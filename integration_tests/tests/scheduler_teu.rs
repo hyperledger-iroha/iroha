@@ -1,14 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Telemetry scheduler TEU integration tests.
 #![cfg(feature = "telemetry")]
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroUsize,
-    sync::Arc,
-    time::Duration,
-};
-
 use eyre::Result;
 use iroha_config::parameters::actual::{
     LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule, Nexus, Queue as QueueConfig,
@@ -37,15 +29,19 @@ use iroha_primitives::{json::Json, time::TimeSource};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::sync::broadcast;
-
 fn disable_nexus_fee_admission(nexus: &mut Nexus) {
     nexus.fees.base_fee = Quantity::zero();
     nexus.fees.per_byte_fee = Quantity::zero();
     nexus.fees.per_instruction_fee = Quantity::zero();
     nexus.fees.per_gas_unit_fee = Quantity::zero();
 }
-
 fn build_world(authority: &AccountId, domain_id: &DomainId) -> World {
     let domain = Domain::new(domain_id.clone()).build(authority);
     let account = Account::new(authority.clone()).build(authority);
@@ -62,10 +58,8 @@ fn build_world(authority: &AccountId, domain_id: &DomainId) -> World {
         )
     }
     .build(authority);
-
     World::with([domain], [account], [asset_definition])
 }
-
 fn build_transaction(
     network_id: NetworkId,
     authority: &AccountId,
@@ -101,7 +95,6 @@ fn build_transaction(
     )
     .expect("transaction should be accepted")
 }
-
 #[test]
 fn queue_teu_backlog_matches_metering() -> Result<()> {
     let (account_id, keypair) = gen_account_in("wonderland");
@@ -109,14 +102,11 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
     let world = build_world(&account_id, &wonderland_domain);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query_store = iroha_core::query::store::LiveQueryStore::start_test();
-
     let metrics = Arc::new(Metrics::default());
     let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
-
     let mut nexus = Nexus::default();
     nexus.fusion.exit_teu = 12_345;
     let queue_limits = QueueLimits::from_nexus(&nexus);
-
     let mut state_inner = State::with_telemetry(world, kura, query_store, telemetry);
     state_inner
         .set_nexus(nexus)
@@ -133,15 +123,12 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
         queue_limits.clone(),
         None,
     ));
-
     let time_source = TimeSource::new_system();
-
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         wonderland_domain.clone(),
         "xor".parse().unwrap(),
     );
     let asset_id = AssetId::of(asset_definition_id, account_id.clone());
-
     let mint = Mint::asset_quantity(10_u32, asset_id.clone());
     let transfer = Transfer::asset_quantity(asset_id.clone(), 5_u32, account_id.clone());
     let metadata_instruction = SetKeyValue::account(
@@ -149,7 +136,6 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
         "teu_key".parse().unwrap(),
         Json::new("value"),
     );
-
     let txs = vec![
         build_transaction(
             network_id,
@@ -173,7 +159,6 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
             vec![InstructionBox::from(metadata_instruction.clone())],
         ),
     ];
-
     let expected_teu: u64 = [
         gas::meter_instructions(&[InstructionBox::from(mint.clone())]),
         gas::meter_instructions(&[InstructionBox::from(transfer.clone())]),
@@ -181,43 +166,35 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
     ]
     .into_iter()
     .sum();
-
     for tx in txs.clone() {
         if let Err(failure) = queue.push(tx, state.view()) {
             return Err(eyre::eyre!(failure.err.to_string()));
         }
     }
-
     let lane_label = LaneId::SINGLE.as_u32().to_string();
     let dataspace_label = DataSpaceId::UNIVERSAL.as_u64().to_string();
-
     let backlog = metrics
         .nexus_scheduler_dataspace_teu_backlog
         .with_label_values(&[lane_label.as_str(), dataspace_label.as_str()])
         .get();
     assert_eq!(backlog, expected_teu);
-
     let capacity = metrics
         .nexus_scheduler_lane_teu_capacity
         .with_label_values(&[lane_label.as_str()])
         .get();
     assert_eq!(capacity, queue_limits.for_lane(LaneId::SINGLE).teu_capacity);
-
     // Drain the queue and ensure backlog resets to zero.
     let mut guards = Vec::new();
     let max = NonZeroUsize::new(txs.len()).expect("non-zero");
     queue.get_transactions_for_block(&state.view(), max, &mut guards);
     drop(guards);
-
     let backlog_after = metrics
         .nexus_scheduler_dataspace_teu_backlog
         .with_label_values(&[lane_label.as_str(), dataspace_label.as_str()])
         .get();
     assert_eq!(backlog_after, 0);
-
     Ok(())
 }
-
 #[test]
 #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
 fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
@@ -225,7 +202,6 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
     let (lane1_account, lane1_keypair) = gen_account_in("nexus_alt");
     let lane0_domain_id: DomainId = DomainId::try_new("nexus", "universal").unwrap();
     let lane1_domain_id: DomainId = DomainId::try_new("nexus_alt", "universal").unwrap();
-
     // Assemble world with both authorities registered.
     let domain0: Domain = Domain::new(lane0_domain_id.clone()).build(&lane0_account);
     let domain1: Domain = Domain::new(lane1_domain_id.clone()).build(&lane1_account);
@@ -236,12 +212,10 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         [account0, account1],
         Vec::<AssetDefinition>::new(),
     );
-
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query_store = iroha_core::query::store::LiveQueryStore::start_test();
     let metrics = Arc::new(Metrics::default());
     let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
-
     // Nexus catalog with two lanes and distinct dataspace assignments.
     let mut lane0_metadata = BTreeMap::new();
     lane0_metadata.insert("scheduler.teu_capacity".to_string(), "900".to_string());
@@ -261,7 +235,6 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         metadata: lane0_metadata,
         ..LaneConfig::default()
     };
-
     let mut lane1_metadata = BTreeMap::new();
     lane1_metadata.insert("scheduler.teu_capacity".to_string(), "1500".to_string());
     lane1_metadata.insert(
@@ -280,9 +253,7 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         metadata: lane1_metadata,
         ..LaneConfig::default()
     };
-
     let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![lane0, lane1]).expect("catalog");
-
     let dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata::default(),
         DataSpaceMetadata {
@@ -293,7 +264,6 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         },
     ])
     .expect("dataspace catalog");
-
     let routing_policy = LaneRoutingPolicy {
         default_lane: LaneId::new(0),
         default_dataspace: DataSpaceId::UNIVERSAL,
@@ -307,7 +277,6 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
             },
         }],
     };
-
     let nexus = Nexus {
         enabled: true,
         lane_catalog: lane_catalog.clone(),
@@ -317,16 +286,13 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
     };
     let mut nexus = nexus;
     disable_nexus_fee_admission(&mut nexus);
-
     let queue_limits = QueueLimits::from_nexus(&nexus);
-
     let mut state_inner = State::with_telemetry(world, kura, query_store, telemetry);
     state_inner
         .set_nexus(nexus.clone())
         .expect("apply Nexus config for router TEU test");
     let state = Arc::new(state_inner);
     let network_id = *state.network_id_ref();
-
     let (events_sender, _) = broadcast::channel(16);
     let queue_cfg = QueueConfig::default();
     let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
@@ -345,9 +311,7 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         &dataspace_catalog_arc,
         None,
     ));
-
     let time_source = TimeSource::new_system();
-
     let instr_lane0 = InstructionBox::from(SetKeyValue::account(
         lane0_account.clone(),
         "k0".parse().unwrap(),
@@ -363,10 +327,8 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         "k1b".parse().unwrap(),
         Json::new("v2"),
     ));
-
     let teu_lane0 = gas::meter_instructions(std::slice::from_ref(&instr_lane0));
     let teu_lane1 = gas::meter_instructions(&[instr_lane1_a.clone(), instr_lane1_b.clone()]);
-
     let tx_lane0 = build_transaction(
         network_id,
         &lane0_account,
@@ -381,21 +343,17 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         &time_source,
         vec![instr_lane1_a.clone(), instr_lane1_b.clone()],
     );
-
     queue
         .push(tx_lane0, state.view())
         .expect("lane0 transaction accepted");
     queue
         .push(tx_lane1, state.view())
         .expect("lane1 transaction accepted");
-
     assert_eq!(queue.queued_len(), 2, "both transactions should be queued");
-
     let lane0_label = LaneId::new(0).as_u32().to_string();
     let lane1_label = LaneId::new(1).as_u32().to_string();
     let dataspace0_label = DataSpaceId::UNIVERSAL.as_u64().to_string();
     let dataspace1_label = DataSpaceId::new(1).as_u64().to_string();
-
     let backlog_lane0 = metrics
         .nexus_scheduler_dataspace_teu_backlog
         .with_label_values(&[lane0_label.as_str(), dataspace0_label.as_str()])
@@ -404,10 +362,8 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         .nexus_scheduler_dataspace_teu_backlog
         .with_label_values(&[lane1_label.as_str(), dataspace1_label.as_str()])
         .get();
-
     assert_eq!(backlog_lane0, teu_lane0);
     assert_eq!(backlog_lane1, teu_lane1);
-
     let capacity_lane0 = metrics
         .nexus_scheduler_lane_teu_capacity
         .with_label_values(&[lane0_label.as_str()])
@@ -418,11 +374,9 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         .get();
     assert_eq!(capacity_lane0, 900);
     assert_eq!(capacity_lane1, 1_500);
-
     let mut guards = Vec::new();
     let max = NonZeroUsize::new(2).expect("non-zero");
     queue.get_transactions_for_block(&state.view(), max, &mut guards);
-
     let mut lanes_seen = BTreeSet::new();
     let mut dataspaces_seen = BTreeSet::new();
     for guard in &guards {
@@ -434,15 +388,12 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
     assert!(lanes_seen.contains(&LaneId::new(1)));
     assert!(dataspaces_seen.contains(&DataSpaceId::UNIVERSAL));
     assert!(dataspaces_seen.contains(&DataSpaceId::new(1)));
-
     drop(guards);
-
     assert_eq!(
         queue.queued_len(),
         0,
         "queue should drain after guards drop"
     );
-
     let backlog_lane0_after = metrics
         .nexus_scheduler_dataspace_teu_backlog
         .with_label_values(&[lane0_label.as_str(), dataspace0_label.as_str()])
@@ -453,10 +404,8 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         .get();
     assert_eq!(backlog_lane0_after, 0);
     assert_eq!(backlog_lane1_after, 0);
-
     Ok(())
 }
-
 #[test]
 #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
 fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
@@ -464,7 +413,6 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
     let (routed_account, routed_keypair) = gen_account_in("routed");
     let fallback_domain_id: DomainId = DomainId::try_new("fallback", "universal").unwrap();
     let routed_domain_id: DomainId = DomainId::try_new("routed", "universal").unwrap();
-
     let domain_fallback: Domain = Domain::new(fallback_domain_id.clone()).build(&fallback_account);
     let domain_routed: Domain = Domain::new(routed_domain_id.clone()).build(&routed_account);
     let account_fallback = Account::new(fallback_account.clone()).build(&fallback_account);
@@ -474,12 +422,10 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         [account_fallback, account_routed],
         Vec::<AssetDefinition>::new(),
     );
-
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query_store = iroha_core::query::store::LiveQueryStore::start_test();
     let metrics = Arc::new(Metrics::default());
     let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
-
     // Lane 0 has a dedicated dataspace and explicit routing rule, lane 1 acts as the default.
     let mut lane0_metadata = BTreeMap::new();
     lane0_metadata.insert("scheduler.teu_capacity".to_string(), "1200".to_string());
@@ -499,7 +445,6 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         metadata: lane0_metadata,
         ..LaneConfig::default()
     };
-
     let mut lane1_metadata = BTreeMap::new();
     lane1_metadata.insert("scheduler.teu_capacity".to_string(), "900".to_string());
     lane1_metadata.insert(
@@ -518,7 +463,6 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         metadata: lane1_metadata,
         ..LaneConfig::default()
     };
-
     let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![lane0, lane1]).expect("catalog");
     let dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata::default(),
@@ -530,7 +474,6 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         },
     ])
     .expect("dataspace catalog");
-
     let routing_policy = LaneRoutingPolicy {
         default_lane: LaneId::new(1),
         default_dataspace: DataSpaceId::new(1),
@@ -544,7 +487,6 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
             },
         }],
     };
-
     let nexus = Nexus {
         enabled: true,
         lane_catalog: lane_catalog.clone(),
@@ -554,16 +496,13 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
     };
     let mut nexus = nexus;
     disable_nexus_fee_admission(&mut nexus);
-
     let queue_limits = QueueLimits::from_nexus(&nexus);
-
     let mut state_inner = State::with_telemetry(world, kura, query_store, telemetry);
     state_inner
         .set_nexus(nexus.clone())
         .expect("apply Nexus config for per-account routing test");
     let state = Arc::new(state_inner);
     let network_id = *state.network_id_ref();
-
     let (events_sender, _) = broadcast::channel(16);
     let queue_cfg = QueueConfig::default();
     let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
@@ -582,7 +521,6 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         &dataspace_catalog_arc,
         None,
     ));
-
     let time_source = TimeSource::new_system();
     let routed_instr = InstructionBox::from(SetKeyValue::account(
         routed_account.clone(),
@@ -593,10 +531,8 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         "scheduler_default_lane_role".parse().unwrap(),
         fallback_account.clone(),
     )));
-
     let routed_teu = gas::meter_instructions(std::slice::from_ref(&routed_instr));
     let fallback_teu = gas::meter_instructions(std::slice::from_ref(&fallback_instr));
-
     let tx_routed = build_transaction(
         network_id,
         &routed_account,
@@ -611,7 +547,6 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         &time_source,
         vec![fallback_instr.clone()],
     );
-
     queue
         .push(tx_routed, state.view())
         .expect("routed transaction accepted");
@@ -619,12 +554,10 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         .push(tx_fallback, state.view())
         .expect("fallback transaction accepted");
     assert_eq!(queue.queued_len(), 2, "both transactions should be queued");
-
     let lane0_label = LaneId::new(0).as_u32().to_string();
     let lane1_label = LaneId::new(1).as_u32().to_string();
     let dataspace0_label = DataSpaceId::UNIVERSAL.as_u64().to_string();
     let dataspace1_label = DataSpaceId::new(1).as_u64().to_string();
-
     let backlog_lane0 = metrics
         .nexus_scheduler_dataspace_teu_backlog
         .with_label_values(&[lane0_label.as_str(), dataspace0_label.as_str()])
@@ -635,11 +568,9 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         .get();
     assert_eq!(backlog_lane0, routed_teu);
     assert_eq!(backlog_lane1, fallback_teu);
-
     let mut guards = Vec::new();
     let max = NonZeroUsize::new(2).expect("non-zero");
     queue.get_transactions_for_block(&state.view(), max, &mut guards);
-
     let mut lanes_seen = BTreeSet::new();
     let mut dataspaces_seen = BTreeSet::new();
     for guard in &guards {
@@ -663,10 +594,8 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         dataspaces_seen.contains(&DataSpaceId::UNIVERSAL),
         "explicit rule should keep its dataspace"
     );
-
     drop(guards);
     assert_eq!(queue.queued_len(), 0, "queue should drain after processing");
-
     let backlog_lane0_after = metrics
         .nexus_scheduler_dataspace_teu_backlog
         .with_label_values(&[lane0_label.as_str(), dataspace0_label.as_str()])
@@ -677,6 +606,5 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         .get();
     assert_eq!(backlog_lane0_after, 0);
     assert_eq!(backlog_lane1_after, 0);
-
     Ok(())
 }

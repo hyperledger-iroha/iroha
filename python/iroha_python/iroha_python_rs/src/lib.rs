@@ -1,8 +1,6 @@
 //! Python bindings exposing a growing subset of the Iroha SDK surface.
-
 #![deny(unsafe_code)]
 #![allow(unsafe_op_in_unsafe_fn)] // PyO3 generates historical wrappers that require this on edition 2024
-
 mod connect_key_bindings;
 #[cfg(test)]
 mod crypto_admission_tests;
@@ -12,25 +10,12 @@ pub mod privacy_wallet_bundle;
 pub mod privacy_wallet_worker;
 mod sorafs_orderbook_submission;
 mod zk_vk_draft;
-
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use blake3::hash as blake3_hash;
 use core::{
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     time::Duration,
 };
-use std::{
-    collections::{HashMap, HashSet},
-    convert::{TryFrom, TryInto},
-    fs::{self, File},
-    io::{Read, Seek, SeekFrom},
-    net::IpAddr,
-    path::PathBuf,
-    str::FromStr,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
-
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use blake3::hash as blake3_hash;
 use futures::executor::block_on;
 use hex::{encode as hex_encode, encode_upper as hex_encode_upper};
 use iroha_config::parameters::defaults;
@@ -236,19 +221,27 @@ use sorafs_orchestrator::{
         TaikaiCacheStatsSnapshot, TaikaiPullQueueStats, TierStats,
     },
 };
+use std::{
+    collections::{HashMap, HashSet},
+    convert::{TryFrom, TryInto},
+    fs::{self, File},
+    io::{Read, Seek, SeekFrom},
+    net::IpAddr,
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tokio::runtime::Runtime;
 use url::{Host, Url};
 use zeroize::Zeroizing;
-
 /// Raised when a non-Ed25519 key is passed to an Ed25519-only helper.
 const ERR_EXPECTED_ED25519: &str = "expected Ed25519 key material";
 const ERR_SM2_SIGNATURE_LEN: &str = "sm2 signature must be 64 bytes";
 const SM2_PRIVATE_KEY_LENGTH: usize = 32;
 const SM2_PUBLIC_KEY_UNCOMPRESSED_LENGTH: usize = 65;
 const SM2_SIGNATURE_LENGTH: usize = Sm2Signature::LENGTH;
-
 create_exception!(_crypto, SorafsMultiFetchError, PyException);
-
 fn algorithm_guard(algorithm: Algorithm) -> PyResult<()> {
     if algorithm != Algorithm::Ed25519 {
         Err(PyValueError::new_err(ERR_EXPECTED_ED25519))
@@ -256,7 +249,6 @@ fn algorithm_guard(algorithm: Algorithm) -> PyResult<()> {
         Ok(())
     }
 }
-
 fn supported_crypto_algorithms() -> Vec<Algorithm> {
     let mut algorithms = vec![Algorithm::Ed25519, Algorithm::Secp256k1, Algorithm::MlDsa];
     algorithms.extend([
@@ -270,7 +262,6 @@ fn supported_crypto_algorithms() -> Vec<Algorithm> {
     algorithms.push(Algorithm::Sm2);
     algorithms
 }
-
 fn parse_algorithm_arg(algorithm: &str) -> PyResult<Algorithm> {
     if algorithm.is_empty() {
         return Err(PyValueError::new_err(
@@ -290,12 +281,10 @@ fn parse_algorithm_arg(algorithm: &str) -> PyResult<Algorithm> {
             "unsupported crypto algorithm `{algorithm}`"
         )));
     }
-
     let normalized = algorithm.to_ascii_lowercase();
     if let Ok(parsed) = Algorithm::from_str(&normalized) {
         return Ok(parsed);
     }
-
     let compact = normalized
         .chars()
         .map(|ch| match ch {
@@ -303,7 +292,6 @@ fn parse_algorithm_arg(algorithm: &str) -> PyResult<Algorithm> {
             _ => ch,
         })
         .collect::<String>();
-
     let parsed = match compact.as_str() {
         "ed-25519" | "ed25519" => Some(Algorithm::Ed25519),
         "ecdsa"
@@ -337,58 +325,46 @@ fn parse_algorithm_arg(algorithm: &str) -> PyResult<Algorithm> {
         "sm2" => Some(Algorithm::Sm2),
         _ => None,
     };
-
     parsed
         .ok_or_else(|| PyValueError::new_err(format!("unsupported crypto algorithm `{algorithm}`")))
 }
-
 fn parse_err(kind: &str, err: ParseError) -> PyErr {
     PyValueError::new_err(format!("failed to parse {kind} key: {err}"))
 }
-
 fn parse_private_key(bytes: &[u8]) -> PyResult<PrivateKey> {
     PrivateKey::from_bytes(Algorithm::Ed25519, bytes).map_err(|err| parse_err("private", err))
 }
-
 fn parse_public_key(bytes: &[u8]) -> PyResult<PublicKey> {
     PublicKey::from_bytes(Algorithm::Ed25519, bytes).map_err(|err| parse_err("public", err))
 }
-
 fn parse_private_key_for_algorithm(algorithm: Algorithm, bytes: &[u8]) -> PyResult<PrivateKey> {
     PrivateKey::from_bytes(algorithm, bytes).map_err(|err| parse_err("private", err))
 }
-
 fn parse_public_key_for_algorithm(algorithm: Algorithm, bytes: &[u8]) -> PyResult<PublicKey> {
     PublicKey::from_bytes(algorithm, bytes).map_err(|err| parse_err("public", err))
 }
-
 fn proxy_mode_from_label_py(label: &str) -> PyResult<ProxyMode> {
     ProxyMode::parse(label.trim())
         .ok_or_else(|| PyValueError::new_err("proxy_mode must be 'bridge' or 'metadata-only'"))
 }
-
 fn sm2_distid_arg(distid: Option<&str>) -> String {
     distid
         .map(str::to_owned)
         .unwrap_or_else(Sm2PublicKey::default_distid)
 }
-
 trait IntoSm2Result {
     fn into_sm2_result(self) -> Result<Sm2PrivateKey, ParseError>;
 }
-
 impl IntoSm2Result for Sm2PrivateKey {
     fn into_sm2_result(self) -> Result<Sm2PrivateKey, ParseError> {
         Ok(self)
     }
 }
-
 impl IntoSm2Result for Result<Sm2PrivateKey, ParseError> {
     fn into_sm2_result(self) -> Result<Sm2PrivateKey, ParseError> {
         self
     }
 }
-
 fn parse_sm2_private_key(distid: Option<&str>, bytes: &[u8]) -> PyResult<Sm2PrivateKey> {
     if bytes.len() != SM2_PRIVATE_KEY_LENGTH {
         return Err(PyValueError::new_err(format!(
@@ -400,7 +376,6 @@ fn parse_sm2_private_key(distid: Option<&str>, bytes: &[u8]) -> PyResult<Sm2Priv
     Sm2PrivateKey::from_bytes(distid, bytes)
         .map_err(|err| PyValueError::new_err(format!("failed to parse SM2 private key: {err}")))
 }
-
 fn parse_sm2_public_key(distid: Option<&str>, bytes: &[u8]) -> PyResult<Sm2PublicKey> {
     if bytes.len() != SM2_PUBLIC_KEY_UNCOMPRESSED_LENGTH {
         return Err(PyValueError::new_err(format!(
@@ -412,7 +387,6 @@ fn parse_sm2_public_key(distid: Option<&str>, bytes: &[u8]) -> PyResult<Sm2Publi
     Sm2PublicKey::from_sec1_bytes(distid, bytes)
         .map_err(|err| PyValueError::new_err(format!("failed to parse SM2 public key: {err}")))
 }
-
 fn parse_sm2_signature(bytes: &[u8]) -> PyResult<Sm2Signature> {
     let array: [u8; SM2_SIGNATURE_LENGTH] = bytes
         .try_into()
@@ -420,7 +394,6 @@ fn parse_sm2_signature(bytes: &[u8]) -> PyResult<Sm2Signature> {
     Sm2Signature::from_bytes(&array)
         .map_err(|err| PyValueError::new_err(format!("invalid SM2 signature: {err}")))
 }
-
 fn public_key_to_bytes<'a>(
     public_key: &'a PublicKey,
     context: &'static str,
@@ -429,7 +402,6 @@ fn public_key_to_bytes<'a>(
         .try_to_bytes()
         .map_err(|err| PyValueError::new_err(format!("{context} is malformed: {err}")))
 }
-
 fn public_key_multihash_string(
     public_key: &PublicKey,
     prefixed: bool,
@@ -442,7 +414,6 @@ fn public_key_multihash_string(
     }
     .map_err(|err| PyValueError::new_err(format!("failed to format {context}: {err}")))
 }
-
 fn private_key_multihash_string(
     private_key: &ExposedPrivateKey,
     prefixed: bool,
@@ -455,17 +426,14 @@ fn private_key_multihash_string(
     }
     .map_err(|err| PyValueError::new_err(format!("failed to format {context}: {err}")))
 }
-
 fn keypair_to_py(py: Python<'_>, key_pair: KeyPair) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
     let (_, public_bytes) = public_key_to_bytes(key_pair.public_key(), "public key")?;
     let (_, mut private_bytes) = key_pair.private_key().to_bytes();
-
     let public = Py::from(PyBytes::new(py, public_bytes));
     let private = Py::from(PyBytes::new(py, private_bytes.as_slice()));
     private_bytes.fill(0);
     Ok((private, public))
 }
-
 fn require_non_blank_unpadded(value: &str, field: &str) -> PyResult<()> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -478,7 +446,6 @@ fn require_non_blank_unpadded(value: &str, field: &str) -> PyResult<()> {
     }
     Ok(())
 }
-
 fn parse_account_id(value: &str) -> PyResult<AccountId> {
     let raw = value.trim();
     let parsed = match AccountAddress::parse_encoded(raw, None) {
@@ -490,7 +457,6 @@ fn parse_account_id(value: &str) -> PyResult<AccountId> {
     };
     parsed.map_err(|err| PyValueError::new_err(format!("invalid account id: {err}")))
 }
-
 fn parse_exact_i105_account_id(value: &str, field: &str) -> PyResult<AccountId> {
     require_non_blank_unpadded(value, field)?;
     if value.chars().any(char::is_whitespace)
@@ -513,7 +479,6 @@ fn parse_exact_i105_account_id(value: &str, field: &str) -> PyResult<AccountId> 
         ))
     })
 }
-
 fn parse_nonzero_lower_hex_32(value: &str, field: &str) -> PyResult<[u8; 32]> {
     if value.len() != 64
         || !value
@@ -536,7 +501,6 @@ fn parse_nonzero_lower_hex_32(value: &str, field: &str) -> PyResult<[u8; 32]> {
     }
     Ok(bytes)
 }
-
 fn require_exact_dict_fields(
     value: &Bound<'_, PyDict>,
     fields: &[&str],
@@ -561,7 +525,6 @@ fn require_exact_dict_fields(
     }
     Ok(())
 }
-
 fn required_dict_field<'py>(
     value: &Bound<'py, PyDict>,
     field: &str,
@@ -571,13 +534,11 @@ fn required_dict_field<'py>(
         .get_item(field)?
         .ok_or_else(|| PyValueError::new_err(format!("{context}.{field} is required")))
 }
-
 fn required_dict_string(value: &Bound<'_, PyDict>, field: &str, context: &str) -> PyResult<String> {
     required_dict_field(value, field, context)?
         .extract::<String>()
         .map_err(|_| PyTypeError::new_err(format!("{context}.{field} must be a string")))
 }
-
 fn required_dict_u64(value: &Bound<'_, PyDict>, field: &str, context: &str) -> PyResult<u64> {
     let field_value = required_dict_field(value, field, context)?;
     if field_value.is_instance_of::<pyo3::types::PyBool>() {
@@ -589,7 +550,6 @@ fn required_dict_u64(value: &Bound<'_, PyDict>, field: &str, context: &str) -> P
         .extract::<u64>()
         .map_err(|_| PyTypeError::new_err(format!("{context}.{field} must be a non-negative u64")))
 }
-
 fn parse_provider_ingest_completion_authority(
     value: &Bound<'_, PyDict>,
 ) -> PyResult<ProviderIngestCompletionAuthorityV1> {
@@ -611,7 +571,6 @@ fn parse_provider_ingest_completion_authority(
         ],
         POLICY_CONTEXT,
     )?;
-
     let revision = required_dict_u64(signer_policy, "revision", POLICY_CONTEXT)?;
     if revision == 0 {
         return Err(PyValueError::new_err(
@@ -646,7 +605,6 @@ fn parse_provider_ingest_completion_authority(
         }
         _ => {}
     }
-
     let signer_policy = ProviderIngestCompletionSignerPolicyV1 {
         policy_id: parse_nonzero_lower_hex_32(
             &required_dict_string(signer_policy, "policy_id", POLICY_CONTEXT)?,
@@ -669,7 +627,6 @@ fn parse_provider_ingest_completion_authority(
         signer_policy,
     ))
 }
-
 fn parse_provider_ingest_finalized_anchor(
     value: &Bound<'_, PyDict>,
 ) -> PyResult<ProviderIngestFinalizedAnchorV1> {
@@ -689,7 +646,6 @@ fn parse_provider_ingest_finalized_anchor(
         )?,
     })
 }
-
 fn parse_fee_sponsor_program_id(value: &str) -> PyResult<FeeSponsorProgramId> {
     require_non_blank_unpadded(value, "fee sponsor program id")?;
     let program_id = FeeSponsorProgramId::from_str(value).map_err(|err| {
@@ -703,7 +659,6 @@ fn parse_fee_sponsor_program_id(value: &str) -> PyResult<FeeSponsorProgramId> {
     ensure_ed25519_account(&program_id.sponsor)?;
     Ok(program_id)
 }
-
 fn parse_fee_payment_intent_json(value: &str) -> PyResult<FeePaymentIntent> {
     require_non_blank_unpadded(value, "fee payment intent JSON")?;
     let intent = json::from_str::<FeePaymentIntent>(value)
@@ -713,13 +668,11 @@ fn parse_fee_payment_intent_json(value: &str) -> PyResult<FeePaymentIntent> {
         .map_err(|err| PyValueError::new_err(format!("invalid fee payment intent: {err}")))?;
     Ok(intent)
 }
-
 fn parse_asset_id(value: &str) -> PyResult<AssetId> {
     let raw = value.trim();
     if let Ok(asset_id) = raw.parse::<AssetId>() {
         return Ok(asset_id);
     }
-
     let mut parts = raw.split('#');
     let definition_literal = parts.next().ok_or_else(|| {
         PyValueError::new_err(format!(
@@ -735,7 +688,6 @@ fn parse_asset_id(value: &str) -> PyResult<AssetId> {
             "invalid asset id `{value}`: too many `#` segments"
         )));
     }
-
     let definition = AssetDefinitionId::parse_address_literal(definition_literal)
         .map_err(|err| PyValueError::new_err(format!("invalid asset id `{value}`: {err}")))?;
     let account = parse_account_id(account_literal)
@@ -761,7 +713,6 @@ fn parse_asset_id(value: &str) -> PyResult<AssetId> {
     };
     Ok(AssetId::with_scope(definition, account, scope))
 }
-
 fn require_single_signatory<'a>(account: &'a AccountId, context: &str) -> PyResult<&'a PublicKey> {
     account.try_signatory().ok_or_else(|| {
         PyValueError::new_err(format!(
@@ -769,13 +720,11 @@ fn require_single_signatory<'a>(account: &'a AccountId, context: &str) -> PyResu
         ))
     })
 }
-
 fn ensure_ed25519_account(account: &AccountId) -> PyResult<()> {
     let signatory = require_single_signatory(account, "account")?;
     let (algorithm, _) = public_key_to_bytes(signatory, "account signatory public key")?;
     algorithm_guard(algorithm)
 }
-
 fn ensure_allowed_kwargs<'py>(
     kwargs: &Bound<'py, PyDict>,
     allowed: &[&str],
@@ -793,21 +742,18 @@ fn ensure_allowed_kwargs<'py>(
     }
     Ok(())
 }
-
 fn dict_require<'py, F>(dict: &Bound<'py, PyDict>, key: &str, err: F) -> PyResult<Bound<'py, PyAny>>
 where
     F: FnOnce() -> PyErr,
 {
     dict.get_item(key)?.ok_or_else(err)
 }
-
 #[derive(Debug)]
 struct TimeTriggerKwargsParsed<'py> {
     period_ms: Option<u64>,
     repeats: Option<u32>,
     metadata: Option<Bound<'py, PyAny>>,
 }
-
 fn parse_time_trigger_kwargs<'py>(
     kwargs: Option<&Bound<'py, PyDict>>,
 ) -> PyResult<TimeTriggerKwargsParsed<'py>> {
@@ -818,13 +764,11 @@ fn parse_time_trigger_kwargs<'py>(
             metadata: None,
         });
     };
-
     ensure_allowed_kwargs(
         kwargs,
         &["period_ms", "repeats", "metadata"],
         "register_time_trigger()",
     )?;
-
     let period_ms = match kwargs.get_item("period_ms")? {
         Some(value) => Some(value.extract::<u64>()?),
         None => None,
@@ -834,14 +778,12 @@ fn parse_time_trigger_kwargs<'py>(
         None => None,
     };
     let metadata = kwargs.get_item("metadata")?;
-
     Ok(TimeTriggerKwargsParsed {
         period_ms,
         repeats,
         metadata,
     })
 }
-
 fn parse_connect_direction(value: &str) -> PyResult<Dir> {
     match value {
         "AppToWallet" => Ok(Dir::AppToWallet),
@@ -851,14 +793,12 @@ fn parse_connect_direction(value: &str) -> PyResult<Dir> {
         ))),
     }
 }
-
 fn connect_direction_str(dir: Dir) -> &'static str {
     match dir {
         Dir::AppToWallet => "AppToWallet",
         Dir::WalletToApp => "WalletToApp",
     }
 }
-
 fn parse_connect_role(value: &str) -> PyResult<Role> {
     match value {
         "App" => Ok(Role::App),
@@ -868,14 +808,12 @@ fn parse_connect_role(value: &str) -> PyResult<Role> {
         ))),
     }
 }
-
 fn connect_role_str(role: Role) -> &'static str {
     match role {
         Role::App => "App",
         Role::Wallet => "Wallet",
     }
 }
-
 fn fixed_array<const N: usize>(bytes: &[u8], context: &str) -> PyResult<[u8; N]> {
     if bytes.len() != N {
         return Err(PyValueError::new_err(format!(
@@ -887,7 +825,6 @@ fn fixed_array<const N: usize>(bytes: &[u8], context: &str) -> PyResult<[u8; N]>
     arr.copy_from_slice(bytes);
     Ok(arr)
 }
-
 fn checked_signature_from_bytes_for_algorithm(
     bytes: &[u8],
     algorithm: Algorithm,
@@ -900,7 +837,6 @@ fn checked_signature_from_bytes_for_algorithm(
     };
     signature.map_err(|err| PyValueError::new_err(format!("{context} is malformed: {err}")))
 }
-
 fn py_text(value: &Bound<'_, PyAny>, context: &str) -> PyResult<String> {
     let text = value
         .extract::<String>()
@@ -913,7 +849,6 @@ fn py_text(value: &Bound<'_, PyAny>, context: &str) -> PyResult<String> {
     }
     Ok(trimmed.to_owned())
 }
-
 fn py_bytes_or_hex(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<u8>> {
     if let Ok(text) = value.extract::<String>() {
         return parse_hex_bytes_py(&text, context);
@@ -922,7 +857,6 @@ fn py_bytes_or_hex(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<u8>>
         .extract::<Vec<u8>>()
         .map_err(|_| PyTypeError::new_err(format!("{context} must be bytes or hex string")))
 }
-
 fn py_bytes_or_base64(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<u8>> {
     if let Ok(text) = value.extract::<String>() {
         let trimmed = text.trim();
@@ -939,12 +873,10 @@ fn py_bytes_or_base64(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<u
         .extract::<Vec<u8>>()
         .map_err(|_| PyTypeError::new_err(format!("{context} must be bytes or base64 string")))
 }
-
 fn py_fixed_array<const N: usize>(value: &Bound<'_, PyAny>, context: &str) -> PyResult<[u8; N]> {
     let bytes = py_bytes_or_hex(value, context)?;
     fixed_array::<N>(&bytes, context)
 }
-
 fn py_fixed_array_list(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<[u8; 32]>> {
     if let Ok(items) = value.cast::<PyList>() {
         let mut parsed = Vec::with_capacity(items.len());
@@ -964,7 +896,6 @@ fn py_fixed_array_list(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<
         "{context} must be a list or tuple"
     )))
 }
-
 fn dict_get_alias<'py>(
     dict: &Bound<'py, PyDict>,
     aliases: &[&str],
@@ -978,13 +909,12 @@ fn dict_get_alias<'py>(
     }
     Ok(None)
 }
-
 fn parse_u128_text(value: &str, context: &str) -> PyResult<u128> {
     value.trim().parse::<u128>().map_err(|err| {
         PyValueError::new_err(format!("{context} must be an unsigned integer: {err}"))
     })
 }
-
+#[cfg(test)]
 fn parse_canonical_u128_text(value: &str, context: &str) -> PyResult<u128> {
     if value.is_empty()
         || value.len() > 39
@@ -999,18 +929,6 @@ fn parse_canonical_u128_text(value: &str, context: &str) -> PyResult<u128> {
         PyValueError::new_err(format!("{context} must be an unsigned integer: {err}"))
     })
 }
-
-fn parse_canonical_public_balance_scope_py(
-    value: &str,
-    context: &str,
-) -> PyResult<AssetBalanceScope> {
-    crate::privacy_native_actions::parse_canonical_public_balance_scope_v1(value).ok_or_else(|| {
-        PyValueError::new_err(format!(
-            "{context} must be exactly `global` or `dataspace:<canonical positive u64>`"
-        ))
-    })
-}
-
 fn canonical_public_balance_scope_py(scope: AssetBalanceScope) -> PyResult<String> {
     crate::privacy_native_actions::canonical_public_balance_scope_v1(scope).ok_or_else(|| {
         PyRuntimeError::new_err(
@@ -1018,7 +936,6 @@ fn canonical_public_balance_scope_py(scope: AssetBalanceScope) -> PyResult<Strin
         )
     })
 }
-
 fn parse_verifying_key_id_text(value: &str, context: &str) -> PyResult<VerifyingKeyId> {
     let trimmed = value.trim();
     let Some((backend, name)) = trimmed.split_once(':') else {
@@ -1038,7 +955,6 @@ fn parse_verifying_key_id_text(value: &str, context: &str) -> PyResult<Verifying
     })?;
     Ok(VerifyingKeyId::new(backend, name))
 }
-
 fn parse_verifying_key_id_py(
     value: Option<&Bound<'_, PyAny>>,
     context: &str,
@@ -1066,7 +982,6 @@ fn parse_verifying_key_id_py(
     })?;
     Ok(Some(VerifyingKeyId::new(backend, name_text)))
 }
-
 fn py_exact_dict<'value, 'py>(
     value: &'value Bound<'py, PyAny>,
     context: &str,
@@ -1087,7 +1002,6 @@ fn py_exact_dict<'value, 'py>(
     }
     Ok(dict)
 }
-
 fn py_required_dict_field<'py>(
     dict: &Bound<'py, PyDict>,
     field: &str,
@@ -1096,21 +1010,18 @@ fn py_required_dict_field<'py>(
     dict.get_item(field)?
         .ok_or_else(|| PyValueError::new_err(format!("{context}.{field} is required")))
 }
-
 fn py_exact_bytes(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<u8>> {
     let bytes = value
         .cast::<PyBytes>()
         .map_err(|_| PyTypeError::new_err(format!("{context} must be bytes")))?;
     Ok(bytes.as_bytes().to_vec())
 }
-
 fn py_exact_fixed_bytes<const N: usize>(
     value: &Bound<'_, PyAny>,
     context: &str,
 ) -> PyResult<[u8; N]> {
     fixed_array::<N>(&py_exact_bytes(value, context)?, context)
 }
-
 fn py_portable_verifier_id_field(value: &Bound<'_, PyAny>, context: &str) -> PyResult<String> {
     let text = value
         .extract::<String>()
@@ -1122,7 +1033,6 @@ fn py_portable_verifier_id_field(value: &Bound<'_, PyAny>, context: &str) -> PyR
     }
     Ok(text)
 }
-
 fn py_exact_u16(value: &Bound<'_, PyAny>, context: &str) -> PyResult<u16> {
     if value.is_instance_of::<PyBool>() {
         return Err(PyTypeError::new_err(format!(
@@ -1133,7 +1043,6 @@ fn py_exact_u16(value: &Bound<'_, PyAny>, context: &str) -> PyResult<u16> {
         .extract::<u16>()
         .map_err(|_| PyTypeError::new_err(format!("{context} must be an unsigned 16-bit integer")))
 }
-
 fn py_exact_u32(value: &Bound<'_, PyAny>, context: &str) -> PyResult<u32> {
     if value.is_instance_of::<PyBool>() {
         return Err(PyTypeError::new_err(format!(
@@ -1144,7 +1053,6 @@ fn py_exact_u32(value: &Bound<'_, PyAny>, context: &str) -> PyResult<u32> {
         .extract::<u32>()
         .map_err(|_| PyTypeError::new_err(format!("{context} must be an unsigned 32-bit integer")))
 }
-
 fn parse_lane_privacy_proof_py(
     value: &Bound<'_, PyAny>,
     context: &str,
@@ -1228,7 +1136,6 @@ fn parse_lane_privacy_proof_py(
     )
     .map_err(|error| PyValueError::new_err(format!("{context} {error}")))
 }
-
 fn parse_zk_proof_attachment(value: &Bound<'_, PyAny>, context: &str) -> PyResult<ProofAttachment> {
     let dict = py_exact_dict(
         value,
@@ -1249,7 +1156,6 @@ fn parse_zk_proof_attachment(value: &Bound<'_, PyAny>, context: &str) -> PyResul
     let backend = Ident::from_str(&backend_text).map_err(|err| {
         PyValueError::new_err(format!("invalid {context} backend identifier: {err}"))
     })?;
-
     let proof_value = py_required_dict_field(dict, "proof", context)?;
     let proof = py_exact_dict(
         &proof_value,
@@ -1286,7 +1192,6 @@ fn parse_zk_proof_attachment(value: &Bound<'_, PyAny>, context: &str) -> PyResul
         )));
     }
     let proof_bytes = proof_bytes.to_vec();
-
     let vk_value = py_required_dict_field(dict, "vk_ref", context)?;
     let vk = py_exact_dict(
         &vk_value,
@@ -1342,7 +1247,6 @@ fn parse_zk_proof_attachment(value: &Bound<'_, PyAny>, context: &str) -> PyResul
     }
     Ok(attachment)
 }
-
 fn extract_optional_dict<'py>(
     value: Option<Bound<'py, PyAny>>,
     context: &str,
@@ -1361,14 +1265,12 @@ fn extract_optional_dict<'py>(
         None => Ok(None),
     }
 }
-
 fn optional_string(value: Option<Bound<'_, PyAny>>) -> PyResult<Option<String>> {
     match value {
         Some(obj) if !obj.is_none() => obj.extract::<String>().map(Some),
         _ => Ok(None),
     }
 }
-
 fn parse_string_list(value: Option<Bound<'_, PyAny>>, context: &str) -> PyResult<Vec<String>> {
     match value {
         Some(obj) if !obj.is_none() => obj
@@ -1377,7 +1279,6 @@ fn parse_string_list(value: Option<Bound<'_, PyAny>>, context: &str) -> PyResult
         _ => Ok(Vec::new()),
     }
 }
-
 fn parse_permissions(
     value: Option<Bound<'_, PyAny>>,
     context: &str,
@@ -1399,7 +1300,6 @@ fn parse_permissions(
         resources,
     }))
 }
-
 fn parse_app_metadata(value: Option<Bound<'_, PyAny>>) -> PyResult<Option<AppMeta>> {
     let Some(mapping) = extract_optional_dict(value, "metadata")? else {
         return Ok(None);
@@ -1416,7 +1316,6 @@ fn parse_app_metadata(value: Option<Bound<'_, PyAny>>) -> PyResult<Option<AppMet
         icon_hash,
     }))
 }
-
 fn parse_sign_in_proof(value: Option<Bound<'_, PyAny>>) -> PyResult<Option<SignInProofV1>> {
     let Some(mapping) = extract_optional_dict(value, "proof")? else {
         return Ok(None);
@@ -1449,7 +1348,6 @@ fn parse_sign_in_proof(value: Option<Bound<'_, PyAny>>) -> PyResult<Option<SignI
         nonce,
     }))
 }
-
 fn parse_wallet_signature(fields: &Bound<'_, PyDict>) -> PyResult<WalletSignatureV1> {
     let sig_bytes = dict_require(fields, "signature", || {
         PyValueError::new_err("approve.signature is required")
@@ -1472,7 +1370,6 @@ fn parse_wallet_signature(fields: &Bound<'_, PyDict>) -> PyResult<WalletSignatur
         checked_signature_from_bytes_for_algorithm(&sig, algorithm, "approve.signature")?,
     ))
 }
-
 fn parse_connect_control(fields: &Bound<'_, PyDict>) -> PyResult<ConnectControlV1> {
     let control_type = dict_require(fields, "control_type", || {
         PyValueError::new_err("connect frame control requires `control_type`")
@@ -1601,7 +1498,6 @@ fn parse_connect_control(fields: &Bound<'_, PyDict>) -> PyResult<ConnectControlV
         ))),
     }
 }
-
 fn parse_frame_kind(kind: &Bound<'_, PyDict>) -> PyResult<FrameKind> {
     let kind_type = dict_require(kind, "type", || {
         PyValueError::new_err("connect frame kind requires `type`")
@@ -1632,7 +1528,6 @@ fn parse_frame_kind(kind: &Bound<'_, PyDict>) -> PyResult<FrameKind> {
         ))),
     }
 }
-
 fn parse_control_after_key(
     fields: &Bound<'_, PyDict>,
     variant: &str,
@@ -1687,7 +1582,6 @@ fn parse_control_after_key(
         ))),
     }
 }
-
 fn encode_wallet_signature_dict<'py>(
     py: Python<'py>,
     sig: &WalletSignatureV1,
@@ -1697,7 +1591,6 @@ fn encode_wallet_signature_dict<'py>(
     mapping.set_item("signature", PyBytes::new(py, sig.signature.payload()))?;
     Ok(mapping.into_any().unbind())
 }
-
 fn parse_connect_payload(payload: &Bound<'_, PyDict>) -> PyResult<ConnectPayloadV1> {
     let payload_type = dict_require(payload, "type", || {
         PyValueError::new_err("connect payload requires `type`")
@@ -1773,7 +1666,6 @@ fn parse_connect_payload(payload: &Bound<'_, PyDict>) -> PyResult<ConnectPayload
         ))),
     }
 }
-
 fn encode_connect_payload<'py>(py: Python<'py>, payload: &ConnectPayloadV1) -> PyResult<Py<PyAny>> {
     let mapping = PyDict::new(py);
     match payload {
@@ -1835,7 +1727,6 @@ fn encode_connect_payload<'py>(py: Python<'py>, payload: &ConnectPayloadV1) -> P
     }
     Ok(mapping.into_any().unbind())
 }
-
 fn encode_permissions_dict<'py>(py: Python<'py>, perms: &Option<PermissionsV1>) -> Py<PyAny> {
     match perms {
         Some(p) => {
@@ -1859,7 +1750,6 @@ fn encode_permissions_dict<'py>(py: Python<'py>, perms: &Option<PermissionsV1>) 
         None => py.None(),
     }
 }
-
 fn encode_app_meta_dict<'py>(py: Python<'py>, meta: &Option<AppMeta>) -> Py<PyAny> {
     match meta {
         Some(value) => {
@@ -1886,7 +1776,6 @@ fn encode_app_meta_dict<'py>(py: Python<'py>, meta: &Option<AppMeta>) -> Py<PyAn
         None => py.None(),
     }
 }
-
 fn encode_proof_dict<'py>(py: Python<'py>, proof: &Option<SignInProofV1>) -> Py<PyAny> {
     match proof {
         Some(value) => {
@@ -1905,7 +1794,6 @@ fn encode_proof_dict<'py>(py: Python<'py>, proof: &Option<SignInProofV1>) -> Py<
         None => py.None(),
     }
 }
-
 fn encode_frame_kind(py: Python<'_>, kind: &FrameKind) -> PyResult<Py<PyDict>> {
     let mapping = PyDict::new(py);
     match kind {
@@ -2021,7 +1909,6 @@ fn encode_frame_kind(py: Python<'_>, kind: &FrameKind) -> PyResult<Py<PyDict>> {
     }
     Ok(mapping.unbind())
 }
-
 fn decode_connect_frame_bytes(bytes: &[u8]) -> PyResult<ConnectFrameV1> {
     let (frame, used) = norito::core::decode_field_canonical::<ConnectFrameV1>(bytes)
         .map_err(|err| PyValueError::new_err(format!("failed to decode connect frame: {err}")))?;
@@ -2032,7 +1919,6 @@ fn decode_connect_frame_bytes(bytes: &[u8]) -> PyResult<ConnectFrameV1> {
     }
     Ok(frame)
 }
-
 fn sorafs_default_policy() -> AliasCachePolicy {
     AliasCachePolicy::new(
         Duration::from_secs(defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
@@ -2045,7 +1931,6 @@ fn sorafs_default_policy() -> AliasCachePolicy {
         Duration::from_secs(defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS),
     )
 }
-
 fn policy_override_u64<'py>(
     overrides: &Bound<'py, PyDict>,
     keys: &[&str],
@@ -2069,7 +1954,6 @@ fn policy_override_u64<'py>(
     }
     Ok(None)
 }
-
 fn alias_policy_from_py(overrides: Option<&Bound<'_, PyDict>>) -> PyResult<AliasCachePolicy> {
     let defaults = sorafs_default_policy();
     let mut positive = defaults.positive_ttl().as_secs();
@@ -2080,7 +1964,6 @@ fn alias_policy_from_py(overrides: Option<&Bound<'_, PyDict>>) -> PyResult<Alias
     let mut rotation = defaults.rotation_max_age().as_secs();
     let mut successor = defaults.successor_grace().as_secs();
     let mut governance = defaults.governance_grace().as_secs();
-
     if let Some(mapping) = overrides {
         if let Some(value) = policy_override_u64(
             mapping,
@@ -2139,7 +2022,6 @@ fn alias_policy_from_py(overrides: Option<&Bound<'_, PyDict>>) -> PyResult<Alias
             governance = value;
         }
     }
-
     if refresh > positive {
         return Err(PyValueError::new_err(
             "refresh_window_secs must not exceed positive_ttl_secs",
@@ -2150,7 +2032,6 @@ fn alias_policy_from_py(overrides: Option<&Bound<'_, PyDict>>) -> PyResult<Alias
             "hard_expiry_secs must be greater than or equal to positive_ttl_secs",
         ));
     }
-
     Ok(AliasCachePolicy::new(
         Duration::from_secs(positive),
         Duration::from_secs(refresh),
@@ -2162,7 +2043,6 @@ fn alias_policy_from_py(overrides: Option<&Bound<'_, PyDict>>) -> PyResult<Alias
         Duration::from_secs(governance),
     ))
 }
-
 fn alias_policy_to_dict(py: Python<'_>, policy: &AliasCachePolicy) -> PyResult<Py<PyDict>> {
     let mapping = PyDict::new(py);
     mapping.set_item("positive_ttl_secs", policy.positive_ttl().as_secs())?;
@@ -2175,7 +2055,6 @@ fn alias_policy_to_dict(py: Python<'_>, policy: &AliasCachePolicy) -> PyResult<P
     mapping.set_item("governance_grace_secs", policy.governance_grace().as_secs())?;
     Ok(mapping.unbind())
 }
-
 fn parse_hex_bytes_py(input: &str, context: &str) -> PyResult<Vec<u8>> {
     let trimmed = input.trim_start_matches("0x");
     if !trimmed.len().is_multiple_of(2) {
@@ -2186,14 +2065,12 @@ fn parse_hex_bytes_py(input: &str, context: &str) -> PyResult<Vec<u8>> {
     hex::decode(trimmed)
         .map_err(|err| PyValueError::new_err(format!("failed to decode {context}: {err}")))
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_alias_policy_defaults")]
 fn sorafs_alias_policy_defaults_py(py: Python<'_>) -> PyResult<Py<PyDict>> {
     let policy = sorafs_default_policy();
     alias_policy_to_dict(py, &policy)
 }
-
 #[pyfunction]
 #[pyo3(
     name = "sorafs_evaluate_alias_proof",
@@ -2209,7 +2086,6 @@ fn sorafs_evaluate_alias_proof_py(
     if trimmed.is_empty() {
         return Err(PyValueError::new_err("proof must not be empty"));
     }
-
     let policy = alias_policy_from_py(policy_overrides)?;
     let now = now_secs.unwrap_or_else(unix_now_secs);
     let proof_bytes = BASE64.decode(trimmed.as_bytes()).map_err(|err| {
@@ -2224,7 +2100,6 @@ fn sorafs_evaluate_alias_proof_py(
         AliasProofState::Expired => "expired",
         AliasProofState::HardExpired => "hard_expired",
     };
-
     let dict = PyDict::new(py);
     dict.set_item("state", state_label)?;
     dict.set_item("status_label", evaluation.status_label())?;
@@ -2240,7 +2115,6 @@ fn sorafs_evaluate_alias_proof_py(
     dict.set_item("servable", evaluation.state.is_servable())?;
     Ok(dict.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_alias_proof_fixture", signature = (options=None))]
 fn sorafs_alias_proof_fixture_py(
@@ -2259,7 +2133,6 @@ fn sorafs_alias_proof_fixture_py(
     } else {
         "docs/sora".to_owned()
     };
-
     let manifest_cid = if let Some(opts) = mapping {
         if let Some(value) = opts.get_item("manifest_cid_hex")? {
             let hex_str = value.extract::<String>().map_err(|_| {
@@ -2277,7 +2150,6 @@ fn sorafs_alias_proof_fixture_py(
             "manifest_cid_hex must not decode to an empty value",
         ));
     }
-
     let now = unix_now_secs();
     let generated = if let Some(opts) = mapping {
         if let Some(value) = opts.get_item("generated_at_unix")? {
@@ -2291,7 +2163,6 @@ fn sorafs_alias_proof_fixture_py(
     } else {
         now.saturating_sub(60)
     };
-
     let expires_default = generated + defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS;
     let expires = if let Some(opts) = mapping {
         if let Some(value) = opts.get_item("expires_at_unix")? {
@@ -2305,13 +2176,11 @@ fn sorafs_alias_proof_fixture_py(
     } else {
         expires_default
     };
-
     if expires <= generated {
         return Err(PyValueError::new_err(
             "expires_at_unix must be greater than generated_at_unix",
         ));
     }
-
     let bound_at = if let Some(opts) = mapping {
         if let Some(value) = opts.get_item("bound_at_epoch")? {
             value.extract::<u64>().map_err(|_| {
@@ -2323,7 +2192,6 @@ fn sorafs_alias_proof_fixture_py(
     } else {
         1
     };
-
     let expiry_epoch = if let Some(opts) = mapping {
         if let Some(value) = opts.get_item("expiry_epoch")? {
             value
@@ -2335,14 +2203,12 @@ fn sorafs_alias_proof_fixture_py(
     } else {
         bound_at + 100
     };
-
     let binding = AliasBindingV1 {
         alias: alias.clone(),
         manifest_cid,
         bound_at,
         expiry_epoch,
     };
-
     let mut bundle = AliasProofBundleV1 {
         binding,
         registry_root: [0u8; 32],
@@ -2352,7 +2218,6 @@ fn sorafs_alias_proof_fixture_py(
         merkle_path: Vec::new(),
         council_signatures: Vec::new(),
     };
-
     let root = alias_merkle_root(&bundle.binding, &bundle.merkle_path)
         .map_err(|err| PyValueError::new_err(format!("invalid alias proof bundle: {err}")))?;
     bundle.registry_root = root;
@@ -2379,7 +2244,6 @@ fn sorafs_alias_proof_fixture_py(
     bundle
         .validate()
         .map_err(|err| PyValueError::new_err(format!("invalid alias proof bundle: {err}")))?;
-
     let proof_bytes = norito::to_bytes(&bundle)
         .map_err(|err| PyValueError::new_err(format!("failed to encode alias proof: {err}")))?;
     let proof_b64 = BASE64.encode(proof_bytes);
@@ -2392,7 +2256,6 @@ fn sorafs_alias_proof_fixture_py(
     dict.set_item("registry_root_hex", hex::encode(bundle.registry_root))?;
     Ok(dict.unbind())
 }
-
 #[derive(Clone, FromPyObject)]
 struct PyRangeCapability {
     max_chunk_span: u32,
@@ -2401,21 +2264,18 @@ struct PyRangeCapability {
     requires_alignment: Option<bool>,
     supports_merkle_proof: Option<bool>,
 }
-
 #[derive(Clone, FromPyObject)]
 struct PyStreamBudget {
     max_in_flight: u16,
     max_bytes_per_sec: u64,
     burst_bytes: Option<u64>,
 }
-
 #[derive(Clone, FromPyObject)]
 struct PyTransportHint {
     protocol: String,
     protocol_id: u8,
     priority: u8,
 }
-
 #[derive(Clone, FromPyObject)]
 struct PyProviderMetadata {
     provider_id: Option<String>,
@@ -2435,7 +2295,6 @@ struct PyProviderMetadata {
     stream_budget: Option<PyStreamBudget>,
     transport_hints: Option<Vec<PyTransportHint>>,
 }
-
 #[derive(Clone, FromPyObject)]
 struct PyTelemetryEntry {
     provider_id: String,
@@ -2448,24 +2307,20 @@ struct PyTelemetryEntry {
     penalty: Option<bool>,
     last_updated_unix: Option<u64>,
 }
-
 #[derive(Clone, FromPyObject)]
 struct PyProviderBoost {
     provider: String,
     delta: i64,
 }
-
 struct PyScorePolicy {
     deny: HashSet<String>,
     boosts: HashMap<String, i64>,
 }
-
 impl PyScorePolicy {
     fn new(deny: HashSet<String>, boosts: HashMap<String, i64>) -> Self {
         Self { deny, boosts }
     }
 }
-
 impl ScorePolicy for PyScorePolicy {
     fn score(&self, ctx: ProviderScoreContext<'_>) -> ProviderScoreDecision {
         let provider = ctx.provider.id().as_str();
@@ -2482,14 +2337,12 @@ impl ScorePolicy for PyScorePolicy {
         }
     }
 }
-
 struct ProcessedPyProvider {
     name: String,
     max_concurrent: NonZeroUsize,
     weight: Option<NonZeroU32>,
     metadata: Option<ProviderMetadata>,
 }
-
 fn py_range_capability_to_internal(range: &PyRangeCapability) -> RangeCapability {
     RangeCapability {
         max_chunk_span: range.max_chunk_span,
@@ -2499,7 +2352,6 @@ fn py_range_capability_to_internal(range: &PyRangeCapability) -> RangeCapability
         supports_merkle_proof: range.supports_merkle_proof.unwrap_or(true),
     }
 }
-
 fn py_stream_budget_to_internal(budget: &PyStreamBudget) -> StreamBudget {
     StreamBudget {
         max_in_flight: budget.max_in_flight,
@@ -2507,7 +2359,6 @@ fn py_stream_budget_to_internal(budget: &PyStreamBudget) -> StreamBudget {
         burst_bytes: budget.burst_bytes,
     }
 }
-
 fn ensure_positive_u64(value: u64, context: &str) -> PyResult<u64> {
     if value == 0 {
         Err(PyValueError::new_err(format!(
@@ -2517,7 +2368,6 @@ fn ensure_positive_u64(value: u64, context: &str) -> PyResult<u64> {
         Ok(value)
     }
 }
-
 fn ensure_positive_u32(value: u32, context: &str) -> PyResult<u32> {
     if value == 0 {
         Err(PyValueError::new_err(format!(
@@ -2527,7 +2377,6 @@ fn ensure_positive_u32(value: u32, context: &str) -> PyResult<u32> {
         Ok(value)
     }
 }
-
 fn py_taikai_cache_to_internal(cfg: &PyTaikaiCacheOptions) -> PyResult<TaikaiCacheConfig> {
     let qos = &cfg.qos;
     let qos_config = QosConfig {
@@ -2586,7 +2435,6 @@ fn py_taikai_cache_to_internal(cfg: &PyTaikaiCacheOptions) -> PyResult<TaikaiCac
         },
     })
 }
-
 fn py_transport_hints_to_internal(hints: &[PyTransportHint]) -> Vec<TransportHint> {
     hints
         .iter()
@@ -2597,7 +2445,6 @@ fn py_transport_hints_to_internal(hints: &[PyTransportHint]) -> Vec<TransportHin
         })
         .collect()
 }
-
 fn py_provider_metadata_to_internal(
     metadata: PyProviderMetadata,
     alias: &str,
@@ -2636,7 +2483,6 @@ fn py_provider_metadata_to_internal(
     }
     Ok(provider_metadata)
 }
-
 fn telemetry_snapshot_from_py(entries: &[PyTelemetryEntry]) -> PyResult<TelemetrySnapshot> {
     let records = entries
         .iter()
@@ -2664,7 +2510,6 @@ fn telemetry_snapshot_from_py(entries: &[PyTelemetryEntry]) -> PyResult<Telemetr
         .collect::<PyResult<Vec<_>>>()?;
     Ok(TelemetrySnapshot::from_records(records))
 }
-
 #[derive(Clone, FromPyObject)]
 struct PyLocalProviderSpec {
     name: String,
@@ -2673,7 +2518,6 @@ struct PyLocalProviderSpec {
     weight: Option<u32>,
     metadata: Option<PyProviderMetadata>,
 }
-
 #[derive(Clone, Default, FromPyObject)]
 struct PyMultiFetchOptions {
     verify_digests: Option<bool>,
@@ -2693,7 +2537,6 @@ struct PyMultiFetchOptions {
     scoreboard_now_unix_secs: Option<u64>,
     scoreboard_telemetry_label: Option<String>,
 }
-
 fn derive_python_scoreboard_label(
     options: &PyMultiFetchOptions,
     persist_path: bool,
@@ -2712,13 +2555,11 @@ fn derive_python_scoreboard_label(
         None
     }
 }
-
 fn option_usize_to_json_value(value: Option<usize>) -> json::Value {
     value
         .and_then(|val| u64::try_from(val).ok())
         .map_or(json::Value::Null, json::Value::from)
 }
-
 fn transport_policy_labels(
     requested: TransportPolicy,
     override_policy: Option<TransportPolicy>,
@@ -2728,7 +2569,6 @@ fn transport_policy_labels(
         None => (requested.label(), false, None),
     }
 }
-
 fn anonymity_policy_labels(
     requested: AnonymityPolicy,
     override_policy: Option<AnonymityPolicy>,
@@ -2738,7 +2578,6 @@ fn anonymity_policy_labels(
         None => (requested.label(), false, None),
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn python_scoreboard_metadata(
     provider_count: usize,
@@ -2833,7 +2672,6 @@ fn python_scoreboard_metadata(
     );
     json::Value::Object(map)
 }
-
 fn provider_mix_label_from_counts(direct: u64, gateway: u64) -> &'static str {
     match (direct > 0, gateway > 0) {
         (true, true) => "mixed",
@@ -2842,7 +2680,6 @@ fn provider_mix_label_from_counts(direct: u64, gateway: u64) -> &'static str {
         (false, false) => "none",
     }
 }
-
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn build_gateway_metadata_dict(
     py: Python<'_>,
@@ -2865,7 +2702,6 @@ fn build_gateway_metadata_dict(
         "provider_mix",
         provider_mix_label_from_counts(direct_count, gateway_count),
     )?;
-
     let (transport_label, transport_override_flag, transport_override_label) =
         transport_policy_labels(
             config.transport_policy,
@@ -2878,7 +2714,6 @@ fn build_gateway_metadata_dict(
     } else {
         metadata.set_item("transport_policy_override_label", py.None())?;
     }
-
     let (anonymity_label, anonymity_override_flag, anonymity_override_label) =
         anonymity_policy_labels(
             config.anonymity_policy,
@@ -2891,33 +2726,28 @@ fn build_gateway_metadata_dict(
     } else {
         metadata.set_item("anonymity_policy_override_label", py.None())?;
     }
-
     if let Some(limit) = config.fetch.global_parallel_limit {
         let converted = u64::try_from(limit).unwrap_or(u64::MAX);
         metadata.set_item("max_parallel", converted)?;
     } else {
         metadata.set_item("max_parallel", py.None())?;
     }
-
     if let Some(limit) = config.max_providers {
         let converted = u64::try_from(limit.get()).unwrap_or(u64::MAX);
         metadata.set_item("max_peers", converted)?;
     } else {
         metadata.set_item("max_peers", py.None())?;
     }
-
     if let Some(limit) = config.fetch.per_chunk_retry_limit {
         let converted = u64::try_from(limit).unwrap_or(u64::MAX);
         metadata.set_item("retry_budget", converted)?;
     } else {
         metadata.set_item("retry_budget", py.None())?;
     }
-
     let provider_failure_threshold =
         u64::try_from(config.fetch.provider_failure_threshold).unwrap_or(u64::MAX);
     metadata.set_item("provider_failure_threshold", provider_failure_threshold)?;
     metadata.set_item("assume_now_unix", config.scoreboard.now_unix_secs)?;
-
     if let Some(label) = telemetry_label {
         metadata.set_item("telemetry_source_label", label)?;
     } else {
@@ -2928,7 +2758,6 @@ fn build_gateway_metadata_dict(
     } else {
         metadata.set_item("telemetry_region", py.None())?;
     }
-
     metadata.set_item("gateway_manifest_provided", manifest_envelope_present)?;
     metadata.set_item("gateway_manifest_id", manifest_id)?;
     if let Some(cid) = manifest_cid_hex {
@@ -2937,10 +2766,8 @@ fn build_gateway_metadata_dict(
         metadata.set_item("gateway_manifest_cid", py.None())?;
     }
     metadata.set_item("allow_implicit_metadata", allow_implicit_metadata)?;
-
     Ok(metadata.unbind())
 }
-
 #[derive(Clone, FromPyObject)]
 struct PyGatewayProviderSpec {
     name: String,
@@ -2950,12 +2777,10 @@ struct PyGatewayProviderSpec {
     stream_token_b64: String,
     privacy_events_url: Option<String>,
 }
-
 const MAX_GATEWAY_PROVIDER_NAME_BYTES: usize = 128;
 const MAX_GATEWAY_URL_BYTES: usize = 2_048;
 const MAX_GATEWAY_TOKEN_BASE64_BYTES: usize = 90 * 1_024;
 const MAX_GATEWAY_TOKEN_BYTES: usize = 64 * 1_024;
-
 fn canonical_gateway_hex32(value: &str, field: &str) -> PyResult<String> {
     if value.len() != 64
         || !value
@@ -2969,7 +2794,6 @@ fn canonical_gateway_hex32(value: &str, field: &str) -> PyResult<String> {
     }
     Ok(value.to_owned())
 }
-
 fn canonical_gateway_token(value: &str) -> PyResult<String> {
     if value.is_empty() || value.len() > MAX_GATEWAY_TOKEN_BASE64_BYTES || value != value.trim() {
         return Err(PyValueError::new_err(
@@ -2986,7 +2810,6 @@ fn canonical_gateway_token(value: &str) -> PyResult<String> {
     }
     Ok(value.to_owned())
 }
-
 fn canonical_gateway_url(value: &str, field: &str, expected_path: &str) -> PyResult<String> {
     if value.is_empty()
         || value.len() > MAX_GATEWAY_URL_BYTES
@@ -3037,7 +2860,6 @@ fn canonical_gateway_url(value: &str, field: &str, expected_path: &str) -> PyRes
     }
     Ok(value.to_owned())
 }
-
 fn gateway_ip_is_public(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(address) => {
@@ -3072,7 +2894,6 @@ fn gateway_ip_is_public(address: IpAddr) -> bool {
         }
     }
 }
-
 fn canonical_gateway_provider(spec: PyGatewayProviderSpec) -> PyResult<GatewayProviderInput> {
     if spec.name.is_empty()
         || spec.name.len() > MAX_GATEWAY_PROVIDER_NAME_BYTES
@@ -3103,7 +2924,6 @@ fn canonical_gateway_provider(spec: PyGatewayProviderSpec) -> PyResult<GatewayPr
         privacy_events_url,
     })
 }
-
 #[derive(Clone, Default, FromPyObject)]
 struct PyGatewayFetchOptions {
     manifest_envelope_b64: Option<String>,
@@ -3120,7 +2940,6 @@ struct PyGatewayFetchOptions {
     local_proxy: Option<PyLocalProxyOptions>,
     taikai_cache: Option<PyTaikaiCacheOptions>,
 }
-
 #[derive(Clone, Default, FromPyObject)]
 struct PyLocalProxyOptions {
     bind_addr: Option<String>,
@@ -3135,27 +2954,23 @@ struct PyLocalProxyOptions {
     car_bridge: Option<PyLocalProxyCarBridgeOptions>,
     kaigi_bridge: Option<PyLocalProxyKaigiBridgeOptions>,
 }
-
 #[derive(Clone, Default, FromPyObject)]
 struct PyLocalProxyNoritoBridgeOptions {
     spool_dir: String,
     extension: Option<String>,
 }
-
 #[derive(Clone, Default, FromPyObject)]
 struct PyLocalProxyCarBridgeOptions {
     cache_dir: String,
     extension: Option<String>,
     allow_zst: Option<bool>,
 }
-
 #[derive(Clone, Default, FromPyObject)]
 struct PyLocalProxyKaigiBridgeOptions {
     spool_dir: String,
     extension: Option<String>,
     room_policy: Option<String>,
 }
-
 #[derive(Clone, FromPyObject)]
 struct PyTaikaiQosOptions {
     priority_rate_bps: u64,
@@ -3163,13 +2978,11 @@ struct PyTaikaiQosOptions {
     bulk_rate_bps: u64,
     burst_multiplier: u32,
 }
-
 #[derive(Clone, Default, FromPyObject)]
 struct PyTaikaiReliabilityOptions {
     failures_to_trip: Option<u32>,
     open_secs: Option<u64>,
 }
-
 #[derive(Clone, FromPyObject)]
 struct PyTaikaiCacheOptions {
     hot_capacity_bytes: u64,
@@ -3181,7 +2994,6 @@ struct PyTaikaiCacheOptions {
     qos: PyTaikaiQosOptions,
     reliability: Option<PyTaikaiReliabilityOptions>,
 }
-
 fn chunk_verification_error_payload(
     py: Python<'_>,
     error: ChunkVerificationError,
@@ -3201,7 +3013,6 @@ fn chunk_verification_error_payload(
     }
     Ok(payload.into())
 }
-
 fn capability_mismatch_payload(
     py: Python<'_>,
     mismatch: CapabilityMismatch,
@@ -3246,7 +3057,6 @@ fn capability_mismatch_payload(
     }
     Ok(payload.into())
 }
-
 fn attempt_failure_payload(py: Python<'_>, failure: AttemptFailure) -> PyResult<Py<PyDict>> {
     let payload = PyDict::new(py);
     match failure {
@@ -3272,7 +3082,6 @@ fn attempt_failure_payload(py: Python<'_>, failure: AttemptFailure) -> PyResult<
     }
     Ok(payload.into())
 }
-
 fn tier_counts_payload(py: Python<'_>, counts: TierStats) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
     dict.set_item("hot", counts.hot)?;
@@ -3280,7 +3089,6 @@ fn tier_counts_payload(py: Python<'_>, counts: TierStats) -> PyResult<Py<PyDict>
     dict.set_item("cold", counts.cold)?;
     Ok(dict.into())
 }
-
 fn eviction_counts_payload(py: Python<'_>, counts: EvictionStats) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
     let hot = PyDict::new(py);
@@ -3297,7 +3105,6 @@ fn eviction_counts_payload(py: Python<'_>, counts: EvictionStats) -> PyResult<Py
     dict.set_item("cold", cold)?;
     Ok(dict.into())
 }
-
 fn promotions_payload(py: Python<'_>, promotions: PromotionStats) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
     dict.set_item("warm_to_hot", promotions.warm_to_hot)?;
@@ -3305,7 +3112,6 @@ fn promotions_payload(py: Python<'_>, promotions: PromotionStats) -> PyResult<Py
     dict.set_item("cold_to_hot", promotions.cold_to_hot)?;
     Ok(dict.into())
 }
-
 fn qos_counts_payload(py: Python<'_>, counts: QosStats) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
     dict.set_item("priority", counts.priority)?;
@@ -3313,7 +3119,6 @@ fn qos_counts_payload(py: Python<'_>, counts: QosStats) -> PyResult<Py<PyDict>> 
     dict.set_item("bulk", counts.bulk)?;
     Ok(dict.into())
 }
-
 fn taikai_cache_stats_payload(
     py: Python<'_>,
     stats: TaikaiCacheStatsSnapshot,
@@ -3327,7 +3132,6 @@ fn taikai_cache_stats_payload(
     dict.set_item("qos_denials", qos_counts_payload(py, stats.qos_denials)?)?;
     Ok(dict.into())
 }
-
 fn taikai_queue_stats_payload(py: Python<'_>, stats: TaikaiPullQueueStats) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
     dict.set_item("pending_segments", stats.pending_segments)?;
@@ -3344,7 +3148,6 @@ fn taikai_queue_stats_payload(py: Python<'_>, stats: TaikaiPullQueueStats) -> Py
     dict.set_item("open_circuits", stats.open_circuits)?;
     Ok(dict.into())
 }
-
 fn attempt_error_payload(py: Python<'_>, error: AttemptError) -> PyResult<Py<PyDict>> {
     let AttemptError { provider, failure } = error;
     let provider_name = provider.as_str().to_owned();
@@ -3353,14 +3156,12 @@ fn attempt_error_payload(py: Python<'_>, error: AttemptError) -> PyResult<Py<PyD
     payload.set_item("failure", attempt_failure_payload(py, failure)?)?;
     Ok(payload.into())
 }
-
 fn sorafs_multi_fetch_error(py: Python<'_>, err: MultiSourceError) -> PyErr {
     match build_multi_fetch_error_payload(py, err) {
         Ok(payload) => SorafsMultiFetchError::new_err(payload),
         Err(py_err) => py_err,
     }
 }
-
 fn build_multi_fetch_error_payload(py: Python<'_>, err: MultiSourceError) -> PyResult<Py<PyDict>> {
     let payload = PyDict::new(py);
     payload.set_item("message", err.to_string())?;
@@ -3426,7 +3227,6 @@ fn build_multi_fetch_error_payload(py: Python<'_>, err: MultiSourceError) -> PyR
     }
     Ok(payload.into())
 }
-
 #[pyfunction(
     name = "sorafs_multi_fetch_local",
     signature = (plan_json, providers, *, options=None)
@@ -3442,9 +3242,7 @@ fn sorafs_multi_fetch_local_py(
             "providers list must contain at least one entry",
         ));
     }
-
     let options = options.unwrap_or_default();
-
     let plan_value: json::Value = json::from_str(plan_json)
         .map_err(|err| PyValueError::new_err(format!("failed to parse plan JSON: {err}")))?;
     let parsed_plan = chunk_fetch_plan_from_json(&plan_value)
@@ -3456,13 +3254,11 @@ fn sorafs_multi_fetch_local_py(
             "chunk fetch plan must contain at least one chunk",
         ));
     }
-
     let content_length = chunk_specs
         .iter()
         .map(|spec| spec.offset + u64::from(spec.length))
         .max()
         .unwrap_or(0);
-
     let chunk_profile = if let Some(handle) = options.chunker_handle.as_deref() {
         let descriptor = sorafs_car::chunker_registry::lookup_by_handle(handle)
             .ok_or_else(|| PyValueError::new_err(format!("unknown chunker handle '{handle}'")))?;
@@ -3470,7 +3266,6 @@ fn sorafs_multi_fetch_local_py(
     } else {
         ChunkProfile::DEFAULT
     };
-
     let plan = CarBuildPlan {
         chunk_profile,
         payload_digest: blake3::Hash::from_bytes(plan_payload_digest),
@@ -3491,11 +3286,9 @@ fn sorafs_multi_fetch_local_py(
             size: content_length,
         }],
     };
-
     let mut processed = Vec::with_capacity(providers.len());
     let mut provider_names = HashSet::new();
     let mut raw_path_lookup: HashMap<String, PathBuf> = HashMap::new();
-
     for spec in providers {
         if !provider_names.insert(spec.name.clone()) {
             return Err(PyValueError::new_err(format!(
@@ -3516,21 +3309,17 @@ fn sorafs_multi_fetch_local_py(
                 spec.path
             )));
         }
-
         raw_path_lookup.insert(spec.name.clone(), path.clone());
-
         let max_concurrent = spec
             .max_concurrent
             .and_then(NonZeroUsize::new)
             .unwrap_or_else(|| NonZeroUsize::new(2).expect("constant non-zero"));
-
         let weight = match spec.weight {
             Some(value) => Some(NonZeroU32::new(value).ok_or_else(|| {
                 PyValueError::new_err("provider weight must be greater than zero")
             })?),
             None => None,
         };
-
         let metadata = match spec.metadata {
             Some(meta) => {
                 let provider_metadata = py_provider_metadata_to_internal(meta, &spec.name)?;
@@ -3541,7 +3330,6 @@ fn sorafs_multi_fetch_local_py(
             }
             None => None,
         };
-
         processed.push(ProcessedPyProvider {
             name: spec.name,
             max_concurrent,
@@ -3549,13 +3337,11 @@ fn sorafs_multi_fetch_local_py(
             metadata,
         });
     }
-
     if options.scoreboard_telemetry_label.is_some() && options.scoreboard_out_path.is_none() {
         return Err(PyValueError::new_err(
             "scoreboard_telemetry_label requires scoreboard_out_path to be set",
         ));
     }
-
     let telemetry_region = if let Some(raw) = options.telemetry_region.as_ref() {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -3565,7 +3351,6 @@ fn sorafs_multi_fetch_local_py(
     } else {
         None
     };
-
     let provider_count = processed.len();
     let mut scoreboard_config = ScoreboardConfig::default();
     if let Some(now) = options.scoreboard_now_unix_secs {
@@ -3608,7 +3393,6 @@ fn sorafs_multi_fetch_local_py(
             ));
         }
     }
-
     let telemetry_snapshot = options.telemetry.as_ref().map_or_else(
         || Ok(TelemetrySnapshot::default()),
         |entries| telemetry_snapshot_from_py(entries),
@@ -3620,7 +3404,6 @@ fn sorafs_multi_fetch_local_py(
     let scoreboard_requested = options.use_scoreboard.unwrap_or(false)
         || telemetry_provided
         || scoreboard_config.persist_path.is_some();
-
     let mut alias_by_provider_id: HashMap<String, String> = HashMap::new();
     let scoreboard_metadata = if scoreboard_requested {
         let mut list = Vec::with_capacity(processed.len());
@@ -3649,7 +3432,6 @@ fn sorafs_multi_fetch_local_py(
     } else {
         Vec::new()
     };
-
     let scoreboard = if scoreboard_requested {
         Some(
             scoreboard::build_scoreboard(
@@ -3663,9 +3445,7 @@ fn sorafs_multi_fetch_local_py(
     } else {
         None
     };
-
     let include_scoreboard = options.return_scoreboard.unwrap_or(scoreboard_requested);
-
     let mut eligible_aliases: HashSet<String> = HashSet::new();
     let mut weight_by_alias: HashMap<String, NonZeroU32> = HashMap::new();
     let scoreboard_export = if let Some(scoreboard) = scoreboard.as_ref() {
@@ -3711,7 +3491,6 @@ fn sorafs_multi_fetch_local_py(
     } else {
         None
     };
-
     let mut fetch_providers = Vec::with_capacity(processed.len());
     for provider in &processed {
         if scoreboard_requested && !eligible_aliases.contains(&provider.name) {
@@ -3731,20 +3510,17 @@ fn sorafs_multi_fetch_local_py(
         }
         fetch_providers.push(fetch_provider);
     }
-
     if fetch_providers.is_empty() {
         return Err(PyValueError::new_err(
             "no providers available after applying scoreboard filters",
         ));
     }
-
     if let Some(limit) = options.max_peers {
         let limit = limit.max(1);
         if fetch_providers.len() > limit {
             fetch_providers.truncate(limit);
         }
     }
-
     let mut provider_paths: HashMap<String, PathBuf> = HashMap::new();
     for provider in &fetch_providers {
         if let Some(path) = raw_path_lookup.get(provider.id().as_str()) {
@@ -3757,7 +3533,6 @@ fn sorafs_multi_fetch_local_py(
             provider_paths.insert(provider_id.clone(), path.clone());
         }
     }
-
     let path_map = Arc::new(provider_paths);
     let fetcher = move |request: FetchRequest| {
         let map = Arc::clone(&path_map);
@@ -3776,7 +3551,6 @@ fn sorafs_multi_fetch_local_py(
             Ok::<ChunkResponse, std::io::Error>(ChunkResponse::new(buf))
         }
     };
-
     let mut fetch_options = FetchOptions::default();
     if let Some(flag) = options.verify_digests {
         fetch_options.verify_digests = flag;
@@ -3793,7 +3567,6 @@ fn sorafs_multi_fetch_local_py(
     if let Some(limit) = options.max_parallel {
         fetch_options.global_parallel_limit = Some(limit.max(1));
     }
-
     let policy_requested = options
         .deny_providers
         .as_ref()
@@ -3817,7 +3590,6 @@ fn sorafs_multi_fetch_local_py(
         }
         fetch_options.score_policy = Some(Arc::new(PyScorePolicy::new(deny, boosts)));
     }
-
     let outcome = block_on(fetch_plan_parallel(
         &plan,
         fetch_providers,
@@ -3825,7 +3597,6 @@ fn sorafs_multi_fetch_local_py(
         fetch_options,
     ))
     .map_err(|err| sorafs_multi_fetch_error(py, err))?;
-
     let payload_bytes = outcome.assemble_payload();
     if blake3_hash(&payload_bytes) != plan.payload_digest {
         return Err(PyValueError::new_err(
@@ -3835,7 +3606,6 @@ fn sorafs_multi_fetch_local_py(
     let result = PyDict::new(py);
     result.set_item("chunk_count", outcome.chunks.len())?;
     result.set_item("payload", PyBytes::new(py, &payload_bytes))?;
-
     let provider_list = PyList::empty(py);
     for report in &outcome.provider_reports {
         let entry = PyDict::new(py);
@@ -3846,7 +3616,6 @@ fn sorafs_multi_fetch_local_py(
         provider_list.append(entry)?;
     }
     result.set_item("provider_reports", provider_list)?;
-
     let receipts_list = PyList::empty(py);
     for receipt in &outcome.chunk_receipts {
         let entry = PyDict::new(py);
@@ -3858,7 +3627,6 @@ fn sorafs_multi_fetch_local_py(
         receipts_list.append(entry)?;
     }
     result.set_item("chunk_receipts", receipts_list)?;
-
     if let Some(entries) = scoreboard_export {
         let scoreboard_list = PyList::empty(py);
         for (provider_id, alias, raw_score, normalised_weight, eligibility) in entries {
@@ -3874,10 +3642,8 @@ fn sorafs_multi_fetch_local_py(
     } else if include_scoreboard {
         result.set_item("scoreboard", py.None())?;
     }
-
     Ok(result.unbind())
 }
-
 fn parse_gateway_transport_policy_v1(raw: &str) -> PyResult<TransportPolicy> {
     if raw.is_empty() {
         return Err(PyValueError::new_err("transport_policy must not be empty"));
@@ -3888,7 +3654,6 @@ fn parse_gateway_transport_policy_v1(raw: &str) -> PyResult<TransportPolicy> {
         )
     })
 }
-
 fn parse_gateway_rollout_phase_v1(raw: &str) -> PyResult<RolloutPhase> {
     if raw.is_empty() {
         return Err(PyValueError::new_err("rollout_phase must not be empty"));
@@ -3897,7 +3662,6 @@ fn parse_gateway_rollout_phase_v1(raw: &str) -> PyResult<RolloutPhase> {
         PyValueError::new_err("rollout_phase must be one of 'canary', 'ramp', or 'default'")
     })
 }
-
 fn parse_gateway_anonymity_policy_v1(raw: &str) -> PyResult<AnonymityPolicy> {
     if raw.is_empty() {
         return Err(PyValueError::new_err("anonymity_policy must not be empty"));
@@ -3908,7 +3672,6 @@ fn parse_gateway_anonymity_policy_v1(raw: &str) -> PyResult<AnonymityPolicy> {
         )
     })
 }
-
 #[pyfunction]
 #[pyo3(
     name = "sorafs_gateway_fetch",
@@ -3927,14 +3690,12 @@ fn sorafs_gateway_fetch_py(
             "providers list must contain at least one entry",
         ));
     }
-
     let manifest_id = manifest_id_hex.trim().to_ascii_lowercase();
     if manifest_id.len() != 64 || !manifest_id.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(PyValueError::new_err(
             "manifest_id_hex must be a 32-byte hex string",
         ));
     }
-
     let options = options.unwrap_or_default();
     let scoreboard_telemetry_label = options
         .scoreboard_telemetry_label
@@ -3949,7 +3710,6 @@ fn sorafs_gateway_fetch_py(
             Ok(trimmed.to_string())
         })
         .transpose()?;
-
     let plan_value: json::Value = json::from_str(plan_json)
         .map_err(|err| PyValueError::new_err(format!("failed to parse plan JSON: {err}")))?;
     let parsed_plan = chunk_fetch_plan_from_json(&plan_value)
@@ -3969,13 +3729,11 @@ fn sorafs_gateway_fetch_py(
             )));
         }
     }
-
     let content_length = chunk_specs
         .iter()
         .map(|spec| spec.offset + u64::from(spec.length))
         .max()
         .unwrap_or(0);
-
     let chunker_handle_trimmed = chunker_handle.trim();
     if chunker_handle_trimmed.is_empty() {
         return Err(PyValueError::new_err("chunker_handle must not be empty"));
@@ -3984,7 +3742,6 @@ fn sorafs_gateway_fetch_py(
         .ok_or_else(|| {
             PyValueError::new_err(format!("unknown chunker handle '{chunker_handle_trimmed}'"))
         })?;
-
     let plan = CarBuildPlan {
         chunk_profile: descriptor.profile,
         payload_digest: blake3::Hash::from_bytes(plan_payload_digest),
@@ -4005,7 +3762,6 @@ fn sorafs_gateway_fetch_py(
             size: content_length,
         }],
     };
-
     let manifest_envelope_b64 = options
         .manifest_envelope_b64
         .as_ref()
@@ -4046,7 +3802,6 @@ fn sorafs_gateway_fetch_py(
         None
     };
     let manifest_cid_metadata = manifest_cid_hex.clone();
-
     let provider_inputs: Vec<GatewayProviderInput> = providers
         .into_iter()
         .map(canonical_gateway_provider)
@@ -4061,7 +3816,6 @@ fn sorafs_gateway_fetch_py(
             "sorafs_gateway_fetch requires at least two unique gateway providers",
         ));
     }
-
     let mut orchestrator_config = OrchestratorConfig::default();
     if let Some(region) = telemetry_region.as_ref() {
         orchestrator_config = orchestrator_config.with_telemetry_region(region.clone());
@@ -4123,7 +3877,6 @@ fn sorafs_gateway_fetch_py(
         }
         proxy_cfg.max_streams_per_circuit = proxy_opts.max_streams_per_circuit;
         proxy_cfg.circuit_ttl_hint_secs = proxy_opts.circuit_ttl_hint_secs;
-
         if let Some(norito_cfg) = proxy_opts.norito_bridge.as_ref() {
             let trimmed = norito_cfg.spool_dir.trim();
             if trimmed.is_empty() {
@@ -4187,7 +3940,6 @@ fn sorafs_gateway_fetch_py(
                 room_policy,
             });
         }
-
         if matches!(proxy_cfg.proxy_mode, ProxyMode::Bridge) && proxy_cfg.norito_bridge.is_none() {
             proxy_cfg.norito_bridge = Some(ProxyNoritoBridgeConfig {
                 spool_dir: defaults::streaming::soranet::PROVISION_SPOOL_DIR.to_string(),
@@ -4201,7 +3953,6 @@ fn sorafs_gateway_fetch_py(
                 room_policy: Some("public".to_string()),
             });
         }
-
         orchestrator_config.local_proxy = Some(proxy_cfg);
     }
     if let Some(cache_opts) = options.taikai_cache.as_ref() {
@@ -4209,7 +3960,6 @@ fn sorafs_gateway_fetch_py(
         orchestrator_config.taikai_cache = Some(cache_cfg);
     }
     let local_proxy_snapshot = orchestrator_config.local_proxy.clone();
-
     let gateway_provider_count = provider_inputs.len();
     let gateway_config = GatewayFetchConfig {
         manifest_id_hex: manifest_id.clone(),
@@ -4233,7 +3983,6 @@ fn sorafs_gateway_fetch_py(
         manifest_envelope_present,
         false,
     )?;
-
     let runtime = Runtime::new().map_err(|err| {
         PyValueError::new_err(format!("failed to initialise Tokio runtime: {err}"))
     })?;
@@ -4247,10 +3996,8 @@ fn sorafs_gateway_fetch_py(
             max_peers,
         ))
         .map_err(|err| PyValueError::new_err(format!("sorafs gateway fetch failed: {err}")))?;
-
     let outcome = &session.outcome;
     let policy_report = &session.policy_report;
-
     let payload_bytes = outcome.assemble_payload();
     if blake3_hash(&payload_bytes) != plan.payload_digest {
         return Err(PyValueError::new_err(
@@ -4293,7 +4040,6 @@ fn sorafs_gateway_fetch_py(
         policy_report.should_flag_brownout(),
     )?;
     result.set_item("anonymity_uses_classical", policy_report.uses_classical())?;
-
     let provider_reports = PyList::empty(py);
     for report in &outcome.provider_reports {
         let entry = PyDict::new(py);
@@ -4304,7 +4050,6 @@ fn sorafs_gateway_fetch_py(
         provider_reports.append(entry)?;
     }
     result.set_item("provider_reports", provider_reports)?;
-
     let receipts = PyList::empty(py);
     for receipt in &outcome.chunk_receipts {
         let entry = PyDict::new(py);
@@ -4386,7 +4131,6 @@ fn sorafs_gateway_fetch_py(
         let governance_obj = PyDict::new(py);
         governance_obj.set_item("council_signatures", signatures)?;
         car_dict.set_item("manifest_governance", governance_obj)?;
-
         let car_obj = PyDict::new(py);
         car_obj.set_item("size", verification.car_stats.car_size)?;
         car_obj.set_item(
@@ -4406,12 +4150,10 @@ fn sorafs_gateway_fetch_py(
         car_obj.set_item("verified", true)?;
         car_obj.set_item("por_leaf_count", verification.por_leaf_count)?;
         car_dict.set_item("car_archive", car_obj)?;
-
         result.set_item("car_verification", car_dict)?;
     } else {
         result.set_item("car_verification", py.None())?;
     }
-
     if let Some(cache_stats) = session.taikai_cache_stats {
         let summary = taikai_cache_stats_payload(py, cache_stats)?;
         result.set_item("taikai_cache_summary", summary)?;
@@ -4424,10 +4166,8 @@ fn sorafs_gateway_fetch_py(
     } else {
         result.set_item("taikai_cache_queue", py.None())?;
     }
-
     Ok(result.unbind())
 }
-
 fn anonymity_policy_label(policy: AnonymityPolicy) -> &'static str {
     match policy {
         AnonymityPolicy::GuardPq => "anon-guard-pq",
@@ -4435,7 +4175,6 @@ fn anonymity_policy_label(policy: AnonymityPolicy) -> &'static str {
         AnonymityPolicy::StrictPq => "anon-strict-pq",
     }
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_decode_replication_order")]
 fn sorafs_decode_replication_order_py(py: Python<'_>, norito_bytes: &[u8]) -> PyResult<Py<PyDict>> {
@@ -4445,7 +4184,6 @@ fn sorafs_decode_replication_order_py(py: Python<'_>, norito_bytes: &[u8]) -> Py
     order
         .validate()
         .map_err(|err| PyValueError::new_err(format!("invalid replication order: {err}")))?;
-
     let ReplicationOrderV1 {
         version,
         order_id,
@@ -4459,24 +4197,20 @@ fn sorafs_decode_replication_order_py(py: Python<'_>, norito_bytes: &[u8]) -> Py
         sla,
         metadata,
     } = order;
-
     let dict = PyDict::new(py);
     dict.set_item("schema_version", version)?;
     dict.set_item("order_id_hex", hex::encode(order_id))?;
-
     let manifest_cid_base64 = BASE64.encode(&manifest_cid);
     dict.set_item("manifest_cid_base64", manifest_cid_base64)?;
     match String::from_utf8(manifest_cid) {
         Ok(value) => dict.set_item("manifest_cid_utf8", value)?,
         Err(_) => dict.set_item("manifest_cid_utf8", py.None())?,
     }
-
     dict.set_item("manifest_digest_hex", hex::encode(manifest_digest))?;
     dict.set_item("chunking_profile", chunking_profile)?;
     dict.set_item("target_replicas", u32::from(target_replicas))?;
     dict.set_item("issued_at_unix", issued_at)?;
     dict.set_item("deadline_at_unix", deadline_at)?;
-
     let sla_dict = PyDict::new(py);
     sla_dict.set_item("ingest_deadline_secs", sla.ingest_deadline_secs)?;
     sla_dict.set_item(
@@ -4488,7 +4222,6 @@ fn sorafs_decode_replication_order_py(py: Python<'_>, norito_bytes: &[u8]) -> Py
         sla.min_por_success_percent_milli,
     )?;
     dict.set_item("sla", sla_dict)?;
-
     let assignments_list = PyList::empty(py);
     for assignment in assignments {
         let entry = PyDict::new(py);
@@ -4501,7 +4234,6 @@ fn sorafs_decode_replication_order_py(py: Python<'_>, norito_bytes: &[u8]) -> Py
         assignments_list.append(entry)?;
     }
     dict.set_item("assignments", assignments_list)?;
-
     let metadata_list = PyList::empty(py);
     for entry in metadata {
         let meta = PyDict::new(py);
@@ -4510,16 +4242,13 @@ fn sorafs_decode_replication_order_py(py: Python<'_>, norito_bytes: &[u8]) -> Py
         metadata_list.append(meta)?;
     }
     dict.set_item("metadata", metadata_list)?;
-
     Ok(dict.unbind())
 }
-
 fn sorafs_validation_outcome_json(outcome: &ValidationOutcomeV1) -> PyResult<String> {
     json::to_string(outcome).map_err(|err| {
         PyValueError::new_err(format!("failed to serialize validation outcome: {err}"))
     })
 }
-
 fn validate_sorafs_reference_label_py(label: &str, context: &str) -> PyResult<()> {
     if label.is_empty() || label.trim().is_empty() {
         return Err(PyValueError::new_err(format!(
@@ -4544,7 +4273,6 @@ fn validate_sorafs_reference_label_py(label: &str, context: &str) -> PyResult<()
     }
     Ok(())
 }
-
 fn validate_sorafs_reference_aggregate_bytes_py(
     context: &str,
     sizes: impl IntoIterator<Item = usize>,
@@ -4563,7 +4291,6 @@ fn validate_sorafs_reference_aggregate_bytes_py(
     }
     Ok(())
 }
-
 fn validate_sorafs_reference_governance_cid_py<'a>(
     cid: Option<&'a [u8]>,
     context: &str,
@@ -4579,7 +4306,6 @@ fn validate_sorafs_reference_governance_cid_py<'a>(
     }
     Ok(Some(cid))
 }
-
 fn parse_sorafs_orderbook_payload_kind(kind: &str) -> PyResult<OrderbookValidationPayloadKindV1> {
     parse_sorafs_orderbook_payload_kind_v1(kind).ok_or_else(|| {
         PyValueError::new_err(format!(
@@ -4587,17 +4313,14 @@ fn parse_sorafs_orderbook_payload_kind(kind: &str) -> PyResult<OrderbookValidati
         ))
     })
 }
-
 fn parse_sorafs_orderbook_side_py(side: &str) -> PyResult<OrderSideV1> {
     parse_sorafs_orderbook_side_v1(side)
         .ok_or_else(|| PyValueError::new_err(format!("unsupported SoraFS orderbook side `{side}`")))
 }
-
 fn parse_sorafs_orderbook_tier_py(tier: &str) -> PyResult<OrderTierV1> {
     parse_sorafs_orderbook_tier_v1(tier)
         .ok_or_else(|| PyValueError::new_err(format!("unsupported SoraFS orderbook tier `{tier}`")))
 }
-
 fn parse_sorafs_orderbook_cancel_reason_py(reason: &str) -> PyResult<OrderCancelReasonV1> {
     parse_sorafs_orderbook_cancel_reason_v1(reason, "owner_requested").ok_or_else(|| {
         PyValueError::new_err(format!(
@@ -4605,23 +4328,18 @@ fn parse_sorafs_orderbook_cancel_reason_py(reason: &str) -> PyResult<OrderCancel
         ))
     })
 }
-
 fn parse_sorafs_decimal_u64_text_py(value: &str, context: &str) -> PyResult<u64> {
     parse_sorafs_orderbook_decimal_u64_v1(value, context).map_err(PyValueError::new_err)
 }
-
 fn parse_sorafs_xor_quantity_text_py(value: &str, context: &str) -> PyResult<XorQuantity> {
     parse_sorafs_orderbook_xor_quantity_v1(value, context).map_err(PyValueError::new_err)
 }
-
 fn parse_sorafs_fee_bps_py(value: u32, context: &str) -> PyResult<u16> {
     parse_sorafs_orderbook_fee_bps_v1(value, context).map_err(PyValueError::new_err)
 }
-
 fn sorafs_fixed32_from_bytes_py(value: &[u8], context: &str) -> PyResult<[u8; 32]> {
     fixed_array::<32>(value, context)
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_validate_appeal_finance_cancel_asset_lock_json")]
 fn sorafs_validate_appeal_finance_cancel_asset_lock_json_py(
@@ -4636,14 +4354,12 @@ fn sorafs_validate_appeal_finance_cancel_asset_lock_json_py(
     );
     sorafs_validation_outcome_json(&outcome)
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SorafsPdpPayloadKind {
     Commitment,
     Challenge,
     Proof,
 }
-
 fn parse_sorafs_pdp_payload_kind(kind: &str) -> PyResult<SorafsPdpPayloadKind> {
     match kind {
         "commitment" => Ok(SorafsPdpPayloadKind::Commitment),
@@ -4654,7 +4370,6 @@ fn parse_sorafs_pdp_payload_kind(kind: &str) -> PyResult<SorafsPdpPayloadKind> {
         ))),
     }
 }
-
 fn parse_sorafs_fixture_bundle_payload_kind_py(kind: &str) -> PyResult<FixtureBundlePayloadKindV1> {
     match kind {
         "provider-advert" => Ok(FixtureBundlePayloadKindV1::ProviderAdvert),
@@ -4685,7 +4400,6 @@ fn parse_sorafs_fixture_bundle_payload_kind_py(kind: &str) -> PyResult<FixtureBu
         ))),
     }
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_validate_orderbook_payload_json")]
 fn sorafs_validate_orderbook_payload_json_py(
@@ -4699,7 +4413,6 @@ fn sorafs_validate_orderbook_payload_json_py(
         validate_orderbook_payload_bytes(kind, norito_bytes, label.to_owned(), generated_at_unix);
     sorafs_validation_outcome_json(&outcome)
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_sign_orderbook_payload")]
 fn sorafs_sign_orderbook_payload_py(
@@ -4713,7 +4426,6 @@ fn sorafs_sign_orderbook_payload_py(
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_derive_orderbook_order_id")]
 fn sorafs_derive_orderbook_order_id_py(
@@ -4729,7 +4441,6 @@ fn sorafs_derive_orderbook_order_id_py(
     let order_id = derive_orderbook_order_id_v1(owner_account, nonce);
     Ok(Py::from(PyBytes::new(py, &order_id)))
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_build_signed_orderbook_order_request")]
 #[allow(clippy::too_many_arguments)] // Python field-level constructor surface
@@ -4793,7 +4504,6 @@ fn sorafs_build_signed_orderbook_order_request_py(
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_build_signed_orderbook_order_cancel")]
 fn sorafs_build_signed_orderbook_order_cancel_py(
@@ -4815,11 +4525,9 @@ fn sorafs_build_signed_orderbook_order_cancel_py(
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
-
 fn validate_sorafs_orderbook_owner_account_py(owner_account: &[u8]) -> PyResult<()> {
     validate_sorafs_orderbook_owner_account_v1(owner_account).map_err(PyValueError::new_err)
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_build_signed_orderbook_settlement_receipt")]
 #[allow(clippy::too_many_arguments)] // Python field-level constructor surface
@@ -4855,7 +4563,6 @@ fn sorafs_build_signed_orderbook_settlement_receipt_py(
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_validate_pdp_payload_json")]
 fn sorafs_validate_pdp_payload_json_py(
@@ -4878,7 +4585,6 @@ fn sorafs_validate_pdp_payload_json_py(
     };
     sorafs_validation_outcome_json(&outcome)
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_validate_pdp_commitment_challenge_json")]
 fn sorafs_validate_pdp_commitment_challenge_json_py(
@@ -4897,7 +4603,6 @@ fn sorafs_validate_pdp_commitment_challenge_json_py(
     );
     sorafs_validation_outcome_json(&outcome)
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_validate_pdp_challenge_proof_json")]
 fn sorafs_validate_pdp_challenge_proof_json_py(
@@ -4916,7 +4621,6 @@ fn sorafs_validate_pdp_challenge_proof_json_py(
     );
     sorafs_validation_outcome_json(&outcome)
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_validate_pdp_bundle_json")]
 fn sorafs_validate_pdp_bundle_json_py(
@@ -4939,7 +4643,6 @@ fn sorafs_validate_pdp_bundle_json_py(
     );
     sorafs_validation_outcome_json(&outcome)
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_validate_fixture_bundle_json")]
 fn sorafs_validate_fixture_bundle_json_py(
@@ -4981,7 +4684,6 @@ fn sorafs_validate_fixture_bundle_json_py(
     let outcome = validate_fixture_bundle_payloads(&borrowed, now_unix, generated_at_unix);
     sorafs_validation_outcome_json(&outcome)
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_validate_governance_log_node_json")]
 fn sorafs_validate_governance_log_node_json_py(
@@ -5006,7 +4708,6 @@ fn sorafs_validate_governance_log_node_json_py(
     );
     sorafs_validation_outcome_json(&outcome)
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_validate_governance_dag_block_json")]
 #[pyo3(signature = (norito_bytes, label, expected_block_cid, generated_at_unix))]
@@ -5035,7 +4736,6 @@ fn sorafs_validate_governance_dag_block_json_py(
     );
     sorafs_validation_outcome_json(&outcome)
 }
-
 #[pyfunction]
 #[pyo3(name = "sorafs_validate_governance_dag_head_chain_json")]
 fn sorafs_validate_governance_dag_head_chain_json_py(
@@ -5077,11 +4777,32 @@ fn sorafs_validate_governance_dag_head_chain_json_py(
     );
     sorafs_validation_outcome_json(&outcome)
 }
-
 #[cfg(test)]
 mod sorafs_reference_validation_py_tests {
     use super::*;
-
+    #[test]
+    fn parse_sorafs_orderbook_payload_kind_requires_exact_v1_name() {
+        assert!(matches!(
+            parse_sorafs_orderbook_payload_kind("order-request"),
+            Ok(OrderbookValidationPayloadKindV1::OrderRequest)
+        ));
+        assert!(matches!(
+            parse_sorafs_orderbook_payload_kind("settlement-receipt"),
+            Ok(OrderbookValidationPayloadKindV1::SettlementReceipt)
+        ));
+        for retired in [
+            "order",
+            "order_request",
+            " ORDER-REQUEST",
+            "request",
+            "runtime-snapshot",
+        ] {
+            assert!(parse_sorafs_orderbook_payload_kind(retired).is_err());
+        }
+        assert!(parse_sorafs_orderbook_side_py("Bid").is_err());
+        assert!(parse_sorafs_orderbook_tier_py(" hot").is_err());
+        assert!(parse_sorafs_orderbook_cancel_reason_py("owner-requested").is_err());
+    }
     #[test]
     fn parse_sorafs_pdp_payload_kind_requires_exact_v1_name() {
         assert_eq!(
@@ -5100,7 +4821,6 @@ mod sorafs_reference_validation_py_tests {
             assert!(parse_sorafs_pdp_payload_kind(retired).is_err());
         }
     }
-
     #[test]
     fn governance_dag_reference_bounds_are_enforced_before_native_dispatch() {
         let maximum_label = SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1 as usize;
@@ -5108,7 +4828,6 @@ mod sorafs_reference_validation_py_tests {
         assert!(
             validate_sorafs_reference_label_py(&"a".repeat(maximum_label + 1), "label").is_err()
         );
-
         let maximum_input = SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1 as usize;
         assert!(
             validate_sorafs_reference_aggregate_bytes_py("governance DAG", [maximum_input]).is_ok()
@@ -5117,7 +4836,6 @@ mod sorafs_reference_validation_py_tests {
             validate_sorafs_reference_aggregate_bytes_py("governance DAG", [maximum_input, 1])
                 .is_err()
         );
-
         assert!(validate_sorafs_reference_governance_cid_py(None, "expected CID").is_ok());
         let exact_cid = [0_u8; SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1 as usize];
         assert!(
@@ -5131,7 +4849,6 @@ mod sorafs_reference_validation_py_tests {
             );
         }
     }
-
     #[test]
     fn governance_log_node_reference_fixture_has_stable_outcome() {
         let node =
@@ -5149,7 +4866,6 @@ mod sorafs_reference_validation_py_tests {
         assert_eq!(outcome.code, "SFS-OK-000");
         assert_eq!(outcome.generated_at, 1_700_001_234);
     }
-
     #[test]
     fn appeal_finance_cancel_asset_lock_native_outcomes_are_stable() {
         let canonical = include_bytes!(
@@ -5158,7 +4874,6 @@ mod sorafs_reference_validation_py_tests {
         let zero = include_bytes!(
             "../../../../fixtures/sorafs_manifest/appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to"
         );
-
         let accepted = sorafs_validate_appeal_finance_cancel_asset_lock_json_py(
             canonical,
             "cancel_asset_lock_v1.to",
@@ -5171,7 +4886,6 @@ mod sorafs_reference_validation_py_tests {
             accepted.get("code").and_then(norito::json::Value::as_str),
             Some("SFS-OK-000")
         );
-
         let rejected = sorafs_validate_appeal_finance_cancel_asset_lock_json_py(
             zero,
             "cancel_asset_lock_zero_expected_v1.to",
@@ -5185,7 +4899,6 @@ mod sorafs_reference_validation_py_tests {
             Some("SFS-VAL-001")
         );
     }
-
     #[test]
     fn governance_dag_reference_fixtures_have_stable_positive_and_negative_outcomes() {
         let root =
@@ -5193,12 +4906,10 @@ mod sorafs_reference_validation_py_tests {
         let child =
             include_bytes!("../../../../fixtures/sorafs_manifest/governance/dag_block_1_v1.to");
         let head = include_bytes!("../../../../fixtures/sorafs_manifest/governance/dag_head_v1.to");
-
         let block_outcome =
             validate_governance_dag_block_bytes(root, "root.to", None, 1_700_001_234);
         assert!(block_outcome.is_ok());
         assert_eq!(block_outcome.generated_at, 1_700_001_234);
-
         let blocks = [
             (root.as_slice(), "root.to".to_owned()),
             (child.as_slice(), "child.to".to_owned()),
@@ -5207,7 +4918,6 @@ mod sorafs_reference_validation_py_tests {
             validate_governance_dag_head_chain_bytes(head, "head.to", &blocks, 1_700_001_235);
         assert!(chain_outcome.is_ok());
         assert_eq!(chain_outcome.generated_at, 1_700_001_235);
-
         let reordered = [
             (child.as_slice(), "child.to".to_owned()),
             (root.as_slice(), "root.to".to_owned()),
@@ -5218,7 +4928,6 @@ mod sorafs_reference_validation_py_tests {
         assert_eq!(negative.code, "SFS-GOV-006");
     }
 }
-
 fn confidential_vk_registration_payload_py(
     py: Python<'_>,
     record: iroha_data_model::proof::VerifyingKeyRecord,
@@ -5256,7 +4965,6 @@ fn confidential_vk_registration_payload_py(
     payload.set_item("status", "Active")?;
     Ok(payload.into_any().unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "confidential_transfer_v2_verifying_key_registration_payload_v1")]
 fn confidential_transfer_v2_verifying_key_registration_payload_v1_py(
@@ -5279,7 +4987,6 @@ fn confidential_transfer_v2_verifying_key_registration_payload_v1_py(
         "confidential transfer v2",
     )
 }
-
 #[pyfunction]
 #[pyo3(name = "confidential_unshield_v3_verifying_key_registration_payload_v1")]
 fn confidential_unshield_v3_verifying_key_registration_payload_v1_py(
@@ -5302,7 +5009,6 @@ fn confidential_unshield_v3_verifying_key_registration_payload_v1_py(
         "confidential unshield v3",
     )
 }
-
 fn py_sequence_items<'py>(
     value: &Bound<'py, PyAny>,
     context: &str,
@@ -5317,7 +5023,6 @@ fn py_sequence_items<'py>(
         "{context} must be a list or tuple"
     )))
 }
-
 fn dict_require_alias<'py>(
     dict: &Bound<'py, PyDict>,
     aliases: &[&str],
@@ -5326,7 +5031,6 @@ fn dict_require_alias<'py>(
     dict_get_alias(dict, aliases)?
         .ok_or_else(|| PyValueError::new_err(format!("{context} is required")))
 }
-
 fn parse_confidential_amount_py(value: &Bound<'_, PyAny>, context: &str) -> PyResult<u128> {
     if let Ok(text) = value.extract::<String>() {
         return parse_u128_text(&text, context);
@@ -5335,7 +5039,6 @@ fn parse_confidential_amount_py(value: &Bound<'_, PyAny>, context: &str) -> PyRe
         .extract::<u128>()
         .map_err(|_| PyTypeError::new_err(format!("{context} must be a whole-number amount")))
 }
-
 fn parse_confidential_leaf_index_py(
     value: Option<Bound<'_, PyAny>>,
     context: &str,
@@ -5347,7 +5050,6 @@ fn parse_confidential_leaf_index_py(
         .extract::<usize>()
         .map_err(|_| PyTypeError::new_err(format!("{context} must be an unsigned integer")))
 }
-
 fn parse_confidential_transfer_input_py(
     item: &Bound<'_, PyAny>,
     index: usize,
@@ -5387,7 +5089,6 @@ fn parse_confidential_transfer_input_py(
         },
     )
 }
-
 fn parse_confidential_transfer_inputs_py(
     value: &Bound<'_, PyAny>,
 ) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialTransferInputV2>> {
@@ -5397,7 +5098,6 @@ fn parse_confidential_transfer_inputs_py(
         .map(|(index, item)| parse_confidential_transfer_input_py(item, index))
         .collect()
 }
-
 fn parse_confidential_unshield_inputs_py(
     value: &Bound<'_, PyAny>,
 ) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialUnshieldInputV2>> {
@@ -5415,7 +5115,6 @@ fn parse_confidential_unshield_inputs_py(
             .collect()
     })
 }
-
 fn parse_confidential_transfer_output_py(
     item: &Bound<'_, PyAny>,
     index: usize,
@@ -5442,7 +5141,6 @@ fn parse_confidential_transfer_output_py(
         },
     )
 }
-
 fn parse_confidential_transfer_outputs_py(
     value: &Bound<'_, PyAny>,
 ) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialTransferOutputV2>> {
@@ -5452,7 +5150,6 @@ fn parse_confidential_transfer_outputs_py(
         .map(|(index, item)| parse_confidential_transfer_output_py(item, index))
         .collect()
 }
-
 fn parse_confidential_unshield_output_py(
     item: &Bound<'_, PyAny>,
     index: usize,
@@ -5473,7 +5170,6 @@ fn parse_confidential_unshield_output_py(
         },
     )
 }
-
 fn parse_confidential_unshield_outputs_py(
     value: &Bound<'_, PyAny>,
 ) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialUnshieldOutputV3>> {
@@ -5483,7 +5179,6 @@ fn parse_confidential_unshield_outputs_py(
         .map(|(index, item)| parse_confidential_unshield_output_py(item, index))
         .collect()
 }
-
 fn parse_confidential_merkle_path_py(
     item: &Bound<'_, PyAny>,
     index: usize,
@@ -5526,7 +5221,6 @@ fn parse_confidential_merkle_path_py(
         root: py_fixed_array::<32>(&root, &format!("input_paths[{index}].root"))?,
     })
 }
-
 fn parse_confidential_merkle_paths_py(
     value: &Bound<'_, PyAny>,
 ) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialMerklePathV2>> {
@@ -5536,7 +5230,6 @@ fn parse_confidential_merkle_paths_py(
         .map(|(index, item)| parse_confidential_merkle_path_py(item, index))
         .collect()
 }
-
 fn confidential_bytes_list_py<const N: usize>(
     py: Python<'_>,
     items: &[[u8; N]],
@@ -5547,7 +5240,6 @@ fn confidential_bytes_list_py<const N: usize>(
     }
     Ok(list.unbind())
 }
-
 fn confidential_merkle_path_v2_py_dict(
     py: Python<'_>,
     leaf_index: usize,
@@ -5570,7 +5262,6 @@ fn confidential_merkle_path_v2_py_dict(
     result.set_item("root", PyBytes::new(py, &path.root))?;
     Ok(result.unbind())
 }
-
 fn confidential_transfer_proof_v2_py_dict(
     py: Python<'_>,
     proof: iroha_core::zk::confidential_v2::ConfidentialTransferProofV2,
@@ -5588,7 +5279,6 @@ fn confidential_transfer_proof_v2_py_dict(
     result.set_item("proof", PyBytes::new(py, &proof.proof.bytes))?;
     Ok(result.unbind())
 }
-
 fn confidential_unshield_proof_v3_py_dict(
     py: Python<'_>,
     proof: iroha_core::zk::confidential_v2::ConfidentialUnshieldProofV3,
@@ -5606,7 +5296,6 @@ fn confidential_unshield_proof_v3_py_dict(
     result.set_item("proof", PyBytes::new(py, &proof.proof.bytes))?;
     Ok(result.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "build_confidential_transfer_proof_v2", signature = (
     network_id,
@@ -5668,7 +5357,6 @@ fn build_confidential_transfer_proof_v2_py(
     .map_err(PyValueError::new_err)?;
     confidential_transfer_proof_v2_py_dict(py, proof)
 }
-
 #[pyfunction]
 #[pyo3(name = "build_confidential_transfer_proof_v2_with_paths", signature = (
     network_id,
@@ -5730,7 +5418,6 @@ fn build_confidential_transfer_proof_v2_with_paths_py(
     .map_err(PyValueError::new_err)?;
     confidential_transfer_proof_v2_py_dict(py, proof)
 }
-
 #[pyfunction]
 #[pyo3(name = "compute_confidential_root_v2", signature = (tree_commitments))]
 fn compute_confidential_root_v2_py(
@@ -5742,7 +5429,6 @@ fn compute_confidential_root_v2_py(
         .map_err(PyValueError::new_err)?;
     Ok(PyBytes::new(py, &root).unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "derive_confidential_next_zero_path_v2", signature = (
     previous_leaf_commitment,
@@ -5773,7 +5459,6 @@ fn derive_confidential_next_zero_path_v2_py(
         .ok_or_else(|| PyValueError::new_err("next zero leaf_index overflowed usize"))?;
     confidential_merkle_path_v2_py_dict(py, leaf_index, [0u8; 32], path)
 }
-
 #[pyfunction]
 #[pyo3(name = "derive_confidential_diversifier_v2", signature = (seed))]
 fn derive_confidential_diversifier_v2_py(
@@ -5789,7 +5474,6 @@ fn derive_confidential_diversifier_v2_py(
     let diversifier = iroha_core::zk::confidential_v2::derive_confidential_diversifier_v2(&seed);
     Ok(PyBytes::new(py, &diversifier).unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "derive_confidential_owner_tag_v2", signature = (spend_key, diversifier))]
 fn derive_confidential_owner_tag_v2_py(
@@ -5810,7 +5494,6 @@ fn derive_confidential_owner_tag_v2_py(
         .map_err(PyValueError::new_err)?;
     Ok(PyBytes::new(py, &owner_tag).unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "derive_confidential_note_v2", signature = (
     asset_definition_id,
@@ -5843,7 +5526,6 @@ fn derive_confidential_note_v2_py(
     .map_err(PyValueError::new_err)?;
     Ok(PyBytes::new(py, &note_commitment).unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "build_confidential_unshield_proof_v3", signature = (
     network_id,
@@ -5909,7 +5591,6 @@ fn build_confidential_unshield_proof_v3_py(
     .map_err(PyValueError::new_err)?;
     confidential_unshield_proof_v3_py_dict(py, proof)
 }
-
 #[pyfunction]
 #[pyo3(name = "build_confidential_unshield_proof_v3_with_paths", signature = (
     network_id,
@@ -5975,7 +5656,6 @@ fn build_confidential_unshield_proof_v3_with_paths_py(
     .map_err(PyValueError::new_err)?;
     confidential_unshield_proof_v3_py_dict(py, proof)
 }
-
 #[pyfunction]
 #[pyo3(name = "seal_connect_payload")]
 fn seal_connect_payload_py(
@@ -5994,7 +5674,6 @@ fn seal_connect_payload_py(
     let encoded = codec::Encode::encode(&frame);
     Ok(Py::from(PyBytes::new(py, encoded.as_slice())))
 }
-
 #[pyfunction]
 #[pyo3(name = "open_connect_payload")]
 fn open_connect_payload_py(py: Python<'_>, key: &[u8], frame_bytes: &[u8]) -> PyResult<Py<PyDict>> {
@@ -6009,11 +5688,9 @@ fn open_connect_payload_py(py: Python<'_>, key: &[u8], frame_bytes: &[u8]) -> Py
     mapping.set_item("payload", payload_dict)?;
     Ok(mapping.unbind())
 }
-
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
+    use super::*;
     use ed25519_dalek::SigningKey;
     use http::StatusCode;
     use ivm::bn254_vec::{self, FieldElem};
@@ -6024,31 +5701,25 @@ mod tests {
         types::{PyBytes, PyDict, PyList},
     };
     use sorafs_car::multi_fetch::PolicyBlockEvidence;
+    use std::fs;
     use tempfile::tempdir;
-
-    use super::*;
-
     const SAMPLE_RWA_ID: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.universal";
-
     fn ensure_python() {
         static INIT: OnceCell<()> = OnceCell::new();
         INIT.get_or_init(|| {
             Python::initialize();
         });
     }
-
     fn python_test_network_id() -> PyNetworkId {
         PyNetworkId::from_exact_bytes(&[0xA5; Hash::LENGTH]).expect("marked test NetworkId")
     }
-
     #[test]
     fn python_network_id_rejects_bare_labels_unmarked_hashes_and_noncanonical_literals() {
         ensure_python();
         assert!(PyNetworkId::parse("test-chain").is_err());
         assert!(PyNetworkId::from_exact_bytes(&[0xA4; Hash::LENGTH]).is_err());
         assert!(PyNetworkId::from_exact_bytes(&[0xA5; Hash::LENGTH - 1]).is_err());
-
         let network_id = python_test_network_id();
         let literal = network_id.literal().expect("canonical NetworkId literal");
         assert_eq!(
@@ -6064,12 +5735,26 @@ mod tests {
         assert!(PyNetworkId::parse(&literal.to_ascii_lowercase()).is_err());
         assert!(PyNetworkId::parse(&network_id.inner.to_string()).is_err());
     }
-
+    #[test]
+    fn sorafs_orderbook_owner_account_validation_enforces_v1_byte_ceiling() {
+        ensure_python();
+        assert!(
+            validate_sorafs_orderbook_owner_account_py(
+                &[0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1]
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_sorafs_orderbook_owner_account_py(
+                &[0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1]
+            )
+            .is_err()
+        );
+    }
     fn py_err_message(err: pyo3::PyErr) -> String {
         ensure_python();
         Python::attach(|py| err.value(py).to_string())
     }
-
     const MALFORMED_ED25519_PUBLIC_KEYS: [(&str, [u8; 32], &str); 3] = [
         ("all-zero", [0u8; 32], "all zero"),
         (
@@ -6090,42 +5775,34 @@ mod tests {
             "non-canonical",
         ),
     ];
-
     fn canonical_i105_from_seed(seed: u8) -> String {
         AccountId::new(PublicKey::from(parse_private_key(&[seed; 32]).unwrap()))
             .canonical_i105()
             .expect("canonical I105")
     }
-
     fn taira_i105_from_seed(seed: u8) -> String {
         AccountId::new(PublicKey::from(parse_private_key(&[seed; 32]).unwrap()))
             .to_i105_for_discriminant(369)
             .expect("Taira I105")
     }
-
     fn custom_i105_from_seed(seed: u8, discriminant: u16) -> String {
         AccountId::new(PublicKey::from(parse_private_key(&[seed; 32]).unwrap()))
             .to_i105_for_discriminant(discriminant)
             .expect("custom I105")
     }
-
     fn sample_account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive Python fixture account key");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn authority_fee_payment_json() -> &'static str {
         r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":null}}"#
     }
-
     include!("tests/python_crypto_boundary_tests.rs");
-
     #[test]
     fn native_sdk_bridge_abi_version_is_exactly_twenty_two() {
         assert_eq!(connect_norito_bridge_abi_version_py(), 22);
     }
-
     #[test]
     fn attachments_json_decodes_versioned_signed_transaction() {
         ensure_python();
@@ -6136,7 +5813,6 @@ mod tests {
         let authority = AccountId::new(public_key.clone())
             .canonical_i105()
             .expect("canonical I105 authority");
-
         let mut builder = TransactionBuilder::new(
             &python_test_network_id(),
             &authority,
@@ -6144,13 +5820,11 @@ mod tests {
         )
         .expect("builder constructs");
         let envelope = builder.sign(signing.as_bytes()).expect("transaction signs");
-
         let attachments = envelope
             .attachments_json()
             .expect("attachments decode succeeds");
         assert!(attachments.is_none());
         assert_eq!(envelope.network_id, python_test_network_id().inner);
-
         let wrong_network = PyNetworkId::from_exact_bytes(&[0xA7; Hash::LENGTH])
             .expect("marked wrong-network identity");
         assert!(
@@ -6161,14 +5835,12 @@ mod tests {
             .is_err(),
             "a valid signature from another NetworkId must reject",
         );
-
         let envelope_json = envelope.to_json().expect("envelope JSON");
         Python::attach(|py| {
             let envelope_type = py.get_type::<SignedTransactionEnvelope>();
             let restored = SignedTransactionEnvelope::from_json(&envelope_type, &envelope_json)
                 .expect("exact envelope JSON roundtrip");
             assert_eq!(restored.network_id, envelope.network_id);
-
             for retired_key in [
                 "chain",
                 "chainId",
@@ -6185,7 +5857,6 @@ mod tests {
                     "retired {retired_key} envelope metadata must reject",
                 );
             }
-
             let unsupported =
                 envelope_json.replacen("\"authority\"", "\"unsupported\":true,\"authority\"", 1);
             assert!(
@@ -6193,7 +5864,6 @@ mod tests {
                 "unknown envelope metadata must reject",
             );
         });
-
         let recomputed =
             canonical_signed_transaction_hash_v1(&envelope.signed_transaction_versioned)
                 .expect("exact signed envelope hashes");
@@ -6202,7 +5872,6 @@ mod tests {
             verify_signed_transaction_versioned_py(&envelope.signed_transaction_versioned)
                 .expect("canonical signed envelope verifies")
         );
-
         let mut tampered = envelope.signed_transaction_versioned.clone();
         let last = tampered
             .last_mut()
@@ -6210,7 +5879,6 @@ mod tests {
         *last ^= 0x01;
         assert!(canonical_signed_transaction_hash_v1(&tampered).is_err());
     }
-
     #[test]
     fn transaction_builder_attachment_limits_are_atomic_and_remain_signable() {
         ensure_python();
@@ -6232,7 +5900,6 @@ mod tests {
                 VerifyingKeyId::new("halo2/ipa", "python-builder-vk"),
             )
         };
-
         for byte in 0..iroha_data_model::proof::PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1 {
             builder
                 .try_add_proof_attachment(attachment(
@@ -6273,7 +5940,6 @@ mod tests {
             iroha_data_model::proof::PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1
         );
         signed.verify_signature().expect("signature remains valid");
-
         builder.clear_attachments();
         assert!(builder.attachments.is_none());
         builder
@@ -6284,7 +5950,6 @@ mod tests {
             Some(1)
         );
     }
-
     #[test]
     fn transaction_builder_attachment_frame_rejection_rolls_back() {
         ensure_python();
@@ -6343,7 +6008,6 @@ mod tests {
         builder.clear_attachments();
         assert!(builder.attachments.is_none());
     }
-
     #[test]
     fn signed_transaction_python_boundaries_use_the_canonical_transaction_limit() {
         let maximum = usize::try_from(
@@ -6353,11 +6017,9 @@ mod tests {
         )
         .expect("canonical transaction limit fits the test platform");
         let adversarial = vec![0_u8; maximum + 1];
-
         assert!(require_canonical_signed_transaction_wire_size_v1(&[]).is_err());
         assert!(require_canonical_signed_transaction_wire_size_v1(&adversarial[..maximum]).is_ok());
         assert!(require_canonical_signed_transaction_wire_size_v1(&adversarial).is_err());
-
         let exact_bound_error = canonical_signed_transaction_hash_v1(&adversarial[..maximum])
             .expect_err("malformed exact-bound input must not authenticate");
         assert!(
@@ -6376,7 +6038,6 @@ mod tests {
         assert!(verify_signed_transaction_versioned_py(&adversarial[..maximum]).is_err());
         assert!(verify_signed_transaction_versioned_py(&adversarial).is_err());
     }
-
     #[test]
     fn transaction_builder_rejects_invalid_network_and_authority() {
         ensure_python();
@@ -6385,7 +6046,6 @@ mod tests {
         let authority = AccountId::new(public_key)
             .canonical_i105()
             .expect("canonical I105 authority");
-
         for padded_authority in [format!(" {authority}"), format!("{authority} ")] {
             let err = match TransactionBuilder::new(
                 &python_test_network_id(),
@@ -6401,7 +6061,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn python_scoreboard_metadata_records_policy_labels() {
         let metadata = python_scoreboard_metadata(
@@ -6461,7 +6120,6 @@ mod tests {
             Some("iad-prod")
         );
     }
-
     #[test]
     fn python_scoreboard_metadata_defaults_soranet_first() {
         let metadata = python_scoreboard_metadata(
@@ -6505,7 +6163,6 @@ mod tests {
                 .is_some_and(json::Value::is_null)
         );
     }
-
     #[test]
     fn python_gateway_policy_parsers_accept_only_exact_v1_labels() {
         ensure_python();
@@ -6535,7 +6192,6 @@ mod tests {
                 "noncanonical transport label `{rejected}` must fail"
             );
         }
-
         for (label, expected) in [
             ("canary", RolloutPhase::Canary),
             ("ramp", RolloutPhase::Ramp),
@@ -6555,7 +6211,6 @@ mod tests {
                 "noncanonical rollout label `{rejected}` must fail"
             );
         }
-
         for (label, expected) in [
             ("anon-guard-pq", AnonymityPolicy::GuardPq),
             ("anon-majority-pq", AnonymityPolicy::MajorityPq),
@@ -6590,7 +6245,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn python_scoreboard_metadata_records_gateway_fields() {
         let metadata = python_scoreboard_metadata(
@@ -6623,7 +6277,6 @@ mod tests {
             Some(true)
         );
     }
-
     #[test]
     fn transfer_rwa_instruction_classmethod_serializes_canonical_quantity_payload() {
         ensure_python();
@@ -6651,7 +6304,6 @@ mod tests {
             let iroha_data_model::isi::rwa::RwaInstructionBox::Transfer(transfer) = rwa_box else {
                 panic!("expected TransferRwa instruction");
             };
-
             assert_eq!(
                 transfer.source,
                 parse_account_id(&source).expect("source parses")
@@ -6667,7 +6319,6 @@ mod tests {
             );
         });
     }
-
     #[test]
     fn register_rwa_instruction_classmethod_serializes_payload() {
         ensure_python();
@@ -6710,7 +6361,6 @@ mod tests {
             let iroha_data_model::isi::rwa::RwaInstructionBox::Register(register) = rwa_box else {
                 panic!("expected RegisterRwa instruction");
             };
-
             assert_eq!(
                 register.rwa.domain,
                 DomainId::try_new("commodities", "universal").expect("domain")
@@ -6732,7 +6382,6 @@ mod tests {
             assert!(register.rwa.controls.freeze_enabled);
         });
     }
-
     #[test]
     fn register_account_instruction_classmethod_is_domainless() {
         ensure_python();
@@ -6754,7 +6403,6 @@ mod tests {
             let iroha_data_model::isi::RegisterBox::Account(register) = register_box else {
                 panic!("expected Register<Account> instruction");
             };
-
             assert_eq!(
                 register.object.id,
                 parse_account_id(&account_id).expect("account parses")
@@ -6762,7 +6410,6 @@ mod tests {
             assert_eq!(register.object.metadata, Metadata::default());
         });
     }
-
     #[test]
     fn python_proof_attachment_instruction_classmethod_serializes_payload() {
         ensure_python();
@@ -6791,7 +6438,6 @@ mod tests {
             proof
                 .set_item("envelope_hash", PyBytes::new(py, &expected_envelope_hash))
                 .expect("envelope hash");
-
             let instruction = Instruction::verify_proof(&instruction_type, proof.as_any())
                 .expect("VerifyProof instruction builds");
             let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*instruction.inner;
@@ -6809,7 +6455,6 @@ mod tests {
             );
         });
     }
-
     #[test]
     fn python_proof_attachment_parser_rejects_noncanonical_boundaries() {
         ensure_python();
@@ -6833,11 +6478,9 @@ mod tests {
                 attachment.set_item("vk_ref", vk_ref).expect("vk ref");
                 attachment
             };
-
             let valid = canonical(b"proof");
             parse_zk_proof_attachment(valid.as_any(), "proof")
                 .expect("exact first-release attachment must parse");
-
             for alias in [
                 "proof_bytes",
                 "proof_b64",
@@ -6852,7 +6495,6 @@ mod tests {
                     .expect_err("retired aliases must reject");
                 assert!(error.to_string().contains("unknown first-release field"));
             }
-
             let nested_alias = canonical(b"proof");
             nested_alias
                 .get_item("proof")
@@ -6865,7 +6507,6 @@ mod tests {
             let error = parse_zk_proof_attachment(nested_alias.as_any(), "proof")
                 .expect_err("nested aliases must reject");
             assert!(error.to_string().contains("unknown first-release field"));
-
             for (field, value) in [("backend", " Halo2/ipa"), ("backend", "halo2/ipa/../vk")] {
                 let invalid = canonical(b"proof");
                 invalid.set_item(field, value).expect("invalid selector");
@@ -6873,7 +6514,6 @@ mod tests {
                     .expect_err("nonportable selectors must reject");
                 assert!(error.to_string().contains("portable"));
             }
-
             let invalid_name = canonical(b"proof");
             invalid_name
                 .get_item("vk_ref")
@@ -6886,12 +6526,10 @@ mod tests {
             let error = parse_zk_proof_attachment(invalid_name.as_any(), "proof")
                 .expect_err("nonportable VK name must reject");
             assert!(error.to_string().contains("portable"));
-
             let empty = canonical(b"");
             let error = parse_zk_proof_attachment(empty.as_any(), "proof")
                 .expect_err("empty proof must reject");
             assert!(error.to_string().contains("proof.bytes must be non-empty"));
-
             let zero_commitment = canonical(b"proof");
             zero_commitment
                 .set_item("vk_commitment", PyBytes::new(py, &[0; 32]))
@@ -6899,7 +6537,6 @@ mod tests {
             let error = parse_zk_proof_attachment(zero_commitment.as_any(), "proof")
                 .expect_err("zero VK commitment must reject");
             assert!(error.to_string().contains("vk_commitment must be non-zero"));
-
             let forged_hash = canonical(b"proof");
             forged_hash
                 .set_item("envelope_hash", PyBytes::new(py, &[0x55; 32]))
@@ -6907,7 +6544,6 @@ mod tests {
             let error = parse_zk_proof_attachment(forged_hash.as_any(), "proof")
                 .expect_err("forged envelope hash must reject");
             assert!(error.to_string().contains("must match proof bytes"));
-
             let lane_attachment = canonical(b"proof");
             let lane = PyDict::new(py);
             lane.set_item("commitment_id", 7_u16)
@@ -6932,7 +6568,6 @@ mod tests {
                 .expect("lane privacy");
             parse_zk_proof_attachment(lane_attachment.as_any(), "proof")
                 .expect("complete lane witness must parse");
-
             let sparse_lane_attachment = canonical(b"proof");
             let sparse_lane = PyDict::new(py);
             sparse_lane
@@ -6970,7 +6605,6 @@ mod tests {
             assert!(error.to_string().contains("between 1 and 255"));
         });
     }
-
     #[test]
     fn merge_rwas_and_set_rwa_controls_classmethods_roundtrip_payloads() {
         ensure_python();
@@ -7010,7 +6644,6 @@ mod tests {
             let iroha_data_model::isi::rwa::RwaInstructionBox::Merge(merge) = rwa_box else {
                 panic!("expected MergeRwas instruction");
             };
-
             assert_eq!(merge.parents.len(), 1);
             assert_eq!(merge.primary_reference, "blend-cert-007");
             assert_eq!(
@@ -7025,7 +6658,6 @@ mod tests {
                     .as_deref(),
                 Some("A")
             );
-
             let controls_payload = json_module
                 .call_method1(
                     "loads",
@@ -7061,14 +6693,12 @@ mod tests {
             else {
                 panic!("expected SetRwaControls instruction");
             };
-
             assert_eq!(controls.controls.controller_accounts.len(), 1);
             assert!(controls.controls.freeze_enabled);
             assert!(controls.controls.hold_enabled);
             assert!(controls.controls.redeem_enabled);
         });
     }
-
     #[test]
     fn rwa_scalar_instruction_classmethods_roundtrip_payloads() {
         ensure_python();
@@ -7076,7 +6706,6 @@ mod tests {
             let instruction_type = py.get_type::<Instruction>();
             let rwa_id = SAMPLE_RWA_ID;
             let destination = canonical_i105_from_seed(0x44);
-
             let redeem =
                 Instruction::redeem_rwa(&instruction_type, rwa_id, "2.5").expect("redeem builds");
             let hold =
@@ -7102,12 +6731,10 @@ mod tests {
             let remove_metadata =
                 Instruction::remove_rwa_key_value(&instruction_type, rwa_id, "grade")
                     .expect("remove metadata builds");
-
             let decoded = |instruction: &Instruction| {
                 json::from_str::<InstructionBox>(&instruction.to_json().expect("json"))
                     .expect("instruction json decodes")
             };
-
             let redeem_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&redeem);
             let hold_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&hold);
             let release_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&release);
@@ -7116,7 +6743,6 @@ mod tests {
             let unfreeze_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&unfreeze);
             let set_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&set_metadata);
             let remove_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&remove_metadata);
-
             let Some(iroha_data_model::isi::rwa::RwaInstructionBox::Redeem(redeem_box)) =
                 redeem_ref
                     .as_any()
@@ -7169,7 +6795,6 @@ mod tests {
             else {
                 panic!("expected RemoveRwaKeyValue");
             };
-
             assert_eq!(
                 redeem_box.quantity,
                 Quantity::from_str("2.5").expect("quantity")
@@ -7201,7 +6826,6 @@ mod tests {
             assert_eq!(remove_box.key.to_string(), "grade");
         });
     }
-
     #[test]
     fn sorafs_gateway_fetch_py_rejects_single_gateway_provider() {
         ensure_python();
@@ -7218,7 +6842,6 @@ mod tests {
             stream_token_b64: "dG9rZW4=".to_string(),
             privacy_events_url: None,
         }];
-
         Python::attach(|py| {
             let result = sorafs_gateway_fetch_py(
                 py,
@@ -7238,7 +6861,6 @@ mod tests {
             }
         });
     }
-
     #[test]
     fn canonical_gateway_provider_preserves_trust_inputs() {
         ensure_python();
@@ -7250,7 +6872,6 @@ mod tests {
             stream_token_b64: "dG9rZW4=".to_string(),
             privacy_events_url: Some("https://gateway.test/privacy/events".to_string()),
         };
-
         let provider = canonical_gateway_provider(spec).expect("canonical provider");
         assert_eq!(provider.provider_id_hex, "55".repeat(32));
         assert_eq!(provider.gateway_public_key_hex, "11".repeat(32));
@@ -7261,7 +6882,6 @@ mod tests {
             Some("https://gateway.test/privacy/events")
         );
     }
-
     #[test]
     fn canonical_gateway_provider_rejects_adversarial_trust_inputs() {
         ensure_python();
@@ -7273,7 +6893,6 @@ mod tests {
             stream_token_b64: "dG9rZW4=".to_string(),
             privacy_events_url: None,
         };
-
         for key in [
             "00".repeat(32),
             "AA".repeat(32),
@@ -7312,7 +6931,6 @@ mod tests {
         invalid_privacy.privacy_events_url = Some("https://gateway.test/privacy".to_string());
         assert!(canonical_gateway_provider(invalid_privacy).is_err());
     }
-
     #[test]
     fn py_taikai_cache_options_convert_to_internal_config() {
         ensure_python();
@@ -7337,7 +6955,6 @@ mod tests {
         assert_eq!(config.hot_retention.as_secs(), 45);
         assert_eq!(config.qos.burst_multiplier, 4);
     }
-
     #[test]
     fn py_taikai_cache_options_reject_zero_values() {
         ensure_python();
@@ -7363,7 +6980,6 @@ mod tests {
                 .contains("taikai_cache.hot_capacity_bytes must be greater than zero")
         );
     }
-
     #[test]
     fn parse_time_trigger_kwargs_handles_known_arguments() {
         ensure_python();
@@ -7378,7 +6994,6 @@ mod tests {
             assert!(parsed.metadata.is_some());
         });
     }
-
     #[test]
     fn parse_time_trigger_kwargs_rejects_unknown_keys() {
         ensure_python();
@@ -7389,7 +7004,6 @@ mod tests {
             assert!(err.is_instance_of::<PyTypeError>(py));
         });
     }
-
     #[test]
     fn repo_cash_leg_parser_validates_fields() {
         ensure_python();
@@ -7404,7 +7018,6 @@ mod tests {
                 "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
             );
             assert_eq!(leg.quantity.to_string(), "10");
-
             let missing = PyDict::new(py);
             missing
                 .set_item("asset_definition_id", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
@@ -7414,7 +7027,6 @@ mod tests {
             assert!(err.is_instance_of::<PyValueError>(py));
         });
     }
-
     #[test]
     fn quantity_python_boundaries_reject_lossy_and_noncanonical_inputs() {
         for literal in ["+1", "01", "1.0", "1.2300", "1e0", "-1", " 1", "1 "] {
@@ -7439,7 +7051,6 @@ mod tests {
             parse_canonical_u128_text("1", "test amount").expect("canonical amount"),
             1
         );
-
         ensure_python();
         Python::attach(|py| {
             let float = pyo3::types::PyFloat::new(py, 1.25);
@@ -7452,7 +7063,6 @@ mod tests {
             assert!(integer_error.is_instance_of::<PyTypeError>(py));
         });
     }
-
     #[test]
     fn sorafs_xor_quantity_parser_enforces_exact_first_release_domain() {
         const MAX_MANTISSA: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
@@ -7472,7 +7082,6 @@ mod tests {
                 literal
             );
         }
-
         for literal in [
             "",
             "+1",
@@ -7496,7 +7105,6 @@ mod tests {
         parse_sorafs_xor_quantity_text_py(&"1".repeat(156), "amount")
             .expect_err("156-character XOR quantity must exceed the canonical text bound");
     }
-
     #[test]
     fn asset_quantity_instruction_classmethods_require_canonical_text() {
         ensure_python();
@@ -7505,7 +7113,6 @@ mod tests {
             let owner = canonical_i105_from_seed(0x45);
             let destination = canonical_i105_from_seed(0x46);
             let asset_id = format!("7MBRDd8cGFBZkFGdDMwV7S6FPwbw#{owner}");
-
             Instruction::mint_asset_quantity(&instruction_type, &asset_id, "1.25")
                 .expect("canonical mint quantity");
             Instruction::burn_asset_quantity(&instruction_type, &asset_id, "1.25")
@@ -7561,7 +7168,6 @@ mod tests {
                 None,
             )
             .expect("clear asset holding limit");
-
             for literal in ["+1", "01", "1.0", "1.2500", "-1", " 1"] {
                 let result =
                     Instruction::mint_asset_quantity(&instruction_type, &asset_id, literal);
@@ -7573,7 +7179,6 @@ mod tests {
             }
         });
     }
-
     #[test]
     fn verified_transaction_rejection_codes_use_typed_variants() {
         let validation = |error| {
@@ -7626,7 +7231,6 @@ mod tests {
             }))
         );
     }
-
     #[test]
     fn repo_governance_parser_accepts_mixed_numeric_sources() {
         ensure_python();
@@ -7640,7 +7244,6 @@ mod tests {
             assert_eq!(governance.margin_frequency_secs(), 60);
         });
     }
-
     #[test]
     fn multi_source_invalid_plan_has_stable_python_payload() {
         ensure_python();
@@ -7651,7 +7254,6 @@ mod tests {
             )
             .expect("build invalid-plan payload");
             let payload = payload.bind(py);
-
             let kind: String = payload
                 .get_item("kind")
                 .expect("kind lookup")
@@ -7668,7 +7270,6 @@ mod tests {
             assert_eq!(reason, "input payload is empty");
         });
     }
-
     #[test]
     fn sorafs_multi_fetch_local_executes_plan() {
         ensure_python();
@@ -7680,12 +7281,10 @@ mod tests {
         let beta_path = tempdir.path().join("beta.bin");
         fs::write(&alpha_path, &payload).expect("write alpha payload");
         fs::write(&beta_path, &payload).expect("write beta payload");
-
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_json =
             sorafs_car::fetch_plan::chunk_fetch_plan_to_string(&plan).expect("serialise plan");
-
         let providers = vec![
             PyLocalProviderSpec {
                 name: "alpha".to_owned(),
@@ -7702,7 +7301,6 @@ mod tests {
                 metadata: None,
             },
         ];
-
         Python::attach(|py| {
             let result = sorafs_multi_fetch_local_py(
                 py,
@@ -7715,14 +7313,12 @@ mod tests {
             )
             .expect("multi-fetch succeeds");
             let dict = result.bind(py);
-
             let payload_obj = dict
                 .get_item("payload")
                 .expect("payload key")
                 .expect("payload missing");
             let payload_value = payload_obj.cast::<PyBytes>().expect("payload bytes");
             assert_eq!(payload_value.as_bytes(), payload.as_slice());
-
             let reports_obj = dict
                 .get_item("provider_reports")
                 .expect("provider_reports key")
@@ -7738,7 +7334,6 @@ mod tests {
                 .extract()
                 .expect("provider str");
             assert_eq!(provider_name, "alpha");
-
             let receipts_obj = dict
                 .get_item("chunk_receipts")
                 .expect("chunk_receipts key")
@@ -7764,7 +7359,6 @@ mod tests {
             }));
         });
     }
-
     #[test]
     fn sorafs_telemetry_reputation_score_rejects_out_of_range_bps() {
         ensure_python();
@@ -7779,14 +7373,12 @@ mod tests {
             penalty: Some(false),
             last_updated_unix: Some(1_700_000_000),
         }];
-
         let err = match telemetry_snapshot_from_py(&entries) {
             Ok(_) => panic!("out-of-range reputation_score_bps should be rejected"),
             Err(err) => err,
         };
         assert!(err.to_string().contains("reputation_score_bps"));
     }
-
     #[test]
     fn sorafs_multi_fetch_local_returns_scoreboard_and_filters_providers() {
         ensure_python();
@@ -7798,12 +7390,10 @@ mod tests {
         let beta_path = tempdir.path().join("beta.bin");
         fs::write(&alpha_path, &payload).expect("write alpha payload");
         fs::write(&beta_path, &payload).expect("write beta payload");
-
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_json =
             sorafs_car::fetch_plan::chunk_fetch_plan_to_string(&plan).expect("serialise plan");
-
         let providers = vec![
             PyLocalProviderSpec {
                 name: "alpha".to_owned(),
@@ -7820,7 +7410,6 @@ mod tests {
                 metadata: Some(provider_metadata("beta-id")),
             },
         ];
-
         Python::attach(|py| {
             let telemetry = vec![
                 PyTelemetryEntry {
@@ -7859,14 +7448,12 @@ mod tests {
             )
             .expect("multi-fetch with scoreboard succeeds");
             let dict = result.bind(py);
-
             let scoreboard_obj = dict
                 .get_item("scoreboard")
                 .expect("scoreboard key")
                 .expect("scoreboard missing");
             let scoreboard = scoreboard_obj.cast::<PyList>().expect("scoreboard list");
             assert_eq!(scoreboard.len(), 2);
-
             let alpha_item = scoreboard.get_item(0).expect("alpha scoreboard entry");
             let alpha = alpha_item.cast::<PyDict>().expect("alpha scoreboard entry");
             let alpha_id: String = alpha
@@ -7897,7 +7484,6 @@ mod tests {
                 .extract()
                 .expect("alpha weight");
             assert!(alpha_weight > 0.0);
-
             let beta_item = scoreboard.get_item(1).expect("beta scoreboard entry");
             let beta = beta_item.cast::<PyDict>().expect("beta scoreboard entry");
             let beta_id: String = beta
@@ -7914,7 +7500,6 @@ mod tests {
                 .extract()
                 .expect("beta eligibility");
             assert_eq!(beta_status, "telemetry penalty active");
-
             let reports_obj = dict
                 .get_item("provider_reports")
                 .expect("provider_reports")
@@ -7930,7 +7515,6 @@ mod tests {
                 .extract()
                 .expect("provider str");
             assert_eq!(provider_name, "alpha");
-
             let receipts_obj = dict
                 .get_item("chunk_receipts")
                 .expect("chunk_receipts")
@@ -7956,7 +7540,6 @@ mod tests {
             }));
         });
     }
-
     #[test]
     fn sorafs_multi_fetch_local_applies_score_policy() {
         ensure_python();
@@ -7966,13 +7549,11 @@ mod tests {
         let beta_path = tempdir.path().join("beta_policy.bin");
         fs::write(&alpha_path, &payload).expect("write alpha payload");
         fs::write(&beta_path, &payload).expect("write beta payload");
-
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_json =
             sorafs_car::fetch_plan::chunk_fetch_plan_to_string(&plan).expect("serialise plan");
         let chunk_count = plan.try_chunk_fetch_specs().expect("valid CAR plan").len() as u64;
-
         let providers = vec![
             PyLocalProviderSpec {
                 name: "alpha".to_owned(),
@@ -7989,7 +7570,6 @@ mod tests {
                 metadata: None,
             },
         ];
-
         Python::attach(|py| {
             let denied = sorafs_multi_fetch_local_py(
                 py,
@@ -8033,7 +7613,6 @@ mod tests {
             }
             assert_eq!(alpha_successes.unwrap_or_default(), 0);
             assert_eq!(beta_successes, Some(chunk_count));
-
             let denied_receipts_obj = denied_dict
                 .get_item("chunk_receipts")
                 .expect("chunk_receipts")
@@ -8055,7 +7634,6 @@ mod tests {
                     .map(|value| value == "beta")
                     .unwrap_or(false)
             }));
-
             let boosted = sorafs_multi_fetch_local_py(
                 py,
                 &plan_json,
@@ -8093,7 +7671,6 @@ mod tests {
             }));
         });
     }
-
     fn expect_poseidon2(a: u64, b: u64, gpu: Option<u64>) {
         let expected = ivm::poseidon2(a, b);
         match gpu {
@@ -8101,7 +7678,6 @@ mod tests {
             None => assert!(!super::cuda_available_py() || super::cuda_disabled_py()),
         }
     }
-
     fn expect_poseidon6(inputs: [u64; 6], gpu: Option<u64>) {
         let expected = ivm::poseidon6(inputs);
         match gpu {
@@ -8109,7 +7685,6 @@ mod tests {
             None => assert!(!super::cuda_available_py() || super::cuda_disabled_py()),
         }
     }
-
     fn expect_bn254<F>(a: [u64; 4], b: [u64; 4], gpu: Option<[u64; 4]>, reference_impl: F)
     where
         F: Fn(FieldElem, FieldElem) -> FieldElem,
@@ -8120,7 +7695,6 @@ mod tests {
             None => assert!(!super::cuda_available_py() || super::cuda_disabled_py()),
         }
     }
-
     fn expect_bn254_many<F>(
         lhs: &[[u64; 4]],
         rhs: &[[u64; 4]],
@@ -8140,18 +7714,15 @@ mod tests {
             None => assert!(!super::cuda_available_py() || super::cuda_disabled_py()),
         }
     }
-
     #[test]
     fn cuda_probes_reflect_ivm_state() {
         assert_eq!(super::cuda_available_py(), ivm::cuda_available());
         assert_eq!(super::cuda_disabled_py(), ivm::cuda_disabled());
     }
-
     #[test]
     fn poseidon2_wrapper_matches_cpu() {
         expect_poseidon2(1, 2, super::poseidon2_cuda_py(1, 2));
     }
-
     #[test]
     fn poseidon6_wrapper_matches_cpu() {
         expect_poseidon6(
@@ -8159,28 +7730,24 @@ mod tests {
             super::poseidon6_cuda_py([1, 2, 3, 4, 5, 6]),
         );
     }
-
     #[test]
     fn bn254_add_wrapper_matches_cpu() {
         let a = [1, 0, 0, 0];
         let b = [2, 0, 0, 0];
         expect_bn254(a, b, super::bn254_add_cuda_py(a, b), bn254_vec::add);
     }
-
     #[test]
     fn bn254_sub_wrapper_matches_cpu() {
         let a = [5, 0, 0, 0];
         let b = [3, 0, 0, 0];
         expect_bn254(a, b, super::bn254_sub_cuda_py(a, b), bn254_vec::sub);
     }
-
     #[test]
     fn bn254_mul_wrapper_matches_cpu() {
         let a = [7, 0, 0, 0];
         let b = [11, 0, 0, 0];
         expect_bn254(a, b, super::bn254_mul_cuda_py(a, b), bn254_vec::mul);
     }
-
     #[test]
     fn bn254_add_many_wrapper_matches_cpu() {
         let lhs = vec![[1, 0, 0, 0], [2, 0, 0, 0], [9, 0, 0, 0]];
@@ -8198,7 +7765,6 @@ mod tests {
             assert!(empty.is_none());
         }
     }
-
     #[test]
     fn bn254_sub_many_wrapper_matches_cpu() {
         let lhs = vec![[5, 0, 0, 0], [8, 0, 0, 0], [13, 0, 0, 0]];
@@ -8210,7 +7776,6 @@ mod tests {
             bn254_vec::sub_scalar,
         );
     }
-
     #[test]
     fn bn254_mul_many_wrapper_matches_cpu() {
         let lhs = vec![[7, 0, 0, 0], [11, 0, 0, 0], [5, 0, 0, 0]];
@@ -8222,7 +7787,6 @@ mod tests {
             bn254_vec::mul_scalar,
         );
     }
-
     #[test]
     fn attempt_failure_payload_renders_policy_block() {
         ensure_python();
@@ -8233,7 +7797,6 @@ mod tests {
             catalog_digest_hex: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                 .to_owned(),
         };
-
         Python::attach(|py| {
             let payload = attempt_failure_payload(
                 py,
@@ -8249,7 +7812,6 @@ mod tests {
                 .expect("policy block entry")
                 .expect("policy block entry");
             let policy = policy.cast::<PyDict>().expect("policy dict");
-
             assert_eq!(
                 policy
                     .get_item("observed_status")
@@ -8304,7 +7866,6 @@ mod tests {
             }
         });
     }
-
     #[test]
     fn taikai_cache_payload_helpers_render_counts() {
         ensure_python();
@@ -8315,7 +7876,6 @@ mod tests {
         evictions.warm.capacity = 4;
         evictions.cold.expired = 5;
         evictions.cold.capacity = 6;
-
         let stats = TaikaiCacheStatsSnapshot {
             hits: TierStats {
                 hot: 7,
@@ -8340,7 +7900,6 @@ mod tests {
                 bulk: 19,
             },
         };
-
         Python::attach(|py| {
             let summary = taikai_cache_stats_payload(py, stats).expect("payload");
             let summary = summary.bind(py);
@@ -8369,7 +7928,6 @@ mod tests {
             );
         });
     }
-
     #[test]
     fn taikai_queue_payload_helpers_render_counts() {
         ensure_python();
@@ -8388,7 +7946,6 @@ mod tests {
             failovers: 8,
             open_circuits: 9,
         };
-
         Python::attach(|py| {
             let payload = taikai_queue_stats_payload(py, queue).expect("payload");
             let payload = payload.bind(py);
@@ -8417,7 +7974,6 @@ mod tests {
             );
         });
     }
-
     #[test]
     fn transaction_builder_signs_only_the_exact_quoted_payer_and_gas_bound() {
         ensure_python();
@@ -8431,12 +7987,10 @@ mod tests {
             .expect("builder constructs");
         builder.set_creation_time_ms(42).expect("creation time");
         let draft = builder.payload_json().expect("payload JSON");
-
         let envelope = builder
             .sign_quoted_payload(&draft, intent, signing.as_bytes())
             .expect("exact quote signs");
         assert_eq!(envelope.authority, authority);
-
         let mut substituted =
             TransactionBuilder::new(&python_test_network_id(), &authority, intent)
                 .expect("builder constructs");
@@ -8453,7 +8007,6 @@ mod tests {
                 .contains("fee quote changed the selected payer, sponsor revision, or gas bound")
         );
     }
-
     #[test]
     fn transaction_builder_rejects_invalid_fee_payment_replacement() {
         ensure_python();
@@ -8468,7 +8021,6 @@ mod tests {
             authority_fee_payment_json(),
         )
         .expect("builder constructs");
-
         let error = builder
             .set_fee_payment_json(
                 r#"{"payer":"sponsor","value":{"charge_limits":[],"gas_limit":null,"program_revision":0}}"#,
@@ -8480,16 +8032,13 @@ mod tests {
                 .contains("invalid fee payment intent JSON")
         );
     }
-
     fn batch_test_instruction(message: &str) -> Instruction {
         Instruction::new(
             iroha_data_model::isi::Log::new(iroha_data_model::Level::INFO, message.into()).into(),
         )
     }
-
     const BATCH_TEST_CONTRACT_ADDRESS: &str =
         "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh";
-
     #[test]
     fn transaction_builder_preserves_mixed_batch_order_and_wire_tags() {
         ensure_python();
@@ -8504,7 +8053,6 @@ mod tests {
         let last = batch_test_instruction("after");
         let code_hash = Hash::new(b"python-mixed-batch-code");
         let mut arguments = vec![0xA5, 0x5A];
-
         builder.add_instruction(&first).expect("first instruction");
         builder
             .add_contract_call(
@@ -8517,7 +8065,6 @@ mod tests {
         arguments.fill(0);
         builder.add_instruction(&last).expect("last instruction");
         builder.validate_executable().expect("valid mixed batch");
-
         let model = builder.to_model_builder();
         let executable = &model.payload().instructions;
         let encoded = norito::codec::Encode::encode(executable);
@@ -8544,7 +8091,6 @@ mod tests {
             &1_u32.to_le_bytes()
         );
     }
-
     #[test]
     fn transaction_builder_keeps_legacy_instruction_encoding_unless_batch_is_selected() {
         ensure_python();
@@ -8565,7 +8111,6 @@ mod tests {
             &norito::codec::Encode::encode(legacy_executable)[..4],
             &0_u32.to_le_bytes()
         );
-
         let mut explicit = TransactionBuilder::new(
             &python_test_network_id(),
             &authority,
@@ -8585,13 +8130,11 @@ mod tests {
             &4_u32.to_le_bytes()
         );
     }
-
     #[test]
     fn transaction_builder_rejects_invalid_batch_shapes_and_contract_inputs() {
         ensure_python();
         let authority = canonical_i105_from_seed(0x43);
         let code_hash = Hash::new(b"python-invalid-batch-code").to_string();
-
         let mut empty = TransactionBuilder::new(
             &python_test_network_id(),
             &authority,
@@ -8606,7 +8149,6 @@ mod tests {
                 .to_string()
                 .contains("requires at least one item")
         );
-
         let mut without_gas = TransactionBuilder::new(
             &python_test_network_id(),
             &authority,
@@ -8623,7 +8165,6 @@ mod tests {
                 .to_string()
                 .contains("requires a transaction gas_limit")
         );
-
         let gas_intent = r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":1000}}"#;
         let mut invalid =
             TransactionBuilder::new(&python_test_network_id(), &authority, gas_intent)
@@ -8654,7 +8195,6 @@ mod tests {
                 )
                 .is_err()
         );
-
         let mut ivm = TransactionBuilder::new(&python_test_network_id(), &authority, gas_intent)
             .expect("builder");
         ivm.set_bytecode_hex("00").expect("bytecode");
@@ -8662,7 +8202,6 @@ mod tests {
             ivm.add_instruction(&batch_test_instruction("mixed"))
                 .is_err()
         );
-
         let mut items = TransactionBuilder::new(&python_test_network_id(), &authority, gas_intent)
             .expect("builder");
         items
@@ -8671,7 +8210,6 @@ mod tests {
         assert!(items.set_bytecode_hex("00").is_err());
     }
 }
-
 fn py_to_metadata(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<Metadata> {
     match value {
         None => Ok(Metadata::default()),
@@ -8682,7 +8220,6 @@ fn py_to_metadata(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<
         }
     }
 }
-
 fn py_to_json_string(py: Python<'_>, value: &Bound<'_, PyAny>, context: &str) -> PyResult<String> {
     let json_module = py
         .import("json")
@@ -8694,7 +8231,6 @@ fn py_to_json_string(py: Python<'_>, value: &Bound<'_, PyAny>, context: &str) ->
         .extract()
         .map_err(|err| PyValueError::new_err(format!("expected JSON string: {err}")))
 }
-
 fn py_to_json_model<T>(py: Python<'_>, value: &Bound<'_, PyAny>, context: &str) -> PyResult<T>
 where
     T: norito::json::JsonDeserialize,
@@ -8703,7 +8239,6 @@ where
     json::from_str::<T>(&dumped)
         .map_err(|err| PyValueError::new_err(format!("invalid {context} value: {err}")))
 }
-
 fn json_required_value(
     fields: &mut std::collections::BTreeMap<String, json::Value>,
     key: &str,
@@ -8713,26 +8248,22 @@ fn json_required_value(
         .remove(key)
         .ok_or_else(|| PyValueError::new_err(format!("{context}.{key} is required")))
 }
-
 fn json_string_value(value: json::Value, context: &str) -> PyResult<String> {
     match value {
         json::Value::String(value) => Ok(value),
         _ => Err(PyValueError::new_err(format!("{context} must be a string"))),
     }
 }
-
 fn json_rwa_id_value(value: json::Value, context: &str) -> PyResult<RwaId> {
     let literal = json_string_value(value, context)?;
     literal
         .parse()
         .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{literal}`: {err}")))
 }
-
 fn json_rwa_parent_refs_value(value: json::Value, context: &str) -> PyResult<Vec<RwaParentRef>> {
     let json::Value::Array(entries) = value else {
         return Err(PyValueError::new_err(format!("{context} must be an array")));
     };
-
     let mut parents = Vec::with_capacity(entries.len());
     for (index, entry) in entries.into_iter().enumerate() {
         let entry_context = format!("{context}[{index}]");
@@ -8755,7 +8286,6 @@ fn json_rwa_parent_refs_value(value: json::Value, context: &str) -> PyResult<Vec
     }
     Ok(parents)
 }
-
 fn parse_new_rwa_payload(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<NewRwa> {
     let dumped = py_to_json_string(py, value, "rwa")?;
     let json::Value::Object(mut fields) = json::from_str::<json::Value>(&dumped)
@@ -8763,7 +8293,6 @@ fn parse_new_rwa_payload(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<N
     else {
         return Err(PyValueError::new_err("rwa must be a JSON object"));
     };
-
     let domain =
         json::from_value::<DomainId>(json_required_value(&mut fields, "domain", "rwa")?)
             .map_err(|err| PyValueError::new_err(format!("invalid rwa.domain value: {err}")))?;
@@ -8801,7 +8330,6 @@ fn parse_new_rwa_payload(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<N
             json::from_value(value)
                 .map_err(|err| PyValueError::new_err(format!("invalid rwa.controls value: {err}")))
         })?;
-
     Ok(NewRwa::new(
         domain,
         quantity,
@@ -8813,7 +8341,6 @@ fn parse_new_rwa_payload(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<N
         controls,
     ))
 }
-
 fn parse_merge_rwas_payload(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
@@ -8824,7 +8351,6 @@ fn parse_merge_rwas_payload(
     else {
         return Err(PyValueError::new_err("merge must be a JSON object"));
     };
-
     let parents = json_rwa_parent_refs_value(
         json_required_value(&mut fields, "parents", "merge")?,
         "merge.parents",
@@ -8848,7 +8374,6 @@ fn parse_merge_rwas_payload(
                 PyValueError::new_err(format!("invalid merge.metadata value: {err}"))
             })
         })?;
-
     Ok(iroha_data_model::isi::rwa::MergeRwas {
         parents,
         primary_reference,
@@ -8856,7 +8381,6 @@ fn parse_merge_rwas_payload(
         metadata,
     })
 }
-
 fn py_to_json_value(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<Json> {
     match value {
         None => Ok(Json::default()),
@@ -8867,7 +8391,6 @@ fn py_to_json_value(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResul
         }
     }
 }
-
 fn parse_asset_quantity(quantity: &str, context: &str) -> PyResult<Quantity> {
     if quantity.len() > 155 {
         return Err(PyValueError::new_err(format!(
@@ -8883,11 +8406,9 @@ fn parse_asset_quantity(quantity: &str, context: &str) -> PyResult<Quantity> {
     }
     Ok(parsed)
 }
-
 fn parse_typed_quantity(quantity: &str, context: &str) -> PyResult<Quantity> {
     parse_asset_quantity(quantity, context)
 }
-
 fn parse_asset_transfer_limits(value: &Bound<'_, PyAny>) -> PyResult<Vec<AssetTransferLimit>> {
     let items = if let Ok(items) = value.cast::<PyList>() {
         items.iter().collect::<Vec<_>>()
@@ -8903,7 +8424,6 @@ fn parse_asset_transfer_limits(value: &Bound<'_, PyAny>) -> PyResult<Vec<AssetTr
             "limits may contain at most DAY, WEEK, and MONTH",
         ));
     }
-
     let mut parsed = Vec::with_capacity(items.len());
     let mut windows = Vec::with_capacity(items.len());
     for (index, item) in items.iter().enumerate() {
@@ -8930,7 +8450,6 @@ fn parse_asset_transfer_limits(value: &Bound<'_, PyAny>) -> PyResult<Vec<AssetTr
             )));
         }
         windows.push(window);
-
         let cap_amount = match mapping.get_item("cap_amount")? {
             None => {
                 return Err(PyValueError::new_err(format!(
@@ -8944,7 +8463,6 @@ fn parse_asset_transfer_limits(value: &Bound<'_, PyAny>) -> PyResult<Vec<AssetTr
     }
     Ok(parsed)
 }
-
 fn parse_escrow_id(value: &str, context: &str) -> PyResult<EscrowId> {
     let text = value.trim();
     if text.is_empty() {
@@ -8954,7 +8472,6 @@ fn parse_escrow_id(value: &str, context: &str) -> PyResult<EscrowId> {
     }
     Ok(EscrowId::new(Hash::new(text.as_bytes())))
 }
-
 fn json_object_string(fields: &mut json::Map, key: &str, context: &str) -> PyResult<String> {
     let value = fields
         .remove(key)
@@ -8966,7 +8483,6 @@ fn json_object_string(fields: &mut json::Map, key: &str, context: &str) -> PyRes
         ))),
     }
 }
-
 fn parse_transfer_asset_batch_entries(
     raw: &str,
     source: &AccountId,
@@ -9025,7 +8541,6 @@ fn parse_transfer_asset_batch_entries(
         })
         .collect()
 }
-
 fn parse_optional_hashes(value: Option<&Bound<'_, PyAny>>, context: &str) -> PyResult<Vec<Hash>> {
     let Some(value) = value else {
         return Ok(Vec::new());
@@ -9036,7 +8551,6 @@ fn parse_optional_hashes(value: Option<&Bound<'_, PyAny>>, context: &str) -> PyR
     py_fixed_array_list(value, context)
         .map(|items| items.into_iter().map(Hash::prehashed).collect())
 }
-
 fn conditional_escrow_evidence_hash_from_py(
     value: &Bound<'_, PyAny>,
     context: &str,
@@ -9044,7 +8558,6 @@ fn conditional_escrow_evidence_hash_from_py(
     let raw_digest = py_fixed_array::<32>(value, context)?;
     Ok(hash_conditional_escrow_evidence_digest(&raw_digest))
 }
-
 fn parse_optional_conditional_evidence_digest(
     value: Option<&Bound<'_, PyAny>>,
     context: &str,
@@ -9054,7 +8567,6 @@ fn parse_optional_conditional_evidence_digest(
         .map(|value| conditional_escrow_evidence_hash_from_py(value, context))
         .transpose()
 }
-
 fn parse_optional_conditional_evidence_digests(
     value: Option<&Bound<'_, PyAny>>,
     context: &str,
@@ -9072,14 +8584,12 @@ fn parse_optional_conditional_evidence_digests(
             .collect()
     })
 }
-
 fn quantity_from_py(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Quantity> {
     let literal = value.extract::<String>().map_err(|_| {
         PyTypeError::new_err(format!("{context} must be a canonical quantity string"))
     })?;
     parse_typed_quantity(&literal, context)
 }
-
 fn parse_repo_cash_leg(_py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<RepoCashLeg> {
     let dict = value.cast::<PyDict>().map_err(|_| {
         PyTypeError::new_err("cash_leg must be a mapping with asset_definition_id/quantity fields")
@@ -9104,7 +8614,6 @@ fn parse_repo_cash_leg(_py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Re
         quantity,
     })
 }
-
 fn parse_repo_collateral_leg(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
@@ -9139,7 +8648,6 @@ fn parse_repo_collateral_leg(
         metadata,
     })
 }
-
 fn parse_settlement_leg(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
@@ -9150,7 +8658,6 @@ fn parse_settlement_leg(
             "{name} must be a mapping with asset_definition_id, quantity, from, and to fields"
         ))
     })?;
-
     let asset_obj = dict
         .get_item("asset_definition_id")?
         .ok_or_else(|| PyValueError::new_err(format!("{name} requires `asset_definition_id`")))?;
@@ -9162,12 +8669,10 @@ fn parse_settlement_leg(
             "invalid {name} asset definition `{asset_str}`: {err}"
         ))
     })?;
-
     let quantity_obj = dict
         .get_item("quantity")?
         .ok_or_else(|| PyValueError::new_err(format!("{name} requires `quantity`")))?;
     let quantity = quantity_from_py(&quantity_obj, &format!("{name}.quantity"))?;
-
     let from_obj = dict
         .get_item("from")?
         .ok_or_else(|| PyValueError::new_err(format!("{name} requires `from`")))?;
@@ -9178,7 +8683,6 @@ fn parse_settlement_leg(
         PyValueError::new_err(format!("invalid {name} `from` account `{from_str}`: {err}"))
     })?;
     ensure_ed25519_account(&from_account)?;
-
     let to_obj = dict
         .get_item("to")?
         .ok_or_else(|| PyValueError::new_err(format!("{name} requires `to`")))?;
@@ -9189,12 +8693,10 @@ fn parse_settlement_leg(
         PyValueError::new_err(format!("invalid {name} `to` account `{to_str}`: {err}"))
     })?;
     ensure_ed25519_account(&to_account)?;
-
     let metadata = match dict.get_item("metadata")? {
         Some(meta) => py_to_metadata(py, Some(&meta))?,
         None => Metadata::default(),
     };
-
     Ok(SettlementLeg {
         asset_definition_id,
         quantity,
@@ -9203,7 +8705,6 @@ fn parse_settlement_leg(
         metadata,
     })
 }
-
 fn parse_settlement_order(value: &str) -> PyResult<SettlementExecutionOrder> {
     let normalized = value.replace('-', "_").to_ascii_lowercase();
     match normalized.as_str() {
@@ -9214,7 +8715,6 @@ fn parse_settlement_order(value: &str) -> PyResult<SettlementExecutionOrder> {
         ))),
     }
 }
-
 fn parse_settlement_atomicity(value: &str) -> PyResult<SettlementAtomicity> {
     let normalized = value.replace('-', "_").to_ascii_lowercase();
     match normalized.as_str() {
@@ -9230,7 +8730,6 @@ fn parse_settlement_atomicity(value: &str) -> PyResult<SettlementAtomicity> {
         ))),
     }
 }
-
 fn parse_u16_field(value: &Bound<'_, PyAny>, field: &str) -> PyResult<u16> {
     if let Ok(v) = value.extract::<u16>() {
         return Ok(v);
@@ -9244,7 +8743,6 @@ fn parse_u16_field(value: &Bound<'_, PyAny>, field: &str) -> PyResult<u16> {
         "`{field}` must be an unsigned 16-bit integer"
     )))
 }
-
 fn parse_u64_field(value: &Bound<'_, PyAny>, field: &str) -> PyResult<u64> {
     if let Ok(v) = value.extract::<u64>() {
         return Ok(v);
@@ -9258,7 +8756,6 @@ fn parse_u64_field(value: &Bound<'_, PyAny>, field: &str) -> PyResult<u64> {
         "`{field}` must be an unsigned 64-bit integer"
     )))
 }
-
 fn parse_repo_governance(value: &Bound<'_, PyAny>) -> PyResult<RepoGovernance> {
     let dict = value.cast::<PyDict>().map_err(|_| {
         PyTypeError::new_err(
@@ -9278,7 +8775,6 @@ fn parse_repo_governance(value: &Bound<'_, PyAny>) -> PyResult<RepoGovernance> {
         margin_frequency_secs,
     ))
 }
-
 fn parse_mintable(mode: Option<&str>) -> PyResult<Mintable> {
     let label = mode.unwrap_or("Infinitely");
     match label {
@@ -9297,7 +8793,6 @@ fn parse_mintable(mode: Option<&str>) -> PyResult<Mintable> {
         ))),
     }
 }
-
 fn parse_balance_scope_policy(mode: &str) -> PyResult<AssetBalancePolicy> {
     let policy = match mode {
         "Global" => AssetBalancePolicy::Global,
@@ -9310,18 +8805,15 @@ fn parse_balance_scope_policy(mode: &str) -> PyResult<AssetBalancePolicy> {
     };
     Ok(policy)
 }
-
 fn account_id_to_py(py: Python<'_>, id: &AccountId) -> PyResult<Py<PyAccountId>> {
     Py::new(py, PyAccountId { inner: id.clone() })
 }
-
 fn asset_definition_id_to_py(
     py: Python<'_>,
     id: &AssetDefinitionId,
 ) -> PyResult<Py<PyAssetDefinitionId>> {
     Py::new(py, PyAssetDefinitionId { inner: id.clone() })
 }
-
 #[pyclass(
     from_py_object,
     frozen,
@@ -9332,12 +8824,10 @@ fn asset_definition_id_to_py(
 pub(crate) struct PyNetworkId {
     inner: NetworkId,
 }
-
 impl PyNetworkId {
     pub(crate) const fn as_inner(&self) -> &NetworkId {
         &self.inner
     }
-
     fn from_exact_bytes(value: &[u8]) -> PyResult<Self> {
         let bytes = fixed_array::<{ Hash::LENGTH }>(value, "NetworkId")?;
         if bytes[Hash::LENGTH - 1] & 1 == 0 {
@@ -9352,7 +8842,6 @@ impl PyNetworkId {
         })
     }
 }
-
 fn canonical_network_id_literal(network_id: &NetworkId) -> PyResult<String> {
     let value = norito::json::to_value(network_id)
         .map_err(|err| PyRuntimeError::new_err(format!("failed to serialize NetworkId: {err}")))?;
@@ -9361,7 +8850,6 @@ fn canonical_network_id_literal(network_id: &NetworkId) -> PyResult<String> {
         .map(str::to_owned)
         .ok_or_else(|| PyRuntimeError::new_err("NetworkId JSON must be a string literal"))
 }
-
 #[pymethods]
 impl PyNetworkId {
     /// Parse one exact canonical checksummed genesis-header hash literal.
@@ -9382,57 +8870,46 @@ impl PyNetworkId {
         }
         Ok(Self { inner })
     }
-
     /// Construct one exact NetworkId from marked genesis-header hash bytes.
     #[staticmethod]
     fn from_bytes(value: &[u8]) -> PyResult<Self> {
         Self::from_exact_bytes(value)
     }
-
     /// Return the canonical checksummed hash literal.
     #[getter]
     fn literal(&self) -> PyResult<String> {
         canonical_network_id_literal(&self.inner)
     }
-
     /// Return a defensive copy of the exact genesis-header hash bytes.
     fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, self.inner.as_bytes())
     }
-
     fn __str__(&self) -> PyResult<String> {
         self.literal()
     }
-
     fn __repr__(&self) -> PyResult<String> {
         Ok(format!("NetworkId('{}')", self.literal()?))
     }
-
     fn __eq__(&self, other: &Self) -> bool {
         self.inner == other.inner
     }
-
     fn __hash__(&self) -> u64 {
         let mut prefix = [0_u8; 8];
         prefix.copy_from_slice(&self.inner.as_bytes()[..8]);
         u64::from_le_bytes(prefix)
     }
-
     fn __copy__(&self) -> Self {
         *self
     }
-
     fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
         *self
     }
 }
-
 #[pyclass(from_py_object, name = "DomainId", module = "iroha_python._crypto")]
 #[derive(Clone)]
 struct PyDomainId {
     inner: DomainId,
 }
-
 #[pymethods]
 impl PyDomainId {
     #[new]
@@ -9441,35 +8918,28 @@ impl PyDomainId {
             .map_err(|err| PyValueError::new_err(format!("invalid domain id `{value}`: {err}")))?;
         Ok(Self { inner })
     }
-
     #[getter]
     fn value(&self) -> String {
         self.inner.to_string()
     }
-
     fn __str__(&self) -> String {
         self.value()
     }
-
     fn __repr__(&self) -> String {
         format!("DomainId('{}')", self.value())
     }
-
     fn __copy__(&self) -> Self {
         self.clone()
     }
-
     fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
         self.clone()
     }
 }
-
 #[pyclass(from_py_object, name = "AccountId", module = "iroha_python._crypto")]
 #[derive(Clone)]
 struct PyAccountId {
     inner: AccountId,
 }
-
 #[pymethods]
 impl PyAccountId {
     #[new]
@@ -9478,12 +8948,10 @@ impl PyAccountId {
         ensure_ed25519_account(&id)?;
         Ok(Self { inner: id })
     }
-
     #[getter]
     fn value(&self) -> String {
         self.inner.to_string()
     }
-
     #[getter]
     fn public_key_hex(&self) -> PyResult<String> {
         let signatory = require_single_signatory(&self.inner, "AccountId")?;
@@ -9491,24 +8959,19 @@ impl PyAccountId {
         algorithm_guard(algorithm)?;
         Ok(hex::encode(bytes))
     }
-
     fn __str__(&self) -> String {
         self.value()
     }
-
     fn __repr__(&self) -> String {
         format!("AccountId('{}')", self.value())
     }
-
     fn __copy__(&self) -> Self {
         self.clone()
     }
-
     fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
         self.clone()
     }
 }
-
 #[pyclass(
     from_py_object,
     name = "AssetDefinitionId",
@@ -9518,7 +8981,6 @@ impl PyAccountId {
 struct PyAssetDefinitionId {
     inner: AssetDefinitionId,
 }
-
 #[pymethods]
 impl PyAssetDefinitionId {
     #[new]
@@ -9528,7 +8990,6 @@ impl PyAssetDefinitionId {
         })?;
         Ok(Self { inner })
     }
-
     #[staticmethod]
     fn from_domain_and_name(domain_id: &str, name: &str) -> PyResult<Self> {
         let domain = DomainId::parse_fully_qualified(domain_id).map_err(|err| {
@@ -9541,39 +9002,31 @@ impl PyAssetDefinitionId {
             inner: AssetDefinitionId::derive_from_components(domain, name),
         })
     }
-
     #[getter]
     fn value(&self) -> String {
         self.inner.to_string()
     }
-
     fn canonical_address(&self) -> String {
         self.inner.canonical_address().to_string()
     }
-
     fn __str__(&self) -> String {
         self.value()
     }
-
     fn __repr__(&self) -> String {
         format!("AssetDefinitionId('{}')", self.value())
     }
-
     fn __copy__(&self) -> Self {
         self.clone()
     }
-
     fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
         self.clone()
     }
 }
-
 #[pyclass(from_py_object, name = "AssetId", module = "iroha_python._crypto")]
 #[derive(Clone)]
 struct PyAssetId {
     inner: AssetId,
 }
-
 #[pymethods]
 impl PyAssetId {
     #[new]
@@ -9581,7 +9034,6 @@ impl PyAssetId {
         let inner = parse_asset_id(value)?;
         Ok(Self { inner })
     }
-
     #[classmethod]
     fn from_parts(
         _cls: &Bound<'_, PyType>,
@@ -9592,39 +9044,31 @@ impl PyAssetId {
             inner: AssetId::new(definition.inner.clone(), account.inner.clone()),
         })
     }
-
     #[getter]
     fn value(&self) -> String {
         self.inner.to_string()
     }
-
     #[getter]
     fn definition<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAssetDefinitionId>> {
         asset_definition_id_to_py(py, self.inner.definition())
     }
-
     #[getter]
     fn account<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAccountId>> {
         account_id_to_py(py, self.inner.account())
     }
-
     fn __str__(&self) -> String {
         self.value()
     }
-
     fn __repr__(&self) -> String {
         format!("AssetId('{}')", self.value())
     }
-
     fn __copy__(&self) -> Self {
         self.clone()
     }
-
     fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
         self.clone()
     }
 }
-
 fn numeric_spec_from_optional_scale(scale: Option<u32>) -> PyResult<NumericSpec> {
     match scale {
         Some(scale) => NumericSpec::try_fractional(scale).map_err(|error| {
@@ -9636,19 +9080,16 @@ fn numeric_spec_from_optional_scale(scale: Option<u32>) -> PyResult<NumericSpec>
         None => Ok(NumericSpec::unconstrained()),
     }
 }
-
 #[pyclass(from_py_object, module = "iroha_python._crypto")]
 #[derive(Clone)]
 struct Instruction {
     inner: InstructionBox,
 }
-
 impl Instruction {
     fn new(inner: InstructionBox) -> Self {
         Self { inner }
     }
 }
-
 #[pymethods]
 impl Instruction {
     #[classmethod]
@@ -9657,7 +9098,6 @@ impl Instruction {
             .map_err(|err| PyValueError::new_err(format!("invalid instruction JSON: {err}")))?;
         Ok(Instruction::new(instruction))
     }
-
     /// Construct one canonical native SoraFS replication-order issue.
     #[classmethod]
     #[pyo3(signature = (order_id, order_payload_base64, issued_epoch, deadline_epoch, musubi_archive=None))]
@@ -9735,7 +9175,6 @@ impl Instruction {
         };
         Ok(Self::new(instruction.into()))
     }
-
     /// Construct one exact six-field SoraFS provider completion.
     #[classmethod]
     fn complete_replication_order(
@@ -9764,7 +9203,6 @@ impl Instruction {
             .into(),
         ))
     }
-
     /// Construct one canonical native SoraFS replication-order expiration.
     #[classmethod]
     fn expire_replication_order(
@@ -9780,7 +9218,6 @@ impl Instruction {
             .into(),
         ))
     }
-
     /// Construct the atomic smart-contract deployment commit instruction.
     #[classmethod]
     #[pyo3(signature = (expected_deploy_nonce, contract_address, code_hash_hex, contract_alias, lease_expiry_ms=None, expected_previous_contract_address=None))]
@@ -9821,7 +9258,6 @@ impl Instruction {
         };
         Ok(Self::new(instruction.into()))
     }
-
     /// Construct the signed-transaction instruction for a Nexus lane lifecycle update.
     ///
     /// `status_json` must be an unmodified response from
@@ -9861,13 +9297,11 @@ impl Instruction {
             SetParameter::new(Parameter::Custom(custom)).into(),
         ))
     }
-
     fn to_json(&self) -> PyResult<String> {
         let mut output = String::new();
         self.inner.json_serialize(&mut output);
         Ok(output)
     }
-
     fn as_dict<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDict>> {
         let json_str = self.to_json()?;
         let json_module = py.import("json")?;
@@ -9876,7 +9310,6 @@ impl Instruction {
         let dict: Py<PyDict> = value.extract()?;
         Ok(dict)
     }
-
     /// Return the canonical framed Norito `InstructionBox`.
     fn to_norito_bytes<'py>(&self, py: Python<'py>) -> PyResult<Py<PyBytes>> {
         let bytes = norito::to_bytes(&self.inner).map_err(|err| {
@@ -9884,14 +9317,12 @@ impl Instruction {
         })?;
         Ok(Py::from(PyBytes::new(py, &bytes)))
     }
-
     /// Return the stable registry identity used by canonical instruction framing.
     fn wire_id(&self) -> PyResult<String> {
         iroha_data_model::isi::instruction_wire_id(&self.inner)
             .map(str::to_owned)
             .ok_or_else(|| PyValueError::new_err("instruction is not registered"))
     }
-
     /// Create a new fail-closed fee sponsor program.
     #[classmethod]
     #[pyo3(signature = (sponsor, payout_account, program_name = "default"))]
@@ -9924,7 +9355,6 @@ impl Instruction {
             iroha_data_model::isi::nexus::CreateFeeSponsorProgram { program }.into(),
         ))
     }
-
     /// Stage an immutable fee sponsor program revision from canonical Norito JSON.
     #[classmethod]
     fn stage_fee_sponsor_program_revision(
@@ -9942,7 +9372,6 @@ impl Instruction {
             iroha_data_model::isi::nexus::StageFeeSponsorProgramRevision { revision }.into(),
         ))
     }
-
     /// Schedule an exact staged fee sponsor program revision for activation.
     #[classmethod]
     fn activate_fee_sponsor_program_revision(
@@ -9966,7 +9395,6 @@ impl Instruction {
             .into(),
         ))
     }
-
     /// Pause an active fee sponsor program.
     #[classmethod]
     fn pause_fee_sponsor_program(_cls: &Bound<'_, PyType>, program_id: &str) -> PyResult<Self> {
@@ -9977,7 +9405,6 @@ impl Instruction {
             .into(),
         ))
     }
-
     /// Begin the fail-closed drain phase for a fee sponsor program.
     #[classmethod]
     fn begin_close_fee_sponsor_program(
@@ -9991,7 +9418,6 @@ impl Instruction {
             .into(),
         ))
     }
-
     /// Permanently close a fully drained fee sponsor program.
     #[classmethod]
     fn close_fee_sponsor_program(_cls: &Bound<'_, PyType>, program_id: &str) -> PyResult<Self> {
@@ -10002,7 +9428,6 @@ impl Instruction {
             .into(),
         ))
     }
-
     /// Enroll one exact canonical account in a fee sponsor program.
     #[classmethod]
     fn enroll_fee_sponsor_beneficiary(
@@ -10020,7 +9445,6 @@ impl Instruction {
             .into(),
         ))
     }
-
     /// Remove one exact canonical account from a fee sponsor program.
     #[classmethod]
     fn unenroll_fee_sponsor_beneficiary(
@@ -10038,7 +9462,6 @@ impl Instruction {
             .into(),
         ))
     }
-
     /// Allocate a positive asset amount to one program-isolated fee vault.
     #[classmethod]
     fn fund_fee_sponsor_program(
@@ -10067,7 +9490,6 @@ impl Instruction {
             .into(),
         ))
     }
-
     /// Withdraw a positive asset amount from a paused or closing program vault.
     #[classmethod]
     fn withdraw_fee_sponsor_program(
@@ -10096,7 +9518,6 @@ impl Instruction {
             .into(),
         ))
     }
-
     #[classmethod]
     fn register_domain<'py>(
         _cls: &Bound<'py, PyType>,
@@ -10112,7 +9533,6 @@ impl Instruction {
         let instruction = Register::<Domain>::domain(new_domain);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn register_account<'py>(
         _cls: &Bound<'py, PyType>,
@@ -10128,7 +9548,6 @@ impl Instruction {
         let instruction = Register::<Account>::account(new_account);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     #[pyo3(signature = (definition_id, *, owning_domain, balance_scope_policy, name, description=None, alias=None, scale=None, mintable=None, metadata=None))]
     #[allow(clippy::too_many_arguments)] // PyO3 signature mirrors the Python surface and requires explicit keyword params
@@ -10150,7 +9569,6 @@ impl Instruction {
                 "invalid asset definition id `{definition_id}`: {err}"
             ))
         })?;
-
         let owning_domain = owning_domain
             .map(|domain| {
                 DomainId::parse_fully_qualified(domain).map_err(|err| {
@@ -10177,23 +9595,19 @@ impl Instruction {
             parsed_balance_scope_policy,
             owning_domain,
         );
-
         if let Some(description) = description {
             new_asset = new_asset.with_description(Some(description.to_owned()));
         }
-
         if let Some(alias) = alias {
             let alias = alias.parse::<AssetDefinitionAlias>().map_err(|err| {
                 PyValueError::new_err(format!("invalid asset definition alias `{alias}`: {err}"))
             })?;
             new_asset = new_asset.with_alias(Some(alias));
         }
-
         if let Some(meta) = metadata {
             let metadata = py_to_metadata(py, Some(meta))?;
             new_asset = new_asset.with_metadata(metadata);
         }
-
         let mintable_mode = parse_mintable(mintable)?;
         new_asset = match mintable_mode {
             Mintable::Infinitely => new_asset,
@@ -10201,11 +9615,9 @@ impl Instruction {
             Mintable::Limited(tokens) => new_asset.mintable_limited(tokens),
             Mintable::Not => new_asset.with_mintable(Mintable::Not),
         };
-
         let instruction = Register::<AssetDefinition>::asset_definition(new_asset);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     #[pyo3(signature = (asset_definition_id, *, vk_unshield=None, vk_shield=None))]
     fn register_zk_asset<'py>(
@@ -10227,14 +9639,12 @@ impl Instruction {
             .map_err(PyValueError::new_err)?;
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     #[pyo3(signature = (proof))]
     fn verify_proof<'py>(_cls: &Bound<'py, PyType>, proof: &Bound<'py, PyAny>) -> PyResult<Self> {
         let instruction = VerifyProof::new(parse_zk_proof_attachment(proof, "proof")?);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn mint_asset_quantity(
         _cls: &Bound<'_, PyType>,
@@ -10246,7 +9656,6 @@ impl Instruction {
         let instruction = Mint::asset_quantity(quantity, asset_id);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn burn_asset_quantity(
         _cls: &Bound<'_, PyType>,
@@ -10258,7 +9667,6 @@ impl Instruction {
         let instruction = Burn::asset_quantity(quantity, asset_id);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn transfer_asset_quantity(
         _cls: &Bound<'_, PyType>,
@@ -10273,7 +9681,6 @@ impl Instruction {
         let instruction = Transfer::asset_quantity(asset_id, quantity, destination);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     #[pyo3(signature = (source_account, asset_definition_id, payments_json, *, mode="Independent"))]
     fn transfer_asset_batch(
@@ -10305,7 +9712,6 @@ impl Instruction {
             TransferAssetBatch::new(entries).with_mode(mode).into(),
         ))
     }
-
     #[classmethod]
     #[pyo3(signature = (account_id, asset_definition_id, expected_revision, incoming, outgoing, *, reason=None))]
     fn set_asset_transfer_availability(
@@ -10348,7 +9754,6 @@ impl Instruction {
             .into(),
         ))
     }
-
     #[classmethod]
     fn set_asset_transfer_blacklist(
         _cls: &Bound<'_, PyType>,
@@ -10368,7 +9773,6 @@ impl Instruction {
             SetAssetTransferBlacklist::new(account_id, asset_definition_id, blacklisted).into(),
         ))
     }
-
     #[classmethod]
     fn set_asset_transfer_control(
         _cls: &Bound<'_, PyType>,
@@ -10393,7 +9797,6 @@ impl Instruction {
             .into(),
         ))
     }
-
     #[classmethod]
     fn set_asset_holding_limit(
         _cls: &Bound<'_, PyType>,
@@ -10416,7 +9819,6 @@ impl Instruction {
             SetAssetHoldingLimit::new(account_id, asset_definition_id, holding_limit).into(),
         ))
     }
-
     #[classmethod]
     #[pyo3(signature = (escrow_id, asset_definition_id, destination, amount, *, release_authority=None, expires_at_ms=None, evidence_hashes=None))]
     #[allow(clippy::too_many_arguments)]
@@ -10459,7 +9861,6 @@ impl Instruction {
         );
         Ok(Instruction::new(instruction.into()))
     }
-
     /// Open an ordered, all-of conditional escrow with an immutable on-chain policy.
     #[classmethod]
     #[pyo3(signature = (escrow_id, asset_definition_id, beneficiary, amount, conditions, expires_at_ms, *, evidence_digests=None))]
@@ -10514,7 +9915,6 @@ impl Instruction {
         );
         Ok(Instruction::new(instruction.into()))
     }
-
     /// Attest the next ordered predicate in a native conditional escrow.
     #[classmethod]
     #[pyo3(signature = (escrow_id, condition_id, value, *, evidence_digest=None))]
@@ -10545,7 +9945,6 @@ impl Instruction {
             .into(),
         ))
     }
-
     /// Expire and refund a native conditional escrow after its authoritative deadline.
     #[classmethod]
     fn expire_conditional_escrow(_cls: &Bound<'_, PyType>, escrow_id: &str) -> PyResult<Self> {
@@ -10553,7 +9952,6 @@ impl Instruction {
             ExpireConditionalEscrow::new(parse_escrow_id(escrow_id, "escrow_id")?).into(),
         ))
     }
-
     #[classmethod]
     fn drawdown_asset_lock(
         _cls: &Bound<'_, PyType>,
@@ -10571,7 +9969,6 @@ impl Instruction {
         );
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn cancel_asset_lock(
         _cls: &Bound<'_, PyType>,
@@ -10593,13 +9990,11 @@ impl Instruction {
         );
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn expire_asset_lock(_cls: &Bound<'_, PyType>, escrow_id: &str) -> PyResult<Self> {
         let instruction = ExpireAssetLock::new(parse_escrow_id(escrow_id, "escrow_id")?);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     #[pyo3(signature = (destination, name, *, payload=None))]
     fn grant_account_permission<'py>(
@@ -10618,7 +10013,6 @@ impl Instruction {
         let instruction = Grant::account_permission(permission, destination);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     #[pyo3(signature = (destination, name, *, payload=None))]
     fn revoke_account_permission<'py>(
@@ -10637,7 +10031,6 @@ impl Instruction {
         let instruction = Revoke::account_permission(permission, destination);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     #[pyo3(signature = (account_id, key, value=None))]
     fn set_account_key_value<'py>(
@@ -10655,7 +10048,6 @@ impl Instruction {
         let instruction = SetKeyValue::account(account_id, key, json_value);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn remove_account_key_value(
         _cls: &Bound<'_, PyType>,
@@ -10670,20 +10062,17 @@ impl Instruction {
         let instruction = RemoveKeyValue::account(account_id, key);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn register_rwa<'py>(cls: &Bound<'py, PyType>, rwa: &Bound<'py, PyAny>) -> PyResult<Self> {
         let rwa = parse_new_rwa_payload(cls.py(), rwa)?;
         let instruction = iroha_data_model::isi::rwa::RegisterRwa { rwa };
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn merge_rwas<'py>(cls: &Bound<'py, PyType>, merge: &Bound<'py, PyAny>) -> PyResult<Self> {
         let instruction = parse_merge_rwas_payload(cls.py(), merge)?;
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     #[pyo3(signature = (agreement_id, initiator, counterparty, *, custodian=None, cash_leg, collateral_leg, rate_bps, maturity_timestamp_ms, governance))]
     #[allow(clippy::too_many_arguments)]
@@ -10731,7 +10120,6 @@ impl Instruction {
         );
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     #[pyo3(signature = (agreement_id))]
     fn repo_unwind(_cls: &Bound<'_, PyType>, agreement_id: &str) -> PyResult<Self> {
@@ -10741,7 +10129,6 @@ impl Instruction {
         let instruction = ReverseRepoIsi::new(agreement_id);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn repo_margin_call(_cls: &Bound<'_, PyType>, agreement_id: &str) -> PyResult<Self> {
         let agreement_id = RepoAgreementId::from_str(agreement_id).map_err(|err| {
@@ -10750,7 +10137,6 @@ impl Instruction {
         let instruction = RepoMarginCallIsi::new(agreement_id);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     #[pyo3(signature = (settlement_id, delivery_leg, payment_leg, *, order="delivery_then_payment", atomicity="all_or_nothing", metadata=None))]
     #[allow(clippy::too_many_arguments)]
@@ -10785,7 +10171,6 @@ impl Instruction {
         };
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     #[pyo3(signature = (settlement_id, primary_leg, counter_leg, *, order="delivery_then_payment", atomicity="all_or_nothing", metadata=None))]
     #[allow(clippy::too_many_arguments)]
@@ -10820,7 +10205,6 @@ impl Instruction {
         };
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn transfer_domain(
         _cls: &Bound<'_, PyType>,
@@ -10838,7 +10222,6 @@ impl Instruction {
         let instruction = Transfer::domain(source, domain_id, destination);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn transfer_asset_definition(
         _cls: &Bound<'_, PyType>,
@@ -10858,7 +10241,6 @@ impl Instruction {
         let instruction = Transfer::asset_definition(source, definition_id, destination);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn transfer_nft(
         _cls: &Bound<'_, PyType>,
@@ -10876,7 +10258,6 @@ impl Instruction {
         let instruction = Transfer::nft(source, nft_id, destination);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn transfer_rwa(
         _cls: &Bound<'_, PyType>,
@@ -10901,7 +10282,6 @@ impl Instruction {
         };
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn redeem_rwa(_cls: &Bound<'_, PyType>, rwa_id: &str, quantity: &str) -> PyResult<Self> {
         let rwa_id: RwaId = rwa_id
@@ -10914,7 +10294,6 @@ impl Instruction {
         };
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn freeze_rwa(_cls: &Bound<'_, PyType>, rwa_id: &str) -> PyResult<Self> {
         let rwa_id: RwaId = rwa_id
@@ -10923,7 +10302,6 @@ impl Instruction {
         let instruction = iroha_data_model::isi::rwa::FreezeRwa { rwa: rwa_id };
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn unfreeze_rwa(_cls: &Bound<'_, PyType>, rwa_id: &str) -> PyResult<Self> {
         let rwa_id: RwaId = rwa_id
@@ -10932,7 +10310,6 @@ impl Instruction {
         let instruction = iroha_data_model::isi::rwa::UnfreezeRwa { rwa: rwa_id };
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn hold_rwa(_cls: &Bound<'_, PyType>, rwa_id: &str, quantity: &str) -> PyResult<Self> {
         let rwa_id: RwaId = rwa_id
@@ -10945,7 +10322,6 @@ impl Instruction {
         };
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn release_rwa(_cls: &Bound<'_, PyType>, rwa_id: &str, quantity: &str) -> PyResult<Self> {
         let rwa_id: RwaId = rwa_id
@@ -10958,7 +10334,6 @@ impl Instruction {
         };
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn force_transfer_rwa(
         _cls: &Bound<'_, PyType>,
@@ -10979,7 +10354,6 @@ impl Instruction {
         };
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn set_rwa_controls<'py>(
         cls: &Bound<'py, PyType>,
@@ -10996,7 +10370,6 @@ impl Instruction {
         };
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     #[pyo3(signature = (rwa_id, key, value=None))]
     fn set_rwa_key_value<'py>(
@@ -11015,7 +10388,6 @@ impl Instruction {
         let instruction = SetKeyValue::rwa(rwa_id, key, json_value);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn remove_rwa_key_value(_cls: &Bound<'_, PyType>, rwa_id: &str, key: &str) -> PyResult<Self> {
         let rwa_id: RwaId = rwa_id
@@ -11027,7 +10399,6 @@ impl Instruction {
         let instruction = RemoveKeyValue::rwa(rwa_id, key);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     #[pyo3(signature = (trigger_id, authority, instructions, *, start_ms, **kwargs))]
     fn register_time_trigger<'py>(
@@ -11043,24 +10414,20 @@ impl Instruction {
                 "time trigger requires at least one instruction",
             ));
         }
-
         let trigger_id: TriggerId = trigger_id.parse().map_err(|err| {
             PyValueError::new_err(format!("invalid trigger id `{trigger_id}`: {err}"))
         })?;
         let authority = parse_account_id(authority)?;
         ensure_ed25519_account(&authority)?;
-
         if start_ms == 0 {
             return Err(PyValueError::new_err("start_ms must be greater than zero"));
         }
-
         let py = cls.py();
         let TimeTriggerKwargsParsed {
             period_ms,
             repeats: repeats_kwarg,
             metadata: metadata_obj,
         } = parse_time_trigger_kwargs(kwargs)?;
-
         let mut schedule = TimeSchedule::starting_at(Duration::from_millis(start_ms));
         if let Some(period_ms) = period_ms {
             if period_ms == 0 {
@@ -11068,7 +10435,6 @@ impl Instruction {
             }
             schedule = schedule.with_period(Duration::from_millis(period_ms));
         }
-
         let repeats = match repeats_kwarg {
             Some(0) => {
                 return Err(PyValueError::new_err(
@@ -11078,7 +10444,6 @@ impl Instruction {
             Some(value) => Repeats::Exactly(value),
             None => Repeats::Indefinitely,
         };
-
         let metadata = py_to_metadata(py, metadata_obj.as_ref())?;
         let mut instruction_boxes = Vec::with_capacity(instructions.len());
         for instr in instructions {
@@ -11098,7 +10463,6 @@ impl Instruction {
         let instruction = Register::trigger(trigger);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     #[pyo3(signature = (trigger_id, authority, instructions, *, repeats=None, metadata=None))]
     fn register_precommit_trigger<'py>(
@@ -11114,13 +10478,11 @@ impl Instruction {
                 "pre-commit trigger requires at least one instruction",
             ));
         }
-
         let trigger_id: TriggerId = trigger_id.parse().map_err(|err| {
             PyValueError::new_err(format!("invalid trigger id `{trigger_id}`: {err}"))
         })?;
         let authority = parse_account_id(authority)?;
         ensure_ed25519_account(&authority)?;
-
         let repeats = match repeats {
             Some(0) => {
                 return Err(PyValueError::new_err(
@@ -11130,7 +10492,6 @@ impl Instruction {
             Some(value) => Repeats::Exactly(value),
             None => Repeats::Indefinitely,
         };
-
         let py = cls.py();
         let metadata = py_to_metadata(py, metadata)?;
         let mut instruction_boxes = Vec::with_capacity(instructions.len());
@@ -11151,7 +10512,6 @@ impl Instruction {
         let instruction = Register::trigger(trigger);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     #[pyo3(signature = (trigger_id, *, args=None))]
     fn execute_trigger<'py>(
@@ -11173,7 +10533,6 @@ impl Instruction {
         };
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn unregister_trigger(_cls: &Bound<'_, PyType>, trigger_id: &str) -> PyResult<Self> {
         let trigger_id: TriggerId = trigger_id.parse().map_err(|err| {
@@ -11182,7 +10541,6 @@ impl Instruction {
         let instruction = Unregister::trigger(trigger_id);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn mint_trigger_repetitions(
         _cls: &Bound<'_, PyType>,
@@ -11200,7 +10558,6 @@ impl Instruction {
         let instruction = Mint::trigger_repetitions(repetitions, trigger_id);
         Ok(Instruction::new(instruction.into()))
     }
-
     #[classmethod]
     fn burn_trigger_repetitions(
         _cls: &Bound<'_, PyType>,
@@ -11218,16 +10575,13 @@ impl Instruction {
         let instruction = Burn::trigger_repetitions(repetitions, trigger_id);
         Ok(Instruction::new(instruction.into()))
     }
-
     fn __copy__(&self) -> Self {
         self.clone()
     }
-
     fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
         self.clone()
     }
 }
-
 fn python_zk_x509_statement_archive_v1(
     canonical_statement_archive: &[u8],
 ) -> PyResult<IrohaZkX509StarkP256StatementV1> {
@@ -11244,7 +10598,6 @@ fn python_zk_x509_statement_archive_v1(
             )
         })
 }
-
 #[derive(Clone)]
 struct PythonPrivacyActionTransactionContextV1 {
     network_id: NetworkId,
@@ -11255,7 +10608,6 @@ struct PythonPrivacyActionTransactionContextV1 {
     fee_payment: FeePaymentIntent,
     metadata: Metadata,
 }
-
 fn python_compiled_privacy_profile_v1(
     protocol_id: PrivacyProtocolIdV1,
     protocol_label: &str,
@@ -11266,7 +10618,6 @@ fn python_compiled_privacy_profile_v1(
         ))
     })
 }
-
 fn python_nonzero_privacy_digest_v1(value: &[u8], field: &str) -> PyResult<[u8; 32]> {
     let digest = fixed_array::<32>(value, field)?;
     if digest == [0; 32] {
@@ -11276,7 +10627,6 @@ fn python_nonzero_privacy_digest_v1(value: &[u8], field: &str) -> PyResult<[u8; 
     }
     Ok(digest)
 }
-
 fn python_vega_draft_statement_v1(
     context: PrivacyStatementContextV1,
     issuer_id: [u8; 32],
@@ -11312,7 +10662,6 @@ fn python_vega_draft_statement_v1(
         session_transcript_digest: PrivacySessionTranscriptDigestV1::new(session_transcript_digest),
     }
 }
-
 fn python_bind_vega_device_authentication_digest_v1(
     mut statement: VegaExistingCredentialStatementV1,
     canonical_genesis_hash: [u8; 32],
@@ -11329,7 +10678,6 @@ fn python_bind_vega_device_authentication_digest_v1(
     statement.device_authentication_digest = digest;
     Ok(statement)
 }
-
 #[allow(clippy::too_many_arguments)]
 fn python_vega_statement_v1(
     context: PrivacyStatementContextV1,
@@ -11362,7 +10710,6 @@ fn python_vega_statement_v1(
         canonical_genesis_hash,
     )
 }
-
 /// Native transaction builder with JSON instruction support.
 ///
 /// Generic privacy proving is intentionally absent: the Rust-owned wallet
@@ -11384,7 +10731,6 @@ struct TransactionBuilder {
     privacy_capability_manifest:
         Option<privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1>,
 }
-
 impl TransactionBuilder {
     fn try_add_proof_attachment(&mut self, attachment: ProofAttachment) -> PyResult<()> {
         match &mut self.attachments {
@@ -11395,7 +10741,6 @@ impl TransactionBuilder {
         }
         .map_err(|error| PyValueError::new_err(format!("invalid proof attachment list: {error}")))
     }
-
     fn require_empty_privacy_action_builder_v1(
         &self,
         protocol_id: PrivacyProtocolIdV1,
@@ -11418,7 +10763,6 @@ impl TransactionBuilder {
         manifest.require_network_profile(protocol_id)?;
         Ok(())
     }
-
     fn privacy_action_transaction_context_v1(&self) -> PythonPrivacyActionTransactionContextV1 {
         // Resolve the default clock exactly once. Both intent construction and
         // final signing must use this same signature-bound millisecond value.
@@ -11433,7 +10777,6 @@ impl TransactionBuilder {
             metadata: self.metadata.clone(),
         }
     }
-
     fn privacy_native_action_transaction_context_v1(
         &self,
     ) -> crate::privacy_native_actions::PrivacyActionTransactionContextV1 {
@@ -11448,7 +10791,6 @@ impl TransactionBuilder {
             metadata: context.metadata,
         }
     }
-
     fn validate_privacy_action_signing_authority_v1(
         &self,
         private_key: &PrivateKey,
@@ -11466,7 +10808,6 @@ impl TransactionBuilder {
         }
         Ok(())
     }
-
     fn privacy_native_action_build_result_v1(
         &self,
         py: Python<'_>,
@@ -11493,7 +10834,6 @@ impl TransactionBuilder {
             versioned_signed_transaction_bytes: signed.versioned_signed_transaction_bytes(),
         })
     }
-
     fn validate_executable(&self) -> PyResult<()> {
         if self.executable_override.is_some()
             && (self.explicit_batch || !self.executable_items.is_empty())
@@ -11519,7 +10859,6 @@ impl TransactionBuilder {
         }
         Ok(())
     }
-
     fn to_model_builder(&self) -> ModelTransactionBuilder {
         let mut builder = ModelTransactionBuilder::new(
             self.network_id,
@@ -11535,7 +10874,6 @@ impl TransactionBuilder {
         if let Some(nonce) = self.nonce {
             builder.set_nonce(nonce);
         }
-
         if let Some(ref executable) = self.executable_override {
             builder = builder.with_executable(executable.clone());
         } else if self.explicit_batch {
@@ -11548,27 +10886,22 @@ impl TransactionBuilder {
                 instruction.clone()
             }));
         }
-
         builder = builder.with_metadata(self.metadata.clone());
         if let Some(attachments) = self.attachments.clone() {
             builder = builder.with_attachments(attachments);
         }
         builder
     }
-
     fn envelope_from_signed(
         &self,
         signed: &SignedTransaction,
     ) -> PyResult<SignedTransactionEnvelope> {
         let signature: Signature = signed.signature().payload().clone();
         let signature_bytes = signature.payload().to_vec();
-
         let hash: HashOf<SignedTransaction> = signed.hash();
         let hash_bytes: [u8; Hash::LENGTH] = *hash.as_ref();
-
         let signed_bytes = codec::encode_adaptive(signed);
         let signed_versioned = signed.encode_versioned();
-
         let signatory = require_single_signatory(signed.authority(), "transaction authority")?;
         let (_, public_key_bytes) = public_key_to_bytes(signatory, "authority public key")?;
         Ok(SignedTransactionEnvelope {
@@ -11581,7 +10914,6 @@ impl TransactionBuilder {
             public_key: public_key_bytes.to_vec(),
         })
     }
-
     fn clear_transaction_state(&mut self) {
         self.executable_items.clear();
         self.explicit_batch = false;
@@ -11590,7 +10922,6 @@ impl TransactionBuilder {
         self.privacy_capability_manifest = None;
     }
 }
-
 #[pymethods]
 impl TransactionBuilder {
     #[new]
@@ -11619,7 +10950,6 @@ impl TransactionBuilder {
             privacy_capability_manifest: None,
         })
     }
-
     /// Bind the exact canonical manifest fetched from authenticated Torii state.
     ///
     /// Every native privacy constructor consumes this binding and rejects a
@@ -11637,25 +10967,21 @@ impl TransactionBuilder {
         self.privacy_capability_manifest = Some(manifest.clone());
         Ok(())
     }
-
     /// Replace the exact signature-bound fee payment intent.
     fn set_fee_payment_json(&mut self, fee_payment_json: &str) -> PyResult<()> {
         self.fee_payment = parse_fee_payment_intent_json(fee_payment_json)?;
         Ok(())
     }
-
     /// Set a deterministic creation timestamp (milliseconds since UNIX epoch).
     fn set_creation_time_ms(&mut self, timestamp_ms: u64) -> PyResult<()> {
         self.creation_time = Some(Duration::from_millis(timestamp_ms));
         Ok(())
     }
-
     /// Set the transaction time-to-live in milliseconds.
     fn set_ttl_ms(&mut self, ttl_ms: u64) -> PyResult<()> {
         self.ttl = Some(Duration::from_millis(ttl_ms));
         Ok(())
     }
-
     /// Set the transaction nonce.
     fn set_nonce(&mut self, nonce: u32) -> PyResult<()> {
         let Some(nonce) = NonZeroU32::new(nonce) else {
@@ -11664,25 +10990,21 @@ impl TransactionBuilder {
         self.nonce = Some(nonce);
         Ok(())
     }
-
     /// Replace metadata using a Norito-compatible JSON string.
     fn set_metadata_json(&mut self, json_payload: &str) -> PyResult<()> {
         self.metadata = json::from_str::<Metadata>(json_payload)
             .map_err(|err| PyValueError::new_err(format!("invalid metadata JSON: {err}")))?;
         Ok(())
     }
-
     /// Replace metadata using a Python mapping (converted via `json.dumps`).
     fn set_metadata(&mut self, py: Python<'_>, metadata: &Bound<'_, PyAny>) -> PyResult<()> {
         self.metadata = py_to_metadata(py, Some(metadata))?;
         Ok(())
     }
-
     /// Remove all staged proof attachments.
     fn clear_attachments(&mut self) {
         self.attachments = None;
     }
-
     /// Add a Merkle-based lane privacy proof attachment for Nexus private lanes.
     ///
     /// `leaf` and `audit_path` entries are treated as pre-hashed 32-byte digests.
@@ -11734,7 +11056,6 @@ impl TransactionBuilder {
         let leaf_arr: [u8; 32] = leaf
             .try_into()
             .map_err(|_| PyValueError::new_err("leaf must be exactly 32 bytes"))?;
-
         let audit_path = audit_path.cast::<PyList>().map_err(|_| {
             PyTypeError::new_err("audit_path must be a list of complete 32-byte siblings")
         })?;
@@ -11753,7 +11074,6 @@ impl TransactionBuilder {
             let arr = py_exact_fixed_bytes::<32>(&bytes, &format!("audit_path[{index}]"))?;
             audit_bytes.push(Some(arr));
         }
-
         let privacy_proof = LanePrivacyProof::merkle_from_raw_path(
             LaneCommitmentId::new(commitment_id),
             leaf_arr,
@@ -11761,7 +11081,6 @@ impl TransactionBuilder {
             audit_bytes,
         )
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
-
         let mut attachment = ProofAttachment::new_ref(
             backend.clone(),
             ProofBox::new(backend.clone(), proof_bytes.to_vec()),
@@ -11776,7 +11095,6 @@ impl TransactionBuilder {
         self.try_add_proof_attachment(attachment)?;
         Ok(())
     }
-
     /// Add an instruction described by `norito::json` syntax.
     fn add_instruction_json(&mut self, instruction_json: &str) -> PyResult<()> {
         if self.executable_override.is_some() {
@@ -11790,7 +11108,6 @@ impl TransactionBuilder {
             .push(ExecutableBatchItem::Instruction(instruction));
         Ok(())
     }
-
     /// Append a pre-built instruction.
     fn add_instruction(&mut self, instruction: &Instruction) -> PyResult<()> {
         if self.executable_override.is_some() {
@@ -11802,7 +11119,6 @@ impl TransactionBuilder {
             .push(ExecutableBatchItem::Instruction(instruction.inner.clone()));
         Ok(())
     }
-
     /// Select the ordered executable-batch representation explicitly.
     ///
     /// Finalization rejects the batch until at least one instruction or contract call is added.
@@ -11815,7 +11131,6 @@ impl TransactionBuilder {
         self.explicit_batch = true;
         Ok(())
     }
-
     /// Append a deployed-contract call to the ordered executable batch.
     #[pyo3(signature = (contract_address, expected_code_hash_hex, entrypoint, arguments=None))]
     fn add_contract_call(
@@ -11861,14 +11176,12 @@ impl TransactionBuilder {
         self.explicit_batch = true;
         Ok(())
     }
-
     /// Encode the canonical transaction payload bytes without signing.
     fn encode_payload<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
         self.validate_executable()?;
         let payload_bytes = self.to_model_builder().encode_payload();
         Ok(PyBytes::new(py, &payload_bytes))
     }
-
     /// Return the exact unsigned payload submitted to `/v1/fees/quote`.
     fn payload_json(&self) -> PyResult<String> {
         self.validate_executable()?;
@@ -11879,20 +11192,17 @@ impl TransactionBuilder {
         json::to_json(&payload)
             .map_err(|err| PyValueError::new_err(format!("encode transaction payload JSON: {err}")))
     }
-
     /// Return the canonical Iroha transaction payload prehash bytes.
     fn payload_hash<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
         self.validate_executable()?;
         let payload_hash = self.to_model_builder().payload_hash_bytes();
         Ok(PyBytes::new(py, &payload_hash))
     }
-
     /// Return the canonical Iroha transaction payload prehash as lowercase hex.
     fn payload_hash_hex(&self) -> PyResult<String> {
         self.validate_executable()?;
         Ok(hex_encode(self.to_model_builder().payload_hash_bytes()))
     }
-
     /// Override the executable with raw IVM bytecode (Norito-encoded hex string).
     fn set_bytecode_hex(&mut self, hex_payload: &str) -> PyResult<()> {
         if self.explicit_batch || !self.executable_items.is_empty() {
@@ -11906,7 +11216,6 @@ impl TransactionBuilder {
         self.executable_override = Some(Executable::Ivm(bytecode));
         Ok(())
     }
-
     /// Sign the transaction, returning an envelope with Norito payloads and hash.
     fn sign(&mut self, private_key: &[u8]) -> PyResult<SignedTransactionEnvelope> {
         self.validate_executable()?;
@@ -11916,13 +11225,10 @@ impl TransactionBuilder {
             .try_sign(&private_key)
             .map_err(|err| PyValueError::new_err(format!("transaction signing failed: {err}")))?;
         let envelope = self.envelope_from_signed(&signed)?;
-
         // Reset executable entries for the next transaction while keeping metadata.
         self.clear_transaction_state();
-
         Ok(envelope)
     }
-
     /// Derive the sole transaction intent that an isolated ZK-X509 prover worker must bind.
     ///
     /// The canonical statement archive must contain the exact public action
@@ -11954,7 +11260,6 @@ impl TransactionBuilder {
             })?;
         Ok(PyBytes::new(py, intent.as_bytes()))
     }
-
     /// Validate and sign one canonical, intent-bound ZK-X509 identity presentation.
     ///
     /// The profile-owned worker returns only a typed public statement and its
@@ -12008,7 +11313,6 @@ impl TransactionBuilder {
         self.clear_transaction_state();
         Ok(result)
     }
-
     /// Replace only fee maxima using a quote, then sign the exact quoted draft.
     fn sign_quoted_payload(
         &mut self,
@@ -12049,7 +11353,6 @@ impl TransactionBuilder {
         self.clear_transaction_state();
         Ok(envelope)
     }
-
     /// Finalize the transaction using a wallet-provided external signature.
     fn build_with_signature(&mut self, signature: &[u8]) -> PyResult<SignedTransactionEnvelope> {
         self.validate_executable()?;
@@ -12059,7 +11362,6 @@ impl TransactionBuilder {
                 signature.len()
             )));
         }
-
         let signed = self.to_model_builder().build_with_signature(
             checked_signature_from_bytes_for_algorithm(
                 signature,
@@ -12075,7 +11377,6 @@ impl TransactionBuilder {
         Ok(envelope)
     }
 }
-
 const ZK_ACE_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "authorization_action";
 const ZK_ACE_TRANSFER_LEDGER_EFFECT_V1: &str = "zk_ace_transparent_transfer";
 const VERANGE_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "action_verification_and_finality_only";
@@ -12096,7 +11397,6 @@ const PQ_MASP_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "note_action";
 const PQ_MASP_LEDGER_EFFECT_V1: &str = "pq_masp_note_state_transition";
 const ZK_X509_ACTION_EXECUTION_CLASSIFICATION_V1: &str = "presentation_action";
 const ZK_X509_LEDGER_EFFECT_V1: &str = "zk_x509_certificate_nullifier";
-
 /// Common signed result for typed native privacy action bindings.
 ///
 /// Secret-bearing bundle buffers are held in zeroizing storage around their
@@ -12117,70 +11417,57 @@ struct PrivacyNativeActionBuildResultV1 {
     adaptive_signed_transaction_bytes: u32,
     versioned_signed_transaction_bytes: u32,
 }
-
 #[pymethods]
 impl PrivacyNativeActionBuildResultV1 {
     #[getter]
     fn envelope(&self, py: Python<'_>) -> Py<SignedTransactionEnvelope> {
         self.envelope.clone_ref(py)
     }
-
     #[getter]
     fn protocol_id(&self) -> &str {
         &self.protocol_id
     }
-
     #[getter]
     const fn operation_schema(&self) -> &'static str {
         self.operation_schema
     }
-
     #[getter]
     fn transaction_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, &self.transaction_hash)
     }
-
     #[getter]
     fn transaction_intent_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, &self.transaction_intent_digest)
     }
-
     #[getter]
     fn statement_digest<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, &self.statement_digest)
     }
-
     #[getter]
     fn proof_envelope_hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, &self.proof_envelope_hash)
     }
-
     #[getter]
     const fn statement_bytes(&self) -> u32 {
         self.statement_bytes
     }
-
     #[getter]
     const fn proof_bytes(&self) -> u32 {
         self.proof_bytes
     }
-
     #[getter]
     const fn encoded_proof_envelope_bytes(&self) -> u32 {
         self.encoded_proof_envelope_bytes
     }
-
     #[getter]
     const fn adaptive_signed_transaction_bytes(&self) -> u32 {
         self.adaptive_signed_transaction_bytes
     }
-
     #[getter]
     const fn versioned_signed_transaction_bytes(&self) -> u32 {
         self.versioned_signed_transaction_bytes
     }
 }
-
 /// Signed transaction outputs exposed to Python.
 #[pyclass(module = "iroha_python._crypto")]
 struct SignedTransactionEnvelope {
@@ -12192,7 +11479,6 @@ struct SignedTransactionEnvelope {
     signature: Vec<u8>,
     public_key: Vec<u8>,
 }
-
 #[pymethods]
 impl SignedTransactionEnvelope {
     /// Construct an envelope from its JSON representation produced by `to_json`.
@@ -12204,7 +11490,6 @@ impl SignedTransactionEnvelope {
         let obj = value
             .as_object()
             .ok_or_else(|| PyValueError::new_err("expected JSON object"))?;
-
         const RETIRED_NETWORK_FIELDS: [&str; 7] = [
             "chain",
             "chainId",
@@ -12251,7 +11536,6 @@ impl SignedTransactionEnvelope {
             .and_then(|v| v.as_str())
             .ok_or_else(|| PyValueError::new_err("missing `authority` field"))?
             .to_string();
-
         let signed_b64 = obj
             .get("signed_transaction_b64")
             .and_then(|v| v.as_str())
@@ -12282,7 +11566,6 @@ impl SignedTransactionEnvelope {
             .get("hash_hex")
             .and_then(|v| v.as_str())
             .ok_or_else(|| PyValueError::new_err("missing `hash_hex` field"))?;
-
         let signed_transaction = BASE64.decode(signed_b64.as_bytes()).map_err(|err| {
             PyValueError::new_err(format!("invalid signed_transaction_b64: {err}"))
         })?;
@@ -12300,7 +11583,6 @@ impl SignedTransactionEnvelope {
         let public_key = BASE64
             .decode(public_key_b64.as_bytes())
             .map_err(|err| PyValueError::new_err(format!("invalid public_key_b64: {err}")))?;
-
         for (field, encoded, decoded) in [
             (
                 "signed_transaction_b64",
@@ -12321,7 +11603,6 @@ impl SignedTransactionEnvelope {
                 )));
             }
         }
-
         if signature.len() != 64 {
             return Err(PyValueError::new_err(format!(
                 "signature must be 64 bytes, got {}",
@@ -12334,7 +11615,6 @@ impl SignedTransactionEnvelope {
                 public_key.len()
             )));
         }
-
         let mut hash = [0u8; Hash::LENGTH];
         let hash_bytes = hex::decode(hash_hex).map_err(|err| {
             PyValueError::new_err(format!("invalid hash_hex value `{hash_hex}`: {err}"))
@@ -12362,7 +11642,6 @@ impl SignedTransactionEnvelope {
                 "public_key_hex does not match public_key_b64",
             ));
         }
-
         let decoded = decode_canonical_signed_transaction_v1(&signed_transaction_versioned)?;
         if decoded.network_id() != Some(&network_id) {
             return Err(PyValueError::new_err(
@@ -12382,59 +11661,48 @@ impl SignedTransactionEnvelope {
         }
         Ok(authenticated)
     }
-
     #[getter]
     fn network_id(&self) -> PyNetworkId {
         PyNetworkId {
             inner: self.network_id,
         }
     }
-
     #[getter]
     fn authority(&self) -> &str {
         &self.authority
     }
-
     #[getter]
     fn signed_transaction<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, &self.signed_transaction)
     }
-
     #[getter]
     fn signed_transaction_versioned<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, &self.signed_transaction_versioned)
     }
-
     #[getter]
     fn hash<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, &self.hash)
     }
-
     #[getter]
     fn signature<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, &self.signature)
     }
-
     #[getter]
     fn public_key<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, &self.public_key)
     }
-
     /// Return the transaction hash as a hex string.
     fn hash_hex(&self) -> String {
         hex::encode(self.hash)
     }
-
     /// Return the attached signature as a hex string.
     fn signature_hex(&self) -> String {
         hex::encode(&self.signature)
     }
-
     /// Return the authority public key as a hex string.
     fn public_key_hex(&self) -> String {
         hex::encode(&self.public_key)
     }
-
     /// Return a Python dict summarising the envelope contents.
     fn as_dict<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDict>> {
         let dict = PyDict::new(py);
@@ -12459,7 +11727,6 @@ impl SignedTransactionEnvelope {
         dict.set_item("public_key_hex", self.public_key_hex())?;
         Ok(dict.unbind())
     }
-
     /// Decode proof attachments (if present) into a Norito JSON string.
     fn attachments_json(&self) -> PyResult<Option<String>> {
         let signed = SignedTransaction::decode_all_versioned(&self.signed_transaction_versioned)
@@ -12478,7 +11745,6 @@ impl SignedTransactionEnvelope {
             None => Ok(None),
         }
     }
-
     /// Return a JSON string representation with base64-encoded binary fields.
     fn to_json(&self) -> PyResult<String> {
         let mut map = norito::json::Map::new();
@@ -12523,7 +11789,6 @@ impl SignedTransactionEnvelope {
             .map_err(|err| PyValueError::new_err(format!("failed to serialize envelope: {err}")))
     }
 }
-
 #[pyfunction]
 #[pyo3(name = "supported_crypto_algorithms")]
 /// Return the canonical names of signature algorithms compiled into the Python SDK.
@@ -12533,14 +11798,12 @@ fn supported_crypto_algorithms_py() -> Vec<String> {
         .map(|algorithm| algorithm.as_static_str().to_owned())
         .collect()
 }
-
 #[pyfunction]
 #[pyo3(name = "normalize_crypto_algorithm")]
 /// Normalize a crypto algorithm alias to the canonical `iroha_crypto` label.
 fn normalize_crypto_algorithm_py(algorithm: &str) -> PyResult<String> {
     parse_algorithm_arg(algorithm).map(|algorithm| algorithm.as_static_str().to_owned())
 }
-
 #[pyfunction]
 #[pyo3(name = "generate_keypair")]
 /// Generate a random key pair for any signature algorithm compiled into the SDK.
@@ -12549,7 +11812,6 @@ fn generate_keypair_py(py: Python<'_>, algorithm: &str) -> PyResult<(Py<PyBytes>
     let key_pair = KeyPair::random_with_algorithm(algorithm);
     keypair_to_py(py, key_pair)
 }
-
 #[pyfunction]
 #[pyo3(name = "derive_keypair_from_seed")]
 /// Derive a key pair for any supported algorithm from arbitrary seed material.
@@ -12563,7 +11825,6 @@ fn derive_keypair_from_seed_py(
         .map_err(|err| PyValueError::new_err(format!("failed to derive key pair: {err}")))?;
     keypair_to_py(py, key_pair)
 }
-
 #[pyfunction]
 #[pyo3(name = "load_keypair")]
 /// Reconstruct a key pair for any supported algorithm from raw private-key payload bytes.
@@ -12578,7 +11839,6 @@ fn load_keypair_py(
         .map_err(|err| PyValueError::new_err(format!("failed to reconstruct key pair: {err}")))?;
     keypair_to_py(py, key_pair)
 }
-
 #[pyfunction]
 #[pyo3(name = "sign")]
 /// Sign `message` with the private-key payload for any supported signature algorithm.
@@ -12594,7 +11854,6 @@ fn sign_py(
         .map_err(|err| PyValueError::new_err(format!("failed to sign message: {err}")))?;
     Ok(Py::from(PyBytes::new(py, signature.payload())))
 }
-
 fn sign_query_request(
     authority: &str,
     private_key: &[u8],
@@ -12640,14 +11899,12 @@ fn sign_query_request(
         .map(|signed| signed.encode_versioned())
         .map_err(|error| PyValueError::new_err(format!("query signing failed: {error}")))
 }
-
 fn parse_typed_hash<T>(value: &str, context: &str) -> PyResult<HashOf<T>> {
     let normalized = value.strip_prefix("0x").unwrap_or(value);
     let hash = Hash::from_str(normalized)
         .map_err(|error| PyValueError::new_err(format!("invalid {context}: {error}")))?;
     Ok(HashOf::from_untyped_unchecked(hash))
 }
-
 #[pyfunction]
 #[pyo3(name = "build_find_asset_escrow_query")]
 /// Build the exact versioned Norito signed query for one native escrow record.
@@ -12664,7 +11921,6 @@ fn build_find_asset_escrow_query_py(
     let signed = sign_query_request(authority, private_key, network_id.as_inner(), request)?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
-
 fn build_find_asset_escrows_by_party_query(
     py: Python<'_>,
     authority: &str,
@@ -12688,7 +11944,6 @@ fn build_find_asset_escrows_by_party_query(
     let signed = sign_query_request(authority, private_key, network_id.as_inner(), request)?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
-
 #[pyfunction]
 #[pyo3(name = "build_find_asset_escrows_by_seller_query")]
 /// Build a signed iterable query for native escrows funded by one account.
@@ -12711,7 +11966,6 @@ fn build_find_asset_escrows_by_seller_query_py(
         norito::codec::Encode::encode(&query),
     )
 }
-
 #[pyfunction]
 #[pyo3(name = "build_find_asset_escrows_by_buyer_query")]
 /// Build a signed iterable query for native escrows benefiting one account.
@@ -12734,7 +11988,6 @@ fn build_find_asset_escrows_by_buyer_query_py(
         norito::codec::Encode::encode(&query),
     )
 }
-
 #[pyfunction]
 #[pyo3(name = "build_find_committed_transaction_query")]
 /// Build a signed `FindTransactions` query for one canonical transaction hash.
@@ -12763,7 +12016,6 @@ fn build_find_committed_transaction_query_py(
     let signed = sign_query_request(authority, private_key, network_id.as_inner(), request)?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
-
 #[pyfunction]
 #[pyo3(name = "build_find_block_by_hash_query")]
 /// Build a signed `FindBlocks` query for one canonical carrier block hash.
@@ -12788,7 +12040,6 @@ fn build_find_block_by_hash_query_py(
     let signed = sign_query_request(authority, private_key, network_id.as_inner(), request)?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
-
 fn decode_single_committed_transaction(response_bytes: &[u8]) -> PyResult<CommittedTransaction> {
     let response = decode_from_bytes::<QueryResponse>(response_bytes).map_err(|error| {
         PyValueError::new_err(format!(
@@ -12822,7 +12073,6 @@ fn decode_single_committed_transaction(response_bytes: &[u8]) -> PyResult<Commit
     }
     Ok(transactions.remove(0))
 }
-
 fn decode_single_carrier_block(response_bytes: &[u8]) -> PyResult<SignedBlock> {
     let response = decode_from_bytes::<QueryResponse>(response_bytes).map_err(|error| {
         PyValueError::new_err(format!(
@@ -12856,7 +12106,6 @@ fn decode_single_carrier_block(response_bytes: &[u8]) -> PyResult<SignedBlock> {
     }
     Ok(blocks.remove(0))
 }
-
 #[pyfunction]
 #[pyo3(name = "committed_transaction_carrier_block_hash")]
 /// Extract and validate the carrier block hash from an exact transaction query response.
@@ -12873,7 +12122,6 @@ fn committed_transaction_carrier_block_hash_py(
     }
     Ok(hex_encode(committed.block_hash.as_ref()))
 }
-
 fn instruction_execution_rejection_code(error: &InstructionExecutionError) -> &'static str {
     match error {
         InstructionExecutionError::AssetTransferAdmission(admission) => match admission {
@@ -12899,7 +12147,6 @@ fn instruction_execution_rejection_code(error: &InstructionExecutionError) -> &'
         InstructionExecutionError::InvariantViolation(_) => "InvariantViolation",
     }
 }
-
 fn transaction_rejection_code(reason: &TransactionRejectionReason) -> &str {
     match reason {
         TransactionRejectionReason::AccountDoesNotExist(_) => "AccountDoesNotExist",
@@ -12919,7 +12166,6 @@ fn transaction_rejection_code(reason: &TransactionRejectionReason) -> &str {
         TransactionRejectionReason::TriggerExecution(_) => "TriggerExecutionFailed",
     }
 }
-
 fn transaction_contract_rejection_json(reason: &TransactionRejectionReason) -> Option<json::Value> {
     let TransactionRejectionReason::Validation(ValidationFail::ContractRejected(rejection)) =
         reason
@@ -12939,7 +12185,6 @@ fn transaction_contract_rejection_json(reason: &TransactionRejectionReason) -> O
     value.insert("code".into(), json::Value::from(rejection.code));
     Some(json::Value::Object(value))
 }
-
 fn batch_rejection_code(code: AssetBatchTransferRejectionCode) -> &'static str {
     match code {
         AssetBatchTransferRejectionCode::InsufficientFunds => "InsufficientFunds",
@@ -12950,7 +12195,6 @@ fn batch_rejection_code(code: AssetBatchTransferRejectionCode) -> &'static str {
         AssetBatchTransferRejectionCode::PolicyRejected => "PolicyRejected",
     }
 }
-
 fn batch_outcome_json(outcome: &AssetBatchTransferOutcome) -> PyResult<json::Value> {
     let (status, rejection_code, rejection_message) = match &outcome.status {
         AssetBatchTransferLegStatus::Applied => ("Applied", None, None),
@@ -12996,7 +12240,6 @@ fn batch_outcome_json(outcome: &AssetBatchTransferOutcome) -> PyResult<json::Val
     );
     Ok(json::Value::Object(result))
 }
-
 #[pyfunction]
 #[pyo3(name = "verify_committed_transaction_inclusion_json")]
 /// Verify a committed transaction response against its exact carrier block response.
@@ -13023,7 +12266,6 @@ fn verify_committed_transaction_inclusion_json_py(
             "committed transaction inclusion proof verification failed",
         ));
     }
-
     let proof_kind = if committed.merge_inclusion.is_some() {
         "certified_merge"
     } else {
@@ -13160,7 +12402,6 @@ fn verify_committed_transaction_inclusion_json_py(
         ))
     })
 }
-
 #[pyfunction]
 #[pyo3(name = "verify")]
 /// Verify a raw signature against a public-key payload for any supported signature algorithm.
@@ -13182,7 +12423,6 @@ fn verify_py(
     };
     Ok(signature.verify(&public_key, message).is_ok())
 }
-
 #[pyfunction]
 #[pyo3(name = "public_key_multihash", signature = (algorithm, public_key, prefixed=false))]
 /// Return the canonical multihash encoding for a public-key payload.
@@ -13191,7 +12431,6 @@ fn public_key_multihash_py(algorithm: &str, public_key: &[u8], prefixed: bool) -
     let public_key = parse_public_key_for_algorithm(algorithm, public_key)?;
     public_key_multihash_string(&public_key, prefixed, "public key multihash")
 }
-
 #[pyfunction]
 #[pyo3(name = "private_key_multihash", signature = (algorithm, private_key, prefixed=false))]
 /// Return the canonical multihash encoding for a private-key payload.
@@ -13205,7 +12444,6 @@ fn private_key_multihash_py(
     let exposed = ExposedPrivateKey(private_key);
     private_key_multihash_string(&exposed, prefixed, "private key multihash")
 }
-
 #[pyfunction]
 #[pyo3(name = "parse_public_key_multihash")]
 /// Decode a public key from a bare or algorithm-prefixed multihash string.
@@ -13219,7 +12457,6 @@ fn parse_public_key_multihash_py(py: Python<'_>, encoded: &str) -> PyResult<(Str
         Py::from(PyBytes::new(py, payload)),
     ))
 }
-
 #[pyfunction]
 #[pyo3(name = "parse_private_key_multihash")]
 /// Decode a private key from a bare or algorithm-prefixed multihash string.
@@ -13235,7 +12472,6 @@ fn parse_private_key_multihash_py(
     payload.fill(0);
     Ok((algorithm.as_static_str().to_owned(), bytes))
 }
-
 #[pyfunction]
 #[pyo3(name = "load_keypair_from_multihash")]
 /// Reconstruct a key pair from a private-key multihash string.
@@ -13252,7 +12488,6 @@ fn load_keypair_from_multihash_py(
     let (private, public) = keypair_to_py(py, key_pair)?;
     Ok((algorithm.as_static_str().to_owned(), private, public))
 }
-
 #[pyfunction]
 #[pyo3(name = "generate_ed25519_keypair")]
 /// Generate a random Ed25519 key pair using `iroha_crypto` defaults.
@@ -13260,7 +12495,6 @@ fn generate_ed25519_keypair_py(py: Python<'_>) -> PyResult<(Py<PyBytes>, Py<PyBy
     let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     keypair_to_py(py, key_pair)
 }
-
 #[pyfunction]
 #[pyo3(name = "derive_ed25519_keypair_from_seed")]
 /// Derive an Ed25519 key pair from an arbitrary seed (hashed internally to 32 bytes).
@@ -13273,7 +12507,6 @@ fn derive_ed25519_keypair_from_seed_py(
     })?;
     keypair_to_py(py, key_pair)
 }
-
 #[pyfunction]
 #[pyo3(name = "load_ed25519_keypair")]
 /// Reconstruct an Ed25519 key pair from raw private key bytes.
@@ -13286,7 +12519,6 @@ fn load_ed25519_keypair_py(
         .map_err(|err| PyValueError::new_err(format!("failed to reconstruct key pair: {err}")))?;
     keypair_to_py(py, key_pair)
 }
-
 #[pyfunction]
 #[pyo3(name = "sign_ed25519")]
 /// Sign `message` using the given Ed25519 private key; returns the raw signature bytes.
@@ -13296,7 +12528,6 @@ fn sign_ed25519_py(py: Python<'_>, private_key: &[u8], message: &[u8]) -> PyResu
         .map_err(|err| PyValueError::new_err(format!("failed to sign Ed25519 message: {err}")))?;
     Ok(Py::from(PyBytes::new(py, signature.payload())))
 }
-
 #[pyfunction]
 #[pyo3(name = "verify_ed25519")]
 /// Verify `signature` against `message` and the provided Ed25519 public key.
@@ -13308,14 +12539,12 @@ fn verify_ed25519_py(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyR
     };
     Ok(signature.verify(&public_key, message).is_ok())
 }
-
 #[pyfunction]
 #[pyo3(name = "sm2_default_distid")]
 /// Return the default SM2 distinguishing identifier.
 fn sm2_default_distid_py() -> String {
     Sm2PublicKey::default_distid()
 }
-
 #[pyfunction]
 #[pyo3(name = "generate_sm2_keypair", signature = (distid=None))]
 /// Generate a random SM2 key pair; returns the 32-byte private scalar and 65-byte SEC1 public key.
@@ -13336,7 +12565,6 @@ fn generate_sm2_keypair_py(
         Py::from(PyBytes::new(py, &public_bytes)),
     ))
 }
-
 #[pyfunction]
 #[pyo3(name = "derive_sm2_keypair_from_seed", signature = (seed, distid=None))]
 /// Deterministically derive an SM2 key pair from `seed`.
@@ -13357,7 +12585,6 @@ fn derive_sm2_keypair_from_seed_py(
         Py::from(PyBytes::new(py, &public_bytes)),
     ))
 }
-
 #[pyfunction]
 #[pyo3(name = "load_sm2_keypair", signature = (private_key, distid=None))]
 /// Reconstruct an SM2 key pair from raw private-key bytes.
@@ -13375,7 +12602,6 @@ fn load_sm2_keypair_py(
         Py::from(PyBytes::new(py, &public_bytes)),
     ))
 }
-
 #[pyfunction]
 #[pyo3(name = "sm2_public_key_multihash", signature = (public_key, distid=None))]
 /// Return the canonical multihash encoding for an SM2 public key.
@@ -13389,13 +12615,11 @@ fn sm2_public_key_multihash_py(public_key: &[u8], distid: Option<&str>) -> PyRes
         .map_err(|err| PyValueError::new_err(format!("failed to construct SM2 public key: {err}")))
         .and_then(|pk| public_key_multihash_string(&pk, false, "SM2 public key multihash"))
 }
-
 fn sm2_fixture_public_key_multihashes(public_key: &PublicKey) -> PyResult<(String, String)> {
     let multihash = public_key_multihash_string(public_key, false, "SM2 fixture public key")?;
     let prefixed = public_key_multihash_string(public_key, true, "SM2 fixture public key")?;
     Ok((multihash, prefixed))
 }
-
 #[pyfunction]
 #[pyo3(name = "sign_sm2", signature = (private_key, message, distid=None))]
 /// Sign `message` with the provided SM2 private key.
@@ -13409,7 +12633,6 @@ fn sign_sm2_py(
     let signature = private.sign(message).to_bytes();
     Ok(Py::from(PyBytes::new(py, &signature)))
 }
-
 #[pyfunction]
 #[pyo3(name = "verify_sm2", signature = (public_key, message, signature, distid=None))]
 /// Verify an SM2 signature against `message` and the provided public key.
@@ -13423,7 +12646,6 @@ fn verify_sm2_py(
     let signature = parse_sm2_signature(signature)?;
     Ok(public.verify(message, &signature).is_ok())
 }
-
 #[pyfunction]
 #[pyo3(name = "hash_blake2b_32")]
 /// Compute the canonical Iroha Blake2b-256 hash for the given bytes.
@@ -13432,7 +12654,6 @@ fn hash_blake2b_32_py(py: Python<'_>, payload: &[u8]) -> PyResult<Py<PyBytes>> {
     let bytes: [u8; Hash::LENGTH] = hash.into();
     Ok(Py::from(PyBytes::new(py, &bytes)))
 }
-
 fn require_canonical_signed_transaction_wire_size_v1(bytes: &[u8]) -> PyResult<()> {
     let maximum = usize::try_from(
         iroha_data_model::parameter::system::TransactionParameters::default()
@@ -13449,7 +12670,6 @@ fn require_canonical_signed_transaction_wire_size_v1(bytes: &[u8]) -> PyResult<(
     }
     Ok(())
 }
-
 fn decode_canonical_signed_transaction_v1(bytes: &[u8]) -> PyResult<SignedTransaction> {
     require_canonical_signed_transaction_wire_size_v1(bytes)?;
     let signed = SignedTransaction::decode_all_versioned(bytes).map_err(|_| {
@@ -13464,7 +12684,6 @@ fn decode_canonical_signed_transaction_v1(bytes: &[u8]) -> PyResult<SignedTransa
     }
     Ok(signed)
 }
-
 fn signed_transaction_envelope_from_model_v1(
     signed: &SignedTransaction,
 ) -> PyResult<SignedTransactionEnvelope> {
@@ -13490,7 +12709,6 @@ fn signed_transaction_envelope_from_model_v1(
         public_key: public_key_bytes.to_vec(),
     })
 }
-
 #[pyfunction]
 #[pyo3(name = "signed_transaction_envelope_from_versioned_v1")]
 /// Decode one exact current signed wire and reconstruct its authenticated public envelope.
@@ -13506,7 +12724,6 @@ fn signed_transaction_envelope_from_versioned_v1_py(
     }
     signed_transaction_envelope_from_model_v1(&signed)
 }
-
 fn canonical_signed_transaction_hash_v1(bytes: &[u8]) -> PyResult<[u8; Hash::LENGTH]> {
     let signed = decode_canonical_signed_transaction_v1(bytes)?;
     signed.verify_signature().map_err(|_| {
@@ -13514,7 +12731,6 @@ fn canonical_signed_transaction_hash_v1(bytes: &[u8]) -> PyResult<[u8; Hash::LEN
     })?;
     Ok(*signed.hash().as_ref())
 }
-
 #[pyfunction]
 #[pyo3(name = "canonical_signed_transaction_hash_v1")]
 /// Decode, authenticate, and recompute the current transaction hash.
@@ -13525,10 +12741,8 @@ fn canonical_signed_transaction_hash_v1_py(
     let hash = canonical_signed_transaction_hash_v1(signed_transaction_versioned)?;
     Ok(Py::from(PyBytes::new(py, &hash)))
 }
-
 const PRIVACY_EXACT12_ACTION_DRIVER_SEED_DOMAIN_V1: &[u8] =
     b"iroha.taira.privacy_action_driver_seed.v1\0";
-
 fn privacy_exact12_action_driver_signing_seed_v1(
     candidate_binding_sha256: [u8; 32],
     request_id: [u8; 32],
@@ -13544,7 +12758,6 @@ fn privacy_exact12_action_driver_signing_seed_v1(
     }
     seed
 }
-
 #[pyfunction]
 #[pyo3(name = "inspect_privacy_exact12_action_driver_transaction_context_v1")]
 /// Authenticate one action-driver transaction and enforce its complete public request context.
@@ -13574,7 +12787,6 @@ fn inspect_privacy_exact12_action_driver_transaction_context_v1_py(
             "expected transaction time fields must be nonzero",
         ));
     }
-
     let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
     signed.verify_signature().map_err(|_| {
         PyValueError::new_err("signed_transaction_versioned has an invalid authority signature")
@@ -13584,7 +12796,6 @@ fn inspect_privacy_exact12_action_driver_transaction_context_v1_py(
             "signed transaction does not match the expected NetworkId",
         ));
     }
-
     let signing_seed =
         privacy_exact12_action_driver_signing_seed_v1(candidate_binding_sha256, request_id);
     let private_key = PrivateKey::from_bytes(Algorithm::Ed25519, signing_seed.as_ref())
@@ -13623,7 +12834,6 @@ fn inspect_privacy_exact12_action_driver_transaction_context_v1_py(
             "signed action-driver transaction must use one direct authority signature",
         ));
     }
-
     let (intent, submission) = signed
         .privacy_transaction_intent_binding_if_present_v1()
         .map_err(|_| {
@@ -13641,7 +12851,6 @@ fn inspect_privacy_exact12_action_driver_transaction_context_v1_py(
             "signed privacy statement context differs from the exact transaction context",
         ));
     }
-
     let (_, expected_public_key_bytes) =
         public_key_to_bytes(&expected_public_key, "action-driver public key")?;
     let transaction_hash = signed.hash();
@@ -13671,7 +12880,6 @@ fn inspect_privacy_exact12_action_driver_transaction_context_v1_py(
     result.set_item("metadata", "empty-v1")?;
     Ok(result.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "privacy_vega_device_authentication_digest_v1")]
 /// Derive `H_dev` for an already prepared, explicit nonzero transaction intent.
@@ -13738,7 +12946,6 @@ fn privacy_vega_device_authentication_digest_v1_py(
         statement.device_authentication_digest.as_bytes(),
     )))
 }
-
 fn python_authenticated_privacy_action_envelope_v1<'a>(
     signed: &'a SignedTransaction,
     expected_protocol_id: PrivacyProtocolIdV1,
@@ -13772,7 +12979,6 @@ fn python_authenticated_privacy_action_envelope_v1<'a>(
         })?;
     Ok((transaction_intent_digest, envelope))
 }
-
 fn python_privacy_action_inspection_result_v1<'py>(
     py: Python<'py>,
     signed: &SignedTransaction,
@@ -13838,7 +13044,6 @@ fn python_privacy_action_inspection_result_v1<'py>(
     }
     Ok(result)
 }
-
 #[pyfunction]
 #[pyo3(name = "inspect_signed_privacy_zk_ace_transfer_action_v1")]
 /// Authenticate and inspect exactly one native ZK-ACE transparent transfer.
@@ -13902,7 +13107,6 @@ fn inspect_signed_privacy_zk_ace_transfer_action_v1_py(
     )?;
     Ok(result.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "inspect_signed_privacy_jindo_action_v1")]
 /// Authenticate and inspect the exact public metadata carried by one Jindo action.
@@ -14001,7 +13205,6 @@ fn inspect_signed_privacy_jindo_action_v1_py(
     )?;
     Ok(result.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "inspect_signed_privacy_verange_action_v1")]
 /// Authenticate and inspect the exact public metadata carried by one VeRange action.
@@ -14046,7 +13249,6 @@ fn inspect_signed_privacy_verange_action_v1_py(
     result.set_item("value_commitments", commitments)?;
     Ok(result.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "inspect_signed_privacy_vega_action_v1")]
 /// Authenticate and inspect the exact public metadata carried by one Vega action.
@@ -14110,21 +13312,18 @@ fn inspect_signed_privacy_vega_action_v1_py(
     )?;
     Ok(result.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "inspect_signed_privacy_zk_x509_identity_presentation_action_v1")]
 /// Authenticate and inspect one exact ZK-X509 identity presentation.
 fn inspect_signed_privacy_zk_x509_identity_presentation_action_v1_py(
     py: Python<'_>,
     signed_transaction_versioned: &[u8],
-    canonical_genesis_hash: &[u8],
+    network_id: &PyNetworkId,
 ) -> PyResult<Py<PyDict>> {
-    let canonical_genesis_hash =
-        python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
     let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
     crate::privacy_native_actions::inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
         &signed,
-        canonical_genesis_hash,
+        *network_id.inner.as_bytes(),
     )
     .map_err(|error| {
         PyValueError::new_err(format!(
@@ -14251,7 +13450,6 @@ fn inspect_signed_privacy_zk_x509_identity_presentation_action_v1_py(
     )?;
     Ok(result.unbind())
 }
-
 fn python_zk_ams_action_inspection_result_v1<'py>(
     py: Python<'py>,
     signed: &SignedTransaction,
@@ -14300,7 +13498,6 @@ fn python_zk_ams_action_inspection_result_v1<'py>(
     )?;
     Ok(result)
 }
-
 #[pyfunction]
 #[pyo3(name = "inspect_signed_privacy_zk_ams_batch_admission_action_v1")]
 /// Authenticate and inspect exactly one ZK-AMS batch-admission action.
@@ -14373,7 +13570,6 @@ fn inspect_signed_privacy_zk_ams_batch_admission_action_v1_py(
     result.set_item("seed_public_keys", seed_public_keys)?;
     Ok(result.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "inspect_signed_privacy_zk_ams_provision_account_action_v1")]
 /// Authenticate and inspect exactly one ZK-AMS account-provisioning action.
@@ -14440,7 +13636,6 @@ fn inspect_signed_privacy_zk_ams_provision_account_action_v1_py(
     )?;
     Ok(result.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "inspect_signed_privacy_bootle_lantern_presentation_action_v1")]
 /// Authenticate and inspect exactly one Bootle/Lantern presentation action.
@@ -14513,7 +13708,6 @@ fn inspect_signed_privacy_bootle_lantern_presentation_action_v1_py(
     result.set_item("disclosed_attribute_values", disclosed_values)?;
     Ok(result.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "inspect_signed_privacy_anonymous_pgc_payment_action_v1")]
 /// Authenticate and inspect exactly one Anonymous-PGC payment action.
@@ -14578,7 +13772,6 @@ fn inspect_signed_privacy_anonymous_pgc_payment_action_v1_py(
     )?;
     Ok(result.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "inspect_signed_privacy_orchard_note_action_v1")]
 /// Authenticate and inspect exactly one Orchard note action.
@@ -14634,7 +13827,6 @@ fn inspect_signed_privacy_orchard_note_action_v1_py(
     )?;
     Ok(result.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "inspect_signed_privacy_fcmp_membership_payment_action_v1")]
 /// Authenticate and inspect exactly one FCMP++ membership payment.
@@ -14687,7 +13879,6 @@ fn inspect_signed_privacy_fcmp_membership_payment_action_v1_py(
     )?;
     Ok(result.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "inspect_signed_privacy_ivm_private_note_action_v1")]
 /// Authenticate and inspect exactly one native private-IVM note action.
@@ -14758,7 +13949,6 @@ fn inspect_signed_privacy_ivm_private_note_action_v1_py(
     )?;
     Ok(result.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "inspect_signed_privacy_pq_masp_note_action_v1")]
 /// Authenticate and inspect exactly one PQ-MASP note action.
@@ -14823,7 +14013,6 @@ fn inspect_signed_privacy_pq_masp_note_action_v1_py(
     )?;
     Ok(result.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "verify_signed_transaction_versioned")]
 /// Decode a versioned signed transaction and verify its signature.
@@ -14831,7 +14020,6 @@ fn verify_signed_transaction_versioned_py(bytes: &[u8]) -> PyResult<bool> {
     let signed = decode_canonical_signed_transaction_v1(bytes)?;
     Ok(signed.verify_signature().is_ok())
 }
-
 #[pyfunction]
 #[pyo3(name = "derive_confidential_keyset")]
 /// Derive the confidential key hierarchy from a 32-byte spend key.
@@ -14846,7 +14034,6 @@ fn derive_confidential_keyset_py(py: Python<'_>, spend_key: &[u8]) -> PyResult<P
     as_dict.set_item("fvk", PyBytes::new(py, keyset.full_view_key()))?;
     Ok(as_dict.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "sm2_fixture_from_seed")]
 /// Compute the canonical SM2 fixture values for the given distinguishing ID, seed, and message.
@@ -14881,7 +14068,6 @@ fn sm2_fixture_from_seed_py(
     let s_hex = hex::encode_upper(signature.s);
     let seed_hex = hex::encode_upper(seed);
     let message_hex = hex::encode_upper(message);
-
     let result = PyDict::new(py);
     result.set_item("distid", distid)?;
     result.set_item("seed_hex", seed_hex)?;
@@ -14896,7 +14082,6 @@ fn sm2_fixture_from_seed_py(
     result.set_item("s", s_hex)?;
     Ok(result.unbind())
 }
-
 #[pyfunction]
 #[pyo3(name = "encode_connect_frame")]
 /// Encode a connect frame described by a Python dictionary into Norito bytes.
@@ -14931,7 +14116,6 @@ fn encode_connect_frame_py(py: Python<'_>, frame: &Bound<'_, PyDict>) -> PyResul
     let encoded = norito::codec::Encode::encode(&proto_frame);
     Ok(Py::from(PyBytes::new(py, encoded.as_slice())))
 }
-
 #[pyfunction]
 #[pyo3(name = "decode_connect_frame")]
 /// Decode Norito-encoded connect frame bytes into a Python dictionary.
@@ -14944,19 +14128,16 @@ fn decode_connect_frame_py(py: Python<'_>, payload: &[u8]) -> PyResult<Py<PyDict
     mapping.set_item("kind", encode_frame_kind(py, &frame.kind)?)?;
     Ok(mapping.unbind())
 }
-
 #[pyfunction]
 /// Return `True` when the CUDA backend initialised successfully for the current process.
 fn cuda_available_py() -> bool {
     ivm::cuda_available()
 }
-
 #[pyfunction]
 /// Return `True` when the CUDA backend has been disabled after an error or self-test failure.
 fn cuda_disabled_py() -> bool {
     ivm::cuda_disabled()
 }
-
 #[pyfunction]
 /// Execute the Poseidon2 permutation on the CUDA backend when available.
 ///
@@ -14964,7 +14145,6 @@ fn cuda_disabled_py() -> bool {
 fn poseidon2_cuda_py(a: u64, b: u64) -> Option<u64> {
     ivm::poseidon2_cuda(a, b)
 }
-
 #[pyfunction]
 /// Execute multiple Poseidon2 permutations on the CUDA backend when available.
 ///
@@ -14972,7 +14152,6 @@ fn poseidon2_cuda_py(a: u64, b: u64) -> Option<u64> {
 fn poseidon2_cuda_many_py(inputs: Vec<(u64, u64)>) -> Option<Vec<u64>> {
     ivm::poseidon2_cuda_many(&inputs)
 }
-
 #[pyfunction]
 /// Execute the Poseidon6 permutation on the CUDA backend when available.
 ///
@@ -14980,7 +14159,6 @@ fn poseidon2_cuda_many_py(inputs: Vec<(u64, u64)>) -> Option<Vec<u64>> {
 fn poseidon6_cuda_py(inputs: [u64; 6]) -> Option<u64> {
     ivm::poseidon6_cuda(inputs)
 }
-
 #[pyfunction]
 /// Execute multiple Poseidon6 permutations on the CUDA backend when available.
 ///
@@ -14988,7 +14166,6 @@ fn poseidon6_cuda_py(inputs: [u64; 6]) -> Option<u64> {
 fn poseidon6_cuda_many_py(inputs: Vec<[u64; 6]>) -> Option<Vec<u64>> {
     ivm::poseidon6_cuda_many(&inputs)
 }
-
 #[pyfunction]
 /// Add two BN254 field elements using the CUDA backend when available.
 ///
@@ -14996,7 +14173,6 @@ fn poseidon6_cuda_many_py(inputs: Vec<[u64; 6]>) -> Option<Vec<u64>> {
 fn bn254_add_cuda_py(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
     ivm::bn254_add_cuda(a, b)
 }
-
 #[pyfunction]
 /// Add many BN254 field-element pairs using the CUDA backend when available.
 ///
@@ -15005,7 +14181,6 @@ fn bn254_add_cuda_py(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
 fn bn254_add_cuda_many_py(lhs: Vec<[u64; 4]>, rhs: Vec<[u64; 4]>) -> Option<Vec<[u64; 4]>> {
     ivm::bn254_add_batch_cuda(&lhs, &rhs)
 }
-
 #[pyfunction]
 /// Subtract two BN254 field elements using the CUDA backend when available.
 ///
@@ -15013,7 +14188,6 @@ fn bn254_add_cuda_many_py(lhs: Vec<[u64; 4]>, rhs: Vec<[u64; 4]>) -> Option<Vec<
 fn bn254_sub_cuda_py(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
     ivm::bn254_sub_cuda(a, b)
 }
-
 #[pyfunction]
 /// Subtract many BN254 field-element pairs using the CUDA backend when available.
 ///
@@ -15022,7 +14196,6 @@ fn bn254_sub_cuda_py(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
 fn bn254_sub_cuda_many_py(lhs: Vec<[u64; 4]>, rhs: Vec<[u64; 4]>) -> Option<Vec<[u64; 4]>> {
     ivm::bn254_sub_batch_cuda(&lhs, &rhs)
 }
-
 #[pyfunction]
 /// Multiply two BN254 field elements using the CUDA backend when available.
 ///
@@ -15030,7 +14203,6 @@ fn bn254_sub_cuda_many_py(lhs: Vec<[u64; 4]>, rhs: Vec<[u64; 4]>) -> Option<Vec<
 fn bn254_mul_cuda_py(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
     ivm::bn254_mul_cuda(a, b)
 }
-
 #[pyfunction]
 /// Multiply many BN254 field-element pairs using the CUDA backend when available.
 ///
@@ -15039,7 +14211,6 @@ fn bn254_mul_cuda_py(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
 fn bn254_mul_cuda_many_py(lhs: Vec<[u64; 4]>, rhs: Vec<[u64; 4]>) -> Option<Vec<[u64; 4]>> {
     ivm::bn254_mul_batch_cuda(&lhs, &rhs)
 }
-
 #[pyfunction]
 /// Return a deterministic relay envelope fixture and a tampered copy for testing.
 fn lane_relay_envelope_fixture_py() -> PyResult<(Vec<u8>, Vec<u8>)> {
@@ -15074,14 +14245,12 @@ fn lane_relay_envelope_fixture_py() -> PyResult<(Vec<u8>, Vec<u8>)> {
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
     let valid = norito::to_bytes(&envelope)
         .map_err(|err| PyValueError::new_err(format!("failed to serialize envelope: {err}")))?;
-
     let mut tampered = valid.clone();
     if let Some(last) = tampered.last_mut() {
         *last ^= 0xFF;
     }
     Ok((valid, tampered))
 }
-
 #[pyfunction]
 /// Verify the Norito-encoded relay envelope bytes returned by `/v1/sumeragi/status`.
 fn verify_lane_relay_envelope_bytes_py(envelope: &[u8]) -> PyResult<()> {
@@ -15092,7 +14261,6 @@ fn verify_lane_relay_envelope_bytes_py(envelope: &[u8]) -> PyResult<()> {
         .verify()
         .map_err(|err| PyValueError::new_err(err.to_string()))
 }
-
 #[pyfunction]
 /// Decode relay envelope bytes into a JSON string for inspection.
 fn decode_lane_relay_envelope_json_py(envelope: &[u8]) -> PyResult<String> {
@@ -15104,7 +14272,6 @@ fn decode_lane_relay_envelope_json_py(envelope: &[u8]) -> PyResult<String> {
     norito::json::to_string_pretty(&value)
         .map_err(|err| PyValueError::new_err(format!("failed to encode envelope JSON: {err}")))
 }
-
 #[pyfunction]
 /// Compute the settlement hash for a JSON `LaneBlockCommitment`.
 fn lane_settlement_hash_py(settlement_json: &str) -> PyResult<String> {
@@ -15114,7 +14281,6 @@ fn lane_settlement_hash_py(settlement_json: &str) -> PyResult<String> {
         .map_err(|err| PyValueError::new_err(format!("failed to hash settlement: {err}")))?;
     Ok(hex_encode_upper(hash.as_ref()))
 }
-
 fn privacy_compiled_profile_catalog() -> PyResult<PrivacyCompiledProfileCatalogV1> {
     let catalog = compiled_privacy_profile_catalog_v1().map_err(|error| {
         PyRuntimeError::new_err(format!(
@@ -15131,7 +14297,6 @@ fn privacy_compiled_profile_catalog() -> PyResult<PrivacyCompiledProfileCatalogV
     );
     Ok(catalog)
 }
-
 fn encode_privacy_compiled_profile_catalog_archive_py(
     py: Python<'_>,
     value: &PrivacyCompiledProfileCatalogV1,
@@ -15157,7 +14322,6 @@ fn encode_privacy_compiled_profile_catalog_archive_py(
     bytes.fill(0);
     Ok(output)
 }
-
 #[pyfunction]
 #[pyo3(name = "privacy_compiled_profile_catalog_v1")]
 fn privacy_compiled_profile_catalog_v1_py(py: Python<'_>) -> PyResult<Py<PyBytes>> {
@@ -15168,25 +14332,21 @@ fn privacy_compiled_profile_catalog_v1_py(py: Python<'_>) -> PyResult<Py<PyBytes
         "encode local privacy compiled-profile catalog",
     )
 }
-
 #[pyfunction]
 #[pyo3(name = "privacy_validate_compiled_profile_catalog_v1")]
 fn privacy_validate_compiled_profile_catalog_v1_py(archive: &[u8]) -> i32 {
     validate_local_privacy_compiled_profile_catalog_archive_v1(archive).code()
 }
-
 #[pyfunction]
 #[pyo3(name = "privacy_bridge_abi_version")]
 fn privacy_bridge_abi_version_py() -> u32 {
     PRIVACY_BRIDGE_ABI_VERSION_V1
 }
-
 #[pyfunction]
 #[pyo3(name = "connect_norito_bridge_abi_version")]
 fn connect_norito_bridge_abi_version_py() -> u32 {
     PRIVACY_BRIDGE_ABI_VERSION_V1
 }
-
 #[pyfunction]
 #[pyo3(name = "canonical_genesis_header_hash_v1")]
 fn canonical_genesis_header_hash_v1_py(
@@ -15218,7 +14378,6 @@ fn canonical_genesis_header_hash_v1_py(
     let hash = header.hash();
     Ok(Py::from(PyBytes::new(py, hash.as_ref())))
 }
-
 #[pymodule]
 fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add(

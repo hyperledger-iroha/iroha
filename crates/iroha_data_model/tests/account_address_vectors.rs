@@ -1,27 +1,22 @@
 //! Compliance-suite validation for account address vectors.
-
-use std::path::Path;
-
 use hex::{FromHex, encode_upper};
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::account::{
     AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy,
 };
 use norito::json::{self, JsonDeserialize};
-
+use std::path::Path;
 #[derive(Debug, JsonDeserialize)]
 struct Root {
     format_version: u32,
     default_network_prefix: u16,
     cases: CaseSets,
 }
-
 #[derive(Debug, JsonDeserialize)]
 struct CaseSets {
     positive: Vec<PositiveCase>,
     negative: Vec<NegativeCase>,
 }
-
 #[allow(dead_code)]
 #[derive(Debug, JsonDeserialize)]
 struct PositiveCase {
@@ -33,7 +28,6 @@ struct PositiveCase {
     controller: Controller,
     encodings: Encodings,
 }
-
 #[allow(dead_code)]
 #[derive(Debug, JsonDeserialize)]
 struct PositiveInput {
@@ -46,7 +40,6 @@ struct PositiveInput {
     member_weights: Option<Vec<u16>>,
     threshold: Option<u16>,
 }
-
 #[allow(dead_code)]
 #[derive(Debug, JsonDeserialize)]
 struct Selector {
@@ -55,7 +48,6 @@ struct Selector {
     registry_id: Option<u32>,
     domain_equivalents: Option<Vec<String>>,
 }
-
 #[allow(dead_code)]
 #[derive(Debug, JsonDeserialize)]
 struct Controller {
@@ -68,7 +60,6 @@ struct Controller {
     ctap2_cbor_hex: Option<String>,
     digest_blake2b256_hex: Option<String>,
 }
-
 #[allow(dead_code)]
 #[derive(Debug, JsonDeserialize)]
 struct Member {
@@ -76,21 +67,18 @@ struct Member {
     weight: u16,
     public_key_hex: String,
 }
-
 #[allow(dead_code)]
 #[derive(Debug, JsonDeserialize)]
 struct Encodings {
     canonical_hex: String,
     i105: I105Encoding,
 }
-
 #[allow(dead_code)]
 #[derive(Debug, JsonDeserialize)]
 struct I105Encoding {
     prefix: u16,
     string: String,
 }
-
 #[allow(dead_code)]
 #[derive(Debug, JsonDeserialize)]
 struct NegativeCase {
@@ -101,7 +89,6 @@ struct NegativeCase {
     expected_prefix: Option<u16>,
     expected_error: ExpectedError,
 }
-
 #[allow(dead_code)]
 #[derive(Debug, JsonDeserialize)]
 struct ExpectedError {
@@ -111,7 +98,6 @@ struct ExpectedError {
     char: Option<String>,
     policy_error: Option<String>,
 }
-
 fn decode_canonical(hex_value: &str) -> Vec<u8> {
     let body = hex_value
         .strip_prefix("0x")
@@ -119,18 +105,15 @@ fn decode_canonical(hex_value: &str) -> Vec<u8> {
         .to_ascii_lowercase();
     Vec::from_hex(body.as_str()).expect("canonical hex decode")
 }
-
 fn canonical_bytes_from_address(address: &AccountAddress) -> Vec<u8> {
     let canonical_hex = address
         .canonical_hex()
         .expect("canonical address encoding should succeed");
     decode_canonical(&canonical_hex)
 }
-
 fn ed25519_public_key(hex_value: &str) -> PublicKey {
     PublicKey::from_hex(Algorithm::Ed25519, hex_value).expect("valid ed25519 public key payload")
 }
-
 #[test]
 fn account_address_vectors_validate() {
     let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -140,22 +123,18 @@ fn account_address_vectors_validate() {
     let data = std::fs::read_to_string(&fixture_path).expect("fixture must read");
     let root: Root = json::from_str(&data).expect("fixture must parse");
     assert_eq!(root.format_version, 1, "unexpected format version");
-
     for case in &root.cases.positive {
         validate_positive_case(case, root.default_network_prefix);
     }
-
     for case in &root.cases.negative {
         validate_negative_case(case, root.default_network_prefix);
     }
 }
-
 #[allow(clippy::too_many_lines)]
 fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
     let canonical_bytes = decode_canonical(&case.encodings.canonical_hex);
     let canonical_address =
         AccountAddress::from_canonical_bytes(&canonical_bytes).expect("canonical decode");
-
     // I105 decoding (legacy fixture key: `i105`)
     let i105_addr = AccountAddress::from_i105_for_discriminant(
         &case.encodings.i105.string,
@@ -192,11 +171,9 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
             .expect("default-prefix i105 encode"),
         case.encodings.i105.string
     );
-
     if let Some(domain) = case.input.normalized_domain.as_deref() {
         iroha_data_model::domain::DomainId::try_new(domain, "universal").expect("valid domain");
     }
-
     // Strict parser must reject canonical hex literals.
     let err = AccountAddress::parse_encoded(&case.encodings.canonical_hex, None)
         .expect_err("canonical hex must be rejected by strict parser");
@@ -205,7 +182,6 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
         "{} canonical hex should be unsupported",
         case.case_id
     );
-
     // Ensure canonical hex rendering matches fixture.
     let rendered_hex = canonical_address
         .canonical_hex()
@@ -216,13 +192,11 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
         "{} canonical hex mismatch",
         case.case_id
     );
-
     match case.category.as_str() {
         "single" => validate_single_case(case, &canonical_address),
         "multisig" => validate_multisig_case(case, &canonical_address),
         other => panic!("unknown positive category {other}"),
     }
-
     assert_eq!(
         case.selector.kind, "default",
         "{} selector kind mismatch",
@@ -244,7 +218,6 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
         case.case_id
     );
 }
-
 fn validate_single_case(case: &PositiveCase, address: &AccountAddress) {
     if let Some(_raw_domain) = case.input.raw_domain.as_deref() {
         let public_key_hex = case
@@ -263,7 +236,6 @@ fn validate_single_case(case: &PositiveCase, address: &AccountAddress) {
         );
     }
 }
-
 fn validate_multisig_case(case: &PositiveCase, address: &AccountAddress) {
     let members_hex = case
         .input
@@ -329,7 +301,6 @@ fn validate_multisig_case(case: &PositiveCase, address: &AccountAddress) {
             case.case_id
         );
     }
-
     let account = AccountId::new_multisig(policy);
     let rebuilt =
         AccountAddress::from_account_id(&account).expect("multisig address reconstruction");
@@ -339,7 +310,6 @@ fn validate_multisig_case(case: &PositiveCase, address: &AccountAddress) {
         case.case_id
     );
 }
-
 fn validate_negative_case(case: &NegativeCase, default_prefix: u16) {
     match case.format.as_str() {
         "i105" => {
@@ -357,7 +327,6 @@ fn validate_negative_case(case: &NegativeCase, default_prefix: u16) {
         other => panic!("unknown negative format {other}"),
     }
 }
-
 fn assert_error(err: &AccountAddressError, expected: &ExpectedError, case_id: &str) {
     match expected.kind.as_str() {
         "ChecksumMismatch" => {

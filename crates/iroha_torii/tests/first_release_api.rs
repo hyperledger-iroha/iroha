@@ -1,12 +1,6 @@
 //! Integration coverage for the single, first-release Torii API surface.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "app_api")]
-
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::Arc,
-};
-
 use axum::http::Request;
 use http::{
     HeaderMap, HeaderValue, Method, StatusCode,
@@ -22,12 +16,14 @@ use iroha_core::{
 };
 use iroha_torii::{OnlinePeersProvider, Torii, test_utils};
 use iroha_torii_shared::{ErrorEnvelope, uri};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::Arc,
+};
 use tower::ServiceExt as _;
-
 fn local_connect_info() -> axum::extract::connect_info::ConnectInfo<SocketAddr> {
     axum::extract::connect_info::ConnectInfo(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
 }
-
 fn header_contains_token(headers: &HeaderMap, name: http::header::HeaderName, token: &str) -> bool {
     headers
         .get_all(name)
@@ -36,7 +32,6 @@ fn header_contains_token(headers: &HeaderMap, name: http::header::HeaderName, to
         .flat_map(|value| value.split(','))
         .any(|value| value.trim().eq_ignore_ascii_case(token))
 }
-
 async fn decode_error_response(
     response: axum::response::Response,
 ) -> (StatusCode, HeaderMap, ErrorEnvelope) {
@@ -60,7 +55,6 @@ async fn decode_error_response(
     };
     (status, headers, envelope)
 }
-
 async fn assert_canonical_early_error(
     response: axum::response::Response,
     expected_status: StatusCode,
@@ -103,7 +97,6 @@ async fn assert_canonical_early_error(
     };
     assert_eq!(envelope.code(), expected_code);
 }
-
 #[tokio::test]
 async fn unknown_routes_use_negotiated_typed_error_envelopes() {
     let router = build_router();
@@ -126,11 +119,9 @@ async fn unknown_routes_use_negotiated_typed_error_envelopes() {
         assert!(header_contains_token(&headers, VARY, "Accept"));
     }
 }
-
 #[tokio::test]
 async fn assembled_router_canonicalizes_early_path_and_accept_failures() {
     let router = build_router();
-
     let invalid_path = router
         .clone()
         .oneshot(
@@ -152,7 +143,6 @@ async fn assembled_router_canonicalizes_early_path_and_accept_failures() {
         "early-path-400",
     )
     .await;
-
     let trailing_slash = router
         .clone()
         .oneshot(
@@ -174,7 +164,6 @@ async fn assembled_router_canonicalizes_early_path_and_accept_failures() {
         "early-path-404",
     )
     .await;
-
     let mut malformed_accept = Request::builder()
         .uri(uri::HEALTH)
         .extension(local_connect_info())
@@ -201,7 +190,6 @@ async fn assembled_router_canonicalizes_early_path_and_accept_failures() {
     )
     .await;
 }
-
 #[tokio::test]
 async fn offline_command_header_admission_precedes_body_decoding() {
     let router = build_router();
@@ -223,7 +211,6 @@ async fn offline_command_header_admission_precedes_body_decoding() {
         let (status, _, envelope) = decode_error_response(response).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "path={path}");
         assert_eq!(envelope.code(), "idempotency_key_missing", "path={path}");
-
         let response = router
             .clone()
             .oneshot(
@@ -249,7 +236,6 @@ async fn offline_command_header_admission_precedes_body_decoding() {
         );
     }
 }
-
 #[tokio::test]
 async fn wrong_methods_use_negotiated_typed_errors_and_retain_allow() {
     let router = build_router();
@@ -275,7 +261,6 @@ async fn wrong_methods_use_negotiated_typed_errors_and_retain_allow() {
         assert!(header_contains_token(&headers, VARY, "Accept"));
     }
 }
-
 #[tokio::test]
 async fn unsupported_por_routes_are_unregistered_and_cannot_mutate_state() {
     async fn por_status_snapshot(router: &axum::Router) -> Vec<u8> {
@@ -299,7 +284,6 @@ async fn unsupported_por_routes_are_unregistered_and_cannot_mutate_state() {
             .to_bytes()
             .to_vec()
     }
-
     let router = build_router();
     let before = por_status_snapshot(&router).await;
     let unsupported = [
@@ -315,7 +299,6 @@ async fn unsupported_por_routes_are_unregistered_and_cannot_mutate_state() {
         "/v1/sorafs/capacity/por-challenge/arbitrary",
         "/v1/sorafs/storage/por-proof/arbitrary",
     ];
-
     for path in unsupported {
         let response = router
             .clone()
@@ -342,7 +325,6 @@ async fn unsupported_por_routes_are_unregistered_and_cannot_mutate_state() {
             "unregistered route changed PoR state: POST {path}"
         );
     }
-
     for active_path in [
         "/v1/sorafs/capacity/por-proof",
         "/v1/sorafs/capacity/por-verdict",
@@ -367,7 +349,6 @@ async fn unsupported_por_routes_are_unregistered_and_cannot_mutate_state() {
         );
     }
 }
-
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn canonical_sumeragi_spellings_reach_their_resource_handlers() {
@@ -392,7 +373,6 @@ async fn canonical_sumeragi_spellings_reach_their_resource_handlers() {
         );
     }
 }
-
 fn build_router() -> axum::Router {
     let cfg = test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -408,7 +388,6 @@ fn build_router() -> axum::Router {
     let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
-
     let torii = Torii::new_with_handle(
         cfg.common.chain.clone(),
         iroha_torii::test_utils::signed_query_network_id(),
@@ -424,6 +403,5 @@ fn build_router() -> axum::Router {
         None,
         iroha_torii::MaybeTelemetry::disabled(),
     );
-
     torii.api_router_for_tests()
 }

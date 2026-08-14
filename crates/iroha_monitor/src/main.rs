@@ -1,5 +1,4 @@
 //! Animated Iroha monitor with torii ASCII art and festival metrics.
-
 mod ascii;
 mod etenraku;
 mod fetch;
@@ -10,13 +9,13 @@ mod fetch;
 ))]
 mod synth;
 mod theme;
-
-use std::{
-    collections::VecDeque,
-    io::{self, Write},
-    time::Duration,
+use crate::{
+    fetch::{
+        NoticeLevel, PeerFetcher, PeerNotice, PeerSnapshot, PeerUpdate, STATUS_BODY_LIMIT,
+        StatusPayload, spawn_stub_cluster,
+    },
+    theme::{ThemeIntro, ThemeOptions},
 };
-
 use axum::http::Uri;
 use clap::{Parser, ValueEnum};
 use eyre::{Result, eyre};
@@ -28,23 +27,18 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Sparkline, Table, Wrap},
 };
-use tokio::{signal, sync::mpsc, time, time::MissedTickBehavior};
-
-use crate::{
-    fetch::{
-        NoticeLevel, PeerFetcher, PeerNotice, PeerSnapshot, PeerUpdate, STATUS_BODY_LIMIT,
-        StatusPayload, spawn_stub_cluster,
-    },
-    theme::{ThemeIntro, ThemeOptions},
+use std::{
+    collections::VecDeque,
+    io::{self, Write},
+    time::Duration,
 };
-
+use tokio::{signal, sync::mpsc, time, time::MissedTickBehavior};
 #[derive(ValueEnum, Clone, Copy, Debug)]
 enum ArtThemeArg {
     Night,
     Dawn,
     Sakura,
 }
-
 impl From<ArtThemeArg> for ascii::AsciiTheme {
     fn from(value: ArtThemeArg) -> Self {
         match value {
@@ -54,7 +48,6 @@ impl From<ArtThemeArg> for ascii::AsciiTheme {
         }
     }
 }
-
 #[derive(Parser, Debug, Clone)]
 #[command(
     name = "iroha_monitor",
@@ -66,56 +59,43 @@ struct Args {
     /// Refresh interval in milliseconds
     #[arg(short = 'i', long = "interval", default_value_t = 800)]
     refresh_ms: u64,
-
     /// Attach to existing peer Torii endpoints instead of local stubs
     #[arg(long = "attach", value_name = "URL", num_args = 1..)]
     attach: Vec<String>,
-
     /// Spawn animated local stubs instead of real peers
     #[arg(long = "spawn-lite", default_value_t = false)]
     spawn_lite: bool,
-
     /// Number of peers to spawn in stub mode
     #[arg(short = 'n', long = "peers", default_value_t = 4)]
     peers: usize,
-
     /// Skip the animated intro (useful for automated tests)
     #[arg(long = "no-theme", default_value_t = false)]
     no_theme: bool,
-
     /// Disable audio playback of the Etenraku theme
     #[arg(long = "no-audio", default_value_t = false)]
     no_audio: bool,
-
     /// External MIDI player command (optional)
     #[arg(long = "midi-player")]
     midi_player: Option<String>,
-
     /// MIDI file path to feed to --midi-player (defaults to built-in demo)
     #[arg(long = "midi-file")]
     midi_file: Option<String>,
-
     /// Render the gas history sparkline panel
     #[arg(long = "show-gas-trend", default_value_t = false)]
     show_gas_trend: bool,
-
     /// Speed multiplier for the ASCII animation (1 = default)
     #[arg(long = "art-speed", default_value_t = 1, value_parser = clap::value_parser!(u16).range(1..=8))]
     art_speed: u16,
-
     /// Set the ASCII art palette (night, dawn, sakura)
     #[arg(long = "art-theme", value_enum, default_value_t = ArtThemeArg::Night)]
     art_theme: ArtThemeArg,
-
     /// Maximum frames to render when the monitor falls back to headless mode (0 = unlimited)
     #[arg(long = "headless-max-frames")]
     headless_max_frames: Option<u64>,
 }
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-
     let theme_playback = if args.no_theme {
         None
     } else {
@@ -127,13 +107,11 @@ async fn main() -> Result<()> {
         };
         Some(intro.play(options).await?)
     };
-
     let attach_endpoints = if args.spawn_lite || args.attach.is_empty() {
         None
     } else {
         Some(normalize_endpoints(&args.attach)?)
     };
-
     let (endpoints, stub_cluster) = if let Some(endpoints) = attach_endpoints {
         (endpoints, None)
     } else {
@@ -141,22 +119,17 @@ async fn main() -> Result<()> {
         let urls = cluster.urls().to_vec();
         (urls, Some(cluster))
     };
-
     let ascii_config = ascii::AsciiConfig {
         speed: args.art_speed,
         theme: args.art_theme.into(),
     };
-
     let monitor_result = run_monitor(&args, endpoints, ascii_config).await;
-
     if let Some(mut playback) = theme_playback {
         playback.stop().await;
     }
-
     drop(stub_cluster);
     monitor_result
 }
-
 fn normalize_endpoints(raws: &[String]) -> Result<Vec<String>> {
     let mut normalized = Vec::with_capacity(raws.len());
     for raw in raws {
@@ -164,23 +137,19 @@ fn normalize_endpoints(raws: &[String]) -> Result<Vec<String>> {
     }
     Ok(normalized)
 }
-
 fn normalize_endpoint(raw: &str) -> Result<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(eyre!("Torii endpoint cannot be empty"));
     }
-
     let candidate = if trimmed.contains("://") {
         trimmed.to_string()
     } else {
         format!("http://{trimmed}")
     };
-
     let uri: Uri = candidate
         .parse()
         .map_err(|err| eyre!("invalid Torii endpoint `{trimmed}`: {err}"))?;
-
     match uri.scheme_str() {
         Some("http" | "https") => {}
         Some(other) => {
@@ -194,23 +163,19 @@ fn normalize_endpoint(raw: &str) -> Result<String> {
             ));
         }
     }
-
     if uri.host().is_none() {
         return Err(eyre!(
             "Torii endpoint `{trimmed}` is missing a host component"
         ));
     }
-
     Ok(candidate)
 }
-
 /// Frame budget for headless fallback when no explicit cap is provided.
 ///
 /// With the default 800 ms refresh cadence this keeps the process alive for
 /// just over three minutes, which is long enough for demos yet short enough to
 /// avoid CI hangs when raw terminal access is unavailable.
 const DEFAULT_HEADLESS_MAX_FRAMES: usize = 240;
-
 #[derive(Clone, Copy)]
 struct MonitorTheme {
     background: Color,
@@ -229,7 +194,6 @@ struct MonitorTheme {
     selected_bg: Color,
     selected_fg: Color,
 }
-
 const MONITOR_THEME: MonitorTheme = MonitorTheme {
     background: Color::Rgb(5, 9, 18),
     panel: Color::Rgb(10, 17, 30),
@@ -247,7 +211,6 @@ const MONITOR_THEME: MonitorTheme = MonitorTheme {
     selected_bg: Color::Rgb(94, 211, 255),
     selected_fg: Color::Black,
 };
-
 fn headless_limit_from_args(args: &Args) -> Option<usize> {
     match args.headless_max_frames {
         Some(0) => None,
@@ -255,7 +218,6 @@ fn headless_limit_from_args(args: &Args) -> Option<usize> {
         None => Some(DEFAULT_HEADLESS_MAX_FRAMES),
     }
 }
-
 async fn run_monitor(
     args: &Args,
     endpoints: Vec<String>,
@@ -284,7 +246,6 @@ async fn run_monitor(
         }
         return Err(err.into());
     }
-
     let mut stdout = io::stdout();
     if let Err(err) = crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen) {
         let _ = crossterm::terminal::disable_raw_mode();
@@ -308,11 +269,9 @@ async fn run_monitor(
         }
         return Err(err.into());
     }
-
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
-
     let result = run_monitor_loop(
         endpoints,
         refresh,
@@ -321,7 +280,6 @@ async fn run_monitor(
         args.show_gas_trend,
     )
     .await;
-
     crossterm::terminal::disable_raw_mode()?;
     crossterm::execute!(
         terminal.backend_mut(),
@@ -330,7 +288,6 @@ async fn run_monitor(
     terminal.show_cursor()?;
     result
 }
-
 async fn run_monitor_headless(
     endpoints: Vec<String>,
     refresh: Duration,
@@ -341,18 +298,15 @@ async fn run_monitor_headless(
     if endpoints.is_empty() {
         return Err(eyre!("no endpoints configured"));
     }
-
     let mut fetcher = PeerFetcher::new(endpoints.clone(), refresh);
     let mut app = AppState::new(endpoints, refresh, ascii_config, show_gas_trend);
     let mut ticker = time::interval(refresh);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut printer = HeadlessPrinter::default();
-
     printer.render(&app)?;
     if !consume_headless_frame(&mut max_frames) {
         return finish_headless(&mut printer);
     }
-
     loop {
         tokio::select! {
             update = fetcher.recv() => {
@@ -376,15 +330,12 @@ async fn run_monitor_headless(
             }
         }
     }
-
     finish_headless(&mut printer)
 }
-
 fn finish_headless(printer: &mut HeadlessPrinter) -> Result<()> {
     printer.finish()?;
     Ok(())
 }
-
 fn consume_headless_frame(limit: &mut Option<usize>) -> bool {
     limit.as_mut().is_none_or(|remaining| {
         if *remaining == 0 {
@@ -395,7 +346,6 @@ fn consume_headless_frame(limit: &mut Option<usize>) -> bool {
         }
     })
 }
-
 fn should_fallback_to_headless(err: &std::io::Error) -> bool {
     matches!(
         err.kind(),
@@ -404,12 +354,10 @@ fn should_fallback_to_headless(err: &std::io::Error) -> bool {
         .raw_os_error()
         .is_some_and(|code| matches!(code, 1 | 6 | 25))
 }
-
 #[derive(Default)]
 struct HeadlessPrinter {
     last_line_len: usize,
 }
-
 impl HeadlessPrinter {
     fn render(&mut self, app: &AppState) -> io::Result<()> {
         let mut line = format_headless_line(app);
@@ -423,7 +371,6 @@ impl HeadlessPrinter {
         self.last_line_len = line.len();
         Ok(())
     }
-
     fn finish(&mut self) -> io::Result<()> {
         if self.last_line_len == 0 {
             return Ok(());
@@ -435,7 +382,6 @@ impl HeadlessPrinter {
         Ok(())
     }
 }
-
 async fn run_monitor_loop(
     endpoints: Vec<String>,
     refresh: Duration,
@@ -446,15 +392,12 @@ async fn run_monitor_loop(
     if endpoints.is_empty() {
         return Err(eyre!("no endpoints configured"));
     }
-
     let mut fetcher = PeerFetcher::new(endpoints.clone(), refresh);
     let mut app = AppState::new(endpoints, refresh, ascii_config, show_gas_trend);
     let mut ticker = time::interval(refresh);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-
     let (tx_input, mut rx_input) = mpsc::channel::<InputEvent>(16);
     spawn_input_listener(tx_input);
-
     loop {
         tokio::select! {
             update = fetcher.recv() => {
@@ -493,12 +436,9 @@ async fn run_monitor_loop(
             }
         }
     }
-
     Ok(())
 }
-
 const MAX_GAS_HISTORY: usize = 180;
-
 struct AppState {
     refresh: Duration,
     ascii: ascii::AsciiAnimator,
@@ -512,7 +452,6 @@ struct AppState {
     search_query: String,
     search_editing: bool,
 }
-
 impl AppState {
     fn new(
         endpoints: Vec<String>,
@@ -540,12 +479,10 @@ impl AppState {
             search_editing: false,
         }
     }
-
     fn advance_animation(&mut self) {
         self.record_gas_snapshot();
         self.ascii.advance();
     }
-
     fn record_gas_snapshot(&mut self) {
         if !self.show_gas_trend {
             return;
@@ -563,14 +500,12 @@ impl AppState {
             self.gas_history.pop_front();
         }
     }
-
     fn update_peer(&mut self, update: PeerUpdate) {
         if let Some(slot) = self.peers.get_mut(update.index) {
             slot.update(update.snapshot, &mut self.events);
         }
         self.normalize_focus();
     }
-
     fn focus_next(&mut self) {
         let visible = self.visible_peer_indices();
         if visible.is_empty() {
@@ -582,7 +517,6 @@ impl AppState {
             .unwrap_or(0);
         self.focus = Some(visible[(pos + 1) % visible.len()]);
     }
-
     fn focus_prev(&mut self) {
         let visible = self.visible_peer_indices();
         if visible.is_empty() {
@@ -595,20 +529,16 @@ impl AppState {
         let prev = if pos == 0 { visible.len() - 1 } else { pos - 1 };
         self.focus = Some(visible[prev]);
     }
-
     fn ascii_lines(&self, width: u16, max_lines: Option<u16>) -> Vec<String> {
         let limit = max_lines.map(usize::from);
         self.ascii.frame_with_height(width, limit)
     }
-
     fn show_gas_trend(&self) -> bool {
         self.show_gas_trend
     }
-
     fn gas_history(&self) -> impl Iterator<Item = u64> + '_ {
         self.gas_history.iter().copied()
     }
-
     fn visible_peer_indices(&self) -> Vec<usize> {
         let mut visible = (0..self.peers.len())
             .filter(|&index| {
@@ -620,7 +550,6 @@ impl AppState {
         visible.sort_by(|&left, &right| self.compare_peers(left, right));
         visible
     }
-
     fn matches_search(&self, slot: &PeerSlot) -> bool {
         if self.search_query.is_empty() {
             return true;
@@ -629,7 +558,6 @@ impl AppState {
         slot.display_name().to_ascii_lowercase().contains(&needle)
             || slot.endpoint.to_ascii_lowercase().contains(&needle)
     }
-
     fn compare_peers(&self, left: usize, right: usize) -> std::cmp::Ordering {
         let left_slot = &self.peers[left];
         let right_slot = &self.peers[right];
@@ -654,7 +582,6 @@ impl AppState {
                 .then_with(|| right_slot.latest_height().cmp(&left_slot.latest_height())),
         }
     }
-
     fn selected_index(&self) -> Option<usize> {
         let visible = self.visible_peer_indices();
         if visible.is_empty() {
@@ -664,47 +591,38 @@ impl AppState {
             .filter(|idx| visible.iter().any(|candidate| candidate == idx))
             .or_else(|| visible.first().copied())
     }
-
     fn selected_peer(&self) -> Option<(usize, &PeerSlot)> {
         let idx = self.selected_index()?;
         Some((idx, &self.peers[idx]))
     }
-
     fn latest_event(&self) -> Option<&str> {
         self.events.back().map(|entry| entry.message.as_str())
     }
-
     fn cycle_sort(&mut self) {
         self.sort = self.sort.next();
         self.normalize_focus();
     }
-
     fn toggle_issue_filter(&mut self) {
         self.filter_issues_only = !self.filter_issues_only;
         self.normalize_focus();
     }
-
     fn begin_search(&mut self) {
         self.search_editing = true;
     }
-
     fn clear_search(&mut self) {
         self.search_query.clear();
         self.search_editing = false;
         self.normalize_focus();
     }
-
     fn handle_key(
         &mut self,
         code: crossterm::event::KeyCode,
         modifiers: crossterm::event::KeyModifiers,
     ) -> bool {
         use crossterm::event::{KeyCode, KeyModifiers};
-
         if modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('c')) {
             return true;
         }
-
         if self.search_editing {
             match code {
                 KeyCode::Esc => {
@@ -728,7 +646,6 @@ impl AppState {
             }
             return false;
         }
-
         match code {
             KeyCode::Char('q') | KeyCode::Esc => return true,
             KeyCode::Char('n') | KeyCode::Right | KeyCode::Down => self.focus_next(),
@@ -741,7 +658,6 @@ impl AppState {
         }
         false
     }
-
     fn search_status(&self) -> String {
         if self.search_query.is_empty() {
             if self.search_editing {
@@ -755,12 +671,10 @@ impl AppState {
             format!("search /{}", self.search_query)
         }
     }
-
     fn normalize_focus(&mut self) {
         self.focus = self.selected_index();
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PeerSort {
     Health,
@@ -768,7 +682,6 @@ enum PeerSort {
     Latency,
     Name,
 }
-
 impl PeerSort {
     fn label(self) -> &'static str {
         match self {
@@ -778,7 +691,6 @@ impl PeerSort {
             Self::Name => "name",
         }
     }
-
     fn next(self) -> Self {
         match self {
             Self::Health => Self::Height,
@@ -788,7 +700,6 @@ impl PeerSort {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EventSeverity {
     Info,
@@ -796,7 +707,6 @@ enum EventSeverity {
     Warning,
     Critical,
 }
-
 impl EventSeverity {
     fn label(self) -> &'static str {
         match self {
@@ -806,12 +716,10 @@ impl EventSeverity {
             Self::Critical => "DOWN",
         }
     }
-
     fn style(self) -> Style {
         Style::default().fg(event_color(self))
     }
 }
-
 impl From<NoticeLevel> for EventSeverity {
     fn from(value: NoticeLevel) -> Self {
         match value {
@@ -821,13 +729,11 @@ impl From<NoticeLevel> for EventSeverity {
         }
     }
 }
-
 #[derive(Clone, Debug)]
 struct EventEntry {
     severity: EventSeverity,
     message: String,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PeerHealth {
     Pending,
@@ -835,7 +741,6 @@ enum PeerHealth {
     Degraded,
     Offline,
 }
-
 impl PeerHealth {
     fn label(self) -> &'static str {
         match self {
@@ -846,13 +751,11 @@ impl PeerHealth {
         }
     }
 }
-
 struct PeerSlot {
     endpoint: String,
     latest: Option<PeerSnapshot>,
     current_alert: Option<PeerNotice>,
 }
-
 impl PeerSlot {
     fn new(endpoint: String) -> Self {
         Self {
@@ -861,20 +764,17 @@ impl PeerSlot {
             current_alert: None,
         }
     }
-
     fn update(&mut self, snapshot: PeerSnapshot, events: &mut VecDeque<EventEntry>) {
         let name = snapshot
             .status
             .as_ref()
             .and_then(|s| s.alias.clone())
             .unwrap_or_else(|| self.endpoint.clone());
-
         let was_online = self
             .latest
             .as_ref()
             .is_some_and(|previous| previous.status.is_some());
         let is_online = snapshot.status.is_some();
-
         if self.latest.is_none() && is_online {
             push_event(
                 events,
@@ -894,7 +794,6 @@ impl PeerSlot {
                 format!("{name}: telemetry restored"),
             );
         }
-
         let next_alert = snapshot.primary_notice().cloned();
         if next_alert != self.current_alert {
             match (&self.current_alert, &next_alert) {
@@ -915,25 +814,21 @@ impl PeerSlot {
                 _ => {}
             }
         }
-
         self.current_alert = next_alert;
         self.latest = Some(snapshot);
     }
-
     fn display_name(&self) -> String {
         self.latest
             .as_ref()
             .and_then(|snap| snap.status.as_ref()?.alias.clone())
             .unwrap_or_else(|| self.endpoint.clone())
     }
-
     fn latest_height(&self) -> u64 {
         self.latest
             .as_ref()
             .and_then(|snapshot| snapshot.status.as_ref()?.blocks)
             .unwrap_or(0)
     }
-
     fn latency_millis(&self) -> u128 {
         self.latest
             .as_ref()
@@ -941,17 +836,14 @@ impl PeerSlot {
             .map_or(u128::MAX, |latency| latency.as_millis())
     }
 }
-
 enum InputEvent {
     Key(crossterm::event::KeyCode, crossterm::event::KeyModifiers),
     Resize,
 }
-
 fn spawn_input_listener(tx: mpsc::Sender<InputEvent>) {
     std::thread::spawn(move || {
-        use std::time::Duration;
-
         use crossterm::event::{self, Event};
+        use std::time::Duration;
         loop {
             if event::poll(Duration::from_millis(100)).unwrap_or(false) {
                 match event::read() {
@@ -973,7 +865,6 @@ fn spawn_input_listener(tx: mpsc::Sender<InputEvent>) {
         }
     });
 }
-
 fn push_event(queue: &mut VecDeque<EventEntry>, severity: EventSeverity, msg: String) {
     const MAX_EVENTS: usize = 32;
     queue.push_back(EventEntry {
@@ -984,7 +875,6 @@ fn push_event(queue: &mut VecDeque<EventEntry>, severity: EventSeverity, msg: St
         queue.pop_front();
     }
 }
-
 fn render_ui(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     let size = frame.area();
     paint_background(frame, size);
@@ -992,7 +882,6 @@ fn render_ui(frame: &mut ratatui::Frame<'_>, app: &AppState) {
         render_compact_ui(frame, app);
         return;
     }
-
     let footer_height = 1u16.min(size.height);
     let header_height = if size.height >= 30 { 8 } else { 7 }.min(size.height);
     let body_height = size.height.saturating_sub(header_height + footer_height);
@@ -1004,7 +893,6 @@ fn render_ui(frame: &mut ratatui::Frame<'_>, app: &AppState) {
             Constraint::Length(footer_height),
         ])
         .split(size);
-
     if layout[0].width >= 110 {
         let header_split = Layout::default()
             .direction(Direction::Horizontal)
@@ -1015,13 +903,11 @@ fn render_ui(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     } else {
         render_overview_panel(frame, layout[0], app);
     }
-
     let body_split = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(64), Constraint::Percentage(36)])
         .split(layout[1]);
     render_peer_table(frame, body_split[0], app);
-
     let side_constraints = if app.show_gas_trend() && body_split[1].height >= 17 {
         vec![
             Constraint::Length(7),
@@ -1035,7 +921,6 @@ fn render_ui(frame: &mut ratatui::Frame<'_>, app: &AppState) {
         .direction(Direction::Vertical)
         .constraints(side_constraints)
         .split(body_split[1]);
-
     render_focus_panel(frame, side_split[0], app);
     if side_split.len() >= 2 {
         render_events(frame, side_split[1], app);
@@ -1043,12 +928,10 @@ fn render_ui(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     if side_split.len() >= 3 {
         render_gas_trend(frame, side_split[2], app);
     }
-
     if footer_height > 0 {
         render_footer(frame, layout[2], app);
     }
 }
-
 fn format_summary_text(app: &AppState) -> String {
     let stats = collect_summary(app);
     format!(
@@ -1069,7 +952,6 @@ fn format_summary_text(app: &AppState) -> String {
         app.refresh.as_millis()
     )
 }
-
 fn peer_table_title(
     app: &AppState,
     visible: &[usize],
@@ -1083,7 +965,6 @@ fn peer_table_title(
         }
         return format!("Peer Mesh  no matches  {}", app.search_status());
     }
-
     let row_span = if capacity == 0 {
         format!("1-{}", visible.len().min(1))
     } else {
@@ -1101,7 +982,6 @@ fn peer_table_title(
         app.search_status()
     )
 }
-
 fn format_headless_line(app: &AppState) -> String {
     let summary = format_summary_text(app);
     app.latest_event().map_or_else(
@@ -1109,14 +989,12 @@ fn format_headless_line(app: &AppState) -> String {
         |event| format!("[headless] {summary} • {event}"),
     )
 }
-
 fn paint_background(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect) {
     frame.render_widget(
         Block::default().style(Style::default().bg(MONITOR_THEME.background)),
         area,
     );
 }
-
 fn panel_block(title: impl Into<String>, border: Color) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
@@ -1133,7 +1011,6 @@ fn panel_block(title: impl Into<String>, border: Color) -> Block<'static> {
                 .add_modifier(Modifier::BOLD),
         ))
 }
-
 fn label_span(label: impl Into<String>) -> Span<'static> {
     Span::styled(
         label.into(),
@@ -1142,22 +1019,18 @@ fn label_span(label: impl Into<String>) -> Span<'static> {
             .add_modifier(Modifier::BOLD),
     )
 }
-
 fn value_span(value: impl Into<String>, color: Color) -> Span<'static> {
     Span::styled(
         value.into(),
         Style::default().fg(color).add_modifier(Modifier::BOLD),
     )
 }
-
 fn muted_span(value: impl Into<String>) -> Span<'static> {
     Span::styled(value.into(), Style::default().fg(MONITOR_THEME.muted))
 }
-
 fn separator_span() -> Span<'static> {
     Span::styled("  |  ", Style::default().fg(MONITOR_THEME.border))
 }
-
 fn push_metric(
     spans: &mut Vec<Span<'static>>,
     label: &'static str,
@@ -1171,7 +1044,6 @@ fn push_metric(
     spans.push(Span::raw(" "));
     spans.push(value_span(value.into(), color));
 }
-
 fn health_color(health: PeerHealth) -> Color {
     match health {
         PeerHealth::Pending => MONITOR_THEME.pending,
@@ -1180,7 +1052,6 @@ fn health_color(health: PeerHealth) -> Color {
         PeerHealth::Offline => MONITOR_THEME.danger,
     }
 }
-
 fn event_color(severity: EventSeverity) -> Color {
     match severity {
         EventSeverity::Info => MONITOR_THEME.accent,
@@ -1189,7 +1060,6 @@ fn event_color(severity: EventSeverity) -> Color {
         EventSeverity::Critical => MONITOR_THEME.danger,
     }
 }
-
 fn overview_lines(app: &AppState) -> Vec<Line<'static>> {
     let stats = collect_summary(app);
     vec![
@@ -1200,7 +1070,6 @@ fn overview_lines(app: &AppState) -> Vec<Line<'static>> {
         overview_focus_line(app),
     ]
 }
-
 fn overview_network_line(stats: &SummaryStats) -> Line<'static> {
     let mut network = Vec::new();
     push_metric(
@@ -1235,7 +1104,6 @@ fn overview_network_line(stats: &SummaryStats) -> Line<'static> {
     );
     Line::from(network)
 }
-
 fn overview_ledger_line(stats: &SummaryStats) -> Line<'static> {
     let mut ledger = Vec::new();
     push_metric(
@@ -1256,7 +1124,6 @@ fn overview_ledger_line(stats: &SummaryStats) -> Line<'static> {
     );
     Line::from(ledger)
 }
-
 fn overview_flow_line(stats: &SummaryStats) -> Line<'static> {
     let mut flow = Vec::new();
     push_metric(
@@ -1285,7 +1152,6 @@ fn overview_flow_line(stats: &SummaryStats) -> Line<'static> {
     );
     Line::from(flow)
 }
-
 fn overview_view_line(app: &AppState) -> Line<'static> {
     let mut view = Vec::new();
     push_metric(
@@ -1326,7 +1192,6 @@ fn overview_view_line(app: &AppState) -> Line<'static> {
     );
     Line::from(view)
 }
-
 fn overview_focus_line(app: &AppState) -> Line<'static> {
     let mut focus = Vec::new();
     focus.push(label_span("FOCUS"));
@@ -1348,16 +1213,13 @@ fn overview_focus_line(app: &AppState) -> Line<'static> {
     }
     Line::from(focus)
 }
-
 fn render_peer_table(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, app: &AppState) {
     if area.height < 3 || area.width < 20 {
         return;
     }
-
     let visible = app.visible_peer_indices();
     let (start, end, capacity) = visible_peer_window(app, &visible, area.height);
     let title = peer_table_title(app, &visible, start, end, capacity);
-
     let header = Row::new(vec![
         Cell::from("Peer"),
         Cell::from("Height"),
@@ -1373,7 +1235,6 @@ fn render_peer_table(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect
             .bg(MONITOR_THEME.accent)
             .add_modifier(Modifier::BOLD),
     );
-
     let rows = visible
         .iter()
         .skip(start)
@@ -1434,7 +1295,6 @@ fn render_peer_table(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect
             row
         })
         .collect::<Vec<_>>();
-
     let widths = [
         Constraint::Percentage(22),
         Constraint::Percentage(10),
@@ -1444,7 +1304,6 @@ fn render_peer_table(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect
         Constraint::Percentage(9),
         Constraint::Percentage(24),
     ];
-
     let table = Table::new(rows, widths).header(header).block(
         panel_block(title, MONITOR_THEME.border).style(
             Style::default()
@@ -1452,10 +1311,8 @@ fn render_peer_table(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect
                 .bg(MONITOR_THEME.panel),
         ),
     );
-
     frame.render_widget(table, area);
 }
-
 fn render_gas_trend(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, app: &AppState) {
     if area.height < 3 || area.width < 16 {
         return;
@@ -1477,7 +1334,6 @@ fn render_gas_trend(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect,
         compact_u64(latest)
     );
     let block = panel_block(title, MONITOR_THEME.accent);
-
     if data.is_empty() {
         let help = Paragraph::new("Waiting for gas metrics...")
             .block(block)
@@ -1489,7 +1345,6 @@ fn render_gas_trend(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect,
         frame.render_widget(help, area);
         return;
     }
-
     let spark = Sparkline::default()
         .block(block)
         .style(
@@ -1501,7 +1356,6 @@ fn render_gas_trend(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect,
         .max(max);
     frame.render_widget(spark, area);
 }
-
 fn peer_row_data(
     slot: &PeerSlot,
 ) -> (
@@ -1522,7 +1376,6 @@ fn peer_row_data(
     let mut gas = "-".to_string();
     let mut latency = "-".to_string();
     let mut note = peer_note(slot);
-
     if let Some(snapshot) = &slot.latest {
         if let Some(status) = &snapshot.status {
             if let Some(b) = status.blocks {
@@ -1545,7 +1398,6 @@ fn peer_row_data(
     } else {
         note = "waiting for first sample".to_string();
     }
-
     (
         name,
         blocks,
@@ -1557,12 +1409,10 @@ fn peer_row_data(
         health,
     )
 }
-
 fn render_events(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, app: &AppState) {
     if area.height < 3 || area.width < 20 {
         return;
     }
-
     let lines: Vec<Line<'_>> = if app.events.is_empty() {
         vec![Line::from(Span::styled(
             "Waiting for peer activity...",
@@ -1583,7 +1433,6 @@ fn render_events(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, ap
             })
             .collect()
     };
-
     let events = Paragraph::new(lines)
         .block(panel_block(
             format!("Alerts & Activity  last {}", app.events.len()),
@@ -1597,7 +1446,6 @@ fn render_events(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, ap
         .wrap(Wrap { trim: true });
     frame.render_widget(events, area);
 }
-
 fn render_compact_ui(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     let size = frame.area();
     paint_background(frame, size);
@@ -1613,13 +1461,11 @@ fn render_compact_ui(frame: &mut ratatui::Frame<'_>, app: &AppState) {
         frame.render_widget(summary, size);
         return;
     }
-
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(5), Constraint::Min(0)])
         .split(size);
     render_overview_panel(frame, layout[0], app);
-
     if layout[1].height >= 8 {
         let body = Layout::default()
             .direction(Direction::Vertical)
@@ -1631,7 +1477,6 @@ fn render_compact_ui(frame: &mut ratatui::Frame<'_>, app: &AppState) {
         render_peer_table(frame, layout[1], app);
     }
 }
-
 fn render_overview_panel(
     frame: &mut ratatui::Frame<'_>,
     area: ratatui::layout::Rect,
@@ -1653,7 +1498,6 @@ fn render_overview_panel(
         .wrap(Wrap { trim: true });
     frame.render_widget(overview, area);
 }
-
 fn render_banner_panel(
     frame: &mut ratatui::Frame<'_>,
     area: ratatui::layout::Rect,
@@ -1675,12 +1519,10 @@ fn render_banner_panel(
         );
     frame.render_widget(banner, area);
 }
-
 fn render_focus_panel(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, app: &AppState) {
     if area.height < 3 || area.width < 20 {
         return;
     }
-
     let panel = Paragraph::new(focus_panel_lines(app))
         .block(panel_block(focus_panel_title(app), focus_panel_border(app)))
         .style(
@@ -1691,28 +1533,24 @@ fn render_focus_panel(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rec
         .wrap(Wrap { trim: true });
     frame.render_widget(panel, area);
 }
-
 fn focus_panel_lines(app: &AppState) -> Vec<Line<'static>> {
     app.selected_peer().map_or_else(
         || empty_focus_panel_lines(app),
         |(index, slot)| selected_peer_focus_lines(app, index, slot),
     )
 }
-
 fn focus_panel_border(app: &AppState) -> Color {
     app.selected_peer()
         .map_or(MONITOR_THEME.border, |(_, slot)| {
             health_color(peer_health(slot))
         })
 }
-
 fn focus_panel_title(app: &AppState) -> String {
     app.selected_peer().map_or_else(
         || "Selected Peer".to_string(),
         |(_, slot)| format!("Selected Peer - {}", peer_health(slot).label()),
     )
 }
-
 fn empty_focus_panel_lines(app: &AppState) -> Vec<Line<'static>> {
     vec![Line::from(if app.peers.is_empty() {
         muted_span("No peers configured")
@@ -1720,7 +1558,6 @@ fn empty_focus_panel_lines(app: &AppState) -> Vec<Line<'static>> {
         muted_span("No peers match the current view")
     })]
 }
-
 fn selected_peer_focus_lines(app: &AppState, index: usize, slot: &PeerSlot) -> Vec<Line<'static>> {
     let health = peer_health(slot);
     let status_color = health_color(health);
@@ -1736,7 +1573,6 @@ fn selected_peer_focus_lines(app: &AppState, index: usize, slot: &PeerSlot) -> V
     ]));
     rows
 }
-
 fn selected_peer_header_line(app: &AppState, index: usize, slot: &PeerSlot) -> Line<'static> {
     let health = peer_health(slot);
     Line::from(vec![
@@ -1753,7 +1589,6 @@ fn selected_peer_header_line(app: &AppState, index: usize, slot: &PeerSlot) -> L
         Span::raw(format!("  {}/{}", index + 1, app.peers.len())),
     ])
 }
-
 fn endpoint_line(slot: &PeerSlot) -> Line<'static> {
     Line::from(vec![
         label_span("ENDPOINT"),
@@ -1764,7 +1599,6 @@ fn endpoint_line(slot: &PeerSlot) -> Line<'static> {
         ),
     ])
 }
-
 fn push_selected_peer_snapshot_lines(rows: &mut Vec<Line<'static>>, slot: &PeerSlot) {
     if let Some(snapshot) = &slot.latest
         && let Some(status) = &snapshot.status
@@ -1803,7 +1637,6 @@ fn push_selected_peer_snapshot_lines(rows: &mut Vec<Line<'static>>, slot: &PeerS
         rows.push(selected_peer_resource_line(snapshot, status));
     }
 }
-
 fn selected_peer_timing_line(snapshot: &PeerSnapshot, status: &StatusPayload) -> Line<'static> {
     let mut timing = Vec::new();
     push_metric(
@@ -1833,7 +1666,6 @@ fn selected_peer_timing_line(snapshot: &PeerSnapshot, status: &StatusPayload) ->
     );
     Line::from(timing)
 }
-
 fn selected_peer_resource_line(snapshot: &PeerSnapshot, status: &StatusPayload) -> Line<'static> {
     let mut resources = Vec::new();
     push_metric(
@@ -1864,7 +1696,6 @@ fn selected_peer_resource_line(snapshot: &PeerSnapshot, status: &StatusPayload) 
     );
     Line::from(resources)
 }
-
 fn render_footer(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, app: &AppState) {
     if area.height == 0 {
         return;
@@ -1909,7 +1740,6 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, ap
     );
     frame.render_widget(footer, area);
 }
-
 struct SummaryStats {
     peer_count: usize,
     online: usize,
@@ -1925,7 +1755,6 @@ struct SummaryStats {
     gas: u64,
     avg_latency_ms: Option<u128>,
 }
-
 fn collect_summary(app: &AppState) -> SummaryStats {
     let mut online = 0usize;
     let mut healthy = 0usize;
@@ -1940,7 +1769,6 @@ fn collect_summary(app: &AppState) -> SummaryStats {
     let mut gas = 0u64;
     let mut latency_total = 0u128;
     let mut latency_count = 0u128;
-
     for slot in &app.peers {
         match peer_health(slot) {
             PeerHealth::Healthy => healthy += 1,
@@ -1948,7 +1776,6 @@ fn collect_summary(app: &AppState) -> SummaryStats {
             PeerHealth::Offline => offline += 1,
             PeerHealth::Pending => {}
         }
-
         if let Some(snapshot) = &slot.latest {
             if snapshot.status.is_some() {
                 online += 1;
@@ -1968,7 +1795,6 @@ fn collect_summary(app: &AppState) -> SummaryStats {
             }
         }
     }
-
     SummaryStats {
         peer_count: app.peers.len(),
         online,
@@ -1989,7 +1815,6 @@ fn collect_summary(app: &AppState) -> SummaryStats {
         },
     }
 }
-
 fn visible_peer_window(
     app: &AppState,
     visible: &[usize],
@@ -2010,7 +1835,6 @@ fn visible_peer_window(
     let end = (start + capacity).min(total);
     (start, end, capacity)
 }
-
 fn peer_health(slot: &PeerSlot) -> PeerHealth {
     let Some(snapshot) = &slot.latest else {
         return PeerHealth::Pending;
@@ -2018,7 +1842,6 @@ fn peer_health(slot: &PeerSlot) -> PeerHealth {
     if snapshot.status.is_none() {
         return PeerHealth::Offline;
     }
-
     snapshot
         .primary_notice()
         .map_or(PeerHealth::Healthy, |notice| match notice.level {
@@ -2027,7 +1850,6 @@ fn peer_health(slot: &PeerSlot) -> PeerHealth {
             NoticeLevel::Critical => PeerHealth::Offline,
         })
 }
-
 fn peer_note(slot: &PeerSlot) -> String {
     if let Some(snapshot) = &slot.latest {
         if let Some(notice) = snapshot.primary_notice() {
@@ -2048,7 +1870,6 @@ fn peer_note(slot: &PeerSlot) -> String {
     }
     "awaiting data".to_string()
 }
-
 fn peer_health_rank(slot: &PeerSlot) -> u8 {
     match peer_health(slot) {
         PeerHealth::Offline => 3,
@@ -2057,7 +1878,6 @@ fn peer_health_rank(slot: &PeerSlot) -> u8 {
         PeerHealth::Healthy => 0,
     }
 }
-
 fn compact_u64(value: u64) -> String {
     const UNITS: [(&str, u64); 3] = [("B", 1_000_000_000), ("M", 1_000_000), ("k", 1_000)];
     for (suffix, scale) in UNITS {
@@ -2076,31 +1896,25 @@ fn compact_u64(value: u64) -> String {
     }
     value.to_string()
 }
-
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use ratatui::backend::TestBackend;
-
     use super::*;
     use crate::fetch::{
         MetricsSnapshot, NoticeKind, PeerNotice, PeerSnapshot, PeerUpdate, StatusPayload,
     };
-
+    use ratatui::backend::TestBackend;
+    use std::time::Duration;
     fn line_text(line: &Line<'_>) -> String {
         line.spans
             .iter()
             .map(|span| span.content.as_ref())
             .collect()
     }
-
     #[test]
     fn normalize_endpoint_adds_http_scheme() {
         let endpoint = normalize_endpoint("torii.local:8080").expect("normalize endpoint");
         assert_eq!(endpoint, "http://torii.local:8080");
     }
-
     #[test]
     fn normalize_endpoint_rejects_invalid_scheme() {
         let err = normalize_endpoint("ssh://torii.local").unwrap_err();
@@ -2109,7 +1923,6 @@ mod tests {
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     fn push_event_caps_history() {
         let mut events = VecDeque::new();
@@ -2120,7 +1933,6 @@ mod tests {
         assert_eq!(events.front().unwrap().message, "event 16");
         assert_eq!(events.back().unwrap().message, "event 47");
     }
-
     #[test]
     fn gas_history_records_and_caps() {
         let mut app = AppState::new(
@@ -2129,7 +1941,6 @@ mod tests {
             ascii::AsciiConfig::default(),
             true,
         );
-
         for i in 0..(MAX_GAS_HISTORY + 10) {
             let snapshot = PeerSnapshot {
                 status: None,
@@ -2144,12 +1955,10 @@ mod tests {
             app.update_peer(PeerUpdate { index: 0, snapshot });
             app.advance_animation();
         }
-
         let samples: Vec<u64> = app.gas_history().collect();
         assert!(samples.len() <= MAX_GAS_HISTORY);
         assert_eq!(samples.last().copied(), Some((MAX_GAS_HISTORY + 9) as u64));
     }
-
     #[test]
     fn summary_and_headless_line_include_metrics_and_events() {
         let refresh = Duration::from_millis(1_000);
@@ -2159,13 +1968,11 @@ mod tests {
             ascii::AsciiConfig::default(),
             true,
         );
-
         let initial_line = format_headless_line(&app);
         assert!(
             initial_line.contains("UPLINK ESTABLISHED"),
             "expected initial line to mention awakening, got `{initial_line}`"
         );
-
         let status = StatusPayload {
             alias: Some("peer-0".to_string()),
             peers: Some(4),
@@ -2176,7 +1983,6 @@ mod tests {
             queue_size: Some(2),
             ..Default::default()
         };
-
         let snapshot = PeerSnapshot {
             status: Some(status),
             metrics: MetricsSnapshot {
@@ -2187,9 +1993,7 @@ mod tests {
             latency: Some(Duration::from_millis(30)),
             notices: Vec::new(),
         };
-
         app.update_peer(PeerUpdate { index: 0, snapshot });
-
         let summary = format_summary_text(&app);
         assert!(
             summary.contains("online 1/1"),
@@ -2205,14 +2009,12 @@ mod tests {
             summary.contains("avg lat 30 ms"),
             "unexpected summary `{summary}`"
         );
-
         let headless_line = format_headless_line(&app);
         assert!(
             headless_line.contains("telemetry online"),
             "expected join event in `{headless_line}`"
         );
     }
-
     #[test]
     fn overview_lines_surface_health_and_controls() {
         let mut app = AppState::new(
@@ -2221,7 +2023,6 @@ mod tests {
             ascii::AsciiConfig::default(),
             false,
         );
-
         app.update_peer(PeerUpdate {
             index: 0,
             snapshot: PeerSnapshot {
@@ -2256,12 +2057,10 @@ mod tests {
                 }],
             },
         });
-
         let lines = overview_lines(&app)
             .iter()
             .map(line_text)
             .collect::<Vec<_>>();
-
         assert!(
             lines[0].contains("NETWORK 1/2 online")
                 && lines[0].contains("OK 1")
@@ -2274,7 +2073,6 @@ mod tests {
         assert!(lines[3].contains("VIEW sort health"));
         assert!(lines[4].contains("FOCUS"));
     }
-
     #[test]
     fn peer_updates_only_emit_warning_state_changes() {
         let mut events = VecDeque::new();
@@ -2292,18 +2090,15 @@ mod tests {
                 message: "metrics timeout".to_string(),
             }],
         };
-
         slot.update(warning_snapshot.clone(), &mut events);
         let first_len = events.len();
         slot.update(warning_snapshot, &mut events);
-
         assert_eq!(
             events.len(),
             first_len,
             "repeating the same warning should not flood the event log"
         );
     }
-
     #[test]
     fn render_ui_handles_narrow_terminal() {
         let mut app = AppState::new(
@@ -2313,7 +2108,6 @@ mod tests {
             false,
         );
         app.advance_animation();
-
         let backend = TestBackend::new(48, 16);
         let mut terminal = Terminal::new(backend).expect("setup test backend");
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2321,19 +2115,16 @@ mod tests {
                 .draw(|frame| render_ui(frame, &app))
                 .expect("render should succeed on narrow terminals");
         }));
-
         assert!(
             result.is_ok(),
             "render_ui panicked on narrow terminal: {result:?}"
         );
     }
-
     #[test]
     fn headless_fallback_accepts_non_tty_errors() {
         let err = io::Error::from_raw_os_error(6);
         assert!(should_fallback_to_headless(&err));
     }
-
     #[test]
     fn visible_peers_follow_sort_filter_and_search() {
         let mut app = AppState::new(
@@ -2346,7 +2137,6 @@ mod tests {
             ascii::AsciiConfig::default(),
             false,
         );
-
         let healthy = PeerSnapshot {
             status: Some(StatusPayload {
                 alias: Some("alpha".to_string()),
@@ -2381,7 +2171,6 @@ mod tests {
                 message: "status unreachable".to_string(),
             }],
         };
-
         app.update_peer(PeerUpdate {
             index: 0,
             snapshot: healthy,
@@ -2394,27 +2183,21 @@ mod tests {
             index: 2,
             snapshot: offline,
         });
-
         assert_eq!(app.visible_peer_indices(), vec![2, 1, 0]);
-
         app.toggle_issue_filter();
         assert_eq!(app.visible_peer_indices(), vec![2, 1]);
-
         app.search_query = "beta".to_string();
         app.normalize_focus();
         assert_eq!(app.visible_peer_indices(), vec![1]);
         assert_eq!(app.selected_index(), Some(1));
-
         app.search_query = "peer-c".to_string();
         app.normalize_focus();
         assert_eq!(app.visible_peer_indices(), vec![2]);
-
         app.search_query.clear();
         app.sort = PeerSort::Name;
         app.normalize_focus();
         assert_eq!(app.visible_peer_indices(), vec![1, 2]);
     }
-
     #[test]
     fn peer_table_title_tracks_window_filter_and_search() {
         let mut app = AppState::new(
@@ -2430,12 +2213,10 @@ mod tests {
         app.filter_issues_only = true;
         app.search_query = "beta".to_string();
         let visible = vec![1usize];
-
         let title = peer_table_title(&app, &visible, 0, 1, 4);
         assert!(title.contains("Peer Mesh  rows 1-1/1"));
         assert!(title.contains("filter issues"));
         assert!(title.contains("search /beta"));
-
         app.search_query = "missing".to_string();
         let title = peer_table_title(&app, &[], 0, 0, 4);
         assert!(title.contains("no matches"));

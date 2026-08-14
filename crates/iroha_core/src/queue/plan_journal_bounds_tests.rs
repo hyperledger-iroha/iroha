@@ -1,5 +1,4 @@
 // Queue-plan journal allocation, corruption, and cardinality regressions.
-
 #[test]
 fn complete_corruption_and_unsupported_versions_fail_without_truncation() {
     let valid = raw_frame(&QueuePlanJournalFrameV4::Put(record("corrupt")));
@@ -41,7 +40,6 @@ fn complete_corruption_and_unsupported_versions_fail_without_truncation() {
             )
         },
     ];
-
     for (label, corrupt_frame) in cases {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join(format!("{label}.norito"));
@@ -52,7 +50,6 @@ fn complete_corruption_and_unsupported_versions_fail_without_truncation() {
         assert_eq!(fs::read(&path).expect("retain evidence"), bytes, "{label}");
     }
 }
-
 #[test]
 fn full_length_uncommitted_body_checksum_and_marker_tears_truncate_only_terminal_frame() {
     let committed_record = record("committed-before-full-length-tear");
@@ -71,11 +68,9 @@ fn full_length_uncommitted_body_checksum_and_marker_tears_truncate_only_terminal
     let mut body_tear = terminal.clone();
     body_tear[header] ^= 0x80;
     body_tear[commit_start..].fill(0);
-
     let mut checksum_tear = terminal.clone();
     checksum_tear[checksum_start] ^= 0x80;
     checksum_tear[commit_start..].fill(0);
-
     let mut marker_tear = terminal;
     marker_tear[commit_start..].fill(0);
     let cases = [
@@ -83,7 +78,6 @@ fn full_length_uncommitted_body_checksum_and_marker_tears_truncate_only_terminal
         ("checksum", checksum_tear),
         ("commit", marker_tear),
     ];
-
     for (case, torn) in cases {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join(format!("full-length-{case}-tear.norito"));
@@ -92,7 +86,6 @@ fn full_length_uncommitted_body_checksum_and_marker_tears_truncate_only_terminal
         let mut bytes = expected.clone();
         bytes.extend_from_slice(&torn);
         fs::write(&path, bytes).expect("write full-length staged tear");
-
         let journal =
             open(&path).unwrap_or_else(|error| panic!("repair full-length {case} tear: {error}"));
         assert_eq!(
@@ -108,7 +101,6 @@ fn full_length_uncommitted_body_checksum_and_marker_tears_truncate_only_terminal
         );
     }
 }
-
 #[test]
 fn invalid_commit_marker_is_never_repaired_in_the_middle_of_history() {
     let mut invalid = raw_frame(&QueuePlanJournalFrameV4::Put(record(
@@ -128,14 +120,12 @@ fn invalid_commit_marker_is_never_repaired_in_the_middle_of_history() {
     bytes.extend_from_slice(&invalid);
     bytes.extend_from_slice(&following);
     fs::write(&path, &bytes).expect("write invalid mid-history marker");
-
     let error = open(&path)
         .err()
         .expect("invalid mid-history marker must fail closed");
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert_eq!(fs::read(&path).expect("retain corrupt history"), bytes);
 }
-
 #[test]
 fn oversized_declared_frame_and_file_fail_before_allocation() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -155,7 +145,6 @@ fn oversized_declared_frame_and_file_fail_before_allocation() {
             .kind(),
         io::ErrorKind::InvalidData
     );
-
     let oversized_file = dir.path().join("oversized-file.norito");
     let file = OpenOptions::new()
         .create_new(true)
@@ -169,7 +158,6 @@ fn oversized_declared_frame_and_file_fail_before_allocation() {
         io::ErrorKind::InvalidData
     );
 }
-
 #[test]
 fn decode_budget_accepts_exact_wire_limit_and_rejects_one_byte_over() {
     assert_eq!(
@@ -211,12 +199,10 @@ fn decode_budget_accepts_exact_wire_limit_and_rejects_one_byte_over() {
             .len()
             .saturating_add(FRAME_DECODE_ALLOCATION_FIXED_OVERHEAD_BYTES)
     );
-
     assert_eq!(
         decode_frame(&payload, exact_limits).expect("decode at exact configured wire limit"),
         frame
     );
-
     let one_byte_under = QueuePlanJournalLimits::new(1, payload_len - 1, TEST_MAX_BYTES, 1);
     let error = decode_frame(&payload, one_byte_under)
         .expect_err("one byte above the configured frame limit must fail before decode");
@@ -227,7 +213,6 @@ fn decode_budget_accepts_exact_wire_limit_and_rejects_one_byte_over() {
             .contains("exceeds the configured frame limit")
     );
 }
-
 #[test]
 fn decode_budget_covers_maximum_native_contract_upload_chunk() {
     // This is the production shape emitted for every non-final native
@@ -252,7 +237,6 @@ fn decode_budget_covers_maximum_native_contract_upload_chunk() {
         payload.len() > SMART_CONTRACT_CODE_CHUNK_BYTES,
         "fixture must include the complete signed transaction and journal envelope"
     );
-
     let canonical_limits = norito::canonical_decode_limits(payload.len());
     let legacy_element_budget = payload.len();
     let legacy_allocation_budget = payload
@@ -282,7 +266,6 @@ fn decode_budget_covers_maximum_native_contract_upload_chunk() {
         ),
         "the former 26x-plus-64-KiB envelope must reproduce its native-upload rejection"
     );
-
     let payload_len = u64::try_from(payload.len()).expect("payload length fits u64");
     let exact_limits = QueuePlanJournalLimits::new(
         1,
@@ -299,11 +282,9 @@ fn decode_budget_covers_maximum_native_contract_upload_chunk() {
         frame
     );
 }
-
 #[test]
 fn decode_budget_covers_maximum_allocation_dense_instruction_vector() {
     const CALIBRATION_INSTRUCTION_COUNT: usize = 4_096;
-
     let calibration_instructions =
         std::iter::repeat_with(|| InstructionBox::from(Log::new(Level::INFO, String::new())))
             .take(CALIBRATION_INSTRUCTION_COUNT);
@@ -321,7 +302,6 @@ fn decode_budget_covers_maximum_allocation_dense_instruction_vector() {
         .expect("calibration allocation budget");
     let (minimum_element_budget, minimum_allocation_budget) =
         minimum_decode_budgets(&calibration_payload);
-
     assert!(
         configured_element_budget >= minimum_element_budget,
         "configured element budget {configured_element_budget} is below the allocation-dense minimum {minimum_element_budget} for {CALIBRATION_INSTRUCTION_COUNT} instructions and {} wire bytes",
@@ -332,7 +312,6 @@ fn decode_budget_covers_maximum_allocation_dense_instruction_vector() {
         "configured allocation budget {configured_allocation_budget} is below the allocation-dense minimum {minimum_allocation_budget} for {CALIBRATION_INSTRUCTION_COUNT} instructions and {} wire bytes",
         calibration_payload.len()
     );
-
     let instruction_count =
         usize::try_from(iroha_config::parameters::defaults::transaction::max_instructions().get())
             .expect("default transaction instruction limit fits usize");
@@ -362,7 +341,6 @@ fn decode_budget_covers_maximum_allocation_dense_instruction_vector() {
         frame
     );
 }
-
 #[test]
 fn compressed_frame_is_rejected_before_owned_decompression() {
     let frame = QueuePlanJournalFrameV4::Put(record_with_message(
@@ -390,7 +368,6 @@ fn compressed_frame_is_rejected_before_owned_decompression() {
         "compressed input must fail during the uncompressed archive preflight: {error}"
     );
 }
-
 #[test]
 fn replay_rejects_exactly_one_distinct_identity_above_live_bound() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -404,7 +381,6 @@ fn replay_rejects_exactly_one_distinct_identity_above_live_bound() {
         }
         journal.sync_all_with_parent().expect("sync");
     }
-
     let journal = QueuePlanJournal::open_with_limits(&path, limits(1), true).expect("reopen");
     let error = journal
         .prepare_replay()
@@ -418,7 +394,6 @@ fn replay_rejects_exactly_one_distinct_identity_above_live_bound() {
         "unexpected bound error: {error}"
     );
 }
-
 #[test]
 fn replay_rejects_transient_distinct_identity_amplification_even_if_final_set_is_small() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -445,7 +420,6 @@ fn replay_rejects_transient_distinct_identity_amplification_even_if_final_set_is
             .expect("append delayed tombstones");
         journal.sync_all_with_parent().expect("sync fixture");
     }
-
     let journal = QueuePlanJournal::open_with_limits(&path, limits(1), true).expect("reopen");
     let error = journal
         .prepare_replay()
@@ -459,7 +433,6 @@ fn replay_rejects_transient_distinct_identity_amplification_even_if_final_set_is
         "unexpected transient-bound error: {error}"
     );
 }
-
 #[test]
 fn replay_allows_long_put_remove_history_with_bounded_live_cardinality() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -483,13 +456,11 @@ fn replay_allows_long_put_remove_history_with_bounded_live_cardinality() {
         .put_deferred_flush(live.clone())
         .expect("append final live owner");
     journal.sync_all_with_parent().expect("sync history");
-
     assert_eq!(
         journal.replay().expect("replay bounded history"),
         vec![live]
     );
 }
-
 #[test]
 fn replay_same_entrypoint_replacements_do_not_grow_cardinality_and_stale_remove_is_ignored() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -515,14 +486,12 @@ fn replay_same_entrypoint_replacements_do_not_grow_cardinality_and_stale_remove_
         )])
         .expect("append stale original-plan Remove");
     journal.sync_all_with_parent().expect("sync replacements");
-
     assert_eq!(
         journal.replay().expect("replay latest replacement"),
         vec![latest],
         "a stale plan-specific Remove must not delete the latest plan for the same entrypoint"
     );
 }
-
 #[test]
 fn replacement_preserves_original_fifo_ownership_through_compaction_and_reopen() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -544,7 +513,6 @@ fn replacement_preserves_original_fifo_ownership_through_compaction_and_reopen()
             .expect("append FIFO fixture");
     }
     journal.sync_all_with_parent().expect("sync FIFO fixture");
-
     assert_eq!(
         journal.replay().expect("replay before compaction"),
         vec![replacement.clone(), second.clone()],
@@ -561,14 +529,12 @@ fn replacement_preserves_original_fifo_ownership_through_compaction_and_reopen()
         ]
     );
     drop(journal);
-
     let reopened = QueuePlanJournal::open_with_limits(&path, compact_limits, true).expect("reopen");
     assert_eq!(
         reopened.replay().expect("replay compacted FIFO history"),
         vec![replacement, second]
     );
 }
-
 #[test]
 fn matching_remove_ends_ownership_before_same_entrypoint_is_reinserted() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -596,7 +562,6 @@ fn matching_remove_ends_ownership_before_same_entrypoint_is_reinserted() {
     journal
         .sync_all_with_parent()
         .expect("sync ownership fixture");
-
     assert_eq!(
         journal.replay().expect("replay reset ownership"),
         vec![second, reinserted],

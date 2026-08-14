@@ -1,6 +1,5 @@
 // Canonical prune recovery stages that consume the capacity admission sealed in
 // `KuraPruneIntentV2`.
-
 impl Kura {
     fn truncate_pipeline_sidecars_for_prune(&self, intent: &KuraPruneIntentV2) -> Result<()> {
         let target_height = intent.target_height;
@@ -88,7 +87,6 @@ impl Kura {
             .retain(|snapshot| snapshot.snapshot.height <= target_height);
         Ok(())
     }
-
     fn validate_pipeline_sidecars_for_prune(
         &self,
         max_height: u64,
@@ -139,7 +137,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn truncate_roster_for_prune(
         &self,
         intent: &KuraPruneIntentV2,
@@ -181,7 +178,6 @@ impl Kura {
         self.update_disk_usage_delta(before, after);
         Ok(())
     }
-
     fn preflight_recovered_prune_capacity_before_mutation(
         &self,
         intent: &KuraPruneIntentV2,
@@ -215,7 +211,6 @@ impl Kura {
         self.validate_recovered_prune_capacity(intent, remaining_roster, remaining)?;
         Ok(remaining)
     }
-
     fn complete_recovered_prune_intent(&self, intent: &KuraPruneIntentV2) -> Result<()> {
         let remaining_sidecar = self.preflight_recovered_prune_capacity_before_mutation(intent)?;
         // Merge reconciliation runs before this method and uses the durable

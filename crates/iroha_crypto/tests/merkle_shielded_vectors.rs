@@ -5,13 +5,10 @@
 //! - Explicit empty‑tree root obeys `R_{d+1} = H(R_d || R_d)`.
 //! - Empty‑tree root for small depths matches the root of a perfect tree
 //!   constructed from 2^d identical zero‑leaves.
-
 use iroha_crypto::{Hash, HashOf, MerkleTree};
-
 fn hex_upper(h: &Hash) -> String {
     hex::encode_upper(h.as_ref())
 }
-
 #[test]
 fn shielded_leaf_is_domain_tagged() {
     let cm = [0u8; 32];
@@ -20,14 +17,12 @@ fn shielded_leaf_is_domain_tagged() {
     let pre = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(cm));
     assert_ne!(hex_upper(&Hash::from(leaf)), hex_upper(&Hash::from(pre)));
 }
-
 #[test]
 fn empty_root_recursive_identity() {
     // Depth 0: root equals domain‑tagged zero leaf
     let r0 = MerkleTree::<[u8; 32]>::shielded_empty_root(0);
     let l0 = MerkleTree::<[u8; 32]>::shielded_leaf_from_commitment([0u8; 32]);
     assert_eq!(r0, <Hash as Into<[u8; 32]>>::into(Hash::from(l0)));
-
     // Check a few levels satisfy R_{d+1} = H(R_d || R_d)
     let mut prev = r0;
     for d in 0..4u8 {
@@ -41,7 +36,6 @@ fn empty_root_recursive_identity() {
         prev = next;
     }
 }
-
 #[test]
 fn empty_root_matches_perfect_tree_small_depth() {
     for depth in 0..=4u8 {
@@ -53,7 +47,6 @@ fn empty_root_matches_perfect_tree_small_depth() {
         assert_eq!(root_tree, root_empty, "depth {depth}");
     }
 }
-
 #[test]
 fn shielded_leaf_golden_vectors() {
     let zero = MerkleTree::<[u8; 32]>::shielded_leaf_from_commitment([0u8; 32]);
@@ -62,7 +55,6 @@ fn shielded_leaf_golden_vectors() {
         "D6BF3EAAC5E6107CA805D08C4C788968A88AE2050268A8585C47BEB03F296C0F",
         "zero commitment leaf"
     );
-
     let ff = MerkleTree::<[u8; 32]>::shielded_leaf_from_commitment([0xFFu8; 32]);
     assert_eq!(
         hex_upper(&Hash::from(ff)),
@@ -70,7 +62,6 @@ fn shielded_leaf_golden_vectors() {
         "0xFF commitment leaf"
     );
 }
-
 #[test]
 fn shielded_empty_root_golden_vectors() {
     const GOLDENS: &[(u8, &str)] = &[
@@ -107,7 +98,6 @@ fn shielded_empty_root_golden_vectors() {
             "803DAFC24BF2B020CB57F1951ADBF3DB6150A820CFA939CBC84DD86A4C4DF9F1",
         ),
     ];
-
     for &(depth, expected) in GOLDENS {
         let root = MerkleTree::<[u8; 32]>::shielded_empty_root(depth);
         assert_eq!(

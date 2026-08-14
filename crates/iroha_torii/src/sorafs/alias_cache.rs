@@ -1,17 +1,13 @@
 //! Alias proof caching policy and evaluation helpers for SoraFS gateways.
-
-use std::time::Duration;
-
+#[cfg(feature = "app_api")]
+use crate::sorafs::registry::{GovernanceSummary, ManifestLineageSummary};
 use http::header::HeaderValue;
 pub use sorafs_manifest::alias_cache::{
     AliasCachePolicy, AliasProofError, AliasProofEvaluation, AliasProofState, decode_alias_proof,
     decode_alias_proof_untrusted_signers, unix_now_secs,
 };
 use sorafs_manifest::pin_registry::AliasProofBundleV1;
-
-#[cfg(feature = "app_api")]
-use crate::sorafs::registry::{GovernanceSummary, ManifestLineageSummary};
-
+use std::time::Duration;
 /// Grace window overrides layered atop the base alias cache policy.
 #[derive(Debug, Clone, Copy)]
 pub struct AliasCacheEnforcement {
@@ -20,21 +16,18 @@ pub struct AliasCacheEnforcement {
     /// Grace period applied to governance-triggered rotations.
     pub governance_grace: Duration,
 }
-
 impl AliasCacheEnforcement {
     /// Returns the successor grace period in seconds.
     #[must_use]
     pub fn successor_grace_secs(self) -> u64 {
         self.successor_grace.as_secs()
     }
-
     /// Returns the governance grace period in seconds.
     #[must_use]
     pub fn governance_grace_secs(self) -> u64 {
         self.governance_grace.as_secs()
     }
 }
-
 /// Creates an [`AliasCachePolicy`] from the runtime configuration.
 #[must_use]
 pub fn policy_from_config(
@@ -51,7 +44,6 @@ pub fn policy_from_config(
         config.governance_grace,
     )
 }
-
 /// Creates an [`AliasCacheEnforcement`] descriptor from the runtime configuration.
 #[must_use]
 pub fn enforcement_from_config(
@@ -62,7 +54,6 @@ pub fn enforcement_from_config(
         governance_grace: config.governance_grace,
     }
 }
-
 /// Convenience extension providing duration accessors in seconds.
 pub trait AliasCachePolicyExt {
     /// Returns the configured positive TTL (seconds).
@@ -82,75 +73,58 @@ pub trait AliasCachePolicyExt {
     /// Returns the configured governance grace period (seconds).
     fn governance_grace_secs(&self) -> u64;
 }
-
 impl AliasCachePolicyExt for AliasCachePolicy {
     fn positive_ttl_secs(&self) -> u64 {
         self.positive_ttl().as_secs()
     }
-
     fn refresh_window_secs(&self) -> u64 {
         self.refresh_window().as_secs()
     }
-
     fn hard_expiry_secs(&self) -> u64 {
         self.hard_expiry().as_secs()
     }
-
     fn rotation_max_age_secs(&self) -> u64 {
         self.rotation_max_age().as_secs()
     }
-
     fn negative_ttl_secs(&self) -> u64 {
         self.negative_ttl().as_secs()
     }
-
     fn revocation_ttl_secs(&self) -> u64 {
         self.revocation_ttl().as_secs()
     }
-
     fn successor_grace_secs(&self) -> u64 {
         self.successor_grace().as_secs()
     }
-
     fn governance_grace_secs(&self) -> u64 {
         self.governance_grace().as_secs()
     }
 }
-
 impl AliasCachePolicyExt for iroha_config::parameters::actual::SorafsAliasCachePolicy {
     fn positive_ttl_secs(&self) -> u64 {
         self.positive_ttl.as_secs()
     }
-
     fn refresh_window_secs(&self) -> u64 {
         self.refresh_window.as_secs()
     }
-
     fn hard_expiry_secs(&self) -> u64 {
         self.hard_expiry.as_secs()
     }
-
     fn rotation_max_age_secs(&self) -> u64 {
         self.rotation_max_age.as_secs()
     }
-
     fn negative_ttl_secs(&self) -> u64 {
         self.negative_ttl.as_secs()
     }
-
     fn revocation_ttl_secs(&self) -> u64 {
         self.revocation_ttl.as_secs()
     }
-
     fn successor_grace_secs(&self) -> u64 {
         self.successor_grace.as_secs()
     }
-
     fn governance_grace_secs(&self) -> u64 {
         self.governance_grace.as_secs()
     }
 }
-
 fn push_reason(
     decision: &mut CacheDecision,
     reason: impl Into<String>,
@@ -158,7 +132,6 @@ fn push_reason(
 ) {
     push_reason_with_deadline(decision, reason, outcome, None);
 }
-
 fn push_reason_with_deadline(
     decision: &mut CacheDecision,
     reason: impl Into<String>,
@@ -177,7 +150,6 @@ fn push_reason_with_deadline(
         }
     }
 }
-
 /// Evaluate cache enforcement decisions using successor and governance metadata.
 #[must_use]
 #[cfg(feature = "app_api")]
@@ -195,7 +167,6 @@ pub(crate) fn evaluate_cache_decision(
         successor: SuccessorAssessment::from_lineage(lineage),
         governance: GovernanceAssessment::from_summary(governance),
     };
-
     let ttl_deadline = Some(evaluation.expires_at_unix);
     match evaluation.state {
         AliasProofState::Fresh => {}
@@ -214,11 +185,9 @@ pub(crate) fn evaluate_cache_decision(
             push_reason(&mut decision, "HardExpired", CacheDecisionOutcome::Refuse);
         }
     }
-
     if evaluation.rotation_due {
         push_reason(&mut decision, "RotationDue", CacheDecisionOutcome::Hold);
     }
-
     if let Some(reason) = decision.governance.active_reason() {
         let grace_secs = enforcement.governance_grace_secs();
         match decision.governance.effective_at_unix {
@@ -254,7 +223,6 @@ pub(crate) fn evaluate_cache_decision(
             }
         }
     }
-
     let successor_snapshot = decision.successor.clone();
     let manifest_missing = successor_snapshot
         .anomalies
@@ -272,7 +240,6 @@ pub(crate) fn evaluate_cache_decision(
         .anomalies
         .iter()
         .any(|reason| reason.as_str() == "SuccessorForkResolved");
-
     if manifest_missing {
         push_reason(
             &mut decision,
@@ -298,7 +265,6 @@ pub(crate) fn evaluate_cache_decision(
             CacheDecisionOutcome::Hold,
         );
     }
-
     if let Some(approved_at) = successor_snapshot.approved_at_unix {
         let grace_secs = enforcement.successor_grace.as_secs();
         if now_secs < approved_at {
@@ -349,12 +315,10 @@ pub(crate) fn evaluate_cache_decision(
             CacheDecisionOutcome::Hold,
         );
     }
-
     decision.reasons.sort();
     decision.reasons.dedup();
     decision
 }
-
 /// Result of applying alias cache enforcement rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheDecisionOutcome {
@@ -365,14 +329,12 @@ pub enum CacheDecisionOutcome {
     /// Alias proof must be refused to the caller.
     Refuse,
 }
-
 impl CacheDecisionOutcome {
     fn elevate(&mut self, other: Self) {
         if other.severity() > self.severity() {
             *self = other;
         }
     }
-
     fn severity(self) -> u8 {
         match self {
             CacheDecisionOutcome::Serve => 0,
@@ -381,7 +343,6 @@ impl CacheDecisionOutcome {
         }
     }
 }
-
 /// Aggregate evaluation describing how a gateway should respond to an alias proof.
 #[derive(Debug, Clone)]
 pub struct CacheDecision {
@@ -396,7 +357,6 @@ pub struct CacheDecision {
     /// Summary of governance state used for decision making.
     pub governance: GovernanceAssessment,
 }
-
 impl CacheDecision {
     /// Returns a human-readable status label blending cache enforcement with proof state.
     #[must_use]
@@ -452,7 +412,6 @@ impl CacheDecision {
         }
     }
 }
-
 /// Projection of successor manifest state relevant to cache enforcement.
 #[derive(Debug, Clone)]
 pub struct SuccessorAssessment {
@@ -469,7 +428,6 @@ pub struct SuccessorAssessment {
     /// Collected anomaly codes discovered during lineage inspection.
     pub anomalies: Vec<String>,
 }
-
 impl SuccessorAssessment {
     #[cfg(feature = "app_api")]
     fn from_lineage(lineage: &ManifestLineageSummary) -> Self {
@@ -486,7 +444,6 @@ impl SuccessorAssessment {
         }
     }
 }
-
 /// Projection of governance decisions affecting the evaluated alias.
 #[derive(Debug, Clone)]
 pub struct GovernanceAssessment {
@@ -501,7 +458,6 @@ pub struct GovernanceAssessment {
     /// Optional UNIX timestamp (seconds) when the governance decision takes effect.
     pub effective_at_unix: Option<u64>,
 }
-
 impl GovernanceAssessment {
     #[cfg(feature = "app_api")]
     fn from_summary(summary: &GovernanceSummary) -> Self {
@@ -515,7 +471,6 @@ impl GovernanceAssessment {
         }
         refs.sort();
         refs.dedup();
-
         let revoked = summary.revoked.is_some();
         let frozen = summary.frozen.is_some();
         let rotated = summary.rotated.is_some();
@@ -535,7 +490,6 @@ impl GovernanceAssessment {
                     .as_ref()
                     .and_then(|reference| reference.effective_at_unix)
             });
-
         Self {
             ref_ids: refs,
             revoked,
@@ -544,7 +498,6 @@ impl GovernanceAssessment {
             effective_at_unix,
         }
     }
-
     fn active_reason(&self) -> Option<&'static str> {
         if self.revoked {
             Some("GovernanceRevoked")
@@ -557,7 +510,6 @@ impl GovernanceAssessment {
         }
     }
 }
-
 /// HTTP-specific helpers for alias cache policies.
 pub trait AliasCachePolicyHttpExt {
     /// Builds the recommended `Cache-Control` header for positive responses.
@@ -567,7 +519,6 @@ pub trait AliasCachePolicyHttpExt {
     /// Builds the `Cache-Control` header for revoked aliases (`410`).
     fn revocation_cache_control_header(&self) -> HeaderValue;
 }
-
 impl AliasCachePolicyHttpExt for AliasCachePolicy {
     fn cache_control_header(&self) -> HeaderValue {
         let value = format!(
@@ -577,18 +528,15 @@ impl AliasCachePolicyHttpExt for AliasCachePolicy {
         );
         HeaderValue::from_str(&value).expect("cache-control value must be ASCII")
     }
-
     fn negative_cache_control_header(&self) -> HeaderValue {
         let value = format!("max-age={}", self.negative_ttl().as_secs());
         HeaderValue::from_str(&value).expect("cache-control value must be ASCII")
     }
-
     fn revocation_cache_control_header(&self) -> HeaderValue {
         let value = format!("max-age={}", self.revocation_ttl().as_secs());
         HeaderValue::from_str(&value).expect("cache-control value must be ASCII")
     }
 }
-
 /// HTTP header conversions for alias proof evaluations.
 pub trait AliasProofEvaluationExt {
     /// Builds the `Age` header value reflecting the proof age.
@@ -598,13 +546,11 @@ pub trait AliasProofEvaluationExt {
     /// Builds the `Sora-Proof-Status` header.
     fn proof_status_header(&self) -> HeaderValue;
 }
-
 impl AliasProofEvaluationExt for AliasProofEvaluation {
     fn age_header(&self) -> HeaderValue {
         HeaderValue::from_str(&self.age.as_secs().to_string())
             .expect("age header must be ASCII digits")
     }
-
     fn warning_header(&self) -> Option<HeaderValue> {
         match self.state {
             AliasProofState::RefreshWindow => Some(HeaderValue::from_static(
@@ -619,14 +565,17 @@ impl AliasProofEvaluationExt for AliasProofEvaluation {
             AliasProofState::Fresh => None,
         }
     }
-
     fn proof_status_header(&self) -> HeaderValue {
         HeaderValue::from_str(self.status_label()).expect("status label must be ASCII")
     }
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
+    use super::*;
+    use crate::sorafs::registry::{
+        GovernanceRefKind, GovernanceReference, GovernanceSummary, ManifestLineageSummary,
+        approved_successor_for_tests,
+    };
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_config::parameters::actual::SorafsAliasCachePolicy as ConfigPolicy;
     use sorafs_manifest::{
@@ -635,13 +584,6 @@ mod tests {
             AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
         },
     };
-
-    use super::*;
-    use crate::sorafs::registry::{
-        GovernanceRefKind, GovernanceReference, GovernanceSummary, ManifestLineageSummary,
-        approved_successor_for_tests,
-    };
-
     fn sample_bundle(generated: u64, expires: u64) -> AliasProofBundleV1 {
         let binding = AliasBindingV1 {
             alias: "docs/sora".into(),
@@ -660,7 +602,6 @@ mod tests {
         };
         bundle.registry_root = alias_merkle_root(&bundle.binding, &bundle.merkle_path)
             .expect("compute alias merkle root");
-
         let digest = alias_proof_signature_digest(&bundle);
         let signing_key = SigningKey::from_bytes(&[0xAB; 32]);
         let signature = signing_key.sign(&digest);
@@ -670,7 +611,6 @@ mod tests {
         });
         bundle
     }
-
     fn sample_policy() -> AliasCachePolicy {
         AliasCachePolicy::new(
             Duration::from_mins(10),
@@ -683,7 +623,6 @@ mod tests {
             Duration::ZERO,
         )
     }
-
     fn evaluation_at(now: u64, generated_at: u64, expires_at: u64) -> AliasProofEvaluation {
         AliasProofEvaluation {
             state: AliasProofState::Fresh,
@@ -694,34 +633,27 @@ mod tests {
             expires_in: Some(Duration::from_secs(expires_at.saturating_sub(now))),
         }
     }
-
     #[test]
     fn evaluates_fresh_refresh_and_expired_states() {
         let policy = sample_policy();
         let now = 1_000_000;
-
         let fresh = sample_bundle(now - 120, now + 600);
         let eval_fresh = policy.evaluate(&fresh, now);
         assert_eq!(eval_fresh.state, AliasProofState::Fresh);
         assert!(!eval_fresh.rotation_due);
-
         let refresh = sample_bundle(now - 550, now + 600);
         let eval_refresh = policy.evaluate(&refresh, now);
         assert_eq!(eval_refresh.state, AliasProofState::RefreshWindow);
-
         let expired = sample_bundle(now - 720, now + 600);
         let eval_expired = policy.evaluate(&expired, now);
         assert_eq!(eval_expired.state, AliasProofState::Expired);
-
         let hard = sample_bundle(now - 1_200, now + 600);
         let eval_hard = policy.evaluate(&hard, now);
         assert_eq!(eval_hard.state, AliasProofState::HardExpired);
-
         let expiry = sample_bundle(now - 300, now - 1);
         let eval_expiry = policy.evaluate(&expiry, now);
         assert_eq!(eval_expiry.state, AliasProofState::HardExpired);
     }
-
     #[test]
     fn rotation_due_flag_triggers_when_configured() {
         let config = ConfigPolicy {
@@ -738,7 +670,6 @@ mod tests {
         assert_eq!(eval.state, AliasProofState::Fresh);
         assert!(eval.rotation_due);
     }
-
     #[test]
     fn cache_control_header_matches_policy() {
         let policy = sample_policy();
@@ -749,7 +680,6 @@ mod tests {
             .to_owned();
         assert_eq!(header, "max-age=600, stale-while-revalidate=120");
     }
-
     #[test]
     fn policy_from_config_propagates_grace_windows() {
         let config = ConfigPolicy {
@@ -764,7 +694,6 @@ mod tests {
         assert_eq!(enforcement.successor_grace_secs(), 123);
         assert_eq!(enforcement.governance_grace_secs(), 11);
     }
-
     #[test]
     fn manifest_missing_anomaly_forces_refusal() {
         let evaluation = evaluation_at(10_000, 9_500, 12_000);
@@ -802,7 +731,6 @@ mod tests {
             decision.reasons
         );
     }
-
     #[test]
     fn lineage_depth_limit_anomaly_forces_refusal() {
         let evaluation = evaluation_at(10_000, 9_500, 12_000);
@@ -840,7 +768,6 @@ mod tests {
             decision.reasons
         );
     }
-
     #[test]
     fn proof_headers_reflect_evaluation_state() {
         let policy = sample_policy();
@@ -859,7 +786,6 @@ mod tests {
             "expired"
         );
     }
-
     #[test]
     fn decode_alias_proof_validates_bundle() {
         let bytes = encode_valid_bundle();
@@ -867,7 +793,6 @@ mod tests {
             decode_alias_proof_untrusted_signers(&bytes).expect("decode alias proof integrity");
         assert_eq!(decoded.binding.alias, "docs/sora");
     }
-
     #[test]
     fn successor_grace_transitions_from_hold_to_refuse() {
         let approved_epoch = 64;
@@ -893,7 +818,6 @@ mod tests {
         };
         let generated_at = approved_at.saturating_sub(600);
         let expires_at = approved_at + 3_600;
-
         let within_grace = approved_at + 120;
         let eval_within = evaluation_at(within_grace, generated_at, expires_at);
         let decision_within = evaluate_cache_decision(
@@ -917,7 +841,6 @@ mod tests {
             decision_within.status_label(&eval_within),
             "refresh-successor"
         );
-
         let past_grace = approved_at + enforcement.successor_grace_secs() + 90;
         let eval_past = evaluation_at(past_grace, generated_at, expires_at);
         let decision_past =
@@ -931,7 +854,6 @@ mod tests {
         assert_eq!(decision_past.status_label(&eval_past), "successor-refused");
         assert!(decision_past.serve_until_unix.is_none());
     }
-
     #[test]
     fn governance_grace_transitions_to_refusal() {
         let effective_at = 1_700_000_500;
@@ -963,7 +885,6 @@ mod tests {
         };
         let generated_at = effective_at.saturating_sub(300);
         let expires_at = effective_at + 3_000;
-
         let within_grace = effective_at + 60;
         let eval_within = evaluation_at(within_grace, generated_at, expires_at);
         let decision_within = evaluate_cache_decision(
@@ -992,7 +913,6 @@ mod tests {
             decision_within.status_label(&eval_within),
             "refresh-governance"
         );
-
         let past_grace = effective_at + enforcement.governance_grace_secs() + 45;
         let eval_past = evaluation_at(past_grace, generated_at, expires_at);
         let decision_past =
@@ -1006,7 +926,6 @@ mod tests {
         assert_eq!(decision_past.status_label(&eval_past), "governance-refused");
         assert!(decision_past.serve_until_unix.is_none());
     }
-
     fn encode_valid_bundle() -> Vec<u8> {
         let bundle = sample_bundle(100, 200);
         norito::to_bytes(&bundle).expect("encode alias bundle")

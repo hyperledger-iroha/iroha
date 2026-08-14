@@ -6,22 +6,6 @@
 //! synchronizes the containing directory. Unix file identity and link-count
 //! checks reject symlink and hard-link substitution. Non-Unix platforms fail
 //! closed until equivalent primitives are implemented.
-
-use std::{
-    collections::BTreeSet,
-    io,
-    path::{Path, PathBuf},
-};
-
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
-#[cfg(unix)]
-use std::{
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
-    sync::atomic::{AtomicU64, Ordering},
-};
-
 use iroha_crypto::PublicKey;
 #[cfg(unix)]
 use iroha_data_model::sorafs::moderation::MODERATION_PROVENANCE_MAX_ENTRIES_V1;
@@ -33,8 +17,20 @@ use iroha_data_model::sorafs::moderation::{
 };
 #[cfg(unix)]
 use norito::core::DecodeLimits;
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::{
+    collections::BTreeSet,
+    io,
+    path::{Path, PathBuf},
+};
+#[cfg(unix)]
+use std::{
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
+    sync::atomic::{AtomicU64, Ordering},
+};
 use thiserror::Error;
-
 #[cfg(unix)]
 const MAX_PROVENANCE_FILE_BYTES: u64 = 64 * 1024 * 1024;
 #[cfg(unix)]
@@ -47,7 +43,6 @@ const MAX_PROVENANCE_DECODE_DEPTH: usize = 64;
 const TEMPFILE_ATTEMPTS: u64 = 64;
 #[cfg(unix)]
 static TEMPFILE_COUNTER: AtomicU64 = AtomicU64::new(0);
-
 /// Durable moderation provenance storage failures.
 #[derive(Debug, Error)]
 pub enum ModerationProvenanceStoreError {
@@ -115,14 +110,12 @@ pub enum ModerationProvenanceStoreError {
     #[error("failed to encode moderation provenance: {0}")]
     Encode(String),
 }
-
 /// Concurrent-writer-safe durable provenance segment.
 #[derive(Clone, Debug)]
 pub struct ModerationProvenanceStoreV1 {
     path: PathBuf,
     log_id: [u8; 16],
 }
-
 impl ModerationProvenanceStoreV1 {
     /// Open an existing segment or atomically create an empty one.
     pub fn open(
@@ -136,18 +129,15 @@ impl ModerationProvenanceStoreV1 {
         store.with_locked_log(|_, _| Ok(()))?;
         Ok(store)
     }
-
     /// Return the configured durable path.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
-
     /// Read and verify the latest durable snapshot under the writer lock.
     pub fn snapshot(&self) -> Result<ModerationProvenanceLogV1, ModerationProvenanceStoreError> {
         self.with_locked_log(|log, _| Ok(log.clone()))
     }
-
     /// Validate and durably append one externally authorized signed result.
     pub fn append_signed_result(
         &self,
@@ -173,7 +163,6 @@ impl ModerationProvenanceStoreV1 {
             .map_err(ModerationProvenanceStoreError::from)
         })
     }
-
     /// Reconstruct, compare, and durably append the complete signed member set
     /// followed by one authenticated committee aggregate. Distinct signer,
     /// freshness, revocation, external governance, and quorum checks are all
@@ -225,7 +214,6 @@ impl ModerationProvenanceStoreV1 {
             .map_err(ModerationProvenanceStoreError::from)
         })
     }
-
     #[cfg(unix)]
     fn update<T>(
         &self,
@@ -237,7 +225,6 @@ impl ModerationProvenanceStoreV1 {
             Ok(output)
         })
     }
-
     #[cfg(not(unix))]
     fn update<T>(
         &self,
@@ -247,7 +234,6 @@ impl ModerationProvenanceStoreV1 {
     ) -> Result<T, ModerationProvenanceStoreError> {
         Err(ModerationProvenanceStoreError::UnsupportedPlatform)
     }
-
     fn with_locked_log<T>(
         &self,
         operation: impl FnOnce(
@@ -281,10 +267,8 @@ impl ModerationProvenanceStoreV1 {
         }
     }
 }
-
 #[cfg(unix)]
 type ParentIdentity = (u64, u64);
-
 #[cfg(unix)]
 #[derive(Debug)]
 struct ValidatedParent {
@@ -293,10 +277,8 @@ struct ValidatedParent {
     identity: ParentIdentity,
     handle: File,
 }
-
 #[cfg(not(unix))]
 struct ValidatedParent;
-
 #[cfg(unix)]
 fn validate_parent(path: &Path) -> Result<ValidatedParent, ModerationProvenanceStoreError> {
     let filename = path
@@ -336,7 +318,6 @@ fn validate_parent(path: &Path) -> Result<ValidatedParent, ModerationProvenanceS
         handle,
     })
 }
-
 #[cfg(unix)]
 fn verify_parent(parent: &ValidatedParent) -> Result<(), ModerationProvenanceStoreError> {
     let metadata = fs::symlink_metadata(&parent.canonical)
@@ -357,7 +338,6 @@ fn verify_parent(parent: &ValidatedParent) -> Result<(), ModerationProvenanceSto
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn acquire_lock(
     path: &Path,
@@ -382,20 +362,17 @@ fn acquire_lock(
     }
     Ok(StoreLock { path: lock_path })
 }
-
 #[cfg(unix)]
 #[derive(Debug)]
 struct StoreLock {
     path: PathBuf,
 }
-
 #[cfg(unix)]
 impl Drop for StoreLock {
     fn drop(&mut self) {
         let _ = fs::remove_dir(&self.path);
     }
 }
-
 #[cfg(unix)]
 fn read_log(
     path: &Path,
@@ -476,7 +453,6 @@ fn read_log(
     log.validate_chain()?;
     Ok(Some(log))
 }
-
 #[cfg(unix)]
 fn persist_log(
     path: &Path,
@@ -552,7 +528,6 @@ fn persist_log(
     }
     transaction
 }
-
 #[cfg(unix)]
 fn validate_regular_single_link(
     path: &Path,
@@ -566,7 +541,6 @@ fn validate_regular_single_link(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn file_identity(metadata: &fs::Metadata) -> (u64, u64, u64, i64, i64) {
     (
@@ -577,22 +551,18 @@ fn file_identity(metadata: &fs::Metadata) -> (u64, u64, u64, i64, i64) {
         metadata.mtime_nsec(),
     )
 }
-
 #[cfg(unix)]
 fn parent_identity(metadata: &fs::Metadata) -> ParentIdentity {
     (metadata.dev(), metadata.ino())
 }
-
 #[cfg(unix)]
 fn set_no_follow(options: &mut OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const fn platform_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -608,32 +578,27 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 fn io_error(path: &Path, source: io::Error) -> ModerationProvenanceStoreError {
     ModerationProvenanceStoreError::Io {
         path: path.to_path_buf(),
         source,
     }
 }
-
 fn unsafe_path(path: &Path, reason: impl Into<String>) -> ModerationProvenanceStoreError {
     ModerationProvenanceStoreError::UnsafePath {
         path: path.to_path_buf(),
         reason: reason.into(),
     }
 }
-
 #[cfg(all(test, unix))]
 mod tests {
+    use super::*;
     use iroha_crypto::{KeyPair, SignatureOf};
     use iroha_data_model::sorafs::moderation::{
         MODERATION_SIGNED_RESULT_VERSION_V1, ModerationSignedScreeningBodyV1,
         ModerationSignedScreeningResultV1,
     };
     use tempfile::TempDir;
-
-    use super::*;
-
     fn signed_payload(timestamp: u64) -> ModerationProvenancePayloadV1 {
         let keypair = KeyPair::try_random().expect("keypair");
         let mut body = ModerationSignedScreeningBodyV1 {
@@ -662,7 +627,6 @@ mod tests {
             signature,
         })
     }
-
     #[test]
     fn store_persists_canonical_hash_chain_across_reopen() {
         let directory = TempDir::new().expect("tempdir");
@@ -674,14 +638,12 @@ mod tests {
                     .map_err(ModerationProvenanceStoreError::from)
             })
             .expect("append");
-
         let reopened =
             ModerationProvenanceStoreV1::open(&path, [0xA1; 16]).expect("reopen canonical");
         let snapshot = reopened.snapshot().expect("snapshot");
         assert_eq!(snapshot.entries.len(), 1);
         snapshot.validate_chain().expect("valid chain");
     }
-
     #[test]
     fn store_rejects_noncanonical_trailing_bytes() {
         let directory = TempDir::new().expect("tempdir");
@@ -692,7 +654,6 @@ mod tests {
         let mut file = options.open(&path).expect("open for adversarial append");
         file.write_all(&[0]).expect("append trailing byte");
         file.sync_all().expect("sync tamper");
-
         assert!(matches!(
             ModerationProvenanceStoreV1::open(&path, [0xA2; 16])
                 .expect_err("trailing bytes must fail"),
@@ -700,7 +661,6 @@ mod tests {
                 | ModerationProvenanceStoreError::NonCanonical(_)
         ));
     }
-
     #[test]
     fn store_fails_fast_on_concurrent_writer_lock() {
         let directory = TempDir::new().expect("tempdir");
@@ -714,7 +674,6 @@ mod tests {
         ));
         fs::remove_dir(lock_path).expect("remove simulated lock");
     }
-
     #[test]
     fn store_file_is_owner_read_write_only() {
         let directory = TempDir::new().expect("tempdir");
@@ -723,19 +682,16 @@ mod tests {
         let mode = fs::metadata(path).expect("metadata").permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
     }
-
     #[cfg(unix)]
     #[test]
     fn store_rejects_symlink_and_hardlink_substitution() {
         use std::os::unix::fs::symlink;
-
         let directory = TempDir::new().expect("tempdir");
         let target = directory.path().join("target.to");
         ModerationProvenanceStoreV1::open(&target, [0xA3; 16]).expect("target");
         let symlink_path = directory.path().join("symlink.to");
         symlink(&target, &symlink_path).expect("symlink");
         assert!(ModerationProvenanceStoreV1::open(&symlink_path, [0xA3; 16]).is_err());
-
         let hardlink_path = directory.path().join("hardlink.to");
         fs::hard_link(&target, &hardlink_path).expect("hardlink");
         assert!(ModerationProvenanceStoreV1::open(&hardlink_path, [0xA3; 16]).is_err());

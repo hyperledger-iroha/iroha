@@ -68,7 +68,6 @@ fn vpn_openapi_paths_are_typed_signed_and_use_runtime_success_statuses() {
     ]
     .into_iter()
     .collect::<BTreeSet<_>>();
-
     for (path, method, request_ref, success_status, response_ref, signed) in cases {
         let operation = openapi_operation(&document, path, method);
         match request_ref {
@@ -107,7 +106,6 @@ fn vpn_openapi_paths_are_typed_signed_and_use_runtime_success_statuses() {
                 "{method} {path} must not advertise the retired creation status"
             );
         }
-
         let auth_headers = operation
             .get("parameters")
             .and_then(Value::as_array)
@@ -130,7 +128,6 @@ fn vpn_openapi_paths_are_typed_signed_and_use_runtime_success_statuses() {
             );
         }
     }
-
     for method in ["get", "delete"] {
         let operation = openapi_operation(&document, "/v1/vpn/sessions/{session_id}", method);
         let session_id = operation
@@ -154,12 +151,10 @@ fn vpn_openapi_paths_are_typed_signed_and_use_runtime_success_statuses() {
         );
     }
 }
-
 #[test]
 fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
     let document = generate_spec();
     let schemas = component_schemas(&document);
-
     assert_strict_object_schema(
         schemas,
         "VpnTxInstruction",
@@ -184,7 +179,6 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
         &["relay_receipt_hex", "client_voucher_hex"],
         &["lease_id_hex"],
     );
-
     let profile_fields = [
         "available",
         "relay_endpoint",
@@ -212,7 +206,6 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
         "directory_snapshot_digest_hex",
     ];
     assert_strict_object_schema(schemas, "VpnProfileResponse", &profile_fields, &[]);
-
     let quote_fields = [
         "quote_id",
         "lease_id_hex",
@@ -245,7 +238,6 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
         "open_lease_instruction",
     ];
     assert_strict_object_schema(schemas, "VpnQuoteResponse", &quote_fields, &[]);
-
     let session_fields = [
         "session_id",
         "account_id",
@@ -348,7 +340,6 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
         helper_ticket.get("maxLength").and_then(Value::as_u64),
         Some(1328)
     );
-
     let receipt_fields = [
         "session_id",
         "account_id",
@@ -375,7 +366,6 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
     ];
     assert_strict_object_schema(schemas, "VpnReceiptResponse", &receipt_fields, &[]);
     assert_strict_object_schema(schemas, "VpnReceiptListResponse", &["items", "total"], &[]);
-
     for (schema_name, field) in [
         ("VpnTxInstruction", "wire_id"),
         ("VpnProfileResponse", "relay_endpoint"),
@@ -417,7 +407,6 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
             "{schema_name}.{field} must reject empty runtime identifiers"
         );
     }
-
     for (schema_name, field) in [
         ("VpnQuoteResponse", "quote_expires_at_ms"),
         ("VpnSessionResponse", "expires_at_ms"),
@@ -445,7 +434,6 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
             "{schema_name}.{field} must advertise its unsigned lower bound"
         );
     }
-
     let quantity = schemas
         .get("Quantity")
         .and_then(Value::as_object)
@@ -478,7 +466,6 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
             );
         }
     }
-
     for name in [
         "VpnProfileResponse",
         "VpnQuoteCreateRequest",
@@ -505,7 +492,6 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
         }
     }
 }
-
 #[test]
 fn sorafs_tag_documents_exact_canonical_quantity_contract() {
     let tags = tags_section().as_array().expect("tags array").to_vec();
@@ -530,7 +516,6 @@ fn sorafs_tag_documents_exact_canonical_quantity_contract() {
         );
     }
 }
-
 #[test]
 fn tags_section_includes_push_tag() {
     let tags = match tags_section() {
@@ -556,7 +541,6 @@ fn tags_section_includes_push_tag() {
     assert!(has_soracloud, "tags should include Soracloud");
     assert!(has_vpn, "tags should include VPN");
 }
-
 #[test]
 fn detached_asset_transfer_openapi_is_strict_and_two_phase() {
     let doc = generate_spec();
@@ -609,7 +593,6 @@ fn detached_asset_transfer_openapi_is_strict_and_two_phase() {
             ),
         "asset transfer operation must document exact signed replay semantics"
     );
-
     let schemas = doc
         .get("components")
         .and_then(Value::as_object)
@@ -686,7 +669,6 @@ fn detached_asset_transfer_openapi_is_strict_and_two_phase() {
         );
     }
 }
-
 #[test]
 fn zk_ivm_openapi_uses_compact_state_dependent_schemas() {
     let doc = generate_spec();
@@ -765,7 +747,6 @@ fn zk_ivm_openapi_uses_compact_state_dependent_schemas() {
             "{method} cache policy"
         );
     }
-
     let schemas = doc
         .get("components")
         .and_then(Value::as_object)
@@ -829,7 +810,6 @@ fn zk_ivm_openapi_uses_compact_state_dependent_schemas() {
         assert_eq!(pattern, Some("^[0-9a-f]{32}$"), "{state}");
     }
 }
-
 #[test]
 fn retired_server_contract_deployment_paths_are_absent() {
     let document = generate_spec();
@@ -848,7 +828,6 @@ fn retired_server_contract_deployment_paths_are_absent() {
         );
     }
 }
-
 #[test]
 fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
     let document = generate_spec();
@@ -862,7 +841,6 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
         .and_then(|components| components.get("schemas"))
         .and_then(Value::as_object)
         .expect("OpenAPI schemas");
-
     assert!(
         !paths.contains_key("/v1/gov/ballots/zk"),
         "the legacy ZK ballot route must not enter the first-release OpenAPI"
@@ -894,7 +872,6 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
     );
     assert!(!capability_properties.contains_key("chain_id"));
     assert!(!capability_properties.contains_key("genesis_hash"));
-
     let cases: [(&str, &str, &[&str]); 9] = [
         (
             "/v1/ministry/agenda/proposals/draft",
@@ -971,7 +948,6 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
             &["authority", "namespaces"],
         ),
     ];
-
     for path in [
         "/v1/gov/ballots/zk-v1",
         "/v1/gov/ballots/zk-v1/ballot-proof",
@@ -1005,7 +981,6 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
             );
         }
     }
-
     for (path, schema_name, expected_properties) in cases {
         let request_ref = paths
             .get(path)
@@ -1028,7 +1003,6 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
             format!("#/components/schemas/{schema_name}"),
             "{path}"
         );
-
         let schema = schemas
             .get(schema_name)
             .and_then(Value::as_object)
@@ -1046,7 +1020,6 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
         actual_properties.sort_unstable();
         assert_eq!(actual_properties, expected_properties, "{schema_name}");
     }
-
     for (schema_name, expected_required) in [
         (
             "GovernanceProposeDeployContractRequestV1",
@@ -1110,7 +1083,6 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
         actual_required.sort_unstable();
         assert_eq!(actual_required, expected_required, "{schema_name}");
     }
-
     let deploy = schemas
         .get("GovernanceProposeDeployContractRequestV1")
         .and_then(Value::as_object)
@@ -1205,7 +1177,6 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
             "root_hint",
         ]
     );
-
     let u64_maximum = Value::from(u64::MAX);
     let governance_window = schemas
         .get("GovernanceAtWindowV1")
@@ -1262,7 +1233,6 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
         Some(GOVERNANCE_U64_DECIMAL_PATTERN),
         "plain-ballot duration must publish the exact canonical u64 grammar"
     );
-
     for schema_name in [
         "GovernanceBallotProofV1",
         "GovernanceZkBallotEnvelopeRequestV1",
@@ -1281,7 +1251,6 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
             "{schema_name}.backend must be an exact nonempty token"
         );
     }
-
     for schema_name in [
         "GovernanceZkBallotEnvelopeRequestV1",
         "GovernanceZkBallotProofRequestV1",
@@ -1308,7 +1277,6 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
             "{schema_name} must reject the retired chain_id key"
         );
     }
-
     for (schema_name, field) in [
         ("GovernanceZkBallotEnvelopeRequestV1", "election_id"),
         ("GovernanceZkBallotProofRequestV1", "election_id"),
@@ -1341,7 +1309,6 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
             "{schema_name}.{field} must publish the selector byte ceiling"
         );
     }
-
     assert_eq!(
         schemas
             .get("GovernanceParliamentBallotRequestV1")
@@ -1354,7 +1321,6 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
         Some(&norito::json!(["approve", "reject", "abstain"])),
         "Parliament decisions must expose only the exact lowercase wire labels"
     );
-
     assert_eq!(
         schemas
             .get("GovernanceEnactRequestV1")
@@ -1393,7 +1359,6 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
             "finalization {field} must publish the exact digest length"
         );
     }
-
     let provenance_properties = schemas
         .get("GovernanceManifestProvenanceV1")
         .and_then(Value::as_object)
@@ -1435,7 +1400,6 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
         Some(&norito::json!(["Aye", "Nay", "Abstain", null])),
         "ZK-v1 direction must match the closed runtime ballot enum"
     );
-
     for schema_name in [
         "GovernanceProposeDeployContractRequestV1",
         "GovernanceZkBallotEnvelopeRequestV1",
@@ -1495,7 +1459,6 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
         );
     }
 }
-
 #[test]
 fn governance_read_path_parameters_publish_exact_runtime_grammars() {
     let document = generate_spec();
@@ -1503,7 +1466,6 @@ fn governance_read_path_parameters_publish_exact_runtime_grammars() {
         .get("paths")
         .and_then(Value::as_object)
         .expect("OpenAPI paths");
-
     for (path, method, parameter_name, expected_pattern) in [
         (
             "/v1/ministry/agenda/proposals/{proposal_id}",
@@ -1571,7 +1533,6 @@ fn governance_read_path_parameters_publish_exact_runtime_grammars() {
         );
     }
 }
-
 #[test]
 fn subscription_mutations_publish_exact_unsigned_v1_draft_contract() {
     let paths = subscription_paths();
@@ -1595,7 +1556,6 @@ fn subscription_mutations_publish_exact_unsigned_v1_draft_contract() {
             .expect("draft description");
         assert!(description.contains("does not sign or queue"));
     }
-
     let mut schemas = Map::new();
     subscription_schemas(&mut schemas);
     for request in [
@@ -1618,7 +1578,6 @@ fn subscription_mutations_publish_exact_unsigned_v1_draft_contract() {
             .expect("request properties");
         assert!(!properties.contains_key("private_key"));
     }
-
     for response in [
         "SubscriptionCreateDraftResponseV1",
         "SubscriptionActionDraftResponseV1",
@@ -1642,7 +1601,6 @@ fn subscription_mutations_publish_exact_unsigned_v1_draft_contract() {
         assert!(!properties.contains_key("ok"));
         assert!(!properties.contains_key("tx_hash_hex"));
     }
-
     let cancel_mode = schemas
         .get("SubscriptionCancelModeV1")
         .and_then(Value::as_object)
@@ -1651,7 +1609,6 @@ fn subscription_mutations_publish_exact_unsigned_v1_draft_contract() {
         .expect("exact cancellation mode cases");
     assert_eq!(cancel_mode.len(), 2);
 }
-
 #[test]
 fn local_signing_openapi_contracts_are_closed_and_secret_free() {
     let document = generate_spec();
@@ -1676,7 +1633,6 @@ fn local_signing_openapi_contracts_are_closed_and_secret_free() {
             "missing local-signing POST `{path}`",
         );
     }
-
     let schemas = document
         .get("components")
         .and_then(Value::as_object)
@@ -1709,7 +1665,6 @@ fn local_signing_openapi_contracts_are_closed_and_secret_free() {
         );
     }
 }
-
 #[test]
 fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
     fn operation_responses<'a>(paths: &'a Map, path: &str) -> &'a Map {
@@ -1722,7 +1677,6 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             .and_then(Value::as_object)
             .unwrap_or_else(|| panic!("missing DA POST responses for `{path}`"))
     }
-
     fn schema_properties<'a>(schemas: &'a Map, schema: &str) -> &'a Map {
         schemas
             .get(schema)
@@ -1731,7 +1685,6 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             .and_then(Value::as_object)
             .unwrap_or_else(|| panic!("missing `{schema}` properties"))
     }
-
     fn operation_schema_ref<'a>(paths: &'a Map, path: &str, request: bool) -> &'a str {
         let operation = paths
             .get(path)
@@ -1762,13 +1715,11 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             .and_then(Value::as_str)
             .unwrap_or_else(|| panic!("missing DA schema reference for `{path}`"))
     }
-
     let document = generate_spec();
     let paths = document
         .get("paths")
         .and_then(Value::as_object)
         .expect("OpenAPI paths");
-
     assert_eq!(
         operation_schema_ref(paths, "/v1/da/commitments", true),
         "#/components/schemas/DaCommitmentListRequest"
@@ -1870,7 +1821,6 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             .is_some_and(|description| description.contains("256 UTF-8 bytes")),
         "pin-intent proof errors must document the alias byte limit"
     );
-
     let schemas = component_schemas(&document);
     assert!(
         !schemas.contains_key("DaPagination"),
@@ -1884,7 +1834,6 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
         !schemas.contains_key("DaPinIntentWithLocationList"),
         "the pin-intent list route uses its cursor-bearing page envelope"
     );
-
     for (request, cursor) in [
         ("DaCommitmentListRequest", "DaCommitmentListCursor"),
         ("DaPinIntentListRequest", "DaPinIntentListCursor"),
@@ -1932,7 +1881,6 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             "{request}"
         );
     }
-
     for (request, expected) in [
         (
             "DaCommitmentProofRequest",
@@ -1957,7 +1905,6 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
         property_names.sort_unstable();
         assert_eq!(property_names, expected, "{request}");
     }
-
     let snapshot = schemas
         .get("DaListSnapshot")
         .and_then(Value::as_object)
@@ -1980,7 +1927,6 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
         Some(2),
         "empty and non-empty canonical snapshot shapes"
     );
-
     for (cursor, after) in [
         ("DaCommitmentListCursor", "DaCommitmentKey"),
         ("DaPinIntentListCursor", "DaCommitmentLocation"),
@@ -2006,7 +1952,6 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             "{cursor}"
         );
     }
-
     for (response, items, cursor) in [
         (
             "DaCommitmentListResponse",
@@ -2064,7 +2009,6 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             "{response}"
         );
     }
-
     let digest = schemas
         .get("DaDigest32")
         .and_then(Value::as_object)
@@ -2126,7 +2070,6 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             }),
         "removed KZG commitments must not remain in DA record requirements"
     );
-
     let direction = schemas
         .get("MerkleDirection")
         .and_then(Value::as_object)
@@ -2145,7 +2088,6 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
                 .collect::<Vec<_>>()),
         Some(vec!["direction", "value"])
     );
-
     for proof in ["DaCommitmentProof", "DaPinIntentProof"] {
         let properties = schemas
             .get(proof)
@@ -2183,7 +2125,6 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             Some(32)
         );
     }
-
     for (schema, field) in [
         ("DaPinIntentQueryRequest", "alias"),
         ("DaPinIntent", "alias"),
@@ -2202,7 +2143,6 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             Some(256)
         );
     }
-
     for verify in ["DaCommitmentVerifyResponse", "DaPinIntentVerifyResponse"] {
         assert_eq!(
             schemas

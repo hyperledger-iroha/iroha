@@ -53,8 +53,8 @@ function verifyExactNetworkSignature(call, expectedMethod, expectedPath, expecte
   });
   const signature = Buffer.from(init.headers["X-Iroha-Signature"], "base64");
   assert.equal(
-    Buffer.from(init.headers["X-Iroha-Account"], "latin1").toString("utf8"),
-    ACCOUNT_ID,
+    init.headers["X-Iroha-Account"],
+    AccountAddress.parseEncoded(ACCOUNT_ID).address.canonicalHex(),
   );
   assert.equal(ed25519.verify(signature, message, PUBLIC_KEY), true);
   assert.equal(ed25519.verify(signature, foreign, PUBLIC_KEY), false);

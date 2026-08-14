@@ -1,5 +1,4 @@
 //! Kotodama V1 branded declaration syntax invariants.
-
 use kotodama_lang::{
     formatter::format_source,
     lexer::V1_KEYWORD_EDITOR_PATTERN,
@@ -7,12 +6,10 @@ use kotodama_lang::{
     source::{FrontendBudget, SourceFile, SourceId},
     syntax::parse,
 };
-
 fn parse_source(text: &str) -> kotodama_lang::syntax::ParseOutput {
     let source = SourceFile::new(SourceId(0), "branding.ko", text);
     parse(&source, FrontendBudget::v1())
 }
-
 #[test]
 fn romanized_and_japanese_declaration_sets_are_first_class() {
     for source in [
@@ -37,7 +34,6 @@ fn romanized_and_japanese_declaration_sets_are_first_class() {
         assert!(output.is_ok(), "{:?}", output.diagnostics.diagnostics);
     }
 }
-
 #[test]
 fn formatting_preserves_the_selected_japanese_declaration_script() {
     let source = SourceFile::new(
@@ -60,7 +56,6 @@ fn formatting_preserves_the_selected_japanese_declaration_script() {
         );
     }
 }
-
 #[test]
 fn editor_keyword_boundaries_cover_unicode_identifier_continuations() {
     for property in [r"\p{L}", r"\p{N}"] {
@@ -76,7 +71,6 @@ fn editor_keyword_boundaries_cover_unicode_identifier_continuations() {
         );
     }
 }
-
 #[test]
 fn english_feature_aliases_are_rejected_by_the_lossless_frontend() {
     for (alias, source) in [
@@ -102,7 +96,6 @@ fn english_feature_aliases_are_rejected_by_the_lossless_frontend() {
         );
     }
 }
-
 #[test]
 fn english_words_remain_available_as_ordinary_identifiers() {
     let source = r#"module OrdinaryWords {

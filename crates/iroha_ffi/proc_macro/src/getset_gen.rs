@@ -1,12 +1,3 @@
-use std::default::Default;
-
-use darling::ast::Style;
-use manyhow::{Emitter, emit};
-use proc_macro2::TokenStream;
-use quote::quote;
-use rustc_hash::FxHashMap;
-use syn::{Ident, parse_quote, visit::Visit};
-
 use crate::{
     attr_parse::{
         derive::DeriveAttrs,
@@ -15,7 +6,13 @@ use crate::{
     convert::{FfiTypeField, FfiTypeFields},
     impl_visitor::{Arg, FnDescriptor, unwrap_result_type},
 };
-
+use darling::ast::Style;
+use manyhow::{Emitter, emit};
+use proc_macro2::TokenStream;
+use quote::quote;
+use rustc_hash::FxHashMap;
+use std::default::Default;
+use syn::{Ident, parse_quote, visit::Visit};
 /// Generate FFI function equivalents of getset-derived methods
 pub fn gen_derived_methods<'a>(
     emitter: &mut Emitter,
@@ -25,7 +22,6 @@ pub fn gen_derived_methods<'a>(
     fields: &'a FfiTypeFields,
 ) -> impl Iterator<Item = FnDescriptor<'a>> {
     let mut ffi_derives = FxHashMap::default();
-
     match fields.style {
         Style::Struct => {}
         Style::Tuple | Style::Unit => {
@@ -33,7 +29,6 @@ pub fn gen_derived_methods<'a>(
             return ffi_derives.into_values();
         }
     }
-
     for field in fields.iter() {
         for (mode, options) in field
             .getset_attr
@@ -49,18 +44,14 @@ pub fn gen_derived_methods<'a>(
                 // ignore non-public accessors
                 continue;
             }
-
             let fn_ = gen_derived_method(name, field, mode);
             ffi_derives.insert(fn_.sig.ident.clone(), fn_);
         }
     }
-
     ffi_derives.into_values()
 }
-
 pub fn gen_resolve_type(arg: &Arg) -> TokenStream {
     let (arg_name, src_type) = (arg.name(), arg.src_type());
-
     if unwrap_result_type(src_type).is_some() {
         return quote! {
             let #arg_name = match #arg_name {
@@ -71,12 +62,10 @@ pub fn gen_resolve_type(arg: &Arg) -> TokenStream {
             };
         };
     }
-
     let mut type_resolver = FfiTypeResolver(arg_name, quote! {});
     type_resolver.visit_type(src_type);
     type_resolver.1
 }
-
 fn gen_derived_method<'ast>(
     item_name: &Ident,
     field: &'ast FfiTypeField,
@@ -90,9 +79,7 @@ fn gen_derived_method<'ast>(
         .clone();
     let sig = gen_derived_method_sig(field, mode);
     let self_ty = Some(parse_quote! {#item_name});
-
     let attrs = field.doc_attrs.attrs.iter().collect();
-
     let field_ty = &field.ty;
     let (receiver, input_args, output_arg) = match mode {
         GetSetGenMode::Set => (
@@ -128,7 +115,6 @@ fn gen_derived_method<'ast>(
             )),
         ),
     };
-
     FnDescriptor {
         attrs,
         self_ty,
@@ -138,11 +124,9 @@ fn gen_derived_method<'ast>(
         output_arg,
     }
 }
-
 fn gen_derived_method_sig(field: &FfiTypeField, mode: GetSetGenMode) -> syn::Signature {
     let field_name = field.ident.as_ref().expect("BUG: Field name not defined");
     let field_ty = &field.ty;
-
     let method_name = Ident::new(
         &match mode {
             GetSetGenMode::Set => format!("set_{field_name}"),
@@ -151,7 +135,6 @@ fn gen_derived_method_sig(field: &FfiTypeField, mode: GetSetGenMode) -> syn::Sig
         },
         proc_macro2::Span::call_site(),
     );
-
     match mode {
         GetSetGenMode::Set => parse_quote! {
             fn #method_name(&mut self, #field_name: #field_ty)
@@ -167,16 +150,13 @@ fn gen_derived_method_sig(field: &FfiTypeField, mode: GetSetGenMode) -> syn::Sig
         },
     }
 }
-
 pub fn gen_store_name(arg_name: &Ident) -> Ident {
     Ident::new(&format!("{arg_name}_store"), proc_macro2::Span::call_site())
 }
-
 struct FfiTypeResolver<'itm>(&'itm Ident, TokenStream);
 impl<'itm> Visit<'itm> for FfiTypeResolver<'itm> {
     fn visit_trait_bound(&mut self, i: &'itm syn::TraitBound) {
         let trait_ = i.path.segments.last().expect("Defined");
-
         let arg_name = self.0;
         if trait_.ident == "IntoIterator" || trait_.ident == "ExactSizeIterator" {
             self.1 = quote! { let #arg_name: Vec<_> = #arg_name.into_iter().collect(); };

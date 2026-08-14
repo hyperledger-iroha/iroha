@@ -1,11 +1,4 @@
 //! Shared test fixtures for the desktop supervisor shell.
-
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
-};
-
 use iroha_data_model::{
     block::consensus_v2::{PROTOCOL_VERSION, SumeragiV2GenesisContextParameters},
     parameter::{
@@ -14,12 +7,15 @@ use iroha_data_model::{
     },
 };
 use norito::json::{self, Map, Value};
-
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+};
 pub(super) struct TestEnvGuard {
     key: &'static str,
     prev: Option<String>,
 }
-
 impl TestEnvGuard {
     pub(super) fn set(key: &'static str, value: &Path) -> Self {
         let prev = env::var(key).ok();
@@ -28,7 +24,6 @@ impl TestEnvGuard {
         Self { key, prev }
     }
 }
-
 impl Drop for TestEnvGuard {
     fn drop(&mut self) {
         if let Some(prev) = self.prev.as_ref() {
@@ -38,20 +33,16 @@ impl Drop for TestEnvGuard {
         }
     }
 }
-
 pub(super) fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
 }
-
 pub(super) fn genesis_invocation_count(path: &Path) -> usize {
     invocation_count(path, "genesis")
 }
-
 pub(super) fn kagami_sign_invocation_count(path: &Path) -> usize {
     invocation_count(path, "sign")
 }
-
 fn invocation_count(path: &Path, expected: &str) -> usize {
     if !path.exists() {
         return 0;
@@ -59,7 +50,6 @@ fn invocation_count(path: &Path, expected: &str) -> usize {
     let contents = fs::read_to_string(path).unwrap_or_else(|err| panic!("read kagami log: {err}"));
     contents.lines().filter(|line| *line == expected).count()
 }
-
 pub(super) fn install_kagami_stub(root: &Path) -> (PathBuf, TestEnvGuard) {
     let permissioned_manifest = fixture_manifest(SumeragiConsensusMode::Permissioned);
     let npos_manifest = fixture_manifest(SumeragiConsensusMode::Npos);
@@ -149,7 +139,6 @@ exit 1
         TestEnvGuard::set("MOCHI_TEST_FINALIZE_KAGAMI_STUB_SIGNATURE", Path::new("1"));
     (path, signature_guard)
 }
-
 fn fixture_manifest(consensus_mode: SumeragiConsensusMode) -> String {
     let mut transaction = Map::new();
     if consensus_mode == SumeragiConsensusMode::Npos {
@@ -191,7 +180,6 @@ fn fixture_manifest(consensus_mode: SumeragiConsensusMode) -> String {
     );
     json::to_string(&Value::Object(manifest)).expect("encode fixture manifest")
 }
-
 pub(super) fn install_noop_stub(root: &Path, name: &str) -> PathBuf {
     install_stub_script(
         root,
@@ -201,14 +189,12 @@ exit 0
 "#,
     )
 }
-
 fn install_stub_script(root: &Path, name: &str, contents: &str) -> PathBuf {
     let path = root.join(name);
     fs::write(&path, contents).expect("write stub");
     make_executable(&path);
     path
 }
-
 #[cfg(unix)]
 fn make_executable(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
@@ -216,6 +202,5 @@ fn make_executable(path: &Path) {
     perms.set_mode(0o755);
     fs::set_permissions(path, perms).expect("set perms");
 }
-
 #[cfg(not(unix))]
 fn make_executable(_path: &Path) {}

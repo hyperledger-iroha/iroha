@@ -1,7 +1,6 @@
 //! Verify IVM pointer ABI applies queued instructions correctly.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::too_many_lines)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -16,7 +15,6 @@ use ivm::{
 };
 use mv::storage::StorageReadOnly;
 use norito::NoritoSerialize;
-
 fn tlv_envelope<T: NoritoSerialize>(type_id: PointerType, val: &T) -> Vec<u8> {
     let payload = norito::to_bytes(val).expect("encode payload");
     let mut blob = Vec::with_capacity(2 + 1 + 4 + payload.len() + iroha_crypto::Hash::LENGTH);
@@ -28,11 +26,9 @@ fn tlv_envelope<T: NoritoSerialize>(type_id: PointerType, val: &T) -> Vec<u8> {
     blob.extend_from_slice(&hash);
     blob
 }
-
 fn quantity_tlv(value: &Quantity) -> Vec<u8> {
     ivm::numeric_tlv::encode_quantity(value).expect("encode quantity pointer envelope")
 }
-
 fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
     let metadata = ProgramMetadata::parse(program).expect("parse Kotodama V1 artifact");
     let entrypoint = metadata
@@ -48,13 +44,11 @@ fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
     vm.set_program_counter(entrypoint_pc)
         .unwrap_or_else(|error| panic!("select Kotodama V1 entrypoint `{name}`: {error:?}"));
 }
-
 fn opaque_asset_definition_literal(aid_bytes: [u8; 16]) -> String {
     AssetDefinitionId::from_uuid_bytes(aid_bytes)
         .expect("opaque asset definition id")
         .to_string()
 }
-
 #[test]
 fn apply_queued_isis_from_corehost_transfer_asset() {
     // Build a minimal IVM program that performs SCALL TRANSFER_ASSET_SCOPED and HALT
@@ -83,7 +77,6 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     let ptr_asset = ivm::Memory::INPUT_START + off_asset;
     let ptr_amount = ivm::Memory::INPUT_START + off_amount;
     let ptr_dataspace = ivm::Memory::INPUT_START + off_dataspace;
-
     let mut code = Vec::new();
     // SCALL transfer + HALT
     code.extend_from_slice(
@@ -94,7 +87,6 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-
     // Full program (metadata + code)
     let meta = ProgramMetadata {
         version_major: 1,
@@ -106,7 +98,6 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     };
     let mut program = meta.encode();
     program.extend_from_slice(&code);
-
     // Build VM with CoreHost and preload INPUT
     let mut vm = IVM::new(500_000);
     vm.memory
@@ -144,7 +135,6 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     );
     let mut block = state.block(header);
     let mut tx = block.transaction();
-
     // Setup: register domain 'wonderland', register accounts, asset definition, and mint 1_000 to 'from'
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let new_domain = Domain::new(domain_id.clone());
@@ -166,7 +156,6 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
             iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace),
         ),
     ));
-
     let executor = tx.world.executor().clone();
     for instr in [
         InstructionBox::from(reg_domain),
@@ -181,13 +170,11 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     }
     tx.apply();
     block.commit().expect("commit setup block");
-
     {
         let view = state.view();
         let mut host = CoreHostImpl::new(from.clone());
         host.set_query_state(&view);
         vm.run_with_host(&mut host).unwrap();
-
         let header = iroha_data_model::block::BlockHeader::new(
             core::num::NonZeroU64::new(2).unwrap(),
             None,
@@ -198,7 +185,6 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
         );
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         // Apply queued transfer via CoreHost bridge.
         let queued = host
             .apply_queued(&mut tx, &from)
@@ -207,7 +193,6 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
         tx.apply();
         block.commit().expect("commit transfer block");
     }
-
     // Assert balances updated: from decreased by 500, to increased by 500
     let from_asset = AssetId::with_scope(
         asset_def.clone(),
@@ -234,7 +219,6 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     assert_eq!(from_bal, Quantity::from(500u32));
     assert_eq!(to_bal, Quantity::from(500u32));
 }
-
 #[test]
 #[ignore = "debug helper for live encoded account ids and opaque asset definitions"]
 fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
@@ -244,7 +228,6 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let asset_raw = std::env::var("IVM_DEBUG_ASSET_DEFINITION")
         .expect("IVM_DEBUG_ASSET_DEFINITION must be set");
     let domain_raw = std::env::var("IVM_DEBUG_DOMAIN").unwrap_or_else(|_| "centralbank".to_owned());
-
     let from = iroha_data_model::account::AccountId::parse_encoded(&from_raw)
         .expect("valid encoded source account")
         .into_account_id();
@@ -253,7 +236,6 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
         .into_account_id();
     let asset_def: AssetDefinitionId = asset_raw.parse().expect("valid asset definition");
     let amount = Quantity::from(500_u64);
-
     let from_bytes = tlv_envelope(PointerType::AccountId, &from);
     let to_bytes = tlv_envelope(PointerType::AccountId, &to);
     let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);
@@ -271,7 +253,6 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let ptr_asset = ivm::Memory::INPUT_START + off_asset;
     let ptr_amount = ivm::Memory::INPUT_START + off_amount;
     let ptr_dataspace = ivm::Memory::INPUT_START + off_dataspace;
-
     let mut code = Vec::new();
     code.extend_from_slice(
         &encoding::wide::encode_sys(
@@ -281,7 +262,6 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
         .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-
     let meta = ProgramMetadata {
         version_major: 1,
         version_minor: 0,
@@ -292,7 +272,6 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     };
     let mut program = meta.encode();
     program.extend_from_slice(&code);
-
     let mut vm = IVM::new(500_000);
     vm.set_host(CoreHost::new(from.clone()));
     vm.memory
@@ -317,7 +296,6 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     vm.set_register(13, ptr_amount);
     vm.set_register(14, ptr_dataspace);
     vm.run().unwrap();
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query_handle);
@@ -331,7 +309,6 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     );
     let mut block = state.block(header);
     let mut tx = block.transaction();
-
     let domain_id = DomainId::try_new(domain_raw, "universal").expect("domain id");
     let new_domain = Domain::new(domain_id.clone());
     let reg_domain = RegisterBox::from(Register::domain(new_domain));
@@ -351,7 +328,6 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
             iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace),
         ),
     ));
-
     let executor = tx.world.executor().clone();
     for instr in [
         InstructionBox::from(reg_domain),
@@ -364,12 +340,10 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
             .execute_instruction(&mut tx, &from, instr)
             .expect("setup should succeed");
     }
-
     let queued = CoreHost::with_host(&mut vm, |host| host.apply_queued(&mut tx, &from))
         .expect("apply queued instructions");
     assert_eq!(queued.len(), 1);
 }
-
 #[test]
 #[ignore = "debug helper for live trigger-style JSON-driven transfers"]
 fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
@@ -391,7 +365,6 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
     let domain_raw =
         std::env::var("IVM_DEBUG_DOMAIN").unwrap_or_else(|_| "centralbank.universal".to_owned());
     let ratio_raw = std::env::var("IVM_DEBUG_RATIO").unwrap_or_else(|_| "76".to_owned());
-
     let reserve = iroha_data_model::account::AccountId::parse_encoded(&reserve_raw)
         .expect("valid encoded reserve account")
         .into_account_id();
@@ -402,7 +375,6 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
     let cbdc_asset_def: AssetDefinitionId = cbdc_asset_raw.parse().expect("valid CBDC asset");
     let domain_id = DomainId::parse_fully_qualified(&domain_raw).expect("valid domain");
     let ratio: u64 = ratio_raw.parse().expect("valid ratio");
-
     let authority = ALICE_ID.clone();
     let compiler = Compiler::new();
     let src = format!(
@@ -425,13 +397,11 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
         ratio = ratio,
     );
     let program = compiler.compile_source(&src).expect("compile");
-
     let mut vm = IVM::new(500_000);
     vm.set_host(CoreHost::new(authority.clone()));
     vm.load_program(&program).expect("load");
     select_kotodama_entrypoint(&mut vm, &program, "main");
     vm.run().expect("run");
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query_handle);
@@ -445,7 +415,6 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
     );
     let mut block = state.block(header);
     let mut tx = block.transaction();
-
     let reg_domain = RegisterBox::from(Register::domain(Domain::new(domain_id.clone())));
     let reg_authority = RegisterBox::from(Register::account(NewAccount::new(authority.clone())));
     let reg_reserve = RegisterBox::from(Register::account(NewAccount::new(reserve.clone())));
@@ -470,7 +439,6 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
         ratio * 2,
         AssetId::of(cbdc_asset_def.clone(), reserve.clone()),
     ));
-
     let executor = tx.world.executor().clone();
     for instr in [
         InstructionBox::from(reg_domain),
@@ -486,11 +454,9 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
             .execute_instruction(&mut tx, &authority, instr)
             .expect("setup should succeed");
     }
-
     let queued = CoreHost::with_host(&mut vm, |host| host.apply_queued(&mut tx, &authority))
         .expect("apply queued instructions");
     assert_eq!(queued.len(), 2);
-
     let dst_aed_bal = tx
         .world
         .assets()

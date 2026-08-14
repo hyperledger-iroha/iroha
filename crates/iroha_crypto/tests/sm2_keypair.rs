@@ -1,44 +1,36 @@
 //! Integration tests covering SM2 key pair behavior.
 #![cfg(feature = "sm")]
-
 use iroha_crypto::{
     Algorithm, Error, KeyPair, Signature, Sm2PrivateKey, Sm2PublicKey, Sm2Signature,
 };
 use rand::{RngCore, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
-
 fn checked_sm2_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Sm2).expect("generate checked SM2 keypair")
 }
-
 #[test]
 fn sm2_keypair_fixture_uses_checked_random_generation() {
     let keypair = checked_sm2_keypair();
     assert_eq!(keypair.public_key().algorithm(), Algorithm::Sm2);
 }
-
 #[test]
 fn sm2_keypair_sign_and_verify() {
     let keypair = checked_sm2_keypair();
     let msg = b"iroha sm2 keypair smoke test";
-
     let signature = Signature::try_new(keypair.private_key(), msg).expect("fixture SM2 signature");
     signature
         .verify(keypair.public_key(), msg)
         .expect("sm2 signature should verify");
 }
-
 #[test]
 fn sm2_signing_is_deterministic_with_same_key_and_message() {
     let secret = [0x42u8; 32];
     let private =
         Sm2PrivateKey::new(Sm2PublicKey::DEFAULT_DISTID, secret).expect("secret should be valid");
     let message = b"deterministic sm2 signing check";
-
     let sig1 = private.sign(message);
     let sig2 = private.sign(message);
     assert_eq!(sig1.to_bytes(), sig2.to_bytes(), "signatures must match");
-
     // Rehydrate the key from bytes to ensure determinism survives reconstruction.
     let reconstructed =
         Sm2PrivateKey::from_bytes(Sm2PublicKey::DEFAULT_DISTID, &secret).expect("valid key");
@@ -48,25 +40,21 @@ fn sm2_signing_is_deterministic_with_same_key_and_message() {
         sig3.to_bytes(),
         "signatures must remain stable"
     );
-
     let public = private.public_key();
     public
         .verify(message, &sig1)
         .expect("signature should verify with deterministic nonce");
 }
-
 #[test]
 fn sm2_signature_rejects_malformed_payloads() {
     let mut rng = ChaCha20Rng::from_seed([7u8; 32]);
     let keypair = checked_sm2_keypair();
     let message = b"malformed signature test vector";
-
     let signature =
         Signature::try_new(keypair.private_key(), message).expect("fixture SM2 signature");
     signature
         .verify(keypair.public_key(), message)
         .expect("baseline signature should verify");
-
     // Remove one byte to simulate truncated r∥s payload.
     let mut truncated = signature.payload().to_vec();
     truncated.pop();
@@ -78,7 +66,6 @@ fn sm2_signature_rejects_malformed_payloads() {
         ),
         "truncated signature must be rejected"
     );
-
     // Corrupt r component and ensure verification fails.
     let mut corrupted = signature.payload().to_vec();
     // Flip a random byte to keep failure non-deterministic across runs while staying reproducible.
@@ -93,7 +80,6 @@ fn sm2_signature_rejects_malformed_payloads() {
         "corrupted signature must be rejected"
     );
 }
-
 #[test]
 fn sm2_signature_rejects_wrong_message_or_distid() {
     let secret = [0x33u8; 32];
@@ -102,7 +88,6 @@ fn sm2_signature_rejects_wrong_message_or_distid() {
     let message = b"sm2 integrity check";
     let signature = private.sign(message);
     let public = private.public_key();
-
     assert!(
         matches!(
             public.verify(b"sm2 integrity check (altered)", &signature),
@@ -110,7 +95,6 @@ fn sm2_signature_rejects_wrong_message_or_distid() {
         ),
         "verification must fail for altered message"
     );
-
     let sec1 = public.to_sec1_bytes(false);
     let mismatched =
         Sm2PublicKey::from_sec1_bytes("ALICE123@YAHOO.COM", &sec1).expect("sec1 point valid");
@@ -122,13 +106,11 @@ fn sm2_signature_rejects_wrong_message_or_distid() {
         "verification must fail when distinguishing ID differs"
     );
 }
-
 #[test]
 fn sm2_signature_rejects_zero_components() {
     let keypair = checked_sm2_keypair();
     let message = b"invalid zero-component signature";
     let zero_signature = Signature::from_bytes(&[0u8; Sm2Signature::LENGTH]);
-
     assert!(
         matches!(
             zero_signature.verify(keypair.public_key(), message),
@@ -137,14 +119,12 @@ fn sm2_signature_rejects_zero_components() {
         "generic signature verification must reject zeroed r and s as a bad signature"
     );
 }
-
 #[test]
 fn sm2_signature_rejects_high_scalar_components() {
     let bytes = [0xFFu8; Sm2Signature::LENGTH];
     let signature = Signature::from_bytes(&bytes);
     let keypair = checked_sm2_keypair();
     let message = b"invalid high-component signature";
-
     assert!(
         matches!(
             signature.verify(keypair.public_key(), message),
@@ -153,38 +133,31 @@ fn sm2_signature_rejects_high_scalar_components() {
         "generic signature verification must reject components >= n as a bad signature"
     );
 }
-
 #[test]
 fn sm2_public_key_rejects_points_off_curve() {
     let mut invalid = [0u8; 65];
     invalid[0] = 0x04;
     invalid[1..33].copy_from_slice(&[0x01; 32]);
     invalid[33..].copy_from_slice(&[0x02; 32]);
-
     assert!(
         Sm2PublicKey::from_sec1_bytes(Sm2PublicKey::DEFAULT_DISTID, &invalid).is_err(),
         "off-curve SEC1 point must be rejected"
     );
 }
-
 #[test]
 fn sm2_signatures_depend_on_distinguishing_id() {
     let secret = [0x7Au8; 32];
     let message = b"distid-influences-sm2-prehash";
-
     let default_key =
         Sm2PrivateKey::new(Sm2PublicKey::DEFAULT_DISTID, secret).expect("default key");
     let custom_key = Sm2PrivateKey::new("device:alpha", secret).expect("custom key");
-
     let default_sig = default_key.sign(message);
     let custom_sig = custom_key.sign(message);
-
     assert_ne!(
         default_sig.to_bytes(),
         custom_sig.to_bytes(),
         "signatures must change when the distinguishing identifier differs"
     );
-
     default_key
         .public_key()
         .verify(message, &default_sig)
@@ -193,7 +166,6 @@ fn sm2_signatures_depend_on_distinguishing_id() {
         .public_key()
         .verify(message, &custom_sig)
         .expect("custom signature should verify with matching distid");
-
     assert!(
         custom_key
             .public_key()

@@ -1,7 +1,5 @@
 //! Strict public binding and resource bounds for stream-token admission.
-
 use super::*;
-
 pub(super) fn decode_policy_digest(
     value: Option<&str>,
     field: &'static str,
@@ -31,7 +29,6 @@ pub(super) fn decode_policy_digest(
         Some(digest)
     })
 }
-
 pub(super) fn validate_binding_and_bounds(
     config: &SorafsStreamTokenConfig,
     emitter: &mut Emitter<ParseError>,

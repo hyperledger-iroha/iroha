@@ -18,7 +18,6 @@ use sorafs_node::provider_ingest_runtime::{
     ProviderIngestAuthenticatedSourceRegistrationV1, ProviderIngestMusubiArchiveFetchBindingV1,
     ProviderIngestSourceQualificationV1,
 };
-
 use super::*;
 mod quarantine_restart;
 #[test]
@@ -31,7 +30,6 @@ fn completed_musubi_capture_composer_has_one_concrete_inert_shape() {
     ) -> Result<ProviderIngestCompletedMusubiCaptureCoordinatorV1> =
         compose_inert_completed_musubi_capture_coordinator_v1;
     let _ = composer;
-
     let source = include_str!("../sorafs_provider_ingest_runtime.rs");
     let start = source
         .find("pub(crate) fn compose_inert_completed_musubi_capture_coordinator_v1")
@@ -42,7 +40,6 @@ fn completed_musubi_capture_composer_has_one_concrete_inert_shape() {
     assert!(!body.contains("try_activate"));
     assert!(!body.contains("read_signed_completed_musubi_capture_page"));
 }
-
 #[test]
 fn completed_musubi_attestation_driver_composer_remains_inert_and_open_only() {
     let source = include_str!("../sorafs_provider_ingest_runtime.rs");
@@ -55,33 +52,27 @@ fn completed_musubi_attestation_driver_composer_remains_inert_and_open_only() {
     assert!(body.contains("GovernedMusubiProviderAttestationInventoryV1::new"));
     assert!(!body.contains("initialize_journal_runtime"));
     assert!(!body.contains("drive_one_bounded_page"));
-
     let main = include_str!("../main.rs");
     assert!(!main.contains("compose_inert_completed_musubi_attestation_driver_v1"));
 }
-
 #[derive(Debug)]
 struct TestClockV1 {
     now: Mutex<Instant>,
 }
-
 impl TestClockV1 {
     fn new() -> Self {
         Self {
             now: Mutex::new(Instant::now()),
         }
     }
-
     fn now(&self) -> Instant {
         *self.now.lock().expect("test clock lock")
     }
-
     fn advance(&self, duration: Duration) {
         let mut now = self.now.lock().expect("test clock lock");
         *now = now.checked_add(duration).expect("test clock advance");
     }
 }
-
 #[derive(Debug)]
 enum TestTerminalBehaviorV1 {
     Eof,
@@ -95,7 +86,6 @@ enum TestTerminalBehaviorV1 {
         advance: Duration,
     },
 }
-
 struct TestTerminalReaderV1 {
     payload: Vec<u8>,
     offset: usize,
@@ -103,7 +93,6 @@ struct TestTerminalReaderV1 {
     terminal_probe_count: Arc<AtomicU64>,
     terminal_probe_width: Arc<AtomicU64>,
 }
-
 impl TestTerminalReaderV1 {
     fn new(
         payload: impl Into<Vec<u8>>,
@@ -124,7 +113,6 @@ impl TestTerminalReaderV1 {
         )
     }
 }
-
 impl Read for TestTerminalReaderV1 {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
         if output.is_empty() {
@@ -155,35 +143,29 @@ impl Read for TestTerminalReaderV1 {
         }
     }
 }
-
 #[derive(Clone)]
 struct TestOwnerAuthorityV1 {
     owner: Arc<Mutex<Option<AccountId>>>,
 }
-
 impl TestOwnerAuthorityV1 {
     fn new(owner: AccountId) -> Self {
         Self {
             owner: Arc::new(Mutex::new(Some(owner))),
         }
     }
-
     fn replace(&self, owner: AccountId) {
         *self.owner.lock().expect("owner authority lock") = Some(owner);
     }
 }
-
 impl ProviderIngestFinalizedOwnerAuthorityV1 for TestOwnerAuthorityV1 {
     fn owner_matches(&self, _provider_id: ProviderId, expected_owner: &AccountId) -> bool {
         self.owner.lock().expect("owner authority lock").as_ref() == Some(expected_owner)
     }
 }
-
 enum TestMusubiSignerMutationV1 {
     Owner(AccountId),
     AdapterRevision(u64),
 }
-
 struct TestMusubiAttestationSignerV1 {
     handle: String,
     key: KeyPair,
@@ -198,7 +180,6 @@ struct TestMusubiAttestationSignerV1 {
     eligibility_calls: AtomicU64,
     approval_calls: AtomicU64,
 }
-
 impl TestMusubiAttestationSignerV1 {
     fn new(key: KeyPair, owner_authority: TestOwnerAuthorityV1) -> Self {
         let authority = AccountId::new(key.public_key().clone());
@@ -220,7 +201,6 @@ impl TestMusubiAttestationSignerV1 {
             approval_calls: AtomicU64::new(0),
         }
     }
-
     fn approve_payload<'a>(
         &'a self,
         payload: &'a MusubiProviderBundleVerificationPayloadV1,
@@ -256,16 +236,13 @@ impl TestMusubiAttestationSignerV1 {
         })
     }
 }
-
 impl MusubiProviderAttestationSignerV1 for TestMusubiAttestationSignerV1 {
     fn runtime_handle(&self) -> &str {
         &self.handle
     }
-
     fn authority(&self) -> &AccountId {
         &self.authority
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -281,11 +258,9 @@ impl MusubiProviderAttestationSignerV1 for TestMusubiAttestationSignerV1 {
             self.controller_policy_digest,
         ))
     }
-
     fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
         self.policy
     }
-
     fn current_eligibility(
         &self,
     ) -> Result<ProviderIngestCompletionSignerPolicyV1, MusubiProviderAttestationSignerErrorV1>
@@ -293,7 +268,6 @@ impl MusubiProviderAttestationSignerV1 for TestMusubiAttestationSignerV1 {
         self.eligibility_calls.fetch_add(1, Ordering::SeqCst);
         Ok(self.policy)
     }
-
     fn approve<'a>(
         &'a self,
         _request: &'a ProviderIngestMusubiAttestationApprovalRequestV1,
@@ -301,7 +275,6 @@ impl MusubiProviderAttestationSignerV1 for TestMusubiAttestationSignerV1 {
         Box::pin(async { Err(MusubiProviderAttestationSignerErrorV1::Rejected) })
     }
 }
-
 fn test_musubi_attestation_payload(
     owner_key: &KeyPair,
 ) -> MusubiProviderBundleVerificationPayloadV1 {
@@ -336,7 +309,6 @@ fn test_musubi_attestation_payload(
         .expect("valid Musubi attestation payload");
     payload
 }
-
 fn test_musubi_request_binding(
     payload: &MusubiProviderBundleVerificationPayloadV1,
 ) -> MusubiProviderAttestationRequestBindingV1<'_> {
@@ -350,7 +322,6 @@ fn test_musubi_request_binding(
         signer_policy: payload.binding.completion_authority.signer_policy,
     }
 }
-
 fn test_musubi_signer_binding() -> SorafsProviderAttestationRuntimeBinding {
     SorafsProviderAttestationRuntimeBinding {
         handle: "hsm://sorafs/musubi/provider-attestation/primary".to_owned(),
@@ -358,7 +329,6 @@ fn test_musubi_signer_binding() -> SorafsProviderAttestationRuntimeBinding {
         policy_digest: [0xA7; 32],
     }
 }
-
 fn test_musubi_signer_fixture() -> (
     Arc<TestMusubiAttestationSignerV1>,
     TestOwnerAuthorityV1,
@@ -375,7 +345,6 @@ fn test_musubi_signer_fixture() -> (
     ));
     (signer, owner_authority, payload)
 }
-
 fn test_governed_musubi_signer(
     signer: Arc<TestMusubiAttestationSignerV1>,
     configured_binding: SorafsProviderAttestationRuntimeBinding,
@@ -393,7 +362,6 @@ fn test_governed_musubi_signer(
         payload.binding.provider_id,
     )
 }
-
 struct TestMusubiAttestationInventoryV1 {
     handle: String,
     adapter_revision: AtomicU64,
@@ -422,7 +390,6 @@ struct TestMusubiAttestationInventoryV1 {
     get_calls: AtomicU64,
     inventory_calls: AtomicU64,
 }
-
 impl TestMusubiAttestationInventoryV1 {
     fn new(item: MusubiProviderAttestationInventoryItemV1) -> Self {
         let scope = item.scope().clone();
@@ -450,13 +417,11 @@ impl TestMusubiAttestationInventoryV1 {
             inventory_calls: AtomicU64::new(0),
         }
     }
-
     fn maybe_drift(&self, configured: &AtomicBool) {
         if configured.swap(false, Ordering::SeqCst) {
             self.adapter_revision.fetch_add(1, Ordering::SeqCst);
         }
     }
-
     fn external_call_count(&self) -> u64 {
         self.handle_calls.load(Ordering::SeqCst)
             + self.qualification_calls.load(Ordering::SeqCst)
@@ -466,13 +431,11 @@ impl TestMusubiAttestationInventoryV1 {
             + self.inventory_calls.load(Ordering::SeqCst)
     }
 }
-
 impl MusubiProviderAttestationInventoryRuntimeV1 for TestMusubiAttestationInventoryV1 {
     fn runtime_handle(&self) -> &str {
         self.handle_calls.fetch_add(1, Ordering::SeqCst);
         &self.handle
     }
-
     fn qualification(
         &self,
     ) -> std::result::Result<
@@ -485,7 +448,6 @@ impl MusubiProviderAttestationInventoryRuntimeV1 for TestMusubiAttestationInvent
             self.policy_digest,
         ))
     }
-
     fn check_readiness<'a>(
         &'a self,
     ) -> ProviderIngestFutureV1<
@@ -503,7 +465,6 @@ impl MusubiProviderAttestationInventoryRuntimeV1 for TestMusubiAttestationInvent
         })
     }
 }
-
 impl MusubiProviderAttestationInventorySinkV1 for TestMusubiAttestationInventoryV1 {
     fn put<'a>(
         &'a self,
@@ -520,7 +481,6 @@ impl MusubiProviderAttestationInventorySinkV1 for TestMusubiAttestationInventory
         })
     }
 }
-
 impl MusubiProviderAttestationInventoryReaderV1 for TestMusubiAttestationInventoryV1 {
     fn get<'a>(
         &'a self,
@@ -541,7 +501,6 @@ impl MusubiProviderAttestationInventoryReaderV1 for TestMusubiAttestationInvento
                 .clone()
         })
     }
-
     fn inventory<'a>(
         &'a self,
         _scope: &'a MusubiProviderAttestationInventoryScopeV1,
@@ -561,7 +520,6 @@ impl MusubiProviderAttestationInventoryReaderV1 for TestMusubiAttestationInvento
         })
     }
 }
-
 fn test_musubi_inventory_item(
     network_id: NetworkId,
     provider_id: ProviderId,
@@ -586,7 +544,6 @@ fn test_musubi_inventory_item(
     };
     MusubiProviderAttestationInventoryItemV1::new(attestation).expect("valid Musubi inventory item")
 }
-
 fn exact_test_musubi_inventory_item() -> MusubiProviderAttestationInventoryItemV1 {
     test_musubi_inventory_item(
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
@@ -597,7 +554,6 @@ fn exact_test_musubi_inventory_item() -> MusubiProviderAttestationInventoryItemV
         ReplicationOrderId::new([0xC4; 32]),
     )
 }
-
 fn test_musubi_inventory_binding() -> SorafsProviderAttestationRuntimeBinding {
     SorafsProviderAttestationRuntimeBinding {
         handle: "inventory://sorafs/musubi/provider-attestation/primary".to_owned(),
@@ -605,7 +561,6 @@ fn test_musubi_inventory_binding() -> SorafsProviderAttestationRuntimeBinding {
         policy_digest: [0xD1; 32],
     }
 }
-
 fn test_governed_musubi_inventory(
     inventory: Arc<TestMusubiAttestationInventoryV1>,
     configured_binding: SorafsProviderAttestationRuntimeBinding,
@@ -619,13 +574,11 @@ fn test_governed_musubi_inventory(
         item.key().provider_id,
     )
 }
-
 enum TestSignerMutationV1 {
     Owner(AccountId),
     Policy(ProviderIngestCompletionSignerPolicyV1),
     QualificationRevision(u64),
 }
-
 struct TestGovernedCompletionSignerV1 {
     key: KeyPair,
     authority: AccountId,
@@ -635,16 +588,13 @@ struct TestGovernedCompletionSignerV1 {
     mutation: Mutex<Option<TestSignerMutationV1>>,
     sign_calls: AtomicU64,
 }
-
 impl ProviderIngestCompletionSignerV1 for TestGovernedCompletionSignerV1 {
     fn runtime_handle(&self) -> &'static str {
         "pkcs11:sorafs-provider-ingest-primary"
     }
-
     fn authority(&self) -> &AccountId {
         &self.authority
     }
-
     fn qualification(
         &self,
     ) -> std::result::Result<
@@ -658,11 +608,9 @@ impl ProviderIngestCompletionSignerV1 for TestGovernedCompletionSignerV1 {
             self.key.public_key().clone(),
         ))
     }
-
     fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
         *self.policy.lock().expect("signer policy lock")
     }
-
     fn current_eligibility(
         &self,
     ) -> std::result::Result<
@@ -676,7 +624,6 @@ impl ProviderIngestCompletionSignerV1 for TestGovernedCompletionSignerV1 {
             Err(ProviderIngestCompletionSignerErrorV1::Rejected)
         }
     }
-
     fn sign(
         &self,
         payload: TransactionPayload,
@@ -706,7 +653,6 @@ impl ProviderIngestCompletionSignerV1 for TestGovernedCompletionSignerV1 {
         })
     }
 }
-
 struct TestGovernedSignerResolverV1 {
     signer: Arc<dyn ProviderIngestCompletionSignerV1>,
     qualification: Mutex<ProviderIngestRuntimeProviderQualificationV1>,
@@ -715,7 +661,6 @@ struct TestGovernedSignerResolverV1 {
     readiness: Mutex<std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1>>,
     last_resolution_context: Mutex<Option<ProviderIngestCompletionSignerResolutionContextV1>>,
 }
-
 impl TestGovernedSignerResolverV1 {
     fn new(signer: Arc<dyn ProviderIngestCompletionSignerV1>) -> Self {
         Self {
@@ -730,12 +675,10 @@ impl TestGovernedSignerResolverV1 {
         }
     }
 }
-
 impl ProviderIngestGovernedSignerResolverRuntimeV1 for TestGovernedSignerResolverV1 {
     fn runtime_handle(&self) -> &'static str {
         "hsm:sorafs-provider-ingest-resolver"
     }
-
     fn qualification(
         &self,
     ) -> std::result::Result<
@@ -747,7 +690,6 @@ impl ProviderIngestGovernedSignerResolverRuntimeV1 for TestGovernedSignerResolve
             .lock()
             .expect("resolver qualification lock"))
     }
-
     fn signer_binding(
         &self,
     ) -> std::result::Result<
@@ -767,7 +709,6 @@ impl ProviderIngestGovernedSignerResolverRuntimeV1 for TestGovernedSignerResolve
             qualification,
         ))
     }
-
     fn check_readiness(
         &self,
     ) -> std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1> {
@@ -784,7 +725,6 @@ impl ProviderIngestGovernedSignerResolverRuntimeV1 for TestGovernedSignerResolve
         }
         *self.readiness.lock().expect("resolver readiness lock")
     }
-
     fn resolve(
         &self,
         context: ProviderIngestCompletionSignerResolutionContextV1,
@@ -814,7 +754,6 @@ impl ProviderIngestGovernedSignerResolverRuntimeV1 for TestGovernedSignerResolve
         Box::pin(async move { Ok(Some(signer)) })
     }
 }
-
 fn test_signer_policy(revision: u64) -> ProviderIngestCompletionSignerPolicyV1 {
     let digest_byte = u8::try_from(revision).unwrap_or(0xFE);
     ProviderIngestCompletionSignerPolicyV1 {
@@ -824,7 +763,6 @@ fn test_signer_policy(revision: u64) -> ProviderIngestCompletionSignerPolicyV1 {
         policy_digest: [digest_byte; 32],
     }
 }
-
 fn test_completion_payload(
     key: &KeyPair,
     provider_id: ProviderId,
@@ -863,7 +801,6 @@ fn test_completion_payload(
         .payload()
         .clone()
 }
-
 #[test]
 fn canonical_completion_payload_fixture_fits_production_floor() {
     assert_eq!(
@@ -881,7 +818,6 @@ fn canonical_completion_payload_fixture_fits_production_floor() {
         norito::to_bytes(&decoded_payload).expect("re-encode canonical completion payload"),
         payload_bytes
     );
-
     let signed = TransactionBuilder::from_payload(payload.clone())
         .expect("rebuild canonical completion transaction")
         .try_sign(key.private_key())
@@ -905,7 +841,6 @@ fn canonical_completion_payload_fixture_fits_production_floor() {
             .expect("encode repeated canonical signed completion transaction"),
         signed_bytes
     );
-
     let payload_with_envelope = u64::try_from(payload_bytes.len())
         .expect("payload length fits u64")
         .checked_add(provider_ingest_outbox_defaults::SIGNED_TRANSACTION_ENVELOPE_RESERVE_BYTES_V1)
@@ -918,7 +853,6 @@ fn canonical_completion_payload_fixture_fits_production_floor() {
             <= provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN
     );
 }
-
 fn test_governed_signer(
     policy: ProviderIngestCompletionSignerPolicyV1,
     mutation: Option<TestSignerMutationV1>,
@@ -945,7 +879,6 @@ fn test_governed_signer(
     });
     (signer, owner_authority, provider_id, payload)
 }
-
 fn test_readiness_resolver(
     readiness: std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1>,
 ) -> Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> {
@@ -955,7 +888,6 @@ fn test_readiness_resolver(
     *resolver.readiness.lock().expect("resolver readiness lock") = readiness;
     resolver
 }
-
 fn governed_signer_adapter(
     signer: Arc<TestGovernedCompletionSignerV1>,
     owner_authority: TestOwnerAuthorityV1,
@@ -980,14 +912,12 @@ fn governed_signer_adapter(
         expected_signer_binding,
     }
 }
-
 fn signer_test_cursor() -> ProviderIngestFinalizedCursorV1 {
     ProviderIngestFinalizedCursorV1 {
         height: 8,
         block_hash: [0xB2; 32],
     }
 }
-
 fn signer_resolution_context(
     provider_owner: AccountId,
 ) -> ProviderIngestCompletionSignerResolutionContextV1 {
@@ -998,7 +928,6 @@ fn signer_resolution_context(
         signer_test_cursor(),
     )
 }
-
 #[test]
 fn governed_signer_resolver_rejects_stale_advertised_binding() {
     let (signer, _owner_authority, _provider_id, _payload) =
@@ -1007,13 +936,11 @@ fn governed_signer_resolver_rejects_stale_advertised_binding() {
     let resolver = TestGovernedSignerResolverV1::new(Arc::clone(&signer));
     let mut expected = resolver.signer_binding().expect("signer binding");
     expected.qualification.adapter_revision = 2;
-
     assert_eq!(
         validate_resolver_signer_binding(&resolver, &expected),
         Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected)
     );
 }
-
 #[test]
 fn governed_signer_resolver_rejects_qualification_drift_across_readiness() {
     let (signer, _owner_authority, _provider_id, _payload) =
@@ -1028,15 +955,12 @@ fn governed_signer_resolver_rejects_qualification_drift_across_readiness() {
         .expect("resolver readiness mutation lock") = Some(
         ProviderIngestRuntimeProviderQualificationV1::new(7, [0xB3; 32]),
     );
-
     resolver.check_readiness().expect("readiness probe");
-
     assert_eq!(
         validate_resolver_qualification(&resolver, expected),
         Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected)
     );
 }
-
 #[tokio::test]
 async fn governed_signer_resolver_rechecks_qualification_after_resolution() {
     let (signer, owner_authority, provider_id, _payload) =
@@ -1065,7 +989,6 @@ async fn governed_signer_resolver_rechecks_qualification_after_resolution() {
         ),
         expected_signer_binding,
     };
-
     let expected_context = signer_resolution_context(provider_owner);
     assert!(matches!(
         adapter.resolve(expected_context.clone()).await,
@@ -1079,7 +1002,6 @@ async fn governed_signer_resolver_rechecks_qualification_after_resolution() {
         Some(expected_context)
     );
 }
-
 #[tokio::test]
 async fn governed_signer_resolver_rejects_invalid_initial_policy() {
     let (signer, owner_authority, provider_id, _payload) = test_governed_signer(
@@ -1093,7 +1015,6 @@ async fn governed_signer_resolver_rejects_invalid_initial_policy() {
     );
     let provider_owner = signer.authority().clone();
     let adapter = governed_signer_adapter(signer, owner_authority, provider_id);
-
     assert!(matches!(
         adapter
             .resolve(signer_resolution_context(provider_owner))
@@ -1101,7 +1022,6 @@ async fn governed_signer_resolver_rejects_invalid_initial_policy() {
         Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected)
     ));
 }
-
 #[tokio::test]
 async fn governed_signer_pins_assignment_revision_before_hsm_signing() {
     let (signer, owner_authority, provider_id, exact_payload) =
@@ -1113,14 +1033,12 @@ async fn governed_signer_pins_assignment_revision_before_hsm_signing() {
         .await
         .expect("resolve governed signer")
         .expect("governed signer");
-
     let signed = governed
         .sign(exact_payload.clone())
         .await
         .expect("sign exact assignment revision");
     assert_eq!(signed.payload(), &exact_payload);
     assert_eq!(signer.sign_calls.load(Ordering::SeqCst), 1);
-
     let substituted_payload = test_completion_payload(&signer.key, provider_id, 8, 2);
     assert_eq!(
         governed.sign(substituted_payload).await,
@@ -1132,7 +1050,6 @@ async fn governed_signer_pins_assignment_revision_before_hsm_signing() {
         "substituted assignment revision must not reach the HSM signer"
     );
 }
-
 #[tokio::test]
 async fn governed_signer_rejects_provider_substitution_before_hsm_signing() {
     let (signer, owner_authority, provider_id, _exact_payload) =
@@ -1144,7 +1061,6 @@ async fn governed_signer_rejects_provider_substitution_before_hsm_signing() {
         .await
         .expect("resolve governed signer")
         .expect("governed signer");
-
     let substituted_payload =
         test_completion_payload(&signer.key, ProviderId::new([0x42; 32]), 8, 1);
     assert_eq!(
@@ -1157,7 +1073,6 @@ async fn governed_signer_rejects_provider_substitution_before_hsm_signing() {
         "a completion for another provider must not reach the HSM signer"
     );
 }
-
 #[tokio::test]
 async fn governed_signer_rechecks_policy_after_signing() {
     let (signer, owner_authority, provider_id, payload) = test_governed_signer(
@@ -1171,13 +1086,11 @@ async fn governed_signer_rechecks_policy_after_signing() {
         .await
         .expect("resolve governed signer")
         .expect("governed signer");
-
     assert_eq!(
         governed.sign(payload).await,
         Err(ProviderIngestCompletionSignerErrorV1::Unavailable)
     );
 }
-
 #[tokio::test]
 async fn governed_signer_rechecks_qualification_after_signing() {
     let (signer, owner_authority, provider_id, payload) = test_governed_signer(
@@ -1191,13 +1104,11 @@ async fn governed_signer_rechecks_qualification_after_signing() {
         .await
         .expect("resolve governed signer")
         .expect("governed signer");
-
     assert_eq!(
         governed.sign(payload).await,
         Err(ProviderIngestCompletionSignerErrorV1::Unavailable)
     );
 }
-
 #[tokio::test]
 async fn governed_signer_surfaces_policy_rotation_before_authorization() {
     let (signer, owner_authority, provider_id, _payload) =
@@ -1209,16 +1120,13 @@ async fn governed_signer_surfaces_policy_rotation_before_authorization() {
         .await
         .expect("resolve governed signer")
         .expect("governed signer");
-
     *signer.policy.lock().expect("signer policy lock") = test_signer_policy(2);
-
     assert_eq!(governed.signer_policy(), test_signer_policy(2));
     assert_eq!(
         governed.current_eligibility(),
         Err(ProviderIngestCompletionSignerErrorV1::Unavailable)
     );
 }
-
 #[tokio::test]
 async fn governed_signer_reports_owner_rotation_before_authorization() {
     let replacement_key = KeyPair::try_from_seed(vec![0x33; 32], Algorithm::Ed25519)
@@ -1234,15 +1142,12 @@ async fn governed_signer_reports_owner_rotation_before_authorization() {
         .await
         .expect("resolve governed signer")
         .expect("governed signer");
-
     owner_authority.replace(replacement_owner);
-
     assert_eq!(
         governed.current_eligibility(),
         Err(ProviderIngestCompletionSignerErrorV1::Unavailable)
     );
 }
-
 #[tokio::test]
 async fn governed_signer_rechecks_owner_after_signing() {
     let replacement_key = KeyPair::try_from_seed(vec![0x32; 32], Algorithm::Ed25519)
@@ -1259,13 +1164,11 @@ async fn governed_signer_rechecks_owner_after_signing() {
         .await
         .expect("resolve governed signer")
         .expect("governed signer");
-
     assert_eq!(
         governed.sign(payload).await,
         Err(ProviderIngestCompletionSignerErrorV1::Unavailable)
     );
 }
-
 #[tokio::test]
 async fn governed_musubi_signer_rejects_each_configured_binding_mismatch() {
     let mut mismatches = Vec::new();
@@ -1278,7 +1181,6 @@ async fn governed_musubi_signer_rejects_each_configured_binding_mismatch() {
     let mut policy_digest = test_musubi_signer_binding();
     policy_digest.policy_digest = [0xA8; 32];
     mismatches.push(policy_digest);
-
     for configured_binding in mismatches {
         let (signer, owner_authority, payload) = test_musubi_signer_fixture();
         let governed = test_governed_musubi_signer(
@@ -1302,7 +1204,6 @@ async fn governed_musubi_signer_rejects_each_configured_binding_mismatch() {
         assert_eq!(signer.approval_calls.load(Ordering::SeqCst), 0);
     }
 }
-
 #[tokio::test]
 async fn governed_musubi_signer_rejects_foreign_deployment_context_before_approval() {
     let (signer, owner_authority, payload) = test_musubi_signer_fixture();
@@ -1322,7 +1223,6 @@ async fn governed_musubi_signer_rejects_foreign_deployment_context_before_approv
     );
     let mut foreign_provider = payload.clone();
     foreign_provider.binding.provider_id = ProviderId::new([0xB2; 32]);
-
     for foreign in [
         foreign_network,
         same_label_foreign_genesis,
@@ -1344,7 +1244,6 @@ async fn governed_musubi_signer_rejects_foreign_deployment_context_before_approv
     assert_eq!(signer.eligibility_calls.load(Ordering::SeqCst), 0);
     assert_eq!(signer.approval_calls.load(Ordering::SeqCst), 0);
 }
-
 #[tokio::test]
 async fn governed_musubi_signer_rejects_revoked_owner_before_any_signer_effect() {
     let (signer, owner_authority, payload) = test_musubi_signer_fixture();
@@ -1358,7 +1257,6 @@ async fn governed_musubi_signer_rejects_revoked_owner_before_any_signer_effect()
         &payload,
     );
     let request = test_musubi_request_binding(&payload);
-
     assert_eq!(
         governed
             .approve_bound(request, || signer.approve_payload(&payload))
@@ -1369,7 +1267,6 @@ async fn governed_musubi_signer_rejects_revoked_owner_before_any_signer_effect()
     assert_eq!(signer.eligibility_calls.load(Ordering::SeqCst), 0);
     assert_eq!(signer.approval_calls.load(Ordering::SeqCst), 0);
 }
-
 #[tokio::test]
 async fn governed_musubi_signer_rejects_owner_rotation_after_external_approval() {
     let (signer, owner_authority, payload) = test_musubi_signer_fixture();
@@ -1384,7 +1281,6 @@ async fn governed_musubi_signer_rejects_owner_rotation_after_external_approval()
         owner_authority,
         &payload,
     );
-
     assert_eq!(
         governed
             .approve_bound(test_musubi_request_binding(&payload), || {
@@ -1395,7 +1291,6 @@ async fn governed_musubi_signer_rejects_owner_rotation_after_external_approval()
     );
     assert_eq!(signer.approval_calls.load(Ordering::SeqCst), 1);
 }
-
 #[tokio::test]
 async fn governed_musubi_signer_rejects_adapter_drift_after_external_approval() {
     let (signer, owner_authority, payload) = test_musubi_signer_fixture();
@@ -1407,7 +1302,6 @@ async fn governed_musubi_signer_rejects_adapter_drift_after_external_approval() 
         owner_authority,
         &payload,
     );
-
     assert!(
         governed
             .approve_bound(test_musubi_request_binding(&payload), || {
@@ -1418,7 +1312,6 @@ async fn governed_musubi_signer_rejects_adapter_drift_after_external_approval() 
     );
     assert_eq!(signer.approval_calls.load(Ordering::SeqCst), 1);
 }
-
 #[tokio::test]
 async fn governed_musubi_signer_rejects_substituted_attestation() {
     let (signer, owner_authority, payload) = test_musubi_signer_fixture();
@@ -1433,7 +1326,6 @@ async fn governed_musubi_signer_rejects_substituted_attestation() {
     substituted
         .validate()
         .expect("substituted payload remains structurally valid");
-
     assert_eq!(
         governed
             .approve_bound(test_musubi_request_binding(&payload), || {
@@ -1444,7 +1336,6 @@ async fn governed_musubi_signer_rejects_substituted_attestation() {
     );
     assert_eq!(signer.approval_calls.load(Ordering::SeqCst), 1);
 }
-
 #[tokio::test]
 async fn governed_musubi_signer_accepts_exact_binding_and_preserves_replay() {
     let (signer, owner_authority, payload) = test_musubi_signer_fixture();
@@ -1455,7 +1346,6 @@ async fn governed_musubi_signer_accepts_exact_binding_and_preserves_replay() {
         &payload,
     );
     let request = test_musubi_request_binding(&payload);
-
     let first = governed
         .approve_bound(request, || signer.approve_payload(&payload))
         .await
@@ -1464,7 +1354,6 @@ async fn governed_musubi_signer_accepts_exact_binding_and_preserves_replay() {
         .approve_bound(request, || signer.approve_payload(&payload))
         .await
         .expect("replay exact Musubi attestation binding");
-
     assert_eq!(first, replay);
     assert_eq!(&first.payload, request.payload);
     first
@@ -1472,7 +1361,6 @@ async fn governed_musubi_signer_accepts_exact_binding_and_preserves_replay() {
         .expect("exact governed attestation verifies");
     assert_eq!(signer.approval_calls.load(Ordering::SeqCst), 2);
 }
-
 #[test]
 fn governed_musubi_inventory_rejects_each_configured_binding_mismatch() {
     let item = exact_test_musubi_inventory_item();
@@ -1486,12 +1374,10 @@ fn governed_musubi_inventory_rejects_each_configured_binding_mismatch() {
     let mut policy_digest = test_musubi_inventory_binding();
     policy_digest.policy_digest = [0xD2; 32];
     mismatches.push(policy_digest);
-
     for configured_binding in mismatches {
         let inventory = Arc::new(TestMusubiAttestationInventoryV1::new(item.clone()));
         let governed =
             test_governed_musubi_inventory(Arc::clone(&inventory), configured_binding, &item);
-
         assert_eq!(
             governed.qualification(),
             Err(MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected)
@@ -1501,7 +1387,6 @@ fn governed_musubi_inventory_rejects_each_configured_binding_mismatch() {
         assert_eq!(inventory.inventory_calls.load(Ordering::SeqCst), 0);
     }
 }
-
 #[tokio::test]
 async fn governed_musubi_inventory_rejects_foreign_context_before_adapter_calls() {
     let item = exact_test_musubi_inventory_item();
@@ -1535,7 +1420,6 @@ async fn governed_musubi_inventory_rejects_foreign_context_before_adapter_calls(
         scope.archive_id,
         scope.replication_order,
     );
-
     for foreign in [
         foreign_network_item,
         second_foreign_network_item,
@@ -1546,7 +1430,6 @@ async fn governed_musubi_inventory_rejects_foreign_context_before_adapter_calls(
             Err(MusubiProviderAttestationInventoryErrorV1::Rejected)
         );
     }
-
     let mut foreign_network_scope = scope.clone();
     foreign_network_scope.network_id = NetworkId::from_genesis_hash(
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new([0xE2; 32])),
@@ -1569,10 +1452,8 @@ async fn governed_musubi_inventory_rejects_foreign_context_before_adapter_calls(
         governed.get(&scope, foreign_provider_key).await,
         Err(MusubiProviderAttestationInventoryErrorV1::Rejected)
     );
-
     assert_eq!(inventory.external_call_count(), 0);
 }
-
 #[tokio::test]
 async fn governed_musubi_inventory_rejects_qualification_drift_after_put() {
     let item = exact_test_musubi_inventory_item();
@@ -1583,14 +1464,12 @@ async fn governed_musubi_inventory_rejects_qualification_drift_after_put() {
         test_musubi_inventory_binding(),
         &item,
     );
-
     assert_eq!(
         governed.put(item).await,
         Err(MusubiProviderAttestationInventoryErrorV1::Rejected)
     );
     assert_eq!(inventory.put_calls.load(Ordering::SeqCst), 1);
 }
-
 #[tokio::test]
 async fn governed_musubi_inventory_rejects_substituted_get_and_inventory_outputs() {
     let item = exact_test_musubi_inventory_item();
@@ -1631,7 +1510,6 @@ async fn governed_musubi_inventory_rejects_substituted_get_and_inventory_outputs
         test_musubi_inventory_binding(),
         &item,
     );
-
     assert_eq!(
         governed.get(&scope, key).await,
         Err(MusubiProviderAttestationInventoryErrorV1::Rejected)
@@ -1643,7 +1521,6 @@ async fn governed_musubi_inventory_rejects_substituted_get_and_inventory_outputs
     assert_eq!(inventory.get_calls.load(Ordering::SeqCst), 1);
     assert_eq!(inventory.inventory_calls.load(Ordering::SeqCst), 1);
 }
-
 #[tokio::test]
 async fn governed_musubi_inventory_fences_and_preserves_readiness_errors() {
     let item = exact_test_musubi_inventory_item();
@@ -1661,11 +1538,9 @@ async fn governed_musubi_inventory_fences_and_preserves_readiness_errors() {
             test_musubi_inventory_binding(),
             &item,
         );
-
         assert_eq!(governed.check_readiness().await, Err(expected));
         assert_eq!(inventory.readiness_calls.load(Ordering::SeqCst), 1);
     }
-
     let inventory = Arc::new(TestMusubiAttestationInventoryV1::new(item.clone()));
     inventory
         .drift_after_readiness
@@ -1680,7 +1555,6 @@ async fn governed_musubi_inventory_fences_and_preserves_readiness_errors() {
         Err(MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected)
     );
 }
-
 #[tokio::test]
 async fn governed_musubi_inventory_preserves_stable_transient_operation_failures() {
     let item = exact_test_musubi_inventory_item();
@@ -1707,7 +1581,6 @@ async fn governed_musubi_inventory_preserves_stable_transient_operation_failures
         test_musubi_inventory_binding(),
         &item,
     );
-
     assert_eq!(
         governed.put(item).await,
         Err(MusubiProviderAttestationInventoryErrorV1::Unavailable)
@@ -1721,7 +1594,6 @@ async fn governed_musubi_inventory_preserves_stable_transient_operation_failures
         Err(MusubiProviderAttestationInventoryErrorV1::Unavailable)
     );
 }
-
 #[tokio::test]
 async fn governed_musubi_inventory_accepts_exact_qualified_operations() {
     let item = exact_test_musubi_inventory_item();
@@ -1733,7 +1605,6 @@ async fn governed_musubi_inventory_accepts_exact_qualified_operations() {
         test_musubi_inventory_binding(),
         &item,
     );
-
     assert_eq!(
         governed.qualification(),
         Ok(MusubiProviderAttestationInventoryQualificationV1::new(
@@ -1761,7 +1632,6 @@ async fn governed_musubi_inventory_accepts_exact_qualified_operations() {
     assert_eq!(inventory.get_calls.load(Ordering::SeqCst), 1);
     assert_eq!(inventory.inventory_calls.load(Ordering::SeqCst), 1);
 }
-
 #[test]
 fn production_handle_validation_rejects_placeholders_and_whitespace() {
     for handle in [
@@ -1785,30 +1655,24 @@ fn production_handle_validation_rejects_placeholders_and_whitespace() {
         "https-pinned-source-pool:eu-1"
     ));
 }
-
 #[test]
 fn dependency_identity_rejects_runtime_substitution() {
     assert!(validate_dependency_identity("source", "source:eu-1", "source:eu-2").is_err());
     assert!(validate_dependency_identity("source", "source:eu-1", "source:eu-1").is_ok());
 }
-
 struct TestPoolProviderSourceV1 {
     provider_id: [u8; 32],
     runtime_handle: &'static str,
     readiness: std::result::Result<(), ProviderIngestSourceFetchErrorV1>,
 }
-
 impl ProviderIngestAuthenticatedProviderSourceV1 for TestPoolProviderSourceV1 {
     type Fetched = VerifiedProviderIngestPayloadV1;
-
     fn provider_id(&self) -> [u8; 32] {
         self.provider_id
     }
-
     fn runtime_handle(&self) -> &str {
         self.runtime_handle
     }
-
     fn qualification(
         &self,
     ) -> std::result::Result<ProviderIngestSourceQualificationV1, ProviderIngestSourceFetchErrorV1>
@@ -1818,11 +1682,9 @@ impl ProviderIngestAuthenticatedProviderSourceV1 for TestPoolProviderSourceV1 {
             self.provider_id,
         ))
     }
-
     fn check_readiness(&self) -> std::result::Result<(), ProviderIngestSourceFetchErrorV1> {
         self.readiness
     }
-
     fn fetch_provider(
         &self,
         _authorization: FinalizedProviderIngestAuthorizationV1,
@@ -1834,7 +1696,6 @@ impl ProviderIngestAuthenticatedProviderSourceV1 for TestPoolProviderSourceV1 {
         Box::pin(async { Err(ProviderIngestSourceFetchErrorV1::Unavailable) })
     }
 }
-
 fn test_runtime_source_pool(
     first_readiness: std::result::Result<(), ProviderIngestSourceFetchErrorV1>,
     second_readiness: std::result::Result<(), ProviderIngestSourceFetchErrorV1>,
@@ -1873,7 +1734,6 @@ fn test_runtime_source_pool(
     )
     .expect("test source pool")
 }
-
 struct TestAuthenticatedSourceInventoryV1 {
     provider_ids: Vec<[u8; 32]>,
     qualification: Mutex<ProviderIngestRuntimeProviderQualificationV1>,
@@ -1881,7 +1741,6 @@ struct TestAuthenticatedSourceInventoryV1 {
     qualification_after_fetch: Mutex<Option<ProviderIngestRuntimeProviderQualificationV1>>,
     readiness: Mutex<std::result::Result<(), ProviderIngestSourceFetchErrorV1>>,
 }
-
 impl TestAuthenticatedSourceInventoryV1 {
     fn new(provider_ids: Vec<[u8; 32]>) -> Self {
         Self {
@@ -1895,7 +1754,6 @@ impl TestAuthenticatedSourceInventoryV1 {
         }
     }
 }
-
 fn test_readiness_source(
     readiness: std::result::Result<(), ProviderIngestSourceFetchErrorV1>,
 ) -> Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> {
@@ -1905,7 +1763,6 @@ fn test_readiness_source(
     *source.readiness.lock().expect("source readiness lock") = readiness;
     source
 }
-
 #[derive(Debug)]
 struct TestStateFreeCheckpointRuntimeV1 {
     qualification: Mutex<ProviderIngestCheckpointProviderQualificationV1>,
@@ -1913,7 +1770,6 @@ struct TestStateFreeCheckpointRuntimeV1 {
     load_calls: AtomicU64,
     compare_and_swap_calls: AtomicU64,
 }
-
 impl TestStateFreeCheckpointRuntimeV1 {
     fn new() -> Self {
         Self {
@@ -1926,12 +1782,10 @@ impl TestStateFreeCheckpointRuntimeV1 {
         }
     }
 }
-
 impl ProviderIngestCheckpointRuntimeV1 for TestStateFreeCheckpointRuntimeV1 {
     fn handle(&self) -> &'static str {
         "sealed:sorafs-provider-ingest-primary"
     }
-
     fn qualification(
         &self,
     ) -> std::result::Result<
@@ -1944,7 +1798,6 @@ impl ProviderIngestCheckpointRuntimeV1 for TestStateFreeCheckpointRuntimeV1 {
             .lock()
             .expect("checkpoint qualification lock"))
     }
-
     fn load_latest(
         &self,
     ) -> std::result::Result<
@@ -1954,7 +1807,6 @@ impl ProviderIngestCheckpointRuntimeV1 for TestStateFreeCheckpointRuntimeV1 {
         self.load_calls.fetch_add(1, Ordering::SeqCst);
         Ok(None)
     }
-
     fn compare_and_swap_latest(
         &self,
         _expected_revision: Option<[u8; 32]>,
@@ -1964,7 +1816,6 @@ impl ProviderIngestCheckpointRuntimeV1 for TestStateFreeCheckpointRuntimeV1 {
         Ok(())
     }
 }
-
 fn state_free_preflight_fixture() -> (
     SorafsProviderIngestRuntime,
     ProviderId,
@@ -2038,7 +1889,6 @@ fn state_free_preflight_fixture() -> (
         Arc::new(TestStateFreeCheckpointRuntimeV1::new()),
     )
 }
-
 #[tokio::test]
 async fn state_free_preflight_accepts_exact_adapters_without_creating_outbox_state() {
     let (config, provider_id, source, resolver, checkpoint) = state_free_preflight_fixture();
@@ -2047,7 +1897,6 @@ async fn state_free_preflight_accepts_exact_adapters_without_creating_outbox_sta
     let source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> = source;
     let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> = resolver;
     let checkpoint_runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1> = checkpoint.clone();
-
     let _preflight = preflight_runtime_adapters(
         &config,
         provider_id,
@@ -2056,7 +1905,6 @@ async fn state_free_preflight_accepts_exact_adapters_without_creating_outbox_sta
     )
     .await
     .expect("qualify exact state-free provider-ingest adapters");
-
     assert!(
         !state_root.exists(),
         "state-free preflight must not create local outbox state"
@@ -2065,7 +1913,6 @@ async fn state_free_preflight_accepts_exact_adapters_without_creating_outbox_sta
     assert_eq!(checkpoint.load_calls.load(Ordering::SeqCst), 0);
     assert_eq!(checkpoint.compare_and_swap_calls.load(Ordering::SeqCst), 0);
 }
-
 #[tokio::test]
 async fn state_free_preflight_rejects_stale_source_without_creating_outbox_state() {
     let (config, provider_id, source, resolver, checkpoint) = state_free_preflight_fixture();
@@ -2079,7 +1926,6 @@ async fn state_free_preflight_rejects_stale_source_without_creating_outbox_state
     let source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> = source;
     let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> = resolver;
     let checkpoint_runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1> = checkpoint.clone();
-
     let result = preflight_runtime_adapters(
         &config,
         provider_id,
@@ -2087,7 +1933,6 @@ async fn state_free_preflight_rejects_stale_source_without_creating_outbox_state
         checkpoint_runtime,
     )
     .await;
-
     let error = result.err().expect("stale source qualification must fail");
     assert!(
         error
@@ -2103,7 +1948,6 @@ async fn state_free_preflight_rejects_stale_source_without_creating_outbox_state
     assert_eq!(checkpoint.load_calls.load(Ordering::SeqCst), 0);
     assert_eq!(checkpoint.compare_and_swap_calls.load(Ordering::SeqCst), 0);
 }
-
 #[tokio::test]
 async fn state_free_preflight_rejects_stale_resolver_without_creating_outbox_state() {
     let (config, provider_id, source, resolver, checkpoint) = state_free_preflight_fixture();
@@ -2117,7 +1961,6 @@ async fn state_free_preflight_rejects_stale_resolver_without_creating_outbox_sta
     let source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> = source;
     let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> = resolver;
     let checkpoint_runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1> = checkpoint.clone();
-
     let result = preflight_runtime_adapters(
         &config,
         provider_id,
@@ -2125,7 +1968,6 @@ async fn state_free_preflight_rejects_stale_resolver_without_creating_outbox_sta
         checkpoint_runtime,
     )
     .await;
-
     let error = result
         .err()
         .expect("stale resolver qualification must fail");
@@ -2143,7 +1985,6 @@ async fn state_free_preflight_rejects_stale_resolver_without_creating_outbox_sta
     assert_eq!(checkpoint.load_calls.load(Ordering::SeqCst), 0);
     assert_eq!(checkpoint.compare_and_swap_calls.load(Ordering::SeqCst), 0);
 }
-
 #[tokio::test]
 async fn state_free_preflight_rejects_stale_checkpoint_without_load_cas_or_local_state() {
     let (config, provider_id, source, resolver, checkpoint) = state_free_preflight_fixture();
@@ -2157,7 +1998,6 @@ async fn state_free_preflight_rejects_stale_checkpoint_without_load_cas_or_local
     let source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> = source;
     let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> = resolver;
     let checkpoint_runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1> = checkpoint.clone();
-
     let result = preflight_runtime_adapters(
         &config,
         provider_id,
@@ -2165,7 +2005,6 @@ async fn state_free_preflight_rejects_stale_checkpoint_without_load_cas_or_local
         checkpoint_runtime,
     )
     .await;
-
     let error = result
         .err()
         .expect("stale checkpoint qualification must fail");
@@ -2183,7 +2022,6 @@ async fn state_free_preflight_rejects_stale_checkpoint_without_load_cas_or_local
     assert_eq!(checkpoint.load_calls.load(Ordering::SeqCst), 0);
     assert_eq!(checkpoint.compare_and_swap_calls.load(Ordering::SeqCst), 0);
 }
-
 #[test]
 fn opaque_preflight_is_consumed_and_revalidated_before_worker_assembly() {
     let source = include_str!("../sorafs_provider_ingest_runtime.rs");
@@ -2200,16 +2038,13 @@ fn opaque_preflight_is_consumed_and_revalidated_before_worker_assembly() {
     let assemble = launch
         .find("assemble_native_provider_ingest_runtime")
         .expect("provider-ingest worker assembly");
-
     assert!(
         consume < revalidate && revalidate < assemble,
         "the opaque token must be consumed and all adapter pins revalidated before state-backed worker assembly"
     );
 }
-
 impl ProviderIngestAuthenticatedSourceFetchV1 for TestAuthenticatedSourceInventoryV1 {
     type Fetched = VerifiedProviderIngestPayloadV1;
-
     fn fetch(
         &self,
         _request: ProviderIngestSourceRequestV1,
@@ -2231,12 +2066,10 @@ impl ProviderIngestAuthenticatedSourceFetchV1 for TestAuthenticatedSourceInvento
         Box::pin(async { Err(ProviderIngestSourceFetchErrorV1::Unavailable) })
     }
 }
-
 impl ProviderIngestAuthenticatedSourceRuntimeV1 for TestAuthenticatedSourceInventoryV1 {
     fn runtime_handle(&self) -> &'static str {
         "https-pinned-source-pool:region-a"
     }
-
     fn qualification(
         &self,
     ) -> std::result::Result<
@@ -2248,11 +2081,9 @@ impl ProviderIngestAuthenticatedSourceRuntimeV1 for TestAuthenticatedSourceInven
             .lock()
             .expect("source qualification lock"))
     }
-
     fn source_provider_ids(&self) -> &[[u8; 32]] {
         &self.provider_ids
     }
-
     fn check_readiness(&self) -> std::result::Result<(), ProviderIngestSourceFetchErrorV1> {
         if let Some(qualification) = self
             .qualification_after_readiness
@@ -2268,7 +2099,6 @@ impl ProviderIngestAuthenticatedSourceRuntimeV1 for TestAuthenticatedSourceInven
         *self.readiness.lock().expect("source readiness lock")
     }
 }
-
 #[test]
 fn authenticated_source_inventory_is_multi_provider_canonical_and_identity_stable() {
     let local_provider_id = [0x11; 32];
@@ -2281,7 +2111,6 @@ fn authenticated_source_inventory_is_multi_provider_canonical_and_identity_stabl
         )
         .is_ok()
     );
-
     for invalid in [
         vec![[0x22; 32]],
         vec![[0; 32], [0x22; 32]],
@@ -2292,7 +2121,6 @@ fn authenticated_source_inventory_is_multi_provider_canonical_and_identity_stabl
         let source = TestAuthenticatedSourceInventoryV1::new(invalid);
         assert!(validate_authenticated_source_inventory(&source, local_provider_id, None).is_err());
     }
-
     assert!(
         validate_authenticated_source_inventory(
             &valid,
@@ -2316,7 +2144,6 @@ fn authenticated_source_inventory_is_multi_provider_canonical_and_identity_stabl
     );
     assert!(validate_authenticated_source_inventory(&oversized, local_provider_id, None).is_err());
 }
-
 #[test]
 fn authenticated_source_rejects_qualification_drift_across_readiness() {
     let source = TestAuthenticatedSourceInventoryV1::new(vec![[0x22; 32], [0x33; 32]]);
@@ -2328,15 +2155,12 @@ fn authenticated_source_rejects_qualification_drift_across_readiness() {
         .expect("source readiness mutation lock") = Some(
         ProviderIngestRuntimeProviderQualificationV1::new(6, [0xB4; 32]),
     );
-
     source.check_readiness().expect("readiness probe");
-
     assert_eq!(
         validate_authenticated_source_qualification(&source, expected),
         Err(ProviderIngestSourceFetchErrorV1::Rejected)
     );
 }
-
 #[test]
 fn source_and_resolver_qualifications_remain_independent() {
     let source = ProviderIngestRuntimeProviderQualificationV1::new(5, [0xB1; 32]);
@@ -2345,7 +2169,6 @@ fn source_and_resolver_qualifications_remain_independent() {
     assert!(resolver.is_valid());
     assert_ne!(source, resolver);
 }
-
 #[test]
 fn worker_liveness_guard_fails_readiness_closed_on_every_exit() {
     let running = Arc::new(AtomicBool::new(false));
@@ -2358,7 +2181,6 @@ fn worker_liveness_guard_fails_readiness_closed_on_every_exit() {
     assert!(!running.load(Ordering::Acquire));
     assert!(!in_flight.load(Ordering::Acquire));
 }
-
 #[test]
 fn completed_cursor_consistency_rejects_historical_and_head_forks() {
     let committed_hashes = (1_u8..=10)
@@ -2404,7 +2226,6 @@ fn completed_cursor_consistency_rejects_historical_and_head_forks() {
         &committed_hashes
     ));
 }
-
 #[test]
 fn completion_payload_anchor_accepts_an_authenticated_committed_prefix() {
     let committed_hashes = (1_u8..=10)
@@ -2415,7 +2236,6 @@ fn completion_payload_anchor_accepts_an_authenticated_committed_prefix() {
         block_hash: *committed_hashes[8].as_ref(),
     };
     let head_hash = *committed_hashes[9].as_ref();
-
     assert!(completion_payload_anchor_matches_committed_chain(
         cursor,
         9,
@@ -2448,7 +2268,6 @@ fn completion_payload_anchor_accepts_an_authenticated_committed_prefix() {
         &committed_hashes,
     ));
 }
-
 #[test]
 fn cancelling_store_wait_joins_late_writer() {
     let completed = Arc::new(AtomicBool::new(false));
@@ -2460,7 +2279,6 @@ fn cancelling_store_wait_joins_late_writer() {
     drop(BlockingStoreJoinGuardV1(Some(thread)));
     assert!(completed.load(Ordering::Acquire));
 }
-
 #[test]
 fn newly_admitted_manifest_verification_enters_logical_quarantine() {
     let exact = ProviderIngestLocalStoredV1::generic("exact-manifest".to_owned());
@@ -2468,7 +2286,6 @@ fn newly_admitted_manifest_verification_enters_logical_quarantine() {
         finish_newly_admitted_manifest_verification("exact-manifest", Ok(Some(exact.clone()))),
         Ok(exact)
     );
-
     for rejected in [
         Ok(Some(ProviderIngestLocalStoredV1::generic(
             "substituted-manifest".to_owned(),
@@ -2483,7 +2300,6 @@ fn newly_admitted_manifest_verification_enters_logical_quarantine() {
             "a permanent post-admission rejection must retain shared storage and quarantine the job"
         );
     }
-
     assert_eq!(
         finish_newly_admitted_manifest_verification(
             "exact-manifest",
@@ -2493,7 +2309,6 @@ fn newly_admitted_manifest_verification_enters_logical_quarantine() {
         "a transient post-admission read failure remains retryable"
     );
 }
-
 #[test]
 fn deadline_bounded_reader_authenticates_terminal_eof_once() {
     let payload = b"authenticated provider payload".to_vec();
@@ -2502,7 +2317,6 @@ fn deadline_bounded_reader_authenticates_terminal_eof_once() {
         TestTerminalReaderV1::new(payload.clone(), TestTerminalBehaviorV1::Eof);
     let mut reader =
         DeadlineBoundedReaderV1::new(Box::new(inner), Duration::from_secs(1), expected_len);
-
     let mut observed = Vec::new();
     reader
         .read_to_end(&mut observed)
@@ -2510,7 +2324,6 @@ fn deadline_bounded_reader_authenticates_terminal_eof_once() {
     assert_eq!(observed, payload);
     assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
     assert_eq!(terminal_probe_width.load(Ordering::SeqCst), 1);
-
     let mut trailing = [0_u8; 8];
     assert_eq!(reader.read(&mut trailing).expect("cached EOF"), 0);
     assert_eq!(
@@ -2519,7 +2332,6 @@ fn deadline_bounded_reader_authenticates_terminal_eof_once() {
         "authenticated EOF must not re-enter the underlying transport"
     );
 }
-
 #[test]
 fn deadline_bounded_reader_rejects_premature_eof() {
     let payload = b"short".to_vec();
@@ -2528,7 +2340,6 @@ fn deadline_bounded_reader_rejects_premature_eof() {
         TestTerminalReaderV1::new(payload.clone(), TestTerminalBehaviorV1::Eof);
     let mut reader =
         DeadlineBoundedReaderV1::new(Box::new(inner), Duration::from_secs(1), expected_len);
-
     let mut observed = Vec::new();
     let error = reader
         .read_to_end(&mut observed)
@@ -2536,7 +2347,6 @@ fn deadline_bounded_reader_rejects_premature_eof() {
     assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
     assert_eq!(observed, payload);
     assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
-
     let mut trailing = [0_u8; 1];
     assert_eq!(
         reader
@@ -2547,7 +2357,6 @@ fn deadline_bounded_reader_rejects_premature_eof() {
     );
     assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
 }
-
 #[test]
 fn deadline_bounded_reader_propagates_terminal_verification_failures() {
     for (kind, message) in [
@@ -2573,7 +2382,6 @@ fn deadline_bounded_reader_propagates_terminal_verification_failures() {
             .read_exact(&mut observed)
             .expect("read exact authorized bytes");
         assert_eq!(observed, payload);
-
         let mut trailing = [0_u8; 8];
         let error = reader
             .read(&mut trailing)
@@ -2582,7 +2390,6 @@ fn deadline_bounded_reader_propagates_terminal_verification_failures() {
         assert_eq!(error.to_string(), message);
         assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
         assert_eq!(terminal_probe_width.load(Ordering::SeqCst), 1);
-
         assert_eq!(
             reader
                 .read(&mut trailing)
@@ -2593,7 +2400,6 @@ fn deadline_bounded_reader_propagates_terminal_verification_failures() {
         assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
     }
 }
-
 #[test]
 fn deadline_bounded_reader_rejects_extra_bytes_at_terminal_probe() {
     let payload = b"exact bytes".to_vec();
@@ -2606,7 +2412,6 @@ fn deadline_bounded_reader_rejects_extra_bytes_at_terminal_probe() {
     reader
         .read_exact(&mut observed)
         .expect("read exact authorized bytes");
-
     let mut trailing = [0_u8; 8];
     assert_eq!(
         reader
@@ -2617,7 +2422,6 @@ fn deadline_bounded_reader_rejects_extra_bytes_at_terminal_probe() {
     );
     assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
     assert_eq!(terminal_probe_width.load(Ordering::SeqCst), 1);
-
     assert_eq!(
         reader
             .read(&mut trailing)
@@ -2627,7 +2431,6 @@ fn deadline_bounded_reader_rejects_extra_bytes_at_terminal_probe() {
     );
     assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
 }
-
 #[test]
 fn deadline_bounded_reader_checks_deadline_after_terminal_probe() {
     let payload = b"exact bytes".to_vec();
@@ -2651,7 +2454,6 @@ fn deadline_bounded_reader_checks_deadline_after_terminal_probe() {
     reader
         .read_exact(&mut observed)
         .expect("read exact authorized bytes before deadline");
-
     let mut trailing = [0_u8; 8];
     assert_eq!(
         reader
@@ -2675,7 +2477,6 @@ fn deadline_bounded_reader_checks_deadline_after_terminal_probe() {
         "sticky timeout must not re-enter the underlying transport"
     );
 }
-
 #[test]
 fn archive_binding_storage_failures_are_permanent() {
     for error in [
@@ -2698,7 +2499,6 @@ fn archive_binding_storage_failures_are_permanent() {
             ProviderIngestLocalStorageErrorV1::Permanent
         );
     }
-
     for error in [
         ChunkStoreError::UnexpectedEof {
             chunk_index: 0,
@@ -2717,7 +2517,6 @@ fn archive_binding_storage_failures_are_permanent() {
         );
     }
 }
-
 #[test]
 fn admitted_musubi_verification_classifies_storage_failures() {
     assert_eq!(
@@ -2770,7 +2569,6 @@ fn admitted_musubi_verification_classifies_storage_failures() {
     assert!(!admitted_payload_read_error_is_retryable(
         io::ErrorKind::PermissionDenied
     ));
-
     let transient = StorageError::Io(io::Error::new(
         io::ErrorKind::Interrupted,
         "injected transient storage read",
@@ -2780,7 +2578,6 @@ fn admitted_musubi_verification_classifies_storage_failures() {
         ProviderIngestLocalStorageErrorV1::Retryable
     );
 }
-
 #[tokio::test]
 async fn daemon_dependency_probe_allows_one_ready_source_for_request_failover() {
     let source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> = Arc::new(
@@ -2793,10 +2590,8 @@ async fn daemon_dependency_probe_allows_one_ready_source_for_request_failover() 
         Duration::from_secs(1),
     )
     .await;
-
     assert_eq!(result, RuntimeDependencyProbeV1::Ready);
 }
-
 #[tokio::test]
 async fn daemon_dependency_probe_preserves_rejected_and_unavailable_outcomes() {
     let unavailable = probe_runtime_dependencies(
@@ -2807,7 +2602,6 @@ async fn daemon_dependency_probe_preserves_rejected_and_unavailable_outcomes() {
     )
     .await;
     assert_eq!(unavailable, RuntimeDependencyProbeV1::Unavailable);
-
     let source_rejected = probe_runtime_dependencies(
         test_readiness_source(Err(ProviderIngestSourceFetchErrorV1::Rejected)),
         test_readiness_resolver(Ok(())),
@@ -2816,7 +2610,6 @@ async fn daemon_dependency_probe_preserves_rejected_and_unavailable_outcomes() {
     )
     .await;
     assert_eq!(source_rejected, RuntimeDependencyProbeV1::Rejected);
-
     let signer_unavailable = probe_runtime_dependencies(
         test_readiness_source(Ok(())),
         test_readiness_resolver(Err(
@@ -2827,7 +2620,6 @@ async fn daemon_dependency_probe_preserves_rejected_and_unavailable_outcomes() {
     )
     .await;
     assert_eq!(signer_unavailable, RuntimeDependencyProbeV1::Unavailable);
-
     let signer_rejected = probe_runtime_dependencies(
         test_readiness_source(Ok(())),
         test_readiness_resolver(Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected)),
@@ -2837,7 +2629,6 @@ async fn daemon_dependency_probe_preserves_rejected_and_unavailable_outcomes() {
     .await;
     assert_eq!(signer_rejected, RuntimeDependencyProbeV1::Rejected);
 }
-
 #[tokio::test]
 async fn hung_readiness_probe_fails_at_explicit_deadline() {
     let result = bounded_blocking_readiness_probe(Duration::from_millis(1), || {
@@ -2847,7 +2638,6 @@ async fn hung_readiness_probe_fails_at_explicit_deadline() {
     .await;
     assert_eq!(result, RuntimeDependencyProbeV1::TimedOut);
 }
-
 #[tokio::test]
 async fn panicked_readiness_probe_is_distinct_from_transient_timeout() {
     let result = bounded_blocking_readiness_probe(Duration::from_secs(1), || {
@@ -2856,7 +2646,6 @@ async fn panicked_readiness_probe_is_distinct_from_transient_timeout() {
     .await;
     assert_eq!(result, RuntimeDependencyProbeV1::Panicked);
 }
-
 #[test]
 fn provider_attestation_journal_policy_maps_exactly_and_revalidates_actual_config() {
     let configured = SorafsProviderAttestationJournal {
@@ -2899,14 +2688,12 @@ fn provider_attestation_journal_policy_maps_exactly_and_revalidates_actual_confi
             max_cas_retries: configured.max_cas_retries,
         }
     );
-
     let mut invalid = configured;
     invalid.max_entries = 0;
     assert!(
         provider_attestation_journal_policy(&invalid).is_err(),
         "programmatically constructed actual config must not bypass policy validation"
     );
-
     invalid.max_entries = 8;
     invalid.inventory.policy_digest = [0; 32];
     assert!(
@@ -2914,7 +2701,6 @@ fn provider_attestation_journal_policy_maps_exactly_and_revalidates_actual_confi
         "programmatically constructed actual config must not bypass binding validation"
     );
 }
-
 #[test]
 fn only_temporary_finalized_ledger_loss_is_a_retryable_tick_error() {
     assert!(provider_ingest_tick_error_is_transient(

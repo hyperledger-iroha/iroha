@@ -64,7 +64,7 @@ test("ToriiClient emits an exact ASCII alias credential and a verifiable signatu
   assert.equal(verifyEd25519(message, signature, publicKey), true);
 });
 
-test("ToriiClient transports an exact canonical I105 credential as UTF-8 header bytes", async () => {
+test("ToriiClient transports an exact canonical I105 credential as canonical hex", async () => {
   const captured = [];
   const fetchImpl = async (url, init) => {
     captured.push({ url, init });
@@ -84,10 +84,8 @@ test("ToriiClient transports an exact canonical I105 credential as UTF-8 header 
 
   assert.equal(captured.length, 1);
   assert.equal(
-    Buffer.from(captured[0].init.headers["X-Iroha-Account"], "latin1").toString(
-      "utf8",
-    ),
-    accountId,
+    captured[0].init.headers["X-Iroha-Account"],
+    AccountAddress.parseEncoded(accountId).address.canonicalHex(),
   );
 });
 

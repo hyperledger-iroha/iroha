@@ -1,9 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "./common.rs"]
 pub(crate) mod common;
-
-use std::sync::Arc;
-
 use common::*;
 use iroha_core::{
     block::CommittedBlock, prelude::*, state::State, sumeragi::network_topology::Topology,
@@ -11,13 +8,12 @@ use iroha_core::{
 use iroha_crypto::Algorithm;
 use iroha_data_model::peer::PeerId;
 use iroha_test_samples::gen_account_in;
-
+use std::sync::Arc;
 pub struct StateApplyBlocks {
     state: State,
     blocks: Vec<CommittedBlock>,
     topology: Topology,
 }
-
 impl StateApplyBlocks {
     /// Create [`State`] and blocks for benchmarking
     ///
@@ -38,14 +34,12 @@ impl StateApplyBlocks {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let mut state = build_state(rt, &alice_id, alice_keypair.private_key());
         seed_benchmark_domains(&mut state, &domain_ids, &alice_id);
-
         let nth = 10;
         let instructions = [
             populate_state(&domain_ids, &account_ids, &asset_definition_ids, &alice_id),
             delete_every_nth(&domain_ids, &account_ids, &asset_definition_ids, nth),
             restore_every_nth(&domain_ids, &account_ids, &asset_definition_ids, nth),
         ];
-
         let blocks = {
             // Create empty state because it will be changed during creation of block
             let mut state = build_state(rt, &alice_id, alice_keypair.private_key());
@@ -74,14 +68,12 @@ impl StateApplyBlocks {
                 })
                 .collect::<Vec<_>>()
         };
-
         Self {
             state,
             blocks,
             topology,
         }
     }
-
     /// Run benchmark body.
     ///
     /// # Errors

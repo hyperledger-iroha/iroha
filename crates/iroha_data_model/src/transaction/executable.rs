@@ -1,28 +1,22 @@
 //! Types representing executable parts of a transaction.
-
-use std::{fmt, iter::IntoIterator, ops::Deref, vec::Vec};
-
-use ::base64::{Engine as _, engine::general_purpose::STANDARD};
-use iroha_data_model_derive::model;
-use iroha_primitives::const_vec::ConstVec;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-use norito::{NoritoDeserialize, core as ncore};
-
 pub use self::model::*;
 #[cfg(test)]
 use crate::isi::Instruction;
 use crate::{
     isi::InstructionBox, smart_contract::ContractAddress, transaction::signed::FeePaymentIntent,
 };
-
+use ::base64::{Engine as _, engine::general_purpose::STANDARD};
+use iroha_data_model_derive::model;
+use iroha_primitives::const_vec::ConstVec;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use norito::{NoritoDeserialize, core as ncore};
+use std::{fmt, iter::IntoIterator, ops::Deref, vec::Vec};
 #[model]
 mod model {
+    use super::*;
     use iroha_crypto::Hash;
     use iroha_primitives::const_vec::ConstVec;
-
-    use super::*;
-
     /// An executable transaction or trigger payload.
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
@@ -52,7 +46,6 @@ mod model {
         /// [`ExecutableBatchItem`], keeping the mixed form explicit and bounded.
         Batch(ConstVec<ExecutableBatchItem>),
     }
-
     /// One ordered item in [`Executable::Batch`].
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
@@ -64,7 +57,6 @@ mod model {
         /// Invoke one deployed contract instance by reference.
         ContractCall(ContractInvocation),
     }
-
     /// Wrapper for IVM bytecode used by [`Executable::Ivm`].
     ///
     /// Uses **base64** (de-)serialization format.
@@ -79,7 +71,6 @@ mod model {
         /// Raw Kotodama bytecode blob.
         pub(super) Vec<u8>,
     );
-
     /// Wrapper for proved IVM executions.
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
@@ -95,13 +86,11 @@ mod model {
         /// Commitment to gas policy compliance (without revealing exact gas usage).
         pub gas_policy_commitment: Hash,
     }
-
     /// Bounded canonical bytes for one schema-bound Kotodama argument record.
     #[derive(derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
     #[norito(reuse_archived)]
     #[repr(transparent)]
     pub struct ContractArgumentRecord(pub(super) Vec<u8>);
-
     /// By-reference invocation of a deployed contract instance.
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
@@ -133,19 +122,16 @@ mod model {
         pub arguments: Option<ContractArgumentRecord>,
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for ExecutableBatchItem {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical::<Self>(bytes)
     }
 }
-
 /// Maximum signed argument-record bytes accepted by transaction decoding.
 ///
 /// This wire limit is independent from compiler source-size limits. It is
 /// enforced before allocating the record payload.
 pub const MAX_CONTRACT_ARGUMENT_RECORD_BYTES: usize = 1024 * 1024;
-
 /// Error returned when a signed contract argument record exceeds its wire cap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("contract argument record is {actual} bytes; maximum is {max}")]
@@ -155,7 +141,6 @@ pub struct ContractArgumentRecordTooLarge {
     /// Maximum accepted record length.
     pub max: usize,
 }
-
 impl ContractArgumentRecord {
     /// Construct a bounded signed argument record.
     ///
@@ -172,13 +157,11 @@ impl ContractArgumentRecord {
         }
         Ok(Self(bytes))
     }
-
     /// Borrow the canonical record bytes.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
-
     /// Mutably borrow the fixed-length record bytes.
     ///
     /// This cannot violate the allocation bound because the slice length is
@@ -186,50 +169,40 @@ impl ContractArgumentRecord {
     pub fn as_mut_bytes(&mut self) -> &mut [u8] {
         &mut self.0
     }
-
     /// Consume the wrapper and return its canonical bytes.
     #[must_use]
     pub fn into_bytes(self) -> Vec<u8> {
         self.0
     }
 }
-
 impl AsRef<[u8]> for ContractArgumentRecord {
     fn as_ref(&self) -> &[u8] {
         self.as_bytes()
     }
 }
-
 impl Deref for ContractArgumentRecord {
     type Target = [u8];
-
     fn deref(&self) -> &Self::Target {
         self.as_bytes()
     }
 }
-
 impl TryFrom<Vec<u8>> for ContractArgumentRecord {
     type Error = ContractArgumentRecordTooLarge;
-
     fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
         Self::try_new(bytes)
     }
 }
-
 impl ncore::NoritoSerialize for ContractArgumentRecord {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         ncore::NoritoSerialize::serialize(&self.0, writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         ncore::NoritoSerialize::encoded_len_hint(&self.0)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         ncore::NoritoSerialize::encoded_len_exact(&self.0)
     }
 }
-
 impl<'de> NoritoDeserialize<'de> for ContractArgumentRecord {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         // Norito's public decode functions, Option decoder, and generated
@@ -239,7 +212,6 @@ impl<'de> NoritoDeserialize<'de> for ContractArgumentRecord {
         Self::try_deserialize(archived)
             .expect("ContractArgumentRecord deserialization must enforce its wire bound")
     }
-
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
@@ -250,7 +222,6 @@ impl<'de> NoritoDeserialize<'de> for ContractArgumentRecord {
         Ok(value)
     }
 }
-
 impl<'de> ncore::DecodeFromSlice<'de> for ContractArgumentRecord {
     fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), ncore::Error> {
         let (len, offset) = ncore::read_seq_len_slice(bytes)?;
@@ -264,14 +235,18 @@ impl<'de> ncore::DecodeFromSlice<'de> for ContractArgumentRecord {
         Ok((Self(payload.to_vec()), end))
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for ContractArgumentRecord {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.0, out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ContractArgumentRecord {
     fn json_deserialize(
@@ -300,7 +275,6 @@ impl norito::json::JsonDeserialize for ContractArgumentRecord {
         sequence.finish()?;
         Ok(Self(bytes))
     }
-
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
         let items = value.as_array().ok_or_else(|| {
             norito::json::Error::Message("contract arguments must be a byte array".to_owned())
@@ -319,11 +293,9 @@ impl norito::json::JsonDeserialize for ContractArgumentRecord {
         Ok(Self(bytes))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for Executable {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         const INSTRUCTIONS_TAG: u32 = 0;
-
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
@@ -334,7 +306,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Executable {
                 .map_err(|_| norito::core::Error::LengthMismatch)?;
             return Ok((decoded, used));
         }
-
         let tag_bytes = bytes
             .get(..core::mem::size_of::<u32>())
             .ok_or(norito::core::Error::LengthMismatch)?;
@@ -351,7 +322,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Executable {
                 .map_err(|_| norito::core::Error::LengthMismatch)?;
             return Ok((decoded, used));
         }
-
         let mut offset = core::mem::size_of::<u32>();
         let remaining = bytes
             .get(offset..)
@@ -376,7 +346,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Executable {
         Ok((Self::Instructions(instructions), offset))
     }
 }
-
 // Collect any iterator of instructions into an executable, avoiding
 // double-boxing when items are already `InstructionBox`.
 impl<A> FromIterator<A> for Executable
@@ -388,7 +357,6 @@ where
         Self::Instructions(items.into())
     }
 }
-
 impl<T, A> From<T> for Executable
 where
     T: IntoIterator<Item = A>,
@@ -398,38 +366,32 @@ where
         Executable::from_iter(collection)
     }
 }
-
 impl From<IvmBytecode> for Executable {
     fn from(source: IvmBytecode) -> Self {
         Self::Ivm(source)
     }
 }
-
 impl From<ContractInvocation> for Executable {
     fn from(source: ContractInvocation) -> Self {
         Self::ContractCall(source)
     }
 }
-
 impl From<InstructionBox> for ExecutableBatchItem {
     fn from(source: InstructionBox) -> Self {
         Self::Instruction(source)
     }
 }
-
 impl From<ContractInvocation> for ExecutableBatchItem {
     fn from(source: ContractInvocation) -> Self {
         Self::ContractCall(source)
     }
 }
-
 /// Errors raised while requiring a signature-bound transaction gas limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransactionGasLimitError {
     /// The signed fee intent does not declare an executable gas limit.
     Missing,
 }
-
 impl fmt::Display for TransactionGasLimitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -437,9 +399,7 @@ impl fmt::Display for TransactionGasLimitError {
         }
     }
 }
-
 impl std::error::Error for TransactionGasLimitError {}
-
 /// Return the optional nonzero executable gas limit bound by the signed fee intent.
 #[must_use]
 pub const fn parse_transaction_gas_limit(fee_payment: &FeePaymentIntent) -> Option<u64> {
@@ -448,7 +408,6 @@ pub const fn parse_transaction_gas_limit(fee_payment: &FeePaymentIntent) -> Opti
         None => None,
     }
 }
-
 /// Return the executable gas limit bound by the signed fee intent.
 ///
 /// # Errors
@@ -462,26 +421,22 @@ pub const fn require_transaction_gas_limit(
         None => Err(TransactionGasLimitError::Missing),
     }
 }
-
 impl AsRef<[u8]> for IvmBytecode {
     fn as_ref(&self) -> &[u8] {
         self.0.as_ref()
     }
 }
-
 impl IvmBytecode {
     /// Create [`Self`] from raw IVM bytecode
     #[inline]
     pub const fn from_compiled(blob: Vec<u8>) -> Self {
         Self(blob)
     }
-
     /// Size of the smart contract in bytes
     pub fn size_bytes(&self) -> usize {
         self.0.len()
     }
 }
-
 impl Executable {
     /// Returns `true` if the executable kind requires a signature-bound gas limit.
     pub fn requires_transaction_gas_limit(&self) -> bool {
@@ -493,7 +448,6 @@ impl Executable {
             Self::ContractCall(_) | Self::Ivm(_) | Self::IvmProved(_) => true,
         }
     }
-
     /// Return the ordered mixed-batch items, if this is a batch executable.
     #[must_use]
     pub fn batch_items(&self) -> Option<&ConstVec<ExecutableBatchItem>> {
@@ -502,7 +456,6 @@ impl Executable {
             _ => None,
         }
     }
-
     /// Iterate native instructions explicitly supplied by the transaction author.
     ///
     /// This includes the legacy instruction executable and instruction items in
@@ -517,7 +470,6 @@ impl Executable {
             Self::Batch(items) => Some(items.as_ref()),
             _ => None,
         };
-
         instructions
             .into_iter()
             .flatten()
@@ -527,7 +479,6 @@ impl Executable {
             }))
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ExecutableBatchItem {
     fn json_deserialize(
@@ -547,7 +498,6 @@ impl norito::json::JsonDeserialize for ExecutableBatchItem {
         Ok(item)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for ExecutableBatchItem {
     fn write_json(&self, out: &mut String) {
@@ -566,16 +516,39 @@ impl norito::json::FastJsonWrite for ExecutableBatchItem {
         }
         out.push('}');
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        match self {
+            Self::Instruction(instruction) => {
+                out.push_str("\"Instruction\":")?;
+                norito::json::JsonSerialize::json_serialize_to(instruction, out)?;
+            }
+            Self::ContractCall(invocation) => {
+                out.push_str("\"ContractCall\":")?;
+                norito::json::JsonSerialize::json_serialize_to(invocation, out)?;
+            }
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for IvmBytecode {
     fn write_json(&self, out: &mut String) {
-        let encoded = STANDARD.encode(&self.0);
-        norito::json::JsonSerialize::json_serialize(&encoded, out);
+        norito::json::write_base64_json(&self.0, out);
+    }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_base64_json_to(&self.0, out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for IvmBytecode {
     fn json_deserialize(
@@ -588,7 +561,6 @@ impl norito::json::JsonDeserialize for IvmBytecode {
         Ok(Self(bytes))
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for IvmProved {
     fn write_json(&self, out: &mut String) {
@@ -610,8 +582,24 @@ impl norito::json::FastJsonWrite for IvmProved {
         norito::json::JsonSerialize::json_serialize(&self.gas_policy_commitment, out);
         out.push('}');
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"bytecode\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.bytecode, out)?;
+        out.push_str(",\"overlay\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.overlay, out)?;
+        out.push_str(",\"events_commitment\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.events_commitment, out)?;
+        out.push_str(",\"gas_policy_commitment\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.gas_policy_commitment, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for IvmProved {
     fn json_deserialize(
@@ -672,7 +660,6 @@ impl norito::json::JsonDeserialize for IvmProved {
         })
     }
 }
-
 impl Executable {
     /// Number of explicit native instructions carried by this executable.
     ///
@@ -689,7 +676,6 @@ impl Executable {
                 .count() as u64,
         }
     }
-
     /// Returns bytecode size if this is `Executable::Ivm`, otherwise `0`.
     pub fn ivm_size_bytes(&self) -> usize {
         match self {
@@ -699,7 +685,6 @@ impl Executable {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for Executable {
     fn json_deserialize(
@@ -790,7 +775,6 @@ impl norito::json::JsonDeserialize for Executable {
         Ok(exec)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for Executable {
     fn write_json(&self, out: &mut String) {
@@ -840,31 +824,64 @@ impl norito::json::FastJsonWrite for Executable {
         }
         out.push('}');
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        match self {
+            Executable::Instructions(instructions) => {
+                out.push_str("\"Instructions\":")?;
+                norito::json::JsonSerialize::json_serialize_to(instructions, out)?;
+            }
+            Executable::ContractCall(invocation) => {
+                out.push_str("\"ContractCall\":")?;
+                norito::json::JsonSerialize::json_serialize_to(invocation, out)?;
+            }
+            Executable::Ivm(bytecode) => {
+                out.push_str("\"Ivm\":")?;
+                norito::json::JsonSerialize::json_serialize_to(bytecode, out)?;
+            }
+            Executable::IvmProved(proved) => {
+                out.push_str("\"IvmProved\":")?;
+                norito::json::JsonSerialize::json_serialize_to(proved, out)?;
+            }
+            Executable::Batch(items) => {
+                out.push_str("\"Batch\":")?;
+                norito::json::JsonSerialize::json_serialize_to(items, out)?;
+            }
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
-
-    use norito::core::DecodeFromSlice as _;
-
     use super::*;
-
+    use norito::core::DecodeFromSlice as _;
+    use std::any::Any;
     #[derive(Debug, Clone)]
     struct DummyInstruction(pub u32);
-
     impl crate::seal::Instruction for DummyInstruction {}
-
     impl Instruction for DummyInstruction {
         fn dyn_encode(&self) -> Vec<u8> {
             Vec::new()
         }
-
+        fn dyn_write_frame(
+            &self,
+            _writer: &mut dyn std::io::Write,
+        ) -> Result<(), norito::core::Error> {
+            Err(norito::core::Error::LengthMismatch)
+        }
+        fn dyn_frame_len(&self) -> Result<usize, norito::core::Error> {
+            Err(norito::core::Error::LengthMismatch)
+        }
         fn as_any(&self) -> &dyn Any {
             self
         }
     }
-
     // Provide a local conversion so tests can collect DummyInstruction
     // directly into an Executable without extra boilerplate.
     impl From<DummyInstruction> for InstructionBox {
@@ -872,14 +889,46 @@ mod tests {
             Instruction::into_instruction_box(Box::new(i))
         }
     }
-
     #[test]
     fn ivm_bytecode_debug_repr_should_contain_just_len() {
         // IVM bytecode debug output should only show its length
         let ivm_bytecode = IvmBytecode::from_compiled(vec![0, 1, 2, 3, 4]);
         assert_eq!(format!("{ivm_bytecode:?}"), "IVM bytecode(len = 5)");
     }
-
+    #[cfg(feature = "json")]
+    #[test]
+    fn manual_executable_json_families_have_closed_bounds() {
+        fn assert_bounded<T: norito::json::JsonSerialize>(value: &T) {
+            let expected = norito::json::to_json(value).expect("serialize ordinary JSON");
+            assert_eq!(
+                norito::json::to_json_bounded(value, expected.len()).expect("exact JSON bound"),
+                expected
+            );
+            assert_eq!(
+                norito::json::to_json_bounded(value, expected.len() - 1),
+                Err(norito::json::BoundedJsonError::BodyTooLarge)
+            );
+        }
+        let arguments =
+            ContractArgumentRecord::try_new(vec![0, 1, 2, 255]).expect("bounded argument record");
+        assert_bounded(&arguments);
+        let bytecode = IvmBytecode::from_compiled(vec![0, 1, 2, 3, 4]);
+        assert_bounded(&bytecode);
+        assert_bounded(&Executable::Ivm(bytecode.clone()));
+        let proved = IvmProved {
+            bytecode,
+            overlay: Vec::<InstructionBox>::new().into(),
+            events_commitment: iroha_crypto::Hash::new(b"events"),
+            gas_policy_commitment: iroha_crypto::Hash::new(b"gas"),
+        };
+        assert_bounded(&proved);
+        assert_bounded(&Executable::IvmProved(proved));
+        let instruction = InstructionBox::from(crate::isi::Log::new(
+            crate::Level::INFO,
+            "bounded".to_owned(),
+        ));
+        assert_bounded(&ExecutableBatchItem::Instruction(instruction));
+    }
     #[test]
     fn executable_kind_reports_gas_limit_requirement() {
         assert!(
@@ -899,7 +948,6 @@ mod tests {
             })
             .requires_transaction_gas_limit()
         );
-
         let instruction_only_batch = Executable::Batch(
             vec![ExecutableBatchItem::Instruction(
                 crate::isi::Log::new(crate::Level::INFO, "batched log".into()).into(),
@@ -907,7 +955,6 @@ mod tests {
             .into(),
         );
         assert!(!instruction_only_batch.requires_transaction_gas_limit());
-
         let mixed_batch = Executable::Batch(
             vec![ExecutableBatchItem::ContractCall(ContractInvocation {
                 contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
@@ -921,7 +968,6 @@ mod tests {
         );
         assert!(mixed_batch.requires_transaction_gas_limit());
     }
-
     #[test]
     fn executable_batch_preserves_wire_tags_and_order() {
         let first: InstructionBox = crate::isi::Log::new(crate::Level::INFO, "first".into()).into();
@@ -942,7 +988,6 @@ mod tests {
             ]
             .into(),
         );
-
         let encoded = batch.encode();
         assert_eq!(&encoded[..4], &4_u32.to_le_bytes());
         let mut input = encoded.as_slice();
@@ -950,7 +995,6 @@ mod tests {
         assert_eq!(decoded, batch);
         assert!(input.is_empty());
         assert_eq!(decoded.instruction_count(), 2);
-
         let Executable::Batch(items) = decoded else {
             panic!("expected mixed executable batch");
         };
@@ -962,38 +1006,32 @@ mod tests {
         assert_eq!(&items[2].encode()[..4], &0_u32.to_le_bytes());
         assert_eq!(batch.explicit_instructions().count(), 2);
     }
-
     #[test]
     fn contract_argument_record_rejects_oversized_length_before_allocation() {
         assert!(
             ContractArgumentRecord::try_new(vec![0; MAX_CONTRACT_ARGUMENT_RECORD_BYTES + 1])
                 .is_err()
         );
-
         let declared = u64::try_from(MAX_CONTRACT_ARGUMENT_RECORD_BYTES + 1)
             .expect("argument bound fits u64")
             .to_le_bytes();
         assert!(ContractArgumentRecord::decode_from_slice(&declared).is_err());
-
         let mut truncated = 4_u64.to_le_bytes().to_vec();
         truncated.extend_from_slice(&[1, 2]);
         assert!(ContractArgumentRecord::decode_from_slice(&truncated).is_err());
     }
-
     #[test]
     fn contract_argument_record_accepts_and_roundtrips_the_exact_wire_cap() {
         let record =
             ContractArgumentRecord::try_new(vec![0xA5; MAX_CONTRACT_ARGUMENT_RECORD_BYTES])
                 .expect("the signed argument-record cap is inclusive");
         assert_eq!(record.as_bytes().len(), MAX_CONTRACT_ARGUMENT_RECORD_BYTES);
-
         let encoded = norito::to_bytes(&record).expect("encode exact-cap argument record");
         let decoded = norito::decode_from_bytes::<ContractArgumentRecord>(&encoded)
             .expect("decode exact-cap argument record");
         assert_eq!(decoded, record);
         assert_eq!(decoded.as_bytes().len(), MAX_CONTRACT_ARGUMENT_RECORD_BYTES);
     }
-
     #[test]
     fn contract_argument_record_uses_the_bounded_vec_wire_layout() {
         let record =
@@ -1007,7 +1045,6 @@ mod tests {
             record
         );
     }
-
     #[test]
     fn containing_contract_invocation_uses_fallible_bounded_decode() {
         let record_bytes = [1_u8, 2, 3, 4];
@@ -1036,7 +1073,6 @@ mod tests {
             .position(|window| window == needle)
             .expect("embedded argument sequence");
         encoded[count_offset..count_offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
-
         let decoded =
             std::panic::catch_unwind(|| norito::decode_from_bytes::<ContractInvocation>(&encoded));
         assert!(
@@ -1048,7 +1084,6 @@ mod tests {
             "derived containing-type decode must call the bounded fallible decoder"
         );
     }
-
     #[test]
     fn transaction_gas_limit_reads_signed_fee_intent() {
         let without_limit = FeePaymentIntent::authority(Vec::new(), None);
@@ -1063,7 +1098,6 @@ mod tests {
             42
         );
     }
-
     #[test]
     fn transaction_gas_limit_requires_explicit_signed_value() {
         let intent = FeePaymentIntent::authority(Vec::new(), None);
@@ -1076,7 +1110,6 @@ mod tests {
             "missing gas limit in fee payment intent"
         );
     }
-
     #[test]
     fn executable_from_iter_should_preserve_order() {
         let executable = Executable::from_iter(vec![
@@ -1084,11 +1117,9 @@ mod tests {
             DummyInstruction(2),
             DummyInstruction(3),
         ]);
-
         let Executable::Instructions(instructions) = executable else {
             panic!("expected instructions variant");
         };
-
         let ids: Vec<u32> = instructions
             .into_iter()
             .map(|instruction| {
@@ -1099,25 +1130,20 @@ mod tests {
                     .0
             })
             .collect();
-
         assert_eq!(ids, vec![1, 2, 3]);
     }
-
     #[test]
     fn executable_instructions_decode_from_slice_roundtrips() {
         let instruction: InstructionBox =
             crate::isi::Log::new(crate::Level::INFO, "slice executable".into()).into();
         let executable = Executable::from_iter([instruction]);
         let bytes = norito::codec::encode_adaptive(&executable);
-
         let (decoded, used) =
             <Executable as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
                 .expect("decode executable instructions");
-
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, executable);
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn ivm_bytecode_should_serialize_and_deserialize() {
@@ -1126,7 +1152,6 @@ mod tests {
         let deserialized: IvmBytecode = norito::json::from_str(&json).expect("deserialize");
         assert_eq!(bytecode, deserialized);
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn executable_json_roundtrip_for_all_variants() {
@@ -1136,12 +1161,10 @@ mod tests {
         let json = norito::json::to_json(&executable).expect("serialize instructions");
         let deserialized: Executable = norito::json::from_str(&json).expect("deserialize");
         assert_eq!(executable, deserialized);
-
         let ivm_executable = Executable::Ivm(IvmBytecode::from_compiled(vec![9, 8, 7]));
         let json = norito::json::to_json(&ivm_executable).expect("serialize ivm");
         let deserialized: Executable = norito::json::from_str(&json).expect("deserialize ivm");
         assert_eq!(ivm_executable, deserialized);
-
         let contract_call_executable = Executable::ContractCall(ContractInvocation {
             contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                 .parse()
@@ -1169,7 +1192,6 @@ mod tests {
             norito::json::from_value::<Executable>(missing_hash).is_err(),
             "first-release JSON must not decode a ContractInvocation without expected_code_hash"
         );
-
         let proved_executable = Executable::IvmProved(IvmProved {
             bytecode: IvmBytecode::from_compiled(vec![7, 7, 7]),
             overlay: Vec::<InstructionBox>::new().into(),
@@ -1179,7 +1201,6 @@ mod tests {
         let json = norito::json::to_json(&proved_executable).expect("serialize proved");
         let deserialized: Executable = norito::json::from_str(&json).expect("deserialize proved");
         assert_eq!(proved_executable, deserialized);
-
         let batch_executable = Executable::Batch(
             vec![
                 ExecutableBatchItem::Instruction(

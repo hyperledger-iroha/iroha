@@ -1,5 +1,4 @@
 // Crash-safe, capacity-bounded lane-history compaction.
-
 impl Kura {
     fn compact_lane_histories_through_merge_frontier_locked(
         &self,

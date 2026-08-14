@@ -1,13 +1,10 @@
 //! First-run onboarding for the Mochi desktop shell.
-
 use super::*;
-
 impl MochiApp {
     pub(super) fn render_first_run_wizard(&mut self, ctx: &egui::Context) {
         if !self.first_run_wizard.open {
             return;
         }
-
         egui::Window::new("Welcome to Mochi")
             .collapsible(false)
             .resizable(false)
@@ -20,7 +17,6 @@ impl MochiApp {
                     "This is the friendly local-chain cockpit. Choose a topology, point Mochi at a workspace, and launch.",
                 );
                 ui.add_space(12.0);
-
                 ui.label(RichText::new("Topology").strong());
                 ui.horizontal_wrapped(|ui| {
                     for preset in [ProfilePreset::FourPeerBft] {
@@ -58,14 +54,12 @@ impl MochiApp {
                             });
                     }
                 });
-
                 ui.add_space(12.0);
                 ui.label(RichText::new("Workspace").strong());
                 ui.text_edit_singleline(&mut self.first_run_wizard.workspace_input);
                 ui.small(
                     "Mochi writes `.env.local` and `.mochi/generated/*` here, and keeps peer state under `.mochi/sandbox/<profile>`.",
                 );
-
                 ui.add_space(12.0);
                 ui.checkbox(
                     &mut self.first_run_wizard.enable_nexus,
@@ -74,7 +68,6 @@ impl MochiApp {
                 if self.first_run_wizard.enable_nexus {
                     ui.small("Nexus uses the always-on first-release DA/RBC pipeline.");
                 }
-
                 ui.add_space(16.0);
                 if ui
                     .add(
@@ -88,14 +81,12 @@ impl MochiApp {
                 }
             });
     }
-
     fn launch_first_run_wizard(&mut self) {
         let workspace = self.first_run_wizard.workspace_input.trim();
         if workspace.is_empty() {
             self.last_error = Some("Choose a workspace directory before launching.".to_owned());
             return;
         }
-
         self.settings_data_root_input = workspace.to_owned();
         self.settings_profile_input = self.first_run_wizard.preset.slug().to_owned();
         self.settings_nexus_enabled = self.first_run_wizard.enable_nexus;

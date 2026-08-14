@@ -16,7 +16,7 @@ path = "src/bin/kagami_mock.rs"
 required-features = ["dev-tools"]
 
 [features]
-dev-tools = ["mochi-core/test-support"]
+dev-tools = ["mochi-core/test"]
 
 [dependencies]
 color-eyre = { workspace = true }

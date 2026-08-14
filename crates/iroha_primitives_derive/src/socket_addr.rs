@@ -1,35 +1,28 @@
-use std::net;
-
 use manyhow::Result;
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use quote::quote;
+use std::net;
 use syn::{Token, bracketed, parse::ParseStream};
-
 /// Stringify [`TokenStream`], without inserting any spaces in between
 fn stringify_tokens(tokens: TokenStream) -> String {
     let mut result = String::new();
-
     for token_tree in tokens {
         match token_tree {
             TokenTree::Group(g) => {
                 let inner = stringify_tokens(g.stream());
-
                 let bracketed = match g.delimiter() {
                     Delimiter::Parenthesis => format!("({inner})"),
                     Delimiter::Brace => format!("{{{inner}}}"),
                     Delimiter::Bracket => format!("[{inner}]"),
                     Delimiter::None => inner,
                 };
-
                 result.push_str(&bracketed);
             }
             o => result.push_str(&o.to_string()),
         }
     }
-
     result
 }
-
 enum IpAddress {
     IPv4 {
         ip_tokens: TokenStream,
@@ -43,14 +36,11 @@ enum IpAddress {
         ip_tokens: TokenStream,
     },
 }
-
 impl IpAddress {
     fn parse_v4(input: ParseStream) -> syn::Result<Self> {
         input.step(|cursor| {
             let mut rest = *cursor;
-
             let mut ip_tokens = TokenStream::new();
-
             while let Some((tt, next)) = rest.token_tree() {
                 match tt {
                     TokenTree::Punct(punct) if punct.as_char() == ':' => {
@@ -62,11 +52,9 @@ impl IpAddress {
                     }
                 }
             }
-
             Err(cursor.error("Socket address must have a colon in it"))
         })
     }
-
     fn parse_v6(input: ParseStream) -> syn::Result<Self> {
         let ip_tokens;
         Ok(IpAddress::IPv6 {
@@ -74,7 +62,6 @@ impl IpAddress {
             ip_tokens: ip_tokens.parse()?,
         })
     }
-
     fn parse_tokens(&self) -> syn::Result<net::IpAddr> {
         match self {
             IpAddress::IPv4 { ip_tokens } => {
@@ -104,11 +91,9 @@ impl IpAddress {
         }
     }
 }
-
 impl syn::parse::Parse for IpAddress {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let lookahead = input.lookahead1();
-
         if lookahead.peek(syn::token::Bracket) {
             Self::parse_v6(input)
         } else {
@@ -116,32 +101,26 @@ impl syn::parse::Parse for IpAddress {
         }
     }
 }
-
 struct SocketAddress {
     ip: IpAddress,
     #[allow(unused)]
     colon: Token![:],
     port: syn::Expr,
 }
-
 impl syn::parse::Parse for SocketAddress {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let ip = input.parse::<IpAddress>()?;
         let colon = input.parse::<Token![:]>()?;
         let port = input.parse::<syn::Expr>()?;
-
         Ok(SocketAddress { ip, colon, port })
     }
 }
-
 // it's fine, these are just segments of IPv6 addresses
 #[allow(clippy::many_single_char_names)]
 pub fn socket_addr_impl(input: TokenStream) -> Result<TokenStream> {
     let socket_address = syn::parse2::<SocketAddress>(input)?;
-
     let ip_address = socket_address.ip.parse_tokens()?;
     let port = socket_address.port;
-
     Ok(match ip_address {
         net::IpAddr::V4(v4) => {
             let [a, b, c, d] = v4.octets();
@@ -167,13 +146,10 @@ pub fn socket_addr_impl(input: TokenStream) -> Result<TokenStream> {
         }
     })
 }
-
 #[cfg(test)]
 mod tests {
-    use manyhow::ToTokensError;
-
     use super::*;
-
+    use manyhow::ToTokensError;
     #[test]
     fn parse_ipv4() {
         assert_eq!(
@@ -191,7 +167,6 @@ mod tests {
             .to_string()
         );
     }
-
     #[test]
     fn parse_ipv6() {
         assert_eq!(
@@ -207,7 +182,6 @@ mod tests {
                 .to_string()
         );
     }
-
     #[test]
     fn parse_port_expression() {
         assert_eq!(
@@ -227,7 +201,6 @@ mod tests {
             .to_string()
         );
     }
-
     #[test]
     fn error_parens() {
         assert_eq!(
@@ -238,7 +211,6 @@ mod tests {
                 .to_string()
         );
     }
-
     #[test]
     fn error_extra_tokens() {
         assert_eq!(

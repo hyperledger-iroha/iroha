@@ -1,8 +1,5 @@
 //! Stress tests for the transaction queue to guard against Arc drain panics.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
-use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, thread, time::Duration};
-
 use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_core::{
     kura::Kura,
@@ -14,20 +11,17 @@ use iroha_core::{
 use iroha_crypto::KeyPair;
 use iroha_data_model::{domain::Domain, prelude::*};
 use nonzero_ext::nonzero;
-
+use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, thread, time::Duration};
 fn checked_random_queue_stress_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked queue stress transaction keypair")
 }
-
 #[test]
 fn queue_stress_fixture_uses_checked_randomness() {
     let _key_pair = checked_random_queue_stress_keypair();
 }
-
 fn build_state() -> (State, NetworkId, AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-
     let key_pair = checked_random_queue_stress_keypair();
     let (public_key, _) = key_pair.clone().into_parts();
     let domain_id: DomainId =
@@ -36,14 +30,11 @@ fn build_state() -> (State, NetworkId, AccountId, KeyPair) {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty());
-
     let chain_id = ChainId::from("queue-stress-chain");
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain_id.clone());
     let network_id = *state.network_id_ref();
-
     (state, network_id, account_id, key_pair)
 }
-
 fn queue_config(capacity: usize, ttl: Duration) -> QueueConfig {
     QueueConfig {
         capacity: NonZeroUsize::new(capacity).expect("non-zero capacity"),
@@ -52,7 +43,6 @@ fn queue_config(capacity: usize, ttl: Duration) -> QueueConfig {
         ..QueueConfig::default()
     }
 }
-
 fn make_transaction(
     network_id: &NetworkId,
     authority: &AccountId,
@@ -70,7 +60,6 @@ fn make_transaction(
     let tx = builder.sign(key_pair.private_key());
     AcceptedTransaction::new_unchecked(Cow::Owned(tx))
 }
-
 #[test]
 fn expired_transactions_drain_without_panic() {
     let (state, chain_id, authority, key_pair) = build_state();
@@ -79,7 +68,6 @@ fn expired_transactions_drain_without_panic() {
         queue_config(4, Duration::from_secs(1)),
         events_sender,
     ));
-
     // Transactions expire quickly, triggering queue drain paths that previously panicked when
     // draining Arc-backed transactions with outstanding clones.
     let iterations = 32;
@@ -94,14 +82,11 @@ fn expired_transactions_drain_without_panic() {
         queue
             .push(tx, state.view())
             .expect("queue accepts new transaction");
-
         thread::sleep(Duration::from_millis(30));
-
         let mut guards: Vec<TransactionGuard> = Vec::new();
         let view = state.view();
         queue.get_transactions_for_block(&view, nonzero!(1_usize), &mut guards);
         drop(view);
-
         assert!(guards.is_empty(), "expired tx should not remain available");
         assert_eq!(queue.queued_len(), 0, "queue drained expired transaction");
     }

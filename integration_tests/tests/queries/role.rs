@@ -1,19 +1,16 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests queries for retrieving roles and their identifiers.
-
-use std::{
-    collections::HashSet,
-    thread::sleep,
-    time::{Duration, Instant},
-};
-
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_executor_data_model::permission::account::CanModifyAccountMetadata;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
-
+use std::{
+    collections::HashSet,
+    thread::sleep,
+    time::{Duration, Instant},
+};
 fn create_role_ids() -> [RoleId; 5] {
     [
         "a".parse().expect("Valid"),
@@ -23,22 +20,18 @@ fn create_role_ids() -> [RoleId; 5] {
         "e".parse().expect("Valid"),
     ]
 }
-
 fn start_network(
     context: &'static str,
 ) -> Option<(sandbox::SerializedNetwork, tokio::runtime::Runtime)> {
     sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context).unwrap()
 }
-
 #[test]
 fn find_roles() -> Result<()> {
     let Some((network, rt)) = start_network(stringify!(find_roles)) else {
         return Ok(());
     };
     let test_client = network.client();
-
     let role_ids = create_role_ids();
-
     // Registering roles
     let register_roles = role_ids
         .iter()
@@ -57,9 +50,7 @@ fn find_roles() -> Result<()> {
         return Ok(());
     }
     rt.block_on(async { network.ensure_blocks(1).await })?;
-
     let role_ids = HashSet::from(role_ids);
-
     // Checking results
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
@@ -87,19 +78,15 @@ fn find_roles() -> Result<()> {
         }
         sleep(Duration::from_millis(250));
     }
-
     Ok(())
 }
-
 #[test]
 fn find_role_ids() -> Result<()> {
     let Some((network, _rt)) = start_network(stringify!(find_role_ids)) else {
         return Ok(());
     };
     let test_client = network.client();
-
     let role_ids = create_role_ids();
-
     // Registering roles
     let register_roles = role_ids
         .iter()
@@ -117,9 +104,7 @@ fn find_role_ids() -> Result<()> {
     {
         return Ok(());
     }
-
     let role_ids = HashSet::from(role_ids);
-
     // Checking results
     let found_role_ids = match sandbox::handle_result(
         test_client
@@ -132,22 +117,17 @@ fn find_role_ids() -> Result<()> {
         None => return Ok(()),
     };
     let found_role_ids = found_role_ids.into_iter().collect::<HashSet<_>>();
-
     assert!(role_ids.is_subset(&found_role_ids));
-
     Ok(())
 }
-
 #[test]
 fn find_role_by_id() -> Result<()> {
     let Some((network, _rt)) = start_network(stringify!(find_role_by_id)) else {
         return Ok(());
     };
     let test_client = network.client();
-
     let role_id: RoleId = "root".parse().expect("Valid");
     let new_role = Role::new(role_id.clone(), ALICE_ID.clone());
-
     // Registering role
     let register_role = Register::role(new_role.clone());
     if sandbox::handle_result(
@@ -161,7 +141,6 @@ fn find_role_by_id() -> Result<()> {
     {
         return Ok(());
     }
-
     let found_role = match sandbox::handle_result(
         test_client
             .query(FindRoles::new())
@@ -175,43 +154,34 @@ fn find_role_by_id() -> Result<()> {
             .expect("role should exist"),
         None => return Ok(()),
     };
-
     assert_eq!(found_role.id(), new_role.id());
     assert!(found_role.permissions().next().is_none());
-
     Ok(())
 }
-
 #[test]
 fn find_unregistered_role_by_id() {
     let Some((network, _rt)) = start_network(stringify!(find_unregistered_role_by_id)) else {
         return;
     };
     let test_client = network.client();
-
     let role_id: RoleId = "root".parse().expect("Valid");
-
     let found_role = test_client
         .query(FindRoles::new())
         .execute_all()
         .unwrap()
         .into_iter()
         .find(|role| role.id() == &role_id);
-
     // Not found
     assert!(found_role.is_none());
 }
-
 #[test]
 fn find_roles_by_account_id() -> Result<()> {
     let Some((network, _rt)) = start_network(stringify!(find_roles_by_account_id)) else {
         return Ok(());
     };
     let test_client = network.client();
-
     let role_ids = create_role_ids();
     let alice_id = ALICE_ID.clone();
-
     // Registering roles
     let register_roles = role_ids
         .iter()
@@ -235,9 +205,7 @@ fn find_roles_by_account_id() -> Result<()> {
     {
         return Ok(());
     }
-
     let role_ids = HashSet::from(role_ids);
-
     // Checking results
     let found_role_ids = match sandbox::handle_result(
         test_client
@@ -250,8 +218,6 @@ fn find_roles_by_account_id() -> Result<()> {
         None => return Ok(()),
     };
     let found_role_ids = found_role_ids.into_iter().collect::<HashSet<_>>();
-
     assert!(role_ids.is_subset(&found_role_ids));
-
     Ok(())
 }

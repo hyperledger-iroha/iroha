@@ -1,9 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! End-to-end check that privacy proofs attached to transactions can satisfy
 //! lane compliance policies requiring advertised commitments.
-
-use std::{collections::BTreeSet, sync::Arc};
-
 use eyre::Result;
 use iroha_core::{
     compliance::{LaneComplianceContext, LaneComplianceEngine, LaneComplianceEvaluation},
@@ -23,18 +20,16 @@ use iroha_data_model::{
     },
 };
 use iroha_test_samples::ALICE_ID;
-
+use std::{collections::BTreeSet, sync::Arc};
 #[test]
 fn lane_privacy_proof_allows_compliance() -> Result<()> {
     let lane_id = LaneId::new(5);
-
     // Build a manifest status with a registered Merkle commitment.
     let first_leaf = [0xAA_u8; 32];
     let merkle_proof = MerkleProof::from_audit_path_bytes(0, vec![[0xBB_u8; 32]]);
     let merkle_root = MerkleWitness::new(first_leaf, merkle_proof.clone())
         .implied_root(8)
         .expect("valid lane proof must produce a root");
-
     let commitment_id = LaneCommitmentId::new(9);
     let manifest = LaneManifestStatus {
         lane: lane_id,
@@ -51,7 +46,6 @@ fn lane_privacy_proof_allows_compliance() -> Result<()> {
         )],
     };
     let registry = LanePrivacyRegistry::from_statuses(&[manifest]);
-
     // Attach a matching privacy proof and verify it against the registry.
     let proof = LanePrivacyProof {
         commitment_id,
@@ -65,7 +59,6 @@ fn lane_privacy_proof_allows_compliance() -> Result<()> {
         verified.contains(&commitment_id),
         "expected verified commitments to include the attachment id"
     );
-
     // Build a lane compliance policy that requires the same commitment id.
     let policy = LaneCompliancePolicy {
         id: LaneCompliancePolicyId::new(Hash::prehashed([0x11; 32])),
@@ -91,7 +84,6 @@ fn lane_privacy_proof_allows_compliance() -> Result<()> {
         metadata: Default::default(),
     };
     let engine = LaneComplianceEngine::from_policies(vec![policy], false)?;
-
     // Evaluate with a verified commitment.
     let verified_set = verified;
     let ctx = LaneComplianceContext {
@@ -108,7 +100,6 @@ fn lane_privacy_proof_allows_compliance() -> Result<()> {
         engine.evaluate(&ctx),
         LaneComplianceEvaluation::Allowed(_)
     ));
-
     // Evaluate with no proof to ensure the policy denies the transaction.
     let empty_verified = BTreeSet::new();
     let ctx_missing_proof = LaneComplianceContext {
@@ -119,6 +110,5 @@ fn lane_privacy_proof_allows_compliance() -> Result<()> {
         engine.evaluate(&ctx_missing_proof),
         LaneComplianceEvaluation::Denied(_)
     ));
-
     Ok(())
 }

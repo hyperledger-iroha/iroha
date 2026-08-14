@@ -34,7 +34,6 @@ import {
   NetworkId,
   noritoEncodeMultisigContractCallProposeRequest,
   normalizeAccountId,
-  signEd25519,
   verifyEd25519,
   ValidationError,
   ValidationErrorCode,
@@ -62,8 +61,19 @@ import {
 import { registerToriiClientGovernanceTests } from "./toriiClientGovernanceTests.js";
 import { registerToriiClientConnectSessionTests } from "./toriiClientConnectSessionTests.js";
 import {
+  registerToriiClientBoundedResponseTests,
+  registerToriiClientDistributionMemoryTests,
+} from "./toriiClientMemoryBoundsTests.js";
+import {
+  assertFlattenedAliasSelector,
+  cloneFixture,
   createSseResponse,
   fileExists,
+  makeTestOperatorSigningContext,
+  noritoFramePayload,
+  readCompactLength,
+  readNoritoFieldPayload,
+  readU64Length,
   withEnv,
 } from "./toriiClientTestHelpers.js";
 
@@ -105,10 +115,13 @@ const VK_SIGNING_NETWORK_ID = NetworkId.parse(
 const VK_LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
   VK_SIGNING_NETWORK_ID,
 );
+const ISO_OPERATOR_SIGNING_CONTEXT = makeTestOperatorSigningContext(VK_SIGNING_NETWORK_ID);
 class ToriiClient extends SelectedToriiClient {
   constructor(baseUrl, options = {}) {
     super(baseUrl, {
       localSigningContext: VK_LOCAL_SIGNING_CONTEXT,
+      operatorSigningContext: ISO_OPERATOR_SIGNING_CONTEXT,
+      canonicalRequestAuth: APPLICATION_CANONICAL_AUTH,
       ...options,
     });
   }
@@ -194,10 +207,6 @@ function expectedProductionBackendRejectionPattern(backend) {
   return /unsupported production verifier backend/;
 }
 
-function cloneFixture(value) {
-  return JSON.parse(JSON.stringify(value));
-}
-
 function chunkFetchPlan(
   chunkFetchSpecs,
   payloadDigestBlake3Hex = "11".repeat(32),
@@ -265,82 +274,6 @@ function noncanonicalStandardBase64PadBitAlias(encoded) {
   assert.notEqual(value, -1);
   chars[index] = alphabet[value ^ 0x01];
   return chars.join("");
-}
-
-function readU64Length(buffer, offset, label) {
-  assert.ok(offset + 8 <= buffer.length, `${label} length prefix is in bounds`);
-  const value = buffer.readBigUInt64LE(offset);
-  assert.ok(value <= BigInt(Number.MAX_SAFE_INTEGER), `${label} length fits JS number`);
-  return { length: Number(value), bytes: 8 };
-}
-
-function readCompactLength(buffer, offset, label) {
-  let value = 0n;
-  let shift = 0n;
-  let cursor = offset;
-  for (; cursor < buffer.length; cursor += 1) {
-    const byte = buffer[cursor];
-    value |= BigInt(byte & 0x7f) << shift;
-    if ((byte & 0x80) === 0) {
-      assert.ok(value <= BigInt(Number.MAX_SAFE_INTEGER), `${label} length fits JS number`);
-      return { length: Number(value), bytes: cursor + 1 - offset };
-    }
-    shift += 7n;
-  }
-  assert.fail(`${label} compact length prefix is unterminated`);
-}
-
-function readNoritoFieldPayload(buffer, offset, label, compactLength) {
-  const { length, bytes } = compactLength
-    ? readCompactLength(buffer, offset, label)
-    : readU64Length(buffer, offset, label);
-  const start = offset + bytes;
-  const end = start + length;
-  assert.ok(end <= buffer.length, `${label} payload is in bounds`);
-  return { payload: buffer.subarray(start, end), offset: end };
-}
-
-function noritoFramePayload(body, label) {
-  const buffer = Buffer.from(body);
-  assert.equal(buffer.subarray(0, 4).toString("ascii"), "NRT0");
-  const { length: payloadLength } = readU64Length(buffer, 23, `${label}.payloadLength`);
-  assert.equal(buffer.length, 40 + payloadLength);
-  return {
-    flags: buffer[39],
-    payload: buffer.subarray(40),
-  };
-}
-
-function assertFlattenedAliasSelector(body, alias, label) {
-  const { flags, payload } = noritoFramePayload(body, label);
-  const compactLength = (flags & 0x02) !== 0;
-  const multisigAccountId = readNoritoFieldPayload(
-    payload,
-    0,
-    `${label}.multisig_account_id`,
-    compactLength,
-  );
-  assert.deepEqual([...multisigAccountId.payload], [0]);
-  const multisigAccountAlias = readNoritoFieldPayload(
-    payload,
-    multisigAccountId.offset,
-    `${label}.multisig_account_alias`,
-    compactLength,
-  );
-  assert.equal(multisigAccountAlias.payload[0], 1);
-  const aliasOption = readNoritoFieldPayload(
-    multisigAccountAlias.payload,
-    1,
-    `${label}.multisig_account_alias.option`,
-    compactLength,
-  );
-  const aliasString = readNoritoFieldPayload(
-    aliasOption.payload,
-    0,
-    `${label}.multisig_account_alias.string`,
-    compactLength,
-  );
-  assert.equal(aliasString.payload.toString("utf8"), alias);
 }
 
 function assertContractCallPayloadJson(body, expected, label) {
@@ -488,6 +421,7 @@ function canonicalReadOptions(options = {}) {
     },
   };
 }
+const SORAFS_CANONICAL_AUTH = Object.freeze(canonicalReadOptions().canonicalAuth);
 
 function ivmProveOptions(options = {}) {
   return {
@@ -547,6 +481,10 @@ const FIXTURE_VAULT_ID = fixtureAccountId("vault");
 const FIXTURE_MERCHANT_ID = fixtureAccountId("merchant");
 const FIXTURE_ISSUER_ID = fixtureAccountId("issuer");
 const FIXTURE_AUTHORITY_ID = fixtureAccountId("authority");
+const APPLICATION_CANONICAL_AUTH = Object.freeze({
+  accountId: FIXTURE_AUTHORITY_ID,
+  privateKey: Buffer.alloc(32, 0x5a),
+});
 const FIXTURE_COUNCIL_TEST_ID = fixtureAccountId("council", "test");
 const FIXTURE_ALICE_FORMS = fixtureAccountForms("alice");
 const FIXTURE_BOB_FORMS = fixtureAccountForms("bob");
@@ -1549,7 +1487,7 @@ function bufferToBase64Url(buffer) {
 
 test("ToriiClient constructor enforces option shapes", () => {
   assert.throws(
-    () => new ToriiClient(BASE_URL, "invalid"),
+    () => new SourceToriiClient(BASE_URL, "invalid"),
     /ToriiClient options must be a plain object/,
   );
 
@@ -2387,27 +2325,7 @@ test("submitIsoPacs008 rejects invalid contentType overrides", async () => {
   );
 });
 
-test("submitIsoPacs008 forwards retryProfile to fetch options", async () => {
-  let captured;
-  const submissionPayload = createIsoSubmissionPayload({ message_id: "RP1" });
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("fetch should be mocked");
-    },
-  });
-  client._request = async (_method, _url, init = {}) => {
-    captured = init;
-    return createResponse({
-      status: 202,
-      jsonData: submissionPayload,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  await client.submitIsoPacs008("<xml/>", { retryProfile: "iso-bridge" });
-  assert.equal(captured?.retryProfile, "iso-bridge");
-});
-
-test("submitIsoPacs008 forwards selected ISO profile header", async () => {
+test("submitIsoPacs008 forwards selected ISO profile query", async () => {
   let captured;
   const submissionPayload = createIsoSubmissionPayload({ message_id: "PROFILE1" });
   const client = new ToriiClient(BASE_URL, {
@@ -2424,7 +2342,16 @@ test("submitIsoPacs008 forwards selected ISO profile header", async () => {
     });
   };
   await client.submitIsoPacs008("<xml/>", { profile: "swift-cbpr-plus" });
-  assert.equal(captured?.headers["X-Iroha-Iso-Profile"], "swift-cbpr-plus");
+  assert.deepEqual(captured?.params, { profile: "swift-cbpr-plus" });
+  assert.equal(captured?.headers["X-Iroha-Iso-Profile"], undefined);
+  assert.equal(captured?.requireIsoOperatorAuth, true);
+  await assert.rejects(
+    () =>
+      client.submitIsoPacs008("<xml/>", {
+        profile: " Swift-CBPR-Plus",
+      }),
+    /canonical lowercase profile id/u,
+  );
 });
 
 test("submitIsoPacs008 rejects invalid retryProfile overrides", async () => {
@@ -3047,8 +2974,8 @@ test("getSorafsPinManifestTyped rejects non-integer status timestamps", async ()
   );
 });
 
-test("listSorafsAliases normalizes response and applies filters", async () => {
-  let capturedUrl;
+test("listSorafsAliases signs, normalizes response, and applies filters", async () => {
+  let captured;
   const manifestHex = "a".repeat(64);
   const aliasRecord = {
     alias: "sora/docs",
@@ -3067,8 +2994,8 @@ test("listSorafsAliases normalizes response and applies filters", async () => {
     cache_evaluation: { decision: "serve" },
     lineage: { head_hex: manifestHex },
   };
-  const fetchImpl = async (url) => {
-    capturedUrl = url;
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
     return createResponse({
       status: 200,
       jsonData: {
@@ -3088,9 +3015,12 @@ test("listSorafsAliases normalizes response and applies filters", async () => {
     manifestDigestHex: `0x${manifestHex}`,
     limit: "5",
     offset: 10n,
+    canonicalAuth: SORAFS_CANONICAL_AUTH,
   });
-  assert.ok(capturedUrl?.startsWith(`${BASE_URL}/v1/sorafs/aliases`));
-  const parsed = new URL(capturedUrl);
+  assert.ok(captured?.url?.startsWith(`${BASE_URL}/v1/sorafs/aliases`));
+  assert.equal(captured?.init?.headers?.["X-Iroha-Account"], CANONICAL_AUTH_ALIAS);
+  assert.ok(captured?.init?.headers?.["X-Iroha-Signature"]);
+  const parsed = new URL(captured.url);
   assert.equal(parsed.searchParams.get("namespace"), "Sora");
   assert.equal(parsed.searchParams.get("manifest_digest"), manifestHex);
   assert.equal(parsed.searchParams.get("limit"), "5");
@@ -3261,8 +3191,8 @@ test("listSorafsPinManifests rejects retired shapes and forged page cursors", as
   );
 });
 
-test("listSorafsReplicationOrders normalizes response and validates status filter", async () => {
-  let capturedUrl;
+test("listSorafsReplicationOrders signs, normalizes response, and validates status filter", async () => {
+  let captured;
   const manifestHex = "b".repeat(64);
   const orderHex = "c".repeat(64);
   const providerHex = "d".repeat(64);
@@ -3285,8 +3215,8 @@ test("listSorafsReplicationOrders normalizes response and validates status filte
     ],
     providers: [providerHex],
   };
-  const fetchImpl = async (url) => {
-    capturedUrl = url;
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
     return createResponse({
       status: 200,
       jsonData: {
@@ -3305,16 +3235,22 @@ test("listSorafsReplicationOrders normalizes response and validates status filte
     status: "Pending",
     manifestDigestHex: manifestHex,
     limit: 20,
+    canonicalAuth: SORAFS_CANONICAL_AUTH,
   });
-  assert.ok(capturedUrl?.startsWith(`${BASE_URL}/v1/sorafs/replication`));
-  const parsed = new URL(capturedUrl);
+  assert.ok(captured?.url?.startsWith(`${BASE_URL}/v1/sorafs/replication`));
+  assert.equal(captured?.init?.headers?.["X-Iroha-Account"], CANONICAL_AUTH_ALIAS);
+  assert.ok(captured?.init?.headers?.["X-Iroha-Signature"]);
+  const parsed = new URL(captured.url);
   assert.equal(parsed.searchParams.get("status"), "pending");
   assert.equal(parsed.searchParams.get("manifest_digest"), manifestHex);
   assert.equal(parsed.searchParams.get("limit"), "20");
   assert.equal(result.replication_orders[0].order_id_hex, orderHex);
   assert.equal(result.replication_orders[0].receipts[0].provider_hex, providerHex);
   await assert.rejects(
-    () => client.listSorafsReplicationOrders({ status: "finished" }),
+    () => client.listSorafsReplicationOrders({
+      status: "finished",
+      canonicalAuth: SORAFS_CANONICAL_AUTH,
+    }),
     (error) => {
       assert(error instanceof ValidationError);
       assert.equal(error.code, ValidationErrorCode.INVALID_STRING);
@@ -4027,11 +3963,11 @@ test("SoraFS reputation witness auth is exact and signed streams do not replay",
   const latest = await witnessClient.getSorafsReputationLatest({
     headers: {
       "X-Iroha-Witness": witness,
-      "X-Iroha-Account": "reputation-reader@sora",
+      "X-Iroha-Account": SAMPLE_ACCOUNT_ID,
     },
   });
   assert.equal(latest, null);
-  assert.equal(witnessCalls[0]?.init?.headers?.["X-Iroha-Witness"], witness);
+  assert.deepEqual([witnessCalls[0]?.init?.headers?.["X-Iroha-Witness"], witnessCalls[0]?.init?.headers?.["X-Iroha-Account"]], [witness, AccountAddress.parseEncoded(SAMPLE_ACCOUNT_ID).address.canonicalHex()]);
 
   await assert.rejects(
     () =>
@@ -4562,12 +4498,7 @@ test("SoraFS orderbook WebSocket helpers require and preserve full finalized cur
   assert.equal(socket.closed, true);
 });
 
-test("SoraFS orderbook canonical dist matches the reviewed source", () => {
-  assert.deepEqual(
-    readFileSync(new URL("../dist/toriiClient.js", import.meta.url)),
-    readFileSync(new URL("../src/toriiClient.js", import.meta.url)),
-  );
-});
+registerToriiClientDistributionMemoryTests({ assert, test });
 
 test("getUaidPortfolio normalizes UAID literals and dataspace payloads", async () => {
   let capturedUrl;
@@ -4771,7 +4702,7 @@ test("publishSpaceDirectoryManifest posts manifest payloads with normalized keys
     authority: FIXTURE_AUTHORITY_ID,
     manifest,
     reason: "rotation audit",
-  });
+  }, { canonicalAuth: APPLICATION_CANONICAL_AUTH });
   assert.equal(captured.url, `${BASE_URL}/v1/space-directory/manifests`);
   assert.equal(captured.init.method, "POST");
   const parsedBody = JSON.parse(captured.init.body.toString());
@@ -4811,7 +4742,7 @@ test("publishSpaceDirectoryManifest canonicalizes manifest payloads", async () =
   await client.publishSpaceDirectoryManifest({
     authority: FIXTURE_AUTHORITY_ID,
     manifest: manifestInput,
-  });
+  }, { canonicalAuth: APPLICATION_CANONICAL_AUTH });
   const parsed = JSON.parse(captured.init.body.toString());
   assert.equal(captured.url, `${BASE_URL}/v1/space-directory/manifests`);
   const manifest = parsed.manifest;
@@ -4849,7 +4780,7 @@ test("publishSpaceDirectoryManifest forwards AbortSignal options", async () => {
       authority: FIXTURE_AUTHORITY_ID,
       manifest: toriiFixtures.uaid.manifests.manifests[0].manifest,
     },
-    { signal: controller.signal },
+    { signal: controller.signal, canonicalAuth: APPLICATION_CANONICAL_AUTH },
   );
   assert.equal(captured.init.signal, controller.signal);
 });
@@ -4888,7 +4819,7 @@ test("publishSpaceDirectoryManifest rejects invalid manifest entries", async () 
           dataspace: 1,
           entries: [],
         },
-      }),
+      }, { canonicalAuth: APPLICATION_CANONICAL_AUTH }),
     /entries must be a non-empty array/,
   );
   await assert.rejects(
@@ -4901,7 +4832,7 @@ test("publishSpaceDirectoryManifest rejects invalid manifest entries", async () 
           dataspace: 1,
           entries: [{ scope: "demo", effect: null }],
         },
-      }),
+      }, { canonicalAuth: APPLICATION_CANONICAL_AUTH }),
     /effect must be an object/,
   );
   await assert.rejects(
@@ -4920,7 +4851,7 @@ test("publishSpaceDirectoryManifest rejects invalid manifest entries", async () 
             },
           ],
         },
-      }),
+      }, { canonicalAuth: APPLICATION_CANONICAL_AUTH }),
     /notes must be a string/,
   );
 });
@@ -4941,7 +4872,7 @@ test("revokeSpaceDirectoryManifest normalizes UAIDs and epochs without signing m
     uaid: "0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
     dataspaceId: 11,
     revokedEpoch: 4096,
-  });
+  }, { canonicalAuth: APPLICATION_CANONICAL_AUTH });
   assert.equal(
     captured.url,
     `${BASE_URL}/v1/space-directory/manifests/revoke`,
@@ -4975,7 +4906,7 @@ test("revokeSpaceDirectoryManifest supports AbortSignal options", async () => {
       dataspaceId: 3,
       revokedEpoch: 512,
     },
-    { signal: controller.signal },
+    { signal: controller.signal, canonicalAuth: APPLICATION_CANONICAL_AUTH },
   );
   assert.equal(captured.init.signal, controller.signal);
 });
@@ -4994,7 +4925,7 @@ test("revokeSpaceDirectoryManifest rejects unsupported option fields", async () 
           dataspaceId: 5,
           revokedEpoch: 256,
         },
-        { signal: new AbortController().signal, extra: "nope" },
+        { signal: new AbortController().signal, canonicalAuth: APPLICATION_CANONICAL_AUTH, extra: "nope" },
       ),
     /revokeSpaceDirectoryManifest options contains unsupported fields: extra/,
   );
@@ -5012,7 +4943,7 @@ test("space-directory mutation drafts reject inline private-key fields", async (
         authority: FIXTURE_AUTHORITY_ID,
         privateKeyHex: "11".repeat(32),
         manifest: toriiFixtures.uaid.manifests.manifests[0].manifest,
-      }),
+      }, { canonicalAuth: APPLICATION_CANONICAL_AUTH }),
     /does not accept private-key fields/,
   );
   await assert.rejects(
@@ -5023,7 +4954,7 @@ test("space-directory mutation drafts reject inline private-key fields", async (
         uaid: toriiFixtures.uaid.manifests.uaid,
         dataspaceId: 5,
         revokedEpoch: 256,
-      }),
+      }, { canonicalAuth: APPLICATION_CANONICAL_AUTH }),
     /does not accept private-key fields/,
   );
 });
@@ -5095,7 +5026,11 @@ test("iterateSorafsAliases paginates alias listings", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const seen = [];
-  for await (const alias of client.iterateSorafsAliases({ namespace: "sora", pageSize: 1 })) {
+  for await (const alias of client.iterateSorafsAliases({
+    namespace: "sora",
+    pageSize: 1,
+    canonicalAuth: SORAFS_CANONICAL_AUTH,
+  })) {
     seen.push(alias.alias);
   }
   assert.deepEqual(seen, ["sora/docs-0", "sora/docs-1"]);
@@ -5222,6 +5157,7 @@ test("iterateSorafsReplicationOrders paginates results", async () => {
   for await (const order of client.iterateSorafsReplicationOrders({
     status: "pending",
     pageSize: 1,
+    canonicalAuth: SORAFS_CANONICAL_AUTH,
   })) {
     ids.push(order.order_id_hex);
   }
@@ -5239,6 +5175,7 @@ test("SoraFS iterators reject unsupported options", () => {
       client.iterateSorafsAliases({
         namespace: "sora",
         platformPolicy: "strict",
+        canonicalAuth: SORAFS_CANONICAL_AUTH,
       }),
     /iterator options contains unsupported fields: platformPolicy/,
   );
@@ -5255,6 +5192,7 @@ test("SoraFS iterators reject unsupported options", () => {
       client.iterateSorafsReplicationOrders({
         status: "pending",
         filter: "noop",
+        canonicalAuth: SORAFS_CANONICAL_AUTH,
       }),
     /iterator options contains unsupported fields: filter/,
   );
@@ -5315,6 +5253,8 @@ test("fetchSorafsPayloadRange normalizes request and response payloads", async (
     providerIdHex: providerBytes,
   });
   assert.equal(captured?.url, `${BASE_URL}/v1/sorafs/storage/fetch`);
+  assert.ok(captured?.init?.headers?.["X-Iroha-Operator-Public-Key"]);
+  assert.ok(captured?.init?.headers?.["X-Iroha-Operator-Signature"]);
   const body = JSON.parse(captured?.init?.body ?? "{}");
   assert.equal(body.manifest_id_hex, manifestHex);
   assert.equal(body.offset, 4);
@@ -5342,16 +5282,37 @@ test("getSorafsStorageState returns typed fields", async () => {
     pin_queue_utilisation_bps: 3000,
     por_utilisation_bps: 2000,
   };
+  let capturedInit;
   const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
+    fetchImpl: async (_url, init) => {
+      capturedInit = init;
+      return createResponse({
         status: 200,
         jsonData: snapshot,
         headers: { "content-type": "application/json" },
-      }),
+      });
+    },
   });
   const result = await client.getSorafsStorageState();
   assert.deepEqual(result, snapshot);
+  assert.ok(capturedInit?.headers?.["X-Iroha-Operator-Public-Key"]);
+  assert.ok(capturedInit?.headers?.["X-Iroha-Operator-Signature"]);
+});
+
+test("SoraFS local storage diagnostics require operator signing context", async () => {
+  const client = new SourceToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run without operator authentication");
+    },
+  });
+  await assert.rejects(
+    () => client.fetchSorafsPayloadRange({}),
+    /fetchSorafsPayloadRange requires ToriiClient options\.operatorSigningContext/,
+  );
+  await assert.rejects(
+    () => client.getSorafsStorageState(),
+    /getSorafsStorageState requires ToriiClient options\.operatorSigningContext/,
+  );
 });
 
 test("getSorafsManifest normalizes response payload", async () => {
@@ -6702,7 +6663,11 @@ test("SoraFS registry helpers reject unsupported option fields", async () => {
   const cases = [
     [
       "listSorafsAliases",
-      () => client.listSorafsAliases({ namespace: "sorafs", extra: true }),
+      () => client.listSorafsAliases({
+        namespace: "sorafs",
+        extra: true,
+        canonicalAuth: SORAFS_CANONICAL_AUTH,
+      }),
       "extra",
     ],
     [
@@ -6717,6 +6682,7 @@ test("SoraFS registry helpers reject unsupported option fields", async () => {
           status: "pending",
           manifestDigestHex: "a".repeat(64),
           stray: 1,
+          canonicalAuth: SORAFS_CANONICAL_AUTH,
         }),
       "stray",
     ],
@@ -6732,6 +6698,22 @@ test("SoraFS registry helpers reject unsupported option fields", async () => {
       return true;
     });
   }
+});
+
+test("SoraFS legacy inventory helpers require canonical account authentication", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run without canonical authentication");
+    },
+  });
+  await assert.rejects(
+    () => client.listSorafsAliases({ namespace: "sorafs" }),
+    /listSorafsAliases options\.canonicalAuth is required/,
+  );
+  await assert.rejects(
+    () => client.listSorafsReplicationOrders({ status: "pending" }),
+    /listSorafsReplicationOrders options\.canonicalAuth is required/,
+  );
 });
 
 test("SoraFS POR helpers reject non-object options", async () => {
@@ -7464,59 +7446,6 @@ test("waitForIsoMessageStatus forwards retryProfile to status polls", async () =
   });
   assert.equal(status.status, "Committed");
   assert.deepEqual(retryProfiles, ["iso-wait", "iso-wait"]);
-});
-
-test("ToriiClient submits Soracloud app infra mutations", async () => {
-  const calls = [];
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 500 }),
-  });
-  client._request = async (method, path, init = {}) => {
-    calls.push({ method, path, init });
-    return createResponse({
-      status: 200,
-      jsonData: { ok: true },
-      headers: { "content-type": "application/json" },
-    });
-  };
-
-  const request = {
-    manifest: { app_name: "hayahi" },
-    provenance: { signer: "signer", signature: "ABCD" },
-  };
-  assert.deepEqual(await client.deploySoracloudAppInfra(request), { ok: true });
-  assert.equal(calls[0].method, "POST");
-  assert.equal(calls[0].path, "/v1/soracloud/apps/deploy");
-  assert.deepEqual(JSON.parse(calls[0].init.body), request);
-
-  assert.deepEqual(await client.upgradeSoracloudAppInfra(request), { ok: true });
-  assert.equal(calls[1].path, "/v1/soracloud/apps/upgrade");
-});
-
-test("ToriiClient fetches Soracloud app infra status", async () => {
-  const calls = [];
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 500 }),
-  });
-  client._request = async (method, path, init = {}) => {
-    calls.push({ method, path, init });
-    return createResponse({
-      status: 200,
-      jsonData: { app_count: 1 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-
-  assert.deepEqual(
-    await client.getSoracloudAppInfraStatus({ appName: "hayahi", auditLimit: 3 }),
-    { app_count: 1 },
-  );
-  assert.equal(calls[0].path, "/v1/soracloud/apps/status");
-  assert.deepEqual(calls[0].init.params, { app_name: "hayahi", audit_limit: 3 });
-
-  await client.getSoracloudNamedAppInfraStatus("hayahi app", { auditLimit: "2" });
-  assert.equal(calls[1].path, "/v1/soracloud/apps/hayahi%20app/status");
-  assert.deepEqual(calls[1].init.params, { audit_limit: 2 });
 });
 
 test("waitForIsoMessageStatus throws when no terminal status is observed", async () => {
@@ -9550,18 +9479,18 @@ test("getPipelineRecovery returns null for missing heights", async () => {
   assert.equal(payload, null);
 });
 
-test("getPipelineRecovery throws when Torii omits JSON", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: null,
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.getPipelineRecovery(1),
-    /pipeline recovery endpoint returned no payload/,
-  );
+// Keep bounded-response registrations at the original pipeline-recovery position.
+// The diagnostic focus harness filters registrations as they occur in this file,
+// so moving this call would change the direct toriiClient.test.js test sequence.
+// The sibling module owns implementation only, keeping the main suite navigable.
+// These regressions remain registered here rather than becoming a separate suite.
+registerToriiClientBoundedResponseTests({
+  assert,
+  BASE_URL,
+  createResponse,
+  ISO_OPERATOR_SIGNING_CONTEXT,
+  test,
+  ToriiClient,
 });
 
 test("getPipelineRecoveryTyped normalises dag + transaction snapshots", async () => {
@@ -21551,8 +21480,8 @@ test("IVM proved contract helpers simulate, derive, prove, and poll authoritativ
   for (const call of proofCalls) {
     assert.equal(call.init.redirect, "error");
     assert.equal(
-      Buffer.from(call.init.headers["X-Iroha-Account"], "latin1").toString("utf8"),
-      SAMPLE_ACCOUNT_ID,
+      call.init.headers["X-Iroha-Account"],
+      AccountAddress.parseEncoded(SAMPLE_ACCOUNT_ID).address.canonicalHex(),
     );
     assert.ok(call.init.headers["X-Iroha-Signature"]);
     assert.ok(call.init.headers["X-Iroha-Nonce"]);
@@ -25226,9 +25155,10 @@ function createBatchCapabilitiesResponse() {
   });
 }
 
-function createResponse({ status, jsonData = {}, arrayData, textBody, headers }) {
+function createResponse({ status, jsonData, arrayData, textBody, headers }) {
+  const effectiveJsonData = jsonData === undefined ? {} : jsonData;
   const responseText =
-    typeof textBody === "string" ? textBody : JSON.stringify(jsonData ?? {});
+    typeof textBody === "string" ? textBody : JSON.stringify(effectiveJsonData);
   const bodyBytes =
     arrayData instanceof ArrayBuffer
       ? new Uint8Array(arrayData)
@@ -25241,7 +25171,7 @@ function createResponse({ status, jsonData = {}, arrayData, textBody, headers })
         : new TextEncoder().encode(responseText);
   return {
     status,
-    json: async () => jsonData,
+    json: async () => effectiveJsonData,
     arrayBuffer: async () => {
       if (arrayData instanceof ArrayBuffer) {
         return arrayData;

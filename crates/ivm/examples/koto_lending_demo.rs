@@ -1,6 +1,4 @@
 //! Kotodama lending demo: a minimal borrow/mint flow on IVM.
-use std::collections::BTreeMap;
-
 use iroha_crypto::Hash;
 use iroha_data_model::{DomainId, prelude::Name};
 use iroha_primitives::{json::Json, numeric::Quantity};
@@ -9,11 +7,10 @@ use ivm::{
     ProgramMetadata, encode_argument_record_from_json,
     kotodama::compiler::Compiler as KotodamaCompiler, mock_wsv::WsvHost,
 };
-
+use std::collections::BTreeMap;
 fn fixture_account(_domain: &str, hex_public_key: &str) -> AccountId {
     AccountId::new(hex_public_key.parse().expect("public key"))
 }
-
 fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -27,7 +24,6 @@ fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(Hash::new(payload).as_ref());
     out
 }
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1) Compile the Kotodama sample to IVM bytecode
     let src = include_str!("../../kotodama_lang/src/samples/lending_simple.ko");
@@ -46,7 +42,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("borrow entrypoint descriptor");
     let entrypoint_pc =
         u64::try_from(metadata.prefix_len()).expect("program prefix fits u64") + borrow.entry_pc;
-
     // 2) Prepare a tiny world with a user, a vault account, and a debt asset
     let user = fixture_account(
         "wonderland",
@@ -61,7 +56,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             DomainId::try_new("wonderland", "universal")?,
             "stable".parse()?,
         );
-
     // Seed the canonical accounts and asset definition with zero balances, then
     // grant permission for the user to mint through the host.
     let mut wsv = MockWorldStateView::with_balances(&[
@@ -93,14 +87,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host = WsvHost::new_with_subject(wsv, user_subject, Default::default()).with_public_inputs(
         BTreeMap::from([(input_name, tlv(PointerType::NoritoBytes, &record))]),
     );
-
     // 4) Create the VM, attach the host, and select the public wrapper.
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&bytecode).expect("load program");
     vm.set_program_counter(entrypoint_pc)
         .expect("select borrow entrypoint");
-
     vm.run().expect("run VM");
     println!("Borrow executed. User should have 500 of {debt_asset}.");
     println!("Done.");

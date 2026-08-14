@@ -1,5 +1,4 @@
 //! Allocation-free structural envelope for provider-owned JSON responses.
-
 /// Endpoint-specific upper bounds applied before an owned JSON DOM is built.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct JsonDomEnvelopeV1 {
@@ -14,7 +13,6 @@ pub(super) struct JsonDomEnvelopeV1 {
     /// Maximum byte length of one unquoted scalar literal.
     pub(super) atom_bytes: usize,
 }
-
 /// Structural-envelope rejection reported before DOM allocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum JsonDomPreflightErrorV1 {
@@ -29,7 +27,6 @@ pub(super) enum JsonDomPreflightErrorV1 {
     /// An unquoted scalar literal exceeds the endpoint envelope.
     AtomBytes,
 }
-
 /// Scan a response before Norito constructs its owned JSON value tree.
 ///
 /// The scanner itself allocates nothing. It deliberately counts object keys as
@@ -46,7 +43,6 @@ pub(super) fn preflight_json_dom(
     limits: JsonDomEnvelopeV1,
 ) -> Result<(), JsonDomPreflightErrorV1> {
     const MAX_TRACKED_DEPTH: usize = 32;
-
     if limits.depth == 0 || limits.depth > MAX_TRACKED_DEPTH {
         return Err(JsonDomPreflightErrorV1::Malformed);
     }
@@ -55,7 +51,6 @@ pub(super) fn preflight_json_dom(
     let mut tokens = 0_usize;
     let mut total_string_bytes = 0_usize;
     let mut index = 0_usize;
-
     while index < body.len() {
         match body[index] {
             b' ' | b'\n' | b'\r' | b'\t' | b':' | b',' => index += 1,
@@ -154,11 +149,9 @@ pub(super) fn preflight_json_dom(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const PLAN_ENVELOPE: JsonDomEnvelopeV1 = JsonDomEnvelopeV1 {
         tokens: 65_536,
         depth: 16,
@@ -166,7 +159,6 @@ mod tests {
         total_string_bytes: 4 * 1024 * 1024,
         atom_bytes: 64,
     };
-
     #[test]
     fn accepts_bounded_escaped_structure() {
         let body = br#"{"plan":{"files":[{"path":["src","escaped\".ko"],"size":1}],"ok":true}}"#;
@@ -182,7 +174,6 @@ mod tests {
         )
         .expect("bounded representative response");
     }
-
     #[test]
     fn rejects_pathological_unknown_field_before_dom() {
         let mut body = String::from("{\"unknown\":[");
@@ -193,13 +184,11 @@ mod tests {
             body.push('0');
         }
         body.push_str("]}");
-
         assert_eq!(
             preflight_json_dom(body.as_bytes(), PLAN_ENVELOPE),
             Err(JsonDomPreflightErrorV1::TooManyTokens)
         );
     }
-
     #[test]
     fn rejects_depth_string_and_atom_envelopes() {
         let limits = JsonDomEnvelopeV1 {

@@ -1,7 +1,4 @@
 //! End-to-end acceptance coverage for Kotodama V1 runtime semantics.
-
-use std::{collections::BTreeMap, fmt::Write as _};
-
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::Name;
 use iroha_primitives::json::Json;
@@ -10,13 +7,12 @@ use ivm::{
     pointer_abi::PointerType,
 };
 use norito::json as njson;
+use std::{collections::BTreeMap, fmt::Write as _};
 mod common;
-
 const MAX_INT: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
 const MAX_INT_MINUS_ONE: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042046";
 const MIN_INT: &str = "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048";
 const MIN_INT_PLUS_ONE: &str = "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
-
 fn compile_and_run(source: &str) -> IVM {
     let code = Compiler::new()
         .compile_source(source)
@@ -39,7 +35,6 @@ fn compile_and_run(source: &str) -> IVM {
     vm.run().expect("run V1 contract");
     vm
 }
-
 fn compile_and_run_with_default_host(source: &str) -> IVM {
     let code = Compiler::new()
         .compile_source(source)
@@ -61,7 +56,6 @@ fn compile_and_run_with_default_host(source: &str) -> IVM {
     vm.run().expect("run V1 contract with DefaultHost");
     vm
 }
-
 fn compile_init_and_run(source: &str) -> IVM {
     let code = Compiler::new()
         .compile_source(source)
@@ -79,7 +73,6 @@ fn compile_init_and_run(source: &str) -> IVM {
             .unwrap_or_else(|| panic!("missing {name} entrypoint"));
         u64::try_from(parsed.prefix_len()).expect("prefix fits u64") + entry.entry_pc
     };
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&code)
@@ -94,7 +87,6 @@ fn compile_init_and_run(source: &str) -> IVM {
     vm.run().expect("run initialized V1 contract");
     vm
 }
-
 fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -108,7 +100,6 @@ fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(Hash::new(payload).as_ref());
     out
 }
-
 fn argument_host(
     schema: &ivm_abi::entrypoint::EntrypointArgumentSchemaV1,
     left: &str,
@@ -124,7 +115,6 @@ fn argument_host(
         tlv(PointerType::NoritoBytes, &payload),
     )]))
 }
-
 #[test]
 fn call_aware_allocation_preserves_internal_call_and_tuple_results() {
     let source = r#"
@@ -144,11 +134,9 @@ seiyaku CallAwareRuntime {
   }
 }
 "#;
-
     let vm = compile_and_run(source);
     assert_eq!(vm.register(10), 1);
 }
-
 #[test]
 fn mixed_value_and_divergent_tails_execute_both_paths_without_unit_fallthrough() {
     let source = r#"
@@ -178,11 +166,9 @@ seiyaku MixedTailRuntime {
   }
 }
 "#;
-
     let vm = compile_and_run(source);
     assert_eq!(common::decode_i64_register(&vm, 10), 25);
 }
-
 #[test]
 fn result_if_let_executes_both_tags_and_binds_only_the_selected_payload() {
     let source = r#"
@@ -207,11 +193,9 @@ seiyaku ResultIfLetRuntime {
   }
 }
 "#;
-
     let vm = compile_and_run(source);
     assert_eq!(common::decode_i64_register(&vm, 10), 4978);
 }
-
 #[test]
 fn state_map_get_distinguishes_absent_present_zero_and_removal() {
     let source = r#"
@@ -246,11 +230,9 @@ seiyaku StateMapOptionAcceptance {
   }
 }
 "#;
-
     let vm = compile_and_run(source);
     assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
-
 #[test]
 fn aggregate_state_map_value_roundtrips_as_one_record() {
     let source = r#"
@@ -282,11 +264,9 @@ seiyaku AggregateStateAcceptance {
   }
 }
 "#;
-
     let vm = compile_and_run(source);
     assert_eq!(common::decode_i64_register(&vm, 10), 9);
 }
-
 #[test]
 fn aggregate_option_and_result_unwrap_merge_each_payload_word() {
     let source = r#"
@@ -323,11 +303,9 @@ seiyaku AggregateSumAcceptance {
   }
 }
 "#;
-
     let vm = compile_and_run(source);
     assert_eq!(common::decode_i64_register(&vm, 10), 67);
 }
-
 #[test]
 fn propagation_materializes_the_enclosing_sum_layout_on_failure() {
     let result_source = r#"
@@ -349,7 +327,6 @@ seiyaku ResultPropagationLayoutAcceptance {
         Ok((false, vec![1])),
         "the returned error must occupy the wider enclosing Result allocation"
     );
-
     let option_source = r#"
 seiyaku OptionPropagationLayoutAcceptance {
   fn source() -> Option<int> {
@@ -370,7 +347,6 @@ seiyaku OptionPropagationLayoutAcceptance {
         "the returned none must occupy the wider enclosing Option allocation"
     );
 }
-
 #[test]
 fn native_json_executes_once_and_returns_canonical_recursive_values() {
     let source = r#"
@@ -411,7 +387,6 @@ seiyaku NativeJsonRuntimeAcceptance {
             "z_bytes": "0xab01",
         })
     );
-
     let rendered = njson::to_string(&json).expect("render native JSON result");
     let key_positions = ["amount", "blobs", "labels", "maybe", "z_bytes"].map(|key| {
         rendered
@@ -423,7 +398,6 @@ seiyaku NativeJsonRuntimeAcceptance {
         "object keys must be encoded in canonical lexical order: {rendered}"
     );
 }
-
 #[test]
 fn native_json_and_typed_getters_execute_with_default_host() {
     let source = r#"
@@ -440,7 +414,6 @@ seiyaku DefaultHostNativeJsonAcceptance {
     let vm = compile_and_run_with_default_host(source);
     assert_eq!(common::decode_i64_register(&vm, 10), 7);
 }
-
 #[test]
 fn scalar_and_aggregate_state_roots_roundtrip_as_schema_bound_records() {
     let source = r#"
@@ -477,11 +450,9 @@ seiyaku StateRootAcceptance {
   }
 }
 "#;
-
     let vm = compile_init_and_run(source);
     assert_eq!(common::decode_i64_register(&vm, 10), 27);
 }
-
 #[test]
 fn pointer_literal_state_is_materialized_before_record_encoding() {
     let source = r#"
@@ -497,11 +468,9 @@ seiyaku PointerStateAcceptance {
   }
 }
 "#;
-
     let vm = compile_init_and_run(source);
     assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
-
 #[test]
 fn logical_operators_short_circuit_state_side_effects() {
     let source = r#"
@@ -538,11 +507,9 @@ seiyaku ShortCircuitAcceptance {
   }
 }
 "#;
-
     let vm = compile_and_run(source);
     assert_eq!(common::decode_i64_register(&vm, 10), 2);
 }
-
 #[test]
 fn state_map_iteration_uses_canonical_norito_byte_order_for_sixty_four_items() {
     let mut source = String::from(
@@ -594,11 +561,9 @@ seiyaku StateMapIterationAcceptance {
 }
 "#,
     );
-
     let vm = compile_and_run(&source);
     assert_eq!(common::decode_i64_register(&vm, 10), 64);
 }
-
 #[test]
 fn signed_comparisons_match_all_boundary_pairs_in_values_and_branches() {
     let source = r#"
@@ -651,7 +616,6 @@ seiyaku SignedComparisonAcceptance {
         .argument_schema
         .as_ref()
         .expect("comparison argument schema");
-
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&code).expect("load comparison contract");
     vm.set_program_counter(entry_pc)
@@ -663,7 +627,6 @@ seiyaku SignedComparisonAcceptance {
         .load_region(0, code_len)
         .expect("loaded code region")
         .to_vec();
-
     let values = [
         MIN_INT,
         MIN_INT_PLUS_ONE,
@@ -679,7 +642,6 @@ seiyaku SignedComparisonAcceptance {
                 .expect("acceptance VM retains its template geometry");
             vm.set_host(argument_host(argument_schema, left, right));
             vm.run().expect("execute signed comparison pair");
-
             let expected = [
                 left_index == right_index,
                 left_index != right_index,

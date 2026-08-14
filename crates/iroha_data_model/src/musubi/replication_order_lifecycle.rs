@@ -14,7 +14,6 @@ pub struct MusubiReplicationOrderArchiveBindingV1 {
     /// Complete immutable archive commitment copied from authoritative registry state.
     pub commitment: MusubiArchiveCommitmentV1,
 }
-
 impl MusubiReplicationOrderArchiveBindingV1 {
     /// Construct an immutable replication-order/archive binding.
     #[must_use]
@@ -29,7 +28,6 @@ impl MusubiReplicationOrderArchiveBindingV1 {
             commitment,
         }
     }
-
     /// Validate the order identity, complete commitment, derived archive identity, and wire bound.
     ///
     /// # Errors
@@ -56,7 +54,6 @@ impl MusubiReplicationOrderArchiveBindingV1 {
         Ok(())
     }
 }
-
 /// Historical location facts retained when a replication order is permanently consumed.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -67,7 +64,6 @@ pub struct MusubiRetiredReplicationOrderLocationV1 {
     /// Exact completed provider set that justified that historical location admission.
     pub providers: Vec<ProviderId>,
 }
-
 impl MusubiRetiredReplicationOrderLocationV1 {
     /// Construct a permanent replication-order location tombstone.
     #[must_use]
@@ -77,7 +73,6 @@ impl MusubiRetiredReplicationOrderLocationV1 {
             providers,
         }
     }
-
     /// Validate the historical location identity and exact bounded provider set.
     ///
     /// # Errors
@@ -105,11 +100,13 @@ impl MusubiRetiredReplicationOrderLocationV1 {
         Ok(())
     }
 }
-
 /// Lifecycle of one immutable replication-order/archive binding.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiReplicationOrderLocationLifecycleV1 {
     /// The order is bound to the archive before any location has been admitted.
     PreLocation,
@@ -118,7 +115,6 @@ pub enum MusubiReplicationOrderLocationLifecycleV1 {
     /// The order is permanently consumed with its exact historical provider set.
     Retired(MusubiRetiredReplicationOrderLocationV1),
 }
-
 /// Canonical consensus projection of a replication-order/archive binding and location lifecycle.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -129,7 +125,6 @@ pub struct MusubiReplicationOrderLocationReferenceV1 {
     /// Current use of the permanently bound order.
     pub lifecycle: MusubiReplicationOrderLocationLifecycleV1,
 }
-
 impl MusubiReplicationOrderLocationReferenceV1 {
     /// Construct a binding before location admission.
     #[must_use]
@@ -139,7 +134,6 @@ impl MusubiReplicationOrderLocationReferenceV1 {
             lifecycle: MusubiReplicationOrderLocationLifecycleV1::PreLocation,
         }
     }
-
     /// Return the active location, if this order currently backs one.
     #[must_use]
     pub const fn active_location(&self) -> Option<MusubiArchiveLocationKeyV1> {
@@ -149,7 +143,6 @@ impl MusubiReplicationOrderLocationReferenceV1 {
             | MusubiReplicationOrderLocationLifecycleV1::Retired(_) => None,
         }
     }
-
     /// Return the consumed location, if this order has become a tombstone.
     #[must_use]
     pub const fn retired_location(&self) -> Option<MusubiArchiveLocationKeyV1> {
@@ -159,7 +152,6 @@ impl MusubiReplicationOrderLocationReferenceV1 {
             | MusubiReplicationOrderLocationLifecycleV1::Active(_) => None,
         }
     }
-
     /// Validate the immutable trust binding and any location identity.
     ///
     /// # Errors

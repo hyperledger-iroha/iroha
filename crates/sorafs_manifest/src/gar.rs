@@ -2,9 +2,7 @@
 //!
 //! Lightweight local definitions let dependants (e.g. `iroha_js_host`) parse
 //! GAR payloads without pulling the entire data model crate or creating cycles.
-
 #![allow(clippy::module_name_repetitions)]
-
 mod local {
     /// Licensing bundle referenced by a GAR payload.
     #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -22,7 +20,6 @@ mod local {
         /// Optional URI or document reference for auditors.
         pub reference_uri: Option<String>,
     }
-
     /// CDN-facing policy embedded in GAR v2 payloads.
     #[derive(Clone, Debug, PartialEq, Eq, Default)]
     pub struct GarCdnPolicyV1 {
@@ -41,7 +38,6 @@ mod local {
         /// Whether the GAR is under a legal hold (serving is blocked).
         pub legal_hold: bool,
     }
-
     /// Moderation directive embedded in GAR v2.
     #[derive(Clone, Debug, PartialEq, Eq, Default)]
     pub struct GarModerationDirectiveV1 {
@@ -54,7 +50,6 @@ mod local {
         /// Optional governance notes shown in dashboards/runbooks.
         pub notes: Option<String>,
     }
-
     /// Moderation action enforced by the directive.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
     pub enum GarModerationAction {
@@ -68,7 +63,6 @@ mod local {
         #[default]
         Block,
     }
-
     impl GarModerationAction {
         /// Returns the canonical string representation used in GAR payloads.
         #[must_use]
@@ -81,7 +75,6 @@ mod local {
             }
         }
     }
-
     /// Metrics/telemetry policy surfaced through GAR.
     #[derive(Clone, Debug, PartialEq, Eq, Default)]
     pub struct GarMetricsPolicyV1 {
@@ -94,7 +87,6 @@ mod local {
         /// Named metrics that the policy allows (e.g., `audience`, `rebuffer`).
         pub allowed_metrics: Vec<String>,
     }
-
     /// Structured policy payload embedded in GAR v2.
     #[derive(Clone, Debug, PartialEq, Eq, Default)]
     pub struct GarPolicyPayloadV1 {
@@ -112,7 +104,6 @@ mod local {
         pub rpt_digest: Option<[u8; 32]>,
     }
 }
-
 pub use local::{
     GarCdnPolicyV1, GarLicenseSetV1, GarMetricsPolicyV1, GarModerationAction,
     GarModerationDirectiveV1, GarPolicyPayloadV1,

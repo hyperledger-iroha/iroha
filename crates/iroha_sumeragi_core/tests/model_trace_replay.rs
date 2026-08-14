@@ -8,9 +8,7 @@
 //! The mapping is deliberately strict: malformed traces, invalid leaders,
 //! certificates without delivered quorum votes, and out-of-order durability
 //! boundaries are rejected before replay.
-
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-
 use iroha_sumeragi_core::{
     BodyState, CertificateRef, ConsensusMessageV2, ContextId, Digest, Effect, EquivocationKind,
     Event, EventTag, Generation, HeightContext, IgnoreReason, NetworkId, OpaqueSignature,
@@ -19,16 +17,13 @@ use iroha_sumeragi_core::{
     TimeoutSignatureGroup, TimeoutVote, Validator, ValidatorId, Vote, VotingMode, VotingPower,
     WalEntry, WalRecord,
 };
-
 const TRACE: &str = include_str!("fixtures/tlc_replay_witness.tsv");
 const HEIGHT: u64 = 1;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ModelSubject {
     A,
     B,
 }
-
 impl ModelSubject {
     fn parse(value: &str) -> Result<Option<Self>, String> {
         match value {
@@ -38,7 +33,6 @@ impl ModelSubject {
             _ => Err(format!("unknown model subject {value:?}")),
         }
     }
-
     const fn production(self) -> Subject {
         match self {
             Self::A => Subject::repeat(0xa1),
@@ -46,7 +40,6 @@ impl ModelSubject {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ModelAction {
     SetGst,
@@ -78,7 +71,6 @@ enum ModelAction {
     FormCommitQc,
     PersistDecision,
 }
-
 impl ModelAction {
     fn parse(value: &str) -> Result<Self, String> {
         match value {
@@ -114,7 +106,6 @@ impl ModelAction {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ModelStep {
     number: usize,
@@ -125,7 +116,6 @@ struct ModelStep {
     phase: Option<Phase>,
     subject: Option<ModelSubject>,
 }
-
 fn parse_optional_usize(value: &str, field: &str) -> Result<Option<usize>, String> {
     if value == "-" {
         return Ok(None);
@@ -138,7 +128,6 @@ fn parse_optional_usize(value: &str, field: &str) -> Result<Option<usize>, Strin
     }
     Ok(Some(parsed))
 }
-
 fn parse_optional_view(value: &str) -> Result<Option<u64>, String> {
     if value == "-" {
         Ok(None)
@@ -149,7 +138,6 @@ fn parse_optional_view(value: &str) -> Result<Option<u64>, String> {
             .map_err(|_| format!("invalid view {value:?}"))
     }
 }
-
 fn parse_optional_phase(value: &str) -> Result<Option<Phase>, String> {
     match value {
         "-" => Ok(None),
@@ -158,7 +146,6 @@ fn parse_optional_phase(value: &str) -> Result<Option<Phase>, String> {
         _ => Err(format!("unknown phase {value:?}")),
     }
 }
-
 fn parse_trace(input: &str) -> Result<Vec<ModelStep>, String> {
     let mut steps = Vec::new();
     for (line_index, line) in input.lines().enumerate() {
@@ -198,7 +185,6 @@ fn parse_trace(input: &str) -> Result<Vec<ModelStep>, String> {
     validate_model_trace(&steps)?;
     Ok(steps)
 }
-
 fn replace_exactly_once(input: &str, anchor: &str, replacement: &str) -> String {
     let occurrences = input.matches(anchor).count();
     assert_eq!(
@@ -207,11 +193,9 @@ fn replace_exactly_once(input: &str, anchor: &str, replacement: &str) -> String 
     );
     input.replacen(anchor, replacement, 1)
 }
-
 fn required<T: Copy>(value: Option<T>, step: ModelStep, field: &str) -> Result<T, String> {
     value.ok_or_else(|| format!("step {} {:?} is missing {field}", step.number, step.action))
 }
-
 #[allow(clippy::too_many_lines)]
 fn validate_model_trace(steps: &[ModelStep]) -> Result<(), String> {
     if steps.first().map(|step| step.action) != Some(ModelAction::SetGst) {
@@ -224,7 +208,6 @@ fn validate_model_trace(steps: &[ModelStep]) -> Result<(), String> {
     {
         return Err("SetGST may appear only once".to_owned());
     }
-
     let mut views = [0_u64; 4];
     let mut timeout_begun = BTreeSet::new();
     let mut timeout_persisted = BTreeSet::new();
@@ -253,7 +236,6 @@ fn validate_model_trace(steps: &[ModelStep]) -> Result<(), String> {
     let mut lock_persisted = BTreeSet::new();
     let mut active_locks = [None; 4];
     let mut decisions_begun = BTreeSet::new();
-
     for step in steps.iter().copied().skip(1) {
         let error = |message: &str| format!("step {} {:?}: {message}", step.number, step.action);
         match step.action {
@@ -609,19 +591,16 @@ fn validate_model_trace(steps: &[ModelStep]) -> Result<(), String> {
     }
     Ok(())
 }
-
 #[derive(Clone)]
 struct Envelope {
     from: usize,
     to: usize,
     message: ConsensusMessageV2,
 }
-
 enum DeferredEvent {
     AuthenticatedIngress(Event),
     Completion(Event),
 }
-
 struct ReplayNode {
     reducer: Reducer,
     wal: Vec<WalEntry>,
@@ -629,7 +608,6 @@ struct ReplayNode {
     deferred: VecDeque<DeferredEvent>,
     applied: Vec<Subject>,
 }
-
 struct ProductionReplay {
     context: HeightContext,
     nodes: Vec<ReplayNode>,
@@ -641,7 +619,6 @@ struct ProductionReplay {
     reordered_deliveries: usize,
     reports: Vec<(ValidatorId, EquivocationKind)>,
 }
-
 impl ProductionReplay {
     fn new() -> Self {
         let context = production_context();
@@ -669,7 +646,6 @@ impl ProductionReplay {
             reports: Vec::new(),
         }
     }
-
     fn dispatch(&mut self, node: usize, event: Event) -> StepDisposition {
         let outcome = self.nodes[node]
             .reducer
@@ -679,7 +655,6 @@ impl ProductionReplay {
         self.absorb(node, outcome.into_effects());
         disposition
     }
-
     fn dispatch_deferred(&mut self, node: usize, deferred: DeferredEvent) {
         let event = match &deferred {
             DeferredEvent::AuthenticatedIngress(event) => event
@@ -700,7 +675,6 @@ impl ProductionReplay {
             self.absorb(node, outcome.into_effects());
         }
     }
-
     fn retry_deferred(&mut self, node: usize) {
         let attempts = self.nodes[node].deferred.len();
         for _ in 0..attempts {
@@ -714,7 +688,6 @@ impl ProductionReplay {
             }
         }
     }
-
     fn absorb(&mut self, from: usize, effects: Vec<Effect>) {
         for effect in effects {
             match effect {
@@ -743,7 +716,6 @@ impl ProductionReplay {
             }
         }
     }
-
     fn pending_position(&self, node: usize, predicate: impl Fn(&Effect) -> bool) -> usize {
         self.nodes[node]
             .pending
@@ -756,7 +728,6 @@ impl ProductionReplay {
                 )
             })
     }
-
     fn take_pending(&mut self, node: usize, predicate: impl Fn(&Effect) -> bool) -> Effect {
         let position = self.pending_position(node, predicate);
         self.nodes[node]
@@ -764,13 +735,11 @@ impl ProductionReplay {
             .remove(position)
             .expect("located pending effect remains present")
     }
-
     fn has_persist(&self, node: usize, predicate: impl Fn(&WalRecord) -> bool) -> bool {
         self.nodes[node].pending.iter().any(
             |effect| matches!(effect, Effect::Persist { entry, .. } if predicate(entry.record())),
         )
     }
-
     fn acknowledge_persist(&mut self, node: usize, predicate: impl Fn(&WalRecord) -> bool) {
         let Effect::Persist { tag, entry } = self.take_pending(
             node,
@@ -789,7 +758,6 @@ impl ProductionReplay {
         assert_eq!(disposition, StepDisposition::Applied);
         self.retry_deferred(node);
     }
-
     fn complete_signature(&mut self, node: usize, predicate: impl Fn(&SignableMessage) -> bool) {
         let Effect::Sign { tag, message: _ } = self.take_pending(
             node,
@@ -807,7 +775,6 @@ impl ProductionReplay {
         assert_eq!(disposition, StepDisposition::Applied);
         self.retry_deferred(node);
     }
-
     fn complete_fetch(&mut self, node: usize, subject: Subject) {
         let Effect::FetchBody {
             tag,
@@ -830,7 +797,6 @@ impl ProductionReplay {
             }),
         );
     }
-
     fn complete_store(&mut self, node: usize, subject: Subject) {
         let Effect::StoreBody {
             tag,
@@ -852,7 +818,6 @@ impl ProductionReplay {
             }),
         );
     }
-
     fn complete_validation(&mut self, node: usize, subject: Subject, valid: bool) {
         let Effect::ValidateBody {
             tag,
@@ -875,7 +840,6 @@ impl ProductionReplay {
             }),
         );
     }
-
     fn deliver(&mut self, action: ModelAction, node: usize, peer: Option<usize>, step: ModelStep) {
         let position = self
             .network
@@ -915,7 +879,6 @@ impl ProductionReplay {
         let event = network_event(&envelope.message, self.nodes[node].reducer.current_tag());
         self.dispatch_deferred(node, DeferredEvent::AuthenticatedIngress(event));
     }
-
     fn begin_install_tc(&mut self, node: usize, step: ModelStep) {
         let position = self
             .delivered_timeout_certificates
@@ -934,7 +897,6 @@ impl ProductionReplay {
         let event = network_event(&envelope.message, self.nodes[node].reducer.current_tag());
         self.dispatch_deferred(node, DeferredEvent::AuthenticatedIngress(event));
     }
-
     #[allow(clippy::too_many_lines)]
     fn replay_step(&mut self, step: ModelStep) {
         let subject = step.subject.map(ModelSubject::production);
@@ -1081,7 +1043,6 @@ impl ProductionReplay {
             }
         }
     }
-
     fn complete_apply(&mut self, node: usize, expected: Subject) {
         let Effect::Apply {
             tag,
@@ -1102,7 +1063,6 @@ impl ProductionReplay {
             StepDisposition::Applied
         );
     }
-
     fn crash_and_recover(&mut self, node: usize) -> EventTag {
         let old_tag = self.nodes[node].reducer.current_tag();
         let next_generation = Generation::new(old_tag.generation().get() + 1);
@@ -1128,7 +1088,6 @@ impl ProductionReplay {
         old_tag
     }
 }
-
 fn message_matches(
     message: &ConsensusMessageV2,
     action: ModelAction,
@@ -1163,7 +1122,6 @@ fn message_matches(
         _ => false,
     }
 }
-
 fn network_event(message: &ConsensusMessageV2, current: EventTag) -> Event {
     match message {
         ConsensusMessageV2::Proposal(proposal) => Event::ProposalReceived {
@@ -1191,11 +1149,9 @@ fn network_event(message: &ConsensusMessageV2, current: EventTag) -> Event {
         }
     }
 }
-
 fn model_validator(node: usize) -> ValidatorId {
     ValidatorId::repeat(u8::try_from(node + 1).expect("four-node model index fits u8"))
 }
-
 fn production_context() -> HeightContext {
     let roster = (0..4)
         .map(|node| Validator::new(model_validator(node), VotingPower::new(1)))
@@ -1216,11 +1172,9 @@ fn production_context() -> HeightContext {
     )
     .expect("production trace context is valid")
 }
-
 fn manifest(subject: Subject) -> PayloadManifest {
     PayloadManifest::new(subject, Digest::repeat(0xd1), Digest::repeat(0xd2), 512, 4)
 }
-
 fn signatures(signers: &[usize]) -> Vec<SignatureShare> {
     signers
         .iter()
@@ -1232,7 +1186,6 @@ fn signatures(signers: &[usize]) -> Vec<SignatureShare> {
         })
         .collect()
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum WalKind {
     Proposal,
@@ -1243,7 +1196,6 @@ enum WalKind {
     InstallTimeout,
     Decision,
 }
-
 const fn wal_kind(record: &WalRecord) -> WalKind {
     match record {
         WalRecord::ProposalIntent(_) => WalKind::Proposal,
@@ -1255,7 +1207,6 @@ const fn wal_kind(record: &WalRecord) -> WalKind {
         WalRecord::Decision(_) => WalKind::Decision,
     }
 }
-
 fn assert_every_witness_wal_prefix_recovers(replay: &ProductionReplay, subject: Subject) {
     let observed_kinds: BTreeSet<_> = replay
         .nodes
@@ -1276,7 +1227,6 @@ fn assert_every_witness_wal_prefix_recovers(replay: &ProductionReplay, subject: 
         ]),
         "the TLC witness must cross every safety-WAL record class"
     );
-
     for (node_index, node) in replay.nodes.iter().enumerate() {
         let local = node
             .reducer
@@ -1308,7 +1258,6 @@ fn assert_every_witness_wal_prefix_recovers(replay: &ProductionReplay, subject: 
         }
     }
 }
-
 #[test]
 fn tlc_liveness_witness_replays_against_the_production_reducer() {
     let steps = parse_trace(TRACE).expect("checked-in source-aligned trace is valid");
@@ -1368,14 +1317,12 @@ fn tlc_liveness_witness_replays_against_the_production_reducer() {
         .filter(|step| step.action == ModelAction::PersistDecision)
         .and_then(|step| step.node)
         .expect("validated witness ends with one persisted decision");
-
     let mut replay = ProductionReplay::new();
     assert_eq!(replay.context.leader(0), model_validator(3));
     assert_eq!(replay.context.leader(1), model_validator(0));
     for step in steps {
         replay.replay_step(step);
     }
-
     let subject = ModelSubject::A.production();
     assert_eq!(
         replay.nodes[decided]
@@ -1413,7 +1360,6 @@ fn tlc_liveness_witness_replays_against_the_production_reducer() {
     }));
     assert_every_witness_wal_prefix_recovers(&replay, subject);
 }
-
 #[test]
 fn identical_commit_envelope_stutters_before_lock_and_is_admitted_after_persistence() {
     let recipient = 0;
@@ -1433,7 +1379,6 @@ fn identical_commit_envelope_stutters_before_lock_and_is_admitted_after_persiste
         OpaqueSignature::new(vec![0x31, 0x41]),
     );
     let envelope = ConsensusMessageV2::Vote(commit.clone());
-
     assert_eq!(
         replay.dispatch(
             recipient,
@@ -1448,7 +1393,6 @@ fn identical_commit_envelope_stutters_before_lock_and_is_admitted_after_persiste
             .locked()
             .is_none()
     );
-
     let prepare = iroha_sumeragi_core::QuorumCertificate::new(
         CertificateRef::new(context.id(), round, Phase::Prepare, subject),
         signatures(&[0, 1, 2]),
@@ -1472,7 +1416,6 @@ fn identical_commit_envelope_stutters_before_lock_and_is_admitted_after_persiste
     replay.acknowledge_persist(recipient, |record| {
         matches!(record, WalRecord::LockAndCommit { prepare, .. } if prepare.round() == round && prepare.subject() == subject)
     });
-
     let locked = replay.nodes[recipient]
         .reducer
         .durable_state()
@@ -1517,7 +1460,6 @@ fn identical_commit_envelope_stutters_before_lock_and_is_admitted_after_persiste
         "both deliveries use the identical authenticated Commit envelope"
     );
 }
-
 #[test]
 fn malformed_and_unsafe_normalized_traces_fail_closed() {
     let unknown = replace_exactly_once(TRACE, "SetGST", "InventSafety");
@@ -1526,14 +1468,12 @@ fn malformed_and_unsafe_normalized_traces_fail_closed() {
             .unwrap_err()
             .contains("unknown model action")
     );
-
     let non_contiguous = replace_exactly_once(TRACE, "2\tBeginTimeout", "7\tBeginTimeout");
     assert!(
         parse_trace(&non_contiguous)
             .unwrap_err()
             .contains("non-contiguous")
     );
-
     let wrong_leader = replace_exactly_once(
         TRACE,
         "29\tBeginLocalProposal\t0",
@@ -1544,7 +1484,6 @@ fn malformed_and_unsafe_normalized_traces_fail_closed() {
             .unwrap_err()
             .contains("proposal violates leader")
     );
-
     // Replace node zero's second remote Prepare signer with a duplicate of its
     // first remote signer. Together with the local signature the syntactic
     // trace remains well formed, but only two distinct validators remain.
@@ -1558,7 +1497,6 @@ fn malformed_and_unsafe_normalized_traces_fail_closed() {
             .unwrap_err()
             .contains("distinct-validator phase quorum")
     );
-
     // Complete node zero's durable Commit signature, then deliver it to node
     // two before node two's LockAndCommit acknowledgement. The authenticated
     // packet is a safe receiver-side stutter and must not be counted toward
@@ -1578,7 +1516,6 @@ fn malformed_and_unsafe_normalized_traces_fail_closed() {
             .unwrap_err()
             .contains("distinct-validator phase quorum")
     );
-
     let missing_column = replace_exactly_once(
         TRACE,
         "2\tBeginTimeout\t2\t-\t0\t-\t-",
@@ -1590,7 +1527,6 @@ fn malformed_and_unsafe_normalized_traces_fail_closed() {
             .contains("expected 7")
     );
 }
-
 #[test]
 fn crash_replay_rejects_stale_completion_and_resumes_exact_intent() {
     let mut replay = ProductionReplay::new();
@@ -1628,7 +1564,6 @@ fn crash_replay_rejects_stale_completion_and_resumes_exact_intent() {
     assert!(replay.nodes[leader].pending.iter().any(|effect| {
         matches!(effect, Effect::Sign { message, .. } if message == &stale_message)
     }));
-
     let stale = replay.nodes[leader]
         .reducer
         .step(Event::Signed {
@@ -1641,13 +1576,11 @@ fn crash_replay_rejects_stale_completion_and_resumes_exact_intent() {
         StepDisposition::Ignored(IgnoreReason::StaleGeneration)
     );
     assert!(stale.effects().is_empty());
-
     replay.complete_signature(leader, |message| message == &stale_message);
     assert!(replay.network.iter().any(|envelope| {
         matches!(&envelope.message, ConsensusMessageV2::Proposal(proposal) if proposal.proposal().manifest().subject() == subject)
     }));
 }
-
 #[test]
 fn unsafe_certificate_and_vote_equivocation_do_not_decide() {
     let context = production_context();
@@ -1660,7 +1593,6 @@ fn unsafe_certificate_and_vote_equivocation_do_not_decide() {
         Generation::new(9),
     )
     .expect("fixture reducer");
-
     let duplicate_signer_qc = iroha_sumeragi_core::QuorumCertificate::new(
         CertificateRef::new(context.id(), round, Phase::Commit, subject_a),
         signatures(&[0, 0, 1]),
@@ -1673,7 +1605,6 @@ fn unsafe_certificate_and_vote_equivocation_do_not_decide() {
         Err(ReducerError::Quorum(QuorumError::SignersNotStrictlyOrdered))
     );
     assert!(reducer.durable_state().decision().is_none());
-
     let vote_a = SignedVote::new(
         Vote::new(
             context.id(),
@@ -1724,7 +1655,6 @@ fn unsafe_certificate_and_vote_equivocation_do_not_decide() {
     );
     assert!(reducer.durable_state().decision().is_none());
 }
-
 #[test]
 fn invalid_body_never_authorizes_prepare_or_decision() {
     let context = production_context();
@@ -1802,7 +1732,6 @@ fn invalid_body_never_authorizes_prepare_or_decision() {
     assert!(validator.durable_state().prepare_intent(*round).is_none());
     assert!(validator.durable_state().decision().is_none());
 }
-
 #[test]
 fn overlapping_timeout_groups_are_rejected_transactionally() {
     let context = production_context();
@@ -1829,7 +1758,6 @@ fn overlapping_timeout_groups_are_rejected_transactionally() {
     ));
     assert_eq!(validator, before);
 }
-
 #[test]
 fn timeout_equivocation_with_different_full_high_qcs_is_reported() {
     let context = production_context();

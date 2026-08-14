@@ -12,7 +12,6 @@ fn pop_registry_error(
         }
     }
 }
-
 fn pop_exact_bindings_match(
     supplied: &iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderBindingsV1,
     exact: &PopCredentialRuntimeBindingWireV1,
@@ -28,14 +27,12 @@ fn pop_exact_bindings_match(
         && supplied.wallet_recipient_public_key_digest() == exact.wallet_recipient_public_key_digest
         && supplied.wallet_wrapping_key_id() == exact.wallet_wrapping_key_id
 }
-
 #[derive(Clone)]
 struct PopBrokerEnrollmentRecipient {
     provider: PopBrokerProvider,
     key_id: String,
     public_key_digest: [u8; 32],
 }
-
 impl fmt::Debug for PopBrokerEnrollmentRecipient {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -45,16 +42,13 @@ impl fmt::Debug for PopBrokerEnrollmentRecipient {
             .finish_non_exhaustive()
     }
 }
-
 impl sorafs_node::pop_credentials::PopEnrollmentRecipientV1 for PopBrokerEnrollmentRecipient {
     fn key_id(&self) -> &str {
         &self.key_id
     }
-
     fn public_key_digest(&self) -> [u8; 32] {
         self.public_key_digest
     }
-
     fn open_enrollment(
         &self,
         encrypted_payload: &sorafs_manifest::hybrid_envelope::HybridPayloadEnvelopeV1,
@@ -68,14 +62,12 @@ impl sorafs_node::pop_credentials::PopEnrollmentRecipientV1 for PopBrokerEnrollm
         )
     }
 }
-
 #[derive(Clone)]
 struct PopBrokerWalletRecipient {
     provider: PopBrokerProvider,
     key_id: String,
     public_key_digest: [u8; 32],
 }
-
 impl fmt::Debug for PopBrokerWalletRecipient {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -85,16 +77,13 @@ impl fmt::Debug for PopBrokerWalletRecipient {
             .finish_non_exhaustive()
     }
 }
-
 impl sorafs_node::pop_credentials::PopWalletRecipientV1 for PopBrokerWalletRecipient {
     fn key_id(&self) -> &str {
         &self.key_id
     }
-
     fn public_key_digest(&self) -> [u8; 32] {
         self.public_key_digest
     }
-
     fn open_wallet_delivery(
         &self,
         encrypted_payload: &sorafs_manifest::hybrid_envelope::HybridPayloadEnvelopeV1,
@@ -108,7 +97,6 @@ impl sorafs_node::pop_credentials::PopWalletRecipientV1 for PopBrokerWalletRecip
         )
     }
 }
-
 fn open_pop_recipient(
     provider: &PopBrokerProvider,
     operation: u16,
@@ -116,7 +104,6 @@ fn open_pop_recipient(
     aad: &[u8],
 ) -> Result<Vec<u8>, sorafs_node::pop_credentials::PopRecipientOpenErrorV1> {
     use sorafs_node::pop_credentials::PopRecipientOpenErrorV1 as Error;
-
     if !matches!(
         operation,
         OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1 | OPERATION_POP_WALLET_RECIPIENT_OPEN_V1

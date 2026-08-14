@@ -1,7 +1,5 @@
 //! Validate that the public CUDA status helpers report disabled on non-CUDA builds.
-
 #![cfg(not(feature = "cuda"))]
-
 #[test]
 fn cuda_status_disabled_without_feature() {
     assert!(

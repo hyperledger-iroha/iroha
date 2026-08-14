@@ -1,9 +1,7 @@
 use super::*;
 use crate::smart_contract::manifest::ContractManifest;
-
 /// Maximum number of contract artifact bytes carried by one native upload chunk.
 pub const SMART_CONTRACT_CODE_CHUNK_BYTES: usize = 65_536;
-
 isi! {
     /// Register a smart contract manifest keyed by `code_hash` into the WSV.
     ///
@@ -14,9 +12,7 @@ isi! {
         pub manifest: ContractManifest,
     }
 }
-
 impl crate::seal::Instruction for RegisterSmartContractCode {}
-
 isi! {
     /// Deactivate a contract instance by removing the `contract_address` binding.
     ///
@@ -31,9 +27,7 @@ isi! {
         pub reason: Option<String>,
     }
 }
-
 impl crate::seal::Instruction for DeactivateContractInstance {}
-
 isi! {
     /// Activate or perform `kaizen`/`改善` on a contract instance by binding
     /// `contract_address` to a `code_hash`.
@@ -49,9 +43,7 @@ isi! {
         pub code_hash: iroha_crypto::Hash,
     }
 }
-
 impl crate::seal::Instruction for ActivateContractInstance {}
-
 isi! {
     /// Atomically deploy a new contract address and move its stable alias.
     ///
@@ -76,9 +68,7 @@ isi! {
         pub expected_previous_contract_address: Option<crate::smart_contract::ContractAddress>,
     }
 }
-
 impl crate::seal::Instruction for CommitContractDeployment {}
-
 isi! {
     /// Register compiled contract bytecode on-chain keyed by its `code_hash`.
     ///
@@ -94,9 +84,7 @@ isi! {
         pub code: Vec<u8>,
     }
 }
-
 impl crate::seal::Instruction for RegisterSmartContractBytes {}
-
 isi! {
     /// Upload one bounded chunk of a compiled smart-contract artifact.
     ///
@@ -116,9 +104,7 @@ isi! {
         pub chunk: Vec<u8>,
     }
 }
-
 impl crate::seal::Instruction for UploadSmartContractCodeChunk {}
-
 isi! {
     /// Verify and atomically register a completely staged smart-contract artifact.
     ///
@@ -133,9 +119,7 @@ isi! {
         pub chunk_count: u32,
     }
 }
-
 impl crate::seal::Instruction for FinalizeSmartContractCodeUpload {}
-
 isi! {
     /// Cancel the authority's pending upload for `code_hash`.
     ///
@@ -145,9 +129,7 @@ isi! {
         pub code_hash: iroha_crypto::Hash,
     }
 }
-
 impl crate::seal::Instruction for CancelSmartContractCodeUpload {}
-
 isi! {
     /// Remove compiled contract bytecode from on-chain storage.
     ///
@@ -162,20 +144,16 @@ isi! {
         pub reason: Option<String>,
     }
 }
-
 impl crate::seal::Instruction for RemoveSmartContractBytes {}
-
 fn smart_contract_code_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RegisterSmartContractCode {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let manifest = super::decode_aos_canonical_field::<ContractManifest>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -188,14 +166,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterSmartContractCode {
         Ok((Self { manifest }, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for DeactivateContractInstance {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let contract_address = super::decode_aos_canonical_field::<
             crate::smart_contract::ContractAddress,
@@ -221,14 +197,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for DeactivateContractInstance {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for ActivateContractInstance {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let contract_address = super::decode_aos_canonical_field::<
             crate::smart_contract::ContractAddress,
@@ -250,14 +224,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ActivateContractInstance {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for CommitContractDeployment {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let expected_deploy_nonce = super::decode_aos_canonical_field::<u64>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -299,14 +271,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CommitContractDeployment {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RegisterSmartContractBytes {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let code_hash = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -323,14 +293,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterSmartContractBytes {
         Ok((Self { code_hash, code }, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for UploadSmartContractCodeChunk {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let code_hash = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -368,14 +336,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for UploadSmartContractCodeChunk {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for FinalizeSmartContractCodeUpload {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let code_hash = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -403,14 +369,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for FinalizeSmartContractCodeUpload {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for CancelSmartContractCodeUpload {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let code_hash = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -423,14 +387,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CancelSmartContractCodeUpload {
         Ok((Self { code_hash }, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RemoveSmartContractBytes {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let code_hash = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -451,25 +413,21 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RemoveSmartContractBytes {
         Ok((Self { code_hash, reason }, offset))
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::{
         account::AccountId,
         nexus::DataSpaceId,
         smart_contract::{ContractAddress, ContractAlias},
     };
-
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use norito::core::DecodeFromSlice;
     fn account() -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![0xD1; 32], Algorithm::Ed25519)
             .expect("derive checked smart-contract-code fixture account keypair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn contract_address() -> ContractAddress {
         ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -481,15 +439,12 @@ mod tests {
         )
         .expect("contract address")
     }
-
     fn code_hash() -> Hash {
         Hash::new(b"contract-code")
     }
-
     fn contract_alias() -> ContractAlias {
         "payments::universal".parse().expect("contract alias")
     }
-
     fn manifest() -> ContractManifest {
         ContractManifest {
             seiyaku_name: None,
@@ -505,7 +460,6 @@ mod tests {
             provenance: None,
         }
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -516,7 +470,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, value: T)
     where
         T: crate::isi::Instruction
@@ -534,7 +487,6 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     fn smart_contract_code_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(RegisterSmartContractCode {
@@ -580,7 +532,6 @@ mod tests {
             reason: Some("superseded".to_owned()),
         });
     }
-
     #[test]
     fn commit_contract_deployment_rejects_missing_trailing_fields() {
         let encoded = CommitContractDeployment {
@@ -598,7 +549,6 @@ mod tests {
             0,
             "truncation fixture requires the canonical AoS layout"
         );
-
         let mut offset = 0usize;
         for _ in 0..4 {
             crate::isi::read_aos_field(&encoded, &mut offset, flags).expect("required field");
@@ -607,14 +557,12 @@ mod tests {
             CommitContractDeployment::decode_from_slice(&encoded[..offset]).is_err(),
             "wire payload missing both optional-valued fields must be rejected"
         );
-
         crate::isi::read_aos_field(&encoded, &mut offset, flags).expect("lease field");
         assert!(
             CommitContractDeployment::decode_from_slice(&encoded[..offset]).is_err(),
             "wire payload missing expected_previous_contract_address must be rejected"
         );
     }
-
     #[test]
     fn smart_contract_code_registry_decodes_type_names() {
         let registry = crate::isi::InstructionRegistry::new()
@@ -627,7 +575,6 @@ mod tests {
             .register_slice::<FinalizeSmartContractCodeUpload>()
             .register_slice::<CancelSmartContractCodeUpload>()
             .register_slice::<RemoveSmartContractBytes>();
-
         assert_registry_decodes(
             &registry,
             RegisterSmartContractCode {
@@ -698,7 +645,6 @@ mod tests {
             },
         );
     }
-
     #[test]
     fn default_instruction_registry_decodes_native_upload_instructions() {
         let registry = crate::instruction_registry::default();

@@ -5,7 +5,6 @@ fn fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback() {
         .expect("nexus fee test lock");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
     let chain_id = ChainId::from("fee-detached-single-transfer-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -64,7 +63,6 @@ fn fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback() {
         nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
     }
-
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -76,7 +74,6 @@ fn fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -107,7 +104,6 @@ fn fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback() {
         &block_time_source,
     )
     .expect("transaction should pass stateless admission");
-
     let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
         .chain(1, Some(&latest_signed))
         .sign(payer_keypair.private_key())
@@ -116,7 +112,6 @@ fn fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback() {
     let valid_block = unverified_block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-
     let errors = valid_block
         .as_ref()
         .errors()
@@ -135,7 +130,6 @@ fn fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback() {
             .detached_fallback_fee_postprocessing_total,
         0
     );
-
     let assets = state_block.world.assets();
     assert_eq!(
         assets.get(&payer_transfer_asset).expect("payer rose").0,
@@ -153,7 +147,6 @@ fn fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback() {
         Quantity::from(9_u32)
     );
 }
-
 #[test]
 fn fee_enabled_supported_non_transfer_uses_fee_postprocessing_fallback() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
@@ -161,7 +154,6 @@ fn fee_enabled_supported_non_transfer_uses_fee_postprocessing_fallback() {
         .expect("nexus fee test lock");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
     let chain_id = ChainId::from("fee-detached-non-transfer-fallback-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (sink_id, _sink_keypair) = gen_account_in("wonderland");
@@ -202,7 +194,6 @@ fn fee_enabled_supported_non_transfer_uses_fee_postprocessing_fallback() {
         nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
     }
-
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -214,7 +205,6 @@ fn fee_enabled_supported_non_transfer_uses_fee_postprocessing_fallback() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-
     let marker_key: Name = "fee_fallback_marker".parse().expect("metadata key");
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
@@ -242,7 +232,6 @@ fn fee_enabled_supported_non_transfer_uses_fee_postprocessing_fallback() {
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
-
     let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
     let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
         .chain(1, Some(&latest_signed))
@@ -252,7 +241,6 @@ fn fee_enabled_supported_non_transfer_uses_fee_postprocessing_fallback() {
     let valid_block = unverified_block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-
     assert!(
         valid_block.as_ref().errors().next().is_none(),
         "supported non-transfer fee transaction should be accepted through sequential fallback"
@@ -277,7 +265,6 @@ fn fee_enabled_supported_non_transfer_uses_fee_postprocessing_fallback() {
         1,
         "metadata writes are deliberately unsupported by detached execution"
     );
-
     let assets = state_block.world.assets();
     assert_eq!(
         assets.get(&payer_fee_asset).expect("payer xor").0,
@@ -291,7 +278,6 @@ fn fee_enabled_supported_non_transfer_uses_fee_postprocessing_fallback() {
         .expect("payer account exists");
     assert_eq!(marker_value, Some(Json::from(true)));
 }
-
 #[test]
 fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
@@ -299,7 +285,6 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
         .expect("nexus fee test lock");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
     let chain_id = ChainId::from("fee-detached-insufficient-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -358,7 +343,6 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
         nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
     }
-
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -370,7 +354,6 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-
     let mut builder = TransactionBuilder::new(
         state.network_id,
         payer_id.clone(),
@@ -393,7 +376,6 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
-
     let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
     let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
         .chain(1, Some(&latest_signed))
@@ -403,13 +385,11 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
     let valid_block = unverified_block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-
     assert_eq!(
         valid_block.as_ref().errors().next().map(|(idx, _)| idx),
         Some(0),
         "insufficient fee must reject the transaction"
     );
-
     let assets = state_block.world.assets();
     assert_eq!(
         assets.get(&payer_transfer_asset).expect("payer rose").0,
@@ -430,7 +410,6 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
         "failed fee debit must not create a negative or partial fee state"
     );
 }
-
 #[test]
 fn fee_enabled_single_transfer_with_active_data_trigger_uses_fee_fallback() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
@@ -438,7 +417,6 @@ fn fee_enabled_single_transfer_with_active_data_trigger_uses_fee_fallback() {
         .expect("nexus fee test lock");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
     let chain_id = ChainId::from("fee-detached-data-trigger-fallback-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -497,7 +475,6 @@ fn fee_enabled_single_transfer_with_active_data_trigger_uses_fee_fallback() {
         nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
     }
-
     let trigger_marker_key: Name = "fee_trigger_marker".parse().expect("metadata key");
     let trigger_id: TriggerId = "fee_transfer_trigger_guard".parse().unwrap();
     let trigger = Trigger::new(
@@ -529,7 +506,6 @@ fn fee_enabled_single_transfer_with_active_data_trigger_uses_fee_fallback() {
         setup_tx.apply();
         setup_state_block.commit().expect("commit trigger setup");
     }
-
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -561,7 +537,6 @@ fn fee_enabled_single_transfer_with_active_data_trigger_uses_fee_fallback() {
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
-
     let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
     let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
         .chain(1, Some(&setup_signed))
@@ -571,7 +546,6 @@ fn fee_enabled_single_transfer_with_active_data_trigger_uses_fee_fallback() {
     let valid_block = unverified_block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-
     assert!(
         valid_block.as_ref().errors().next().is_none(),
         "fee-enabled transfer with an active data trigger should be accepted through fallback"
@@ -585,7 +559,6 @@ fn fee_enabled_single_transfer_with_active_data_trigger_uses_fee_fallback() {
             .detached_fallback_fee_postprocessing_total,
         1
     );
-
     let assets = state_block.world.assets();
     assert_eq!(
         assets.get(&payer_transfer_asset).expect("payer rose").0,
@@ -610,7 +583,6 @@ fn fee_enabled_single_transfer_with_active_data_trigger_uses_fee_fallback() {
         .expect("payer account exists");
     assert_eq!(marker_value, Some(Json::from("triggered")));
 }
-
 #[test]
 fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_missing() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
@@ -618,7 +590,6 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
         .expect("nexus fee test lock");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
     let chain_id = ChainId::from("fee-detached-missing-fee-asset-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -676,7 +647,6 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
         nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
     }
-
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -688,7 +658,6 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -715,7 +684,6 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
-
     let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
     let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
         .chain(1, Some(&latest_signed))
@@ -725,13 +693,11 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
     let valid_block = unverified_block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-
     assert_eq!(
         valid_block.as_ref().errors().next().map(|(idx, _)| idx),
         Some(0),
         "missing payer fee asset must reject the transaction"
     );
-
     let assets = state_block.world.assets();
     assert_eq!(
         assets.get(&payer_transfer_asset).expect("payer rose").0,
@@ -751,7 +717,6 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
         "fee charging must not create the missing payer fee asset"
     );
 }
-
 #[test]
 fn fee_enabled_transfer_fee_same_asset_rejects_without_partial_state() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
@@ -759,7 +724,6 @@ fn fee_enabled_transfer_fee_same_asset_rejects_without_partial_state() {
         .expect("nexus fee test lock");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
     let chain_id = ChainId::from("fee-detached-same-asset-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -804,7 +768,6 @@ fn fee_enabled_transfer_fee_same_asset_rejects_without_partial_state() {
         nexus.fees.fee_asset_id = asset_definition_id.to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
     }
-
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -816,7 +779,6 @@ fn fee_enabled_transfer_fee_same_asset_rejects_without_partial_state() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -843,7 +805,6 @@ fn fee_enabled_transfer_fee_same_asset_rejects_without_partial_state() {
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
-
     let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
     let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
         .chain(1, Some(&latest_signed))
@@ -853,7 +814,6 @@ fn fee_enabled_transfer_fee_same_asset_rejects_without_partial_state() {
     let valid_block = unverified_block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-
     assert_eq!(
         valid_block.as_ref().errors().next().map(|(idx, _)| idx),
         Some(0),
@@ -862,7 +822,6 @@ fn fee_enabled_transfer_fee_same_asset_rejects_without_partial_state() {
     let snapshot = crate::sumeragi::status::snapshot();
     assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
     assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
-
     let assets = state_block.world.assets();
     assert_eq!(
         assets.get(&payer_asset).expect("payer rose").0,
@@ -875,7 +834,6 @@ fn fee_enabled_transfer_fee_same_asset_rejects_without_partial_state() {
         "recipient must not receive funds from a transaction rejected during fee charging"
     );
 }
-
 #[test]
 fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_prior_success() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
@@ -883,7 +841,6 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         .expect("nexus fee test lock");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
     let chain_id = ChainId::from("fee-detached-shared-fee-balance-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -942,7 +899,6 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
     }
-
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -954,7 +910,6 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -982,7 +937,6 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         Duration::from_millis(10),
     )
     .expect("first transaction should pass stateless admission");
-
     let mut second_builder =
         TransactionBuilder::new(state.network_id, payer_id.clone(), fee_payment);
     second_builder.set_creation_time(Duration::from_millis(1));
@@ -1002,7 +956,6 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         Duration::from_millis(10),
     )
     .expect("second transaction should pass stateless admission");
-
     let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
     let unverified_block =
         BlockBuilder::new_with_time_source(vec![first_tx, second_tx], block_time_source)
@@ -1013,7 +966,6 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
     let valid_block = unverified_block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-
     assert_eq!(
         valid_block.as_ref().errors().count(),
         1,
@@ -1028,7 +980,6 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         snapshot.pipeline_execution.detached_fallback_total, 0,
         "signed fee admission must reject after the first debit drains the balance, before detached execution"
     );
-
     let assets = state_block.world.assets();
     assert_eq!(
         assets
@@ -1055,7 +1006,6 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         "only the accepted transaction may consume the available fee balance"
     );
 }
-
 #[test]
 fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_transfer() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
@@ -1063,7 +1013,6 @@ fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_tran
         .expect("nexus fee test lock");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
     let chain_id = ChainId::from("fee-detached-transfer-then-fail-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -1122,7 +1071,6 @@ fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_tran
         nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
     }
-
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -1134,7 +1082,6 @@ fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_tran
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-
     let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
         vec![iroha_data_model::transaction::FeeChargeLimit::new(
             iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -1161,7 +1108,6 @@ fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_tran
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
-
     let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
     let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
         .chain(1, Some(&latest_signed))
@@ -1171,7 +1117,6 @@ fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_tran
     let valid_block = unverified_block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-
     assert_eq!(
         valid_block.as_ref().errors().next().map(|(idx, _)| idx),
         Some(0),
@@ -1187,7 +1132,6 @@ fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_tran
         1,
         "multi-instruction transfer transactions must not use detached transfer merge"
     );
-
     let assets = state_block.world.assets();
     assert_eq!(
         assets
@@ -1214,7 +1158,6 @@ fn fee_enabled_transfer_then_failing_instruction_falls_back_without_leaking_tran
         "rejected business execution must still charge the configured Nexus fee"
     );
 }
-
 #[test]
 fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
@@ -1222,7 +1165,6 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
         .expect("nexus fee test lock");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
     let chain_id = ChainId::from("fee-detached-sequence-admission-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -1271,7 +1213,6 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
     params.transaction = params.transaction.with_ingress_enforcement(false, true);
     world.parameters = mv::cell::Cell::new(params);
     world.tx_sequences.insert(payer_id.clone(), 5);
-
     let kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_with_chain(world, Arc::clone(&kura), query_handle, chain_id.clone());
@@ -1286,7 +1227,6 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
         nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
     }
-
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -1298,7 +1238,6 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-
     let mut metadata = Metadata::default();
     metadata.insert(
         Name::from_str("tx_sequence").expect("metadata key"),
@@ -1327,7 +1266,6 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
         Duration::from_millis(10),
     )
     .expect("transaction should pass stateless admission");
-
     let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
     let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
         .chain(1, Some(&latest_signed))
@@ -1337,7 +1275,6 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
     let valid_block = unverified_block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-
     assert_eq!(
         valid_block.as_ref().errors().next().map(|(idx, _)| idx),
         Some(0),
@@ -1346,7 +1283,6 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
     let snapshot = crate::sumeragi::status::snapshot();
     assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
     assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
-
     let assets = state_block.world.assets();
     assert_eq!(
         assets
@@ -1376,7 +1312,6 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
         "rejected sequence must not advance stored per-authority state"
     );
 }
-
 #[test]
 fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_mutation() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
@@ -1384,7 +1319,6 @@ fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_muta
         .expect("nexus fee test lock");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
     let chain_id = ChainId::from("legacy-fee-sponsor-metadata-disabled-fees-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
@@ -1445,7 +1379,6 @@ fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_muta
         nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
     }
-
     let mut metadata = Metadata::default();
     metadata.insert(
         Name::from_str("fee_sponsor").expect("metadata key"),
@@ -1474,7 +1407,6 @@ fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_muta
         ),
         "unexpected signing error: {error}"
     );
-
     let state_view = state.world.view();
     let assets = state_view.assets();
     assert_eq!(
@@ -1500,7 +1432,6 @@ fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_muta
         "signing rejection must not debit the legacy sponsor"
     );
 }
-
 #[test]
 fn legacy_fee_sponsor_metadata_rejects_even_when_nexus_fees_are_enabled() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
@@ -1508,7 +1439,6 @@ fn legacy_fee_sponsor_metadata_rejects_even_when_nexus_fees_are_enabled() {
         .expect("nexus fee test lock");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
     let chain_id = ChainId::from("legacy-fee-sponsor-metadata-enabled-fees-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
@@ -1569,7 +1499,6 @@ fn legacy_fee_sponsor_metadata_rejects_even_when_nexus_fees_are_enabled() {
         nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
     }
-
     let mut metadata = Metadata::default();
     metadata.insert(
         Name::from_str("fee_sponsor").expect("metadata key"),
@@ -1598,7 +1527,6 @@ fn legacy_fee_sponsor_metadata_rejects_even_when_nexus_fees_are_enabled() {
         ),
         "unexpected signing error: {error}"
     );
-
     let state_view = state.world.view();
     let assets = state_view.assets();
     assert_eq!(
@@ -1624,7 +1552,6 @@ fn legacy_fee_sponsor_metadata_rejects_even_when_nexus_fees_are_enabled() {
         "signing rejection must not debit the legacy sponsor"
     );
 }
-
 #[test]
 fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
@@ -1632,7 +1559,6 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
         .expect("nexus fee test lock");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
-
     let chain_id = ChainId::from("fee-detached-invalid-fee-asset-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -1678,7 +1604,6 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
         nexus.fees.fee_asset_id = "not-an-asset-literal".to_owned();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
     }
-
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -1690,7 +1615,6 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-
     let mut builder = TransactionBuilder::new(
         state.network_id,
         payer_id.clone(),
@@ -1712,7 +1636,6 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
         state.crypto().as_ref(),
     )
     .expect("transaction should pass stateless admission");
-
     let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
     let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
         .chain(1, Some(&latest_signed))
@@ -1722,7 +1645,6 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
     let valid_block = unverified_block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-
     assert_eq!(
         valid_block.as_ref().errors().next().map(|(idx, _)| idx),
         Some(0),
@@ -1734,7 +1656,6 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
         snapshot.pipeline_execution.detached_fallback_total, 0,
         "invalid governed fee configuration must fail signed admission before execution"
     );
-
     let assets = state_block.world.assets();
     assert_eq!(
         assets
@@ -1751,14 +1672,12 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
         Quantity::zero()
     );
 }
-
 #[test]
 fn rejected_data_trigger_execution_still_charges_nexus_fee() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
     crate::sumeragi::status::reset_nexus_economics_for_tests();
-
     let chain_id = ChainId::from("rejected-trigger-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (sink_id, _sink_keypair) = gen_account_in("wonderland");
@@ -1824,7 +1743,6 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         header.set_height(nonzero!(1_u64));
     });
     let latest_signed: SignedBlock = latest_valid.into();
-
     let trigger_id: TriggerId = "fee_depth_limit_trigger".parse().unwrap();
     let flag_key: Name = "fee_trigger_flag".parse().unwrap();
     let event_key: Name = "fee_trigger_event".parse().unwrap();
@@ -1873,7 +1791,6 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         state.crypto().as_ref(),
     )
     .expect("transaction should pass stateless admission");
-
     let (_block_handle, block_time_source) = TimeSource::new_mock(Duration::from_millis(10));
     let unverified_block = BlockBuilder::new_with_time_source(vec![tx], block_time_source)
         .chain(1, Some(&latest_signed))
@@ -1883,7 +1800,6 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
     let valid_block = unverified_block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-
     assert_eq!(
         valid_block.as_ref().errors().next().map(|(idx, _)| idx),
         Some(0)
@@ -1898,7 +1814,6 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         ),
         "unexpected trigger rejection: {first_error:?}"
     );
-
     let assets = state_block.world.assets();
     let payer_balance = assets
         .get(&AssetId::of(asset_definition_id.clone(), payer_id.clone()))
@@ -1910,7 +1825,6 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         .expect("sink balance exists")
         .0
         .to_string();
-
     assert_eq!(payer_balance, "9", "tx error: {first_error:?}");
     assert_eq!(sink_balance, "0");
     let event_value = state_block
@@ -1924,11 +1838,9 @@ fn rejected_data_trigger_execution_still_charges_nexus_fee() {
         "trigger-rejected transaction state changes must still be rolled back"
     );
 }
-
 #[tokio::test]
 async fn validate_and_record_transactions_allows_missing_authority_self_register() {
     let chain_id = ChainId::from("missing-authority-self-register-block");
-
     let (authority, keypair) = gen_account_in("wonderland");
     let world = World::new();
     let kura = Kura::blank_kura_for_testing();
@@ -1940,7 +1852,6 @@ async fn validate_and_record_transactions_allows_missing_authority_self_register
         let params = state_view.parameters();
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
-
     let tx = TransactionBuilder::new(
         state.network_id,
         authority.clone(),
@@ -1960,17 +1871,14 @@ async fn validate_and_record_transactions_allows_missing_authority_self_register
         crypto_cfg.as_ref(),
     )
     .expect("admission should accept transaction shape");
-
     let unverified_block = BlockBuilder::new(vec![tx])
         .chain(0, state.view().latest_block().as_deref())
         .sign(keypair.private_key())
         .unpack(|_| {});
-
     let mut state_block = state.block(unverified_block.header);
     let valid_block = unverified_block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-
     assert!(
         valid_block.as_ref().errors().next().is_none(),
         "self-register block path should not produce transaction errors"

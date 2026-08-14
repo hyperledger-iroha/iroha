@@ -2,9 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 //! `CoreHost` ZK voting instructions require their operation-specific verify syscall.
-
-use std::sync::Arc;
-
 use iroha_core::{
     kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::host::CoreHost, state::State,
 };
@@ -12,13 +9,11 @@ use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use nonzero_ext::nonzero;
-
+use std::sync::Arc;
 const VM_GAS_LIMIT: u64 = 10_000_000;
-
 fn with_core_host<R>(vm: &mut IVM, f: impl FnOnce(&mut CoreHost) -> R) -> R {
     CoreHost::with_host(vm, f)
 }
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
     v.extend_from_slice(&type_id.to_be_bytes());
@@ -29,7 +24,6 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     v.extend_from_slice(&h);
     v
 }
-
 fn small_proof_attachment() -> iroha_data_model::proof::ProofAttachment {
     let proof = iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0xAB; 32]);
     iroha_data_model::proof::ProofAttachment::new_ref(
@@ -38,13 +32,11 @@ fn small_proof_attachment() -> iroha_data_model::proof::ProofAttachment {
         iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "fixture"),
     )
 }
-
 fn store_tlv(vm: &mut IVM, cursor: &mut u64, tlv: &[u8]) -> u64 {
     vm.memory
         .input_write_aligned(cursor, tlv, 8)
         .expect("write TLV into INPUT")
 }
-
 #[test]
 fn submit_ballot_without_verify_is_rejected() {
     // Minimal state
@@ -55,7 +47,6 @@ fn submit_ballot_without_verify_is_rejected() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let authority: AccountId = ALICE_ID.clone();
     let mut vm = IVM::new(VM_GAS_LIMIT);
     let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
@@ -69,7 +60,6 @@ fn submit_ballot_without_verify_is_rejected() {
         ..Default::default()
     });
     vm.set_host(host);
-
     // Build SubmitBallot instruction
     let sb = iroha_data_model::isi::zk::SubmitBallot {
         election_id: "election1".to_string(),
@@ -83,7 +73,6 @@ fn submit_ballot_without_verify_is_rejected() {
     let mut cursor = 0;
     let ptr = store_tlv(&mut vm, &mut cursor, &tlv);
     vm.set_register(10, ptr);
-
     // Program: SCALL SMARTCONTRACT_EXECUTE_INSTRUCTION; HALT
     let mut code = Vec::new();
     let scall = instruction::wide::system::SCALL;
@@ -93,7 +82,6 @@ fn submit_ballot_without_verify_is_rejected() {
     let mut prog = ProgramMetadata::default().encode();
     prog.extend_from_slice(&code);
     vm.load_program(&prog).unwrap();
-
     vm.run().unwrap();
     let err = with_core_host(&mut vm, |host| host.apply_queued(&mut stx, &authority))
         .expect_err("SubmitBallot must be gated by verify");
@@ -104,7 +92,6 @@ fn submit_ballot_without_verify_is_rejected() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn finalize_election_without_verify_is_rejected() {
     // Minimal state
@@ -115,7 +102,6 @@ fn finalize_election_without_verify_is_rejected() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let authority: AccountId = ALICE_ID.clone();
     let mut vm = IVM::new(VM_GAS_LIMIT);
     let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
@@ -129,7 +115,6 @@ fn finalize_election_without_verify_is_rejected() {
         ..Default::default()
     });
     vm.set_host(host);
-
     // Build FinalizeElection instruction
     let fin = iroha_data_model::isi::zk::FinalizeElection {
         election_id: "election1".to_string(),
@@ -142,7 +127,6 @@ fn finalize_election_without_verify_is_rejected() {
     let mut cursor = 0;
     let ptr = store_tlv(&mut vm, &mut cursor, &tlv);
     vm.set_register(10, ptr);
-
     // Program: SCALL SMARTCONTRACT_EXECUTE_INSTRUCTION; HALT
     let mut code = Vec::new();
     code.extend_from_slice(
@@ -157,7 +141,6 @@ fn finalize_election_without_verify_is_rejected() {
     let mut prog = ProgramMetadata::default().encode();
     prog.extend_from_slice(&code);
     vm.load_program(&prog).unwrap();
-
     vm.run().unwrap();
     let err = with_core_host(&mut vm, |host| host.apply_queued(&mut stx, &authority))
         .expect_err("FinalizeElection must be gated by verify");

@@ -1,10 +1,8 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
-
 // ========================================================================
 // Big integers.
 // ========================================================================
-
 // We implement some support for big integers that are represented either
 // in base 2^31, or in RNS notation, i.e. modulo a given set of 31-bit
 // primes. Both representations use a given, fixed number of words (limbs,
@@ -21,9 +19,7 @@
 // of its slice, but inferred from another function parameter (usually,
 // the number of words matches the size of the slice of another big
 // integer which uses stride 1).
-
 use super::mp31::{PRIMES, mp_add, mp_half, mp_mmul, mp_set_u, mp_sub, tbmask};
-
 // Multiply m by the small value x (non-negative). x MUST be less than 2^31.
 // The integer m uses base 2^31 with stride 1, and is modified to receive
 // the result. The carry word is returned.
@@ -36,7 +32,6 @@ pub(crate) fn zint_mul_small(m: &mut [u32], x: u32) -> u32 {
     }
     cc
 }
-
 // Reduce a big integer d modulo a small integer p.
 //   d uses base 2^31 with stride 'dstride', dlen elements
 //   d is considered unsigned
@@ -62,7 +57,6 @@ pub(crate) fn zint_mod_small_unsigned(
     }
     x
 }
-
 // Reduce a big integer d modulo a small integer p.
 //   d uses base 2^31 with stride 'dstride', dlen elements
 //   d is considered signed
@@ -86,7 +80,6 @@ pub(crate) fn zint_mod_small_signed(
     let r = zint_mod_small_unsigned(d, dlen, dstride, p, p0i, R2);
     mp_sub(r, Rx & (d[dstride * (dlen - 1)] >> 30).wrapping_neg(), p)
 }
-
 // Add a*s to d.
 //   d uses base 2^31, stride 'dstride', unsigned
 //   a uses base 2^31, stride 1, unsigned
@@ -104,7 +97,6 @@ pub(crate) fn zint_add_mul_small(d: &mut [u32], dstride: usize, a: &[u32], s: u3
     }
     d[j] = cc;
 }
-
 // Normalize a modular big integer around 0: if x > floor(m/2), then x is
 // replaced with x - m; otherwise, x is untouched. Source x should be
 // non-negative and lower than m.
@@ -121,22 +113,18 @@ pub(crate) fn zint_norm_zero(x: &mut [u32], xstride: usize, m: &[u32]) {
         let mw = m[i];
         let hmw = (mw >> 1) | (bb << 30);
         bb = mw & 1;
-
         // Get next word of x.
         j -= xstride;
         let xw = x[j];
-
         // We set cc to -1, 0 or 1, depending on whether hmw is lower than,
         // equal to, or greater than xw.
         let cc = hmw.wrapping_sub(xw);
         let cc = (cc.wrapping_neg() >> 31) | tbmask(cc);
-
         // If r != 0 then it is either 1 or -1, and we keep its value
         // (comparison result has already been ascertained). Otherwise,
         // we replace it with cc.
         r |= cc & ((r & 1).wrapping_sub(1));
     }
-
     // At this point, r = -1, 0 or 1, depending on whether (m-1)/2 is
     // lower than, equal to, or greater than x. We subtract m from x
     // if and only if r < 0.
@@ -150,7 +138,6 @@ pub(crate) fn zint_norm_zero(x: &mut [u32], xstride: usize, m: &[u32]) {
         cc = xw >> 31;
     }
 }
-
 // Rebuild several integers from their RNS representation. There are
 // 'num_sets' sets of 'n' integers. Within each set, the n integers
 // are interleaved, so that words of a given integer occur every n
@@ -202,13 +189,11 @@ pub(crate) fn zint_rebuild_CRT(
                 zint_add_mul_small(xq, n, &tmp[..i], xt);
             }
         }
-
         // Multiply xq_i (in tmp[]) with p_i to prepare for the next
         // iteration (this is also useful for the last iteration: the
         // product of all small primes is used for signed normalization).
         tmp[i] = zint_mul_small(&mut tmp[0..i], p);
     }
-
     // Apply signed normalization if requested.
     if normalize_signed {
         for j in 0..num_sets {
@@ -218,7 +203,6 @@ pub(crate) fn zint_rebuild_CRT(
         }
     }
 }
-
 // Negate a big integer conditionally: value a is replaced with -a if
 // ctl == 0xFFFFFFFF; if ctl == 0, then a is unchanged. a[] is in base 2^31,
 // stride 1, unsigned.
@@ -231,7 +215,6 @@ fn zint_negate(a: &mut [u32], ctl: u32) {
         *aw = z & 0x7FFFFFFF;
     }
 }
-
 // Replace a and b with (a*xa + b*xb)/2^31 and (a*ya + b*yb)/2^31,
 // respectively. The low bits are dropped.
 // The two values are then replaced with their respective absolute values.
@@ -271,14 +254,12 @@ fn zint_co_lin_div31_abs(
     }
     a[nlen - 1] = (cca as u32) & 0x7FFFFFFF;
     b[nlen - 1] = (ccb as u32) & 0x7FFFFFFF;
-
     let nega = (cca >> 63) as u32;
     let negb = (ccb >> 63) as u32;
     zint_negate(a, nega);
     zint_negate(b, negb);
     (nega, negb)
 }
-
 // Finish modular reduction. Rules:
 //   if neg == 0xFFFFFFFF, then -m <= a < 0
 //   if neg == 0x00000000, then 0 <= a < 2*m
@@ -292,7 +273,6 @@ fn zint_finish_mod(a: &mut [u32], m: &[u32], neg: u32) {
     for (aw, mw) in a.iter().zip(m) {
         cc = aw.wrapping_sub(*mw).wrapping_sub(cc) >> 31;
     }
-
     // If neg == 0xFFFFFFFF, then we must add m (regardless of cc).
     // If neg == 0x00000000 and cc == 0, then we must subtract m.
     // If neg == 0x00000000 and cc == 1, then we must do nothing.
@@ -312,7 +292,6 @@ fn zint_finish_mod(a: &mut [u32], m: &[u32], neg: u32) {
         cc = z >> 31;
     }
 }
-
 // Replace a and b with (a*xa + b*xb)/2^31 mod m and
 // (a*ya + b*yb)/2^31 mod m, respectively. Modulus m must be odd;
 // m0i = -1/m[0] mod 2^31. Coefficients xa, xb, ya and yb must be
@@ -370,7 +349,6 @@ fn zint_co_lin_mod(
     }
     a[nlen - 1] = cca as u32;
     b[nlen - 1] = ccb as u32;
-
     // The loop computed in a[]:
     //   a*xa + b*xb + m*fa
     // with:
@@ -391,7 +369,6 @@ fn zint_co_lin_mod(
     zint_finish_mod(a, m, (cca >> 63) as u32);
     zint_finish_mod(b, m, (ccb >> 63) as u32);
 }
-
 // Given x (odd), compute -1/x mod 2^31.
 fn ninv31(x: u32) -> u32 {
     let y = 2u32.wrapping_sub(x);
@@ -401,7 +378,6 @@ fn ninv31(x: u32) -> u32 {
     let y = y.wrapping_mul(2u32.wrapping_sub(x.wrapping_mul(y)));
     y.wrapping_neg() & 0x7FFFFFFF
 }
-
 // Extended GCD between two positive integers x and y. The two
 // integers must be odd. Returned value is 0xFFFFFFFF if the GCD is 1, 0
 // otherwise. When 0xFFFFFFFF is returned, arrays u and v are filled with
@@ -425,7 +401,6 @@ pub(crate) fn zint_bezout(
     if nlen == 0 {
         return 0;
     }
-
     // Algorithm is basically the optimized binary GCD as described in:
     //    https://eprint.iacr.org/2020/972
     // The paper shows that with registers of size 2*k bits, one can do
@@ -440,7 +415,6 @@ pub(crate) fn zint_bezout(
     // coefficients (u0, u1, v0 and v1) instead of the two coefficients
     // (u, v), because we want a full Bezout relation, not just a modular
     // inverse.
-
     // We set up integers u0, v0, u1, v1, a and b. Throughout the algorithm,
     // they maintain the following invariants:
     //   a = x*u0 - y*v0
@@ -457,7 +431,6 @@ pub(crate) fn zint_bezout(
     let (v0, tmp) = tmp.split_at_mut(nlen);
     let (a, tmp) = tmp.split_at_mut(nlen);
     let (b, _) = tmp.split_at_mut(nlen);
-
     // Initial values:
     //   a = x   u0 = 1   v0 = 0
     //   b = y   u1 = y   v1 = x - 1
@@ -469,17 +442,14 @@ pub(crate) fn zint_bezout(
     v0.fill(0);
     v1.copy_from_slice(x);
     v1[0] = x[0] - 1; // x is odd, so no possible overflow
-
     // Coefficients for Montgomery reduction.
     let x0i = ninv31(x[0]);
     let y0i = ninv31(y[0]);
-
     // Each operand is up to 31*nlen bits, and the total is reduced by
     // at least 31 bits at each outer iteration.
     let mut num = 62 * nlen + 31;
     while num >= 31 {
         num -= 31;
-
         // Extract the top 32 bits of a and b: if j is such that:
         //   2^(j-1) <= max(a,b) < 2^j
         // then we want:
@@ -506,7 +476,6 @@ pub(crate) fn zint_bezout(
             c0 = c1;
             c1 &= (((aw | bw) + 0x7FFFFFFF) >> 31).wrapping_sub(1);
         }
-
         // Possible situations:
         //   cp = 0, c0 = 0, c1 = 0
         //     j >= 63, top words of a and b are in a0:a1 and b0:b1
@@ -524,20 +493,16 @@ pub(crate) fn zint_bezout(
         let s = lzcnt(a1 | b1 | ((cp & c0) >> 1));
         let ha = (a1 << s) | (a0 >> (31 - s));
         let hb = (b1 << s) | (b0 >> (31 - s));
-
         // If j <= 62, then we instead use the non-aligned bits.
         let ha = ha ^ (cp & (ha ^ a1));
         let hb = hb ^ (cp & (hb ^ b1));
-
         // If j <= 31, then all of the above was bad, and we simply
         // clear the upper bits.
         let ha = ha & !c0;
         let hb = hb & !c0;
-
         // Assemble the approximate values xa and xb (63 bits each).
         let mut xa = ((ha as u64) << 31) | (a[0] as u64);
         let mut xb = ((hb as u64) << 31) | (b[0] as u64);
-
         // Compute reduction factors:
         //   a' = a*f0 + b*g0
         //   b' = a*f1 + b*g1
@@ -565,7 +530,6 @@ pub(crate) fn zint_bezout(
             xa >>= 1;
             fg1 <<= 1;
         }
-
         // Split update factors.
         fg0 = fg0.wrapping_add(0x7FFFFFFF7FFFFFFF);
         fg1 = fg1.wrapping_add(0x7FFFFFFF7FFFFFFF);
@@ -573,7 +537,6 @@ pub(crate) fn zint_bezout(
         let g0 = ((fg0 >> 32) as i64) - 0x7FFFFFFF;
         let f1 = ((fg1 & 0xFFFFFFFF) as i64) - 0x7FFFFFFF;
         let g1 = ((fg1 >> 32) as i64) - 0x7FFFFFFF;
-
         // Apply the update factors.
         let (nega, negb) = zint_co_lin_div31_abs(a, b, f0, g0, f1, g1);
         let f0 = f0 - ((f0 + f0) & ((nega as i64) | ((nega as i64) << 32)));
@@ -583,18 +546,15 @@ pub(crate) fn zint_bezout(
         zint_co_lin_mod(u0, u1, y, y0i, f0, g0, f1, g1);
         zint_co_lin_mod(v0, v1, x, x0i, f0, g0, f1, g1);
     }
-
     // b contains GCD(x,y), provided that x and y were indeed odd.
     // Result is correct if the GCD is 1.
     let mut r = b[0] ^ 1;
     for i in 1..b.len() {
         r |= b[i];
     }
-
     r |= (x[0] & y[0] & 1) ^ 1;
     ((r | r.wrapping_neg()) >> 31).wrapping_sub(1)
 }
-
 // lzcnt(x) returns the number of leading zero bits of x. This function
 // assumes that x != 0. There are dedicated opcodes for this operation
 // on x86 (bsr and lzcnt) and aarch64 (clz); they are constant-time for
@@ -606,7 +566,6 @@ pub(crate) fn zint_bezout(
 // conditional for the case of a zero input, that bsr does not handle
 // properly; since we always use it with a non-zero input, this does not
 // contradict constant-time discipline.
-
 #[cfg(any(
     target_arch = "x86",
     target_arch = "x86_64",
@@ -616,7 +575,6 @@ pub(crate) fn zint_bezout(
 const fn lzcnt(x: u32) -> u32 {
     x.leading_zeros()
 }
-
 #[cfg(not(any(
     target_arch = "x86",
     target_arch = "x86_64",
@@ -627,29 +585,23 @@ const fn lzcnt(x: u32) -> u32 {
     let m = tbmask((x >> 16).wrapping_sub(1));
     let s = m & 16;
     let x = (x >> 16) ^ (m & (x ^ (x >> 16)));
-
     let m = tbmask((x >> 8).wrapping_sub(1));
     let s = s | (m & 8);
     let x = (x >> 8) ^ (m & (x ^ (x >> 8)));
-
     let m = tbmask((x >> 4).wrapping_sub(1));
     let s = s | (m & 4);
     let x = (x >> 4) ^ (m & (x ^ (x >> 4)));
-
     let m = tbmask((x >> 2).wrapping_sub(1));
     let s = s | (m & 2);
     let x = (x >> 2) ^ (m & (x ^ (x >> 2)));
-
     // At this point, x fits on 2 bits. Number of leading zeros is then:
     //   x = 0   -> 2
     //   x = 1   -> 1
     //   x = 2   -> 0
     //   x = 3   -> 0
     let s = s.wrapping_add(2u32.wrapping_sub(x) & (x.wrapping_sub(3) >> 2));
-
     s as u32
 }
-
 // bitlength(x) returns the length of x, in bits. The bit length of
 // zero is zero.
 //
@@ -672,7 +624,6 @@ const fn lzcnt(x: u32) -> u32 {
 pub(crate) const fn bitlength(x: u32) -> u32 {
     32 - x.leading_zeros()
 }
-
 #[cfg(all(
     any(target_arch = "x86", target_arch = "x86_64"),
     not(target_feature = "lzcnt")
@@ -680,7 +631,6 @@ pub(crate) const fn bitlength(x: u32) -> u32 {
 pub(crate) const fn bitlength(x: u32) -> u32 {
     (31 + ((x | x.wrapping_neg()) >> 31)) - (x | 1).leading_zeros()
 }
-
 #[cfg(not(any(
     target_arch = "x86",
     target_arch = "x86_64",
@@ -690,7 +640,6 @@ pub(crate) const fn bitlength(x: u32) -> u32 {
 pub(crate) const fn bitlength(x: u32) -> u32 {
     32 - lzcnt(x)
 }
-
 // Add k*(2^sc)*y to x. Slices x and y do not necessarily have the same
 // length, but x MUST NOT be shorter than y. Result is truncated (if
 // needed) to the size of x. Scale factor sc is provided as sch and scl,
@@ -729,7 +678,6 @@ pub(crate) fn zint_add_scaled_mul_small(
         i += xystride;
     }
 }
-
 // Subtract (2^sc)*y from x. Slices x and y do not necessarily have the same
 // length, but x MUST NOT be shorter than y. x and y share the same stride
 // ('xystride'). Result is truncated (if needed) to the size of x. Scale
@@ -766,5 +714,4 @@ pub(crate) fn zint_sub_scaled(
         i += xystride;
     }
 }
-
 // ========================================================================

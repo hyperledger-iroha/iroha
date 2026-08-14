@@ -8,7 +8,6 @@
 //! every terminal verification path.  The in-circuit verifier consumes the
 //! same wire through the split scalar/point verifier; this native implementation
 //! is the reference oracle and the terminal soundness boundary.
-
 use ff::PrimeField;
 use halo2_proofs::{
     halo2curves::{
@@ -30,13 +29,11 @@ use snark_verifier::{
     system::halo2::transcript::halo2::PoseidonTranscript,
     util::arithmetic::{Domain, root_of_unity},
 };
-
 /// Version of the degree-parameterized accumulated-opening wire.
 ///
 /// V4 is intentionally a distinct wire.  A V1 value can never be accepted by
 /// a V4 parser merely because the authenticated degree happens to be 12.
 pub const KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4: u16 = 5;
-
 /// Return the exact V4 public-instance limb count for one authenticated IPA
 /// round count.
 pub fn kagemusha_ipa_accumulator_instance_limbs_v4(round_count: u32) -> Result<usize, String> {
@@ -51,7 +48,6 @@ pub fn kagemusha_ipa_accumulator_instance_limbs_v4(round_count: u32) -> Result<u
     )
     .map_err(|_| "Kagemusha V4 IPA accumulator limb count does not fit usize".to_owned())
 }
-
 /// Return the exact non-ZK BGH19 transcript length for an authenticated V4
 /// IPA round count.
 pub fn kagemusha_ipa_accumulation_proof_bytes_v4(round_count: u32) -> Result<usize, String> {
@@ -69,13 +65,11 @@ pub fn kagemusha_ipa_accumulation_proof_bytes_v4(round_count: u32) -> Result<usi
     )
     .map_err(|_| "Kagemusha V4 IPA fold length does not fit usize".to_owned())
 }
-
 const POSEIDON_WIDTH: usize = 3;
 const POSEIDON_RATE: usize = 2;
 const POSEIDON_FULL_ROUNDS: usize = 8;
 const POSEIDON_PARTIAL_ROUNDS: usize = 57;
 const POSEIDON_SECURE_MDS: usize = 0;
-
 type EqAccumulation = IpaAs<EqAffine, Bgh19>;
 type EpAccumulation = IpaAs<EpAffine, Bgh19>;
 type EqTranscript<S> = PoseidonTranscript<
@@ -96,12 +90,10 @@ type EpTranscript<S> = PoseidonTranscript<
     POSEIDON_FULL_ROUNDS,
     POSEIDON_PARTIAL_ROUNDS,
 >;
-
 fn catch_native_verifier_panic<T>(label: &str, verify: impl FnOnce() -> T) -> Result<T, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(verify))
         .map_err(|_| format!("Kagemusha V4 {label} rejected an invalid native verifier relation"))
 }
-
 /// Degree-parameterized field-neutral IPA accumulator.
 ///
 /// `round_count` is redundant with the challenge vector on purpose: it is an
@@ -117,7 +109,6 @@ pub struct KagemushaIpaAccumulatorWireV4 {
     /// Canonical compressed accumulated generator.
     pub folded_generator: [u8; 32],
 }
-
 impl KagemushaIpaAccumulatorWireV4 {
     /// Encode an Eq/Vesta accumulator under an explicit authenticated degree.
     pub fn from_eq(
@@ -146,7 +137,6 @@ impl KagemushaIpaAccumulatorWireV4 {
         wire.to_eq(round_count)?;
         Ok(wire)
     }
-
     /// Encode an Ep/Pallas accumulator under an explicit authenticated degree.
     pub fn from_ep(
         accumulator: &IpaAccumulator<EpAffine, NativeLoader>,
@@ -174,14 +164,12 @@ impl KagemushaIpaAccumulatorWireV4 {
         wire.to_ep(round_count)?;
         Ok(wire)
     }
-
     /// Parse this wire as Eq/Vesta without reducing any scalar bytes.
     pub fn to_eq(
         &self,
         authenticated_round_count: u32,
     ) -> Result<IpaAccumulator<EqAffine, NativeLoader>, String> {
         use halo2_proofs::halo2curves::group::prime::PrimeCurveAffine as _;
-
         self.validate_shape(authenticated_round_count)?;
         let xi = self
             .round_challenges
@@ -198,14 +186,12 @@ impl KagemushaIpaAccumulatorWireV4 {
         }
         Ok(IpaAccumulator::new(xi, u))
     }
-
     /// Parse this wire as Ep/Pallas without reducing any scalar bytes.
     pub fn to_ep(
         &self,
         authenticated_round_count: u32,
     ) -> Result<IpaAccumulator<EpAffine, NativeLoader>, String> {
         use halo2_proofs::halo2curves::group::prime::PrimeCurveAffine as _;
-
         self.validate_shape(authenticated_round_count)?;
         let xi = self
             .round_challenges
@@ -222,7 +208,6 @@ impl KagemushaIpaAccumulatorWireV4 {
         }
         Ok(IpaAccumulator::new(xi, u))
     }
-
     /// Encode this accumulator as the exact dynamic V4 public-instance vector.
     pub fn instance_limbs(&self, authenticated_round_count: u32) -> Result<Vec<u128>, String> {
         self.validate_shape(authenticated_round_count)?;
@@ -244,7 +229,6 @@ impl KagemushaIpaAccumulatorWireV4 {
         }
         Ok(limbs)
     }
-
     /// Validate only the authenticated V4 wire shape.
     pub fn validate_shape(&self, authenticated_round_count: u32) -> Result<(), String> {
         kagemusha_ipa_accumulator_instance_limbs_v4(authenticated_round_count)?;
@@ -257,7 +241,6 @@ impl KagemushaIpaAccumulatorWireV4 {
         Ok(())
     }
 }
-
 /// Degree-parameterized opaque BGH19 fold transcript.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaIpaAccumulationProofV4 {
@@ -269,7 +252,6 @@ pub struct KagemushaIpaAccumulationProofV4 {
     /// witnesses use [`Self::validate_fixed_transcript`] and require all bytes.
     pub bytes: Vec<u8>,
 }
-
 impl KagemushaIpaAccumulationProofV4 {
     /// Construct the native initialization marker for an explicit degree.
     pub fn initialization(round_count: u32) -> Result<Self, String> {
@@ -280,7 +262,6 @@ impl KagemushaIpaAccumulationProofV4 {
             bytes: Vec::new(),
         })
     }
-
     /// Construct and validate a complete fold transcript.
     pub fn from_fold_bytes(round_count: u32, bytes: Vec<u8>) -> Result<Self, String> {
         let proof = Self {
@@ -291,7 +272,6 @@ impl KagemushaIpaAccumulationProofV4 {
         proof.validate_fixed_transcript(round_count)?;
         Ok(proof)
     }
-
     /// Validate the native optional-parent representation.
     pub fn validate(&self, authenticated_round_count: u32, has_parent: bool) -> Result<(), String> {
         self.validate_header(authenticated_round_count)?;
@@ -301,7 +281,6 @@ impl KagemushaIpaAccumulationProofV4 {
         }
         Ok(())
     }
-
     /// Validate the always-present transcript required by a fixed-shape Step
     /// witness, including disabled/bootstrap fold stages.
     pub fn validate_fixed_transcript(&self, authenticated_round_count: u32) -> Result<(), String> {
@@ -312,7 +291,6 @@ impl KagemushaIpaAccumulationProofV4 {
         }
         Ok(())
     }
-
     fn validate_header(&self, authenticated_round_count: u32) -> Result<(), String> {
         if self.version != KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4
             || self.round_count != authenticated_round_count
@@ -322,12 +300,10 @@ impl KagemushaIpaAccumulationProofV4 {
         Ok(())
     }
 }
-
 fn eq_proving_key(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
 ) -> IpaProvingKey<EqAffine> {
     use halo2_proofs::poly::commitment::ParamsProver as _;
-
     let hash_to_curve = Eq::hash_to_curve("Halo2-Parameters");
     let h = hash_to_curve(&[2]).to_affine();
     let s = Some(hash_to_curve(&[1]).to_affine());
@@ -340,12 +316,10 @@ fn eq_proving_key(
         s,
     )
 }
-
 fn eq_deciding_key(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
 ) -> IpaDecidingKey<EqAffine> {
     use halo2_proofs::poly::commitment::ParamsProver as _;
-
     let hash_to_curve = Eq::hash_to_curve("Halo2-Parameters");
     let h = hash_to_curve(&[2]).to_affine();
     let s = Some(hash_to_curve(&[1]).to_affine());
@@ -359,12 +333,10 @@ fn eq_deciding_key(
     record_key_construction(KeyConstruction::EqDeciding);
     IpaDecidingKey::new(svk, params.get_g().to_vec())
 }
-
 fn ep_proving_key(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
 ) -> IpaProvingKey<EpAffine> {
     use halo2_proofs::poly::commitment::ParamsProver as _;
-
     let hash_to_curve = Ep::hash_to_curve("Halo2-Parameters");
     let h = hash_to_curve(&[2]).to_affine();
     let s = Some(hash_to_curve(&[1]).to_affine());
@@ -377,12 +349,10 @@ fn ep_proving_key(
         s,
     )
 }
-
 fn ep_deciding_key(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
 ) -> IpaDecidingKey<EpAffine> {
     use halo2_proofs::poly::commitment::ParamsProver as _;
-
     let hash_to_curve = Ep::hash_to_curve("Halo2-Parameters");
     let h = hash_to_curve(&[2]).to_affine();
     let s = Some(hash_to_curve(&[1]).to_affine());
@@ -396,7 +366,6 @@ fn ep_deciding_key(
     record_key_construction(KeyConstruction::EpDeciding);
     IpaDecidingKey::new(svk, params.get_g().to_vec())
 }
-
 #[cfg(test)]
 #[derive(Clone, Copy)]
 enum KeyConstruction {
@@ -405,14 +374,12 @@ enum KeyConstruction {
     EpProving = 2,
     EpDeciding = 3,
 }
-
 #[cfg(test)]
 std::thread_local! {
     static KEY_CONSTRUCTION_COUNTS: std::cell::Cell<[usize; 4]> = const {
         std::cell::Cell::new([0; 4])
     };
 }
-
 #[cfg(test)]
 fn record_key_construction(kind: KeyConstruction) {
     KEY_CONSTRUCTION_COUNTS.with(|counts| {
@@ -421,7 +388,6 @@ fn record_key_construction(kind: KeyConstruction) {
         counts.set(values);
     });
 }
-
 /// Fold Eq accumulators under an explicit authenticated V4 degree.
 pub fn fold_eq_accumulators_v4(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
@@ -466,7 +432,6 @@ pub fn fold_eq_accumulators_v4(
     )?;
     Ok((proof, accumulated))
 }
-
 /// Fold Ep accumulators under an explicit authenticated V4 degree.
 pub fn fold_ep_accumulators_v4(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
@@ -511,7 +476,6 @@ pub fn fold_ep_accumulators_v4(
     )?;
     Ok((proof, accumulated))
 }
-
 /// Verify and terminally decide an Eq fold under the authenticated V4 degree.
 pub fn verify_and_decide_eq_accumulation_v4(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
@@ -575,7 +539,6 @@ pub fn verify_and_decide_eq_accumulation_v4(
     .map_err(|error| format!("Kagemusha V4 Eq accumulated decision failed: {error:?}"))?;
     Ok(accumulated)
 }
-
 /// Verify and terminally decide an Ep fold under the authenticated V4 degree.
 pub fn verify_and_decide_ep_accumulation_v4(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
@@ -639,17 +602,14 @@ pub fn verify_and_decide_ep_accumulation_v4(
     .map_err(|error| format!("Kagemusha V4 Ep accumulated decision failed: {error:?}"))?;
     Ok(accumulated)
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use ff::Field as _;
     use halo2_proofs::{
         halo2curves::group::{Curve as _, Group as _},
         poly::{commitment::ParamsProver as _, ipa::commitment::ParamsIPA},
     };
-
-    use super::*;
-
     fn ipa_h_coefficients<F: ff::Field>(challenges: &[F], scalar: F) -> Vec<F> {
         let mut coefficients = vec![F::ZERO; 1 << challenges.len()];
         coefficients[0] = scalar;
@@ -668,7 +628,6 @@ mod tests {
         }
         coefficients
     }
-
     fn eq_accumulator(
         params: &ParamsIPA<EqAffine>,
         seed: u64,
@@ -688,7 +647,6 @@ mod tests {
             .to_affine();
         IpaAccumulator::new(xi, u)
     }
-
     fn ep_accumulator(
         params: &ParamsIPA<EpAffine>,
         seed: u64,
@@ -708,19 +666,15 @@ mod tests {
             .to_affine();
         IpaAccumulator::new(xi, u)
     }
-
     fn reset_key_construction_counts() {
         KEY_CONSTRUCTION_COUNTS.with(|counts| counts.set([0; 4]));
     }
-
     fn key_construction_counts() -> [usize; 4] {
         KEY_CONSTRUCTION_COUNTS.with(std::cell::Cell::get)
     }
-
     #[test]
     fn parity_key_builders_construct_consistent_requested_keys() {
         const K: u32 = 4;
-
         let eq_params = ParamsIPA::<EqAffine>::new(K);
         let eq_proving_key = eq_proving_key(&eq_params);
         assert_eq!(eq_proving_key.domain.k, K as usize);
@@ -733,7 +687,6 @@ mod tests {
         assert_eq!(eq_deciding_svk.g, eq_proving_svk.g);
         assert_eq!(eq_deciding_svk.h, eq_proving_svk.h);
         assert_eq!(eq_deciding_svk.s, eq_proving_svk.s);
-
         let ep_params = ParamsIPA::<EpAffine>::new(K);
         let ep_proving_key = ep_proving_key(&ep_params);
         assert_eq!(ep_proving_key.domain.k, K as usize);
@@ -747,7 +700,6 @@ mod tests {
         assert_eq!(ep_deciding_svk.h, ep_proving_svk.h);
         assert_eq!(ep_deciding_svk.s, ep_proving_svk.s);
     }
-
     #[test]
     fn v4_dynamic_sizes_and_headers_are_exact() {
         assert_eq!(kagemusha_ipa_accumulator_instance_limbs_v4(12).unwrap(), 28);
@@ -763,7 +715,6 @@ mod tests {
         assert!(kagemusha_ipa_accumulator_instance_limbs_v4(0).is_err());
         assert!(kagemusha_ipa_accumulator_instance_limbs_v4(u32::MAX).is_err());
         assert!(kagemusha_ipa_accumulation_proof_bytes_v4(u32::MAX).is_err());
-
         let proof = KagemushaIpaAccumulationProofV4::from_fold_bytes(
             20,
             vec![0; kagemusha_ipa_accumulation_proof_bytes_v4(20).unwrap()],
@@ -777,7 +728,6 @@ mod tests {
         };
         assert!(cross_version.validate_fixed_transcript(20).is_err());
     }
-
     #[test]
     fn v4_eq_wire_and_fold_reject_substitution() {
         const K: u32 = 12;
@@ -790,7 +740,6 @@ mod tests {
         let mut noncanonical = wire;
         noncanonical.round_challenges[0] = [0xFF; 32];
         assert!(noncanonical.to_eq(K).is_err());
-
         let (proof, expected) =
             fold_eq_accumulators_v4(&params, K, current.clone(), Some(parent.clone())).unwrap();
         let actual = verify_and_decide_eq_accumulation_v4(
@@ -803,7 +752,6 @@ mod tests {
         .unwrap();
         assert_eq!(actual.xi, expected.xi);
         assert_eq!(actual.u, expected.u);
-
         let mut tampered = proof;
         tampered.bytes[0] ^= 1;
         assert!(
@@ -811,11 +759,9 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn v4_fold_and_decision_construct_only_their_required_key_material() {
         const K: u32 = 4;
-
         let eq_params = ParamsIPA::<EqAffine>::new(K);
         let eq_current = eq_accumulator(&eq_params, 3);
         let eq_parent = eq_accumulator(&eq_params, 19);
@@ -824,7 +770,6 @@ mod tests {
             fold_eq_accumulators_v4(&eq_params, K, eq_current.clone(), Some(eq_parent.clone()))
                 .unwrap();
         assert_eq!(key_construction_counts(), [1, 0, 0, 0]);
-
         reset_key_construction_counts();
         let eq_actual = verify_and_decide_eq_accumulation_v4(
             &eq_params,
@@ -837,7 +782,6 @@ mod tests {
         assert_eq!(key_construction_counts(), [0, 1, 0, 0]);
         assert_eq!(eq_actual.xi, eq_expected.xi);
         assert_eq!(eq_actual.u, eq_expected.u);
-
         let ep_params = ParamsIPA::<EpAffine>::new(K);
         let ep_current = ep_accumulator(&ep_params, 7);
         let ep_parent = ep_accumulator(&ep_params, 23);
@@ -846,7 +790,6 @@ mod tests {
             fold_ep_accumulators_v4(&ep_params, K, ep_current.clone(), Some(ep_parent.clone()))
                 .unwrap();
         assert_eq!(key_construction_counts(), [0, 0, 1, 0]);
-
         reset_key_construction_counts();
         let ep_actual = verify_and_decide_ep_accumulation_v4(
             &ep_params,

@@ -1,34 +1,28 @@
 //! Crash-safe time-floor persistence for the private Musubi publication service.
-
-use std::{
-    fmt,
-    fs::{self, File, OpenOptions},
-    io::{self, Read as _, Write as _},
-    path::{Path, PathBuf},
-};
-
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
-
 #[cfg(unix)]
 use super::publication_filesystem_owner_probe;
 use super::{
     MusubiPublicationServiceBackendErrorV1, MusubiPublicationServiceClockV1,
     MusubiPublicationSystemClockV1,
 };
-
 #[cfg(unix)]
 use crate::musubi_archive_fetch::{
     secure_directory_open_flags, secure_no_follow_nonblocking_flags,
 };
-
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::{
+    fmt,
+    fs::{self, File, OpenOptions},
+    io::{self, Read as _, Write as _},
+    path::{Path, PathBuf},
+};
 const CLOCK_STATE_FILE: &str = "clock-floor-v1.norito";
 const CLOCK_LOCK_FILE: &str = "clock-floor-v1.lock";
 const CLOCK_NEXT_FILE: &str = "clock-floor-v1.next";
 const CLOCK_STATE_DOMAIN_V1: [u8; 32] = *b"musubi-pub-clock-floor-v1\0\0\0\0\0\0\0";
 const CLOCK_STATE_SCHEMA_V1: u8 = 1;
 const MAX_CLOCK_STATE_BYTES: usize = 4 * 1024;
-
 /// Stable failure opening a durable private-publication clock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DurableMusubiPublicationServiceClockOpenErrorV1 {
@@ -51,7 +45,6 @@ pub enum DurableMusubiPublicationServiceClockOpenErrorV1 {
     /// The private state could not be read or durably replaced.
     StorageUnavailable,
 }
-
 impl DurableMusubiPublicationServiceClockOpenErrorV1 {
     /// Return the stable operator-facing error code.
     #[must_use]
@@ -69,15 +62,12 @@ impl DurableMusubiPublicationServiceClockOpenErrorV1 {
         }
     }
 }
-
 impl fmt::Display for DurableMusubiPublicationServiceClockOpenErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
 }
-
 impl std::error::Error for DurableMusubiPublicationServiceClockOpenErrorV1 {}
-
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 struct DurableClockStateV1 {
     domain: [u8; 32],
@@ -85,7 +75,6 @@ struct DurableClockStateV1 {
     revision: u64,
     floor_ms: u64,
 }
-
 impl DurableClockStateV1 {
     fn new(floor_ms: u64) -> Self {
         Self {
@@ -95,7 +84,6 @@ impl DurableClockStateV1 {
             floor_ms,
         }
     }
-
     fn validate(&self) -> Result<(), DurableMusubiPublicationServiceClockOpenErrorV1> {
         if self.domain != CLOCK_STATE_DOMAIN_V1
             || self.schema != CLOCK_STATE_SCHEMA_V1
@@ -106,7 +94,6 @@ impl DurableClockStateV1 {
         }
         Ok(())
     }
-
     fn digest(&self) -> Result<[u8; 32], DurableMusubiPublicationServiceClockOpenErrorV1> {
         let encoded = norito::encode_canonical(self)
             .map_err(|_| DurableMusubiPublicationServiceClockOpenErrorV1::InvalidState)?;
@@ -115,13 +102,11 @@ impl DurableClockStateV1 {
         Ok(*hasher.finalize().as_bytes())
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 struct DurableClockEnvelopeV1 {
     state: DurableClockStateV1,
     state_digest: [u8; 32],
 }
-
 impl DurableClockEnvelopeV1 {
     fn new(
         state: DurableClockStateV1,
@@ -132,7 +117,6 @@ impl DurableClockEnvelopeV1 {
             state_digest,
         })
     }
-
     fn validate(&self) -> Result<(), DurableMusubiPublicationServiceClockOpenErrorV1> {
         self.state.validate()?;
         if self.state.digest()? != self.state_digest {
@@ -141,7 +125,6 @@ impl DurableClockEnvelopeV1 {
         Ok(())
     }
 }
-
 /// Restart-persistent non-regressing clock for a private Musubi publication service.
 ///
 /// The caller supplies one existing dedicated directory. On Unix it must be a real directory
@@ -166,7 +149,6 @@ pub struct DurableMusubiPublicationServiceClockV1 {
     state: DurableClockStateV1,
     poisoned: bool,
 }
-
 #[derive(Clone, Copy)]
 struct ClockStorageContext<'a> {
     root: &'a Path,
@@ -176,7 +158,6 @@ struct ClockStorageContext<'a> {
     lock_handle: &'a File,
     lock_identity: PrivateFileIdentity,
 }
-
 impl fmt::Debug for DurableMusubiPublicationServiceClockV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -187,7 +168,6 @@ impl fmt::Debug for DurableMusubiPublicationServiceClockV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl DurableMusubiPublicationServiceClockV1 {
     /// Explicitly initialize one empty private state directory.
     ///
@@ -206,7 +186,6 @@ impl DurableMusubiPublicationServiceClockV1 {
     ) -> Result<Self, DurableMusubiPublicationServiceClockOpenErrorV1> {
         Self::open_inner(root, source, true)
     }
-
     /// Open existing private state and durably advance it to the source's current time.
     ///
     /// Only one process may hold a state directory at a time. Existing state is decoded under a
@@ -224,7 +203,6 @@ impl DurableMusubiPublicationServiceClockV1 {
     ) -> Result<Self, DurableMusubiPublicationServiceClockOpenErrorV1> {
         Self::open_inner(root, source, false)
     }
-
     fn open_inner(
         root: &Path,
         mut source: Box<dyn MusubiPublicationServiceClockV1>,
@@ -317,7 +295,6 @@ impl DurableMusubiPublicationServiceClockV1 {
             poisoned: false,
         })
     }
-
     /// Open a durable wrapper around the raw system wall clock.
     ///
     /// This is suitable only when the supplied directory is on storage whose durability
@@ -331,7 +308,6 @@ impl DurableMusubiPublicationServiceClockV1 {
     ) -> Result<Self, DurableMusubiPublicationServiceClockOpenErrorV1> {
         Self::open(root, Box::new(MusubiPublicationSystemClockV1))
     }
-
     /// Explicitly initialize a durable wrapper around the raw system wall clock.
     ///
     /// # Errors
@@ -342,13 +318,11 @@ impl DurableMusubiPublicationServiceClockV1 {
     ) -> Result<Self, DurableMusubiPublicationServiceClockOpenErrorV1> {
         Self::initialize(root, Box::new(MusubiPublicationSystemClockV1))
     }
-
     /// Return the last durably committed Unix-millisecond floor.
     #[must_use]
     pub const fn durable_floor_ms(&self) -> u64 {
         self.state.floor_ms
     }
-
     fn storage_context(&self) -> ClockStorageContext<'_> {
         ClockStorageContext {
             root: &self.root,
@@ -360,7 +334,6 @@ impl DurableMusubiPublicationServiceClockV1 {
         }
     }
 }
-
 impl MusubiPublicationServiceClockV1 for DurableMusubiPublicationServiceClockV1 {
     fn current_time_ms(&mut self) -> Result<u64, MusubiPublicationServiceBackendErrorV1> {
         if self.poisoned {
@@ -404,7 +377,6 @@ impl MusubiPublicationServiceClockV1 for DurableMusubiPublicationServiceClockV1 
         Ok(sampled)
     }
 }
-
 fn open_private_root(
     root: &Path,
 ) -> Result<
@@ -456,7 +428,6 @@ fn open_private_root(
         metadata_owner(&opened),
     ))
 }
-
 fn sample_startup_source(
     source: &mut dyn MusubiPublicationServiceClockV1,
 ) -> Result<u64, DurableMusubiPublicationServiceClockOpenErrorV1> {
@@ -468,13 +439,11 @@ fn sample_startup_source(
     }
     Ok(sampled)
 }
-
 #[derive(Clone, Copy)]
 enum ClockLockOpenMode {
     Existing,
     CreateNew,
 }
-
 fn ensure_empty_initialization_root(
     root: &Path,
 ) -> Result<(), DurableMusubiPublicationServiceClockOpenErrorV1> {
@@ -490,7 +459,6 @@ fn ensure_empty_initialization_root(
     }
     Ok(())
 }
-
 fn open_and_lock(
     root: &Path,
     root_owner: u32,
@@ -574,7 +542,6 @@ fn open_and_lock(
     }
     Ok((file, PrivateFileIdentity::from_metadata(&opened)))
 }
-
 fn reconcile_directory(
     root: &Path,
     root_handle: &File,
@@ -624,7 +591,6 @@ fn reconcile_directory(
     validate_root_identity(root, root_handle, root_identity, root_owner)?;
     validate_lock_identity(root, lock_handle, lock_identity, root_owner)
 }
-
 fn read_state(
     path: &Path,
     root_owner: u32,
@@ -696,7 +662,6 @@ fn read_state(
         PrivateFileIdentity::from_metadata(&opened_after),
     )))
 }
-
 fn write_state(
     storage: ClockStorageContext<'_>,
     expected_state_identity: Option<PrivateFileIdentity>,
@@ -760,7 +725,6 @@ fn write_state(
     }
     Ok(pending.identity)
 }
-
 fn validate_pending_state(
     pending: &PrivateTemporaryFile,
     expected_state: &DurableClockStateV1,
@@ -775,7 +739,6 @@ fn validate_pending_state(
     }
     Ok(())
 }
-
 fn validate_persisted_state(
     path: &Path,
     expected: Option<PrivateFileIdentity>,
@@ -800,7 +763,6 @@ fn validate_persisted_state(
         _ => Err(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable),
     }
 }
-
 fn validate_lock_identity(
     root: &Path,
     lock_handle: &File,
@@ -825,7 +787,6 @@ fn validate_lock_identity(
     }
     Ok(())
 }
-
 fn validate_live_state(
     storage: ClockStorageContext<'_>,
     state_identity: PrivateFileIdentity,
@@ -848,7 +809,6 @@ fn validate_live_state(
         root_owner,
     )
 }
-
 fn validate_root_identity(
     root: &Path,
     root_handle: &File,
@@ -871,7 +831,6 @@ fn validate_root_identity(
     }
     Ok(())
 }
-
 fn optional_metadata(
     path: &Path,
 ) -> Result<Option<fs::Metadata>, DurableMusubiPublicationServiceClockOpenErrorV1> {
@@ -881,7 +840,6 @@ fn optional_metadata(
         Err(_) => Err(DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable),
     }
 }
-
 fn validate_private_root(
     metadata: &fs::Metadata,
 ) -> Result<(), DurableMusubiPublicationServiceClockOpenErrorV1> {
@@ -894,7 +852,6 @@ fn validate_private_root(
     }
     Ok(())
 }
-
 fn validate_private_file(
     metadata: &fs::Metadata,
     root_owner: u32,
@@ -910,14 +867,12 @@ fn validate_private_file(
     }
     Ok(())
 }
-
 struct PrivateTemporaryFile {
     path: PathBuf,
     file: File,
     identity: PrivateFileIdentity,
     armed: bool,
 }
-
 impl PrivateTemporaryFile {
     fn create(
         root: &Path,
@@ -946,7 +901,6 @@ impl PrivateTemporaryFile {
         pending.validate(root_owner)?;
         Ok(pending)
     }
-
     fn validate(
         &self,
         root_owner: u32,
@@ -967,12 +921,10 @@ impl PrivateTemporaryFile {
         }
         Ok(())
     }
-
     fn disarm(&mut self) {
         self.armed = false;
     }
 }
-
 impl Drop for PrivateTemporaryFile {
     fn drop(&mut self) {
         if !self.armed {
@@ -989,14 +941,12 @@ impl Drop for PrivateTemporaryFile {
         }
     }
 }
-
 #[cfg(unix)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct PrivateFileIdentity {
     device: u64,
     inode: u64,
 }
-
 #[cfg(unix)]
 impl PrivateFileIdentity {
     fn from_metadata(metadata: &fs::Metadata) -> Self {
@@ -1005,32 +955,26 @@ impl PrivateFileIdentity {
             inode: metadata.ino(),
         }
     }
-
     fn matches(self, metadata: &fs::Metadata) -> bool {
         self.device == metadata.dev() && self.inode == metadata.ino()
     }
 }
-
 #[cfg(not(unix))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct PrivateFileIdentity;
-
 #[cfg(not(unix))]
 impl PrivateFileIdentity {
     fn from_metadata(_metadata: &fs::Metadata) -> Self {
         Self
     }
-
     fn matches(self, _metadata: &fs::Metadata) -> bool {
         true
     }
 }
-
 #[cfg(unix)]
 fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(unix)]
 fn same_file_version(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     same_file(left, right)
@@ -1043,29 +987,25 @@ fn same_file_version(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.uid() == right.uid()
         && left.nlink() == right.nlink()
 }
-
 #[cfg(not(unix))]
 fn same_file(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     true
 }
-
 #[cfg(not(unix))]
 fn same_file_version(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
-
 #[cfg(unix)]
 fn metadata_owner(metadata: &fs::Metadata) -> u32 {
     metadata.uid()
 }
-
 #[cfg(not(unix))]
 fn metadata_owner(_metadata: &fs::Metadata) -> u32 {
     0
 }
-
 #[cfg(all(test, unix))]
 mod tests {
+    use super::*;
     use std::{
         os::unix::fs::{PermissionsExt as _, symlink},
         sync::{
@@ -1073,14 +1013,10 @@ mod tests {
             atomic::{AtomicU64, Ordering},
         },
     };
-
-    use super::*;
-
     #[derive(Clone)]
     struct TestClock {
         current: Arc<AtomicU64>,
     }
-
     impl TestClock {
         fn new(current: u64) -> (Self, Arc<AtomicU64>) {
             let current = Arc::new(AtomicU64::new(current));
@@ -1092,34 +1028,28 @@ mod tests {
             )
         }
     }
-
     fn private_tempdir() -> tempfile::TempDir {
         let root = tempfile::tempdir().expect("private state root");
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
             .expect("set private state-root permissions");
         root
     }
-
     impl MusubiPublicationServiceClockV1 for TestClock {
         fn current_time_ms(&mut self) -> Result<u64, MusubiPublicationServiceBackendErrorV1> {
             Ok(self.current.load(Ordering::SeqCst))
         }
     }
-
     struct FailingClock;
-
     impl MusubiPublicationServiceClockV1 for FailingClock {
         fn current_time_ms(&mut self) -> Result<u64, MusubiPublicationServiceBackendErrorV1> {
             Err(MusubiPublicationServiceBackendErrorV1::Retryable)
         }
     }
-
     struct SubstitutingClock {
         current: u64,
         calls_before_substitution: usize,
         state_path: PathBuf,
     }
-
     impl MusubiPublicationServiceClockV1 for SubstitutingClock {
         fn current_time_ms(&mut self) -> Result<u64, MusubiPublicationServiceBackendErrorV1> {
             if self.calls_before_substitution == 0 {
@@ -1134,7 +1064,6 @@ mod tests {
             Ok(self.current)
         }
     }
-
     #[test]
     fn open_error_codes_are_stable_and_path_free() {
         let cases = [
@@ -1180,7 +1109,6 @@ mod tests {
             assert_eq!(error.to_string(), code);
         }
     }
-
     #[test]
     fn ordinary_open_never_initializes_missing_or_deleted_state() {
         let root = private_tempdir();
@@ -1190,7 +1118,6 @@ mod tests {
                 .expect_err("ordinary open must not initialize"),
             DurableMusubiPublicationServiceClockOpenErrorV1::Uninitialized
         );
-
         let (source, _) = TestClock::new(100);
         let clock =
             DurableMusubiPublicationServiceClockV1::initialize(root.path(), Box::new(source))
@@ -1202,7 +1129,6 @@ mod tests {
             DurableMusubiPublicationServiceClockOpenErrorV1::AlreadyInitialized
         );
         drop(clock);
-
         fs::remove_file(root.path().join(CLOCK_STATE_FILE)).expect("delete durable floor");
         let (source, _) = TestClock::new(1);
         assert_eq!(
@@ -1218,7 +1144,6 @@ mod tests {
             DurableMusubiPublicationServiceClockOpenErrorV1::Uninitialized
         );
     }
-
     #[test]
     fn failed_or_zero_initial_sample_leaves_the_root_uninitialized() {
         let unavailable_root = private_tempdir();
@@ -1236,7 +1161,6 @@ mod tests {
                 .count(),
             0
         );
-
         let zero_root = private_tempdir();
         let (source, _) = TestClock::new(0);
         assert_eq!(
@@ -1249,7 +1173,6 @@ mod tests {
             0
         );
     }
-
     #[test]
     fn floor_is_durable_and_restart_rollback_fails_closed() {
         let root = private_tempdir();
@@ -1270,7 +1193,6 @@ mod tests {
         current.store(201, Ordering::SeqCst);
         assert_eq!(clock.current_time_ms(), Ok(201));
         drop(clock);
-
         current.store(200, Ordering::SeqCst);
         assert_eq!(
             DurableMusubiPublicationServiceClockV1::open(
@@ -1292,7 +1214,6 @@ mod tests {
         .expect("equal floor accepted");
         assert_eq!(reopened.durable_floor_ms(), 201);
         drop(reopened);
-
         current.store(250, Ordering::SeqCst);
         let advanced = DurableMusubiPublicationServiceClockV1::open(
             root.path(),
@@ -1313,7 +1234,6 @@ mod tests {
             DurableMusubiPublicationServiceClockOpenErrorV1::ClockRollback
         );
     }
-
     #[test]
     fn exclusive_lock_prevents_two_clock_writers() {
         let root = private_tempdir();
@@ -1335,7 +1255,6 @@ mod tests {
             .expect("lock released after drop");
         assert_eq!(reopened.durable_floor_ms(), 100);
     }
-
     #[test]
     fn root_mode_rejects_special_permission_bits() {
         let root = private_tempdir();
@@ -1350,7 +1269,6 @@ mod tests {
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
             .expect("restore tempdir mode");
     }
-
     #[test]
     fn persisted_corruption_and_unsafe_paths_are_rejected() {
         let corrupt_root = private_tempdir();
@@ -1374,7 +1292,6 @@ mod tests {
                 .expect_err("corrupt state rejected"),
             DurableMusubiPublicationServiceClockOpenErrorV1::InvalidState
         );
-
         let public_root = private_tempdir();
         fs::set_permissions(public_root.path(), fs::Permissions::from_mode(0o755))
             .expect("make root public");
@@ -1387,7 +1304,6 @@ mod tests {
             .expect_err("public root rejected"),
             DurableMusubiPublicationServiceClockOpenErrorV1::UnsafeRoot
         );
-
         let target = private_tempdir();
         let parent = private_tempdir();
         let linked = parent.path().join("clock-root");
@@ -1399,7 +1315,6 @@ mod tests {
             DurableMusubiPublicationServiceClockOpenErrorV1::UnsafeRoot
         );
     }
-
     #[test]
     fn startup_reconciles_only_the_fixed_private_next_file() {
         let root = private_tempdir();
@@ -1429,7 +1344,6 @@ mod tests {
         assert_eq!(clock.durable_floor_ms(), 100);
         assert!(!next.exists());
         drop(clock);
-
         fs::write(root.path().join("unexpected"), b"foreign state")
             .expect("write unexpected state");
         let (source, _) = TestClock::new(100);
@@ -1439,7 +1353,6 @@ mod tests {
             DurableMusubiPublicationServiceClockOpenErrorV1::UnsafeRoot
         );
     }
-
     #[test]
     fn live_state_substitution_poisoning_is_sticky() {
         let root = private_tempdir();
@@ -1461,7 +1374,6 @@ mod tests {
             Err(MusubiPublicationServiceBackendErrorV1::Retryable)
         );
     }
-
     #[test]
     fn sampling_revalidates_state_before_returning_time() {
         let startup_root = private_tempdir();
@@ -1485,7 +1397,6 @@ mod tests {
             .expect_err("startup substitution rejected"),
             DurableMusubiPublicationServiceClockOpenErrorV1::StorageUnavailable
         );
-
         let live_root = private_tempdir();
         let state_path = live_root.path().join(CLOCK_STATE_FILE);
         let mut clock = DurableMusubiPublicationServiceClockV1::initialize(
@@ -1506,7 +1417,6 @@ mod tests {
             Err(MusubiPublicationServiceBackendErrorV1::Retryable)
         );
     }
-
     #[test]
     fn live_next_file_collision_poisoning_is_sticky() {
         let root = private_tempdir();
@@ -1528,7 +1438,6 @@ mod tests {
             Err(MusubiPublicationServiceBackendErrorV1::Retryable)
         );
     }
-
     #[test]
     fn state_digest_and_single_link_invariants_are_enforced() {
         let root = private_tempdir();
@@ -1537,7 +1446,6 @@ mod tests {
             DurableMusubiPublicationServiceClockV1::initialize(root.path(), Box::new(source))
                 .expect("initialize durable clock");
         drop(clock);
-
         let state_path = root.path().join(CLOCK_STATE_FILE);
         let bytes = fs::read(&state_path).expect("read state");
         let mut envelope: DurableClockEnvelopeV1 =
@@ -1553,7 +1461,6 @@ mod tests {
                 .expect_err("digest mismatch rejected"),
             DurableMusubiPublicationServiceClockOpenErrorV1::InvalidState
         );
-
         let clean_root = private_tempdir();
         let (source, _) = TestClock::new(100);
         let clock =
@@ -1571,7 +1478,6 @@ mod tests {
         );
         fs::remove_file(external_link).expect("remove hostile hard link");
     }
-
     #[test]
     fn nonempty_lifetime_lock_fails_closed() {
         let root = private_tempdir();
@@ -1594,7 +1500,6 @@ mod tests {
             DurableMusubiPublicationServiceClockOpenErrorV1::InvalidState
         );
     }
-
     #[test]
     fn error_codes_are_stable_and_system_constructor_uses_the_same_state() {
         assert_eq!(

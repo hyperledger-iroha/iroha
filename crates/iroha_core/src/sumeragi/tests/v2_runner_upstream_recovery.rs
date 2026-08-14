@@ -1,5 +1,4 @@
 // Upstream roster-duty and quiet-recovery regressions retained through the merge.
-
 #[test]
 fn global_voting_role_tracks_each_frozen_roster_without_losing_validator_processes() {
     let (context, keys) = context();
@@ -32,7 +31,6 @@ fn global_voting_role_tracks_each_frozen_roster_without_losing_validator_process
         None
     );
 }
-
 #[test]
 fn initially_absent_configured_validator_claims_one_process_generation() {
     let (context, _) = context();
@@ -44,7 +42,6 @@ fn initially_absent_configured_validator_claims_one_process_generation() {
             .expect("configured validator may be absent from this frozen roster"),
         None
     );
-
     let kura = super::super::v2_lane_work::tests::locked_lane_work_test_kura(
         iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
     );
@@ -62,7 +59,6 @@ fn initially_absent_configured_validator_claims_one_process_generation() {
     assert_ne!(generation, 0);
     assert_eq!(claim.local_peer_id(), &local_peer);
     assert_eq!(claim.network_id(), context.network_id);
-
     let mut later_context = context.clone();
     later_context.roster.push(wire::ValidatorPower {
         validator: local_peer.clone(),
@@ -91,14 +87,12 @@ fn initially_absent_configured_validator_claims_one_process_generation() {
         None
     );
 }
-
 #[test]
 fn lane_production_duty_survives_successor_global_roster_removal() {
     let (context, _) = context();
     let tag = EventTag::new(context.height, 4, Generation::new(23));
     let directive =
         LocalProposalDirective::for_test(tag, context.leader(tag.view()), None, None, None);
-
     assert_eq!(
         local_consensus_duties(directive, None),
         LocalConsensusDuties {
@@ -107,7 +101,6 @@ fn lane_production_duty_survives_successor_global_roster_removal() {
         },
         "successor-global observer status must not suppress independently frozen lane-author work"
     );
-
     let subject = proposal_subject(b"lane production duty lock");
     let locked_round = wire::ConsensusRound {
         context_id: context.id(),
@@ -126,7 +119,6 @@ fn lane_production_duty_survives_successor_global_roster_removal() {
         None,
         "a global lock still suppresses fresh lane payload production"
     );
-
     let decided = LocalProposalDirective::for_test(
         tag,
         context.leader(tag.view()),
@@ -140,7 +132,6 @@ fn lane_production_duty_survives_successor_global_roster_removal() {
         "a terminal global decision retires fresh lane payload production"
     );
 }
-
 #[test]
 fn pre_submit_lane_binding_rejection_arms_one_non_empty_retry() {
     let (context, _) = context();
@@ -160,7 +151,6 @@ fn pre_submit_lane_binding_rejection_arms_one_non_empty_retry() {
         }),
         ..LocalProposalState::default()
     };
-
     assert_eq!(
         state.handle_candidate_binding_rejection(owner),
         LocalValidationDisposition::RetryNonEmpty,
@@ -172,19 +162,16 @@ fn pre_submit_lane_binding_rejection_arms_one_non_empty_retry() {
     assert!(state.submitted.is_none());
     assert!(state.pending_events.is_none());
     assert!(state.global_selection.is_none());
-
     assert_eq!(
         state.handle_candidate_binding_rejection(owner),
         LocalValidationDisposition::FatalNonEmpty,
         "a rejected non-empty recovery retry still fails closed"
     );
 }
-
 #[test]
 fn quiet_retransmission_tick_services_one_retained_historical_session() {
     let mut lane_work = super::super::v2_lane_work::tests::quiet_historical_recovery_fixture();
     assert!(lane_work.has_pending_historical_recovery());
-
     let outcome = service_historical_recovery_tick(&mut lane_work)
         .expect("quiet retransmission tick advances retained history");
     let HistoricalRecoveryServiceOutcome::Waiting(wait) = outcome else {

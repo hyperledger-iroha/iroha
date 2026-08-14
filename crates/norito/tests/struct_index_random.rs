@@ -1,8 +1,6 @@
 //! Randomized/adversarial corpus comparing NEON/fast path to scalar reference.
 #![cfg(feature = "json")]
-
 use norito::json::{build_struct_index, build_struct_index_scalar_test};
-
 fn make_mix(seed: u64, kib: usize) -> String {
     // Deterministic generator: alternate patterns and inject spaces to shift alignment.
     let mut rng = seed;
@@ -39,7 +37,6 @@ fn make_mix(seed: u64, kib: usize) -> String {
     s.push(']');
     s
 }
-
 #[test]
 fn random_adversarial_parity() {
     for kib in [32usize, 128, 512] {

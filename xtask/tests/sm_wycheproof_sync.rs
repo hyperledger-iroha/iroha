@@ -1,15 +1,12 @@
 #![allow(clippy::unwrap_used)]
-
+use assert_cmd::cargo::cargo_bin_cmd;
+use norito::json::{self, Value};
 use std::{
     io::{ErrorKind, Read, Write},
     net::TcpListener,
     thread,
 };
-
-use assert_cmd::cargo::cargo_bin_cmd;
-use norito::json::{self, Value};
 use tempfile::TempDir;
-
 fn sample_wycheproof() -> String {
     let key = format!("04{}{}", "11".repeat(32), "22".repeat(32));
     format!(
@@ -42,13 +39,11 @@ fn sample_wycheproof() -> String {
         }}"#
     )
 }
-
 #[test]
 fn sm_wycheproof_sync_from_file() {
     let dir = TempDir::new().expect("temp dir");
     let input_path = dir.path().join("source.json");
     std::fs::write(&input_path, sample_wycheproof()).expect("write sample");
-
     let output_path = dir.path().join("output.json");
     cargo_bin_cmd!("xtask")
         .args([
@@ -61,11 +56,9 @@ fn sm_wycheproof_sync_from_file() {
         ])
         .assert()
         .success();
-
     let sanitized = std::fs::read_to_string(&output_path).expect("read sanitized file");
     assert_fixture_shape(&sanitized);
 }
-
 #[test]
 fn sm_wycheproof_sync_from_url() {
     let listener = match TcpListener::bind("127.0.0.1:0") {
@@ -78,7 +71,6 @@ fn sm_wycheproof_sync_from_url() {
     };
     let addr = listener.local_addr().expect("obtain addr");
     let body = sample_wycheproof();
-
     thread::spawn(move || {
         if let Ok((mut stream, _)) = listener.accept() {
             let mut request = [0u8; 1024];
@@ -93,10 +85,8 @@ fn sm_wycheproof_sync_from_url() {
                 .expect("write http response");
         }
     });
-
     let dir = TempDir::new().expect("temp dir");
     let output_path = dir.path().join("out.json");
-
     cargo_bin_cmd!("xtask")
         .args([
             "sm-wycheproof-sync",
@@ -107,11 +97,9 @@ fn sm_wycheproof_sync_from_url() {
         ])
         .assert()
         .success();
-
     let sanitized = std::fs::read_to_string(&output_path).expect("read sanitized file");
     assert_fixture_shape(&sanitized);
 }
-
 fn assert_fixture_shape(raw: &str) {
     let value: Value = json::from_str(raw).expect("parse sanitized json");
     assert_eq!(

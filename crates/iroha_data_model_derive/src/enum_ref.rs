@@ -1,48 +1,39 @@
+use crate::utils::darling_error;
 use darling::{FromAttributes, FromDeriveInput, FromMeta, FromVariant};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
-
-use crate::utils::darling_error;
-
 pub fn impl_enum_ref(input: &syn::DeriveInput) -> manyhow::Result<TokenStream> {
     let input = EnumRef::from_derive_input(input).map_err(darling_error)?;
     Ok(quote! { #input })
 }
-
 #[derive(Clone, Copy)]
 enum Transparent {
     Transparent,
     NotTransparent,
 }
-
 #[derive(Clone)]
 enum EnumRefDeriveAttrs {
     Derive(Vec<darling::ast::NestedMeta>),
 }
-
 #[derive(Clone, FromAttributes)]
 #[darling(attributes(enum_ref))]
 struct EnumRefAttrs {
     derive: EnumRefDeriveAttrs,
 }
-
 #[derive(Clone, Copy, FromAttributes)]
 #[darling(attributes(enum_ref))]
 struct EnumRefVariantAttrs {
     transparent: Transparent,
 }
-
 #[derive(Clone)]
 struct EnumRefField {
     ty: syn::Type,
 }
-
 #[derive(Clone)]
 struct EnumRefVariant {
     ident: syn::Ident,
     field: EnumRefField,
 }
-
 #[derive(Clone)]
 struct EnumRef {
     attrs: EnumRefAttrs,
@@ -50,53 +41,44 @@ struct EnumRef {
     generics: syn::Generics,
     data: darling::ast::Data<EnumRefVariant, darling::util::Ignored>,
 }
-
 impl FromMeta for Transparent {
     fn from_none() -> Option<Self> {
         Some(Self::NotTransparent)
     }
-
     fn from_word() -> darling::Result<Self> {
         Ok(Self::Transparent)
     }
 }
-
 impl FromMeta for EnumRefDeriveAttrs {
     fn from_list(items: &[darling::ast::NestedMeta]) -> darling::Result<Self> {
         Ok(Self::Derive(items.to_vec()))
     }
 }
-
 impl FromVariant for EnumRefVariant {
     fn from_variant(variant: &syn::Variant) -> darling::Result<Self> {
         let transparent = EnumRefVariantAttrs::from_attributes(&variant.attrs)?;
-
         let mut fields: Vec<_> = variant
             .fields
             .iter()
             .map(|field| {
                 assert_eq!(field.ident, None);
-
                 EnumRefField {
                     ty: gen_field_ty(transparent.transparent, &field.ty),
                 }
             })
             .collect();
-
         if fields.len() > 1 {
             return Err(darling::Error::custom(
                 "Enums with more than 1 unnamed field are not supported",
             )
             .with_span(&variant.fields));
         }
-
         Ok(Self {
             ident: variant.ident.clone(),
             field: fields.swap_remove(0),
         })
     }
 }
-
 impl FromDeriveInput for EnumRef {
     fn from_derive_input(input: &syn::DeriveInput) -> darling::Result<Self> {
         Ok(Self {
@@ -107,7 +89,6 @@ impl FromDeriveInput for EnumRef {
         })
     }
 }
-
 impl ToTokens for EnumRefAttrs {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let EnumRefDeriveAttrs::Derive(derive) = &self.derive;
@@ -117,24 +98,20 @@ impl ToTokens for EnumRefAttrs {
         .to_tokens(tokens);
     }
 }
-
 impl ToTokens for EnumRefField {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         self.ty.to_tokens(tokens);
     }
 }
-
 impl ToTokens for EnumRefVariant {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let EnumRefVariant { ident, field } = self;
-
         quote! {
             #ident(#field)
         }
         .to_tokens(tokens);
     }
 }
-
 impl ToTokens for EnumRef {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let EnumRef {
@@ -143,14 +120,12 @@ impl ToTokens for EnumRef {
             generics,
             data,
         } = self;
-
         let (impl_generics, _, where_clause) = generics.split_for_impl();
         let variants = if let darling::ast::Data::Enum(variants) = data {
             variants
         } else {
             unreachable!()
         };
-
         quote! {
             #attrs
             pub(super) enum #ident<'a> #impl_generics #where_clause {
@@ -160,11 +135,9 @@ impl ToTokens for EnumRef {
         .to_tokens(tokens);
     }
 }
-
 fn gen_enum_ref_ident(ident: &syn::Ident) -> syn::Ident {
     syn::Ident::new(&format!("{ident}Ref"), proc_macro2::Span::call_site())
 }
-
 fn gen_field_ty(transparent: Transparent, field_ty: &syn::Type) -> syn::Type {
     if matches!(transparent, Transparent::Transparent)
         && let syn::Type::Path(ty) = field_ty
@@ -173,6 +146,5 @@ fn gen_field_ty(transparent: Transparent, field_ty: &syn::Type) -> syn::Type {
         let ident = gen_enum_ref_ident(ident);
         return syn::parse_quote! { #ident<'a> };
     }
-
     syn::parse_quote!(&'a #field_ty)
 }

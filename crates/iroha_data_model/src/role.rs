@@ -1,26 +1,20 @@
 //! Structures, traits and impls related to `Role`s.
-
-use std::{collections::BTreeMap, format, string::String, vec::Vec};
-
-use iroha_data_model_derive::model;
-
 pub use self::model::*;
 use crate::{
     Identifiable, Name, Registered, Registrable,
     account::AccountId,
     permission::{Permission, Permissions},
 };
-
+use iroha_data_model_derive::model;
+use std::{collections::BTreeMap, format, string::String, vec::Vec};
 #[model]
 mod model {
+    use super::*;
     use derive_more::{Constructor, Display, FromStr};
     use getset::Getters;
     use iroha_data_model_derive::IdEqOrdHash;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
-
-    use super::*;
-
     /// Identification of a role.
     #[derive(
         Debug,
@@ -45,7 +39,6 @@ mod model {
         /// Role name, should be unique .
         pub name: Name,
     }
-
     /// Role is a tag for a set of permission tokens.
     #[derive(Debug, Display, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
     #[display("{id}")]
@@ -63,7 +56,6 @@ mod model {
         #[norito(default)]
         pub permission_epochs: BTreeMap<Permission, u64>,
     }
-
     /// Builder for [`Role`]
     #[derive(Debug, Display, Clone, Getters, IdEqOrdHash, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -77,14 +69,18 @@ mod model {
         pub grant_to: AccountId,
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for RoleId {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.name, out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.name, out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for RoleId {
     fn json_deserialize(
@@ -94,7 +90,6 @@ impl norito::json::JsonDeserialize for RoleId {
         Ok(Self { name })
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for NewRole {
     fn write_json(&self, out: &mut String) {
@@ -112,20 +107,32 @@ impl norito::json::FastJsonWrite for NewRole {
         norito::json::JsonSerialize::json_serialize(&self.grant_to, out);
         out.push('}');
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"id\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.inner.id, out)?;
+        out.push_str(",\"permissions\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.inner.permissions, out)?;
+        out.push_str(",\"grant_to\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.grant_to, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for NewRole {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         use norito::json::MapVisitor;
-
         let mut visitor = MapVisitor::new(parser)?;
         let mut id: Option<RoleId> = None;
         let mut permissions: Option<Permissions> = None;
         let mut grant_to: Option<AccountId> = None;
-
         while let Some(key) = visitor.next_key()? {
             match key.as_str() {
                 "id" => {
@@ -153,12 +160,10 @@ impl norito::json::JsonDeserialize for NewRole {
             }
         }
         visitor.finish()?;
-
         let id = id.ok_or_else(|| norito::json::Error::missing_field("id"))?;
         let permissions =
             permissions.ok_or_else(|| norito::json::Error::missing_field("permissions"))?;
         let grant_to = grant_to.ok_or_else(|| norito::json::Error::missing_field("grant_to"))?;
-
         Ok(Self {
             inner: Role {
                 id,
@@ -169,7 +174,6 @@ impl norito::json::JsonDeserialize for NewRole {
         })
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for Role {
     fn json_serialize(&self, out: &mut String) {
@@ -183,19 +187,29 @@ impl norito::json::JsonSerialize for Role {
         norito::json::JsonSerialize::json_serialize(&self.permissions, out);
         out.push('}');
     }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"id\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.id, out)?;
+        out.push_str(",\"permissions\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.permissions, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for Role {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         use norito::json::MapVisitor;
-
         let mut visitor = MapVisitor::new(parser)?;
         let mut id: Option<RoleId> = None;
         let mut permissions: Option<Permissions> = None;
-
         while let Some(key) = visitor.next_key()? {
             match key.as_str() {
                 "id" => {
@@ -217,11 +231,9 @@ impl norito::json::JsonDeserialize for Role {
             }
         }
         visitor.finish()?;
-
         let id = id.ok_or_else(|| norito::json::Error::missing_field("id"))?;
         let permissions =
             permissions.ok_or_else(|| norito::json::Error::missing_field("permissions"))?;
-
         Ok(Self {
             id,
             permissions,
@@ -229,34 +241,29 @@ impl norito::json::JsonDeserialize for Role {
         })
     }
 }
-
 impl Role {
     /// Constructor.
     #[inline]
     pub fn new(id: RoleId, grant_to: AccountId) -> <Self as Registered>::With {
         NewRole::new(id, grant_to)
     }
-
     /// Get an iterator over [`permissions`](Permission) of the `Role`
     #[inline]
     pub fn permissions(&self) -> impl ExactSizeIterator<Item = &Permission> {
         self.permissions.iter()
     }
-
     /// Return the recorded epoch for the provided permission.
     #[inline]
     #[must_use]
     pub fn permission_epoch(&self, permission: &Permission) -> Option<u64> {
         self.permission_epochs.get(permission).copied()
     }
-
     /// Borrow the permission epoch map.
     #[inline]
     #[must_use]
     pub fn permission_epochs(&self) -> &BTreeMap<Permission, u64> {
         &self.permission_epochs
     }
-
     /// Fill missing permission epoch entries and drop stale ones.
     pub fn ensure_permission_epochs(&mut self, default_epoch: u64) {
         self.permission_epochs
@@ -268,7 +275,6 @@ impl Role {
         }
     }
 }
-
 impl NewRole {
     /// Constructor
     #[must_use]
@@ -283,14 +289,12 @@ impl NewRole {
             },
         }
     }
-
     /// Add permission to the [`Role`]
     #[must_use]
     #[inline]
     pub fn add_permission(self, perm: impl Into<Permission>) -> Self {
         self.add_permission_with_epoch(perm, 0)
     }
-
     /// Add permission to the [`Role`] with an explicit epoch.
     #[must_use]
     #[inline]
@@ -305,27 +309,21 @@ impl NewRole {
         self
     }
 }
-
 impl Registered for Role {
     type With = NewRole;
 }
-
 impl Registrable for NewRole {
     type Target = Role;
-
     #[inline]
     fn build(self, _authority: &AccountId) -> Self::Target {
         self.inner
     }
 }
-
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use iroha_primitives::json::Json;
-
     use super::*;
     use crate::{domain::DomainId, permission::Permission};
-
+    use iroha_primitives::json::Json;
     #[test]
     fn role_json_roundtrip() {
         let name: Name = "auditor".parse().expect("role name");
@@ -341,14 +339,11 @@ mod tests {
             // Epoch `0` is the implicit default and omitted from JSON.
             permission_epochs: BTreeMap::new(),
         };
-
         let json = norito::json::to_json(&role).expect("serialize role");
         let mut decoded: Role = norito::json::from_json(&json).expect("deserialize role");
-
         assert_eq!(decoded, role);
         assert_eq!(decoded.permissions, role.permissions);
         assert!(decoded.permission_epochs().is_empty());
-
         decoded.ensure_permission_epochs(0);
         assert_eq!(decoded.permission_epochs().len(), 1);
         assert_eq!(
@@ -356,11 +351,9 @@ mod tests {
             Some(0)
         );
     }
-
     #[test]
     fn role_permission_epochs_capture_epoch() {
         use iroha_crypto::{Algorithm, KeyPair};
-
         let name: Name = "auditor".parse().expect("role name");
         let id = RoleId::new(name);
         let perm = Permission::new("can_audit".into(), Json::new(norito::json!({})));
@@ -374,7 +367,6 @@ mod tests {
             .build(&account_id);
         assert_eq!(role.permission_epoch(&perm), Some(42));
     }
-
     #[test]
     fn role_ensure_permission_epochs_fills_missing_and_prunes() {
         let name: Name = "auditor".parse().expect("role name");
@@ -387,21 +379,17 @@ mod tests {
             permissions,
             permission_epochs: BTreeMap::new(),
         };
-
         role.ensure_permission_epochs(9);
         assert_eq!(role.permission_epoch(&perm), Some(9));
-
         role.permissions.clear();
         role.ensure_permission_epochs(9);
         assert!(role.permission_epochs.is_empty());
     }
 }
-
 /// The prelude re-exports most commonly used traits, structs and macros from this module.
 pub mod prelude {
     pub use super::{NewRole, Role, RoleId};
 }
-
 // Provide a slice-based decoder for Role to satisfy event enum derives
 // that require `DecodeFromSlice` under strict-safe builds.
 impl<'a> norito::core::DecodeFromSlice<'a> for Role {

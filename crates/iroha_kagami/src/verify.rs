@@ -1,11 +1,13 @@
 //! Profile-aware genesis verification entrypoint.
-
-use std::{
-    collections::{BTreeSet, HashSet},
-    io::{BufWriter, Write},
-    path::PathBuf,
+use crate::{
+    Outcome, RunArgs,
+    genesis::{
+        GenesisProfile, ProfileDefaults, parse_vrf_seed_hex, profile_defaults,
+        profile_requires_npos, profile_uses_public_xor, resolve_vrf_seed,
+    },
+    genesis::{PUBLIC_XOR_ALIAS, TAIRA_XOR_ASSET_DEFINITION_ID},
+    tui,
 };
-
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_data_model::{
@@ -19,17 +21,11 @@ use iroha_data_model::{
     prelude::{AssetDefinition, DomainId, PeerId},
 };
 use iroha_genesis::RawGenesisTransaction;
-
-use crate::{
-    Outcome, RunArgs,
-    genesis::{
-        GenesisProfile, ProfileDefaults, parse_vrf_seed_hex, profile_defaults,
-        profile_requires_npos, profile_uses_public_xor, resolve_vrf_seed,
-    },
-    genesis::{PUBLIC_XOR_ALIAS, TAIRA_XOR_ASSET_DEFINITION_ID},
-    tui,
+use std::{
+    collections::{BTreeSet, HashSet},
+    io::{BufWriter, Write},
+    path::PathBuf,
 };
-
 /// Verify a genesis manifest against a known profile (chain id, cadence, VRF seed, PoPs).
 #[derive(Debug, Parser, Clone)]
 pub struct Args {
@@ -43,7 +39,6 @@ pub struct Args {
     #[clap(long, value_name = "HEX")]
     vrf_seed_hex: Option<String>,
 }
-
 #[derive(Debug)]
 struct VerificationReport {
     chain_id: String,
@@ -52,7 +47,6 @@ struct VerificationReport {
     vrf_seed_hex: String,
     peer_count: usize,
 }
-
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         tui::status("Verifying genesis manifest against profile");
@@ -64,7 +58,6 @@ impl<T: Write> RunArgs<T> for Args {
             .map(parse_vrf_seed_hex)
             .transpose()
             .wrap_err("invalid --vrf-seed-hex")?;
-
         let report =
             verify_manifest(&manifest, self.profile, vrf_seed_override).wrap_err_with(|| {
                 format!(
@@ -73,7 +66,6 @@ impl<T: Write> RunArgs<T> for Args {
                     self.genesis.display()
                 )
             })?;
-
         writeln!(writer, "profile: {:?}", self.profile)?;
         writeln!(writer, "chain_id: {}", report.chain_id)?;
         writeln!(writer, "block_cadence_ms: {}", report.block_cadence_ms)?;
@@ -81,12 +73,10 @@ impl<T: Write> RunArgs<T> for Args {
         writeln!(writer, "peers_with_pop: {}", report.peer_count)?;
         writeln!(writer, "consensus_fingerprint: {}", report.fingerprint)?;
         writeln!(writer, "kagami_version: {}", env!("CARGO_PKG_VERSION"))?;
-
         tui::success("Genesis manifest verified");
         Ok(())
     }
 }
-
 fn verify_manifest(
     manifest: &RawGenesisTransaction,
     profile: GenesisProfile,
@@ -94,15 +84,12 @@ fn verify_manifest(
 ) -> Result<VerificationReport> {
     let defaults = profile_defaults(profile);
     ensure_chain_id(manifest, &defaults)?;
-
     let normalized = manifest.clone().with_consensus_meta();
     let params = normalized.effective_parameters()?;
     let sumeragi: SumeragiParameters = params.sumeragi().clone();
-
     let mode = enforce_mode(profile, &normalized)?;
     enforce_cadence(&sumeragi, &defaults)?;
     enforce_gas_limit(&params)?;
-
     let wants_npos = matches!(mode, SumeragiConsensusMode::Npos);
     if !wants_npos && vrf_seed_override.is_some() {
         return Err(eyre!(
@@ -127,7 +114,6 @@ fn verify_manifest(
     } else {
         "n/a".to_owned()
     };
-
     let peers_with_pops = collect_topology(manifest)?;
     let unique_peers: HashSet<_> = peers_with_pops.iter().collect();
     if unique_peers.len() != peers_with_pops.len() {
@@ -152,7 +138,6 @@ fn verify_manifest(
             unique_peers.len()
         ));
     }
-
     let fingerprint = normalized
         .consensus_fingerprint()
         .ok_or_else(|| eyre!("consensus fingerprint missing after normalization"))?
@@ -164,7 +149,6 @@ fn verify_manifest(
             "consensus_fingerprint mismatch: manifest advertises {raw_fp} but recomputation yielded {fingerprint}"
         ));
     }
-
     Ok(VerificationReport {
         chain_id: manifest.chain_id().as_str().to_owned(),
         fingerprint,
@@ -173,7 +157,6 @@ fn verify_manifest(
         peer_count: unique_peers.len(),
     })
 }
-
 fn enforce_public_xor_binding(
     manifest: &RawGenesisTransaction,
     profile: GenesisProfile,
@@ -183,7 +166,6 @@ fn enforce_public_xor_binding(
         DomainId::parse_fully_qualified("nexus.universal")?,
         "xor".parse()?,
     );
-
     let mut registered_asset_definitions = BTreeSet::new();
     let mut public_xor_binding = None;
     for instruction in manifest.instructions() {
@@ -220,21 +202,18 @@ fn enforce_public_xor_binding(
             public_xor_binding = Some(bind.asset_definition_id.clone());
         }
     }
-
     if registered_asset_definitions.contains(&synthetic_stake_asset_id) {
         return Err(eyre!(
             "public profile {:?} must not register synthetic `nexus.universal/xor` as the NPoS stake asset",
             profile
         ));
     }
-
     let Some(public_xor_asset_definition_id) = public_xor_binding else {
         return Err(eyre!(
             "public profile {:?} must bind `{PUBLIC_XOR_ALIAS}` to a canonical XOR asset definition in genesis",
             profile
         ));
     };
-
     if profile == GenesisProfile::Iroha3Taira
         && public_xor_asset_definition_id.to_string() != TAIRA_XOR_ASSET_DEFINITION_ID
     {
@@ -242,24 +221,20 @@ fn enforce_public_xor_binding(
             "Taira `{PUBLIC_XOR_ALIAS}` binding must target `{TAIRA_XOR_ASSET_DEFINITION_ID}`, found `{public_xor_asset_definition_id}`"
         ));
     }
-
     if public_xor_asset_definition_id == synthetic_stake_asset_id {
         return Err(eyre!(
             "public profile {:?} binds `{PUBLIC_XOR_ALIAS}` to synthetic `nexus.universal/xor`; use the real canonical XOR asset definition",
             profile
         ));
     }
-
     if !registered_asset_definitions.contains(&public_xor_asset_definition_id) {
         return Err(eyre!(
             "public profile {:?} binds `{PUBLIC_XOR_ALIAS}` to `{public_xor_asset_definition_id}` but does not register that asset definition",
             profile
         ));
     }
-
     Ok(())
 }
-
 fn ensure_chain_id(manifest: &RawGenesisTransaction, defaults: &ProfileDefaults) -> Result<()> {
     if manifest.chain_id() != &defaults.chain_id {
         return Err(eyre!(
@@ -270,7 +245,6 @@ fn ensure_chain_id(manifest: &RawGenesisTransaction, defaults: &ProfileDefaults)
     }
     Ok(())
 }
-
 fn enforce_mode(
     profile: GenesisProfile,
     manifest: &RawGenesisTransaction,
@@ -285,7 +259,6 @@ fn enforce_mode(
     }
     Ok(mode)
 }
-
 fn enforce_cadence(params: &SumeragiParameters, defaults: &ProfileDefaults) -> Result<()> {
     if params.block_cadence_ms() != defaults.block_cadence_ms {
         return Err(eyre!(
@@ -296,7 +269,6 @@ fn enforce_cadence(params: &SumeragiParameters, defaults: &ProfileDefaults) -> R
     }
     Ok(())
 }
-
 fn enforce_gas_limit(params: &iroha_data_model::parameter::Parameters) -> Result<()> {
     let gas_param_id = CustomParameterId::new("ivm_gas_limit_per_block".parse()?);
     let Some(custom) = params.custom().get(&gas_param_id) else {
@@ -317,7 +289,6 @@ fn enforce_gas_limit(params: &iroha_data_model::parameter::Parameters) -> Result
     }
     Ok(())
 }
-
 fn resolve_npos_params(
     params: &iroha_data_model::parameter::Parameters,
 ) -> Result<SumeragiNposParameters> {
@@ -328,7 +299,6 @@ fn resolve_npos_params(
         .and_then(SumeragiNposParameters::from_custom_parameter)
         .ok_or_else(|| eyre!("missing `sumeragi_npos_parameters` in manifest"))
 }
-
 fn collect_topology(manifest: &RawGenesisTransaction) -> Result<Vec<PeerId>> {
     let mut peers_with_pop = Vec::new();
     for (tx_idx, tx) in manifest.transactions().iter().enumerate() {
@@ -350,9 +320,10 @@ fn collect_topology(manifest: &RawGenesisTransaction) -> Result<Vec<PeerId>> {
     }
     Ok(peers_with_pop)
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::genesis::profile::derive_vrf_seed_from_chain;
     use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         asset::{AssetDefinitionAlias, AssetDefinitionId},
@@ -365,10 +336,6 @@ mod tests {
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     use tempfile::NamedTempFile;
-
-    use super::*;
-    use crate::genesis::profile::derive_vrf_seed_from_chain;
-
     fn test_public_xor_asset_definition_id(profile: GenesisProfile) -> AssetDefinitionId {
         match profile {
             GenesisProfile::Iroha3Taira => {
@@ -382,7 +349,6 @@ mod tests {
             GenesisProfile::Iroha3Dev => unreachable!("dev profile has no public XOR"),
         }
     }
-
     fn append_public_xor_binding_for_test(
         manifest: RawGenesisTransaction,
         asset_definition_id: AssetDefinitionId,
@@ -412,7 +378,6 @@ mod tests {
             .with_consensus_mode(consensus_mode)
             .with_chain_discriminant(chain_discriminant)
     }
-
     fn build_manifest_with_profile(
         profile: GenesisProfile,
         consensus_mode: SumeragiConsensusMode,
@@ -439,7 +404,6 @@ mod tests {
         } else {
             manifest
         };
-
         manifest
             .into_builder()
             .next_transaction()
@@ -453,18 +417,15 @@ mod tests {
             )
             .build_raw()
     }
-
     fn generate_peer_pop() -> (PublicKey, Vec<u8>) {
         let kp = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
             .expect("checked Kagami verify BLS fixture key generation");
         let pop = bls_normal_pop_prove(kp.private_key()).expect("generate PoP");
         (kp.public_key().clone(), pop)
     }
-
     #[test]
     fn generate_peer_pop_uses_checked_bls_key_generation() {
         let (public_key, pop) = generate_peer_pop();
-
         assert_eq!(
             public_key
                 .try_algorithm()
@@ -473,7 +434,6 @@ mod tests {
         );
         assert!(!pop.is_empty());
     }
-
     #[test]
     fn verify_accepts_dev_profile_manifest() {
         let seed = derive_vrf_seed_from_chain(&ChainId::from("iroha3-dev.local"));
@@ -484,13 +444,11 @@ mod tests {
             seed,
             &peers,
         );
-
         let report =
             verify_manifest(&manifest, GenesisProfile::Iroha3Dev, None).expect("verify manifest");
         assert_eq!(report.peer_count, 4);
         assert_eq!(report.vrf_seed_hex, hex::encode_upper(seed));
     }
-
     #[test]
     fn verify_allows_permissioned_dev_profile() {
         let seed = derive_vrf_seed_from_chain(&ChainId::from("iroha3-dev.local"));
@@ -501,18 +459,15 @@ mod tests {
             seed,
             &peers,
         );
-
         let report =
             verify_manifest(&manifest, GenesisProfile::Iroha3Dev, None).expect("verify manifest");
         assert_eq!(report.peer_count, 4);
         assert_eq!(report.vrf_seed_hex, "n/a");
     }
-
     #[test]
     fn verify_rejects_non_committee_profile_topologies() {
         let seed = derive_vrf_seed_from_chain(&ChainId::from("iroha3-dev.local"));
         let peers = (0..32).map(|_| generate_peer_pop()).collect::<Vec<_>>();
-
         for count in [1_usize, 2, 3, 5, 32] {
             let manifest = build_manifest_with_profile(
                 GenesisProfile::Iroha3Dev,
@@ -520,7 +475,6 @@ mod tests {
                 seed,
                 &peers[..count],
             );
-
             let error = verify_manifest(&manifest, GenesisProfile::Iroha3Dev, None)
                 .expect_err("non-committee topology must fail profile verification");
             assert!(
@@ -530,7 +484,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn verify_requires_seed_for_taira_profile() {
         let seed = [7u8; 32];
@@ -541,21 +494,18 @@ mod tests {
             seed,
             &peers,
         );
-
         let err = verify_manifest(&manifest, GenesisProfile::Iroha3Taira, None)
             .expect_err("seed required");
         assert!(
             err.to_string().contains("vrf-seed-hex"),
             "unexpected error: {err}"
         );
-
         let ok = verify_manifest(&manifest, GenesisProfile::Iroha3Taira, Some(seed));
         assert!(
             ok.is_ok(),
             "explicit seed should satisfy verification: {ok:?}"
         );
     }
-
     #[test]
     fn verify_accepts_nexus_profile_with_explicit_public_xor_binding() {
         let seed = [8u8; 32];
@@ -566,12 +516,10 @@ mod tests {
             seed,
             &peers,
         );
-
         let report = verify_manifest(&manifest, GenesisProfile::Iroha3Nexus, Some(seed))
             .expect("Nexus explicit XOR binding should verify");
         assert_eq!(report.peer_count, 4);
     }
-
     #[test]
     fn verify_rejects_public_profile_missing_xor_binding() {
         let seed = [9u8; 32];
@@ -599,7 +547,6 @@ mod tests {
         .build_raw()
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
-
         let err = verify_manifest(&manifest, GenesisProfile::Iroha3Taira, Some(seed))
             .expect_err("missing public XOR binding should fail");
         assert!(
@@ -607,7 +554,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn verify_rejects_taira_wrong_public_xor_binding() {
         let seed = [10u8; 32];
@@ -640,7 +586,6 @@ mod tests {
             .build_raw()
             .with_consensus_mode(SumeragiConsensusMode::Npos)
             .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
-
         let err = verify_manifest(&manifest, GenesisProfile::Iroha3Taira, Some(seed))
             .expect_err("wrong Taira XOR id should fail");
         assert!(
@@ -648,7 +593,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn verify_rejects_public_profile_synthetic_xor_binding() {
         let seed = [11u8; 32];
@@ -683,7 +627,6 @@ mod tests {
             .build_raw()
             .with_consensus_mode(SumeragiConsensusMode::Npos)
             .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
-
         let err = verify_manifest(&manifest, GenesisProfile::Iroha3Taira, Some(seed))
             .expect_err("synthetic public XOR binding should fail");
         assert!(
@@ -691,7 +634,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn verify_rejects_public_profile_domain_derived_xor_binding() {
         let seed = [12u8; 32];
@@ -726,7 +668,6 @@ mod tests {
             .build_raw()
             .with_consensus_mode(SumeragiConsensusMode::Npos)
             .with_chain_discriminant(crate::genesis::profile::NEXUS_CHAIN_DISCRIMINANT);
-
         let err = verify_manifest(&manifest, GenesisProfile::Iroha3Nexus, Some(seed))
             .expect_err("domain-derived public XOR binding should fail");
         assert!(
@@ -734,7 +675,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn verify_rejects_missing_pop() {
         let defaults = profile_defaults(GenesisProfile::Iroha3Dev);
@@ -756,7 +696,6 @@ mod tests {
             generate_peer_pop().0,
         ))])
         .build_raw();
-
         let err = verify_manifest(&manifest, GenesisProfile::Iroha3Dev, Some(seed))
             .expect_err("missing PoP should fail");
         assert!(
@@ -764,7 +703,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn verify_command_outputs_report_for_dev_profile() {
         let seed = derive_vrf_seed_from_chain(&ChainId::from("iroha3-dev.local"));
@@ -775,11 +713,9 @@ mod tests {
             seed,
             &peers,
         );
-
         let mut file = NamedTempFile::new().expect("create temp file");
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         file.write_all(json.as_bytes()).expect("write genesis");
-
         let args = Args {
             profile: GenesisProfile::Iroha3Dev,
             genesis: file.path().to_path_buf(),
@@ -791,7 +727,6 @@ mod tests {
         writer.flush().expect("flush buffer");
         let output =
             String::from_utf8(writer.into_inner().expect("collect output")).expect("utf8 output");
-
         assert!(
             output.contains("chain_id: iroha3-dev.local"),
             "report should include chain id: {output}"

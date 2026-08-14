@@ -10,7 +10,6 @@ fn persist_historical_atomic_temp_dependencies(kura: &Kura, payload: &LaneExecut
     kura.persist_lane_block_execution_input(&recovered)
         .expect("persist historical atomic-temp execution input");
 }
-
 fn write_historical_atomic_temp_fixture(
     directory: &Path,
     name: &str,
@@ -22,7 +21,6 @@ fn write_historical_atomic_temp_fixture(
         .expect("write historical atomic-temp fixture");
     path
 }
-
 #[test]
 fn historical_atomic_temp_fault_and_legacy_residue_recover_before_startup_inventory() {
     let temp_dir = TempDir::new().expect("historical atomic-temp fault directory");
@@ -58,7 +56,6 @@ fn historical_atomic_temp_fault_and_legacy_residue_recover_before_startup_invent
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first_payload);
     persist_historical_atomic_temp_dependencies(&kura, &first_payload);
     persist_historical_atomic_temp_dependencies(&kura, &second_payload);
-
     kura.fail_next_atomic_write_after_temporary_sync_for_test();
     assert!(
         kura.persist_historical_autonomous_lane_recovery_records(std::slice::from_ref(&first))
@@ -94,7 +91,6 @@ fn historical_atomic_temp_fault_and_legacy_residue_recover_before_startup_invent
     );
     assert!(!first_stable.exists() && !second_stable.exists());
     drop(kura);
-
     let (reopened, _) = Kura::new(&config, &lane_config)
         .expect("startup authenticates and promotes dedicated plus legacy residues");
     assert_eq!(
@@ -107,7 +103,6 @@ fn historical_atomic_temp_fault_and_legacy_residue_recover_before_startup_invent
     );
     assert!(!dedicated_temp.exists() && !legacy_temp.exists());
     drop(reopened);
-
     let (reopened_again, _) = Kura::new(&config, &lane_config)
         .expect("historical atomic-temp recovery is restart-idempotent");
     assert!(
@@ -121,7 +116,6 @@ fn historical_atomic_temp_fault_and_legacy_residue_recover_before_startup_invent
             .expect("revalidate legacy recovered record"),
     );
 }
-
 #[test]
 fn historical_atomic_temp_cleans_exact_duplicate_and_two_link_publication_retry() {
     let temp_dir = TempDir::new().expect("historical atomic duplicate directory");
@@ -160,7 +154,6 @@ fn historical_atomic_temp_cleans_exact_duplicate_and_two_link_publication_retry(
     kura.persist_historical_autonomous_lane_recovery_records(&[duplicate.clone(), linked.clone()])
         .expect("persist stable historical duplicate fixtures");
     drop(kura);
-
     let directory = Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
     let duplicate_temp = write_historical_atomic_temp_fixture(
         &directory,
@@ -177,7 +170,6 @@ fn historical_atomic_temp_cleans_exact_duplicate_and_two_link_publication_retry(
     ));
     std::fs::hard_link(&linked_stable, &linked_temp)
         .expect("create stable/temporary two-link publication boundary");
-
     let (reopened, _) = Kura::new(&config, &lane_config)
         .expect("startup cleans exact and two-link historical retries");
     assert!(!duplicate_temp.exists() && !linked_temp.exists());
@@ -193,7 +185,6 @@ fn historical_atomic_temp_cleans_exact_duplicate_and_two_link_publication_retry(
             .expect("read cleaned linked historical stable metadata"),
     ));
 }
-
 #[test]
 fn historical_atomic_temp_whole_inventory_preflight_prevents_partial_promotion() {
     let temp_dir = TempDir::new().expect("historical whole-inventory directory");
@@ -234,7 +225,6 @@ fn historical_atomic_temp_whole_inventory_preflight_prevents_partial_promotion()
         record.recovery_id,
     );
     drop(kura);
-
     assert!(
         Kura::new(&config, &lane_config).is_err(),
         "a late malformed item must reject the complete startup reconciliation",
@@ -246,7 +236,6 @@ fn historical_atomic_temp_whole_inventory_preflight_prevents_partial_promotion()
     );
     assert!(malformed_temp.exists());
 }
-
 #[test]
 fn historical_atomic_temp_rejects_multiple_names_for_one_target_before_mutation() {
     let temp_dir = TempDir::new().expect("duplicate-temp historical residue directory");
@@ -302,7 +291,6 @@ fn historical_atomic_temp_rejects_multiple_names_for_one_target_before_mutation(
         .exists(),
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn historical_atomic_temp_rejects_oversize_symlink_and_extraneous_hardlinks() {
@@ -330,7 +318,6 @@ fn historical_atomic_temp_rejects_oversize_symlink_and_extraneous_hardlinks() {
         assert!(Kura::new(&config, &lane_config).is_err());
         assert!(oversized.exists());
     }
-
     #[cfg(unix)]
     {
         let temp_dir = TempDir::new().expect("symlink historical residue directory");
@@ -356,7 +343,6 @@ fn historical_atomic_temp_rejects_oversize_symlink_and_extraneous_hardlinks() {
                 .is_symlink(),
         );
     }
-
     {
         let temp_dir = TempDir::new().expect("hardlink historical residue directory");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -393,7 +379,6 @@ fn historical_atomic_temp_rejects_oversize_symlink_and_extraneous_hardlinks() {
         assert!(first.exists() && second.exists());
     }
 }
-
 #[test]
 fn historical_atomic_temp_rejects_collision_and_stale_incarnation_without_mutation() {
     {
@@ -454,7 +439,6 @@ fn historical_atomic_temp_rejects_collision_and_stale_incarnation_without_mutati
             .exists(),
         );
     }
-
     {
         let temp_dir = TempDir::new().expect("stale historical residue directory");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);

@@ -5,11 +5,9 @@
 //! 0x40000969b871277cc1de70130355aeec17e854be7764570ef9a1000000000001`.
 //! Values use one canonical 32-byte little-endian wire encoding and a
 //! four-limb Montgomery representation internally.
-
 use core::ops::{Add, Mul, Neg, Sub};
 use iroha_data_model::privacy::IROHA_JINDO_FIELD_MODULUS_LE_V1;
 use zeroize::Zeroize;
-
 const fn read_u64_le(bytes: &[u8; 32], offset: usize) -> u64 {
     let mut value = 0_u64;
     let mut index = 0_usize;
@@ -21,17 +19,14 @@ const fn read_u64_le(bytes: &[u8; 32], offset: usize) -> u64 {
     }
     value
 }
-
 /// Canonical field element in Montgomery form.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct JindoFieldElementV1([u64; 4]);
-
 impl Zeroize for JindoFieldElementV1 {
     fn zeroize(&mut self) {
         self.0.zeroize();
     }
 }
-
 impl JindoFieldElementV1 {
     /// Field modulus in little-endian 64-bit limbs.
     pub(crate) const MODULUS: [u64; 4] = [
@@ -40,7 +35,6 @@ impl JindoFieldElementV1 {
         read_u64_le(&IROHA_JINDO_FIELD_MODULUS_LE_V1, 16),
         read_u64_le(&IROHA_JINDO_FIELD_MODULUS_LE_V1, 24),
     ];
-
     /// `R mod p` for `R = 2^256`.
     const MONTGOMERY_R: [u64; 4] = [
         0x131c_ffff_ffff_fffd,
@@ -48,7 +42,6 @@ impl JindoFieldElementV1 {
         0xba64_afc6_f5fe_f33b,
         0x3fff_e3c2_d6ac_8989,
     ];
-
     /// `R^2 mod p`, used when importing an ordinary residue.
     const MONTGOMERY_R2: [u64; 4] = [
         0x2854_9231_8baa_46f4,
@@ -56,10 +49,8 @@ impl JindoFieldElementV1 {
         0xb7a7_f2fd_9bf7_1a8a,
         0x2a63_2b92_0759_bb7f,
     ];
-
     /// `-p^{-1} mod 2^64`.
     const MONTGOMERY_NEG_INV: u64 = 0xf9a0_ffff_ffff_ffff;
-
     /// Exponent `p - 2`, in little-endian limbs.
     #[cfg(test)]
     const INVERSE_EXPONENT: [u64; 4] = [
@@ -68,18 +59,14 @@ impl JindoFieldElementV1 {
         0xc1de_7013_0355_aeec,
         0x4000_0969_b871_277c,
     ];
-
     /// Additive identity.
     pub(crate) const ZERO: Self = Self([0; 4]);
-
     /// Multiplicative identity.
     pub(crate) const ONE: Self = Self(Self::MONTGOMERY_R);
-
     /// Construct from a small unsigned integer.
     pub(crate) fn from_u64(value: u64) -> Self {
         Self::from_u128(u128::from(value))
     }
-
     /// Construct from an unsigned integer known to be smaller than the field
     /// modulus.
     pub(crate) fn from_u128(value: u128) -> Self {
@@ -88,7 +75,6 @@ impl JindoFieldElementV1 {
             Self::MONTGOMERY_R2,
         ))
     }
-
     /// Construct from a signed integer whose magnitude is smaller than the
     /// field modulus.
     pub(crate) fn from_i128(value: i128) -> Self {
@@ -98,7 +84,6 @@ impl JindoFieldElementV1 {
             Self::from_u128(value as u128)
         }
     }
-
     /// Decode one canonical 32-byte little-endian residue.
     pub(crate) fn from_canonical_bytes(bytes: [u8; 32]) -> Option<Self> {
         let mut limbs = [0_u64; 4];
@@ -112,7 +97,6 @@ impl JindoFieldElementV1 {
         }
         Some(Self(Self::montgomery_mul_limbs(limbs, Self::MONTGOMERY_R2)))
     }
-
     /// Encode as the unique 32-byte little-endian residue in `[0, p)`.
     pub(crate) fn to_canonical_bytes(self) -> [u8; 32] {
         let limbs = self.to_canonical_limbs();
@@ -122,17 +106,14 @@ impl JindoFieldElementV1 {
         }
         bytes
     }
-
     /// Return the canonical ordinary-residue limbs.
     pub(crate) fn to_canonical_limbs(self) -> [u64; 4] {
         Self::montgomery_mul_limbs(self.0, [1, 0, 0, 0])
     }
-
     /// Return true exactly for the additive identity.
     pub(crate) fn is_zero(self) -> bool {
         self == Self::ZERO
     }
-
     /// Multiplicative inverse, or `None` for zero.
     #[cfg(test)]
     pub(crate) fn invert(self) -> Option<Self> {
@@ -151,7 +132,6 @@ impl JindoFieldElementV1 {
         }
         Some(accumulator)
     }
-
     fn less_than(left: [u64; 4], right: [u64; 4]) -> bool {
         for index in (0..4).rev() {
             if left[index] != right[index] {
@@ -160,7 +140,6 @@ impl JindoFieldElementV1 {
         }
         false
     }
-
     fn add_limbs(left: [u64; 4], right: [u64; 4]) -> ([u64; 4], u64) {
         let mut out = [0_u64; 4];
         let mut carry = 0_u64;
@@ -171,7 +150,6 @@ impl JindoFieldElementV1 {
         }
         (out, carry)
     }
-
     fn sub_limbs(left: [u64; 4], right: [u64; 4]) -> ([u64; 4], u64) {
         let mut out = [0_u64; 4];
         let mut borrow = 0_u64;
@@ -183,7 +161,6 @@ impl JindoFieldElementV1 {
         }
         (out, borrow)
     }
-
     fn reduce_once(value: [u64; 4], high: u64) -> [u64; 4] {
         if high != 0 || !Self::less_than(value, Self::MODULUS) {
             let (reduced, _) = Self::sub_limbs(value, Self::MODULUS);
@@ -192,7 +169,6 @@ impl JindoFieldElementV1 {
             value
         }
     }
-
     fn add_with_propagation(words: &mut [u64; 9], index: usize, value: u64) {
         let mut cursor = index;
         let mut carry = value;
@@ -204,10 +180,8 @@ impl JindoFieldElementV1 {
             cursor += 1;
         }
     }
-
     fn montgomery_mul_limbs(left: [u64; 4], right: [u64; 4]) -> [u64; 4] {
         let mut product = [0_u64; 9];
-
         for left_index in 0..4 {
             let mut carry = 0_u64;
             for right_index in 0..4 {
@@ -220,7 +194,6 @@ impl JindoFieldElementV1 {
             }
             Self::add_with_propagation(&mut product, left_index + 4, carry);
         }
-
         for offset in 0..4 {
             let multiplier = product[offset].wrapping_mul(Self::MONTGOMERY_NEG_INV);
             let mut carry = 0_u64;
@@ -236,23 +209,18 @@ impl JindoFieldElementV1 {
             Self::add_with_propagation(&mut product, offset + 4, carry);
             debug_assert_eq!(product[offset], 0);
         }
-
         Self::reduce_once([product[4], product[5], product[6], product[7]], product[8])
     }
 }
-
 impl Add for JindoFieldElementV1 {
     type Output = Self;
-
     fn add(self, rhs: Self) -> Self::Output {
         let (sum, carry) = Self::add_limbs(self.0, rhs.0);
         Self(Self::reduce_once(sum, carry))
     }
 }
-
 impl Sub for JindoFieldElementV1 {
     type Output = Self;
-
     fn sub(self, rhs: Self) -> Self::Output {
         let (difference, borrow) = Self::sub_limbs(self.0, rhs.0);
         if borrow == 0 {
@@ -264,18 +232,14 @@ impl Sub for JindoFieldElementV1 {
         }
     }
 }
-
 impl Mul for JindoFieldElementV1 {
     type Output = Self;
-
     fn mul(self, rhs: Self) -> Self::Output {
         Self(Self::montgomery_mul_limbs(self.0, rhs.0))
     }
 }
-
 impl Neg for JindoFieldElementV1 {
     type Output = Self;
-
     fn neg(self) -> Self::Output {
         if self.is_zero() {
             Self::ZERO
@@ -284,12 +248,10 @@ impl Neg for JindoFieldElementV1 {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::super::{JINDO_ENCODING_BASE_V1, JINDO_ENCODING_EXPONENT_V1};
     use super::*;
-
     fn canonical_from_limbs(limbs: [u64; 4]) -> [u8; 32] {
         let mut bytes = [0_u8; 32];
         for (chunk, limb) in bytes.chunks_exact_mut(8).zip(limbs) {
@@ -297,12 +259,10 @@ mod tests {
         }
         bytes
     }
-
     fn decode(limbs: [u64; 4]) -> JindoFieldElementV1 {
         JindoFieldElementV1::from_canonical_bytes(canonical_from_limbs(limbs))
             .expect("canonical test field element")
     }
-
     #[test]
     fn modulus_matches_the_jindo_friendly_base_relation() {
         assert_eq!(
@@ -317,7 +277,6 @@ mod tests {
         }
         assert_eq!(value + JindoFieldElementV1::ONE, JindoFieldElementV1::ZERO);
     }
-
     #[test]
     fn canonical_decoder_rejects_modulus_and_larger_values() {
         assert!(
@@ -331,7 +290,6 @@ mod tests {
         assert!(JindoFieldElementV1::from_canonical_bytes(canonical_from_limbs(larger)).is_none());
         assert!(JindoFieldElementV1::from_canonical_bytes(canonical_from_limbs([0; 4])).is_some());
     }
-
     #[test]
     fn canonical_roundtrip_covers_limb_boundaries_and_modulus_minus_one() {
         let values = [
@@ -353,7 +311,6 @@ mod tests {
             assert_eq!(decode(limbs).to_canonical_bytes(), encoded);
         }
     }
-
     #[test]
     fn addition_subtraction_and_negation_cross_the_modulus_boundary() {
         let modulus_minus_one = decode([
@@ -371,7 +328,6 @@ mod tests {
             modulus_minus_one
         );
         assert_eq!(-JindoFieldElementV1::ONE, modulus_minus_one);
-
         for value in [
             JindoFieldElementV1::ZERO,
             JindoFieldElementV1::ONE,
@@ -382,7 +338,6 @@ mod tests {
             assert_eq!(value - value, JindoFieldElementV1::ZERO);
         }
     }
-
     #[test]
     fn multiplication_matches_independent_small_integer_vectors() {
         let vectors = [
@@ -402,7 +357,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn full_width_known_answer_vectors_match_independent_integer_arithmetic() {
         let left_bytes = [
@@ -430,7 +384,6 @@ mod tests {
             0xbf, 0xcd, 0x5c, 0x9b, 0x7b, 0x65, 0x1e, 0x22, 0x1e, 0xed, 0xab, 0x66, 0x8c, 0x98,
             0xd4, 0xb8, 0x3a, 0x05,
         ];
-
         let left = JindoFieldElementV1::from_canonical_bytes(left_bytes).expect("canonical left");
         let right =
             JindoFieldElementV1::from_canonical_bytes(right_bytes).expect("canonical right");
@@ -441,7 +394,6 @@ mod tests {
             inverse_bytes
         );
     }
-
     #[test]
     fn inversion_is_total_only_for_nonzero_elements() {
         assert!(JindoFieldElementV1::ZERO.invert().is_none());
@@ -462,7 +414,6 @@ mod tests {
             assert_eq!(inverse * value, JindoFieldElementV1::ONE);
         }
     }
-
     #[test]
     fn distributivity_vectors_exercise_full_width_carries() {
         let a = decode([

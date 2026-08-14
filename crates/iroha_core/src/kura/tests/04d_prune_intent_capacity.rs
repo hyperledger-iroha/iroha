@@ -15,12 +15,10 @@ fn canonical_prune_intent_artifact_fixture() -> KuraPruneIntentV2 {
         capacity: unsealed_prune_capacity_fixture(),
     })
 }
-
 fn canonical_prune_intent_artifact_bytes() -> Vec<u8> {
     norito::encode_canonical(&canonical_prune_intent_artifact_fixture())
         .expect("encode canonical prune-intent fixture")
 }
-
 fn seed_large_commit_roster_for_prune(
     kura: &Kura,
     blocks: &[Arc<SignedBlock>],
@@ -47,7 +45,6 @@ fn seed_large_commit_roster_for_prune(
         .project_truncate_to_height(target_height)
         .expect("project large retained roster")
 }
-
 fn commit_roster_file_snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     let journal = CommitRosterJournal::journal_path(root);
     let mut files = Vec::new();
@@ -73,7 +70,6 @@ fn commit_roster_file_snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     files.sort_by(|left, right| left.0.cmp(&right.0));
     files
 }
-
 #[test]
 fn canonical_prune_intent_scanners_account_stable_temp_crash_inode_once() {
     let temp_dir = TempDir::new().expect("prune accounting temp dir");
@@ -90,7 +86,6 @@ fn canonical_prune_intent_scanners_account_stable_temp_crash_inode_once() {
     let bytes_len = u64::try_from(bytes.len()).expect("intent fixture length fits u64");
     let stable_path = Kura::prune_intent_path_for(temp_dir.path());
     let temporary_path = Kura::prune_intent_temp_path_for(temp_dir.path());
-
     fs::write(&temporary_path, &bytes).expect("write exact deterministic prune temp");
     fs::hard_link(&temporary_path, &stable_path)
         .expect("construct portable no-clobber crash window");
@@ -113,7 +108,6 @@ fn canonical_prune_intent_scanners_account_stable_temp_crash_inode_once() {
             .expect("scan total crash-window bytes"),
         baseline_total + bytes_len,
     );
-
     assert_eq!(
         Kura::read_prune_intent(temp_dir.path()).expect("normalize crash-window publication"),
         Some(canonical_prune_intent_artifact_fixture()),
@@ -127,7 +121,6 @@ fn canonical_prune_intent_scanners_account_stable_temp_crash_inode_once() {
             .expect("account normalized stable intent"),
         bytes_len,
     );
-
     kura.refresh_disk_usage_bytes()
         .expect("publish normalized live accounting");
     kura.clear_prune_intent()
@@ -148,7 +141,6 @@ fn canonical_prune_intent_scanners_account_stable_temp_crash_inode_once() {
         baseline_total,
     );
 }
-
 #[test]
 fn canonical_prune_publication_updates_both_live_usage_counters() {
     let temp_dir = TempDir::new().expect("prune live-accounting temp dir");
@@ -164,7 +156,6 @@ fn canonical_prune_publication_updates_both_live_usage_counters() {
     let baseline_total = kura
         .disk_usage_bytes()
         .expect("read prune total-accounting baseline");
-
     kura.persist_prune_intent(&intent)
         .expect("publish canonical prune intent");
     assert_eq!(
@@ -188,7 +179,6 @@ fn canonical_prune_publication_updates_both_live_usage_counters() {
             .expect("scan total bytes after prune publication"),
         baseline_total + intent_len,
     );
-
     kura.finish_prune_intent()
         .expect("clear canonical prune intent and recovery latch");
     assert_eq!(kura.disk_usage.load(Ordering::Relaxed), baseline_enforced);
@@ -198,7 +188,6 @@ fn canonical_prune_publication_updates_both_live_usage_counters() {
         baseline_total,
     );
 }
-
 #[test]
 fn canonical_prune_intent_exact_artifacts_fail_closed_for_every_untrusted_shape() {
     let temp_dir = TempDir::new().expect("prune artifact adversarial temp dir");
@@ -206,11 +195,9 @@ fn canonical_prune_intent_exact_artifacts_fail_closed_for_every_untrusted_shape(
     let stable_path = Kura::prune_intent_path_for(root);
     let temporary_path = Kura::prune_intent_temp_path_for(root);
     let bytes = canonical_prune_intent_artifact_bytes();
-
     fs::write(&stable_path, b"not canonical Norito").expect("write malformed stable intent");
     assert!(Kura::canonical_prune_intent_artifact_inventory(root).is_err());
     fs::remove_file(&stable_path).expect("remove malformed stable intent");
-
     fs::write(&stable_path, vec![0_u8; PRUNE_INTENT_MAX_BYTES + 1])
         .expect("write oversized stable intent");
     assert!(matches!(
@@ -218,7 +205,6 @@ fn canonical_prune_intent_exact_artifacts_fail_closed_for_every_untrusted_shape(
         Err(Error::PruneIntentConflict(message)) if message.contains("invalid byte length")
     ));
     fs::remove_file(&stable_path).expect("remove oversized stable intent");
-
     let unexpected = root.join(format!("{PRUNE_INTENT_FILE_NAME}.bak"));
     fs::write(&unexpected, &bytes).expect("write unexpected reserved-name artifact");
     assert!(matches!(
@@ -226,7 +212,6 @@ fn canonical_prune_intent_exact_artifacts_fail_closed_for_every_untrusted_shape(
         Err(Error::PruneIntentConflict(message)) if message.contains("unexpected reserved publication name")
     ));
     fs::remove_file(&unexpected).expect("remove unexpected reserved-name artifact");
-
     let legacy_random_temp = root.join(format!(
         "{LEGACY_CANONICAL_PRUNE_RANDOM_TEMP_PREFIX}legacy-prune-residue"
     ));
@@ -236,7 +221,6 @@ fn canonical_prune_intent_exact_artifacts_fail_closed_for_every_untrusted_shape(
         Err(Error::PruneIntentConflict(message)) if message.contains("unexpected reserved publication name")
     ));
     fs::remove_file(&legacy_random_temp).expect("remove legacy random prune temp");
-
     let hardlink_source = root.join("prune-hardlink-source");
     fs::write(&hardlink_source, &bytes).expect("write hardlink source");
     fs::hard_link(&hardlink_source, &stable_path).expect("hardlink lone stable artifact");
@@ -246,7 +230,6 @@ fn canonical_prune_intent_exact_artifacts_fail_closed_for_every_untrusted_shape(
     ));
     fs::remove_file(&stable_path).expect("remove hardlinked stable name");
     fs::remove_file(&hardlink_source).expect("remove hardlink source");
-
     fs::write(&stable_path, &bytes).expect("write independent stable intent");
     fs::write(&temporary_path, &bytes).expect("write independent temporary intent");
     assert!(matches!(
@@ -255,11 +238,9 @@ fn canonical_prune_intent_exact_artifacts_fail_closed_for_every_untrusted_shape(
     ));
     fs::remove_file(&stable_path).expect("remove mismatched stable object");
     fs::remove_file(&temporary_path).expect("remove mismatched temporary object");
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
-
         let symlink_target = root.join("prune-symlink-target");
         fs::write(&symlink_target, &bytes).expect("write symlink target");
         symlink(&symlink_target, &stable_path).expect("symlink stable prune intent");
@@ -271,7 +252,6 @@ fn canonical_prune_intent_exact_artifacts_fail_closed_for_every_untrusted_shape(
         fs::remove_file(&symlink_target).expect("remove symlink target");
     }
 }
-
 #[test]
 fn canonical_prune_publication_consumes_the_exact_reserved_boundary() {
     let temp_dir = TempDir::new().expect("prune reserved-boundary temp dir");
@@ -294,7 +274,6 @@ fn canonical_prune_publication_consumes_the_exact_reserved_boundary() {
         },
     );
     let exact_boundary = preview.capacity.admitted_peak_bytes;
-
     Arc::get_mut(&mut kura)
         .expect("prune boundary Kura remains exclusive")
         .max_disk_usage_bytes = exact_boundary - 1;
@@ -305,7 +284,6 @@ fn canonical_prune_publication_consumes_the_exact_reserved_boundary() {
     ));
     assert_eq!(kura.blocks_count(), 2);
     assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
-
     Arc::get_mut(&mut kura)
         .expect("prune boundary Kura remains exclusive after rejection")
         .max_disk_usage_bytes = exact_boundary;
@@ -319,7 +297,6 @@ fn canonical_prune_publication_consumes_the_exact_reserved_boundary() {
     assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
     assert!(!Kura::prune_intent_temp_path_for(temp_dir.path()).exists());
 }
-
 #[test]
 fn canonical_prune_capacity_includes_large_commit_roster_generation() {
     let temp_dir = TempDir::new().expect("large-roster prune temp dir");
@@ -346,7 +323,6 @@ fn canonical_prune_capacity_includes_large_commit_roster_generation() {
     );
     assert_eq!(preview.capacity.roster, roster_projection);
     let exact = preview.capacity.admitted_peak_bytes;
-
     Arc::get_mut(&mut kura)
         .expect("large-roster Kura remains exclusive")
         .max_disk_usage_bytes = exact - 1;
@@ -358,7 +334,6 @@ fn canonical_prune_capacity_includes_large_commit_roster_generation() {
     assert_eq!(kura.blocks_count(), 48);
     assert!(kura.roster_log.read().has_entries_above(24));
     assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
-
     Arc::get_mut(&mut kura)
         .expect("large-roster Kura remains exclusive after rejection")
         .max_disk_usage_bytes = exact;
@@ -368,7 +343,6 @@ fn canonical_prune_capacity_includes_large_commit_roster_generation() {
     assert!(!kura.roster_log.read().has_entries_above(24));
     assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
 }
-
 #[test]
 fn startup_prune_capacity_reuses_large_roster_admission_exactly() {
     let temp_dir = TempDir::new().expect("startup large-roster prune temp dir");
@@ -413,7 +387,6 @@ fn startup_prune_capacity_reuses_large_roster_admission_exactly() {
     let marker_path = kura.block_store.lock().commit_marker_path();
     let marker_before = fs::read(&marker_path).expect("read pre-recovery block marker");
     drop(kura);
-
     config.max_disk_usage_bytes = iroha_config::base::util::Bytes(exact - 1);
     assert!(matches!(
         Kura::new(&config, &RuntimeLaneConfig::default()),
@@ -426,7 +399,6 @@ fn startup_prune_capacity_reuses_large_roster_admission_exactly() {
         marker_before,
     );
     assert!(Kura::prune_intent_path_for(temp_dir.path()).is_file());
-
     config.max_disk_usage_bytes = iroha_config::base::util::Bytes(exact);
     let (recovered, BlockCount(block_count)) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("exact startup capacity completes large-roster prune");
@@ -435,7 +407,6 @@ fn startup_prune_capacity_reuses_large_roster_admission_exactly() {
     assert!(!recovered.roster_log.read().has_entries_above(24));
     assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
 }
-
 #[test]
 fn canonical_prune_temp_crash_restarts_without_stale_disk_accounting() {
     let temp_dir = TempDir::new().expect("prune temp-crash temp dir");
@@ -473,7 +444,6 @@ fn canonical_prune_temp_crash_restarts_without_stale_disk_accounting() {
         .expect("measure temp-crash baseline");
     let temporary_path = Kura::prune_intent_temp_path_for(temp_dir.path());
     let stable_path = Kura::prune_intent_path_for(temp_dir.path());
-
     kura.fail_next_atomic_write_after_temporary_sync_for_test();
     assert!(kura.persist_prune_intent(&intent).is_err());
     assert!(temporary_path.is_file());
@@ -499,7 +469,6 @@ fn canonical_prune_temp_crash_restarts_without_stale_disk_accounting() {
             .expect("scan total accounting after temp crash"),
     );
     drop(kura);
-
     let (reopened, BlockCount(block_count)) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("startup removes the authenticated unpublished prune temp");
     assert_eq!(block_count, 2);
@@ -522,7 +491,6 @@ fn canonical_prune_temp_crash_restarts_without_stale_disk_accounting() {
             .expect("scan total bytes after startup cleanup"),
     );
 }
-
 #[test]
 fn canonical_prune_stable_temp_publication_crash_recovers_forward_on_startup() {
     let temp_dir = TempDir::new().expect("prune publication-crash temp dir");
@@ -552,7 +520,6 @@ fn canonical_prune_stable_temp_publication_crash_recovers_forward_on_startup() {
     let bytes = norito::encode_canonical(&intent).expect("encode publication-crash prune intent");
     let temporary_path = Kura::prune_intent_temp_path_for(temp_dir.path());
     let stable_path = Kura::prune_intent_path_for(temp_dir.path());
-
     fs::write(&temporary_path, &bytes).expect("write exact deterministic prune temp");
     fs::hard_link(&temporary_path, &stable_path)
         .expect("construct stable+temp no-clobber publication crash window");
@@ -564,7 +531,6 @@ fn canonical_prune_stable_temp_publication_crash_recovers_forward_on_startup() {
             .expect("account publication crash inventory"),
         u64::try_from(bytes.len()).expect("publication-crash intent length fits u64"),
     );
-
     let (recovered, BlockCount(block_count)) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("startup normalizes publication and completes the durable prune");
     assert_eq!(block_count, 2);
@@ -592,7 +558,6 @@ fn canonical_prune_stable_temp_publication_crash_recovers_forward_on_startup() {
             .expect("scan total bytes after publication-crash recovery"),
     );
 }
-
 #[test]
 fn active_prune_recovery_never_allocates_missing_retained_merge_carrier() {
     let temp_dir = TempDir::new().expect("missing retained-carrier temp dir");
@@ -629,7 +594,6 @@ fn active_prune_recovery_never_allocates_missing_retained_merge_carrier() {
     )
     .expect("sync missing retained-carrier fixture");
     drop(kura);
-
     assert!(matches!(
         Kura::new(&config, &RuntimeLaneConfig::default()),
         Err(Error::PruneIntentConflict(message))
@@ -638,7 +602,6 @@ fn active_prune_recovery_never_allocates_missing_retained_merge_carrier() {
     assert!(!retained_carrier.exists());
     assert!(Kura::prune_intent_path_for(temp_dir.path()).is_file());
 }
-
 #[derive(Encode)]
 struct LegacyKuraPruneIntentV1Fixture {
     version: u8,
@@ -649,7 +612,6 @@ struct LegacyKuraPruneIntentV1Fixture {
     retained_merge_entries: u64,
     retained_merge_tip_hash: Option<HashOf<MergeLedgerEntry>>,
 }
-
 fn seed_large_current_tip_sidecar_rewrite(kura: &Kura, tip_hash: HashOf<BlockHeader>) {
     let mut retained = PipelineRecoverySidecar::new(
         1,
@@ -685,7 +647,6 @@ fn seed_large_current_tip_sidecar_rewrite(kura: &Kura, tip_hash: HashOf<BlockHea
         None,
     )));
 }
-
 fn canonical_prune_sidecar_files(kura: &Kura) -> Vec<(PathBuf, Vec<u8>)> {
     let directory = kura.active_blocks_dir.lock().join(PIPELINE_DIR_NAME);
     [
@@ -702,7 +663,6 @@ fn canonical_prune_sidecar_files(kura: &Kura) -> Vec<(PathBuf, Vec<u8>)> {
     })
     .collect()
 }
-
 #[test]
 fn legacy_hash_only_prune_intent_layout_is_rejected() {
     let temp_dir = TempDir::new().expect("legacy prune-intent temp dir");
@@ -729,7 +689,6 @@ fn legacy_hash_only_prune_intent_layout_is_rejected() {
     ));
     assert!(path.is_file(), "legacy evidence must remain fail-closed");
 }
-
 #[test]
 fn empty_current_tip_cleanup_authenticates_zero_byte_retained_output() {
     let temp_dir = TempDir::new().expect("empty current-tip prune temp dir");
@@ -759,7 +718,6 @@ fn empty_current_tip_cleanup_authenticates_zero_byte_retained_output() {
     };
     assert!(projection.has_work());
     assert_eq!(projection.sequential_peak_bytes, 0);
-
     kura.fail_prune_after_stage_for_tests(PRUNE_STAGE_INTENT);
     let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = kura.prune_to_height(0);
@@ -774,7 +732,6 @@ fn empty_current_tip_cleanup_authenticates_zero_byte_retained_output() {
     assert!(intent.sidecar_rewrite.has_work());
     assert_eq!(intent.sidecar_rewrite.sequential_peak_bytes, 0);
     drop(kura);
-
     let (recovered, BlockCount(count)) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("recover empty current-tip sidecar cleanup");
     assert_eq!(count, 0);
@@ -795,7 +752,6 @@ fn empty_current_tip_cleanup_authenticates_zero_byte_retained_output() {
         .expect("empty retained pair is structurally canonical");
     assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
 }
-
 #[test]
 fn current_tip_sidecar_rewrite_uses_v2_intent_and_exact_peak_capacity() {
     let temp_dir = TempDir::new().expect("current-tip prune-capacity temp dir");
@@ -845,7 +801,6 @@ fn current_tip_sidecar_rewrite_uses_v2_intent_and_exact_peak_capacity() {
     );
     let exact = preview.capacity.admitted_peak_bytes;
     let before = canonical_prune_sidecar_files(&kura);
-
     Arc::get_mut(&mut kura)
         .expect("current-tip Kura remains exclusive")
         .max_disk_usage_bytes = exact - 1;
@@ -856,7 +811,6 @@ fn current_tip_sidecar_rewrite_uses_v2_intent_and_exact_peak_capacity() {
     ));
     assert_eq!(canonical_prune_sidecar_files(&kura), before);
     assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
-
     Arc::get_mut(&mut kura)
         .expect("current-tip Kura remains exclusive after rejection")
         .max_disk_usage_bytes = exact;
@@ -879,7 +833,6 @@ fn current_tip_sidecar_rewrite_uses_v2_intent_and_exact_peak_capacity() {
     assert_eq!(intent.capacity, preview.capacity);
     assert_eq!(canonical_prune_sidecar_files(&kura), before);
     drop(kura);
-
     let (recovered, BlockCount(count)) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("recover current-tip V2 sidecar intent");
     assert_eq!(count, 1);
@@ -890,7 +843,6 @@ fn current_tip_sidecar_rewrite_uses_v2_intent_and_exact_peak_capacity() {
         .expect("current-tip sidecars recover to one compact retained prefix");
     assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
 }
-
 #[test]
 fn startup_rewrite_capacity_rejects_one_under_without_sidecar_mutation() {
     let temp_dir = TempDir::new().expect("startup prune-capacity temp dir");
@@ -930,7 +882,6 @@ fn startup_rewrite_capacity_rejects_one_under_without_sidecar_mutation() {
     );
     let before = canonical_prune_sidecar_files(&kura);
     drop(kura);
-
     config.max_disk_usage_bytes = iroha_config::base::util::Bytes(exact - 1);
     assert!(matches!(
         Kura::new(&config, &RuntimeLaneConfig::default()),
@@ -959,7 +910,6 @@ fn startup_rewrite_capacity_rejects_one_under_without_sidecar_mutation() {
             .with_extension("norito.tmp")
             .exists()
     );
-
     config.max_disk_usage_bytes = iroha_config::base::util::Bytes(exact);
     let (inspection, _) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("exact startup recovery succeeds with sufficient capacity");
@@ -970,7 +920,6 @@ fn startup_rewrite_capacity_rejects_one_under_without_sidecar_mutation() {
     assert_ne!(canonical_prune_sidecar_files(&inspection), before);
     assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
 }
-
 #[test]
 fn startup_rejects_ambiguous_two_pair_rewrite_residues_before_mutation() {
     let temp_dir = TempDir::new().expect("ambiguous prune-residue temp dir");
@@ -1013,7 +962,6 @@ fn startup_rejects_ambiguous_two_pair_rewrite_residues_before_mutation() {
     let pipeline_bytes = fs::read(&pipeline_temp).expect("snapshot pipeline residue");
     let roster_bytes = fs::read(&roster_temp).expect("snapshot roster residue");
     drop(kura);
-
     assert!(matches!(
         Kura::new(&config, &RuntimeLaneConfig::default()),
         Err(Error::PruneIntentConflict(message))

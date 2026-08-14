@@ -1,15 +1,12 @@
 //! Shared Norito schemas for streaming proof requests.
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use norito::{
     derive::{NoritoDeserialize, NoritoSerialize},
     json::{self, Map, Value},
 };
 use thiserror::Error;
-
 /// Maximum `sample_count` accepted for PoR proof-stream requests.
 pub const MAX_PROOF_STREAM_SAMPLE_COUNT: u32 = 500;
-
 /// Streaming proof request envelope (PoR / PDP / PoTR).
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, Hash)]
 pub struct ProofStreamRequestV1 {
@@ -49,7 +46,6 @@ pub struct ProofStreamRequestV1 {
     /// Optional storage tier hint (hot/warm/archive).
     pub tier: Option<ProofStreamTier>,
 }
-
 impl ProofStreamRequestV1 {
     /// Validate request invariants.
     pub fn validate(&self) -> Result<(), ProofStreamRequestError> {
@@ -149,7 +145,6 @@ impl ProofStreamRequestV1 {
         Ok(())
     }
 }
-
 /// Supported proof kinds for streaming.
 #[derive(Debug, Clone, Copy, Default, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, Hash)]
 pub enum ProofStreamKind {
@@ -161,7 +156,6 @@ pub enum ProofStreamKind {
     /// Proof-of-Timed Retrieval receipt requests.
     Potr,
 }
-
 /// Tier hints used by PDP/PoTR schedulers.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, Hash)]
 pub enum ProofStreamTier {
@@ -172,7 +166,6 @@ pub enum ProofStreamTier {
     /// Archive tier (cold storage).
     Archive,
 }
-
 impl ProofStreamKind {
     /// Canonical lowercase HTTP/JSON label.
     #[must_use]
@@ -183,7 +176,6 @@ impl ProofStreamKind {
             Self::Potr => "potr",
         }
     }
-
     /// Parse an exact canonical HTTP/JSON label.
     pub fn parse(raw: &str) -> Result<Self, ProofStreamHttpRequestError> {
         match raw {
@@ -194,7 +186,6 @@ impl ProofStreamKind {
         }
     }
 }
-
 impl ProofStreamTier {
     /// Canonical lowercase HTTP/JSON label.
     #[must_use]
@@ -205,7 +196,6 @@ impl ProofStreamTier {
             Self::Archive => "archive",
         }
     }
-
     /// Parse an exact canonical HTTP/JSON label.
     pub fn parse(raw: &str) -> Result<Self, ProofStreamHttpRequestError> {
         match raw {
@@ -216,21 +206,18 @@ impl ProofStreamTier {
         }
     }
 }
-
 impl norito::json::JsonSerialize for ProofStreamKind {
     fn json_serialize(&self, out: &mut String) {
         let label = self.as_str();
         <&str as norito::json::JsonSerialize>::json_serialize(&label, out);
     }
 }
-
 impl norito::json::JsonSerialize for ProofStreamTier {
     fn json_serialize(&self, out: &mut String) {
         let label = self.as_str();
         <&str as norito::json::JsonSerialize>::json_serialize(&label, out);
     }
 }
-
 /// Validation failures for [`ProofStreamRequestV1`].
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum ProofStreamRequestError {
@@ -277,7 +264,6 @@ pub enum ProofStreamRequestError {
     #[error("deadline must be greater than zero milliseconds")]
     ZeroDeadlineMs,
 }
-
 /// Validated canonical Norito-JSON envelope for the proof-stream HTTP API.
 ///
 /// The inner binary request is kept private so callers cannot serialize an
@@ -287,26 +273,22 @@ pub enum ProofStreamRequestError {
 pub struct ProofStreamHttpRequestV1 {
     request: ProofStreamRequestV1,
 }
-
 impl ProofStreamHttpRequestV1 {
     /// Construct a wire envelope after validating all request invariants.
     pub fn new(request: ProofStreamRequestV1) -> Result<Self, ProofStreamHttpRequestError> {
         request.validate()?;
         Ok(Self { request })
     }
-
     /// Borrow the validated canonical binary request.
     #[must_use]
     pub const fn request(&self) -> &ProofStreamRequestV1 {
         &self.request
     }
-
     /// Consume the envelope and return the validated canonical binary request.
     #[must_use]
     pub const fn into_request(self) -> ProofStreamRequestV1 {
         self.request
     }
-
     /// Render the exact canonical HTTP object.
     #[must_use]
     pub fn to_json_value(self) -> Value {
@@ -363,7 +345,6 @@ impl ProofStreamHttpRequestV1 {
         }
         Value::Object(map)
     }
-
     /// Parse and validate an exact canonical HTTP object.
     pub fn from_json_value(value: &Value) -> Result<Self, ProofStreamHttpRequestError> {
         let object = value
@@ -386,7 +367,6 @@ impl ProofStreamHttpRequestV1 {
         if object.keys().any(|field| !FIELDS.contains(&field.as_str())) {
             return Err(ProofStreamHttpRequestError::UnknownField);
         }
-
         let manifest_digest = parse_canonical_hex::<32>(
             required_string(object, "manifest_digest_hex")?,
             "manifest_digest_hex",
@@ -424,7 +404,6 @@ impl ProofStreamHttpRequestV1 {
         let tier = optional_string(object, "tier")?
             .map(ProofStreamTier::parse)
             .transpose()?;
-
         Self::new(ProofStreamRequestV1 {
             manifest_digest,
             provider_id,
@@ -441,32 +420,26 @@ impl ProofStreamHttpRequestV1 {
         })
     }
 }
-
 impl TryFrom<ProofStreamRequestV1> for ProofStreamHttpRequestV1 {
     type Error = ProofStreamHttpRequestError;
-
     fn try_from(request: ProofStreamRequestV1) -> Result<Self, Self::Error> {
         Self::new(request)
     }
 }
-
 impl json::JsonSerialize for ProofStreamHttpRequestV1 {
     fn json_serialize(&self, out: &mut String) {
         self.to_json_value().json_serialize(out);
     }
 }
-
 impl json::JsonDeserialize for ProofStreamHttpRequestV1 {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = Value::json_deserialize(parser)?;
         Self::json_from_value(&value)
     }
-
     fn json_from_value(value: &Value) -> Result<Self, json::Error> {
         Self::from_json_value(value).map_err(|error| json::Error::Message(error.to_string()))
     }
 }
-
 /// Canonical proof-stream HTTP envelope failures.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum ProofStreamHttpRequestError {
@@ -513,7 +486,6 @@ pub enum ProofStreamHttpRequestError {
     #[error(transparent)]
     InvalidRequest(#[from] ProofStreamRequestError),
 }
-
 fn required_string<'a>(
     object: &'a Map,
     field: &'static str,
@@ -524,7 +496,6 @@ fn required_string<'a>(
         None => Err(ProofStreamHttpRequestError::MissingField(field)),
     }
 }
-
 fn optional_string<'a>(
     object: &'a Map,
     field: &'static str,
@@ -536,7 +507,6 @@ fn optional_string<'a>(
         None => Ok(None),
     }
 }
-
 fn optional_u64(
     object: &Map,
     field: &'static str,
@@ -550,7 +520,6 @@ fn optional_u64(
         None => Ok(None),
     }
 }
-
 fn parse_canonical_hex<const N: usize>(
     raw: &str,
     field: &'static str,
@@ -566,7 +535,6 @@ fn parse_canonical_hex<const N: usize>(
         .try_into()
         .map_err(|_| ProofStreamHttpRequestError::InvalidHexLength(field))
 }
-
 fn parse_canonical_base64_16(raw: &str) -> Result<[u8; 16], ProofStreamHttpRequestError> {
     let bytes = BASE64_STANDARD
         .decode(raw.as_bytes())
@@ -578,13 +546,10 @@ fn parse_canonical_base64_16(raw: &str) -> Result<[u8; 16], ProofStreamHttpReque
         .try_into()
         .map_err(|_| ProofStreamHttpRequestError::InvalidNonceLength)
 }
-
 #[cfg(test)]
 mod tests {
-    use norito::json::{Value, from_slice, to_vec};
-
     use super::*;
-
+    use norito::json::{Value, from_slice, to_vec};
     fn base_request() -> ProofStreamRequestV1 {
         ProofStreamRequestV1 {
             manifest_digest: [0x11; 32],
@@ -601,13 +566,11 @@ mod tests {
             tier: Some(ProofStreamTier::Hot),
         }
     }
-
     #[test]
     fn por_request_validates() {
         let request = base_request();
         assert_eq!(request.validate(), Ok(()));
     }
-
     #[test]
     fn missing_sample_count_rejected() {
         let mut request = base_request();
@@ -617,7 +580,6 @@ mod tests {
             Err(ProofStreamRequestError::MissingSampleCount)
         );
     }
-
     #[test]
     fn zero_orchestrator_job_id_is_rejected() {
         let mut request = base_request();
@@ -627,7 +589,6 @@ mod tests {
             Err(ProofStreamRequestError::InvalidOrchestratorJobId)
         );
     }
-
     #[test]
     fn oversized_sample_count_rejected() {
         let mut request = base_request();
@@ -637,7 +598,6 @@ mod tests {
             Err(ProofStreamRequestError::SampleCountTooLarge)
         );
     }
-
     #[test]
     fn por_requires_a_complete_nonzero_finalized_cursor() {
         let mut request = base_request();
@@ -647,7 +607,6 @@ mod tests {
             request.validate(),
             Err(ProofStreamRequestError::MissingFinalizedCursor)
         );
-
         request.expected_finalized_height = Some(17);
         assert_eq!(
             request.validate(),
@@ -666,7 +625,6 @@ mod tests {
             Err(ProofStreamRequestError::InvalidFinalizedBlockHash)
         );
     }
-
     #[test]
     fn potr_requires_deadline() {
         let mut request = base_request();
@@ -686,7 +644,6 @@ mod tests {
         request.deadline_ms = Some(90_000);
         assert_eq!(request.validate(), Ok(()));
     }
-
     #[test]
     fn potr_requires_an_exact_request_scope_job_id() {
         let mut request = base_request();
@@ -707,7 +664,6 @@ mod tests {
         request.orchestrator_job_id = Some([0x44; 16]);
         assert_eq!(request.validate(), Ok(()));
     }
-
     #[test]
     fn pdp_requires_a_non_zero_governed_challenge_id() {
         let mut request = base_request();
@@ -726,7 +682,6 @@ mod tests {
         request.challenge_id = Some([0x55; 32]);
         assert_eq!(request.validate(), Ok(()));
     }
-
     #[test]
     fn non_pdp_requests_reject_challenge_ids() {
         let mut request = base_request();
@@ -744,7 +699,6 @@ mod tests {
             Err(ProofStreamRequestError::UnexpectedChallengeId)
         );
     }
-
     #[test]
     fn por_and_pdp_reject_potr_request_scope_ids() {
         let mut por = base_request();
@@ -753,7 +707,6 @@ mod tests {
             por.validate(),
             Err(ProofStreamRequestError::UnexpectedOrchestratorJobId)
         );
-
         let mut pdp = base_request();
         pdp.proof_kind = ProofStreamKind::Pdp;
         pdp.challenge_id = Some([0x55; 32]);
@@ -765,7 +718,6 @@ mod tests {
             Err(ProofStreamRequestError::UnexpectedOrchestratorJobId)
         );
     }
-
     #[test]
     fn zero_nonce_rejected() {
         let mut request = base_request();
@@ -775,7 +727,6 @@ mod tests {
             Err(ProofStreamRequestError::InvalidNonce)
         );
     }
-
     #[test]
     fn canonical_http_request_roundtrips_without_null_optionals() {
         let request = base_request();
@@ -817,19 +768,16 @@ mod tests {
         assert!(!obj.contains_key("challenge_id_hex"));
         assert!(!obj.contains_key("deadline_ms"));
         assert!(obj.values().all(|value| !matches!(value, Value::Null)));
-
         let decoded: ProofStreamHttpRequestV1 =
             from_slice(&bytes).expect("decode canonical HTTP envelope");
         assert_eq!(decoded.into_request(), request);
     }
-
     #[test]
     fn canonical_http_request_rejects_unknown_alias_and_null_fields() {
         let base = ProofStreamHttpRequestV1::new(base_request())
             .expect("valid envelope")
             .to_json_value();
         let base = base.as_object().expect("object");
-
         for field in ["provider_id", "verification_status", "unexpected"] {
             let mut object = base.clone();
             object.insert(field.into(), Value::from("retired"));
@@ -838,7 +786,6 @@ mod tests {
                 Err(ProofStreamHttpRequestError::UnknownField)
             );
         }
-
         for field in [
             "challenge_id_hex",
             "sample_count",
@@ -857,14 +804,12 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn canonical_http_request_rejects_noncanonical_identity_and_nonce_encodings() {
         let base = ProofStreamHttpRequestV1::new(base_request())
             .expect("valid envelope")
             .to_json_value();
         let base = base.as_object().expect("object");
-
         let mut uppercase = base.clone();
         uppercase.insert("manifest_digest_hex".into(), Value::from("AB".repeat(32)));
         assert_eq!(
@@ -873,7 +818,6 @@ mod tests {
                 "manifest_digest_hex"
             ))
         );
-
         let mut uppercase_cursor = base.clone();
         uppercase_cursor.insert(
             "expected_finalized_block_hash_hex".into(),
@@ -885,7 +829,6 @@ mod tests {
                 "expected_finalized_block_hash_hex"
             ))
         );
-
         let mut zero_cursor_hash = base.clone();
         zero_cursor_hash.insert(
             "expected_finalized_block_hash_hex".into(),
@@ -897,7 +840,6 @@ mod tests {
                 ProofStreamRequestError::InvalidFinalizedBlockHash
             ))
         );
-
         let mut zero_provider = base.clone();
         zero_provider.insert("provider_id_hex".into(), Value::from("00".repeat(32)));
         assert_eq!(
@@ -906,7 +848,6 @@ mod tests {
                 ProofStreamRequestError::InvalidProviderId
             ))
         );
-
         let canonical_nonce = BASE64_STANDARD.encode([0x33; 16]);
         let mut unpadded_nonce = base.clone();
         unpadded_nonce.insert(
@@ -917,7 +858,6 @@ mod tests {
             ProofStreamHttpRequestV1::from_json_value(&Value::Object(unpadded_nonce)),
             Err(ProofStreamHttpRequestError::InvalidNonceBase64)
         );
-
         let mut zero_nonce = base.clone();
         zero_nonce.insert(
             "nonce_b64".into(),
@@ -930,21 +870,18 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn canonical_http_request_rejects_wrong_types_ranges_and_kind_fields() {
         let base = ProofStreamHttpRequestV1::new(base_request())
             .expect("valid envelope")
             .to_json_value();
         let base = base.as_object().expect("object");
-
         let mut wrong_type = base.clone();
         wrong_type.insert("tier".into(), Value::from(7));
         assert_eq!(
             ProofStreamHttpRequestV1::from_json_value(&Value::Object(wrong_type)),
             Err(ProofStreamHttpRequestError::WrongType("tier"))
         );
-
         let mut overflow = base.clone();
         overflow.insert("sample_count".into(), Value::from(u64::from(u32::MAX) + 1));
         assert_eq!(
@@ -953,7 +890,6 @@ mod tests {
                 "sample_count"
             ))
         );
-
         let mut wrong_kind = base.clone();
         wrong_kind.insert("proof_kind".into(), Value::from("pdp"));
         assert_eq!(
@@ -962,7 +898,6 @@ mod tests {
                 ProofStreamRequestError::MissingChallengeId
             ))
         );
-
         let mut noncanonical_tier = base.clone();
         noncanonical_tier.insert("tier".into(), Value::from("HOT"));
         assert_eq!(
@@ -970,7 +905,6 @@ mod tests {
             Err(ProofStreamHttpRequestError::UnsupportedTier)
         );
     }
-
     #[test]
     fn canonical_http_request_rejects_duplicate_json_keys() {
         let raw = format!(

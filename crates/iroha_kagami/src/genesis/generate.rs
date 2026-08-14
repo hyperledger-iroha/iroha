@@ -1,8 +1,12 @@
-use std::{
-    io::{BufWriter, Write},
-    path::PathBuf,
+use crate::{
+    Outcome, RunArgs,
+    genesis::profile::{
+        GenesisProfile, PUBLIC_XOR_ALIAS, PUBLIC_XOR_DOMAIN, ProfileDefaults,
+        known_chain_discriminant_for_chain_id, parse_vrf_seed_hex, profile_defaults,
+        profile_requires_npos, resolve_public_xor_asset_definition_id, resolve_vrf_seed,
+    },
+    tui,
 };
-
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use color_eyre::eyre::WrapErr as _;
 use iroha_crypto::Algorithm;
@@ -19,21 +23,16 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::{
     account::CanRegisterAccount, parameter::CanSetParameters, query::CanReadAllLedgerData,
 };
-use iroha_genesis::{GenesisBuilder, ManifestCrypto, RawGenesisTransaction};
+use iroha_genesis::{
+    GenesisBuilder, ManifestCrypto, RawGenesisTransaction, validate_genesis_manifest_json,
+};
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, CARPENTER_ID, gen_account_in};
 use iroha_version::BuildLine;
-
-use crate::{
-    Outcome, RunArgs,
-    genesis::profile::{
-        GenesisProfile, PUBLIC_XOR_ALIAS, PUBLIC_XOR_DOMAIN, ProfileDefaults,
-        known_chain_discriminant_for_chain_id, parse_vrf_seed_hex, profile_defaults,
-        profile_requires_npos, resolve_public_xor_asset_definition_id, resolve_vrf_seed,
-    },
-    tui,
+use std::{
+    io::{BufWriter, Write},
+    path::PathBuf,
 };
-
 /// Generate a genesis configuration and standard-output in JSON format
 #[derive(Parser, Debug, Clone)]
 pub struct Args {
@@ -75,7 +74,6 @@ pub struct Args {
     #[clap(flatten)]
     crypto: CryptoArgs,
 }
-
 #[derive(ClapArgs, Debug, Clone, Default)]
 struct CryptoArgs {
     /// Toggle the OpenSSL-backed SM preview helpers in the generated manifest.
@@ -94,11 +92,9 @@ struct CryptoArgs {
     #[clap(long = "allowed-curve-id", value_name = "CURVE_ID")]
     allowed_curve_ids: Vec<u8>,
 }
-
 impl CryptoArgs {
     fn into_manifest_crypto(self) -> color_eyre::Result<ManifestCrypto> {
         let mut crypto = ManifestCrypto::default();
-
         if !self.allowed_signing.is_empty() {
             crypto.allowed_signing = self
                 .allowed_signing
@@ -106,23 +102,18 @@ impl CryptoArgs {
                 .map(Algorithm::from)
                 .collect();
         }
-
         if let Some(flag) = self.sm_openssl_preview {
             crypto.sm_openssl_preview = flag;
         }
-
         if let Some(hash) = self.default_hash {
             crypto.default_hash = hash;
         }
-
         if let Some(distid) = self.sm2_distid_default {
             crypto.sm2_distid_default = distid;
         }
-
         if !self.allowed_curve_ids.is_empty() {
             crypto.allowed_curve_ids = self.allowed_curve_ids;
         }
-
         crypto.allowed_signing.sort();
         crypto.allowed_signing.dedup();
         if !crypto
@@ -132,12 +123,10 @@ impl CryptoArgs {
         {
             crypto.allowed_signing.insert(0, Algorithm::Ed25519);
         }
-
         crypto.validate()?;
         Ok(crypto)
     }
 }
-
 #[derive(ValueEnum, Clone, Debug)]
 enum AlgorithmArg {
     Ed25519,
@@ -145,7 +134,6 @@ enum AlgorithmArg {
     #[cfg(feature = "sm")]
     Sm2,
 }
-
 impl From<AlgorithmArg> for Algorithm {
     fn from(value: AlgorithmArg) -> Self {
         match value {
@@ -156,7 +144,6 @@ impl From<AlgorithmArg> for Algorithm {
         }
     }
 }
-
 #[derive(Subcommand, Debug, Clone, Copy, Default)]
 pub enum Mode {
     /// Generate default genesis
@@ -181,13 +168,11 @@ pub enum Mode {
         asset_definitions_per_domain: u64,
     },
 }
-
 #[derive(ValueEnum, Clone, Copy, Debug)]
 pub enum ConsensusModeArg {
     Permissioned,
     Npos,
 }
-
 impl From<ConsensusModeArg> for SumeragiConsensusMode {
     fn from(value: ConsensusModeArg) -> Self {
         match value {
@@ -196,7 +181,6 @@ impl From<ConsensusModeArg> for SumeragiConsensusMode {
         }
     }
 }
-
 #[derive(Debug)]
 struct ResolvedGenesisSettings {
     chain: ChainId,
@@ -204,7 +188,6 @@ struct ResolvedGenesisSettings {
     profile_vrf_seed: Option<[u8; 32]>,
     public_xor_asset_definition_id: Option<AssetDefinitionId>,
 }
-
 fn apply_profile_overrides(
     profile: GenesisProfile,
     chain_id: Option<&ChainId>,
@@ -222,13 +205,11 @@ fn apply_profile_overrides(
             defaults.chain_id
         ));
     }
-
     if profile_requires_npos(profile) && !matches!(consensus_mode, SumeragiConsensusMode::Npos) {
         return Err(color_eyre::eyre::eyre!(
             "profile {profile:?} targets the public dataspace; use `--consensus-mode npos`"
         ));
     }
-
     if let Some(gas_limit) = ivm_gas_limit_per_block
         && gas_limit != 1_680_000
     {
@@ -236,7 +217,6 @@ fn apply_profile_overrides(
             "profile {profile:?} pins `ivm_gas_limit_per_block` to 1_680_000; drop the override"
         ));
     }
-
     let chain = defaults.chain_id.clone();
     let wants_npos_seed = matches!(consensus_mode, SumeragiConsensusMode::Npos);
     let profile_vrf_seed = if wants_npos_seed {
@@ -244,7 +224,6 @@ fn apply_profile_overrides(
     } else {
         None
     };
-
     Ok(ResolvedGenesisSettings {
         chain,
         consensus_mode,
@@ -256,7 +235,6 @@ fn apply_profile_overrides(
         )?,
     })
 }
-
 fn resolve_profile_settings(
     profile: Option<GenesisProfile>,
     chain_id: Option<&ChainId>,
@@ -294,13 +272,11 @@ fn resolve_profile_settings(
     } else {
         None
     };
-
     if profile.is_none() {
         let wants_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos);
         public_xor_asset_definition_id =
             resolve_public_xor_asset_definition_id(profile, xor_asset_definition_id, wants_npos)?;
     }
-
     Ok(ResolvedGenesisSettings {
         chain,
         consensus_mode,
@@ -308,7 +284,6 @@ fn resolve_profile_settings(
         public_xor_asset_definition_id,
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 fn build_genesis_for_mode(
     mode: Mode,
@@ -344,10 +319,8 @@ fn build_genesis_for_mode(
             resolved_vrf_seed,
         ),
     }?;
-
     Ok(apply_npos_crypto_overrides(genesis, consensus_mode))
 }
-
 fn apply_npos_crypto_overrides(
     genesis: RawGenesisTransaction,
     consensus_mode: SumeragiConsensusMode,
@@ -356,7 +329,6 @@ fn apply_npos_crypto_overrides(
     if !npos_bootstrap {
         return genesis;
     }
-
     let mut crypto = genesis.crypto().clone();
     if !crypto
         .allowed_signing
@@ -377,17 +349,14 @@ fn apply_npos_crypto_overrides(
         .collect();
     crypto.allowed_curve_ids.sort_unstable();
     crypto.allowed_curve_ids.dedup();
-
     genesis.into_builder().with_crypto(crypto).build_raw()
 }
-
 fn append_public_xor_binding(
     genesis: RawGenesisTransaction,
     asset_definition_id: &AssetDefinitionId,
 ) -> color_eyre::Result<RawGenesisTransaction> {
     let public_xor_domain = DomainId::parse_fully_qualified(PUBLIC_XOR_DOMAIN)?;
     let public_xor_alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse()?;
-
     let mut has_domain = false;
     let mut has_asset_definition = false;
     let mut alias_bound = false;
@@ -432,11 +401,9 @@ fn append_public_xor_binding(
             alias_bound = true;
         }
     }
-
     if has_domain && has_asset_definition && alias_bound {
         return Ok(genesis);
     }
-
     let mut builder = genesis.into_builder().next_transaction();
     if !has_domain {
         builder = builder.append_instruction(Register::domain(Domain::new(public_xor_domain)));
@@ -461,10 +428,8 @@ fn append_public_xor_binding(
             ),
         );
     }
-
     Ok(builder.build_raw().with_consensus_meta())
 }
-
 fn format_profile_summary(
     profile: GenesisProfile,
     summary_chain: &ChainId,
@@ -486,7 +451,6 @@ fn format_profile_summary(
         env!("CARGO_PKG_VERSION")
     )
 }
-
 fn validate_vrf_seed_usage(
     resolved_vrf_seed: Option<[u8; 32]>,
     consensus_mode: SumeragiConsensusMode,
@@ -498,7 +462,6 @@ fn validate_vrf_seed_usage(
     }
     Ok(())
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsensusPolicy {
     /// Allow either permissioned or NPoS consensus.
@@ -506,7 +469,6 @@ pub enum ConsensusPolicy {
     /// Require NPoS (public dataspace rule).
     PublicDataspace,
 }
-
 pub fn validate_consensus_mode_for_line(
     build_line: BuildLine,
     consensus_mode: SumeragiConsensusMode,
@@ -522,7 +484,6 @@ pub fn validate_consensus_mode_for_line(
     let _ = build_line;
     Ok(())
 }
-
 impl<T: Write> RunArgs<T> for Args {
     #[allow(clippy::too_many_lines)]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
@@ -539,27 +500,23 @@ impl<T: Write> RunArgs<T> for Args {
             consensus_mode,
             crypto,
         } = self;
-
         let mode = mode.unwrap_or_default();
         let mode_label = match &mode {
             Mode::Default => "default genesis manifest",
             Mode::Synthetic { .. } => "synthetic genesis manifest",
         };
         tui::status(format!("Building {mode_label}"));
-
         let profile_defaults = profile.map(profile_defaults);
         let vrf_seed_override = vrf_seed_hex
             .map(|hex| parse_vrf_seed_hex(&hex))
             .transpose()
             .wrap_err("invalid --vrf-seed-hex")?;
-
         let profile_is_some = profile.is_some();
         let build_line = if profile_is_some {
             BuildLine::Iroha3
         } else {
             build_line_from_env()
         };
-
         let consensus_mode = consensus_mode.map_or_else(
             || {
                 if build_line.is_iroha3() {
@@ -571,7 +528,6 @@ impl<T: Write> RunArgs<T> for Args {
             SumeragiConsensusMode::from,
         );
         let crypto = crypto.into_manifest_crypto()?;
-
         let resolved = resolve_profile_settings(
             profile,
             chain_id.as_ref(),
@@ -585,10 +541,8 @@ impl<T: Write> RunArgs<T> for Args {
         let consensus_mode = resolved.consensus_mode;
         let profile_vrf_seed = resolved.profile_vrf_seed;
         let public_xor_asset_definition_id = resolved.public_xor_asset_definition_id;
-
         let resolved_vrf_seed = profile_vrf_seed.or(vrf_seed_override);
         validate_vrf_seed_usage(resolved_vrf_seed, consensus_mode)?;
-
         let summary_chain = chain.clone();
         let consensus_policy = match profile {
             Some(profile) if profile_requires_npos(profile) => ConsensusPolicy::PublicDataspace,
@@ -619,8 +573,13 @@ impl<T: Write> RunArgs<T> for Args {
             .unwrap_or_else(iroha_data_model::account::address::chain_discriminant);
         let genesis = genesis.with_chain_discriminant(chain_discriminant);
         let _chain_discriminant = ChainDiscriminantGuard::enter(chain_discriminant);
-        let json = norito::json::to_json_pretty(&genesis)?;
-        writeln!(writer, "{json}").wrap_err("failed to write serialized genesis to the buffer")?;
+        let mut json = norito::json::to_json_pretty(&genesis)?;
+        json.push('\n');
+        validate_genesis_manifest_json(json.as_bytes())
+            .wrap_err("generated genesis exceeds fixed resource bounds")?;
+        writer
+            .write_all(json.as_bytes())
+            .wrap_err("failed to write serialized genesis to the buffer")?;
         if let Some(profile) = profile {
             let summary = format_profile_summary(
                 profile,
@@ -635,7 +594,6 @@ impl<T: Write> RunArgs<T> for Args {
         Ok(())
     }
 }
-
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub fn generate_default(
     builder: GenesisBuilder,
@@ -662,7 +620,6 @@ pub fn generate_default(
         garden_of_live_flowers_domain.clone(),
         "cabbage".parse()?,
     );
-
     let mut wonderland = builder.domain_with_metadata(wonderland_domain.clone(), meta.clone());
     if genesis_account_id != *ALICE_ID {
         wonderland = wonderland
@@ -675,7 +632,6 @@ pub fn generate_default(
         .account(CARPENTER_ID.expect_single_signatory().clone())
         .asset("cabbage".parse()?, NumericSpec::default())
         .finish_domain();
-
     let mint = Mint::asset_quantity(
         13u32,
         AssetId::new(rose_asset_definition_id.clone(), ALICE_ID.clone()),
@@ -707,7 +663,6 @@ pub fn generate_default(
         rose_asset_definition_id,
         ALICE_ID.clone(),
     );
-
     let mut parameters = Parameters::default();
     if let Some(defaults) = profile_defaults {
         builder = builder.with_block_cadence_ms(defaults.block_cadence_ms);
@@ -736,7 +691,6 @@ pub fn generate_default(
     builder = builder
         .next_transaction()
         .append_instruction(grant_permission_to_manage_verifying_keys);
-
     // Use transaction-oriented API: separate initial registrations from
     // subsequent state updates.
     builder = builder
@@ -748,18 +702,14 @@ pub fn generate_default(
         .append_instruction(grant_permission_to_read_all_ledger_data)
         .append_instruction(grant_permission_to_manage_soracloud)
         .append_instruction(grant_permission_to_register_accounts);
-
     let manifest = builder.build_raw().with_consensus_mode(consensus_mode);
     // Enrich with consensus metadata and fingerprint for operator visibility.
     Ok(manifest.with_consensus_meta())
 }
-
 #[cfg(test)]
 mod consensus_manifest_tests {
-    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
-
     use super::*;
-
+    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     fn account_permission_grants(manifest: &RawGenesisTransaction) -> Vec<(AccountId, Permission)> {
         manifest
             .transactions()
@@ -777,7 +727,6 @@ mod consensus_manifest_tests {
             })
             .collect()
     }
-
     fn grants_global_reader_to(
         manifest: &RawGenesisTransaction,
         expected_authority: &AccountId,
@@ -789,7 +738,6 @@ mod consensus_manifest_tests {
                 authority == expected_authority && permission == &expected_permission
             })
     }
-
     #[test]
     fn genesis_generation_requires_an_explicit_display_chain_without_a_profile() {
         let error = resolve_profile_settings(
@@ -802,10 +750,8 @@ mod consensus_manifest_tests {
             None,
         )
         .expect_err("unprofiled genesis generation must name its display chain");
-
         assert!(error.to_string().contains("--chain-id"));
     }
-
     #[test]
     fn synthetic_npos_genesis_has_canonical_metadata() {
         let manifest = generate_synthetic(
@@ -823,7 +769,6 @@ mod consensus_manifest_tests {
             Some([7; 32]),
         )
         .expect("generate synthetic NPoS genesis");
-
         assert_eq!(manifest.consensus_mode(), SumeragiConsensusMode::Npos);
         assert!(manifest.consensus_fingerprint().is_some());
         assert_eq!(
@@ -831,7 +776,6 @@ mod consensus_manifest_tests {
             u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION)
         );
     }
-
     #[test]
     fn profile_cadence_and_seed_are_signed() {
         let defaults = profile_defaults(GenesisProfile::Iroha3Dev);
@@ -853,14 +797,12 @@ mod consensus_manifest_tests {
             .get(&SumeragiNposParameters::parameter_id())
             .and_then(SumeragiNposParameters::from_custom_parameter)
             .expect("signed NPoS parameters");
-
         assert_eq!(
             parameters.sumeragi().block_cadence_ms(),
             defaults.block_cadence_ms
         );
         assert_eq!(npos.epoch_seed(), seed);
     }
-
     #[test]
     fn npos_genesis_rejects_missing_seed() {
         let error = generate_default(
@@ -877,7 +819,6 @@ mod consensus_manifest_tests {
         .expect_err("NPoS genesis without a seed must fail closed");
         assert!(error.to_string().contains("VRF seed"));
     }
-
     #[test]
     fn generated_genesis_does_not_reregister_its_preseeded_authority() {
         let manifest = generate_default(
@@ -892,7 +833,6 @@ mod consensus_manifest_tests {
             None,
         )
         .expect("generate genesis with Alice as the genesis authority");
-
         assert!(
             !manifest
                 .transactions()
@@ -913,7 +853,6 @@ mod consensus_manifest_tests {
             "the fresh-node world pre-seeds the genesis authority account"
         );
     }
-
     #[test]
     fn generated_default_grants_global_reader_to_bootstrap_alice() {
         let manifest = generate_default(
@@ -928,13 +867,11 @@ mod consensus_manifest_tests {
             None,
         )
         .expect("generate default genesis");
-
         assert!(
             grants_global_reader_to(&manifest, &ALICE_ID),
             "the bootstrap operator must receive the immutable global query root"
         );
     }
-
     #[test]
     fn shipped_first_release_manifests_name_an_intentional_global_reader() {
         let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -980,7 +917,6 @@ mod consensus_manifest_tests {
         }
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn generate_synthetic(
     builder: GenesisBuilder,
@@ -1004,11 +940,9 @@ fn generate_synthetic(
         profile_vrf_seed,
     )?;
     let mut builder = default_genesis.into_builder().next_transaction();
-
     for domain in 0..domains {
         let domain_id = DomainId::try_new(format!("domain_{domain}"), "universal")?;
         builder = builder.append_instruction(Register::domain(Domain::new(domain_id.clone())));
-
         let mut synthetic_asset_definitions = Vec::new();
         for asset_definition in 0..asset_definitions_per_domain {
             let asset_name_literal = format!("asset_{asset_definition}");
@@ -1024,12 +958,10 @@ fn generate_synthetic(
                 None,
             )));
         }
-
         for _ in 0..accounts_per_domain {
             let (account_id, _account_keypair) = gen_account_in(&domain_id);
             builder =
                 builder.append_instruction(Register::account(Account::new(account_id.clone())));
-
             for asset_definition_id in &synthetic_asset_definitions {
                 let mint = Mint::asset_quantity(
                     13u32,
@@ -1039,11 +971,9 @@ fn generate_synthetic(
             }
         }
     }
-
     let manifest = builder.build_raw().with_consensus_mode(consensus_mode);
     Ok(manifest.with_consensus_meta())
 }
-
 /// Resolve the build line from the binary name or `IROHA_BUILD_LINE` override.
 pub fn build_line_from_env() -> BuildLine {
     const OVERRIDE_ENV: &str = "IROHA_BUILD_LINE";

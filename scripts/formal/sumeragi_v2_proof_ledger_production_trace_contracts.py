@@ -1,5 +1,95 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+# Canonical one-to-one operational-correspondence mapping. The source snapshot
+# below proves that every model action appears exactly once, every Rust action
+# tag and numeric discriminant appears exactly once, and every mapped tag is an
+# arm of the shared composed transition kernel. Multiple concrete production
+# call sites may refine one action, but they cannot mint a second mapping.
+PRODUCTION_TRACE_EXTRACTION_ACTION_WITNESS_MAPPINGS = (
+    ("SelectQueuePlanV4Conjunction", "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4", 1),
+    ("FsyncReservationV5", "IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5", 2),
+    ("ActivateKura", "IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA", 3),
+    ("FanoutFromProducer", "IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER", 4),
+    ("ServeLateBody", "IN_FLIGHT_FIRST_RELEASE_ACTION_SERVE_LATE_BODY", 5),
+    ("PersistExecutionInput", "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT", 6),
+    ("AuthorizeReady", "IN_FLIGHT_FIRST_RELEASE_ACTION_AUTHORIZE_READY", 7),
+    ("SignReady", "IN_FLIGHT_FIRST_RELEASE_ACTION_SIGN_READY", 8),
+    ("PersistReadyQc", "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC", 9),
+    ("Crash", "IN_FLIGHT_FIRST_RELEASE_ACTION_CRASH", 10),
+    ("Recover", "IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER", 11),
+    (
+        "RecoverReservationSnapshot",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT",
+        25,
+    ),
+    (
+        "ReleaseReservationDirect",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT",
+        26,
+    ),
+    (
+        "RehydrateLocalKuraCustody",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_REHYDRATE_LOCAL_KURA_CUSTODY",
+        27,
+    ),
+    ("LaneCommit", "IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT", 12),
+    ("ApplyCarrier", "IN_FLIGHT_FIRST_RELEASE_ACTION_APPLY_CARRIER", 13),
+    (
+        "PersistReservationCommitted",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED",
+        14,
+    ),
+    (
+        "PersistPlanTombstone",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE",
+        15,
+    ),
+    (
+        "ForgetReservationCommit",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT",
+        16,
+    ),
+    (
+        "PersistKuraRetirement",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_KURA_RETIREMENT",
+        17,
+    ),
+    (
+        "AdvanceReleasePendingPrefix",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASE_PENDING",
+        18,
+    ),
+    (
+        "PrepareReservationRelease",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_PREPARE_RESERVATION_RELEASE",
+        19,
+    ),
+    (
+        "AdvanceReleasedPrefix",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED",
+        20,
+    ),
+    (
+        "CompleteReservationRelease",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_COMPLETE_RESERVATION_RELEASE",
+        21,
+    ),
+    (
+        "RestoreReleasedFifo",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO",
+        22,
+    ),
+    (
+        "ForgetReservationRelease",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_RELEASE",
+        23,
+    ),
+    (
+        "RepairPostCarrierEvidence",
+        "IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
+        24,
+    ),
+)
 
 def _retained_effect_frontier_adapter_contracts(
     effects_path: Path,
@@ -4854,6 +4944,9 @@ def build_production_trace_extraction_evidence(
     workspace_manifest = verus_evidence.get("source_manifest_sha256")
     if not _nonempty_string(workspace_manifest):
         raise ValueError("Verus evidence lacks its workspace source manifest")
+    tlaps_ledger_sha256 = tlaps_evidence.get("ledger_sha256")
+    if not _nonempty_string(tlaps_ledger_sha256):
+        raise ValueError("TLAPS evidence lacks its exact proof-ledger digest")
     component_evidence = {
         "tlaps_sha256": _canonical_json_sha256(tlaps_evidence),
         "verus_sha256": _canonical_json_sha256(verus_evidence),
@@ -4870,9 +4963,7 @@ def build_production_trace_extraction_evidence(
                 "cross-tool evidence does not link the exact formal and workspace "
                 "manifests"
             )
-        if cross_tool_evidence.get("ledger_sha256") != _canonical_json_sha256(
-            ledger
-        ):
+        if cross_tool_evidence.get("ledger_sha256") != tlaps_ledger_sha256:
             raise ValueError(
                 "cross-tool evidence does not link the exact proof ledger"
             )

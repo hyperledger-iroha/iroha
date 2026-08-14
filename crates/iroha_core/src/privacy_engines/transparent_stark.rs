@@ -13,13 +13,10 @@
 //! Callers of this substrate must commit and query every masked witness column,
 //! bind composition quotients to those same openings, and perform the complete
 //! FRI terminal-degree check.
-
-use std::collections::BTreeSet;
-
 use rand::TryRngCore;
 use sha2::{Digest as _, Sha256};
+use std::collections::BTreeSet;
 use thiserror::Error;
-
 /// Goldilocks prime `2^64 - 2^32 + 1`.
 pub(crate) const GOLDILOCKS_MODULUS_V1: u64 = 0xffff_ffff_0000_0001;
 /// `2^64 - p = 2^32 - 1`, used for division-free canonical reduction.
@@ -43,7 +40,6 @@ pub(crate) const GOLDILOCKS_FP4_DEGREE_V1: usize = 4;
 /// Canonical encoded size of one quartic-extension value.
 pub(crate) const GOLDILOCKS_FP4_WIRE_BYTES_V1: usize = GOLDILOCKS_FP4_DEGREE_V1 * 8;
 const GOLDILOCKS_FP4_NONRESIDUE_V1: GoldilocksFieldV1 = GoldilocksFieldV1(GOLDILOCKS_GENERATOR_V1);
-
 /// Checked zero-knowledge masking geometry for the canonical DEEP-ALI flow.
 ///
 /// `minimum_mask_coefficients` is the dimension `h` of the randomizer space
@@ -65,7 +61,6 @@ pub(crate) struct TransparentStarkZkMaskGeometryV1 {
     /// Largest degree of a minimum-size randomizer polynomial.
     pub(crate) minimum_mask_degree: usize,
 }
-
 /// Conservative classical-ROM work-normalized Fiat--Shamir certificate.
 ///
 /// The caller must separately prove the supplied round-by-round soundness
@@ -88,22 +83,18 @@ pub(crate) struct TransparentStarkWorkSecurityV1 {
     /// Bound `Q <= 2^max_random_oracle_query_log2`.
     pub(crate) max_random_oracle_query_log2: u16,
 }
-
 /// Canonical Goldilocks field element.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct GoldilocksFieldV1(pub(crate) u64);
-
 impl GoldilocksFieldV1 {
     /// Additive identity.
     pub(crate) const ZERO: Self = Self(0);
     /// Multiplicative identity.
     pub(crate) const ONE: Self = Self(1);
-
     /// Decode one canonical residue.
     pub(crate) fn canonical(value: u64) -> Option<Self> {
         (value < GOLDILOCKS_MODULUS_V1).then_some(Self(value))
     }
-
     /// Reduce a 128-bit value modulo the Goldilocks prime.
     ///
     /// For `p = 2^64 - 2^32 + 1`, `2^64 = 2^32 - 1 (mod p)`.
@@ -119,7 +110,6 @@ impl GoldilocksFieldV1 {
         let high = (value >> 64) as u64;
         let high_high = high >> 32;
         let high_low = high & GOLDILOCKS_EPSILON_V1;
-
         let (reduced_low, borrowed) = low.overflowing_sub(high_high);
         let reduced_low = if borrowed {
             reduced_low.wrapping_sub(GOLDILOCKS_EPSILON_V1)
@@ -135,12 +125,10 @@ impl GoldilocksFieldV1 {
         };
         Self(Self::canonicalize_once_v1(reduced))
     }
-
     /// Canonical residue as a `u64`.
     pub(crate) const fn value(self) -> u64 {
         self.0
     }
-
     /// Field addition.
     pub(crate) fn add(self, rhs: Self) -> Self {
         debug_assert!(self.0 < GOLDILOCKS_MODULUS_V1);
@@ -154,7 +142,6 @@ impl GoldilocksFieldV1 {
         };
         Self(Self::canonicalize_once_v1(sum))
     }
-
     /// Field subtraction.
     pub(crate) fn sub(self, rhs: Self) -> Self {
         if self.0 >= rhs.0 {
@@ -163,14 +150,12 @@ impl GoldilocksFieldV1 {
             Self(GOLDILOCKS_MODULUS_V1 - (rhs.0 - self.0))
         }
     }
-
     /// Field multiplication.
     pub(crate) fn mul(self, rhs: Self) -> Self {
         debug_assert!(self.0 < GOLDILOCKS_MODULUS_V1);
         debug_assert!(rhs.0 < GOLDILOCKS_MODULUS_V1);
         Self::reduce(u128::from(self.0) * u128::from(rhs.0))
     }
-
     fn canonicalize_once_v1(value: u64) -> u64 {
         if value >= GOLDILOCKS_MODULUS_V1 {
             value - GOLDILOCKS_MODULUS_V1
@@ -178,7 +163,6 @@ impl GoldilocksFieldV1 {
             value
         }
     }
-
     /// Exponentiation by repeated squaring.
     pub(crate) fn pow(mut self, mut exponent: u128) -> Self {
         let mut result = Self::ONE;
@@ -191,14 +175,12 @@ impl GoldilocksFieldV1 {
         }
         result
     }
-
     /// Multiplicative inverse, absent for zero.
     pub(crate) fn inv(self) -> Option<Self> {
         (self != Self::ZERO && self.0 < GOLDILOCKS_MODULUS_V1)
             .then(|| self.pow(u128::from(GOLDILOCKS_MODULUS_V1 - 2)))
     }
 }
-
 /// Quartic extension of Goldilocks defined by `w^4 = 7`.
 ///
 /// Coefficients are in ascending power order:
@@ -211,7 +193,6 @@ impl GoldilocksFieldV1 {
 pub(crate) struct GoldilocksFp4V1 {
     coefficients: [GoldilocksFieldV1; GOLDILOCKS_FP4_DEGREE_V1],
 }
-
 impl GoldilocksFp4V1 {
     /// Additive identity.
     pub(crate) const ZERO: Self = Self {
@@ -226,7 +207,6 @@ impl GoldilocksFp4V1 {
             GoldilocksFieldV1::ZERO,
         ],
     };
-
     /// Decode four canonical residues in ascending power order.
     pub(crate) fn canonical(values: [u64; 4]) -> Option<Self> {
         Self::from_coefficients([
@@ -236,7 +216,6 @@ impl GoldilocksFp4V1 {
             GoldilocksFieldV1::canonical(values[3])?,
         ])
     }
-
     /// Decode the canonical fixed-width big-endian wire encoding.
     pub(crate) fn canonical_be_bytes(bytes: [u8; 32]) -> Option<Self> {
         let mut values = [0_u64; GOLDILOCKS_FP4_DEGREE_V1];
@@ -249,7 +228,6 @@ impl GoldilocksFp4V1 {
         }
         Self::canonical(values)
     }
-
     /// Construct from four already-decoded coefficients.
     pub(crate) fn from_coefficients(coefficients: [GoldilocksFieldV1; 4]) -> Option<Self> {
         coefficients
@@ -257,7 +235,6 @@ impl GoldilocksFp4V1 {
             .all(|coefficient| coefficient.0 < GOLDILOCKS_MODULUS_V1)
             .then_some(Self { coefficients })
     }
-
     /// Embed one base-field element.
     pub(crate) fn from_base(value: GoldilocksFieldV1) -> Self {
         debug_assert!(value.0 < GOLDILOCKS_MODULUS_V1);
@@ -270,12 +247,10 @@ impl GoldilocksFp4V1 {
             ],
         }
     }
-
     /// Return the four canonical coefficients in ascending power order.
     pub(crate) const fn coefficients(self) -> [GoldilocksFieldV1; 4] {
         self.coefficients
     }
-
     /// Return the canonical fixed-width big-endian wire encoding.
     pub(crate) fn to_be_bytes(self) -> [u8; 32] {
         let mut bytes = [0_u8; GOLDILOCKS_FP4_WIRE_BYTES_V1];
@@ -285,14 +260,12 @@ impl GoldilocksFp4V1 {
         }
         bytes
     }
-
     /// Whether every coefficient is a canonical base-field residue.
     pub(crate) fn is_canonical(self) -> bool {
         self.coefficients
             .iter()
             .all(|coefficient| coefficient.0 < GOLDILOCKS_MODULUS_V1)
     }
-
     /// Field addition.
     pub(crate) fn add(self, rhs: Self) -> Self {
         let mut coefficients = [GoldilocksFieldV1::ZERO; GOLDILOCKS_FP4_DEGREE_V1];
@@ -306,7 +279,6 @@ impl GoldilocksFp4V1 {
         }
         Self { coefficients }
     }
-
     /// Field subtraction.
     pub(crate) fn sub(self, rhs: Self) -> Self {
         let mut coefficients = [GoldilocksFieldV1::ZERO; GOLDILOCKS_FP4_DEGREE_V1];
@@ -320,12 +292,10 @@ impl GoldilocksFp4V1 {
         }
         Self { coefficients }
     }
-
     /// Additive inverse.
     pub(crate) fn neg(self) -> Self {
         Self::ZERO.sub(self)
     }
-
     /// Field multiplication modulo `w^4 - 7`.
     pub(crate) fn mul(self, rhs: Self) -> Self {
         let mut product = [GoldilocksFieldV1::ZERO; 7];
@@ -343,7 +313,6 @@ impl GoldilocksFp4V1 {
             coefficients: [product[0], product[1], product[2], product[3]],
         }
     }
-
     /// Multiply every coefficient by one base-field element.
     pub(crate) fn mul_base(self, rhs: GoldilocksFieldV1) -> Self {
         debug_assert!(rhs.0 < GOLDILOCKS_MODULUS_V1);
@@ -353,7 +322,6 @@ impl GoldilocksFp4V1 {
         }
         Self { coefficients }
     }
-
     /// Exponentiation by a `u128` exponent.
     pub(crate) fn pow(mut self, mut exponent: u128) -> Self {
         let mut result = Self::ONE;
@@ -366,7 +334,6 @@ impl GoldilocksFp4V1 {
         }
         result
     }
-
     /// Multiplicative inverse, absent for zero.
     ///
     /// Write the element as `A + B w` over the quadratic subfield
@@ -401,7 +368,6 @@ impl GoldilocksFp4V1 {
         })
     }
 }
-
 fn goldilocks_fp2_mul_v1(
     left: [GoldilocksFieldV1; 2],
     right: [GoldilocksFieldV1; 2],
@@ -413,7 +379,6 @@ fn goldilocks_fp2_mul_v1(
         left[0].mul(right[1]).add(left[1].mul(right[0])),
     ]
 }
-
 fn goldilocks_fp2_inv_v1(value: [GoldilocksFieldV1; 2]) -> Option<[GoldilocksFieldV1; 2]> {
     let norm = value[0]
         .mul(value[0])
@@ -424,7 +389,6 @@ fn goldilocks_fp2_inv_v1(value: [GoldilocksFieldV1; 2]) -> Option<[GoldilocksFie
         GoldilocksFieldV1::ZERO.sub(value[1]).mul(norm_inverse),
     ])
 }
-
 /// Failure in protocol-neutral transparent-proof machinery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum TransparentStarkErrorV1 {
@@ -468,7 +432,6 @@ pub(crate) enum TransparentStarkErrorV1 {
     #[error("transparent STARK grinding nonce is invalid")]
     InvalidGrinding,
 }
-
 /// Derive the exact minimum Protocol-3 masking geometry.
 ///
 /// This is Equation (3) of Haböck--Al Kindi, ePrint 2024/1037:
@@ -510,7 +473,6 @@ pub(crate) fn transparent_stark_zk_mask_geometry_v1(
         minimum_mask_degree,
     })
 }
-
 /// Check a classical-ROM work-normalized BCS/Fiat--Shamir claim without rounding.
 ///
 /// Half of the target error budget is assigned to round-by-round soundness and
@@ -545,7 +507,6 @@ pub(crate) fn checked_transparent_stark_work_security_v1(
         max_random_oracle_query_log2,
     })
 }
-
 /// Compute the primitive root for an exact power-of-two order.
 pub(crate) fn goldilocks_primitive_root_v1(
     log_size: u8,
@@ -563,7 +524,6 @@ pub(crate) fn goldilocks_primitive_root_v1(
     }
     Ok(root)
 }
-
 /// In-place radix-two FFT.
 pub(crate) fn goldilocks_fft_v1(
     values: &mut [GoldilocksFieldV1],
@@ -611,7 +571,6 @@ pub(crate) fn goldilocks_fft_v1(
     }
     Ok(())
 }
-
 /// In-place inverse radix-two FFT.
 pub(crate) fn goldilocks_ifft_v1(
     values: &mut [GoldilocksFieldV1],
@@ -632,7 +591,6 @@ pub(crate) fn goldilocks_ifft_v1(
     }
     Ok(())
 }
-
 /// Evaluate coefficients over one shifted radix-two domain.
 pub(crate) fn goldilocks_evaluate_coset_v1(
     coefficients: &[GoldilocksFieldV1],
@@ -663,7 +621,6 @@ pub(crate) fn goldilocks_evaluate_coset_v1(
     goldilocks_fft_v1(&mut evaluations, root)?;
     Ok(evaluations)
 }
-
 /// In-place radix-two FFT over the quartic Goldilocks extension.
 ///
 /// The evaluation domain remains in the base field, so roots and twiddles are
@@ -714,7 +671,6 @@ pub(crate) fn goldilocks_fp4_fft_v1(
     }
     Ok(())
 }
-
 /// In-place inverse radix-two FFT over the quartic Goldilocks extension.
 pub(crate) fn goldilocks_fp4_ifft_v1(
     values: &mut [GoldilocksFp4V1],
@@ -735,7 +691,6 @@ pub(crate) fn goldilocks_fp4_ifft_v1(
     }
     Ok(())
 }
-
 /// Evaluate quartic-extension coefficients over one shifted base-field domain.
 pub(crate) fn goldilocks_fp4_evaluate_coset_v1(
     coefficients: &[GoldilocksFp4V1],
@@ -763,7 +718,6 @@ pub(crate) fn goldilocks_fp4_evaluate_coset_v1(
     goldilocks_fp4_fft_v1(&mut evaluations, root)?;
     Ok(evaluations)
 }
-
 /// Batch-invert a non-empty collection using one field inversion.
 pub(crate) fn goldilocks_batch_invert_v1(
     values: &mut [GoldilocksFieldV1],
@@ -790,7 +744,6 @@ pub(crate) fn goldilocks_batch_invert_v1(
     }
     Ok(())
 }
-
 /// Draw one unbiased canonical Goldilocks field element.
 pub(crate) fn random_goldilocks_v1<R: TryRngCore>(
     rng: &mut R,
@@ -805,7 +758,6 @@ pub(crate) fn random_goldilocks_v1<R: TryRngCore>(
     }
     Err(TransparentStarkErrorV1::RandomnessUnavailable)
 }
-
 /// Draw one uniform quartic-extension element, including zero.
 pub(crate) fn random_goldilocks_fp4_v1<R: TryRngCore>(
     rng: &mut R,
@@ -818,7 +770,6 @@ pub(crate) fn random_goldilocks_fp4_v1<R: TryRngCore>(
     ])
     .ok_or(TransparentStarkErrorV1::NonCanonicalField)
 }
-
 /// Draw one uniform nonzero quartic-extension element.
 #[cfg(test)]
 pub(crate) fn random_nonzero_goldilocks_fp4_v1<R: TryRngCore>(
@@ -832,7 +783,6 @@ pub(crate) fn random_nonzero_goldilocks_fp4_v1<R: TryRngCore>(
     }
     Err(TransparentStarkErrorV1::RandomnessUnavailable)
 }
-
 /// Interpolate one native trace column and apply an exact replayable mask.
 ///
 /// For a native domain of size `n`, the returned polynomial is
@@ -872,7 +822,6 @@ pub(crate) fn masked_trace_coefficients_with_mask_v1(
     }
     Ok(coefficients)
 }
-
 /// Evaluate retained masked trace coefficients on one canonical generator coset.
 ///
 /// The evaluation domain may be smaller than the eventual commitment domain,
@@ -904,7 +853,6 @@ pub(crate) fn masked_trace_coefficients_on_coset_v1(
     }
     goldilocks_evaluate_coset_v1(coefficients, evaluation_size, evaluation_root, shift)
 }
-
 /// Interpolate and mask one trace column before evaluating its LDE.
 ///
 /// The mask is `r(X) * (X^n - 1)`, so every base-domain trace value is
@@ -919,25 +867,21 @@ pub(crate) fn masked_trace_lde_column_with_mask_v1(
     let coefficients = masked_trace_coefficients_with_mask_v1(base_column, base_log_size, mask)?;
     masked_trace_coefficients_on_coset_v1(&coefficients, base_log_size, lde_log_size)
 }
-
 /// Replayable zero-knowledge mask for one streamed trace column.
 pub(crate) struct ReplayableTraceMaskV1 {
     coefficients: Vec<GoldilocksFieldV1>,
 }
-
 impl ReplayableTraceMaskV1 {
     /// Exact coefficients in ascending degree order.
     pub(crate) fn coefficients(&self) -> &[GoldilocksFieldV1] {
         &self.coefficients
     }
 }
-
 impl Drop for ReplayableTraceMaskV1 {
     fn drop(&mut self) {
         self.coefficients.fill(GoldilocksFieldV1::ZERO);
     }
 }
-
 /// Sample and retain the exact mask coefficients for one replayable column.
 ///
 /// Streaming provers keep these few coefficients until post-query openings are
@@ -959,7 +903,6 @@ pub(crate) fn sample_trace_mask_v1<R: TryRngCore>(
     }
     Ok(ReplayableTraceMaskV1 { coefficients: mask })
 }
-
 /// Interpolate, sample a fresh mask, and evaluate one trace column's LDE.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn masked_trace_lde_column_v1<R: TryRngCore>(
@@ -977,13 +920,11 @@ pub(crate) fn masked_trace_lde_column_v1<R: TryRngCore>(
         mask.coefficients(),
     )
 }
-
 /// Domain-separated binary SHA-256 Merkle tree.
 #[derive(Clone, Debug)]
 pub(crate) struct Sha256MerkleTreeV1 {
     levels: Vec<Vec<[u8; 32]>>,
 }
-
 impl Sha256MerkleTreeV1 {
     /// Commit a non-empty power-of-two leaf vector.
     pub(crate) fn from_leaves(
@@ -1006,12 +947,10 @@ impl Sha256MerkleTreeV1 {
         }
         Ok(Self { levels })
     }
-
     /// Root digest.
     pub(crate) fn root(&self) -> [u8; 32] {
         self.levels[self.levels.len() - 1][0]
     }
-
     /// Leaf-to-root sibling path.
     pub(crate) fn path(&self, mut index: usize) -> Result<Vec<[u8; 32]>, TransparentStarkErrorV1> {
         if index >= self.levels[0].len() {
@@ -1027,7 +966,6 @@ impl Sha256MerkleTreeV1 {
         Ok(path)
     }
 }
-
 /// Hash one binary Merkle node with an engine-fixed role domain.
 pub(crate) fn sha256_merkle_node_v1(
     node_domain: &[u8],
@@ -1037,7 +975,6 @@ pub(crate) fn sha256_merkle_node_v1(
     sha256_frame_v1(node_domain, &[left, right])
         .expect("two fixed hashes and a static domain are representable")
 }
-
 /// Verify one exact binary Merkle path.
 #[cfg(test)]
 pub(crate) fn verify_sha256_merkle_path_v1(
@@ -1064,7 +1001,6 @@ pub(crate) fn verify_sha256_merkle_path_v1(
     }
     Ok(())
 }
-
 /// Hash an unambiguous domain-and-field frame.
 pub(crate) fn sha256_frame_v1(
     domain: &[u8],
@@ -1087,14 +1023,12 @@ pub(crate) fn sha256_frame_v1(
     }
     Ok(hash.finalize().into())
 }
-
 /// Stateful framed Fiat–Shamir transcript.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TransparentTranscriptV1 {
     state: [u8; 32],
     challenge_counter: u64,
 }
-
 impl TransparentTranscriptV1 {
     /// Initialize with the engine suite, complete profile digest, and exact
     /// public-input digest.
@@ -1114,7 +1048,6 @@ impl TransparentTranscriptV1 {
             challenge_counter: 0,
         })
     }
-
     /// Absorb one labeled message and reset the local challenge counter.
     pub(crate) fn absorb(
         &mut self,
@@ -1126,12 +1059,10 @@ impl TransparentTranscriptV1 {
         self.challenge_counter = 0;
         Ok(())
     }
-
     /// Current transcript state for query/grinding derivation.
     pub(crate) const fn state(&self) -> [u8; 32] {
         self.state
     }
-
     /// Derive one unbiased nonzero Goldilocks challenge.
     pub(crate) fn challenge_field(
         &mut self,
@@ -1166,7 +1097,6 @@ impl TransparentTranscriptV1 {
         }
         Err(TransparentStarkErrorV1::ChallengeSamplingExhausted)
     }
-
     /// Derive one uniform challenge in the quartic Goldilocks extension.
     ///
     /// A complete SHA-256 digest supplies the four fixed-order coefficients.
@@ -1181,7 +1111,6 @@ impl TransparentTranscriptV1 {
     ) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
         self.challenge_fp4_where(label, |_| true)
     }
-
     /// Derive a uniform quartic challenge satisfying an additional
     /// deterministic public predicate.
     ///
@@ -1208,7 +1137,6 @@ impl TransparentTranscriptV1 {
             predicate,
         )
     }
-
     #[cfg(test)]
     fn challenge_fp4_with_oracle(
         &mut self,
@@ -1217,7 +1145,6 @@ impl TransparentTranscriptV1 {
     ) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
         self.challenge_fp4_with_oracle_and_predicate(label, &mut oracle, |_| true)
     }
-
     fn challenge_fp4_with_oracle_and_predicate(
         &mut self,
         label: &[u8],
@@ -1241,7 +1168,6 @@ impl TransparentTranscriptV1 {
         Err(TransparentStarkErrorV1::ChallengeSamplingExhausted)
     }
 }
-
 /// Derive unique unbiased query indices for a power-of-two domain.
 pub(crate) fn derive_unique_query_indices_v1(
     seed: &[u8; 32],
@@ -1282,7 +1208,6 @@ pub(crate) fn derive_unique_query_indices_v1(
     }
     Err(TransparentStarkErrorV1::QuerySamplingExhausted)
 }
-
 /// Compute one binary FRI fold.
 #[cfg(test)]
 pub(crate) fn fri_fold_pair_v1(
@@ -1294,7 +1219,6 @@ pub(crate) fn fri_fold_pair_v1(
     let inverse_x = x.inv().ok_or(TransparentStarkErrorV1::DivisionByZero)?;
     fri_fold_pair_with_inverse_x_v1(low, high, beta, inverse_x)
 }
-
 /// Compute one binary FRI fold when the caller already tracks `x^-1`.
 ///
 /// Provers fold an entire multiplicative coset in order and can update the
@@ -1315,7 +1239,6 @@ pub(crate) fn fri_fold_pair_with_inverse_x_v1(
     let odd = low.sub(high).mul(inverse_two).mul(inverse_x);
     Ok(even.add(beta.mul(odd)))
 }
-
 /// Compute one binary FRI fold over the quartic Goldilocks extension.
 pub(crate) fn fri_fold_pair_fp4_v1(
     low: GoldilocksFp4V1,
@@ -1329,7 +1252,6 @@ pub(crate) fn fri_fold_pair_fp4_v1(
     let inverse_x = x.inv().ok_or(TransparentStarkErrorV1::DivisionByZero)?;
     fri_fold_pair_with_inverse_x_fp4_v1(low, high, beta, inverse_x)
 }
-
 /// Compute one quartic-extension FRI fold with a tracked base-domain `x^-1`.
 pub(crate) fn fri_fold_pair_with_inverse_x_fp4_v1(
     low: GoldilocksFp4V1,
@@ -1354,7 +1276,6 @@ pub(crate) fn fri_fold_pair_with_inverse_x_fp4_v1(
     let odd = low.sub(high).mul_base(inverse_two).mul_base(inverse_x);
     Ok(even.add(beta.mul(odd)))
 }
-
 /// Check the entire terminal FRI polynomial against an exact degree bound.
 #[cfg(test)]
 pub(crate) fn ensure_fri_terminal_degree_v1(
@@ -1379,7 +1300,6 @@ pub(crate) fn ensure_fri_terminal_degree_v1(
     }
     Ok(())
 }
-
 /// Check an entire quartic-extension FRI terminal against an exact degree.
 pub(crate) fn ensure_fri_terminal_degree_fp4_v1(
     values: &[GoldilocksFp4V1],
@@ -1406,7 +1326,6 @@ pub(crate) fn ensure_fri_terminal_degree_fp4_v1(
     }
     Ok(())
 }
-
 /// Search for the smallest nonce meeting an exact leading-zero-bit target.
 pub(crate) fn grind_nonce_v1(
     transcript_seed: &[u8; 32],
@@ -1422,7 +1341,6 @@ pub(crate) fn grind_nonce_v1(
     }
     Err(TransparentStarkErrorV1::InvalidGrinding)
 }
-
 /// Verify a transcript grinding nonce.
 pub(crate) fn verify_grinding_nonce_v1(
     transcript_seed: &[u8; 32],
@@ -1438,7 +1356,6 @@ pub(crate) fn verify_grinding_nonce_v1(
     }
     Ok(())
 }
-
 fn leading_zero_bits_v1(bytes: &[u8]) -> u32 {
     let mut count = 0_u32;
     for byte in bytes {
@@ -1451,19 +1368,16 @@ fn leading_zero_bits_v1(bytes: &[u8]) -> u32 {
     }
     count
 }
-
 /// Strict fixed-shape proof reader.
 pub(crate) struct ExactProofReaderV1<'a> {
     bytes: &'a [u8],
     offset: usize,
 }
-
 impl<'a> ExactProofReaderV1<'a> {
     /// Construct over one size-capped proof slice.
     pub(crate) const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }
     }
-
     /// Read an exact byte array.
     pub(crate) fn take<const N: usize>(&mut self) -> Result<[u8; N], TransparentStarkErrorV1> {
         let end = self
@@ -1479,27 +1393,22 @@ impl<'a> ExactProofReaderV1<'a> {
             .try_into()
             .map_err(|_| TransparentStarkErrorV1::MalformedProof)
     }
-
     /// Read big-endian `u16`.
     pub(crate) fn u16(&mut self) -> Result<u16, TransparentStarkErrorV1> {
         self.take().map(u16::from_be_bytes)
     }
-
     /// Read big-endian `u32`.
     pub(crate) fn u32(&mut self) -> Result<u32, TransparentStarkErrorV1> {
         self.take().map(u32::from_be_bytes)
     }
-
     /// Read big-endian `u64`.
     pub(crate) fn u64(&mut self) -> Result<u64, TransparentStarkErrorV1> {
         self.take().map(u64::from_be_bytes)
     }
-
     /// Read one canonical Goldilocks value.
     pub(crate) fn field(&mut self) -> Result<GoldilocksFieldV1, TransparentStarkErrorV1> {
         GoldilocksFieldV1::canonical(self.u64()?).ok_or(TransparentStarkErrorV1::NonCanonicalField)
     }
-
     /// Read one canonically encoded quartic-extension value.
     pub(crate) fn fp4(&mut self) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
         GoldilocksFp4V1::from_coefficients([
@@ -1510,7 +1419,6 @@ impl<'a> ExactProofReaderV1<'a> {
         ])
         .ok_or(TransparentStarkErrorV1::NonCanonicalField)
     }
-
     /// Require exact end-of-input.
     pub(crate) fn finish(self) -> Result<(), TransparentStarkErrorV1> {
         if self.offset == self.bytes.len() {
@@ -1520,103 +1428,79 @@ impl<'a> ExactProofReaderV1<'a> {
         }
     }
 }
-
 /// Append big-endian fixed integers to a canonical proof.
 pub(crate) fn append_u16_v1(bytes: &mut Vec<u8>, value: u16) {
     bytes.extend_from_slice(&value.to_be_bytes());
 }
-
 /// Append big-endian fixed integers to a canonical proof.
 pub(crate) fn append_u32_v1(bytes: &mut Vec<u8>, value: u32) {
     bytes.extend_from_slice(&value.to_be_bytes());
 }
-
 /// Append big-endian fixed integers to a canonical proof.
 pub(crate) fn append_u64_v1(bytes: &mut Vec<u8>, value: u64) {
     bytes.extend_from_slice(&value.to_be_bytes());
 }
-
 /// Append one canonical quartic-extension value.
 pub(crate) fn append_goldilocks_fp4_v1(bytes: &mut Vec<u8>, value: GoldilocksFp4V1) {
     bytes.extend_from_slice(&value.to_be_bytes());
 }
-
 #[cfg(test)]
 mod tests {
-    use rand::{RngCore, SeedableRng as _, rngs::StdRng};
-
     use super::*;
-
+    use rand::{RngCore, SeedableRng as _, rngs::StdRng};
     fn fp4(coefficients: [u64; 4]) -> GoldilocksFp4V1 {
         GoldilocksFp4V1::canonical(coefficients).expect("small canonical coefficients")
     }
-
     #[derive(Debug)]
     struct InjectedRngError;
-
     impl core::fmt::Display for InjectedRngError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected transparent-STARK RNG failure")
         }
     }
-
     struct FailingTryRng;
-
     impl TryRngCore for FailingTryRng {
         type Error = InjectedRngError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(InjectedRngError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(InjectedRngError)
         }
-
         fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
             Err(InjectedRngError)
         }
     }
-
     struct MaxValueRng;
-
     impl RngCore for MaxValueRng {
         fn next_u32(&mut self) -> u32 {
             u32::MAX
         }
-
         fn next_u64(&mut self) -> u64 {
             u64::MAX
         }
-
         fn fill_bytes(&mut self, destination: &mut [u8]) {
             destination.fill(0xff);
         }
     }
-
     struct ZeroRng;
-
     impl RngCore for ZeroRng {
         fn next_u32(&mut self) -> u32 {
             0
         }
-
         fn next_u64(&mut self) -> u64 {
             0
         }
-
         fn fill_bytes(&mut self, destination: &mut [u8]) {
             destination.fill(0);
         }
     }
-
     #[test]
     fn zk_mask_geometry_uses_reduced_air_degree_and_coefficient_count_exactly() {
         let zk_ace =
             transparent_stark_zk_mask_geometry_v1(1, 4, 1, 108).expect("quadratic ZK-ACE AIR");
         assert_eq!(zk_ace.minimum_mask_coefficients, 332);
         assert_eq!(zk_ace.minimum_mask_degree, 331);
-
         let quadratic_ca =
             transparent_stark_zk_mask_geometry_v1(1, 4, 1, 60).expect("quadratic CA census");
         assert_eq!(quadratic_ca.minimum_mask_coefficients, 188);
@@ -1628,12 +1512,10 @@ mod tests {
             transparent_stark_zk_mask_geometry_v1(3, 4, 1, 60).expect("quartic main AIR");
         assert_eq!(quartic_main.minimum_mask_coefficients, 444);
         assert_eq!(quartic_main.minimum_mask_degree, 443);
-
         let deep_free =
             transparent_stark_zk_mask_geometry_v1(1, 4, 0, 60).expect("DEEP-free local proof");
         assert_eq!(deep_free.minimum_mask_coefficients, 180);
         assert_eq!(deep_free.minimum_mask_degree, 179);
-
         for invalid in [
             transparent_stark_zk_mask_geometry_v1(0, 4, 1, 60),
             transparent_stark_zk_mask_geometry_v1(1, 0, 1, 60),
@@ -1644,7 +1526,6 @@ mod tests {
             assert_eq!(invalid, Err(TransparentStarkErrorV1::InvalidDomain));
         }
     }
-
     #[test]
     fn work_normalized_fiat_shamir_certificate_is_exact_and_fail_closed() {
         let boundary = checked_transparent_stark_work_security_v1(128, 129, 256, 124)
@@ -1653,7 +1534,6 @@ mod tests {
         assert_eq!(boundary.round_by_round_bits, 129);
         assert_eq!(boundary.random_oracle_bits, 256);
         assert_eq!(boundary.max_random_oracle_query_log2, 124);
-
         assert_eq!(
             checked_transparent_stark_work_security_v1(128, 128, 256, 124),
             Err(TransparentStarkErrorV1::InvalidDomain),
@@ -1679,7 +1559,6 @@ mod tests {
             "bit-count overflow must fail closed"
         );
     }
-
     #[test]
     fn goldilocks_fp4_is_an_irreducible_field_with_exact_arithmetic() {
         assert_eq!(GOLDILOCKS_MODULUS_V1 % 4, 1);
@@ -1693,7 +1572,6 @@ mod tests {
             generator.pow(4),
             GoldilocksFp4V1::from_base(GOLDILOCKS_FP4_NONRESIDUE_V1)
         );
-
         let left = fp4([1, 2, 3, 4]);
         let middle = fp4([5, 6, 7, 8]);
         let right = fp4([9, 10, 11, 12]);
@@ -1714,7 +1592,6 @@ mod tests {
         );
         assert_eq!(left.add(left.neg()), GoldilocksFp4V1::ZERO);
         assert_eq!(GoldilocksFp4V1::ZERO.inv(), None);
-
         for c0 in 0..4 {
             for c1 in 0..4 {
                 for c2 in 0..4 {
@@ -1731,7 +1608,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn division_free_goldilocks_arithmetic_matches_u128_reference() {
         let modulus = u128::from(GOLDILOCKS_MODULUS_V1);
@@ -1758,7 +1634,6 @@ mod tests {
             assert_eq!(u128::from(reduced.0), value % modulus, "value={value}");
             assert!(reduced.0 < GOLDILOCKS_MODULUS_V1);
         }
-
         let boundary_residues = [
             0,
             1,
@@ -1791,7 +1666,6 @@ mod tests {
                 assert!(product.0 < GOLDILOCKS_MODULUS_V1);
             }
         }
-
         let mut rng = StdRng::from_seed([0x6D; 32]);
         for sample in 0..200_000 {
             let value = (u128::from(rng.next_u64()) << 64) | u128::from(rng.next_u64());
@@ -1801,7 +1675,6 @@ mod tests {
                 value % modulus,
                 "arbitrary reduction sample {sample}"
             );
-
             let left = rng.next_u64() % GOLDILOCKS_MODULUS_V1;
             let right = rng.next_u64() % GOLDILOCKS_MODULUS_V1;
             let sum = GoldilocksFieldV1(left).add(GoldilocksFieldV1(right));
@@ -1818,7 +1691,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn goldilocks_fp4_codec_is_fixed_order_canonical_and_exact() {
         let value = fp4([1, 2, 3, GOLDILOCKS_MODULUS_V1 - 1]);
@@ -1830,7 +1702,6 @@ mod tests {
             GoldilocksFp4V1::from_coefficients(value.coefficients()),
             Some(value)
         );
-
         let mut noncanonical = bytes;
         noncanonical[..8].copy_from_slice(&GOLDILOCKS_MODULUS_V1.to_be_bytes());
         assert_eq!(GoldilocksFp4V1::canonical_be_bytes(noncanonical), None);
@@ -1838,13 +1709,11 @@ mod tests {
             GoldilocksFp4V1::canonical([0, 0, 0, GOLDILOCKS_MODULUS_V1]),
             None
         );
-
         let mut encoded = Vec::new();
         append_goldilocks_fp4_v1(&mut encoded, value);
         let mut reader = ExactProofReaderV1::new(&encoded);
         assert_eq!(reader.fp4().expect("canonical Fp4"), value);
         reader.finish().expect("exact Fp4 byte stream");
-
         let mut encoded_noncanonical = encoded;
         encoded_noncanonical[8..16].copy_from_slice(&GOLDILOCKS_MODULUS_V1.to_be_bytes());
         assert_eq!(
@@ -1852,7 +1721,6 @@ mod tests {
             Err(TransparentStarkErrorV1::NonCanonicalField)
         );
     }
-
     #[test]
     fn goldilocks_fp4_fft_coset_terminal_and_fold_are_exact() {
         for log_size in 0..=10 {
@@ -1874,7 +1742,6 @@ mod tests {
             goldilocks_fp4_ifft_v1(&mut values, root).expect("Fp4 IFFT");
             assert_eq!(values, original);
         }
-
         let root = goldilocks_primitive_root_v1(4).expect("root");
         let coefficients = vec![fp4([1, 2, 3, 4]), fp4([5, 6, 7, 8]), fp4([9, 10, 11, 12])];
         let evaluations =
@@ -1887,7 +1754,6 @@ mod tests {
             ensure_fri_terminal_degree_fp4_v1(&high, 4, 2),
             Err(TransparentStarkErrorV1::FriDegree)
         );
-
         let low = fp4([11, 12, 13, 14]);
         let high = fp4([19, 20, 21, 22]);
         let beta = fp4([23, 24, 25, 26]);
@@ -1920,7 +1786,6 @@ mod tests {
             "a malformed inverse-FFT root must fail before exponentiation"
         );
     }
-
     #[test]
     fn goldilocks_fp4_transcript_and_rng_sampling_fail_closed() {
         let mut first =
@@ -1942,7 +1807,6 @@ mod tests {
             TransparentTranscriptV1::new(b"fp4-suite", &[1; 32], &[2; 32]).expect("transcript");
         replay.absorb(b"root", &[b"commitment"]).expect("absorb");
         assert_eq!(replay.challenge_fp4(b"beta").expect("replay"), challenge);
-
         let mut zero_allowed =
             TransparentTranscriptV1::new(b"fp4-suite", &[1; 32], &[2; 32]).expect("transcript");
         let mut attempts = 0_u64;
@@ -1955,7 +1819,6 @@ mod tests {
             "FRI challenges are uniform over the complete extension field"
         );
         assert_eq!(attempts, 1);
-
         let mut exhausted =
             TransparentTranscriptV1::new(b"fp4-suite", &[1; 32], &[2; 32]).expect("transcript");
         let mut attempts = 0_u64;
@@ -1967,7 +1830,6 @@ mod tests {
             Err(TransparentStarkErrorV1::ChallengeSamplingExhausted)
         );
         assert_eq!(attempts, MAX_FIELD_REJECTION_ATTEMPTS_V1);
-
         let mut retry =
             TransparentTranscriptV1::new(b"fp4-suite", &[1; 32], &[2; 32]).expect("transcript");
         let expected = fp4([1, 2, 3, 4]);
@@ -1986,7 +1848,6 @@ mod tests {
             .expect("second candidate is canonical");
         assert_eq!(attempts, 2);
         assert_eq!(sampled, expected);
-
         let mut predicate_retry =
             TransparentTranscriptV1::new(b"fp4-suite", &[1; 32], &[2; 32]).expect("transcript");
         let rejected = GoldilocksFp4V1::ZERO;
@@ -2023,14 +1884,12 @@ mod tests {
             direct.state(),
             "a rejected DEEP point must not be absorbed into the transcript"
         );
-
         let mut predicate_exhausted =
             TransparentTranscriptV1::new(b"fp4-suite", &[1; 32], &[2; 32]).expect("transcript");
         assert_eq!(
             predicate_exhausted.challenge_fp4_where(b"deep-point", |_| false),
             Err(TransparentStarkErrorV1::ChallengeSamplingExhausted)
         );
-
         let mut first_rng = StdRng::from_seed([0x44; 32]);
         let mut replay_rng = StdRng::from_seed([0x44; 32]);
         assert_eq!(
@@ -2054,7 +1913,6 @@ mod tests {
             Err(TransparentStarkErrorV1::RandomnessUnavailable)
         );
     }
-
     #[test]
     fn fft_roundtrips_every_small_power_of_two_domain() {
         assert_eq!(
@@ -2080,7 +1938,6 @@ mod tests {
             goldilocks_ifft_v1(&mut values, root).expect("IFFT");
             assert_eq!(values, original);
         }
-
         let mut wrong_order = vec![GoldilocksFieldV1::ONE; 8];
         assert_eq!(
             goldilocks_fft_v1(&mut wrong_order, GoldilocksFieldV1::ONE),
@@ -2094,7 +1951,6 @@ mod tests {
             Err(TransparentStarkErrorV1::NonCanonicalField)
         );
     }
-
     #[test]
     fn masked_trace_lde_is_randomized_and_preserves_degree_capacity() {
         let base = (0..16).map(GoldilocksFieldV1).collect::<Vec<_>>();
@@ -2177,7 +2033,6 @@ mod tests {
             Err(TransparentStarkErrorV1::NonCanonicalField)
         );
     }
-
     #[test]
     fn merkle_paths_bind_domain_index_leaf_order_and_depth() {
         let domain = b"iroha:test:transparent-stark:node:v1";
@@ -2207,7 +2062,6 @@ mod tests {
             Err(TransparentStarkErrorV1::InvalidMerkleShape)
         );
     }
-
     #[test]
     fn transcript_is_framed_ordered_and_deterministic() {
         let mut first =
@@ -2225,7 +2079,6 @@ mod tests {
             challenge
         );
     }
-
     #[test]
     fn query_indices_are_unique_deterministic_and_in_domain() {
         let first = derive_unique_query_indices_v1(&[9; 32], 1 << 12, 56).expect("queries");
@@ -2237,7 +2090,6 @@ mod tests {
             first.len()
         );
     }
-
     #[test]
     fn fri_terminal_check_rejects_high_degree_values() {
         let root = goldilocks_primitive_root_v1(4).expect("root");
@@ -2255,7 +2107,6 @@ mod tests {
             ensure_fri_terminal_degree_v1(&high, 4, 1),
             Err(TransparentStarkErrorV1::FriDegree)
         );
-
         let low = GoldilocksFieldV1(11);
         let high = GoldilocksFieldV1(19);
         let beta = GoldilocksFieldV1(23);
@@ -2270,7 +2121,6 @@ mod tests {
             Err(TransparentStarkErrorV1::DivisionByZero)
         );
     }
-
     #[test]
     fn grinding_and_exact_reader_fail_closed() {
         let nonce = grind_nonce_v1(&[0x42; 32], 8).expect("grind");
@@ -2281,7 +2131,6 @@ mod tests {
                 Err(TransparentStarkErrorV1::InvalidGrinding)
             );
         }
-
         let mut bytes = Vec::new();
         append_u16_v1(&mut bytes, 7);
         append_u32_v1(&mut bytes, 11);
@@ -2296,7 +2145,6 @@ mod tests {
             GoldilocksFieldV1(GOLDILOCKS_MODULUS_V1 - 1)
         );
         reader.finish().expect("exact end");
-
         let mut noncanonical = Vec::new();
         append_u64_v1(&mut noncanonical, GOLDILOCKS_MODULUS_V1);
         assert_eq!(

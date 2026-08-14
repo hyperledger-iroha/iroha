@@ -3,7 +3,6 @@ struct FileWrap {
     path: PathBuf,
     file: std::fs::File,
 }
-
 impl std::fmt::Debug for FileWrap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FileWrap")
@@ -12,7 +11,6 @@ impl std::fmt::Debug for FileWrap {
             .finish()
     }
 }
-
 impl FileWrap {
     fn open_with(path: PathBuf, configure: impl FnOnce(&mut std::fs::OpenOptions)) -> Result<Self> {
         let mut options = std::fs::OpenOptions::new();
@@ -20,13 +18,11 @@ impl FileWrap {
         let file = options.open(path.clone()).add_err_context(&path)?;
         Ok(Self { path, file })
     }
-
     fn open_read_write(path: PathBuf) -> Result<Self> {
         Self::open_with(path, |opts| {
             opts.write(true).read(true).create(true).truncate(false);
         })
     }
-
     fn try_io<F, T>(&mut self, f: F) -> Result<T>
     where
         F: FnOnce(&mut std::fs::File) -> std::io::Result<T>,
@@ -35,16 +31,13 @@ impl FileWrap {
         Ok(value)
     }
 }
-
 fn create_dir_all_with_context(path: &Path) -> Result<()> {
     std::fs::create_dir_all(path).map_err(|err| Error::MkDir(err, path.to_path_buf()))
 }
-
 fn sync_dir(path: &Path) -> std::io::Result<()> {
     let file = std::fs::File::open(path)?;
     file.sync_all()
 }
-
 fn remove_commit_marker_temp_and_sync(path: &Path) -> Result<()> {
     std::fs::remove_file(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
     if let Some(parent) = path.parent() {
@@ -52,7 +45,6 @@ fn remove_commit_marker_temp_and_sync(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 fn promote_commit_marker_temp_and_sync(temporary_path: &Path, stable_path: &Path) -> Result<()> {
     std::fs::rename(temporary_path, stable_path)
         .map_err(|error| Error::IO(error, stable_path.to_path_buf()))?;
@@ -68,7 +60,6 @@ fn promote_commit_marker_temp_and_sync(temporary_path: &Path, stable_path: &Path
     }
     Ok(())
 }
-
 fn rollback_fault_point(point: RollbackFaultPoint) -> Result<()> {
     #[cfg(test)]
     if FAIL_ROLLBACK_AT.with(|fault| {
@@ -88,7 +79,6 @@ fn rollback_fault_point(point: RollbackFaultPoint) -> Result<()> {
     let _ = point;
     Ok(())
 }
-
 fn sync_bound_progress_intent_file(file: &std::fs::File) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_NEXT_BOUND_PROGRESS_INTENT_FILE_SYNC.with(|flag| flag.replace(false)) {
@@ -98,7 +88,6 @@ fn sync_bound_progress_intent_file(file: &std::fs::File) -> std::io::Result<()> 
     }
     file.sync_data()
 }
-
 fn sync_bound_progress_append_data(file: &std::fs::File) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_NEXT_BOUND_PROGRESS_APPEND_DATA_SYNC.with(|flag| flag.replace(false)) {
@@ -108,7 +97,6 @@ fn sync_bound_progress_append_data(file: &std::fs::File) -> std::io::Result<()> 
     }
     file.sync_data()
 }
-
 fn sync_bound_progress_append_index(file: &std::fs::File) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_NEXT_BOUND_PROGRESS_APPEND_INDEX_SYNC.with(|flag| flag.replace(false)) {
@@ -118,7 +106,6 @@ fn sync_bound_progress_append_index(file: &std::fs::File) -> std::io::Result<()>
     }
     file.sync_data()
 }
-
 fn sync_native_amx_latest_index_recovery_temp(file: &std::fs::File) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_NEXT_NATIVE_AMX_LATEST_INDEX_RECOVERY_TEMP_SYNC.with(|flag| flag.replace(false)) {
@@ -128,7 +115,6 @@ fn sync_native_amx_latest_index_recovery_temp(file: &std::fs::File) -> std::io::
     }
     file.sync_all()
 }
-
 fn sync_indexed_sidecar_data(file: &std::fs::File) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_NEXT_INDEXED_SIDECAR_DATA_SYNC.with(|flag| flag.replace(false)) {
@@ -138,7 +124,6 @@ fn sync_indexed_sidecar_data(file: &std::fs::File) -> std::io::Result<()> {
     }
     file.sync_data()
 }
-
 fn sync_indexed_sidecar_initial_data(file: &std::fs::File) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_NEXT_INDEXED_SIDECAR_INITIAL_DATA_SYNC.with(|flag| flag.replace(false)) {
@@ -148,7 +133,6 @@ fn sync_indexed_sidecar_initial_data(file: &std::fs::File) -> std::io::Result<()
     }
     file.sync_data()
 }
-
 fn rollback_unindexed_sidecar_payload(
     file: &std::fs::File,
     offset: u64,
@@ -177,7 +161,6 @@ fn rollback_unindexed_sidecar_payload(
     }
     true
 }
-
 fn sync_indexed_sidecar_index(file: &std::fs::File) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_NEXT_INDEXED_SIDECAR_INDEX_SYNC.with(|flag| flag.replace(false)) {
@@ -187,12 +170,10 @@ fn sync_indexed_sidecar_index(file: &std::fs::File) -> std::io::Result<()> {
     }
     file.sync_data()
 }
-
 fn sync_indexed_sidecar_dir(path: &Path) -> std::io::Result<()> {
     let file = std::fs::File::open(path)?;
     sync_indexed_sidecar_dir_handle(&file)
 }
-
 fn sync_indexed_sidecar_dir_handle(file: &std::fs::File) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_NEXT_INDEXED_SIDECAR_DIR_SYNC.with(|flag| flag.replace(false)) {
@@ -202,7 +183,6 @@ fn sync_indexed_sidecar_dir_handle(file: &std::fs::File) -> std::io::Result<()> 
     }
     file.sync_all()
 }
-
 fn sync_progress_sidecar_ancestor_dir_handle(file: &std::fs::File) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_PROGRESS_SIDECAR_ANCESTOR_SYNC_AT.with(|slot| {
@@ -229,7 +209,6 @@ fn sync_progress_sidecar_ancestor_dir_handle(file: &std::fs::File) -> std::io::R
     }
     file.sync_all()
 }
-
 fn sync_sidecar_promotion_dir(path: &Path) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_NEXT_SIDECAR_PROMOTION_DIR_SYNC.with(|flag| flag.replace(false)) {
@@ -239,7 +218,6 @@ fn sync_sidecar_promotion_dir(path: &Path) -> std::io::Result<()> {
     }
     sync_dir(path)
 }
-
 fn sync_sidecar_temp_marker_dir(path: &Path) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_NEXT_SIDECAR_TEMP_MARKER_DIR_SYNC.with(|flag| flag.replace(false)) {
@@ -249,7 +227,6 @@ fn sync_sidecar_temp_marker_dir(path: &Path) -> std::io::Result<()> {
     }
     sync_dir(path)
 }
-
 fn numbered_norito_sidecar_height(path: &Path) -> Option<u64> {
     let file_name = path.file_name()?.to_str()?;
     let height = file_name
@@ -257,13 +234,11 @@ fn numbered_norito_sidecar_height(path: &Path) -> Option<u64> {
         .or_else(|| file_name.strip_suffix(".norito.tmp"))?;
     height.parse().ok()
 }
-
 #[cfg(test)]
 const CONFIGURED_PRIMARY_OPEN_IDENTITY_SWAP_SUFFIX: &str = ".configured-primary-open-identity-swap";
 #[cfg(test)]
 const CONFIGURED_PRIMARY_OPEN_IDENTITY_DISPLACED_SUFFIX: &str =
     ".configured-primary-open-identity-displaced";
-
 #[cfg(test)]
 fn configured_primary_open_identity_test_path(path: &Path, suffix: &str) -> Result<PathBuf> {
     let file_name = path.file_name().ok_or_else(|| {
@@ -279,7 +254,6 @@ fn configured_primary_open_identity_test_path(path: &Path, suffix: &str) -> Resu
     sibling_name.push(suffix);
     Ok(path.with_file_name(sibling_name))
 }
-
 /// Deterministically model an inode replacement after authenticated preflight.
 ///
 /// Test fixtures opt in by placing a replacement at the reserved sibling path.
@@ -296,7 +270,6 @@ fn configured_primary_open_identity_swap_boundary(path: &Path) -> Result<()> {
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(Error::IO(error, replacement)),
     }
-
     let displaced = configured_primary_open_identity_test_path(
         path,
         CONFIGURED_PRIMARY_OPEN_IDENTITY_DISPLACED_SUFFIX,
@@ -317,7 +290,6 @@ fn configured_primary_open_identity_swap_boundary(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 /// Error variants for persistent storage logic
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
@@ -593,7 +565,6 @@ pub enum Error {
     /// Durable Kura prune intent is inconsistent: {0}
     PruneIntentConflict(String),
 }
-
 impl Error {
     /// Return whether this error proves that the canonical publication boundary cannot be
     /// retried safely by the live consensus process.
@@ -608,16 +579,12 @@ impl Error {
         )
     }
 }
-
 trait AddErrContextExt<T> {
     type Context;
-
     fn add_err_context(self, context: &Self::Context) -> Result<T, Error>;
 }
-
 impl<T> AddErrContextExt<T> for Result<T, std::io::Error> {
     type Context = PathBuf;
-
     fn add_err_context(self, path: &Self::Context) -> Result<T, Error> {
         self.map_err(|e| Error::IO(e, path.clone()))
     }

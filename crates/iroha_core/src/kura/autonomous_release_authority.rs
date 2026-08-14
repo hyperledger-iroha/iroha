@@ -1,5 +1,4 @@
 // Durable autonomous-lane Queue release authority and claim finalization.
-
 impl Kura {
     /// Authenticate the exact Kura half of one release-barrier Queue snapshot.
     ///
@@ -61,7 +60,6 @@ impl Kura {
                 "autonomous retirement snapshot names another ordered reservation group",
             ));
         }
-
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
@@ -99,7 +97,6 @@ impl Kura {
                 "durable autonomous attempt conflicts with retirement snapshot evidence",
             ));
         }
-
         let context = AutonomousLaneReleaseProjectionContext::from_payload(
             self,
             &record.artifact.executable_payload,
@@ -126,7 +123,6 @@ impl Kura {
             )
             .map_err(|message| Self::invalid_lane_artifact_error(self.store_root.clone(), message))
     }
-
     /// Authenticate Queue's exact prepared-release boundary from durable Kura evidence.
     ///
     /// This reopens the exact historical attempt, verifies its retirement,
@@ -232,7 +228,6 @@ impl Kura {
             })
             .map_err(|message| Self::invalid_lane_artifact_error(self.store_root.clone(), message))
     }
-
     /// Finish the claim half of an exact autonomous-slot release.
     ///
     /// Callers may invoke this only after Queue has durably prepared the
@@ -254,7 +249,6 @@ impl Kura {
             AutonomousLaneQueueReleaseBarrierGate::Authorized(authorization),
         )
     }
-
     #[cfg(test)]
     pub(crate) fn finalize_autonomous_lane_slot_release(
         &self,
@@ -272,7 +266,6 @@ impl Kura {
         )
         .map(drop)
     }
-
     fn finalize_autonomous_lane_slot_release_inner(
         &self,
         retirement: &AutonomousLaneSlotRetirementV1,

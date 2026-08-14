@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for the `SoraFS` gateway conformance harness.
-
 use integration_tests::{
     sorafs_gateway_capability_refusal,
     sorafs_gateway_conformance::{
@@ -12,7 +11,6 @@ use iroha_data_model::account::AccountAddress;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use norito::json::Value;
 use std::time::{Duration, UNIX_EPOCH};
-
 #[test]
 fn sorafs_gateway_conformance_suite_passes() {
     let report = default_suite_report();
@@ -21,7 +19,6 @@ fn sorafs_gateway_conformance_suite_passes() {
         "expected canned conformance suite to pass for fixture-backed gateway simulation"
     );
 }
-
 #[test]
 fn sorafs_gateway_suite_report_json_contains_expected_fields() {
     let report = default_suite_report();
@@ -87,7 +84,6 @@ fn sorafs_gateway_suite_report_json_contains_expected_fields() {
         "capability refusal JSON must include details map"
     );
 }
-
 #[test]
 fn sorafs_gateway_attestation_signature_verifies_and_rejects_wrong_key() {
     let report = default_suite_report();
@@ -110,7 +106,6 @@ fn sorafs_gateway_attestation_signature_verifies_and_rejects_wrong_key() {
     let signature_bytes = hex::decode(signature_hex).expect("attestation signature is hex");
     let signature = Signature::try_from_bytes(&signature_bytes)
         .expect("generated attestation signature is non-empty and nonzero");
-
     signature
         .verify(ALICE_KEYPAIR.public_key(), &bundle.report_json)
         .expect("attestation signature verifies with Alice key");
@@ -120,7 +115,6 @@ fn sorafs_gateway_attestation_signature_verifies_and_rejects_wrong_key() {
     assert_eq!(verified.scenario_count, report.scenario_count());
     assert_eq!(verified.algorithm, Algorithm::Ed25519);
     assert_eq!(verified.signer_account, signer.to_string());
-
     let wrong_key = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
         .expect("derive SoraFS gateway wrong-key fixture");
     assert!(
@@ -130,7 +124,6 @@ fn sorafs_gateway_attestation_signature_verifies_and_rejects_wrong_key() {
         "attestation signature must reject a wrong key"
     );
 }
-
 #[test]
 fn sorafs_gateway_attestation_verifier_rejects_report_tamper() {
     let report = default_suite_report();
@@ -152,7 +145,6 @@ fn sorafs_gateway_attestation_verifier_rejects_report_tamper() {
         .insert("profile_version".into(), Value::from("sf1-tampered"));
     let tampered =
         norito::json::to_vec(&envelope).expect("serialize tampered attestation envelope");
-
     let err = verify_attestation_envelope(&tampered)
         .expect_err("tampered embedded report must fail attestation verification");
     assert!(
@@ -160,7 +152,6 @@ fn sorafs_gateway_attestation_verifier_rejects_report_tamper() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn sorafs_gateway_attestation_verifier_rejects_all_zero_signature() {
     let report = default_suite_report();
@@ -182,7 +173,6 @@ fn sorafs_gateway_attestation_verifier_rejects_all_zero_signature() {
         .insert("signature_hex".into(), Value::from("00".repeat(64)));
     let tampered =
         norito::json::to_vec(&envelope).expect("serialize tampered attestation envelope");
-
     let err = verify_attestation_envelope(&tampered)
         .expect_err("all-zero attestation signature must fail admission");
     assert!(
@@ -191,7 +181,6 @@ fn sorafs_gateway_attestation_verifier_rejects_all_zero_signature() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn sorafs_gateway_unadmitted_provider_is_refused() {
     let report = default_suite_report();
@@ -206,7 +195,6 @@ fn sorafs_gateway_unadmitted_provider_is_refused() {
         "observed outcome mismatch"
     );
 }
-
 #[test]
 fn sorafs_gateway_refusal_scenarios_match_expectations() {
     let report = default_suite_report();
@@ -226,7 +214,6 @@ fn sorafs_gateway_refusal_scenarios_match_expectations() {
         ("C7", 422),
         ("D1", 451),
     ];
-
     for (id, status) in expected {
         let scenario = report
             .scenario(id)
@@ -255,13 +242,11 @@ fn sorafs_gateway_refusal_scenarios_match_expectations() {
         );
     }
 }
-
 #[test]
 fn sorafs_gateway_capability_refusals_align_with_fixtures() {
     let report = default_suite_report();
     let scenarios = sorafs_gateway_capability_refusal::load_scenarios()
         .expect("load capability refusal scenarios");
-
     for scenario in scenarios {
         let entry = report.scenario(&scenario.id).unwrap_or_else(|| {
             panic!(

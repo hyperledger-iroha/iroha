@@ -1,5 +1,4 @@
 //! Roundtrip coverage for Kaigi domain event summaries.
-
 use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
     events::data::prelude::KaigiRelayRegistrationSummary,
@@ -9,18 +8,15 @@ use iroha_data_model::{
         KaigiRelayManifestSummary, KaigiRosterSummary, KaigiUsageSummary, Name,
     },
 };
-
 fn sample_domain_id() -> DomainId {
     DomainId::try_new("kaigi_domain", "universal").expect("domain id")
 }
-
 fn sample_call_id() -> KaigiId {
     KaigiId::new(
         sample_domain_id(),
         "daily-standup".parse::<Name>().expect("call name"),
     )
 }
-
 fn checked_random_account_id() -> AccountId {
     AccountId::new(
         KeyPair::try_random()
@@ -29,7 +25,6 @@ fn checked_random_account_id() -> AccountId {
             .clone(),
     )
 }
-
 #[test]
 fn roster_summary_roundtrips_via_norito() {
     let summary = DomainEvent::KaigiRosterSummary(KaigiRosterSummary::new(
@@ -40,12 +35,10 @@ fn roster_summary_roundtrips_via_norito() {
         2,
         Some(Hash::prehashed([0x55; 32])),
     ));
-
     let bytes = summary.encode();
     let decoded = DomainEvent::decode(&mut bytes.as_slice()).expect("decode roster summary");
     assert_eq!(summary, decoded);
 }
-
 #[test]
 fn relay_manifest_summary_roundtrips_via_norito() {
     let summary = DomainEvent::KaigiRelayManifestUpdated(KaigiRelayManifestSummary::new(
@@ -53,36 +46,30 @@ fn relay_manifest_summary_roundtrips_via_norito() {
         5,
         123_456,
     ));
-
     let bytes = summary.encode();
     let decoded =
         DomainEvent::decode(&mut bytes.as_slice()).expect("decode relay manifest summary");
     assert_eq!(summary, decoded);
 }
-
 #[test]
 fn usage_summary_roundtrips_via_norito() {
     let summary =
         DomainEvent::KaigiUsageSummary(KaigiUsageSummary::new(sample_call_id(), 42_000, 1234, 7));
-
     let bytes = summary.encode();
     let decoded = DomainEvent::decode(&mut bytes.as_slice()).expect("decode usage summary");
     assert_eq!(summary, decoded);
 }
-
 #[test]
 fn participant_commitment_roundtrip_preserves_payload() {
     let commitment = KaigiParticipantCommitment {
         commitment: Hash::prehashed([0xAA; 32]),
         alias_tag: Some("speaker".to_owned()),
     };
-
     let bytes = commitment.encode();
     let decoded =
         KaigiParticipantCommitment::decode(&mut bytes.as_slice()).expect("decode commitment");
     assert_eq!(commitment, decoded);
 }
-
 #[test]
 fn relay_registration_summary_roundtrips_via_norito() {
     let domain_id = sample_domain_id();
@@ -93,7 +80,6 @@ fn relay_registration_summary_roundtrips_via_norito() {
         9,
         Hash::prehashed([0xAB; 32]),
     ));
-
     let bytes = summary.encode();
     let decoded =
         DomainEvent::decode(&mut bytes.as_slice()).expect("decode relay registration summary");
@@ -105,7 +91,6 @@ fn relay_registration_summary_roundtrips_via_norito() {
         panic!("unexpected domain event variant");
     }
 }
-
 #[test]
 fn relay_health_summary_roundtrips_via_norito() {
     let call = sample_call_id();
@@ -116,7 +101,6 @@ fn relay_health_summary_roundtrips_via_norito() {
         KaigiRelayHealthStatus::Unavailable,
         123_456,
     ));
-
     let bytes = summary.encode();
     let decoded = DomainEvent::decode(&mut bytes.as_slice()).expect("decode relay health summary");
     assert_eq!(summary, decoded);

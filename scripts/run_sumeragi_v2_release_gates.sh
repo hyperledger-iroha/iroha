@@ -162,7 +162,7 @@ export GIT_CONFIG_VALUE_1=false
 readonly release_runner_support_components=(
   scripts/run_sumeragi_v2_release_gates_support.sh
 )
-readonly release_runner_support_sha256="04e0a5a9286502595dbad64ae27d2c79d2e7e694b45f6de895fe182868dd590a"
+readonly release_runner_support_sha256="1c112ff344866044a830811900e77a8f0efc30f0b6b4a688997f2eb07959563d"
 if ((${#release_runner_support_components[@]} != 1)); then
   echo "release runner support manifest is invalid" >&2
   exit 1
@@ -1624,6 +1624,7 @@ PY
     else
       release_invocation_retained=1
       echo "aggregate release receipt: ${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
+      echo "Sumeragi v2 production release gates passed, including exact 525/525 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
     fi
   fi
   exit "$sealed_status"

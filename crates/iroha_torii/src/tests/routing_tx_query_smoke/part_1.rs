@@ -1,5 +1,4 @@
 use std::{borrow::Cow, sync::Arc};
-
 use axum::http::StatusCode;
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -14,12 +13,9 @@ use iroha_core::{
 use iroha_crypto::Algorithm;
 use iroha_data_model::prelude as dm;
 use iroha_primitives::const_vec::ConstVec;
-
 use super::*;
 // use tower::ServiceExt; // not needed in this module
-
 const TEST_ACCOUNT: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
-
 fn checked_smoke_keypair(
     seed: u8,
     algorithm: iroha_crypto::Algorithm,
@@ -27,13 +23,11 @@ fn checked_smoke_keypair(
 ) -> KeyPair {
     checked_routing_fixture_keypair(seed, algorithm, context)
 }
-
 fn checked_smoke_account(seed: u8, context: &'static str) -> (dm::AccountId, KeyPair) {
     let kp = checked_smoke_keypair(seed, iroha_crypto::Algorithm::Ed25519, context);
     let account = dm::AccountId::new(kp.public_key().clone());
     (account, kp)
 }
-
 fn checked_smoke_account_id(seed: u8, context: &'static str) -> AccountId {
     AccountId::new(
         checked_smoke_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
@@ -41,17 +35,14 @@ fn checked_smoke_account_id(seed: u8, context: &'static str) -> AccountId {
             .clone(),
     )
 }
-
 fn account_with_key() -> (dm::AccountId, KeyPair) {
     checked_smoke_account(0x40, "derive transaction query smoke fixture account key")
 }
-
 #[must_use]
 struct DebugEnvGuard {
     prev_torii_debug_match: bool,
     prev_iroha_debug_tx_eval: bool,
 }
-
 impl DebugEnvGuard {
     fn enable() -> Self {
         let prev_torii_debug_match = super::debug_toggle_override::set_torii_override(true);
@@ -62,26 +53,21 @@ impl DebugEnvGuard {
         }
     }
 }
-
 impl Drop for DebugEnvGuard {
     fn drop(&mut self) {
         super::debug_toggle_override::set_torii_override(self.prev_torii_debug_match);
         super::debug_toggle_override::set_iroha_override(self.prev_iroha_debug_tx_eval);
     }
 }
-
 fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
     crate::json_object(pairs)
 }
-
 fn arr(values: Vec<Value>) -> Value {
     crate::json_array(values)
 }
-
 fn val<T: json::JsonSerialize + ?Sized>(value: &T) -> Value {
     crate::json_value(value)
 }
-
 fn decode_latin1_utf8(input: &str) -> Option<String> {
     let mut bytes = Vec::with_capacity(input.len());
     for ch in input.chars() {
@@ -93,18 +79,15 @@ fn decode_latin1_utf8(input: &str) -> Option<String> {
     }
     String::from_utf8(bytes).ok()
 }
-
 fn log_instruction() -> dm::InstructionBox {
     dm::Log::new(dm::Level::INFO, "test".to_string()).into()
 }
-
 #[tokio::test]
 async fn handle_v1_account_transactions_returns_empty_on_blank_state() {
     // Minimal in-memory state: no blocks yet
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = iroha_core::state::State::new_for_testing(World::default(), kura, query);
-
     // Request with a simple filter (authority == alice) and default pagination
     let env = crate::filter::QueryEnvelope {
         query: None,
@@ -124,7 +107,6 @@ async fn handle_v1_account_transactions_returns_empty_on_blank_state() {
         fetch_size: None,
         count_mode: Some("exact".to_owned()),
     };
-
     let resp = handle_v1_account_transactions(
         Arc::new(state),
         axum::extract::Path("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".into()),
@@ -134,7 +116,6 @@ async fn handle_v1_account_transactions_returns_empty_on_blank_state() {
     .await
     .expect("handler ok")
     .into_response();
-
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let s = String::from_utf8(body.to_vec()).unwrap();
@@ -159,13 +140,11 @@ async fn handle_v1_account_transactions_returns_empty_on_blank_state() {
     assert_eq!(items_len, 0);
     assert_eq!(total, 0);
 }
-
 #[tokio::test]
 async fn handle_v1_transactions_query_returns_empty_on_blank_state() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = iroha_core::state::State::new_for_testing(World::default(), kura, query);
-
     let env = crate::filter::QueryEnvelope {
         query: None,
         filter: None,
@@ -182,7 +161,6 @@ async fn handle_v1_transactions_query_returns_empty_on_blank_state() {
         fetch_size: None,
         count_mode: Some("exact".to_owned()),
     };
-
     let resp = handle_v1_transactions_query(
         Arc::new(state),
         crate::utils::extractors::NoritoJson(env),
@@ -191,14 +169,12 @@ async fn handle_v1_transactions_query_returns_empty_on_blank_state() {
     .await
     .expect("handler ok")
     .into_response();
-
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
     assert_eq!(v["items"].as_array().unwrap().len(), 0);
     assert_eq!(v["total"].as_u64(), Some(0));
 }
-
 #[tokio::test]
 async fn transactions_query_aggregate_uses_sparse_index_for_an_exact_miss() {
     let kura = Kura::blank_kura_for_testing();
@@ -232,7 +208,6 @@ async fn transactions_query_aggregate_uses_sparse_index_for_an_exact_miss() {
         fetch_size: None,
         count_mode: Some("exact".to_owned()),
     };
-
     let response = handle_v1_transactions_query(
         Arc::new(state),
         crate::utils::extractors::NoritoJson(env),
@@ -241,7 +216,6 @@ async fn transactions_query_aggregate_uses_sparse_index_for_an_exact_miss() {
     .await
     .expect("aggregate sparse miss")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let value: norito::json::Value = norito::json::from_slice(&body).unwrap();
@@ -253,7 +227,6 @@ async fn transactions_query_aggregate_uses_sparse_index_for_an_exact_miss() {
     assert!(value["indexed_block_hash"].is_null());
     assert_eq!(value["query_source"].as_str(), Some("live"));
 }
-
 #[tokio::test]
 async fn handle_v1_transactions_visible_query_returns_empty_on_blank_state() {
     let kura = Kura::blank_kura_for_testing();
@@ -276,7 +249,6 @@ async fn handle_v1_transactions_visible_query_returns_empty_on_blank_state() {
         fetch_size: None,
         count_mode: Some("exact".to_owned()),
     };
-
     let resp = handle_v1_transactions_visible_query_with_policy(
         Arc::new(state),
         crate::utils::extractors::NoritoJson(env),
@@ -292,14 +264,12 @@ async fn handle_v1_transactions_visible_query_returns_empty_on_blank_state() {
     .await
     .expect("handler ok")
     .into_response();
-
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
     assert_eq!(v["items"].as_array().unwrap().len(), 0);
     assert_eq!(v["total"].as_u64(), Some(0));
 }
-
 #[tokio::test]
 async fn account_transactions_query_rejects_limit_above_cap() {
     let kura = Kura::blank_kura_for_testing();
@@ -319,7 +289,6 @@ async fn account_transactions_query_rejects_limit_above_cap() {
         fetch_size: None,
         count_mode: None,
     };
-
     let err = handle_v1_account_transactions(
         Arc::new(state),
         axum::extract::Path(TEST_ACCOUNT.to_string()),
@@ -327,14 +296,12 @@ async fn account_transactions_query_rejects_limit_above_cap() {
         crate::routing::MaybeTelemetry::for_tests(),
     )
     .await;
-
     match err {
         Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
         Err(other) => panic!("unexpected error: {other:?}"),
         Ok(_) => panic!("expected error for limit above cap"),
     }
 }
-
 #[tokio::test]
 async fn account_transactions_query_rejects_invalid_field_path() {
     let kura = Kura::blank_kura_for_testing();
@@ -356,7 +323,6 @@ async fn account_transactions_query_rejects_invalid_field_path() {
         fetch_size: None,
         count_mode: None,
     };
-
     let err = handle_v1_account_transactions(
         Arc::new(state),
         axum::extract::Path(TEST_ACCOUNT.to_string()),
@@ -364,14 +330,12 @@ async fn account_transactions_query_rejects_invalid_field_path() {
         crate::routing::MaybeTelemetry::for_tests(),
     )
     .await;
-
     match err {
         Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_field_path"),
         Err(other) => panic!("unexpected error: {other:?}"),
         Ok(_) => panic!("expected error for invalid field"),
     }
 }
-
 #[tokio::test]
 async fn account_transactions_get_rejects_limit_above_cap() {
     let kura = Kura::blank_kura_for_testing();
@@ -384,7 +348,6 @@ async fn account_transactions_get_rejects_limit_above_cap() {
         asset_id: None,
         count_mode: None,
     };
-
     let err = handle_v1_account_transactions_get(
         Arc::new(state),
         axum::extract::Path(TEST_ACCOUNT.to_string()),
@@ -392,18 +355,15 @@ async fn account_transactions_get_rejects_limit_above_cap() {
         crate::routing::MaybeTelemetry::for_tests(),
     )
     .await;
-
     match err {
         Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
         Err(other) => panic!("unexpected error: {other:?}"),
         Ok(_) => panic!("expected error for limit above cap"),
     }
 }
-
 #[tokio::test]
 async fn account_transactions_get_filters_by_asset_id() {
     use iroha_crypto::Algorithm;
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(
@@ -411,7 +371,6 @@ async fn account_transactions_get_filters_by_asset_id() {
         kura.clone(),
         query,
     ));
-
     // Prepare world: domain + account
     let leader0 = checked_smoke_keypair(
         0x42,
@@ -451,13 +410,11 @@ async fn account_transactions_get_filters_by_asset_id() {
         .unpack(|_| {});
     let committed0 = valid0.commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
-
     let network_id = *state.network_id_ref();
     let asset_def: dm::AssetDefinitionId =
         test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
     let asset_id = dm::AssetId::new(asset_def, actor_id.clone().into());
     let mint = dm::Mint::asset_quantity(1_u32, asset_id.clone());
-
     let mut bldr_asset = dm::TransactionBuilder::new(
         network_id,
         actor_id.clone().into(),
@@ -469,7 +426,6 @@ async fn account_transactions_get_filters_by_asset_id() {
         .sign(kp_actor.private_key());
     let entry_hash_asset = format!("{}", signed_asset.hash_as_entrypoint());
     let tx_asset = AcceptedTransaction::new_unchecked(Cow::Owned(signed_asset));
-
     let mut bldr_log = dm::TransactionBuilder::new(
         network_id,
         actor_id.clone().into(),
@@ -480,7 +436,6 @@ async fn account_transactions_get_filters_by_asset_id() {
         .with_instructions::<dm::InstructionBox>([log_instruction()])
         .sign(kp_actor.private_key());
     let tx_log = AcceptedTransaction::new_unchecked(Cow::Owned(signed_log));
-
     let leader = checked_smoke_keypair(
         0x45,
         Algorithm::BlsNormal,
@@ -497,7 +452,6 @@ async fn account_transactions_get_filters_by_asset_id() {
         .unpack(|_| {});
     let committed = valid.clone().commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block, committed);
-
     let params = AccountTransactionsGetParams {
         limit: Some(10),
         offset: 0,
@@ -518,7 +472,6 @@ async fn account_transactions_get_filters_by_asset_id() {
     .await
     .expect("handler ok")
     .into_response();
-
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let parsed: norito::json::Value = norito::json::from_slice(&body).unwrap();
@@ -530,11 +483,9 @@ async fn account_transactions_get_filters_by_asset_id() {
         Some(entry_hash_asset.as_str())
     );
 }
-
 #[tokio::test]
 async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
     use iroha_crypto::Algorithm;
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(
@@ -542,7 +493,6 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
         kura.clone(),
         query,
     ));
-
     let leader0 = checked_smoke_keypair(
         0x46,
         Algorithm::BlsNormal,
@@ -555,7 +505,6 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
         .unpack(|_| {});
     let mut st_block0 = state.block(unverified0.header());
     let mut stx0 = st_block0.transaction();
-
     let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let kp_exec = checked_smoke_keypair(
         0x47,
@@ -577,7 +526,6 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
     let bob_id = dm::AccountId::new(kp_bob.public_key().clone());
     let def_id: dm::AssetDefinitionId =
         test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
-
     dm::Register::domain(dm::Domain::new(domain_id.clone()))
         .execute(exec_id.account(), &mut stx0)
         .ok();
@@ -607,7 +555,6 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
     )
     .execute(exec_id.account(), &mut stx0)
     .ok();
-
     stx0.apply();
     let valid0 = unverified0
         .clone()
@@ -615,7 +562,6 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
         .unpack(|_| {});
     let committed0 = valid0.commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
-
     let network_id = *state.network_id_ref();
     let source_asset_id = dm::AssetId::new(def_id.clone(), alice_id.account().clone());
     let recipient_asset_id = dm::AssetId::new(def_id.clone(), bob_id.account().clone());
@@ -636,7 +582,6 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
         .sign(kp_alice.private_key());
     let entry_hash = format!("{}", signed_transfer.hash_as_entrypoint());
     let transfer_tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed_transfer));
-
     let leader = checked_smoke_keypair(
         0x4A,
         Algorithm::BlsNormal,
@@ -653,7 +598,6 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
         .unpack(|_| {});
     let committed = valid.commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block, committed);
-
     let bob_literal = bob_id
         .account()
         .to_account_address()
@@ -673,7 +617,6 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
     .await
     .expect("handler ok")
     .into_response();
-
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let parsed: norito::json::Value = norito::json::from_slice(&body).unwrap();
@@ -684,7 +627,6 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
         items[0]["entrypoint_hash"].as_str(),
         Some(entry_hash.as_str())
     );
-
     let resp = handle_v1_account_transactions_get(
         state.clone(),
         axum::extract::Path(bob_literal.clone()),
@@ -699,7 +641,6 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
     .await
     .expect("recipient bucket handler ok")
     .into_response();
-
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let parsed: norito::json::Value = norito::json::from_slice(&body).unwrap();
@@ -710,7 +651,6 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
         items[0]["entrypoint_hash"].as_str(),
         Some(entry_hash.as_str())
     );
-
     let resp = handle_v1_account_transactions_get(
         state.clone(),
         axum::extract::Path(bob_literal),
@@ -725,14 +665,12 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
     .await
     .expect("unrelated bucket handler ok")
     .into_response();
-
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let parsed: norito::json::Value = norito::json::from_slice(&body).unwrap();
     let items = parsed["items"].as_array().unwrap();
     assert_eq!(parsed["total"].as_u64(), Some(0));
     assert!(items.is_empty());
-
     let resp = handle_v1_transactions_history_get(
         state,
         crate::NoritoQuery(AccountTransactionsGetParams {
@@ -753,7 +691,6 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
     .await
     .expect("history handler ok")
     .into_response();
-
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let parsed: norito::json::Value = norito::json::from_slice(&body).unwrap();
@@ -765,11 +702,9 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
         Some(entry_hash.as_str())
     );
 }
-
 #[tokio::test]
 async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
     use iroha_crypto::Algorithm;
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(
@@ -777,7 +712,6 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
         kura.clone(),
         query,
     ));
-
     let leader0 = checked_smoke_keypair(
         0x4B,
         Algorithm::BlsNormal,
@@ -795,7 +729,6 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
         .unpack(|_| {});
     let committed0 = valid0.commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
-
     let (authority, keypair) = account_with_key();
     let network_id = *state.network_id_ref();
     let mut metadata = dm::Metadata::default();
@@ -832,7 +765,6 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
         )],
         std::num::NonZeroU64::new(100_000),
     );
-
     let mut tx_builder = dm::TransactionBuilder::new(network_id, authority.clone(), fee_payment);
     tx_builder.set_creation_time(core::time::Duration::from_millis(1_710_000_000_000));
     let signed = tx_builder
@@ -844,7 +776,6 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
         .sign(keypair.private_key());
     let entry_hash = format!("{}", signed.hash_as_entrypoint());
     let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
-
     let leader = checked_smoke_keypair(
         0x4C,
         Algorithm::BlsNormal,
@@ -861,7 +792,6 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
         .unpack(|_| {});
     let committed = valid.commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block, committed);
-
     let resp = handle_v1_contracts_activity_get(
         state,
         crate::NoritoQuery(ContractActivityGetParams {
@@ -878,7 +808,6 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
     .await
     .expect("handler ok")
     .into_response();
-
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let parsed: norito::json::Value = norito::json::from_slice(&body).unwrap();
@@ -906,7 +835,6 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
         gas_asset_id.to_string()
     );
 }
-
 #[tokio::test]
 async fn handle_v1_account_transactions_returns_and_sorts() {
     let kura = Kura::blank_kura_for_testing();
@@ -916,7 +844,6 @@ async fn handle_v1_account_transactions_returns_and_sorts() {
         kura.clone(),
         query,
     ));
-
     // Prepare world: domain + two accounts
     // Apply domain + accounts in a state transaction, then insert an empty
     // transactions block before committing to satisfy state invariants.
@@ -961,7 +888,6 @@ async fn handle_v1_account_transactions_returns_and_sorts() {
         .unpack(|_| {});
     let committed0 = valid0.commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
-
     // Build three transactions for the same authority (two share timestamp for tie-breaking)
     let network_id = *state.network_id_ref();
     let (_max_clock_drift, _tx_limits) = {
@@ -996,7 +922,6 @@ async fn handle_v1_account_transactions_returns_and_sorts() {
         .sign(kp_a.private_key());
     let _entry_b_str = format!("{}", signed_b.hash_as_entrypoint());
     let tx_b = AcceptedTransaction::new_unchecked(Cow::Owned(signed_b));
-
     // tx_c: authority acc_a at t=2000ms (different entrypoint hash)
     let mut bldr_c = dm::TransactionBuilder::new(
         network_id,
@@ -1013,7 +938,6 @@ async fn handle_v1_account_transactions_returns_and_sorts() {
         .sign(kp_a.private_key());
     let _entry_c_str = format!("{}", signed_c.hash_as_entrypoint());
     let tx_c = AcceptedTransaction::new_unchecked(Cow::Owned(signed_c));
-
     // Build one block containing both transactions and commit
     let leader = checked_smoke_keypair(
         0x50,
@@ -1032,7 +956,6 @@ async fn handle_v1_account_transactions_returns_and_sorts() {
     // Persist by committing to topology (produces CommittedBlock) and applying state bookkeeping
     let committed = valid.clone().commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block1, committed);
-
     // Now query via handler with sorting by timestamp_ms ascending, tie-break by entrypoint_hash asc
     let timestamp_filter = crate::filter::FilterExpr::Gte(
         crate::filter::FieldPath("timestamp_ms".into()),
@@ -1079,7 +1002,6 @@ async fn handle_v1_account_transactions_returns_and_sorts() {
     // First item should be the earlier timestamp (1000)
     assert_eq!(items[0]["timestamp_ms"].as_u64(), Some(1000));
     // Second page first element (offset=1) should be the lexicographically smaller of the two 2000ms entrypoint hashes
-
     // Pagination: fetch only the second item
     let env2 = crate::filter::QueryEnvelope {
         query: None,
@@ -1125,11 +1047,9 @@ async fn handle_v1_account_transactions_returns_and_sorts() {
         items[1]["entrypoint_hash"].as_str()
     );
 }
-
 #[tokio::test]
 async fn handle_v1_account_transactions_caps_total_with_fetch_size() {
     use iroha_crypto::Algorithm;
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(
@@ -1137,7 +1057,6 @@ async fn handle_v1_account_transactions_caps_total_with_fetch_size() {
         kura.clone(),
         query,
     ));
-
     // Register domain + operator + target account
     let leader0 = checked_smoke_keypair(
         0x51,
@@ -1176,7 +1095,6 @@ async fn handle_v1_account_transactions_caps_total_with_fetch_size() {
         .unpack(|_| {});
     let committed0 = valid0.commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
-
     // Create five transactions for the same authority
     let network_id = *state.network_id_ref();
     let mut accepted = Vec::new();
@@ -1208,7 +1126,6 @@ async fn handle_v1_account_transactions_caps_total_with_fetch_size() {
         .unpack(|_| {});
     let committed = valid.clone().commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block, committed);
-
     // Query with fetch_size smaller than total to ensure streaming totals kick in.
     let authority_literal = actor_id.account().to_string();
     let env = crate::filter::QueryEnvelope {
@@ -1242,7 +1159,6 @@ async fn handle_v1_account_transactions_caps_total_with_fetch_size() {
     assert_eq!(doc["items"].as_array().unwrap().len(), 2);
     assert_eq!(doc["total"].as_u64(), Some(4));
 }
-
 #[tokio::test]
 async fn multi_sort_and_mixed_eq_ne_filter() {
     // Enable detailed filter debug for this test only
@@ -1256,7 +1172,6 @@ async fn multi_sort_and_mixed_eq_ne_filter() {
         kura.clone(),
         query,
     ));
-
     // Ensure domain and accounts exist before committing txs
     let kp_a = checked_smoke_keypair(
         0x55,
@@ -1304,14 +1219,12 @@ async fn multi_sort_and_mixed_eq_ne_filter() {
         .unpack(|_| {});
     let committed0 = valid0.commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
-
     let network_id = *state.network_id_ref();
     let (_max_clock_drift, _tx_limits) = {
         let v = state.view();
         let p = v.world().parameters();
         (p.sumeragi().max_clock_drift(), p.transaction())
     };
-
     // tx1: t=1000, result_ok=true, capture entrypoint hash string
     let mut b1 = dm::TransactionBuilder::new(
         network_id,
@@ -1335,7 +1248,6 @@ async fn multi_sort_and_mixed_eq_ne_filter() {
         .with_instructions::<dm::InstructionBox>([log_instruction()])
         .sign(kp_b.private_key());
     let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed2));
-
     // Commit the block with both transactions
     let leader = checked_smoke_keypair(
         0x59,
@@ -1353,7 +1265,6 @@ async fn multi_sort_and_mixed_eq_ne_filter() {
         .unpack(|_| {});
     let committed = valid.clone().commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block, committed);
-
     // Filter: result_ok == true AND entrypoint_hash != entry_hash1_str AND timestamp_ms >= 1500
     // Sort: result_ok desc, timestamp_ms asc, entrypoint_hash asc
     let expr = crate::filter::FilterExpr::And(vec![
@@ -1416,17 +1327,14 @@ async fn multi_sort_and_mixed_eq_ne_filter() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["timestamp_ms"].as_u64(), Some(2000));
 }
-
 #[tokio::test]
 async fn handle_v1_account_transactions_emits_requested_format() {
     use std::borrow::Cow;
-
     use iroha_core::{
         block::{BlockBuilder, ValidBlock},
         tx::AcceptedTransaction,
     };
     use iroha_data_model::prelude as dm;
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(iroha_core::state::State::new_for_testing(
@@ -1434,7 +1342,6 @@ async fn handle_v1_account_transactions_emits_requested_format() {
         kura.clone(),
         query,
     ));
-
     let network_id = *state.network_id_ref();
     let kp = checked_smoke_keypair(
         0x5A,
@@ -1452,7 +1359,6 @@ async fn handle_v1_account_transactions_emits_requested_format() {
         .with_instructions::<dm::InstructionBox>([log_instruction()])
         .sign(kp.private_key());
     let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
-
     let leader = checked_smoke_keypair(
         0x5B,
         iroha_crypto::Algorithm::BlsNormal,
@@ -1468,12 +1374,10 @@ async fn handle_v1_account_transactions_emits_requested_format() {
         .unpack(|_| {});
     let committed = valid.clone().commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block, committed);
-
     let i105_literal = account
         .to_account_address()
         .and_then(|address| address.to_i105())
         .expect("account i105 literal");
-
     let env = crate::filter::QueryEnvelope {
         query: None,
         filter: None,
@@ -1505,7 +1409,6 @@ async fn handle_v1_account_transactions_emits_requested_format() {
     let normalized = decode_latin1_utf8(raw).unwrap_or_else(|| raw.to_string());
     assert_eq!(normalized, i105_literal);
 }
-
 #[tokio::test]
 async fn authority_and_timestamp_bounds_filter_local_and_handler() {
     use iroha_data_model::prelude as dm;
@@ -1516,7 +1419,6 @@ async fn authority_and_timestamp_bounds_filter_local_and_handler() {
         kura.clone(),
         query,
     ));
-
     let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x5C,
@@ -1534,13 +1436,11 @@ async fn authority_and_timestamp_bounds_filter_local_and_handler() {
         .to_account_address()
         .and_then(|address| address.to_i105())
         .expect("account i105 literal");
-
     let (_max_clock_drift, _tx_limits) = {
         let v = state.view();
         let p = v.world().parameters();
         (p.sumeragi().max_clock_drift(), p.transaction())
     };
-
     // tx for A at 1000, tx for B at 2000
     let mut b1 = dm::TransactionBuilder::new(
         network_id,
@@ -1553,7 +1453,6 @@ async fn authority_and_timestamp_bounds_filter_local_and_handler() {
         .sign(kp_a.private_key());
     let _entry_hash_a = format!("{}", signed_a.hash_as_entrypoint());
     let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_a));
-
     let mut b2 = dm::TransactionBuilder::new(
         network_id,
         acc_b.clone(),
@@ -1564,7 +1463,6 @@ async fn authority_and_timestamp_bounds_filter_local_and_handler() {
         .with_instructions::<dm::InstructionBox>([log_instruction()])
         .sign(kp_b.private_key());
     let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed2.clone()));
-
     // Commit block
     let leader = checked_smoke_keypair(
         0x5E,
@@ -1582,7 +1480,6 @@ async fn authority_and_timestamp_bounds_filter_local_and_handler() {
         .unpack(|_| {});
     let committed = valid.clone().commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block, committed);
-
     // Build filter: authority == acc_b AND 1500 <= timestamp_ms <= 2500
     let expr = crate::filter::FilterExpr::And(vec![
         crate::filter::FilterExpr::Eq(
@@ -1598,11 +1495,9 @@ async fn authority_and_timestamp_bounds_filter_local_and_handler() {
             norito::json::Value::from(2500u64),
         ),
     ]);
-
     // Local path: synthesize a CommittedTransaction-like struct and check filter_tx
     // Reuse the unit-test helper approach minimally by reconstructing a tx projection check via tx_field_value
     // We directly assert the handler path instead (primary), since local path is covered by unit tests.
-
     // Handler path
     let env = crate::filter::QueryEnvelope {
         query: None,
@@ -1636,7 +1531,6 @@ async fn authority_and_timestamp_bounds_filter_local_and_handler() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["timestamp_ms"].as_u64(), Some(2000));
 }
-
 #[tokio::test]
 async fn or_union_matches_both_authority_or_timestamp() {
     use iroha_data_model::prelude as dm;
@@ -1647,7 +1541,6 @@ async fn or_union_matches_both_authority_or_timestamp() {
         kura.clone(),
         query,
     ));
-
     // Build two transactions: A at 1500ms, A at 900ms
     let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
@@ -1665,7 +1558,6 @@ async fn or_union_matches_both_authority_or_timestamp() {
         let p = v.world().parameters();
         (p.sumeragi().max_clock_drift(), p.transaction())
     };
-
     let mut b1 = dm::TransactionBuilder::new(
         network_id,
         acc_a.clone(),
@@ -1676,7 +1568,6 @@ async fn or_union_matches_both_authority_or_timestamp() {
         .with_instructions::<dm::InstructionBox>([log_instruction()])
         .sign(kp_a.private_key());
     let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
-
     let mut b2 = dm::TransactionBuilder::new(
         network_id,
         acc_a.clone(),
@@ -1687,7 +1578,6 @@ async fn or_union_matches_both_authority_or_timestamp() {
         .with_instructions::<dm::InstructionBox>([log_instruction()])
         .sign(kp_a.private_key());
     let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
-
     // Commit block
     let leader = checked_smoke_keypair(
         0x60,
@@ -1705,7 +1595,6 @@ async fn or_union_matches_both_authority_or_timestamp() {
         .unpack(|_| {});
     let committed = valid.clone().commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block, committed);
-
     // Filter: authority == acc_a_str OR timestamp_ms < 1000
     let expr = crate::filter::FilterExpr::Or(vec![
         crate::filter::FilterExpr::Eq(
@@ -1756,7 +1645,6 @@ async fn or_union_matches_both_authority_or_timestamp() {
     stamps.sort_unstable();
     assert_eq!(stamps, vec![900, 1500]);
 }
-
 // The production app path always uses the typed server-side predicate and
 // then applies the authoritative endpoint filter to returned candidates.
 #[tokio::test]
@@ -1769,7 +1657,6 @@ async fn typed_tx_predicate_matches_all_filter() {
         kura.clone(),
         query,
     ));
-
     let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x61,
@@ -1778,7 +1665,6 @@ async fn typed_tx_predicate_matches_all_filter() {
     );
     let _dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let acc_a = dm::AccountId::new(kp_a.public_key().clone());
-
     let (_max_clock_drift, _tx_limits) = {
         let v = state.view();
         let p = v.world().parameters();
@@ -1805,7 +1691,6 @@ async fn typed_tx_predicate_matches_all_filter() {
         .with_instructions::<dm::InstructionBox>([log_instruction()])
         .sign(kp_a.private_key());
     let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
-
     let leader = checked_smoke_keypair(
         0x62,
         iroha_crypto::Algorithm::BlsNormal,
@@ -1822,7 +1707,6 @@ async fn typed_tx_predicate_matches_all_filter() {
         .unpack(|_| {});
     let committed = valid.clone().commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block, committed);
-
     // Filter that should match all: Exists(authority) OR Lt(timestamp_ms, very large)
     let expr = crate::filter::FilterExpr::Or(vec![
         crate::filter::FilterExpr::Exists(crate::filter::FieldPath("authority".into())),
@@ -1869,7 +1753,6 @@ async fn typed_tx_predicate_matches_all_filter() {
     // Both transactions should be present under predicate-based filtering as well
     assert_eq!(items.len(), 2);
 }
-
 #[tokio::test]
 async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
     use iroha_data_model::prelude as dm;
@@ -1880,7 +1763,6 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
         kura.clone(),
         query,
     ));
-
     let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x63,
@@ -1903,7 +1785,6 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
     let acc_c = dm::AccountId::new(kp_c.public_key().clone());
     let acc_a_str = acc_a.account().to_string();
     let acc_b_str = acc_b.account().to_string();
-
     let (_max_clock_drift, _tx_limits) = {
         let v = state.view();
         let p = v.world().parameters();
@@ -1920,7 +1801,6 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
         .with_instructions::<dm::InstructionBox>([log_instruction()])
         .sign(kp_a.private_key());
     let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
-
     let mut b2 = dm::TransactionBuilder::new(
         network_id,
         acc_b.clone(),
@@ -1931,7 +1811,6 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
         .with_instructions::<dm::InstructionBox>([log_instruction()])
         .sign(kp_b.private_key());
     let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
-
     let mut b3 = dm::TransactionBuilder::new(
         network_id,
         acc_c.clone(),
@@ -1945,7 +1824,6 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
         .into()])
         .sign(kp_c.private_key());
     let tx3 = AcceptedTransaction::new_unchecked(Cow::Owned(signed3));
-
     let mut b4 = dm::TransactionBuilder::new(
         network_id,
         acc_b.clone(),
@@ -1959,7 +1837,6 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
         .into()])
         .sign(kp_b.private_key());
     let tx4 = AcceptedTransaction::new_unchecked(Cow::Owned(signed4));
-
     // Commit block
     let leader = checked_smoke_keypair(
         0x66,
@@ -1977,7 +1854,6 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
         .unpack(|_| {});
     let committed = valid.clone().commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block, committed);
-
     // Large, duplicate-free IN set below the deterministic membership cap.
     let mut big_set = vec![
         norito::json::Value::String(acc_a_str.clone()),
@@ -1999,7 +1875,6 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
         }
     }
     assert_eq!(big_set.len(), 250);
-
     // Deep boolean: NOT(NOT(IN(authority, big_set))) AND (timestamp_ms >= 1500 OR result_ok == false)
     let expr = crate::filter::FilterExpr::And(vec![
         crate::filter::FilterExpr::Not(Box::new(crate::filter::FilterExpr::Not(Box::new(
@@ -2016,7 +1891,6 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
             ),
         ]),
     ]);
-
     let env = crate::filter::QueryEnvelope {
         query: None,
         filter: Some(expr),
@@ -2054,13 +1928,11 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
         .collect();
     assert_eq!(ts, vec![2000, 2500]);
 }
-
 // Typed server predicates mirror the authoritative endpoint semantics for
 // authority and entrypoint-hash equality and membership operators.
 #[tokio::test]
 async fn typed_tx_predicate_handles_authority_equality_sets() {
     use iroha_data_model::prelude as dm;
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(iroha_core::state::State::new_for_testing(
@@ -2068,7 +1940,6 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
         kura.clone(),
         query,
     ));
-
     let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x67,
@@ -2092,13 +1963,11 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
     let acc_a_str = acc_a.account().to_string();
     let acc_b_str = acc_b.account().to_string();
     let acc_c_str = acc_c.account().to_string();
-
     let (_max_clock_drift, _tx_limits) = {
         let v = state.view();
         let p = v.world().parameters();
         (p.sumeragi().max_clock_drift(), p.transaction())
     };
-
     // Three external transactions with the same authority
     let mut b1 = dm::TransactionBuilder::new(
         network_id,
@@ -2110,7 +1979,6 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
         .with_instructions::<dm::InstructionBox>([log_instruction()])
         .sign(kp_a.private_key());
     let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
-
     let mut b2 = dm::TransactionBuilder::new(
         network_id,
         acc_a.clone(),
@@ -2121,7 +1989,6 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
         .with_instructions::<dm::InstructionBox>([log_instruction()])
         .sign(kp_a.private_key());
     let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
-
     let mut b3 = dm::TransactionBuilder::new(
         network_id,
         acc_a.clone(),
@@ -2132,7 +1999,6 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
         .with_instructions::<dm::InstructionBox>([log_instruction()])
         .sign(kp_a.private_key());
     let tx3 = AcceptedTransaction::new_unchecked(Cow::Owned(tx3));
-
     // Commit block with all three
     let leader = checked_smoke_keypair(
         0x6A,
@@ -2150,7 +2016,6 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
         .unpack(|_| {});
     let committed = valid.clone().commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block, committed);
-
     // 1) Eq(authority == A) => all
     let env_eq = crate::filter::QueryEnvelope {
         query: None,
@@ -2181,7 +2046,6 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
     let v_eq: norito::json::Value =
         norito::json::from_slice(&resp_eq.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(v_eq["items"].as_array().unwrap().len(), 3);
-
     // 2) Ne(authority != B) => all
     let env_ne = crate::filter::QueryEnvelope {
         query: None,
@@ -2212,7 +2076,6 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
     let v_ne: norito::json::Value =
         norito::json::from_slice(&resp_ne.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(v_ne["items"].as_array().unwrap().len(), 3);
-
     // 3) In(authority IN {A,C}) => all
     let env_in = crate::filter::QueryEnvelope {
         query: None,
@@ -2246,7 +2109,6 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
     let v_in: norito::json::Value =
         norito::json::from_slice(&resp_in.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(v_in["items"].as_array().unwrap().len(), 3);
-
     // 4) Nin(authority NIN {A}) => 0
     let env_nin = crate::filter::QueryEnvelope {
         query: None,
@@ -2279,11 +2141,9 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
             .unwrap();
     assert_eq!(v_nin["items"].as_array().unwrap().len(), 0);
 }
-
 #[tokio::test]
 async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
     use iroha_data_model::prelude as dm;
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(iroha_core::state::State::new_for_testing(
@@ -2291,7 +2151,6 @@ async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
         kura.clone(),
         query,
     ));
-
     let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x6B,
@@ -2301,13 +2160,11 @@ async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
     let _dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let acc_a = dm::AccountId::new(kp_a.public_key().clone());
     let account_literal = acc_a.account().to_string();
-
     let (_max_clock_drift, _tx_limits) = {
         let v = state.view();
         let p = v.world().parameters();
         (p.sumeragi().max_clock_drift(), p.transaction())
     };
-
     // Two transactions with distinct entrypoint hashes
     let mut b1 = dm::TransactionBuilder::new(
         network_id,
@@ -2320,7 +2177,6 @@ async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
         .sign(kp_a.private_key());
     let entry1 = format!("{}", signed1.hash_as_entrypoint());
     let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed1));
-
     let mut b2 = dm::TransactionBuilder::new(
         network_id,
         acc_a.clone(),
@@ -2332,7 +2188,6 @@ async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
         .sign(kp_a.private_key());
     let entry2 = format!("{}", signed2.hash_as_entrypoint());
     let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed2));
-
     // Commit
     let leader = checked_smoke_keypair(
         0x6C,
@@ -2350,7 +2205,6 @@ async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
         .unpack(|_| {});
     let committed = valid.clone().commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block, committed);
-
     // Eq(entrypoint_hash == entry1) => 1
     let env_eq = crate::filter::QueryEnvelope {
         query: None,
@@ -2380,7 +2234,6 @@ async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
     let v_eq: norito::json::Value =
         norito::json::from_slice(&resp_eq.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(v_eq["items"].as_array().unwrap().len(), 1);
-
     // Ne(entrypoint_hash != entry1) => 1 (the other)
     let env_ne = crate::filter::QueryEnvelope {
         query: None,
@@ -2410,7 +2263,6 @@ async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
     let v_ne: norito::json::Value =
         norito::json::from_slice(&resp_ne.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(v_ne["items"].as_array().unwrap().len(), 1);
-
     // In(entrypoint_hash IN {entry1}) => 1
     let env_in_one = crate::filter::QueryEnvelope {
         query: None,
@@ -2441,7 +2293,6 @@ async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
         norito::json::from_slice(&resp_in_one.into_body().collect().await.unwrap().to_bytes())
             .unwrap();
     assert_eq!(v_in_one["items"].as_array().unwrap().len(), 1);
-
     // In(entrypoint_hash IN {entry1, entry2}) => 2
     let env_in_two = crate::filter::QueryEnvelope {
         query: None,
@@ -2475,7 +2326,6 @@ async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
         norito::json::from_slice(&resp_in_two.into_body().collect().await.unwrap().to_bytes())
             .unwrap();
     assert_eq!(v_in_two["items"].as_array().unwrap().len(), 2);
-
     // Nin(entrypoint_hash NIN {entry1}) => 1
     let env_nin = crate::filter::QueryEnvelope {
         query: None,
@@ -2507,11 +2357,9 @@ async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
             .unwrap();
     assert_eq!(v_nin["items"].as_array().unwrap().len(), 1);
 }
-
 #[tokio::test]
 async fn typed_tx_predicate_handles_exists_is_null_entrypoint_and_result() {
     use iroha_data_model::prelude as dm;
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(iroha_core::state::State::new_for_testing(
@@ -2519,7 +2367,6 @@ async fn typed_tx_predicate_handles_exists_is_null_entrypoint_and_result() {
         kura.clone(),
         query,
     ));
-
     let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x6D,
@@ -2529,13 +2376,11 @@ async fn typed_tx_predicate_handles_exists_is_null_entrypoint_and_result() {
     let _dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let acc_a = dm::AccountId::new(kp_a.public_key().clone());
     let account_literal = acc_a.account().to_string();
-
     let (_max_clock_drift, _tx_limits) = {
         let v = state.view();
         let p = v.world().parameters();
         (p.sumeragi().max_clock_drift(), p.transaction())
     };
-
     // A: success, A: failure
     let mut b1 = dm::TransactionBuilder::new(
         network_id,
@@ -2547,7 +2392,6 @@ async fn typed_tx_predicate_handles_exists_is_null_entrypoint_and_result() {
         .with_instructions::<dm::InstructionBox>([log_instruction()])
         .sign(kp_a.private_key());
     let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
-
     let mut b2 = dm::TransactionBuilder::new(
         network_id,
         acc_a.clone(),
@@ -2561,7 +2405,6 @@ async fn typed_tx_predicate_handles_exists_is_null_entrypoint_and_result() {
         .into()])
         .sign(kp_a.private_key());
     let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_b));
-
     // Commit
     let leader = checked_smoke_keypair(
         0x6E,
@@ -2578,7 +2421,6 @@ async fn typed_tx_predicate_handles_exists_is_null_entrypoint_and_result() {
         .unpack(|_| {});
     let committed = valid.clone().commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block, committed);
-
     // Exists(entrypoint_hash) => 2 (always present)
     let env_exists_entry = crate::filter::QueryEnvelope {
         query: None,
@@ -2614,7 +2456,6 @@ async fn typed_tx_predicate_handles_exists_is_null_entrypoint_and_result() {
     )
     .unwrap();
     assert_eq!(v_exists_entry["items"].as_array().unwrap().len(), 2);
-
     // IsNull(entrypoint_hash) => 0
     let env_null_entry = crate::filter::QueryEnvelope {
         query: None,
@@ -2650,7 +2491,6 @@ async fn typed_tx_predicate_handles_exists_is_null_entrypoint_and_result() {
     )
     .unwrap();
     assert_eq!(v_null_entry["items"].as_array().unwrap().len(), 0);
-
     // Exists(result_ok) => 2 (always present as boolean)
     let env_exists_result = crate::filter::QueryEnvelope {
         query: None,
@@ -2686,7 +2526,6 @@ async fn typed_tx_predicate_handles_exists_is_null_entrypoint_and_result() {
     )
     .unwrap();
     assert_eq!(v_exists_result["items"].as_array().unwrap().len(), 2);
-
     // IsNull(result_ok) => 0
     let env_null_result = crate::filter::QueryEnvelope {
         query: None,

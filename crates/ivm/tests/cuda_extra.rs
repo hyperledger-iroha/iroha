@@ -1,5 +1,4 @@
 //! Extra CUDA public-helper parity and adversarial coverage.
-
 #[cfg(feature = "cuda")]
 #[test]
 fn test_cuda_poseidon2() {
@@ -20,7 +19,6 @@ fn test_cuda_poseidon2() {
         eprintln!("CUDA Poseidon2 path unavailable; skipping");
     }
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn test_cuda_keccak() {
@@ -41,7 +39,6 @@ fn test_cuda_keccak() {
         eprintln!("CUDA Keccak path unavailable; skipping");
     }
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn test_cuda_aesenc() {
@@ -62,7 +59,6 @@ fn test_cuda_aesenc() {
         eprintln!("CUDA AESENC path unavailable; skipping");
     }
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn test_cuda_bn254_add() {
@@ -104,7 +100,6 @@ fn test_cuda_aesdec() {
         eprintln!("CUDA AESDEC path unavailable; skipping");
     }
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn test_cuda_bn254_sub() {
@@ -125,7 +120,6 @@ fn test_cuda_bn254_sub() {
         eprintln!("CUDA BN254 sub path unavailable; skipping");
     }
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn test_cuda_bn254_mul() {
@@ -146,7 +140,6 @@ fn test_cuda_bn254_mul() {
         eprintln!("CUDA BN254 mul path unavailable; skipping");
     }
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn test_cuda_poseidon6() {
@@ -166,7 +159,6 @@ fn test_cuda_poseidon6() {
         eprintln!("CUDA Poseidon6 path unavailable; skipping");
     }
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn test_cuda_ed25519_verify() {
@@ -195,7 +187,6 @@ fn test_cuda_ed25519_verify() {
         eprintln!("CUDA ed25519 verify path unavailable; skipping");
     }
 }
-
 #[cfg(feature = "cuda")]
 fn compute_hram(sig: &[u8; 64], pk: &[u8; 32], msg: &[u8]) -> [u8; 32] {
     use curve25519_dalek::scalar::Scalar;
@@ -206,7 +197,6 @@ fn compute_hram(sig: &[u8; 64], pk: &[u8; 32], msg: &[u8]) -> [u8; 32] {
     hasher.update(msg);
     Scalar::from_hash(hasher).to_bytes()
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_public_helpers_reject_adversarial_shape_mismatches() {
@@ -216,20 +206,17 @@ fn cuda_public_helpers_reject_adversarial_shape_mismatches() {
     assert!(ivm::vand_cuda(&[1u32, 2, 3], &[4u32, 5]).is_none());
     assert!(ivm::vxor_cuda(&[1u32, 2, 3], &[4u32, 5]).is_none());
     assert!(ivm::vor_cuda(&[1u32, 2, 3], &[4u32, 5]).is_none());
-
     let lhs = [[1u64, 2, 3, 4], [5, 6, 7, 8]];
     let rhs = [[9u64, 10, 11, 12]];
     assert!(ivm::bn254_add_batch_cuda(&lhs, &rhs).is_none());
     assert!(ivm::bn254_sub_batch_cuda(&lhs, &rhs).is_none());
     assert!(ivm::bn254_mul_batch_cuda(&lhs, &rhs).is_none());
-
     let signatures = [[0x11u8; 64], [0x22; 64]];
     let public_keys = [[0x33u8; 32], [0x44; 32]];
     let hrams = [[0x55u8; 32], [0x66; 32]];
     assert!(ivm::ed25519_verify_batch_cuda(&signatures, &public_keys[..1], &hrams).is_none());
     assert!(ivm::ed25519_verify_batch_cuda(&signatures, &public_keys, &hrams[..1]).is_none());
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_adversarial_rejections_preserve_caller_buffers() {
@@ -237,7 +224,6 @@ fn cuda_adversarial_rejections_preserve_caller_buffers() {
     let original_lo = [2u64, 3, 1, 4];
     let mut hi = original_hi;
     let mut lo = original_lo;
-
     {
         let lo_short = &mut lo[..3];
         assert!(
@@ -245,7 +231,6 @@ fn cuda_adversarial_rejections_preserve_caller_buffers() {
             "mismatched bitonic-sort buffers must be rejected"
         );
     }
-
     assert_eq!(
         hi, original_hi,
         "rejected bitonic sort must not mutate the high-word buffer"
@@ -255,7 +240,6 @@ fn cuda_adversarial_rejections_preserve_caller_buffers() {
         "rejected bitonic sort must not mutate the low-word buffer"
     );
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_empty_vector_boundaries_short_circuit_without_device_work() {
@@ -265,7 +249,6 @@ fn cuda_empty_vector_boundaries_short_circuit_without_device_work() {
     assert_eq!(ivm::vand_cuda(&[], &[]), Some(Vec::<u32>::new()));
     assert_eq!(ivm::vxor_cuda(&[], &[]), Some(Vec::<u32>::new()));
     assert_eq!(ivm::vor_cuda(&[], &[]), Some(Vec::<u32>::new()));
-
     assert!(ivm::vector_add_f32(&[], &[1.0]).is_none());
     assert!(ivm::vadd32_cuda(&[], &[1]).is_none());
     assert!(ivm::vadd64_cuda(&[], &[1]).is_none());
@@ -273,7 +256,6 @@ fn cuda_empty_vector_boundaries_short_circuit_without_device_work() {
     assert!(ivm::vxor_cuda(&[], &[1]).is_none());
     assert!(ivm::vor_cuda(&[], &[1]).is_none());
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_empty_and_singleton_boundaries_short_circuit_without_device_work() {
@@ -300,33 +282,27 @@ fn cuda_empty_and_singleton_boundaries_short_circuit_without_device_work() {
         ivm::aesdec_rounds_batch_cuda(&[[0x24u8; 16]], &[]),
         Some(vec![[0x24u8; 16]])
     );
-
     let digest = [0xa5u8; 32];
     assert_eq!(ivm::sha256_pairs_reduce_cuda(&[]), None);
     assert_eq!(ivm::sha256_pairs_reduce_cuda(&[digest]), Some(digest));
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_ed25519_does_not_accept_adversarial_public_key_bytes() {
     use ed25519_dalek::{Signer, SigningKey};
-
     let keypair = SigningKey::from_bytes(&[0x44; 32]);
     let msg = b"cuda invalid public key";
     let sig = keypair.sign(msg).to_bytes();
     let adversarial_pk = [0xffu8; 32];
-
     assert_ne!(
         ivm::ed25519_verify_cuda(msg, &sig, &adversarial_pk),
         Some(true),
         "adversarial Ed25519 public-key bytes must not verify successfully"
     );
 }
-
 #[test]
 fn cuda_public_ed25519_helpers_reject_malformed_signature_r_before_device_dispatch() {
     use ed25519_dalek::{Signer, SigningKey};
-
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -336,20 +312,17 @@ fn cuda_public_ed25519_helpers_reject_malformed_signature_r_before_device_dispat
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     let keypair = SigningKey::from_bytes(&[0x48; 32]);
     let message = b"cuda public malformed signature r";
     let valid_signature = keypair.sign(message).to_bytes();
     let public_key = keypair.verifying_key().to_bytes();
     let hram = [0x24_u8; 32];
-
     for (label, replacement_r) in [
         ("small-order", SMALL_ORDER_ED25519_R),
         ("noncanonical", NONCANONICAL_ED25519_R),
     ] {
         let mut malformed_signature = valid_signature;
         malformed_signature[..replacement_r.len()].copy_from_slice(&replacement_r);
-
         assert_eq!(
             ivm::ed25519_verify_cuda(message, &malformed_signature, &public_key),
             Some(false),
@@ -362,7 +335,6 @@ fn cuda_public_ed25519_helpers_reject_malformed_signature_r_before_device_dispat
         );
     }
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn test_cuda_ed25519_verify_batch() {
@@ -377,15 +349,12 @@ fn test_cuda_ed25519_verify_batch() {
     use ed25519_dalek::{Signer, SigningKey};
     let key1 = SigningKey::from_bytes(&[0x22; 32]);
     let key2 = SigningKey::from_bytes(&[0x33; 32]);
-
     let msg1 = b"cuda batch one";
     let msg2 = b"cuda batch two";
     let sig1 = key1.sign(msg1);
     let sig2 = key2.sign(msg2);
-
     let mut bad_sig2 = sig2.to_bytes();
     bad_sig2[0] ^= 0x11;
-
     let pks = vec![
         key1.verifying_key().to_bytes(),
         key2.verifying_key().to_bytes(),
@@ -395,14 +364,12 @@ fn test_cuda_ed25519_verify_batch() {
         compute_hram(&sigs[0], &pks[0], msg1),
         compute_hram(&sigs[1], &pks[1], msg2),
     ];
-
     if let Some(gpu_results) = ivm::ed25519_verify_batch_cuda(&sigs, &pks, &hrams) {
         assert_eq!(gpu_results, vec![true, false]);
     } else {
         eprintln!("CUDA ed25519 batch verify path unavailable; skipping");
     }
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn test_cuda_ed25519_verify_batch_rejects_adversarial_hram() {
@@ -417,14 +384,12 @@ fn test_cuda_ed25519_verify_batch_rejects_adversarial_hram() {
     use ed25519_dalek::{Signer, SigningKey};
     let key1 = SigningKey::from_bytes(&[0x55; 32]);
     let key2 = SigningKey::from_bytes(&[0x66; 32]);
-
     let msg1 = b"cuda adversarial hram one";
     let msg2 = b"cuda adversarial hram two";
     let sig1 = key1.sign(msg1).to_bytes();
     let sig2 = key2.sign(msg2).to_bytes();
     let pk1 = key1.verifying_key().to_bytes();
     let pk2 = key2.verifying_key().to_bytes();
-
     let sigs = vec![sig1, sig2];
     let pks = vec![pk1, pk2];
     let mut hrams = vec![
@@ -432,7 +397,6 @@ fn test_cuda_ed25519_verify_batch_rejects_adversarial_hram() {
         compute_hram(&sigs[1], &pks[1], msg2),
     ];
     hrams[1][0] ^= 0x80;
-
     if let Some(gpu_results) = ivm::ed25519_verify_batch_cuda(&sigs, &pks, &hrams) {
         assert_eq!(
             gpu_results,

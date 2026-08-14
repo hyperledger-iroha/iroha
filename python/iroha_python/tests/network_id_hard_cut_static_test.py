@@ -299,6 +299,29 @@ def test_confidential_proof_builders_require_exact_network_id() -> None:
         assert all(retired not in signature for retired in RETIRED_DOMAIN_NAMES)
 
 
+def test_zk_x509_public_apis_require_nominal_network_id() -> None:
+    crypto = _tree("crypto.py")
+    client = _tree("client.py")
+
+    inspector = _function(
+        crypto.body,
+        "inspect_signed_privacy_zk_x509_identity_presentation_action_v1",
+    )
+    assert _arguments(inspector) == ["signed_transaction_versioned", "network_id"]
+    assert _argument_annotation(inspector, "network_id") == "NetworkId"
+    assert RETIRED_DOMAIN_NAMES.isdisjoint(_arguments(inspector))
+
+    torii = _class(client, "ToriiClient")
+    submit = _function(
+        torii.body,
+        "submit_signed_privacy_zk_x509_identity_presentation_action_v1",
+    )
+    assert "network_id" in _arguments(submit)
+    assert _argument_annotation(submit, "network_id") == "NetworkId"
+    assert RETIRED_DOMAIN_NAMES.isdisjoint(_arguments(submit))
+    assert submit.args.kwarg is None
+
+
 def test_pyo3_boundary_and_native_signer_revision_are_exact_abi22_v5() -> None:
     rust = (RUST_BRIDGE / "lib.rs").read_text(encoding="utf-8")
     vk_rust = (RUST_BRIDGE / "zk_vk_draft.rs").read_text(encoding="utf-8")
@@ -315,6 +338,12 @@ def test_pyo3_boundary_and_native_signer_revision_are_exact_abi22_v5() -> None:
     assert "network_id: &super::PyNetworkId" in vk_rust
     assert "canonical_genesis_hash: &[u8]" not in vk_rust
     assert "fn parse_query_network_id" not in rust
+    x509_start = rust.index(
+        "fn inspect_signed_privacy_zk_x509_identity_presentation_action_v1_py("
+    )
+    x509_signature = rust[x509_start : rust.index(") -> PyResult", x509_start)]
+    assert "network_id: &PyNetworkId" in x509_signature
+    assert all(retired not in x509_signature for retired in RETIRED_DOMAIN_NAMES)
     vega_start = rust.index("fn privacy_vega_device_authentication_digest_v1_py(")
     vega_end = rust.index(
         "fn python_authenticated_privacy_action_envelope_v1", vega_start

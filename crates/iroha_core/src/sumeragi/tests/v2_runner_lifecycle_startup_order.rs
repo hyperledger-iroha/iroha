@@ -44,7 +44,6 @@ fn startup_reconciles_lifecycle_before_lane_work_activation() {
         remainder = &remainder[offset + anchor.len()..];
     }
 }
-
 #[test]
 fn lane_evidence_repair_fence_accepts_an_empty_unquarantined_replay() {
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
@@ -74,14 +73,12 @@ fn lane_evidence_repair_fence_accepts_an_empty_unquarantined_replay() {
             .is_empty()
     );
     assert!(!queue.lane_reservation_startup_reconciliation_pending());
-
     let fence = LaneApplicationEvidenceRepairQueueFence::capture(&queue)
         .expect("empty unquarantined Queue replay is a valid startup cut");
     fence
         .revalidate(&queue)
         .expect("unchanged empty Queue replay remains valid through evidence repair");
 }
-
 #[test]
 fn terminal_sweep_source_partitions_whole_units_before_any_mutation() {
     let source = include_str!("../v2_lifecycle_recovery.rs");
@@ -93,7 +90,6 @@ fn terminal_sweep_source_partitions_whole_units_before_any_mutation() {
         .map(|offset| start + offset)
         .expect("terminal sweep remains independently bounded");
     let sweep = &source[start..end];
-
     let anchors = [
         "if recovery.network_id() != network_id",
         "let route_identities = recovery.route_identities();",
@@ -131,7 +127,6 @@ fn terminal_sweep_source_partitions_whole_units_before_any_mutation() {
         "terminal sweep must use one bounded input inventory and one exact deferred-set readback",
     );
 }
-
 #[test]
 fn deferred_terminal_completion_requires_two_exact_stage_proofs_and_ordered_pending_coverage() {
     let source = include_str!("../v2_lifecycle_recovery.rs");
@@ -183,7 +178,6 @@ fn deferred_terminal_completion_requires_two_exact_stage_proofs_and_ordered_pend
         "deferred completion must preflight and finally reject every remaining Pending source",
     );
 }
-
 #[test]
 fn planner_covered_pending_attempts_are_exposed_for_pairing_but_skipped_for_recovery() {
     let kura_source = include_str!("../../kura/autonomous_lifecycle_terminal_outcomes.rs");
@@ -198,7 +192,6 @@ fn planner_covered_pending_attempts_are_exposed_for_pairing_but_skipped_for_reco
         !kura_source[covered..inventory_push].contains("continue;"),
         "exact covered Pending attempts must not be omitted from pairing inventory",
     );
-
     let lifecycle_source = include_str!("../v2_lifecycle_recovery.rs");
     let first_inventory = lifecycle_source
         .find(".active_autonomous_lifecycle_attempt_inventory_with_planner_covered_pending_groups(")
@@ -224,7 +217,6 @@ fn planner_covered_pending_attempts_are_exposed_for_pairing_but_skipped_for_reco
             .unwrap_or_else(|| panic!("paired projection pass lost safety anchor: {anchor}"));
         remainder = &remainder[offset + anchor.len()..];
     }
-
     let bootstrap_inventory = lifecycle_source
         .find("let mut bootstraps = Vec::new();")
         .expect("bootstrap inventory remains source-bound");
@@ -242,7 +234,6 @@ fn planner_covered_pending_attempts_are_exposed_for_pairing_but_skipped_for_reco
         .expect("bootstrap completion remains source-bound");
     assert!(bootstrap_overlap < bootstrap_custody);
     assert!(bootstrap_overlap < bootstrap_completion);
-
     let mutation_pass = lifecycle_source
         .rfind(
             ".active_autonomous_lifecycle_attempt_inventory_with_planner_covered_pending_groups(",
@@ -265,7 +256,6 @@ fn planner_covered_pending_attempts_are_exposed_for_pairing_but_skipped_for_reco
     assert!(deferred_skip < producer_custody);
     assert!(deferred_skip < recovery);
 }
-
 #[test]
 fn local_producer_queue_custody_is_preflighted_before_cursor_mutation() {
     let source = include_str!("../v2_lifecycle_recovery.rs");
@@ -291,7 +281,6 @@ fn local_producer_queue_custody_is_preflighted_before_cursor_mutation() {
         .find("if recover_one_attempt(")
         .map(|offset| startup + offset)
         .expect("startup retains bounded cursor recovery");
-
     assert!(helper < startup);
     assert!(first_full_inventory < producer_preflight);
     assert!(producer_preflight < bootstrap_mutation);

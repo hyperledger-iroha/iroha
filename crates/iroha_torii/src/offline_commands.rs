@@ -1,10 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    num::NonZeroUsize,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
-
+use crate::{AppState, Error, SharedAppState, app_auth, routing};
 use axum::{http::HeaderMap, response::Response as AxResponse};
 use iroha_config::parameters::actual;
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
@@ -32,10 +26,13 @@ use iroha_torii_shared::offline_api::{
 };
 use mv::storage::StorageReadOnly;
 use parking_lot::Mutex;
+use std::{
+    collections::BTreeMap,
+    num::NonZeroUsize,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tokio::sync::watch;
-
-use crate::{AppState, Error, SharedAppState, app_auth, routing};
-
 const PATH_OFFLINE_TOP_UP: &str = iroha_torii_shared::uri::OFFLINE_TOP_UP;
 const PATH_OFFLINE_REDEEM: &str = iroha_torii_shared::uri::OFFLINE_REDEEM;
 const OFFLINE_OPERATION_RETENTION_AFTER_EXPIRY_MS: u64 = 24 * 60 * 60 * 1_000;
@@ -45,7 +42,6 @@ const OFFLINE_OPERATION_RETENTION_AFTER_EXPIRY_MS: u64 = 24 * 60 * 60 * 1_000;
 // map-node/key duplication and in-flight coordination objects.
 const ADMITTED_OPERATION_ACCOUNTED_BYTES: usize =
     iroha_config::parameters::defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY;
-
 #[derive(Debug, Clone)]
 pub(crate) struct OfflineCommandRuntime {
     authority: AccountId,
@@ -54,7 +50,6 @@ pub(crate) struct OfflineCommandRuntime {
     max_tx_value: Quantity,
     admission: Arc<Mutex<OfflineOperationRegistry>>,
 }
-
 impl OfflineCommandRuntime {
     pub(crate) fn from_config(config: actual::ToriiKagemushaCommands) -> Self {
         Self {
@@ -68,7 +63,6 @@ impl OfflineCommandRuntime {
             ))),
         }
     }
-
     pub(super) fn startup_config(&self) -> actual::ToriiKagemushaCommands {
         let admission = self.admission.lock();
         actual::ToriiKagemushaCommands {
@@ -80,7 +74,6 @@ impl OfflineCommandRuntime {
             operation_registry_max_bytes: admission.max_accounted_bytes,
         }
     }
-
     fn quote_and_sign_transaction(
         &self,
         app: &AppState,
@@ -97,27 +90,23 @@ impl OfflineCommandRuntime {
             .map_err(|source| offline_transaction_signing_error(context, source))
     }
 }
-
 #[derive(Debug)]
 struct InFlightSubmission {
     binding: OfflineOperationRequestBinding,
     token: Arc<()>,
     updates: watch::Sender<SubmissionOutcome>,
 }
-
 #[derive(Debug, Clone)]
 enum SubmissionOutcome {
     Pending,
     Accepted(AdmittedOfflineOperationRecord),
     Retry,
 }
-
 enum SubmissionClaim {
     Accepted(AdmittedOfflineOperationRecord),
     Leader(SubmissionLeader),
     Follower(watch::Receiver<SubmissionOutcome>),
 }
-
 struct SubmissionLeader {
     issuer: Arc<OfflineCommandRuntime>,
     operation_id: [u8; 32],
@@ -126,7 +115,6 @@ struct SubmissionLeader {
     updates: watch::Sender<SubmissionOutcome>,
     active: bool,
 }
-
 pub(crate) async fn handle_top_up(
     app: SharedAppState,
     headers: &HeaderMap,
@@ -220,7 +208,6 @@ pub(crate) async fn handle_top_up(
     let record = submission.accept(tx_hash)?;
     offline_operation_reference_for_admitted_record(&record)
 }
-
 pub(crate) async fn handle_redeem(
     app: SharedAppState,
     headers: &HeaderMap,
@@ -309,13 +296,11 @@ pub(crate) async fn handle_redeem(
     let record = submission.accept(tx_hash)?;
     offline_operation_reference_for_admitted_record(&record)
 }
-
 fn kagemusha_v4_snapshot_time_ms(state: &impl StateReadOnly) -> u64 {
     state.latest_block().map_or(0, |block| {
         u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
     })
 }
-
 fn validate_kagemusha_v4_topup_snapshot(
     app: &SharedAppState,
     request: &OfflineTopUpRequest,
@@ -447,7 +432,6 @@ fn validate_kagemusha_v4_topup_snapshot(
             )
         })
 }
-
 fn validate_kagemusha_v4_redeem_snapshot(
     app: &SharedAppState,
     request: &OfflineRedeemRequest,
@@ -518,7 +502,6 @@ fn validate_kagemusha_v4_redeem_snapshot(
             )
         })
 }
-
 fn ensure_kagemusha_v4_transaction_release(
     resolution: Result<
         iroha_core::smartcontracts::isi::offline::KagemushaRecursiveTransactionReleaseV4,
@@ -532,7 +515,6 @@ fn ensure_kagemusha_v4_transaction_release(
     })?;
     ensure_kagemusha_v4_issuance_window(resolved.issuance_active, issuance_required)
 }
-
 fn ensure_kagemusha_v4_issuance_window(
     issuance_active: bool,
     issuance_required: bool,
@@ -546,13 +528,11 @@ fn ensure_kagemusha_v4_issuance_window(
     }
     Ok(())
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KagemushaV2OperationKind {
     TopUp,
     Redeem,
 }
-
 impl From<KagemushaV2OperationKind> for OfflineOperationKind {
     fn from(value: KagemushaV2OperationKind) -> Self {
         match value {
@@ -561,18 +541,15 @@ impl From<KagemushaV2OperationKind> for OfflineOperationKind {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OfflineOperationRequest<TopUp, Redeem> {
     TopUp(TopUp),
     Redeem(Redeem),
 }
-
 type OfflineOperationRequestOwned =
     OfflineOperationRequest<Box<OfflineTopUpRequest>, Box<OfflineRedeemRequest>>;
 type OfflineOperationRequestRef<'a> =
     OfflineOperationRequest<&'a OfflineTopUpRequest, &'a OfflineRedeemRequest>;
-
 impl<TopUp, Redeem> OfflineOperationRequest<TopUp, Redeem> {
     const fn kind(&self) -> KagemushaV2OperationKind {
         match self {
@@ -581,7 +558,6 @@ impl<TopUp, Redeem> OfflineOperationRequest<TopUp, Redeem> {
         }
     }
 }
-
 impl<'a> OfflineOperationRequestRef<'a> {
     fn authorization(self) -> &'a iroha_data_model::offline::KagemushaRequestAuthorizationV2 {
         match self {
@@ -589,7 +565,6 @@ impl<'a> OfflineOperationRequestRef<'a> {
             Self::Redeem(request) => &request.authorization,
         }
     }
-
     fn into_owned(self) -> OfflineOperationRequestOwned {
         match self {
             Self::TopUp(request) => OfflineOperationRequest::TopUp(Box::new(request.clone())),
@@ -597,7 +572,6 @@ impl<'a> OfflineOperationRequestRef<'a> {
         }
     }
 }
-
 impl OfflineOperationRequestOwned {
     fn as_ref(&self) -> OfflineOperationRequestRef<'_> {
         match self {
@@ -605,7 +579,6 @@ impl OfflineOperationRequestOwned {
             Self::Redeem(request) => OfflineOperationRequest::Redeem(request.as_ref()),
         }
     }
-
     fn authorization(&self) -> &iroha_data_model::offline::KagemushaRequestAuthorizationV2 {
         match self {
             Self::TopUp(request) => &request.authorization,
@@ -613,7 +586,6 @@ impl OfflineOperationRequestOwned {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct OfflineOperationRequestBinding {
     operation_id: [u8; 32],
@@ -622,7 +594,6 @@ struct OfflineOperationRequestBinding {
     submitted_at_ms: u64,
     expires_at_ms: u64,
 }
-
 impl OfflineOperationRequestBinding {
     fn from_request(request: OfflineOperationRequestRef<'_>) -> Result<Self, Error> {
         let authorization = request.authorization();
@@ -635,7 +606,6 @@ impl OfflineOperationRequestBinding {
         })
     }
 }
-
 fn canonical_offline_request_digest(
     request: OfflineOperationRequestRef<'_>,
 ) -> Result<[u8; 32], Error> {
@@ -649,7 +619,6 @@ fn canonical_offline_request_digest(
     })?;
     Ok(Hash::new(canonical).into())
 }
-
 fn ensure_same_offline_request_binding(
     existing: &OfflineOperationRequestBinding,
     requested: &OfflineOperationRequestBinding,
@@ -659,7 +628,6 @@ fn ensure_same_offline_request_binding(
     }
     Err(operation_id_conflict())
 }
-
 fn ensure_same_offline_request<TopUp: PartialEq, Redeem: PartialEq>(
     existing: &OfflineOperationRequest<TopUp, Redeem>,
     requested: &OfflineOperationRequest<TopUp, Redeem>,
@@ -669,33 +637,28 @@ fn ensure_same_offline_request<TopUp: PartialEq, Redeem: PartialEq>(
     }
     Err(operation_id_conflict())
 }
-
 fn operation_id_conflict() -> Error {
     Error::AppConflict {
         code: "operation_id_conflict",
         message: "Offline operation id is already bound to a different request.".to_owned(),
     }
 }
-
 #[derive(Debug, Clone)]
 struct OfflineOperationRecord {
     request: OfflineOperationRequestOwned,
     transaction_hash: HashOf<SignedTransaction>,
     submitted_at_ms: u64,
 }
-
 impl OfflineOperationRecord {
     fn binding(&self) -> Result<OfflineOperationRequestBinding, Error> {
         OfflineOperationRequestBinding::from_request(self.request.as_ref())
     }
 }
-
 #[derive(Debug, Clone)]
 struct AdmittedOfflineOperationRecord {
     binding: OfflineOperationRequestBinding,
     transaction_hash: HashOf<SignedTransaction>,
 }
-
 #[derive(Debug)]
 struct OfflineOperationRegistry {
     records: BTreeMap<[u8; 32], AdmittedOfflineOperationRecord>,
@@ -703,7 +666,6 @@ struct OfflineOperationRegistry {
     max_entries: NonZeroUsize,
     max_accounted_bytes: NonZeroUsize,
 }
-
 impl OfflineOperationRegistry {
     fn new(max_entries: NonZeroUsize, max_accounted_bytes: NonZeroUsize) -> Self {
         Self {
@@ -713,16 +675,13 @@ impl OfflineOperationRegistry {
             max_accounted_bytes,
         }
     }
-
     fn accounted_bytes(&self) -> usize {
         self.tracked_entries()
             .saturating_mul(ADMITTED_OPERATION_ACCOUNTED_BYTES)
     }
-
     fn tracked_entries(&self) -> usize {
         self.records.len().saturating_add(self.in_flight.len())
     }
-
     fn has_capacity_for_new_operation(&self) -> bool {
         self.tracked_entries().saturating_add(1) <= self.max_entries.get()
             && self
@@ -730,24 +689,20 @@ impl OfflineOperationRegistry {
                 .saturating_add(ADMITTED_OPERATION_ACCOUNTED_BYTES)
                 <= self.max_accounted_bytes.get()
     }
-
     fn prune_expired(&mut self, now_ms: u64) {
         self.records.retain(|_, record| {
             offline_operation_is_retained(record.binding.expires_at_ms, now_ms)
         });
     }
-
     fn get(&self, operation_id: &[u8; 32]) -> Option<&AdmittedOfflineOperationRecord> {
         self.records.get(operation_id)
     }
-
     fn insert_reserved(&mut self, record: AdmittedOfflineOperationRecord) {
         self.records.insert(record.binding.operation_id, record);
         debug_assert!(self.tracked_entries() <= self.max_entries.get());
         debug_assert!(self.accounted_bytes() <= self.max_accounted_bytes.get());
     }
 }
-
 fn require_idempotency_key(headers: &HeaderMap, operation_id: [u8; 32]) -> Result<(), Error> {
     if operation_id == [0; 32] {
         return Err(Error::AppQueryValidation {
@@ -765,7 +720,6 @@ fn require_idempotency_key(headers: &HeaderMap, operation_id: [u8; 32]) -> Resul
     }
     Ok(())
 }
-
 fn validated_idempotency_key(headers: &HeaderMap) -> Result<&str, Error> {
     let mut values = headers.get_all("idempotency-key").iter();
     let Some(raw) = values.next() else {
@@ -797,14 +751,12 @@ fn validated_idempotency_key(headers: &HeaderMap) -> Result<&str, Error> {
     }
     Ok(actual)
 }
-
 impl OfflineCommandRuntime {
     fn claim_submission(
         self: &Arc<Self>,
         binding: OfflineOperationRequestBinding,
     ) -> Result<SubmissionClaim, Error> {
         let operation_id = binding.operation_id;
-
         // Accepted bindings and in-flight reservations share one capacity and
         // one mutex. The transition from reservation to admitted binding is
         // therefore atomic: no request can observe an absent operation between
@@ -826,7 +778,6 @@ impl OfflineCommandRuntime {
                 message: "Offline operation admission capacity is exhausted; retry after an in-flight submission completes or an admitted binding expires.".to_owned(),
             });
         }
-
         let token = Arc::new(());
         let (updates, _) = watch::channel(SubmissionOutcome::Pending);
         admission.in_flight.insert(
@@ -846,7 +797,6 @@ impl OfflineCommandRuntime {
             active: true,
         }))
     }
-
     fn record_admitted_operation(
         &self,
         record: AdmittedOfflineOperationRecord,
@@ -882,7 +832,6 @@ impl OfflineCommandRuntime {
         Ok(record)
     }
 }
-
 impl SubmissionLeader {
     fn accept(
         mut self,
@@ -911,7 +860,6 @@ impl SubmissionLeader {
             }
         }
     }
-
     fn finish(&mut self, outcome: SubmissionOutcome) {
         if !self.active {
             return;
@@ -928,13 +876,11 @@ impl SubmissionLeader {
         self.active = false;
     }
 }
-
 impl Drop for SubmissionLeader {
     fn drop(&mut self) {
         self.finish(SubmissionOutcome::Retry);
     }
 }
-
 async fn wait_for_submission_outcome(
     mut receiver: watch::Receiver<SubmissionOutcome>,
 ) -> SubmissionOutcome {
@@ -948,11 +894,9 @@ async fn wait_for_submission_outcome(
         }
     }
 }
-
 fn offline_operation_is_retained(expires_at_ms: u64, now_ms: u64) -> bool {
     expires_at_ms.saturating_add(OFFLINE_OPERATION_RETENTION_AFTER_EXPIRY_MS) >= now_ms
 }
-
 fn find_admitted_offline_operation(
     issuer: &OfflineCommandRuntime,
     requested_binding: &OfflineOperationRequestBinding,
@@ -967,11 +911,9 @@ fn find_admitted_offline_operation(
     ensure_same_offline_request_binding(&existing.binding, requested_binding)?;
     Ok(Some(existing.clone()))
 }
-
 fn offline_operation_status_uri(operation_id: [u8; 32]) -> String {
     format!("/v1/offline/operations/{}", hex::encode(operation_id))
 }
-
 fn offline_operation_reference_response(
     operation_id: [u8; 32],
     kind: OfflineOperationKind,
@@ -1007,7 +949,6 @@ fn offline_operation_reference_response(
     );
     Ok(response)
 }
-
 fn offline_operation_reference_for_admitted_record(
     record: &AdmittedOfflineOperationRecord,
 ) -> Result<AxResponse, Error> {
@@ -1018,7 +959,6 @@ fn offline_operation_reference_for_admitted_record(
         record.binding.submitted_at_ms,
     )
 }
-
 fn parse_operation_id(raw: &str) -> Result<[u8; 32], Error> {
     if raw.len() != 64
         || raw.bytes().any(|byte| !byte.is_ascii_hexdigit())
@@ -1046,7 +986,6 @@ fn parse_operation_id(raw: &str) -> Result<[u8; 32], Error> {
     }
     Ok(operation_id)
 }
-
 fn offline_operation_record_in_transaction(
     transaction: &SignedTransaction,
     issuer_authority: &AccountId,
@@ -1078,7 +1017,6 @@ fn offline_operation_record_in_transaction(
     }
     None
 }
-
 fn signed_transaction_for_entrypoint(
     entrypoint: &TransactionEntrypoint,
 ) -> Option<&SignedTransaction> {
@@ -1088,7 +1026,6 @@ fn signed_transaction_for_entrypoint(
         TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
     }
 }
-
 fn terminal_offline_operation_in_transaction(
     transaction: &SignedTransaction,
     result: &TransactionResult,
@@ -1115,7 +1052,6 @@ fn terminal_offline_operation_in_transaction(
         ),
     ))
 }
-
 fn find_pending_offline_operation_by_id(
     app: &SharedAppState,
     issuer_authority: &AccountId,
@@ -1134,7 +1070,6 @@ fn find_pending_offline_operation_by_id(
     }
     None
 }
-
 fn find_existing_offline_operation(
     app: &SharedAppState,
     issuer: &OfflineCommandRuntime,
@@ -1144,7 +1079,6 @@ fn find_existing_offline_operation(
     if let Some(existing) = find_admitted_offline_operation(issuer, requested_binding)? {
         return offline_operation_reference_for_admitted_record(&existing).map(Some);
     }
-
     let authorization = requested.authorization();
     if let Some(existing) =
         find_pending_offline_operation_by_id(app, &issuer.authority, authorization.operation_id)
@@ -1158,7 +1092,6 @@ fn find_existing_offline_operation(
         )
         .map(Some);
     }
-
     let Some(finality) = find_committed_kagemusha_v4_operation(app, issuer, requested)? else {
         return Ok(None);
     };
@@ -1170,7 +1103,6 @@ fn find_existing_offline_operation(
     )
     .map(Some)
 }
-
 fn is_duplicate_queue_admission_error(error: &Error) -> bool {
     matches!(
         error,
@@ -1181,7 +1113,6 @@ fn is_duplicate_queue_admission_error(error: &Error) -> bool {
             )
     )
 }
-
 fn reconcile_duplicate_queue_admission(
     app: &SharedAppState,
     issuer: &OfflineCommandRuntime,
@@ -1192,13 +1123,11 @@ fn reconcile_duplicate_queue_admission(
     if !is_duplicate_queue_admission_error(&admission_error) {
         return Err(admission_error);
     }
-
     match find_existing_offline_operation(app, issuer, requested, requested_binding)? {
         Some(response) => Ok(response),
         None => Err(admission_error),
     }
 }
-
 fn find_terminal_offline_operation_by_id(
     app: &SharedAppState,
     issuer_authority: &AccountId,
@@ -1241,7 +1170,6 @@ fn find_terminal_offline_operation_by_id(
             return Ok(Some(terminal));
         }
     }
-
     let merge_entry = app
         .kura
         .get_merge_entry_by_carrier_height(height)
@@ -1289,7 +1217,6 @@ fn find_terminal_offline_operation_by_id(
         message: "The offline operation index does not match its canonical block body.".to_owned(),
     })
 }
-
 fn ensure_admitted_operation_matches_recovered_record(
     admitted: &AdmittedOfflineOperationRecord,
     recovered: &OfflineOperationRecord,
@@ -1304,7 +1231,6 @@ fn ensure_admitted_operation_matches_recovered_record(
     }
     Ok(())
 }
-
 fn pending_offline_operation_status(
     operation_id: [u8; 32],
     kind: KagemushaV2OperationKind,
@@ -1318,7 +1244,6 @@ fn pending_offline_operation_status(
         submitted_at_ms,
     }
 }
-
 fn rejected_offline_operation_status(
     operation_id: [u8; 32],
     kind: KagemushaV2OperationKind,
@@ -1335,7 +1260,6 @@ fn rejected_offline_operation_status(
         ),
     }
 }
-
 fn terminal_rejected_or_expired_offline_operation_status(
     entry: &crate::PipelineStatusEntry,
     operation_id: [u8; 32],
@@ -1351,11 +1275,10 @@ fn terminal_rejected_or_expired_offline_operation_status(
             operation_id,
             kind,
             transaction_hash,
-            kagemusha_v4_rejection_detail(entry.rejection.as_ref()),
+            kagemusha_v4_cached_rejection_detail(entry.rejection.as_ref()),
         )
     })
 }
-
 fn respond_with_offline_operation_status(status: OfflineOperationStatus) -> AxResponse {
     let pending = matches!(status, OfflineOperationStatus::Pending { .. });
     let mut response =
@@ -1372,7 +1295,6 @@ fn respond_with_offline_operation_status(status: OfflineOperationStatus) -> AxRe
     }
     response
 }
-
 fn offline_operation_status_response(
     app: &SharedAppState,
     issuer: &OfflineCommandRuntime,
@@ -1521,7 +1443,6 @@ fn offline_operation_status_response(
     };
     Ok(respond_with_offline_operation_status(status))
 }
-
 fn admitted_offline_operation_status_response(
     app: &SharedAppState,
     issuer: &OfflineCommandRuntime,
@@ -1566,14 +1487,12 @@ fn admitted_offline_operation_status_response(
             }
         }
     }
-
     if let Some((record, finality)) =
         find_terminal_offline_operation_by_id(app, &issuer.authority, operation_id)?
     {
         ensure_admitted_operation_matches_recovered_record(admitted, &record)?;
         return offline_operation_status_response(app, issuer, &record, Some(&finality), false);
     }
-
     let state = app.state.view();
     ensure_unproven_pending_window_is_live(
         kagemusha_v4_snapshot_time_ms(&state),
@@ -1587,7 +1506,6 @@ fn admitted_offline_operation_status_response(
     );
     Ok(respond_with_offline_operation_status(status))
 }
-
 pub(crate) fn handle_operation_status(
     app: &SharedAppState,
     operation_id: &str,
@@ -1622,7 +1540,6 @@ pub(crate) fn handle_operation_status(
         message: "Offline operation is unknown on this Torii node.".to_owned(),
     })
 }
-
 #[derive(Debug, Clone)]
 struct KagemushaV2CommittedFinality {
     operation_id: [u8; 32],
@@ -1631,13 +1548,11 @@ struct KagemushaV2CommittedFinality {
     outcome: KagemushaV2TerminalOutcome,
     server_time_ms: u64,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum KagemushaV2TerminalOutcome {
     Applied,
     Rejected(String),
 }
-
 fn kagemusha_v4_applied_finality(
     operation_id: [u8; 32],
     transaction_hash: String,
@@ -1652,7 +1567,6 @@ fn kagemusha_v4_applied_finality(
         None,
     )
 }
-
 fn kagemusha_v4_committed_finality(
     operation_id: [u8; 32],
     transaction_hash: String,
@@ -1670,13 +1584,18 @@ fn kagemusha_v4_committed_finality(
         server_time_ms,
     }
 }
-
 fn kagemusha_v4_rejection_detail(rejection: Option<&TransactionRejectionReason>) -> String {
-    canonical_offline_rejection_message(
-        rejection.map_or_else(|| "no rejection reason".to_owned(), ToString::to_string),
-    )
+    canonical_offline_rejection_message(rejection.map_or_else(
+        || "no rejection reason".to_owned(),
+        |reason| crate::pipeline_rejection_summary(reason).to_owned(),
+    ))
 }
-
+fn kagemusha_v4_cached_rejection_detail(rejection: Option<&&'static str>) -> String {
+    canonical_offline_rejection_message(rejection.map_or_else(
+        || "no rejection reason".to_owned(),
+        |message| (*message).to_owned(),
+    ))
+}
 fn canonical_offline_rejection_message(message: String) -> String {
     if crate::utils::is_valid_error_message(&message) {
         message
@@ -1684,14 +1603,12 @@ fn canonical_offline_rejection_message(message: String) -> String {
         "The offline operation was rejected.".to_owned()
     }
 }
-
 fn offline_operation_index_inconsistent(message: impl Into<String>) -> Error {
     Error::AppServiceUnavailable {
         code: "offline_operation_index_inconsistent",
         message: message.into(),
     }
 }
-
 fn ensure_unproven_pending_window_is_live(
     snapshot_time_ms: u64,
     expires_at_ms: u64,
@@ -1703,7 +1620,6 @@ fn ensure_unproven_pending_window_is_live(
         "The accepted offline operation expired without queue, pipeline, or canonical terminal provenance.",
     ))
 }
-
 fn ensure_kagemusha_v4_terminal_finality_matches_record(
     record: &OfflineOperationRecord,
     finality: &KagemushaV2CommittedFinality,
@@ -1720,7 +1636,6 @@ fn ensure_kagemusha_v4_terminal_finality_matches_record(
     }
     Ok(())
 }
-
 fn find_committed_kagemusha_v4_operation(
     app: &SharedAppState,
     issuer: &OfflineCommandRuntime,
@@ -1735,7 +1650,6 @@ fn find_committed_kagemusha_v4_operation(
     ensure_same_offline_request(&record.request.as_ref(), &requested)?;
     Ok(Some(finality))
 }
-
 fn kagemusha_v4_anchor_state_key(operation_id: [u8; 32]) -> Result<StatePath, Error> {
     if operation_id == [0; 32] {
         return Err(offline_operation_index_inconsistent(
@@ -1750,7 +1664,6 @@ fn kagemusha_v4_anchor_state_key(operation_id: [u8; 32]) -> Result<StatePath, Er
             ))
         })
 }
-
 fn ensure_kagemusha_v4_topup_anchor_matches_request(
     anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
     request: &OfflineTopUpRequest,
@@ -1771,7 +1684,6 @@ fn ensure_kagemusha_v4_topup_anchor_matches_request(
     }
     Ok(())
 }
-
 fn ensure_kagemusha_v4_anchor_finality_binding(
     anchor_operation_id: [u8; 32],
     anchor_transaction_hash: [u8; 32],
@@ -1794,7 +1706,6 @@ fn ensure_kagemusha_v4_anchor_finality_binding(
     }
     Ok(())
 }
-
 fn load_finalized_kagemusha_v4_anchor(
     app: &SharedAppState,
     operation_id: [u8; 32],
@@ -1829,7 +1740,6 @@ fn load_finalized_kagemusha_v4_anchor(
     }
     Ok(anchor)
 }
-
 fn load_finalized_kagemusha_v4_topup_proof(
     app: &SharedAppState,
     finalized_block_height: u64,
@@ -1849,14 +1759,12 @@ fn load_finalized_kagemusha_v4_topup_proof(
     }
     Ok(proof)
 }
-
 fn offline_topup_finality_proof_unavailable() -> Error {
     Error::AppServiceUnavailable {
         code: "offline_topup_finality_proof_unavailable",
         message: "The finalized top-up proof is not available yet.".to_owned(),
     }
 }
-
 fn require_issuer(app: &AppState) -> Result<Arc<OfflineCommandRuntime>, Error> {
     let issuer = app
         .offline_commands
@@ -1868,7 +1776,6 @@ fn require_issuer(app: &AppState) -> Result<Arc<OfflineCommandRuntime>, Error> {
     ensure_offline_command_authority_ready(app, &issuer)?;
     Ok(issuer)
 }
-
 pub(crate) fn ensure_offline_command_authority_ready(
     app: &AppState,
     issuer: &OfflineCommandRuntime,
@@ -1882,7 +1789,6 @@ pub(crate) fn ensure_offline_command_authority_ready(
         kagemusha_v4_snapshot_time_ms(&state),
     )
 }
-
 pub(super) fn ensure_offline_command_authority_ready_in_world(
     world: &impl WorldReadOnly,
     issuer: &OfflineCommandRuntime,
@@ -1901,7 +1807,6 @@ pub(super) fn ensure_offline_command_authority_ready_in_world(
                 .to_owned(),
         });
     }
-
     let fee_asset_definition =
         routing::resolve_asset_definition_selector(world, fee_asset_selector, snapshot_time_ms)
             .map_err(|error| {
@@ -1929,7 +1834,6 @@ pub(super) fn ensure_offline_command_authority_ready_in_world(
     }
     Ok(())
 }
-
 fn offline_transaction_signing_error(
     context: &'static str,
     source: impl std::fmt::Display,
@@ -1939,7 +1843,6 @@ fn offline_transaction_signing_error(
         "Offline operation signer failed to sign the transaction.".to_owned(),
     ))
 }
-
 fn reject_x_iroha_auth_headers(headers: &HeaderMap) -> Result<(), Error> {
     for name in [
         app_auth::HEADER_ACCOUNT,
@@ -1957,36 +1860,26 @@ fn reject_x_iroha_auth_headers(headers: &HeaderMap) -> Result<(), Error> {
     }
     Ok(())
 }
-
 /// Validate body-independent Offline command headers before payload decoding.
 pub(crate) fn validate_command_headers_before_body(headers: &HeaderMap) -> Result<(), Error> {
     reject_x_iroha_auth_headers(headers)?;
     validated_idempotency_key(headers).map(|_| ())
 }
-
 fn now_ms() -> u64 {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
-
 fn validation(code: &'static str, message: &'static str) -> Error {
     validation_owned(code, message.to_owned())
 }
-
 fn validation_owned(code: &'static str, message: String) -> Error {
     Error::AppQueryValidation { code, message }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::{NonZeroU64, NonZeroUsize},
-        sync::Barrier,
-        time::Duration,
-    };
-
+    use super::*;
     use axum::response::IntoResponse as _;
     use iroha_config::{
         base::WithOrigin,
@@ -1997,6 +1890,7 @@ mod tests {
         },
     };
     use iroha_core::kura::Kura;
+    use iroha_core::state::World;
     use iroha_crypto::{Algorithm, Hash, HashOf, Signature, SignatureOf};
     use iroha_data_model::{
         ChainId, NetworkId, Registrable as _,
@@ -2029,15 +1923,15 @@ mod tests {
         transaction::signed::TransactionResultInner,
         trigger::DataTriggerSequence,
     };
+    use std::{
+        num::{NonZeroU64, NonZeroUsize},
+        sync::Barrier,
+        time::Duration,
+    };
     use tempfile::TempDir;
-
-    use super::*;
-    use iroha_core::state::World;
-
     fn submission_test_issuer() -> Arc<OfflineCommandRuntime> {
         submission_test_issuer_with_limits(64, 64 * ADMITTED_OPERATION_ACCOUNTED_BYTES)
     }
-
     fn submission_test_issuer_with_limits(
         max_entries: usize,
         max_accounted_bytes: usize,
@@ -2055,7 +1949,6 @@ mod tests {
             ))),
         })
     }
-
     fn command_authority_readiness_world(
         issuer: &OfflineCommandRuntime,
         permission: Permission,
@@ -2085,14 +1978,12 @@ mod tests {
             .insert(issuer.authority.clone(), permissions);
         (world, fee_asset_definition_id.to_string())
     }
-
     fn assert_offline_readiness_code(error: Error, expected: &'static str) {
         match error {
             Error::AppServiceUnavailable { code, .. } => assert_eq!(code, expected),
             other => panic!("unexpected offline readiness error: {other:?}"),
         }
     }
-
     #[test]
     fn command_authority_readiness_requires_exact_permission_and_xor_floor() {
         let issuer = submission_test_issuer();
@@ -2113,7 +2004,6 @@ mod tests {
         )
         .expect_err("same-name wildcard payload must not authorize offline commands");
         assert_offline_readiness_code(error, "offline_command_authority_not_ready");
-
         world.account_permissions_mut_for_testing().insert(
             issuer.authority.clone(),
             [iroha_core::smartcontracts::isi::offline::isi::offline_escrow_manager_permission()]
@@ -2127,7 +2017,6 @@ mod tests {
             0,
         )
         .expect("exact manager permission and configured XOR floor must be ready");
-
         let (underfunded_world, underfunded_fee_asset_selector) = command_authority_readiness_world(
             &issuer,
             iroha_core::smartcontracts::isi::offline::isi::offline_escrow_manager_permission(),
@@ -2142,7 +2031,6 @@ mod tests {
         .expect_err("balance below the configured XOR floor must stay unavailable");
         assert_offline_readiness_code(error, "offline_command_authority_unfunded");
     }
-
     fn submission_test_request(operation_seed: u8) -> OfflineTopUpRequest {
         let key_pair = KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519)
             .expect("derive offline submission request fixture key");
@@ -2244,13 +2132,11 @@ mod tests {
             .expect("offline hardware fixture signature must bind the exact typed fields");
         request
     }
-
     #[test]
     fn topup_admission_rejects_same_label_foreign_genesis_before_state_work() {
         let first_display_label = ChainId::from("shared-offline-display-label");
         let second_display_label = ChainId::from("shared-offline-display-label");
         assert_eq!(first_display_label, second_display_label);
-
         let app = crate::tests_runtime_handlers::mk_app_state_for_tests();
         let mut request = submission_test_request(0x7B);
         let foreign_network =
@@ -2269,7 +2155,6 @@ mod tests {
             }
         ));
     }
-
     fn claim_test_leader(
         issuer: &Arc<OfflineCommandRuntime>,
         request: &OfflineTopUpRequest,
@@ -2284,16 +2169,13 @@ mod tests {
             }
         }
     }
-
     fn submission_test_binding(request: &OfflineTopUpRequest) -> OfflineOperationRequestBinding {
         OfflineOperationRequestBinding::from_request(OfflineOperationRequest::TopUp(request))
             .expect("canonical submission fixture binding")
     }
-
     fn submission_test_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; 32]))
     }
-
     fn admitted_record_fixture(
         operation_seed: u8,
         submitted_at_ms: u64,
@@ -2310,7 +2192,6 @@ mod tests {
             transaction_hash: submission_test_hash(operation_seed),
         }
     }
-
     fn submission_test_transaction(requests: Vec<OfflineTopUpRequest>) -> SignedTransaction {
         let issuer = submission_test_issuer();
         let instructions = requests
@@ -2330,12 +2211,10 @@ mod tests {
             .expect("offline history fixture transaction must carry an exact valid signature");
         transaction
     }
-
     fn history_block_signer() -> KeyPair {
         KeyPair::try_from_seed(vec![0x53; 32], Algorithm::Ed25519)
             .expect("derive offline history block fixture key")
     }
-
     fn signed_history_block(
         height: u64,
         prev_block_hash: Option<HashOf<BlockHeader>>,
@@ -2380,7 +2259,6 @@ mod tests {
             .expect("replace provisional history block signature with finalized signature");
         block
     }
-
     fn persistent_kura_config(directory: &TempDir) -> KuraConfig {
         KuraConfig {
             init_mode: InitMode::Strict,
@@ -2402,7 +2280,6 @@ mod tests {
             replica_advert: kura::REPLICA_ADVERT_POLICY,
         }
     }
-
     fn app_with_offline_history(
         kura: Arc<Kura>,
         issuer: Arc<OfflineCommandRuntime>,
@@ -2413,7 +2290,6 @@ mod tests {
         inner.offline_commands = Some(issuer);
         app
     }
-
     fn assert_offline_history_error(error: Error, expected_code: &'static str) {
         match &error {
             Error::AppServiceUnavailable { code, .. } => assert_eq!(*code, expected_code),
@@ -2424,7 +2300,6 @@ mod tests {
             axum::http::StatusCode::SERVICE_UNAVAILABLE
         );
     }
-
     async fn decode_offline_operation_status(response: AxResponse) -> OfflineOperationStatus {
         assert_eq!(response.status(), axum::http::StatusCode::OK);
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -2432,7 +2307,6 @@ mod tests {
             .expect("collect offline status response body");
         norito::decode_from_bytes(&bytes).expect("decode typed Norito offline status response")
     }
-
     fn merge_history_settlement(lane_incarnation: Hash) -> LaneBlockCommitment {
         LaneBlockCommitment {
             block_height: 1,
@@ -2450,7 +2324,6 @@ mod tests {
             native_amx_receipts: Vec::new(),
         }
     }
-
     fn committed_merge_history_entry(
         transaction: SignedTransaction,
         result: TransactionResult,
@@ -2561,7 +2434,6 @@ mod tests {
         };
         execution_batch.batch_hash =
             iroha_core::merge::merge_execution_batch_hash(&execution_batch);
-
         let merge_hint_root = Hash::new(b"offline-status-merge-hint");
         let lane_snapshot = MergeLaneSnapshot {
             lane_id: LaneId::SINGLE,
@@ -2610,7 +2482,6 @@ mod tests {
             queue_plan_admissions: Vec::new(),
         }
     }
-
     fn attach_committed_merge_reference(
         mut carrier: SignedBlock,
         entry: &MergeLedgerEntry,
@@ -2620,7 +2491,6 @@ mod tests {
         carrier.set_execution_context(Some(context));
         carrier
     }
-
     async fn retry_outcome(receiver: watch::Receiver<SubmissionOutcome>) {
         let outcome = tokio::time::timeout(
             Duration::from_secs(1),
@@ -2630,21 +2500,18 @@ mod tests {
         .expect("submission follower must be released promptly");
         assert!(matches!(outcome, SubmissionOutcome::Retry));
     }
-
     async fn response_json(response: AxResponse) -> norito::json::Value {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("collect offline response body");
         norito::json::from_slice(&body).expect("decode offline JSON response")
     }
-
     #[test]
     fn transaction_recovery_uses_the_authorized_nonzero_id_and_exact_matching_instruction() {
         let issuer = submission_test_issuer();
         let first = submission_test_request(0x15);
         let second = submission_test_request(0x16);
         let transaction = submission_test_transaction(vec![first.clone(), second.clone()]);
-
         let recovered = offline_operation_record_in_transaction(
             &transaction,
             &issuer.authority,
@@ -2667,7 +2534,6 @@ mod tests {
                 .is_none(),
             "zero is never a valid operation identity"
         );
-
         let mut mismatched = submission_test_request(0x18);
         let authorized_id = mismatched.authorization.operation_id;
         mismatched.operation_id = [0x19; 32];
@@ -2691,7 +2557,6 @@ mod tests {
             .is_none(),
             "a forged duplicate top-level id must not create another lookup identity"
         );
-
         let unrelated = TransactionBuilder::new(
             crate::signed_query_test_network_id(),
             issuer.authority.clone().into(),
@@ -2708,7 +2573,6 @@ mod tests {
             "ordinary transactions must never enter offline recovery"
         );
     }
-
     #[test]
     fn unauthorized_outer_authority_cannot_poison_offline_recovery() {
         let issuer = submission_test_issuer();
@@ -2730,7 +2594,6 @@ mod tests {
                 "outer authority is not the configured Kagemusha submission authority".to_owned(),
             ),
         )));
-
         assert!(
             offline_operation_record_in_transaction(
                 &front_runner_transaction,
@@ -2752,7 +2615,6 @@ mod tests {
             .is_none(),
             "a rejected front-run must not become a terminal idempotency record"
         );
-
         let issuer_transaction = submission_test_transaction(vec![request]);
         assert!(
             offline_operation_record_in_transaction(
@@ -2764,7 +2626,6 @@ mod tests {
             "the same signed request remains recoverable under the configured issuer authority"
         );
     }
-
     #[test]
     fn terminal_recovery_binds_the_exact_operation_and_preserves_both_outcomes() {
         let issuer = submission_test_issuer();
@@ -2799,7 +2660,6 @@ mod tests {
             .is_none(),
             "a transaction containing another operation must not satisfy the lookup"
         );
-
         let rejected_result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
             ValidationFail::TooComplex,
         )));
@@ -2824,7 +2684,6 @@ mod tests {
         assert_eq!(rejected.finalized_block_height, 19);
         assert_eq!(rejected.server_time_ms, 29);
     }
-
     #[tokio::test]
     async fn ordinary_canonical_history_survives_restart_with_an_empty_operation_registry() {
         let request = submission_test_request(0x81);
@@ -2846,7 +2705,6 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         kura.store_block(block)
             .expect("store canonical offline history block");
-
         let restarted_issuer = submission_test_issuer();
         {
             let admission = restarted_issuer.admission.lock();
@@ -2871,7 +2729,6 @@ mod tests {
             finality.outcome,
             KagemushaV2TerminalOutcome::Rejected(_)
         ));
-
         let response = handle_operation_status(&app, &hex::encode(operation_id))
             .expect("restart status must reconstruct the operation from canonical history");
         match decode_offline_operation_status(response).await {
@@ -2888,7 +2745,6 @@ mod tests {
             other => panic!("canonical rejection returned the wrong status: {other:?}"),
         }
     }
-
     #[tokio::test]
     async fn committed_merge_execution_history_is_resolved_from_its_carrier_sidecar() {
         let request = submission_test_request(0x82);
@@ -2911,7 +2767,6 @@ mod tests {
         let carrier = attach_committed_merge_reference(carrier, &entry);
         kura.store_block_with_merge_entry(carrier, &entry)
             .expect("commit merge execution carrier and exact sidecar");
-
         assert!(
             kura.get_merge_entry_by_carrier_height(
                 NonZeroUsize::new(2).expect("merge carrier height is non-zero")
@@ -2937,7 +2792,6 @@ mod tests {
             finality.outcome,
             KagemushaV2TerminalOutcome::Rejected(_)
         ));
-
         let response = handle_operation_status(&app, &hex::encode(operation_id))
             .expect("status must reconstruct a committed merge-side operation");
         assert!(matches!(
@@ -2945,7 +2799,6 @@ mod tests {
             OfflineOperationStatus::Rejected { .. }
         ));
     }
-
     #[test]
     fn partially_reconstructed_kura_index_fails_closed_instead_of_reporting_not_found() {
         let request = submission_test_request(0x83);
@@ -2993,7 +2846,6 @@ mod tests {
             .expect_err("partial canonical index must make status temporarily unavailable");
         assert_offline_history_error(error, "offline_operation_index_unavailable");
     }
-
     #[test]
     fn indexed_operation_with_missing_block_body_fails_closed() {
         let request = submission_test_request(0x84);
@@ -3052,13 +2904,11 @@ mod tests {
             kura.get_block(indexed_height).is_none(),
             "the index remains authoritative while the local body is unavailable"
         );
-
         let app = app_with_offline_history(kura, issuer);
         let error = handle_operation_status(&app, &hex::encode(operation_id))
             .expect_err("an indexed operation cannot be answered without its canonical body");
         assert_offline_history_error(error, "offline_operation_history_unavailable");
     }
-
     #[test]
     fn misaligned_committed_merge_execution_is_never_zipped_or_partially_trusted() {
         let request = submission_test_request(0x85);
@@ -3101,7 +2951,6 @@ mod tests {
             .expect_err("misaligned entrypoint/result history must fail closed");
         assert_offline_history_error(error, "offline_operation_index_inconsistent");
     }
-
     #[test]
     fn pipeline_applied_ram_hint_cannot_manufacture_canonical_offline_finality() {
         let issuer = submission_test_issuer();
@@ -3134,18 +2983,15 @@ mod tests {
                 None,
             ),
         );
-
         let error = handle_operation_status(&app, &hex::encode(operation_id))
             .expect_err("RAM-only Applied must not become a durable applied operation response");
         assert_offline_history_error(error, "offline_operation_index_inconsistent");
     }
-
     #[tokio::test]
     async fn submission_claim_deduplicates_and_binds_the_complete_typed_request() {
         let issuer = submission_test_issuer();
         let request = submission_test_request(0x11);
         let leader = claim_test_leader(&issuer, &request);
-
         let follower = match issuer
             .claim_submission(submission_test_binding(&request))
             .expect("identical concurrent request must join the leader")
@@ -3155,7 +3001,6 @@ mod tests {
                 panic!("identical in-flight request must be a follower")
             }
         };
-
         let mut conflicting = request.clone();
         conflicting.artifact_binding.generation.push_str("-forged");
         let error = match issuer.claim_submission(submission_test_binding(&conflicting)) {
@@ -3169,7 +3014,6 @@ mod tests {
                 ..
             }
         ));
-
         let transaction_hash = submission_test_hash(0x71);
         let admitted = leader
             .accept(transaction_hash)
@@ -3185,7 +3029,6 @@ mod tests {
         };
         assert_eq!(observed.binding, admitted.binding);
         assert_eq!(observed.transaction_hash, transaction_hash);
-
         match issuer
             .claim_submission(submission_test_binding(&request))
             .expect("admitted replay must be returned without resubmission")
@@ -3212,7 +3055,6 @@ mod tests {
         assert_eq!(issuer.admission.lock().records.len(), 1);
         assert!(issuer.admission.lock().in_flight.is_empty());
     }
-
     #[tokio::test]
     async fn cancelled_submission_leader_releases_followers_for_retry() {
         let issuer = submission_test_issuer();
@@ -3241,13 +3083,11 @@ mod tests {
                 .is_cancelled()
         );
         retry_outcome(follower).await;
-
         let replacement = claim_test_leader(&issuer, &request);
         drop(replacement);
         assert!(issuer.admission.lock().in_flight.is_empty());
         assert!(issuer.admission.lock().records.is_empty());
     }
-
     #[tokio::test]
     async fn panicking_submission_leader_releases_followers_without_poisoning_coordinator() {
         let issuer = submission_test_issuer();
@@ -3268,12 +3108,10 @@ mod tests {
         });
         assert!(task.await.expect_err("leader task must panic").is_panic());
         retry_outcome(follower).await;
-
         let replacement = claim_test_leader(&issuer, &request);
         drop(replacement);
         assert!(issuer.admission.lock().in_flight.is_empty());
     }
-
     #[tokio::test]
     async fn stale_submission_leader_cannot_remove_a_newer_generation() {
         let issuer = submission_test_issuer();
@@ -3297,9 +3135,7 @@ mod tests {
                 },
             );
         }
-
         drop(stale_leader);
-
         let admission = issuer.admission.lock();
         let replacement = admission
             .in_flight
@@ -3311,12 +3147,10 @@ mod tests {
             &*replacement_receiver.borrow(),
             SubmissionOutcome::Pending
         ));
-
         issuer.admission.lock().in_flight.remove(&operation_id);
         let _ = replacement_updates.send_replace(SubmissionOutcome::Retry);
         retry_outcome(replacement_receiver).await;
     }
-
     #[tokio::test]
     async fn accepted_submission_with_lost_reservation_fails_closed_and_releases_followers() {
         let issuer = submission_test_issuer();
@@ -3338,7 +3172,6 @@ mod tests {
                 },
             );
         }
-
         let error = stale_leader
             .accept(submission_test_hash(0x7F))
             .expect_err("a stale leader must not publish a false accepted cache transition");
@@ -3350,7 +3183,6 @@ mod tests {
             }
         ));
         retry_outcome(stale_follower).await;
-
         {
             let admission = issuer.admission.lock();
             assert!(admission.records.get(&operation_id).is_none());
@@ -3364,14 +3196,12 @@ mod tests {
         let _ = replacement_updates.send_replace(SubmissionOutcome::Retry);
         retry_outcome(replacement_receiver).await;
     }
-
     #[tokio::test]
     async fn closed_submission_channel_fails_safe_to_retry() {
         let (updates, receiver) = watch::channel(SubmissionOutcome::Pending);
         drop(updates);
         retry_outcome(receiver).await;
     }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn admission_and_duplicate_claim_race_never_elects_a_second_leader() {
         for seed in 0x20..0x30 {
@@ -3412,7 +3242,6 @@ mod tests {
             }
         }
     }
-
     #[tokio::test]
     async fn duplicate_submission_waiter_observes_only_terminal_coordinator_outcomes() {
         let (updates, receiver) = watch::channel(SubmissionOutcome::Pending);
@@ -3422,14 +3251,12 @@ mod tests {
             !waiter.is_finished(),
             "a duplicate caller must not treat an in-flight reservation as accepted"
         );
-
         let _ = updates.send_replace(SubmissionOutcome::Retry);
         assert!(matches!(
             waiter.await.expect("waiter task"),
             SubmissionOutcome::Retry
         ));
     }
-
     #[test]
     fn v4_snapshot_admission_authenticates_exact_release_without_global_backend_flag() {
         let runtime_source = include_str!("offline_commands.rs")
@@ -3458,7 +3285,6 @@ mod tests {
             "redemption must authenticate parent and change bindings independently",
         );
     }
-
     #[test]
     fn v4_issuance_window_distinguishes_historic_redemption_from_new_notes() {
         ensure_kagemusha_v4_issuance_window(false, false)
@@ -3478,7 +3304,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn v4_rotated_change_accepts_withdrawn_parent_and_active_successor() {
         ensure_kagemusha_v4_issuance_window(false, false)
@@ -3486,7 +3311,6 @@ mod tests {
         ensure_kagemusha_v4_issuance_window(true, true)
             .expect("an independently selected active successor may issue change");
     }
-
     #[test]
     fn operation_ids_use_one_canonical_path_spelling() {
         let operation_id = [0xAB; 32];
@@ -3509,7 +3333,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn idempotency_key_must_equal_the_signed_operation_id() {
         let operation_id = [0x11; 32];
@@ -3532,7 +3355,6 @@ mod tests {
                 ..
             }
         ));
-
         headers.insert(
             "idempotency-key",
             axum::http::HeaderValue::from_static(
@@ -3540,7 +3362,6 @@ mod tests {
             ),
         );
         require_idempotency_key(&headers, operation_id).expect("matching idempotency key");
-
         headers.append(
             "idempotency-key",
             axum::http::HeaderValue::from_static(
@@ -3557,7 +3378,6 @@ mod tests {
             }
         ));
         headers.remove("idempotency-key");
-
         for malformed in [
             "11",
             "111111111111111111111111111111111111111111111111111111111111111g",
@@ -3577,7 +3397,6 @@ mod tests {
                 }
             ));
         }
-
         headers.insert(
             "idempotency-key",
             axum::http::HeaderValue::from_static(
@@ -3594,7 +3413,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn only_duplicate_queue_outcomes_enter_idempotent_recovery() {
         for source in [
@@ -3607,7 +3425,6 @@ mod tests {
             };
             assert!(is_duplicate_queue_admission_error(&error));
         }
-
         for source in [
             iroha_core::queue::Error::Full,
             iroha_core::queue::Error::LatencySaturated,
@@ -3625,7 +3442,6 @@ mod tests {
         }
         assert!(!is_duplicate_queue_admission_error(&operation_id_conflict()));
     }
-
     #[test]
     fn operation_binding_covers_the_full_typed_request_and_route() {
         #[derive(Clone, Copy, PartialEq, Eq)]
@@ -3633,7 +3449,6 @@ mod tests {
             operation_id: [u8; 32],
             amount: u64,
         }
-
         let original = RequestFixture {
             operation_id: [0x11; 32],
             amount: 7,
@@ -3650,7 +3465,6 @@ mod tests {
             OfflineOperationRequest::<&RequestFixture, &RequestFixture>::TopUp(&different_amount);
         let different_route =
             OfflineOperationRequest::<&RequestFixture, &RequestFixture>::Redeem(&identical);
-
         ensure_same_offline_request(&top_up, &identical_top_up)
             .expect("identical typed request is an idempotent replay");
         for mismatch in [&changed_top_up, &different_route] {
@@ -3665,7 +3479,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn admission_registry_retention_has_an_inclusive_saturating_boundary() {
         let expires_at_ms = 1_000_u64;
@@ -3678,7 +3491,6 @@ mod tests {
         ));
         assert!(offline_operation_is_retained(u64::MAX, u64::MAX));
     }
-
     #[test]
     fn transaction_signing_failure_does_not_expose_the_signer_error() {
         let error = offline_transaction_signing_error(
@@ -3694,7 +3506,6 @@ mod tests {
         );
         assert!(!message.contains("sensitive"));
     }
-
     #[test]
     fn admitted_bindings_are_fixed_size_and_cover_every_canonical_request_byte() {
         assert!(
@@ -3709,7 +3520,6 @@ mod tests {
             std::mem::size_of::<AdmittedOfflineOperationRecord>() <= 128,
             "the admitted record unexpectedly grew beyond its fixed-size metadata budget"
         );
-
         let mut request = submission_test_request(0x44);
         request.shield_evidence.proof.proof.bytes = vec![0xA5; 2 * 1024 * 1024];
         let original =
@@ -3719,7 +3529,6 @@ mod tests {
         let changed =
             OfflineOperationRequestBinding::from_request(OfflineOperationRequest::TopUp(&request))
                 .expect("canonical changed request binding");
-
         assert_eq!(original.operation_id, changed.operation_id);
         assert_ne!(
             original.canonical_request_digest, changed.canonical_request_digest,
@@ -3733,7 +3542,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn count_capacity_covers_admitted_and_in_flight_without_evicting_replays() {
         let issuer = submission_test_issuer_with_limits(2, 2 * ADMITTED_OPERATION_ACCOUNTED_BYTES);
@@ -3745,7 +3553,6 @@ mod tests {
         let pending_request = submission_test_request(0x02);
         let pending_binding = submission_test_binding(&pending_request);
         let pending_leader = claim_test_leader(&issuer, &pending_request);
-
         assert!(matches!(
             issuer
                 .claim_submission(admitted_binding)
@@ -3758,7 +3565,6 @@ mod tests {
                 .expect("an in-flight replay bypasses capacity"),
             SubmissionClaim::Follower(_)
         ));
-
         let mut conflicting = pending_binding;
         conflicting.canonical_request_digest[0] ^= 1;
         assert!(matches!(
@@ -3768,7 +3574,6 @@ mod tests {
                 ..
             })
         ));
-
         let capacity_error = match issuer
             .claim_submission(submission_test_binding(&submission_test_request(0x03)))
         {
@@ -3786,7 +3591,6 @@ mod tests {
             capacity_error.into_response().status(),
             axum::http::StatusCode::SERVICE_UNAVAILABLE
         );
-
         pending_leader
             .accept(submission_test_hash(0x72))
             .expect("reserved pending fixture transition");
@@ -3799,7 +3603,6 @@ mod tests {
             2 * ADMITTED_OPERATION_ACCOUNTED_BYTES
         );
     }
-
     #[test]
     fn byte_capacity_bounds_stalled_reservations_and_releases_on_drop() {
         let issuer = submission_test_issuer_with_limits(32, ADMITTED_OPERATION_ACCOUNTED_BYTES);
@@ -3819,13 +3622,11 @@ mod tests {
             }
         ));
         drop(first_leader);
-
         let replacement = claim_test_leader(&issuer, &submission_test_request(0x12));
         assert_eq!(issuer.admission.lock().tracked_entries(), 1);
         drop(replacement);
         assert_eq!(issuer.admission.lock().tracked_entries(), 0);
     }
-
     #[test]
     fn concurrent_unique_claims_cannot_overbook_admission_capacity() {
         const CAPACITY: usize = 8;
@@ -3847,7 +3648,6 @@ mod tests {
                 claim_issuer.claim_submission(binding)
             }));
         }
-
         let mut leaders = Vec::with_capacity(CAPACITY);
         let mut rejected = 0;
         for handle in handles {
@@ -3863,7 +3663,6 @@ mod tests {
                 Err(error) => panic!("unexpected claim error: {error:?}"),
             }
         }
-
         assert_eq!(leaders.len(), CAPACITY);
         assert_eq!(rejected, ATTEMPTS - CAPACITY);
         {
@@ -3878,7 +3677,6 @@ mod tests {
         drop(leaders);
         assert_eq!(issuer.admission.lock().tracked_entries(), 0);
     }
-
     #[test]
     fn admission_registry_prunes_only_past_retention_and_never_capacity_evicts() {
         let mut registry = OfflineOperationRegistry::new(
@@ -3891,12 +3689,10 @@ mod tests {
         registry.prune_expired(retained_until);
         assert!(registry.get(&[0x31; 32]).is_some());
         assert!(!registry.has_capacity_for_new_operation());
-
         registry.prune_expired(retained_until + 1);
         assert!(registry.records.is_empty());
         assert!(registry.has_capacity_for_new_operation());
     }
-
     #[test]
     fn retention_pruning_leaves_queue_and_kura_records_authoritative_for_conflicts() {
         let issuer = submission_test_issuer();
@@ -3907,7 +3703,6 @@ mod tests {
         let recovered =
             offline_operation_record_in_transaction(&transaction, &issuer.authority, operation_id)
                 .expect("authoritative transaction retains the complete request");
-
         let mut registry = OfflineOperationRegistry::new(
             NonZeroUsize::new(1).expect("positive count"),
             NonZeroUsize::new(ADMITTED_OPERATION_ACCOUNTED_BYTES).expect("positive bytes"),
@@ -3922,7 +3717,6 @@ mod tests {
             registry.get(&operation_id).is_none(),
             "fixture prunes only after the normative retention window"
         );
-
         ensure_same_offline_request(
             &recovered.request.as_ref(),
             &OfflineOperationRequest::TopUp(&original),
@@ -3944,7 +3738,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn admitted_binding_recovery_rejects_digest_or_transaction_mismatch() {
         let issuer = submission_test_issuer();
@@ -3959,7 +3752,6 @@ mod tests {
         };
         ensure_admitted_operation_matches_recovered_record(&matching, &recovered)
             .expect("matching authoritative record");
-
         let mut wrong_digest = matching.clone();
         wrong_digest.binding.canonical_request_digest[0] ^= 1;
         let mut wrong_hash = matching;
@@ -3977,20 +3769,17 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn applied_kagemusha_v4_finality_preserves_requested_operation_id() {
         let operation_id = [0x5A; 32];
         let finality =
             kagemusha_v4_applied_finality(operation_id, "transaction-hash".to_owned(), 7, 11);
-
         assert_eq!(finality.operation_id, operation_id);
         assert_eq!(finality.transaction_hash, "transaction-hash");
         assert_eq!(finality.finalized_block_height, 7);
         assert_eq!(finality.outcome, KagemushaV2TerminalOutcome::Applied);
         assert_eq!(finality.server_time_ms, 11);
     }
-
     #[tokio::test]
     async fn canonical_operation_references_and_applied_redeem_status_preserve_operation_id() {
         let operation_id = [0x5B; 32];
@@ -4006,7 +3795,6 @@ mod tests {
                 .expect("build accepted operation reference")
             })
         };
-
         let first = make_reference().await;
         let replay = make_reference().await;
         assert_eq!(first.status(), axum::http::StatusCode::ACCEPTED);
@@ -4045,7 +3833,6 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some(offline_operation_status_uri(operation_id).as_str())
         );
-
         let applied =
             crate::utils::with_current_response_format(crate::utils::ResponseFormat::Json, async {
                 respond_with_offline_operation_status(OfflineOperationStatus::Applied {
@@ -4087,7 +3874,6 @@ mod tests {
             "an applied redeem result must not regain an unused top-up field"
         );
     }
-
     #[test]
     fn terminal_finality_requires_nonzero_exact_identity_hash_height_and_time() {
         let issuer = submission_test_issuer();
@@ -4114,7 +3900,6 @@ mod tests {
         );
         ensure_kagemusha_v4_terminal_finality_matches_record(&record, &rejected)
             .expect("a canonical rejection is terminal finality, not incomplete finality");
-
         for (label, finality) in [
             (
                 "zero operation identity",
@@ -4167,7 +3952,6 @@ mod tests {
             );
         }
     }
-
     #[tokio::test]
     async fn rejected_and_expired_pipeline_entries_are_terminal_without_retry() {
         let operation_id = [0x2F; 32];
@@ -4238,14 +4022,12 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn unproven_pending_state_fails_closed_after_signed_expiry() {
         ensure_unproven_pending_window_is_live(9_999, 10_000)
             .expect("a pre-expiry operation may still acquire authoritative provenance");
         ensure_unproven_pending_window_is_live(10_000, 10_000)
             .expect("the signed expiry boundary is inclusive");
-
         let error = ensure_unproven_pending_window_is_live(10_001, 10_000)
             .expect_err("an expired operation without provenance must not remain pending forever");
         assert!(matches!(
@@ -4260,7 +4042,6 @@ mod tests {
             axum::http::StatusCode::SERVICE_UNAVAILABLE
         );
     }
-
     #[test]
     fn kagemusha_v4_anchor_finality_binding_rejects_identity_hash_or_height_mismatch() {
         let operation_id = [0x31; 32];
@@ -4275,7 +4056,6 @@ mod tests {
             42,
         )
         .expect("matching anchor and finality");
-
         for (case, anchor_operation_id, anchor_hash, anchor_height, finalized_height) in [
             (
                 "operation id mismatch",
@@ -4329,7 +4109,6 @@ mod tests {
                 axum::http::StatusCode::SERVICE_UNAVAILABLE
             );
         }
-
         let zero_transaction_hash = submission_test_hash(0);
         let error = ensure_kagemusha_v4_anchor_finality_binding(
             [0; 32],
@@ -4348,14 +4127,12 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn authorization_refresh_cannot_alias_a_second_anchor_or_bypass_exact_replay() {
         let original = submission_test_request(0x33);
         let mut refreshed = original.clone();
         refreshed.authorization.issued_at_ms = 2;
         refreshed.authorization.expires_at_ms = u64::MAX - 1;
-
         assert_eq!(
             kagemusha_v4_anchor_state_key(original.authorization.operation_id)
                 .expect("original anchor key"),
@@ -4367,7 +4144,6 @@ mod tests {
             kagemusha_v4_anchor_state_key([0; 32]).is_err(),
             "the all-zero operation id must never address chain state"
         );
-
         let original_binding = submission_test_binding(&original);
         let refreshed_binding = submission_test_binding(&refreshed);
         assert_eq!(
@@ -4386,34 +4162,28 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn kagemusha_v4_rejection_detail_formats_borrowed_reason() {
         assert_eq!(kagemusha_v4_rejection_detail(None), "no rejection reason");
-
         let rejection = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "fixture rejection".to_owned(),
         ));
         assert_eq!(
             kagemusha_v4_rejection_detail(Some(&rejection)),
-            rejection.to_string()
+            "Transaction validation failed."
         );
-
         let adversarial = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "attacker-controlled\nmessage".to_owned(),
         ));
         let message = kagemusha_v4_rejection_detail(Some(&adversarial));
-        assert_eq!(message, adversarial.to_string());
-        assert_eq!(message, "Validation failed");
+        assert_eq!(message, "Transaction validation failed.");
         assert!(!message.contains("attacker-controlled"));
         assert!(!message.contains('\n'));
         assert!(crate::utils::is_valid_error_message(&message));
     }
-
     #[test]
     fn terminal_rejection_messages_replace_control_characters_before_nesting() {
         const FALLBACK: &str = "The offline operation was rejected.";
-
         for adversarial in [
             "line\nbreak",
             "carriage\rreturn",
@@ -4425,7 +4195,6 @@ mod tests {
             assert_eq!(message, FALLBACK, "input={adversarial:?}");
             assert!(crate::utils::is_valid_error_message(&message));
         }
-
         let finality = kagemusha_v4_committed_finality(
             [0x2D; 32],
             submission_test_hash(0x2E).to_string(),

@@ -1,5 +1,4 @@
 //! Consolidated integration-test harness for SoraFS CAR coverage.
-
 #[path = "capacity_cli.rs"]
 mod capacity_cli;
 #[path = "capacity_simulation_toolkit.rs"]

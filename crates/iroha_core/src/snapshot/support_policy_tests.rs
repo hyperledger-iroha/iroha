@@ -5,7 +5,6 @@ use std::{
     path::Path,
     sync::{Arc, Barrier},
 };
-
 use super::*;
 use crate::{
     block::BlockBuilder,
@@ -51,13 +50,10 @@ use iroha_data_model::{
 use iroha_primitives::json::Json;
 use nonzero_ext::nonzero;
 use tempfile::tempdir;
-
 const TEST_CHUNK_SIZE: NonZeroUsize = nonzero!(1024_usize);
-
 fn dummy_block_hash(marker: u8) -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(Hash::prehashed([marker; 32]))
 }
-
 const TEST_CHAIN_ID: &str = "test-chain";
 const SMALL_ORDER_ED25519_R: [u8; 32] = [
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -66,7 +62,6 @@ const NONCANONICAL_ED25519_R: [u8; 32] = [
     0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
 ];
-
 fn snapshot_test_network_id() -> NetworkId {
     let mut genesis_hash = [0_u8; Hash::LENGTH];
     genesis_hash[Hash::LENGTH - 1] = 1;
@@ -74,38 +69,31 @@ fn snapshot_test_network_id() -> NetworkId {
         Hash::prehashed(genesis_hash),
     ))
 }
-
 fn checked_seeded_keypair(seed: u8, algorithm: Algorithm) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], algorithm)
         .expect("test snapshot seeded keypair should be valid")
 }
-
 fn checked_random_snapshot_keypair() -> KeyPair {
     KeyPair::try_random().expect("snapshot fixture key generation should succeed")
 }
-
 fn checked_random_snapshot_bls_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("snapshot BLS fixture key generation should succeed")
 }
-
 fn current_generation_name(store_dir: &Path) -> String {
     let pointer_path = store_dir.join(SNAPSHOT_CURRENT_FILE_NAME);
     let pointer = std::fs::read(&pointer_path).expect("read canonical snapshot pointer");
     parse_snapshot_current_pointer(&pointer, &pointer_path)
         .expect("canonical snapshot pointer must name one generation")
 }
-
 fn current_generation_dir(store_dir: &Path) -> PathBuf {
     store_dir
         .join(SNAPSHOT_GENERATIONS_DIR_NAME)
         .join(current_generation_name(store_dir))
 }
-
 fn current_generation_artifact(store_dir: &Path, name: &str) -> PathBuf {
     current_generation_dir(store_dir).join(name)
 }
-
 fn assert_canonical_snapshot_generation(store_dir: &Path) {
     let mut root_entries = std::fs::read_dir(store_dir)
         .expect("read snapshot root")
@@ -126,7 +114,6 @@ fn assert_canonical_snapshot_generation(store_dir: &Path) {
         ],
         "first-release snapshots expose only the atomic pointer and immutable generations"
     );
-
     let generation_dir = current_generation_dir(store_dir);
     let generation_name = current_generation_name(store_dir);
     let payload = std::fs::read(generation_dir.join(SNAPSHOT_FILE_NAME))
@@ -157,7 +144,6 @@ fn assert_canonical_snapshot_generation(store_dir: &Path) {
     expected.sort();
     assert_eq!(artifact_names, expected);
 }
-
 fn signed_complete_wire_finality_for_snapshot_blocks(
     network_id: &NetworkId,
     blocks: &[Arc<SignedBlock>],
@@ -167,7 +153,6 @@ fn signed_complete_wire_finality_for_snapshot_blocks(
         ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
         QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
     };
-
     let mut keypairs = (0_u8..4)
         .map(|index| checked_seeded_keypair(0xB0_u8.saturating_add(index), Algorithm::BlsNormal))
         .collect::<Vec<_>>();
@@ -285,7 +270,6 @@ fn signed_complete_wire_finality_for_snapshot_blocks(
     }
     artifacts
 }
-
 fn snapshot_gate_fixture() -> (
     State,
     Arc<Kura>,
@@ -305,7 +289,6 @@ fn snapshot_gate_fixture() -> (
     .expect("one snapshot finality artifact");
     (state, kura, block, artifact)
 }
-
 fn store_snapshot_checkpoint_and_manifest(
     state: &State,
     kura: &Kura,
@@ -323,7 +306,6 @@ fn store_snapshot_checkpoint_and_manifest(
         .expect("store checkpoint-bound snapshot gate manifest");
     assert_eq!(state.committed_height(), usize::try_from(height).unwrap());
 }
-
 fn store_complete_snapshot_commit_evidence(
     state: &State,
     kura: &Kura,
@@ -336,7 +318,6 @@ fn store_complete_snapshot_commit_evidence(
         .store_v2_finality_artifact(authority)
         .expect("persist complete-wire snapshot finality");
 }
-
 fn store_complete_snapshot_commit_evidence_for_blocks(
     state: &State,
     kura: &Kura,
@@ -356,7 +337,6 @@ fn store_complete_snapshot_commit_evidence_for_blocks(
         .expect("snapshot commit evidence requires a terminal block");
     store_complete_snapshot_commit_evidence(state, kura, terminal_block, terminal_artifact);
 }
-
 fn assert_snapshot_bundle_absent(store_dir: &Path) {
     assert!(
         !store_dir.join(SNAPSHOT_CURRENT_FILE_NAME).exists(),
@@ -372,25 +352,21 @@ fn assert_snapshot_bundle_absent(store_dir: &Path) {
         "rejected snapshot must not leave a selectable immutable generation"
     );
 }
-
 #[tokio::test]
 async fn bounded_snapshot_reader_rejects_oversized_regular_file() {
     let root = tempdir().expect("tempdir");
     let path = root.path().join("oversized");
     std::fs::write(&path, [0_u8; 9]).expect("write oversized fixture");
-
     let error = read_bounded_stable_regular_file(&path, 8)
         .expect_err("oversized snapshot artifact must fail before allocation");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
 }
-
 #[tokio::test]
 async fn bounded_snapshot_reader_rechecks_the_opened_file_length() {
     let error = bounded_snapshot_read_capacity(9, 8)
         .expect_err("growth between path metadata and the opened descriptor must fail");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
 }
-
 #[cfg(unix)]
 #[tokio::test]
 async fn authenticated_bound_payload_rejects_in_place_change_before_decode() {
@@ -400,25 +376,21 @@ async fn authenticated_bound_payload_rejects_in_place_change_before_decode() {
     let binding = bind_snapshot_file_handle(&path, 9)
         .expect("bind canonical payload")
         .expect("payload exists");
-
     std::fs::OpenOptions::new()
         .write(true)
         .truncate(true)
         .open(&path)
         .and_then(|mut file| file.write_all(b"malicious"))
         .expect("replace bytes in the already-open inode");
-
     assert!(matches!(
         read_bound_snapshot_payload(&binding),
         Err(TryReadError::SnapshotBindingChanged(changed)) if changed == path
     ));
 }
-
 #[cfg(unix)]
 #[tokio::test]
 async fn snapshot_bindings_reject_untrusted_unix_owner_or_mode() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
     let root = tempdir().expect("tempdir");
     let directory = root.path().join("snapshot");
     std::fs::create_dir(&directory).expect("create snapshot directory");
@@ -434,14 +406,12 @@ async fn snapshot_bindings_reject_untrusted_unix_owner_or_mode() {
         metadata.mode(),
         effective_uid
     ));
-
     std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o770))
         .expect("make snapshot directory group-writable");
     assert!(matches!(
         direct_snapshot_directory_identity(&directory),
         Err(TryReadError::SnapshotGenerationInvalid { .. })
     ));
-
     std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
         .expect("restore snapshot directory permissions");
     let artifact = directory.join("artifact");
@@ -452,12 +422,10 @@ async fn snapshot_bindings_reject_untrusted_unix_owner_or_mode() {
         .expect_err("group-writable snapshot artifact must fail closed");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
 }
-
 #[cfg(unix)]
 #[tokio::test]
 async fn bounded_snapshot_reader_rejects_symlink_and_hardlink() {
     use std::os::unix::fs::symlink;
-
     let root = tempdir().expect("tempdir");
     let victim = root.path().join("victim");
     let symlink_path = root.path().join("symlink");
@@ -465,7 +433,6 @@ async fn bounded_snapshot_reader_rejects_symlink_and_hardlink() {
     std::fs::write(&victim, b"sensitive victim bytes").expect("write victim");
     symlink(&victim, &symlink_path).expect("create symlink");
     std::fs::hard_link(&victim, &hardlink_path).expect("create hardlink");
-
     for path in [&symlink_path, &hardlink_path] {
         let error = read_bounded_stable_regular_file(path, 1024)
             .expect_err("linked snapshot artifact must fail closed");
@@ -476,14 +443,12 @@ async fn bounded_snapshot_reader_rejects_symlink_and_hardlink() {
         b"sensitive victim bytes"
     );
 }
-
 #[tokio::test]
 async fn snapshot_publication_defers_without_checkpoint_and_selects_nothing() {
     let (state, kura, _block, _artifact) = snapshot_gate_fixture();
     let root = tempdir().expect("snapshot gate temp root");
     let store_dir = root.path().join("snapshot");
     let signing_key = checked_random_snapshot_keypair();
-
     let error = try_write_snapshot(&state, &store_dir, &signing_key, TEST_CHUNK_SIZE)
         .expect_err("a durable body without its checkpoint must defer snapshot publication");
     assert!(matches!(
@@ -508,7 +473,6 @@ async fn snapshot_publication_defers_without_checkpoint_and_selects_nothing() {
         "restart must not select a rejected unpublished generation"
     );
 }
-
 #[tokio::test]
 async fn snapshot_publication_defers_bound_manifest_without_finality() {
     let (state, kura, block, artifact) = snapshot_gate_fixture();
@@ -516,7 +480,6 @@ async fn snapshot_publication_defers_bound_manifest_without_finality() {
     store_snapshot_checkpoint_and_manifest(&state, &kura, &block, state_hash, &artifact);
     let root = tempdir().expect("snapshot gate temp root");
     let store_dir = root.path().join("snapshot");
-
     let error = try_write_snapshot(
         &state,
         &store_dir,
@@ -530,7 +493,6 @@ async fn snapshot_publication_defers_bound_manifest_without_finality() {
     ));
     assert_snapshot_bundle_absent(&store_dir);
 }
-
 #[tokio::test]
 async fn snapshot_publication_rejects_mismatched_state_hash() {
     let (state, kura, block, artifact) = snapshot_gate_fixture();
@@ -541,7 +503,6 @@ async fn snapshot_publication_rejects_mismatched_state_hash() {
         .expect("store exact finality artifact");
     let root = tempdir().expect("snapshot gate temp root");
     let store_dir = root.path().join("snapshot");
-
     let error = try_write_snapshot(
         &state,
         &store_dir,
@@ -552,7 +513,6 @@ async fn snapshot_publication_rejects_mismatched_state_hash() {
     assert!(matches!(error, TryWriteError::CommitEvidence { .. }));
     assert_snapshot_bundle_absent(&store_dir);
 }
-
 #[tokio::test]
 async fn snapshot_publication_rejects_foreign_manifest_authority() {
     let (state, kura, block, artifact) = snapshot_gate_fixture();
@@ -571,7 +531,6 @@ async fn snapshot_publication_rejects_foreign_manifest_authority() {
         .expect("store exact finality artifact");
     let root = tempdir().expect("snapshot gate temp root");
     let store_dir = root.path().join("snapshot");
-
     let error = try_write_snapshot(
         &state,
         &store_dir,
@@ -582,7 +541,6 @@ async fn snapshot_publication_rejects_foreign_manifest_authority() {
     assert!(matches!(error, TryWriteError::CommitEvidence { .. }));
     assert_snapshot_bundle_absent(&store_dir);
 }
-
 #[tokio::test]
 async fn snapshot_publication_accepts_complete_authenticated_tuple() {
     let (mut state, kura, block, artifact) = snapshot_gate_fixture();
@@ -598,7 +556,6 @@ async fn snapshot_publication_accepts_complete_authenticated_tuple() {
     let root = tempdir().expect("snapshot gate temp root");
     let store_dir = root.path().join("snapshot");
     let signing_key = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &signing_key, TEST_CHUNK_SIZE)
         .expect("complete authenticated commit tuple must permit publication");
     assert_canonical_snapshot_generation(&store_dir);
@@ -637,7 +594,6 @@ async fn snapshot_publication_accepts_complete_authenticated_tuple() {
         "post-height publication must preserve the exact canonical restart payload"
     );
 }
-
 #[tokio::test]
 async fn snapshot_fixture_key_generation_preserves_algorithm() {
     assert_eq!(
@@ -651,7 +607,6 @@ async fn snapshot_fixture_key_generation_preserves_algorithm() {
         Algorithm::BlsNormal
     );
 }
-
 #[tokio::test]
 async fn snapshot_bootstrap_policy_requires_exact_canonical_digest_and_height() {
     let digest = "1a0861b04fa35fd0d8ea4c2f38baaa478c7430df3466e9401c53f934671747bd";
@@ -667,13 +622,11 @@ async fn snapshot_bootstrap_policy_requires_exact_canonical_digest_and_height() 
         42
     ));
     assert!(!policy.authorizes(digest, 41));
-
     let invalid_uppercase = SnapshotBootstrapPolicy {
         audited_sha256: Some(digest.to_ascii_uppercase()),
         ..policy.clone()
     };
     assert!(invalid_uppercase.validate().is_err());
-
     let disabled = SnapshotBootstrapPolicy::default();
     assert!(disabled.validate().is_ok());
     assert!(!disabled.authorizes(digest, 42));
@@ -684,7 +637,6 @@ async fn snapshot_bootstrap_policy_requires_exact_canonical_digest_and_height() 
     };
     assert!(disabled_with_authority.validate().is_err());
 }
-
 fn state_factory_with_kura_and_chain(kura: Arc<Kura>, chain_id: ChainId) -> State {
     let query_handle = LiveQueryStore::start_test();
     State::new_with_chain(
@@ -694,15 +646,12 @@ fn state_factory_with_kura_and_chain(kura: Arc<Kura>, chain_id: ChainId) -> Stat
         chain_id,
     )
 }
-
 fn state_factory_with_kura(kura: Arc<Kura>) -> State {
     state_factory_with_kura_and_chain(kura, ChainId::from(TEST_CHAIN_ID))
 }
-
 fn state_factory() -> State {
     state_factory_with_kura(Kura::blank_kura_for_testing())
 }
-
 fn sccp_registry_for_snapshot_test() -> crate::state::SccpOnChainRegistryV1 {
     let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
         iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
@@ -718,7 +667,6 @@ fn sccp_registry_for_snapshot_test() -> crate::state::SccpOnChainRegistryV1 {
         }],
     }
 }
-
 fn state_with_exact_pending_sccp_snapshot_fixture(
     kura: Arc<Kura>,
 ) -> (
@@ -810,7 +758,6 @@ fn state_with_exact_pending_sccp_snapshot_fixture(
         .expect("completed retained SCCP signature verifies");
     crate::bridge::validate_sccp_commitment_root_for_signed_block(&block)
         .expect("completed snapshot block authenticates its exact SCCP message");
-
     let exact = exact.with_finalized_block(&block, None);
     let finality = iroha_sccp::decode_taira_bridge_finality_proof(&exact.bundle.finality_proof)
         .expect("exact completed SCCP finality fixture decodes");
@@ -834,7 +781,6 @@ fn state_with_exact_pending_sccp_snapshot_fixture(
     let _ = kura
         .store_v2_finality_artifact(&finality.finality_artifact)
         .expect("persist exact SCCP finality artifact");
-
     let mut state = state_factory_with_kura_and_chain(
         Arc::clone(&kura),
         ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
@@ -898,7 +844,6 @@ fn kura_config_for_snapshot_test(store_dir: &Path, blocks_in_memory: NonZeroUsiz
         replica_advert: REPLICA_ADVERT_POLICY,
     }
 }
-
 fn install_active_space_directory_manifest(
     state: &mut State,
 ) -> (UniversalAccountId, DataSpaceId, AccountId) {
@@ -910,7 +855,6 @@ fn install_active_space_directory_manifest(
         .world
         .accounts
         .insert(account_id.clone(), AccountValue::new(details));
-
     let manifest = AssetPermissionManifest {
         version: ManifestVersion::default(),
         uaid,
@@ -925,10 +869,8 @@ fn install_active_space_directory_manifest(
     let mut set = crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
     set.upsert(record);
     state.world.space_directory_manifests.insert(uaid, set);
-
     (uaid, dataspace, account_id)
 }
-
 fn resource_policy(
     max_decode_depth: usize,
     max_decode_items: usize,
@@ -945,7 +887,6 @@ fn resource_policy(
             .expect("non-zero transient limit"),
     }
 }
-
 #[tokio::test]
 async fn snapshot_json_scanner_enforces_every_resource_budget() {
     assert_eq!(
@@ -1000,7 +941,6 @@ async fn snapshot_json_scanner_enforces_every_resource_budget() {
         }
     }
 }
-
 #[tokio::test]
 async fn snapshot_json_scanner_rejects_noncanonical_spelling() {
     let policy = SnapshotResourcePolicy::default();
@@ -1011,7 +951,6 @@ async fn snapshot_json_scanner_rejects_noncanonical_spelling() {
         ));
     }
 }
-
 #[tokio::test]
 async fn borrowed_snapshot_wsv_hash_matches_typed_canonical_surface() {
     let state = state_factory();
@@ -1025,7 +964,6 @@ async fn borrowed_snapshot_wsv_hash_matches_typed_canonical_surface() {
     );
     assert_eq!(canonical_state_snapshot_hash(&state), tree_reference);
 }
-
 #[tokio::test]
 async fn borrowed_snapshot_wsv_hash_canonicalizes_json_lexemes() {
     let lexical = br#"{"\u0077orld":{"note":"\u0061","number":1e0}}"#;
@@ -1092,7 +1030,6 @@ async fn canonical_wsv_hash_ignores_commit_qc_sidecars() {
             bls_aggregate_signature: vec![0xAA; 96],
         },
     };
-
     state.insert_commit_qc_for_testing(block_hash, qc);
     let mut restart_snapshot = String::new();
     serialize_state_snapshot(&state, &mut restart_snapshot, true);
@@ -1100,7 +1037,6 @@ async fn canonical_wsv_hash_ignores_commit_qc_sidecars() {
         restart_snapshot.contains("\"commit_qcs\""),
         "restart snapshots must retain the historical commit-QC archive"
     );
-
     let after = canonical_state_snapshot_bytes_for_tests(&state);
     assert_eq!(
         before, after,
@@ -1118,19 +1054,16 @@ async fn canonical_wsv_hash_ignores_commit_qc_sidecars() {
         "canonical WSV checkpoint surface should omit commit-QC sidecars"
     );
 }
-
 #[tokio::test]
 async fn canonical_wsv_hash_uses_current_mv_cell_values() {
     let state = state_factory();
     let before = canonical_state_snapshot_bytes_for_tests(&state);
-
     {
         let mut parameters = state.world.parameters.block();
         let current = parameters.get().clone();
         *parameters.get_mut() = current;
         parameters.commit();
     }
-
     let after = canonical_state_snapshot_bytes_for_tests(&state);
     assert_eq!(
         before, after,
@@ -1141,7 +1074,6 @@ async fn canonical_wsv_hash_uses_current_mv_cell_values() {
             .expect("borrowed WSV hashing must unwrap MV cells"),
         Hash::new(&after),
     );
-
     let value = canonical_state_snapshot_value(&state);
     let parameters = value
         .get("world")
@@ -1153,7 +1085,6 @@ async fn canonical_wsv_hash_uses_current_mv_cell_values() {
         "canonical WSV checkpoint surface should serialize current cell values"
     );
 }
-
 fn test_vrf_epoch_record(epoch: u64) -> iroha_data_model::consensus::VrfEpochRecord {
     iroha_data_model::consensus::VrfEpochRecord {
         epoch,
@@ -1173,19 +1104,16 @@ fn test_vrf_epoch_record(epoch: u64) -> iroha_data_model::consensus::VrfEpochRec
         validator_election: None,
     }
 }
-
 #[tokio::test]
 async fn canonical_wsv_hash_ignores_vrf_epoch_sidecars() {
     let state = state_factory();
     let before = canonical_state_snapshot_bytes_for_tests(&state);
-
     {
         let mut world = state.world.block();
         world.vrf_epochs.insert(0, test_vrf_epoch_record(0));
         world.commit();
     }
     let after = canonical_state_snapshot_bytes_for_tests(&state);
-
     assert_eq!(
         before, after,
         "VRF epoch sidecars must not affect replay WSV checkpoints"
@@ -1195,7 +1123,6 @@ async fn canonical_wsv_hash_ignores_vrf_epoch_sidecars() {
             .expect("borrowed WSV hashing must redact VRF sidecars"),
         Hash::new(&after),
     );
-
     let value = canonical_state_snapshot_value(&state);
     let world = value
         .get("world")
@@ -1206,11 +1133,9 @@ async fn canonical_wsv_hash_ignores_vrf_epoch_sidecars() {
         "canonical WSV checkpoint surface should omit VRF epoch sidecars"
     );
 }
-
 #[tokio::test]
 async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
     let state = state_factory();
-
     {
         let mut parameters = state.world.parameters.block();
         parameters.sumeragi.key_allowed_algorithms = vec![
@@ -1233,7 +1158,6 @@ async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
             .expect("borrowed WSV hashing must canonicalize set-like key policy fields"),
         Hash::new(&first),
     );
-
     {
         let mut parameters = state.world.parameters.block();
         parameters.sumeragi.key_allowed_algorithms = vec![Algorithm::Ed25519, Algorithm::Secp256k1];
@@ -1251,12 +1175,10 @@ async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
             .expect("borrowed WSV hashing must preserve canonical key policy sets"),
         Hash::new(&second),
     );
-
     assert_eq!(
         first, second,
         "set-like Sumeragi key policy fields must not make WSV checkpoints order-sensitive"
     );
-
     let value = canonical_state_snapshot_value(&state);
     let providers = value
         .get("world")
@@ -1274,12 +1196,10 @@ async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
         .collect::<Vec<_>>();
     assert_eq!(providers, ["pkcs11", "softkey", "yubihsm"]);
 }
-
 #[tokio::test]
 async fn canonical_state_snapshot_ignores_consensus_evidence_caches() {
     let state = state_factory();
     let expected = canonical_state_snapshot_bytes_for_tests(&state);
-
     let keypair = checked_random_snapshot_bls_keypair();
     let peer = PeerId::new(keypair.public_key().clone());
     let roster = vec![peer.clone()];
@@ -1322,7 +1242,6 @@ async fn canonical_state_snapshot_ignores_consensus_evidence_caches() {
         penalties_applied_at_height: None,
         validator_election: None,
     };
-
     {
         let mut world = state.world.block();
         world
@@ -1343,14 +1262,12 @@ async fn canonical_state_snapshot_ignores_consensus_evidence_caches() {
         prev_commit_topology.push(peer);
         prev_commit_topology.commit();
     }
-
     assert_eq!(
         canonical_state_snapshot_bytes_for_tests(&state),
         expected,
         "consensus evidence caches must not perturb canonical replay checkpoints"
     );
 }
-
 fn sample_space_directory_manifest() -> AssetPermissionManifest {
     AssetPermissionManifest {
         version: ManifestVersion::default(),
@@ -1362,7 +1279,6 @@ fn sample_space_directory_manifest() -> AssetPermissionManifest {
         entries: Vec::new(),
     }
 }
-
 fn insert_account_with_uaid(state: &mut State, uaid: UniversalAccountId) -> AccountId {
     let account_id = AccountId::new(checked_random_snapshot_keypair().public_key().clone());
     let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
@@ -1372,7 +1288,6 @@ fn insert_account_with_uaid(state: &mut State, uaid: UniversalAccountId) -> Acco
         .insert(account_id.clone(), AccountValue::new(details));
     account_id
 }
-
 fn accepted_manifest_transaction() -> AcceptedTransaction<'static> {
     let key_pair = checked_seeded_keypair(0x31, Algorithm::Ed25519);
     let authority = AccountId::new(key_pair.public_key().clone());
@@ -1387,7 +1302,6 @@ fn accepted_manifest_transaction() -> AcceptedTransaction<'static> {
     .sign(key_pair.private_key());
     AcceptedTransaction::new_unchecked(Cow::Owned(transaction))
 }
-
 fn accepted_log_transaction(message: &str) -> AcceptedTransaction<'static> {
     let key_pair = checked_seeded_keypair(0x32, Algorithm::Ed25519);
     let authority = AccountId::new(key_pair.public_key().clone());
@@ -1400,11 +1314,9 @@ fn accepted_log_transaction(message: &str) -> AcceptedTransaction<'static> {
     .sign(key_pair.private_key());
     AcceptedTransaction::new_unchecked(Cow::Owned(transaction))
 }
-
 fn signed_block_with_transaction(transaction: AcceptedTransaction<'static>) -> Arc<SignedBlock> {
     signed_block_after_transaction(transaction, None)
 }
-
 fn signed_block_after_transaction(
     transaction: AcceptedTransaction<'static>,
     latest_block: Option<&SignedBlock>,
@@ -1418,19 +1330,16 @@ fn signed_block_after_transaction(
             .into(),
     )
 }
-
 fn legacy_snapshot_bytes_without_space_directory_section(state: &State) -> Vec<u8> {
     let mut payload = String::new();
     serialize_state_snapshot(state, &mut payload, false);
     payload.into_bytes()
 }
-
 fn exact_snapshot_payload_bytes(state: &State) -> Vec<u8> {
     let mut payload = String::new();
     serialize_state_snapshot(state, &mut payload, true);
     payload.into_bytes()
 }
-
 fn publish_test_snapshot_generation(
     store_dir: &std::path::Path,
     bytes: &[u8],
@@ -1468,7 +1377,6 @@ fn publish_test_snapshot_generation(
     .expect("publish immutable test generation");
     (store_identity, generation)
 }
-
 fn write_snapshot_bundle_from_bytes(store_dir: &std::path::Path, bytes: &[u8], key_pair: &KeyPair) {
     let (store_identity, generation) = publish_test_snapshot_generation(store_dir, bytes, key_pair);
     publish_snapshot_current_pointer(
@@ -1481,12 +1389,10 @@ fn write_snapshot_bundle_from_bytes(store_dir: &std::path::Path, bytes: &[u8], k
     )
     .expect("publish canonical test pointer");
 }
-
 fn store_block_and_mark_state_height(state: &mut State, kura: &Arc<Kura>, block: Arc<SignedBlock>) {
     kura.store_block(Arc::clone(&block)).expect("store block");
     state.push_block_hash_for_testing(block.hash());
 }
-
 fn signed_commit_qc_for_snapshot(
     network_id: &NetworkId,
     block_hash: HashOf<BlockHeader>,
@@ -1535,7 +1441,6 @@ fn signed_commit_qc_for_snapshot(
         },
     }
 }
-
 fn model_rotated_disabled_removed_validator(
     state: &mut State,
     historical_validator: &KeyPair,
@@ -1552,7 +1457,6 @@ fn model_rotated_disabled_removed_validator(
     state
         .world
         .register_validator_pop_for_testing(replacement.public_key().clone(), replacement_pop);
-
     let historical_id = derive_validator_key_id(historical_validator.public_key());
     let replacement_id = derive_validator_key_id(replacement.public_key());
     let mut world = state.world.block();
@@ -1576,7 +1480,6 @@ fn model_rotated_disabled_removed_validator(
         .consensus_keys
         .insert(replacement_id, replacement_record);
     world.commit();
-
     assert!(
         state
             .world

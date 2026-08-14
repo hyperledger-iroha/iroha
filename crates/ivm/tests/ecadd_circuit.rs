@@ -2,7 +2,6 @@
 use blstrs::{G1Projective, Scalar};
 use group::{Curve, Group};
 use ivm::halo2::{ECAddCircuit, ECMulVarCircuit, PubKeyGenCircuit};
-
 #[test]
 fn test_ecadd_circuit() {
     let p = G1Projective::generator() * Scalar::from(3u64);
@@ -15,7 +14,6 @@ fn test_ecadd_circuit() {
     };
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_ecmul_var_circuit() {
     let p = G1Projective::generator();
@@ -28,7 +26,6 @@ fn test_ecmul_var_circuit() {
     };
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_pubkgen_circuit() {
     let secret = Scalar::from(9u64);

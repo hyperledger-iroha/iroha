@@ -7,7 +7,6 @@ struct TestGovernanceDagSigner {
     qualification_reads: AtomicU64,
     drift_on_second_qualification_read: AtomicBool,
 }
-
 impl TestGovernanceDagSigner {
     fn new() -> Self {
         Self {
@@ -20,7 +19,6 @@ impl TestGovernanceDagSigner {
             drift_on_second_qualification_read: AtomicBool::new(false),
         }
     }
-
     fn public_key_bytes(&self) -> [u8; 32] {
         let (algorithm, bytes) = self
             .key_pair
@@ -30,17 +28,14 @@ impl TestGovernanceDagSigner {
         assert_eq!(algorithm, Algorithm::Ed25519);
         bytes.try_into().expect("Ed25519 public key width")
     }
-
     fn expected_qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
         GovernanceDagRuntimeProviderQualificationV1::new(1, [0x84; 32])
     }
 }
-
 impl GovernanceDagRuntimeSigner for TestGovernanceDagSigner {
     fn handle(&self) -> &str {
         &self.handle
     }
-
     fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
         if self.qualification_refuse.load(Ordering::SeqCst) {
             return Err("hsm_credential=must-never-escape".to_owned());
@@ -57,15 +52,12 @@ impl GovernanceDagRuntimeSigner for TestGovernanceDagSigner {
         }
         Ok(Self::expected_qualification())
     }
-
     fn publisher_peer_id(&self) -> &[u8] {
         &self.publisher_peer_id
     }
-
     fn public_key(&self) -> [u8; 32] {
         self.public_key_bytes()
     }
-
     fn sign(
         &self,
         _purpose: crate::GovernanceDagSigningPurposeV1,
@@ -78,13 +70,11 @@ impl GovernanceDagRuntimeSigner for TestGovernanceDagSigner {
             .map_err(|_| "test Governance DAG signature width changed".to_owned())
     }
 }
-
 #[derive(Debug)]
 struct TestGovernanceDagCheckpointStoreState {
     records: [Option<GovernanceDagSealedStateRecord>; 6],
     generation_floors: [u64; 6],
 }
-
 impl Default for TestGovernanceDagCheckpointStoreState {
     fn default() -> Self {
         Self {
@@ -93,21 +83,17 @@ impl Default for TestGovernanceDagCheckpointStoreState {
         }
     }
 }
-
 #[derive(Debug, Default)]
 struct TestGovernanceDagCheckpointStore {
     state: Mutex<TestGovernanceDagCheckpointStoreState>,
     qualification_refuse: AtomicBool,
     fail_after_next_checkpoint_cas: AtomicBool,
 }
-
 impl TestGovernanceDagCheckpointStore {
     const HANDLE: &'static str = "kms:governance-dag:node-producer-checkpoint";
-
     const fn expected_qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
         GovernanceDagRuntimeProviderQualificationV1::new(1, [0x94; 32])
     }
-
     const fn slot_index(slot: GovernanceDagSealedStateSlot) -> usize {
         match slot {
             GovernanceDagSealedStateSlot::Checkpoint => 0,
@@ -119,19 +105,16 @@ impl TestGovernanceDagCheckpointStore {
         }
     }
 }
-
 impl GovernanceDagSealedCheckpointStore for TestGovernanceDagCheckpointStore {
     fn handle(&self) -> &str {
         Self::HANDLE
     }
-
     fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
         if self.qualification_refuse.load(Ordering::SeqCst) {
             return Err("checkpoint_credential=must-never-escape".to_owned());
         }
         Ok(Self::expected_qualification())
     }
-
     fn load(
         &self,
         slot: GovernanceDagSealedStateSlot,
@@ -139,7 +122,6 @@ impl GovernanceDagSealedCheckpointStore for TestGovernanceDagCheckpointStore {
         let state = self.state.lock().map_err(|_| "poisoned".to_owned())?;
         Ok(state.records[Self::slot_index(slot)].clone())
     }
-
     fn compare_and_swap(
         &self,
         slot: GovernanceDagSealedStateSlot,
@@ -169,7 +151,6 @@ impl GovernanceDagSealedCheckpointStore for TestGovernanceDagCheckpointStore {
         }
         Ok(())
     }
-
     fn delete(
         &self,
         slot: GovernanceDagSealedStateSlot,
@@ -184,12 +165,10 @@ impl GovernanceDagSealedCheckpointStore for TestGovernanceDagCheckpointStore {
         Ok(())
     }
 }
-
 #[derive(Debug)]
 struct FailingRepairOrchestrator {
     calls: Arc<AtomicUsize>,
 }
-
 impl RepairOrchestrator for FailingRepairOrchestrator {
     fn rehydrate_missing_chunks(
         &self,
@@ -203,19 +182,16 @@ impl RepairOrchestrator for FailingRepairOrchestrator {
         ))
     }
 }
-
 #[derive(Debug, Default)]
 struct RecordingPublisher {
     payloads: Mutex<Vec<Vec<u8>>>,
 }
-
 impl RecordingPublisher {
     fn take(&self) -> Vec<Vec<u8>> {
         let mut guard = self.payloads.lock().expect("publisher lock poisoned");
         guard.drain(..).collect()
     }
 }
-
 impl GovernancePublisher for RecordingPublisher {
     fn publish_deal_settlement(
         &self,
@@ -226,7 +202,6 @@ impl GovernancePublisher for RecordingPublisher {
         guard.push(encoded.to_vec());
         Ok(())
     }
-
     fn publish_pdp_archive(
         &self,
         _archive: &PdpGovernanceArchiveV1,
@@ -236,7 +211,6 @@ impl GovernancePublisher for RecordingPublisher {
         guard.push(encoded.to_vec());
         Ok(())
     }
-
     fn publish_por_challenge_publication(
         &self,
         _publication: &PorChallengePublicationV1,
@@ -246,7 +220,6 @@ impl GovernancePublisher for RecordingPublisher {
         guard.push(encoded.to_vec());
         Ok(())
     }
-
     fn publish_por_weekly_report(
         &self,
         _report: &PorWeeklyReportV1,
@@ -256,7 +229,6 @@ impl GovernancePublisher for RecordingPublisher {
         guard.push(encoded.to_vec());
         Ok(())
     }
-
     fn publish_gc_audit_event(
         &self,
         _event: &GcAuditEventV1,
@@ -266,7 +238,6 @@ impl GovernancePublisher for RecordingPublisher {
         guard.push(encoded.to_vec());
         Ok(())
     }
-
     fn publish_reconciliation_report(
         &self,
         _report: &SorafsReconciliationReportV1,
@@ -276,7 +247,6 @@ impl GovernancePublisher for RecordingPublisher {
         guard.push(encoded.to_vec());
         Ok(())
     }
-
     fn publish_reputation_snapshot(
         &self,
         _snapshot: &SignedReputationSnapshotV1,
@@ -286,7 +256,6 @@ impl GovernancePublisher for RecordingPublisher {
         guard.push(encoded.to_vec());
         Ok(())
     }
-
     fn publish_moderation_ballot_event(
         &self,
         _event: &SoraFsModerationBallotGovernanceEventV1,
@@ -296,7 +265,6 @@ impl GovernancePublisher for RecordingPublisher {
         guard.push(encoded.to_vec());
         Ok(())
     }
-
     fn publish_transparency_ledger_publication(
         &self,
         _publication: &ModerationLedgerCyclePublicationV1,
@@ -308,7 +276,6 @@ impl GovernancePublisher for RecordingPublisher {
         guard.push(encoded.to_vec());
         Ok(())
     }
-
     fn publish_proof_token_issuance(
         &self,
         _issuance: &ProofTokenIssuanceV1,
@@ -319,7 +286,6 @@ impl GovernancePublisher for RecordingPublisher {
         guard.push(encoded.to_vec());
         Ok(())
     }
-
     fn publish_appeal_finance_report(
         &self,
         _report: &SoraFsAppealFinanceReportV1,
@@ -330,7 +296,6 @@ impl GovernancePublisher for RecordingPublisher {
         guard.push(encoded.to_vec());
         Ok(())
     }
-
     fn publish_appeal_finance_weekly_rollup(
         &self,
         _rollup: &SoraFsAppealFinanceWeeklyRollupV1,
@@ -341,7 +306,6 @@ impl GovernancePublisher for RecordingPublisher {
         guard.push(encoded.to_vec());
         Ok(())
     }
-
     fn publish_appeal_finance_settlement_receipt(
         &self,
         _receipt: &SoraFsAppealFinanceSettlementReceiptV1,
@@ -352,18 +316,15 @@ impl GovernancePublisher for RecordingPublisher {
         Ok(())
     }
 }
-
 #[derive(Debug, Default)]
 struct FailingPublisher {
     attempts: Mutex<usize>,
 }
-
 impl FailingPublisher {
     fn attempts(&self) -> usize {
         *self.attempts.lock().expect("publisher lock poisoned")
     }
 }
-
 impl GovernancePublisher for FailingPublisher {
     fn publish_deal_settlement(
         &self,
@@ -374,7 +335,6 @@ impl GovernancePublisher for FailingPublisher {
         *guard += 1;
         Err(GovernancePublishError::other("simulated publish failure"))
     }
-
     fn publish_pdp_archive(
         &self,
         _archive: &PdpGovernanceArchiveV1,
@@ -384,7 +344,6 @@ impl GovernancePublisher for FailingPublisher {
         *guard += 1;
         Err(GovernancePublishError::other("simulated publish failure"))
     }
-
     fn publish_por_challenge_publication(
         &self,
         _publication: &PorChallengePublicationV1,
@@ -394,7 +353,6 @@ impl GovernancePublisher for FailingPublisher {
         *guard += 1;
         Err(GovernancePublishError::other("simulated publish failure"))
     }
-
     fn publish_por_weekly_report(
         &self,
         _report: &PorWeeklyReportV1,
@@ -404,7 +362,6 @@ impl GovernancePublisher for FailingPublisher {
         *guard += 1;
         Err(GovernancePublishError::other("simulated publish failure"))
     }
-
     fn publish_gc_audit_event(
         &self,
         _event: &GcAuditEventV1,
@@ -414,7 +371,6 @@ impl GovernancePublisher for FailingPublisher {
         *guard += 1;
         Err(GovernancePublishError::other("simulated publish failure"))
     }
-
     fn publish_reconciliation_report(
         &self,
         _report: &SorafsReconciliationReportV1,
@@ -424,7 +380,6 @@ impl GovernancePublisher for FailingPublisher {
         *guard += 1;
         Err(GovernancePublishError::other("simulated publish failure"))
     }
-
     fn publish_reputation_snapshot(
         &self,
         _snapshot: &SignedReputationSnapshotV1,
@@ -434,7 +389,6 @@ impl GovernancePublisher for FailingPublisher {
         *guard += 1;
         Err(GovernancePublishError::other("simulated publish failure"))
     }
-
     fn publish_moderation_ballot_event(
         &self,
         _event: &SoraFsModerationBallotGovernanceEventV1,
@@ -444,7 +398,6 @@ impl GovernancePublisher for FailingPublisher {
         *guard += 1;
         Err(GovernancePublishError::other("simulated publish failure"))
     }
-
     fn publish_transparency_ledger_publication(
         &self,
         _publication: &ModerationLedgerCyclePublicationV1,
@@ -456,7 +409,6 @@ impl GovernancePublisher for FailingPublisher {
         *guard += 1;
         Err(GovernancePublishError::other("simulated publish failure"))
     }
-
     fn publish_proof_token_issuance(
         &self,
         _issuance: &ProofTokenIssuanceV1,
@@ -467,7 +419,6 @@ impl GovernancePublisher for FailingPublisher {
         *guard += 1;
         Err(GovernancePublishError::other("simulated publish failure"))
     }
-
     fn publish_appeal_finance_report(
         &self,
         _report: &SoraFsAppealFinanceReportV1,
@@ -478,7 +429,6 @@ impl GovernancePublisher for FailingPublisher {
         *guard += 1;
         Err(GovernancePublishError::other("simulated publish failure"))
     }
-
     fn publish_appeal_finance_weekly_rollup(
         &self,
         _rollup: &SoraFsAppealFinanceWeeklyRollupV1,
@@ -489,7 +439,6 @@ impl GovernancePublisher for FailingPublisher {
         *guard += 1;
         Err(GovernancePublishError::other("simulated publish failure"))
     }
-
     fn publish_appeal_finance_settlement_receipt(
         &self,
         _receipt: &SoraFsAppealFinanceSettlementReceiptV1,

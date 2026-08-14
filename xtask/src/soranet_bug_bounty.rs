@@ -2,26 +2,22 @@
 //! Generates a repeatable packet (overview, triage checklist, remediation
 //! template, JSON summary) so SRE/Security can contract testers and prove
 //! scope/SLA compliance for the gateway CDN.
-
-use std::{
-    fmt::Write as FmtWrite,
-    fs,
-    path::{Path, PathBuf},
-};
-
 use eyre::{Result, WrapErr};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
+use std::{
+    fmt::Write as FmtWrite,
+    fs,
+    path::{Path, PathBuf},
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
 #[derive(Debug)]
 pub struct BugBountyOptions {
     pub config_path: PathBuf,
     pub output_dir: PathBuf,
 }
-
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct BugBountyOutcome {
@@ -30,7 +26,6 @@ pub struct BugBountyOutcome {
     pub remediation_template_path: PathBuf,
     pub summary_path: PathBuf,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct BugBountyConfig {
     program: String,
@@ -44,7 +39,6 @@ struct BugBountyConfig {
     reward_table: Vec<RewardBand>,
     reporting: Reporting,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct Contact {
     intake_email: String,
@@ -52,7 +46,6 @@ struct Contact {
     tracker: String,
     disclosure_url: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct Partner {
     name: String,
@@ -61,7 +54,6 @@ struct Partner {
     renewal: String,
     coverage: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct ScopeEntry {
     area: String,
@@ -70,14 +62,12 @@ struct ScopeEntry {
     exclusions: Vec<String>,
     notes: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, PartialEq)]
 pub struct SeverityWindow {
     pub ack_hours: u64,
     pub contain_hours: u64,
     pub fix_days: u64,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, PartialEq)]
 pub struct SeveritySla {
     pub critical: SeverityWindow,
@@ -85,7 +75,6 @@ pub struct SeveritySla {
     pub medium: SeverityWindow,
     pub low: SeverityWindow,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, PartialEq)]
 pub struct RewardBand {
     pub severity: String,
@@ -93,7 +82,6 @@ pub struct RewardBand {
     pub max: u64,
     pub currency: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct TriagePolicy {
     intake_channels: Vec<String>,
@@ -101,7 +89,6 @@ struct TriagePolicy {
     duplication_policy: String,
     evidence_requirements: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct Reporting {
     disclosure_window_days: u64,
@@ -109,7 +96,6 @@ struct Reporting {
     sla_dashboard: String,
     audit_bucket: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct ContactSummary {
     intake_email: String,
@@ -117,7 +103,6 @@ struct ContactSummary {
     tracker: String,
     disclosure_url: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct PartnerSummary {
     name: String,
@@ -126,7 +111,6 @@ struct PartnerSummary {
     coverage: Vec<String>,
     renewal: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct ScopeSummary {
     area: String,
@@ -135,7 +119,6 @@ struct ScopeSummary {
     exclusions: Vec<String>,
     notes: Option<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct TriageSummary {
     intake_channels: Vec<String>,
@@ -143,7 +126,6 @@ struct TriageSummary {
     evidence_requirements: Vec<String>,
     playbook: Vec<String>,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct ReportingSummary {
     disclosure_window_days: u64,
@@ -151,14 +133,12 @@ struct ReportingSummary {
     sla_dashboard: String,
     audit_bucket: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct OutputSummary {
     overview: String,
     triage_checklist: String,
     remediation_template: String,
 }
-
 #[derive(Clone, Debug, JsonSerialize)]
 struct BugBountySummary {
     program: String,
@@ -174,7 +154,6 @@ struct BugBountySummary {
     outputs: OutputSummary,
     generated_at_rfc3339: String,
 }
-
 /// Generate the bug bounty / pen-test kit from the provided configuration.
 pub fn generate_bug_bounty_pack(options: BugBountyOptions) -> Result<BugBountyOutcome> {
     fs::create_dir_all(&options.output_dir).wrap_err_with(|| {
@@ -183,7 +162,6 @@ pub fn generate_bug_bounty_pack(options: BugBountyOptions) -> Result<BugBountyOu
             options.output_dir.display()
         )
     })?;
-
     let raw = fs::read(&options.config_path).wrap_err_with(|| {
         format!(
             "failed to read bug bounty config {}",
@@ -192,19 +170,16 @@ pub fn generate_bug_bounty_pack(options: BugBountyOptions) -> Result<BugBountyOu
     })?;
     let config: BugBountyConfig =
         json::from_slice(&raw).wrap_err("failed to parse bug bounty config as Norito JSON")?;
-
     let slug = sanitize_slug(config.slug.as_deref().unwrap_or(&config.program));
     let normalized_scope = normalize_scope(&config.scope)?;
     validate_required_scope(&normalized_scope)?;
     let generated_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
-
     let overview_path = options.output_dir.join("bug_bounty_overview.md");
     let triage_path = options.output_dir.join("triage_checklist.md");
     let remediation_path = options.output_dir.join("remediation_template.md");
     let summary_path = options.output_dir.join("bug_bounty_summary.json");
-
     fs::write(
         &overview_path,
         render_overview_markdown(&config, &normalized_scope, &slug, &generated_at),
@@ -220,7 +195,6 @@ pub fn generate_bug_bounty_pack(options: BugBountyOptions) -> Result<BugBountyOu
         render_remediation_template(&config.reporting),
     )
     .wrap_err_with(|| format!("failed to write {}", remediation_path.display()))?;
-
     let summary = build_summary(
         &config,
         &normalized_scope,
@@ -235,7 +209,6 @@ pub fn generate_bug_bounty_pack(options: BugBountyOptions) -> Result<BugBountyOu
         .wrap_err_with(|| format!("failed to create {}", summary_path.display()))?;
     json::to_writer_pretty(summary_file, &summary)
         .wrap_err_with(|| format!("failed to write {}", summary_path.display()))?;
-
     Ok(BugBountyOutcome {
         overview_path,
         triage_checklist_path: triage_path,
@@ -243,7 +216,6 @@ pub fn generate_bug_bounty_pack(options: BugBountyOptions) -> Result<BugBountyOu
         summary_path,
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 fn build_summary(
     config: &BugBountyConfig,
@@ -303,7 +275,6 @@ fn build_summary(
         generated_at_rfc3339: generated_at.to_string(),
     }
 }
-
 fn normalize_scope(entries: &[ScopeEntry]) -> Result<Vec<ScopeSummary>> {
     entries
         .iter()
@@ -330,7 +301,6 @@ fn normalize_scope(entries: &[ScopeEntry]) -> Result<Vec<ScopeSummary>> {
         })
         .collect()
 }
-
 fn validate_required_scope(scope: &[ScopeSummary]) -> Result<()> {
     let required = ["edge", "control-plane", "billing"];
     for entry in required {
@@ -342,7 +312,6 @@ fn validate_required_scope(scope: &[ScopeSummary]) -> Result<()> {
     }
     Ok(())
 }
-
 fn sanitize_slug(value: &str) -> String {
     let mut cleaned: String = value
         .chars()
@@ -368,17 +337,14 @@ fn sanitize_slug(value: &str) -> String {
         cleaned
     }
 }
-
 fn normalize_area(value: &str) -> String {
     value.trim().to_ascii_lowercase().replace([' ', '_'], "-")
 }
-
 fn summarize_path(path: &Path, root: &Path) -> String {
     path.strip_prefix(root)
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| path.display().to_string())
 }
-
 fn render_overview_markdown(
     config: &BugBountyConfig,
     scope: &[ScopeSummary],
@@ -471,7 +437,6 @@ fn render_overview_markdown(
     let _ = writeln!(out, "- Audit bucket: {}", config.reporting.audit_bucket);
     out
 }
-
 fn render_triage_checklist(config: &BugBountyConfig, scope: &[ScopeSummary]) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# Triage checklist");
@@ -524,7 +489,6 @@ fn render_triage_checklist(config: &BugBountyConfig, scope: &[ScopeSummary]) -> 
     }
     out
 }
-
 fn render_remediation_template(reporting: &Reporting) -> String {
     let mut out = String::new();
     let _ = writeln!(
@@ -554,14 +518,11 @@ fn render_remediation_template(reporting: &Reporting) -> String {
     let _ = writeln!(out, "- Approvals (Security, SRE, Release):");
     out
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use norito::{json, json::Value};
     use tempfile::tempdir;
-
-    use super::*;
-
     fn sample_config() -> BugBountyConfig {
         BugBountyConfig {
             program: "Gateway Bug Bounty".to_string(),
@@ -648,7 +609,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn slug_sanitizer_removes_bad_chars() {
         assert_eq!(
@@ -657,7 +617,6 @@ mod tests {
         );
         assert_eq!(sanitize_slug(""), "bug-bounty");
     }
-
     #[test]
     fn overview_mentions_scope_and_sla() {
         let cfg = sample_config();
@@ -670,7 +629,6 @@ mod tests {
         );
         assert!(overview.contains("4h / 24h / 7d"), "SLA not rendered");
     }
-
     #[test]
     fn generates_pack() {
         let cfg = sample_config();
@@ -678,14 +636,12 @@ mod tests {
         let config_path = temp.path().join("config.json");
         let config_file = fs::File::create(&config_path).expect("create config file");
         json::to_writer_pretty(config_file, &cfg).expect("write config");
-
         let output_dir = temp.path().join("out");
         let outcome = generate_bug_bounty_pack(BugBountyOptions {
             config_path,
             output_dir: output_dir.clone(),
         })
         .expect("generate pack");
-
         for path in [
             outcome.overview_path,
             outcome.triage_checklist_path,

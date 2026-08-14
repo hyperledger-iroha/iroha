@@ -1,8 +1,3 @@
-use std::{
-    str::FromStr,
-    time::{Instant, SystemTime, UNIX_EPOCH},
-};
-
 use crate::{SharedAppState, app_auth::verify_canonical_network_request, limits};
 use axum::{
     extract::ConnectInfo,
@@ -23,7 +18,10 @@ use iroha_data_model::{
     da::types::BlobDigest,
 };
 use iroha_logger::{error, info};
-
+use std::{
+    str::FromStr,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 #[derive(Debug)]
 pub enum ContentError {
     BadRequest(String),
@@ -34,7 +32,6 @@ pub enum ContentError {
     Internal(String),
     RangeNotSatisfiable { total_len: u64 },
 }
-
 const CONTENT_RECEIPT_HEADER: &str = "sora-content-receipt";
 const CONTENT_SECURITY_POLICY_HEADER: HeaderName =
     HeaderName::from_static("content-security-policy");
@@ -43,7 +40,6 @@ const CONTENT_SECURITY_POLICY_VALUE: HeaderValue =
 /// Exact `Vary` value for content whose manifest requires canonical authentication.
 pub(crate) const CANONICAL_CONTENT_AUTH_VARY: &str =
     "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness";
-
 impl IntoResponse for ContentError {
     fn into_response(self) -> Response {
         match self {
@@ -65,7 +61,6 @@ impl IntoResponse for ContentError {
         }
     }
 }
-
 /// GET /v1/content/{bundle}/{path...}
 #[allow(clippy::too_many_lines)]
 pub async fn handle_get_content(
@@ -79,7 +74,6 @@ pub async fn handle_get_content(
     let start = Instant::now();
     let mut bytes_served = 0u64;
     let mut outcome_hint: Option<&'static str> = None;
-
     let result: Result<Response, ContentError> = async {
         let bundle_id = match parse_bundle_id(&bundle_hex) {
             Ok(id) => id,
@@ -102,23 +96,19 @@ pub async fn handle_get_content(
             outcome_hint = Some("rate_limited");
             return Err(ContentError::RateLimited);
         }
-
         let (bundle, entry, range_spec) = {
             let world = app.state.world_view();
             let current_height = app.state.committed_height() as u64;
-
             let Some(bundle) =
                 mv::storage::StorageReadOnly::get(world.content_bundles(), &bundle_id)
             else {
                 outcome_hint = Some("not_found");
                 return Err(ContentError::NotFound);
             };
-
             if is_bundle_expired(current_height, bundle.expires_at_height) {
                 outcome_hint = Some("not_found");
                 return Err(ContentError::NotFound);
             }
-
             let entry =
                 authorize_content_entry(&bundle, &app.state, &headers, &method, &uri, &path)
                     .map_err(|err| {
@@ -131,7 +121,6 @@ pub async fn handle_get_content(
                         });
                         err
                     })?;
-
             if let Err(err) = enforce_pow(&app.content_config.pow, &headers, &bundle_id, &path) {
                 outcome_hint = Some(match &err {
                     ContentError::Unauthorized(_) => "pow_required",
@@ -140,7 +129,6 @@ pub async fn handle_get_content(
                 });
                 return Err(err);
             }
-
             let chunk_size = u64::from(bundle.chunk_size);
             if chunk_size == 0 {
                 outcome_hint = Some("internal");
@@ -148,9 +136,7 @@ pub async fn handle_get_content(
                     "content chunk size must be greater than zero".to_string(),
                 ));
             }
-
             let range_spec = apply_range(entry.length, headers.get(header::RANGE))?;
-
             // Keep the potentially large file/chunk projection borrowed until
             // authentication, authorization, PoW, and range validation have
             // succeeded. Anonymous callers must not make Torii clone a
@@ -168,7 +154,6 @@ pub async fn handle_get_content(
             outcome_hint = Some("rate_limited");
             return Err(ContentError::RateLimited);
         }
-
         let body = if range_spec.content_length == 0 {
             Vec::new()
         } else {
@@ -187,21 +172,17 @@ pub async fn handle_get_content(
                 }
             }
         };
-
         let receipt_header = encode_receipt_header(&bundle, &entry, &range_spec).ok();
         let status = range_spec.status;
         let content_length = range_spec.content_length;
         let content_range_header = range_spec.content_range.clone();
-
         bytes_served = content_length;
         let etag = entry.file_hash.encode_hex::<String>();
         let representation = content_representation_headers(&bundle.manifest, &entry);
-
         let mut response = Response::builder()
             .status(status)
             .body(axum::body::Body::from(body))
             .map_err(|_| ContentError::Internal("failed to build response".to_string()))?;
-
         let headers_mut = response.headers_mut();
         headers_mut.insert(
             header::ETAG,
@@ -229,11 +210,9 @@ pub async fn handle_get_content(
                     .unwrap_or_else(|_| HeaderValue::from_static("bytes */0")),
             );
         }
-
         if let Some(receipt_header) = receipt_header {
             headers_mut.insert(CONTENT_RECEIPT_HEADER, receipt_header);
         }
-
         info!(
             bundle = %bundle_id,
             path,
@@ -242,11 +221,9 @@ pub async fn handle_get_content(
             auth = ?bundle.manifest.auth,
             "served content bundle file"
         );
-
         Ok(response)
     }
     .await;
-
     let outcome = outcome_hint.unwrap_or(match &result {
         Ok(_) => "ok",
         Err(ContentError::Unauthorized(_)) => "auth_required",
@@ -257,14 +234,11 @@ pub async fn handle_get_content(
         Err(ContentError::BadRequest(_)) => "bad_request",
         Err(ContentError::Internal(_)) => "internal",
     });
-
     app.telemetry.with_metrics(|telemetry| {
         telemetry.observe_torii_content_request(outcome, bytes_served, start.elapsed());
     });
-
     result
 }
-
 fn parse_bundle_id(bundle_hex: &str) -> Result<Hash, ContentError> {
     let bundle_bytes = hex::decode(bundle_hex.trim_start_matches("0x"))
         .map_err(|_| ContentError::BadRequest("invalid bundle id".to_string()))?;
@@ -277,16 +251,13 @@ fn parse_bundle_id(bundle_hex: &str) -> Result<Hash, ContentError> {
     bundle_arr.copy_from_slice(&bundle_bytes);
     Ok(Hash::prehashed(bundle_arr))
 }
-
 fn is_bundle_expired(current_height: u64, expires_at_height: Option<u64>) -> bool {
     matches!(expires_at_height, Some(expiry) if current_height >= expiry)
 }
-
 fn content_cache_control_header(manifest: &ContentBundleManifest) -> HeaderValue {
     HeaderValue::from_str(&manifest.cache_control_value())
         .unwrap_or_else(|_| HeaderValue::from_static("private, no-store"))
 }
-
 fn content_auth_vary_header(manifest: &ContentBundleManifest) -> Option<HeaderValue> {
     match &manifest.auth {
         ContentAuthMode::Public => None,
@@ -295,7 +266,6 @@ fn content_auth_vary_header(manifest: &ContentBundleManifest) -> Option<HeaderVa
         }
     }
 }
-
 fn authorize_content_entry(
     bundle: &ContentBundleRecord,
     state: &std::sync::Arc<iroha_core::state::State>,
@@ -312,7 +282,6 @@ fn authorize_content_entry(
         .cloned()
         .ok_or(ContentError::NotFound)
 }
-
 fn content_rate_key(
     headers: &HeaderMap,
     remote: Option<std::net::IpAddr>,
@@ -321,7 +290,6 @@ fn content_rate_key(
 ) -> String {
     limits::key_from_headers(headers, remote, Some(hint), require_api_token)
 }
-
 fn enforce_pow(
     pow: &iroha_config::parameters::actual::ContentPow,
     headers: &HeaderMap,
@@ -331,7 +299,6 @@ fn enforce_pow(
     if pow.difficulty_bits == 0 {
         return Ok(());
     }
-
     let header_name = header::HeaderName::from_str(&pow.header_name)
         .map_err(|_| ContentError::Internal("invalid content pow header name".to_string()))?;
     let token_value = headers
@@ -342,20 +309,16 @@ fn enforce_pow(
         .map_err(|_| ContentError::BadRequest("invalid pow token".to_string()))?;
     let token_bytes = hex::decode(token_str)
         .map_err(|_| ContentError::BadRequest("invalid pow token".to_string()))?;
-
     let mut hasher = Hasher::new();
     hasher.update(bundle.as_ref());
     hasher.update(path.as_bytes());
     hasher.update(&token_bytes);
     let digest = hasher.finalize();
-
     if leading_zero_bits(digest.as_bytes()) < u32::from(pow.difficulty_bits) {
         return Err(ContentError::Forbidden("pow token invalid".to_string()));
     }
-
     Ok(())
 }
-
 fn enforce_auth(
     manifest: &ContentBundleManifest,
     state: &std::sync::Arc<iroha_core::state::State>,
@@ -394,7 +357,6 @@ fn enforce_auth(
         }
     }
 }
-
 fn signed_account(
     state: &std::sync::Arc<iroha_core::state::State>,
     headers: &HeaderMap,
@@ -422,7 +384,6 @@ fn signed_account(
         }
     }
 }
-
 fn leading_zero_bits(bytes: &[u8]) -> u32 {
     let mut total = 0u32;
     for byte in bytes {
@@ -435,7 +396,6 @@ fn leading_zero_bits(bytes: &[u8]) -> u32 {
     }
     total
 }
-
 fn assemble_file_range(
     world: &impl WorldReadOnly,
     bundle: &ContentBundleRecord,
@@ -459,7 +419,6 @@ fn assemble_file_range(
             .map(|chunk| chunk.data.as_slice())
     })
 }
-
 fn assemble_range_from_chunks<'a, F>(
     chunk_size: u64,
     chunk_hashes: &[[u8; 32]],
@@ -479,7 +438,6 @@ where
     let start_chunk = start / chunk_size;
     let end_chunk = end.saturating_sub(1) / chunk_size;
     let expected_len = end.checked_sub(start).ok_or(AssembleError::Overflow)? as usize;
-
     let mut out = Vec::with_capacity(expected_len);
     for idx in start_chunk..=end_chunk {
         let hash = *chunk_hashes
@@ -496,7 +454,6 @@ where
     }
     Ok(out)
 }
-
 #[derive(Debug, Clone)]
 struct RangeSpec {
     status: StatusCode,
@@ -505,7 +462,6 @@ struct RangeSpec {
     start: u64,
     end: u64,
 }
-
 #[derive(Debug)]
 enum AssembleError {
     InvalidChunkSize,
@@ -513,7 +469,6 @@ enum AssembleError {
     SliceBounds,
     Overflow,
 }
-
 impl AssembleError {
     fn outcome(&self) -> &'static str {
         match self {
@@ -521,7 +476,6 @@ impl AssembleError {
             Self::InvalidChunkSize | Self::SliceBounds | Self::Overflow => "internal",
         }
     }
-
     fn message(&self) -> &'static str {
         match self {
             Self::InvalidChunkSize => "content chunk size must be greater than zero",
@@ -531,7 +485,6 @@ impl AssembleError {
         }
     }
 }
-
 fn apply_range(
     total_len: u64,
     range_header: Option<&HeaderValue>,
@@ -557,7 +510,6 @@ fn apply_range(
             end: total_len.saturating_sub(1),
         });
     };
-
     let range_str = raw
         .to_str()
         .map_err(|_| ContentError::BadRequest("invalid range header".to_string()))?;
@@ -569,7 +521,6 @@ fn apply_range(
     let Some((start_str, end_str)) = range_str["bytes=".len()..].split_once('-') else {
         return Err(ContentError::BadRequest("malformed range spec".to_string()));
     };
-
     let (start, mut end) = if start_str.is_empty() {
         let suffix: u64 = end_str
             .parse()
@@ -594,21 +545,17 @@ fn apply_range(
         };
         (start, end)
     };
-
     if start >= total_len {
         return Err(ContentError::RangeNotSatisfiable { total_len });
     }
-
     if end >= total_len {
         end = total_len
             .checked_sub(1)
             .ok_or(ContentError::RangeNotSatisfiable { total_len })?;
     }
-
     if start > end {
         return Err(ContentError::RangeNotSatisfiable { total_len });
     }
-
     let content_length = end
         .checked_sub(start)
         .and_then(|len| len.checked_add(1))
@@ -621,7 +568,6 @@ fn apply_range(
         end,
     })
 }
-
 fn encode_receipt_header(
     bundle: &ContentBundleRecord,
     entry: &iroha_data_model::content::ContentFileEntry,
@@ -657,7 +603,6 @@ fn encode_receipt_header(
         .parse()
         .map_err(|_| ContentError::Internal("failed to encode content receipt header".to_string()))
 }
-
 fn mime_for_path(
     manifest: &ContentBundleManifest,
     entry: &iroha_data_model::content::ContentFileEntry,
@@ -665,7 +610,6 @@ fn mime_for_path(
     if let Some(mime) = manifest.mime_overrides.get(&entry.path) {
         return mime.clone();
     }
-
     let default = "application/octet-stream".to_string();
     let Some(ext) = entry.path.rsplit('.').next() else {
         return default;
@@ -685,13 +629,11 @@ fn mime_for_path(
         _ => default,
     }
 }
-
 #[derive(Debug, Clone)]
 struct ContentRepresentationHeaders {
     content_type: HeaderValue,
     force_attachment: bool,
 }
-
 fn content_representation_headers(
     manifest: &ContentBundleManifest,
     entry: &iroha_data_model::content::ContentFileEntry,
@@ -703,13 +645,11 @@ fn content_representation_headers(
             force_attachment: false,
         };
     }
-
     ContentRepresentationHeaders {
         content_type: HeaderValue::from_static("application/octet-stream"),
         force_attachment: true,
     }
 }
-
 fn canonical_inline_content_type(content_type: &str) -> Option<HeaderValue> {
     let media_type = content_type
         .split(';')
@@ -730,7 +670,6 @@ fn canonical_inline_content_type(content_type: &str) -> Option<HeaderValue> {
     };
     Some(HeaderValue::from_static(canonical))
 }
-
 fn install_content_representation_headers(
     headers: &mut HeaderMap,
     representation: ContentRepresentationHeaders,
@@ -751,11 +690,8 @@ fn install_content_representation_headers(
         );
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use super::*;
     use base64::Engine;
     use iroha_config::parameters::actual::ContentPow;
@@ -774,7 +710,7 @@ mod tests {
         nexus::{DataSpaceId, LaneId},
         role::RoleId,
     };
-
+    use std::collections::BTreeMap;
     fn sample_manifest() -> ContentBundleManifest {
         ContentBundleManifest {
             bundle_id: Hash::new(b"bundle"),
@@ -792,7 +728,6 @@ mod tests {
             mime_overrides: BTreeMap::new(),
         }
     }
-
     fn minimal_state_with_account(
         account_id: &AccountId,
         uaid: Option<iroha_data_model::nexus::UniversalAccountId>,
@@ -809,7 +744,6 @@ mod tests {
             LiveQueryStore::start_test(),
         ))
     }
-
     fn app_auth_test_guard(config: crate::app_auth::CanonicalRequestAuthConfig) -> impl Drop {
         static TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
         struct Guard(std::sync::MutexGuard<'static, ()>);
@@ -819,7 +753,6 @@ mod tests {
                     .expect("default app-auth config");
             }
         }
-
         let guard = TEST_LOCK
             .get_or_init(|| std::sync::Mutex::new(()))
             .lock()
@@ -827,12 +760,10 @@ mod tests {
         crate::app_auth::configure(config).expect("valid app-auth test config");
         Guard(guard)
     }
-
     fn checked_ed25519_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate checked content auth fixture keypair")
     }
-
     fn signed_headers(
         network_id: &iroha_data_model::NetworkId,
         account: &AccountId,
@@ -852,7 +783,8 @@ mod tests {
             &[],
             timestamp_ms,
             &nonce,
-        );
+        )
+        .expect("canonical content test request is within V1 limits");
         let signature = Signature::try_new(key_pair.private_key(), &message)
             .expect("checked content signed-header fixture signature");
         signature
@@ -861,11 +793,16 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             crate::HEADER_ACCOUNT,
-            account.to_string().parse().expect("account header"),
+            account
+                .to_canonical_hex()
+                .expect("canonical account header")
+                .parse()
+                .expect("account header"),
         );
         headers.insert(
             crate::HEADER_SIGNATURE,
             crate::signature_header_value(&signature)
+                .expect("encode valid signature header")
                 .parse()
                 .expect("signature header"),
         );
@@ -876,7 +813,6 @@ mod tests {
         headers.insert(crate::HEADER_NONCE, nonce.parse().expect("nonce header"));
         headers
     }
-
     #[test]
     fn bundle_expiry_is_exclusive() {
         assert!(!is_bundle_expired(4, Some(5)));
@@ -884,7 +820,6 @@ mod tests {
         assert!(is_bundle_expired(6, Some(5)));
         assert!(!is_bundle_expired(0, None));
     }
-
     #[test]
     fn content_cache_header_disables_storage_for_protected_manifests() {
         let mut manifest = sample_manifest();
@@ -893,7 +828,6 @@ mod tests {
             HeaderValue::from_static("public, max-age=60")
         );
         assert_eq!(content_auth_vary_header(&manifest), None);
-
         manifest.auth =
             ContentAuthMode::RoleGate(RoleId::new("auditor".parse().expect("role name")));
         assert_eq!(
@@ -904,7 +838,6 @@ mod tests {
             content_auth_vary_header(&manifest),
             Some(HeaderValue::from_static(CANONICAL_CONTENT_AUTH_VARY))
         );
-
         manifest.auth = ContentAuthMode::Sponsor(
             iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(b"sponsor")),
         );
@@ -917,7 +850,6 @@ mod tests {
             Some(HeaderValue::from_static(CANONICAL_CONTENT_AUTH_VARY))
         );
     }
-
     #[test]
     fn protected_missing_path_authenticates_before_file_index_lookup() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
@@ -943,7 +875,6 @@ mod tests {
         };
         let method = Method::GET;
         let uri: Uri = "/v1/content/bundle/unknown.txt".parse().expect("uri");
-
         let protected_error = authorize_content_entry(
             &bundle,
             &state,
@@ -954,7 +885,6 @@ mod tests {
         )
         .expect_err("protected lookup must authenticate before checking the path");
         assert!(matches!(protected_error, ContentError::Unauthorized(_)));
-
         bundle.manifest.auth = ContentAuthMode::Public;
         let public_error = authorize_content_entry(
             &bundle,
@@ -967,7 +897,6 @@ mod tests {
         .expect_err("public missing path must remain not found");
         assert!(matches!(public_error, ContentError::NotFound));
     }
-
     #[test]
     fn range_parsing_handles_full_and_partial() {
         let total_len = 11;
@@ -976,7 +905,6 @@ mod tests {
         assert_eq!(full.content_length, total_len);
         assert_eq!(full.start, 0);
         assert_eq!(full.end, 10);
-
         let partial =
             apply_range(total_len, Some(&HeaderValue::from_static("bytes=0-3"))).expect("range");
         assert_eq!(partial.status, StatusCode::PARTIAL_CONTENT);
@@ -984,7 +912,6 @@ mod tests {
         assert_eq!(partial.content_length, 4);
         assert_eq!(partial.start, 0);
         assert_eq!(partial.end, 3);
-
         let overshoot =
             apply_range(total_len, Some(&HeaderValue::from_static("bytes=0-99"))).expect("range");
         assert_eq!(overshoot.status, StatusCode::PARTIAL_CONTENT);
@@ -993,7 +920,6 @@ mod tests {
         assert_eq!(overshoot.start, 0);
         assert_eq!(overshoot.end, 10);
     }
-
     #[test]
     fn range_header_on_empty_body_is_unsatisfiable() {
         let err = apply_range(0, Some(&HeaderValue::from_static("bytes=0-0")))
@@ -1003,7 +929,6 @@ mod tests {
             ContentError::RangeNotSatisfiable { total_len: 0 }
         ));
     }
-
     #[test]
     fn range_not_satisfiable_sets_content_range_header() {
         let response = ContentError::RangeNotSatisfiable { total_len: 12 }.into_response();
@@ -1014,7 +939,6 @@ mod tests {
             .and_then(|value| value.to_str().ok());
         assert_eq!(header_value, Some("bytes */12"));
     }
-
     #[test]
     fn assemble_range_from_chunks_slices_across_boundaries() {
         let chunk_hashes = [[0x01; 32], [0x02; 32], [0x03; 32]];
@@ -1022,25 +946,19 @@ mod tests {
         chunks.insert([0x01; 32], b"abcd".to_vec());
         chunks.insert([0x02; 32], b"efgh".to_vec());
         chunks.insert([0x03; 32], b"ijkl".to_vec());
-
         let body = assemble_range_from_chunks(4, &chunk_hashes, 2, 10, |hash| {
             chunks.get(hash).map(Vec::as_slice)
         })
         .expect("assemble range");
-
         assert_eq!(body, b"cdefghij");
     }
-
     #[test]
     fn assemble_range_from_chunks_rejects_zero_chunk_size() {
         let chunk_hashes = [[0x01; 32]];
-
         let err = assemble_range_from_chunks(0, &chunk_hashes, 0, 1, |_| Some(&[0xAA]))
             .expect_err("zero chunk size must be rejected");
-
         assert!(matches!(err, AssembleError::InvalidChunkSize));
     }
-
     #[test]
     fn mime_override_prefers_manifest() {
         let mut manifest = sample_manifest();
@@ -1054,7 +972,6 @@ mod tests {
             file_hash: [0; 32],
         };
         assert_eq!(mime_for_path(&manifest, &entry), "text/custom");
-
         let css_entry = ContentFileEntry {
             path: "styles/main.css".into(),
             offset: 0,
@@ -1066,7 +983,6 @@ mod tests {
             "text/css; charset=utf-8"
         );
     }
-
     #[test]
     fn torii_origin_content_coerces_active_and_unknown_media_to_downloads() {
         let mut manifest = sample_manifest();
@@ -1076,7 +992,6 @@ mod tests {
             length: 0,
             file_hash: [0; 32],
         };
-
         for active_or_unknown in [
             "text/html; charset=utf-8",
             "application/javascript",
@@ -1098,7 +1013,6 @@ mod tests {
                 "{active_or_unknown} must not remain executable on the Torii origin"
             );
             assert!(representation.force_attachment);
-
             let mut headers = HeaderMap::new();
             install_content_representation_headers(&mut headers, representation);
             assert_eq!(
@@ -1115,7 +1029,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn torii_origin_content_preserves_inert_media_with_nosniff() {
         let mut manifest = sample_manifest();
@@ -1128,14 +1041,12 @@ mod tests {
             length: 0,
             file_hash: [0; 32],
         };
-
         let representation = content_representation_headers(&manifest, &entry);
         assert_eq!(
             representation.content_type,
             HeaderValue::from_static("image/png")
         );
         assert!(!representation.force_attachment);
-
         let mut headers = HeaderMap::new();
         install_content_representation_headers(&mut headers, representation);
         assert!(!headers.contains_key(header::CONTENT_DISPOSITION));
@@ -1148,7 +1059,6 @@ mod tests {
             Some(&CONTENT_SECURITY_POLICY_VALUE)
         );
     }
-
     #[test]
     fn parse_bundle_id_rejects_bad_input() {
         assert!(matches!(
@@ -1156,7 +1066,6 @@ mod tests {
             Err(ContentError::BadRequest(_))
         ));
     }
-
     #[test]
     fn receipt_header_encodes_receipt() {
         let mut manifest = sample_manifest();
@@ -1202,14 +1111,12 @@ mod tests {
         assert_eq!(receipt.range.unwrap().end, 3);
         assert_eq!(receipt.chunk_root.as_bytes(), &bundle.chunk_root);
     }
-
     #[test]
     fn rate_key_uses_headers_and_remote() {
         let mut headers = HeaderMap::new();
         headers.insert("x-api-token", HeaderValue::from_static("token-1"));
         let key = content_rate_key(&headers, None, "bundle", true);
         assert_eq!(key, "token-1");
-
         let key = content_rate_key(
             &HeaderMap::new(),
             Some("127.0.0.1".parse().unwrap()),
@@ -1218,7 +1125,6 @@ mod tests {
         );
         assert_eq!(key, "127.0.0.1");
     }
-
     #[test]
     fn enforce_pow_requires_header() {
         let pow = ContentPow {
@@ -1230,7 +1136,6 @@ mod tests {
         let err = enforce_pow(&pow, &headers, &bundle, "index.html").expect_err("pow missing");
         matches!(err, ContentError::Unauthorized(_));
     }
-
     #[test]
     fn role_gate_requires_signed_headers() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
@@ -1243,12 +1148,10 @@ mod tests {
         let headers = HeaderMap::new();
         let method = Method::GET;
         let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
-
         let err = enforce_auth(&manifest, &state, &headers, &method, &uri)
             .expect_err("signature required");
         assert!(matches!(err, ContentError::Unauthorized(_)));
     }
-
     #[test]
     fn role_gate_rejects_missing_role() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
@@ -1267,12 +1170,10 @@ mod tests {
             &method,
             &uri,
         );
-
         let err =
             enforce_auth(&manifest, &state, &headers, &method, &uri).expect_err("missing role");
         assert!(matches!(err, ContentError::Forbidden(_)));
     }
-
     #[test]
     fn role_gate_rejects_replayed_signature() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
@@ -1291,11 +1192,9 @@ mod tests {
             &method,
             &uri,
         );
-
         let first = enforce_auth(&manifest, &state, &headers, &method, &uri)
             .expect_err("unsigned role membership should still be forbidden");
         assert!(matches!(first, ContentError::Forbidden(_)));
-
         let err =
             enforce_auth(&manifest, &state, &headers, &method, &uri).expect_err("replay denied");
         assert!(matches!(
@@ -1303,7 +1202,6 @@ mod tests {
             ContentError::Unauthorized(ref message) if message == "invalid request signature"
         ));
     }
-
     #[test]
     fn sponsor_accepts_matching_uaid() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
@@ -1322,10 +1220,8 @@ mod tests {
             &method,
             &uri,
         );
-
         enforce_auth(&manifest, &state, &headers, &method, &uri).expect("authorized");
     }
-
     #[test]
     fn sponsor_rejects_mismatched_uaid() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
@@ -1350,12 +1246,10 @@ mod tests {
             &method,
             &uri,
         );
-
         let err =
             enforce_auth(&manifest, &state, &headers, &method, &uri).expect_err("uaid mismatch");
         assert!(matches!(err, ContentError::Forbidden(_)));
     }
-
     #[test]
     fn protected_content_rejects_foreign_network_signature() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
@@ -1374,7 +1268,6 @@ mod tests {
             )),
         );
         let headers = signed_headers(&foreign_network, &account_id, &key_pair, &method, &uri);
-
         let error = enforce_auth(&manifest, &state, &headers, &method, &uri)
             .expect_err("foreign-network content signature must fail closed");
         assert!(matches!(
@@ -1382,7 +1275,6 @@ mod tests {
             ContentError::Unauthorized(ref message) if message == "invalid request signature"
         ));
     }
-
     #[test]
     fn content_bundle_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}

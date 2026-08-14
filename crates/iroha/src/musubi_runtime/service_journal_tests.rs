@@ -5,7 +5,6 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
 };
-
 use super::*;
 use iroha_crypto::{Algorithm, Hash, HashOf};
 use iroha_data_model::{
@@ -28,13 +27,11 @@ use iroha_data_model::{
 };
 use norito::codec::Encode as _;
 use sorafs_car::{CarVerifier, CarWriter, FileEntry, compute_por_root};
-
 fn test_network_id(seed: u8) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         [seed; 32],
     )))
 }
-
 #[cfg(unix)]
 #[test]
 fn publication_filesystem_owner_probe_reports_target_filesystem_owner() {
@@ -42,18 +39,14 @@ fn publication_filesystem_owner_probe_reports_target_filesystem_owner() {
     let expected_owner = std::fs::metadata(root.path())
         .expect("publication ownership probe root metadata")
         .uid();
-
     let actual_owner = publication_filesystem_owner_probe(root.path())
         .expect("probe publication filesystem owner");
-
     assert_eq!(actual_owner, expected_owner);
 }
-
 #[derive(Clone)]
 struct TestPublicationClock {
     current_time_ms: Arc<AtomicU64>,
 }
-
 impl TestPublicationClock {
     fn new(initial_time_ms: u64) -> (Self, Arc<AtomicU64>) {
         let current_time_ms = Arc::new(AtomicU64::new(initial_time_ms));
@@ -65,13 +58,11 @@ impl TestPublicationClock {
         )
     }
 }
-
 impl MusubiPublicationServiceClockV1 for TestPublicationClock {
     fn current_time_ms(&mut self) -> Result<u64, MusubiPublicationServiceBackendErrorV1> {
         Ok(self.current_time_ms.load(Ordering::SeqCst))
     }
 }
-
 #[test]
 fn private_http_request_debug_redacts_authorization_metadata_and_body() {
     let request = MusubiPublicationPrivateHttpRequestV1 {
@@ -93,7 +84,6 @@ fn private_http_request_debug_redacts_authorization_metadata_and_body() {
     assert!(debug.contains("authorization_present: true"));
     assert!(debug.contains("body_length: 21"));
 }
-
 #[test]
 fn publication_service_telemetry_annotations_are_closed_and_terminal() {
     let conflict = seed_ingress_journal_error(MusubiPublicationServiceJournalErrorV1::Conflict);
@@ -103,17 +93,14 @@ fn publication_service_telemetry_annotations_are_closed_and_terminal() {
             MusubiIngestDeadletterReasonV1::ReceiptReplay,
         ))
     );
-
     let authorization_replay =
         seed_ingress_journal_error(MusubiPublicationServiceJournalErrorV1::Replay);
     assert!(authorization_replay.retryable);
     assert_eq!(authorization_replay.telemetry, None);
-
     let retryable_storage =
         seed_ingress_backend_error(MusubiPublicationServiceBackendErrorV1::Retryable);
     assert!(retryable_storage.retryable);
     assert_eq!(retryable_storage.telemetry, None);
-
     let terminal_storage =
         seed_ingress_backend_error(MusubiPublicationServiceBackendErrorV1::Permanent);
     assert!(!terminal_storage.retryable);
@@ -123,7 +110,6 @@ fn publication_service_telemetry_annotations_are_closed_and_terminal() {
             MusubiIngestDeadletterReasonV1::StorageRejected,
         ))
     );
-
     let readback = MusubiPublicationServiceErrorV1::permanent(
         MusubiPublicationServiceErrorCodeV1::BackendResponseInvalid,
     )
@@ -135,7 +121,6 @@ fn publication_service_telemetry_annotations_are_closed_and_terminal() {
         ))
     );
 }
-
 #[derive(Clone)]
 struct RecordingSeedIngress {
     provider: ProviderId,
@@ -143,12 +128,10 @@ struct RecordingSeedIngress {
     fail_first: bool,
     clock_after_stage: Option<(Arc<AtomicU64>, u64)>,
 }
-
 impl MusubiSeedIngressBackendV1 for RecordingSeedIngress {
     fn provider_id(&self) -> ProviderId {
         self.provider
     }
-
     fn stage_exact_car(
         &mut self,
         _operation_id: [u8; 32],
@@ -169,7 +152,6 @@ impl MusubiSeedIngressBackendV1 for RecordingSeedIngress {
         }
     }
 }
-
 #[derive(Clone, Copy)]
 enum TestSigningBehavior {
     Correct,
@@ -178,7 +160,6 @@ enum TestSigningBehavior {
     DuplicateApproval,
     RetryableFailure,
 }
-
 struct TestReceiptSigningProvider {
     broker: AccountId,
     key_pair: KeyPair,
@@ -186,7 +167,6 @@ struct TestReceiptSigningProvider {
     observed_payloads: Arc<Mutex<Vec<MusubiSeedIngressReceiptPayloadV1>>>,
     clock_after_signing: Option<(Arc<AtomicU64>, u64)>,
 }
-
 impl TestReceiptSigningProvider {
     fn new(
         broker: AccountId,
@@ -205,18 +185,15 @@ impl TestReceiptSigningProvider {
             observed_payloads,
         )
     }
-
     fn with_clock_after_signing(mut self, clock: Arc<AtomicU64>, current_time_ms: u64) -> Self {
         self.clock_after_signing = Some((clock, current_time_ms));
         self
     }
 }
-
 impl MusubiSeedIngressReceiptSigningProviderV1 for TestReceiptSigningProvider {
     fn broker(&self) -> &AccountId {
         &self.broker
     }
-
     fn sign_approvals(
         &mut self,
         payload: &MusubiSeedIngressReceiptPayloadV1,
@@ -268,7 +245,6 @@ impl MusubiSeedIngressReceiptSigningProviderV1 for TestReceiptSigningProvider {
         Ok(approvals)
     }
 }
-
 #[derive(Clone, Copy)]
 enum ThresholdSigningBehavior {
     Correct,
@@ -277,18 +253,15 @@ enum ThresholdSigningBehavior {
     Unsorted,
     OverApprovalBound,
 }
-
 struct ThresholdReceiptSigningProvider {
     broker: AccountId,
     key_pairs: Vec<KeyPair>,
     behavior: ThresholdSigningBehavior,
 }
-
 impl MusubiSeedIngressReceiptSigningProviderV1 for ThresholdReceiptSigningProvider {
     fn broker(&self) -> &AccountId {
         &self.broker
     }
-
     fn sign_approvals(
         &mut self,
         payload: &MusubiSeedIngressReceiptPayloadV1,
@@ -315,7 +288,6 @@ impl MusubiSeedIngressReceiptSigningProviderV1 for ThresholdReceiptSigningProvid
         Ok(approvals)
     }
 }
-
 #[derive(Clone, Copy)]
 enum ThresholdAuthorizationSigningBehavior {
     Correct,
@@ -327,20 +299,17 @@ enum ThresholdAuthorizationSigningBehavior {
     RetryableFailure,
     PermanentFailure,
 }
-
 struct ThresholdAuthorizationSigningProvider {
     publisher: AccountId,
     key_pairs: Vec<KeyPair>,
     behavior: ThresholdAuthorizationSigningBehavior,
 }
-
 impl MusubiPublicationRuntimeAuthorizationSigningProviderV1
     for ThresholdAuthorizationSigningProvider
 {
     fn publisher(&self) -> &AccountId {
         &self.publisher
     }
-
     fn sign_approvals(
         &self,
         payload: &MusubiPublicationRuntimeAuthorizationPayloadV1,
@@ -398,16 +367,13 @@ impl MusubiPublicationRuntimeAuthorizationSigningProviderV1
         Ok(approvals)
     }
 }
-
 struct ConflictJournal {
     binding: MusubiPublicationServiceJournalBindingV1,
 }
-
 impl MusubiPublicationServiceJournalV1 for ConflictJournal {
     fn deployment_binding(&self) -> &MusubiPublicationServiceJournalBindingV1 {
         &self.binding
     }
-
     fn begin(
         &mut self,
         _attempt: &MusubiPublicationJournalAttemptV1,
@@ -415,7 +381,6 @@ impl MusubiPublicationServiceJournalV1 for ConflictJournal {
     ) -> Result<MusubiPublicationJournalBeginV1, MusubiPublicationServiceJournalErrorV1> {
         Err(MusubiPublicationServiceJournalErrorV1::Unavailable)
     }
-
     fn refresh_expired_seed_receipt(
         &mut self,
         _attempt: &MusubiPublicationJournalAttemptV1,
@@ -424,7 +389,6 @@ impl MusubiPublicationServiceJournalV1 for ConflictJournal {
     ) -> Result<(), MusubiPublicationServiceJournalErrorV1> {
         Err(MusubiPublicationServiceJournalErrorV1::Unavailable)
     }
-
     fn commit(
         &mut self,
         _key: MusubiPublicationIdempotencyKeyV1,
@@ -433,7 +397,6 @@ impl MusubiPublicationServiceJournalV1 for ConflictJournal {
     ) -> Result<(), MusubiPublicationServiceJournalErrorV1> {
         Err(MusubiPublicationServiceJournalErrorV1::Conflict)
     }
-
     fn abort(
         &mut self,
         _key: MusubiPublicationIdempotencyKeyV1,
@@ -442,17 +405,14 @@ impl MusubiPublicationServiceJournalV1 for ConflictJournal {
         Err(MusubiPublicationServiceJournalErrorV1::Conflict)
     }
 }
-
 struct CommitCapacityJournal {
     binding: MusubiPublicationServiceJournalBindingV1,
     aborts: Arc<Mutex<usize>>,
 }
-
 impl MusubiPublicationServiceJournalV1 for CommitCapacityJournal {
     fn deployment_binding(&self) -> &MusubiPublicationServiceJournalBindingV1 {
         &self.binding
     }
-
     fn begin(
         &mut self,
         _attempt: &MusubiPublicationJournalAttemptV1,
@@ -460,7 +420,6 @@ impl MusubiPublicationServiceJournalV1 for CommitCapacityJournal {
     ) -> Result<MusubiPublicationJournalBeginV1, MusubiPublicationServiceJournalErrorV1> {
         Err(MusubiPublicationServiceJournalErrorV1::Unavailable)
     }
-
     fn refresh_expired_seed_receipt(
         &mut self,
         _attempt: &MusubiPublicationJournalAttemptV1,
@@ -469,7 +428,6 @@ impl MusubiPublicationServiceJournalV1 for CommitCapacityJournal {
     ) -> Result<(), MusubiPublicationServiceJournalErrorV1> {
         Err(MusubiPublicationServiceJournalErrorV1::Unavailable)
     }
-
     fn commit(
         &mut self,
         _key: MusubiPublicationIdempotencyKeyV1,
@@ -478,7 +436,6 @@ impl MusubiPublicationServiceJournalV1 for CommitCapacityJournal {
     ) -> Result<(), MusubiPublicationServiceJournalErrorV1> {
         Err(MusubiPublicationServiceJournalErrorV1::Capacity)
     }
-
     fn abort(
         &mut self,
         _key: MusubiPublicationIdempotencyKeyV1,
@@ -488,7 +445,6 @@ impl MusubiPublicationServiceJournalV1 for CommitCapacityJournal {
         Ok(())
     }
 }
-
 #[test]
 fn seed_ingress_commit_and_abort_conflicts_are_deadletters_without_double_annotation() {
     let mut fixture = private_service_fixture(false);
@@ -502,7 +458,6 @@ fn seed_ingress_commit_and_abort_conflicts_are_deadletters_without_double_annota
         operation_id: fixture.request.operation_id,
         target: [0; 32],
     };
-
     let commit_error = fixture
         .service
         .finish_attempt(key, [0x71; 32], Ok(vec![0x01]))
@@ -513,7 +468,6 @@ fn seed_ingress_commit_and_abort_conflicts_are_deadletters_without_double_annota
             MusubiIngestDeadletterReasonV1::ReceiptReplay,
         ))
     );
-
     let abort_error = fixture
         .service
         .finish_attempt(
@@ -530,7 +484,6 @@ fn seed_ingress_commit_and_abort_conflicts_are_deadletters_without_double_annota
             MusubiIngestDeadletterReasonV1::ReceiptReplay,
         ))
     );
-
     let already_annotated = fixture
         .service
         .finish_attempt(
@@ -544,7 +497,6 @@ fn seed_ingress_commit_and_abort_conflicts_are_deadletters_without_double_annota
         .expect_err("abort conflict after annotated failure");
     assert_eq!(already_annotated.telemetry, None);
 }
-
 #[test]
 fn commit_capacity_releases_the_attempt_before_returning_unavailable() {
     let mut fixture = private_service_fixture(false);
@@ -575,9 +527,7 @@ fn commit_capacity_releases_the_attempt_before_returning_unavailable() {
     assert_eq!(error.telemetry, None);
     assert_eq!(*aborts.lock().expect("abort counter"), 1);
 }
-
 struct UnusedStorage;
-
 impl MusubiStorageCoordinationBackendV1 for UnusedStorage {
     fn coordinate_storage(
         &mut self,
@@ -586,9 +536,7 @@ impl MusubiStorageCoordinationBackendV1 for UnusedStorage {
         Err(MusubiPublicationServiceBackendErrorV1::Permanent)
     }
 }
-
 struct UnusedReadback;
-
 impl MusubiProviderReadbackBackendV1 for UnusedReadback {
     fn readback_provider(
         &mut self,
@@ -597,12 +545,10 @@ impl MusubiProviderReadbackBackendV1 for UnusedReadback {
         Err(MusubiPublicationServiceBackendErrorV1::Permanent)
     }
 }
-
 struct FixedStorage {
     response: MusubiStorageCoordinationResponseV1,
     substitute: bool,
 }
-
 impl MusubiStorageCoordinationBackendV1 for FixedStorage {
     fn coordinate_storage(
         &mut self,
@@ -620,17 +566,14 @@ impl MusubiStorageCoordinationBackendV1 for FixedStorage {
         Ok(response)
     }
 }
-
 struct FixedReadback {
     response: MusubiProviderReadbackResponseV1,
     substitute: bool,
 }
-
 #[cfg(unix)]
 struct RecordingExactReadback {
     calls: Arc<Mutex<Vec<(MusubiArchiveLocationIdV1, u64, ProviderId)>>>,
 }
-
 #[cfg(unix)]
 impl MusubiProviderReadbackBackendV1 for RecordingExactReadback {
     fn readback_provider(
@@ -653,7 +596,6 @@ impl MusubiProviderReadbackBackendV1 for RecordingExactReadback {
         })
     }
 }
-
 impl MusubiProviderReadbackBackendV1 for FixedReadback {
     fn readback_provider(
         &mut self,
@@ -666,7 +608,6 @@ impl MusubiProviderReadbackBackendV1 for FixedReadback {
         Ok(response)
     }
 }
-
 struct PrivateServiceFixture {
     service: MusubiPublicationPrivateServiceV1,
     runtime: AuthenticatedMusubiPublicationRuntimeClientV1,
@@ -678,7 +619,6 @@ struct PrivateServiceFixture {
     calls: Arc<Mutex<usize>>,
     clock: Arc<AtomicU64>,
 }
-
 struct ControlServiceFixture {
     service: MusubiPublicationPrivateServiceV1,
     runtime: AuthenticatedMusubiPublicationRuntimeClientV1,
@@ -688,7 +628,6 @@ struct ControlServiceFixture {
     readback_response: MusubiProviderReadbackResponseV1,
     clock: Arc<AtomicU64>,
 }
-
 fn control_commitment() -> MusubiArchiveCommitmentV1 {
     MusubiArchiveCommitmentV1 {
         root_cid: ManifestRootCid::from_blake3_digest([0x91; 32]).expect("root CID"),
@@ -711,7 +650,6 @@ fn control_commitment() -> MusubiArchiveCommitmentV1 {
         chunk_count: 4,
     }
 }
-
 fn control_service_fixture(
     substitute_storage: bool,
     substitute_readback: bool,
@@ -959,7 +897,6 @@ fn control_service_fixture(
         clock,
     }
 }
-
 fn private_service_fixture(fail_first: bool) -> PrivateServiceFixture {
     let (regressing_client, _) = client();
     let runtime = AuthenticatedMusubiPublicationRuntimeClientV1::from_iroha_client(
@@ -1179,7 +1116,6 @@ fn private_service_fixture(fail_first: bool) -> PrivateServiceFixture {
         clock,
     }
 }
-
 fn threshold_private_service_fixture(behavior: ThresholdSigningBehavior) -> PrivateServiceFixture {
     let mut fixture = private_service_fixture(false);
     let member_count = if matches!(behavior, ThresholdSigningBehavior::OverApprovalBound) {
@@ -1242,7 +1178,6 @@ fn threshold_private_service_fixture(behavior: ThresholdSigningBehavior) -> Priv
     fixture.calls = calls;
     fixture
 }
-
 fn authorization_header(
     runtime: &AuthenticatedMusubiPublicationRuntimeClientV1,
     request: &MusubiSeedIngressStageRequestV1,
@@ -1262,7 +1197,6 @@ fn authorization_header(
     base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(norito::encode_canonical(&authorization).expect("canonical authorization"))
 }
-
 fn control_authorization_header(
     runtime: &AuthenticatedMusubiPublicationRuntimeClientV1,
     operation: MusubiPublicationRuntimeOperationV1,
@@ -1277,7 +1211,6 @@ fn control_authorization_header(
     base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(norito::encode_canonical(&authorization).expect("canonical authorization"))
 }
-
 fn control_readback_response(
     fixture: &mut ControlServiceFixture,
     request: &MusubiProviderReadbackRequestV1,
@@ -1305,7 +1238,6 @@ fn control_readback_response(
             body: &body,
         })
 }
-
 fn seed_http_response(
     fixture: &mut PrivateServiceFixture,
     authorization: &str,
@@ -1326,14 +1258,12 @@ fn seed_http_response(
             body,
         })
 }
-
 fn decode_service_error(
     response: &MusubiPublicationPrivateHttpResponseV1,
 ) -> MusubiPublicationServiceErrorResponseV1 {
     norito::decode_canonical_with_limits(&response.body, RESPONSE_DECODE_LIMITS)
         .expect("typed service error")
 }
-
 fn client() -> (Client, KeyPair) {
     let key_pair = KeyPair::try_from_seed(
         b"musubi-publication-runtime-client-test".to_vec(),
@@ -1372,7 +1302,6 @@ fn client() -> (Client, KeyPair) {
     };
     (client, key_pair)
 }
-
 fn threshold_authorization_runtime(
     behavior: ThresholdAuthorizationSigningBehavior,
 ) -> AuthenticatedMusubiPublicationRuntimeClientV1 {

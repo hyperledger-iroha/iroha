@@ -1,15 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for basic asset lifecycle operations.
-
-use std::{
-    sync::{
-        OnceLock,
-        atomic::{AtomicU64, Ordering},
-    },
-    thread::sleep,
-    time::{Duration, Instant},
-};
-
 use eyre::{Report, Result, WrapErr, eyre};
 use integration_tests::{
     sandbox,
@@ -25,8 +15,15 @@ use iroha_data_model::query::error::{FindError, QueryExecutionFail};
 use iroha_executor_data_model::permission::asset::CanTransferAsset;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
+use std::{
+    sync::{
+        OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
+    thread::sleep,
+    time::{Duration, Instant},
+};
 use toml::Value as TomlValue;
-
 static GENESIS_STATUS: OnceLock<std::result::Result<(), ()>> = OnceLock::new();
 static SERIAL_NETWORK_GUARD: OnceLock<sandbox::NetworkParallelismGuard> = OnceLock::new();
 const QUERY_RETRIES: usize = 1_200;
@@ -35,12 +32,10 @@ const NON_EMPTY_BLOCK_TIMEOUT: Duration = Duration::from_secs(240);
 // DA-enabled consensus needs a wider pipeline in local test runs to avoid view-change stalls.
 const FAST_PIPELINE_TIME: Duration = Duration::from_secs(6);
 static ASSET_NAME_COUNTER: AtomicU64 = AtomicU64::new(0);
-
 struct ClientPool {
     clients: Vec<Client>,
     index: usize,
 }
-
 impl ClientPool {
     fn new(network: &Network) -> Self {
         let clients = network
@@ -55,22 +50,18 @@ impl ClientPool {
         };
         Self { clients, index: 0 }
     }
-
     fn len(&self) -> usize {
         self.clients.len()
     }
-
     fn current(&self) -> &Client {
         &self.clients[self.index]
     }
-
     fn next(&mut self) -> &Client {
         let idx = self.index;
         self.index = (self.index + 1) % self.clients.len();
         &self.clients[idx]
     }
 }
-
 fn unique_asset_definition_id(
     domain_id_literal: &str,
     prefix: &str,
@@ -89,7 +80,6 @@ fn unique_asset_definition_id(
         display_name,
     )
 }
-
 fn named_numeric_asset_definition(
     id: AssetDefinitionId,
     name: String,
@@ -101,7 +91,6 @@ fn named_numeric_asset_definition(
         None,
     )
 }
-
 fn named_asset_definition(
     id: AssetDefinitionId,
     name: String,
@@ -115,7 +104,6 @@ fn named_asset_definition(
         None,
     )
 }
-
 fn is_transient_client_error(err: &Report) -> bool {
     const NEEDLES: [&str; 6] = [
         "Failed to send http",
@@ -130,7 +118,6 @@ fn is_transient_client_error(err: &Report) -> bool {
         NEEDLES.iter().any(|needle| text.contains(needle))
     })
 }
-
 fn retry_query<T, F>(mut f: F) -> Result<T>
 where
     F: FnMut() -> Result<T>,
@@ -144,7 +131,6 @@ where
     }
     unreachable!()
 }
-
 fn asset_value(clients: &mut ClientPool, asset_id: &AssetId) -> Result<Quantity> {
     retry_query(|| {
         let client = clients.next();
@@ -156,7 +142,6 @@ fn asset_value(clients: &mut ClientPool, asset_id: &AssetId) -> Result<Quantity>
             .map_err(Report::new)
     })
 }
-
 fn asset_exists(clients: &mut ClientPool, asset_id: &AssetId) -> Result<bool> {
     retry_query(|| {
         let client = clients.next();
@@ -171,7 +156,6 @@ fn asset_exists(clients: &mut ClientPool, asset_id: &AssetId) -> Result<bool> {
         }
     })
 }
-
 fn wait_for_asset_definition_owner(
     clients: &mut ClientPool,
     asset_definition_id: &AssetDefinitionId,
@@ -202,11 +186,9 @@ fn wait_for_asset_definition_owner(
                 ),
             Err(err) => Some(Report::new(err)),
         };
-
         if last_err.is_none() {
             return Ok(());
         }
-
         if Instant::now() >= deadline {
             return Err(last_err.unwrap_or_else(|| {
                 eyre!("timed out waiting for {timeout_msg} after {NON_EMPTY_BLOCK_TIMEOUT:?}")
@@ -215,7 +197,6 @@ fn wait_for_asset_definition_owner(
         sleep(QUERY_RETRY_DELAY);
     }
 }
-
 fn wait_for_asset_value(
     clients: &mut ClientPool,
     asset_id: &AssetId,
@@ -238,7 +219,6 @@ fn wait_for_asset_value(
         sleep(QUERY_RETRY_DELAY);
     }
 }
-
 fn wait_for_asset_absent(
     clients: &mut ClientPool,
     asset_id: &AssetId,
@@ -261,7 +241,6 @@ fn wait_for_asset_absent(
         sleep(QUERY_RETRY_DELAY);
     }
 }
-
 /// Ensure noisy tracing is silenced before any network is spawned.
 #[allow(unsafe_code)]
 fn install_quiet_tracing() {
@@ -275,14 +254,12 @@ fn install_quiet_tracing() {
         }
     });
 }
-
 fn ivm_build_profile_exists() -> bool {
     use std::path::PathBuf;
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../crates/ivm/target/prebuilt/build_config.toml")
         .exists()
 }
-
 fn quiet_network_builder_base() -> NetworkBuilder {
     init_instruction_registry();
     let mut sumeragi = toml::Table::new();
@@ -291,7 +268,6 @@ fn quiet_network_builder_base() -> NetworkBuilder {
     rbc.insert("pending_ttl_ms".into(), TomlValue::Integer(120_000));
     rbc.insert("session_ttl_ms".into(), TomlValue::Integer(240_000));
     advanced.insert("rbc".into(), TomlValue::Table(rbc));
-
     // Increase DA quorum/availability timeouts to tolerate slower CI and local hosts.
     let mut da = toml::Table::new();
     da.insert("quorum_timeout_multiplier".into(), TomlValue::Integer(6));
@@ -313,12 +289,10 @@ fn quiet_network_builder_base() -> NetworkBuilder {
         .with_config_table(layer)
         .with_ivm_fuel(IvmFuelConfig::Unset)
 }
-
 fn quiet_network_builder() -> NetworkBuilder {
     install_quiet_tracing();
     quiet_network_builder_base()
 }
-
 fn submit_or_skip(
     clients: &mut ClientPool,
     instruction: impl Into<InstructionBox>,
@@ -326,7 +300,6 @@ fn submit_or_skip(
 ) -> Result<Option<()>> {
     submit_or_tolerate_timeout(clients, instruction, context)
 }
-
 fn submit_tx_or_skip(
     clients: &mut ClientPool,
     tx: &iroha::data_model::transaction::SignedTransaction,
@@ -362,7 +335,6 @@ fn submit_tx_or_skip(
         )
     }
 }
-
 fn submit_or_tolerate_timeout(
     clients: &mut ClientPool,
     instruction: impl Into<InstructionBox>,
@@ -376,7 +348,6 @@ fn submit_or_tolerate_timeout(
     );
     submit_tx_or_skip(clients, &tx, context)
 }
-
 fn is_tx_confirmation_timeout(err: &Report) -> bool {
     const NEEDLES: [&str; 4] = [
         "haven't got tx confirmation within",
@@ -389,7 +360,6 @@ fn is_tx_confirmation_timeout(err: &Report) -> bool {
         NEEDLES.iter().any(|needle| text.contains(needle))
     })
 }
-
 fn is_duplicate_tx_error(err: &Report) -> bool {
     const NEEDLES: [&str; 6] = [
         "PRTRY:ALREADY_COMMITTED",
@@ -404,7 +374,6 @@ fn is_duplicate_tx_error(err: &Report) -> bool {
         NEEDLES.iter().any(|needle| text.contains(needle))
     })
 }
-
 fn start_test_network_with_builder(
     builder: NetworkBuilder,
 ) -> Option<(sandbox::SerializedNetwork, tokio::runtime::Runtime)> {
@@ -413,12 +382,10 @@ fn start_test_network_with_builder(
         return None;
     }
     SERIAL_NETWORK_GUARD.get_or_init(|| sandbox::override_network_parallelism(Some(true), None));
-
     if matches!(GENESIS_STATUS.get(), Some(Err(()))) {
         eprintln!("Skipping test: failed to start network (cached)");
         return None;
     }
-
     if let Err(err) = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
         let report = Report::new(err);
         if let Some(reason) = sandbox::sandbox_reason(&report) {
@@ -429,18 +396,15 @@ fn start_test_network_with_builder(
         }
         panic!("failed during bind preflight: {report}");
     }
-
     let serial_guard = sandbox::serial_guard();
     if matches!(GENESIS_STATUS.get(), Some(Err(()))) {
         eprintln!("Skipping test: failed to start network (cached)");
         return None;
     }
-
     let (network, runtime) = builder
         .with_auto_populated_trusted_peers()
         .with_min_peers(4)
         .build_blocking();
-
     // Preflight binding check to avoid long hangs when the sandbox forbids sockets.
     if let Err(err) = network
         .peers()
@@ -457,7 +421,6 @@ fn start_test_network_with_builder(
             Err(err) => panic!("failed during bind preflight: {err}"),
         }
     }
-
     if let Err(err) = runtime.block_on(async { network.start_all().await }) {
         match sandbox::handle_result::<()>(Err(err), "start test network") {
             Ok(None) => return None,
@@ -478,14 +441,12 @@ fn start_test_network_with_builder(
             }
         }
     }
-
     let _ = GENESIS_STATUS.set(Ok(()));
     Some((
         sandbox::SerializedNetwork::new(network, serial_guard),
         runtime,
     ))
 }
-
 #[test]
 // This test is also covered at the UI level in the iroha_cli tests
 // in test_mint_assets.py
@@ -508,9 +469,7 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
         decimal_definition_name,
         NumericSpec::fractional(3),
     );
-
     let builder = quiet_network_builder();
-
     let Some((network, _rt)) = start_test_network_with_builder(builder) else {
         return Ok(());
     };
@@ -525,7 +484,6 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     {
         return Ok(());
     }
-
     for definition in [
         asset_definition.clone(),
         big_asset_definition.clone(),
@@ -542,7 +500,6 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
             return Ok(());
         }
     }
-
     for asset_definition_id in [
         &asset_definition_id,
         &big_asset_definition_id,
@@ -566,7 +523,6 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
             return Ok(());
         }
     }
-
     // When: mint integer asset quantity
     let quantity = Quantity::from(200_u32);
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
@@ -583,7 +539,6 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
         eprintln!("Skipping asset mint coverage: {err}");
         return Ok(());
     }
-
     // And: mint large integer asset quantity
     let big_quantity = Quantity::from(2_u128.pow(65));
     let big_asset_id = AssetId::new(big_asset_definition_id.clone(), account_id.clone());
@@ -605,7 +560,6 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
         eprintln!("Skipping asset mint coverage: {err}");
         return Ok(());
     }
-
     // And: mint decimal asset quantity
     let decimal_quantity = "123.456"
         .parse::<Quantity>()
@@ -629,7 +583,6 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
         eprintln!("Skipping asset mint coverage: {err}");
         return Ok(());
     }
-
     // Add some fractional part
     let quantity2 = "0.55"
         .parse::<Quantity>()
@@ -656,10 +609,8 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
         eprintln!("Skipping asset mint coverage: {err}");
         return Ok(());
     }
-
     Ok(())
 }
-
 #[allow(unused_must_use)]
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::expect_fun_call)]
@@ -680,7 +631,6 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
         let rate = AssetId::new(rate_def.clone(), dex_id.clone());
         let seller_btc = AssetId::new(btc_def.clone(), seller_id.clone());
         let buyer_eth = AssetId::new(eth_def.clone(), buyer_id.clone());
-
         let mut builder = quiet_network_builder();
         builder = builder
             .with_genesis_instruction(register::domain("exchange.universal"))
@@ -689,7 +639,6 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             .with_genesis_instruction(register::account(dex_id.clone(), exchange_domain.clone()))
             .with_genesis_instruction(register::account(seller_id.clone(), company_domain.clone()))
             .with_genesis_instruction(register::account(buyer_id.clone(), company_domain.clone()));
-
         let Some((network, rt)) = start_test_network_with_builder(builder) else {
             return Ok(());
         };
@@ -702,7 +651,6 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             None => return Ok(()),
         };
         let mut last_non_empty_height = status.blocks_non_empty;
-
         for (definition, name) in [
             (rate_def.clone(), rate_name),
             (btc_def.clone(), btc_name),
@@ -726,7 +674,6 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
                 return Ok(());
             }
         }
-
         let seed_instructions: [InstructionBox; 3] = [
             Mint::asset_quantity(20_u32, rate.clone()).into(),
             Mint::asset_quantity(10_u32, seller_btc.clone()).into(),
@@ -754,7 +701,6 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             None => return Ok(()),
         };
         last_non_empty_height = status.blocks_non_empty;
-
         wait_for_asset_value(
             &mut clients,
             &rate,
@@ -773,7 +719,6 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             &Quantity::from(200_u32),
             "seed buyer eth",
         )?;
-
         let alice_id = ALICE_ID.clone();
         {
             let mut alice_can_transfer_asset = |asset_id: AssetId,
@@ -790,7 +735,6 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
                 )
                 .with_instructions([instruction])
                 .sign(owner_key_pair.private_key());
-
                 if submit_tx_or_skip(&mut clients, &transaction, "grant transfer permission")?
                     .is_none()
                 {
@@ -815,7 +759,6 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             alice_can_transfer_asset(seller_btc.clone(), seller_keypair)?;
             alice_can_transfer_asset(buyer_eth.clone(), buyer_keypair)?;
         }
-
         let rate: u32 = asset_value(&mut clients, &rate)?
             .into_numeric()
             .try_into()
@@ -845,7 +788,6 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
         } else {
             return Ok(());
         }
-
         let seller_eth = AssetId::new(eth_def, seller_id.clone());
         let buyer_btc = AssetId::new(btc_def, buyer_id.clone());
         // after: seller has $ETH200 and buyer has $BTC10
@@ -863,17 +805,14 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             &Quantity::from(10_u32),
             "buyer BTC balance",
         )?;
-
         Ok(())
     })();
-
     let _ = sandbox::handle_result(
         result,
         stringify!(find_rate_and_make_exchange_isi_should_succeed),
     )?;
     Ok(())
 }
-
 #[test]
 #[allow(clippy::unnecessary_wraps)]
 fn transfer_asset_definition() -> Result<()> {
@@ -882,14 +821,12 @@ fn transfer_asset_definition() -> Result<()> {
     let (new_owner_id, _kp) = gen_account_in("domain");
     let (asset_definition_id, asset_definition_name) =
         unique_asset_definition_id("wonderland.universal", "asset");
-
     let mut builder = quiet_network_builder();
     let domain_id: DomainId =
         DomainId::try_new("domain", "universal").expect("domain should be valid");
     builder = builder
         .with_genesis_instruction(register::domain("domain.universal"))
         .with_genesis_instruction(register::account(new_owner_id.clone(), domain_id.clone()));
-
     let Some((network, _rt)) = start_test_network_with_builder(builder) else {
         return Ok(());
     };
@@ -902,7 +839,6 @@ fn transfer_asset_definition() -> Result<()> {
     {
         return Ok(());
     }
-
     let register_instruction: InstructionBox =
         Register::asset_definition(AssetDefinition::numeric(
             asset_definition_id.clone(),
@@ -920,7 +856,6 @@ fn transfer_asset_definition() -> Result<()> {
         );
         return Ok(());
     }
-
     wait_for_asset_definition_owner(
         &mut clients,
         &asset_definition_id,
@@ -929,7 +864,6 @@ fn transfer_asset_definition() -> Result<()> {
         "unexpected asset definition owner",
         "asset definition registration",
     )?;
-
     if submit_or_tolerate_timeout(
         &mut clients,
         Transfer::asset_definition(alice_id, asset_definition_id.clone(), new_owner_id.clone()),
@@ -939,7 +873,6 @@ fn transfer_asset_definition() -> Result<()> {
     {
         return Ok(());
     }
-
     wait_for_asset_definition_owner(
         &mut clients,
         &asset_definition_id,
@@ -950,7 +883,6 @@ fn transfer_asset_definition() -> Result<()> {
     )?;
     Ok(())
 }
-
 #[test]
 #[allow(clippy::unnecessary_wraps)]
 #[allow(clippy::too_many_lines)]
@@ -959,7 +891,6 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         let alice_id = ALICE_ID.clone();
         // Prepare a transferable destination account under a manageable domain
         let (dest_id, _kp) = gen_account_in("domain");
-
         let (asset_definition_id, asset_definition_name) =
             unique_asset_definition_id("wonderland.universal", "asset");
         let asset_id: AssetId = AssetId::new(asset_definition_id.clone(), alice_id.clone());
@@ -969,14 +900,12 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             asset_definition_name,
             NumericSpec::integer(),
         );
-
         let mut builder = quiet_network_builder();
         let domain_id: DomainId =
             DomainId::try_new("domain", "universal").expect("domain should be valid");
         builder = builder
             .with_genesis_instruction(register::domain("domain.universal"))
             .with_genesis_instruction(register::account(dest_id.clone(), domain_id.clone()));
-
         let Some((network, _rt)) = start_test_network_with_builder(builder) else {
             return Ok(());
         };
@@ -997,7 +926,6 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         {
             return Ok(());
         }
-
         let register_instruction: InstructionBox =
             Register::asset_definition(asset_definition.clone()).into();
         if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
@@ -1009,7 +937,6 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             );
             return Ok(());
         }
-
         // Seed the registered asset definition under Alice's authority.
         if submit_or_skip(
             &mut clients,
@@ -1033,12 +960,10 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
                 Transfer::asset_quantity(asset_id.clone(), quantity, dest_id.clone()).into(),
             ]
         };
-
         // Fail if submitting fractional value
         let fractional_value = "0.01"
             .parse::<Quantity>()
             .expect("fractional test quantity must be valid");
-
         // No fractional operations should change the state
         let before = asset_value(&mut clients, &asset_id)?;
         let dest_asset_id = AssetId::new(asset_definition_id.clone(), dest_id.clone());
@@ -1066,7 +991,6 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
                 "fractional transfer must not create destination asset"
             );
         }
-
         // Everything works fine when submitting proper integer value
         let integer_quantity = Quantity::one();
         let expected_after_mint = before
@@ -1075,7 +999,6 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         let expected_after_transfer = before
             .checked_sub(&integer_quantity)
             .map_err(|_| eyre!("integer transfer underflow"))?;
-
         let mint_instruction: InstructionBox =
             Mint::asset_quantity(integer_quantity.clone(), asset_id.clone()).into();
         if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
@@ -1091,7 +1014,6 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             &expected_after_mint,
             "integer mint",
         )?;
-
         let burn_instruction: InstructionBox =
             Burn::asset_quantity(integer_quantity.clone(), asset_id.clone()).into();
         if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
@@ -1102,7 +1024,6 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             return Ok(());
         }
         wait_for_asset_value(&mut clients, &asset_id, &before, "integer burn")?;
-
         let transfer_instruction: InstructionBox =
             Transfer::asset_quantity(asset_id.clone(), integer_quantity, dest_id.clone()).into();
         if let Err(err) = clients.next().submit_blocking::<InstructionBox>(
@@ -1112,7 +1033,6 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             eprintln!("Skipping integer-only asset spec coverage: integer transfer failed: {err}");
             return Ok(());
         }
-
         // After integer ops: asset moved to destination, zero at source (purged)
         wait_for_asset_value(
             &mut clients,
@@ -1142,10 +1062,8 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
                 env_dir.display()
             ))?;
         }
-
         Ok(())
     })();
-
     if let Err(err) = result {
         let message = err.to_string();
         if message.contains("timed out waiting for")
@@ -1158,42 +1076,34 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
     }
     Ok(())
 }
-
 fn status_or_skip(res: Result<Status>, context: &str) -> Result<Option<Status>> {
     sandbox::handle_result(res, context)
 }
-
 mod register {
     use super::*;
-
     pub fn domain(id_literal: &str) -> Register<Domain> {
         Register::domain(Domain::new(
             DomainId::parse_fully_qualified(id_literal)
                 .expect("domain literal should be fully qualified"),
         ))
     }
-
     pub fn account(id: AccountId, _domain: DomainId) -> Register<Account> {
         Register::account(Account::new(id.clone()))
     }
 }
-
 #[cfg(test)]
 mod helper_tests {
     use super::*;
-
     #[test]
     fn tx_confirmation_timeout_includes_fallback_status() {
         let err = eyre!("transaction confirmation timed out; fallback status check failed");
         assert!(is_tx_confirmation_timeout(&err));
     }
-
     #[test]
     fn tx_confirmation_timeout_includes_queue_stall() {
         let err = eyre!("transaction queued for too long");
         assert!(is_tx_confirmation_timeout(&err));
     }
-
     #[test]
     fn duplicate_tx_error_detects_queue_conflicts() {
         let committed = eyre!(
@@ -1209,7 +1119,6 @@ mod helper_tests {
         );
         assert!(!is_duplicate_tx_error(&other));
     }
-
     #[test]
     fn transient_client_error_detects_request_failures() {
         let err = eyre!("Failed to send http POST request to http://127.0.0.1:1/query");
@@ -1217,13 +1126,11 @@ mod helper_tests {
         let non_transient = eyre!("Transaction rejected");
         assert!(!is_transient_client_error(&non_transient));
     }
-
     #[test]
     fn quiet_network_builder_uses_fast_pipeline_time() {
         let builder = quiet_network_builder_base();
         assert_eq!(builder.configured_block_cadence(), Some(FAST_PIPELINE_TIME));
     }
-
     #[test]
     fn asset_definition_uses_explicit_name() {
         let (numeric_id, numeric_name) =
@@ -1231,7 +1138,6 @@ mod helper_tests {
         let numeric =
             named_numeric_asset_definition(numeric_id, numeric_name.clone()).build(&ALICE_ID);
         assert_eq!(numeric.name(), &numeric_name);
-
         let (fractional_id, fractional_name) =
             unique_asset_definition_id("wonderland.universal", "fractional");
         let fractional = named_asset_definition(

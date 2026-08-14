@@ -1,9 +1,3 @@
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    error::Error,
-    fmt,
-};
-
 use super::{
     CertificateRef, Committee, CommitteeRole, ConsensusMessageV2, DurableState, EventTag,
     Generation, HeightContext, MAX_VOTING_ROSTER_LEN, OpaqueSignature, PayloadManifest,
@@ -34,7 +28,11 @@ use super::{
     },
     types::timeout_vote_view_is_admissible,
 };
-
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    error::Error,
+    fmt,
+};
 /// Progress of an exact block body through the durable validation boundary.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BodyState {
@@ -50,7 +48,6 @@ pub enum BodyState {
     /// Deterministic validation rejected the body.
     Invalid,
 }
-
 /// Locally signable consensus message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SignableMessage {
@@ -61,7 +58,6 @@ pub enum SignableMessage {
     /// Timeout vote whose intent is already durable.
     TimeoutVote(TimeoutVote),
 }
-
 /// Kind of authenticated equivocation observed by the reducer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EquivocationKind {
@@ -72,7 +68,6 @@ pub enum EquivocationKind {
     /// Two different proposals from the expected leader in one round.
     Proposal,
 }
-
 /// Exact pair of authenticated artifacts proving one validator equivocated. Keeping both
 /// signatures inside the reducer effect prevents a downstream adapter from turning a
 /// non-verifiable offender/round summary into slashing evidence.
@@ -101,7 +96,6 @@ pub enum EquivocationEvidence {
         second: SignedTimeoutVote,
     },
 }
-
 impl EquivocationEvidence {
     /// Return the conflicting message class.
     #[must_use]
@@ -112,7 +106,6 @@ impl EquivocationEvidence {
             Self::Timeout { .. } => EquivocationKind::Timeout,
         }
     }
-
     /// Return the offending validator.
     #[must_use]
     pub fn offender(&self) -> ValidatorId {
@@ -122,7 +115,6 @@ impl EquivocationEvidence {
             Self::Timeout { first, .. } => first.vote().signer(),
         }
     }
-
     /// Return the round containing both artifacts.
     #[must_use]
     pub fn round(&self) -> Round {
@@ -132,7 +124,6 @@ impl EquivocationEvidence {
             Self::Timeout { first, .. } => first.vote().round(),
         }
     }
-
     fn is_conflict_in(&self, context: &HeightContext) -> bool {
         if self.round().height() != context.height()
             || context.validator(&self.offender()).is_none()
@@ -172,7 +163,6 @@ impl EquivocationEvidence {
         }
     }
 }
-
 /// Side effect requested from an asynchronous production adapter.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -263,7 +253,6 @@ pub enum Effect {
         certificate: QuorumCertificate,
     },
 }
-
 /// Storage-issued evidence that the decided block and its exact `CommitQC` are
 /// durably visible as one finalized Kura height.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -273,7 +262,6 @@ pub struct DurableCommitReceipt {
     subject: Subject,
     certificate: CertificateRef,
 }
-
 impl DurableCommitReceipt {
     /// Construct a receipt at the trusted durable-storage boundary.
     #[must_use]
@@ -291,28 +279,24 @@ impl DurableCommitReceipt {
         }
     }
 }
-
 /// Closed, finalized reducer output used to derive the next height context.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FinalizedHeight {
     context: HeightContext,
     decision: QuorumCertificate,
 }
-
 impl FinalizedHeight {
     /// Return the context that was finalized.
     #[must_use]
     pub const fn context(&self) -> &HeightContext {
         &self.context
     }
-
     /// Return the exact durable `CommitQC` decision.
     #[must_use]
     pub const fn decision(&self) -> &QuorumCertificate {
         &self.decision
     }
 }
-
 /// Authenticated input or asynchronous adapter completion.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
@@ -437,7 +421,6 @@ pub enum Event {
         subject: Subject,
     },
 }
-
 impl Event {
     fn tag(&self) -> EventTag {
         match self {
@@ -459,7 +442,6 @@ impl Event {
             | Self::ApplicationCompleted { tag, .. } => *tag,
         }
     }
-
     /// Replace the local delivery tag on an already authenticated network
     /// input before retrying it after reducer backpressure.
     ///
@@ -483,7 +465,6 @@ impl Event {
         }
     }
 }
-
 /// Reason an input was safely ignored without changing state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum IgnoreReason {
@@ -513,7 +494,6 @@ pub enum IgnoreReason {
     /// A durable lock makes the proposal's subject unsafe to prepare.
     UnsafeProposal,
 }
-
 /// Whether a reducer step changed state or intentionally ignored an input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StepDisposition {
@@ -522,14 +502,12 @@ pub enum StepDisposition {
     /// The input was safely ignored for the stated reason.
     Ignored(IgnoreReason),
 }
-
 /// Result of one serialized reducer transition.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StepOutcome {
     disposition: StepDisposition,
     effects: Vec<Effect>,
 }
-
 impl StepOutcome {
     fn applied(effects: Vec<Effect>) -> Self {
         Self {
@@ -537,46 +515,39 @@ impl StepOutcome {
             effects,
         }
     }
-
     fn ignored(reason: IgnoreReason) -> Self {
         Self {
             disposition: StepDisposition::Ignored(reason),
             effects: Vec::new(),
         }
     }
-
     /// Returns whether the input was applied or ignored.
     #[must_use]
     pub const fn disposition(&self) -> StepDisposition {
         self.disposition
     }
-
     /// Returns requested adapter effects in deterministic order.
     #[must_use]
     pub fn effects(&self) -> &[Effect] {
         &self.effects
     }
-
     /// Consumes the outcome and returns its adapter effects.
     #[must_use]
     pub fn into_effects(self) -> Vec<Effect> {
         self.effects
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BodyWork {
     manifest: Option<PayloadManifest>,
     state: BodyState,
 }
-
 /// Exact in-memory WAL append and the continuation fenced behind its fsync.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingPersistence {
     entry: WalEntry,
     continuation: Continuation,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Continuation {
     None,
@@ -590,7 +561,6 @@ enum Continuation {
         broadcast: bool,
     },
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum OutboundControlClass {
     Proposal,
@@ -601,7 +571,6 @@ enum OutboundControlClass {
     TimeoutVote,
     TimeoutCertificate,
 }
-
 /// Exact partial vote quorum retained by the reducer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct VotePoolSnapshot {
@@ -618,7 +587,6 @@ pub(crate) struct VotePoolSnapshot {
     /// Voting power represented by `signers`.
     pub(crate) signed_power: VotingPower,
 }
-
 /// Exact partial timeout quorum retained by the reducer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TimeoutPoolSnapshot {
@@ -631,7 +599,6 @@ pub(crate) struct TimeoutPoolSnapshot {
     /// Whether this pool already formed a timeout certificate.
     pub(crate) certificate_formed: bool,
 }
-
 /// The sole executable Sumeragi v2 consensus state machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reducer {
@@ -657,7 +624,6 @@ pub struct Reducer {
     // Volatile, view-scoped admission for Set B body work and new votes.
     fallback_active: bool,
 }
-
 impl Reducer {
     /// Return the immutable canonical archive fanout for this height.
     ///
@@ -670,7 +636,6 @@ impl Reducer {
             .map(|validator| validator.id())
             .collect()
     }
-
     fn local_committee_role(&self) -> Option<CommitteeRole> {
         let local = self.local_validator?;
         let index = self
@@ -684,7 +649,6 @@ impl Reducer {
             .role(index)
             .ok()
     }
-
     fn local_candidate_body_eligible(&self) -> bool {
         match self.local_committee_role() {
             Some(CommitteeRole::SetBValidator) => self.fallback_active,
@@ -694,11 +658,9 @@ impl Reducer {
             None => false,
         }
     }
-
     fn local_certified_candidate_body_eligible(&self) -> bool {
         self.local_validator.is_none() || self.local_candidate_body_eligible()
     }
-
     fn record_is_role_eligible(&self, record: &WalRecord) -> bool {
         match record {
             WalRecord::PrepareIntent(_) | WalRecord::LockAndCommit { .. } => {
@@ -711,7 +673,6 @@ impl Reducer {
             | WalRecord::Decision(_) => true,
         }
     }
-
     /// Constructs a fresh reducer at view zero.
     ///
     /// # Errors
@@ -727,7 +688,6 @@ impl Reducer {
         // A fresh reducer has no replay lifecycle transition to consume.
         Self::from_durable(context, local_validator, generation, durable, true)
     }
-
     /// Reconstructs a reducer from complete WAL frames.
     ///
     /// The returned reducer accepts only a matching
@@ -749,7 +709,6 @@ impl Reducer {
         // Only successful WAL replay creates an unconsumed recovery event.
         Self::from_durable(context, local_validator, generation, durable, false)
     }
-
     fn from_durable(
         context: HeightContext,
         local_validator: Option<ValidatorId>,
@@ -835,19 +794,16 @@ impl Reducer {
             fallback_active: false,
         })
     }
-
     /// Returns the frozen height context.
     #[must_use]
     pub const fn context(&self) -> &HeightContext {
         &self.context
     }
-
     /// Returns the local validator, or `None` for an observer.
     #[must_use]
     pub const fn local_validator(&self) -> Option<ValidatorId> {
         self.local_validator
     }
-
     /// Return volatile evidence-pool cardinalities for boundedness tests.
     #[cfg(test)]
     pub(crate) fn volatile_evidence_counts(&self) -> (usize, usize, usize, usize) {
@@ -858,20 +814,17 @@ impl Reducer {
             self.formed_timeouts.len(),
         )
     }
-
     /// Returns the state reconstructed from acknowledged WAL frames.
     #[must_use]
     pub const fn durable_state(&self) -> &DurableState {
         &self.durable
     }
-
     /// Return the decision subject successfully applied in this reducer
     /// incarnation, if any.
     #[must_use]
     pub const fn applied_subject(&self) -> Option<Subject> {
         self.applied_subject
     }
-
     /// Return whether the height can be consumed with a matching durable Kura
     /// receipt without dropping unfinished safety work.
     #[must_use]
@@ -883,7 +836,6 @@ impl Reducer {
                 .decision()
                 .is_some_and(|decision| self.applied_subject == Some(decision.subject()))
     }
-
     /// Returns the current tag adapters must attach to new inputs.
     #[must_use]
     pub const fn current_tag(&self) -> EventTag {
@@ -893,13 +845,11 @@ impl Reducer {
             self.generation,
         )
     }
-
     /// Return the local generation owning volatile consumer state.
     #[must_use]
     pub(crate) const fn generation(&self) -> Generation {
         self.generation
     }
-
     /// Return exact subject-grouped partial Prepare and Commit pools.
     #[must_use]
     pub(crate) fn vote_pool_snapshots(&self) -> Vec<VotePoolSnapshot> {
@@ -928,7 +878,6 @@ impl Reducer {
             })
             .collect()
     }
-
     /// Return exact partial timeout pools and their formed-certificate state.
     #[must_use]
     pub(crate) fn timeout_pool_snapshots(&self) -> Vec<TimeoutPoolSnapshot> {
@@ -947,13 +896,11 @@ impl Reducer {
             })
             .collect()
     }
-
     /// Iterate over signed or certified control intents retained for
     /// retransmission.
     pub(crate) fn outbound_messages(&self) -> impl Iterator<Item = &ConsensusMessageV2> {
         self.outbound_control.values()
     }
-
     /// Return the durable record currently fenced behind a WAL append.
     #[must_use]
     pub(crate) fn pending_persistence_record(&self) -> Option<&WalRecord> {
@@ -961,18 +908,15 @@ impl Reducer {
             .as_ref()
             .map(|pending| pending.entry.record())
     }
-
     /// Return the signable currently owned by the signer boundary.
     #[must_use]
     pub(crate) const fn awaiting_signature(&self) -> Option<&SignableMessage> {
         self.awaiting_signature.as_ref()
     }
-
     /// Iterate over durable signables waiting behind the active signer work.
     pub(crate) fn queued_signatures(&self) -> impl Iterator<Item = &SignableMessage> {
         self.signature_queue.iter()
     }
-
     /// Returns the body state for a round and subject.
     #[must_use]
     pub fn body_state(&self, round: Round, subject: Subject) -> BodyState {
@@ -980,12 +924,10 @@ impl Reducer {
             .get(&(round, subject))
             .map_or(BodyState::Missing, |work| work.state)
     }
-
     /// Return the exact same-round body key authenticated by a Decision.
     fn decision_body_round(&self, decision: &QuorumCertificate) -> Round {
         decision.proposal_round()
     }
-
     /// Consume a fully applied reducer after Kura durably exposes the matching
     /// block and `CommitQC`. Consuming `self` prevents any further votes at the
     /// closed height.
@@ -1021,7 +963,6 @@ impl Reducer {
             decision,
         })
     }
-
     fn on_resume_after_replay(&mut self) -> StepOutcome {
         if self.replay_resumed {
             return StepOutcome::ignored(IgnoreReason::Duplicate);
@@ -1058,7 +999,6 @@ impl Reducer {
         }
         StepOutcome::applied(self.drive_signature())
     }
-
     /// Applies one input to the serialized state machine.
     ///
     /// # Errors
@@ -1141,7 +1081,6 @@ impl Reducer {
             }
         }
     }
-
     /// Return the first missing reconstruction witness for durable progress.
     ///
     /// This check deliberately covers only reducer-owned state. Adapter queue
@@ -1173,7 +1112,6 @@ impl Reducer {
                 return Some(ProgressWitnessViolation::LockedCommitOrphaned);
             }
         }
-
         if let Some(decision) = self.durable.decision()
             && self.applied_subject != Some(decision.subject())
             && self.replay_resumed
@@ -1195,7 +1133,6 @@ impl Reducer {
         }
         None
     }
-
     fn locked_commit_progress_witness_projection(
         &self,
         locked: &QuorumCertificate,
@@ -1275,7 +1212,6 @@ impl Reducer {
                 .map_or(0, |certificate| certificate.round().view()),
         }
     }
-
     fn step_in_place(&mut self, event: Event) -> Result<StepOutcome, ReducerError> {
         if let Some(reason) = self.reject_tag(event.tag()) {
             return Ok(StepOutcome::ignored(reason));
@@ -1333,11 +1269,9 @@ impl Reducer {
             Event::ApplicationCompleted { subject, .. } => self.on_application_completed(subject),
         }
     }
-
     fn transition_refines(&self, event: &Event, after: &Self, effects: &[Effect]) -> bool {
         refinement::accepts(self.transition_projection(event, after, effects))
     }
-
     fn transition_projection<'a>(
         &'a self,
         event: &Event,
@@ -1414,7 +1348,6 @@ impl Reducer {
             effects: trace,
         }
     }
-
     fn effect_trace(&self, event: &Event, after: &Self, effects: &[Effect]) -> EffectTrace {
         let mut trace = EffectTrace::empty();
         for effect in effects {
@@ -1429,7 +1362,6 @@ impl Reducer {
         }
         trace
     }
-
     fn production_safety_projection(&self) -> SafetyProjection {
         let durable_context_id = self.durable.context_id();
         let expected_context_id = self.context.id();
@@ -1504,7 +1436,6 @@ impl Reducer {
             invalid_application: u64::from(invalid_application),
         }
     }
-
     fn continuation_matches_record(record: &WalRecord, continuation: &Continuation) -> bool {
         match (record, continuation) {
             (
@@ -1534,11 +1465,9 @@ impl Reducer {
             _ => false,
         }
     }
-
     fn signable_is_durably_authorized(&self, message: &SignableMessage) -> bool {
         Self::signable_is_durably_authorized_for(&self.durable, message)
     }
-
     fn signable_is_durably_authorized_for(
         durable: &DurableState,
         message: &SignableMessage,
@@ -1553,7 +1482,6 @@ impl Reducer {
             }
         }
     }
-
     fn durable_proposal_is_active(durable: &DurableState, proposal: &Proposal) -> bool {
         let exact_justification = match proposal.justification() {
             ProposalJustification::ParentCommit(_) => proposal.round().view() == 0,
@@ -1570,7 +1498,6 @@ impl Reducer {
             && exact_justification
             && Self::proposal_is_safe_for_durable_lock(durable, proposal)
     }
-
     fn proposal_is_safe_for_durable_lock(durable: &DurableState, proposal: &Proposal) -> bool {
         let Some(locked) = durable.locked() else {
             return true;
@@ -1588,7 +1515,6 @@ impl Reducer {
                 && highest.round().view() > locked.round().view()
         })
     }
-
     fn durable_vote_is_active(durable: &DurableState, vote: Vote) -> bool {
         if durable.decision().is_some() {
             return false;
@@ -1606,13 +1532,11 @@ impl Reducer {
             }),
         }
     }
-
     fn durable_timeout_vote_is_active(durable: &DurableState, vote: &TimeoutVote) -> bool {
         durable.decision().is_none()
             && vote.round() == Round::new(durable.height(), durable.current_view())
             && durable.timeout_intent(vote.round()) == Some(vote.clone())
     }
-
     fn outbound_control_is_active(
         context: &HeightContext,
         durable: &DurableState,
@@ -1650,14 +1574,12 @@ impl Reducer {
             ConsensusMessageV2::BodyRequest(_) | ConsensusMessageV2::BodyChunk(_) => false,
         }
     }
-
     fn prune_inactive_outbound_control(&mut self) {
         let context = &self.context;
         let durable = &self.durable;
         self.outbound_control
             .retain(|_, message| Self::outbound_control_is_active(context, durable, message));
     }
-
     fn queue_active_locked_commit_signature(&mut self) {
         let Some(locked) = self.durable.locked() else {
             return;
@@ -1676,7 +1598,6 @@ impl Reducer {
         }
         self.signature_queue.push_back(message);
     }
-
     /// Return whether authenticated certificate progress may supersede one
     /// outstanding local signature task.
     ///
@@ -1694,7 +1615,6 @@ impl Reducer {
                     if certificate.phase() == Phase::Commit
             )
     }
-
     /// Park the sole in-flight signing intent before certified progress opens
     /// a new WAL boundary.
     ///
@@ -1712,7 +1632,6 @@ impl Reducer {
             self.signature_queue.push_front(message);
         }
     }
-
     fn tag_projection(tag: EventTag) -> TagProjection {
         TagProjection {
             height: tag.height(),
@@ -1720,21 +1639,18 @@ impl Reducer {
             generation: tag.generation().get(),
         }
     }
-
     fn validator_projection(validator: Option<ValidatorId>) -> ValidatorProjection {
         ValidatorProjection {
             present: validator.is_some(),
             id: validator.unwrap_or_default(),
         }
     }
-
     fn subject_projection(subject: Option<Subject>) -> SubjectProjection {
         SubjectProjection {
             present: subject.is_some(),
             subject: subject.unwrap_or_default(),
         }
     }
-
     fn pending_projection(&self) -> PendingProjection {
         self.pending_persistence
             .as_ref()
@@ -1757,7 +1673,6 @@ impl Reducer {
                 }
             })
     }
-
     fn context_identity_projection(context_id: super::ContextId) -> CanonicalIdentityProjection {
         CanonicalIdentityProjection::from_bytes(
             IDENTITY_DOMAIN_CONTEXT,
@@ -1765,7 +1680,6 @@ impl Reducer {
             *context_id.as_bytes(),
         )
     }
-
     fn subject_identity_projection(subject: Subject) -> CanonicalIdentityProjection {
         CanonicalIdentityProjection::from_bytes(
             IDENTITY_DOMAIN_SUBJECT,
@@ -1773,7 +1687,6 @@ impl Reducer {
             *subject.as_bytes(),
         )
     }
-
     fn certificate_evidence_class(
         certificate: Option<&QuorumCertificate>,
         local: Option<&QuorumCertificate>,
@@ -1793,7 +1706,6 @@ impl Reducer {
             CERTIFICATE_EVIDENCE_FOREIGN
         }
     }
-
     fn certificate_signer_projection(
         &self,
         certificate: &QuorumCertificate,
@@ -1838,7 +1750,6 @@ impl Reducer {
             quorum.voting_power().get(),
         ))
     }
-
     fn certificate_identity_projection(
         &self,
         certificate: Option<&QuorumCertificate>,
@@ -1870,7 +1781,6 @@ impl Reducer {
             },
         }
     }
-
     fn timeout_identity_projection(
         &self,
         certificate: Option<&TimeoutCertificate>,
@@ -1891,7 +1801,6 @@ impl Reducer {
             }
         })
     }
-
     fn enter_view_projection(&self, after: &Self, effects: &[Effect]) -> EnterViewProjection {
         let pending_record_timeout = self.pending_persistence.as_ref().and_then(|pending| {
             if let WalRecord::InstallTimeout(certificate) = pending.entry.record() {
@@ -2046,7 +1955,6 @@ impl Reducer {
             following_fetch_index,
         }
     }
-
     fn wal_record_round_subject(record: &WalRecord) -> (Round, Subject) {
         match record {
             WalRecord::ProposalIntent(proposal) => {
@@ -2066,7 +1974,6 @@ impl Reducer {
             }
         }
     }
-
     fn wal_record_proposal_round(record: &WalRecord) -> Option<Round> {
         match record {
             WalRecord::ProposalIntent(proposal) => Some(proposal.round()),
@@ -2079,7 +1986,6 @@ impl Reducer {
             WalRecord::TimeoutIntent(_) | WalRecord::InstallTimeout(_) => None,
         }
     }
-
     const fn continuation_kind(continuation: &Continuation) -> u8 {
         match continuation {
             Continuation::None => CONTINUATION_NONE,
@@ -2088,7 +1994,6 @@ impl Reducer {
             Continuation::Decide { .. } => CONTINUATION_DECIDE,
         }
     }
-
     fn wal_record_auxiliary_certificate(record: &WalRecord) -> Option<CertificateRef> {
         match record {
             WalRecord::ProposalIntent(proposal) => match proposal.justification() {
@@ -2107,7 +2012,6 @@ impl Reducer {
             }
         }
     }
-
     fn boundary_for_pending(
         kind: u8,
         pending: &PendingPersistence,
@@ -2146,7 +2050,6 @@ impl Reducer {
         }
         boundary
     }
-
     fn boundary_claim(
         &self,
         event: &Event,
@@ -2212,7 +2115,6 @@ impl Reducer {
         }
         BoundaryCapabilityKey::none()
     }
-
     fn boundary_grant(
         &self,
         event: &Event,
@@ -2287,7 +2189,6 @@ impl Reducer {
             _ => BoundaryCapabilityKey::none(),
         }
     }
-
     fn begin_persist_is_exact(&self, event: &Event, after: &Self) -> bool {
         let (None, Some(pending)) = (
             self.pending_persistence.as_ref(),
@@ -2328,7 +2229,6 @@ impl Reducer {
             | WalRecord::Decision(_) => true,
         }
     }
-
     #[allow(clippy::too_many_lines)]
     fn event_may_start_record(&self, event: &Event, record: &WalRecord) -> bool {
         match (event, record) {
@@ -2472,7 +2372,6 @@ impl Reducer {
             _ => false,
         }
     }
-
     fn acknowledgement_is_exact(&self, event: &Event, after: &Self) -> bool {
         let (Some(pending), Event::Persisted { id, .. }, None) = (
             self.pending_persistence.as_ref(),
@@ -2546,7 +2445,6 @@ impl Reducer {
             }
         }
     }
-
     /// Compute the next process-local completion generation for one exact TC
     /// install.
     ///
@@ -2569,7 +2467,6 @@ impl Reducer {
             Some(Generation::INITIAL)
         }
     }
-
     fn application_transition_is_exact(&self, event: &Event, after: &Self) -> bool {
         if self.applied_subject == after.applied_subject {
             return true;
@@ -2588,7 +2485,6 @@ impl Reducer {
                     == BodyState::Validated
         })
     }
-
     fn resume_after_replay_is_exact(
         &self,
         event: &Event,
@@ -2605,7 +2501,6 @@ impl Reducer {
             && expected_effects == effects
             && Self::observed_replay_plan(after, effects) == self.expected_replay_plan()
     }
-
     /// Derive the complete recovery FIFO from durable sources without calling
     /// `on_resume_after_replay` or `drive_signature`.
     ///
@@ -2643,7 +2538,6 @@ impl Reducer {
         }
         messages
     }
-
     fn replay_kind_for_signable(message: &SignableMessage) -> u8 {
         match message {
             SignableMessage::Proposal(_) => REPLAY_EFFECT_PROPOSAL,
@@ -2654,7 +2548,6 @@ impl Reducer {
             SignableMessage::TimeoutVote(_) => REPLAY_EFFECT_TIMEOUT,
         }
     }
-
     fn replay_sign_capability(&self, message: &SignableMessage) -> EffectCapabilityKey {
         let mut capability = EffectCapabilityKey {
             kind: EFFECT_SIGN,
@@ -2664,7 +2557,6 @@ impl Reducer {
         Self::apply_signable(&mut capability, message);
         capability
     }
-
     fn expected_decision_fetch(&self) -> Option<Effect> {
         let certificate = self.durable.decision()?.clone();
         let round = self.decision_body_round(&certificate);
@@ -2684,7 +2576,6 @@ impl Reducer {
             certificate: Some(certificate),
         })
     }
-
     fn push_replay_plan(
         plan: &mut ReplayPlanProjection,
         kind: u8,
@@ -2696,7 +2587,6 @@ impl Reducer {
             plan.len = 4;
         }
     }
-
     fn expected_replay_plan(&self) -> ReplayPlanProjection {
         let mut plan = ReplayPlanProjection::empty();
         if let Some(effect) = self.expected_decision_fetch() {
@@ -2714,7 +2604,6 @@ impl Reducer {
         }
         plan
     }
-
     fn observed_replay_plan(after: &Self, effects: &[Effect]) -> ReplayPlanProjection {
         let mut plan = ReplayPlanProjection::empty();
         if after.durable.decision().is_some() {
@@ -2744,7 +2633,6 @@ impl Reducer {
         }
         plan
     }
-
     const fn first_replay_plan_kind(plan: ReplayPlanProjection) -> u8 {
         if plan.len == 0 {
             REPLAY_EFFECT_NONE
@@ -2752,7 +2640,6 @@ impl Reducer {
             plan.slot0.kind
         }
     }
-
     /// Independently materialize the exact post-replay state and first effect.
     /// This must remain structurally separate from the implementation under
     /// test so a shared omission or reordering cannot grant itself authority.
@@ -2797,7 +2684,6 @@ impl Reducer {
         };
         Some((expected, vec![effect]))
     }
-
     fn signable_message_kind(message: &SignableMessage) -> u8 {
         match message {
             SignableMessage::Proposal(_) => SIGNED_MESSAGE_PROPOSAL,
@@ -2808,7 +2694,6 @@ impl Reducer {
             SignableMessage::TimeoutVote(_) => SIGNED_MESSAGE_TIMEOUT,
         }
     }
-
     fn replay_effect_kind(after: &Self, effects: &[Effect]) -> u8 {
         match effects {
             [] => REPLAY_EFFECT_NONE,
@@ -2835,7 +2720,6 @@ impl Reducer {
             _ => u8::MAX,
         }
     }
-
     const fn event_kind(event: &Event) -> u8 {
         match event {
             Event::ResumeAfterReplay { .. } => EVENT_RESUME_AFTER_REPLAY,
@@ -2856,7 +2740,6 @@ impl Reducer {
             Event::ApplicationCompleted { .. } => 14,
         }
     }
-
     const fn effect_kind(effect: &Effect) -> u8 {
         match effect {
             Effect::Persist { .. } => EFFECT_PERSIST,
@@ -2872,7 +2755,6 @@ impl Reducer {
             }
         }
     }
-
     const fn wal_record_kind(record: &WalRecord) -> u8 {
         match record {
             WalRecord::ProposalIntent(_) => WAL_RECORD_PROPOSAL_INTENT,
@@ -2884,11 +2766,9 @@ impl Reducer {
             WalRecord::Decision(_) => WAL_RECORD_DECISION,
         }
     }
-
     fn cardinality(value: usize) -> u64 {
         u64::try_from(value).unwrap_or(u64::MAX)
     }
-
     fn volatile_summary(&self) -> VolatileSummary {
         let vote_entries = self
             .votes
@@ -2924,14 +2804,12 @@ impl Reducer {
             replay_resumed: self.replay_resumed,
         }
     }
-
     const fn phase_code(phase: Phase) -> u8 {
         match phase {
             Phase::Prepare => 1,
             Phase::Commit => 2,
         }
     }
-
     fn apply_primary_certificate(key: &mut EffectCapabilityKey, reference: CertificateRef) {
         key.context_id = reference.context_id();
         key.height = reference.round().height();
@@ -2941,7 +2819,6 @@ impl Reducer {
         key.phase = Self::phase_code(reference.phase());
         key.subject = reference.subject();
     }
-
     fn apply_auxiliary_certificate(key: &mut EffectCapabilityKey, reference: CertificateRef) {
         key.auxiliary_present = true;
         key.auxiliary_context_id = reference.context_id();
@@ -2952,7 +2829,6 @@ impl Reducer {
         key.auxiliary_phase = Self::phase_code(reference.phase());
         key.auxiliary_subject = reference.subject();
     }
-
     fn apply_manifest(key: &mut EffectCapabilityKey, manifest: PayloadManifest) {
         key.subject = manifest.subject();
         key.manifest_payload = manifest.payload_hash();
@@ -2960,7 +2836,6 @@ impl Reducer {
         key.manifest_len = manifest.byte_len();
         key.manifest_count = u64::from(manifest.chunk_count());
     }
-
     fn apply_proposal(key: &mut EffectCapabilityKey, proposal: &Proposal) {
         key.context_id = proposal.context_id();
         key.height = proposal.round().height();
@@ -2979,7 +2854,6 @@ impl Reducer {
             Self::apply_auxiliary_certificate(key, reference);
         }
     }
-
     fn apply_vote(key: &mut EffectCapabilityKey, vote: Vote) {
         key.context_id = vote.context_id();
         key.height = vote.round().height();
@@ -2990,7 +2864,6 @@ impl Reducer {
         key.subject = vote.subject();
         key.actor = vote.signer();
     }
-
     fn apply_timeout_vote(key: &mut EffectCapabilityKey, vote: &TimeoutVote) {
         key.context_id = vote.context_id();
         key.height = vote.round().height();
@@ -3000,7 +2873,6 @@ impl Reducer {
             Self::apply_auxiliary_certificate(key, reference);
         }
     }
-
     fn apply_timeout_certificate(key: &mut EffectCapabilityKey, certificate: &TimeoutCertificate) {
         key.context_id = certificate.context_id();
         key.height = certificate.round().height();
@@ -3012,7 +2884,6 @@ impl Reducer {
             Self::apply_auxiliary_certificate(key, reference);
         }
     }
-
     fn apply_wal_record(key: &mut EffectCapabilityKey, record: &WalRecord) {
         key.record_kind = Self::wal_record_kind(record);
         match record {
@@ -3034,7 +2905,6 @@ impl Reducer {
             }
         }
     }
-
     fn apply_signable(key: &mut EffectCapabilityKey, message: &SignableMessage) {
         match message {
             SignableMessage::Proposal(proposal) => Self::apply_proposal(key, proposal),
@@ -3042,7 +2912,6 @@ impl Reducer {
             SignableMessage::TimeoutVote(vote) => Self::apply_timeout_vote(key, vote),
         }
     }
-
     fn apply_consensus_message(key: &mut EffectCapabilityKey, message: &ConsensusMessageV2) {
         match message {
             ConsensusMessageV2::Proposal(proposal) => {
@@ -3062,7 +2931,6 @@ impl Reducer {
             ConsensusMessageV2::BodyChunk(chunk) => key.subject = chunk.subject(),
         }
     }
-
     fn effect_capability(effect: &Effect) -> EffectCapabilityKey {
         let mut key = EffectCapabilityKey {
             kind: Self::effect_kind(effect),
@@ -3149,7 +3017,6 @@ impl Reducer {
         }
         key
     }
-
     #[allow(clippy::too_many_lines)]
     fn granted_effect_capability(
         &self,
@@ -3482,7 +3349,6 @@ impl Reducer {
         };
         granted.unwrap_or_else(EffectCapabilityKey::none)
     }
-
     fn reject_tag(&self, tag: EventTag) -> Option<IgnoreReason> {
         if tag.height() != self.context.height() {
             return Some(IgnoreReason::WrongHeight);
@@ -3495,7 +3361,6 @@ impl Reducer {
         }
         None
     }
-
     fn on_proposal(&mut self, signed: &SignedProposal) -> Result<StepOutcome, ReducerError> {
         if self.durable.decision().is_some() {
             return Ok(StepOutcome::ignored(IgnoreReason::AlreadyDecided));
@@ -3579,7 +3444,6 @@ impl Reducer {
             Ok(StepOutcome::applied(Vec::new()))
         }
     }
-
     fn on_local_proposal_ready(
         &mut self,
         manifest: PayloadManifest,
@@ -3616,7 +3480,6 @@ impl Reducer {
             if self.applied_subject == Some(decision.subject()) {
                 return Ok(StepOutcome::ignored(IgnoreReason::Duplicate));
             }
-
             // Decision can overtake local assembly after its body has become
             // durable and valid but before ProposalIntent persistence. Bind
             // that exact trusted completion directly to the durable decision
@@ -3682,7 +3545,6 @@ impl Reducer {
             }
             return Ok(StepOutcome::ignored(IgnoreReason::Duplicate));
         }
-
         // The event itself is the adapter's trusted acknowledgement that the
         // exact body is already durable and deterministically valid. Recording
         // the proposal intent makes leader non-equivocation survive a crash.
@@ -3699,7 +3561,6 @@ impl Reducer {
         )?;
         Ok(StepOutcome::applied(vec![effect]))
     }
-
     fn process_signed_local_proposal(
         &mut self,
         proposal: &Proposal,
@@ -3729,7 +3590,6 @@ impl Reducer {
         );
         self.persist_prepare_intent(round, subject)
     }
-
     fn validate_proposal(&self, proposal: &Proposal) -> Result<(), ReducerError> {
         if proposal.context_id() != self.context.id()
             || proposal.round().height() != self.context.height()
@@ -3779,11 +3639,9 @@ impl Reducer {
         }
         Ok(())
     }
-
     fn safe_to_prepare(&self, proposal: &Proposal) -> bool {
         Self::proposal_is_safe_for_durable_lock(&self.durable, proposal)
     }
-
     fn on_body_available(&mut self, round: Round, subject: Subject) -> StepOutcome {
         let Some(work) = self.body_work.get_mut(&(round, subject)) else {
             return StepOutcome::ignored(IgnoreReason::NoMatchingWork);
@@ -3798,7 +3656,6 @@ impl Reducer {
             subject,
         }])
     }
-
     fn on_body_stored(&mut self, round: Round, subject: Subject) -> StepOutcome {
         let Some(work) = self.body_work.get_mut(&(round, subject)) else {
             return StepOutcome::ignored(IgnoreReason::NoMatchingWork);
@@ -3813,7 +3670,6 @@ impl Reducer {
             subject,
         }])
     }
-
     fn on_validation(
         &mut self,
         round: Round,
@@ -3874,7 +3730,6 @@ impl Reducer {
         }
         Ok(StepOutcome::applied(Vec::new()))
     }
-
     fn persist_prepare_intent(
         &mut self,
         round: Round,
@@ -3902,7 +3757,6 @@ impl Reducer {
         )?;
         Ok(StepOutcome::applied(vec![effect]))
     }
-
     fn persist_commit_intent(
         &mut self,
         prepare: QuorumCertificate,
@@ -3940,7 +3794,6 @@ impl Reducer {
         )?;
         Ok(StepOutcome::applied(vec![effect]))
     }
-
     fn on_vote(&mut self, signed: SignedVote) -> Result<StepOutcome, ReducerError> {
         if self.durable.decision().is_some() {
             return Ok(StepOutcome::ignored(IgnoreReason::AlreadyDecided));
@@ -4016,7 +3869,6 @@ impl Reducer {
         };
         self.on_certificate(certificate, true)
     }
-
     fn validate_vote(&self, vote: Vote) -> Result<(), ReducerError> {
         if vote.context_id() != self.context.id()
             || vote.round().height() != self.context.height()
@@ -4028,7 +3880,6 @@ impl Reducer {
         }
         Ok(())
     }
-
     fn try_form_certificate(
         &mut self,
         round: Round,
@@ -4072,7 +3923,6 @@ impl Reducer {
         self.formed_certificates.insert(reference);
         Ok(Some(QuorumCertificate::new(reference, signatures)))
     }
-
     fn on_certificate(
         &mut self,
         certificate: QuorumCertificate,
@@ -4084,7 +3934,6 @@ impl Reducer {
             Phase::Commit => self.on_commit_certificate(certificate, formed_locally),
         }
     }
-
     fn on_prepare_certificate(
         &mut self,
         certificate: &QuorumCertificate,
@@ -4112,7 +3961,6 @@ impl Reducer {
             self.remember_control(message.clone());
             effects.push(Effect::Broadcast(message));
         }
-
         let current = certificate.round().view() == self.durable.current_view();
         let validated =
             self.body_state(certificate.round(), certificate.subject()) == BodyState::Validated;
@@ -4127,14 +3975,12 @@ impl Reducer {
             effects.append(&mut outcome.effects);
             return Ok(StepOutcome::applied(effects));
         }
-
         if current
             && self.body_state(certificate.round(), certificate.subject()) == BodyState::Missing
             && self.local_certified_candidate_body_eligible()
         {
             effects.push(self.ensure_body_fetch(&certificate));
         }
-
         let should_persist_high = match self.durable.highest_prepare() {
             None => true,
             Some(existing) => {
@@ -4153,7 +3999,6 @@ impl Reducer {
         }
         Ok(StepOutcome::applied(effects))
     }
-
     fn ensure_body_fetch(&mut self, certificate: &QuorumCertificate) -> Effect {
         let round = self
             .durable
@@ -4180,7 +4025,6 @@ impl Reducer {
             certificate: Some(certificate.clone()),
         }
     }
-
     fn on_commit_certificate(
         &mut self,
         certificate: QuorumCertificate,
@@ -4211,7 +4055,6 @@ impl Reducer {
         )?;
         Ok(StepOutcome::applied(vec![effect]))
     }
-
     fn on_retransmit_elapsed(&mut self) -> Result<StepOutcome, ReducerError> {
         let current_view = self.durable.current_view();
         if self
@@ -4256,7 +4099,6 @@ impl Reducer {
             }
             return Ok(StepOutcome::applied(effects));
         }
-
         if let Some(certificate) = self
             .pending_prepare
             .values()
@@ -4287,7 +4129,6 @@ impl Reducer {
             }
             return Ok(StepOutcome::applied(effects));
         }
-
         if let Some(locked) = self.durable.locked().cloned() {
             let effect = match self.body_state(locked.round(), locked.subject()) {
                 BodyState::Missing => Some(self.ensure_body_fetch(&locked)),
@@ -4308,7 +4149,6 @@ impl Reducer {
                 return Ok(StepOutcome::applied(effects));
             }
         }
-
         if let Some(proposal) = self.candidate.clone() {
             let round = proposal.round();
             let subject = proposal.manifest().subject();
@@ -4355,10 +4195,8 @@ impl Reducer {
                 | BodyState::Invalid => {}
             }
         }
-
         Ok(StepOutcome::applied(effects))
     }
-
     fn remember_control(&mut self, message: ConsensusMessageV2) {
         let (class, round) = match &message {
             ConsensusMessageV2::Proposal(proposal) => {
@@ -4405,7 +4243,6 @@ impl Reducer {
             self.outbound_control.insert(class, message);
         }
     }
-
     fn on_timeout_elapsed(&mut self) -> Result<StepOutcome, ReducerError> {
         if self.durable.decision().is_some() {
             return Ok(StepOutcome::ignored(IgnoreReason::AlreadyDecided));
@@ -4429,7 +4266,6 @@ impl Reducer {
         )?;
         Ok(StepOutcome::applied(vec![effect]))
     }
-
     fn on_timeout_vote(&mut self, signed: SignedTimeoutVote) -> Result<StepOutcome, ReducerError> {
         if self.durable.decision().is_some() {
             return Ok(StepOutcome::ignored(IgnoreReason::AlreadyDecided));
@@ -4471,7 +4307,6 @@ impl Reducer {
         };
         self.on_timeout_certificate(certificate, true)
     }
-
     fn try_form_timeout_certificate(
         &mut self,
         round: Round,
@@ -4515,7 +4350,6 @@ impl Reducer {
         self.formed_timeouts.insert(round);
         Ok(Some(certificate))
     }
-
     fn on_timeout_certificate(
         &mut self,
         certificate: TimeoutCertificate,
@@ -4542,7 +4376,6 @@ impl Reducer {
         )?;
         Ok(StepOutcome::applied(vec![effect]))
     }
-
     fn start_persistence(
         &mut self,
         record: WalRecord,
@@ -4562,7 +4395,6 @@ impl Reducer {
             entry,
         })
     }
-
     fn on_persisted(&mut self, id: PersistenceId) -> Result<StepOutcome, ReducerError> {
         let Some(pending) = self.pending_persistence.as_ref() else {
             return Ok(StepOutcome::ignored(IgnoreReason::NoMatchingWork));
@@ -4594,7 +4426,6 @@ impl Reducer {
             self.fallback_active = false;
         }
         self.pending_persistence = None;
-
         if matches!(pending.entry.record(), WalRecord::LockAndCommit { .. }) {
             let current_round = Round::new(self.context.height(), self.durable.current_view());
             // Once a new same-round LockAndCommit frame is durable, its round
@@ -4607,7 +4438,6 @@ impl Reducer {
             self.votes
                 .retain(|(round, _, _), _| *round == current_round);
         }
-
         let mut effects = match pending.continuation {
             Continuation::None => Vec::new(),
             Continuation::Sign(message) => {
@@ -4748,7 +4578,6 @@ impl Reducer {
                 self.awaiting_signature = None;
                 self.signature_queue.clear();
                 self.outbound_control.clear();
-
                 let mut decision_effects = Vec::new();
                 let message = ConsensusMessageV2::QuorumCertificate(certificate.clone());
                 self.remember_control(message.clone());
@@ -4769,7 +4598,6 @@ impl Reducer {
         }
         Ok(StepOutcome::applied(effects))
     }
-
     fn on_persistence_failed(&mut self, id: PersistenceId) -> Result<StepOutcome, ReducerError> {
         let Some(pending) = &self.pending_persistence else {
             return Ok(StepOutcome::ignored(IgnoreReason::NoMatchingWork));
@@ -4782,7 +4610,6 @@ impl Reducer {
         }
         Err(ReducerError::PersistenceFailed(id))
     }
-
     fn drive_signature(&mut self) -> Vec<Effect> {
         if self.awaiting_signature.is_some() || self.pending_persistence.is_some() {
             return Vec::new();
@@ -4801,7 +4628,6 @@ impl Reducer {
         }
         Vec::new()
     }
-
     fn on_signed(&mut self, signature: OpaqueSignature) -> Result<StepOutcome, ReducerError> {
         let Some(message) = self.awaiting_signature.take() else {
             return Ok(StepOutcome::ignored(IgnoreReason::NoMatchingWork));
@@ -4858,7 +4684,6 @@ impl Reducer {
         }
         Ok(StepOutcome::applied(effects))
     }
-
     fn on_application_completed(&mut self, subject: Subject) -> Result<StepOutcome, ReducerError> {
         let decision = self
             .durable
@@ -4880,7 +4705,6 @@ impl Reducer {
         self.applied_subject = Some(subject);
         Ok(StepOutcome::applied(Vec::new()))
     }
-
     fn decision_effects(&mut self, certificate: QuorumCertificate) -> Vec<Effect> {
         let round = self.decision_body_round(&certificate);
         let subject = certificate.subject();
@@ -4904,7 +4728,6 @@ impl Reducer {
         }
     }
 }
-
 /// Missing reducer-owned evidence that durable work can be reconstructed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProgressWitnessViolation {
@@ -4916,7 +4739,6 @@ pub enum ProgressWitnessViolation {
     /// Deterministic validation marked the body of a durable decision invalid.
     DecidedBodyInvalid,
 }
-
 /// Failure caused by malformed authenticated input or an impossible local state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReducerError {
@@ -4981,7 +4803,6 @@ pub enum ReducerError {
     /// WAL replay or application failed.
     Replay(ReplayError),
 }
-
 impl fmt::Display for ReducerError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -5045,26 +4866,21 @@ impl fmt::Display for ReducerError {
         }
     }
 }
-
 impl Error for ReducerError {}
-
 impl From<QuorumError> for ReducerError {
     fn from(error: QuorumError) -> Self {
         Self::Quorum(error)
     }
 }
-
 impl From<ReplayError> for ReducerError {
     fn from(error: ReplayError) -> Self {
         Self::Replay(error)
     }
 }
-
 #[cfg(test)]
 mod source_link_tests {
     use super::super::{ContextId, Digest, NetworkId, Validator, VotingMode, VotingPower};
     use super::*;
-
     fn reducer() -> Reducer {
         let validators = (1_u8..=4)
             .map(|byte| Validator::new(ValidatorId::repeat(byte), VotingPower::new(1)))
@@ -5091,7 +4907,6 @@ mod source_link_tests {
         Reducer::new(context, Some(ValidatorId::repeat(1)), Generation::new(7))
             .expect("source-link fixture reducer")
     }
-
     fn decided_reducer(subject: Subject) -> (Reducer, QuorumCertificate) {
         let fresh = reducer();
         let context = fresh.context.clone();
@@ -5124,7 +4939,6 @@ mod source_link_tests {
         decided.replay_resumed = true;
         (decided, decision)
     }
-
     fn certificate(
         context: &HeightContext,
         view: u64,
@@ -5149,7 +4963,6 @@ mod source_link_tests {
                 .collect(),
         )
     }
-
     fn timeout_certificate(
         context: &HeightContext,
         view: u64,
@@ -5171,7 +4984,6 @@ mod source_link_tests {
             )],
         )
     }
-
     fn pending_timeout_install_at_generation(
         generation: Generation,
         highest_prepare: Option<QuorumCertificate>,
@@ -5195,11 +5007,9 @@ mod source_link_tests {
         };
         (before, event)
     }
-
     fn pending_timeout_install(highest_prepare: Option<QuorumCertificate>) -> (Reducer, Event) {
         pending_timeout_install_at_generation(Generation::new(7), highest_prepare)
     }
-
     fn pending_same_round_timeout_upgrade_at_generation(
         generation: Generation,
     ) -> (Reducer, Event) {
@@ -5219,7 +5029,6 @@ mod source_link_tests {
             .on_persisted(first_id)
             .expect("acknowledge the initial timeout install");
         before.generation = generation;
-
         let selected = certificate(
             &before.context,
             0,
@@ -5244,9 +5053,7 @@ mod source_link_tests {
         };
         (before, event)
     }
-
     include!("tests/reducer_timeout_and_projection.rs");
-
     include!("tests/v2_core_reducer_primitive_projection.rs");
     #[test]
     fn enter_view_without_a_lock_carries_and_fetches_nothing() {
@@ -5264,7 +5071,6 @@ mod source_link_tests {
         ));
         let projection = before.transition_projection(&event, &after, outcome.effects());
         assert!(refinement::accepts(projection));
-
         let mut nonzero_absent_context = projection;
         nonzero_absent_context
             .enter_view
@@ -5272,7 +5078,6 @@ mod source_link_tests {
             .context_id
             .word0 = 1;
         assert!(!refinement::accepts(nonzero_absent_context));
-
         let mut nonzero_absent_subject = projection;
         nonzero_absent_subject
             .enter_view
@@ -5280,7 +5085,6 @@ mod source_link_tests {
             .subject
             .word3 = 1;
         assert!(!refinement::accepts(nonzero_absent_subject));
-
         let mut invented = projection;
         invented.enter_view.effect_protected_lock.present = true;
         invented.enter_view.effect_protected_lock.context_id =
@@ -5290,7 +5094,6 @@ mod source_link_tests {
         invented.enter_view.effect_protected_lock.subject =
             Reducer::subject_identity_projection(Subject::repeat(0xb5));
         assert!(!refinement::accepts(invented));
-
         let mut invented_prepare_control_state = after;
         invented_prepare_control_state.outbound_control.insert(
             OutboundControlClass::PrepareQc,
@@ -5319,7 +5122,6 @@ mod source_link_tests {
             outcome.effects()
         ));
     }
-
     #[test]
     fn enter_view_effect_cannot_substitute_an_equal_reference_certificate() {
         let fixture = reducer();
@@ -5365,7 +5167,6 @@ mod source_link_tests {
         assert!(!refinement::accepts(projection));
         assert!(!before.transition_refines(&event, &after, &effects));
     }
-
     #[test]
     fn certificate_evidence_priority_and_signer_bitmap_match_the_roster_bound() {
         assert!(MAX_VOTING_ROSTER_LEN <= u128::BITS as usize);
@@ -5395,7 +5196,6 @@ mod source_link_tests {
         assert_eq!(u64::from(bitmap.count_ones()), bitmap_count);
         assert_eq!(bitmap_count, signer_count);
     }
-
     #[test]
     fn decided_local_completion_cannot_overwrite_invalid_exact_body() {
         let subject = Subject::repeat(0xa7);
@@ -5410,7 +5210,6 @@ mod source_link_tests {
             },
         );
         let before = decided.clone();
-
         assert_eq!(
             decided.on_local_proposal_ready(manifest),
             Err(ReducerError::ProgressWitnessViolation(
@@ -5419,7 +5218,6 @@ mod source_link_tests {
         );
         assert_eq!(decided, before);
     }
-
     #[test]
     fn local_ready_apply_capability_requires_the_exact_manifest() {
         let subject = Subject::repeat(0xaa);
@@ -5456,11 +5254,9 @@ mod source_link_tests {
             tag: before.current_tag(),
             manifest: conflicting,
         };
-
         assert!(before.transition_refines(&exact, &after, std::slice::from_ref(&apply)));
         assert!(!before.transition_refines(&counterfeit, &after, &[apply]));
     }
-
     #[test]
     fn counterfeit_effect_grant_with_a_different_primitive_key_fails_closed() {
         let before = reducer();
@@ -5486,7 +5282,6 @@ mod source_link_tests {
         };
         assert!(!refinement::accepts(projection));
     }
-
     #[test]
     fn retransmit_body_stage_requires_an_exact_durable_decision_capability() {
         let before = reducer();
@@ -5495,7 +5290,6 @@ mod source_link_tests {
             tag: before.current_tag(),
         };
         let round = Round::new(before.context.height(), before.durable.current_view());
-
         for effect in [
             Effect::StoreBody {
                 tag: before.current_tag(),
@@ -5516,7 +5310,6 @@ mod source_link_tests {
             );
         }
     }
-
     #[test]
     fn certified_fetch_capability_requires_the_exact_proposal_origin() {
         let fresh = reducer();
@@ -5561,7 +5354,6 @@ mod source_link_tests {
             certified_sources.contains(&ValidatorId::repeat(4)),
             "a frozen-roster archive that did not sign the QC remains a deterministic source"
         );
-
         let mut wrong_after = before.clone();
         wrong_after.body_work.insert(
             (wrong_round, subject),
@@ -5584,7 +5376,6 @@ mod source_link_tests {
                 .kind,
             refinement::EFFECT_NONE
         );
-
         let mut exact_after = before.clone();
         exact_after.body_work.insert(
             (proposal_round, subject),
@@ -5608,7 +5399,6 @@ mod source_link_tests {
             EFFECT_FETCH
         );
     }
-
     #[test]
     fn closed_proposal_round_cannot_create_a_new_commit_intent() {
         let fixture = reducer();
@@ -5644,7 +5434,6 @@ mod source_link_tests {
         ];
         let mut recovered = Reducer::recover(context, Some(local), Generation::new(11), entries)
             .expect("recover current-view timeout above retained same-round Commit");
-
         let outcome = recovered
             .persist_commit_intent(prepare)
             .expect("the closed proposal round is a non-fatal liveness outcome");
@@ -5655,6 +5444,5 @@ mod source_link_tests {
         assert!(outcome.effects().is_empty());
         assert!(recovered.pending_persistence.is_none());
     }
-
     include!("reducer/counterfeit_boundary_capability_test.rs");
 }

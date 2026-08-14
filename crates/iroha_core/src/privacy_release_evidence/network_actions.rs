@@ -5,9 +5,6 @@
 //! production `SignedTransaction` and bootstrap data-model values. Network
 //! execution therefore traverses the same Torii, DA/RBC, verifier, and ledger
 //! paths as any externally constructed action.
-
-use std::{num::NonZeroU32, time::Duration};
-
 use iroha_crypto::PrivateKey;
 use iroha_data_model::{
     metadata::Metadata,
@@ -24,21 +21,8 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload},
 };
 use sha2::{Digest as _, Sha256};
-
+use std::{num::NonZeroU32, time::Duration};
 mod retained;
-
-pub use retained::{
-    PrivacyReleaseAnonymousPgcNetworkActionV1, PrivacyReleaseBootleLanternNetworkActionV1,
-    PrivacyReleaseFcmpNetworkActionV1, PrivacyReleaseIvmPrivateNoteNetworkActionV1,
-    PrivacyReleaseVeRangeNetworkActionV1, PrivacyReleaseZkAceNetworkActionV1,
-    build_privacy_release_anonymous_pgc_network_action_v1,
-    build_privacy_release_bootle_lantern_network_action_v1,
-    build_privacy_release_fcmp_network_action_v1,
-    build_privacy_release_ivm_private_note_network_action_v1,
-    build_privacy_release_verange_network_action_v1,
-    build_privacy_release_zk_ace_network_action_v1,
-};
-
 use super::{
     EvidenceRng06, EvidenceRng09, PrivacyReleaseEvidenceErrorClassV1, authorize_orchard_bundle_v1,
     compiled_privacy_profile_v1, orchard_empty_root_v1, orchard_spending_key_v1,
@@ -56,7 +40,17 @@ use crate::privacy_engines::{
         build_signed_vega_privacy_action_with_rng_v1,
     },
 };
-
+pub use retained::{
+    PrivacyReleaseAnonymousPgcNetworkActionV1, PrivacyReleaseBootleLanternNetworkActionV1,
+    PrivacyReleaseFcmpNetworkActionV1, PrivacyReleaseIvmPrivateNoteNetworkActionV1,
+    PrivacyReleaseVeRangeNetworkActionV1, PrivacyReleaseZkAceNetworkActionV1,
+    build_privacy_release_anonymous_pgc_network_action_v1,
+    build_privacy_release_bootle_lantern_network_action_v1,
+    build_privacy_release_fcmp_network_action_v1,
+    build_privacy_release_ivm_private_note_network_action_v1,
+    build_privacy_release_verange_network_action_v1,
+    build_privacy_release_zk_ace_network_action_v1,
+};
 /// Exact transaction and consensus context used by one non-shipping network
 /// action builder.
 #[derive(Clone, Debug)]
@@ -78,7 +72,6 @@ pub struct PrivacyReleaseTransactionContextV1 {
     /// Actual canonical genesis block hash queried from the network.
     pub genesis_hash: [u8; 32],
 }
-
 /// One canonical output-only Orchard deposit and its governed pool bootstrap.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleaseOrchardNetworkActionV1 {
@@ -89,14 +82,12 @@ pub struct PrivacyReleaseOrchardNetworkActionV1 {
     /// Exact statement carried by `transaction`.
     pub statement: OrchardHalo2ActionsStatementV1,
 }
-
 /// One canonical verification-only revised-Jindo action.
 #[derive(Debug)]
 pub struct PrivacyReleaseJindoNetworkActionV1 {
     /// Ordinary production transaction carrying exactly one revised-Jindo proof.
     pub transaction: SignedTransaction,
 }
-
 /// One canonical verification-only Vega presentation and its issuer revision.
 #[derive(Debug)]
 pub struct PrivacyReleaseVegaNetworkActionV1 {
@@ -105,7 +96,6 @@ pub struct PrivacyReleaseVegaNetworkActionV1 {
     /// Exact active issuer record validators must register before submission.
     pub issuer_record: PrivacyVegaIssuerRecordV1,
 }
-
 /// Four independently proved PQ-MASP actions consuming the same genesis note.
 ///
 /// Each transaction has a distinct canonical intent and proof. The first is a
@@ -135,7 +125,6 @@ pub struct PrivacyReleasePqMaspNetworkActionsV1 {
     /// Exact fresh replay statement used after peer restart.
     pub post_restart_replay_statement: PqMaspStarkStatementV1,
 }
-
 fn network_seed_v1(master: [u8; 32], purpose: &[u8], index: u8) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(b"iroha.privacy.release.network-action.seed.v1");
@@ -153,7 +142,6 @@ fn network_seed_v1(master: [u8; 32], purpose: &[u8], index: u8) -> [u8; 32] {
     }
     seed
 }
-
 fn statement_context_v1(
     transaction: &PrivacyReleaseTransactionContextV1,
     profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
@@ -169,7 +157,6 @@ fn statement_context_v1(
         engine_manifest_digest: profile.engine_manifest_digest,
     }
 }
-
 fn transaction_payload_v1(
     context: &PrivacyReleaseTransactionContextV1,
     envelope: PrivacyProofEnvelopeV1,
@@ -197,7 +184,6 @@ fn transaction_payload_v1(
         .into_payload()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)
 }
-
 fn signed_payload_v1(
     payload: TransactionPayload,
     expected_intent: PrivacyTransactionIntentDigestV1,
@@ -219,7 +205,6 @@ fn signed_payload_v1(
     }
     Ok(transaction)
 }
-
 fn orchard_statement_v1(
     context: PrivacyStatementContextV1,
     draft: &OrchardBundleDraftV1,
@@ -262,13 +247,11 @@ fn orchard_statement_v1(
         expiry_height,
     })
 }
-
 fn jindo_field_v1(value: u64) -> PrivacyJindoFieldElementV1 {
     let mut encoding = [0_u8; 32];
     encoding[..8].copy_from_slice(&value.to_le_bytes());
     PrivacyJindoFieldElementV1::new(encoding)
 }
-
 fn vega_utc_date_from_timestamp_ms_v1(
     timestamp_ms: u64,
 ) -> Result<PrivacyVegaMdlDateV1, PrivacyReleaseEvidenceErrorClassV1> {
@@ -300,7 +283,6 @@ fn vega_utc_date_from_timestamp_ms_v1(
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?,
     })
 }
-
 /// Build one canonical network-bound revised-Jindo action.
 ///
 /// The polynomial coefficients, evaluation point, proof randomness, and
@@ -349,7 +331,6 @@ pub fn build_privacy_release_jindo_network_action_v1(
         transaction: signed.into_signed_transaction(),
     })
 }
-
 /// Build one canonical network-bound Vega presentation.
 ///
 /// The mDL document fragments, issuer signature, holder device key, proof
@@ -397,7 +378,6 @@ pub fn build_privacy_release_vega_network_action_v1(
         issuer_record: fixture.issuer_record,
     })
 }
-
 /// Build one canonical network-bound Orchard action through the production
 /// two-phase prover and consuming authorization API.
 ///
@@ -433,7 +413,6 @@ pub fn build_privacy_release_orchard_network_action_v1(
         &mut prover_rng,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
-
     let mut statement = orchard_statement_v1(
         statement_context_v1(&transaction_context, profile),
         prepared.public_draft(),
@@ -517,7 +496,6 @@ pub fn build_privacy_release_orchard_network_action_v1(
         statement,
     })
 }
-
 fn build_pq_masp_transaction_v1(
     transaction_context: &PrivacyReleaseTransactionContextV1,
     mut statement: PqMaspStarkStatementV1,
@@ -593,7 +571,6 @@ fn build_pq_masp_transaction_v1(
     }
     Ok((signed_payload_v1(payload, intent, private_key)?, statement))
 }
-
 /// Build four network-bound PQ-MASP actions with distinct intents and proofs
 /// but the same stable nullifier.
 ///
@@ -643,7 +620,6 @@ pub fn build_privacy_release_pq_masp_network_actions_v1(
     bootstrap
         .validate()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-
     let (preactivation_transaction, preactivation_statement) = build_pq_masp_transaction_v1(
         &preactivation_context,
         fixture.statement.clone(),

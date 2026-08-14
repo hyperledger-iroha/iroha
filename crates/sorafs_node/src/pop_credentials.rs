@@ -12,14 +12,10 @@
 //! There is no local-authority fallback. Issuance and verification are bound to
 //! an explicitly supplied finalized policy/root projection, and every registry
 //! submission is recovered through a durable idempotent outbox.
-
-use std::{
-    collections::BTreeSet,
-    fmt, fs,
-    path::{Path, PathBuf},
-    sync::Arc,
+use crate::{
+    decode_local_checkpoint_canonical, read_local_checkpoint_bounded,
+    write_local_private_checkpoint_atomic,
 };
-
 use iroha_config::parameters::validate_production_runtime_handle;
 #[cfg(test)]
 use iroha_crypto::HybridSecretKey;
@@ -49,13 +45,13 @@ use sorafs_manifest::{
         verify_pop_membership_proof_v1, verify_pop_revocation_list_signature_v1,
     },
 };
-use thiserror::Error;
-
-use crate::{
-    decode_local_checkpoint_canonical, read_local_checkpoint_bounded,
-    write_local_private_checkpoint_atomic,
+use std::{
+    collections::BTreeSet,
+    fmt, fs,
+    path::{Path, PathBuf},
+    sync::Arc,
 };
-
+use thiserror::Error;
 /// V1 issuer-service policy version.
 pub const POP_CREDENTIAL_SERVICE_POLICY_VERSION_V1: u16 = 1;
 /// V1 encrypted enrollment envelope version.
@@ -90,7 +86,6 @@ pub const POP_API_AUTHENTICATION_MAX_BYTES_V1: usize = 16 * 1024;
 pub const POP_SERVICE_COLLECTION_MAX_V1: usize = 65_536;
 /// Fixed issuer checkpoint file name.
 pub const POP_ISSUER_CHECKPOINT_FILE_V1: &str = "issuer-checkpoint.to";
-
 const ENROLLMENT_ATTESTATION_DOMAIN_V1: &[u8] = b"sorafs.pop.enrollment-attestation.v1";
 const ENROLLMENT_ENVELOPE_DOMAIN_V1: &[u8] = b"sorafs.pop.encrypted-enrollment.v1";
 const ENROLLMENT_AAD_DOMAIN_V1: &[u8] = b"sorafs.pop.enrollment-aad.v1";
@@ -111,14 +106,12 @@ const WALLET_PROVE_BINDING_DOMAIN_V1: &[u8] = b"sorafs.pop.wallet-prove-api.v1";
 const WALLET_VAULT_AAD_DOMAIN_V1: &[u8] = b"sorafs.pop.wallet-vault-aad.v1";
 const WALLET_VAULT_FILE_PREFIX_V1: &str = "credential-";
 const WALLET_VAULT_FILE_SUFFIX_V1: &str = ".to";
-
 fn digest_domain(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
     hasher.update(bytes);
     *hasher.finalize().as_bytes()
 }
-
 /// Return the canonical V1 digest of one hybrid enrollment-recipient public key.
 ///
 /// The digest is safe to place in public configuration. It lets startup prove
@@ -132,14 +125,12 @@ pub fn pop_enrollment_recipient_public_key_digest_v1(recipient: &HybridPublicKey
     hasher.update(recipient.kyber_bytes());
     *hasher.finalize().as_bytes()
 }
-
 fn scrub_sensitive_bytes(bytes: &mut [u8]) {
     bytes.fill(0);
     // Make the cleared contents observable to the optimizer without requiring
     // unsafe volatile writes. This module is compiled with `unsafe_code = deny`.
     std::hint::black_box(bytes);
 }
-
 fn scrub_sensitive_string(value: &mut String) {
     if !value.is_empty() {
         let cleared = "\0".repeat(value.len());
@@ -148,39 +139,32 @@ fn scrub_sensitive_string(value: &mut String) {
         value.clear();
     }
 }
-
 /// Borrowed secret bytes that are scrubbed on every return path.
 struct SensitiveBytesGuard<'a> {
     bytes: &'a mut [u8],
 }
-
 impl<'a> SensitiveBytesGuard<'a> {
     fn new(bytes: &'a mut [u8]) -> Self {
         Self { bytes }
     }
-
     fn as_slice(&self) -> &[u8] {
         &*self.bytes
     }
-
     fn as_mut_slice(&mut self) -> &mut [u8] {
         self.bytes
     }
 }
-
 impl Drop for SensitiveBytesGuard<'_> {
     fn drop(&mut self) {
         scrub_sensitive_bytes(self.bytes);
     }
 }
-
 fn nonzero_digest(field: &'static str, digest: [u8; 32]) -> Result<(), PopCredentialServiceError> {
     if digest == [0; 32] {
         return Err(PopCredentialServiceError::InvalidInput { field });
     }
     Ok(())
 }
-
 fn bounded_clean_text(
     field: &'static str,
     value: &str,
@@ -195,7 +179,6 @@ fn bounded_clean_text(
     }
     Ok(())
 }
-
 fn bounded_production_runtime_handle(
     field: &'static str,
     value: &str,
@@ -203,13 +186,11 @@ fn bounded_production_runtime_handle(
     validate_production_runtime_handle(value)
         .map_err(|_| PopCredentialServiceError::InvalidInput { field })
 }
-
 fn encode_canonical<T: norito::core::NoritoSerialize>(
     value: &T,
 ) -> Result<Vec<u8>, PopCredentialServiceError> {
     norito::to_bytes(value).map_err(|_| PopCredentialServiceError::Codec)
 }
-
 fn decode_canonical<T>(
     bytes: &[u8],
     max_bytes: u64,
@@ -221,13 +202,11 @@ where
     decode_local_checkpoint_canonical(bytes, max_bytes, max_sequence_elements)
         .map_err(|_| PopCredentialServiceError::Codec)
 }
-
 /// Domain-separated digest for off-chain enrollment attestations.
 #[must_use]
 pub fn pop_enrollment_attestation_digest_v1(attestation: &[u8]) -> [u8; 32] {
     digest_domain(ENROLLMENT_ATTESTATION_DOMAIN_V1, attestation)
 }
-
 /// One governed dual-control approver.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -240,7 +219,6 @@ pub struct PopApprovalSignerV1 {
     /// Finalized epoch at which this signer was revoked, if any.
     pub revoked_at_epoch: Option<u64>,
 }
-
 /// Finalized operational policy consumed by the PoP service.
 ///
 /// This policy is intentionally required at construction. The service never
@@ -276,7 +254,6 @@ pub struct PopCredentialServicePolicyV1 {
     /// Submission attempts before an unconfirmed operation enters dead letter.
     pub max_submission_attempts: u16,
 }
-
 impl PopCredentialServicePolicyV1 {
     /// Validate bounded, canonical V1 policy invariants.
     pub fn validate(&self) -> Result<(), PopCredentialServiceError> {
@@ -348,7 +325,6 @@ impl PopCredentialServicePolicyV1 {
         }
         Ok(())
     }
-
     fn approval_signer(
         &self,
         signer_id: &str,
@@ -369,7 +345,6 @@ impl PopCredentialServicePolicyV1 {
         Ok(signer)
     }
 }
-
 /// Public metadata integrity-protected with an encrypted enrollment.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -381,7 +356,6 @@ struct PopEnrollmentAadV1 {
     issuer_id: String,
     recipient_key_id: String,
 }
-
 /// Private enrollment plaintext. It is never written or logged.
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PopPrivateEnrollmentV1 {
@@ -396,7 +370,6 @@ pub struct PopPrivateEnrollmentV1 {
     /// Private enrollment attestation payload.
     pub attestation_payload: Vec<u8>,
 }
-
 impl fmt::Debug for PopPrivateEnrollmentV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -411,7 +384,6 @@ impl fmt::Debug for PopPrivateEnrollmentV1 {
             .finish()
     }
 }
-
 impl Drop for PopPrivateEnrollmentV1 {
     fn drop(&mut self) {
         scrub_sensitive_string(&mut self.request.applicant_id);
@@ -426,7 +398,6 @@ impl Drop for PopPrivateEnrollmentV1 {
         scrub_sensitive_bytes(&mut self.attestation_payload);
     }
 }
-
 impl PopPrivateEnrollmentV1 {
     fn validate(&self) -> Result<HybridPublicKey, PopCredentialServiceError> {
         self.request
@@ -444,7 +415,6 @@ impl PopPrivateEnrollmentV1 {
             .map_err(|_| PopCredentialServiceError::InvalidEnrollment)
     }
 }
-
 /// Canonical encrypted enrollment accepted by the issuer service.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize)]
 pub struct PopEncryptedEnrollmentV1 {
@@ -461,7 +431,6 @@ pub struct PopEncryptedEnrollmentV1 {
     /// Hybrid X25519+ML-KEM/ChaCha20-Poly1305 private payload.
     pub encrypted_payload: HybridPayloadEnvelopeV1,
 }
-
 impl PopEncryptedEnrollmentV1 {
     fn aad(&self) -> Result<Vec<u8>, PopCredentialServiceError> {
         let metadata = PopEnrollmentAadV1 {
@@ -474,7 +443,6 @@ impl PopEncryptedEnrollmentV1 {
         let encoded = encode_canonical(&metadata)?;
         Ok([ENROLLMENT_AAD_DOMAIN_V1, encoded.as_slice()].concat())
     }
-
     fn canonical_bytes(&self) -> Result<Vec<u8>, PopCredentialServiceError> {
         let bytes = encode_canonical(self)?;
         if bytes.len() > POP_ENCRYPTED_ENROLLMENT_MAX_BYTES_V1 {
@@ -482,7 +450,6 @@ impl PopEncryptedEnrollmentV1 {
         }
         Ok(bytes)
     }
-
     fn digest(&self) -> Result<[u8; 32], PopCredentialServiceError> {
         Ok(digest_domain(
             ENROLLMENT_ENVELOPE_DOMAIN_V1,
@@ -490,7 +457,6 @@ impl PopEncryptedEnrollmentV1 {
         ))
     }
 }
-
 /// Encrypt a private enrollment for the governed issuer recipient key.
 pub fn encrypt_pop_enrollment_v1<R: TryCryptoRng>(
     private: &PopPrivateEnrollmentV1,
@@ -526,7 +492,6 @@ pub fn encrypt_pop_enrollment_v1<R: TryCryptoRng>(
     envelope.canonical_bytes()?;
     Ok(envelope)
 }
-
 /// Approval decision.
 #[derive(
     Clone,
@@ -546,7 +511,6 @@ pub enum PopApprovalDecisionV1 {
     /// Reject issuance.
     Reject,
 }
-
 /// Signed payload-free dual-control decision.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -569,7 +533,6 @@ pub struct PopApprovalV1 {
     /// Raw Ed25519 signature.
     pub signature: Vec<u8>,
 }
-
 impl PopApprovalV1 {
     /// Compute the canonical signed digest.
     pub fn signature_digest(&self) -> Result<[u8; 32], PopCredentialServiceError> {
@@ -580,7 +543,6 @@ impl PopApprovalV1 {
             &encode_canonical(&signable)?,
         ))
     }
-
     fn validate(
         &self,
         policy: &PopCredentialServicePolicyV1,
@@ -609,7 +571,6 @@ impl PopApprovalV1 {
             .map_err(|_| PopCredentialServiceError::InvalidSignature)
     }
 }
-
 /// Exact PoP digest class presented to the runtime signer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -621,14 +582,12 @@ pub enum PopIssuerSigningPurposeV1 {
     /// Revocation-list publisher signature digest.
     RevocationList = 3,
 }
-
 impl PopIssuerSigningPurposeV1 {
     /// Immutable V1 wire identifier.
     #[must_use]
     pub const fn wire_id(self) -> u8 {
         self as u8
     }
-
     /// Decode one immutable V1 wire identifier without aliases.
     #[must_use]
     pub const fn try_from_wire_id(value: u8) -> Option<Self> {
@@ -640,7 +599,6 @@ impl PopIssuerSigningPurposeV1 {
         }
     }
 }
-
 /// Runtime-only authenticated external signing interface.
 ///
 /// Implementations must not expose or persist private key bytes. The service
@@ -657,7 +615,6 @@ pub trait PopIssuerSigner: Send + Sync + fmt::Debug {
         digest: [u8; 32],
     ) -> Result<[u8; 64], String>;
 }
-
 /// Payload-free failure returned by a runtime-owned recipient capability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PopRecipientOpenErrorV1 {
@@ -666,7 +623,6 @@ pub enum PopRecipientOpenErrorV1 {
     /// The exact ciphertext, AAD, or governed key binding was rejected.
     Rejected,
 }
-
 /// Runtime-only capability that opens encrypted enrollment payloads without
 /// exposing the hybrid recipient private key to the caller.
 pub trait PopEnrollmentRecipientV1: Send + Sync + fmt::Debug {
@@ -681,7 +637,6 @@ pub trait PopEnrollmentRecipientV1: Send + Sync + fmt::Debug {
         aad: &[u8],
     ) -> Result<Vec<u8>, PopRecipientOpenErrorV1>;
 }
-
 /// Runtime-only capability that opens finalized encrypted wallet deliveries
 /// without exposing the wallet recipient private key to the caller.
 pub trait PopWalletRecipientV1: Send + Sync + fmt::Debug {
@@ -696,7 +651,6 @@ pub trait PopWalletRecipientV1: Send + Sync + fmt::Debug {
         aad: &[u8],
     ) -> Result<Vec<u8>, PopRecipientOpenErrorV1>;
 }
-
 fn map_enrollment_recipient_error(error: PopRecipientOpenErrorV1) -> PopCredentialServiceError {
     match error {
         PopRecipientOpenErrorV1::Unavailable => {
@@ -705,7 +659,6 @@ fn map_enrollment_recipient_error(error: PopRecipientOpenErrorV1) -> PopCredenti
         PopRecipientOpenErrorV1::Rejected => PopCredentialServiceError::InvalidEnrollment,
     }
 }
-
 fn map_wallet_recipient_error(error: PopRecipientOpenErrorV1) -> PopCredentialServiceError {
     match error {
         PopRecipientOpenErrorV1::Unavailable => {
@@ -714,7 +667,6 @@ fn map_wallet_recipient_error(error: PopRecipientOpenErrorV1) -> PopCredentialSe
         PopRecipientOpenErrorV1::Rejected => PopCredentialServiceError::Encryption,
     }
 }
-
 /// Runtime-only KMS/PKCS#11 wrapper used by a wallet vault.
 pub trait PopWalletKeyWrapper: Send + Sync + fmt::Debug {
     /// Return the active non-secret wrapping-key handle.
@@ -729,7 +681,6 @@ pub trait PopWalletKeyWrapper: Send + Sync + fmt::Debug {
         wrapped_dek: &[u8],
     ) -> Result<[u8; 32], String>;
 }
-
 /// Private serializable witness representation used only inside encryption.
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PopPrivateWitnessEnvelopeV1 {
@@ -738,13 +689,11 @@ struct PopPrivateWitnessEnvelopeV1 {
     credential_directions: Vec<bool>,
     revocation_siblings: Vec<[u8; 32]>,
 }
-
 impl fmt::Debug for PopPrivateWitnessEnvelopeV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PopPrivateWitnessEnvelopeV1([REDACTED])")
     }
 }
-
 impl PopPrivateWitnessEnvelopeV1 {
     fn from_witness(witness: &PopMembershipWitnessV1) -> Self {
         Self {
@@ -754,7 +703,6 @@ impl PopPrivateWitnessEnvelopeV1 {
             revocation_siblings: witness.revocation_path.siblings.clone(),
         }
     }
-
     fn into_witness(mut self) -> PopMembershipWitnessV1 {
         let witness = PopMembershipWitnessV1 {
             holder_secret: self.holder_secret,
@@ -769,7 +717,6 @@ impl PopPrivateWitnessEnvelopeV1 {
         scrub_sensitive_bytes(&mut self.holder_secret);
         witness
     }
-
     fn zeroize(&mut self) {
         scrub_sensitive_bytes(&mut self.holder_secret);
         for sibling in &mut self.credential_siblings {
@@ -782,13 +729,11 @@ impl PopPrivateWitnessEnvelopeV1 {
         }
     }
 }
-
 impl Drop for PopPrivateWitnessEnvelopeV1 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 /// RAII owner for a decoded membership witness used during local proof
 /// generation. `PopMembershipWitnessV1` is defined in the manifest crate and
 /// cannot implement `Drop` here, so this guard ensures every return path
@@ -796,16 +741,13 @@ impl Drop for PopPrivateWitnessEnvelopeV1 {
 struct PrivateMembershipWitnessGuard {
     witness: PopMembershipWitnessV1,
 }
-
 impl PrivateMembershipWitnessGuard {
     fn new(witness: PopMembershipWitnessV1) -> Self {
         Self { witness }
     }
-
     fn as_ref(&self) -> &PopMembershipWitnessV1 {
         &self.witness
     }
-
     fn zeroize(&mut self) {
         scrub_sensitive_bytes(&mut self.witness.holder_secret);
         for sibling in &mut self.witness.credential_path.siblings {
@@ -818,18 +760,15 @@ impl PrivateMembershipWitnessGuard {
         }
     }
 }
-
 impl Drop for PrivateMembershipWitnessGuard {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 fn scrub_pop_signature(signature: &mut PopSignatureV1) {
     scrub_sensitive_bytes(&mut signature.public_key);
     scrub_sensitive_bytes(&mut signature.signature);
 }
-
 fn scrub_pop_credential(credential: &mut PopCredentialV1) {
     scrub_sensitive_bytes(&mut credential.credential_id);
     scrub_sensitive_bytes(&mut credential.holder_commitment);
@@ -843,7 +782,6 @@ fn scrub_pop_credential(credential: &mut PopCredentialV1) {
     scrub_sensitive_bytes(&mut credential.commitment_root);
     scrub_pop_signature(&mut credential.issuer_signature);
 }
-
 fn scrub_pop_bundle(bundle: &mut PopIssuedCredentialBundleV1) {
     scrub_pop_credential(&mut bundle.credential);
     scrub_sensitive_bytes(&mut bundle.commitment_root.root_digest);
@@ -862,37 +800,31 @@ fn scrub_pop_bundle(bundle: &mut PopIssuedCredentialBundleV1) {
     bundle.revocation_list.entries.clear();
     scrub_pop_signature(&mut bundle.revocation_list.publisher_signature);
 }
-
 struct PrivateBundleGuard {
     bundle: Option<PopIssuedCredentialBundleV1>,
 }
-
 impl PrivateBundleGuard {
     fn new(bundle: PopIssuedCredentialBundleV1) -> Self {
         Self {
             bundle: Some(bundle),
         }
     }
-
     fn as_ref(&self) -> Result<&PopIssuedCredentialBundleV1, PopCredentialServiceError> {
         self.bundle
             .as_ref()
             .ok_or(PopCredentialServiceError::InvalidState)
     }
-
     fn as_mut(&mut self) -> Result<&mut PopIssuedCredentialBundleV1, PopCredentialServiceError> {
         self.bundle
             .as_mut()
             .ok_or(PopCredentialServiceError::InvalidState)
     }
-
     fn into_inner(mut self) -> Result<PopIssuedCredentialBundleV1, PopCredentialServiceError> {
         self.bundle
             .take()
             .ok_or(PopCredentialServiceError::InvalidState)
     }
 }
-
 impl Drop for PrivateBundleGuard {
     fn drop(&mut self) {
         if let Some(bundle) = &mut self.bundle {
@@ -900,7 +832,6 @@ impl Drop for PrivateBundleGuard {
         }
     }
 }
-
 /// Issuance material prepared after enrollment review.
 pub struct PopIssuanceDraftV1 {
     /// Enrollment request being fulfilled.
@@ -914,7 +845,6 @@ pub struct PopIssuanceDraftV1 {
     /// Private wallet witness.
     pub witness: PopMembershipWitnessV1,
 }
-
 impl fmt::Debug for PopIssuanceDraftV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -924,7 +854,6 @@ impl fmt::Debug for PopIssuanceDraftV1 {
             .finish()
     }
 }
-
 impl Drop for PopIssuanceDraftV1 {
     fn drop(&mut self) {
         scrub_pop_credential(&mut self.credential);
@@ -939,7 +868,6 @@ impl Drop for PopIssuanceDraftV1 {
         }
     }
 }
-
 /// Registry operation payload retained in the durable outbox.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -959,7 +887,6 @@ pub enum PopRegistryOperationKindV1 {
         issuer_policy_digest: [u8; 32],
     },
 }
-
 /// One payload-free ledger submission.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -972,7 +899,6 @@ pub struct PopRegistryOperationV1 {
     /// Ledger instruction body.
     pub kind: PopRegistryOperationKindV1,
 }
-
 impl PopRegistryOperationV1 {
     fn new(kind: PopRegistryOperationKindV1) -> Result<Self, PopCredentialServiceError> {
         let mut operation = Self {
@@ -984,7 +910,6 @@ impl PopRegistryOperationV1 {
             digest_domain(REGISTRY_OPERATION_DOMAIN_V1, &encode_canonical(&operation)?);
         Ok(operation)
     }
-
     /// Validate the digest and exact canonical nested payload.
     pub fn validate(&self) -> Result<(), PopCredentialServiceError> {
         if self.version != POP_REGISTRY_OPERATION_VERSION_V1 {
@@ -1024,7 +949,6 @@ impl PopRegistryOperationV1 {
         }
         Ok(())
     }
-
     fn validate_for_policy(
         &self,
         expected_policy_digest: [u8; 32],
@@ -1050,7 +974,6 @@ impl PopRegistryOperationV1 {
         Ok(())
     }
 }
-
 /// Idempotent registry transaction submitter.
 pub trait PopRegistrySubmitter: Send + Sync + fmt::Debug {
     /// Submit an operation. Reusing `idempotency_key` must return the original
@@ -1061,7 +984,6 @@ pub trait PopRegistrySubmitter: Send + Sync + fmt::Debug {
         operation: &PopRegistryOperationV1,
     ) -> Result<(), String>;
 }
-
 /// Finalized block cursor used by registry reconciliation.
 #[derive(
     Clone,
@@ -1080,7 +1002,6 @@ pub struct PopFinalizedCursorV1 {
     /// Finalized block hash.
     pub block_hash: [u8; 32],
 }
-
 /// Finalized, public PoP registry projection returned by ledger queries.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -1105,7 +1026,6 @@ pub struct PopFinalizedRegistryProjectionV1 {
     /// Governed issuer keys that are revoked at this cursor.
     pub revoked_issuer_public_keys: Vec<[u8; 32]>,
 }
-
 /// Reader that advances exactly one finalized projection at a time.
 pub trait PopFinalizedRegistryReader: Send + Sync + fmt::Debug {
     /// Return the next projection after `cursor`, or `None` if caught up.
@@ -1114,7 +1034,6 @@ pub trait PopFinalizedRegistryReader: Send + Sync + fmt::Debug {
         cursor: Option<PopFinalizedCursorV1>,
     ) -> Result<Option<PopFinalizedRegistryProjectionV1>, String>;
 }
-
 /// One request's exact authoritative finalized-head reconciliation context.
 #[derive(Clone, Copy, Debug)]
 pub struct PopCommittedRegistryContextV1<'a> {
@@ -1122,7 +1041,6 @@ pub struct PopCommittedRegistryContextV1<'a> {
     expected_cursor: PopFinalizedCursorV1,
     now_epoch: u64,
 }
-
 impl<'a> PopCommittedRegistryContextV1<'a> {
     /// Bind a committed-state reader and time to one exact finalized head.
     pub fn new(
@@ -1142,13 +1060,11 @@ impl<'a> PopCommittedRegistryContextV1<'a> {
             now_epoch,
         })
     }
-
     /// Finalized epoch bound to this exact head.
     #[must_use]
     pub const fn now_epoch(self) -> u64 {
         self.now_epoch
     }
-
     /// Reconcile and prove that `service` reached this exact finalized head.
     pub fn reconcile(
         self,
@@ -1156,7 +1072,6 @@ impl<'a> PopCommittedRegistryContextV1<'a> {
     ) -> Result<(), PopCredentialServiceError> {
         service.reconcile_finalized_tip(self.reader, self.now_epoch, self.expected_cursor)
     }
-
     fn reconcile_bounded(
         self,
         service: &mut PopCredentialService,
@@ -1170,7 +1085,6 @@ impl<'a> PopCommittedRegistryContextV1<'a> {
         )
     }
 }
-
 /// Authenticated PoP service operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PopCredentialApiActionV1 {
@@ -1205,7 +1119,6 @@ pub enum PopCredentialApiActionV1 {
     /// Verify and consume a membership proof.
     VerifyMembership,
 }
-
 impl PopCredentialApiActionV1 {
     /// Return the minimum authority accepted for this action.
     #[must_use]
@@ -1228,7 +1141,6 @@ impl PopCredentialApiActionV1 {
             | Self::ProveMembership => PopRequestAuthorityV1::AuthenticatedRequest,
         }
     }
-
     /// Return whether this action may mutate private or issuer checkpoint state
     /// only after the deployment authenticator verifies a caller signature over
     /// the exact action and request binding.
@@ -1240,7 +1152,6 @@ impl PopCredentialApiActionV1 {
         )
     }
 }
-
 /// Authority established for one exact authenticated API request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PopRequestAuthorityV1 {
@@ -1249,7 +1160,6 @@ pub enum PopRequestAuthorityV1 {
     /// A caller signature covers the exact action and request binding.
     CallerSignedTransaction,
 }
-
 /// Result returned by the deployment authentication adapter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PopAuthenticatedPrincipalV1 {
@@ -1260,7 +1170,6 @@ pub struct PopAuthenticatedPrincipalV1 {
     /// Exact authority established by the deployment authenticator.
     pub request_authority: PopRequestAuthorityV1,
 }
-
 /// Runtime authentication adapter used by the PoP API facade.
 ///
 /// The opaque credential can be a Torii bearer token, mutual-TLS exporter,
@@ -1279,20 +1188,17 @@ pub trait PopCredentialApiAuthenticator: Send + Sync + fmt::Debug {
         now_epoch: u64,
     ) -> Result<PopAuthenticatedPrincipalV1, String>;
 }
-
 /// Authenticated API facade over [`PopCredentialService`].
 #[derive(Debug)]
 pub struct PopCredentialApiV1 {
     authenticator: Arc<dyn PopCredentialApiAuthenticator>,
 }
-
 impl PopCredentialApiV1 {
     /// Construct an API facade with an explicit production authenticator.
     #[must_use]
     pub fn new(authenticator: Arc<dyn PopCredentialApiAuthenticator>) -> Self {
         Self { authenticator }
     }
-
     fn authorize(
         &self,
         opaque_credential: &[u8],
@@ -1320,7 +1226,6 @@ impl PopCredentialApiV1 {
         }
         Ok(principal)
     }
-
     /// Authenticate and submit an encrypted enrollment.
     pub fn submit_enrollment(
         &self,
@@ -1340,7 +1245,6 @@ impl PopCredentialApiV1 {
         committed.reconcile(service)?;
         service.submit_enrollment(canonical_enrollment, now_epoch)
     }
-
     /// Authenticate and read payload-free enrollment status.
     pub fn enrollment_status(
         &self,
@@ -1359,7 +1263,6 @@ impl PopCredentialApiV1 {
         committed.reconcile(service)?;
         service.enrollment_status(request_id, now_epoch)
     }
-
     /// Authenticate and record a governed approval.
     pub fn record_approval(
         &self,
@@ -1379,7 +1282,6 @@ impl PopCredentialApiV1 {
         committed.reconcile(service)?;
         service.record_approval(approval, now_epoch)
     }
-
     /// Authenticate and invoke external-signer-backed issuance.
     pub fn issue<R: TryCryptoRng>(
         &self,
@@ -1400,7 +1302,6 @@ impl PopCredentialApiV1 {
         committed.reconcile(service)?;
         service.issue(draft, now_epoch, rng)
     }
-
     /// Authenticate a request-id-only trigger, require the runtime-resolved
     /// private draft to match it, and invoke external-signer-backed issuance.
     ///
@@ -1429,7 +1330,6 @@ impl PopCredentialApiV1 {
         committed.reconcile(service)?;
         service.issue(draft, now_epoch, rng)
     }
-
     /// Authenticate, externally sign, and durably enqueue a revocation successor.
     pub fn enqueue_revocation(
         &self,
@@ -1449,7 +1349,6 @@ impl PopCredentialApiV1 {
         committed.reconcile(service)?;
         service.enqueue_revocation(revocations)
     }
-
     /// Authenticate and run one retry-safe registry submission step.
     pub fn submit_next(
         &self,
@@ -1474,7 +1373,6 @@ impl PopCredentialApiV1 {
         )?;
         service.submit_next(submitter, now_epoch)
     }
-
     /// Authenticate and reconcile at most one finalized registry projection.
     pub fn reconcile_next(
         &self,
@@ -1491,7 +1389,6 @@ impl PopCredentialApiV1 {
         )?;
         service.reconcile_next(reader, now_epoch)
     }
-
     /// Authenticate and return a bounded clone of the current finalized public
     /// registry projection.
     pub fn finalized_projection(
@@ -1507,7 +1404,6 @@ impl PopCredentialApiV1 {
             POP_SERVICE_COLLECTION_MAX_V1,
         )
     }
-
     /// Authenticate and return a current finalized projection after proving
     /// bounded catch-up against the authoritative reader.
     pub fn finalized_projection_bounded(
@@ -1533,7 +1429,6 @@ impl PopCredentialApiV1 {
         )?;
         Ok(service.finalized_projection().cloned())
     }
-
     /// Authenticate and fetch encrypted finalized wallet delivery.
     pub fn wallet_delivery(
         &self,
@@ -1552,7 +1447,6 @@ impl PopCredentialApiV1 {
         committed.reconcile(service)?;
         service.wallet_delivery(request_id)
     }
-
     /// Authenticate and acknowledge wallet delivery.
     pub fn acknowledge_wallet_delivery(
         &self,
@@ -1571,7 +1465,6 @@ impl PopCredentialApiV1 {
         committed.reconcile(service)?;
         service.acknowledge_wallet_delivery(request_id)
     }
-
     /// Authenticate and import a finalized encrypted delivery into the injected
     /// runtime wallet vault.
     pub fn import_wallet_delivery(
@@ -1596,7 +1489,6 @@ impl PopCredentialApiV1 {
         let delivery = service.wallet_delivery(request_id)?;
         vault.import_finalized_delivery(&delivery, finalized)
     }
-
     /// Authenticate and synchronize a runtime-injected private witness against
     /// the service's current finalized registry projection.
     pub fn synchronize_wallet_witness(
@@ -1624,7 +1516,6 @@ impl PopCredentialApiV1 {
             .ok_or(PopCredentialServiceError::NotSynchronized)?;
         vault.synchronize_witness(credential_commitment, finalized, witness)
     }
-
     /// Authenticate and produce a local proof from runtime wallet custody.
     #[expect(
         clippy::too_many_arguments,
@@ -1664,7 +1555,6 @@ impl PopCredentialApiV1 {
             now_epoch,
         )
     }
-
     /// Authenticate, verify, and atomically consume a proof nullifier.
     pub fn verify_membership(
         &self,
@@ -1700,7 +1590,6 @@ impl PopCredentialApiV1 {
         service.verify_membership(proof, challenge_digest, verifier_context, now_epoch)
     }
 }
-
 fn issuance_request_binding(
     draft: &PopIssuanceDraftV1,
 ) -> Result<[u8; 32], PopCredentialServiceError> {
@@ -1723,7 +1612,6 @@ fn issuance_request_binding(
         material.as_slice(),
     ))
 }
-
 fn registry_submit_api_binding(service: &PopCredentialService) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(REGISTRY_SUBMIT_BINDING_DOMAIN_V1);
@@ -1737,7 +1625,6 @@ fn registry_submit_api_binding(service: &PopCredentialService) -> [u8; 32] {
     }
     *hasher.finalize().as_bytes()
 }
-
 fn registry_projection_api_binding(domain: &[u8], service: &PopCredentialService) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
@@ -1751,7 +1638,6 @@ fn registry_projection_api_binding(domain: &[u8], service: &PopCredentialService
     }
     *hasher.finalize().as_bytes()
 }
-
 fn wallet_prove_api_binding(
     credential_commitment: [u8; 32],
     challenge_digest: [u8; 32],
@@ -1769,7 +1655,6 @@ fn wallet_prove_api_binding(
     hasher.update(verifier_context.as_bytes());
     *hasher.finalize().as_bytes()
 }
-
 /// Stable outbox/dead-letter failure class; external payloads are never stored.
 #[derive(
     Clone,
@@ -1791,7 +1676,6 @@ pub enum PopRegistryFailureCodeV1 {
     /// Operation exhausted its bounded retry budget.
     RetryExhausted,
 }
-
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -1803,7 +1687,6 @@ struct PopRegistryOutboxEntryV1 {
     attempt_count: u16,
     last_attempt_epoch: Option<u64>,
 }
-
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -1813,7 +1696,6 @@ struct PopRegistryDeadLetterV1 {
     failure: PopRegistryFailureCodeV1,
     recorded_at_epoch: u64,
 }
-
 /// Payload-free enrollment lifecycle.
 #[derive(
     Clone,
@@ -1841,7 +1723,6 @@ pub enum PopEnrollmentStateV1 {
     /// Wallet acknowledged durable custody.
     Delivered,
 }
-
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -1856,7 +1737,6 @@ struct PopEnrollmentRecordV1 {
     credential_commitment: Option<[u8; 32]>,
     canonical_encrypted_delivery: Option<Vec<u8>>,
 }
-
 /// Encrypted credential/witness delivery from issuer to wallet.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize)]
 pub struct PopEncryptedWalletDeliveryV1 {
@@ -1871,26 +1751,22 @@ pub struct PopEncryptedWalletDeliveryV1 {
     /// Encrypted signed bundle and private witness.
     pub encrypted_payload: HybridPayloadEnvelopeV1,
 }
-
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PopPrivateWalletDeliveryV1 {
     bundle: PopIssuedCredentialBundleV1,
     witness: PopPrivateWitnessEnvelopeV1,
 }
-
 impl fmt::Debug for PopPrivateWalletDeliveryV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PopPrivateWalletDeliveryV1([REDACTED])")
     }
 }
-
 impl Drop for PopPrivateWalletDeliveryV1 {
     fn drop(&mut self) {
         scrub_pop_bundle(&mut self.bundle);
         self.witness.zeroize();
     }
 }
-
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -1904,7 +1780,6 @@ struct PopIssuerCheckpointV1 {
     finalized_projection: Option<PopFinalizedRegistryProjectionV1>,
     seen_nullifiers: Vec<[u8; 32]>,
 }
-
 impl PopIssuerCheckpointV1 {
     fn empty(policy: &PopCredentialServicePolicyV1) -> Self {
         Self {
@@ -1918,7 +1793,6 @@ impl PopIssuerCheckpointV1 {
             seen_nullifiers: Vec::new(),
         }
     }
-
     fn validate(
         &self,
         policy: &PopCredentialServicePolicyV1,
@@ -2044,7 +1918,6 @@ impl PopIssuerCheckpointV1 {
         Ok(())
     }
 }
-
 /// Payload-free enrollment status returned by service APIs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PopEnrollmentStatusV1 {
@@ -2057,7 +1930,6 @@ pub struct PopEnrollmentStatusV1 {
     /// Registry operation digest, once issued.
     pub registry_operation_digest: Option<[u8; 32]>,
 }
-
 /// Submission worker outcome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PopOutboxSubmitOutcomeV1 {
@@ -2079,7 +1951,6 @@ pub enum PopOutboxSubmitOutcomeV1 {
         operation_digest: [u8; 32],
     },
 }
-
 /// Issuer, reconciliation, and verifier service.
 pub struct PopCredentialService {
     policy: PopCredentialServicePolicyV1,
@@ -2090,7 +1961,6 @@ pub struct PopCredentialService {
     checkpoint_writer: PopCheckpointWriter,
     mutations_disabled: bool,
 }
-
 impl fmt::Debug for PopCredentialService {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2101,7 +1971,6 @@ impl fmt::Debug for PopCredentialService {
             .finish()
     }
 }
-
 impl PopCredentialService {
     /// Open or initialize a fail-closed issuer service.
     pub fn open(
@@ -2156,7 +2025,6 @@ impl PopCredentialService {
             mutations_disabled: false,
         })
     }
-
     fn transact<T>(
         &mut self,
         mutation: impl FnOnce(&mut PopIssuerCheckpointV1) -> Result<T, PopCredentialServiceError>,
@@ -2180,7 +2048,6 @@ impl PopCredentialService {
             Err(failure) => Err(failure.error),
         }
     }
-
     /// Submit an exact canonical encrypted enrollment.
     pub fn submit_enrollment(
         &mut self,
@@ -2259,7 +2126,6 @@ impl PopCredentialService {
         })?;
         Ok(self.status_for_record(&record, now_epoch))
     }
-
     /// Record one signed dual-control approval or rejection.
     pub fn record_approval(
         &mut self,
@@ -2325,7 +2191,6 @@ impl PopCredentialService {
         })?;
         Ok(self.status_for_record(&self.state.enrollments[index], now_epoch))
     }
-
     fn active_approval_count(&self, record: &PopEnrollmentRecordV1, now_epoch: u64) -> u8 {
         let count = record
             .approvals
@@ -2344,7 +2209,6 @@ impl PopCredentialService {
             .count();
         u8::try_from(count).unwrap_or(u8::MAX)
     }
-
     fn status_for_record(
         &self,
         record: &PopEnrollmentRecordV1,
@@ -2357,7 +2221,6 @@ impl PopCredentialService {
             registry_operation_digest: record.registry_operation_digest,
         }
     }
-
     /// Return payload-free enrollment status.
     pub fn enrollment_status(
         &self,
@@ -2373,7 +2236,6 @@ impl PopCredentialService {
             .ok_or(PopCredentialServiceError::EnrollmentNotFound)?;
         Ok(self.status_for_record(record, now_epoch))
     }
-
     /// Externally sign an approved issuance and atomically enqueue its payload-free
     /// registry operation together with encrypted wallet delivery.
     pub fn issue<R: TryCryptoRng>(
@@ -2509,7 +2371,6 @@ impl PopCredentialService {
         })?;
         Ok(operation_digest)
     }
-
     /// Externally sign and enqueue a strict successor revocation snapshot.
     pub fn enqueue_revocation(
         &mut self,
@@ -2569,7 +2430,6 @@ impl PopCredentialService {
         })?;
         Ok(digest)
     }
-
     /// Submit the oldest outbox entry. Failures retain only a stable code.
     pub fn submit_next(
         &mut self,
@@ -2622,7 +2482,6 @@ impl PopCredentialService {
             }
         }
     }
-
     /// Consume one next finalized projection and reconcile the outbox.
     pub fn reconcile_next(
         &mut self,
@@ -2684,7 +2543,6 @@ impl PopCredentialService {
         })?;
         Ok(true)
     }
-
     /// Reconcile finalized successors until the durable projection reaches
     /// the exact independently sampled authoritative head.
     ///
@@ -2704,7 +2562,6 @@ impl PopCredentialService {
             POP_SERVICE_COLLECTION_MAX_V1,
         )
     }
-
     fn reconcile_finalized_tip_bounded(
         &mut self,
         reader: &dyn PopFinalizedRegistryReader,
@@ -2752,7 +2609,6 @@ impl PopCredentialService {
         }
         Err(PopCredentialServiceError::RegistryUnavailable)
     }
-
     /// Fetch the stable encrypted wallet delivery after ledger finalization.
     pub fn wallet_delivery(
         &self,
@@ -2776,7 +2632,6 @@ impl PopCredentialService {
             .clone()
             .ok_or(PopCredentialServiceError::PoisonedCheckpoint)
     }
-
     /// Record wallet acknowledgement without deleting the recoverable ciphertext.
     pub fn acknowledge_wallet_delivery(
         &mut self,
@@ -2798,7 +2653,6 @@ impl PopCredentialService {
             Ok(())
         })
     }
-
     /// Verify a proof against the exact finalized roots and atomically consume
     /// its nullifier before returning success.
     pub fn verify_membership(
@@ -2842,7 +2696,6 @@ impl PopCredentialService {
         .map_err(|_| PopCredentialServiceError::InvalidMembershipProof)?;
         self.consume_verified_nullifier(proof.nullifier)
     }
-
     fn consume_verified_nullifier(
         &mut self,
         nullifier: [u8; 32],
@@ -2862,28 +2715,23 @@ impl PopCredentialService {
             Ok(())
         })
     }
-
     /// Return the exact validated policy used to construct this service.
     #[must_use]
     pub fn policy(&self) -> &PopCredentialServicePolicyV1 {
         &self.policy
     }
-
     /// Return the current finalized public projection.
     #[must_use]
     pub fn finalized_projection(&self) -> Option<&PopFinalizedRegistryProjectionV1> {
         self.state.finalized_projection.as_ref()
     }
 }
-
 #[derive(Debug, Clone, Copy)]
 struct PopCheckpointPersistFailure {
     error: PopCredentialServiceError,
     committed: bool,
 }
-
 type PopCheckpointWriter = fn(&Path, &[u8]) -> Result<(), PopCheckpointPersistFailure>;
-
 fn production_checkpoint_write(
     path: &Path,
     bytes: &[u8],
@@ -2899,7 +2747,6 @@ fn production_checkpoint_write(
         }
     })
 }
-
 fn persist_checkpoint(
     path: &Path,
     state: &PopIssuerCheckpointV1,
@@ -2917,7 +2764,6 @@ fn persist_checkpoint(
     }
     writer(path, &bytes)
 }
-
 fn push_dead_letter(
     state: &mut PopIssuerCheckpointV1,
     policy: &PopCredentialServicePolicyV1,
@@ -2938,14 +2784,12 @@ fn push_dead_letter(
     state.dead_letters.sort_by_key(|entry| entry.sequence);
     Ok(())
 }
-
 fn registry_idempotency_key(sequence: u64, operation_digest: [u8; 32]) -> [u8; 32] {
     let mut bytes = Vec::with_capacity(40);
     bytes.extend_from_slice(&sequence.to_le_bytes());
     bytes.extend_from_slice(&operation_digest);
     digest_domain(REGISTRY_IDEMPOTENCY_DOMAIN_V1, &bytes)
 }
-
 fn validate_issuance_draft(
     draft: &PopIssuanceDraftV1,
     enrollment: &PopPrivateEnrollmentV1,
@@ -2984,7 +2828,6 @@ fn validate_issuance_draft(
         .map_err(|_| PopCredentialServiceError::InvalidIssuance)?;
     Ok(())
 }
-
 fn pop_signature(public_key: [u8; 32], signature: [u8; 64]) -> PopSignatureV1 {
     PopSignatureV1 {
         algorithm: PopSignatureAlgorithmV1::Ed25519,
@@ -2992,7 +2835,6 @@ fn pop_signature(public_key: [u8; 32], signature: [u8; 64]) -> PopSignatureV1 {
         signature: signature.to_vec(),
     }
 }
-
 fn empty_pop_signature(public_key: [u8; 32]) -> PopSignatureV1 {
     PopSignatureV1 {
         algorithm: PopSignatureAlgorithmV1::Ed25519,
@@ -3000,7 +2842,6 @@ fn empty_pop_signature(public_key: [u8; 32]) -> PopSignatureV1 {
         signature: Vec::new(),
     }
 }
-
 fn sign_bundle_with_signer(
     credential: PopCredentialV1,
     root: PopCommitmentRootV1,
@@ -3048,7 +2889,6 @@ fn sign_bundle_with_signer(
         .map_err(|_| PopCredentialServiceError::InvalidIssuance)?;
     bundle.into_inner()
 }
-
 fn sign_revocation_with_signer(
     mut revocations: PopRevocationListV1,
     signer: &dyn PopIssuerSigner,
@@ -3067,7 +2907,6 @@ fn sign_revocation_with_signer(
         .map_err(|_| PopCredentialServiceError::InvalidIssuance)?;
     Ok(revocations)
 }
-
 fn validate_projection(
     current: Option<&PopFinalizedRegistryProjectionV1>,
     next: &PopFinalizedRegistryProjectionV1,
@@ -3177,7 +3016,6 @@ fn validate_projection(
     }
     Ok(())
 }
-
 fn wallet_delivery_aad(
     request_id: [u8; 32],
     operation_digest: [u8; 32],
@@ -3195,7 +3033,6 @@ fn wallet_delivery_aad(
     ]
     .concat())
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PopWalletDeliveryAadV1 {
     version: u16,
@@ -3203,7 +3040,6 @@ struct PopWalletDeliveryAadV1 {
     operation_digest: [u8; 32],
     credential_commitment: [u8; 32],
 }
-
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PopWalletVaultPlaintextV1 {
     bundle: PopIssuedCredentialBundleV1,
@@ -3213,13 +3049,11 @@ struct PopWalletVaultPlaintextV1 {
     witness_commitment_tree_version: u64,
     active_revocation_list: PopRevocationListV1,
 }
-
 impl fmt::Debug for PopWalletVaultPlaintextV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PopWalletVaultPlaintextV1([REDACTED])")
     }
 }
-
 impl Drop for PopWalletVaultPlaintextV1 {
     fn drop(&mut self) {
         scrub_pop_bundle(&mut self.bundle);
@@ -3236,7 +3070,6 @@ impl Drop for PopWalletVaultPlaintextV1 {
         scrub_pop_signature(&mut self.active_revocation_list.publisher_signature);
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PopWalletVaultMetadataV1 {
     version: u16,
@@ -3246,7 +3079,6 @@ struct PopWalletVaultMetadataV1 {
     revocation_root: [u8; 32],
     revocation_list_version: u64,
 }
-
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PopWalletVaultEnvelopeV1 {
     metadata: PopWalletVaultMetadataV1,
@@ -3255,7 +3087,6 @@ struct PopWalletVaultEnvelopeV1 {
     nonce: [u8; 12],
     ciphertext: Vec<u8>,
 }
-
 impl fmt::Debug for PopWalletVaultEnvelopeV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -3269,7 +3100,6 @@ impl fmt::Debug for PopWalletVaultEnvelopeV1 {
             .finish()
     }
 }
-
 /// Encrypted local wallet credential custody and proof generation.
 #[derive(Debug)]
 pub struct PopWalletVault {
@@ -3277,7 +3107,6 @@ pub struct PopWalletVault {
     recipient: Arc<dyn PopWalletRecipientV1>,
     key_wrapper: Arc<dyn PopWalletKeyWrapper>,
 }
-
 impl PopWalletVault {
     /// Open an encrypted wallet vault. Key material remains runtime-only.
     pub fn open(
@@ -3297,7 +3126,6 @@ impl PopWalletVault {
             key_wrapper,
         })
     }
-
     /// Import an issuer delivery only after its registry operation finalized.
     pub fn import_finalized_delivery(
         &self,
@@ -3373,7 +3201,6 @@ impl PopWalletVault {
         self.persist_credential(delivery.credential_commitment, &vault_plaintext)?;
         Ok(delivery.credential_commitment)
     }
-
     fn persist_credential(
         &self,
         credential_commitment: [u8; 32],
@@ -3441,7 +3268,6 @@ impl PopWalletVault {
                 }
             })
     }
-
     fn load_credential(
         &self,
         credential_commitment: [u8; 32],
@@ -3513,7 +3339,6 @@ impl PopWalletVault {
         drop(canonical_credential);
         Ok(plaintext)
     }
-
     /// Synchronize a private revocation witness to a newer finalized signed
     /// snapshot. Root/list rollback, issuer substitution, and mutation of an
     /// existing revocation entry are rejected before the vault is rewritten.
@@ -3579,7 +3404,6 @@ impl PopWalletVault {
         private.active_revocation_list = revocations;
         self.persist_credential(credential_commitment, &private)
     }
-
     /// Rewrap one credential DEK under a replacement KMS/PKCS#11 key without
     /// changing ciphertext, nonce, or immutable authenticated metadata.
     pub fn rewrap_credential(
@@ -3653,7 +3477,6 @@ impl PopWalletVault {
             }
         })
     }
-
     /// Produce a membership proof locally. Credential and witness bytes never
     /// leave the vault API; only the zero-knowledge proof is returned.
     pub fn prove_membership(
@@ -3700,7 +3523,6 @@ impl PopWalletVault {
         )
         .map_err(|_| PopCredentialServiceError::InvalidMembershipProof)
     }
-
     fn credential_path(&self, credential_commitment: [u8; 32]) -> PathBuf {
         self.root.join(format!(
             "{WALLET_VAULT_FILE_PREFIX_V1}{}{WALLET_VAULT_FILE_SUFFIX_V1}",
@@ -3708,7 +3530,6 @@ impl PopWalletVault {
         ))
     }
 }
-
 fn fill_nonzero_random(output: &mut [u8]) -> Result<(), PopCredentialServiceError> {
     for _ in 0..8 {
         OsRng
@@ -3720,7 +3541,6 @@ fn fill_nonzero_random(output: &mut [u8]) -> Result<(), PopCredentialServiceErro
     }
     Err(PopCredentialServiceError::Encryption)
 }
-
 /// PoP service failures. Variants intentionally omit private payload values.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PopCredentialServiceError {
@@ -3840,25 +3660,21 @@ pub enum PopCredentialServiceError {
     #[error("PoP private checkpoint is poisoned")]
     PoisonedCheckpoint,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{io, sync::Arc};
-
     use iroha_crypto::{HybridKeyPair, KeyPair};
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
     use sorafs_manifest::pop_credentials::{
         POP_CREDENTIAL_TREE_DEPTH_V1, POP_REVOCATION_TREE_DEPTH_V1, derive_pop_holder_commitment_v1,
     };
+    use std::{io, sync::Arc};
     use tempfile::TempDir;
-
     #[derive(Debug)]
     struct TestAuthenticator {
         request_authority: PopRequestAuthorityV1,
     }
-
     impl PopCredentialApiAuthenticator for TestAuthenticator {
         fn authenticate(
             &self,
@@ -3874,7 +3690,6 @@ mod tests {
             })
         }
     }
-
     #[test]
     fn mutation_actions_require_exact_caller_signed_authority() {
         let authenticated = PopCredentialApiV1::new(Arc::new(TestAuthenticator {
@@ -3912,7 +3727,6 @@ mod tests {
                 "unsigned mutation action {action:?}"
             );
         }
-
         let caller_signed = PopCredentialApiV1::new(Arc::new(TestAuthenticator {
             request_authority: PopRequestAuthorityV1::CallerSignedTransaction,
         }));
@@ -3935,18 +3749,15 @@ mod tests {
             );
         }
     }
-
     #[derive(Debug)]
     struct TestSigner {
         key_id: String,
         keypair: KeyPair,
     }
-
     impl PopIssuerSigner for TestSigner {
         fn key_id(&self) -> &str {
             &self.key_id
         }
-
         fn public_key(&self) -> [u8; 32] {
             let (_, bytes) = self
                 .keypair
@@ -3955,7 +3766,6 @@ mod tests {
                 .expect("public key");
             bytes.try_into().expect("ed25519")
         }
-
         fn sign_digest(
             &self,
             _purpose: PopIssuerSigningPurposeV1,
@@ -3968,18 +3778,15 @@ mod tests {
                 .map_err(|_| "signature length".to_owned())
         }
     }
-
     #[derive(Debug)]
     struct TestWrapper {
         key_id: String,
         key: [u8; 32],
     }
-
     impl PopWalletKeyWrapper for TestWrapper {
         fn active_key_id(&self) -> &str {
             &self.key_id
         }
-
         fn wrap_dek(&self, context: [u8; 32], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
             Ok(dek
                 .iter()
@@ -3988,7 +3795,6 @@ mod tests {
                 .map(|((&byte, key), aad)| byte ^ key ^ aad)
                 .collect())
         }
-
         fn unwrap_dek(
             &self,
             key_id: &str,
@@ -4005,13 +3811,11 @@ mod tests {
             Ok(dek)
         }
     }
-
     struct TestRecipient {
         key_id: String,
         secret: HybridSecretKey,
         public_key_digest: [u8; 32],
     }
-
     impl fmt::Debug for TestRecipient {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4021,16 +3825,13 @@ mod tests {
                 .finish()
         }
     }
-
     impl PopEnrollmentRecipientV1 for TestRecipient {
         fn key_id(&self) -> &str {
             &self.key_id
         }
-
         fn public_key_digest(&self) -> [u8; 32] {
             self.public_key_digest
         }
-
         fn open_enrollment(
             &self,
             encrypted_payload: &HybridPayloadEnvelopeV1,
@@ -4040,16 +3841,13 @@ mod tests {
                 .map_err(|_| PopRecipientOpenErrorV1::Rejected)
         }
     }
-
     impl PopWalletRecipientV1 for TestRecipient {
         fn key_id(&self) -> &str {
             &self.key_id
         }
-
         fn public_key_digest(&self) -> [u8; 32] {
             self.public_key_digest
         }
-
         fn open_wallet_delivery(
             &self,
             encrypted_payload: &HybridPayloadEnvelopeV1,
@@ -4059,7 +3857,6 @@ mod tests {
                 .map_err(|_| PopRecipientOpenErrorV1::Rejected)
         }
     }
-
     fn test_recipient(key_id: &str, keypair: &HybridKeyPair) -> Arc<TestRecipient> {
         Arc::new(TestRecipient {
             key_id: key_id.to_owned(),
@@ -4067,18 +3864,15 @@ mod tests {
             public_key_digest: pop_enrollment_recipient_public_key_digest_v1(keypair.public()),
         })
     }
-
     fn ed25519(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("keypair")
     }
-
     #[test]
     fn enrollment_recipient_public_key_digest_binds_both_hybrid_components() {
         let mut first_rng = ChaCha20Rng::from_seed([0x31; 32]);
         let first = HybridKeyPair::generate(&mut first_rng).expect("first hybrid key");
         let mut second_rng = ChaCha20Rng::from_seed([0x32; 32]);
         let second = HybridKeyPair::generate(&mut second_rng).expect("second hybrid key");
-
         let first_digest = pop_enrollment_recipient_public_key_digest_v1(first.public());
         assert_ne!(first_digest, [0; 32]);
         assert_eq!(
@@ -4090,7 +3884,6 @@ mod tests {
             pop_enrollment_recipient_public_key_digest_v1(second.public())
         );
     }
-
     #[test]
     fn recipient_capability_failures_map_without_provider_details() {
         assert_eq!(
@@ -4110,12 +3903,10 @@ mod tests {
             PopCredentialServiceError::Encryption
         );
     }
-
     fn public_key(keypair: &KeyPair) -> [u8; 32] {
         let (_, bytes) = keypair.public_key().try_to_bytes().expect("key");
         bytes.try_into().expect("ed25519")
     }
-
     fn policy(signer: &TestSigner, approvers: &[KeyPair]) -> PopCredentialServicePolicyV1 {
         PopCredentialServicePolicyV1 {
             version: POP_CREDENTIAL_SERVICE_POLICY_VERSION_V1,
@@ -4141,19 +3932,16 @@ mod tests {
             max_submission_attempts: 2,
         }
     }
-
     fn scalar(value: u64) -> [u8; 32] {
         let mut output = [0; 32];
         output[..8].copy_from_slice(&value.to_le_bytes());
         output
     }
-
     fn nonce(value: u128) -> [u8; 32] {
         let mut output = [0; 32];
         output[..16].copy_from_slice(&value.to_le_bytes());
         output
     }
-
     fn private_enrollment(wallet: &HybridKeyPair) -> PopPrivateEnrollmentV1 {
         let attestation_payload = b"private biometric attestation".to_vec();
         let holder_commitment =
@@ -4175,16 +3963,13 @@ mod tests {
             attestation_payload,
         }
     }
-
     fn canonical_temp_root(temp: &TempDir) -> PathBuf {
         fs::canonicalize(temp.path()).expect("canonical temporary directory")
     }
-
     fn injected_sensitive_failure(bytes: &mut [u8]) -> Result<(), PopCredentialServiceError> {
         let _guard = SensitiveBytesGuard::new(bytes);
         Err(PopCredentialServiceError::Encryption)
     }
-
     #[test]
     fn production_runtime_handles_use_canonical_grammar() {
         for handle in [
@@ -4216,7 +4001,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn sensitive_guard_scrubs_on_early_error() {
         let mut secret = vec![0xA5; 64];
@@ -4226,7 +4010,6 @@ mod tests {
         );
         assert_eq!(secret, vec![0; 64]);
     }
-
     #[test]
     fn private_membership_witness_guard_scrubs_all_secret_material() {
         let mut guard = PrivateMembershipWitnessGuard::new(PopMembershipWitnessV1 {
@@ -4239,9 +4022,7 @@ mod tests {
                 siblings: vec![[0xD4; 32]],
             },
         });
-
         guard.zeroize();
-
         assert_eq!(guard.witness.holder_secret, [0; 32]);
         assert!(
             guard
@@ -4270,7 +4051,6 @@ mod tests {
                 .all(|byte| *byte == 0)
         );
     }
-
     fn approval(
         signer_id: &str,
         keypair: &KeyPair,
@@ -4297,7 +4077,6 @@ mod tests {
         .to_vec();
         approval
     }
-
     fn service_fixture() -> (
         TempDir,
         PopCredentialService,
@@ -4332,7 +4111,6 @@ mod tests {
         .expect("service");
         (temp, service, policy, wallet, approvers, enrollment)
     }
-
     #[test]
     fn enrollment_is_encrypted_and_debug_is_payload_free() {
         let (_temp, mut service, _policy, _wallet, _approvers, enrollment) = service_fixture();
@@ -4358,7 +4136,6 @@ mod tests {
                 .any(|window| window == b"private-applicant")
         );
     }
-
     #[test]
     fn enrollment_replay_is_idempotent_only_for_identical_ciphertext() {
         let (_temp, mut service, _policy, _wallet, _approvers, mut enrollment) = service_fixture();
@@ -4371,7 +4148,6 @@ mod tests {
             Err(PopCredentialServiceError::EnrollmentReplay)
         );
     }
-
     fn fail_before_checkpoint_rename(
         _path: &Path,
         _bytes: &[u8],
@@ -4381,11 +4157,9 @@ mod tests {
             committed: false,
         })
     }
-
     fn fail_checkpoint_parent_sync(_: &Path) -> io::Result<()> {
         Err(io::Error::other("injected parent sync failure"))
     }
-
     fn fail_after_checkpoint_rename(
         path: &Path,
         bytes: &[u8],
@@ -4405,13 +4179,11 @@ mod tests {
             committed: error.committed,
         })
     }
-
     #[test]
     fn crash_before_and_after_rename_preserve_transaction_boundaries() {
         let (_temp, mut service, policy, _wallet, approvers, enrollment) = service_fixture();
         let canonical = encode_canonical(&enrollment).unwrap();
         let original_checkpoint = fs::read(&service.checkpoint_path).unwrap();
-
         service.checkpoint_writer = fail_before_checkpoint_rename;
         assert_eq!(
             service.submit_enrollment(&canonical, 20),
@@ -4422,7 +4194,6 @@ mod tests {
             fs::read(&service.checkpoint_path).unwrap(),
             original_checkpoint
         );
-
         service.checkpoint_writer = fail_after_checkpoint_rename;
         assert_eq!(
             service.submit_enrollment(&canonical, 20),
@@ -4449,7 +4220,6 @@ mod tests {
             Err(PopCredentialServiceError::CheckpointDurabilityUncertain)
         );
     }
-
     #[test]
     fn dual_control_rejects_duplicates_wrong_policy_and_revoked_signer() {
         let (_temp, mut service, policy, _wallet, approvers, enrollment) = service_fixture();
@@ -4493,7 +4263,6 @@ mod tests {
             Err(PopCredentialServiceError::SignerRevoked)
         );
     }
-
     #[test]
     fn approval_policy_rejects_duplicate_keys_under_distinct_ids() {
         let signer = TestSigner {
@@ -4510,10 +4279,8 @@ mod tests {
             })
         );
     }
-
     #[derive(Debug)]
     struct FailingSubmitter;
-
     impl PopRegistrySubmitter for FailingSubmitter {
         fn submit(
             &self,
@@ -4523,7 +4290,6 @@ mod tests {
             Err("private upstream details".to_owned())
         }
     }
-
     #[test]
     fn retry_exhaustion_is_durable_and_payload_free() {
         let (_temp, mut service, policy, _wallet, _approvers, _enrollment) = service_fixture();
@@ -4578,7 +4344,6 @@ mod tests {
                 .any(|window| window == b"private upstream details")
         );
     }
-
     #[test]
     fn nullifier_replay_cache_is_atomic_and_survives_restart() {
         let (temp, mut service, policy, _wallet, _approvers, _enrollment) = service_fixture();
@@ -4593,7 +4358,6 @@ mod tests {
             Err(PopCredentialServiceError::ReplayedProof)
         );
         drop(service);
-
         let mut restored = PopCredentialService::open(
             canonical_temp_root(&temp),
             policy,
@@ -4606,7 +4370,6 @@ mod tests {
             Err(PopCredentialServiceError::ReplayedProof)
         );
     }
-
     #[test]
     fn semantically_poisoned_checkpoint_policy_binding_fails_closed() {
         let (temp, mut service, policy, _wallet, _approvers, enrollment) = service_fixture();
@@ -4630,7 +4393,6 @@ mod tests {
         let poisoned_bytes = encode_canonical(&poisoned).unwrap();
         drop(service);
         write_local_private_checkpoint_atomic(&checkpoint_path, &poisoned_bytes).unwrap();
-
         assert_eq!(
             PopCredentialService::open(
                 canonical_temp_root(&temp),
@@ -4642,7 +4404,6 @@ mod tests {
             PopCredentialServiceError::PoisonedCheckpoint
         );
     }
-
     #[test]
     fn poisoned_checkpoint_and_symlink_target_fail_closed() {
         let (temp, service, policy, _wallet, _approvers, _enrollment) = service_fixture();
@@ -4665,7 +4426,6 @@ mod tests {
             .expect_err("poisoned"),
             PopCredentialServiceError::PoisonedCheckpoint
         );
-
         fs::remove_file(&checkpoint).expect("remove poison");
         let outside = temp.path().join("outside");
         fs::write(&outside, b"sentinel").expect("outside");
@@ -4684,7 +4444,6 @@ mod tests {
         );
         assert_eq!(fs::read(outside).unwrap(), b"sentinel");
     }
-
     fn empty_signature(key: [u8; 32]) -> PopSignatureV1 {
         PopSignatureV1 {
             algorithm: PopSignatureAlgorithmV1::Ed25519,
@@ -4692,7 +4451,6 @@ mod tests {
             signature: vec![1; 64],
         }
     }
-
     fn unsigned_root(
         key: [u8; 32],
         version: u64,
@@ -4711,7 +4469,6 @@ mod tests {
             publisher_signature: empty_signature(key),
         }
     }
-
     fn unsigned_revocations(key: [u8; 32], root: [u8; 32], version: u64) -> PopRevocationListV1 {
         PopRevocationListV1 {
             version: sorafs_manifest::POP_REVOCATION_LIST_VERSION_V1,
@@ -4726,7 +4483,6 @@ mod tests {
             publisher_signature: empty_signature(key),
         }
     }
-
     fn projection(
         signer: &TestSigner,
         height: u64,
@@ -4774,7 +4530,6 @@ mod tests {
             revoked_issuer_public_keys: Vec::new(),
         }
     }
-
     #[test]
     fn finalized_sync_rejects_cursor_root_rollback_and_wrong_policy() {
         let signer = TestSigner {
@@ -4784,14 +4539,12 @@ mod tests {
         let policy = policy(&signer, &[ed25519(2), ed25519(3)]);
         let first = projection(&signer, 1, None, 2, None, policy.issuer_policy_digest);
         validate_projection(None, &first, &policy).expect("first");
-
         let mut wrong_policy = first.clone();
         wrong_policy.issuer_policy_digest = [0x99; 32];
         assert_eq!(
             validate_projection(None, &wrong_policy, &policy),
             Err(PopCredentialServiceError::WrongPolicy)
         );
-
         let rollback = projection(
             &signer,
             2,
@@ -4804,7 +4557,6 @@ mod tests {
             validate_projection(Some(&first), &rollback, &policy),
             Err(PopCredentialServiceError::RootRollback)
         );
-
         let fork = projection(
             &signer,
             2,
@@ -4826,7 +4578,6 @@ mod tests {
             Err(PopCredentialServiceError::RootRollback)
         );
     }
-
     #[test]
     fn wallet_vault_rejects_symlink_and_wrong_wrapping_key() {
         let temp = TempDir::new().unwrap();
@@ -4900,7 +4651,6 @@ mod tests {
             Err(PopCredentialServiceError::KeyWrapping)
         );
     }
-
     #[test]
     fn sensitive_struct_debug_is_redacted() {
         let mut rng = ChaCha20Rng::from_seed([0x23; 32]);

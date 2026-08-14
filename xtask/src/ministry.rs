@@ -1,10 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
-    error::Error,
-    fs,
-    path::{Path, PathBuf},
-};
-
+use crate::ministry_panel::{self, SynthesizeOptions as PanelSynthesizeOptions};
 use blake3::Hasher;
 use iroha_data_model::ministry::{ReviewPanelSummaryV1, TransparencyReleaseV1};
 use norito::{
@@ -16,10 +10,13 @@ use rand_chacha::ChaCha20Rng;
 use rand_distr::{Distribution, Normal};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as SerdeJsonValue;
+use std::{
+    collections::{BTreeMap, BTreeSet, HashSet},
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
-use crate::ministry_panel::{self, SynthesizeOptions as PanelSynthesizeOptions};
-
 pub enum Command {
     Ingest(Box<IngestOptions>),
     Build(Box<BuildOptions>),
@@ -27,7 +24,6 @@ pub enum Command {
     Anchor(Box<AnchorOptions>),
     VolunteerValidate(Box<VolunteerValidateOptions>),
 }
-
 #[derive(Clone)]
 pub struct IngestOptions {
     pub quarter: String,
@@ -40,7 +36,6 @@ pub struct IngestOptions {
     pub panel_summary: Option<PanelSummaryRequest>,
     pub output_path: PathBuf,
 }
-
 #[derive(Clone)]
 pub struct PanelSummaryRequest {
     pub proposal_path: PathBuf,
@@ -51,7 +46,6 @@ pub struct PanelSummaryRequest {
     pub language_override: Option<String>,
     pub generated_at_unix_ms: Option<u64>,
 }
-
 #[derive(Clone)]
 pub struct BuildOptions {
     pub ingest_path: PathBuf,
@@ -59,7 +53,6 @@ pub struct BuildOptions {
     pub manifest_output: PathBuf,
     pub note: Option<String>,
 }
-
 #[derive(Clone)]
 pub struct SanitizeOptions {
     pub ingest_path: PathBuf,
@@ -72,21 +65,17 @@ pub struct SanitizeOptions {
     pub min_accuracy_samples: u64,
     pub seed: Option<u64>,
 }
-
 #[derive(Clone)]
 pub struct AnchorOptions {
     pub action_path: PathBuf,
     pub governance_dir: PathBuf,
 }
-
 #[derive(Clone)]
 pub struct VolunteerValidateOptions {
     pub inputs: Vec<PathBuf>,
     pub json_output: Option<PathBuf>,
 }
-
 const APPEAL_SLA_HOURS: f64 = 72.0;
-
 #[derive(Debug, JsonSerialize, JsonDeserialize)]
 struct QuarterIngestSnapshot {
     quarter: String,
@@ -101,7 +90,6 @@ struct QuarterIngestSnapshot {
     review_panel_summary: Option<ReviewPanelSummaryV1>,
     source_checksums: BTreeMap<String, String>,
 }
-
 #[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]
 struct RedTeamScenario {
     drill_id: String,
@@ -118,14 +106,12 @@ struct RedTeamScenario {
     #[serde(default)]
     sorafs_cid: Option<String>,
 }
-
 #[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]
 struct AiMetricSummary {
     total_samples: u64,
     false_positives: u64,
     false_negatives: u64,
 }
-
 #[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]
 struct AppealsSummary {
     total: u64,
@@ -134,20 +120,17 @@ struct AppealsSummary {
     sla_breaches: u64,
     avg_resolution_hours: f64,
 }
-
 #[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]
 struct DenylistSummary {
     additions: u64,
     removals: u64,
     emergency_actions: u64,
 }
-
 #[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]
 struct TreasurySummary {
     total_deposits_xor: i64,
     total_payouts_xor: i64,
 }
-
 #[derive(Debug, Default, Serialize, Deserialize, JsonSerialize, JsonDeserialize, Clone)]
 struct VolunteerSummary {
     total_briefs: u64,
@@ -157,7 +140,6 @@ struct VolunteerSummary {
     disclosures_missing: u64,
     off_topic_rejections: u64,
 }
-
 #[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
 struct QuarterDashboard {
     quarter: String,
@@ -170,7 +152,6 @@ struct QuarterDashboard {
     #[serde(default)]
     red_team: Vec<RedTeamScenario>,
 }
-
 #[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
 struct AiAccuracyRow {
     total_samples: u64,
@@ -178,7 +159,6 @@ struct AiAccuracyRow {
     false_negative_rate: f64,
     accuracy: f64,
 }
-
 #[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
 struct AppealDashboard {
     total: u64,
@@ -186,7 +166,6 @@ struct AppealDashboard {
     avg_resolution_hours: f64,
     sla_breach_rate: f64,
 }
-
 #[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
 struct DenylistDashboard {
     additions: u64,
@@ -194,14 +173,12 @@ struct DenylistDashboard {
     emergency_actions: u64,
     net_delta: i64,
 }
-
 #[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
 struct TreasuryDashboard {
     total_deposits_xor: String,
     total_payouts_xor: String,
     net_flow_xor: String,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct TransparencyManifest {
     version: u32,
@@ -211,7 +188,6 @@ struct TransparencyManifest {
     metrics_checksum: String,
     note: Option<String>,
 }
-
 #[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
 struct SanitizedMetrics {
     quarter: String,
@@ -225,7 +201,6 @@ struct SanitizedMetrics {
     #[serde(default)]
     red_team: Vec<RedTeamScenario>,
 }
-
 #[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
 struct SanitizerMetadata {
     epsilon_counts: f64,
@@ -235,7 +210,6 @@ struct SanitizerMetadata {
     min_accuracy_samples: u64,
     seed_commitment: String,
 }
-
 #[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
 struct SanitizedAppeals {
     total: u64,
@@ -244,7 +218,6 @@ struct SanitizedAppeals {
     sla_breaches: u64,
     avg_resolution_hours: f64,
 }
-
 #[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
 struct SanitizedDenylist {
     additions: u64,
@@ -252,7 +225,6 @@ struct SanitizedDenylist {
     emergency_actions: u64,
     net_delta: i64,
 }
-
 #[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
 struct SanitizedVolunteer {
     total_briefs: u64,
@@ -262,7 +234,6 @@ struct SanitizedVolunteer {
     disclosures_missing: u64,
     off_topic_rejections: u64,
 }
-
 #[derive(Debug, Serialize, Deserialize, JsonSerialize, JsonDeserialize)]
 struct SanitizedPolicy {
     total_samples: u64,
@@ -271,7 +242,6 @@ struct SanitizedPolicy {
     accuracy: f64,
     suppressed: bool,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct DpReport {
     quarter: String,
@@ -286,7 +256,6 @@ struct DpReport {
     accuracy_buckets: Vec<AccuracyNoiseRecord>,
     suppressed_buckets: Vec<String>,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct CountNoiseRecord {
     bucket: String,
@@ -295,7 +264,6 @@ struct CountNoiseRecord {
     sanitized: f64,
     suppressed: bool,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct AccuracyNoiseRecord {
     policy: String,
@@ -310,7 +278,6 @@ struct AccuracyNoiseRecord {
     sanitized_false_negative: f64,
     suppressed: bool,
 }
-
 pub fn run(command: Command) -> Result<(), Box<dyn Error>> {
     match command {
         Command::Ingest(options) => run_ingest(*options),
@@ -320,7 +287,6 @@ pub fn run(command: Command) -> Result<(), Box<dyn Error>> {
         Command::VolunteerValidate(options) => run_volunteer_validate(*options),
     }
 }
-
 fn parse_red_team_report(path: &Path) -> Result<RedTeamScenario, Box<dyn Error>> {
     let content = fs::read_to_string(path)?;
     let lines: Vec<&str> = content.lines().collect();
@@ -332,7 +298,6 @@ fn parse_red_team_report(path: &Path) -> Result<RedTeamScenario, Box<dyn Error>>
     let dashboards_sha = capture_report_value(&lines, "Dashboards frozen from commit:");
     let evidence_path = capture_report_value(&lines, "Evidence bundle:");
     let sorafs_cid = capture_report_value(&lines, "SoraFS CID (optional):");
-
     let operators = operators_raw
         .map(|text| {
             text.split([',', '|'])
@@ -342,7 +307,6 @@ fn parse_red_team_report(path: &Path) -> Result<RedTeamScenario, Box<dyn Error>>
                 .collect()
         })
         .unwrap_or_default();
-
     Ok(RedTeamScenario {
         drill_id,
         date_window,
@@ -353,7 +317,6 @@ fn parse_red_team_report(path: &Path) -> Result<RedTeamScenario, Box<dyn Error>>
         sorafs_cid,
     })
 }
-
 fn capture_report_value(lines: &[&str], label: &str) -> Option<String> {
     let needle = format!("**{label}**");
     lines.iter().find_map(|line| {
@@ -368,7 +331,6 @@ fn capture_report_value(lines: &[&str], label: &str) -> Option<String> {
         }
     })
 }
-
 fn run_ingest(options: IngestOptions) -> Result<(), Box<dyn Error>> {
     let ledger_entries = load_array(&options.ledger_path)?;
     let appeals_entries = load_array(&options.appeals_path)?;
@@ -379,7 +341,6 @@ fn run_ingest(options: IngestOptions) -> Result<(), Box<dyn Error>> {
         None => None,
     };
     let mut red_team_scenarios: Vec<RedTeamScenario> = Vec::new();
-
     let mut source_checksums = collect_checksums(&[
         ("ledger", &options.ledger_path),
         ("appeals", &options.appeals_path),
@@ -430,7 +391,6 @@ fn run_ingest(options: IngestOptions) -> Result<(), Box<dyn Error>> {
     } else {
         None
     };
-
     let snapshot = QuarterIngestSnapshot {
         quarter: options.quarter,
         generated_at: now_rfc3339(),
@@ -446,7 +406,6 @@ fn run_ingest(options: IngestOptions) -> Result<(), Box<dyn Error>> {
         review_panel_summary,
         source_checksums,
     };
-
     write_json_file(&options.output_path, &snapshot)?;
     println!(
         "wrote ministry transparency ingest snapshot to {}",
@@ -454,11 +413,9 @@ fn run_ingest(options: IngestOptions) -> Result<(), Box<dyn Error>> {
     );
     Ok(())
 }
-
 fn run_build(options: BuildOptions) -> Result<(), Box<dyn Error>> {
     let bytes = fs::read(&options.ingest_path)?;
     let ingest: QuarterIngestSnapshot = json::from_slice(&bytes)?;
-
     let dashboard = QuarterDashboard {
         quarter: ingest.quarter.clone(),
         generated_at: now_rfc3339(),
@@ -469,9 +426,7 @@ fn run_build(options: BuildOptions) -> Result<(), Box<dyn Error>> {
         volunteer: ingest.volunteer.clone(),
         red_team: ingest.red_team.clone(),
     };
-
     write_json_file(&options.metrics_output, &dashboard)?;
-
     let manifest = TransparencyManifest {
         version: 1,
         quarter: ingest.quarter,
@@ -481,7 +436,6 @@ fn run_build(options: BuildOptions) -> Result<(), Box<dyn Error>> {
         note: options.note,
     };
     write_json_file(&options.manifest_output, &manifest)?;
-
     println!(
         "wrote ministry transparency metrics to {} and manifest to {}",
         options.metrics_output.display(),
@@ -489,11 +443,9 @@ fn run_build(options: BuildOptions) -> Result<(), Box<dyn Error>> {
     );
     Ok(())
 }
-
 fn run_sanitize(options: SanitizeOptions) -> Result<(), Box<dyn Error>> {
     let bytes = fs::read(&options.ingest_path)?;
     let ingest: QuarterIngestSnapshot = json::from_slice(&bytes)?;
-
     let seed = options.seed.unwrap_or_else(rand::random::<u64>);
     let mut rng = ChaCha20Rng::seed_from_u64(seed);
     let seed_commitment = {
@@ -501,11 +453,9 @@ fn run_sanitize(options: SanitizeOptions) -> Result<(), Box<dyn Error>> {
         buf.extend_from_slice(ingest.quarter.as_bytes());
         blake3::hash(&buf).to_hex().to_string()
     };
-
     let mut count_records = Vec::new();
     let mut accuracy_records = Vec::new();
     let mut suppressed = BTreeSet::new();
-
     let appeals_total = sanitize_count(
         "appeals.total",
         ingest.appeals.total,
@@ -557,7 +507,6 @@ fn run_sanitize(options: SanitizeOptions) -> Result<(), Box<dyn Error>> {
         sanitized: appeals_avg_resolution_hours,
         suppressed: false,
     });
-
     let denylist_additions = sanitize_count(
         "denylist.additions",
         ingest.denylist.additions,
@@ -585,7 +534,6 @@ fn run_sanitize(options: SanitizeOptions) -> Result<(), Box<dyn Error>> {
         &mut count_records,
         &mut suppressed,
     );
-
     let sanitized_volunteer = ingest
         .volunteer
         .as_ref()
@@ -595,11 +543,9 @@ fn run_sanitize(options: SanitizeOptions) -> Result<(), Box<dyn Error>> {
         .filter(|vol| {
             vol.total_briefs > 0 || vol.off_topic_rejections > 0 || !vol.languages.is_empty()
         });
-
     let (ai_policies, policy_records) =
         sanitize_ai_policies(&ingest.ai_metrics, &options, &mut rng, &mut suppressed);
     accuracy_records.extend(policy_records);
-
     let sanitized = SanitizedMetrics {
         quarter: ingest.quarter.clone(),
         generated_at: now_rfc3339(),
@@ -629,7 +575,6 @@ fn run_sanitize(options: SanitizeOptions) -> Result<(), Box<dyn Error>> {
         ai_policies,
         red_team: ingest.red_team.clone(),
     };
-
     let report = DpReport {
         quarter: ingest.quarter,
         generated_at: sanitized.generated_at.clone(),
@@ -643,10 +588,8 @@ fn run_sanitize(options: SanitizeOptions) -> Result<(), Box<dyn Error>> {
         accuracy_buckets: accuracy_records,
         suppressed_buckets: suppressed.into_iter().collect(),
     };
-
     write_json_file(&options.output_path, &sanitized)?;
     write_json_file(&options.report_path, &report)?;
-
     println!(
         "wrote sanitized transparency metrics to {} and DP report to {}",
         options.output_path.display(),
@@ -654,12 +597,10 @@ fn run_sanitize(options: SanitizeOptions) -> Result<(), Box<dyn Error>> {
     );
     Ok(())
 }
-
 fn run_anchor(options: AnchorOptions) -> Result<(), Box<dyn Error>> {
     let raw = fs::read(&options.action_path)?;
     let json_value: SerdeJsonValue = serde_json::from_slice(&raw)?;
     let payload: TransparencyReleaseActionPayload = serde_json::from_value(json_value.clone())?;
-
     if payload.action != "TransparencyReleaseV1" {
         return Err(format!(
             "unsupported action `{}` in {} (expected TransparencyReleaseV1)",
@@ -668,7 +609,6 @@ fn run_anchor(options: AnchorOptions) -> Result<(), Box<dyn Error>> {
         )
         .into());
     }
-
     if payload.version != 1 {
         return Err(format!(
             "unsupported TransparencyReleaseV1 version {} in {} (expected 1)",
@@ -677,7 +617,6 @@ fn run_anchor(options: AnchorOptions) -> Result<(), Box<dyn Error>> {
         )
         .into());
     }
-
     let generated_at = OffsetDateTime::parse(&payload.generated_at, &Rfc3339)
         .map_err(|err| format!("invalid generated_at timestamp: {err}"))?;
     let generated_at_ms = generated_at.unix_timestamp_nanos() / 1_000_000;
@@ -687,7 +626,6 @@ fn run_anchor(options: AnchorOptions) -> Result<(), Box<dyn Error>> {
         );
     }
     let generated_at_ms = generated_at_ms as u64;
-
     let manifest_digest = decode_fixed_hex::<32>(
         &payload.manifest_digest_blake2b_256,
         "manifest_digest_blake2b_256",
@@ -699,7 +637,6 @@ fn run_anchor(options: AnchorOptions) -> Result<(), Box<dyn Error>> {
         }
         _ => None,
     };
-
     let release = TransparencyReleaseV1 {
         quarter: payload.quarter.clone(),
         generated_at_unix_ms: generated_at_ms,
@@ -708,7 +645,6 @@ fn run_anchor(options: AnchorOptions) -> Result<(), Box<dyn Error>> {
         dashboards_git_sha,
         note: payload.note.clone(),
     };
-
     let encoded = to_bytes(&release)?;
     let quarter_dir = options
         .governance_dir
@@ -720,34 +656,28 @@ fn run_anchor(options: AnchorOptions) -> Result<(), Box<dyn Error>> {
     let base_name = format!("{}_{}", quarter_slug, generated_at_ms);
     let norito_path = quarter_dir.join(format!("{base_name}.to"));
     fs::write(&norito_path, &encoded)?;
-
     let mut json_text = serde_json::to_string_pretty(&json_value)?;
     json_text.push('\n');
     let json_path = quarter_dir.join(format!("{base_name}.json"));
     fs::write(&json_path, json_text)?;
-
     println!(
         "anchored TransparencyReleaseV1 for {} at {}",
         payload.quarter,
         norito_path.display()
     );
-
     Ok(())
 }
-
 fn run_volunteer_validate(options: VolunteerValidateOptions) -> Result<(), Box<dyn Error>> {
     if options.inputs.is_empty() {
         return Err(
             "ministry-transparency volunteer-validate requires at least one --input <path>".into(),
         );
     }
-
     let mut total_entries = 0usize;
     let mut total_errors = 0usize;
     let mut total_warnings = 0usize;
     let mut entries_with_errors = 0usize;
     let mut entry_summaries: Vec<VolunteerValidationEntrySummary> = Vec::new();
-
     for path in &options.inputs {
         let bytes = fs::read(path)
             .map_err(|err| format!("failed to read volunteer brief `{}`: {err}", path.display()))?;
@@ -763,14 +693,12 @@ fn run_volunteer_validate(options: VolunteerValidateOptions) -> Result<(), Box<d
                 path.display()
             )
         })?;
-
         if entries.is_empty() {
             println!("{}: 1 error(s), 0 warning(s)", path.display());
             println!("  error: no volunteer briefs were found in this file");
             total_errors += 1;
             continue;
         }
-
         for (idx, entry) in entries.iter().enumerate() {
             let base = if entries.len() == 1 {
                 "brief".to_string()
@@ -811,11 +739,9 @@ fn run_volunteer_validate(options: VolunteerValidateOptions) -> Result<(), Box<d
             });
         }
     }
-
     if total_entries == 0 && total_errors == 0 {
         return Err("no volunteer briefs were validated; check the provided --input paths".into());
     }
-
     if let Some(output_path) = &options.json_output {
         let timestamp = OffsetDateTime::now_utc();
         let nanos = timestamp.unix_timestamp_nanos();
@@ -839,18 +765,15 @@ fn run_volunteer_validate(options: VolunteerValidateOptions) -> Result<(), Box<d
         };
         write_json_file(output_path, &report)?;
     }
-
     println!(
         "volunteer validation summary: {total_entries} brief(s), {total_errors} error(s), {total_warnings} warning(s)"
     );
-
     if total_errors > 0 {
         Err("volunteer validation reported errors".into())
     } else {
         Ok(())
     }
 }
-
 fn extract_volunteer_entries(value: &Value) -> Result<Vec<&Value>, String> {
     if let Some(array) = value.as_array() {
         Ok(array.iter().collect())
@@ -860,7 +783,6 @@ fn extract_volunteer_entries(value: &Value) -> Result<Vec<&Value>, String> {
         Err("payload must be a JSON object or an array of objects".into())
     }
 }
-
 #[derive(Debug, Default, Clone, JsonSerialize)]
 struct VolunteerEntryMetadata {
     brief_id: Option<String>,
@@ -870,14 +792,12 @@ struct VolunteerEntryMetadata {
     submitted_at: Option<String>,
     moderation_off_topic: Option<bool>,
 }
-
 #[derive(Default)]
 struct VolunteerValidationReport {
     errors: Vec<String>,
     warnings: Vec<String>,
     metadata: VolunteerEntryMetadata,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct VolunteerValidationEntrySummary {
     input_path: String,
@@ -886,7 +806,6 @@ struct VolunteerValidationEntrySummary {
     warnings: Vec<String>,
     metadata: VolunteerEntryMetadata,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct VolunteerValidationJsonReport {
     generated_at_unix_ms: u64,
@@ -897,7 +816,6 @@ struct VolunteerValidationJsonReport {
     inputs: Vec<String>,
     entries: Vec<VolunteerValidationEntrySummary>,
 }
-
 const STANCE_VALUES: &[&str] = &["support", "oppose", "context"];
 const FACT_STATUS_VALUES: &[&str] = &["corroborated", "disputed", "context-only"];
 const IMPACT_VALUES: &[&str] = &["governance", "technical", "compliance", "community"];
@@ -910,10 +828,8 @@ const MODERATION_TAGS: &[&str] = &[
     "astroturf",
     "policy-escalation",
 ];
-
 fn validate_volunteer_entry(entry: &Value, base: &str) -> VolunteerValidationReport {
     let mut report = VolunteerValidationReport::default();
-
     if let Some(submitted_at) =
         require_nonempty_string_field(entry, "submitted_at", base, &mut report.errors)
     {
@@ -924,7 +840,6 @@ fn validate_volunteer_entry(entry: &Value, base: &str) -> VolunteerValidationRep
         }
         report.metadata.submitted_at = Some(submitted_at);
     }
-
     if let Some(stance) = require_nonempty_string_field(entry, "stance", base, &mut report.errors) {
         if !is_allowed(&stance, STANCE_VALUES) {
             report.errors.push(format!(
@@ -935,7 +850,6 @@ fn validate_volunteer_entry(entry: &Value, base: &str) -> VolunteerValidationRep
         }
         report.metadata.stance = Some(stance);
     }
-
     if let Some(brief_id) =
         require_nonempty_string_field(entry, "brief_id", base, &mut report.errors)
     {
@@ -951,7 +865,6 @@ fn validate_volunteer_entry(entry: &Value, base: &str) -> VolunteerValidationRep
     {
         report.metadata.language = Some(language);
     }
-
     if let Some(summary) = require_object_field(entry, "summary", base, &mut report.errors) {
         let summary_base = field_path(base, "summary");
         if require_nonempty_string_field(summary, "abstract", &summary_base, &mut report.errors)
@@ -970,7 +883,6 @@ fn validate_volunteer_entry(entry: &Value, base: &str) -> VolunteerValidationRep
             &mut report.errors,
         );
     }
-
     let mut author_certified_no_conflicts = false;
     if let Some(author) = require_object_field(entry, "author", base, &mut report.errors) {
         let author_base = field_path(base, "author");
@@ -986,7 +898,6 @@ fn validate_volunteer_entry(entry: &Value, base: &str) -> VolunteerValidationRep
             }
         }
     }
-
     if let Some(facts) = require_array_field(entry, "fact_table", base, &mut report.errors) {
         if facts.is_empty() {
             report.errors.push(format!(
@@ -1072,7 +983,6 @@ fn validate_volunteer_entry(entry: &Value, base: &str) -> VolunteerValidationRep
             }
         }
     }
-
     let mut disclosures_present = false;
     if let Some(disclosures_value) = entry.get("disclosures") {
         match disclosures_value.as_array() {
@@ -1131,14 +1041,12 @@ fn validate_volunteer_entry(entry: &Value, base: &str) -> VolunteerValidationRep
             )),
         }
     }
-
     if !disclosures_present && !author_certified_no_conflicts {
         report.errors.push(format!(
             "{} must include a disclosures array or set author.no_conflicts_certified=true",
             base
         ));
     }
-
     if let Some(moderation) = optional_object_field(entry, "moderation", base, &mut report.errors) {
         let moderation_base = field_path(base, "moderation");
         if let Some(value) = moderation.get("off_topic") {
@@ -1185,10 +1093,8 @@ fn validate_volunteer_entry(entry: &Value, base: &str) -> VolunteerValidationRep
             }
         }
     }
-
     report
 }
-
 fn require_nonempty_string_field(
     value: &Value,
     field: &str,
@@ -1210,7 +1116,6 @@ fn require_nonempty_string_field(
         }
     }
 }
-
 fn require_object_field<'a>(
     value: &'a Value,
     field: &str,
@@ -1230,7 +1135,6 @@ fn require_object_field<'a>(
         }
     }
 }
-
 fn optional_object_field<'a>(
     value: &'a Value,
     field: &str,
@@ -1247,7 +1151,6 @@ fn optional_object_field<'a>(
         None => None,
     }
 }
-
 fn require_array_field<'a>(
     value: &'a Value,
     field: &str,
@@ -1269,7 +1172,6 @@ fn require_array_field<'a>(
         }
     }
 }
-
 fn field_path(base: &str, field: &str) -> String {
     if base.is_empty() {
         field.to_string()
@@ -1277,17 +1179,14 @@ fn field_path(base: &str, field: &str) -> String {
         format!("{base}.{field}")
     }
 }
-
 fn is_allowed(value: &str, allowed: &[&str]) -> bool {
     allowed
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(value))
 }
-
 fn is_hex_digest(value: &str) -> bool {
     value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
-
 #[derive(Debug, Deserialize)]
 struct TransparencyReleaseActionPayload {
     action: String,
@@ -1299,14 +1198,12 @@ struct TransparencyReleaseActionPayload {
     dashboards_git_sha: Option<String>,
     note: Option<String>,
 }
-
 fn decode_hex_vec(input: &str, label: &str) -> Result<Vec<u8>, Box<dyn Error>> {
     let trimmed = input.trim();
     let normalised = trimmed.strip_prefix("0x").unwrap_or(trimmed);
     let bytes = hex::decode(normalised).map_err(|err| format!("invalid {label}: {err}"))?;
     Ok(bytes)
 }
-
 fn decode_fixed_hex<const N: usize>(input: &str, label: &str) -> Result<[u8; N], Box<dyn Error>> {
     let bytes = decode_hex_vec(input, label)?;
     if bytes.len() != N {
@@ -1316,7 +1213,6 @@ fn decode_fixed_hex<const N: usize>(input: &str, label: &str) -> Result<[u8; N],
     array.copy_from_slice(&bytes);
     Ok(array)
 }
-
 fn sanitize_volunteer_summary(
     summary: &VolunteerSummary,
     options: &SanitizeOptions,
@@ -1394,7 +1290,6 @@ fn sanitize_volunteer_summary(
         off_topic_rejections,
     }
 }
-
 fn sanitize_ai_policies(
     metrics: &BTreeMap<String, AiMetricSummary>,
     options: &SanitizeOptions,
@@ -1421,29 +1316,24 @@ fn sanitize_ai_policies(
             });
             continue;
         }
-
         let noise_samples = gaussian_noise(options.epsilon_accuracy, options.delta, rng);
         let noisy_samples =
             (summary.total_samples as f64 + noise_samples).clamp(0.0, u64::MAX as f64);
         let sanitized_samples = noisy_samples.round().max(1.0);
         let noise_fp = gaussian_noise(options.epsilon_accuracy, options.delta, rng);
         let noise_fn = gaussian_noise(options.epsilon_accuracy, options.delta, rng);
-
         let mut sanitized_fp =
             (summary.false_positives as f64 + noise_fp).clamp(0.0, sanitized_samples);
         let mut sanitized_fn =
             (summary.false_negatives as f64 + noise_fn).clamp(0.0, sanitized_samples);
-
         if sanitized_fp + sanitized_fn > sanitized_samples {
             let scale = sanitized_samples / (sanitized_fp + sanitized_fn);
             sanitized_fp *= scale;
             sanitized_fn *= scale;
         }
-
         let fp_rate = (sanitized_fp / sanitized_samples).clamp(0.0, 1.0);
         let fn_rate = (sanitized_fn / sanitized_samples).clamp(0.0, 1.0);
         let accuracy = (1.0 - fp_rate - fn_rate).clamp(0.0, 1.0);
-
         map.insert(
             policy.clone(),
             SanitizedPolicy {
@@ -1454,7 +1344,6 @@ fn sanitize_ai_policies(
                 suppressed: false,
             },
         );
-
         records.push(AccuracyNoiseRecord {
             policy: policy.clone(),
             raw_samples: summary.total_samples,
@@ -1471,7 +1360,6 @@ fn sanitize_ai_policies(
     }
     (map, records)
 }
-
 fn sanitize_count(
     bucket: &str,
     raw: u64,
@@ -1499,7 +1387,6 @@ fn sanitize_count(
     });
     sanitized
 }
-
 fn laplace_noise(epsilon: f64, rng: &mut ChaCha20Rng) -> f64 {
     if epsilon <= 0.0 {
         return 0.0;
@@ -1510,7 +1397,6 @@ fn laplace_noise(epsilon: f64, rng: &mut ChaCha20Rng) -> f64 {
     let inner = (1.0 - 2.0 * u.abs()).max(f64::MIN_POSITIVE);
     -beta * sign * inner.ln()
 }
-
 fn gaussian_noise(epsilon: f64, delta: f64, rng: &mut ChaCha20Rng) -> f64 {
     if epsilon <= 0.0 || delta <= 0.0 {
         return 0.0;
@@ -1519,7 +1405,6 @@ fn gaussian_noise(epsilon: f64, delta: f64, rng: &mut ChaCha20Rng) -> f64 {
     let dist = Normal::new(0.0, sigma.max(f64::EPSILON)).unwrap();
     dist.sample(rng)
 }
-
 fn load_array(path: &Path) -> Result<Vec<Value>, Box<dyn Error>> {
     let raw = fs::read(path)?;
     if raw.is_empty() {
@@ -1531,7 +1416,6 @@ fn load_array(path: &Path) -> Result<Vec<Value>, Box<dyn Error>> {
         .ok_or_else(|| format!("expected JSON array in {}", path.display()))?;
     Ok(array.clone())
 }
-
 fn summarize_ai_metrics(entries: &[Value]) -> BTreeMap<String, AiMetricSummary> {
     let mut map: BTreeMap<String, AiMetricSummary> = BTreeMap::new();
     for entry in entries {
@@ -1554,7 +1438,6 @@ fn summarize_ai_metrics(entries: &[Value]) -> BTreeMap<String, AiMetricSummary> 
     }
     map
 }
-
 fn summarize_appeals(entries: &[Value]) -> AppealsSummary {
     if entries.is_empty() {
         return AppealsSummary::default();
@@ -1590,7 +1473,6 @@ fn summarize_appeals(entries: &[Value]) -> AppealsSummary {
     }
     summary
 }
-
 fn summarize_denylist(entries: &[Value]) -> DenylistSummary {
     let mut summary = DenylistSummary::default();
     for entry in entries {
@@ -1609,7 +1491,6 @@ fn summarize_denylist(entries: &[Value]) -> DenylistSummary {
     }
     summary
 }
-
 fn summarize_treasury(entries: &[Value]) -> TreasurySummary {
     let mut summary = TreasurySummary::default();
     for entry in entries {
@@ -1627,7 +1508,6 @@ fn summarize_treasury(entries: &[Value]) -> TreasurySummary {
     }
     summary
 }
-
 fn summarize_volunteer(entries: &[Value]) -> VolunteerSummary {
     let mut summary = VolunteerSummary::default();
     for entry in entries {
@@ -1657,7 +1537,6 @@ fn summarize_volunteer(entries: &[Value]) -> VolunteerSummary {
     }
     summary
 }
-
 fn is_off_topic(entry: &Value) -> bool {
     entry
         .get("moderation")
@@ -1665,7 +1544,6 @@ fn is_off_topic(entry: &Value) -> bool {
         .and_then(Value::as_bool)
         .unwrap_or(false)
 }
-
 fn has_conflict_disclosure(entry: &Value) -> bool {
     if entry
         .get("author")
@@ -1687,21 +1565,18 @@ fn has_conflict_disclosure(entry: &Value) -> bool {
         })
         .unwrap_or(false)
 }
-
 fn fact_has_citation(fact: &Value) -> bool {
     fact.get("citations")
         .and_then(Value::as_array)
         .map(|rows| rows.iter().any(|row| has_nonempty_text(Some(row))))
         .unwrap_or(false)
 }
-
 fn has_nonempty_text(value: Option<&Value>) -> bool {
     value
         .and_then(Value::as_str)
         .map(|text| !text.trim().is_empty())
         .unwrap_or(false)
 }
-
 fn build_ai_accuracy(
     summaries: &BTreeMap<String, AiMetricSummary>,
 ) -> BTreeMap<String, AiAccuracyRow> {
@@ -1722,7 +1597,6 @@ fn build_ai_accuracy(
     }
     rows
 }
-
 fn build_appeal_dashboard(summary: &AppealsSummary) -> AppealDashboard {
     AppealDashboard {
         total: summary.total,
@@ -1735,7 +1609,6 @@ fn build_appeal_dashboard(summary: &AppealsSummary) -> AppealDashboard {
         },
     }
 }
-
 fn build_denylist_dashboard(summary: &DenylistSummary) -> DenylistDashboard {
     DenylistDashboard {
         additions: summary.additions,
@@ -1744,7 +1617,6 @@ fn build_denylist_dashboard(summary: &DenylistSummary) -> DenylistDashboard {
         net_delta: summary.additions as i64 - summary.removals as i64,
     }
 }
-
 fn build_treasury_dashboard(summary: &TreasurySummary) -> TreasuryDashboard {
     let net = summary.total_deposits_xor - summary.total_payouts_xor;
     TreasuryDashboard {
@@ -1753,7 +1625,6 @@ fn build_treasury_dashboard(summary: &TreasurySummary) -> TreasuryDashboard {
         net_flow_xor: net.to_string(),
     }
 }
-
 fn extract_resolution_hours(entry: &Value) -> Option<f64> {
     if let Some(explicit) = entry.get("resolution_hours").and_then(Value::as_f64) {
         return Some(explicit);
@@ -1764,7 +1635,6 @@ fn extract_resolution_hours(entry: &Value) -> Option<f64> {
         .checked_sub(submitted_ms)
         .map(|ms| ms as f64 / 3_600_000.0)
 }
-
 fn extract_amount(value: Option<&Value>) -> Option<i64> {
     let value = value?;
     if let Some(val) = value.as_i64() {
@@ -1782,7 +1652,6 @@ fn extract_amount(value: Option<&Value>) -> Option<i64> {
     }
     None
 }
-
 fn collect_checksums(
     entries: &[(&str, &PathBuf)],
 ) -> Result<BTreeMap<String, String>, Box<dyn Error>> {
@@ -1793,14 +1662,12 @@ fn collect_checksums(
     }
     Ok(map)
 }
-
 fn file_checksum(path: &Path) -> Result<String, Box<dyn Error>> {
     let data = fs::read(path)?;
     let mut hasher = Hasher::new();
     hasher.update(&data);
     Ok(hasher.finalize().to_hex().to_string())
 }
-
 fn write_json_file<T: ?Sized + JsonSerialize>(
     path: &Path,
     value: &T,
@@ -1814,15 +1681,14 @@ fn write_json_file<T: ?Sized + JsonSerialize>(
     fs::write(path, text)?;
     Ok(())
 }
-
 fn now_rfc3339() -> String {
     let now = OffsetDateTime::now_utc();
     now.format(&Rfc3339)
         .unwrap_or_else(|_| now.unix_timestamp().to_string())
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, PublicKey, Signature, SignatureOf};
     use iroha_data_model::{
         ministry::{
@@ -1840,9 +1706,6 @@ mod tests {
     };
     use norito::decode_from_bytes;
     use tempfile::{NamedTempFile, TempDir};
-
-    use super::*;
-
     #[test]
     fn volunteer_validator_accepts_template() {
         let raw =
@@ -1855,7 +1718,6 @@ mod tests {
             report.errors
         );
     }
-
     #[test]
     fn volunteer_validator_flags_missing_fields() {
         let bad = norito::json!({
@@ -1889,7 +1751,6 @@ mod tests {
                 "notes": 10
             }
         });
-
         let report = super::validate_volunteer_entry(&bad, "brief");
         assert!(
             report
@@ -1916,7 +1777,6 @@ mod tests {
             report.errors
         );
     }
-
     #[test]
     fn volunteer_validator_emits_json_report() {
         let tmp = TempDir::new().expect("tempdir");
@@ -1986,13 +1846,11 @@ mod tests {
             }
         ]);
         write_json(&input_path, &payload);
-
         let result = super::run_volunteer_validate(super::VolunteerValidateOptions {
             inputs: vec![input_path.clone()],
             json_output: Some(json_output.clone()),
         });
         assert!(result.is_err(), "expected errors due to invalid brief");
-
         let report_bytes = fs::read(&json_output).expect("report exists");
         let report_value: Value = json::from_slice(&report_bytes).expect("json report");
         assert_eq!(
@@ -2062,7 +1920,6 @@ mod tests {
             "expected error entries for invalid brief"
         );
     }
-
     #[test]
     fn volunteer_summary_enforces_template_requirements() {
         let entries = norito::json!([
@@ -2113,7 +1970,6 @@ mod tests {
                 ]
             }
         ]);
-
         let summary = super::summarize_volunteer(entries.as_array().expect("array"));
         assert_eq!(summary.total_briefs, 3);
         assert_eq!(summary.off_topic_rejections, 1);
@@ -2124,7 +1980,6 @@ mod tests {
         assert_eq!(summary.languages.get("ja"), Some(&1));
         assert!(!summary.languages.contains_key("fr"));
     }
-
     #[test]
     fn parse_red_team_report_extracts_metadata() {
         let report = NamedTempFile::new().expect("temp report");
@@ -2138,7 +1993,6 @@ mod tests {
 - **SoraFS CID (optional):** bafybeicid123
 "#;
         std::fs::write(report.path(), body).expect("write report");
-
         let scenario = super::parse_red_team_report(report.path()).expect("parse report");
         assert_eq!(scenario.drill_id, "20261012-operation-test");
         assert_eq!(
@@ -2157,7 +2011,6 @@ mod tests {
         );
         assert_eq!(scenario.sorafs_cid.as_deref(), Some("bafybeicid123"));
     }
-
     #[test]
     fn summarizes_and_builds_outputs() {
         let tmp = TempDir::new().expect("temp dir");
@@ -2169,7 +2022,6 @@ mod tests {
         let ingest_path = tmp.path().join("ingest.json");
         let metrics_path = tmp.path().join("metrics.json");
         let manifest_path = tmp.path().join("manifest.json");
-
         write_json(
             &ledger_path,
             &norito::json!([
@@ -2209,7 +2061,6 @@ mod tests {
                 {"language": "ja"}
             ]),
         );
-
         run(Command::Ingest(Box::new(IngestOptions {
             quarter: "2026-Q3".to_string(),
             ledger_path: ledger_path.clone(),
@@ -2222,9 +2073,7 @@ mod tests {
             output_path: ingest_path.clone(),
         })))
         .expect("ingest runs");
-
         assert!(ingest_path.exists());
-
         run(Command::Build(Box::new(BuildOptions {
             ingest_path: ingest_path.clone(),
             metrics_output: metrics_path.clone(),
@@ -2232,7 +2081,6 @@ mod tests {
             note: Some("test-release".to_string()),
         })))
         .expect("build runs");
-
         let dashboard: Value =
             json::from_slice(&fs::read(&metrics_path).expect("metrics read")).expect("json");
         assert_eq!(
@@ -2241,7 +2089,6 @@ mod tests {
         );
         assert!(manifest_path.exists());
     }
-
     #[test]
     fn ingest_generates_review_panel_summary_when_requested() {
         let tmp = TempDir::new().expect("tempdir");
@@ -2254,7 +2101,6 @@ mod tests {
         let volunteer_path = tmp.path().join("volunteer.json");
         let proposal_path = tmp.path().join("proposal.json");
         let manifest_path = tmp.path().join("manifest.json");
-
         write_json(
             &ledger_path,
             &norito::json!([
@@ -2270,7 +2116,6 @@ mod tests {
             &treasury_path,
             &norito::json!([{"kind": "deposit", "amount": 100}]),
         );
-
         let volunteer_payload = norito::json!([
             {
                 "brief_id": "VB-support-01",
@@ -2306,10 +2151,8 @@ mod tests {
             }
         ]);
         write_json(&volunteer_path, &volunteer_payload);
-
         write_json_file(&proposal_path, &sample_proposal()).expect("write proposal");
         write_json_file(&manifest_path, &sample_ai_manifest()).expect("write manifest");
-
         run(Command::Ingest(Box::new(IngestOptions {
             quarter: "2026-Q4".to_string(),
             ledger_path: ledger_path.clone(),
@@ -2330,7 +2173,6 @@ mod tests {
             output_path: ingest_path.clone(),
         })))
         .expect("ingest runs");
-
         let snapshot_bytes = fs::read(&ingest_path).expect("ingest read");
         let snapshot: QuarterIngestSnapshot = json::from_slice(&snapshot_bytes).expect("snapshot");
         let summary = snapshot
@@ -2338,13 +2180,11 @@ mod tests {
             .expect("review panel summary present");
         assert_eq!(summary.panel_round_id, "RP-2026-07");
         assert_eq!(summary.highlights.len(), 2);
-
         let summary_file: ReviewPanelSummaryV1 =
             json::from_slice(&fs::read(&panel_summary_path).expect("panel summary read"))
                 .expect("panel summary decode");
         assert_eq!(summary_file.overview.title, summary.overview.title);
     }
-
     #[test]
     fn sanitizes_metrics_with_deterministic_seed() {
         let tmp = TempDir::new().expect("temp dir");
@@ -2355,7 +2195,6 @@ mod tests {
         let ingest_path = tmp.path().join("ingest.json");
         let sanitized_path = tmp.path().join("sanitized.json");
         let report_path = tmp.path().join("dp_report.json");
-
         write_json(
             &ledger_path,
             &norito::json!([
@@ -2385,7 +2224,6 @@ mod tests {
                 {"kind": "payout", "amount": 200}
             ]),
         );
-
         run(Command::Ingest(Box::new(IngestOptions {
             quarter: "2026-Q3".to_string(),
             ledger_path: ledger_path.clone(),
@@ -2398,7 +2236,6 @@ mod tests {
             output_path: ingest_path.clone(),
         })))
         .expect("ingest runs");
-
         run(Command::Sanitize(Box::new(SanitizeOptions {
             ingest_path: ingest_path.clone(),
             output_path: sanitized_path.clone(),
@@ -2411,7 +2248,6 @@ mod tests {
             seed: Some(7),
         })))
         .expect("sanitize runs");
-
         let sanitized: Value =
             json::from_slice(&fs::read(&sanitized_path).expect("sanitized read")).expect("json");
         assert_eq!(
@@ -2419,7 +2255,6 @@ mod tests {
             Some("2026-Q3")
         );
         assert!(sanitized.get("metadata").is_some());
-
         let report: Value =
             json::from_slice(&fs::read(&report_path).expect("report read")).expect("json");
         assert!(
@@ -2429,7 +2264,6 @@ mod tests {
                 .is_some()
         );
     }
-
     #[test]
     fn anchor_command_writes_release_artifacts() {
         let tmp = TempDir::new().expect("tempdir");
@@ -2452,13 +2286,11 @@ mod tests {
             format!("{}\n", serde_json::to_string_pretty(&action).expect("json")),
         )
         .expect("write action");
-
         run_anchor(AnchorOptions {
             action_path: action_path.clone(),
             governance_dir: governance_dir.clone(),
         })
         .expect("anchor runs");
-
         let release_dir = governance_dir.join("ministry/releases/2026-Q3");
         let mut artifacts = fs::read_dir(&release_dir)
             .expect("release dir")
@@ -2474,7 +2306,6 @@ mod tests {
             .iter()
             .find(|path| path.extension().map(|ext| ext == "json").unwrap_or(false))
             .expect("json artefact path present");
-
         let encoded = fs::read(norito_path).expect("read norito payload");
         let decoded: TransparencyReleaseV1 =
             decode_from_bytes(&encoded).expect("decode release payload");
@@ -2484,7 +2315,6 @@ mod tests {
             decoded.sorafs_root_cid,
             vec![1, 35, 69, 103, 137, 171, 205, 239]
         );
-
         let summary: SerdeJsonValue =
             serde_json::from_slice(&fs::read(json_path).expect("read json")).expect("json");
         assert_eq!(
@@ -2492,7 +2322,6 @@ mod tests {
             Some("TransparencyReleaseV1")
         );
     }
-
     fn write_json(path: &Path, value: &Value) {
         fs::write(
             path,
@@ -2500,7 +2329,6 @@ mod tests {
         )
         .expect("write");
     }
-
     fn sample_proposal() -> AgendaProposalV1 {
         AgendaProposalV1 {
             version: AGENDA_PROPOSAL_VERSION_V1,
@@ -2535,7 +2363,6 @@ mod tests {
             duplicates: vec![],
         }
     }
-
     fn sample_ai_manifest() -> ModerationReproManifestV1 {
         let mut body = ModerationReproBodyV1 {
                 schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,

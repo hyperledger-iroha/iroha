@@ -1,8 +1,6 @@
 use eyre::{Result, WrapErr};
 use iroha::data_model::query::{dsl::SelectorTuple, parameters::SortOrder};
-
 use crate::parse_json;
-
 /// Common pagination/sorting arguments shared by list commands.
 #[derive(clap::Args, Debug, Clone)]
 pub struct CommonArgs {
@@ -25,7 +23,6 @@ pub struct CommonArgs {
     #[arg(long)]
     pub select: Option<String>,
 }
-
 pub fn parse_selector_tuple<Item>(sel: &str) -> Result<SelectorTuple<Item>>
 where
     Item: 'static,
@@ -37,17 +34,14 @@ where
             return Ok(SelectorTuple::<Item>::ids_only());
         }
     }
-
     parse_json::<SelectorTuple<Item>>(sel).wrap_err("Failed to parse --select JSON")
 }
-
 /// CLI-friendly sort order wrapper.
 #[derive(clap::ValueEnum, Clone, Debug, Copy, PartialEq, Eq)]
 pub enum CliOrder {
     Asc,
     Desc,
 }
-
 impl From<CliOrder> for SortOrder {
     fn from(o: CliOrder) -> Self {
         match o {
@@ -56,7 +50,6 @@ impl From<CliOrder> for SortOrder {
         }
     }
 }
-
 /// Arguments for "list all" invocations.
 #[derive(clap::Args, Debug, Clone)]
 pub struct AllArgs {
@@ -66,29 +59,24 @@ pub struct AllArgs {
     #[command(flatten)]
     pub common: CommonArgs,
 }
-
 /// Arguments for "list with filter" invocations.
 #[derive(Debug, Clone)]
 pub struct FilterArgs<P> {
     predicate: P,
     common: CommonArgs,
 }
-
 impl<P> FilterArgs<P> {
     pub fn new(predicate: P, common: CommonArgs) -> Self {
         Self { predicate, common }
     }
-
     pub fn decompose(self) -> (P, CommonArgs) {
         (self.predicate, self.common)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha::data_model::{prelude::*, query::dsl::CompoundPredicate};
-
     fn dummy_common_args() -> CommonArgs {
         CommonArgs {
             sort_by_metadata_key: None,
@@ -99,7 +87,6 @@ mod tests {
             select: None,
         }
     }
-
     #[test]
     fn filter_args_split_preserves_fields() {
         let predicate = CompoundPredicate::<Domain>::PASS;
@@ -117,7 +104,6 @@ mod tests {
         );
         assert_eq!(common.select, actual_common.select);
     }
-
     #[test]
     fn parse_selector_tuple_rejects_invalid_json() {
         let err = super::parse_selector_tuple::<Domain>("not-json");

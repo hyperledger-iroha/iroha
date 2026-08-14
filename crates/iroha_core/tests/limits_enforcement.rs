@@ -1,8 +1,6 @@
 //! IVM gas schedule wiring tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::smartcontracts::limits;
-
 #[test]
 fn ivm_gas_schedule_entries_match_ivm_table() {
     let entries = limits::ivm_gas_schedule_entries();
@@ -14,7 +12,6 @@ fn ivm_gas_schedule_entries_match_ivm_table() {
         assert_eq!(entry.cost, expected);
     }
 }
-
 #[test]
 fn ivm_gas_schedule_hash_matches_ivm_hash() {
     assert_eq!(limits::ivm_gas_schedule_hash(), ivm::gas::schedule_hash());

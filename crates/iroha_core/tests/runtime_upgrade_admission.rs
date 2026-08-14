@@ -1,9 +1,6 @@
 //! Admission coverage for runtime upgrade manifests under the v1-only policy.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::items_after_statements)]
-
-use std::{borrow::Cow, collections::BTreeSet, num::NonZeroU64, sync::Arc};
-
 use iroha_config::parameters::actual::RuntimeUpgradeProvenanceMode;
 use iroha_core::smartcontracts::Execute; // bring trait for `.execute()` on ISIs
 use iroha_core::{
@@ -22,9 +19,8 @@ use iroha_primitives::json::Json;
 use ivm::ProgramMetadata;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
+use std::{borrow::Cow, collections::BTreeSet, num::NonZeroU64, sync::Arc};
 const TEST_GAS_LIMIT: u64 = 1_000_000;
-
 fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     // Program: HALT (minimal body)
     let mut code = Vec::new();
@@ -41,38 +37,30 @@ fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     out.extend_from_slice(&code);
     out
 }
-
 fn fee_payment_with_gas_limit(limit: u64) -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
 }
-
 fn new_account_in_domain(account_id: &AccountId) -> Account {
     Account::new(account_id.clone()).build(account_id)
 }
-
 fn checked_keypair() -> KeyPair {
     KeyPair::try_random().expect("runtime upgrade admission fixture key generation should succeed")
 }
-
 fn install_current_lane_manifest_registry(state: &State) {
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
 }
-
 #[test]
 fn checked_keypair_preserves_default_algorithm() {
     assert_eq!(checked_keypair().algorithm(), Algorithm::default());
 }
-
 #[test]
 fn runtime_upgrade_rejects_non_v1_manifest() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-
     let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -81,17 +69,14 @@ fn runtime_upgrade_rejects_non_v1_manifest() {
     let account = new_account_in_domain(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
-
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
     use iroha_data_model::prelude::Grant;
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx)
         .expect("grant permission");
-
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
         name: "ABI version 2".to_string(),
         description: "Unsupported ABI version".to_string(),
@@ -109,7 +94,6 @@ fn runtime_upgrade_rejects_non_v1_manifest() {
     let err = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes }
         .execute(&account_id, &mut stx)
         .expect_err("non runtime upgrade must be rejected");
-
     match err {
         InstructionExecutionError::InvariantViolation(msg) => {
             assert!(
@@ -120,15 +104,12 @@ fn runtime_upgrade_rejects_non_v1_manifest() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn propose_runtime_upgrade_allows_v1_when_v1_active() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
     use iroha_data_model::prelude::Grant;
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-
     let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -137,17 +118,14 @@ fn propose_runtime_upgrade_allows_v1_when_v1_active() {
     let account = new_account_in_domain(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
-
     let header1 =
         iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
-
     let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx1)
         .expect("grant permission");
-
     let active_manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
         name: "ABI version 1".to_string(),
         description: "Activated ABI v1".to_string(),
@@ -173,12 +151,10 @@ fn propose_runtime_upgrade_allows_v1_when_v1_active() {
     );
     stx1.apply();
     block1.commit().unwrap();
-
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
-
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
         name: "ABI version 1".to_string(),
         description: "Runtime upgrade without ABI bump".to_string(),
@@ -197,20 +173,16 @@ fn propose_runtime_upgrade_allows_v1_when_v1_active() {
     iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes }
         .execute(&account_id, &mut stx2)
         .expect("v1 runtime upgrade should be accepted even with v1 active");
-
     stx2.world
         .runtime_upgrades()
         .get(&id)
         .expect("record persisted");
 }
-
 #[test]
 fn propose_runtime_upgrade_rejects_non_matching_abi_hash() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-
     let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -219,16 +191,13 @@ fn propose_runtime_upgrade_rejects_non_matching_abi_hash() {
     let account = new_account_in_domain(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
-
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx)
         .expect("grant permission");
-
     let mut manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
         name: "ABI version 1".to_string(),
         description: "Activate ABI version 1".to_string(),
@@ -248,20 +217,16 @@ fn propose_runtime_upgrade_rejects_non_matching_abi_hash() {
     let err = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes }
         .execute(&account_id, &mut stx)
         .expect_err("mismatched abi_hash must be rejected");
-
     assert!(matches!(
         err,
         InstructionExecutionError::InvariantViolation(_)
     ));
 }
-
 #[test]
 fn propose_runtime_upgrade_rejects_incorrect_added_sets() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-
     let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -270,16 +235,13 @@ fn propose_runtime_upgrade_rejects_incorrect_added_sets() {
     let account = new_account_in_domain(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
-
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx)
         .expect("grant permission");
-
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
         name: "ABI version 1".to_string(),
         description: "Activate ABI version 1".to_string(),
@@ -298,20 +260,16 @@ fn propose_runtime_upgrade_rejects_incorrect_added_sets() {
     let err = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes }
         .execute(&account_id, &mut stx)
         .expect_err("incorrect added_* sets must be rejected");
-
     assert!(matches!(
         err,
         InstructionExecutionError::InvariantViolation(_)
     ));
 }
-
 #[test]
 fn propose_runtime_upgrade_is_idempotent_for_identical_manifest() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-
     let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -320,16 +278,13 @@ fn propose_runtime_upgrade_is_idempotent_for_identical_manifest() {
     let account = new_account_in_domain(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
-
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx)
         .expect("grant permission");
-
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
         name: "ABI version 1".to_string(),
         description: "Activate ABI version 1".to_string(),
@@ -353,7 +308,6 @@ fn propose_runtime_upgrade_is_idempotent_for_identical_manifest() {
     iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes }
         .execute(&account_id, &mut stx)
         .expect("replaying identical proposal is idempotent");
-
     let id = manifest.id();
     let rec = stx
         .world
@@ -366,14 +320,11 @@ fn propose_runtime_upgrade_is_idempotent_for_identical_manifest() {
         iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed
     ));
 }
-
 #[test]
 fn activate_runtime_upgrade_is_idempotent_at_start_height() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-
     let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -382,18 +333,15 @@ fn activate_runtime_upgrade_is_idempotent_at_start_height() {
     let account = new_account_in_domain(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
-
     // Block 1: grant permission and propose upgrade starting at height 5
     let header1 =
         iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
-
     let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx1)
         .expect("grant permission");
-
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
         name: "ABI version 1".to_string(),
         description: "Activate ABI version 1".to_string(),
@@ -414,20 +362,17 @@ fn activate_runtime_upgrade_is_idempotent_at_start_height() {
         .expect("propose manifest");
     stx1.apply();
     block1.commit().unwrap();
-
     // Block 5: activate twice at the same height; the second invocation should be a no-op
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
-
     iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade { id }
         .execute(&account_id, &mut stx2)
         .expect("first activation succeeds");
     iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade { id }
         .execute(&account_id, &mut stx2)
         .expect("second activation at same height is a no-op");
-
     let rec = stx2
         .world
         .runtime_upgrades()
@@ -438,16 +383,13 @@ fn activate_runtime_upgrade_is_idempotent_at_start_height() {
         iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(5)
     ));
 }
-
 #[test]
 fn activation_allows_v1_in_same_block() {
     use iroha_core::{
         kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache,
     };
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-
     let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -459,20 +401,16 @@ fn activation_allows_v1_in_same_block() {
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     let network_id = *state.network_id_ref();
     install_current_lane_manifest_registry(&state);
-
     let prog_current = minimal_ivm_program(1);
-
     // Block 1: grant permission and propose upgrade [2, 10)
     let header1 =
         iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
-
     let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx1)
         .expect("grant permission");
-
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
         name: "ABI version 1".to_string(),
         description: "Activate ABI version 1".to_string(),
@@ -493,18 +431,15 @@ fn activation_allows_v1_in_same_block() {
         .expect("propose manifest");
     stx1.apply();
     block1.commit().unwrap();
-
     // Block 2: activate upgrade, then validate a v1 program in the same block
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
-
     iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade { id }
         .execute(&account_id, &mut stx2)
         .expect("activate upgrade at scheduled height");
     stx2.apply();
-
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
         network_id,
         account_id.clone(),
@@ -517,15 +452,12 @@ fn activation_allows_v1_in_same_block() {
     let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
     assert!(result.is_ok(), "program with ABI v1 should validate");
 }
-
 #[test]
 fn active_manifest_hash_mismatch_rejects_block_construction() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
     use iroha_data_model::executor::IvmAdmissionError;
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-
     let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -534,7 +466,6 @@ fn active_manifest_hash_mismatch_rejects_block_construction() {
     let account = new_account_in_domain(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
-
     // Seed an activated upgrade record with an incorrect abi_hash.
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
         name: "ABI version 1".to_string(),
@@ -564,7 +495,6 @@ fn active_manifest_hash_mismatch_rejects_block_construction() {
     );
     stx.apply();
     block.commit().unwrap();
-
     // The next block must fail closed before any transaction can execute under
     // an ABI surface that differs from the local binary.
     let header2 =
@@ -577,14 +507,11 @@ fn active_manifest_hash_mismatch_rejects_block_construction() {
         Ok(_) => panic!("tampered active ABI must prevent block construction"),
     }
 }
-
 #[test]
 fn propose_runtime_upgrade_rejects_missing_provenance_when_required() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-
     let kp = checked_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -594,16 +521,13 @@ fn propose_runtime_upgrade_rejects_missing_provenance_when_required() {
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let mut state = State::new_for_testing(world, kura, query_handle);
     state.gov.runtime_upgrade_provenance.mode = RuntimeUpgradeProvenanceMode::Required;
-
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx)
         .expect("grant permission");
-
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
         name: "ABI version 1".to_string(),
         description: "Activate ABI version 1".to_string(),
@@ -621,7 +545,6 @@ fn propose_runtime_upgrade_rejects_missing_provenance_when_required() {
     let err = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes }
         .execute(&account_id, &mut stx)
         .expect_err("missing provenance must be rejected");
-
     match err {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
             assert!(
@@ -632,14 +555,11 @@ fn propose_runtime_upgrade_rejects_missing_provenance_when_required() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn propose_runtime_upgrade_rejects_untrusted_signer() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-
     let trusted = checked_keypair();
     let untrusted = checked_keypair();
     let (pubkey, _) = trusted.clone().into_parts();
@@ -653,16 +573,13 @@ fn propose_runtime_upgrade_rejects_untrusted_signer() {
     state.gov.runtime_upgrade_provenance.signature_threshold = 1;
     state.gov.runtime_upgrade_provenance.trusted_signers =
         BTreeSet::from([trusted.public_key().clone()]);
-
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx)
         .expect("grant permission");
-
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
         name: "ABI version 1".to_string(),
         description: "Activate ABI version 1".to_string(),
@@ -677,12 +594,10 @@ fn propose_runtime_upgrade_rejects_untrusted_signer() {
         provenance: Vec::new(),
     }
     .signed(&untrusted);
-
     let manifest_bytes = manifest.canonical_bytes();
     let err = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes }
         .execute(&account_id, &mut stx)
         .expect_err("untrusted signer must be rejected");
-
     match err {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
             assert!(

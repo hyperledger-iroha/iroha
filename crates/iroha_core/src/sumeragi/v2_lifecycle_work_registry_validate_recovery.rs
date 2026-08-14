@@ -11,7 +11,6 @@ pub(crate) struct ReadyValidatedAdapterAuthority<'a> {
     subject: wire::BlockSubject,
     receipt: &'a ValidatedBodyReceipt,
 }
-
 /// Non-forgeable installed-Validate predecessor accepted only by the
 /// adapter's sealed WAL-sign binding step.
 ///
@@ -24,14 +23,11 @@ pub(in crate::sumeragi) struct ReadyValidateSignPredecessorAuthority<'a> {
     pending: &'a PendingRuntimeEffectBinding,
     _linearity: ReadyValidateSignPredecessorLinearity,
 }
-
 struct ReadyValidateSignPredecessorLinearity;
-
 impl Drop for ReadyValidateSignPredecessorLinearity {
     fn drop(&mut self) {}
 }
-
-impl<'a> ReadyValidateSignPredecessorAuthority<'a> {
+impl ReadyValidateSignPredecessorAuthority<'_> {
     /// Project only the exact Prepare/Commit vote successor retained by the
     /// adapter preflight. No predecessor parts or certificate can escape.
     pub(in crate::sumeragi) fn project_successor(
@@ -64,9 +60,10 @@ impl<'a> ReadyValidateSignPredecessorAuthority<'a> {
             wire::GlobalPhase::Prepare => None,
         }
     }
-
+}
+#[cfg(test)]
+impl<'a> ReadyValidateSignPredecessorAuthority<'a> {
     /// Construct the same opaque view for focused adapter tests.
-    #[cfg(test)]
     pub(in crate::sumeragi) const fn for_test(
         effect: &'a AdapterEffect,
         pending: &'a PendingRuntimeEffectBinding,
@@ -78,7 +75,6 @@ impl<'a> ReadyValidateSignPredecessorAuthority<'a> {
         }
     }
 }
-
 impl<'a> ReadyValidatedAdapterAuthority<'a> {
     /// Consume the unforgeable registry authority inside the adapter module.
     pub(crate) fn into_parts(
@@ -92,7 +88,6 @@ impl<'a> ReadyValidatedAdapterAuthority<'a> {
         (self.tag, self.round, self.subject, self.receipt)
     }
 }
-
 /// Non-forgeable rejected-validation input accepted only by the adapter's
 /// sealed direct-preview entry point.
 ///
@@ -105,7 +100,6 @@ pub(crate) struct ReadyRejectedAdapterAuthority<'a> {
     subject: wire::BlockSubject,
     receipt: &'a DurableBodyReceipt,
 }
-
 impl<'a> ReadyRejectedAdapterAuthority<'a> {
     /// Consume the unforgeable registry authority inside the adapter module.
     pub(crate) fn into_parts(
@@ -119,7 +113,6 @@ impl<'a> ReadyRejectedAdapterAuthority<'a> {
         (self.tag, self.round, self.subject, self.receipt)
     }
 }
-
 /// Fixed dual-borrow result of joining one Ready Validate carrier to the
 /// adapter's fully preflighted, still-inert publication.
 ///
@@ -132,7 +125,6 @@ pub(super) struct PreparedReadyDurableValidateAdapterPreview<'registry, 'adapter
     _registry: PreparedReadyDurableValidateExecution<'registry>,
     _adapter: PreparedReadyDurableValidateAdapterPublication<'adapter>,
 }
-
 /// Opaque post-fsync Validate-to-Sign authority retaining both subsystem
 /// borrows until the sole coordinator/LedgerV1 publication consumes it.
 #[allow(dead_code)]
@@ -141,7 +133,6 @@ pub(super) struct PreparedReadyDurableValidatePersistedSignPreAdmission<'registr
     _registry: PreparedReadyDurableValidateExecution<'registry>,
     _adapter: PreparedReadyDurableValidatePersistedSign<'adapter>,
 }
-
 /// Pre-fsync live registry publication using the recovered-WAL exclusive
 /// detached-parent/child-vacancy reservation.
 ///
@@ -154,13 +145,11 @@ pub(super) struct PreparedLiveValidateSignRegistryPublication<'registry, 'adapte
     reservation: LiveValidateSignRegistryReservation<'registry>,
     adapter: PreparedReadyDurableValidatePersistedSign<'adapter>,
 }
-
 /// Opaque fail-stop error from live Sign registry preparation.
 #[must_use = "failed live Sign registry preparation retains post-WAL authority"]
 pub(super) struct LiveValidateSignRegistryPublicationError<'registry, 'adapter> {
     _failure: LiveValidateSignRegistryPublicationFailure<'registry, 'adapter>,
 }
-
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum LiveValidateSignRegistryPublicationFailure<'registry, 'adapter> {
     AdapterWork {
@@ -180,7 +169,6 @@ enum LiveValidateSignRegistryPublicationFailure<'registry, 'adapter> {
         _adapter: PreparedReadyDurableValidatePersistedSign<'adapter>,
     },
 }
-
 /// One-shot authority for consuming the nested post-WAL Sign into closed
 /// ordinary registry work.
 ///
@@ -190,13 +178,10 @@ enum LiveValidateSignRegistryPublicationFailure<'registry, 'adapter> {
 pub(in crate::sumeragi) struct LiveValidateSignWorkProjectionPermit {
     _linearity: LiveValidateSignWorkProjectionLinearity,
 }
-
 struct LiveValidateSignWorkProjectionLinearity;
-
 impl Drop for LiveValidateSignWorkProjectionLinearity {
     fn drop(&mut self) {}
 }
-
 impl LiveValidateSignWorkProjectionPermit {
     fn new() -> Self {
         Self {
@@ -204,14 +189,12 @@ impl LiveValidateSignWorkProjectionPermit {
         }
     }
 }
-
 /// Ownership-retaining failure from the fixed live-WAL Validate-to-Sign join.
 #[allow(dead_code)]
 #[must_use = "failed Validate Sign sealing still owns both subsystem borrows"]
 pub(super) struct ReadyDurableValidateSignPreAdmissionError<'registry, 'adapter> {
     failure: ReadyDurableValidateSignPreAdmissionFailure<'registry, 'adapter>,
 }
-
 #[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
 enum ReadyDurableValidateSignPreAdmissionFailure<'registry, 'adapter> {
     PreWal {
@@ -222,7 +205,6 @@ enum ReadyDurableValidateSignPreAdmissionFailure<'registry, 'adapter> {
         _error: ReadyDurableValidateSignWalError<'adapter>,
     },
 }
-
 /// Closed inert replay pre-admission for one exact invalid certified body report.
 ///
 /// The Ready registry row and staged adapter rejection remain exclusively
@@ -235,14 +217,12 @@ pub(super) struct PreparedInvalidBodyReportReplayPreAdmission<'registry, 'adapte
     registry: PreparedReadyDurableValidateExecution<'registry>,
     adapter: PreparedInvalidBodyReportAdapterReplay<'adapter>,
 }
-
 /// Ownership-preserving failure from the fixed invalid-body replay join.
 #[allow(dead_code)]
 #[must_use = "failed invalid-body replay preparation retains both authority borrows"]
 pub(super) struct InvalidBodyReportReplayPreAdmissionError<'registry, 'adapter> {
     preview: PreparedReadyDurableValidateAdapterPreview<'registry, 'adapter>,
 }
-
 impl PreparedReadyDurableValidateAdapterPreview<'_, '_> {
     /// Project one exact no-successor cut without exposing the retained body.
     ///
@@ -284,7 +264,6 @@ impl PreparedReadyDurableValidateAdapterPreview<'_, '_> {
         ))
     }
 }
-
 impl<'registry, 'adapter> PreparedReadyDurableValidateAdapterPreview<'registry, 'adapter> {
     /// Consume only the exact validated Persist branch into a real post-fsync
     /// vote-sign seal.
@@ -341,7 +320,6 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateAdapterPreview<'registry, 
             }),
         }
     }
-
     /// Consume only the exact Ready/rejected report preview into replay pre-admission.
     ///
     /// All inputs are read from the still-installed completion and staged
@@ -401,7 +379,6 @@ impl<'registry, 'adapter> PreparedReadyDurableValidateAdapterPreview<'registry, 
         Ok(sealed)
     }
 }
-
 impl PreparedInvalidBodyReportReplayPreAdmission<'_, '_> {
     fn validates(&self) -> bool {
         self.registry.completion().is_some_and(|completion| {
@@ -417,7 +394,6 @@ impl PreparedInvalidBodyReportReplayPreAdmission<'_, '_> {
                 )
         })
     }
-
     /// Project the invalid-body child while every raw part remains sealed.
     ///
     /// Only the body-transition module can mint the one-shot permit. Candidate
@@ -492,20 +468,17 @@ impl PreparedInvalidBodyReportReplayPreAdmission<'_, '_> {
             parent_payload,
         ))
     }
-
     /// Compare one retained lease without exposing registry or report parts.
     #[cfg(test)]
     fn exactly_matches_lease_for_test(&self, lease: &TurnLease) -> bool {
         self.validates() && self.registry.matches_exact_lease(lease)
     }
-
     /// Compare one retained body receipt without exposing the canonical frame.
     #[cfg(test)]
     fn exactly_matches_receipt_for_test(&self, receipt: &DurableBodyReceipt) -> bool {
         self.validates() && self.registry.matches_exact_durable_receipt(receipt)
     }
 }
-
 impl PreparedReadyDurableValidatePersistedSignPreAdmission<'_, '_> {
     /// Project the exact post-WAL Sign child while all effect, pending, replay,
     /// and durable-body authority remains nested in this fixed join.
@@ -581,7 +554,6 @@ impl PreparedReadyDurableValidatePersistedSignPreAdmission<'_, '_> {
         ))
     }
 }
-
 impl<'registry, 'adapter>
     PreparedReadyDurableValidatePersistedSignPreAdmission<'registry, 'adapter>
 {
@@ -672,7 +644,6 @@ impl<'registry, 'adapter>
         })
     }
 }
-
 impl PreparedLiveValidateSignRegistryPublication<'_, '_> {
     /// Complete the already-fsynced registry and adapter publication.
     ///
@@ -683,7 +654,6 @@ impl PreparedLiveValidateSignRegistryPublication<'_, '_> {
             .install_registry_and_commit_adapter(self.reservation);
     }
 }
-
 /// Ownership-preserving failure from the fixed Ready Validate adapter join.
 #[allow(dead_code)]
 #[must_use = "a failed Ready Validate preview still retains its registry cut"]
@@ -691,13 +661,11 @@ pub(super) struct ReadyDurableValidateAdapterPreviewError<'registry> {
     _registry: PreparedReadyDurableValidateExecution<'registry>,
     _failure: ReadyDurableValidateAdapterPreviewFailure,
 }
-
 #[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
 enum ReadyDurableValidateAdapterPreviewFailure {
     RegistryAuthority,
     Adapter(crate::sumeragi::v2::AdapterError),
 }
-
 // DURABLE_VALIDATE_ASYNC_HANDOFF_DECLARATIONS_BEGIN
 /// Move-only registry authority detached from one exact durable Validate row.
 ///
@@ -721,7 +689,6 @@ pub(super) struct DetachedDurableValidateExecution {
     lifecycle_key: LifecycleKey,
     lifecycle_stage: LifecycleStage,
 }
-
 /// Move-only result of executing one detached durable Validate request.
 ///
 /// The request remains sealed beside the body-store-minted closed outcome, so
@@ -734,7 +701,6 @@ pub(super) struct ExecutedDurableValidateExecution {
     request: DetachedDurableValidateExecution,
     outcome: DurableBodyValidationOutcome,
 }
-
 /// Borrow-bound exact-row reattachment of one executed Validate outcome.
 ///
 /// Reattachment and drop mutate nothing. This token deliberately exposes no
@@ -746,7 +712,6 @@ pub(super) struct PreparedDurableValidateCompletion<'a> {
     executed: ExecutedDurableValidateExecution,
 }
 // DURABLE_VALIDATE_ASYNC_HANDOFF_DECLARATIONS_END
-
 // DURABLE_VALIDATE_WAIT_DISPATCH_DECLARATIONS_BEGIN
 /// Move-only wake authority paired only with its exact detached validation.
 ///
@@ -758,7 +723,6 @@ pub(super) struct PreparedDurableValidateCompletion<'a> {
 struct DurableValidateWakeAuthority {
     wait_token: WaitToken,
 }
-
 /// One exact durable validation whose claimed lifecycle lease has already
 /// become an explicit external wait.
 #[derive(Debug)]
@@ -768,7 +732,6 @@ pub(super) struct DurableValidateDispatch {
     request: DetachedDurableValidateExecution,
     wake: DurableValidateWakeAuthority,
 }
-
 /// Closed validation result retaining the exact external-wait authority.
 ///
 /// The sole volatile completion transaction reattaches `executed`, installs
@@ -782,7 +745,6 @@ pub(super) struct ExecutedDurableValidateDispatch {
     wake: DurableValidateWakeAuthority,
 }
 // DURABLE_VALIDATE_WAIT_DISPATCH_DECLARATIONS_END
-
 // DURABLE_VALIDATE_VOLATILE_COMPLETION_DECLARATIONS_BEGIN
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DurableValidateOutcomeKind {
@@ -790,7 +752,6 @@ enum DurableValidateOutcomeKind {
     Rejected,
     DeferredMergeSidecar,
 }
-
 /// Sealed exact authority for one Waiting-to-Ready Validate publication.
 ///
 /// Construction is private to exact registry reattachment. The coordinator
@@ -807,21 +768,18 @@ pub(super) struct DurableValidateCompletionAuthority {
     lifecycle_stage: LifecycleStage,
     payload: DurablePayloadReference,
 }
-
 /// Typed location of one published successful validation carrier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct PublishedValidated {
     location: DurableValidatePublishedLocation,
 }
-
 /// Typed location of one published deterministic-rejection carrier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct PublishedRejected {
     location: DurableValidatePublishedLocation,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 struct DurableValidatePublishedLocation {
@@ -829,7 +787,6 @@ struct DurableValidatePublishedLocation {
     incumbent_digest: LifecycleDigest,
     replacement_digest: LifecycleDigest,
 }
-
 /// Move-only merge-sidecar dependency retaining its exact executed dispatch.
 #[derive(Debug)]
 #[must_use = "a deferred Validate dispatch still requires sealed sidecar registration"]
@@ -837,7 +794,6 @@ struct DurableValidatePublishedLocation {
 pub(super) struct DeferredDurableValidateDispatch {
     dispatch: ExecutedDurableValidateDispatch,
 }
-
 /// Closed result of the volatile Validate completion transaction.
 #[derive(Debug)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
@@ -851,7 +807,6 @@ pub(super) enum DurableValidateCompletionPublication {
     /// Merge-sidecar absence left both volatile sides exactly Waiting/original.
     DeferredMergeSidecar(DeferredDurableValidateDispatch),
 }
-
 /// Borrow-bound exact executed-dispatch reattachment.
 ///
 /// Drop changes nothing. The only consuming paths either return the dispatch
@@ -864,7 +819,6 @@ pub(super) struct PreparedExecutedDurableValidateCompletion<'a> {
     dispatch: ExecutedDurableValidateDispatch,
     authority: DurableValidateCompletionAuthority,
 }
-
 /// Armed same-address Validate conversion restored automatically on unwind.
 #[must_use = "the staged Validate carrier must commit or roll back"]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -876,7 +830,6 @@ pub(super) struct StagedDurableValidateCompletion<'a> {
     publication: PublishedDurableValidateCompletion,
     armed: bool,
 }
-
 /// Infallible Copy metadata returned when an armed carrier is committed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PublishedDurableValidateCompletion {
@@ -886,7 +839,6 @@ pub(super) enum PublishedDurableValidateCompletion {
     Rejected(PublishedRejected),
 }
 // DURABLE_VALIDATE_VOLATILE_COMPLETION_DECLARATIONS_END
-
 /// Receipt-bound successful validation of one closed Validate carrier.
 ///
 /// The live registry row remains untouched and exclusively borrowed. The
@@ -905,7 +857,6 @@ pub(super) struct PreparedValidatedBodyCompletion<'a> {
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
 }
-
 /// Closed live-WAL replay preflight retained until future exact admission.
 ///
 /// Payload-free stages own the canonical source seal immediately. `Apply`
@@ -918,13 +869,11 @@ pub(super) struct PreparedLiveWalReplayPreAdmission<'a> {
     _persisted: SealedLiveWalPersistedEffectV1,
     _origin: LiveWalReplayPreAdmissionOrigin<'a>,
 }
-
 #[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
 enum LiveWalReplayPreAdmissionOrigin<'a> {
     PayloadFree,
     Apply(PreparedValidatedBodyCompletion<'a>),
 }
-
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum LiveWalReplayPreAdmissionFailure<'a> {
     PayloadFree {
@@ -936,12 +885,10 @@ enum LiveWalReplayPreAdmissionFailure<'a> {
         _pending: PendingRuntimeEffectBinding,
     },
 }
-
 /// Ownership-preserving failure from exact live-WAL replay preflight.
 pub(super) struct LiveWalReplayPreAdmissionError<'a> {
     _failure: LiveWalReplayPreAdmissionFailure<'a>,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedLiveWalReplayPreAdmission<'static> {
     /// Seal one of the five payload-free WAL continuations with its exact pending owner.
@@ -962,7 +909,6 @@ impl PreparedLiveWalReplayPreAdmission<'static> {
         })
     }
 }
-
 /// Move-only Validate projection sealed under its closed durable Store parent.
 ///
 /// No field can be extracted. Its only cross-module consuming path retains the
@@ -983,7 +929,6 @@ pub(super) struct PreparedDurableStoreValidateSuccessor<'a> {
     _expected_manifest_hash: HashOf<wire::PayloadManifest>,
     _replay_evidence: CertifiedValidateReplayEvidenceV1,
 }
-
 /// Move-only Store-successor projection sealed under its closed Fetch parent.
 ///
 /// The projected pending binding never escapes this token. In particular,
@@ -1005,7 +950,6 @@ pub(super) struct PreparedCertifiedFetchStoreSuccessor<'a> {
     _expected_manifest_hash: HashOf<wire::PayloadManifest>,
     _replay_evidence: CertifiedStoreReplayEvidenceV1,
 }
-
 /// Closed recovered-WAL Fetch-to-Store registry/adapter successor.
 ///
 /// The installed dedicated Fetch carrier remains borrowed until publication.
@@ -1020,7 +964,6 @@ pub(super) struct PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapt
     store: super::wal_recovery::RecoveredDecisionFetchStoreProjectionV1,
     adapter: crate::sumeragi::v2::PreparedRecoveredDecisionFetchStoreAdapterV1<'adapter>,
 }
-
 /// Closed recovered Sign-to-Broadcast registry/adapter successor.
 ///
 /// The claimed Sign stays installed until LedgerV1 publication. The child is
@@ -1035,7 +978,6 @@ pub(super) struct PreparedRecoveredLifecycleSignBroadcastSuccessor<'registry, 'a
     verified: VerifiedHeightContext,
     adapter: crate::sumeragi::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'adapter>,
 }
-
 /// Closed recovered Sign successor retaining Broadcast plus one WAL Vote Sign.
 ///
 /// Child addresses are intentionally absent at this point. The lifecycle
@@ -1050,7 +992,6 @@ pub(super) struct PreparedRecoveredLifecycleSignBroadcastAndSignSuccessor<'regis
     verified: VerifiedHeightContext,
     adapter: crate::sumeragi::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'adapter>,
 }
-
 /// Combined registry successor rebound to both exact staged child rows.
 ///
 /// Dropping this before LedgerV1 publication leaves the original Sign carrier
@@ -1067,7 +1008,6 @@ pub(super) struct BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'registry
     verified: VerifiedHeightContext,
     adapter: crate::sumeragi::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'adapter>,
 }
-
 /// Pre-fsync failure to join a claimed recovered Sign to its signed Broadcast.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RecoveredLifecycleSignBroadcastPreparationErrorV1 {
@@ -1078,7 +1018,6 @@ pub(super) enum RecoveredLifecycleSignBroadcastPreparationErrorV1 {
     /// The deterministic Consensus child address collides with installed work.
     ChildCollision,
 }
-
 /// Pre-fsync failure to retain both children of one recovered `Signed` event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1090,7 +1029,6 @@ pub(super) enum RecoveredLifecycleSignBroadcastAndSignPreparationErrorV1 {
     /// Either staged child address collides with process-local work.
     ChildCollision,
 }
-
 /// Pre-fsync failure to join recovered carrier, body, adapter, and child address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RecoveredDecisionFetchStorePreparationErrorV1 {
@@ -1103,7 +1041,6 @@ pub(super) enum RecoveredDecisionFetchStorePreparationErrorV1 {
     /// The deterministic child address collides with installed work.
     ChildCollision,
 }
-
 /// Closed failure while projecting a sealed body-stage successor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SealedBodySuccessorProjectionError {
@@ -1114,7 +1051,6 @@ pub(super) enum SealedBodySuccessorProjectionError {
     /// Authenticated replay projection rejected the verified height context.
     Projection(AdapterEffectAdmissionError),
 }
-
 /// Closed failure inventory for sealed terminal Validate projections.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SealedValidateTerminalProjectionError {
@@ -1127,7 +1063,6 @@ pub(super) enum SealedValidateTerminalProjectionError {
     /// Canonical report projection rejected the verified height context.
     Projection(AdapterEffectAdmissionError),
 }
-
 const fn sealed_validate_no_successor_reservation(
     publication: ReadyDurableValidateAdapterPublicationKind,
     outcome: ReadyDurableValidateOutcomeKind,
@@ -1160,7 +1095,6 @@ const fn sealed_validate_no_successor_reservation(
         ) => Err(SealedValidateTerminalProjectionError::InvalidCarrier),
     }
 }
-
 /// Borrow-bound registry conversion prepared before the exact queue CAS.
 ///
 /// Preparation is read-only. Dropping this value therefore leaves every map
@@ -1180,7 +1114,6 @@ pub(super) struct PreparedCertifiedFetchCompletion<'a> {
     authenticated_responder: PeerId,
     replay_origin: AuthenticatedCertifiedFetchReplayOriginV1,
 }
-
 /// Receipt-bound completion conversion authorized to consume one exact
 /// checked-dequeue result.
 ///
@@ -1200,7 +1133,6 @@ pub(super) struct PreparedDurableCertifiedFetchCompletion<'a> {
     replay_evidence: CertifiedFetchReplayEvidenceV1,
     ready_projection: DurableCertifiedFetchReplayProjectionV1,
 }
-
 /// Failure from the registry-before-ledger publication boundary.
 pub(super) enum RegistryPublicationError<E> {
     /// Exact-address installation failed before publication was attempted.
@@ -1208,7 +1140,6 @@ pub(super) enum RegistryPublicationError<E> {
     /// Durable publication failed and the just-installed work was removed.
     Publication(E, ConcreteLifecycleWork),
 }
-
 /// Failure from an exact same-address replacement boundary.
 #[derive(Debug)]
 pub(super) enum RegistryReplacementError<E> {
@@ -1217,19 +1148,16 @@ pub(super) enum RegistryReplacementError<E> {
     /// The callback rejected the staged replacement and the incumbent was restored.
     Publication(E, ConcreteLifecycleWork),
 }
-
 /// Unwind-safe staging guard for one new registry installation.
 struct StagedRegistryInstall<'a> {
     entries: &'a mut BTreeMap<ConcreteWorkAddress, ConcreteLifecycleWork>,
     address: ConcreteWorkAddress,
     armed: bool,
 }
-
 impl StagedRegistryInstall<'_> {
     fn commit(mut self) {
         self.armed = false;
     }
-
     fn rollback(mut self) -> ConcreteLifecycleWork {
         self.armed = false;
         self.entries
@@ -1237,7 +1165,6 @@ impl StagedRegistryInstall<'_> {
             .expect("staged installation remains at its exact address")
     }
 }
-
 impl Drop for StagedRegistryInstall<'_> {
     fn drop(&mut self) {
         if self.armed {
@@ -1249,21 +1176,18 @@ impl Drop for StagedRegistryInstall<'_> {
         }
     }
 }
-
 /// Unwind-safe staging guard for one exact registry replacement.
 struct StagedRegistryReplacement<'a> {
     entries: &'a mut BTreeMap<ConcreteWorkAddress, ConcreteLifecycleWork>,
     address: ConcreteWorkAddress,
     incumbent: Option<ConcreteLifecycleWork>,
 }
-
 impl StagedRegistryReplacement<'_> {
     fn commit(mut self) -> ConcreteLifecycleWork {
         self.incumbent
             .take()
             .expect("staged replacement retains its incumbent until commit")
     }
-
     fn rollback(mut self) -> ConcreteLifecycleWork {
         let incumbent = self
             .incumbent
@@ -1274,7 +1198,6 @@ impl StagedRegistryReplacement<'_> {
             .expect("staged replacement remains installed at its exact address")
     }
 }
-
 impl Drop for StagedRegistryReplacement<'_> {
     fn drop(&mut self) {
         let Some(incumbent) = self.incumbent.take() else {
@@ -1287,7 +1210,6 @@ impl Drop for StagedRegistryReplacement<'_> {
         drop(replacement);
     }
 }
-
 /// Closed failure inventory for concrete-work registration and resolution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RegistryError {
@@ -1310,7 +1232,6 @@ pub(super) enum RegistryError {
     /// The coordinator's admitted record did not name exactly one effect slot.
     InvalidAdmissionShape,
 }
-
 /// Deterministic process-local map from admitted slots to concrete effects.
 ///
 /// This registry is deliberately not a scheduler. It owns no readiness,
@@ -1320,7 +1241,6 @@ pub(super) struct ConcreteLifecycleWorkRegistry {
     identity: std::sync::Arc<ConcreteLifecycleWorkRegistryInstanceIdentityMarker>,
     entries: BTreeMap<ConcreteWorkAddress, ConcreteLifecycleWork>,
 }
-
 /// Exclusive optional WAL-owned registry slot at startup.
 #[derive(Clone, Copy)]
 enum RecoveredWalRegistrySlotV1 {
@@ -1337,7 +1257,6 @@ enum RecoveredWalRegistrySlotV1 {
     DecisionStore(ConcreteWorkAddress),
     DecisionApply(ConcreteWorkAddress),
 }
-
 impl RecoveredWalRegistrySlotV1 {
     const fn addresses(self) -> [Option<ConcreteWorkAddress>; 2] {
         match self {
@@ -1355,7 +1274,6 @@ impl RecoveredWalRegistrySlotV1 {
             } => [Some(broadcast), Some(next_sign)],
         }
     }
-
     const fn cardinality(self) -> usize {
         match self {
             Self::None => 0,
@@ -1369,14 +1287,12 @@ impl RecoveredWalRegistrySlotV1 {
             | Self::DecisionApply(_) => 1,
         }
     }
-
     fn contains_record(self, record: &super::LifecycleRecord) -> bool {
         self.addresses()
             .into_iter()
             .flatten()
             .any(|address| record.owner == address.owner && record.ordinal == address.ordinal)
     }
-
     fn contains_owner(self, owner: OwnerId) -> bool {
         self.addresses()
             .into_iter()
@@ -1384,23 +1300,19 @@ impl RecoveredWalRegistrySlotV1 {
             .any(|address| address.owner == owner)
     }
 }
-
 #[derive(Debug)]
 struct ConcreteLifecycleWorkRegistryInstanceIdentityMarker;
-
 /// Comparison-only identity for one exact concrete registry instance.
 #[derive(Clone, Debug)]
 pub(super) struct ConcreteLifecycleWorkRegistryInstanceIdentity(
     std::sync::Arc<ConcreteLifecycleWorkRegistryInstanceIdentityMarker>,
 );
-
 impl ConcreteLifecycleWorkRegistryInstanceIdentity {
     /// Return whether both seals came from the same registry owner.
     pub(super) fn same_instance(&self, other: &Self) -> bool {
         std::sync::Arc::ptr_eq(&self.0, &other.0)
     }
 }
-
 impl Default for ConcreteLifecycleWorkRegistry {
     fn default() -> Self {
         Self {
@@ -1409,9 +1321,7 @@ impl Default for ConcreteLifecycleWorkRegistry {
         }
     }
 }
-
 include!("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs");
-
 fn sealed_successor_parent<'a>(
     registry: &'a ConcreteLifecycleWorkRegistry,
     address: ConcreteWorkAddress,
@@ -1435,7 +1345,6 @@ fn sealed_successor_parent<'a>(
     }
     Ok(work)
 }
-
 fn sealed_successor_candidate_has_exact_geometry(
     candidate: &CandidateAdmission,
     expected_class: LifecycleWorkClass,
@@ -1453,7 +1362,6 @@ fn sealed_successor_candidate_has_exact_geometry(
                 && consumed == universe
         })
 }
-
 #[allow(dead_code)]
 impl PreparedCertifiedFetchStoreSuccessor<'_> {
     /// Project the exact Store candidate while retaining its Fetch registry cut.
@@ -1520,7 +1428,6 @@ impl PreparedCertifiedFetchStoreSuccessor<'_> {
         Ok(candidate)
     }
 }
-
 #[allow(dead_code)]
 impl PreparedDurableStoreValidateSuccessor<'_> {
     /// Project the exact Validate candidate while retaining its Store registry cut.
@@ -1579,7 +1486,6 @@ impl PreparedDurableStoreValidateSuccessor<'_> {
         Ok(candidate)
     }
 }
-
 // READY_DURABLE_VALIDATE_ADAPTER_JOIN_BEGIN
 #[allow(dead_code)]
 impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
@@ -1590,21 +1496,17 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
         };
         completion.validates(work.digest).then_some(completion)
     }
-
     /// Return only the closed reducer-level outcome discriminator.
     pub(crate) const fn outcome_kind(&self) -> ReadyDurableValidateOutcomeKind {
         self.outcome_kind
     }
-
     fn matches_exact_lease(&self, lease: &TurnLease) -> bool {
         &self.lease == lease
     }
-
     fn matches_exact_durable_receipt(&self, receipt: &DurableBodyReceipt) -> bool {
         self.completion()
             .is_some_and(|completion| &completion.incumbent.durable_receipt == receipt)
     }
-
     fn validated_completion(&self) -> Option<&DurableValidateCompletion> {
         if self.outcome_kind != ReadyDurableValidateOutcomeKind::Validated {
             return None;
@@ -1626,7 +1528,6 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
         }
         Some(completion)
     }
-
     fn validated_authority(&self) -> Option<ReadyValidatedAdapterAuthority<'_>> {
         let completion = self.validated_completion()?;
         let AdapterEffect::ValidateBody {
@@ -1645,7 +1546,6 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
             receipt,
         })
     }
-
     fn validate_sign_predecessor_authority(
         &self,
     ) -> Option<ReadyValidateSignPredecessorAuthority<'_>> {
@@ -1656,7 +1556,6 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
             _linearity: ReadyValidateSignPredecessorLinearity,
         })
     }
-
     fn rejected_authority(&self) -> Option<ReadyRejectedAdapterAuthority<'_>> {
         if self.outcome_kind != ReadyDurableValidateOutcomeKind::Rejected {
             return None;
@@ -1689,7 +1588,6 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
             receipt: completion.outcome.durable_body(),
         })
     }
-
     /// Consume this exact registry cut into the adapter's sealed direct preview.
     ///
     /// The fixed join exposes no generic callback or raw receipt result. Every
@@ -1723,7 +1621,6 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
                 adapter.prepare_sealed_ready_durable_validate_failed(authority)
             }
         };
-
         match adapter_preview {
             Ok(adapter_preview) => match adapter_preview.preflight_publication() {
                 Ok(_adapter) => Ok(PreparedReadyDurableValidateAdapterPreview {
@@ -1743,7 +1640,6 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
     }
 }
 // READY_DURABLE_VALIDATE_ADAPTER_JOIN_END
-
 // RECOVERED_WAL_VALIDATE_REGISTRY_DETACH_BEGIN
 impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
     /// Detach the exact Ready/validated carrier for the fixed recovered-WAL join.
@@ -1779,9 +1675,7 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
     }
 }
 // RECOVERED_WAL_VALIDATE_REGISTRY_DETACH_END
-
 include!("v2_lifecycle_work_registry_validate_recovery_parent.rs");
-
 // RECOVERED_WAL_VALIDATE_REGISTRY_JOIN_BEGIN
 impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
     /// Convert the existing restorable recovery cut into the sole fail-stop
@@ -1805,7 +1699,6 @@ impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
             _detached_parent: parent,
         })
     }
-
     #[cfg(test)]
     fn detached_work_is_exact_for_test(&self) -> bool {
         self.work.as_ref().is_some_and(|work| {
@@ -1820,7 +1713,6 @@ impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
                 )
         })
     }
-
     /// Consume this exact closed Validate carrier and the adapter-authenticated
     /// current reducer vote from its latest exact WAL owner into one typed
     /// lifecycle repair.
@@ -1860,7 +1752,6 @@ impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
                 },
             });
         }
-
         let work = self
             .work
             .take()
@@ -1896,7 +1787,6 @@ impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
             replay_evidence: DetachedValidateReplayEvidenceV1::Retained(replay_evidence),
             outcome,
         };
-
         let successor = match pending.project_recovered_wal_vote_successor(&effect, recovered) {
             Ok(successor) => successor,
             Err((pending, recovered)) => {
@@ -1945,7 +1835,6 @@ impl<'registry> RecoveredWalValidateRegistryCut<'registry> {
     }
 }
 // RECOVERED_WAL_VALIDATE_REGISTRY_JOIN_END
-
 #[allow(dead_code)]
 impl<'a> PreparedDurableValidateExecution<'a> {
     fn durable_validate(&self) -> &DurableValidateBody {
@@ -1959,7 +1848,6 @@ impl<'a> PreparedDurableValidateExecution<'a> {
         };
         validate
     }
-
     /// Return the exact reducer coordinates accepted by the future body
     /// validation preview.
     pub(super) fn adapter_preview_inputs(
@@ -1975,12 +1863,10 @@ impl<'a> PreparedDurableValidateExecution<'a> {
         };
         (*tag, *round, *subject)
     }
-
     /// Borrow the exact post-fsync body receipt retained by the Validate carrier.
     pub(super) fn durable_body_receipt(&self) -> &DurableBodyReceipt {
         &self.durable_validate().durable_receipt
     }
-
     /// Match the coordinator's durable payload against this exact body receipt.
     pub(super) fn matches_durable_payload(&self, payload: DurablePayloadReference) -> bool {
         durable_validate_body_payload(&self.durable_validate().durable_receipt).is_some_and(
@@ -1993,12 +1879,10 @@ impl<'a> PreparedDurableValidateExecution<'a> {
             },
         )
     }
-
     /// Return the manifest hash transferred independently through the Store parent.
     pub(super) fn expected_manifest_hash(&self) -> HashOf<wire::PayloadManifest> {
         self.durable_validate().expected_manifest_hash
     }
-
     /// Derive the external wake source only from this revalidated closed row.
     ///
     /// Callers cannot supply address, digest, causal-key, or inherited
@@ -2022,7 +1906,6 @@ impl<'a> PreparedDurableValidateExecution<'a> {
             self.lifecycle_stage,
         )
     }
-
     /// Seal this preflight beside the exact coordinator-minted external wait.
     ///
     /// A foreign source or the reserved maximum generation returns the
@@ -2041,7 +1924,6 @@ impl<'a> PreparedDurableValidateExecution<'a> {
             wake: DurableValidateWakeAuthority { wait_token },
         })
     }
-
     /// Consume the borrow-bound preflight into an owned validation request.
     ///
     /// The registry row is not removed or changed. Returning the owned token
@@ -2103,7 +1985,6 @@ impl<'a> PreparedDurableValidateExecution<'a> {
             lifecycle_stage,
         }
     }
-
     /// Bind one store-minted successful-validation receipt to this exact
     /// Validate carrier without changing the registry row.
     ///
@@ -2152,7 +2033,6 @@ impl<'a> PreparedDurableValidateExecution<'a> {
             }
             (*tag, *round, *subject, incumbent_digest, replacement_digest)
         };
-
         Ok(PreparedValidatedBodyCompletion {
             _registry: self.registry,
             address: self.address,
@@ -2165,7 +2045,6 @@ impl<'a> PreparedDurableValidateExecution<'a> {
         })
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl<'a> PreparedValidatedBodyCompletion<'a> {
     fn retained_validated_receipt_is_exact(&self) -> bool {
@@ -2184,7 +2063,6 @@ impl<'a> PreparedValidatedBodyCompletion<'a> {
                 &self.validated_receipt,
             ) == self.replacement_digest
     }
-
     fn retained_apply_join_is_exact(&self, persisted: &SealedLiveWalPersistedEffectV1) -> bool {
         let Some(work) = self._registry.entries.get(&self.address) else {
             return false;
@@ -2199,7 +2077,6 @@ impl<'a> PreparedValidatedBodyCompletion<'a> {
                 self.validated_receipt.durable(),
             )
     }
-
     /// Join one exact live `Decision -> Apply` WAL seal to this retained Validate result.
     ///
     /// This is the sole production receipt-bearing completion surface. It
@@ -2255,24 +2132,20 @@ impl<'a> PreparedValidatedBodyCompletion<'a> {
             _origin: LiveWalReplayPreAdmissionOrigin::Apply(self),
         })
     }
-
     /// Exact reducer coordinates retained by the completed Validate carrier.
     pub(super) const fn adapter_preview_inputs(
         &self,
     ) -> (EventTag, wire::ConsensusRound, wire::BlockSubject) {
         (self.tag, self.round, self.subject)
     }
-
     /// Borrow the exact store-minted deterministic validation result.
     pub(super) const fn validated_receipt(&self) -> &ValidatedBodyReceipt {
         &self.validated_receipt
     }
-
     /// Digest currently installed for the closed Validate work.
     pub(super) const fn incumbent_digest(&self) -> LifecycleDigest {
         self.incumbent_digest
     }
-
     /// Domain-separated physical digest for the receipt-bound completion.
     pub(super) const fn replacement_digest(&self) -> LifecycleDigest {
         self.replacement_digest

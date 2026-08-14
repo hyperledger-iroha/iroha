@@ -1,5 +1,5 @@
 //! Reusable credential-scope binding for the concrete Falcon-512 profile.
-
+use super::{params::APPLICATION_MODULUS_V1, ring::ApplicationPolynomialV1};
 use iroha_data_model::{
     NetworkId,
     privacy::{
@@ -15,9 +15,6 @@ use sha3::{
     digest::{ExtendableOutput, Update, XofReader},
 };
 use thiserror::Error;
-
-use super::{params::APPLICATION_MODULUS_V1, ring::ApplicationPolynomialV1};
-
 /// Domain for the algebraic credential-scope term.
 pub const BOOTLE_LANTERN_CREDENTIAL_SCOPE_DOMAIN_V1: &[u8] =
     b"iroha.privacy.bootle-lantern.lazer-falcon512-credential-scope.v1";
@@ -33,7 +30,6 @@ pub const BOOTLE_LANTERN_SCOPE_APPLICATION_ACCEPTANCE_LIMIT_V1: u16 = 61_445;
 pub const BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1: u32 = 4_096;
 /// Canonical reusable-scope schema owned by the implementation that absorbs it.
 pub const BOOTLE_LANTERN_CREDENTIAL_SCOPE_SCHEMA_V1: &[u8] = b"scope-xof:SHAKE256-framed-u32be-uniform-mod12289-accept<61445-max4096-per-coefficient|included:protocol+concrete-profile+version+network-id+canonical-genesis-hash+parameter-id+parameter-digest+verifier-digest+statement-schema-digest+engine-manifest-digest+issuer-id+policy-id+epoch+policy-record-digest+issuer-parameter-id+issuer-parameter-digest|excluded:action-index+transaction-intent-digest|rotation:every-included-field-invalidates-existing-credential";
-
 /// Reusable governed scope permanently signed into one credential.
 ///
 /// Presentation-specific action index and transaction intent are deliberately
@@ -55,7 +51,6 @@ pub struct BootleLanternCredentialScopeV1 {
     issuer_parameter_id: PrivacyParameterIdV1,
     issuer_parameter_digest: PrivacyParameterDigestV1,
 }
-
 impl BootleLanternCredentialScopeV1 {
     /// Select the reusable scope from a statement-context template and one
     /// exact active policy record.
@@ -117,7 +112,6 @@ impl BootleLanternCredentialScopeV1 {
             issuer_parameter_digest: policy.issuer_parameter_digest,
         })
     }
-
     /// Return whether this scope is exactly selected by a later presentation.
     #[must_use]
     pub fn matches(
@@ -128,7 +122,6 @@ impl BootleLanternCredentialScopeV1 {
     ) -> bool {
         Self::new(context, canonical_genesis_hash, policy).is_ok_and(|candidate| candidate == *self)
     }
-
     pub(crate) fn application_term(
         &self,
     ) -> Result<[ApplicationPolynomialV1; BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1], CredentialScopeErrorV1>
@@ -156,7 +149,6 @@ impl BootleLanternCredentialScopeV1 {
         }
         Ok(output)
     }
-
     pub(crate) fn digest(&self) -> Result<[u8; 32], CredentialScopeErrorV1> {
         let mut state = Shake256::default();
         absorb_frame(&mut state, BOOTLE_LANTERN_CREDENTIAL_SCOPE_DIGEST_DOMAIN_V1)?;
@@ -169,7 +161,6 @@ impl BootleLanternCredentialScopeV1 {
         }
         Ok(digest)
     }
-
     fn absorb_fields(&self, state: &mut Shake256) -> Result<(), CredentialScopeErrorV1> {
         let epoch = self.policy_epoch.to_be_bytes();
         for (label, value) in [
@@ -211,7 +202,6 @@ impl BootleLanternCredentialScopeV1 {
         Ok(())
     }
 }
-
 fn bounded_scope_coefficient_v1<F>(max_attempts: u32, mut next_candidate: F) -> Option<u16>
 where
     F: FnMut() -> u16,
@@ -224,14 +214,12 @@ where
     }
     None
 }
-
 fn absorb_frame(state: &mut Shake256, value: &[u8]) -> Result<(), CredentialScopeErrorV1> {
     let length = u32::try_from(value.len()).map_err(|_| CredentialScopeErrorV1::FieldTooLarge)?;
     state.update(&length.to_be_bytes());
     state.update(value);
     Ok(())
 }
-
 /// Failure while selecting or expanding one reusable credential scope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum CredentialScopeErrorV1 {
@@ -254,22 +242,18 @@ pub enum CredentialScopeErrorV1 {
     #[error("Bootle/Lantern credential scope internal invariant failed")]
     InternalInvariant,
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::privacy::{
         BootleLanternAllowedAttributeValuesV1, BootleLanternIssuerPublicMatrixV1,
         BootleLanternPolynomialV1, PrivacyTransactionIntentDigestV1,
     };
     use sha2::{Digest as _, Sha256};
-
-    use super::*;
-
     const fn raw(value: u8) -> [u8; 32] {
         [value; 32]
     }
-
     fn network_id(bytes: [u8; 32]) -> NetworkId {
         NetworkId::from_genesis_hash(
             HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
@@ -277,7 +261,6 @@ mod tests {
             ),
         )
     }
-
     fn kat_scope() -> BootleLanternCredentialScopeV1 {
         BootleLanternCredentialScopeV1 {
             network_id: network_id(raw(2)),
@@ -295,7 +278,6 @@ mod tests {
             issuer_parameter_digest: PrivacyParameterDigestV1::new(raw(13)),
         }
     }
-
     fn context() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
             network_id: network_id(raw(20)),
@@ -308,7 +290,6 @@ mod tests {
             engine_manifest_digest: PrivacyEngineManifestDigestV1::new(raw(6)),
         }
     }
-
     fn active_policy() -> BootleLanternIssuerPolicyV1 {
         let first_column = core::array::from_fn(|row| BootleLanternPolynomialV1 {
             coefficients: (0..64)
@@ -341,7 +322,6 @@ mod tests {
         policy.validate().expect("valid fixture policy");
         policy
     }
-
     fn application_term_digest(scope: &BootleLanternCredentialScopeV1) -> Vec<u8> {
         let term = scope.application_term().expect("scope expansion");
         let mut encoded = Vec::with_capacity(2 * BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1 * 64);
@@ -352,7 +332,6 @@ mod tests {
         }
         Sha256::digest(encoded).to_vec()
     }
-
     #[test]
     fn scope_uniform_rejection_boundaries_and_cap_are_exact() {
         assert_eq!(
@@ -365,7 +344,6 @@ mod tests {
         );
         assert_eq!(bounded_scope_coefficient_v1(1, || 61_445), None);
         assert_eq!(bounded_scope_coefficient_v1(0, || 0), None);
-
         let mut proposals = 0_u32;
         assert_eq!(
             bounded_scope_coefficient_v1(BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1, || {
@@ -375,7 +353,6 @@ mod tests {
             None
         );
         assert_eq!(proposals, BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1);
-
         proposals = 0;
         assert_eq!(
             bounded_scope_coefficient_v1(BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1, || {
@@ -390,7 +367,6 @@ mod tests {
         );
         assert_eq!(proposals, BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1);
     }
-
     #[test]
     fn scope_digest_and_application_term_match_independent_kat() {
         let scope = kat_scope();
@@ -413,7 +389,6 @@ mod tests {
                 .expect("hex")
         );
     }
-
     #[test]
     fn every_included_scope_field_changes_digest_and_application_term() {
         let scope = kat_scope();
@@ -452,7 +427,6 @@ mod tests {
             issuer_parameter_digest,
             PrivacyParameterDigestV1::new(raw(33))
         );
-
         for (field, mutation) in mutations {
             assert_ne!(
                 mutation.digest().expect("mutated digest"),
@@ -466,7 +440,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn action_index_and_transaction_intent_are_presentation_only() {
         let policy = active_policy();
@@ -478,12 +451,10 @@ mod tests {
         changed_context.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new(raw(21));
         let changed =
             BootleLanternCredentialScopeV1::new(&changed_context, raw(20), &policy).expect("scope");
-
         assert_eq!(changed, base);
         assert_eq!(changed.digest(), base.digest());
         assert_eq!(changed.application_term(), base.application_term());
     }
-
     #[test]
     fn revoked_policy_and_zero_reusable_bindings_fail_closed() {
         let context = context();
@@ -492,7 +463,6 @@ mod tests {
             BootleLanternCredentialScopeV1::new(&context, [0; 32], &policy),
             Err(CredentialScopeErrorV1::ZeroBinding("genesis_hash"))
         ));
-
         let mut revoked = policy.clone();
         revoked.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
         revoked.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
@@ -501,14 +471,12 @@ mod tests {
             BootleLanternCredentialScopeV1::new(&context, raw(20), &revoked),
             Err(CredentialScopeErrorV1::InvalidPolicy)
         ));
-
         let mut zero_issuer = policy.clone();
         zero_issuer.issuer_id = PrivacyIssuerIdV1::new([0; 32]);
         assert!(matches!(
             BootleLanternCredentialScopeV1::new(&context, raw(20), &zero_issuer),
             Err(CredentialScopeErrorV1::InvalidPolicy)
         ));
-
         let mut zero_contexts = Vec::new();
         macro_rules! zero_context {
             ($field:ident, $value:expr) => {{

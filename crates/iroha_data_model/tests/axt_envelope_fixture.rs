@@ -1,12 +1,10 @@
 //! Regression guard for the AXT envelope fixtures (handles/proofs/touches).
-
 use hex::encode;
 use iroha_data_model::nexus::{
     AxtDescriptor, AxtHandleFragment, AxtProofFragment, TouchManifest, compute_descriptor_binding,
     proof_matches_manifest, validate_descriptor,
 };
 use norito::{json, to_bytes};
-
 #[derive(Debug, Clone, norito::json::JsonDeserialize)]
 struct DescriptorFixture {
     descriptor: AxtDescriptor,
@@ -14,13 +12,11 @@ struct DescriptorFixture {
     binding_hex: String,
     descriptor_hex: String,
 }
-
 #[derive(Debug, Clone, norito::json::JsonDeserialize)]
 struct HandleFixtures {
     happy: Vec<AxtHandleFragment>,
     rejects: Vec<AxtHandleFragment>,
 }
-
 #[derive(Debug, Clone, norito::json::JsonDeserialize)]
 struct EnvelopeFixture {
     descriptor_hex: String,
@@ -28,7 +24,6 @@ struct EnvelopeFixture {
     proofs: Vec<AxtProofFragment>,
     handles: HandleFixtures,
 }
-
 #[test]
 fn envelope_fixtures_align_with_descriptor_binding() {
     let descriptor: DescriptorFixture =
@@ -37,13 +32,11 @@ fn envelope_fixtures_align_with_descriptor_binding() {
     let envelope: EnvelopeFixture =
         json::from_slice(include_bytes!("fixtures/axt_envelope_multi_ds.json"))
             .expect("envelope fixture decodes");
-
     validate_descriptor(&descriptor.descriptor).expect("fixture descriptor is valid");
     let binding = compute_descriptor_binding(&descriptor.descriptor).expect("binding computed");
     assert_eq!(encode(binding), descriptor.binding_hex);
     assert_eq!(descriptor.binding_hex, envelope.binding_hex);
     assert_eq!(descriptor.descriptor_hex, envelope.descriptor_hex);
-
     let manifest_for = |dsid| -> TouchManifest {
         descriptor
             .touch_manifest
@@ -52,7 +45,6 @@ fn envelope_fixtures_align_with_descriptor_binding() {
             .map(|fragment| fragment.manifest.clone())
             .expect("manifest for dataspace present")
     };
-
     for proof in &envelope.proofs {
         let manifest = manifest_for(proof.dsid);
         let manifest_root = iroha_crypto::Hash::new(to_bytes(&manifest).expect("manifest encodes"));
@@ -63,7 +55,6 @@ fn envelope_fixtures_align_with_descriptor_binding() {
             proof.dsid.as_u64()
         );
     }
-
     for handle in &envelope.handles.happy {
         assert_eq!(
             handle.handle.axt_binding.as_bytes(),
@@ -78,7 +69,6 @@ fn envelope_fixtures_align_with_descriptor_binding() {
             "handle manifest root must reflect fixture manifest"
         );
     }
-
     let mut reject_seen = false;
     for handle in &envelope.handles.rejects {
         if handle.handle.axt_binding.as_bytes() != &binding {

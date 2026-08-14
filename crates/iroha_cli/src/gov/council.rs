@@ -1,14 +1,11 @@
 //! Council governance query helper.
-
 use super::shared::print_with_summary;
 use crate::{Run, RunContext};
 use eyre::Result;
 use iroha::client::Client;
-
 /// Fetch the latest explicitly persisted council roster.
 #[derive(clap::Args, Debug)]
 pub struct CouncilArgs {}
-
 impl Run for CouncilArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -37,7 +34,6 @@ impl Run for CouncilArgs {
         print_with_summary(context, summary, &value)
     }
 }
-
 fn account_ids(value: &norito::json::Value, field: &str) -> Vec<String> {
     value
         .get(field)

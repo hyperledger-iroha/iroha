@@ -112,7 +112,6 @@ enum ExactOutputRolloverClaim {
         response_hash: HashOf<CertifiedMergeSidecarChunkV1>,
     },
 }
-
 fn native_amx_message_body(
     message: &NativeAmxMessage,
 ) -> Result<&NativeAmxAttestationBodyV2, String> {
@@ -132,7 +131,6 @@ fn native_amx_message_body(
     }
     Ok(body)
 }
-
 impl ExactOutputRolloverClaim {
     const fn accepts_superseded_reply_delivery(&self) -> bool {
         matches!(
@@ -141,7 +139,6 @@ impl ExactOutputRolloverClaim {
                 | Self::DurableCertifiedBodyResponse { .. }
         )
     }
-
     fn scope(&self) -> Option<ExactOutputCreationScope> {
         match self {
             Self::Exact | Self::NonRetireableLaneTransport { .. } => None,
@@ -163,7 +160,6 @@ impl ExactOutputRolloverClaim {
             | Self::CertifiedSidecarChunk { scope, .. } => Some(*scope),
         }
     }
-
     fn validate_non_retireable_lane_transport_fanout(
         messages: &[NetworkMessage],
         peers: &[PeerId],
@@ -189,7 +185,6 @@ impl ExactOutputRolloverClaim {
         }
         Ok(())
     }
-
     fn validate_fanout(&self, messages: &[NetworkMessage], peers: &[PeerId]) -> Result<(), String> {
         match self {
             Self::Exact => Ok(()),

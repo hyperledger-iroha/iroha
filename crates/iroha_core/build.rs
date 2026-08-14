@@ -4,9 +4,7 @@
 //! opt-in Kagemusha candidate-build feature additionally requires and verifies
 //! an independently pinned reviewed clean signed source closure supplied by the
 //! dedicated build helper.
-
 use std::{env, path::Path, process::Command};
-
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=IROHA_GIT_COMMIT_HASH");
@@ -27,7 +25,6 @@ fn main() {
         embed_exact_kagemusha_source_seal();
     }
 }
-
 fn embed_exact_kagemusha_source_seal() {
     let expected_commit = required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_COMMIT", 40);
     let expected_tree = required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_TREE_SHA256", 64);
@@ -52,7 +49,6 @@ fn embed_exact_kagemusha_source_seal() {
     let repository_root = Path::new(&manifest_dir).join("../..");
     let seal_script = repository_root.join("scripts/kagemusha_source_tree_seal.py");
     let python = env::var("KAGEMUSHA_SOURCE_SEAL_PYTHON").unwrap_or_else(|_| "python3".to_owned());
-
     let first_tree = command_text(
         Command::new(&python)
             .arg("-I")
@@ -103,7 +99,6 @@ fn embed_exact_kagemusha_source_seal() {
     );
     println!("cargo:rerun-if-changed={reviewed_closure}");
 }
-
 fn required_lower_hex_env(name: &str, expected_len: usize) -> String {
     let value = env::var(name)
         .unwrap_or_else(|_| panic!("{name} is required for a sealed Kagemusha candidate build"));
@@ -116,7 +111,6 @@ fn required_lower_hex_env(name: &str, expected_len: usize) -> String {
     }
     value
 }
-
 fn command_text(command: &mut Command, description: &str) -> String {
     let output = command
         .output()
@@ -134,7 +128,6 @@ fn command_text(command: &mut Command, description: &str) -> String {
     );
     trimmed.to_owned()
 }
-
 fn env_commit_hash() -> Option<String> {
     let commit = env::var("IROHA_GIT_COMMIT_HASH").ok()?;
     let trimmed = commit.trim();
@@ -144,7 +137,6 @@ fn env_commit_hash() -> Option<String> {
         Some(trimmed.to_owned())
     }
 }
-
 fn git_commit_hash() -> Option<String> {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").ok()?;
     let output = Command::new("git")

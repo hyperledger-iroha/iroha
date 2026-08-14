@@ -4,9 +4,7 @@
 //! one finalized cursor and matching the chain-authoritative status count.
 //! Callers cannot obtain a partially collected projection, so local storage
 //! deletion never relies on a stale or truncated repair-task cache.
-
-use std::collections::BTreeSet;
-
+use crate::repair_transaction_forwarder::{decode_repair_report, decode_slash_proposal};
 use iroha_data_model::sorafs::moderation_ledger::{
     REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1, REPAIR_LEDGER_MAX_RECEIPTS_V1,
     REPAIR_LEDGER_TASK_VERSION_V1, REPAIR_QUERY_MAX_ITEMS_V1, REPAIR_QUERY_MAX_TASK_PAGE_BYTES_V1,
@@ -15,10 +13,8 @@ use iroha_data_model::sorafs::moderation_ledger::{
     RepairLedgerTaskV1, RepairLedgerTerminalKindV1, RepairLedgerTerminalOutcomeV1,
     sorafs_repair_appeal_id_v1, sorafs_repair_task_id_v1,
 };
+use std::collections::BTreeSet;
 use thiserror::Error;
-
-use crate::repair_transaction_forwarder::{decode_repair_report, decode_slash_proposal};
-
 /// Maximum finalized task pages accepted for one GC projection.
 ///
 /// The page bound is independent of the number of tasks retained by consensus.
@@ -29,14 +25,12 @@ pub const REPAIR_GC_PROJECTION_MAX_PAGES_V1: usize = 1_024;
 pub const REPAIR_GC_PROJECTION_MAX_TASKS_V1: usize = 65_536;
 /// Maximum aggregate canonical page bytes accepted for one GC projection.
 pub const REPAIR_GC_PROJECTION_MAX_ENCODED_BYTES_V1: usize = 64 * 1024 * 1024;
-
 #[derive(Debug, Clone, Copy)]
 struct RepairLedgerProjectionLimitsV1 {
     pages: usize,
     tasks: usize,
     encoded_bytes: usize,
 }
-
 impl Default for RepairLedgerProjectionLimitsV1 {
     fn default() -> Self {
         Self {
@@ -46,7 +40,6 @@ impl Default for RepairLedgerProjectionLimitsV1 {
         }
     }
 }
-
 /// Failure to prove one complete, bounded finalized repair-task projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum RepairLedgerProjectionErrorV1 {
@@ -84,7 +77,6 @@ pub enum RepairLedgerProjectionErrorV1 {
     #[error("repair projection is incomplete")]
     Incomplete,
 }
-
 /// Builder that withholds the projection until every bounded page is proven.
 #[derive(Debug)]
 pub struct RepairLedgerTaskProjectionBuilderV1 {
@@ -98,7 +90,6 @@ pub struct RepairLedgerTaskProjectionBuilderV1 {
     ticket_ids: BTreeSet<String>,
     tasks: Vec<RepairLedgerTaskV1>,
 }
-
 impl RepairLedgerTaskProjectionBuilderV1 {
     /// Start collecting pages for one chain-authoritative finalized status.
     ///
@@ -109,7 +100,6 @@ impl RepairLedgerTaskProjectionBuilderV1 {
     pub fn new(status: RepairFinalizedStatusV1) -> Result<Self, RepairLedgerProjectionErrorV1> {
         Self::new_with_limits(status, RepairLedgerProjectionLimitsV1::default())
     }
-
     fn new_with_limits(
         status: RepairFinalizedStatusV1,
         limits: RepairLedgerProjectionLimitsV1,
@@ -137,7 +127,6 @@ impl RepairLedgerTaskProjectionBuilderV1 {
             tasks: Vec::new(),
         })
     }
-
     /// Consume the next exclusive-cursor page at the initial finalized anchor.
     ///
     /// # Errors
@@ -179,14 +168,12 @@ impl RepairLedgerTaskProjectionBuilderV1 {
         if next_encoded_bytes > self.limits.encoded_bytes {
             return Err(RepairLedgerProjectionErrorV1::EncodedByteLimitExceeded);
         }
-
         let page_last_task_id = page.tasks.last().map(|task| task.task_id);
         match (page.has_more, page.next_after_task_id, page_last_task_id) {
             (true, Some(next), Some(last)) if next == last => {}
             (false, None, _) => {}
             _ => return Err(RepairLedgerProjectionErrorV1::InvalidPageCursor),
         }
-
         let next_task_count = self
             .tasks
             .len()
@@ -206,14 +193,12 @@ impl RepairLedgerTaskProjectionBuilderV1 {
             }
             self.last_task_id = Some(task.task_id);
         }
-
         self.pages_seen = next_pages;
         self.encoded_bytes = next_encoded_bytes;
         self.terminal_page_seen = !page.has_more;
         self.tasks.extend(page.tasks);
         Ok(())
     }
-
     /// Finish collection only after the terminal page and exact global count.
     ///
     /// # Errors
@@ -234,7 +219,6 @@ impl RepairLedgerTaskProjectionBuilderV1 {
         })
     }
 }
-
 /// Complete bounded repair-task state from one immutable finalized view.
 #[derive(Debug, Clone)]
 pub struct RepairLedgerTaskProjectionV1 {
@@ -242,37 +226,31 @@ pub struct RepairLedgerTaskProjectionV1 {
     encoded_bytes: usize,
     tasks: Vec<RepairLedgerTaskV1>,
 }
-
 impl RepairLedgerTaskProjectionV1 {
     /// Finalized cursor shared by the status and every consumed page.
     #[must_use]
     pub const fn finalized_cursor(&self) -> RepairFinalizedCursorV1 {
         self.finalized_cursor
     }
-
     /// Exact globally proven task count.
     #[must_use]
     pub fn len(&self) -> usize {
         self.tasks.len()
     }
-
     /// Whether the globally proven projection contains no tasks.
     pub fn is_empty(&self) -> bool {
         self.tasks.is_empty()
     }
-
     /// Aggregate canonical bytes consumed while proving completeness.
     #[must_use]
     pub const fn encoded_bytes(&self) -> usize {
         self.encoded_bytes
     }
-
     /// Every finalized repair task in strict immutable task-id order.
     #[must_use]
     pub fn tasks(&self) -> &[RepairLedgerTaskV1] {
         &self.tasks
     }
-
     /// Non-terminal tasks for one provider.
     ///
     /// Filtering is deliberately available only on a finished projection, so
@@ -287,7 +265,6 @@ impl RepairLedgerTaskProjectionV1 {
             .filter(move |task| task.provider_id == provider_id && task.terminal_outcome.is_none())
     }
 }
-
 fn validate_finalized_cursor(
     cursor: RepairFinalizedCursorV1,
 ) -> Result<(), RepairLedgerProjectionErrorV1> {
@@ -296,7 +273,6 @@ fn validate_finalized_cursor(
     }
     Ok(())
 }
-
 fn validate_status(status: RepairLedgerStatusV1) -> Result<(), RepairLedgerProjectionErrorV1> {
     if status == RepairLedgerStatusV1::default() {
         return Ok(());
@@ -317,7 +293,6 @@ fn validate_status(status: RepairLedgerStatusV1) -> Result<(), RepairLedgerProje
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_lines)]
 /// Validate one finalized native repair task and all embedded provenance.
 ///
@@ -345,7 +320,6 @@ pub fn validate_task(task: &RepairLedgerTaskV1) -> Result<(), RepairLedgerProjec
     {
         return Err(RepairLedgerProjectionErrorV1::InvalidTask);
     }
-
     let mut receipt_keys = BTreeSet::new();
     let mut last_revision = 1_u64;
     for receipt in &task.action_receipts {
@@ -370,7 +344,6 @@ pub fn validate_task(task: &RepairLedgerTaskV1) -> Result<(), RepairLedgerProjec
     {
         return Err(RepairLedgerProjectionErrorV1::InvalidTask);
     }
-
     match (&task.terminal_outcome, &task.slash, &task.appeal) {
         (None, None, None) => {}
         (
@@ -425,7 +398,6 @@ pub fn validate_task(task: &RepairLedgerTaskV1) -> Result<(), RepairLedgerProjec
             }) => {}
         _ => return Err(RepairLedgerProjectionErrorV1::InvalidTask),
     }
-
     if let Some(slash) = &task.slash {
         let proposal = decode_slash_proposal(&slash.canonical_proposal)
             .map_err(|_| RepairLedgerProjectionErrorV1::InvalidTask)?;
@@ -450,31 +422,26 @@ pub fn validate_task(task: &RepairLedgerTaskV1) -> Result<(), RepairLedgerProjec
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::account::AccountId;
     use sorafs_manifest::repair::{
         REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, RepairCauseV1, RepairEvidenceV1,
         RepairManualCauseV1, RepairReportV1, RepairTicketId,
     };
-
-    use super::*;
-
     fn cursor(byte: u8) -> RepairFinalizedCursorV1 {
         RepairFinalizedCursorV1 {
             height: u64::from(byte),
             block_hash: [byte; 32],
         }
     }
-
     fn account(byte: u8) -> AccountId {
         let key = KeyPair::try_from_seed(vec![byte; 32], Algorithm::Ed25519)
             .expect("deterministic account key");
         AccountId::new(key.public_key().clone())
     }
-
     fn task(ticket: &str, source_identity: [u8; 32]) -> RepairLedgerTaskV1 {
         let submitted_by = account(source_identity[0]);
         let manifest_digest = [source_identity[0].wrapping_add(1); 32];
@@ -516,7 +483,6 @@ mod tests {
             updated_at_unix_ms: 1_000,
         }
     }
-
     fn status(finalized_cursor: RepairFinalizedCursorV1, tasks: u64) -> RepairFinalizedStatusV1 {
         RepairFinalizedStatusV1 {
             finalized_cursor,
@@ -527,7 +493,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn complete_projection_is_exposed_only_after_exact_terminal_count() {
         let anchor = cursor(7);
@@ -551,7 +516,6 @@ mod tests {
         assert_eq!(projection.active_tasks_for_provider(provider_id).count(), 1);
         assert_eq!(projection.active_tasks_for_provider([0xFF; 32]).count(), 0);
     }
-
     #[test]
     fn exact_all_zero_status_accepts_one_empty_terminal_page() {
         let anchor = cursor(6);
@@ -572,7 +536,6 @@ mod tests {
         assert!(projection.is_empty());
         assert_eq!(projection.finalized_cursor(), anchor);
     }
-
     #[test]
     fn terminal_page_must_match_authoritative_global_count() {
         let anchor = cursor(8);
@@ -591,7 +554,6 @@ mod tests {
             Err(RepairLedgerProjectionErrorV1::Incomplete)
         ));
     }
-
     #[test]
     fn page_anchor_and_exclusive_cursor_are_fail_closed() {
         let anchor = cursor(9);
@@ -617,7 +579,6 @@ mod tests {
             Err(RepairLedgerProjectionErrorV1::InvalidPageCursor)
         );
     }
-
     #[test]
     fn independent_projection_resource_ceilings_reject_prefixes() {
         let anchor = cursor(11);
@@ -648,7 +609,6 @@ mod tests {
             }),
             Err(RepairLedgerProjectionErrorV1::PageLimitExceeded)
         );
-
         assert!(matches!(
             RepairLedgerTaskProjectionBuilderV1::new_with_limits(
                 status(anchor, 2),
@@ -660,7 +620,6 @@ mod tests {
             ),
             Err(RepairLedgerProjectionErrorV1::TaskLimitExceeded)
         ));
-
         let mut byte_limited = RepairLedgerTaskProjectionBuilderV1::new_with_limits(
             status(anchor, 1),
             RepairLedgerProjectionLimitsV1 {

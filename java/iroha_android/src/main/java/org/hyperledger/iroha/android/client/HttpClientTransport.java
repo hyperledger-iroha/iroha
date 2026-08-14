@@ -448,7 +448,7 @@ public final class HttpClientTransport implements IrohaClient {
   @Override
   public CompletableFuture<SumeragiV2Status> getSumeragiStatus() {
     return fetchExactJson(
-        buildExactJsonGetRequest(
+        buildExactOperatorJsonGetRequest(
             "/v1/sumeragi/status", SumeragiStatusModels.STATUS_JSON_MAX_BYTES),
         SumeragiStatusModels::parseStatus,
         "Sumeragi status");
@@ -458,7 +458,7 @@ public final class HttpClientTransport implements IrohaClient {
   @Override
   public CompletableFuture<SumeragiDiagnosticsStatus> getSumeragiDiagnostics() {
     return fetchExactJson(
-        buildExactJsonGetRequest(
+        buildExactOperatorJsonGetRequest(
             "/v1/sumeragi/diagnostics", SumeragiStatusModels.DIAGNOSTICS_JSON_MAX_BYTES),
         SumeragiDiagnosticsModels::parseDiagnostics,
         "Sumeragi diagnostics");
@@ -480,7 +480,7 @@ public final class HttpClientTransport implements IrohaClient {
     return getLedgerExecutedBlockWire(BigInteger.valueOf(height));
   }
 
-  /** Fetch the exact canonical committed Exact12 manifest and require native validation. */
+  /** Fetch the exact committed Exact12 manifest with one-shot canonical account authentication. */
   public CompletableFuture<PrivacyExact12CapabilityManifestV1> getPrivacyCapabilities(
       final ToriiCanonicalRequestAuth canonicalAuth) {
     return fetchExactNoritoBytes(
@@ -492,7 +492,10 @@ public final class HttpClientTransport implements IrohaClient {
         .thenApply(PrivacyNativeBridge::decodeExact12CapabilityManifestV1);
   }
 
-  /** Require committed/native tuple agreement before retained privacy construction. */
+  /**
+   * Require committed/native tuple agreement before retained privacy construction, authenticated
+   * against the exact locally configured network.
+   */
   public CompletableFuture<PrivacyExact12CapabilityTupleAdmissionV1>
       requirePrivacyExact12CapabilityAdmission(
           final PrivacyProtocolIdV1 protocolId,
@@ -639,7 +642,8 @@ public final class HttpClientTransport implements IrohaClient {
 
   /** Resolves an identifier using a typed request wrapper. */
   public CompletableFuture<Optional<IdentifierResolutionReceipt>> resolveIdentifier(
-      final IdentifierResolveRequest requestBody) {
+      final IdentifierResolveRequest requestBody,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
     Objects.requireNonNull(requestBody, "requestBody");
     final byte[] body =
         encodeJsonBody(
@@ -647,7 +651,8 @@ public final class HttpClientTransport implements IrohaClient {
                 requestBody.policyId(),
                 requestBody.encryptedInputHex(),
                 requestBody.outputOpening()));
-    final TransportRequest request = buildJsonPostRequest("/v1/identifiers/resolve", body);
+    final TransportRequest request =
+        buildVpnRequest("POST", "/v1/identifiers/resolve", body, canonicalAuth);
     return fetchJsonAllowingNotFound(
         request, IdentifierJsonParser::parseResolutionReceipt, "identifier resolve");
   }
@@ -656,16 +661,26 @@ public final class HttpClientTransport implements IrohaClient {
   public CompletableFuture<Optional<IdentifierResolutionReceipt>> resolveIdentifier(
       final String policyId,
       final String encryptedInputHex,
-      final RamLfeOutputOpening outputOpening) {
+      final RamLfeOutputOpening outputOpening,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
     return resolveIdentifier(
-        IdentifierResolveRequest.encrypted(policyId, encryptedInputHex, outputOpening));
+        IdentifierResolveRequest.encrypted(policyId, encryptedInputHex, outputOpening),
+        canonicalAuth);
   }
 
   /** Issues a claim receipt using a typed request wrapper. */
   public CompletableFuture<Optional<IdentifierResolutionReceipt>> issueIdentifierClaimReceipt(
-      final String accountId, final IdentifierResolveRequest requestBody) {
+      final String accountId,
+      final IdentifierResolveRequest requestBody,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
     Objects.requireNonNull(requestBody, "requestBody");
-    final String normalizedAccountId = normalizeNonBlank(accountId, "accountId");
+    final String normalizedAccountId =
+        org.hyperledger.iroha.android.address.AccountIdLiteral.requireCanonicalI105Address(
+            accountId, "accountId");
+    if (!normalizedAccountId.equals(canonicalAuth.accountId())) {
+      throw new IllegalArgumentException(
+          "canonicalAuth.accountId must equal the claim-receipt path accountId");
+    }
     final byte[] body =
         encodeJsonBody(
             buildIdentifierResolvePayload(
@@ -673,11 +688,13 @@ public final class HttpClientTransport implements IrohaClient {
                 requestBody.encryptedInputHex(),
                 requestBody.outputOpening()));
     final TransportRequest request =
-        buildJsonPostRequest(
+        buildVpnRequest(
+            "POST",
             "/v1/accounts/"
                 + encodePathSegment(normalizedAccountId)
                 + "/identifiers/claim-receipt",
-            body);
+            body,
+            canonicalAuth);
     return fetchJsonAllowingNotFound(
         request, IdentifierJsonParser::parseResolutionReceipt, "identifier claim receipt");
   }
@@ -687,21 +704,29 @@ public final class HttpClientTransport implements IrohaClient {
       final String accountId,
       final String policyId,
       final String encryptedInputHex,
-      final RamLfeOutputOpening outputOpening) {
+      final RamLfeOutputOpening outputOpening,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
     return issueIdentifierClaimReceipt(
-        accountId, IdentifierResolveRequest.encrypted(policyId, encryptedInputHex, outputOpening));
+        accountId,
+        IdentifierResolveRequest.encrypted(policyId, encryptedInputHex, outputOpening),
+        canonicalAuth);
   }
 
   /** Executes a RAM-LFE program using a typed request wrapper. */
   public CompletableFuture<Optional<RamLfeExecuteResponse>> executeRamLfeProgram(
-      final String programId, final RamLfeExecuteRequest requestBody) {
+      final String programId,
+      final RamLfeExecuteRequest requestBody,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
     Objects.requireNonNull(requestBody, "requestBody");
     final String normalizedProgramId = normalizeNonBlank(programId, "programId");
     final byte[] body =
         encodeJsonBody(buildRamLfeExecutePayload(requestBody.encryptedInputHex()));
     final TransportRequest request =
-        buildJsonPostRequest(
-            "/v1/ram-lfe/programs/" + encodePathSegment(normalizedProgramId) + "/execute", body);
+        buildVpnRequest(
+            "POST",
+            "/v1/ram-lfe/programs/" + encodePathSegment(normalizedProgramId) + "/execute",
+            body,
+            canonicalAuth);
     return fetchJsonAllowingNotFound(
         request, RamLfeJsonParser::parseExecuteResponse, "ram-lfe execute");
   }
@@ -711,26 +736,34 @@ public final class HttpClientTransport implements IrohaClient {
    * `/v1/ram-lfe/programs/{program_id}/execute`.
    */
   public CompletableFuture<Optional<RamLfeExecuteResponse>> executeRamLfeProgram(
-      final String programId, final String encryptedInputHex) {
-    return executeRamLfeProgram(programId, buildRamLfeExecuteRequest(encryptedInputHex));
+      final String programId,
+      final String encryptedInputHex,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return executeRamLfeProgram(
+        programId, buildRamLfeExecuteRequest(encryptedInputHex), canonicalAuth);
   }
 
   /** Verifies a RAM-LFE execution receipt against the node's registered program policy. */
   public CompletableFuture<RamLfeReceiptVerifyResponse> verifyRamLfeReceipt(
-      final RamLfeReceiptVerifyRequest requestBody) {
+      final RamLfeReceiptVerifyRequest requestBody,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
     Objects.requireNonNull(requestBody, "requestBody");
     final byte[] body =
         encodeJsonBody(
             buildRamLfeReceiptVerifyPayload(requestBody.receipt(), requestBody.outputHex()));
-    final TransportRequest request = buildJsonPostRequest("/v1/ram-lfe/receipts/verify", body);
+    final TransportRequest request =
+        buildVpnRequest("POST", "/v1/ram-lfe/receipts/verify", body, canonicalAuth);
     return fetchJson(
         request, RamLfeJsonParser::parseReceiptVerifyResponse, "ram-lfe receipt verify");
   }
 
   /** Verifies a RAM-LFE execution receipt against the node's registered program policy. */
   public CompletableFuture<RamLfeReceiptVerifyResponse> verifyRamLfeReceipt(
-      final Map<String, Object> receipt, final String outputHex) {
-    return verifyRamLfeReceipt(new RamLfeReceiptVerifyRequest(receipt, outputHex));
+      final Map<String, Object> receipt,
+      final String outputHex,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return verifyRamLfeReceipt(
+        new RamLfeReceiptVerifyRequest(receipt, outputHex), canonicalAuth);
   }
 
   /** Fetches the public Sora VPN profile. */
@@ -1801,6 +1834,41 @@ public final class HttpClientTransport implements IrohaClient {
     return builder.build();
   }
 
+  private TransportRequest buildExactOperatorJsonGetRequest(
+      final String path, final long maximumResponseBytes) {
+    for (final String name : config.defaultHeaders().keySet()) {
+      if (name.equalsIgnoreCase("Accept")) {
+        throw new IllegalArgumentException(
+            "Accept must not be overridden for exact JSON requests");
+      }
+    }
+    OperatorRequestSigner.requireGeneratedAuth(config.defaultHeaders());
+    final URI target = resolvePath(path);
+    final Map<String, String> operatorHeaders =
+        OperatorRequestSigner.buildHeaders(
+            config.requireOperatorSigningContext(), "GET", target, new byte[0]);
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(target)
+            .setMethod("GET")
+            .addHeader("Accept", APPLICATION_JSON)
+            .setMaximumResponseBytes(Long.valueOf(maximumResponseBytes))
+            .setTimeout(config.requestTimeout());
+    for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    for (final Map.Entry<String, String> entry : operatorHeaders.entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    TransportSecurity.requireHttpRequestAllowed(
+        "HttpClientTransport operator GET",
+        config.baseUri(),
+        target,
+        operatorHeaders,
+        null);
+    return builder.build();
+  }
+
   private TransportRequest buildExactNoritoGetRequest(
       final String path, final long maximumResponseBytes) {
     return buildExactNoritoGetRequest(path, maximumResponseBytes, null);
@@ -1887,6 +1955,7 @@ public final class HttpClientTransport implements IrohaClient {
       requireSecureVpnBaseUri();
     }
     Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    requireCanonicalHeadersUnset();
     final URI target = resolvePath(path);
     final TransportRequest.Builder builder =
         TransportRequest.builder()
@@ -1900,10 +1969,13 @@ public final class HttpClientTransport implements IrohaClient {
     for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
       builder.addHeader(entry.getKey(), entry.getValue());
     }
-    for (final Map.Entry<String, String> entry :
-        buildCanonicalHeaders(method, target, body, canonicalAuth).entrySet()) {
+    final Map<String, String> canonicalHeaders =
+        buildCanonicalHeaders(method, target, body, canonicalAuth);
+    for (final Map.Entry<String, String> entry : canonicalHeaders.entrySet()) {
       builder.addHeader(entry.getKey(), entry.getValue());
     }
+    TransportSecurity.requireHttpRequestAllowed(
+        "HttpClientTransport", config.baseUri(), target, canonicalHeaders, body);
     return builder.build();
   }
 
@@ -1993,9 +2065,14 @@ public final class HttpClientTransport implements IrohaClient {
     if (params.isEmpty()) {
       return target;
     }
-    final StringBuilder builder = new StringBuilder(target.toString());
-    builder.append(target.toString().contains("?") ? "&" : "?");
+    final String targetText = target.toString();
+    final int rawFragmentIndex = targetText.indexOf('#');
+    final int fragmentIndex = rawFragmentIndex >= 0 ? rawFragmentIndex : targetText.length();
+    final StringBuilder builder = new StringBuilder(targetText.length() + 1);
+    builder.append(targetText, 0, fragmentIndex);
+    builder.append(builder.indexOf("?") >= 0 ? "&" : "?");
     builder.append(encodeQuery(params));
+    builder.append(targetText, fragmentIndex, targetText.length());
     return URI.create(builder.toString());
   }
 

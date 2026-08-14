@@ -1,5 +1,4 @@
 //! Consumer-side Tokio stream adapters for the `SoraNet` record protocol.
-
 /// Define Tokio record reader/writer adapters inside one consumer-owned module.
 ///
 /// The adapter implementation expands in a runtime crate that already owns
@@ -15,14 +14,11 @@ macro_rules! define_soranet_record_io_adapters {
                 pin::Pin,
                 task::{Context, Poll, ready},
             };
-
             use ::tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
             use $crate::soranet::record::__RecordZeroize as _;
-
             use $crate::soranet::record::{
                 MAX_RECORD_PLAINTEXT_LEN, RECORD_HEADER_LEN, RecordOpener, RecordSealer,
             };
-
             /// Async writer that emits bounded authenticated records.
             pub struct RecordWriter<W> {
                 inner: W,
@@ -31,7 +27,6 @@ macro_rules! define_soranet_record_io_adapters {
                 pending_offset: usize,
                 failed: bool,
             }
-
             impl<W> RecordWriter<W> {
                 /// Wrap an async writer with record protection.
                 #[must_use]
@@ -44,14 +39,12 @@ macro_rules! define_soranet_record_io_adapters {
                         failed: false,
                     }
                 }
-
                 /// Borrow the underlying writer.
                 #[must_use]
                 pub fn get_ref(&self) -> &W {
                     &self.inner
                 }
             }
-
             impl<W: AsyncWrite + Unpin> RecordWriter<W> {
                 fn poll_drain_pending(
                     &mut self,
@@ -89,13 +82,11 @@ macro_rules! define_soranet_record_io_adapters {
                     Poll::Ready(Ok(()))
                 }
             }
-
             impl<W> Drop for RecordWriter<W> {
                 fn drop(&mut self) {
                     self.pending.zeroize();
                 }
             }
-
             impl<W: AsyncWrite + Unpin> AsyncWrite for RecordWriter<W> {
                 fn poll_write(
                     self: Pin<&mut Self>,
@@ -122,7 +113,6 @@ macro_rules! define_soranet_record_io_adapters {
                     // successful call.
                     Poll::Ready(Ok(accepted))
                 }
-
                 fn poll_flush(
                     self: Pin<&mut Self>,
                     context: &mut Context<'_>,
@@ -137,7 +127,6 @@ macro_rules! define_soranet_record_io_adapters {
                         }
                     }
                 }
-
                 fn poll_shutdown(
                     self: Pin<&mut Self>,
                     context: &mut Context<'_>,
@@ -153,7 +142,6 @@ macro_rules! define_soranet_record_io_adapters {
                     }
                 }
             }
-
             /// Async reader that authenticates records before exposing plaintext.
             pub struct RecordReader<R> {
                 inner: R,
@@ -168,7 +156,6 @@ macro_rules! define_soranet_record_io_adapters {
                 eof: bool,
                 failed: bool,
             }
-
             impl<R> RecordReader<R> {
                 /// Wrap an async reader with record authentication.
                 #[must_use]
@@ -187,13 +174,11 @@ macro_rules! define_soranet_record_io_adapters {
                         failed: false,
                     }
                 }
-
                 /// Borrow the underlying reader.
                 #[must_use]
                 pub fn get_ref(&self) -> &R {
                     &self.inner
                 }
-
                 fn fail(
                     &mut self,
                     kind: ErrorKind,
@@ -203,7 +188,6 @@ macro_rules! define_soranet_record_io_adapters {
                     io::Error::new(kind, message)
                 }
             }
-
             impl<R> Drop for RecordReader<R> {
                 fn drop(&mut self) {
                     self.header.zeroize();
@@ -211,7 +195,6 @@ macro_rules! define_soranet_record_io_adapters {
                     self.plaintext.zeroize();
                 }
             }
-
             impl<R: AsyncRead + Unpin> AsyncRead for RecordReader<R> {
                 fn poll_read(
                     self: Pin<&mut Self>,
@@ -228,7 +211,6 @@ macro_rules! define_soranet_record_io_adapters {
                             "SoraNet record reader is in a failed state",
                         )));
                     }
-
                     loop {
                         if this.plaintext_offset < this.plaintext.len() {
                             let available = &this.plaintext[this.plaintext_offset..];
@@ -245,7 +227,6 @@ macro_rules! define_soranet_record_io_adapters {
                         if this.eof {
                             return Poll::Ready(Ok(()));
                         }
-
                         while this.header_offset < RECORD_HEADER_LEN {
                             let before = this.header_offset;
                             let mut target = ReadBuf::new(&mut this.header[before..]);
@@ -263,7 +244,6 @@ macro_rules! define_soranet_record_io_adapters {
                             }
                             this.header_offset += read;
                         }
-
                         if this.body_len.is_none() {
                             let body_len = match this.opener.ciphertext_len(&this.header) {
                                 Ok(length) => length,
@@ -278,7 +258,6 @@ macro_rules! define_soranet_record_io_adapters {
                             this.ciphertext_offset = 0;
                             this.body_len = Some(body_len);
                         }
-
                         let body_len = this.body_len.expect("record body length initialized");
                         while this.ciphertext_offset < body_len {
                             let before = this.ciphertext_offset;
@@ -293,7 +272,6 @@ macro_rules! define_soranet_record_io_adapters {
                             }
                             this.ciphertext_offset += read;
                         }
-
                         let opened = this.opener.open_parts_into(
                             &this.header,
                             &this.ciphertext,
@@ -311,19 +289,16 @@ macro_rules! define_soranet_record_io_adapters {
                     }
                 }
             }
-
             #[cfg(test)]
             mod tests {
-                use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-
                 use super::*;
+                use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
                 use $crate::{
                     SessionKey,
                     soranet::record::{
                         RecordEndpoint, RecordLayer, RecordStreamContext, RecordStreamKind,
                     },
                 };
-
                 #[tokio::test(flavor = "current_thread")]
                 async fn adapters_reconstruct_plaintext_across_record_and_read_boundaries() {
                     let key = SessionKey::new(vec![0xA5; 32]);
@@ -343,7 +318,6 @@ macro_rules! define_soranet_record_io_adapters {
                     let (transport_writer, transport_reader) = tokio::io::duplex(32);
                     let mut writer = RecordWriter::new(transport_writer, client.sealer);
                     let mut reader = RecordReader::new(transport_reader, relay.opener);
-
                     let write = async {
                         writer.write_all(b"first").await.expect("first");
                         writer.write_all(b"-second").await.expect("second");
@@ -357,7 +331,6 @@ macro_rules! define_soranet_record_io_adapters {
                     let ((), plaintext) = tokio::join!(write, read);
                     assert_eq!(plaintext, b"first-second");
                 }
-
                 #[tokio::test(flavor = "current_thread")]
                 async fn reader_rejects_tampered_transport_bytes() {
                     let key = SessionKey::new(vec![0x5A; 32]);
@@ -381,7 +354,6 @@ macro_rules! define_soranet_record_io_adapters {
                     transport_writer.shutdown().await.expect("shutdown");
                     let mut reader = RecordReader::new(transport_reader, relay.opener);
                     let mut output = Vec::new();
-
                     let error = reader
                         .read_to_end(&mut output)
                         .await
@@ -389,7 +361,6 @@ macro_rules! define_soranet_record_io_adapters {
                     assert_eq!(error.kind(), ErrorKind::InvalidData);
                     assert!(output.is_empty());
                 }
-
                 #[tokio::test(flavor = "current_thread")]
                 async fn reader_rejects_unframed_plaintext_without_exposing_it() {
                     let key = SessionKey::new(vec![0x3C; 32]);
@@ -410,7 +381,6 @@ macro_rules! define_soranet_record_io_adapters {
                     transport_writer.shutdown().await.expect("shutdown");
                     let mut reader = RecordReader::new(transport_reader, relay.opener);
                     let mut output = Vec::new();
-
                     let error = reader
                         .read_to_end(&mut output)
                         .await

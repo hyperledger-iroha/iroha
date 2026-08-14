@@ -7,9 +7,7 @@
 //!
 //! The expected bytes are computed from the documented layouts and should be
 //! stable across architectures. Compact-len is enabled by default for varints.
-
 use norito::columnar as ncb;
-
 fn to_hex(bs: &[u8]) -> String {
     let mut s = String::with_capacity(bs.len() * 2);
     for b in bs {
@@ -18,7 +16,6 @@ fn to_hex(bs: &[u8]) -> String {
     }
     s
 }
-
 #[test]
 fn aos_bytes_bool_small_golden() {
     // Rows: (1, b"abc", true), (2, b"\x00\xff", false)
@@ -28,7 +25,6 @@ fn aos_bytes_bool_small_golden() {
     let expected = "0002010100000000000000036162630102000000000000000200ff00";
     assert_eq!(to_hex(&bytes), expected);
 }
-
 #[test]
 fn aos_str_u32_bool_small_golden() {
     // Rows: (1, "x", 7, true), (2, "yy", 9, false)
@@ -38,7 +34,6 @@ fn aos_str_u32_bool_small_golden() {
     let expected = "00020101000000000000000178070000000102000000000000000279790900000000";
     assert_eq!(to_hex(&bytes), expected);
 }
-
 #[test]
 fn ncb_str_bool_golden_small() {
     // NCB (u64, str, bool) with two rows (no delta, no dict)
@@ -50,7 +45,6 @@ fn ncb_str_bool_golden_small() {
         "0200000053000000010000000000000002000000000000000500000008000000616c696365626f6201";
     assert_eq!(to_hex(&bytes), expected);
 }
-
 #[test]
 fn ncb_str_bool_golden_medium() {
     // NCB (u64, str, bool) with eight rows, id-delta path, 1-byte names
@@ -70,7 +64,6 @@ fn ncb_str_bool_golden_medium() {
     let expected = "080000005300000000000000000000000202020202020200000000000100000002000000030000000400000005000000060000000700000008000000616263646566676855";
     assert_eq!(to_hex(&bytes), expected);
 }
-
 #[test]
 fn ncb_str_bool_dict_golden_small() {
     // Force dictionary encoding for repeated names
@@ -87,7 +80,6 @@ fn ncb_str_bool_dict_golden_small() {
     let expected = "0400000093000000010000000000000002000000000000000300000000000000040000000000000002000000000000000200000004000000616263640000000001000000000000000100000009";
     assert_eq!(to_hex(&bytes), expected);
 }
-
 #[test]
 fn ncb_enum_bool_dict_code_delta_golden() {
     // Enum(Name|Code) with dict-coded names and delta-coded codes
@@ -107,7 +99,6 @@ fn ncb_enum_bool_dict_code_delta_golden() {
     let expected = "04000000e50000000a000000000000000c000000000000000e000000000000000f00000000000000000001010200000000000000010000000200000078790000000000000100000007000000020a";
     assert_eq!(to_hex(&bytes), expected);
 }
-
 #[test]
 fn ncb_opt_str_bool_golden_small() {
     // (u64, Option<str>, bool): [1, Some("a"), false], [2, None, true], [3, Some("bc"), false]
@@ -123,7 +114,6 @@ fn ncb_opt_str_bool_golden_small() {
     let expected = "030000005b000000010000000000000002020500000000000000010000000300000061626302";
     assert_eq!(to_hex(&bytes), expected);
 }
-
 #[test]
 fn ncb_opt_u32_bool_golden_small() {
     // (u64, Option<u32>, bool): [1, Some(7), false], [2, None, true], [3, Some(9), false]
@@ -136,7 +126,6 @@ fn ncb_opt_u32_bool_golden_small() {
     let expected = "030000005c0000000100000000000000020205000000070000000900000002";
     assert_eq!(to_hex(&bytes), expected);
 }
-
 #[test]
 fn ncb_enum_bool_golden_small() {
     // (u64, enum(Name|Code), bool): [1, Name("a"), false], [2, Code(7), true], [3, Name("bc"), false]
@@ -158,7 +147,6 @@ fn ncb_enum_bool_golden_small() {
     let expected = "030000006100000001000000000000000200000000000000030000000000000000010000000000000100000003000000616263000700000002";
     assert_eq!(to_hex(&bytes), expected);
 }
-
 #[test]
 fn ncb_enum_offsets_iddelta_golden_small() {
     // NCB enum with offsets-based names and id-delta enabled
@@ -179,7 +167,6 @@ fn ncb_enum_offsets_iddelta_golden_small() {
     let expected = "0400000063000000640000000000000002080e00010001000000000002000000050000006161626262000000070000000900000005";
     assert_eq!(to_hex(&bytes), expected);
 }
-
 #[test]
 fn aos_enum_small_golden() {
     // Adaptive AoS for enum rows: small input should select AoS
@@ -193,7 +180,6 @@ fn aos_enum_small_golden() {
     let expected = "00020100000000000000000178000200000000000000010700000001";
     assert_eq!(to_hex(&bytes), expected);
 }
-
 fn read_hex_fixture(rel: &str) -> Vec<u8> {
     use std::path::Path;
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
@@ -208,7 +194,6 @@ fn read_hex_fixture(rel: &str) -> Vec<u8> {
     }
     out
 }
-
 #[test]
 fn ncb_enum_offsets_code_delta_small_fixture() {
     use ncb::EnumBorrow;
@@ -222,7 +207,6 @@ fn ncb_enum_offsets_code_delta_small_fixture() {
     let fix = read_hex_fixture("tests/data/enum_offsets_code_delta_small.hex");
     assert_eq!(bytes, fix, "offsets+code-delta small bytes mismatch");
 }
-
 #[test]
 fn ncb_enum_dict_id_code_delta_small_fixture() {
     use ncb::EnumBorrow;
@@ -237,7 +221,6 @@ fn ncb_enum_dict_id_code_delta_small_fixture() {
     let fix = read_hex_fixture("tests/data/enum_dict_id_code_delta_small.hex");
     assert_eq!(bytes, fix, "dict+id+code-delta small bytes mismatch");
 }
-
 #[test]
 fn ncb_enum_offsets_id_delta_small_fixture() {
     use ncb::EnumBorrow;
@@ -251,7 +234,6 @@ fn ncb_enum_offsets_id_delta_small_fixture() {
     let fix = read_hex_fixture("tests/data/enum_offsets_id_delta_small.hex");
     assert_eq!(bytes, fix, "offsets+id-delta small bytes mismatch");
 }
-
 #[test]
 fn ncb_enum_dict_code_delta_small_fixture() {
     use ncb::EnumBorrow;
@@ -265,7 +247,6 @@ fn ncb_enum_dict_code_delta_small_fixture() {
     let fix = read_hex_fixture("tests/data/enum_dict_code_delta_small.hex");
     assert_eq!(bytes, fix, "dict+code-delta small bytes mismatch");
 }
-
 #[test]
 fn ncb_enum_offsets_code_delta_variant1_fixture() {
     use ncb::EnumBorrow;
@@ -280,7 +261,6 @@ fn ncb_enum_offsets_code_delta_variant1_fixture() {
     let fix = read_hex_fixture("tests/data/enum_offsets_code_delta_variant1.hex");
     assert_eq!(bytes, fix, "offsets+code-delta variant1 bytes mismatch");
 }
-
 #[test]
 fn ncb_enum_offsets_code_delta_variant2_fixture() {
     use ncb::EnumBorrow;
@@ -295,7 +275,6 @@ fn ncb_enum_offsets_code_delta_variant2_fixture() {
     let fix = read_hex_fixture("tests/data/enum_offsets_code_delta_variant2.hex");
     assert_eq!(bytes, fix, "offsets+code-delta variant2 bytes mismatch");
 }
-
 #[test]
 fn ncb_enum_offsets_id_code_delta_small_fixture() {
     use ncb::EnumBorrow;
@@ -310,7 +289,6 @@ fn ncb_enum_offsets_id_code_delta_small_fixture() {
     let fix = read_hex_fixture("tests/data/enum_offsets_id_code_delta_small.hex");
     assert_eq!(bytes, fix, "offsets+id+code-delta small bytes mismatch");
 }
-
 #[test]
 fn ncb_enum_dict_id_delta_small_fixture() {
     use ncb::EnumBorrow;
@@ -324,7 +302,6 @@ fn ncb_enum_dict_id_delta_small_fixture() {
     let fix = read_hex_fixture("tests/data/enum_dict_id_delta_small.hex");
     assert_eq!(bytes, fix, "dict+id-delta small bytes mismatch");
 }
-
 #[test]
 fn ncb_enum_offsets_alternating_aa_300_fixture() {
     use ncb::EnumBorrow;
@@ -342,7 +319,6 @@ fn ncb_enum_offsets_alternating_aa_300_fixture() {
     let fix = read_hex_fixture("tests/data/enum_offsets_alternating_aa_300.hex");
     assert_eq!(bytes, fix, "offsets alternating aa/300 bytes mismatch");
 }
-
 #[test]
 fn ncb_enum_dict_alternating_zz_77_fixture() {
     use ncb::EnumBorrow;

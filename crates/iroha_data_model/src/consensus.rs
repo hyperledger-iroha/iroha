@@ -1,13 +1,4 @@
 //! Consensus-related data model DTOs for on-chain persistence.
-use std::str::FromStr;
-
-use iroha_crypto::{Hash, PublicKey};
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::{Ident, IntoSchema};
-#[cfg(feature = "json")]
-use mv::json::JsonKeyCodec;
-use norito::codec::{Decode, Encode};
-
 pub use crate::block::consensus::{
     CertPhase, Qc, QcAggregate, QcRef, QcVote, SumeragiBlockSyncRosterStatus,
     SumeragiCommitPipelineStatus, SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
@@ -21,7 +12,13 @@ pub use crate::block::consensus::{
 /// Canonical Sumeragi v2 wire types.
 pub use crate::block::consensus_v2 as v2;
 use crate::prelude::*;
-
+use iroha_crypto::{Hash, PublicKey};
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::{Ident, IntoSchema};
+#[cfg(feature = "json")]
+use mv::json::JsonKeyCodec;
+use norito::codec::{Decode, Encode};
+use std::str::FromStr;
 /// Hash-version constant for validator set checkpoints.
 pub const VALIDATOR_SET_HASH_VERSION_V1: u16 = 1;
 /// Hard upper bound for one autonomous lane consensus committee.
@@ -29,9 +26,7 @@ pub const VALIDATOR_SET_HASH_VERSION_V1: u16 = 1;
 /// This bounds proposal, vote, quorum-certificate, drain, and persisted proof
 /// envelopes across configuration, runtime admission, and restart recovery.
 pub const MAX_LANE_CONSENSUS_VALIDATORS: usize = 128;
-
 // QC types are defined in `block::consensus` and re-exported above.
-
 /// Signed validator set checkpoint used for bootstrap and audit.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -67,7 +62,6 @@ pub struct ValidatorSetCheckpoint {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub expires_at_height: Option<u64>,
 }
-
 impl ValidatorSetCheckpoint {
     /// Construct a checkpoint using the supplied block hash, validator set, and signatures.
     #[must_use]
@@ -99,7 +93,6 @@ impl ValidatorSetCheckpoint {
             expires_at_height,
         )
     }
-
     /// Construct a checkpoint with an explicit vNext chain-order binding.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
@@ -135,7 +128,6 @@ impl ValidatorSetCheckpoint {
         }
     }
 }
-
 /// Stake snapshot entry for a single validator in a commit roster.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -148,7 +140,6 @@ pub struct CommitStakeSnapshotEntry {
     /// Total stake attributed to the validator.
     pub stake: Quantity,
 }
-
 /// Stake snapshot aligned to the validator set used for commit proof validation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -161,7 +152,6 @@ pub struct CommitStakeSnapshot {
     /// Stake entries aligned to validator roster order.
     pub entries: Vec<CommitStakeSnapshotEntry>,
 }
-
 impl CommitStakeSnapshot {
     /// Return `true` when this snapshot exactly and uniquely matches the roster.
     ///
@@ -174,14 +164,12 @@ impl CommitStakeSnapshot {
         {
             return false;
         }
-
         let mut observed = std::collections::BTreeSet::new();
         self.entries.iter().zip(roster).all(|(entry, expected)| {
             &entry.peer_id == expected && !entry.stake.is_zero() && observed.insert(&entry.peer_id)
         })
     }
 }
-
 /// Canonical previous-height roster evidence embedded in block payloads.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -200,7 +188,6 @@ pub struct PreviousRosterEvidence {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub stake_snapshot: Option<CommitStakeSnapshot>,
 }
-
 /// Deterministic `NPoS` state effects embedded in a signed block.
 ///
 /// These effects are applied as part of the committed block transition so every
@@ -225,7 +212,6 @@ pub struct NposConsensusEffects {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub penalty_actions: Vec<NposPenaltyAction>,
 }
-
 impl NposConsensusEffects {
     /// Returns true when the bundle carries no committed state changes.
     #[must_use]
@@ -235,19 +221,16 @@ impl NposConsensusEffects {
             && self.penalty_actions.is_empty()
     }
 }
-
 impl Ord for NposConsensusEffects {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.encode().cmp(&other.encode())
     }
 }
-
 impl PartialOrd for NposConsensusEffects {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-
 /// A deterministic VRF jail action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -268,7 +251,6 @@ pub struct NposVrfJailAction {
     /// Stable jail reason.
     pub reason: String,
 }
-
 /// A deterministic consensus-evidence slash action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -291,7 +273,6 @@ pub struct NposConsensusSlashAction {
     /// Amount to slash.
     pub amount: Quantity,
 }
-
 /// Marker that a VRF epoch's penalties were applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -304,7 +285,6 @@ pub struct NposMarkVrfPenaltiesAppliedAction {
     /// Block height that applied the marker.
     pub height: u64,
 }
-
 /// Marker that a consensus evidence record's penalty was applied.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -317,7 +297,6 @@ pub struct NposMarkConsensusEvidenceAppliedAction {
     /// Block height that applied the marker.
     pub height: u64,
 }
-
 /// Penalty or marker action applied by a committed `NPoS` effects bundle.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -335,7 +314,6 @@ pub enum NposPenaltyAction {
     /// Mark a consensus evidence record's penalty as applied.
     MarkConsensusEvidenceApplied(NposMarkConsensusEvidenceAppliedAction),
 }
-
 /// Snapshot of the election parameters used when selecting validators for an epoch.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -358,7 +336,6 @@ pub struct ValidatorElectionParameters {
     /// Finality margin (blocks) required when activating a newly elected set.
     pub finality_margin_blocks: u64,
 }
-
 /// Deterministic tie-break record used when ordering candidates.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -371,7 +348,6 @@ pub struct ValidatorTieBreak {
     /// Blake2b-derived score used to order candidates (lower is preferred).
     pub score: [u8; 32],
 }
-
 /// Election outcome for an epoch along with audit metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -401,7 +377,6 @@ pub struct ValidatorElectionOutcome {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub tie_break: Vec<ValidatorTieBreak>,
 }
-
 impl ValidatorElectionOutcome {
     /// Construct an empty election outcome for failed or skipped elections.
     #[must_use]
@@ -429,7 +404,6 @@ impl ValidatorElectionOutcome {
         }
     }
 }
-
 /// Logical role for a consensus or committee key.
 #[derive(
     Debug,
@@ -457,7 +431,6 @@ pub enum ConsensusKeyRole {
     /// Domain/endorsement committee key.
     Endorsement,
 }
-
 /// Identifier for a consensus/committee key (role + stable name).
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, derive_more::Display,
@@ -473,7 +446,6 @@ pub struct ConsensusKeyId {
     /// Human-friendly name (stable across rotations).
     pub name: Ident,
 }
-
 impl ConsensusKeyId {
     /// Construct a new key identifier.
     #[must_use]
@@ -484,7 +456,6 @@ impl ConsensusKeyId {
         }
     }
 }
-
 /// HSM/keystore binding for a consensus key.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -500,7 +471,6 @@ pub struct HsmBinding {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub slot: Option<u16>,
 }
-
 /// Lifecycle state of a consensus key.
 #[derive(
     Debug,
@@ -530,7 +500,6 @@ pub enum ConsensusKeyStatus {
     /// Disabled or superseded; signatures should be rejected.
     Disabled,
 }
-
 /// Recorded consensus/committee key with lifecycle metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -559,13 +528,11 @@ pub struct ConsensusKeyRecord {
     /// Declared lifecycle status.
     pub status: ConsensusKeyStatus,
 }
-
 #[cfg(feature = "json")]
 impl JsonKeyCodec for ConsensusKeyId {
     fn encode_json_key(&self, out: &mut String) {
         norito::json::write_json_string(&self.to_string(), out);
     }
-
     fn decode_json_key(encoded: &str) -> Result<Self, norito::json::Error> {
         let (role_str, name_str) = encoded.split_once(':').ok_or_else(|| {
             norito::json::Error::Message("invalid consensus key id; expected role:name".into())
@@ -582,7 +549,6 @@ impl JsonKeyCodec for ConsensusKeyId {
         Ok(ConsensusKeyId { role, name })
     }
 }
-
 impl ConsensusKeyRecord {
     /// Determine whether the key should be accepted at `height`, honoring overlap/expiry grace.
     #[must_use]
@@ -607,7 +573,6 @@ impl ConsensusKeyRecord {
         true
     }
 }
-
 /// Canonical authenticated VRF commitment retained in an epoch record.
 ///
 /// The signature is over the versioned Sumeragi `VrfCommit` preimage. Keeping the
@@ -632,7 +597,6 @@ pub struct VrfCommitProof {
     /// Unsigned height at which this exact signed message was first admitted.
     pub observed_at_height: u64,
 }
-
 /// Canonical authenticated VRF reveal retained in an epoch record.
 ///
 /// The signature is over the versioned Sumeragi `VrfReveal` preimage, including
@@ -658,7 +622,6 @@ pub struct VrfRevealProof {
     /// Unsigned height at which this exact signed message was first admitted.
     pub observed_at_height: u64,
 }
-
 /// Participation record for a validator within a VRF epoch.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -691,7 +654,6 @@ pub struct VrfParticipantRecord {
     /// Last block height at which this participant record was updated.
     pub last_updated_height: u64,
 }
-
 /// Late reveal emitted after the epoch reveal window.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -713,7 +675,6 @@ pub struct VrfLateRevealRecord {
     /// Block height at which the late reveal was recorded.
     pub noted_at_height: u64,
 }
-
 /// Snapshot of VRF randomness state for a particular epoch.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -759,20 +720,16 @@ pub struct VrfEpochRecord {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub validator_election: Option<ValidatorElectionOutcome>,
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Numeric;
-
-    use super::*;
-
     #[derive(Encode)]
     struct ForgedCommitStakeSnapshotEntry {
         peer_id: crate::peer::PeerId,
         stake: Numeric,
     }
-
     #[derive(Encode)]
     struct ForgedNposConsensusSlashAction {
         evidence_key: Vec<u8>,
@@ -783,16 +740,13 @@ mod tests {
         slash_id: Hash,
         amount: Numeric,
     }
-
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked consensus DTO fixture keypair")
     }
-
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("generate checked consensus DTO fixture keypair")
     }
-
     fn stake_snapshot_fixture() -> (Vec<crate::peer::PeerId>, CommitStakeSnapshot) {
         let roster = (0..3)
             .map(|_| crate::peer::PeerId::new(checked_random_keypair().public_key().clone()))
@@ -813,37 +767,29 @@ mod tests {
         };
         (roster, snapshot)
     }
-
     #[test]
     fn commit_stake_snapshot_requires_exact_positive_ordered_roster() {
         let (roster, snapshot) = stake_snapshot_fixture();
         assert!(snapshot.matches_roster(&roster));
-
         let mut reordered = snapshot.clone();
         reordered.entries.swap(0, 1);
         assert!(!reordered.matches_roster(&roster));
-
         let mut duplicate = snapshot.clone();
         duplicate.entries[1].peer_id = duplicate.entries[0].peer_id.clone();
         assert!(!duplicate.matches_roster(&roster));
-
         let mut missing = snapshot.clone();
         missing.entries.pop();
         assert!(!missing.matches_roster(&roster));
-
         let mut extra = snapshot.clone();
         extra.entries.push(snapshot.entries[0].clone());
         assert!(!extra.matches_roster(&roster));
-
         let mut zero_stake = snapshot.clone();
         zero_stake.entries[1].stake = Quantity::zero();
         assert!(!zero_stake.matches_roster(&roster));
-
         let mut wrong_hash = snapshot;
         wrong_hash.validator_set_hash = HashOf::new(&roster[..2].to_vec());
         assert!(!wrong_hash.matches_roster(&roster));
     }
-
     #[test]
     fn negative_numeric_payloads_cannot_decode_as_consensus_stake_quantities() {
         let key_pair = checked_random_keypair();
@@ -857,7 +803,6 @@ mod tests {
             CommitStakeSnapshotEntry::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as a commit stake snapshot"
         );
-
         let slash = ForgedNposConsensusSlashAction {
             evidence_key: vec![0xA5],
             signer: 0,
@@ -873,7 +818,6 @@ mod tests {
             "a negative signed payload must not decode as a consensus slash amount"
         );
     }
-
     #[test]
     fn vrf_epoch_record_roundtrip() {
         let participant = VrfParticipantRecord {
@@ -917,7 +861,6 @@ mod tests {
         assert_eq!(decoded.committed_no_reveal, vec![2, 4]);
         assert_eq!(decoded.no_participation, vec![6]);
     }
-
     #[test]
     fn vrf_epoch_record_accepts_missing_late_reveals() {
         let record = VrfEpochRecord {
@@ -947,7 +890,6 @@ mod tests {
         assert_eq!(decoded.epoch, record.epoch);
         assert_eq!(decoded.seed, record.seed);
     }
-
     #[test]
     fn validator_set_checkpoint_roundtrip_and_hash() {
         let kp_a = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -973,12 +915,10 @@ mod tests {
             VALIDATOR_SET_HASH_VERSION_V1,
             None,
         );
-
         let expected_hash = HashOf::new(&validator_set);
         assert_eq!(checkpoint.validator_set_hash, expected_hash);
         assert_eq!(checkpoint.chain_order_hash, default_chain_order_hash());
         assert_eq!(checkpoint.rechain_seq, 0);
-
         let buf = checkpoint.encode();
         let decoded =
             ValidatorSetCheckpoint::decode(&mut &buf[..]).expect("validator checkpoint decodes");
@@ -990,7 +930,6 @@ mod tests {
         assert_eq!(decoded.rechain_seq, 0);
         assert_eq!(decoded.validator_set_hash, expected_hash);
         assert_eq!(decoded.validator_set, validator_set);
-
         let chain_order_hash = iroha_crypto::Hash::new(b"checkpoint-chain-order");
         let explicit = ValidatorSetCheckpoint::new_with_chain_order(
             42,
@@ -1009,7 +948,6 @@ mod tests {
         assert_eq!(explicit.chain_order_hash, chain_order_hash);
         assert_eq!(explicit.rechain_seq, 5);
     }
-
     #[test]
     fn commit_qc_roundtrip() {
         let kp_a = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1053,7 +991,6 @@ mod tests {
             cert.aggregate.bls_aggregate_signature
         );
     }
-
     #[test]
     fn consensus_key_record_liveness_respects_activation_and_expiry() {
         let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "v1");
@@ -1076,7 +1013,6 @@ mod tests {
         assert!(record.is_live_at(20, 2, 0));
         assert!(!record.is_live_at(23, 2, 0));
     }
-
     #[test]
     fn consensus_key_record_disabled_is_never_live() {
         let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "v1");
@@ -1094,7 +1030,6 @@ mod tests {
         assert!(!record.is_live_at(0, 5, 5));
         assert!(!record.is_live_at(100, 5, 5));
     }
-
     #[test]
     fn validator_election_outcome_empty_has_expected_defaults() {
         let seed = [0x44; 32];

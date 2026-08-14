@@ -17,17 +17,13 @@
 //!
 //! [`crate::encryption::ChaCha20Poly1305`] is the only algorithm currently supported,
 //! as it is the only one used by the Iroha p2p transport protocol.
-
-use std::{convert::TryFrom, mem, vec::Vec};
-
+use crate::SessionKey;
 use aead::{Aead, AeadCore, AeadInOut, KeyInit, Payload, TagPosition};
 pub use chacha20poly1305::ChaCha20Poly1305;
 use displaydoc::Display;
 use rand::rngs::OsRng;
 use rand_core::{OsError, TryRngCore};
-
-use crate::SessionKey;
-
+use std::{convert::TryFrom, mem, vec::Vec};
 /// An error that can occur during encryption or decryption
 #[derive(thiserror::Error, Display, Debug, Clone, Copy)]
 pub enum Error {
@@ -44,11 +40,9 @@ pub enum Error {
     /// Provided key material has an invalid length
     InvalidKeyLength,
 }
-
 fn random_nonce<E: AeadCore>() -> Result<aead::Nonce<E>, Error> {
     random_nonce_from_rng::<E, _>(&mut OsRng)
 }
-
 fn random_nonce_from_rng<E, R>(rng: &mut R) -> Result<aead::Nonce<E>, Error>
 where
     E: AeadCore,
@@ -63,11 +57,9 @@ where
     }
     Ok(value)
 }
-
 fn nonce_from_slice<E: AeadCore>(bytes: &[u8]) -> Result<aead::Nonce<E>, Error> {
     aead::Nonce::<E>::try_from(bytes).map_err(|_| Error::NotEnoughData)
 }
-
 /// Helper wrapper around an [`Aead`] implementation that provides convenience
 /// helpers for nonce management and envelope layout.
 #[derive(Debug, Clone)]
@@ -77,7 +69,6 @@ where
 {
     encryptor: E,
 }
-
 impl<E> SymmetricEncryptor<E>
 where
     E: Aead + KeyInit,
@@ -86,7 +77,6 @@ where
     pub fn new(encryptor: E) -> Self {
         Self { encryptor }
     }
-
     /// Create a new [`SymmetricEncryptor`] from a [`SessionKey`]
     ///
     /// # Errors
@@ -96,7 +86,6 @@ where
         let encryptor = E::new_from_slice(key.payload()).map_err(|_| Error::InvalidKeyLength)?;
         Ok(Self::new(encryptor))
     }
-
     /// Create a new [`SymmetricEncryptor`] from key bytes
     ///
     /// # Errors
@@ -106,7 +95,6 @@ where
         let encryptor = E::new_from_slice(key.as_ref()).map_err(|_| Error::InvalidKeyLength)?;
         Ok(Self::new(encryptor))
     }
-
     /// Encrypt `plaintext` and integrity protect `aad`. The result is the ciphertext.
     /// This method handles safely generating a `nonce` and prepends it to the ciphertext.
     ///
@@ -126,14 +114,12 @@ where
                 },
             )
             .map_err(Error::Encryption)?;
-
         let nonce_bytes: &[u8] = nonce.as_ref();
         let mut result = Vec::with_capacity(nonce_bytes.len() + ciphertext.len());
         result.extend_from_slice(nonce_bytes);
         result.extend_from_slice(&ciphertext);
         Ok(result)
     }
-
     /// Encrypt `plaintext` and integrity protect `aad` into the provided buffer.
     ///
     /// The output buffer is cleared and reused to store the full envelope:
@@ -156,13 +142,11 @@ where
         let nonce = random_nonce::<E>()?;
         let nonce_bytes: &[u8] = nonce.as_ref();
         let nonce_len = nonce_bytes.len();
-
         out.clear();
         out.extend_from_slice(plaintext.as_ref());
         self.encryptor
             .encrypt_in_place(&nonce, aad.as_ref(), out)
             .map_err(Error::Encryption)?;
-
         // Prefix the nonce by shifting ciphertext bytes to the right.
         let ciphertext_len = out.len();
         out.reserve(nonce_len);
@@ -171,7 +155,6 @@ where
         out[..nonce_len].copy_from_slice(nonce_bytes);
         Ok(out.as_slice())
     }
-
     /// Encrypt `plaintext` and integrity protect `aad` using the provided `nonce`.
     ///
     /// # Errors
@@ -194,7 +177,6 @@ where
             )
             .map_err(Error::Encryption)
     }
-
     /// Decrypt `ciphertext` using integrity protected `aad`. The result is the plaintext if successful
     /// or an error if the `ciphertext` cannot be decrypted due to tampering, an incorrect `aad` value,
     /// or incorrect key. `aad` must be the same value used in `encrypt_easy`.
@@ -213,7 +195,6 @@ where
         let nonce = nonce_from_slice::<E>(nonce_bytes)?;
         self.decrypt_with_nonce(&nonce, aad.as_ref(), ciphertext_bytes)
     }
-
     /// Decrypt `ciphertext` using integrity protected `aad` into the provided buffer.
     ///
     /// The output buffer is cleared and reused to store the plaintext to avoid per-message
@@ -246,7 +227,6 @@ where
             .map_err(Error::Decryption)?;
         Ok(out.as_slice())
     }
-
     /// Decrypt an easy-envelope directly inside its source allocation.
     ///
     /// The input remains laid out as `nonce || message || tag`, but the returned
@@ -289,7 +269,6 @@ where
             .map_err(Error::Decryption)?;
         Ok(message)
     }
-
     /// Decrypt `ciphertext` using integrity protected `aad` and the provided `nonce`.
     ///
     /// # Errors
@@ -304,7 +283,6 @@ where
         let nonce = nonce_from_slice::<E>(nonce.as_ref())?;
         self.decrypt_with_nonce(&nonce, aad.as_ref(), ciphertext.as_ref())
     }
-
     fn decrypt_with_nonce(
         &self,
         nonce: &aead::Nonce<E>,
@@ -322,54 +300,42 @@ where
             .map_err(Error::Decryption)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     struct FixedTryRng {
         byte: u8,
     }
-
     impl TryRngCore for FixedTryRng {
         type Error = OsError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Ok(u64::from_le_bytes([self.byte; 8]))
         }
-
         fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
             dest.fill(self.byte);
             Ok(())
         }
     }
-
     fn encryptor() -> SymmetricEncryptor<ChaCha20Poly1305> {
         SymmetricEncryptor::new_with_key((0u8..32).collect::<Vec<_>>()).expect("valid key length")
     }
-
     #[test]
     fn random_nonce_rejects_all_zero_material() {
         let mut rng = FixedTryRng { byte: 0 };
-
         assert!(matches!(
             random_nonce_from_rng::<ChaCha20Poly1305, _>(&mut rng),
             Err(Error::InertNonce)
         ));
     }
-
     #[test]
     fn random_nonce_accepts_nonzero_material() {
         let mut rng = FixedTryRng { byte: 0xA5 };
         let nonce = random_nonce_from_rng::<ChaCha20Poly1305, _>(&mut rng).expect("nonzero nonce");
-
         assert_eq!(nonce.as_slice(), &[0xA5; 12]);
     }
-
     #[test]
     fn encrypt_easy_roundtrip() {
         let encryptor = encryptor();
@@ -383,7 +349,6 @@ mod tests {
             .expect("decryption");
         assert_eq!(plaintext.as_slice(), message);
     }
-
     #[test]
     fn encrypt_with_nonce_roundtrip() {
         let encryptor = encryptor();
@@ -398,24 +363,20 @@ mod tests {
             .expect("decrypt");
         assert_eq!(plaintext.as_slice(), message);
     }
-
     #[test]
     fn encrypt_with_caller_supplied_all_zero_nonce_roundtrips() {
         let encryptor = encryptor();
         let nonce = [0u8; 12];
         let aad = b"explicit nonce compatibility";
         let message = b"manual nonce boundary";
-
         let ciphertext = encryptor
             .encrypt(nonce.as_ref(), aad.as_ref(), message.as_ref())
             .expect("encrypt with caller supplied nonce");
         let plaintext = encryptor
             .decrypt(nonce.as_ref(), aad.as_ref(), ciphertext.as_slice())
             .expect("decrypt with caller supplied nonce");
-
         assert_eq!(plaintext.as_slice(), message);
     }
-
     #[test]
     fn decrypt_should_fail_with_tampering() {
         let encryptor = encryptor();
@@ -424,14 +385,12 @@ mod tests {
         let mut ciphertext = encryptor
             .encrypt_easy(aad.as_ref(), message.as_ref())
             .expect("encrypt");
-
         // wrong AAD fails
         assert!(
             encryptor
                 .decrypt_easy(b"different aad".as_ref(), ciphertext.as_slice())
                 .is_err()
         );
-
         // tamper with ciphertext
         ciphertext[0] ^= 0x01;
         assert!(
@@ -440,7 +399,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn decrypts_empty_message() {
         let encryptor = encryptor();
@@ -453,7 +411,6 @@ mod tests {
             .expect("decrypt");
         assert!(plaintext.is_empty());
     }
-
     #[test]
     fn decrypt_easy_into_roundtrip() {
         let encryptor = encryptor();
@@ -477,7 +434,6 @@ mod tests {
             .expect("decrypt");
         assert_eq!(plaintext2, message2);
     }
-
     #[test]
     fn decrypt_easy_in_place_roundtrip_preserves_envelope_allocation() {
         let encryptor = encryptor();
@@ -487,21 +443,17 @@ mod tests {
             .encrypt_easy(aad.as_ref(), message.as_ref())
             .expect("encrypt");
         let original_allocation = envelope.as_ptr();
-
         let plaintext = encryptor
             .decrypt_easy_in_place(aad.as_ref(), envelope.as_mut_slice())
             .expect("decrypt in source allocation");
-
         assert_eq!(plaintext, message);
         assert_eq!(envelope.as_ptr(), original_allocation);
     }
-
     #[test]
     fn encrypt_easy_into_roundtrip() {
         let encryptor = encryptor();
         let aad = b"Iroha2";
         let message = b"Encrypt into buffer!";
-
         let mut out = Vec::new();
         let ciphertext = encryptor
             .encrypt_easy_into(aad.as_ref(), message.as_ref(), &mut out)

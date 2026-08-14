@@ -14,16 +14,16 @@ Endpoints
 - `/v1/sumeragi/commit-qcs/{block_hash}` (Norito by default): full commit QC record for a block hash (if present). Set `Accept: application/json` to receive `{ subject_block_hash, commit_qc }` with `parent_state_root`, `post_state_root`, and aggregate signature data when available.
 - `/v1/sumeragi/leader` (JSON): leader index snapshot; includes PRF context `{ height, view, epoch_seed }` in NPoS mode when available.
 - `/v1/sumeragi/phases` (JSON): compact per-phase latencies (ms) for operator dashboards; returns the latest observed durations for consensus phases.
-- `/v1/soranet/privacy/{event,share}` (Norito): bounded privacy telemetry mutation ingress for relay/collector signals. Before decoding at most 128 KiB of body data, Torii requires `torii.soranet_privacy_ingest.enabled = true`, a token header (`X-SoraNet-Privacy-Token` or `X-API-Token`) when `require_token` is set, and a CIDR allow-list entry (empty list denies). Rate limits come from the same config (`rate_per_sec`/`burst`), and rejects surface `401/403/429` plus `soranet_privacy_ingest_reject_total{endpoint,reason}` counters for alerting.
+- `/v1/soranet/privacy/{event,share}` (Norito): bounded privacy telemetry mutation ingress for relay/collector signals. Before decoding, Torii verifies the four exact NetworkId-bound `X-Iroha-Operator-*` headers over the method, target, body, timestamp, and fresh nonce, then requires `torii.soranet_privacy_ingest.enabled = true` and a CIDR allow-list entry (empty list denies). Rate limits come from `rate_per_sec`/`burst` and are keyed by authenticated operator public key. Retired collector/API bearer headers are rejected; failures surface `400/401/403/429` plus `soranet_privacy_ingest_reject_total{endpoint,reason}`.
 - `/v1/sumeragi/params` (JSON): snapshot of the on-chain Sumeragi parameters `{ block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
 
 The authoritative `/v1/sumeragi/status` response carries canonical settlement,
 relay, payload-ownership, committed-lane-block, and active-session evidence; it
 does not infer governance readiness from retired operator snapshots. Use
-`iroha app nexus lane-report --only-incomplete --fail-on-incomplete` during
-rollouts or CI to aggregate that typed evidence and exit non-zero when retained
-sessions or committed blocks have not completed certification/application.
-Governance-manifest admission remains observable through its dedicated metrics.
+`iroha --operator-private-key-file /absolute/runtime/operator.key app nexus lane-report --only-missing --fail-on-sealed` during
+rollouts or CI to summarize lane-governance status and exit non-zero when a
+required manifest remains sealed. Session and committed-block progress remains
+observable through the dedicated metrics.
 
 SM helper telemetry (Prometheus metrics)
 - `iroha_sm_syscall_total{kind="hash|verify|seal|open",mode}` — cumulative SM helper syscall successes grouped by helper kind and mode (`gcm`/`ccm` for SM4 helpers).
@@ -60,13 +60,15 @@ Network time telemetry
 
 Runbook guidance
 - Alert when `max_over_time(nts_healthy[5m]) == 0` or `max_over_time(nts_fallback[5m]) > 0`; these indicate the time service is unsynchronized or missing samples.
-- Use `nts_min_samples_ok`, `nts_offset_ok`, and `nts_confidence_ok` to pinpoint root cause; check `/v1/time/status` for peer sample and RTT diagnostics.
+- Use `nts_min_samples_ok`, `nts_offset_ok`, and `nts_confidence_ok` to pinpoint root cause; an operator may check `/v1/time/status` for peer sample and RTT diagnostics using a fresh signature bound to the exact genesis `NetworkId`, `GET`, path, query, and empty body. The node rejects redirects/replays and does not accept token fallback for this node-local clock state.
 - If `enforcement_mode = "reject"`, admission blocks time-sensitive instructions while unhealthy. Switch to `warn` only for temporary operational relief.
 
 Configuration
 - `telemetry_enabled` (default: true): Master kill switch. When set to false, the daemon skips telemetry worker startup, Torii hides `/metrics` and `/status`, and runtime instrumentation is bypassed regardless of profile.
 - `telemetry_profile` (default: `operator`): Capability bundle wiring both Torii routing and runtime sinks. Profiles toggle three capability flags — `metrics`, `expensive_metrics`, and `developer_outputs`. When `telemetry_enabled = false`, the effective profile is forced to `disabled`.
 - `torii.peer_telemetry_urls` (default: empty): Optional list of Torii base URLs used to fetch peer telemetry metadata. When unset, peer telemetry discovery is disabled to avoid probing P2P ports.
+- Peer-monitor HTTP bodies are streamed under first-release caps before JSON decoding: 4 MiB for `/v1/configuration`, 1 MiB for `/v1/peers`, 64 KiB for `/status`, and 16 KiB for the fixed-field geo response. Both an oversized `Content-Length` and chunked/decompressed growth past the applicable cap fail closed without retaining the remainder.
+- Telegram alert metric sampling never materializes the complete Prometheus response: it examines at most 8 MiB per poll, retains at most one 16 KiB line, and stores only the four scalar values used by alert rendering. Declared or streamed overflow fails that sample closed.
 - `torii.peer_geo.enabled` (default: false): Enable peer geo lookups for Torii telemetry (opt-in; requires network access to the configured endpoint).
 - `torii.peer_geo.endpoint` (default: unset): Required HTTPS ip-api compatible endpoint used for peer geo lookups when `torii.peer_geo.enabled = true`; when unset, Torii skips geo lookup and logs a warning.
 - Build-time ISI instrumentation: `#[metrics]` counters (`isi{kind="total|success"}`) and timing histograms (`isi_times`) require building `irohad` with `--features expensive-telemetry` (or `iroha_core` `expensive-telemetry`). The runtime still respects `telemetry_enabled` and `telemetry_profile` for exposure.
@@ -751,7 +753,7 @@ Additional gauges track backlog pressure: `sumeragi_rbc_backlog_chunks_total`, `
 
 ### Troubleshooting: RBC & pacemaker backpressure
 
-1. **Capture live snapshots.** Start with `iroha_cli --output-format text ops sumeragi telemetry` (or `GET /v1/sumeragi/telemetry`) and archive `availability.collectors`, `rbc_backlog`, and `rbc_pending`. These are aggregate diagnostics, so use consensus logs when you need to identify a specific height or view.
+1. **Capture live snapshots.** Start with `iroha_cli --operator-private-key-file /absolute/runtime/operator.key --output-format text ops sumeragi telemetry` (or an equivalently exact-`NetworkId` operator-signed `GET /v1/sumeragi/telemetry`) and archive `availability.collectors`, `rbc_backlog`, and `rbc_pending`. These are aggregate diagnostics, so use consensus logs when you need to identify a specific height or view.
 2. **Inspect backlog counters.** Watch `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`, and `sumeragi_rbc_backlog_sessions_pending`. Sustained non-zero values over five minutes (e.g., `max_over_time(sumeragi_rbc_backlog_chunks_max[5m]) > 0`) imply slow chunk delivery; correlate aggregate missing-chunk counts with `rbc_pending` drops and consensus logs.
 3. **Check DA availability warnings.** Alert on spikes in `sumeragi_da_gate_block_total{reason="missing_local_data"}`; `sumeragi_rbc_da_reschedule_total` is legacy and should remain zero in current pipelines.
 4. **Evaluate pacemaker deferrals and proposal backpressure.** Use `increase(sumeragi_pacemaker_backpressure_deferrals_total[5m])`, `increase(sumeragi_pacemaker_backpressure_deferrals_by_reason_total{reason="..."}[5m])`, `max_over_time(sumeragi_pacemaker_backpressure_deferral_age_ms{reason="..."}[5m])`, `max_over_time(sumeragi_tx_queue_saturated[5m])`, `max_over_time(sumeragi_tx_queue_saturated_by_count[5m])`, `max_over_time(sumeragi_tx_queue_saturated_by_bytes[5m])`, `max_over_time(sumeragi_tx_queue_saturated_by_age[5m])`, `max_over_time(sumeragi_pending_blocks_blocking[5m])`, `max_over_time(sumeragi_commit_inflight_queue_depth[5m])`, `sumeragi_rbc_backlog_*`, and relay drop/backpressure counters to confirm whether the pacemaker halted due to queue saturation, relay/RBC backlog, or blocking pending blocks. Combine with `max_over_time(sumeragi_tx_queue_oldest_queued_age_ms[5m])`, `increase(gossip_fallback_total[5m])`, and `increase(block_created_proposal_mismatch_total[5m])` to surface collectors retrying without progress.
@@ -763,7 +765,7 @@ Additional gauges track backlog pressure: `sumeragi_rbc_backlog_chunks_total`, `
    by default and supports `--json` for feeding structured reports into on-call automation.
 7. **Escalate persistent issues.** If backlog/deferral metrics stay high beyond two blocks:
    - Freeze new client submissions via admission rate limiting.
-   - Manually inspect problematic sessions with `iroha_cli --output-format json ops sumeragi telemetry` to confirm which height/view is stuck.
+   - Manually inspect problematic sessions with `iroha_cli --operator-private-key-file /absolute/runtime/operator.key --output-format json ops sumeragi telemetry` to confirm which height/view is stuck.
    - Consider increasing `sumeragi.advanced.rbc.chunk_max_bytes` or provisioning additional bandwidth before re-enabling full load.
 
 
@@ -791,7 +793,7 @@ labels:
 annotations:
   summary: "Validator skipped VRF commit and reveal windows"
   description: |
-    Non-participation penalties incremented (count={{ $value }}). Inspect `iroha_cli ops sumeragi vrf-epoch --epoch <current>`
+    Non-participation penalties incremented (count={{ $value }}). Inspect `iroha_cli --operator-private-key-file /absolute/runtime/operator.key ops sumeragi vrf-epoch --epoch <current>`
     to identify the offline signer and stage reconfiguration or slashing if the validator cannot recover.
 
 alert: SumeragiVrfNonReveal
@@ -1083,7 +1085,10 @@ verify what binary is actually serving traffic. The object includes:
 - `target_triple` — compilation target triple for the running binary.
 
 Queue-aware liveness checks should use the raw `/status` facts together with
-`GET /v1/pipeline/preflight`. The status payload exposes `observed_at_ms`,
+operator-authenticated `GET /v1/pipeline/preflight`. The preflight request must
+carry a fresh signature over the exact genesis `NetworkId`, method, path,
+query, and empty body; clients dispatch once without redirects or retries.
+The status payload exposes `observed_at_ms`,
 `queue_size`, `queue_queued`, `queue_inflight`,
 `last_block_committed_at_ms`, `last_non_empty_block_committed_at_ms`,
 `time_since_last_block_ms`, and `time_since_last_non_empty_block_ms`.
@@ -1167,9 +1172,9 @@ Alert thresholds:
   `increase(nexus_scheduler_must_serve_truncations_total[1h]) > 0`.
 
 Operator triage:
-1. Run `iroha_cli app nexus lane-report --lane <id>` to inspect the lane cap,
-   configured bound, and backlog snapshot (CLI update tracked under Nexus
-   router workstreams).
+1. Run `iroha_cli --operator-private-key-file /absolute/runtime/operator.key app nexus lane-report --summary`
+   to confirm lane-governance readiness, then inspect the lane-labelled metrics
+   below for the exact cap, configured bound, and backlog.
 2. Check `nexus_scheduler_lane_trigger_level` (tier `>0` implies a
    circuit-breaker is reducing caps); reference `specs/nexus_transition_notes.md`
    for trigger semantics.

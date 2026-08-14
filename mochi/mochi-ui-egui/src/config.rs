@@ -5,24 +5,20 @@
 //! recompiling the application. This module discovers that file (or an explicit
 //! `MOCHI_CONFIG` override), parses the TOML document, and yields a strongly
 //! typed configuration for the UI to apply while constructing the supervisor.
-
+use iroha_data_model::parameter::system::SumeragiConsensusMode;
+use mochi_core::{
+    GenesisProfile, NetworkProfile, ProfilePreset, SupervisorBuilder,
+    config::sandbox_root_for_workspace, supervisor::RestartPolicy,
+};
 use std::{
     convert::TryFrom,
     env, fmt, fs, io,
     path::{Path, PathBuf},
     time::Duration,
 };
-
-use iroha_data_model::parameter::system::SumeragiConsensusMode;
-use mochi_core::{
-    GenesisProfile, NetworkProfile, ProfilePreset, SupervisorBuilder,
-    config::sandbox_root_for_workspace, supervisor::RestartPolicy,
-};
-
 const DEFAULT_RESTART_MAX_RESTARTS: usize = 3;
 const DEFAULT_RESTART_BACKOFF_MS: u64 = 1_000;
 use toml::{Value, map::Map};
-
 /// Overrides for external binaries referenced by the supervisor.
 #[derive(Debug, Default, Clone)]
 pub struct BinaryOverrides {
@@ -33,7 +29,6 @@ pub struct BinaryOverrides {
     /// Optional override for the `iroha_cli` executable (reserved for future use).
     pub iroha_cli: Option<PathBuf>,
 }
-
 /// Parsed configuration extracted from `config/local.toml`.
 #[derive(Debug, Default, Clone)]
 pub struct BundleConfig {
@@ -68,19 +63,16 @@ pub struct BundleConfig {
     /// Optional Torii config overrides applied to generated peer configs.
     pub torii: Option<Map<String, Value>>,
 }
-
 #[derive(Debug, Clone)]
 pub struct ResolvedBundleConfig {
     pub config: BundleConfig,
     pub path: PathBuf,
 }
-
 #[derive(Debug, Clone)]
 struct ParsedProfile {
     profile: NetworkProfile,
     genesis_profile: Option<GenesisProfile>,
 }
-
 impl BundleConfig {
     /// Applies overrides onto a [`SupervisorBuilder`](mochi_core::SupervisorBuilder).
     pub fn apply_to(&self, mut builder: SupervisorBuilder) -> SupervisorBuilder {
@@ -133,56 +125,43 @@ impl BundleConfig {
         }
         builder
     }
-
     pub fn set_data_root(&mut self, value: Option<PathBuf>) {
         self.data_root = value;
     }
-
     pub fn set_workspace_root(&mut self, value: Option<PathBuf>) {
         self.workspace_root = value;
     }
-
     pub fn set_profile(&mut self, value: Option<NetworkProfile>) {
         self.profile = value;
     }
-
     pub fn set_chain_id(&mut self, value: Option<String>) {
         self.chain_id = value;
     }
-
     pub fn set_build_binaries(&mut self, value: Option<bool>) {
         self.build_binaries = value;
     }
-
     pub fn set_readiness_smoke(&mut self, value: Option<bool>) {
         self.readiness_smoke = value;
     }
-
     #[allow(dead_code)]
     pub fn set_genesis_profile(&mut self, value: Option<GenesisProfile>) {
         self.genesis_profile = value;
     }
-
     #[allow(dead_code)]
     pub fn set_vrf_seed_hex(&mut self, value: Option<String>) {
         self.vrf_seed_hex = value;
     }
-
     pub fn set_torii_start(&mut self, value: Option<u16>) {
         self.torii_start = value;
     }
-
     pub fn set_p2p_start(&mut self, value: Option<u16>) {
         self.p2p_start = value;
     }
-
     pub fn set_restart_policy(&mut self, value: Option<RestartPolicy>) {
         self.restart_policy = value;
     }
-
     pub fn write_to_path(&self, path: &Path) -> Result<(), ConfigError> {
         let mut root = existing_root_table(path)?;
-
         let mut supervisor = root
             .get("supervisor")
             .and_then(Value::as_table)
@@ -296,7 +275,6 @@ impl BundleConfig {
         } else {
             root.insert("supervisor".into(), Value::Table(supervisor));
         }
-
         let mut ports = root
             .get("ports")
             .and_then(Value::as_table)
@@ -323,7 +301,6 @@ impl BundleConfig {
         } else {
             root.insert("ports".into(), Value::Table(ports));
         }
-
         let mut binaries = root
             .get("binaries")
             .and_then(Value::as_table)
@@ -361,7 +338,6 @@ impl BundleConfig {
         } else {
             root.insert("binaries".into(), Value::Table(binaries));
         }
-
         match self.nexus.as_ref() {
             Some(nexus) => {
                 root.insert("nexus".into(), Value::Table(nexus.clone()));
@@ -370,7 +346,6 @@ impl BundleConfig {
                 root.remove("nexus");
             }
         }
-
         match self.sumeragi.as_ref() {
             Some(sumeragi) => {
                 root.insert("sumeragi".into(), Value::Table(sumeragi.clone()));
@@ -379,7 +354,6 @@ impl BundleConfig {
                 root.remove("sumeragi");
             }
         }
-
         match self.torii.as_ref() {
             Some(torii) => {
                 root.insert("torii".into(), Value::Table(torii.clone()));
@@ -388,7 +362,6 @@ impl BundleConfig {
                 root.remove("torii");
             }
         }
-
         let text = toml::to_string_pretty(&Value::Table(root)).map_err(|err| {
             ConfigError::new(format!(
                 "failed to serialize config {}: {err}",
@@ -408,13 +381,11 @@ impl BundleConfig {
         })
     }
 }
-
 /// Errors emitted while loading the bundle configuration.
 #[derive(Debug)]
 pub struct ConfigError {
     message: String,
 }
-
 impl ConfigError {
     fn new(message: impl Into<String>) -> Self {
         Self {
@@ -422,15 +393,12 @@ impl ConfigError {
         }
     }
 }
-
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
     }
 }
-
 impl std::error::Error for ConfigError {}
-
 /// Discover and parse `config/local.toml` if present.
 pub fn load_bundle_config() -> Result<Option<ResolvedBundleConfig>, ConfigError> {
     for (path, explicit) in candidate_paths() {
@@ -451,7 +419,6 @@ pub fn load_bundle_config() -> Result<Option<ResolvedBundleConfig>, ConfigError>
     }
     Ok(None)
 }
-
 /// Load configuration from an explicit path, returning defaults if the file is absent.
 pub fn load_bundle_config_at(path: PathBuf) -> Result<ResolvedBundleConfig, ConfigError> {
     match fs::read_to_string(&path) {
@@ -469,7 +436,6 @@ pub fn load_bundle_config_at(path: PathBuf) -> Result<ResolvedBundleConfig, Conf
         ))),
     }
 }
-
 pub fn default_config_path() -> PathBuf {
     candidate_paths()
         .into_iter()
@@ -477,14 +443,11 @@ pub fn default_config_path() -> PathBuf {
         .next()
         .unwrap_or_else(|| PathBuf::from("config").join("local.toml"))
 }
-
 fn candidate_paths() -> Vec<(PathBuf, bool)> {
     let mut paths = Vec::new();
-
     if let Some(value) = env::var_os("MOCHI_CONFIG").filter(|value| !value.is_empty()) {
         push_candidate(&mut paths, PathBuf::from(value), true);
     }
-
     if let Ok(exe) = env::current_exe()
         && let Some(dir) = exe.parent()
     {
@@ -493,20 +456,16 @@ fn candidate_paths() -> Vec<(PathBuf, bool)> {
             push_candidate(&mut paths, root.join("config").join("local.toml"), false);
         }
     }
-
     if let Ok(cwd) = env::current_dir() {
         push_candidate(&mut paths, cwd.join("config").join("local.toml"), false);
     }
-
     paths
 }
-
 fn push_candidate(paths: &mut Vec<(PathBuf, bool)>, candidate: PathBuf, explicit: bool) {
     if !paths.iter().any(|(path, _)| path == &candidate) {
         paths.push((candidate, explicit));
     }
 }
-
 fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, ConfigError> {
     let value: Value = toml::from_str(contents).map_err(|err| {
         ConfigError::new(format!("failed to parse config {}: {err}", path.display()))
@@ -518,7 +477,6 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
         )));
     };
     let base = path.parent().unwrap_or(Path::new("."));
-
     let mut config = BundleConfig::default();
     if let Some(supervisor) = table.get("supervisor").and_then(Value::as_table) {
         let mut profile_genesis = None;
@@ -612,7 +570,6 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
             config.set_restart_policy(Some(parse_restart_policy(path, restart)?));
         }
     }
-
     if let Some(ports) = table.get("ports").and_then(Value::as_table) {
         if let Some(port) = ports.get("torii_start") {
             config.torii_start = Some(parse_port(path, "ports.torii_start", port)?);
@@ -621,7 +578,6 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
             config.p2p_start = Some(parse_port(path, "ports.p2p_start", port)?);
         }
     }
-
     if let Some(binaries) = table.get("binaries").and_then(Value::as_table) {
         config.binaries.irohad =
             parse_path_override(base, path, "binaries.irohad", binaries.get("irohad"))?;
@@ -630,7 +586,6 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
         config.binaries.iroha_cli =
             parse_path_override(base, path, "binaries.iroha_cli", binaries.get("iroha_cli"))?;
     }
-
     if let Some(nexus_value) = table.get("nexus") {
         let Some(nexus) = nexus_value.as_table() else {
             return Err(ConfigError::new(format!(
@@ -640,7 +595,6 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
         };
         config.nexus = Some(nexus.clone());
     }
-
     if let Some(sumeragi_value) = table.get("sumeragi") {
         let Some(sumeragi) = sumeragi_value.as_table() else {
             return Err(ConfigError::new(format!(
@@ -656,7 +610,6 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
         }
         config.sumeragi = Some(sumeragi.clone());
     }
-
     if let Some(torii_value) = table.get("torii") {
         let Some(torii) = torii_value.as_table() else {
             return Err(ConfigError::new(format!(
@@ -674,10 +627,8 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
         }
         config.torii = Some(torii.clone());
     }
-
     Ok(config)
 }
-
 fn parse_profile_table(
     path: &Path,
     table: &Map<String, Value>,
@@ -711,27 +662,23 @@ fn parse_profile_table(
             })
         })
         .transpose()?;
-
     if genesis_profile.is_some() && consensus_mode != SumeragiConsensusMode::Npos {
         return Err(ConfigError::new(format!(
             "config {} requires `supervisor.profile.consensus_mode = \"npos\"` when using genesis_profile",
             path.display()
         )));
     }
-
     let profile = NetworkProfile::custom(peer_count, consensus_mode).map_err(|err| {
         ConfigError::new(format!(
             "invalid supervisor.profile in {}: {err}",
             path.display()
         ))
     })?;
-
     Ok(ParsedProfile {
         profile,
         genesis_profile,
     })
 }
-
 fn parse_port(path: &Path, key: &str, value: &Value) -> Result<u16, ConfigError> {
     let int = value.as_integer().ok_or_else(|| {
         ConfigError::new(format!(
@@ -739,17 +686,14 @@ fn parse_port(path: &Path, key: &str, value: &Value) -> Result<u16, ConfigError>
             path.display()
         ))
     })?;
-
     if !(1..=u16::MAX as i64).contains(&int) {
         return Err(ConfigError::new(format!(
             "config {} value {int} out of range for `{key}`",
             path.display()
         )));
     }
-
     Ok(int as u16)
 }
-
 fn parse_peer_count(path: &Path, key: &str, value: &Value) -> Result<usize, ConfigError> {
     let raw = parse_non_negative_integer(path, key, value)?;
     if raw == 0 {
@@ -771,7 +715,6 @@ fn parse_peer_count(path: &Path, key: &str, value: &Value) -> Result<usize, Conf
         ))
     })
 }
-
 fn parse_consensus_mode(
     path: &Path,
     key: &str,
@@ -793,7 +736,6 @@ fn parse_consensus_mode(
         ))),
     }
 }
-
 fn parse_bool(path: &Path, key: &str, value: &Value) -> Result<bool, ConfigError> {
     value.as_bool().ok_or_else(|| {
         ConfigError::new(format!(
@@ -802,7 +744,6 @@ fn parse_bool(path: &Path, key: &str, value: &Value) -> Result<bool, ConfigError
         ))
     })
 }
-
 fn parse_path_override(
     base: &Path,
     path: &Path,
@@ -826,7 +767,6 @@ fn parse_path_override(
     }
     Ok(Some(resolved))
 }
-
 fn resolve_path(base: &Path, raw: &str) -> PathBuf {
     let candidate = PathBuf::from(raw);
     let resolved = if candidate.is_absolute() {
@@ -836,10 +776,8 @@ fn resolve_path(base: &Path, raw: &str) -> PathBuf {
     };
     normalize_path(&resolved)
 }
-
 fn normalize_path(path: &Path) -> PathBuf {
     use std::path::Component;
-
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
@@ -854,7 +792,6 @@ fn normalize_path(path: &Path) -> PathBuf {
     }
     normalized
 }
-
 fn parse_profile(value: &str) -> Result<ProfilePreset, String> {
     match value {
         "single-peer" | "single_peer" | "singlepeer" => Ok(ProfilePreset::SinglePeer),
@@ -862,7 +799,6 @@ fn parse_profile(value: &str) -> Result<ProfilePreset, String> {
         other => Err(other.to_owned()),
     }
 }
-
 fn existing_root_table(path: &Path) -> Result<Map<String, Value>, ConfigError> {
     match fs::read_to_string(path) {
         Ok(contents) => match toml::from_str::<Value>(&contents) {
@@ -880,7 +816,6 @@ fn existing_root_table(path: &Path) -> Result<Map<String, Value>, ConfigError> {
         ))),
     }
 }
-
 fn parse_restart_policy(
     path: &Path,
     table: &Map<String, Value>,
@@ -891,7 +826,6 @@ fn parse_restart_policy(
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "on-failure".to_owned());
-
     match mode.as_str() {
         "never" => {
             if table.get("max_restarts").is_some() || table.get("backoff_ms").is_some() {
@@ -925,7 +859,6 @@ fn parse_restart_policy(
         ))),
     }
 }
-
 fn parse_restart_count(path: &Path, value: &Value) -> Result<usize, ConfigError> {
     let raw = parse_non_negative_integer(path, "supervisor.restart.max_restarts", value)?;
     let unsigned = u64::try_from(raw).map_err(|_| {
@@ -943,7 +876,6 @@ fn parse_restart_count(path: &Path, value: &Value) -> Result<usize, ConfigError>
         ))
     })
 }
-
 fn parse_restart_backoff(path: &Path, value: &Value) -> Result<u64, ConfigError> {
     let raw = parse_non_negative_integer(path, "supervisor.restart.backoff_ms", value)?;
     u64::try_from(raw).map_err(|_| {
@@ -954,7 +886,6 @@ fn parse_restart_backoff(path: &Path, value: &Value) -> Result<u64, ConfigError>
         ))
     })
 }
-
 fn parse_non_negative_integer(path: &Path, key: &str, value: &Value) -> Result<i64, ConfigError> {
     let Some(int) = value.as_integer() else {
         return Err(ConfigError::new(format!(
@@ -970,7 +901,6 @@ fn parse_non_negative_integer(path: &Path, key: &str, value: &Value) -> Result<i
     }
     Ok(int)
 }
-
 fn render_restart_table(policy: RestartPolicy) -> Map<String, Value> {
     let mut table = Map::new();
     match policy {
@@ -989,7 +919,6 @@ fn render_restart_table(policy: RestartPolicy) -> Map<String, Value> {
     }
     table
 }
-
 fn duration_to_ms(backoff: Duration) -> i64 {
     let millis = backoff.as_millis();
     if millis > i64::MAX as u128 {
@@ -998,18 +927,15 @@ fn duration_to_ms(backoff: Duration) -> i64 {
         millis as i64
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn temp_file(contents: &str) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("local.toml");
         fs::write(&path, contents).expect("write config");
         (dir, path)
     }
-
     #[test]
     fn parse_valid_config_resolves_relative_paths() {
         let (dir, path) = temp_file(
@@ -1038,7 +964,6 @@ kagami = "/opt/iroha/bin/kagami"
 iroha_cli = "./tools/iroha_cli"
 "#,
         );
-
         let config =
             parse_bundle_config(&path, &fs::read_to_string(&path).unwrap()).expect("config parsed");
         assert_eq!(
@@ -1079,7 +1004,6 @@ iroha_cli = "./tools/iroha_cli"
             RestartPolicy::Never => panic!("expected on-failure restart policy"),
         }
     }
-
     #[test]
     fn parse_workspace_root_resolves_relative_path() {
         let (dir, path) = temp_file(
@@ -1088,7 +1012,6 @@ iroha_cli = "./tools/iroha_cli"
 workspace_root = "./app"
 "#,
         );
-
         let config =
             parse_bundle_config(&path, &fs::read_to_string(&path).unwrap()).expect("config parsed");
         assert_eq!(
@@ -1097,7 +1020,6 @@ workspace_root = "./app"
         );
         assert!(config.data_root.is_none());
     }
-
     #[test]
     fn parse_rejects_invalid_profile() {
         let (_dir, path) = temp_file(
@@ -1113,7 +1035,6 @@ profile = "unknown"
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn parse_rejects_invalid_genesis_profile() {
         let (_dir, path) = temp_file(
@@ -1129,7 +1050,6 @@ genesis_profile = "invalid"
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn parse_custom_profile_table() {
         let (_dir, path) = temp_file(
@@ -1146,7 +1066,6 @@ profile = { peer_count = 7, consensus_mode = "permissioned" }
         assert_eq!(profile.consensus_mode, SumeragiConsensusMode::Permissioned);
         assert!(config.genesis_profile.is_none());
     }
-
     #[test]
     fn parse_custom_profile_table_rejects_conflicting_genesis_profile() {
         let (_dir, path) = temp_file(
@@ -1162,7 +1081,6 @@ profile = { peer_count = 4, consensus_mode = "permissioned", genesis_profile = "
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn parse_custom_profile_table_with_genesis_profile() {
         let (_dir, path) = temp_file(
@@ -1179,7 +1097,6 @@ profile = { peer_count = 7, consensus_mode = "npos", genesis_profile = "iroha3-d
         assert_eq!(profile.consensus_mode, SumeragiConsensusMode::Npos);
         assert_eq!(config.genesis_profile, Some(GenesisProfile::Iroha3Dev));
     }
-
     #[test]
     fn parse_bundle_config_parses_nexus_sumeragi_and_torii_tables() {
         let (_dir, path) = temp_file(
@@ -1202,7 +1119,6 @@ msg_channel_cap_votes = 16
   manifest_store_dir = "./da/manifests"
 "#,
         );
-
         let config =
             parse_bundle_config(&path, &fs::read_to_string(&path).unwrap()).expect("config parsed");
         let nexus = config.nexus.expect("nexus config");
@@ -1231,7 +1147,6 @@ msg_channel_cap_votes = 16
             Some("./da/manifests")
         );
     }
-
     #[test]
     fn parse_bundle_config_rejects_retired_sumeragi_da_enabled() {
         let (_dir, path) = temp_file(
@@ -1247,7 +1162,6 @@ da_enabled = "nope"
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn parse_bundle_config_rejects_invalid_torii_da_ingest() {
         let (_dir, path) = temp_file(
@@ -1263,7 +1177,6 @@ da_ingest = "nope"
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn load_bundle_config_at_returns_default_for_missing_file() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -1273,7 +1186,6 @@ da_ingest = "nope"
         assert!(resolved.config.data_root.is_none());
         assert_eq!(resolved.path, path);
     }
-
     #[test]
     fn load_bundle_config_at_parses_existing_file() {
         let (dir, path) = temp_file(
@@ -1296,7 +1208,6 @@ mode = "never"
             Some(RestartPolicy::Never)
         ));
     }
-
     #[test]
     fn load_uses_explicit_env_override() {
         let (dir, path) = temp_file(
@@ -1317,7 +1228,6 @@ data_root = "./env-data"
         let expected_root = resolve_path(dir.path(), "./env-data");
         assert_eq!(normalize_path(actual_root), expected_root);
     }
-
     #[test]
     fn write_roundtrips_bundle_config() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -1369,7 +1279,6 @@ data_root = "./env-data"
             backoff: Duration::from_secs(2),
         }));
         config.write_to_path(&path).expect("write bundle config");
-
         let contents = fs::read_to_string(&path).expect("read config back");
         let parsed = parse_bundle_config(&path, &contents).expect("parse written config");
         assert_eq!(parsed.workspace_root, config.workspace_root);
@@ -1399,7 +1308,6 @@ data_root = "./env-data"
             RestartPolicy::Never => panic!("expected on-failure restart policy"),
         }
     }
-
     #[test]
     fn write_roundtrips_custom_profile_with_genesis_profile() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -1409,7 +1317,6 @@ data_root = "./env-data"
         config.set_profile(Some(profile));
         config.set_genesis_profile(Some(GenesisProfile::Iroha3Dev));
         config.write_to_path(&path).expect("write bundle config");
-
         let contents = fs::read_to_string(&path).expect("read config back");
         let value: Value = toml::from_str(&contents).expect("parse config");
         let supervisor = value
@@ -1436,12 +1343,10 @@ data_root = "./env-data"
             profile_table.get("genesis_profile").and_then(Value::as_str),
             Some("iroha3-dev")
         );
-
         let parsed = parse_bundle_config(&path, &contents).expect("parse written config");
         assert_eq!(parsed.profile, config.profile);
         assert_eq!(parsed.genesis_profile, config.genesis_profile);
     }
-
     #[test]
     fn parse_restart_policy_defaults_to_on_failure() {
         let (dir, path) = temp_file(
@@ -1467,7 +1372,6 @@ max_restarts = 0
         }
         drop(dir);
     }
-
     #[test]
     fn parse_restart_policy_never_rejects_extra_fields() {
         let (_dir, path) = temp_file(
@@ -1484,7 +1388,6 @@ backoff_ms = 1000
                 .contains("`supervisor.restart.max_restarts` or `.backoff_ms`")
         );
     }
-
     #[test]
     fn apply_to_overrides_profile() {
         let mut config = BundleConfig::default();
@@ -1495,7 +1398,6 @@ backoff_ms = 1000
         assert_eq!(builder.profile().preset, Some(ProfilePreset::FourPeerBft));
         assert_eq!(builder.profile().topology.peer_count, 4);
     }
-
     #[test]
     fn write_preserves_unrelated_fields() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -1537,7 +1439,6 @@ extra_setting = "keep"
             ),
         )
         .expect("write starter config");
-
         let mut config =
             parse_bundle_config(&path, &fs::read_to_string(&path).unwrap()).expect("parse");
         config.set_torii_start(Some(12000));
@@ -1546,7 +1447,6 @@ extra_setting = "keep"
         config
             .write_to_path(&path)
             .expect("rewrite should preserve unrelated fields");
-
         let contents = fs::read_to_string(&path).expect("read rewritten config");
         assert!(
             contents.contains("note = \"keep-root\""),
@@ -1585,12 +1485,10 @@ extra_setting = "keep"
             "chain_id should be removed when cleared"
         );
     }
-
     struct EnvGuard {
         key: &'static str,
         prev: Option<String>,
     }
-
     impl EnvGuard {
         fn new(key: &'static str, value: impl AsRef<str>) -> Self {
             let prev = env::var(key).ok();
@@ -1599,7 +1497,6 @@ extra_setting = "keep"
             Self { key, prev }
         }
     }
-
     impl Drop for EnvGuard {
         fn drop(&mut self) {
             if let Some(prev) = self.prev.as_ref() {
@@ -1609,7 +1506,6 @@ extra_setting = "keep"
             }
         }
     }
-
     #[test]
     fn parse_profile_mappings_cover_aliases() {
         assert_eq!(

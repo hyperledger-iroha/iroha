@@ -1,14 +1,12 @@
 //! FASTPQ prover lane: converts execution witnesses into transition batches and
 //! drives the Stage 6 prover in the background.
-
-use std::{
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicBool, Ordering},
+use crate::{
+    fastpq::{
+        ENTRY_HASH_METADATA_KEY, FASTPQ_CANONICAL_PARAMETER_SET, FastpqWitnessContext,
+        TranscriptBatchError, batches_from_bundles, batches_from_exec_witness,
     },
-    time::Instant,
+    kura::{FastpqProofEnqueueResult, FastpqProofSnapshot, Kura},
 };
-
 use fastpq_prover::{
     ExecutionMode as ProverExecutionMode, MetalOverrides,
     PoseidonExecutionMode as ProverPoseidonMode, Prover, TransitionBatch, apply_metal_overrides,
@@ -18,16 +16,14 @@ use iroha_config::parameters::actual::{Fastpq, FastpqExecutionMode, FastpqPoseid
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::{BlockHeader, consensus::ExecWitness};
 use iroha_logger::{debug, info, warn};
-use tokio::sync::mpsc;
-
-use crate::{
-    fastpq::{
-        ENTRY_HASH_METADATA_KEY, FASTPQ_CANONICAL_PARAMETER_SET, FastpqWitnessContext,
-        TranscriptBatchError, batches_from_bundles, batches_from_exec_witness,
+use std::{
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
     },
-    kura::{FastpqProofEnqueueResult, FastpqProofSnapshot, Kura},
+    time::Instant,
 };
-
+use tokio::sync::mpsc;
 /// Handle used to submit FASTPQ prover jobs.
 #[derive(Clone)]
 pub struct FastpqLaneHandle {
@@ -35,7 +31,6 @@ pub struct FastpqLaneHandle {
     backpressure: Option<crate::queue::BackpressureHandle>,
     ready: Arc<AtomicBool>,
 }
-
 impl FastpqLaneHandle {
     /// Submit a prover job to the lane.
     pub fn submit(&self, job: FastpqWitnessJob) -> bool {
@@ -61,13 +56,11 @@ impl FastpqLaneHandle {
         }
         self.tx.try_send(job).is_ok()
     }
-
     #[cfg(test)]
     fn is_ready_for_test(&self) -> bool {
         self.ready.load(Ordering::Acquire)
     }
 }
-
 /// Execution witness metadata forwarded to the prover lane.
 #[derive(Clone)]
 pub struct FastpqWitnessJob {
@@ -82,7 +75,6 @@ pub struct FastpqWitnessJob {
     /// Local-only batch construction context captured outside the witness wire payload.
     pub(crate) context: FastpqWitnessContext,
 }
-
 /// Proof bytes and digest produced by the FASTPQ lane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FastpqProofOutput {
@@ -93,7 +85,6 @@ pub struct FastpqProofOutput {
     /// Batch trace commitment proven by the proof.
     pub trace_commitment: Hash,
 }
-
 /// Trait abstracting over the FASTPQ prover backend so tests can inject mocks.
 pub trait FastpqProofEngine: Send + Sync + 'static {
     /// Prove the supplied transition batch.
@@ -105,11 +96,9 @@ pub trait FastpqProofEngine: Send + Sync + 'static {
         batch: &fastpq_prover::TransitionBatch,
     ) -> fastpq_prover::Result<FastpqProofOutput>;
 }
-
 struct RealProofEngine {
     prover: Prover,
 }
-
 impl FastpqProofEngine for RealProofEngine {
     fn prove(
         &self,
@@ -126,17 +115,13 @@ impl FastpqProofEngine for RealProofEngine {
         })
     }
 }
-
 static GLOBAL_SENDER: OnceLock<FastpqLaneHandle> = OnceLock::new();
-
 #[cfg(test)]
 static TEST_ENGINE: OnceLock<Arc<dyn FastpqProofEngine>> = OnceLock::new();
-
 /// Start the FASTPQ prover lane. Returns the handle and the spawned task when successful.
 pub fn start(cfg: &Fastpq) -> Option<(FastpqLaneHandle, tokio::task::JoinHandle<()>)> {
     start_with_backpressure(cfg, None, None)
 }
-
 /// Start the FASTPQ prover lane with optional queue backpressure and Kura proof persistence.
 pub fn start_with_backpressure(
     cfg: &Fastpq,
@@ -161,12 +146,10 @@ pub fn start_with_backpressure(
     let task = spawn_worker(rx, ready, kura, move || build_engine(&cfg));
     Some((handle, task))
 }
-
 /// Submit a prover job if the lane is running.
 pub fn try_submit(job: FastpqWitnessJob) -> bool {
     GLOBAL_SENDER.get().is_some_and(|handle| handle.submit(job))
 }
-
 fn build_engine(cfg: &Fastpq) -> Option<Arc<dyn FastpqProofEngine>> {
     #[cfg(test)]
     if let Some(engine) = TEST_ENGINE.get().cloned() {
@@ -192,7 +175,6 @@ fn build_engine(cfg: &Fastpq) -> Option<Arc<dyn FastpqProofEngine>> {
         }
     }
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn preflight_prover_modes(
     cfg: &Fastpq,
@@ -207,7 +189,6 @@ fn preflight_prover_modes(
         fastpq_prover::preflight_bn254_poseidon_word_batches,
     )
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn preflight_prover_modes_with_preflights(
     cfg: &Fastpq,
@@ -233,7 +214,6 @@ fn preflight_prover_modes_with_preflights(
     }
     Some((mode, poseidon_mode))
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn preflight_digest_acceleration(cfg: &Fastpq, preflight: impl FnOnce() -> bool) {
     if !crate::fastpq::poseidon_digest_acceleration_configured(cfg) {
@@ -249,7 +229,6 @@ fn preflight_digest_acceleration(cfg: &Fastpq, preflight: impl FnOnce() -> bool)
         "fastpq lane: BN254 Poseidon digest GPU preflight completed"
     );
 }
-
 fn spawn_worker(
     mut rx: mpsc::Receiver<FastpqWitnessJob>,
     ready: Arc<AtomicBool>,
@@ -284,7 +263,6 @@ fn spawn_worker(
         }
     })
 }
-
 fn metal_overrides_from_config(cfg: &Fastpq) -> MetalOverrides {
     MetalOverrides {
         max_in_flight: cfg.metal_max_in_flight,
@@ -294,21 +272,18 @@ fn metal_overrides_from_config(cfg: &Fastpq) -> MetalOverrides {
         debug_fused: cfg.metal_debug_fused,
     }
 }
-
 fn map_execution_mode(mode: FastpqExecutionMode) -> ProverExecutionMode {
     match mode {
         FastpqExecutionMode::Cpu => ProverExecutionMode::Cpu,
         FastpqExecutionMode::Gpu => ProverExecutionMode::Gpu,
     }
 }
-
 fn map_poseidon_mode(mode: FastpqPoseidonMode) -> ProverPoseidonMode {
     match mode {
         FastpqPoseidonMode::Cpu => ProverPoseidonMode::Cpu,
         FastpqPoseidonMode::Gpu => ProverPoseidonMode::Gpu,
     }
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn should_preflight_poseidon(
     _mode: ProverExecutionMode,
@@ -316,7 +291,6 @@ fn should_preflight_poseidon(
 ) -> bool {
     matches!(poseidon_mode, ProverPoseidonMode::Gpu)
 }
-
 fn process_job(engine: &Arc<dyn FastpqProofEngine>, job: &FastpqWitnessJob, kura: Option<&Kura>) {
     if job.witness.fastpq_transcripts.is_empty() && job.witness.fastpq_batches.is_empty() {
         debug!(
@@ -435,7 +409,6 @@ fn process_job(engine: &Arc<dyn FastpqProofEngine>, job: &FastpqWitnessJob, kura
         "fastpq lane: processed prover job"
     );
 }
-
 fn entry_hash_for_batch(
     idx: usize,
     witness: &ExecWitness,
@@ -448,7 +421,6 @@ fn entry_hash_for_batch(
     let digest: [u8; 32] = bytes.as_slice().try_into().ok()?;
     Some(Hash::prehashed(digest))
 }
-
 /// Install a deterministic FASTPQ engine for tests, bypassing the real prover backend.
 ///
 /// This lets unit tests inject a mock [`FastpqProofEngine`] so the lane can
@@ -457,11 +429,9 @@ fn entry_hash_for_batch(
 pub fn install_test_engine(engine: Arc<dyn FastpqProofEngine>) {
     let _ = TEST_ENGINE.set(engine);
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, sync::atomic::AtomicBool, time::Duration};
-
+    use super::*;
     use crate::fastpq::{
         FastpqPublicInputsTemplate, authority_digest, batches_from_bundles, transition_batch_to_dto,
     };
@@ -471,13 +441,10 @@ mod tests {
     };
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-
-    use super::*;
-
+    use std::{collections::BTreeMap, sync::atomic::AtomicBool, time::Duration};
     #[tokio::test]
     async fn lane_processes_transcripts_with_mock_engine() {
         use tokio::time::{Instant, sleep};
-
         let calls = Arc::new(std::sync::Mutex::new(0usize));
         install_test_engine(Arc::new(MockEngine {
             calls: Arc::clone(&calls),
@@ -564,12 +531,10 @@ mod tests {
             sleep(Duration::from_millis(10)).await;
         }
     }
-
     #[tokio::test]
     async fn worker_start_does_not_wait_for_backend_initialisation() {
         use std::time::Instant as StdInstant;
         use tokio::time::sleep;
-
         let (_tx, rx) = mpsc::channel::<FastpqWitnessJob>(1);
         let ready = Arc::new(AtomicBool::new(false));
         let started_at = StdInstant::now();
@@ -577,7 +542,6 @@ mod tests {
             std::thread::sleep(Duration::from_millis(200));
             None
         });
-
         assert!(
             started_at.elapsed() < Duration::from_millis(100),
             "worker startup waited for backend initialisation"
@@ -587,7 +551,6 @@ mod tests {
         assert!(!ready.load(Ordering::Acquire));
         task.await.expect("worker task joins");
     }
-
     #[test]
     fn job_context_builds_batches_for_transcript_only_witness() {
         let bundle = sample_bundle();
@@ -619,15 +582,12 @@ mod tests {
                 entry_dataspaces,
             },
         };
-
         let batches = batches_for_job(&job).expect("context builds batches");
-
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].public_inputs.dsid, dsid);
         assert_eq!(batches[0].public_inputs.tx_set_hash, tx_set_hash);
         assert_eq!(batches[0].public_inputs.perm_root, template.perm_root);
     }
-
     #[test]
     #[cfg(feature = "fastpq-gpu")]
     fn prover_poseidon_preflight_failure_disables_explicit_gpu_lane() {
@@ -656,7 +616,6 @@ mod tests {
             metal_debug_enum: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_ENUM,
             metal_debug_fused: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
         };
-
         let preflight = preflight_prover_modes_with_preflights(
             &cfg,
             ProverExecutionMode::Gpu,
@@ -664,7 +623,6 @@ mod tests {
             || false,
             || true,
         );
-
         assert!(
             preflight.is_none(),
             "explicit GPU preflight must fail closed"
@@ -675,12 +633,10 @@ mod tests {
         );
         crate::fastpq::set_poseidon_digest_acceleration_enabled(previous);
     }
-
     #[derive(Clone)]
     struct MockEngine {
         calls: Arc<std::sync::Mutex<usize>>,
     }
-
     impl FastpqProofEngine for MockEngine {
         fn prove(
             &self,
@@ -696,7 +652,6 @@ mod tests {
             })
         }
     }
-
     fn sample_bundle() -> TransferTranscriptBundle {
         TransferTranscriptBundle {
             entry_hash: Hash::prehashed([0x11; 32]),
@@ -723,7 +678,6 @@ mod tests {
             }],
         }
     }
-
     #[test]
     fn maps_config_to_metal_overrides() {
         let cfg = Fastpq {
@@ -746,7 +700,6 @@ mod tests {
             metal_debug_enum: true,
             metal_debug_fused: true,
         };
-
         let overrides = metal_overrides_from_config(&cfg);
         assert_eq!(overrides.max_in_flight, Some(8));
         assert_eq!(overrides.threadgroup_size, Some(256));
@@ -755,25 +708,21 @@ mod tests {
         assert!(overrides.debug_fused);
     }
 }
-
 fn batches_for_job(job: &FastpqWitnessJob) -> Result<Vec<TransitionBatch>, TranscriptBatchError> {
     match batches_from_exec_witness(&job.witness) {
         Ok(batches) => return Ok(batches),
         Err(TranscriptBatchError::MissingFastpqBatches) => {}
         Err(err) => return Err(err),
     }
-
     if job.witness.fastpq_transcripts.is_empty() {
         return Ok(Vec::new());
     }
-
     let Some(public_inputs) = job.context.public_inputs else {
         return Err(TranscriptBatchError::MissingFastpqBatches);
     };
     let Some(tx_set_hash) = job.context.tx_set_hash else {
         return Err(TranscriptBatchError::MissingFastpqBatches);
     };
-
     let mut batches = batches_from_bundles(
         FASTPQ_CANONICAL_PARAMETER_SET,
         public_inputs,

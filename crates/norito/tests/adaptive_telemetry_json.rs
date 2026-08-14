@@ -1,5 +1,4 @@
 //! Check JSON export helpers for adaptive telemetry.
-
 #[test]
 #[cfg(feature = "json")]
 fn columnar_json_keys_present() {
@@ -15,7 +14,6 @@ fn columnar_json_keys_present() {
     assert!(obj.contains_key("probes"));
     assert!(obj.contains_key("bytes_saved_total"));
 }
-
 #[test]
 #[cfg(feature = "json")]
 fn codec_json_keys_present() {

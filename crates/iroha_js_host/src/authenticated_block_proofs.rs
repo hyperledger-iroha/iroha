@@ -5,9 +5,6 @@
 //! canonical finality/proof archives, verifies Sumeragi-v2 finality under an
 //! application-pinned network context, and only then asks the data model to
 //! derive its non-serializable `TrustedBlockProofAnchor` capability.
-
-use std::{fmt, str::FromStr as _};
-
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
@@ -25,14 +22,13 @@ use iroha_data_model::{
 };
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
-
+use std::{fmt, str::FromStr as _};
 /// First-release authenticated block-proof bridge version.
 const AUTHENTICATED_BLOCK_PROOFS_VERSION_V1: u8 = 1;
 /// Maximum canonical Norito bytes accepted for one bridge finality proof.
 const AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1: usize = 9 * 1024 * 1024;
 /// Maximum canonical Norito bytes accepted for one block-proof response.
 const AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1: usize = 16 * 1024 * 1024;
-
 /// Bounded inputs for one authenticated block-proof verification.
 ///
 /// `previous_finality_proof_norito` is the optional last proof in the
@@ -58,7 +54,6 @@ pub struct JsAuthenticatedBlockProofInputV1 {
     /// Canonical Norito `BlockProofs` bytes returned by Torii.
     pub block_proofs_norito: Buffer,
 }
-
 /// Authenticated native verdict for one Torii `BlockProofs` response.
 ///
 /// Finality is valid whenever this object is returned. `valid` additionally
@@ -81,7 +76,6 @@ pub struct JsAuthenticatedBlockProofVerdictV1 {
     /// Verified current height-context id for application successor state.
     pub height_context_id_hex: String,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VerificationErrorCode {
     UnsupportedVersion,
@@ -96,7 +90,6 @@ enum VerificationErrorCode {
     FinalityRejected,
     AnchorRejected,
 }
-
 impl VerificationErrorCode {
     const fn as_str(self) -> &'static str {
         match self {
@@ -114,13 +107,11 @@ impl VerificationErrorCode {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VerificationError {
     code: VerificationErrorCode,
     message: String,
 }
-
 impl VerificationError {
     fn new(code: VerificationErrorCode, message: impl Into<String>) -> Self {
         Self {
@@ -129,7 +120,6 @@ impl VerificationError {
         }
     }
 }
-
 impl fmt::Display for VerificationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -140,7 +130,6 @@ impl fmt::Display for VerificationError {
         )
     }
 }
-
 struct RawVerificationInputV1<'a> {
     version: u8,
     network_id: &'a str,
@@ -151,7 +140,6 @@ struct RawVerificationInputV1<'a> {
     executed_block_wire: &'a [u8],
     block_proofs_norito: &'a [u8],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AuthenticatedBlockProofVerdictV1 {
     valid: bool,
@@ -161,7 +149,6 @@ struct AuthenticatedBlockProofVerdictV1 {
     entry_hash_hex: String,
     height_context_id_hex: String,
 }
-
 impl From<AuthenticatedBlockProofVerdictV1> for JsAuthenticatedBlockProofVerdictV1 {
     fn from(verdict: AuthenticatedBlockProofVerdictV1) -> Self {
         Self {
@@ -179,7 +166,6 @@ impl From<AuthenticatedBlockProofVerdictV1> for JsAuthenticatedBlockProofVerdict
         }
     }
 }
-
 /// Verify one Torii `BlockProofs` response through Rust-authenticated finality.
 ///
 /// The CPU-heavy BLS and Merkle work runs outside the Node event loop. Every
@@ -212,7 +198,6 @@ pub async fn block_proofs_verify_authenticated_v1(
     })?
     .map_err(|error| napi::Error::new(napi::Status::InvalidArg, error.to_string()))
 }
-
 fn verify_raw_v1(
     input: RawVerificationInputV1<'_>,
 ) -> Result<AuthenticatedBlockProofVerdictV1, VerificationError> {
@@ -225,7 +210,6 @@ fn verify_raw_v1(
             ),
         ));
     }
-
     let network_id = NetworkId::from_str(input.network_id).map_err(|error| {
         VerificationError::new(
             VerificationErrorCode::InvalidNetworkId,
@@ -245,7 +229,6 @@ fn verify_raw_v1(
         .map(|bytes| decode_finality_proof(bytes, "previous_finality_proof_norito"))
         .transpose()?;
     let finality = decode_finality_proof(input.finality_proof_norito, "finality_proof_norito")?;
-
     let mut finality_verifier =
         BridgeFinalityVerifier::with_context(network_id, trusted_context_id);
     if let Some(previous) = previous_finality.as_ref() {
@@ -262,13 +245,11 @@ fn verify_raw_v1(
             format!("target finality proof was rejected: {error}"),
         )
     })?;
-
     // Authenticate the comparatively small finality inputs before allocating
     // or decoding the larger carriers. An invalid QC therefore cannot use
     // either field as an amplification stage. Decode and bind the block before
     // touching the proof archive so a wrong wire cannot amplify through it.
     let block = decode_executed_block_wire(input.executed_block_wire)?;
-
     // This is intentionally the only anchor construction path. The data-model
     // capability re-verifies the untrusted artifact, binds it to the decoded
     // header and exact executed wire, and recomputes all roots and transcripts.
@@ -283,9 +264,7 @@ fn verify_raw_v1(
             format!("finality-bound executed block could not derive an anchor: {error}"),
         )
     })?;
-
     let block_proofs = decode_block_proofs(input.block_proofs_norito)?;
-
     Ok(AuthenticatedBlockProofVerdictV1 {
         valid: block_proofs.verify(&anchor),
         block_height: anchor.block_height().get(),
@@ -295,7 +274,6 @@ fn verify_raw_v1(
         height_context_id_hex: hex::encode(finality.finality_artifact.context_id().0.as_ref()),
     })
 }
-
 fn parse_height_context_id(bytes: &[u8]) -> Result<HeightContextId, VerificationError> {
     parse_marked_hash(
         bytes,
@@ -304,7 +282,6 @@ fn parse_height_context_id(bytes: &[u8]) -> Result<HeightContextId, Verification
     )
     .map(|hash| HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(hash)))
 }
-
 fn parse_entry_hash(bytes: &[u8]) -> Result<HashOf<TransactionEntrypoint>, VerificationError> {
     parse_marked_hash(
         bytes,
@@ -313,7 +290,6 @@ fn parse_entry_hash(bytes: &[u8]) -> Result<HashOf<TransactionEntrypoint>, Verif
     )
     .map(HashOf::<TransactionEntrypoint>::from_untyped_unchecked)
 }
-
 fn parse_marked_hash(
     bytes: &[u8],
     label: &'static str,
@@ -333,7 +309,6 @@ fn parse_marked_hash(
     })?;
     Ok(hash)
 }
-
 fn decode_finality_proof(
     bytes: &[u8],
     label: &'static str,
@@ -349,13 +324,11 @@ fn decode_finality_proof(
         VerificationErrorCode::NonCanonicalFinalityProof,
     )
 }
-
 fn decode_block_proofs(bytes: &[u8]) -> Result<BlockProofs, VerificationError> {
     const LABEL: &str = "block_proofs_norito";
     enforce_archive_size(bytes, AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1, LABEL)?;
     decode_canonical_archive(bytes, LABEL, VerificationErrorCode::NonCanonicalBlockProofs)
 }
-
 fn decode_canonical_archive<T>(
     bytes: &[u8],
     label: &'static str,
@@ -373,7 +346,6 @@ where
         )
     })
 }
-
 fn decode_executed_block_wire(bytes: &[u8]) -> Result<SignedBlock, VerificationError> {
     const LABEL: &str = "executed_block_wire";
     enforce_archive_size(
@@ -406,7 +378,6 @@ fn decode_executed_block_wire(bytes: &[u8]) -> Result<SignedBlock, VerificationE
     }
     Ok(block)
 }
-
 fn authenticated_decode_limits(encoded_len: usize) -> norito::DecodeLimits {
     let canonical = norito::canonical_decode_limits(encoded_len);
     norito::DecodeLimits::new(
@@ -417,7 +388,6 @@ fn authenticated_decode_limits(encoded_len: usize) -> norito::DecodeLimits {
         128,
     )
 }
-
 fn enforce_archive_size(
     bytes: &[u8],
     maximum: usize,
@@ -437,11 +407,9 @@ fn enforce_archive_size(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
-
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair, MerkleTreeCommitment, Signature, SignatureOf};
     use iroha_data_model::{
         account::AccountId,
@@ -462,12 +430,9 @@ mod tests {
         },
         trigger::DataTriggerSequence,
     };
-
-    use super::*;
-
+    use std::num::NonZeroU64;
     const FIXTURE_NETWORK_ID: &str =
         "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5";
-
     struct Fixture {
         block: SignedBlock,
         finality: BridgeFinalityProof,
@@ -476,12 +441,10 @@ mod tests {
         finality_keys: Vec<KeyPair>,
         trusted_context_id: [u8; Hash::LENGTH],
     }
-
     fn checked_keypair(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .unwrap_or_else(|error| panic!("{algorithm:?} fixture key generation failed: {error}"))
     }
-
     fn make_fixture() -> Fixture {
         let transaction_key = checked_keypair(Algorithm::Ed25519);
         let alternate_transaction_key = checked_keypair(Algorithm::Ed25519);
@@ -535,7 +498,6 @@ mod tests {
         let alternate_block_proofs = block
             .proofs_for_entry_hash(&alternate_entry_hash)
             .expect("alternate fixture block proof exists");
-
         let executed_block_wire = block
             .encode_wire()
             .expect("encode authenticated proof fixture block wire");
@@ -555,7 +517,6 @@ mod tests {
             block_header: block.header(),
             finality_artifact: artifact,
         };
-
         Fixture {
             block,
             finality,
@@ -565,7 +526,6 @@ mod tests {
             trusted_context_id,
         }
     }
-
     fn finalized_artifact_for_block(
         block: &SignedBlock,
         network_id: NetworkId,
@@ -637,7 +597,6 @@ mod tests {
             .expect("fixture finality matches block header");
         (artifact, keys)
     }
-
     fn signed_commit_qc(
         _context: &HeightContext,
         subject: BlockSubject,
@@ -677,7 +636,6 @@ mod tests {
                 .expect("aggregate fixture commit votes"),
         }
     }
-
     fn make_successor(parent: &BridgeFinalityProof, keys: &[KeyPair]) -> BridgeFinalityProof {
         let parent_artifact = &parent.finality_artifact;
         let height = parent_artifact.height + 1;
@@ -761,7 +719,6 @@ mod tests {
         verifier.verify(&proof).expect("fixture successor verifies");
         proof
     }
-
     fn verify_typed(
         fixture: &Fixture,
         previous: Option<&BridgeFinalityProof>,
@@ -781,7 +738,6 @@ mod tests {
             &fixture.block_proofs.entry_hash,
         )
     }
-
     fn verify_typed_with_expected(
         previous: Option<&BridgeFinalityProof>,
         finality: &BridgeFinalityProof,
@@ -809,7 +765,6 @@ mod tests {
             block_proofs_norito: &block_proof_bytes,
         })
     }
-
     #[test]
     fn real_finality_block_wire_and_proofs_produce_authenticated_verdict() {
         let fixture = make_fixture();
@@ -823,7 +778,6 @@ mod tests {
             &fixture.trusted_context_id,
         )
         .expect("valid authenticated block proof");
-
         assert!(verdict.valid);
         assert_eq!(verdict.block_height, 1);
         assert_eq!(
@@ -831,15 +785,12 @@ mod tests {
             hex::encode(fixture.trusted_context_id)
         );
     }
-
     #[test]
     fn forged_qc_pop_and_roster_fail_before_anchor_derivation() {
         let fixture = make_fixture();
-
         let mut forged_qc = fixture.finality.clone();
         forged_qc.finality_artifact.commit_qc.aggregate_signature[0] ^= 0x80;
         assert_rejected_finality(&fixture, &forged_qc);
-
         let forged_qc_bytes =
             norito::encode_canonical(&forged_qc).expect("encode forged finality fixture");
         let preflight_error = verify_raw_v1(RawVerificationInputV1 {
@@ -857,11 +808,9 @@ mod tests {
             preflight_error.code,
             VerificationErrorCode::FinalityRejected
         );
-
         let mut forged_pop = fixture.finality.clone();
         forged_pop.finality_artifact.validator_set_pops[0][0] ^= 0x80;
         assert_rejected_finality(&fixture, &forged_pop);
-
         let mut forged_roster = fixture.finality.clone();
         forged_roster
             .finality_artifact
@@ -870,7 +819,6 @@ mod tests {
             .swap(0, 1);
         assert_rejected_finality(&fixture, &forged_roster);
     }
-
     fn assert_rejected_finality(fixture: &Fixture, finality: &BridgeFinalityProof) {
         let error = verify_typed(
             fixture,
@@ -884,11 +832,9 @@ mod tests {
         .expect_err("forged finality must fail closed");
         assert_eq!(error.code, VerificationErrorCode::FinalityRejected);
     }
-
     #[test]
     fn wrong_network_context_header_height_and_wire_fail_closed() {
         let fixture = make_fixture();
-
         let wrong_network = verify_typed(
             &fixture,
             None,
@@ -900,7 +846,6 @@ mod tests {
         )
         .expect_err("wrong network must fail");
         assert_eq!(wrong_network.code, VerificationErrorCode::FinalityRejected);
-
         let wrong_context = Hash::new(b"untrusted height context");
         let wrong_context = verify_typed(
             &fixture,
@@ -913,15 +858,12 @@ mod tests {
         )
         .expect_err("wrong context must fail");
         assert_eq!(wrong_context.code, VerificationErrorCode::FinalityRejected);
-
         let mut wrong_header = fixture.finality.clone();
         wrong_header.block_header.set_view_change_index(1);
         assert_rejected_finality(&fixture, &wrong_header);
-
         let mut wrong_height = fixture.finality.clone();
         wrong_height.finality_artifact.height = 2;
         assert_rejected_finality(&fixture, &wrong_height);
-
         let other = make_fixture();
         let wrong_wire = verify_typed(
             &fixture,
@@ -935,11 +877,9 @@ mod tests {
         .expect_err("another canonical block wire must fail");
         assert_eq!(wrong_wire.code, VerificationErrorCode::AnchorRejected);
     }
-
     #[test]
     fn stale_and_skipped_successor_state_is_rejected() {
         let fixture = make_fixture();
-
         let stale = verify_typed(
             &fixture,
             Some(&fixture.finality),
@@ -952,7 +892,6 @@ mod tests {
         .expect_err("stale proof must fail");
         assert_eq!(stale.code, VerificationErrorCode::FinalityRejected);
         assert!(stale.message.contains("stale"));
-
         let height_two = make_successor(&fixture.finality, &fixture.finality_keys);
         let height_three = make_successor(&height_two, &fixture.finality_keys);
         let skipped = verify_typed(
@@ -968,7 +907,6 @@ mod tests {
         assert_eq!(skipped.code, VerificationErrorCode::FinalityRejected);
         assert!(skipped.message.contains("advances past"));
     }
-
     #[test]
     fn root_geometry_result_and_transcript_mutations_return_invalid_verdicts() {
         let fixture = make_fixture();
@@ -985,14 +923,12 @@ mod tests {
             .expect("valid finality with invalid BlockProofs returns a verdict");
             assert!(!verdict.valid);
         };
-
         let mut wrong_root = fixture.block_proofs.clone();
         wrong_root.entry_commitment = MerkleTreeCommitment::new(
             HashOf::from_untyped_unchecked(Hash::new(b"forged entry root")),
             wrong_root.entry_commitment.leaf_count(),
         );
         assert_invalid(&wrong_root);
-
         let mut wrong_geometry = fixture.block_proofs.clone();
         wrong_geometry.entry_commitment = MerkleTreeCommitment::new(
             *wrong_geometry.entry_commitment.root(),
@@ -1000,21 +936,18 @@ mod tests {
                 .expect("non-zero forged leaf count"),
         );
         assert_invalid(&wrong_geometry);
-
         let mut wrong_result = fixture.block_proofs.clone();
         wrong_result.result_proof = ExecutionReceiptProof::new(
             HashOf::<TransactionResult>::from_untyped_unchecked(Hash::new(b"forged result")),
             wrong_result.result_proof.proof().clone(),
         );
         assert_invalid(&wrong_result);
-
         let mut wrong_transcript = fixture.block_proofs.clone();
         wrong_transcript
             .fastpq_transcripts
             .insert(Hash::new(b"forged FASTPQ transcript key"), Vec::new());
         assert_invalid(&wrong_transcript);
     }
-
     #[test]
     fn another_valid_entry_proof_from_the_same_finalized_block_is_rejected() {
         let fixture = make_fixture();
@@ -1028,21 +961,18 @@ mod tests {
             &fixture.trusted_context_id,
         )
         .expect("valid finality with a substituted proof returns a verdict");
-
         assert!(!verdict.valid);
         assert_eq!(
             verdict.entry_hash_hex,
             hex::encode(fixture.block_proofs.entry_hash.as_ref())
         );
     }
-
     #[test]
     fn raw_boundary_rejects_unmarked_context_noncanonical_archives_and_headerless_wire() {
         let fixture = make_fixture();
         let finality = norito::encode_canonical(&fixture.finality).expect("encode finality");
         let proofs = norito::encode_canonical(&fixture.block_proofs).expect("encode proofs");
         let wire = fixture.block.encode_wire().expect("encode wire");
-
         let mut unmarked_context = fixture.trusted_context_id;
         unmarked_context[Hash::LENGTH - 1] &= !1;
         let context_error = verify_raw_v1(RawVerificationInputV1 {
@@ -1057,7 +987,6 @@ mod tests {
         })
         .expect_err("unmarked context hash must fail");
         assert_eq!(context_error.code, VerificationErrorCode::InvalidContextId);
-
         let mut unmarked_entry_hash = *fixture.block_proofs.entry_hash.as_ref();
         unmarked_entry_hash[Hash::LENGTH - 1] &= !1;
         let entry_hash_error = verify_raw_v1(RawVerificationInputV1 {
@@ -1075,7 +1004,6 @@ mod tests {
             entry_hash_error.code,
             VerificationErrorCode::InvalidEntryHash
         );
-
         let wire_preflight_error = verify_raw_v1(RawVerificationInputV1 {
             version: AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
             network_id: FIXTURE_NETWORK_ID,
@@ -1091,7 +1019,6 @@ mod tests {
             wire_preflight_error.code,
             VerificationErrorCode::NonCanonicalBlockWire
         );
-
         let mut noncanonical_finality = finality.clone();
         noncanonical_finality.push(0);
         let finality_error = verify_raw_v1(RawVerificationInputV1 {
@@ -1109,7 +1036,6 @@ mod tests {
             finality_error.code,
             VerificationErrorCode::NonCanonicalFinalityProof
         );
-
         let mut noncanonical_proofs = proofs.clone();
         noncanonical_proofs.push(0);
         let proof_error = verify_raw_v1(RawVerificationInputV1 {
@@ -1127,7 +1053,6 @@ mod tests {
             proof_error.code,
             VerificationErrorCode::NonCanonicalBlockProofs
         );
-
         let deframed = iroha_data_model::block::deframe_versioned_signed_block_bytes(&wire)
             .expect("deframe fixture wire");
         let wire_error = verify_raw_v1(RawVerificationInputV1 {
@@ -1146,14 +1071,12 @@ mod tests {
             VerificationErrorCode::NonCanonicalBlockWire
         );
     }
-
     #[test]
     fn size_preflight_rejects_before_decode() {
         let oversized = vec![0; AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1 + 1];
         let error = decode_finality_proof(&oversized, "oversized")
             .expect_err("oversized finality proof must fail before decode");
         assert_eq!(error.code, VerificationErrorCode::InputTooLarge);
-
         let empty = decode_block_proofs(&[]).expect_err("empty block proofs must fail");
         assert_eq!(empty.code, VerificationErrorCode::EmptyInput);
     }

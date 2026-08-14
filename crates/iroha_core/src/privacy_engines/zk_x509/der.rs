@@ -7,14 +7,11 @@
 //! nesting depth, value count, and `SET OF` order. Primitive `OCTET STRING`
 //! payloads remain opaque and must be parsed separately when an X.509
 //! extension assigns them an inner ASN.1 type.
-
-use thiserror::Error;
-
 pub(crate) use super::der_limits::{
     ZK_X509_DER_MAX_DOCUMENT_BYTES_V1, ZK_X509_DER_MAX_NESTING_DEPTH_V1,
     ZK_X509_DER_MAX_VALUE_BYTES_V1, ZK_X509_DER_MAX_VALUES_V1,
 };
-
+use thiserror::Error;
 /// DER content octets of `ecdsa-with-SHA256` (`1.2.840.10045.4.3.2`).
 pub(crate) const ZK_X509_ECDSA_WITH_SHA256_OID_CONTENT_V1: &[u8] =
     &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
@@ -24,7 +21,6 @@ pub(crate) const ZK_X509_ID_EC_PUBLIC_KEY_OID_CONTENT_V1: &[u8] =
 /// DER content octets of `prime256v1` (`1.2.840.10045.3.1.7`).
 pub(crate) const ZK_X509_PRIME256V1_OID_CONTENT_V1: &[u8] =
     &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
-
 /// Exact DER `AlgorithmIdentifier` for ECDSA with SHA-256 and absent parameters.
 pub(crate) const ZK_X509_ECDSA_WITH_SHA256_ALGORITHM_IDENTIFIER_DER_V1: &[u8] = &[
     0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02,
@@ -34,7 +30,6 @@ pub(crate) const ZK_X509_P256_PUBLIC_KEY_ALGORITHM_IDENTIFIER_DER_V1: &[u8] = &[
     0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48,
     0xce, 0x3d, 0x03, 0x01, 0x07,
 ];
-
 /// Resource limits applied while validating one DER document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerLimitsV1 {
@@ -47,7 +42,6 @@ pub(crate) struct ZkX509DerLimitsV1 {
     /// Maximum recursively encountered value count.
     pub(crate) max_values: usize,
 }
-
 impl ZkX509DerLimitsV1 {
     /// Construct explicit limits.
     pub(crate) const fn new(
@@ -63,7 +57,6 @@ impl ZkX509DerLimitsV1 {
             max_values,
         }
     }
-
     /// Return the fixed first-release X.509 DER limits.
     pub(crate) const fn profile() -> Self {
         Self::new(
@@ -74,7 +67,6 @@ impl ZkX509DerLimitsV1 {
         )
     }
 }
-
 /// ASN.1 tag class.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ZkX509DerClassV1 {
@@ -87,7 +79,6 @@ pub(crate) enum ZkX509DerClassV1 {
     /// Private tag.
     Private,
 }
-
 /// Canonically decoded DER identifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerTagV1 {
@@ -98,7 +89,6 @@ pub(crate) struct ZkX509DerTagV1 {
     /// Decoded tag number.
     pub(crate) number: u32,
 }
-
 impl ZkX509DerTagV1 {
     /// Universal BOOLEAN.
     pub(crate) const BOOLEAN: Self = Self::universal(false, 1);
@@ -114,7 +104,6 @@ impl ZkX509DerTagV1 {
     pub(crate) const SEQUENCE: Self = Self::universal(true, 16);
     /// Universal SET.
     pub(crate) const SET: Self = Self::universal(true, 17);
-
     const fn universal(constructed: bool, number: u32) -> Self {
         Self {
             class: ZkX509DerClassV1::Universal,
@@ -123,7 +112,6 @@ impl ZkX509DerTagV1 {
         }
     }
 }
-
 /// Exact failure returned by the bounded DER parser.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509DerErrorV1 {
@@ -305,7 +293,6 @@ pub(crate) enum ZkX509DerErrorV1 {
     #[error("zk-X509 AlgorithmIdentifier contains unexpected trailing fields")]
     UnexpectedAlgorithmIdentifierFields,
 }
-
 /// One recursively validated borrowed DER value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerValueV1<'a> {
@@ -313,23 +300,19 @@ pub(crate) struct ZkX509DerValueV1<'a> {
     encoded: &'a [u8],
     contents: &'a [u8],
 }
-
 impl<'a> ZkX509DerValueV1<'a> {
     /// Return the decoded tag.
     pub(crate) const fn tag(self) -> ZkX509DerTagV1 {
         self.tag
     }
-
     /// Return the complete canonical TLV bytes.
     pub(crate) const fn encoded(self) -> &'a [u8] {
         self.encoded
     }
-
     /// Return the content octets.
     pub(crate) const fn contents(self) -> &'a [u8] {
         self.contents
     }
-
     /// Require an exact tag.
     pub(crate) fn require_tag(self, expected: ZkX509DerTagV1) -> Result<Self, ZkX509DerErrorV1> {
         if self.tag != expected {
@@ -340,7 +323,6 @@ impl<'a> ZkX509DerValueV1<'a> {
         }
         Ok(self)
     }
-
     /// Interpret this value as a canonical INTEGER.
     pub(crate) fn as_integer(self) -> Result<ZkX509DerIntegerV1<'a>, ZkX509DerErrorV1> {
         self.require_tag(ZkX509DerTagV1::INTEGER)?;
@@ -349,7 +331,6 @@ impl<'a> ZkX509DerValueV1<'a> {
             contents: self.contents,
         })
     }
-
     /// Interpret this value as a canonical OBJECT IDENTIFIER.
     pub(crate) fn as_object_identifier(
         self,
@@ -360,14 +341,12 @@ impl<'a> ZkX509DerValueV1<'a> {
             contents: self.contents,
         })
     }
-
     /// Interpret this value as a canonical BIT STRING.
     pub(crate) fn as_bit_string(self) -> Result<ZkX509DerBitStringV1<'a>, ZkX509DerErrorV1> {
         self.require_tag(ZkX509DerTagV1::BIT_STRING)?;
         let (unused_bits, bytes) = validate_bit_string_contents(self.contents)?;
         Ok(ZkX509DerBitStringV1 { unused_bits, bytes })
     }
-
     /// Create a bounded reader over this constructed value's children.
     pub(crate) fn children(
         self,
@@ -382,20 +361,17 @@ impl<'a> ZkX509DerValueV1<'a> {
         })
     }
 }
-
 /// Reader over already recursively validated DER children.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerReaderV1<'a> {
     remaining: &'a [u8],
     limits: ZkX509DerLimitsV1,
 }
-
 impl<'a> ZkX509DerReaderV1<'a> {
     /// Return whether every child was consumed.
     pub(crate) const fn is_empty(self) -> bool {
         self.remaining.is_empty()
     }
-
     /// Read one required child.
     pub(crate) fn read_value(&mut self) -> Result<ZkX509DerValueV1<'a>, ZkX509DerErrorV1> {
         if self.remaining.is_empty() {
@@ -406,19 +382,16 @@ impl<'a> ZkX509DerReaderV1<'a> {
         Ok(value)
     }
 }
-
 /// Canonical borrowed INTEGER content.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerIntegerV1<'a> {
     contents: &'a [u8],
 }
-
 impl<'a> ZkX509DerIntegerV1<'a> {
     /// Return the exact signed two's-complement content bytes.
     pub(crate) const fn contents(self) -> &'a [u8] {
         self.contents
     }
-
     /// Require a positive non-zero integer and return its unsigned magnitude.
     pub(crate) fn positive_unsigned(
         self,
@@ -448,57 +421,48 @@ impl<'a> ZkX509DerIntegerV1<'a> {
         Ok(ZkX509DerPositiveIntegerV1 { bytes: unsigned })
     }
 }
-
 /// Positive non-zero unsigned magnitude derived from a canonical INTEGER.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerPositiveIntegerV1<'a> {
     bytes: &'a [u8],
 }
-
 impl<'a> ZkX509DerPositiveIntegerV1<'a> {
     /// Return the unsigned magnitude with any required DER sign octet removed.
     pub(crate) const fn bytes(self) -> &'a [u8] {
         self.bytes
     }
 }
-
 /// Canonical borrowed OBJECT IDENTIFIER content.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerObjectIdentifierV1<'a> {
     contents: &'a [u8],
 }
-
 impl<'a> ZkX509DerObjectIdentifierV1<'a> {
     /// Return the exact base-128 content octets.
     pub(crate) const fn contents(self) -> &'a [u8] {
         self.contents
     }
-
     /// Compare against exact canonical OID content octets.
     pub(crate) fn equals(self, expected_contents: &[u8]) -> bool {
         self.contents == expected_contents
     }
 }
-
 /// Canonical borrowed BIT STRING payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509DerBitStringV1<'a> {
     unused_bits: u8,
     bytes: &'a [u8],
 }
-
 impl<'a> ZkX509DerBitStringV1<'a> {
     /// Return the number of zero padding bits in the final payload octet.
     pub(crate) const fn unused_bits(self) -> u8 {
         self.unused_bits
     }
-
     /// Return the BIT STRING payload without the unused-bit count octet.
     pub(crate) const fn bytes(self) -> &'a [u8] {
         self.bytes
     }
 }
-
 /// Parse and recursively validate exactly one bounded DER value.
 pub(crate) fn parse_single_der_value_v1(
     input: &[u8],
@@ -522,7 +486,6 @@ pub(crate) fn parse_single_der_value_v1(
     }
     Ok(value)
 }
-
 /// Validate the exact ECDSA-with-SHA256 AlgorithmIdentifier used by certificates and CRLs.
 pub(crate) fn validate_ecdsa_with_sha256_algorithm_identifier_v1(
     encoded: &[u8],
@@ -543,7 +506,6 @@ pub(crate) fn validate_ecdsa_with_sha256_algorithm_identifier_v1(
     }
     Ok(())
 }
-
 /// Validate the exact id-ecPublicKey/prime256v1 AlgorithmIdentifier used by SPKIs.
 pub(crate) fn validate_p256_public_key_algorithm_identifier_v1(
     encoded: &[u8],
@@ -571,7 +533,6 @@ pub(crate) fn validate_p256_public_key_algorithm_identifier_v1(
     }
     Ok(())
 }
-
 fn map_missing_algorithm_oid(error: ZkX509DerErrorV1) -> ZkX509DerErrorV1 {
     if error == ZkX509DerErrorV1::UnexpectedEndOfContainer {
         ZkX509DerErrorV1::MissingAlgorithmObjectIdentifier
@@ -579,7 +540,6 @@ fn map_missing_algorithm_oid(error: ZkX509DerErrorV1) -> ZkX509DerErrorV1 {
         error
     }
 }
-
 fn map_missing_public_key_parameters(error: ZkX509DerErrorV1) -> ZkX509DerErrorV1 {
     if error == ZkX509DerErrorV1::UnexpectedEndOfContainer {
         ZkX509DerErrorV1::MissingPublicKeyAlgorithmParameters
@@ -587,7 +547,6 @@ fn map_missing_public_key_parameters(error: ZkX509DerErrorV1) -> ZkX509DerErrorV
         error
     }
 }
-
 fn scan_value<'a>(
     input: &'a [u8],
     depth: usize,
@@ -610,7 +569,6 @@ fn scan_value<'a>(
         .ok_or(ZkX509DerErrorV1::TooManyValues {
             max: limits.max_values,
         })?;
-
     let (value, remaining) = parse_value_prefix(input, limits)?;
     if value.tag.constructed {
         let child_depth = depth
@@ -629,7 +587,6 @@ fn scan_value<'a>(
     }
     Ok((value, remaining))
 }
-
 fn scan_constructed_contents(
     mut input: &[u8],
     depth: usize,
@@ -650,7 +607,6 @@ fn scan_constructed_contents(
     }
     Ok(())
 }
-
 fn parse_value_prefix(
     input: &[u8],
     limits: ZkX509DerLimitsV1,
@@ -695,7 +651,6 @@ fn parse_value_prefix(
         &input[encoded_bytes..],
     ))
 }
-
 fn parse_identifier(input: &[u8]) -> Result<(ZkX509DerTagV1, usize), ZkX509DerErrorV1> {
     let first = *input.first().ok_or(ZkX509DerErrorV1::TruncatedIdentifier)?;
     let class = match first >> 6 {
@@ -716,7 +671,6 @@ fn parse_identifier(input: &[u8]) -> Result<(ZkX509DerTagV1, usize), ZkX509DerEr
             1,
         ));
     }
-
     let mut number = 0_u32;
     let mut index = 1_usize;
     let first_high = *input
@@ -752,7 +706,6 @@ fn parse_identifier(input: &[u8]) -> Result<(ZkX509DerTagV1, usize), ZkX509DerEr
         index,
     ))
 }
-
 fn parse_length(input: &[u8]) -> Result<(usize, usize), ZkX509DerErrorV1> {
     let first = *input.first().ok_or(ZkX509DerErrorV1::TruncatedLength)?;
     if first & 0x80 == 0 {
@@ -787,7 +740,6 @@ fn parse_length(input: &[u8]) -> Result<(usize, usize), ZkX509DerErrorV1> {
         .ok_or(ZkX509DerErrorV1::LengthOverflow)?;
     Ok((length, encoded_octets))
 }
-
 fn validate_universal_tag_form(tag: ZkX509DerTagV1) -> Result<(), ZkX509DerErrorV1> {
     if tag.class != ZkX509DerClassV1::Universal {
         return Ok(());
@@ -809,7 +761,6 @@ fn validate_universal_tag_form(tag: ZkX509DerTagV1) -> Result<(), ZkX509DerError
     }
     Ok(())
 }
-
 fn validate_primitive_contents(
     tag: ZkX509DerTagV1,
     contents: &[u8],
@@ -826,21 +777,18 @@ fn validate_primitive_contents(
         _ => Ok(()),
     }
 }
-
 fn validate_boolean_contents(contents: &[u8]) -> Result<(), ZkX509DerErrorV1> {
     if contents.len() != 1 || !matches!(contents[0], 0x00 | 0xff) {
         return Err(ZkX509DerErrorV1::InvalidBoolean);
     }
     Ok(())
 }
-
 fn validate_null_contents(contents: &[u8]) -> Result<(), ZkX509DerErrorV1> {
     if !contents.is_empty() {
         return Err(ZkX509DerErrorV1::InvalidNull);
     }
     Ok(())
 }
-
 fn validate_integer_contents(contents: &[u8]) -> Result<(), ZkX509DerErrorV1> {
     let first = *contents.first().ok_or(ZkX509DerErrorV1::EmptyInteger)?;
     if let Some(second) = contents.get(1).copied() {
@@ -852,7 +800,6 @@ fn validate_integer_contents(contents: &[u8]) -> Result<(), ZkX509DerErrorV1> {
     }
     Ok(())
 }
-
 fn validate_object_identifier_contents(contents: &[u8]) -> Result<(), ZkX509DerErrorV1> {
     if contents.is_empty() {
         return Err(ZkX509DerErrorV1::EmptyObjectIdentifier);
@@ -869,7 +816,6 @@ fn validate_object_identifier_contents(contents: &[u8]) -> Result<(), ZkX509DerE
     }
     Ok(())
 }
-
 fn validate_bit_string_contents(contents: &[u8]) -> Result<(u8, &[u8]), ZkX509DerErrorV1> {
     let unused_bits = *contents.first().ok_or(ZkX509DerErrorV1::EmptyBitString)?;
     if unused_bits > 7 {
@@ -887,19 +833,15 @@ fn validate_bit_string_contents(contents: &[u8]) -> Result<(u8, &[u8]), ZkX509De
     }
     Ok((unused_bits, bytes))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn limits() -> ZkX509DerLimitsV1 {
         ZkX509DerLimitsV1::profile()
     }
-
     fn single(input: &[u8]) -> Result<ZkX509DerValueV1<'_>, ZkX509DerErrorV1> {
         parse_single_der_value_v1(input, limits())
     }
-
     #[test]
     fn one_top_level_value_is_borrowed_and_trailing_bytes_are_rejected() {
         let encoded = [0x30, 0x05, 0x02, 0x01, 0x01, 0x05, 0x00];
@@ -907,7 +849,6 @@ mod tests {
         assert_eq!(value.tag(), ZkX509DerTagV1::SEQUENCE);
         assert_eq!(value.encoded(), &encoded);
         assert_eq!(value.contents(), &encoded[2..]);
-
         assert_eq!(single(&[]), Err(ZkX509DerErrorV1::EmptyInput));
         let mut trailing = encoded.to_vec();
         trailing.extend_from_slice(&[0x05, 0x00]);
@@ -916,7 +857,6 @@ mod tests {
             Err(ZkX509DerErrorV1::TrailingData { bytes: 2 })
         );
     }
-
     #[test]
     fn document_value_depth_and_count_limits_fail_before_allocation() {
         let tiny_document = ZkX509DerLimitsV1::new(2, 16, 4, 4);
@@ -924,20 +864,17 @@ mod tests {
             parse_single_der_value_v1(&[0x04, 0x01, 0x00], tiny_document),
             Err(ZkX509DerErrorV1::InputTooLarge { actual: 3, max: 2 })
         );
-
         let tiny_value = ZkX509DerLimitsV1::new(16, 2, 4, 4);
         assert_eq!(
             parse_single_der_value_v1(&[0x04, 0x03, 0, 0, 0], tiny_value),
             Err(ZkX509DerErrorV1::ValueTooLarge { actual: 3, max: 2 })
         );
-
         let nested = [0x30, 0x02, 0x30, 0x00];
         let one_level = ZkX509DerLimitsV1::new(16, 16, 1, 4);
         assert_eq!(
             parse_single_der_value_v1(&nested, one_level),
             Err(ZkX509DerErrorV1::NestingTooDeep { depth: 2, max: 1 })
         );
-
         let three_values = [0x30, 0x04, 0x05, 0x00, 0x05, 0x00];
         let two_values = ZkX509DerLimitsV1::new(16, 16, 4, 2);
         assert_eq!(
@@ -945,13 +882,11 @@ mod tests {
             Err(ZkX509DerErrorV1::TooManyValues { max: 2 })
         );
     }
-
     #[test]
     fn definite_minimal_lengths_are_the_only_lengths_admitted() {
         let mut long_form = vec![0x30, 0x81, 0x80, 0x04, 0x7e];
         long_form.extend(core::iter::repeat(0_u8).take(126));
         single(&long_form).expect("minimal 128-byte long form");
-
         assert_eq!(single(&[0x04]), Err(ZkX509DerErrorV1::TruncatedLength));
         assert_eq!(
             single(&[0x04, 0x80]),
@@ -976,7 +911,6 @@ mod tests {
                 remaining: 2
             })
         );
-
         let length_octets = core::mem::size_of::<usize>() + 1;
         let mut overflowing = vec![
             0x04,
@@ -984,7 +918,6 @@ mod tests {
         ];
         overflowing.extend(core::iter::repeat(0xff).take(length_octets));
         assert_eq!(single(&overflowing), Err(ZkX509DerErrorV1::LengthOverflow));
-
         assert_eq!(
             single(&[0x04, 0x83, 0x01, 0x00, 0x00]),
             Err(ZkX509DerErrorV1::ValueTooLarge {
@@ -993,7 +926,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn identifiers_are_minimal_bounded_and_use_canonical_universal_forms() {
         let high_context_tag = [0x9f, 0x1f, 0x00];
@@ -1006,7 +938,6 @@ mod tests {
                 number: 31,
             }
         );
-
         assert_eq!(single(&[0x9f]), Err(ZkX509DerErrorV1::TruncatedIdentifier));
         assert_eq!(
             single(&[0x9f, 0x80, 0x00]),
@@ -1045,7 +976,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn set_of_order_is_checked_recursively() {
         let sorted = [0x31, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x02];
@@ -1056,7 +986,6 @@ mod tests {
             Err(ZkX509DerErrorV1::SetElementsOutOfOrder)
         );
     }
-
     #[test]
     fn integers_are_minimal_and_positive_projection_is_bounded() {
         for encoded in [
@@ -1077,7 +1006,6 @@ mod tests {
             single(&[0x02, 0x02, 0xff, 0x80]),
             Err(ZkX509DerErrorV1::NonMinimalInteger)
         );
-
         let sign_padded = single(&[0x02, 0x02, 0x00, 0x80])
             .expect("positive INTEGER")
             .as_integer()
@@ -1115,7 +1043,6 @@ mod tests {
             Err(ZkX509DerErrorV1::IntegerTooLarge { actual: 2, max: 1 })
         );
     }
-
     #[test]
     fn object_identifiers_require_minimal_terminated_base128_arcs() {
         let oid = single(&[0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02])
@@ -1124,7 +1051,6 @@ mod tests {
             .expect("OID tag");
         assert!(oid.equals(ZK_X509_ECDSA_WITH_SHA256_OID_CONTENT_V1));
         assert_eq!(oid.contents(), ZK_X509_ECDSA_WITH_SHA256_OID_CONTENT_V1);
-
         // First combined arc value 1079 encodes 2.999, followed by arc 3.
         single(&[0x06, 0x03, 0x88, 0x37, 0x03]).expect("multi-byte first subidentifier");
         assert_eq!(
@@ -1145,7 +1071,6 @@ mod tests {
         single(&wide_but_canonical_arc)
             .expect("canonical OID arcs are byte-validated without an integer-width limit");
     }
-
     #[test]
     fn bit_strings_bind_unused_count_and_zero_padding() {
         let empty = single(&[0x03, 0x01, 0x00])
@@ -1154,14 +1079,12 @@ mod tests {
             .expect("BIT STRING tag");
         assert_eq!(empty.unused_bits(), 0);
         assert!(empty.bytes().is_empty());
-
         let partial = single(&[0x03, 0x02, 0x03, 0xa0])
             .expect("partially used final octet")
             .as_bit_string()
             .expect("BIT STRING tag");
         assert_eq!(partial.unused_bits(), 3);
         assert_eq!(partial.bytes(), &[0xa0]);
-
         assert_eq!(single(&[0x03, 0x00]), Err(ZkX509DerErrorV1::EmptyBitString));
         assert_eq!(
             single(&[0x03, 0x01, 0x08]),
@@ -1176,7 +1099,6 @@ mod tests {
             Err(ZkX509DerErrorV1::NonZeroUnusedBits)
         );
     }
-
     #[test]
     fn boolean_and_null_are_canonical() {
         single(&[0x01, 0x01, 0x00]).expect("canonical FALSE");
@@ -1192,7 +1114,6 @@ mod tests {
             Err(ZkX509DerErrorV1::InvalidNull)
         );
     }
-
     #[test]
     fn signature_algorithm_identifier_is_exact_and_parameters_are_absent() {
         validate_ecdsa_with_sha256_algorithm_identifier_v1(
@@ -1204,7 +1125,6 @@ mod tests {
             validate_ecdsa_with_sha256_algorithm_identifier_v1(&[0x30, 0x00], limits()),
             Err(ZkX509DerErrorV1::MissingAlgorithmObjectIdentifier)
         );
-
         let with_null = [
             0x30, 0x0c, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02, 0x05, 0x00,
         ];
@@ -1212,7 +1132,6 @@ mod tests {
             validate_ecdsa_with_sha256_algorithm_identifier_v1(&with_null, limits()),
             Err(ZkX509DerErrorV1::ForbiddenSignatureAlgorithmParameters)
         );
-
         let sha384 = [
             0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03,
         ];
@@ -1228,7 +1147,6 @@ mod tests {
             Err(ZkX509DerErrorV1::UnexpectedTag { .. })
         ));
     }
-
     #[test]
     fn public_key_algorithm_identifier_is_exact_p256_with_named_curve() {
         validate_p256_public_key_algorithm_identifier_v1(
@@ -1236,7 +1154,6 @@ mod tests {
             limits(),
         )
         .expect("exact P-256 public-key algorithm");
-
         let missing_curve = [
             0x30, 0x09, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,
         ];
@@ -1244,7 +1161,6 @@ mod tests {
             validate_p256_public_key_algorithm_identifier_v1(&missing_curve, limits()),
             Err(ZkX509DerErrorV1::MissingPublicKeyAlgorithmParameters)
         );
-
         let wrong_algorithm = [
             0x30, 0x14, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02, 0x06, 0x08,
             0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07,
@@ -1253,7 +1169,6 @@ mod tests {
             validate_p256_public_key_algorithm_identifier_v1(&wrong_algorithm, limits()),
             Err(ZkX509DerErrorV1::UnsupportedPublicKeyAlgorithm)
         );
-
         let secp384r1 = [
             0x30, 0x10, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x05, 0x2b,
             0x81, 0x04, 0x00, 0x22,
@@ -1262,7 +1177,6 @@ mod tests {
             validate_p256_public_key_algorithm_identifier_v1(&secp384r1, limits()),
             Err(ZkX509DerErrorV1::UnsupportedNamedCurve)
         );
-
         let with_extra_null = [
             0x30, 0x15, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a,
             0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x05, 0x00,
@@ -1272,7 +1186,6 @@ mod tests {
             Err(ZkX509DerErrorV1::UnexpectedAlgorithmIdentifierFields)
         );
     }
-
     #[test]
     fn every_algorithm_identifier_truncation_fails_closed() {
         for canonical in [
@@ -1289,25 +1202,21 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn x509_parser_is_only_a_differential_oracle_for_algorithm_shape() {
         use x509_parser::{prelude::FromDer, x509::AlgorithmIdentifier};
-
         let (remaining, signature) =
             AlgorithmIdentifier::from_der(ZK_X509_ECDSA_WITH_SHA256_ALGORITHM_IDENTIFIER_DER_V1)
                 .expect("oracle parses canonical signature AlgorithmIdentifier");
         assert!(remaining.is_empty());
         assert_eq!(signature.algorithm.to_id_string(), "1.2.840.10045.4.3.2");
         assert!(signature.parameters.is_none());
-
         let (remaining, public_key) =
             AlgorithmIdentifier::from_der(ZK_X509_P256_PUBLIC_KEY_ALGORITHM_IDENTIFIER_DER_V1)
                 .expect("oracle parses canonical public-key AlgorithmIdentifier");
         assert!(remaining.is_empty());
         assert_eq!(public_key.algorithm.to_id_string(), "1.2.840.10045.2.1");
         assert!(public_key.parameters.is_some());
-
         // The generic oracle accepts an explicit NULL here. The native profile
         // is deliberately stricter and remains the authoritative decision.
         let with_null = [

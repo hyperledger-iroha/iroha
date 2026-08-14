@@ -1126,12 +1126,10 @@ def test_mcp_rollout_has_no_backend_offline_admission_gate() -> None:
     assert "--offline-expected-identity" not in source
     assert "OFFLINE_ASSET_DEFINITION_ID" not in source
     assert "OFFLINE_EXPECTED_IDENTITY_PATH" not in source
-    assert (
-        'EXPECTED_IS_ROUTE_ALIAS="${EXPECTED_IS_ROUTE_ALIAS:-external-poc}"' in source
-    )
-    assert (
-        'EXPECTED_IS2_ROUTE_ALIAS="${EXPECTED_IS2_ROUTE_ALIAS:-boi-mobile}"' in source
-    )
+    assert 'readonly EXPECTED_IS_ROUTE_ALIAS="external-poc"' in source
+    assert 'readonly EXPECTED_IS2_ROUTE_ALIAS="boi-mobile"' in source
+    assert '${EXPECTED_IS_ROUTE_ALIAS:-' not in source
+    assert '${EXPECTED_IS2_ROUTE_ALIAS:-' not in source
     assert '"$(normalize_root_url "$root")/health"' in source
     assert '"$(normalize_root_url "$root")/readyz"' in source
     assert '"$(normalize_root_url "$root")/v1/nexus/lifecycle"' in source

@@ -1,5 +1,4 @@
 use crate::bitstream::{BitReader, BitstreamError};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HuffmanError {
     EmptyInput,
@@ -7,24 +6,20 @@ pub enum HuffmanError {
     Bitstream(BitstreamError),
     InvalidTable,
 }
-
 impl From<BitstreamError> for HuffmanError {
     fn from(err: BitstreamError) -> Self {
         HuffmanError::Bitstream(err)
     }
 }
-
 const MAX_SYMBOLS: usize = 256;
 const MAX_NODES: usize = 512;
 const MAX_BITS: u8 = 56;
-
 #[derive(Debug, Clone)]
 pub(crate) struct HuffmanTable {
     pub(crate) lengths: [u8; MAX_SYMBOLS],
     pub(crate) codes: [u64; MAX_SYMBOLS],
     pub(crate) max_len: u8,
 }
-
 pub(crate) fn encode_literals(input: &[u8]) -> Result<(Vec<u8>, HuffmanTable), HuffmanError> {
     if input.is_empty() {
         return Ok((
@@ -40,7 +35,6 @@ pub(crate) fn encode_literals(input: &[u8]) -> Result<(Vec<u8>, HuffmanTable), H
     let encoded = encode_with_table(input, &table)?;
     Ok((encoded, table))
 }
-
 pub(crate) fn decode_literals(
     encoded: &[u8],
     table: &HuffmanTable,
@@ -54,7 +48,6 @@ pub(crate) fn decode_literals(
     let mut tree_child1 = vec![-1i32; MAX_NODES];
     let mut tree_symbol = vec![-1i16; MAX_NODES];
     let mut node_count = 1usize;
-
     let mut pairs = collect_pairs(&table.lengths)?;
     assign_tree(
         &mut pairs,
@@ -63,7 +56,6 @@ pub(crate) fn decode_literals(
         &mut tree_child1,
         &mut node_count,
     )?;
-
     let mut output = Vec::with_capacity(output_len);
     for _ in 0..output_len {
         let mut node = 0usize;
@@ -88,12 +80,10 @@ pub(crate) fn decode_literals(
     output.reverse();
     Ok(output)
 }
-
 pub(crate) fn build_table_for_input(input: &[u8]) -> Result<HuffmanTable, HuffmanError> {
     let counts = histogram(input);
     build_table(&counts)
 }
-
 pub(crate) fn encode_with_table(
     input: &[u8],
     table: &HuffmanTable,
@@ -114,7 +104,6 @@ pub(crate) fn encode_with_table(
     }
     writer.close()
 }
-
 fn histogram(input: &[u8]) -> [u32; MAX_SYMBOLS] {
     let mut counts = [0u32; MAX_SYMBOLS];
     for &byte in input {
@@ -122,7 +111,6 @@ fn histogram(input: &[u8]) -> [u32; MAX_SYMBOLS] {
     }
     counts
 }
-
 fn build_table(counts: &[u32; MAX_SYMBOLS]) -> Result<HuffmanTable, HuffmanError> {
     let mut lengths = [0u8; MAX_SYMBOLS];
     let mut codes = [0u64; MAX_SYMBOLS];
@@ -134,7 +122,6 @@ fn build_table(counts: &[u32; MAX_SYMBOLS]) -> Result<HuffmanTable, HuffmanError
     let mut right = [-1i32; MAX_NODES];
     let mut leaves = [0i32; MAX_SYMBOLS];
     let mut leaf_count = 0usize;
-
     for (sym, &count) in counts.iter().enumerate() {
         if count == 0 {
             leaves[sym] = -1;
@@ -146,7 +133,6 @@ fn build_table(counts: &[u32; MAX_SYMBOLS]) -> Result<HuffmanTable, HuffmanError
         leaves[sym] = idx as i32;
         leaf_count += 1;
     }
-
     if leaf_count == 0 {
         return Ok(HuffmanTable {
             lengths,
@@ -154,7 +140,6 @@ fn build_table(counts: &[u32; MAX_SYMBOLS]) -> Result<HuffmanTable, HuffmanError
             max_len: 0,
         });
     }
-
     if leaf_count == 1 {
         let sym = leaves.iter().position(|&v| v >= 0).unwrap();
         lengths[sym] = 1;
@@ -165,7 +150,6 @@ fn build_table(counts: &[u32; MAX_SYMBOLS]) -> Result<HuffmanTable, HuffmanError
             max_len: 1,
         });
     }
-
     let mut node_count = leaf_count;
     let mut remaining = leaf_count;
     while remaining > 1 {
@@ -184,7 +168,6 @@ fn build_table(counts: &[u32; MAX_SYMBOLS]) -> Result<HuffmanTable, HuffmanError
         right[new_idx] = right_idx as i32;
         remaining -= 1;
     }
-
     for sym in 0..MAX_SYMBOLS {
         let leaf = leaves[sym];
         if leaf < 0 {
@@ -211,7 +194,6 @@ fn build_table(counts: &[u32; MAX_SYMBOLS]) -> Result<HuffmanTable, HuffmanError
             max_len = depth;
         }
     }
-
     let mut pairs = collect_pairs(&lengths)?;
     assign_codes(&mut pairs, &mut codes, &lengths)?;
     Ok(HuffmanTable {
@@ -220,7 +202,6 @@ fn build_table(counts: &[u32; MAX_SYMBOLS]) -> Result<HuffmanTable, HuffmanError
         max_len,
     })
 }
-
 fn collect_pairs(lengths: &[u8; MAX_SYMBOLS]) -> Result<Vec<(u8, u16)>, HuffmanError> {
     let mut pairs = Vec::new();
     for (sym, &len) in lengths.iter().enumerate() {
@@ -234,7 +215,6 @@ fn collect_pairs(lengths: &[u8; MAX_SYMBOLS]) -> Result<Vec<(u8, u16)>, HuffmanE
     pairs.sort_by(|(len_a, sym_a), (len_b, sym_b)| len_a.cmp(len_b).then(sym_a.cmp(sym_b)));
     Ok(pairs)
 }
-
 fn assign_codes(
     pairs: &mut [(u8, u16)],
     codes: &mut [u64; MAX_SYMBOLS],
@@ -261,7 +241,6 @@ fn assign_codes(
     }
     Ok(())
 }
-
 fn assign_tree(
     pairs: &mut [(u8, u16)],
     tree_symbol: &mut [i16],
@@ -302,14 +281,12 @@ fn assign_tree(
     }
     Ok(())
 }
-
 struct ZstdBitWriter {
     buffer: u64,
     bit_count: u32,
     out: Vec<u8>,
     max_bytes: usize,
 }
-
 impl ZstdBitWriter {
     fn with_capacity(max_bytes: usize) -> Self {
         Self {
@@ -319,7 +296,6 @@ impl ZstdBitWriter {
             max_bytes,
         }
     }
-
     fn add_bits(&mut self, value: u64, bits: u32) -> Result<(), HuffmanError> {
         if bits > MAX_BITS as u32 {
             return Err(HuffmanError::Bitstream(BitstreamError::InvalidBits));
@@ -339,7 +315,6 @@ impl ZstdBitWriter {
         }
         Ok(())
     }
-
     fn close(mut self) -> Result<Vec<u8>, HuffmanError> {
         self.add_bits(1, 1)?;
         if self.bit_count > 0 {
@@ -352,7 +327,6 @@ impl ZstdBitWriter {
         }
         Ok(self.out)
     }
-
     fn push_byte(&mut self) -> Result<(), HuffmanError> {
         if self.out.len() >= self.max_bytes {
             return Err(HuffmanError::Bitstream(BitstreamError::NoSpace));
@@ -363,7 +337,6 @@ impl ZstdBitWriter {
         Ok(())
     }
 }
-
 fn reverse_bits(mut value: u64, bits: u8) -> u64 {
     let mut out = 0u64;
     for _ in 0..bits {
@@ -372,7 +345,6 @@ fn reverse_bits(mut value: u64, bits: u8) -> u64 {
     }
     out
 }
-
 fn select_two_smallest(
     parent: &[i32; MAX_NODES],
     weights: &[u32; MAX_NODES],
@@ -405,7 +377,6 @@ fn select_two_smallest(
         _ => Err(HuffmanError::InvalidTable),
     }
 }
-
 fn cmp_node(a: usize, b: usize, weights: &[u32; MAX_NODES], node_id: &[u16; MAX_NODES]) -> bool {
     if weights[a] != weights[b] {
         return weights[a] < weights[b];
@@ -415,7 +386,6 @@ fn cmp_node(a: usize, b: usize, weights: &[u32; MAX_NODES], node_id: &[u16; MAX_
     }
     a < b
 }
-
 fn order_nodes(
     a: usize,
     b: usize,
@@ -428,11 +398,9 @@ fn order_nodes(
         (b, a)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn huffman_roundtrip() {
         let payload = b"gpuzstd huffman roundtrip literals";
@@ -440,7 +408,6 @@ mod tests {
         let decoded = decode_literals(&encoded, &table, payload.len()).expect("decode");
         assert_eq!(decoded, payload);
     }
-
     #[test]
     fn huffman_single_symbol() {
         let payload = vec![0xaa; 32];

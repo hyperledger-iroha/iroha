@@ -1,8 +1,3 @@
-use std::string::String;
-
-use iroha_crypto::Hash;
-use iroha_primitives::numeric::Quantity;
-
 use super::*;
 use crate::{
     account::AccountId,
@@ -12,7 +7,9 @@ use crate::{
     nexus::{LaneId, PublicLaneRewardShare},
     peer::PeerId,
 };
-
+use iroha_crypto::Hash;
+use iroha_primitives::numeric::Quantity;
+use std::string::String;
 isi! {
     /// Activate a pending validator for a public Nexus lane.
     #[cfg_attr(
@@ -26,7 +23,6 @@ isi! {
         pub validator: AccountId,
     }
 }
-
 impl ActivatePublicLaneValidator {
     /// Build a public-lane validator activation instruction.
     #[must_use]
@@ -34,7 +30,6 @@ impl ActivatePublicLaneValidator {
         Self { lane_id, validator }
     }
 }
-
 isi! {
     /// Request graceful exit for a validator and release its slot.
     pub struct ExitPublicLaneValidator {
@@ -46,7 +41,6 @@ isi! {
         pub release_at_ms: u64,
     }
 }
-
 isi! {
     /// Register a validator for a public Nexus lane and bond validator-owned initial stake.
     #[cfg_attr(
@@ -68,7 +62,6 @@ isi! {
         pub metadata: Metadata,
     }
 }
-
 impl RegisterPublicLaneValidator {
     /// Build a public-lane validator registration instruction.
     #[must_use]
@@ -90,7 +83,6 @@ impl RegisterPublicLaneValidator {
         }
     }
 }
-
 isi! {
     /// Rebind an existing public-lane validator to a new consensus peer identity.
     #[cfg_attr(
@@ -106,7 +98,6 @@ isi! {
         pub peer_id: PeerId,
     }
 }
-
 impl RebindPublicLaneValidatorPeer {
     /// Build a public-lane validator peer-rebinding instruction.
     #[must_use]
@@ -118,7 +109,6 @@ impl RebindPublicLaneValidatorPeer {
         }
     }
 }
-
 isi! {
     /// Bond additional stake for an existing validator (self or delegator supplied).
     pub struct BondPublicLaneStake {
@@ -134,7 +124,6 @@ isi! {
         pub metadata: Metadata,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,29 +131,24 @@ mod tests {
         peer::PeerId,
         prelude::{AccountId, Algorithm, DomainId, KeyPair},
     };
-
     fn sample_account() -> AccountId {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let key_pair = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)
             .expect("derive checked staking fixture account keypair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn sample_peer_id() -> PeerId {
         let key_pair = KeyPair::try_from_seed(vec![0x22; 32], Algorithm::Ed25519)
             .expect("derive checked staking fixture peer keypair");
         PeerId::new(key_pair.public_key().clone())
     }
-
     #[test]
     fn activate_public_lane_validator_new_sets_fields() {
         let validator = sample_account();
         let instruction = ActivatePublicLaneValidator::new(LaneId::SINGLE, validator.clone());
-
         assert_eq!(*instruction.lane_id(), LaneId::SINGLE);
         assert_eq!(instruction.validator(), &validator);
     }
-
     #[test]
     fn register_public_lane_validator_new_sets_fields() {
         let validator = sample_account();
@@ -178,7 +162,6 @@ mod tests {
             Quantity::from(10_u64),
             metadata.clone(),
         );
-
         assert_eq!(*instruction.lane_id(), LaneId::SINGLE);
         assert_eq!(instruction.validator(), &validator);
         assert_eq!(instruction.peer_id(), &peer_id);
@@ -186,20 +169,17 @@ mod tests {
         assert_eq!(instruction.initial_stake(), &Quantity::from(10_u64));
         assert_eq!(instruction.metadata(), &metadata);
     }
-
     #[test]
     fn rebind_public_lane_validator_peer_new_sets_fields() {
         let validator = sample_account();
         let peer_id = sample_peer_id();
         let instruction =
             RebindPublicLaneValidatorPeer::new(LaneId::SINGLE, validator.clone(), peer_id.clone());
-
         assert_eq!(*instruction.lane_id(), LaneId::SINGLE);
         assert_eq!(instruction.validator(), &validator);
         assert_eq!(instruction.peer_id(), &peer_id);
     }
 }
-
 isi! {
     /// Schedule stake withdrawal for a validator or delegator.
     pub struct SchedulePublicLaneUnbond {
@@ -217,7 +197,6 @@ isi! {
         pub release_at_ms: u64,
     }
 }
-
 isi! {
     /// Finalise a previously scheduled stake withdrawal once the unlock timer expires.
     pub struct FinalizePublicLaneUnbond {
@@ -231,7 +210,6 @@ isi! {
         pub request_id: Hash,
     }
 }
-
 isi! {
     /// Slash a validator for misbehaviour and emit an audit trail entry.
     pub struct SlashPublicLaneValidator {
@@ -249,7 +227,6 @@ isi! {
         pub metadata: Metadata,
     }
 }
-
 isi! {
     /// Cancel a pending consensus evidence penalty before slashing executes.
     pub struct CancelConsensusEvidencePenalty {
@@ -257,7 +234,6 @@ isi! {
         pub evidence: Evidence,
     }
 }
-
 isi! {
     /// Record a reward distribution for a public lane epoch.
     pub struct RecordPublicLaneRewards {
@@ -275,7 +251,6 @@ isi! {
         pub metadata: Metadata,
     }
 }
-
 isi! {
     /// Claim pending public-lane rewards for an account up to an optional epoch (inclusive).
     pub struct ClaimPublicLaneRewards {
@@ -287,7 +262,6 @@ isi! {
         pub upto_epoch: Option<u64>,
     }
 }
-
 impl crate::seal::Instruction for RegisterPublicLaneValidator {}
 impl crate::seal::Instruction for RebindPublicLaneValidatorPeer {}
 impl crate::seal::Instruction for ActivatePublicLaneValidator {}
@@ -299,18 +273,15 @@ impl crate::seal::Instruction for SlashPublicLaneValidator {}
 impl crate::seal::Instruction for CancelConsensusEvidencePenalty {}
 impl crate::seal::Instruction for RecordPublicLaneRewards {}
 impl crate::seal::Instruction for ClaimPublicLaneRewards {}
-
 fn staking_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPublicLaneValidator {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = staking_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let lane_id = super::decode_aos_canonical_field::<LaneId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -353,14 +324,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPublicLaneValidator {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RebindPublicLaneValidatorPeer {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = staking_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let lane_id = super::decode_aos_canonical_field::<LaneId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -388,14 +357,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RebindPublicLaneValidatorPeer {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for ActivatePublicLaneValidator {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = staking_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let lane_id = super::decode_aos_canonical_field::<LaneId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -412,14 +379,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ActivatePublicLaneValidator {
         Ok((Self { lane_id, validator }, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for ExitPublicLaneValidator {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = staking_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let lane_id = super::decode_aos_canonical_field::<LaneId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -447,14 +412,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ExitPublicLaneValidator {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for CancelConsensusEvidencePenalty {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = staking_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let evidence = super::decode_aos_canonical_field::<Evidence>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -467,17 +430,14 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CancelConsensusEvidencePenalty {
         Ok((Self { evidence }, offset))
     }
 }
-
 #[cfg(test)]
 mod slice_tests {
+    use super::*;
+    use crate::block::consensus::{EvidenceKind, EvidencePayload};
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_primitives::numeric::Numeric;
     use norito::codec::Decode;
     use norito::core::{DecodeFlagsGuard, DecodeFromSlice, header_flags, read_len_dyn_slice};
-
-    use super::*;
-    use crate::block::consensus::{EvidenceKind, EvidencePayload};
-
     #[derive(norito::codec::Encode)]
     struct ForgedRegisterPublicLaneValidator {
         lane_id: LaneId,
@@ -487,7 +447,6 @@ mod slice_tests {
         initial_stake: Numeric,
         metadata: Metadata,
     }
-
     #[derive(norito::codec::Encode)]
     struct ForgedBondPublicLaneStake {
         lane_id: LaneId,
@@ -496,19 +455,16 @@ mod slice_tests {
         amount: Numeric,
         metadata: Metadata,
     }
-
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked staking slice fixture account keypair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn peer(seed: u8) -> PeerId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked staking slice fixture peer keypair");
         PeerId::new(key_pair.public_key().clone())
     }
-
     fn sample_evidence() -> Evidence {
         let key_pair = KeyPair::try_from_seed(vec![0xE1; 32], Algorithm::Ed25519)
             .expect("derive checked staking evidence fixture keypair");
@@ -530,7 +486,6 @@ mod slice_tests {
             },
         }
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -541,7 +496,6 @@ mod slice_tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(
         registry: &crate::isi::InstructionRegistry,
         wire_id: &str,
@@ -561,7 +515,6 @@ mod slice_tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     fn staking_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(RegisterPublicLaneValidator {
@@ -590,7 +543,6 @@ mod slice_tests {
             evidence: sample_evidence(),
         });
     }
-
     #[test]
     fn staking_registry_decodes_type_names_and_stable_ids() {
         let registry = crate::isi::InstructionRegistry::new()
@@ -608,7 +560,6 @@ mod slice_tests {
             .register_with_id_slice::<ExitPublicLaneValidator>(
                 "iroha.staking.exit_public_lane_validator",
             );
-
         assert_registry_decodes(
             &registry,
             std::any::type_name::<RegisterPublicLaneValidator>(),
@@ -655,7 +606,6 @@ mod slice_tests {
             },
         );
     }
-
     #[test]
     fn negative_numeric_payloads_cannot_decode_as_staking_instructions() {
         let forged_registration = ForgedRegisterPublicLaneValidator {
@@ -671,7 +621,6 @@ mod slice_tests {
             RegisterPublicLaneValidator::decode_from_slice(&encoded).is_err(),
             "a negative signed payload must not decode as validator initial stake"
         );
-
         let forged_bond = ForgedBondPublicLaneStake {
             lane_id: LaneId::SINGLE,
             validator: account(0x34),
@@ -685,7 +634,6 @@ mod slice_tests {
             "a negative signed payload must not decode as bonded stake"
         );
     }
-
     #[test]
     fn forged_bond_lane_id_packed_layout_is_rejected_without_unwind() {
         let bond = BondPublicLaneStake {
@@ -707,7 +655,6 @@ mod slice_tests {
             0,
             "LaneId must have an explicit packed-field size"
         );
-
         let mut size_offset = 1_usize;
         let mut lane_header = None;
         let mut lane_len = None;
@@ -726,7 +673,6 @@ mod slice_tests {
                 size_offset += header_len;
             }
         }
-
         let (lane_header_offset, lane_header_len) = lane_header.expect("LaneId packed size header");
         let lane_len = lane_len.expect("LaneId packed payload length");
         assert_eq!(lane_header_len, 1, "small LaneId size must be one varint");
@@ -736,7 +682,6 @@ mod slice_tests {
         );
         payload[lane_header_offset] = 2;
         payload.splice(size_offset..size_offset + lane_len, [0b1, 0x00]);
-
         let framed = norito::core::frame_bare_with_header_flags::<BondPublicLaneStake>(
             &payload,
             encoded_flags,
@@ -758,7 +703,6 @@ mod slice_tests {
         }
     }
 }
-
 #[cfg(test)]
 mod json_tests {
     use super::{
@@ -770,7 +714,6 @@ mod json_tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Quantity;
     use norito::json::value::{from_value, to_value};
-
     #[test]
     fn register_public_lane_validator_json_roundtrip() {
         let _domain: crate::domain::DomainId =
@@ -792,14 +735,11 @@ mod json_tests {
             Quantity::from(42u32),
             Metadata::default(),
         );
-
         let encoded = to_value(&isi).expect("encode RegisterPublicLaneValidator");
         let decoded: RegisterPublicLaneValidator =
             from_value(encoded).expect("decode RegisterPublicLaneValidator");
-
         assert_eq!(decoded, isi);
     }
-
     #[test]
     fn activate_public_lane_validator_json_roundtrip() {
         let _domain: crate::domain::DomainId =
@@ -808,14 +748,11 @@ mod json_tests {
             .expect("derive checked staking JSON active validator fixture keypair");
         let validator = AccountId::new(validator_key.public_key().clone());
         let isi = ActivatePublicLaneValidator::new(LaneId::new(2), validator);
-
         let encoded = to_value(&isi).expect("encode ActivatePublicLaneValidator");
         let decoded: ActivatePublicLaneValidator =
             from_value(encoded).expect("decode ActivatePublicLaneValidator");
-
         assert_eq!(decoded, isi);
     }
-
     #[test]
     fn rebind_public_lane_validator_peer_json_roundtrip() {
         let _domain: crate::domain::DomainId =
@@ -827,11 +764,9 @@ mod json_tests {
         let validator = AccountId::new(validator_key.public_key().clone());
         let peer_id = PeerId::new(peer_key.public_key().clone());
         let isi = RebindPublicLaneValidatorPeer::new(LaneId::new(3), validator, peer_id);
-
         let encoded = to_value(&isi).expect("encode RebindPublicLaneValidatorPeer");
         let decoded: RebindPublicLaneValidatorPeer =
             from_value(encoded).expect("decode RebindPublicLaneValidatorPeer");
-
         assert_eq!(decoded, isi);
     }
 }

@@ -5,11 +5,8 @@
 //! `specs/confidential_assets.md`. The redundant public-input count and
 //! byte-length fields are canonical only when `pi_len == n_pi * 32`; decoding
 //! rejects any other relationship before reading or allocating public inputs.
-
 use core::mem::size_of;
-
 use thiserror::Error;
-
 /// Canonical envelope version.
 pub const ENVELOPE_VERSION: u8 = 0x01;
 /// Curve identifier for Pasta (Pallas/Vesta cycle).
@@ -20,15 +17,12 @@ pub const PCS_IPA: u8 = 0x01;
 pub const TRANSCRIPT_BLAKE2B: u8 = 0x01;
 /// Flag bit indicating that lookup tables are enabled in the circuit.
 pub const FLAG_LOOKUPS: u8 = 0x01;
-
 /// Size of the header prefix before public inputs (`version`..`pi_len`).
 const HEADER_PREFIX_LEN: usize = 8  // version..flags
     + size_of::<u16>()              // n_pi
     + size_of::<u32>(); // pi_len
-
 /// Length of a single public input encoding (32-byte field element).
 pub const PUBLIC_INPUT_STRIDE: usize = 32;
-
 /// Envelope parsing/building errors.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum EnvelopeError {
@@ -40,23 +34,18 @@ pub enum EnvelopeError {
         /// Actual available bytes in the input buffer.
         actual: usize,
     },
-
     /// Unsupported envelope version (only `0x01` is recognised).
     #[error("unsupported envelope version {0:#04x}")]
     UnsupportedVersion(u8),
-
     /// Unsupported curve identifier (only Pasta is recognised).
     #[error("unsupported curve identifier {0:#04x}")]
     UnsupportedCurve(u8),
-
     /// Unsupported PCS identifier (only IPA is recognised).
     #[error("unsupported polynomial commitment identifier {0:#04x}")]
     UnsupportedPcs(u8),
-
     /// Unsupported transcript identifier (only Blake2b is recognised).
     #[error("unsupported transcript identifier {0:#04x}")]
     UnsupportedTranscript(u8),
-
     /// Public input byte length was not a multiple of 32.
     #[error("public inputs length {declared} is not a multiple of {stride}")]
     PublicInputAlignment {
@@ -65,7 +54,6 @@ pub enum EnvelopeError {
         /// Required stride (32 bytes).
         stride: usize,
     },
-
     /// Declared vs. expected public input count mismatch.
     #[error("public input count mismatch: declared {declared}, expected {expected}")]
     PublicInputCount {
@@ -74,7 +62,6 @@ pub enum EnvelopeError {
         /// Count implied by header fields.
         expected: u16,
     },
-
     /// Declared public input byte length did not match the declared count.
     #[error(
         "public input shape mismatch: {count} entries require {expected} bytes, declared {declared}"
@@ -87,7 +74,6 @@ pub enum EnvelopeError {
         /// Canonical byte length for `count` entries.
         expected: u32,
     },
-
     /// Computing the canonical public input byte length overflowed.
     #[error("public input size overflow for {count} entries of {stride} bytes")]
     PublicInputSizeOverflow {
@@ -96,7 +82,6 @@ pub enum EnvelopeError {
         /// Bytes per public input entry.
         stride: usize,
     },
-
     /// Declared byte length for public inputs did not match the actual payload.
     #[error("public input byte length mismatch: declared {declared}, actual {actual}")]
     PublicInputLength {
@@ -105,7 +90,6 @@ pub enum EnvelopeError {
         /// Actual payload length.
         actual: usize,
     },
-
     /// Declared proof length did not match the remaining payload.
     #[error("proof length mismatch: declared {declared}, actual {actual}")]
     ProofLength {
@@ -114,7 +98,6 @@ pub enum EnvelopeError {
         /// Actual proof length.
         actual: usize,
     },
-
     /// Extra bytes followed the declared proof payload.
     #[error("envelope has {actual} trailing bytes after declared proof length")]
     TrailingBytes {
@@ -122,7 +105,6 @@ pub enum EnvelopeError {
         actual: usize,
     },
 }
-
 /// Header describing a Halo2 proof envelope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Halo2ProofEnvelopeHeader {
@@ -151,7 +133,6 @@ pub struct Halo2ProofEnvelopeHeader {
     /// Canonical envelopes require `pi_len == n_pi * PUBLIC_INPUT_STRIDE`.
     pi_len: u32,
 }
-
 impl Halo2ProofEnvelopeHeader {
     /// Compute the expected public-input count for the given `n_in`/`n_out`.
     ///
@@ -167,7 +148,6 @@ impl Halo2ProofEnvelopeHeader {
             + 1u16  // asset_id
             + 1u16 // policy_digest
     }
-
     /// Construct a canonical header for the provided parameters.
     ///
     /// The redundant count and byte-length fields are validated together so
@@ -215,19 +195,16 @@ impl Halo2ProofEnvelopeHeader {
             pi_len,
         })
     }
-
     /// Return the canonical public-input count.
     #[must_use]
     pub const fn n_pi(&self) -> u16 {
         self.n_pi
     }
-
     /// Return the canonical public-input byte length.
     #[must_use]
     pub const fn pi_len(&self) -> u32 {
         self.pi_len
     }
-
     fn write_prefix(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&[
             self.version,
@@ -243,7 +220,6 @@ impl Halo2ProofEnvelopeHeader {
         out.extend_from_slice(&self.pi_len.to_le_bytes());
     }
 }
-
 /// In-memory representation of a Halo2 proof envelope (public inputs + proof bytes).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Halo2ProofEnvelope {
@@ -254,7 +230,6 @@ pub struct Halo2ProofEnvelope {
     /// Raw Halo2 transcript bytes.
     pub proof: Vec<u8>,
 }
-
 impl Halo2ProofEnvelope {
     /// Build a new envelope from logical parts.
     pub fn new(
@@ -287,7 +262,6 @@ impl Halo2ProofEnvelope {
             proof,
         })
     }
-
     /// Encode the envelope into bytes.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -305,7 +279,6 @@ impl Halo2ProofEnvelope {
         out.extend_from_slice(&self.proof);
         out
     }
-
     /// Parse an envelope from bytes and validate it matches the supported profile.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, EnvelopeError> {
         if bytes.len() < HEADER_PREFIX_LEN {
@@ -340,7 +313,6 @@ impl Halo2ProofEnvelope {
             Halo2ProofEnvelopeHeader::new(k, n_in, n_out, flags, declared_n_pi, declared_pi_len)?;
         let n_pi = header.n_pi();
         let pi_len = header.pi_len();
-
         let offset_after_header = HEADER_PREFIX_LEN;
         let actual = bytes.len().saturating_sub(offset_after_header);
         let pi_len_usize =
@@ -372,7 +344,6 @@ impl Halo2ProofEnvelope {
             public_inputs.push(chunk.try_into().expect("chunk exact 32"));
         }
         debug_assert_eq!(public_inputs.len(), usize::from(n_pi));
-
         let proof_len_bytes = &bytes[proof_len_offset..proof_start];
         let proof_len = u32::from_le_bytes(proof_len_bytes.try_into().expect("len 4"));
         let proof_len_usize =
@@ -399,7 +370,6 @@ impl Halo2ProofEnvelope {
             });
         }
         let proof = bytes[proof_start..proof_end].to_vec();
-
         Ok(Self {
             header,
             public_inputs,
@@ -407,7 +377,6 @@ impl Halo2ProofEnvelope {
         })
     }
 }
-
 fn checked_public_input_byte_len(count: usize) -> Result<u32, EnvelopeError> {
     count
         .checked_mul(PUBLIC_INPUT_STRIDE)
@@ -417,18 +386,15 @@ fn checked_public_input_byte_len(count: usize) -> Result<u32, EnvelopeError> {
             stride: PUBLIC_INPUT_STRIDE,
         })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn hex_array(s: &str) -> [u8; PUBLIC_INPUT_STRIDE] {
         let bytes = hex::decode(s.trim_start_matches("0x")).expect("valid hex");
         let mut out = [0u8; PUBLIC_INPUT_STRIDE];
         out.copy_from_slice(&bytes);
         out
     }
-
     fn raw_envelope(
         n_in: u8,
         n_out: u8,
@@ -457,7 +423,6 @@ mod tests {
         bytes.extend_from_slice(proof);
         bytes
     }
-
     #[test]
     fn round_trip_envelope() {
         let inputs = vec![
@@ -492,7 +457,6 @@ mod tests {
         assert_eq!(parsed.public_inputs, inputs);
         assert_eq!(parsed.proof, proof);
     }
-
     #[test]
     fn rejects_pi_count_mismatch() {
         let inputs = vec![hex_array(
@@ -507,7 +471,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn parse_rejects_wrong_version() {
         let env = Halo2ProofEnvelope::new(
@@ -542,7 +505,6 @@ mod tests {
         let err = Halo2ProofEnvelope::from_bytes(&bytes).unwrap_err();
         assert!(matches!(err, EnvelopeError::UnsupportedTranscript(0xFF)));
     }
-
     #[test]
     fn parse_rejects_undersized_public_input_length_for_count() {
         let n_in = 1;
@@ -550,7 +512,6 @@ mod tests {
         let n_pi = Halo2ProofEnvelopeHeader::expected_pi_count(n_in, n_out);
         let declared = u32::from(n_pi - 1) * PUBLIC_INPUT_STRIDE as u32;
         let bytes = raw_envelope(n_in, n_out, n_pi, &vec![0x11; declared as usize], b"proof");
-
         let err = Halo2ProofEnvelope::from_bytes(&bytes).unwrap_err();
         assert_eq!(
             err,
@@ -561,7 +522,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn parse_rejects_oversized_public_input_length_for_count() {
         let n_in = 1;
@@ -569,7 +529,6 @@ mod tests {
         let n_pi = Halo2ProofEnvelopeHeader::expected_pi_count(n_in, n_out);
         let declared = u32::from(n_pi + 1) * PUBLIC_INPUT_STRIDE as u32;
         let bytes = raw_envelope(n_in, n_out, n_pi, &vec![0x22; declared as usize], b"proof");
-
         let err = Halo2ProofEnvelope::from_bytes(&bytes).unwrap_err();
         assert_eq!(
             err,
@@ -580,7 +539,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn parse_rejects_misaligned_public_input_length() {
         let n_in = 1;
@@ -588,7 +546,6 @@ mod tests {
         let n_pi = Halo2ProofEnvelopeHeader::expected_pi_count(n_in, n_out);
         let declared = u32::from(n_pi) * PUBLIC_INPUT_STRIDE as u32 - 1;
         let bytes = raw_envelope(n_in, n_out, n_pi, &vec![0x33; declared as usize], b"proof");
-
         let err = Halo2ProofEnvelope::from_bytes(&bytes).unwrap_err();
         assert_eq!(
             err,
@@ -598,7 +555,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn parse_rejects_proof_length_mismatch() {
         let inputs = vec![
@@ -623,7 +579,6 @@ mod tests {
         let err = Halo2ProofEnvelope::from_bytes(&bytes).unwrap_err();
         assert!(matches!(err, EnvelopeError::ProofLength { .. }));
     }
-
     #[test]
     fn parse_rejects_trailing_bytes_after_proof() {
         let inputs = vec![
@@ -638,7 +593,6 @@ mod tests {
         let env = Halo2ProofEnvelope::new(19, 2, 2, FLAG_LOOKUPS, inputs, vec![0u8; 16]).unwrap();
         let mut bytes = env.to_bytes();
         bytes.extend_from_slice(b"unbound suffix");
-
         let err = Halo2ProofEnvelope::from_bytes(&bytes).unwrap_err();
         assert!(matches!(err, EnvelopeError::TrailingBytes { actual: 14 }));
     }

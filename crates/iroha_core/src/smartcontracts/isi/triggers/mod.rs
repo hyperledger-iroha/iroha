@@ -1,20 +1,15 @@
 //! This module contains implementations of smart-contract traits and
 //! instructions for triggers in Iroha.
-
-use std::sync::OnceLock;
-
 use iroha_data_model::{
     ValidationFail, isi::error::MathError, prelude::*, query::error::FindError,
     transaction::error::prelude::TransactionRejectionReason,
 };
 use iroha_telemetry::metrics;
-
+use std::sync::OnceLock;
 pub mod set;
 pub mod specialized;
-
 /// Trigger metadata key toggled by `set_trigger_enabled` syscalls/ISIs.
 pub(crate) const TRIGGER_ENABLED_METADATA_KEY: &str = "__enabled";
-
 fn trigger_enabled_metadata_key() -> &'static Name {
     static KEY: OnceLock<Name> = OnceLock::new();
     KEY.get_or_init(|| {
@@ -23,7 +18,6 @@ fn trigger_enabled_metadata_key() -> &'static Name {
             .expect("trigger enabled metadata key must be valid")
     })
 }
-
 /// Read the trigger enabled flag from metadata, defaulting to `true` when absent.
 /// Malformed values fail closed and disable the trigger.
 pub(crate) fn trigger_is_enabled(metadata: &Metadata) -> bool {
@@ -38,7 +32,6 @@ pub(crate) fn trigger_is_enabled(metadata: &Metadata) -> bool {
     }
     false
 }
-
 /// All instructions related to triggers.
 /// - registering a trigger and validating the declared authority against
 ///   `CanRegisterTrigger{authority: ...}` permissions or domain ownership
@@ -46,18 +39,15 @@ pub(crate) fn trigger_is_enabled(metadata: &Metadata) -> bool {
 /// - adjusting trigger metadata to reflect registration height and block time
 #[allow(clippy::used_underscore_binding)]
 pub mod isi {
+    use super::{super::prelude::*, *};
     use iroha_data_model::{
         events::EventFilter,
         isi::error::{InvalidParameterError, RepetitionError},
         name::Name,
         trigger::prelude::*,
     };
-
-    use super::{super::prelude::*, *};
-
     const RESERVED_TRIGGER_METADATA_KEYS: [&str; 2] =
         ["__registered_block_height", "__registered_at_ms"];
-
     pub(super) fn ensure_metadata_key_is_not_reserved(key: &Name) -> Result<(), Error> {
         if RESERVED_TRIGGER_METADATA_KEYS
             .iter()
@@ -71,7 +61,6 @@ pub mod isi {
         }
         Ok(())
     }
-
     fn enforce_trigger_metadata_limits(
         metadata: &Metadata,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -87,7 +76,6 @@ pub mod isi {
         }
         Ok(())
     }
-
     fn enforce_ivm_trigger_program_policy(
         executable: &Executable,
         metadata: &Metadata,
@@ -124,7 +112,6 @@ pub mod isi {
         })?;
         Ok(())
     }
-
     fn is_permission_trigger_associated(
         permission: &iroha_data_model::permission::Permission,
         trigger_id: &TriggerId,
@@ -153,10 +140,8 @@ pub mod isi {
         {
             return &permission.trigger == trigger_id;
         }
-
         false
     }
-
     pub(crate) fn remove_trigger_associated_permissions(
         state_transaction: &mut StateTransaction<'_, '_>,
         trigger_id: &TriggerId,
@@ -167,7 +152,6 @@ pub mod isi {
             .iter()
             .map(|(holder, _)| holder.clone())
             .collect();
-
         for holder in account_ids {
             let should_remove = state_transaction
                 .world
@@ -181,7 +165,6 @@ pub mod isi {
             if !should_remove {
                 continue;
             }
-
             let remove_entry = if let Some(permissions) =
                 state_transaction.world.account_permissions.get_mut(&holder)
             {
@@ -191,24 +174,20 @@ pub mod isi {
             } else {
                 false
             };
-
             if remove_entry {
                 state_transaction
                     .world
                     .account_permissions
                     .remove(holder.clone());
             }
-
             state_transaction.invalidate_permission_cache_for_account(&holder);
         }
-
         let role_ids: Vec<RoleId> = state_transaction
             .world
             .roles
             .iter()
             .map(|(role_id, _)| role_id.clone())
             .collect();
-
         for role_id in role_ids {
             let should_remove = state_transaction
                 .world
@@ -221,22 +200,18 @@ pub mod isi {
             if !should_remove {
                 continue;
             }
-
             let impacted_accounts = state_transaction.accounts_with_role(&role_id);
-
             if let Some(role) = state_transaction.world.roles.get_mut(&role_id) {
                 role.permissions
                     .retain(|permission| !is_permission_trigger_associated(permission, trigger_id));
                 role.permission_epochs
                     .retain(|permission, _| role.permissions.contains(permission));
             }
-
             if !impacted_accounts.is_empty() {
                 state_transaction.invalidate_permission_cache_for(impacted_accounts.iter());
             }
         }
     }
-
     #[allow(clippy::too_many_lines)]
     pub(crate) fn register_trigger_internal(
         authority: &AccountId,
@@ -245,7 +220,6 @@ pub mod isi {
         preauthorized_manifest_contract_subject: Option<&AccountId>,
     ) -> Result<(), Error> {
         let mut new_trigger = trigger;
-
         if new_trigger.action().repeats().is_depleted() {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -253,7 +227,6 @@ pub mod isi {
                 ),
             ));
         }
-
         enforce_ivm_trigger_program_policy(
             new_trigger.action().executable(),
             new_trigger.metadata(),
@@ -265,7 +238,6 @@ pub mod isi {
                 .smart_contract()
                 .fuel(),
         )?;
-
         {
             // Enforce minimal permission: only genesis block, the trigger owner,
             // domain owner of the trigger owner, an account with
@@ -330,7 +302,6 @@ pub mod isi {
                 ));
             }
         }
-
         if let EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(schedule))) =
             new_trigger.action().filter()
         {
@@ -360,7 +331,6 @@ pub mod isi {
                 }
             }
         }
-
         if new_trigger.action().retry_policy().is_some()
             && !matches!(
                 new_trigger.action().filter(),
@@ -374,7 +344,6 @@ pub mod isi {
                 ),
             ));
         }
-
         let duplicates_enacted_payout =
             |invocation: &iroha_data_model::transaction::executable::ContractInvocation| {
                 crate::validation_fee::is_enacted_validation_fee_payout_invocation(
@@ -402,7 +371,6 @@ pub mod isi {
                 "an enacted validation-fee payout lifecycle pins its sole scheduled trigger".into(),
             ));
         }
-
         if let EventFilterBox::Pipeline(filter) = new_trigger.action().filter() {
             match filter {
                 PipelineEventFilterBox::Transaction(filter)
@@ -422,7 +390,6 @@ pub mod isi {
                 }
             }
         }
-
         // Mark triggers registered within the current block so they do not fire in the same block.
         // This flag is used as a secondary guard in the execution path.
         {
@@ -443,7 +410,6 @@ pub mod isi {
             let action = new_trigger.action().clone().with_metadata(metadata);
             new_trigger = Trigger::new(new_trigger.id().clone(), action);
         }
-
         if !new_trigger.action().filter().mintable() {
             match new_trigger.action().repeats() {
                 Repeats::Exactly(1) => (),
@@ -452,7 +418,6 @@ pub mod isi {
                 }
             }
         }
-
         let triggers = &mut state_transaction.world.triggers;
         let trigger_id = new_trigger.id().clone();
         let success = match new_trigger.action().filter() {
@@ -481,7 +446,6 @@ pub mod isi {
             }
         }
         .map_err(|e| InvalidParameterError::SmartContract(e.to_string()))?;
-
         if !success {
             return Err(RepetitionError {
                 instruction: InstructionType::Register,
@@ -489,14 +453,11 @@ pub mod isi {
             }
             .into());
         }
-
         state_transaction
             .world
             .emit_events(Some(TriggerEvent::Created(trigger_id)));
-
         Ok(())
     }
-
     impl Execute for Register<Trigger> {
         #[metrics(+"register_trigger")]
         fn execute(
@@ -507,7 +468,6 @@ pub mod isi {
             register_trigger_internal(authority, state_transaction, self.object().clone(), None)
         }
     }
-
     impl Execute for Unregister<Trigger> {
         #[metrics(+"unregister_trigger")]
         fn execute(
@@ -524,7 +484,6 @@ pub mod isi {
                     "an enacted validation-fee payout lifecycle pins this trigger".into(),
                 ));
             }
-
             if state_transaction.world.triggers.remove(&trigger_id) {
                 remove_trigger_associated_permissions(state_transaction, &trigger_id);
                 state_transaction
@@ -540,7 +499,6 @@ pub mod isi {
             }
         }
     }
-
     impl Execute for Mint<u32, Trigger> {
         #[metrics(+"mint_trigger_repetitions")]
         fn execute(
@@ -557,7 +515,6 @@ pub mod isi {
                     "an enacted validation-fee payout lifecycle pins this trigger".into(),
                 ));
             }
-
             let triggers = &mut state_transaction.world.triggers;
             triggers
                 .inspect_by_id(&id, |action| -> Result<(), Error> {
@@ -568,12 +525,10 @@ pub mod isi {
                     }
                 })
                 .ok_or_else(|| Error::Find(FindError::Trigger(id.clone())))??;
-
             triggers.mod_repeats(&id, |n| {
                 n.checked_add(*self.object())
                     .ok_or(super::set::RepeatsOverflowError)
             })?;
-
             state_transaction
                 .world
                 .emit_events(Some(TriggerEvent::Extended(
@@ -582,11 +537,9 @@ pub mod isi {
                         by: *self.object(),
                     },
                 )));
-
             Ok(())
         }
     }
-
     impl Execute for Burn<u32, Trigger> {
         #[metrics(+"burn_trigger_repetitions")]
         fn execute(
@@ -629,11 +582,9 @@ pub mod isi {
                         by: *self.object(),
                     },
                 )));
-
             Ok(())
         }
     }
-
     impl Execute for SetKeyValue<Trigger> {
         #[metrics(+"set_trigger_key_value")]
         fn execute(
@@ -661,7 +612,6 @@ pub mod isi {
                 "max_metadata_value_bytes",
                 crate::smartcontracts::limits::DEFAULT_JSON_LIMIT,
             )?;
-
             state_transaction
                 .world
                 .triggers
@@ -669,7 +619,6 @@ pub mod isi {
                     action.metadata_mut().insert(key.clone(), value.clone())
                 })
                 .ok_or(FindError::Trigger(trigger_id.clone()))?;
-
             state_transaction
                 .world
                 .emit_events(Some(TriggerEvent::MetadataInserted(MetadataChanged {
@@ -677,11 +626,9 @@ pub mod isi {
                     key,
                     value,
                 })));
-
             Ok(())
         }
     }
-
     impl Execute for RemoveKeyValue<Trigger> {
         #[metrics(+"remove_trigger_key_value")]
         fn execute(
@@ -699,7 +646,6 @@ pub mod isi {
                 ));
             }
             ensure_metadata_key_is_not_reserved(self.key())?;
-
             let value = state_transaction
                 .world
                 .triggers
@@ -710,7 +656,6 @@ pub mod isi {
                         .ok_or_else(|| FindError::MetadataKey(self.key().clone()))
                 })
                 .ok_or(FindError::Trigger(trigger_id.clone()))??;
-
             state_transaction
                 .world
                 .emit_events(Some(TriggerEvent::MetadataRemoved(MetadataChanged {
@@ -718,11 +663,9 @@ pub mod isi {
                     key: self.key().clone(),
                     value,
                 })));
-
             Ok(())
         }
     }
-
     impl Execute for ExecuteTrigger {
         #[metrics(+"execute_trigger")]
         fn execute(
@@ -733,17 +676,14 @@ pub mod isi {
             // Enforce args payload size
             enforce_payload_limit(state_transaction, self.args())?;
             let id = self.trigger();
-
             let event = ExecuteTriggerEvent {
                 trigger_id: id.clone(),
                 authority: authority.clone(),
                 args: self.args().clone(),
             };
-
             // Precompute permission check before borrowing `triggers` view to avoid
             // conflicting borrows and to keep the closure `Fn`-compatible.
             let perm_ok_global = state_transaction.can_execute_trigger_for(authority, id);
-
             state_transaction
                 .world
                 .triggers
@@ -752,7 +692,6 @@ pub mod isi {
                     if action.repeats().is_depleted() {
                         return Err(Error::Find(FindError::Trigger(id.clone())));
                     }
-
                     // Manual execution is only allowed for triggers with ExecuteTrigger filters
                     // and only if (a) the event matches the filter and (b) the caller is authorized.
                     let mut filter_event = event.clone();
@@ -767,7 +706,6 @@ pub mod isi {
                                     "Trigger can't be executed manually: filter mismatch".into(),
                                 ));
                             }
-
                             // Authorization: owner of the trigger action OR explicit permission
                             let owner_ok = action.authority() == authority;
                             if owner_ok || perm_ok_global {
@@ -785,7 +723,6 @@ pub mod isi {
                 })
                 .ok_or_else(|| Error::Find(FindError::Trigger(id.clone())))
                 .and_then(core::convert::identity)?;
-
             // ExecuteTrigger remains supported; step output is intentionally dropped here
             // because trigger completion is already surfaced via events.
             let _step = state_transaction
@@ -884,11 +821,9 @@ pub mod isi {
                         }
                     }
                 })?;
-
             Ok(())
         }
     }
-
     /// Enforce a maximum JSON size for metadata values.
     // centralized in smartcontracts::limits
     /// Enforce a maximum JSON size for instruction payloads.
@@ -898,7 +833,6 @@ pub mod isi {
     ) -> Result<(), Error> {
         const DEFAULT_MAX: usize = 1_048_576; // 1 MiB
         const PARAM_NAME: &str = "max_instruction_payload_bytes";
-
         let params = state_transaction.world.parameters.get();
         let limit = if let Ok(name) = core::str::FromStr::from_str(PARAM_NAME)
             && let Some(custom) = params
@@ -922,11 +856,14 @@ pub mod isi {
         Ok(())
     }
 }
-
 pub mod query {
     //! Queries associated to triggers.
-    use std::collections::BTreeSet;
-
+    use super::*;
+    use crate::{
+        prelude::*,
+        smartcontracts::{ValidQuery, ValidSingularQuery, triggers::set::SetReadOnly},
+        state::StateReadOnly,
+    };
     use iroha_data_model::{
         query::{
             dsl::{CompoundPredicate, EvaluatePredicate},
@@ -938,18 +875,10 @@ pub mod query {
     };
     use mv::storage::StorageReadOnly;
     use norito::json::Value;
-
-    use super::*;
-    use crate::{
-        prelude::*,
-        smartcontracts::{ValidQuery, ValidSingularQuery, triggers::set::SetReadOnly},
-        state::StateReadOnly,
-    };
-
+    use std::collections::BTreeSet;
     fn trigger_id_from_value(value: &Value) -> Option<TriggerId> {
         norito::json::from_value(value.clone()).ok()
     }
-
     fn intersect_trigger_candidate_ids(
         best: &mut Option<BTreeSet<TriggerId>>,
         candidates: BTreeSet<TriggerId>,
@@ -960,10 +889,8 @@ pub mod query {
         };
         *best = Some(current.intersection(&candidates).cloned().collect());
     }
-
     fn trigger_candidate_ids(predicate: &PredicateJson) -> Option<BTreeSet<TriggerId>> {
         let mut best = None;
-
         for cond in &predicate.equals {
             if cond.field == "id" {
                 intersect_trigger_candidate_ids(
@@ -972,7 +899,6 @@ pub mod query {
                 );
             }
         }
-
         for cond in &predicate.r#in {
             if cond.field == "id" {
                 intersect_trigger_candidate_ids(
@@ -984,21 +910,17 @@ pub mod query {
                 );
             }
         }
-
         best
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
-
         #[test]
         fn trigger_candidate_ids_are_intersected() {
             let rose_id: TriggerId = "intersect_rose".parse().unwrap();
             let tulip_id: TriggerId = "intersect_tulip".parse().unwrap();
             let iris_id: TriggerId = "intersect_iris".parse().unwrap();
             let mut candidates = None;
-
             intersect_trigger_candidate_ids(
                 &mut candidates,
                 BTreeSet::from([rose_id.clone(), tulip_id]),
@@ -1007,25 +929,21 @@ pub mod query {
                 &mut candidates,
                 BTreeSet::from([rose_id.clone(), iris_id]),
             );
-
             assert_eq!(candidates, Some(BTreeSet::from([rose_id])));
         }
     }
-
     fn trigger_alias_values(trigger: &Trigger, field: &str) -> Vec<String> {
         match field {
             "id" => vec![trigger.id().to_string()],
             _ => Vec::new(),
         }
     }
-
     fn trigger_id_alias_values(id: &TriggerId, field: &str) -> Vec<String> {
         match field {
             "id" => vec![id.to_string()],
             _ => Vec::new(),
         }
     }
-
     fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
         if path.is_empty() {
             return None;
@@ -1042,40 +960,34 @@ pub mod query {
         }
         Some(current)
     }
-
     fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
         matches!(value, Value::String(raw) if raw == expected)
     }
-
     fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
         values
             .iter()
             .any(|value| matches!(value, Value::String(raw) if raw == expected))
     }
-
     fn trigger_json_value<'a>(
         cache: &'a mut Option<Value>,
         trigger: &Trigger,
     ) -> Option<&'a Value> {
         if cache.is_none() {
-            *cache = norito::json::to_value(trigger).ok();
+            *cache = crate::smartcontracts::isi::query::ordinary_predicate_json_value(trigger);
         }
         cache.as_ref()
     }
-
     fn trigger_id_json_value<'a>(
         cache: &'a mut Option<Value>,
         id: &TriggerId,
     ) -> Option<&'a Value> {
         if cache.is_none() {
-            *cache = norito::json::to_value(id).ok();
+            *cache = crate::smartcontracts::isi::query::ordinary_predicate_json_value(id);
         }
         cache.as_ref()
     }
-
     fn predicate_matches_trigger(predicate: &PredicateJson, trigger: &Trigger) -> bool {
         let mut trigger_json = None;
-
         for cond in &predicate.equals {
             let aliases = trigger_alias_values(trigger, &cond.field);
             if !aliases.is_empty() {
@@ -1097,7 +1009,6 @@ pub mod query {
                 return false;
             }
         }
-
         for cond in &predicate.r#in {
             let aliases = trigger_alias_values(trigger, &cond.field);
             if !aliases.is_empty() {
@@ -1119,7 +1030,6 @@ pub mod query {
                 return false;
             }
         }
-
         for field in &predicate.exists {
             if !trigger_alias_values(trigger, field).is_empty() {
                 continue;
@@ -1134,13 +1044,10 @@ pub mod query {
                 return false;
             }
         }
-
         true
     }
-
     fn predicate_matches_trigger_id(predicate: &PredicateJson, id: &TriggerId) -> bool {
         let mut id_json = None;
-
         for cond in &predicate.equals {
             let aliases = trigger_id_alias_values(id, &cond.field);
             if !aliases.is_empty() {
@@ -1162,7 +1069,6 @@ pub mod query {
                 return false;
             }
         }
-
         for cond in &predicate.r#in {
             let aliases = trigger_id_alias_values(id, &cond.field);
             if !aliases.is_empty() {
@@ -1184,7 +1090,6 @@ pub mod query {
                 return false;
             }
         }
-
         for field in &predicate.exists {
             if !trigger_id_alias_values(id, field).is_empty() {
                 continue;
@@ -1199,17 +1104,14 @@ pub mod query {
                 return false;
             }
         }
-
         true
     }
-
     fn trigger_id_is_active(triggers: &impl SetReadOnly, id: &TriggerId) -> bool {
         triggers.active_data_trigger_ids().get(id).is_some()
             || triggers.active_pipeline_trigger_ids().get(id).is_some()
             || triggers.active_time_trigger_ids().get(id).is_some()
             || triggers.active_by_call_trigger_ids().get(id).is_some()
     }
-
     impl ValidQuery for FindActiveTriggerIds {
         #[metrics(+"find_active_triggers")]
         fn execute(
@@ -1218,9 +1120,9 @@ pub mod query {
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = TriggerId>, Error> {
             let triggers = state_ro.world().triggers();
-            let predicate_json = filter
-                .json_payload()
-                .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+            let predicate_json = filter.json_payload().and_then(
+                iroha_data_model::query::json::predicate_json_candidate_plan_for_execution,
+            );
             if let Some(candidate_ids) = predicate_json.as_ref().and_then(trigger_candidate_ids) {
                 let iter: Box<dyn Iterator<Item = TriggerId> + '_> =
                     Box::new(candidate_ids.into_iter().filter(move |id| {
@@ -1232,13 +1134,11 @@ pub mod query {
                     }));
                 return Ok(iter);
             }
-
             let iter: Box<dyn Iterator<Item = TriggerId> + '_> =
                 Box::new(triggers.active_trigger_ids_iter().cloned());
             if filter.json_payload().is_none() {
                 return Ok(iter);
             }
-
             // Only report triggers that are actually active (i.e., have
             // remaining executions). This makes the query resilient to any
             // edge case where a depleted trigger could temporarily remain
@@ -1251,7 +1151,6 @@ pub mod query {
             })))
         }
     }
-
     impl ValidQuery for FindTriggers {
         #[metrics(+"find_triggers")]
         fn execute(
@@ -1260,9 +1159,9 @@ pub mod query {
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = Self::Item>, Error> {
             let triggers = state_ro.world().triggers();
-            let predicate_json = filter
-                .json_payload()
-                .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
+            let predicate_json = filter.json_payload().and_then(
+                iroha_data_model::query::json::predicate_json_candidate_plan_for_execution,
+            );
             if let Some(candidate_ids) = predicate_json.as_ref().and_then(trigger_candidate_ids) {
                 let iter: Box<dyn Iterator<Item = Trigger> + '_> =
                     Box::new(candidate_ids.into_iter().filter_map(move |id| {
@@ -1276,12 +1175,10 @@ pub mod query {
                     }));
                 return Ok(iter);
             }
-
             let iter: Box<dyn Iterator<Item = Trigger> + '_> = Box::new(triggers.triggers_iter());
             if filter.json_payload().is_none() {
                 return Ok(iter);
             }
-
             Ok(Box::new(iter.filter(move |trigger| {
                 if let Some(predicate) = predicate_json.as_ref() {
                     predicate_matches_trigger(predicate, trigger)
@@ -1291,24 +1188,30 @@ pub mod query {
             })))
         }
     }
-
     impl ValidSingularQuery for FindTriggerById {
         #[metrics(+"find_trigger_by_id")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Trigger, Error> {
-            state_ro
+            let trigger = state_ro
                 .world()
                 .triggers()
-                .trigger_by_id(self.trigger_id())
-                .ok_or_else(|| Error::Find(FindError::Trigger(self.trigger_id().clone())))
+                .trigger_by_id_bounded(self.trigger_id())?
+                .ok_or_else(|| Error::Find(FindError::Trigger(self.trigger_id().clone())))?;
+            Ok(trigger)
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        block::ValidBlock,
+        kura::Kura,
+        query::store::LiveQueryStore,
+        smartcontracts::{Error, Execute, ValidQuery, isi::triggers::set::SetReadOnly},
+        state::{State, World},
+        sumeragi::network_topology::Topology,
+    };
     use core::num::NonZeroU64;
-    use std::{str::FromStr, time::Duration};
-
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         block::BlockHeader,
@@ -1322,26 +1225,14 @@ mod tests {
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use mv::storage::StorageReadOnly;
-
-    use super::*;
-    use crate::{
-        block::ValidBlock,
-        kura::Kura,
-        query::store::LiveQueryStore,
-        smartcontracts::{Error, Execute, ValidQuery, isi::triggers::set::SetReadOnly},
-        state::{State, World},
-        sumeragi::network_topology::Topology,
-    };
-
+    use std::{str::FromStr, time::Duration};
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("trigger fixture key generation should succeed")
     }
-
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
-
     fn new_dummy_block() -> crate::block::CommittedBlock {
         let (leader_public_key, leader_private_key) = checked_keypair().into_parts();
         let peer_id = crate::PeerId::new(leader_public_key);
@@ -1353,12 +1244,10 @@ mod tests {
         .unpack(|_| {})
         .unwrap()
     }
-
     /// Fetch active trigger ids using a short-lived [`State::view`] guard so the caller
     /// can immediately take new mutable block scopes without deadlocking on the view lock.
     fn collect_active_trigger_ids(state: &State) -> Vec<TriggerId> {
         use iroha_data_model::query::dsl::CompoundPredicate;
-
         let view = state.view();
         let ids: Vec<_> = ValidQuery::execute(FindActiveTriggerIds, CompoundPredicate::PASS, &view)
             .expect("active trigger query should succeed")
@@ -1366,10 +1255,8 @@ mod tests {
         drop(view);
         ids
     }
-
     // No unit test for the cache helpers here; those are exercised indirectly
     // via existing trigger authorization tests.
-
     #[test]
     fn trigger_is_enabled_reads_metadata_flag() {
         let mut metadata = Metadata::default();
@@ -1377,20 +1264,16 @@ mod tests {
             trigger_is_enabled(&metadata),
             "missing flag defaults to enabled"
         );
-
         let key = TRIGGER_ENABLED_METADATA_KEY
             .parse::<Name>()
             .expect("valid metadata key");
         metadata.insert(key.clone(), Json::from(false));
         assert!(!trigger_is_enabled(&metadata), "false disables trigger");
-
         metadata.insert(key.clone(), Json::from(0_u64));
         assert!(!trigger_is_enabled(&metadata), "zero disables trigger");
-
         metadata.insert(key, Json::from(true));
         assert!(trigger_is_enabled(&metadata), "true enables trigger");
     }
-
     #[test]
     fn trigger_is_enabled_rejects_malformed_metadata_flag() {
         let mut metadata = Metadata::default();
@@ -1398,13 +1281,11 @@ mod tests {
             .parse::<Name>()
             .expect("valid metadata key");
         metadata.insert(key, Json::from(norito::json!("not-a-bool")));
-
         assert!(
             !trigger_is_enabled(&metadata),
             "malformed enabled flags must fail closed"
         );
     }
-
     #[test]
     fn trigger_registration_rejects_zero_and_over_ceiling_ivm_headers() {
         use iroha_data_model::{
@@ -1412,7 +1293,6 @@ mod tests {
             transaction::{Executable, IvmBytecode},
             trigger::action::{Action, Repeats},
         };
-
         let state = State::new(
             World::default(),
             Kura::blank_kura_for_testing(),
@@ -1438,7 +1318,6 @@ mod tests {
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
-
         for (id, max_cycles, expected) in [
             ("zero_cycle_trigger", 0_u64, "omits a non-zero `max_cycles`"),
             (
@@ -1461,7 +1340,6 @@ mod tests {
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
             )
             .expect("trigger action fixture satisfies validation invariants");
-
             let error = Register::trigger(Trigger::new(trigger_id.clone(), action))
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("invalid cycle header must fail trigger admission");
@@ -1483,18 +1361,15 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn execute_trigger_requires_owner_or_permission() {
         use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
         use iroha_executor_data_model::permission::trigger::CanExecuteTrigger;
         use iroha_test_samples::{ALICE_ID, BOB_ID};
-
         // Build state
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-
         // Prepare a block and state transaction
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
@@ -1507,7 +1382,6 @@ mod tests {
         let mut stx = state_block.transaction();
         stx._curr_block
             .set_height(NonZeroU64::new(2).expect("nonzero"));
-
         // Create domain and accounts
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
@@ -1519,7 +1393,6 @@ mod tests {
         Register::account(Account::new(BOB_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         // Register a by-call trigger owned by Alice
         let trig_id: TriggerId = "bycall_authz_test".parse().unwrap();
         let trig = Trigger::new(
@@ -1535,11 +1408,9 @@ mod tests {
         Register::trigger(trig)
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         // Bob cannot execute without permission
         let exec = ExecuteTrigger::new(trig_id.clone());
         assert!(exec.execute(&BOB_ID, &mut stx).is_err());
-
         // Grant Bob an explicit permission for this trigger
         let perm: iroha_data_model::permission::Permission = CanExecuteTrigger {
             trigger: trig_id.clone(),
@@ -1548,11 +1419,9 @@ mod tests {
         Grant::account_permission(perm, BOB_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         // Commit the permission grant and execute in the next block
         stx.apply();
         state_block.commit().unwrap();
-
         let mut state_block2 = state.block(BlockHeader::new(
             NonZeroU64::new(2).unwrap(),
             None,
@@ -1566,16 +1435,13 @@ mod tests {
         exec.execute(&BOB_ID, &mut stx2)
             .expect("bob should be permitted to execute trigger");
     }
-
     #[test]
     fn unregister_trigger_removes_associated_permissions_from_accounts_and_roles() {
         use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
         use iroha_executor_data_model::permission::trigger::CanExecuteTrigger;
-
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).expect("nonzero"),
             None,
@@ -1587,7 +1453,6 @@ mod tests {
         let mut stx = state_block.transaction();
         stx._curr_block
             .set_height(NonZeroU64::new(2).expect("nonzero"));
-
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
@@ -1599,7 +1464,6 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register bob");
         let bob_id = (*BOB_ID).clone();
-
         let trig_id: TriggerId = "perm_cleanup".parse().expect("trigger id");
         let trig = Trigger::new(
             trig_id.clone(),
@@ -1614,7 +1478,6 @@ mod tests {
         Register::trigger(trig)
             .execute(&ALICE_ID, &mut stx)
             .expect("register trigger");
-
         let permission: Permission = CanExecuteTrigger {
             trigger: trig_id.clone(),
         }
@@ -1622,7 +1485,6 @@ mod tests {
         Grant::account_permission(permission.clone(), bob_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant account permission");
-
         let role_id: RoleId = "TRIGGER_CLEANUP".parse().expect("role id");
         Register::role(Role::new(role_id.clone(), bob_id.clone()))
             .execute(&ALICE_ID, &mut stx)
@@ -1630,7 +1492,6 @@ mod tests {
         Grant::role_permission(permission.clone(), role_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant role permission");
-
         assert!(
             stx.world
                 .account_permissions
@@ -1643,11 +1504,9 @@ mod tests {
             role.permissions().any(|perm| perm == &permission),
             "role should include permission before unregister"
         );
-
         Unregister::trigger(trig_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("unregister trigger");
-
         assert!(
             !stx.world
                 .account_permissions
@@ -1665,17 +1524,14 @@ mod tests {
             "permission epoch should be pruned"
         );
     }
-
     #[test]
     fn by_call_trigger_is_pruned_after_manual_execution() {
         use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
         use iroha_logger::Level;
-
         // Build state
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-
         // Prepare a block and state transaction
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
@@ -1688,7 +1544,6 @@ mod tests {
         let mut stx = state_block.transaction();
         stx._curr_block
             .set_height(NonZeroU64::new(2).expect("nonzero"));
-
         // Create domain and account
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
@@ -1697,7 +1552,6 @@ mod tests {
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         // Register a by-call trigger that may run exactly once
         let trig_id: TriggerId = "manual_once".parse().unwrap();
         let trig = Trigger::new(
@@ -1713,32 +1567,27 @@ mod tests {
         Register::trigger(trig)
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         // First execution should succeed.
         ExecuteTrigger::new(trig_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         // Subsequent execution should report the trigger as missing/depleted.
         let err = ExecuteTrigger::new(trig_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect_err("depleted by-call trigger must not run twice");
         assert!(matches!(err, Error::Find(FindError::Trigger(id)) if id == trig_id));
     }
-
     #[test]
     fn register_trigger_without_permission_is_rejected() {
         // Build state
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         stx._curr_block
             .set_height(NonZeroU64::new(2).expect("nonzero"));
-
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
@@ -1749,7 +1598,6 @@ mod tests {
         Register::account(Account::new(BOB_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let trig_id: TriggerId = "reg_trigger_denied".parse().unwrap();
         let trig = Trigger::new(
             trig_id,
@@ -1761,11 +1609,9 @@ mod tests {
             )
             .expect("trigger action fixture satisfies validation invariants"),
         );
-
         let err = Register::trigger(trig)
             .execute(&BOB_ID, &mut stx)
             .expect_err("register should fail without permission");
-
         match err {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 msg,
@@ -1777,21 +1623,17 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn register_trigger_with_permission_succeeds() {
         use iroha_data_model::permission::Permission;
         use iroha_primitives::json::Json;
-
         // Build state
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
-
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
@@ -1802,7 +1644,6 @@ mod tests {
         Register::account(Account::new(BOB_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let trig_id: TriggerId = "reg_trigger_allowed".parse().unwrap();
         let trig = Trigger::new(
             trig_id.clone(),
@@ -1814,26 +1655,22 @@ mod tests {
             )
             .expect("trigger action fixture satisfies validation invariants"),
         );
-
         let payload = norito::json::object([("authority", ALICE_ID.to_string())])
             .expect("serialize permission payload");
         let perm = Permission::new("CanRegisterTrigger".into(), Json::new(payload));
         Grant::account_permission(perm, BOB_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         Register::trigger(trig)
             .execute(&BOB_ID, &mut stx)
             .expect("register should succeed with permission");
     }
-
     #[test]
     fn active_trigger_ids_excludes_depleted_after_burn() {
         // Build state
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-
         // Bootstrap world with a domain and Alice account
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
@@ -1851,7 +1688,6 @@ mod tests {
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         // Register a by-call trigger with Exactly(1) repeat
         let trig_id: TriggerId = "utrig_burn_rm".parse().unwrap();
         let trig = Trigger::new(
@@ -1869,14 +1705,12 @@ mod tests {
             .unwrap();
         stx.apply();
         state_block.commit().unwrap();
-
         // Active IDs should include the trigger id
         {
             let mut ids = collect_active_trigger_ids(&state);
             ids.sort();
             assert!(ids.iter().any(|id| id == &trig_id));
         }
-
         // Burn to zero in the next block
         let mut state_block2 = state.block(BlockHeader::new(
             NonZeroU64::new(2).unwrap(),
@@ -1892,20 +1726,17 @@ mod tests {
             .unwrap();
         stx2.apply();
         state_block2.commit().unwrap();
-
         // Active IDs should no longer include the trigger id
         {
             let ids2 = collect_active_trigger_ids(&state);
             assert!(ids2.iter().all(|id| id != &trig_id));
         }
     }
-
     #[test]
     fn active_trigger_ids_excludes_disabled_trigger() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -1922,7 +1753,6 @@ mod tests {
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let trigger_id: TriggerId = "disabled_not_active".parse().unwrap();
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -1947,20 +1777,17 @@ mod tests {
             .unwrap();
         stx.apply();
         state_block.commit().unwrap();
-
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().all(|id| id != &trigger_id),
             "disabled trigger must not be reported active"
         );
     }
-
     #[test]
     fn active_trigger_ids_excludes_malformed_enabled_metadata() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -1977,7 +1804,6 @@ mod tests {
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let trigger_id: TriggerId = "malformed_enabled_not_active".parse().unwrap();
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -2002,20 +1828,17 @@ mod tests {
             .unwrap();
         stx.apply();
         state_block.commit().unwrap();
-
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().all(|id| id != &trigger_id),
             "malformed enabled metadata must fail closed and not be active"
         );
     }
-
     #[test]
     fn active_trigger_ids_recover_after_malformed_enabled_is_set_true() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -2032,7 +1855,6 @@ mod tests {
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let trigger_id: TriggerId = "malformed_enabled_recovers".parse().unwrap();
         let enabled_key = TRIGGER_ENABLED_METADATA_KEY
             .parse::<Name>()
@@ -2055,13 +1877,11 @@ mod tests {
             .unwrap();
         stx.apply();
         state_block.commit().unwrap();
-
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().all(|id| id != &trigger_id),
             "malformed enabled metadata must initially fail closed"
         );
-
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(2).unwrap(),
             None,
@@ -2076,20 +1896,17 @@ mod tests {
             .unwrap();
         stx.apply();
         state_block.commit().unwrap();
-
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().any(|id| id == &trigger_id),
             "setting enabled=true must restore the trigger to active ids"
         );
     }
-
     #[test]
     fn active_trigger_ids_recover_after_disabled_enabled_flag_is_removed() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -2106,7 +1923,6 @@ mod tests {
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let trigger_id: TriggerId = "disabled_enabled_flag_removed".parse().unwrap();
         let enabled_key = TRIGGER_ENABLED_METADATA_KEY
             .parse::<Name>()
@@ -2129,13 +1945,11 @@ mod tests {
             .unwrap();
         stx.apply();
         state_block.commit().unwrap();
-
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().all(|id| id != &trigger_id),
             "disabled trigger must initially be inactive"
         );
-
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(2).unwrap(),
             None,
@@ -2150,20 +1964,17 @@ mod tests {
             .unwrap();
         stx.apply();
         state_block.commit().unwrap();
-
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().any(|id| id == &trigger_id),
             "removing __enabled must restore the default enabled state"
         );
     }
-
     #[test]
     fn active_trigger_ids_exclude_trigger_after_enabled_is_set_false() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -2180,7 +1991,6 @@ mod tests {
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let trigger_id: TriggerId = "enabled_flag_set_false".parse().unwrap();
         let enabled_key = TRIGGER_ENABLED_METADATA_KEY
             .parse::<Name>()
@@ -2200,13 +2010,11 @@ mod tests {
             .unwrap();
         stx.apply();
         state_block.commit().unwrap();
-
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().any(|id| id == &trigger_id),
             "fresh trigger must initially be active"
         );
-
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(2).unwrap(),
             None,
@@ -2221,20 +2029,17 @@ mod tests {
             .unwrap();
         stx.apply();
         state_block.commit().unwrap();
-
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().all(|id| id != &trigger_id),
             "setting __enabled=false must remove the trigger from active ids"
         );
     }
-
     #[test]
     fn active_trigger_ids_follow_numeric_enabled_flag_transitions() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -2251,7 +2056,6 @@ mod tests {
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let trigger_id: TriggerId = "numeric_enabled_flag".parse().unwrap();
         let enabled_key = TRIGGER_ENABLED_METADATA_KEY
             .parse::<Name>()
@@ -2274,13 +2078,11 @@ mod tests {
             .unwrap();
         stx.apply();
         state_block.commit().unwrap();
-
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().all(|id| id != &trigger_id),
             "__enabled=0 must disable active queries"
         );
-
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(2).unwrap(),
             None,
@@ -2295,13 +2097,11 @@ mod tests {
             .unwrap();
         stx.apply();
         state_block.commit().unwrap();
-
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().any(|id| id == &trigger_id),
             "__enabled=1 must restore active queries"
         );
-
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(3).unwrap(),
             None,
@@ -2316,25 +2116,21 @@ mod tests {
             .unwrap();
         stx.apply();
         state_block.commit().unwrap();
-
         let ids = collect_active_trigger_ids(&state);
         assert!(
             ids.iter().all(|id| id != &trigger_id),
             "returning __enabled to 0 must remove the trigger from active ids"
         );
     }
-
     #[test]
     fn register_trigger_rejects_nondeterministic_pipeline_filter() {
         use iroha_data_model::events::pipeline::{
             BlockEventFilter, BlockStatus, MergeLedgerEventFilter, PipelineEventFilterBox,
             TransactionEventFilter, TransactionStatus, WitnessEventFilter,
         };
-
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -2351,7 +2147,6 @@ mod tests {
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         for (name, filter) in [
             (
                 "pipeline_block_any",
@@ -2419,19 +2214,16 @@ mod tests {
                 )
                 .expect("trigger action fixture satisfies validation invariants"),
             );
-
             Register::trigger(trigger)
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("non-deterministic pipeline filter must be rejected");
         }
     }
-
     #[test]
     fn find_triggers_returns_registered_triggers_for_pass_predicate() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
             None,
@@ -2448,7 +2240,6 @@ mod tests {
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let rose_id: TriggerId = "utrig_rose".parse().unwrap();
         let tulip_id: TriggerId = "utrig_tulip".parse().unwrap();
         for trigger_id in [&rose_id, &tulip_id] {
@@ -2468,7 +2259,6 @@ mod tests {
         }
         stx.apply();
         state_block.commit().unwrap();
-
         let view = state.view();
         let mut ids: Vec<_> = ValidQuery::execute(
             FindTriggers,
@@ -2479,9 +2269,7 @@ mod tests {
         .map(|trigger| trigger.id().clone())
         .collect();
         ids.sort();
-
         assert_eq!(ids, vec![rose_id.clone(), tulip_id.clone()]);
-
         let by_id: Vec<_> = ValidQuery::execute(
             FindTriggers,
             CompoundPredicate::<Trigger>::build(|predicate| {
@@ -2493,7 +2281,6 @@ mod tests {
         .map(|trigger| trigger.id().clone())
         .collect();
         assert_eq!(by_id, vec![rose_id.clone()]);
-
         let active_by_id: Vec<_> = ValidQuery::execute(
             FindActiveTriggerIds,
             CompoundPredicate::<TriggerId>::build(|predicate| {
@@ -2504,7 +2291,6 @@ mod tests {
         .expect("active trigger id query by id should succeed")
         .collect();
         assert_eq!(active_by_id, vec![rose_id.clone()]);
-
         let missing_id: TriggerId = "utrig_missing".parse().unwrap();
         let missing_count = ValidQuery::execute(
             FindTriggers,
@@ -2515,7 +2301,6 @@ mod tests {
         .count();
         assert_eq!(missing_count, 0);
     }
-
     #[test]
     fn reserved_trigger_metadata_key_is_rejected() {
         let key: Name = "__registered_block_height".parse().expect("valid name");
@@ -2528,23 +2313,19 @@ mod tests {
             "unexpected error variant: {err:?}"
         );
     }
-
     #[test]
     fn custom_trigger_metadata_key_is_allowed() {
         let key: Name = "custom_meta".parse().expect("valid name");
         isi::ensure_metadata_key_is_not_reserved(&key).expect("custom keys should be allowed");
     }
-
     #[test]
     fn time_trigger_with_zero_period_is_rejected() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
-
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
@@ -2552,7 +2333,6 @@ mod tests {
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let trig_id: TriggerId = "time_zero_period".parse().unwrap();
         let schedule = ExecutionTime::Schedule(
             Schedule::starting_at(Duration::from_secs(0)).with_period(Duration::from_secs(0)),
@@ -2567,11 +2347,9 @@ mod tests {
             )
             .expect("trigger action fixture satisfies validation invariants"),
         );
-
         let err = Register::trigger(trigger)
             .execute(&ALICE_ID, &mut stx)
             .expect_err("zero-period time trigger must be rejected");
-
         match err {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 msg,
@@ -2582,17 +2360,14 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn time_trigger_period_shorter_than_block_cadence_is_rejected() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
-
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id))
             .execute(&ALICE_ID, &mut stx)
@@ -2600,7 +2375,6 @@ mod tests {
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let trigger_id: TriggerId = "time_sub_cadence".parse().unwrap();
         let schedule = ExecutionTime::Schedule(
             Schedule::starting_at(Duration::ZERO).with_period(Duration::from_millis(1)),
@@ -2615,11 +2389,9 @@ mod tests {
             )
             .expect("trigger action fixture satisfies validation invariants"),
         );
-
         let err = Register::trigger(trigger)
             .execute(&ALICE_ID, &mut stx)
             .expect_err("sub-cadence time trigger must be rejected");
-
         assert!(
             matches!(
                 err,
@@ -2630,7 +2402,6 @@ mod tests {
             "unexpected registration error: {err:?}"
         );
     }
-
     #[test]
     fn trigger_retry_policy_rejects_non_scheduled_time_trigger_on_registration() {
         let kura = Kura::blank_kura_for_testing();
@@ -2641,11 +2412,9 @@ mod tests {
             [],
         );
         let state = State::new(world, kura, query_handle);
-
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
-
         let trig_id: TriggerId = "time_retry_precommit".parse().unwrap();
         let trigger = Trigger::new(
             trig_id,
@@ -2661,11 +2430,9 @@ mod tests {
                 metadata: Metadata::default(),
             },
         );
-
         let err = Register::trigger(trigger)
             .execute(&ALICE_ID, &mut stx)
             .expect_err("precommit retry policy must be rejected");
-
         match err {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 msg,
@@ -2676,17 +2443,14 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn trigger_registration_enforces_metadata_limit() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
-
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
-
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
@@ -2694,14 +2458,11 @@ mod tests {
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-
         let id = CustomParameterId::from_str("max_metadata_value_bytes").unwrap();
         let param = Parameter::Custom(CustomParameter::new(id, Json::new(4u32)));
         stx.world.parameters.get_mut().set_parameter(param);
-
         let mut metadata = Metadata::default();
         metadata.insert("oversized".parse().unwrap(), Json::new("0123456789"));
-
         let trigger = Trigger::new(
             "meta_limit".parse().unwrap(),
             Action::new(
@@ -2713,11 +2474,9 @@ mod tests {
             .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(metadata),
         );
-
         let err = Register::trigger(trigger)
             .execute(&ALICE_ID, &mut stx)
             .expect_err("metadata over limit must be rejected");
-
         match err {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 msg,

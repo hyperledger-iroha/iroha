@@ -4,21 +4,16 @@
 //! - the backend disables itself cleanly on forced self-test failure or config disable;
 //! - documented CPU fallbacks still match known outputs; and
 //! - explicit CUDA entry points fail closed instead of returning drifted output.
-
 #![cfg(feature = "cuda")]
-
 use std::sync::{Mutex, MutexGuard, OnceLock};
-
 const SHA256_ABC_DIGEST: [u8; 32] = [
     0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
     0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad,
 ];
-
 fn cuda_disable_test_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
 }
-
 fn restore_env_var(name: &str, value: &Option<String>) {
     unsafe {
         match value {
@@ -27,14 +22,12 @@ fn restore_env_var(name: &str, value: &Option<String>) {
         }
     }
 }
-
 struct CudaDisableTestGuard {
     _lock: MutexGuard<'static, ()>,
     original_accel: ivm::AccelerationConfig,
     original_force_fail: Option<String>,
     original_disable_cuda: Option<String>,
 }
-
 impl CudaDisableTestGuard {
     fn new() -> Self {
         let lock = cuda_disable_test_lock()
@@ -48,7 +41,6 @@ impl CudaDisableTestGuard {
         }
     }
 }
-
 impl Drop for CudaDisableTestGuard {
     fn drop(&mut self) {
         restore_env_var("IVM_FORCE_CUDA_SELFTEST_FAIL", &self.original_force_fail);
@@ -57,7 +49,6 @@ impl Drop for CudaDisableTestGuard {
         ivm::set_acceleration_config(self.original_accel);
     }
 }
-
 fn sha256_single_block_abc() -> [u8; 64] {
     let mut block = [0u8; 64];
     block[0] = b'a';
@@ -67,7 +58,6 @@ fn sha256_single_block_abc() -> [u8; 64] {
     block[63] = 24;
     block
 }
-
 fn digest_bytes(state: [u32; 8]) -> [u8; 32] {
     let mut digest = [0u8; 32];
     for (index, word) in state.iter().enumerate() {
@@ -75,7 +65,6 @@ fn digest_bytes(state: [u32; 8]) -> [u8; 32] {
     }
     digest
 }
-
 fn assert_cuda_disabled_surface_behaves() {
     let initial_state = [
         0x6a09e667u32,
@@ -88,7 +77,6 @@ fn assert_cuda_disabled_surface_behaves() {
         0x5be0cd19,
     ];
     let block = sha256_single_block_abc();
-
     let mut cuda_state = initial_state;
     assert!(
         !ivm::sha256_compress_cuda(&mut cuda_state, &block),
@@ -98,7 +86,6 @@ fn assert_cuda_disabled_surface_behaves() {
         cuda_state, initial_state,
         "failed CUDA SHA-256 helper must not mutate the digest state"
     );
-
     let mut cpu_state = initial_state;
     ivm::sha256_compress(&mut cpu_state, &block);
     assert_eq!(
@@ -106,7 +93,6 @@ fn assert_cuda_disabled_surface_behaves() {
         SHA256_ABC_DIGEST,
         "scalar fallback must match the known SHA-256 digest"
     );
-
     let poseidon_expected = ivm::poseidon2_simd(7, 9);
     assert_eq!(
         ivm::poseidon2(7, 9),
@@ -125,7 +111,6 @@ fn assert_cuda_disabled_surface_behaves() {
         ivm::poseidon6_cuda_many(&[[1, 2, 3, 4, 5, 6]]).is_none(),
         "poseidon6_cuda_many should fail closed for non-empty batches when CUDA is disabled"
     );
-
     let state = [0x42u8; 16];
     let rk = [0x24u8; 16];
     let aes_enc_cpu = ivm::aesenc_impl(state, rk);
@@ -142,7 +127,6 @@ fn assert_cuda_disabled_surface_behaves() {
         aes_dec_cuda, aes_dec_cpu,
         "aesdec_cuda should fall back to CPU output when CUDA is disabled"
     );
-
     let states = [
         [
             0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
@@ -227,7 +211,6 @@ fn assert_cuda_disabled_surface_behaves() {
         expected_dec,
         "aesdec_n_rounds_many should preserve deterministic CPU output when CUDA is disabled"
     );
-
     let original_hi = [5u64, 3, 5, 3, 3];
     let original_lo = [7u64, 9, 1, 2, 1];
     let mut hi = original_hi;
@@ -244,7 +227,6 @@ fn assert_cuda_disabled_surface_behaves() {
         lo, original_lo,
         "failed CUDA bitonic-sort helper must not mutate the low-word buffer"
     );
-
     let lhs = [1.0f32, -2.5, 3.25, 4.5];
     let rhs = [2.0f32, 0.5, -1.25, 3.5];
     assert!(
@@ -256,7 +238,6 @@ fn assert_cuda_disabled_surface_behaves() {
     assert!(ivm::vand_cuda(&[1u32, 2], &[3u32, 4]).is_none());
     assert!(ivm::vxor_cuda(&[1u32, 2], &[3u32, 4]).is_none());
     assert!(ivm::vor_cuda(&[1u32, 2], &[3u32, 4]).is_none());
-
     let leaf_blocks = [block];
     assert!(
         ivm::sha256_leaves_cuda(&leaf_blocks).is_none(),
@@ -266,7 +247,6 @@ fn assert_cuda_disabled_surface_behaves() {
         ivm::sha256_pairs_reduce_cuda(&[[0u8; 32], [1u8; 32]]).is_none(),
         "explicit CUDA SHA-256 pair-reduce helper should fail closed while CUDA is disabled"
     );
-
     let original_keccak_state = core::array::from_fn(|index| index as u64);
     let mut keccak_state = original_keccak_state;
     assert!(
@@ -277,7 +257,6 @@ fn assert_cuda_disabled_surface_behaves() {
         keccak_state, original_keccak_state,
         "failed CUDA keccak helper must not mutate the state"
     );
-
     let bn254_lhs = [1u64, 2, 3, 4];
     let bn254_rhs = [5u64, 6, 7, 8];
     assert!(ivm::bn254_add_cuda(bn254_lhs, bn254_rhs).is_none());
@@ -286,7 +265,6 @@ fn assert_cuda_disabled_surface_behaves() {
     assert!(ivm::bn254_add_batch_cuda(&[bn254_lhs], &[bn254_rhs]).is_none());
     assert!(ivm::bn254_sub_batch_cuda(&[bn254_lhs], &[bn254_rhs]).is_none());
     assert!(ivm::bn254_mul_batch_cuda(&[bn254_lhs], &[bn254_rhs]).is_none());
-
     let msg = b"cuda disable regression";
     let sig = [0u8; 64];
     let pk = [0u8; 32];
@@ -299,7 +277,6 @@ fn assert_cuda_disabled_surface_behaves() {
         "explicit CUDA ed25519 batch helper should fail closed while CUDA is disabled"
     );
 }
-
 #[test]
 fn cuda_backend_disables_on_forced_selftest_failure_and_parity_holds() {
     let _guard = CudaDisableTestGuard::new();
@@ -308,7 +285,6 @@ fn cuda_backend_disables_on_forced_selftest_failure_and_parity_holds() {
         std::env::set_var("IVM_FORCE_CUDA_SELFTEST_FAIL", "1");
         std::env::set_var("IVM_DISABLE_CUDA", "0");
     }
-
     assert!(
         !ivm::cuda_available(),
         "cuda_available should be false after forced self-test fail"
@@ -323,10 +299,8 @@ fn cuda_backend_disables_on_forced_selftest_failure_and_parity_holds() {
             .is_some_and(|message| message.contains("IVM_FORCE_CUDA_SELFTEST_FAIL")),
         "forced self-test failure should report a diagnostic message"
     );
-
     assert_cuda_disabled_surface_behaves();
 }
-
 #[test]
 fn cuda_backend_respects_config_disable_and_falls_back() {
     let guard = CudaDisableTestGuard::new();
@@ -335,12 +309,10 @@ fn cuda_backend_respects_config_disable_and_falls_back() {
         enable_cuda: true,
         ..guard.original_accel
     });
-
     if !ivm::cuda_available() {
         eprintln!("No CUDA GPU available; skipping test");
         return;
     }
-
     let mut gpu_state = [
         0x6a09e667u32,
         0xbb67ae85,
@@ -356,12 +328,10 @@ fn cuda_backend_respects_config_disable_and_falls_back() {
         ivm::sha256_compress_cuda(&mut gpu_state, &block),
         "CUDA path should succeed before config disable"
     );
-
     ivm::set_acceleration_config(ivm::AccelerationConfig {
         enable_cuda: false,
         ..guard.original_accel
     });
-
     assert!(
         !ivm::cuda_available(),
         "cuda_available should be false after config disable"
@@ -375,6 +345,5 @@ fn cuda_backend_respects_config_disable_and_falls_back() {
         Some("disabled by configuration"),
         "config disable should surface the canonical diagnostic message"
     );
-
     assert_cuda_disabled_surface_behaves();
 }

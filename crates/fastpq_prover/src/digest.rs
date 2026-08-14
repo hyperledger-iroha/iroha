@@ -1,15 +1,12 @@
-use fastpq_isi::StarkParameterSet;
-use iroha_crypto::Hash;
-
 use crate::{
     Error, Result,
     batch::TransitionBatch,
     trace::{ColumnDigests, Trace, build_trace, column_hashes, merkle_root_with_first_level},
 };
-
+use fastpq_isi::StarkParameterSet;
+use iroha_crypto::Hash;
 /// Domain separator applied to the Stage 1 commitment payload.
 const TRACE_COMMITMENT_DOMAIN: &[u8] = b"fastpq:v1:trace_commitment";
-
 /// Compute the deterministic commitment over a transition batch.
 ///
 /// The commitment is derived by building the canonical FASTPQ trace,
@@ -34,7 +31,6 @@ pub fn trace_commitment(params: &StarkParameterSet, batch: &TransitionBatch) -> 
     let column_digests = column_hashes(&trace, params)?;
     trace_commitment_from_digests(params, &trace, &column_digests)
 }
-
 pub fn trace_commitment_from_digests(
     params: &StarkParameterSet,
     trace: &Trace,
@@ -42,7 +38,6 @@ pub fn trace_commitment_from_digests(
 ) -> Result<Hash> {
     let root =
         merkle_root_with_first_level(column_digests.leaves(), column_digests.fused_parents());
-
     let rows: u64 = trace
         .rows
         .try_into()
@@ -61,7 +56,6 @@ pub fn trace_commitment_from_digests(
             .map_err(|_| Error::PayloadLengthOverflow {
                 length: trace.columns.len(),
             })?;
-
     let mut payload = Vec::with_capacity(
         TRACE_COMMITMENT_DOMAIN.len()
             + params.name.len()
@@ -77,10 +71,8 @@ pub fn trace_commitment_from_digests(
         payload.extend_from_slice(&digest.to_le_bytes());
     }
     payload.extend_from_slice(&root.to_le_bytes());
-
     Ok(Hash::new(payload))
 }
-
 fn append_length_prefixed(buffer: &mut Vec<u8>, bytes: &[u8]) -> Result<(), Error> {
     let len: u64 = bytes
         .len()
@@ -92,11 +84,8 @@ fn append_length_prefixed(buffer: &mut Vec<u8>, bytes: &[u8]) -> Result<(), Erro
     buffer.extend_from_slice(bytes);
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
-    use fastpq_isi::CANONICAL_PARAMETER_SETS;
-
     use super::*;
     use crate::{
         OperationKind, Planner, PublicInputs, StateTransition, TransitionBatch,
@@ -107,6 +96,7 @@ mod tests {
             hash_columns_from_coefficients,
         },
     };
+    use fastpq_isi::CANONICAL_PARAMETER_SETS;
     use iroha_data_model::{
         DomainId,
         asset::id::AssetDefinitionId,
@@ -115,7 +105,6 @@ mod tests {
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::to_bytes;
-
     fn sample_batch() -> TransitionBatch {
         let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         batch.public_inputs.dsid = [0xAA; 16];
@@ -124,7 +113,6 @@ mod tests {
         batch.public_inputs.new_root = [0x22; 32];
         batch.public_inputs.perm_root = [0x33; 32];
         batch.public_inputs.tx_set_hash = [0x44; 32];
-
         batch.push(StateTransition::new(
             b"asset/xor/alice".to_vec(),
             u64::to_le_bytes(1_000).to_vec(),
@@ -140,7 +128,6 @@ mod tests {
         batch.sort();
         batch
     }
-
     fn build_fixture(name: &str) -> TransitionBatch {
         let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         batch.public_inputs.dsid = [0xAA; 16];
@@ -149,7 +136,6 @@ mod tests {
         batch.public_inputs.new_root = [0x22; 32];
         batch.public_inputs.perm_root = [0x33; 32];
         batch.public_inputs.tx_set_hash = [0x44; 32];
-
         match name {
             "transfer" => {
                 let transcript = sample_transfer_transcript();
@@ -197,15 +183,12 @@ mod tests {
             }
             other => panic!("unknown fixture {other}"),
         }
-
         batch.sort();
         batch
     }
-
     fn u64_bytes(value: u64) -> Vec<u8> {
         value.to_le_bytes().to_vec()
     }
-
     fn sample_transfer_transcript() -> TransferTranscript {
         let mut delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
@@ -232,7 +215,6 @@ mod tests {
             poseidon_preimage_digest: Some(digest),
         }
     }
-
     fn attach_delta_witnesses(delta: &mut TransferDeltaTranscript) {
         let sender_key =
             format!("asset/{}/{}", delta.asset_definition, delta.from_account).into_bytes();
@@ -250,12 +232,10 @@ mod tests {
         delta.from_smt_witness = from;
         delta.to_smt_witness = to;
     }
-
     fn numeric_u64(value: &Quantity) -> u64 {
         iroha_data_model::fastpq::normalized_numeric_to_u64(value.as_numeric(), value.scale())
             .expect("quantity fits")
     }
-
     fn sample_transfer_transitions(transcript: &TransferTranscript) -> Vec<StateTransition> {
         transcript
             .deltas
@@ -277,7 +257,6 @@ mod tests {
             })
             .collect()
     }
-
     fn numeric_to_bytes(value: &Quantity) -> Vec<u8> {
         let amount: u64 = value
             .as_numeric()
@@ -286,7 +265,6 @@ mod tests {
             .expect("quantity fits u64");
         amount.to_le_bytes().to_vec()
     }
-
     fn synthetic_trace() -> Trace {
         Trace {
             rows: 1,
@@ -302,7 +280,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn trace_commitment_rejects_parameter_mismatch_before_trace_build() {
         let params = CANONICAL_PARAMETER_SETS
@@ -311,9 +288,7 @@ mod tests {
             .copied()
             .expect("canonical latency parameter set");
         let batch = sample_batch();
-
         let err = trace_commitment(&params, &batch).unwrap_err();
-
         assert!(matches!(
             err,
             Error::ParameterMismatch {
@@ -322,7 +297,6 @@ mod tests {
             } if expected == "fastpq-lane-latency" && actual == "fastpq-lane-balanced"
         ));
     }
-
     #[test]
     fn trace_commitment_from_digests_binds_parameter_name_trace_shape_and_leaves() {
         let balanced = CANONICAL_PARAMETER_SETS
@@ -337,25 +311,21 @@ mod tests {
             .expect("canonical latency parameter set");
         let trace = synthetic_trace();
         let digests = ColumnDigests::new(vec![1, 2, 3], None);
-
         let base =
             trace_commitment_from_digests(&balanced, &trace, &digests).expect("base commitment");
         let other_parameter =
             trace_commitment_from_digests(&latency, &trace, &digests).expect("parameter change");
         assert_ne!(base, other_parameter);
-
         let mut row_changed = trace.clone();
         row_changed.rows = 2;
         let other_rows =
             trace_commitment_from_digests(&balanced, &row_changed, &digests).expect("row change");
         assert_ne!(base, other_rows);
-
         let mut padded_changed = trace.clone();
         padded_changed.padded_len = 2;
         let other_padded = trace_commitment_from_digests(&balanced, &padded_changed, &digests)
             .expect("padded length change");
         assert_ne!(base, other_padded);
-
         let mut column_changed = trace.clone();
         column_changed.columns.push(TraceColumn {
             name: "extra".to_owned(),
@@ -364,7 +334,6 @@ mod tests {
         let other_columns = trace_commitment_from_digests(&balanced, &column_changed, &digests)
             .expect("column count change");
         assert_ne!(base, other_columns);
-
         let other_leaves = trace_commitment_from_digests(
             &balanced,
             &trace,
@@ -373,7 +342,6 @@ mod tests {
         .expect("leaf change");
         assert_ne!(base, other_leaves);
     }
-
     #[test]
     fn trace_commitment_from_digests_uses_fused_parent_roots() {
         let params = CANONICAL_PARAMETER_SETS
@@ -385,26 +353,20 @@ mod tests {
         let leaves = vec![11, 22, 33, 44];
         let scalar = ColumnDigests::new(leaves.clone(), None);
         let fused = ColumnDigests::new(leaves, Some(vec![55, 66]));
-
         let scalar_commitment =
             trace_commitment_from_digests(&params, &trace, &scalar).expect("scalar commitment");
         let fused_commitment =
             trace_commitment_from_digests(&params, &trace, &fused).expect("fused commitment");
-
         assert_ne!(scalar_commitment, fused_commitment);
     }
-
     #[test]
     fn append_length_prefixed_writes_little_endian_length_and_payload() {
         let mut payload = vec![0xAA];
-
         append_length_prefixed(&mut payload, b"fastpq").unwrap();
-
         assert_eq!(payload[0], 0xAA);
         assert_eq!(&payload[1..9], &6u64.to_le_bytes());
         assert_eq!(&payload[9..], b"fastpq");
     }
-
     #[test]
     fn commitment_matches_manual_merkle() {
         let params = CANONICAL_PARAMETER_SETS
@@ -419,7 +381,6 @@ mod tests {
             ("mint", build_fixture("mint")),
             ("burn", build_fixture("burn")),
         ];
-
         for (label, batch) in cases {
             let commitment = trace_commitment(&params, &batch).expect("trace commitment");
             let trace = build_trace(&batch).expect("build trace");
@@ -439,7 +400,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn row_hash_extension_is_idempotent_for_cpu_mode() {
         let params = CANONICAL_PARAMETER_SETS
@@ -454,7 +414,6 @@ mod tests {
             ("mint", build_fixture("mint")),
             ("burn", build_fixture("burn")),
         ];
-
         for (label, batch) in cases {
             let trace = build_trace(&batch).expect("trace");
             let mut data = derive_polynomial_data(&trace, &planner, ExecutionMode::Cpu);

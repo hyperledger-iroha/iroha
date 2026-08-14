@@ -1,6 +1,5 @@
 use iroha_crypto::MerkleTree;
 use ivm::ByteMerkleTree;
-
 #[test]
 fn byte_merkle_tree_matches_crypto_merkle_root() {
     // Generate random data and compare roots for chunk=32
@@ -13,11 +12,9 @@ fn byte_merkle_tree_matches_crypto_merkle_root() {
         *byte = state as u8;
     }
     let chunk = 32usize;
-
     // Build ByteMerkleTree root
     let bmt = ByteMerkleTree::from_bytes(&data, chunk);
     let root_a = bmt.root();
-
     // Build leaves as SHA256 of 32-byte chunks (last chunk zero-padded)
     let mut leaves = Vec::new();
     let mut i = 0usize;

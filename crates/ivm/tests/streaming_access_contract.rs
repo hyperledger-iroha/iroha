@@ -1,17 +1,13 @@
 #![allow(dead_code)]
 use std::collections::{HashMap, HashSet};
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Hash32([u8; 32]);
-
 impl Hash32 {
     const ZERO: Self = Self([0u8; 32]);
-
     fn repeat(byte: u8) -> Self {
         Self([byte; 32])
     }
 }
-
 #[derive(Clone, Debug)]
 struct StreamingCapabilityTicket {
     ticket_id: Hash32,
@@ -27,7 +23,6 @@ struct StreamingCapabilityTicket {
     key_commitment: Hash32,
     nonce: u64,
 }
-
 #[derive(Clone, Debug)]
 struct StreamingBucketReceipt {
     bucket_id: u64,
@@ -40,7 +35,6 @@ struct StreamingBucketReceipt {
     relay_set_root: Hash32,
     signed_at_slot: u64,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StreamingChunkMac {
     chunk_id: u64,
@@ -48,7 +42,6 @@ struct StreamingChunkMac {
     payload_hash: Hash32,
     mac: Hash32,
 }
-
 #[derive(Clone, Debug)]
 struct StreamingShortfallProof {
     ticket: StreamingCapabilityTicket,
@@ -57,7 +50,6 @@ struct StreamingShortfallProof {
     client_mac: StreamingChunkMac,
     transcript_commitment: Hash32,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum TicketLifecycle {
     Active {
@@ -71,7 +63,6 @@ enum TicketLifecycle {
         refunded_teu: u128,
     },
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum StreamingEvent {
     TicketMinted {
@@ -96,14 +87,12 @@ enum StreamingEvent {
         refunded_teu: u128,
     },
 }
-
 #[derive(Debug)]
 struct StreamingAccessContract {
     tickets: HashMap<Hash32, (StreamingCapabilityTicket, TicketLifecycle)>,
     owner_index: HashSet<(String, String, u64)>,
     events: Vec<StreamingEvent>,
 }
-
 #[derive(Debug, PartialEq, Eq)]
 enum ContractError {
     DuplicateActive,
@@ -116,7 +105,6 @@ enum ContractError {
     NotYetExpired,
     MacMismatch,
 }
-
 impl core::fmt::Display for ContractError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let msg = match self {
@@ -133,9 +121,7 @@ impl core::fmt::Display for ContractError {
         f.write_str(msg)
     }
 }
-
 impl std::error::Error for ContractError {}
-
 impl StreamingAccessContract {
     fn new() -> Self {
         Self {
@@ -144,11 +130,9 @@ impl StreamingAccessContract {
             events: Vec::new(),
         }
     }
-
     fn events(&self) -> &[StreamingEvent] {
         &self.events
     }
-
     fn mint(&mut self, ticket: StreamingCapabilityTicket) -> Result<(), ContractError> {
         let key = (
             ticket.owner.clone(),
@@ -173,7 +157,6 @@ impl StreamingAccessContract {
         self.tickets.insert(ticket_id, (ticket, state));
         Ok(())
     }
-
     fn debit_bucket(
         &mut self,
         receipt: StreamingBucketReceipt,
@@ -183,7 +166,6 @@ impl StreamingAccessContract {
             .tickets
             .get_mut(&receipt.ticket_id)
             .ok_or(ContractError::TicketNotFound)?;
-
         let ticket = &entry.0;
         let state = &mut entry.1;
         let TicketLifecycle::Active {
@@ -194,40 +176,32 @@ impl StreamingAccessContract {
         else {
             return Err(ContractError::TicketNotActive);
         };
-
         if receipt.bucket_id != *next_bucket {
             return Err(ContractError::BucketMismatch);
         }
-
         let expected_teu = u128::from(receipt.delivered_chunks) * u128::from(chunk_teu);
         if receipt.delivered_teu != expected_teu {
             return Err(ContractError::TeuMismatch);
         }
-
         if *remaining_teu < expected_teu {
             return Err(ContractError::InsufficientBudget);
         }
-
         *remaining_teu -= expected_teu;
         *next_bucket += 1;
         *last_mac_root = Some(receipt.mac_root.clone());
-
         self.events.push(StreamingEvent::BucketDebited {
             ticket_id: ticket.ticket_id.clone(),
             bucket_id: receipt.bucket_id,
             delivered_teu: receipt.delivered_teu,
         });
-
         if *remaining_teu == 0 {
             *state = TicketLifecycle::Exhausted;
             self.events.push(StreamingEvent::TicketExhausted {
                 ticket_id: ticket.ticket_id.clone(),
             });
         }
-
         Ok(())
     }
-
     fn expire(&mut self, ticket_id: &Hash32, current_slot: u64) -> Result<(), ContractError> {
         let entry = self
             .tickets
@@ -255,7 +229,6 @@ impl StreamingAccessContract {
             }
         }
     }
-
     fn refund_unserved(
         &mut self,
         proof: StreamingShortfallProof,
@@ -294,7 +267,6 @@ impl StreamingAccessContract {
         }
     }
 }
-
 #[test]
 fn mint_debit_exhaustes_ticket() {
     let mut contract = StreamingAccessContract::new();
@@ -312,9 +284,7 @@ fn mint_debit_exhaustes_ticket() {
         key_commitment: Hash32::repeat(2),
         nonce: 0,
     };
-
     contract.mint(ticket.clone()).expect("mint");
-
     let receipt = StreamingBucketReceipt {
         bucket_id: 10,
         dsid: ticket.dsid.clone(),
@@ -326,11 +296,9 @@ fn mint_debit_exhaustes_ticket() {
         relay_set_root: Hash32::repeat(4),
         signed_at_slot: 641,
     };
-
     contract
         .debit_bucket(receipt.clone(), ticket.chunk_teu)
         .expect("debit bucket");
-
     // Debit remaining balance to zero.
     let receipt_last = StreamingBucketReceipt {
         bucket_id: 11,
@@ -341,7 +309,6 @@ fn mint_debit_exhaustes_ticket() {
     contract
         .debit_bucket(receipt_last, ticket.chunk_teu)
         .expect("debit bucket");
-
     assert_eq!(
         contract.events(),
         &[
@@ -366,7 +333,6 @@ fn mint_debit_exhaustes_ticket() {
         ],
     );
 }
-
 #[test]
 fn refund_shortfall_transitions_ticket() {
     let mut contract = StreamingAccessContract::new();
@@ -384,9 +350,7 @@ fn refund_shortfall_transitions_ticket() {
         key_commitment: Hash32::repeat(7),
         nonce: 1,
     };
-
     contract.mint(ticket.clone()).expect("mint");
-
     let receipt = StreamingBucketReceipt {
         bucket_id: 5,
         dsid: ticket.dsid.clone(),
@@ -398,18 +362,15 @@ fn refund_shortfall_transitions_ticket() {
         relay_set_root: Hash32::repeat(6),
         signed_at_slot: 321,
     };
-
     contract
         .debit_bucket(receipt.clone(), ticket.chunk_teu)
         .expect("debit bucket");
-
     let mac = StreamingChunkMac {
         chunk_id: 9,
         seq_slot: 322,
         payload_hash: Hash32::repeat(10),
         mac: Hash32::repeat(11),
     };
-
     let dispute = StreamingShortfallProof {
         ticket: ticket.clone(),
         receipt: receipt.clone(),
@@ -417,16 +378,13 @@ fn refund_shortfall_transitions_ticket() {
         client_mac: mac,
         transcript_commitment: Hash32::repeat(12),
     };
-
     contract
         .refund_unserved(dispute, ticket.chunk_teu)
         .expect("refund");
-
     assert!(
         matches!(contract.events().last(), Some(StreamingEvent::TicketRefunded { ticket_id, bucket_id, refunded_teu }) if *ticket_id == ticket.ticket_id && *bucket_id == 5 && *refunded_teu == 25)
     );
 }
-
 #[test]
 fn expire_transitions_ticket_to_expired_state() {
     let mut contract = StreamingAccessContract::new();
@@ -444,18 +402,14 @@ fn expire_transitions_ticket_to_expired_state() {
         key_commitment: Hash32::repeat(4),
         nonce: 5,
     };
-
     contract.mint(ticket.clone()).expect("mint ticket");
-
     let early_err = contract
         .expire(&ticket.ticket_id, ticket.expire_slot)
         .expect_err("ticket must not expire before expiry slot");
     assert!(matches!(early_err, ContractError::NotYetExpired));
-
     contract
         .expire(&ticket.ticket_id, ticket.expire_slot + 1)
         .expect("expire after slot boundary");
-
     let entry = contract
         .tickets
         .get(&ticket.ticket_id)
@@ -464,12 +418,10 @@ fn expire_transitions_ticket_to_expired_state() {
         matches!(entry.1, TicketLifecycle::Expired),
         "ticket lifecycle should transition to Expired"
     );
-
     assert!(
         matches!(contract.events().last(), Some(StreamingEvent::TicketExpired { ticket_id }) if *ticket_id == ticket.ticket_id),
         "last event should record ticket expiry"
     );
-
     let final_err = contract
         .expire(&ticket.ticket_id, ticket.expire_slot + 2)
         .expect_err("ticket must not expire twice");

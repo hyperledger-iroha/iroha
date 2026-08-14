@@ -1,25 +1,19 @@
 //! Shared helpers for SM2 negative vector fixtures sourced from upstream suites.
 #![cfg(feature = "sm")]
-
 use hex::decode;
 use hex_literal::hex;
 use iroha_crypto::{Sm2PrivateKey, Sm2PublicKey};
 use norito::json::{self, Value};
-
 /// Canonical SM2 curve order (GM/T 0003-2012, Fp-256).
 pub const ORDER: [u8; 32] =
     hex!("FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123");
-
 /// Value just above the canonical order (used by upstream overflow tests).
 pub const ORDER_PLUS_ONE: [u8; 32] =
     hex!("FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54124");
-
 /// Default SM2 distinguishing identifier used across the fixtures.
 pub const DEFAULT_DISTID: &str = Sm2PublicKey::DEFAULT_DISTID;
-
 /// Alternate distinguishing identifier used by `GmSSL` negative vectors.
 const ALT_DISTID: &str = "gmssl:alternate-distid";
-
 /// Parsed negative verification vector.
 #[derive(Clone, Debug)]
 pub struct NegativeVector {
@@ -32,7 +26,6 @@ pub struct NegativeVector {
     /// Message passed to verification (may differ for tamper cases).
     pub verify_message: Vec<u8>,
 }
-
 /// Result of applying a mutation to a freshly generated signature.
 #[derive(Clone, Debug)]
 pub struct MutationResult {
@@ -47,7 +40,6 @@ pub struct MutationResult {
     /// Indicates public key parsing failed (e.g., tampered coordinates).
     pub public_parse_failed: bool,
 }
-
 /// Load the upstream negative verification fixtures.
 pub fn load_negative_vectors() -> Vec<NegativeVector> {
     const RAW: &str = include_str!("fixtures/sm/sm2_negative_vectors.json");
@@ -80,7 +72,6 @@ pub fn load_negative_vectors() -> Vec<NegativeVector> {
                     || message.clone(),
                     |hex| decode(hex).expect("hex decode verify message"),
                 );
-
             NegativeVector {
                 label,
                 mutation,
@@ -90,7 +81,6 @@ pub fn load_negative_vectors() -> Vec<NegativeVector> {
         })
         .collect()
 }
-
 /// Apply the requested mutation, returning the mutated inputs for verification.
 pub fn apply_mutation(vector: &NegativeVector, private: &Sm2PrivateKey) -> MutationResult {
     let base_signature = private.sign(&vector.message);
@@ -99,7 +89,6 @@ pub fn apply_mutation(vector: &NegativeVector, private: &Sm2PrivateKey) -> Mutat
     let mut verify_message = vector.verify_message.clone();
     let mut expect_signature_parse_error = false;
     let mut public_parse_failed = false;
-
     let half_len = signature_bytes.len() / 2;
     match vector.mutation.as_str() {
         "r_zero" => {
@@ -159,7 +148,6 @@ pub fn apply_mutation(vector: &NegativeVector, private: &Sm2PrivateKey) -> Mutat
         }
         other => panic!("unsupported mutation: {other}"),
     }
-
     MutationResult {
         signature_bytes,
         verify_message,

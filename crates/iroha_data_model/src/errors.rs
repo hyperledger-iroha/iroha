@@ -3,15 +3,12 @@
 //! These types provide a shared, machine-readable schema for the NX-17 error
 //! catalog. Each variant maps to a deterministic `reason_code` so operators and
 //! SDKs can branch on stable integers instead of parsing strings.
-
-use iroha_crypto::Hash;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-
 use crate::nexus::DataSpaceId;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-
+use iroha_crypto::Hash;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 /// Canonical error envelope containing the stable reason code and structured
 /// context.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -22,7 +19,6 @@ pub struct CanonicalError {
     /// Structured error payload.
     pub detail: CanonicalErrorKind,
 }
-
 impl CanonicalError {
     /// Construct an error using the canonical reason code for the given detail
     /// variant.
@@ -35,7 +31,6 @@ impl CanonicalError {
         }
     }
 }
-
 /// Canonical error variants surfaced by AMX, DA, and settlement components.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -68,7 +63,6 @@ pub enum CanonicalErrorKind {
     /// Settlement router could not supply a deterministic conversion path.
     SettlementRouterUnavailable(SettlementRouterUnavailable),
 }
-
 /// Context for `DA_DEADLINE_EXCEEDED`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -82,7 +76,6 @@ pub struct DaDeadlineExceeded {
     /// Millisecond deadline budget that was exceeded.
     pub deadline_ms: u16,
 }
-
 /// Context for `ORACLE_STALE`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -94,7 +87,6 @@ pub struct OracleStale {
     /// Maximum staleness budget in milliseconds.
     pub max_staleness_ms: u64,
 }
-
 /// Context for `CIRCUIT_BREAKER_ACTIVE`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -104,7 +96,6 @@ pub struct CircuitBreakerActive {
     /// Kind of breaker that tripped.
     pub breaker: CircuitBreakerKind,
 }
-
 /// Context for `BUFFER_DEPLETED_XOR_ONLY`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -116,7 +107,6 @@ pub struct BufferDepletedXorOnly {
     /// Configured floor that triggered XOR-only mode.
     pub floor_bp: u16,
 }
-
 /// Context for `RWSET_UNBOUNDED`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -124,7 +114,6 @@ pub struct RwsetUnbounded {
     /// Hash of the offending program or descriptor.
     pub program_hash: Hash,
 }
-
 /// Context for `AMX_TIMEOUT`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -138,7 +127,6 @@ pub struct AmxTimeout {
     /// Millisecond budget for the stage.
     pub budget_ms: u32,
 }
-
 /// Context for `AMX_LOCK_CONFLICT`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -148,7 +136,6 @@ pub struct AmxLockConflict {
     /// Number of conflicting keys or touches observed.
     pub conflicts: u16,
 }
-
 /// Context for `PVO_MISSING_OR_EXPIRED`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -160,7 +147,6 @@ pub struct PvoMissingOrExpired {
     /// Current slot height when the error was emitted.
     pub current_slot: u64,
 }
-
 /// Context for `HEAVY_INSTRUCTION_DISALLOWED`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -168,7 +154,6 @@ pub struct HeavyInstructionDisallowed {
     /// Opcode identifier of the disallowed instruction.
     pub opcode: u16,
 }
-
 /// Context for `SETTLEMENT_ROUTER_UNAVAILABLE`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -178,7 +163,6 @@ pub struct SettlementRouterUnavailable {
     /// Reason the router was unavailable.
     pub reason: SettlementRouterOutage,
 }
-
 impl CanonicalErrorKind {
     /// Reason code used for `DA_DEADLINE_EXCEEDED`.
     pub const DA_DEADLINE_EXCEEDED_CODE: u16 = 1_000;
@@ -200,7 +184,6 @@ impl CanonicalErrorKind {
     pub const HEAVY_INSTRUCTION_DISALLOWED_CODE: u16 = 1_008;
     /// Reason code used for `SETTLEMENT_ROUTER_UNAVAILABLE`.
     pub const SETTLEMENT_ROUTER_UNAVAILABLE_CODE: u16 = 1_009;
-
     /// Return the deterministic reason code for this error variant.
     #[must_use]
     pub const fn reason_code(&self) -> u16 {
@@ -218,7 +201,6 @@ impl CanonicalErrorKind {
         }
     }
 }
-
 /// Stage of AMX execution used for timeout reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -231,7 +213,6 @@ pub enum AmxStage {
     /// Delta merge and trigger replay.
     Commit,
 }
-
 /// Identifier for the breaker that halted execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -246,7 +227,6 @@ pub enum CircuitBreakerKind {
     /// Catch-all when the breaker does not map to a dedicated bucket.
     Other,
 }
-
 /// Reason why the settlement router could not supply a conversion path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -263,13 +243,10 @@ pub enum SettlementRouterOutage {
     /// Catch-all for implementation-defined outages.
     Other,
 }
-
 #[cfg(test)]
 mod tests {
-    use norito::core::NoritoDeserialize;
-
     use super::*;
-
+    use norito::core::NoritoDeserialize;
     #[test]
     fn reason_codes_are_stable() {
         let ds = DataSpaceId::new(7);
@@ -280,7 +257,6 @@ mod tests {
             budget_ms: 30,
         });
         assert_eq!(detail.reason_code(), CanonicalErrorKind::AMX_TIMEOUT_CODE);
-
         let detail = CanonicalErrorKind::RwsetUnbounded(RwsetUnbounded {
             program_hash: Hash::new(b"rwset-unbounded"),
         });
@@ -289,7 +265,6 @@ mod tests {
             CanonicalErrorKind::RWSET_UNBOUNDED_CODE
         );
     }
-
     #[test]
     fn canonical_error_roundtrips() {
         let detail = CanonicalErrorKind::PvoMissingOrExpired(PvoMissingOrExpired {

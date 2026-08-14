@@ -2,20 +2,17 @@
 //!
 //! Collects NORITO/JSON receipts and optional ACK records, then emits a single
 //! JSON summary (and optional Markdown) for governance/compliance exports.
-
+use eyre::{Result, WrapErr, eyre};
+use hex::{decode_to_slice, encode};
+use iroha_data_model::sorafs::gar::{GarEnforcementActionV1, GarEnforcementReceiptV1};
+use norito::json::{self, Map, Number, Value};
 use std::{
     collections::BTreeMap,
     fmt::Write as FmtWrite,
     fs,
     path::{Path, PathBuf},
 };
-
-use eyre::{Result, WrapErr, eyre};
-use hex::{decode_to_slice, encode};
-use iroha_data_model::sorafs::gar::{GarEnforcementActionV1, GarEnforcementReceiptV1};
-use norito::json::{self, Map, Number, Value};
 use walkdir::WalkDir;
-
 /// Options controlling receipt export.
 #[derive(Debug, Clone)]
 pub struct ExportOptions {
@@ -25,7 +22,6 @@ pub struct ExportOptions {
     pub markdown_out: Option<PathBuf>,
     pub now_unix: Option<u64>,
 }
-
 /// Load receipts/acks, emit a JSON summary, and optionally persist a Markdown report.
 pub fn export_receipts(options: ExportOptions) -> Result<Value> {
     let receipts = load_receipts(&options.receipts_dir)?;
@@ -40,34 +36,27 @@ pub fn export_receipts(options: ExportOptions) -> Result<Value> {
     } else {
         BTreeMap::new()
     };
-
     let mut action_counts: BTreeMap<String, u64> = BTreeMap::new();
     let mut earliest: Option<u64> = None;
     let mut latest: Option<u64> = None;
     let mut receipts_out = Vec::with_capacity(receipts.len());
     let mut missing_acks = 0usize;
     let mut acked = 0usize;
-
     for receipt in receipts {
         let triggered = receipt.receipt.triggered_at_unix;
         earliest = Some(earliest.map_or(triggered, |current| current.min(triggered)));
         latest = Some(latest.map_or(triggered, |current| current.max(triggered)));
-
         let action_label = action_label(&receipt.receipt.action);
         *action_counts.entry(action_label.to_string()).or_default() += 1;
-
         let age_seconds = options.now_unix.map(|now| now.saturating_sub(triggered));
-
         let ack = acks.remove(&receipt.receipt.receipt_id);
         if ack.is_some() {
             acked += 1;
         } else {
             missing_acks += 1;
         }
-
         let action_json = action_json(&receipt.receipt.action);
         let policy_digest_hex = receipt.receipt.policy_digest.map(encode);
-
         let ack_json = ack.as_ref().map(|ack| {
             let mut obj = Map::new();
             obj.insert("path".into(), Value::String(ack.path.display().to_string()));
@@ -87,7 +76,6 @@ pub fn export_receipts(options: ExportOptions) -> Result<Value> {
             }
             Value::Object(obj)
         });
-
         let mut item = Map::new();
         item.insert(
             "receipt_path".into(),
@@ -157,7 +145,6 @@ pub fn export_receipts(options: ExportOptions) -> Result<Value> {
         }
         receipts_out.push(Value::Object(item));
     }
-
     let dangling_acks = acks
         .into_values()
         .map(|ack| {
@@ -179,12 +166,10 @@ pub fn export_receipts(options: ExportOptions) -> Result<Value> {
             Value::Object(obj)
         })
         .collect::<Vec<_>>();
-
     let mut actions_obj = Map::new();
     for (action, count) in action_counts {
         actions_obj.insert(action, Value::Number(Number::from(count)));
     }
-
     let mut root = Map::new();
     if let Some(pop) = &options.pop_label {
         root.insert("pop_label".into(), Value::String(pop.clone()));
@@ -236,7 +221,6 @@ pub fn export_receipts(options: ExportOptions) -> Result<Value> {
     root.insert("actions".into(), Value::Object(actions_obj));
     root.insert("receipts".into(), Value::Array(receipts_out));
     root.insert("dangling_ack_files".into(), Value::Array(dangling_acks));
-
     let summary = Value::Object(root);
     if let Some(path) = options.markdown_out {
         let markdown = render_markdown(&summary);
@@ -245,7 +229,6 @@ pub fn export_receipts(options: ExportOptions) -> Result<Value> {
     }
     Ok(summary)
 }
-
 fn load_receipts(dir: &Path) -> Result<Vec<ReceiptFile>> {
     if !dir.exists() {
         return Err(eyre!(
@@ -277,7 +260,6 @@ fn load_receipts(dir: &Path) -> Result<Vec<ReceiptFile>> {
     receipts.sort_by_key(|receipt| receipt.receipt.triggered_at_unix);
     Ok(receipts)
 }
-
 fn load_acks(dir: &Path) -> Result<BTreeMap<[u8; 16], AckRecord>> {
     if !dir.exists() {
         return Err(eyre!("ack directory `{}` does not exist", dir.display()));
@@ -325,7 +307,6 @@ fn load_acks(dir: &Path) -> Result<BTreeMap<[u8; 16], AckRecord>> {
     }
     Ok(records)
 }
-
 fn parse_hex_array<const N: usize>(hex: &str, field: &str, path: &Path) -> Result<[u8; N]> {
     let mut buffer = [0u8; N];
     decode_to_slice(hex, &mut buffer).map_err(|_| {
@@ -336,7 +317,6 @@ fn parse_hex_array<const N: usize>(hex: &str, field: &str, path: &Path) -> Resul
     })?;
     Ok(buffer)
 }
-
 fn action_label(action: &GarEnforcementActionV1) -> &'static str {
     match action {
         GarEnforcementActionV1::PurgeStaticZone => "purge-static-zone",
@@ -350,7 +330,6 @@ fn action_label(action: &GarEnforcementActionV1) -> &'static str {
         GarEnforcementActionV1::Custom(_) => "custom",
     }
 }
-
 fn action_json(action: &GarEnforcementActionV1) -> Value {
     match action {
         GarEnforcementActionV1::Custom(slug) => {
@@ -369,7 +348,6 @@ fn action_json(action: &GarEnforcementActionV1) -> Value {
         }
     }
 }
-
 fn render_markdown(summary: &Value) -> String {
     let mut out = String::new();
     let counts = summary
@@ -395,7 +373,6 @@ fn render_markdown(summary: &Value) -> String {
     let _ = writeln!(out, "- Acknowledged: {acked}");
     let _ = writeln!(out, "- Missing ACKs: {missing}");
     let _ = writeln!(out, "- Dangling ACK files: {dangling}");
-
     if let Some(actions) = summary.get("actions").and_then(Value::as_object) {
         let _ = writeln!(out, "\n## Actions");
         for (action, count) in actions {
@@ -404,7 +381,6 @@ fn render_markdown(summary: &Value) -> String {
             }
         }
     }
-
     if let Some(receipts) = summary.get("receipts").and_then(Value::as_array) {
         let _ = writeln!(out, "\n## Receipts");
         let _ = writeln!(
@@ -451,16 +427,13 @@ fn render_markdown(summary: &Value) -> String {
             );
         }
     }
-
     out
 }
-
 #[derive(Debug, Clone)]
 struct ReceiptFile {
     path: PathBuf,
     receipt: GarEnforcementReceiptV1,
 }
-
 #[derive(Debug, Clone)]
 struct AckRecord {
     path: PathBuf,
@@ -469,21 +442,17 @@ struct AckRecord {
     acked_at_unix: Option<u64>,
     pop: Option<String>,
 }
-
 impl AckRecord {
     fn pop_label(&self) -> Option<String> {
         self.pop.clone()
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::account::AccountId;
     use norito::json;
     use tempfile::TempDir;
-
-    use super::*;
-
     #[test]
     fn exports_receipts_and_acks() -> Result<()> {
         let temp = TempDir::new()?;
@@ -491,7 +460,6 @@ mod tests {
         let acks_dir = temp.path().join("acks");
         fs::create_dir_all(&receipts_dir)?;
         fs::create_dir_all(&acks_dir)?;
-
         let operator =
             AccountId::parse_encoded("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
@@ -500,7 +468,6 @@ mod tests {
             AccountId::parse_encoded("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76")
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .unwrap();
-
         let first = GarEnforcementReceiptV1 {
             receipt_id: *b"0123456789abcdef",
             gar_name: "docs.sora".to_string(),
@@ -531,13 +498,10 @@ mod tests {
             evidence_uris: vec![],
             labels: vec![],
         };
-
         let first_json = json::to_vec(&first)?;
         fs::write(receipts_dir.join("first.json"), first_json)?;
-
         let second_bytes = norito::to_bytes(&second)?;
         fs::write(receipts_dir.join("second.to"), second_bytes)?;
-
         let ack_value = Value::Object(Map::from_iter([
             (
                 "receipt_id".into(),
@@ -554,7 +518,6 @@ mod tests {
             acks_dir.join("ack.json"),
             json::to_string_pretty(&ack_value)?,
         )?;
-
         let summary = export_receipts(ExportOptions {
             receipts_dir: receipts_dir.clone(),
             ack_dir: Some(acks_dir.clone()),
@@ -562,7 +525,6 @@ mod tests {
             markdown_out: Some(temp.path().join("report.md")),
             now_unix: Some(1_700_000_900),
         })?;
-
         assert_eq!(
             summary["counts"]["receipts"].as_u64(),
             Some(2),
@@ -578,7 +540,6 @@ mod tests {
             Some(1),
             "one receipt is missing ack"
         );
-
         let receipts = summary["receipts"].as_array().cloned().expect("receipts");
         assert_eq!(receipts.len(), 2);
         let acked = receipts

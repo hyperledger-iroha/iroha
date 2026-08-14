@@ -1,11 +1,5 @@
 //! Regression tests ensuring decode_from_slice rejects truncated or tampered
 //! buffers with `Error::LengthMismatch` instead of panicking.
-
-use std::{
-    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque},
-    convert::TryInto,
-};
-
 use norito::{
     NoritoSerialize,
     core::{
@@ -13,18 +7,19 @@ use norito::{
         read_len_dyn, read_seq_len_slice, reset_decode_state,
     },
 };
-
+use std::{
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque},
+    convert::TryInto,
+};
 fn packed_seq_supported() -> bool {
     norito::core::default_encode_flags() & header_flags::PACKED_SEQ != 0
 }
-
 fn encode_payload<T: NoritoSerialize>(value: &T) -> (u8, Vec<u8>) {
     let bytes = norito::to_bytes(value).expect("encode payload");
     let flags = bytes[Header::SIZE - 1];
     let payload = bytes[Header::SIZE..].to_vec();
     (flags, payload)
 }
-
 fn expect_len_mismatch<'a, T>(flags: u8, payload: &'a [u8])
 where
     T: DecodeFromSlice<'a>,
@@ -38,7 +33,6 @@ where
     reset_decode_state();
     assert!(matches!(res, Err(Error::LengthMismatch)));
 }
-
 fn encode_payload_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
     reset_decode_state();
     let mut payload = Vec::new();
@@ -48,7 +42,6 @@ fn encode_payload_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8
     }
     payload
 }
-
 #[test]
 fn vec_packed_truncated_yields_length_mismatch() {
     if !packed_seq_supported() {
@@ -58,7 +51,6 @@ fn vec_packed_truncated_yields_length_mismatch() {
     assert!(payload.pop().is_some());
     expect_len_mismatch::<Vec<u32>>(flags, &payload);
 }
-
 #[test]
 fn vec_fixed_truncated_yields_length_mismatch() {
     let mut payload = Vec::new();
@@ -68,7 +60,6 @@ fn vec_fixed_truncated_yields_length_mismatch() {
     assert!(payload.pop().is_some());
     expect_len_mismatch::<Vec<u32>>(0, &payload);
 }
-
 #[test]
 fn array_truncated_yields_length_mismatch() {
     if !packed_seq_supported() {
@@ -78,7 +69,6 @@ fn array_truncated_yields_length_mismatch() {
     assert!(payload.pop().is_some());
     expect_len_mismatch::<[u32; 2]>(flags, &payload);
 }
-
 #[test]
 fn vecdeque_truncated_yields_length_mismatch() {
     if !packed_seq_supported() {
@@ -88,7 +78,6 @@ fn vecdeque_truncated_yields_length_mismatch() {
     assert!(payload.pop().is_some());
     expect_len_mismatch::<VecDeque<u32>>(flags, &payload);
 }
-
 #[test]
 fn linked_list_truncated_yields_length_mismatch() {
     if !packed_seq_supported() {
@@ -101,7 +90,6 @@ fn linked_list_truncated_yields_length_mismatch() {
     assert!(payload.pop().is_some());
     expect_len_mismatch::<LinkedList<u32>>(flags, &payload);
 }
-
 #[test]
 fn binary_heap_truncated_yields_length_mismatch() {
     if !packed_seq_supported() {
@@ -111,7 +99,6 @@ fn binary_heap_truncated_yields_length_mismatch() {
     assert!(payload.pop().is_some());
     expect_len_mismatch::<BinaryHeap<u32>>(flags, &payload);
 }
-
 #[test]
 fn btree_set_offsets_tampered_yields_length_mismatch() {
     if !packed_seq_supported() {
@@ -132,7 +119,6 @@ fn btree_set_offsets_tampered_yields_length_mismatch() {
     }
     expect_len_mismatch::<BTreeSet<u32>>(flags, &payload);
 }
-
 #[test]
 fn hash_set_offsets_tampered_yields_length_mismatch() {
     if !packed_seq_supported() {
@@ -153,7 +139,6 @@ fn hash_set_offsets_tampered_yields_length_mismatch() {
     }
     expect_len_mismatch::<HashSet<u32>>(flags, &payload);
 }
-
 #[test]
 fn btree_map_offsets_tampered_yields_length_mismatch() {
     if !packed_seq_supported() {
@@ -172,7 +157,6 @@ fn btree_map_offsets_tampered_yields_length_mismatch() {
     }
     expect_len_mismatch::<BTreeMap<u32, u32>>(flags, &payload);
 }
-
 #[test]
 fn hash_map_offsets_tampered_yields_length_mismatch() {
     if !packed_seq_supported() {
@@ -191,7 +175,6 @@ fn hash_map_offsets_tampered_yields_length_mismatch() {
     }
     expect_len_mismatch::<HashMap<u32, u32>>(flags, &payload);
 }
-
 #[test]
 fn btree_set_fixed_offsets_tampered_yields_length_mismatch() {
     if !packed_seq_supported() {
@@ -212,7 +195,6 @@ fn btree_set_fixed_offsets_tampered_yields_length_mismatch() {
     payload[offsets_start + 8..offsets_start + 16].copy_from_slice(&bogus.to_le_bytes());
     expect_len_mismatch::<BTreeSet<u32>>(flags, &payload);
 }
-
 #[test]
 fn btree_map_fixed_offsets_tampered_yields_length_mismatch() {
     if !packed_seq_supported() {
@@ -230,7 +212,6 @@ fn btree_map_fixed_offsets_tampered_yields_length_mismatch() {
     payload[key_offsets_start + 8..key_offsets_start + 16]
         .copy_from_slice(&bogus_key.to_le_bytes());
     expect_len_mismatch::<BTreeMap<u32, u32>>(flags, &payload);
-
     let mut payload_val = encode_payload_with_flags(&map, flags);
     let len_val = u64::from_le_bytes(payload_val[0..8].try_into().expect("len bytes")) as usize;
     assert_eq!(len_val, map.len());
@@ -242,7 +223,6 @@ fn btree_map_fixed_offsets_tampered_yields_length_mismatch() {
         .copy_from_slice(&bogus_val.to_le_bytes());
     expect_len_mismatch::<BTreeMap<u32, u32>>(flags, &payload_val);
 }
-
 #[test]
 fn pointer_truncated_varint_errors() {
     if (norito::core::default_encode_flags() & header_flags::COMPACT_LEN) == 0 {
@@ -257,7 +237,6 @@ fn pointer_truncated_varint_errors() {
     reset_decode_state();
     assert!(matches!(res, Err(Error::LengthMismatch)));
 }
-
 #[test]
 fn pointer_before_payload_is_rejected() {
     if (norito::core::default_encode_flags() & header_flags::COMPACT_LEN) == 0 {

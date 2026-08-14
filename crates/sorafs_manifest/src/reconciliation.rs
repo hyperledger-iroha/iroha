@@ -1,13 +1,9 @@
 //! Reconciliation reports published by SoraFS nodes.
-
+use crate::deal::XorQuantity;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-
-use crate::deal::XorQuantity;
-
 /// Schema version for [`SorafsReconciliationReportV1`].
 pub const SORAFS_RECONCILIATION_REPORT_VERSION_V1: u8 = 1;
-
 /// Deterministic reconciliation summary published by a SoraFS node.
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -40,7 +36,6 @@ pub struct SorafsReconciliationReportV1 {
     #[norito(default)]
     pub appeal_finance: Option<AppealFinanceReconciliationSummaryV1>,
 }
-
 /// Appeal-finance rollup summary embedded in a SoraFS reconciliation report.
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -59,7 +54,6 @@ pub struct AppealFinanceReconciliationSummaryV1 {
     /// Total forfeited reward XOR represented by included rollups.
     pub total_rewards_forfeited_treasury_xor: XorQuantity,
 }
-
 impl SorafsReconciliationReportV1 {
     /// Validate the report contents.
     pub fn validate(&self) -> Result<(), ReconciliationValidationError> {
@@ -80,7 +74,6 @@ impl SorafsReconciliationReportV1 {
         Ok(())
     }
 }
-
 impl AppealFinanceReconciliationSummaryV1 {
     fn validate(&self) -> Result<(), ReconciliationValidationError> {
         if self.rollup_count > 0 && self.rollup_snapshot_hash == [0u8; 32] {
@@ -89,7 +82,6 @@ impl AppealFinanceReconciliationSummaryV1 {
         Ok(())
     }
 }
-
 /// Validation errors for reconciliation reports.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ReconciliationValidationError {
@@ -114,11 +106,9 @@ pub enum ReconciliationValidationError {
         field: &'static str,
     },
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn reconciliation_report_validates() {
         let report = SorafsReconciliationReportV1 {
@@ -144,7 +134,6 @@ mod tests {
         };
         report.validate().expect("report should validate");
     }
-
     #[test]
     fn reconciliation_report_rejects_missing_appeal_finance_snapshot_hash() {
         let report = SorafsReconciliationReportV1 {
@@ -168,13 +157,11 @@ mod tests {
                 total_rewards_forfeited_treasury_xor: "25".parse().expect("canonical XOR quantity"),
             }),
         };
-
         assert_eq!(
             report.validate(),
             Err(ReconciliationValidationError::InvalidAppealFinanceSnapshotHash)
         );
     }
-
     #[test]
     fn reconciliation_report_rejects_missing_provider_identity() {
         let report = SorafsReconciliationReportV1 {
@@ -191,7 +178,6 @@ mod tests {
             divergence_count: 0,
             appeal_finance: None,
         };
-
         assert_eq!(
             report.validate(),
             Err(ReconciliationValidationError::InvalidProviderId)

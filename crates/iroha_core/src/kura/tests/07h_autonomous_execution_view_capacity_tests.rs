@@ -17,7 +17,6 @@ fn terminal_capacity_with_allowed_view_temp(kura: &Kura, temp_path: &Path) -> u6
         .and_then(|stable| stable.checked_add(if incomplete == 0 { 0 } else { terminal_max }))
         .expect("terminal reservation capacity fits")
 }
-
 fn pending_canonical_capacity_bytes(kura: &Kura) -> u64 {
     let _prune_guard = kura.prune_lock.lock();
     kura.ensure_prune_recovery_not_required()
@@ -26,7 +25,6 @@ fn pending_canonical_capacity_bytes(kura: &Kura) -> u64 {
     kura.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()
         .expect("measure pending canonical capacity")
 }
-
 #[test]
 fn autonomous_execution_input_preflights_complete_progress_peak_before_mutation() {
     let temp_dir = TempDir::new().expect("execution-input capacity temp dir");
@@ -101,7 +99,6 @@ fn autonomous_execution_input_preflights_complete_progress_peak_before_mutation(
     Arc::get_mut(&mut kura)
         .expect("execution-input capacity Kura is exclusive")
         .max_disk_usage_bytes = exact_limit - 1;
-
     assert!(
         kura.persist_lane_block_execution_input(&recovered).is_err(),
         "one byte below the complete execution-input peak must reject",
@@ -121,7 +118,6 @@ fn autonomous_execution_input_preflights_complete_progress_peak_before_mutation(
         reservations_before,
         "capacity rejection must not consume another carrier reservation",
     );
-
     Arc::get_mut(&mut kura)
         .expect("execution-input capacity Kura remains exclusive")
         .max_disk_usage_bytes = exact_limit;
@@ -147,7 +143,6 @@ fn autonomous_execution_input_preflights_complete_progress_peak_before_mutation(
         .expect("guarded execution-input seam is idempotent and non-recursive");
     }
 }
-
 #[test]
 fn autonomous_view_recovery_preflights_named_and_atomic_temp_peak() {
     let temp_dir = TempDir::new().expect("view recovery capacity temp dir");
@@ -175,7 +170,6 @@ fn autonomous_view_recovery_preflights_named_and_atomic_temp_peak() {
         .expect("stage malformed main view state");
     kura.refresh_disk_usage_bytes()
         .expect("refresh named-temp disk accounting");
-
     let read_only_before = snapshot_regular_files_recursively(temp_dir.path());
     assert!(
         kura.read_autonomous_lane_block_artifact_with_recovery_policy(
@@ -193,7 +187,6 @@ fn autonomous_view_recovery_preflights_named_and_atomic_temp_peak() {
         read_only_before,
         "recover=false must not promote or delete a named view temp",
     );
-
     let used = kura
         .kura_disk_usage_bytes()
         .expect("measure named-temp physical baseline");
@@ -220,7 +213,6 @@ fn autonomous_view_recovery_preflights_named_and_atomic_temp_peak() {
     Arc::get_mut(&mut kura)
         .expect("view recovery capacity Kura is exclusive")
         .max_disk_usage_bytes = exact_limit - 1;
-
     assert!(
         kura.read_autonomous_lane_block_artifact_with_recovery_policy(
             lane.lane_id,
@@ -242,7 +234,6 @@ fn autonomous_view_recovery_preflights_named_and_atomic_temp_peak() {
         accounting_before,
         "recovery capacity rejection must preserve accounting",
     );
-
     Arc::get_mut(&mut kura)
         .expect("view recovery capacity Kura remains exclusive")
         .max_disk_usage_bytes = exact_limit;
@@ -266,7 +257,6 @@ fn autonomous_view_recovery_preflights_named_and_atomic_temp_peak() {
         "successful recovery removes the named temp"
     );
 }
-
 #[test]
 fn autonomous_view_writer_preflights_even_with_named_temp() {
     let temp_dir = TempDir::new().expect("view writer capacity temp dir");
@@ -318,7 +308,6 @@ fn autonomous_view_writer_preflights_even_with_named_temp() {
     Arc::get_mut(&mut kura)
         .expect("view writer capacity Kura is exclusive")
         .max_disk_usage_bytes = exact_limit - 1;
-
     let rejected = {
         let _prune_guard = kura.prune_lock.lock();
         kura.ensure_prune_recovery_not_required()
@@ -349,7 +338,6 @@ fn autonomous_view_writer_preflights_even_with_named_temp() {
         accounting_before,
         "writer capacity rejection must preserve accounting",
     );
-
     Arc::get_mut(&mut kura)
         .expect("view writer capacity Kura remains exclusive")
         .max_disk_usage_bytes = exact_limit;
@@ -379,7 +367,6 @@ fn autonomous_view_writer_preflights_even_with_named_temp() {
     );
     assert!(!temp_path.exists());
 }
-
 #[test]
 fn autonomous_view_recovery_corridor_acquires_prune_before_geometry() {
     let temp_dir = TempDir::new().expect("view lock-order temp dir");
@@ -396,7 +383,6 @@ fn autonomous_view_recovery_corridor_acquires_prune_before_geometry() {
     let descriptor = &payload.origin_proposal.descriptor;
     let lane_id = lane.lane_id;
     let lane_block_height = descriptor.lane_block_height;
-
     let prune_guard = kura.prune_lock.lock();
     assert!(
         kura.read_autonomous_lane_block_artifact_with_recovery_policy(

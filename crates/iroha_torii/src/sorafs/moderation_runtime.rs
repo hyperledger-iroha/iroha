@@ -5,16 +5,6 @@
 //! durable boundaries, while finalized projections are read from one immutable
 //! [`State::query_view`] and cross-checked through the native committed-event
 //! query.
-
-use std::{
-    cmp,
-    sync::{
-        Arc, Mutex, RwLock,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::{Duration, Instant},
-};
-
 use iroha_core::{
     queue::Queue,
     smartcontracts::ValidSingularQuery,
@@ -55,7 +45,14 @@ use sorafs_node::moderation_orchestrator::{
     ModerationTransactionRequestV1, ModerationTransactionSubmitterV1,
     qualify_moderation_runtime_provider_v1, revalidate_moderation_runtime_provider_v1,
 };
-
+use std::{
+    cmp,
+    sync::{
+        Arc, Mutex, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
 const MODERATION_HANDOFF_MAX_BYTES_V1: usize = 64 * 1024;
 const MODERATION_PANEL_NOTIFICATION_MAX_BYTES_V1: usize = 64 * 1024;
 const DEFAULT_MODERATION_EVENT_PAGE_SIZE_V1: u32 = 256;
@@ -72,7 +69,6 @@ pub const TORII_MODERATION_STRICT_INGRESS_POLICY_DIGEST_V1: [u8; 32] = [
     0xcc, 0x0c, 0xea, 0xc1, 0x8b, 0x93, 0xfa, 0x97, 0x05, 0xc0, 0xef, 0x86, 0xf6, 0x57, 0xa9, 0xed,
     0x94, 0xc5, 0xdd, 0x65, 0x31, 0x57, 0x84, 0x96, 0xa2, 0xd6, 0x4e, 0x8e, 0xc5, 0x21, 0x6d, 0x2e,
 ];
-
 /// Return the exact public qualification of Torii's built-in V1 moderation ingress.
 #[must_use]
 pub const fn torii_moderation_strict_ingress_qualification_v1()
@@ -82,15 +78,12 @@ pub const fn torii_moderation_strict_ingress_qualification_v1()
         TORII_MODERATION_STRICT_INGRESS_POLICY_DIGEST_V1,
     )
 }
-
 #[derive(Debug)]
 struct ToriiModerationStrictIngressBindingV1;
-
 impl ModerationRuntimeProviderV1 for ToriiModerationStrictIngressBindingV1 {
     fn handle(&self) -> &str {
         TORII_MODERATION_STRICT_INGRESS_HANDLE_V1
     }
-
     fn qualification(
         &self,
     ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
@@ -98,7 +91,6 @@ impl ModerationRuntimeProviderV1 for ToriiModerationStrictIngressBindingV1 {
         Ok(torii_moderation_strict_ingress_qualification_v1())
     }
 }
-
 /// Qualify configured public metadata against Torii's built-in V1 moderation ingress.
 ///
 /// This preflight needs no queue, ledger state, credentials, or private key and
@@ -118,7 +110,6 @@ pub fn qualify_torii_moderation_strict_ingress_binding_v1(
         &ToriiModerationStrictIngressBindingV1,
     )
 }
-
 /// Fail-closed reason that prevents serving a cached moderation projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ModerationProjectionReadErrorV1 {
@@ -139,7 +130,6 @@ pub(crate) enum ModerationProjectionReadErrorV1 {
     /// A local cache or health lock was poisoned.
     Poisoned,
 }
-
 #[derive(Debug)]
 struct ModerationProjectionHealthStateV1 {
     last_success_at: Option<Instant>,
@@ -147,7 +137,6 @@ struct ModerationProjectionHealthStateV1 {
     failure: Option<ModerationProjectionReadErrorV1>,
     worker_stopped: bool,
 }
-
 /// Bounded read cache and monotonic liveness state for finalized moderation.
 ///
 /// Only the supervised maintenance worker may publish into this cache. Request
@@ -160,7 +149,6 @@ struct ModerationFinalizedProjectionCacheV1 {
     health: Mutex<ModerationProjectionHealthStateV1>,
     snapshot: RwLock<Option<Arc<ModerationFinalizedLedgerSnapshotV1>>>,
 }
-
 impl ModerationFinalizedProjectionCacheV1 {
     fn new(freshness_limit: Duration) -> Self {
         Self {
@@ -175,13 +163,11 @@ impl ModerationFinalizedProjectionCacheV1 {
             snapshot: RwLock::new(None),
         }
     }
-
     fn begin_maintenance(&self) -> bool {
         self.in_flight
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
     }
-
     fn mark_deadline_exceeded(&self) {
         if !self.in_flight.load(Ordering::Acquire) {
             return;
@@ -190,14 +176,12 @@ impl ModerationFinalizedProjectionCacheV1 {
             health.failure = Some(ModerationProjectionReadErrorV1::DeadlineExceeded);
         }
     }
-
     fn finish_failure(&self, failure: ModerationProjectionReadErrorV1) {
         if let Ok(mut health) = self.health.lock() {
             health.failure = Some(failure);
         }
         self.in_flight.store(false, Ordering::Release);
     }
-
     fn finish_success(
         &self,
         snapshot: ModerationFinalizedLedgerSnapshotV1,
@@ -238,14 +222,12 @@ impl ModerationFinalizedProjectionCacheV1 {
         self.in_flight.store(false, Ordering::Release);
         Ok(())
     }
-
     fn mark_worker_stopped(&self) {
         if let Ok(mut health) = self.health.lock() {
             health.failure = Some(ModerationProjectionReadErrorV1::WorkerStopped);
             health.worker_stopped = true;
         }
     }
-
     fn snapshot(
         &self,
     ) -> Result<Arc<ModerationFinalizedLedgerSnapshotV1>, ModerationProjectionReadErrorV1> {
@@ -272,14 +254,12 @@ impl ModerationFinalizedProjectionCacheV1 {
             .ok_or(ModerationProjectionReadErrorV1::Cold)
     }
 }
-
 /// Supervised Torii owner for one finalized moderation orchestrator.
 #[derive(Debug)]
 pub(crate) struct ModerationOrchestratorRuntimeV1 {
     orchestrator: Arc<ModerationOrchestratorV1>,
     projection: ModerationFinalizedProjectionCacheV1,
 }
-
 impl ModerationOrchestratorRuntimeV1 {
     pub(crate) fn new(
         orchestrator: Arc<ModerationOrchestratorV1>,
@@ -290,24 +270,19 @@ impl ModerationOrchestratorRuntimeV1 {
             projection: ModerationFinalizedProjectionCacheV1::new(freshness_limit),
         }
     }
-
     pub(crate) fn orchestrator(&self) -> Arc<ModerationOrchestratorV1> {
         Arc::clone(&self.orchestrator)
     }
-
     pub(crate) fn begin_maintenance(&self) -> bool {
         self.projection.begin_maintenance()
     }
-
     pub(crate) fn mark_deadline_exceeded(&self) {
         self.projection.mark_deadline_exceeded();
     }
-
     pub(crate) fn finish_failure(&self) {
         self.projection
             .finish_failure(ModerationProjectionReadErrorV1::DependencyFailed);
     }
-
     pub(crate) fn finish_success(
         &self,
         snapshot: ModerationFinalizedLedgerSnapshotV1,
@@ -315,18 +290,15 @@ impl ModerationOrchestratorRuntimeV1 {
     ) -> Result<(), ModerationProjectionReadErrorV1> {
         self.projection.finish_success(snapshot, durable_health)
     }
-
     pub(crate) fn mark_worker_stopped(&self) {
         self.projection.mark_worker_stopped();
     }
-
     pub(crate) fn snapshot(
         &self,
     ) -> Result<Arc<ModerationFinalizedLedgerSnapshotV1>, ModerationProjectionReadErrorV1> {
         self.projection.snapshot()
     }
 }
-
 /// Derive the synchronous worker deadline from governed cadence and the exact
 /// external-work lease. No request thread observes this timeout.
 #[must_use]
@@ -336,7 +308,6 @@ pub(crate) fn moderation_worker_deadline(worker_interval: Duration) -> Duration 
         Duration::from_millis(MODERATION_EXTERNAL_WORK_LEASE_MS_V1),
     )
 }
-
 /// Derive the monotonic projection freshness budget from governed cadence.
 #[must_use]
 pub(crate) fn moderation_projection_freshness_limit(worker_interval: Duration) -> Duration {
@@ -346,7 +317,6 @@ pub(crate) fn moderation_projection_freshness_limit(worker_interval: Duration) -
         .and_then(|value| value.checked_add(worker_interval))
         .unwrap_or(Duration::MAX)
 }
-
 /// Fixed runtime signing failures that are safe to surface to the orchestrator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationSigningFailureV1 {
@@ -357,7 +327,6 @@ pub enum ModerationSigningFailureV1 {
     /// The signer permanently refused the exact request.
     Refused,
 }
-
 /// Runtime-only signer for one exact native moderation transaction.
 ///
 /// Implementations may delegate to PKCS#11 or a remote HSM. A returned
@@ -375,7 +344,6 @@ pub trait ModerationSignedTransactionSignerV1: ModerationRuntimeProviderV1 {
         payload: TransactionPayload,
     ) -> Result<SignedTransaction, ModerationSigningFailureV1>;
 }
-
 /// Fixed fee-quote failures safe to return across the signer boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationFeeQuoteFailureV1 {
@@ -384,7 +352,6 @@ pub enum ModerationFeeQuoteFailureV1 {
     /// The exact payload cannot satisfy governed fee policy.
     Rejected,
 }
-
 /// Runtime fee quoter used after Torii has built the exact V1 payload.
 pub trait ModerationFeeQuoterV1: Send + Sync {
     /// Quote the signature-bound fee intent without changing any other field.
@@ -393,7 +360,6 @@ pub trait ModerationFeeQuoterV1: Send + Sync {
         payload: &TransactionPayload,
     ) -> Result<FeePaymentIntent, ModerationFeeQuoteFailureV1>;
 }
-
 /// Receipt returned by the strict, durable transaction ingress boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModerationStrictIngressReceiptV1 {
@@ -404,7 +370,6 @@ pub struct ModerationStrictIngressReceiptV1 {
     /// Whether ingress returned an already retained operation.
     pub replay: bool,
 }
-
 /// Fixed strict-ingress failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationStrictIngressFailureV1 {
@@ -419,7 +384,6 @@ pub enum ModerationStrictIngressFailureV1 {
     /// Runtime-only policy or credentials are unavailable.
     RuntimeUnavailable,
 }
-
 /// Strict signed-transaction ingress used by the moderation adapter.
 ///
 /// The orchestrator has already persisted the exact operation-to-transaction
@@ -440,7 +404,6 @@ pub trait ModerationStrictTransactionIngressV1: ModerationRuntimeProviderV1 {
         request: &ModerationTransactionRequestV1,
         transaction: SignedTransaction,
     ) -> Result<ModerationStrictIngressReceiptV1, ModerationStrictIngressFailureV1>;
-
     /// Resolve a retained operation through durable ingress/committed state.
     fn lookup_exact(
         &self,
@@ -448,13 +411,11 @@ pub trait ModerationStrictTransactionIngressV1: ModerationRuntimeProviderV1 {
         transaction_id: Option<[u8; 32]>,
     ) -> ModerationSubmissionLookupV1;
 }
-
 struct QualifiedModerationRuntimeProviderV1<P: ModerationRuntimeProviderV1 + ?Sized> {
     handle: String,
     qualification: ModerationRuntimeProviderQualificationV1,
     provider: Arc<P>,
 }
-
 impl<P: ModerationRuntimeProviderV1 + ?Sized> QualifiedModerationRuntimeProviderV1<P> {
     fn try_new(
         expected_handle: &str,
@@ -472,7 +433,6 @@ impl<P: ModerationRuntimeProviderV1 + ?Sized> QualifiedModerationRuntimeProvider
             provider,
         })
     }
-
     fn revalidate(&self) -> Result<(), ModerationRuntimeProviderQualificationErrorV1> {
         revalidate_moderation_runtime_provider_v1(
             &self.handle,
@@ -481,7 +441,6 @@ impl<P: ModerationRuntimeProviderV1 + ?Sized> QualifiedModerationRuntimeProvider
         )
     }
 }
-
 impl<P: ModerationRuntimeProviderV1 + ?Sized> core::fmt::Debug
     for QualifiedModerationRuntimeProviderV1<P>
 {
@@ -494,7 +453,6 @@ impl<P: ModerationRuntimeProviderV1 + ?Sized> core::fmt::Debug
             .finish()
     }
 }
-
 /// Fail-closed bridge from moderation operations to signed Torii ingress.
 pub struct ModerationTransactionSubmitterAdapterV1 {
     network_id: NetworkId,
@@ -502,7 +460,6 @@ pub struct ModerationTransactionSubmitterAdapterV1 {
     fee_quoter: Arc<dyn ModerationFeeQuoterV1>,
     ingress: QualifiedModerationRuntimeProviderV1<dyn ModerationStrictTransactionIngressV1>,
 }
-
 impl core::fmt::Debug for ModerationTransactionSubmitterAdapterV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -514,7 +471,6 @@ impl core::fmt::Debug for ModerationTransactionSubmitterAdapterV1 {
             .finish()
     }
 }
-
 impl ModerationTransactionSubmitterAdapterV1 {
     /// Construct and qualify a submitter for one exact genesis-derived network.
     ///
@@ -550,20 +506,16 @@ impl ModerationTransactionSubmitterAdapterV1 {
         })
     }
 }
-
 impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV1 {
     fn transaction_signer_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
         self.signer.provider.as_ref()
     }
-
     fn strict_ingress_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
         self.ingress.provider.as_ref()
     }
-
     fn network_id(&self) -> NetworkId {
         self.network_id
     }
-
     fn sign(
         &self,
         request: &ModerationTransactionRequestV1,
@@ -607,7 +559,6 @@ impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV
         validate_signed_moderation_transaction(&self.network_id, request, &transaction)?;
         ModerationSignedTransactionV1::from_signed_transaction(request, &transaction)
     }
-
     fn submit_signed(
         &self,
         request: &ModerationTransactionRequestV1,
@@ -637,7 +588,6 @@ impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV
             observed_finalized_height: receipt.observed_finalized_height,
         })
     }
-
     fn lookup(
         &self,
         operation_id: [u8; 32],
@@ -659,7 +609,6 @@ impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV
         sanitize_submission_lookup(lookup, transaction_id)
     }
 }
-
 fn validate_moderation_transaction_request(
     request: &ModerationTransactionRequestV1,
 ) -> Result<(), ModerationSubmissionFailureV1> {
@@ -667,7 +616,6 @@ fn validate_moderation_transaction_request(
         .validate()
         .map_err(|_| ModerationSubmissionFailureV1::PermanentRejection)
 }
-
 fn validate_unsigned_moderation_payload(
     network_id: &NetworkId,
     request: &ModerationTransactionRequestV1,
@@ -700,7 +648,6 @@ fn validate_unsigned_moderation_payload(
         _ => Err(ModerationSubmissionFailureV1::PermanentRejection),
     }
 }
-
 fn validate_signed_moderation_transaction(
     network_id: &NetworkId,
     request: &ModerationTransactionRequestV1,
@@ -723,13 +670,11 @@ fn validate_signed_moderation_transaction(
         _ => Err(ModerationSubmissionFailureV1::PermanentRejection),
     }
 }
-
 /// Canonical Torii fee quoter for the exact moderation payload.
 pub(crate) struct ToriiModerationFeeQuoterV1 {
     queue: Arc<Queue>,
     state: Arc<State>,
 }
-
 impl core::fmt::Debug for ToriiModerationFeeQuoterV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -739,14 +684,12 @@ impl core::fmt::Debug for ToriiModerationFeeQuoterV1 {
             .finish()
     }
 }
-
 impl ToriiModerationFeeQuoterV1 {
     #[must_use]
     pub(crate) fn new(queue: Arc<Queue>, state: Arc<State>) -> Self {
         Self { queue, state }
     }
 }
-
 impl ModerationFeeQuoterV1 for ToriiModerationFeeQuoterV1 {
     fn quote(
         &self,
@@ -761,7 +704,6 @@ impl ModerationFeeQuoterV1 for ToriiModerationFeeQuoterV1 {
         .map_err(|_| ModerationFeeQuoteFailureV1::Rejected)
     }
 }
-
 /// Canonical local strict-durable ingress and exact finalized transaction observer.
 pub(crate) struct ToriiModerationStrictTransactionIngressV1 {
     queue: Arc<Queue>,
@@ -769,7 +711,6 @@ pub(crate) struct ToriiModerationStrictTransactionIngressV1 {
     telemetry: crate::routing::MaybeTelemetry,
     pipeline_status_cache: Arc<crate::PipelineStatusCache>,
 }
-
 impl core::fmt::Debug for ToriiModerationStrictTransactionIngressV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -788,7 +729,6 @@ impl core::fmt::Debug for ToriiModerationStrictTransactionIngressV1 {
             .finish()
     }
 }
-
 impl ToriiModerationStrictTransactionIngressV1 {
     #[must_use]
     pub(crate) fn new(
@@ -804,7 +744,6 @@ impl ToriiModerationStrictTransactionIngressV1 {
             pipeline_status_cache,
         }
     }
-
     fn validate_retained_baseline(
         &self,
         request: &ModerationTransactionRequestV1,
@@ -827,7 +766,6 @@ impl ToriiModerationStrictTransactionIngressV1 {
         }
         Ok(observed_finalized_height)
     }
-
     fn has_positive_pending_hint(&self, transaction_hash: &HashOf<SignedTransaction>) -> bool {
         self.queue
             .contains_pending_hash(transaction_hash.clone(), self.state.as_ref())
@@ -845,12 +783,10 @@ impl ToriiModerationStrictTransactionIngressV1 {
                 })
     }
 }
-
 impl ModerationRuntimeProviderV1 for ToriiModerationStrictTransactionIngressV1 {
     fn handle(&self) -> &str {
         TORII_MODERATION_STRICT_INGRESS_HANDLE_V1
     }
-
     fn qualification(
         &self,
     ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
@@ -858,7 +794,6 @@ impl ModerationRuntimeProviderV1 for ToriiModerationStrictTransactionIngressV1 {
         Ok(torii_moderation_strict_ingress_qualification_v1())
     }
 }
-
 impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIngressV1 {
     fn submit_exact(
         &self,
@@ -947,7 +882,6 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
             Err(_) => Err(ModerationStrictIngressFailureV1::Unavailable),
         }
     }
-
     fn lookup_exact(
         &self,
         operation_id: [u8; 32],
@@ -1017,7 +951,6 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
         }
     }
 }
-
 fn map_signing_failure(error: ModerationSigningFailureV1) -> ModerationSubmissionFailureV1 {
     match error {
         ModerationSigningFailureV1::Unavailable => {
@@ -1029,7 +962,6 @@ fn map_signing_failure(error: ModerationSigningFailureV1) -> ModerationSubmissio
         ModerationSigningFailureV1::Refused => ModerationSubmissionFailureV1::PermanentRejection,
     }
 }
-
 fn map_ingress_failure(error: ModerationStrictIngressFailureV1) -> ModerationSubmissionFailureV1 {
     match error {
         ModerationStrictIngressFailureV1::Unavailable => {
@@ -1047,7 +979,6 @@ fn map_ingress_failure(error: ModerationStrictIngressFailureV1) -> ModerationSub
         }
     }
 }
-
 fn sanitize_submission_lookup(
     lookup: ModerationSubmissionLookupV1,
     expected_transaction_id: Option<[u8; 32]>,
@@ -1090,13 +1021,11 @@ fn sanitize_submission_lookup(
         | ModerationSubmissionLookupV1::Rejected { .. } => ModerationSubmissionLookupV1::Unknown,
     }
 }
-
 /// Finalized snapshot reader backed directly by native state queries.
 pub struct ModerationStateSnapshotReaderV1 {
     state: Arc<State>,
     event_page_size: u32,
 }
-
 impl core::fmt::Debug for ModerationStateSnapshotReaderV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1106,7 +1035,6 @@ impl core::fmt::Debug for ModerationStateSnapshotReaderV1 {
             .finish()
     }
 }
-
 impl ModerationStateSnapshotReaderV1 {
     /// Construct a reader with the default bounded committed-event page size.
     #[must_use]
@@ -1116,7 +1044,6 @@ impl ModerationStateSnapshotReaderV1 {
             event_page_size: DEFAULT_MODERATION_EVENT_PAGE_SIZE_V1,
         }
     }
-
     /// Construct a reader with an explicit native committed-event page size.
     ///
     /// # Errors
@@ -1136,7 +1063,6 @@ impl ModerationStateSnapshotReaderV1 {
         })
     }
 }
-
 impl ModerationFinalizedSnapshotReaderV1 for ModerationStateSnapshotReaderV1 {
     fn read_finalized_snapshot(
         &self,
@@ -1155,7 +1081,6 @@ impl ModerationFinalizedSnapshotReaderV1 for ModerationStateSnapshotReaderV1 {
         Ok(snapshot)
     }
 }
-
 fn validate_snapshot_finalized_block(
     view: &impl StateReadOnly,
     snapshot: &ModerationFinalizedLedgerSnapshotV1,
@@ -1170,7 +1095,6 @@ fn validate_snapshot_finalized_block(
         block.header().creation_time_ms,
     )
 }
-
 fn validate_snapshot_finalized_block_fields(
     snapshot: &ModerationFinalizedLedgerSnapshotV1,
     block_height: u64,
@@ -1186,7 +1110,6 @@ fn validate_snapshot_finalized_block_fields(
     }
     Ok(())
 }
-
 fn bounded_query_limit(
     requested: usize,
     hard_max: u32,
@@ -1198,19 +1121,16 @@ fn bounded_query_limit(
     }
     Ok(requested)
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeModerationQueryFailureV1 {
     Unavailable,
 }
-
 trait ModerationQueryViewV1 {
     fn snapshot(
         &self,
         max_cases: u32,
         max_events: u32,
     ) -> Result<ModerationFinalizedLedgerSnapshotV1, NativeModerationQueryFailureV1>;
-
     fn event_page(
         &self,
         expected_finalized_cursor:
@@ -1219,11 +1139,9 @@ trait ModerationQueryViewV1 {
         limit: u32,
     ) -> Result<ModerationFinalizedEventPageV1, NativeModerationQueryFailureV1>;
 }
-
 struct StateModerationQueryViewV1<'view, 'state> {
     view: &'view StateQueryView<'state>,
 }
-
 impl ModerationQueryViewV1 for StateModerationQueryViewV1<'_, '_> {
     fn snapshot(
         &self,
@@ -1237,7 +1155,6 @@ impl ModerationQueryViewV1 for StateModerationQueryViewV1<'_, '_> {
         .execute(self.view)
         .map_err(|_| NativeModerationQueryFailureV1::Unavailable)
     }
-
     fn event_page(
         &self,
         expected_finalized_cursor:
@@ -1254,7 +1171,6 @@ impl ModerationQueryViewV1 for StateModerationQueryViewV1<'_, '_> {
         .map_err(|_| NativeModerationQueryFailureV1::Unavailable)
     }
 }
-
 fn read_and_validate_snapshot(
     queries: &impl ModerationQueryViewV1,
     max_cases: u32,
@@ -1287,7 +1203,6 @@ fn read_and_validate_snapshot(
     validate_snapshot_event_pages(queries, &snapshot, page_size, max_events)?;
     Ok(snapshot)
 }
-
 fn validate_snapshot_event_pages(
     queries: &impl ModerationQueryViewV1,
     snapshot: &ModerationFinalizedLedgerSnapshotV1,
@@ -1320,7 +1235,6 @@ fn validate_snapshot_event_pages(
         .saturating_add(1);
     let page_size_usize =
         usize::try_from(page_size).map_err(|_| ModerationSnapshotReadErrorV1::ResourceExhausted)?;
-
     for _ in 0..maximum_pages {
         let page = queries
             .event_page(anchor, after, page_size)
@@ -1357,7 +1271,6 @@ fn validate_snapshot_event_pages(
     }
     Err(ModerationSnapshotReadErrorV1::ResourceExhausted)
 }
-
 /// Canonical handoff request supplied to a durable downstream boundary.
 #[derive(Debug, Clone)]
 pub struct ModerationDurableHandoffRequestV1 {
@@ -1366,7 +1279,6 @@ pub struct ModerationDurableHandoffRequestV1 {
     /// Canonical Norito encoding of `handoff`.
     pub canonical_handoff: Vec<u8>,
 }
-
 /// Canonical signed archive-head request supplied to the slot-20
 /// `ModerationPublicationHandoff` boundary.
 #[derive(Debug, Clone)]
@@ -1376,7 +1288,6 @@ pub struct ModerationDurableArchiveHeadPublicationRequestV1 {
     /// Canonical Norito encoding of `head`.
     pub canonical_head: Vec<u8>,
 }
-
 /// Successful result from a durable handoff boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationDurableHandoffOutcomeV1 {
@@ -1385,7 +1296,6 @@ pub enum ModerationDurableHandoffOutcomeV1 {
     /// The same handoff identity and bytes were already durably accepted.
     AlreadyDelivered,
 }
-
 /// Fixed durable-boundary failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationDurableHandoffFailureV1 {
@@ -1396,7 +1306,6 @@ pub enum ModerationDurableHandoffFailureV1 {
     /// The exact handoff was permanently rejected.
     Permanent,
 }
-
 /// Durable, idempotent terminal settlement or publication boundary.
 ///
 /// Implementations must atomically retain `handoff_id`, the digest of
@@ -1414,7 +1323,6 @@ pub trait ModerationDurableHandoffBoundaryV1: ModerationRuntimeProviderV1 {
         &self,
         request: &ModerationDurableHandoffRequestV1,
     ) -> Result<ModerationDurableHandoffOutcomeV1, ModerationDurableHandoffFailureV1>;
-
     /// Publish or replay one exact signed archive head under its operation identity.
     ///
     /// Implementations must atomically enforce generation/predecessor continuity,
@@ -1423,19 +1331,16 @@ pub trait ModerationDurableHandoffBoundaryV1: ModerationRuntimeProviderV1 {
         &self,
         request: &ModerationDurableArchiveHeadPublicationRequestV1,
     ) -> Result<ModerationDurableHandoffOutcomeV1, ModerationDurableHandoffFailureV1>;
-
     /// Read the monotonic public archive head from the publication store.
     fn read_published_archive_head(
         &self,
     ) -> Result<Option<ModerationPanelNotificationArchiveHeadV1>, ModerationDurableHandoffFailureV1>;
 }
-
 /// Destination-bound terminal handoff adapter.
 pub struct ModerationTerminalHandoffSinkAdapterV1 {
     kind: ModerationTerminalHandoffKindV1,
     boundary: QualifiedModerationRuntimeProviderV1<dyn ModerationDurableHandoffBoundaryV1>,
 }
-
 impl core::fmt::Debug for ModerationTerminalHandoffSinkAdapterV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1445,7 +1350,6 @@ impl core::fmt::Debug for ModerationTerminalHandoffSinkAdapterV1 {
             .finish()
     }
 }
-
 impl ModerationTerminalHandoffSinkAdapterV1 {
     /// Construct and qualify the appeal-finance settlement sink.
     ///
@@ -1467,7 +1371,6 @@ impl ModerationTerminalHandoffSinkAdapterV1 {
             )?,
         })
     }
-
     /// Construct and qualify the governance/transparency publication sink.
     ///
     /// # Errors
@@ -1489,12 +1392,10 @@ impl ModerationTerminalHandoffSinkAdapterV1 {
         })
     }
 }
-
 impl ModerationRuntimeProviderV1 for ModerationTerminalHandoffSinkAdapterV1 {
     fn handle(&self) -> &str {
         self.boundary.provider.handle()
     }
-
     fn qualification(
         &self,
     ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
@@ -1502,7 +1403,6 @@ impl ModerationRuntimeProviderV1 for ModerationTerminalHandoffSinkAdapterV1 {
         self.boundary.provider.qualification()
     }
 }
-
 impl ModerationTerminalHandoffSinkV1 for ModerationTerminalHandoffSinkAdapterV1 {
     fn deliver(
         &self,
@@ -1544,7 +1444,6 @@ impl ModerationTerminalHandoffSinkV1 for ModerationTerminalHandoffSinkAdapterV1 
             ModerationDurableHandoffFailureV1::Permanent => ModerationHandoffFailureV1::Permanent,
         })
     }
-
     fn publish_panel_notification_archive_head(
         &self,
         head: &ModerationPanelNotificationArchiveHeadV1,
@@ -1588,7 +1487,6 @@ impl ModerationTerminalHandoffSinkV1 for ModerationTerminalHandoffSinkAdapterV1 
             ModerationDurableHandoffFailureV1::Permanent => ModerationHandoffFailureV1::Permanent,
         })
     }
-
     fn read_panel_notification_archive_head(
         &self,
     ) -> Result<Option<ModerationPanelNotificationArchiveHeadV1>, ModerationHandoffFailureV1> {
@@ -1629,7 +1527,6 @@ impl ModerationTerminalHandoffSinkV1 for ModerationTerminalHandoffSinkAdapterV1 
         Ok(head)
     }
 }
-
 /// Canonical request supplied to a durable panel-notification boundary.
 #[derive(Debug, Clone)]
 pub struct ModerationDurablePanelNotificationRequestV1 {
@@ -1644,7 +1541,6 @@ pub struct ModerationDurablePanelNotificationRequestV1 {
     /// Immutable bounded attempt ceiling.
     pub attempt_limit: u32,
 }
-
 /// Durable, idempotent payload-free panel-notification boundary.
 ///
 /// Implementations must atomically bind `notification.notification_id` to the
@@ -1663,13 +1559,11 @@ pub trait ModerationDurablePanelNotificationBoundaryV1: ModerationRuntimeProvide
         request: &ModerationDurablePanelNotificationRequestV1,
     ) -> Result<ModerationPanelNotificationDeliveryReceiptV1, ModerationPanelNotificationFailureV1>;
 }
-
 /// Adapter from the durable runtime boundary to the moderation orchestrator.
 pub struct ModerationPanelNotificationSinkAdapterV1 {
     boundary:
         QualifiedModerationRuntimeProviderV1<dyn ModerationDurablePanelNotificationBoundaryV1>,
 }
-
 impl core::fmt::Debug for ModerationPanelNotificationSinkAdapterV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -1678,7 +1572,6 @@ impl core::fmt::Debug for ModerationPanelNotificationSinkAdapterV1 {
             .finish()
     }
 }
-
 impl ModerationPanelNotificationSinkAdapterV1 {
     /// Construct and qualify the payload-free notification boundary.
     ///
@@ -1700,12 +1593,10 @@ impl ModerationPanelNotificationSinkAdapterV1 {
         })
     }
 }
-
 impl ModerationRuntimeProviderV1 for ModerationPanelNotificationSinkAdapterV1 {
     fn handle(&self) -> &str {
         self.boundary.provider.handle()
     }
-
     fn qualification(
         &self,
     ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
@@ -1713,7 +1604,6 @@ impl ModerationRuntimeProviderV1 for ModerationPanelNotificationSinkAdapterV1 {
         self.boundary.provider.qualification()
     }
 }
-
 impl ModerationPanelNotificationSinkV1 for ModerationPanelNotificationSinkAdapterV1 {
     fn deliver(
         &self,
@@ -1770,18 +1660,9 @@ impl ModerationPanelNotificationSinkV1 for ModerationPanelNotificationSinkAdapte
         Ok(receipt)
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{BTreeMap, VecDeque},
-        sync::{
-            Barrier, Mutex,
-            atomic::{AtomicUsize, Ordering},
-        },
-        thread,
-    };
-
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         events::data::sorafs::{SorafsModerationLedgerEvent, SorafsModerationLedgerEventKind},
@@ -1790,9 +1671,14 @@ mod tests {
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
     use sorafs_node::moderation_orchestrator::ModerationNativeActionV1;
-
-    use super::*;
-
+    use std::{
+        collections::{BTreeMap, VecDeque},
+        sync::{
+            Barrier, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        thread,
+    };
     const TEST_SIGNER_HANDLE: &str = "moderation-hsm-primary";
     const TEST_INGRESS_HANDLE: &str = "moderation-ingress-primary";
     const TEST_HANDOFF_HANDLE: &str = "moderation-handoff-primary";
@@ -1805,7 +1691,6 @@ mod tests {
         ModerationRuntimeProviderQualificationV1::new(1, [0xA3; 32]);
     const TEST_NOTIFICATION_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
         ModerationRuntimeProviderQualificationV1::new(1, [0xA4; 32]);
-
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(
             HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
@@ -1813,7 +1698,6 @@ mod tests {
             ),
         )
     }
-
     #[test]
     fn torii_strict_ingress_public_binding_preflight_is_exact() {
         let exact = torii_moderation_strict_ingress_qualification_v1();
@@ -1824,7 +1708,6 @@ mod tests {
             ),
             Ok(())
         );
-
         for (handle, qualification, expected) in [
             (
                 "",
@@ -1861,7 +1744,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn local_strict_ingress_identity_is_implementation_derived() {
         assert_eq!(
@@ -1885,15 +1767,12 @@ mod tests {
             TORII_MODERATION_STRICT_INGRESS_HANDLE_V1
         ));
     }
-
     fn key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("test Ed25519 key")
     }
-
     fn account(key_pair: &KeyPair) -> AccountId {
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn cached_snapshot(
         finalized_height: u64,
         finalized_block_hash: [u8; 32],
@@ -1910,7 +1789,6 @@ mod tests {
             events: Vec::new(),
         }
     }
-
     fn cached_health(
         snapshot: &ModerationFinalizedLedgerSnapshotV1,
     ) -> ModerationOrchestratorDurableHealthV1 {
@@ -1926,7 +1804,6 @@ mod tests {
             panel_notification_archive_audited_generation: 0,
         }
     }
-
     #[test]
     fn hung_maintenance_is_unready_and_cannot_overlap_after_deadline() {
         let cache = ModerationFinalizedProjectionCacheV1::new(Duration::from_secs(60));
@@ -1937,11 +1814,9 @@ mod tests {
             cache.snapshot(),
             Err(ModerationProjectionReadErrorV1::DeadlineExceeded)
         );
-
         cache.finish_failure(ModerationProjectionReadErrorV1::DependencyFailed);
         assert!(cache.begin_maintenance());
     }
-
     #[test]
     fn cached_projection_fails_closed_after_monotonic_freshness_expires() {
         let cache = ModerationFinalizedProjectionCacheV1::new(Duration::ZERO);
@@ -1955,12 +1830,10 @@ mod tests {
             Err(ModerationProjectionReadErrorV1::Stale)
         );
     }
-
     #[test]
     fn concurrent_cached_reads_never_start_maintenance_or_mutate_projection() {
         const READERS: usize = 16;
         const READS_PER_THREAD: usize = 128;
-
         let cache = Arc::new(ModerationFinalizedProjectionCacheV1::new(
             Duration::from_secs(60),
         ));
@@ -1989,7 +1862,6 @@ mod tests {
         }
         assert!(!cache.in_flight.load(Ordering::Acquire));
     }
-
     #[test]
     fn durable_dead_letter_blocks_projection_readiness() {
         let cache = ModerationFinalizedProjectionCacheV1::new(Duration::from_secs(60));
@@ -2006,7 +1878,6 @@ mod tests {
             Err(ModerationProjectionReadErrorV1::DeadLetters)
         );
     }
-
     #[test]
     fn cache_rejects_finalized_cursor_regression_and_equivocation() {
         for invalid in [
@@ -2030,7 +1901,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn worker_deadline_and_freshness_are_bounded_by_cadence_and_external_lease() {
         let cadence = Duration::from_secs(1);
@@ -2044,7 +1914,6 @@ mod tests {
                 .checked_add(Duration::from_secs(2))
                 .expect("test duration")
         );
-
         let slow_cadence = Duration::from_secs(60);
         assert_eq!(moderation_worker_deadline(slow_cadence), slow_cadence);
         assert_eq!(
@@ -2052,14 +1921,12 @@ mod tests {
             Duration::from_secs(180)
         );
     }
-
     fn action() -> ModerationNativeActionV1 {
         ModerationNativeActionV1::FinalizeCase(FinalizeSorafsModerationCase::new(
             "case-1".to_owned(),
             "round-1".to_owned(),
         ))
     }
-
     fn transaction_request(authority: AccountId) -> ModerationTransactionRequestV1 {
         ModerationTransactionRequestV1::new(
             test_network_id(0xA5),
@@ -2072,7 +1939,6 @@ mod tests {
         )
         .expect("canonical transaction request")
     }
-
     fn sign_and_submit(
         adapter: &ModerationTransactionSubmitterAdapterV1,
         request: &ModerationTransactionRequestV1,
@@ -2080,14 +1946,12 @@ mod tests {
         let signed = adapter.sign(request)?;
         adapter.submit_signed(request, &signed)
     }
-
     #[derive(Debug)]
     enum FixedSignerBehavior {
         Exact,
         SubstituteNetwork,
         Forged(KeyPair),
     }
-
     #[derive(Debug)]
     struct FixedSigner {
         key_pair: KeyPair,
@@ -2102,7 +1966,6 @@ mod tests {
         >,
         qualification_after_sign: Mutex<Option<ModerationRuntimeProviderQualificationV1>>,
     }
-
     impl FixedSigner {
         fn exact(key_pair: KeyPair) -> Self {
             Self {
@@ -2114,7 +1977,6 @@ mod tests {
                 qualification_after_sign: Mutex::new(None),
             }
         }
-
         fn substitute_network(key_pair: KeyPair) -> Self {
             Self {
                 key_pair,
@@ -2125,7 +1987,6 @@ mod tests {
                 qualification_after_sign: Mutex::new(None),
             }
         }
-
         fn forged(key_pair: KeyPair, forgery_key: KeyPair) -> Self {
             Self {
                 key_pair,
@@ -2136,11 +1997,9 @@ mod tests {
                 qualification_after_sign: Mutex::new(None),
             }
         }
-
         fn calls(&self) -> usize {
             self.calls.load(Ordering::Relaxed)
         }
-
         fn drift_after_sign(&self, qualification: ModerationRuntimeProviderQualificationV1) {
             *self
                 .qualification_after_sign
@@ -2148,12 +2007,10 @@ mod tests {
                 .expect("signer qualification drift lock") = Some(qualification);
         }
     }
-
     impl ModerationRuntimeProviderV1 for FixedSigner {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -2166,7 +2023,6 @@ mod tests {
                 .expect("signer qualification lock")
         }
     }
-
     impl ModerationSignedTransactionSignerV1 for FixedSigner {
         fn sign(
             &self,
@@ -2206,10 +2062,8 @@ mod tests {
             result
         }
     }
-
     #[derive(Debug)]
     struct TestFeeQuoter;
-
     impl ModerationFeeQuoterV1 for TestFeeQuoter {
         fn quote(
             &self,
@@ -2218,7 +2072,6 @@ mod tests {
             Ok(payload.fee_payment.clone())
         }
     }
-
     fn adapter(
         signer: Arc<dyn ModerationSignedTransactionSignerV1>,
         ingress: Arc<dyn ModerationStrictTransactionIngressV1>,
@@ -2235,13 +2088,11 @@ mod tests {
         )
         .expect("qualified moderation adapter")
     }
-
     #[derive(Debug, Default)]
     struct TestIngressState {
         calls: usize,
         admissions: BTreeMap<[u8; 32], [u8; 32]>,
     }
-
     #[derive(Debug)]
     struct TestIngress {
         state: Mutex<TestIngressState>,
@@ -2255,7 +2106,6 @@ mod tests {
         qualification_after_submit: Mutex<Option<ModerationRuntimeProviderQualificationV1>>,
         qualification_after_lookup: Mutex<Option<ModerationRuntimeProviderQualificationV1>>,
     }
-
     impl Default for TestIngress {
         fn default() -> Self {
             Self {
@@ -2267,30 +2117,25 @@ mod tests {
             }
         }
     }
-
     impl TestIngress {
         fn calls(&self) -> usize {
             self.state.lock().expect("ingress lock").calls
         }
-
         fn unique_admissions(&self) -> usize {
             self.state.lock().expect("ingress lock").admissions.len()
         }
-
         fn drift_after_submit(&self, qualification: ModerationRuntimeProviderQualificationV1) {
             *self
                 .qualification_after_submit
                 .lock()
                 .expect("ingress submit drift lock") = Some(qualification);
         }
-
         fn drift_after_lookup(&self, qualification: ModerationRuntimeProviderQualificationV1) {
             *self
                 .qualification_after_lookup
                 .lock()
                 .expect("ingress lookup drift lock") = Some(qualification);
         }
-
         fn set_qualification(&self, qualification: ModerationRuntimeProviderQualificationV1) {
             *self
                 .qualification
@@ -2298,12 +2143,10 @@ mod tests {
                 .expect("ingress qualification lock") = Ok(qualification);
         }
     }
-
     impl ModerationRuntimeProviderV1 for TestIngress {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -2316,7 +2159,6 @@ mod tests {
                 .expect("ingress qualification lock")
         }
     }
-
     impl ModerationStrictTransactionIngressV1 for TestIngress {
         fn submit_exact(
             &self,
@@ -2354,7 +2196,6 @@ mod tests {
             }
             result
         }
-
         fn lookup_exact(
             &self,
             operation_id: [u8; 32],
@@ -2387,14 +2228,12 @@ mod tests {
             lookup
         }
     }
-
     #[test]
     fn submitter_rejects_a_test_marked_signer_before_use() {
         let signer_key = key(31);
         let mut signer = FixedSigner::exact(signer_key);
         signer.handle = "moderation-test-signer".to_owned();
         let ingress = Arc::new(TestIngress::default());
-
         let error = ModerationTransactionSubmitterAdapterV1::try_new(
             test_network_id(0xA5),
             TEST_SIGNER_HANDLE,
@@ -2406,13 +2245,11 @@ mod tests {
             ingress,
         )
         .expect_err("test-marked signer must fail qualification");
-
         assert_eq!(
             error,
             ModerationRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle
         );
     }
-
     #[test]
     fn signer_policy_drift_discards_the_returned_envelope() {
         let signer_key = key(32);
@@ -2421,14 +2258,12 @@ mod tests {
         let ingress = Arc::new(TestIngress::default());
         let adapter = adapter(signer.clone(), ingress);
         signer.drift_after_sign(ModerationRuntimeProviderQualificationV1::new(2, [0xB1; 32]));
-
         assert_eq!(
             adapter.sign(&request),
             Err(ModerationSubmissionFailureV1::RuntimeUnavailable)
         );
         assert_eq!(signer.calls(), 1);
     }
-
     #[test]
     fn same_label_different_genesis_is_rejected_before_signer_or_ingress() {
         let configured_display_label = "moderation-runtime-test".to_owned();
@@ -2448,7 +2283,6 @@ mod tests {
         let signer = Arc::new(FixedSigner::exact(signer_key));
         let ingress = Arc::new(TestIngress::default());
         let adapter = adapter(signer.clone(), ingress.clone());
-
         assert_eq!(
             adapter.sign(&request),
             Err(ModerationSubmissionFailureV1::PermanentRejection)
@@ -2457,7 +2291,6 @@ mod tests {
         assert_eq!(ingress.calls(), 0);
         assert_eq!(ingress.unique_admissions(), 0);
     }
-
     #[test]
     fn ingress_policy_drift_after_admission_is_ambiguous_and_lookup_is_discarded() {
         let signer_key = key(33);
@@ -2467,14 +2300,12 @@ mod tests {
         let adapter = adapter(signer, ingress.clone());
         let signed = adapter.sign(&request).expect("qualified signer result");
         ingress.drift_after_submit(ModerationRuntimeProviderQualificationV1::new(2, [0xB2; 32]));
-
         assert_eq!(
             adapter.submit_signed(&request, &signed),
             Err(ModerationSubmissionFailureV1::Ambiguous)
         );
         assert_eq!(ingress.calls(), 1);
         assert_eq!(ingress.unique_admissions(), 1);
-
         ingress.set_qualification(TEST_INGRESS_QUALIFICATION);
         ingress.drift_after_lookup(ModerationRuntimeProviderQualificationV1::new(3, [0xC2; 32]));
         assert_eq!(
@@ -2482,7 +2313,6 @@ mod tests {
             ModerationSubmissionLookupV1::Unknown
         );
     }
-
     #[test]
     fn signer_authority_mismatch_is_rejected_before_ingress() {
         let expected_key = key(1);
@@ -2491,7 +2321,6 @@ mod tests {
         let signer = Arc::new(FixedSigner::exact(substituted_key));
         let ingress = Arc::new(TestIngress::default());
         let adapter = adapter(signer, ingress.clone());
-
         assert_eq!(
             sign_and_submit(&adapter, &request),
             Err(ModerationSubmissionFailureV1::PermanentRejection)
@@ -2499,7 +2328,6 @@ mod tests {
         assert_eq!(ingress.calls(), 0);
         assert_eq!(ingress.unique_admissions(), 0);
     }
-
     #[test]
     fn canonical_request_digest_tampering_is_rejected_before_signing() {
         let signer_key = key(12);
@@ -2508,7 +2336,6 @@ mod tests {
         let ingress = Arc::new(TestIngress::default());
         let adapter = adapter(signer.clone(), ingress.clone());
         request.action_digest[0] ^= 0x80;
-
         assert_eq!(
             sign_and_submit(&adapter, &request),
             Err(ModerationSubmissionFailureV1::PermanentRejection)
@@ -2516,7 +2343,6 @@ mod tests {
         assert_eq!(signer.calls(), 0);
         assert_eq!(ingress.calls(), 0);
     }
-
     #[test]
     fn forged_transaction_signature_is_rejected_before_ingress() {
         let authority_key = key(13);
@@ -2525,14 +2351,12 @@ mod tests {
         let signer = Arc::new(FixedSigner::forged(authority_key, forgery_key));
         let ingress = Arc::new(TestIngress::default());
         let adapter = adapter(signer, ingress.clone());
-
         assert_eq!(
             sign_and_submit(&adapter, &request),
             Err(ModerationSubmissionFailureV1::PermanentRejection)
         );
         assert_eq!(ingress.calls(), 0);
     }
-
     #[test]
     fn signer_payload_substitution_is_rejected_before_ingress() {
         let signer_key = key(15);
@@ -2540,14 +2364,12 @@ mod tests {
         let signer = Arc::new(FixedSigner::substitute_network(signer_key));
         let ingress = Arc::new(TestIngress::default());
         let adapter = adapter(signer, ingress.clone());
-
         assert_eq!(
             sign_and_submit(&adapter, &request),
             Err(ModerationSubmissionFailureV1::PermanentRejection)
         );
         assert_eq!(ingress.calls(), 0);
     }
-
     #[test]
     fn strict_ingress_replay_admits_one_exact_retained_transaction() {
         let signer_key = key(3);
@@ -2557,7 +2379,6 @@ mod tests {
         let adapter = adapter(signer, ingress.clone());
         let signed = adapter.sign(&request).expect("sign exact payload");
         let expected_transaction_id = signed.transaction_id;
-
         let first = adapter
             .submit_signed(&request, &signed)
             .expect("first submission");
@@ -2569,7 +2390,6 @@ mod tests {
         assert_eq!(ingress.calls(), 2);
         assert_eq!(ingress.unique_admissions(), 1);
     }
-
     #[test]
     fn lookup_rejects_a_foreign_transaction_identity() {
         assert_eq!(
@@ -2582,7 +2402,6 @@ mod tests {
             ModerationSubmissionLookupV1::Unknown
         );
     }
-
     #[derive(Debug)]
     struct TestQueries {
         snapshot: Result<ModerationFinalizedLedgerSnapshotV1, NativeModerationQueryFailureV1>,
@@ -2590,7 +2409,6 @@ mod tests {
             Mutex<VecDeque<Result<ModerationFinalizedEventPageV1, NativeModerationQueryFailureV1>>>,
         requests: Mutex<Vec<(ModerationFinalizedCursorV1, Option<u64>, u32)>>,
     }
-
     impl TestQueries {
         fn new(
             snapshot: ModerationFinalizedLedgerSnapshotV1,
@@ -2604,11 +2422,9 @@ mod tests {
                 requests: Mutex::new(Vec::new()),
             }
         }
-
         fn request_count(&self) -> usize {
             self.requests.lock().expect("query requests lock").len()
         }
-
         fn requested_limits(&self) -> Vec<u32> {
             self.requests
                 .lock()
@@ -2618,7 +2434,6 @@ mod tests {
                 .collect()
         }
     }
-
     impl ModerationQueryViewV1 for TestQueries {
         fn snapshot(
             &self,
@@ -2627,7 +2442,6 @@ mod tests {
         ) -> Result<ModerationFinalizedLedgerSnapshotV1, NativeModerationQueryFailureV1> {
             self.snapshot.clone()
         }
-
         fn event_page(
             &self,
             expected_finalized_cursor: ModerationFinalizedCursorV1,
@@ -2646,7 +2460,6 @@ mod tests {
                 .unwrap_or(Err(NativeModerationQueryFailureV1::Unavailable))
         }
     }
-
     fn finalized_event(
         sequence: u64,
         finalized_height: u64,
@@ -2667,7 +2480,6 @@ mod tests {
             ),
         }
     }
-
     fn snapshot_with_events(
         finalized_height: u64,
         finalized_hash: [u8; 32],
@@ -2685,7 +2497,6 @@ mod tests {
             events,
         }
     }
-
     fn event_page(
         cursor: ModerationFinalizedCursorV1,
         events: Vec<ModerationFinalizedEventV1>,
@@ -2704,12 +2515,10 @@ mod tests {
             next_after,
         }
     }
-
     #[test]
     fn finalized_reader_binds_timestamp_to_the_exact_tip_block() {
         let mut snapshot = snapshot_with_events(8, [8; 32], Vec::new());
         snapshot.finalized_at_unix_ms = 8_000;
-
         assert_eq!(
             validate_snapshot_finalized_block_fields(&snapshot, 8, [8; 32], 8_000),
             Ok(())
@@ -2727,7 +2536,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn finalized_reader_rejects_stale_and_forked_page_cursors() {
         let authority = account(&key(4));
@@ -2766,7 +2574,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn finalized_reader_fails_closed_after_partial_query_failure() {
         let authority = account(&key(5));
@@ -2786,14 +2593,12 @@ mod tests {
         );
         let queries =
             TestQueries::new(snapshot, [Err(NativeModerationQueryFailureV1::Unavailable)]);
-
         assert_eq!(
             read_and_validate_snapshot(&queries, 1, 1, 1),
             Err(ModerationSnapshotReadErrorV1::Unavailable)
         );
         assert_eq!(queries.request_count(), 1);
     }
-
     #[test]
     fn finalized_reader_rejects_events_omitted_from_an_empty_snapshot() {
         let authority = account(&key(15));
@@ -2806,14 +2611,12 @@ mod tests {
             snapshot_with_events(cursor.height, cursor.block_hash, Vec::new()),
             [Ok(event_page(cursor, vec![omitted], false))],
         );
-
         assert_eq!(
             read_and_validate_snapshot(&queries, 1, 1, 1),
             Err(ModerationSnapshotReadErrorV1::InvalidSnapshot)
         );
         assert_eq!(queries.request_count(), 1);
     }
-
     #[test]
     fn finalized_reader_pages_within_the_requested_bound() {
         let authority = account(&key(6));
@@ -2839,14 +2642,12 @@ mod tests {
                 Ok(event_page(cursor, events[4..5].to_vec(), false)),
             ],
         );
-
         let snapshot =
             read_and_validate_snapshot(&queries, 1, 5, 2).expect("bounded snapshot pages");
         assert_eq!(snapshot.events, events);
         assert_eq!(queries.request_count(), 3);
         assert_eq!(queries.requested_limits(), vec![2, 2, 2]);
     }
-
     #[derive(Debug, Default)]
     struct TestHandoffBoundaryState {
         calls: usize,
@@ -2855,7 +2656,6 @@ mod tests {
         published_archive_heads:
             BTreeMap<[u8; 32], (Vec<u8>, ModerationPanelNotificationArchiveHeadV1)>,
     }
-
     #[derive(Debug)]
     struct TestHandoffBoundary {
         state: Mutex<TestHandoffBoundaryState>,
@@ -2868,7 +2668,6 @@ mod tests {
         >,
         qualification_after_delivery: Mutex<Option<ModerationRuntimeProviderQualificationV1>>,
     }
-
     impl Default for TestHandoffBoundary {
         fn default() -> Self {
             Self {
@@ -2879,20 +2678,16 @@ mod tests {
             }
         }
     }
-
     impl TestHandoffBoundary {
         fn fail_next(&self, error: ModerationDurableHandoffFailureV1) {
             self.state.lock().expect("handoff lock").fail_next = Some(error);
         }
-
         fn calls(&self) -> usize {
             self.state.lock().expect("handoff lock").calls
         }
-
         fn deliveries(&self) -> usize {
             self.state.lock().expect("handoff lock").delivered.len()
         }
-
         fn drift_after_delivery(&self, qualification: ModerationRuntimeProviderQualificationV1) {
             *self
                 .qualification_after_delivery
@@ -2900,12 +2695,10 @@ mod tests {
                 .expect("handoff qualification drift lock") = Some(qualification);
         }
     }
-
     impl ModerationRuntimeProviderV1 for TestHandoffBoundary {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -2918,7 +2711,6 @@ mod tests {
                 .expect("handoff qualification lock")
         }
     }
-
     impl ModerationDurableHandoffBoundaryV1 for TestHandoffBoundary {
         fn deliver_once(
             &self,
@@ -2956,7 +2748,6 @@ mod tests {
             }
             outcome
         }
-
         fn publish_archive_head_once(
             &self,
             request: &ModerationDurableArchiveHeadPublicationRequestV1,
@@ -3005,7 +2796,6 @@ mod tests {
             );
             Ok(ModerationDurableHandoffOutcomeV1::Delivered)
         }
-
         fn read_published_archive_head(
             &self,
         ) -> Result<
@@ -3023,7 +2813,6 @@ mod tests {
                 .cloned())
         }
     }
-
     fn terminal_handoff(kind: ModerationTerminalHandoffKindV1) -> ModerationTerminalHandoffV1 {
         let mut handoff = ModerationTerminalHandoffV1 {
             handoff_id: [0; 32],
@@ -3056,7 +2845,6 @@ mod tests {
         handoff.handoff_id = handoff.canonical_id();
         handoff
     }
-
     #[test]
     fn terminal_handoff_failure_retries_the_same_idempotency_identity() {
         let boundary = Arc::new(TestHandoffBoundary::default());
@@ -3068,7 +2856,6 @@ mod tests {
         )
         .expect("qualified settlement boundary");
         let handoff = terminal_handoff(ModerationTerminalHandoffKindV1::Settlement);
-
         assert_eq!(
             sink.deliver(&handoff),
             Err(ModerationHandoffFailureV1::NotDelivered)
@@ -3078,7 +2865,6 @@ mod tests {
         assert_eq!(boundary.calls(), 3);
         assert_eq!(boundary.deliveries(), 1);
     }
-
     #[test]
     fn terminal_handoff_policy_drift_after_delivery_is_ambiguous() {
         let boundary = Arc::new(TestHandoffBoundary::default());
@@ -3090,7 +2876,6 @@ mod tests {
         .expect("qualified settlement boundary");
         let handoff = terminal_handoff(ModerationTerminalHandoffKindV1::Settlement);
         boundary.drift_after_delivery(ModerationRuntimeProviderQualificationV1::new(2, [0xB3; 32]));
-
         assert_eq!(
             sink.deliver(&handoff),
             Err(ModerationHandoffFailureV1::Ambiguous)
@@ -3098,7 +2883,6 @@ mod tests {
         assert_eq!(boundary.calls(), 1);
         assert_eq!(boundary.deliveries(), 1);
     }
-
     #[test]
     fn terminal_handoff_cannot_cross_destination_boundaries() {
         let boundary = Arc::new(TestHandoffBoundary::default());
@@ -3109,21 +2893,18 @@ mod tests {
         )
         .expect("qualified publication boundary");
         let settlement = terminal_handoff(ModerationTerminalHandoffKindV1::Settlement);
-
         assert_eq!(
             sink.deliver(&settlement),
             Err(ModerationHandoffFailureV1::Permanent)
         );
         assert_eq!(boundary.calls(), 0);
     }
-
     #[derive(Debug, Default)]
     struct TestNotificationBoundaryState {
         calls: usize,
         fail_next: Option<ModerationPanelNotificationFailureV1>,
         delivered: BTreeMap<[u8; 32], (Vec<u8>, ModerationPanelNotificationDeliveryReceiptV1)>,
     }
-
     #[derive(Debug)]
     struct TestNotificationBoundary {
         state: Mutex<TestNotificationBoundaryState>,
@@ -3136,7 +2917,6 @@ mod tests {
         >,
         qualification_after_delivery: Mutex<Option<ModerationRuntimeProviderQualificationV1>>,
     }
-
     impl Default for TestNotificationBoundary {
         fn default() -> Self {
             Self {
@@ -3147,16 +2927,13 @@ mod tests {
             }
         }
     }
-
     impl TestNotificationBoundary {
         fn fail_next(&self, error: ModerationPanelNotificationFailureV1) {
             self.state.lock().expect("notification lock").fail_next = Some(error);
         }
-
         fn calls(&self) -> usize {
             self.state.lock().expect("notification lock").calls
         }
-
         fn deliveries(&self) -> usize {
             self.state
                 .lock()
@@ -3164,7 +2941,6 @@ mod tests {
                 .delivered
                 .len()
         }
-
         fn drift_after_delivery(&self, qualification: ModerationRuntimeProviderQualificationV1) {
             *self
                 .qualification_after_delivery
@@ -3172,12 +2948,10 @@ mod tests {
                 .expect("notification qualification drift lock") = Some(qualification);
         }
     }
-
     impl ModerationRuntimeProviderV1 for TestNotificationBoundary {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -3190,7 +2964,6 @@ mod tests {
                 .expect("notification qualification lock")
         }
     }
-
     impl ModerationDurablePanelNotificationBoundaryV1 for TestNotificationBoundary {
         fn deliver_once(
             &self,
@@ -3245,7 +3018,6 @@ mod tests {
             receipt
         }
     }
-
     fn panel_notification_claim() -> ModerationPanelNotificationClaimV1 {
         let mut notification = ModerationPanelNotificationV1 {
             notification_id: [0; 32],
@@ -3272,7 +3044,6 @@ mod tests {
             attempt_limit: 3,
         }
     }
-
     #[test]
     fn panel_notification_failure_retries_the_same_idempotency_identity() {
         let boundary = Arc::new(TestNotificationBoundary::default());
@@ -3284,7 +3055,6 @@ mod tests {
         )
         .expect("qualified notification boundary");
         let claim = panel_notification_claim();
-
         assert_eq!(
             sink.deliver(&claim),
             Err(ModerationPanelNotificationFailureV1::NotDelivered)
@@ -3294,7 +3064,6 @@ mod tests {
         assert_eq!(boundary.calls(), 3);
         assert_eq!(boundary.deliveries(), 1);
     }
-
     #[test]
     fn panel_notification_policy_drift_after_delivery_is_ambiguous() {
         let boundary = Arc::new(TestNotificationBoundary::default());
@@ -3305,7 +3074,6 @@ mod tests {
         )
         .expect("qualified notification boundary");
         boundary.drift_after_delivery(ModerationRuntimeProviderQualificationV1::new(2, [0xB4; 32]));
-
         assert_eq!(
             sink.deliver(&panel_notification_claim()),
             Err(ModerationPanelNotificationFailureV1::Ambiguous)
@@ -3313,7 +3081,6 @@ mod tests {
         assert_eq!(boundary.calls(), 1);
         assert_eq!(boundary.deliveries(), 1);
     }
-
     #[test]
     fn panel_notification_adapter_rejects_malformed_claim_before_delivery() {
         let boundary = Arc::new(TestNotificationBoundary::default());
@@ -3325,7 +3092,6 @@ mod tests {
         .expect("qualified notification boundary");
         let mut claim = panel_notification_claim();
         claim.notification.notification_id = [0; 32];
-
         assert_eq!(
             sink.deliver(&claim),
             Err(ModerationPanelNotificationFailureV1::Permanent)

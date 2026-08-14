@@ -8,7 +8,8 @@
     "dry_run": false,
     "allow_default_profile": false,
     "allow_insecure_http": false,
-    "bearer_token_file": "swift-cbpr-plus/secrets/torii.bearer",
+    "network_id": "hash:0808080808080808080808080808080808080808080808080808080808080809#9F75",
+    "operator_private_key_file": "swift-cbpr-plus/secrets/torii.operator.key",
     "max_payload_bytes": 4194304,
     "timeout_secs": 10
   },

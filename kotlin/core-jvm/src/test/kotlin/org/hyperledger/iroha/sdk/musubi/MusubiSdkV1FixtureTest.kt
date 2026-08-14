@@ -5,21 +5,41 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.security.KeyPairGenerator
+import java.security.Signature
+import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import org.hyperledger.iroha.sdk.client.CanonicalRequestSigner
 import org.hyperledger.iroha.sdk.client.HttpTransportExecutor
 import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.client.LocalSigningContext
 import org.hyperledger.iroha.sdk.client.MusubiToriiClientV1
+import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
+import org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 /** Cross-SDK checks for the Rust-owned Musubi first-release JSON fixture. */
 class MusubiSdkV1FixtureTest {
+    private val networkId = NetworkId.parse(
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    )
+    private val otherNetworkId = NetworkId.parse(
+        "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22",
+    )
+    private val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+    private val accountId = "ed0120" + keyPair.public.encoded.takeLast(32).joinToString("") {
+        "%02X".format(it.toInt() and 0xFF)
+    }
+
     @Test
     fun canonicalNamesVersionsAndRequirementsMatchRustFixture() {
         val root = fixture()
@@ -256,8 +276,9 @@ class MusubiSdkV1FixtureTest {
         val client = MusubiToriiClientV1.builder()
             .baseUri(URI.create("http://localhost:8080"))
             .executor(executor)
+            .localSigningContext(LocalSigningContext(networkId))
             .build()
-        assertFails { client.findArchiveRetention(request).join() }
+        assertFails { client.findArchiveRetention(request, canonicalAuth()).join() }
     }
 
     @Test
@@ -436,8 +457,10 @@ class MusubiSdkV1FixtureTest {
         val client = MusubiToriiClientV1.builder()
             .baseUri(URI.create("http://localhost:8080"))
             .executor(executor)
+            .localSigningContext(LocalSigningContext(networkId))
             .build()
 
+        val nonces = linkedSetOf<String>()
         routes.forEach { route ->
             val path = route["path"] as String
             val request = MusubiJsonV1.decodeQuery(path, route["request"])
@@ -447,8 +470,30 @@ class MusubiSdkV1FixtureTest {
             assertEquals(path, captured.uri.path)
             assertEquals(route["request"], parseJson(captured.body))
             assertEquals(32L * 1024L * 1024L, captured.maximumResponseBytes)
+            assertEquals(RequestReplayPolicy.ONE_SHOT, captured.replayPolicy)
+            assertCanonicalSignature(captured)
+            assertTrue(nonces.add(assertNotNull(firstHeader(captured, CanonicalRequestSigner.HEADER_NONCE))))
         }
         assertEquals(EXPECTED_PATHS, executor.requests.map { it.uri.path }.toSet())
+        assertFalse(EXPECTED_PATHS.contains("/v1/musubi/instructions/publish-release"))
+    }
+
+    @Test
+    fun authenticatedClientFailsClosedWithoutSigningContextOrWithInjectedAuthHeaders() {
+        val route = routes().first()
+        val path = route["path"] as String
+        val request = MusubiJsonV1.decodeQuery(path, route["request"])
+        val executor = FixtureExecutor(mapOf(path to MusubiJsonV1.encode(route["response"])))
+        assertFailsWith<IllegalStateException> {
+            MusubiToriiClientV1.builder().executor(executor).build()
+        }
+        val client = MusubiToriiClientV1.builder()
+            .executor(executor)
+            .localSigningContext(LocalSigningContext(networkId))
+            .addHeader("x-IROHA-signature", "forged")
+            .build()
+        assertFailsWith<IllegalArgumentException> { invoke(client, path, request) }
+        assertTrue(executor.requests.isEmpty())
     }
 
     @Test
@@ -462,6 +507,7 @@ class MusubiSdkV1FixtureTest {
             val client = MusubiToriiClientV1.builder()
                 .baseUri(URI.create("http://localhost:8080"))
                 .executor(executor)
+                .localSigningContext(LocalSigningContext(networkId))
                 .build()
             assertFails { invoke(client, path, request) }
         }
@@ -547,6 +593,7 @@ class MusubiSdkV1FixtureTest {
         val client = MusubiToriiClientV1.builder()
             .baseUri(URI.create("http://localhost:8080"))
             .executor(executor)
+            .localSigningContext(LocalSigningContext(networkId))
             .build()
         assertFails {
             invoke(
@@ -578,6 +625,7 @@ class MusubiSdkV1FixtureTest {
             val client = MusubiToriiClientV1.builder()
                 .baseUri(URI.create("http://localhost:8080"))
                 .executor(executor)
+                .localSigningContext(LocalSigningContext(networkId))
                 .build()
             assertFails { invoke(client, path, request) }
         }
@@ -1154,35 +1202,82 @@ class MusubiSdkV1FixtureTest {
         path: String,
         request: MusubiWireValueV1,
     ) {
+        val auth = canonicalAuth()
         when (path) {
             MusubiToriiClientV1.EXACT_PACKAGE_PATH ->
-                client.findExactPackage(request as MusubiExactPackageQueryV1).join()
+                client.findExactPackage(request as MusubiExactPackageQueryV1, auth).join()
             MusubiToriiClientV1.EXACT_RELEASE_PATH ->
-                client.findExactRelease(request as MusubiExactReleaseQueryV1).join()
+                client.findExactRelease(request as MusubiExactReleaseQueryV1, auth).join()
             MusubiToriiClientV1.PROVIDER_BUNDLE_ATTESTATION_PATH ->
                 client.findProviderBundleAttestation(
                     request as MusubiProviderBundleAttestationKeyV1,
+                    auth,
                 ).join()
             MusubiToriiClientV1.RESOLVER_INDEX_PATH ->
-                client.findResolverIndex(request as MusubiResolverIndexQueryV1).join()
+                client.findResolverIndex(request as MusubiResolverIndexQueryV1, auth).join()
             MusubiToriiClientV1.VERSIONS_PATH ->
-                client.findVersions(request as MusubiPackagePageQueryV1).join()
+                client.findVersions(request as MusubiPackagePageQueryV1, auth).join()
             MusubiToriiClientV1.MAINTAINERS_PATH ->
-                client.findMaintainers(request as MusubiPackagePageQueryV1).join()
+                client.findMaintainers(request as MusubiPackagePageQueryV1, auth).join()
             MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH ->
-                client.findArchiveLocations(request as MusubiArchiveLocationQueryV1).join()
+                client.findArchiveLocations(request as MusubiArchiveLocationQueryV1, auth).join()
             MusubiToriiClientV1.ARCHIVE_RETENTION_PATH ->
-                client.findArchiveRetention(request as MusubiArchiveRetentionQueryV1).join()
+                client.findArchiveRetention(request as MusubiArchiveRetentionQueryV1, auth).join()
             MusubiToriiClientV1.ALIAS_PATH ->
-                client.findAlias(request as MusubiAliasQueryV1).join()
+                client.findAlias(request as MusubiAliasQueryV1, auth).join()
             MusubiToriiClientV1.ALIAS_HISTORY_PATH ->
-                client.findAliasHistory(request as MusubiAliasQueryV1).join()
+                client.findAliasHistory(request as MusubiAliasQueryV1, auth).join()
             MusubiToriiClientV1.ORDERED_PREFIX_PATH ->
-                client.findOrderedPrefix(request as MusubiOrderedPrefixQueryV1).join()
+                client.findOrderedPrefix(request as MusubiOrderedPrefixQueryV1, auth).join()
             MusubiToriiClientV1.SEARCH_PATH ->
-                client.search(request as MusubiSearchQueryV1).join()
+                client.search(request as MusubiSearchQueryV1, auth).join()
             else -> error("unhandled fixture path $path")
         }
+    }
+
+    private fun canonicalAuth(): ToriiCanonicalRequestAuth =
+        ToriiCanonicalRequestAuth(accountId, keyPair.private)
+
+    private fun firstHeader(request: TransportRequest, name: String): String? = request.headers
+        .entries
+        .firstOrNull { it.key.equals(name, ignoreCase = true) }
+        ?.value
+        ?.firstOrNull()
+
+    private fun assertCanonicalSignature(request: TransportRequest) {
+        assertEquals(accountId, firstHeader(request, CanonicalRequestSigner.HEADER_ACCOUNT))
+        val timestampMs = assertNotNull(
+            firstHeader(request, CanonicalRequestSigner.HEADER_TIMESTAMP_MS),
+        ).toLong()
+        val nonce = assertNotNull(firstHeader(request, CanonicalRequestSigner.HEADER_NONCE))
+        val signature = Base64.getDecoder().decode(
+            assertNotNull(firstHeader(request, CanonicalRequestSigner.HEADER_SIGNATURE)),
+        )
+        fun verifies(
+            expectedNetworkId: NetworkId = networkId,
+            uri: URI = request.uri,
+            body: ByteArray = request.body,
+            expectedNonce: String = nonce,
+        ): Boolean {
+            val verifier = Signature.getInstance("Ed25519")
+            verifier.initVerify(keyPair.public)
+            verifier.update(
+                CanonicalRequestSigner.canonicalRequestSignatureMessage(
+                    expectedNetworkId,
+                    request.method,
+                    uri,
+                    body,
+                    timestampMs,
+                    expectedNonce,
+                ),
+            )
+            return verifier.verify(signature)
+        }
+        assertTrue(verifies())
+        assertFalse(verifies(expectedNetworkId = otherNetworkId))
+        assertFalse(verifies(uri = URI.create("https://example.test/v1/musubi/wrong")))
+        assertFalse(verifies(body = request.body + byteArrayOf(0)))
+        assertFalse(verifies(expectedNonce = "replayed-with-another-nonce"))
     }
 
     private fun routes(): List<MutableMap<String, Any?>> =

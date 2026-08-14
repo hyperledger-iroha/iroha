@@ -2,10 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::all)]
 #![allow(clippy::disallowed_types)]
-use std::{fs, sync::Arc};
-#[cfg(feature = "bench")]
-use std::{num::NonZeroUsize, time::Duration};
-
 #[cfg(feature = "bench")]
 use criterion::BatchSize;
 use criterion::Criterion;
@@ -31,14 +27,15 @@ use iroha_crypto::KeyPair;
 use iroha_crypto::{Algorithm, Hash, Signature, bls_normal_pop_prove};
 use iroha_data_model::prelude::*;
 use iroha_test_samples::gen_account_in;
+use std::{fs, sync::Arc};
+#[cfg(feature = "bench")]
+use std::{num::NonZeroUsize, time::Duration};
 use tokio::runtime::Builder;
-
 #[cfg(feature = "bench")]
 struct BenchBlocks {
     leader_key: KeyPair,
     prev_block: Option<Arc<SignedBlock>>,
 }
-
 #[cfg(feature = "bench")]
 impl BenchBlocks {
     fn new() -> Self {
@@ -47,7 +44,6 @@ impl BenchBlocks {
             prev_block: None,
         }
     }
-
     fn next(&mut self) -> Arc<SignedBlock> {
         let latest = self.prev_block.as_deref();
         let block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
@@ -60,7 +56,6 @@ impl BenchBlocks {
         block
     }
 }
-
 #[cfg(feature = "bench")]
 fn store_signed_complete_wire_finality_for_eviction_bench(
     kura: &iroha_core::kura::Kura,
@@ -71,7 +66,6 @@ fn store_signed_complete_wire_finality_for_eviction_bench(
         ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
         QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
     };
-
     let mut keypairs = (0_u8..4)
         .map(|index| {
             KeyPair::try_from_seed(
@@ -202,17 +196,14 @@ fn store_signed_complete_wire_finality_for_eviction_bench(
         parent = Some(artifact);
     }
 }
-
 #[cfg(feature = "bench")]
 fn budget_bench_config(dir: &tempfile::TempDir) -> Config {
     kura_bench_config(dir, BLOCKS_IN_MEMORY)
 }
-
 #[cfg(feature = "bench")]
 fn eviction_bench_config(dir: &tempfile::TempDir) -> Config {
     kura_bench_config(dir, NonZeroUsize::new(1).expect("non-zero retained tail"))
 }
-
 #[cfg(feature = "bench")]
 fn kura_bench_config(dir: &tempfile::TempDir, blocks_in_memory: NonZeroUsize) -> Config {
     Config {
@@ -232,7 +223,6 @@ fn kura_bench_config(dir: &tempfile::TempDir, blocks_in_memory: NonZeroUsize) ->
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
-
 #[cfg(feature = "bench")]
 fn seeded_eviction_bench(
     evictable_history: usize,
@@ -257,7 +247,6 @@ fn seeded_eviction_bench(
         &kura,
         &canonical_blocks[..evictable_history.saturating_add(1)],
     );
-
     let mut bytes_needed = 0_u64;
     for height in 2..=evictable_history.saturating_add(1) {
         let height = NonZeroUsize::new(height).expect("non-zero height");
@@ -268,7 +257,6 @@ fn seeded_eviction_bench(
     }
     (dir, kura, bytes_needed)
 }
-
 fn measure_block_size_for_n_executors(n_executors: u32) {
     let dir = tempfile::tempdir().expect("Could not create tempfile.");
     let cfg = Config {
@@ -306,7 +294,6 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
-
     let (alice_id, alice_keypair) = gen_account_in("test");
     let (bob_id, _bob_keypair) = gen_account_in("test");
     let xor_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -344,7 +331,6 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
             .chain(0, state.view().latest_block().as_deref())
             .sign(peer_key_pair.private_key())
             .unpack(|_| {});
-
         let mut state_block = Box::new(state.block(unverified_block.header()));
         let block = unverified_block
             .validate_and_record_transactions(state_block.as_mut())
@@ -352,7 +338,6 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
         state_block.commit().unwrap();
         Box::new(block)
     };
-
     for _ in 1..n_executors {
         block.sign(&peer_key_pair, &topology);
     }
@@ -361,12 +346,10 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
     block_store
         .append_block_to_chain(block.as_ref().as_ref())
         .unwrap();
-
     let metadata = fs::metadata(dir.path().join("blocks.data")).unwrap();
     let file_size = metadata.len();
     println!("For {n_executors} executors: {file_size} bytes");
 }
-
 fn measure_block_size(_criterion: &mut Criterion) {
     std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
@@ -387,7 +370,6 @@ fn measure_block_size(_criterion: &mut Criterion) {
         .join()
         .unwrap();
 }
-
 #[cfg(feature = "bench")]
 fn bench_storage_budget_cached_pending_depth(c: &mut Criterion) {
     let mut group = c.benchmark_group("kura_storage_budget_cached_pending_depth");
@@ -412,7 +394,6 @@ fn bench_storage_budget_cached_pending_depth(c: &mut Criterion) {
     }
     group.finish();
 }
-
 #[cfg(feature = "bench")]
 fn bench_eviction_long_history_compaction(c: &mut Criterion) {
     let mut group = c.benchmark_group("kura_eviction_long_history_compaction");
@@ -434,7 +415,6 @@ fn bench_eviction_long_history_compaction(c: &mut Criterion) {
     }
     group.finish();
 }
-
 /// Entry point for the benchmark binary.
 fn main() {
     // Silence IVM banner if any path constructs it under the hood during this bench.

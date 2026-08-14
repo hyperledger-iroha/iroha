@@ -1,12 +1,10 @@
-use std::collections::{BTreeMap, HashMap};
-
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use norito::{
     Compression, StreamMapIter, decode_from_bytes, serialize_into,
     stream_btreemap_collect_from_reader, stream_hashmap_collect_from_reader,
 };
 use rand::{Rng, SeedableRng, rngs::StdRng};
-
+use std::collections::{BTreeMap, HashMap};
 fn gen_maps(n: usize) -> (HashMap<String, u32>, BTreeMap<u64, String>) {
     let mut rng = StdRng::seed_from_u64(42);
     let mut hm = HashMap::with_capacity(n);
@@ -18,23 +16,19 @@ fn gen_maps(n: usize) -> (HashMap<String, u32>, BTreeMap<u64, String>) {
     }
     (hm, bm)
 }
-
 fn bench_stream_maps(c: &mut Criterion) {
     let (hm, bm) = gen_maps(50_000);
-
     // Uncompressed HashMap bytes
     let mut hm_bytes = Vec::new();
     // In benches, avoid panicking on encoding errors; skip work if it fails
     if let Err(_e) = serialize_into(&mut hm_bytes, &hm, Compression::None) {
         return;
     }
-
     // Compressed BTreeMap bytes
     let mut bm_bytes = Vec::new();
     if let Err(_e) = serialize_into(&mut bm_bytes, &bm, Compression::Zstd) {
         return;
     }
-
     c.bench_function("hashmap_decode_from_bytes", |b| {
         b.iter_batched(
             || hm_bytes.as_slice(),
@@ -46,7 +40,6 @@ fn bench_stream_maps(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("hashmap_stream_collect", |b| {
         b.iter_batched(
             || hm_bytes.as_slice(),
@@ -61,7 +54,6 @@ fn bench_stream_maps(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("hashmap_stream_iter", |b| {
         b.iter_batched(
             || hm_bytes.clone(),
@@ -84,7 +76,6 @@ fn bench_stream_maps(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("btreemap_decode_from_bytes", |b| {
         b.iter_batched(
             || bm_bytes.as_slice(),
@@ -96,7 +87,6 @@ fn bench_stream_maps(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("btreemap_stream_collect", |b| {
         b.iter_batched(
             || bm_bytes.as_slice(),
@@ -111,7 +101,6 @@ fn bench_stream_maps(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("btreemap_stream_iter", |b| {
         b.iter_batched(
             || bm_bytes.clone(),
@@ -135,6 +124,5 @@ fn bench_stream_maps(c: &mut Criterion) {
         )
     });
 }
-
 criterion_group!(benches, bench_stream_maps);
 criterion_main!(benches);

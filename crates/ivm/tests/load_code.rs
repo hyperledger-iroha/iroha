@@ -1,5 +1,4 @@
 use ivm::IVM;
-
 #[test]
 fn load_code_into_memory() {
     let mut vm = IVM::new(u64::MAX);

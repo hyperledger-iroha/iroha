@@ -10,12 +10,9 @@
 //! The global wire-copy argument binds execution-order gate accesses to the
 //! address-sorted SHA word-memory table, and the SHA call-bus STARK binds those
 //! words across aggregate segments.
-
-use thiserror::Error;
-
 use super::air::{BooleanGateAirRowV1, ZkX509AirErrorV1};
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
-
+use thiserror::Error;
 const SHA256_INITIAL_STATE_V1: [u32; 8] = [
     0x6a09_e667,
     0xbb67_ae85,
@@ -26,7 +23,6 @@ const SHA256_INITIAL_STATE_V1: [u32; 8] = [
     0x1f83_d9ab,
     0x5be0_cd19,
 ];
-
 const SHA256_ROUND_CONSTANTS_V1: [u32; 64] = [
     0x428a_2f98,
     0x7137_4491,
@@ -94,10 +90,8 @@ const SHA256_ROUND_CONSTANTS_V1: [u32; 64] = [
     0xc671_78f2,
 ];
 const SHA256_GATE_ROWS_PER_BLOCK_V1: usize = 55_552;
-
 type WireV1 = usize;
 type WordV1 = [WireV1; 32];
-
 /// Deterministic SHA-256 circuit construction or validation failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509Sha256AirErrorV1 {
@@ -121,20 +115,17 @@ pub(crate) enum ZkX509Sha256AirErrorV1 {
     #[error("zk-X509 SHA-256 AIR output digest is invalid")]
     OutputDigest,
 }
-
 impl From<ZkX509AirErrorV1> for ZkX509Sha256AirErrorV1 {
     fn from(_: ZkX509AirErrorV1) -> Self {
         Self::Gate
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GateKindV1 {
     And,
     Xor,
     FullAdder,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CircuitGateV1 {
     kind: GateKindV1,
@@ -145,7 +136,6 @@ struct CircuitGateV1 {
     carry_out: WireV1,
     row: BooleanGateAirRowV1,
 }
-
 /// Complete padded SHA-256 circuit witness.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Sha256CircuitV1 {
@@ -156,28 +146,23 @@ pub(crate) struct ZkX509Sha256CircuitV1 {
     message_len: usize,
     digest: [u8; 32],
 }
-
 impl ZkX509Sha256CircuitV1 {
     /// Final SHA-256 digest reconstructed from constrained output wires.
     pub(crate) const fn digest(&self) -> [u8; 32] {
         self.digest
     }
-
     /// Number of nonlinear degree-bounded AIR gate rows.
     pub(crate) fn gate_rows(&self) -> usize {
         self.gates.len()
     }
-
     /// Number of private padded-message input bits.
     pub(crate) fn input_wires(&self) -> usize {
         self.input_wires.len()
     }
-
     /// Number of unpadded private message bytes.
     pub(crate) const fn message_len(&self) -> usize {
         self.message_len
     }
-
     /// Differentially validate every local gate and exact wire binding.
     pub(crate) fn validate(&self) -> Result<(), ZkX509Sha256AirErrorV1> {
         if self.wires.get(0) != Some(&F::ZERO)
@@ -189,7 +174,6 @@ impl ZkX509Sha256CircuitV1 {
         {
             return Err(ZkX509Sha256AirErrorV1::WireBinding);
         }
-
         let padded_len = self
             .input_wires
             .len()
@@ -204,7 +188,6 @@ impl ZkX509Sha256CircuitV1 {
         {
             return Err(ZkX509Sha256AirErrorV1::CircuitShape);
         }
-
         let mut padded = Vec::new();
         padded
             .try_reserve_exact(padded_len)
@@ -224,7 +207,6 @@ impl ZkX509Sha256CircuitV1 {
         if sha256_padding_v1(message)? != padded {
             return Err(ZkX509Sha256AirErrorV1::Padding);
         }
-
         // Satisfied gate equations only prove some Boolean circuit. Recompile
         // the fixed SHA-256 topology for this exact message length and require
         // every selector role, address, and output wire to match it.
@@ -247,7 +229,6 @@ impl ZkX509Sha256CircuitV1 {
             return Err(ZkX509Sha256AirErrorV1::CircuitShape);
         }
         drop(canonical);
-
         let mut next_fresh_wire = input_end;
         for gate in &self.gates {
             gate.row.validate()?;
@@ -294,20 +275,17 @@ impl ZkX509Sha256CircuitV1 {
         if next_fresh_wire != self.wires.len() {
             return Err(ZkX509Sha256AirErrorV1::CircuitShape);
         }
-
         if digest_from_words_v1(&self.wires, &self.output_words)? != self.digest {
             return Err(ZkX509Sha256AirErrorV1::OutputDigest);
         }
         Ok(())
     }
 }
-
 struct CircuitBuilderV1 {
     wires: Vec<F>,
     input_wires: Vec<WireV1>,
     gates: Vec<CircuitGateV1>,
 }
-
 impl CircuitBuilderV1 {
     fn new() -> Self {
         Self {
@@ -317,31 +295,25 @@ impl CircuitBuilderV1 {
             gates: Vec::new(),
         }
     }
-
     const fn zero(&self) -> WireV1 {
         0
     }
-
     const fn one(&self) -> WireV1 {
         1
     }
-
     fn value(&self, wire: WireV1) -> bool {
         self.wires[wire] == F::ONE
     }
-
     fn push_wire(&mut self, value: bool) -> WireV1 {
         let wire = self.wires.len();
         self.wires.push(F(u64::from(value)));
         wire
     }
-
     fn input_bit(&mut self, value: bool) -> WireV1 {
         let wire = self.push_wire(value);
         self.input_wires.push(wire);
         wire
     }
-
     fn constant_word(&self, value: u32) -> WordV1 {
         core::array::from_fn(|bit| {
             if value & (1_u32 << bit) == 0 {
@@ -351,11 +323,9 @@ impl CircuitBuilderV1 {
             }
         })
     }
-
     fn input_word(&mut self, value: u32) -> WordV1 {
         core::array::from_fn(|bit| self.input_bit(value & (1_u32 << bit) != 0))
     }
-
     fn and(&mut self, left: WireV1, right: WireV1) -> WireV1 {
         let row = BooleanGateAirRowV1::and(self.value(left), self.value(right));
         let out = self.push_wire(row.out == F::ONE);
@@ -370,7 +340,6 @@ impl CircuitBuilderV1 {
         });
         out
     }
-
     fn xor(&mut self, left: WireV1, right: WireV1) -> WireV1 {
         let row = BooleanGateAirRowV1::xor(self.value(left), self.value(right));
         let out = self.push_wire(row.out == F::ONE);
@@ -385,7 +354,6 @@ impl CircuitBuilderV1 {
         });
         out
     }
-
     fn full_adder(&mut self, left: WireV1, right: WireV1, carry_in: WireV1) -> (WireV1, WireV1) {
         let row = BooleanGateAirRowV1::full_adder(
             self.value(left),
@@ -405,16 +373,13 @@ impl CircuitBuilderV1 {
         });
         (out, carry_out)
     }
-
     fn xor_words(&mut self, left: WordV1, right: WordV1) -> WordV1 {
         core::array::from_fn(|bit| self.xor(left[bit], right[bit]))
     }
-
     fn xor_three_words(&mut self, first: WordV1, second: WordV1, third: WordV1) -> WordV1 {
         let partial = self.xor_words(first, second);
         self.xor_words(partial, third)
     }
-
     fn add_words(&mut self, left: WordV1, right: WordV1) -> WordV1 {
         let mut carry = self.zero();
         core::array::from_fn(|bit| {
@@ -423,18 +388,15 @@ impl CircuitBuilderV1 {
             sum
         })
     }
-
     fn add_many_words(&mut self, words: &[WordV1]) -> WordV1 {
         words
             .iter()
             .copied()
             .fold(self.constant_word(0), |sum, word| self.add_words(sum, word))
     }
-
     fn not_word(&mut self, word: WordV1) -> WordV1 {
         core::array::from_fn(|bit| self.xor(word[bit], self.one()))
     }
-
     fn choose(&mut self, x: WordV1, y: WordV1, z: WordV1) -> WordV1 {
         let not_x = self.not_word(x);
         core::array::from_fn(|bit| {
@@ -443,7 +405,6 @@ impl CircuitBuilderV1 {
             self.xor(left, right)
         })
     }
-
     fn majority(&mut self, x: WordV1, y: WordV1, z: WordV1) -> WordV1 {
         core::array::from_fn(|bit| {
             let xy = self.and(x[bit], y[bit]);
@@ -454,7 +415,6 @@ impl CircuitBuilderV1 {
         })
     }
 }
-
 /// Compile and witness the complete padded SHA-256 circuit.
 pub(crate) fn build_sha256_circuit_v1(
     message: &[u8],
@@ -463,7 +423,6 @@ pub(crate) fn build_sha256_circuit_v1(
     circuit.validate()?;
     Ok(circuit)
 }
-
 /// Exact local Boolean-gate rows required for a message length.
 pub(crate) fn sha256_gate_rows_for_message_len_v1(
     message_len: usize,
@@ -474,7 +433,6 @@ pub(crate) fn sha256_gate_rows_for_message_len_v1(
         .and_then(|blocks| blocks.checked_mul(SHA256_GATE_ROWS_PER_BLOCK_V1))
         .ok_or(ZkX509Sha256AirErrorV1::InputTooLarge)
 }
-
 fn build_sha256_circuit_unchecked_v1(
     message: &[u8],
 ) -> Result<ZkX509Sha256CircuitV1, ZkX509Sha256AirErrorV1> {
@@ -491,7 +449,6 @@ fn build_sha256_circuit_unchecked_v1(
             ))
         })
         .collect();
-
     for block in input_words.chunks_exact(16) {
         let mut schedule = Vec::with_capacity(64);
         schedule.extend_from_slice(block);
@@ -513,7 +470,6 @@ fn build_sha256_circuit_unchecked_v1(
                 sigma_one,
             ]));
         }
-
         let mut work = state;
         for round in 0..64 {
             let big_sigma_one = builder.xor_three_words(
@@ -550,7 +506,6 @@ fn build_sha256_circuit_unchecked_v1(
         }
         state = core::array::from_fn(|index| builder.add_words(state[index], work[index]));
     }
-
     let digest = digest_from_words_v1(&builder.wires, &state)?;
     let circuit = ZkX509Sha256CircuitV1 {
         wires: builder.wires,
@@ -562,15 +517,12 @@ fn build_sha256_circuit_unchecked_v1(
     };
     Ok(circuit)
 }
-
 fn rotate_right_v1(word: WordV1, distance: usize) -> WordV1 {
     core::array::from_fn(|bit| word[(bit + distance) % 32])
 }
-
 fn shift_right_v1(word: WordV1, distance: usize, zero: WireV1) -> WordV1 {
     core::array::from_fn(|bit| word.get(bit + distance).copied().unwrap_or(zero))
 }
-
 fn sha256_padding_v1(message: &[u8]) -> Result<Vec<u8>, ZkX509Sha256AirErrorV1> {
     let (bit_length, capacity) = sha256_padding_shape_v1(message.len())?;
     let with_marker = message
@@ -591,7 +543,6 @@ fn sha256_padding_v1(message: &[u8]) -> Result<Vec<u8>, ZkX509Sha256AirErrorV1> 
     padded.extend_from_slice(&bit_length.to_be_bytes());
     Ok(padded)
 }
-
 fn sha256_padding_shape_v1(message_len: usize) -> Result<(u64, usize), ZkX509Sha256AirErrorV1> {
     let bit_length = u64::try_from(message_len)
         .ok()
@@ -612,7 +563,6 @@ fn sha256_padding_shape_v1(message_len: usize) -> Result<(u64, usize), ZkX509Sha
         .ok_or(ZkX509Sha256AirErrorV1::InputTooLarge)?;
     Ok((bit_length, capacity))
 }
-
 fn digest_from_words_v1(
     wires: &[F],
     words: &[WordV1; 8],
@@ -631,11 +581,8 @@ fn digest_from_words_v1(
     }
     Ok(digest)
 }
-
 #[cfg(test)]
 mod tests {
-    use sha2::{Digest as _, Sha256};
-
     use super::*;
     use crate::privacy_engines::zk_x509::{
         profile::ZK_X509_MAX_CRL_BYTES_V1,
@@ -643,7 +590,7 @@ mod tests {
             SHA256_WORD_FIXED_BATCH_SEGMENT_COUNT_V1, SHA256_WORD_FIXED_BATCH_SEGMENT_ROWS_V1,
         },
     };
-
+    use sha2::{Digest as _, Sha256};
     #[test]
     fn complete_sha256_gate_schedule_matches_independent_implementation() {
         for message in [
@@ -670,7 +617,6 @@ mod tests {
             circuit.validate().expect("complete valid circuit");
         }
     }
-
     #[test]
     fn local_boolean_schedule_cannot_be_confused_with_release_resource_readiness() {
         let crl_rows =
@@ -685,37 +631,31 @@ mod tests {
         assert_eq!(compiled_sha_capacity, 2_621_440);
         assert!(u64::try_from(crl_rows).expect("row count fits u64") > compiled_sha_capacity);
     }
-
     #[test]
     fn gate_and_wire_mutations_fail_closed() {
         let circuit = build_sha256_circuit_v1(b"adversarial").expect("SHA-256 circuit");
-
         let mut changed = circuit.clone();
         changed.gates[137].row.out = changed.gates[137].row.out.add(F::ONE);
         assert!(matches!(
             changed.validate(),
             Err(ZkX509Sha256AirErrorV1::Gate | ZkX509Sha256AirErrorV1::WireBinding)
         ));
-
         let mut changed = circuit.clone();
         let output = changed.gates[219].out;
         changed.wires[output] = changed.wires[output].add(F::ONE);
         assert_eq!(changed.validate(), Err(ZkX509Sha256AirErrorV1::WireBinding));
-
         let mut changed = circuit.clone();
         changed.input_wires.swap(0, 1);
         assert_eq!(
             changed.validate(),
             Err(ZkX509Sha256AirErrorV1::CircuitShape)
         );
-
         let mut changed = circuit.clone();
         changed.gates[219].out = changed.gates[218].out;
         assert_eq!(
             changed.validate(),
             Err(ZkX509Sha256AirErrorV1::CircuitShape)
         );
-
         let mut changed = circuit.clone();
         changed.output_words[0] = [0; 32];
         changed.digest[..4].fill(0);
@@ -723,17 +663,14 @@ mod tests {
             changed.validate(),
             Err(ZkX509Sha256AirErrorV1::CircuitShape)
         );
-
         let mut changed = circuit.clone();
         changed.message_len = changed.message_len.saturating_add(1);
         assert_eq!(changed.validate(), Err(ZkX509Sha256AirErrorV1::Padding));
-
         let mut changed = circuit.clone();
         let marker_word = changed.input_wires[64..96].to_vec();
         let marker_high_bit = marker_word[7];
         changed.wires[marker_high_bit] = F::ZERO;
         assert_eq!(changed.validate(), Err(ZkX509Sha256AirErrorV1::Padding));
-
         let mut changed = circuit;
         changed.digest[0] ^= 1;
         assert_eq!(

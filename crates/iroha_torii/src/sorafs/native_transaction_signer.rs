@@ -6,16 +6,13 @@
 //! revalidates it immediately before and after every signing operation. The
 //! facade also rejects an input owned by another authority and verifies that
 //! the provider returned the exact payload, authority, and a valid signature.
-
-use std::sync::Arc;
-
 use iroha_config::parameters::validate_production_runtime_handle;
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
     account::AccountId,
     transaction::{SignedTransaction, TransactionPayload},
 };
-
+use std::sync::Arc;
 /// One isolated native SoraFS transaction-signing role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
@@ -29,7 +26,6 @@ pub enum SorafsNativeTransactionSignerRoleV1 {
     /// Native orderbook transactions.
     Orderbook = 3,
 }
-
 impl SorafsNativeTransactionSignerRoleV1 {
     /// Return the stable public role label.
     #[must_use]
@@ -42,14 +38,12 @@ impl SorafsNativeTransactionSignerRoleV1 {
         }
     }
 }
-
 /// Public revision and policy identity reported by one runtime signer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SorafsNativeTransactionSignerQualificationV1 {
     revision: u64,
     policy_digest: [u8; 32],
 }
-
 impl SorafsNativeTransactionSignerQualificationV1 {
     /// Construct a qualification value.
     ///
@@ -64,19 +58,16 @@ impl SorafsNativeTransactionSignerQualificationV1 {
             policy_digest,
         }
     }
-
     /// Return the exact adapter and public-policy revision.
     #[must_use]
     pub const fn revision(self) -> u64 {
         self.revision
     }
-
     /// Return the exact digest of the provider's public policy.
     #[must_use]
     pub const fn policy_digest(self) -> [u8; 32] {
         self.policy_digest
     }
-
     /// Reject a zero revision or zero policy digest.
     ///
     /// # Errors
@@ -92,7 +83,6 @@ impl SorafsNativeTransactionSignerQualificationV1 {
         Ok(())
     }
 }
-
 /// Invalid public qualification value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SorafsNativeTransactionSignerQualificationValueErrorV1 {
@@ -101,7 +91,6 @@ pub enum SorafsNativeTransactionSignerQualificationValueErrorV1 {
     /// Public-policy digest is all zeroes.
     ZeroPolicyDigest,
 }
-
 /// Non-secret expected identity of one native transaction signer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsNativeTransactionSignerBindingV1 {
@@ -111,7 +100,6 @@ pub struct SorafsNativeTransactionSignerBindingV1 {
     public_key: PublicKey,
     qualification: SorafsNativeTransactionSignerQualificationV1,
 }
-
 impl SorafsNativeTransactionSignerBindingV1 {
     /// Validate and construct an expected production signer binding.
     ///
@@ -145,38 +133,32 @@ impl SorafsNativeTransactionSignerBindingV1 {
             qualification,
         })
     }
-
     /// Return the isolated signer role.
     #[must_use]
     pub const fn role(&self) -> SorafsNativeTransactionSignerRoleV1 {
         self.role
     }
-
     /// Return the stable opaque provider handle.
     #[must_use]
     pub fn handle(&self) -> &str {
         &self.handle
     }
-
     /// Return the exact transaction authority.
     #[must_use]
     pub const fn authority(&self) -> &AccountId {
         &self.authority
     }
-
     /// Return the exact provider public key.
     #[must_use]
     pub const fn public_key(&self) -> &PublicKey {
         &self.public_key
     }
-
     /// Return the exact expected provider qualification.
     #[must_use]
     pub const fn qualification(&self) -> SorafsNativeTransactionSignerQualificationV1 {
         self.qualification
     }
 }
-
 /// Invalid expected signer binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SorafsNativeTransactionSignerBindingErrorV1 {
@@ -189,7 +171,6 @@ pub enum SorafsNativeTransactionSignerBindingErrorV1 {
     /// Public key does not derive the configured transaction authority.
     AuthorityKeyMismatch,
 }
-
 /// Payload-free failure while probing an external signer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SorafsNativeTransactionSignerProbeErrorV1 {
@@ -198,7 +179,6 @@ pub enum SorafsNativeTransactionSignerProbeErrorV1 {
     /// The provider refused or could not answer the public probe.
     Refused,
 }
-
 /// Shared identity contract implemented by every native transaction signer.
 ///
 /// Implementations must return public identity only. Credentials, private keys,
@@ -215,16 +195,12 @@ pub enum SorafsNativeTransactionSignerProbeErrorV1 {
 pub trait SorafsNativeTransactionSignerProviderV1: Send + Sync {
     /// Return the one isolated role served by this provider.
     fn role(&self) -> SorafsNativeTransactionSignerRoleV1;
-
     /// Return the stable opaque provider handle.
     fn handle(&self) -> &str;
-
     /// Return the transaction authority controlled by this provider.
     fn authority(&self) -> AccountId;
-
     /// Probe the exact public key controlled by this provider.
     fn public_key(&self) -> Result<PublicKey, SorafsNativeTransactionSignerProbeErrorV1>;
-
     /// Probe the active adapter revision and public-policy digest.
     fn qualification(
         &self,
@@ -233,7 +209,6 @@ pub trait SorafsNativeTransactionSignerProviderV1: Send + Sync {
         SorafsNativeTransactionSignerProbeErrorV1,
     >;
 }
-
 /// Runtime-only signer used by the durable SoraFS proof-outcome forwarder.
 ///
 /// Implementations may delegate to PKCS#11/HSM infrastructure. The signer is
@@ -252,7 +227,6 @@ pub trait SoraFsProofOutcomeTransactionSigner:
         payload: TransactionPayload,
     ) -> Result<SignedTransaction, SoraFsProofOutcomeSigningError>;
 }
-
 /// Payload-free proof-outcome signing failure classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoraFsProofOutcomeSigningError {
@@ -267,7 +241,6 @@ pub enum SoraFsProofOutcomeSigningError {
     /// Provider identity, key, revision, or policy changed around signing.
     QualificationChanged,
 }
-
 /// Runtime-only signer used by the durable native SoraFS repair forwarder.
 ///
 /// Implementations receive only a fully constructed fee-quoted payload and
@@ -283,7 +256,6 @@ pub trait SoraFsRepairTransactionSigner:
         payload: TransactionPayload,
     ) -> Result<SignedTransaction, SoraFsRepairTransactionSigningError>;
 }
-
 /// Payload-free native repair transaction signing failure classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoraFsRepairTransactionSigningError {
@@ -298,7 +270,6 @@ pub enum SoraFsRepairTransactionSigningError {
     /// Provider identity, key, revision, or policy changed around signing.
     QualificationChanged,
 }
-
 /// Runtime-only signer used by the durable native SoraFS reserve/rent forwarder.
 ///
 /// The signer receives only a fully constructed fee-quoted payload and has no
@@ -314,7 +285,6 @@ pub trait SoraFsReserveTransactionSigner:
         payload: TransactionPayload,
     ) -> Result<SignedTransaction, SoraFsReserveTransactionSigningError>;
 }
-
 /// Payload-free native reserve/rent transaction signing failure classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoraFsReserveTransactionSigningError {
@@ -329,7 +299,6 @@ pub enum SoraFsReserveTransactionSigningError {
     /// Provider identity, key, revision, or policy changed around signing.
     QualificationChanged,
 }
-
 /// Runtime-only signer used by the durable native SoraFS orderbook forwarder.
 ///
 /// The signer receives only a fully constructed fee-quoted payload and has no
@@ -344,7 +313,6 @@ pub trait SoraFsOrderbookTransactionSigner:
         payload: TransactionPayload,
     ) -> Result<SignedTransaction, SoraFsOrderbookTransactionSigningError>;
 }
-
 /// Payload-free native orderbook transaction signing failure classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoraFsOrderbookTransactionSigningError {
@@ -359,7 +327,6 @@ pub enum SoraFsOrderbookTransactionSigningError {
     /// Provider identity, key, revision, or policy changed around signing.
     QualificationChanged,
 }
-
 /// Startup or request-bound signer qualification failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SorafsNativeTransactionSignerQualificationErrorV1 {
@@ -390,7 +357,6 @@ pub enum SorafsNativeTransactionSignerQualificationErrorV1 {
     /// Provider identity changed between adjacent probes.
     ProviderDrift,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProviderSnapshotV1 {
     role: SorafsNativeTransactionSignerRoleV1,
@@ -399,7 +365,6 @@ struct ProviderSnapshotV1 {
     public_key: PublicKey,
     qualification: SorafsNativeTransactionSignerQualificationV1,
 }
-
 fn validate_public_key_algorithm(public_key: &PublicKey) -> Result<(), ()> {
     if matches!(
         public_key.try_algorithm(),
@@ -410,7 +375,6 @@ fn validate_public_key_algorithm(public_key: &PublicKey) -> Result<(), ()> {
         Err(())
     }
 }
-
 fn probe_provider(
     provider: &(impl SorafsNativeTransactionSignerProviderV1 + ?Sized),
 ) -> Result<ProviderSnapshotV1, SorafsNativeTransactionSignerQualificationErrorV1> {
@@ -442,7 +406,6 @@ fn probe_provider(
         qualification,
     })
 }
-
 fn validate_snapshot(
     expected_role: SorafsNativeTransactionSignerRoleV1,
     binding: &SorafsNativeTransactionSignerBindingV1,
@@ -476,13 +439,11 @@ fn validate_snapshot(
     }
     Ok(())
 }
-
 struct QualifiedNativeTransactionSignerV1<S: ?Sized> {
     expected_role: SorafsNativeTransactionSignerRoleV1,
     binding: SorafsNativeTransactionSignerBindingV1,
     provider: Arc<S>,
 }
-
 impl<S> QualifiedNativeTransactionSignerV1<S>
 where
     S: SorafsNativeTransactionSignerProviderV1 + ?Sized,
@@ -507,16 +468,13 @@ where
             provider,
         })
     }
-
     fn revalidate(&self) -> Result<(), SorafsNativeTransactionSignerQualificationErrorV1> {
         let snapshot = probe_provider(self.provider.as_ref())?;
         validate_snapshot(self.expected_role, &self.binding, &snapshot)
     }
-
     fn accepts_payload(&self, payload: &TransactionPayload) -> bool {
         payload.authority() == self.binding.authority()
     }
-
     fn accepts_transaction(
         &self,
         transaction: &SignedTransaction,
@@ -529,7 +487,6 @@ where
             && transaction.verify_signature().is_ok()
     }
 }
-
 macro_rules! define_qualified_signer {
     (
         $wrapper:ident,
@@ -542,27 +499,22 @@ macro_rules! define_qualified_signer {
         struct $wrapper {
             inner: QualifiedNativeTransactionSignerV1<dyn $trait_name>,
         }
-
         impl SorafsNativeTransactionSignerProviderV1 for $wrapper {
             fn role(&self) -> SorafsNativeTransactionSignerRoleV1 {
                 self.inner.binding.role()
             }
-
             fn handle(&self) -> &str {
                 self.inner.binding.handle()
             }
-
             fn authority(&self) -> AccountId {
                 self.inner.binding.authority().clone()
             }
-
             fn public_key(&self) -> Result<PublicKey, SorafsNativeTransactionSignerProbeErrorV1> {
                 self.inner
                     .revalidate()
                     .map_err(|_| SorafsNativeTransactionSignerProbeErrorV1::Unavailable)?;
                 Ok(self.inner.binding.public_key().clone())
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -575,7 +527,6 @@ macro_rules! define_qualified_signer {
                 Ok(self.inner.binding.qualification())
             }
         }
-
         impl $trait_name for $wrapper {
             fn sign(
                 &self,
@@ -602,7 +553,6 @@ macro_rules! define_qualified_signer {
                 Ok(transaction)
             }
         }
-
         #[doc = $constructor_doc]
         ///
         /// The provider is probed twice before this function returns. The
@@ -623,7 +573,6 @@ macro_rules! define_qualified_signer {
         }
     };
 }
-
 define_qualified_signer!(
     QualifiedProofOutcomeTransactionSignerV1,
     SoraFsProofOutcomeTransactionSigner,
@@ -656,25 +605,20 @@ define_qualified_signer!(
     qualify_sorafs_orderbook_transaction_signer_v1,
     "Qualify one native orderbook signer against its exact expected binding."
 );
-
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
-    };
-
+    use super::*;
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         transaction::{FeePaymentIntent, TransactionBuilder, signed::MultisigSignatures},
     };
-
-    use super::*;
-
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
     const EXPECTED_QUALIFICATION: SorafsNativeTransactionSignerQualificationV1 =
         SorafsNativeTransactionSignerQualificationV1::new(7, [0xA7; 32]);
-
     enum TestSignOutput {
         Exact,
         SubstitutePayload(TransactionPayload),
@@ -682,7 +626,6 @@ mod tests {
         AttachProofSidecar,
         AttachEmptyMultisigSidecar,
     }
-
     struct TestProvider {
         role: SorafsNativeTransactionSignerRoleV1,
         handle: String,
@@ -714,7 +657,6 @@ mod tests {
         sign_output: Mutex<TestSignOutput>,
         sign_calls: AtomicUsize,
     }
-
     impl TestProvider {
         fn new(
             role: SorafsNativeTransactionSignerRoleV1,
@@ -725,7 +667,6 @@ mod tests {
                 .expect("derive native signer fixture");
             Self::with_keypair(role, handle, keypair)
         }
-
         fn with_keypair(
             role: SorafsNativeTransactionSignerRoleV1,
             handle: impl Into<String>,
@@ -745,7 +686,6 @@ mod tests {
                 sign_calls: AtomicUsize::new(0),
             }
         }
-
         fn expected_binding(&self) -> SorafsNativeTransactionSignerBindingV1 {
             SorafsNativeTransactionSignerBindingV1::try_new(
                 self.role,
@@ -756,7 +696,6 @@ mod tests {
             )
             .expect("valid native signer fixture binding")
         }
-
         fn set_qualification(
             &self,
             value: Result<
@@ -769,7 +708,6 @@ mod tests {
                 .lock()
                 .expect("qualification fixture lock") = value;
         }
-
         fn drift_qualification_after_probe(
             &self,
             value: Result<
@@ -782,7 +720,6 @@ mod tests {
                 .lock()
                 .expect("post-probe qualification fixture lock") = Some(value);
         }
-
         fn drift_qualification_after_sign(
             &self,
             value: Result<
@@ -795,27 +732,22 @@ mod tests {
                 .lock()
                 .expect("post-sign qualification fixture lock") = Some(value);
         }
-
         fn substitute_payload_once(&self, payload: TransactionPayload) {
             *self.sign_output.lock().expect("sign-output fixture lock") =
                 TestSignOutput::SubstitutePayload(payload);
         }
-
         fn forge_signature_once(&self, signer: KeyPair) {
             *self.sign_output.lock().expect("sign-output fixture lock") =
                 TestSignOutput::ForgeSignature(signer);
         }
-
         fn attach_proof_sidecar_once(&self) {
             *self.sign_output.lock().expect("sign-output fixture lock") =
                 TestSignOutput::AttachProofSidecar;
         }
-
         fn attach_empty_multisig_sidecar_once(&self) {
             *self.sign_output.lock().expect("sign-output fixture lock") =
                 TestSignOutput::AttachEmptyMultisigSidecar;
         }
-
         fn sign_payload(&self, payload: TransactionPayload) -> Result<SignedTransaction, ()> {
             self.sign_calls.fetch_add(1, Ordering::SeqCst);
             let output = std::mem::replace(
@@ -873,30 +805,25 @@ mod tests {
             Ok(transaction)
         }
     }
-
     impl SorafsNativeTransactionSignerProviderV1 for TestProvider {
         fn role(&self) -> SorafsNativeTransactionSignerRoleV1 {
             self.role
         }
-
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn authority(&self) -> AccountId {
             self.authority
                 .lock()
                 .expect("authority fixture lock")
                 .clone()
         }
-
         fn public_key(&self) -> Result<PublicKey, SorafsNativeTransactionSignerProbeErrorV1> {
             self.public_key
                 .lock()
                 .expect("public-key fixture lock")
                 .clone()
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -918,7 +845,6 @@ mod tests {
             current
         }
     }
-
     macro_rules! impl_test_role_signer {
         ($trait_name:ident, $error:ident) => {
             impl $trait_name for TestProvider {
@@ -928,7 +854,6 @@ mod tests {
             }
         };
     }
-
     impl_test_role_signer!(
         SoraFsProofOutcomeTransactionSigner,
         SoraFsProofOutcomeSigningError
@@ -945,7 +870,6 @@ mod tests {
         SoraFsOrderbookTransactionSigner,
         SoraFsOrderbookTransactionSigningError
     );
-
     fn payload(authority: AccountId) -> TransactionPayload {
         TransactionBuilder::new(
             crate::signed_query_test_network_id(),
@@ -955,7 +879,6 @@ mod tests {
         .into_payload()
         .expect("valid native signer fixture payload")
     }
-
     #[test]
     fn all_role_constructors_accept_exact_production_bindings() {
         let proof = Arc::new(TestProvider::new(
@@ -965,7 +888,6 @@ mod tests {
         ));
         qualify_sorafs_proof_outcome_transaction_signer_v1(proof.expected_binding(), proof.clone())
             .expect("qualify proof-outcome signer");
-
         let repair = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::Repair,
             "hsm://sorafs/repair/primary",
@@ -973,7 +895,6 @@ mod tests {
         ));
         qualify_sorafs_repair_transaction_signer_v1(repair.expected_binding(), repair.clone())
             .expect("qualify repair signer");
-
         let reserve = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::Reserve,
             "hsm://sorafs/reserve/primary",
@@ -981,7 +902,6 @@ mod tests {
         ));
         qualify_sorafs_reserve_transaction_signer_v1(reserve.expected_binding(), reserve.clone())
             .expect("qualify reserve signer");
-
         let orderbook = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::Orderbook,
             "hsm://sorafs/orderbook/primary",
@@ -990,7 +910,6 @@ mod tests {
         qualify_sorafs_orderbook_transaction_signer_v1(orderbook.expected_binding(), orderbook)
             .expect("qualify orderbook signer");
     }
-
     #[test]
     fn expected_bindings_enforce_handle_grammar_qualification_and_key_identity() {
         let provider = TestProvider::new(
@@ -1000,7 +919,6 @@ mod tests {
         );
         let authority = provider.authority();
         let public_key = provider.public_key().expect("fixture public key");
-
         for handle in [
             "hsm://sorafs/proof-outcome/primary",
             "pkcs11:prod/native_signer.v1-slot_a",
@@ -1051,7 +969,6 @@ mod tests {
                 Err(SorafsNativeTransactionSignerBindingErrorV1::InvalidQualification)
             );
         }
-
         let secp = KeyPair::try_from_seed(vec![0x22; 32], Algorithm::Secp256k1)
             .expect("derive unsupported signer fixture");
         assert_eq!(
@@ -1075,7 +992,6 @@ mod tests {
             Err(SorafsNativeTransactionSignerBindingErrorV1::AuthorityKeyMismatch)
         );
     }
-
     #[test]
     fn startup_rejects_each_stable_provider_substitution() {
         let provider = Arc::new(TestProvider::new(
@@ -1084,7 +1000,6 @@ mod tests {
             0x31,
         ));
         let expected = provider.expected_binding();
-
         let wrong_handle = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
             "hsm://sorafs/proof-outcome/secondary",
@@ -1094,7 +1009,6 @@ mod tests {
             qualify_sorafs_proof_outcome_transaction_signer_v1(expected.clone(), wrong_handle),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::HandleMismatch)
         ));
-
         let wrong_key = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
             "hsm://sorafs/proof-outcome/primary",
@@ -1104,7 +1018,6 @@ mod tests {
             qualify_sorafs_proof_outcome_transaction_signer_v1(expected.clone(), wrong_key),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::PublicKeyMismatch)
         ));
-
         let wrong_authority_key = KeyPair::try_from_seed(vec![0x33; 32], Algorithm::Ed25519)
             .expect("derive authority substitution fixture");
         *provider.authority.lock().expect("authority fixture lock") =
@@ -1114,7 +1027,6 @@ mod tests {
             Err(SorafsNativeTransactionSignerQualificationErrorV1::AuthorityMismatch)
         ));
         *provider.authority.lock().expect("authority fixture lock") = expected.authority().clone();
-
         provider.set_qualification(Ok(SorafsNativeTransactionSignerQualificationV1::new(
             expected.qualification().revision() + 1,
             expected.qualification().policy_digest(),
@@ -1123,7 +1035,6 @@ mod tests {
             qualify_sorafs_proof_outcome_transaction_signer_v1(expected.clone(), provider.clone()),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::RevisionMismatch)
         ));
-
         provider.set_qualification(Ok(SorafsNativeTransactionSignerQualificationV1::new(
             expected.qualification().revision(),
             [0xB7; 32],
@@ -1133,7 +1044,6 @@ mod tests {
             Err(SorafsNativeTransactionSignerQualificationErrorV1::PolicyDigestMismatch)
         ));
     }
-
     #[test]
     fn startup_rejects_invalid_or_unavailable_provider_probes() {
         let provider = Arc::new(TestProvider::new(
@@ -1155,7 +1065,6 @@ mod tests {
             Err(SorafsNativeTransactionSignerQualificationErrorV1::ProviderUnavailable)
         ));
     }
-
     #[test]
     fn startup_rejects_unavailable_key_invalid_handle_algorithm_and_probe_drift() {
         let expected_provider = Arc::new(TestProvider::new(
@@ -1164,7 +1073,6 @@ mod tests {
             0x45,
         ));
         let binding = expected_provider.expected_binding();
-
         *expected_provider
             .public_key
             .lock()
@@ -1174,7 +1082,6 @@ mod tests {
             qualify_sorafs_proof_outcome_transaction_signer_v1(binding.clone(), expected_provider),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::ProviderUnavailable)
         ));
-
         for handle in [
             "mock://sorafs/proof-outcome/primary",
             "https://operator:secret@signer",
@@ -1193,7 +1100,6 @@ mod tests {
                 Err(SorafsNativeTransactionSignerQualificationErrorV1::InvalidProviderHandle)
             ));
         }
-
         let secp = KeyPair::try_from_seed(vec![0x46; 32], Algorithm::Secp256k1)
             .expect("derive unsupported provider fixture");
         let unsupported_algorithm = Arc::new(TestProvider::with_keypair(
@@ -1208,7 +1114,6 @@ mod tests {
             ),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::UnsupportedProviderKeyAlgorithm)
         ));
-
         let drifting = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
             "hsm://sorafs/proof-outcome/primary",
@@ -1222,7 +1127,6 @@ mod tests {
             Err(SorafsNativeTransactionSignerQualificationErrorV1::ProviderDrift)
         ));
     }
-
     #[test]
     fn constructors_reject_binding_and_provider_role_confusion() {
         let proof = Arc::new(TestProvider::new(
@@ -1234,7 +1138,6 @@ mod tests {
             qualify_sorafs_repair_transaction_signer_v1(proof.expected_binding(), proof.clone()),
             Err(SorafsNativeTransactionSignerQualificationErrorV1::BindingRoleMismatch)
         ));
-
         let repair_binding = SorafsNativeTransactionSignerBindingV1::try_new(
             SorafsNativeTransactionSignerRoleV1::Repair,
             proof.handle.clone(),
@@ -1248,7 +1151,6 @@ mod tests {
             Err(SorafsNativeTransactionSignerQualificationErrorV1::ProviderRoleMismatch)
         ));
     }
-
     #[test]
     fn qualified_signer_revalidates_before_and_after_signing() {
         let pre_drift = Arc::new(TestProvider::new(
@@ -1268,7 +1170,6 @@ mod tests {
             Err(SoraFsProofOutcomeSigningError::QualificationChanged)
         );
         assert_eq!(pre_drift.sign_calls.load(Ordering::SeqCst), 0);
-
         let post_drift = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
             "hsm://sorafs/proof-outcome/post-drift",
@@ -1287,7 +1188,6 @@ mod tests {
         );
         assert_eq!(post_drift.sign_calls.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn qualified_signer_maps_probe_failure_to_qualification_changed() {
         let provider = Arc::new(TestProvider::new(
@@ -1307,7 +1207,6 @@ mod tests {
         );
         assert_eq!(provider.sign_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn double_qualification_rejects_live_provider_drift() {
         let provider = Arc::new(TestProvider::new(
@@ -1323,7 +1222,6 @@ mod tests {
             binding.qualification().revision() + 1,
             binding.qualification().policy_digest(),
         )));
-
         assert_eq!(
             qualified.public_key(),
             Err(SorafsNativeTransactionSignerProbeErrorV1::Unavailable)
@@ -1337,7 +1235,6 @@ mod tests {
             Err(SorafsNativeTransactionSignerQualificationErrorV1::ProviderUnavailable)
         ));
     }
-
     #[test]
     fn double_qualification_rejects_unavailable_live_provider() {
         let provider = Arc::new(TestProvider::new(
@@ -1350,7 +1247,6 @@ mod tests {
             qualify_sorafs_proof_outcome_transaction_signer_v1(binding.clone(), provider.clone())
                 .expect("qualify double-qualification unavailable fixture");
         provider.set_qualification(Err(SorafsNativeTransactionSignerProbeErrorV1::Unavailable));
-
         assert_eq!(
             qualified.public_key(),
             Err(SorafsNativeTransactionSignerProbeErrorV1::Unavailable)
@@ -1364,7 +1260,6 @@ mod tests {
             Err(SorafsNativeTransactionSignerQualificationErrorV1::ProviderUnavailable)
         ));
     }
-
     #[test]
     fn qualified_facade_keeps_immutable_infallible_identity_and_rejects_stale_public_probes() {
         let provider = Arc::new(TestProvider::new(
@@ -1386,7 +1281,6 @@ mod tests {
             binding.qualification().revision() + 1,
             [0xB8; 32],
         )));
-
         assert_eq!(qualified.role(), binding.role());
         assert_eq!(qualified.handle(), binding.handle());
         assert_eq!(qualified.authority(), binding.authority().clone());
@@ -1406,7 +1300,6 @@ mod tests {
         );
         assert_eq!(provider.sign_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn qualified_signer_rejects_unbound_input_authority_before_provider_call() {
         let provider = Arc::new(TestProvider::new(
@@ -1421,14 +1314,12 @@ mod tests {
         .expect("qualify input-authority fixture");
         let unbound = KeyPair::try_from_seed(vec![0x84; 32], Algorithm::Ed25519)
             .expect("derive unbound-authority fixture");
-
         assert_eq!(
             qualified.sign(payload(AccountId::new(unbound.public_key().clone()))),
             Err(SoraFsProofOutcomeSigningError::InputAuthorityMismatch)
         );
         assert_eq!(provider.sign_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn qualified_signer_rejects_provider_substituted_payload() {
         let provider = Arc::new(TestProvider::new(
@@ -1448,14 +1339,12 @@ mod tests {
             .checked_add(1)
             .expect("fixture creation time has headroom");
         provider.substitute_payload_once(substituted_payload);
-
         assert_eq!(
             qualified.sign(exact_payload),
             Err(SoraFsProofOutcomeSigningError::SubstitutedTransaction)
         );
         assert_eq!(provider.sign_calls.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn qualified_signer_rejects_provider_forged_signature() {
         let provider = Arc::new(TestProvider::new(
@@ -1471,14 +1360,12 @@ mod tests {
         let forger = KeyPair::try_from_seed(vec![0x87; 32], Algorithm::Ed25519)
             .expect("derive forged-signature fixture");
         provider.forge_signature_once(forger);
-
         assert_eq!(
             qualified.sign(payload(qualified.authority())),
             Err(SoraFsProofOutcomeSigningError::SubstitutedTransaction)
         );
         assert_eq!(provider.sign_calls.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn qualified_signer_accepts_exact_envelope_and_rejects_provider_sidecars() {
         let exact_provider = Arc::new(TestProvider::new(
@@ -1496,7 +1383,6 @@ mod tests {
         assert!(exact.attachments().is_none());
         assert!(exact.multisig_signatures().is_none());
         assert_eq!(exact_provider.sign_calls.load(Ordering::SeqCst), 1);
-
         let attached_provider = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
             "hsm://sorafs/proof-outcome/proof-sidecar",
@@ -1513,7 +1399,6 @@ mod tests {
             Err(SoraFsProofOutcomeSigningError::SubstitutedTransaction)
         );
         assert_eq!(attached_provider.sign_calls.load(Ordering::SeqCst), 1);
-
         let multisig_provider = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
             "hsm://sorafs/proof-outcome/empty-multisig-sidecar",
@@ -1531,7 +1416,6 @@ mod tests {
         );
         assert_eq!(multisig_provider.sign_calls.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn keypair_has_no_blanket_production_signer_impl_in_source() {
         let source = include_str!("../lib.rs");

@@ -37,7 +37,6 @@ fn native_amx_retirement_targets_exact_participant_incarnation_and_fails_closed(
     );
     assert!(lane_payload_targets_retirement(&payload, &exact));
     assert!(!lane_payload_targets_retirement(&payload, &recreated));
-
     let mut malformed = payload.clone();
     malformed.native_amx_receipts[0]
         .as_mut()
@@ -50,7 +49,6 @@ fn native_amx_retirement_targets_exact_participant_incarnation_and_fails_closed(
         lane_payload_targets_retirement(&malformed, &recreated),
         "internally inconsistent participant evidence must fail closed"
     );
-
     let mut misaligned = payload;
     misaligned.native_amx_receipts.clear();
     assert!(
@@ -58,7 +56,6 @@ fn native_amx_retirement_targets_exact_participant_incarnation_and_fails_closed(
         "routing/receipt vector misalignment must fail closed"
     );
 }
-
 #[test]
 fn mixed_role_native_amx_retirement_ignores_coordinator_and_targets_remote_routes() {
     let block = crate::sumeragi::exec::result_bearing_native_manifest_block_for_tests();
@@ -77,7 +74,6 @@ fn mixed_role_native_amx_retirement_ignores_coordinator_and_targets_remote_route
         Ok(false),
         "participant-form coordinator evidence must not block retirement"
     );
-
     let separate_participants = receipt
         .legs
         .iter()
@@ -114,7 +110,6 @@ fn mixed_role_native_amx_retirement_ignores_coordinator_and_targets_remote_route
         Ok(true)
     );
 }
-
 #[test]
 fn unjournaled_nonzero_activation_without_marker_fails_closed_before_intent() {
     let temp = TempDir::new().expect("temporary directory");
@@ -126,7 +121,6 @@ fn unjournaled_nonzero_activation_without_marker_fails_closed_before_intent() {
     let initial_activations =
         BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
     let kura = open_kura(&root, &extended);
-
     let error = kura
         .apply_lane_geometry_transition(
             &extended,
@@ -160,7 +154,6 @@ fn unjournaled_nonzero_activation_without_marker_fails_closed_before_intent() {
         "rejection must not synthesize authority for the unjournaled dynamic lane"
     );
 }
-
 #[test]
 fn scale_in_conservatively_rejects_pending_native_amx_participant_route() {
     let temp = TempDir::new().expect("temporary directory");
@@ -190,7 +183,6 @@ fn scale_in_conservatively_rejects_pending_native_amx_participant_route() {
     );
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist coordinator-owned participant work");
-
     let error = kura
         .apply_lane_geometry_transition(
             &extended,
@@ -220,7 +212,6 @@ fn scale_in_conservatively_rejects_pending_native_amx_participant_route() {
         journal_before,
         "rejected retirement must not alter the published geometry journal"
     );
-
     let certified_retirement = BTreeSet::from([(
         LaneId::new(1),
         DataSpaceId::new(8),
@@ -244,7 +235,6 @@ fn scale_in_conservatively_rejects_pending_native_amx_participant_route() {
         "unexpected certified-retirement participant error: {error:?}"
     );
 }
-
 #[test]
 fn certified_drain_frontier_admission_rejects_stale_route_and_missing_native_evidence() {
     let temp = TempDir::new().expect("temporary directory");
@@ -262,7 +252,6 @@ fn certified_drain_frontier_admission_rejects_stale_route_and_missing_native_evi
         1,
         Some(Hash::new(b"retirement drain frontier")),
     );
-
     let mut stale = frontier;
     stale.lane_incarnation = Hash::new(b"stale retirement incarnation");
     let error = kura
@@ -273,7 +262,6 @@ fn certified_drain_frontier_admission_rejects_stale_route_and_missing_native_evi
         ErrorKind::InvalidInput,
         "certified lane drain frontier is malformed or targets another incarnation",
     );
-
     frontier.native_application =
         Some(iroha_data_model::merge::LaneDrainNativeFrontierEvidenceV1 {
             version: 1,
@@ -309,7 +297,6 @@ fn certified_drain_frontier_admission_rejects_stale_route_and_missing_native_evi
         "certified Native-derived drain frontier lacks its exact durable receipt",
     );
 }
-
 #[test]
 fn scale_in_allows_unrelated_participant_work() {
     let temp = TempDir::new().expect("temporary directory");
@@ -339,7 +326,6 @@ fn scale_in_allows_unrelated_participant_work() {
     );
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist non-target participant work");
-
     kura.apply_lane_geometry_transition(
         &extended,
         &initial,
@@ -351,7 +337,6 @@ fn scale_in_allows_unrelated_participant_work() {
     )
     .unwrap_or_else(|error| panic!("unrelated lane should not pin old retirement: {error}"));
 }
-
 #[test]
 fn certified_scale_in_archives_pending_work_owned_by_exact_retiring_incarnation() {
     let temp = TempDir::new().expect("temporary directory");
@@ -376,7 +361,6 @@ fn certified_scale_in_archives_pending_work_owned_by_exact_retiring_incarnation(
         certified_geometry_lane_block(retiring_lane, retiring_dataspace, retiring_incarnation, 1);
     kura.write_certified_lane_block_artifact(&artifact)
         .expect("persist late local certified work");
-
     let error = kura
         .apply_lane_geometry_transition(
             &extended,
@@ -393,7 +377,6 @@ fn certified_scale_in_archives_pending_work_owned_by_exact_retiring_incarnation(
             .contains("pending certified work belongs to a retiring lane incarnation"),
         "unexpected ordinary-retirement error: {error:?}"
     );
-
     kura.apply_lane_geometry_transition_with_certified_retirements(
         &extended,
         &initial,
@@ -414,7 +397,6 @@ fn certified_scale_in_archives_pending_work_owned_by_exact_retiring_incarnation(
         "certified retirement must move the old lane directory into the journal archive"
     );
 }
-
 #[test]
 fn capacity_blocked_retirement_archives_recovered_lane_history_intact() {
     let temp = TempDir::new().expect("temporary directory");
@@ -473,7 +455,6 @@ fn capacity_blocked_retirement_archives_recovered_lane_history_intact() {
     Arc::get_mut(&mut kura)
         .expect("exclusive Kura before capacity-blocked retirement")
         .max_disk_usage_bytes = 1;
-
     kura.apply_lane_geometry_transition(
         &extended,
         &initial,
@@ -484,7 +465,6 @@ fn capacity_blocked_retirement_archives_recovered_lane_history_intact() {
         &BTreeSet::new(),
     )
     .expect("capacity-blocked compaction must not strand retirement");
-
     let journal = kura
         .read_lane_geometry_journal()
         .expect("read capacity-blocked retirement journal");
@@ -514,7 +494,6 @@ fn capacity_blocked_retirement_archives_recovered_lane_history_intact() {
         "retirement must archive only the recovered stable pair",
     );
 }
-
 #[test]
 fn certified_scale_in_rejects_wrong_retirement_identity() {
     for (label, dataspace, incarnation) in [
@@ -544,7 +523,6 @@ fn certified_scale_in_rejects_wrong_retirement_identity() {
             &extended_incarnations,
             &extended_activations,
         );
-
         let error = kura
             .apply_lane_geometry_transition_with_certified_retirements(
                 &extended,
@@ -572,7 +550,6 @@ fn certified_scale_in_rejects_wrong_retirement_identity() {
         );
     }
 }
-
 #[test]
 fn scale_in_allows_recreated_incarnation_and_unrelated_participant_work() {
     for (label, participant_lane, participant_dataspace, participant_incarnation) in [
@@ -614,7 +591,6 @@ fn scale_in_allows_recreated_incarnation_and_unrelated_participant_work() {
         );
         kura.persist_lane_executable_payload(&payload, network_id, epoch)
             .expect("persist non-target participant work");
-
         kura.apply_lane_geometry_transition(
             &extended,
             &initial,
@@ -627,7 +603,6 @@ fn scale_in_allows_recreated_incarnation_and_unrelated_participant_work() {
         .unwrap_or_else(|error| panic!("{label} should not pin old retirement: {error}"));
     }
 }
-
 #[test]
 fn scale_in_rejects_unknown_and_malformed_artifact_files_before_intent() {
     for (label, file_name, bytes, expected_kind, expected_message) in [
@@ -685,7 +660,6 @@ fn scale_in_rejects_unknown_and_malformed_artifact_files_before_intent() {
         );
         fs::create_dir_all(&artifact_dir).expect("artifact directory");
         fs::write(artifact_dir.join(file_name), bytes).expect("hostile artifact");
-
         let error = kura
             .apply_lane_geometry_transition(
                 &extended,
@@ -705,7 +679,6 @@ fn scale_in_rejects_unknown_and_malformed_artifact_files_before_intent() {
         );
     }
 }
-
 #[test]
 fn first_release_retirement_policy_rejects_every_stale_autonomous_sidecar_class() {
     for (label, file_name, expected_kind, expected_message) in [
@@ -775,7 +748,6 @@ fn first_release_retirement_policy_rejects_every_stale_autonomous_sidecar_class(
         fs::create_dir_all(&artifact_dir).expect("artifact directory");
         fs::write(artifact_dir.join(file_name), b"stale autonomous bytes")
             .expect("stale autonomous artifact");
-
         let _prune_guard = kura.prune_lock.lock();
         let _canonical_chain_guard = kura.canonical_chain_lock.lock();
         let pending_canonical_bytes = kura
@@ -792,7 +764,6 @@ fn first_release_retirement_policy_rejects_every_stale_autonomous_sidecar_class(
         assert_geometry_io_error(&error, expected_kind, expected_message);
     }
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn first_release_retirement_discards_unpublished_temp_for_every_fixed_pair() {
@@ -833,7 +804,6 @@ fn first_release_retirement_discards_unpublished_temp_for_every_fixed_pair() {
         let temp_path = artifact_dir.join(data_file).with_extension("norito.tmp");
         fs::write(&temp_path, b"unpublished progress rewrite")
             .expect("stage unpublished progress data temp");
-
         kura.first_release_lane_retirement_admissible_for_test(
             retiring_lane,
             retiring_entry.dataspace_id,
@@ -848,7 +818,6 @@ fn first_release_retirement_discards_unpublished_temp_for_every_fixed_pair() {
         );
     }
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn first_release_retirement_rejects_directory_substitution_at_pair_refresh() {
@@ -913,7 +882,6 @@ fn first_release_retirement_rejects_directory_substitution_at_pair_refresh() {
             &artifact_dir,
             displaced.clone(),
         );
-
         let error = kura
             .first_release_lane_retirement_admissible_for_test(
                 retiring_lane,
@@ -943,7 +911,6 @@ fn first_release_retirement_rejects_directory_substitution_at_pair_refresh() {
         );
     }
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn first_release_retirement_classifies_recovery_sync_failure_as_retryable() {
@@ -984,7 +951,6 @@ fn first_release_retirement_classifies_recovery_sync_failure_as_retryable() {
     )
     .expect("stage retryable ownership index");
     ProgressSidecarDurabilityFault::Data.inject();
-
     let error = kura
         .first_release_lane_retirement_admissible_for_test(
             retiring_lane,
@@ -999,7 +965,6 @@ fn first_release_retirement_classifies_recovery_sync_failure_as_retryable() {
     );
     assert!(temp_data_path.is_file());
     assert!(temp_index_path.is_file());
-
     kura.first_release_lane_retirement_admissible_for_test(
         retiring_lane,
         retiring_entry.dataspace_id,
@@ -1011,7 +976,6 @@ fn first_release_retirement_classifies_recovery_sync_failure_as_retryable() {
     assert!(!temp_data_path.exists());
     assert!(!temp_index_path.exists());
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn first_release_retirement_recovers_complete_certified_rewrite_before_snapshot() {
@@ -1043,7 +1007,6 @@ fn first_release_retirement_recovers_complete_certified_rewrite_before_snapshot(
     let temp_index_path = index_path.with_extension("index.tmp");
     fs::rename(&data_path, &temp_data_path).expect("stage complete certified data temp");
     fs::rename(&index_path, &temp_index_path).expect("stage complete certified index temp");
-
     kura.first_release_lane_retirement_admissible_for_test(
         retiring_lane,
         retiring_entry.dataspace_id,
@@ -1061,7 +1024,6 @@ fn first_release_retirement_recovers_complete_certified_rewrite_before_snapshot(
     assert!(!temp_data_path.exists());
     assert!(!temp_index_path.exists());
 }
-
 #[test]
 fn first_release_retirement_repairs_frontier_only_certified_work_before_snapshot() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1094,14 +1056,12 @@ fn first_release_retirement_repairs_frontier_only_certified_work_before_snapshot
     );
     fs::remove_file(&data_path).expect("simulate lost certified data after frontier publish");
     fs::remove_file(&index_path).expect("simulate lost certified index after frontier publish");
-
     kura.first_release_lane_retirement_admissible_for_test(
         retiring_lane,
         retiring_entry.dataspace_id,
         retiring_incarnation,
     )
     .expect("retirement scan must repair the exact frontier certificate before its snapshot");
-
     assert!(data_path.is_file(), "frontier recovery must recreate data");
     assert!(
         index_path.is_file(),
@@ -1117,7 +1077,6 @@ fn first_release_retirement_repairs_frontier_only_certified_work_before_snapshot
         "retirement recovery must restore the frontier certificate exactly"
     );
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn first_release_retirement_rejects_obsolete_autonomous_rewrite_without_promotion() {
@@ -1157,7 +1116,6 @@ fn first_release_retirement_rejects_obsolete_autonomous_rewrite_without_promotio
         .to_bytes(),
     )
     .expect("stage complete autonomous index temp");
-
     let error = kura
         .first_release_lane_retirement_admissible_for_test(
             retiring_lane,
@@ -1175,12 +1133,10 @@ fn first_release_retirement_rejects_obsolete_autonomous_rewrite_without_promotio
     assert!(temp_data_path.exists());
     assert!(temp_index_path.exists());
 }
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn first_release_retirement_recovery_rejects_temp_symlink_without_external_writes() {
     use std::os::unix::fs::symlink;
-
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("recovery-temp-symlink");
     let (initial, extended) = retirement_test_configs();
@@ -1209,7 +1165,6 @@ fn first_release_retirement_recovery_rejects_temp_symlink_without_external_write
     let sentinel: &[u8] = b"must remain outside retirement recovery";
     fs::write(&external, sentinel).expect("write external recovery sentinel");
     symlink(&external, &temp_data_path).expect("install recovery temp symlink");
-
     let error = kura
         .first_release_lane_retirement_admissible_for_test(
             retiring_lane,
@@ -1231,7 +1186,6 @@ fn first_release_retirement_recovery_rejects_temp_symlink_without_external_write
             .is_symlink()
     );
 }
-
 #[test]
 fn first_release_retirement_requires_bound_progress_sidecar_durability() {
     for (label, fault, expected_message) in [
@@ -1281,7 +1235,6 @@ fn first_release_retirement_requires_bound_progress_sidecar_durability() {
         assert_eq!(work.certified.proposal.descriptor.lane_id, retiring_lane);
         assert_eq!(work.entry.epoch_id, 1);
         assert_eq!(work.carrier.header().height().get(), 2);
-
         fault.inject();
         let error = kura
             .first_release_lane_retirement_admissible_for_test(
@@ -1300,7 +1253,6 @@ fn first_release_retirement_requires_bound_progress_sidecar_durability() {
             journal_before,
             "{label} barrier failure must not publish a retirement intent"
         );
-
         kura.first_release_lane_retirement_admissible_for_test(
             retiring_lane,
             retiring_entry.dataspace_id,
@@ -1327,7 +1279,6 @@ fn first_release_retirement_requires_bound_progress_sidecar_durability() {
         );
     }
 }
-
 #[test]
 fn fake_stale_and_forked_payload_hints_cannot_bypass_scale_in_admission() {
     for label in ["fork-hash", "stale-height", "stale-view"] {
@@ -1392,7 +1343,6 @@ fn fake_stale_and_forked_payload_hints_cannot_bypass_scale_in_admission() {
         certified.proposal.payload_block_hint = Some(hint);
         kura.write_certified_lane_block_artifact(&certified)
             .expect("persist adversarial hinted certificate");
-
         let error = kura
             .apply_lane_geometry_transition(
                 &extended,
@@ -1422,7 +1372,6 @@ fn fake_stale_and_forked_payload_hints_cannot_bypass_scale_in_admission() {
         );
     }
 }
-
 #[test]
 fn canonical_block_and_current_receipt_release_applied_participant_work() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1533,7 +1482,6 @@ fn canonical_block_and_current_receipt_release_applied_participant_work() {
         .expect("persist globally backed lane certificate");
     kura.persist_lane_block_application_receipt(&proposal)
         .expect("persist canonical current application receipt");
-
     kura.apply_lane_geometry_transition(
         &extended,
         &initial,
@@ -1552,7 +1500,6 @@ fn canonical_block_and_current_receipt_release_applied_participant_work() {
         baseline_records + 1
     );
 }
-
 #[test]
 fn consecutive_published_retirements_do_not_resurrect_intermediate_lanes() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1609,7 +1556,6 @@ fn consecutive_published_retirements_do_not_resurrect_intermediate_lanes() {
     ];
     let kura = open_kura(&root, &configs[0]);
     install_retirement_test_lane_markers(&kura, &configs[0], &geometries[0].0, &geometries[0].1);
-
     for index in 0..3 {
         kura.apply_lane_geometry_transition(
             &configs[index],
@@ -1628,7 +1574,6 @@ fn consecutive_published_retirements_do_not_resurrect_intermediate_lanes() {
             None,
         )
         .expect("publish consecutive retirement catalog");
-
         for retired in (4 - u32::try_from(index).expect("index fits u32") - 1)..4 {
             assert!(
                 !configs[0]
@@ -1649,7 +1594,6 @@ fn consecutive_published_retirements_do_not_resurrect_intermediate_lanes() {
         "every consecutive retirement remains recoverable until checkpoint GC"
     );
 }
-
 #[test]
 fn zero_file_create_intent_rolls_back_to_a_sealed_image_and_replays() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1680,7 +1624,6 @@ fn zero_file_create_intent_rolls_back_to_a_sealed_image_and_replays() {
     assert!(!live_merge.exists());
     assert!(!unpublished_blocks.exists());
     assert!(!unpublished_merge.exists());
-
     for _ in 0..2 {
         kura.recover_lane_geometry_journal(&initial, &initial_incarnations, &initial_activations)
             .expect("zero-file Intent rollback is idempotent");
@@ -1699,7 +1642,6 @@ fn zero_file_create_intent_rolls_back_to_a_sealed_image_and_replays() {
             LaneGeometryPhase::RolledBack
         );
     }
-
     // A same-authority retry must resume when replay durably retargeted the retained pair to
     // live but crashed before the first rename. The terminal phase is deliberately left at
     // `RolledBack` across that filesystem window.
@@ -1739,11 +1681,9 @@ fn zero_file_create_intent_rolls_back_to_a_sealed_image_and_replays() {
         "journal-owned empty block store has a non-empty lane-artifact directory",
     );
     fs::remove_file(unexpected_artifact).expect("restore empty lane artifact directory");
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
-
         let displaced = root.join("displaced-direct-lane-artifacts");
         let outside = root.join("outside-lane-artifacts");
         fs::create_dir(&outside).expect("create outside lane artifact directory");
@@ -1776,7 +1716,6 @@ fn zero_file_create_intent_rolls_back_to_a_sealed_image_and_replays() {
         &unpublished_merge,
     )
     .expect("same-authority lifecycle restores an immutable rollback image");
-
     // Replay persisted its live-target seal but died before either rename. Remaining on the
     // old catalog must recognize that exact opposite-path seal and normalize it back to the
     // retained rollback image.
@@ -1798,7 +1737,6 @@ fn zero_file_create_intent_rolls_back_to_a_sealed_image_and_replays() {
         &unpublished_merge,
     )
     .expect("rollback image is sealed back to itself");
-
     for _ in 0..2 {
         kura.recover_lane_geometry_journal(
             &extended,
@@ -1816,7 +1754,6 @@ fn zero_file_create_intent_rolls_back_to_a_sealed_image_and_replays() {
         );
     }
 }
-
 #[test]
 fn create_intent_repairs_authenticated_blocks_before_merge_for_rollback_and_replay() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1847,7 +1784,6 @@ fn create_intent_repairs_authenticated_blocks_before_merge_for_rollback_and_repl
     fs::remove_file(&staged_merge).expect("inject crash before merge creation");
     assert!(staged_blocks.join(MARKER_FILE_NAME).is_file());
     assert!(!staged_merge.exists());
-
     kura.recover_lane_geometry_journal(&initial, &initial_incarnations, &initial_activations)
         .expect("rollback repairs authenticated partial provisioning");
     kura.require_sealed_geometry_pair_at(
@@ -1858,7 +1794,6 @@ fn create_intent_repairs_authenticated_blocks_before_merge_for_rollback_and_repl
         &staged_merge,
     )
     .expect("repaired rollback image is sealed");
-
     kura.recover_lane_geometry_journal(&extended, &extended_incarnations, &extended_activations)
         .expect("replay consumes the repaired image");
     kura.require_complete_geometry_binding_at(
@@ -1868,7 +1803,6 @@ fn create_intent_repairs_authenticated_blocks_before_merge_for_rollback_and_repl
     )
     .expect("created binding is complete after replay");
 }
-
 #[test]
 fn create_intent_rejects_merge_only_staging_without_adopting_it() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1895,7 +1829,6 @@ fn create_intent_rejects_merge_only_staging_without_adopting_it() {
     create_dir_all_with_context(staged_merge.parent().expect("merge parent"))
         .expect("create merge parent");
     fs::write(&staged_merge, b"").expect("inject merge-only staging");
-
     let error = kura
         .recover_lane_geometry_journal(&extended, &extended_incarnations, &extended_activations)
         .expect_err("merge-only staging must fail closed");
@@ -1911,7 +1844,6 @@ fn create_intent_rejects_merge_only_staging_without_adopting_it() {
         LaneGeometryPhase::Intent
     );
 }
-
 #[test]
 fn create_intent_rejects_complete_unsealed_foreign_pairs() {
     for location in ["staging", "live"] {
@@ -1946,7 +1878,6 @@ fn create_intent_rejects_complete_unsealed_foreign_pairs() {
         let injected_merge = kura.binding_merge_path(&injected);
         let sentinel = injected_blocks.join("foreign-intent-payload");
         fs::write(&sentinel, b"must-not-be-adopted").expect("inject foreign block payload");
-
         let error = kura
             .recover_lane_geometry_journal(&extended, &extended_incarnations, &extended_activations)
             .expect_err("an unsealed nonempty pair must not gain authority from Intent");
@@ -1966,7 +1897,6 @@ fn create_intent_rejects_complete_unsealed_foreign_pairs() {
         );
     }
 }
-
 #[test]
 fn terminal_geometry_replay_never_reauthorizes_empty_provisioning() {
     // A failed rollback of a published transition must retain `CatalogPublished`; otherwise a
@@ -2006,7 +1936,6 @@ fn terminal_geometry_replay_never_reauthorizes_empty_provisioning() {
             .expect("simulate loss of published blocks");
         fs::remove_file(kura.binding_merge_path(updated))
             .expect("simulate loss of published merge log");
-
         for _ in 0..2 {
             let error = kura
                 .recover_lane_geometry_journal(
@@ -2038,7 +1967,6 @@ fn terminal_geometry_replay_never_reauthorizes_empty_provisioning() {
             );
         }
     }
-
     // The inverse direction must likewise retain `RolledBack` when its authenticated retained
     // image disappears; replay is not authority to create a replacement from nothing.
     {
@@ -2074,7 +2002,6 @@ fn terminal_geometry_replay_never_reauthorizes_empty_provisioning() {
             .expect("unpublished merge");
         fs::remove_dir_all(&unpublished_blocks).expect("simulate loss of retained block image");
         fs::remove_file(&unpublished_merge).expect("simulate loss of retained merge image");
-
         for _ in 0..2 {
             let error = kura
                 .recover_lane_geometry_journal(
@@ -2097,7 +2024,6 @@ fn terminal_geometry_replay_never_reauthorizes_empty_provisioning() {
         }
     }
 }
-
 #[test]
 fn recovery_rolls_back_partial_unpublished_create_and_replays_it_idempotently() {
     let temp = TempDir::new().expect("temporary directory");
@@ -2106,7 +2032,6 @@ fn recovery_rolls_back_partial_unpublished_create_and_replays_it_idempotently() 
     let (initial_incarnations, initial_activations) = initial_geometry();
     let (extended_incarnations, extended_activations) = extended_geometry();
     let kura = open_kura(&root, &initial);
-
     kura.apply_lane_geometry_transition(
         &initial,
         &extended,
@@ -2119,7 +2044,6 @@ fn recovery_rolls_back_partial_unpublished_create_and_replays_it_idempotently() 
     .expect("prepare journaled create");
     let lane1 = extended.entry(LaneId::new(1)).expect("lane one");
     assert!(lane1.blocks_dir(&root).exists());
-
     kura.apply_lane_geometry_transition(
         &initial,
         &initial,
@@ -2131,7 +2055,6 @@ fn recovery_rolls_back_partial_unpublished_create_and_replays_it_idempotently() 
     )
     .expect("same-catalog startup rolls back unpublished create");
     assert!(!lane1.blocks_dir(&root).exists());
-
     // Model a process dying after restoring only the block directory from
     // the unpublished archive. Recovery of the old catalog must complete
     // the inverse operation without duplicating or dropping either path.
@@ -2160,14 +2083,12 @@ fn recovery_rolls_back_partial_unpublished_create_and_replays_it_idempotently() 
     kura.move_geometry_path(&unpublished_blocks, &live_blocks, true)
         .expect("inject partial roll-forward");
     assert!(lane1.blocks_dir(&root).exists());
-
     for _ in 0..2 {
         kura.recover_lane_geometry_journal(&initial, &initial_incarnations, &initial_activations)
             .expect("idempotent rollback recovery");
         assert!(!lane1.blocks_dir(&root).exists());
         assert!(!lane1.merge_log_path(&root).exists());
     }
-
     // The catalog is now authoritative (as after snapshot/block replay),
     // so the same retained intent must roll forward and recover the exact
     // unpublished segment instead of provisioning an empty replacement.
@@ -2187,14 +2108,12 @@ fn recovery_rolls_back_partial_unpublished_create_and_replays_it_idempotently() 
         LaneGeometryPhase::CatalogPublished
     );
 }
-
 #[test]
 fn geometry_moves_never_clobber_targets_materialized_after_preflight() {
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
     let (initial, _) = initial_and_extended_configs();
     let kura = open_kura(&root, &initial);
-
     let source_blocks = root.join("move-collision/source-blocks");
     let target_blocks = root.join("move-collision/target-blocks");
     fs::create_dir_all(&source_blocks).expect("seed source block directory");
@@ -2220,7 +2139,6 @@ fn geometry_moves_never_clobber_targets_materialized_after_preflight() {
             .is_none(),
         "the injected directory must remain untouched"
     );
-
     let source_merge = root.join("move-collision/source-merge.log");
     let target_merge = root.join("move-collision/target-merge.log");
     fs::write(&source_merge, b"source-merge").expect("seed source merge file");
@@ -2238,7 +2156,6 @@ fn geometry_moves_never_clobber_targets_materialized_after_preflight() {
         b"injected-no-clobber-target"
     );
 }
-
 #[cfg(any(
     target_vendor = "apple",
     target_os = "linux",
@@ -2254,7 +2171,6 @@ fn runtime_geometry_recovery_cannot_escape_a_substituted_parent() {
     let (incarnations, activations) = initial_geometry();
     let kura = open_kura(&root, &initial);
     let _ = durable_geometry_snapshot_identity(&kura, 1);
-
     kura.apply_lane_geometry_transition(
         &initial,
         &updated,
@@ -2272,7 +2188,6 @@ fn runtime_geometry_recovery_cannot_escape_a_substituted_parent() {
             .phase,
         LaneGeometryPhase::FilesApplied
     );
-
     let previous_blocks = initial.primary().blocks_dir(&root);
     let updated_blocks = updated.primary().blocks_dir(&root);
     let blocks_parent = previous_blocks.parent().expect("block-store parent");
@@ -2287,7 +2202,6 @@ fn runtime_geometry_recovery_cannot_escape_a_substituted_parent() {
         displaced_parent.clone(),
         outside_parent.clone(),
     ));
-
     kura.recover_lane_geometry_journal(&initial, &incarnations, &activations)
         .expect_err("a substituted runtime parent must fail recovery closed");
     assert!(
@@ -2342,13 +2256,11 @@ fn runtime_geometry_recovery_cannot_escape_a_substituted_parent() {
         "failed recovery must not advance the durable journal phase"
     );
 }
-
 #[test]
 fn bootstrap_geometry_moves_never_clobber_targets_materialized_after_preflight() {
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
     fs::create_dir_all(&root).expect("create bootstrap Kura root");
-
     let source_blocks = root.join("bootstrap-collision/source-blocks");
     let target_blocks = root.join("bootstrap-collision/target-blocks");
     fs::create_dir_all(&source_blocks).expect("seed bootstrap source blocks");
@@ -2370,7 +2282,6 @@ fn bootstrap_geometry_moves_never_clobber_targets_materialized_after_preflight()
             .is_none(),
         "the racing directory must remain empty and must not receive source contents"
     );
-
     let source_merge = root.join("bootstrap-collision/source-merge.log");
     let target_merge = root.join("bootstrap-collision/target-merge.log");
     fs::write(&source_merge, b"source-merge").expect("seed bootstrap source merge");
@@ -2388,12 +2299,10 @@ fn bootstrap_geometry_moves_never_clobber_targets_materialized_after_preflight()
         b"injected-no-clobber-target"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn bootstrap_geometry_move_rejects_a_symlinked_target_parent() {
     use std::os::unix::fs::symlink;
-
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
     let outside = temp.path().join("outside");
@@ -2403,7 +2312,6 @@ fn bootstrap_geometry_move_rejects_a_symlinked_target_parent() {
     fs::write(&source, b"canonical-source").expect("seed canonical source");
     symlink(&outside, root.join("escaped-parent")).expect("plant target-parent symlink");
     let target = root.join("escaped-parent/target.log");
-
     bootstrap_move_geometry_path(&root, &source, &target, false)
         .expect_err("bootstrap move must reject an ancestor symlink");
     assert_eq!(
@@ -2415,7 +2323,6 @@ fn bootstrap_geometry_move_rejects_a_symlinked_target_parent() {
         "bootstrap recovery must not publish outside the authenticated Kura root"
     );
 }
-
 #[test]
 fn mutable_pair_move_supports_a_stationary_block_path_and_later_merge_appends() {
     let temp = TempDir::new().expect("temporary directory");
@@ -2439,7 +2346,6 @@ fn mutable_pair_move_supports_a_stationary_block_path_and_later_merge_appends() 
     kura.provision_geometry_binding(&binding)
         .expect("provision movable geometry pair");
     fs::write(&old_merge, b"before-move").expect("seed merge bytes");
-
     kura.move_geometry_binding_pair(
         &binding,
         &blocks,
@@ -2456,7 +2362,6 @@ fn mutable_pair_move_supports_a_stationary_block_path_and_later_merge_appends() 
         .expect("read completed live marker");
     assert!(marker.move_target_blocks.is_none());
     assert!(marker.move_target_merge.is_none());
-
     fs::write(&new_merge, b"before-move-and-legitimate-append").expect("append live merge history");
     kura.move_geometry_binding_pair(
         &binding,

@@ -2,18 +2,15 @@
 //!
 //! These assert decode/view roundtrips and tag selection behavior. Byte-level
 //! goldens can be added later via fixed hex strings once formats are frozen.
-
 use norito::columnar::{
     ADAPTIVE_TAG_AOS, ADAPTIVE_TAG_NCB, decode_rows_u64_str_bool_adaptive,
     encode_rows_u64_str_bool_adaptive, view_ncb_u64_str_bool,
 };
-
 fn make_rows(n: usize) -> Vec<(u64, String, bool)> {
     (0..n)
         .map(|i| (i as u64, format!("name{i:#x}"), i % 3 == 0))
         .collect()
 }
-
 #[test]
 fn adaptive_roundtrip_small_prefers_aos() {
     let rows = make_rows(5);
@@ -29,7 +26,6 @@ fn adaptive_roundtrip_small_prefers_aos() {
     let decoded = decode_rows_u64_str_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows);
 }
-
 #[test]
 fn adaptive_roundtrip_large_prefers_ncb_and_view_works() {
     let rows = make_rows(256);
@@ -44,7 +40,6 @@ fn adaptive_roundtrip_large_prefers_ncb_and_view_works() {
     ));
     let decoded = decode_rows_u64_str_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows);
-
     if bytes[0] == ADAPTIVE_TAG_NCB {
         let view = view_ncb_u64_str_bool(&bytes[1..]).expect("view");
         assert_eq!(view.len(), rows.len());
@@ -57,7 +52,6 @@ fn adaptive_roundtrip_large_prefers_ncb_and_view_works() {
         }
     }
 }
-
 #[test]
 #[cfg(feature = "compact-len")]
 fn golden_bytes_small_sample() {
@@ -77,7 +71,6 @@ fn golden_bytes_small_sample() {
     let expected_hex = "000201010000000000000005616c69636501020000000000000003626f6200";
     assert_eq!(to_hex(&bytes), expected_hex);
 }
-
 #[cfg(feature = "compact-len")]
 fn to_hex(bs: &[u8]) -> String {
     let mut s = String::with_capacity(bs.len() * 2);

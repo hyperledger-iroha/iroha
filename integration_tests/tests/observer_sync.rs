@@ -1,8 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Observer/sync-only node catches up behind a small validator swarm.
-
-use std::collections::{HashMap, HashSet};
-
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
@@ -13,13 +10,12 @@ use iroha_test_network::{
 };
 use iroha_test_samples::ALICE_ID;
 use norito::json::Value as JsonValue;
+use std::collections::{HashMap, HashSet};
 use toml::{Table, Value as TomlValue};
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn observer_node_catches_up() -> Result<()> {
     init_instruction_registry();
-
     // Prepare a validator network that satisfies DA quorum requirements.
     let Some((network, rt)) = sandbox::build_network_blocking_or_skip(
         NetworkBuilder::new().with_min_peers(4),
@@ -27,12 +23,10 @@ fn observer_node_catches_up() -> Result<()> {
     ) else {
         return Ok(());
     };
-
     // Build observer peer (sync-only) ahead of validator bootstrap so validators trust it.
     let observer = NetworkPeerBuilder::new()
         .with_seed(Some(b"observer"))
         .build(network.env());
-
     // Prepare a trusted_peers override including existing peers and the observer itself.
     // The observer is trusted for networking/block sync, but it is intentionally omitted
     // from `trusted_peers_pop` so the validator roster remains the four validator peers.
@@ -43,13 +37,11 @@ fn observer_node_catches_up() -> Result<()> {
         .collect();
     // Add observer itself to trusted peers; ignore duplicates
     let _ = tp.push(Peer::new(observer.p2p_address(), observer.id()));
-
     let mut pops_by_peer_id = HashMap::new();
     for peer in network.peers() {
         let pop = peer.bls_pop().expect("network peers should have BLS PoPs");
         pops_by_peer_id.insert(peer.id(), pop.to_vec());
     }
-
     let trusted_peers: Vec<String> = tp.iter().map(|peer| peer.to_string()).collect();
     let mut trusted_peers_pop = Vec::new();
     let mut seen = HashSet::new();
@@ -72,14 +64,12 @@ fn observer_node_catches_up() -> Result<()> {
         );
         trusted_peers_pop.push(TomlValue::Table(pop_entry));
     }
-
     let trusted_observer_layer = Table::new()
         .write(["trusted_peers"], trusted_peers.clone())
         .write(
             ["trusted_peers_pop"],
             TomlValue::Array(trusted_peers_pop.clone()),
         );
-
     // Start validators with the observer in trusted peers so permissioned networking accepts it.
     let validator_layers: Vec<_> = network
         .config_layers()
@@ -97,11 +87,9 @@ fn observer_node_catches_up() -> Result<()> {
             "observer_node_catches_up_start_validator",
         )?;
     }
-
     let override_layer = trusted_observer_layer
         .write(["sumeragi", "role"], "observer")
         .write(["logger", "level"], "INFO");
-
     // Start the observer with role override and extended trusted peers
     if sandbox::handle_result(
         rt.block_on(async {
@@ -122,7 +110,6 @@ fn observer_node_catches_up() -> Result<()> {
     {
         return Ok(());
     }
-
     let sync_timeout = network.sync_timeout();
     let wait_for_observer = |height| -> Result<()> {
         rt.block_on(async {
@@ -134,10 +121,8 @@ fn observer_node_catches_up() -> Result<()> {
         })?;
         Ok(())
     };
-
     // Observer should have at least the genesis block
     wait_for_observer(1)?;
-
     // Produce non-genesis blocks and verify height parity across all peers
     // Baseline timestamp (ms) to filter POST /v1/accounts/:id/transactions/query later.
     let now_ms = || -> u64 {
@@ -153,7 +138,6 @@ fn observer_node_catches_up() -> Result<()> {
     let key: Name = "note".parse().unwrap();
     let mut client = network.peer().client();
     client.transaction_status_timeout = std::time::Duration::from_millis(180_000);
-
     // 1st block: set note = "v1"
     println!("observer_sync: submitting v1");
     let t1_lo = now_ms();
@@ -165,7 +149,6 @@ fn observer_node_catches_up() -> Result<()> {
     // Wait until validators reach total >= 2 and observer catches up
     rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 2).await })?;
     wait_for_observer(2)?;
-
     // 2nd block: set note = "v2"
     let _t2_lo = now_ms();
     println!("observer_sync: submitting v2");
@@ -177,7 +160,6 @@ fn observer_node_catches_up() -> Result<()> {
     // Wait until validators reach total >= 3 and observer catches up
     rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 3).await })?;
     wait_for_observer(3)?;
-
     // 3rd block: change some other metadata to ensure another non-genesis block
     let alice2 = ALICE_ID.clone();
     let key2: Name = "znote".parse().unwrap();
@@ -188,11 +170,9 @@ fn observer_node_catches_up() -> Result<()> {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     println!("observer_sync: v3 committed");
-
     // Wait until validators reach total >= 4 and observer catches up
     rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 4).await })?;
     wait_for_observer(4)?;
-
     // 4th block: set note = "v4"
     let t4_lo = now_ms();
     println!("observer_sync: submitting v4");
@@ -207,7 +187,6 @@ fn observer_node_catches_up() -> Result<()> {
     println!("observer_sync: v4 committed");
     rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 5).await })?;
     wait_for_observer(5)?;
-
     // 5th block: set znote = "v5"
     let t5_lo = now_ms();
     println!("observer_sync: submitting v5");
@@ -223,7 +202,6 @@ fn observer_node_catches_up() -> Result<()> {
     rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 6).await })?;
     wait_for_observer(6)?;
     let t_hi = now_ms();
-
     // Verify exact height parity across validators and observer
     let mut validator_totals = Vec::new();
     for p in network.peers() {
@@ -234,7 +212,6 @@ fn observer_node_catches_up() -> Result<()> {
     }
     let target_height = *validator_totals.iter().max().unwrap_or(&0);
     wait_for_observer(target_height)?;
-
     let mut all_totals = Vec::new();
     for p in network.peers() {
         let s = rt
@@ -250,7 +227,6 @@ fn observer_node_catches_up() -> Result<()> {
         all_totals.iter().all(|&t| t == all_totals[0]),
         "heights differ: {all_totals:?}"
     );
-
     // Verify state reflects latest metadata values on all peers (validators + observer).
     // Kura heights can advance before state/indices are fully applied, so poll for metadata.
     let note_key: Name = "note".parse().unwrap();
@@ -284,12 +260,10 @@ fn observer_node_catches_up() -> Result<()> {
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
     };
-
     for p in network.peers() {
         wait_for_metadata(p)?;
     }
     wait_for_metadata(&observer)?;
-
     // Redundant HTTP verification via Torii: fetch last transactions for Alice from each peer
     let alice_id_str = format!("{}", *ALICE_ID);
     let fetch_tx_http = |peer: &NetworkPeer, limit: usize| -> Result<(u64, Vec<JsonValue>)> {
@@ -328,7 +302,6 @@ fn observer_node_catches_up() -> Result<()> {
         };
         Ok((total, items))
     };
-
     for p in network.peers() {
         let (total, items) = fetch_tx_http(p, 5)?;
         assert!(
@@ -349,7 +322,6 @@ fn observer_node_catches_up() -> Result<()> {
         );
         assert!(!items.is_empty(), "expected items via HTTP for observer");
     }
-
     // POST /v1/accounts/{alice}/transactions/query with timestamp filter since t0
     let post_tx_query =
         |peer: &NetworkPeer, min_ts: u64, max_ts: Option<u64>| -> Result<(u64, Vec<JsonValue>)> {
@@ -414,7 +386,6 @@ fn observer_node_catches_up() -> Result<()> {
             };
             Ok((total, items))
         };
-
     // For a narrower window, use [t1_lo, t_hi], expecting exactly 5 Alice txs
     // Removed unused underscore-prefixed binding _extract_ts
     // Helpers to extract timestamp and hash
@@ -429,7 +400,6 @@ fn observer_node_catches_up() -> Result<()> {
             .unwrap_or("")
             .to_string()
     };
-
     for p in network.peers() {
         let (total, mut items) = post_tx_query(p, t1_lo, Some(t_hi))?;
         assert_eq!(
@@ -493,7 +463,6 @@ fn observer_node_catches_up() -> Result<()> {
             "observer last two entrypoint_hash identical"
         );
     }
-
     let fetch_status_json = |url: String| -> Result<JsonValue> {
         let body = rt.block_on(async {
             integration_tests::http::client()
@@ -510,7 +479,6 @@ fn observer_node_catches_up() -> Result<()> {
             format!("HTTP /status did not return JSON from {url}; body starts with `{snippet}`")
         })
     };
-
     // HTTP /status parity snapshot: compare HTTP JSON blocks/non_empty with peer.status()
     for p in network.peers() {
         let s = rt
@@ -558,6 +526,5 @@ fn observer_node_catches_up() -> Result<()> {
             "Observer HTTP /status mismatch (non_empty)"
         );
     }
-
     Ok(())
 }

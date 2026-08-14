@@ -1,15 +1,12 @@
 //! Debug print for Mixed encoding layout
 #![cfg(feature = "json")]
-
 use iroha_schema::IntoSchema;
 use norito::core::to_bytes;
-
 #[derive(IntoSchema, norito::derive::Encode, norito::derive::Decode, PartialEq, Debug)]
 struct Mixed {
     name: String,
     nums: Vec<u32>,
 }
-
 fn hex(bytes: &[u8]) -> String {
     bytes
         .iter()
@@ -17,7 +14,6 @@ fn hex(bytes: &[u8]) -> String {
         .collect::<Vec<_>>()
         .join("")
 }
-
 #[test]
 fn print_mixed_layout() {
     if norito::core::default_encode_flags() == 0 {
@@ -40,7 +36,6 @@ fn print_mixed_layout() {
     let flags = header[header.len() - 1];
     let show = payload.len().min(64);
     eprintln!("payload[0..{show}]={}", hex(&payload[..show]));
-
     if (flags & norito::core::header_flags::PACKED_STRUCT) == 0 {
         let mut o = 0usize;
         let (name_field_len, name_field_header) =
@@ -53,19 +48,16 @@ fn print_mixed_layout() {
         assert_eq!(&payload[o + name_header..name_end], b"hi");
         assert_eq!(name_len, 2);
         o = name_end;
-
         let (nums_field_len, nums_field_header) =
             norito::core::read_len_from_slice(&payload[o..]).expect("nums field length");
         o += nums_field_header;
         assert!(o + nums_field_len <= payload.len());
         o += nums_field_len;
         assert_eq!(o, payload.len());
-
         let dec: Mixed = norito::decode_from_bytes(&bytes).expect("decode");
         eprintln!("decoded={dec:?}");
         return;
     }
-
     // Parse hybrid packed-struct: [bitset][sizes*][data...]
     let mut o = 0usize;
     let bitset = payload[o];

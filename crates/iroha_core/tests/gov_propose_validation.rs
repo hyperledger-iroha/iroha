@@ -1,10 +1,8 @@
 //! Governance instruction validation tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::items_after_statements)]
-
-use core::convert::TryInto;
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
+use core::convert::TryInto;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -25,16 +23,13 @@ use iroha_executor_data_model::permission::governance::{
 };
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
 fn checked_random_governance_proposal_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked governance proposal keypair")
 }
-
 #[test]
 fn governance_proposal_fixture_uses_checked_randomness() {
     let _key_pair = checked_random_governance_proposal_keypair();
 }
-
 fn mk_state_and_authority() -> (State, iroha_data_model::account::AccountId) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -49,7 +44,6 @@ fn mk_state_and_authority() -> (State, iroha_data_model::account::AccountId) {
     let state = State::new_for_testing(world, kura, query);
     (state, account_id)
 }
-
 fn proposal_contract_address(
     authority: &iroha_data_model::account::AccountId,
 ) -> iroha_data_model::smart_contract::ContractAddress {
@@ -63,7 +57,6 @@ fn proposal_contract_address(
     )
     .expect("proposal contract address")
 }
-
 fn compute_proposal_id(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     code_hex: &str,
@@ -94,11 +87,9 @@ fn compute_proposal_id(
     out.copy_from_slice(&digest[..32]);
     out
 }
-
 fn canonical_abi_hex() -> String {
     hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
 }
-
 #[test]
 fn propose_rejects_invalid_hex() {
     let (state, authority) = mk_state_and_authority();
@@ -106,7 +97,6 @@ fn propose_rejects_invalid_hex() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let perm: Permission = CanProposeContractDeployment {
         contract_address: contract_address.clone(),
     }
@@ -114,7 +104,6 @@ fn propose_rejects_invalid_hex() {
     Grant::account_permission(perm, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant propose");
-
     let result = iroha_data_model::isi::governance::ProposeDeployContract {
         contract_address,
         code_hash_hex: "zz".into(),
@@ -125,10 +114,8 @@ fn propose_rejects_invalid_hex() {
         manifest_provenance: None,
     }
     .execute(&authority, &mut stx);
-
     assert!(result.is_err(), "invalid hex must be rejected");
 }
-
 #[test]
 fn propose_rejects_non_canonical_abi_hash_for_v1() {
     let (state, authority) = mk_state_and_authority();
@@ -136,7 +123,6 @@ fn propose_rejects_non_canonical_abi_hash_for_v1() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let perm: Permission = CanProposeContractDeployment {
         contract_address: contract_address.clone(),
     }
@@ -144,7 +130,6 @@ fn propose_rejects_non_canonical_abi_hash_for_v1() {
     Grant::account_permission(perm, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant propose");
-
     let result = iroha_data_model::isi::governance::ProposeDeployContract {
         contract_address,
         code_hash_hex: "11".repeat(32),
@@ -155,13 +140,11 @@ fn propose_rejects_non_canonical_abi_hash_for_v1() {
         manifest_provenance: None,
     }
     .execute(&authority, &mut stx);
-
     assert!(
         result.is_err(),
         "v1 contract proposals must use the canonical ABI hash"
     );
 }
-
 #[test]
 fn propose_window_override_applied() {
     let (state, authority) = mk_state_and_authority();
@@ -169,7 +152,6 @@ fn propose_window_override_applied() {
     let header = BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let perm: Permission = CanProposeContractDeployment {
         contract_address: contract_address.clone(),
     }
@@ -177,7 +159,6 @@ fn propose_window_override_applied() {
     Grant::account_permission(perm, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant propose");
-
     let min_delay = stx.gov.min_enactment_delay;
     let lower = 5 + min_delay + 7;
     let upper = lower + 3;
@@ -194,7 +175,6 @@ fn propose_window_override_applied() {
     }
     .execute(&authority, &mut stx)
     .expect("propose");
-
     let pid = compute_proposal_id(&contract_address, &code_hex, &abi_hex);
     let rid = hex::encode(pid);
     let rec = stx
@@ -206,7 +186,6 @@ fn propose_window_override_applied() {
     assert_eq!(rec.h_start, lower);
     assert_eq!(rec.h_end, upper);
 }
-
 #[test]
 fn propose_window_below_min_delay_rejected() {
     let (state, authority) = mk_state_and_authority();
@@ -214,7 +193,6 @@ fn propose_window_below_min_delay_rejected() {
     let header = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let perm: Permission = CanProposeContractDeployment {
         contract_address: contract_address.clone(),
     }
@@ -222,7 +200,6 @@ fn propose_window_below_min_delay_rejected() {
     Grant::account_permission(perm, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant propose");
-
     let min_delay = stx.gov.min_enactment_delay;
     let lower = 4 + min_delay - 1;
     let result = iroha_data_model::isi::governance::ProposeDeployContract {
@@ -238,22 +215,18 @@ fn propose_window_below_min_delay_rejected() {
         manifest_provenance: None,
     }
     .execute(&authority, &mut stx);
-
     assert!(result.is_err(), "window below min delay must fail");
 }
-
 #[test]
 fn enact_requires_approved_status() {
     let (state, authority) = mk_state_and_authority();
     let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let perm: Permission = CanEnactGovernance.into();
     Grant::account_permission(perm, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant enact");
-
     let pid = [0xAB; 32];
     stx.world.governance_proposals_mut().insert(
         pid,
@@ -275,17 +248,14 @@ fn enact_requires_approved_status() {
             enacted_at_height: None,
         },
     );
-
     let res = iroha_data_model::isi::governance::EnactReferendum {
         referendum_id: pid,
         preimage_hash: [0u8; 32],
         at_window: AtWindow { lower: 1, upper: 1 },
     }
     .execute(&authority, &mut stx);
-
     assert!(res.is_err(), "must reject enactment before approval");
 }
-
 #[test]
 fn proposal_record_exposes_deploy_payload() {
     let (_state, authority) = mk_state_and_authority();
@@ -311,7 +281,6 @@ fn proposal_record_exposes_deploy_payload() {
         .expect("payload must be present");
     assert_eq!(payload.contract_address, contract_address);
 }
-
 #[test]
 fn zk_ballot_rejects_oversized_proof() {
     let (mut state, authority) = mk_state_and_authority();
@@ -321,11 +290,9 @@ fn zk_ballot_rejects_oversized_proof() {
     state
         .set_zk(zk_cfg)
         .expect("empty SCCP outbox accepts governance test configuration");
-
     let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let perm: Permission = CanSubmitGovernanceBallot {
         referendum_id: "election-1".into(),
     }
@@ -333,7 +300,6 @@ fn zk_ballot_rejects_oversized_proof() {
     Grant::account_permission(perm, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant ballot permission");
-
     let oversized = vec![0u8; 16];
     let proof_b64 = BASE64_STD.encode(oversized);
     let res = iroha_data_model::isi::governance::CastZkBallot {
@@ -342,6 +308,5 @@ fn zk_ballot_rejects_oversized_proof() {
         public_inputs_json: "{}".into(),
     }
     .execute(&authority, &mut stx);
-
     assert!(res.is_err(), "oversized proofs must be rejected");
 }

@@ -34,7 +34,6 @@ fn certified_serve_future_slot_blocks_control_and_consensus_replenishment() {
             },
         )
         .expect("install the frozen auxiliary predecessor");
-
     assert!(matches!(
         command_tx.prepare_serve(
             CertifiedServeOwnerKey::Roster(requester.clone()),
@@ -58,7 +57,6 @@ fn certified_serve_future_slot_blocks_control_and_consensus_replenishment() {
             .map(|tracked| tracked.state),
         Some(V2IoServeState::PendingCapacity)
     );
-
     for occurrence in 2..34 {
         for class in [V2IoAdmissionClass::Consensus, V2IoAdmissionClass::Control] {
             assert!(matches!(
@@ -93,7 +91,6 @@ fn certified_serve_future_slot_blocks_control_and_consensus_replenishment() {
         command_rx.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
-
     let prepared = command_tx
         .prepare_serve(CertifiedServeOwnerKey::Roster(requester.clone()), request)
         .expect("materialized future slot is claimed by the exact target");
@@ -110,7 +107,6 @@ fn certified_serve_future_slot_blocks_control_and_consensus_replenishment() {
         Some(V2IoServeState::Terminal)
     );
 }
-
 #[test]
 fn certified_serve_cross_relay_retry_replays_one_terminal_tombstone() {
     let (service, keys) = fixture_with_block_payload();
@@ -151,7 +147,6 @@ fn certified_serve_cross_relay_retry_replays_one_terminal_tombstone() {
         route_a,
         response,
     );
-
     let retry = command_tx
         .prepare_serve(
             CertifiedServeOwnerKey::AuthenticatedSource(source_b.clone()),
@@ -181,7 +176,6 @@ fn certified_serve_cross_relay_retry_replays_one_terminal_tombstone() {
     );
     assert!(state.commands.is_empty());
 }
-
 #[test]
 fn certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fifo() {
     let (service, keys) = fixture_with_block_payload();
@@ -230,7 +224,6 @@ fn certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fi
         1,
         Arc::clone(&admission),
     );
-
     let terminal_admission = command_tx
         .prepare_serve(
             CertifiedServeOwnerKey::Roster(terminal_requester.clone()),
@@ -246,7 +239,6 @@ fn certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fi
         terminal_response,
     );
     assert_eq!(terminal_id.admission_ordinal, 1);
-
     command_tx
         .try_send_as(
             V2IoAdmissionClass::Auxiliary,
@@ -288,7 +280,6 @@ fn certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fi
         );
         assert_eq!(state.next_serve_admission_ordinal, 2);
     }
-
     assert!(matches!(
         command_rx.try_recv(),
         Ok(V2IoCommand::LoadCandidate {
@@ -315,7 +306,6 @@ fn certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fi
             .expect("commit the materialized newer Serve barrier"),
         CertifiedServeCommit::Queued
     ));
-
     let queued_retry = command_tx
         .prepare_serve(
             CertifiedServeOwnerKey::Roster(terminal_requester.clone()),
@@ -364,7 +354,6 @@ fn certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fi
             vec![newer_id]
         );
     }
-
     assert!(matches!(
         command_rx.try_recv(),
         Ok(V2IoCommand::Serve { lifecycle_id, .. }) if lifecycle_id == newer_id
@@ -411,7 +400,6 @@ fn certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fi
         assert!(state.commands.is_empty());
     }
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
-
     command_rx
         .complete_serve_response(newer_id, &newer_response)
         .expect("seal newer terminal Serve response");
@@ -420,7 +408,6 @@ fn certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fi
         .expect("finish the newer Serve fixture without changing the replay tombstone");
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
 }
-
 #[test]
 fn certified_serve_terminal_replay_source_retains_retired_route_and_reconnects() {
     let (mut service, keys) = fixture_with_block_payload();
@@ -474,7 +461,6 @@ fn certified_serve_terminal_replay_source_retains_retired_route_and_reconnects()
         initial_route.clone(),
         response,
     );
-
     let retired_retry = command_tx
         .prepare_serve(
             CertifiedServeOwnerKey::Roster(requester.clone()),
@@ -529,7 +515,6 @@ fn certified_serve_terminal_replay_source_retains_retired_route_and_reconnects()
             .expect("inspect empty replay fanout"),
         "a retired sole route cannot create an empty exact-output fanout"
     );
-
     let reconnected = command_tx
         .prepare_serve(CertifiedServeOwnerKey::Roster(requester.clone()), request)
         .expect("prepare retry after requester reconnect");
@@ -566,7 +551,6 @@ fn certified_serve_terminal_replay_source_retains_retired_route_and_reconnects()
     assert_eq!(replay_admissions.load(AtomicOrdering::Acquire), 1);
     assert!(!service.output_guard.restart_required());
 }
-
 #[test]
 fn certified_serve_terminal_rejects_mismatched_response_hash_without_releasing_owner() {
     let (service, keys) = fixture_with_block_payload();
@@ -620,7 +604,6 @@ fn certified_serve_terminal_rejects_mismatched_response_hash_without_releasing_o
     command_rx
         .complete_serve_response(prepared.lifecycle_id, &correct_response)
         .expect("seal exact terminal response");
-
     let error = command_tx
         .serve_completion_ownership(prepared.lifecycle_id, response.request_hash)
         .expect_err("wrong request hash cannot acquire pre-send ownership");
@@ -628,7 +611,6 @@ fn certified_serve_terminal_rejects_mismatched_response_hash_without_releasing_o
     command_tx
         .serve_completion_ownership(prepared.lifecycle_id, correct_response.request_hash)
         .expect("correct request hash retains pre-send ownership");
-
     let error = command_tx
         .acknowledge_serve_completion(prepared.lifecycle_id, V2IoServeTerminal::Response(response))
         .expect_err("wrong request hash cannot become a replay tombstone");
@@ -643,7 +625,6 @@ fn certified_serve_terminal_rejects_mismatched_response_hash_without_releasing_o
         Some(V2IoServeState::CompletionPending)
     );
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
-
     command_tx
         .acknowledge_serve_completion(
             prepared.lifecycle_id,
@@ -652,7 +633,6 @@ fn certified_serve_terminal_rejects_mismatched_response_hash_without_releasing_o
         .expect("correct exact response becomes the terminal tombstone");
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
 }
-
 #[test]
 fn certified_serve_observer_owner_contains_prepare_and_commit_subfamilies() {
     let (service, keys) = fixture_with_block_payload();
@@ -701,7 +681,6 @@ fn certified_serve_observer_owner_contains_prepare_and_commit_subfamilies() {
         route,
         response,
     );
-
     let commit_admission = command_tx
         .prepare_serve(
             CertifiedServeOwnerKey::AuthenticatedSource(source_b),
@@ -723,7 +702,6 @@ fn certified_serve_observer_owner_contains_prepare_and_commit_subfamilies() {
     command_tx
         .abort_serve(commit_admission)
         .expect("abort observer ownership replacement");
-
     let other = authenticated_serve_request(
         &service.context,
         &other_observer,
@@ -740,7 +718,6 @@ fn certified_serve_observer_owner_contains_prepare_and_commit_subfamilies() {
             if reason.contains("bounded Serve quota")
     ));
 }
-
 #[test]
 fn certified_serve_higher_view_abort_restores_terminal_high_watermark() {
     let (service, keys) = fixture_with_block_payload();
@@ -795,7 +772,6 @@ fn certified_serve_higher_view_abort_restores_terminal_high_watermark() {
     command_tx
         .abort_serve(higher_admission)
         .expect("abort materialized terminal replacement");
-
     let state = command_tx.queue.lock();
     assert_eq!(state.serves.len(), 1);
     assert_eq!(
@@ -808,7 +784,6 @@ fn certified_serve_higher_view_abort_restores_terminal_high_watermark() {
         Some(V2IoServeState::Terminal)
     );
 }
-
 #[test]
 fn certified_serve_receiver_close_aborts_reserved_replacement_without_orphan() {
     let (service, keys) = fixture_with_block_payload();
@@ -870,7 +845,6 @@ fn certified_serve_receiver_close_aborts_reserved_replacement_without_orphan() {
         error.contains("lost its logical lifecycle"),
         "unexpected redundant-abort error: {error}"
     );
-
     let state = command_tx.queue.lock();
     assert!(!state.receiver_open);
     assert!(state.serve_barrier.is_none());
@@ -883,7 +857,6 @@ fn certified_serve_receiver_close_aborts_reserved_replacement_without_orphan() {
     );
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
 }
-
 #[test]
 fn certified_serve_receiver_close_rolls_back_pending_capacity_replacement() {
     let (service, keys) = fixture_with_block_payload();
@@ -962,7 +935,6 @@ fn certified_serve_receiver_close_rolls_back_pending_capacity_replacement() {
         Some(V2IoServeState::PendingCapacity)
     );
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
-
     // The pending request never reserved a physical admission unit. Closing
     // the receiver releases only the predecessor while rolling back the
     // higher-view transaction and restoring its displaced tombstone.
@@ -980,7 +952,6 @@ fn certified_serve_receiver_close_rolls_back_pending_capacity_replacement() {
     );
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
 }
-
 #[test]
 fn certified_serve_receiver_close_rolls_back_materialized_unclaimed_replacement() {
     let (service, keys) = fixture_with_block_payload();
@@ -1074,7 +1045,6 @@ fn certified_serve_receiver_close_rolls_back_materialized_unclaimed_replacement(
             .map(|tracked| tracked.state),
         Some(V2IoServeState::Reserved)
     );
-
     // No second prepare occurred, so no admission token exists outside
     // the queue. Receiver teardown itself must roll back the transaction.
     drop(command_rx);
@@ -1091,7 +1061,6 @@ fn certified_serve_receiver_close_rolls_back_materialized_unclaimed_replacement(
     );
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
 }
-
 #[test]
 fn certified_serve_shutdown_rolls_back_materialized_unclaimed_replacement() {
     let (service, keys) = fixture_with_block_payload();
@@ -1160,7 +1129,6 @@ fn certified_serve_shutdown_rolls_back_materialized_unclaimed_replacement() {
         .lock()
         .serve_barrier
         .expect("replacement owns an off-queue future slot");
-
     let channel_capacity = admission.capacity();
     let (completion_tx, completion_rx) = mpsc::sync_channel(channel_capacity);
     let worker_admission = Arc::clone(&admission);
@@ -1206,7 +1174,6 @@ fn certified_serve_shutdown_rolls_back_materialized_unclaimed_replacement() {
             .map(|tracked| tracked.state),
         Some(V2IoServeState::Reserved)
     );
-
     io.shutdown()
         .expect("shutdown retires the materialized unclaimed replacement");
     let state = queue.lock();
@@ -1221,8 +1188,62 @@ fn certified_serve_shutdown_rolls_back_materialized_unclaimed_replacement() {
         Some(V2IoServeState::Terminal)
     );
     assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
-}
+    drop(state);
 
+    // A raw selected Serve is rolled back into a dormant waiter before
+    // shutdown. That waiter must keep blocking ordinary/control work without
+    // blocking the exact Shutdown command which lets the empty worker exit.
+    let raw = authenticated_serve_request(
+        &service.context,
+        &keys[1],
+        proposal.round,
+        proposal.subject,
+        wire::GlobalPhase::Prepare,
+    );
+    let via = service.context.roster[0].validator.clone();
+    let (shutdown_tx, shutdown_rx, _) = test_io_command_channel(2);
+    let (shutdown_ingress, shutdown_gate) = gated_fair_ingress(&service.context, &shutdown_tx);
+    assert!(matches!(
+        shutdown_ingress.try_push(certified_serve_inbound(raw.request(), via)),
+        Ok(FairV2IngressPushDisposition::Enqueued)
+    ));
+    assert!(matches!(
+        shutdown_tx.try_send_as(V2IoAdmissionClass::Control, V2IoCommand::Shutdown),
+        Err(V2IoTrySendError::Full(V2IoCommand::Shutdown))
+    ));
+    shutdown_tx
+        .rollback_serve_barrier_for_shutdown()
+        .expect("rollback the raw selected Serve before shutdown");
+    {
+        let shutdown_state = shutdown_tx.queue.lock();
+        assert!(shutdown_state.serve_barrier.is_none());
+        assert!(shutdown_state.serve_ingress_reservation.is_none());
+        assert!(shutdown_state.serve_barrier_predecessors.is_empty());
+        assert!(shutdown_state.pending_serve_requests.is_empty());
+        assert_eq!(shutdown_state.serve_ingress_waiters.len(), 1);
+    }
+    assert!(matches!(
+        shutdown_tx.try_send_as(
+            V2IoAdmissionClass::Control,
+            V2IoCommand::LoadCandidate {
+                acquisition_id: LockedCandidateAcquisitionId(93),
+                subject: proposal.subject,
+            },
+        ),
+        Err(V2IoTrySendError::Full(V2IoCommand::LoadCandidate {
+            acquisition_id: LockedCandidateAcquisitionId(93),
+            ..
+        }))
+    ));
+    shutdown_tx
+        .try_send_as(V2IoAdmissionClass::Control, V2IoCommand::Shutdown)
+        .expect("rolled-back raw Serve waiter cannot deadlock exact shutdown");
+    assert!(matches!(shutdown_rx.try_recv(), Ok(V2IoCommand::Shutdown)));
+    shutdown_ingress.close();
+    shutdown_ingress
+        .unbind_certified_serve_gate(&shutdown_gate)
+        .expect("retire raw shutdown fixture gate");
+}
 #[test]
 fn certified_serve_delayed_lower_view_cross_relay_cannot_resurrect() {
     let (service, keys) = fixture_with_block_payload();
@@ -1263,7 +1284,6 @@ fn certified_serve_delayed_lower_view_cross_relay_cannot_resurrect() {
         route_lower,
         lower_response,
     );
-
     let higher = authenticated_serve_request(
         &service.context,
         &observer,
@@ -1294,7 +1314,6 @@ fn certified_serve_delayed_lower_view_cross_relay_cannot_resurrect() {
         route_higher,
         higher_response,
     );
-
     let stale = command_tx
         .prepare_serve(
             CertifiedServeOwnerKey::AuthenticatedSource(source_b.clone()),
@@ -1320,7 +1339,6 @@ fn certified_serve_delayed_lower_view_cross_relay_cannot_resurrect() {
         Some(V2IoServeState::Terminal)
     );
 }
-
 #[test]
 fn remote_auxiliary_flood_cannot_consume_consensus_or_control_reservations() {
     let admission = Arc::new(V2IoAdmission::new(1, 2).expect("bounded I/O admission"));
@@ -1351,7 +1369,6 @@ fn remote_auxiliary_flood_cannot_consume_consensus_or_control_reservations() {
     };
     assert_eq!(command(97).admission_class(), V2IoAdmissionClass::Control);
     assert!(V2IoAdmission::new(usize::MAX, 1).is_err());
-
     io.try_enqueue_as(V2IoAdmissionClass::Auxiliary, command(0))
         .expect("first authenticated service request occupies its prefix");
     assert!(!io.can_enqueue_as(V2IoAdmissionClass::Auxiliary));
@@ -1371,7 +1388,6 @@ fn remote_auxiliary_flood_cannot_consume_consensus_or_control_reservations() {
     ));
     io.try_enqueue_as(V2IoAdmissionClass::Control, command(3))
         .expect("trusted local control reserve");
-
     let subjects = command_rx
         .try_iter()
         .map(|command| match command {

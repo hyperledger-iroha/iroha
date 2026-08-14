@@ -2,17 +2,14 @@
 //!
 //! Verifies that regular channel receivers obtain non-`telemetry::` logs
 //! and that field extraction matches expected event structures.
-
-use std::time::Duration;
-
 use iroha_data_model::nexus::{DataSpaceId, LaneId};
 use iroha_logger::{
     info,
     telemetry::{Channel, Event, Fields},
     test_logger,
 };
+use std::time::Duration;
 use tokio::time;
-
 #[tokio::test]
 async fn telemetry_separation_default() {
     let mut receiver = test_logger()

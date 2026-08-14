@@ -76,17 +76,25 @@ def test_worker_regression_include_invocation_cannot_move_or_disappear(
 
     module = load_checker()
     copy_serve_lifecycle_production_fixture(tmp_path, module)
-    worker = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    owner = (
+        "v2_worker_main_01.rs"
+        if filename in {
+            "v2_worker_reply_route_cases.rs",
+            "v2_worker_backpressure_cases.rs",
+        }
+        else "v2_worker_main_04.rs"
+    )
+    worker = tmp_path / "crates/iroha_core/src/sumeragi/tests" / owner
     mutate_source_once(
         worker,
-        f'    include!("tests/{filename}");',
-        f'    // removed include!("tests/{filename}");',
+        f'include!("{filename}");',
+        f'// removed include!("{filename}");',
     )
 
     errors = module._worker_test_include_source_fidelity_errors(tmp_path)
 
     assert any(
-        filename in error and "must occur exactly once" in error
+        owner in error and "reviewed Rust include inventory must equal" in error
         for error in errors
     ), errors
 
@@ -1613,8 +1621,8 @@ def test_liveness_ownership_runner_rejects_mutation_helper_deletion(
             "serve_restart_terminal_discharge_raw_context_gate_bug.cfg|"
             'RawContextGateSeparatesLifecycleAuthority"\n',
             "",
-            "runner census must equal exactly 30 repaired / 88 "
-            "invariant-mutation / 3 temporal-mutation cases",
+            "runner census must equal exactly 31 repaired / 89 "
+            "invariant-mutation / 4 temporal-mutation cases",
         ),
         (
             '  "serve-restart-terminal-replay-resign|'
@@ -1622,8 +1630,8 @@ def test_liveness_ownership_runner_rejects_mutation_helper_deletion(
             "serve_restart_terminal_discharge_terminal_replay_resign_bug.cfg|"
             'TerminalReplayAndDecisionConversionDoNotResignOrMintOrdinal"\n',
             "",
-            "runner census must equal exactly 30 repaired / 88 "
-            "invariant-mutation / 3 temporal-mutation cases",
+            "runner census must equal exactly 31 repaired / 89 "
+            "invariant-mutation / 4 temporal-mutation cases",
         ),
         (
             '  "serve-live-prefence-prepared-decision-drain|'
@@ -1631,8 +1639,8 @@ def test_liveness_ownership_runner_rejects_mutation_helper_deletion(
             "serve_restart_terminal_discharge_prepared_decision_drain_bug.cfg|"
             'PreparedCarrierDecisionDrainIsAtomicAndOrdinalStable"\n',
             "",
-            "runner census must equal exactly 30 repaired / 88 "
-            "invariant-mutation / 3 temporal-mutation cases",
+            "runner census must equal exactly 31 repaired / 89 "
+            "invariant-mutation / 4 temporal-mutation cases",
         ),
         (
             '  "ordinary-ingress-carrier-rebase|'
@@ -1644,8 +1652,8 @@ def test_liveness_ownership_runner_rejects_mutation_helper_deletion(
             '  "ordinary-ingress-carrier-rebase|'
             "SumeragiV2OrdinaryIngressCarrierRebaseMutation.tla|"
             'ordinary_ingress_carrier_rebase_fixed.cfg"\n',
-            "runner census must equal exactly 30 repaired / 88 "
-            "invariant-mutation / 3 temporal-mutation cases",
+            "runner census must equal exactly 31 repaired / 89 "
+            "invariant-mutation / 4 temporal-mutation cases",
         ),
         (
             "|exact_response_claim_duplicate_bug.cfg|"
@@ -1747,6 +1755,7 @@ def test_liveness_ownership_runner_rejects_mutation_helper_deletion(
             "all liveness-ownership cases passed",
             "exact mutation completion marker",
         ),
+        ('readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"', 'readonly TLA2TOOLS_JAR="${REPO_ROOT}/target/tla2tools.jar"', "authenticated external TLA2Tools path"),
     ),
 )
 def test_liveness_ownership_runner_rejects_status_property_and_marker_weakening(

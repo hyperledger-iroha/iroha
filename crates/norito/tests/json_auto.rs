@@ -1,15 +1,12 @@
 #![cfg(feature = "json")]
 //! Tests for `from_json_auto`: small vs large input selection and correctness.
-
 use norito::json::{JsonDeserialize, from_json_auto};
-
 #[derive(Debug, PartialEq, norito::derive::FastJson, norito::derive::FastJsonWrite)]
 struct Item {
     id: u64,
     name: String,
     flag: bool,
 }
-
 // Provide the generic typed parser to satisfy the fallback branch
 impl JsonDeserialize for Item {
     fn json_deserialize(p: &mut norito::json::Parser<'_>) -> Result<Self, norito::json::Error> {
@@ -39,7 +36,6 @@ impl JsonDeserialize for Item {
         })
     }
 }
-
 #[test]
 fn auto_small_prefers_typed() {
     let s = "{\"id\":1,\"name\":\"x\",\"flag\":true}";
@@ -53,7 +49,6 @@ fn auto_small_prefers_typed() {
         }
     );
 }
-
 #[test]
 fn auto_large_uses_fast() {
     let long_name = "a".repeat(600);
@@ -68,9 +63,7 @@ fn auto_large_uses_fast() {
         }
     );
 }
-
 // ---- Nested types + floats/bools coverage ----
-
 #[derive(Debug, PartialEq, norito::derive::FastJson, norito::derive::FastJsonWrite)]
 struct Inner {
     value: f64,
@@ -78,14 +71,12 @@ struct Inner {
     tags: Vec<String>,
     opt: Option<String>,
 }
-
 #[derive(Debug, PartialEq, norito::derive::FastJson, norito::derive::FastJsonWrite)]
 struct Outer {
     id: u64,
     inner: Inner,
     items: Vec<Inner>,
 }
-
 impl JsonDeserialize for Inner {
     fn json_deserialize(p: &mut norito::json::Parser<'_>) -> Result<Self, norito::json::Error> {
         p.skip_ws();
@@ -125,7 +116,6 @@ impl JsonDeserialize for Inner {
         })
     }
 }
-
 impl JsonDeserialize for Outer {
     fn json_deserialize(p: &mut norito::json::Parser<'_>) -> Result<Self, norito::json::Error> {
         p.skip_ws();
@@ -154,7 +144,6 @@ impl JsonDeserialize for Outer {
         })
     }
 }
-
 #[test]
 #[allow(clippy::approx_constant)]
 fn auto_nested_small() {
@@ -168,7 +157,6 @@ fn auto_nested_small() {
     assert_eq!(out.items.len(), 1);
     assert_eq!(out.items[0].opt.as_deref(), Some("y"));
 }
-
 #[test]
 fn auto_nested_large_equivalence() {
     // Build a large JSON (>256 bytes) with multiple nested items and float/bool variety
@@ -192,7 +180,6 @@ fn auto_nested_large_equivalence() {
     let big = format!(
         "{{\"id\":42,\"inner\":{{\"value\":-1.25e2,\"flags\":[false,true,false],\"tags\":[\"p\",\"q\"],\"opt\":\"z\"}},\"items\":{items_json}}}"
     );
-
     // All paths should agree
     let a: Outer = norito::json::from_json(&big).expect("generic parse");
     let b: Outer = norito::json::from_json_fast(&big).expect("fast parse");

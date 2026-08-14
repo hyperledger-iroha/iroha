@@ -1,6 +1,5 @@
 use iroha_crypto::Hash;
 use iroha_data_model::smart_contract::manifest::{AccessSetHints, ContractManifest};
-
 #[test]
 fn contract_manifest_roundtrip_norito() {
     let manifest = ContractManifest {
@@ -23,9 +22,7 @@ fn contract_manifest_roundtrip_norito() {
         error_codes: None,
         provenance: None,
     };
-
     let bytes = norito::to_bytes(&manifest).expect("encode manifest");
     let decoded: ContractManifest = norito::decode_from_bytes(&bytes).expect("decode manifest");
-
     assert_eq!(decoded, manifest);
 }

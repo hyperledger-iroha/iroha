@@ -64,7 +64,7 @@ enforcement_mode = "reject"
 address = "addr:0.0.0.0:18080#2F16"
 preauth_ban_capacity = 4096
 preauth_allow_cidrs = ["127.0.0.1/32", "207.254.29.242/32"]
-max_content_len = 1_073_741_824
+max_content_len = 64_000_000
 deploy_rate_per_origin_per_sec = 4
 deploy_burst_per_origin = 8
 query_rate_per_authority_per_sec = 160
@@ -249,8 +249,9 @@ max_payload_bytes = 16777216
 proposal_queue_scan_multiplier = 4
 
 [sumeragi.queues]
-# The checked-in baseline covers four validators, two authenticated
-# non-validator source lanes, and anonymous delivery.
+# This legacy universal-cohort baseline covers four validators, two
+# authenticated non-validator source lanes, and anonymous delivery. It is not
+# evidence that one four-validator roster backs all five physical dataspaces.
 # The validator-bundle renderer scales body_bytes to at least
 # (N + authenticated_non_validator_sources + 1) * body_source_bytes.
 authenticated_non_validator_sources = 2
@@ -333,16 +334,18 @@ enabled = true
 lane_count = 7
 
 [nexus.storage]
-# Four validators share one host. Keep aggregate per-node storage bounded so
-# Kura and the other Nexus stores cannot consume restart/fsync headroom.
+# The legacy four-validator universal-cohort fixture shares one host. This
+# per-node budget does not describe or prove the complete five-dataspace
+# deployment; keep each physical cohort's aggregate storage bounded so Kura
+# and the other Nexus stores cannot consume restart/fsync headroom.
 local_budget_bytes = 68719476736
 
 [nexus.storage.disk_budget_weights]
-# SoraFS storage is disabled on Taira; allocate its former share to Kura while
-# retaining bounded WSV and network-spool headroom.
-kura_blocks_bps = 7500
+# SoraFS storage is disabled on Taira. Keep the parser-required one-basis-point
+# reserve while allocating the rest of its former share to Kura.
+kura_blocks_bps = 7499
 wsv_snapshots_bps = 2000
-sorafs_bps = 0
+sorafs_bps = 1
 soranet_spool_bps = 250
 soravpn_spool_bps = 250
 

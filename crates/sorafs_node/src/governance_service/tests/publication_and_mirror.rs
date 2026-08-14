@@ -1,20 +1,17 @@
 use axum::extract::RawQuery;
 use std::collections::HashMap;
-
 #[derive(Clone)]
 struct IpnsMockState {
     resolutions: Arc<Mutex<VecDeque<String>>>,
     bodies: Arc<HashMap<String, Vec<u8>>>,
     publish_count: Arc<AtomicU64>,
 }
-
 fn raw_query_arg(raw: Option<&str>) -> Option<&str> {
     raw?.split('&').find_map(|pair| {
         let (key, value) = pair.split_once('=')?;
         (key == "arg").then_some(value)
     })
 }
-
 async fn mock_ipns_resolve(
     State(state): State<IpnsMockState>,
     RawQuery(_raw): RawQuery,
@@ -25,12 +22,10 @@ async fn mock_ipns_resolve(
         None => test_response(StatusCode::NOT_FOUND, "{}"),
     }
 }
-
 async fn mock_ipns_publish(State(state): State<IpnsMockState>) -> Response {
     state.publish_count.fetch_add(1, AtomicOrdering::SeqCst);
     test_response(StatusCode::OK, "{}")
 }
-
 async fn mock_ipns_cat(State(state): State<IpnsMockState>, RawQuery(raw): RawQuery) -> Response {
     let Some(cid) = raw_query_arg(raw.as_deref()) else {
         return test_response(StatusCode::BAD_REQUEST, Body::empty());
@@ -40,7 +35,6 @@ async fn mock_ipns_cat(State(state): State<IpnsMockState>, RawQuery(raw): RawQue
         None => test_response(StatusCode::NOT_FOUND, Body::empty()),
     }
 }
-
 fn mock_ipns_router(state: IpnsMockState) -> Router {
     Router::new()
         .route("/api/v0/name/resolve", post(mock_ipns_resolve))
@@ -48,22 +42,18 @@ fn mock_ipns_router(state: IpnsMockState) -> Router {
         .route("/api/v0/cat", post(mock_ipns_cat))
         .with_state(state)
 }
-
 #[derive(Clone)]
 struct IpnsResolveFailureState {
     status: StatusCode,
     publish_count: Arc<AtomicU64>,
 }
-
 async fn mock_ipns_resolve_failure(State(state): State<IpnsResolveFailureState>) -> Response {
     test_response(state.status, "{}")
 }
-
 async fn mock_ipns_publish_after_failure(State(state): State<IpnsResolveFailureState>) -> Response {
     state.publish_count.fetch_add(1, AtomicOrdering::SeqCst);
     test_response(StatusCode::OK, "{}")
 }
-
 fn mock_ipns_resolve_failure_router(state: IpnsResolveFailureState) -> Router {
     Router::new()
         .route("/api/v0/name/resolve", post(mock_ipns_resolve_failure))
@@ -73,7 +63,6 @@ fn mock_ipns_resolve_failure_router(state: IpnsResolveFailureState) -> Router {
         )
         .with_state(state)
 }
-
 #[tokio::test]
 async fn ipns_publication_rejects_pre_post_movement_and_readback_drift() {
     let initial = PublicHead::Present {
@@ -126,7 +115,6 @@ async fn ipns_publication_rejects_pre_post_movement_and_readback_drift() {
         task.abort();
     }
 }
-
 #[test]
 fn ipns_absence_profile_is_narrow_and_exact() {
     assert!(is_authenticated_ipns_absence(StatusCode::NOT_FOUND, b"{}"));
@@ -147,7 +135,6 @@ fn ipns_absence_profile_is_narrow_and_exact() {
         br#"{"Message":"could not resolve name","Code":0,"Type":"error"}"#
     ));
 }
-
 #[tokio::test]
 async fn ipns_resolution_errors_never_authorize_bootstrap_publication() {
     for status in [
@@ -186,7 +173,6 @@ async fn ipns_resolution_errors_never_authorize_bootstrap_publication() {
         task.abort();
     }
 }
-
 #[tokio::test]
 async fn service_rejects_in_process_sealed_checkpoint_rollback() {
     let root = secure_temp_dir();
@@ -197,14 +183,12 @@ async fn service_rejects_in_process_sealed_checkpoint_rollback() {
     let mut checkpoint = checkpoint_from_source(&source);
     checkpoint.generation = 2;
     save_checkpoint(&store, None, &checkpoint).expect("seed generation-two checkpoint");
-
     let mut service = Service::from_view(
         view.clone(),
         test_runtime_providers(&view, provider.clone()),
     )
     .await
     .expect("initialize service at generation two");
-
     let original_record = provider
         .load(GovernanceDagSealedStateSlot::Checkpoint)
         .expect("load original checkpoint record")
@@ -230,7 +214,6 @@ async fn service_rejects_in_process_sealed_checkpoint_rollback() {
         .lock()
         .expect("restore original checkpoint")
         .checkpoint = Some(original_record);
-
     let mut rolled_back = checkpoint;
     rolled_back.generation = 1;
     let payload = norito::to_bytes(&rolled_back).expect("encode rollback checkpoint");
@@ -241,13 +224,11 @@ async fn service_rejects_in_process_sealed_checkpoint_rollback() {
         .lock()
         .expect("lock test checkpoint store")
         .checkpoint = Some(record);
-
     let error = service
         .reconcile_once()
         .await
         .expect_err("checkpoint rollback must fail before source/network work");
     assert!(error.to_string().contains("rolled back"));
-
     provider
         .inner
         .lock()
@@ -259,7 +240,6 @@ async fn service_rejects_in_process_sealed_checkpoint_rollback() {
         .expect_err("checkpoint deletion must fail before source/network work");
     assert!(error.to_string().contains("removed the active checkpoint"));
 }
-
 #[tokio::test]
 async fn dropping_service_withdraws_every_retained_mirror_reader() {
     let root = secure_temp_dir();
@@ -276,13 +256,11 @@ async fn dropping_service_withdraws_every_retained_mirror_reader() {
     let reader = service.mirror_reader.clone();
     reader.mark_ready();
     drop(service);
-
     let error = reader
         .read()
         .expect_err("a reader retained past service shutdown must be unavailable");
     assert!(matches!(error, GovernanceDagServiceError::Unavailable(_)));
 }
-
 #[tokio::test]
 async fn pinned_endpoint_rejects_requests_outside_qualified_url_boundary() {
     let ipfs_provider = Arc::new(TestAuthenticator::new(
@@ -299,7 +277,6 @@ async fn pinned_endpoint_rejects_requests_outside_qualified_url_boundary() {
     .await;
     let allowed = ipfs.url.join("v0/add").expect("same-prefix Kubo URL");
     assert!(ipfs.request(Method::POST, allowed).is_ok());
-
     let sibling = ipfs
         .url
         .join("/api-shadow/v0/add")
@@ -312,7 +289,6 @@ async fn pinned_endpoint_rejects_requests_outside_qualified_url_boundary() {
         .err()
         .expect("execute must recheck a builder created outside PinnedEndpoint::request");
     assert!(error.to_string().contains("qualified ingress endpoint"));
-
     let cross_origin =
         Url::parse("http://example.com/api/v0/add").expect("canonical cross-origin test URL");
     assert!(ipfs.request(Method::POST, cross_origin).is_err());
@@ -322,7 +298,6 @@ async fn pinned_endpoint_rejects_requests_outside_qualified_url_boundary() {
         .expect("encoded-separator test URL");
     assert!(ipfs.request(Method::POST, encoded_separator).is_err());
     ipfs_task.abort();
-
     let head_provider = Arc::new(TestAuthenticator::new(
         TEST_HEAD_AUTH_HANDLE,
         "qualified-url-head",
@@ -341,7 +316,6 @@ async fn pinned_endpoint_rejects_requests_outside_qualified_url_boundary() {
     assert!(head.request(Method::GET, altered_head).is_err());
     head_task.abort();
 }
-
 #[tokio::test]
 async fn hardened_http_refuses_redirect_header_body_and_encoding_attacks() {
     let redirect_router = Router::new()
@@ -362,7 +336,6 @@ async fn hardened_http_refuses_redirect_header_body_and_encoding_attacks() {
         .expect("receive redirect response");
     assert!(response.status().is_redirection());
     redirect_task.abort();
-
     let router = Router::new()
         .route("/headers", get(response_header_bomb))
         .route("/body", get(response_body_bomb))
@@ -378,7 +351,6 @@ async fn hardened_http_refuses_redirect_header_body_and_encoding_attacks() {
         .await
         .expect("receive header response");
     assert!(read_bounded_response(response, 1024).await.is_err());
-
     let mut body_url = endpoint.url.clone();
     body_url.set_path("/body");
     let request = endpoint
@@ -389,7 +361,6 @@ async fn hardened_http_refuses_redirect_header_body_and_encoding_attacks() {
         .await
         .expect("receive body response");
     assert!(read_bounded_response(response, 16).await.is_err());
-
     let mut gzip_url = endpoint.url.clone();
     gzip_url.set_path("/gzip");
     let request = endpoint
@@ -402,7 +373,6 @@ async fn hardened_http_refuses_redirect_header_body_and_encoding_attacks() {
     assert!(read_bounded_response(response, 16).await.is_err());
     task.abort();
 }
-
 #[tokio::test]
 async fn ipfs_publication_rejects_malformed_cid_missing_pin_and_wrong_readback() {
     let cases = [
@@ -438,7 +408,6 @@ async fn ipfs_publication_rejects_malformed_cid_missing_pin_and_wrong_readback()
         assert!(result.is_err());
         task.abort();
     }
-
     let valid = MockIpfsState {
         add_body: Arc::new(format!(r#"{{"Hash":"{TEST_CID_PAYLOAD}"}}"#).into_bytes()),
         cat_body: Arc::new(b"payload".to_vec()),
@@ -452,7 +421,6 @@ async fn ipfs_publication_rejects_malformed_cid_missing_pin_and_wrong_readback()
         TEST_CID_PAYLOAD
     );
     task.abort();
-
     let large = Arc::new(vec![0xA5; 5 * IPFS_UNIXFS_CHUNK_BYTES + 7]);
     let large_cid =
         canonical_ipfs_file_cid(&large).expect("large test object fits the fixed UnixFS profile");
@@ -476,7 +444,6 @@ async fn ipfs_publication_rejects_malformed_cid_missing_pin_and_wrong_readback()
     );
     task.abort();
 }
-
 fn ipip_499_chacha20_bytes(seed: &[u8], length: usize) -> Vec<u8> {
     let key = iroha_crypto::sha256(seed);
     let mut initial = [0_u32; 16];
@@ -509,7 +476,6 @@ fn ipip_499_chacha20_bytes(seed: &[u8], length: usize) -> Vec<u8> {
     }
     output
 }
-
 fn chacha20_quarter_round(
     state: &mut [u32; 16],
     a_index: usize,
@@ -534,13 +500,11 @@ fn chacha20_quarter_round(
     state[c_index] = c;
     state[d_index] = d;
 }
-
 #[test]
 fn fixed_unixfs_profile_matches_ipip_499_chunk_boundary_vectors() {
     const SMALL_CID: &str = "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e";
     const AT_CHUNK_CID: &str = "bafkreiacndfy443ter6qr2tmbbdhadvxxheowwf75s6zehscklu6ezxmta";
     const OVER_CHUNK_CID: &str = "bafybeigmix7t42i6jacydtquhet7srwvgpizfg7gjbq7627d35mjomtu64";
-
     assert_eq!(
         canonical_ipfs_file_cid(b"hello world").as_deref(),
         Some(SMALL_CID)
@@ -554,12 +518,10 @@ fn fixed_unixfs_profile_matches_ipip_499_chunk_boundary_vectors() {
         canonical_ipfs_file_cid(&bytes).as_deref(),
         Some(OVER_CHUNK_CID)
     );
-
     let mut tampered = bytes;
     *tampered.last_mut().expect("non-empty fixture") ^= 1;
     assert!(validate_ipfs_cid_for_bytes(OVER_CHUNK_CID, &tampered).is_err());
 }
-
 #[test]
 fn canonical_ipfs_cid_is_derived_from_exact_payload_bytes() {
     assert_eq!(canonical_raw_sha256_cid(b"payload"), TEST_CID_PAYLOAD);
@@ -573,7 +535,6 @@ fn canonical_ipfs_cid_is_derived_from_exact_payload_bytes() {
         "a canonical but substituted CID must not authenticate different bytes"
     );
 }
-
 #[test]
 fn ipfs_multipart_body_is_deterministic_bounded_and_cloneable() {
     let payload = b"\0payload\r\n";
@@ -598,7 +559,6 @@ fn ipfs_multipart_body_is_deterministic_bounded_and_cloneable() {
             .any(|window| window == b"\0payload\r\n")
     );
     assert!(canonical_ipfs_multipart_body("../escape", b"payload").is_err());
-
     let object_max = payload.len() as u64;
     let authenticated_wire_max = authenticated_ipfs_wire_body_max_bytes(object_max)
         .expect("derive authenticated multipart wire bound");
@@ -610,7 +570,6 @@ fn ipfs_multipart_body_is_deterministic_bounded_and_cloneable() {
     assert!(body.len() as u64 > object_max);
     assert!(body.len() as u64 <= authenticated_wire_max);
     assert!(authenticated_ipfs_wire_body_max_bytes(u64::MAX).is_err());
-
     let request = Client::new()
         .post("https://example.invalid/api/v0/add")
         .header(
@@ -639,7 +598,6 @@ fn ipfs_multipart_body_is_deterministic_bounded_and_cloneable() {
     )
     .expect("the checked multipart wire ceiling admits the exact final body");
 }
-
 #[tokio::test]
 async fn signed_head_authenticator_receives_final_body_and_cas_headers() {
     let cases = [
@@ -687,7 +645,6 @@ async fn signed_head_authenticator_receives_final_body_and_cas_headers() {
         task.abort();
     }
 }
-
 #[tokio::test]
 async fn signed_head_cas_rejects_conflict_bootstrap_and_readback_drift() {
     for status in [StatusCode::CONFLICT, StatusCode::PRECONDITION_FAILED] {
@@ -709,7 +666,6 @@ async fn signed_head_cas_rejects_conflict_bootstrap_and_readback_drift() {
         );
         task.abort();
     }
-
     let (endpoint, state, task) = spawn_signed_head(SignedHeadInner::default()).await;
     assert!(
         put_signed_http_head(&endpoint, b"new", &PublicHead::Missing, false, 1024)
@@ -718,7 +674,6 @@ async fn signed_head_cas_rejects_conflict_bootstrap_and_readback_drift() {
     );
     assert_eq!(state.0.lock().await.put_count, 0);
     task.abort();
-
     let (endpoint, _state, task) = spawn_signed_head(SignedHeadInner {
         bytes: Some(b"old".to_vec()),
         etag: "\"v1\"".to_owned(),
@@ -737,7 +692,6 @@ async fn signed_head_cas_rejects_conflict_bootstrap_and_readback_drift() {
     );
     task.abort();
 }
-
 #[tokio::test]
 async fn signed_head_read_rejects_duplicate_entity_tags() {
     let (endpoint, _state, task) = spawn_signed_head(SignedHeadInner {
@@ -753,7 +707,6 @@ async fn signed_head_read_rejects_duplicate_entity_tags() {
     assert!(error.to_string().contains("single canonical strong ETag"));
     task.abort();
 }
-
 #[test]
 fn mirror_index_exposes_only_signed_submission_provenance() {
     let source = signed_finance_source(0x39, 1_800_000_000);
@@ -788,7 +741,6 @@ fn mirror_index_exposes_only_signed_submission_provenance() {
         entry.get("submission_origin").and_then(JsonValue::as_str),
         Some(signed.origin.label())
     );
-
     let internal_source = signed_source(1, 0x38, 1_800_000_000);
     let internal_checkpoint = checkpoint_from_source(&internal_source);
     let internal_mirror = mirror_index_value(
@@ -814,7 +766,6 @@ fn mirror_index_exposes_only_signed_submission_provenance() {
         Some(&JsonValue::Null)
     );
 }
-
 #[test]
 fn mirror_two_slot_store_hard_cut_rejects_legacy_authority_without_cleanup() {
     for legacy_name in [
@@ -841,10 +792,8 @@ fn mirror_two_slot_store_hard_cut_rejects_legacy_authority_without_cleanup() {
         let legacy_path = config.state_root_guard.root().join(legacy_name);
         fs::write(&legacy_path, b"legacy-sentinel-must-remain")
             .expect("seed retired mirror authority");
-
         let error =
             open_mirror_index_store(&config).expect_err("legacy mirror authority must fail closed");
-
         assert!(
             error.to_string().contains("legacy mirror authority"),
             "unexpected error for `{legacy_name}`: {error}"
@@ -863,7 +812,6 @@ fn mirror_two_slot_store_hard_cut_rejects_legacy_authority_without_cleanup() {
         );
     }
 }
-
 #[test]
 fn mirror_two_slot_payload_rejects_truncation_and_metadata_drift() {
     let dir = secure_temp_dir();
@@ -885,11 +833,9 @@ fn mirror_two_slot_payload_rejects_truncation_and_metadata_drift() {
         .expect("encode test mirror")
         .into_bytes();
     checkpoint.mirror_blake3 = blake3_array(&canonical);
-
     let recovered = verify_or_recover_mirror_index_store(&config, &store, &checkpoint, &source)
         .expect("empty hard-cut store recovers from checkpoint");
     assert_eq!(recovered, mirror);
-
     let payload = MirrorIndexStorePayloadV1::committed(checkpoint.generation, [0; 32], canonical)
         .expect("construct canonical typed mirror");
     let encoded = encode_mirror_index_store_payload(&payload).expect("encode typed mirror");
@@ -897,7 +843,6 @@ fn mirror_two_slot_payload_rejects_truncation_and_metadata_drift() {
         decode_mirror_index_store_payload(&encoded[..encoded.len() / 2]).is_err(),
         "a truncated typed payload must fail closed"
     );
-
     for (field, replacement) in [
         ("schema", JsonValue::from("wrong.schema")),
         ("generation", JsonValue::from(99_u64)),
@@ -915,7 +860,6 @@ fn mirror_two_slot_payload_rejects_truncation_and_metadata_drift() {
             "typed metadata must reject {field} drift"
         );
     }
-
     let mut head_drift = mirror.clone();
     head_drift
         .get_mut("head")
@@ -940,7 +884,6 @@ fn mirror_two_slot_payload_rejects_truncation_and_metadata_drift() {
     let repaired = verify_or_recover_mirror_index_store(&config, &store, &checkpoint, &source)
         .expect("checkpoint authority repairs a same-generation derived-cache drift");
     assert_eq!(repaired, mirror);
-
     let mut stale_mirror = mirror.clone();
     stale_mirror
         .as_object_mut()
@@ -959,7 +902,6 @@ fn mirror_two_slot_payload_rejects_truncation_and_metadata_drift() {
             .expect("offline local mirror catches up from the authoritative checkpoint"),
         mirror
     );
-
     let mut ahead_mirror = mirror.clone();
     ahead_mirror
         .as_object_mut()
@@ -978,7 +920,6 @@ fn mirror_two_slot_payload_rejects_truncation_and_metadata_drift() {
         "a local mirror ahead of sealed authority must fail closed"
     );
 }
-
 #[test]
 fn mirror_read_handle_returns_only_checkpoint_coherent_typed_bytes() {
     let dir = secure_temp_dir();
@@ -987,7 +928,6 @@ fn mirror_read_handle_returns_only_checkpoint_coherent_typed_bytes() {
     let mirror_store = open_mirror_index_store(&config).expect("open mirror store");
     let provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
     let checkpoint_store = test_checkpoint_store(Arc::clone(&provider));
-
     let mut checkpoint = checkpoint_from_source(&source);
     let mirror = mirror_index_value(
         &source,
@@ -1027,7 +967,6 @@ fn mirror_read_handle_returns_only_checkpoint_coherent_typed_bytes() {
         .rooted_directory()
         .child_names_bounded(SOURCE_ENTRY_HARD_CAP)
         .expect("inventory state before reader construction");
-
     let handle = GovernanceDagMirrorReadHandleV1::try_new(&config, checkpoint_store.clone(), false)
         .expect("construct coherent mirror reader");
     handle.mark_ready();
@@ -1043,7 +982,6 @@ fn mirror_read_handle_returns_only_checkpoint_coherent_typed_bytes() {
         handle.binding().checkpoint_store_handle(),
         TEST_CHECKPOINT_STORE_HANDLE
     );
-
     let observed = handle
         .read()
         .expect("read coherent mirror capability")
@@ -1080,7 +1018,6 @@ fn mirror_read_handle_returns_only_checkpoint_coherent_typed_bytes() {
         state_inventory_before,
         "reader construction and read must not create state"
     );
-
     let mut checkpoint_b = checkpoint.clone();
     checkpoint_b.generation = checkpoint
         .generation
@@ -1095,7 +1032,6 @@ fn mirror_read_handle_returns_only_checkpoint_coherent_typed_bytes() {
         .read()
         .expect_err("A/B checkpoint race must fail closed");
     assert!(error.to_string().contains("checkpoint changed during read"));
-
     let intent = intent_from_source(&source);
     provider.return_intent_on_second_load(GovernanceDagSealedStateRecord::new(
         GovernanceDagSealedStateSlot::PublishIntent,
@@ -1104,14 +1040,12 @@ fn mirror_read_handle_returns_only_checkpoint_coherent_typed_bytes() {
     ));
     let error = handle.read().expect_err("A/B intent race must fail closed");
     assert!(error.to_string().contains("intent changed during read"));
-
     let active_intent_revision =
         save_publish_intent(&checkpoint_store, None, &intent).expect("seal active intent");
     let error = handle
         .read()
         .expect_err("active intent must make mirror reads fail closed");
     assert!(error.to_string().contains("active sealed publish intent"));
-
     provider
         .qualification_revision
         .store(2, AtomicOrdering::SeqCst);
@@ -1119,7 +1053,6 @@ fn mirror_read_handle_returns_only_checkpoint_coherent_typed_bytes() {
         .read()
         .expect_err("provider qualification drift must invalidate reader");
     assert!(error.to_string().contains("identity or policy changed"));
-
     provider
         .qualification_revision
         .store(1, AtomicOrdering::SeqCst);
@@ -1138,7 +1071,6 @@ fn mirror_read_handle_returns_only_checkpoint_coherent_typed_bytes() {
         .read()
         .expect_err("typed mirror corruption must fail closed");
     assert!(error.to_string().contains("no committed index"));
-
     #[cfg(unix)]
     {
         let state_root = config.state_root_guard.root().to_path_buf();
@@ -1153,7 +1085,6 @@ fn mirror_read_handle_returns_only_checkpoint_coherent_typed_bytes() {
         assert!(error.to_string().contains("state root"));
     }
 }
-
 #[test]
 fn mirror_read_handle_never_initializes_an_absent_store() {
     let dir = secure_temp_dir();
@@ -1167,10 +1098,8 @@ fn mirror_read_handle_never_initializes_an_absent_store() {
     assert!(before.is_empty());
     let provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
     let checkpoint_store = test_checkpoint_store(provider);
-
     let error = GovernanceDagMirrorReadHandleV1::try_new(&config, checkpoint_store, true)
         .expect_err("reader must not initialize an absent mirror store");
-
     assert!(matches!(error, GovernanceDagServiceError::Filesystem(_)));
     assert_eq!(
         config
@@ -1182,7 +1111,6 @@ fn mirror_read_handle_never_initializes_an_absent_store() {
         "read capability construction must not create an init lock, directory, or slot"
     );
 }
-
 #[test]
 fn mirror_read_handle_install_readiness_requires_the_existing_typed_store() {
     let dir = secure_temp_dir();
@@ -1218,7 +1146,6 @@ fn mirror_read_handle_install_readiness_requires_the_existing_typed_store() {
         bootstrap_inventory,
         "bootstrap reads must not initialize or mutate mirror state"
     );
-
     let mut store_directories = Vec::new();
     for entry in fs::read_dir(config.state_root_guard.root()).expect("list mirror state root") {
         let entry = entry.expect("read mirror state entry");
@@ -1236,13 +1163,11 @@ fn mirror_read_handle_install_readiness_requires_the_existing_typed_store() {
         "fresh mirror state has exactly one typed-store directory"
     );
     fs::remove_dir_all(&store_directories[0]).expect("remove typed mirror store fixture");
-
     let error = handle
         .assert_install_ready()
         .expect_err("a mirror capability whose typed store disappeared must not install");
     assert!(matches!(error, GovernanceDagServiceError::Filesystem(_)));
 }
-
 #[test]
 fn node_handle_installs_real_mirror_reader_once_across_preexisting_clones() {
     let dir = secure_temp_dir();
@@ -1251,7 +1176,6 @@ fn node_handle_installs_real_mirror_reader_once_across_preexisting_clones() {
     let mirror_store =
         open_mirror_index_store(&service_config).expect("initialize typed mirror store");
     drop(mirror_store);
-
     let checkpoint_provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
     let signer = Arc::new(PublisherTestSigner {
         handle: TEST_PRODUCER_SIGNER_HANDLE.to_owned(),
@@ -1277,7 +1201,6 @@ fn node_handle_installs_real_mirror_reader_once_across_preexisting_clones() {
     )
     .expect("start node with the same retained Governance DAG providers");
     let mut clone_created_before_install = node.clone();
-
     let mismatch_root = dir.path().join("mismatched-reader");
     let mismatch_config = test_runtime_config(&source, &mismatch_root);
     let mismatch_store =
@@ -1299,7 +1222,6 @@ fn node_handle_installs_real_mirror_reader_once_across_preexisting_clones() {
             .is_none(),
         "failed preflight must not consume or populate the installation slot"
     );
-
     let reader = GovernanceDagMirrorReadHandleV1::try_new(
         &service_config,
         test_checkpoint_store(checkpoint_provider.clone()),
@@ -1319,7 +1241,6 @@ fn node_handle_installs_real_mirror_reader_once_across_preexisting_clones() {
             .expect("preexisting clone observes the installed reader")
             .is_none()
     );
-
     let mut checkpoint = checkpoint_from_source(&source);
     let mirror = mirror_index_value(
         &source,
@@ -1359,7 +1280,6 @@ fn node_handle_installs_real_mirror_reader_once_across_preexisting_clones() {
     )
     .expect("seal matching service checkpoint");
     reader.mark_ready();
-
     let node_snapshot = node
         .governance_dag_mirror_snapshot()
         .expect("node reads the installed checkpoint-coherent mirror")
@@ -1370,7 +1290,6 @@ fn node_handle_installs_real_mirror_reader_once_across_preexisting_clones() {
         .expect("preexisting clone reads the checkpoint-coherent mirror")
         .expect("checkpointed mirror is visible across clones");
     assert_eq!(clone_snapshot.canonical_bytes(), canonical_bytes);
-
     let error = clone_created_before_install
         .install_governance_dag_mirror_read_handle(reader)
         .expect_err("the shared installation slot must reject a second reader");

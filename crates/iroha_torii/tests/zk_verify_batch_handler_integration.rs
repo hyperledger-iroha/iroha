@@ -1,13 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration test for /v1/zk/verify-batch minimal handler.
 #![cfg(all(feature = "app_api", feature = "zk-verify-batch"))]
-
 use axum::{Router, routing::post};
 use http_body_util::BodyExt as _;
 use tower::ServiceExt as _;
-
 const TEST_MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
-
 fn assert_batch_outcome(value: &norito::json::Value, status: &str, code: Option<&str>) {
     assert_eq!(
         value.get("status").and_then(norito::json::Value::as_str),
@@ -18,12 +15,10 @@ fn assert_batch_outcome(value: &norito::json::Value, status: &str, code: Option<
         code
     );
 }
-
 fn sample_pallas_envelope(label: &str) -> iroha_zkp_halo2::OpenVerifyEnvelope {
     use h2::norito_helpers as nh;
     use iroha_zkp_halo2 as h2;
     use iroha_zkp_halo2::backend::pallas::PallasBackend;
-
     let params = h2::Params::new(8).unwrap();
     let coeffs: Vec<h2::PrimeField64> = (0u64..8).map(|i| h2::PrimeField64::from(i + 1)).collect();
     let poly = h2::Polynomial::from_coeffs(coeffs);
@@ -41,7 +36,6 @@ fn sample_pallas_envelope(label: &str) -> iroha_zkp_halo2::OpenVerifyEnvelope {
         domain_tag: None,
     }
 }
-
 async fn post_json_batch_with_limits(
     body: String,
     open_limits: iroha_zkp_halo2::OpenVerifyLimits,
@@ -58,7 +52,6 @@ async fn post_json_batch_with_limits(
     )
     .await
 }
-
 fn verify_batch_router_with_limits(
     open_limits: iroha_zkp_halo2::OpenVerifyLimits,
     max_body_bytes: usize,
@@ -84,7 +77,6 @@ fn verify_batch_router_with_limits(
         ),
     )
 }
-
 async fn post_batch_with_limits(
     body: Vec<u8>,
     content_type: &'static str,
@@ -100,7 +92,6 @@ async fn post_batch_with_limits(
         max_envelope_bytes,
         enforce_transcript_label_ascii,
     );
-
     let req = http::Request::builder()
         .method("POST")
         .uri("/v1/zk/verify-batch")
@@ -112,13 +103,11 @@ async fn post_batch_with_limits(
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     norito::json::from_slice(&bytes).unwrap()
 }
-
 #[tokio::test]
 async fn zk_verify_batch_endpoint_accepts_norito_vec_and_returns_statuses() {
     use h2::norito_helpers as nh;
     use iroha_zkp_halo2 as h2;
     use iroha_zkp_halo2::backend::pallas::PallasBackend;
-
     // Router with verify-batch handler
     let app = Router::new().route(
         "/v1/zk/verify-batch",
@@ -137,7 +126,6 @@ async fn zk_verify_batch_endpoint_accepts_norito_vec_and_returns_statuses() {
             },
         ),
     );
-
     // Build two envelopes: ok and bad (flip t)
     let params = h2::Params::new(8).unwrap();
     let coeffs: Vec<h2::PrimeField64> = (0u64..8).map(|i| h2::PrimeField64::from(i + 1)).collect();
@@ -162,7 +150,6 @@ async fn zk_verify_batch_endpoint_accepts_norito_vec_and_returns_statuses() {
         ..env_ok.clone()
     };
     let norito_vec = norito::to_bytes(&vec![env_ok, env_bad]).expect("encode batch");
-
     // Norito request
     let req = http::Request::builder()
         .method("POST")
@@ -184,11 +171,9 @@ async fn zk_verify_batch_endpoint_accepts_norito_vec_and_returns_statuses() {
     assert_batch_outcome(&statuses[0], "verified", None);
     assert_batch_outcome(&statuses[1], "invalid", None);
 }
-
 #[tokio::test]
 async fn zk_verify_batch_endpoint_accepts_json_array_and_returns_mixed_statuses() {
     use base64::Engine as _;
-
     let app = Router::new().route(
         "/v1/zk/verify-batch",
         post(
@@ -206,7 +191,6 @@ async fn zk_verify_batch_endpoint_accepts_json_array_and_returns_mixed_statuses(
             },
         ),
     );
-
     let env_ok = sample_pallas_envelope("torii-json-default");
     let mut env_bad = env_ok.clone();
     env_bad.public.t[0] = env_bad.public.t[0].wrapping_add(1);
@@ -215,7 +199,6 @@ async fn zk_verify_batch_endpoint_accepts_json_array_and_returns_mixed_statuses(
     let encoded_bad = base64::engine::general_purpose::STANDARD
         .encode(norito::to_bytes(&env_bad).expect("encode bad envelope"));
     let body = format!(r#"["{encoded_ok}","{encoded_bad}"]"#);
-
     let req = http::Request::builder()
         .method("POST")
         .uri("/v1/zk/verify-batch")
@@ -229,7 +212,6 @@ async fn zk_verify_batch_endpoint_accepts_json_array_and_returns_mixed_statuses(
     assert_eq!(resp.status(), http::StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-
     assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
     let statuses = v
         .get("statuses")
@@ -240,7 +222,6 @@ async fn zk_verify_batch_endpoint_accepts_json_array_and_returns_mixed_statuses(
     assert_batch_outcome(&statuses[0], "verified", None);
     assert_batch_outcome(&statuses[1], "invalid", None);
 }
-
 #[tokio::test]
 async fn zk_verify_batch_norito_accepts_empty_batch() {
     let v = post_batch_with_limits(
@@ -253,20 +234,17 @@ async fn zk_verify_batch_norito_accepts_empty_batch() {
         false,
     )
     .await;
-
     assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
     assert_eq!(
         v.get("statuses").and_then(|x| x.as_array()).map(Vec::len),
         Some(0)
     );
 }
-
 #[tokio::test]
 async fn zk_verify_batch_endpoint_enforces_diagnostic_limits() {
     use h2::norito_helpers as nh;
     use iroha_zkp_halo2 as h2;
     use iroha_zkp_halo2::backend::pallas::PallasBackend;
-
     let params = h2::Params::new(8).unwrap();
     let coeffs: Vec<h2::PrimeField64> = (0u64..8).map(|i| h2::PrimeField64::from(i + 1)).collect();
     let poly = h2::Polynomial::from_coeffs(coeffs);
@@ -283,7 +261,6 @@ async fn zk_verify_batch_endpoint_enforces_diagnostic_limits() {
         public_inputs_schema_hash: None,
         domain_tag: None,
     };
-
     let norito_vec = norito::to_bytes(&vec![env.clone(), env.clone()]).expect("encode batch");
     let app = Router::new().route(
         "/v1/zk/verify-batch",
@@ -317,7 +294,6 @@ async fn zk_verify_batch_endpoint_enforces_diagnostic_limits() {
         v.get("error").and_then(|x| x.as_str()),
         Some("batch_too_large")
     );
-
     let norito_vec = norito::to_bytes(&vec![env]).expect("encode batch");
     let app = Router::new().route(
         "/v1/zk/verify-batch",
@@ -355,11 +331,9 @@ async fn zk_verify_batch_endpoint_enforces_diagnostic_limits() {
     assert_eq!(statuses.len(), 1);
     assert_batch_outcome(&statuses[0], "error", Some("verification_limit_exceeded"));
 }
-
 #[tokio::test]
 async fn zk_verify_batch_json_classifies_decode_errors_per_entry() {
     use base64::Engine as _;
-
     let env = sample_pallas_envelope("torii-json");
     let encoded = base64::engine::general_purpose::STANDARD
         .encode(norito::to_bytes(&env).expect("encode envelope"));
@@ -372,7 +346,6 @@ async fn zk_verify_batch_json_classifies_decode_errors_per_entry() {
         false,
     )
     .await;
-
     assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
     let statuses = v
         .get("statuses")
@@ -385,11 +358,9 @@ async fn zk_verify_batch_json_classifies_decode_errors_per_entry() {
     assert_batch_outcome(&statuses[2], "error", Some("invalid_entry_type"));
     assert_batch_outcome(&statuses[3], "error", Some("invalid_envelope"));
 }
-
 #[tokio::test]
 async fn zk_verify_batch_json_applies_per_entry_diagnostic_limits() {
     use base64::Engine as _;
-
     let env = sample_pallas_envelope("torii-json-limits");
     let encoded_bytes = norito::to_bytes(&env).expect("encode envelope");
     let encoded = base64::engine::general_purpose::STANDARD.encode(&encoded_bytes);
@@ -408,7 +379,6 @@ async fn zk_verify_batch_json_applies_per_entry_diagnostic_limits() {
         .unwrap_or_default();
     assert_eq!(statuses.len(), 1);
     assert_batch_outcome(&statuses[0], "error", Some("envelope_too_large"));
-
     let label = String::from_utf8(vec![b't', b'o', b'r', b'i', b'i', b'-', 0xc2, 0xb5])
         .expect("valid utf-8 label");
     let env = sample_pallas_envelope(&label);
@@ -430,11 +400,9 @@ async fn zk_verify_batch_json_applies_per_entry_diagnostic_limits() {
     assert_eq!(statuses.len(), 1);
     assert_batch_outcome(&statuses[0], "error", Some("non_ascii_transcript_label"));
 }
-
 #[tokio::test]
 async fn zk_verify_batch_json_applies_open_verify_limits() {
     use base64::Engine as _;
-
     let env = sample_pallas_envelope("torii-json-open-limits");
     let encoded = base64::engine::general_purpose::STANDARD
         .encode(norito::to_bytes(&env).expect("encode envelope"));
@@ -446,7 +414,6 @@ async fn zk_verify_batch_json_applies_open_verify_limits() {
         false,
     )
     .await;
-
     assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
     let statuses = v
         .get("statuses")
@@ -456,7 +423,6 @@ async fn zk_verify_batch_json_applies_open_verify_limits() {
     assert_eq!(statuses.len(), 1);
     assert_batch_outcome(&statuses[0], "error", Some("verification_limit_exceeded"));
 }
-
 #[tokio::test]
 async fn zk_verify_batch_rejects_retired_text_json_alias() {
     let app = verify_batch_router_with_limits(
@@ -472,11 +438,9 @@ async fn zk_verify_batch_rejects_retired_text_json_alias() {
         .header(http::header::CONTENT_TYPE, "text/json")
         .body(axum::body::Body::from("[]"))
         .expect("request");
-
     let response = app.oneshot(request).await.expect("response");
     assert_eq!(response.status(), http::StatusCode::UNSUPPORTED_MEDIA_TYPE);
 }
-
 #[tokio::test]
 async fn zk_verify_batch_enforces_one_exact_typed_content_type() {
     let app = verify_batch_router_with_limits(
@@ -486,7 +450,6 @@ async fn zk_verify_batch_enforces_one_exact_typed_content_type() {
         usize::MAX,
         false,
     );
-
     let accepted = http::Request::builder()
         .method("POST")
         .uri("/v1/zk/verify-batch")
@@ -504,7 +467,6 @@ async fn zk_verify_batch_enforces_one_exact_typed_content_type() {
             .status(),
         http::StatusCode::OK
     );
-
     for content_type in [
         "application/json-evil",
         "application/json; profile=legacy",
@@ -527,7 +489,6 @@ async fn zk_verify_batch_enforces_one_exact_typed_content_type() {
             "{content_type}"
         );
     }
-
     let missing = http::Request::builder()
         .method("POST")
         .uri("/v1/zk/verify-batch")
@@ -541,7 +502,6 @@ async fn zk_verify_batch_enforces_one_exact_typed_content_type() {
             .status(),
         http::StatusCode::UNSUPPORTED_MEDIA_TYPE
     );
-
     let mut duplicate = http::Request::builder()
         .method("POST")
         .uri("/v1/zk/verify-batch")
@@ -560,7 +520,6 @@ async fn zk_verify_batch_enforces_one_exact_typed_content_type() {
             .status(),
         http::StatusCode::BAD_REQUEST
     );
-
     let mut non_ascii = http::Request::builder()
         .method("POST")
         .uri("/v1/zk/verify-batch")
@@ -578,7 +537,6 @@ async fn zk_verify_batch_enforces_one_exact_typed_content_type() {
         http::StatusCode::BAD_REQUEST
     );
 }
-
 #[tokio::test]
 async fn zk_verify_batch_json_rejects_oversized_batch_before_decode() {
     let v = post_batch_with_limits(
@@ -590,7 +548,6 @@ async fn zk_verify_batch_json_rejects_oversized_batch_before_decode() {
         false,
     )
     .await;
-
     assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(false));
     assert_eq!(
         v.get("error").and_then(|x| x.as_str()),
@@ -599,7 +556,6 @@ async fn zk_verify_batch_json_rejects_oversized_batch_before_decode() {
     assert_eq!(v.get("max").and_then(|x| x.as_u64()), Some(1));
     assert_eq!(v.get("actual").and_then(|x| x.as_u64()), Some(2));
 }
-
 #[tokio::test]
 async fn zk_verify_batch_json_rejects_impossible_or_oversized_base64_before_decode() {
     let v = post_json_batch_with_limits(
@@ -609,7 +565,6 @@ async fn zk_verify_batch_json_rejects_impossible_or_oversized_base64_before_deco
         false,
     )
     .await;
-
     let statuses = v
         .get("statuses")
         .and_then(norito::json::Value::as_array)
@@ -618,7 +573,6 @@ async fn zk_verify_batch_json_rejects_impossible_or_oversized_base64_before_deco
     assert_batch_outcome(&statuses[0], "error", Some("envelope_too_large"));
     assert_batch_outcome(&statuses[1], "error", Some("invalid_base64"));
 }
-
 #[tokio::test]
 async fn zk_verify_batch_rejects_oversized_body_before_norito_decode() {
     let app = Router::new().route(
@@ -644,7 +598,6 @@ async fn zk_verify_batch_rejects_oversized_body_before_norito_decode() {
         .header(http::header::CONTENT_TYPE, "application/x-norito")
         .body(axum::body::Body::from(vec![0_u8; 5]))
         .unwrap();
-
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -657,7 +610,6 @@ async fn zk_verify_batch_rejects_oversized_body_before_norito_decode() {
     assert_eq!(v.get("max").and_then(|x| x.as_u64()), Some(4));
     assert_eq!(v.get("actual").and_then(|x| x.as_u64()), Some(5));
 }
-
 #[tokio::test]
 async fn zk_verify_batch_norito_applies_per_entry_diagnostic_limits() {
     let good = sample_pallas_envelope("torii-norito-good");
@@ -665,7 +617,6 @@ async fn zk_verify_batch_norito_applies_per_entry_diagnostic_limits() {
         .expect("valid utf-8 label");
     let non_ascii = sample_pallas_envelope(&non_ascii_label);
     let body = norito::to_bytes(&vec![good.clone(), non_ascii]).expect("encode batch");
-
     let v = post_batch_with_limits(
         body,
         "application/x-norito",
@@ -684,7 +635,6 @@ async fn zk_verify_batch_norito_applies_per_entry_diagnostic_limits() {
     assert_eq!(statuses.len(), 2);
     assert_batch_outcome(&statuses[0], "verified", None);
     assert_batch_outcome(&statuses[1], "error", Some("non_ascii_transcript_label"));
-
     let encoded_good = norito::to_bytes(&good).expect("encode envelope");
     let v = post_batch_with_limits(
         norito::to_bytes(&vec![good]).expect("encode batch"),
@@ -703,7 +653,6 @@ async fn zk_verify_batch_norito_applies_per_entry_diagnostic_limits() {
     assert_eq!(statuses.len(), 1);
     assert_batch_outcome(&statuses[0], "error", Some("envelope_too_large"));
 }
-
 #[tokio::test]
 async fn zk_verify_batch_returns_false_for_invalid_typed_bodies() {
     let v = post_batch_with_limits(
@@ -720,7 +669,6 @@ async fn zk_verify_batch_returns_false_for_invalid_typed_bodies() {
         v.get("statuses").and_then(|x| x.as_array()).map(Vec::len),
         Some(0)
     );
-
     let v = post_batch_with_limits(
         br#"{"not":"an array"}"#.to_vec(),
         "application/json",
@@ -731,7 +679,6 @@ async fn zk_verify_batch_returns_false_for_invalid_typed_bodies() {
     )
     .await;
     assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(false));
-
     let v = post_batch_with_limits(
         br#"["unterminated""#.to_vec(),
         "application/json",
@@ -743,7 +690,6 @@ async fn zk_verify_batch_returns_false_for_invalid_typed_bodies() {
     .await;
     assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(false));
 }
-
 #[tokio::test]
 async fn zk_verify_batch_json_accepts_empty_batch() {
     let v = post_json_batch_with_limits(
@@ -753,14 +699,12 @@ async fn zk_verify_batch_json_accepts_empty_batch() {
         false,
     )
     .await;
-
     assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
     assert_eq!(
         v.get("statuses").and_then(|x| x.as_array()).map(Vec::len),
         Some(0)
     );
 }
-
 #[cfg(feature = "goldilocks_backend")]
 #[tokio::test]
 async fn zk_verify_batch_endpoint_accepts_goldilocks_payload() {
@@ -770,7 +714,6 @@ async fn zk_verify_batch_endpoint_accepts_goldilocks_payload() {
         GoldilocksParams, GoldilocksPolynomial, GoldilocksScalar, Transcript,
         backend::goldilocks::GoldilocksBackend,
     };
-
     let app = Router::new().route(
         "/v1/zk/verify-batch",
         post(
@@ -788,7 +731,6 @@ async fn zk_verify_batch_endpoint_accepts_goldilocks_payload() {
             },
         ),
     );
-
     let params = GoldilocksParams::new(8).unwrap();
     let coeffs: Vec<GoldilocksScalar> = (0u64..8).map(|i| GoldilocksScalar::from(i + 1)).collect();
     let poly = GoldilocksPolynomial::from_coeffs(coeffs);
@@ -812,7 +754,6 @@ async fn zk_verify_batch_endpoint_accepts_goldilocks_payload() {
         ..env_ok.clone()
     };
     let norito_vec = norito::to_bytes(&vec![env_ok, env_bad]).expect("encode batch");
-
     let req = http::Request::builder()
         .method("POST")
         .uri("/v1/zk/verify-batch")
@@ -833,13 +774,11 @@ async fn zk_verify_batch_endpoint_accepts_goldilocks_payload() {
     assert_batch_outcome(&statuses[0], "verified", None);
     assert_batch_outcome(&statuses[1], "invalid", None);
 }
-
 #[tokio::test]
 async fn zk_verify_batch_endpoint_rejects_bound_metadata_tampering() {
     use h2::norito_helpers as nh;
     use iroha_zkp_halo2 as h2;
     use iroha_zkp_halo2::{PolyOpenTranscriptMetadata, backend::pallas::PallasBackend};
-
     let app = Router::new().route(
         "/v1/zk/verify-batch",
         post(
@@ -857,7 +796,6 @@ async fn zk_verify_batch_endpoint_rejects_bound_metadata_tampering() {
             },
         ),
     );
-
     let params = h2::Params::new(8).unwrap();
     let coeffs: Vec<h2::PrimeField64> = (0u64..8).map(|i| h2::PrimeField64::from(i + 1)).collect();
     let poly = h2::Polynomial::from_coeffs(coeffs);
@@ -884,7 +822,6 @@ async fn zk_verify_batch_endpoint_rejects_bound_metadata_tampering() {
     let mut env_bad = env_ok.clone();
     env_bad.domain_tag = Some([0x44; 32]);
     let norito_vec = norito::to_bytes(&vec![env_ok, env_bad]).expect("encode batch");
-
     let req = http::Request::builder()
         .method("POST")
         .uri("/v1/zk/verify-batch")

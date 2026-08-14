@@ -1,15 +1,11 @@
 //! Exact bounded Microsoft Vega-MC proof codec.
-
-use thiserror::Error;
-
 use super::super::{
     MAX_VEGA_PROOF_BYTES_V1, VegaCurveError, VegaMdlProofDimensionsV1, VegaT256PointV1 as Point,
     VegaT256ScalarV1 as Scalar, commitment::Commitment,
 };
-
+use thiserror::Error;
 const POINT_BYTES: usize = 33;
 const SCALAR_BYTES: usize = 32;
-
 /// Failure while decoding or encoding the fixed Microsoft proof representation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(in crate::vega) enum McCodecError {
@@ -20,19 +16,16 @@ pub(in crate::vega) enum McCodecError {
     #[error(transparent)]
     Curve(#[from] VegaCurveError),
 }
-
 /// One row-vector Hyrax commitment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct McCommitment {
     pub(super) points: Vec<Point>,
 }
-
 impl McCommitment {
     pub(super) fn to_local(&self) -> Result<Commitment, McCodecError> {
         Commitment::from_points(self.points.clone()).map_err(|_| McCodecError::InvalidEncoding)
     }
 }
-
 /// One split application-circuit instance.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SplitInstanceWire {
@@ -42,7 +35,6 @@ pub(super) struct SplitInstanceWire {
     pub(super) public_values: Vec<Scalar>,
     pub(super) challenges: Vec<Scalar>,
 }
-
 /// Multi-round verifier-circuit instance.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct MultiRoundInstanceWire {
@@ -50,7 +42,6 @@ pub(super) struct MultiRoundInstanceWire {
     pub(super) public_values: Vec<Scalar>,
     pub(super) challenges_per_round: Vec<Vec<Scalar>>,
 }
-
 /// Relaxed verifier-circuit instance.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RelaxedInstanceWire {
@@ -59,7 +50,6 @@ pub(super) struct RelaxedInstanceWire {
     pub(super) public_values: Vec<Scalar>,
     pub(super) relaxation: Scalar,
 }
-
 /// Linear inner-product response used by the final Hyrax opening.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LinearIpaWire {
@@ -69,19 +59,16 @@ pub(super) struct LinearIpaWire {
     pub(super) delta_response: Scalar,
     pub(super) beta_response: Scalar,
 }
-
 /// One compressed sum-check polynomial.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CompressedPolynomialWire {
     pub(super) coefficients_except_linear: Vec<Scalar>,
 }
-
 /// One complete sum-check transcript.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SumcheckWire {
     pub(super) rounds: Vec<CompressedPolynomialWire>,
 }
-
 /// Relaxed-Spartan proof nested in the Microsoft MC proof.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RelaxedSpartanWire {
@@ -93,7 +80,6 @@ pub(super) struct RelaxedSpartanWire {
     pub(super) error_opening: Vec<Scalar>,
     pub(super) error_blinding: Scalar,
 }
-
 /// Exact Microsoft `VegaMcZkSNARK` proof object.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct McProofWire {
@@ -106,7 +92,6 @@ pub(super) struct McProofWire {
     pub(super) random_instance: RelaxedInstanceWire,
     pub(super) relaxed_spartan: RelaxedSpartanWire,
 }
-
 impl McProofWire {
     /// Decode one proof after validating every key-derived length before allocation.
     pub(super) fn decode(
@@ -146,7 +131,6 @@ impl McProofWire {
             delta_response: reader.scalar()?,
             beta_response: reader.scalar()?,
         };
-
         reader.expect_len(dimensions.verifier_round_commitment_points.len())?;
         let mut commitments = Vec::with_capacity(dimensions.verifier_round_commitment_points.len());
         for points in &dimensions.verifier_round_commitment_points {
@@ -198,7 +182,6 @@ impl McProofWire {
             relaxed_spartan,
         })
     }
-
     /// Encode the exact fixed-little-endian compatibility representation.
     pub(super) fn encode(&self) -> Result<Vec<u8>, McCodecError> {
         let mut output = Vec::new();
@@ -245,7 +228,6 @@ impl McProofWire {
         Ok(output)
     }
 }
-
 fn read_split_instance(
     reader: &mut Reader<'_>,
     precommitted_points: usize,
@@ -262,7 +244,6 @@ fn read_split_instance(
         challenges: reader.scalar_vec(challenges)?,
     })
 }
-
 fn write_split_instance(
     output: &mut Vec<u8>,
     instance: &SplitInstanceWire,
@@ -273,17 +254,14 @@ fn write_split_instance(
     write_scalars(output, &instance.public_values)?;
     write_scalars(output, &instance.challenges)
 }
-
 pub(super) struct Reader<'a> {
     bytes: &'a [u8],
     offset: usize,
 }
-
 impl<'a> Reader<'a> {
     pub(super) fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }
     }
-
     pub(super) fn finish(self) -> Result<(), McCodecError> {
         if self.offset == self.bytes.len() {
             Ok(())
@@ -291,11 +269,9 @@ impl<'a> Reader<'a> {
             Err(McCodecError::InvalidEncoding)
         }
     }
-
     pub(super) fn remaining(&self) -> usize {
         self.bytes.len() - self.offset
     }
-
     pub(super) fn take(&mut self, count: usize) -> Result<&'a [u8], McCodecError> {
         let end = self
             .offset
@@ -306,7 +282,6 @@ impl<'a> Reader<'a> {
         self.offset = end;
         Ok(bytes)
     }
-
     pub(super) fn encoded_len(&mut self) -> Result<usize, McCodecError> {
         usize::try_from(u64::from_le_bytes(
             self.take(8)?
@@ -315,7 +290,6 @@ impl<'a> Reader<'a> {
         ))
         .map_err(|_| McCodecError::InvalidEncoding)
     }
-
     fn expect_len(&mut self, expected: usize) -> Result<(), McCodecError> {
         if self.encoded_len()? == expected {
             Ok(())
@@ -323,7 +297,6 @@ impl<'a> Reader<'a> {
             Err(McCodecError::InvalidEncoding)
         }
     }
-
     pub(super) fn scalar(&mut self) -> Result<Scalar, McCodecError> {
         let bytes = self
             .take(SCALAR_BYTES)?
@@ -331,11 +304,9 @@ impl<'a> Reader<'a> {
             .map_err(|_| McCodecError::InvalidEncoding)?;
         Scalar::from_le_bytes_exact(bytes).map_err(|_| McCodecError::InvalidEncoding)
     }
-
     pub(super) fn point(&mut self) -> Result<Point, McCodecError> {
         Point::from_non_identity_wire_bytes_exact(self.take(POINT_BYTES)?).map_err(Into::into)
     }
-
     fn commitment(&mut self, points: usize) -> Result<McCommitment, McCodecError> {
         self.expect_len(points)?;
         let bytes = points
@@ -350,7 +321,6 @@ impl<'a> Reader<'a> {
         }
         Ok(McCommitment { points: decoded })
     }
-
     fn option_commitment(
         &mut self,
         expected: Option<usize>,
@@ -361,7 +331,6 @@ impl<'a> Reader<'a> {
             _ => Err(McCodecError::InvalidEncoding),
         }
     }
-
     fn scalar_vec(&mut self, scalars: usize) -> Result<Vec<Scalar>, McCodecError> {
         self.expect_len(scalars)?;
         let bytes = scalars
@@ -376,7 +345,6 @@ impl<'a> Reader<'a> {
         }
         Ok(decoded)
     }
-
     fn sumcheck(
         &mut self,
         rounds: usize,
@@ -392,7 +360,6 @@ impl<'a> Reader<'a> {
         Ok(SumcheckWire { rounds: decoded })
     }
 }
-
 pub(super) fn write_len(output: &mut Vec<u8>, length: usize) -> Result<(), McCodecError> {
     output.extend_from_slice(
         &u64::try_from(length)
@@ -401,11 +368,9 @@ pub(super) fn write_len(output: &mut Vec<u8>, length: usize) -> Result<(), McCod
     );
     Ok(())
 }
-
 pub(super) fn write_scalar(output: &mut Vec<u8>, scalar: Scalar) {
     output.extend_from_slice(&scalar.to_le_bytes());
 }
-
 fn write_scalars(output: &mut Vec<u8>, scalars: &[Scalar]) -> Result<(), McCodecError> {
     write_len(output, scalars.len())?;
     for scalar in scalars {
@@ -413,12 +378,10 @@ fn write_scalars(output: &mut Vec<u8>, scalars: &[Scalar]) -> Result<(), McCodec
     }
     Ok(())
 }
-
 pub(super) fn write_point(output: &mut Vec<u8>, point: Point) -> Result<(), McCodecError> {
     output.extend_from_slice(&point.to_non_identity_wire_bytes()?);
     Ok(())
 }
-
 fn write_commitment(output: &mut Vec<u8>, commitment: &McCommitment) -> Result<(), McCodecError> {
     write_len(output, commitment.points.len())?;
     for point in &commitment.points {
@@ -426,7 +389,6 @@ fn write_commitment(output: &mut Vec<u8>, commitment: &McCommitment) -> Result<(
     }
     Ok(())
 }
-
 fn write_option_commitment(
     output: &mut Vec<u8>,
     commitment: Option<&McCommitment>,
@@ -440,7 +402,6 @@ fn write_option_commitment(
     }
     Ok(())
 }
-
 fn write_sumcheck(output: &mut Vec<u8>, proof: &SumcheckWire) -> Result<(), McCodecError> {
     write_len(output, proof.rounds.len())?;
     for round in &proof.rounds {
@@ -448,11 +409,9 @@ fn write_sumcheck(output: &mut Vec<u8>, proof: &SumcheckWire) -> Result<(), McCo
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn dimensions() -> VegaMdlProofDimensionsV1 {
         VegaMdlProofDimensionsV1 {
             num_steps: 1,
@@ -491,7 +450,6 @@ mod tests {
             relaxed_opening_scalars: 1,
         }
     }
-
     #[test]
     fn decoder_rejects_length_bombs_before_allocating() {
         let mut proof = vec![0_u8];

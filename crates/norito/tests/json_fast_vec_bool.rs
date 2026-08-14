@@ -1,13 +1,10 @@
 #![cfg(feature = "json")]
 //! Validate fast-path parsing for Vec<bool> matches the generic parser.
-
 use norito::json::{JsonDeserialize, from_json, from_json_fast};
-
 #[derive(Debug, PartialEq, norito::derive::FastJson, norito::derive::FastJsonWrite)]
 struct Flags {
     flags: Vec<bool>,
 }
-
 impl JsonDeserialize for Flags {
     fn json_deserialize(p: &mut norito::json::Parser<'_>) -> Result<Self, norito::json::Error> {
         p.skip_ws();
@@ -32,7 +29,6 @@ impl JsonDeserialize for Flags {
         })
     }
 }
-
 #[test]
 fn fast_vec_bool_matches_generic() {
     let s = r#"{"flags":[true,false]}"#;

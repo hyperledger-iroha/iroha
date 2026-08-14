@@ -1,22 +1,5 @@
 //! Runtime orchestration for the relay daemon.
-
 #![allow(unexpected_cfgs)]
-
-use std::{
-    collections::HashSet,
-    fmt::Write as _,
-    fs,
-    io::{self, Read as _, Write as _},
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::{
-        Arc, Mutex as StdMutex,
-        atomic::{AtomicBool, AtomicU16, Ordering},
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use iroha_crypto::{
@@ -40,7 +23,62 @@ use iroha_crypto::{
         token::{self, AdmissionToken, DecodeError as TokenDecodeError},
     },
 };
+use std::{
+    collections::HashSet,
+    fmt::{self, Write as _},
+    fs,
+    io::{self, Read as _, Write as _},
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicBool, AtomicU16, Ordering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 iroha_crypto::define_soranet_record_io_adapters!(soranet_record_io);
+use crate::{
+    capability::{
+        self, CapabilityError, CapabilityWarning, GreaseEntry, NegotiatedCapabilities,
+        ServerCapabilities, SignatureId, encode_relay_advertisement, negotiate_capabilities,
+        parse_client_advertisement,
+    },
+    circuit::{
+        CircuitAdmissionError, CircuitRegistry, PaddingBudget, abort_padding_task,
+        spawn_padding_task,
+    },
+    compliance::{ComplianceLogger, ThrottleAudit},
+    config::{
+        self, ConfigError, RelayConfig, RelayMode, VpnBackendEndpoint,
+        read_bounded_direct_regular_file,
+    },
+    congestion::{CongestionController, CongestionError, CongestionLease},
+    constant_rate::ConstantRateProfileSpec,
+    dos::{DoSControls, ThrottleReason, TokenPolicyError},
+    error::RelayError,
+    exit::{
+        ExitRouting, ExitRoutingState, ExitStreamTag, KaigiStreamState, NoritoStreamState,
+        RouteCatalogError, RouteOpenFrame, RouteOpenFrameError, derive_kaigi_room_id,
+    },
+    guard::{self, GuardDirectoryError},
+    handshake::{ClientHello, MAX_CLIENT_HELLO_LEN},
+    incentive_log::IncentiveLogger,
+    incentives::{
+        BandwidthProofIngest, EpochSummary, INCENTIVE_MAX_ACTIVE_EPOCHS_V1, IncentiveCapacityError,
+        RelayPerformanceAccumulator,
+    },
+    metrics::{Metrics, VpnRuntimeState, normalize_downgrade_reason},
+    privacy::{
+        PrivacyAggregator, PrivacyEventBuffer, ProxyPolicyEventBuffer, RejectReason, ThrottleScope,
+    },
+    scheduler::{
+        CELL_SIZE_BYTES, Cell, CellClass, CellScheduler, OverflowPolicy, QueueDepths,
+        SchedulerConfig,
+    },
+    vpn::{VpnFrameIoError, VpnOverlay, VpnSessionHandle, VpnSettlementArtifact},
+    vpn_adapter::{VpnAdapter, VpnBridge},
+};
 use iroha_data_model::{
     metadata::Metadata,
     prelude::Name,
@@ -60,7 +98,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::{
-    NoritoDeserialize, NoritoSerialize,
+    DecodeLimits, NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
     streaming::SoranetAccessKind,
     to_bytes,
@@ -86,43 +124,6 @@ use tokio_tungstenite::{
     tungstenite::{self, protocol::Message},
 };
 use tracing::{debug, info, warn};
-
-use crate::{
-    capability::{
-        self, CapabilityError, CapabilityWarning, GreaseEntry, NegotiatedCapabilities,
-        ServerCapabilities, SignatureId, encode_relay_advertisement, negotiate_capabilities,
-        parse_client_advertisement,
-    },
-    circuit::{
-        CircuitAdmissionError, CircuitRegistry, PaddingBudget, abort_padding_task,
-        spawn_padding_task,
-    },
-    compliance::{ComplianceLogger, ThrottleAudit},
-    config::{self, ConfigError, RelayConfig, RelayMode, VpnBackendEndpoint},
-    congestion::{CongestionController, CongestionError, CongestionLease},
-    constant_rate::ConstantRateProfileSpec,
-    dos::{DoSControls, ThrottleReason, TokenPolicyError},
-    error::RelayError,
-    exit::{
-        ExitRouting, ExitRoutingState, ExitStreamTag, KaigiStreamState, NoritoStreamState,
-        RouteCatalogError, RouteOpenFrame, RouteOpenFrameError, derive_kaigi_room_id,
-    },
-    guard::{self, GuardDirectoryError},
-    handshake::{ClientHello, MAX_CLIENT_HELLO_LEN},
-    incentive_log::IncentiveLogger,
-    incentives::{EpochSummary, RelayPerformanceAccumulator},
-    metrics::{Metrics, VpnRuntimeState, normalize_downgrade_reason},
-    privacy::{
-        PrivacyAggregator, PrivacyEventBuffer, ProxyPolicyEventBuffer, RejectReason, ThrottleScope,
-    },
-    scheduler::{
-        CELL_SIZE_BYTES, Cell, CellClass, CellScheduler, OverflowPolicy, QueueDepths,
-        SchedulerConfig,
-    },
-    vpn::{VpnFrameIoError, VpnOverlay, VpnSessionHandle, VpnSettlementArtifact},
-    vpn_adapter::{VpnAdapter, VpnBridge},
-};
-
 struct AdminRenderContext<'a> {
     metrics: &'a Metrics,
     privacy: &'a PrivacyAggregator,
@@ -130,7 +131,6 @@ struct AdminRenderContext<'a> {
     proxy_policy_events: &'a ProxyPolicyEventBuffer,
     performance: &'a Mutex<RelayPerformanceAccumulator>,
 }
-
 struct VpnBackendBridgeContext<'a> {
     bridge: VpnBridge,
     adapter: &'a VpnAdapter,
@@ -138,7 +138,6 @@ struct VpnBackendBridgeContext<'a> {
     helper_ticket: &'a VpnHelperTicketV1,
     mtu: usize,
 }
-
 #[derive(Clone)]
 struct AdminResources {
     metrics: Arc<Metrics>,
@@ -147,12 +146,10 @@ struct AdminResources {
     proxy_policy_events: Arc<ProxyPolicyEventBuffer>,
     performance: Arc<Mutex<RelayPerformanceAccumulator>>,
 }
-
 #[derive(Clone, Debug)]
 struct AdminAuthorization {
     token_hash: blake3::Hash,
 }
-
 impl AdminAuthorization {
     fn load(path: &Path) -> Result<Self, ConfigError> {
         let mut file = fs::File::open(path).map_err(|error| {
@@ -181,7 +178,6 @@ impl AdminAuthorization {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             let mode = metadata.permissions().mode();
             if mode & 0o027 != 0 {
                 return Err(ConfigError::Admin(format!(
@@ -190,7 +186,6 @@ impl AdminAuthorization {
                 )));
             }
         }
-
         let capacity = usize::try_from(metadata.len()).map_err(|_| {
             ConfigError::Admin(
                 "admin authentication token file length is not representable".to_string(),
@@ -218,7 +213,6 @@ impl AdminAuthorization {
             token_hash: token_hash?,
         })
     }
-
     fn hash_token(bytes: &[u8]) -> Result<blake3::Hash, ConfigError> {
         let token = std::str::from_utf8(bytes).map_err(|_| {
             ConfigError::Admin("admin authentication token must be valid UTF-8".to_string())
@@ -237,14 +231,12 @@ impl AdminAuthorization {
         }
         Ok(blake3::hash(token.as_bytes()))
     }
-
     fn matches(&self, candidate: &str) -> bool {
         // `blake3::Hash` equality is constant-time, so the secret is never
         // compared byte-by-byte with an attacker-controlled prefix.
         self.token_hash == blake3::hash(candidate.as_bytes())
     }
 }
-
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4";
 const NDJSON_CONTENT_TYPE: &str = "application/x-ndjson";
 const PLAIN_TEXT_CONTENT_TYPE: &str = "text/plain; charset=utf-8";
@@ -253,6 +245,15 @@ const HANDSHAKE_STREAM_TIMEOUT: Duration = Duration::from_secs(5);
 const HANDSHAKE_PAYLOAD_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_HANDSHAKE_FRAME_LEN: usize = MAX_CLIENT_HELLO_LEN;
 const _: () = assert!(MAX_HANDSHAKE_FRAME_LEN <= u16::MAX as usize);
+// First-release bounds for the TLS identity artifacts read during relay
+// startup. Sixteen certificates leave ample room for a complete issuer chain,
+// while the byte ceilings cover ordinary PEM expansion without allowing a
+// corrupt local path to define startup allocation.
+const TLS_CERTIFICATE_CHAIN_MAX_BYTES_V1: usize = 1024 * 1024;
+const TLS_CERTIFICATE_CHAIN_MAX_ENTRIES_V1: usize = 16;
+const TLS_PRIVATE_KEY_MAX_BYTES_V1: usize = 64 * 1024;
+/// Maximum on-disk JSON size of one first-release VPN settlement spool record.
+pub const VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1: usize = 64 * 1024;
 const VPN_HELPER_TICKET_REPLAY_NAMESPACE: &[u8] =
     b"iroha.soranet.vpn.helper-ticket.consumptions.v1";
 const VPN_HELPER_TICKET_REPLAY_ID_DOMAIN: &[u8] = b"iroha.soranet.vpn.helper-ticket.replay-id.v1";
@@ -260,6 +261,8 @@ const VPN_HELPER_TICKET_REPLAY_ID_DOMAIN: &[u8] = b"iroha.soranet.vpn.helper-tic
 const INCENTIVE_EPOCH_WINDOW_SECS: u64 = 60 * 60;
 /// Maximum Norito-encoded bandwidth proof payload accepted over the QUIC measurement stream.
 const MAX_BANDWIDTH_PROOF_FRAME_LEN: usize = 4 * 1024;
+const BANDWIDTH_PROOF_DECODE_LIMITS_V1: DecodeLimits =
+    DecodeLimits::new(128, MAX_BANDWIDTH_PROOF_FRAME_LEN, 512, 64 * 1024, 16);
 /// GAR category recorded when a norito-stream request arrives without a configured route.
 const FALLBACK_NORITO_UNSUPPORTED_CATEGORY: &str = "stream.norito.unsupported";
 /// GAR category recorded when a kaigi-stream request arrives without a configured route.
@@ -273,7 +276,6 @@ const DEFAULT_HANDSHAKE_SUITES: [HandshakeSuite; 2] = [
 ];
 const VPN_BACKEND_BOOTSTRAP_MAGIC: &[u8; 8] = b"SVPNBE1\0";
 const VPN_BACKEND_STATUS_READY: u8 = 1;
-
 fn record_stream_context(stream_id: StreamId) -> RecordStreamContext {
     let initiator = match stream_id.initiator() {
         Side::Client => RecordEndpoint::Client,
@@ -285,7 +287,6 @@ fn record_stream_context(stream_id: StreamId) -> RecordStreamContext {
     };
     RecordStreamContext::new(initiator, kind, stream_id.index())
 }
-
 /// Shared context required by `monitor_circuit`.
 #[derive(Clone)]
 struct MonitorCircuitResources {
@@ -302,7 +303,6 @@ struct MonitorCircuitResources {
     lane_manager: Arc<ConstantRateLaneManager>,
     vpn: Option<Arc<VpnOverlay>>,
 }
-
 #[derive(Debug)]
 struct ConstantRateLaneManager {
     spec: ConstantRateProfileSpec,
@@ -310,7 +310,6 @@ struct ConstantRateLaneManager {
     current_cap: AtomicU16,
     degraded: AtomicBool,
 }
-
 impl ConstantRateLaneManager {
     fn new(spec: ConstantRateProfileSpec, registry: Arc<CircuitRegistry>) -> Self {
         Self {
@@ -320,15 +319,12 @@ impl ConstantRateLaneManager {
             degraded: AtomicBool::new(false),
         }
     }
-
     fn current_cap(&self) -> u16 {
         self.current_cap.load(Ordering::Relaxed)
     }
-
     fn profile_spec(&self) -> ConstantRateProfileSpec {
         self.spec
     }
-
     fn apply_active_sample(&self, active: u64, metrics: &Metrics) {
         metrics.set_constant_rate_active_neighbors(active);
         metrics.set_constant_rate_queue_depth(active);
@@ -346,7 +342,6 @@ impl ConstantRateLaneManager {
             }
         }
     }
-
     fn compute_saturation_percent(&self, active: u64) -> f64 {
         if self.spec.neighbor_cap == 0 {
             0.0
@@ -354,7 +349,6 @@ impl ConstantRateLaneManager {
             (active as f64 / f64::from(self.spec.neighbor_cap)) * 100.0
         }
     }
-
     fn maybe_toggle_cap(&self, active_neighbors: u64, saturation_percent: f64) -> Option<bool> {
         let currently_degraded = self.degraded.load(Ordering::Relaxed);
         if !currently_degraded && saturation_percent >= self.spec.auto_disable_threshold_percent {
@@ -394,7 +388,6 @@ impl ConstantRateLaneManager {
         }
     }
 }
-
 #[derive(Debug)]
 struct ConstantRateEngine {
     scheduler: CellScheduler,
@@ -402,20 +395,17 @@ struct ConstantRateEngine {
     total_sent: u64,
     tick_duration: Duration,
 }
-
 #[derive(Debug)]
 struct ConstantRateTick {
     cell: Cell,
     queues: QueueDepths,
     dummy_ratio: f64,
 }
-
 #[derive(Debug, Clone, Copy)]
 struct CongestionAction {
     buffer_space_bytes: usize,
     dropped_class: Option<CellClass>,
 }
-
 impl ConstantRateEngine {
     fn new(spec: ConstantRateProfileSpec) -> Self {
         let tick_duration = milliseconds_to_duration(spec.tick_millis);
@@ -432,16 +422,13 @@ impl ConstantRateEngine {
             tick_duration,
         }
     }
-
     fn tick_duration(&self) -> Duration {
         self.tick_duration
     }
-
     #[cfg(test)]
     fn enqueue(&mut self, cell: Cell) -> bool {
         self.scheduler.enqueue(cell)
     }
-
     fn next_cell(&mut self) -> ConstantRateTick {
         let queues = self.scheduler.queue_depths();
         let cell = self.scheduler.force_tick();
@@ -460,7 +447,6 @@ impl ConstantRateEngine {
             dummy_ratio,
         }
     }
-
     fn apply_congestion_hint(&mut self, buffer_space_bytes: usize) -> Option<CongestionAction> {
         if buffer_space_bytes >= CELL_SIZE_BYTES {
             return None;
@@ -472,7 +458,6 @@ impl ConstantRateEngine {
         })
     }
 }
-
 fn spawn_constant_rate_task(
     connection: Connection,
     spec: ConstantRateProfileSpec,
@@ -483,7 +468,6 @@ fn spawn_constant_rate_task(
         let mut ticker = interval(engine.tick_duration());
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut low_dummy_active = false;
-
         loop {
             ticker.tick().await;
             if let Some(congestion) =
@@ -521,7 +505,6 @@ fn spawn_constant_rate_task(
             } else {
                 low_dummy_active = false;
             }
-
             let payload = Bytes::from(tick.cell.to_bytes());
             if let Err(error) = connection.send_datagram(payload) {
                 warn!(
@@ -533,19 +516,16 @@ fn spawn_constant_rate_task(
         }
     })
 }
-
 fn abort_constant_rate_task(task: Option<JoinHandle<()>>) {
     if let Some(handle) = task {
         handle.abort();
     }
 }
-
 fn milliseconds_to_duration(millis: f64) -> Duration {
     let clamped = millis.max(1.0);
     let micros = (clamped * 1_000.0).round() as u64;
     Duration::from_micros(micros.max(1))
 }
-
 #[derive(Clone)]
 struct ExitStreamResources {
     norito: Option<Arc<NoritoStreamState>>,
@@ -557,16 +537,13 @@ struct ExitStreamResources {
     compliance: Option<Arc<ComplianceLogger>>,
     vpn: Option<Arc<VpnOverlay>>,
 }
-
 #[derive(Clone, Copy)]
 struct PaddingSchedule {
     channel_id: [u8; 32],
     period: Duration,
 }
-
 type ToriiWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
-
 #[allow(unexpected_cfgs)]
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize)]
 struct NoritoStreamOpen {
@@ -578,7 +555,6 @@ struct NoritoStreamOpen {
     access_kind: SoranetAccessKind,
     exit_token: Vec<u8>,
 }
-
 #[allow(unexpected_cfgs)]
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize)]
 struct KaigiStreamOpen {
@@ -591,7 +567,6 @@ struct KaigiStreamOpen {
     exit_token: Vec<u8>,
     exit_multiaddr: String,
 }
-
 fn derive_relay_id(identity_key: &KeyPair) -> Result<RelayId, RelayError> {
     let (algorithm, payload) = identity_key
         .public_key()
@@ -612,7 +587,6 @@ fn derive_relay_id(identity_key: &KeyPair) -> Result<RelayId, RelayError> {
     relay_id.copy_from_slice(payload);
     Ok(relay_id)
 }
-
 fn current_epoch(window_secs: u64) -> u32 {
     if window_secs == 0 {
         return 0;
@@ -624,118 +598,39 @@ fn current_epoch(window_secs: u64) -> u32 {
     let epoch = secs / window_secs;
     epoch.min(u32::MAX as u64) as u32
 }
-
-fn render_incentive_prometheus(
-    relay_id: RelayId,
-    summaries: &[EpochSummary],
-    mode: RelayMode,
-) -> String {
-    if summaries.is_empty() {
-        return String::new();
-    }
-
-    let mut output = String::new();
-    let mode_label = mode.as_label();
-    let relay_hex = hex::encode(relay_id);
-
-    let _ = writeln!(
-        output,
-        "# HELP soranet_relay_uptime_seconds_total Relay uptime observed within the incentive epoch."
-    );
-    let _ = writeln!(output, "# TYPE soranet_relay_uptime_seconds_total counter");
-    for summary in summaries {
-        let _ = writeln!(
-            output,
-            "soranet_relay_uptime_seconds_total{{mode=\"{mode}\",relay=\"{relay}\",epoch=\"{epoch}\"}} {uptime}",
-            mode = mode_label,
-            relay = relay_hex,
-            epoch = summary.epoch,
-            uptime = summary.uptime_seconds
-        );
-    }
-
-    let _ = writeln!(
-        output,
-        "# HELP soranet_relay_scheduled_seconds_total Expected uptime window for the incentive epoch."
-    );
-    let _ = writeln!(
-        output,
-        "# TYPE soranet_relay_scheduled_seconds_total counter"
-    );
-    for summary in summaries {
-        let _ = writeln!(
-            output,
-            "soranet_relay_scheduled_seconds_total{{mode=\"{mode}\",relay=\"{relay}\",epoch=\"{epoch}\"}} {scheduled}",
-            mode = mode_label,
-            relay = relay_hex,
-            epoch = summary.epoch,
-            scheduled = summary.scheduled_uptime_seconds
-        );
-    }
-
-    let _ = writeln!(
-        output,
-        "# HELP soranet_relay_bandwidth_verified_bytes_total Verified relay bandwidth contribution for the epoch."
-    );
-    let _ = writeln!(
-        output,
-        "# TYPE soranet_relay_bandwidth_verified_bytes_total counter"
-    );
-    for summary in summaries {
-        let _ = writeln!(
-            output,
-            "soranet_relay_bandwidth_verified_bytes_total{{mode=\"{mode}\",relay=\"{relay}\",epoch=\"{epoch}\"}} {bytes}",
-            mode = mode_label,
-            relay = relay_hex,
-            epoch = summary.epoch,
-            bytes = summary.verified_bandwidth_bytes
-        );
-    }
-
-    let _ = writeln!(
-        output,
-        "# HELP soranet_relay_measurements_total Accepted blinded measurement proofs per epoch."
-    );
-    let _ = writeln!(output, "# TYPE soranet_relay_measurements_total counter");
-    for summary in summaries {
-        let _ = writeln!(
-            output,
-            "soranet_relay_measurements_total{{mode=\"{mode}\",relay=\"{relay}\",epoch=\"{epoch}\"}} {count}",
-            mode = mode_label,
-            relay = relay_hex,
-            epoch = summary.epoch,
-            count = summary.measurement_ids.len()
-        );
-    }
-
-    let _ = writeln!(
-        output,
-        "# HELP soranet_relay_confidence_floor_per_mille Minimum measurement confidence per epoch."
-    );
-    let _ = writeln!(
-        output,
-        "# TYPE soranet_relay_confidence_floor_per_mille gauge"
-    );
-    for summary in summaries {
-        let _ = writeln!(
-            output,
-            "soranet_relay_confidence_floor_per_mille{{mode=\"{mode}\",relay=\"{relay}\",epoch=\"{epoch}\"}} {confidence}",
-            mode = mode_label,
-            relay = relay_hex,
-            epoch = summary.epoch,
-            confidence = u64::from(summary.confidence_floor_per_mille)
-        );
-    }
-
-    output
+struct IncentiveMetricsWriter {
+    output: String,
+    max_bytes: usize,
 }
-
+impl IncentiveMetricsWriter {
+    fn new(max_bytes: usize) -> Result<Self, fmt::Error> {
+        let mut output = String::new();
+        output
+            .try_reserve_exact(max_bytes)
+            .map_err(|_| fmt::Error)?;
+        Ok(Self { output, max_bytes })
+    }
+}
+impl fmt::Write for IncentiveMetricsWriter {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        let next = self
+            .output
+            .len()
+            .checked_add(value.len())
+            .ok_or(fmt::Error)?;
+        if next > self.max_bytes {
+            return Err(fmt::Error);
+        }
+        self.output.push_str(value);
+        Ok(())
+    }
+}
+include!("runtime/incentive_metrics.rs");
 #[derive(Copy, Clone, Debug)]
 enum SnapshotKind {
     Uptime,
     Measurement,
 }
-
 impl SnapshotKind {
     fn label(self) -> &'static str {
         match self {
@@ -744,10 +639,9 @@ impl SnapshotKind {
         }
     }
 }
-
 fn snapshot_from_summary(
     relay_id: RelayId,
-    summary: &EpochSummary,
+    summary: EpochSummary,
     kind: SnapshotKind,
 ) -> RelayEpochMetricsV1 {
     let mut metadata = Metadata::default();
@@ -763,7 +657,6 @@ fn snapshot_from_summary(
         Name::from_str("measurement_count").expect("valid metadata name"),
         Json::from(summary.measurement_ids.len() as u64),
     );
-
     RelayEpochMetricsV1 {
         relay_id,
         epoch: summary.epoch,
@@ -773,11 +666,10 @@ fn snapshot_from_summary(
         compliance: RelayComplianceStatusV1::Clean,
         reward_score: 0,
         confidence_floor_per_mille: summary.confidence_floor_per_mille,
-        measurement_ids: summary.measurement_ids.clone(),
+        measurement_ids: summary.measurement_ids,
         metadata,
     }
 }
-
 struct HandshakeOutcome {
     negotiated: NegotiatedCapabilities,
     session: SessionSecrets,
@@ -786,13 +678,11 @@ struct HandshakeOutcome {
     vpn_session: Option<VpnSessionHandle>,
     vpn_helper_ticket: Option<VpnHelperTicketV1>,
 }
-
 struct HandshakeByteGuard<'a> {
     metrics: &'a Metrics,
     bytes: u64,
     consumed: bool,
 }
-
 #[derive(Debug, Error)]
 enum VpnBackendBridgeError {
     #[error(transparent)]
@@ -804,7 +694,6 @@ enum VpnBackendBridgeError {
     #[error("vpn usage voucher error: {0}")]
     UsageVoucher(String),
 }
-
 #[derive(Debug)]
 struct VpnVoucherDebtWindow {
     session_id: [u8; 16],
@@ -821,7 +710,6 @@ struct VpnVoucherDebtWindow {
     highest_sequence: u64,
     has_voucher: bool,
 }
-
 impl VpnVoucherDebtWindow {
     fn new(helper_ticket: &VpnHelperTicketV1, max_unvouched_bytes: u64) -> Self {
         Self {
@@ -840,17 +728,14 @@ impl VpnVoucherDebtWindow {
             has_voucher: false,
         }
     }
-
     fn record_ingress(&mut self, bytes: u64) -> Result<(), VpnBackendBridgeError> {
         self.observed_ingress_bytes = self.observed_ingress_bytes.saturating_add(bytes);
         self.ensure_within_window()
     }
-
     fn record_egress(&mut self, bytes: u64) -> Result<(), VpnBackendBridgeError> {
         self.observed_egress_bytes = self.observed_egress_bytes.saturating_add(bytes);
         self.ensure_within_window()
     }
-
     fn accept_envelope(
         &mut self,
         envelope: &VpnUsageVoucherEnvelopeV1,
@@ -909,7 +794,6 @@ impl VpnVoucherDebtWindow {
                 "voucher earned fee does not match helper ticket tariff".to_string(),
             ));
         }
-
         self.has_voucher = true;
         self.highest_sequence = body.sequence;
         self.vouched_ingress_bytes = body.ingress_bytes;
@@ -921,7 +805,6 @@ impl VpnVoucherDebtWindow {
             earned_fee,
         })
     }
-
     fn ensure_within_window(&self) -> Result<(), VpnBackendBridgeError> {
         let observed = self
             .observed_ingress_bytes
@@ -939,7 +822,6 @@ impl VpnVoucherDebtWindow {
         Ok(())
     }
 }
-
 fn decode_usage_voucher_control(
     payload: &[u8],
 ) -> Result<Option<VpnUsageVoucherEnvelopeV1>, VpnBackendBridgeError> {
@@ -959,7 +841,6 @@ fn decode_usage_voucher_control(
     }
     Ok(Some(envelope))
 }
-
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 struct VpnBackendBootstrap {
     session_id_hex: String,
@@ -967,7 +848,6 @@ struct VpnBackendBootstrap {
     session_routes: Vec<String>,
     mtu_bytes: u16,
 }
-
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 struct VpnBackendBootstrapEnvelope {
     bootstrap: VpnBackendBootstrap,
@@ -975,14 +855,12 @@ struct VpnBackendBootstrapEnvelope {
     nonce: [u8; 16],
     mac: [u8; 32],
 }
-
 #[derive(Debug, Clone, norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
 struct VpnSettlementSubmitRequestArtifact {
     relay_receipt_hex: String,
     client_voucher_hex: String,
     lease_id_hex: String,
 }
-
 #[derive(Debug, Clone, norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
 struct VpnSettlementSpoolRecord {
     version: u8,
@@ -994,18 +872,15 @@ struct VpnSettlementSpoolRecord {
     torii_receipt_path: String,
     submit_receipt_request: VpnSettlementSubmitRequestArtifact,
 }
-
 fn unix_time_ms(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
         .as_millis()
         .min(u128::from(u64::MAX)) as u64
 }
-
 fn unix_time_ms_for_artifact() -> u64 {
     unix_time_ms(SystemTime::now())
 }
-
 fn vpn_settlement_spool_record(
     artifact: &VpnSettlementArtifact,
     generated_at_ms: u64,
@@ -1028,7 +903,6 @@ fn vpn_settlement_spool_record(
         },
     }
 }
-
 fn spool_vpn_settlement_artifact(
     spool_dir: &Path,
     artifact: &VpnSettlementArtifact,
@@ -1046,6 +920,14 @@ fn spool_vpn_settlement_artifact(
         record.session_id_hex, artifact.voucher.body.sequence, generated_at_ms
     );
     let path = spool_dir.join(file_name);
+    let bytes = norito::json::to_vec_pretty(&record)
+        .map_err(|error| format!("failed to encode vpn settlement artifact JSON: {error}"))?;
+    if bytes.len().saturating_add(1) > VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1 {
+        return Err(format!(
+            "vpn settlement artifact is {} bytes; first-release limit is {VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1} bytes",
+            bytes.len().saturating_add(1)
+        ));
+    }
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1056,8 +938,6 @@ fn spool_vpn_settlement_artifact(
                 path.display()
             )
         })?;
-    let bytes = norito::json::to_vec_pretty(&record)
-        .map_err(|error| format!("failed to encode vpn settlement artifact JSON: {error}"))?;
     file.write_all(&bytes).map_err(|error| {
         format!(
             "failed to write vpn settlement artifact `{}`: {error}",
@@ -1072,7 +952,6 @@ fn spool_vpn_settlement_artifact(
     })?;
     Ok(path)
 }
-
 impl<'a> HandshakeByteGuard<'a> {
     fn new(metrics: &'a Metrics) -> Self {
         Self {
@@ -1081,13 +960,11 @@ impl<'a> HandshakeByteGuard<'a> {
             consumed: false,
         }
     }
-
     fn add(&mut self, delta: usize) {
         if !self.consumed {
             self.bytes = self.bytes.saturating_add(delta as u64);
         }
     }
-
     fn finish(mut self) -> u64 {
         if !self.consumed && self.bytes > 0 {
             self.metrics.record_handshake_bytes(self.bytes);
@@ -1096,7 +973,6 @@ impl<'a> HandshakeByteGuard<'a> {
         self.bytes
     }
 }
-
 impl<'a> Drop for HandshakeByteGuard<'a> {
     fn drop(&mut self) {
         if !self.consumed && self.bytes > 0 {
@@ -1105,14 +981,12 @@ impl<'a> Drop for HandshakeByteGuard<'a> {
         }
     }
 }
-
 fn vpn_flow_label_from_session_id(session_id: [u8; 16]) -> VpnFlowLabelV1 {
     let value = (u32::from(session_id[0]) << 16)
         | (u32::from(session_id[1]) << 8)
         | u32::from(session_id[2]);
     VpnFlowLabelV1::from_u32(value).expect("three-byte flow label should always fit")
 }
-
 fn build_vpn_backend_bootstrap(session_id: [u8; 16]) -> VpnBackendBootstrap {
     let address_plan = derive_vpn_session_address_plan_v1(session_id);
     VpnBackendBootstrap {
@@ -1122,7 +996,6 @@ fn build_vpn_backend_bootstrap(session_id: [u8; 16]) -> VpnBackendBootstrap {
         mtu_bytes: VPN_DEFAULT_TUNNEL_MTU_BYTES,
     }
 }
-
 fn vpn_backend_bootstrap_mac(
     secret: &[u8; 32],
     bootstrap: &VpnBackendBootstrap,
@@ -1136,7 +1009,6 @@ fn vpn_backend_bootstrap_mac(
     hasher.update(nonce);
     *hasher.finalize().as_bytes()
 }
-
 fn vpn_backend_bootstrap_envelope(
     bootstrap: &VpnBackendBootstrap,
     secret: Option<&[u8; 32]>,
@@ -1153,7 +1025,6 @@ fn vpn_backend_bootstrap_envelope(
         mac,
     }
 }
-
 async fn write_vpn_backend_bootstrap<W: AsyncWrite + Unpin>(
     writer: &mut W,
     bootstrap: &VpnBackendBootstrap,
@@ -1171,7 +1042,6 @@ async fn write_vpn_backend_bootstrap<W: AsyncWrite + Unpin>(
     writer.write_all(&payload).await?;
     Ok(())
 }
-
 async fn read_vpn_backend_status<R: AsyncRead + Unpin>(
     reader: &mut R,
 ) -> Result<(), VpnBackendBridgeError> {
@@ -1195,7 +1065,6 @@ async fn read_vpn_backend_status<R: AsyncRead + Unpin>(
         ))
     }
 }
-
 fn record_route_open_ingress_metrics(
     vpn_adapter: Option<&VpnAdapter>,
     vpn_session: Option<&VpnSessionHandle>,
@@ -1213,7 +1082,6 @@ fn record_route_open_ingress_metrics(
             .record_vpn_control_ingress(bytes);
     }
 }
-
 fn record_route_open_egress_metrics(
     vpn_adapter: Option<&VpnAdapter>,
     vpn_session: Option<&VpnSessionHandle>,
@@ -1225,7 +1093,6 @@ fn record_route_open_egress_metrics(
         session.session().metrics().record_vpn_control_egress(bytes);
     }
 }
-
 /// Fully configured relay runtime ready to serve traffic.
 pub struct RelayRuntime {
     config: RelayConfig,
@@ -1257,7 +1124,6 @@ pub struct RelayRuntime {
     vpn_helper_ticket_replays: Option<Arc<StdMutex<PersistentReplayLedger>>>,
     ticket_replays: Arc<StdMutex<TicketReplayState>>,
 }
-
 #[derive(Clone)]
 struct CircuitContext {
     metrics: Arc<Metrics>,
@@ -1286,7 +1152,6 @@ struct CircuitContext {
     vpn_helper_ticket_replays: Option<Arc<StdMutex<PersistentReplayLedger>>>,
     ticket_replays: Arc<StdMutex<TicketReplayState>>,
 }
-
 #[derive(Debug, Clone)]
 struct RelayTransportTrust {
     quic_multiaddr: String,
@@ -1296,14 +1161,12 @@ struct RelayTransportTrust {
     directory_snapshot_digest: [u8; 32],
     valid_until_ms: u64,
 }
-
 #[derive(Debug)]
 struct TicketReplayState {
     persisted: TicketRevocationStore,
     pending: HashSet<[u8; 32]>,
     capacity: usize,
 }
-
 impl TicketReplayState {
     fn load(config: &config::PowConfig, now: SystemTime) -> Result<Self, ConfigError> {
         let capacity = usize::try_from(config.revocation_store_capacity).map_err(|_| {
@@ -1327,7 +1190,6 @@ impl TicketReplayState {
         })
     }
 }
-
 fn verify_and_consume_ticket(
     ticket: &PowTicket,
     replay_state: &StdMutex<TicketReplayState>,
@@ -1349,9 +1211,11 @@ fn verify_and_consume_ticket(
                 "ticket replay store at capacity".to_owned(),
             ));
         }
+        state.pending.try_reserve(1).map_err(|_| {
+            HandshakeError::ReplayStore("ticket replay pending-set allocation failed".to_owned())
+        })?;
         state.pending.insert(fingerprint);
     }
-
     if let Err(error) = verify() {
         let mut state = replay_state
             .lock()
@@ -1359,7 +1223,6 @@ fn verify_and_consume_ticket(
         state.pending.remove(&fingerprint);
         return Err(error);
     }
-
     let mut state = replay_state
         .lock()
         .map_err(|_| HandshakeError::ReplayStore("ticket replay lock poisoned".to_owned()))?;
@@ -1371,7 +1234,6 @@ fn verify_and_consume_ticket(
     state.pending.remove(&fingerprint);
     consumed
 }
-
 fn verify_puzzle_ticket_binding(
     ticket: &PowTicket,
     params: &puzzle::Parameters,
@@ -1385,7 +1247,6 @@ fn verify_puzzle_ticket_binding(
         puzzle::verify(ticket, &binding, params).map_err(HandshakeError::Puzzle)
     })
 }
-
 fn verify_pow_ticket_binding(
     ticket: &PowTicket,
     params: &PowParameters,
@@ -1399,7 +1260,6 @@ fn verify_pow_ticket_binding(
         pow::verify(ticket, &binding, params).map_err(HandshakeError::Pow)
     })
 }
-
 fn continue_after_admission<T>(
     admission: Result<(), HandshakeError>,
     expensive_handshake: impl FnOnce() -> Result<T, HandshakeError>,
@@ -1407,7 +1267,6 @@ fn continue_after_admission<T>(
     admission?;
     expensive_handshake()
 }
-
 fn load_vpn_helper_ticket_replay_ledger(
     config: &config::VpnConfig,
     relay_id: &RelayId,
@@ -1439,7 +1298,6 @@ fn load_vpn_helper_ticket_replay_ledger(
         ))
     })
 }
-
 fn vpn_helper_ticket_replay_id(ticket: &VpnHelperTicketV1) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(VPN_HELPER_TICKET_REPLAY_ID_DOMAIN);
@@ -1447,7 +1305,6 @@ fn vpn_helper_ticket_replay_id(ticket: &VpnHelperTicketV1) -> [u8; 32] {
     hasher.update(&ticket.session_id);
     *hasher.finalize().as_bytes()
 }
-
 fn consume_vpn_helper_ticket(
     replay_ledger: &StdMutex<PersistentReplayLedger>,
     replay_id: [u8; 32],
@@ -1483,7 +1340,6 @@ fn consume_vpn_helper_ticket(
         )),
     }
 }
-
 async fn redeem_vpn_helper_ticket(
     replay_ledger: Arc<StdMutex<PersistentReplayLedger>>,
     ticket: &VpnHelperTicketV1,
@@ -1501,7 +1357,6 @@ async fn redeem_vpn_helper_ticket(
         ))
     })?
 }
-
 fn ensure_vpn_helper_ticket_within_trust(
     ticket: &VpnHelperTicketV1,
     trust: &RelayTransportTrust,
@@ -1513,7 +1368,6 @@ fn ensure_vpn_helper_ticket_within_trust(
     }
     Ok(())
 }
-
 fn vpn_helper_handshake_binding(
     helper_ticket: &[u8],
     relay_id: &RelayId,
@@ -1524,7 +1378,6 @@ fn vpn_helper_handshake_binding(
         hasher.update(&(value.len() as u64).to_be_bytes());
         hasher.update(value);
     }
-
     let mut hasher = blake3::Hasher::new();
     for value in [
         b"iroha.soranet.vpn.helper-handshake-binding.v2".as_slice(),
@@ -1542,7 +1395,6 @@ fn vpn_helper_handshake_binding(
     }
     *hasher.finalize().as_bytes()
 }
-
 impl RelayRuntime {
     /// Build a relay runtime from configuration, validating certificates,
     /// descriptor commits, guard snapshots, and identity keys along the way.
@@ -1615,7 +1467,6 @@ impl RelayRuntime {
             ))));
         };
         let descriptor_commit = Arc::new(descriptor_commit_vec);
-
         let manifest_path = policy
             .descriptor_manifest_path()
             .map(|path| path.to_path_buf());
@@ -1659,7 +1510,6 @@ impl RelayRuntime {
         })?;
         let relay_id = derive_relay_id(&identity_key)?;
         let identity_key = Arc::new(identity_key);
-
         if let Some(bundle) = certificate_bundle.as_ref() {
             let (algorithm, public_bytes) =
                 identity_key.public_key().try_to_bytes().map_err(|err| {
@@ -1678,13 +1528,11 @@ impl RelayRuntime {
                 )));
             }
         }
-
         if config.guard_directory_config().is_some() && descriptor_commit_bytes.is_none() {
             return Err(RelayError::Config(ConfigError::GuardDirectory(
                 "guard_directory requires descriptor_commit_hex or certificate bundle".to_string(),
             )));
         }
-
         let mut authenticated_guard_entry = None;
         if let Some(guard_cfg) = config.guard_directory_config() {
             let commit_bytes = descriptor_commit_bytes.expect("checked above");
@@ -1739,7 +1587,6 @@ impl RelayRuntime {
                 Err(err) => return Err(RelayError::Config(err.into())),
             }
         }
-
         let transport_certificate_bundle = if config.vpn_config().is_some_and(|vpn| vpn.enabled) {
             authenticated_guard_entry
                 .as_ref()
@@ -1755,13 +1602,14 @@ impl RelayRuntime {
             transport_certificate_bundle,
             directory_valid_until_unix,
         )?;
-
         let incentive_logger = config
             .incentive_log_config()
             .as_logger(&hex::encode(relay_id))
             .map_err(RelayError::from)?
             .map(Arc::new);
-
+        let incentive_max_active_epochs = config.incentive_log_config().max_active_epochs;
+        let incentive_max_measurements_per_epoch =
+            config.incentive_log_config().max_measurements_per_epoch;
         let pow_config = config.pow_config().clone();
         let base_pow_params = pow_config.parameters()?;
         let puzzle_params = pow_config.puzzle_parameters(&base_pow_params)?;
@@ -1770,9 +1618,7 @@ impl RelayRuntime {
             &pow_config,
             SystemTime::now(),
         )?));
-
         let grease_entries = policy.grease_entries()?;
-
         let congestion_controller = {
             let cfg = config.congestion_config().clone();
             if cfg.max_circuits_per_client == 0 {
@@ -1781,7 +1627,6 @@ impl RelayRuntime {
                 Some(CongestionController::new(cfg))
             }
         };
-
         let compliance_logger = match ComplianceLogger::from_config(config.compliance_config()) {
             Ok(Some(logger)) => Some(Arc::new(logger)),
             Ok(None) => None,
@@ -1791,7 +1636,6 @@ impl RelayRuntime {
                 )));
             }
         };
-
         let kem_caps = policy
             .kem
             .iter()
@@ -1800,7 +1644,6 @@ impl RelayRuntime {
                 required: entry.required,
             })
             .collect::<Vec<_>>();
-
         let signature_caps = policy
             .signatures
             .iter()
@@ -1810,7 +1653,6 @@ impl RelayRuntime {
                 required: entry.required,
             })
             .collect::<Vec<_>>();
-
         let constant_rate_capability = config.constant_rate_capability();
         let server_caps = ServerCapabilities::new(
             kem_caps,
@@ -1820,7 +1662,6 @@ impl RelayRuntime {
             role_bits(config.mode),
             constant_rate_capability,
         );
-
         let metrics = Arc::new(Metrics::new());
         metrics.set_constant_rate_profile(
             constant_rate_profile.as_str(),
@@ -1882,7 +1723,6 @@ impl RelayRuntime {
         } else {
             metrics.set_ml_kem_public_hex(None);
         }
-
         let dos = Arc::new(DoSControls::new(
             base_pow_params,
             &pow_config,
@@ -1891,7 +1731,6 @@ impl RelayRuntime {
             Arc::clone(&metrics),
             config.mode,
         )?);
-
         let privacy = Arc::new(PrivacyAggregator::new(config.privacy_config().into()));
         let event_capacity = config.privacy_config().event_buffer_capacity;
         let privacy_events = Arc::new(PrivacyEventBuffer::new(event_capacity));
@@ -1900,8 +1739,9 @@ impl RelayRuntime {
             .as_ref()
             .map(|bundle| Arc::new(bundle.clone()));
         let handshake_suites = Arc::new(resolve_handshake_suites(certificate_bundle.as_ref())?);
-
-        let registry = Arc::new(CircuitRegistry::default());
+        let registry = Arc::new(CircuitRegistry::with_max_entries(
+            config.congestion_config().max_active_circuits,
+        ));
         let lane_manager = Arc::new(ConstantRateLaneManager::new(
             profile_spec,
             Arc::clone(&registry),
@@ -1926,7 +1766,11 @@ impl RelayRuntime {
             dos,
             congestion: congestion_controller,
             compliance: compliance_logger,
-            performance: Arc::new(Mutex::new(RelayPerformanceAccumulator::new(relay_id))),
+            performance: Arc::new(Mutex::new(RelayPerformanceAccumulator::with_limits(
+                relay_id,
+                incentive_max_active_epochs,
+                incentive_max_measurements_per_epoch,
+            ))),
             epoch_window_secs: INCENTIVE_EPOCH_WINDOW_SECS,
             relay_id,
             exit_routing,
@@ -1937,32 +1781,26 @@ impl RelayRuntime {
             ticket_replays,
         })
     }
-
     /// Expose the metrics registry used by the runtime.
     pub fn metrics(&self) -> Arc<Metrics> {
         Arc::clone(&self.metrics)
     }
-
     /// Return the relay operating mode (entry/middle/exit).
     pub fn mode(&self) -> RelayMode {
         self.config.mode
     }
-
     /// Return the configured QUIC listen address string.
     pub fn listen(&self) -> &str {
         &self.config.listen
     }
-
     /// Return the descriptor commit used to pin handshakes.
     pub fn descriptor_commit(&self) -> &[u8] {
         self.descriptor_commit.as_slice()
     }
-
     /// Return the validated certificate bundle, if configured.
     pub fn certificate_bundle(&self) -> Option<Arc<RelayCertificateBundleV2>> {
         self.certificate_bundle.as_ref().map(Arc::clone)
     }
-
     fn circuit_context(&self) -> CircuitContext {
         CircuitContext {
             metrics: Arc::clone(&self.metrics),
@@ -1992,16 +1830,13 @@ impl RelayRuntime {
             ticket_replays: Arc::clone(&self.ticket_replays),
         }
     }
-
     /// Start the relay control/data planes until shutdown is requested.
     pub async fn run(self) -> Result<(), RelayError> {
         let listen_addr = self.config.listen_addr()?;
         let admin_addr = self.config.admin_addr()?;
         let mode = self.config.mode;
-
         let endpoint = Endpoint::server(self.server_config.clone(), listen_addr)
             .map_err(|error| RelayError::Quic(error.to_string()))?;
-
         let actual_addr = endpoint
             .local_addr()
             .map_err(|error| RelayError::Quic(error.to_string()))?;
@@ -2010,7 +1845,6 @@ impl RelayRuntime {
             listen = %actual_addr,
             "relay listening for SoraNet connections"
         );
-
         let metrics_task = if let Some(admin_addr) = admin_addr {
             let relay_id = self.relay_id;
             let authorization = self
@@ -2042,10 +1876,8 @@ impl RelayRuntime {
             self.relay_id,
             uptime_logger,
         ));
-
         let accept = self.accept_loop(endpoint.clone());
         tokio::pin!(accept);
-
         loop {
             tokio::select! {
                 res = &mut accept => {
@@ -2073,31 +1905,25 @@ impl RelayRuntime {
                 }
             }
         }
-
         if let Some(handle) = metrics_task {
             handle.abort();
         }
         uptime_task.abort();
-
         Ok(())
     }
-
     async fn accept_loop(&self, endpoint: Endpoint) -> Result<(), RelayError> {
         while let Some(incoming) = endpoint.accept().await {
             let context = self.circuit_context();
             tokio::spawn(async move { RelayRuntime::handle_incoming(incoming, context).await });
         }
-
         Ok(())
     }
-
     async fn handle_incoming(incoming: Incoming, context: CircuitContext) {
         let metrics = Arc::clone(&context.metrics);
         let privacy = Arc::clone(&context.privacy);
         let privacy_events = Arc::clone(&context.privacy_events);
         let mode = context.mode;
         let privacy_mode: SoranetPrivacyModeV1 = mode.into();
-
         match incoming.accept() {
             Ok(connecting) => match connecting.await {
                 Ok(connection) => {
@@ -2138,7 +1964,6 @@ impl RelayRuntime {
             }
         }
     }
-
     async fn establish_circuit(
         connection: Connection,
         context: CircuitContext,
@@ -2159,6 +1984,45 @@ impl RelayRuntime {
         let mut reservation = match context.congestion.as_ref() {
             Some(controller) => match controller.reserve(remote, Instant::now()) {
                 Ok(res) => Some(res),
+                Err(CongestionError::GlobalCircuitCapacity { limit }) => {
+                    metrics.record_capacity_reject();
+                    let event_time = SystemTime::now();
+                    privacy.record_capacity_reject(event_time);
+                    privacy.record_throttle(event_time, ThrottleScope::Congestion);
+                    privacy.record_gar_category(event_time, "throttle.congestion");
+                    privacy_events.record_throttle(
+                        privacy_mode,
+                        event_time,
+                        SoranetPrivacyThrottleScopeV1::from(ThrottleScope::Congestion),
+                    );
+                    privacy_events.record_gar_category(
+                        privacy_mode,
+                        event_time,
+                        "throttle.congestion",
+                    );
+                    warn!(
+                        remote = %remote,
+                        mode = mode.as_label(),
+                        limit,
+                        "rejecting handshake: global active-circuit capacity reached"
+                    );
+                    let reason = format!("global circuit capacity reached (limit {limit})");
+                    if let Some(logger) = context.compliance.as_ref()
+                        && let Err(error) = logger.log_handshake_reject(
+                            remote,
+                            mode,
+                            descriptor_commit,
+                            &reason,
+                            None,
+                            None,
+                            &[],
+                        )
+                    {
+                        warn!(%error, "failed to write compliance log entry");
+                    }
+                    connection.close(0u32.into(), b"capacity exceeded");
+                    return;
+                }
                 Err(CongestionError::TooManyCircuits { limit }) => {
                     metrics.record_capacity_reject();
                     let event_time = SystemTime::now();
@@ -2254,7 +2118,6 @@ impl RelayRuntime {
             },
             None => None,
         };
-
         let attempt = match context.dos.begin(remote, descriptor_commit) {
             Ok(attempt) => attempt,
             Err(throttle) => {
@@ -2385,7 +2248,6 @@ impl RelayRuntime {
                 return;
             }
         };
-
         match Self::perform_handshake(&connection, &context, remote).await {
             Ok(HandshakeOutcome {
                 negotiated,
@@ -2432,7 +2294,6 @@ impl RelayRuntime {
                     puzzle_verify_micros = puzzle_verify_micros,
                     "handshake negotiated"
                 );
-
                 let warning_messages = session
                     .warnings
                     .iter()
@@ -2466,7 +2327,6 @@ impl RelayRuntime {
                     key_len = session.session_key.payload().len(),
                     "derived SoraNet session key"
                 );
-
                 if let Some(logger) = context.compliance.as_ref()
                     && let Err(error) = logger.log_handshake_success(
                         remote,
@@ -2482,7 +2342,6 @@ impl RelayRuntime {
                 {
                     warn!(%error, "failed to write compliance log entry");
                 }
-
                 let register_outcome = match registry.register(
                     remote,
                     &negotiated,
@@ -2533,6 +2392,55 @@ impl RelayRuntime {
                             warn!(%error, "failed to write compliance log entry");
                         }
                         connection.close(0u32.into(), b"constant-rate capacity exceeded");
+                        return;
+                    }
+                    Err(CircuitAdmissionError::CircuitCapacity { limit }) => {
+                        metrics.record_capacity_reject();
+                        let event_time = SystemTime::now();
+                        privacy.record_capacity_reject(event_time);
+                        privacy.record_throttle(event_time, ThrottleScope::Congestion);
+                        privacy.record_gar_category(event_time, "throttle.congestion");
+                        privacy_events.record_throttle(
+                            privacy_mode,
+                            event_time,
+                            SoranetPrivacyThrottleScopeV1::from(ThrottleScope::Congestion),
+                        );
+                        privacy_events.record_gar_category(
+                            privacy_mode,
+                            event_time,
+                            "throttle.congestion",
+                        );
+                        warn!(
+                            remote = %remote,
+                            mode = mode.as_label(),
+                            limit,
+                            "rejecting handshake: circuit registry capacity reached"
+                        );
+                        connection.close(0u32.into(), b"capacity exceeded");
+                        return;
+                    }
+                    Err(CircuitAdmissionError::MemoryCapacity) => {
+                        metrics.record_capacity_reject();
+                        let event_time = SystemTime::now();
+                        privacy.record_capacity_reject(event_time);
+                        privacy.record_throttle(event_time, ThrottleScope::Congestion);
+                        privacy.record_gar_category(event_time, "throttle.congestion");
+                        privacy_events.record_throttle(
+                            privacy_mode,
+                            event_time,
+                            SoranetPrivacyThrottleScopeV1::from(ThrottleScope::Congestion),
+                        );
+                        privacy_events.record_gar_category(
+                            privacy_mode,
+                            event_time,
+                            "throttle.congestion",
+                        );
+                        warn!(
+                            remote = %remote,
+                            mode = mode.as_label(),
+                            "rejecting handshake: circuit registry memory unavailable"
+                        );
+                        connection.close(0u32.into(), b"capacity exceeded");
                         return;
                     }
                 };
@@ -2769,7 +2677,6 @@ impl RelayRuntime {
             }
         }
     }
-
     #[allow(clippy::too_many_arguments)]
     async fn monitor_circuit(
         connection: Connection,
@@ -2799,7 +2706,6 @@ impl RelayRuntime {
         let privacy = Arc::clone(&resources.privacy);
         let privacy_events = Arc::clone(&resources.privacy_events);
         let metrics = Arc::clone(&resources.metrics);
-
         let measurement_task = tokio::spawn(Self::ingest_measurement_streams(
             connection.clone(),
             measurement_resources,
@@ -2829,7 +2735,6 @@ impl RelayRuntime {
                 record_layer,
             )),
         };
-
         let reason = connection.closed().await;
         abort_padding_task(padding_task);
         abort_constant_rate_task(constant_rate_task);
@@ -2845,7 +2750,6 @@ impl RelayRuntime {
         privacy.record_active_sample(sample_time, active_len);
         privacy_events.record_active_sample(privacy_mode, sample_time, active_len);
         drop(congestion_lease);
-
         if let Some(logger) = resources.compliance.as_ref() {
             let lifetime_ms = removed.as_ref().map(|removal| {
                 removal
@@ -2868,7 +2772,6 @@ impl RelayRuntime {
             });
             let padding = removed.as_ref().map(|removal| removal.state.padding);
             let reason_text = reason.to_string();
-
             if let Err(error) = logger.log_circuit_closed(
                 remote,
                 resources.mode,
@@ -2883,7 +2786,6 @@ impl RelayRuntime {
                 warn!(%error, "failed to write compliance log entry");
             }
         }
-
         if let Err(error) = measurement_task.await {
             debug!(
                 remote = %remote,
@@ -2898,7 +2800,6 @@ impl RelayRuntime {
                 "exit stream task join error"
             );
         }
-
         if let Some(vpn_session) = vpn_session {
             let settlement_artifact = vpn_session.settlement_artifact();
             let receipt = settlement_artifact
@@ -2949,10 +2850,8 @@ impl RelayRuntime {
                 "vpn session closed; receipt emitted"
             );
         }
-
         debug!(remote = %remote, ?reason, "SoraNet connection closed");
     }
-
     async fn ingest_measurement_streams(
         connection: Connection,
         resources: MonitorCircuitResources,
@@ -3020,7 +2919,6 @@ impl RelayRuntime {
             }
         }
     }
-
     async fn serve_exit_streams(
         connection: Connection,
         resources: ExitStreamResources,
@@ -3140,7 +3038,6 @@ impl RelayRuntime {
             }
         }
     }
-
     async fn serve_vpn_backend_tunnel(
         connection: Connection,
         remote: SocketAddr,
@@ -3231,7 +3128,6 @@ impl RelayRuntime {
             }
         }
     }
-
     async fn serve_vpn_backend_tunnel_stream<S>(
         connection: Connection,
         remote: SocketAddr,
@@ -3265,14 +3161,12 @@ impl RelayRuntime {
                     return;
                 }
             };
-
         let flow_label = vpn_flow_label_from_session_id(helper_ticket.session_id);
         let adapter = VpnAdapter::new(vpn_session.session().clone(), overlay.as_ref().clone());
         let bridge = VpnBridge::new(adapter.clone(), helper_ticket.session_id, flow_label);
         let mtu = bridge.max_payload_len();
         let (mut backend_read, mut backend_write) = tokio::io::split(backend);
         let bootstrap = build_vpn_backend_bootstrap(helper_ticket.session_id);
-
         info!(
             remote = %remote,
             backend = %backend_addr,
@@ -3306,7 +3200,6 @@ impl RelayRuntime {
             connection.close(0u32.into(), b"vpn backend bootstrap rejected");
             return;
         }
-
         let now_ms = unix_time_ms(SystemTime::now());
         if helper_ticket.expires_at_ms <= now_ms {
             connection.close(0u32.into(), b"vpn helper ticket expired");
@@ -3375,7 +3268,6 @@ impl RelayRuntime {
             );
         }
     }
-
     async fn bridge_vpn_backend_streams<VW, VR, BR, BW>(
         vpn_writer: &mut VW,
         vpn_reader: &mut VR,
@@ -3439,13 +3331,11 @@ impl RelayRuntime {
                 }
             }
         };
-
         tokio::select! {
             result = upstream => result,
             result = downstream => result,
         }
     }
-
     async fn process_exit_stream<W, R>(
         resources: &ExitStreamResources,
         send: &mut W,
@@ -3461,7 +3351,6 @@ impl RelayRuntime {
         recv.read_exact(&mut header)
             .await
             .map_err(ExitStreamError::Read)?;
-
         let frame = RouteOpenFrame::decode(&header)?;
         let vpn_adapter = vpn_session.as_ref().and_then(|session| {
             resources
@@ -3470,7 +3359,6 @@ impl RelayRuntime {
                 .map(|overlay| VpnAdapter::new(session.session().clone(), overlay.as_ref().clone()))
         });
         record_route_open_ingress_metrics(vpn_adapter.as_ref(), vpn_session.as_ref());
-
         match frame.tag() {
             ExitStreamTag::NoritoStream => {
                 Self::handle_norito_stream(
@@ -3495,12 +3383,9 @@ impl RelayRuntime {
                 .await?;
             }
         }
-
         record_route_open_egress_metrics(vpn_adapter.as_ref(), vpn_session.as_ref());
-
         Ok(())
     }
-
     async fn handle_norito_stream<W, R>(
         resources: &ExitStreamResources,
         send: &mut W,
@@ -3526,7 +3411,6 @@ impl RelayRuntime {
         resources
             .privacy_events
             .record_gar_category(resources.privacy_mode, now, &category);
-
         let channel_id = *frame.channel_id();
         let channel_hex = hex::encode(channel_id);
         let Some(state) = norito_state else {
@@ -3540,14 +3424,12 @@ impl RelayRuntime {
                 stream: "norito-stream",
             });
         };
-
         let record = state.lookup_channel(&channel_id)?.ok_or_else(|| {
             ExitStreamError::RouteNotProvisioned {
                 stream: "norito-stream",
                 channel: channel_hex.clone(),
             }
         })?;
-
         if record.access_kind == SoranetAccessKind::Authenticated && !authenticated {
             warn!(
                 remote = %remote,
@@ -3559,7 +3441,6 @@ impl RelayRuntime {
                 channel: channel_hex,
             });
         }
-
         let padding_interval = record
             .padding_budget_ms
             .map(|ms| Duration::from_millis(u64::from(ms)))
@@ -3572,7 +3453,6 @@ impl RelayRuntime {
                     Some(default)
                 }
             });
-
         info!(
             remote = %remote,
             channel = %hex::encode(channel_id),
@@ -3601,7 +3481,6 @@ impl RelayRuntime {
         {
             warn!(%error, "failed to write compliance log entry");
         }
-
         let connect_timeout = state.connect_timeout();
         let (ws_stream, response) = timeout(connect_timeout, connect_async(state.torii_ws_url()))
             .await
@@ -3613,14 +3492,12 @@ impl RelayRuntime {
                 stream: "norito-stream",
                 error,
             })?;
-
         debug!(
             remote = %remote,
             channel = %hex::encode(channel_id),
             status = %response.status(),
             "connected to norito-stream adapter"
         );
-
         let handshake = NoritoStreamOpen {
             channel_id,
             route_id: record.route_id,
@@ -3638,7 +3515,6 @@ impl RelayRuntime {
         })?);
         let padding_schedule =
             padding_interval.map(|period| PaddingSchedule { channel_id, period });
-
         Self::bridge_websocket_stream(
             send,
             recv,
@@ -3651,7 +3527,6 @@ impl RelayRuntime {
         )
         .await
     }
-
     async fn handle_kaigi_stream<W, R>(
         resources: &ExitStreamResources,
         send: &mut W,
@@ -3677,7 +3552,6 @@ impl RelayRuntime {
         resources
             .privacy_events
             .record_gar_category(resources.privacy_mode, now, &category);
-
         let channel_id = *frame.channel_id();
         let channel_hex = hex::encode(channel_id);
         let Some(state) = kaigi_state else {
@@ -3691,14 +3565,12 @@ impl RelayRuntime {
                 stream: "kaigi-stream",
             });
         };
-
         let record = state.lookup_channel(&channel_id)?.ok_or_else(|| {
             ExitStreamError::RouteNotProvisioned {
                 stream: "kaigi-stream",
                 channel: channel_hex.clone(),
             }
         })?;
-
         if record.access_kind == SoranetAccessKind::Authenticated && !authenticated {
             warn!(
                 remote = %remote,
@@ -3710,7 +3582,6 @@ impl RelayRuntime {
                 channel: channel_hex,
             });
         }
-
         let room_id = derive_kaigi_room_id(&channel_id, &record.route_id, &record.stream_id);
         let target_url = match Self::kaigi_multiaddr_to_websocket(&record.exit_multiaddr) {
             Some(url) => url,
@@ -3725,7 +3596,6 @@ impl RelayRuntime {
                 state.hub_ws_url().to_owned()
             }
         };
-
         info!(
             remote = %remote,
             channel = %hex::encode(channel_id),
@@ -3755,7 +3625,6 @@ impl RelayRuntime {
         {
             warn!(%error, "failed to write compliance log entry");
         }
-
         let connect_timeout = state.connect_timeout();
         let (ws_stream, response) = timeout(connect_timeout, connect_async(target_url.as_str()))
             .await
@@ -3767,7 +3636,6 @@ impl RelayRuntime {
                 stream: "kaigi-stream",
                 error,
             })?;
-
         debug!(
             remote = %remote,
             channel = %hex::encode(channel_id),
@@ -3775,7 +3643,6 @@ impl RelayRuntime {
             target = %target_url,
             "connected to kaigi-stream adapter"
         );
-
         let handshake = KaigiStreamOpen {
             channel_id,
             route_id: record.route_id,
@@ -3792,7 +3659,6 @@ impl RelayRuntime {
                 error,
             }
         })?);
-
         Self::bridge_websocket_stream(
             send,
             recv,
@@ -3805,7 +3671,6 @@ impl RelayRuntime {
         )
         .await
     }
-
     #[allow(clippy::too_many_arguments)]
     async fn bridge_websocket_stream<W, R>(
         send: &mut W,
@@ -3826,7 +3691,6 @@ impl RelayRuntime {
         let last_send = Arc::new(Mutex::new(Instant::now()));
         let shutdown = Arc::new(Notify::new());
         let vpn_adapter = vpn_adapter.map(Arc::new);
-
         let handshake_len = handshake_bytes.len();
         {
             let mut guard = sink.lock().await;
@@ -3860,7 +3724,6 @@ impl RelayRuntime {
             now
         };
         *last_send.lock().await = initial_last_send;
-
         let to_torii = {
             let sink = Arc::clone(&sink);
             let shutdown = Arc::clone(&shutdown);
@@ -3916,7 +3779,6 @@ impl RelayRuntime {
                 Ok::<(), ExitStreamError>(())
             }
         };
-
         let from_torii = {
             let sink = Arc::clone(&sink);
             let shutdown = Arc::clone(&shutdown);
@@ -3985,7 +3847,6 @@ impl RelayRuntime {
                 Ok::<(), ExitStreamError>(())
             }
         };
-
         let padding_future = schedule.map(|(period, delay)| {
             let sink = Arc::clone(&sink);
             let last_send = Arc::clone(&last_send);
@@ -4023,17 +3884,14 @@ impl RelayRuntime {
                 Ok::<(), ExitStreamError>(())
             }
         });
-
         if let Some(padding) = padding_future {
             tokio::try_join!(to_torii, from_torii, padding)?;
         } else {
             tokio::try_join!(to_torii, from_torii)?;
         }
-
         shutdown.notify_waiters();
         Ok(())
     }
-
     fn norito_padding_delay(channel_id: &[u8; 32], period: Duration, now: SystemTime) -> Duration {
         if period.is_zero() {
             return Duration::ZERO;
@@ -4051,7 +3909,6 @@ impl RelayRuntime {
         let delta_millis = (period_millis + offset - now_mod) % period_millis;
         Duration::from_millis(delta_millis as u64)
     }
-
     fn kaigi_multiaddr_to_websocket(addr: &str) -> Option<String> {
         let trimmed = addr.trim();
         if trimmed.is_empty() {
@@ -4078,7 +3935,6 @@ impl RelayRuntime {
         let port_segment = *segments.get(idx)?;
         idx += 1;
         let port: u16 = port_segment.parse().ok()?;
-
         let mut scheme = "ws";
         if let Some(proto_segment) = segments.get(idx) {
             match *proto_segment {
@@ -4089,16 +3945,13 @@ impl RelayRuntime {
                 _ => return None,
             }
         }
-
         let path = if idx < segments.len() {
             format!("/{}", segments[idx..].join("/"))
         } else {
             "/".to_string()
         };
-
         Some(format!("{scheme}://{host}:{port}{path}"))
     }
-
     #[allow(clippy::too_many_arguments)]
     async fn process_measurement_stream<R>(
         mut stream: R,
@@ -4131,7 +3984,6 @@ impl RelayRuntime {
         }
         Ok(())
     }
-
     async fn read_measurement_frame<R>(
         stream: &mut R,
         len_buf: &mut [u8; 4],
@@ -4149,7 +4001,11 @@ impl RelayRuntime {
         if frame_len > MAX_BANDWIDTH_PROOF_FRAME_LEN {
             return Err(IncentiveStreamError::FrameTooLarge { length: frame_len });
         }
-        let mut frame = vec![0u8; frame_len];
+        let mut frame = Vec::new();
+        frame
+            .try_reserve_exact(frame_len)
+            .map_err(|_| IncentiveStreamError::Allocation)?;
+        frame.resize(frame_len, 0);
         if !Self::read_exact_or_eof(stream, &mut frame).await? {
             return Err(IncentiveStreamError::UnexpectedEof {
                 expected: frame_len,
@@ -4158,7 +4014,6 @@ impl RelayRuntime {
         }
         Ok(Some(frame))
     }
-
     async fn read_exact_or_eof<R>(
         stream: &mut R,
         buf: &mut [u8],
@@ -4189,7 +4044,6 @@ impl RelayRuntime {
         }
         Ok(true)
     }
-
     #[allow(clippy::too_many_arguments)]
     async fn handle_bandwidth_proof(
         frame: &[u8],
@@ -4203,38 +4057,44 @@ impl RelayRuntime {
         remote: SocketAddr,
     ) -> Result<(), IncentiveStreamError> {
         let mut cursor = frame;
-        let proof = RelayBandwidthProofV1::decode(&mut cursor)?;
+        let proof = norito::with_decode_limits_scope(BANDWIDTH_PROOF_DECODE_LIMITS_V1, || {
+            RelayBandwidthProofV1::decode(&mut cursor)
+        })?;
         if !cursor.is_empty() {
             return Err(IncentiveStreamError::TrailingBytes(cursor.len()));
         }
-
         let measurement_hex = hex::encode(proof.measurement_id);
         let verifier_label = proof.verifier_id.to_string();
         enum ProofOutcome {
             Accepted { summary: Option<EpochSummary> },
             Duplicate,
             ForeignRelay,
+            Capacity(IncentiveCapacityError),
         }
-        let outcome = if proof.relay_id != relay_id {
-            ProofOutcome::ForeignRelay
-        } else {
+        let outcome = {
             let mut guard = performance.lock().await;
-            if guard.ingest_bandwidth_proof(&proof) {
-                let summary = guard
-                    .summaries()
-                    .into_iter()
-                    .find(|snapshot| snapshot.epoch == proof.epoch);
-                ProofOutcome::Accepted { summary }
-            } else {
-                ProofOutcome::Duplicate
+            match guard.try_ingest_bandwidth_proof(&proof) {
+                Ok(BandwidthProofIngest::Accepted) => {
+                    let summary = match guard.summary(proof.epoch) {
+                        Ok(summary) => summary,
+                        Err(error) => {
+                            warn!(epoch = proof.epoch, %error, "failed to snapshot bounded incentive epoch");
+                            None
+                        }
+                    };
+                    ProofOutcome::Accepted { summary }
+                }
+                Ok(BandwidthProofIngest::Duplicate) => ProofOutcome::Duplicate,
+                Ok(BandwidthProofIngest::ForeignRelay) => ProofOutcome::ForeignRelay,
+                Err(error) => ProofOutcome::Capacity(error),
             }
         };
-
         if let Some(logger) = compliance.as_ref() {
-            let reason = match outcome {
+            let reason = match &outcome {
                 ProofOutcome::Accepted { .. } => None,
                 ProofOutcome::Duplicate => Some("duplicate_measurement"),
                 ProofOutcome::ForeignRelay => Some("foreign_relay"),
+                ProofOutcome::Capacity(_) => Some("incentive_capacity"),
             };
             if let Err(error) = logger.log_bandwidth_proof(
                 remote,
@@ -4248,13 +4108,12 @@ impl RelayRuntime {
                 proof.confidence.confidence_per_mille,
                 proof.issued_at_unix,
                 &verifier_label,
-                matches!(outcome, ProofOutcome::Accepted { .. }),
+                matches!(&outcome, ProofOutcome::Accepted { .. }),
                 reason,
             ) {
                 warn!(%error, "failed to write compliance log entry");
             }
         }
-
         match outcome {
             ProofOutcome::Accepted { summary } => {
                 debug!(
@@ -4263,10 +4122,9 @@ impl RelayRuntime {
                     measurement = %measurement_hex,
                     "accepted bandwidth proof"
                 );
-
                 if let (Some(summary), Some(logger)) = (summary, incentives) {
                     let metrics =
-                        snapshot_from_summary(relay_id, &summary, SnapshotKind::Measurement);
+                        snapshot_from_summary(relay_id, summary, SnapshotKind::Measurement);
                     if let Err(error) = logger.write_snapshot(&metrics) {
                         warn!(
                             epoch = proof.epoch,
@@ -4275,7 +4133,6 @@ impl RelayRuntime {
                         );
                     }
                 }
-
                 let now = SystemTime::now();
                 privacy.record_verified_bytes(now, proof.verified_bytes);
                 privacy_events.record_verified_bytes(mode.into(), now, proof.verified_bytes);
@@ -4296,11 +4153,17 @@ impl RelayRuntime {
                     "ignored bandwidth proof (foreign relay)"
                 );
             }
+            ProofOutcome::Capacity(error) => {
+                warn!(
+                    epoch = proof.epoch,
+                    measurement = %measurement_hex,
+                    %error,
+                    "ignored bandwidth proof at incentive memory capacity"
+                );
+            }
         }
-
         Ok(())
     }
-
     async fn track_runtime_uptime(
         performance: Arc<Mutex<RelayPerformanceAccumulator>>,
         epoch_window_secs: u64,
@@ -4311,41 +4174,40 @@ impl RelayRuntime {
             warn!("incentive epoch window is zero; uptime tracking disabled");
             return;
         }
-
         let mut last_tick = Instant::now();
         loop {
             sleep(Duration::from_secs(epoch_window_secs)).await;
             let now = Instant::now();
             let elapsed = now.saturating_duration_since(last_tick);
             last_tick = now;
-
             let uptime_secs = elapsed.as_secs().min(epoch_window_secs);
             if uptime_secs == 0 {
                 continue;
             }
-
             let epoch = current_epoch(epoch_window_secs);
             let mut guard = performance.lock().await;
-            guard.record_uptime(epoch, uptime_secs, epoch_window_secs);
-
+            if let Err(error) = guard.try_record_uptime(epoch, uptime_secs, epoch_window_secs) {
+                warn!(epoch, %error, "unable to retain incentive uptime sample");
+                continue;
+            }
             if let Some(logger) = incentives.as_ref() {
-                if let Some(summary) = guard
-                    .summaries()
-                    .into_iter()
-                    .find(|snapshot| snapshot.epoch == epoch)
-                {
-                    drop(guard);
-                    let metrics = snapshot_from_summary(relay_id, &summary, SnapshotKind::Uptime);
+                let summary = match guard.summary(epoch) {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        warn!(epoch, %error, "failed to snapshot bounded incentive uptime epoch");
+                        None
+                    }
+                };
+                drop(guard);
+                if let Some(summary) = summary {
+                    let metrics = snapshot_from_summary(relay_id, summary, SnapshotKind::Uptime);
                     if let Err(error) = logger.write_snapshot(&metrics) {
                         warn!(epoch, ?error, "failed to persist uptime snapshot");
                     }
-                } else {
-                    drop(guard);
                 }
             }
         }
     }
-
     async fn perform_handshake(
         connection: &Connection,
         context: &CircuitContext,
@@ -4363,13 +4225,11 @@ impl RelayRuntime {
             .and_then(|overlay| overlay.config().helper_ticket_secret_bytes());
         let mut byte_guard = HandshakeByteGuard::new(&context.metrics);
         let mut puzzle_verify_micros: Option<u64> = None;
-
         let pow_params = context.dos.current_pow_parameters();
         let puzzle_params = context.dos.current_puzzle_parameters();
         let pow_required = context.dos.is_pow_required();
         let puzzle_enforced = pow_params.difficulty() > 0 || puzzle_params.is_some();
         let has_token_policy = context.dos.has_token_policy();
-
         let mut cached_client_frame: Option<Vec<u8>> = None;
         let mut puzzle_ticket_frame: Option<Vec<u8>> = None;
         let mut pending_puzzle_ticket: Option<PowTicket> = None;
@@ -4377,7 +4237,6 @@ impl RelayRuntime {
         let mut admission_token: Option<AdmissionToken> = None;
         let mut vpn_helper_ticket: Option<VpnHelperTicketV1> = None;
         let mut vpn_helper_ticket_frame: Option<Vec<u8>> = None;
-
         if helper_ticket_secret.is_some() || has_token_policy || (pow_required && puzzle_enforced) {
             let first_frame = match timeout(
                 HANDSHAKE_PAYLOAD_TIMEOUT,
@@ -4390,7 +4249,6 @@ impl RelayRuntime {
                 Err(_) => return Err(HandshakeError::Timeout("pow token/ticket")),
             };
             byte_guard.add(first_frame.len() + 2);
-
             if let Some(secret) = helper_ticket_secret.as_ref() {
                 if VpnHelperTicketV1::looks_like(&first_frame) {
                     let now_ms = unix_time_ms(SystemTime::now());
@@ -4439,7 +4297,6 @@ impl RelayRuntime {
                 cached_client_frame = Some(first_frame);
             }
         }
-
         if pow_required
             && puzzle_enforced
             && puzzle_ticket_frame.is_none()
@@ -4448,7 +4305,6 @@ impl RelayRuntime {
         {
             return Err(HandshakeError::MissingChallenge);
         }
-
         if let Some(frame) = puzzle_ticket_frame {
             let ticket = PowTicket::parse(&frame).map_err(HandshakeError::Pow)?;
             if puzzle_params.is_some() {
@@ -4457,7 +4313,6 @@ impl RelayRuntime {
                 pending_pow_ticket = Some(ticket);
             }
         }
-
         let client_frame = match cached_client_frame {
             Some(frame) => frame,
             None => match timeout(
@@ -4474,7 +4329,6 @@ impl RelayRuntime {
                 Err(_) => return Err(HandshakeError::Timeout("client hello")),
             },
         };
-
         let client_hello =
             ClientHello::parse(&client_frame).map_err(HandshakeError::ClientHello)?;
         ensure_nonzero("client nonce must not be all zeros", client_hello.nonce())?;
@@ -4486,14 +4340,12 @@ impl RelayRuntime {
             "client KEM public key must not be all zeros",
             client_hello.kem_public(),
         )?;
-
         let client_caps = parse_client_advertisement(client_hello.raw_capabilities())
             .map_err(HandshakeError::Capability)?;
         let mut negotiated = negotiate_capabilities(&client_caps, context.server_caps.as_ref())
             .map_err(HandshakeError::Capability)?;
         validate_client_selection(&negotiated, client_hello.kem_id(), client_hello.sig_id())?;
         let transcript_binding = pow::derive_admission_transcript(&client_frame);
-
         let mut response_caps = negotiated.clone();
         response_caps.grease.extend(context.grease.iter().cloned());
         let grease_entries = std::mem::take(&mut response_caps.grease);
@@ -4503,7 +4355,6 @@ impl RelayRuntime {
             update_suite_list(&relay_caps_bytes, context.handshake_suites.as_slice(), true)
                 .map_err(HandshakeError::Noise)?;
         let relay_caps_bytes = append_grease_tlvs(relay_caps_bytes, &grease_entries)?;
-
         let admission = if let (Some(params), Some(ticket)) =
             (puzzle_params.as_ref(), pending_puzzle_ticket.as_ref())
         {
@@ -4543,7 +4394,6 @@ impl RelayRuntime {
         } else {
             Ok(())
         };
-
         // Admission must complete before the handshake engine validates or
         // encapsulates any client ML-KEM material.
         let helper_resume_binding = match vpn_helper_ticket_frame.as_deref() {
@@ -4601,7 +4451,6 @@ impl RelayRuntime {
                 Err(error) => Err(HandshakeError::Noise(error)),
             }
         })?;
-
         match timeout(
             HANDSHAKE_PAYLOAD_TIMEOUT,
             Self::write_handshake_frame(&mut send, &relay_hello),
@@ -4614,9 +4463,7 @@ impl RelayRuntime {
             Ok(Err(error)) => return Err(error),
             Err(_) => return Err(HandshakeError::Timeout("relay hello")),
         }
-
         send.finish().map_err(HandshakeError::Finish)?;
-
         let session = if relay_state.requires_client_finish() {
             let client_finish = match timeout(
                 HANDSHAKE_PAYLOAD_TIMEOUT,
@@ -4637,9 +4484,7 @@ impl RelayRuntime {
             relay_finalize_handshake(relay_state, &[], context.identity_key.as_ref())
                 .map_err(HandshakeError::Noise)?
         };
-
         negotiated.grease.extend(context.grease.iter().cloned());
-
         let handshake_bytes = byte_guard.finish();
         let vpn_session = match (vpn_helper_ticket.clone(), context.vpn.as_ref()) {
             (Some(helper_ticket), Some(overlay)) => Some(overlay.bind_helper_session(
@@ -4657,7 +4502,6 @@ impl RelayRuntime {
             vpn_helper_ticket,
         })
     }
-
     async fn read_handshake_frame(recv: &mut RecvStream) -> Result<Vec<u8>, HandshakeError> {
         let mut len_buf = [0u8; 2];
         recv.read_exact(&mut len_buf)
@@ -4673,7 +4517,6 @@ impl RelayRuntime {
             .map_err(HandshakeError::Read)?;
         Ok(payload)
     }
-
     async fn write_handshake_frame(
         send: &mut SendStream,
         payload: &[u8],
@@ -4685,7 +4528,6 @@ impl RelayRuntime {
             .map_err(HandshakeError::Write)?;
         Ok(())
     }
-
     fn admin_http_response(
         status: &str,
         content_type: &str,
@@ -4710,7 +4552,6 @@ impl RelayRuntime {
             body = body,
         )
     }
-
     fn admin_bearer_token(request: &str) -> Option<&str> {
         let mut token = None;
         for line in request.lines().skip(1) {
@@ -4736,7 +4577,6 @@ impl RelayRuntime {
         }
         token
     }
-
     async fn render_admin_request(
         request: &str,
         authorization: &AdminAuthorization,
@@ -4782,7 +4622,6 @@ impl RelayRuntime {
         if path == "/healthz" {
             return Self::admin_http_response("200 OK", PLAIN_TEXT_CONTENT_TYPE, "ok\n", "");
         }
-
         let authorized = Self::admin_bearer_token(request)
             .is_some_and(|candidate| authorization.matches(candidate));
         if !authorized {
@@ -4793,10 +4632,8 @@ impl RelayRuntime {
                 "www-authenticate: Bearer realm=\"soranet-relay-admin\"\r\n",
             );
         }
-
         Self::render_admin_response(path, context, relay_id, mode).await
     }
-
     async fn render_admin_response(
         path: &str,
         context: AdminRenderContext<'_>,
@@ -4819,14 +4656,36 @@ impl RelayRuntime {
                 "",
             );
         }
-
         let proxy_queue_depth = context.proxy_policy_events.queue_depth() as u64;
         let mut body = context.metrics.render_prometheus(mode, proxy_queue_depth);
         let incentive_summary = {
             let guard = context.performance.lock().await;
-            guard.summaries()
+            guard.try_summaries()
         };
-        let incentives = render_incentive_prometheus(relay_id, &incentive_summary, mode);
+        let incentive_summary = match incentive_summary {
+            Ok(summary) => summary,
+            Err(error) => {
+                warn!(%error, "unable to render bounded incentive metrics snapshot");
+                return Self::admin_http_response(
+                    "503 Service Unavailable",
+                    PLAIN_TEXT_CONTENT_TYPE,
+                    "metrics capacity unavailable\n",
+                    "",
+                );
+            }
+        };
+        let incentives = match render_incentive_prometheus(relay_id, &incentive_summary, mode) {
+            Ok(incentives) => incentives,
+            Err(_) => {
+                warn!("unable to render incentive metrics within its bounded response corridor");
+                return Self::admin_http_response(
+                    "503 Service Unavailable",
+                    PLAIN_TEXT_CONTENT_TYPE,
+                    "metrics capacity unavailable\n",
+                    "",
+                );
+            }
+        };
         let privacy_metrics = context.privacy.render_prometheus(mode, SystemTime::now());
         if !body.ends_with('\n') && !incentives.is_empty() {
             body.push('\n');
@@ -4838,7 +4697,6 @@ impl RelayRuntime {
         body.push_str(&privacy_metrics);
         Self::admin_http_response("200 OK", PROMETHEUS_CONTENT_TYPE, &body, "")
     }
-
     async fn serve_admin(
         resources: AdminResources,
         relay_id: RelayId,
@@ -4856,7 +4714,6 @@ impl RelayRuntime {
         let listener = TcpListener::bind(addr).await?;
         let actual = listener.local_addr()?;
         info!(listen = %actual, "authenticated admin server listening");
-
         loop {
             let (mut stream, peer) = listener.accept().await?;
             let metrics = Arc::clone(&metrics);
@@ -4876,7 +4733,6 @@ impl RelayRuntime {
                     }
                 };
                 let request = std::str::from_utf8(&request_buf[..read]).unwrap_or_default();
-
                 let context = AdminRenderContext {
                     metrics: metrics.as_ref(),
                     privacy: privacy.as_ref(),
@@ -4884,7 +4740,6 @@ impl RelayRuntime {
                     proxy_policy_events: proxy_policy_events.as_ref(),
                     performance: performance.as_ref(),
                 };
-
                 let response = RelayRuntime::render_admin_request(
                     request,
                     &authorization,
@@ -4893,7 +4748,6 @@ impl RelayRuntime {
                     mode,
                 )
                 .await;
-
                 if let Err(error) = stream.write_all(response.as_bytes()).await {
                     debug!(%error, "failed to send admin response");
                 }
@@ -4901,7 +4755,6 @@ impl RelayRuntime {
             });
         }
     }
-
     fn prepare_server_transport(
         config: &RelayConfig,
         certificate_bundle: Option<&RelayCertificateBundleV2>,
@@ -4986,7 +4839,6 @@ impl RelayRuntime {
         let server_config = Self::server_config(certs, key)?;
         Ok((server_config, trust))
     }
-
     fn self_signed_server_config(subject: &str) -> Result<quinn::ServerConfig, RelayError> {
         let rcgen::CertifiedKey { cert, signing_key } =
             rcgen::generate_simple_self_signed(vec![subject.to_owned()])
@@ -4996,7 +4848,6 @@ impl RelayRuntime {
             .map_err(|error| RelayError::Tls(error.to_string()))?;
         Self::server_config(vec![cert_der], key_der)
     }
-
     fn server_config(
         certs: Vec<CertificateDer<'static>>,
         key: PrivateKeyDer<'static>,
@@ -5006,7 +4857,6 @@ impl RelayRuntime {
             .map_err(|error| RelayError::Tls(error.to_string()))?;
         Ok(quinn::ServerConfig::with_crypto(Arc::new(crypto)))
     }
-
     fn tls_server_config(
         certs: Vec<CertificateDer<'static>>,
         key: PrivateKeyDer<'static>,
@@ -5022,15 +4872,26 @@ impl RelayRuntime {
         tls.alpn_protocols = vec![SORANET_QUIC_ALPN.to_vec()];
         Ok(tls)
     }
-
     fn load_certificates(
         path: &std::path::Path,
     ) -> Result<Vec<CertificateDer<'static>>, RelayError> {
-        let data = std::fs::read(path)?;
+        let data = read_bounded_direct_regular_file(
+            path,
+            TLS_CERTIFICATE_CHAIN_MAX_BYTES_V1,
+            "relay TLS certificate chain",
+        )?;
         let mut certs = Vec::new();
         for entry in CertificateDer::pem_slice_iter(&data) {
-            let cert = entry.map_err(|error| RelayError::Tls(error.to_string()))?;
-            certs.push(cert.into_owned());
+            if certs.len() == TLS_CERTIFICATE_CHAIN_MAX_ENTRIES_V1 {
+                return Err(RelayError::Tls(format!(
+                    "relay TLS certificate chain exceeds the first-release {TLS_CERTIFICATE_CHAIN_MAX_ENTRIES_V1}-certificate limit"
+                )));
+            }
+            certs
+                .try_reserve_exact(1)
+                .map_err(|_| RelayError::Tls("failed to reserve bounded TLS chain".to_owned()))?;
+            let certificate = entry.map_err(|error| RelayError::Tls(error.to_string()))?;
+            certs.push(certificate);
         }
         if certs.is_empty() {
             return Err(RelayError::Tls(
@@ -5039,133 +4900,18 @@ impl RelayRuntime {
         }
         Ok(certs)
     }
-
     fn load_private_key(path: &std::path::Path) -> Result<PrivateKeyDer<'static>, RelayError> {
-        let data = std::fs::read(path)?;
+        let data = read_bounded_direct_regular_file(
+            path,
+            TLS_PRIVATE_KEY_MAX_BYTES_V1,
+            "relay TLS private key",
+        )?;
         let key = PrivateKeyDer::from_pem_slice(&data)
             .map_err(|error| RelayError::Tls(error.to_string()))?;
-        Ok(key.clone_key())
+        Ok(key)
     }
 }
-
-#[derive(Debug, Error)]
-enum ExitStreamError {
-    #[error("failed to read route open frame: {0}")]
-    Read(io::Error),
-    #[error(transparent)]
-    Decode(#[from] RouteOpenFrameError),
-    #[error("{stream} exit routing disabled in configuration")]
-    StreamDisabled { stream: &'static str },
-    #[error("{stream} channel {channel} not provisioned")]
-    RouteNotProvisioned {
-        stream: &'static str,
-        channel: String,
-    },
-    #[error(transparent)]
-    RouteLookup(#[from] RouteCatalogError),
-    #[error("{stream} channel {channel} requires authenticated viewers")]
-    RouteRequiresAuthentication {
-        stream: &'static str,
-        channel: String,
-    },
-    #[error("{stream} adapter connection timed out after {timeout:?}")]
-    AdapterTimeout {
-        stream: &'static str,
-        timeout: Duration,
-    },
-    #[error("{stream} adapter connection failed: {error}")]
-    AdapterConnect {
-        stream: &'static str,
-        #[source]
-        error: tungstenite::Error,
-    },
-    #[error("failed to encode {stream} handshake: {error}")]
-    HandshakeEncode {
-        stream: &'static str,
-        #[source]
-        error: norito::Error,
-    },
-    #[error("failed to send data to {stream} adapter: {error}")]
-    AdapterSend {
-        stream: &'static str,
-        #[source]
-        error: tungstenite::Error,
-    },
-    #[error("failed to receive data from {stream} adapter: {error}")]
-    AdapterReceive {
-        stream: &'static str,
-        #[source]
-        error: tungstenite::Error,
-    },
-    #[error("exit stream read error: {0}")]
-    RecvRead(io::Error),
-    #[error("exit stream write error: {0}")]
-    SendWrite(io::Error),
-    #[error("failed to finish exit stream: {0}")]
-    SendFinish(io::Error),
-}
-
-#[derive(Debug, Error)]
-enum IncentiveStreamError {
-    #[error("measurement frame length must be non-zero")]
-    EmptyFrame,
-    #[error(
-        "measurement frame length {length} exceeds maximum of {MAX_BANDWIDTH_PROOF_FRAME_LEN} bytes"
-    )]
-    FrameTooLarge { length: usize },
-    #[error("measurement frame ended prematurely (received {received} of {expected} bytes)")]
-    UnexpectedEof { expected: usize, received: usize },
-    #[error("failed to decode relay bandwidth proof: {0}")]
-    Decode(#[from] norito::codec::Error),
-    #[error("measurement frame contains {0} trailing bytes after decoding proof")]
-    TrailingBytes(usize),
-    #[error("measurement stream read error: {0}")]
-    Read(io::Error),
-}
-
-#[derive(Debug, Error)]
-enum HandshakeError {
-    #[error("timeout waiting for {0}")]
-    Timeout(&'static str),
-    #[error("connection error: {0}")]
-    Connection(#[from] quinn::ConnectionError),
-    #[error("read error: {0}")]
-    Read(quinn::ReadExactError),
-    #[error("write error: {0}")]
-    Write(quinn::WriteError),
-    #[error("failed to close handshake stream: {0}")]
-    Finish(ClosedStream),
-    #[error("handshake frame exceeded maximum length ({0} bytes)")]
-    FrameTooLarge(usize),
-    #[error("client hello parse failed: {0}")]
-    ClientHello(#[from] crate::handshake::ClientHelloError),
-    #[error("capability negotiation failed: {0}")]
-    Capability(#[from] CapabilityError),
-    #[error("invalid client handshake material: {0}")]
-    InvalidClient(&'static str),
-    #[error("handshake downgrade detected")]
-    Downgrade {
-        warnings: Vec<CapabilityWarning>,
-        telemetry: Option<Vec<u8>>,
-    },
-    #[error("noise handshake error: {0}")]
-    Noise(NoiseHandshakeError),
-    #[error("pow verification failed: {0}")]
-    Pow(#[from] pow::Error),
-    #[error("puzzle verification failed: {0}")]
-    Puzzle(#[from] puzzle::Error),
-    #[error("ticket replay store failed closed: {0}")]
-    ReplayStore(String),
-    #[error("missing admission challenge")]
-    MissingChallenge,
-    #[error("token decode failed: {0}")]
-    TokenDecode(TokenDecodeError),
-    #[error("token verification failed: {0}")]
-    Token(#[from] TokenPolicyError),
-    #[error("vpn helper ticket verification failed: {0}")]
-    HelperTicket(#[from] VpnHelperTicketError),
-}
-
+include!("runtime/stream_errors.rs");
 fn role_bits(mode: RelayMode) -> u8 {
     match mode {
         RelayMode::Entry => 0x01,
@@ -5173,7 +4919,6 @@ fn role_bits(mode: RelayMode) -> u8 {
         RelayMode::Exit => 0x04,
     }
 }
-
 fn ensure_nonzero(field: &'static str, bytes: &[u8]) -> Result<(), HandshakeError> {
     if bytes.iter().any(|&byte| byte != 0) {
         Ok(())
@@ -5181,7 +4926,6 @@ fn ensure_nonzero(field: &'static str, bytes: &[u8]) -> Result<(), HandshakeErro
         Err(HandshakeError::InvalidClient(field))
     }
 }
-
 fn resolve_handshake_suites(
     bundle: Option<&RelayCertificateBundleV2>,
 ) -> Result<Vec<HandshakeSuite>, ConfigError> {
@@ -5202,7 +4946,6 @@ fn resolve_handshake_suites(
     }
     Ok(unique)
 }
-
 fn validate_client_selection(
     negotiated: &NegotiatedCapabilities,
     kem_id: u8,
@@ -5225,7 +4968,6 @@ fn validate_client_selection(
     }
     Ok(())
 }
-
 fn handshake_frame_len_prefix(payload_len: usize) -> Result<[u8; 2], HandshakeError> {
     if payload_len > MAX_HANDSHAKE_FRAME_LEN {
         return Err(HandshakeError::FrameTooLarge(payload_len));
@@ -5233,7 +4975,6 @@ fn handshake_frame_len_prefix(payload_len: usize) -> Result<[u8; 2], HandshakeEr
     let len = u16::try_from(payload_len).map_err(|_| HandshakeError::FrameTooLarge(payload_len))?;
     Ok(len.to_be_bytes())
 }
-
 fn append_grease_tlvs(
     mut base: Vec<u8>,
     grease: &[GreaseEntry],
@@ -5251,51 +4992,5 @@ fn append_grease_tlvs(
     }
     Ok(base)
 }
-
-fn downgrade_detail_from_warnings(warnings: &[CapabilityWarning]) -> Option<String> {
-    let slug_source = warnings
-        .iter()
-        .find_map(|warning| {
-            let trimmed = warning.message.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        })
-        .unwrap_or("downgrade");
-    Some(normalize_downgrade_reason(slug_source))
-}
-
-fn record_handshake_suite_downgrade(metrics: &Metrics, suite: HandshakeSuite) {
-    if matches!(suite, HandshakeSuite::Nk3PqForwardSecure) {
-        metrics.record_downgrade("handshake_suite_nk3");
-    }
-}
-
-fn pow_failure_reason(error: &pow::Error) -> SoranetPowFailureReasonV1 {
-    match error {
-        pow::Error::UnsupportedVersion(_) => SoranetPowFailureReasonV1::UnsupportedVersion,
-        pow::Error::DifficultyMismatch { .. } => SoranetPowFailureReasonV1::DifficultyMismatch,
-        pow::Error::Expired(_, _) => SoranetPowFailureReasonV1::Expired,
-        pow::Error::FutureSkewExceeded(_) => SoranetPowFailureReasonV1::FutureSkewExceeded,
-        pow::Error::ExpiryTimestampOverflow(_) => SoranetPowFailureReasonV1::ClockError,
-        pow::Error::ExpiryWindowTooSmall(_) => SoranetPowFailureReasonV1::TtlTooShort,
-        pow::Error::InvalidSolution => SoranetPowFailureReasonV1::InvalidSolution,
-        pow::Error::RelayMismatch | pow::Error::TranscriptMismatch => {
-            SoranetPowFailureReasonV1::RelayMismatch
-        }
-        pow::Error::Replay => SoranetPowFailureReasonV1::Replay,
-        pow::Error::RevocationStore(_) => SoranetPowFailureReasonV1::StoreError,
-        pow::Error::InvalidSignature | pow::Error::Signing(_) => {
-            SoranetPowFailureReasonV1::SignatureInvalid
-        }
-        pow::Error::PostQuantum(_) => SoranetPowFailureReasonV1::PostQuantumError,
-        pow::Error::Clock(_) => SoranetPowFailureReasonV1::ClockError,
-        pow::Error::Malformed(_) | pow::Error::MalformedBinding(_) => {
-            SoranetPowFailureReasonV1::UnsupportedVersion
-        }
-    }
-}
-
+include!("runtime/handshake_diagnostics.rs");
 include!("runtime/tests.rs");

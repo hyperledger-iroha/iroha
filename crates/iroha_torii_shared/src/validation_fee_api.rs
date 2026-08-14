@@ -1,5 +1,4 @@
 //! Public Torii DTOs for Parliament-governed validation-fee policy state.
-
 use iroha_crypto::Hash;
 use iroha_data_model::{
     NetworkId,
@@ -21,7 +20,6 @@ use iroha_data_model::{
     },
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-
 /// Current validation-fee proof request/response layout.
 pub const VALIDATION_FEE_POLICY_PROOF_VERSION_V1: u16 = 1;
 /// Stable public Norito schema name for the proof request.
@@ -49,7 +47,6 @@ pub const VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_PROOFS: usize = 64;
 pub const VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES: usize = 3 * 1024 * 1024;
 /// Defensive maximum for a complete proof response.
 pub const VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
-
 /// Select the farthest consecutive tip that fits one checkpoint-promotion page.
 #[must_use]
 pub fn validation_fee_policy_proof_page_tip(
@@ -63,7 +60,6 @@ pub fn validation_fee_policy_proof_page_tip(
         .expect("validation-fee finality proof bound fits u64");
     Some(observed_ledger_tip_height.min(trusted_checkpoint_height.saturating_add(span)))
 }
-
 /// Request a current validation-fee registry snapshot from a caller-pinned checkpoint.
 #[derive(
     Debug,
@@ -83,7 +79,6 @@ pub struct ValidationFeeCurrentPolicyProofRequestV1 {
     /// Height of the externally trusted checkpoint which must begin the returned chain.
     pub trusted_checkpoint_height: u64,
 }
-
 /// A complete registry snapshot authenticated by a block execution commitment and finality chain.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -109,7 +104,6 @@ pub struct ValidationFeeCurrentPolicyProofV1 {
     /// Whether another checkpoint-promotion request is required to reach the observed tip.
     pub more_available: bool,
 }
-
 /// Minimal policy state returned only after local finality, witness, registry,
 /// and immutable deployment-binding verification.
 #[derive(
@@ -148,7 +142,6 @@ pub struct ValidationFeeVerifiedPolicyProjectionV1 {
     /// Whether another bounded proof page is required.
     pub more_available: bool,
 }
-
 /// Exact JSON-safe mobile policy shape derived only from a verified registry entry.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -184,7 +177,6 @@ pub struct ValidationFeeVerifiedCurrentPolicyV1 {
     /// Complete immutable payout binding.
     pub payout: ValidationFeeVerifiedPayoutV1,
 }
-
 /// Complete policy and payout-lifecycle Parliament evidence.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -201,7 +193,6 @@ pub struct ValidationFeeVerifiedParliamentV1 {
     #[norito(rename = "payoutLifecycleSealHash")]
     pub payout_lifecycle_seal_hash: String,
 }
-
 /// Complete JSON-safe authorization for one enacted Parliament proposal.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -227,7 +218,6 @@ pub struct ValidationFeeVerifiedParliamentProposalV1 {
     /// Complete finalized PLAIN referendum evidence.
     pub finalization: ValidationFeeVerifiedFinalizationV1,
 }
-
 /// JSON-safe anchors for one registry-proven frozen PLAIN electorate.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -247,7 +237,6 @@ pub struct ValidationFeeVerifiedPlainElectorateSnapshotV1 {
     #[norito(rename = "approvalGateHeight")]
     pub approval_gate_height: String,
 }
-
 /// JSON-safe Parliament referendum and enactment heights.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -268,7 +257,6 @@ pub struct ValidationFeeVerifiedEnactmentWindowV1 {
     #[norito(rename = "enacted_at_height")]
     pub enactment: String,
 }
-
 /// Complete JSON-safe deterministic PLAIN referendum result.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -298,7 +286,6 @@ pub struct ValidationFeeVerifiedFinalizationV1 {
     /// Final deterministic decision.
     pub approved: bool,
 }
-
 /// Complete JSON-safe immutable payout binding.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -340,7 +327,6 @@ pub struct ValidationFeeVerifiedPayoutV1 {
     /// Four ordered validator payout recipients.
     pub recipients: Vec<ValidationFeeVerifiedPayoutRecipientV1>,
 }
-
 /// One exact payout recipient; no unproved validator identity is projected.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -352,7 +338,6 @@ pub struct ValidationFeeVerifiedPayoutRecipientV1 {
     /// Exact payout share in basis points.
     pub share_basis_points: u16,
 }
-
 fn verified_parliament_proposal(
     proposal_kind: &str,
     authorization: &ValidationFeeParliamentAuthorizationV1,
@@ -436,7 +421,6 @@ fn verified_parliament_proposal(
         },
     })
 }
-
 fn verified_current_policy(
     entry: &ValidationFeePolicyRegistryEntryV1,
 ) -> Result<Option<ValidationFeeVerifiedCurrentPolicyV1>, String> {
@@ -526,7 +510,6 @@ fn verified_current_policy(
         },
     }))
 }
-
 impl ValidationFeeCurrentPolicyProofV1 {
     /// Verify the canonical registry, ordinary-write witness, and checkpoint-to-tip finality chain.
     ///
@@ -675,7 +658,6 @@ impl ValidationFeeCurrentPolicyProofV1 {
         }
         Ok(self.evaluated_context_id)
     }
-
     /// Return the policy effective at the finalized evaluation height.
     #[must_use]
     pub fn current_policy(&self) -> Option<&ValidationFeePolicyV1> {
@@ -684,7 +666,6 @@ impl ValidationFeeCurrentPolicyProofV1 {
             .effective_entry_at_height(self.evaluated_block_height)
             .map(|entry| &entry.policy)
     }
-
     /// Verify the proof and project it under an immutable deployment binding.
     ///
     /// This is deliberately stricter than [`Self::verify_against`]: an
@@ -763,7 +744,6 @@ impl ValidationFeeCurrentPolicyProofV1 {
         })
     }
 }
-
 /// Validation-fee governance proposal status exposed by the typed read API.
 #[derive(
     Debug,
@@ -789,7 +769,6 @@ pub enum ValidationFeeProposalStatusV1 {
     /// A concurrently enacted successor made this policy predecessor stale.
     Superseded,
 }
-
 /// Referendum state retained with a validation-fee proposal.
 #[derive(
     Debug,
@@ -813,7 +792,6 @@ pub struct ValidationFeeProposalReferendumV1 {
     /// Whether the referendum is closed.
     pub closed: bool,
 }
-
 /// Proposal-time Parliament snapshot committed into the proposal record.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -829,7 +807,6 @@ pub struct ValidationFeeParliamentSnapshotV1 {
     /// Independently drawn body rosters.
     pub bodies: ParliamentBodies,
 }
-
 /// JSON-safe governance pipeline retained with a proposal.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -839,7 +816,6 @@ pub struct ValidationFeeProposalPipelineV1 {
     /// Ordered stage records.
     pub stages: Vec<ValidationFeeProposalPipelineStageV1>,
 }
-
 /// One JSON-safe proposal pipeline stage.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -857,7 +833,6 @@ pub struct ValidationFeeProposalPipelineStageV1 {
     /// Stable failure description, when the stage failed.
     pub failure: Option<String>,
 }
-
 /// One complete typed validation-fee proposal read from protected governance state.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -887,11 +862,9 @@ pub struct ValidationFeeProposalRecordV1 {
     /// Height at which enactment completed.
     pub enacted_at_height: Option<String>,
 }
-
 fn validation_fee_proposal_default_page_limit() -> u32 {
     VALIDATION_FEE_PROPOSAL_PAGE_DEFAULT_LIMIT_V1
 }
-
 /// Bounded query for one canonical validation-fee proposal page.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -905,7 +878,6 @@ pub struct ValidationFeeProposalListQueryV1 {
     #[norito(default = "validation_fee_proposal_default_page_limit")]
     pub limit: u32,
 }
-
 impl Default for ValidationFeeProposalListQueryV1 {
     fn default() -> Self {
         Self {
@@ -914,10 +886,8 @@ impl Default for ValidationFeeProposalListQueryV1 {
         }
     }
 }
-
 const VALIDATION_FEE_PROPOSAL_CURSOR_MAGIC_V1: [u8; 8] = *b"vfprop01";
 const VALIDATION_FEE_PROPOSAL_CURSOR_BYTES_V1: usize = 8 + 8 + 32;
-
 /// Encode one proposal-order key as a collection-bound canonical cursor.
 #[must_use]
 pub fn encode_validation_fee_proposal_cursor_v1(
@@ -930,7 +900,6 @@ pub fn encode_validation_fee_proposal_cursor_v1(
     frame[16..].copy_from_slice(&proposal_id);
     hex::encode(frame)
 }
-
 /// Decode and validate one canonical validation-fee proposal cursor.
 ///
 /// # Errors
@@ -968,7 +937,6 @@ pub fn decode_validation_fee_proposal_cursor_v1(encoded: &str) -> Result<(u64, [
         .expect("validated proposal id has fixed width");
     Ok((created_height, proposal_id))
 }
-
 /// Canonically ordered bounded page of validation-fee proposals.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -984,7 +952,6 @@ pub struct ValidationFeeProposalListV1 {
     /// Opaque continuation token, or `None` after the final page.
     pub next_cursor: Option<String>,
 }
-
 /// Exact validation-fee proposal detail response.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -1004,7 +971,6 @@ pub struct ValidationFeeProposalDetailV1 {
     /// Current retained citizen locks for this referendum.
     pub locks: ValidationFeeProposalLocksV1,
 }
-
 /// Optional account selector for proposal-local Parliament decision projection.
 #[derive(
     Debug,
@@ -1023,7 +989,6 @@ pub struct ValidationFeeProposalDetailQueryV1 {
     #[norito(default)]
     pub account_id: Option<AccountId>,
 }
-
 /// Exact progress for one proposal-local Parliament body.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -1051,7 +1016,6 @@ pub struct ValidationFeeParliamentBodyProgressV1 {
     /// Selected account's exact decision, encoded as `APPROVE`, `REJECT`, or `ABSTAIN`.
     pub current_account_decision: Option<String>,
 }
-
 /// Citizen referendum tally projected from retained locks or finalization evidence.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -1075,7 +1039,6 @@ pub struct ValidationFeeProposalTallyV1 {
     /// Final decision, or `None` while the referendum is not finalized.
     pub approved: Option<bool>,
 }
-
 /// JSON-safe retained citizen locks keyed by canonical voter account.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -1085,7 +1048,6 @@ pub struct ValidationFeeProposalLocksV1 {
     /// Current voter lock records.
     pub locks: std::collections::BTreeMap<AccountId, ValidationFeeProposalLockV1>,
 }
-
 /// One exact retained citizen ballot lock.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -1105,7 +1067,6 @@ pub struct ValidationFeeProposalLockV1 {
     /// Requested conviction duration in blocks.
     pub duration_blocks: String,
 }
-
 /// Exact native validation-fee payload requested from the draft endpoint.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -1129,7 +1090,6 @@ pub enum ValidationFeeProposalDraftPayloadV1 {
         payout_binding: ValidationFeeTreasuryPayoutBindingV1,
     },
 }
-
 impl ValidationFeeProposalDraftPayloadV1 {
     /// Convert the public payload into the exact native proposal kind.
     #[must_use]
@@ -1155,7 +1115,6 @@ impl ValidationFeeProposalDraftPayloadV1 {
         }
     }
 }
-
 /// Strict request for one locally signable native validation-fee proposal instruction.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -1173,7 +1132,6 @@ pub struct ValidationFeeProposalDraftRequestV1 {
     /// Exact PLAIN electorate contract bound into the native proposal and instruction.
     pub plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 }
-
 /// Canonical framed native instruction returned for local signing and submission.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -1185,7 +1143,6 @@ pub struct ValidationFeeProposalInstructionDraftV1 {
     /// Lowercase hexadecimal canonical framed instruction bytes.
     pub payload_hex: String,
 }
-
 /// Strict response binding a draft to its exact native proposal and instruction.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -1201,7 +1158,6 @@ pub struct ValidationFeeProposalDraftResponseV1 {
     /// Exactly one canonical native proposal instruction.
     pub tx_instructions: Vec<ValidationFeeProposalInstructionDraftV1>,
 }
-
 /// Closed direction accepted by the typed validation-fee PLAIN ballot draft.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoDeserialize, NoritoSerialize)]
 pub enum ValidationFeePlainBallotDirectionV1 {
@@ -1212,7 +1168,6 @@ pub enum ValidationFeePlainBallotDirectionV1 {
     /// Participate without voting in favor or against.
     Abstain,
 }
-
 impl ValidationFeePlainBallotDirectionV1 {
     /// Return the exact native [`CastPlainBallot`](iroha_data_model::isi::governance::CastPlainBallot)
     /// direction code.
@@ -1225,7 +1180,6 @@ impl ValidationFeePlainBallotDirectionV1 {
         }
     }
 }
-
 impl norito::json::JsonSerialize for ValidationFeePlainBallotDirectionV1 {
     fn json_serialize(&self, out: &mut String) {
         let value = match self {
@@ -1236,7 +1190,6 @@ impl norito::json::JsonSerialize for ValidationFeePlainBallotDirectionV1 {
         norito::json::write_json_string(value, out);
     }
 }
-
 impl norito::json::JsonDeserialize for ValidationFeePlainBallotDirectionV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1252,7 +1205,6 @@ impl norito::json::JsonDeserialize for ValidationFeePlainBallotDirectionV1 {
         }
     }
 }
-
 /// Strict request for one locally signable validation-fee PLAIN ballot.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -1266,7 +1218,6 @@ pub struct ValidationFeePlainBallotDraftRequestV1 {
     /// Closed first-release ballot direction.
     pub direction: ValidationFeePlainBallotDirectionV1,
 }
-
 /// Strict response containing one exact native validation-fee PLAIN ballot.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -1288,7 +1239,6 @@ pub struct ValidationFeePlainBallotDraftResponseV1 {
     /// Exactly one canonical native `CastPlainBallot` instruction.
     pub tx_instructions: Vec<ValidationFeeProposalInstructionDraftV1>,
 }
-
 fn exact_lower_hex_32(label: &str, value: &str) -> Result<[u8; 32], String> {
     if value.len() != 64
         || !value
@@ -1304,7 +1254,6 @@ fn exact_lower_hex_32(label: &str, value: &str) -> Result<[u8; 32], String> {
         .try_into()
         .map_err(|_| format!("{label} must decode to exactly 32 bytes"))
 }
-
 fn require_canonical_iroha_hash(label: &str, value: &[u8; 32]) -> Result<(), String> {
     if value[31] & 1 == 0 {
         return Err(format!(
@@ -1313,7 +1262,6 @@ fn require_canonical_iroha_hash(label: &str, value: &[u8; 32]) -> Result<(), Str
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1321,14 +1269,12 @@ mod tests {
         ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceVotingModeV1,
         ValidationFeeGovernanceWindowV1, ValidationFeePlainElectorateEligibilityRuleV1,
     };
-
     fn fixture_account(seed: u8) -> AccountId {
         let key_pair =
             iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
                 .expect("derive deterministic validation-fee fixture account");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn plain_electorate_rules() -> ValidationFeePlainElectorateRulesV1 {
         ValidationFeePlainElectorateRulesV1 {
             voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
@@ -1349,7 +1295,6 @@ mod tests {
                 ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
         }
     }
-
     fn parliament_authorization(
         rules: &ValidationFeePlainElectorateRulesV1,
     ) -> ValidationFeeParliamentAuthorizationV1 {
@@ -1383,7 +1328,6 @@ mod tests {
             enacted_at_height: referendum_upper + 1,
         }
     }
-
     #[test]
     fn plain_ballot_direction_json_is_a_closed_string() {
         for (direction, expected) in [
@@ -1405,7 +1349,6 @@ mod tests {
             norito::json::from_str::<ValidationFeePlainBallotDirectionV1>(r#""APPROVE""#).is_err()
         );
     }
-
     #[test]
     fn iroha_hash_validation_requires_the_canonical_marker() {
         require_canonical_iroha_hash("checkpoint", &[0x03; 32])
@@ -1419,7 +1362,6 @@ mod tests {
             Err("checkpoint must carry the canonical Iroha hash marker".to_owned())
         );
     }
-
     #[test]
     fn verified_parliament_projection_preserves_full_range_integers_as_strings() {
         let proposal_id = [0x02; 32];
@@ -1466,7 +1408,6 @@ mod tests {
         );
         assert_eq!(projected.enactment_window.enactment, u64::MAX.to_string());
         assert_eq!(projected.plain_electorate_rules, plain_electorate_rules);
-
         let json = norito::json::to_string(&projected).expect("serialize JSON-safe projection");
         assert!(json.contains(r#""proposal_kind":"ValidationFeePolicyV1""#));
         assert!(json.contains(&format!(r#""approve":"{}""#, u128::MAX)));
@@ -1478,14 +1419,12 @@ mod tests {
             norito::json::from_str(&json).expect("roundtrip JSON-safe projection");
         assert_eq!(roundtrip, projected);
     }
-
     #[test]
     fn verified_parliament_projection_rejects_rule_and_snapshot_anchor_mismatches() {
         let rules = plain_electorate_rules();
         let authorization = parliament_authorization(&rules);
         verified_parliament_proposal("ValidationFeePolicyV1", &authorization, &rules)
             .expect("exact proposal-bound authorization");
-
         let mut wrong_duration = rules.clone();
         wrong_duration.ballot_duration_blocks -= 1;
         assert!(
@@ -1493,7 +1432,6 @@ mod tests {
                 .is_err(),
             "the inclusive referendum span must match the proposal-bound duration"
         );
-
         let mut non_release_amount = rules.clone();
         non_release_amount.ballot_amount = 149_u64.into();
         let matching_non_release_amount = parliament_authorization(&non_release_amount);
@@ -1506,7 +1444,6 @@ mod tests {
             .is_err(),
             "the verified runtime boundary must require the exact 150-XOR ballot"
         );
-
         let mut non_release_duration = rules.clone();
         non_release_duration.ballot_duration_blocks = 3_599;
         let matching_non_release_duration = parliament_authorization(&non_release_duration);
@@ -1519,7 +1456,6 @@ mod tests {
             .is_err(),
             "the verified runtime boundary must require the exact 3,600-block window"
         );
-
         let mut oversized_authorization = authorization;
         oversized_authorization.plain_electorate_snapshot_member_count = 2;
         let mut one_member_rule = rules.clone();
@@ -1533,7 +1469,6 @@ mod tests {
             .is_err(),
             "the registry-proven snapshot count must fit the proposal-bound cap"
         );
-
         let mut wrong_threshold = rules.clone();
         wrong_threshold.approval_threshold_denominator = 2;
         assert!(
@@ -1541,7 +1476,6 @@ mod tests {
                 .is_err(),
             "finalization thresholds must match the proposal-bound rules"
         );
-
         let mut wrong_capture = authorization;
         wrong_capture.plain_electorate_snapshot_captured_at_height += 1;
         assert!(
@@ -1549,7 +1483,6 @@ mod tests {
             "the frozen roster must be captured at the inclusive referendum start"
         );
     }
-
     #[test]
     fn verified_current_policy_shape_has_exact_mobile_keys_and_recipient_evidence() {
         let proposal = ValidationFeeVerifiedParliamentProposalV1 {
@@ -1651,7 +1584,6 @@ mod tests {
             norito::json::from_str(&json).expect("roundtrip current policy");
         assert_eq!(roundtrip, current);
     }
-
     #[test]
     fn checkpoint_promotion_pages_reach_a_distant_tip_without_gaps() {
         let observed_tip = 250;
@@ -1667,7 +1599,6 @@ mod tests {
         }
         assert_eq!(pages, vec![(1, 64), (64, 127), (127, 190), (190, 250)]);
     }
-
     #[test]
     fn proposal_cursor_roundtrip_is_canonical_and_collection_bound() {
         let proposal_id = [0xA5; 32];
@@ -1680,7 +1611,6 @@ mod tests {
             decode_validation_fee_proposal_cursor_v1(&encoded),
             Ok((42, proposal_id))
         );
-
         let mut wrong_collection = hex::decode(&encoded).expect("decode valid cursor fixture");
         wrong_collection[0] ^= 0x01;
         let wrong_collection = hex::encode(wrong_collection);
@@ -1692,7 +1622,6 @@ mod tests {
         assert!(decode_validation_fee_proposal_cursor_v1(&encoded.to_uppercase()).is_err());
         assert!(decode_validation_fee_proposal_cursor_v1("").is_err());
     }
-
     #[test]
     fn proposal_list_query_defaults_to_a_bounded_page() {
         let query: ValidationFeeProposalListQueryV1 =
@@ -1700,7 +1629,6 @@ mod tests {
         assert_eq!(query, ValidationFeeProposalListQueryV1::default());
         assert_eq!(query.limit, VALIDATION_FEE_PROPOSAL_PAGE_DEFAULT_LIMIT_V1);
     }
-
     #[test]
     fn governance_windows_preserve_full_u64_decimal_strings() {
         let window: AtWindow = norito::json::from_str(
@@ -1713,7 +1641,6 @@ mod tests {
             norito::json::to_json(&window).expect("serialize exact heights"),
             r#"{"lower":"9007199254740993","upper":"18446744073709551615"}"#
         );
-
         for invalid in [
             r#"{"lower":1,"upper":"2"}"#,
             r#"{"lower":"01","upper":"2"}"#,

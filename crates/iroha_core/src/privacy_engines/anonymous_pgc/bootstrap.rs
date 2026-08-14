@@ -8,11 +8,6 @@
 //! accounts, `64 * (2^32 - 1)` is far below the P-256 scalar order; aggregate
 //! equality in the group is therefore equality of the represented integers,
 //! not merely equality modulo the scalar field.
-
-use p256::{ProjectivePoint, Scalar};
-use rand_core_06::{CryptoRng, RngCore};
-use sha2::{Digest, Sha256};
-
 use super::{
     AnonymousPgcError, AnonymousPgcParametersV1, TwistedElGamalCiphertextV1,
     TwistedElGamalPublicKeyV1,
@@ -21,7 +16,9 @@ use crate::privacy_engines::p256::{
     CanonicalScalarV1, CompressedPointV1, P256EngineError, SecretScalarV1, TranscriptBindingV1,
     TranscriptV1, health_checked_p256_rng_v1, random_nonzero_scalar,
 };
-
+use p256::{ProjectivePoint, Scalar};
+use rand_core_06::{CryptoRng, RngCore};
+use sha2::{Digest, Sha256};
 /// Closed suite for the complete PGC account-bootstrap proof.
 pub const PGC_BOOTSTRAP_SUITE_V1: &[u8] = b"iroha.anonymous-pgc.account-bootstrap.p256.sha256.v1";
 /// Canonical bootstrap-proof wire version.
@@ -41,14 +38,12 @@ pub const PGC_BOOTSTRAP_TABLE_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.anonymous-pgc.account-bootstrap.table.v1";
 /// Closed field framing absorbed by the canonical bootstrap-table digest.
 pub const PGC_BOOTSTRAP_TABLE_DIGEST_SCHEMA_V1: &[u8] = b"namespace_len:u32be|namespace:bytes|initial_root:32|initial_epoch:u64be|total_supply:u32be|account_count:u32be|accounts[index:u32be,public_key:33,cipher_left:33,cipher_right:33]";
-
 const WELL_FORMED_SUITE_V1: &[u8] = b"iroha.anonymous-pgc.account-bootstrap.well-formed.v1";
 const RANGE_SUITE_V1: &[u8] = b"iroha.anonymous-pgc.account-bootstrap.range32.v1";
 const AGGREGATE_SUPPLY_SUITE_V1: &[u8] =
     b"iroha.anonymous-pgc.account-bootstrap.aggregate-supply.v1";
 const RANGE_BITS: usize = 32;
 const MAX_PROVER_RESTARTS: usize = 128;
-
 fn bootstrap_proof_decode_limits(
     statement: &AnonymousPgcBootstrapStatementV1<'_>,
     payload_len: usize,
@@ -62,7 +57,6 @@ fn bootstrap_proof_decode_limits(
         24,
     )
 }
-
 /// Public input for one complete PGC account bootstrap.
 #[derive(Clone, Copy, Debug)]
 pub struct AnonymousPgcBootstrapStatementV1<'a> {
@@ -75,7 +69,6 @@ pub struct AnonymousPgcBootstrapStatementV1<'a> {
     transcript_binding: TranscriptBindingV1<'a>,
     bootstrap_table_digest: [u8; 32],
 }
-
 impl<'a> AnonymousPgcBootstrapStatementV1<'a> {
     /// Construct a fully bound account-bootstrap statement.
     ///
@@ -160,56 +153,47 @@ impl<'a> AnonymousPgcBootstrapStatementV1<'a> {
             bootstrap_table_digest,
         })
     }
-
     /// Exact canonical namespace encoding.
     #[must_use]
     pub const fn namespace_encoding(&self) -> &'a [u8] {
         self.namespace_encoding
     }
-
     /// Declared canonical initial account-state root.
     #[must_use]
     pub const fn initial_root(&self) -> [u8; 32] {
         self.initial_root
     }
-
     /// Declared canonical initial account-state epoch (exactly one).
     #[must_use]
     pub const fn initial_epoch(&self) -> u64 {
         self.initial_epoch
     }
-
     /// Exact public supply established by this bootstrap.
     #[must_use]
     pub const fn total_supply(&self) -> u32 {
         self.total_supply
     }
-
     /// Number of accounts in the complete table.
     #[must_use]
     pub const fn account_count(&self) -> usize {
         self.public_keys.len()
     }
-
     /// Ordered public keys in the complete table.
     #[must_use]
     pub const fn public_keys(&self) -> &'a [TwistedElGamalPublicKeyV1] {
         self.public_keys
     }
-
     /// Ordered initial encrypted balances in the complete table.
     #[must_use]
     pub const fn encrypted_balances(&self) -> &'a [TwistedElGamalCiphertextV1] {
         self.encrypted_balances
     }
-
     /// Digest of every explicit public bootstrap field in canonical order.
     #[must_use]
     pub const fn bootstrap_table_digest(&self) -> [u8; 32] {
         self.bootstrap_table_digest
     }
 }
-
 /// Secret openings for every encrypted balance in bootstrap-table order.
 #[derive(Clone, Copy, Debug)]
 pub struct AnonymousPgcBootstrapWitnessV1<'a> {
@@ -218,7 +202,6 @@ pub struct AnonymousPgcBootstrapWitnessV1<'a> {
     /// Independent encryption randomizers.
     pub randomness: &'a [SecretScalarV1],
 }
-
 /// Generalized Schnorr proof that one bootstrap ciphertext is well formed.
 #[derive(
     Clone,
@@ -236,7 +219,6 @@ pub struct PgcBootstrapWellFormedProofV1 {
     randomness_response: CanonicalScalarV1,
     balance_response: CanonicalScalarV1,
 }
-
 /// Exact unsigned 32-bit proof for one encrypted balance's right component.
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
@@ -247,7 +229,6 @@ pub struct PgcBootstrapUnsignedRangeProofV1 {
     branch_challenges: [CanonicalScalarV1; RANGE_BITS * 2],
     branch_responses: [CanonicalScalarV1; RANGE_BITS * 2],
 }
-
 /// Complete proof for one ordered bootstrap account.
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
@@ -257,7 +238,6 @@ pub struct PgcBootstrapAccountProofV1 {
     well_formed: PgcBootstrapWellFormedProofV1,
     unsigned_range: PgcBootstrapUnsignedRangeProofV1,
 }
-
 /// Schnorr proof that aggregate plaintext equals the exact public supply.
 #[derive(
     Clone,
@@ -273,7 +253,6 @@ pub struct PgcBootstrapAggregateSupplyProofV1 {
     announcement: CompressedPointV1,
     randomness_response: CanonicalScalarV1,
 }
-
 /// Canonical proof for one complete PGC pool bootstrap.
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
@@ -284,14 +263,12 @@ pub struct AnonymousPgcBootstrapProofV1 {
     accounts: Vec<PgcBootstrapAccountProofV1>,
     aggregate_supply: PgcBootstrapAggregateSupplyProofV1,
 }
-
 impl AnonymousPgcBootstrapProofV1 {
     /// Encode this proof as canonical Norito.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         norito::codec::encode_adaptive(self)
     }
-
     /// Decode exactly one canonical proof and validate its closed shape.
     ///
     /// # Errors
@@ -321,7 +298,6 @@ impl AnonymousPgcBootstrapProofV1 {
         proof.validate_shape(statement)?;
         Ok(proof)
     }
-
     fn validate_shape(
         &self,
         statement: &AnonymousPgcBootstrapStatementV1<'_>,
@@ -340,7 +316,6 @@ impl AnonymousPgcBootstrapProofV1 {
         self.aggregate_supply.validate()
     }
 }
-
 impl PgcBootstrapWellFormedProofV1 {
     fn validate(&self) -> Result<(), AnonymousPgcError> {
         let _ = self.announcement_left.to_projective()?;
@@ -350,7 +325,6 @@ impl PgcBootstrapWellFormedProofV1 {
         Ok(())
     }
 }
-
 impl PgcBootstrapUnsignedRangeProofV1 {
     fn validate(&self) -> Result<(), AnonymousPgcError> {
         for point in &self.bit_commitments {
@@ -362,14 +336,12 @@ impl PgcBootstrapUnsignedRangeProofV1 {
         Ok(())
     }
 }
-
 impl PgcBootstrapAccountProofV1 {
     fn validate(&self) -> Result<(), AnonymousPgcError> {
         self.well_formed.validate()?;
         self.unsigned_range.validate()
     }
 }
-
 impl PgcBootstrapAggregateSupplyProofV1 {
     fn validate(&self) -> Result<(), AnonymousPgcError> {
         let _ = self.announcement.to_projective()?;
@@ -377,7 +349,6 @@ impl PgcBootstrapAggregateSupplyProofV1 {
         Ok(())
     }
 }
-
 /// Opaque evidence that every bootstrap equation verified as one unit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VerifiedAnonymousPgcBootstrapV1 {
@@ -385,27 +356,23 @@ pub struct VerifiedAnonymousPgcBootstrapV1 {
     account_count: usize,
     bootstrap_table_digest: [u8; 32],
 }
-
 impl VerifiedAnonymousPgcBootstrapV1 {
     /// Verified exact public supply.
     #[must_use]
     pub const fn total_supply(self) -> u32 {
         self.total_supply
     }
-
     /// Verified account-table size.
     #[must_use]
     pub const fn account_count(self) -> usize {
         self.account_count
     }
-
     /// Verified digest of the complete ordered public table and metadata.
     #[must_use]
     pub const fn bootstrap_table_digest(self) -> [u8; 32] {
         self.bootstrap_table_digest
     }
 }
-
 fn bootstrap_table_digest(
     namespace_encoding: &[u8],
     initial_root: [u8; 32],
@@ -438,7 +405,6 @@ fn bootstrap_table_digest(
     }
     Ok(hash.finalize().into())
 }
-
 fn bootstrap_transcript(
     suite: &'static [u8],
     statement: &AnonymousPgcBootstrapStatementV1<'_>,
@@ -475,7 +441,6 @@ fn bootstrap_transcript(
     }
     Ok(transcript)
 }
-
 fn append_role_and_ordinal(
     transcript: &mut TranscriptV1,
     role: &[u8],
@@ -485,13 +450,11 @@ fn append_role_and_ordinal(
     transcript.append_message(b"proof_ordinal", &ordinal.to_be_bytes())?;
     Ok(())
 }
-
 fn sum_points(values: impl IntoIterator<Item = ProjectivePoint>) -> ProjectivePoint {
     values
         .into_iter()
         .fold(ProjectivePoint::IDENTITY, |sum, value| sum + value)
 }
-
 fn prove_well_formed<R>(
     statement: &AnonymousPgcBootstrapStatementV1<'_>,
     index: usize,
@@ -545,7 +508,6 @@ where
     }
     Err(AnonymousPgcError::ProverRestartExhausted)
 }
-
 fn verify_well_formed(
     statement: &AnonymousPgcBootstrapStatementV1<'_>,
     index: usize,
@@ -578,7 +540,6 @@ fn verify_well_formed(
     }
     Ok(())
 }
-
 fn prove_unsigned_range<R>(
     statement: &AnonymousPgcBootstrapStatementV1<'_>,
     index: usize,
@@ -604,7 +565,6 @@ where
             bit_blindings.push(bit_blinding);
         }
         bit_blindings.push(randomness - partial_blinding);
-
         let mut bit_commitments = Vec::with_capacity(RANGE_BITS);
         let mut failed = false;
         for (bit, bit_blinding) in bit_blindings.iter().copied().enumerate() {
@@ -632,7 +592,6 @@ where
         if summed_commitments != commitment {
             return Err(AnonymousPgcError::InvalidBootstrapWitness);
         }
-
         let mut challenges = vec![Scalar::ZERO; RANGE_BITS * 2];
         let mut responses = vec![Scalar::ZERO; RANGE_BITS * 2];
         let mut real_masks = vec![Scalar::ZERO; RANGE_BITS];
@@ -670,7 +629,6 @@ where
         if failed {
             continue;
         }
-
         let mut transcript = bootstrap_transcript(RANGE_SUITE_V1, statement)?;
         append_role_and_ordinal(
             &mut transcript,
@@ -725,7 +683,6 @@ where
     }
     Err(AnonymousPgcError::ProverRestartExhausted)
 }
-
 fn verify_unsigned_range(
     statement: &AnonymousPgcBootstrapStatementV1<'_>,
     index: usize,
@@ -745,7 +702,6 @@ fn verify_unsigned_range(
     if summed_commitments != commitment {
         return Err(AnonymousPgcError::BootstrapProofEquationFailed);
     }
-
     let mut announcements = Vec::with_capacity(RANGE_BITS * 2);
     for bit in 0..RANGE_BITS {
         let bit_commitment = proof.bit_commitments[bit].to_projective()?;
@@ -762,7 +718,6 @@ fn verify_unsigned_range(
             )?);
         }
     }
-
     let mut transcript = bootstrap_transcript(RANGE_SUITE_V1, statement)?;
     append_role_and_ordinal(
         &mut transcript,
@@ -797,7 +752,6 @@ fn verify_unsigned_range(
     }
     Ok(())
 }
-
 fn prove_aggregate_supply<R>(
     statement: &AnonymousPgcBootstrapStatementV1<'_>,
     aggregate_randomness: Scalar,
@@ -837,7 +791,6 @@ where
     }
     Err(AnonymousPgcError::ProverRestartExhausted)
 }
-
 fn verify_aggregate_supply(
     statement: &AnonymousPgcBootstrapStatementV1<'_>,
     proof: &PgcBootstrapAggregateSupplyProofV1,
@@ -866,7 +819,6 @@ fn verify_aggregate_supply(
     }
     Ok(())
 }
-
 fn validate_witness(
     statement: &AnonymousPgcBootstrapStatementV1<'_>,
     witness: &AnonymousPgcBootstrapWitnessV1<'_>,
@@ -896,7 +848,6 @@ fn validate_witness(
     }
     Ok(aggregate_randomness)
 }
-
 /// Prove bounded account openings and exact aggregate supply for a complete
 /// bootstrap table.
 ///
@@ -955,7 +906,6 @@ where
     verify_bootstrap(statement, &proof).map_err(|_| AnonymousPgcError::ProverSelfCheckFailed)?;
     Ok(proof)
 }
-
 /// Verify every bootstrap account and the exact aggregate supply as one unit.
 ///
 /// # Errors
@@ -980,7 +930,6 @@ pub fn verify_bootstrap(
         bootstrap_table_digest: statement.bootstrap_table_digest,
     })
 }
-
 /// Decode and verify canonical opaque bootstrap-proof bytes.
 ///
 /// # Errors
@@ -994,60 +943,49 @@ pub fn verify_bootstrap_encoded(
     let proof = AnonymousPgcBootstrapProofV1::decode_exact(proof_bytes, statement)?;
     verify_bootstrap(statement, &proof)
 }
-
 #[cfg(test)]
 mod tests {
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
-
     use super::*;
     use crate::privacy_engines::anonymous_pgc::TwistedElGamalKeyPairV1;
-
+    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     const TEST_NAMESPACE: &[u8] = b"canonical-norito:anonymous-pgc:taira-pool-7";
-
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyUnsignedRangeProofV1 {
         bit_commitments: Vec<CompressedPointV1>,
         branch_challenges: Vec<CanonicalScalarV1>,
         branch_responses: Vec<CanonicalScalarV1>,
     }
-
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyAccountProofV1 {
         well_formed: PgcBootstrapWellFormedProofV1,
         unsigned_range: LegacyUnsignedRangeProofV1,
     }
-
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyBootstrapProofV1 {
         version: u8,
         accounts: Vec<LegacyAccountProofV1>,
         aggregate_supply: PgcBootstrapAggregateSupplyProofV1,
     }
-
     struct KatRng {
         seed: [u8; 32],
         counter: u64,
     }
-
     impl KatRng {
         fn new(seed: [u8; 32]) -> Self {
             Self { seed, counter: 0 }
         }
     }
-
     impl RngCore for KatRng {
         fn next_u32(&mut self) -> u32 {
             let mut bytes = [0_u8; 4];
             self.fill_bytes(&mut bytes);
             u32::from_be_bytes(bytes)
         }
-
         fn next_u64(&mut self) -> u64 {
             let mut bytes = [0_u8; 8];
             self.fill_bytes(&mut bytes);
             u64::from_be_bytes(bytes)
         }
-
         fn fill_bytes(&mut self, destination: &mut [u8]) {
             let mut offset = 0;
             while offset < destination.len() {
@@ -1062,30 +1000,23 @@ mod tests {
                 offset += take;
             }
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
             self.fill_bytes(destination);
             Ok(())
         }
     }
-
     impl CryptoRng for KatRng {}
-
     struct PeriodicRng;
-
     impl RngCore for PeriodicRng {
         fn next_u32(&mut self) -> u32 {
             panic!("PGC bootstrap must use the fallible RNG interface")
         }
-
         fn next_u64(&mut self) -> u64 {
             panic!("PGC bootstrap must use the fallible RNG interface")
         }
-
         fn fill_bytes(&mut self, _destination: &mut [u8]) {
             panic!("PGC bootstrap must use the fallible RNG interface")
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
             for (index, byte) in destination.iter_mut().enumerate() {
                 *byte = ((index % 16) as u8).wrapping_mul(19).wrapping_add(7);
@@ -1093,15 +1024,12 @@ mod tests {
             Ok(())
         }
     }
-
     impl CryptoRng for PeriodicRng {}
-
     fn secret(value: u64) -> SecretScalarV1 {
         let mut bytes = [0_u8; 32];
         bytes[24..].copy_from_slice(&value.to_be_bytes());
         SecretScalarV1::from_bytes(bytes).expect("nonzero test scalar")
     }
-
     fn binding() -> TranscriptBindingV1<'static> {
         let parameters = AnonymousPgcParametersV1::get().expect("parameters");
         TranscriptBindingV1 {
@@ -1117,7 +1045,6 @@ mod tests {
             generator_digest: parameters.generator_digest(),
         }
     }
-
     struct Fixture {
         public_keys: Vec<TwistedElGamalPublicKeyV1>,
         encrypted_balances: Vec<TwistedElGamalCiphertextV1>,
@@ -1127,19 +1054,16 @@ mod tests {
         initial_epoch: u64,
         total_supply: u32,
     }
-
     impl Fixture {
         fn new_16() -> Self {
             let balances = (0_u32..16).collect::<Vec<_>>();
             Self::from_balances(balances, 10_000)
         }
-
         fn boundary_64() -> Self {
             let mut balances = vec![0_u32; 64];
             balances[17] = u32::MAX;
             Self::from_balances(balances, 20_000)
         }
-
         fn from_balances(balances: Vec<u32>, key_base: u64) -> Self {
             let mut key_pairs = (0..balances.len())
                 .map(|index| {
@@ -1183,7 +1107,6 @@ mod tests {
                 total_supply: u32::try_from(total).expect("fixture supply fits u32"),
             }
         }
-
         fn statement(&self) -> AnonymousPgcBootstrapStatementV1<'_> {
             AnonymousPgcBootstrapStatementV1::new(
                 TEST_NAMESPACE,
@@ -1196,29 +1119,24 @@ mod tests {
             )
             .expect("bootstrap statement")
         }
-
         fn witness(&self) -> AnonymousPgcBootstrapWitnessV1<'_> {
             AnonymousPgcBootstrapWitnessV1 {
                 balances: &self.balances,
                 randomness: &self.randomness,
             }
         }
-
         fn prove(&self) -> AnonymousPgcBootstrapProofV1 {
             let mut rng = KatRng::new([0xb1; 32]);
             prove_bootstrap(&self.statement(), &self.witness(), &mut rng).expect("bootstrap proof")
         }
     }
-
     fn mutate_scalar(value: CanonicalScalarV1) -> CanonicalScalarV1 {
         CanonicalScalarV1::from_scalar(value.to_scalar().expect("scalar") + Scalar::ONE)
     }
-
     fn negate_point(value: CompressedPointV1) -> CompressedPointV1 {
         CompressedPointV1::from_projective(-value.to_projective().expect("point"))
             .expect("nonidentity inverse")
     }
-
     #[test]
     fn complete_n16_bootstrap_is_canonical_and_returns_verified_public_values() {
         let fixture = Fixture::new_16();
@@ -1241,7 +1159,6 @@ mod tests {
             statement.bootstrap_table_digest()
         );
     }
-
     #[test]
     fn bootstrap_known_answer_vector_is_stable() {
         let fixture = Fixture::new_16();
@@ -1267,7 +1184,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn complete_n64_zero_and_u32_max_boundary_fits_cap_and_verifies() {
         let fixture = Fixture::boundary_64();
@@ -1293,7 +1209,6 @@ mod tests {
             statement.bootstrap_table_digest()
         );
     }
-
     #[test]
     fn aggregate_integer_bound_cannot_wrap_the_p256_scalar_order() {
         const P256_ORDER_BE: [u8; 32] = [
@@ -1315,13 +1230,11 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn rejects_wrong_witness_opening_lengths_and_aggregate_sum() {
         let fixture = Fixture::new_16();
         let statement = fixture.statement();
         let mut rng = KatRng::new([0xb2; 32]);
-
         let wrong_lengths = AnonymousPgcBootstrapWitnessV1 {
             balances: &fixture.balances[..15],
             randomness: &fixture.randomness,
@@ -1330,7 +1243,6 @@ mod tests {
             prove_bootstrap(&statement, &wrong_lengths, &mut rng),
             Err(AnonymousPgcError::InvalidBootstrapWitness)
         ));
-
         let mut wrong_balances = fixture.balances.clone();
         wrong_balances[4] += 1;
         let wrong_opening = AnonymousPgcBootstrapWitnessV1 {
@@ -1341,7 +1253,6 @@ mod tests {
             prove_bootstrap(&statement, &wrong_opening, &mut rng),
             Err(AnonymousPgcError::InvalidBootstrapWitness)
         ));
-
         let mut wrong_randomness = fixture
             .randomness
             .iter()
@@ -1357,7 +1268,6 @@ mod tests {
             prove_bootstrap(&statement, &wrong_opening, &mut rng),
             Err(AnonymousPgcError::InvalidBootstrapWitness)
         ));
-
         let wrong_supply = AnonymousPgcBootstrapStatementV1::new(
             TEST_NAMESPACE,
             fixture.initial_root,
@@ -1373,7 +1283,6 @@ mod tests {
             Err(AnonymousPgcError::InvalidBootstrapWitness)
         ));
     }
-
     #[test]
     fn complete_bootstrap_rejects_short_period_entropy_before_proof_emission() {
         let fixture = Fixture::new_16();
@@ -1384,13 +1293,11 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn proof_binds_every_public_bootstrap_component() {
         let fixture = Fixture::new_16();
         let proof = fixture.prove();
         let baseline = fixture.statement().bootstrap_table_digest();
-
         let changed_namespace = AnonymousPgcBootstrapStatementV1::new(
             b"canonical-norito:anonymous-pgc:different-pool",
             fixture.initial_root,
@@ -1403,7 +1310,6 @@ mod tests {
         .expect("changed namespace");
         assert_ne!(changed_namespace.bootstrap_table_digest(), baseline);
         assert!(verify_bootstrap(&changed_namespace, &proof).is_err());
-
         let mut changed_root = fixture.initial_root;
         changed_root[0] ^= 1;
         let changed_root_statement = AnonymousPgcBootstrapStatementV1::new(
@@ -1418,7 +1324,6 @@ mod tests {
         .expect("changed root");
         assert_ne!(changed_root_statement.bootstrap_table_digest(), baseline);
         assert!(verify_bootstrap(&changed_root_statement, &proof).is_err());
-
         let changed_supply = AnonymousPgcBootstrapStatementV1::new(
             TEST_NAMESPACE,
             fixture.initial_root,
@@ -1431,7 +1336,6 @@ mod tests {
         .expect("changed supply public field");
         assert_ne!(changed_supply.bootstrap_table_digest(), baseline);
         assert!(verify_bootstrap(&changed_supply, &proof).is_err());
-
         let mut alternative_pairs = (50_000_u64..50_016)
             .map(|value| TwistedElGamalKeyPairV1::from_secret(secret(value)).expect("key"))
             .collect::<Vec<_>>();
@@ -1452,7 +1356,6 @@ mod tests {
         .expect("changed ordered keys");
         assert_ne!(changed_keys.bootstrap_table_digest(), baseline);
         assert!(verify_bootstrap(&changed_keys, &proof).is_err());
-
         for component in 0..2 {
             let mut encrypted = fixture.encrypted_balances.clone();
             match component {
@@ -1474,14 +1377,12 @@ mod tests {
             assert!(verify_bootstrap(&changed, &proof).is_err());
         }
     }
-
     #[test]
     fn proof_binds_chain_action_and_every_governed_transcript_digest() {
         let fixture = Fixture::new_16();
         let proof = fixture.prove();
         let base = binding();
         let mut changed_bindings = Vec::new();
-
         let mut changed = base;
         changed.network_id = &[0x92; 32];
         changed.genesis_hash = [0x92; 32];
@@ -1507,7 +1408,6 @@ mod tests {
         let mut changed = base;
         changed.engine_manifest_digest[0] ^= 1;
         changed_bindings.push(changed);
-
         for changed_binding in changed_bindings {
             let changed = AnonymousPgcBootstrapStatementV1::new(
                 TEST_NAMESPACE,
@@ -1521,7 +1421,6 @@ mod tests {
             .expect("changed valid binding");
             assert!(verify_bootstrap(&changed, &proof).is_err());
         }
-
         let mut changed_parameter = base;
         changed_parameter.parameter_digest[0] ^= 1;
         assert!(matches!(
@@ -1551,7 +1450,6 @@ mod tests {
             Err(AnonymousPgcError::GeneratorDigestMismatch)
         ));
     }
-
     #[test]
     fn rejects_reordered_duplicate_and_malformed_public_tables() {
         let fixture = Fixture::new_16();
@@ -1571,7 +1469,6 @@ mod tests {
             ),
             Err(AnonymousPgcError::BootstrapKeysNotStrictlyIncreasing)
         ));
-
         let mut duplicate_keys = fixture.public_keys.clone();
         duplicate_keys[1] = duplicate_keys[0];
         assert!(matches!(
@@ -1586,7 +1483,6 @@ mod tests {
             ),
             Err(AnonymousPgcError::BootstrapKeysNotStrictlyIncreasing)
         ));
-
         assert!(matches!(
             AnonymousPgcBootstrapStatementV1::new(
                 TEST_NAMESPACE,
@@ -1614,47 +1510,38 @@ mod tests {
         assert!(TwistedElGamalPublicKeyV1::from_sec1_bytes(&[0; 33]).is_err());
         assert!(TwistedElGamalCiphertextV1::from_sec1_bytes(&[0; 33], &[0; 33]).is_err());
     }
-
     #[test]
     fn decoder_and_equations_reject_all_proof_family_tampering() {
         let fixture = Fixture::new_16();
         let statement = fixture.statement();
         let proof = fixture.prove();
-
         let mut changed = proof.clone();
         changed.accounts[0].well_formed.announcement_left =
             negate_point(changed.accounts[0].well_formed.announcement_left);
         assert!(verify_bootstrap(&statement, &changed).is_err());
-
         let mut changed = proof.clone();
         changed.accounts[0].well_formed.balance_response =
             mutate_scalar(changed.accounts[0].well_formed.balance_response);
         assert!(verify_bootstrap(&statement, &changed).is_err());
-
         let mut changed = proof.clone();
         changed.accounts[0].unsigned_range.bit_commitments[0] =
             negate_point(changed.accounts[0].unsigned_range.bit_commitments[0]);
         assert!(verify_bootstrap(&statement, &changed).is_err());
-
         let mut changed = proof.clone();
         changed.accounts[0].unsigned_range.branch_challenges[0] =
             mutate_scalar(changed.accounts[0].unsigned_range.branch_challenges[0]);
         assert!(verify_bootstrap(&statement, &changed).is_err());
-
         let mut changed = proof.clone();
         changed.accounts[0].unsigned_range.branch_responses[0] =
             mutate_scalar(changed.accounts[0].unsigned_range.branch_responses[0]);
         assert!(verify_bootstrap(&statement, &changed).is_err());
-
         let mut changed = proof.clone();
         changed.aggregate_supply.announcement = negate_point(changed.aggregate_supply.announcement);
         assert!(verify_bootstrap(&statement, &changed).is_err());
-
         let mut changed = proof.clone();
         changed.aggregate_supply.randomness_response =
             mutate_scalar(changed.aggregate_supply.randomness_response);
         assert!(verify_bootstrap(&statement, &changed).is_err());
-
         let mut noncanonical_point = proof.clone();
         noncanonical_point.accounts[0].well_formed.announcement_left =
             CompressedPointV1::from_unchecked_bytes([0; 33]);
@@ -1663,7 +1550,6 @@ mod tests {
             AnonymousPgcBootstrapProofV1::decode_exact(&noncanonical_point.encode(), &statement)
                 .is_err()
         );
-
         let mut noncanonical_scalar = proof;
         noncanonical_scalar.accounts[0]
             .unsigned_range
@@ -1674,7 +1560,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn decoder_rejects_truncation_trailing_bombs_versions_shapes_and_cap() {
         let fixture = Fixture::new_16();
@@ -1689,7 +1574,6 @@ mod tests {
         let mut trailing = encoded.clone();
         trailing.push(0);
         assert!(AnonymousPgcBootstrapProofV1::decode_exact(&trailing, &statement).is_err());
-
         for offset in 0..encoded.len().min(16) {
             let mut length_prefix_bomb = encoded.clone();
             length_prefix_bomb[offset] = 0xff;
@@ -1705,7 +1589,6 @@ mod tests {
             ),
             Err(AnonymousPgcError::EncodingTooLarge { .. })
         ));
-
         let mut unknown_version = proof.clone();
         unknown_version.version += 1;
         assert!(matches!(
@@ -1718,7 +1601,6 @@ mod tests {
             AnonymousPgcBootstrapProofV1::decode_exact(&wrong_account_shape.encode(), &statement),
             Err(AnonymousPgcError::InvalidBootstrapProofShape)
         ));
-
         let mut oversized_accounts = proof.clone();
         oversized_accounts
             .accounts
@@ -1739,7 +1621,6 @@ mod tests {
             AnonymousPgcBootstrapProofV1::decode_exact(&forged, &statement),
             Err(AnonymousPgcError::InvalidNoritoEncoding)
         ));
-
         let legacy = LegacyBootstrapProofV1 {
             version: proof.version,
             accounts: proof
@@ -1763,7 +1644,6 @@ mod tests {
             Err(AnonymousPgcError::InvalidNoritoEncoding)
         ));
     }
-
     #[test]
     fn statement_rejects_noncanonical_epoch_before_all_other_validation() {
         for epoch in [0, 2, 11, u64::MAX] {
@@ -1794,7 +1674,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn statement_rejects_zero_and_oversized_namespace_root_and_supply() {
         let fixture = Fixture::new_16();

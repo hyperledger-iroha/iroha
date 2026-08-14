@@ -1,16 +1,13 @@
 //! Network configuration presets, topology metadata, and filesystem helpers.
-
+use iroha_data_model::{
+    block::consensus_v2::is_valid_committee_size, parameter::system::SumeragiConsensusMode,
+};
 use std::{
     fmt, fs, io,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener},
     num::NonZeroU64,
     path::{Path, PathBuf},
 };
-
-use iroha_data_model::{
-    block::consensus_v2::is_valid_committee_size, parameter::system::SumeragiConsensusMode,
-};
-
 const MIN_PEER_COUNT: usize = 4;
 const MAX_PEER_COUNT: usize = 7;
 const MULTI_PEER_BLOCK_CADENCE_MS: NonZeroU64 = NonZeroU64::new(1_000).unwrap();
@@ -18,7 +15,6 @@ const MULTI_PEER_BLOCK_CADENCE_MS: NonZeroU64 = NonZeroU64::new(1_000).unwrap();
 pub const WORKSPACE_MOCHI_DIR: &str = ".mochi";
 /// Relative directory under a workspace that stores sandbox runtime state.
 pub const WORKSPACE_SANDBOX_DIR: &str = ".mochi/sandbox";
-
 /// High-level presets exposed directly to the user interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProfilePreset {
@@ -31,7 +27,6 @@ pub enum ProfilePreset {
     /// Four peers to exercise Sumeragi BFT locally.
     FourPeerBft,
 }
-
 impl ProfilePreset {
     /// Default peer count for the preset.
     pub const fn peer_count(self) -> usize {
@@ -40,7 +35,6 @@ impl ProfilePreset {
             ProfilePreset::FourPeerBft => 4,
         }
     }
-
     /// Short slug used in filesystem paths.
     pub const fn slug(self) -> &'static str {
         match self {
@@ -48,7 +42,6 @@ impl ProfilePreset {
             ProfilePreset::FourPeerBft => "four-peer-bft",
         }
     }
-
     /// Human-friendly label used in UI surfaces.
     pub const fn label(self) -> &'static str {
         match self {
@@ -57,7 +50,6 @@ impl ProfilePreset {
         }
     }
 }
-
 /// Kagami genesis presets for Iroha 3 networks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
@@ -69,7 +61,6 @@ pub enum GenesisProfile {
     /// Sora Nexus main network.
     Iroha3Nexus,
 }
-
 impl GenesisProfile {
     /// CLI flag value expected by `kagami genesis --profile`.
     pub const fn as_kagami_arg(self) -> &'static str {
@@ -79,7 +70,6 @@ impl GenesisProfile {
             GenesisProfile::Iroha3Nexus => "iroha3-nexus",
         }
     }
-
     /// Default chain settings for the profile.
     pub const fn defaults(self) -> GenesisProfileDefaults {
         match self {
@@ -94,7 +84,6 @@ impl GenesisProfile {
             },
         }
     }
-
     /// Whether the profile mandates an explicit VRF seed.
     pub const fn requires_seed(self) -> bool {
         matches!(
@@ -103,10 +92,8 @@ impl GenesisProfile {
         )
     }
 }
-
 impl std::str::FromStr for GenesisProfile {
     type Err = String;
-
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim().to_ascii_lowercase().as_str() {
             "iroha3-dev" | "iroha3dev" | "iroha3_dev" => Ok(GenesisProfile::Iroha3Dev),
@@ -116,40 +103,34 @@ impl std::str::FromStr for GenesisProfile {
         }
     }
 }
-
 impl fmt::Display for GenesisProfile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_kagami_arg())
     }
 }
-
 /// Derived defaults for a genesis profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GenesisProfileDefaults {
     /// Expected chain identifier.
     pub chain_id: &'static str,
 }
-
 /// Structural metadata describing how many peers and helper processes MOCHI should manage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkTopology {
     /// Number of peers launched for the profile.
     pub peer_count: usize,
 }
-
 impl NetworkTopology {
     /// Four peer topology for BFT testing.
     pub const fn four_peer_bft() -> Self {
         Self { peer_count: 4 }
     }
 }
-
 impl Default for NetworkTopology {
     fn default() -> Self {
         NetworkTopology::four_peer_bft()
     }
 }
-
 /// Aggregated profile data describing topology and consensus mode, optionally tied to a preset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkProfile {
@@ -160,7 +141,6 @@ pub struct NetworkProfile {
     /// Consensus mode to seed into the genesis parameters.
     pub consensus_mode: SumeragiConsensusMode,
 }
-
 impl NetworkProfile {
     /// Create a profile from a known preset.
     pub fn from_preset(preset: ProfilePreset) -> Self {
@@ -173,7 +153,6 @@ impl NetworkProfile {
             consensus_mode: SumeragiConsensusMode::Permissioned,
         }
     }
-
     /// Create a custom profile with validation for peer count bounds.
     pub fn custom(
         peer_count: usize,
@@ -187,7 +166,6 @@ impl NetworkProfile {
         profile.validate()?;
         Ok(profile)
     }
-
     /// Validate the profile against topology bounds and preset defaults.
     pub fn validate(&self) -> Result<(), String> {
         if !(MIN_PEER_COUNT..=MAX_PEER_COUNT).contains(&self.topology.peer_count)
@@ -210,7 +188,6 @@ impl NetworkProfile {
         }
         Ok(())
     }
-
     /// Suggested on-disk slug for the profile.
     pub fn slug(&self) -> String {
         match self.preset {
@@ -222,7 +199,6 @@ impl NetworkProfile {
             ),
         }
     }
-
     /// Human-friendly label for the profile.
     pub fn label(&self) -> String {
         match self.preset {
@@ -234,7 +210,6 @@ impl NetworkProfile {
             ),
         }
     }
-
     /// Signed block cadence suitable for this local topology.
     ///
     /// Profiles use Kagami localnet's one-second cadence so crash-safe
@@ -244,20 +219,17 @@ impl NetworkProfile {
         MULTI_PEER_BLOCK_CADENCE_MS
     }
 }
-
 impl Default for NetworkProfile {
     fn default() -> Self {
         Self::from_preset(ProfilePreset::FourPeerBft)
     }
 }
-
 /// Filesystem context describing where generated material should live.
 #[derive(Debug, Clone)]
 pub struct NetworkPaths {
     /// Root directory for all network artifacts (genesis, configs, logs, Kura, snapshots).
     root: PathBuf,
 }
-
 impl NetworkPaths {
     /// Construct paths from an application data root.
     pub fn from_root(root: impl Into<PathBuf>, profile: &NetworkProfile) -> Self {
@@ -265,7 +237,6 @@ impl NetworkPaths {
         path.push(profile.slug());
         Self { root: path }
     }
-
     /// Ensure the directory tree exists for the network root and common subdirectories.
     ///
     /// # Errors
@@ -276,12 +247,10 @@ impl NetworkPaths {
         fs::create_dir_all(self.logs_dir())?;
         fs::create_dir_all(self.snapshots_dir())
     }
-
     /// Path to the network root.
     pub fn root(&self) -> &Path {
         &self.root
     }
-
     /// Runtime peer-container directory.
     ///
     /// This is the container for generation-bound mutable storage. Immutable
@@ -289,7 +258,6 @@ impl NetworkPaths {
     pub fn peers_dir(&self) -> PathBuf {
         self.root.join("peers")
     }
-
     /// Runtime container for a specific peer.
     ///
     /// This is not the peer's selected storage. Use the supervisor's
@@ -297,18 +265,15 @@ impl NetworkPaths {
     pub fn peer_dir(&self, alias: &str) -> PathBuf {
         self.peers_dir().join(alias)
     }
-
     /// Directory storing supervisor logs.
     pub fn logs_dir(&self) -> PathBuf {
         self.root.join("logs")
     }
-
     /// Directory storing exported snapshots.
     pub fn snapshots_dir(&self) -> PathBuf {
         self.root.join("snapshots")
     }
 }
-
 /// Derive the sandbox base root for a workspace.
 #[must_use]
 pub fn sandbox_root_for_workspace(workspace_root: impl AsRef<Path>) -> PathBuf {
@@ -317,7 +282,6 @@ pub fn sandbox_root_for_workspace(workspace_root: impl AsRef<Path>) -> PathBuf {
         .join(WORKSPACE_MOCHI_DIR)
         .join("sandbox")
 }
-
 /// Infer the owning workspace root from a sandbox base root when it follows Mochi defaults.
 #[must_use]
 pub fn infer_workspace_root_from_sandbox_root(sandbox_root: &Path) -> Option<PathBuf> {
@@ -331,19 +295,16 @@ pub fn infer_workspace_root_from_sandbox_root(sandbox_root: &Path) -> Option<Pat
     }
     mochi_dir.parent().map(PathBuf::from)
 }
-
 /// Deterministic port allocator that hands out incrementing socket ports.
 #[derive(Debug, Clone)]
 pub struct PortAllocator {
     next: u16,
 }
-
 impl PortAllocator {
     /// Create a new allocator starting at `start`.
     pub const fn new(start: u16) -> Self {
         Self { next: start }
     }
-
     /// Acquire the next available TCP port.
     ///
     /// The allocator probes the loopback interface, returning the first free port inside the
@@ -358,7 +319,6 @@ impl PortAllocator {
                 )
             })
     }
-
     fn allocate_with_probe<F>(&mut self, mut probe: F) -> Option<u16>
     where
         F: FnMut(u16) -> bool,
@@ -375,7 +335,6 @@ impl PortAllocator {
         }
         None
     }
-
     fn port_available(port: u16) -> bool {
         let v4_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
         match Self::try_bind_socket(v4_addr) {
@@ -389,30 +348,25 @@ impl PortAllocator {
         let v6_addr = SocketAddr::from((Ipv6Addr::LOCALHOST, port));
         Self::try_bind_socket(v6_addr).is_ok()
     }
-
     fn try_bind_socket(addr: SocketAddr) -> io::Result<()> {
         TcpListener::bind(addr).map(drop)
     }
 }
-
 fn consensus_mode_slug(mode: SumeragiConsensusMode) -> &'static str {
     match mode {
         SumeragiConsensusMode::Permissioned => "permissioned",
         SumeragiConsensusMode::Npos => "npos",
     }
 }
-
 fn consensus_mode_label(mode: SumeragiConsensusMode) -> &'static str {
     match mode {
         SumeragiConsensusMode::Permissioned => "permissioned",
         SumeragiConsensusMode::Npos => "npos",
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn can_bind_loopback(context: &str) -> bool {
         match TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) {
             Ok(listener) => {
@@ -431,54 +385,44 @@ mod tests {
             Err(err) => panic!("{context}: {err}"),
         }
     }
-
     #[test]
     fn profile_topology_matches_preset() {
         let legacy = NetworkProfile::from_preset(ProfilePreset::SinglePeer);
         assert_eq!(legacy.topology.peer_count, 4);
         assert_eq!(legacy.preset, Some(ProfilePreset::SinglePeer));
         assert_eq!(legacy.consensus_mode, SumeragiConsensusMode::Permissioned);
-
         let four = NetworkProfile::from_preset(ProfilePreset::FourPeerBft);
         assert_eq!(four.topology.peer_count, 4);
         assert_eq!(four.preset, Some(ProfilePreset::FourPeerBft));
         assert_eq!(four.consensus_mode, SumeragiConsensusMode::Permissioned);
     }
-
     #[test]
     fn profile_cadence_gives_every_committee_persistence_headroom() {
         let legacy = NetworkProfile::from_preset(ProfilePreset::SinglePeer);
         assert_eq!(legacy.signed_block_cadence_ms().get(), 1_000);
-
         let four = NetworkProfile::from_preset(ProfilePreset::FourPeerBft);
         assert_eq!(four.signed_block_cadence_ms().get(), 1_000);
-
         let custom_multi = NetworkProfile::custom(7, SumeragiConsensusMode::Permissioned).unwrap();
         assert_eq!(custom_multi.signed_block_cadence_ms().get(), 1_000);
     }
-
     #[test]
     fn custom_profile_validates_peer_bounds() {
         let err = NetworkProfile::custom(0, SumeragiConsensusMode::Permissioned)
             .expect_err("zero peers should be rejected");
         assert!(err.contains("peer_count"), "unexpected error: {err}");
-
         for count in [1_usize, 2, 3, 5] {
             let err = NetworkProfile::custom(count, SumeragiConsensusMode::Permissioned)
                 .expect_err("non-committee size should be rejected");
             assert!(err.contains("3f+1"), "unexpected error: {err}");
         }
-
         let err = NetworkProfile::custom(8, SumeragiConsensusMode::Permissioned)
             .expect_err("too many peers should be rejected");
         assert!(err.contains("peer_count"), "unexpected error: {err}");
-
         let profile =
             NetworkProfile::custom(7, SumeragiConsensusMode::Npos).expect("valid custom profile");
         assert_eq!(profile.preset, None);
         assert_eq!(profile.topology.peer_count, 7);
     }
-
     #[test]
     fn custom_profile_slug_and_label_include_consensus_mode() {
         let profile =
@@ -491,7 +435,6 @@ mod tests {
             "label should include consensus mode"
         );
     }
-
     #[test]
     fn genesis_profile_parses_aliases() {
         assert_eq!(
@@ -507,21 +450,18 @@ mod tests {
             "invalid profiles should error"
         );
     }
-
     #[test]
     fn genesis_profile_defaults_are_available() {
         let nexus = GenesisProfile::Iroha3Nexus.defaults();
         assert_eq!(nexus.chain_id, "iroha3-nexus");
         assert!(GenesisProfile::Iroha3Nexus.requires_seed());
     }
-
     #[test]
     fn network_paths_append_profile_slug() {
         let profile = NetworkProfile::from_preset(ProfilePreset::FourPeerBft);
         let paths = NetworkPaths::from_root("/tmp/mochi", &profile);
         assert!(paths.root().ends_with(Path::new("four-peer-bft")));
     }
-
     #[test]
     fn sandbox_root_for_workspace_uses_mochi_runtime_dir() {
         let workspace = Path::new("/tmp/demo-workspace");
@@ -530,7 +470,6 @@ mod tests {
             PathBuf::from("/tmp/demo-workspace/.mochi/sandbox")
         );
     }
-
     #[test]
     fn infer_workspace_root_from_sandbox_root_matches_default_layout() {
         let sandbox = Path::new("/tmp/demo-workspace/.mochi/sandbox");
@@ -543,14 +482,12 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn ensure_creates_expected_directories() {
         let temp = tempfile::tempdir().expect("temp dir");
         let profile = NetworkProfile::default();
         let paths = NetworkPaths::from_root(temp.path(), &profile);
         paths.ensure().expect("ensure directories");
-
         assert!(paths.root().exists());
         assert!(paths.peers_dir().exists());
         assert!(paths.logs_dir().exists());
@@ -560,7 +497,6 @@ mod tests {
             "genesis exists only inside immutable configuration generations"
         );
     }
-
     #[test]
     fn port_allocator_advances_monotonically() {
         if !can_bind_loopback("port_allocator_advances_monotonically") {
@@ -571,11 +507,9 @@ mod tests {
         assert_eq!(allocator.allocate().unwrap(), 4001);
         assert_eq!(allocator.allocate().unwrap(), 4002);
     }
-
     #[test]
     fn port_allocator_skips_ports_in_use() {
         use std::{io::ErrorKind, net::TcpListener};
-
         let (listener, busy_port) = loop {
             let candidate = match TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) {
                 Ok(listener) => listener,
@@ -601,25 +535,21 @@ mod tests {
                 Err(_) => continue,
             }
         };
-
         let mut allocator = PortAllocator::new(busy_port);
         let allocated = allocator.allocate().expect("allocate port");
         assert_eq!(allocated, busy_port.wrapping_add(1));
         drop(listener);
     }
-
     #[test]
     fn port_allocator_wraps_and_skips_zero() {
         let mut allocator = PortAllocator::new(u16::MAX);
         let mut probed = Vec::new();
-
         let selected = allocator
             .allocate_with_probe(|port| {
                 probed.push(port);
                 port == 5
             })
             .expect("probe should return a match before exhausting the search space");
-
         assert_eq!(
             probed,
             vec![u16::MAX, 1, 2, 3, 4, 5],

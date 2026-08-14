@@ -2,7 +2,6 @@
 //! Torii tests for protected-namespaces GET/POST endpoints.
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs, clippy::redundant_closure_for_method_calls)]
-
 use axum::response::IntoResponse;
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -10,7 +9,6 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World},
 };
-
 #[tokio::test]
 async fn protected_namespaces_get_post_cycle() {
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
@@ -24,7 +22,6 @@ async fn protected_namespaces_get_post_cycle() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     ));
-
     // GET before setting: found=false
     let resp0 = iroha_torii::handle_gov_protected_get(state.clone())
         .await
@@ -38,7 +35,6 @@ async fn protected_namespaces_get_post_cycle() {
         .to_bytes();
     let v0: norito::json::Value = norito::json::from_slice(&body0).expect("json parse");
     assert_eq!(v0.get("found").and_then(|x| x.as_bool()), Some(false));
-
     // POST to set namespaces
     let req = iroha_torii::ProtectedNamespacesDto {
         namespaces: vec!["apps".to_string(), "system".to_string()],
@@ -60,7 +56,6 @@ async fn protected_namespaces_get_post_cycle() {
         .to_bytes();
     let v1: norito::json::Value = norito::json::from_slice(&body1).expect("json parse");
     assert_eq!(v1.get("ok").and_then(|x| x.as_bool()), Some(true));
-
     // GET after setting: found=true and includes both namespaces
     let resp2 = iroha_torii::handle_gov_protected_get(state)
         .await

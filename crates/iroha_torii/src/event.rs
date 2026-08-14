@@ -1,14 +1,11 @@
 //! Iroha is a quite dynamic system so many events can happen.
 //! This module contains descriptions of such an events and
 //! utility Iroha Special Instructions to work with them.
-
-use iroha_data_model::events::prelude::*;
-
 use crate::{
     proof_filters,
     stream::{self, WebSocketNorito},
 };
-
+use iroha_data_model::events::prelude::*;
 /// Type of error for `Consumer`
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -19,16 +16,13 @@ pub enum Error {
     #[error("Invalid event subscription: {0}")]
     InvalidSubscription(String),
 }
-
 impl From<stream::Error> for Error {
     fn from(error: stream::Error) -> Self {
         Self::Stream(error)
     }
 }
-
 /// Result type for `Consumer`
 pub type Result<T> = core::result::Result<T, Error>;
-
 /// Consumer for Iroha `Event`(s).
 /// Passes the events over the corresponding connection `stream` if they match the `filter`.
 #[derive(Debug)]
@@ -39,7 +33,6 @@ pub struct Consumer<'ws> {
     proof_call_hash: Option<Vec<[u8; 32]>>,
     proof_envelope_hash: Option<Vec<[u8; 32]>>,
 }
-
 impl<'ws> Consumer<'ws> {
     /// Constructs [`Consumer`], which consumes `Event`s and forwards it through the `stream`.
     ///
@@ -67,7 +60,6 @@ impl<'ws> Consumer<'ws> {
             proof_envelope_hash,
         })
     }
-
     /// Forwards the `event` over the `stream` if it matches the `filter`.
     ///
     /// # Errors
@@ -118,7 +110,6 @@ impl<'ws> Consumer<'ws> {
                 ) {
                     return Ok(());
                 }
-
                 self.stream
                     .send(EventMessage(event))
                     .await

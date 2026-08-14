@@ -1,6 +1,5 @@
 use std::error::Error;
 use std::io::BufReader;
-
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE};
 use sorafs_car::{
@@ -11,9 +10,7 @@ use sorafs_car::{
     proof_stream_transport::ProofStreamNdjsonReader,
 };
 use sorafs_manifest::{ProofStreamHttpRequestV1, ProofStreamRequestV1};
-
 const POR_SAMPLE_COUNT: u32 = 32;
-
 fn canonical_nonzero_hex<const N: usize>(
     raw: &str,
     field: &str,
@@ -35,7 +32,6 @@ fn canonical_nonzero_hex<const N: usize>(
     }
     Ok(bytes)
 }
-
 /// Fetch an NDJSON proof stream and return the aggregated summary.
 ///
 /// `trusted_por_root_hex` and the finalized cursor must come from the same authenticated,
@@ -65,7 +61,6 @@ pub fn fetch_and_summarise(
         nonce,
     )
 }
-
 fn fetch_and_summarise_with_nonce(
     endpoint: &str,
     manifest_digest_hex: &str,
@@ -113,7 +108,6 @@ fn fetch_and_summarise_with_nonce(
     }
     let request = ProofStreamHttpRequestV1::new(proof_request)?;
     let request_bytes = norito::json::to_vec(&request)?;
-
     let response = Client::new()
         .post(endpoint)
         .bearer_auth(bearer_token)
@@ -140,7 +134,6 @@ fn fetch_and_summarise_with_nonce(
     {
         return Err("gateway returned a compressed proof stream".into());
     }
-
     let mut metrics = ProofStreamMetrics::default();
     for item in ProofStreamNdjsonReader::new(BufReader::new(response), &verification_context) {
         let item = item?;
@@ -158,16 +151,13 @@ fn fetch_and_summarise_with_nonce(
     if metrics.failure_total != 0 {
         return Err("proof stream reported a failed item".into());
     }
-
     Ok(ProofStreamSummary::new(metrics, Vec::new()))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use norito::json::Value;
     use sorafs_car::{ChunkStore, POR_LEAF_SIZE, por_json::sample_to_map};
-
     #[test]
     fn aggregates_exact_por_sequence_and_rejects_truncation_and_reordering() {
         let manifest_digest_hex = "11".repeat(32);
@@ -238,7 +228,6 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert!(items.len() > 2, "fixture needs a non-trivial PoR schedule");
-
         let encode_ndjson = |items: &[Value]| {
             let mut ndjson = String::new();
             for item in items {
@@ -254,7 +243,6 @@ mod tests {
         let mut reordered_items = items.clone();
         reordered_items.swap(0, 1);
         let reordered_ndjson = encode_ndjson(&reordered_items);
-
         let server = httpmock::MockServer::start();
         let canonical_mock = server.mock(|when, then| {
             when.method(httpmock::Method::POST).path("/stream");
@@ -274,7 +262,6 @@ mod tests {
                 .header("content-type", "application/x-ndjson")
                 .body(reordered_ndjson.clone());
         });
-
         let call = |path: &str| {
             fetch_and_summarise_with_nonce(
                 &server.url(path),
@@ -294,7 +281,6 @@ mod tests {
         let reordered_error = call("/reordered")
             .expect_err("request-bound verifier must reject reordered samples")
             .to_string();
-
         canonical_mock.assert();
         truncated_mock.assert();
         reordered_mock.assert();

@@ -1,8 +1,6 @@
 //! Governance threshold tests: ratio and turnout logic.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use core::num::NonZeroU64;
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -30,7 +28,6 @@ use iroha_data_model::{
 };
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
-
 const DEPLOY_PARLIAMENT_BODIES: [ParliamentBody; 6] = [
     ParliamentBody::RulesCommittee,
     ParliamentBody::AgendaCouncil,
@@ -39,11 +36,9 @@ const DEPLOY_PARLIAMENT_BODIES: [ParliamentBody; 6] = [
     ParliamentBody::PolicyJury,
     ParliamentBody::OversightCommittee,
 ];
-
 fn checked_random_governance_threshold_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked governance threshold keypair")
 }
-
 fn threshold_contract_address(nonce: u64) -> ContractAddress {
     ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -55,7 +50,6 @@ fn threshold_contract_address(nonce: u64) -> ContractAddress {
     )
     .expect("threshold proposal contract address")
 }
-
 fn seed_open_plain_referendum(
     stx: &mut StateTransaction<'_, '_>,
     proposal_id: [u8; 32],
@@ -94,7 +88,6 @@ fn seed_open_plain_referendum(
             enacted_at_height: None,
         },
     );
-
     let mut approvals = GovernanceStageApprovals::default();
     for body in DEPLOY_PARLIAMENT_BODIES {
         approvals
@@ -111,12 +104,10 @@ fn seed_open_plain_referendum(
         .insert(referendum_id.clone(), approvals);
     referendum_id
 }
-
 #[test]
 fn governance_threshold_fixture_uses_checked_randomness() {
     let _key_pair = checked_random_governance_threshold_keypair();
 }
-
 #[test]
 fn ratio_threshold_rejects_even_if_approve_gt_reject() {
     let kura = Kura::blank_kura_for_testing();
@@ -127,7 +118,6 @@ fn ratio_threshold_rejects_even_if_approve_gt_reject() {
     cfg.approval_threshold_q_num = 3;
     cfg.approval_threshold_q_den = 4;
     state.set_gov(cfg);
-
     // Finalization occurs after the inclusive [1, 1] voting window.
     let (_pk, _sk) = checked_random_governance_threshold_keypair().into_parts();
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
@@ -135,7 +125,6 @@ fn ratio_threshold_rejects_even_if_approve_gt_reject() {
     let mut stx = sblock.transaction();
     let proposal_id = [0xAB; 32];
     let rid = seed_open_plain_referendum(&mut stx, proposal_id, 1, 1);
-
     // Locks: approve weight=2 (sqrt(4)), reject weight=1 (sqrt(1)); duration 0 → factor 1
     let mut map = iroha_core::state::GovernanceLocksForReferendum::default();
     map.locks.insert(
@@ -163,7 +152,6 @@ fn ratio_threshold_rejects_even_if_approve_gt_reject() {
         },
     );
     stx.world.governance_locks_mut().insert(rid.clone(), map);
-
     // Finalize should reject due to ratio < 75%
     let instr = FinalizeReferendum {
         referendum_id: rid.clone(),
@@ -201,7 +189,6 @@ fn ratio_threshold_rejects_even_if_approve_gt_reject() {
         GovernanceReferendumStatus::Closed
     );
 }
-
 #[test]
 fn min_turnout_rejects_when_below_threshold() {
     let kura = Kura::blank_kura_for_testing();
@@ -211,7 +198,6 @@ fn min_turnout_rejects_when_below_threshold() {
     let mut cfg = state.gov.clone();
     cfg.min_turnout = 1_000;
     state.set_gov(cfg);
-
     // Finalization occurs after the inclusive [1, 1] voting window.
     let (_pk, _sk) = checked_random_governance_threshold_keypair().into_parts();
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
@@ -219,7 +205,6 @@ fn min_turnout_rejects_when_below_threshold() {
     let mut stx = sblock.transaction();
     let proposal_id = [0xCD; 32];
     let rid = seed_open_plain_referendum(&mut stx, proposal_id, 1, 1);
-
     // Minimal approve weight=1
     let mut map = iroha_core::state::GovernanceLocksForReferendum::default();
     map.locks.insert(
@@ -235,7 +220,6 @@ fn min_turnout_rejects_when_below_threshold() {
         },
     );
     stx.world.governance_locks_mut().insert(rid.clone(), map);
-
     // Finalize should reject due to turnout < min_turnout
     let instr = FinalizeReferendum {
         referendum_id: rid.clone(),
@@ -272,7 +256,6 @@ fn min_turnout_rejects_when_below_threshold() {
         GovernanceReferendumStatus::Closed
     );
 }
-
 #[test]
 fn finalize_referendum_rejects_tally_overflow_without_side_effects() {
     let kura = Kura::blank_kura_for_testing();
@@ -282,7 +265,6 @@ fn finalize_referendum_rejects_tally_overflow_without_side_effects() {
     cfg.conviction_step_blocks = 1;
     cfg.max_conviction = u64::MAX;
     state.set_gov(cfg);
-
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
@@ -304,14 +286,12 @@ fn finalize_referendum_rejects_tally_overflow_without_side_effects() {
         );
     }
     stx.world.governance_locks_mut().insert(rid.clone(), locks);
-
     let err = FinalizeReferendum {
         referendum_id: rid.clone(),
         proposal_id,
     }
     .execute(&ALICE_ID, &mut stx)
     .expect_err("overflowing tally must fail");
-
     assert!(
         matches!(&err, InstructionExecutionError::Math(MathError::Overflow)),
         "unexpected finalization error: {err}"

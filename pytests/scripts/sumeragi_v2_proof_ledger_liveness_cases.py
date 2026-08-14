@@ -189,6 +189,26 @@ def _assert_extended_strong_type_induction_mutations(tmp_path: Path, module) -> 
         (
             "theorem",
             "AsyncNextPreservesStrongTypeInvariant",
+            "    <2>4f. AsyncProducerTypeInvariant'\n"
+            "      BY <1>1, <2>2, AsyncProducerProjectionPreservesTypeInvariant\n"
+            "         DEF AsyncNext\n",
+            "",
+            "must prime AsyncProducerTypeInvariant through the exact producer projection transition",
+        ),
+        (
+            "theorem",
+            "AsyncNextPreservesStrongTypeInvariant",
+            "    <2> QED BY <2>2l, <2>2m, <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>4d,\n"
+            "                <2>4e, <2>4f, <2>5, <2>6, <2>7, <2>8, <2>9, <2>10,\n"
+            "                <2>11, <2>12, <2>13\n",
+            "    <2> QED BY <2>2l, <2>2m, <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>4d,\n"
+            "                <2>4e, <2>5, <2>6, <2>7, <2>8, <2>9, <2>10,\n"
+            "                <2>11, <2>12, <2>13\n",
+            "must retain every producer and timeout-boundary prime as an exact QED dependency",
+        ),
+        (
+            "theorem",
+            "AsyncNextPreservesStrongTypeInvariant",
             "    <2>4d. /\\ AsyncServeProducerEpisodeTypeInvariant'\n"
             "             /\\ AsyncServeProducerEpisodeOwnershipInvariant'\n",
             "    <2>4d. /\\ AsyncServeProducerEpisodeTypeInvariant'\n"
@@ -940,13 +960,13 @@ def test_async_recovery_type_premise_mutations_fail_closed(
         (
             "theorem",
             "AsyncNextPreservesStrongTypeInvariant",
-            "    <2> QED BY <2>2l, <2>2m, <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>5,\n"
-            "                <2>6, <2>7, <2>8, <2>9, <2>10, <2>11, <2>12, <2>13,\n"
-            "                <2>14, <2>15, <2>16, <2>17\n"
+            "    <2> QED BY <2>2l, <2>2m, <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>4d,\n"
+            "                <2>4e, <2>4f, <2>5, <2>6, <2>7, <2>8, <2>9, <2>10,\n"
+            "                <2>11, <2>12, <2>13\n"
             "         DEF AsyncStrongTypeInvariant",
-            "    <2> QED BY <2>2l, <2>2m, <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>5,\n"
-            "                <2>6, <2>7, <2>8, <2>9, <2>10, <2>11, <2>12, <2>13,\n"
-            "                <2>14, <2>15, <2>16\n"
+            "    <2> QED BY <2>2l, <2>2m, <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>4d,\n"
+            "                <2>4e, <2>5, <2>6, <2>7, <2>8, <2>9, <2>10,\n"
+            "                <2>11, <2>12, <2>13\n"
             "         DEF AsyncStrongTypeInvariant",
             "make the service-activation pair, control-service",
         ),
@@ -1462,14 +1482,20 @@ def test_nightly_chaos_cold_cache_is_offline_shared_policy_and_fail_closed(
         ),
         (
             policy,
-            '"$IROHA_RELEASE_CARGO_BIN" "$@"',
-            'command cargo "$@"',
+            'if "$IROHA_RELEASE_CARGO_BIN" "$@"; then',
+            'if command cargo "$@"; then',
             "shared process policy lacks exact required token",
         ),
         (
             policy,
             '( _run_cargo_with_scoped_lock "$label" "${pinned_arguments[@]}" )',
             '( _run_cargo_with_scoped_lock "$label" "$@" )',
+            "shared process policy lacks exact required token",
+        ),
+        (
+            policy,
+            '&& ! release_invocation_cargo_lock; then',
+            '&& false; then',
             "shared process policy lacks exact required token",
         ),
         (
@@ -1482,12 +1508,6 @@ def test_nightly_chaos_cold_cache_is_offline_shared_policy_and_fail_closed(
             policy,
             "release_invocation_cargo_lock || return $?",
             "return $?",
-            "shared process policy lacks exact required token",
-        ),
-        (
-            policy,
-            "&& ! release_invocation_cargo_lock; then",
-            "&& false; then",
             "shared process policy lacks exact required token",
         ),
         (

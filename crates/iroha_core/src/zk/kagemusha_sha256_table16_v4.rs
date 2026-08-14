@@ -10,27 +10,21 @@
 //! Unlike the original Zcash prototype, circuit boundaries use assigned cells,
 //! not host-only [`Value`]s. Message words, chaining state, constants, and the
 //! final digest therefore remain connected by permutation constraints.
-
-use std::{convert::TryInto, fmt::Debug, marker::PhantomData};
-
 use ff::PrimeField;
 use halo2_proofs::{
     circuit::{Cell, Chip, Layouter, Region, Value},
     plonk::{Advice, Any, Assigned, Column, Error},
 };
-
+use std::{convert::TryInto, fmt::Debug, marker::PhantomData};
 mod table16;
-
 pub(crate) use table16::util;
 #[allow(unused_imports)]
 pub use table16::{Table16Chip, Table16Config};
-
 /// Number of canonical spread-table rows that fit at `k = 16`.
 ///
 /// Halo2 reserves nine rows for blinding and argument bookkeeping, so the
 /// final nine 16-bit words are handled by the constrained tail relation.
 pub(crate) const TABLE16_SPREAD_TABLE_ROWS: usize = (1 << 16) - 9;
-
 /// Number of 32-bit words in one SHA-256 block.
 pub const BLOCK_SIZE: usize = 16;
 /// Number of bytes in one SHA-256 block.
@@ -44,7 +38,6 @@ pub const BYTES_PER_WORD: usize = 4;
 pub const BITS_PER_BYTE: usize = 8;
 pub(crate) const ROUNDS: usize = 64;
 const STATE: usize = 8;
-
 #[allow(clippy::unreadable_literal)]
 pub(crate) const ROUND_CONSTANTS: [u32; ROUNDS] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -56,7 +49,6 @@ pub(crate) const ROUND_CONSTANTS: [u32; ROUNDS] = [
     0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ];
-
 pub(crate) const IV: [u32; STATE] = [
     0x6a09_e667,
     0xbb67_ae85,
@@ -67,10 +59,8 @@ pub(crate) const IV: [u32; STATE] = [
     0x1f83_d9ab,
     0x5be0_cd19,
 ];
-
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct BlockWord(pub(crate) Value<u32>);
-
 /// A source byte whose cell is already constrained to the 8-bit range.
 ///
 /// Kagemusha constructs these from the range-checked Base-circuit message
@@ -81,7 +71,6 @@ pub(crate) struct AssignedByte<F: PrimeField> {
     cell: Cell,
     _marker: PhantomData<F>,
 }
-
 impl<F: PrimeField> AssignedByte<F> {
     pub(crate) fn from_range_checked_cell(value: Value<u8>, cell: Cell) -> Self {
         Self {
@@ -91,13 +80,11 @@ impl<F: PrimeField> AssignedByte<F> {
         }
     }
 }
-
 #[derive(Clone, Debug)]
 pub(crate) enum PaddedByte<F: PrimeField> {
     Source(AssignedByte<F>),
     Constant(u8),
 }
-
 impl<F: PrimeField> PaddedByte<F> {
     fn value(&self) -> Value<u8> {
         match self {
@@ -106,7 +93,6 @@ impl<F: PrimeField> PaddedByte<F> {
         }
     }
 }
-
 /// Returns the canonical SHA-256 padding suffix for a message of `message_len`
 /// bytes.
 ///
@@ -123,7 +109,6 @@ pub(crate) fn canonical_padding_suffix(message_len: usize) -> Option<Vec<u8>> {
     } else {
         2 * BLOCK_BYTE_SIZE - 9 - remainder
     };
-
     let mut suffix = Vec::with_capacity(1 + zero_count + 8);
     suffix.push(0x80);
     suffix.resize(1 + zero_count, 0);
@@ -131,73 +116,60 @@ pub(crate) fn canonical_padding_suffix(message_len: usize) -> Option<Vec<u8>> {
     debug_assert_eq!((remainder + suffix.len()) % BLOCK_BYTE_SIZE, 0);
     Some(suffix)
 }
-
 #[derive(Clone, Debug)]
 pub(crate) struct Bits<const LEN: usize>(pub(crate) [bool; LEN]);
-
 impl<const LEN: usize> Bits<LEN> {
     fn spread<const SPREAD: usize>(&self) -> [bool; SPREAD] {
         table16::util::spread_bits(self.0)
     }
 }
-
 impl<const LEN: usize> std::ops::Deref for Bits<LEN> {
     type Target = [bool; LEN];
-
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
 impl<const LEN: usize> From<[bool; LEN]> for Bits<LEN> {
     fn from(bits: [bool; LEN]) -> Self {
         Self(bits)
     }
 }
-
 impl<const LEN: usize> From<&Bits<LEN>> for [bool; LEN] {
     fn from(bits: &Bits<LEN>) -> Self {
         bits.0
     }
 }
-
 impl<const LEN: usize> From<Bits<LEN>> for [bool; LEN] {
     fn from(bits: Bits<LEN>) -> Self {
         bits.0
     }
 }
-
 impl<const LEN: usize, F: PrimeField> From<&Bits<LEN>> for Assigned<F> {
     fn from(bits: &Bits<LEN>) -> Self {
         assert!(LEN <= 64);
         F::from(table16::util::lebs2ip(&bits.0)).into()
     }
 }
-
 impl From<&Bits<16>> for u16 {
     fn from(bits: &Bits<16>) -> Self {
         table16::util::lebs2ip(&bits.0) as u16
     }
 }
-
 impl From<u16> for Bits<16> {
     fn from(value: u16) -> Self {
         Self(table16::util::i2lebsp(value.into()))
     }
 }
-
 impl From<&Bits<32>> for u32 {
     fn from(bits: &Bits<32>) -> Self {
         table16::util::lebs2ip(&bits.0) as u32
     }
 }
-
 impl From<u32> for Bits<32> {
     fn from(value: u32) -> Self {
         Self(table16::util::i2lebsp(value.into()))
     }
 }
-
 /// An assigned, bit-length-typed word.
 ///
 /// Axiom Halo2's low-level assigner erases the typed witness from returned
@@ -209,16 +181,13 @@ pub(crate) struct AssignedBits<const LEN: usize, F: PrimeField> {
     cell: Cell,
     _marker: PhantomData<F>,
 }
-
 impl<const LEN: usize, F: PrimeField> AssignedBits<LEN, F> {
     pub(crate) fn value(&self) -> Value<&Bits<LEN>> {
         self.value.as_ref()
     }
-
     pub(crate) fn cell(&self) -> Cell {
         self.cell
     }
-
     fn copy_advice<A, AR>(
         &self,
         annotation: A,
@@ -240,7 +209,6 @@ impl<const LEN: usize, F: PrimeField> AssignedBits<LEN, F> {
             _marker: PhantomData,
         })
     }
-
     pub(crate) fn assign_bits<A, AR, T>(
         region: &mut Region<'_, F>,
         annotation: A,
@@ -266,7 +234,6 @@ impl<const LEN: usize, F: PrimeField> AssignedBits<LEN, F> {
             _marker: PhantomData,
         })
     }
-
     pub(crate) fn assign_bits_fixed<A, AR, T>(
         region: &mut Region<'_, F>,
         annotation: A,
@@ -292,12 +259,10 @@ impl<const LEN: usize, F: PrimeField> AssignedBits<LEN, F> {
         })
     }
 }
-
 impl<F: PrimeField> AssignedBits<16, F> {
     pub(crate) fn value_u16(&self) -> Value<u16> {
         self.value().map(Into::into)
     }
-
     pub(crate) fn assign<A, AR>(
         region: &mut Region<'_, F>,
         annotation: A,
@@ -318,12 +283,10 @@ impl<F: PrimeField> AssignedBits<16, F> {
         )
     }
 }
-
 impl<F: PrimeField> AssignedBits<32, F> {
     pub(crate) fn value_u32(&self) -> Value<u32> {
         self.value().map(Into::into)
     }
-
     pub(crate) fn assign<A, AR>(
         region: &mut Region<'_, F>,
         annotation: A,
@@ -344,32 +307,27 @@ impl<F: PrimeField> AssignedBits<32, F> {
         )
     }
 }
-
 pub(crate) type AssignedBlockWord<F> = AssignedBits<32, F>;
 pub(crate) type AssignedWord<F> = AssignedBits<32, F>;
-
 /// Low-level instructions implemented by the Table16 chip.
 pub(crate) trait Sha256Instructions<F: PrimeField>: Chip<F> + Clone + Debug {
     type State: Clone + Debug;
-
     fn initialization_vector(&self, layouter: &mut impl Layouter<F>) -> Result<Self::State, Error>;
-
     fn compress(
         &self,
         layouter: &mut impl Layouter<F>,
         chaining_state: &Self::State,
         input: [AssignedBlockWord<F>; BLOCK_SIZE],
     ) -> Result<Self::State, Error>;
-
     fn digest(
         &self,
         layouter: &mut impl Layouter<F>,
         state: &Self::State,
     ) -> Result<[AssignedBlockWord<F>; DIGEST_SIZE], Error>;
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use halo2_proofs::{
         circuit::{Layouter, V1, Value},
         dev::MockProver,
@@ -377,21 +335,16 @@ mod tests {
         plonk::{Advice, Circuit, Column, ConstraintSystem, Error},
     };
     use sha2::{Digest as _, Sha256};
-
-    use super::*;
-
     #[derive(Clone, Debug)]
     struct TestConfig {
         sha: Table16Config,
         input: Column<Advice>,
     }
-
     #[derive(Clone, Debug)]
     struct VectorCircuit {
         vectors: Vec<(Vec<u8>, [u8; 32])>,
         tamper_first_source_value: bool,
     }
-
     impl VectorCircuit {
         fn fips_vectors() -> Self {
             let messages = vec![
@@ -417,16 +370,13 @@ mod tests {
             }
         }
     }
-
     impl<F: PrimeField> Circuit<F> for VectorCircuit {
         type Config = TestConfig;
         type FloorPlanner = V1;
         type Params = ();
-
         fn without_witnesses(&self) -> Self {
             self.clone()
         }
-
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
             let input = meta.advice_column();
             meta.enable_equality(input);
@@ -435,7 +385,6 @@ mod tests {
                 input,
             }
         }
-
         fn synthesize(
             &self,
             config: Self::Config,
@@ -443,7 +392,6 @@ mod tests {
         ) -> Result<(), Error> {
             Table16Chip::<F>::load(config.sha.clone(), &mut layouter)?;
             let chip = Table16Chip::<F>::construct(config.sha);
-
             for (vector_index, (message, expected)) in self.vectors.iter().enumerate() {
                 let assigned_input = layouter.assign_region(
                     || format!("range-checked input bytes for vector {vector_index}"),
@@ -479,7 +427,6 @@ mod tests {
                 for block in blocks {
                     state = chip.compress(&mut layouter, &state, block)?;
                 }
-
                 let digest = chip.digest(&mut layouter, &state)?;
                 let expected_words = expected
                     .chunks_exact(BYTES_PER_WORD)
@@ -498,24 +445,20 @@ mod tests {
             Ok(())
         }
     }
-
     fn assert_fips_vectors<F: PrimeField + ff::FromUniformBytes<64> + Ord>() {
         let circuit = VectorCircuit::fips_vectors();
         MockProver::<F>::run(17, &circuit, vec![])
             .expect("Table16 synthesis")
             .assert_satisfied();
     }
-
     #[test]
     fn fips_vectors_fp() {
         assert_fips_vectors::<Fp>();
     }
-
     #[test]
     fn fips_vectors_fq() {
         assert_fips_vectors::<Fq>();
     }
-
     #[test]
     fn padding_uses_full_64_bit_length() {
         let max_len = usize::try_from(u64::MAX / BITS_PER_BYTE as u64)
@@ -524,7 +467,6 @@ mod tests {
         assert_eq!(&suffix[suffix.len() - 8..], &(u64::MAX - 7).to_be_bytes());
         assert_eq!(canonical_padding_suffix(max_len + 1), None);
     }
-
     #[test]
     fn padding_boundaries_are_canonical() {
         for (message_len, suffix_len) in [
@@ -550,7 +492,6 @@ mod tests {
             assert_eq!((message_len + suffix.len()) % BLOCK_BYTE_SIZE, 0);
         }
     }
-
     #[test]
     fn source_value_is_copy_constrained() {
         let mut circuit = VectorCircuit::fips_vectors();

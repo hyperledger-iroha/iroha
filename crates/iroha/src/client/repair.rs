@@ -1,5 +1,8 @@
 //! Route-to-instruction validation for native `SoraFS` repair submissions.
-
+use super::{
+    APPLICATION_JSON, Response, SorafsRepairCommandRoute, SorafsRepairEventsFilter,
+    SorafsRepairFinalizedAnchor, SorafsRepairTasksFilter, StatusCode,
+};
 use eyre::{Result, eyre};
 use iroha_data_model::{
     isi::sorafs::{
@@ -14,18 +17,10 @@ use iroha_data_model::{
     transaction::{Executable, SignedTransaction},
 };
 use norito::json::Value;
-
-use super::{
-    APPLICATION_JSON, Response, SorafsRepairCommandRoute, SorafsRepairEventsFilter,
-    SorafsRepairFinalizedAnchor, SorafsRepairTasksFilter, StatusCode,
-};
-
 const REPAIR_DEFAULT_PAGE_LIMIT_V1: u32 = 50;
-
 fn response_error(kind: &str, detail: &str) -> eyre::Report {
     eyre!("invalid finalized SoraFS repair {kind} response: {detail}")
 }
-
 fn exact_json_payload(
     response: &Response<Vec<u8>>,
     kind: &'static str,
@@ -59,7 +54,6 @@ fn exact_json_payload(
         .cloned()
         .ok_or_else(|| response_error(kind, "wrapper payload is missing"))
 }
-
 fn parse_request_hash(value: &str, kind: &str) -> Result<[u8; 32]> {
     let mut decoded = [0u8; 32];
     if value.len() != 64
@@ -74,7 +68,6 @@ fn parse_request_hash(value: &str, kind: &str) -> Result<[u8; 32]> {
     }
     Ok(decoded)
 }
-
 fn validate_finalized_cursor(
     cursor: RepairFinalizedCursorV1,
     expected: &SorafsRepairFinalizedAnchor<'_>,
@@ -110,7 +103,6 @@ fn validate_finalized_cursor(
     }
     Ok(())
 }
-
 fn response_limit(limit: Option<u32>, kind: &str) -> Result<usize> {
     let limit = limit.unwrap_or(REPAIR_DEFAULT_PAGE_LIMIT_V1);
     if !(1..=REPAIR_QUERY_MAX_ITEMS_V1).contains(&limit) {
@@ -121,7 +113,6 @@ fn response_limit(limit: Option<u32>, kind: &str) -> Result<usize> {
     }
     Ok(usize::try_from(limit).expect("bounded repair query limit fits usize"))
 }
-
 fn requested_event_cursor(
     filter: &SorafsRepairEventsFilter<'_>,
     kind: &str,
@@ -147,7 +138,6 @@ fn requested_event_cursor(
         _ => Err(response_error(kind, "request event cursor is incomplete")),
     }
 }
-
 macro_rules! define_finalized_event_validators {
     ($cursor:ty, $finalized:ty, $error:path) => {
         fn validate_event_cursor(cursor: $cursor, finalized: $finalized, kind: &str) -> Result<()> {
@@ -162,7 +152,6 @@ macro_rules! define_finalized_event_validators {
             }
             Ok(())
         }
-
         fn validate_event_successor(
             previous: Option<$cursor>,
             current: $cursor,
@@ -197,13 +186,11 @@ macro_rules! define_finalized_event_validators {
     };
 }
 pub(super) use define_finalized_event_validators;
-
 define_finalized_event_validators!(
     RepairFinalizedEventCursorV1,
     RepairFinalizedCursorV1,
     response_error
 );
-
 /// Validate a successful finalized repair-status response without rewriting it.
 pub(super) fn validate_status_response(
     response: Response<Vec<u8>>,
@@ -218,7 +205,6 @@ pub(super) fn validate_status_response(
     validate_finalized_cursor(status.finalized_cursor, expected, "status")?;
     Ok(response)
 }
-
 /// Validate a successful finalized repair-task page without rewriting it.
 pub(super) fn validate_tasks_response(
     response: Response<Vec<u8>>,
@@ -253,7 +239,6 @@ pub(super) fn validate_tasks_response(
     )?;
     Ok(response)
 }
-
 /// Validate a successful finalized repair-task response without rewriting it.
 pub(super) fn validate_task_response(
     response: Response<Vec<u8>>,
@@ -272,7 +257,6 @@ pub(super) fn validate_task_response(
     }
     Ok(response)
 }
-
 /// Validate a successful finalized repair-event page without rewriting it.
 pub(super) fn validate_events_response(
     response: Response<Vec<u8>>,
@@ -314,7 +298,6 @@ pub(super) fn validate_events_response(
     }
     Ok(response)
 }
-
 impl SorafsRepairCommandRoute {
     pub(super) const fn expected_instruction_label(self) -> &'static str {
         match self {
@@ -328,14 +311,12 @@ impl SorafsRepairCommandRoute {
         }
     }
 }
-
 fn route_mismatch(route: SorafsRepairCommandRoute) -> eyre::Report {
     eyre!(
         "SoraFS repair route requires exactly one `{}` native instruction",
         route.expected_instruction_label()
     )
 }
-
 macro_rules! instruction_is {
     ($instruction:expr, $type:ty) => {
         $instruction.as_any().is::<$type>()
@@ -347,7 +328,6 @@ macro_rules! instruction_is {
     };
 }
 pub(super) use instruction_is;
-
 /// Reject a transaction unless it contains the one native instruction selected by `route`.
 pub(super) fn validate_transaction_route(
     route: SorafsRepairCommandRoute,
@@ -396,14 +376,11 @@ pub(super) fn validate_transaction_route(
     }
     Ok(())
 }
-
 #[cfg(test)]
 pub(super) mod route_test_support {
-    use std::sync::Arc;
-
     use super::super::evidence_http_tests::*;
     use crate::http::StatusCode;
-
+    use std::sync::Arc;
     pub(in crate::client) fn assert_rejected_before_http<T: std::fmt::Debug>(
         expected_error: String,
         request: impl FnOnce() -> eyre::Result<T>,
@@ -420,11 +397,16 @@ pub(super) mod route_test_support {
         );
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, sync::Arc};
-
+    use super::*;
+    use crate::{
+        client::evidence_http_tests::{
+            SnapshotStore, base_url, client_with_base_url, json_response, respond_with,
+            with_mock_http,
+        },
+        http::StatusCode,
+    };
     use iroha_data_model::{
         Level,
         events::data::sorafs::{SorafsRepairLedgerEvent, SorafsRepairLedgerEventKind},
@@ -447,16 +429,7 @@ mod tests {
         },
         transaction::{Executable, FeePaymentIntent, IvmBytecode, SignedTransaction},
     };
-
-    use super::*;
-    use crate::{
-        client::evidence_http_tests::{
-            SnapshotStore, base_url, client_with_base_url, json_response, respond_with,
-            with_mock_http,
-        },
-        http::StatusCode,
-    };
-
+    use std::{num::NonZeroU64, sync::Arc};
     fn sign_executable(client: &super::super::Client, executable: Executable) -> SignedTransaction {
         let gas_limit = executable
             .requires_transaction_gas_limit()
@@ -467,7 +440,6 @@ mod tests {
             Metadata::default(),
         )
     }
-
     fn sign_instruction(
         client: &super::super::Client,
         instruction: impl Into<InstructionBox>,
@@ -477,18 +449,15 @@ mod tests {
             Executable::Instructions(vec![instruction.into()].into()),
         )
     }
-
     fn action_instruction(action: SorafsRepairTaskActionV1) -> ApplySorafsRepairTaskAction {
         ApplySorafsRepairTaskAction::new("REP-1".to_owned(), 1, action)
     }
-
     fn finalized_cursor() -> RepairFinalizedCursorV1 {
         RepairFinalizedCursorV1 {
             height: 7,
             block_hash: [0x71; 32],
         }
     }
-
     fn repair_task(
         client: &super::super::Client,
         ticket_id: &str,
@@ -513,7 +482,6 @@ mod tests {
             updated_at_unix_ms: 1,
         }
     }
-
     fn repair_event(
         client: &super::super::Client,
         sequence: u64,
@@ -538,7 +506,6 @@ mod tests {
             },
         }
     }
-
     fn wrapped_response<T: norito::json::JsonSerialize>(
         source: &str,
         key: &str,
@@ -560,11 +527,9 @@ mod tests {
             )
             .expect("build repair response")
     }
-
     fn exact_response<T: norito::json::JsonSerialize>(key: &str, payload: &T) -> Response<Vec<u8>> {
         wrapped_response("finalized_chain", key, payload, APPLICATION_JSON)
     }
-
     fn non_ok_response() -> Response<Vec<u8>> {
         Response::builder()
             .status(StatusCode::CONFLICT)
@@ -573,7 +538,6 @@ mod tests {
             .body(vec![0x00, 0xFF, 0x51, 0x00])
             .expect("build non-OK response")
     }
-
     fn assert_non_ok_preserved(response: Response<Vec<u8>>) {
         assert_eq!(response.status(), StatusCode::CONFLICT);
         assert_eq!(
@@ -583,18 +547,15 @@ mod tests {
         assert_eq!(response.headers()["x-repair-proof"], "opaque");
         assert_eq!(response.body(), &[0x00, 0xFF, 0x51, 0x00]);
     }
-
     fn assert_rejected<T>(result: Result<T>) {
         assert!(result.is_err());
     }
-
     fn assert_tasks_rejected(page: &RepairLedgerTaskPageV1, filter: &SorafsRepairTasksFilter<'_>) {
         assert_rejected(validate_tasks_response(
             exact_response("tasks", page),
             filter,
         ));
     }
-
     fn assert_events_rejected(
         page: &RepairFinalizedEventPageV1,
         filter: &SorafsRepairEventsFilter<'_>,
@@ -604,7 +565,6 @@ mod tests {
             filter,
         ));
     }
-
     fn exact_route_instructions() -> [(SorafsRepairCommandRoute, InstructionBox); 7] {
         [
             (
@@ -668,7 +628,6 @@ mod tests {
             ),
         ]
     }
-
     fn assert_rejected_before_http(
         client: &super::super::Client,
         route: SorafsRepairCommandRoute,
@@ -682,7 +641,6 @@ mod tests {
             || client.post_sorafs_repair_transaction(route, transaction),
         );
     }
-
     #[test]
     fn repair_route_validation_accepts_every_exact_instruction() {
         let client = client_with_base_url(base_url());
@@ -691,13 +649,11 @@ mod tests {
             validate_transaction_route(route, &transaction).expect("matching repair route");
         }
     }
-
     #[test]
     fn repair_route_validation_rejects_mismatch_and_wrong_action_before_http() {
         let client = client_with_base_url(base_url());
         let report = sign_instruction(&client, SubmitSorafsRepairTask::new([0x51; 32], vec![0x01]));
         assert_rejected_before_http(&client, SorafsRepairCommandRoute::Appeal, &report);
-
         let claim = sign_instruction(
             &client,
             action_instruction(SorafsRepairTaskActionV1::Claim(SorafsRepairClaimV1 {
@@ -707,7 +663,6 @@ mod tests {
         );
         assert_rejected_before_http(&client, SorafsRepairCommandRoute::Heartbeat, &claim);
     }
-
     #[test]
     fn repair_route_validation_rejects_non_native_and_non_singleton_before_http() {
         let client = client_with_base_url(base_url());
@@ -720,21 +675,18 @@ mod tests {
             SorafsRepairCommandRoute::Report,
             &wrong_instruction,
         );
-
         let report: InstructionBox = SubmitSorafsRepairTask::new([0x51; 32], vec![0x01]).into();
         let multiple = sign_executable(
             &client,
             Executable::Instructions(vec![report.clone(), report].into()),
         );
         assert_rejected_before_http(&client, SorafsRepairCommandRoute::Report, &multiple);
-
         let ivm = sign_executable(
             &client,
             Executable::Ivm(IvmBytecode::from_compiled(vec![0x00])),
         );
         assert_rejected_before_http(&client, SorafsRepairCommandRoute::Report, &ivm);
     }
-
     #[test]
     fn repair_read_response_binding_accepts_exact_typed_wrappers() {
         let client = client_with_base_url(base_url());
@@ -756,7 +708,6 @@ mod tests {
                 .body(),
             &body
         );
-
         let task = repair_task(&client, "REP-1", [0x20; 32]);
         let response = exact_response(
             "task",
@@ -766,7 +717,6 @@ mod tests {
             },
         );
         validate_task_response(response, "REP-1", &finalized).expect("exact task wrapper");
-
         let after_task_id = hex::encode([0x10; 32]);
         let second_task = repair_task(&client, "REP-2", [0x30; 32]);
         let task_page = RepairLedgerTaskPageV1 {
@@ -782,7 +732,6 @@ mod tests {
         };
         validate_tasks_response(exact_response("tasks", &task_page), &task_filter)
             .expect("exact task-page wrapper");
-
         let after_hash = hex::encode([0x51; 32]);
         let events = vec![
             repair_event(&client, 2, 5, [0x51; 32], 1),
@@ -805,7 +754,6 @@ mod tests {
         validate_events_response(exact_response("events", &event_page), &event_filter)
             .expect("exact event-page wrapper");
     }
-
     #[test]
     fn repair_read_response_binding_rejects_wrapper_finality_and_ticket_mismatches() {
         let client = client_with_base_url(base_url());
@@ -865,7 +813,6 @@ mod tests {
             exact_response("status", &zero_cursor),
             &SorafsRepairFinalizedAnchor::default(),
         ));
-
         let task = RepairFinalizedTaskV1 {
             finalized_cursor: cursor,
             task: repair_task(&client, "REP-OTHER", [0x20; 32]),
@@ -876,7 +823,6 @@ mod tests {
             &SorafsRepairFinalizedAnchor::default(),
         ));
     }
-
     #[test]
     fn repair_task_page_response_binding_rejects_bounds_order_and_bad_continuations() {
         let client = client_with_base_url(base_url());
@@ -894,19 +840,16 @@ mod tests {
             ..SorafsRepairTasksFilter::default()
         };
         assert_tasks_rejected(&page, &limit_one);
-
         page.tasks = vec![second, first];
         let limit_two = SorafsRepairTasksFilter {
             limit: Some(2),
             ..SorafsRepairTasksFilter::default()
         };
         assert_tasks_rejected(&page, &limit_two);
-
         page.tasks = vec![repair_task(&client, "REP-1", [0x20; 32])];
         page.has_more = true;
         page.next_after_task_id = Some([0x21; 32]);
         assert_tasks_rejected(&page, &limit_two);
-
         page.has_more = false;
         page.next_after_task_id = None;
         let after = hex::encode([0x20; 32]);
@@ -916,11 +859,9 @@ mod tests {
             ..SorafsRepairTasksFilter::default()
         };
         assert_tasks_rejected(&page, &not_exclusive);
-
         page.tasks[0].task_id = [0; 32];
         assert_tasks_rejected(&page, &limit_two);
     }
-
     #[test]
     fn repair_task_page_response_binding_rejects_omitted_limit_over_torii_default() {
         let client = client_with_base_url(base_url());
@@ -947,7 +888,6 @@ mod tests {
                 .contains("payload exceeds the requested limit")
         );
     }
-
     #[test]
     fn repair_event_page_response_binding_rejects_bounds_order_and_bad_continuations() {
         let client = client_with_base_url(base_url());
@@ -965,26 +905,21 @@ mod tests {
             ..SorafsRepairEventsFilter::default()
         };
         assert_events_rejected(&page, &limit_one);
-
         let limit_two = SorafsRepairEventsFilter {
             limit: Some(2),
             ..SorafsRepairEventsFilter::default()
         };
         page.events[1].sequence = 3;
         assert_events_rejected(&page, &limit_two);
-
         page.events = vec![first.clone(), repair_event(&client, 2, 5, [0x52; 32], 1)];
         assert_events_rejected(&page, &limit_two);
-
         page.events = vec![
             first,
             repair_event(&client, 2, cursor.height, [0x72; 32], 0),
         ];
         assert_events_rejected(&page, &limit_two);
-
         page.events = vec![repair_event(&client, 1, 0, [0; 32], 0)];
         assert_events_rejected(&page, &limit_two);
-
         page.events = vec![second];
         page.has_more = true;
         page.next_after = Some(RepairFinalizedEventCursorV1 {
@@ -1004,7 +939,6 @@ mod tests {
         };
         assert_events_rejected(&page, &continued);
     }
-
     #[test]
     fn repair_event_page_response_binding_rejects_omitted_limit_over_torii_default() {
         let client = client_with_base_url(base_url());
@@ -1030,7 +964,6 @@ mod tests {
                 .contains("payload exceeds the requested limit")
         );
     }
-
     #[test]
     fn repair_event_page_response_binding_rejects_noncanonical_block_index_successors() {
         let client = client_with_base_url(base_url());
@@ -1058,7 +991,6 @@ mod tests {
         ] {
             assert_events_rejected(&page(events), &filter);
         }
-
         let after_hash = hex::encode([0x51; 32]);
         let overflow = SorafsRepairEventsFilter {
             limit: Some(1),
@@ -1073,7 +1005,6 @@ mod tests {
             &overflow,
         );
     }
-
     #[test]
     fn repair_read_response_binding_preserves_every_non_ok_response() {
         let finalized = SorafsRepairFinalizedAnchor::default();
@@ -1088,7 +1019,6 @@ mod tests {
             assert_non_ok_preserved(response.expect("non-OK repair response"));
         }
     }
-
     #[test]
     fn repair_read_methods_validate_every_successful_response_after_send() {
         let client = client_with_base_url(base_url());

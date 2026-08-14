@@ -1,5 +1,4 @@
 //! Canonical FASTPQ STARK parameter definitions.
-
 /// Description of the scalar field used by the proof system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FieldDescriptor {
@@ -10,7 +9,6 @@ pub struct FieldDescriptor {
     /// Extension degree used for FRI (1 = base field, 2 = quadratic extension).
     pub extension_degree: u32,
 }
-
 /// Description of the hash functions used by the STARK.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HashDescriptor {
@@ -19,7 +17,6 @@ pub struct HashDescriptor {
     /// Hash used for the Fiat-Shamir transcript.
     pub transcript: &'static str,
 }
-
 /// Parameters that configure FRI round structure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FriParameters {
@@ -32,7 +29,6 @@ pub struct FriParameters {
     /// Number of queries sampled by the verifier.
     pub queries: u32,
 }
-
 /// Canonical parameter pack for a FASTPQ STARK instantiation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StarkParameterSet {
@@ -63,20 +59,17 @@ pub struct StarkParameterSet {
     /// FRI parameterisation.
     pub fri: FriParameters,
 }
-
 /// Goldilocks prime (2^64 - 2^32 + 1) with quadratic extension for DEEP-FRI.
 pub const GOLDILOCKS_FP2: FieldDescriptor = FieldDescriptor {
     name: "Goldilocks",
     modulus_decimal: "18446744069414584321",
     extension_degree: 2,
 };
-
 /// Poseidon2 commitment hash with SHA3-256 transcript permutations.
 pub const POSEIDON2_SHA3: HashDescriptor = HashDescriptor {
     trace_commitment: "Poseidon2(Goldilocks)",
     transcript: "SHA3-256",
 };
-
 /// Canonical parameters targeting balanced prover throughput.
 pub const FASTPQ_CANONICAL_BALANCED: StarkParameterSet = StarkParameterSet {
     name: "fastpq-lane-balanced",
@@ -98,7 +91,6 @@ pub const FASTPQ_CANONICAL_BALANCED: StarkParameterSet = StarkParameterSet {
         queries: 46,
     },
 };
-
 /// Canonical parameters optimised for latency-sensitive lanes.
 pub const FASTPQ_CANONICAL_LATENCY: StarkParameterSet = StarkParameterSet {
     name: "fastpq-lane-latency",
@@ -120,20 +112,16 @@ pub const FASTPQ_CANONICAL_LATENCY: StarkParameterSet = StarkParameterSet {
         queries: 34,
     },
 };
-
 /// Ordered slice of canonical parameter sets (stable order: balanced, latency).
 pub const CANONICAL_PARAMETER_SETS: [StarkParameterSet; 2] =
     [FASTPQ_CANONICAL_BALANCED, FASTPQ_CANONICAL_LATENCY];
-
 /// Look up a canonical parameter set by name.
 pub fn find_by_name(name: &str) -> Option<&'static StarkParameterSet> {
     CANONICAL_PARAMETER_SETS.iter().find(|set| set.name == name)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn canonical_sets_meet_security_target() {
         for set in CANONICAL_PARAMETER_SETS {
@@ -151,7 +139,6 @@ mod tests {
             assert_ne!(set.omega_coset, 0);
         }
     }
-
     #[test]
     fn lookup_finds_sets() {
         let balanced = find_by_name("fastpq-lane-balanced").expect("balanced params");

@@ -1,9 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level tests for ZK convenience endpoints.
 #![cfg(feature = "app_api")]
-
-use std::{collections::HashSet, sync::Arc};
-
 use axum::{Router, extract::State, routing::post};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -13,11 +10,10 @@ use iroha_core::{
 };
 use iroha_data_model::{NewAccount, prelude::*};
 use nonzero_ext::nonzero;
+use std::{collections::HashSet, sync::Arc};
 use tower::ServiceExt as _; // for Router::oneshot
-
 const ACCOUNT_SIGNATORY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
-
 fn zk_vote_tally_app(state: Arc<CoreState>) -> Router {
     Router::new().route(
         "/v1/zk/vote/tally",
@@ -29,12 +25,10 @@ fn zk_vote_tally_app(state: Arc<CoreState>) -> Router {
         ),
     )
 }
-
 fn state_with_registered_asset_definition() -> (Arc<CoreState>, String) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = CoreState::new_for_testing(World::new(), kura, query);
-
     let domain_id = DomainId::try_new("zkd", "universal").expect("domain id");
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
@@ -44,7 +38,6 @@ fn state_with_registered_asset_definition() -> (Arc<CoreState>, String) {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
-
     for instruction in [
         Register::domain(Domain::new(domain_id)).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
@@ -69,10 +62,8 @@ fn state_with_registered_asset_definition() -> (Arc<CoreState>, String) {
         nonzero!(1_usize),
     );
     let _ = block.commit();
-
     (Arc::new(state), asset_definition_id.to_string())
 }
-
 #[tokio::test]
 async fn zk_roots_endpoint_returns_200_for_registered_asset_without_shielded_state() {
     let (state, asset_id) = state_with_registered_asset_definition();
@@ -85,7 +76,6 @@ async fn zk_roots_endpoint_returns_200_for_registered_asset_without_shielded_sta
             }
         }),
     );
-
     let body_value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", asset_id),
         iroha_torii::json_entry("max", 10u64),
@@ -125,13 +115,11 @@ async fn zk_roots_endpoint_returns_200_for_registered_asset_without_shielded_sta
         Some(64)
     );
 }
-
 #[tokio::test]
 async fn zk_roots_endpoint_returns_404_for_missing_asset() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(CoreState::new_for_testing(World::default(), kura, query));
-
     let app = Router::new().route(
         "/v1/zk/roots",
         post({
@@ -141,7 +129,6 @@ async fn zk_roots_endpoint_returns_404_for_missing_asset() {
             }
         }),
     );
-
     let missing_asset_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("missing", "universal").expect("domain id"),
         "rose".parse().expect("asset definition name"),
@@ -161,13 +148,11 @@ async fn zk_roots_endpoint_returns_404_for_missing_asset() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
 }
-
 #[tokio::test]
 async fn zk_roots_endpoint_returns_404_for_missing_asset_alias() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(CoreState::new_for_testing(World::default(), kura, query));
-
     let app = Router::new().route(
         "/v1/zk/roots",
         post({
@@ -177,7 +162,6 @@ async fn zk_roots_endpoint_returns_404_for_missing_asset_alias() {
             }
         }),
     );
-
     let body_value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", "rose#missing"),
         iroha_torii::json_entry("max", 10u64),
@@ -192,11 +176,9 @@ async fn zk_roots_endpoint_returns_404_for_missing_asset_alias() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
 }
-
 #[tokio::test]
 async fn zk_roots_endpoint_returns_403_for_invalid_asset_selector() {
     let (state, _) = state_with_registered_asset_definition();
-
     let app = Router::new().route(
         "/v1/zk/roots",
         post({
@@ -206,7 +188,6 @@ async fn zk_roots_endpoint_returns_403_for_invalid_asset_selector() {
             }
         }),
     );
-
     let body_value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", "prefix:not-a-real-selector"),
         iroha_torii::json_entry("max", 10u64),
@@ -221,11 +202,9 @@ async fn zk_roots_endpoint_returns_403_for_invalid_asset_selector() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::FORBIDDEN);
 }
-
 #[tokio::test]
 async fn zk_roots_endpoint_returns_403_for_blank_asset_selector() {
     let (state, _) = state_with_registered_asset_definition();
-
     let app = Router::new().route(
         "/v1/zk/roots",
         post({
@@ -235,7 +214,6 @@ async fn zk_roots_endpoint_returns_403_for_blank_asset_selector() {
             }
         }),
     );
-
     let body_value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", "   "),
         iroha_torii::json_entry("max", 10u64),
@@ -250,15 +228,12 @@ async fn zk_roots_endpoint_returns_403_for_blank_asset_selector() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::FORBIDDEN);
 }
-
 #[tokio::test]
 async fn zk_vote_tally_endpoint_returns_404_for_missing_election() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(CoreState::new_for_testing(World::default(), kura, query));
-
     let app = zk_vote_tally_app(state);
-
     let body_value =
         iroha_torii::json_object(vec![iroha_torii::json_entry("election_id", "nonexistent")]);
     let body = norito::json::to_string(&body_value).expect("serialize tally request");
@@ -271,7 +246,6 @@ async fn zk_vote_tally_endpoint_returns_404_for_missing_election() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
 }
-
 #[tokio::test]
 async fn zk_vote_tally_endpoint_enforces_canonical_selector_for_json_and_norito() {
     let state = Arc::new(CoreState::new_for_testing(
@@ -280,7 +254,6 @@ async fn zk_vote_tally_endpoint_enforces_canonical_selector_for_json_and_norito(
         LiveQueryStore::start_test(),
     ));
     let app = zk_vote_tally_app(state);
-
     for election_id in [
         String::new(),
         ".".to_owned(),
@@ -301,7 +274,6 @@ async fn zk_vote_tally_endpoint_enforces_canonical_selector_for_json_and_norito(
             )]))
             .expect("serialize JSON tally request");
         let norito = norito::to_bytes(&dto).expect("encode Norito tally request");
-
         for (content_type, body) in [
             ("application/json", json.into_bytes()),
             ("application/x-norito", norito),
@@ -320,7 +292,6 @@ async fn zk_vote_tally_endpoint_enforces_canonical_selector_for_json_and_norito(
             );
         }
     }
-
     for election_id in ["a".to_owned(), "a".repeat(128)] {
         let json =
             norito::json::to_string(&iroha_torii::json_object(vec![iroha_torii::json_entry(

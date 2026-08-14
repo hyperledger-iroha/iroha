@@ -3,7 +3,6 @@
 //! These instructions expose only typed V1 privacy records. They intentionally
 //! have no string protocol selectors, compatibility aliases, or opaque proof
 //! bodies.
-
 use super::*;
 use crate::privacy::{
     BootleLanternIssuerPolicyV1, PrivacyBootleLanternIssuerPolicyDigestV1,
@@ -17,7 +16,6 @@ use crate::privacy::{
     PrivacyZkX509CrlRecordV1, PrivacyZkX509TrustAnchorRecordDigestV1,
     PrivacyZkX509TrustAnchorRecordV1,
 };
-
 isi! {
     /// Register one immutable, future privacy-protocol activation.
     #[cfg_attr(
@@ -29,20 +27,16 @@ isi! {
         pub activation: PrivacyProtocolActivationRecordV1,
     }
 }
-
 impl crate::seal::Instruction for RegisterPrivacyProtocolActivationV1 {}
-
 impl RegisterPrivacyProtocolActivationV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.register_protocol_activation.v1";
-
     /// Construct an activation-registration instruction.
     #[must_use]
     pub fn new(activation: PrivacyProtocolActivationRecordV1) -> Self {
         Self { activation }
     }
 }
-
 isi! {
     /// Schedule a delayed component-wise tightening of the chain-wide privacy policy.
     #[cfg_attr(
@@ -56,13 +50,10 @@ isi! {
         pub next_limits: PrivacyConsensusLimitsV1,
     }
 }
-
 impl crate::seal::Instruction for SchedulePrivacyConsensusPolicyTighteningV1 {}
-
 impl SchedulePrivacyConsensusPolicyTighteningV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.schedule_consensus_policy_tightening.v1";
-
     /// Construct a chain-wide privacy-policy schedule.
     #[must_use]
     pub const fn new(effective_at_height: u64, next_limits: PrivacyConsensusLimitsV1) -> Self {
@@ -72,7 +63,6 @@ impl SchedulePrivacyConsensusPolicyTighteningV1 {
         }
     }
 }
-
 isi! {
     /// Schedule a delayed component-wise tightening for one privacy protocol.
     #[cfg_attr(
@@ -88,13 +78,10 @@ isi! {
         pub next_limits: PrivacyProtocolActivationLimitsV1,
     }
 }
-
 impl crate::seal::Instruction for SchedulePrivacyProtocolLimitsTighteningV1 {}
-
 impl SchedulePrivacyProtocolLimitsTighteningV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.schedule_protocol_limits_tightening.v1";
-
     /// Construct a protocol-specific limit schedule.
     #[must_use]
     pub const fn new(
@@ -109,7 +96,6 @@ impl SchedulePrivacyProtocolLimitsTighteningV1 {
         }
     }
 }
-
 isi! {
     /// Apply a forward-only lifecycle transition to a registered privacy protocol.
     #[cfg_attr(
@@ -123,13 +109,10 @@ isi! {
         pub next_lifecycle: PrivacyProtocolLifecycleV1,
     }
 }
-
 impl crate::seal::Instruction for TransitionPrivacyProtocolLifecycleV1 {}
-
 impl TransitionPrivacyProtocolLifecycleV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.transition_protocol_lifecycle.v1";
-
     /// Construct a lifecycle-transition instruction.
     #[must_use]
     pub fn new(
@@ -142,7 +125,6 @@ impl TransitionPrivacyProtocolLifecycleV1 {
         }
     }
 }
-
 isi! {
     /// Publish or initialize one governance-authorized canonical privacy root.
     #[cfg_attr(
@@ -154,20 +136,16 @@ isi! {
         pub publication: PrivacyRootPublicationV1,
     }
 }
-
 impl crate::seal::Instruction for PublishPrivacyRootV1 {}
-
 impl PublishPrivacyRootV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.publish_root.v1";
-
     /// Construct a governed root-publication instruction.
     #[must_use]
     pub fn new(publication: PrivacyRootPublicationV1) -> Self {
         Self { publication }
     }
 }
-
 isi! {
     /// Bootstrap one governed Orchard V3 pool at the node-derived empty root.
     #[cfg_attr(
@@ -179,20 +157,16 @@ isi! {
         pub bootstrap: PrivacyOrchardPoolBootstrapV1,
     }
 }
-
 impl crate::seal::Instruction for BootstrapPrivacyOrchardPoolV1 {}
-
 impl BootstrapPrivacyOrchardPoolV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.bootstrap_orchard_pool.v1";
-
     /// Construct a governed Orchard pool bootstrap.
     #[must_use]
     pub fn new(bootstrap: PrivacyOrchardPoolBootstrapV1) -> Self {
         Self { bootstrap }
     }
 }
-
 isi! {
     /// Bootstrap one governed FCMP++, private-IVM, or PQ-MASP pool at its
     /// node-derived empty root.
@@ -205,20 +179,16 @@ isi! {
         pub bootstrap: PrivacyProofManagedPoolBootstrapV1,
     }
 }
-
 impl crate::seal::Instruction for BootstrapPrivacyProofManagedPoolV1 {}
-
 impl BootstrapPrivacyProofManagedPoolV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.bootstrap_proof_managed_pool.v1";
-
     /// Construct a governed proof-managed pool bootstrap.
     #[must_use]
     pub fn new(bootstrap: PrivacyProofManagedPoolBootstrapV1) -> Self {
         Self { bootstrap }
     }
 }
-
 isi! {
     /// Bootstrap one complete governed Anonymous PGC encrypted-account table.
     #[cfg_attr(
@@ -232,13 +202,10 @@ isi! {
         pub proof: PrivacyPgcBootstrapProofBytesV1,
     }
 }
-
 impl crate::seal::Instruction for BootstrapPrivacyPgcAccountsV1 {}
-
 impl BootstrapPrivacyPgcAccountsV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.bootstrap_pgc_accounts.v1";
-
     /// Construct a governed Anonymous PGC account bootstrap.
     #[must_use]
     pub fn new(
@@ -248,7 +215,6 @@ impl BootstrapPrivacyPgcAccountsV1 {
         Self { bootstrap, proof }
     }
 }
-
 isi! {
     /// Atomically initialize one governed ZK-AMS issuer, policy, and admitted-identity registry.
     #[cfg_attr(
@@ -260,20 +226,16 @@ isi! {
         pub bootstrap: PrivacyZkAmsRegistryBootstrapV1,
     }
 }
-
 impl crate::seal::Instruction for BootstrapPrivacyZkAmsRegistryV1 {}
-
 impl BootstrapPrivacyZkAmsRegistryV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.bootstrap_zk_ams_registry.v1";
-
     /// Construct a governed ZK-AMS registry bootstrap.
     #[must_use]
     pub const fn new(bootstrap: PrivacyZkAmsRegistryBootstrapV1) -> Self {
         Self { bootstrap }
     }
 }
-
 isi! {
     /// Register one canonical authoritative ZK-ACE policy lineage.
     #[cfg_attr(
@@ -285,20 +247,16 @@ isi! {
         pub policy: PrivacyZkAcePolicyRecordV1,
     }
 }
-
 impl crate::seal::Instruction for RegisterPrivacyZkAcePolicyV1 {}
-
 impl RegisterPrivacyZkAcePolicyV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.register_zk_ace_policy.v1";
-
     /// Construct an authoritative policy registration.
     #[must_use]
     pub fn new(policy: PrivacyZkAcePolicyRecordV1) -> Self {
         Self { policy }
     }
 }
-
 isi! {
     /// Rotate one active authoritative ZK-ACE policy by exactly one epoch.
     #[cfg_attr(
@@ -312,13 +270,10 @@ isi! {
         pub successor: PrivacyZkAcePolicyRecordV1,
     }
 }
-
 impl crate::seal::Instruction for RotatePrivacyZkAcePolicyV1 {}
-
 impl RotatePrivacyZkAcePolicyV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.rotate_zk_ace_policy.v1";
-
     /// Construct an exact policy rotation.
     #[must_use]
     pub fn new(
@@ -331,7 +286,6 @@ impl RotatePrivacyZkAcePolicyV1 {
         }
     }
 }
-
 isi! {
     /// Irreversibly revoke one active authoritative ZK-ACE policy.
     #[cfg_attr(
@@ -345,13 +299,10 @@ isi! {
         pub successor: PrivacyZkAcePolicyRecordV1,
     }
 }
-
 impl crate::seal::Instruction for RevokePrivacyZkAcePolicyV1 {}
-
 impl RevokePrivacyZkAcePolicyV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.revoke_zk_ace_policy.v1";
-
     /// Construct an exact irreversible policy revocation.
     #[must_use]
     pub fn new(
@@ -364,7 +315,6 @@ impl RevokePrivacyZkAcePolicyV1 {
         }
     }
 }
-
 isi! {
     /// Register one canonical authoritative Bootle/Lantern issuer-policy lineage.
     #[cfg_attr(
@@ -377,20 +327,16 @@ isi! {
         pub policy: BootleLanternIssuerPolicyV1,
     }
 }
-
 impl crate::seal::Instruction for RegisterPrivacyBootleLanternIssuerPolicyV1 {}
-
 impl RegisterPrivacyBootleLanternIssuerPolicyV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.register_bootle_lantern_issuer_policy.v1";
-
     /// Construct an authoritative issuer-policy registration.
     #[must_use]
     pub fn new(policy: BootleLanternIssuerPolicyV1) -> Self {
         Self { policy }
     }
 }
-
 isi! {
     /// Rotate one active Bootle/Lantern issuer-policy lineage by exactly one epoch.
     #[cfg_attr(
@@ -405,13 +351,10 @@ isi! {
         pub successor: BootleLanternIssuerPolicyV1,
     }
 }
-
 impl crate::seal::Instruction for RotatePrivacyBootleLanternIssuerPolicyV1 {}
-
 impl RotatePrivacyBootleLanternIssuerPolicyV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.rotate_bootle_lantern_issuer_policy.v1";
-
     /// Construct an exact issuer-policy compare-and-swap rotation.
     #[must_use]
     pub fn new(
@@ -424,7 +367,6 @@ impl RotatePrivacyBootleLanternIssuerPolicyV1 {
         }
     }
 }
-
 isi! {
     /// Irreversibly revoke one active Bootle/Lantern issuer-policy lineage.
     #[cfg_attr(
@@ -439,13 +381,10 @@ isi! {
         pub successor: BootleLanternIssuerPolicyV1,
     }
 }
-
 impl crate::seal::Instruction for RevokePrivacyBootleLanternIssuerPolicyV1 {}
-
 impl RevokePrivacyBootleLanternIssuerPolicyV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.revoke_bootle_lantern_issuer_policy.v1";
-
     /// Construct an exact irreversible issuer-policy revocation.
     #[must_use]
     pub fn new(
@@ -458,7 +397,6 @@ impl RevokePrivacyBootleLanternIssuerPolicyV1 {
         }
     }
 }
-
 isi! {
     /// Register one canonical authoritative Vega issuer-key/policy lineage.
     #[cfg_attr(
@@ -471,20 +409,16 @@ isi! {
         pub record: PrivacyVegaIssuerRecordV1,
     }
 }
-
 impl crate::seal::Instruction for RegisterPrivacyVegaIssuerV1 {}
-
 impl RegisterPrivacyVegaIssuerV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.register_vega_issuer.v1";
-
     /// Construct an authoritative Vega issuer registration.
     #[must_use]
     pub const fn new(record: PrivacyVegaIssuerRecordV1) -> Self {
         Self { record }
     }
 }
-
 isi! {
     /// Rotate one active Vega issuer lineage by exactly one immutable epoch.
     #[cfg_attr(
@@ -499,13 +433,10 @@ isi! {
         pub successor: PrivacyVegaIssuerRecordV1,
     }
 }
-
 impl crate::seal::Instruction for RotatePrivacyVegaIssuerV1 {}
-
 impl RotatePrivacyVegaIssuerV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.rotate_vega_issuer.v1";
-
     /// Construct an exact Vega issuer compare-and-swap rotation.
     #[must_use]
     pub const fn new(
@@ -518,7 +449,6 @@ impl RotatePrivacyVegaIssuerV1 {
         }
     }
 }
-
 isi! {
     /// Irreversibly revoke one active Vega issuer lineage.
     #[cfg_attr(
@@ -533,13 +463,10 @@ isi! {
         pub successor: PrivacyVegaIssuerRecordV1,
     }
 }
-
 impl crate::seal::Instruction for RevokePrivacyVegaIssuerV1 {}
-
 impl RevokePrivacyVegaIssuerV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.revoke_vega_issuer.v1";
-
     /// Construct an exact irreversible Vega issuer revocation.
     #[must_use]
     pub const fn new(
@@ -552,7 +479,6 @@ impl RevokePrivacyVegaIssuerV1 {
         }
     }
 }
-
 isi! {
     /// Register one canonical authoritative X.509 trust-anchor lineage.
     #[cfg_attr(
@@ -564,20 +490,16 @@ isi! {
         pub record: PrivacyZkX509TrustAnchorRecordV1,
     }
 }
-
 impl crate::seal::Instruction for RegisterPrivacyZkX509TrustAnchorV1 {}
-
 impl RegisterPrivacyZkX509TrustAnchorV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.register_zk_x509_trust_anchor.v1";
-
     /// Construct an authoritative trust-anchor registration.
     #[must_use]
     pub const fn new(record: PrivacyZkX509TrustAnchorRecordV1) -> Self {
         Self { record }
     }
 }
-
 isi! {
     /// Rotate one active X.509 trust-anchor lineage by exactly one epoch.
     #[cfg_attr(
@@ -591,13 +513,10 @@ isi! {
         pub successor: PrivacyZkX509TrustAnchorRecordV1,
     }
 }
-
 impl crate::seal::Instruction for RotatePrivacyZkX509TrustAnchorV1 {}
-
 impl RotatePrivacyZkX509TrustAnchorV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.rotate_zk_x509_trust_anchor.v1";
-
     /// Construct an exact trust-anchor rotation.
     #[must_use]
     pub const fn new(
@@ -610,7 +529,6 @@ impl RotatePrivacyZkX509TrustAnchorV1 {
         }
     }
 }
-
 isi! {
     /// Irreversibly revoke one active X.509 trust-anchor lineage.
     #[cfg_attr(
@@ -624,13 +542,10 @@ isi! {
         pub successor: PrivacyZkX509TrustAnchorRecordV1,
     }
 }
-
 impl crate::seal::Instruction for RevokePrivacyZkX509TrustAnchorV1 {}
-
 impl RevokePrivacyZkX509TrustAnchorV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.revoke_zk_x509_trust_anchor.v1";
-
     /// Construct an irreversible trust-anchor revocation.
     #[must_use]
     pub const fn new(
@@ -643,7 +558,6 @@ impl RevokePrivacyZkX509TrustAnchorV1 {
         }
     }
 }
-
 isi! {
     /// Register one canonical authoritative X.509 certificate-policy lineage.
     #[cfg_attr(
@@ -655,20 +569,16 @@ isi! {
         pub record: PrivacyZkX509CertificatePolicyRecordV1,
     }
 }
-
 impl crate::seal::Instruction for RegisterPrivacyZkX509CertificatePolicyV1 {}
-
 impl RegisterPrivacyZkX509CertificatePolicyV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.register_zk_x509_certificate_policy.v1";
-
     /// Construct an authoritative certificate-policy registration.
     #[must_use]
     pub fn new(record: PrivacyZkX509CertificatePolicyRecordV1) -> Self {
         Self { record }
     }
 }
-
 isi! {
     /// Rotate one active X.509 certificate-policy lineage by exactly one epoch.
     #[cfg_attr(
@@ -682,13 +592,10 @@ isi! {
         pub successor: PrivacyZkX509CertificatePolicyRecordV1,
     }
 }
-
 impl crate::seal::Instruction for RotatePrivacyZkX509CertificatePolicyV1 {}
-
 impl RotatePrivacyZkX509CertificatePolicyV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.rotate_zk_x509_certificate_policy.v1";
-
     /// Construct an exact certificate-policy rotation.
     #[must_use]
     pub fn new(
@@ -701,7 +608,6 @@ impl RotatePrivacyZkX509CertificatePolicyV1 {
         }
     }
 }
-
 isi! {
     /// Irreversibly revoke one active X.509 certificate-policy lineage.
     #[cfg_attr(
@@ -715,13 +621,10 @@ isi! {
         pub successor: PrivacyZkX509CertificatePolicyRecordV1,
     }
 }
-
 impl crate::seal::Instruction for RevokePrivacyZkX509CertificatePolicyV1 {}
-
 impl RevokePrivacyZkX509CertificatePolicyV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.revoke_zk_x509_certificate_policy.v1";
-
     /// Construct an irreversible certificate-policy revocation.
     #[must_use]
     pub fn new(
@@ -734,7 +637,6 @@ impl RevokePrivacyZkX509CertificatePolicyV1 {
         }
     }
 }
-
 isi! {
     /// Register one current issuer-scoped X.509 signed-CRL lineage.
     ///
@@ -749,20 +651,16 @@ isi! {
         pub record: PrivacyZkX509CrlRecordV1,
     }
 }
-
 impl crate::seal::Instruction for RegisterPrivacyZkX509CrlV1 {}
-
 impl RegisterPrivacyZkX509CrlV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.register_zk_x509_crl.v1";
-
     /// Construct an atomic signed-CRL lineage registration.
     #[must_use]
     pub const fn new(record: PrivacyZkX509CrlRecordV1) -> Self {
         Self { record }
     }
 }
-
 isi! {
     /// Rotate one current signed-CRL lineage and root by exactly one epoch.
     ///
@@ -779,13 +677,10 @@ isi! {
         pub successor: PrivacyZkX509CrlRecordV1,
     }
 }
-
 impl crate::seal::Instruction for RotatePrivacyZkX509CrlV1 {}
-
 impl RotatePrivacyZkX509CrlV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.rotate_zk_x509_crl.v1";
-
     /// Construct an atomic signed-CRL compare-and-swap rotation.
     #[must_use]
     pub const fn new(
@@ -798,7 +693,6 @@ impl RotatePrivacyZkX509CrlV1 {
         }
     }
 }
-
 isi! {
     /// Irreversibly revoke one current signed-CRL lineage.
     ///
@@ -815,13 +709,10 @@ isi! {
         pub successor: PrivacyZkX509CrlRecordV1,
     }
 }
-
 impl crate::seal::Instruction for RevokePrivacyZkX509CrlV1 {}
-
 impl RevokePrivacyZkX509CrlV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.revoke_zk_x509_crl.v1";
-
     /// Construct an atomic irreversible signed-CRL revocation.
     #[must_use]
     pub const fn new(
@@ -834,7 +725,6 @@ impl RevokePrivacyZkX509CrlV1 {
         }
     }
 }
-
 isi! {
     /// Verify and atomically apply one protocol-typed privacy proof action.
     #[cfg_attr(
@@ -846,24 +736,19 @@ isi! {
         pub envelope: PrivacyProofEnvelopeV1,
     }
 }
-
 impl crate::seal::Instruction for SubmitPrivacyProofV1 {}
-
 impl SubmitPrivacyProofV1 {
     /// Canonical first-release Norito instruction identifier.
     pub const WIRE_ID: &'static str = "iroha.privacy.submit_proof.v1";
-
     /// Construct a privacy-proof submission instruction.
     #[must_use]
     pub fn new(envelope: PrivacyProofEnvelopeV1) -> Self {
         Self { envelope }
     }
 }
-
 fn privacy_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 macro_rules! impl_privacy_decode_from_slice {
     ($ty:ident { $($field:ident : $field_ty:ty),+ $(,)? }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -872,7 +757,6 @@ macro_rules! impl_privacy_decode_from_slice {
                 if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
                     return super::decode_packed_instruction_payload::<Self>(bytes);
                 }
-
                 let mut offset = 0usize;
                 $(
                     let $field = super::decode_aos_canonical_field::<$field_ty>(
@@ -889,7 +773,6 @@ macro_rules! impl_privacy_decode_from_slice {
         }
     };
 }
-
 impl_privacy_decode_from_slice!(RegisterPrivacyProtocolActivationV1 {
     activation: PrivacyProtocolActivationRecordV1,
 });
@@ -991,14 +874,8 @@ impl_privacy_decode_from_slice!(RevokePrivacyZkX509CrlV1 {
 impl_privacy_decode_from_slice!(SubmitPrivacyProofV1 {
     envelope: PrivacyProofEnvelopeV1,
 });
-
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
-
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::{
         AssetDefinitionId, NetworkId,
@@ -1033,7 +910,9 @@ mod tests {
             PrivacyZkX509RecordLifecycleV1,
         },
     };
-
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use norito::core::DecodeFromSlice;
+    use std::str::FromStr as _;
     const PRIVACY_ISI_WIRE_IDS_V1: [&str; 28] = [
         RegisterPrivacyProtocolActivationV1::WIRE_ID,
         SchedulePrivacyConsensusPolicyTighteningV1::WIRE_ID,
@@ -1064,11 +943,9 @@ mod tests {
         RevokePrivacyZkX509CrlV1::WIRE_ID,
         SubmitPrivacyProofV1::WIRE_ID,
     ];
-
     fn digest(byte: u8) -> [u8; 32] {
         [byte; 32]
     }
-
     fn account(seed: u8) -> AccountId {
         AccountId::new(
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -1077,7 +954,6 @@ mod tests {
                 .clone(),
         )
     }
-
     fn orchard_bootstrap() -> PrivacyOrchardPoolBootstrapV1 {
         PrivacyOrchardPoolBootstrapV1::new(
             PrivacyPoolIdV1::new(digest(23)),
@@ -1090,7 +966,6 @@ mod tests {
         )
         .expect("canonical Orchard bootstrap")
     }
-
     fn proof_managed_pool_bootstrap() -> PrivacyProofManagedPoolBootstrapV1 {
         PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(PrivacyFcmpPoolBootstrapV1 {
             pool_id: PrivacyPoolIdV1::new(digest(25)),
@@ -1105,7 +980,6 @@ mod tests {
             }],
         })
     }
-
     fn activation() -> PrivacyProtocolActivationRecordV1 {
         let protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0;
         PrivacyProtocolActivationRecordV1 {
@@ -1130,7 +1004,6 @@ mod tests {
             assurance: PrivacyAssuranceV1::Experimental,
         }
     }
-
     fn envelope() -> PrivacyProofEnvelopeV1 {
         let activation = activation();
         let context = PrivacyStatementContextV1 {
@@ -1186,7 +1059,6 @@ mod tests {
             )),
         }
     }
-
     fn publication() -> PrivacyRootPublicationV1 {
         PrivacyRootPublicationV1::new(
             PrivacyNamespaceV1::new(
@@ -1201,14 +1073,12 @@ mod tests {
         )
         .expect("valid root publication")
     }
-
     fn p256_point(prefix: u8, final_byte: u8) -> PrivacyP256PointV1 {
         let mut bytes = [0; 33];
         bytes[0] = prefix;
         bytes[32] = final_byte;
         PrivacyP256PointV1::new(bytes)
     }
-
     fn pgc_bootstrap() -> PrivacyPgcAccountBootstrapV1 {
         PrivacyPgcAccountBootstrapV1 {
             namespace: publication().namespace,
@@ -1226,7 +1096,6 @@ mod tests {
                 .collect(),
         }
     }
-
     fn zk_ams_bootstrap() -> PrivacyZkAmsRegistryBootstrapV1 {
         let bootstrap = PrivacyZkAmsRegistryBootstrapV1 {
             issuer_id: PrivacyIssuerIdV1::new(digest(30)),
@@ -1242,7 +1111,6 @@ mod tests {
             .expect("canonical ZK-AMS registry bootstrap");
         bootstrap
     }
-
     fn zk_ace_policy(
         epoch: u64,
         identity_seed: u8,
@@ -1264,7 +1132,6 @@ mod tests {
         )
         .expect("canonical ZK-ACE policy record")
     }
-
     fn bootle_lantern_public_matrix(seed: usize) -> BootleLanternIssuerPublicMatrixV1 {
         let first_column = core::array::from_fn(|block| BootleLanternPolynomialV1 {
             coefficients: (0..BOOTLE_LANTERN_RING_DEGREE_V1)
@@ -1277,7 +1144,6 @@ mod tests {
         BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
             .expect("canonical degree-512 multiplication matrix")
     }
-
     fn bootle_lantern_policy() -> BootleLanternIssuerPolicyV1 {
         let allowed_values = (0..BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1)
             .map(|index| BootleLanternAllowedAttributeValuesV1 {
@@ -1309,7 +1175,6 @@ mod tests {
             .expect("canonical initial Bootle/Lantern issuer policy");
         policy
     }
-
     fn redigest_bootle_lantern_policy(policy: &mut BootleLanternIssuerPolicyV1) {
         policy.issuer_parameter_digest = policy
             .computed_issuer_parameter_digest()
@@ -1319,7 +1184,6 @@ mod tests {
             .computed_record_digest()
             .expect("canonical Bootle/Lantern issuer-policy digest");
     }
-
     fn rotated_bootle_lantern_policy(
         current: &BootleLanternIssuerPolicyV1,
     ) -> BootleLanternIssuerPolicyV1 {
@@ -1333,7 +1197,6 @@ mod tests {
             .expect("canonical Bootle/Lantern issuer-policy rotation");
         successor
     }
-
     fn revoked_bootle_lantern_policy(
         current: &BootleLanternIssuerPolicyV1,
     ) -> BootleLanternIssuerPolicyV1 {
@@ -1346,7 +1209,6 @@ mod tests {
             .expect("canonical Bootle/Lantern issuer-policy revocation");
         successor
     }
-
     fn vega_issuer_record(
         epoch: u64,
         key_seed: u8,
@@ -1367,7 +1229,6 @@ mod tests {
         )
         .expect("canonical Vega issuer record")
     }
-
     fn zk_x509_trust_anchor(
         epoch: u64,
         trust_store_seed: u8,
@@ -1387,7 +1248,6 @@ mod tests {
         )
         .expect("canonical X.509 trust-anchor record")
     }
-
     fn revoked_zk_x509_trust_anchor(
         current: PrivacyZkX509TrustAnchorRecordV1,
     ) -> PrivacyZkX509TrustAnchorRecordV1 {
@@ -1402,7 +1262,6 @@ mod tests {
         )
         .expect("canonical terminal X.509 trust-anchor record")
     }
-
     fn zk_x509_certificate_policy(
         epoch: u64,
         policy_seed: u8,
@@ -1430,7 +1289,6 @@ mod tests {
         )
         .expect("canonical X.509 certificate-policy record")
     }
-
     fn revoked_zk_x509_certificate_policy(
         current: &PrivacyZkX509CertificatePolicyRecordV1,
     ) -> PrivacyZkX509CertificatePolicyRecordV1 {
@@ -1447,7 +1305,6 @@ mod tests {
         )
         .expect("canonical terminal X.509 certificate-policy record")
     }
-
     fn zk_x509_crl(
         epoch: u64,
         crl_number: u64,
@@ -1470,7 +1327,6 @@ mod tests {
         )
         .expect("canonical active X.509 signed-CRL record")
     }
-
     fn revoked_zk_x509_crl(current: PrivacyZkX509CrlRecordV1) -> PrivacyZkX509CrlRecordV1 {
         PrivacyZkX509CrlRecordV1::new(
             current.trust_anchor_id,
@@ -1486,7 +1342,6 @@ mod tests {
         )
         .expect("canonical terminal X.509 signed-CRL record")
     }
-
     macro_rules! for_each_privacy_isi_fixture {
         ($check:ident) => {
             $check!(
@@ -1709,7 +1564,6 @@ mod tests {
             );
         };
     }
-
     fn assert_slice_roundtrip<T>(wire_id: &str, value: T)
     where
         T: Clone
@@ -1723,7 +1577,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value, "{wire_id} direct slice roundtrip");
     }
-
     fn assert_slice_rejects_malformed<T>(wire_id: &str, value: T)
     where
         T: norito::codec::Encode + for<'a> DecodeFromSlice<'a>,
@@ -1736,7 +1589,6 @@ mod tests {
                 bytes.len()
             );
         }
-
         for suffix in [
             &[0x00][..],
             &[0xA5][..],
@@ -1752,7 +1604,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn privacy_isis_roundtrip_through_direct_slice_decoders() {
         let mut fixture_count = 0_usize;
@@ -1765,7 +1616,6 @@ mod tests {
         for_each_privacy_isi_fixture!(check);
         assert_eq!(fixture_count, PRIVACY_ISI_WIRE_IDS_V1.len());
     }
-
     #[test]
     fn privacy_isi_decoders_reject_trailing_and_truncated_payloads() {
         let mut fixture_count = 0_usize;
@@ -1777,13 +1627,11 @@ mod tests {
         }
         for_each_privacy_isi_fixture!(check);
         assert_eq!(fixture_count, PRIVACY_ISI_WIRE_IDS_V1.len());
-
         assert!(
             BootstrapPrivacyPgcAccountsV1::decode_from_slice(&pgc_bootstrap().encode()).is_err(),
             "the unreleased proofless bootstrap layout has no legacy decoder"
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn bootle_lantern_governance_isi_json_is_closed() {
@@ -1797,7 +1645,6 @@ mod tests {
                         .expect("canonical Bootle/Lantern governance instruction JSON decodes"),
                     instruction
                 );
-
                 let hostile = canonical.replacen('{', "{\"adversarial_extension\":null,", 1);
                 assert_ne!(hostile, canonical);
                 assert!(
@@ -1806,7 +1653,6 @@ mod tests {
                 );
             }};
         }
-
         let current = bootle_lantern_policy();
         assert_closed_json!(
             RegisterPrivacyBootleLanternIssuerPolicyV1,
@@ -1827,7 +1673,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn stable_wire_ids_have_no_retired_compatibility_names() {
         assert_eq!(PRIVACY_ISI_WIRE_IDS_V1.len(), 28);
@@ -1837,7 +1682,6 @@ mod tests {
             sorted_wire_ids.windows(2).all(|pair| pair[0] != pair[1]),
             "all 28 canonical first-release privacy ISIs must have unique wire IDs"
         );
-
         for wire_id in PRIVACY_ISI_WIRE_IDS_V1 {
             assert!(wire_id.starts_with("iroha.privacy."));
             assert!(wire_id.ends_with(".v1"));

@@ -1,9 +1,7 @@
 use ivm::{IVM, VMError, VmTrapKind, encoding, instruction, kotodama::wide};
 mod common;
 use common::{assemble, assemble_zk};
-
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
-
 #[test]
 fn test_out_of_gas() {
     let mut vm = IVM::new(u64::MAX);
@@ -21,7 +19,6 @@ fn test_out_of_gas() {
         "Expected OutOfGas error"
     );
 }
-
 #[test]
 fn test_exact_gas_limit() {
     let mut vm = IVM::new(u64::MAX);
@@ -36,7 +33,6 @@ fn test_exact_gas_limit() {
     vm.run().expect("VM should succeed with exact gas limit");
     assert_eq!(vm.register(3), 3);
 }
-
 #[test]
 fn test_gas_accounting_multiple_ops() {
     let mut vm = IVM::new(u64::MAX);
@@ -52,7 +48,6 @@ fn test_gas_accounting_multiple_ops() {
     vm.run().expect("execution failed");
     assert_eq!(vm.remaining_gas(), 3);
 }
-
 #[test]
 fn test_getgas_instruction() {
     let mut vm = IVM::new(u64::MAX);
@@ -68,7 +63,6 @@ fn test_getgas_instruction() {
     assert_eq!(vm.register(1), 10);
     assert_eq!(vm.remaining_gas(), 10); // HALT no longer consumes gas
 }
-
 #[test]
 fn test_getgas_progress() {
     let mut vm = IVM::new(u64::MAX);
@@ -96,7 +90,6 @@ fn test_getgas_progress() {
     assert_eq!(vm.register(6), 98);
     assert_eq!(vm.remaining_gas(), 98);
 }
-
 #[test]
 fn test_getgas_zero_remaining() {
     let mut vm = IVM::new(u64::MAX);
@@ -116,130 +109,104 @@ fn test_getgas_zero_remaining() {
     assert_eq!(vm.register(3), 0);
     assert_eq!(vm.remaining_gas(), 0);
 }
-
 struct ExtraCostHost;
-
 impl ivm::IVMHost for ExtraCostHost {
     fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         Ok(2)
     }
-
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         let a0 = vm.register(10);
         vm.set_register(10, a0.wrapping_add(1));
         Ok(2) // additional gas cost
     }
-
     fn as_any(&mut self) -> &mut dyn std::any::Any {
         self
     }
 }
-
 struct MeteredErrorHost;
-
 impl ivm::IVMHost for MeteredErrorHost {
     fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
         assert_eq!(number, ivm::syscalls::SYSCALL_EXIT);
         Ok(7)
     }
-
     fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
         assert_eq!(number, ivm::syscalls::SYSCALL_EXIT);
         Err(VMError::metered(7, VMError::PermissionDenied))
     }
-
     fn as_any(&mut self) -> &mut dyn std::any::Any {
         self
     }
 }
-
 struct UnmeteredErrorHost {
     calls: usize,
 }
-
 impl ivm::IVMHost for UnmeteredErrorHost {
     fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         Ok(7)
     }
-
     fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         self.calls += 1;
         Err(VMError::PermissionDenied)
     }
-
     fn as_any(&mut self) -> &mut dyn std::any::Any {
         self
     }
 }
-
 struct SideEffectHost {
     calls: usize,
 }
-
 impl ivm::IVMHost for SideEffectHost {
     fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         Ok(2)
     }
-
     fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         self.calls += 1;
         Ok(2)
     }
-
     fn as_any(&mut self) -> &mut dyn std::any::Any {
         self
     }
 }
-
 struct RefundingHost {
     observed_remaining: u64,
 }
-
 impl ivm::IVMHost for RefundingHost {
     fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         Ok(7)
     }
-
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         self.observed_remaining = vm.remaining_gas();
         Ok(2)
     }
-
     fn as_any(&mut self) -> &mut dyn std::any::Any {
         self
     }
 }
-
 struct UnderquotingHost;
-
 impl ivm::IVMHost for UnderquotingHost {
     fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         Ok(1)
     }
-
     fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         Ok(2)
     }
-
     fn as_any(&mut self) -> &mut dyn std::any::Any {
         self
     }
 }
-
 struct CompactProofHost {
     calls: usize,
 }
-
 impl ivm::IVMHost for CompactProofHost {
     fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
         assert!(matches!(
@@ -249,23 +216,19 @@ impl ivm::IVMHost for CompactProofHost {
         ));
         Ok(2)
     }
-
     fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
         self.calls += 1;
         Ok(2)
     }
-
     fn as_any(&mut self) -> &mut dyn std::any::Any {
         self
     }
 }
-
 #[test]
 fn downcast_extra_cost_host() {
     let mut host: Box<dyn ivm::IVMHost> = Box::new(ExtraCostHost);
     assert!(host.as_any().downcast_mut::<ExtraCostHost>().is_some());
 }
-
 #[test]
 fn test_syscall_additional_gas() {
     let mut vm = IVM::new(u64::MAX);
@@ -283,7 +246,6 @@ fn test_syscall_additional_gas() {
     assert_eq!(vm.register(10), 6);
     assert_eq!(vm.remaining_gas(), 0);
 }
-
 #[test]
 fn syscall_quote_is_debited_before_host_side_effects() {
     let mut vm = IVM::new(u64::MAX);
@@ -296,21 +258,17 @@ fn syscall_quote_is_debited_before_host_side_effects() {
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();
     vm.set_gas_limit(6); // five for SCALL, but only one of the quoted two remains
-
     let result = vm.run_with_host(&mut host);
-
     assert!(matches!(result, Err(VMError::OutOfGas)));
     assert_eq!(
         host.calls, 0,
         "host must not run when its quote cannot be paid"
     );
 }
-
 #[test]
 fn compact_proof_helpers_debit_quotes_and_restore_the_host_on_failure() {
     let mut vm = IVM::new(1);
     vm.set_host(CompactProofHost { calls: 0 });
-
     assert!(matches!(
         vm.get_memory_compact_bundle(0, None),
         Err(VMError::OutOfGas)
@@ -319,7 +277,6 @@ fn compact_proof_helpers_debit_quotes_and_restore_the_host_on_failure() {
         vm.get_registers_compact_bundle(0, None),
         Err(VMError::OutOfGas)
     ));
-
     let host = vm
         .host_mut_any()
         .expect("host must be restored after metering failure")
@@ -330,7 +287,6 @@ fn compact_proof_helpers_debit_quotes_and_restore_the_host_on_failure() {
         "unaffordable helper calls must never reach the host"
     );
 }
-
 #[test]
 fn syscall_refunds_unused_quote_and_preserves_host_budget_view() {
     let mut vm = IVM::new(u64::MAX);
@@ -345,13 +301,10 @@ fn syscall_refunds_unused_quote_and_preserves_host_budget_view() {
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();
     vm.set_gas_limit(12); // five for SCALL plus the seven-gas quote
-
     vm.run_with_host(&mut host).expect("syscall should succeed");
-
     assert_eq!(host.observed_remaining, 7);
     assert_eq!(vm.remaining_gas(), 5); // only the two-gas actual cost remains charged
 }
-
 #[test]
 fn syscall_rejects_a_host_cost_above_its_quote() {
     let mut vm = IVM::new(u64::MAX);
@@ -364,9 +317,7 @@ fn syscall_rejects_a_host_cost_above_its_quote() {
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();
     vm.set_gas_limit(6);
-
     let result = vm.run_with_host(&mut host);
-
     assert!(matches!(
         result,
         Err(VMError::SyscallGasQuoteExceeded {
@@ -380,7 +331,6 @@ fn syscall_rejects_a_host_cost_above_its_quote() {
         Some(VmTrapKind::SyscallGasQuoteExceeded)
     );
 }
-
 #[test]
 fn metered_syscall_error_debits_gas_and_preserves_error() {
     let mut vm = IVM::new(u64::MAX);
@@ -401,7 +351,6 @@ fn metered_syscall_error_debits_gas_and_preserves_error() {
     assert!(matches!(res, Err(VMError::PermissionDenied)));
     assert_eq!(vm.remaining_gas(), 8);
 }
-
 #[test]
 fn metered_syscall_error_returns_out_of_gas_when_debit_cannot_be_paid() {
     let mut vm = IVM::new(u64::MAX);
@@ -422,7 +371,6 @@ fn metered_syscall_error_returns_out_of_gas_when_debit_cannot_be_paid() {
     assert!(matches!(res, Err(VMError::OutOfGas)));
     assert_eq!(vm.remaining_gas(), 5);
 }
-
 #[test]
 fn unmetered_syscall_error_consumes_the_fail_closed_quote() {
     let mut vm = IVM::new(u64::MAX);
@@ -435,9 +383,7 @@ fn unmetered_syscall_error_consumes_the_fail_closed_quote() {
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();
     vm.set_gas_limit(20);
-
     let result = vm.run_with_host(&mut host);
-
     assert_eq!(result, Err(VMError::PermissionDenied));
     assert_eq!(host.calls, 1, "the host executes only after quote debit");
     assert_eq!(
@@ -446,7 +392,6 @@ fn unmetered_syscall_error_consumes_the_fail_closed_quote() {
         "an unmetered failure must not refund potentially expensive host work"
     );
 }
-
 #[test]
 fn test_zk_padding_consumes_gas() {
     let mut vm = IVM::new(u64::MAX);
@@ -459,7 +404,6 @@ fn test_zk_padding_consumes_gas() {
     // One HALT (0 gas) plus four padding cycles at cost 1 each
     assert_eq!(vm.remaining_gas(), 6);
 }
-
 #[test]
 fn test_zk_padding_out_of_gas() {
     let mut vm = IVM::new(u64::MAX);

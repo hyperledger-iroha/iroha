@@ -13,15 +13,11 @@
 //! scalar-bit copy bus must bind the four repeated bits to the scalar
 //! arithmetic trace. The aggregate adapter supplies both bindings; this AIR
 //! has no standalone activation path.
-
-use thiserror::Error;
-
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
-
+use thiserror::Error;
 /// Stable aggregate layout for all selectors in one ECDSA equation.
 #[cfg(test)]
 pub(crate) const ZK_X509_P256_WINDOW_BATCH_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-window-batch-v1-incompatible:one-signature:u1-window0-through63-then-u2-window0-through63:128-verifier-fixed-vertical-blocks:512-rows-per-block:65536-row-single-commitment:no-horizontal-instance-expansion:base61:aux1-zero-before-cross-products:fixed27:constraints232-degree4:cross-trace-address-binding=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";
-
 /// Rows used by one 16-way point lookup.
 pub(crate) const P256_WINDOW_ROWS_V1: usize = 16 * 16 + 16;
 /// Sole padded native trace size for one window instance.
@@ -51,18 +47,15 @@ pub(crate) const P256_WINDOW_COORDINATES_V1: usize = 3;
 pub(crate) const P256_WINDOW_CANDIDATES_V1: usize = 16;
 /// Physical rows occupied by one point.
 pub(crate) const P256_WINDOW_ROWS_PER_POINT_V1: usize = 16;
-
 const ACCUMULATOR: usize = 0;
 const EXTERNAL: usize = ACCUMULATOR + P256_WINDOW_COORDINATES_V1 * P256_WINDOW_COORDINATE_LIMBS_V1;
 const BITS: usize = EXTERNAL + P256_WINDOW_EXTERNAL_LIMBS_PER_ROW_V1;
 const MATCH_PREFIX: usize = BITS + 4;
 const SELECTOR: usize = MATCH_PREFIX + 4;
 const SELECTED_COUNT: usize = SELECTOR + 1;
-
 const _: () = assert!(SELECTED_COUNT + 1 == P256_WINDOW_BASE_WIDTH_V1);
 const _: () = assert!(P256_WINDOW_BATCH_STARK_TRACE_SIZE_V1 == 65_536);
 const _: () = assert!(P256_WINDOW_BATCH_STARK_TRACE_SIZE_V1.is_power_of_two());
-
 const STARK_CANDIDATE: usize = 0;
 const STARK_OUTPUT: usize = STARK_CANDIDATE + 1;
 const STARK_PADDING: usize = STARK_OUTPUT + 1;
@@ -72,9 +65,7 @@ const STARK_CHUNK_LAST: usize = STARK_CHUNK_SELECTORS + P256_WINDOW_ROWS_PER_POI
 const STARK_ACTIVE_FIRST: usize = STARK_CHUNK_LAST + 1;
 const STARK_ACTIVE_FINAL: usize = STARK_ACTIVE_FIRST + 1;
 const STARK_ACTIVE_CONTINUE: usize = STARK_ACTIVE_FINAL + 1;
-
 const _: () = assert!(STARK_ACTIVE_CONTINUE + 1 == P256_WINDOW_STARK_FIXED_WIDTH_V1);
-
 /// Which ECDSA scalar supplies this verifier-positioned nibble.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256WindowScalarV1 {
@@ -83,7 +74,6 @@ pub(crate) enum P256WindowScalarV1 {
     /// `r * s^-1 mod n`.
     U2,
 }
-
 /// Projective coordinate selected or exposed by one row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256WindowCoordinateV1 {
@@ -94,7 +84,6 @@ pub(crate) enum P256WindowCoordinateV1 {
     /// Homogeneous z-coordinate.
     Z,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256WindowCoordinateV1 {
     const fn index(self) -> usize {
@@ -104,7 +93,6 @@ impl P256WindowCoordinateV1 {
             Self::Z => 2,
         }
     }
-
     const fn from_index(index: usize) -> Option<Self> {
         match index {
             0 => Some(Self::X),
@@ -114,7 +102,6 @@ impl P256WindowCoordinateV1 {
         }
     }
 }
-
 /// Exact projective point bytes used to build a selector witness.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,7 +113,6 @@ pub(crate) struct P256WindowPointV1 {
     /// Canonical z-coordinate.
     pub(crate) z_be: [u8; 32],
 }
-
 /// Verifier-fixed phase of one selector row.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,7 +130,6 @@ pub(crate) enum P256WindowRowKindV1 {
         chunk: u8,
     },
 }
-
 /// Complete verifier-regenerated row identity.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,7 +141,6 @@ pub(crate) struct P256WindowFixedRowV1 {
     /// Candidate or selected-output phase.
     pub(crate) kind: P256WindowRowKindV1,
 }
-
 /// Address of one pointwise value-bus read.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -178,7 +162,6 @@ pub(crate) enum P256WindowExternalAddressV1 {
         limb: u8,
     },
 }
-
 /// One complete 16-way point-selection trace.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -188,7 +171,6 @@ pub(crate) struct P256WindowTraceV1 {
     /// Committed witness rows.
     pub(crate) base: Vec<[F; P256_WINDOW_BASE_WIDTH_V1]>,
 }
-
 /// One aggregate commitment layout for all 128 verifier-positioned windows.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -198,7 +180,6 @@ pub(crate) struct P256WindowBatchStarkTraceV1 {
     /// Sole zero auxiliary column before cross-trace products are appended.
     pub(crate) aux: Vec<[F; P256_WINDOW_STARK_AUX_WIDTH_V1]>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256WindowTraceV1 {
     /// Overwrite every witness-bearing selector row.
@@ -208,7 +189,6 @@ impl P256WindowTraceV1 {
         }
         self.base.clear();
     }
-
     /// Validate the exact verifier-positioned lookup and all row identities.
     pub(crate) fn validate_for_v1(
         &self,
@@ -233,7 +213,6 @@ impl P256WindowTraceV1 {
         }
         Ok(())
     }
-
     /// Return one of the four algebraically repeated big-endian nibble bits.
     pub(crate) fn bit_v1(&self, bit: usize) -> Result<F, P256WindowAirErrorV1> {
         if bit >= 4 || self.base.len() != P256_WINDOW_ROWS_V1 {
@@ -241,7 +220,6 @@ impl P256WindowTraceV1 {
         }
         Ok(self.base[0][BITS + bit])
     }
-
     /// Reconstruct the selected projective point from committed output rows.
     pub(crate) fn selected_point_v1(&self) -> Result<P256WindowPointV1, P256WindowAirErrorV1> {
         if self.base.len() != P256_WINDOW_ROWS_V1 {
@@ -266,7 +244,6 @@ impl P256WindowTraceV1 {
         })
     }
 }
-
 /// Selector construction or constraint failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum P256WindowAirErrorV1 {
@@ -289,7 +266,6 @@ pub(crate) enum P256WindowAirErrorV1 {
     #[error("zk-X509 P-256 window allocation failed")]
     Allocation,
 }
-
 /// Build one fixed-topology selector witness.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_p256_window_trace_v1(
@@ -306,12 +282,10 @@ pub(crate) fn build_p256_window_trace_v1(
         .fold(0_usize, |value, bit| (value << 1) | usize::from(*bit));
     let table_limbs = table.map(point_limbs_v1);
     let selected_limbs = table_limbs[selected_index];
-
     let fixed = fixed_rows_v1(scalar, window);
     let mut base = Vec::with_capacity(P256_WINDOW_ROWS_V1);
     let mut accumulator = [F::ZERO; P256_WINDOW_COORDINATES_V1 * P256_WINDOW_COORDINATE_LIMBS_V1];
     let mut selected_count = F::ZERO;
-
     for (candidate, candidate_limbs) in table_limbs.iter().enumerate() {
         let selector = if candidate == selected_index {
             F::ONE
@@ -334,7 +308,6 @@ pub(crate) fn build_p256_window_trace_v1(
             row[SELECTOR] = selector;
             row[SELECTED_COUNT] = selected_count;
             base.push(row);
-
             for slot in 0..P256_WINDOW_EXTERNAL_LIMBS_PER_ROW_V1 {
                 let (coordinate, limb) = packed_limb_v1(chunk, slot)?;
                 let index = coordinate.index() * P256_WINDOW_COORDINATE_LIMBS_V1 + limb;
@@ -345,7 +318,6 @@ pub(crate) fn build_p256_window_trace_v1(
             }
         }
     }
-
     for chunk in 0..P256_WINDOW_ROWS_PER_POINT_V1 {
         let mut row = [F::ZERO; P256_WINDOW_BASE_WIDTH_V1];
         row[ACCUMULATOR..ACCUMULATOR + accumulator.len()].copy_from_slice(&accumulator);
@@ -359,12 +331,10 @@ pub(crate) fn build_p256_window_trace_v1(
         row[SELECTED_COUNT] = selected_count;
         base.push(row);
     }
-
     let trace = P256WindowTraceV1 { fixed, base };
     trace.validate_for_v1(scalar, window)?;
     Ok(trace)
 }
-
 /// Return the fixed pointwise value-bus address for one external row slot.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn p256_window_external_address_v1(
@@ -393,7 +363,6 @@ pub(crate) fn p256_window_external_address_v1(
         },
     })
 }
-
 /// Return one committed external limb for pointwise value-bus equality.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn p256_window_external_limb_v1(
@@ -409,7 +378,6 @@ pub(crate) fn p256_window_external_limb_v1(
     }
     Ok(trace.base[row][EXTERNAL + slot])
 }
-
 /// Project the three external cells directly from one committed base opening.
 ///
 /// Unlike the native trace accessor, this projection also applies to an LDE
@@ -420,7 +388,6 @@ pub(crate) const fn p256_window_opened_external_cells_v1(
 ) -> [F; P256_WINDOW_EXTERNAL_LIMBS_PER_ROW_V1] {
     [base[EXTERNAL], base[EXTERNAL + 1], base[EXTERNAL + 2]]
 }
-
 /// Project the four committed selector bits from one opened window row.
 ///
 /// Scalar source products select one of these cells with verifier-fixed
@@ -430,7 +397,6 @@ pub(crate) const fn p256_window_opened_scalar_bits_v1(
 ) -> [F; 4] {
     [base[BITS], base[BITS + 1], base[BITS + 2], base[BITS + 3]]
 }
-
 /// Evaluate one fixed selector row.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn evaluate_p256_window_row_constraints_v1(
@@ -442,11 +408,9 @@ pub(crate) fn evaluate_p256_window_row_constraints_v1(
         return Err(P256WindowAirErrorV1::Topology);
     }
     let mut residues = Vec::with_capacity(64);
-
     for bit in 0..4 {
         residues.push(boolean_residue_v1(base[BITS + bit]));
     }
-
     match fixed.kind {
         P256WindowRowKindV1::Candidate { candidate, chunk } => {
             if candidate >= 16 || chunk >= 16 || next.is_none() {
@@ -459,12 +423,10 @@ pub(crate) fn evaluate_p256_window_row_constraints_v1(
             }
             residues.push(base[SELECTOR].sub(base[MATCH_PREFIX + 3]));
             residues.push(boolean_residue_v1(base[SELECTOR]));
-
             if candidate == 0 && chunk == 0 {
                 residues.extend(base[ACCUMULATOR..ACCUMULATOR + 48].iter().copied());
                 residues.push(base[SELECTED_COUNT]);
             }
-
             let next = next.ok_or(P256WindowAirErrorV1::Topology)?;
             for index in 0..48 {
                 let update = (0..P256_WINDOW_EXTERNAL_LIMBS_PER_ROW_V1)
@@ -521,7 +483,6 @@ pub(crate) fn evaluate_p256_window_row_constraints_v1(
     }
     Ok(residues)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fixed_rows_v1(scalar: P256WindowScalarV1, window: u8) -> Vec<P256WindowFixedRowV1> {
     let mut fixed = Vec::with_capacity(P256_WINDOW_ROWS_V1);
@@ -543,7 +504,6 @@ fn fixed_rows_v1(scalar: P256WindowScalarV1, window: u8) -> Vec<P256WindowFixedR
     }
     fixed
 }
-
 /// Compile the sole verifier-owned numeric window preprocessing trace.
 ///
 /// Scalar role and window index are checked here and separately bound by the
@@ -587,7 +547,6 @@ pub(crate) fn compile_p256_window_stark_fixed_rows_v1(
     });
     Ok(rows)
 }
-
 fn p256_window_stark_fixed_local_row_v1(
     local: usize,
 ) -> Result<[F; P256_WINDOW_STARK_FIXED_WIDTH_V1], P256WindowAirErrorV1> {
@@ -619,14 +578,12 @@ fn p256_window_stark_fixed_local_row_v1(
     fixed[STARK_ACTIVE_CONTINUE] = F(u64::from(local + 1 < P256_WINDOW_ROWS_V1));
     Ok(fixed)
 }
-
 /// Constant-memory verifier preprocessing for the vertically packed window
 /// adapter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256WindowBatchStarkFixedProviderV1 {
     trace_size: usize,
 }
-
 impl P256WindowBatchStarkFixedProviderV1 {
     /// Establish one padded native domain.
     pub(crate) fn new_v1(trace_size: usize) -> Result<Self, P256WindowAirErrorV1> {
@@ -635,7 +592,6 @@ impl P256WindowBatchStarkFixedProviderV1 {
         }
         Ok(Self { trace_size })
     }
-
     /// Regenerate one exact numeric row without retaining 128 fixed blocks or
     /// their suffix.
     pub(crate) fn row_v1(
@@ -653,7 +609,6 @@ impl P256WindowBatchStarkFixedProviderV1 {
         p256_window_stark_fixed_local_row_v1(index % P256_WINDOW_STARK_TRACE_SIZE_V1)
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn p256_window_batch_position_v1(
     index: usize,
@@ -669,7 +624,6 @@ fn p256_window_batch_position_v1(
     let window = u8::try_from(index % 64).map_err(|_| P256WindowAirErrorV1::Allocation)?;
     Ok((scalar, window))
 }
-
 /// Compile all 128 selector schedules as vertical blocks of one commitment.
 ///
 /// This is the sole aggregate layout: creating 128 horizontal commitment
@@ -690,7 +644,6 @@ pub(crate) fn compile_p256_window_batch_stark_fixed_rows_v1()
     }
     Ok(rows)
 }
-
 /// Build the sole vertically packed aggregate witness for one ECDSA equation.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_p256_window_batch_stark_trace_v1(
@@ -718,13 +671,11 @@ pub(crate) fn build_p256_window_batch_stark_trace_v1(
         vec![[F::ZERO; P256_WINDOW_STARK_AUX_WIDTH_V1]; P256_WINDOW_BATCH_STARK_TRACE_SIZE_V1];
     Ok(P256WindowBatchStarkTraceV1 { base, aux })
 }
-
 fn stark_window_matching_bit_v1(bit: F, expected: F) -> F {
     expected
         .mul(bit)
         .add(F::ONE.sub(expected).mul(F::ONE.sub(bit)))
 }
-
 /// Evaluate one window row as a fixed-width extension-domain polynomial
 /// vector.
 ///
@@ -748,13 +699,11 @@ pub(crate) fn evaluate_p256_window_stark_residues_v1(
     {
         return Err(P256WindowAirErrorV1::Constraint);
     }
-
     let mut residues = Vec::with_capacity(P256_WINDOW_STARK_CONSTRAINT_COUNT_V1);
     for bit in 0..4 {
         residues.push(boolean_residue_v1(current[BITS + bit]));
     }
     residues.push(boolean_residue_v1(current[SELECTOR]));
-
     let candidate = fixed[STARK_CANDIDATE];
     for bit in 0..4 {
         let matching =
@@ -767,13 +716,11 @@ pub(crate) fn evaluate_p256_window_stark_residues_v1(
         residues.push(candidate.mul(current[MATCH_PREFIX + bit].sub(expected_prefix)));
     }
     residues.push(candidate.mul(current[SELECTOR].sub(current[MATCH_PREFIX + 3])));
-
     let first = fixed[STARK_ACTIVE_FIRST];
     for accumulator in &current[ACCUMULATOR..ACCUMULATOR + 48] {
         residues.push(first.mul(*accumulator));
     }
     residues.push(first.mul(current[SELECTED_COUNT]));
-
     for accumulator in 0..48 {
         let chunk = accumulator / P256_WINDOW_EXTERNAL_LIMBS_PER_ROW_V1;
         let slot = accumulator % P256_WINDOW_EXTERNAL_LIMBS_PER_ROW_V1;
@@ -795,7 +742,6 @@ pub(crate) fn evaluate_p256_window_stark_residues_v1(
                 .sub(fixed[STARK_CHUNK_LAST].mul(current[SELECTOR])),
         ),
     );
-
     let output = fixed[STARK_OUTPUT];
     for prefix in &current[MATCH_PREFIX..MATCH_PREFIX + 4] {
         residues.push(output.mul(*prefix));
@@ -810,7 +756,6 @@ pub(crate) fn evaluate_p256_window_stark_residues_v1(
             });
         residues.push(output.mul(current[EXTERNAL + slot].sub(selected)));
     }
-
     let output_continue = output.mul(fixed[STARK_ACTIVE_CONTINUE]);
     for accumulator in 0..48 {
         residues.push(
@@ -820,23 +765,19 @@ pub(crate) fn evaluate_p256_window_stark_residues_v1(
     }
     residues.push(output_continue.mul(next[SELECTED_COUNT].sub(current[SELECTED_COUNT])));
     residues.push(fixed[STARK_ACTIVE_FINAL].mul(current[SELECTED_COUNT].sub(F::ONE)));
-
     for bit in 0..4 {
         residues.push(fixed[STARK_ACTIVE_CONTINUE].mul(next[BITS + bit].sub(current[BITS + bit])));
     }
-
     let padding = fixed[STARK_PADDING];
     for value in current {
         residues.push(padding.mul(*value));
     }
     residues.push(current_aux[0]);
-
     if residues.len() != P256_WINDOW_STARK_CONSTRAINT_COUNT_V1 {
         return Err(P256WindowAirErrorV1::Topology);
     }
     Ok(residues)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn packed_limb_v1(
     chunk: usize,
@@ -850,7 +791,6 @@ fn packed_limb_v1(
         .ok_or(P256WindowAirErrorV1::Index)?;
     Ok((coordinate, packed % P256_WINDOW_COORDINATE_LIMBS_V1))
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn match_prefixes_v1(bits: [F; 4], candidate: u8) -> [F; 4] {
     let mut prefix = F::ONE;
@@ -865,7 +805,6 @@ fn match_prefixes_v1(bits: [F; 4], candidate: u8) -> [F; 4] {
         prefix
     })
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn append_bit_transition_residues_v1(
     residues: &mut Vec<F>,
@@ -876,7 +815,6 @@ fn append_bit_transition_residues_v1(
         residues.push(next[BITS + bit].sub(base[BITS + bit]));
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn point_limbs_v1(
     point: P256WindowPointV1,
@@ -887,7 +825,6 @@ fn point_limbs_v1(
         bytes_be_to_limbs_le_v1(point.z_be),
     ]
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn bytes_be_to_limbs_le_v1(bytes: [u8; 32]) -> [u16; P256_WINDOW_COORDINATE_LIMBS_V1] {
     core::array::from_fn(|limb| {
@@ -895,7 +832,6 @@ fn bytes_be_to_limbs_le_v1(bytes: [u8; 32]) -> [u16; P256_WINDOW_COORDINATE_LIMB
         u16::from_be_bytes([bytes[low - 1], bytes[low]])
     })
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn limbs_le_to_bytes_be_v1(limbs: [u16; P256_WINDOW_COORDINATE_LIMBS_V1]) -> [u8; 32] {
     let mut bytes = [0_u8; 32];
@@ -907,15 +843,12 @@ fn limbs_le_to_bytes_be_v1(limbs: [u16; P256_WINDOW_COORDINATE_LIMBS_V1]) -> [u8
     }
     bytes
 }
-
 fn boolean_residue_v1(value: F) -> F {
     value.mul(value.sub(F::ONE))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn point_v1(tag: u8) -> P256WindowPointV1 {
         let mut x = [0_u8; 32];
         let mut y = [0_u8; 32];
@@ -931,20 +864,16 @@ mod tests {
             z_be: z,
         }
     }
-
     fn table_v1() -> [P256WindowPointV1; 16] {
         core::array::from_fn(|candidate| point_v1(candidate as u8))
     }
-
     fn bits_v1(candidate: usize) -> [u8; 4] {
         core::array::from_fn(|bit| ((candidate >> (3 - bit)) & 1) as u8)
     }
-
     fn trace_v1(candidate: usize) -> P256WindowTraceV1 {
         build_p256_window_trace_v1(P256WindowScalarV1::U1, 37, table_v1(), bits_v1(candidate))
             .expect("valid selector")
     }
-
     #[test]
     fn all_sixteen_nibbles_select_exact_id_contiguous_points() {
         for selected in 0..16 {
@@ -986,7 +915,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn wrong_bits_selector_prefix_accumulator_count_and_output_fail_closed() {
         let attacks = [
@@ -1007,7 +935,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn coordinated_wrong_candidate_and_bit_changes_fail() {
         let mut trace = trace_v1(9);
@@ -1022,7 +949,6 @@ mod tests {
             trace.validate_for_v1(P256WindowScalarV1::U1, 37),
             Err(P256WindowAirErrorV1::Constraint)
         );
-
         let mut trace = trace_v1(9);
         // Changing every repeated bit still cannot rebind the fixed scalar
         // position once the scalar-bit copy bus supplies the expected bits;
@@ -1033,7 +959,6 @@ mod tests {
             Err(P256WindowAirErrorV1::Constraint)
         );
     }
-
     #[test]
     fn selected_candidate_limb_mutations_and_output_aliases_fail() {
         for packed in 0..48 {
@@ -1059,7 +984,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn every_accumulator_and_control_cell_is_constraint_relevant() {
         let baseline = trace_v1(13);
@@ -1082,7 +1006,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn topology_positions_bits_and_indices_are_fail_closed() {
         let trace = trace_v1(3);
@@ -1112,7 +1035,6 @@ mod tests {
             Err(P256WindowAirErrorV1::Index)
         );
     }
-
     fn validate_numeric_window_v1(trace: &P256WindowTraceV1) -> Result<(), P256WindowAirErrorV1> {
         let fixed =
             compile_p256_window_stark_fixed_rows_v1(trace.fixed[0].scalar, trace.fixed[0].window)?;
@@ -1142,7 +1064,6 @@ mod tests {
         }
         Ok(())
     }
-
     fn window_batch_v1() -> Vec<P256WindowTraceV1> {
         let mut windows = Vec::with_capacity(P256_WINDOW_BATCH_INSTANCES_V1);
         for index in 0..P256_WINDOW_BATCH_INSTANCES_V1 {
@@ -1159,7 +1080,6 @@ mod tests {
         }
         windows
     }
-
     #[test]
     fn aggregate_batch_is_one_exact_vertical_commitment_not_128_instances() {
         let windows = window_batch_v1();
@@ -1176,7 +1096,6 @@ mod tests {
                 .windows(b"no-horizontal-instance-expansion".len())
                 .any(|window| window == b"no-horizontal-instance-expansion"),
         );
-
         for (row, fixed_row) in fixed.iter().enumerate() {
             let next = (row + 1) % P256_WINDOW_BATCH_STARK_TRACE_SIZE_V1;
             let residues = evaluate_p256_window_stark_residues_v1(
@@ -1193,7 +1112,6 @@ mod tests {
                 "batch row {row}",
             );
         }
-
         for block in 0..P256_WINDOW_BATCH_INSTANCES_V1 {
             let start = block * P256_WINDOW_STARK_TRACE_SIZE_V1;
             let padding = start + P256_WINDOW_ROWS_V1;
@@ -1206,25 +1124,21 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn aggregate_batch_rejects_missing_extra_and_reordered_typed_blocks() {
         let windows = window_batch_v1();
-
         let mut missing = windows.clone();
         missing.pop();
         assert_eq!(
             build_p256_window_batch_stark_trace_v1(&missing),
             Err(P256WindowAirErrorV1::Topology),
         );
-
         let mut extra = windows.clone();
         extra.push(windows[0].clone());
         assert_eq!(
             build_p256_window_batch_stark_trace_v1(&extra),
             Err(P256WindowAirErrorV1::Topology),
         );
-
         let mut reordered = windows;
         reordered.swap(0, 1);
         assert_eq!(
@@ -1236,7 +1150,6 @@ mod tests {
             Err(P256WindowAirErrorV1::Topology),
         );
     }
-
     #[test]
     fn numeric_fixed_evaluator_matches_all_nibbles_and_canonical_padding() {
         for selected in 0..16 {
@@ -1248,7 +1161,6 @@ mod tests {
             Err(P256WindowAirErrorV1::Topology)
         );
     }
-
     #[test]
     fn numeric_evaluator_binds_every_selected_and_padding_base_column() {
         let trace = trace_v1(13);
@@ -1274,19 +1186,16 @@ mod tests {
                 }
             })
         };
-
         let selected_row = 13 * P256_WINDOW_ROWS_PER_POINT_V1 + 7;
         for column in 0..P256_WINDOW_BASE_WIDTH_V1 {
             let mut changed = base.clone();
             changed[selected_row][column] = changed[selected_row][column].add(F::ONE);
             assert!(rejects(&changed), "unbound selected-row column {column}");
-
             let mut changed = base.clone();
             changed[P256_WINDOW_ROWS_V1][column] = changed[P256_WINDOW_ROWS_V1][column].add(F::ONE);
             assert!(rejects(&changed), "unbound padding column {column}");
         }
     }
-
     #[test]
     fn numeric_evaluator_rejects_auxiliary_fixed_and_noncanonical_attacks() {
         let trace = trace_v1(6);
@@ -1304,7 +1213,6 @@ mod tests {
         )
         .expect("canonical nonzero auxiliary");
         assert!(residues.iter().any(|residue| *residue != F::ZERO));
-
         let row = 6 * P256_WINDOW_ROWS_PER_POINT_V1;
         let mut wrong_fixed = fixed[row];
         wrong_fixed[STARK_EXPECTED_BITS] = F::ONE.sub(wrong_fixed[STARK_EXPECTED_BITS]);
@@ -1317,7 +1225,6 @@ mod tests {
         )
         .expect("canonical substituted fixed row");
         assert!(residues.iter().any(|residue| *residue != F::ZERO));
-
         let mut noncanonical = base[0];
         noncanonical[0] = F(u64::MAX);
         assert_eq!(

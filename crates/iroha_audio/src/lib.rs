@@ -1,13 +1,9 @@
 #![doc = "Deterministic audio helpers used by the Norito streaming pipeline."]
-
-use std::sync::Arc;
-
 #[cfg(feature = "libopus")]
 use opus_backend as opus;
-
+use std::sync::Arc;
 /// Maximum number of channels supported by the deterministic encoder/decoder.
 pub const MAX_CHANNELS: u8 = 4;
-
 /// Audio layout (mono, stereo, or first-order ambisonics).
 ///
 /// The helper keeps channel handling generic so higher layers can map these
@@ -19,7 +15,6 @@ pub enum ChannelLayout {
     Stereo,
     FirstOrderAmbisonics,
 }
-
 impl ChannelLayout {
     /// Returns the number of channels associated with the layout.
     #[must_use]
@@ -31,7 +26,6 @@ impl ChannelLayout {
         }
     }
 }
-
 /// Preferred backend when constructing encoders/decoders.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -47,7 +41,6 @@ pub enum BackendPreference {
     /// Require the libopus backend; construction fails if libopus is unavailable.
     Libopus,
 }
-
 /// Encoder configuration shared across the deterministic helpers.
 #[derive(Clone, Copy, Debug)]
 pub struct EncoderConfig {
@@ -61,7 +54,6 @@ pub struct EncoderConfig {
     /// Backend preference for this encoder/decoder.
     pub backend: BackendPreference,
 }
-
 impl Default for EncoderConfig {
     fn default() -> Self {
         Self {
@@ -74,7 +66,6 @@ impl Default for EncoderConfig {
         }
     }
 }
-
 /// Errors emitted by the deterministic audio helpers.
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum CodecError {
@@ -95,46 +86,39 @@ pub enum CodecError {
     #[error("libopus backend error: {message}")]
     LibopusError { message: Arc<str> },
 }
-
 impl CodecError {
     fn invalid_pcm_length(expected: usize, found: usize) -> Self {
         Self::InvalidPcmLength { expected, found }
     }
 }
-
 enum EncoderBackend {
     Adpcm(adpcm::Encoder),
     Native(native::Encoder),
     #[cfg(feature = "libopus")]
     Libopus(opus::Encoder),
 }
-
 enum DecoderBackend {
     Adpcm(adpcm::Decoder),
     Native(native::Decoder),
     #[cfg(feature = "libopus")]
     Libopus(opus::Decoder),
 }
-
 /// Deterministic audio encoder facade.
 pub struct Encoder {
     config: EncoderConfig,
     backend: EncoderBackend,
 }
-
 impl Encoder {
     /// Construct a new encoder using the preferred backend.
     pub fn new(config: EncoderConfig) -> Result<Self, CodecError> {
         let backend = select_encoder_backend(&config)?;
         Ok(Self { config, backend })
     }
-
     /// Returns a reference to the configuration used by this encoder.
     #[must_use]
     pub fn config(&self) -> &EncoderConfig {
         &self.config
     }
-
     /// Encode raw PCM samples into the selected backend payload.
     ///
     /// The caller is responsible for attaching sequence numbers, timestamps,
@@ -148,19 +132,16 @@ impl Encoder {
         }
     }
 }
-
 /// Deterministic audio decoder facade.
 pub struct Decoder {
     backend: DecoderBackend,
 }
-
 impl Decoder {
     /// Construct a new decoder mirroring the encoder configuration.
     pub fn new(config: EncoderConfig) -> Result<Self, CodecError> {
         let backend = select_decoder_backend(&config)?;
         Ok(Self { backend })
     }
-
     /// Decode an encoded payload back into signed 16-bit PCM samples.
     pub fn decode(&mut self, payload: &[u8]) -> Result<Vec<i16>, CodecError> {
         match &mut self.backend {
@@ -171,7 +152,6 @@ impl Decoder {
         }
     }
 }
-
 fn select_encoder_backend(config: &EncoderConfig) -> Result<EncoderBackend, CodecError> {
     match config.backend {
         BackendPreference::Adpcm => adpcm::Encoder::new(config).map(EncoderBackend::Adpcm),
@@ -212,7 +192,6 @@ fn select_encoder_backend(config: &EncoderConfig) -> Result<EncoderBackend, Code
         }
     }
 }
-
 fn select_decoder_backend(config: &EncoderConfig) -> Result<DecoderBackend, CodecError> {
     match config.backend {
         BackendPreference::Adpcm => adpcm::Decoder::new(config).map(DecoderBackend::Adpcm),
@@ -253,11 +232,9 @@ fn select_decoder_backend(config: &EncoderConfig) -> Result<DecoderBackend, Code
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn sine_pcm(frame_samples: usize, channels: usize) -> Vec<i16> {
         let mut pcm = Vec::with_capacity(channels * frame_samples);
         for i in 0..frame_samples {
@@ -273,7 +250,6 @@ mod tests {
         }
         pcm
     }
-
     #[test]
     fn adpcm_roundtrip_stereo() {
         let config = EncoderConfig {
@@ -296,7 +272,6 @@ mod tests {
             .unwrap();
         assert!(max_err <= 11_000);
     }
-
     #[test]
     fn adpcm_encoder_rejects_invalid_length() {
         let config = EncoderConfig {
@@ -309,7 +284,6 @@ mod tests {
         let err = encoder.encode(&[0i16; 10]).expect_err("length mismatch");
         assert!(matches!(err, CodecError::InvalidPcmLength { .. }));
     }
-
     #[test]
     fn adpcm_decoder_rejects_bad_header() {
         let config = EncoderConfig {
@@ -320,7 +294,6 @@ mod tests {
         let err = decoder.decode(&[1, 0, 0, 0]).expect_err("version mismatch");
         assert!(matches!(err, CodecError::UnsupportedVersion(1)));
     }
-
     #[test]
     fn adpcm_golden_payload_is_stable() {
         let config = EncoderConfig {
@@ -338,7 +311,6 @@ mod tests {
         ];
         assert_eq!(encoded, golden);
     }
-
     #[test]
     fn native_roundtrip_stereo() {
         let config = EncoderConfig {
@@ -365,7 +337,6 @@ mod tests {
             "max reconstruction error too high: {max_err}"
         );
     }
-
     #[test]
     fn native_decoder_rejects_bad_version() {
         let config = EncoderConfig {
@@ -377,7 +348,6 @@ mod tests {
         let err = decoder.decode(&payload).expect_err("version mismatch");
         assert!(matches!(err, CodecError::UnsupportedVersion(1)));
     }
-
     #[test]
     fn native_golden_payload_is_stable() {
         let config = EncoderConfig {
@@ -396,7 +366,6 @@ mod tests {
         ];
         assert_eq!(encoded, golden);
     }
-
     #[cfg(feature = "libopus")]
     #[test]
     fn opus_roundtrip_stereo() {
@@ -417,7 +386,6 @@ mod tests {
         let decoded = decoder.decode(&encoded).expect("decode");
         assert_eq!(decoded.len(), pcm.len());
     }
-
     #[cfg(not(feature = "libopus"))]
     #[test]
     fn libopus_preference_requires_feature() {
@@ -431,18 +399,14 @@ mod tests {
         assert!(matches!(err, CodecError::BackendUnavailable { .. }));
     }
 }
-
 mod adpcm {
-    use std::cmp;
-
     use super::{CodecError, EncoderConfig, MAX_CHANNELS};
-
+    use std::cmp;
     #[derive(Clone, Copy, Debug)]
     struct AdpcmState {
         predictor: i32,
         index: u8,
     }
-
     impl AdpcmState {
         fn new() -> Self {
             Self {
@@ -451,7 +415,6 @@ mod adpcm {
             }
         }
     }
-
     const STEP_TABLE: [i16; 89] = [
         7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60,
         66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371,
@@ -460,15 +423,12 @@ mod adpcm {
         8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086,
         29794, 32767,
     ];
-
     const INDEX_TABLE: [i8; 16] = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8];
-
     pub(crate) struct Encoder {
         frame_samples: u16,
         channels: usize,
         state: Vec<AdpcmState>,
     }
-
     impl Encoder {
         pub(crate) fn new(config: &EncoderConfig) -> Result<Self, CodecError> {
             let channels = config.layout.channel_count();
@@ -484,14 +444,12 @@ mod adpcm {
                 state: vec![AdpcmState::new(); channels],
             })
         }
-
         pub(crate) fn encode(&mut self, pcm: &[i16]) -> Result<Vec<u8>, CodecError> {
             let samples_per_channel = self.frame_samples as usize;
             let total_samples = samples_per_channel * self.channels;
             if pcm.len() != total_samples {
                 return Err(CodecError::invalid_pcm_length(total_samples, pcm.len()));
             }
-
             let header_len = 4 + self.channels * 3;
             let mut payload = Vec::with_capacity(header_len + total_samples.div_ceil(2));
             payload.push(0); // format version
@@ -501,11 +459,9 @@ mod adpcm {
                 payload.extend_from_slice(&(state.predictor as i16).to_le_bytes());
                 payload.push(state.index);
             }
-
             let mut nibble_acc = 0u8;
             let mut has_low_nibble = false;
             let mut local_state = self.state.clone();
-
             for sample_idx in 0..samples_per_channel {
                 for (channel_idx, state) in local_state.iter_mut().enumerate() {
                     let pcm_index = sample_idx * self.channels + channel_idx;
@@ -520,22 +476,18 @@ mod adpcm {
                     }
                 }
             }
-
             if has_low_nibble {
                 payload.push(nibble_acc);
             }
-
             self.state = local_state;
             Ok(payload)
         }
     }
-
     pub(crate) struct Decoder {
         frame_samples: u16,
         channels: usize,
         state: Vec<AdpcmState>,
     }
-
     impl Decoder {
         pub(crate) fn new(config: &EncoderConfig) -> Result<Self, CodecError> {
             let channels = config.layout.channel_count();
@@ -551,7 +503,6 @@ mod adpcm {
                 state: vec![AdpcmState::new(); channels],
             })
         }
-
         pub(crate) fn decode(&mut self, payload: &[u8]) -> Result<Vec<i16>, CodecError> {
             if payload.len() < 4 {
                 return Err(CodecError::PacketTooShort);
@@ -560,7 +511,6 @@ mod adpcm {
             if version != 0 {
                 return Err(CodecError::UnsupportedVersion(version));
             }
-
             let channel_count = payload[1];
             if channel_count as usize != self.channels {
                 return Err(CodecError::InvalidChannelCount {
@@ -579,7 +529,6 @@ mod adpcm {
                     found: samples_per_channel,
                 });
             }
-
             let mut local_state = self.state.clone();
             for state in &mut local_state {
                 if offset + 3 > payload.len() {
@@ -591,12 +540,10 @@ mod adpcm {
                 offset += 3;
                 *state = AdpcmState { predictor, index };
             }
-
             let total_samples = samples_per_channel as usize * self.channels;
             let mut pcm = vec![0i16; total_samples];
             let mut has_low_nibble = false;
             let mut current_byte = 0u8;
-
             for sample_idx in 0..samples_per_channel as usize {
                 for (channel_idx, state) in local_state.iter_mut().enumerate() {
                     let nibble = if !has_low_nibble {
@@ -615,12 +562,10 @@ mod adpcm {
                     pcm[sample_idx * self.channels + channel_idx] = sample;
                 }
             }
-
             self.state = local_state;
             Ok(pcm)
         }
     }
-
     fn encode_ima_sample(sample: i16, state: &mut AdpcmState) -> u8 {
         let mut step = STEP_TABLE[state.index as usize] as i32;
         let mut diff = sample as i32 - state.predictor;
@@ -629,7 +574,6 @@ mod adpcm {
             nibble |= 0x8;
             diff = -diff;
         }
-
         let mut delta = step >> 3;
         if diff >= step {
             nibble |= 0x4;
@@ -647,20 +591,17 @@ mod adpcm {
             nibble |= 0x1;
             delta += step;
         }
-
         let predictor = if (nibble & 0x8) != 0 {
             state.predictor - delta
         } else {
             state.predictor + delta
         };
         state.predictor = predictor.clamp(i16::MIN as i32, i16::MAX as i32);
-
         let mut index = state.index as i32 + i32::from(INDEX_TABLE[nibble as usize]);
         index = cmp::max(0, cmp::min(index, (STEP_TABLE.len() - 1) as i32));
         state.index = index as u8;
         nibble
     }
-
     fn decode_ima_nibble(nibble: u8, state: &mut AdpcmState) -> i16 {
         let mut step = STEP_TABLE[state.index as usize] as i32;
         let mut diff = step >> 3;
@@ -675,32 +616,26 @@ mod adpcm {
         if (nibble & 0x1) != 0 {
             diff += step;
         }
-
         if (nibble & 0x8) != 0 {
             state.predictor -= diff;
         } else {
             state.predictor += diff;
         }
         state.predictor = state.predictor.clamp(i16::MIN as i32, i16::MAX as i32);
-
         let mut index = i32::from(state.index) + i32::from(INDEX_TABLE[nibble as usize]);
         index = cmp::max(0, cmp::min(index, (STEP_TABLE.len() - 1) as i32));
         state.index = index as u8;
         state.predictor as i16
     }
 }
-
 mod native {
     use super::{CodecError, EncoderConfig, MAX_CHANNELS};
-
     const VERSION: u8 = 0;
     const HEADER_LEN: usize = 5;
-
     pub(crate) struct Encoder {
         frame_samples: u16,
         channels: usize,
     }
-
     impl Encoder {
         pub(crate) fn new(config: &EncoderConfig) -> Result<Self, CodecError> {
             let channels = config.layout.channel_count();
@@ -721,14 +656,12 @@ mod native {
                 channels,
             })
         }
-
         pub(crate) fn encode(&mut self, pcm: &[i16]) -> Result<Vec<u8>, CodecError> {
             let samples_per_channel = self.frame_samples as usize;
             let total_samples = samples_per_channel * self.channels;
             if pcm.len() != total_samples {
                 return Err(CodecError::invalid_pcm_length(total_samples, pcm.len()));
             }
-
             let header_size = HEADER_LEN + self.channels * 4;
             let nibble_count = samples_per_channel
                 .saturating_sub(1)
@@ -739,7 +672,6 @@ mod native {
             payload.push(self.channels as u8);
             payload.extend_from_slice(&self.frame_samples.to_le_bytes());
             payload.push(0); // reserved flags
-
             let mut baselines = Vec::with_capacity(self.channels);
             let mut quant_steps = Vec::with_capacity(self.channels);
             for channel in 0..self.channels {
@@ -751,11 +683,9 @@ mod native {
                 payload.extend_from_slice(&baseline.to_le_bytes());
                 payload.extend_from_slice(&step.to_le_bytes());
             }
-
             let mut previous: Vec<i32> = baselines.iter().map(|&s| i32::from(s)).collect();
             let mut nibble_acc = 0u8;
             let mut has_low_nibble = false;
-
             for sample_idx in 1..samples_per_channel {
                 for channel in 0..self.channels {
                     let sample = i32::from(pcm[sample_idx * self.channels + channel]);
@@ -774,20 +704,16 @@ mod native {
                     }
                 }
             }
-
             if has_low_nibble {
                 payload.push(nibble_acc);
             }
-
             Ok(payload)
         }
     }
-
     pub(crate) struct Decoder {
         frame_samples: u16,
         channels: usize,
     }
-
     impl Decoder {
         pub(crate) fn new(config: &EncoderConfig) -> Result<Self, CodecError> {
             let channels = config.layout.channel_count();
@@ -808,7 +734,6 @@ mod native {
                 channels,
             })
         }
-
         pub(crate) fn decode(&mut self, payload: &[u8]) -> Result<Vec<i16>, CodecError> {
             if payload.len() < HEADER_LEN {
                 return Err(CodecError::PacketTooShort);
@@ -835,7 +760,6 @@ mod native {
             if payload.len() < offset + self.channels * 4 {
                 return Err(CodecError::PacketTooShort);
             }
-
             let mut baselines = Vec::with_capacity(self.channels);
             let mut steps = Vec::with_capacity(self.channels);
             for _ in 0..self.channels {
@@ -846,7 +770,6 @@ mod native {
                 baselines.push(baseline);
                 steps.push(step.max(1));
             }
-
             let samples_per_channel = self.frame_samples as usize;
             let total_samples = samples_per_channel * self.channels;
             let expected_nibbles = samples_per_channel
@@ -857,7 +780,6 @@ mod native {
                 return Err(CodecError::PacketTooShort);
             }
             let nibble_buffer = &payload[offset..offset + expected_bytes];
-
             let mut output = Vec::with_capacity(total_samples);
             let mut previous: Vec<i32> = baselines.iter().map(|&s| i32::from(s)).collect();
             for (channel, baseline) in baselines.iter().enumerate() {
@@ -866,11 +788,9 @@ mod native {
                     previous[channel] = i32::from(*baseline);
                 }
             }
-
             if samples_per_channel == 1 {
                 return Ok(output);
             }
-
             let mut nibble_iter = NibbleIterator::new(nibble_buffer);
             for _sample in 1..samples_per_channel {
                 for channel in 0..self.channels {
@@ -883,11 +803,9 @@ mod native {
                     output.push(clamped as i16);
                 }
             }
-
             Ok(output)
         }
     }
-
     fn max_abs_delta(
         pcm: &[i16],
         channel: usize,
@@ -907,7 +825,6 @@ mod native {
         }
         max_abs
     }
-
     fn compute_step(max_abs_diff: i32) -> u16 {
         if max_abs_diff <= 7 {
             1
@@ -916,7 +833,6 @@ mod native {
             value as u16
         }
     }
-
     fn quantize(diff: i32, step: i32) -> i8 {
         if step <= 0 {
             return 0;
@@ -930,21 +846,17 @@ mod native {
         q = q.clamp(-8, 7);
         q as i8
     }
-
     fn encode_nibble(value: i8) -> u8 {
         (value as u8) & 0x0F
     }
-
     fn decode_nibble(nibble: u8) -> i8 {
         ((nibble << 4) as i8) >> 4
     }
-
     struct NibbleIterator<'a> {
         bytes: &'a [u8],
         index: usize,
         use_high: bool,
     }
-
     impl<'a> NibbleIterator<'a> {
         fn new(bytes: &'a [u8]) -> Self {
             Self {
@@ -954,10 +866,8 @@ mod native {
             }
         }
     }
-
     impl<'a> Iterator for NibbleIterator<'a> {
         type Item = u8;
-
         fn next(&mut self) -> Option<Self::Item> {
             if self.index >= self.bytes.len() {
                 return None;
@@ -974,31 +884,24 @@ mod native {
         }
     }
 }
-
 #[cfg(feature = "libopus")]
 mod opus_backend {
-    use std::sync::Arc;
-
-    use opus::{Application, Channels, Decoder as LibOpusDecoder, Encoder as LibOpusEncoder};
-
     use super::{ChannelLayout, CodecError, EncoderConfig};
-
+    use opus::{Application, Channels, Decoder as LibOpusDecoder, Encoder as LibOpusEncoder};
+    use std::sync::Arc;
     const DEFAULT_OPUS_PACKET: usize = 1276;
-
     pub(crate) struct Encoder {
         inner: LibOpusEncoder,
         channels: usize,
         frame_samples: u16,
         max_packet_size: usize,
     }
-
     impl Encoder {
         pub(crate) fn new(config: &EncoderConfig) -> Result<Self, CodecError> {
             let (channels, opus_channels) = opus_layout(config.layout)?;
             let mut inner =
                 LibOpusEncoder::new(config.sample_rate, opus_channels, Application::Audio)
                     .map_err(libopus_error)?;
-
             let bitrate = config
                 .target_bitrate
                 .unwrap_or_else(|| default_bitrate(config.layout));
@@ -1015,7 +918,6 @@ mod opus_backend {
                 .map_err(libopus_error)?;
             inner.set_vbr(false).map_err(libopus_error)?;
             inner.set_vbr_constraint(true).map_err(libopus_error)?;
-
             Ok(Self {
                 inner,
                 channels,
@@ -1023,7 +925,6 @@ mod opus_backend {
                 max_packet_size: max_packet_size(config.layout),
             })
         }
-
         pub(crate) fn encode(&mut self, pcm: &[i16]) -> Result<Vec<u8>, CodecError> {
             let expected = usize::from(self.frame_samples) * self.channels;
             if pcm.len() != expected {
@@ -1038,13 +939,11 @@ mod opus_backend {
             Ok(buffer)
         }
     }
-
     pub(crate) struct Decoder {
         inner: LibOpusDecoder,
         channels: usize,
         frame_samples: u16,
     }
-
     impl Decoder {
         pub(crate) fn new(config: &EncoderConfig) -> Result<Self, CodecError> {
             let (channels, opus_channels) = opus_layout(config.layout)?;
@@ -1056,7 +955,6 @@ mod opus_backend {
                 frame_samples: config.frame_samples,
             })
         }
-
         pub(crate) fn decode(&mut self, payload: &[u8]) -> Result<Vec<i16>, CodecError> {
             if payload.is_empty() {
                 return Err(CodecError::PacketTooShort);
@@ -1070,7 +968,6 @@ mod opus_backend {
             Ok(pcm)
         }
     }
-
     fn opus_layout(layout: ChannelLayout) -> Result<(usize, Channels), CodecError> {
         match layout {
             ChannelLayout::Mono => Ok((1, Channels::Mono)),
@@ -1078,7 +975,6 @@ mod opus_backend {
             ChannelLayout::FirstOrderAmbisonics => Err(CodecError::UnsupportedLayout { layout }),
         }
     }
-
     fn packet_loss_from_level(level: u8) -> u32 {
         match level {
             0 => 0,
@@ -1087,7 +983,6 @@ mod opus_backend {
             _ => 20,
         }
     }
-
     fn default_bitrate(layout: ChannelLayout) -> u32 {
         match layout {
             ChannelLayout::Mono => 64_000,
@@ -1095,14 +990,12 @@ mod opus_backend {
             ChannelLayout::FirstOrderAmbisonics => 192_000,
         }
     }
-
     fn max_packet_size(layout: ChannelLayout) -> usize {
         match layout {
             ChannelLayout::Mono | ChannelLayout::Stereo => DEFAULT_OPUS_PACKET,
             ChannelLayout::FirstOrderAmbisonics => DEFAULT_OPUS_PACKET * 2,
         }
     }
-
     fn libopus_error(err: opus::Error) -> CodecError {
         CodecError::LibopusError {
             message: Arc::from(err.to_string()),

@@ -1,20 +1,16 @@
 //! Formal verification helpers for the Iroha data model.
-
+use crate::{
+    account::{Account, AccountId},
+    asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
+    domain::{Domain, DomainId},
+};
+use iroha_primitives::numeric::Quantity;
 use std::{
     collections::btree_map::{BTreeMap, Entry},
     format,
     string::String,
     vec::Vec,
 };
-
-use iroha_primitives::numeric::Quantity;
-
-use crate::{
-    account::{Account, AccountId},
-    asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
-    domain::{Domain, DomainId},
-};
-
 const INVARIANT_DOMAIN_UNIQUE: &str = "domain.unique_id";
 const INVARIANT_DOMAIN_OWNER_EXISTS: &str = "domain.owner_exists";
 const INVARIANT_ACCOUNT_UNIQUE: &str = "account.unique_id";
@@ -26,11 +22,9 @@ const INVARIANT_ASSET_ACCOUNT_EXISTS: &str = "asset.account_exists";
 const INVARIANT_ASSET_DEF_EXISTS: &str = "asset.definition_exists";
 const INVARIANT_ASSET_VALUE_SPEC: &str = "asset.value_matches_spec";
 const INVARIANT_ASSET_TOTAL_OVERFLOW: &str = "asset.total_quantity_accumulates";
-
 type DomainIndex<'a> = BTreeMap<DomainId, &'a Domain>;
 type AccountIndex<'a> = BTreeMap<AccountId, &'a Account>;
 type AssetDefinitionIndex<'a> = BTreeMap<AssetDefinitionId, &'a AssetDefinition>;
-
 /// Verification failure for a specific invariant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Violation {
@@ -39,14 +33,12 @@ pub struct Violation {
     /// Human-readable description of the failure.
     pub detail: String,
 }
-
 /// Accumulates the outcome of executing verification checks.
 #[derive(Debug, Clone, Default)]
 pub struct VerificationReport {
     total_checks: usize,
     violations: Vec<Violation>,
 }
-
 impl VerificationReport {
     /// Create an empty report.
     #[must_use]
@@ -56,13 +48,11 @@ impl VerificationReport {
             violations: Vec::new(),
         }
     }
-
     /// Record a successful invariant evaluation.
     pub fn ok(&mut self, invariant: &'static str) {
         let _ = invariant;
         self.total_checks = self.total_checks.saturating_add(1);
     }
-
     /// Record a failed invariant evaluation with context.
     pub fn violation(&mut self, invariant: &'static str, detail: impl Into<String>) {
         self.total_checks = self.total_checks.saturating_add(1);
@@ -71,26 +61,22 @@ impl VerificationReport {
             detail: detail.into(),
         });
     }
-
     /// Returns `true` when no violations were observed.
     #[must_use]
     pub fn is_success(&self) -> bool {
         self.violations.is_empty()
     }
-
     /// Total number of invariant evaluations completed.
     #[must_use]
     pub fn total_checks(&self) -> usize {
         self.total_checks
     }
-
     /// Collected verification failures.
     #[must_use]
     pub fn violations(&self) -> &[Violation] {
         &self.violations
     }
 }
-
 /// Borrowed snapshot of the world state required for verification.
 #[derive(Debug, Clone, Copy)]
 pub struct WorldSnapshot<'a> {
@@ -103,28 +89,22 @@ pub struct WorldSnapshot<'a> {
     /// Assets held in the snapshot.
     pub assets: &'a [Asset],
 }
-
 impl WorldSnapshot<'_> {
     /// Execute all built-in verification checks on the snapshot.
     #[must_use]
     pub fn verify(self) -> VerificationReport {
         let mut report = VerificationReport::new();
-
         let domains = index_domains(self.domains, &mut report);
         let accounts = index_accounts(self.accounts, &domains, &mut report);
         let definitions = index_asset_definitions(self.asset_definitions, &accounts, &mut report);
         let totals = index_assets(self.assets, &accounts, &definitions, &mut report);
-
         verify_domain_owners(&domains, &accounts, &mut report);
         verify_asset_totals(&definitions, &totals, &mut report);
-
         report
     }
 }
-
 fn index_domains<'a>(domains: &'a [Domain], report: &mut VerificationReport) -> DomainIndex<'a> {
     let mut index = DomainIndex::new();
-
     for domain in domains {
         let id = domain.id.clone();
         match index.entry(id.clone()) {
@@ -140,17 +120,14 @@ fn index_domains<'a>(domains: &'a [Domain], report: &mut VerificationReport) -> 
             }
         }
     }
-
     index
 }
-
 fn index_accounts<'a>(
     accounts: &'a [Account],
     _domains: &DomainIndex<'a>,
     report: &mut VerificationReport,
 ) -> AccountIndex<'a> {
     let mut index = AccountIndex::new();
-
     for account in accounts {
         let id = account.id.clone();
         match index.entry(id.clone()) {
@@ -166,17 +143,14 @@ fn index_accounts<'a>(
             }
         }
     }
-
     index
 }
-
 fn index_asset_definitions<'a>(
     definitions: &'a [AssetDefinition],
     accounts: &AccountIndex<'a>,
     report: &mut VerificationReport,
 ) -> AssetDefinitionIndex<'a> {
     let mut index = AssetDefinitionIndex::new();
-
     for definition in definitions {
         let id = definition.id.clone();
         match index.entry(id.clone()) {
@@ -191,7 +165,6 @@ fn index_asset_definitions<'a>(
                 );
             }
         }
-
         if accounts.contains_key(definition.owned_by()) {
             report.ok(INVARIANT_ASSET_DEF_OWNER_EXISTS);
         } else {
@@ -204,10 +177,8 @@ fn index_asset_definitions<'a>(
             );
         }
     }
-
     index
 }
-
 fn index_assets<'a>(
     assets: &'a [Asset],
     accounts: &AccountIndex<'a>,
@@ -216,7 +187,6 @@ fn index_assets<'a>(
 ) -> BTreeMap<AssetDefinitionId, Quantity> {
     let mut index: BTreeMap<AssetId, &Asset> = BTreeMap::new();
     let mut totals: BTreeMap<AssetDefinitionId, Quantity> = BTreeMap::new();
-
     for asset in assets {
         let id = asset.id.clone();
         match index.entry(id.clone()) {
@@ -231,7 +201,6 @@ fn index_assets<'a>(
                 );
             }
         }
-
         if accounts.contains_key(id.account()) {
             report.ok(INVARIANT_ASSET_ACCOUNT_EXISTS);
         } else {
@@ -243,10 +212,8 @@ fn index_assets<'a>(
                 ),
             );
         }
-
         if let Some(definition) = definitions.get(id.definition()) {
             report.ok(INVARIANT_ASSET_DEF_EXISTS);
-
             let spec = definition.spec();
             match spec.check(asset.value().as_numeric()) {
                 Ok(()) => report.ok(INVARIANT_ASSET_VALUE_SPEC),
@@ -258,7 +225,6 @@ fn index_assets<'a>(
                     ),
                 ),
             }
-
             let value = asset.value().clone();
             let entry = totals
                 .entry(id.definition().clone())
@@ -283,10 +249,8 @@ fn index_assets<'a>(
             );
         }
     }
-
     totals
 }
-
 fn verify_domain_owners<'a>(
     domains: &DomainIndex<'a>,
     accounts: &AccountIndex<'a>,
@@ -306,7 +270,6 @@ fn verify_domain_owners<'a>(
         }
     }
 }
-
 fn verify_asset_totals(
     definitions: &AssetDefinitionIndex<'_>,
     totals: &BTreeMap<AssetDefinitionId, Quantity>,
@@ -327,14 +290,8 @@ fn verify_asset_totals(
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
-    use iroha_crypto::KeyPair;
-    use iroha_primitives::numeric::{NumericSpec, Quantity};
-
     use super::*;
     use crate::{
         asset::{
@@ -343,25 +300,24 @@ mod tests {
         },
         metadata::Metadata,
     };
-
+    use iroha_crypto::KeyPair;
+    use iroha_primitives::numeric::{NumericSpec, Quantity};
+    use std::collections::BTreeSet;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked data-model verification fixture keypair")
     }
-
     #[test]
     fn valid_snapshot_passes_formal_verification() {
         let domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("valid domain id");
         let keypair = checked_random_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
-
         let domain = Domain {
             id: domain_id.clone(),
             logo: None,
             metadata: Metadata::default(),
             owned_by: account_id.clone(),
         };
-
         let account = Account {
             id: account_id.clone(),
             metadata: Metadata::default(),
@@ -369,7 +325,6 @@ mod tests {
             uaid: None,
             opaque_ids: Vec::new(),
         };
-
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "rose".parse().expect("valid asset name"),
@@ -389,30 +344,25 @@ mod tests {
             total_quantity: Quantity::from(10_u32),
             confidential_policy: AssetConfidentialPolicy::default(),
         };
-
         let asset = Asset {
             id: AssetId::new(definition_id.clone(), account_id.clone()),
             value: Quantity::from(10_u32),
         };
-
         let domains = vec![domain];
         let accounts = vec![account];
         let definitions = vec![asset_definition];
         let assets = vec![asset];
-
         let snapshot = WorldSnapshot {
             domains: &domains,
             accounts: &accounts,
             asset_definitions: &definitions,
             assets: &assets,
         };
-
         let report = snapshot.verify();
         assert!(report.is_success());
         assert_eq!(report.violations().len(), 0);
         assert!(report.total_checks() > 0);
     }
-
     #[test]
     fn snapshot_with_inconsistencies_reports_violations() {
         let domain_id: DomainId =
@@ -425,7 +375,6 @@ mod tests {
             metadata: Metadata::default(),
             owned_by: missing_owner.clone(),
         };
-
         let _foreign_domain: DomainId =
             DomainId::try_new("elsewhere", "universal").expect("valid domain id");
         let account_key = checked_random_keypair();
@@ -437,7 +386,6 @@ mod tests {
             uaid: None,
             opaque_ids: Vec::new(),
         };
-
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "rose".parse().expect("valid asset name"),
@@ -457,45 +405,37 @@ mod tests {
             total_quantity: Quantity::from(5_u32),
             confidential_policy: AssetConfidentialPolicy::default(),
         };
-
         let asset = Asset {
             id: AssetId::new(definition_id.clone(), account_id.clone()),
             value: "0.5".parse().expect("quantity"),
         };
-
         let domains = vec![domain];
         let accounts = vec![account];
         let definitions = vec![asset_definition];
         let assets = vec![asset];
-
         let snapshot = WorldSnapshot {
             domains: &domains,
             accounts: &accounts,
             asset_definitions: &definitions,
             assets: &assets,
         };
-
         let report = snapshot.verify();
         assert!(!report.is_success());
-
         let invariants: BTreeSet<_> = report
             .violations()
             .iter()
             .map(|violation| violation.invariant)
             .collect();
-
         assert!(invariants.contains(&INVARIANT_DOMAIN_OWNER_EXISTS));
         assert!(invariants.contains(&INVARIANT_ASSET_VALUE_SPEC));
         assert!(invariants.contains(&INVARIANT_ASSET_DEF_TOTAL_MATCH));
     }
-
     #[test]
     fn cross_domain_owners_are_allowed_when_references_exist() {
         let business_domain: DomainId =
             DomainId::try_new("business", "universal").expect("valid domain id");
         let owner_domain: DomainId =
             DomainId::try_new("owners", "universal").expect("valid domain id");
-
         let owner_keypair = checked_random_keypair();
         let owner_account_id = AccountId::new(owner_keypair.public_key().clone());
         let owner_domain_record = Domain {
@@ -504,7 +444,6 @@ mod tests {
             metadata: Metadata::default(),
             owned_by: owner_account_id.clone(),
         };
-
         let business_keypair = checked_random_keypair();
         let business_account_id = AccountId::new(business_keypair.public_key().clone());
         let business_domain_record = Domain {
@@ -513,7 +452,6 @@ mod tests {
             metadata: Metadata::default(),
             owned_by: owner_account_id.clone(),
         };
-
         let owner_account = Account {
             id: owner_account_id.clone(),
             metadata: Metadata::default(),
@@ -528,7 +466,6 @@ mod tests {
             uaid: None,
             opaque_ids: Vec::new(),
         };
-
         let definition_id = AssetDefinitionId::derive_from_components(
             business_domain.clone(),
             "equity".parse().expect("name"),
@@ -548,19 +485,16 @@ mod tests {
             total_quantity: Quantity::zero(),
             confidential_policy: AssetConfidentialPolicy::default(),
         };
-
         let domains = vec![business_domain_record, owner_domain_record];
         let accounts = vec![business_account, owner_account];
         let definitions = vec![definition];
         let assets = Vec::new();
-
         let snapshot = WorldSnapshot {
             domains: &domains,
             accounts: &accounts,
             asset_definitions: &definitions,
             assets: &assets,
         };
-
         let report = snapshot.verify();
         assert!(
             report.is_success(),

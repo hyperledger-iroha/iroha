@@ -101,10 +101,12 @@ Follow this staged procedure when enabling or tightening the alias cache policy 
      substituting either finalized coordinate. Require rejection of offsets,
      duplicate/unknown selectors, unpaired anchors, zero cursors, and pages
      whose encoded rows exceed `max_bytes`.
-   - Exercise `/v1/sorafs/aliases` separately with synthetic proofs covering
-     fresh, refresh-window, expired, and hard-expired cases. Validate its HTTP
-     status codes, `Sora-Proof-Status`, `Retry-After`, `Warning`, and JSON body
-     fields against this runbook.
+   - Exercise `/v1/sorafs/aliases` separately with a fresh exact-network
+     canonical-account request signature and synthetic proofs covering fresh,
+     refresh-window, expired, and hard-expired cases. Validate its HTTP status
+     codes, `Sora-Proof-Status`, `Retry-After`, `Warning`, and JSON body fields
+     against this runbook; unsigned requests must fail before inventory
+     materialization.
 3. **Enable in production**
    - Roll out the new configuration via the standard change window. Apply it to Torii first, then
      restart gateways/SDK services once the node confirms the new policy in logs.

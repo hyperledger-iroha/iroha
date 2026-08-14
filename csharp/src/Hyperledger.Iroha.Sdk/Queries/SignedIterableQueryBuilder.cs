@@ -25,16 +25,16 @@ public sealed class SignedIterableQueryBuilder
     private bool descendingSort;
     private string? entrypointHashHex;
 
-    public SignedIterableQueryBuilder(string authorityAccountId, string networkId)
+    public SignedIterableQueryBuilder(string authorityAccountId, NetworkId networkId)
     {
         AuthorityAccountId = NormalizeAccountId(authorityAccountId, nameof(authorityAccountId));
-        networkIdBytes = SignedQueryRequestContext.DecodeNetworkId(networkId, nameof(networkId));
-        NetworkId = networkId;
+        NetworkId = networkId ?? throw new ArgumentNullException(nameof(networkId));
+        networkIdBytes = NetworkId.ToBytes();
     }
 
     public string AuthorityAccountId { get; }
 
-    public string NetworkId { get; }
+    public NetworkId NetworkId { get; }
 
     public SignedIterableQueryBuilder FindDomains()
     {

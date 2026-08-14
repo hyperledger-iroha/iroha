@@ -7,7 +7,6 @@ mod tests {
             iroha_crypto::Hash::new(seed)
         ))
     }
-
     fn schema_public_input_order(schema: &[u8]) -> Vec<String> {
         let value: norito::json::Value =
             norito::json::from_slice(schema).expect("public-input schema must be valid JSON");
@@ -27,7 +26,6 @@ mod tests {
             })
             .collect()
     }
-
     #[test]
     fn topup_and_unshield_named_binding_orders_match_pinned_schemas() {
         for (schema, assigned_order) in [
@@ -54,11 +52,9 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn public_input_extraction_requires_canonical_outer_and_rejects_raw_zk1() {
         use halo2_proofs::halo2curves::pasta::Fp;
-
         let columns = (1_u64..=9)
             .map(|value| vec![Fp::from(value)])
             .collect::<Vec<_>>();
@@ -79,7 +75,6 @@ mod tests {
         let parsed = super::parse_transfer_public_inputs(&canonical)
             .expect("canonical confidential envelope exposes public inputs");
         assert_eq!(parsed.0[0], scalar_bytes(1));
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let alternate_outer = {
@@ -99,7 +94,6 @@ mod tests {
             "raw ZK1 payload must not bypass the V1 outer envelope"
         );
     }
-
     #[test]
     fn public_input_extraction_rejects_alternate_layout_stark_wrapper() {
         let columns = (1_u8..=9)
@@ -126,7 +120,6 @@ mod tests {
             super::parse_transfer_public_inputs(&canonical_outer).is_ok(),
             "canonical nested wrapper must expose its public inputs"
         );
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let alternate_wrapper = {
@@ -144,18 +137,15 @@ mod tests {
             "alternate-layout nested STARK wrapper must be rejected"
         );
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     fn scalar_bytes(value: u64) -> [u8; 32] {
         use halo2_proofs::halo2curves::{ff::PrimeField as _, pasta::Fp};
-
         Fp::from(value)
             .to_repr()
             .as_ref()
             .try_into()
             .expect("Pallas scalar representation")
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     fn dense_confidential_tree_layers_v3_reference(
         commitments: &[[u8; 32]],
@@ -164,7 +154,6 @@ mod tests {
     ) -> Vec<Vec<super::Scalar>> {
         assert!(tree_width.is_power_of_two());
         assert!(commitments.len() <= tree_width);
-
         let mut layers = vec![
             (0..tree_width)
                 .map(|index| {
@@ -186,7 +175,6 @@ mod tests {
         }
         layers
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn canonical_empty_root_constant_matches_poseidon_profile() {
@@ -203,7 +191,6 @@ mod tests {
             computed
         );
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn incremental_prefix_roots_match_recursive_profile() {
@@ -211,7 +198,6 @@ mod tests {
         let prefix_roots = super::compute_confidential_prefix_roots_v2(&commitments)
             .expect("canonical prefix roots");
         let empty_roots = super::confidential_empty_subtree_roots_v3();
-
         for prefix_len in 1..=commitments.len() {
             let recursive = super::confidential_subtree_root_v3(
                 &commitments[..prefix_len],
@@ -224,13 +210,11 @@ mod tests {
             assert_eq!(prefix_roots[prefix_len - 1], recursive);
         }
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn sparse_confidential_subtree_roots_match_dense_reference() {
         let all_commitments = (1_u64..=64).map(scalar_bytes).collect::<Vec<_>>();
         let empty_roots = super::confidential_empty_subtree_roots_v3();
-
         for len in [0_usize, 1, 2, 3, 7, 16, 37, 64] {
             let commitments = &all_commitments[..len];
             let dense_layers = dense_confidential_tree_layers_v3_reference(
@@ -254,7 +238,6 @@ mod tests {
             }
         }
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn compact_projection_matches_legacy_paths_and_incremental_frontier() {
@@ -264,7 +247,6 @@ mod tests {
         let prefix_roots = super::compute_confidential_prefix_roots_v2(&commitments)
             .expect("canonical prefix roots");
         assert_eq!(projection.root(), prefix_roots[commitments.len() - 1]);
-
         let append = super::append_confidential_tree_frontier_v2(
             0,
             [None; super::CONFIDENTIAL_TREE_DEPTH_V2],
@@ -278,7 +260,6 @@ mod tests {
         );
         assert_eq!(projection.root(), append.current_root);
         assert_eq!(append.appended_roots, prefix_roots);
-
         for leaf_index in [0_usize, 1, 2, 31, 63, 64] {
             let projected = projection
                 .compute_path(leaf_index)
@@ -291,7 +272,6 @@ mod tests {
             assert_eq!(projected.root, legacy.root);
         }
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn incremental_frontier_preserves_prefix_shape_and_full_tree_transition() {
@@ -311,7 +291,6 @@ mod tests {
             frontier = append.frontier;
             current_root = append.current_root;
             assert_eq!(append.appended_roots.as_slice(), &[expected_roots[index]]);
-
             let projection = super::ConfidentialTreeProjectionV2::build(&commitments[..=index])
                 .expect("canonical prefix projection");
             assert_eq!(
@@ -322,7 +301,6 @@ mod tests {
             super::validate_confidential_tree_frontier_v2(index + 1, &frontier, current_root)
                 .expect("prefix frontier remains self-consistent");
         }
-
         let full_frontier_scalars: [super::Scalar; super::CONFIDENTIAL_TREE_DEPTH_V2] =
             core::array::from_fn(|level| {
                 super::Scalar::from(u64::try_from(level + 1).expect("tree level fits u64"))
@@ -361,7 +339,6 @@ mod tests {
         )
         .expect("full tree retains its separately persisted root");
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn compact_projection_hashes_each_commitment_once_for_many_paths() {
@@ -369,7 +346,6 @@ mod tests {
         let expected_root =
             super::compute_confidential_root_v2(&commitments).expect("canonical confidential root");
         super::reset_confidential_commitment_leaf_hash_calls_v3();
-
         let projection = super::ConfidentialTreeProjectionV2::build(&commitments)
             .expect("compact confidential projection");
         assert_eq!(
@@ -389,7 +365,6 @@ mod tests {
             "path count must not cause another commitment scan"
         );
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn incremental_frontier_append_work_depends_only_on_batch_and_depth() {
@@ -398,7 +373,6 @@ mod tests {
             .expect("canonical prefix roots");
         super::reset_confidential_commitment_leaf_hash_calls_v3();
         super::reset_confidential_frontier_append_parent_hash_calls_v2();
-
         let append = super::append_confidential_tree_frontier_v2(
             0,
             [None; super::CONFIDENTIAL_TREE_DEPTH_V2],
@@ -422,7 +396,6 @@ mod tests {
         )
         .expect("appended frontier remains self-consistent");
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn recursive_step_inactive_relation_padding_is_fully_valid() {
@@ -449,7 +422,6 @@ mod tests {
             padding.unshield_change.input_1_path.root
         );
     }
-
     #[test]
     fn production_circuit_selectors_reject_noncanonical_aliases() {
         let selectors: [(&str, fn(&str) -> bool); 4] = [
@@ -481,7 +453,6 @@ mod tests {
             assert!(!accepts(&format!("halo2/pasta/{bare}")));
         }
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn retired_single_expression_poseidon_pair_has_constructive_collisions() {
@@ -489,19 +460,16 @@ mod tests {
             ff::Field,
             pasta::{Fp, Fq},
         };
-
         fn fifth_power<F: Field>(value: F) -> F {
             let square = value.square();
             square.square() * value
         }
-
         fn broken_pair<F>(lhs: F, rhs: F) -> F
         where
             F: Field + From<u64>,
         {
             F::from(2) * fifth_power(lhs + F::from(7)) + F::from(3) * fifth_power(rhs + F::from(13))
         }
-
         fn assert_constructive_collision<F>(inverse_five: [u64; 4])
         where
             F: Field + From<u64> + PartialEq + core::fmt::Debug,
@@ -527,7 +495,6 @@ mod tests {
                 broken_pair(replacement.0, replacement.1)
             );
         }
-
         assert_constructive_collision::<Fp>([
             0xe0f0_f3f0_cccc_cccd,
             0x4e9e_e0c9_a10a_60e2,
@@ -541,7 +508,6 @@ mod tests {
             0x3333_3333_3333_3333,
         ]);
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn cached_confidential_poseidon_matches_fresh_engine_on_both_pasta_fields() {
@@ -550,7 +516,6 @@ mod tests {
             loader::native::LOADER,
             util::{arithmetic::FieldExt, hash::Poseidon},
         };
-
         fn check<F>()
         where
             F: FieldExt + super::ConfidentialPoseidonFieldV3,
@@ -592,11 +557,9 @@ mod tests {
                 assert_eq!(cached, expected, "domain={domain:#018x}");
             }
         }
-
         check::<Fp>();
         check::<Fq>();
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn secure_confidential_poseidon_host_and_chip_match_all_domains_on_both_pasta_fields() {
@@ -606,7 +569,6 @@ mod tests {
             halo2curves::pasta::{Fp, Fq},
         };
         use snark_verifier::util::arithmetic::FieldExt;
-
         fn check<F>()
         where
             F: BigPrimeField + FieldExt + super::ConfidentialPoseidonFieldV3,
@@ -638,7 +600,6 @@ mod tests {
                     .iter()
                     .all(|value| { value.to_repr().as_ref().iter().any(|byte| *byte != 0) })
             );
-
             let mut builder = BaseCircuitBuilder::new(false)
                 .use_k(K)
                 .use_lookup_bits(K - 1)
@@ -662,23 +623,19 @@ mod tests {
                 .expect("secure Poseidon mock prover")
                 .assert_satisfied();
         }
-
         check::<Fp>();
         check::<Fq>();
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn secure_confidential_poseidon_kats_pin_both_pasta_fields_and_domains() {
         use halo2_proofs::halo2curves::pasta::{Fp, Fq};
-
         fn repr<F>(domain: u64) -> [u8; 32]
         where
             F: super::ConfidentialPoseidonFieldV3,
         {
             repr_inputs::<F>(domain, &[3, 5, 8, 13])
         }
-
         fn repr_inputs<F>(domain: u64, inputs: &[u64]) -> [u8; 32]
         where
             F: super::ConfidentialPoseidonFieldV3,
@@ -691,7 +648,6 @@ mod tests {
                 .try_into()
                 .expect("32-byte Pasta repr")
         }
-
         fn hex32(value: &str) -> [u8; 32] {
             assert_eq!(value.len(), 64);
             std::array::from_fn(|index| {
@@ -699,7 +655,6 @@ mod tests {
                     .expect("valid KAT hex byte")
             })
         }
-
         let vectors = [
             (
                 super::CONFIDENTIAL_POSEIDON_OWNER_DOMAIN_V3,
@@ -831,12 +786,10 @@ mod tests {
             assert_eq!(repr_inputs::<Fq>(domain, inputs), hex32(fq));
         }
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn confidential_v3_native_derivations_are_domain_separated_and_fail_closed() {
         use std::collections::BTreeSet;
-
         let asset =
             super::derive_confidential_asset_tag_v3("rose#wonderland").expect("V3 asset tag");
         let exact_network = network_id(b"confidential-v3-domain-separation-network");
@@ -850,7 +803,6 @@ mod tests {
             4,
             "distinct use domains must not alias the same preimage"
         );
-
         let spend_key = [11; 32];
         let diversifier = super::scalar_to_repr_bytes(super::Scalar::from(13));
         let owner =
@@ -884,7 +836,6 @@ mod tests {
             super::derive_confidential_nullifier_v3(&spend_key, [0; 32], asset, network).is_err()
         );
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn generated_confidential_v2_vk_records_parse_as_matching_circuits() {
@@ -894,7 +845,6 @@ mod tests {
             .expect("unshield vk record");
         let unshield_v3 = super::confidential_unshield_v3_vk_record("vk_unshield_v3", 5)
             .expect("unshield v3 vk record");
-
         assert_eq!(
             transfer.circuit_id,
             super::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
@@ -913,7 +863,6 @@ mod tests {
         assert!(transfer.max_proof_bytes > 0);
         assert!(unshield.max_proof_bytes > 0);
         assert!(unshield_v3.max_proof_bytes > 0);
-
         let transfer_key = transfer.key.as_ref().expect("transfer key");
         let unshield_key = unshield.key.as_ref().expect("unshield key");
         let unshield_v3_key = unshield_v3.key.as_ref().expect("unshield v3 key");
@@ -924,7 +873,6 @@ mod tests {
         super::parse_vk_for_unshield_v3(&unshield_v3.circuit_id, unshield_v3_key)
             .expect("unshield v3 key must parse as confidential unshield v3");
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn supplied_confidential_merkle_path_recomputes_witness_nodes() {
@@ -933,7 +881,6 @@ mod tests {
             super::compute_confidential_merkle_path_v2(&commitments, 2).expect("computed path");
         let mut supplied = path.clone();
         supplied.witness_nodes.clear();
-
         let normalized = super::normalize_supplied_confidential_merkle_path_v2(
             [0x33; 32],
             Some(2),
@@ -942,10 +889,8 @@ mod tests {
             "test path",
         )
         .expect("supplied path should validate");
-
         assert_eq!(normalized.root, path.root);
         assert_eq!(normalized.witness_nodes, path.witness_nodes);
-
         let mut tampered = supplied;
         tampered.directions[0] ^= 1;
         assert!(
@@ -959,7 +904,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn next_zero_confidential_path_matches_padded_tree_path() {
@@ -986,7 +930,6 @@ mod tests {
                 previous_path.root,
             )
             .expect("derived next zero path");
-
             assert_eq!(derived.root, expected_next_zero.root, "len={len}");
             assert_eq!(
                 derived.siblings, expected_next_zero.siblings,
@@ -1002,7 +945,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn sequential_append_paths_match_complete_tree_recomputation() {
@@ -1067,7 +1009,6 @@ mod tests {
             }
         }
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn sequential_append_paths_reject_tamper_and_invalid_cardinality() {
@@ -1075,7 +1016,6 @@ mod tests {
         let frontier = super::compute_confidential_merkle_path_v3(&commitments, commitments.len())
             .expect("frontier");
         let output = scalar_bytes(1003);
-
         let mut wrong_root = frontier.clone();
         wrong_root.root[0] ^= 1;
         assert!(
@@ -1086,7 +1026,6 @@ mod tests {
             )
             .is_err()
         );
-
         let mut wrong_direction = frontier.clone();
         wrong_direction.directions[0] ^= 1;
         assert!(
@@ -1122,7 +1061,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn canonical_kagemusha_vk_digests_match_reviewed_goldens() {
@@ -1144,7 +1082,6 @@ mod tests {
             "canonical verifier-key layout changed; review the circuit/schema version before updating these goldens",
         );
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn kagemusha_topup_canonical_vk_guard_rejects_one_byte_substitution() {
@@ -1162,12 +1099,10 @@ mod tests {
             "one-byte same-circuit verifier substitution must fail closed",
         );
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn confidential_transfer_v2_canonical_vk_guard_rejects_self_consistent_key_substitution() {
         use iroha_data_model::proof::VerifyingKeyBox;
-
         let canonical = super::confidential_transfer_v2_vk_box().expect("canonical transfer vk");
         let cached = super::confidential_transfer_v2_vk_box().expect("cached transfer vk");
         assert_eq!(
@@ -1184,7 +1119,6 @@ mod tests {
             std::ptr::eq(proving_key, cached_proving_key),
             "confidential transfer v2 proving key generation should be cached"
         );
-
         let mut mutated = canonical.clone();
         let last = mutated
             .bytes
@@ -1197,13 +1131,11 @@ mod tests {
             err.contains("canonical semantic circuit key"),
             "unexpected mutated-key error: {err}"
         );
-
         let wrong_backend =
             VerifyingKeyBox::new("halo2/ipa:kzg".to_owned(), canonical.bytes.clone());
         let err = super::ensure_confidential_transfer_v2_canonical_vk_box(&wrong_backend)
             .expect_err("wrong backend must reject before canonical bytes are considered");
         assert!(err.contains("backend"), "unexpected backend error: {err}");
-
         let empty = VerifyingKeyBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new());
         let err = super::ensure_confidential_transfer_v2_canonical_vk_box(&empty)
             .expect_err("empty verifier key must reject");
@@ -1212,12 +1144,10 @@ mod tests {
             "unexpected empty-key error: {err}"
         );
     }
-
     #[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
     #[test]
     fn canonical_vk_guards_fail_closed_without_halo2_ipa() {
         use iroha_data_model::proof::VerifyingKeyBox;
-
         let opaque =
             VerifyingKeyBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), vec![0xA5; 32]);
         for result in [
@@ -1235,12 +1165,10 @@ mod tests {
             );
         }
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn confidential_transfer_v2_canonical_vk_guard_rejects_malformed_key_preflight() {
         use iroha_data_model::proof::VerifyingKeyBox;
-
         let malformed =
             VerifyingKeyBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), vec![0xC9; 32]);
         let err = super::ensure_confidential_transfer_v2_canonical_vk_box(&malformed)
@@ -1250,24 +1178,20 @@ mod tests {
             "unexpected malformed-key error: {err}"
         );
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn confidential_unshield_v2_v3_canonical_caches_reject_key_substitution() {
         use iroha_data_model::proof::VerifyingKeyBox;
-
         let v2 = super::confidential_unshield_v2_vk_box().expect("canonical unshield v2 vk");
         let v2_cached = super::confidential_unshield_v2_vk_box().expect("cached unshield v2 vk");
         assert_eq!(v2, v2_cached);
         super::ensure_confidential_unshield_v2_canonical_vk_box(&v2)
             .expect("canonical unshield v2 verifier key should pass");
-
         let v3 = super::confidential_unshield_v3_vk_box().expect("canonical unshield v3 vk");
         let v3_cached = super::confidential_unshield_v3_vk_box().expect("cached unshield v3 vk");
         assert_eq!(v3, v3_cached);
         super::ensure_confidential_unshield_v3_canonical_vk_box(&v3)
             .expect("canonical unshield v3 verifier key should pass");
-
         let v2_pk = super::cached_confidential_unshield_v2_proving_key()
             .expect("canonical unshield v2 proving key");
         let v2_pk_cached = super::cached_confidential_unshield_v2_proving_key()
@@ -1276,7 +1200,6 @@ mod tests {
             std::ptr::eq(v2_pk, v2_pk_cached),
             "unshield v2 proving key should come from a process-local cache"
         );
-
         let v3_pk = super::cached_confidential_unshield_v3_proving_key()
             .expect("canonical unshield v3 proving key");
         let v3_pk_cached = super::cached_confidential_unshield_v3_proving_key()
@@ -1285,7 +1208,6 @@ mod tests {
             std::ptr::eq(v3_pk, v3_pk_cached),
             "unshield v3 proving key should come from a process-local cache"
         );
-
         fn assert_rejects_key_substitution(
             label: &str,
             canonical: &VerifyingKeyBox,
@@ -1304,7 +1226,6 @@ mod tests {
                 err.contains("canonical semantic circuit key"),
                 "unexpected {label} mutated-key error: {err}"
             );
-
             let wrong_backend =
                 VerifyingKeyBox::new("halo2/ipa:kzg".to_owned(), canonical.bytes.clone());
             let err = match ensure(&wrong_backend) {
@@ -1326,7 +1247,6 @@ mod tests {
             &v3,
             super::ensure_confidential_unshield_v3_canonical_vk_box,
         );
-
         let err = super::ensure_confidential_unshield_v3_canonical_vk_box(&v2)
             .expect_err("unshield v2 key must not satisfy unshield v3 canonical guard");
         assert!(
@@ -1340,7 +1260,6 @@ mod tests {
             "unexpected v3-as-v2 canonical-guard error: {err}"
         );
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn generated_confidential_transfer_v2_one_input_one_output_verifies_against_generated_vk() {
@@ -1358,7 +1277,6 @@ mod tests {
                 .expect("input commitment");
         let tree_commitments = vec![input_commitment];
         let root = super::compute_confidential_root_v2(&tree_commitments).expect("root");
-
         let recipient_key = [0x33_u8; 32];
         let output_rho = [0x44_u8; 32];
         let output_diversifier = super::derive_confidential_diversifier_v2(b"recipient");
@@ -1437,7 +1355,6 @@ mod tests {
         )
         .expect("mock prover")
         .assert_satisfied();
-
         let proof = super::build_confidential_transfer_proof_v2(
             &network_id,
             asset_definition_id,
@@ -1459,7 +1376,6 @@ mod tests {
             transfer_key,
         )
         .expect("transfer proof");
-
         assert!(
             crate::zk::verify_backend(
                 crate::zk::ZK_BACKEND_HALO2_IPA,
@@ -1468,7 +1384,6 @@ mod tests {
             ),
             "generated one-input one-output confidential transfer v2 proof should verify against the generated VK"
         );
-
         let wrong_cid_key = super::build_confidential_v2_vk_box(
             super::CONFIDENTIAL_TRANSFER_V2_IPA_K,
             super::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
@@ -1511,7 +1426,6 @@ mod tests {
             "verifier must reject a cryptographically valid proof whose VK CID1 names another circuit"
         );
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn generated_confidential_transfer_v2_proof_verifies_against_generated_vk() {
@@ -1535,7 +1449,6 @@ mod tests {
             recipient_diversifier,
         )
         .expect("recipient owner tag");
-
         let input_0_commitment = super::derive_confidential_note_v2(
             asset_definition_id,
             7,
@@ -1555,14 +1468,12 @@ mod tests {
             input_1_owner_tag,
         )
         .expect("input 1 commitment");
-
         let mut tree_commitments = Vec::new();
         tree_commitments.push(input_0_commitment);
         tree_commitments.push(super::scalar_to_repr_bytes(super::Scalar::from(0x99_u64)));
         tree_commitments.push(input_1_commitment);
         let root_hint =
             super::compute_confidential_root_v2(&tree_commitments).expect("confidential root");
-
         let vk_record =
             super::confidential_transfer_v2_vk_record("vk_transfer", 3).expect("transfer vk");
         let vk_box = vk_record.key.clone().expect("inline transfer vk");
@@ -1602,13 +1513,11 @@ mod tests {
             &vk_box,
         )
         .expect("build transfer proof");
-
         assert!(
             crate::zk::verify_backend(crate::zk::ZK_BACKEND_HALO2_IPA, &proof.proof, Some(&vk_box)),
             "generated confidential transfer v2 proof should verify against the generated VK"
         );
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn generated_confidential_transfer_v2_one_input_two_outputs_verifies_against_generated_vk() {
@@ -1665,13 +1574,11 @@ mod tests {
             &vk_box,
         )
         .expect("build transfer proof");
-
         assert!(
             crate::zk::verify_backend(crate::zk::ZK_BACKEND_HALO2_IPA, &proof.proof, Some(&vk_box)),
             "generated one-input confidential transfer v2 proof should verify against the generated VK"
         );
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn kagemusha_topup_shield_v2_binds_every_public_field_and_rejects_substitution() {
@@ -1748,7 +1655,6 @@ mod tests {
             public.operation_tag,
             super::derive_kagemusha_topup_operation_tag_v2(&operation_id)
         );
-
         let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
             norito::decode_from_bytes(&result.proof.bytes).expect("outer proof envelope");
         let (transcript, columns) =
@@ -1818,7 +1724,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn kagemusha_topup_shield_v2_statement_rejects_zero_and_colliding_fields() {
@@ -1826,7 +1731,6 @@ mod tests {
         let nullifier = super::scalar_to_repr_bytes(super::scalar_from_u128(2));
         let initial_root = super::scalar_to_repr_bytes(super::scalar_from_u128(3));
         let finalized_root = super::scalar_to_repr_bytes(super::scalar_from_u128(4));
-
         for (output, nullifier, initial, finalized, expected) in [
             (
                 [0; 32],
@@ -1881,6 +1785,5 @@ mod tests {
             );
         }
     }
-
     include!("confidential_v2_builder_tests.rs");
 }

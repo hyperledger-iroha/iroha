@@ -1,11 +1,9 @@
 //! Module with parameter related functionality.
-
 pub use iroha_data_model::parameter::CustomParameter;
 use iroha_data_model::parameter::CustomParameterId;
 pub use iroha_executor_data_model_derive::Parameter;
 use iroha_schema::IntoSchema;
 use norito::json::{JsonDeserializeOwned, JsonSerialize};
-
 /// Blockchain specific parameter
 pub trait Parameter: Default + JsonDeserializeOwned + JsonSerialize + IntoSchema {
     /// Parameter id, according to [`IntoSchema`].

@@ -1,13 +1,10 @@
 //! Public response-bound checks for decoded Lantern presentations.
-
-use thiserror::Error;
-
 use super::{
     codec::BootleLanternPresentationProofV1,
     compression::{center_proof_residue_v1, use_gamma_hint_v1},
     params::{Z1_NORM_SQUARED_BOUND_V1, Z3_NORM_SQUARED_BOUND_V1, Z4_INFINITY_NORM_BOUND_V1},
 };
-
+use thiserror::Error;
 /// Validate all proof components whose bounds are independently public.
 ///
 /// This does not replace the ABDLOP commitment equation or the linear/norm
@@ -24,18 +21,15 @@ pub fn validate_public_response_bounds_v1(
     if z1_norm > u128::from(Z1_NORM_SQUARED_BOUND_V1) {
         return Err(ResponseBoundErrorV1::Z1NormExceeded);
     }
-
     for residue in proof.hint() {
         let centered = center_proof_residue_v1(*residue)
             .map_err(|_| ResponseBoundErrorV1::InternalInvariant)?;
         use_gamma_hint_v1(0, centered).map_err(|_| ResponseBoundErrorV1::HintOutOfRange)?;
     }
-
     let z3_norm = squared_centered_norm(proof.z3())?;
     if z3_norm > u128::from(Z3_NORM_SQUARED_BOUND_V1) {
         return Err(ResponseBoundErrorV1::Z3NormExceeded);
     }
-
     for residue in proof.z4() {
         let centered = center_proof_residue_v1(*residue)
             .map_err(|_| ResponseBoundErrorV1::InternalInvariant)?;
@@ -45,7 +39,6 @@ pub fn validate_public_response_bounds_v1(
     }
     Ok(())
 }
-
 fn squared_centered_norm(residues: &[u64]) -> Result<u128, ResponseBoundErrorV1> {
     let mut norm = 0_u128;
     for residue in residues {
@@ -58,7 +51,6 @@ fn squared_centered_norm(residues: &[u64]) -> Result<u128, ResponseBoundErrorV1>
     }
     Ok(norm)
 }
-
 /// Public response-bound failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum ResponseBoundErrorV1 {
@@ -78,7 +70,6 @@ pub enum ResponseBoundErrorV1 {
     #[error("Bootle/Lantern response-bound internal invariant failed")]
     InternalInvariant,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,7 +82,6 @@ mod tests {
         compression::proof_residue_from_centered_v1,
         params::{APPLICATION_RING_DEGREE_V1, COMPRESSION_MODULUS_V1},
     };
-
     const T_B_START: usize = 0;
     const H_START: usize = T_B_START + T_B_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
     const T_A1_START: usize = H_START + H_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
@@ -102,38 +92,31 @@ mod tests {
     const Z21_START: usize = Z1_START + Z1_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
     const Z3_START: usize = Z21_START + Z21_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
     const Z4_START: usize = Z3_START + Z3_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
-
     fn proof_with(index: usize, centered: i64) -> BootleLanternPresentationProofV1 {
         let mut coefficients = vec![0_u64; PROOF_COEFFICIENTS_V1];
         coefficients[index] = proof_residue_from_centered_v1(centered);
         BootleLanternPresentationProofV1::from_coefficients(coefficients.into_boxed_slice())
             .expect("synthetic canonical proof")
     }
-
     #[test]
     fn zero_responses_and_every_exact_boundary_are_accepted() {
         let zero = proof_with(0, 0);
         validate_public_response_bounds_v1(&zero).expect("zero responses");
-
         let z1 = proof_with(Z1_START, 1_040_728_451);
         validate_public_response_bounds_v1(&z1).expect("z1 below exact bound");
-
         let hint = proof_with(
             HINT_START,
             i64::try_from(COMPRESSION_MODULUS_V1 / 2).expect("fits"),
         );
         validate_public_response_bounds_v1(&hint).expect("positive half hint");
-
         let z3 = proof_with(Z3_START, 10_661_920);
         validate_public_response_bounds_v1(&z3).expect("z3 below exact bound");
-
         let z4 = proof_with(
             Z4_START,
             i64::try_from(Z4_INFINITY_NORM_BOUND_V1).expect("fits"),
         );
         validate_public_response_bounds_v1(&z4).expect("z4 exact bound");
     }
-
     #[test]
     fn one_coefficient_over_each_bound_fails_closed() {
         assert_eq!(
@@ -173,7 +156,6 @@ mod tests {
             Err(ResponseBoundErrorV1::Z4InfinityNormExceeded)
         );
     }
-
     #[test]
     fn multi_coefficient_norm_overflow_is_detected_not_just_linf() {
         let mut coefficients = vec![0_u64; PROOF_COEFFICIENTS_V1];

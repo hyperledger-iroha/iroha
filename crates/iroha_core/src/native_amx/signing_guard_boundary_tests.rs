@@ -1,12 +1,10 @@
 fn network_id(label: &[u8]) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(label)))
 }
-
 fn checked_random_ed25519_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked native AMX fixture keypair")
 }
-
 #[cfg(unix)]
 #[test]
 fn signing_guard_durably_binds_full_source_session_and_participant_incarnation() {
@@ -20,7 +18,6 @@ fn signing_guard_durably_binds_full_source_session_and_participant_incarnation()
     let base = request.body;
     let guard =
         open_signing_guard(root.path(), &base, signer.clone(), 32).expect("open signing guard");
-
     let mut wrong_coordinator_dataspace = request.clone();
     wrong_coordinator_dataspace.body.coordinator_dataspace_id = DataSpaceId::new(70);
     let mut wrong_participant_lane = request.clone();
@@ -53,12 +50,10 @@ fn signing_guard_durably_binds_full_source_session_and_participant_incarnation()
             "an unauthenticated {label} drift must not mutate the journal"
         );
     }
-
     guard
         .record(&request)
         .expect("record authenticated source-session claim");
     assert_eq!(guard.record_count_for_test(), 1);
-
     let mut divergent_plan = request.clone();
     let coordinator = RoutingDecision::new(base.coordinator_lane_id, base.coordinator_dataspace_id);
     let primary_participant =
@@ -85,62 +80,51 @@ fn signing_guard_durably_binds_full_source_session_and_participant_incarnation()
         "plan-only equivocation must be rejected before journal mutation"
     );
     drop(guard);
-
     let mut drifts = Vec::new();
-
     let mut entrypoint = base;
     entrypoint.phase = NativeAmxPhase::Commit;
     entrypoint.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
         Hash::new(b"source-entrypoint-drift"),
     );
     drifts.push(entrypoint);
-
     let mut global_view = base;
     global_view.phase = NativeAmxPhase::Commit;
     global_view.round.view = global_view.round.view.saturating_add(1);
     drifts.push(global_view);
-
     let mut coordinator_route = base;
     coordinator_route.phase = NativeAmxPhase::Commit;
     coordinator_route.coordinator_lane_id = LaneId::new(9);
     drifts.push(coordinator_route);
-
     let mut coordinator_dataspace = base;
     coordinator_dataspace.phase = NativeAmxPhase::Commit;
     coordinator_dataspace.coordinator_dataspace_id = DataSpaceId::new(70);
     drifts.push(coordinator_dataspace);
-
     let mut coordinator_incarnation = base;
     coordinator_incarnation.phase = NativeAmxPhase::Commit;
     coordinator_incarnation.coordinator_lane_incarnation =
         Hash::new(b"coordinator-incarnation-drift");
     drifts.push(coordinator_incarnation);
-
     let mut planned_height = base;
     planned_height.phase = NativeAmxPhase::Commit;
     planned_height.planned_coordinator_block_height = planned_height
         .planned_coordinator_block_height
         .saturating_add(1);
     drifts.push(planned_height);
-
     let mut coordinator_view = base;
     coordinator_view.phase = NativeAmxPhase::Commit;
     coordinator_view.coordinator_lane_block_view = coordinator_view
         .coordinator_lane_block_view
         .saturating_add(1);
     drifts.push(coordinator_view);
-
     let mut coordinator_proposal = base;
     coordinator_proposal.phase = NativeAmxPhase::Commit;
     coordinator_proposal.coordinator_proposal_hash = Hash::new(b"coordinator-proposal-drift");
     drifts.push(coordinator_proposal);
-
     let mut participant_incarnation = base;
     participant_incarnation.phase = NativeAmxPhase::Commit;
     participant_incarnation.participant_lane_incarnation =
         Hash::new(b"participant-incarnation-drift");
     drifts.push(participant_incarnation);
-
     for drift in drifts {
         let restarted = open_signing_guard(root.path(), &base, signer.clone(), 32)
             .expect("restart signing guard");
@@ -154,7 +138,6 @@ fn signing_guard_durably_binds_full_source_session_and_participant_incarnation()
             "rejected source-session drift must precede journal mutation"
         );
     }
-
     let mut round_context = base;
     round_context.phase = NativeAmxPhase::Commit;
     round_context.round.context_id = another_context(b"source-round-context-drift");
@@ -203,7 +186,6 @@ fn signing_guard_durably_binds_full_source_session_and_participant_incarnation()
             "rejected {label} drift must precede journal mutation"
         );
     }
-
     let mut second_participant = base;
     second_participant.participant_lane_id = LaneId::new(3);
     second_participant.participant_dataspace_id = DataSpaceId::new(9);
@@ -220,7 +202,6 @@ fn signing_guard_durably_binds_full_source_session_and_participant_incarnation()
         .record_body_for_test(&second_participant)
         .expect("same source may bind another planned participant route");
     assert_eq!(restarted.record_count_for_test(), 2);
-
     let mut second_source = base;
     second_source.source_id = [0xA4; Hash::LENGTH];
     second_source.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
@@ -238,7 +219,6 @@ fn signing_guard_durably_binds_full_source_session_and_participant_incarnation()
         .record_body_for_test(&second_source)
         .expect("a distinct source owns an independent durable claim");
     assert_eq!(restarted.record_count_for_test(), 3);
-
     let mut second_source_conflict = second_source;
     second_source_conflict.phase = NativeAmxPhase::Commit;
     second_source_conflict.coordinator_dataspace_id = DataSpaceId::new(71);
@@ -249,7 +229,6 @@ fn signing_guard_durably_binds_full_source_session_and_participant_incarnation()
     );
     assert_eq!(restarted.record_count_for_test(), 3);
 }
-
 #[cfg(unix)]
 #[test]
 fn signing_guard_durably_rejects_same_source_plan_only_equivocation_after_restart() {
@@ -261,7 +240,6 @@ fn signing_guard_durably_rejects_same_source_plan_only_equivocation_after_restar
     guard
         .record_body_for_test(&body)
         .expect("record source-plan claim");
-
     let mut conflicting_plan = body;
     conflicting_plan.phase = NativeAmxPhase::Commit;
     conflicting_plan.plan_digest = Hash::new(b"conflicting durable native AMX plan");
@@ -271,7 +249,6 @@ fn signing_guard_durably_rejects_same_source_plan_only_equivocation_after_restar
     );
     assert_eq!(guard.record_count_for_test(), 1);
     drop(guard);
-
     let restarted =
         open_signing_guard(root.path(), &body, signer, 8).expect("restart signing guard");
     assert_eq!(
@@ -280,7 +257,6 @@ fn signing_guard_durably_rejects_same_source_plan_only_equivocation_after_restar
     );
     assert_eq!(restarted.record_count_for_test(), 1);
 }
-
 #[cfg(unix)]
 fn write_unpublished_signing_tail(
     guard: &NativeAmxSigningGuard,
@@ -301,7 +277,6 @@ fn write_unpublished_signing_tail(
     );
     path
 }
-
 #[cfg(unix)]
 #[test]
 fn signing_guard_restart_rejects_source_and_slot_equivocating_unpublished_tails() {
@@ -314,7 +289,6 @@ fn signing_guard_restart_rejects_source_and_slot_equivocating_unpublished_tails(
         guard
             .record_body_for_test(&base)
             .expect("record anchored source and slot claims");
-
         let mut conflicting_tail = base;
         if slot_conflict {
             conflicting_tail.source_id = [0xE5; Hash::LENGTH];
@@ -358,7 +332,6 @@ fn signing_guard_restart_rejects_source_and_slot_equivocating_unpublished_tails(
         }
         let tail_path = write_unpublished_signing_tail(&guard, &conflicting_tail, &signer);
         drop(guard);
-
         assert!(matches!(
             open_signing_guard(root.path(), &base, signer, 8),
             Err(NativeAmxSigningGuardError::UnsafeJournal(message))
@@ -370,7 +343,6 @@ fn signing_guard_restart_rejects_source_and_slot_equivocating_unpublished_tails(
         );
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn signing_guard_restart_rejects_truncated_and_oversized_records_and_anchors() {
@@ -389,7 +361,6 @@ fn signing_guard_restart_rejects_truncated_and_oversized_records_and_anchors() {
             .expect("anchored signing record");
         let max_record_bytes = guard.limits.max_record_bytes.get();
         drop(guard);
-
         if oversized {
             fs::write(
                 &record_path,
@@ -401,13 +372,11 @@ fn signing_guard_restart_rejects_truncated_and_oversized_records_and_anchors() {
             bytes.pop().expect("canonical record is non-empty");
             fs::write(&record_path, bytes).expect("write truncated record");
         }
-
         assert!(matches!(
             open_signing_guard(root.path(), &body, signer, 8),
             Err(NativeAmxSigningGuardError::UnsafeJournal(_))
         ));
     }
-
     fn assert_anchor_corruption_rejected(seed: u8, oversized: bool) {
         let root = tempfile::tempdir().expect("temp dir");
         let (_keypair, signer) = signing_guard_signer(seed);
@@ -420,7 +389,6 @@ fn signing_guard_restart_rejects_truncated_and_oversized_records_and_anchors() {
         let anchor_path = NativeAmxSigningGuard::anchor_path(&guard.directory);
         let max_anchor_bytes = guard.limits.max_anchor_bytes.get();
         drop(guard);
-
         if oversized {
             fs::write(
                 &anchor_path,
@@ -432,19 +400,16 @@ fn signing_guard_restart_rejects_truncated_and_oversized_records_and_anchors() {
             bytes.pop().expect("canonical anchor is non-empty");
             fs::write(&anchor_path, bytes).expect("write truncated anchor");
         }
-
         assert!(matches!(
             open_signing_guard(root.path(), &body, signer, 8),
             Err(NativeAmxSigningGuardError::UnsafeJournal(_))
         ));
     }
-
     assert_record_corruption_rejected(0x96, false);
     assert_record_corruption_rejected(0x97, true);
     assert_anchor_corruption_rejected(0x98, false);
     assert_anchor_corruption_rejected(0x99, true);
 }
-
 #[cfg(unix)]
 #[test]
 fn signing_guard_restart_rejects_duplicate_record_sequence() {
@@ -461,7 +426,6 @@ fn signing_guard_restart_rejects_duplicate_record_sequence() {
         .next()
         .expect("anchored signing record");
     let anchor = guard.inner.lock().anchor.clone();
-
     let mut duplicate_body = base;
     duplicate_body.source_id = [0xE6; Hash::LENGTH];
     duplicate_body.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
@@ -487,7 +451,6 @@ fn signing_guard_restart_rejects_duplicate_record_sequence() {
         &norito::encode_canonical(&duplicate).expect("encode duplicate-sequence record"),
     );
     drop(guard);
-
     assert!(matches!(
         open_signing_guard(root.path(), &base, signer, 8),
         Err(NativeAmxSigningGuardError::UnsafeJournal(message))

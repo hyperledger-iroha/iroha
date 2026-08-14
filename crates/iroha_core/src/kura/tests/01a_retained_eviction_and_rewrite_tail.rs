@@ -16,7 +16,6 @@ fn finalized_remote_only_block_retains_header_across_restart() {
     let _receipt = kura
         .store_v2_finality_artifact(&artifact)
         .expect("persist finality with retained header");
-
     let (_, payload_len) = advertise_required_replicas(&kura, height);
     assert!(
         kura.evict_block_bodies(payload_len)
@@ -31,7 +30,6 @@ fn finalized_remote_only_block_retains_header_across_restart() {
     }
     assert!(kura.get_block(height).is_none());
     drop(kura);
-
     let (reopened, _) =
         Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen remote-only Kura");
     assert!(reopened.get_block(height).is_none());
@@ -46,7 +44,6 @@ fn finalized_remote_only_block_retains_header_across_restart() {
         .store_v2_finality_artifact(&artifact)
         .expect("idempotent persistence must not require the evicted body");
 }
-
 #[test]
 fn eviction_requires_signed_complete_wire_finality_before_retaining_or_removing_body() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -55,7 +52,6 @@ fn eviction_requires_signed_complete_wire_finality_before_retaining_or_removing_
     store_dummy_block_arcs(&kura, 4);
     let height = nonzero!(2_usize);
     let (_, payload_len) = advertise_unfinalized_required_replicas(&kura, height);
-
     assert_eq!(
         kura.evict_block_bodies(payload_len)
             .expect("deny an unfinalized canonical block"),
@@ -79,7 +75,6 @@ fn eviction_requires_signed_complete_wire_finality_before_retaining_or_removing_
         "unfinalized canonical body must remain inline"
     );
 }
-
 #[test]
 fn eviction_scans_past_an_unfinalized_advertised_height() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -95,7 +90,6 @@ fn eviction_scans_past_an_unfinalized_advertised_height() {
         .expect("persist only height-three complete-wire finality");
     let (_, height_two_len) = advertise_unfinalized_required_replicas(&kura, nonzero!(2_usize));
     let (_, height_three_len) = advertise_unfinalized_required_replicas(&kura, finalized_height);
-
     assert_eq!(
         kura.evict_block_bodies(height_three_len)
             .expect("evict the later finalized candidate"),
@@ -114,7 +108,6 @@ fn eviction_scans_past_an_unfinalized_advertised_height() {
         "an unfinalized earlier candidate must not starve a later finalized candidate"
     );
 }
-
 #[test]
 fn failed_top_replacement_restores_staged_retained_record_and_exact_accounting() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -141,7 +134,6 @@ fn failed_top_replacement_restores_staged_retained_record_and_exact_accounting()
     );
     assert_ne!(replacement.hash(), original.hash());
     kura.fail_next_block_write_for_tests();
-
     assert!(kura.replace_top_block(Arc::clone(&replacement)).is_err());
     assert_eq!(
         kura.get_durable_block_hash(nonzero!(1_usize)),
@@ -166,7 +158,6 @@ fn failed_top_replacement_restores_staged_retained_record_and_exact_accounting()
         total_before
     );
 }
-
 #[test]
 fn successful_top_replacement_discards_staged_record_with_exact_accounting() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -186,7 +177,6 @@ fn successful_top_replacement_discards_staged_record_with_exact_accounting() {
         })
         .into(),
     );
-
     kura.replace_top_block(Arc::clone(&replacement))
         .expect("replace unfinalized canonical top");
     assert_eq!(
@@ -202,7 +192,6 @@ fn successful_top_replacement_discards_staged_record_with_exact_accounting() {
             .expect("exact total usage after successful replacement")
     );
 }
-
 #[test]
 fn retained_rewrite_stage_restores_old_canonical_record_after_restart() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -227,7 +216,6 @@ fn retained_rewrite_stage_restores_old_canonical_record_after_restart() {
         drop(stage);
         retained_before
     };
-
     let (reopened, _) =
         Kura::new(&config, &RuntimeLaneConfig::default()).expect("recover staged rewrite");
     assert_eq!(
@@ -248,7 +236,6 @@ fn retained_rewrite_stage_restores_old_canonical_record_after_restart() {
             .expect("exact usage after staged-restore restart")
     );
 }
-
 #[test]
 fn staged_v2_record_accepts_exact_published_v3_upgrade() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -278,7 +265,6 @@ fn staged_v2_record_accepts_exact_published_v3_upgrade() {
         let retained_directory = kura.retained_block_record_dir();
         let retained_path = kura.retained_block_record_path(2);
         std::fs::create_dir_all(&retained_directory).expect("create retained-record directory");
-
         // Exercise the same-process error-reconciliation path first.
         std::fs::write(&retained_path, &legacy_bytes).expect("write legacy retained record");
         kura.refresh_total_disk_usage_bytes()
@@ -307,7 +293,6 @@ fn staged_v2_record_accepts_exact_published_v3_upgrade() {
             kura.kura_total_disk_usage_bytes()
                 .expect("exact usage after exact upgrade reconciliation")
         );
-
         // Recreate the publication interleaving and leave it for startup
         // recovery, which must make the same monotonic-upgrade decision.
         std::fs::write(&retained_path, &legacy_bytes)
@@ -327,7 +312,6 @@ fn staged_v2_record_accepts_exact_published_v3_upgrade() {
         assert!(Kura::retained_block_rewrite_staging_dir_for(&blocks_dir).is_dir());
         (current_bytes, retained_path)
     };
-
     let (reopened, _) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("recover exact retained-record upgrade on startup");
     assert_eq!(
@@ -347,7 +331,6 @@ fn staged_v2_record_accepts_exact_published_v3_upgrade() {
             .expect("exact usage after startup exact-upgrade recovery")
     );
 }
-
 #[test]
 fn ambiguous_old_marker_keeps_retained_and_finality_evidence_for_startup() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -376,7 +359,6 @@ fn ambiguous_old_marker_keeps_retained_and_finality_evidence_for_startup() {
             })
             .into(),
         );
-
         let _canonical_guard = kura.canonical_chain_lock.lock();
         let retained_stage = kura
             .stage_retained_block_records_for_rewrite(&blocks_dir, 1)
@@ -407,7 +389,6 @@ fn ambiguous_old_marker_keeps_retained_and_finality_evidence_for_startup() {
         drop(retained_stage);
         (retained_before, finality_before, original.hash(), artifact)
     };
-
     let (reopened, _) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("startup resolves DA before retained and finality evidence");
     assert_eq!(
@@ -429,7 +410,6 @@ fn ambiguous_old_marker_keeps_retained_and_finality_evidence_for_startup() {
         Some(artifact)
     );
 }
-
 #[test]
 fn retained_rewrite_stage_discards_old_record_after_published_crash() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -462,7 +442,6 @@ fn retained_rewrite_stage_discards_old_record_after_published_crash() {
         drop(stage);
         replacement_hash
     };
-
     let (reopened, _) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("restart after replacement publication crash");
     assert_eq!(
@@ -486,7 +465,6 @@ fn retained_rewrite_stage_discards_old_record_after_published_crash() {
             .expect("exact usage after staged-discard restart")
     );
 }
-
 #[test]
 fn post_publication_rewrite_error_discards_old_evidence_and_restarts_cleanly() {
     let temp_dir = TempDir::new().expect("create Kura root");
@@ -542,7 +520,6 @@ fn post_publication_rewrite_error_discards_old_evidence_and_restarts_cleanly() {
         );
         replacement_hash
     };
-
     let (reopened, _) = Kura::new(&config, &RuntimeLaneConfig::default())
         .expect("restart after post-publication rewrite error");
     assert_eq!(

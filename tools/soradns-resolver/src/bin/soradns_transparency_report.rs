@@ -1,11 +1,3 @@
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    fmt::Write as _,
-    fs::File,
-    io::{self, BufRead, BufReader, BufWriter, Write},
-    path::{Path, PathBuf},
-};
-
 use clap::Parser;
 use eyre::{Result, WrapErr};
 use norito::json::{self, Value};
@@ -13,10 +5,15 @@ use soradns_resolver::transparency::{
     BundleEventKind, BundleRecord, BundleState, ResolverEventKind, ResolverRecord,
     TransparencyRecord, TransparencyTailer,
 };
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    fmt::Write as _,
+    fs::File,
+    io::{self, BufRead, BufReader, BufWriter, Write},
+    path::{Path, PathBuf},
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
 const DEFAULT_RECENT_LIMIT: usize = 20;
-
 #[derive(Debug, Parser)]
 #[command(
     author,
@@ -37,24 +34,19 @@ struct Cli {
     #[arg(long, default_value_t = DEFAULT_RECENT_LIMIT)]
     recent_limit: usize,
 }
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let mut tailer = TransparencyTailer::new();
     let mut builder = ReportBuilder::new(cli.recent_limit);
     ingest_log(cli.log.as_ref(), &mut tailer, &mut builder)?;
-
     let generated_at = OffsetDateTime::now_utc();
     let report_body = render_report(&tailer, &builder, generated_at);
     write_report_output(cli.output.as_ref(), &report_body)?;
-
     if let Some(path) = cli.sth_output.as_ref() {
         write_sth_summary(path, &tailer, generated_at)?;
     }
-
     Ok(())
 }
-
 fn ingest_log(
     log_path: Option<&PathBuf>,
     tailer: &mut TransparencyTailer,
@@ -67,7 +59,6 @@ fn ingest_log(
         }
         None => Box::new(BufReader::new(io::stdin())),
     };
-
     let mut line = String::new();
     let mut reader = reader;
     loop {
@@ -95,7 +86,6 @@ fn ingest_log(
     }
     Ok(())
 }
-
 fn write_report_output(path: Option<&PathBuf>, contents: &str) -> Result<()> {
     match path {
         Some(path) => {
@@ -115,7 +105,6 @@ fn write_report_output(path: Option<&PathBuf>, contents: &str) -> Result<()> {
     }
     Ok(())
 }
-
 fn render_report(
     tailer: &TransparencyTailer,
     builder: &ReportBuilder,
@@ -129,14 +118,12 @@ fn render_report(
     writeln!(report, "# SoraDNS Transparency Report").ok();
     writeln!(report, "Generated at: {}", generated_fmt).ok();
     writeln!(report).ok();
-
     render_summary_section(&mut report, &states, builder);
     render_resolver_table(&mut report, &resolver_summaries);
     render_sth_table(&mut report, &states);
     render_recent_events(&mut report, &recent_events);
     report
 }
-
 fn render_summary_section(report: &mut String, states: &[BundleState], builder: &ReportBuilder) {
     let unique_resolvers: HashSet<_> = states
         .iter()
@@ -144,7 +131,6 @@ fn render_summary_section(report: &mut String, states: &[BundleState], builder: 
         .collect();
     let max_age = states.iter().max_by_key(|state| state.proof_age_secs);
     let min_ttl = states.iter().min_by_key(|state| state.proof_ttl_secs);
-
     writeln!(report, "## Summary").ok();
     writeln!(
         report,
@@ -194,7 +180,6 @@ fn render_summary_section(report: &mut String, states: &[BundleState], builder: 
     .ok();
     writeln!(report).ok();
 }
-
 fn render_resolver_table(report: &mut String, summaries: &[ResolverSummary]) {
     writeln!(report, "## Resolver Health").ok();
     writeln!(
@@ -217,7 +202,6 @@ fn render_resolver_table(report: &mut String, summaries: &[ResolverSummary]) {
     }
     writeln!(report).ok();
 }
-
 fn render_sth_table(report: &mut String, states: &[BundleState]) {
     writeln!(report, "## Signed Tree Heads").ok();
     writeln!(
@@ -244,7 +228,6 @@ fn render_sth_table(report: &mut String, states: &[BundleState]) {
     }
     writeln!(report).ok();
 }
-
 fn render_recent_events(report: &mut String, events: &[TimelineEvent]) {
     writeln!(report, "## Recent Events").ok();
     if events.is_empty() {
@@ -285,7 +268,6 @@ fn render_recent_events(report: &mut String, events: &[TimelineEvent]) {
     }
     writeln!(report).ok();
 }
-
 fn build_resolver_summaries(states: &[BundleState]) -> Vec<ResolverSummary> {
     let mut summaries: HashMap<String, ResolverSummary> = HashMap::new();
     for state in states {
@@ -298,7 +280,6 @@ fn build_resolver_summaries(states: &[BundleState]) -> Vec<ResolverSummary> {
     values.sort_by(|a, b| a.resolver_id.cmp(&b.resolver_id));
     values
 }
-
 fn write_sth_summary(
     path: &Path,
     tailer: &TransparencyTailer,
@@ -363,20 +344,17 @@ fn write_sth_summary(
         .flush()
         .wrap_err("failed to flush Signed Tree Head summary")
 }
-
 fn unix_timestamp_ms(dt: OffsetDateTime) -> u64 {
     let secs = dt.unix_timestamp().max(0) as i128;
     let millis = secs * 1_000 + i128::from(dt.nanosecond() / 1_000_000);
     millis as u64
 }
-
 fn format_timestamp(ts: i64) -> String {
     match OffsetDateTime::from_unix_timestamp(ts) {
         Ok(dt) => dt.format(&Rfc3339).unwrap_or_else(|_| ts.to_string()),
         Err(_) => ts.to_string(),
     }
 }
-
 fn format_optional_i64(value: i64) -> String {
     if value == i64::MAX {
         "-".into()
@@ -384,7 +362,6 @@ fn format_optional_i64(value: i64) -> String {
         value.to_string()
     }
 }
-
 #[derive(Default, Debug)]
 struct EventCounters {
     total: u64,
@@ -396,7 +373,6 @@ struct EventCounters {
     resolver_updated: u64,
     resolver_removed: u64,
 }
-
 #[derive(Clone, Debug)]
 struct TimelineEvent {
     timestamp: i64,
@@ -406,13 +382,11 @@ struct TimelineEvent {
     zone_version: Option<u64>,
     cid_changed: Option<bool>,
 }
-
 struct ReportBuilder {
     counters: EventCounters,
     recent_events: VecDeque<TimelineEvent>,
     recent_limit: usize,
 }
-
 impl ReportBuilder {
     fn new(recent_limit: usize) -> Self {
         Self {
@@ -421,7 +395,6 @@ impl ReportBuilder {
             recent_limit: recent_limit.max(1),
         }
     }
-
     fn record(&mut self, record: &TransparencyRecord) {
         self.counters.total = self.counters.total.saturating_add(1);
         match record {
@@ -433,7 +406,6 @@ impl ReportBuilder {
             }
         }
     }
-
     fn record_bundle(&mut self, bundle: &BundleRecord) {
         match bundle.event {
             BundleEventKind::Added => self.counters.bundle_added += 1,
@@ -452,7 +424,6 @@ impl ReportBuilder {
             cid_changed: Some(bundle.cid_changed),
         });
     }
-
     fn record_resolver(&mut self, record: &ResolverRecord) {
         match record.event {
             ResolverEventKind::Added => self.counters.resolver_added += 1,
@@ -470,7 +441,6 @@ impl ReportBuilder {
             cid_changed: None,
         });
     }
-
     fn push_event(&mut self, event: TimelineEvent) {
         if self.recent_events.len() == self.recent_limit {
             self.recent_events.pop_front();
@@ -478,7 +448,6 @@ impl ReportBuilder {
         self.recent_events.push_back(event);
     }
 }
-
 #[derive(Debug, Clone)]
 struct ResolverSummary {
     resolver_id: String,
@@ -487,7 +456,6 @@ struct ResolverSummary {
     min_proof_ttl_secs: i64,
     cid_drift_total: u64,
 }
-
 impl ResolverSummary {
     fn new(resolver_id: String) -> Self {
         Self {
@@ -498,7 +466,6 @@ impl ResolverSummary {
             cid_drift_total: 0,
         }
     }
-
     fn update(&mut self, state: &BundleState) {
         self.active_zones += 1;
         self.max_proof_age_secs = self.max_proof_age_secs.max(state.proof_age_secs);
@@ -506,14 +473,11 @@ impl ResolverSummary {
         self.cid_drift_total = self.cid_drift_total.saturating_add(state.cid_drift_total);
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use norito::json::{self, Value};
     use soradns_resolver::transparency::{BundleSnapshot, TransparencyTailer};
-
-    use super::*;
-
     fn sample_snapshot(zone_version: u64, cid: &str) -> BundleSnapshot {
         BundleSnapshot {
             zone_version,
@@ -526,7 +490,6 @@ mod tests {
             freshness_signature_hex: "ff".into(),
         }
     }
-
     #[test]
     fn builder_tracks_recent_events() {
         let mut builder = ReportBuilder::new(2);
@@ -551,7 +514,6 @@ mod tests {
             BundleEventKind::Updated,
             None,
         ))));
-
         assert_eq!(builder.counters.total, 3);
         assert_eq!(builder.counters.bundle_added, 1);
         assert_eq!(builder.counters.bundle_updated, 1);
@@ -559,7 +521,6 @@ mod tests {
         assert_eq!(builder.recent_events.front().unwrap().timestamp, 30);
         assert_eq!(builder.recent_events.back().unwrap().timestamp, 40);
     }
-
     #[test]
     fn resolver_summary_accumulates_stats() {
         let states = vec![
@@ -591,12 +552,10 @@ mod tests {
         assert_eq!(summary.min_proof_ttl_secs, 40);
         assert_eq!(summary.cid_drift_total, 3);
     }
-
     #[test]
     fn sth_writer_serialises_entries() {
         let mut tailer = TransparencyTailer::new();
         use soradns_resolver::events::{ResolverEvent, ResolverEventLog};
-
         let log = ResolverEventLog {
             timestamp: 30,
             resolver_id: "resolver-a".into(),

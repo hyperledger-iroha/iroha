@@ -3,28 +3,23 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
-
 fn main() {
     // Ensure the produced dynamic library inherits the correct Python linkage flags.
     pyo3_build_config::add_extension_module_link_args();
-
     println!("cargo:rerun-if-env-changed=IROHA_PYTHON_RUNTIME_PATH");
     println!("cargo:rerun-if-env-changed=IROHA_PYTHON_SKIP_RUNTIME_LINK");
     println!("cargo:rerun-if-env-changed=PYO3_PYTHON");
     println!("cargo:rerun-if-env-changed=PYTHON_SYS_EXECUTABLE");
     println!("cargo:rerun-if-env-changed=PYTHON");
     println!("cargo:rerun-if-changed=python-runtime-path");
-
     // Tests link as executables; on macOS they also require the dynamic lookup flag set.
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         println!("cargo:rustc-link-arg=-undefined");
         println!("cargo:rustc-link-arg=dynamic_lookup");
     }
-
     if env::var_os("IROHA_PYTHON_SKIP_RUNTIME_LINK").is_some() {
         return;
     }
-
     if let Some(runtime) = python_runtime_library_path() {
         emit_runtime_link_args(&runtime);
     } else {
@@ -34,7 +29,6 @@ fn main() {
         );
     }
 }
-
 fn emit_runtime_link_args(path: &Path) {
     println!("cargo:rustc-link-arg={}", path.display());
     if env::var("CARGO_CFG_TARGET_FAMILY").as_deref() == Ok("unix")
@@ -44,7 +38,6 @@ fn emit_runtime_link_args(path: &Path) {
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", rpath.display());
     }
 }
-
 fn python_runtime_library_path() -> Option<PathBuf> {
     runtime_path_override()
         .or_else(runtime_path_from_env)
@@ -57,7 +50,6 @@ fn python_runtime_library_path() -> Option<PathBuf> {
             }
         })
 }
-
 fn framework_rpath_root(path: &Path) -> Option<PathBuf> {
     let mut current = path.parent();
     while let Some(dir) = current {
@@ -70,7 +62,6 @@ fn framework_rpath_root(path: &Path) -> Option<PathBuf> {
     }
     None
 }
-
 fn runtime_path_override() -> Option<PathBuf> {
     let manifest_dir = env::var_os("CARGO_MANIFEST_DIR")?;
     let override_file = PathBuf::from(manifest_dir).join("python-runtime-path");
@@ -81,11 +72,9 @@ fn runtime_path_override() -> Option<PathBuf> {
         .find(|line| !line.is_empty() && !line.starts_with('#'))
         .map(PathBuf::from)
 }
-
 fn runtime_path_from_env() -> Option<PathBuf> {
     env::var_os("IROHA_PYTHON_RUNTIME_PATH").map(PathBuf::from)
 }
-
 fn python_runtime_via_interpreter() -> Option<PathBuf> {
     const DISCOVERY_SCRIPT: &str = r#"
 import os
@@ -148,7 +137,6 @@ for candidate in candidates():
         sys.stdout.write(os.path.realpath(candidate))
         break
 "#;
-
     for interpreter in python_interpreter_candidates() {
         let output = Command::new(&interpreter)
             .args(["-c", DISCOVERY_SCRIPT])
@@ -157,7 +145,6 @@ for candidate in candidates():
             Ok(output) if output.status.success() => output,
             _ => continue,
         };
-
         if let Ok(path) = String::from_utf8(output.stdout) {
             let trimmed = path.trim();
             if !trimmed.is_empty() {
@@ -165,10 +152,8 @@ for candidate in candidates():
             }
         }
     }
-
     None
 }
-
 fn python_interpreter_candidates() -> Vec<String> {
     let mut candidates = Vec::<String>::new();
     push_candidate(&mut candidates, env::var("PYO3_PYTHON"));
@@ -181,7 +166,6 @@ fn python_interpreter_candidates() -> Vec<String> {
     candidates.dedup();
     candidates
 }
-
 fn push_candidate(list: &mut Vec<String>, value: Result<String, env::VarError>) {
     if let Ok(value) = value
         && !list.iter().any(|existing| existing == &value)

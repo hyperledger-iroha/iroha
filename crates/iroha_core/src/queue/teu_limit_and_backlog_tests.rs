@@ -3,23 +3,18 @@ async fn push_tx() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
-
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-
     let queue = Queue::test(config_factory(), &time_source);
-
     queue
         .push(accepted_tx_by_someone(&time_source), state.view())
         .expect("Failed to push tx into queue");
 }
-
 #[test]
 fn enforce_lane_teu_limits_defers_when_capacity_exceeded() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new(world_with_test_domains(), kura, query_handle);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-
     // Prepare a representative transaction so we can size the lane capacity to its TEU weight.
     let first_tx = accepted_tx_by_someone(&time_source);
     let lane_capacity = Queue::compute_teu_weight(&first_tx);
@@ -27,7 +22,6 @@ fn enforce_lane_teu_limits_defers_when_capacity_exceeded() {
         lane_capacity > 0,
         "expected positive TEU weight for sample transaction"
     );
-
     let test_lane = LaneId::new(7);
     let test_dataspace = DataSpaceId::new(1);
     install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
@@ -44,12 +38,10 @@ fn enforce_lane_teu_limits_defers_when_capacity_exceeded() {
         &[(test_lane, test_dataspace)],
     );
     let queue = Arc::new(queue_inner);
-
     let first_hash = first_tx.as_ref().hash();
     queue
         .push(first_tx, state.view())
         .expect("first push should succeed");
-
     let second_tx = accepted_tx_by_someone(&time_source);
     let second_hash = second_tx.as_ref().hash();
     queue
@@ -65,7 +57,6 @@ fn enforce_lane_teu_limits_defers_when_capacity_exceeded() {
         fallback: scheduling,
         per_lane: BTreeMap::from([(test_lane, scheduling)]),
     };
-
     let mut deferred = queue.enforce_lane_teu_limits(&mut guards);
     assert_eq!(
         guards.len(),
@@ -84,13 +75,11 @@ fn enforce_lane_teu_limits_defers_when_capacity_exceeded() {
         "second transaction should be deferred"
     );
     assert_eq!(guards[0].routing().lane_id, test_lane);
-
     drop(guards);
     *queue.nexus_limits.write() = QueueLimits::from_nexus(&state.nexus_snapshot());
     queue
         .return_transaction_guards(&mut deferred, state.as_ref())
         .expect("returning deferred guard should succeed once capacity resets");
-
     let next = queue.collect_transactions_for_block(&state.view(), nonzero!(1usize));
     assert_eq!(
         next.len(),
@@ -99,14 +88,12 @@ fn enforce_lane_teu_limits_defers_when_capacity_exceeded() {
     );
     assert_eq!(next[0].as_ref().hash(), second_hash);
 }
-
 #[test]
 fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new(world_with_test_domains(), kura, query_handle);
     let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
-
     let (account_id, key_pair) = gen_account_in("wonderland");
     let first_tx = accepted_tx_with(
         account_id.clone(),
@@ -123,7 +110,6 @@ fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
         lane_capacity > 0,
         "expected positive TEU weight for sample transaction"
     );
-
     let test_lane = LaneId::new(9);
     let test_dataspace = DataSpaceId::new(3);
     let (lane_catalog, dataspace_catalog) =
@@ -152,12 +138,10 @@ fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
     state.set_nexus(nexus).expect("set Nexus config");
     let state = Arc::new(state);
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
-
     let first_hash = first_tx.as_ref().hash();
     queue
         .push(first_tx, state.view())
         .expect("first push should succeed");
-
     time_handle.advance(Duration::from_millis(1));
     let second_tx = accepted_tx_with(
         account_id,
@@ -173,10 +157,8 @@ fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
     queue
         .push(second_tx, state.view())
         .expect("second push should succeed");
-
     let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
     assert_eq!(guards.len(), 2, "expected both transactions before gating");
-
     let mut consumed = BTreeMap::new();
     let mut deferred = queue
         .enforce_lane_teu_limits_with_consumption_and_routing_plans(&mut guards, &mut consumed);
@@ -187,24 +169,20 @@ fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
         first_hash,
         "first transaction should remain executable"
     );
-
     let deferred_tx = deferred[0].clone_accepted();
     let deferred_plan = deferred[0].routing_plan();
     let deferred_routing = deferred_plan.coordinator_route();
     assert_eq!(deferred_tx.as_ref().hash(), second_hash);
     assert_eq!(deferred_routing.lane_id, test_lane);
     assert_eq!(deferred_routing.dataspace_id, test_dataspace);
-
     drop(guards);
     queue
         .return_transaction_guards(&mut deferred, state.as_ref())
         .expect("deferred guard should return atomically");
-
     let next = queue.collect_transactions_for_block(&state.view(), nonzero!(1usize));
     assert_eq!(next.len(), 1, "deferred transaction should be queued next");
     assert_eq!(next[0].as_ref().hash(), second_hash);
 }
-
 #[test]
 fn enforce_lane_teu_limits_preserves_native_amx_requeue_plan() {
     let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -225,7 +203,6 @@ fn enforce_lane_teu_limits_preserves_native_amx_requeue_plan() {
     let coordinator = first_plan.coordinator_route();
     assert_eq!(coordinator, second_plan.coordinator_route());
     assert!(matches!(second_plan, RoutingPlan::NativeAmx(_)));
-
     let first_teu = Queue::compute_teu_weight(&first_tx);
     assert!(first_teu > 0, "expected positive TEU weight");
     {
@@ -248,7 +225,6 @@ fn enforce_lane_teu_limits_preserves_native_amx_requeue_plan() {
     }
     let state = Arc::new(state);
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
-
     let first_hash = first_tx.hash();
     queue
         .push_with_gossip_payload_with_state_and_routing_plan(
@@ -274,17 +250,14 @@ fn enforce_lane_teu_limits_preserves_native_amx_requeue_plan() {
             .teu_capacity,
         first_teu
     );
-
     let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
     assert_eq!(guards.len(), 2, "expected both transactions before gating");
-
     let mut consumed = BTreeMap::new();
     let mut deferred = queue
         .enforce_lane_teu_limits_with_consumption_and_routing_plans(&mut guards, &mut consumed);
     assert_eq!(guards.len(), 1, "one Native AMX transaction should remain");
     assert_eq!(deferred.len(), 1, "one Native AMX transaction should defer");
     assert_eq!(guards[0].as_ref().hash(), first_hash);
-
     let deferred_tx = deferred[0].clone_accepted();
     let deferred_plan = deferred[0].routing_plan();
     assert_eq!(deferred_tx.as_ref().hash(), second_hash);
@@ -293,12 +266,10 @@ fn enforce_lane_teu_limits_preserves_native_amx_requeue_plan() {
         "TEU deferral must preserve the full Native AMX routing plan"
     );
     assert!(matches!(deferred_plan, RoutingPlan::NativeAmx(_)));
-
     drop(guards);
     queue
         .return_transaction_guards(&mut deferred, state.as_ref())
         .expect("deferred Native AMX guard should return atomically");
-
     let next = queue.collect_transactions_for_block(&state.view(), nonzero!(1usize));
     assert_eq!(
         next.len(),
@@ -308,40 +279,33 @@ fn enforce_lane_teu_limits_preserves_native_amx_requeue_plan() {
     assert_eq!(next[0].as_ref().hash(), second_hash);
     assert_eq!(next[0].routing_plan(), second_plan);
 }
-
 #[test]
 fn overweight_lane_not_starved_when_not_first_in_batch() {
     struct SequenceRouter {
         decisions: parking_lot::Mutex<Vec<RoutingDecision>>,
     }
-
     impl LaneRouter for SequenceRouter {
         fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
             let mut decisions = self.decisions.lock();
             decisions.remove(0)
         }
     }
-
     let lane_a = LaneId::new(1);
     let lane_b = LaneId::new(2);
     let dataspace_a = DataSpaceId::new(11);
     let dataspace_b = DataSpaceId::new(12);
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new(world_with_test_domains(), kura, query_handle);
     install_test_nexus_routes(&mut state, &[(lane_a, dataspace_a), (lane_b, dataspace_b)]);
     let state = Arc::new(state);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-
     let first_tx = accepted_tx_by_someone(&time_source);
     let second_tx = accepted_tx_by_someone(&time_source);
     let overweight_teu = Queue::compute_teu_weight(&second_tx);
     assert!(overweight_teu > 1, "expected non-trivial TEU weight");
-
     let lane_a_limits = LaneSchedulingLimits::new(overweight_teu.saturating_mul(2), 0);
     let lane_b_bounds = LaneSchedulingLimits::new(overweight_teu.saturating_sub(1), 0);
-
     let router: Arc<dyn LaneRouter> = Arc::new(SequenceRouter {
         decisions: parking_lot::Mutex::new(vec![
             RoutingDecision::new(lane_a, dataspace_a),
@@ -350,7 +314,6 @@ fn overweight_lane_not_starved_when_not_first_in_batch() {
             RoutingDecision::new(lane_b, dataspace_b),
         ]),
     });
-
     let queue_inner = Queue::test_with_router_for_routes(
         config_factory(),
         &time_source,
@@ -358,24 +321,20 @@ fn overweight_lane_not_starved_when_not_first_in_batch() {
         &[(lane_a, dataspace_a), (lane_b, dataspace_b)],
     );
     let queue = Arc::new(queue_inner);
-
     queue
         .push(first_tx, state.view())
         .expect("lane A push should succeed");
     queue
         .push(second_tx, state.view())
         .expect("lane B push should succeed");
-
     let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
     assert_eq!(guards.len(), 2, "expected both transactions before gating");
     *queue.nexus_limits.write() = QueueLimits {
         fallback: lane_b_bounds,
         per_lane: BTreeMap::from([(lane_a, lane_a_limits), (lane_b, lane_b_bounds)]),
     };
-
     let mut consumed = BTreeMap::new();
     let deferred = queue.enforce_lane_teu_limits_with_consumption(&mut guards, &mut consumed);
-
     assert!(
         deferred.is_empty(),
         "overweight transaction for lane B must not be starved"
@@ -385,7 +344,6 @@ fn overweight_lane_not_starved_when_not_first_in_batch() {
         "lane B transaction should be retained"
     );
 }
-
 #[test]
 fn enforce_lane_teu_limits_with_consumption_respects_existing_usage() {
     let test_lane = LaneId::new(11);
@@ -396,11 +354,9 @@ fn enforce_lane_teu_limits_with_consumption_respects_existing_usage() {
     install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
     let state = Arc::new(state);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-
     let first_tx = accepted_tx_by_someone(&time_source);
     let lane_capacity = Queue::compute_teu_weight(&first_tx);
     assert!(lane_capacity > 0, "expected positive TEU weight");
-
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
         lane: test_lane,
         dataspace: test_dataspace,
@@ -413,27 +369,22 @@ fn enforce_lane_teu_limits_with_consumption_respects_existing_usage() {
         &[(test_lane, test_dataspace)],
     );
     let queue = Arc::new(queue_inner);
-
     queue
         .push(first_tx, state.view())
         .expect("first push should succeed");
-
     let second_tx = accepted_tx_by_someone(&time_source);
     queue
         .push(second_tx, state.view())
         .expect("second push should succeed");
-
     let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
     assert_eq!(guards.len(), 2, "expected both transactions before gating");
     *queue.nexus_limits.write() = QueueLimits {
         fallback: scheduling,
         per_lane: BTreeMap::from([(test_lane, scheduling)]),
     };
-
     let mut consumed = BTreeMap::new();
     consumed.insert(test_lane, lane_capacity);
     let deferred = queue.enforce_lane_teu_limits_with_consumption(&mut guards, &mut consumed);
-
     assert!(guards.is_empty(), "all transactions should be deferred");
     assert_eq!(deferred.len(), 2, "both transactions should defer");
     assert_eq!(
@@ -442,7 +393,6 @@ fn enforce_lane_teu_limits_with_consumption_respects_existing_usage() {
         "lane consumption should remain capped at the configured capacity"
     );
 }
-
 #[test]
 fn enforce_lane_teu_limits_is_deterministic_across_guard_order() {
     fn run_with_order<F>(
@@ -461,10 +411,8 @@ fn enforce_lane_teu_limits_is_deterministic_across_guard_order() {
         install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
         let state = Arc::new(state);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-
         let lane_capacity = Queue::compute_teu_weight(first_tx);
         assert!(lane_capacity > 0, "expected positive TEU weight");
-
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: test_lane,
             dataspace: test_dataspace,
@@ -477,14 +425,12 @@ fn enforce_lane_teu_limits_is_deterministic_across_guard_order() {
             &[(test_lane, test_dataspace)],
         );
         let queue = Arc::new(queue_inner);
-
         queue
             .push(first_tx.clone(), state.view())
             .expect("first push should succeed");
         queue
             .push(second_tx.clone(), state.view())
             .expect("second push should succeed");
-
         let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
         assert_eq!(guards.len(), 2, "expected both transactions before gating");
         reorder(&mut guards);
@@ -492,10 +438,8 @@ fn enforce_lane_teu_limits_is_deterministic_across_guard_order() {
             fallback: scheduling,
             per_lane: BTreeMap::from([(test_lane, scheduling)]),
         };
-
         let mut consumed = BTreeMap::new();
         let deferred = queue.enforce_lane_teu_limits_with_consumption(&mut guards, &mut consumed);
-
         let retained_hashes = guards
             .iter()
             .map(|guard| guard.tx.as_ref().hash())
@@ -506,12 +450,10 @@ fn enforce_lane_teu_limits_is_deterministic_across_guard_order() {
             .collect::<Vec<_>>();
         (retained_hashes, deferred_hashes)
     }
-
     let (_seed_handle, seed_time_source) = TimeSource::new_mock(Duration::default());
     let (account_id, key_pair) = gen_account_in("wonderland");
     let first_template = accepted_tx_by(account_id.clone(), &key_pair, &seed_time_source);
     let second_template = accepted_tx_by(account_id, &key_pair, &seed_time_source);
-
     let (retained_normal, deferred_normal) =
         run_with_order(|_| {}, &first_template, &second_template);
     let (retained_reversed, deferred_reversed) =
@@ -525,17 +467,14 @@ fn enforce_lane_teu_limits_is_deterministic_across_guard_order() {
         "lane gating should defer the same transactions regardless of guard order"
     );
 }
-
 #[cfg(feature = "telemetry")]
 #[test]
 fn enforce_lane_teu_limits_updates_telemetry_counters() {
     use std::num::NonZeroU32;
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let metrics = Arc::new(Metrics::default());
     let telemetry = StateTelemetry::new(metrics.clone(), true);
-
     let test_lane = LaneId::new(11);
     let test_dataspace = DataSpaceId::new(3);
     let test_dataspace_alias = "dataspace3";
@@ -567,7 +506,6 @@ fn enforce_lane_teu_limits_updates_telemetry_counters() {
     let dataspace_catalog =
         DataSpaceCatalog::new(vec![dataspace_metadata.clone()]).expect("valid dataspace catalog");
     telemetry.set_nexus_catalogs(&lane_catalog, &dataspace_catalog);
-
     let mut state = State::with_telemetry(
         world_with_test_domains(),
         kura.clone(),
@@ -595,7 +533,6 @@ fn enforce_lane_teu_limits_updates_telemetry_counters() {
         .set_nexus(nexus)
         .expect("apply telemetry test Nexus state");
     let state = Arc::new(state);
-
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
         lane: test_lane,
         dataspace: test_dataspace,
@@ -618,7 +555,6 @@ fn enforce_lane_teu_limits_updates_telemetry_counters() {
         .dataspace_teu_pending
         .insert((test_lane, test_dataspace), PendingTeu::default());
     let queue = Arc::new(queue_inner);
-
     let first_hash = first_tx.as_ref().hash();
     queue
         .push(first_tx, state.view())
@@ -628,23 +564,19 @@ fn enforce_lane_teu_limits_updates_telemetry_counters() {
     queue
         .push(second_tx, state.view())
         .expect("second push should succeed");
-
     let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
     assert_eq!(guards.len(), 2);
-
     let deferred = queue.enforce_lane_teu_limits(&mut guards);
     assert_eq!(guards.len(), 1);
     assert_eq!(deferred.len(), 1);
     assert_eq!(guards[0].as_ref().hash(), first_hash);
     assert_eq!(deferred[0].as_ref().hash(), second_hash);
-
     let lane_label = test_lane.as_u32().to_string();
     let recorded = metrics
         .nexus_scheduler_lane_teu_deferral_total
         .with_label_values(&[lane_label.as_str(), "cap_exceeded"])
         .get();
     assert_eq!(recorded, lane_capacity);
-
     let lane_snapshots = metrics
         .nexus_scheduler_lane_teu_status
         .read()
@@ -654,17 +586,14 @@ fn enforce_lane_teu_limits_updates_telemetry_counters() {
         .expect("lane snapshot missing");
     assert_eq!(snapshot.deferrals.cap_exceeded, lane_capacity);
 }
-
 #[cfg(feature = "telemetry")]
 #[test]
 fn queue_backlog_reports_available_lane_headroom() {
     use std::num::NonZeroU32;
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let metrics = Arc::new(Metrics::default());
     let telemetry = StateTelemetry::new(metrics.clone(), true);
-
     let test_lane = LaneId::new(13);
     let test_dataspace = DataSpaceId::new(9);
     let test_dataspace_alias = "dataspace9";
@@ -702,7 +631,6 @@ fn queue_backlog_reports_available_lane_headroom() {
     let dataspace_catalog =
         DataSpaceCatalog::new(vec![dataspace_metadata.clone()]).expect("valid dataspace catalog");
     telemetry.set_nexus_catalogs(&lane_catalog, &dataspace_catalog);
-
     let mut state = State::with_telemetry(
         world_with_test_domains(),
         kura.clone(),
@@ -730,7 +658,6 @@ fn queue_backlog_reports_available_lane_headroom() {
         .set_nexus(nexus)
         .expect("apply backlog test Nexus state");
     let state = Arc::new(state);
-
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
         lane: test_lane,
         dataspace: test_dataspace,
@@ -753,18 +680,15 @@ fn queue_backlog_reports_available_lane_headroom() {
         .dataspace_teu_pending
         .insert((test_lane, test_dataspace), PendingTeu::default());
     let queue = Arc::new(queue_inner);
-
     queue
         .push(first_tx, state.view())
         .expect("first push should succeed");
     queue
         .push(second_tx, state.view())
         .expect("second push should succeed");
-
     let pending_teu = first_teu.saturating_add(second_teu);
     let expected_committed = pending_teu.min(lane_capacity);
     let expected_headroom = lane_capacity.saturating_sub(expected_committed);
-
     let lane_label = test_lane.as_u32().to_string();
     let headroom_events = metrics
         .nexus_scheduler_lane_headroom_events_total
@@ -774,7 +698,6 @@ fn queue_backlog_reports_available_lane_headroom() {
         headroom_events, 0,
         "backlog snapshots should not emit warnings"
     );
-
     let lane_snapshots = metrics
         .nexus_scheduler_lane_teu_status
         .read()

@@ -1,12 +1,9 @@
-use std::sync::Mutex;
-
 use ivm::kotodama::{
     compiler::Compiler,
     i18n::{self, Language, Message},
 };
-
+use std::sync::Mutex;
 static LANG_LOCK: Mutex<()> = Mutex::new(());
-
 #[test]
 fn detect_language_default() {
     use std::env;
@@ -38,13 +35,11 @@ fn detect_language_default() {
         }
     }
 }
-
 #[test]
 fn translate_unknown_param() {
     let msg = i18n::translate(Language::French, Message::UnknownParam("x"));
     assert_eq!(msg, "Param inconnu x");
 }
-
 #[test]
 fn compiler_language_override_preserves_structured_diagnostics() {
     // CompilerSession owns source diagnostics so every compiler facade emits the
@@ -58,13 +53,11 @@ fn compiler_language_override_preserves_structured_diagnostics() {
         "unexpected error message: {err}"
     );
 }
-
 #[test]
 fn translate_parser_error() {
     let msg = i18n::translate(Language::Spanish, Message::ParserError("oops"));
     assert_eq!(msg, "Error del analizador: oops");
 }
-
 #[test]
 fn detect_language_portuguese() {
     use std::env;
@@ -96,13 +89,11 @@ fn detect_language_portuguese() {
         }
     }
 }
-
 #[test]
 fn translate_parser_error_portuguese() {
     let msg = i18n::translate(Language::Portuguese, Message::ParserError("oops"));
     assert_eq!(msg, "Erro do analisador: oops");
 }
-
 #[test]
 fn rtl_placeholders_use_direction_isolates() {
     let arabic = i18n::translate(Language::Arabic, Message::UnknownParam("X"));

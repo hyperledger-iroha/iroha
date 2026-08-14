@@ -11,54 +11,46 @@
 )]
 pub struct PrivacyP256PointV1(
     /// The exact 33-byte compressed SEC1 value.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub [u8; 33],
 );
-
 impl PrivacyP256PointV1 {
     /// Construct a point encoding from exactly 33 bytes.
     #[must_use]
     pub const fn new(bytes: [u8; 33]) -> Self {
         Self(bytes)
     }
-
     /// Borrow the exact compressed SEC1 bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 33] {
         &self.0
     }
-
     /// Consume the value and return its compressed SEC1 bytes.
     #[must_use]
     pub const fn into_bytes(self) -> [u8; 33] {
         self.0
     }
-
     /// Return `true` when every encoded byte is zero.
     #[must_use]
     pub fn is_zero(&self) -> bool {
         self.0.iter().all(|byte| *byte == 0)
     }
 }
-
 impl From<[u8; 33]> for PrivacyP256PointV1 {
     fn from(bytes: [u8; 33]) -> Self {
         Self::new(bytes)
     }
 }
-
 impl From<PrivacyP256PointV1> for [u8; 33] {
     fn from(value: PrivacyP256PointV1) -> Self {
         value.into_bytes()
     }
 }
-
 impl AsRef<[u8; 33]> for PrivacyP256PointV1 {
     fn as_ref(&self) -> &[u8; 33] {
         self.as_bytes()
     }
 }
-
 /// Canonical twisted-ElGamal ciphertext `(C_L, C_R)` over P-256.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -72,7 +64,6 @@ pub struct PrivacyP256CiphertextV1 {
     /// `C_R = g^r h^v`.
     pub right: PrivacyP256PointV1,
 }
-
 /// Governed policy namespace payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -84,7 +75,6 @@ pub struct PrivacyPolicyNamespaceV1 {
     /// Exact policy identity.
     pub policy_id: PrivacyPolicyIdV1,
 }
-
 /// Pool namespace payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -96,7 +86,6 @@ pub struct PrivacyPoolNamespaceV1 {
     /// Exact pool identity.
     pub pool_id: PrivacyPoolIdV1,
 }
-
 /// Issuer, admitted-identity registry, and policy namespace payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -112,7 +101,6 @@ pub struct PrivacyIssuerRegistryPolicyNamespaceV1 {
     /// Exact admission policy.
     pub policy_id: PrivacyPolicyIdV1,
 }
-
 /// Trust-anchor-wide namespace payload.
 ///
 /// This scope owns the single CA-membership root derived from a complete
@@ -127,7 +115,6 @@ pub struct PrivacyTrustAnchorNamespaceV1 {
     /// Exact trust-anchor issuer.
     pub trust_anchor_id: PrivacyIssuerIdV1,
 }
-
 /// Trust-anchor and certificate-policy namespace payload.
 ///
 /// This scope owns policy-specific statement state and the corresponding
@@ -144,7 +131,6 @@ pub struct PrivacyTrustAnchorPolicyNamespaceV1 {
     /// Exact certificate policy.
     pub policy_id: PrivacyPolicyIdV1,
 }
-
 /// Governed parameter namespace payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -156,7 +142,6 @@ pub struct PrivacyParameterNamespaceV1 {
     /// Exact parameter-set identity.
     pub parameter_id: PrivacyParameterIdV1,
 }
-
 /// Issuer and selective-disclosure policy namespace payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -170,7 +155,6 @@ pub struct PrivacyIssuerPolicyNamespaceV1 {
     /// Exact selective-disclosure policy.
     pub policy_id: PrivacyPolicyIdV1,
 }
-
 /// Pool and private-program namespace payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -184,7 +168,6 @@ pub struct PrivacyPoolProgramNamespaceV1 {
     /// Exact private program.
     pub program_id: PrivacyProgramIdV1,
 }
-
 /// Protocol-specific portion of a replay, output, or root namespace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -213,7 +196,6 @@ pub enum PrivacyNamespaceScopeV1 {
     /// Private-note pool and exact IVM program.
     PoolProgram(PrivacyPoolProgramNamespaceV1),
 }
-
 /// Namespace component selected by validation diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrivacyNamespaceComponentV1 {
@@ -230,7 +212,6 @@ pub enum PrivacyNamespaceComponentV1 {
     /// Private IVM program identifier.
     Program,
 }
-
 /// Closed namespace for one protocol's replay, output, and root state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -242,14 +223,12 @@ pub struct PrivacyNamespaceV1 {
     protocol_id: PrivacyProtocolIdV1,
     scope: PrivacyNamespaceScopeV1,
 }
-
 impl PrivacyNamespaceV1 {
     /// Construct a namespace from a closed protocol and scope.
     #[must_use]
     pub const fn new(protocol_id: PrivacyProtocolIdV1, scope: PrivacyNamespaceScopeV1) -> Self {
         Self { protocol_id, scope }
     }
-
     /// Derive the only canonical namespace for a typed public statement.
     #[must_use]
     pub const fn from_statement(statement: &PrivacyStatementV1) -> Self {
@@ -335,19 +314,16 @@ impl PrivacyNamespaceV1 {
             ),
         }
     }
-
     /// Return the protocol owning this namespace.
     #[must_use]
     pub const fn protocol_id(self) -> PrivacyProtocolIdV1 {
         self.protocol_id
     }
-
     /// Return the protocol-specific scope.
     #[must_use]
     pub const fn scope(self) -> PrivacyNamespaceScopeV1 {
         self.scope
     }
-
     /// Validate protocol/scope compatibility and nonzero components.
     ///
     /// # Errors
@@ -455,7 +431,6 @@ impl PrivacyNamespaceV1 {
         }
     }
 }
-
 fn validate_namespace_component(
     nonzero: bool,
     component: PrivacyNamespaceComponentV1,
@@ -465,7 +440,6 @@ fn validate_namespace_component(
     }
     Ok(())
 }
-
 /// Validation failure for [`PrivacyNamespaceV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyNamespaceValidationError {
@@ -482,7 +456,6 @@ pub enum PrivacyNamespaceValidationError {
         component: PrivacyNamespaceComponentV1,
     },
 }
-
 /// Authority responsible for advancing one root role after initialization.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -499,7 +472,6 @@ pub enum PrivacyRootManagementV1 {
     /// Roots advance through an authorized governance publication.
     GovernanceManaged,
 }
-
 /// Semantic role of one canonical root inside a protocol namespace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -526,7 +498,6 @@ pub enum PrivacyRootRoleV1 {
     /// Private IVM program state.
     ProgramState,
 }
-
 impl PrivacyRootRoleV1 {
     /// Return the sole authority model for this root role.
     #[must_use]
@@ -542,7 +513,6 @@ impl PrivacyRootRoleV1 {
             }
         }
     }
-
     /// Return whether this role is meaningful for `protocol_id`.
     #[must_use]
     pub const fn is_compatible_with(self, protocol_id: PrivacyProtocolIdV1) -> bool {
@@ -571,7 +541,6 @@ impl PrivacyRootRoleV1 {
                 )
         )
     }
-
     /// Return whether this role is meaningful for the exact namespace scope.
     ///
     /// X.509 has one trust-anchor-wide CA-membership root. Its signed CRL is a
@@ -594,7 +563,6 @@ impl PrivacyRootRoleV1 {
         }
     }
 }
-
 /// Governance payload publishing one canonical privacy root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -612,7 +580,6 @@ pub struct PrivacyRootPublicationV1 {
     /// Published canonical root.
     pub root: PrivacyRootV1,
 }
-
 impl PrivacyRootPublicationV1 {
     /// Construct and validate a root publication.
     ///
@@ -635,7 +602,6 @@ impl PrivacyRootPublicationV1 {
         publication.validate()?;
         Ok(publication)
     }
-
     /// Validate this root publication.
     ///
     /// # Errors
@@ -668,7 +634,6 @@ impl PrivacyRootPublicationV1 {
         }
         Ok(())
     }
-
     /// Hash this publication using canonical Norito bytes and its own domain.
     ///
     /// # Errors
@@ -689,7 +654,6 @@ impl PrivacyRootPublicationV1 {
         ))
     }
 }
-
 /// Validation failure for [`PrivacyRootPublicationV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyRootPublicationValidationError {
@@ -719,7 +683,6 @@ pub enum PrivacyRootPublicationValidationError {
     #[error("privacy root publication root must be non-zero")]
     ZeroRoot,
 }
-
 /// Governance payload establishing one Orchard pool's immutable public bridge.
 ///
 /// The payload deliberately contains neither an initial root nor an initial
@@ -742,7 +705,6 @@ pub struct PrivacyOrchardPoolBootstrapV1 {
     /// Governed public reserve account used for deposits and withdrawals.
     pub reserve_account: AccountId,
 }
-
 impl PrivacyOrchardPoolBootstrapV1 {
     /// Construct and validate one canonical Orchard pool bootstrap.
     ///
@@ -764,7 +726,6 @@ impl PrivacyOrchardPoolBootstrapV1 {
         bootstrap.validate()?;
         Ok(bootstrap)
     }
-
     /// Return the sole protocol-scoped namespace for this pool.
     #[must_use]
     pub const fn namespace(&self) -> PrivacyNamespaceV1 {
@@ -775,7 +736,6 @@ impl PrivacyOrchardPoolBootstrapV1 {
             }),
         )
     }
-
     /// Validate the closed Orchard namespace fields.
     ///
     /// # Errors
@@ -795,7 +755,6 @@ impl PrivacyOrchardPoolBootstrapV1 {
             .validate()
             .map_err(PrivacyOrchardPoolBootstrapValidationErrorV1::Namespace)
     }
-
     /// Hash the exact canonical bootstrap in its own provenance domain.
     ///
     /// # Errors
@@ -816,7 +775,6 @@ impl PrivacyOrchardPoolBootstrapV1 {
         ))
     }
 }
-
 /// Structural failure for [`PrivacyOrchardPoolBootstrapV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyOrchardPoolBootstrapValidationErrorV1 {
@@ -830,10 +788,8 @@ pub enum PrivacyOrchardPoolBootstrapValidationErrorV1 {
     #[error("Orchard pool bootstrap namespace is invalid: {0}")]
     Namespace(PrivacyNamespaceValidationError),
 }
-
 /// Exact unframed byte width of one FCMP++ `(O,I,C)` tuple.
 pub const PRIVACY_FCMP_OUTPUT_TUPLE_BYTES_V1: usize = 3 * 32;
-
 /// One complete FCMP++ output-tree leaf `(O, I, C)`.
 ///
 /// All three values are canonical compressed prime-order Edwards points. The
@@ -848,16 +804,15 @@ pub const PRIVACY_FCMP_OUTPUT_TUPLE_BYTES_V1: usize = 3 * 32;
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyFcmpOutputTupleV1 {
     /// One-time output key `O`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub output_key: [u8; 32],
     /// Per-output linking-tag generator `I`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub linking_tag_generator: [u8; 32],
     /// Amount commitment `C`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub amount_commitment: [u8; 32],
 }
-
 impl PrivacyFcmpOutputTupleV1 {
     /// Derive the ledger-only identifier used for duplicate detection and
     /// output lookup.
@@ -872,7 +827,6 @@ impl PrivacyFcmpOutputTupleV1 {
         hasher.update(self.amount_commitment);
         PrivacyFcmpOutputIdV1::new(hasher.finalize().into())
     }
-
     /// Reject the reserved all-zero encoding before native curve validation.
     ///
     /// # Errors
@@ -897,7 +851,6 @@ impl PrivacyFcmpOutputTupleV1 {
         Ok(())
     }
 }
-
 /// FCMP++ output-tuple component selected by validation diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrivacyFcmpOutputComponentV1 {
@@ -908,7 +861,6 @@ pub enum PrivacyFcmpOutputComponentV1 {
     /// Amount commitment `C`.
     AmountCommitment,
 }
-
 /// Structural failure for one FCMP++ output tuple.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyFcmpOutputTupleValidationErrorV1 {
@@ -919,7 +871,6 @@ pub enum PrivacyFcmpOutputTupleValidationErrorV1 {
         component: PrivacyFcmpOutputComponentV1,
     },
 }
-
 /// Canonical typed root of the alternating FCMP++ Selene/Helios curve tree.
 ///
 /// Odd layer counts identify Selene roots and even layer counts identify
@@ -935,14 +886,12 @@ pub struct PrivacyFcmpTreeRootV1 {
     /// Number of alternating curve-tree layers.
     pub layers: u8,
     /// Canonical compressed Selene or Helios point selected by layer parity.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub point: [u8; 32],
 }
-
 impl PrivacyFcmpTreeRootV1 {
     /// Largest layer count admitted by the first-release FCMP++ wire.
     pub const MAX_LAYERS: u8 = 32;
-
     /// Validate the closed structural shape before native curve validation.
     ///
     /// # Errors
@@ -960,7 +909,6 @@ impl PrivacyFcmpTreeRootV1 {
         }
         Ok(())
     }
-
     /// Commit the typed root into the shared 32-byte retained-root index.
     ///
     /// Durable FCMP++ accumulator state still stores the complete typed root;
@@ -974,7 +922,6 @@ impl PrivacyFcmpTreeRootV1 {
         PrivacyRootV1::new(hasher.finalize().into())
     }
 }
-
 /// Structural failure for one typed FCMP++ tree root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyFcmpTreeRootValidationErrorV1 {
@@ -990,7 +937,6 @@ pub enum PrivacyFcmpTreeRootValidationErrorV1 {
     #[error("FCMP++ tree root point must be non-zero")]
     ZeroPoint,
 }
-
 /// Complete public FCMP++ relation for one hidden consumed output.
 ///
 /// The IFC1 proof duplicates `O~`, `I~`, and `R`; the native decoder must
@@ -1004,21 +950,20 @@ pub enum PrivacyFcmpTreeRootValidationErrorV1 {
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyFcmpInputPublicV1 {
     /// Rerandomized output key `O~`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub output_key_tilde: [u8; 32],
     /// Rerandomized linking-tag generator `I~`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub linking_tag_generator_tilde: [u8; 32],
     /// Rerandomization commitment `R`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub rerandomization_commitment: [u8; 32],
     /// Pseudo output amount commitment `C~`.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub pseudo_out: [u8; 32],
     /// Linkability key image `L`.
     pub key_image: PrivacyFcmpKeyImageV1,
 }
-
 impl PrivacyFcmpInputPublicV1 {
     /// Reject the reserved all-zero encoding before native curve validation.
     ///
@@ -1052,7 +997,6 @@ impl PrivacyFcmpInputPublicV1 {
         Ok(())
     }
 }
-
 /// FCMP++ input component selected by validation diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrivacyFcmpInputComponentV1 {
@@ -1067,7 +1011,6 @@ pub enum PrivacyFcmpInputComponentV1 {
     /// Linkability key image `L`.
     KeyImage,
 }
-
 /// Structural failure for one FCMP++ public input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyFcmpInputValidationErrorV1 {
@@ -1078,7 +1021,6 @@ pub enum PrivacyFcmpInputValidationErrorV1 {
         component: PrivacyFcmpInputComponentV1,
     },
 }
-
 /// Magic prefix of the sole first-release FCMP++ wallet ciphertext codec.
 pub const PRIVACY_FCMP_ENCRYPTED_OUTPUT_MAGIC_V1: [u8; 4] = *b"IFCE";
 /// XChaCha20-Poly1305 nonce width in the FCMP++ wallet ciphertext.
@@ -1094,7 +1036,6 @@ pub const PRIVACY_FCMP_ENCRYPTED_OUTPUT_BYTES_V1: usize = 4
     + PRIVACY_FCMP_ENCRYPTED_OUTPUT_NONCE_BYTES_V1
     + PRIVACY_FCMP_NOTE_PLAINTEXT_BYTES_V1
     + PRIVACY_FCMP_ENCRYPTED_OUTPUT_TAG_BYTES_V1;
-
 /// Magic prefix of the sole first-release private-IVM wallet ciphertext.
 pub const PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_MAGIC_V1: [u8; 4] = *b"IPNE";
 /// XChaCha20-Poly1305 nonce width in a private-IVM wallet ciphertext.
@@ -1110,7 +1051,6 @@ pub const PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1: usize = 4
     + PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_NONCE_BYTES_V1
     + PRIVACY_IVM_PRIVATE_NOTE_PLAINTEXT_BYTES_V1
     + PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_TAG_BYTES_V1;
-
 /// Typed encrypted payload for one complete FCMP++ output tuple.
 ///
 /// The output identifier is a ledger index only. The statement and native
@@ -1130,10 +1070,9 @@ pub struct PrivacyFcmpEncryptedOutputV1 {
     /// Identifier of the ordered public output tuple.
     pub output_id: PrivacyFcmpOutputIdV1,
     /// Exact `IFCE || nonce || XChaCha20-Poly1305(FCMP note)` bytes.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub ciphertext: Vec<u8>,
 }
-
 /// Immutable governance payload for one FCMP++ complete-output-set pool.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1149,7 +1088,6 @@ pub struct PrivacyFcmpPoolBootstrapV1 {
     /// Non-empty complete genesis output set in strict output-identifier order.
     pub initial_outputs: Vec<PrivacyFcmpOutputTupleV1>,
 }
-
 /// Immutable governance payload for one private-IVM program pool.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1171,7 +1109,6 @@ pub struct PrivacyIvmPrivateNotePoolBootstrapV1 {
     /// Non-empty genesis note set in strict commitment order.
     pub initial_note_commitments: Vec<PrivacyCommitmentV1>,
 }
-
 /// Immutable governance payload for one PQ-MASP note pool.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1187,7 +1124,6 @@ pub struct PrivacyPqMaspPoolBootstrapV1 {
     /// Non-empty genesis note set in strict commitment order.
     pub initial_note_commitments: Vec<PrivacyCommitmentV1>,
 }
-
 /// Closed typed bootstrap for proof-managed pools that do not use Orchard's
 /// compact frontier.
 ///
@@ -1215,7 +1151,6 @@ pub enum PrivacyProofManagedPoolBootstrapV1 {
     #[cfg_attr(feature = "json", norito(rename = "pq-masp-stark-v0"))]
     PqMaspStarkV0(PrivacyPqMaspPoolBootstrapV1),
 }
-
 impl PrivacyProofManagedPoolBootstrapV1 {
     /// Return the exact protocol initialized by this payload.
     #[must_use]
@@ -1226,7 +1161,6 @@ impl PrivacyProofManagedPoolBootstrapV1 {
             Self::PqMaspStarkV0(_) => PrivacyProtocolIdV1::PqMaspStarkV0,
         }
     }
-
     /// Return the exact proof-managed root role initialized by this payload.
     #[must_use]
     pub const fn root_role(&self) -> PrivacyRootRoleV1 {
@@ -1236,7 +1170,6 @@ impl PrivacyProofManagedPoolBootstrapV1 {
             Self::PqMaspStarkV0(_) => PrivacyRootRoleV1::NoteCommitmentAnchor,
         }
     }
-
     /// Return the sole protocol-scoped namespace initialized by this payload.
     #[must_use]
     pub const fn namespace(&self) -> PrivacyNamespaceV1 {
@@ -1262,7 +1195,6 @@ impl PrivacyProofManagedPoolBootstrapV1 {
             ),
         }
     }
-
     /// Return the exact backing asset definition.
     #[must_use]
     pub const fn asset_definition_id(&self) -> &AssetDefinitionId {
@@ -1272,7 +1204,6 @@ impl PrivacyProofManagedPoolBootstrapV1 {
             Self::PqMaspStarkV0(bootstrap) => &bootstrap.asset_definition_id,
         }
     }
-
     /// Return the public reserve account when the protocol supports an
     /// explicit value-balance bridge.
     #[must_use]
@@ -1282,7 +1213,6 @@ impl PrivacyProofManagedPoolBootstrapV1 {
             Self::MoneroFcmpPlusPlusV1(_) | Self::PqMaspStarkV0(_) => None,
         }
     }
-
     /// Return the exact transparent balance partition for protocols with a
     /// public value-balance bridge.
     #[must_use]
@@ -1292,7 +1222,6 @@ impl PrivacyProofManagedPoolBootstrapV1 {
             Self::MoneroFcmpPlusPlusV1(_) | Self::PqMaspStarkV0(_) => None,
         }
     }
-
     /// Return the pinned private-program digest for private-IVM pools.
     #[must_use]
     pub const fn program_id(&self) -> Option<PrivacyProgramIdV1> {
@@ -1301,7 +1230,6 @@ impl PrivacyProofManagedPoolBootstrapV1 {
             Self::MoneroFcmpPlusPlusV1(_) | Self::PqMaspStarkV0(_) => None,
         }
     }
-
     /// Return the complete canonical genesis note-commitment set.
     ///
     /// FCMP++ uses full typed output tuples and therefore returns `None`.
@@ -1315,7 +1243,6 @@ impl PrivacyProofManagedPoolBootstrapV1 {
             Self::PqMaspStarkV0(bootstrap) => Some(&bootstrap.initial_note_commitments),
         }
     }
-
     /// Return the complete canonical FCMP++ genesis output set.
     #[must_use]
     pub fn initial_fcmp_outputs(&self) -> Option<&[PrivacyFcmpOutputTupleV1]> {
@@ -1324,7 +1251,6 @@ impl PrivacyProofManagedPoolBootstrapV1 {
             Self::IrohaIvmPrivateNoteStarkV1(_) | Self::PqMaspStarkV0(_) => None,
         }
     }
-
     /// Validate the exact closed namespace and required non-zero identifiers.
     ///
     /// # Errors
@@ -1402,7 +1328,6 @@ impl PrivacyProofManagedPoolBootstrapV1 {
         }
         Ok(())
     }
-
     /// Hash the exact canonical bootstrap in its own provenance domain.
     ///
     /// # Errors
@@ -1423,7 +1348,6 @@ impl PrivacyProofManagedPoolBootstrapV1 {
         ))
     }
 }
-
 fn validate_initial_note_commitments(
     commitments: &[PrivacyCommitmentV1],
 ) -> Result<(), PrivacyProofManagedPoolBootstrapValidationErrorV1> {
@@ -1456,7 +1380,6 @@ fn validate_initial_note_commitments(
     }
     Ok(())
 }
-
 /// Structural failure for [`PrivacyProofManagedPoolBootstrapV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyProofManagedPoolBootstrapValidationErrorV1 {
@@ -1528,7 +1451,6 @@ pub enum PrivacyProofManagedPoolBootstrapValidationErrorV1 {
     #[error("proof-managed privacy pool bootstrap root role is incompatible")]
     IncompatibleRootRole,
 }
-
 /// One canonical encrypted account in a PGC account-state bootstrap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1542,7 +1464,6 @@ pub struct PrivacyPgcAccountV1 {
     /// Initial twisted-ElGamal encrypted balance.
     pub encrypted_balance: PrivacyP256CiphertextV1,
 }
-
 /// Point position selected by PGC bootstrap validation diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrivacyPgcAccountPointV1 {
@@ -1553,7 +1474,6 @@ pub enum PrivacyPgcAccountPointV1 {
     /// Encrypted-balance right component.
     EncryptedBalanceRight,
 }
-
 /// Exact canonical native proof for an Anonymous PGC account bootstrap.
 ///
 /// This proof has a dedicated wire type and a tighter first-release bound than
@@ -1567,23 +1487,20 @@ pub enum PrivacyPgcAccountPointV1 {
 )]
 pub struct PrivacyPgcBootstrapProofBytesV1 {
     /// Exact native proof encoding.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub bytes: Vec<u8>,
 }
-
 impl PrivacyPgcBootstrapProofBytesV1 {
     /// Construct proof bytes for subsequent native validation.
     #[must_use]
     pub fn new(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }
-
     /// Borrow the exact proof bytes.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
-
     /// Validate presence, non-degeneracy, and the fixed Taira byte cap.
     ///
     /// # Errors
@@ -1606,7 +1523,6 @@ impl PrivacyPgcBootstrapProofBytesV1 {
         }
         Ok(())
     }
-
     /// Derive the audit digest of these exact proof bytes.
     ///
     /// Callers admitting a proof must invoke this only after the native
@@ -1632,7 +1548,6 @@ impl PrivacyPgcBootstrapProofBytesV1 {
         ))
     }
 }
-
 /// Structural failure for [`PrivacyPgcBootstrapProofBytesV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyPgcBootstrapProofValidationError {
@@ -1654,7 +1569,6 @@ pub enum PrivacyPgcBootstrapProofValidationError {
     #[error("PGC bootstrap proof length exceeds u64")]
     LengthOverflow,
 }
-
 /// Governed bootstrap payload for a complete PGC encrypted account table.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1675,7 +1589,6 @@ pub struct PrivacyPgcAccountBootstrapV1 {
     /// Complete account table in strict public-key order.
     pub accounts: Vec<PrivacyPgcAccountV1>,
 }
-
 impl PrivacyPgcAccountBootstrapV1 {
     /// Validate the closed namespace, size, ordering, and nonzero wire values.
     ///
@@ -1745,7 +1658,6 @@ impl PrivacyPgcAccountBootstrapV1 {
         }
         Ok(())
     }
-
     /// Hash this bootstrap payload in its distinct provenance domain.
     ///
     /// # Errors
@@ -1766,7 +1678,6 @@ impl PrivacyPgcAccountBootstrapV1 {
         ))
     }
 }
-
 /// Validation failure for [`PrivacyPgcAccountBootstrapV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyPgcAccountBootstrapValidationError {
@@ -1812,7 +1723,6 @@ pub enum PrivacyPgcAccountBootstrapValidationError {
     #[error("PGC bootstrap account length exceeds u32")]
     AccountLengthOverflow,
 }
-
 /// Field within [`PrivacyConsensusLimitsV1`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivacyLimitFieldV1 {
@@ -1837,7 +1747,6 @@ pub enum PrivacyLimitFieldV1 {
     /// Retained recent roots.
     RetainedRootCount,
 }
-
 /// Consensus-enforced privacy resource limits.
 ///
 /// The first release permits governance to lower these values but not exceed
@@ -1871,7 +1780,6 @@ pub struct PrivacyConsensusLimitsV1 {
     /// Number of recent commitment roots retained for proof admission.
     pub retained_root_count: u32,
 }
-
 impl PrivacyConsensusLimitsV1 {
     /// Return the approved first-release Taira profile.
     #[must_use]
@@ -1890,7 +1798,6 @@ impl PrivacyConsensusLimitsV1 {
             retained_root_count: TAIRA_PRIVACY_RETAINED_ROOT_COUNT_V1,
         }
     }
-
     /// Validate non-zero, hard-ceiling, and cross-field ordering invariants.
     ///
     /// # Errors
@@ -1950,7 +1857,6 @@ impl PrivacyConsensusLimitsV1 {
                 TAIRA_PRIVACY_RETAINED_ROOT_COUNT_V1,
             ),
         ];
-
         for (field, value, hard_max) in fields {
             if value == 0 {
                 return Err(PrivacyConsensusLimitsValidationError::Zero { field });
@@ -1963,7 +1869,6 @@ impl PrivacyConsensusLimitsV1 {
                 });
             }
         }
-
         validate_limit_order(
             PrivacyLimitFieldV1::ActionsPerTransaction,
             self.max_actions_per_transaction,
@@ -1996,7 +1901,6 @@ impl PrivacyConsensusLimitsV1 {
         )?;
         Ok(())
     }
-
     /// Validate `next` as a strict component-wise tightening of this policy.
     ///
     /// # Errors
@@ -2010,7 +1914,6 @@ impl PrivacyConsensusLimitsV1 {
             .map_err(PrivacyConsensusLimitsTighteningErrorV1::InvalidCurrent)?;
         next.validate()
             .map_err(PrivacyConsensusLimitsTighteningErrorV1::InvalidNext)?;
-
         let fields = [
             (
                 PrivacyLimitFieldV1::ActionsPerTransaction,
@@ -2078,13 +1981,11 @@ impl PrivacyConsensusLimitsV1 {
         Ok(())
     }
 }
-
 impl Default for PrivacyConsensusLimitsV1 {
     fn default() -> Self {
         Self::taira_default()
     }
 }
-
 fn validate_limit_order(
     smaller_field: PrivacyLimitFieldV1,
     smaller_value: u32,
@@ -2101,7 +2002,6 @@ fn validate_limit_order(
     }
     Ok(())
 }
-
 /// Validation failure for [`PrivacyConsensusLimitsV1`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyConsensusLimitsValidationError {
@@ -2136,7 +2036,6 @@ pub enum PrivacyConsensusLimitsValidationError {
         larger_value: u32,
     },
 }
-
 /// Validation failure for a component-wise consensus-policy tightening.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyConsensusLimitsTighteningErrorV1 {
@@ -2162,7 +2061,6 @@ pub enum PrivacyConsensusLimitsTighteningErrorV1 {
     #[error("privacy consensus policy tightening is a no-op")]
     NoChange,
 }
-
 /// Scheduled successor for the singleton chain-wide privacy policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2178,7 +2076,6 @@ pub struct PrivacyConsensusPolicyTighteningV1 {
     /// Complete component-wise-lower successor policy.
     pub next_limits: PrivacyConsensusLimitsV1,
 }
-
 impl PrivacyConsensusPolicyTighteningV1 {
     /// Validate schedule timing and component-wise monotonicity.
     ///
@@ -2199,7 +2096,6 @@ impl PrivacyConsensusPolicyTighteningV1 {
             .map_err(PrivacyPolicyValidationErrorV1::ConsensusTightening)
     }
 }
-
 /// Singleton chain-wide privacy admission policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2213,7 +2109,6 @@ pub struct PrivacyConsensusPolicyV1 {
     /// At most one delayed, component-wise tightening.
     pub pending_tightening: Option<PrivacyConsensusPolicyTighteningV1>,
 }
-
 impl PrivacyConsensusPolicyV1 {
     /// Construct the first-release Taira policy with no pending change.
     #[must_use]
@@ -2223,7 +2118,6 @@ impl PrivacyConsensusPolicyV1 {
             pending_tightening: None,
         }
     }
-
     /// Validate the complete persisted policy independent of chain height.
     ///
     /// # Errors
@@ -2238,7 +2132,6 @@ impl PrivacyConsensusPolicyV1 {
         }
         Ok(())
     }
-
     /// Validate a restored policy against the latest committed block height.
     ///
     /// A pending transition at height `E` is valid in a snapshot committed at
@@ -2270,7 +2163,6 @@ impl PrivacyConsensusPolicyV1 {
         }
         Ok(())
     }
-
     /// Root-retention cap enforced while admitting new roots.
     ///
     /// During the notice window new histories must already satisfy the pending
@@ -2288,13 +2180,11 @@ impl PrivacyConsensusPolicyV1 {
         }
     }
 }
-
 impl Default for PrivacyConsensusPolicyV1 {
     fn default() -> Self {
         Self::taira_default()
     }
 }
-
 /// Validation failure for a singleton privacy-policy value or schedule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyPolicyValidationErrorV1 {
@@ -2351,7 +2241,6 @@ pub enum PrivacyPolicyValidationErrorV1 {
         committed_height: u64,
     },
 }
-
 fn validate_privacy_policy_schedule_heights_v1(
     scheduled_at_height: u64,
     effective_at_height: u64,
@@ -2376,7 +2265,6 @@ fn validate_privacy_policy_schedule_heights_v1(
     }
     Ok(())
 }
-
 /// Proposed lifecycle state fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2390,7 +2278,6 @@ pub struct PrivacyProposedLifecycleV1 {
     /// Scheduled first active height.
     pub activate_at_height: u64,
 }
-
 /// Active lifecycle state fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2406,7 +2293,6 @@ pub struct PrivacyActiveLifecycleV1 {
     /// Height at which the current active interval began.
     pub state_since_height: u64,
 }
-
 /// Suspended lifecycle state fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2422,7 +2308,6 @@ pub struct PrivacySuspendedLifecycleV1 {
     /// Height at which the current suspension began.
     pub state_since_height: u64,
 }
-
 /// Retired lifecycle state fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2438,7 +2323,6 @@ pub struct PrivacyRetiredLifecycleV1 {
     /// Height at which retirement became effective.
     pub state_since_height: u64,
 }
-
 /// Governed lifecycle of a protocol activation record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2463,7 +2347,6 @@ pub enum PrivacyProtocolLifecycleV1 {
     #[cfg_attr(feature = "json", norito(rename = "retired"))]
     Retired(PrivacyRetiredLifecycleV1),
 }
-
 impl PrivacyProtocolLifecycleV1 {
     /// Validate internal height ordering.
     ///
@@ -2535,19 +2418,16 @@ impl PrivacyProtocolLifecycleV1 {
             }
         }
     }
-
     /// Return `true` only for the active lifecycle state.
     #[must_use]
     pub const fn is_active(&self) -> bool {
         matches!(self, Self::Active(_))
     }
-
     /// Return whether `next` is a valid forward lifecycle transition.
     #[must_use]
     pub fn can_transition_to(&self, next: &Self) -> bool {
         self.validate_transition_to(next).is_ok()
     }
-
     /// Validate a forward lifecycle transition and its immutable history.
     ///
     /// # Errors
@@ -2563,7 +2443,6 @@ impl PrivacyProtocolLifecycleV1 {
             .map_err(PrivacyLifecycleTransitionError::CurrentState)?;
         next.validate()
             .map_err(PrivacyLifecycleTransitionError::NextState)?;
-
         match (*self, *next) {
             (Self::Proposed(current), Self::Active(next))
                 if proposed_activation_history_matches(current, next) =>
@@ -2610,7 +2489,6 @@ impl PrivacyProtocolLifecycleV1 {
         }
     }
 }
-
 const fn proposed_activation_history_matches(
     proposed: PrivacyProposedLifecycleV1,
     active: PrivacyActiveLifecycleV1,
@@ -2623,7 +2501,6 @@ const fn proposed_activation_history_matches(
     }
     active.activated_at_height == active.state_since_height
 }
-
 fn validate_strictly_later(
     earlier_field: PrivacyLifecycleHeightFieldV1,
     earlier_height: u64,
@@ -2648,7 +2525,6 @@ fn validate_strictly_later(
     }
     Ok(())
 }
-
 /// Height field within a privacy lifecycle record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivacyLifecycleHeightFieldV1 {
@@ -2659,7 +2535,6 @@ pub enum PrivacyLifecycleHeightFieldV1 {
     /// Height at which the current state began.
     StateSince,
 }
-
 /// Validation failure for one [`PrivacyProtocolLifecycleV1`] value.
 #[allow(variant_size_differences)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -2685,7 +2560,6 @@ pub enum PrivacyLifecycleValidationError {
         later_height: u64,
     },
 }
-
 /// Validation failure for a lifecycle state transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyLifecycleTransitionError {
@@ -2702,7 +2576,6 @@ pub enum PrivacyLifecycleTransitionError {
     #[error("retired privacy protocol lifecycle is terminal")]
     RetiredIsTerminal,
 }
-
 /// Assurance classification for a first-release privacy activation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2718,7 +2591,6 @@ pub enum PrivacyAssuranceV1 {
     #[cfg_attr(feature = "json", norito(rename = "experimental"))]
     Experimental,
 }
-
 /// Activation-specific Anonymous PGC policy limits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2732,7 +2604,6 @@ pub struct AnonymousPgcActivationLimitsV1 {
     /// Maximum intended recipient count `k` for this activation.
     pub max_recipient_count: u32,
 }
-
 /// Activation-specific `VeRange` aggregation policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2744,7 +2615,6 @@ pub struct VeRangeActivationLimitsV1 {
     /// Maximum aggregation count `T` admitted by this activation.
     pub max_aggregation_count: u32,
 }
-
 /// Activation-specific ZK-AMS admission and provisioning policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2758,7 +2628,6 @@ pub struct ZkAmsActivationLimitsV1 {
     /// Maximum admitted seed-key ring size in one provisioning action.
     pub max_ring_size: u32,
 }
-
 /// Activation-specific Jindo batched univariate-opening policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2770,7 +2639,6 @@ pub struct JindoActivationLimitsV1 {
     /// Maximum polynomial commitments per statement.
     pub max_polynomial_count: u32,
 }
-
 /// Activation-specific Orchard action policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2782,7 +2650,6 @@ pub struct OrchardActivationLimitsV1 {
     /// Maximum one-to-one spend/output actions per statement.
     pub max_action_count: u32,
 }
-
 /// Activation-specific FCMP++ transfer policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2796,7 +2663,6 @@ pub struct FcmpActivationLimitsV1 {
     /// Maximum new outputs per transfer.
     pub max_output_count: u32,
 }
-
 /// Activation-specific native IVM private-note policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2810,7 +2676,6 @@ pub struct IvmPrivateNoteActivationLimitsV1 {
     /// Maximum new notes per action.
     pub max_output_count: u32,
 }
-
 /// Activation-specific PQ-MASP policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2824,7 +2689,6 @@ pub struct PqMaspActivationLimitsV1 {
     /// Maximum new notes per action.
     pub max_output_count: u32,
 }
-
 /// Protocol-specific governed limits carried by an activation record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2876,7 +2740,6 @@ pub enum PrivacyProtocolActivationLimitsV1 {
     #[cfg_attr(feature = "json", norito(rename = "pq-masp-stark-v0"))]
     PqMaspStarkV0(PqMaspActivationLimitsV1),
 }
-
 impl PrivacyProtocolActivationLimitsV1 {
     /// Exact protocol to which these activation-specific limits apply.
     #[must_use]
@@ -2898,7 +2761,6 @@ impl PrivacyProtocolActivationLimitsV1 {
             Self::PqMaspStarkV0(_) => PrivacyProtocolIdV1::PqMaspStarkV0,
         }
     }
-
     /// Validate activation-specific values against first-release hard ceilings.
     ///
     /// # Errors
@@ -3000,7 +2862,6 @@ impl PrivacyProtocolActivationLimitsV1 {
             _ => Ok(()),
         }
     }
-
     /// Validate this governed protocol policy against a compiled ceiling.
     ///
     /// Both values first undergo their intrinsic nonzero, hard-maximum, and
@@ -3115,7 +2976,6 @@ impl PrivacyProtocolActivationLimitsV1 {
         }
     }
 }
-
 fn validate_profile_limit_ceiling(
     field: PrivacyActivationLimitFieldV1,
     value: u32,
@@ -3132,7 +2992,6 @@ fn validate_profile_limit_ceiling(
     }
     Ok(())
 }
-
 fn validate_profile_limit(
     field: PrivacyActivationLimitFieldV1,
     value: u32,
@@ -3152,7 +3011,6 @@ fn validate_profile_limit(
     }
     Ok(())
 }
-
 /// Activation-specific limit field selected by validation diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrivacyActivationLimitFieldV1 {
@@ -3183,7 +3041,6 @@ pub enum PrivacyActivationLimitFieldV1 {
     /// PQ-MASP output count.
     PqMaspOutputCount,
 }
-
 /// Validation failure for protocol-specific activation limits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyProtocolActivationLimitsValidationError {
@@ -3238,7 +3095,6 @@ pub enum PrivacyProtocolActivationLimitsValidationError {
         size: u32,
     },
 }
-
 /// Scheduled component-wise tightening for one protocol activation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3254,7 +3110,6 @@ pub struct PrivacyProtocolLimitsTighteningV1 {
     /// Complete protocol-tagged successor limit set.
     pub next_limits: PrivacyProtocolActivationLimitsV1,
 }
-
 impl PrivacyProtocolLimitsTighteningV1 {
     /// Validate schedule timing and strict component-wise monotonicity.
     ///
@@ -3280,7 +3135,6 @@ impl PrivacyProtocolLimitsTighteningV1 {
         Ok(())
     }
 }
-
 /// Validation failure for a scheduled protocol-specific tightening.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyProtocolLimitsTighteningValidationErrorV1 {
@@ -3294,7 +3148,6 @@ pub enum PrivacyProtocolLimitsTighteningValidationErrorV1 {
     #[error("privacy protocol-limit tightening is a no-op")]
     NoChange,
 }
-
 /// Governed activation record for one exact privacy protocol implementation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3328,7 +3181,6 @@ pub struct PrivacyProtocolActivationRecordV1 {
     /// Testnet assurance classification.
     pub assurance: PrivacyAssuranceV1,
 }
-
 impl PrivacyProtocolActivationRecordV1 {
     /// Validate exact protocol mappings, non-zero digests, lifecycle, and limits.
     ///
@@ -3388,7 +3240,6 @@ impl PrivacyProtocolActivationRecordV1 {
             .map_err(PrivacyActivationValidationError::Lifecycle)
     }
 }
-
 /// Validation failure for [`PrivacyProtocolActivationRecordV1`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyActivationValidationError {
@@ -3447,12 +3298,10 @@ pub enum PrivacyActivationValidationError {
     #[error("privacy activation lifecycle is invalid: {0}")]
     Lifecycle(PrivacyLifecycleValidationError),
 }
-
 /// Exact public capability-snapshot wire version.
 pub const PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1: u32 = 1;
 /// Exact local compiled-profile catalog wire version.
 pub const PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1: u32 = 1;
-
 /// Exact locally compiled bindings exposed by the public privacy snapshot.
 ///
 /// This is a wire-model counterpart of the core-only compiled profile. It
@@ -3484,7 +3333,6 @@ pub struct PrivacyCompiledProfileSnapshotV1 {
     /// Exact protocol-specific limits compiled into the verifier.
     pub protocol_limits: PrivacyProtocolActivationLimitsV1,
 }
-
 impl PrivacyCompiledProfileSnapshotV1 {
     /// Validate the closed protocol mappings and every fixed binding.
     ///
@@ -3542,7 +3390,6 @@ impl PrivacyCompiledProfileSnapshotV1 {
             .map_err(PrivacyCompiledProfileSnapshotValidationErrorV1::ProtocolLimits)
     }
 }
-
 /// Validation failure for [`PrivacyCompiledProfileSnapshotV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyCompiledProfileSnapshotValidationErrorV1 {
@@ -3599,7 +3446,6 @@ pub enum PrivacyCompiledProfileSnapshotValidationErrorV1 {
     #[error("compiled privacy protocol limits are invalid: {0}")]
     ProtocolLimits(PrivacyProtocolActivationLimitsValidationError),
 }
-
 /// Typed failure canonicalizing a compiled public-statement schema.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3618,7 +3464,6 @@ pub enum PrivacyCompiledStatementSchemaErrorV1 {
     #[cfg_attr(feature = "json", norito(rename = "missing-type-reference"))]
     MissingTypeReference,
 }
-
 /// Typed reason why one closed protocol has no executable compiled profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3640,7 +3485,6 @@ pub enum PrivacyCompiledProfileUnavailableReasonV1 {
     #[cfg_attr(feature = "json", norito(rename = "statement-schema-invalid"))]
     StatementSchemaInvalid(PrivacyCompiledStatementSchemaErrorV1),
 }
-
 /// Closed result of obtaining one locally compiled privacy profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3659,7 +3503,6 @@ pub enum PrivacyCompiledProfileResultV1 {
     #[cfg_attr(feature = "json", norito(rename = "unavailable"))]
     Unavailable(PrivacyCompiledProfileUnavailableReasonV1),
 }
-
 /// One local build result in the canonical compiled-profile catalog.
 ///
 /// This row deliberately has no activation, lifecycle, committed height, or
@@ -3678,7 +3521,6 @@ pub struct PrivacyCompiledProfileCatalogRowV1 {
     /// Exact local compiled-profile result.
     pub compiled_profile: PrivacyCompiledProfileResultV1,
 }
-
 impl PrivacyCompiledProfileCatalogRowV1 {
     /// Validate the row's closed identity and compiled profile.
     ///
@@ -3704,7 +3546,6 @@ impl PrivacyCompiledProfileCatalogRowV1 {
         Ok(())
     }
 }
-
 /// Validation failure for one [`PrivacyCompiledProfileCatalogRowV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyCompiledProfileCatalogRowValidationErrorV1 {
@@ -3722,7 +3563,6 @@ pub enum PrivacyCompiledProfileCatalogRowValidationErrorV1 {
         profile_protocol: PrivacyProtocolIdV1,
     },
 }
-
 /// Canonical local compiled-profile catalog for the closed first-release registry.
 ///
 /// `protocols` contains exactly [`PrivacyProtocolIdV1::ALL`] in Norito
@@ -3741,7 +3581,6 @@ pub struct PrivacyCompiledProfileCatalogV1 {
     /// Exactly twelve local results in canonical discriminant order.
     pub protocols: Vec<PrivacyCompiledProfileCatalogRowV1>,
 }
-
 impl PrivacyCompiledProfileCatalogV1 {
     /// Validate the complete closed local catalog.
     ///
@@ -3789,7 +3628,6 @@ impl PrivacyCompiledProfileCatalogV1 {
         Ok(())
     }
 }
-
 /// Validation failure for [`PrivacyCompiledProfileCatalogV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyCompiledProfileCatalogValidationErrorV1 {
@@ -3830,7 +3668,6 @@ pub enum PrivacyCompiledProfileCatalogValidationErrorV1 {
         source: PrivacyCompiledProfileCatalogRowValidationErrorV1,
     },
 }
-
 /// One protocol row in the canonical public capability snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -3846,7 +3683,6 @@ pub struct PrivacyCapabilityRowV1 {
     /// Exact committed governance record, if registered.
     pub activation: Option<PrivacyProtocolActivationRecordV1>,
 }
-
 impl PrivacyCapabilityRowV1 {
     /// Validate a row against its committed snapshot height.
     ///
@@ -3876,7 +3712,6 @@ impl PrivacyCapabilityRowV1 {
             }
             PrivacyCompiledProfileResultV1::Unavailable(_) => None,
         };
-
         let Some(activation) = self.activation else {
             return Ok(());
         };
@@ -3902,7 +3737,6 @@ impl PrivacyCapabilityRowV1 {
         validate_privacy_capability_activation_height_v1(&activation, committed_height)
     }
 }
-
 fn validate_privacy_capability_activation_profile_v1(
     activation: &PrivacyProtocolActivationRecordV1,
     profile: &PrivacyCompiledProfileSnapshotV1,
@@ -3961,7 +3795,6 @@ fn validate_privacy_capability_activation_profile_v1(
         .validate_with_ceiling(&profile.protocol_limits)
         .map_err(PrivacyCapabilityRowValidationErrorV1::ActivationProtocolLimits)
 }
-
 fn validate_privacy_capability_activation_height_v1(
     activation: &PrivacyProtocolActivationRecordV1,
     committed_height: u64,
@@ -4042,7 +3875,6 @@ fn validate_privacy_capability_activation_height_v1(
     }
     Ok(())
 }
-
 /// Immutable binding selected when comparing activation and compiled profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrivacyCapabilityBindingFieldV1 {
@@ -4061,7 +3893,6 @@ pub enum PrivacyCapabilityBindingFieldV1 {
     /// Engine-manifest digest.
     EngineManifestDigest,
 }
-
 /// Validation failure for one [`PrivacyCapabilityRowV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyCapabilityRowValidationErrorV1 {
@@ -4167,7 +3998,6 @@ pub enum PrivacyCapabilityRowValidationErrorV1 {
         committed_height: u64,
     },
 }
-
 /// Authoritative committed privacy capability snapshot.
 ///
 /// `protocols` must contain exactly [`PrivacyProtocolIdV1::ALL`] in Norito
@@ -4189,7 +4019,6 @@ pub struct PrivacyCapabilitySnapshotV1 {
     /// Exactly twelve protocol rows in canonical discriminant order.
     pub protocols: Vec<PrivacyCapabilityRowV1>,
 }
-
 impl PrivacyCapabilitySnapshotV1 {
     /// Validate the complete public snapshot and all embedded state.
     ///
@@ -4237,7 +4066,6 @@ impl PrivacyCapabilitySnapshotV1 {
         Ok(())
     }
 }
-
 /// Exact native bridge ABI required by the first-release privacy SDK surface.
 pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 22;
 /// Maximum accepted size of one canonical local compiled-profile catalog archive.
@@ -4255,7 +4083,6 @@ pub const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1
     256 * 1024;
 /// Maximum data-dependent nesting depth permitted in one catalog.
 pub const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_NESTING_DEPTH_V1: usize = 32;
-
 /// Stable result codes returned by the native compiled-profile catalog validator.
 ///
 /// These codes validate local build metadata only. A valid catalog does not
@@ -4282,21 +4109,18 @@ pub enum PrivacyCompiledProfileCatalogArchiveValidationStatusV1 {
     /// The typed catalog violates its closed first-release semantic invariants.
     InvalidCatalog = 8,
 }
-
 impl PrivacyCompiledProfileCatalogArchiveValidationStatusV1 {
     /// Return the stable ABI-22 integer representation.
     #[must_use]
     pub const fn code(self) -> i32 {
         self as i32
     }
-
     /// Return whether the archive was accepted.
     #[must_use]
     pub const fn is_valid(self) -> bool {
         matches!(self, Self::Valid)
     }
 }
-
 /// Validate one untrusted canonical typed local compiled-profile catalog.
 ///
 /// This validator enforces fixed byte, sequence, cumulative-element,
@@ -4309,14 +4133,12 @@ pub fn validate_privacy_compiled_profile_catalog_archive_v1(
     archive: &[u8],
 ) -> PrivacyCompiledProfileCatalogArchiveValidationStatusV1 {
     use PrivacyCompiledProfileCatalogArchiveValidationStatusV1 as Status;
-
     if archive.is_empty() {
         return Status::Empty;
     }
     if archive.len() > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1 {
         return Status::ArchiveTooLarge;
     }
-
     let limits = norito::DecodeLimits::new(
         PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1,
         PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_FIELD_BYTES_V1,
@@ -4342,7 +4164,6 @@ pub fn validate_privacy_compiled_profile_catalog_archive_v1(
     }
     Status::Valid
 }
-
 /// Maximum accepted size of one canonical privacy capability archive.
 pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1: usize = 256 * 1024;
 /// Maximum elements accepted in any sequence while decoding a capability archive.
@@ -4355,7 +4176,6 @@ pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_FIELD_BYTES_V1: usize = 128 * 1024;
 pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1: usize = 256 * 1024;
 /// Maximum data-dependent nesting depth permitted in a capability archive.
 pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_NESTING_DEPTH_V1: usize = 32;
-
 /// Stable result codes returned by every native privacy capability validator.
 ///
 /// These numeric discriminants are part of ABI 22. SDKs must accept only
@@ -4382,21 +4202,18 @@ pub enum PrivacyCapabilityArchiveValidationStatusV1 {
     /// The typed manifest violates its closed first-release semantic invariants.
     InvalidManifest = 8,
 }
-
 impl PrivacyCapabilityArchiveValidationStatusV1 {
     /// Return the stable ABI-22 integer representation.
     #[must_use]
     pub const fn code(self) -> i32 {
         self as i32
     }
-
     /// Return whether the archive was accepted.
     #[must_use]
     pub const fn is_valid(self) -> bool {
         matches!(self, Self::Valid)
     }
 }
-
 /// Validate one untrusted canonical typed privacy capability archive.
 ///
 /// Admission first applies the fixed 256 KiB byte ceiling, then decodes with
@@ -4413,14 +4230,12 @@ pub fn validate_privacy_capability_archive_v1(
     archive: &[u8],
 ) -> PrivacyCapabilityArchiveValidationStatusV1 {
     use PrivacyCapabilityArchiveValidationStatusV1 as Status;
-
     if archive.is_empty() {
         return Status::Empty;
     }
     if archive.len() > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
         return Status::ArchiveTooLarge;
     }
-
     let limits = norito::DecodeLimits::new(
         PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1,
         PRIVACY_CAPABILITY_ARCHIVE_MAX_FIELD_BYTES_V1,
@@ -4446,7 +4261,6 @@ pub fn validate_privacy_capability_archive_v1(
     }
     Status::Valid
 }
-
 /// Validation failure for [`PrivacyCapabilitySnapshotV1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyCapabilitySnapshotValidationErrorV1 {

@@ -1,12 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensures invalid instructions are rolled back without side effects.
-
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
-
 #[test]
 fn client_sends_transaction_with_invalid_instruction_should_not_see_any_changes() -> Result<()> {
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
@@ -17,7 +15,6 @@ fn client_sends_transaction_with_invalid_instruction_should_not_see_any_changes(
         return Ok(());
     };
     let client = network.client();
-
     //When
     let account_id = ALICE_ID.clone();
     let asset_definition_id = AssetDefinitionId::derive_from_components(
@@ -45,10 +42,8 @@ fn client_sends_transaction_with_invalid_instruction_should_not_see_any_changes(
         [create_asset.into(), mint_asset.into()],
         iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
-
     //Then;
     let query_result = client.query(FindAssets::new()).execute_all()?;
-
     assert!(
         query_result
             .iter()

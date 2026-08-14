@@ -3,22 +3,17 @@ use norito::{
     Compression, decode_from_bytes, serialize_into, stream_seq_iter,
     stream_vec_collect_from_reader, stream_vec_fold_from_reader,
 };
-
 fn gen_vec(n: usize) -> Vec<u32> {
     (0..n as u32).map(|i| i.wrapping_mul(3) + 1).collect()
 }
-
 fn bench_stream_seq(c: &mut Criterion) {
     let v = gen_vec(200_000);
-
     // Uncompressed bytes
     let mut raw = Vec::new();
     serialize_into(&mut raw, &v, Compression::None).unwrap();
-
     // Compressed bytes
     let mut z = Vec::new();
     serialize_into(&mut z, &v, Compression::Zstd).unwrap();
-
     c.bench_function("vec_decode_from_bytes", |b| {
         b.iter_batched(
             || raw.as_slice(),
@@ -29,7 +24,6 @@ fn bench_stream_seq(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("vec_stream_collect", |b| {
         b.iter_batched(
             || raw.as_slice(),
@@ -41,7 +35,6 @@ fn bench_stream_seq(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("vec_stream_fold", |b| {
         b.iter_batched(
             || raw.as_slice(),
@@ -57,7 +50,6 @@ fn bench_stream_seq(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("vec_stream_iter", |b| {
         b.iter_batched(
             || raw.clone(),
@@ -75,7 +67,6 @@ fn bench_stream_seq(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     c.bench_function("vec_stream_iter_zstd", |b| {
         b.iter_batched(
             || z.clone(),
@@ -94,6 +85,5 @@ fn bench_stream_seq(c: &mut Criterion) {
         )
     });
 }
-
 criterion_group!(benches, bench_stream_seq);
 criterion_main!(benches);

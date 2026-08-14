@@ -64,7 +64,11 @@ Do not infer a mutable path such as `peers/<alias>/storage`. Read
 its immutable `peers/<alias>/config.toml`. The canonical parent of
 `snapshot.store_dir` is the selected mutable storage root. Config-only overlays
 can select a newer config generation while intentionally retaining an older
-storage generation. `resolve_selected_peer_storage_paths` performs these checks
+storage generation. The V1 inventory is compact canonical Norito JSON and is
+fail-closed at 8 MiB, 8,192 files, 16,384 tree entries, 32 directory levels,
+4 KiB per relative path, and 4 MiB of aggregate relative-path text. Hashing and
+tree sync stream bounded files instead of materializing the whole tree.
+`resolve_selected_peer_storage_paths` performs these checks
 for detached tooling and returns a shared generation-selection lease. Keep the
 returned `SelectedPeerStoragePaths` value alive for the entire operation; a
 copied `PathBuf` does not retain that protection. An active `PeerHandle`
@@ -91,7 +95,10 @@ Follow these steps before making changes:
   log exists.
 - Export a snapshot via **Maintenance → Export snapshot** (or call
   `Supervisor::export_snapshot`). The snapshot bundles storage, configs, and
-  logs into `snapshots/<timestamp>-<label>/`.
+  logs into `snapshots/<timestamp>-<label>/`. Digesting walks canonical UTF-8
+  paths through one 4,096-entry lexical window at a time, streams every file,
+  and rejects directory nesting beyond 64 levels; it does not materialize the
+  full file inventory or any file-sized comparison buffer.
 - If the issue involves stream widgets, copy the `ManagedBlockStream`,
   `ManagedEventStream`, and `ManagedStatusStream` health indicators from the
   Dashboard. The UI surfaces the last reconnect attempt and error reason; grab

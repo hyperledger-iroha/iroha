@@ -3,7 +3,6 @@ use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, CouncilSignature, GovernanceProofs, ManifestBuilder, PinPolicy,
     StorageClass,
 };
-
 fn sample_input() -> Vec<u8> {
     let mut buf = Vec::with_capacity(1 << 20);
     let mut state: u64 = 0xDEC0DED;
@@ -15,7 +14,6 @@ fn sample_input() -> Vec<u8> {
     }
     buf
 }
-
 #[test]
 fn manifest_digest_consistent_with_chunker_fixture() {
     let input = sample_input();
@@ -27,7 +25,6 @@ fn manifest_digest_consistent_with_chunker_fixture() {
         vec![177_082, 210_377, 403_145, 187_169, 70_803],
         "chunk lengths drifted"
     );
-
     let manifest = ManifestBuilder::new()
         .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]))
         .dag_codec(sorafs_manifest::DagCodecId(0x71))
@@ -56,7 +53,6 @@ fn manifest_digest_consistent_with_chunker_fixture() {
         .add_metadata("fixture", "sf1-profile-v1")
         .build()
         .expect("build manifest");
-
     // Pin policy matches expectation and chunking snapshot preserved.
     assert_eq!(manifest.pin_policy.min_replicas, 3);
     assert!(matches!(

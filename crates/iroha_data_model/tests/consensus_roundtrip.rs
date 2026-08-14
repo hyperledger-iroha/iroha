@@ -1,12 +1,4 @@
 //! Ensure the Norito consensus message types support encode/decode roundtrips.
-use std::{
-    convert::TryFrom,
-    fmt::Debug,
-    fs,
-    num::NonZeroU64,
-    path::{Path, PathBuf},
-};
-
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, MerkleTree, SignatureOf};
 use iroha_data_model::{
     block::{
@@ -32,8 +24,14 @@ use norito::{
     NoritoDeserialize,
     codec::{Decode, Encode},
 };
+use std::{
+    convert::TryFrom,
+    fmt::Debug,
+    fs,
+    num::NonZeroU64,
+    path::{Path, PathBuf},
+};
 use tempfile::tempdir;
-
 fn sample_hash(seed: u8) -> Hash {
     let mut bytes = [0u8; Hash::LENGTH];
     for (idx, byte) in bytes.iter_mut().enumerate() {
@@ -42,11 +40,9 @@ fn sample_hash(seed: u8) -> Hash {
     }
     Hash::prehashed(bytes)
 }
-
 fn sample_block_hash(seed: u8) -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(sample_hash(seed))
 }
-
 fn sample_bytes(seed: u8, len: usize) -> Vec<u8> {
     assert!(u8::try_from(len).is_ok(), "len must fit in u8");
     (0..len)
@@ -56,29 +52,23 @@ fn sample_bytes(seed: u8, len: usize) -> Vec<u8> {
         })
         .collect()
 }
-
 fn checked_random_keypair() -> KeyPair {
     KeyPair::try_random().expect("test fixture random key generation should succeed")
 }
-
 fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
     KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
         panic!("{algorithm:?} consensus fixture key generation should succeed: {err}")
     })
 }
-
 fn checked_bls_keypair() -> KeyPair {
     checked_random_keypair_with_algorithm(Algorithm::BlsNormal)
 }
-
 fn checked_random_peer_id() -> PeerId {
     PeerId::from(checked_random_keypair().public_key().clone())
 }
-
 fn checked_bls_peer_id() -> PeerId {
     PeerId::new(checked_bls_keypair().public_key().clone())
 }
-
 fn assert_roundtrip<T>(value: &T)
 where
     T: Encode + Decode + PartialEq + Debug,
@@ -89,36 +79,29 @@ where
     assert!(cursor.is_empty(), "decoder must consume all bytes");
     assert_eq!(decoded, *value, "roundtrip must preserve value");
 }
-
 #[derive(Clone)]
 struct DeterministicRng(u64);
-
 impl DeterministicRng {
     fn new(seed: u64) -> Self {
         Self(seed)
     }
-
     fn next_u64(&mut self) -> u64 {
         const A: u64 = 6_364_136_223_846_793_005;
         const C: u64 = 1_442_695_040_888_963_407;
         self.0 = self.0.wrapping_mul(A).wrapping_add(C);
         self.0
     }
-
     fn next_u32(&mut self) -> u32 {
         let masked = self.next_u64() & u64::from(u32::MAX);
         u32::try_from(masked).expect("masked value fits into u32")
     }
-
     fn next_u8(&mut self) -> u8 {
         let masked = self.next_u64() & u64::from(u8::MAX);
         u8::try_from(masked).expect("masked value fits into u8")
     }
-
     fn next_bool(&mut self) -> bool {
         (self.next_u64() & 1) == 1
     }
-
     fn up_to(&mut self, upper_inclusive: usize) -> usize {
         if upper_inclusive == 0 {
             0
@@ -132,13 +115,11 @@ impl DeterministicRng {
             usize::try_from(sample).expect("sample must fit into usize for testing")
         }
     }
-
     fn range_inclusive(&mut self, min: usize, max: usize) -> usize {
         debug_assert!(min <= max);
         let span = max - min;
         min + self.up_to(span)
     }
-
     fn array32(&mut self) -> [u8; 32] {
         let mut bytes = [0u8; 32];
         for byte in &mut bytes {
@@ -146,21 +127,17 @@ impl DeterministicRng {
         }
         bytes
     }
-
     fn bytes(&mut self, max_len: usize) -> Vec<u8> {
         let len = self.up_to(max_len);
         (0..len).map(|_| self.next_u8()).collect()
     }
 }
-
 fn rng_hash(rng: &mut DeterministicRng) -> Hash {
     Hash::prehashed(rng.array32())
 }
-
 fn rng_block_hash(rng: &mut DeterministicRng) -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(rng_hash(rng))
 }
-
 fn rng_ascii_string(rng: &mut DeterministicRng, max_len: usize) -> String {
     let max_len = max_len.max(1);
     let len = rng.range_inclusive(1, max_len);
@@ -168,7 +145,6 @@ fn rng_ascii_string(rng: &mut DeterministicRng, max_len: usize) -> String {
         .map(|_| (b'a' + (rng.next_u8() % 26)) as char)
         .collect()
 }
-
 fn rng_cert_phase_any(rng: &mut DeterministicRng) -> CertPhase {
     match rng.up_to(2) {
         0 => CertPhase::Prepare,
@@ -176,7 +152,6 @@ fn rng_cert_phase_any(rng: &mut DeterministicRng) -> CertPhase {
         _ => CertPhase::NewView,
     }
 }
-
 fn rng_commit_qc_ref(rng: &mut DeterministicRng) -> QcRef {
     QcRef {
         height: rng.next_u64(),
@@ -186,7 +161,6 @@ fn rng_commit_qc_ref(rng: &mut DeterministicRng) -> QcRef {
         phase: rng_cert_phase_any(rng),
     }
 }
-
 fn rng_consensus_block_header(rng: &mut DeterministicRng) -> ConsensusBlockHeader {
     ConsensusBlockHeader {
         parent_hash: rng_block_hash(rng),
@@ -199,7 +173,6 @@ fn rng_consensus_block_header(rng: &mut DeterministicRng) -> ConsensusBlockHeade
         highest_qc: rng_commit_qc_ref(rng),
     }
 }
-
 fn rng_commit_aggregate(rng: &mut DeterministicRng) -> QcAggregate {
     let signers_bitmap = rng.bytes(8);
     let bls_len = rng.range_inclusive(0, 96);
@@ -209,7 +182,6 @@ fn rng_commit_aggregate(rng: &mut DeterministicRng) -> QcAggregate {
         bls_aggregate_signature,
     }
 }
-
 fn rng_consensus_genesis_params(rng: &mut DeterministicRng) -> ConsensusGenesisParams {
     let mode = if rng.next_bool() {
         ConsensusGenesisModeParams::Npos(rng_npos_genesis_params(rng))
@@ -225,7 +197,6 @@ fn rng_consensus_genesis_params(rng: &mut DeterministicRng) -> ConsensusGenesisP
             iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
     }
 }
-
 fn rng_npos_genesis_params(rng: &mut DeterministicRng) -> NposGenesisParams {
     let mut epoch_seed = [0u8; 32];
     for chunk in epoch_seed.chunks_mut(8) {
@@ -250,14 +221,12 @@ fn rng_npos_genesis_params(rng: &mut DeterministicRng) -> NposGenesisParams {
         slashing_delay_blocks: rng.next_u64(),
     }
 }
-
 fn rng_proposal(rng: &mut DeterministicRng) -> Proposal {
     Proposal {
         header: rng_consensus_block_header(rng),
         payload_hash: rng_hash(rng),
     }
 }
-
 fn rng_commit_vote(rng: &mut DeterministicRng) -> QcVote {
     let phase = rng_cert_phase_any(rng);
     let highest_qc = matches!(phase, CertPhase::NewView).then(|| rng_commit_qc_ref(rng));
@@ -288,7 +257,6 @@ fn rng_commit_vote(rng: &mut DeterministicRng) -> QcVote {
         bls_sig: rng.bytes(64),
     }
 }
-
 fn rng_commit_qc(rng: &mut DeterministicRng) -> Qc {
     let phase = rng_cert_phase_any(rng);
     let highest_qc = matches!(phase, CertPhase::NewView).then(|| rng_commit_qc_ref(rng));
@@ -327,14 +295,12 @@ fn rng_commit_qc(rng: &mut DeterministicRng) -> Qc {
         aggregate: rng_commit_aggregate(rng),
     }
 }
-
 fn rng_exec_kv(rng: &mut DeterministicRng) -> ExecKv {
     ExecKv {
         key: rng.bytes(16),
         value: rng.bytes(24),
     }
 }
-
 fn rng_exec_witness(rng: &mut DeterministicRng) -> ExecWitness {
     let read_len = rng.up_to(3);
     let write_len = rng.up_to(3);
@@ -353,7 +319,6 @@ fn rng_exec_witness(rng: &mut DeterministicRng) -> ExecWitness {
         fastpq_batches: Vec::new(),
     }
 }
-
 fn rng_exec_witness_msg(rng: &mut DeterministicRng) -> ExecWitnessMsg {
     ExecWitnessMsg {
         block_hash: rng_block_hash(rng),
@@ -363,7 +328,6 @@ fn rng_exec_witness_msg(rng: &mut DeterministicRng) -> ExecWitnessMsg {
         witness: rng_exec_witness(rng),
     }
 }
-
 fn rng_vrf_commit(rng: &mut DeterministicRng) -> VrfCommit {
     VrfCommit {
         epoch: rng.next_u64(),
@@ -372,7 +336,6 @@ fn rng_vrf_commit(rng: &mut DeterministicRng) -> VrfCommit {
         bls_sig: rng.bytes(96),
     }
 }
-
 fn rng_vrf_reveal(rng: &mut DeterministicRng) -> VrfReveal {
     VrfReveal {
         epoch: rng.next_u64(),
@@ -381,7 +344,6 @@ fn rng_vrf_reveal(rng: &mut DeterministicRng) -> VrfReveal {
         bls_sig: rng.bytes(96),
     }
 }
-
 fn rng_reconfig(rng: &mut DeterministicRng) -> Reconfig {
     let roster_len = rng.range_inclusive(1, 4);
     let mut roster = Vec::with_capacity(roster_len);
@@ -393,7 +355,6 @@ fn rng_reconfig(rng: &mut DeterministicRng) -> Reconfig {
         activation_height: rng.next_u64(),
     }
 }
-
 fn rng_roster(rng: &mut DeterministicRng) -> Vec<PeerId> {
     let roster_len = rng.range_inclusive(1, 4);
     let mut roster = Vec::with_capacity(roster_len);
@@ -402,7 +363,6 @@ fn rng_roster(rng: &mut DeterministicRng) -> Vec<PeerId> {
     }
     roster
 }
-
 fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
     let roster = rng_roster(rng);
     let roster_hash = Hash::new(roster.encode());
@@ -462,7 +422,6 @@ fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
         leader_signature,
     }
 }
-
 fn rng_rbc_chunk_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcChunk {
     let total = init.total_chunks.max(1);
     let upper = total.saturating_sub(1) as usize;
@@ -476,7 +435,6 @@ fn rng_rbc_chunk_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcChunk {
         bytes: rng.bytes(64),
     }
 }
-
 fn rng_rbc_ready_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcReady {
     RbcReady {
         block_hash: init.block_hash,
@@ -489,14 +447,12 @@ fn rng_rbc_ready_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcReady {
         signature: rng.bytes(64),
     }
 }
-
 fn rng_rbc_ready_signature_from(rng: &mut DeterministicRng) -> RbcReadySignature {
     RbcReadySignature {
         sender: rng.next_u32(),
         signature: rng.bytes(64),
     }
 }
-
 fn rng_rbc_deliver_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcDeliver {
     RbcDeliver {
         block_hash: init.block_hash,
@@ -512,7 +468,6 @@ fn rng_rbc_deliver_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcDelive
             .collect(),
     }
 }
-
 fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
     match rng.up_to(2) {
         0 => {
@@ -549,7 +504,6 @@ fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
         _ => unreachable!("rng.up_to(2) must be within 0..=2"),
     }
 }
-
 fn rng_evidence_record(rng: &mut DeterministicRng, evidence: Evidence) -> EvidenceRecord {
     EvidenceRecord {
         evidence,
@@ -563,7 +517,6 @@ fn rng_evidence_record(rng: &mut DeterministicRng, evidence: Evidence) -> Eviden
         consensus_admitted_at_height: None,
     }
 }
-
 fn rng_sumeragi_v2_status(rng: &mut DeterministicRng) -> SumeragiV2Status {
     SumeragiV2Status {
         protocol_version: V2_PROTOCOL_VERSION,
@@ -598,7 +551,6 @@ fn rng_sumeragi_v2_status(rng: &mut DeterministicRng) -> SumeragiV2Status {
         liveness: Default::default(),
     }
 }
-
 fn rng_sumeragi_qc_entry(rng: &mut DeterministicRng) -> SumeragiQcEntry {
     SumeragiQcEntry {
         height: rng.next_u64(),
@@ -610,14 +562,12 @@ fn rng_sumeragi_qc_entry(rng: &mut DeterministicRng) -> SumeragiQcEntry {
         },
     }
 }
-
 fn rng_sumeragi_qc_snapshot(rng: &mut DeterministicRng) -> SumeragiQcSnapshot {
     SumeragiQcSnapshot {
         highest_qc: rng_sumeragi_qc_entry(rng),
         locked_qc: rng_sumeragi_qc_entry(rng),
     }
 }
-
 #[test]
 fn consensus_genesis_norito_roundtrip() {
     let npos = NposGenesisParams {
@@ -648,12 +598,10 @@ fn consensus_genesis_norito_roundtrip() {
         mode: ConsensusGenesisModeParams::Permissioned,
         ..with_npos.clone()
     };
-
     assert_roundtrip(&npos);
     assert_roundtrip(&with_npos);
     assert_roundtrip(&without_npos);
 }
-
 #[allow(clippy::too_many_lines)]
 #[test]
 fn consensus_messages_norito_roundtrip() {
@@ -922,17 +870,14 @@ fn consensus_messages_norito_roundtrip() {
     assert_roundtrip(&rbc_ready);
     assert_roundtrip(&rbc_deliver);
 }
-
 #[test]
 fn consensus_roundtrip_deterministic_fuzz() {
     let mut rng = DeterministicRng::new(0xD4E5_F607_89AB_CDEF);
     for _ in 0..64 {
         let status = rng_sumeragi_v2_status(&mut rng);
         assert_roundtrip(&status);
-
         let qc_snapshot = rng_sumeragi_qc_snapshot(&mut rng);
         assert_roundtrip(&qc_snapshot);
-
         let genesis = rng_consensus_genesis_params(&mut rng);
         if let ConsensusGenesisModeParams::Npos(npos) = &genesis.mode {
             assert_roundtrip(npos);
@@ -951,63 +896,44 @@ fn consensus_roundtrip_deterministic_fuzz() {
             );
             panic!("consensus genesis roundtrip mismatch");
         }
-
         let cert_header = rng_commit_qc_ref(&mut rng);
         assert_roundtrip(&cert_header);
-
         let block_header = rng_consensus_block_header(&mut rng);
         assert_roundtrip(&block_header);
-
         let proposal = rng_proposal(&mut rng);
         assert_roundtrip(&proposal);
-
         let vote = rng_commit_vote(&mut rng);
         assert_roundtrip(&vote);
-
         let aggregate = rng_commit_aggregate(&mut rng);
         assert_roundtrip(&aggregate);
-
         let cert = rng_commit_qc(&mut rng);
         assert_roundtrip(&cert);
-
         let exec_kv = rng_exec_kv(&mut rng);
         assert_roundtrip(&exec_kv);
-
         let exec_witness = rng_exec_witness(&mut rng);
         assert_roundtrip(&exec_witness);
-
         let exec_witness_msg = rng_exec_witness_msg(&mut rng);
         assert_roundtrip(&exec_witness_msg);
-
         let vrf_commit = rng_vrf_commit(&mut rng);
         assert_roundtrip(&vrf_commit);
-
         let vrf_reveal = rng_vrf_reveal(&mut rng);
         assert_roundtrip(&vrf_reveal);
-
         let reconfig = rng_reconfig(&mut rng);
         assert_roundtrip(&reconfig);
-
         let evidence = rng_evidence(&mut rng);
         assert_roundtrip(&evidence);
-
         let evidence_record = rng_evidence_record(&mut rng, evidence);
         assert_roundtrip(&evidence_record);
-
         let rbc_init = rng_rbc_init(&mut rng);
         assert_roundtrip(&rbc_init);
-
         let rbc_chunk = rng_rbc_chunk_from(&mut rng, &rbc_init);
         assert_roundtrip(&rbc_chunk);
-
         let rbc_ready = rng_rbc_ready_from(&mut rng, &rbc_init);
         assert_roundtrip(&rbc_ready);
-
         let rbc_deliver = rng_rbc_deliver_from(&mut rng, &rbc_init);
         assert_roundtrip(&rbc_deliver);
     }
 }
-
 #[test]
 fn lane_commitment_fixtures_roundtrip() {
     let fixtures_dir = workspace_root()
@@ -1018,15 +944,12 @@ fn lane_commitment_fixtures_roundtrip() {
         fixtures_dir.is_dir(),
         "lane commitment fixtures directory {fixtures_dir:?} must exist"
     );
-
     let seen = process_lane_commitment_fixtures(&fixtures_dir, LaneCommitmentFixtureMode::Verify);
-
     assert!(
         seen > 0,
         "expected at least one lane commitment fixture under {fixtures_dir:?}"
     );
 }
-
 #[test]
 #[ignore = "regenerates lane commitment Norito fixtures"]
 fn regenerate_lane_commitment_fixtures() {
@@ -1038,22 +961,18 @@ fn regenerate_lane_commitment_fixtures() {
         fixtures_dir.is_dir(),
         "lane commitment fixtures directory {fixtures_dir:?} must exist"
     );
-
     let seen =
         process_lane_commitment_fixtures(&fixtures_dir, LaneCommitmentFixtureMode::Regenerate);
-
     assert!(
         seen > 0,
         "expected at least one lane commitment fixture under {fixtures_dir:?}"
     );
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LaneCommitmentFixtureMode {
     Verify,
     Regenerate,
 }
-
 fn process_lane_commitment_fixtures(fixtures_dir: &Path, mode: LaneCommitmentFixtureMode) -> usize {
     let mut seen = 0usize;
     for entry in fs::read_dir(fixtures_dir).expect("read lane commitment fixtures") {
@@ -1128,7 +1047,6 @@ fn process_lane_commitment_fixtures(fixtures_dir: &Path, mode: LaneCommitmentFix
     }
     seen
 }
-
 fn sample_lane_commitment_fixture() -> LaneBlockCommitment {
     let receipt = LaneSettlementReceipt {
         source_id: [0xAB; 32],
@@ -1138,7 +1056,6 @@ fn sample_lane_commitment_fixture() -> LaneBlockCommitment {
         xor_variance: "0.02".parse().expect("valid settlement quantity"),
         timestamp_ms: 1_726_296_400_000,
     };
-
     LaneBlockCommitment {
         block_height: 8_642,
         lane_id: LaneId::new(1),
@@ -1161,7 +1078,6 @@ fn sample_lane_commitment_fixture() -> LaneBlockCommitment {
         native_amx_receipts: Vec::new(),
     }
 }
-
 fn sample_lane_commitment_fixture_without_metadata() -> LaneBlockCommitment {
     LaneBlockCommitment {
         block_height: 8_643,
@@ -1179,7 +1095,6 @@ fn sample_lane_commitment_fixture_without_metadata() -> LaneBlockCommitment {
         native_amx_receipts: Vec::new(),
     }
 }
-
 fn write_lane_commitment_json_fixture(
     fixtures_dir: &Path,
     stem: &str,
@@ -1191,7 +1106,6 @@ fn write_lane_commitment_json_fixture(
         .unwrap_or_else(|err| panic!("write lane commitment fixture {}: {err}", path.display()));
     path
 }
-
 fn assert_lane_commitment_to_fixture_matches(
     json_path: &Path,
     commitment: &LaneBlockCommitment,
@@ -1205,7 +1119,6 @@ fn assert_lane_commitment_to_fixture_matches(
         "{context}: Norito companion bytes must match canonical encoding"
     );
 }
-
 #[test]
 fn lane_commitment_fixture_helper_skips_non_json_and_missing_to() {
     let dir = tempdir().expect("create temp dir");
@@ -1214,27 +1127,22 @@ fn lane_commitment_fixture_helper_skips_non_json_and_missing_to() {
     let json_path = write_lane_commitment_json_fixture(fixtures_dir, "lane", &commitment);
     let ignored_path = fixtures_dir.join("notes.txt");
     fs::write(&ignored_path, "not a fixture").expect("write ignored file");
-
     let seen = process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify);
     assert_eq!(seen, 1, "only JSON fixtures should be counted");
-
     let to_path = json_path.with_extension("to");
     assert!(
         !to_path.exists(),
         "verify mode must not create missing Norito fixture companions"
     );
 }
-
 #[test]
 fn lane_commitment_fixture_helper_returns_zero_for_empty_directory() {
     let dir = tempdir().expect("create temp dir");
     let fixtures_dir = dir.path();
-
     let verified =
         process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify);
     let regenerated =
         process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Regenerate);
-
     assert_eq!(
         verified, 0,
         "empty directories should not report fixtures in verify mode"
@@ -1244,7 +1152,6 @@ fn lane_commitment_fixture_helper_returns_zero_for_empty_directory() {
         "empty directories should not report fixtures in regenerate mode"
     );
 }
-
 #[test]
 fn lane_commitment_fixture_helper_regenerate_overwrites_stale_to() {
     let dir = tempdir().expect("create temp dir");
@@ -1253,17 +1160,14 @@ fn lane_commitment_fixture_helper_regenerate_overwrites_stale_to() {
     let json_path = write_lane_commitment_json_fixture(fixtures_dir, "lane", &commitment);
     let to_path = json_path.with_extension("to");
     fs::write(&to_path, b"stale").expect("write stale Norito fixture");
-
     let seen =
         process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Regenerate);
     assert_eq!(seen, 1, "regenerate mode should process the JSON fixture");
-
     assert_lane_commitment_to_fixture_matches(
         &json_path,
         &commitment,
         "regenerate mode must overwrite stale Norito fixture bytes",
     );
-
     let verified =
         process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify);
     assert_eq!(
@@ -1271,7 +1175,6 @@ fn lane_commitment_fixture_helper_regenerate_overwrites_stale_to() {
         "regenerated fixture should verify successfully"
     );
 }
-
 #[test]
 fn lane_commitment_fixture_helper_verify_panics_on_stale_but_decodable_to() {
     let dir = tempdir().expect("create temp dir");
@@ -1282,7 +1185,6 @@ fn lane_commitment_fixture_helper_verify_panics_on_stale_but_decodable_to() {
     let to_path = json_path.with_extension("to");
     let stale_bytes = norito::to_bytes(&stale_commitment).expect("encode stale Norito fixture");
     fs::write(&to_path, stale_bytes).expect("write stale decodable Norito fixture");
-
     let result = std::panic::catch_unwind(|| {
         process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify)
     });
@@ -1291,7 +1193,6 @@ fn lane_commitment_fixture_helper_verify_panics_on_stale_but_decodable_to() {
         "verify mode must fail when a decodable companion fixture is stale"
     );
 }
-
 #[test]
 fn lane_commitment_fixture_helper_regenerate_creates_missing_to_for_multiple_fixtures() {
     let dir = tempdir().expect("create temp dir");
@@ -1302,14 +1203,12 @@ fn lane_commitment_fixture_helper_regenerate_creates_missing_to_for_multiple_fix
         write_lane_commitment_json_fixture(fixtures_dir, "with_metadata", &with_metadata);
     let without_metadata_path =
         write_lane_commitment_json_fixture(fixtures_dir, "without_metadata", &without_metadata);
-
     let regenerated =
         process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Regenerate);
     assert_eq!(
         regenerated, 2,
         "regenerate mode should process every JSON lane commitment fixture"
     );
-
     assert_lane_commitment_to_fixture_matches(
         &with_metadata_path,
         &with_metadata,
@@ -1320,7 +1219,6 @@ fn lane_commitment_fixture_helper_regenerate_creates_missing_to_for_multiple_fix
         &without_metadata,
         "regenerate mode should create a .to companion for metadata-free fixtures",
     );
-
     let verified =
         process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify);
     assert_eq!(
@@ -1328,11 +1226,9 @@ fn lane_commitment_fixture_helper_regenerate_creates_missing_to_for_multiple_fix
         "generated companions should verify for every fixture"
     );
 }
-
 #[test]
 fn lane_block_commitment_roundtrips_without_metadata_or_receipts() {
     let commitment = sample_lane_commitment_fixture_without_metadata();
-
     let json = norito::json::to_json_pretty(&commitment).expect("serialize commitment to JSON");
     let replay: LaneBlockCommitment =
         norito::json::from_str(&json).expect("parse reserialized commitment");
@@ -1340,7 +1236,6 @@ fn lane_block_commitment_roundtrips_without_metadata_or_receipts() {
         replay, commitment,
         "JSON roundtrip must preserve commitments without optional metadata"
     );
-
     let norito_bytes = norito::to_bytes(&commitment).expect("encode commitment to Norito bytes");
     let archived = norito::from_bytes::<LaneBlockCommitment>(&norito_bytes)
         .expect("archive metadata-free commitment");
@@ -1351,7 +1246,6 @@ fn lane_block_commitment_roundtrips_without_metadata_or_receipts() {
         "Norito roundtrip must preserve commitments without receipts"
     );
 }
-
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

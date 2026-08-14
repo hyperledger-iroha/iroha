@@ -2,11 +2,8 @@
 //!
 //! These structures represent the parsed Kotodama source surface accepted by
 //! the compiler.
-
-use iroha_primitives::bigint::BigInt;
-
 use crate::source::{SourceRange, TextRange};
-
+use iroha_primitives::bigint::BigInt;
 /// Stable identity assigned when a spanned AST node enters resolved HIR.
 ///
 /// The identity is local to one source unit. It is embedded in resolver-only
@@ -14,20 +11,17 @@ use crate::source::{SourceRange, TextRange};
 /// semantic analysis from the name-resolution result it is required to use.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct HirId(pub(crate) u32);
-
 /// Stable identity assigned by the CST/AST parser to one source-backed node.
 ///
 /// Unlike an address-derived lookup key, this identity is stored directly in
 /// source provenance and therefore survives moves, clones, and parser caches.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct NodeId(pub(crate) u32);
-
 impl NodeId {
     pub(crate) fn index(self) -> usize {
         usize::try_from(self.0).expect("u32 source-node identity fits usize")
     }
 }
-
 /// Compiler-owned call name used after parsing the canonical
 /// `StateMap.get(key)` method form.
 ///
@@ -36,7 +30,6 @@ impl NodeId {
 /// resolution to distinguish a user function named `get` from the StateMap
 /// intrinsic.
 pub(crate) const STATE_MAP_GET_INTRINSIC: &str = "state_map_get";
-
 #[derive(Debug, PartialEq, Clone)]
 pub struct Program {
     /// The single named source unit declared by this file.
@@ -47,7 +40,6 @@ pub struct Program {
     /// Optional local test fixtures available to `#[test(...)]` functions.
     pub fixtures: Vec<FixtureDecl>,
 }
-
 /// Whether a source file declares a deployable `seiyaku` or a library module.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum SourceUnitKind {
@@ -56,7 +48,6 @@ pub enum SourceUnitKind {
     /// A non-deployable library unit.
     Module,
 }
-
 /// Identity of the single top-level source unit.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SourceUnit {
@@ -65,13 +56,11 @@ pub struct SourceUnit {
     /// Source-level seiyaku or module name.
     pub name: String,
 }
-
 #[derive(Debug, PartialEq, Clone, Copy, Eq)]
 pub struct SourceLocation {
     pub line: usize,
     pub column: usize,
 }
-
 /// Exact declaration role of a function inside a seiyaku or module.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub enum FunctionKind {
@@ -87,7 +76,6 @@ pub enum FunctionKind {
     /// Read-only public query entrypoint (`view fn`).
     View,
 }
-
 /// Parsed modifiers associated with a function.
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct FunctionModifiers {
@@ -105,7 +93,6 @@ pub struct FunctionModifiers {
     /// Optional fixture bound to a Kotodama test function.
     pub test_fixture: Option<String>,
 }
-
 #[derive(Debug, PartialEq, Clone)]
 pub enum Item {
     Function(Function),
@@ -121,7 +108,6 @@ pub enum Item {
     /// Seiyaku-level trigger declaration (manifest-only metadata).
     Trigger(TriggerDecl),
 }
-
 /// A syntactic type expression as written by the user.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeExpr {
@@ -150,7 +136,6 @@ pub enum TypeExpr {
     /// A non-negative compile-time integer argument, used by `List<T, N>`.
     Const(u64),
 }
-
 #[derive(Debug, PartialEq, Clone)]
 pub struct Param {
     pub ty: Option<TypeExpr>,
@@ -158,7 +143,6 @@ pub struct Param {
     /// Internal state-handle marker; canonical V1 source parameters always set this to `false`.
     pub is_state: bool,
 }
-
 #[derive(Debug, PartialEq, Clone)]
 pub struct Function {
     pub name: String,
@@ -168,35 +152,30 @@ pub struct Function {
     pub modifiers: FunctionModifiers,
     pub location: SourceLocation,
 }
-
 #[derive(Debug, PartialEq, Clone)]
 pub struct Block {
     pub statements: Vec<Statement>,
     /// Final expression without a semicolon, evaluated as the block value.
     pub tail: Option<Box<Expr>>,
 }
-
 /// A user-defined struct with named fields.
 #[derive(Debug, PartialEq, Clone)]
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<(String, TypeExpr)>,
 }
-
 /// Declared stable error-code namespace.
 #[derive(Debug, PartialEq, Clone)]
 pub struct ErrorEnumDef {
     pub name: String,
     pub variants: Vec<ErrorVariant>,
 }
-
 /// One explicitly numbered seiyaku error.
 #[derive(Debug, PartialEq, Clone)]
 pub struct ErrorVariant {
     pub name: String,
     pub code: u32,
 }
-
 /// A seiyaku-level type-first `const` declaration: `const Type name = expr;`.
 #[derive(Debug, PartialEq, Clone)]
 pub struct ConstDecl {
@@ -204,27 +183,23 @@ pub struct ConstDecl {
     pub ty: Option<TypeExpr>,
     pub value: Expr,
 }
-
 /// A seiyaku-level `state` declaration: `state Type name;`.
 #[derive(Debug, PartialEq, Clone)]
 pub struct StateDecl {
     pub name: String,
     pub ty: TypeExpr,
 }
-
 /// Standalone Kotodama test-file declaration identifying the seiyaku under test.
 #[derive(Debug, PartialEq, Clone)]
 pub struct TestTargetDecl {
     pub target: String,
 }
-
 /// Declarative local fixture used by `koto_test`.
 #[derive(Debug, PartialEq, Clone)]
 pub struct FixtureDecl {
     pub name: String,
     pub actions: Vec<FixtureAction>,
 }
-
 /// One fixture action expressed as a function-style command, for example
 /// `caller(account("alice@wonderland"))`.
 #[derive(Debug, PartialEq, Clone)]
@@ -232,7 +207,6 @@ pub struct FixtureAction {
     pub name: String,
     pub args: Vec<Expr>,
 }
-
 /// Seiyaku-level trigger declaration.
 #[derive(Debug, PartialEq, Clone)]
 pub struct TriggerDecl {
@@ -245,14 +219,12 @@ pub struct TriggerDecl {
     pub authority: Option<String>,
     pub metadata: Vec<TriggerMetadataEntry>,
 }
-
 /// Trigger callback target.
 #[derive(Debug, PartialEq, Clone)]
 pub struct TriggerCall {
     pub namespace: Option<String>,
     pub entrypoint: String,
 }
-
 /// Trigger filter definition.
 #[derive(Debug, PartialEq, Clone)]
 pub enum TriggerFilter {
@@ -261,14 +233,12 @@ pub enum TriggerFilter {
     Data(TriggerDataFilter),
     Pipeline(TriggerPipelineFilter),
 }
-
 /// Data trigger filter variants.
 #[derive(Debug, PartialEq, Clone)]
 pub enum TriggerDataFilter {
     Any,
     Structured(TriggerStructuredDataFilter),
 }
-
 /// Structured data trigger filter block.
 #[derive(Debug, PartialEq, Clone)]
 pub struct TriggerStructuredDataFilter {
@@ -276,7 +246,6 @@ pub struct TriggerStructuredDataFilter {
     pub event: TriggerDataEventKind,
     pub matchers: Vec<TriggerDataMatcher>,
 }
-
 /// Supported data-event families for contract trigger declarations.
 #[derive(Debug, PartialEq, Clone, Copy, Eq)]
 pub enum TriggerDataFamily {
@@ -292,28 +261,24 @@ pub enum TriggerDataFamily {
     Configuration,
     Executor,
 }
-
 /// Event kind selector inside a structured data trigger.
 #[derive(Debug, PartialEq, Clone)]
 pub enum TriggerDataEventKind {
     Any,
     Named(String),
 }
-
 /// Matcher entry inside a structured data trigger block.
 #[derive(Debug, PartialEq, Clone)]
 pub struct TriggerDataMatcher {
     pub key: String,
     pub value: String,
 }
-
 /// Pipeline trigger filter variants.
 #[derive(Debug, PartialEq, Clone)]
 pub enum TriggerPipelineFilter {
     TransactionApproved,
     BlockApproved,
 }
-
 /// Time trigger filter variants.
 #[derive(Debug, PartialEq, Clone)]
 pub enum TriggerTimeFilter {
@@ -323,47 +288,40 @@ pub enum TriggerTimeFilter {
         period_ms: Option<u64>,
     },
 }
-
 /// Trigger repeat policy.
 #[derive(Debug, PartialEq, Clone)]
 pub enum TriggerRepeats {
     Indefinitely,
     Exactly(u32),
 }
-
 /// Trigger metadata entry (literal JSON values only).
 #[derive(Debug, PartialEq, Clone)]
 pub struct TriggerMetadataEntry {
     pub key: String,
     pub value: Expr,
 }
-
 /// Seiyaku-level localization table.
 #[derive(Debug, PartialEq, Clone)]
 pub struct MessageBlock {
     pub entries: Vec<MessageEntry>,
 }
-
 /// Localized message entry keyed by a stable message id.
 #[derive(Debug, PartialEq, Clone)]
 pub struct MessageEntry {
     pub msg_id: String,
     pub translations: Vec<MessageTranslation>,
 }
-
 /// Localization entry for a specific language tag.
 #[derive(Debug, PartialEq, Clone)]
 pub struct MessageTranslation {
     pub lang: String,
     pub text: String,
 }
-
 #[derive(Debug, PartialEq, Clone)]
 pub enum Pattern {
     Name(String),
     Tuple(Vec<String>),
 }
-
 /// Canonical namespaced variant admitted in `match` and `if let` patterns.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum SumVariant {
@@ -372,7 +330,6 @@ pub enum SumVariant {
     ResultOk,
     ResultErr,
 }
-
 /// Payload handling for an active sum variant pattern.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum PatternBinding {
@@ -381,7 +338,6 @@ pub enum PatternBinding {
     /// Explicitly ignore the active payload.
     Wildcard,
 }
-
 /// One exhaustive namespaced `Option` or `Result` pattern.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SumPattern {
@@ -389,14 +345,12 @@ pub struct SumPattern {
     /// `None` is valid only for the inactive `Option::none` pattern.
     pub binding: Option<PatternBinding>,
 }
-
 /// One source `match` arm.
 #[derive(Debug, PartialEq, Clone)]
 pub struct MatchArm {
     pub pattern: SumPattern,
     pub body: Block,
 }
-
 /// One native JSON object entry with its decoded key and exact source spelling.
 #[derive(Debug, PartialEq, Clone)]
 pub struct JsonObjectEntry {
@@ -409,7 +363,6 @@ pub struct JsonObjectEntry {
     /// Dynamically converted JSON value expression.
     pub value: Expr,
 }
-
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum AssignOp {
     /// Simple assignment: `=`.
@@ -425,7 +378,6 @@ pub enum AssignOp {
     /// Compound assignment: `%=`.
     Mod,
 }
-
 #[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
     /// Parser-internal provenance carrier removed before any canonical public
@@ -498,7 +450,6 @@ pub enum Statement {
         body: Block,
     },
 }
-
 #[derive(Debug, PartialEq, Clone)]
 pub enum Expr {
     /// Parser-internal provenance carrier removed before any canonical public
@@ -614,7 +565,6 @@ pub enum Expr {
     Bytes(Vec<u8>),
     Ident(String),
 }
-
 /// One source field in a named struct literal.
 #[derive(Debug, PartialEq, Clone)]
 pub struct StructLiteralField {
@@ -625,7 +575,6 @@ pub struct StructLiteralField {
     /// Whether the source used shorthand spelling without `: value`.
     pub shorthand: bool,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BinaryOp {
     Add,
@@ -643,13 +592,11 @@ pub enum BinaryOp {
     Gt,
     Ge,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UnaryOp {
     Neg,
     Not,
 }
-
 impl TypeExpr {
     /// Return this type's exact source range when it came from source text.
     #[must_use]
@@ -663,7 +610,6 @@ impl TypeExpr {
             _ => None,
         }
     }
-
     /// Return the stable resolved-HIR identity, when name resolution has run.
     #[must_use]
     pub const fn hir_id(&self) -> Option<HirId> {
@@ -673,7 +619,6 @@ impl TypeExpr {
             _ => None,
         }
     }
-
     /// Return the parser-owned source identity before resolved-HIR lowering.
     #[must_use]
     pub const fn source_node(&self) -> Option<NodeId> {
@@ -683,7 +628,6 @@ impl TypeExpr {
             _ => None,
         }
     }
-
     /// View the semantic type form without its source wrapper.
     #[must_use]
     pub fn kind(&self) -> &Self {
@@ -693,7 +637,6 @@ impl TypeExpr {
             _ => self,
         }
     }
-
     /// Consume the source wrapper and return the semantic type form.
     #[must_use]
     pub fn into_kind(self) -> Self {
@@ -704,7 +647,6 @@ impl TypeExpr {
         }
     }
 }
-
 impl Statement {
     /// Return this statement's exact source range when it came from source text.
     #[must_use]
@@ -720,7 +662,6 @@ impl Statement {
             _ => None,
         }
     }
-
     /// Return the stable resolved-HIR identity, when name resolution has run.
     #[must_use]
     pub const fn hir_id(&self) -> Option<HirId> {
@@ -730,7 +671,6 @@ impl Statement {
             _ => None,
         }
     }
-
     /// Return the parser-owned source identity before resolved-HIR lowering.
     #[must_use]
     pub const fn source_node(&self) -> Option<NodeId> {
@@ -740,7 +680,6 @@ impl Statement {
             _ => None,
         }
     }
-
     /// View the semantic statement form without its source wrapper.
     #[must_use]
     pub fn kind(&self) -> &Self {
@@ -750,7 +689,6 @@ impl Statement {
             _ => self,
         }
     }
-
     /// Consume the source wrapper and return the semantic statement form.
     #[must_use]
     pub fn into_kind(self) -> Self {
@@ -761,7 +699,6 @@ impl Statement {
         }
     }
 }
-
 impl Expr {
     /// Return this expression's exact source range when it came from source text.
     #[must_use]
@@ -777,7 +714,6 @@ impl Expr {
             _ => None,
         }
     }
-
     /// Return the stable resolved-HIR identity, when name resolution has run.
     #[must_use]
     pub const fn hir_id(&self) -> Option<HirId> {
@@ -787,7 +723,6 @@ impl Expr {
             _ => None,
         }
     }
-
     /// Return the parser-owned source identity before resolved-HIR lowering.
     #[must_use]
     pub const fn source_node(&self) -> Option<NodeId> {
@@ -797,7 +732,6 @@ impl Expr {
             _ => None,
         }
     }
-
     /// View the semantic expression form without its source wrapper.
     #[must_use]
     pub fn kind(&self) -> &Self {
@@ -807,7 +741,6 @@ impl Expr {
             _ => self,
         }
     }
-
     /// Consume the source wrapper and return the semantic expression form.
     #[must_use]
     pub fn into_kind(self) -> Self {
@@ -818,13 +751,11 @@ impl Expr {
         }
     }
 }
-
 #[derive(Clone, Copy)]
 enum ProvenanceAction {
     Rebase(crate::source::SourceId),
     Strip,
 }
-
 fn normalize_type_provenance(ty: &mut TypeExpr, action: ProvenanceAction) -> &mut TypeExpr {
     match action {
         ProvenanceAction::Rebase(source_id) => {
@@ -859,7 +790,6 @@ fn normalize_type_provenance(ty: &mut TypeExpr, action: ProvenanceAction) -> &mu
         },
     }
 }
-
 fn normalize_statement_provenance(
     statement: &mut Statement,
     action: ProvenanceAction,
@@ -906,7 +836,6 @@ fn normalize_statement_provenance(
         },
     }
 }
-
 fn normalize_expr_provenance(expression: &mut Expr, action: ProvenanceAction) -> &mut Expr {
     match action {
         ProvenanceAction::Rebase(source_id) => {
@@ -950,21 +879,18 @@ fn normalize_expr_provenance(expression: &mut Expr, action: ProvenanceAction) ->
         },
     }
 }
-
 fn transform_program_provenance(program: &mut Program, action: ProvenanceAction) {
     enum Pending<'a> {
         Type(&'a mut TypeExpr),
         Statement(&'a mut Statement),
         Expr(&'a mut Expr),
     }
-
     fn push_block<'a>(block: &'a mut Block, pending: &mut Vec<Pending<'a>>) {
         pending.extend(block.statements.iter_mut().map(Pending::Statement));
         if let Some(tail) = &mut block.tail {
             pending.push(Pending::Expr(tail));
         }
     }
-
     let mut pending = Vec::new();
     for item in &mut program.items {
         match item {
@@ -1010,7 +936,6 @@ fn transform_program_provenance(program: &mut Program, action: ProvenanceAction)
             pending.extend(fixture_action.args.iter_mut().map(Pending::Expr));
         }
     }
-
     while let Some(node) = pending.pop() {
         match node {
             Pending::Type(ty) => match normalize_type_provenance(ty, action) {
@@ -1180,17 +1105,14 @@ fn transform_program_provenance(program: &mut Program, action: ProvenanceAction)
         }
     }
 }
-
 /// Rebase every embedded source range while preserving local NodeId/HirId identities.
 pub(crate) fn rebase_program_source(program: &mut Program, source: crate::source::SourceId) {
     transform_program_provenance(program, ProvenanceAction::Rebase(source));
 }
-
 /// Remove compiler provenance wrappers for public syntax/tooling AST consumers.
 pub(crate) fn strip_program_provenance(program: &mut Program) {
     transform_program_provenance(program, ProvenanceAction::Strip);
 }
-
 /// Destroy a parsed program without recursively dropping adversarially deep
 /// expression, statement, or type trees.
 ///
@@ -1205,7 +1127,6 @@ pub(crate) fn drop_program_iterative(program: Program) {
         Expr(Expr),
         Type(TypeExpr),
     }
-
     fn push_block(block: Block, pending: &mut Vec<Pending>) {
         pending.extend(block.statements.into_iter().map(Pending::Statement));
         pending.extend(
@@ -1215,7 +1136,6 @@ pub(crate) fn drop_program_iterative(program: Program) {
                 .map(|expression| Pending::Expr(*expression)),
         );
     }
-
     let Program {
         unit: _,
         items,
@@ -1223,7 +1143,6 @@ pub(crate) fn drop_program_iterative(program: Program) {
         fixtures,
     } = program;
     let mut pending = Vec::new();
-
     for item in items {
         match item {
             Item::Function(function) => {
@@ -1262,7 +1181,6 @@ pub(crate) fn drop_program_iterative(program: Program) {
             pending.extend(action.args.into_iter().map(Pending::Expr));
         }
     }
-
     while let Some(node) = pending.pop() {
         match node {
             Pending::Type(TypeExpr::Source { ty, .. } | TypeExpr::Resolved { ty, .. }) => {
@@ -1433,12 +1351,10 @@ pub(crate) fn drop_program_iterative(program: Program) {
         }
     }
 }
-
 #[cfg(test)]
 mod provenance_tests {
     use super::*;
     use crate::source::{SourceId, TextRange};
-
     fn deeply_sourced_program(depth: u32) -> Program {
         let old_source = SourceId(11);
         let mut expression = Expr::IntLiteral(BigInt::one());
@@ -1466,13 +1382,11 @@ mod provenance_tests {
             fixtures: Vec::new(),
         }
     }
-
     #[test]
     fn full_depth_provenance_rebases_and_strips_iteratively() {
         let mut program = deeply_sourced_program(256);
         let new_source = SourceId(99);
         rebase_program_source(&mut program, new_source);
-
         let Item::Const(declaration) = &program.items[0] else {
             panic!("const declaration")
         };
@@ -1495,7 +1409,6 @@ mod provenance_tests {
             }
         }
         assert_eq!(wrappers, 256);
-
         strip_program_provenance(&mut program);
         let Item::Const(declaration) = &program.items[0] else {
             panic!("const declaration")

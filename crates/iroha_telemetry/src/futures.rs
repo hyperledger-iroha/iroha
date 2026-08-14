@@ -1,16 +1,12 @@
 //! Module with telemetry future telemetry processing
-use std::{collections::HashMap, marker::Unpin, time::Duration};
-
 use iroha_futures::FuturePollTelemetry;
 use iroha_logger::telemetry::Event as Telemetry;
+use std::{collections::HashMap, marker::Unpin, time::Duration};
 use tokio::time;
 use tokio_stream::{Stream, StreamExt, wrappers::errors::BroadcastStreamRecvError};
-
 pub mod post_process {
     //! Module with telemetry post processing
-
     use super::*;
-
     /// Post processed info of function
     #[derive(
         Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize,
@@ -31,7 +27,6 @@ pub mod post_process {
         /// Maximum
         pub max: f64,
     }
-
     #[allow(clippy::fallible_impl_from)]
     impl From<(String, HashMap<u64, Vec<Duration>>)> for PostProcessedInfo {
         fn from((name, entries): (String, HashMap<u64, Vec<Duration>>)) -> Self {
@@ -39,7 +34,6 @@ pub mod post_process {
                 .values()
                 .flat_map(|v| v.iter().map(Duration::as_secs_f64))
                 .collect();
-
             if values.is_empty() {
                 return Self {
                     name,
@@ -51,16 +45,13 @@ pub mod post_process {
                     max: 0.0,
                 };
             }
-
             let minmax = values.iter().copied().collect::<stats::MinMax<f64>>();
-
             let mean = stats::mean(values.iter().copied());
             let median = stats::median(values.iter().copied()).unwrap_or_default();
             let variance = stats::variance(values.iter().copied());
             let stddev = stats::stddev(values.iter().copied());
             let min = minmax.min().copied().unwrap_or_default();
             let max = minmax.max().copied().unwrap_or_default();
-
             Self {
                 name,
                 stddev,
@@ -72,7 +63,6 @@ pub mod post_process {
             }
         }
     }
-
     /// Collects info from stream of future poll telemetry
     pub async fn collect_info(
         mut receiver: impl Stream<Item = FuturePollTelemetry> + Unpin + Send,
@@ -90,7 +80,6 @@ pub mod post_process {
         out.into_iter().map(Into::into).collect()
     }
 }
-
 /// Gets stream of future poll telemetry out of general telemetry stream
 pub fn get_stream(
     receiver: impl Stream<Item = Result<Telemetry, BroadcastStreamRecvError>> + Unpin,
@@ -110,28 +99,22 @@ pub fn get_stream(
             },
         )
 }
-
 #[cfg(test)]
 mod tests {
-    use tokio_stream::empty;
-
     use super::*;
-
+    use tokio_stream::empty;
     #[tokio::test]
     async fn collect_info_handles_empty_stream() {
         let info = post_process::collect_info(empty()).await;
         assert!(info.is_empty());
     }
-
     #[test]
     fn post_processed_info_handles_empty_data() {
         use std::{collections::HashMap, time::Duration};
-
         let info = post_process::PostProcessedInfo::from((
             String::from("test"),
             HashMap::<u64, Vec<Duration>>::new(),
         ));
-
         assert!((info.median - 0.0).abs() < f64::EPSILON);
         assert!((info.min - 0.0).abs() < f64::EPSILON);
         assert!((info.max - 0.0).abs() < f64::EPSILON);

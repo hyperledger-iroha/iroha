@@ -4,9 +4,7 @@
 //! identical results to a local scalar reference implementation for:
 //! - Random initial states and random 64-byte blocks
 //! - The standard "abc" single-block padded message with known digest
-
 use ivm::sha256_compress;
-
 // Deterministic PRNG reused from other tests (no external deps)
 #[derive(Clone)]
 struct Rng(u64);
@@ -35,7 +33,6 @@ impl Rng {
         }
     }
 }
-
 fn sha256_compress_scalar(state: &mut [u32; 8], block: &[u8; 64]) {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
@@ -49,7 +46,6 @@ fn sha256_compress_scalar(state: &mut [u32; 8], block: &[u8; 64]) {
         0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
         0xc67178f2,
     ];
-
     let mut w = [0u32; 64];
     for (t, chunk) in block.chunks(4).enumerate().take(16) {
         w[t] = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
@@ -62,7 +58,6 @@ fn sha256_compress_scalar(state: &mut [u32; 8], block: &[u8; 64]) {
             .wrapping_add(w[t - 7])
             .wrapping_add(s1);
     }
-
     let mut a = state[0];
     let mut b = state[1];
     let mut c = state[2];
@@ -71,7 +66,6 @@ fn sha256_compress_scalar(state: &mut [u32; 8], block: &[u8; 64]) {
     let mut f = state[5];
     let mut g = state[6];
     let mut h = state[7];
-
     for t in 0..64 {
         let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
         let ch = (e & f) ^ ((!e) & g);
@@ -83,7 +77,6 @@ fn sha256_compress_scalar(state: &mut [u32; 8], block: &[u8; 64]) {
         let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
         let maj = (a & b) ^ (a & c) ^ (b & c);
         let temp2 = s0.wrapping_add(maj);
-
         h = g;
         g = f;
         f = e;
@@ -93,7 +86,6 @@ fn sha256_compress_scalar(state: &mut [u32; 8], block: &[u8; 64]) {
         b = a;
         a = temp1.wrapping_add(temp2);
     }
-
     state[0] = state[0].wrapping_add(a);
     state[1] = state[1].wrapping_add(b);
     state[2] = state[2].wrapping_add(c);
@@ -103,14 +95,12 @@ fn sha256_compress_scalar(state: &mut [u32; 8], block: &[u8; 64]) {
     state[6] = state[6].wrapping_add(g);
     state[7] = state[7].wrapping_add(h);
 }
-
 #[test]
 fn sha256_compress_random_blocks_parity() {
     let mut rng = Rng::new(0xBADC0FFEE0DDF00D);
     for _ in 0..128 {
         let mut block = [0u8; 64];
         rng.fill_bytes(&mut block);
-
         let mut st_ref = [0u32; 8];
         let mut st_acc = [0u32; 8];
         for i in 0..8 {
@@ -118,13 +108,11 @@ fn sha256_compress_random_blocks_parity() {
             st_ref[i] = w;
             st_acc[i] = w;
         }
-
         sha256_compress_scalar(&mut st_ref, &block);
         sha256_compress(&mut st_acc, &block);
         assert_eq!(st_ref, st_acc);
     }
 }
-
 #[test]
 fn sha256_abc_single_block_matches_known_digest() {
     // Initial IV as per FIPS 180-4
@@ -147,7 +135,6 @@ fn sha256_abc_single_block_matches_known_digest() {
     // last 8 bytes are 64-bit big-endian bit length = 24
     block[63] = 24; // low byte
     sha256_compress(&mut state, &block);
-
     // Construct digest from state (big-endian words)
     let mut digest = [0u8; 32];
     for (i, word) in state.iter().enumerate() {

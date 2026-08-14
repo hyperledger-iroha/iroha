@@ -3,9 +3,6 @@
 //! The helpers here let SDK callers build and validate the `LaneRelayEnvelope`
 //! payloads surfaced by `/v1/sumeragi/status`, ensuring settlement proofs stay
 //! self-consistent before they are forwarded to other lanes.
-
-use std::collections::HashSet;
-
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::{BlockHeader, consensus::LaneBlockCommitment},
@@ -13,8 +10,8 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope, LaneRelayError},
 };
 use iroha_logger::prelude::*;
+use std::collections::HashSet;
 use thiserror::Error;
-
 /// Error surfaced when validating or building cross-lane relay proofs.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum CrossLaneProofError {
@@ -34,20 +31,17 @@ pub enum CrossLaneProofError {
         block_height: u64,
     },
 }
-
 /// Strongly typed wrapper around a [`LaneRelayEnvelope`].
 #[derive(Debug, Clone)]
 pub struct CrossLaneTransferProof {
     envelope: LaneRelayEnvelope,
 }
-
 impl CrossLaneTransferProof {
     /// Construct a proof wrapper from a relay envelope.
     #[must_use]
     pub const fn new(envelope: LaneRelayEnvelope) -> Self {
         Self { envelope }
     }
-
     /// Validate the structural DA and settlement bindings.
     ///
     /// # Errors
@@ -56,14 +50,12 @@ impl CrossLaneTransferProof {
         self.envelope.verify()?;
         Ok(())
     }
-
     /// Access the inner relay envelope.
     #[must_use]
     pub const fn envelope(&self) -> &LaneRelayEnvelope {
         &self.envelope
     }
 }
-
 /// Helper to build relay envelopes from lane settlement data.
 #[derive(Debug)]
 pub struct CrossLaneTransferBuilder {
@@ -73,7 +65,6 @@ pub struct CrossLaneTransferBuilder {
     rbc_bytes_total: u64,
     finality_authority: Option<LaneFinalityAuthorityV1>,
 }
-
 impl CrossLaneTransferBuilder {
     /// Create a builder for a cross-lane relay envelope.
     #[must_use]
@@ -91,21 +82,18 @@ impl CrossLaneTransferBuilder {
             finality_authority: None,
         }
     }
-
     /// Override the RBC byte count attached to the relay envelope.
     #[must_use]
     pub fn with_rbc_bytes_total(mut self, rbc_bytes_total: u64) -> Self {
         self.rbc_bytes_total = rbc_bytes_total;
         self
     }
-
     /// Attach a compact authority reference obtained from finalized node output.
     #[must_use]
     pub fn with_finality_authority(mut self, authority: LaneFinalityAuthorityV1) -> Self {
         self.finality_authority = Some(authority);
         self
     }
-
     /// Build the relay envelope and wrap it in a proof helper.
     ///
     /// # Errors
@@ -121,7 +109,6 @@ impl CrossLaneTransferBuilder {
         Ok(CrossLaneTransferProof::new(envelope))
     }
 }
-
 /// Verify a batch of relay envelopes and reject duplicates.
 ///
 /// # Errors
@@ -165,11 +152,9 @@ pub fn verify_lane_relay_envelopes(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
-
+    use super::*;
     use iroha_crypto::{Hash, MerkleProof};
     use iroha_data_model::{
         block::{
@@ -180,9 +165,7 @@ mod tests {
         },
         nexus::LaneId,
     };
-
-    use super::*;
-
+    use std::num::NonZeroU64;
     fn sample_settlement(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -217,7 +200,6 @@ mod tests {
             native_amx_receipts: Vec::new(),
         }
     }
-
     fn header_with_da_hash(
         height: NonZeroU64,
         da_hash: Option<HashOf<DaCommitmentBundle>>,
@@ -226,7 +208,6 @@ mod tests {
         header.set_da_commitments_hash(da_hash);
         header
     }
-
     fn sample_finality_authority(header: &BlockHeader) -> LaneFinalityAuthorityV1 {
         LaneFinalityAuthorityV1 {
             version: 1,
@@ -237,7 +218,6 @@ mod tests {
             statement_proof: MerkleProof::from_audit_path(0, Vec::new()),
         }
     }
-
     #[test]
     fn builder_constructs_verifiable_envelope() {
         let lane_id = LaneId::new(7);
@@ -246,19 +226,16 @@ mod tests {
         let header = header_with_da_hash(NonZeroU64::new(5).expect("nonzero height"), da_hash);
         let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
         let authority = sample_finality_authority(&header);
-
         let proof = CrossLaneTransferBuilder::new(header, da_hash, settlement)
             .with_finality_authority(authority.clone())
             .with_rbc_bytes_total(64)
             .build()
             .expect("builder should produce a valid envelope");
-
         proof.verify().expect("verification should succeed");
         assert_eq!(proof.envelope().block_height, header.height().get());
         assert_eq!(proof.envelope().rbc_bytes_total, 64);
         assert_eq!(proof.envelope().finality_authority, Some(authority));
     }
-
     #[test]
     fn builder_preserves_pending_envelopes_without_authority() {
         let lane_id = LaneId::new(1);
@@ -270,12 +247,10 @@ mod tests {
             .expect("pending proof without authority");
         assert!(proof.envelope().finality_authority.is_none());
     }
-
     #[test]
     fn batch_verification_accepts_empty_envelopes() {
         verify_lane_relay_envelopes(&[]).expect("empty relay envelope batch should be valid");
     }
-
     #[test]
     fn batch_verification_rejects_duplicates() {
         let lane_id = LaneId::new(10);
@@ -286,10 +261,8 @@ mod tests {
             .build()
             .expect("envelope should be valid");
         let envelope = proof.envelope().clone();
-
         verify_lane_relay_envelopes(std::slice::from_ref(&envelope))
             .expect("single envelope should pass");
-
         let err =
             verify_lane_relay_envelopes(&[envelope.clone(), envelope]).expect_err("duplicate");
         match err {
@@ -305,7 +278,6 @@ mod tests {
             other => panic!("unexpected duplicate proof error: {other:?}"),
         }
     }
-
     #[test]
     fn batch_verification_rejects_non_adjacent_duplicate_tuple() {
         let lane_id = LaneId::new(12);
@@ -327,7 +299,6 @@ mod tests {
             .expect("third envelope should be valid")
             .envelope()
             .clone();
-
         let middle_header = header_with_da_hash(
             NonZeroU64::new(duplicate_height + 1).expect("nonzero height"),
             None,
@@ -338,7 +309,6 @@ mod tests {
             .expect("middle envelope should be valid")
             .envelope()
             .clone();
-
         let err = verify_lane_relay_envelopes(&[first, middle, third])
             .expect_err("non-adjacent duplicate tuple should be rejected");
         match err {
@@ -354,7 +324,6 @@ mod tests {
             other => panic!("unexpected duplicate proof error: {other:?}"),
         }
     }
-
     #[test]
     fn batch_verification_allows_distinct_dataspaces_on_same_lane_and_height() {
         let lane_id = LaneId::new(10);
@@ -363,7 +332,6 @@ mod tests {
         let header = header_with_da_hash(NonZeroU64::new(11).expect("nonzero height"), None);
         let first_settlement = sample_settlement(lane_id, first_dataspace, header.height().get());
         let second_settlement = sample_settlement(lane_id, second_dataspace, header.height().get());
-
         let first = CrossLaneTransferBuilder::new(header, None, first_settlement)
             .build()
             .expect("first envelope should be valid")
@@ -374,11 +342,9 @@ mod tests {
             .expect("second envelope should be valid")
             .envelope()
             .clone();
-
         verify_lane_relay_envelopes(&[first, second])
             .expect("distinct dataspaces on same lane/height should not be duplicates");
     }
-
     #[test]
     fn batch_verification_allows_distinct_lanes_on_same_dataspace_and_height() {
         let first_lane = LaneId::new(10);
@@ -387,7 +353,6 @@ mod tests {
         let header = header_with_da_hash(NonZeroU64::new(11).expect("nonzero height"), None);
         let first_settlement = sample_settlement(first_lane, dataspace_id, header.height().get());
         let second_settlement = sample_settlement(second_lane, dataspace_id, header.height().get());
-
         let first = CrossLaneTransferBuilder::new(header, None, first_settlement)
             .build()
             .expect("first envelope should be valid")
@@ -398,17 +363,14 @@ mod tests {
             .expect("second envelope should be valid")
             .envelope()
             .clone();
-
         verify_lane_relay_envelopes(&[first, second])
             .expect("distinct lanes on same dataspace/height should not be duplicates");
     }
-
     #[test]
     fn batch_verification_duplicate_detection_depends_on_full_tuple_permutations() {
         let base_lane = LaneId::new(30);
         let base_dataspace = DataSpaceId::new(40);
         let base_height = 21_u64;
-
         let build_envelope = |lane_id: LaneId, dataspace_id: DataSpaceId, block_height: u64| {
             let header =
                 header_with_da_hash(NonZeroU64::new(block_height).expect("nonzero height"), None);
@@ -419,7 +381,6 @@ mod tests {
                 .envelope()
                 .clone()
         };
-
         let base = build_envelope(base_lane, base_dataspace, base_height);
         for lane_matches in [true, false] {
             for dataspace_matches in [true, false] {
@@ -440,7 +401,6 @@ mod tests {
                         base_height + 1
                     };
                     let second = build_envelope(lane_id, dataspace_id, block_height);
-
                     let result = verify_lane_relay_envelopes(&[base.clone(), second]);
                     let should_duplicate = lane_matches && dataspace_matches && height_matches;
                     if should_duplicate {
@@ -458,7 +418,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn batch_verification_reports_relay_error_before_duplicate_key_check() {
         let lane_id = LaneId::new(20);
@@ -470,10 +429,8 @@ mod tests {
             .expect("envelope should be valid")
             .envelope()
             .clone();
-
         let mut tampered_duplicate = valid.clone();
         tampered_duplicate.settlement_hash = HashOf::from_untyped_unchecked(Hash::new([0xEE; 4]));
-
         let err = verify_lane_relay_envelopes(&[valid, tampered_duplicate])
             .expect_err("invalid envelope should be rejected before duplicate check");
         assert!(matches!(
@@ -481,25 +438,21 @@ mod tests {
             CrossLaneProofError::Relay(LaneRelayError::SettlementHashMismatch)
         ));
     }
-
     #[test]
     fn builder_accepts_independent_lane_local_settlement_height() {
         let lane_id = LaneId::new(2);
         let dataspace_id = DataSpaceId::new(3);
         let header = header_with_da_hash(NonZeroU64::new(12).expect("nonzero height"), None);
         let settlement = sample_settlement(lane_id, dataspace_id, header.height().get() - 1);
-
         let proof = CrossLaneTransferBuilder::new(header, None, settlement)
             .build()
             .expect("lane-local settlement height may differ from global proposal height");
-
         assert_eq!(proof.envelope().block_height, 11);
         assert_eq!(proof.envelope().block_header.height().get(), 12);
         proof
             .verify()
             .expect("independent lane-local and global heights should verify");
     }
-
     #[test]
     fn builder_rejects_da_commitment_hash_mismatch() {
         let lane_id = LaneId::new(2);
@@ -509,7 +462,6 @@ mod tests {
         let header =
             header_with_da_hash(NonZeroU64::new(12).expect("nonzero height"), header_da_hash);
         let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
-
         let err = CrossLaneTransferBuilder::new(header, provided_da_hash, settlement)
             .build()
             .expect_err("da mismatch should fail");

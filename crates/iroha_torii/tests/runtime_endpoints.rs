@@ -1,9 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for runtime upgrade endpoints.
 #![cfg(feature = "app_api")]
-
-use std::vec::Vec;
-
 use axum::{extract::Path as AxPath, response::IntoResponse as _};
 use iroha_data_model::runtime::{
     RuntimeUpgradeId, RuntimeUpgradeManifest, RuntimeUpgradeRecord, RuntimeUpgradeStatus,
@@ -11,11 +8,10 @@ use iroha_data_model::runtime::{
 use iroha_torii::{
     handle_runtime_activate_upgrade, handle_runtime_cancel_upgrade, test_utils::random_authority,
 };
-
+use std::vec::Vec;
 struct SimpleItem {
     record: RuntimeUpgradeRecord,
 }
-
 #[tokio::test]
 async fn runtime_activate_and_cancel_validate_identifiers() {
     // Case 1: malformed hex should return a conversion error
@@ -34,7 +30,6 @@ async fn runtime_activate_and_cancel_validate_identifiers() {
         },
         other => panic!("unexpected error type: {other:?}"),
     }
-
     // Case 2: good hex but wrong length (31 bytes)
     let bad_len_hex = "aa".repeat(31);
     let err = handle_runtime_activate_upgrade(AxPath(bad_len_hex))
@@ -52,7 +47,6 @@ async fn runtime_activate_and_cancel_validate_identifiers() {
         },
         other => panic!("unexpected error type: {other:?}"),
     }
-
     // Case 3: cancel endpoint mirrors the same validation
     let err = handle_runtime_cancel_upgrade(AxPath("gh".to_string()))
         .await
@@ -69,7 +63,6 @@ async fn runtime_activate_and_cancel_validate_identifiers() {
         },
         other => panic!("unexpected error type: {other:?}"),
     }
-
     // Router-style response (200) is sufficient for a well-formed id
     let ok_id = RuntimeUpgradeId([0x11; 32]);
     let ok_resp = handle_runtime_activate_upgrade(AxPath(hex::encode(ok_id.0)))
@@ -78,11 +71,9 @@ async fn runtime_activate_and_cancel_validate_identifiers() {
         .into_response();
     assert_eq!(ok_resp.status(), http::StatusCode::OK);
 }
-
 #[tokio::test]
 async fn runtime_upgrades_list_sorted_by_window() {
     let authority = random_authority();
-
     let manifests = vec![
         RuntimeUpgradeManifest {
             name: "ABI v1 (late)".into(),
@@ -124,7 +115,6 @@ async fn runtime_upgrades_list_sorted_by_window() {
             provenance: Vec::new(),
         },
     ];
-
     let mut items: Vec<SimpleItem> = manifests
         .into_iter()
         .enumerate()
@@ -137,14 +127,12 @@ async fn runtime_upgrades_list_sorted_by_window() {
             },
         })
         .collect();
-
     items.sort_by_key(|it| {
         (
             it.record.manifest.start_height,
             it.record.manifest.abi_version,
         )
     });
-
     let order: Vec<(u64, u16)> = items
         .iter()
         .map(|it| {

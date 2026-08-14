@@ -10,52 +10,44 @@
 //! * **Input** – read-only buffer beginning at `0x0020_0000` (64 KB).
 //! * **Output** – read/write buffer beginning at `0x0021_0000`.
 //! * **Stack** – 4&nbsp;MB region starting at `0x0030_0000`.
-use std::{collections::HashSet, convert::TryInto, num::NonZeroU64, time::Instant};
-
-use iroha_crypto::{
-    CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment,
-};
-use likely_stable::{likely, unlikely};
-use parking_lot::Mutex;
-
 use crate::{
     byte_merkle_tree::ByteMerkleTree,
     error::{Perm, VMError},
     merkle_utils::compute_memory_leaf_digest,
     stack_policy::IvmStackPolicy,
 };
-
+use iroha_crypto::{
+    CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment,
+};
+use likely_stable::{likely, unlikely};
+use parking_lot::Mutex;
+use std::{collections::HashSet, convert::TryInto, num::NonZeroU64, time::Instant};
 #[cfg(test)]
 std::thread_local! {
     static MEMORY_CLONE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
-
 /// Reset the current test thread's full-memory clone counter.
 #[cfg(test)]
 pub(crate) fn reset_memory_clone_count() {
     MEMORY_CLONE_COUNT.set(0);
 }
-
 /// Return the number of full-memory clones on the current test thread.
 #[cfg(test)]
 pub(crate) fn memory_clone_count() -> u64 {
     MEMORY_CLONE_COUNT.get()
 }
-
 /// Memory read range recorded for conflict detection in parallel execution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccessRange {
     pub addr: u64,
     pub len: u64,
 }
-
 /// Memory write entry capturing the exact bytes written.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WriteLogEntry {
     pub addr: u64,
     pub bytes: Vec<u8>,
 }
-
 /// Memory manager for the VM, with fixed regions for code, heap, and stack.
 ///
 /// In accordance with the updated architecture the entire memory image is
@@ -91,7 +83,6 @@ pub struct Memory {
     /// Log of writes performed during execution (byte-accurate).
     write_log: Mutex<Vec<WriteLogEntry>>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MemoryGeometry {
     pub(crate) bytes: usize,
@@ -100,13 +91,11 @@ pub(crate) struct MemoryGeometry {
     pub(crate) merkle_chunk_bytes: usize,
     pub(crate) merkle_leaves: usize,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MemoryTemplateMismatch {
     pub(crate) current: MemoryGeometry,
     pub(crate) template: MemoryGeometry,
 }
-
 impl Memory {
     /// Alignment enforced for the ABI V1 guest stack top.
     pub const STACK_ALIGNMENT: u64 = IvmStackPolicy::V1.stack_alignment_bytes();
@@ -120,36 +109,29 @@ impl Memory {
     /// the full pre-input window avoids spurious `OutOfMemory` traps for
     /// larger but still bounded contracts such as SoraSwap DLMM.
     pub const HEAP_SIZE: u64 = Self::HEAP_MAX_SIZE;
-
     pub const INPUT_START: u64 = 0x0020_0000;
     pub const INPUT_SIZE: u64 = 0x0001_0000; // 64 KB input
-
     pub const OUTPUT_START: u64 = Self::INPUT_START + Self::INPUT_SIZE;
     pub const OUTPUT_SIZE: u64 = 0x0000_8000; // 32 KB output
-
     pub const STACK_START: u64 = 0x0030_0000;
     /// Maximum logical stack size for ABI V1 guest programs.
     pub const STACK_SIZE: u64 = IvmStackPolicy::V1.maximum_stack_bytes();
     /// Extra slop beyond the nominal stack end (kept zero to trap exactly at the limit).
     pub const STACK_SLOP: u64 = 0;
-
     /// Align a stack byte count to the VM guest-stack boundary.
     #[must_use]
     pub fn align_stack_bytes(bytes: u64) -> u64 {
         let bytes = bytes.max(Self::STACK_ALIGNMENT);
         bytes - (bytes % Self::STACK_ALIGNMENT)
     }
-
     /// Current stack limit (bytes) enforced for this memory instance.
     pub fn stack_limit(&self) -> u64 {
         self.stack_limit
     }
-
     /// Top-of-stack address (exclusive).
     pub fn stack_top(&self) -> u64 {
         Memory::STACK_START + self.stack_limit
     }
-
     /// Update only the modified Merkle leaves and recompute the root.
     fn recompute_dirty(&mut self) {
         let started_at = Instant::now();
@@ -198,7 +180,6 @@ impl Memory {
             .with_label_values(&[commit_path])
             .observe(dirty_count);
     }
-
     /// Commit pending writes by hashing only the dirty chunks if the memory has
     /// been modified since the last commit.
     pub fn commit(&mut self) {
@@ -206,12 +187,10 @@ impl Memory {
             self.recompute_dirty();
         }
     }
-
     #[cfg(test)]
     pub(crate) fn dirty_for_testing(&self) -> bool {
         self.dirty
     }
-
     /// Generate the Merkle authentication path for the 32-byte chunk containing
     /// `addr`. Pending writes are committed before sampling so the returned
     /// path matches the latest memory image.
@@ -221,7 +200,6 @@ impl Memory {
         let index = (addr as usize) / CHUNK;
         self.tree.path(index)
     }
-
     /// Return both the current Merkle root (typed `HashOf<MerkleTree<[u8; 32]>>`)
     /// and the authentication path for the 32-byte chunk containing `addr` in a
     /// single operation. Pending writes are committed first to keep the root/path
@@ -235,7 +213,6 @@ impl Memory {
         let index = (addr as usize) / CHUNK;
         self.tree.root_and_path(index)
     }
-
     /// Build a compact Merkle proof for the memory chunk containing `addr`.
     ///
     /// Pending writes are committed before construction. Without truncation
@@ -286,10 +263,8 @@ impl Memory {
         } else {
             full_root
         };
-
         (compact, root)
     }
-
     /// Return the current full-tree root and exact local memory geometry as one
     /// membership commitment.
     ///
@@ -304,7 +279,6 @@ impl Memory {
             .expect("memory tree always has a non-zero leaf count representable as u64");
         MerkleTreeCommitment::new(self.root, leaf_count)
     }
-
     /// Current typed Merkle root, recomputing pending dirty ranges if needed.
     ///
     /// This helper mirrors [`root`](Self::root) but keeps the method name used
@@ -315,14 +289,12 @@ impl Memory {
         self.commit();
         self.root
     }
-
     /// Return the current Merkle root of memory, recomputing it if any writes
     /// have occurred since the last call.
     pub fn root(&mut self) -> HashOf<MerkleTree<[u8; 32]>> {
         self.commit();
         self.root
     }
-
     fn update_merkle(&mut self, start: usize, len: usize) {
         const CHUNK: usize = 32;
         let first = start / CHUNK;
@@ -335,12 +307,10 @@ impl Memory {
         // `commit()` or `root()` call.
         self.dirty = true;
     }
-
     /// Initialize memory with given code size. Other regions (heap, stack) are also configured.
     pub fn new(code_size: u64) -> Self {
         Self::new_with_stack_limit(code_size, IvmStackPolicy::V1.maximum_stack_bytes())
     }
-
     /// Initialize memory with an explicit stack limit (bytes).
     ///
     /// This low-level constructor is used for runtime templates and focused
@@ -369,7 +339,6 @@ impl Memory {
         mem.root = mem.tree.root_hash();
         mem
     }
-
     /// Preload data into the input region. Used by tests/host before execution.
     pub fn preload_input(&mut self, offset: u64, bytes: &[u8]) -> Result<(), VMError> {
         if offset > Memory::INPUT_SIZE {
@@ -390,7 +359,6 @@ impl Memory {
         self.update_merkle(start, bytes.len());
         Ok(())
     }
-
     /// Tiny INPUT allocator helper: write `bytes` at the next aligned offset pointed to by `cursor`.
     ///
     /// - `cursor` is an offset relative to `INPUT_START` that the caller maintains.
@@ -420,7 +388,6 @@ impl Memory {
         *cursor = end;
         Ok(Memory::INPUT_START + off)
     }
-
     #[inline]
     pub fn alloc(&mut self, size: u64) -> Result<u64, VMError> {
         let aligned = size
@@ -442,7 +409,6 @@ impl Memory {
             Ok(Memory::HEAP_START + self.heap_alloc)
         }
     }
-
     /// Grow the heap by `additional` bytes, returning the new limit.
     pub fn grow_heap(&mut self, additional: u64) -> Result<u64, VMError> {
         let aligned = additional
@@ -462,22 +428,18 @@ impl Memory {
         self.heap_limit = new_limit;
         Ok(self.heap_limit)
     }
-
     /// Current heap limit in bytes.
     pub fn heap_limit(&self) -> u64 {
         self.heap_limit
     }
-
     /// Per-instance ceiling for heap growth.
     pub fn heap_max_limit(&self) -> u64 {
         self.heap_max_limit
     }
-
     /// Number of heap bytes currently owned by successful allocations.
     pub(crate) fn heap_allocated_len(&self) -> u64 {
         self.heap_alloc
     }
-
     /// Override the active heap limit, keeping the already-allocated region valid.
     pub fn set_heap_limit(&mut self, limit: u64) -> Result<(), VMError> {
         if limit < self.heap_alloc || limit > self.heap_max_limit {
@@ -486,7 +448,6 @@ impl Memory {
         self.heap_limit = limit;
         Ok(())
     }
-
     /// Set the absolute per-instance heap ceiling and clamp the active limit to it.
     ///
     /// Unlike [`Self::set_heap_limit`], this limit cannot be bypassed by
@@ -500,23 +461,19 @@ impl Memory {
         self.heap_limit = self.heap_limit.min(limit);
         Ok(())
     }
-
     /// Update the code region length after loading a program.
     pub fn set_code_length(&mut self, code_size: u64) {
         self.code_length = code_size;
     }
-
     /// Return the current code length in bytes.
     pub fn code_len(&self) -> u64 {
         self.code_length
     }
-
     /// Copy out the code bytes currently loaded in the code region.
     pub fn read_code_bytes(&self) -> Vec<u8> {
         let len = self.code_length as usize;
         self.data[0..len].to_vec()
     }
-
     /// Load program bytes into the beginning of memory (code region).
     pub fn load_code(&mut self, code: &[u8]) {
         let len = code.len();
@@ -546,7 +503,6 @@ impl Memory {
             }
         }
     }
-
     /// Determine the permissions for the address range `[addr, addr + size)`.
     #[inline]
     fn region_perm(&self, addr: u64, size: u32) -> Option<Perm> {
@@ -572,7 +528,6 @@ impl Memory {
         }
         None
     }
-
     /// Check that an address range has the required permissions.
     #[inline]
     fn check_perm(&self, addr: u64, size: u32, required: Perm) -> Result<(), VMError> {
@@ -592,7 +547,6 @@ impl Memory {
             })
         }
     }
-
     /// Load an 8-bit value from memory.
     #[inline]
     pub fn load_u8(&self, addr: u64) -> Result<u8, VMError> {
@@ -600,7 +554,6 @@ impl Memory {
         self.record_read_range(addr, 1);
         Ok(self.data[addr as usize])
     }
-
     /// Load a 16-bit value (little-endian) from memory.
     #[inline]
     pub fn load_u16(&self, addr: u64) -> Result<u16, VMError> {
@@ -615,7 +568,6 @@ impl Memory {
         self.record_read_range(addr, 2);
         Ok(u16::from_le_bytes(bytes))
     }
-
     /// Fetch a 16-bit value intended for instruction decoding. Requires execute
     /// permission in addition to read.
     #[inline]
@@ -630,7 +582,6 @@ impl Memory {
         self.record_read_range(addr, 2);
         Ok(u16::from_le_bytes(bytes))
     }
-
     /// Load a 32-bit value (little-endian) from memory.
     #[inline]
     pub fn load_u32(&self, addr: u64) -> Result<u32, VMError> {
@@ -644,7 +595,6 @@ impl Memory {
         self.record_read_range(addr, 4);
         Ok(u32::from_le_bytes(bytes))
     }
-
     /// Load a 64-bit value from memory.
     #[inline]
     pub fn load_u64(&self, addr: u64) -> Result<u64, VMError> {
@@ -658,7 +608,6 @@ impl Memory {
             .unwrap();
         Ok(u64::from_le_bytes(bytes))
     }
-
     /// Load a 128-bit value from memory (little endian).
     #[inline]
     pub fn load_u128(&self, addr: u64) -> Result<u128, VMError> {
@@ -672,7 +621,6 @@ impl Memory {
         self.record_read_range(addr, 16);
         Ok(u128::from_le_bytes(bytes))
     }
-
     /// Copy `out.len()` bytes starting at `addr` into `out`.
     #[inline]
     pub fn load_bytes(&self, addr: u64, out: &mut [u8]) -> Result<(), VMError> {
@@ -685,7 +633,6 @@ impl Memory {
         self.record_read_range(addr, len);
         Ok(())
     }
-
     fn checked_region_bounds_for(
         &self,
         addr: u64,
@@ -711,11 +658,9 @@ impl Memory {
         }
         Ok((start, end))
     }
-
     fn checked_region_bounds(&self, addr: u64, len: u64) -> Result<(usize, usize), VMError> {
         self.checked_region_bounds_for(addr, len, Perm::READ)
     }
-
     /// Inspect `len` bytes without recording a guest-visible memory access.
     ///
     /// This is reserved for side-effect-free host quote preparation. Actual
@@ -726,7 +671,6 @@ impl Memory {
         let (start, end) = self.checked_region_bounds(addr, len)?;
         Ok(&self.data[start..end])
     }
-
     /// Load `len` bytes starting at `addr` and return a slice referencing the
     /// underlying memory.
     #[inline]
@@ -747,7 +691,6 @@ impl Memory {
         }
         Ok(&self.data[start..end])
     }
-
     /// Copy bytes from `bytes` into memory starting at `addr`.
     #[inline]
     pub fn store_bytes(&mut self, addr: u64, bytes: &[u8]) -> Result<(), VMError> {
@@ -763,7 +706,6 @@ impl Memory {
         self.record_write(addr, bytes);
         Ok(())
     }
-
     /// Store an 8-bit value into memory.
     #[inline]
     pub fn store_u8(&mut self, addr: u64, value: u8) -> Result<(), VMError> {
@@ -774,7 +716,6 @@ impl Memory {
         self.record_write(addr, &[value]);
         Ok(())
     }
-
     /// Store a 16-bit value (little-endian) into memory.
     #[inline]
     pub fn store_u16(&mut self, addr: u64, value: u16) -> Result<(), VMError> {
@@ -788,7 +729,6 @@ impl Memory {
         self.record_write(addr, &value.to_le_bytes());
         Ok(())
     }
-
     /// Store a 32-bit value (little-endian) into memory.
     #[inline]
     pub fn store_u32(&mut self, addr: u64, value: u32) -> Result<(), VMError> {
@@ -802,7 +742,6 @@ impl Memory {
         self.record_write(addr, &value.to_le_bytes());
         Ok(())
     }
-
     /// Store a 64-bit value into memory.
     #[inline]
     pub fn store_u64(&mut self, addr: u64, value: u64) -> Result<(), VMError> {
@@ -816,7 +755,6 @@ impl Memory {
         self.update_merkle(addr as usize, 8);
         Ok(())
     }
-
     /// Store a 128-bit value into memory.
     #[inline]
     pub fn store_u128(&mut self, addr: u64, value: u128) -> Result<(), VMError> {
@@ -830,7 +768,6 @@ impl Memory {
         self.record_write(addr, &value.to_le_bytes());
         Ok(())
     }
-
     /// Obtain a slice of the entire output region without allocating.
     #[inline]
     pub fn read_output(&self) -> &[u8] {
@@ -838,13 +775,11 @@ impl Memory {
         let end = start + Memory::OUTPUT_SIZE as usize;
         &self.data[start..end]
     }
-
     /// Number of bytes in the append-only prefix written by the guest.
     #[inline]
     pub fn output_used_len(&self) -> u64 {
         self.output_cursor
     }
-
     /// Borrow only the append-only output prefix written by the guest.
     #[inline]
     pub fn read_output_used(&self) -> &[u8] {
@@ -852,7 +787,6 @@ impl Memory {
         let used = usize::try_from(self.output_cursor).unwrap_or(Memory::OUTPUT_SIZE as usize);
         &self.data[start..start.saturating_add(used)]
     }
-
     /// Clear the OUTPUT region and reset the append-only cursor.
     pub(crate) fn clear_output(&mut self) {
         let start = Memory::OUTPUT_START as usize;
@@ -864,23 +798,19 @@ impl Memory {
         self.output_cursor = 0;
         self.update_merkle(start, end - start);
     }
-
     /// Clear recorded access information.
     pub fn clear_tracking(&self) {
         self.read_log.lock().clear();
         self.write_log.lock().clear();
     }
-
     /// Snapshot the set of ranges read since the last clear.
     pub fn read_set(&self) -> Vec<AccessRange> {
         self.read_log.lock().clone()
     }
-
     /// Snapshot of writes made since the last clear.
     pub fn write_log(&self) -> Vec<WriteLogEntry> {
         self.write_log.lock().clone()
     }
-
     /// Ranges of memory that have been modified since the last commit.
     pub fn dirty_ranges(&self) -> Vec<(usize, usize)> {
         const CHUNK: usize = 32;
@@ -906,19 +836,16 @@ impl Memory {
         }
         ranges
     }
-
     /// Clear all recorded dirty ranges without committing them.
     pub fn clear_dirty(&mut self) {
         self.dirty_chunks.clear();
         self.dirty = false;
     }
-
     /// Mark the current bytes as an immutable runtime-template baseline.
     pub(crate) fn mark_template_clean(&mut self) {
         self.modified_chunks.clear();
         self.clear_tracking();
     }
-
     pub(crate) fn reset_from_template(
         &mut self,
         template: &Memory,
@@ -931,7 +858,6 @@ impl Memory {
                 template: template_geometry,
             });
         }
-
         const CHUNK: usize = 32;
         let mut modified = self.modified_chunks.iter().copied().collect::<Vec<_>>();
         modified.sort_unstable();
@@ -957,7 +883,6 @@ impl Memory {
         self.clear_tracking();
         Ok(())
     }
-
     fn geometry(&self) -> MemoryGeometry {
         MemoryGeometry {
             bytes: self.data.len(),
@@ -967,18 +892,15 @@ impl Memory {
             merkle_leaves: self.tree.leaf_count(),
         }
     }
-
     fn record_read_range(&self, addr: u64, len: u64) {
         self.read_log.lock().push(AccessRange { addr, len });
     }
-
     fn record_write(&self, addr: u64, bytes: &[u8]) {
         self.write_log.lock().push(WriteLogEntry {
             addr,
             bytes: bytes.to_vec(),
         });
     }
-
     /// Overwrite just the code region with bytes from another Memory.
     pub fn overlay_code(&mut self, src: &Memory) {
         let len = src.code_length as usize;
@@ -987,7 +909,6 @@ impl Memory {
         self.update_merkle(0, len);
     }
 }
-
 impl Clone for Memory {
     fn clone(&self) -> Self {
         #[cfg(test)]
@@ -1010,7 +931,6 @@ impl Clone for Memory {
         }
     }
 }
-
 impl Memory {
     #[inline]
     fn check_output_append_only(&mut self, addr: u64, len: u64) -> Result<(), VMError> {
@@ -1037,14 +957,11 @@ impl Memory {
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Hash, HashOf, MerkleProof};
-
     use super::*;
     use crate::merkle_utils::compute_memory_leaf_digest;
-
+    use iroha_crypto::{Hash, HashOf, MerkleProof};
     #[test]
     fn reset_from_template_restores_runtime_regions() {
         let mut base = Memory::new(0);
@@ -1052,7 +969,6 @@ mod tests {
             .expect("preload template input");
         base.set_heap_limit(Memory::HEAP_MAX_SIZE - 128)
             .expect("lower template heap limit");
-
         let mut worker = base.clone();
         worker.alloc(32).expect("alloc");
         worker
@@ -1066,34 +982,27 @@ mod tests {
             !worker.modified_chunks.is_empty(),
             "Merkle commits must retain reset tracking"
         );
-
         assert_ne!(&worker.read_output()[..8], &base.read_output()[..8],);
-
         worker
             .reset_from_template(&base)
             .expect("worker and template geometries match");
-
         assert_eq!(worker.heap_alloc, base.heap_alloc);
         assert_eq!(worker.heap_limit(), base.heap_limit());
         assert_eq!(worker.code_len(), base.code_len());
         assert_eq!(worker.read_output(), base.read_output());
         assert!(worker.modified_chunks.is_empty());
-
         let mut worker_clone = worker.clone();
         let mut base_clone = base.clone();
         assert_eq!(worker_clone.root(), base_clone.root());
     }
-
     #[test]
     fn warm_reset_does_not_copy_unmodified_memory_chunks() {
         let base = Memory::new(0);
         let mut worker = base.clone();
-
         let tracked_address = Memory::HEAP_START;
         worker
             .store_u8(tracked_address, 0xA5)
             .expect("write tracked heap byte");
-
         // Deliberately perturb a different chunk without going through a Memory
         // write API. This is a test-only probe: a whole-image reset would erase
         // it, while a dirty-chunk reset must leave it untouched.
@@ -1101,11 +1010,9 @@ mod tests {
         let untracked_address = usize::try_from(Memory::HEAP_START).expect("heap start fits usize")
             + 2 * MERKLE_LEAF_BYTES;
         worker.data[untracked_address] = 0x5A;
-
         worker
             .reset_from_template(&base)
             .expect("worker and template geometries match");
-
         assert_eq!(
             worker.data[usize::try_from(tracked_address).expect("tracked address fits usize")],
             0,
@@ -1116,7 +1023,6 @@ mod tests {
             "warm reset must not copy the complete memory image"
         );
     }
-
     #[test]
     fn runtime_template_geometry_mismatch_fails_without_replacing_memory() {
         let mut worker = Memory::new_with_stack_limit(0, Memory::STACK_ALIGNMENT);
@@ -1139,11 +1045,9 @@ mod tests {
         let worker_modified_chunks = worker.modified_chunks.clone();
         let worker_reads = worker.read_set();
         let worker_writes = worker.write_log();
-
         let error = worker
             .reset_from_template(&template)
             .expect_err("different stack geometry must reject warm reset");
-
         assert_eq!(error.current, worker_geometry);
         assert_eq!(error.template, template_geometry);
         assert_eq!(worker.geometry(), worker_geometry);
@@ -1155,19 +1059,16 @@ mod tests {
         assert_eq!(worker.read_set(), worker_reads);
         assert_eq!(worker.write_log(), worker_writes);
     }
-
     #[test]
     fn commit_small_dirty_set_uses_incremental_merkle_update() {
         let mut mem = Memory::new(0);
         let baseline = mem.root();
         let (_, updates_before) = crate::byte_merkle_tree::merkle_update_counters();
-
         mem.store_u8(Memory::HEAP_START, 0xAA)
             .expect("store in heap");
         mem.store_u8(Memory::HEAP_START + 1, 0x55)
             .expect("store in same chunk");
         let updated = mem.root();
-
         assert_ne!(updated, baseline, "memory root should change after writes");
         let (_, updates_after) = crate::byte_merkle_tree::merkle_update_counters();
         assert!(
@@ -1180,7 +1081,6 @@ mod tests {
             "commit should drain dirty chunks"
         );
     }
-
     #[test]
     fn commit_large_dirty_set_matches_full_rebuild_root() {
         let data = vec![0u8; 32 * 8];
@@ -1202,7 +1102,6 @@ mod tests {
             read_log: Mutex::new(Vec::new()),
             write_log: Mutex::new(Vec::new()),
         };
-
         mem.data[0..32].fill(0xAA);
         mem.data[32..64].fill(0x55);
         mem.data[64..96].fill(0x11);
@@ -1210,7 +1109,6 @@ mod tests {
         mem.dirty_chunks.extend([0, 1, 2, 3]);
         mem.dirty = true;
         let updated = mem.root();
-
         let expected = MerkleTree::<[u8; 32]>::from_byte_chunks(&mem.data, 32)
             .expect("canonical tree")
             .root()
@@ -1221,7 +1119,6 @@ mod tests {
             "large commit should drain dirty chunks"
         );
     }
-
     #[test]
     fn large_commit_keeps_unaligned_memory_tree_shape() {
         let data = vec![0u8; 32 * 8 + 16];
@@ -1244,7 +1141,6 @@ mod tests {
             write_log: Mutex::new(Vec::new()),
         };
         let mut rebuilt = incremental.clone();
-
         incremental.data[0..32].fill(0xAA);
         incremental.data[32..64].fill(0x55);
         incremental.dirty_chunks.extend([0, 1]);
@@ -1255,7 +1151,6 @@ mod tests {
         incremental.dirty_chunks.extend([2, 3]);
         incremental.dirty = true;
         let incremental_root = incremental.root();
-
         rebuilt.data[0..32].fill(0xAA);
         rebuilt.data[32..64].fill(0x55);
         rebuilt.data[64..96].fill(0x11);
@@ -1263,11 +1158,9 @@ mod tests {
         rebuilt.dirty_chunks.extend([0, 1, 2, 3]);
         rebuilt.dirty = true;
         let rebuilt_root = rebuilt.root();
-
         assert_eq!(rebuilt.tree.leaf_count(), 8);
         assert_eq!(rebuilt_root, incremental_root);
     }
-
     #[test]
     fn preload_input_out_of_bounds_fails() {
         let mut mem = Memory::new(0);
@@ -1282,7 +1175,6 @@ mod tests {
             Err(VMError::MemoryOutOfBounds)
         ));
     }
-
     #[test]
     fn alloc_rejects_overflow_sizes() {
         let mut mem = Memory::new(0);
@@ -1292,20 +1184,17 @@ mod tests {
         let small = mem.alloc(16).expect("small allocation succeeds");
         assert_eq!(small, Memory::HEAP_START);
     }
-
     #[test]
     fn per_instance_heap_ceiling_cannot_be_bypassed_by_growth() {
         let mut mem = Memory::new(0);
         mem.set_heap_max_limit(64)
             .expect("install governed heap ceiling");
-
         assert_eq!(mem.heap_limit(), 64);
         assert_eq!(mem.heap_max_limit(), 64);
         assert_eq!(mem.alloc(64), Ok(Memory::HEAP_START));
         assert_eq!(mem.grow_heap(8), Err(VMError::OutOfMemory));
         assert_eq!(mem.alloc(1), Err(VMError::OutOfMemory));
     }
-
     #[test]
     fn grow_heap_rejects_overflow() {
         let mut mem = Memory::new(0);
@@ -1318,7 +1207,6 @@ mod tests {
         mem.grow_heap(32).expect("bounded grow succeeds");
         assert_eq!(mem.heap_limit(), original_limit + 32);
     }
-
     #[test]
     fn store_u128_respects_output_append_only() {
         let mut mem = Memory::new(0);
@@ -1330,7 +1218,6 @@ mod tests {
         mem.store_u128(base + 16, 0x1111_2222_3333_4444_5555_6666_7777_8888)
             .expect("append at cursor succeeds");
     }
-
     #[test]
     fn load_region_rejects_oversized_len() {
         let mem = Memory::new(0);
@@ -1343,7 +1230,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn byte_slice_access_rejects_ranges_crossing_region_boundaries() {
         let mut mem = Memory::new(0);
@@ -1364,7 +1250,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn quote_inspection_does_not_mutate_memory_access_tracking() {
         let mut mem = Memory::new(0);
@@ -1372,13 +1257,11 @@ mod tests {
         mem.store_bytes(address, &[1, 2, 3, 4])
             .expect("write quote fixture");
         mem.clear_tracking();
-
         assert_eq!(
             mem.inspect_region(address, 4).expect("inspect fixture"),
             &[1, 2, 3, 4]
         );
         assert!(mem.read_set().is_empty());
-
         mem.load_region(address, 4).expect("tracked load fixture");
         assert_eq!(
             mem.read_set(),
@@ -1388,7 +1271,6 @@ mod tests {
             }]
         );
     }
-
     #[test]
     fn canonical_stack_limit_boundary_is_enforced() {
         let mut mem = Memory::new(0);
@@ -1404,7 +1286,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn explicit_unaligned_stack_limit_is_normalized_before_exposure() {
         let mut mem = Memory::new_with_stack_limit(0, 0x60a04);
@@ -1413,49 +1294,39 @@ mod tests {
         mem.store_u64(mem.stack_top() - 8, 7)
             .expect("aligned stack top must accept 64-bit stores");
     }
-
     #[test]
     fn current_root_recomputes_dirty_state() {
         let mut mem = Memory::new(0);
         let baseline = mem.current_root();
-
         let addr = Memory::HEAP_START;
         mem.store_u64(addr, 0xCAFEBABE_DEADBEEF).unwrap();
         mem.store_u32(addr + 32, 0xA5A5_5A5A).unwrap();
-
         let mut clone = mem.clone();
         let expected = clone.root();
         let observed = mem.current_root();
-
         assert_ne!(observed, baseline);
         assert_eq!(observed, expected);
         assert!(mem.dirty_ranges().is_empty());
     }
-
     #[test]
     fn merkle_path_without_explicit_commit_reflects_writes() {
         let mut mem = Memory::new(0);
         let addr = Memory::HEAP_START + 96;
         mem.store_u64(addr, 0xFEED_FACE_DEAD_BEEFu64).unwrap();
         let mut reference = mem.clone();
-
         let path = mem.merkle_path(addr);
         let root = mem.current_root();
-
         let expected_path = reference.merkle_path(addr);
         let expected_root = reference.current_root();
-
         assert_eq!(root, expected_root);
         assert_eq!(path, expected_path);
     }
-
     #[test]
     fn merkle_compact_without_explicit_commit_matches_path() {
         let mut mem = Memory::new(0);
         let addr = Memory::HEAP_START + 160;
         mem.store_u32(addr, 0x1357_9BDF).unwrap();
         let mut reference = mem.clone();
-
         let (proof, root) = mem.merkle_compact(addr, Some(12));
         let depth = proof.depth() as usize;
         assert_eq!(proof.siblings().len(), depth);
@@ -1464,9 +1335,7 @@ mod tests {
             (addr / 32) as u32,
             "depth-capped proof must use only its encoded direction bits"
         );
-
         let (expected_root, expected_path) = reference.merkle_root_and_path(addr);
-
         let mut chunk = [0u8; 32];
         reference
             .load_bytes((addr / 32) * 32, &mut chunk)

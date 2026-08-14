@@ -1,9 +1,4 @@
 //! Durable execution routing context committed by a block header.
-
-use iroha_crypto::{Hash, HashOf, MerkleTree};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-
 use crate::{
     NetworkId,
     block::{
@@ -15,12 +10,13 @@ use crate::{
     peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
-
+use iroha_crypto::{Hash, HashOf, MerkleTree};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 /// Current wire version for a globally committed autonomous lane payload.
 pub const AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1: u8 = 1;
 /// Current-only first-release block execution-context bundle layout.
 pub const BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1: u8 = 1;
-
 /// Role of one route leg in an external execution plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(tag = "role", content = "detail", rename_all = "snake_case")]
@@ -34,7 +30,6 @@ pub enum ExternalExecutionRouteRole {
     /// The route prepares or commits one dataspace-local leg of the plan.
     Participant,
 }
-
 /// Lane/dataspace leg committed as part of an external execution plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -49,7 +44,6 @@ pub struct ExternalExecutionRouteLeg {
     /// Role assigned to this leg.
     pub role: ExternalExecutionRouteRole,
 }
-
 impl ExternalExecutionRouteLeg {
     /// Construct an execution route leg.
     #[must_use]
@@ -65,7 +59,6 @@ impl ExternalExecutionRouteLeg {
         }
     }
 }
-
 /// Routing context used to execute one external block entrypoint.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -87,7 +80,6 @@ pub struct ExternalExecutionContext {
     /// Native AMX receipt collected for this routed entrypoint, when the plan spans dataspaces.
     pub native_amx_receipt: Option<NativeAmxReceipt>,
 }
-
 impl ExternalExecutionContext {
     /// Construct routing context for one external entrypoint.
     #[must_use]
@@ -111,7 +103,6 @@ impl ExternalExecutionContext {
             native_amx_receipt: None,
         }
     }
-
     /// Construct routing context with a committed full routing plan.
     #[must_use]
     pub fn with_routing_plan(
@@ -130,7 +121,6 @@ impl ExternalExecutionContext {
             native_amx_receipt: None,
         }
     }
-
     /// Attach a native AMX receipt to this execution context.
     #[must_use]
     pub fn with_native_amx_receipt(mut self, receipt: NativeAmxReceipt) -> Self {
@@ -138,7 +128,6 @@ impl ExternalExecutionContext {
         self
     }
 }
-
 fn single_route_plan_digest(lane_id: LaneId, dataspace_id: DataSpaceId) -> Hash {
     let mut bytes = Vec::with_capacity(16 + 12);
     bytes.extend_from_slice(b"iroha:routing-plan:v1");
@@ -146,7 +135,6 @@ fn single_route_plan_digest(lane_id: LaneId, dataspace_id: DataSpaceId) -> Hash 
     bytes.extend_from_slice(&dataspace_id.as_u64().to_le_bytes());
     Hash::new(bytes)
 }
-
 /// Compact, globally ordered reference to a merge-committee-certified entry.
 ///
 /// The complete merge entry can contain many lane payloads and is transferred as
@@ -183,7 +171,6 @@ pub struct CertifiedMergeLedgerReference {
     /// Self-contained merge certificate; its signer bitmap also identifies sidecar holders.
     pub merge_qc: MergeQuorumCertificate,
 }
-
 impl CertifiedMergeLedgerReference {
     /// Construct the canonical compact reference for a complete merge entry.
     #[must_use]
@@ -222,14 +209,12 @@ impl CertifiedMergeLedgerReference {
             merge_qc: entry.merge_qc.clone(),
         }
     }
-
     /// Return whether this reference exactly identifies `entry`.
     #[must_use]
     pub fn matches_entry(&self, entry: &MergeLedgerEntry) -> bool {
         self == &Self::new(entry)
     }
 }
-
 /// Globally ordered commitment to one producer-authenticated autonomous lane payload.
 ///
 /// `canonical_payload` contains the exact canonical framed bytes of the
@@ -273,7 +258,6 @@ pub struct AutonomousLanePayloadEnvelopeV1 {
     /// Bounded canonical framed bytes of the hint-free executable payload.
     pub canonical_payload: Vec<u8>,
 }
-
 /// Ordered execution context for external entrypoints in a block payload.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -296,17 +280,14 @@ pub struct BlockExecutionContextBundle {
     /// Merge-committee-certified entry applied before ordinary block entrypoints.
     pub merge_entry: Option<CertifiedMergeLedgerReference>,
 }
-
 impl BlockExecutionContextBundle {
     /// Current supported bundle layout.
     pub const VERSION: u8 = BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1;
-
     /// Return whether this bundle advertises the current first-release layout.
     #[must_use]
     pub const fn has_current_version(&self) -> bool {
         self.version == Self::VERSION
     }
-
     /// Construct an ordered execution context bundle.
     #[must_use]
     pub const fn new(external: Vec<ExternalExecutionContext>) -> Self {
@@ -318,7 +299,6 @@ impl BlockExecutionContextBundle {
             merge_entry: None,
         }
     }
-
     /// Attach globally anchored autonomous lane payloads to this bundle.
     #[must_use]
     pub fn with_autonomous_lane_payloads(
@@ -328,7 +308,6 @@ impl BlockExecutionContextBundle {
         self.autonomous_lane_payloads = autonomous_lane_payloads;
         self
     }
-
     /// Attach lane-local payload ownership identities to this bundle.
     #[must_use]
     pub fn with_lane_payload_ownerships(
@@ -338,14 +317,12 @@ impl BlockExecutionContextBundle {
         self.lane_payload_ownerships = lane_payload_ownerships;
         self
     }
-
     /// Attach a merge-ledger entry reference to this bundle.
     #[must_use]
     pub fn with_merge_entry(mut self, merge_entry: CertifiedMergeLedgerReference) -> Self {
         self.merge_entry = Some(merge_entry);
         self
     }
-
     /// Returns true when the bundle carries no execution context.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -355,29 +332,23 @@ impl BlockExecutionContextBundle {
             && self.merge_entry.is_none()
     }
 }
-
 impl Default for BlockExecutionContextBundle {
     fn default() -> Self {
         Self::new(Vec::new())
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use core::num::NonZeroU64;
-
-    use iroha_crypto::{Algorithm, KeyPair};
-
     use super::*;
     use crate::{
         merge::{MergeExecutionBatch, MergeLedgerEntry},
         peer::PeerId,
     };
-
+    use core::num::NonZeroU64;
+    use iroha_crypto::{Algorithm, KeyPair};
     fn entrypoint_hash(label: &[u8]) -> HashOf<TransactionEntrypoint> {
         HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(label))
     }
-
     fn sample_merge_entry() -> MergeLedgerEntry {
         let validator_set = Vec::<PeerId>::new();
         MergeLedgerEntry {
@@ -408,7 +379,6 @@ mod tests {
             queue_plan_admissions: Vec::new(),
         }
     }
-
     fn sample_execution_batch() -> MergeExecutionBatch {
         let base_state_hash = HashOf::from_untyped_unchecked(Hash::new(b"batch-base-state"));
         MergeExecutionBatch {
@@ -434,14 +404,12 @@ mod tests {
             batch_hash: Hash::new(b"batch-hash"),
         }
     }
-
     #[test]
     fn external_execution_context_new_commits_single_route_plan() {
         let lane_id = LaneId::new(3);
         let dataspace_id = DataSpaceId::new(7);
         let context =
             ExternalExecutionContext::new(entrypoint_hash(b"entrypoint"), lane_id, dataspace_id);
-
         assert_eq!(context.lane_id, lane_id);
         assert_eq!(context.dataspace_id, dataspace_id);
         assert_eq!(
@@ -457,7 +425,6 @@ mod tests {
             )]
         );
     }
-
     #[test]
     fn external_execution_context_with_routing_plan_preserves_full_plan() {
         let lane_id = LaneId::new(1);
@@ -475,7 +442,6 @@ mod tests {
                 ExternalExecutionRouteRole::Participant,
             ),
         ];
-
         let context = ExternalExecutionContext::with_routing_plan(
             entrypoint_hash(b"native-entrypoint"),
             lane_id,
@@ -483,11 +449,9 @@ mod tests {
             routing_plan_digest,
             routing_plan_legs.clone(),
         );
-
         assert_eq!(context.routing_plan_digest, routing_plan_digest);
         assert_eq!(context.routing_plan_legs, routing_plan_legs);
     }
-
     #[test]
     fn block_execution_context_bundle_roundtrips_lane_payload_ownerships() {
         let lane_id = LaneId::new(2);
@@ -519,15 +483,12 @@ mod tests {
             dataspace_id,
         )])
         .with_lane_payload_ownerships(vec![ownership.clone()]);
-
         let encoded = norito::to_bytes(&bundle).expect("bundle encodes");
         let decoded: BlockExecutionContextBundle =
             norito::decode_from_bytes(&encoded).expect("bundle decodes with lane ownership");
-
         assert_eq!(decoded.lane_payload_ownerships, vec![ownership]);
         assert!(!decoded.is_empty());
     }
-
     #[test]
     fn block_execution_context_bundle_with_only_ownership_is_not_empty() {
         let ownership = SumeragiLanePayloadOwnership {
@@ -551,27 +512,23 @@ mod tests {
             payload_ownership_hash: Hash::new(b"payload"),
             rbc_instance_hash: Hash::new(b"rbc"),
         };
-
         assert!(
             !BlockExecutionContextBundle::new(Vec::new())
                 .with_lane_payload_ownerships(vec![ownership])
                 .is_empty()
         );
     }
-
     #[test]
     fn block_execution_context_bundle_new_has_required_empty_autonomous_anchor() {
         let bundle = BlockExecutionContextBundle::new(Vec::new());
         assert_eq!(bundle.version, BlockExecutionContextBundle::VERSION);
         assert!(bundle.autonomous_lane_payloads.is_empty());
         assert!(bundle.is_empty());
-
         let encoded = norito::to_bytes(&bundle).expect("empty current bundle encodes");
         let decoded: BlockExecutionContextBundle =
             norito::decode_from_bytes(&encoded).expect("required empty anchor decodes");
         assert_eq!(decoded, bundle);
     }
-
     #[test]
     fn block_execution_context_bundle_roundtrips_autonomous_lane_payloads() {
         let producer = PeerId::new(
@@ -600,15 +557,12 @@ mod tests {
         };
         let bundle = BlockExecutionContextBundle::new(Vec::new())
             .with_autonomous_lane_payloads(vec![envelope.clone()]);
-
         let encoded = norito::to_bytes(&bundle).expect("autonomous payload bundle encodes");
         let decoded: BlockExecutionContextBundle =
             norito::decode_from_bytes(&encoded).expect("autonomous payload bundle decodes");
-
         assert_eq!(decoded.autonomous_lane_payloads, vec![envelope]);
         assert!(!decoded.is_empty());
     }
-
     #[test]
     fn block_execution_context_layout_omissions_fail_closed() {
         #[derive(Encode)]
@@ -619,7 +573,6 @@ mod tests {
             routing_plan_digest: Hash,
             routing_plan_legs: Vec<ExternalExecutionRouteLeg>,
         }
-
         #[derive(Encode)]
         struct UnversionedBlockExecutionContextBundle {
             external: Vec<ExternalExecutionContext>,
@@ -627,7 +580,6 @@ mod tests {
             lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
             merge_entry: Option<CertifiedMergeLedgerReference>,
         }
-
         #[derive(Encode)]
         struct PreAutonomousBlockExecutionContextBundle {
             version: u8,
@@ -635,14 +587,12 @@ mod tests {
             lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
             merge_entry: Option<CertifiedMergeLedgerReference>,
         }
-
         #[derive(Encode)]
         struct LegacyBlockExecutionContextBundle {
             version: u8,
             external: Vec<ExternalExecutionContext>,
             autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
         }
-
         #[derive(Encode)]
         struct PreviousBlockExecutionContextBundle {
             version: u8,
@@ -650,7 +600,6 @@ mod tests {
             autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
             lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
         }
-
         let legacy_external = LegacyExternalExecutionContext {
             entrypoint_hash: entrypoint_hash(b"legacy-external"),
             lane_id: LaneId::SINGLE,
@@ -663,7 +612,6 @@ mod tests {
             ExternalExecutionContext::decode(&mut legacy_external.as_slice()).is_err(),
             "an external context omitting its Native AMX receipt field must fail closed"
         );
-
         let unversioned = UnversionedBlockExecutionContextBundle {
             external: Vec::new(),
             autonomous_lane_payloads: Vec::new(),
@@ -675,7 +623,6 @@ mod tests {
             BlockExecutionContextBundle::decode(&mut unversioned.as_slice()).is_err(),
             "the unversioned execution-context bundle must fail closed"
         );
-
         let pre_autonomous = PreAutonomousBlockExecutionContextBundle {
             version: BlockExecutionContextBundle::VERSION,
             external: Vec::new(),
@@ -687,7 +634,6 @@ mod tests {
             BlockExecutionContextBundle::decode(&mut pre_autonomous.as_slice()).is_err(),
             "the bundle layout omitting its autonomous payload field must fail closed"
         );
-
         let legacy = LegacyBlockExecutionContextBundle {
             version: BlockExecutionContextBundle::VERSION,
             external: Vec::new(),
@@ -698,7 +644,6 @@ mod tests {
             BlockExecutionContextBundle::decode(&mut legacy.as_slice()).is_err(),
             "the bundle layout omitting ownership and merge fields must fail closed"
         );
-
         let previous = PreviousBlockExecutionContextBundle {
             version: BlockExecutionContextBundle::VERSION,
             external: Vec::new(),
@@ -711,7 +656,6 @@ mod tests {
             "the bundle layout omitting its merge field must fail closed"
         );
     }
-
     #[test]
     fn certified_merge_reference_roundtrips_and_rejects_tampering() {
         let entry = sample_merge_entry();
@@ -720,7 +664,6 @@ mod tests {
         assert_eq!(reference.entrypoint_count, None);
         assert_eq!(reference.entrypoint_merkle_root, None);
         assert_eq!(reference.result_merkle_root, None);
-
         let bundle =
             BlockExecutionContextBundle::new(Vec::new()).with_merge_entry(reference.clone());
         let encoded = norito::to_bytes(&bundle).expect("merge reference bundle encodes");
@@ -728,22 +671,18 @@ mod tests {
             norito::decode_from_bytes(&encoded).expect("merge reference bundle decodes");
         assert_eq!(decoded.merge_entry.as_ref(), Some(&reference));
         assert!(!decoded.is_empty());
-
         let mut tampered = reference;
         tampered.encoded_len = tampered.encoded_len.saturating_add(1);
         assert!(!tampered.matches_entry(&entry));
-
         let mut partial_batch_binding = CertifiedMergeLedgerReference::new(&entry);
         partial_batch_binding.entrypoint_count = Some(1);
         assert!(!partial_batch_binding.matches_entry(&entry));
     }
-
     #[test]
     fn certified_merge_reference_binds_transaction_proof_roots() {
         let mut entry = sample_merge_entry();
         let batch = sample_execution_batch();
         entry.execution_batch = Some(batch.clone());
-
         let reference = CertifiedMergeLedgerReference::new(&entry);
         assert_eq!(reference.execution_batch_hash, Some(batch.batch_hash));
         assert_eq!(reference.entrypoint_count, Some(batch.entrypoint_count));
@@ -753,7 +692,6 @@ mod tests {
         );
         assert_eq!(reference.result_merkle_root, Some(batch.result_merkle_root));
         assert!(reference.matches_entry(&entry));
-
         let mut tampered = reference;
         tampered.result_merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(
             b"tampered-result-root",

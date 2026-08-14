@@ -1,5 +1,4 @@
 // Shared governance publication fixtures and request-ingress regressions.
-
 use std::{
     collections::BTreeMap,
     fs, io,
@@ -12,7 +11,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -60,9 +58,7 @@ use sorafs_manifest::{
 };
 use tempfile::TempDir;
 use tokio::net::TcpListener;
-
 use super::*;
-
 fn request_ingress_test_public_key() -> [u8; 32] {
     KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
         .expect("derive request-ingress test key")
@@ -72,7 +68,6 @@ fn request_ingress_test_public_key() -> [u8; 32] {
         .try_into()
         .expect("Ed25519 public key width")
 }
-
 fn request_ingress_test_binding() -> GovernanceDagRequestIngressBindingV1 {
     let scope = GovernanceDagAuthenticationScope::Ipfs;
     GovernanceDagRequestIngressBindingV1::try_new(
@@ -89,12 +84,10 @@ fn request_ingress_test_binding() -> GovernanceDagRequestIngressBindingV1 {
     )
     .expect("valid request-ingress binding")
 }
-
 fn request_receiver_test_key_pair() -> KeyPair {
     KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
         .expect("derive request-receiver test key")
 }
-
 fn request_receiver_test_envelope(
     key_pair: &KeyPair,
     descriptor: &GovernanceDagCanonicalRequestV1,
@@ -130,7 +123,6 @@ fn request_receiver_test_envelope(
     )
     .expect("construct request-receiver envelope")
 }
-
 fn request_receiver_test_descriptor(endpoint: &str) -> GovernanceDagCanonicalRequestV1 {
     GovernanceDagCanonicalRequestV1::try_from_http_parts(
         GovernanceDagAuthenticationScope::SignedHead,
@@ -146,7 +138,6 @@ fn request_receiver_test_descriptor(endpoint: &str) -> GovernanceDagCanonicalReq
     )
     .expect("construct canonical request-receiver descriptor")
 }
-
 fn request_receiver_test_binding_for_endpoint(
     endpoint: &str,
     public_key: [u8; 32],
@@ -165,7 +156,6 @@ fn request_receiver_test_binding_for_endpoint(
     )
     .expect("construct request-receiver binding")
 }
-
 fn request_receiver_http1_request(
     client: &reqwest::Client,
     endpoint: &str,
@@ -181,13 +171,11 @@ fn request_receiver_http1_request(
     }
     request
 }
-
 fn request_receiver_test_response(status: StatusCode) -> Response {
     let mut response = Response::new(Body::empty());
     *response.status_mut() = status;
     response
 }
-
 #[derive(Clone)]
 struct RequestReceiverHttp1State {
     endpoint: Arc<str>,
@@ -196,7 +184,6 @@ struct RequestReceiverHttp1State {
     backend_calls: Arc<AtomicU64>,
     now_unix_secs: u64,
 }
-
 async fn request_receiver_http1_handler(
     State(state): State<RequestReceiverHttp1State>,
     request: Request<Body>,
@@ -252,7 +239,6 @@ async fn request_receiver_http1_handler(
         Err(_) => request_receiver_test_response(StatusCode::UNAUTHORIZED),
     }
 }
-
 #[test]
 fn request_ingress_endpoint_binding_is_normalized_scoped_and_fail_closed() {
     let ipfs_without_slash = governance_dag_request_ingress_endpoint_binding_v1(
@@ -290,13 +276,11 @@ fn request_ingress_endpoint_binding_is_normalized_scoped_and_fail_closed() {
         );
     }
 }
-
 #[test]
 fn request_ingress_binding_digest_commits_every_policy_field() {
     let binding = request_ingress_test_binding();
     let digest = binding.binding_digest();
     assert_ne!(digest, [0; 32]);
-
     let variants = [
         GovernanceDagRequestIngressBindingV1::try_new(
             GovernanceDagAuthenticationScope::SignedHead,
@@ -363,7 +347,6 @@ fn request_ingress_binding_digest_commits_every_policy_field() {
         assert_ne!(variant.binding_digest(), digest);
     }
 }
-
 #[tokio::test]
 async fn request_receiver_accepts_real_http1_host_and_blocks_boundary_bypasses() {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -408,21 +391,18 @@ async fn request_receiver_accepts_real_http1_host_and_blocks_boundary_bypasses()
     let descriptor = request_receiver_test_descriptor(&endpoint);
     let envelope =
         request_receiver_test_envelope(&key_pair, &descriptor, now_unix_secs, [0x31; 32]);
-
     let accepted = request_receiver_http1_request(&client, &endpoint, &envelope)
         .send()
         .await
         .expect("send authenticated HTTP/1 request");
     assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
     assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
-
     let replay = request_receiver_http1_request(&client, &endpoint, &envelope)
         .send()
         .await
         .expect("replay authenticated HTTP/1 request");
     assert_eq!(replay.status(), StatusCode::CONFLICT);
     assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
-
     let extension_envelope =
         request_receiver_test_envelope(&key_pair, &descriptor, now_unix_secs, [0x32; 32]);
     let extension = request_receiver_http1_request(&client, &endpoint, &extension_envelope)
@@ -432,7 +412,6 @@ async fn request_receiver_accepts_real_http1_host_and_blocks_boundary_bypasses()
         .expect("send unsigned semantic-extension request");
     assert_eq!(extension.status(), StatusCode::BAD_REQUEST);
     assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
-
     let wrong_host_envelope =
         request_receiver_test_envelope(&key_pair, &descriptor, now_unix_secs, [0x33; 32]);
     let wrong_host = request_receiver_http1_request(&client, &endpoint, &wrong_host_envelope)
@@ -442,7 +421,6 @@ async fn request_receiver_accepts_real_http1_host_and_blocks_boundary_bypasses()
         .expect("send mismatched-Host HTTP/1 request");
     assert_eq!(wrong_host.status(), StatusCode::MISDIRECTED_REQUEST);
     assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
-
     let authority = endpoint
         .strip_prefix("http://")
         .and_then(|endpoint| endpoint.strip_suffix("/head"))
@@ -492,7 +470,6 @@ async fn request_receiver_accepts_real_http1_host_and_blocks_boundary_bypasses()
         Some(authority)
     );
     assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
-
     let duplicate_envelope =
         request_receiver_test_envelope(&key_pair, &descriptor, now_unix_secs, [0x35; 32]);
     let mut duplicate_host = Request::builder()
@@ -531,10 +508,8 @@ async fn request_receiver_accepts_real_http1_host_and_blocks_boundary_bypasses()
         GovernanceDagRequestAuthenticationErrorV1::InvalidAuthority
     );
     assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
-
     server.abort();
 }
-
 #[test]
 fn request_ingress_qualification_requires_receiver_replay_and_replica_proofs() {
     let provider = GovernanceDagRuntimeProviderQualificationV1::new(7, [0xB1; 32]);
@@ -579,7 +554,6 @@ fn request_ingress_qualification_requires_receiver_replay_and_replica_proofs() {
         GovernanceDagRequestReplayPostureV1::SharedSealedAtomicConsumeUntilExpiry
     );
 }
-
 fn read_publication_snapshot_fixture(root: &Path) -> GovernancePublicationSnapshotV1 {
     let root_guard = GovernanceFilesystemRootGuard::capture_source(root)
         .expect("retain read-only publication fixture root");
@@ -587,20 +561,17 @@ fn read_publication_snapshot_fixture(root: &Path) -> GovernancePublicationSnapsh
         .expect("read authoritative governance publication snapshot")
         .expect("publication fixture is initialized")
 }
-
 fn read_publication_state_fixture(root: &Path) -> JsonValue {
     let snapshot = read_publication_snapshot_fixture(root);
     norito::json::from_slice(snapshot.canonical_bytes())
         .expect("decode authoritative governance publication state")
 }
-
 fn read_publication_section_fixture(root: &Path, section: &str) -> JsonValue {
     read_publication_state_fixture(root)
         .get(section)
         .cloned()
         .unwrap_or_else(|| panic!("publication state section `{section}`"))
 }
-
 fn published_source_paths_fixture(root: &Path, payload_kind: &str) -> Vec<(PathBuf, PathBuf)> {
     read_publication_section_fixture(root, "publish_index")
         .get("entries")
@@ -621,13 +592,11 @@ fn published_source_paths_fixture(root: &Path, payload_kind: &str) -> Vec<(PathB
         })
         .collect()
 }
-
 fn only_published_source_paths(root: &Path, payload_kind: &str) -> (PathBuf, PathBuf) {
     let paths = published_source_paths_fixture(root, payload_kind);
     assert_eq!(paths.len(), 1, "expected one `{payload_kind}` publication");
     paths.into_iter().next().expect("one publication path")
 }
-
 #[test]
 fn runtime_dag_decode_allocation_budget_is_scaled_and_absolutely_capped() {
     assert_eq!(
@@ -650,7 +619,6 @@ fn runtime_dag_decode_allocation_budget_is_scaled_and_absolutely_capped() {
         GOVERNANCE_RUNTIME_DAG_DECODE_MAX_ALLOCATED_BYTES_V1
     );
 }
-
 #[test]
 fn runtime_dag_decode_allocation_floor_admits_one_composite_state_but_rejects_two() {
     let state = FencedPrivacyStateV1 {
@@ -670,7 +638,6 @@ fn runtime_dag_decode_allocation_floor_admits_one_composite_state_but_rejects_tw
         decode_canonical_runtime_dag(&bytes, "empty fenced privacy state")
             .expect("decode production empty fenced privacy state");
     assert_eq!(decoded, state);
-
     let composite = (state.clone(), state);
     let composite_bytes =
         encode_governance_two_slot_value_v1(&composite, "two empty fenced privacy states")
@@ -696,7 +663,6 @@ fn runtime_dag_decode_allocation_floor_admits_one_composite_state_but_rejects_tw
         "unexpected allocation-floor diagnostic: {error}"
     );
 }
-
 #[test]
 fn canonical_request_rejects_body_bound_before_consuming_headers() {
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -719,7 +685,6 @@ fn canonical_request_rejects_body_bound_before_consuming_headers() {
         "Governance DAG request body commitment is noncanonical or exceeds the configured bound"
     );
 }
-
 #[test]
 fn request_partition_rejects_selected_header_count_before_vector_growth() {
     let headers = std::iter::repeat_n(
@@ -743,7 +708,6 @@ fn request_partition_rejects_selected_header_count_before_vector_growth() {
         GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest
     );
 }
-
 #[test]
 fn request_partition_rejects_selected_header_budget_before_vector_growth() {
     let oversized_value = vec![b'a'; GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADER_VALUE_BYTES_V1 + 1];
@@ -765,7 +729,6 @@ fn request_partition_rejects_selected_header_budget_before_vector_growth() {
         GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest
     );
 }
-
 #[test]
 fn request_partition_rejects_authentication_header_count_before_vector_growth() {
     let headers = std::iter::repeat_n(
@@ -792,7 +755,6 @@ fn request_partition_rejects_authentication_header_count_before_vector_growth() 
         GovernanceDagRequestAuthenticationErrorV1::DuplicateHeader
     );
 }
-
 // Keep one target-gated assertion for every ABI branch. Overlapping branches
 // fail with duplicate definitions; missing branches fail to resolve the flag.
 #[cfg(all(
@@ -810,7 +772,6 @@ fn linux_directory_open_flags_match_low_flag_target_abi() {
     assert_eq!(platform_no_follow_flag(), 0x8000);
     assert_eq!(platform_directory_only_flag(), 0x4000);
 }
-
 #[cfg(all(
     target_os = "linux",
     not(any(
@@ -826,7 +787,6 @@ fn linux_directory_open_flags_match_generic_target_abi() {
     assert_eq!(platform_no_follow_flag(), 0x20000);
     assert_eq!(platform_directory_only_flag(), 0x10000);
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "aarch64", target_arch = "arm")
@@ -836,7 +796,6 @@ fn android_arm_directory_open_flags_match_target_abi() {
     assert_eq!(platform_no_follow_flag(), 0x8000);
     assert_eq!(platform_directory_only_flag(), 0x4000);
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "x86", target_arch = "x86_64")
@@ -846,14 +805,12 @@ fn android_x86_directory_open_flags_match_target_abi() {
     assert_eq!(platform_no_follow_flag(), 0x20000);
     assert_eq!(platform_directory_only_flag(), 0x10000);
 }
-
 #[cfg(all(target_os = "android", target_arch = "riscv64"))]
 #[test]
 fn android_riscv64_directory_open_flags_match_target_abi() {
     assert_eq!(platform_no_follow_flag(), 0x400000);
     assert_eq!(platform_directory_only_flag(), 0x200000);
 }
-
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "riscv32", target_arch = "riscv64")
@@ -863,55 +820,46 @@ fn linux_riscv_directory_open_flags_remain_generic_target_abi() {
     assert_eq!(platform_no_follow_flag(), 0x20000);
     assert_eq!(platform_directory_only_flag(), 0x10000);
 }
-
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[test]
 fn apple_directory_open_flags_match_target_abi() {
     assert_eq!(platform_no_follow_flag(), 0x100);
     assert_eq!(platform_directory_only_flag(), 0x0010_0000);
 }
-
 #[cfg(target_os = "freebsd")]
 #[test]
 fn freebsd_directory_open_flags_match_target_abi() {
     assert_eq!(platform_no_follow_flag(), 0x100);
     assert_eq!(platform_directory_only_flag(), 0x0002_0000);
 }
-
 #[cfg(target_os = "dragonfly")]
 #[test]
 fn dragonfly_directory_open_flags_match_target_abi() {
     assert_eq!(platform_no_follow_flag(), 0x100);
     assert_eq!(platform_directory_only_flag(), 0x0800_0000);
 }
-
 #[cfg(target_os = "openbsd")]
 #[test]
 fn openbsd_directory_open_flags_match_target_abi() {
     assert_eq!(platform_no_follow_flag(), 0x100);
     assert_eq!(platform_directory_only_flag(), 0x0002_0000);
 }
-
 #[cfg(target_os = "netbsd")]
 #[test]
 fn netbsd_directory_open_flags_match_target_abi() {
     assert_eq!(platform_no_follow_flag(), 0x100);
     assert_eq!(platform_directory_only_flag(), 0x0020_0000);
 }
-
 const TEST_RUNTIME_DAG_SIGNER_POLICY_DIGEST: [u8; 32] = [0x71; 32];
 const TEST_RUNTIME_DAG_STORE_POLICY_DIGEST: [u8; 32] = [0x73; 32];
-
 fn test_runtime_dag_signer_qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
     GovernanceDagRuntimeProviderQualificationV1::new(1, TEST_RUNTIME_DAG_SIGNER_POLICY_DIGEST)
 }
-
 #[derive(Debug)]
 struct TestRuntimeDagCheckpointStoreState {
     records: [Option<GovernanceDagSealedStateRecord>; 6],
     generation_floors: [u64; 6],
 }
-
 impl Default for TestRuntimeDagCheckpointStoreState {
     fn default() -> Self {
         Self {
@@ -920,7 +868,6 @@ impl Default for TestRuntimeDagCheckpointStoreState {
         }
     }
 }
-
 #[derive(Debug, Default)]
 struct TestRuntimeDagCheckpointStore {
     state: Mutex<TestRuntimeDagCheckpointStoreState>,
@@ -930,14 +877,11 @@ struct TestRuntimeDagCheckpointStore {
     producer_checkpoint_load_count: AtomicU64,
     producer_checkpoint_second_load: Mutex<Option<GovernanceDagSealedStateRecord>>,
 }
-
 impl TestRuntimeDagCheckpointStore {
     const HANDLE: &'static str = "kms:governance-dag:producer-checkpoint-primary";
-
     const fn qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
         GovernanceDagRuntimeProviderQualificationV1::new(1, TEST_RUNTIME_DAG_STORE_POLICY_DIGEST)
     }
-
     const fn slot_index(slot: GovernanceDagSealedStateSlot) -> usize {
         match slot {
             GovernanceDagSealedStateSlot::Checkpoint => 0,
@@ -948,7 +892,6 @@ impl TestRuntimeDagCheckpointStore {
             GovernanceDagSealedStateSlot::SignedHeadRequestReplay => 5,
         }
     }
-
     fn return_producer_checkpoint_on_second_load(&self, record: GovernanceDagSealedStateRecord) {
         *self
             .producer_checkpoint_second_load
@@ -958,16 +901,13 @@ impl TestRuntimeDagCheckpointStore {
             .store(0, Ordering::SeqCst);
     }
 }
-
 impl GovernanceDagSealedCheckpointStore for TestRuntimeDagCheckpointStore {
     fn handle(&self) -> &str {
         Self::HANDLE
     }
-
     fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
         Ok(Self::qualification())
     }
-
     fn load(
         &self,
         slot: GovernanceDagSealedStateSlot,
@@ -988,7 +928,6 @@ impl GovernanceDagSealedCheckpointStore for TestRuntimeDagCheckpointStore {
         let state = self.state.lock().map_err(|_| "poisoned".to_owned())?;
         Ok(state.records[Self::slot_index(slot)].clone())
     }
-
     fn compare_and_swap(
         &self,
         slot: GovernanceDagSealedStateSlot,
@@ -1032,7 +971,6 @@ impl GovernanceDagSealedCheckpointStore for TestRuntimeDagCheckpointStore {
         }
         Ok(())
     }
-
     fn delete(
         &self,
         slot: GovernanceDagSealedStateSlot,
@@ -1047,7 +985,6 @@ impl GovernanceDagSealedCheckpointStore for TestRuntimeDagCheckpointStore {
         Ok(())
     }
 }
-
 const TEST_FENCED_PUBLISHER_HANDLE: &str = "hsm:governance:fenced-privacy-primary";
 const TEST_FENCED_PUBLISHER_POLICY_DIGEST: [u8; 32] = [0x72; 32];
 const TEST_FENCED_HEAD_READER_HANDLE: &str = TEST_FENCED_PUBLISHER_HANDLE;
@@ -1055,18 +992,14 @@ const TEST_FENCED_HEAD_READER_POLICY_DIGEST: [u8; 32] = TEST_FENCED_PUBLISHER_PO
 const TEST_PRIVACY_QUERY_ID: [u8; 32] = [0x91; 32];
 const TEST_PRIVACY_CYCLE_START: u64 = 1_800_000_000;
 const TEST_PRIVACY_CYCLE_END: u64 = 1_800_604_800;
-
 fn test_fenced_publisher_qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
     GovernanceDagRuntimeProviderQualificationV1::new(1, TEST_FENCED_PUBLISHER_POLICY_DIGEST)
 }
-
 fn test_fenced_head_reader_qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
     GovernanceDagRuntimeProviderQualificationV1::new(1, TEST_FENCED_HEAD_READER_POLICY_DIGEST)
 }
-
 type TestFencedPublications =
     BTreeMap<([u8; 32], [u8; 16]), ([u8; 32], [u8; 32], FencedTransparencyTargetHeadV1)>;
-
 #[derive(Debug, Default)]
 struct TestFencedPublisherState {
     head: Option<FencedTransparencyTargetHeadV1>,
@@ -1082,13 +1015,11 @@ struct TestFencedPublisherState {
     history: Vec<FencedTransparencyTargetHeadV1>,
     append_count: usize,
 }
-
 #[derive(Debug, Default)]
 struct TestFencedPublisherPause {
     reached: bool,
     released: bool,
 }
-
 #[derive(Debug)]
 struct TestFencedTransparencyPublisher {
     state: Mutex<TestFencedPublisherState>,
@@ -1097,7 +1028,6 @@ struct TestFencedTransparencyPublisher {
     pause_changed: Condvar,
     substitute_receipt: AtomicBool,
 }
-
 #[derive(Debug)]
 struct TestFencedTransparencyHeadReader {
     target: Arc<TestFencedTransparencyPublisher>,
@@ -1107,7 +1037,6 @@ struct TestFencedTransparencyHeadReader {
     head_override: Mutex<Option<Option<FencedTransparencyTargetHeadV1>>>,
     fail_read: AtomicBool,
 }
-
 impl TestFencedTransparencyPublisher {
     fn new() -> Self {
         Self {
@@ -1118,12 +1047,10 @@ impl TestFencedTransparencyPublisher {
             substitute_receipt: AtomicBool::new(false),
         }
     }
-
     fn pause_fencing_token(&self, fencing_token: u64) {
         self.pause_token.store(fencing_token, Ordering::Release);
         *self.pause.lock().expect("fenced publisher pause") = TestFencedPublisherPause::default();
     }
-
     fn wait_until_paused(&self) {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut pause = self.pause.lock().expect("fenced publisher pause");
@@ -1139,27 +1066,22 @@ impl TestFencedTransparencyPublisher {
             assert!(!wait.timed_out(), "fenced publisher did not pause");
         }
     }
-
     fn release_paused(&self) {
         self.pause.lock().expect("fenced publisher pause").released = true;
         self.pause_changed.notify_all();
     }
-
     fn set_substitute_receipt(&self, substitute: bool) {
         self.substitute_receipt.store(substitute, Ordering::Release);
     }
-
     fn append_count(&self) -> usize {
         self.state
             .lock()
             .expect("fenced publisher state")
             .append_count
     }
-
     fn head(&self) -> Option<FencedTransparencyTargetHeadV1> {
         self.state.lock().expect("fenced publisher state").head
     }
-
     fn pause_if_requested(&self, fencing_token: u64) {
         if self.pause_token.load(Ordering::Acquire) != fencing_token {
             return;
@@ -1176,7 +1098,6 @@ impl TestFencedTransparencyPublisher {
         self.pause_token.store(0, Ordering::Release);
     }
 }
-
 impl TestFencedTransparencyHeadReader {
     fn new(target: Arc<TestFencedTransparencyPublisher>) -> Self {
         Self {
@@ -1188,7 +1109,6 @@ impl TestFencedTransparencyHeadReader {
             fail_read: AtomicBool::new(false),
         }
     }
-
     fn with_handle(
         target: Arc<TestFencedTransparencyPublisher>,
         handle: impl Into<String>,
@@ -1198,7 +1118,6 @@ impl TestFencedTransparencyHeadReader {
             ..Self::new(target)
         }
     }
-
     fn with_binding(
         target: Arc<TestFencedTransparencyPublisher>,
         handle: impl Into<String>,
@@ -1214,29 +1133,23 @@ impl TestFencedTransparencyHeadReader {
             fail_read: AtomicBool::new(false),
         }
     }
-
     fn set_revision(&self, revision: u64) {
         self.revision.store(revision, Ordering::Release);
     }
-
     fn override_head(&self, head: Option<FencedTransparencyTargetHeadV1>) {
         *self.head_override.lock().expect("head reader override") = Some(head);
     }
-
     fn set_fail_read(&self, fail: bool) {
         self.fail_read.store(fail, Ordering::Release);
     }
 }
-
 impl FencedTransparencyPublisherV1 for TestFencedTransparencyPublisher {
     fn handle(&self) -> &str {
         TEST_FENCED_PUBLISHER_HANDLE
     }
-
     fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
         Ok(test_fenced_publisher_qualification())
     }
-
     fn compare_and_append_privacy(
         &self,
         request: &FencedPrivacyPublicationRequestV1,
@@ -1314,19 +1227,16 @@ impl FencedTransparencyPublisherV1 for TestFencedTransparencyPublisher {
         }
     }
 }
-
 impl FencedTransparencyAuthoritativeHeadReaderV1 for TestFencedTransparencyHeadReader {
     fn handle(&self) -> &str {
         &self.handle
     }
-
     fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
         Ok(GovernanceDagRuntimeProviderQualificationV1::new(
             self.revision.load(Ordering::Acquire),
             self.policy_digest,
         ))
     }
-
     fn read_authoritative_head_with_ancestry(
         &self,
         required_ancestors: &[FencedTransparencyTargetHeadV1],
@@ -1399,7 +1309,6 @@ impl FencedTransparencyAuthoritativeHeadReaderV1 for TestFencedTransparencyHeadR
         .map_err(|_| "redacted test ancestry proof encoding failure".to_owned())
     }
 }
-
 fn qualified_test_fenced_publisher(
     provider: Arc<TestFencedTransparencyPublisher>,
 ) -> QualifiedFencedTransparencyPublisherV1 {
@@ -1411,7 +1320,6 @@ fn qualified_test_fenced_publisher(
     )
     .expect("qualify test fused publisher")
 }
-
 fn qualified_test_fenced_head_reader(
     reader: Arc<TestFencedTransparencyHeadReader>,
 ) -> QualifiedFencedTransparencyHeadReaderV1 {
@@ -1423,17 +1331,14 @@ fn qualified_test_fenced_head_reader(
     )
     .expect("qualify test fused head reader")
 }
-
 fn test_fenced_head_reader(
     provider: Arc<TestFencedTransparencyPublisher>,
 ) -> Arc<TestFencedTransparencyHeadReader> {
     Arc::new(TestFencedTransparencyHeadReader::new(provider))
 }
-
 fn xor(value: &str) -> sorafs_manifest::deal::XorQuantity {
     value.parse().expect("canonical XOR quantity")
 }
-
 #[derive(Clone, Copy)]
 struct SamplePrivacyReleaseSpec {
     query_id: [u8; 32],
@@ -1442,7 +1347,6 @@ struct SamplePrivacyReleaseSpec {
     release_sequence: u64,
     release_record_digest: [u8; 32],
 }
-
 impl SamplePrivacyReleaseSpec {
     const fn primary() -> Self {
         Self {
@@ -1453,7 +1357,6 @@ impl SamplePrivacyReleaseSpec {
             release_record_digest: [0x98; 32],
         }
     }
-
     const fn next() -> Self {
         let cycle_seconds = TEST_PRIVACY_CYCLE_END - TEST_PRIVACY_CYCLE_START;
         Self {
@@ -1465,7 +1368,6 @@ impl SamplePrivacyReleaseSpec {
         }
     }
 }
-
 #[derive(Clone, Copy)]
 struct SampleFinalizedAnchorSpec {
     sequence: u64,
@@ -1473,7 +1375,6 @@ struct SampleFinalizedAnchorSpec {
     record_digest: [u8; 32],
     latest_publication_block_hash: Option<[u8; 32]>,
 }
-
 fn sample_privacy_publication_for(
     spec: SamplePrivacyReleaseSpec,
 ) -> (ModerationLedgerCyclePublicationV1, Vec<u8>) {
@@ -1528,11 +1429,9 @@ fn sample_privacy_publication_for(
     let encoded = norito::to_bytes(&publication).expect("encode privacy publication");
     (publication, encoded)
 }
-
 fn sample_privacy_publication() -> (ModerationLedgerCyclePublicationV1, Vec<u8>) {
     sample_privacy_publication_for(SamplePrivacyReleaseSpec::primary())
 }
-
 fn sample_privacy_authorization_for(
     spec: SamplePrivacyReleaseSpec,
     publication: &ModerationLedgerCyclePublicationV1,
@@ -1614,7 +1513,6 @@ fn sample_privacy_authorization_for(
     PrivacyPublicationAuthorizationV1::try_new(&lease, anchor, &release, payload_digest)
         .expect("privacy publication authorization")
 }
-
 fn sample_privacy_authorization(
     publication: &ModerationLedgerCyclePublicationV1,
     encoded: &[u8],
@@ -1628,7 +1526,6 @@ fn sample_privacy_authorization(
         None,
     )
 }
-
 fn sample_fenced_request(
     fencing_token: u64,
     expected_head: Option<FencedTransparencyTargetHeadV1>,
@@ -1644,7 +1541,6 @@ fn sample_fenced_request(
     )
     .expect("fenced privacy request")
 }
-
 fn assert_empty_publication_authority(root: &Path) {
     let state = read_publication_state_fixture(root);
     assert_eq!(state.get("generation").and_then(JsonValue::as_u64), Some(0));
@@ -1670,7 +1566,6 @@ fn assert_empty_publication_authority(root: &Path) {
         GOVERNANCE_PUBLICATION_INITIALIZED_BODY
     );
 }
-
 fn assert_no_privacy_publication_side_effects(root: &Path) {
     assert!(
         !root.join(GOVERNANCE_PUBLICATION_SOURCES_DIR).exists()
@@ -1688,7 +1583,6 @@ fn assert_no_privacy_publication_side_effects(root: &Path) {
         "authoritative-head cache must remain logically absent"
     );
 }
-
 fn assert_fenced_privacy_pending_logically_cleared(root: &Path) {
     assert!(
         !fenced_privacy_pending_path(root).exists(),
@@ -1699,18 +1593,15 @@ fn assert_fenced_privacy_pending_logically_cleared(root: &Path) {
         None
     );
 }
-
 struct CanonicalTempDir {
     _inner: TempDir,
     path: PathBuf,
 }
-
 impl CanonicalTempDir {
     fn path(&self) -> &Path {
         &self.path
     }
 }
-
 fn tempdir() -> std::io::Result<CanonicalTempDir> {
     let inner = tempfile::tempdir()?;
     let path = inner.path().canonicalize()?;
@@ -1719,11 +1610,9 @@ fn tempdir() -> std::io::Result<CanonicalTempDir> {
         path,
     })
 }
-
 fn canonical_temp_path(dir: &CanonicalTempDir) -> PathBuf {
     dir.path().to_path_buf()
 }
-
 fn sample_settlement() -> (DealSettlementV1, Vec<u8>) {
     let deal_id = [0xAB; 32];
     let provider_id = [0xCD; 32];
@@ -1775,7 +1664,6 @@ fn sample_settlement() -> (DealSettlementV1, Vec<u8>) {
     let encoded = norito::to_bytes(&settlement).expect("encode settlement");
     (settlement, encoded)
 }
-
 fn sample_por_challenge_publication() -> (PorChallengePublicationV1, Vec<u8>) {
     let manifest_digest = [0x41; 32];
     let provider_id = [0x42; 32];
@@ -1814,7 +1702,6 @@ fn sample_por_challenge_publication() -> (PorChallengePublicationV1, Vec<u8>) {
     let encoded = norito::to_bytes(&publication).expect("encode challenge publication");
     (publication, encoded)
 }
-
 fn sample_por_weekly_report() -> (PorWeeklyReportV1, Vec<u8>) {
     let report = PorWeeklyReportV1 {
         version: POR_WEEKLY_REPORT_VERSION_V1,
@@ -1840,7 +1727,6 @@ fn sample_por_weekly_report() -> (PorWeeklyReportV1, Vec<u8>) {
     let encoded = norito::to_bytes(&report).expect("encode weekly report");
     (report, encoded)
 }
-
 fn sample_reputation_snapshot() -> (SignedReputationSnapshotV1, Vec<u8>) {
     let metrics = ReputationProviderMetricsV1 {
         version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
@@ -1904,7 +1790,6 @@ fn sample_reputation_snapshot() -> (SignedReputationSnapshotV1, Vec<u8>) {
         .expect("encode signed reputation snapshot");
     (envelope, encoded)
 }
-
 fn sample_moderation_ballot_event() -> (SoraFsModerationBallotGovernanceEventV1, Vec<u8>) {
     let event = SoraFsModerationBallotGovernanceEventV1 {
         version: SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
@@ -1937,13 +1822,11 @@ fn sample_moderation_ballot_event() -> (SoraFsModerationBallotGovernanceEventV1,
     let encoded = norito::to_bytes(&event).expect("encode moderation ballot event");
     (event, encoded)
 }
-
 fn sample_transparency_ledger_publication() -> (ModerationLedgerCyclePublicationV1, Vec<u8>) {
     use iroha_data_model::sorafs::transparency::{
         MODERATION_LEDGER_ENTRY_VERSION_V1, ModerationLedgerEntryKindV1, ModerationLedgerEntryV1,
         ModerationLedgerMetadataV1,
     };
-
     let cycle_id = *b"cycle-2026-wk-03";
     let entries = [
         ModerationLedgerEntryV1 {
@@ -1995,7 +1878,6 @@ fn sample_transparency_ledger_publication() -> (ModerationLedgerCyclePublication
     let encoded = norito::to_bytes(&publication).expect("encode transparency ledger publication");
     (publication, encoded)
 }
-
 fn sample_proof_token_issuance() -> (ProofTokenIssuanceV1, Vec<u8>) {
     let issuance = ProofTokenIssuanceV1 {
         version: PROOF_TOKEN_ISSUANCE_VERSION_V1,
@@ -2014,7 +1896,6 @@ fn sample_proof_token_issuance() -> (ProofTokenIssuanceV1, Vec<u8>) {
     let encoded = norito::to_bytes(&issuance).expect("encode proof-token issuance");
     (issuance, encoded)
 }
-
 fn sample_appeal_finance_report() -> (SoraFsAppealFinanceReportV1, Vec<u8>) {
     let report = SoraFsAppealFinanceReportV1 {
         version: SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
@@ -2061,7 +1942,6 @@ fn sample_appeal_finance_report() -> (SoraFsAppealFinanceReportV1, Vec<u8>) {
     let encoded = norito::to_bytes(&report).expect("encode appeal finance report");
     (report, encoded)
 }
-
 fn sample_appeal_finance_weekly_rollup() -> (SoraFsAppealFinanceWeeklyRollupV1, Vec<u8>) {
     let (report, _) = sample_appeal_finance_report();
     let rollup = SoraFsAppealFinanceWeeklyRollupV1::from_reports(
@@ -2076,7 +1956,6 @@ fn sample_appeal_finance_weekly_rollup() -> (SoraFsAppealFinanceWeeklyRollupV1, 
     let encoded = norito::to_bytes(&rollup).expect("encode appeal finance weekly rollup");
     (rollup, encoded)
 }
-
 fn sample_appeal_finance_settlement_receipt() -> (SoraFsAppealFinanceSettlementReceiptV1, Vec<u8>) {
     let receipt = SoraFsAppealFinanceSettlementReceiptV1 {
         version: SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
@@ -2111,7 +1990,6 @@ fn sample_appeal_finance_settlement_receipt() -> (SoraFsAppealFinanceSettlementR
     let encoded = norito::to_bytes(&receipt).expect("encode appeal finance settlement receipt");
     (receipt, encoded)
 }
-
 #[test]
 fn governance_car_queue_rejects_non_producible_pending_segments() {
     let temp = tempdir().expect("tempdir");
@@ -2123,7 +2001,6 @@ fn governance_car_queue_rejects_non_producible_pending_segments() {
         JsonValue::from(GOVERNANCE_CAR_SEGMENT_SCHEMA),
     );
     pending.insert("status".into(), JsonValue::from("pending"));
-
     let error = rebuild_car_queue(JsonMap::new(), vec![JsonValue::Object(pending)])
         .expect_err("pending CAR segment must fail closed");
     assert!(error.to_string().contains("non-producible"));
@@ -2132,7 +2009,6 @@ fn governance_car_queue_rejects_non_producible_pending_segments() {
         .revalidate()
         .expect("retained root remains valid");
 }
-
 fn write_car_segment_source_fixture_for_kind(
     root: &Path,
     payload_kind: &str,
@@ -2172,11 +2048,9 @@ fn write_car_segment_source_fixture_for_kind(
         json_len: json.len(),
     }
 }
-
 fn write_car_segment_source_fixture(root: &Path, encoded: &[u8]) -> PublishIndexEntryForCar {
     write_car_segment_source_fixture_for_kind(root, "test_payload", encoded)
 }
-
 fn publication_artifact_paths_for_fixture(
     root: &Path,
     entry: &PublishIndexEntryForCar,
@@ -2201,7 +2075,6 @@ fn publication_artifact_paths_for_fixture(
         digest_sidecar_path_for(&manifest),
     ]
 }
-
 fn seed_complete_uncommitted_publication_fixture(
     root: &Path,
     payload_kind: &str,

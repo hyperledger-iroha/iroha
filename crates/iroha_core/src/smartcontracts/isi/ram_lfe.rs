@@ -1,5 +1,5 @@
 //! Generic RAM-LFE program-policy instruction handlers.
-
+use super::prelude::*;
 use iroha_crypto::{
     BfvIdentifierPublicParameters, Hash, RamLfeBackend, RamLfeVerificationMode,
     decode_bfv_programmed_public_parameters,
@@ -13,14 +13,10 @@ use iroha_data_model::{
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds},
 };
 use iroha_telemetry::metrics;
-
-use super::prelude::*;
-
 /// Execution handlers for RAM-LFE program-policy ISIs.
 pub mod isi {
     use super::*;
     use crate::state::StateTransaction;
-
     impl Execute for iroha_data_model::isi::ram_lfe::RegisterRamLfeProgramPolicy {
         #[metrics(+"register_ram_lfe_program_policy")]
         fn execute(
@@ -67,7 +63,6 @@ pub mod isi {
             Ok(())
         }
     }
-
     impl Execute for iroha_data_model::isi::ram_lfe::ActivateRamLfeProgramPolicy {
         #[metrics(+"activate_ram_lfe_program_policy")]
         fn execute(
@@ -103,7 +98,6 @@ pub mod isi {
             Ok(())
         }
     }
-
     impl Execute for iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy {
         #[metrics(+"deactivate_ram_lfe_program_policy")]
         fn execute(
@@ -138,7 +132,6 @@ pub mod isi {
             Ok(())
         }
     }
-
     fn ensure_program_policy_owner(
         authority: &AccountId,
         policy: &RamLfeProgramPolicy,
@@ -153,7 +146,6 @@ pub mod isi {
         ))
     }
 }
-
 /// Validate a RAM-LFE program policy before storing or restoring it.
 pub(crate) fn validate_program_policy(policy: &RamLfeProgramPolicy) -> Result<(), Error> {
     if policy.backend != policy.commitment.backend {
@@ -234,7 +226,6 @@ pub(crate) fn validate_program_policy(policy: &RamLfeProgramPolicy) -> Result<()
     }
     Ok(())
 }
-
 /// Validate a stateless RAM-LFE execution receipt against the published program policy and clock.
 ///
 /// This mirrors the attestation checks used during identifier-claim admission,
@@ -293,7 +284,6 @@ pub fn validate_execution_receipt_at(
             program_policy.program_id
         ));
     }
-
     let public_parameters = match program_policy.backend {
         RamLfeBackend::BfvProgrammedSha3_256V1 => {
             decode_bfv_programmed_public_parameters(&program_policy.commitment.public_parameters)
@@ -348,7 +338,6 @@ pub fn validate_execution_receipt_at(
             program_policy.program_id
         ));
     }
-
     match program_policy.verification_mode {
         RamLfeVerificationMode::Signed => {
             if !matches!(&receipt.attestation, RamLfeReceiptAttestation::Signed(_)) {
@@ -386,10 +375,8 @@ pub fn validate_execution_receipt_at(
             )?;
         }
     }
-
     Ok(())
 }
-
 fn expected_associated_data_hash(program_policy: &RamLfeProgramPolicy) -> Result<Hash, String> {
     norito::encode_canonical(&program_policy.program_id)
         .map(Hash::new)
@@ -400,7 +387,6 @@ fn expected_associated_data_hash(program_policy: &RamLfeProgramPolicy) -> Result
             )
         })
 }
-
 /// Verify a proof-mode RAM-LFE receipt under explicit node guardrails.
 ///
 /// The envelope cap is checked before decoding so callers cannot bypass the
@@ -444,7 +430,6 @@ pub(crate) fn verify_execution_proof(
             guardrails.halo2_max_envelope_bytes
         ));
     }
-
     let envelope: OpenVerifyEnvelope = norito::decode_canonical(&proof.bytes).map_err(|err| {
         format!("RAM-LFE proof receipt must use a canonical OpenVerifyEnvelope payload: {err}")
     })?;
@@ -465,7 +450,6 @@ pub(crate) fn verify_execution_proof(
     if !envelope.aux.is_empty() {
         return Err("RAM-LFE proof envelope auxiliary bytes must be empty".to_owned());
     }
-
     let verifying_key = VerifyingKeyBox::new(
         verifier.proof_backend.clone().into(),
         verifier.verifying_key_bytes.clone(),
@@ -507,7 +491,6 @@ pub(crate) fn verify_execution_proof(
     }
     Ok(())
 }
-
 fn expected_execution_payload_hash_instances(payload_hash: Hash) -> Vec<Vec<[u8; 32]>> {
     let bytes: &[u8; 32] = payload_hash.as_ref();
     (0..4)
@@ -520,11 +503,9 @@ fn expected_execution_payload_hash_instances(payload_hash: Hash) -> Vec<Vec<[u8;
         })
         .collect()
 }
-
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
-
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair, PolicyCommitment, RamLfeProofVerifierMetadata};
     use iroha_data_model::{
         account::AccountId,
@@ -532,17 +513,13 @@ mod tests {
         ram_lfe::{RamLfeProgramId, RamLfeReceiptAttestation},
         zk::OpenVerifyEnvelope,
     };
-
-    use super::*;
-
+    use std::str::FromStr as _;
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("RAM-LFE fixture key generation should succeed")
     }
-
     fn checked_account_id() -> AccountId {
         AccountId::new(checked_keypair().public_key().clone())
     }
-
     fn test_guardrails() -> crate::zk::ZkVerifyGuardrails {
         crate::zk::ZkVerifyGuardrails {
             halo2_enabled: true,
@@ -553,12 +530,10 @@ mod tests {
             stark_max_proof_bytes: usize::MAX,
         }
     }
-
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
-
     #[test]
     fn malformed_bfv_parameters_are_rejected_without_panicking() {
         let resolver = checked_keypair();
@@ -575,7 +550,6 @@ mod tests {
             resolver.public_key().clone(),
         );
         policy.active = true;
-
         let error = validate_program_policy(&policy)
             .expect_err("malformed BFV parameters must fail policy admission");
         assert!(
@@ -583,7 +557,6 @@ mod tests {
             "unexpected error: {error}"
         );
     }
-
     fn sample_policy() -> RamLfeProgramPolicy {
         let owner = checked_account_id();
         let resolver = checked_keypair();
@@ -600,7 +573,6 @@ mod tests {
             resolver.public_key().clone(),
         )
     }
-
     fn sample_receipt(
         policy: &RamLfeProgramPolicy,
         executed_at_ms: u64,
@@ -627,7 +599,6 @@ mod tests {
             )),
         }
     }
-
     #[test]
     fn validate_execution_receipt_rejects_expired_receipts() {
         let policy = sample_policy();
@@ -636,7 +607,6 @@ mod tests {
             .expect_err("expired");
         assert!(err.contains("is expired"));
     }
-
     #[test]
     fn validate_execution_receipt_rejects_malformed_expiry() {
         let policy = sample_policy();
@@ -645,7 +615,6 @@ mod tests {
             .expect_err("bad expiry");
         assert!(err.contains("expires at or before execution time"));
     }
-
     #[test]
     fn validate_execution_receipt_rejects_future_execution_time() {
         let policy = sample_policy();
@@ -654,7 +623,6 @@ mod tests {
             .expect_err("future");
         assert!(err.contains("executed in the future"));
     }
-
     fn sample_proof_payload() -> RamLfeExecutionReceiptPayload {
         RamLfeExecutionReceiptPayload {
             program_id: RamLfeProgramId::from_str("proof_program").expect("program id"),
@@ -671,7 +639,6 @@ mod tests {
             expires_at_ms: None,
         }
     }
-
     fn sample_proof_verifier() -> RamLfeProofVerifierMetadata {
         RamLfeProofVerifierMetadata {
             proof_backend: crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
@@ -680,7 +647,6 @@ mod tests {
             verifying_key_bytes: b"ram-lfe-proof-vk".to_vec(),
         }
     }
-
     fn sample_proof_box(
         verifier: &RamLfeProofVerifierMetadata,
         mutate: impl FnOnce(&mut OpenVerifyEnvelope),
@@ -703,33 +669,28 @@ mod tests {
             norito::encode_canonical(&envelope).expect("encode canonical OpenVerifyEnvelope"),
         )
     }
-
     #[test]
     fn verify_execution_proof_rejects_noncanonical_envelope_metadata_before_proof_decode() {
         let verifier = sample_proof_verifier();
         let execution = sample_proof_payload();
-
         let bad_backend = sample_proof_box(&verifier, |envelope| {
             envelope.backend = BackendTag::Stark;
         });
         let err = verify_execution_proof(&bad_backend, &execution, &verifier, test_guardrails())
             .expect_err("wrong envelope backend tag must reject before proof parsing");
         assert!(err.contains("backend tag"), "unexpected error: {err}");
-
         let aux = sample_proof_box(&verifier, |envelope| {
             envelope.aux = b"unbound-ram-lfe-proof-metadata".to_vec();
         });
         let err = verify_execution_proof(&aux, &execution, &verifier, test_guardrails())
             .expect_err("non-empty auxiliary bytes must reject before proof parsing");
         assert!(err.contains("auxiliary bytes"), "unexpected error: {err}");
-
         let zero_vk_hash = sample_proof_box(&verifier, |envelope| {
             envelope.vk_hash = [0u8; Hash::LENGTH];
         });
         let err = verify_execution_proof(&zero_vk_hash, &execution, &verifier, test_guardrails())
             .expect_err("zero verifier-key hash must reject before proof parsing");
         assert!(err.contains("non-zero"), "unexpected error: {err}");
-
         let schema_drift = sample_proof_box(&verifier, |envelope| {
             envelope.public_inputs.extend_from_slice(b":schema-drift");
         });
@@ -739,7 +700,6 @@ mod tests {
             err.contains("public-input schema hash"),
             "unexpected error: {err}"
         );
-
         let wrong_vk_hash = sample_proof_box(&verifier, |envelope| {
             envelope.vk_hash = [0xA5; Hash::LENGTH];
         });
@@ -750,11 +710,9 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn verify_execution_proof_rejects_nonproduction_labels_before_decode() {
         let execution = sample_proof_payload();
-
         for backend in [
             "halo2/ipa:debug",
             "halo2/ipa:trusted-setup",
@@ -771,7 +729,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn verify_execution_proof_rejects_alternate_norito_layout_before_proof_decode() {
         let verifier = sample_proof_verifier();
@@ -787,7 +744,6 @@ mod tests {
         };
         assert_ne!(alternate_bytes, canonical.bytes);
         let alternate = ProofBox::new(canonical.backend, alternate_bytes);
-
         let err = verify_execution_proof(&alternate, &execution, &verifier, test_guardrails())
             .expect_err("alternate-layout RAM-LFE proof envelope must reject");
         assert!(
@@ -795,7 +751,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn associated_data_hash_is_independent_of_ambient_norito_layout() {
         let policy = sample_policy();
@@ -810,13 +765,11 @@ mod tests {
             expected
         );
     }
-
     #[test]
     fn verify_execution_proof_enforces_node_guardrails_before_decode() {
         let verifier = sample_proof_verifier();
         let execution = sample_proof_payload();
         let proof = sample_proof_box(&verifier, |_| {});
-
         let mut disabled = test_guardrails();
         disabled.halo2_enabled = false;
         let err = verify_execution_proof(&proof, &execution, &verifier, disabled)
@@ -825,7 +778,6 @@ mod tests {
             err.contains("disabled in node configuration"),
             "unexpected error: {err}"
         );
-
         let mut envelope_limited = test_guardrails();
         envelope_limited.halo2_max_envelope_bytes = proof.bytes.len().saturating_sub(1);
         let err = verify_execution_proof(&proof, &execution, &verifier, envelope_limited)
@@ -834,7 +786,6 @@ mod tests {
             err.contains("exceeding the configured maximum"),
             "unexpected error: {err}"
         );
-
         let mut proof_limited = test_guardrails();
         proof_limited.halo2_max_proof_bytes = 1;
         let err = verify_execution_proof(&proof, &execution, &verifier, proof_limited)

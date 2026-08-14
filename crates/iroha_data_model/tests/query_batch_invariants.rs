@@ -1,5 +1,4 @@
 //! Adversarial tests for iterable-query column batch invariants.
-
 use iroha_data_model::query::{
     QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryOutputBatchBoxTupleError,
     builder::{QueryExecutor, QueryIterator, TypedBatchDowncastError},
@@ -7,12 +6,10 @@ use iroha_data_model::query::{
 };
 use iroha_primitives::numeric::Numeric;
 use norito::codec::Encode;
-
 #[derive(Encode)]
 struct WireTuple {
     tuple: Vec<QueryOutputBatchBox>,
 }
-
 #[derive(Encode)]
 struct WireQueryOutput {
     batch: WireTuple,
@@ -20,11 +17,9 @@ struct WireQueryOutput {
     has_more: bool,
     continue_cursor: Option<ForwardCursor>,
 }
-
 fn numeric(values: &[u32]) -> QueryOutputBatchBox {
     QueryOutputBatchBox::Numeric(values.iter().copied().map(Numeric::from).collect())
 }
-
 fn every_empty_batch_variant() -> Vec<QueryOutputBatchBox> {
     vec![
         QueryOutputBatchBox::PublicKey(Vec::new()),
@@ -75,7 +70,6 @@ fn every_empty_batch_variant() -> Vec<QueryOutputBatchBox> {
         QueryOutputBatchBox::FeeSponsorProgramId(Vec::new()),
     ]
 }
-
 #[test]
 fn public_construction_rejects_missing_and_unequal_columns() {
     assert_eq!(
@@ -98,13 +92,11 @@ fn public_construction_rejects_missing_and_unequal_columns() {
             actual: 1,
         })
     );
-
     let empty_page = QueryOutputBatchBoxTuple::new(vec![numeric(&[]), numeric(&[])])
         .expect("equal zero-row columns remain valid for pagination");
     assert_eq!(empty_page.column_count(), 2);
     assert!(empty_page.is_empty());
 }
-
 #[test]
 fn all_norito_decode_paths_reject_hostile_column_shapes() {
     for wire in [
@@ -127,7 +119,6 @@ fn all_norito_decode_paths_reject_hostile_column_shapes() {
         );
     }
 }
-
 #[test]
 fn nested_query_output_decode_rejects_hostile_columns() {
     let wire = WireQueryOutput {
@@ -138,12 +129,10 @@ fn nested_query_output_decode_rejects_hostile_columns() {
         has_more: false,
         continue_cursor: None,
     };
-
     let error = norito::codec::decode_adaptive::<QueryOutput>(&wire.encode())
         .expect_err("nested hostile columns must fail before iteration");
     assert!(error.to_string().to_lowercase().contains("column"));
 }
-
 #[test]
 fn norito_decode_rejects_all_truncated_prefixes_and_trailing_bytes() {
     let batch = QueryOutputBatchBoxTuple::new(vec![numeric(&[1, 2]), numeric(&[3, 4])])
@@ -154,7 +143,6 @@ fn norito_decode_rejects_all_truncated_prefixes_and_trailing_bytes() {
             .expect("valid exact slice decode"),
         batch
     );
-
     for cut in 0..bytes.len() {
         assert!(
             norito::codec::decode_adaptive::<QueryOutputBatchBoxTuple>(&bytes[..cut]).is_err(),
@@ -162,7 +150,6 @@ fn norito_decode_rejects_all_truncated_prefixes_and_trailing_bytes() {
             bytes.len()
         );
     }
-
     let mut with_trailing = bytes;
     with_trailing.extend_from_slice(&[0xA5, 0x5A]);
     assert!(
@@ -170,7 +157,6 @@ fn norito_decode_rejects_all_truncated_prefixes_and_trailing_bytes() {
         "decoded payload with trailing bytes"
     );
 }
-
 #[cfg(feature = "json")]
 #[test]
 fn json_query_output_rejects_hostile_columns() {
@@ -182,12 +168,10 @@ fn json_query_output_rejects_hostile_columns() {
         "has_more": false,
         "continue_cursor": null
     });
-
     let error = norito::json::from_value::<QueryOutput>(value)
         .expect_err("hostile JSON columns must fail before iteration");
     assert!(error.to_string().to_lowercase().contains("column"));
 }
-
 #[test]
 fn extend_preflights_late_type_mismatch_without_partial_mutation() {
     let mut left = QueryOutputBatchBoxTuple::new(vec![
@@ -198,26 +182,22 @@ fn extend_preflights_late_type_mismatch_without_partial_mutation() {
     let snapshot = left.clone();
     let right =
         QueryOutputBatchBoxTuple::new(vec![numeric(&[2]), numeric(&[3])]).expect("equal columns");
-
     assert_eq!(
         left.extend(right),
         Err(QueryOutputBatchBoxTupleError::ColumnTypeMismatch { column: 1 })
     );
     assert_eq!(left, snapshot);
 }
-
 #[test]
 fn erased_batch_extend_is_total_for_every_variant_and_atomic_on_mismatch() {
     let variants = every_empty_batch_variant();
     assert!(!variants.is_empty());
-
     for (index, batch) in variants.iter().enumerate() {
         let mut matching = batch.clone();
         matching
             .extend(batch.clone())
             .unwrap_or_else(|error| panic!("variant {index} failed matching extend: {error}"));
         assert!(matching.is_empty());
-
         let mut mismatched = batch.clone();
         let snapshot = mismatched.clone();
         let other = variants[(index + 1) % variants.len()].clone();
@@ -228,27 +208,22 @@ fn erased_batch_extend_is_total_for_every_variant_and_atomic_on_mismatch() {
         assert_eq!(mismatched, snapshot, "variant {index} mutated on error");
     }
 }
-
 struct HostileExecutor;
-
 impl QueryExecutor for HostileExecutor {
     type Cursor = ();
     type Error = TypedBatchDowncastError;
-
     fn execute_singular_query(
         &self,
         _query: iroha_data_model::query::SingularQueryBox,
     ) -> Result<iroha_data_model::query::SingularQueryOutputBox, Self::Error> {
         unreachable!("not used by iterable test")
     }
-
     fn start_query(
         &self,
         _query: iroha_data_model::query::QueryWithParams,
     ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
         unreachable!("not used by direct iterator test")
     }
-
     fn continue_query(
         (): Self::Cursor,
     ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
@@ -261,13 +236,11 @@ impl QueryExecutor for HostileExecutor {
         ))
     }
 }
-
 #[test]
 fn hostile_continuation_returns_one_terminal_typed_error() {
     let first = QueryOutputBatchBoxTuple::from_batch(numeric(&[]));
     let mut iterator = QueryIterator::<HostileExecutor, Numeric>::new(first, Some(()))
         .expect("initial batch type matches");
-
     assert_eq!(iterator.size_hint(), (0, None));
     assert_eq!(
         iterator.next(),

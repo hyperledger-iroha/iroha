@@ -16,7 +16,7 @@ title: SoraFS Gateway Chunk-Range & Scheduler Integration
 |--------|------|------------------|-------|
 | `GET`  | `/car/{manifest_id}` | `Range`, `dag-scope=block`, `X-SoraFS-Chunker`, `X-SoraFS-Nonce`, `X-SoraFS-Stream-Token`, `Sora-Name` (optional alias) | Returns an aligned CAR slice; alias header is validated against the manifest envelope. Stream token must be base64-encoded Norito. |
 | `GET`  | `/chunk/{manifest_id}/{chunk_digest}` | `X-SoraFS-Nonce`, `X-SoraFS-Stream-Token` | Single chunk retrieval with deterministic headers. |
-| `POST` | `/token` | `X-API-Token`, `X-SoraFS-Client`, `X-SoraFS-Nonce`, signed manifest envelope | Issues per-peer stream token with TTL & rate limits. |
+| `POST` | `/token` | `X-Iroha-Operator-{Public-Key,Timestamp-Ms,Nonce,Signature}`, `X-SoraFS-Client`, `X-SoraFS-Nonce`, signed manifest envelope | Issues per-peer stream token with TTL & rate limits. The operator signature binds the exact network and complete request. |
 
 CAR responses MUST include:
 - `Content-Range: bytes start-end/total`
@@ -143,24 +143,25 @@ Logs:
 ## Secure Token Issuance API
 
 - **Authentication.** The canonical route is
-  `POST /v1/sorafs/storage/token`. It always requires exactly one valid
-  `X-API-Token` from `torii.api_tokens`, independently of the listener-wide
-  `torii.require_api_token` setting. `X-SoraFS-Client` is only a diagnostic
-  label and `X-SoraFS-Nonce` is only an echoed correlation value; neither
-  authenticates the caller.
+  `POST /v1/sorafs/storage/token`. It requires one fresh exact-network operator
+  signature over the complete canonical request. `X-SoraFS-Client` is only a
+  diagnostic label and `X-SoraFS-Nonce` is only an echoed correlation value;
+  neither authenticates the caller.
 - **CORS preflight.** When CORS is enabled, a catalog-declared `OPTIONS`
-  preflight may complete without `X-API-Token`; it performs no manifest lookup,
-  quota reservation, or token issuance. The actual `POST` still requires the
-  credential. Browser deployments must explicitly allow `X-API-Token`,
-  `X-SoraFS-Client`, `X-SoraFS-Nonce`, and `Content-Type` in
-  `torii.cors.allowed_headers`.
+  preflight may complete without signature headers; it performs no manifest
+  lookup, quota reservation, or token issuance. The actual `POST` still
+  requires all four `X-Iroha-Operator-*` headers. Browser deployments must
+  explicitly allow those headers, `X-SoraFS-Client`, `X-SoraFS-Nonce`, and
+  `Content-Type` in `torii.cors.allowed_headers`.
 - **Request flow.**
-  1. Client submits the three required headers and JSON containing
+  1. Client signs and submits the exact request plus the two SoraFS diagnostic
+     headers and JSON containing
      `manifest_id_hex`, `provider_id_hex`, and any approved TTL, stream,
      byte-rate, or issuance-quota overrides.
-  2. Gateway authenticates `X-API-Token`, derives a domain-separated opaque
-     quota subject from that credential, resolves the manifest from local
-     storage, and applies its configured issuance quota. Rotating
+  2. Gateway verifies signature freshness, exact NetworkId, and replay nonce,
+     derives a domain-separated opaque quota subject from the authenticated
+     operator key, resolves the manifest from local storage, and applies its
+     configured issuance quota. Rotating
      `X-SoraFS-Client` labels does not create a fresh budget.
   3. Gateway mints and domain-separates a token, then returns JSON containing
      `token.body`, `token.signature_hex`, `token.encoded`, and
@@ -180,19 +181,18 @@ Logs:
   4. Response headers include `X-SoraFS-Token-Id`,
      `X-SoraFS-Verifying-Key`, `X-SoraFS-Issuance-Quota-Remaining`, and the echoed
      nonce/client identifiers. `Cache-Control: no-store` is mandatory.
-     `X-SoraFS-Issuance-Quota-Remaining` reports the authenticated credential's
+     `X-SoraFS-Issuance-Quota-Remaining` reports the authenticated operator's
      remaining 60-second issuance allowance; exhaustion returns `429` plus
      `Retry-After`.
 - **Telemetry.** Gateway records issuance metrics:
   - `sorafs_gateway_token_issuance_total{client,result}`
   - `sorafs_gateway_token_issuance_latency_ms_bucket`
   - `sorafs_gateway_token_denials_total{reason}`
-- **Abuse protection.** Treat both the Torii API token and returned base64
-  stream token as bearer credentials.
+- **Abuse protection.** Treat the returned base64 stream token as a bearer
+  credential; operator request signatures are fresh and replay-protected.
   Do not log provider descriptors without redacting `stream-token`. Clients
-  exceeding their issuance budget receive `429`; nonce uniqueness must be
-  enforced by the authenticated perimeter until the route has a durable replay
-  ledger.
+  exceeding their issuance budget receive `429`; the operator-signature replay
+  cache rejects a reused nonce inside the accepted freshness window.
 
 ## Documentation & Rollout
 

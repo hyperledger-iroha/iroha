@@ -62,7 +62,6 @@ fn sha256_compress_ref(mut state: [u32; 8], block: &[u8; 64]) -> [u32; 8] {
     state[7] = state[7].wrapping_add(h);
     state
 }
-
 #[cfg(target_os = "macos")]
 #[test]
 fn test_metal_sha256_round() {

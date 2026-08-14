@@ -1058,7 +1058,6 @@ fn exercise_pending_kura_production_lifecycle(
 
 #[cfg(feature = "bls")]
 #[test]
-#[allow(clippy::too_many_lines)]
 fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies() {
     if std::thread::current().name() != Some("production-lifecycle-marker-replay") {
         return run_marker_replay_test_on_stack();
@@ -1719,7 +1718,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             );
             assert!(matches!(
                 leader_wire_ingress.try_push(crate::sumeragi::InboundBlockMessage::new(
-                    BlockMessage::V2(invalid_response_message),
+                    crate::sumeragi::message::BlockMessage::V2(invalid_response_message),
                     Some(local_peer.clone()),
                 )),
                 Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)

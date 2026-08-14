@@ -1,7 +1,6 @@
 // Lane-reservation durability, FIFO, and exact-release regression tests.
 //
 // Included by `queue::tests` so source-bound libtest names remain stable.
-
 fn checked_startup_reconciliation_receipt(
     queue: &Queue,
 ) -> LaneReservationStartupReconciliationReceipt {
@@ -13,7 +12,6 @@ fn checked_startup_reconciliation_receipt(
         .expect("bind checked snapshot replay receipt")
         .expect("queue snapshot remains unchanged while binding receipt")
 }
-
 fn lane_reservation_test_state() -> Arc<State> {
     let mut state = State::new(
         world_with_test_domains(),
@@ -28,7 +26,6 @@ fn lane_reservation_test_state() -> Arc<State> {
         .expect("use the authoritative canonical single-lane fixture");
     Arc::new(state)
 }
-
 fn lane_reservation_scope(
     state: &State,
     owner_seed: &[u8],
@@ -47,14 +44,11 @@ fn lane_reservation_scope(
         proposal_identity_hash: Hash::new(proposal_seed),
     }
 }
-
 #[test]
 fn lane_reservation_scope_accepts_only_canonical_single_lane_when_nexus_is_disabled() {
     let state = lane_reservation_test_state();
     let scope = lane_reservation_scope(&state, b"single-lane-owner", b"single-lane-proposal");
-
     assert!(Queue::validate_reservation_scope_against_view(&state.view(), scope).is_ok());
-
     let mut noncanonical = scope;
     noncanonical.dataspace_id = DataSpaceId::new(1);
     assert!(matches!(
@@ -62,7 +56,6 @@ fn lane_reservation_scope_accepts_only_canonical_single_lane_when_nexus_is_disab
         Err(LaneQueueReservationError::InactiveRoute)
     ));
 }
-
 #[test]
 fn lane_reservation_key_requires_explicit_current_version() {
     #[derive(Encode)]
@@ -80,7 +73,6 @@ fn lane_reservation_key_requires_explicit_current_version() {
         reservation_owner_hash: Hash,
         proposal_identity_hash: Hash,
     }
-
     let route = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(7));
     let entrypoint_hash = HashOf::from_untyped_unchecked(Hash::new(b"reservation-key-entrypoint"));
     let key = LaneQueueReservationKeyV2 {
@@ -126,7 +118,6 @@ fn lane_reservation_key_requires_explicit_current_version() {
             "reservation identity must ignore the caller's ambient Norito layout"
         );
     }
-
     let legacy = LegacyLaneQueueReservationKeyV1 {
         signed_transaction_hash: key.signed_transaction_hash,
         entrypoint_hash: key.entrypoint_hash,
@@ -147,7 +138,6 @@ fn lane_reservation_key_requires_explicit_current_version() {
         norito::decode_from_bytes::<LaneQueueReservationKeyV2>(&legacy_framed).is_err(),
         "a versionless reservation key must fail closed"
     );
-
     for malformed_version in [0, LaneQueueReservationKeyV2::VERSION + 1] {
         let mut malformed = key;
         malformed.version = malformed_version;
@@ -157,7 +147,6 @@ fn lane_reservation_key_requires_explicit_current_version() {
         );
     }
 }
-
 fn install_test_reservation_journal(queue: &Queue, dir: &tempfile::TempDir) -> PathBuf {
     let path = dir.path().join("lane-queue-reservations.norito");
     assert!(!queue.lane_reservation_journal_installed());
@@ -170,7 +159,6 @@ fn install_test_reservation_journal(queue: &Queue, dir: &tempfile::TempDir) -> P
     assert!(queue.lane_reservation_journal_installed());
     path
 }
-
 fn install_globally_certified_test_reservation_journals(
     queue: &Queue,
     dir: &tempfile::TempDir,
@@ -184,7 +172,6 @@ fn install_globally_certified_test_reservation_journals(
         .expect("install queue-plan journal for globally certified reservation fixture");
     install_test_reservation_journal(queue, dir)
 }
-
 fn payload_free_diagnostic_reservation_record(
     route: RoutingDecision,
     lane_incarnation: Hash,
@@ -231,11 +218,9 @@ fn payload_free_diagnostic_reservation_record(
             .expect("diagnostic FIFO ordinal is positive"),
     }
 }
-
 fn test_lane_reservation_plan_path(dir: &tempfile::TempDir) -> PathBuf {
     dir.path().join("lane-queue-plans.norito")
 }
-
 fn push_globally_bound_lane_reservation_candidate(
     queue: &Queue,
     state: &State,
@@ -249,20 +234,17 @@ fn push_globally_bound_lane_reservation_candidate(
     }
     admit_globally_certified_reservation_transaction_for_test(queue, state, transaction)
 }
-
 fn prepared_canonical_cleanup_group(
     ordered_keys: Vec<LaneQueueReservationKeyV2>,
 ) -> PreparedLaneQueueCarrierCleanupGroup {
-    let group_binding =
-        lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())
-            .expect("bind prepared canonical cleanup group");
+    let group_binding = lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())
+        .expect("bind prepared canonical cleanup group");
     PreparedLaneQueueCarrierCleanupGroup {
         ordered_keys,
         group_binding,
         cleanup_gate: LaneQueueCarrierCleanupGate::direct_test(group_binding),
     }
 }
-
 fn reserve_two_canonical_cleanup_carrier_groups(
     queue: &Queue,
     state: &State,
@@ -288,15 +270,11 @@ fn reserve_two_canonical_cleanup_carrier_groups(
         b"cross-carrier-owner-a",
         b"cross-carrier-proposal-a",
     ));
-    let mut second_scope = lane_reservation_scope(
-        state,
-        b"cross-carrier-owner-b",
-        b"cross-carrier-proposal-b",
-    );
+    let mut second_scope =
+        lane_reservation_scope(state, b"cross-carrier-owner-b", b"cross-carrier-proposal-b");
     second_scope.lane_block_height = 2;
     [first, reserve_one(second_scope)]
 }
-
 fn persist_unreconciled_commit_barrier(
     queue: &Queue,
     state: &State,
@@ -328,7 +306,6 @@ fn persist_unreconciled_commit_barrier(
     reservations.commit_barriers.push(key);
     key
 }
-
 #[test]
 fn commit_barrier_owns_hash_until_plan_reconciliation() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -346,7 +323,6 @@ fn commit_barrier_owns_hash_until_plan_reconciliation() {
         b"commit-owner",
         b"commit-proposal",
     );
-
     let store = queue.lane_reservations.lock();
     assert_eq!(store.commit_barriers, vec![key]);
     assert!(
@@ -356,7 +332,6 @@ fn commit_barrier_owns_hash_until_plan_reconciliation() {
     drop(store);
     assert_eq!(queue.pop_queued_hash(), None);
 }
-
 #[test]
 fn plan_admission_append_never_owns_queue_mutation_lock() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -384,14 +359,12 @@ fn plan_admission_append_never_owns_queue_mutation_lock() {
         .as_ref()
         .expect("installed plan journal")
         .install_append_handoff(Arc::clone(&reached), Arc::clone(&resume));
-
     thread::scope(|scope| {
         let queue_for_admission = Arc::clone(&queue);
         let state_for_admission = Arc::clone(&state);
         let admission = scope.spawn(move || {
             queue_for_admission.push_with_lane_with_state(transaction, &state_for_admission)
         });
-
         reached.wait();
         assert!(queue.durability_transition_active(&hash));
         assert!(
@@ -439,7 +412,6 @@ fn plan_admission_append_never_owns_queue_mutation_lock() {
             !queue.accepted_work_validation_faulted(),
             "a content-valid partial admission must not trip the sticky validation latch"
         );
-
         resume.wait();
         admission
             .join()
@@ -462,7 +434,6 @@ fn plan_admission_append_never_owns_queue_mutation_lock() {
     );
     assert!(!queue.accepted_work_validation_faulted());
 }
-
 #[test]
 fn ordinary_unbound_durable_claim_waits_for_global_admission_without_fault() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -476,7 +447,6 @@ fn ordinary_unbound_durable_claim_waits_for_global_admission_without_fault() {
         Arc::get_mut(&mut state).expect("unshared lane-reservation test state"),
         &transaction,
     );
-
     queue
         .push_with_lane_with_state(transaction, &state)
         .expect("persist ordinary unbound durable claim");
@@ -486,7 +456,6 @@ fn ordinary_unbound_durable_claim_waits_for_global_admission_without_fault() {
             .get(&hash)
             .is_some_and(|claim| claim.global_admission_identity.is_none())
     );
-
     let reserved = queue
         .reserve_transactions_for_lane(
             &state,
@@ -507,7 +476,6 @@ fn ordinary_unbound_durable_claim_waits_for_global_admission_without_fault() {
     assert!(!queue.accepted_work_validation_faulted());
     assert!(!queue.lane_reservation_durability_faulted());
 }
-
 #[test]
 fn reservation_append_does_not_convoy_unrelated_queue_removal() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -529,7 +497,6 @@ fn reservation_append_does_not_convoy_unrelated_queue_removal() {
         .as_mut()
         .expect("installed reservation journal")
         .install_append_handoff(Arc::clone(&reached), Arc::clone(&resume));
-
     thread::scope(|scope| {
         let queue_for_reservation = Arc::clone(&queue);
         let state_for_reservation = Arc::clone(&state);
@@ -544,14 +511,12 @@ fn reservation_append_does_not_convoy_unrelated_queue_removal() {
                 nonzero!(1_usize),
             )
         });
-
         reached.wait();
         assert!(queue.durability_transition_active(&selected_hash));
         assert!(
             queue.push_remove_lock.try_lock().is_some(),
             "reservation-journal fsync must not own the queue mutation lock"
         );
-
         let (removed_tx, removed_rx) = std::sync::mpsc::channel();
         let queue_for_removal = Arc::clone(&queue);
         let removal = scope.spawn(move || {
@@ -564,7 +529,6 @@ fn reservation_append_does_not_convoy_unrelated_queue_removal() {
             "unrelated removal must not retain the queue lock while storage is blocked"
         );
         resume.wait();
-
         let reserved = reservation
             .join()
             .expect("reservation thread")

@@ -90,6 +90,15 @@ def test_faucet_requires_queued_receipt_and_pipeline_finality(monkeypatch) -> No
         return 200, {"status": {"kind": "Applied", "block_height": 7}}
 
     monkeypatch.setattr(MODULE, "_http_json", fake_http_json)
+    monkeypatch.setattr(
+        MODULE,
+        "solve_puzzle",
+        lambda account, _puzzle: {
+            "account_id": account,
+            "pow_anchor_height": 5,
+            "pow_nonce_hex": "00" * 8,
+        },
+    )
     result = MODULE.attempt_faucet(
         account_id,
         "https://taira.example",
@@ -116,6 +125,15 @@ def test_faucet_rejects_retired_synchronous_receipt(monkeypatch) -> None:
         return 200, response
 
     monkeypatch.setattr(MODULE, "_http_json", fake_http_json)
+    monkeypatch.setattr(
+        MODULE,
+        "solve_puzzle",
+        lambda account, _puzzle: {
+            "account_id": account,
+            "pow_anchor_height": 5,
+            "pow_nonce_hex": "00" * 8,
+        },
+    )
     result = MODULE.attempt_faucet(
         account_id,
         "https://taira.example",
@@ -138,6 +156,15 @@ def test_faucet_rejects_short_queued_hash(monkeypatch) -> None:
         return 202, response
 
     monkeypatch.setattr(MODULE, "_http_json", fake_http_json)
+    monkeypatch.setattr(
+        MODULE,
+        "solve_puzzle",
+        lambda account, _puzzle: {
+            "account_id": account,
+            "pow_anchor_height": 5,
+            "pow_nonce_hex": "00" * 8,
+        },
+    )
     result = MODULE.attempt_faucet(
         account_id,
         "https://taira.example",

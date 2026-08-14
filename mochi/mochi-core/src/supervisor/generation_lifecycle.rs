@@ -1,5 +1,4 @@
 use super::*;
-
 impl Supervisor {
     pub(super) fn running_peer_aliases(&self) -> Vec<String> {
         self.peers
@@ -8,7 +7,6 @@ impl Supervisor {
             .map(|peer| peer.alias().to_owned())
             .collect()
     }
-
     pub(super) fn stop_captured_running_peers(&mut self, aliases: &[String]) -> Result<()> {
         let mut failures = Vec::new();
         for alias in aliases {
@@ -29,7 +27,6 @@ impl Supervisor {
             )))
         }
     }
-
     pub(super) fn restore_captured_running_peers(&mut self, aliases: &[String]) -> Result<()> {
         if aliases.is_empty() {
             return Ok(());
@@ -58,7 +55,6 @@ impl Supervisor {
             })
         }
     }
-
     pub(super) fn restore_running_set_after_error(
         &mut self,
         aliases: &[String],
@@ -72,7 +68,6 @@ impl Supervisor {
             },
         }
     }
-
     /// Re-render a single peer config with temporary overlays and restart that peer.
     pub fn restart_peer_with_extra_layers(
         &mut self,
@@ -81,7 +76,6 @@ impl Supervisor {
     ) -> Result<()> {
         self.restart_peer_with_extra_layers_inner(alias, extra_layers, None)
     }
-
     #[cfg(test)]
     pub(super) fn restart_peer_with_extra_layers_with_publication_fault(
         &mut self,
@@ -91,7 +85,6 @@ impl Supervisor {
     ) -> Result<()> {
         self.restart_peer_with_extra_layers_inner(alias, extra_layers, Some(fault))
     }
-
     fn restart_peer_with_extra_layers_inner(
         &mut self,
         alias: &str,
@@ -110,7 +103,6 @@ impl Supervisor {
             .is_running()
             .then(|| vec![alias.to_owned()])
             .unwrap_or_default();
-
         let generation_transaction = GenerationTransaction::begin_replacing(
             self.paths.root(),
             Some(self.genesis.generation_id.clone()),
@@ -148,7 +140,6 @@ impl Supervisor {
                 "validated generation omitted its exact genesis hash".to_owned(),
             )
         })?;
-
         if let Err(stop_error) = self.stop_captured_running_peers(&previously_running) {
             return Err(self.restore_running_set_after_error(&previously_running, stop_error));
         }
@@ -195,19 +186,16 @@ impl Supervisor {
             drop(publication);
             return Err(error);
         }
-
         let restored = self.restore_captured_running_peers(&previously_running);
         drop(publication);
         restored
     }
-
     /// Wipe peer storage and regenerate the default genesis manifest.
     ///
     /// If peers were running before this call they are restarted afterwards.
     pub fn wipe_and_regenerate(&mut self) -> Result<()> {
         self.wipe_and_regenerate_inner(None, || {})
     }
-
     #[cfg(test)]
     pub(super) fn wipe_and_regenerate_with_publication_fault(
         &mut self,
@@ -215,7 +203,6 @@ impl Supervisor {
     ) -> Result<()> {
         self.wipe_and_regenerate_inner(Some(fault), || {})
     }
-
     #[cfg(test)]
     pub(super) fn wipe_and_regenerate_with_publication_fault_and_failure_hook<F>(
         &mut self,
@@ -227,7 +214,6 @@ impl Supervisor {
     {
         self.wipe_and_regenerate_inner(Some(fault), on_precommit_failure)
     }
-
     fn wipe_and_regenerate_inner<F>(
         &mut self,
         publication_fault: Option<PublicationFaultPoint>,
@@ -255,7 +241,6 @@ impl Supervisor {
                     .in_fresh_generation(&generation_root, storage_dir)?,
             );
         }
-
         let genesis = GenesisMaterial::create(
             &mut self.binaries,
             GenesisCreateContext {
@@ -286,7 +271,6 @@ impl Supervisor {
                 "validated generation omitted its exact genesis hash".to_owned(),
             )
         })?;
-
         if let Err(stop_error) = self.stop_captured_running_peers(&previously_running) {
             return Err(self.restore_running_set_after_error(&previously_running, stop_error));
         }
@@ -333,12 +317,10 @@ impl Supervisor {
             drop(publication);
             return Err(error);
         }
-
         let restored = self.restore_captured_running_peers(&previously_running);
         drop(publication);
         restored
     }
-
     fn adopt_generation(&mut self, specs: Vec<PeerSpec>, genesis: GenesisMaterial) {
         debug_assert_eq!(self.peers.len(), specs.len());
         for (peer, spec) in self.peers.iter_mut().zip(specs) {

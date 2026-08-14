@@ -1,6 +1,5 @@
 //! Tests for registering on-chain contract code bytes.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -9,7 +8,6 @@ use iroha_core::{
 use iroha_crypto::KeyPair;
 use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
 use mv::storage::StorageReadOnly;
-
 fn assert_smart_contract_error(error: &InstructionExecutionError, expected_message: &str) {
     match error {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
@@ -23,7 +21,6 @@ fn assert_smart_contract_error(error: &InstructionExecutionError, expected_messa
         format!("Invalid smart contract: {expected_message}")
     );
 }
-
 fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
@@ -66,10 +63,8 @@ fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     ivm::verify_contract_artifact(&out).expect("valid test contract artifact");
     out
 }
-
 fn multi_chunk_ivm_program() -> Vec<u8> {
     use iroha_data_model::isi::smart_contract_code::SMART_CONTRACT_CODE_CHUNK_BYTES;
-
     let mut program = minimal_ivm_program(1);
     let halt = ivm::encoding::wide::encode_halt().to_le_bytes();
     let minimum_len = SMART_CONTRACT_CODE_CHUNK_BYTES
@@ -82,21 +77,17 @@ fn multi_chunk_ivm_program() -> Vec<u8> {
     ivm::verify_contract_artifact(&program).expect("valid multi-chunk contract artifact");
     program
 }
-
 fn checked_random_contract_code_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked contract code keypair")
 }
-
 #[test]
 fn contract_code_fixture_uses_checked_randomness() {
     let _key_pair = checked_random_contract_code_keypair();
 }
-
 #[test]
 fn register_contract_code_bytes_stores_and_idempotent() {
     use iroha_core::smartcontracts::Execute;
     use iroha_data_model::{isi::smart_contract_code::RegisterSmartContractBytes, prelude::*};
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let kp = checked_random_contract_code_keypair();
@@ -107,7 +98,6 @@ fn register_contract_code_bytes_stores_and_idempotent() {
     let account = Account::new(auth.clone()).build(&auth);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query);
-
     let header = iroha_data_model::block::BlockHeader::new(
         nonzero_ext::nonzero!(1_u64),
         None,
@@ -123,11 +113,9 @@ fn register_contract_code_bytes_stores_and_idempotent() {
     Grant::account_permission(permission, auth.clone())
         .execute(&auth, &mut stx)
         .expect("grant contract lifecycle authority");
-
     // Prepare program and code hash
     let prog = minimal_ivm_program(1);
     let code_hash = ivm::contract_code_hash(&prog);
-
     // Register bytes
     RegisterSmartContractBytes {
         code_hash,
@@ -136,12 +124,10 @@ fn register_contract_code_bytes_stores_and_idempotent() {
     .execute(&auth, &mut stx)
     .expect("register code bytes");
     stx.apply();
-
     // Verify stored (uncommitted block scope)
     let got = block.world.contract_code().get(&code_hash).cloned();
     assert_eq!(got.as_deref(), Some(prog.as_slice()));
     block.commit().expect("commit initial block");
-
     // Idempotent re-register
     let mut block2 = state.block(iroha_data_model::block::BlockHeader::new(
         nonzero_ext::nonzero!(2_u64),
@@ -159,7 +145,6 @@ fn register_contract_code_bytes_stores_and_idempotent() {
     .execute(&auth, &mut stx2)
     .expect("idempotent");
 }
-
 #[test]
 fn register_contract_code_bytes_respects_size_cap() {
     use iroha_core::smartcontracts::Execute;
@@ -168,7 +153,6 @@ fn register_contract_code_bytes_respects_size_cap() {
         parameter::custom::{CustomParameter, CustomParameterId},
         prelude::*,
     };
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let kp = checked_random_contract_code_keypair();
@@ -179,7 +163,6 @@ fn register_contract_code_bytes_respects_size_cap() {
     let account = Account::new(auth.clone()).build(&auth);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query);
-
     let header = iroha_data_model::block::BlockHeader::new(
         nonzero_ext::nonzero!(1_u64),
         None,
@@ -195,18 +178,15 @@ fn register_contract_code_bytes_respects_size_cap() {
     Grant::account_permission(permission, auth.clone())
         .execute(&auth, &mut stx)
         .expect("grant contract lifecycle authority");
-
     // Set cap to a tiny value (8 bytes) via custom parameter
     let id = CustomParameterId("max_contract_code_bytes".parse().unwrap());
     let cap = CustomParameter::new(id, iroha_primitives::json::Json::new(8u64));
     SetParameter::new(Parameter::Custom(cap))
         .execute(&auth, &mut stx)
         .expect("set cap");
-
     // Prepare a minimal IVM program which should exceed 8 bytes overall
     let prog = minimal_ivm_program(1);
     let code_hash = ivm::contract_code_hash(&prog);
-
     // Register should fail due to cap
     let err = RegisterSmartContractBytes {
         code_hash,
@@ -217,7 +197,6 @@ fn register_contract_code_bytes_respects_size_cap() {
     let s = format!("{err}");
     assert!(s.contains("code bytes exceed cap"));
 }
-
 #[test]
 fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize() {
     use iroha_core::smartcontracts::Execute;
@@ -229,7 +208,6 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
         },
         prelude::*,
     };
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let kp = checked_random_contract_code_keypair();
@@ -258,7 +236,6 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
         .execute(&auth, &mut stx)
         .expect("grant contract lifecycle authority");
     stx.world.take_external_events();
-
     let program = multi_chunk_ivm_program();
     let code_hash = ivm::contract_code_hash(&program);
     let chunks = program
@@ -268,7 +245,6 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
     let total_size = u64::try_from(program.len()).expect("program length fits u64");
     let chunk_count = u32::try_from(chunks.len()).expect("chunk count fits u32");
     assert!(chunk_count > 2, "fixture must exercise multiple chunks");
-
     let last_index = chunk_count - 1;
     let last_chunk = chunks[usize::try_from(last_index).unwrap()].clone();
     let upload_last = UploadSmartContractCodeChunk {
@@ -285,7 +261,6 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
     upload_last
         .execute(&auth, &mut stx)
         .expect("identical duplicate is idempotent");
-
     let mut conflicting = last_chunk;
     conflicting[0] ^= 0x80;
     let conflict = UploadSmartContractCodeChunk {
@@ -298,7 +273,6 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
     .execute(&auth, &mut stx)
     .expect_err("conflicting duplicate must fail");
     assert!(format!("{conflict}").contains("conflicting duplicate"));
-
     let missing = FinalizeSmartContractCodeUpload {
         code_hash,
         total_size,
@@ -315,7 +289,6 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
         .contract_code_upload_progress(&auth, &code_hash)
         .expect("failed finalization retains progress");
     assert_eq!(progress.received_chunks, 1);
-
     for (chunk_index, chunk) in chunks.iter().enumerate().rev().skip(1) {
         UploadSmartContractCodeChunk {
             code_hash,
@@ -347,7 +320,6 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
         )
     }));
     stx.apply();
-
     assert_eq!(
         block
             .world
@@ -364,7 +336,6 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
         "successful finalization must remove descriptor and chunks"
     );
 }
-
 #[test]
 fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
     use iroha_core::smartcontracts::Execute;
@@ -373,7 +344,6 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
         parameter::custom::{CustomParameter, CustomParameterId},
         prelude::*,
     };
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let kp = checked_random_contract_code_keypair();
@@ -408,7 +378,6 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
     )))
     .execute(&auth, &mut stx)
     .expect("set code cap");
-
     let first_hash = iroha_crypto::Hash::new(b"quota-first");
     UploadSmartContractCodeChunk {
         code_hash: first_hash,
@@ -488,7 +457,6 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
     .execute(&auth, &mut stx)
     .expect_err("aggregate declarations above cap must fail");
     assert!(format!("{aggregate_error}").contains("declared bytes exceed authority cap"));
-
     let malformed = UploadSmartContractCodeChunk {
         code_hash: iroha_crypto::Hash::new(b"malformed-shape"),
         total_size: 2,
@@ -502,7 +470,6 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
         &malformed,
         "contract upload chunk 0 length mismatch: expected 2, got 1",
     );
-
     let other = AccountId::new(checked_random_contract_code_keypair().public_key().clone());
     CancelSmartContractCodeUpload {
         code_hash: first_hash,
@@ -525,7 +492,6 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
     }
     .execute(&auth, &mut stx)
     .expect("owner cancellation is idempotent");
-
     for index in 0u8..4 {
         UploadSmartContractCodeChunk {
             code_hash: iroha_crypto::Hash::new(&[index]),
@@ -548,7 +514,6 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
     .expect_err("fifth pending upload must fail");
     assert!(format!("{count_error}").contains("at most 4 pending"));
 }
-
 #[test]
 fn native_contract_upload_authorizes_deploy_steps_but_not_owner_cleanup() {
     use iroha_core::smartcontracts::Execute;
@@ -559,7 +524,6 @@ fn native_contract_upload_authorizes_deploy_steps_but_not_owner_cleanup() {
         },
         prelude::*,
     };
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let kp = checked_random_contract_code_keypair();
@@ -592,7 +556,6 @@ fn native_contract_upload_authorizes_deploy_steps_but_not_owner_cleanup() {
         chunk_count: 1,
         chunk: vec![0],
     };
-
     let upload_error = upload
         .clone()
         .execute(&auth, &mut stx)
@@ -604,7 +567,6 @@ fn native_contract_upload_authorizes_deploy_steps_but_not_owner_cleanup() {
             .is_none(),
         "rejected upload must not create staging"
     );
-
     Grant::account_permission(permission.clone(), auth.clone())
         .execute(&auth, &mut stx)
         .expect("grant contract lifecycle authority");
@@ -614,7 +576,6 @@ fn native_contract_upload_authorizes_deploy_steps_but_not_owner_cleanup() {
     Revoke::account_permission(permission, auth.clone())
         .execute(&auth, &mut stx)
         .expect("revoke contract lifecycle authority");
-
     let finalize_error = FinalizeSmartContractCodeUpload {
         code_hash,
         total_size: 1,
@@ -629,7 +590,6 @@ fn native_contract_upload_authorizes_deploy_steps_but_not_owner_cleanup() {
             .is_some(),
         "rejected finalization must retain owner staging"
     );
-
     CancelSmartContractCodeUpload { code_hash }
         .execute(&auth, &mut stx)
         .expect("owner cleanup does not require deployment authorization");
@@ -639,7 +599,6 @@ fn native_contract_upload_authorizes_deploy_steps_but_not_owner_cleanup() {
             .is_none()
     );
 }
-
 #[test]
 fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
     use iroha_core::smartcontracts::Execute;
@@ -652,7 +611,6 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
         },
         prelude::*,
     };
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let kp = checked_random_contract_code_keypair();
@@ -681,7 +639,6 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
         .execute(&auth, &mut stx)
         .expect("grant contract lifecycle authority");
     stx.world.take_external_events();
-
     let program = multi_chunk_ivm_program();
     let code_hash = ivm::contract_code_hash(&program);
     let chunks = program
@@ -699,7 +656,6 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
     }
     .execute(&auth, &mut stx)
     .expect("stage a chunk before atomic registration wins");
-
     RegisterSmartContractBytes {
         code_hash,
         code: program.clone(),
@@ -718,7 +674,6 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
                 )
         )
     }));
-
     let mut conflicting_chunk = chunks[0].clone();
     conflicting_chunk[0] ^= 0x80;
     let conflicting_duplicate = UploadSmartContractCodeChunk {
@@ -731,7 +686,6 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
     .execute(&auth, &mut stx)
     .expect_err("registered code must not mask a conflicting staged duplicate");
     assert!(format!("{conflicting_duplicate}").contains("conflicting duplicate"));
-
     for chunk_index in 1..chunk_count {
         UploadSmartContractCodeChunk {
             code_hash,
@@ -749,7 +703,6 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
             .is_some(),
         "the prior descriptor models the registration/upload race"
     );
-
     FinalizeSmartContractCodeUpload {
         code_hash,
         total_size,
@@ -769,7 +722,6 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
     }
     .execute(&auth, &mut stx)
     .expect("finalization of already registered code remains idempotent");
-
     let mut corrupted_program = minimal_ivm_program(1);
     corrupted_program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     ivm::verify_contract_artifact(&corrupted_program).expect("valid second race artifact");
@@ -826,7 +778,6 @@ fn native_finalize_cleans_staging_when_atomic_registration_wins_the_race() {
             .is_none()
     );
 }
-
 #[test]
 fn failed_native_finalization_and_rejected_cap_updates_retain_staging() {
     use iroha_core::smartcontracts::Execute;
@@ -835,7 +786,6 @@ fn failed_native_finalization_and_rejected_cap_updates_retain_staging() {
         parameter::custom::{CustomParameter, CustomParameterId},
         prelude::*,
     };
-
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let kp = checked_random_contract_code_keypair();
@@ -863,7 +813,6 @@ fn failed_native_finalization_and_rejected_cap_updates_retain_staging() {
     Grant::account_permission(permission, auth.clone())
         .execute(&auth, &mut stx)
         .expect("grant contract lifecycle authority");
-
     let malformed = vec![0xFF; 32];
     let malformed_hash = iroha_crypto::Hash::new(b"declared malformed artifact hash");
     UploadSmartContractCodeChunk {
@@ -887,7 +836,6 @@ fn failed_native_finalization_and_rejected_cap_updates_retain_staging() {
             .contract_code_upload_progress(&auth, &malformed_hash)
             .is_some()
     );
-
     let program = minimal_ivm_program(1);
     let wrong_hash = iroha_crypto::Hash::new(b"wrong complete artifact hash");
     let program_size = u64::try_from(program.len()).unwrap();
@@ -913,7 +861,6 @@ fn failed_native_finalization_and_rejected_cap_updates_retain_staging() {
             .contract_code_upload_progress(&auth, &wrong_hash)
             .is_some()
     );
-
     let correct_hash = ivm::contract_code_hash(&program);
     UploadSmartContractCodeChunk {
         code_hash: correct_hash,

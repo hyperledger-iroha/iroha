@@ -1,13 +1,10 @@
 //! Lossless, recovering Kotodama lexer.
-
+use super::{cst::GreenToken, kind::SyntaxKind};
 use crate::{
     diagnostic::{Diagnostic, DiagnosticFix, DiagnosticPhase, SourcePosition, SourceSpan},
     lexer::{TokenKind, V1_PUNCTUATION_KINDS, v1_keyword_kind},
     source::{FrontendBudget, SourceFile, TextRange},
 };
-
-use super::{cst::GreenToken, kind::SyntaxKind};
-
 /// Lossless lexer output.
 #[derive(Clone, Debug)]
 pub struct Lexed {
@@ -18,7 +15,6 @@ pub struct Lexed {
     /// Lexical diagnostics discarded after reaching the fixed V1 cap.
     pub(crate) omitted_diagnostics: usize,
 }
-
 fn diagnostic(
     source: &SourceFile,
     code: &'static str,
@@ -46,7 +42,6 @@ fn diagnostic(
         }),
     )
 }
-
 fn keyword_kind(text: &str) -> SyntaxKind {
     match v1_keyword_kind(text) {
         Some(TokenKind::Fn) => SyntaxKind::KwFn,
@@ -79,20 +74,17 @@ fn keyword_kind(text: &str) -> SyntaxKind {
         None => SyntaxKind::Ident,
     }
 }
-
 struct Scanner<'source> {
     text: &'source str,
     pos: usize,
     previous_significant: Option<SyntaxKind>,
 }
-
 #[derive(Clone, Copy)]
 struct LexicalError {
     code: &'static str,
     message: &'static str,
     strip_numeric_suffix: bool,
 }
-
 impl LexicalError {
     const fn new(code: &'static str, message: &'static str) -> Self {
         Self {
@@ -101,7 +93,6 @@ impl LexicalError {
             strip_numeric_suffix: false,
         }
     }
-
     fn retired_numeric_suffix(suffix: &str) -> Self {
         Self {
             code: "E_RETIRED_NUMERIC_SUFFIX",
@@ -110,14 +101,12 @@ impl LexicalError {
         }
     }
 }
-
 #[derive(Clone, Copy)]
 enum ScannedNumber {
     Integer,
     Decimal,
     Invalid(LexicalError),
 }
-
 impl<'source> Scanner<'source> {
     fn new(source: &'source SourceFile) -> Self {
         Self {
@@ -126,31 +115,25 @@ impl<'source> Scanner<'source> {
             previous_significant: None,
         }
     }
-
     fn rest(&self) -> &'source str {
         &self.text[self.pos..]
     }
-
     fn current(&self) -> Option<char> {
         self.rest().chars().next()
     }
-
     fn bump(&mut self) -> Option<char> {
         let character = self.current()?;
         self.pos += character.len_utf8();
         Some(character)
     }
-
     fn starts_with(&self, pattern: &str) -> bool {
         self.rest().starts_with(pattern)
     }
-
     fn scan_whitespace(&mut self) {
         while self.current().is_some_and(char::is_whitespace) {
             self.bump();
         }
     }
-
     fn scan_line_comment(&mut self) {
         self.pos += 2;
         while let Some(character) = self.bump() {
@@ -159,7 +142,6 @@ impl<'source> Scanner<'source> {
             }
         }
     }
-
     fn scan_block_comment(&mut self) -> bool {
         self.pos += 2;
         while self.pos < self.text.len() {
@@ -171,7 +153,6 @@ impl<'source> Scanner<'source> {
         }
         false
     }
-
     fn scan_identifier(&mut self) {
         while self
             .current()
@@ -180,7 +161,6 @@ impl<'source> Scanner<'source> {
             self.bump();
         }
     }
-
     /// Scan an unsuffixed integer or exact base-10 decimal token.
     fn scan_number(&mut self, tuple_index: bool) -> ScannedNumber {
         if self.starts_with("0x") || self.starts_with("0X") {
@@ -209,7 +189,6 @@ impl<'source> Scanner<'source> {
         {
             self.bump();
         }
-
         let mut has_fraction = false;
         if self.starts_with(".") && !tuple_index {
             let after_dot = self.rest()[1..].chars().next();
@@ -232,7 +211,6 @@ impl<'source> Scanner<'source> {
                 self.bump();
             }
         }
-
         let mut has_exponent = false;
         if matches!(self.current(), Some('e' | 'E')) {
             has_exponent = true;
@@ -254,7 +232,6 @@ impl<'source> Scanner<'source> {
                 ));
             }
         }
-
         if self
             .current()
             .is_some_and(|character| character.is_ascii_alphabetic())
@@ -271,7 +248,6 @@ impl<'source> Scanner<'source> {
             ScannedNumber::Integer
         }
     }
-
     fn finish_integer(&mut self) -> ScannedNumber {
         if self
             .current()
@@ -286,7 +262,6 @@ impl<'source> Scanner<'source> {
             ScannedNumber::Integer
         }
     }
-
     fn scan_quoted(&mut self, prefix_bytes: usize) -> bool {
         self.pos += prefix_bytes;
         let Some('"') = self.bump() else {
@@ -308,7 +283,6 @@ impl<'source> Scanner<'source> {
         }
         false
     }
-
     fn raw_prefix(&self) -> Option<(bool, usize, usize)> {
         let bytes = self.text.as_bytes();
         let mut cursor = self.pos;
@@ -330,7 +304,6 @@ impl<'source> Scanner<'source> {
         }
         (bytes.get(cursor) == Some(&b'"')).then_some((is_bytes, cursor + 1, hashes))
     }
-
     fn scan_raw(&mut self, content_start: usize, hashes: usize) -> bool {
         self.pos = content_start;
         let bytes = self.text.as_bytes();
@@ -351,7 +324,6 @@ impl<'source> Scanner<'source> {
         }
         false
     }
-
     fn punctuation(&mut self) -> Option<SyntaxKind> {
         for &(spelling, kind) in V1_PUNCTUATION_KINDS {
             if self.starts_with(spelling) {
@@ -363,7 +335,6 @@ impl<'source> Scanner<'source> {
         self.bump();
         None
     }
-
     fn next_token(&mut self) -> (GreenToken, Option<LexicalError>) {
         let start = self.pos;
         let Some(character) = self.current() else {
@@ -492,7 +463,6 @@ impl<'source> Scanner<'source> {
         )
     }
 }
-
 fn record_diagnostic(
     diagnostics: &mut Vec<Diagnostic>,
     omitted_diagnostics: &mut usize,
@@ -505,7 +475,6 @@ fn record_diagnostic(
         *omitted_diagnostics = omitted_diagnostics.saturating_add(1);
     }
 }
-
 /// Lex one source file without discarding trivia or malformed text.
 #[must_use]
 pub fn lex(source: &SourceFile, budget: FrontendBudget) -> Lexed {
@@ -529,7 +498,6 @@ pub fn lex(source: &SourceFile, budget: FrontendBudget) -> Lexed {
             omitted_diagnostics: 0,
         };
     }
-
     let mut scanner = Scanner::new(source);
     let mut tokens = Vec::new();
     let mut diagnostics = Vec::new();
@@ -565,7 +533,6 @@ pub fn lex(source: &SourceFile, budget: FrontendBudget) -> Lexed {
             }
             significant_tokens = significant_tokens.saturating_add(1);
         }
-
         match token.kind {
             SyntaxKind::LParen | SyntaxKind::LBrace | SyntaxKind::LBracket => {
                 delimiter_depth = delimiter_depth.saturating_add(1);
@@ -621,7 +588,6 @@ pub fn lex(source: &SourceFile, budget: FrontendBudget) -> Lexed {
         omitted_diagnostics,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::lex;
@@ -630,7 +596,6 @@ mod tests {
         source::{FrontendBudget, SourceFile, SourceId},
         syntax::SyntaxKind,
     };
-
     #[test]
     fn branded_keywords_are_accepted_in_both_scripts() {
         let source = SourceFile::new(
@@ -649,7 +614,6 @@ mod tests {
             assert!(lexed.tokens.iter().any(|token| token.kind == expected));
         }
     }
-
     #[test]
     fn branded_keywords_do_not_enable_unicode_identifiers() {
         for text in ["利用者", "誓約名", "始まり名", "改善版", "言挙げrun"] {
@@ -662,7 +626,6 @@ mod tests {
             assert_eq!(lexed.tokens[0].kind, SyntaxKind::ErrorToken);
         }
     }
-
     #[test]
     fn retired_words_are_plain_identifiers_and_retired_operators_are_errors() {
         for text in [
@@ -684,7 +647,6 @@ mod tests {
             );
             assert_eq!(lexed.tokens[0].kind, SyntaxKind::Ident, "{text}");
         }
-
         for text in ["++", "&", "|"] {
             let source = SourceFile::new(SourceId(0), "retired-operator.ko", text);
             let lexed = lex(&source, FrontendBudget::v1());
@@ -692,7 +654,6 @@ mod tests {
             assert_eq!(lexed.tokens[0].kind, SyntaxKind::ErrorToken, "{text}");
         }
     }
-
     #[test]
     fn normative_operator_table_drives_the_lossless_scanner() {
         assert_eq!(V1_OPERATORS.len(), V1_PUNCTUATION_KINDS.len());
@@ -713,7 +674,6 @@ mod tests {
             assert_eq!(lexed.tokens[1].kind, SyntaxKind::Eof, "{spelling}");
         }
     }
-
     #[test]
     fn decimal_is_one_lossless_token_with_exact_range() {
         let source = SourceFile::new(SourceId(0), "decimal.ko", "  1.250_0 // exact\n");
@@ -728,7 +688,6 @@ mod tests {
         assert_eq!(decimal.range.start, 2);
         assert_eq!(decimal.range.end, 9);
     }
-
     #[test]
     fn chained_tuple_projection_keeps_following_dots_as_punctuation() {
         let source = SourceFile::new(SourceId(0), "tuple-projection.ko", "value.0.1.field");
@@ -753,7 +712,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn comment_period_does_not_turn_a_following_decimal_into_a_tuple_index() {
         let source = SourceFile::new(
@@ -771,7 +729,6 @@ mod tests {
                     && source.slice(token.range) == Some("1.25"))
         );
     }
-
     #[test]
     fn decimal_and_retired_suffix_failures_have_dedicated_codes() {
         for (spelling, code) in [
@@ -788,7 +745,6 @@ mod tests {
             assert_eq!(lexed.tokens[0].kind, SyntaxKind::ErrorToken, "`{spelling}`");
         }
     }
-
     #[test]
     fn amount_and_quantity_suffixes_offer_unsuffixed_literal_fixes() {
         for (spelling, replacement) in [
@@ -807,7 +763,6 @@ mod tests {
             assert_eq!(fix.span.byte_range, Some(lexed.tokens[0].range));
             assert_eq!(fix.replacement, replacement);
         }
-
         for spelling in ["1i64", "1u128"] {
             let source = SourceFile::new(SourceId(0), "retired-suffix.ko", spelling);
             let lexed = lex(&source, FrontendBudget::v1());

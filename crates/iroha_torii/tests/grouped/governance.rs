@@ -1,7 +1,5 @@
 //! Grouped Torii governance integration tests.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 #[path = "../gov_enact_handler.rs"]
 mod gov_enact_handler;
 #[path = "../gov_mode_mismatch_and_autoclose.rs"]

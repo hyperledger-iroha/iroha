@@ -1,9 +1,7 @@
 //! ZK syscall policy tests: ensure ABI surface includes ZK numbers and rejects unknown.
-
 #[test]
 fn zk_syscalls_present_and_unknown_rejected() {
     use ivm::{SyscallPolicy, syscalls};
-
     // Ensure ZK syscalls are part of the canonical ABI surface
     let abi = ivm::syscalls::abi_syscall_list();
     for &n in &[
@@ -16,7 +14,6 @@ fn zk_syscalls_present_and_unknown_rejected() {
         assert!(abi.contains(&n), "missing ZK syscall 0x{n:02x} in ABI list");
         assert!(ivm::syscalls::is_syscall_allowed(SyscallPolicy::AbiV1, n));
     }
-
     // Unknown number should not be allowed by policy (and host must return UnknownSyscall)
     let unknown = 0xDFu32;
     assert!(

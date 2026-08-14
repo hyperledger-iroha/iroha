@@ -1,10 +1,7 @@
 //! Tests for the built-in parameter defaults.
-
+use super::{governance, nexus::fees, oracle, pipeline, queue, torii};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::AccountId;
-
-use super::{governance, nexus::fees, oracle, pipeline, queue, torii};
-
 #[test]
 fn gas_technical_account_matches_default_bootstrap_identity() {
     let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
@@ -15,7 +12,6 @@ fn gas_technical_account_matches_default_bootstrap_identity() {
         .into_account_id();
     assert_eq!(parsed, governance::bond_escrow_account_id());
 }
-
 #[test]
 fn sponsor_vault_custody_account_is_canonical_and_dedicated() {
     let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
@@ -27,13 +23,11 @@ fn sponsor_vault_custody_account_is_canonical_and_dedicated() {
     assert_eq!(parsed, fees::sponsor_vault_custody_account_id());
     assert_ne!(parsed.to_string(), pipeline::GAS_TECH_ACCOUNT_ID);
 }
-
 #[test]
 fn jdg_signature_schemes_includes_simple_threshold() {
     let schemes = governance::jdg_signature_schemes();
     assert!(schemes.contains(&"simple_threshold".to_string()));
 }
-
 #[test]
 fn soracloud_public_runtime_defaults_are_non_zero() {
     assert_eq!(torii::SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC, Some(5));
@@ -50,7 +44,6 @@ fn soracloud_public_runtime_defaults_are_non_zero() {
     assert_eq!(torii::SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN, Some(16));
     assert_eq!(torii::SORACLOUD_MUTATION_MAX_INFLIGHT.get(), 64);
 }
-
 #[test]
 fn queue_defaults_allow_two_times_legacy_soak_capacity() {
     assert_eq!(queue::CAPACITY.get(), 262_144);
@@ -58,7 +51,6 @@ fn queue_defaults_allow_two_times_legacy_soak_capacity() {
     assert!(queue::CAPACITY_PER_USER < queue::CAPACITY);
     assert_eq!(queue::MAX_RETAINED_BYTES.get(), 128 * 1024 * 1024);
 }
-
 #[test]
 fn oracle_custody_defaults_are_public_only_and_not_legacy_seeded() {
     let legacy_reward_pool_keypair =
@@ -69,7 +61,6 @@ fn oracle_custody_defaults_are_public_only_and_not_legacy_seeded() {
             .expect("legacy slash-receiver seed derives");
     let reward_pool = oracle::reward_pool();
     let slash_receiver = oracle::slash_receiver();
-
     assert_eq!(
         reward_pool,
         AccountId::new(

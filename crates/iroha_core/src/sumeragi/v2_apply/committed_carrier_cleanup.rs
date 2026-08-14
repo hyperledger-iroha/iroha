@@ -43,7 +43,6 @@ fn finalize_startup_committed_canonical_carriers(
             .entry(publication.entry_hash())
             .or_insert(publication);
     }
-
     let mut carrier_heights = BTreeMap::new();
     let mut source_authorized_carriers = Vec::with_capacity(carrier_publications.len());
     for (entry_hash, publication) in carrier_publications {
@@ -69,7 +68,6 @@ fn finalize_startup_committed_canonical_carriers(
                 "startup carrier groups, applications, and source outcomes differ in cardinality",
             ));
         }
-
         let mut carrier_groups = Vec::with_capacity(authenticated.groups.len());
         for (group, (source_group, source_authorization)) in
             authenticated.groups.into_iter().zip(source_authorizations)

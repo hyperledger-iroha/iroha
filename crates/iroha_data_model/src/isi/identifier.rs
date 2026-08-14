@@ -1,11 +1,9 @@
 //! Hidden-function-backed identifier policy instructions.
-
 use super::*;
 use crate::{
     account::AccountId,
     identifier::{IdentifierPolicy, IdentifierPolicyId, IdentifierResolutionReceipt},
 };
-
 isi! {
     /// Register a new identifier policy namespace in the world state.
     pub struct RegisterIdentifierPolicy {
@@ -13,9 +11,7 @@ isi! {
         pub policy: IdentifierPolicy,
     }
 }
-
 impl crate::seal::Instruction for RegisterIdentifierPolicy {}
-
 isi! {
     /// Activate an existing identifier policy namespace.
     pub struct ActivateIdentifierPolicy {
@@ -23,9 +19,7 @@ isi! {
         pub policy_id: IdentifierPolicyId,
     }
 }
-
 impl crate::seal::Instruction for ActivateIdentifierPolicy {}
-
 isi! {
     /// Bind an attested opaque identifier receipt to the UAID attached to an account.
     pub struct ClaimIdentifier {
@@ -35,9 +29,7 @@ isi! {
         pub receipt: IdentifierResolutionReceipt,
     }
 }
-
 impl crate::seal::Instruction for ClaimIdentifier {}
-
 isi! {
     /// Revoke a previously claimed opaque identifier.
     pub struct RevokeIdentifier {
@@ -47,13 +39,10 @@ isi! {
         pub opaque_id: OpaqueAccountId,
     }
 }
-
 impl crate::seal::Instruction for RevokeIdentifier {}
-
 fn identifier_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 macro_rules! impl_decode_one_field {
     ($ty:ident { $field:ident: $field_ty:ty }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -62,7 +51,6 @@ macro_rules! impl_decode_one_field {
                 if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
                     return super::decode_packed_instruction_payload::<Self>(bytes);
                 }
-
                 let mut offset = 0usize;
                 let $field = super::decode_aos_canonical_field::<$field_ty>(
                     super::read_aos_field(bytes, &mut offset, flags)?,
@@ -77,7 +65,6 @@ macro_rules! impl_decode_one_field {
         }
     };
 }
-
 macro_rules! impl_decode_two_fields {
     ($ty:ident { $first:ident: $first_ty:ty, $second:ident: $second_ty:ty }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -86,7 +73,6 @@ macro_rules! impl_decode_two_fields {
                 if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
                     return super::decode_packed_instruction_payload::<Self>(bytes);
                 }
-
                 let mut offset = 0usize;
                 let $first = super::decode_aos_canonical_field::<$first_ty>(
                     super::read_aos_field(bytes, &mut offset, flags)?,
@@ -105,7 +91,6 @@ macro_rules! impl_decode_two_fields {
         }
     };
 }
-
 impl_decode_one_field!(RegisterIdentifierPolicy {
     policy: IdentifierPolicy
 });
@@ -120,15 +105,8 @@ impl_decode_two_fields!(RevokeIdentifier {
     policy_id: IdentifierPolicyId,
     opaque_id: OpaqueAccountId
 });
-
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{
-        Algorithm, Hash, KeyPair, PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
-        SignatureOf,
-    };
-    use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::{
         nexus::UniversalAccountId,
@@ -137,12 +115,15 @@ mod tests {
             RamLfeProgramId, RamLfeReceiptAttestation,
         },
     };
-
+    use iroha_crypto::{
+        Algorithm, Hash, KeyPair, PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
+        SignatureOf,
+    };
+    use norito::core::DecodeFromSlice;
     fn checked_seed_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked identifier instruction fixture keypair")
     }
-
     fn checked_signature<T: norito::codec::Encode>(
         signer: &KeyPair,
         payload: &T,
@@ -150,24 +131,19 @@ mod tests {
         SignatureOf::try_new(signer.private_key(), payload)
             .expect("sign checked identifier instruction fixture payload")
     }
-
     fn public_key(seed: u8) -> PublicKey {
         let key_pair = checked_seed_keypair(seed);
         key_pair.public_key().clone()
     }
-
     fn account(seed: u8) -> AccountId {
         AccountId::new(public_key(seed))
     }
-
     fn policy_id() -> IdentifierPolicyId {
         "email#retail".parse().expect("policy id")
     }
-
     fn program_id() -> RamLfeProgramId {
         "email_retail".parse().expect("program id")
     }
-
     fn policy() -> IdentifierPolicy {
         IdentifierPolicy::new(
             policy_id(),
@@ -177,7 +153,6 @@ mod tests {
         )
         .with_note("retail email")
     }
-
     fn receipt() -> IdentifierResolutionReceipt {
         let account_id = account(0xF2);
         let opening_payload = RamLfeOutputOpeningPayload {
@@ -235,7 +210,6 @@ mod tests {
             ),
         }
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -246,7 +220,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(
         registry: &crate::isi::InstructionRegistry,
         wire_id: &'static str,
@@ -266,7 +239,6 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     fn identifier_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(RegisterIdentifierPolicy { policy: policy() });
@@ -282,7 +254,6 @@ mod tests {
             opaque_id: OpaqueAccountId::from_hash(Hash::new(b"opaque")),
         });
     }
-
     #[test]
     fn identifier_registry_decodes_stable_ids() {
         let registry = crate::isi::InstructionRegistry::new()
@@ -294,7 +265,6 @@ mod tests {
             )
             .register_with_id_slice::<ClaimIdentifier>("identity::ClaimIdentifier")
             .register_with_id_slice::<RevokeIdentifier>("identity::RevokeIdentifier");
-
         assert_registry_decodes(
             &registry,
             "identity::RegisterIdentifierPolicy",

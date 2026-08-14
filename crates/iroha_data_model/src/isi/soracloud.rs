@@ -2,15 +2,6 @@
 //!
 //! These instructions move Soracloud service deployment state into the
 //! authoritative on-chain world model instead of Torii-local file persistence.
-
-use core::cmp::Ordering;
-use std::collections::BTreeMap;
-
-use iroha_crypto::Hash;
-use iroha_primitives::{json::Json, numeric::Quantity};
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-
 use crate::{
     account::AccountId,
     asset::AssetDefinitionId,
@@ -30,15 +21,18 @@ use crate::{
     },
     sorafs::pin_registry::StorageClass,
 };
-
+use core::cmp::Ordering;
+use iroha_crypto::Hash;
+use iroha_primitives::{json::Json, numeric::Quantity};
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::collections::BTreeMap;
 fn encoded_order<T: Encode>(left: &T, right: &T) -> Ordering {
     left.encode().cmp(&right.encode())
 }
-
 fn decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 /// Admit a brand new Soracloud service deployment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -57,15 +51,12 @@ pub struct DeploySoracloudService {
     /// Provenance attestation over the bundle payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for DeploySoracloudService {}
-
 impl PartialOrd for DeploySoracloudService {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Admit a new candidate revision for an existing Soracloud service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -84,15 +75,12 @@ pub struct UpgradeSoracloudService {
     /// Provenance attestation over the bundle payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for UpgradeSoracloudService {}
-
 impl PartialOrd for UpgradeSoracloudService {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Admit a brand new Soracloud app-level infrastructure topology.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -105,16 +93,13 @@ pub struct DeploySoracloudAppInfra {
     /// Provenance attestation over the app topology payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for DeploySoracloudAppInfra {}
-
 impl<'a> norito::core::DecodeFromSlice<'a> for DeploySoracloudAppInfra {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let manifest = super::decode_aos_canonical_field::<SoraAppInfraManifestV1>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -137,13 +122,11 @@ impl<'a> norito::core::DecodeFromSlice<'a> for DeploySoracloudAppInfra {
         ))
     }
 }
-
 impl PartialOrd for DeploySoracloudAppInfra {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Admit an upgraded Soracloud app-level infrastructure topology.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -156,16 +139,13 @@ pub struct UpgradeSoracloudAppInfra {
     /// Provenance attestation over the app topology payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for UpgradeSoracloudAppInfra {}
-
 impl<'a> norito::core::DecodeFromSlice<'a> for UpgradeSoracloudAppInfra {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let manifest = super::decode_aos_canonical_field::<SoraAppInfraManifestV1>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -188,13 +168,11 @@ impl<'a> norito::core::DecodeFromSlice<'a> for UpgradeSoracloudAppInfra {
         ))
     }
 }
-
 impl PartialOrd for UpgradeSoracloudAppInfra {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Roll a Soracloud service back to an already admitted revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -210,15 +188,12 @@ pub struct RollbackSoracloudService {
     /// Provenance attestation over the rollback payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for RollbackSoracloudService {}
-
 impl PartialOrd for RollbackSoracloudService {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Record or replace an authoritative Soracloud service config entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -235,15 +210,12 @@ pub struct SetSoracloudServiceConfig {
     /// Provenance attestation over the config payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for SetSoracloudServiceConfig {}
-
 impl PartialOrd for SetSoracloudServiceConfig {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Remove an authoritative Soracloud service config entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -258,15 +230,12 @@ pub struct DeleteSoracloudServiceConfig {
     /// Provenance attestation over the config payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for DeleteSoracloudServiceConfig {}
-
 impl PartialOrd for DeleteSoracloudServiceConfig {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Record or replace an authoritative Soracloud service secret entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -283,15 +252,12 @@ pub struct SetSoracloudServiceSecret {
     /// Provenance attestation over the secret payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for SetSoracloudServiceSecret {}
-
 impl PartialOrd for SetSoracloudServiceSecret {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Remove an authoritative Soracloud service secret entry.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -306,15 +272,12 @@ pub struct DeleteSoracloudServiceSecret {
     /// Provenance attestation over the secret payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for DeleteSoracloudServiceSecret {}
-
 impl PartialOrd for DeleteSoracloudServiceSecret {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Record an ordered Soracloud state mutation against a declared binding.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -346,15 +309,12 @@ pub struct MutateSoracloudState {
     /// Provenance attestation over the mutation payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for MutateSoracloudState {}
-
 impl PartialOrd for MutateSoracloudState {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Register the first governance-authenticated FHE material version for a service policy.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -369,15 +329,12 @@ pub struct RegisterSoracloudFhePolicy {
     /// Governance provenance attestation over the registration payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for RegisterSoracloudFhePolicy {}
-
 impl PartialOrd for RegisterSoracloudFhePolicy {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Rotate a service-scoped FHE policy to the next immutable material version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -394,15 +351,12 @@ pub struct RotateSoracloudFhePolicy {
     /// Governance provenance attestation over the rotation payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for RotateSoracloudFhePolicy {}
-
 impl PartialOrd for RotateSoracloudFhePolicy {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Permanently revoke the exact active FHE policy version for a service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -417,15 +371,12 @@ pub struct RevokeSoracloudFhePolicy {
     /// Governance provenance attestation over the revocation payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for RevokeSoracloudFhePolicy {}
-
 impl PartialOrd for RevokeSoracloudFhePolicy {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Record an ordered Soracloud FHE execution result.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -453,15 +404,12 @@ pub struct RunSoracloudFheJob {
     /// Provenance attestation over the job payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for RunSoracloudFheJob {}
-
 impl PartialOrd for RunSoracloudFheJob {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Record an ordered Soracloud decryption or health-access request.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -478,15 +426,12 @@ pub struct RecordSoracloudDecryptionRequest {
     /// Provenance attestation over the request payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for RecordSoracloudDecryptionRequest {}
-
 impl PartialOrd for RecordSoracloudDecryptionRequest {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Join or create a shared Hugging Face lease window on Soracloud.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -525,15 +470,12 @@ pub struct JoinSoracloudHfSharedLease {
     /// Provenance attestation over the join payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for JoinSoracloudHfSharedLease {}
-
 impl PartialOrd for JoinSoracloudHfSharedLease {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Leave the current shared Hugging Face lease window.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -558,15 +500,12 @@ pub struct LeaveSoracloudHfSharedLease {
     /// Provenance attestation over the leave payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for LeaveSoracloudHfSharedLease {}
-
 impl PartialOrd for LeaveSoracloudHfSharedLease {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Sponsor a fresh shared Hugging Face lease window after expiry or retirement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -599,15 +538,12 @@ pub struct RenewSoracloudHfSharedLease {
     /// Provenance attestation over the renew payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for RenewSoracloudHfSharedLease {}
-
 impl PartialOrd for RenewSoracloudHfSharedLease {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Advertise validator-host capabilities for authoritative HF placement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -620,15 +556,12 @@ pub struct AdvertiseSoracloudModelHost {
     /// Provenance attestation over the advert payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for AdvertiseSoracloudModelHost {}
-
 impl PartialOrd for AdvertiseSoracloudModelHost {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Refresh the heartbeat TTL for an advertised validator host.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -643,15 +576,12 @@ pub struct HeartbeatSoracloudModelHost {
     /// Provenance attestation over the heartbeat payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for HeartbeatSoracloudModelHost {}
-
 impl PartialOrd for HeartbeatSoracloudModelHost {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Withdraw an advertised validator host from authoritative HF placement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -664,15 +594,12 @@ pub struct WithdrawSoracloudModelHost {
     /// Provenance attestation over the withdrawal payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for WithdrawSoracloudModelHost {}
-
 impl PartialOrd for WithdrawSoracloudModelHost {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Reconcile expired validator-host adverts against authoritative HF placements.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -680,15 +607,12 @@ impl PartialOrd for WithdrawSoracloudModelHost {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct ReconcileSoracloudModelHosts;
-
 impl crate::seal::Instruction for ReconcileSoracloudModelHosts {}
-
 impl PartialOrd for ReconcileSoracloudModelHosts {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Advertise validator-host capabilities for authoritative Inrou placement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -701,15 +625,12 @@ pub struct AdvertiseSoracloudInrouHost {
     /// Provenance attestation over the advert payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for AdvertiseSoracloudInrouHost {}
-
 impl PartialOrd for AdvertiseSoracloudInrouHost {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Withdraw an advertised validator host from authoritative Inrou placement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -722,15 +643,12 @@ pub struct WithdrawSoracloudInrouHost {
     /// Provenance attestation over the withdrawal payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for WithdrawSoracloudInrouHost {}
-
 impl PartialOrd for WithdrawSoracloudInrouHost {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Reconcile active hosted Inrou placements against current host adverts and service leases.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -738,15 +656,12 @@ impl PartialOrd for WithdrawSoracloudInrouHost {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct ReconcileSoracloudInrouPlacements;
-
 impl crate::seal::Instruction for ReconcileSoracloudInrouPlacements {}
-
 impl PartialOrd for ReconcileSoracloudInrouPlacements {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Report authoritative evidence for a validator-host violation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -765,15 +680,12 @@ pub struct ReportSoracloudModelHostViolation {
     #[norito(default)]
     pub detail: Option<String>,
 }
-
 impl crate::seal::Instruction for ReportSoracloudModelHostViolation {}
-
 impl PartialOrd for ReportSoracloudModelHostViolation {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Deploy a Soracloud agent apartment into authoritative world state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -790,15 +702,12 @@ pub struct DeploySoracloudAgentApartment {
     /// Provenance attestation over the deploy payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for DeploySoracloudAgentApartment {}
-
 impl PartialOrd for DeploySoracloudAgentApartment {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Renew a Soracloud agent apartment lease.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -813,15 +722,12 @@ pub struct RenewSoracloudAgentLease {
     /// Provenance attestation over the renew payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for RenewSoracloudAgentLease {}
-
 impl PartialOrd for RenewSoracloudAgentLease {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Restart a Soracloud agent apartment process.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -836,15 +742,12 @@ pub struct RestartSoracloudAgentApartment {
     /// Provenance attestation over the restart payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for RestartSoracloudAgentApartment {}
-
 impl PartialOrd for RestartSoracloudAgentApartment {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Revoke an active Soracloud agent apartment policy capability.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -862,15 +765,12 @@ pub struct RevokeSoracloudAgentPolicy {
     /// Provenance attestation over the revoke payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for RevokeSoracloudAgentPolicy {}
-
 impl PartialOrd for RevokeSoracloudAgentPolicy {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Submit a policy-gated wallet spend request for an agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -887,15 +787,12 @@ pub struct RequestSoracloudAgentWalletSpend {
     /// Provenance attestation over the spend payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for RequestSoracloudAgentWalletSpend {}
-
 impl PartialOrd for RequestSoracloudAgentWalletSpend {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Approve and apply a pending wallet spend request for an agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -910,15 +807,12 @@ pub struct ApproveSoracloudAgentWalletSpend {
     /// Provenance attestation over the approval payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for ApproveSoracloudAgentWalletSpend {}
-
 impl PartialOrd for ApproveSoracloudAgentWalletSpend {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Enqueue a deterministic mailbox message between agent apartments.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -937,15 +831,12 @@ pub struct EnqueueSoracloudAgentMessage {
     /// Provenance attestation over the message payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for EnqueueSoracloudAgentMessage {}
-
 impl PartialOrd for EnqueueSoracloudAgentMessage {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Acknowledge and consume a queued mailbox message for an agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -960,15 +851,12 @@ pub struct AcknowledgeSoracloudAgentMessage {
     /// Provenance attestation over the acknowledgement payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for AcknowledgeSoracloudAgentMessage {}
-
 impl PartialOrd for AcknowledgeSoracloudAgentMessage {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Allowlist an autonomy artifact for an agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -986,15 +874,12 @@ pub struct AllowSoracloudAgentAutonomyArtifact {
     /// Provenance attestation over the allowlist payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for AllowSoracloudAgentAutonomyArtifact {}
-
 impl PartialOrd for AllowSoracloudAgentAutonomyArtifact {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Approve a deterministic autonomy run for an agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1019,15 +904,12 @@ pub struct RunSoracloudAgentAutonomy {
     /// Provenance attestation over the autonomy-run payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for RunSoracloudAgentAutonomy {}
-
 impl PartialOrd for RunSoracloudAgentAutonomy {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Persist an authoritative apartment-level execution audit for a completed autonomy run.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1067,15 +949,12 @@ pub struct RecordSoracloudAgentAutonomyExecution {
     #[norito(default)]
     pub error: Option<String>,
 }
-
 impl crate::seal::Instruction for RecordSoracloudAgentAutonomyExecution {}
-
 impl PartialOrd for RecordSoracloudAgentAutonomyExecution {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Start a deterministic Soracloud training job.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1106,15 +985,12 @@ pub struct StartSoracloudTrainingJob {
     /// Provenance attestation over the job payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for StartSoracloudTrainingJob {}
-
 impl PartialOrd for StartSoracloudTrainingJob {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Record a deterministic Soracloud training checkpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1135,15 +1011,12 @@ pub struct CheckpointSoracloudTrainingJob {
     /// Provenance attestation over the checkpoint payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for CheckpointSoracloudTrainingJob {}
-
 impl PartialOrd for CheckpointSoracloudTrainingJob {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Move a deterministic Soracloud training job into retry-pending state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1160,15 +1033,12 @@ pub struct RetrySoracloudTrainingJob {
     /// Provenance attestation over the retry payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for RetrySoracloudTrainingJob {}
-
 impl PartialOrd for RetrySoracloudTrainingJob {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Register a deterministic Soracloud model artifact.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1195,15 +1065,12 @@ pub struct RegisterSoracloudModelArtifact {
     /// Provenance attestation over the artifact payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for RegisterSoracloudModelArtifact {}
-
 impl PartialOrd for RegisterSoracloudModelArtifact {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Register a deterministic Soracloud model-weight version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1235,15 +1102,12 @@ pub struct RegisterSoracloudModelWeight {
     /// Provenance attestation over the register payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for RegisterSoracloudModelWeight {}
-
 impl PartialOrd for RegisterSoracloudModelWeight {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Promote an admitted Soracloud model-weight version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1264,15 +1128,12 @@ pub struct PromoteSoracloudModelWeight {
     /// Provenance attestation over the promote payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for PromoteSoracloudModelWeight {}
-
 impl PartialOrd for PromoteSoracloudModelWeight {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Roll a Soracloud model registry back to a prior admitted weight version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1291,15 +1152,12 @@ pub struct RollbackSoracloudModelWeight {
     /// Provenance attestation over the rollback payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for RollbackSoracloudModelWeight {}
-
 impl PartialOrd for RollbackSoracloudModelWeight {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Register an uploaded-model bundle root before encrypted chunks arrive.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1312,15 +1170,12 @@ pub struct RegisterSoracloudUploadedModelBundle {
     /// Provenance attestation over the bundle payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for RegisterSoracloudUploadedModelBundle {}
-
 impl PartialOrd for RegisterSoracloudUploadedModelBundle {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Seal an uploaded-model bundle and publish its artifact metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1353,15 +1208,12 @@ pub struct FinalizeSoracloudUploadedModelBundle {
     /// Provenance attestation over the finalize payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for FinalizeSoracloudUploadedModelBundle {}
-
 impl PartialOrd for FinalizeSoracloudUploadedModelBundle {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Advance or roll back an in-flight Soracloud rollout.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1383,15 +1235,12 @@ pub struct AdvanceSoracloudRollout {
     /// Provenance attestation over the rollout payload.
     pub provenance: ManifestProvenance,
 }
-
 impl crate::seal::Instruction for AdvanceSoracloudRollout {}
-
 impl PartialOrd for AdvanceSoracloudRollout {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Upsert authoritative node/runtime state for a Soracloud service.
 ///
 /// `CanManageSoracloud` holders may reconcile any service. Other callers must
@@ -1405,15 +1254,12 @@ pub struct SetSoracloudRuntimeState {
     /// Runtime state to persist.
     pub state: SoraServiceRuntimeStateV1,
 }
-
 impl crate::seal::Instruction for SetSoracloudRuntimeState {}
-
 impl PartialOrd for SetSoracloudRuntimeState {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Upsert authoritative runtime state for one placed Inrou replica.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1424,15 +1270,12 @@ pub struct SetSoracloudInrouReplicaRuntimeState {
     /// Runtime state to persist.
     pub state: SoraInrouReplicaRuntimeStateV1,
 }
-
 impl crate::seal::Instruction for SetSoracloudInrouReplicaRuntimeState {}
-
 impl PartialOrd for SetSoracloudInrouReplicaRuntimeState {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Clear authoritative runtime state for one placed Inrou replica.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1447,15 +1290,12 @@ pub struct ClearSoracloudInrouReplicaRuntimeState {
     /// One-based placed replica slot whose state should be removed.
     pub replica_slot: u16,
 }
-
 impl crate::seal::Instruction for ClearSoracloudInrouReplicaRuntimeState {}
-
 impl PartialOrd for ClearSoracloudInrouReplicaRuntimeState {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Report authoritative leased-service usage observed by the runtime.
 ///
 /// `CanManageSoracloud` holders may reconcile any service. Other callers must
@@ -1473,15 +1313,12 @@ pub struct ReportSoracloudServiceLeaseUsage {
     /// Total egress bytes accounted for the active lease so far.
     pub accounted_egress_bytes: u64,
 }
-
 impl crate::seal::Instruction for ReportSoracloudServiceLeaseUsage {}
-
 impl PartialOrd for ReportSoracloudServiceLeaseUsage {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Persist an ordered Soracloud mailbox message.
 ///
 /// The source service must be deployed. `CanManageSoracloud` holders may
@@ -1497,15 +1334,12 @@ pub struct RecordSoracloudMailboxMessage {
     /// Mailbox message to persist.
     pub message: SoraServiceMailboxMessageV1,
 }
-
 impl crate::seal::Instruction for RecordSoracloudMailboxMessage {}
-
 impl PartialOrd for RecordSoracloudMailboxMessage {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Persist an authoritative Soracloud runtime receipt.
 ///
 /// `CanManageSoracloud` holders may reconcile any service. Other callers must
@@ -1521,15 +1355,12 @@ pub struct RecordSoracloudRuntimeReceipt {
     /// Runtime receipt to persist.
     pub receipt: SoraRuntimeReceiptV1,
 }
-
 impl crate::seal::Instruction for RecordSoracloudRuntimeReceipt {}
-
 impl PartialOrd for RecordSoracloudRuntimeReceipt {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 /// Persist an authoritative private uploaded-model execution receipt.
 ///
 /// This privileged ledger projection is restricted to
@@ -1544,19 +1375,15 @@ pub struct RecordSoracloudPrivateUploadedModelExecutionReceipt {
     /// Private uploaded-model execution receipt to persist.
     pub receipt: SoraPrivateUploadedModelExecutionReceiptV1,
 }
-
 impl crate::seal::Instruction for RecordSoracloudPrivateUploadedModelExecutionReceipt {}
-
 impl PartialOrd for RecordSoracloudPrivateUploadedModelExecutionReceipt {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
 }
-
 fn soracloud_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 macro_rules! impl_soracloud_decode_from_slice {
     ($ty:ty { $($field:ident : $field_ty:ty),+ $(,)? }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -1565,7 +1392,6 @@ macro_rules! impl_soracloud_decode_from_slice {
                 if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
                     return super::decode_packed_instruction_payload::<Self>(bytes);
                 }
-
                 let mut offset = 0usize;
                 $(
                     let $field = super::decode_aos_canonical_field::<$field_ty>(
@@ -1582,7 +1408,6 @@ macro_rules! impl_soracloud_decode_from_slice {
         }
     };
 }
-
 macro_rules! impl_soracloud_unit_decode_from_slice {
     ($ty:ty) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -1600,53 +1425,45 @@ macro_rules! impl_soracloud_unit_decode_from_slice {
         }
     };
 }
-
 impl_soracloud_decode_from_slice!(DeploySoracloudService {
     bundle: SoraDeploymentBundleV1,
     initial_service_configs: BTreeMap<String, Json>,
     initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(UpgradeSoracloudService {
     bundle: SoraDeploymentBundleV1,
     initial_service_configs: BTreeMap<String, Json>,
     initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RollbackSoracloudService {
     service_name: Name,
     target_version: Option<String>,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(SetSoracloudServiceConfig {
     service_name: Name,
     config_name: String,
     value_json: Json,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(DeleteSoracloudServiceConfig {
     service_name: Name,
     config_name: String,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(SetSoracloudServiceSecret {
     service_name: Name,
     secret_name: String,
     secret: SecretEnvelopeV1,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(DeleteSoracloudServiceSecret {
     service_name: Name,
     secret_name: String,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(MutateSoracloudState {
     service_name: Name,
     binding_name: Name,
@@ -1659,7 +1476,6 @@ impl_soracloud_decode_from_slice!(MutateSoracloudState {
     fhe_input_admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RunSoracloudFheJob {
     service_name: Name,
     binding_name: Name,
@@ -1670,33 +1486,28 @@ impl_soracloud_decode_from_slice!(RunSoracloudFheJob {
     full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RegisterSoracloudFhePolicy {
     service_name: Name,
     material: SoracloudFheGovernedMaterialV1,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RotateSoracloudFhePolicy {
     service_name: Name,
     expected_active: SoracloudFhePolicyReferenceV1,
     material: SoracloudFheGovernedMaterialV1,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RevokeSoracloudFhePolicy {
     service_name: Name,
     expected_active: SoracloudFhePolicyReferenceV1,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RecordSoracloudDecryptionRequest {
     service_name: Name,
     policy: DecryptionAuthorityPolicyV1,
     request: DecryptionRequestV1,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(JoinSoracloudHfSharedLease {
     repo_id: String,
     resolved_revision: String,
@@ -1711,7 +1522,6 @@ impl_soracloud_decode_from_slice!(JoinSoracloudHfSharedLease {
     max_compute_reservation_fee: Quantity,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(LeaveSoracloudHfSharedLease {
     repo_id: String,
     resolved_revision: String,
@@ -1721,7 +1531,6 @@ impl_soracloud_decode_from_slice!(LeaveSoracloudHfSharedLease {
     apartment_name: Option<Name>,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RenewSoracloudHfSharedLease {
     repo_id: String,
     resolved_revision: String,
@@ -1735,83 +1544,68 @@ impl_soracloud_decode_from_slice!(RenewSoracloudHfSharedLease {
     resource_profile: Option<SoraHfResourceProfileV1>,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(AdvertiseSoracloudModelHost {
     capability: SoraModelHostCapabilityRecordV1,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(HeartbeatSoracloudModelHost {
     validator_account_id: AccountId,
     heartbeat_expires_at_ms: u64,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(WithdrawSoracloudModelHost {
     validator_account_id: AccountId,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_unit_decode_from_slice!(ReconcileSoracloudModelHosts);
-
 impl_soracloud_decode_from_slice!(AdvertiseSoracloudInrouHost {
     capability: SoraInrouHostCapabilityRecordV1,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(WithdrawSoracloudInrouHost {
     validator_account_id: AccountId,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_unit_decode_from_slice!(ReconcileSoracloudInrouPlacements);
-
 impl_soracloud_decode_from_slice!(ReportSoracloudModelHostViolation {
     validator_account_id: AccountId,
     kind: SoraModelHostViolationKindV1,
     placement_id: Option<Hash>,
     detail: Option<String>,
 });
-
 impl_soracloud_decode_from_slice!(DeploySoracloudAgentApartment {
     manifest: AgentApartmentManifestV1,
     lease_ticks: u64,
     autonomy_budget_units: u64,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RenewSoracloudAgentLease {
     apartment_name: Name,
     lease_ticks: u64,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RestartSoracloudAgentApartment {
     apartment_name: Name,
     reason: String,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RevokeSoracloudAgentPolicy {
     apartment_name: Name,
     capability: String,
     reason: Option<String>,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RequestSoracloudAgentWalletSpend {
     apartment_name: Name,
     asset_definition: String,
     amount: Quantity,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(ApproveSoracloudAgentWalletSpend {
     apartment_name: Name,
     request_id: String,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(EnqueueSoracloudAgentMessage {
     from_apartment: Name,
     to_apartment: Name,
@@ -1819,20 +1613,17 @@ impl_soracloud_decode_from_slice!(EnqueueSoracloudAgentMessage {
     payload: String,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(AcknowledgeSoracloudAgentMessage {
     apartment_name: Name,
     message_id: String,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(AllowSoracloudAgentAutonomyArtifact {
     apartment_name: Name,
     artifact_hash: String,
     provenance_hash: Option<String>,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RunSoracloudAgentAutonomy {
     apartment_name: Name,
     artifact_hash: String,
@@ -1842,7 +1633,6 @@ impl_soracloud_decode_from_slice!(RunSoracloudAgentAutonomy {
     workflow_input_json: Option<String>,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RecordSoracloudAgentAutonomyExecution {
     apartment_name: Name,
     run_id: String,
@@ -1857,7 +1647,6 @@ impl_soracloud_decode_from_slice!(RecordSoracloudAgentAutonomyExecution {
     checkpoint_artifact_hash: Option<Hash>,
     error: Option<String>,
 });
-
 impl_soracloud_decode_from_slice!(StartSoracloudTrainingJob {
     service_name: Name,
     model_name: String,
@@ -1871,7 +1660,6 @@ impl_soracloud_decode_from_slice!(StartSoracloudTrainingJob {
     storage_budget_bytes: u64,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(CheckpointSoracloudTrainingJob {
     service_name: Name,
     job_id: String,
@@ -1880,14 +1668,12 @@ impl_soracloud_decode_from_slice!(CheckpointSoracloudTrainingJob {
     metrics_hash: Hash,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RetrySoracloudTrainingJob {
     service_name: Name,
     job_id: String,
     reason: String,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RegisterSoracloudModelArtifact {
     service_name: Name,
     model_name: String,
@@ -1899,7 +1685,6 @@ impl_soracloud_decode_from_slice!(RegisterSoracloudModelArtifact {
     provenance_attestation_hash: Hash,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RegisterSoracloudModelWeight {
     service_name: Name,
     model_name: String,
@@ -1913,7 +1698,6 @@ impl_soracloud_decode_from_slice!(RegisterSoracloudModelWeight {
     provenance_attestation_hash: Hash,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(PromoteSoracloudModelWeight {
     service_name: Name,
     model_name: String,
@@ -1922,7 +1706,6 @@ impl_soracloud_decode_from_slice!(PromoteSoracloudModelWeight {
     gate_report_hash: Hash,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RollbackSoracloudModelWeight {
     service_name: Name,
     model_name: String,
@@ -1930,12 +1713,10 @@ impl_soracloud_decode_from_slice!(RollbackSoracloudModelWeight {
     reason: String,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(RegisterSoracloudUploadedModelBundle {
     bundle: SoraUploadedModelBundleV1,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(FinalizeSoracloudUploadedModelBundle {
     service_name: Name,
     model_name: String,
@@ -1950,7 +1731,6 @@ impl_soracloud_decode_from_slice!(FinalizeSoracloudUploadedModelBundle {
     provenance_attestation_hash: Hash,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(AdvanceSoracloudRollout {
     service_name: Name,
     rollout_handle: String,
@@ -1959,60 +1739,47 @@ impl_soracloud_decode_from_slice!(AdvanceSoracloudRollout {
     governance_tx_hash: Hash,
     provenance: ManifestProvenance,
 });
-
 impl_soracloud_decode_from_slice!(SetSoracloudRuntimeState {
     state: SoraServiceRuntimeStateV1,
 });
-
 impl_soracloud_decode_from_slice!(SetSoracloudInrouReplicaRuntimeState {
     state: SoraInrouReplicaRuntimeStateV1,
 });
-
 impl_soracloud_decode_from_slice!(ClearSoracloudInrouReplicaRuntimeState {
     service_name: Name,
     service_version: String,
     replica_slot: u16,
 });
-
 impl_soracloud_decode_from_slice!(ReportSoracloudServiceLeaseUsage {
     service_name: Name,
     active_service_version: String,
     accounted_egress_bytes: u64,
 });
-
 impl_soracloud_decode_from_slice!(RecordSoracloudMailboxMessage {
     message: SoraServiceMailboxMessageV1,
 });
-
 impl_soracloud_decode_from_slice!(RecordSoracloudRuntimeReceipt {
     receipt: SoraRuntimeReceiptV1,
 });
-
 impl_soracloud_decode_from_slice!(RecordSoracloudPrivateUploadedModelExecutionReceipt {
     receipt: SoraPrivateUploadedModelExecutionReceiptV1,
 });
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use norito::core::DecodeFromSlice;
-
-    use super::*;
-
     fn name(raw: &str) -> Name {
         raw.parse().expect("valid name")
     }
-
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked Soracloud ISI fixture account keypair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn hash(label: &str) -> Hash {
         Hash::new(label)
     }
-
     fn provenance(seed: u8) -> ManifestProvenance {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked Soracloud ISI provenance fixture keypair");
@@ -2023,7 +1790,6 @@ mod tests {
             signature,
         }
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -2034,7 +1800,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(
         registry: &crate::isi::InstructionRegistry,
         wire_id: &str,
@@ -2054,7 +1819,6 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     fn private_uploaded_model_execution_receipt()
     -> RecordSoracloudPrivateUploadedModelExecutionReceipt {
         RecordSoracloudPrivateUploadedModelExecutionReceipt {
@@ -2095,7 +1859,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn soracloud_decode_from_slice_roundtrips_simple_instructions() {
         assert_slice_roundtrip(RollbackSoracloudService {
@@ -2176,7 +1939,6 @@ mod tests {
         });
         assert_slice_roundtrip(private_uploaded_model_execution_receipt());
     }
-
     #[test]
     fn soracloud_default_registry_decodes_type_names_and_stable_ids() {
         let registry = crate::isi::registry::default();

@@ -237,7 +237,6 @@ fn validate_vpn_lease_quote_projection(record: &VpnLeaseRecordV1) -> Result<(), 
     }
     Ok(())
 }
-
 fn validate_vpn_lease_network(
     record: &VpnLeaseRecordV1,
     expected_network_id: &iroha_data_model::NetworkId,
@@ -250,7 +249,6 @@ fn validate_vpn_lease_network(
     }
     Ok(())
 }
-
 fn validate_vpn_lease_transition(
     previous: &VpnLeaseRecordV1,
     next: &VpnLeaseRecordV1,

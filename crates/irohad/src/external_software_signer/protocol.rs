@@ -1,10 +1,7 @@
 //! Canonical public identities and wire containers for the signer service.
-
-use std::{fmt, str::FromStr};
-
 use iroha_crypto::{Algorithm, PublicKey};
 use norito::codec::{Decode, Encode};
-
+use std::{fmt, str::FromStr};
 pub(super) const SIGNER_PROTOCOL_MAGIC_V1: [u8; 8] = *b"IRSGNR01";
 pub(super) const SIGNER_PROTOCOL_VERSION_V1: u16 = 1;
 pub(super) const SIGNER_KEY_MAGIC_V1: [u8; 8] = *b"IRSGKY01";
@@ -22,12 +19,10 @@ pub(super) const SIGNER_MAX_ID_BYTES_V1: usize = 128;
 pub(super) const SIGNER_MAX_DOMAIN_BYTES_V1: usize = 128;
 pub(super) const SIGNER_MAX_SIGNATURE_BYTES_V1: usize = 4 * 1024;
 pub(super) const SIGNER_MAX_PRIVATE_KEY_BYTES_V1: usize = 8 * 1024;
-
 const PUBLIC_KEY_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.public-key.v1";
 const PUBLIC_BINDING_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.binding.v1";
 const REQUEST_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.request.v1";
 const RESPONSE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.response.v1";
-
 /// Exact prefix of the SoraFS V1 foundational-promotion signing payload.
 ///
 /// The promotion key signs the complete byte string beginning with this prefix;
@@ -35,7 +30,6 @@ const RESPONSE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.response.v1";
 /// those reviewed bytes.
 pub const SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1: &[u8] =
     b"iroha:sorafs:production-readiness:foundational-prerequisites:v1\0";
-
 /// Provider implementation class carried by external-signer provenance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[repr(u8)]
@@ -43,7 +37,6 @@ pub enum ExternalSignerBackendV1 {
     /// Isolated software key service with an encrypted key envelope.
     Software = 1,
 }
-
 /// Signature algorithms admitted by the external signer V1 protocol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[repr(u8)]
@@ -53,19 +46,15 @@ pub enum SoftwareSignerKeyAlgorithmV1 {
     /// FIPS 204 ML-DSA-65.
     MlDsa = 2,
 }
-
 /// Error returned when a signer algorithm or role label is not canonical.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SoftwareSignerValueParseErrorV1;
-
 impl fmt::Display for SoftwareSignerValueParseErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("invalid external software signer value")
     }
 }
-
 impl std::error::Error for SoftwareSignerValueParseErrorV1 {}
-
 impl SoftwareSignerKeyAlgorithmV1 {
     /// Convert to the workspace cryptography algorithm.
     #[must_use]
@@ -76,10 +65,8 @@ impl SoftwareSignerKeyAlgorithmV1 {
         }
     }
 }
-
 impl TryFrom<Algorithm> for SoftwareSignerKeyAlgorithmV1 {
     type Error = ();
-
     fn try_from(value: Algorithm) -> Result<Self, Self::Error> {
         match value {
             Algorithm::Ed25519 => Ok(Self::Ed25519),
@@ -88,10 +75,8 @@ impl TryFrom<Algorithm> for SoftwareSignerKeyAlgorithmV1 {
         }
     }
 }
-
 impl FromStr for SoftwareSignerKeyAlgorithmV1 {
     type Err = SoftwareSignerValueParseErrorV1;
-
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "ed25519" => Ok(Self::Ed25519),
@@ -100,7 +85,6 @@ impl FromStr for SoftwareSignerKeyAlgorithmV1 {
         }
     }
 }
-
 impl fmt::Display for SoftwareSignerKeyAlgorithmV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -109,7 +93,6 @@ impl fmt::Display for SoftwareSignerKeyAlgorithmV1 {
         })
     }
 }
-
 /// Least-privilege signing domains served by the first software-signer slice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[repr(u8)]
@@ -139,7 +122,6 @@ pub enum SoftwareSignerRoleV1 {
     /// PoP credential, commitment-root, and revocation signing.
     PopCredentials = 12,
 }
-
 impl SoftwareSignerRoleV1 {
     /// Stable role label.
     #[must_use]
@@ -159,7 +141,6 @@ impl SoftwareSignerRoleV1 {
             Self::PopCredentials => "pop_credentials",
         }
     }
-
     /// Exact signing domain enforced before any key operation.
     #[must_use]
     pub const fn domain(self) -> &'static str {
@@ -178,7 +159,6 @@ impl SoftwareSignerRoleV1 {
             Self::PopCredentials => "sorafs.pop.issuer-signature.v1",
         }
     }
-
     /// Whether this isolated role admits the requested key algorithm.
     #[must_use]
     pub const fn allows_algorithm(self, algorithm: SoftwareSignerKeyAlgorithmV1) -> bool {
@@ -196,7 +176,6 @@ impl SoftwareSignerRoleV1 {
             }
         }
     }
-
     /// Convert a native-transaction role to the existing Torii runtime role.
     #[must_use]
     pub const fn native_role(self) -> Option<iroha_torii::SorafsNativeTransactionSignerRoleV1> {
@@ -218,7 +197,6 @@ impl SoftwareSignerRoleV1 {
         }
     }
 }
-
 impl From<iroha_torii::SorafsNativeTransactionSignerRoleV1> for SoftwareSignerRoleV1 {
     fn from(value: iroha_torii::SorafsNativeTransactionSignerRoleV1) -> Self {
         match value {
@@ -229,10 +207,8 @@ impl From<iroha_torii::SorafsNativeTransactionSignerRoleV1> for SoftwareSignerRo
         }
     }
 }
-
 impl FromStr for SoftwareSignerRoleV1 {
     type Err = SoftwareSignerValueParseErrorV1;
-
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "proof_outcome" => Ok(Self::ProofOutcome),
@@ -251,13 +227,11 @@ impl FromStr for SoftwareSignerRoleV1 {
         }
     }
 }
-
 impl fmt::Display for SoftwareSignerRoleV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
 }
-
 /// Public role-specific authority pinned into the encrypted key envelope.
 ///
 /// The signer service validates this value itself, so an authenticated client
@@ -300,7 +274,6 @@ pub enum SoftwareSignerPurposeBindingV1 {
         issuer_id: String,
     },
 }
-
 impl SoftwareSignerPurposeBindingV1 {
     pub(super) fn validates_role(&self, role: SoftwareSignerRoleV1) -> bool {
         match (role, self) {
@@ -339,7 +312,6 @@ impl SoftwareSignerPurposeBindingV1 {
         }
     }
 }
-
 /// Immutable public identity expected from one software signer service.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SoftwareSignerPublicBindingV1 {
@@ -384,7 +356,6 @@ pub struct SoftwareSignerPublicBindingV1 {
     /// Maximum canonical transaction-payload bytes accepted by the service.
     pub max_request_bytes: u32,
 }
-
 impl SoftwareSignerPublicBindingV1 {
     /// Validate every fail-closed public binding invariant.
     ///
@@ -421,7 +392,6 @@ impl SoftwareSignerPublicBindingV1 {
         }
         Ok(())
     }
-
     /// Return the canonical domain-separated binding digest.
     ///
     /// # Errors
@@ -432,7 +402,6 @@ impl SoftwareSignerPublicBindingV1 {
         digest_canonical(PUBLIC_BINDING_DIGEST_DOMAIN_V1, self)
     }
 }
-
 /// Live software-signer provenance returned by qualification and signing.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SoftwareSignerLiveProvenanceV1 {
@@ -447,7 +416,6 @@ pub struct SoftwareSignerLiveProvenanceV1 {
     /// Active key signature over the canonical provenance body.
     pub attestation: Vec<u8>,
 }
-
 impl SoftwareSignerLiveProvenanceV1 {
     /// Compare every signed live-state field while excluding the potentially
     /// randomized signature encoding itself.
@@ -458,7 +426,6 @@ impl SoftwareSignerLiveProvenanceV1 {
             && self.revoked == other.revoked
     }
 }
-
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub(super) struct SoftwareSignerFrameV1 {
     pub magic: [u8; 8],
@@ -466,7 +433,6 @@ pub(super) struct SoftwareSignerFrameV1 {
     pub kind: u8,
     pub body: Vec<u8>,
 }
-
 impl fmt::Debug for SoftwareSignerFrameV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -477,19 +443,16 @@ impl fmt::Debug for SoftwareSignerFrameV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl Drop for SoftwareSignerFrameV1 {
     fn drop(&mut self) {
         scrub(&mut self.body);
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct QualifyRequestV1 {
     pub binding_digest: [u8; 32],
     pub client_nonce: [u8; 32],
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct QualifyResponseV1 {
     pub client_nonce: [u8; 32],
@@ -498,7 +461,6 @@ pub(super) struct QualifyResponseV1 {
     pub response_digest: [u8; 32],
     pub response_attestation: Vec<u8>,
 }
-
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub(super) struct SignRequestV1 {
     pub binding_digest: [u8; 32],
@@ -510,7 +472,6 @@ pub(super) struct SignRequestV1 {
     pub payload: Vec<u8>,
     pub request_digest: [u8; 32],
 }
-
 impl fmt::Debug for SignRequestV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -521,13 +482,11 @@ impl fmt::Debug for SignRequestV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl Drop for SignRequestV1 {
     fn drop(&mut self) {
         scrub(&mut self.payload);
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[repr(u8)]
 pub(super) enum SignStatusV1 {
@@ -538,7 +497,6 @@ pub(super) enum SignStatusV1 {
     StaleOrRevoked = 4,
     Unavailable = 5,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct SignResponseV1 {
     pub operation_id: [u8; 32],
@@ -552,7 +510,6 @@ pub(super) struct SignResponseV1 {
     pub response_digest: [u8; 32],
     pub response_attestation: Vec<u8>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) enum AdminCommandV1 {
     Status,
@@ -572,14 +529,12 @@ pub(super) enum AdminCommandV1 {
         reason_digest: [u8; 32],
     },
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct AdminRequestV1 {
     pub binding_digest: [u8; 32],
     pub command: AdminCommandV1,
     pub request_digest: [u8; 32],
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[repr(u8)]
 pub(super) enum AdminStatusV1 {
@@ -589,7 +544,6 @@ pub(super) enum AdminStatusV1 {
     Conflict = 3,
     Unavailable = 4,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct AdminResponseV1 {
     pub request_digest: [u8; 32],
@@ -598,7 +552,6 @@ pub(super) struct AdminResponseV1 {
     pub response_digest: [u8; 32],
     pub response_attestation: Vec<u8>,
 }
-
 pub(super) fn valid_identity(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= SIGNER_MAX_ID_BYTES_V1
@@ -608,7 +561,6 @@ pub(super) fn valid_identity(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
         && !value.to_ascii_lowercase().contains("test")
 }
-
 pub(super) fn valid_software_signer_handle(role: SoftwareSignerRoleV1, value: &str) -> bool {
     let (role_segment, instance_prefix) = match role {
         SoftwareSignerRoleV1::ProofOutcome => ("proof-outcome", None),
@@ -632,7 +584,6 @@ pub(super) fn valid_software_signer_handle(role: SoftwareSignerRoleV1, value: &s
                 && instance_prefix.is_none_or(|prefix| instance.starts_with(prefix))
         })
 }
-
 pub(super) fn public_key_digest(public_key: &PublicKey) -> Result<[u8; 32], ()> {
     let (algorithm, payload) = public_key.try_to_bytes().map_err(|_| ())?;
     Ok(digest_parts(
@@ -640,7 +591,6 @@ pub(super) fn public_key_digest(public_key: &PublicKey) -> Result<[u8; 32], ()> 
         &[&[algorithm as u8], payload.as_ref()],
     ))
 }
-
 pub(super) fn digest_parts(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
@@ -650,7 +600,6 @@ pub(super) fn digest_parts(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     }
     *hasher.finalize().as_bytes()
 }
-
 pub(super) fn digest_canonical<T: norito::NoritoSerialize>(
     domain: &[u8],
     value: &T,
@@ -658,11 +607,9 @@ pub(super) fn digest_canonical<T: norito::NoritoSerialize>(
     let bytes = norito::encode_canonical(value).map_err(|_| ())?;
     Ok(digest_parts(domain, &[&bytes]))
 }
-
 pub(super) fn payload_digest(payload: &[u8]) -> [u8; 32] {
     digest_parts(b"iroha.external-signer.payload.v1", &[payload])
 }
-
 pub(super) fn sign_request_digest(request: &SignRequestV1) -> Result<[u8; 32], ()> {
     digest_canonical(
         REQUEST_DIGEST_DOMAIN_V1,
@@ -677,7 +624,6 @@ pub(super) fn sign_request_digest(request: &SignRequestV1) -> Result<[u8; 32], (
         ),
     )
 }
-
 pub(super) fn sign_response_digest(response: &SignResponseV1) -> Result<[u8; 32], ()> {
     digest_canonical(
         RESPONSE_DIGEST_DOMAIN_V1,
@@ -693,7 +639,6 @@ pub(super) fn sign_response_digest(response: &SignResponseV1) -> Result<[u8; 32]
         ),
     )
 }
-
 pub(super) fn qualify_response_digest(response: &QualifyResponseV1) -> Result<[u8; 32], ()> {
     digest_canonical(
         RESPONSE_DIGEST_DOMAIN_V1,
@@ -704,14 +649,12 @@ pub(super) fn qualify_response_digest(response: &QualifyResponseV1) -> Result<[u
         ),
     )
 }
-
 pub(super) fn admin_request_digest(
     binding_digest: [u8; 32],
     command: &AdminCommandV1,
 ) -> Result<[u8; 32], ()> {
     digest_canonical(REQUEST_DIGEST_DOMAIN_V1, &(binding_digest, command.clone()))
 }
-
 pub(super) fn admin_response_digest(response: &AdminResponseV1) -> Result<[u8; 32], ()> {
     digest_canonical(
         RESPONSE_DIGEST_DOMAIN_V1,
@@ -722,7 +665,6 @@ pub(super) fn admin_response_digest(response: &AdminResponseV1) -> Result<[u8; 3
         ),
     )
 }
-
 pub(super) fn scrub(bytes: &mut [u8]) {
     bytes.fill(0);
     let _ = std::hint::black_box(bytes);

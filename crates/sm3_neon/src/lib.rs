@@ -1,5 +1,4 @@
 #![allow(clippy::missing_const_for_fn)]
-
 //! NEON helpers for the SM3 hash function.
 //!
 //! The routine below implements the SM3 compression function and padding while
@@ -7,17 +6,14 @@
 //! implementation still mirrors the scalar RustCrypto path but executes inside
 //! an AArch64 NEON context so additional vectorisation can be layered in
 //! step-by-step.
-
 #[cfg(target_arch = "aarch64")]
 mod neon {
     use core::arch::aarch64::*;
     use std::vec::Vec;
-
     #[inline]
     pub fn is_supported() -> bool {
         cfg!(feature = "force-neon") || std::arch::is_aarch64_feature_detected!("neon")
     }
-
     /// Compute an SM3 digest using the NEON path. Returns `None` when NEON is
     /// unavailable so callers can fall back to the scalar routine.
     pub fn digest(message: &[u8]) -> Option<[u8; 32]> {
@@ -26,7 +22,6 @@ mod neon {
         }
         Some(unsafe { digest_neon(message) })
     }
-
     #[target_feature(enable = "neon")]
     fn digest_neon(message: &[u8]) -> [u8; 32] {
         const IV: [u32; 8] = [
@@ -39,7 +34,6 @@ mod neon {
             0xE38D_EE4D,
             0xB0FB_0E4E,
         ];
-
         let mut state = IV;
         let buffer = allocate_padded(message);
         for chunk in buffer.chunks_exact(64) {
@@ -51,31 +45,25 @@ mod neon {
         }
         out
     }
-
     #[inline]
     #[target_feature(enable = "neon")]
     fn compress_block(state: &mut [u32; 8], block: &[u8]) {
         debug_assert_eq!(block.len(), 64);
-
         let mut w = [0u32; 68];
         let mut w_prime = [0u32; 64];
-
         for (i, chunk) in block.chunks_exact(4).enumerate() {
             w[i] = u32::from_be_bytes(chunk.try_into().expect("SM3 chunk"));
         }
-
         for j in 16..68 {
             let x = w[j - 16] ^ w[j - 9] ^ rotl32(w[j - 3], 15);
             w[j] = p1(x) ^ rotl32(w[j - 13], 7) ^ w[j - 6];
         }
         compute_w_prime(&w, &mut w_prime);
-
         let mut t_rot = [0u32; 64];
         for (idx, slot) in t_rot.iter_mut().enumerate() {
             let t: u32 = if idx < 16 { 0x79CC_4519 } else { 0x7A87_9D8A };
             *slot = t.rotate_left(idx as u32);
         }
-
         let mut a = state[0];
         let mut b = state[1];
         let mut c = state[2];
@@ -84,7 +72,6 @@ mod neon {
         let mut f = state[5];
         let mut g = state[6];
         let mut h = state[7];
-
         let mut j = 0usize;
         while j < 64 {
             let w_lane = unsafe {
@@ -96,7 +83,6 @@ mod neon {
             let t_lane = unsafe {
                 core::mem::transmute::<uint32x4_t, [u32; 4]>(vld1q_u32(t_rot.as_ptr().add(j)))
             };
-
             let lane_count = (64 - j).min(4);
             for lane in 0..lane_count {
                 let index = j + lane;
@@ -120,10 +106,8 @@ mod neon {
                 f = e;
                 e = p0(tt2);
             }
-
             j += 4;
         }
-
         state[0] ^= a;
         state[1] ^= b;
         state[2] ^= c;
@@ -133,19 +117,16 @@ mod neon {
         state[6] ^= g;
         state[7] ^= h;
     }
-
     #[inline]
     #[target_feature(enable = "neon")]
     fn p0(x: u32) -> u32 {
         x ^ rotl32(x, 9) ^ rotl32(x, 17)
     }
-
     #[inline]
     #[target_feature(enable = "neon")]
     fn p1(x: u32) -> u32 {
         x ^ rotl32(x, 15) ^ rotl32(x, 23)
     }
-
     #[inline]
     #[target_feature(enable = "neon")]
     fn ff(j: usize, x: u32, y: u32, z: u32) -> u32 {
@@ -155,7 +136,6 @@ mod neon {
             (x & y) | (x & z) | (y & z)
         }
     }
-
     #[inline]
     #[target_feature(enable = "neon")]
     fn gg(j: usize, x: u32, y: u32, z: u32) -> u32 {
@@ -165,13 +145,11 @@ mod neon {
             (x & y) | ((!x) & z)
         }
     }
-
     #[inline]
     #[target_feature(enable = "neon")]
     fn rotl32(value: u32, n: u32) -> u32 {
         value.rotate_left(n)
     }
-
     #[inline]
     fn allocate_padded(message: &[u8]) -> Vec<u8> {
         let len = message.len();
@@ -187,7 +165,6 @@ mod neon {
         buffer[tail_offset..].copy_from_slice(&len_bits.to_be_bytes());
         buffer
     }
-
     #[inline]
     #[target_feature(enable = "neon")]
     fn compute_w_prime(w: &[u32; 68], w_prime: &mut [u32; 64]) {
@@ -206,44 +183,36 @@ mod neon {
         }
     }
 }
-
 #[cfg(target_arch = "aarch64")]
 pub use neon::{digest, is_supported};
-
 #[cfg(not(target_arch = "aarch64"))]
 #[inline]
 pub fn is_supported() -> bool {
     false
 }
-
 #[cfg(not(target_arch = "aarch64"))]
 #[inline]
 pub fn digest(_: &[u8]) -> Option<[u8; 32]> {
     None
 }
-
 #[cfg(all(test, target_arch = "aarch64"))]
 mod tests {
+    use super::*;
     use hex_literal::hex;
     use rand::{Rng, SeedableRng, rngs::StdRng};
     use sm3::{Digest, Sm3};
-
-    use super::*;
-
     #[test]
     fn digest_matches_scalar() {
         if !is_supported() {
             eprintln!("skipping SM3 NEON test: NEON not available");
             return;
         }
-
         let vectors = [
             b"".as_slice(),
             b"abc".as_slice(),
             b"abcdefghijklmnopqrstuvwxyz0123456789".as_slice(),
             &[0u8; 128],
         ];
-
         for message in vectors {
             assert_eq!(
                 scalar_digest(message),
@@ -251,7 +220,6 @@ mod tests {
                 "SM3 NEON mismatch for vector {message:?}"
             );
         }
-
         let mut rng = StdRng::seed_from_u64(0xDEADBEEFCAFEBABE);
         for size in [
             1usize, 3, 7, 16, 31, 63, 64, 65, 127, 255, 256, 511, 512, 513,
@@ -265,14 +233,12 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn digest_matches_golden_vectors() {
         if !is_supported() {
             eprintln!("skipping SM3 NEON golden test: NEON not available");
             return;
         }
-
         const LONG_BLOCK: &[u8] =
             b"abcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd";
         const GOLDEN: [(&[u8], [u8; 32]); 3] = [
@@ -289,7 +255,6 @@ mod tests {
                 hex!("DEBE9FF92275B8A138604889C18E5A4D6FDB70E5387E5765293DCBA39C0C5732"),
             ),
         ];
-
         for (message, expected) in GOLDEN {
             let digest = super::digest(message).expect("NEON path");
             assert_eq!(
@@ -298,7 +263,6 @@ mod tests {
             );
         }
     }
-
     fn scalar_digest(message: &[u8]) -> [u8; 32] {
         let mut hasher = Sm3::new();
         hasher.update(message);

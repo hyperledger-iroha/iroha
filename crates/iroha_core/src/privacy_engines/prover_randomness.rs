@@ -5,25 +5,20 @@
 //! through one bounded reservoir. Honest source bytes are therefore invariant
 //! under caller chunking. A failed or unwinding refill zeroizes the caller
 //! buffer and permanently poisons the wrapper before witness-dependent proving.
-
 use rand::{TryCryptoRng, TryRngCore};
 use rand_core_06::{CryptoRng, RngCore};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
-
 const HEALTH_PREFIX_BYTES_V1: usize = 64;
 const HEALTH_HALF_BYTES_V1: usize = HEALTH_PREFIX_BYTES_V1 / 2;
 const PROHIBITED_PERIODS_V1: [usize; 6] = [1, 2, 4, 8, 16, 32];
-
 /// Canonical producer policy committed by every curve-engine manifest.
 pub(crate) const CURVE_PROVER_RANDOMNESS_POLICY_V1: &[u8] = b"prover-rng:fixed64-reservoir:fallible-refill:reject-initial-constant-half+periods-1,2,4,8,16,32:retain-tail-max63:zeroize+poison-on-error-or-unwind:v1";
 /// Canonical rand 0.9 `TryCryptoRng` producer and seed-bridge policy.
 pub(crate) const TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1: &[u8] = b"prover-rng-api=rand0.9-TryCryptoRng:fixed64-reservoir:fallible-refill:reject-initial-constant-half+periods-1,2,4,8,16,32:retain-reservoir-tail-max63+initial-block64-until-phase-transition:zeroize+poison-on-error-or-unwind:seed-bridge=sha256-domain+all64+exact-initial64+fresh-fixed64:partition=initial64-replay+fresh64-seed:v1";
-
 const TRY_CRYPTO_DERIVED_SEED_DOMAIN_V1: &[u8] =
     b"iroha:privacy:try-crypto-prover:derived-entropy-seed:v1";
-
 /// Failure while preflighting one cryptographic prover random source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ProverRandomnessErrorV1 {
@@ -34,7 +29,6 @@ pub(crate) enum ProverRandomnessErrorV1 {
     #[error("cryptographic prover randomness failed its health check")]
     Unhealthy,
 }
-
 /// Failure while preflighting or deriving rand 0.9 prover entropy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum TryCryptoProverRandomnessErrorV1 {
@@ -45,13 +39,11 @@ pub(crate) enum TryCryptoProverRandomnessErrorV1 {
     #[error("fallible cryptographic prover randomness failed its health check")]
     Unhealthy,
 }
-
 fn is_constant(bytes: &[u8]) -> bool {
     bytes
         .first()
         .is_some_and(|first| bytes.iter().all(|byte| byte == first))
 }
-
 fn repeats_with_period(bytes: &[u8], period: usize) -> bool {
     period < bytes.len()
         && bytes
@@ -59,7 +51,6 @@ fn repeats_with_period(bytes: &[u8], period: usize) -> bool {
             .enumerate()
             .all(|(index, byte)| *byte == bytes[index % period])
 }
-
 fn prefix_is_unhealthy_v1(prefix: &[u8; HEALTH_PREFIX_BYTES_V1]) -> bool {
     let (left, right) = prefix.split_at(HEALTH_HALF_BYTES_V1);
     is_constant(left)
@@ -68,7 +59,6 @@ fn prefix_is_unhealthy_v1(prefix: &[u8; HEALTH_PREFIX_BYTES_V1]) -> bool {
             .into_iter()
             .any(|period| repeats_with_period(prefix, period))
 }
-
 fn drain_reservoir_v1(
     reservoir: &mut [u8; HEALTH_PREFIX_BYTES_V1],
     cursor: &mut usize,
@@ -82,12 +72,10 @@ fn drain_reservoir_v1(
     *cursor = end;
     copied
 }
-
 struct DestinationZeroizeGuardV1<'a> {
     destination: &'a mut [u8],
     armed: bool,
 }
-
 impl<'a> DestinationZeroizeGuardV1<'a> {
     fn new(destination: &'a mut [u8]) -> Self {
         Self {
@@ -95,12 +83,10 @@ impl<'a> DestinationZeroizeGuardV1<'a> {
             armed: true,
         }
     }
-
     fn disarm(&mut self) {
         self.armed = false;
     }
 }
-
 impl Drop for DestinationZeroizeGuardV1<'_> {
     fn drop(&mut self) {
         if self.armed {
@@ -108,11 +94,9 @@ impl Drop for DestinationZeroizeGuardV1<'_> {
         }
     }
 }
-
 fn core_unavailable_error_v1() -> rand_core_06::Error {
     rand_core_06::Error::new(ProverRandomnessErrorV1::Unavailable)
 }
-
 /// A cryptographic RNG health-checked through canonical source blocks.
 pub(crate) struct HealthCheckedCryptoRngV1<'a, R> {
     source: &'a mut R,
@@ -120,7 +104,6 @@ pub(crate) struct HealthCheckedCryptoRngV1<'a, R> {
     cursor: usize,
     poisoned: bool,
 }
-
 impl<'a, R> HealthCheckedCryptoRngV1<'a, R>
 where
     R: CryptoRng + RngCore,
@@ -141,7 +124,6 @@ where
             poisoned: false,
         })
     }
-
     fn try_refill_v1(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
         self.reservoir.zeroize();
         self.cursor = HEALTH_PREFIX_BYTES_V1;
@@ -163,7 +145,6 @@ where
         self.poisoned = false;
         Ok(())
     }
-
     fn try_fill_canonical_v1(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
         if self.poisoned {
             destination.zeroize();
@@ -180,7 +161,6 @@ where
         Ok(())
     }
 }
-
 impl<R> RngCore for HealthCheckedCryptoRngV1<'_, R>
 where
     R: CryptoRng + RngCore,
@@ -190,25 +170,20 @@ where
         self.fill_bytes(&mut bytes);
         u32::from_le_bytes(bytes)
     }
-
     fn next_u64(&mut self) -> u64 {
         let mut bytes = [0_u8; 8];
         self.fill_bytes(&mut bytes);
         u64::from_le_bytes(bytes)
     }
-
     fn fill_bytes(&mut self, destination: &mut [u8]) {
         self.try_fill_canonical_v1(destination)
             .expect("cryptographic prover randomness became unavailable");
     }
-
     fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
         self.try_fill_canonical_v1(destination)
     }
 }
-
 impl<R> CryptoRng for HealthCheckedCryptoRngV1<'_, R> where R: CryptoRng + RngCore {}
-
 /// A rand 0.9 cryptographic RNG health-checked through canonical source blocks.
 pub(crate) struct HealthCheckedTryCryptoRngV1<'a, R: ?Sized> {
     source: &'a mut R,
@@ -219,7 +194,6 @@ pub(crate) struct HealthCheckedTryCryptoRngV1<'a, R: ?Sized> {
     emitted_bytes: u64,
     poisoned: bool,
 }
-
 impl<'a, R> HealthCheckedTryCryptoRngV1<'a, R>
 where
     R: TryCryptoRng + ?Sized,
@@ -244,7 +218,6 @@ where
             poisoned: false,
         })
     }
-
     fn poison(&mut self, destination: &mut [u8]) {
         self.reservoir.zeroize();
         self.initial_block.zeroize();
@@ -252,7 +225,6 @@ where
         self.poisoned = true;
         destination.zeroize();
     }
-
     fn try_refill_v1(
         &mut self,
         destination: &mut [u8],
@@ -279,7 +251,6 @@ where
         self.poisoned = false;
         Ok(())
     }
-
     fn try_fill_canonical_v1(
         &mut self,
         destination: &mut [u8],
@@ -302,7 +273,6 @@ where
         }
         Ok(())
     }
-
     /// Draw a separately health-checked seed after exactly block one is spent.
     ///
     /// The fresh block must not repeat the initial prover prefix. This catches
@@ -346,7 +316,6 @@ where
             }
         }
     }
-
     /// Reserve a fresh independent seed and replay block one to a prover.
     pub(crate) fn partition_initial_block_with_independent_seed_v1(
         mut self,
@@ -373,62 +342,50 @@ where
         Ok((PartitionedProverTryCryptoRngV1(self), independent_seed))
     }
 }
-
 impl<R> TryRngCore for HealthCheckedTryCryptoRngV1<'_, R>
 where
     R: TryCryptoRng + ?Sized,
 {
     type Error = TryCryptoProverRandomnessErrorV1;
-
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         let mut bytes = [0_u8; 4];
         self.try_fill_bytes(&mut bytes)?;
         Ok(u32::from_le_bytes(bytes))
     }
-
     fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         let mut bytes = [0_u8; 8];
         self.try_fill_bytes(&mut bytes)?;
         Ok(u64::from_le_bytes(bytes))
     }
-
     fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
         self.try_fill_canonical_v1(destination)
     }
 }
-
 impl<R> TryCryptoRng for HealthCheckedTryCryptoRngV1<'_, R> where R: TryCryptoRng + ?Sized {}
-
 /// One-way prover phase after block two is reserved for an independent seed.
 pub(crate) struct PartitionedProverTryCryptoRngV1<'a, R: ?Sized>(
     HealthCheckedTryCryptoRngV1<'a, R>,
 );
-
 impl<R> TryRngCore for PartitionedProverTryCryptoRngV1<'_, R>
 where
     R: TryCryptoRng + ?Sized,
 {
     type Error = TryCryptoProverRandomnessErrorV1;
-
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         let mut bytes = [0_u8; 4];
         self.try_fill_bytes(&mut bytes)?;
         Ok(u32::from_le_bytes(bytes))
     }
-
     fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         let mut bytes = [0_u8; 8];
         self.try_fill_bytes(&mut bytes)?;
         Ok(u64::from_le_bytes(bytes))
     }
-
     fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
         self.0.try_fill_bytes(destination)
     }
 }
-
 impl<R> TryCryptoRng for PartitionedProverTryCryptoRngV1<'_, R> where R: TryCryptoRng + ?Sized {}
-
 /// Draw and domain-derive one 32-byte seed from an independent healthy block.
 ///
 /// Every sampled byte influences the result. Both the source block and
@@ -445,7 +402,6 @@ pub(crate) fn derive_healthy_try_crypto_seed_v1<R: TryCryptoRng + ?Sized>(
     }
     derive_try_crypto_seed_from_block_v1(&entropy, purpose)
 }
-
 fn derive_try_crypto_seed_from_block_v1(
     entropy: &[u8; HEALTH_PREFIX_BYTES_V1],
     purpose: &[u8],
@@ -466,13 +422,10 @@ fn derive_try_crypto_seed_from_block_v1(
     }
     Ok(seed)
 }
-
 #[cfg(test)]
 mod tests {
-    use rand_08::{SeedableRng as _, rngs::StdRng};
-
     use super::*;
-
+    use rand_08::{SeedableRng as _, rngs::StdRng};
     #[derive(Clone, Copy)]
     enum Mode {
         Constant,
@@ -481,23 +434,18 @@ mod tests {
         Period(usize),
         PartialFailure,
     }
-
     struct AdversarialRng(Mode);
-
     impl RngCore for AdversarialRng {
         fn next_u32(&mut self) -> u32 {
             0
         }
-
         fn next_u64(&mut self) -> u64 {
             0
         }
-
         fn fill_bytes(&mut self, destination: &mut [u8]) {
             self.try_fill_bytes(destination)
                 .expect("infallible adversarial mode")
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
             match self.0 {
                 Mode::Constant => destination.fill(0x5A),
@@ -539,27 +487,21 @@ mod tests {
             Ok(())
         }
     }
-
     impl CryptoRng for AdversarialRng {}
-
     #[derive(Debug)]
     struct RecordingError;
-
     impl core::fmt::Display for RecordingError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected canonical-block failure")
         }
     }
-
     impl std::error::Error for RecordingError {}
-
     struct RecordingStream {
         cursor: usize,
         requests: Vec<usize>,
         fail_on_request: Option<usize>,
         panic_on_request: Option<usize>,
     }
-
     impl RecordingStream {
         fn new(fail_on_request: Option<usize>) -> Self {
             Self {
@@ -569,7 +511,6 @@ mod tests {
                 panic_on_request: None,
             }
         }
-
         fn panicking_on(request: usize) -> Self {
             Self {
                 cursor: 0,
@@ -578,7 +519,6 @@ mod tests {
                 panic_on_request: Some(request),
             }
         }
-
         fn byte(index: usize) -> u8 {
             let mixed = (index as u64)
                 .wrapping_mul(0x9E37_79B9_7F4A_7C15)
@@ -586,7 +526,6 @@ mod tests {
                 ^ 0xA5C3_6D91_E27B_4F08;
             (mixed ^ (mixed >> 17) ^ (mixed >> 43)) as u8
         }
-
         fn fill(&mut self, destination: &mut [u8]) -> Result<(), RecordingError> {
             self.requests.push(destination.len());
             let panicking = self.panic_on_request == Some(self.requests.len());
@@ -606,64 +545,50 @@ mod tests {
             if failing { Err(RecordingError) } else { Ok(()) }
         }
     }
-
     struct CoreRecordingRng(RecordingStream);
-
     impl RngCore for CoreRecordingRng {
         fn next_u32(&mut self) -> u32 {
             let mut bytes = [0; 4];
             self.fill_bytes(&mut bytes);
             u32::from_le_bytes(bytes)
         }
-
         fn next_u64(&mut self) -> u64 {
             let mut bytes = [0; 8];
             self.fill_bytes(&mut bytes);
             u64::from_le_bytes(bytes)
         }
-
         fn fill_bytes(&mut self, destination: &mut [u8]) {
             self.try_fill_bytes(destination).expect("recording source")
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
             self.0.fill(destination).map_err(rand_core_06::Error::new)
         }
     }
-
     impl CryptoRng for CoreRecordingRng {}
-
     struct TryRecordingRng(RecordingStream);
-
     impl TryRngCore for TryRecordingRng {
         type Error = RecordingError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             let mut bytes = [0; 4];
             self.try_fill_bytes(&mut bytes)?;
             Ok(u32::from_le_bytes(bytes))
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             let mut bytes = [0; 8];
             self.try_fill_bytes(&mut bytes)?;
             Ok(u64::from_le_bytes(bytes))
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             self.0.fill(destination)
         }
     }
-
     impl TryCryptoRng for TryRecordingRng {}
-
     #[test]
     fn healthy_wrapper_preserves_the_exact_source_stream_across_chunking() {
         let mut direct = StdRng::from_seed([0x39; 32]);
         let mut wrapped_source = StdRng::from_seed([0x39; 32]);
         let mut expected = [0_u8; 257];
         direct.fill_bytes(&mut expected);
-
         let mut wrapped =
             HealthCheckedCryptoRngV1::new(&mut wrapped_source).expect("healthy source");
         let mut actual = [0_u8; 257];
@@ -676,7 +601,6 @@ mod tests {
             .expect("source suffix");
         assert_eq!(actual, expected);
     }
-
     #[test]
     fn curve_reservoir_is_partition_invariant_bounded_and_uses_only_fixed_blocks() {
         const TOTALS: [usize; 23] = [
@@ -717,7 +641,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn curve_refill_failure_zeroizes_poisoned_output_and_never_reenters_source() {
         let mut source = CoreRecordingRng(RecordingStream::new(Some(2)));
@@ -733,7 +656,6 @@ mod tests {
         assert_eq!(destination, [0; 65]);
         assert_eq!(checked.source.0.requests, [64, 64]);
     }
-
     #[test]
     fn refill_panics_zeroize_and_permanently_poison_both_wrappers() {
         let mut core_source = CoreRecordingRng(RecordingStream::panicking_on(2));
@@ -754,7 +676,6 @@ mod tests {
         assert!(core.try_fill_bytes(&mut core_destination).is_err());
         assert_eq!(core_destination, [0; 65]);
         assert_eq!(core.source.0.requests, [64, 64]);
-
         let mut try_source = TryRecordingRng(RecordingStream::panicking_on(2));
         let mut checked =
             HealthCheckedTryCryptoRngV1::new(&mut try_source).expect("healthy first block");
@@ -778,7 +699,6 @@ mod tests {
         assert_eq!(try_destination, [0; 65]);
         assert_eq!(checked.source.0.requests, [64, 64]);
     }
-
     #[test]
     fn every_curve_and_try_entrypoint_consumes_the_same_canonical_stream() {
         let expected = (0..203).map(RecordingStream::byte).collect::<Vec<_>>();
@@ -797,7 +717,6 @@ mod tests {
         core.try_fill_bytes(&mut core_tail[13..])
             .expect("fallible tail");
         assert_eq!(core_tail, expected[12..]);
-
         let mut try_source = TryRecordingRng(RecordingStream::new(None));
         let mut checked =
             HealthCheckedTryCryptoRngV1::new(&mut try_source).expect("healthy source");
@@ -813,7 +732,6 @@ mod tests {
         checked.try_fill_bytes(&mut try_tail).expect("try tail");
         assert_eq!(try_tail, expected[12..]);
     }
-
     #[test]
     fn constant_short_period_and_partial_failure_are_rejected() {
         for mode in [
@@ -837,13 +755,10 @@ mod tests {
             Err(ProverRandomnessErrorV1::Unavailable)
         ));
     }
-
     mod try_crypto {
-        use rand::{RngCore as _, SeedableRng as _, TryCryptoRng, TryRngCore, rngs::StdRng};
-
         use super::super::*;
         use super::{RecordingStream, TryRecordingRng};
-
+        use rand::{RngCore as _, SeedableRng as _, TryCryptoRng, TryRngCore, rngs::StdRng};
         #[derive(Clone, Copy)]
         enum TryMode {
             Constant,
@@ -852,29 +767,22 @@ mod tests {
             Period(usize),
             PartialFailure,
         }
-
         #[derive(Debug)]
         struct InjectedTryEntropyError;
-
         impl core::fmt::Display for InjectedTryEntropyError {
             fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 formatter.write_str("injected fallible prover entropy failure")
             }
         }
-
         struct TryAdversarialRng(TryMode);
-
         impl TryRngCore for TryAdversarialRng {
             type Error = InjectedTryEntropyError;
-
             fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
                 Err(InjectedTryEntropyError)
             }
-
             fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
                 Err(InjectedTryEntropyError)
             }
-
             fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
                 match self.0 {
                     TryMode::Constant => destination.fill(0x5A),
@@ -911,24 +819,18 @@ mod tests {
                 Ok(())
             }
         }
-
         impl TryCryptoRng for TryAdversarialRng {}
-
         struct RepeatedHealthyBlockRng {
             cursor: usize,
         }
-
         impl TryRngCore for RepeatedHealthyBlockRng {
             type Error = InjectedTryEntropyError;
-
             fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
                 Err(InjectedTryEntropyError)
             }
-
             fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
                 Err(InjectedTryEntropyError)
             }
-
             fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
                 for byte in destination {
                     *byte = ((self.cursor % HEALTH_PREFIX_BYTES_V1) as u8)
@@ -939,25 +841,19 @@ mod tests {
                 Ok(())
             }
         }
-
         impl TryCryptoRng for RepeatedHealthyBlockRng {}
-
         struct AdversarialSecondBlockRng {
             mode: TryMode,
             fills: usize,
         }
-
         impl TryRngCore for AdversarialSecondBlockRng {
             type Error = InjectedTryEntropyError;
-
             fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
                 Err(InjectedTryEntropyError)
             }
-
             fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
                 Err(InjectedTryEntropyError)
             }
-
             fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
                 let fill = self.fills;
                 self.fills = self.fills.saturating_add(1);
@@ -970,9 +866,7 @@ mod tests {
                 TryAdversarialRng(self.mode).try_fill_bytes(destination)
             }
         }
-
         impl TryCryptoRng for AdversarialSecondBlockRng {}
-
         fn consume_checked_prefix_v1<R: TryCryptoRng + ?Sized>(
             checked: &mut HealthCheckedTryCryptoRngV1<'_, R>,
         ) {
@@ -981,7 +875,6 @@ mod tests {
                 .try_fill_bytes(replay.as_mut())
                 .expect("replay initial block");
         }
-
         #[test]
         fn healthy_wrapper_preserves_the_exact_try_crypto_stream() {
             let mut direct = StdRng::from_seed([0x39; 32]);
@@ -1000,7 +893,6 @@ mod tests {
                 .expect("source suffix");
             assert_eq!(actual, expected);
         }
-
         #[test]
         fn try_reservoir_is_partition_invariant_bounded_and_uses_only_fixed_blocks() {
             const TOTALS: [usize; 23] = [
@@ -1041,7 +933,6 @@ mod tests {
                 }
             }
         }
-
         #[test]
         fn try_refill_failure_zeroizes_poisoned_output_and_never_reenters_source() {
             let mut source = TryRecordingRng(RecordingStream::new(Some(2)));
@@ -1065,7 +956,6 @@ mod tests {
             assert_eq!(destination, [0; 65]);
             assert_eq!(checked.source.0.requests, [64, 64]);
         }
-
         #[test]
         fn constant_period_one_to_thirty_two_and_partial_try_sources_fail_closed() {
             for mode in [
@@ -1106,7 +996,6 @@ mod tests {
                 Err(TryCryptoProverRandomnessErrorV1::Unavailable)
             );
         }
-
         #[test]
         fn independent_seed_rejects_reused_and_adversarial_second_blocks() {
             let mut repeated_source = RepeatedHealthyBlockRng { cursor: 0 };
@@ -1119,7 +1008,6 @@ mod tests {
                     .map(|_| ()),
                 Err(TryCryptoProverRandomnessErrorV1::Unhealthy)
             );
-
             let mut early_source = AdversarialSecondBlockRng {
                 mode: TryMode::Constant,
                 fills: 0,
@@ -1132,7 +1020,6 @@ mod tests {
                     .map(|_| ()),
                 Err(TryCryptoProverRandomnessErrorV1::Unhealthy)
             );
-
             let mut late_source = TryRecordingRng(RecordingStream::new(None));
             let mut late = HealthCheckedTryCryptoRngV1::new(&mut late_source)
                 .expect("initial block is healthy");
@@ -1143,7 +1030,6 @@ mod tests {
                     .map(|_| ()),
                 Err(TryCryptoProverRandomnessErrorV1::Unhealthy)
             );
-
             for (mode, expected) in [
                 (
                     TryMode::PartialFailure,
@@ -1174,7 +1060,6 @@ mod tests {
                 );
             }
         }
-
         #[test]
         fn independent_seed_panic_zeroizes_poisoned_state_and_never_reenters_source() {
             let mut source = TryRecordingRng(RecordingStream::panicking_on(2));
@@ -1201,7 +1086,6 @@ mod tests {
             assert_eq!(destination, [0; 64]);
             assert_eq!(checked.source.0.requests, [64, 64]);
         }
-
         #[test]
         fn partitioned_prover_replays_block_one_and_skips_reserved_block_two() {
             let purpose = b"partitioned-prover-test-v1";
@@ -1211,7 +1095,6 @@ mod tests {
             let (mut prover, seed) = checked
                 .partition_initial_block_with_independent_seed_v1(purpose)
                 .expect("healthy partition");
-
             let first_block = (0..64).map(RecordingStream::byte).collect::<Vec<_>>();
             let second_block: [u8; 64] = (64..128)
                 .map(RecordingStream::byte)
@@ -1222,7 +1105,6 @@ mod tests {
                 .expect("expected independent seed");
             assert_eq!(*seed, *expected_seed);
             assert_eq!(prover.0.source.0.requests, [64, 64]);
-
             let mut actual = [0_u8; 128];
             prover
                 .try_fill_bytes(&mut actual)
@@ -1233,7 +1115,6 @@ mod tests {
             assert_eq!(prover.0.source.0.requests, [64, 64, 64]);
             assert!(prover.0.initial_block.iter().all(|byte| *byte == 0));
         }
-
         #[test]
         fn independent_seed_is_deterministic_and_purpose_separated() {
             let mut first_source = StdRng::from_seed([0x63; 32]);

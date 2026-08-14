@@ -1,9 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Push bridge endpoints (FCM/APNS) – feature/config gating and happy-path smoke.
 #![cfg(all(feature = "app_api", feature = "push"))]
-
-use std::sync::Arc;
-
 use axum::{
     body::to_bytes,
     http::{Request, StatusCode},
@@ -22,18 +19,16 @@ use iroha_data_model::{
     domain::{Domain, DomainId},
 };
 use iroha_torii::{OnlinePeersProvider, Torii};
+use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
-
 #[path = "fixtures.rs"]
 mod fixtures;
-
 fn world_with_account(account_id: &AccountId) -> World {
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id).build(account_id);
     let account = Account::new(account_id.clone()).build(account_id);
     World::with([domain], [account], [])
 }
-
 fn push_identity(seed: u8) -> (iroha_crypto::KeyPair, AccountId) {
     let key_pair =
         iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
@@ -41,7 +36,6 @@ fn push_identity(seed: u8) -> (iroha_crypto::KeyPair, AccountId) {
     let account_id = AccountId::new(key_pair.public_key().clone());
     (key_pair, account_id)
 }
-
 fn push_config() -> actual::Push {
     actual::Push {
         enabled: true,
@@ -50,7 +44,6 @@ fn push_config() -> actual::Push {
         ..Default::default()
     }
 }
-
 fn build_torii(
     push: actual::Push,
     account_id: &AccountId,
@@ -79,7 +72,6 @@ fn build_torii(
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
-
     #[cfg(feature = "telemetry")]
     let torii = {
         use iroha_core::telemetry as core_telemetry;
@@ -113,7 +105,6 @@ fn build_torii(
             true,
         )
     };
-
     #[cfg(not(feature = "telemetry"))]
     let torii = Torii::new(
         ChainId::from("test-chain"),
@@ -128,11 +119,9 @@ fn build_torii(
         da_receipt_signer,
         OnlinePeersProvider::new(peers_rx),
     );
-
     let router = torii.api_router_for_tests();
     (torii, router, data_dir)
 }
-
 fn register_device_request(
     account_id: &AccountId,
     key_pair: &iroha_crypto::KeyPair,
@@ -150,7 +139,6 @@ fn register_device_request(
         .unwrap();
     fixtures::app_signed_request(account_id, key_pair, request, body.as_bytes())
 }
-
 async fn status_and_body(
     router: axum::Router,
     req: Request<axum::body::Body>,
@@ -163,7 +151,6 @@ async fn status_and_body(
     let body = String::from_utf8_lossy(&body_bytes).to_string();
     (status, body)
 }
-
 #[tokio::test]
 async fn push_registration_rejected_when_disabled() {
     let (key_pair, account_id) = push_identity(11);
@@ -172,7 +159,6 @@ async fn push_registration_rejected_when_disabled() {
         ..Default::default()
     };
     let (_torii, router, _data_dir) = build_torii(push_cfg, &account_id);
-
     let (status, body) = status_and_body(
         router,
         register_device_request(&account_id, &key_pair, "t0"),
@@ -180,7 +166,6 @@ async fn push_registration_rejected_when_disabled() {
     .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body: {body}");
 }
-
 #[tokio::test]
 async fn push_registration_rejected_without_credentials() {
     let (key_pair, account_id) = push_identity(12);
@@ -189,7 +174,6 @@ async fn push_registration_rejected_without_credentials() {
         ..Default::default()
     };
     let (_torii, router, _data_dir) = build_torii(push_cfg, &account_id);
-
     let (status, body) = status_and_body(
         router,
         register_device_request(&account_id, &key_pair, "t0"),
@@ -197,12 +181,10 @@ async fn push_registration_rejected_without_credentials() {
     .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body: {body}");
 }
-
 #[tokio::test]
 async fn push_registration_succeeds_with_credentials() {
     let (key_pair, account_id) = push_identity(13);
     let (torii, router, _data_dir) = build_torii(push_config(), &account_id);
-
     let (status, body) = status_and_body(
         router,
         register_device_request(&account_id, &key_pair, "t0"),

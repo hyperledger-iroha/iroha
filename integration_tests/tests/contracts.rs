@@ -1,9 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii contract manifest endpoints: bytecode deploy wraps ISIs and GET reads the derived on-chain manifest.
-
-use std::time::{Duration, Instant};
-use std::{num::NonZeroU64, str::FromStr as _};
-
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -23,7 +19,8 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_test_network::NetworkBuilder;
 use reqwest::StatusCode;
-
+use std::time::{Duration, Instant};
+use std::{num::NonZeroU64, str::FromStr as _};
 fn minimal_contract_artifact() -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
@@ -63,7 +60,6 @@ fn minimal_contract_artifact() -> Vec<u8> {
     out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     out
 }
-
 fn contract_state_probe_artifact() -> Vec<u8> {
     let src = r#"
 seiyaku ContractStateProbe {
@@ -99,7 +95,6 @@ seiyaku ContractStateProbe {
         .compile_source(src)
         .expect("compile contract-state probe program")
 }
-
 fn dynamic_access_counter_artifact() -> Vec<u8> {
     let src = r#"
 seiyaku DynamicAccessCounter {
@@ -147,7 +142,6 @@ seiyaku DynamicAccessCounter {
     }
     artifact
 }
-
 fn typed_core_query_pager_artifact() -> Vec<u8> {
     let source = r#"
 seiyaku TypedCoreQueryPager {
@@ -176,7 +170,6 @@ seiyaku TypedCoreQueryPager {
         .compile_source(source)
         .expect("compile typed core-query pager program")
 }
-
 fn typed_core_query_page_payload_literals(offset: &str, limit: &str) -> norito::json::Value {
     norito::json::object([
         ("offset", norito::json::Value::from(offset.to_owned())),
@@ -184,11 +177,9 @@ fn typed_core_query_page_payload_literals(offset: &str, limit: &str) -> norito::
     ])
     .expect("serialize typed core-query page arguments")
 }
-
 fn typed_core_query_page_payload(offset: i64, limit: i64) -> norito::json::Value {
     typed_core_query_page_payload_literals(&offset.to_string(), &limit.to_string())
 }
-
 async fn post_typed_core_query_page(
     http: &reqwest::Client,
     torii_url: &reqwest::Url,
@@ -225,7 +216,6 @@ async fn post_typed_core_query_page(
         .map_err(|error| eyre!("contract view returned {status} with invalid JSON: {error}"))?;
     Ok((status, body))
 }
-
 async fn invoke_typed_core_query_page(
     client: iroha::client::Client,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -252,7 +242,6 @@ async fn invoke_typed_core_query_page(
         .cloned()
         .ok_or_else(|| eyre!("contract view response is missing result: {response:?}"))
 }
-
 fn typed_query_page_parts(
     result: &norito::json::Value,
     view_name: &str,
@@ -342,7 +331,6 @@ fn typed_query_page_parts(
     };
     Ok((ids, next_offset))
 }
-
 #[test]
 fn typed_query_page_parts_require_canonical_active_only_option_int() {
     for (source, expected) in [
@@ -360,7 +348,6 @@ fn typed_query_page_parts_require_canonical_active_only_option_int() {
             expected
         );
     }
-
     for source in [
         r#"{"items":[],"next_offset":{"some":3}}"#,
         r#"{"items":[],"next_offset":{"some":"03"}}"#,
@@ -381,7 +368,6 @@ fn typed_query_page_parts_require_canonical_active_only_option_int() {
             "accepted non-canonical active-only Option<Int>: {source}"
         );
     }
-
     let oversized_items = (0..=ivm::core_query::QUERY_PAGE_CAPACITY_V1)
         .map(|index| format!(r#"{{"id":"item{index}"}}"#))
         .collect::<Vec<_>>()
@@ -395,7 +381,6 @@ fn typed_query_page_parts_require_canonical_active_only_option_int() {
         "accepted a typed query page above the V1 capacity"
     );
 }
-
 fn assert_typed_query_projection(
     result: &norito::json::Value,
     view_name: &str,
@@ -421,7 +406,6 @@ fn assert_typed_query_projection(
     }
     Ok(())
 }
-
 fn assert_canonical_query_order<T>(ids: &[T], entity_name: &str)
 where
     T: Clone + Ord + std::fmt::Debug,
@@ -434,7 +418,6 @@ where
         "the ledger {entity_name} query must expose canonical ID order"
     );
 }
-
 fn signed_consensus_handshake(
     network: &sandbox::SerializedNetwork,
 ) -> Result<ConsensusHandshakeMetadata> {
@@ -464,7 +447,6 @@ fn signed_consensus_handshake(
     norito::json::from_str(custom.payload().get())
         .map_err(|error| eyre!("decode signed consensus handshake metadata: {error}"))
 }
-
 async fn wait_for_cross_peer_rbc_diagnostics(
     network: &sandbox::SerializedNetwork,
     timeout: Duration,
@@ -483,7 +465,6 @@ async fn wait_for_cross_peer_rbc_diagnostics(
     expected_validator_set.sort();
     let zero_hash = Hash::prehashed([0; Hash::LENGTH]);
     let deadline = Instant::now() + timeout;
-
     loop {
         let tasks = network
             .peers()
@@ -577,7 +558,6 @@ async fn wait_for_cross_peer_rbc_diagnostics(
                 }
             }
         }
-
         if let Some(first) = observations.first().and_then(Option::as_ref)
             && observations
                 .iter()
@@ -595,7 +575,6 @@ async fn wait_for_cross_peer_rbc_diagnostics(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 fn dynamic_counter_args(key: i64, delta: i64) -> norito::json::Value {
     norito::json::object([
         ("key", norito::json::Value::from(key.to_string())),
@@ -603,7 +582,6 @@ fn dynamic_counter_args(key: i64, delta: i64) -> norito::json::Value {
     ])
     .expect("serialize dynamic counter arguments")
 }
-
 async fn wait_for_approved_txs(
     client: &iroha::client::Client,
     baseline: u64,
@@ -613,7 +591,6 @@ async fn wait_for_approved_txs(
     let deadline = Instant::now() + timeout;
     let mut last_status = None;
     let mut last_error = None;
-
     while Instant::now() < deadline {
         match tokio::task::spawn_blocking({
             let client = client.clone();
@@ -633,15 +610,12 @@ async fn wait_for_approved_txs(
                 last_error = Some(err.to_string());
             }
         }
-
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-
     Err(eyre!(
         "{stage}: timed out waiting for txs_approved to advance beyond {baseline}; last_status={last_status:?}; last_error={last_error:?}"
     ))
 }
-
 fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
     let status = payload
         .get("content")
@@ -653,7 +627,6 @@ fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
         _ => None,
     }
 }
-
 fn pipeline_status_block_height(payload: &norito::json::Value) -> Option<u64> {
     payload
         .get("content")
@@ -662,7 +635,6 @@ fn pipeline_status_block_height(payload: &norito::json::Value) -> Option<u64> {
         .get("block_height")
         .and_then(norito::json::Value::as_u64)
 }
-
 async fn wait_for_tx_applied(
     http: &reqwest::Client,
     torii_url: &reqwest::Url,
@@ -678,7 +650,6 @@ async fn wait_for_tx_applied(
     let mut last_kind = String::from("unavailable");
     let mut last_payload = String::new();
     let mut last_error = String::new();
-
     loop {
         match http
             .get(status_url.clone())
@@ -739,7 +710,6 @@ async fn wait_for_tx_applied(
                 last_error = format!("{err}");
             }
         }
-
         if Instant::now() >= deadline {
             return Err(eyre!(
                 "{stage}: timed out waiting for tx `{tx_hash_hex}` to reach Applied; last_kind={last_kind}, last_payload={last_payload}, last_error={last_error}"
@@ -748,7 +718,6 @@ async fn wait_for_tx_applied(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
 pub(super) fn deploy_contract_locally_signed(
     client: &iroha::client::Client,
     artifact: &[u8],
@@ -763,7 +732,6 @@ pub(super) fn deploy_contract_locally_signed(
         CommitContractDeployment, FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
         SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
     };
-
     let verified = ivm::verify_contract_artifact(artifact)
         .map_err(|error| eyre!("verify contract artifact: {error}"))?;
     let manifest = verified
@@ -841,7 +809,6 @@ pub(super) fn deploy_contract_locally_signed(
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         metadata,
     )?;
-
     Ok((
         contract_address,
         hex::encode(verified.code_hash.as_ref()),
@@ -849,7 +816,6 @@ pub(super) fn deploy_contract_locally_signed(
         deployment_tx_hash,
     ))
 }
-
 async fn deploy_contract_artifact(
     client: &iroha::client::Client,
     http: &reqwest::Client,
@@ -884,7 +850,6 @@ async fn deploy_contract_artifact(
         deployment_block_height,
     ))
 }
-
 async fn contract_state_json_value(
     http: &reqwest::Client,
     torii_url: &reqwest::Url,
@@ -920,7 +885,6 @@ async fn contract_state_json_value(
         .cloned()
         .ok_or_else(|| eyre!("contract state `{path}` was not decoded: {payload:?}"))
 }
-
 #[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
@@ -949,12 +913,9 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
     else {
         return Ok(());
     };
-
     let client = network.client();
-
     // Wait for genesis to be committed before submitting additional transactions
     network.ensure_blocks(1).await?;
-
     let code_bytes = minimal_contract_artifact();
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
         "deploy_test",
@@ -969,7 +930,6 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
     .await
     .expect("locally signed contract deployment task")?;
     let http = integration_tests::http::client();
-
     // Poll status until we see the deploy transaction committed
     let deadline = Instant::now() + std::time::Duration::from_secs(120);
     let mut status = None;
@@ -1016,7 +976,6 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
             last_status_error.as_deref().unwrap_or("none")
         ));
     }
-
     // GET by code hash
     let get_url = client
         .torii_url
@@ -1057,7 +1016,6 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
         )
     })?;
     let got: norito::json::Value = norito::json::from_str(&got_txt)?;
-
     // Validate manifest present and code_bytes absent
     let (got_manifest, got_bytes) = match &got {
         norito::json::Value::Object(m) => (
@@ -1076,10 +1034,8 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
     };
     assert_eq!(got_code, Some(code_hash_hex.as_str()));
     assert!(got_bytes.is_null(), "code_bytes must be null/absent");
-
     Ok(())
 }
-
 #[tokio::test]
 async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> Result<()> {
     let register_permission: Permission = CanRegisterSmartContractCode.into();
@@ -1114,7 +1070,6 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
         return Ok(());
     };
     assert_eq!(network.peers().len(), 4, "test requires four voting peers");
-
     network.ensure_blocks(1).await?;
     let alice_client = network.peers()[0].client();
     let bob_client = network.peers()[1].client();
@@ -1128,9 +1083,7 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
         "deploy dynamic-access counter",
     )
     .await?;
-
     network.ensure_blocks(deploy_height).await?;
-
     let alice_submission = tokio::task::spawn_blocking({
         let client = alice_client.clone();
         let contract_address = contract_address.clone();
@@ -1178,7 +1131,6 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| eyre!("helper bump response missing tx_hash_hex: {bob_response:?}"))?
         .to_owned();
-
     let (alice_block_height, bob_block_height) = tokio::try_join!(
         wait_for_tx_applied(
             &http,
@@ -1199,9 +1151,7 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
         alice_block_height, bob_block_height,
         "concurrent conflicting calls must be observed in the same committed block"
     );
-
     network.ensure_blocks(alice_block_height).await?;
-
     let mut peer_values = Vec::with_capacity(network.peers().len());
     for peer in network.peers() {
         let peer_client = peer.client();
@@ -1224,10 +1174,8 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
         peer_values.windows(2).all(|pair| pair[0] == pair[1]),
         "contract state differs across voting peers: {peer_values:?}"
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<()> {
     let seeded_accounts = (0..6)
@@ -1318,7 +1266,6 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         SumeragiV2GenesisContextParameters::recommended().da_layout,
         "typed-query pagination gate requires the signed mandatory DA layout"
     );
-
     network.ensure_blocks(1).await?;
     let rbc_baseline =
         wait_for_cross_peer_rbc_diagnostics(&network, Duration::from_secs(120), None, None).await?;
@@ -1340,7 +1287,6 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         Some((deploy_height, &deployment_tx_hash)),
     )
     .await?;
-
     let (account_ids, asset_ids, asset_definition_ids, domain_ids, nft_ids) =
         tokio::task::spawn_blocking({
             let client = deploy_client.clone();
@@ -1385,13 +1331,11 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
             }
         })
         .await??;
-
     assert_canonical_query_order(&account_ids, "account");
     assert_canonical_query_order(&asset_ids, "asset");
     assert_canonical_query_order(&asset_definition_ids, "asset-definition");
     assert_canonical_query_order(&domain_ids, "domain");
     assert_canonical_query_order(&nft_ids, "NFT");
-
     let families: [(&str, &str, Vec<String>, &[&str]); 5] = [
         (
             "accounts",
@@ -1442,7 +1386,6 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
             expected_ids.len()
         );
     }
-
     const CURSOR_PAGE_LIMIT: i64 = 3;
     let mut peer_results = Vec::with_capacity(network.peers().len());
     for peer in network.peers() {
@@ -1481,7 +1424,6 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
                 }
                 offset = next_offset;
             }
-
             pages.push(
                 invoke_typed_core_query_page(peer.client(), &contract_address, entrypoint, 0, 64)
                     .await?,
@@ -1490,7 +1432,6 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         }
         peer_results.push(family_pages);
     }
-
     assert!(
         peer_results.windows(2).all(|pair| pair[0] == pair[1]),
         "typed page projections for the five core entity families differ across voting peers: \
@@ -1535,7 +1476,6 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
             expected_ids.as_slice(),
             "{entrypoint} cursor walk must return every canonical ID exactly once"
         );
-
         let (all_ids, all_next) = typed_query_page_parts(all_page, view_name)?;
         assert_eq!(
             &all_ids, expected_ids,
@@ -1547,7 +1487,6 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         );
         assert_typed_query_projection(all_page, view_name, expected_fields)?;
     }
-
     const INVALID_PAGINATION_BOUNDS: [(&str, &str, &str, &str, &str); 8] = [
         (
             "negative offset",
@@ -1694,10 +1633,8 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
             );
         }
     }
-
     Ok(())
 }
-
 #[tokio::test]
 async fn contract_state_survives_across_calls_in_sora_profile_network() -> Result<()> {
     let register_permission: Permission = CanRegisterSmartContractCode.into();
@@ -1726,11 +1663,9 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
         return Ok(());
     };
     assert_eq!(network.peers().len(), 4, "test requires four voting peers");
-
     let client = network.client();
     let http = integration_tests::http::client();
     network.ensure_blocks(1).await?;
-
     let code_bytes = contract_state_probe_artifact();
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
         "contract_state_probe",
@@ -1748,7 +1683,6 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
         iroha_test_samples::ALICE_KEYPAIR.private_key().clone(),
     );
     let authority_literal = iroha_test_samples::ALICE_ID.to_string();
-
     let activate_body = norito::json::object([
         (
             "authority",
@@ -1817,7 +1751,6 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
         )
         .await?;
     }
-
     let hajimari_body = norito::json::object([
         (
             "authority",
@@ -1894,7 +1827,6 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
         )
         .await?;
     }
-
     let verify_body = norito::json::object([
         (
             "authority",
@@ -1964,7 +1896,6 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
     } else {
         wait_for_approved_txs(&client, verify_baseline, Duration::from_secs(30), "verify").await?;
     }
-
     let mut state_url = client.torii_url.join("/v1/contracts/state")?;
     state_url
         .query_pairs_mut()
@@ -1991,6 +1922,5 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
         found,
         "probe_readback should be persisted: {state_payload:?}"
     );
-
     Ok(())
 }

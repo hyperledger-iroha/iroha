@@ -1,5 +1,4 @@
 use ivm::{self, PointerType, SyscallPolicy};
-
 #[test]
 fn abi_v1_policy_allows_full_pointer_surface() {
     use PointerType::*;
@@ -26,7 +25,6 @@ fn abi_v1_policy_allows_full_pointer_surface() {
         assert!(ivm::is_type_allowed_for_policy(SyscallPolicy::AbiV1, ty))
     }
 }
-
 #[test]
 fn abi_v1_assigns_quantity_and_rejects_the_unassigned_numeric_pointer_id() {
     assert_eq!(PointerType::from_u16(0x0010), Some(PointerType::Quantity));

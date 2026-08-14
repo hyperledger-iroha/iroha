@@ -3,9 +3,6 @@
 #![allow(clippy::redundant_closure_for_method_calls)]
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs)]
-
-use std::sync::Arc;
-
 use axum::{Router, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -14,8 +11,8 @@ use iroha_core::{
     state::{State, World},
 };
 use norito::json;
+use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
-
 #[tokio::test]
 async fn protected_namespaces_endpoints_work() {
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
@@ -28,7 +25,6 @@ async fn protected_namespaces_endpoints_work() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(World::default(), kura, query));
-
     // Wire routes for GET and POST
     let app = Router::new().route(
         "/v1/gov/protected-namespaces",
@@ -51,7 +47,6 @@ async fn protected_namespaces_endpoints_work() {
             }
         }),
     );
-
     // GET should return found=false
     let req_get0 = http::Request::builder()
         .method("GET")
@@ -63,7 +58,6 @@ async fn protected_namespaces_endpoints_work() {
     let body0 = resp0.into_body().collect().await.unwrap().to_bytes();
     let v0: norito::json::Value = norito::json::from_slice(&body0).unwrap();
     assert_eq!(v0.get("found").and_then(|x| x.as_bool()), Some(false));
-
     // POST apply namespaces
     let body_value = iroha_torii::json_object(vec![iroha_torii::json_entry(
         "namespaces",
@@ -78,7 +72,6 @@ async fn protected_namespaces_endpoints_work() {
         .unwrap();
     let resp1 = app.clone().oneshot(req_post).await.unwrap();
     assert_eq!(resp1.status(), http::StatusCode::OK);
-
     // GET now returns found=true with namespaces
     let req_get1 = http::Request::builder()
         .method("GET")

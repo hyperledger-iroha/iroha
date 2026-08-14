@@ -1,43 +1,33 @@
 fn volatile_summary_is_well_formed(summary: VolatileSummary, validator_count: u64) -> bool {
     volatile_summary_well_formed_body!(summary, validator_count)
 }
-
 fn signed_message_class_is_valid(facts: TransitionFacts) -> bool {
     signed_message_class_body!(facts)
 }
-
 fn stutter_action_is_valid(facts: TransitionFacts) -> bool {
     stutter_action_body!(facts)
 }
-
 fn begin_wal_action_is_valid(facts: TransitionFacts) -> bool {
     begin_wal_action_body!(facts)
 }
-
 fn acknowledge_wal_action_is_valid(facts: TransitionFacts) -> bool {
     acknowledge_wal_action_body!(facts)
 }
-
 fn validation_completed_action_is_valid(facts: TransitionFacts) -> bool {
     validation_completed_action_body!(facts, effect_count)
 }
-
 fn body_progress_action_is_valid(facts: TransitionFacts) -> bool {
     body_progress_action_body!(facts, validation_completed_action_is_valid)
 }
-
 fn volatile_protocol_action_is_valid(facts: TransitionFacts) -> bool {
     volatile_protocol_action_body!(facts)
 }
-
 fn complete_application_action_is_valid(facts: TransitionFacts) -> bool {
     complete_application_action_body!(facts)
 }
-
 fn resume_after_replay_action_is_valid(facts: TransitionFacts) -> bool {
     resume_after_replay_action_body!(facts, effect_count)
 }
-
 fn action_kind_is_valid(facts: TransitionFacts) -> bool {
     action_kind_relation_body!(
         facts,
@@ -50,19 +40,15 @@ fn action_kind_is_valid(facts: TransitionFacts) -> bool {
         resume_after_replay_action_is_valid,
     )
 }
-
 fn named_action_is_valid(facts: TransitionFacts) -> bool {
     production_action_relation_body!(facts, signed_message_class_is_valid, action_kind_is_valid,)
 }
-
 fn effect_slots_are_authorized(trace: EffectTrace) -> bool {
     effect_slots_authorized_body!(trace)
 }
-
 fn effect_count(trace: EffectTrace, kind: u8) -> u64 {
     effect_count_body!(trace, kind)
 }
-
 #[allow(clippy::too_many_arguments)]
 fn effect_order_constraints(
     trace: EffectTrace,
@@ -87,11 +73,9 @@ fn effect_order_constraints(
         enter_count,
     )
 }
-
 fn effect_order_is_valid(trace: EffectTrace, event_kind: u8) -> bool {
     effect_ordering_gate_body!(trace, event_kind, effect_count, effect_order_constraints)
 }
-
 fn effect_trace_accepts(trace: EffectTrace, event_kind: u8) -> bool {
     effect_trace_gate_body!(
         trace,
@@ -100,7 +84,6 @@ fn effect_trace_accepts(trace: EffectTrace, event_kind: u8) -> bool {
         effect_order_is_valid,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 fn transition_branch_constraints(
     facts: TransitionFacts,
@@ -119,11 +102,9 @@ fn transition_branch_constraints(
         enter_count,
     )
 }
-
 fn transition_branch_accepts(facts: TransitionFacts) -> bool {
     transition_branch_gate_body!(facts, effect_count, transition_branch_constraints)
 }
-
 fn accepts_facts(facts: TransitionFacts) -> bool {
     production_transition_gate_body!(
         facts,
@@ -133,7 +114,6 @@ fn accepts_facts(facts: TransitionFacts) -> bool {
         transition_branch_accepts,
     )
 }
-
 /// Derive the complete checked relation from concrete primitive projections.
 fn transition_facts(projection: TransitionProjection<'_>) -> TransitionFacts {
     transition_facts_from_projection_body!(
@@ -143,7 +123,6 @@ fn transition_facts(projection: TransitionProjection<'_>) -> TransitionFacts {
         TransitionDeltaFacts,
     )
 }
-
 /// Predicate-level evidence for a transition rejected by [`accepts`].
 ///
 /// This is diagnostic-only: every field is derived from the same primitive
@@ -163,7 +142,6 @@ pub(crate) struct TransitionDiagnostic {
     transition_branch_valid: bool,
     enter_view_effective_lock_valid: bool,
 }
-
 impl fmt::Debug for TransitionDiagnostic {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -194,7 +172,6 @@ impl fmt::Debug for TransitionDiagnostic {
             .finish()
     }
 }
-
 /// Derive predicate-level diagnostics without weakening the production gate.
 #[must_use]
 pub(crate) fn diagnose(projection: TransitionProjection<'_>) -> TransitionDiagnostic {
@@ -251,7 +228,6 @@ pub(crate) fn diagnose(projection: TransitionProjection<'_>) -> TransitionDiagno
         enter_view_effective_lock_valid,
     }
 }
-
 /// Execute the verified transition kernel used as the production commit gate.
 ///
 /// No caller-provided authorization or action-exactness boolean crosses this
@@ -303,7 +279,6 @@ pub(crate) fn check(
         None
     }
 }
-
 /// Report whether the complete production transition relation accepts.
 ///
 /// Production uses [`check`] and consumes its opaque evidence at state

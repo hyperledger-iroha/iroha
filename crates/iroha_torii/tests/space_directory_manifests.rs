@@ -1,9 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii Space Directory manifest endpoint tests.
 #![cfg(feature = "app_api")]
-
-use std::sync::Arc;
-
 use axum::{Router, http::Request, response::IntoResponse as _, routing::post};
 use base64::Engine as _;
 use hex::ToHex;
@@ -32,16 +29,14 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use norito::codec::Decode;
 use norito::json::{self, Value};
+use std::sync::Arc;
 use tower::ServiceExt as _;
-
 #[path = "fixtures.rs"]
 mod fixtures;
-
 fn checked_space_directory_ed25519_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked space directory Ed25519 fixture keypair")
 }
-
 fn checked_space_directory_account_fixture() -> AccountId {
     AccountId::new(
         KeyPair::try_random()
@@ -50,7 +45,6 @@ fn checked_space_directory_account_fixture() -> AccountId {
             .clone(),
     )
 }
-
 fn cbdc_manifest_entry(
     dataspace: DataSpaceId,
     method: &str,
@@ -78,7 +72,6 @@ fn cbdc_manifest_entry(
         },
     }
 }
-
 async fn decode_unsigned_transaction_draft(
     response: axum::response::Response,
 ) -> TransactionPayload {
@@ -107,18 +100,15 @@ async fn decode_unsigned_transaction_draft(
     );
     payload
 }
-
 struct ManifestMutationState {
     queue: Arc<Queue>,
     state: Arc<State>,
 }
-
 struct ManifestMutationHarness {
     router: Router,
     queue: Arc<Queue>,
     state: Arc<State>,
 }
-
 async fn test_manifest_publish_handler(
     axum::extract::State(context): axum::extract::State<Arc<ManifestMutationState>>,
     request: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestPublishDto>,
@@ -131,7 +121,6 @@ async fn test_manifest_publish_handler(
     .await
     .into_response()
 }
-
 async fn test_manifest_revoke_handler(
     axum::extract::State(context): axum::extract::State<Arc<ManifestMutationState>>,
     request: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestRevokeDto>,
@@ -144,7 +133,6 @@ async fn test_manifest_revoke_handler(
     .await
     .into_response()
 }
-
 fn manifest_publish_harness() -> ManifestMutationHarness {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -169,7 +157,6 @@ fn manifest_publish_harness() -> ManifestMutationHarness {
         state,
     }
 }
-
 fn manifest_revoke_harness() -> ManifestMutationHarness {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -194,7 +181,6 @@ fn manifest_revoke_harness() -> ManifestMutationHarness {
         state,
     }
 }
-
 #[test]
 fn space_directory_ed25519_fixture_uses_checked_key_generation() {
     let key_pair = checked_space_directory_ed25519_key_fixture();
@@ -202,10 +188,8 @@ fn space_directory_ed25519_fixture_uses_checked_key_generation() {
         .public_key()
         .try_algorithm()
         .expect("fixture space directory Ed25519 public key has a valid algorithm");
-
     assert_eq!(algorithm, Algorithm::Ed25519);
 }
-
 #[test]
 fn space_directory_account_fixture_uses_checked_ed25519_key_generation() {
     let account = checked_space_directory_account_fixture();
@@ -213,10 +197,8 @@ fn space_directory_account_fixture_uses_checked_ed25519_key_generation() {
         .expect_single_signatory()
         .try_algorithm()
         .expect("fixture space directory account public key has a valid algorithm");
-
     assert_eq!(algorithm, Algorithm::Ed25519);
 }
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn space_directory_manifest_endpoint_returns_records() {
@@ -235,7 +217,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
     world
         .uaid_dataspaces_mut_for_testing()
         .insert(uaid, bindings);
-
     let manifest = AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -250,7 +231,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
             Some("Wholesale daily cap"),
         )],
     };
-
     let mut record = SpaceDirectoryManifestRecord::new(manifest);
     record.lifecycle.activated_epoch = Some(4_096);
     let expected_hash = record.manifest_hash.as_ref().encode_hex::<String>();
@@ -259,7 +239,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
     world
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, set);
-
     let mut state = State::new_for_testing(world, kura.clone(), query);
     let dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata::default(),
@@ -273,9 +252,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
     .expect("dataspace catalog");
     state.nexus.get_mut().dataspace_catalog = dataspace_catalog;
     let state = Arc::new(state);
-
     let torii = fixtures::StandardToriiHarness::from_state(&cfg, &kura, state.clone());
-
     let app = torii.router();
     let resp = fixtures::request_get(&app, &format!("/v1/space-directory/uaids/{uaid}/manifests"))
         .await
@@ -300,9 +277,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
         entries[0]["accounts"][0],
         Value::from(account_id.to_string())
     );
-
     let raw_uaid = uaid.to_string().trim_start_matches("uaid:").to_owned();
-
     // Bindings endpoint returns canonical account literals.
     let app = torii.router();
     let resp = fixtures::request_get(&app, &format!("/v1/space-directory/uaids/{uaid}"))
@@ -319,7 +294,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
         dataspaces[0]["accounts"][0],
         Value::from(account_id.to_string())
     );
-
     // Raw 64-hex UAID paths are accepted and canonicalized in the response payload.
     let app = torii.router();
     let resp = fixtures::request_get(&app, &format!("/v1/space-directory/uaids/{raw_uaid}"))
@@ -333,7 +307,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
         raw_bindings_doc["dataspaces"][0]["accounts"][0],
         Value::from(account_id.to_string())
     );
-
     // Dataspace filter excludes unknown ids.
     let app = torii.router();
     let resp = fixtures::request_get(
@@ -354,7 +327,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
         0,
         "filter removes non-matching dataspaces"
     );
-
     // Configured dataspace with no explicit lane route still falls back to fanout filtering.
     let app = torii.router();
     let resp = fixtures::request_get(
@@ -380,7 +352,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
         filtered_existing_doc["manifests"][0]["manifest_hash"],
         Value::from(expected_hash.as_str())
     );
-
     let app = torii.router();
     let resp = fixtures::request_get(
         &app,
@@ -397,7 +368,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
         raw_manifests_doc["manifests"][0]["manifest_hash"],
         Value::from(expected_hash.as_str())
     );
-
     // Status filter (active) yields the entry, limit/offset paginate.
     let app = torii.router();
     let resp = fixtures::request_get(
@@ -415,7 +385,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
         1,
         "status=Active returns bindings"
     );
-
     // Invalid status values are rejected by the manifest query parser.
     let app = torii.router();
     let resp = fixtures::request_get(
@@ -425,7 +394,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
     .await
     .expect("response");
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
     // Build a revoked + second manifest world to test inactive/pagination.
     let cfg_rev = iroha_torii::test_utils::mk_minimal_root_cfg();
     let local_peer_id_rev = PeerId::new(cfg_rev.common.key_pair.public_key().clone());
@@ -438,7 +406,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
     world_revoked
         .uaid_dataspaces_mut_for_testing()
         .insert(uaid, bindings);
-
     let mut record_revoked = SpaceDirectoryManifestRecord::new(AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -452,7 +419,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
     record_revoked
         .lifecycle
         .mark_revoked(200, Some("test revoke".into()));
-
     let mut record_active = SpaceDirectoryManifestRecord::new(AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -463,14 +429,12 @@ async fn space_directory_manifest_endpoint_returns_records() {
         entries: Vec::new(),
     });
     record_active.lifecycle.activated_epoch = Some(150);
-
     let mut set = SpaceDirectoryManifestSet::default();
     set.upsert(record_revoked);
     set.upsert(record_active);
     world_revoked
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, set);
-
     let kura_rev = Kura::blank_kura_for_testing();
     let query_rev = LiveQueryStore::start_test();
     let mut state_revoked = State::new_for_testing(world_revoked, kura_rev.clone(), query_rev);
@@ -509,7 +473,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
         true,
         false,
     );
-
     // Inactive filter returns revoked manifest.
     let app = torii_rev.router();
     let resp = fixtures::request_get(
@@ -531,7 +494,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
         inactive_doc["manifests"][0]["status"],
         Value::from("Revoked")
     );
-
     // Active filter + pagination.
     let resp = fixtures::request_get(
         &app,
@@ -548,7 +510,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
         1,
         "pagination limits to 1 entry"
     );
-
     // limit=0 is treated as "no limit" even when multiple manifests exist.
     let resp = fixtures::request_get(
         &app,
@@ -566,7 +527,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
         "limit=0 should return all matching manifests"
     );
 }
-
 #[tokio::test]
 async fn space_directory_get_routes_reject_invalid_uaid_literals() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -576,22 +536,18 @@ async fn space_directory_get_routes_reject_invalid_uaid_literals() {
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-
     let torii = fixtures::StandardToriiHarness::from_state(&cfg, &kura, state.clone());
-
     let app = torii.router();
     let bindings_resp = fixtures::request_get(&app, "/v1/space-directory/uaids/uaid:1234")
         .await
         .expect("bindings response");
     assert_eq!(bindings_resp.status(), StatusCode::BAD_REQUEST);
-
     let manifests_resp =
         fixtures::request_get(&app, "/v1/space-directory/uaids/uaid:1234/manifests")
             .await
             .expect("manifests response");
     assert_eq!(manifests_resp.status(), StatusCode::BAD_REQUEST);
 }
-
 #[tokio::test]
 async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -604,7 +560,6 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
     let primary_account = checked_space_directory_account_fixture();
     let secondary_account = checked_space_directory_account_fixture();
     let tertiary_account = checked_space_directory_account_fixture();
-
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let mut bindings = iroha_core::nexus::space_directory::UaidDataspaceBindings::default();
@@ -614,7 +569,6 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
     world
         .uaid_dataspaces_mut_for_testing()
         .insert(uaid, bindings);
-
     let mut primary_record = SpaceDirectoryManifestRecord::new(AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -625,7 +579,6 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
         entries: Vec::new(),
     });
     primary_record.lifecycle.mark_activated(4_096);
-
     let mut secondary_record = SpaceDirectoryManifestRecord::new(AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -636,14 +589,12 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
         entries: Vec::new(),
     });
     secondary_record.lifecycle.mark_activated(4_097);
-
     let mut set = SpaceDirectoryManifestSet::default();
     set.upsert(primary_record);
     set.upsert(secondary_record);
     world
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, set);
-
     let mut state = State::new_for_testing(world, kura.clone(), query);
     state.nexus.get_mut().dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata::default(),
@@ -656,9 +607,7 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
     ])
     .expect("dataspace catalog");
     let state = Arc::new(state);
-
     let torii = fixtures::StandardToriiHarness::from_state(&cfg, &kura, state.clone());
-
     let resp = torii
         .router()
         .oneshot(fixtures::get_request(
@@ -672,7 +621,6 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
     assert_eq!(doc["uaid"], Value::from(uaid.to_string()));
     let dataspaces = doc["dataspaces"].as_array().expect("dataspaces array");
     assert_eq!(dataspaces.len(), 2);
-
     let primary = dataspaces
         .iter()
         .find(|entry| entry["dataspace_id"] == Value::from(primary_dataspace.as_u64()))
@@ -689,7 +637,6 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
     actual_primary_accounts.sort_unstable();
     expected_primary_accounts.sort_unstable();
     assert_eq!(actual_primary_accounts, expected_primary_accounts);
-
     let secondary = dataspaces
         .iter()
         .find(|entry| entry["dataspace_id"] == Value::from(secondary_dataspace.as_u64()))
@@ -703,7 +650,6 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
         Value::from(tertiary_account.to_string())
     );
 }
-
 #[tokio::test]
 async fn space_directory_manifest_endpoint_keeps_prefilter_total_when_public_page_is_empty() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -713,10 +659,8 @@ async fn space_directory_manifest_endpoint_keeps_prefilter_total_when_public_pag
     let uaid = UniversalAccountId::from_hash(Hash::new(b"space-directory-empty-page"));
     let active_dataspace = DataSpaceId::new(41);
     let revoked_dataspace = DataSpaceId::new(42);
-
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
-
     let mut active_record = SpaceDirectoryManifestRecord::new(AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -727,7 +671,6 @@ async fn space_directory_manifest_endpoint_keeps_prefilter_total_when_public_pag
         entries: Vec::new(),
     });
     active_record.lifecycle.mark_activated(4_096);
-
     let mut revoked_record = SpaceDirectoryManifestRecord::new(AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -739,14 +682,12 @@ async fn space_directory_manifest_endpoint_keeps_prefilter_total_when_public_pag
     });
     revoked_record.lifecycle.mark_activated(4_097);
     revoked_record.lifecycle.mark_revoked(4_200, None);
-
     let mut set = SpaceDirectoryManifestSet::default();
     set.upsert(active_record);
     set.upsert(revoked_record);
     world
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, set);
-
     let mut state = State::new_for_testing(world, kura.clone(), query);
     state.nexus.get_mut().dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata::default(),
@@ -765,9 +706,7 @@ async fn space_directory_manifest_endpoint_keeps_prefilter_total_when_public_pag
     ])
     .expect("dataspace catalog");
     let state = Arc::new(state);
-
     let torii = fixtures::StandardToriiHarness::from_state(&cfg, &kura, state.clone());
-
     let resp = torii
         .router()
         .oneshot(fixtures::get_request(
@@ -786,7 +725,6 @@ async fn space_directory_manifest_endpoint_keeps_prefilter_total_when_public_pag
         "total should reflect the pre-status-filter set size even when pagination clears the page",
     );
 }
-
 #[tokio::test]
 async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -796,7 +734,6 @@ async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json(
     let dataspace = DataSpaceId::new(21);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"space-directory-null-reason"));
     let account = checked_space_directory_account_fixture();
-
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let mut bindings = iroha_core::nexus::space_directory::UaidDataspaceBindings::default();
@@ -804,7 +741,6 @@ async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json(
     world
         .uaid_dataspaces_mut_for_testing()
         .insert(uaid, bindings);
-
     let manifest = AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -822,7 +758,6 @@ async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json(
     world
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, set);
-
     let mut state = State::new_for_testing(world, kura.clone(), query);
     state.nexus.get_mut().dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata::default(),
@@ -835,9 +770,7 @@ async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json(
     ])
     .expect("dataspace catalog");
     let state = Arc::new(state);
-
     let torii = fixtures::StandardToriiHarness::from_state(&cfg, &kura, state.clone());
-
     let resp = torii
         .router()
         .oneshot(fixtures::get_request(
@@ -863,11 +796,9 @@ async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json(
         "reasonless revocations should stay explicit nulls in route payloads",
     );
 }
-
 #[tokio::test]
 async fn manifest_publish_endpoint_returns_unsigned_transaction_draft() {
     let ManifestMutationHarness { router, queue, .. } = manifest_publish_harness();
-
     let creds = iroha_torii::test_utils::random_authority();
     let dataspace = DataSpaceId::new(11);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"publish-manifest"));
@@ -893,7 +824,6 @@ async fn manifest_publish_endpoint_returns_unsigned_transaction_draft() {
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .expect("request");
-
     let resp = fixtures::request(&router, req)
         .await
         .expect("publish response body");
@@ -904,11 +834,9 @@ async fn manifest_publish_endpoint_returns_unsigned_transaction_draft() {
     ));
     assert_eq!(queue.queued_len(), 0, "Torii must not submit the draft");
 }
-
 #[tokio::test]
 async fn manifest_publish_endpoint_applies_reason_only_to_entries_missing_notes() {
     let ManifestMutationHarness { router, queue, .. } = manifest_publish_harness();
-
     let creds = iroha_torii::test_utils::random_authority();
     let dataspace = DataSpaceId::new(11);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"publish-manifest-reason"));
@@ -937,7 +865,6 @@ async fn manifest_publish_endpoint_applies_reason_only_to_entries_missing_notes(
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .expect("request");
-
     let resp = fixtures::request(&router, req)
         .await
         .expect("publish response body");
@@ -960,11 +887,9 @@ async fn manifest_publish_endpoint_applies_reason_only_to_entries_missing_notes(
         Some("keep existing")
     );
 }
-
 #[tokio::test]
 async fn manifest_publish_endpoint_preserves_missing_notes_when_reason_is_omitted() {
     let ManifestMutationHarness { router, queue, .. } = manifest_publish_harness();
-
     let creds = iroha_torii::test_utils::random_authority();
     let dataspace = DataSpaceId::new(12);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"publish-manifest-no-reason"));
@@ -989,7 +914,6 @@ async fn manifest_publish_endpoint_preserves_missing_notes_when_reason_is_omitte
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .expect("request");
-
     let resp = fixtures::request(&router, req)
         .await
         .expect("publish response body");
@@ -1007,11 +931,9 @@ async fn manifest_publish_endpoint_preserves_missing_notes_when_reason_is_omitte
         "omitting reason should leave missing notes untouched",
     );
 }
-
 #[tokio::test]
 async fn manifest_revoke_endpoint_returns_unsigned_transaction_draft() {
     let ManifestMutationHarness { router, queue, .. } = manifest_revoke_harness();
-
     let creds = iroha_torii::test_utils::random_authority();
     let uaid_hash = iroha_crypto::Hash::new(b"space-directory-revoke");
     let uaid_literal = format!("uaid:{}", uaid_hash.as_ref().encode_hex::<String>());
@@ -1029,7 +951,6 @@ async fn manifest_revoke_endpoint_returns_unsigned_transaction_draft() {
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .expect("request");
-
     let resp = fixtures::request(&router, req)
         .await
         .expect("revoke response body");
@@ -1040,11 +961,9 @@ async fn manifest_revoke_endpoint_returns_unsigned_transaction_draft() {
     ));
     assert_eq!(queue.queued_len(), 0, "Torii must not submit the draft");
 }
-
 #[tokio::test]
 async fn manifest_revoke_endpoint_canonicalizes_uaid_literal_in_queued_instruction() {
     let ManifestMutationHarness { router, queue, .. } = manifest_revoke_harness();
-
     let creds = iroha_torii::test_utils::random_authority();
     let uaid_hash = iroha_crypto::Hash::new(b"space-directory-revoke-canonical");
     let expected_uaid = UniversalAccountId::from_hash(uaid_hash);
@@ -1066,7 +985,6 @@ async fn manifest_revoke_endpoint_canonicalizes_uaid_literal_in_queued_instructi
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .expect("request");
-
     let resp = fixtures::request(&router, req)
         .await
         .expect("revoke response body");
@@ -1084,11 +1002,9 @@ async fn manifest_revoke_endpoint_canonicalizes_uaid_literal_in_queued_instructi
     assert_eq!(revoke.revoked_epoch, 4096);
     assert_eq!(revoke.reason.as_deref(), Some("test emergency revoke"));
 }
-
 #[tokio::test]
 async fn manifest_revoke_endpoint_accepts_raw_hex_uaid_without_reason() {
     let ManifestMutationHarness { router, queue, .. } = manifest_revoke_harness();
-
     let creds = iroha_torii::test_utils::random_authority();
     let uaid_hash = iroha_crypto::Hash::new(b"space-directory-revoke-raw-no-reason");
     let expected_uaid = UniversalAccountId::from_hash(uaid_hash);
@@ -1106,7 +1022,6 @@ async fn manifest_revoke_endpoint_accepts_raw_hex_uaid_without_reason() {
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .expect("request");
-
     let resp = fixtures::request(&router, req)
         .await
         .expect("revoke response body");
@@ -1127,7 +1042,6 @@ async fn manifest_revoke_endpoint_accepts_raw_hex_uaid_without_reason() {
         "omitted revoke reason should stay absent in the drafted instruction",
     );
 }
-
 #[tokio::test]
 async fn manifest_revoke_endpoint_rejects_invalid_uaid_before_queueing() {
     let ManifestMutationHarness {
@@ -1135,7 +1049,6 @@ async fn manifest_revoke_endpoint_rejects_invalid_uaid_before_queueing() {
         queue,
         state,
     } = manifest_revoke_harness();
-
     let creds = iroha_torii::test_utils::random_authority();
     let value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
@@ -1151,7 +1064,6 @@ async fn manifest_revoke_endpoint_rejects_invalid_uaid_before_queueing() {
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .expect("request");
-
     let resp = fixtures::request(&router, req)
         .await
         .expect("revoke response body");
@@ -1170,12 +1082,10 @@ async fn manifest_revoke_endpoint_rejects_invalid_uaid_before_queueing() {
         "invalid UAID must not leave pending transactions"
     );
 }
-
 #[tokio::test]
 async fn api_router_registers_space_directory_manifest_mutation_routes() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
-
     let creds = iroha_torii::test_utils::random_authority();
     let dataspace = DataSpaceId::new(11);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"router-manifest"));
@@ -1222,7 +1132,6 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
         StatusCode::NOT_FOUND,
         "publish route must be registered on the Torii API router",
     );
-
     let uaid_literal = format!(
         "uaid:{}",
         Hash::new(b"router-revoke").as_ref().encode_hex::<String>()

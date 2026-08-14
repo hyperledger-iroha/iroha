@@ -1,8 +1,6 @@
 //! Ensures the GPU Poseidon tables embed the canonical manifest.
-
 use fastpq_isi::poseidon::STATE_WIDTH;
 use fastpq_prover::poseidon_manifest;
-
 #[test]
 fn metal_poseidon_tables_match_manifest() {
     let manifest = poseidon_manifest();
@@ -21,7 +19,6 @@ fn metal_poseidon_tables_match_manifest() {
         "Metal MDS matrix diverged from the manifest"
     );
 }
-
 #[test]
 fn cuda_poseidon_tables_match_manifest() {
     let manifest = poseidon_manifest();
@@ -40,7 +37,6 @@ fn cuda_poseidon_tables_match_manifest() {
         "CUDA MDS matrix diverged from the manifest"
     );
 }
-
 fn parse_constant_table(contents: &str, marker: &str) -> Vec<[u64; STATE_WIDTH]> {
     let section = extract_braced_section(contents, marker);
     let values = parse_hex_literals(section);
@@ -54,7 +50,6 @@ fn parse_constant_table(contents: &str, marker: &str) -> Vec<[u64; STATE_WIDTH]>
         .map(|chunk| [chunk[0], chunk[1], chunk[2]])
         .collect()
 }
-
 fn extract_braced_section<'a>(contents: &'a str, marker: &str) -> &'a str {
     let start = contents
         .find(marker)
@@ -84,7 +79,6 @@ fn extract_braced_section<'a>(contents: &'a str, marker: &str) -> &'a str {
     }
     panic!("marker `{marker}` missing closing `}}`");
 }
-
 fn parse_hex_literals(section: &str) -> Vec<u64> {
     let mut values = Vec::new();
     for token in section.split(|c: char| {
@@ -97,7 +91,6 @@ fn parse_hex_literals(section: &str) -> Vec<u64> {
     }
     values
 }
-
 fn parse_hex_token(token: &str) -> u64 {
     let trimmed = token.trim_end_matches(&['u', 'U', 'l', 'L'][..]);
     let digits = trimmed

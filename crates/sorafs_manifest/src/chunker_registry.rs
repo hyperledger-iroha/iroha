@@ -1,17 +1,11 @@
 //! Chunker profile registry helpers used by SoraFS manifests.
-
 #![allow(unexpected_cfgs)]
-
-use std::{collections::HashSet, sync::OnceLock};
-
 use sorafs_chunker::ChunkProfile;
-
+use std::{collections::HashSet, sync::OnceLock};
 /// Multihash code used for CAR payload digests in the default profile.
 pub const DEFAULT_MULTIHASH_CODE: u64 = 0x1f;
-
 /// Canonical dag-cbor codec identifier for manifest roots.
 pub const MANIFEST_DAG_CODEC: u64 = 0x71;
-
 #[derive(Debug, Clone, Copy)]
 struct RawChunkerDescriptor {
     id: u32,
@@ -22,7 +16,6 @@ struct RawChunkerDescriptor {
     multihash_code: u64,
     aliases: &'static [&'static str],
 }
-
 const RAW_REGISTRY: &[RawChunkerDescriptor] = &[
     RawChunkerDescriptor {
         id: 1,
@@ -43,7 +36,6 @@ const RAW_REGISTRY: &[RawChunkerDescriptor] = &[
         aliases: &["sorafs.sf2@1.0.0", "sorafs-sf2"],
     },
 ];
-
 /// Descriptor describing a registered chunker profile.
 #[derive(Debug, Clone, Copy)]
 pub struct ChunkerProfileDescriptor {
@@ -62,13 +54,11 @@ pub struct ChunkerProfileDescriptor {
     /// Additional handles recognised as aliases for negotiation.
     pub aliases: &'static [&'static str],
 }
-
 impl ChunkerProfileDescriptor {
     #[must_use]
     pub fn matches(&self, profile: ChunkProfile, multihash_code: u64) -> bool {
         self.profile == profile && self.multihash_code == multihash_code
     }
-
     const fn from_raw(raw: &RawChunkerDescriptor) -> Self {
         Self {
             id: crate::ProfileId(raw.id),
@@ -81,7 +71,6 @@ impl ChunkerProfileDescriptor {
         }
     }
 }
-
 fn registry_storage() -> &'static Vec<ChunkerProfileDescriptor> {
     static REGISTRY: OnceLock<Vec<ChunkerProfileDescriptor>> = OnceLock::new();
     REGISTRY.get_or_init(|| {
@@ -91,26 +80,22 @@ fn registry_storage() -> &'static Vec<ChunkerProfileDescriptor> {
             .collect()
     })
 }
-
 /// Returns the canonical registry entries.
 #[must_use]
 pub fn registry() -> &'static [ChunkerProfileDescriptor] {
     registry_storage().as_slice()
 }
-
 /// Returns the descriptor matching `profile_id`, if any.
 #[must_use]
 pub fn lookup(id: crate::ProfileId) -> Option<&'static ChunkerProfileDescriptor> {
     registry().iter().find(|entry| entry.id == id)
 }
-
 /// Returns the descriptor matching `namespace.name@semver` or `namespace/name@semver`.
 #[must_use]
 pub fn lookup_by_handle(handle: &str) -> Option<&'static ChunkerProfileDescriptor> {
     let (namespace, name, semver) = parse_handle(handle)?;
     lookup_by_identity(namespace, name, semver)
 }
-
 /// Returns the descriptor that matches the provided parameters.
 #[must_use]
 pub fn lookup_by_profile(
@@ -121,7 +106,6 @@ pub fn lookup_by_profile(
         .iter()
         .find(|entry| entry.matches(profile, multihash_code))
 }
-
 /// Returns the descriptor identified by namespace/name/semver triple.
 #[must_use]
 pub fn lookup_by_identity(
@@ -133,7 +117,6 @@ pub fn lookup_by_identity(
         .iter()
         .find(|entry| entry.namespace == namespace && entry.name == name && entry.semver == semver)
 }
-
 /// Returns the default `sorafs-sf1` descriptor.
 #[must_use]
 pub fn default_descriptor() -> &'static ChunkerProfileDescriptor {
@@ -141,18 +124,15 @@ pub fn default_descriptor() -> &'static ChunkerProfileDescriptor {
         .first()
         .expect("registry must contain at least one descriptor")
 }
-
 /// Ensures the registry satisfies governance charter rules.
 #[must_use = "Charter compliance must be checked during startup"]
 pub fn ensure_charter_compliance() -> Result<(), CharterViolation> {
     validate_entries(registry())
 }
-
 fn validate_entries(entries: &[ChunkerProfileDescriptor]) -> Result<(), CharterViolation> {
     let mut prev_id: Option<u32> = None;
     let mut canonical_handles = HashSet::new();
     let mut alias_handles = HashSet::new();
-
     for descriptor in entries {
         let id = descriptor.id.0;
         if id == 0 {
@@ -167,7 +147,6 @@ fn validate_entries(entries: &[ChunkerProfileDescriptor]) -> Result<(), CharterV
             });
         }
         prev_id = Some(id);
-
         let canonical = format!(
             "{}.{}@{}",
             descriptor.namespace, descriptor.name, descriptor.semver
@@ -185,7 +164,6 @@ fn validate_entries(entries: &[ChunkerProfileDescriptor]) -> Result<(), CharterV
         if !canonical_handles.insert(canonical.clone()) {
             return Err(CharterViolation::DuplicateCanonical { handle: canonical });
         }
-
         if descriptor
             .aliases
             .iter()
@@ -202,7 +180,6 @@ fn validate_entries(entries: &[ChunkerProfileDescriptor]) -> Result<(), CharterV
                 handle: canonical.clone(),
             });
         }
-
         for &alias in descriptor.aliases {
             if alias == canonical {
                 continue;
@@ -219,14 +196,11 @@ fn validate_entries(entries: &[ChunkerProfileDescriptor]) -> Result<(), CharterV
             }
         }
     }
-
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn sf2_profile_is_registered_with_aliases() {
         let descriptor = lookup_by_handle("sorafs.sf2@1.0.0")
@@ -247,13 +221,11 @@ mod tests {
             "expected `sorafs-sf2` alias to be registered"
         );
     }
-
     #[test]
     fn charter_compliance_covers_sf2() {
         ensure_charter_compliance().expect("registry must satisfy charter invariants");
     }
 }
-
 /// Violations detected while validating the charter.
 #[derive(Debug, thiserror::Error)]
 pub enum CharterViolation {
@@ -278,7 +250,6 @@ pub enum CharterViolation {
     #[error("chunker profile `{handle}` contains an alias with surrounding whitespace")]
     AliasContainsWhitespace { handle: String },
 }
-
 fn parse_handle(handle: &str) -> Option<(&str, &str, &str)> {
     if let Some((ns_name, semver)) = handle.split_once('@') {
         if let Some((namespace, name)) = ns_name.split_once('.') {

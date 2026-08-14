@@ -5,9 +5,9 @@
 //! one immutable activation record per protocol version, future-only
 //! activation, fail-closed lifecycle transitions, and transaction-atomic
 //! resource charging.
-
-use std::collections::{BTreeMap, btree_map::Entry};
-
+use crate::privacy_profiles::{
+    CompiledPrivacyProfileValidationErrorV1, validate_compiled_privacy_activation_v1,
+};
 use iroha_data_model::{
     ValidationFail,
     isi::privacy::SubmitPrivacyProofV1,
@@ -19,21 +19,15 @@ use iroha_data_model::{
     },
     transaction::SignedTransaction,
 };
+use std::collections::{BTreeMap, btree_map::Entry};
 use thiserror::Error;
-
-use crate::privacy_profiles::{
-    CompiledPrivacyProfileValidationErrorV1, validate_compiled_privacy_activation_v1,
-};
-
 /// Minimum governance lead time for a first-release privacy activation.
 ///
 /// The deployment workflow may impose a longer wall-clock or block delay.  The
 /// chain rule is the irreducible consensus guard and therefore cannot be
 /// bypassed by a deployment tool or SDK.
 pub const PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1: u64 = 300;
-
 const PRIVACY_SIGNED_SUBMISSION_HASH_DOMAIN_V1: &[u8] = b"iroha.privacy.signed-submission-hash.v1";
-
 /// Hash the complete typed privacy submission authorized by the transaction signature.
 ///
 /// Unlike the transaction-intent digest, this internal one-shot fingerprint
@@ -56,7 +50,6 @@ pub(crate) fn privacy_signed_submission_hash_v1(
     preimage.extend_from_slice(&encoded);
     Ok(iroha_crypto::Hash::new(preimage))
 }
-
 /// Recompute and validate the optional privacy intent in one signed payload.
 ///
 /// Ordinary transactions return `Ok(None)`. Any privacy-bearing payload must
@@ -83,7 +76,6 @@ pub(crate) fn signed_privacy_transaction_intent_binding_v1(
     })?;
     Ok(Some((digest, submission_hash)))
 }
-
 /// Closed first-release registry of governed privacy protocol activations.
 ///
 /// A protocol identity can be registered exactly once.  Its artifact bindings
@@ -95,7 +87,6 @@ pub struct PrivacyProtocolRegistryV1 {
     limits: PrivacyConsensusLimitsV1,
     records: BTreeMap<PrivacyProtocolIdV1, PrivacyProtocolActivationRecordV1>,
 }
-
 impl PrivacyProtocolRegistryV1 {
     /// Construct an empty registry with the chain-wide consensus limits.
     ///
@@ -112,13 +103,11 @@ impl PrivacyProtocolRegistryV1 {
             records: BTreeMap::new(),
         })
     }
-
     /// Return the exact chain-wide privacy limits.
     #[must_use]
     pub const fn limits(&self) -> &PrivacyConsensusLimitsV1 {
         &self.limits
     }
-
     /// Return the registered record for `protocol_id`, if present.
     #[must_use]
     pub fn record(
@@ -127,7 +116,6 @@ impl PrivacyProtocolRegistryV1 {
     ) -> Option<&PrivacyProtocolActivationRecordV1> {
         self.records.get(&protocol_id)
     }
-
     /// Return an active record at `current_height`.
     ///
     /// Call [`Self::advance_to_height`] at block start before admission.  This
@@ -145,7 +133,6 @@ impl PrivacyProtocolRegistryV1 {
         };
         (current_height >= active.state_since_height).then_some(record)
     }
-
     /// Register one immutable future activation.
     ///
     /// Registration is accepted only in the proposed state, at the exact
@@ -179,7 +166,6 @@ impl PrivacyProtocolRegistryV1 {
             }
         }
     }
-
     /// Deterministically promote all due proposals.
     ///
     /// The scheduled activation height remains the beginning of the active
@@ -190,7 +176,6 @@ impl PrivacyProtocolRegistryV1 {
             record.lifecycle = effective_privacy_lifecycle_v1(record.lifecycle, current_height);
         }
     }
-
     /// Apply an explicit fail-closed lifecycle transition.
     ///
     /// Validation evaluates a due proposal as active without mutating it first,
@@ -217,7 +202,6 @@ impl PrivacyProtocolRegistryV1 {
         record.lifecycle = next;
         Ok(())
     }
-
     /// Iterate over records in canonical protocol-discriminant order.
     pub fn iter(
         &self,
@@ -226,7 +210,6 @@ impl PrivacyProtocolRegistryV1 {
         self.records.iter()
     }
 }
-
 /// Validate a persisted activation registration without constructing an
 /// in-memory registry.
 ///
@@ -281,7 +264,6 @@ pub fn validate_privacy_registration_v1(
     }
     Ok(())
 }
-
 /// Derive the lifecycle that is effective at `current_height`.
 ///
 /// Only scheduled proposals change implicitly.  Suspension, resumption, and
@@ -303,7 +285,6 @@ pub const fn effective_privacy_lifecycle_v1(
         state_since_height: proposed.activate_at_height,
     })
 }
-
 /// Validate a lifecycle transition against a persisted activation record.
 ///
 /// A due proposal is promoted before evaluating the requested edge.  This
@@ -340,7 +321,6 @@ pub fn validate_privacy_lifecycle_transition_v1(
     }
     Ok(())
 }
-
 fn lifecycle_effective_height(lifecycle: PrivacyProtocolLifecycleV1) -> u64 {
     match lifecycle {
         PrivacyProtocolLifecycleV1::Proposed(state) => state.proposed_at_height,
@@ -349,14 +329,12 @@ fn lifecycle_effective_height(lifecycle: PrivacyProtocolLifecycleV1) -> u64 {
         PrivacyProtocolLifecycleV1::Retired(state) => state.state_since_height,
     }
 }
-
 impl Default for PrivacyProtocolRegistryV1 {
     fn default() -> Self {
         Self::new(PrivacyConsensusLimitsV1::taira_default())
             .expect("the compiled Taira privacy limits are valid")
     }
 }
-
 /// Failure applying a privacy registry governance operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyRegistryError {
@@ -426,7 +404,6 @@ pub enum PrivacyRegistryError {
     #[error("invalid privacy lifecycle transition: {0}")]
     InvalidLifecycleTransition(PrivacyLifecycleTransitionError),
 }
-
 /// Resource budget already committed by privacy actions in one block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrivacyBlockBudgetV1 {
@@ -434,7 +411,6 @@ pub struct PrivacyBlockBudgetV1 {
     actions: u32,
     bytes: u64,
 }
-
 impl PrivacyBlockBudgetV1 {
     /// Construct an empty block budget.
     ///
@@ -451,7 +427,6 @@ impl PrivacyBlockBudgetV1 {
             bytes: 0,
         })
     }
-
     /// Start a transaction-local budget.
     ///
     /// Charges remain local until [`PrivacyTransactionBudgetV1::commit`] is
@@ -463,33 +438,28 @@ impl PrivacyBlockBudgetV1 {
             bytes: 0,
         }
     }
-
     /// Number of committed privacy actions in this block.
     #[must_use]
     pub const fn actions(&self) -> u32 {
         self.actions
     }
-
     /// Number of committed canonical privacy bytes in this block.
     #[must_use]
     pub const fn bytes(&self) -> u64 {
         self.bytes
     }
-
     /// Exact chain-wide limits bound to this block budget.
     #[must_use]
     pub const fn limits(&self) -> &PrivacyConsensusLimitsV1 {
         &self.limits
     }
 }
-
 impl Default for PrivacyBlockBudgetV1 {
     fn default() -> Self {
         Self::new(PrivacyConsensusLimitsV1::taira_default())
             .expect("the compiled Taira privacy limits are valid")
     }
 }
-
 /// Transaction-local, rollback-safe privacy admission budget.
 #[must_use = "dropping a privacy transaction budget rolls back its reservations"]
 pub struct PrivacyTransactionBudgetV1<'block> {
@@ -497,7 +467,6 @@ pub struct PrivacyTransactionBudgetV1<'block> {
     actions: u32,
     bytes: u64,
 }
-
 impl PrivacyTransactionBudgetV1<'_> {
     /// Reserve one canonically encoded privacy action.
     ///
@@ -529,7 +498,6 @@ impl PrivacyTransactionBudgetV1<'_> {
                 max: self.block.limits.max_action_bytes,
             });
         }
-
         let next_tx_actions = self
             .actions
             .checked_add(1)
@@ -551,7 +519,6 @@ impl PrivacyTransactionBudgetV1<'_> {
                 max: self.block.limits.max_actions_per_block,
             });
         }
-
         let next_tx_bytes = self
             .bytes
             .checked_add(encoded_action_bytes)
@@ -573,12 +540,10 @@ impl PrivacyTransactionBudgetV1<'_> {
                 max: self.block.limits.max_privacy_bytes_per_block,
             });
         }
-
         self.actions = next_tx_actions;
         self.bytes = next_tx_bytes;
         Ok(())
     }
-
     /// Commit every transaction-local reservation into the block budget.
     ///
     /// The method consumes the transaction budget, so a successful reservation
@@ -595,20 +560,17 @@ impl PrivacyTransactionBudgetV1<'_> {
             .checked_add(self.bytes)
             .expect("reserve prevalidated the block byte count");
     }
-
     /// Number of locally reserved privacy actions.
     #[must_use]
     pub const fn actions(&self) -> u32 {
         self.actions
     }
-
     /// Number of locally reserved canonical privacy bytes.
     #[must_use]
     pub const fn bytes(&self) -> u64 {
         self.bytes
     }
 }
-
 /// Failure reserving privacy resources.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyBudgetError {
@@ -670,22 +632,18 @@ pub enum PrivacyBudgetError {
     #[error("privacy budget arithmetic overflow")]
     ArithmeticOverflow,
 }
-
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::privacy::{
-        PrivacyProofSystemIdV1, PrivacyProposedLifecycleV1, PrivacyRetiredLifecycleV1,
-        PrivacySuspendedLifecycleV1,
-    };
-
     use super::*;
     use crate::privacy_profiles::{
         compiled_privacy_profile_v1, zk_x509_release_candidate_profile_material_v1,
     };
-
+    use iroha_data_model::privacy::{
+        PrivacyProofSystemIdV1, PrivacyProposedLifecycleV1, PrivacyRetiredLifecycleV1,
+        PrivacySuspendedLifecycleV1,
+    };
     const PROPOSAL_HEIGHT: u64 = 1_000;
     const ACTIVATION_HEIGHT: u64 = PROPOSAL_HEIGHT + PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1;
-
     fn proposal() -> PrivacyProtocolActivationRecordV1 {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
             .expect("compiled VeRange profile")
@@ -696,7 +654,6 @@ mod tests {
                 },
             ))
     }
-
     #[test]
     fn proposal_promotes_only_at_scheduled_height() {
         let mut registry = PrivacyProtocolRegistryV1::default();
@@ -705,14 +662,12 @@ mod tests {
         registry
             .register(proposal, PROPOSAL_HEIGHT)
             .expect("valid proposal");
-
         registry.advance_to_height(ACTIVATION_HEIGHT - 1);
         assert!(
             registry
                 .active_record(protocol_id, ACTIVATION_HEIGHT - 1)
                 .is_none()
         );
-
         registry.advance_to_height(ACTIVATION_HEIGHT);
         let active = registry
             .active_record(protocol_id, ACTIVATION_HEIGHT)
@@ -726,7 +681,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn registration_rejects_early_historical_and_duplicate_records() {
         let mut registry = PrivacyProtocolRegistryV1::default();
@@ -739,7 +693,6 @@ mod tests {
             registry.register(early, PROPOSAL_HEIGHT),
             Err(PrivacyRegistryError::ActivationLeadTimeTooShort { .. })
         ));
-
         let mut historical = proposal();
         let PrivacyProtocolLifecycleV1::Proposed(ref mut state) = historical.lifecycle else {
             unreachable!();
@@ -750,7 +703,6 @@ mod tests {
             registry.register(historical, PROPOSAL_HEIGHT),
             Err(PrivacyRegistryError::ProposalHeightMismatch { .. })
         ));
-
         registry
             .register(proposal(), PROPOSAL_HEIGHT)
             .expect("first registration");
@@ -759,7 +711,6 @@ mod tests {
             Err(PrivacyRegistryError::AlreadyRegistered { .. })
         ));
     }
-
     #[test]
     fn registration_rejects_prepopulated_protocol_limit_schedule() {
         let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -785,7 +736,6 @@ mod tests {
             Err(PrivacyRegistryError::RegistrationHasPendingProtocolLimits)
         );
     }
-
     #[test]
     fn registration_rejects_artifact_hash_substitution_without_mutation() {
         let mut registry = PrivacyProtocolRegistryV1::default();
@@ -799,7 +749,6 @@ mod tests {
         );
         assert_eq!(registry.iter().len(), 0);
     }
-
     #[test]
     fn suspension_resume_and_retirement_are_forward_only() {
         let mut registry = PrivacyProtocolRegistryV1::default();
@@ -808,7 +757,6 @@ mod tests {
             .register(proposal(), PROPOSAL_HEIGHT)
             .expect("valid proposal");
         registry.advance_to_height(ACTIVATION_HEIGHT);
-
         let suspend_height = ACTIVATION_HEIGHT + 1;
         registry
             .transition(
@@ -826,7 +774,6 @@ mod tests {
                 .active_record(protocol_id, suspend_height)
                 .is_none()
         );
-
         let resume_height = suspend_height + 1;
         registry
             .transition(
@@ -839,7 +786,6 @@ mod tests {
                 resume_height,
             )
             .expect("suspended protocol can resume");
-
         let retire_height = resume_height + 1;
         registry
             .transition(
@@ -853,7 +799,6 @@ mod tests {
             )
             .expect("active protocol can retire");
         assert!(registry.active_record(protocol_id, retire_height).is_none());
-
         assert!(matches!(
             registry.transition(
                 protocol_id,
@@ -869,7 +814,6 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn transition_height_must_equal_current_height() {
         let mut registry = PrivacyProtocolRegistryV1::default();
@@ -892,7 +836,6 @@ mod tests {
             Err(PrivacyRegistryError::TransitionHeightMismatch { .. })
         ));
     }
-
     #[test]
     fn unavailable_compiled_engine_cannot_resume_through_lifecycle_transition() {
         let suspended_at_height = ACTIVATION_HEIGHT + 1;
@@ -915,7 +858,6 @@ mod tests {
             validate_privacy_lifecycle_transition_v1(&record, resume, transition_height),
             Err(PrivacyRegistryError::CompiledProfile(_))
         ));
-
         let retire = PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
             proposed_at_height: PROPOSAL_HEIGHT,
             activated_at_height: Some(ACTIVATION_HEIGHT),
@@ -924,7 +866,6 @@ mod tests {
         validate_privacy_lifecycle_transition_v1(&record, retire, transition_height)
             .expect("fail-closed retirement remains available for an unavailable engine");
     }
-
     #[test]
     fn rejected_transition_does_not_mutate_due_proposal() {
         let mut registry = PrivacyProtocolRegistryV1::default();
@@ -934,7 +875,6 @@ mod tests {
             .register(proposal, PROPOSAL_HEIGHT)
             .expect("valid proposal");
         let before = *registry.record(protocol_id).expect("registered record");
-
         let invalid = PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
             proposed_at_height: PROPOSAL_HEIGHT,
             activated_at_height: None,
@@ -951,7 +891,6 @@ mod tests {
             "a rejected governance instruction must have no partial effect"
         );
     }
-
     #[test]
     fn dropped_transaction_budget_rolls_back_all_charges() {
         let mut block = PrivacyBlockBudgetV1::default();
@@ -964,7 +903,6 @@ mod tests {
         assert_eq!(block.actions(), 0);
         assert_eq!(block.bytes(), 0);
     }
-
     #[test]
     fn exactly_two_maximal_transactions_fill_taira_block() {
         let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -978,7 +916,6 @@ mod tests {
             assert_eq!(block.actions(), expected_actions);
         }
         assert_eq!(block.bytes(), u64::from(limits.max_privacy_bytes_per_block));
-
         let mut third = block.begin_transaction();
         assert!(matches!(
             third.reserve(0, 1),
@@ -987,13 +924,11 @@ mod tests {
         drop(third);
         assert_eq!(block.actions(), 2);
     }
-
     #[test]
     fn budget_rejects_index_skips_zero_length_and_oversize_without_mutation() {
         let limits = PrivacyConsensusLimitsV1::taira_default();
         let mut block = PrivacyBlockBudgetV1::new(limits).expect("valid limits");
         let mut transaction = block.begin_transaction();
-
         assert_eq!(
             transaction.reserve(1, 1),
             Err(PrivacyBudgetError::ActionIndexMismatch {
@@ -1015,7 +950,6 @@ mod tests {
         assert_eq!(transaction.actions(), 0);
         assert_eq!(transaction.bytes(), 0);
     }
-
     #[test]
     fn one_transaction_cannot_smuggle_a_second_privacy_action() {
         let mut block = PrivacyBlockBudgetV1::default();
@@ -1028,7 +962,6 @@ mod tests {
         assert_eq!(transaction.actions(), 1);
         assert_eq!(transaction.bytes(), 1);
     }
-
     #[test]
     fn height_overflow_fails_closed() {
         let mut registry = PrivacyProtocolRegistryV1::default();
@@ -1043,7 +976,6 @@ mod tests {
             Err(PrivacyRegistryError::HeightOverflow)
         );
     }
-
     #[test]
     fn protocol_mapping_is_not_caller_selectable() {
         let mut registry = PrivacyProtocolRegistryV1::default();

@@ -1,6 +1,5 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-
 fn escape_as_json_string_content(data: &[u8]) -> String {
     // Produce a JSON string literal content (without surrounding quotes),
     // escaping control, quote, backslash, and non-ASCII bytes via \u00XX.
@@ -27,7 +26,6 @@ fn escape_as_json_string_content(data: &[u8]) -> String {
     }
     out
 }
-
 fn expected_from_bytes(data: &[u8]) -> String {
     // Build the expected UTF-8 string after JSON unescaping.
     // For bytes mapped via \u00XX we expect the corresponding Unicode scalar U+00XX.
@@ -43,7 +41,6 @@ fn expected_from_bytes(data: &[u8]) -> String {
     }
     out
 }
-
 fuzz_target!(|data: &[u8]| {
     let content = escape_as_json_string_content(data);
     let s = format!("\"{}\"", content);

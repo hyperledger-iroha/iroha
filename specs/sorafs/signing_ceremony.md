@@ -44,7 +44,10 @@ offline process and how developers interact with it.
 
 ## Developer Workflow
 
-- Regenerate fixtures with `cargo run -p sorafs_chunker --features dev-tools --bin export_vectors`.
+- Regenerate fixtures with `export_vectors --write` using an empty mode-0700
+  external `--staging-root` and an absolute private `--signing-key-file`. The
+  generator validates the complete signed stage before atomically publishing
+  checked-in paths; `--check` leaves the repository read-only.
 - Use the Parliament fetch helper from `xtask` to download the approved envelope,
   verify council signatures, and refresh the local fixtures. Point
   `--signatures` at the Parliament-published envelope; the helper resolves the

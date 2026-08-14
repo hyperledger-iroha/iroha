@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use iroha_crypto::{
     Hash, HashOf, MerkleProof,
     blake2::{
@@ -11,11 +9,10 @@ use iroha_data_model::{name::Name, prelude::AccountId};
 use ivm::{ExecutionProof, IVM, PointerType, VMError, encoding, instruction, syscalls};
 use sha2::Digest as Sha2Digest;
 use sha3_hash::{Digest as Sha3Digest, Keccak256, Sha3_256};
+use std::collections::BTreeMap;
 mod common;
 use common::assemble;
-
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
-
 fn assemble_syscall(syscall: u8) -> Vec<u8> {
     let mut code = Vec::with_capacity(8);
     let word = encoding::wide::encode_sys(instruction::wide::system::SCALL, syscall);
@@ -23,7 +20,6 @@ fn assemble_syscall(syscall: u8) -> Vec<u8> {
     code.extend_from_slice(&HALT);
     assemble(&code)
 }
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
         .map(|pty| common::payload_for_type(pty, payload))
@@ -37,7 +33,6 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 fn sample_account() -> AccountId {
     AccountId::new(
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
@@ -45,7 +40,6 @@ fn sample_account() -> AccountId {
             .expect("public key"),
     )
 }
-
 fn raw_blake2b256(payload: &[u8]) -> [u8; 32] {
     let mut digest = [0u8; 32];
     let mut hasher = Blake2bVar::new(32).expect("32-byte Blake2b output size");
@@ -55,7 +49,6 @@ fn raw_blake2b256(payload: &[u8]) -> [u8; 32] {
         .expect("fixed output buffer has the requested length");
     digest
 }
-
 #[test]
 fn debug_print_is_handled_by_default_host() {
     let mut vm = IVM::new(u64::MAX);
@@ -65,7 +58,6 @@ fn debug_print_is_handled_by_default_host() {
     let result = vm.run();
     assert!(result.is_ok(), "debug_print should be handled");
 }
-
 #[test]
 fn syscall_policy_gating_allows_known_and_rejects_unknown_v1() {
     // Build a tiny program making a known allowed syscall (ALLOC)
@@ -77,14 +69,12 @@ fn syscall_policy_gating_allows_known_and_rejects_unknown_v1() {
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&bytes).unwrap();
     vm.run().expect("known syscall should be allowed under V1");
-
     // Unknown ABI numbers are rejected during authenticated program admission.
     let mut bad = assemble_syscall(0xDF);
     bad[4 + 1 + 1 + 1 + 1 + 8] = 1; // ABI v1
     let mut vm2 = IVM::new(u64::MAX);
     assert_eq!(vm2.load_program(&bad), Err(VMError::UnknownSyscall(0xDF)));
 }
-
 #[test]
 fn syscall_exit_halts_execution() {
     let mut vm = IVM::new(u64::MAX);
@@ -103,7 +93,6 @@ fn syscall_exit_halts_execution() {
     vm.run().expect("exit syscall should halt");
     assert_eq!(vm.register(10), 5);
 }
-
 #[test]
 fn syscall_abort_marks_failure() {
     let mut vm = IVM::new(u64::MAX);
@@ -114,7 +103,6 @@ fn syscall_abort_marks_failure() {
     assert!(matches!(result, Err(VMError::AssertionFailed)));
     assert_eq!(vm.register(10), 0xA11CE, "abort code must survive in r10");
 }
-
 #[test]
 fn debug_log_accepts_json_tlv() {
     let mut vm = IVM::new(u64::MAX);
@@ -126,7 +114,6 @@ fn debug_log_accepts_json_tlv() {
     vm.load_program(&prog).unwrap();
     vm.run().expect("debug log should succeed");
 }
-
 #[test]
 fn hash_syscalls_return_expected_digest_blobs() {
     let message = b"ivm deterministic hash syscalls";
@@ -135,7 +122,6 @@ fn hash_syscalls_return_expected_digest_blobs() {
     let blake2b = raw_blake2b256(message).to_vec();
     let keccak = <Keccak256 as Sha3Digest>::digest(message).to_vec();
     let iroha_hash: [u8; 32] = Hash::new(message).into();
-
     for (syscall, expected) in [
         (syscalls::SYSCALL_SHA256_HASH, sha256),
         (syscalls::SYSCALL_SHA3_HASH, sha3),
@@ -150,7 +136,6 @@ fn hash_syscalls_return_expected_digest_blobs() {
         let prog = assemble_syscall(syscall as u8);
         vm.load_program(&prog).expect("load program");
         vm.run().expect("hash syscall should succeed");
-
         let out = vm
             .memory
             .validate_tlv(vm.register(10))
@@ -159,7 +144,6 @@ fn hash_syscalls_return_expected_digest_blobs() {
         assert_eq!(out.payload, expected.as_slice());
     }
 }
-
 #[test]
 fn get_public_input_returns_named_tlv() {
     let mut vm = IVM::new(u64::MAX);
@@ -171,26 +155,22 @@ fn get_public_input_returns_named_tlv() {
     let mut host = ivm::host::DefaultHost::new().with_public_inputs(BTreeMap::new());
     host.set_public_inputs(inputs);
     vm.set_host(host);
-
     let name_tlv = make_tlv(PointerType::Name as u16, name.as_ref().as_bytes());
     let ptr = vm.alloc_input_tlv(&name_tlv).expect("alloc tlv");
     vm.set_register(10, ptr);
     let prog = assemble_syscall(syscalls::SYSCALL_GET_PUBLIC_INPUT as u8);
     vm.load_program(&prog).unwrap();
     vm.run().expect("get public input should succeed");
-
     let out_ptr = vm.register(10);
     let out_tlv = vm.memory.validate_tlv(out_ptr).expect("validate output");
     assert_eq!(out_tlv.type_id, PointerType::Blob);
     assert_eq!(out_tlv.payload, payload.as_slice());
 }
-
 #[test]
 fn get_public_input_missing_name_errors() {
     let mut vm = IVM::new(u64::MAX);
     let name: Name = "missing_key".parse().unwrap();
     vm.set_host(ivm::host::DefaultHost::new());
-
     let name_tlv = make_tlv(PointerType::Name as u16, name.as_ref().as_bytes());
     let ptr = vm.alloc_input_tlv(&name_tlv).expect("alloc tlv");
     vm.set_register(10, ptr);
@@ -199,7 +179,6 @@ fn get_public_input_missing_name_errors() {
     let res = vm.run();
     assert!(matches!(res, Err(VMError::PermissionDenied)));
 }
-
 #[test]
 fn get_public_input_zero_pointer_errors() {
     let mut vm = IVM::new(u64::MAX);
@@ -210,7 +189,6 @@ fn get_public_input_zero_pointer_errors() {
     let res = vm.run();
     assert!(matches!(res, Err(VMError::NoritoInvalid)));
 }
-
 #[test]
 fn add_signatory_syscall_accepts_account_and_json() {
     let mut vm = IVM::new(u64::MAX);
@@ -229,7 +207,6 @@ fn add_signatory_syscall_accepts_account_and_json() {
     vm.load_program(&prog).unwrap();
     vm.run().expect("add signatory should succeed");
 }
-
 #[test]
 fn remove_signatory_syscall_accepts_account_and_json() {
     let mut vm = IVM::new(u64::MAX);
@@ -248,7 +225,6 @@ fn remove_signatory_syscall_accepts_account_and_json() {
     vm.load_program(&prog).unwrap();
     vm.run().expect("remove signatory should succeed");
 }
-
 #[test]
 fn set_account_quorum_accepts_nonzero() {
     let mut vm = IVM::new(u64::MAX);
@@ -263,7 +239,6 @@ fn set_account_quorum_accepts_nonzero() {
     vm.load_program(&prog).unwrap();
     vm.run().expect("set account quorum should succeed");
 }
-
 #[test]
 fn set_account_quorum_rejects_zero() {
     let mut vm = IVM::new(u64::MAX);
@@ -279,9 +254,7 @@ fn set_account_quorum_rejects_zero() {
     let res = vm.run();
     assert!(matches!(res, Err(VMError::DecodeError)));
 }
-
 struct AddHost;
-
 impl ivm::IVMHost for AddHost {
     fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
         if number == 1 {
@@ -290,7 +263,6 @@ impl ivm::IVMHost for AddHost {
             Err(VMError::UnknownSyscall(number))
         }
     }
-
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         if number == 1 {
             let a0 = vm.register(10);
@@ -301,18 +273,15 @@ impl ivm::IVMHost for AddHost {
             Err(VMError::UnknownSyscall(number))
         }
     }
-
     fn as_any(&mut self) -> &mut dyn std::any::Any {
         self
     }
 }
-
 #[test]
 fn downcast_add_host() {
     let mut host: Box<dyn ivm::IVMHost> = Box::new(AddHost);
     assert!(host.as_any().downcast_mut::<AddHost>().is_some());
 }
-
 #[test]
 fn test_custom_syscall() {
     let mut vm = IVM::new(u64::MAX);
@@ -324,7 +293,6 @@ fn test_custom_syscall() {
     vm.run().expect("custom syscall failed");
     assert_eq!(vm.register(10), 12);
 }
-
 #[test]
 fn removed_hw_probe_syscalls_reject() {
     for number in [0xF2, 0xF3] {
@@ -336,7 +304,6 @@ fn removed_hw_probe_syscalls_reject() {
         );
     }
 }
-
 #[test]
 fn test_verify_proof_syscall() {
     let mut vm = IVM::new(u64::MAX);
@@ -354,7 +321,6 @@ fn test_verify_proof_syscall() {
         VMError::NotImplemented { syscall } if syscall == syscalls::SYSCALL_VERIFY_PROOF
     ));
 }
-
 #[test]
 fn test_prove_execution_syscall_returns_deterministic_summary() {
     let mut vm = IVM::new(u64::MAX);
@@ -370,7 +336,6 @@ fn test_prove_execution_syscall_returns_deterministic_summary() {
     assert_eq!(proof.code_hash, vm.code_hash());
     assert!(proof.gas_used > 0);
     let first_payload = tlv.payload.to_vec();
-
     let mut vm_again = IVM::new(u64::MAX);
     vm_again.load_program(&prog).unwrap();
     vm_again.run().expect("second proof run");
@@ -383,7 +348,6 @@ fn test_prove_execution_syscall_returns_deterministic_summary() {
         "execution proof summaries must be byte-identical for identical input"
     );
 }
-
 #[test]
 fn test_get_merkle_path_syscall() {
     let mut vm = IVM::new(u64::MAX);
@@ -406,7 +370,6 @@ fn test_get_merkle_path_syscall() {
         assert_eq!(&out[i * 32..(i + 1) * 32], node);
     }
 }
-
 #[test]
 fn test_get_merkle_path_with_root_syscall() {
     let mut vm = IVM::new(u64::MAX);
@@ -425,7 +388,6 @@ fn test_get_merkle_path_with_root_syscall() {
     vm.memory.load_bytes(root_out, &mut out_root).unwrap();
     assert_eq!(out_root, *expected_root.as_ref());
 }
-
 #[test]
 fn test_get_merkle_compact_syscall() {
     let mut vm = IVM::new(u64::MAX);
@@ -492,7 +454,6 @@ fn test_get_merkle_compact_syscall() {
     // Basic sanity on dirs: at least has bits set within range
     assert_eq!(dirs >> depth, 0);
 }
-
 #[test]
 fn test_get_merkle_path_syscall_out_of_bounds() {
     let mut vm = IVM::new(u64::MAX);
@@ -507,7 +468,6 @@ fn test_get_merkle_path_syscall_out_of_bounds() {
     let res = vm.run();
     assert!(matches!(res, Err(VMError::MemoryOutOfBounds)));
 }
-
 #[test]
 fn test_get_merkle_compact_syscall_out_of_bounds() {
     let mut vm = IVM::new(u64::MAX);
@@ -526,7 +486,6 @@ fn test_get_merkle_compact_syscall_out_of_bounds() {
     let res = vm.run();
     assert!(matches!(res, Err(VMError::MemoryOutOfBounds)));
 }
-
 #[test]
 fn test_get_register_merkle_compact_syscall_out_of_bounds() {
     let mut vm = IVM::new(u64::MAX);

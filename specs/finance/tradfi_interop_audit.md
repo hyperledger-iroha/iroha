@@ -78,8 +78,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
     `sample-preprod`, and `test-preprod`
 - Made Torii inbound validation profile-aware for existing `pacs.008` and
   `pacs.009` endpoints:
-  - profile selected by `X-Iroha-Iso-Profile`, then `?profile=...`, then config
-    default
+  - profile selected only by the signed canonical `?profile=...` query; the
+    retired `X-Iroha-Iso-Profile` header is rejected
   - message definition version and business service checks
   - real-XML parser binding for all observed message-definition declarations:
     BAH/body `MsgDefIdr` values plus `Document` and immediate payload-root XSD
@@ -211,6 +211,15 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   payload hash, profile metadata, UETR, transaction hash, status history, reason
   codes, context, reference snapshot id, and a deterministic `record_sha256`
   digest that binds the persisted JSON body.
+- The exact append-only `status_history` is bounded in V1 to 256 entries and
+  256 KiB of canonical compact JSON. Live lifecycle updates build a bounded
+  candidate and reject the whole transition before changing memory, indexes, or
+  durable files when either limit would be crossed; they never silently drop an
+  older audit entry. The associated deduplicated `change_reason_codes` list is
+  independently bounded to 64 entries and 16 KiB of canonical compact JSON, so
+  distinct unknown lifecycle codes cannot grow behind an unchanged derived
+  status. Startup likewise rejects rather than truncates either over-limit
+  persisted collection.
 - Added a deterministic local audit index at
   `store_dir/audit/messages.index.json`; it lists sorted durable message
   entries, links each entry to the message file's `record_sha256`, and carries
@@ -218,11 +227,14 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   serves the same deterministic manifest at
   `GET /v1/iso20022/audit/messages` after the normal access checks.
 - Added operator-controlled durable-store retention with
-  `store_retention_secs` and `store_max_records`. Both default to `0` to retain
-  all durable records; when configured, compaction removes expired or oldest
-  overflow records, clears replay indexes, deletes the corresponding
+  `store_retention_secs` and `store_max_records`. Age retention remains disabled
+  by default, while count retention defaults to 256 records and is fail-closed
+  above the first-release hard maximum of 1024. Startup reads each record
+  through a stable 1 MiB-capped file handle and retains only the deterministic
+  newest bounded set before building replay indexes. Compaction removes expired
+  or oldest overflow records, clears replay indexes, deletes the corresponding
   `store_dir/messages/*.json` files, and regenerates the audit index from
-  survivors.
+  survivors without cloning the full record store.
 - Added `audit_export_dir`, an operator-configured external audit spool. When
   durable persistence regenerates the audit index, Torii mirrors
   `messages.index.json` into that directory and writes a digest-addressed
@@ -682,12 +694,13 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   unless the validated Torii URL or sidecars actually require the corresponding
   local diagnostic policy, with non-dry-run
   coverage pinning those rejections before submit or receipt output,
-	  requires bearer-token files to be regular non-symlink inputs capped at 8 KiB
-  before decoding to exact UTF-8 with no surrounding whitespace, embedded
-  whitespace, or unsafe control characters, including Unicode format controls,
-  with token-file read/decode/size failures reported by input label instead of
-  runtime path, rejects raw `--inbox-dir`,
-  explicit `--message`, and `--bearer-token-file` CLI path smuggling before argparse `Path`
+  requires operator private-key files to be regular non-symlink inputs capped
+  at 8 KiB before exact ASCII decoding with no surrounding or embedded
+  whitespace, binds each fresh operator signature to the configured NetworkId
+  and exact method/path/sorted query/body, rejects bearer and precomputed auth
+  shapes, and reports key-file read/decode/size failures by input label instead
+  of runtime path, rejects raw `--inbox-dir`, explicit `--message`, and
+  `--operator-private-key-file` CLI path smuggling before argparse `Path`
   normalization, rejects secret-looking key/value material in local paths before
   receipt output, rejects missing, empty, flag-looking, or leading-dash
   `--torii-base-url` values before argparse parsing, rejects malformed numeric CLI values before
@@ -696,7 +709,7 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   `--response-limit-bytes` at 4 MiB,
   does not follow remote redirects, and writes bounded local receipts for
   successful and failed submissions
-  without persisting token material, rejecting secret-looking or control-bearing
+  without persisting private-key material, rejecting secret-looking or control-bearing
   successful remote response bodies before receipt persistence, rejecting
   boolean or string status aliases before coercion, normalizing
   non-standard, malformed, or oversized remote HTTP statuses into transport-failed receipts
@@ -725,9 +738,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   traversal, symlinked existing ancestors, and hard-linked, symlink, or
   non-regular targets, reject receipt directories that reuse or symlink back
   to the rail inbox root or overlap explicit message XML/sidecar source
-  material, bearer-token file path, or a directory containing the
-  bearer-token file, reject bearer-token file paths that overlap the rail inbox
-  root before token loading, and are written via exclusive same-directory
+  material, operator private-key file path, or a directory containing the key
+  file, reject operator private-key paths that overlap the rail inbox root
+  before key loading, and are written via exclusive same-directory
   owner-private temporary files with bounded digest-derived names that are
   descriptor-rechecked, fsynced, and atomically replaced where available. The
   inbox directory and both
@@ -746,7 +759,7 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   endpoint URLs and rejects summaries that hide that endpoint evidence behind
   `allow_insecure_http=false`,
   rejects receipt endpoint URLs with
-  credentials, params, query strings, fragments, malformed hosts, surrounding
+  credentials, params, fragments, malformed hosts, surrounding
   or embedded whitespace, control characters, empty/zero/leading-zero/malformed/default ports, or
   non-canonical host spelling, localhost/local-private IP literals, known
   local/private rebinding hostnames, IPv6 transition addresses embedding
@@ -756,7 +769,11 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   percent-escaped hosts, numeric-host/legacy-IPv4 spoofing, plus
   path traversal, encoded path separators, repeated path separators,
   encoded-semicolon parameters, encoded URL delimiters, encoded-percent path
-  segments, or percent-encoded control/space bytes,
+  segments, or percent-encoded control/space bytes. Notary receipt queries and
+  default-profile rail receipt queries are forbidden; an explicit-profile rail
+  receipt must carry exactly one canonical `profile=<profile-id>` query matching
+  its recorded profile, so duplicate, unknown, reordered, encoded, omitted, or
+  substituted query values fail replay,
   detects leaked authorization/token material plus secret-looking allowed
   receipt string values, including malformed `receipt_kind`, before version or
   kind dispatch and without echoing those values, reports rejected endpoint
@@ -856,9 +873,13 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   explicitly recorded as arrays under `--require-explicit-policy`, and
   production-policy runbooks must explicitly record rail/notary receipt
   directories that do not overlap the rail inbox or notary audit-export root,
-  while any configured rail/notary bearer-token file path must stay outside the
-  corresponding stage source root and receipt directory before child execution,
-  redacts bearer-token file arguments in its summary, verifies generated
+  while the required rail operator-private-key file and any notary bearer-token
+  file must stay outside the corresponding stage source root and receipt
+  directory before child execution. Rail planning also requires a canonical
+  checksummed genesis-derived `network_id`, rejects the retired rail
+  `bearer_token_file`, emits exact `--network-id` and
+  `--operator-private-key-file` adapter inputs, and redacts both rail key and
+  notary token paths in its summary. It verifies generated
   receipts by default, bounds each child stage with positive finite
   `--stage-timeout-secs`, records `timed_out` for killed children, drains child
   stdout/stderr through a bounded preview cap instead of retaining unbounded
@@ -897,7 +918,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   traversal, checked-in `fixtures/iso20022/` artifact destinations, symlinked
   existing ancestors, and hard-linked, symlink, or
   non-regular targets. Summary outputs also cannot reuse or hardlink the
-  runbook config input, planned rail/notary bearer-token files, explicit rail
+  runbook config input, the planned rail operator-private-key file, planned
+  notary bearer-token files, explicit rail
   message files, explicit verifier receipt files, or planned stage artifact
   directories before child execution, and are written via exclusive same-directory
   owner-private temporary files with bounded digest-derived names that are
@@ -1196,7 +1218,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   provenance, discovery, or policy checks run; checked file inputs are opened
   through no-follow file descriptors where available so the read uses the same
   regular file that was checked. Direct CLI artifact flags for live rail inbox
-  roots, live notary export roots, rail/notary bearer-token files, canary
+  roots, live notary export roots, rail operator-private-key files, notary
+  bearer-token files, canary
   configs, trust bundles, XSD manifests/profile catalogs, receipt
   files/directories, canary/trust summaries, and XSD/evidence summaries also reject raw control
   characters, whitespace, leading-dash segments, backslashes, semicolon
@@ -1232,7 +1255,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   output files, so those destinations fail before input loading, child stages,
   schema/trust validation, or network delivery. Live rail/notary adapter runs
   also reject receipt output directories that overlap direct source artifacts:
-  rail explicit XML/sidecar inputs, rail/notary bearer-token files, and notary
+  rail explicit XML/sidecar inputs, rail operator-private-key files, notary
+  bearer-token files, and notary
   `latest.notary.json`, `anchors/`, or `messages.index.json` inputs.
   Explicit rail/notary receipt-directory symlink ancestors are rejected before
   inbox/export source loading without creating missing output directories; the
@@ -1269,8 +1293,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   Canary runbook artifact paths now apply the same narrow
   control-character plus key/value and identifier-style secret-material rejection
   before plan-only summaries or child command arguments are built, while
-  bearer-token file paths remain runtime secret-file references and are
-  redacted from planned command output. Canary child stdout/stderr previews
+  rail operator-private-key and notary bearer-token paths remain runtime
+  secret-file references and are redacted from planned command output. Canary
+  child stdout/stderr previews
   also reject identifier-style secret-looking material and unsafe control
   characters before summary emission.
   Canary runbook path strings and archived child-command local path values must
@@ -1349,8 +1374,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   source URL, policy, trust-material label, manifest, profile-catalog, archive,
   rail-message ID, reviewed reason, and string-list values, matching the
   recursive bundle, manifest, evidence, and readiness scans that catch those
-  controls during CLI loading. Live rail/audit adapter raw CLI, URL, output
-  path, bearer-token path, and rail message-path helpers use the same
+  controls during CLI loading. Live rail/audit adapter raw CLI, URL, output,
+  rail operator-key path, notary bearer-token path, and rail message-path
+  helpers use the same
   control-character policy as XSD, operator-evidence, and final readiness raw
   CLI token, numeric/context/profile value, local path, source-path,
   fixture/schema relative-path, receipt-kind, child-command, stage-name, compact
@@ -1662,7 +1688,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   before failed child verifier diagnostics report a detail, rejects missing or unsupported
   receipt-verifier summary versions, rejects plan-only
   or dry-run canaries, plaintext-HTTP overrides, default-profile fallbacks,
-  stale retired `colr.007` receipt-summary fields, unredacted bearer-token paths,
+  stale retired `colr.007` receipt-summary fields, unredacted rail
+  operator-private-key or notary bearer-token paths,
   non-canonical compact receipt paths with control characters, surrounding
   whitespace, dot or parent traversal segments, checked-in ISO fixture
   artifact coordinates, or non-`*.receipt.json` leaves, all-zero compact
@@ -1691,7 +1718,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   non-finite, or non-canonical numeric child command flag values, Unicode
   digit confusables in floating timeout flags, value-taking child command flags whose separate or
   equals-form values are empty, another flag token, or a leading-dash
-  rail/notary endpoint URL or bearer-token-file placeholder,
+  rail/notary endpoint URL, rail operator-private-key placeholder, or notary
+  bearer-token-file placeholder,
   child command arrays that do not start with a Python interpreter using
   ASCII-only numeric version suffixes plus the expected stage script path, or
   that contain extra positional arguments after that runner-emitted prefix,
@@ -1922,17 +1950,20 @@ The JSON runbook is intentionally strict. It must label `provider` and
   absent; a present `null` value is malformed. Use absolute paths for explicitly
   external operator directories.
 Endpoint URLs must not contain embedded credentials,
-params, query strings, or fragments. Bearer-token files are runtime-only inputs
-passed through to child scripts; the runner never reads token contents and
-redacts token-file arguments in the summary. Production canaries should use
+params, query strings, or fragments. The rail stage requires the exact
+genesis-derived checksummed `network_id` and a runtime-only
+`operator_private_key_file`; it has no bearer-token fallback. Notary bearer
+tokens remain separate runtime-only inputs. The runner does not read either
+secret and redacts both secret-file arguments in the summary. Production canaries should use
 `--require-explicit-policy`, which requires every runbook policy boolean and
 the notary/verify list-valued receipt selector fields to be present, requires
 rail/notary receipt directories to be explicitly recorded, and rejects
 production-policy receipt directories that overlap the rail inbox or notary
 audit-export root before any child script runs. Stage receipt directories also
-must not overlap configured rail/notary bearer-token file paths, so token inputs
-cannot be placed inside generated receipt roots or vice versa, and token files
-must stay outside the rail inbox and notary audit-export roots. It then records
+must not overlap the configured rail operator-private-key or notary bearer-token
+paths, so secret inputs cannot be placed inside generated receipt roots or vice
+versa. The operator key must stay outside the rail inbox and the notary token
+must stay outside the notary audit-export root. It then records
 that proof in the summary for the evidence gate. Verify receipt selectors must be unique and
 non-overlapping at planning time, including direct
 `verify.receipts` files that are already covered by explicit or generated
@@ -1941,8 +1972,8 @@ verifier policy boolean or explicit list in turn. Checked-in
 templates for Swift CBPR+, Fedwire Funds, SEPA SCT Inst, and securities CSD
 live-profile families live under
 `fixtures/iso20022/operator_canary/`; copy them into an operator runbook area
-before replacing template endpoints, token-file paths, inboxes, and
-`audit_export_dir` locations.
+before replacing the template NetworkId, endpoints, operator-key/notary-token
+paths, inboxes, and `audit_export_dir` locations.
 
 ```json
 {
@@ -1951,7 +1982,9 @@ before replacing template endpoints, token-file paths, inboxes, and
   "rail": {
     "inbox_dir": "inbox",
     "torii_base_url": "https://torii.example.internal",
-    "receipt_dir": "receipts/rail"
+    "receipt_dir": "receipts/rail",
+    "network_id": "hash:0808080808080808080808080808080808080808080808080808080808080809#9F75",
+    "operator_private_key_file": "secrets/torii.operator.key"
   },
   "notary": {
     "export_dir": "audit-export",
@@ -2165,9 +2198,13 @@ archived commands/output for obvious secret leakage.
 Plan-only diagnostic archives must still record each planned stage's `dry_run`
 boolean, and that boolean must match the planned child command's `--dry-run`
 flag. The evidence gate accepts `--allow-plan-only` only when at least one
-archived canary summary records `plan_only=true`. Bearer-token file
-arguments must be redacted whether represented as
-`--bearer-token-file <path>` or `--bearer-token-file=<path>`. The `--allow-*`
+archived canary summary records `plan_only=true`. Bearer-token arguments for
+the notary stage and operator-private-key arguments for the rail
+stage must be redacted in either separate-value or `--flag=<path>` form. Rail
+commands containing the retired `--bearer-token-file` flag are rejected. Rail
+commands must contain one canonical checksummed `--network-id` plus one redacted
+`--operator-private-key-file`; missing values, a wrong checksum, a cleared Iroha
+marker bit, duplicate flags, or an unredacted key path fail replay. The `--allow-*`
   flags, including
   `--allow-missing-record-sources`, `--allow-canary-stage-receipts-only`, and
   `--allow-profile-json-not-emitted`, are for local test audits only and should not
@@ -2236,8 +2273,8 @@ The canary runbook planner also fails before execution if generated non-dry-run
 rail/notary receipts are not selected by the verify stage through
 `include_stage_receipts=true` or explicit generated `verify.receipt_dirs`.
 It also fails before execution when a rail/notary receipt directory overlaps
-that stage's configured bearer-token file path, or when a bearer-token file
-path overlaps the rail inbox or notary audit-export root.
+that stage's configured operator-key/notary-token path, when the operator key
+overlaps the rail inbox, or when the notary token overlaps the audit-export root.
 Selected generated receipt directories must use a matching verify policy: the
 verify policy must carry the local overrides required by those producer commands,
 such as `verify.allow_insecure_http` for rail/notary `allow_insecure_http` or

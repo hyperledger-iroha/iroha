@@ -1,9 +1,6 @@
 #![cfg(feature = "compression")]
-
 //! Ensure zstd compression path roundtrips complex payloads and preserves flags.
-
 use norito::{CompressionConfig, core::header_flags, decode_from_bytes, to_compressed_bytes};
-
 #[test]
 fn compressed_roundtrip_preserves_layout_flags() {
     let value = vec![
@@ -15,13 +12,11 @@ fn compressed_roundtrip_preserves_layout_flags() {
             Some(String::from("beta")),
         ),
     ];
-
     let bytes =
         to_compressed_bytes(&value, Some(CompressionConfig::default())).expect("compress payload");
     let decoded: Vec<(u8, Vec<u8>, Option<String>)> =
         decode_from_bytes(&bytes).expect("decode compressed payload");
     assert_eq!(decoded, value);
-
     let flags = bytes[norito::core::Header::SIZE - 1];
     assert_eq!(
         flags & header_flags::PACKED_SEQ,

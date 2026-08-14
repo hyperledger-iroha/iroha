@@ -9,6 +9,7 @@ KURA_PRODUCTION_COMPONENT_FILES = (
     Path("crates/iroha_core/src/kura/merge_ledger_latest_execution_index.rs"),
     Path("crates/iroha_core/src/kura/replica_advert_and_body_status.rs"),
     Path("crates/iroha_core/src/kura/retained_finality_replica_authority.rs"),
+    Path("crates/iroha_core/src/kura/wsv_checkpoint_read_helpers.rs"),
     Path("crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs"),
     Path("crates/iroha_core/src/kura/prune_intent_publication.rs"),
     Path("crates/iroha_core/src/kura/prune_recovery_capacity.rs"),
@@ -30,6 +31,7 @@ KURA_PRODUCTION_COMPONENT_FILES = (
     Path("crates/iroha_core/src/kura/indexed_sidecar_io.rs"),
     Path("crates/iroha_core/src/kura/indexed_sidecar_rewrite.rs"),
     Path("crates/iroha_core/src/kura/lane_history_compaction.rs"),
+    Path("crates/iroha_core/src/kura/prune_block_store_tail.rs"),
     Path("crates/iroha_core/src/kura/test_fault_injection_state.rs"),
     Path("crates/iroha_core/src/kura/test_fault_injection_controls.rs"),
     Path("crates/iroha_core/src/kura/file_error_support.rs"),
@@ -39,13 +41,24 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('commit_roster_journal/tests.rs'),
     ),
     Path('crates/iroha_config/src/parameters/actual.rs'): (
-        Path('actual/runtime_tail_tests.rs'),
+        Path('actual/torii_tx_history.rs'),
+        Path('actual/torii_http_transport.rs'),
+        Path('actual/torii_mcp_profile.rs'),
         Path('actual/tests.rs'),
     ),
     Path('crates/iroha_config/src/parameters/user.rs'): (
         Path('user/kura.rs'),
+        Path('user/torii_peer_geo.rs'),
+        Path('user/torii_soranet_privacy_ingest.rs'),
+        Path('user/torii_tx_history.rs'),
         Path('user/sorafs_moderation_query_bound_tests.rs'),
         Path('user/governance_dag_head_mode_tests.rs'),
+        Path('user/zk_prover_report_retention_tests.rs'),
+        Path('user/query_fanout_memory_tests.rs'),
+        Path('user/app_routed_read_body_timeout_tests.rs'),
+        Path('user/operator_signature_body_timeout_tests.rs'),
+        Path('user/verified_source_ingress_tests.rs'),
+        Path('user/iso_bridge_store_memory_tests.rs'),
         Path('user/kura_and_snapshot_tests.rs'),
         Path('user/runtime_tail_tests.rs'),
     ),
@@ -61,6 +74,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('kura/merge_ledger_latest_execution_index.rs'),
         Path('kura/replica_advert_and_body_status.rs'),
         Path('kura/retained_finality_replica_authority.rs'),
+        Path('kura/wsv_checkpoint_read_helpers.rs'),
         Path('kura/durable_block_and_atomic_sidecar_io.rs'),
         Path('kura/prune_intent_publication.rs'),
         Path('kura/prune_recovery_capacity.rs'),
@@ -79,6 +93,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('kura/indexed_sidecar_io.rs'),
         Path('kura/indexed_sidecar_rewrite.rs'),
         Path('kura/lane_history_compaction.rs'),
+        Path('kura/prune_block_store_tail.rs'),
         Path('kura/test_fault_injection_state.rs'),
         Path('kura/test_fault_injection_controls.rs'),
         Path('kura/file_error_support.rs'),
@@ -149,6 +164,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/queue.rs'): (
         Path('queue/canonical_terminal_cleanup.rs'),
+        Path('queue/nexus_reconfigure_manifest_reload_tests.rs'),
         Path('queue/plan_journal_startup_atomicity_tests.rs'),
         Path('queue/global_guard_claim_conflict_tests.rs'),
         Path('queue/queue_metadata_and_admission_tests.rs'),
@@ -205,7 +221,9 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('peer_tests.rs'),
     ),
     Path('crates/irohad/src/main.rs'): (
+        Path('main/shared_sorafs_provider_cache_tests.rs'),
         Path('main/runtime_deps.rs'),
+        Path('main/online_peers_provider.rs'),
         Path('main_tests/governance_dag_publisher_binding_signer.rs'),
         Path('main/governance_dag_launcher_tests.rs'),
         Path('main/runtime_budget_and_config_tests.rs'),
@@ -215,6 +233,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('taira_public_localnet_config_digest_test.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/mod.rs'): (
+        Path('fair_v2_ingress_selector.rs'),
         Path('tests/mod_authoritative_runtime_gate_01_support.rs'),
         Path('tests/mod_authoritative_runtime_gate_02_carrierless_replay.rs'),
         Path('tests/mod_authoritative_runtime_gate_03_admission_and_fairness.rs'),
@@ -229,19 +248,11 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('status/test_guards.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2.rs'): (
-        Path('v2_adapter_inline_context_and_genesis_tests.rs'),
-        Path('tests/v2_adapter_activation_context.rs'),
-        Path('v2_adapter_inline_auth_and_producer_recovery_01_tests.rs'),
-        Path('v2_adapter_inline_producer_recovery_02_tests.rs'),
-        Path('v2_adapter_inline_recovered_signing_tests.rs'),
-        Path('tests/v2_adapter_04_wal_recovery.rs'),
-        Path('tests/v2_adapter_04b_lifecycle_startup.rs'),
-        Path('tests/v2_adapter_05_direct_lifecycle.rs'),
-        Path('v2_adapter_inline_wal_and_lock_progress_tests.rs'),
-        Path('tests/v2_adapter_01_replay_and_registry.rs'),
-        Path('tests/v2_adapter_02_view_and_lock_progress.rs'),
-        Path('tests/v2_adapter_03_tc_and_terminal_ingress.rs'),
-        Path('v2_adapter_inline_ingress_authentication_tests.rs'),
+        Path('tests/v2_adapter_main_00.rs'),
+        Path('tests/v2_adapter_main_01.rs'),
+        Path('tests/v2_adapter_main_02.rs'),
+        Path('tests/v2_adapter_main_03.rs'),
+        Path('tests/v2_adapter_main_04.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs'): (
         Path('tests/v2_lifecycle_coordinator_explorer_cases.rs'),
@@ -277,6 +288,9 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lifecycle_work_registry_recovered_wal.rs'),
         Path('v2_lifecycle_work_registry_validate_recovery.rs'),
         Path('v2_lifecycle_work_registry_validate_execution.rs'),
+        Path('tests/v2_lifecycle_work_registry_00.rs'),
+        Path('tests/v2_lifecycle_work_registry_01.rs'),
+        Path('tests/v2_lifecycle_work_registry_02.rs'),
         Path('tests/v2_lifecycle_work_registry_validate_dispatch_cases.rs'),
         Path('tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs'),
         Path('tests/v2_lifecycle_work_registry_durable_store_and_validate_cases.rs'),
@@ -285,33 +299,36 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_lifecycle_work_registry_replay_evidence_cases.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_runtime.rs'): (
+        Path('tests/v2_runtime_pending_binding_cases.rs'),
+        Path('tests/v2_runtime_main_00.rs'),
+        Path('tests/v2_runtime_main_01.rs'),
+        Path('tests/v2_runtime_main_02.rs'),
+        Path('tests/v2_runtime_main_03.rs'),
+        Path('tests/v2_runtime_main_04.rs'),
+        Path('tests/v2_runtime_main_05.rs'),
+        Path('tests/v2_runtime_main_06.rs'),
         Path('tests/v2_runtime_unsealed_01b_lifecycle_bounds.rs'),
-        Path('v2_runtime_body_pipeline_ownership_cases_tests.rs'),
         Path('tests/v2_runtime_unsealed_02_owner_retirement_and_fairness.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_worker.rs'): (
         Path('v2_worker/exact_output_rollover_claim.rs'),
         Path('v2_worker/kura_replica_advert_refresh.rs'),
         Path('v2_worker/current_lane_output_rollover_claim.rs'),
+        Path('tests/v2_worker_main_00.rs'),
+        Path('tests/v2_worker_main_01.rs'),
+        Path('tests/v2_worker_lifecycle_capacity_cases.rs'),
         Path('tests/v2_worker_equivocation_and_selected_serve_fixture.rs'),
-        Path('tests/v2_worker_reply_route_cases.rs'),
-        Path('tests/v2_worker_backpressure_cases.rs'),
-        Path('v2_worker_output_and_handoff_cases_tests.rs'),
         Path('v2_worker/applied_height_handoff_tests.rs'),
         Path('v2_worker/upstream_reply_route_test.rs'),
-        Path('v2_worker_locked_candidate_and_routing_cases_tests.rs'),
-        Path('v2_worker_cold_refanout_and_recovery_cases_tests.rs'),
-        Path('tests/v2_worker_nonzero_view_restart.rs'),
-        Path('v2_worker_io_and_selected_serve_cases_01_tests.rs'),
-        Path('v2_worker_selected_serve_cases_02_tests.rs'),
-        Path('tests/v2_worker_serve_unsealed_cases.rs'),
-        Path('tests/v2_worker_serve_decision_restart_cases.rs'),
-        Path('tests/v2_worker_certified_serve_budget_cases.rs'),
-        Path('tests/v2_worker_productive_orphan_recovery_cases.rs'),
+        Path('tests/v2_worker_main_02.rs'),
+        Path('tests/v2_worker_main_03.rs'),
+        Path('tests/v2_worker_main_04.rs'),
+        Path('tests/v2_worker_main_05.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_runner.rs'): (
         Path('v2_runner/height_ingress_bindings.rs'),
         Path('v2_runner/lifecycle_terminal_recovery.rs'),
+        Path('v2_runner/decided_lane_recovery.rs'),
         Path('v2_runner/finalized_output_rollover.rs'),
         Path('v2_runner/canonical_recovery_ingress.rs'),
         Path('v2_runner/reply_route_retention.rs'),
@@ -351,11 +368,14 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_core_terminal_transactionality.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_effects.rs'): (
+        Path('tests/v2_effects_main_00.rs'),
+        Path('tests/v2_effects_main_01.rs'),
+        Path('tests/v2_effects_main_02.rs'),
+        Path('tests/v2_effects_main_03.rs'),
+        Path('tests/v2_effects_main_04.rs'),
+        Path('tests/v2_effects_main_05.rs'),
+        Path('tests/v2_effects_lifecycle_predecessor.rs'),
         Path('tests/v2_effects_03_locked_body_and_sidecar.rs'),
-        Path('v2_effects_certified_response_and_apply_cases_tests.rs'),
-        Path('tests/v2_effects_kura_tip_replay.rs'),
-        Path('tests/v2_effects_01_view_churn_and_runtime_steps.rs'),
-        Path('tests/v2_effects_02_admission_handoffs.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lane_work.rs'): (
         Path('v2_lane_work/canonical_executed_block_application_repair.rs'),
@@ -377,6 +397,35 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('verus_proofs/production_transition_contracts.rs'),
         Path('verus_proofs/in_flight_first_release_proofs.rs'),
         Path('verus_proofs/production_kernel_tail.rs'),
+    ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_main_00.rs'): (
+        Path('v2_adapter_activation_context.rs'),
+    ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_main_03.rs'): (
+        Path('v2_adapter_04_wal_recovery.rs'),
+        Path('v2_adapter_04b_lifecycle_startup.rs'),
+        Path('v2_adapter_05_direct_lifecycle.rs'),
+    ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_main_04.rs'): (
+        Path('v2_adapter_01_replay_and_registry.rs'),
+        Path('v2_adapter_02_view_and_lock_progress.rs'),
+        Path('v2_adapter_03_tc_and_terminal_ingress.rs'),
+    ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_worker_main_01.rs'): (
+        Path('v2_worker_reply_route_cases.rs'),
+        Path('v2_worker_backpressure_cases.rs'),
+        Path('v2_worker_recovered_lifecycle_output_cases.rs'),
+        Path('v2_worker_nonzero_view_restart.rs'),
+    ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_worker_main_04.rs'): (
+        Path('v2_worker_serve_unsealed_cases.rs'),
+        Path('v2_worker_serve_decision_restart_cases.rs'),
+        Path('v2_worker_certified_serve_budget_cases.rs'),
+    ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_effects_main_05.rs'): (
+        Path('v2_effects_kura_tip_replay.rs'),
+        Path('v2_effects_01_view_churn_and_runtime_steps.rs'),
+        Path('v2_effects_02_admission_handoffs.rs'),
     ),
 }
 
@@ -403,10 +452,10 @@ REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
     for parent in REVIEWED_RUST_INCLUDE_MANIFESTS
     if parent not in REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
-assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 42
+assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 48
 assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 4
 assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 4
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 38
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 44
 assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(
     REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
@@ -1530,6 +1579,26 @@ def test_async_source_fidelity_pins_live_serve_occurrence_identity(
     )
 
 
+def reviewed_rust_item_provider(
+    module, repo_root: Path, relative: Path, item_name: str
+) -> Path:
+    """Resolve one item through its authenticated parent/include closure."""
+
+    parent = repo_root / relative
+    candidates = (parent,) + tuple(
+        parent.parent / component
+        for component in module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(
+            relative.as_posix(), ()
+        )
+    )
+    providers = tuple(
+        path for path in candidates
+        if path.is_file() and module.rust_items(path.read_text(encoding="utf-8"), item_name)
+    )
+    assert len(providers) == 1, (relative, item_name, providers)
+    return providers[0]
+
+
 def copy_timeout_vote_window_fixture(tmp_path: Path, module) -> Path:
     """Copy the bounded TimeoutVote production and regression sources."""
 
@@ -1615,7 +1684,10 @@ def test_timeout_vote_semantic_capacity_rejects_real_source_mutations(
     """Bounded admission and both protected prune arms fail closed."""
 
     module = load_checker()
-    rust_path = copy_timeout_vote_window_fixture(tmp_path, module)
+    copy_timeout_vote_window_fixture(tmp_path, module)
+    rust_path = reviewed_rust_item_provider(
+        module, tmp_path, Path("crates/iroha_core/src/sumeragi/v2.rs"), item_name
+    )
     mutate_rust_item_source_in_context(
         module,
         rust_path,
@@ -1638,7 +1710,11 @@ def test_timeout_vote_semantic_capacity_rejects_two_roster_sets(
     """The semantic table reserves lock plus both bounded timeout rounds."""
 
     module = load_checker()
-    rust_path = copy_timeout_vote_window_fixture(tmp_path, module)
+    copy_timeout_vote_window_fixture(tmp_path, module)
+    rust_path = reviewed_rust_item_provider(
+        module, tmp_path, Path("crates/iroha_core/src/sumeragi/v2.rs"),
+        "semantic_ingress_capacity",
+    )
     mutate_rust_item_source(
         module,
         rust_path,
@@ -1796,23 +1872,8 @@ def test_timeout_vote_semantic_capacity_regressions_cannot_be_deleted(
 
     module = load_checker()
     copy_timeout_vote_window_fixture(tmp_path, module)
-    externalized = {
-        "capacity_bypass_records_follow_current_lock_and_timeout_view": (
-            "crates/iroha_core/src/sumeragi/tests/"
-            "v2_adapter_02_view_and_lock_progress.rs"
-        ),
-        "certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote": (
-            "crates/iroha_core/src/sumeragi/tests/"
-            "v2_adapter_03_tc_and_terminal_ingress.rs"
-        ),
-        "busy_deferred_source_identity_coalesces_across_consumer_view_change": (
-            "crates/iroha_core/src/sumeragi/tests/"
-            "v2_adapter_03_tc_and_terminal_ingress.rs"
-        ),
-    }
-    rust_path = tmp_path / externalized.get(
-        test_name,
-        "crates/iroha_core/src/sumeragi/v2.rs",
+    rust_path = reviewed_rust_item_provider(
+        module, tmp_path, Path("crates/iroha_core/src/sumeragi/v2.rs"), test_name
     )
     mutate_rust_item_source(
         module,
@@ -2453,6 +2514,13 @@ def test_merge_runtime_config_v6_rejects_each_projection_field_substitution(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "const fn merge_sidecar_server_stream_capacity(",
+            "roster_len + wire::MAX_VALIDATORS_PER_HEIGHT",
+            "roster_len",
+            "adapter sidecar server stream capacity reserves current and predecessor committees",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "None => MergeSidecarTransport::open_durable_with_server_stream_capacity(",
             "limits.merge_sidecar_limits,",
             "MergeSidecarLimits::defaults(),",
@@ -2935,6 +3003,92 @@ def _synthetic_trace_artifact_paths(module, path: Path):
         verus_log=path,
         cross_tool_evidence=path,
     )
+
+
+def test_production_trace_certificate_links_exact_tlaps_ledger_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_checker()
+    ledger = {
+        "obligations": [
+            {"id": obligation_id, "status": status}
+            for obligation_id, status in (
+                module.PRODUCTION_TRACE_EXTRACTION_LEDGER_DEPENDENCIES
+            )
+        ],
+        "machine_checked_completion": False,
+    }
+    canonical_ledger_sha256 = module._canonical_json_sha256(ledger)
+    exact_ledger_sha256 = "a" * 64
+    assert exact_ledger_sha256 != canonical_ledger_sha256
+    tlaps_evidence = {
+        "source_manifest": {"sha256": "b" * 64},
+        "ledger_sha256": exact_ledger_sha256,
+    }
+    verus_evidence = {
+        "source_manifest_sha256": "c" * 64,
+        "log_sha256": "d" * 64,
+    }
+    cross_tool_evidence = {
+        "source_manifests": {
+            "formal_sha256": tlaps_evidence["source_manifest"]["sha256"],
+            "workspace_sha256": verus_evidence["source_manifest_sha256"],
+        },
+        "ledger_sha256": exact_ledger_sha256,
+        "component_evidence": {
+            "tlaps_sha256": module._canonical_json_sha256(tlaps_evidence),
+            "verus_sha256": module._canonical_json_sha256(verus_evidence),
+        },
+    }
+    source_snapshot = {
+        "multilane_source_manifest_sha256": "e" * 64,
+        "model_sources": [],
+        "model_symbols": [],
+        "refinement_symbols": [],
+        "production_symbols": [],
+        "verus_theorems": [],
+        "operational_correspondence": {},
+        "source_bindings": [],
+    }
+    monkeypatch.setattr(
+        module, "_production_trace_extraction_action_partition_errors", lambda: []
+    )
+    monkeypatch.setattr(
+        module,
+        "_production_trace_extraction_source_snapshot",
+        lambda **kwargs: source_snapshot,
+    )
+    monkeypatch.setattr(
+        module,
+        "_production_trace_artifact_entry",
+        lambda role, path: {"role": role, "sha256": "f" * 64, "size_bytes": 1},
+    )
+    artifacts = _synthetic_trace_artifact_paths(module, tmp_path / "artifact")
+
+    certificate = module.build_production_trace_extraction_evidence(
+        ledger,
+        tlaps_evidence=tlaps_evidence,
+        verus_evidence=verus_evidence,
+        cross_tool_evidence=cross_tool_evidence,
+        artifacts=artifacts,
+    )
+
+    assert certificate["proof_linkage"]["ledger_document_sha256"] == (
+        canonical_ledger_sha256
+    )
+    assert certificate["proof_linkage"]["cross_tool_ledger_sha256"] == (
+        exact_ledger_sha256
+    )
+    substituted = copy.deepcopy(cross_tool_evidence)
+    substituted["ledger_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="does not link the exact proof ledger"):
+        module.build_production_trace_extraction_evidence(
+            ledger,
+            tlaps_evidence=tlaps_evidence,
+            verus_evidence=verus_evidence,
+            cross_tool_evidence=substituted,
+            artifacts=artifacts,
+        )
 
 
 def test_production_trace_certificate_authenticates_all_runtime_links() -> None:
@@ -4767,102 +4921,49 @@ def _assert_commit_import_release_or_stale_artifact(
         ), errors
 
 
-def test_successor_run_inner_parser_rejects_neighbor_lookalike(
+
+
+@pytest.mark.parametrize(
+    ("replacement", "expected_counts"),
+    (
+        ("let linked_before = match removed_statat(", "(0, 0, 0)"),
+        (
+            """if false {
+                let linked_before = match rustix::fs::statat(
+                    &self.directory.directory,
+                    &self.entry_name,
+                    rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+                ) {
+                    Ok(stat) => stat,
+                    Err(_) => unreachable!(),
+                };
+                let _ = linked_before;
+            }
+            let linked_before = match rustix::fs::statat(""",
+            "(0, 0, 2)",
+        ),
+    ),
+)
+def test_serviced_candidate_read_discriminator_fails_closed_without_crashing(
     tmp_path: Path,
+    replacement: str,
+    expected_counts: str,
 ) -> None:
-    """Successor checks may consume only the parsed `run_inner` item."""
+    """Missing or duplicate bounded-read ownership returns a diagnostic."""
 
     module = load_checker()
-    for relative in (
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "crates/iroha_core/src/sumeragi/mod.rs",
-        "crates/iroha_core/src/sumeragi/status.rs",
-        "crates/iroha_core/src/sumeragi/v2.rs",
-        "crates/iroha_core/src/sumeragi/v2_runtime.rs",
-        "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
-        "crates/iroha_core/src/sumeragi/v2_effects.rs",
-        "crates/iroha_core/src/sumeragi/v2_apply_tests.rs",
-        "crates/iroha_core/src/sumeragi/v2_recovery.rs",
-        "crates/iroha_core/src/sumeragi/v2_context.rs",
-        "crates/iroha_core/src/sumeragi/v2_body_store.rs",
-        "crates/iroha_core/src/sumeragi/safety_wal.rs",
-        "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_pending_kura.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs",
-        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
-        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs",
-        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
-        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
-        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_runner_authority.rs",
-        "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
-        "crates/iroha_core/src/sumeragi/v2_runner/preactivation_ingress.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
-        "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_concrete_admission.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
-        "crates/iroha_core/src/sumeragi/v2_transport.rs",
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
-        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-        "crates/iroha_core/src/sumeragi/v2_apply.rs",
-        "crates/iroha_core/src/state.rs",
-        "crates/iroha_core/src/kura.rs",
-        "scripts/run_sumeragi_v2_release_gates.sh",
-    ):
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / relative, destination)
-    copy_reviewed_rust_include_components(tmp_path)
-
-    runner = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
-    source = runner.read_text(encoding="utf-8")
-    run_inner_items = module.rust_items(source, "run_inner")
-    assert len(run_inner_items) == 1
-    run_inner = run_inner_items[0]
-    owner_binding = (
-        "let pending_successor_activation = recovered_successor_activation\n"
-        "        .map(|authority| PendingSuccessorActivation::recovered(authority, &common_config.key_pair))\n"
-        "        .transpose()?;"
-    )
-    assert run_inner.source.count(owner_binding) == 1
-    weakened = run_inner.source.replace(
-        owner_binding,
-        "let pending_successor_activation = None;",
-        1,
-    )
-    neighboring_lookalike = (
-        "\n\nfn parser_only_run_inner_lookalike() {\n"
-        f"    {owner_binding}\n"
-        "    let _ = &pending_successor_activation;\n"
-        "}\n"
-    )
-    assert source.count(run_inner.source) == 1
-    runner.write_text(
-        source.replace(
-            run_inner.source,
-            weakened + neighboring_lookalike,
-            1,
-        ),
-        encoding="utf-8",
+    copy_serviced_candidate_production_fixture(tmp_path)
+    assert module._serviced_candidate_production_source_fidelity_errors(tmp_path) == []
+    safety_path = tmp_path / "crates/iroha_core/src/sumeragi/safety_wal.rs"
+    mutate_source_once(
+        safety_path,
+        "let linked_before = match rustix::fs::statat(",
+        replacement,
     )
 
-    errors = module._successor_production_source_fidelity_errors(tmp_path)
+    errors = module._serviced_candidate_production_source_fidelity_errors(tmp_path)
     assert any(
-        "run_inner recovery ownership omits production refinement tokens"
-        in error
+        "require exactly one parsed bounded adjacent read" in error
+        and f"discriminator_counts={expected_counts}" in error
         for error in errors
     ), errors

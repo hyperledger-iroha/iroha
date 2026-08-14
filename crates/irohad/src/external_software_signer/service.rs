@@ -1,30 +1,4 @@
 //! Stateful software signer core independent of its Unix transport.
-
-use std::{
-    collections::BTreeMap,
-    fs::{self, File, OpenOptions},
-    io::{Read as _, Write as _},
-    path::{Component, Path, PathBuf},
-    sync::Mutex,
-};
-
-#[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
-
-use iroha_crypto::{KeyPair, Signature};
-use iroha_data_model::{
-    account::AccountId,
-    isi::sorafs::{
-        AdvanceSorafsReserveLifecycle, ApplySorafsRepairTaskAction, ChargeSorafsReserveRent,
-        DecideSorafsReserveAppeal, DecideSorafsReserveMovement, DrawSorafsReserveCredit,
-        MaintainSorafsOrderbook, MatchSorafsOrderbook, RecordSorafsOrderbookSettlementReceipt,
-        RegisterSorafsReserveAccount, RepaySorafsReserveCredit, RequestSorafsReserveMovement,
-        SubmitSorafsProofOutcome, SubmitSorafsRepairAppeal, SubmitSorafsRepairTask,
-        SubmitSorafsReserveAppeal,
-    },
-    transaction::{Executable, TransactionBuilder, TransactionPayload},
-};
-
 use super::{
     envelope::{
         SoftwareSignerKeyEnvelopeAadV1, SoftwareSignerKeyEnvelopeV1, SoftwareSignerWrappingKeyV1,
@@ -45,13 +19,33 @@ use super::{
         valid_software_signer_handle,
     },
 };
-
+use iroha_crypto::{KeyPair, Signature};
+use iroha_data_model::{
+    account::AccountId,
+    isi::sorafs::{
+        AdvanceSorafsReserveLifecycle, ApplySorafsRepairTaskAction, ChargeSorafsReserveRent,
+        DecideSorafsReserveAppeal, DecideSorafsReserveMovement, DrawSorafsReserveCredit,
+        MaintainSorafsOrderbook, MatchSorafsOrderbook, RecordSorafsOrderbookSettlementReceipt,
+        RegisterSorafsReserveAccount, RepaySorafsReserveCredit, RequestSorafsReserveMovement,
+        SubmitSorafsProofOutcome, SubmitSorafsRepairAppeal, SubmitSorafsRepairTask,
+        SubmitSorafsReserveAppeal,
+    },
+    transaction::{Executable, TransactionBuilder, TransactionPayload},
+};
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
+use std::{
+    collections::BTreeMap,
+    fs::{self, File, OpenOptions},
+    io::{Read as _, Write as _},
+    path::{Component, Path, PathBuf},
+    sync::Mutex,
+};
 const ACTIVE_ENVELOPE_NAME_V1: &str = "key-envelope-v1.norito";
 const PENDING_ENVELOPE_NAME_V1: &str = ".key-envelope-v1.pending";
 const ENVELOPE_FILE_MAX_BYTES_V1: usize = 32 * 1024;
 const PROVENANCE_ATTESTATION_DOMAIN_V1: &[u8] = b"iroha.external-signer.provenance.v1";
 const RESPONSE_ATTESTATION_DOMAIN_V1: &[u8] = b"iroha.external-signer.response-attestation.v1";
-
 /// Public inputs used to create a fresh isolated software signer.
 #[derive(Clone, Debug)]
 pub struct SoftwareSignerProvisioningV1 {
@@ -82,7 +76,6 @@ pub struct SoftwareSignerProvisioningV1 {
     /// Maximum canonical transaction payload size.
     pub max_request_bytes: u32,
 }
-
 impl SoftwareSignerProvisioningV1 {
     fn validate(&self) -> Result<(), SoftwareSignerErrorV1> {
         if !valid_software_signer_handle(self.role, &self.handle)
@@ -111,13 +104,11 @@ impl SoftwareSignerProvisioningV1 {
         Ok(())
     }
 }
-
 /// One opened signer service. Debug output deliberately excludes key material.
 pub struct SoftwareSignerServiceV1 {
     state_directory: PathBuf,
     state: Mutex<SoftwareSignerStateV1>,
 }
-
 struct SoftwareSignerStateV1 {
     binding: SoftwareSignerPublicBindingV1,
     envelope: SoftwareSignerKeyEnvelopeV1,
@@ -129,7 +120,6 @@ struct SoftwareSignerStateV1 {
     sign_commits: BTreeMap<[u8; 32], RecoveredSignCommitV1>,
     admin_commits: BTreeMap<[u8; 32], RecoveredAdminCommitV1>,
 }
-
 impl std::fmt::Debug for SoftwareSignerServiceV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let state = self.state.lock().map_err(|_| std::fmt::Error)?;
@@ -145,7 +135,6 @@ impl std::fmt::Debug for SoftwareSignerServiceV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl SoftwareSignerServiceV1 {
     /// Generate and durably provision one new software signer.
     ///
@@ -218,7 +207,6 @@ impl SoftwareSignerServiceV1 {
             }),
         })
     }
-
     /// Open and fully recover one provisioned signer.
     ///
     /// # Errors
@@ -267,7 +255,6 @@ impl SoftwareSignerServiceV1 {
             }),
         })
     }
-
     /// Return the immutable public binding for the active generation.
     ///
     /// # Errors
@@ -278,7 +265,6 @@ impl SoftwareSignerServiceV1 {
         state.ensure_available()?;
         Ok(state.binding.clone())
     }
-
     /// Return signed live qualification and current audit head.
     ///
     /// # Errors
@@ -289,7 +275,6 @@ impl SoftwareSignerServiceV1 {
         state.ensure_available()?;
         state.provenance()
     }
-
     pub(super) fn handle_sign_request(
         &self,
         request: &SignRequestV1,
@@ -390,7 +375,6 @@ impl SoftwareSignerServiceV1 {
             .insert(request.operation_id, commit.clone());
         state.sign_success_response(request, SignStatusV1::Ok, commit)
     }
-
     pub(super) fn attest_protocol_response(
         &self,
         response_digest: [u8; 32],
@@ -399,7 +383,6 @@ impl SoftwareSignerServiceV1 {
         state.ensure_available()?;
         state.attest_response(response_digest)
     }
-
     pub(super) fn handle_admin_request(
         &self,
         request: &AdminRequestV1,
@@ -546,7 +529,6 @@ impl SoftwareSignerServiceV1 {
             }
         }
     }
-
     fn lock_state(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, SoftwareSignerStateV1>, SoftwareSignerErrorV1> {
@@ -555,7 +537,6 @@ impl SoftwareSignerServiceV1 {
             .map_err(|_| SoftwareSignerErrorV1::Unavailable)
     }
 }
-
 fn admin_operation_id(command: &AdminCommandV1) -> Option<[u8; 32]> {
     match command {
         AdminCommandV1::Status => None,
@@ -563,7 +544,6 @@ fn admin_operation_id(command: &AdminCommandV1) -> Option<[u8; 32]> {
         | AdminCommandV1::Revoke { operation_id, .. } => Some(*operation_id),
     }
 }
-
 impl SoftwareSignerStateV1 {
     fn ensure_available(&self) -> Result<(), SoftwareSignerErrorV1> {
         if self.poisoned {
@@ -572,7 +552,6 @@ impl SoftwareSignerStateV1 {
             Ok(())
         }
     }
-
     fn active_snapshot(&self) -> (u64, u64, [u8; 32], [u8; 32], bool) {
         (
             self.binding.key_revision,
@@ -582,7 +561,6 @@ impl SoftwareSignerStateV1 {
             self.revoked,
         )
     }
-
     fn append_audit(
         &mut self,
         event: SoftwareSignerAuditEventV1,
@@ -591,7 +569,6 @@ impl SoftwareSignerStateV1 {
             .append(event, &self.keypair)
             .map_err(SoftwareSignerErrorV1::Journal)
     }
-
     fn provenance(&self) -> Result<SoftwareSignerLiveProvenanceV1, SoftwareSignerErrorV1> {
         let mut provenance = SoftwareSignerLiveProvenanceV1 {
             binding: self.binding.clone(),
@@ -607,7 +584,6 @@ impl SoftwareSignerStateV1 {
             .to_vec();
         Ok(provenance)
     }
-
     fn sign_success_response(
         &self,
         request: &SignRequestV1,
@@ -631,7 +607,6 @@ impl SoftwareSignerStateV1 {
         response.response_attestation = self.attest_response(response.response_digest)?;
         Ok(response)
     }
-
     fn sign_error_response(
         &self,
         request: &SignRequestV1,
@@ -654,7 +629,6 @@ impl SoftwareSignerStateV1 {
         response.response_attestation = self.attest_response(response.response_digest)?;
         Ok(response)
     }
-
     fn admin_response(
         &self,
         request_digest: [u8; 32],
@@ -676,7 +650,6 @@ impl SoftwareSignerStateV1 {
             .map_err(|_| SoftwareSignerAdminErrorV1::Unavailable)?;
         Ok(response)
     }
-
     fn attest_response(&self, response_digest: [u8; 32]) -> Result<Vec<u8>, SoftwareSignerErrorV1> {
         let message =
             super::protocol::digest_parts(RESPONSE_ATTESTATION_DOMAIN_V1, &[&response_digest]);
@@ -685,7 +658,6 @@ impl SoftwareSignerStateV1 {
             .map_err(|_| SoftwareSignerErrorV1::CryptoUnavailable)
     }
 }
-
 pub(super) fn verify_response_attestation(
     binding: &SoftwareSignerPublicBindingV1,
     response_digest: [u8; 32],
@@ -702,7 +674,6 @@ pub(super) fn verify_response_attestation(
         .verify(&binding.public_key, &message)
         .map_err(|_| SoftwareSignerErrorV1::InvalidBinding)
 }
-
 pub(super) fn verify_provenance(
     provenance: &SoftwareSignerLiveProvenanceV1,
 ) -> Result<(), SoftwareSignerErrorV1> {
@@ -730,7 +701,6 @@ pub(super) fn verify_provenance(
         )
         .map_err(|_| SoftwareSignerErrorV1::InvalidBinding)
 }
-
 fn provenance_body_digest(
     provenance: &SoftwareSignerLiveProvenanceV1,
 ) -> Result<[u8; 32], SoftwareSignerErrorV1> {
@@ -745,7 +715,6 @@ fn provenance_body_digest(
     )
     .map_err(|_| SoftwareSignerErrorV1::Unavailable)
 }
-
 fn valid_promotion_payload(payload: &[u8]) -> bool {
     let Some(json) = payload.strip_prefix(super::protocol::SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1)
     else {
@@ -757,7 +726,6 @@ fn valid_promotion_payload(payload: &[u8]) -> bool {
         && !json.contains(&0)
         && std::str::from_utf8(json).is_ok()
 }
-
 pub(super) fn native_payload_matches_role(
     role: SoftwareSignerRoleV1,
     payload: &TransactionPayload,
@@ -832,13 +800,11 @@ pub(super) fn native_payload_matches_role(
         | SoftwareSignerRoleV1::PopCredentials => false,
     }
 }
-
 fn binding_from_recovered(
     recovered: &RecoveredJournalV1,
 ) -> Result<SoftwareSignerPublicBindingV1, SoftwareSignerErrorV1> {
     binding_from_aad(recovered.active_key.clone(), recovered.audit_genesis_digest)
 }
-
 fn binding_from_aad(
     aad: SoftwareSignerKeyEnvelopeAadV1,
     audit_genesis_digest: [u8; 32],
@@ -870,7 +836,6 @@ fn binding_from_aad(
         .map_err(|_| SoftwareSignerErrorV1::InvalidBinding)?;
     Ok(binding)
 }
-
 fn persist_initial_envelope(
     state_directory: &Path,
     envelope: &SoftwareSignerKeyEnvelopeV1,
@@ -878,7 +843,6 @@ fn persist_initial_envelope(
     persist_pending_envelope(state_directory, envelope)?;
     promote_pending_envelope(state_directory)
 }
-
 fn persist_pending_envelope(
     state_directory: &Path,
     envelope: &SoftwareSignerKeyEnvelopeV1,
@@ -908,7 +872,6 @@ fn persist_pending_envelope(
     validate_private_file(&pending).map_err(SoftwareSignerErrorV1::Journal)?;
     sync_directory(state_directory).map_err(SoftwareSignerErrorV1::Journal)
 }
-
 fn promote_pending_envelope(state_directory: &Path) -> Result<(), SoftwareSignerErrorV1> {
     let pending = state_directory.join(PENDING_ENVELOPE_NAME_V1);
     let active = state_directory.join(ACTIVE_ENVELOPE_NAME_V1);
@@ -917,7 +880,6 @@ fn promote_pending_envelope(state_directory: &Path) -> Result<(), SoftwareSigner
     sync_directory(state_directory).map_err(SoftwareSignerErrorV1::Journal)?;
     validate_private_file(&active).map_err(SoftwareSignerErrorV1::Journal)
 }
-
 fn recover_envelope_transition(
     state_directory: &Path,
     recovered: &RecoveredJournalV1,
@@ -953,7 +915,6 @@ fn recover_envelope_transition(
         _ => Err(SoftwareSignerErrorV1::RollbackOrSubstitution),
     }
 }
-
 fn read_envelope(path: &Path) -> Result<SoftwareSignerKeyEnvelopeV1, SoftwareSignerErrorV1> {
     validate_private_file(path).map_err(SoftwareSignerErrorV1::Journal)?;
     let mut bytes = Vec::new();
@@ -980,7 +941,6 @@ fn read_envelope(path: &Path) -> Result<SoftwareSignerKeyEnvelopeV1, SoftwareSig
         .map_err(SoftwareSignerErrorV1::Envelope)?;
     Ok(envelope)
 }
-
 fn validate_absolute_normal_path(path: &Path) -> Result<(), SoftwareSignerErrorV1> {
     if !path.is_absolute()
         || path.components().any(|component| {
@@ -994,7 +954,6 @@ fn validate_absolute_normal_path(path: &Path) -> Result<(), SoftwareSignerErrorV
     }
     Ok(())
 }
-
 fn validate_secure_ancestors(path: &Path) -> Result<(), SoftwareSignerErrorV1> {
     for ancestor in path.ancestors() {
         let metadata =
@@ -1017,7 +976,6 @@ fn validate_secure_ancestors(path: &Path) -> Result<(), SoftwareSignerErrorV1> {
     }
     Ok(())
 }
-
 fn create_state_directory(path: &Path) -> Result<(), SoftwareSignerErrorV1> {
     let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
@@ -1027,7 +985,6 @@ fn create_state_directory(path: &Path) -> Result<(), SoftwareSignerErrorV1> {
         .map_err(|_| SoftwareSignerErrorV1::Persistence)?;
     validate_state_directory(path)
 }
-
 fn validate_state_directory(path: &Path) -> Result<(), SoftwareSignerErrorV1> {
     let metadata = fs::symlink_metadata(path).map_err(|_| SoftwareSignerErrorV1::UntrustedPath)?;
     #[cfg(unix)]
@@ -1044,7 +1001,6 @@ fn validate_state_directory(path: &Path) -> Result<(), SoftwareSignerErrorV1> {
     }
     Ok(())
 }
-
 /// Payload-free signer service failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoftwareSignerErrorV1 {
@@ -1069,7 +1025,6 @@ pub enum SoftwareSignerErrorV1 {
     /// Service state is unavailable or poisoned.
     Unavailable,
 }
-
 /// Payload-free administrator operation failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoftwareSignerAdminErrorV1 {

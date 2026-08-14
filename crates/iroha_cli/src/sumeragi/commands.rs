@@ -1,10 +1,7 @@
 use clap::ValueEnum;
 use eyre::Result;
-
 use crate::{Run, RunContext};
-
 use super::{commit_qc, evidence, status, telemetry, vrf};
-
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Show consensus status snapshot (leader, `HighestQC`, `LockedQC`)
@@ -34,13 +31,11 @@ pub enum Command {
     #[command(subcommand)]
     CommitQc(CommitQcCommand),
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum CommitQcCommand {
     /// Fetch commit QC (if present) for a block hash
     Get(CommitQcGetArgs),
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum EvidenceCommand {
     /// List persisted evidence entries
@@ -48,19 +43,14 @@ pub enum EvidenceCommand {
     /// Show evidence count
     Count(EvidenceCountArgs),
 }
-
 #[derive(clap::Args, Debug)]
 pub struct StatusArgs {}
-
 #[derive(clap::Args, Debug)]
 pub struct DiagnosticsArgs {}
-
 #[derive(clap::Args, Debug)]
 pub struct LeaderArgs {}
-
 #[derive(clap::Args, Debug)]
 pub struct ParamsArgs {}
-
 #[derive(clap::Args, Debug)]
 pub struct EvidenceListArgs {
     /// Maximum number of entries to return
@@ -73,10 +63,8 @@ pub struct EvidenceListArgs {
     #[arg(long, value_enum)]
     pub kind: Option<EvidenceKindArg>,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct EvidenceCountArgs {}
-
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum EvidenceKindArg {
     #[value(name = "DoublePrepare")]
@@ -92,7 +80,6 @@ pub enum EvidenceKindArg {
     #[value(name = "SumeragiV2Equivocation")]
     SumeragiV2Equivocation,
 }
-
 impl EvidenceKindArg {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -105,40 +92,32 @@ impl EvidenceKindArg {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct QcArgs {}
-
 #[derive(clap::Args, Debug)]
 pub struct PacemakerArgs {}
-
 #[derive(clap::Args, Debug)]
 pub struct PhasesArgs {}
-
 #[derive(clap::Args, Debug)]
 pub struct TelemetryArgs {}
-
 #[derive(clap::Args, Debug)]
 pub struct VrfPenaltiesArgs {
     /// Epoch index (decimal or 0x-prefixed hex)
     #[arg(long, value_name = "EPOCH")]
     pub epoch: String,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct VrfEpochArgs {
     /// Epoch index (decimal or 0x-prefixed hex)
     #[arg(long, value_name = "EPOCH")]
     pub epoch: String,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct CommitQcGetArgs {
     /// Block hash for which the commit QC should be fetched
     #[arg(long)]
     pub hash: String,
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -157,7 +136,6 @@ impl Run for Command {
         }
     }
 }
-
 impl Run for CommitQcCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -165,7 +143,6 @@ impl Run for CommitQcCommand {
         }
     }
 }
-
 impl Run for EvidenceCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -174,13 +151,10 @@ impl Run for EvidenceCommand {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use clap::ValueEnum as _;
-
     use super::EvidenceKindArg;
-
     #[test]
     fn evidence_kind_filters_map_to_the_six_canonical_wire_names() {
         let cases = [
@@ -194,7 +168,6 @@ mod tests {
                 "SumeragiV2Equivocation",
             ),
         ];
-
         for (kind, expected) in cases {
             assert_eq!(kind.as_str(), expected);
             assert_eq!(

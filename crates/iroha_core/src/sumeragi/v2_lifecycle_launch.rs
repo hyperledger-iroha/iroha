@@ -1,15 +1,13 @@
 //! Sealed production launch from recovered lifecycle ownership into live I/O.
-
+use iroha_crypto::KeyPair;
+use iroha_data_model::{
+    block::{CertifiedMergeLedgerReference, consensus_v2 as wire},
+    peer::PeerId,
+};
 use std::{
     collections::BTreeSet,
     sync::Arc,
     time::{Duration, Instant},
-};
-
-use iroha_crypto::{HashOf, KeyPair};
-use iroha_data_model::{
-    block::{CertifiedMergeLedgerReference, consensus_v2 as wire},
-    peer::PeerId,
 };
 use thiserror::Error;
 
@@ -55,13 +53,15 @@ use super::{
     ingress_position::{FairIngressTurnContextCut, FairIngressTurnCut},
     work_registry::RecoveredDecisionApplyTerminalPublicationError,
 };
+use crate::sumeragi::v2_runner::LifecycleCurrentRunnerTurn;
+#[cfg(test)]
+use crate::sumeragi::v2_runner::LifecycleRunnerRankSnapshot;
 use crate::{
     IrohaNetwork,
     kura::{Kura, KuraV2CommitReceipt},
     state::State,
     sumeragi::{
-        FairV2Ingress, FairV2IngressDequeueDisposition, FairV2IngressOwnershipEvidence,
-        InboundBlockMessage,
+        FairV2Ingress, FairV2IngressDequeueDisposition, InboundBlockMessage,
         output_guard::ConsensusOutputGuard,
         serviced_candidate_store::{LeaderWireLifecycleRestore, LeaderWireLifecycleStoreGate},
         v2_apply::RecoveredDecisionApplyWorkerResultV1,
@@ -73,9 +73,9 @@ use crate::{
         },
         v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig, SerializedV2Runtime},
         v2_worker::{
-            CertifiedServeAdmission, CertifiedServeIngressGate, CertifiedServeNegativeOutcome,
-            CertifiedServePrepareError, DurableExactOutputServiceOwner,
-            KuraReplicaAdvertRefreshOwner, PreparedRecoveredDecisionApplyCompletionV1,
+            CertifiedServeIngressGate, CertifiedServeNegativeOutcome, CertifiedServePrepareError,
+            DurableExactOutputServiceOwner, KuraReplicaAdvertRefreshOwner,
+            PreparedRecoveredDecisionApplyCompletionV1,
             PreparedRecoveredDecisionFetchBodyCompletionV1,
             PreparedRecoveredLifecycleSignCompletionV1, ProductionV2Services,
             RecoveredDecisionApplyDeferredRetryV1, RecoveredLifecycleCompletionTakeV1,
@@ -83,11 +83,18 @@ use crate::{
         },
     },
 };
-
-use crate::sumeragi::v2_runner::LifecycleCurrentRunnerTurn;
 #[cfg(test)]
-use crate::sumeragi::v2_runner::LifecycleRunnerRankSnapshot;
-
+use preactivation::ProductionLifecyclePreActivationFailStopScopeV1;
+pub(in crate::sumeragi) use preactivation::{
+    ProductionLifecyclePreActivationErrorV1, ProductionPendingKuraApplyInstallErrorV1,
+};
+#[cfg(test)]
+pub(in crate::sumeragi) use turn_driver::ProductionPreparedCertifiedServeTestSettlementV1;
+pub(in crate::sumeragi) use turn_driver::{
+    ProductionLifecycleCompletionSelectionV1, ProductionLifecycleCompletionTurnV1,
+    ProductionLifecycleIngressSelectionV1, ProductionLifecycleIngressTurnV1,
+    ProductionPreparedOrdinaryIngressTurnV1, ProductionRecoveredLifecycleSignCompletionSelectionV1,
+};
 /// All non-lifecycle dependencies consumed by one production height launch.
 ///
 /// The immutable height context, roster proofs, adapter, and body store are not
@@ -113,7 +120,6 @@ pub(in crate::sumeragi) struct ProductionLifecycleLaunchInputsV1 {
     kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
     exact_output_handoff_owner: DurableExactOutputServiceOwner,
 }
-
 impl ProductionLifecycleLaunchInputsV1 {
     /// Bind the runner-owned service dependencies for one consuming launch.
     #[allow(clippy::too_many_arguments)]
@@ -159,7 +165,6 @@ impl ProductionLifecycleLaunchInputsV1 {
         }
     }
 }
-
 /// RAII owner of both exact durable ingress gates installed for this launch.
 ///
 /// Leader-wire recovery binds before runtime and service construction. The
@@ -172,7 +177,6 @@ struct ProductionLeaderWireIngressBindingV1 {
     gate: Option<Arc<LeaderWireLifecycleStoreGate>>,
     certified_serve_gate: Option<CertifiedServeIngressGate>,
 }
-
 impl ProductionLeaderWireIngressBindingV1 {
     fn bind(
         ingress: Arc<FairV2Ingress>,
@@ -198,7 +202,6 @@ impl ProductionLeaderWireIngressBindingV1 {
             certified_serve_gate: None,
         })
     }
-
     /// Join the exact service-owned Serve gate to the retained leader gate.
     fn bind_certified_serve(mut self, gate: CertifiedServeIngressGate) -> Result<Self, String> {
         if self.gate.is_none() || self.certified_serve_gate.is_some() {
@@ -212,7 +215,6 @@ impl ProductionLeaderWireIngressBindingV1 {
         self.certified_serve_gate = Some(gate);
         Ok(self)
     }
-
     fn retire(&mut self) -> Result<(), String> {
         match (self.gate.as_ref(), self.certified_serve_gate.as_ref()) {
             (None, None) => Ok(()),
@@ -247,7 +249,6 @@ impl ProductionLeaderWireIngressBindingV1 {
         }
     }
 }
-
 impl Drop for ProductionLeaderWireIngressBindingV1 {
     fn drop(&mut self) {
         if let Err(error) = self.retire() {
@@ -258,7 +259,6 @@ impl Drop for ProductionLeaderWireIngressBindingV1 {
         }
     }
 }
-
 /// Opaque running stack produced by the sole consuming lifecycle launch.
 ///
 /// Construction does not publish status or open ingress. The separate
@@ -298,7 +298,6 @@ pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {
     #[allow(dead_code)]
     leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1,
 }
-
 /// Result of draining one dedicated recovered Apply worker completion.
 #[allow(variant_size_differences)]
 #[must_use = "a deferred recovered Apply completion must remain retained"]
@@ -310,7 +309,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyCompletionV1 {
     /// A guarded missing-sidecar result awaits exact fetch progress or queue re-entry.
     Deferred(RetainedRecoveredDecisionApplyDeferredV1),
 }
-
 /// Result of settling one lifecycle-owned recovered Decision Fetch body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "recovered Decision Fetch settlement result must be observed"]
@@ -324,7 +322,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchStoreSettlementV1 {
     /// Fetch, Store, ingress, request, adapter, registry, and worker owners advanced.
     Applied,
 }
-
 /// Pre-publication adapter preparation for a recovered signed Broadcast.
 ///
 /// This bounded seam proves the exact single-Broadcast reducer shape but does
@@ -339,7 +336,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignBroadcastPreparatio
     /// The completion or reducer successor is outside the single-Broadcast cut.
     Retry,
 }
-
 /// Result of durably settling one recovered Sign into its exact Broadcast child.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "recovered Sign Broadcast settlement result must be observed"]
@@ -356,7 +352,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignBroadcastSettlement
     /// separate restart-safe refanout transaction.
     Applied,
 }
-
 /// Result of atomically settling a recovered Proposal into Broadcast plus Sign.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "recovered Proposal two-child settlement result must be observed"]
@@ -372,7 +367,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleProposalBroadcastAndSig
     /// Ledger, coordinator, registry, adapter, worker, and exact output advanced.
     Applied,
 }
-
 /// Result of settling one recovered Prepare Vote into Broadcast plus Commit Sign.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "recovered Vote two-child settlement result must be observed"]
@@ -387,7 +381,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleVoteBroadcastAndSignSet
     /// The Ready Broadcast remains the durable source for typed refanout.
     Applied,
 }
-
 /// Stable pre-fsync settlement diagnostic; it contains no completion parts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchStoreSettlementFailureV1 {
@@ -406,7 +399,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchStoreSettlementFail
     /// Consensus output was already closed before publication.
     OutputClosed,
 }
-
 /// Opaque guarded missing-sidecar result.
 ///
 /// There is intentionally no parts or acknowledgement API. The sole retry
@@ -417,13 +409,11 @@ pub(in crate::sumeragi) struct RetainedRecoveredDecisionApplyDeferredV1 {
     completion: PreparedRecoveredDecisionApplyCompletionV1,
     sidecar: RecoveredDecisionApplySidecarWaitV1,
 }
-
 struct RecoveredDecisionApplySidecarWaitV1 {
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
     reference: CertifiedMergeLedgerReference,
 }
-
 impl RecoveredDecisionApplySidecarWaitV1 {
     fn register(
         &self,
@@ -436,7 +426,6 @@ impl RecoveredDecisionApplySidecarWaitV1 {
         )
     }
 }
-
 /// Result of retrying one exact recovered Apply after its merge sidecar arrives.
 #[allow(variant_size_differences)]
 #[must_use = "an unavailable retry still owns the recovered Apply completion"]
@@ -448,7 +437,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyRetryV1 {
     /// The dedicated worker index changed and consensus was closed for restart.
     RestartRequired,
 }
-
 impl RetainedRecoveredDecisionApplyDeferredV1 {
     /// Retry only after the exact authenticated sidecar is locally durable.
     ///
@@ -476,7 +464,6 @@ impl RetainedRecoveredDecisionApplyDeferredV1 {
         }
     }
 }
-
 /// Fail-stop class while durably terminalizing a recovered Apply completion.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyCompletionErrorV1 {
@@ -499,7 +486,6 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyCompletionErrorV1 {
     #[error("recovered Apply terminal LedgerV1 publication failed")]
     Ledger,
 }
-
 /// Move-only authority reserved for the final one-shot runner activation.
 ///
 /// Launch construction retains this authority, but only this launch module
@@ -510,9 +496,7 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyCompletionErrorV1 {
 pub(in crate::sumeragi) struct ProductionV2CompletionObserverActivationPermitV1 {
     _seal: ProductionV2CompletionObserverActivationPermitSealV1,
 }
-
 struct ProductionV2CompletionObserverActivationPermitSealV1;
-
 impl Drop for ProductionV2CompletionObserverActivationPermitSealV1 {
     fn drop(&mut self) {}
 }
@@ -596,7 +580,6 @@ impl ProductionLifecycleServeRetirementAuthenticationPermitV1 {
         }
     }
 }
-
 impl LaunchedProductionLifecycleV1 {
     /// Sign, reserve, claim, and publish the recovered Decision Fetch request.
     #[cfg(not(test))]
@@ -610,7 +593,6 @@ impl LaunchedProductionLifecycleV1 {
         self.owner
             .dispatch_recovered_decision_fetch(&self.services, &mut self.executor, runner)
     }
-
     /// Exercise recovered Decision Fetch request dispatch with a fixture cursor.
     #[cfg(test)]
     pub(in crate::sumeragi) fn dispatch_recovered_decision_fetch(
@@ -623,7 +605,6 @@ impl LaunchedProductionLifecycleV1 {
         self.owner
             .dispatch_recovered_decision_fetch(&self.services, &mut self.executor, runner)
     }
-
     /// Persist one selected recovered Decision Fetch response at the current Ingress cursor.
     #[cfg(not(test))]
     #[allow(clippy::result_large_err)]
@@ -642,7 +623,6 @@ impl LaunchedProductionLifecycleV1 {
             runner,
         )
     }
-
     /// Exercise recovered Decision Fetch Phase A with a fixture Ingress cursor.
     #[cfg(test)]
     #[allow(clippy::result_large_err)]
@@ -661,7 +641,6 @@ impl LaunchedProductionLifecycleV1 {
             runner,
         )
     }
-
     /// Park at most one guarded durable recovered Decision Fetch body.
     /// No raw completion or acknowledgement surface exists; the fixed Store
     /// settlement below is the only consuming transaction.
@@ -680,7 +659,6 @@ impl LaunchedProductionLifecycleV1 {
         self.recovered_decision_fetch_body_completion = Some(completion);
         Ok(true)
     }
-
     /// Settle the parked recovered Decision Fetch into one durable Store successor.
     ///
     /// Every semantic, owner, and exact-queue check precedes LedgerV1 fsync.
@@ -702,7 +680,6 @@ impl LaunchedProductionLifecycleV1 {
         let Some(completion) = recovered_decision_fetch_body_completion.take() else {
             return ProductionRecoveredDecisionFetchStoreSettlementV1::None;
         };
-
         macro_rules! retry {
             ($failure:expr) => {{
                 assert!(recovered_decision_fetch_body_completion.is_none());
@@ -710,7 +687,6 @@ impl LaunchedProductionLifecycleV1 {
                 return ProductionRecoveredDecisionFetchStoreSettlementV1::Retry($failure);
             }};
         }
-
         if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
             retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::Owner);
         }
@@ -723,7 +699,6 @@ impl LaunchedProductionLifecycleV1 {
         let Some(body) = completion.completion().project_store_body_authority() else {
             retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::Body);
         };
-
         let selector = match executor.prepare_lifecycle_ingress_selector(
             &leader_wire_ingress_binding.ingress,
             physical_ordinal,
@@ -805,7 +780,6 @@ impl LaunchedProductionLifecycleV1 {
             drop(locked_dequeue);
             retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::OutputClosed);
         };
-
         if transition.persist_exact_successor().is_err() {
             drop(transition);
             owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
@@ -815,7 +789,6 @@ impl LaunchedProductionLifecycleV1 {
             drop(operation);
             return ProductionRecoveredDecisionFetchStoreSettlementV1::RestartRequired;
         }
-
         transition.commit_after_publication();
         executor.commit_recovered_decision_fetch_owner_retirement(retirement);
         locked_dequeue.commit();
@@ -823,7 +796,6 @@ impl LaunchedProductionLifecycleV1 {
         operation.complete();
         ProductionRecoveredDecisionFetchStoreSettlementV1::Applied
     }
-
     /// Reserve, claim, and queue one recovered Sign at the current Completion cursor.
     #[cfg(not(test))]
     pub(in crate::sumeragi) fn dispatch_recovered_lifecycle_sign(
@@ -836,7 +808,6 @@ impl LaunchedProductionLifecycleV1 {
         self.owner
             .dispatch_recovered_lifecycle_sign(&self.services, &self.executor, runner)
     }
-
     /// Exercise recovered Sign dispatch with a fixture-owned Completion cursor.
     #[cfg(test)]
     pub(in crate::sumeragi) fn dispatch_recovered_lifecycle_sign(
@@ -849,7 +820,6 @@ impl LaunchedProductionLifecycleV1 {
         self.owner
             .dispatch_recovered_lifecycle_sign(&self.services, &self.executor, runner)
     }
-
     /// Park at most one guarded recovered Sign completion under this owner.
     ///
     /// Repeated calls retain the existing token and generic completion drains
@@ -868,7 +838,6 @@ impl LaunchedProductionLifecycleV1 {
         self.recovered_lifecycle_sign_completion = Some(completion);
         Ok(true)
     }
-
     /// Preflight the parked Sign's exact adapter successor.
     ///
     /// This deliberately drops the publication-inert preview before returning.
@@ -900,7 +869,6 @@ impl LaunchedProductionLifecycleV1 {
         drop(preview);
         ProductionRecoveredLifecycleSignBroadcastPreparationV1::Prepared
     }
-
     /// Settle the parked recovered Sign into one durable signed Broadcast.
     ///
     /// The claimed Sign carrier, adapter preview, and Broadcast child remain
@@ -923,7 +891,6 @@ impl LaunchedProductionLifecycleV1 {
         let Some(completion) = recovered_lifecycle_sign_completion.take() else {
             return ProductionRecoveredLifecycleSignBroadcastSettlementV1::None;
         };
-
         macro_rules! retry {
             () => {{
                 assert!(recovered_lifecycle_sign_completion.is_none());
@@ -938,7 +905,6 @@ impl LaunchedProductionLifecycleV1 {
                 return ProductionRecoveredLifecycleSignBroadcastSettlementV1::RestartRequired;
             }};
         }
-
         if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
             restart!();
         }
@@ -987,7 +953,6 @@ impl LaunchedProductionLifecycleV1 {
             drop(transition);
             restart!();
         };
-
         if transition.persist_exact_successor().is_err() {
             drop(transition);
             owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
@@ -996,13 +961,11 @@ impl LaunchedProductionLifecycleV1 {
             drop(operation);
             return ProductionRecoveredLifecycleSignBroadcastSettlementV1::RestartRequired;
         }
-
         transition.commit_after_publication();
         completion.acknowledge_after_publication();
         operation.complete();
         ProductionRecoveredLifecycleSignBroadcastSettlementV1::Applied
     }
-
     /// Settle a recovered Prepare Vote into Broadcast plus Commit Sign.
     ///
     /// The next Vote body/WAL authority and both registry children remain
@@ -1023,7 +986,6 @@ impl LaunchedProductionLifecycleV1 {
         let Some(completion) = recovered_lifecycle_sign_completion.take() else {
             return ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::None;
         };
-
         macro_rules! retry {
             () => {{
                 assert!(recovered_lifecycle_sign_completion.is_none());
@@ -1041,7 +1003,6 @@ impl LaunchedProductionLifecycleV1 {
                 return ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::RestartRequired;
             }};
         }
-
         if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
             restart!();
         }
@@ -1097,13 +1058,11 @@ impl LaunchedProductionLifecycleV1 {
             drop(operation);
             return ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::RestartRequired;
         }
-
         transition.commit_after_publication();
         completion.acknowledge_after_publication();
         operation.complete();
         ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1::Applied
     }
-
     /// Fsync an initial Proposal `PrepareIntent`, then publish both successors.
     ///
     /// The Proposal control message and canonical chunks are reserved before
@@ -1125,7 +1084,6 @@ impl LaunchedProductionLifecycleV1 {
         let Some(completion) = recovered_lifecycle_sign_completion.take() else {
             return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::None;
         };
-
         macro_rules! restart {
             () => {{
                 owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
@@ -1136,7 +1094,6 @@ impl LaunchedProductionLifecycleV1 {
                 return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired;
             }};
         }
-
         if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
             restart!();
         }
@@ -1186,7 +1143,6 @@ impl LaunchedProductionLifecycleV1 {
                 restart!();
             }
         };
-
         let Some(wal_permit) = output.prepare_wal_append_permit() else {
             drop(body);
             drop(preview);
@@ -1237,13 +1193,11 @@ impl LaunchedProductionLifecycleV1 {
             drop(completion);
             return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired;
         }
-
         transition.commit_after_publication();
         completion.acknowledge_after_publication();
         output.commit_after_publication();
         ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied
     }
-
     /// Settle a recovered Proposal into one Broadcast and one WAL-backed Sign.
     ///
     /// The signed Proposal and its canonical chunks reserve one aggregate
@@ -1266,7 +1220,6 @@ impl LaunchedProductionLifecycleV1 {
         let Some(completion) = recovered_lifecycle_sign_completion.take() else {
             return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::None;
         };
-
         macro_rules! retry {
             () => {{
                 assert!(recovered_lifecycle_sign_completion.is_none());
@@ -1284,7 +1237,6 @@ impl LaunchedProductionLifecycleV1 {
                 return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired;
             }};
         }
-
         if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
             restart!();
         }
@@ -1361,7 +1313,6 @@ impl LaunchedProductionLifecycleV1 {
                 retry!();
             }
         };
-
         if transition.persist_exact_successor().is_err() {
             drop(transition);
             owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
@@ -1370,13 +1321,11 @@ impl LaunchedProductionLifecycleV1 {
             drop(output);
             return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired;
         }
-
         transition.commit_after_publication();
         completion.acknowledge_after_publication();
         output.commit_after_publication();
         ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied
     }
-
     /// Refanout one durable recovered signed Broadcast at the Completion cursor.
     ///
     /// Success parks only the live coordinator row. LedgerV1 deliberately
@@ -1393,7 +1342,6 @@ impl LaunchedProductionLifecycleV1 {
         self.owner
             .refanout_recovered_lifecycle_signed_broadcast(&self.services, runner)
     }
-
     /// Exercise durable recovered Broadcast refanout with a fixture-owned cursor.
     #[cfg(test)]
     pub(in crate::sumeragi) fn refanout_recovered_lifecycle_signed_broadcast(
@@ -1406,7 +1354,6 @@ impl LaunchedProductionLifecycleV1 {
         self.owner
             .refanout_recovered_lifecycle_signed_broadcast(&self.services, runner)
     }
-
     /// Reserve, claim, and queue the recovered Apply at the live Completion cursor.
     #[cfg(not(test))]
     pub(in crate::sumeragi) fn dispatch_recovered_decision_apply(
@@ -1419,7 +1366,6 @@ impl LaunchedProductionLifecycleV1 {
         self.owner
             .dispatch_recovered_decision_apply(&self.services, &self.executor, runner)
     }
-
     /// Drive and retry one exact missing-sidecar recovered Apply owner.
     ///
     /// The completion token no longer borrows the whole service owner: its
@@ -1465,7 +1411,6 @@ impl LaunchedProductionLifecycleV1 {
             }
         }
     }
-
     /// Exercise recovered Apply dispatch with a fixture-owned runner observation.
     #[cfg(test)]
     pub(in crate::sumeragi) fn dispatch_recovered_decision_apply(
@@ -1478,7 +1423,6 @@ impl LaunchedProductionLifecycleV1 {
         self.owner
             .dispatch_recovered_decision_apply(&self.services, &self.executor, runner)
     }
-
     /// Drain and durably terminalize one lifecycle-owned recovered Apply.
     ///
     /// Applied results are rejoined to the exact claimed carrier before the
@@ -1518,14 +1462,12 @@ impl LaunchedProductionLifecycleV1 {
         let owner = &mut self.owner;
         let executor = &mut self.executor;
         let services = &mut self.services;
-
         macro_rules! restart {
             ($failure:expr) => {{
                 owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
                 return Err($failure);
             }};
         }
-
         if let RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference } =
             completion.result()
         {
@@ -1560,7 +1502,6 @@ impl LaunchedProductionLifecycleV1 {
         let RecoveredDecisionApplyWorkerResultV1::Applied(applied) = completion.result() else {
             unreachable!("recovered Apply result variants are exhausted above")
         };
-
         if owner.coordinator.fault.is_some() || owner.coordinator.ledger_store.is_none() {
             restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Owner);
         }
@@ -1604,7 +1545,6 @@ impl LaunchedProductionLifecycleV1 {
                 restart!(ProductionRecoveredDecisionApplyCompletionErrorV1::Ledger);
             }
         }
-
         owner.coordinator = staged;
         let finality = adapter.commit_after_durable_settlement();
         let status = executor.commit_recovered_decision_apply_finality(finality);
@@ -1617,7 +1557,6 @@ impl LaunchedProductionLifecycleV1 {
         Ok(ProductionRecoveredDecisionApplyCompletionV1::Applied)
     }
 }
-
 /// Fail-stop failure while consuming the recovered lifecycle owner into I/O.
 #[derive(Debug, Error)]
 #[must_use = "a failed consuming launch requires process restart"]
@@ -1644,7 +1583,6 @@ pub(in crate::sumeragi) enum ProductionLifecycleLaunchErrorV1 {
     #[error("launched lifecycle stack lost exact process ownership")]
     OwnershipMismatch,
 }
-
 /// Fail-stop failure while crossing the one-shot live-height boundary.
 #[derive(Debug, Error)]
 #[must_use = "failed lifecycle activation requires process restart"]
@@ -2453,7 +2391,6 @@ impl ProductionLifecycleCleanupReadyV1 {
         }
     }
 }
-
 impl ProductionLifecycleOwnerV1 {
     fn launch_local_identity_matches(
         roster: &[wire::ValidatorPower],
@@ -2470,7 +2407,6 @@ impl ProductionLifecycleOwnerV1 {
             .and_then(|position| u32::try_from(position).ok());
         local_validator.is_none_or(|observed| roster_position == Some(observed))
     }
-
     /// Consume the sealed adapter and exact body store into one running stack.
     ///
     /// One armed fail-stop operation spans runtime, executor, and worker
@@ -2565,7 +2501,6 @@ impl ProductionLifecycleOwnerV1 {
             context.height,
         )
         .map_err(ProductionLifecycleLaunchErrorV1::LeaderWire)?;
-
         let adapter_startup = self
             .adapter_startup
             .take()
@@ -2681,7 +2616,6 @@ impl ProductionLifecycleOwnerV1 {
         })
     }
 }
-
 #[cfg(test)]
 mod tests {
     include!("v2_lifecycle_launch_tests.rs");

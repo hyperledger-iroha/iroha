@@ -1,18 +1,13 @@
 //! Pricing manifests and probabilistic micropayment policies for SoraFS.
-
-use std::num::{NonZeroU32, NonZeroU64};
-
+use crate::deal::{DealAmountError, XorQuantity};
 use iroha_crypto::numeric::{Numeric, RoundingMode};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
     json::{Map, Value},
 };
+use std::num::{NonZeroU32, NonZeroU64};
 use thiserror::Error;
-
-use crate::deal::{DealAmountError, XorQuantity};
-
 pub mod signed;
-
 /// SoraFS pricing manifest schema version.
 pub const PRICING_MANIFEST_VERSION_V1: u8 = 1;
 /// Maximum number of tiers carried by one pricing manifest.
@@ -23,7 +18,6 @@ pub const MAX_PRICING_TIER_ID_LEN: usize = 64;
 pub const MAX_PRICING_NOTES_LEN: usize = 1_024;
 /// Maximum nonce samples accepted by pricing diagnostic JSON helpers.
 pub const MAX_PRICING_NONCE_SAMPLES: usize = 65_536;
-
 /// Number of seconds in one hour.
 const SECONDS_PER_HOUR: u128 = 60 * 60;
 /// Number of bytes in a gibibyte.
@@ -32,7 +26,6 @@ const BYTES_PER_GIB: u128 = 1024 * 1024 * 1024;
 const BASIS_POINTS_SCALE: u128 = 10_000;
 /// Maximum collateral ratio (basis points) supported by pricing tiers (10×).
 const MAX_COLLATERAL_RATIO_BPS: u32 = 100_000;
-
 /// Pricing manifest describing storage/egress tiers and settlement policy.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -54,7 +47,6 @@ pub struct PricingManifestV1 {
     #[norito(default)]
     pub micropayment_policy: Option<PricingMicropaymentPolicyV1>,
 }
-
 impl PricingManifestV1 {
     /// Validate the pricing manifest, returning an error describing the first invalid field.
     pub fn validate(&self) -> Result<(), PricingManifestError> {
@@ -63,14 +55,11 @@ impl PricingManifestV1 {
                 version: self.version,
             });
         }
-
         validate_currency(&self.currency)
             .map_err(|reason| PricingManifestError::CurrencyInvalid { reason })?;
-
         if self.effective_from_unix == 0 {
             return Err(PricingManifestError::MissingEffectiveTime);
         }
-
         if self.tiers.is_empty() {
             return Err(PricingManifestError::NoTiers);
         }
@@ -80,7 +69,6 @@ impl PricingManifestV1 {
                 max: MAX_PRICING_TIERS,
             });
         }
-
         let mut previous_tier_id: Option<&str> = None;
         for tier in &self.tiers {
             tier.validate()
@@ -100,35 +88,28 @@ impl PricingManifestV1 {
             }
             previous_tier_id = Some(&tier.tier_id);
         }
-
         self.credit_policy
             .validate()
             .map_err(PricingManifestError::CreditPolicyInvalid)?;
-
         self.bond_policy
             .validate()
             .map_err(PricingManifestError::BondPolicyInvalid)?;
-
         if let Some(policy) = &self.micropayment_policy {
             policy
                 .validate()
                 .map_err(PricingManifestError::MicropaymentPolicyInvalid)?;
         }
-
         Ok(())
     }
-
     /// Lookup the specified pricing tier.
     #[must_use]
     pub fn tier(&self, tier_id: &str) -> Option<&PricingTierV1> {
         self.tiers.iter().find(|tier| tier.tier_id == tier_id)
     }
-
     /// Serialise the pricing manifest into a JSON value.
     pub fn to_json(&self) -> Result<Value, PricingManifestError> {
         norito::json::to_value(self).map_err(|err| PricingManifestError::Json(err.to_string()))
     }
-
     /// Attempt to parse a pricing manifest from a JSON value.
     pub fn from_json(value: &Value) -> Result<Self, PricingManifestError> {
         norito::json::from_value::<PricingManifestV1>(value.clone())
@@ -139,7 +120,6 @@ impl PricingManifestV1 {
             })
     }
 }
-
 /// Pricing tier describing storage and egress fees.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -158,7 +138,6 @@ pub struct PricingTierV1 {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 impl PricingTierV1 {
     /// Ensure the tier adheres to validation rules.
     pub fn validate(&self) -> Result<(), PricingTierError> {
@@ -183,7 +162,6 @@ impl PricingTierV1 {
         }
         Ok(())
     }
-
     /// Calculate the exact storage fee for the supplied GiB·seconds duration.
     ///
     /// The V1 settlement rule rounds fractional results upward at nine decimal
@@ -201,7 +179,6 @@ impl PricingTierV1 {
             NonZeroU64::new(SECONDS_PER_HOUR as u64).expect("hour is non-zero"),
         )
     }
-
     /// Calculate the exact egress fee for the supplied byte length.
     ///
     /// The V1 settlement rule rounds fractional results upward at nine decimal
@@ -217,7 +194,6 @@ impl PricingTierV1 {
         )
     }
 }
-
 fn prorated_fee(
     rate: &XorQuantity,
     units: u128,
@@ -231,7 +207,6 @@ fn prorated_fee(
     )?;
     XorQuantity::try_from_quantity(exact)
 }
-
 /// Settlement and credit policy for buyers.
 #[derive(
     Debug,
@@ -251,7 +226,6 @@ pub struct CreditPolicyV1 {
     #[norito(default)]
     pub auto_top_up_threshold_bps: u16,
 }
-
 impl CreditPolicyV1 {
     /// Validate the credit policy.
     pub fn validate(&self) -> Result<(), CreditPolicyError> {
@@ -268,7 +242,6 @@ impl CreditPolicyV1 {
         Ok(())
     }
 }
-
 /// Bond and collateral requirements applied to providers.
 #[derive(
     Debug,
@@ -288,7 +261,6 @@ pub struct BondPolicyV1 {
     #[norito(default)]
     pub new_provider_grace_days: u16,
 }
-
 impl BondPolicyV1 {
     /// Validate the bond policy.
     pub fn validate(&self) -> Result<(), BondPolicyError> {
@@ -305,7 +277,6 @@ impl BondPolicyV1 {
         Ok(())
     }
 }
-
 /// Probabilistic micropayment configuration for retrieval vouchers.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -319,7 +290,6 @@ pub struct PricingMicropaymentPolicyV1 {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 impl PricingMicropaymentPolicyV1 {
     /// Validate micropayment policy invariants.
     pub fn validate(&self) -> Result<(), PricingMicropaymentPolicyError> {
@@ -344,7 +314,6 @@ impl PricingMicropaymentPolicyV1 {
         }
         Ok(())
     }
-
     /// Evaluate a micropayment voucher for the supplied deterministic nonce.
     ///
     /// The `nonce` must be uniformly distributed in `[0, 10_000)` to honour the basis-point
@@ -359,14 +328,12 @@ impl PricingMicropaymentPolicyV1 {
         if nonce >= BASIS_POINTS_SCALE as u16 {
             return Err(PricingMicropaymentEvaluationError::NonceOutOfRange { nonce });
         }
-
         if fee.is_zero() || nonce >= self.payout_probability_bps {
             return Ok(MicropaymentDecision::skip(
                 fee.clone(),
                 self.payout_probability_bps,
             ));
         }
-
         let capped = if fee >= &self.max_voucher_value {
             self.max_voucher_value.clone()
         } else {
@@ -385,7 +352,6 @@ impl PricingMicropaymentPolicyV1 {
                 Err(error) => return Err(error.into()),
             }
         };
-
         Ok(MicropaymentDecision::pay(
             fee.clone(),
             capped,
@@ -393,7 +359,6 @@ impl PricingMicropaymentPolicyV1 {
         ))
     }
 }
-
 /// Outcome of evaluating a probabilistic micropayment voucher.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MicropaymentDecision {
@@ -406,7 +371,6 @@ pub struct MicropaymentDecision {
     /// Exact expected fee value associated with the voucher.
     pub expected_fee: XorQuantity,
 }
-
 impl MicropaymentDecision {
     fn pay(expected_fee: XorQuantity, payout: XorQuantity, probability_bps: u16) -> Self {
         Self {
@@ -416,7 +380,6 @@ impl MicropaymentDecision {
             expected_fee,
         }
     }
-
     fn skip(expected_fee: XorQuantity, probability_bps: u16) -> Self {
         Self {
             should_pay: false,
@@ -426,7 +389,6 @@ impl MicropaymentDecision {
         }
     }
 }
-
 /// Errors encountered while validating a pricing manifest.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PricingManifestError {
@@ -471,7 +433,6 @@ pub enum PricingManifestError {
     #[error("pricing manifest JSON error: {0}")]
     Json(String),
 }
-
 /// Errors raised while validating a pricing tier.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PricingTierError {
@@ -500,7 +461,6 @@ pub enum PricingTierError {
     #[error("tier notes length {len} exceeds maximum {max}")]
     NotesTooLong { len: usize, max: usize },
 }
-
 /// Errors raised while validating the credit policy.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum CreditPolicyError {
@@ -511,7 +471,6 @@ pub enum CreditPolicyError {
     #[error("top-up threshold {value} basis points exceeds 10_000")]
     TopUpThresholdTooHigh { value: u16 },
 }
-
 /// Errors raised while validating a bond policy.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum BondPolicyError {
@@ -522,7 +481,6 @@ pub enum BondPolicyError {
     #[error("collateral ratio {value} bps exceeds 10.0× maximum")]
     CollateralRatioTooHigh { value: u32 },
 }
-
 /// Errors encountered while validating a micropayment policy.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PricingMicropaymentPolicyError {
@@ -539,7 +497,6 @@ pub enum PricingMicropaymentPolicyError {
     #[error("micropayment notes length {len} exceeds maximum {max}")]
     NotesTooLong { len: usize, max: usize },
 }
-
 /// Micropayment evaluation failures.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PricingMicropaymentEvaluationError {
@@ -553,7 +510,6 @@ pub enum PricingMicropaymentEvaluationError {
     #[error(transparent)]
     Arithmetic(#[from] DealAmountError),
 }
-
 /// Strict JSON nonce-sample decoding failures.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PricingNonceJsonError {
@@ -573,7 +529,6 @@ pub enum PricingNonceJsonError {
     #[error("pricing nonce sample allocation failed")]
     AllocationFailed,
 }
-
 fn validate_currency(currency: &str) -> Result<(), String> {
     if currency.len() < 3 || currency.len() > 6 {
         return Err("currency code must be 3–6 characters".into());
@@ -586,7 +541,6 @@ fn validate_currency(currency: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn validate_tier_id(tier_id: &str) -> Result<(), PricingTierError> {
     if tier_id.is_empty() {
         return Err(PricingTierError::EmptyTierId);
@@ -606,13 +560,11 @@ fn validate_tier_id(tier_id: &str) -> Result<(), PricingTierError> {
     }
     Ok(())
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NotesValidationError {
     Invalid,
     TooLong { len: usize },
 }
-
 fn validate_notes(notes: &str) -> Result<(), NotesValidationError> {
     if notes.len() > MAX_PRICING_NOTES_LEN {
         return Err(NotesValidationError::TooLong { len: notes.len() });
@@ -622,7 +574,6 @@ fn validate_notes(notes: &str) -> Result<(), NotesValidationError> {
     }
     Ok(())
 }
-
 /// Helper to construct a deterministic nonce map from a JSON array of integers.
 pub fn load_nonces_from_json(array: &Value) -> Result<Vec<u16>, PricingNonceJsonError> {
     let values = array.as_array().ok_or(PricingNonceJsonError::NotArray)?;
@@ -655,7 +606,6 @@ pub fn load_nonces_from_json(array: &Value) -> Result<Vec<u16>, PricingNonceJson
     }
     Ok(nonces)
 }
-
 /// Persist nonce samples into a JSON map for diagnostics.
 pub fn nonce_samples_to_json(samples: &[u16]) -> Result<Value, PricingNonceJsonError> {
     if samples.len() > MAX_PRICING_NONCE_SAMPLES {
@@ -681,15 +631,12 @@ pub fn nonce_samples_to_json(samples: &[u16]) -> Result<Value, PricingNonceJsonE
     root.insert("nonces".into(), Value::Array(values));
     Ok(Value::Object(root))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
     }
-
     #[test]
     fn validates_pricing_manifest_roundtrip() {
         let manifest = PricingManifestV1 {
@@ -726,13 +673,11 @@ mod tests {
                 notes: Some("Probabilistic micropayments".into()),
             }),
         };
-
         manifest.validate().expect("valid manifest");
         let json = manifest.to_json().expect("manifest to json");
         let decoded = PricingManifestV1::from_json(&json).expect("json manifest");
         assert_eq!(manifest, decoded);
     }
-
     #[test]
     fn storage_fee_rounding_matches_expectation() {
         let tier = PricingTierV1 {
@@ -743,20 +688,17 @@ mod tests {
             notes: None,
         };
         tier.validate().expect("tier valid");
-
         // One GiB reserved for an hour should cost exactly 0.5 XOR.
         let fee = tier
             .storage_fee_for_gib_seconds(SECONDS_PER_HOUR)
             .expect("fee arithmetic");
         assert_eq!(fee, xor("0.5"));
-
         // Half-hour should round up to the nearest milli-unit.
         let half_fee = tier
             .storage_fee_for_gib_seconds(SECONDS_PER_HOUR / 2)
             .expect("fee arithmetic");
         assert_eq!(half_fee, xor("0.25"));
     }
-
     #[test]
     fn egress_fee_rounding_matches_expectation() {
         let tier = PricingTierV1 {
@@ -767,18 +709,15 @@ mod tests {
             notes: None,
         };
         tier.validate().expect("tier valid");
-
         let one_gib = tier
             .egress_fee_for_bytes(BYTES_PER_GIB as u64)
             .expect("fee arithmetic");
         assert_eq!(one_gib, xor("0.01"));
-
         let half_gib = tier
             .egress_fee_for_bytes((BYTES_PER_GIB / 2) as u64)
             .expect("fee arithmetic");
         assert_eq!(half_gib, xor("0.005"));
     }
-
     #[test]
     fn micropayment_decision_respects_probability() {
         let fee = xor("0.5");
@@ -788,16 +727,13 @@ mod tests {
             notes: None,
         };
         policy.validate().expect("policy valid");
-
         let payout = policy.evaluate(50, &fee).expect("payout arithmetic");
         assert!(payout.should_pay);
         assert!(payout.payout >= fee);
-
         let skip = policy.evaluate(6_000, &fee).expect("payout arithmetic");
         assert!(!skip.should_pay);
         assert_eq!(skip.payout, XorQuantity::zero());
     }
-
     #[test]
     fn duplicate_tier_detected() {
         let manifest = PricingManifestV1 {
@@ -830,11 +766,9 @@ mod tests {
             },
             micropayment_policy: None,
         };
-
         let err = manifest.validate().expect_err("duplicate tier invalid");
         assert!(matches!(err, PricingManifestError::DuplicateTier { .. }));
     }
-
     #[test]
     fn manifest_rejects_zero_time_unsorted_tiers_and_excessive_cardinality() {
         let mut manifest = PricingManifestV1 {
@@ -862,7 +796,6 @@ mod tests {
             manifest.validate(),
             Err(PricingManifestError::MissingEffectiveTime)
         );
-
         manifest.effective_from_unix = 1;
         manifest.tiers.insert(
             0,
@@ -875,7 +808,6 @@ mod tests {
             manifest.validate(),
             Err(PricingManifestError::TiersNotSorted)
         );
-
         manifest.tiers = (0..=MAX_PRICING_TIERS)
             .map(|index| PricingTierV1 {
                 tier_id: format!("tier-{index:03}"),
@@ -893,7 +825,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn canonical_text_fields_reject_padding_controls_and_oversize() {
         for currency in [" xor", "xor ", "XOR", "xør"] {
@@ -917,7 +848,6 @@ mod tests {
             Err(NotesValidationError::TooLong { .. })
         ));
     }
-
     #[test]
     fn fee_calculations_are_exact_and_reject_overflow_instead_of_saturating() {
         let maximum = xor(
@@ -940,7 +870,6 @@ mod tests {
             storage.storage_fee_for_gib_seconds(SECONDS_PER_HOUR * 2),
             Err(DealAmountError::Overflow)
         ));
-
         let egress = PricingTierV1 {
             tier_id: "egress".into(),
             storage_price_per_gib_hour: XorQuantity::zero(),
@@ -955,7 +884,6 @@ mod tests {
             maximum
         );
     }
-
     #[test]
     fn micropayment_rejects_out_of_range_nonce_and_caps_extreme_fee_exactly() {
         let policy = PricingMicropaymentPolicyV1 {
@@ -979,7 +907,6 @@ mod tests {
         assert!(!zero.should_pay);
         assert_eq!(zero.payout, XorQuantity::zero());
     }
-
     #[test]
     fn micropayment_evaluation_validates_policy_and_rounds_at_nano_xor() {
         let invalid = PricingMicropaymentPolicyV1 {
@@ -993,7 +920,6 @@ mod tests {
                 PricingMicropaymentPolicyError::InvalidProbability { value: 0 }
             ))
         ));
-
         let rounded = PricingMicropaymentPolicyV1 {
             payout_probability_bps: 3_333,
             max_voucher_value: xor("1"),
@@ -1004,7 +930,6 @@ mod tests {
         assert!(rounded.should_pay);
         assert_eq!(rounded.expected_fee, xor("0.000000001"));
         assert_eq!(rounded.payout, xor("0.000000004"));
-
         let certain = PricingMicropaymentPolicyV1 {
             payout_probability_bps: 10_000,
             max_voucher_value: xor("1"),
@@ -1021,7 +946,6 @@ mod tests {
             Err(PricingMicropaymentEvaluationError::NonceOutOfRange { nonce: 10_000 })
         );
     }
-
     #[test]
     fn nonzero_fractional_usage_never_rounds_to_free() {
         let tier = PricingTierV1 {
@@ -1041,7 +965,6 @@ mod tests {
             xor("0.000000001")
         );
     }
-
     #[test]
     fn nonce_json_helpers_are_strict_bounded_and_lossless() {
         let valid = Value::Array(vec![Value::from(0_u64), Value::from(9_999_u64)]);
@@ -1071,7 +994,6 @@ mod tests {
                 value: 10_000,
             })
         );
-
         let oversized = Value::Array(vec![Value::from(0_u64); MAX_PRICING_NONCE_SAMPLES + 1]);
         assert_eq!(
             load_nonces_from_json(&oversized),

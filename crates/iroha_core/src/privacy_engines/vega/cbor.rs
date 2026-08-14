@@ -1,13 +1,9 @@
 //! Strict deterministic-CBOR reader for the closed Vega mDL profile.
-
 use core::{cmp::Ordering, ops::Range, str};
-
 use thiserror::Error;
-
 const MAX_CBOR_DEPTH_V1: usize = 16;
 const MAX_CBOR_CONTAINER_ITEMS_V1: usize = 256;
 const MAX_CBOR_TOTAL_ITEMS_V1: usize = 1_024;
-
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub(super) enum CborError {
     #[error("canonical CBOR input is empty or truncated")]
@@ -35,14 +31,12 @@ pub(super) enum CborError {
     #[error("floating-point and unassigned CBOR simple values are not admitted")]
     UnsupportedSimpleValue,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CborNode<'a> {
     source: &'a [u8],
     range: Range<usize>,
     value: CborValue<'a>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum CborValue<'a> {
     Unsigned(u64),
@@ -55,7 +49,6 @@ pub(super) enum CborValue<'a> {
     Boolean(bool),
     Null,
 }
-
 impl<'a> CborNode<'a> {
     pub(super) fn parse_exact(bytes: &'a [u8]) -> Result<Self, CborError> {
         let mut parser = Parser {
@@ -69,36 +62,30 @@ impl<'a> CborNode<'a> {
         }
         Ok(node)
     }
-
     pub(super) fn encoded(&self) -> &'a [u8] {
         &self.source[self.range.clone()]
     }
-
     pub(super) fn range(&self) -> Range<usize> {
         self.range.clone()
     }
-
     pub(super) fn as_map(&self) -> Option<&[(CborNode<'a>, CborNode<'a>)]> {
         match &self.value {
             CborValue::Map(entries) => Some(entries),
             _ => None,
         }
     }
-
     pub(super) fn as_array(&self) -> Option<&[CborNode<'a>]> {
         match &self.value {
             CborValue::Array(values) => Some(values),
             _ => None,
         }
     }
-
     pub(super) const fn as_bytes(&self) -> Option<&'a [u8]> {
         match self.value {
             CborValue::Bytes(bytes) => Some(bytes),
             _ => None,
         }
     }
-
     pub(super) fn as_bytes_with_range(&self) -> Option<(&'a [u8], Range<usize>)> {
         let bytes = self.as_bytes()?;
         let source_start = self.source.as_ptr() as usize;
@@ -107,28 +94,24 @@ impl<'a> CborNode<'a> {
         let end = start.checked_add(bytes.len())?;
         (end <= self.source.len()).then_some((bytes, start..end))
     }
-
     pub(super) const fn as_text(&self) -> Option<&'a str> {
         match self.value {
             CborValue::Text(text) => Some(text),
             _ => None,
         }
     }
-
     pub(super) const fn as_unsigned(&self) -> Option<u64> {
         match self.value {
             CborValue::Unsigned(value) => Some(value),
             _ => None,
         }
     }
-
     pub(super) fn tagged(&self, expected: u64) -> Option<&CborNode<'a>> {
         match &self.value {
             CborValue::Tag(tag, value) if *tag == expected => Some(value),
             _ => None,
         }
     }
-
     pub(super) fn integer_equals(&self, expected: i64) -> bool {
         match self.value {
             CborValue::Unsigned(value) => u64::try_from(expected) == Ok(value),
@@ -138,40 +121,33 @@ impl<'a> CborNode<'a> {
             _ => false,
         }
     }
-
     pub(super) fn map_get_text(&self, key: &str) -> Option<&CborNode<'a>> {
         self.map_entry_text(key).map(|(_, value)| value)
     }
-
     pub(super) fn map_get_integer(&self, key: i64) -> Option<&CborNode<'a>> {
         self.map_entry_integer(key).map(|(_, value)| value)
     }
-
     pub(super) fn map_entry_text(&self, key: &str) -> Option<(&CborNode<'a>, &CborNode<'a>)> {
         self.as_map()?.iter().find_map(|(candidate, value)| {
             (candidate.as_text() == Some(key)).then_some((candidate, value))
         })
     }
-
     pub(super) fn map_entry_integer(&self, key: i64) -> Option<(&CborNode<'a>, &CborNode<'a>)> {
         self.as_map()?.iter().find_map(|(candidate, value)| {
             candidate.integer_equals(key).then_some((candidate, value))
         })
     }
-
     pub(super) fn map_entry_unsigned(&self, key: u64) -> Option<(&CborNode<'a>, &CborNode<'a>)> {
         self.as_map()?.iter().find_map(|(candidate, value)| {
             (candidate.as_unsigned() == Some(key)).then_some((candidate, value))
         })
     }
 }
-
 struct Parser<'a> {
     bytes: &'a [u8],
     offset: usize,
     items: usize,
 }
-
 impl<'a> Parser<'a> {
     fn parse_node(&mut self, depth: usize) -> Result<CborNode<'a>, CborError> {
         if depth > MAX_CBOR_DEPTH_V1 {
@@ -181,7 +157,6 @@ impl<'a> Parser<'a> {
         if self.items > MAX_CBOR_TOTAL_ITEMS_V1 {
             return Err(CborError::ItemLimit);
         }
-
         let start = self.offset;
         let initial = self.take_byte()?;
         let major = initial >> 5;
@@ -242,7 +217,6 @@ impl<'a> Parser<'a> {
             value,
         })
     }
-
     fn read_container_length(&mut self, additional: u8, map: bool) -> Result<usize, CborError> {
         let length = self.read_length(additional)?;
         if length > MAX_CBOR_CONTAINER_ITEMS_V1 {
@@ -258,11 +232,9 @@ impl<'a> Parser<'a> {
         }
         Ok(length)
     }
-
     fn read_length(&mut self, additional: u8) -> Result<usize, CborError> {
         usize::try_from(self.read_argument(additional)?).map_err(|_| CborError::LengthOverflow)
     }
-
     fn read_argument(&mut self, additional: u8) -> Result<u64, CborError> {
         match additional {
             value @ 0..=23 => Ok(u64::from(value)),
@@ -298,13 +270,11 @@ impl<'a> Parser<'a> {
             _ => Err(CborError::ReservedAdditionalInformation),
         }
     }
-
     fn take_array<const N: usize>(&mut self) -> Result<[u8; N], CborError> {
         let mut value = [0_u8; N];
         value.copy_from_slice(self.take(N)?);
         Ok(value)
     }
-
     fn take_byte(&mut self) -> Result<u8, CborError> {
         let byte = *self
             .bytes
@@ -313,7 +283,6 @@ impl<'a> Parser<'a> {
         self.offset += 1;
         Ok(byte)
     }
-
     fn take(&mut self, length: usize) -> Result<&'a [u8], CborError> {
         let end = self
             .offset
@@ -326,20 +295,16 @@ impl<'a> Parser<'a> {
         self.offset = end;
         Ok(bytes)
     }
-
     fn remaining(&self) -> usize {
         self.bytes.len().saturating_sub(self.offset)
     }
 }
-
 fn deterministic_key_cmp(left: &[u8], right: &[u8]) -> Ordering {
     left.len().cmp(&right.len()).then_with(|| left.cmp(right))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn deterministic_map_parses_and_exposes_integer_keys() {
         let node = CborNode::parse_exact(&[0xa2, 0x01, 0x02, 0x20, 0x01]).expect("canonical map");
@@ -352,7 +317,6 @@ mod tests {
             Some(1)
         );
     }
-
     #[test]
     fn rejects_non_minimal_indefinite_duplicate_and_unsorted_encodings() {
         for malformed in [
@@ -365,7 +329,6 @@ mod tests {
             assert!(CborNode::parse_exact(malformed).is_err(), "{malformed:x?}");
         }
     }
-
     #[test]
     fn rejects_truncation_trailing_bytes_and_excessive_depth() {
         assert_eq!(

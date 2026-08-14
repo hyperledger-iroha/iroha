@@ -1,5 +1,4 @@
 // Canonical active-lifecycle fixture shared by privacy ISI tests.
-
 fn active_lifecycle() -> PrivacyProtocolLifecycleV1 {
     PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
         proposed_at_height: 1,

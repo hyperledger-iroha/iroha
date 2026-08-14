@@ -1,9 +1,4 @@
 //! This module contains [`Nft`] structure and it's implementation
-
-use std::{format, str::FromStr, string::String, vec::Vec};
-
-use iroha_data_model_derive::model;
-
 pub use self::model::*;
 use crate::{
     IntoKeyValue, Registered, Registrable,
@@ -12,18 +7,17 @@ use crate::{
     metadata::Metadata,
     prelude::AccountId,
 };
-
+use iroha_data_model_derive::model;
+use std::{format, str::FromStr, string::String, vec::Vec};
 #[model]
 mod model {
+    use super::*;
+    use crate::{Identifiable, Name, account::prelude::*, domain::prelude::*};
     use derive_more::Constructor;
     use getset::{CopyGetters, Getters};
     use iroha_data_model_derive::{IdEqOrdHash, RegistrableBuilder};
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
-
-    use super::*;
-    use crate::{Identifiable, Name, account::prelude::*, domain::prelude::*};
-
     /// Identification of an Non Fungible Asset. Consists of Asset name and Domain name.
     ///
     /// # Examples
@@ -59,7 +53,6 @@ mod model {
         /// NFT name.
         pub name: Name,
     }
-
     /// Non fungible asset, represents some unique value
     #[derive(
         derive_more::Debug,
@@ -91,13 +84,10 @@ mod model {
         pub owned_by: AccountId,
     }
 }
-
 string_id!(NftId);
-
 /// Read-only reference to [`Nft`].
 /// Used in query filters to avoid copying.
 pub type NftEntry<'world> = Ref<'world, NftId, NftValue>;
-
 /// [`Nft`] without `id` field.
 /// Needed only for the world-state NFT map to reduce memory usage.
 /// In other places use [`Nft`] directly.
@@ -117,28 +107,23 @@ pub struct NftData {
     /// The account that owns this NFT.
     pub owned_by: AccountId,
 }
-
 /// Wrapper over [`NftData`] used in storages.
 pub type NftValue = Owned<NftData>;
-
 impl Nft {
     /// Constructor
     pub fn new(id: NftId, content: Metadata) -> <Self as Registered>::With {
         <Self as Registered>::With::new(id, content)
     }
 }
-
 impl NftId {
     /// Convenience alias for [`Self::new`]
     pub fn of(domain: crate::domain::prelude::DomainId, name: crate::Name) -> Self {
         Self::new(domain, name)
     }
 }
-
 /// NFT Identification is represented by `name$domain` or `name$domain.dataspace` string.
 impl FromStr for NftId {
     type Err = ParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (name_candidate, domain_id_candidate) = split_nonempty(
             s,
@@ -161,7 +146,6 @@ impl FromStr for NftId {
         Ok(Self::new(domain_id, name))
     }
 }
-
 impl IntoKeyValue for Nft {
     type Key = NftId;
     type Value = NftValue;
@@ -175,41 +159,33 @@ impl IntoKeyValue for Nft {
         )
     }
 }
-
 #[cfg(all(test, feature = "json"))]
 mod json_tests {
     use super::*;
     use crate::{Name, domain::prelude::DomainId, metadata::Metadata};
-
     #[test]
     fn new_nft_json_roundtrip() {
         let domain = DomainId::try_new("art", "universal").expect("domain id");
         let id = NftId::new(domain, Name::from_str("mona_lisa").expect("nft name"));
         let mut content = Metadata::default();
         content.insert("artist".parse().expect("metadata key"), "da_vinci");
-
         let builder = NewNft {
             id: id.clone(),
             content: content.clone(),
         };
-
         let json = norito::json::to_json(&builder).expect("serialize NFT builder");
         let decoded: NewNft = norito::json::from_json(&json).expect("deserialize NFT builder");
-
         assert_eq!(decoded.id, id);
         assert_eq!(decoded.content, content);
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{Name, domain::prelude::DomainId};
-
     #[test]
     fn bare_domain_literal_defaults_to_universal_dataspace() {
         let id: NftId = "mona_lisa$art".parse().expect("valid nft id");
-
         assert_eq!(
             id,
             NftId::new(
@@ -219,11 +195,9 @@ mod tests {
         );
         assert_eq!(id.to_string(), "mona_lisa$art.universal");
     }
-
     #[test]
     fn fully_qualified_domain_literal_is_preserved() {
         let id: NftId = "mona_lisa$art.gallery".parse().expect("valid nft id");
-
         assert_eq!(
             id,
             NftId::new(
@@ -232,13 +206,11 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn invalid_dotted_domain_literal_stays_rejected() {
         assert!("mona_lisa$art.gallery.extra".parse::<NftId>().is_err());
     }
 }
-
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
     pub use super::{NewNft, Nft, NftId};

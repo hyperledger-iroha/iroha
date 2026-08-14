@@ -1,22 +1,18 @@
 //! Golden checks for hybrid packed-struct bitset sizing behavior.
-
-use std::{
-    collections::BTreeMap,
-    panic::{AssertUnwindSafe, catch_unwind},
-};
-
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     core::{self as norito_core, DecodeFlagsGuard, Error, header_flags},
 };
-
+use std::{
+    collections::BTreeMap,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 fn encode_bare_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
     let _guard = DecodeFlagsGuard::enter(flags);
     let mut payload = Vec::new();
     norito::core::serialize_to_buffer(value, &mut payload).expect("serialize");
     payload
 }
-
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct SelfDelimExample {
     id: u32,
@@ -24,38 +20,30 @@ struct SelfDelimExample {
     values: Vec<u8>,
     labels: BTreeMap<String, u32>,
 }
-
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct Nested {
     name: String,
 }
-
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct NeedsSize {
     id: u32,
     nested: Nested,
 }
-
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct Tiny(u32);
-
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct NamedTiny {
     inner: Tiny,
 }
-
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct TupleTiny(Tiny);
-
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct NamedMixed {
     fixed: u32,
     inner: Tiny,
 }
-
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct TupleMixed(u32, Tiny);
-
 fn decode_bare_with_flags<T>(payload: &[u8], flags: u8) -> Result<T, Error>
 where
     T: for<'de> NoritoDeserialize<'de>,
@@ -63,7 +51,6 @@ where
     let _guard = DecodeFlagsGuard::enter(flags);
     norito_core::decode_archived_field::<T>(payload)
 }
-
 fn assert_typed_error_without_unwind<T>(payload: &[u8], flags: u8)
 where
     T: for<'de> NoritoDeserialize<'de>,
@@ -78,7 +65,6 @@ where
         Ok(_) => panic!("malformed packed structs must return a typed decode error"),
     }
 }
-
 #[test]
 fn packed_struct_bitset_skips_self_delimiting_fields() {
     let mut labels = BTreeMap::new();
@@ -92,7 +78,6 @@ fn packed_struct_bitset_skips_self_delimiting_fields() {
     let flags =
         header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN | header_flags::FIELD_BITSET;
     let payload = encode_bare_with_flags(&value, flags);
-
     let bitset_len = 1usize;
     assert_eq!(
         payload[0], 0,
@@ -101,7 +86,6 @@ fn packed_struct_bitset_skips_self_delimiting_fields() {
     let id_bytes = value.id.to_le_bytes();
     assert_eq!(&payload[bitset_len..bitset_len + id_bytes.len()], id_bytes);
 }
-
 #[test]
 fn packed_struct_bitset_emits_size_for_nested_structs() {
     let value = NeedsSize {
@@ -113,7 +97,6 @@ fn packed_struct_bitset_emits_size_for_nested_structs() {
     let flags =
         header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN | header_flags::FIELD_BITSET;
     let payload = encode_bare_with_flags(&value, flags);
-
     assert_eq!(payload[0], 0b10, "nested field should set bit 1");
     let (nested_len, hdr_len) = {
         let _guard = DecodeFlagsGuard::enter(flags);
@@ -121,7 +104,6 @@ fn packed_struct_bitset_emits_size_for_nested_structs() {
     };
     let nested_payload = encode_bare_with_flags(&value.nested, flags);
     assert_eq!(nested_len, nested_payload.len());
-
     let data_start = 1 + hdr_len;
     let id_bytes = value.id.to_le_bytes();
     assert_eq!(&payload[data_start..data_start + id_bytes.len()], id_bytes);
@@ -130,12 +112,10 @@ fn packed_struct_bitset_emits_size_for_nested_structs() {
         nested_payload.as_slice()
     );
 }
-
 #[test]
 fn packed_struct_bitset_rejects_layout_forgery_for_named_and_unnamed_structs() {
     let flags =
         header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN | header_flags::FIELD_BITSET;
-
     let named = NamedMixed {
         fixed: 7,
         inner: Tiny(11),
@@ -151,7 +131,6 @@ fn packed_struct_bitset_rejects_layout_forgery_for_named_and_unnamed_structs() {
         decode_bare_with_flags::<NamedMixed>(&named_payload, flags),
         Err(Error::NonCanonicalEncoding)
     ));
-
     let unnamed = TupleMixed(13, Tiny(17));
     let mut unnamed_payload = encode_bare_with_flags(&unnamed, flags);
     assert_eq!(unnamed_payload[0], 0b10);
@@ -166,12 +145,10 @@ fn packed_struct_bitset_rejects_layout_forgery_for_named_and_unnamed_structs() {
         Err(Error::NonCanonicalEncoding)
     ));
 }
-
 #[test]
 fn packed_struct_size_headers_reject_truncation_without_unwind() {
     let flags =
         header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN | header_flags::FIELD_BITSET;
-
     for header_len in 0..=7 {
         let mut payload = vec![0b1];
         payload.extend(std::iter::repeat_n(0x80, header_len));
@@ -179,12 +156,10 @@ fn packed_struct_size_headers_reject_truncation_without_unwind() {
         assert_typed_error_without_unwind::<TupleTiny>(&payload, flags);
     }
 }
-
 #[test]
 fn compact_zero_size_header_is_not_reinterpreted_as_fixed_u64() {
     let flags =
         header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN | header_flags::FIELD_BITSET;
-
     for bytes_after_zero in 0..=7 {
         let mut payload = vec![0b1, 0x00];
         payload.extend(std::iter::repeat_n(0xAA, bytes_after_zero));

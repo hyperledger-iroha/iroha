@@ -6,7 +6,6 @@
     clippy::too_many_lines,
     clippy::map_unwrap_or
 )]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -18,27 +17,21 @@ use iroha_data_model::{account::NewAccount, metadata::Metadata, nft::NftId, prel
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;
 use norito::NoritoSerialize;
-
 const AMPLE_TEST_GAS_LIMIT: u64 = 1_000_000;
-
 fn with_core_host<R>(vm: &mut IVM, f: impl FnOnce(&mut CoreHost) -> R) -> R {
     CoreHost::with_host(vm, f)
 }
-
 fn tlv_blob<T: NoritoSerialize>(val: &T, type_id: u16) -> Vec<u8> {
     let payload = norito::to_bytes(val).expect("encode payload");
     tlv_from_payload(&payload, type_id)
 }
-
 fn norito_bytes_tlv<T: norito::core::NoritoSerialize>(val: &T) -> Vec<u8> {
     let payload = norito::to_bytes(val).expect("encode NoritoBytes payload");
     tlv_from_payload(&payload, PointerType::NoritoBytes as u16)
 }
-
 fn quantity_tlv(value: Quantity) -> Vec<u8> {
     ivm::numeric_tlv::encode_quantity(&value).expect("encode quantity pointer envelope")
 }
-
 fn tlv_from_payload(payload: &[u8], type_id: u16) -> Vec<u8> {
     let mut blob = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
     blob.extend_from_slice(&type_id.to_be_bytes());
@@ -49,26 +42,21 @@ fn tlv_from_payload(payload: &[u8], type_id: u16) -> Vec<u8> {
     blob.extend_from_slice(&hash);
     blob
 }
-
 fn seeded_account(seed: u8) -> AccountId {
     seeded_account_in(seed, "wonder")
 }
-
 fn seeded_account_in(seed: u8, domain_name: &str) -> AccountId {
     let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("seeded IVM host mapping account keypair should be valid");
     let _domain = DomainId::try_new(domain_name, "universal").unwrap();
     AccountId::new(keypair.public_key().clone())
 }
-
 fn new_account_in_domain(account_id: &AccountId) -> NewAccount {
     NewAccount::new(account_id.clone())
 }
-
 fn built_account_in_domain(account_id: &AccountId) -> Account {
     new_account_in_domain(account_id).build(account_id)
 }
-
 fn make_header() -> Vec<u8> {
     ProgramMetadata {
         version_major: 1,
@@ -80,7 +68,6 @@ fn make_header() -> Vec<u8> {
     }
     .encode()
 }
-
 fn scall_program(syscall: u32) -> Vec<u8> {
     let mut code = Vec::new();
     code.extend_from_slice(
@@ -95,13 +82,11 @@ fn scall_program(syscall: u32) -> Vec<u8> {
     program.extend_from_slice(&code);
     program
 }
-
 fn load_input_blob(vm: &mut IVM, cursor: &mut u64, blob: &[u8]) -> u64 {
     vm.memory
         .input_write_aligned(cursor, blob, 8)
         .expect("write INPUT blob")
 }
-
 fn run_syscall(vm: &mut IVM, syscall: u32, regs: &[(u8, u64)]) {
     let program = scall_program(syscall);
     vm.load_program(&program).expect("load program");
@@ -111,14 +96,12 @@ fn run_syscall(vm: &mut IVM, syscall: u32, regs: &[(u8, u64)]) {
     vm.run()
         .unwrap_or_else(|err| panic!("run syscall 0x{syscall:02X}: {err:?}"));
 }
-
 #[test]
 fn host_bridges_nft_mint_and_transfer() {
     // Accounts and NFT id
     let owner = seeded_account(1);
     let recipient = seeded_account(2);
     let nft_id: NftId = "n0$wonder".parse().unwrap();
-
     let nft_blob = tlv_blob(&nft_id, PointerType::NftId as u16);
     let owner_blob = tlv_blob(&owner, PointerType::AccountId as u16);
     let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
@@ -131,7 +114,6 @@ fn host_bridges_nft_mint_and_transfer() {
         ivm_sys::SYSCALL_NFT_MINT_ASSET,
         &[(10, ptr_nft), (11, ptr_owner)],
     );
-
     // Minimal world setup: domain + accounts
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -162,7 +144,6 @@ fn host_bridges_nft_mint_and_transfer() {
                 .execute_instruction(&mut tx, &owner, instr)
                 .unwrap();
         }
-
         // Apply queued NFT_MINT_ASSET
         let queued =
             CoreHost::with_host(&mut vm, |host| host.apply_queued(&mut tx, &owner)).unwrap();
@@ -170,14 +151,12 @@ fn host_bridges_nft_mint_and_transfer() {
         tx.apply();
         block.commit().unwrap();
     }
-
     // NFT exists and is owned by owner
     {
         let view = state.view();
         let entry = view.world.nfts().get(&nft_id).expect("nft exists");
         assert_eq!(entry.owned_by, owner);
     }
-
     // Now transfer NFT to recipient via SCALL NFT_TRANSFER_ASSET
     let from_blob = tlv_blob(&owner, PointerType::AccountId as u16);
     let nft_blob2 = tlv_blob(&nft_id, PointerType::NftId as u16);
@@ -193,7 +172,6 @@ fn host_bridges_nft_mint_and_transfer() {
         ivm_sys::SYSCALL_NFT_TRANSFER_ASSET,
         &[(10, ptr_from), (11, ptr_nft2), (12, ptr_to)],
     );
-
     // Apply queued NFT_TRANSFER_ASSET in a new block scope
     let header_transfer = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(2).unwrap(),
@@ -217,7 +195,6 @@ fn host_bridges_nft_mint_and_transfer() {
     let entry2 = view.world.nfts().get(&nft_id).expect("nft exists");
     assert_eq!(entry2.owned_by, recipient);
 }
-
 #[test]
 fn host_rejects_insufficient_asset_transfer() {
     // Setup accounts and asset def
@@ -228,7 +205,6 @@ fn host_rejects_insufficient_asset_transfer() {
             DomainId::try_new("wonder", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
-
     // Build program: TRANSFER_ASSET_SCOPED(&from, &to, &asset_def, 1000, &dataspace) -> expect rejection when applying queued ISIs
     let from_tlv = tlv_blob(&from, PointerType::AccountId as u16);
     let to_tlv = tlv_blob(&to, PointerType::AccountId as u16);
@@ -238,7 +214,6 @@ fn host_rejects_insufficient_asset_transfer() {
         &iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         PointerType::DataSpaceId as u16,
     );
-
     // Setup world: domain, accounts, asset def, mint only 100
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -281,7 +256,6 @@ fn host_rejects_insufficient_asset_transfer() {
     }
     tx.apply();
     block.commit().unwrap();
-
     let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     let mut cursor = 0;
     let ptr_from = load_input_blob(&mut vm, &mut cursor, &from_tlv);
@@ -305,7 +279,6 @@ fn host_rejects_insufficient_asset_transfer() {
     host.set_query_state(&view);
     vm.run_with_host(&mut host)
         .unwrap_or_else(|err| panic!("run syscall 0x2C: {err:?}"));
-
     // Apply queued transfer: should be rejected due to insufficient funds
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(2).unwrap(),
@@ -321,7 +294,6 @@ fn host_rejects_insufficient_asset_transfer() {
     result.expect_err("should reject");
     // We don't assert exact error kind to avoid tight coupling, just that it rejects.
 }
-
 #[test]
 fn host_batches_transfer_v1_calls() {
     let from = seeded_account(5);
@@ -373,7 +345,6 @@ fn host_batches_transfer_v1_calls() {
     let mut block = state.block(header);
     let mut tx = block.transaction();
     tx.tx_call_hash = Some(Hash::prehashed([0x55; Hash::LENGTH]));
-
     let from_tlv = tlv_blob(&from, PointerType::AccountId as u16);
     let first_recipient_tlv = tlv_blob(&to_a, PointerType::AccountId as u16);
     let second_recipient_tlv = tlv_blob(&to_b, PointerType::AccountId as u16);
@@ -389,7 +360,6 @@ fn host_batches_transfer_v1_calls() {
     let ptr_asset = load_input_blob(&mut vm, &mut cursor, &asset_tlv);
     let ptr_amount_a = load_input_blob(&mut vm, &mut cursor, &amount_a_tlv);
     let ptr_amount_b = load_input_blob(&mut vm, &mut cursor, &amount_b_tlv);
-
     run_syscall(&mut vm, ivm_sys::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &[]);
     run_syscall(
         &mut vm,
@@ -412,7 +382,6 @@ fn host_batches_transfer_v1_calls() {
         ],
     );
     run_syscall(&mut vm, ivm_sys::SYSCALL_TRANSFER_V1_BATCH_END, &[]);
-
     let queued = with_core_host(&mut vm, |host| host.apply_queued(&mut tx, &from)).unwrap();
     assert_eq!(queued.len(), 1, "single batch instruction enqueued");
     let batch = queued[0]
@@ -421,7 +390,6 @@ fn host_batches_transfer_v1_calls() {
         .expect("queued instruction is a TransferAssetBatch");
     assert_eq!(batch.entries().len(), 2, "two entries batched");
     tx.apply();
-
     let from_asset_id = AssetId::new(asset_def_id.clone(), from.clone());
     let from_balance = block.world.asset(&from_asset_id).expect("authority asset");
     assert_eq!(**from_balance, Quantity::from(14_u32));
@@ -437,7 +405,6 @@ fn host_batches_transfer_v1_calls() {
         .asset(&second_recipient_asset_id)
         .expect("recipient b asset");
     assert_eq!(**second_recipient_balance, Quantity::from(4_u32));
-
     let transcripts = block.drain_transfer_transcripts();
     assert_eq!(transcripts.len(), 1);
     let (_, batches) = transcripts.into_iter().next().unwrap();
@@ -445,7 +412,6 @@ fn host_batches_transfer_v1_calls() {
     assert_eq!(batches[0].deltas.len(), 2);
     assert!(batches[0].poseidon_preimage_digest.is_none());
 }
-
 #[test]
 fn host_rejects_nft_transfer_from_non_owner() {
     // Setup accounts and NFT owned by bob; alice attempts transfer -> reject
@@ -453,12 +419,10 @@ fn host_rejects_nft_transfer_from_non_owner() {
     let bob = seeded_account(9);
     let charlie = seeded_account(10);
     let nft_id: NftId = "n0$wonder".parse().unwrap();
-
     // Build program: TRANSFER_NFT(from=alice, nft_id, to=charlie)
     let from_tlv = tlv_blob(&alice, PointerType::AccountId as u16);
     let nft_tlv = tlv_blob(&nft_id, PointerType::NftId as u16);
     let to_tlv = tlv_blob(&charlie, PointerType::AccountId as u16);
-
     let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     vm.set_host(CoreHost::new(alice.clone()));
     let mut cursor = 0;
@@ -470,7 +434,6 @@ fn host_rejects_nft_transfer_from_non_owner() {
         ivm_sys::SYSCALL_NFT_TRANSFER_ASSET,
         &[(10, ptr_from), (11, ptr_nft), (12, ptr_to)],
     );
-
     // Seed a valid ledger fixture directly. This test exercises transfer
     // authorization, not account/NFT registration authorization.
     let kura = Kura::blank_kura_for_testing();
@@ -499,13 +462,11 @@ fn host_rejects_nft_transfer_from_non_owner() {
     );
     let mut block = state.block(header);
     let mut tx = block.transaction();
-
     // Apply queued transfer: should be rejected since alice is not the owner
     let err = with_core_host(&mut vm, |host| host.apply_queued(&mut tx, &alice))
         .expect_err("should reject");
     drop(err);
 }
-
 #[test]
 fn host_bridges_set_account_detail() {
     // Build program: set_account_detail(authority(), name("cursor"), json("1")); HALT
@@ -515,7 +476,6 @@ fn host_bridges_set_account_detail() {
     let key_tlv = tlv_blob(&key, PointerType::Name as u16);
     let val_tlv = tlv_blob(&val, PointerType::Json as u16);
     let authority_tlv = tlv_blob(&authority, PointerType::AccountId as u16);
-
     let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     vm.set_host(CoreHost::new(authority.clone()));
     let mut cursor = 0;
@@ -527,7 +487,6 @@ fn host_bridges_set_account_detail() {
         ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL,
         &[(10, ptr_account), (11, ptr_key), (12, ptr_val)],
     );
-
     // Minimal world setup: register domain and account
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -543,7 +502,6 @@ fn host_bridges_set_account_detail() {
     {
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         let domain_id: DomainId = DomainId::try_new("wonder", "universal").unwrap();
         let new_domain = Domain::new(domain_id.clone());
         let reg_domain = RegisterBox::from(Register::domain(new_domain));
@@ -557,7 +515,6 @@ fn host_bridges_set_account_detail() {
                 .execute_instruction(&mut tx, &authority, instr)
                 .unwrap();
         }
-
         // Apply queued detail set via host
         let queued =
             with_core_host(&mut vm, |host| host.apply_queued(&mut tx, &authority)).unwrap();
@@ -565,7 +522,6 @@ fn host_bridges_set_account_detail() {
         tx.apply();
         block.commit().unwrap();
     } // drop block + tx before taking a read-only view
-
     // Check metadata present
     let view = state.view();
     let acc = view.world.accounts().get(&authority).unwrap();
@@ -576,7 +532,6 @@ fn host_bridges_set_account_detail() {
         Some("1")
     );
 }
-
 #[test]
 fn host_bridges_mint_asset() {
     // Build program: mint_asset(authority(), asset_definition("coin#wonder"), 123); HALT
@@ -589,7 +544,6 @@ fn host_bridges_mint_asset() {
     let authority_tlv = tlv_blob(&authority, PointerType::AccountId as u16);
     let asset_tlv = tlv_blob(&asset_def, PointerType::AssetDefinitionId as u16);
     let amount_tlv = quantity_tlv(Quantity::from(123_u64));
-
     let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     vm.set_host(CoreHost::new(authority.clone()));
     let mut cursor = 0;
@@ -601,7 +555,6 @@ fn host_bridges_mint_asset() {
         ivm_sys::SYSCALL_MINT_ASSET,
         &[(10, ptr_authority), (11, ptr_asset), (12, ptr_amount)],
     );
-
     // Minimal world setup: domain, account, asset def
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -617,7 +570,6 @@ fn host_bridges_mint_asset() {
     {
         let mut block = state.block(header);
         let mut tx = block.transaction();
-
         let domain_id: DomainId = DomainId::try_new("wonder", "universal").unwrap();
         let new_domain = Domain::new(domain_id.clone());
         let reg_domain = RegisterBox::from(Register::domain(new_domain));
@@ -639,7 +591,6 @@ fn host_bridges_mint_asset() {
                 .execute_instruction(&mut tx, &authority, instr)
                 .unwrap();
         }
-
         // Apply queued mint via host
         let queued =
             with_core_host(&mut vm, |host| host.apply_queued(&mut tx, &authority)).unwrap();
@@ -647,7 +598,6 @@ fn host_bridges_mint_asset() {
         tx.apply();
         block.commit().unwrap();
     }
-
     let balance = state
         .view()
         .world
@@ -656,7 +606,6 @@ fn host_bridges_mint_asset() {
         .map_or_else(Quantity::zero, |v| v.clone().into_inner());
     assert_eq!(balance, Quantity::from(123_u32));
 }
-
 #[test]
 fn host_bridges_nft_set_metadata_and_burn() {
     // Setup an owner and NFT id
@@ -669,7 +618,6 @@ fn host_bridges_nft_set_metadata_and_burn() {
     let val: iroha_primitives::json::Json = true.into();
     let val_tlv = tlv_blob(&val, PointerType::Json as u16);
     let owner_tlv = tlv_blob(&owner, PointerType::AccountId as u16);
-
     // VM
     let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     vm.set_host(CoreHost::new(owner.clone()));
@@ -689,7 +637,6 @@ fn host_bridges_nft_set_metadata_and_burn() {
         &[(10, ptr_nft), (11, ptr_key), (12, ptr_val)],
     );
     run_syscall(&mut vm, ivm_sys::SYSCALL_NFT_BURN_ASSET, &[(10, ptr_nft)]);
-
     // Minimal world: domain + owner
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -717,19 +664,16 @@ fn host_bridges_nft_set_metadata_and_burn() {
                 .execute_instruction(&mut tx, &owner, instr)
                 .unwrap();
         }
-
         // Apply queued NFT_MINT_ASSET, NFT_SET_METADATA, NFT_BURN_ASSET
         let queued = with_core_host(&mut vm, |host| host.apply_queued(&mut tx, &owner)).unwrap();
         assert_eq!(queued.len(), 3);
         tx.apply();
         block.commit().unwrap();
     }
-
     // NFT should not exist after burn; before burn, metadata should have been set correctly
     let view = state.view();
     assert!(view.world.nfts().get(&nft_id).is_none());
 }
-
 #[test]
 fn transfer_batch_apply_syscall_enqueues_batch() {
     let from = seeded_account(14);
@@ -740,7 +684,6 @@ fn transfer_batch_apply_syscall_enqueues_batch() {
             DomainId::try_new("wonder", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
-
     let batch = TransferAssetBatch::new(vec![
         TransferAssetBatchEntry::new(from.clone(), to_a.clone(), asset_def_id.clone(), 7_u32),
         TransferAssetBatchEntry::new(from.clone(), to_b.clone(), asset_def_id.clone(), 4_u32),
@@ -750,7 +693,6 @@ fn transfer_batch_apply_syscall_enqueues_batch() {
         norito::decode_from_bytes(&encoded_batch).expect("batch roundtrip");
     assert_eq!(decoded.entries().len(), 2, "encode/decode sanity check");
     let batch_tlv = norito_bytes_tlv(&batch);
-
     let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     vm.set_host(CoreHost::new(from.clone()));
     let mut cursor = 0;
@@ -760,7 +702,6 @@ fn transfer_batch_apply_syscall_enqueues_batch() {
         ivm_sys::SYSCALL_TRANSFER_V1_BATCH_APPLY,
         &[(10, ptr_batch)],
     );
-
     let queued = with_core_host(&mut vm, |host| host.drain_instructions());
     assert_eq!(queued.len(), 1, "transfer batch apply enqueues instruction");
     let batch_instr = queued[0]

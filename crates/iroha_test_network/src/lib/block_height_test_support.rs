@@ -12,7 +12,6 @@ fn advance_block_height(
             "missed block height update; resynchronising block watcher"
         );
     }
-
     block_height.total = observed_height;
     if !is_empty {
         block_height.non_empty = block_height.non_empty.saturating_add(1);

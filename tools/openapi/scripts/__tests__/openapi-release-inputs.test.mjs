@@ -518,7 +518,7 @@ test('source-bound Cargo.lock pin validates exact root lock bytes', async () => 
           ),
         ),
       }),
-    /pin does not match the exact V1 size and SHA-256/i,
+    /pin SHA-256 must be nonzero/i,
   );
 });
 

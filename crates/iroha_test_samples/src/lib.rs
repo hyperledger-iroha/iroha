@@ -1,5 +1,8 @@
 //! Utility crate for standardized and random signatories.
-
+use iroha_crypto::KeyPair;
+#[cfg(feature = "rand")]
+use iroha_crypto::{Algorithm, Error as CryptoError, Hash};
+use iroha_data_model::prelude::{AccountId, DomainId, IvmBytecode};
 #[cfg(all(test, feature = "rand"))]
 use std::sync::Mutex;
 #[cfg(feature = "rand")]
@@ -13,12 +16,6 @@ use std::{
     str::FromStr,
     sync::LazyLock,
 };
-
-use iroha_crypto::KeyPair;
-#[cfg(feature = "rand")]
-use iroha_crypto::{Algorithm, Error as CryptoError, Hash};
-use iroha_data_model::prelude::{AccountId, DomainId, IvmBytecode};
-
 /// Generate a domainless [`AccountId`] using the given `domain` label as seed scope.
 ///
 /// # Panics
@@ -28,7 +25,6 @@ use iroha_data_model::prelude::{AccountId, DomainId, IvmBytecode};
 pub fn gen_account_in(domain: impl core::fmt::Display) -> (AccountId, KeyPair) {
     try_gen_account_in(domain).expect("test sample account key generation should succeed")
 }
-
 /// Fallibly generate a domainless [`AccountId`] using the given `domain` label as seed scope.
 ///
 /// # Errors
@@ -57,12 +53,10 @@ pub fn try_gen_account_in(
     let account_id = AccountId::new(key_pair.public_key().clone());
     Ok((account_id, key_pair))
 }
-
 #[cfg(feature = "rand")]
 static CALIBRATION_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[cfg(feature = "rand")]
 static CALIBRATION_LOG_ONCE: Once = Once::new();
-
 #[cfg(feature = "rand")]
 fn calibration_base_seed() -> Option<String> {
     #[cfg(all(test, feature = "rand"))]
@@ -77,7 +71,6 @@ fn calibration_base_seed() -> Option<String> {
     }
     std::env::var("IROHA_CONF_GAS_SEED").ok()
 }
-
 #[cfg(feature = "rand")]
 fn next_calibration_seed(base_seed: &str, domain: &str) -> Vec<u8> {
     let ordinal = CALIBRATION_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -85,20 +78,17 @@ fn next_calibration_seed(base_seed: &str, domain: &str) -> Vec<u8> {
     let hash_bytes: [u8; Hash::LENGTH] = Hash::new(material).into();
     hash_bytes.to_vec()
 }
-
 #[cfg(feature = "rand")]
 fn log_active_seed_once(base_seed: &str) {
     CALIBRATION_LOG_ONCE.call_once(|| {
         println!("IROHA_CONF_GAS_SEED_ACTIVE={base_seed}");
     });
 }
-
 #[cfg(all(test, feature = "rand"))]
 fn calibration_seed_override() -> &'static Mutex<Option<String>> {
     static OVERRIDE: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
     &OVERRIDE
 }
-
 #[cfg(all(test, feature = "rand"))]
 fn set_calibration_seed_override(seed: Option<&str>) {
     let mut guard = calibration_seed_override()
@@ -106,23 +96,17 @@ fn set_calibration_seed_override(seed: Option<&str>) {
         .expect("calibration seed override lock");
     *guard = seed.map(std::string::ToString::to_string);
 }
-
 #[cfg(all(test, feature = "rand"))]
 mod calibration_tests {
-    use std::sync::atomic::Ordering;
-
-    use iroha_data_model::prelude::AccountId;
-
     use super::*;
-
+    use iroha_data_model::prelude::AccountId;
+    use std::sync::atomic::Ordering;
     #[test]
     fn gen_account_in_uses_seed_when_present() {
         let seed_value = "test-seed";
         set_calibration_seed_override(Some(seed_value));
         CALIBRATION_COUNTER.store(0, Ordering::Relaxed);
-
         let (account, key_pair) = super::gen_account_in("wonderland");
-
         let material = format!("{seed_value}:wonderland:0");
         let hash_bytes: [u8; Hash::LENGTH] = Hash::new(material).into();
         let expected_key = KeyPair::try_from_seed(hash_bytes.to_vec(), Algorithm::default())
@@ -130,20 +114,16 @@ mod calibration_tests {
         let expected_account = AccountId::new(expected_key.public_key().clone());
         assert_eq!(account, expected_account);
         assert_eq!(key_pair.public_key(), expected_key.public_key());
-
         set_calibration_seed_override(None);
         CALIBRATION_COUNTER.store(0, Ordering::Relaxed);
     }
-
     #[test]
     fn try_gen_account_in_uses_checked_seed_derivation() {
         let seed_value = "checked-test-seed";
         set_calibration_seed_override(Some(seed_value));
         CALIBRATION_COUNTER.store(0, Ordering::Relaxed);
-
         let (account, key_pair) =
             super::try_gen_account_in("wonderland").expect("checked sample account");
-
         let material = format!("{seed_value}:wonderland:0");
         let hash_bytes: [u8; Hash::LENGTH] = Hash::new(material).into();
         let expected_key = KeyPair::try_from_seed(hash_bytes.to_vec(), Algorithm::default())
@@ -157,11 +137,9 @@ mod calibration_tests {
             Algorithm::default()
         );
         assert_eq!(key_pair.public_key(), expected_key.public_key());
-
         set_calibration_seed_override(None);
         CALIBRATION_COUNTER.store(0, Ordering::Relaxed);
     }
-
     #[test]
     fn toml_profile_key_parses() {
         let value: toml::Value =
@@ -172,7 +150,6 @@ mod calibration_tests {
         );
     }
 }
-
 macro_rules! declare_keypair {
     ( $key_pair:ident, $public_key:expr, $private_key:expr ) => {
         /// A standardized [`KeyPair`].
@@ -189,7 +166,6 @@ macro_rules! declare_keypair {
         });
     };
 }
-
 macro_rules! declare_account_with_keypair {
     ( $account_id:ident, $domain:literal, $key_pair:ident, $public_key:literal, $private_key:literal ) => {
         /// A standardized [`AccountId`].
@@ -198,17 +174,14 @@ macro_rules! declare_account_with_keypair {
                 DomainId::try_new($domain, "universal").expect("domain should be a valid Name");
             AccountId::new($key_pair.public_key().clone())
         });
-
         declare_keypair!($key_pair, $public_key, $private_key);
     };
 }
-
 declare_keypair!(
     PEER_KEYPAIR,
     "ed01207233BFC89DCBD68C19FDE6CE6158225298EC1131B6A130D1AEB454C1AB5183C0",
     "8026209AC47ABF59B356E0BD7DCBBBB4DEC080E302156A48CA907E47CB6AEA1D32719E"
 );
-
 declare_account_with_keypair!(
     ALICE_ID,
     "wonderland",
@@ -238,7 +211,6 @@ declare_account_with_keypair!(
     "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4",
     "80262082B3BDE54AEBECA4146257DA0DE8D59D8E46D5FE34887DCD8072866792FCB3AD"
 );
-
 // Deterministic “real” genesis keys (seed: genesis-real). These match the localnet
 // fixture keys used in /private/tmp/i2-localnet and are available for integration
 // tests that want to mirror production-style key material.
@@ -249,16 +221,13 @@ declare_account_with_keypair!(
     "ed0120EEF765223920C4D7D7ED4E204DCBDF3DAFE37F53B11F155D78206F24BC232646",
     "802620AF458918974764C8ECB6AEB4F0AB18DC4EAD18DB597F22D5D2B31E68537817D7"
 );
-
 fn read_file(path: impl AsRef<Path>) -> std::io::Result<Vec<u8>> {
     let mut blob = vec![];
     std::fs::File::open(path.as_ref())?.read_to_end(&mut blob)?;
     Ok(blob)
 }
-
 const IVM_SAMPLES_PREBUILT_DIR: &str = "crates/ivm/target/prebuilt/samples";
 const IVM_BUILD_CONFIG_PATH: &str = "crates/ivm/target/prebuilt/build_config.toml";
-
 /// Resolve the path of the IVM sample.
 pub fn sample_ivm_path(name: impl AsRef<str>) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -269,14 +238,12 @@ pub fn sample_ivm_path(name: impl AsRef<str>) -> PathBuf {
         .join(name.as_ref())
         .with_extension("to")
 }
-
 /// Load IVM smart contract from `ivm/samples` by the name of smart contract
 /// e.g. `default_executor`.
 ///
 /// Bytecode must be pre-built before running the tests
 pub fn load_sample_ivm(name: impl AsRef<str>) -> IvmBytecode {
     let path = sample_ivm_path(name.as_ref());
-
     match read_file(&path) {
         Err(err) => {
             eprintln!(
@@ -293,7 +260,6 @@ pub fn load_sample_ivm(name: impl AsRef<str>) -> IvmBytecode {
         Ok(blob) => IvmBytecode::from_compiled(blob),
     }
 }
-
 /// Load IVM smart contract build profile.
 ///
 /// Returns `None` if the build configuration cannot be found.
@@ -303,10 +269,8 @@ pub fn load_ivm_build_profile() -> Option<Profile> {
         .canonicalize()
         .expect("invoking from crates/iroha_test_samples, should be fine")
         .join(IVM_BUILD_CONFIG_PATH);
-
     load_ivm_build_profile_from(&path)
 }
-
 fn load_ivm_build_profile_from(path: &Path) -> Option<Profile> {
     match fs::read_to_string(path) {
         Err(err) => {
@@ -331,7 +295,6 @@ fn load_ivm_build_profile_from(path: &Path) -> Option<Profile> {
         }
     }
 }
-
 /// Build profile used for pre-built IVM samples
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Profile {
@@ -340,7 +303,6 @@ pub enum Profile {
     /// Optimized build
     Release,
 }
-
 impl Profile {
     /// Whether the profile is optimized
     #[must_use]
@@ -348,10 +310,8 @@ impl Profile {
         matches!(self, Self::Release)
     }
 }
-
 impl FromStr for Profile {
     type Err = &'static str;
-
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "debug" | "Debug" => Ok(Self::Debug),
@@ -360,17 +320,14 @@ impl FromStr for Profile {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn sample_ivm_path_has_to_extension() {
         let path = sample_ivm_path("dummy");
         assert_eq!(path.extension().and_then(|e| e.to_str()), Some("to"));
     }
-
     #[test]
     fn load_ivm_build_profile_defaults_to_release_when_missing() {
         let path = std::env::temp_dir().join(format!(
@@ -379,7 +336,6 @@ mod tests {
         ));
         assert_eq!(super::load_ivm_build_profile_from(&path), None);
     }
-
     #[test]
     fn load_ivm_build_profile_reads_existing_file() {
         let path =

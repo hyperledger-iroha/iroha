@@ -1,7 +1,6 @@
 //! Kaigi instruction helpers.
 //!
 //! These subcommands build Kaigi ISIs and submit them through the CLI runtime.
-
 use crate::cli_output::print_with_optional_text;
 use crate::{Run, RunContext};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -23,7 +22,6 @@ use std::{
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
-
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Create a new Kaigi session.
@@ -45,7 +43,6 @@ pub enum Command {
     /// Report the health status of a relay used by a Kaigi session.
     ReportRelayHealth(ReportRelayHealthArgs),
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -61,7 +58,6 @@ impl Run for Command {
         }
     }
 }
-
 #[derive(Args, Debug)]
 pub struct CreateArgs {
     /// Domain identifier hosting the call (e.g. `kaigi`).
@@ -122,7 +118,6 @@ pub struct CreateArgs {
     #[arg(long, value_name = "HEX")]
     pub proof_hex: Option<String>,
 }
-
 impl Run for CreateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
@@ -158,7 +153,6 @@ impl Run for CreateArgs {
             self.roster_root_hex.as_deref(),
             self.proof_hex.as_deref(),
         )?;
-
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
             Box::new(iroha::data_model::isi::kaigi::CreateKaigi {
                 call: template,
@@ -170,7 +164,6 @@ impl Run for CreateArgs {
         )])
     }
 }
-
 #[derive(Args, Debug)]
 pub struct QuickstartArgs {
     /// Domain identifier hosting the call.
@@ -208,7 +201,6 @@ pub struct QuickstartArgs {
     )]
     pub spool_hint: String,
 }
-
 impl Run for QuickstartArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let call_label = resolve_call_label(self.call_name)?;
@@ -227,7 +219,6 @@ impl Run for QuickstartArgs {
         if let Some(path) = self.metadata_json {
             template.metadata = read_metadata(&path)?;
         }
-
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
             Box::new(iroha::data_model::isi::kaigi::CreateKaigi {
                 call: template.clone(),
@@ -237,7 +228,6 @@ impl Run for QuickstartArgs {
                 proof: None,
             }),
         )])?;
-
         if self.auto_join_host {
             context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
                 Box::new(iroha::data_model::isi::kaigi::JoinKaigi {
@@ -250,7 +240,6 @@ impl Run for QuickstartArgs {
                 }),
             )])?;
         }
-
         let torii_url = context.config().torii_api_url.clone();
         let join_hint = format!(
             "iroha --config <path> kaigi join --domain {} --call-name {} --participant <account-id>",
@@ -283,7 +272,6 @@ impl Run for QuickstartArgs {
             fs::write(path, payload)
                 .wrap_err_with(|| format!("failed to write summary to {}", path.display()))?;
         }
-
         let output = QuickstartOutput {
             summary: summary.clone(),
             summary_out: summary_out
@@ -294,14 +282,12 @@ impl Run for QuickstartArgs {
         print_with_optional_text(context, Some(text), &output)
     }
 }
-
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivacyModeArg {
     Transparent,
     #[clap(alias = "zk", alias = "zk_roster_v1")]
     ZkRosterV1,
 }
-
 impl From<PrivacyModeArg> for KaigiPrivacyMode {
     fn from(arg: PrivacyModeArg) -> Self {
         match arg {
@@ -310,14 +296,12 @@ impl From<PrivacyModeArg> for KaigiPrivacyMode {
         }
     }
 }
-
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomPolicyArg {
     Public,
     #[clap(alias = "auth", alias = "authenticated")]
     Authenticated,
 }
-
 impl From<RoomPolicyArg> for KaigiRoomPolicy {
     fn from(arg: RoomPolicyArg) -> Self {
         match arg {
@@ -326,7 +310,6 @@ impl From<RoomPolicyArg> for KaigiRoomPolicy {
         }
     }
 }
-
 #[derive(Debug, Clone, norito::json::JsonSerialize)]
 struct QuickstartSummary {
     call_id: String,
@@ -339,13 +322,11 @@ struct QuickstartSummary {
     join_hint: String,
     spool_hint: String,
 }
-
 #[derive(Debug, Clone, norito::json::JsonSerialize)]
 struct QuickstartOutput {
     summary: QuickstartSummary,
     summary_out: Option<String>,
 }
-
 fn render_quickstart_text(summary: &QuickstartSummary, summary_out: Option<&Path>) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "Kaigi demo call created. Share the summary below:");
@@ -363,7 +344,6 @@ fn render_quickstart_text(summary: &QuickstartSummary, summary_out: Option<&Path
     }
     out
 }
-
 fn resolve_call_label(value: Option<String>) -> Result<String> {
     if let Some(label) = value {
         return Ok(label);
@@ -374,7 +354,6 @@ fn resolve_call_label(value: Option<String>) -> Result<String> {
         .as_secs();
     Ok(format!("kaigi_demo_{uptime:x}"))
 }
-
 #[derive(Args, Debug)]
 pub struct RegisterRelayArgs {
     /// Relay account identifier advertising relay capabilities (canonical I105 account literal).
@@ -387,7 +366,6 @@ pub struct RegisterRelayArgs {
     #[arg(long, value_name = "U8")]
     pub bandwidth_class: u8,
 }
-
 impl Run for RegisterRelayArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         if self.bandwidth_class == 0 {
@@ -403,13 +381,11 @@ impl Run for RegisterRelayArgs {
             hpke_public_key,
             bandwidth_class: self.bandwidth_class,
         };
-
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
             Box::new(iroha::data_model::isi::kaigi::RegisterKaigiRelay { relay }),
         )])
     }
 }
-
 #[derive(Args, Debug)]
 pub struct SetRelayManifestArgs {
     /// Domain identifier hosting the call.
@@ -430,7 +406,6 @@ pub struct SetRelayManifestArgs {
     #[arg(long, conflicts_with = "relay_manifest")]
     pub clear: bool,
 }
-
 impl Run for SetRelayManifestArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
@@ -439,7 +414,6 @@ impl Run for SetRelayManifestArgs {
             (false, Some(path)) => Some(read_manifest(&path)?),
             _ => eyre::bail!("provide either --relay-manifest <PATH> or --clear"),
         };
-
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
             Box::new(iroha::data_model::isi::kaigi::SetKaigiRelayManifest {
                 call_id,
@@ -448,7 +422,6 @@ impl Run for SetRelayManifestArgs {
         )])
     }
 }
-
 #[derive(Args, Debug)]
 pub struct JoinArgs {
     /// Domain identifier hosting the call.
@@ -479,7 +452,6 @@ pub struct JoinArgs {
     #[arg(long, value_name = "HEX")]
     pub proof_hex: Option<String>,
 }
-
 impl Run for JoinArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
@@ -493,7 +465,6 @@ impl Run for JoinArgs {
             self.roster_root_hex.as_deref(),
             self.proof_hex.as_deref(),
         )?;
-
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
             Box::new(iroha::data_model::isi::kaigi::JoinKaigi {
                 call_id,
@@ -506,11 +477,9 @@ impl Run for JoinArgs {
         )])
     }
 }
-
 struct KaigiCommitmentBuilder {
     commitment: KaigiParticipantCommitment,
 }
-
 impl KaigiCommitmentBuilder {
     fn new(hex: &str) -> Result<Self> {
         let hash = parse_hash(hex)?;
@@ -521,20 +490,17 @@ impl KaigiCommitmentBuilder {
             },
         })
     }
-
     fn with_alias(mut self, alias: Option<String>) -> KaigiParticipantCommitment {
         self.commitment.alias_tag = alias;
         self.commitment
     }
 }
-
 struct ParsedKaigiPrivacyArtifacts {
     commitment: Option<KaigiParticipantCommitment>,
     nullifier: Option<KaigiParticipantNullifier>,
     roster_root: Option<Hash>,
     proof: Option<Vec<u8>>,
 }
-
 fn parse_optional_privacy_artifacts(
     commitment_hex: Option<&str>,
     commitment_alias: Option<&str>,
@@ -563,7 +529,6 @@ fn parse_optional_privacy_artifacts(
         proof,
     })
 }
-
 fn build_nullifier(hex: &str, issued_at_ms: Option<u64>) -> Result<KaigiParticipantNullifier> {
     let digest = parse_hash(hex)?;
     let issued_at_ms = issued_at_ms.unwrap_or_default();
@@ -572,7 +537,6 @@ fn build_nullifier(hex: &str, issued_at_ms: Option<u64>) -> Result<KaigiParticip
         issued_at_ms,
     })
 }
-
 #[derive(Args, Debug)]
 pub struct LeaveArgs {
     /// Domain identifier hosting the call.
@@ -600,7 +564,6 @@ pub struct LeaveArgs {
     #[arg(long, value_name = "HEX")]
     pub proof_hex: Option<String>,
 }
-
 impl Run for LeaveArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
@@ -614,7 +577,6 @@ impl Run for LeaveArgs {
             self.roster_root_hex.as_deref(),
             self.proof_hex.as_deref(),
         )?;
-
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
             Box::new(iroha::data_model::isi::kaigi::LeaveKaigi {
                 call_id,
@@ -627,7 +589,6 @@ impl Run for LeaveArgs {
         )])
     }
 }
-
 #[derive(Args, Debug)]
 pub struct EndArgs {
     /// Domain identifier hosting the call.
@@ -658,7 +619,6 @@ pub struct EndArgs {
     #[arg(long, value_name = "HEX")]
     pub proof_hex: Option<String>,
 }
-
 impl Run for EndArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
@@ -682,7 +642,6 @@ impl Run for EndArgs {
         )])
     }
 }
-
 #[derive(Args, Debug)]
 pub struct RecordUsageArgs {
     /// Domain identifier hosting the call.
@@ -704,7 +663,6 @@ pub struct RecordUsageArgs {
     #[arg(long, value_name = "HEX")]
     pub proof_hex: Option<String>,
 }
-
 impl Run for RecordUsageArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
@@ -727,7 +685,6 @@ impl Run for RecordUsageArgs {
         )])
     }
 }
-
 #[derive(Args, Debug)]
 pub struct ReportRelayHealthArgs {
     /// Domain identifier hosting the call.
@@ -749,14 +706,12 @@ pub struct ReportRelayHealthArgs {
     #[arg(long)]
     pub notes: Option<String>,
 }
-
 impl Run for ReportRelayHealthArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
         let relay_id = crate::resolve_account_id(context, &self.relay)
             .wrap_err("failed to resolve relay account")?;
         let status: KaigiRelayHealthStatus = self.status.into();
-
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
             Box::new(iroha::data_model::isi::kaigi::ReportKaigiRelayHealth {
                 call_id,
@@ -768,14 +723,12 @@ impl Run for ReportRelayHealthArgs {
         )])
     }
 }
-
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelayHealthStatusArg {
     Healthy,
     Degraded,
     Unavailable,
 }
-
 impl From<RelayHealthStatusArg> for KaigiRelayHealthStatus {
     fn from(arg: RelayHealthStatusArg) -> Self {
         match arg {
@@ -785,29 +738,24 @@ impl From<RelayHealthStatusArg> for KaigiRelayHealthStatus {
         }
     }
 }
-
 fn parse_call_id(domain: &str, call_name: &str) -> Result<KaigiId> {
     let domain_id = DomainId::parse_fully_qualified(domain).wrap_err("invalid domain id")?;
     let call = iroha::data_model::name::Name::from_str(call_name).wrap_err("invalid call name")?;
     Ok(KaigiId::new(domain_id, call))
 }
-
 fn parse_hash(hex: &str) -> Result<Hash> {
     let trimmed = hex.trim_start_matches("0x");
     Hash::from_str(trimmed).wrap_err("invalid hash literal")
 }
-
 fn decode_hex_vec(hex: &str) -> Result<Vec<u8>> {
     let trimmed = hex.trim_start_matches("0x");
     hex::decode(trimmed).wrap_err("invalid hex encoding")
 }
-
 fn read_manifest(path: &str) -> Result<KaigiRelayManifest> {
     let contents = fs::read_to_string(path)
         .wrap_err_with(|| format!("failed to read relay manifest from `{path}`"))?;
     norito::json::from_str(&contents).wrap_err("invalid relay manifest JSON")
 }
-
 fn read_metadata(path: &str) -> Result<Metadata> {
     let contents = fs::read_to_string(path)
         .wrap_err_with(|| format!("failed to read metadata JSON from `{path}`"))?;
@@ -824,28 +772,23 @@ fn read_metadata(path: &str) -> Result<Metadata> {
     }
     Ok(metadata)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::Parser;
     use std::path::Path;
-
     const HOST_ACCOUNT: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     const PARTICIPANT_ACCOUNT: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
-
     #[derive(Parser, Debug)]
     struct TestCli {
         #[command(subcommand)]
         command: Command,
     }
-
     fn parse_command(args: &[&str]) -> Command {
         let mut cli_argv = vec!["test"];
         cli_argv.extend_from_slice(args);
         TestCli::parse_from(cli_argv).command
     }
-
     #[test]
     fn clap_parses_create_with_privacy_alias() {
         match parse_command(&[
@@ -870,7 +813,6 @@ mod tests {
             other => panic!("expected create command, got {other:?}"),
         }
     }
-
     #[test]
     fn clap_parses_create_with_optional_privacy_fields() {
         match parse_command(&[
@@ -905,7 +847,6 @@ mod tests {
             other => panic!("expected create command, got {other:?}"),
         }
     }
-
     #[test]
     fn clap_parses_join_with_optional_fields() {
         match parse_command(&[
@@ -943,7 +884,6 @@ mod tests {
             other => panic!("expected create command, got {other:?}"),
         }
     }
-
     #[test]
     fn clap_parses_register_relay() {
         match parse_command(&[
@@ -966,7 +906,6 @@ mod tests {
             other => panic!("expected register-relay command, got {other:?}"),
         }
     }
-
     #[test]
     fn clap_parses_set_relay_manifest_with_clear() {
         match parse_command(&[
@@ -986,7 +925,6 @@ mod tests {
             other => panic!("expected set-relay-manifest command, got {other:?}"),
         }
     }
-
     #[test]
     fn clap_parses_leave_without_optional_fields() {
         match parse_command(&[
@@ -1010,7 +948,6 @@ mod tests {
             other => panic!("expected leave command, got {other:?}"),
         }
     }
-
     #[test]
     fn clap_parses_end_with_timestamp() {
         match parse_command(&[
@@ -1028,7 +965,6 @@ mod tests {
             other => panic!("expected end command, got {other:?}"),
         }
     }
-
     #[test]
     fn clap_parses_end_with_optional_privacy_fields() {
         match parse_command(&[
@@ -1061,7 +997,6 @@ mod tests {
             other => panic!("expected end command, got {other:?}"),
         }
     }
-
     #[test]
     fn clap_parses_record_usage_defaults() {
         match parse_command(&[
@@ -1081,7 +1016,6 @@ mod tests {
             other => panic!("expected record-usage command, got {other:?}"),
         }
     }
-
     #[test]
     fn clap_parses_quickstart_defaults() {
         match parse_command(&["quickstart"]) {
@@ -1095,7 +1029,6 @@ mod tests {
             other => panic!("expected quickstart command, got {other:?}"),
         }
     }
-
     #[test]
     fn clap_parses_record_usage_with_privacy_fields() {
         match parse_command(&[
@@ -1120,7 +1053,6 @@ mod tests {
             other => panic!("expected record-usage command, got {other:?}"),
         }
     }
-
     #[test]
     fn build_nullifier_defaults_to_zero_when_timestamp_missing() {
         let hex = "ab".repeat(32);
@@ -1128,7 +1060,6 @@ mod tests {
         let nullifier = build_nullifier(&payload, None).expect("valid nullifier");
         assert_eq!(nullifier.issued_at_ms, 0);
     }
-
     #[test]
     fn parse_optional_privacy_artifacts_builds_all_fields() {
         let commitment_hex = format!("0x{}", "ab".repeat(32));
@@ -1143,7 +1074,6 @@ mod tests {
             Some("aa55"),
         )
         .expect("valid privacy artifacts");
-
         assert_eq!(
             artifacts
                 .commitment
@@ -1164,27 +1094,22 @@ mod tests {
             Some(parse_hash(&roster_root_hex).unwrap())
         );
     }
-
     #[test]
     fn read_metadata_rejects_non_object_json() {
         use std::fs;
-
         let mut path = std::env::temp_dir();
         path.push(format!(
             "kaigi_metadata_invalid_{}.json",
             std::process::id()
         ));
         fs::write(&path, "\"not-an-object\"").expect("write temp metadata");
-
         let result = read_metadata(path.to_str().expect("path to str"));
-
         fs::remove_file(&path).expect("cleanup temp metadata");
         assert!(
             result.is_err(),
             "metadata reader should reject non-object JSON"
         );
     }
-
     #[test]
     fn render_quickstart_text_includes_summary_out() {
         let summary = QuickstartSummary {

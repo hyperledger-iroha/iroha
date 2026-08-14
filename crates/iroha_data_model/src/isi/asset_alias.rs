@@ -1,7 +1,5 @@
 //! Asset-definition alias binding instructions.
-
 use super::*;
-
 isi! {
     /// Bind, update, or clear an alias for an existing asset definition.
     ///
@@ -19,11 +17,9 @@ isi! {
         pub lease_expiry_ms: Option<u64>,
     }
 }
-
 impl SetAssetDefinitionAlias {
     /// Stable wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.asset_definition.alias.set";
-
     /// Create a binding/update instruction.
     #[must_use]
     pub fn bind(
@@ -37,7 +33,6 @@ impl SetAssetDefinitionAlias {
             lease_expiry_ms,
         }
     }
-
     /// Create an instruction that clears the current alias binding.
     #[must_use]
     pub fn clear(asset_definition_id: AssetDefinitionId) -> Self {
@@ -48,9 +43,7 @@ impl SetAssetDefinitionAlias {
         }
     }
 }
-
 impl crate::seal::Instruction for SetAssetDefinitionAlias {}
-
 impl<'a> norito::core::DecodeFromSlice<'a> for SetAssetDefinitionAlias {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -58,7 +51,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetAssetDefinitionAlias {
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let asset_definition_id = super::decode_aos_canonical_field::<AssetDefinitionId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -94,26 +86,21 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetAssetDefinitionAlias {
         ))
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::asset::AssetDefinitionAlias;
-
+    use norito::core::DecodeFromSlice;
     fn asset_definition() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "rose".parse().expect("asset name"),
         )
     }
-
     fn asset_alias() -> AssetDefinitionAlias {
         AssetDefinitionAlias::from_components("rose", Some("wonderland"), "universal")
             .expect("asset alias")
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -124,7 +111,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(
         registry: &crate::isi::InstructionRegistry,
         wire_id: &'static str,
@@ -144,7 +130,6 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     fn asset_alias_decode_from_slice_roundtrips() {
         let definition = asset_definition();
@@ -156,13 +141,11 @@ mod tests {
         assert_slice_roundtrip(SetAssetDefinitionAlias::clear(definition.clone()));
         let _ = definition;
     }
-
     #[test]
     fn asset_alias_registry_decodes_stable_ids() {
         let registry = crate::isi::InstructionRegistry::new()
             .register_with_id_slice::<SetAssetDefinitionAlias>(SetAssetDefinitionAlias::WIRE_ID);
         let definition = asset_definition();
-
         assert_registry_decodes(
             &registry,
             SetAssetDefinitionAlias::WIRE_ID,

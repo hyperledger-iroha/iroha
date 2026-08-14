@@ -1,10 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Telemetry JSON endpoint smoke tests for Sumeragi v2 diagnostics.
-
 #![cfg(feature = "telemetry")]
-
-use std::sync::Arc;
-
 use axum::{extract::ConnectInfo, http::Request};
 use iroha_config::parameters::actual::TelemetryProfile;
 use iroha_core::{
@@ -14,14 +10,12 @@ use iroha_core::{
 };
 use iroha_data_model::ChainId;
 use iroha_torii::MaybeTelemetry;
+use std::sync::Arc;
 use tower::util::ServiceExt as _;
-
 mod fixtures;
-
 fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     iroha_torii::test_utils::mk_minimal_root_cfg()
 }
-
 fn signed_loopback_get(
     cfg: &iroha_config::parameters::actual::Root,
     uri: &'static str,
@@ -36,7 +30,6 @@ fn signed_loopback_get(
         .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
     request
 }
-
 fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Torii {
     let (kiso, _child) = iroha_core::kiso::KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -71,7 +64,6 @@ fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Tor
         telemetry,
     )
 }
-
 #[tokio::test]
 async fn pacemaker_status_json_shape() {
     let cfg = mk_minimal_root_cfg();

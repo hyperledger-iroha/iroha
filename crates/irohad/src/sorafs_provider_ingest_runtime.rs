@@ -5,7 +5,6 @@
 //! authentication and governed HSM/KMS signing remain deployment-injected
 //! boundaries: config contains only identity-pinned opaque handles and public
 //! revision/policy-digest qualifications.
-
 use std::{
     cell::Cell,
     fmt,
@@ -16,7 +15,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
 use eyre::{Result, WrapErr, bail};
 use iroha_config::parameters::{
     actual::{
@@ -106,11 +104,9 @@ use sorafs_node::{
     store::{StorageError, StoredManifest},
     validate_musubi_provider_attestation_inventory_binding_v1,
 };
-
 use crate::sorafs_provider_ingest_finalized_query::{
     ArchivedProviderIngestFinalizedLedgerV1, PreparedProviderIngestFinalizedArchiveV1,
 };
-
 const SHUTDOWN_WAIT_FLOOR: Duration = Duration::from_secs(2);
 const READINESS_STALE_TICK_MULTIPLIER_V1: u32 = 3;
 const REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
@@ -121,7 +117,6 @@ const REPLICATION_ORDER_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1 * 4,
     32,
 );
-
 /// Move the exact prepared signed reader into this node's one inert capture tenure.
 ///
 /// This composer is intentionally crate-private and performs no lazy scanner
@@ -145,7 +140,6 @@ pub(crate) fn compose_inert_completed_musubi_capture_coordinator_v1(
     )
     .wrap_err("reserve the inert completed-Musubi capture coordinator tenure")
 }
-
 /// Compose, but do not run, one deployment-bound completed-Musubi effect pump.
 ///
 /// `journal` must come from ordinary `open_journal_runtime`; the node binder
@@ -195,7 +189,6 @@ pub(crate) fn compose_inert_completed_musubi_attestation_driver_v1(
     )
     .wrap_err("bind inert completed-Musubi provider-attestation effect pump")
 }
-
 /// Exact verified source material passed directly into local `SoraFS` storage.
 ///
 /// The reader may stream from a bounded authenticated transport or a
@@ -215,7 +208,6 @@ pub struct VerifiedProviderIngestPayloadV1 {
     /// Authenticated payload stream whose verification completes at exact EOF.
     pub reader: Box<dyn Read + Send>,
 }
-
 impl fmt::Debug for VerifiedProviderIngestPayloadV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -226,7 +218,6 @@ impl fmt::Debug for VerifiedProviderIngestPayloadV1 {
             .finish()
     }
 }
-
 impl VerifiedProviderIngestPayloadV1 {
     /// Construct exact verified material without copying payload bytes.
     #[must_use]
@@ -238,7 +229,6 @@ impl VerifiedProviderIngestPayloadV1 {
         }
     }
 }
-
 /// Runtime-only authenticated source provider.
 ///
 /// Implementations must resolve only current governance-admitted signed
@@ -251,7 +241,6 @@ pub trait ProviderIngestAuthenticatedSourceRuntimeV1:
 {
     /// Stable production identity compared with `iroha_config`.
     fn runtime_handle(&self) -> &str;
-
     /// Exact public source-pool revision and policy digest.
     ///
     /// # Errors
@@ -264,13 +253,11 @@ pub trait ProviderIngestAuthenticatedSourceRuntimeV1:
         ProviderIngestRuntimeProviderQualificationV1,
         ProviderIngestSourceFetchErrorV1,
     >;
-
     /// Canonical, identity-pinned governed provider inventory.
     ///
     /// Production startup requires at least two non-local providers and reads
     /// this exact slice again after readiness probing and on every worker tick.
     fn source_provider_ids(&self) -> &[[u8; 32]];
-
     /// Non-mutating authenticated readiness probe.
     ///
     /// # Errors
@@ -279,14 +266,12 @@ pub trait ProviderIngestAuthenticatedSourceRuntimeV1:
     /// qualified without mutation.
     fn check_readiness(&self) -> std::result::Result<(), ProviderIngestSourceFetchErrorV1>;
 }
-
 impl ProviderIngestAuthenticatedSourceRuntimeV1
     for ProviderIngestAuthenticatedSourcePoolV1<VerifiedProviderIngestPayloadV1>
 {
     fn runtime_handle(&self) -> &str {
         ProviderIngestAuthenticatedSourcePoolV1::runtime_handle(self)
     }
-
     fn qualification(
         &self,
     ) -> std::result::Result<
@@ -295,16 +280,13 @@ impl ProviderIngestAuthenticatedSourceRuntimeV1
     > {
         Ok(ProviderIngestAuthenticatedSourcePoolV1::qualification(self))
     }
-
     fn source_provider_ids(&self) -> &[[u8; 32]] {
         ProviderIngestAuthenticatedSourcePoolV1::source_provider_ids(self)
     }
-
     fn check_readiness(&self) -> std::result::Result<(), ProviderIngestSourceFetchErrorV1> {
         ProviderIngestAuthenticatedSourcePoolV1::check_readiness(self)
     }
 }
-
 /// Runtime-only governed signer resolver.
 ///
 /// Resolution must validate the requested owner, signer policy, and exact
@@ -316,7 +298,6 @@ impl ProviderIngestAuthenticatedSourceRuntimeV1
 pub trait ProviderIngestGovernedSignerResolverRuntimeV1: Send + Sync + 'static {
     /// Stable production identity compared with `iroha_config`.
     fn runtime_handle(&self) -> &str;
-
     /// Exact public resolver revision and policy digest.
     ///
     /// # Errors
@@ -329,7 +310,6 @@ pub trait ProviderIngestGovernedSignerResolverRuntimeV1: Send + Sync + 'static {
         ProviderIngestRuntimeProviderQualificationV1,
         ProviderIngestCompletionSignerResolverErrorV1,
     >;
-
     /// Exact public signer/key binding exposed by this resolver.
     ///
     /// # Errors
@@ -342,7 +322,6 @@ pub trait ProviderIngestGovernedSignerResolverRuntimeV1: Send + Sync + 'static {
         ProviderIngestCompletionSignerBindingV1,
         ProviderIngestCompletionSignerResolverErrorV1,
     >;
-
     /// Non-mutating HSM/KMS and governance-readiness probe.
     ///
     /// # Errors
@@ -352,7 +331,6 @@ pub trait ProviderIngestGovernedSignerResolverRuntimeV1: Send + Sync + 'static {
     fn check_readiness(
         &self,
     ) -> std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1>;
-
     /// Resolve one governed signer for the exact finalized authorization.
     fn resolve(
         &self,
@@ -365,7 +343,6 @@ pub trait ProviderIngestGovernedSignerResolverRuntimeV1: Send + Sync + 'static {
         >,
     >;
 }
-
 fn validate_authenticated_source_qualification(
     source: &dyn ProviderIngestAuthenticatedSourceRuntimeV1,
     expected: ProviderIngestRuntimeProviderQualificationV1,
@@ -388,16 +365,13 @@ fn validate_authenticated_source_qualification(
     }
     Ok(())
 }
-
 #[derive(Clone)]
 struct AuthenticatedSourceAdapterV1 {
     source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1>,
     expected_qualification: ProviderIngestRuntimeProviderQualificationV1,
 }
-
 impl ProviderIngestAuthenticatedSourceFetchV1 for AuthenticatedSourceAdapterV1 {
     type Fetched = VerifiedProviderIngestPayloadV1;
-
     fn fetch(
         &self,
         request: ProviderIngestSourceRequestV1,
@@ -439,7 +413,6 @@ impl ProviderIngestAuthenticatedSourceFetchV1 for AuthenticatedSourceAdapterV1 {
         })
     }
 }
-
 #[derive(Clone)]
 struct GovernedCompletionSignerV1 {
     signer: Arc<dyn ProviderIngestCompletionSignerV1>,
@@ -448,7 +421,6 @@ struct GovernedCompletionSignerV1 {
     expected_context: ProviderIngestCompletionSignerResolutionContextV1,
     expected_binding: ProviderIngestCompletionSignerBindingV1,
 }
-
 fn completion_payload_matches_resolution_context(
     payload: &TransactionPayload,
     context: &ProviderIngestCompletionSignerResolutionContextV1,
@@ -483,16 +455,13 @@ fn completion_payload_matches_resolution_context(
         && anchor.height == context.finalized_cursor.height
         && anchor.block_hash == context.finalized_cursor.block_hash
 }
-
 impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
     fn runtime_handle(&self) -> &str {
         self.signer.runtime_handle()
     }
-
     fn authority(&self) -> &AccountId {
         self.signer.authority()
     }
-
     fn qualification(
         &self,
     ) -> std::result::Result<
@@ -510,11 +479,9 @@ impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
         }
         Ok(qualification)
     }
-
     fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
         self.signer.signer_policy()
     }
-
     fn current_eligibility(
         &self,
     ) -> std::result::Result<
@@ -536,7 +503,6 @@ impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
         }
         Ok(current_policy)
     }
-
     fn sign(
         &self,
         payload: TransactionPayload,
@@ -569,7 +535,6 @@ impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
         })
     }
 }
-
 #[derive(Clone)]
 struct GovernedSignerResolverAdapterV1 {
     resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1>,
@@ -578,7 +543,6 @@ struct GovernedSignerResolverAdapterV1 {
     expected_resolver_qualification: ProviderIngestRuntimeProviderQualificationV1,
     expected_signer_binding: ProviderIngestCompletionSignerBindingV1,
 }
-
 fn validate_resolver_qualification(
     resolver: &dyn ProviderIngestGovernedSignerResolverRuntimeV1,
     expected: ProviderIngestRuntimeProviderQualificationV1,
@@ -592,7 +556,6 @@ fn validate_resolver_qualification(
     }
     Ok(())
 }
-
 fn validate_resolver_signer_binding(
     resolver: &dyn ProviderIngestGovernedSignerResolverRuntimeV1,
     expected: &ProviderIngestCompletionSignerBindingV1,
@@ -606,10 +569,8 @@ fn validate_resolver_signer_binding(
     }
     Ok(())
 }
-
 impl ProviderIngestCompletionSignerResolverV1 for GovernedSignerResolverAdapterV1 {
     type Signer = GovernedCompletionSignerV1;
-
     fn resolve(
         &self,
         context: ProviderIngestCompletionSignerResolutionContextV1,
@@ -697,11 +658,9 @@ impl ProviderIngestCompletionSignerResolverV1 for GovernedSignerResolverAdapterV
         })
     }
 }
-
 trait ProviderIngestFinalizedOwnerAuthorityV1: Send + Sync + 'static {
     fn owner_matches(&self, provider_id: ProviderId, expected_owner: &AccountId) -> bool;
 }
-
 impl ProviderIngestFinalizedOwnerAuthorityV1 for State {
     fn owner_matches(&self, provider_id: ProviderId, expected_owner: &AccountId) -> bool {
         self.query_view()
@@ -711,7 +670,6 @@ impl ProviderIngestFinalizedOwnerAuthorityV1 for State {
             == Some(expected_owner)
     }
 }
-
 // The standard daemon keeps this governed signer uninstantiated until the
 // provider-attestation archive, checkpoint-head seal, and supervised journal
 // are activation-qualified. Its private construction surface prevents
@@ -725,7 +683,6 @@ struct GovernedMusubiProviderAttestationSignerV1 {
     expected_network_id: NetworkId,
     expected_provider_id: ProviderId,
 }
-
 #[derive(Clone, Copy)]
 struct MusubiProviderAttestationRequestBindingV1<'a> {
     payload: &'a MusubiProviderBundleVerificationPayloadV1,
@@ -733,12 +690,10 @@ struct MusubiProviderAttestationRequestBindingV1<'a> {
     observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
     signer_policy: ProviderIngestCompletionSignerPolicyV1,
 }
-
 type MusubiProviderAttestationApprovalFutureV1<'a> = ProviderIngestFutureV1<
     'a,
     Result<MusubiProviderBundleVerificationAttestationV1, MusubiProviderAttestationSignerErrorV1>,
 >;
-
 impl<'a> From<&'a ProviderIngestMusubiAttestationApprovalRequestV1>
     for MusubiProviderAttestationRequestBindingV1<'a>
 {
@@ -751,7 +706,6 @@ impl<'a> From<&'a ProviderIngestMusubiAttestationApprovalRequestV1>
         }
     }
 }
-
 #[allow(dead_code)]
 impl GovernedMusubiProviderAttestationSignerV1 {
     fn new(
@@ -769,7 +723,6 @@ impl GovernedMusubiProviderAttestationSignerV1 {
             expected_provider_id,
         }
     }
-
     fn validate_configured_binding(&self) -> Result<(), MusubiProviderAttestationSignerErrorV1> {
         if !is_production_runtime_handle(&self.configured_binding.handle)
             || self.configured_binding.revision == 0
@@ -781,7 +734,6 @@ impl GovernedMusubiProviderAttestationSignerV1 {
         }
         Ok(())
     }
-
     fn qualified_snapshot(
         &self,
     ) -> Result<
@@ -811,7 +763,6 @@ impl GovernedMusubiProviderAttestationSignerV1 {
         }
         Ok(qualification)
     }
-
     fn request_snapshot(
         &self,
         request: MusubiProviderAttestationRequestBindingV1<'_>,
@@ -853,7 +804,6 @@ impl GovernedMusubiProviderAttestationSignerV1 {
         }
         Ok(qualification)
     }
-
     async fn approve_bound<'a, Approve>(
         &'a self,
         request: MusubiProviderAttestationRequestBindingV1<'a>,
@@ -888,7 +838,6 @@ impl GovernedMusubiProviderAttestationSignerV1 {
         {
             return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
         }
-
         let approval = approve().await;
         if !self
             .owner_authority
@@ -907,7 +856,6 @@ impl GovernedMusubiProviderAttestationSignerV1 {
         if qualification_after != qualification_before {
             return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
         }
-
         let attestation = approval?;
         if &attestation.payload != request.payload
             || attestation.verify(&request.payload.binding).is_err()
@@ -917,16 +865,13 @@ impl GovernedMusubiProviderAttestationSignerV1 {
         Ok(attestation)
     }
 }
-
 impl MusubiProviderAttestationSignerV1 for GovernedMusubiProviderAttestationSignerV1 {
     fn runtime_handle(&self) -> &str {
         &self.configured_binding.handle
     }
-
     fn authority(&self) -> &AccountId {
         self.signer.authority()
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -940,11 +885,9 @@ impl MusubiProviderAttestationSignerV1 for GovernedMusubiProviderAttestationSign
         }
         Ok(after)
     }
-
     fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
         self.signer.signer_policy()
     }
-
     fn current_eligibility(
         &self,
     ) -> Result<ProviderIngestCompletionSignerPolicyV1, MusubiProviderAttestationSignerErrorV1>
@@ -960,7 +903,6 @@ impl MusubiProviderAttestationSignerV1 for GovernedMusubiProviderAttestationSign
         }
         Ok(eligibility)
     }
-
     fn approve<'a>(
         &'a self,
         request: &'a ProviderIngestMusubiAttestationApprovalRequestV1,
@@ -968,7 +910,6 @@ impl MusubiProviderAttestationSignerV1 for GovernedMusubiProviderAttestationSign
         Box::pin(self.approve_bound(request.into(), || self.signer.approve(request)))
     }
 }
-
 // The standard daemon keeps this governed inventory uninstantiated until the
 // provider-attestation archive, checkpoint-head seal, and supervised journal
 // are activation-qualified. Its private construction surface prevents an
@@ -981,7 +922,6 @@ struct GovernedMusubiProviderAttestationInventoryV1 {
     expected_network_id: NetworkId,
     expected_provider_id: ProviderId,
 }
-
 #[allow(dead_code)]
 impl GovernedMusubiProviderAttestationInventoryV1 {
     fn new(
@@ -997,7 +937,6 @@ impl GovernedMusubiProviderAttestationInventoryV1 {
             expected_provider_id,
         }
     }
-
     fn validate_configured_binding(
         &self,
     ) -> std::result::Result<(), MusubiProviderAttestationInventoryRuntimeErrorV1> {
@@ -1011,7 +950,6 @@ impl GovernedMusubiProviderAttestationInventoryV1 {
         }
         Ok(())
     }
-
     fn qualified_snapshot(
         &self,
     ) -> std::result::Result<
@@ -1039,7 +977,6 @@ impl GovernedMusubiProviderAttestationInventoryV1 {
         }
         Ok(qualification)
     }
-
     fn validate_scope(
         &self,
         scope: &MusubiProviderAttestationInventoryScopeV1,
@@ -1049,7 +986,6 @@ impl GovernedMusubiProviderAttestationInventoryV1 {
         }
         Ok(())
     }
-
     fn validate_key(
         &self,
         scope: &MusubiProviderAttestationInventoryScopeV1,
@@ -1065,7 +1001,6 @@ impl GovernedMusubiProviderAttestationInventoryV1 {
         }
         Ok(())
     }
-
     fn validate_item(
         &self,
         item: &MusubiProviderAttestationInventoryItemV1,
@@ -1075,7 +1010,6 @@ impl GovernedMusubiProviderAttestationInventoryV1 {
         }
         self.validate_key(item.scope(), item.key())
     }
-
     fn validate_readback(
         &self,
         scope: &MusubiProviderAttestationInventoryScopeV1,
@@ -1092,7 +1026,6 @@ impl GovernedMusubiProviderAttestationInventoryV1 {
         }
         Ok(())
     }
-
     fn validate_inventory(
         &self,
         scope: &MusubiProviderAttestationInventoryScopeV1,
@@ -1105,7 +1038,6 @@ impl GovernedMusubiProviderAttestationInventoryV1 {
         Ok(())
     }
 }
-
 fn map_musubi_inventory_runtime_error(
     error: MusubiProviderAttestationInventoryRuntimeErrorV1,
 ) -> MusubiProviderAttestationInventoryErrorV1 {
@@ -1118,12 +1050,10 @@ fn map_musubi_inventory_runtime_error(
         }
     }
 }
-
 impl MusubiProviderAttestationInventoryRuntimeV1 for GovernedMusubiProviderAttestationInventoryV1 {
     fn runtime_handle(&self) -> &str {
         &self.configured_binding.handle
     }
-
     fn qualification(
         &self,
     ) -> std::result::Result<
@@ -1137,7 +1067,6 @@ impl MusubiProviderAttestationInventoryRuntimeV1 for GovernedMusubiProviderAttes
         }
         Ok(after)
     }
-
     fn check_readiness<'a>(
         &'a self,
     ) -> ProviderIngestFutureV1<
@@ -1155,7 +1084,6 @@ impl MusubiProviderAttestationInventoryRuntimeV1 for GovernedMusubiProviderAttes
         })
     }
 }
-
 impl MusubiProviderAttestationInventorySinkV1 for GovernedMusubiProviderAttestationInventoryV1 {
     fn put<'a>(
         &'a self,
@@ -1184,7 +1112,6 @@ impl MusubiProviderAttestationInventorySinkV1 for GovernedMusubiProviderAttestat
         })
     }
 }
-
 impl MusubiProviderAttestationInventoryReaderV1 for GovernedMusubiProviderAttestationInventoryV1 {
     fn get<'a>(
         &'a self,
@@ -1216,7 +1143,6 @@ impl MusubiProviderAttestationInventoryReaderV1 for GovernedMusubiProviderAttest
             Ok(readback)
         })
     }
-
     fn inventory<'a>(
         &'a self,
         scope: &'a MusubiProviderAttestationInventoryScopeV1,
@@ -1247,12 +1173,10 @@ impl MusubiProviderAttestationInventoryReaderV1 for GovernedMusubiProviderAttest
         })
     }
 }
-
 #[derive(Debug, Clone, Copy)]
 struct FinalizedSnapshotProbeV1 {
     completed_cursor: Option<ProviderIngestFinalizedCursorV1>,
 }
-
 /// Archive-only finalized assignment reader with a payload-free terminal-page
 /// observation used by daemon readiness.
 #[derive(Clone)]
@@ -1260,7 +1184,6 @@ struct ObservedArchivedFinalizedAssignmentLedgerV1 {
     archived: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
     probe: Arc<Mutex<FinalizedSnapshotProbeV1>>,
 }
-
 impl ObservedArchivedFinalizedAssignmentLedgerV1 {
     fn new(
         archived: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
@@ -1269,7 +1192,6 @@ impl ObservedArchivedFinalizedAssignmentLedgerV1 {
         Self { archived, probe }
     }
 }
-
 impl ProviderIngestFinalizedLedgerV1 for ObservedArchivedFinalizedAssignmentLedgerV1 {
     fn read_assignment_page(
         &self,
@@ -1300,13 +1222,11 @@ impl ProviderIngestFinalizedLedgerV1 for ObservedArchivedFinalizedAssignmentLedg
         })
     }
 }
-
 #[derive(Clone)]
 struct NativeProviderIngestLocalStorageV1 {
     node: NodeHandle,
     operation_timeout: Duration,
 }
-
 impl NativeProviderIngestLocalStorageV1 {
     fn new(node: NodeHandle, operation_timeout: Duration) -> Self {
         Self {
@@ -1315,7 +1235,6 @@ impl NativeProviderIngestLocalStorageV1 {
         }
     }
 }
-
 struct DeadlineBoundedReaderV1 {
     inner: Box<dyn Read + Send>,
     deadline: Instant,
@@ -1324,12 +1243,10 @@ struct DeadlineBoundedReaderV1 {
     #[cfg(test)]
     clock: Arc<dyn Fn() -> Instant + Send + Sync>,
 }
-
 struct ObservedAdmittedPayloadReaderV1<'observation, R> {
     inner: R,
     first_error_kind: &'observation Cell<Option<io::ErrorKind>>,
 }
-
 impl<R: Read> Read for ObservedAdmittedPayloadReaderV1<'_, R> {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
         self.inner.read(output).inspect_err(|error| {
@@ -1339,14 +1256,12 @@ impl<R: Read> Read for ObservedAdmittedPayloadReaderV1<'_, R> {
         })
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DeadlineBoundedReaderTerminalStateV1 {
     Pending,
     Authenticated,
     Failed(io::ErrorKind),
 }
-
 impl DeadlineBoundedReaderV1 {
     fn new(inner: Box<dyn Read + Send>, timeout: Duration, expected_bytes: u64) -> Self {
         Self {
@@ -1360,7 +1275,6 @@ impl DeadlineBoundedReaderV1 {
             clock: Arc::new(Instant::now),
         }
     }
-
     #[cfg(test)]
     fn new_with_clock(
         inner: Box<dyn Read + Send>,
@@ -1377,27 +1291,22 @@ impl DeadlineBoundedReaderV1 {
             clock,
         }
     }
-
     #[cfg(not(test))]
     fn current_time(&self) -> Instant {
         Instant::now()
     }
-
     #[cfg(test)]
     fn current_time(&self) -> Instant {
         (self.clock)()
     }
-
     fn failure(&mut self, kind: io::ErrorKind, message: &'static str) -> io::Error {
         self.terminal_state = DeadlineBoundedReaderTerminalStateV1::Failed(kind);
         io::Error::new(kind, message)
     }
-
     fn record_inner_failure(&mut self, error: io::Error) -> io::Error {
         self.terminal_state = DeadlineBoundedReaderTerminalStateV1::Failed(error.kind());
         error
     }
-
     fn require_live_deadline(&mut self) -> io::Result<()> {
         if self.current_time() >= self.deadline {
             return Err(self.failure(
@@ -1407,7 +1316,6 @@ impl DeadlineBoundedReaderV1 {
         }
         Ok(())
     }
-
     fn authenticate_terminal_eof(&mut self) -> io::Result<usize> {
         self.require_live_deadline()?;
         let mut trailing = [0_u8; 1];
@@ -1426,7 +1334,6 @@ impl DeadlineBoundedReaderV1 {
         }
     }
 }
-
 impl Read for DeadlineBoundedReaderV1 {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
         if output.is_empty() {
@@ -1479,15 +1386,12 @@ impl Read for DeadlineBoundedReaderV1 {
         Ok(read)
     }
 }
-
 struct BlockingStoreJoinGuardV1(Option<std::thread::JoinHandle<()>>);
-
 impl BlockingStoreJoinGuardV1 {
     fn join(mut self) -> bool {
         self.0.take().is_some_and(|thread| thread.join().is_ok())
     }
 }
-
 impl Drop for BlockingStoreJoinGuardV1 {
     fn drop(&mut self) {
         if let Some(thread) = self.0.take() {
@@ -1495,7 +1399,6 @@ impl Drop for BlockingStoreJoinGuardV1 {
         }
     }
 }
-
 impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
     for NativeProviderIngestLocalStorageV1
 {
@@ -1516,7 +1419,6 @@ impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
             .map_err(|_| ProviderIngestLocalStorageErrorV1::Retryable)?
         })
     }
-
     fn store(
         &self,
         authorization: FinalizedProviderIngestAuthorizationV1,
@@ -1585,7 +1487,6 @@ impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
         })
     }
 }
-
 /// Finish verification after this provider-ingest call admitted a manifest.
 ///
 /// Admission may deduplicate into a generic SoraFS object that another reference already uses, so
@@ -1614,7 +1515,6 @@ fn finish_newly_admitted_manifest_verification(
         }
     }
 }
-
 fn verify_existing_manifest(
     node: &NodeHandle,
     authorization: &FinalizedProviderIngestAuthorizationV1,
@@ -1658,7 +1558,6 @@ fn verify_existing_manifest(
         receipt,
     )))
 }
-
 fn verify_existing_musubi_bundle(
     node: &NodeHandle,
     authorization: &FinalizedProviderIngestAuthorizationV1,
@@ -1672,14 +1571,12 @@ fn verify_existing_musubi_bundle(
     validate_musubi_claim_binding(authorization, claim)?;
     let verified =
         verify_admitted_musubi_bundle(node, authorization, claim.commitment(), stored, manifest)?;
-
     ProviderIngestVerifiedMusubiBundleReceiptV1::from_verified_bundle(
         claim,
         authorization,
         &verified,
     )
 }
-
 /// Reconstruct and verify one admitted Musubi payload under a fresh lifecycle lease.
 ///
 /// This helper deliberately returns the verifier's closed evidence instead of a persisted
@@ -1703,7 +1600,6 @@ fn verify_admitted_musubi_bundle(
         .try_to_car_plan_with_hint(registered_profile.profile, None)
         .map_err(|error| classify_storage_backend_error(&error))?;
     validate_verified_payload(authorization, manifest, &plan)?;
-
     let verification = node
         .with_admitted_payload_read_lease(&authorization.manifest_digest(), |lease| {
             if lease.manifest_digest() != &authorization.manifest_digest()
@@ -1739,7 +1635,6 @@ fn verify_admitted_musubi_bundle(
         (Err(_), _) => return Err(ProviderIngestLocalStorageErrorV1::Permanent),
     }
 }
-
 fn validate_musubi_claim_binding(
     authorization: &FinalizedProviderIngestAuthorizationV1,
     claim: &ProviderIngestFinalizedMusubiArchiveClaimV1,
@@ -1749,7 +1644,6 @@ fn validate_musubi_claim_binding(
     }
     Ok(())
 }
-
 fn validate_musubi_commitment_binding(
     authorization: &FinalizedProviderIngestAuthorizationV1,
     commitment: &MusubiArchiveCommitmentV1,
@@ -1770,7 +1664,6 @@ fn validate_musubi_commitment_binding(
     }
     Ok(())
 }
-
 const fn classify_admitted_payload_lease_error(
     error: AdmittedPayloadReadLeaseErrorV1,
 ) -> ProviderIngestLocalStorageErrorV1 {
@@ -1784,7 +1677,6 @@ const fn classify_admitted_payload_lease_error(
         AdmittedPayloadReadLeaseErrorV1::Disabled => ProviderIngestLocalStorageErrorV1::Permanent,
     }
 }
-
 const fn admitted_payload_read_error_is_retryable(kind: io::ErrorKind) -> bool {
     matches!(
         kind,
@@ -1795,7 +1687,6 @@ const fn admitted_payload_read_error_is_retryable(kind: io::ErrorKind) -> bool {
             | io::ErrorKind::Other
     )
 }
-
 fn validate_manifest_binding(
     authorization: &FinalizedProviderIngestAuthorizationV1,
     manifest: &ManifestV1,
@@ -1818,7 +1709,6 @@ fn validate_manifest_binding(
     }
     Ok(())
 }
-
 fn validate_verified_payload(
     authorization: &FinalizedProviderIngestAuthorizationV1,
     manifest: &ManifestV1,
@@ -1839,7 +1729,6 @@ fn validate_verified_payload(
     }
     Ok(())
 }
-
 fn classify_storage_error(error: &NodeStorageError) -> ProviderIngestLocalStorageErrorV1 {
     match error {
         NodeStorageError::Storage(error) => classify_storage_backend_error(error),
@@ -1848,7 +1737,6 @@ fn classify_storage_error(error: &NodeStorageError) -> ProviderIngestLocalStorag
         }
     }
 }
-
 fn classify_completed_attestation_manifest_lookup_error(
     error: &NodeStorageError,
 ) -> ProviderIngestLocalStorageErrorV1 {
@@ -1860,7 +1748,6 @@ fn classify_completed_attestation_manifest_lookup_error(
         other => classify_storage_error(other),
     }
 }
-
 fn classify_storage_backend_error(error: &StorageError) -> ProviderIngestLocalStorageErrorV1 {
     match error {
         StorageError::ChunkDigestMismatch { .. }
@@ -1896,7 +1783,6 @@ fn classify_storage_backend_error(error: &StorageError) -> ProviderIngestLocalSt
         _ => ProviderIngestLocalStorageErrorV1::Retryable,
     }
 }
-
 fn validate_completion_order_binding(
     request: &ProviderIngestCompletionPayloadRequestV1,
     provider_id: ProviderId,
@@ -1948,7 +1834,6 @@ fn validate_completion_order_binding(
     }
     Ok(())
 }
-
 #[derive(Clone)]
 struct NativeCompletionPayloadBuilderV1 {
     network_id: NetworkId,
@@ -1957,7 +1842,6 @@ struct NativeCompletionPayloadBuilderV1 {
     ttl: Duration,
     max_signed_transaction_bytes: u64,
 }
-
 impl NativeCompletionPayloadBuilderV1 {
     fn unsigned_completion_payload(
         &self,
@@ -1987,7 +1871,6 @@ impl NativeCompletionPayloadBuilderV1 {
             .into_payload()
             .map_err(|_| ProviderIngestCompletionPayloadErrorV1::Rejected)
     }
-
     fn build_payload_sync(
         &self,
         request: ProviderIngestCompletionPayloadRequestV1,
@@ -2075,7 +1958,6 @@ impl NativeCompletionPayloadBuilderV1 {
         Ok(payload)
     }
 }
-
 impl ProviderIngestCompletionPayloadBuilderV1 for NativeCompletionPayloadBuilderV1 {
     fn build_payload(
         &self,
@@ -2092,13 +1974,11 @@ impl ProviderIngestCompletionPayloadBuilderV1 for NativeCompletionPayloadBuilder
         })
     }
 }
-
 #[derive(Clone)]
 struct NativeTransactionIngressV1 {
     state: Arc<State>,
     queue: Arc<Queue>,
 }
-
 impl NativeTransactionIngressV1 {
     fn prepare_sync(
         &self,
@@ -2115,7 +1995,6 @@ impl NativeTransactionIngressV1 {
         )
         .map_err(|_| ProviderIngestIngressPrepareErrorV1::Rejected)
     }
-
     fn expose_sync(
         &self,
         prepared: AcceptedTransaction<'static>,
@@ -2159,7 +2038,6 @@ impl NativeTransactionIngressV1 {
             Err(_) => ProviderIngestIngressDispositionV1::Rejected,
         }
     }
-
     fn observe_sync(&self, transaction_hash: [u8; 32]) -> ProviderIngestTransactionObservationV1 {
         if transaction_hash == [0; 32] {
             return ProviderIngestTransactionObservationV1::CommittedRejected;
@@ -2199,10 +2077,8 @@ impl NativeTransactionIngressV1 {
         }
     }
 }
-
 impl ProviderIngestTransactionIngressV1 for NativeTransactionIngressV1 {
     type Prepared = AcceptedTransaction<'static>;
-
     fn prepare(
         &self,
         transaction: SignedTransaction,
@@ -2217,7 +2093,6 @@ impl ProviderIngestTransactionIngressV1 for NativeTransactionIngressV1 {
                 .map_err(|_| ProviderIngestIngressPrepareErrorV1::Rejected)?
         })
     }
-
     fn expose(
         &self,
         prepared: Self::Prepared,
@@ -2230,7 +2105,6 @@ impl ProviderIngestTransactionIngressV1 for NativeTransactionIngressV1 {
                 .unwrap_or(ProviderIngestIngressDispositionV1::Ambiguous)
         })
     }
-
     fn observe(
         &self,
         transaction_hash: [u8; 32],
@@ -2243,7 +2117,6 @@ impl ProviderIngestTransactionIngressV1 for NativeTransactionIngressV1 {
         })
     }
 }
-
 #[derive(Debug, Default)]
 struct ProviderIngestDaemonCountersV1 {
     successful_ticks: AtomicU64,
@@ -2257,7 +2130,6 @@ struct ProviderIngestDaemonCountersV1 {
     completions_signed: AtomicU64,
     completion_submissions: AtomicU64,
 }
-
 /// Payload-free supervised provider-ingest metrics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderIngestDaemonMetricsV1 {
@@ -2282,12 +2154,10 @@ pub struct ProviderIngestDaemonMetricsV1 {
     /// Completion transaction exposure attempts.
     pub completion_submissions: u64,
 }
-
 /// Internal two-state status flag with an explicit boolean projection.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderIngestStatusFlagV1(bool);
-
 impl ProviderIngestStatusFlagV1 {
     /// Return the externally emitted boolean value.
     #[must_use]
@@ -2295,13 +2165,11 @@ impl ProviderIngestStatusFlagV1 {
         self.0
     }
 }
-
 impl From<bool> for ProviderIngestStatusFlagV1 {
     fn from(value: bool) -> Self {
         Self(value)
     }
 }
-
 /// Payload-free provider-ingest readiness projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderIngestDaemonStatusV1 {
@@ -2336,39 +2204,33 @@ pub struct ProviderIngestDaemonStatusV1 {
     /// Release-gate readiness: operationally ready and fully drained.
     pub release_ready: bool,
 }
-
 impl ProviderIngestDaemonStatusV1 {
     /// Return whether the supervised worker is alive.
     #[must_use]
     pub const fn worker_running(&self) -> bool {
         self.worker_running.is_set()
     }
-
     /// Return whether the external runtime adapters are healthy.
     #[must_use]
     pub const fn external_dependencies_healthy(&self) -> bool {
         self.external_dependencies_healthy.is_set()
     }
-
     /// Return whether one bounded tick is executing.
     #[must_use]
     pub const fn tick_in_flight(&self) -> bool {
         self.tick_in_flight.is_set()
     }
-
     /// Return whether the latest successful tick is fresh.
     #[must_use]
     pub const fn last_tick_fresh(&self) -> bool {
         self.last_tick_fresh.is_set()
     }
-
     /// Return whether the retained finalized cursor matches committed history.
     #[must_use]
     pub const fn finalized_cursor_consistent(&self) -> bool {
         self.finalized_cursor_consistent.is_set()
     }
 }
-
 /// Cloneable status/metrics handle retained by `irohad`.
 #[derive(Clone)]
 pub struct ProviderIngestRuntimeHandleV1 {
@@ -2382,7 +2244,6 @@ pub struct ProviderIngestRuntimeHandleV1 {
     tick_in_flight: Arc<AtomicBool>,
     last_successful_tick: Arc<Mutex<Option<Instant>>>,
 }
-
 impl fmt::Debug for ProviderIngestRuntimeHandleV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2391,7 +2252,6 @@ impl fmt::Debug for ProviderIngestRuntimeHandleV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ProviderIngestRuntimeHandleV1 {
     /// Return payload-free status without performing runtime work.
     ///
@@ -2463,7 +2323,6 @@ impl ProviderIngestRuntimeHandleV1 {
             release_ready,
         })
     }
-
     /// Return payload-free monotonic counters.
     #[must_use]
     pub fn metrics(&self) -> ProviderIngestDaemonMetricsV1 {
@@ -2480,7 +2339,6 @@ impl ProviderIngestRuntimeHandleV1 {
             completion_submissions: self.counters.completion_submissions.load(Ordering::Relaxed),
         }
     }
-
     fn outbox_counts(&self) -> Result<(usize, usize, usize)> {
         let counts = self
             .node
@@ -2489,7 +2347,6 @@ impl ProviderIngestRuntimeHandleV1 {
         Ok((counts.active, counts.terminal, counts.dead_letters))
     }
 }
-
 fn committed_head_matches_hash_journal(
     head_height: u64,
     head_hash: [u8; 32],
@@ -2500,7 +2357,6 @@ fn committed_head_matches_hash_journal(
             .last()
             .is_some_and(|hash| *hash.as_ref() == head_hash)
 }
-
 fn cursor_matches_committed_hashes(
     cursor: ProviderIngestFinalizedCursorV1,
     committed_hashes: &[HashOf<BlockHeader>],
@@ -2516,7 +2372,6 @@ fn cursor_matches_committed_hashes(
             .get(index)
             .is_some_and(|hash| *hash.as_ref() == cursor.block_hash)
 }
-
 fn completion_payload_anchor_matches_committed_chain(
     cursor: ProviderIngestFinalizedCursorV1,
     completion_epoch: u64,
@@ -2529,7 +2384,6 @@ fn completion_payload_anchor_matches_committed_chain(
         && committed_head_matches_hash_journal(head_height, head_hash, committed_hashes)
         && cursor_matches_committed_hashes(cursor, committed_hashes)
 }
-
 fn completed_cursor_matches_committed_chain(
     completed: Option<ProviderIngestFinalizedCursorV1>,
     head_height: u64,
@@ -2543,7 +2397,6 @@ fn completed_cursor_matches_committed_chain(
         && committed_head_matches_hash_journal(head_height, head_hash, committed_hashes)
         && cursor_matches_committed_hashes(completed, committed_hashes)
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeDependencyProbeV1 {
     Ready,
@@ -2552,7 +2405,6 @@ enum RuntimeDependencyProbeV1 {
     TimedOut,
     Panicked,
 }
-
 async fn bounded_blocking_readiness_probe<F>(
     deadline: Duration,
     probe: F,
@@ -2566,7 +2418,6 @@ where
         Err(_) => RuntimeDependencyProbeV1::TimedOut,
     }
 }
-
 fn source_readiness_probe(
     result: std::result::Result<(), ProviderIngestSourceFetchErrorV1>,
 ) -> RuntimeDependencyProbeV1 {
@@ -2579,7 +2430,6 @@ fn source_readiness_probe(
         ) => RuntimeDependencyProbeV1::Rejected,
     }
 }
-
 fn signer_readiness_probe(
     result: std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1>,
 ) -> RuntimeDependencyProbeV1 {
@@ -2593,7 +2443,6 @@ fn signer_readiness_probe(
         }
     }
 }
-
 fn combine_runtime_dependency_probes(
     source: RuntimeDependencyProbeV1,
     signer: RuntimeDependencyProbeV1,
@@ -2617,7 +2466,6 @@ fn combine_runtime_dependency_probes(
         RuntimeDependencyProbeV1::Ready
     }
 }
-
 async fn probe_runtime_dependencies(
     authenticated_source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1>,
     signer_resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1>,
@@ -2633,7 +2481,6 @@ async fn probe_runtime_dependencies(
     let (source, signer) = tokio::join!(source, signer);
     combine_runtime_dependency_probes(source, signer)
 }
-
 async fn probe_checkpoint_runtime_identity(
     runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
     expected_handle: String,
@@ -2666,7 +2513,6 @@ async fn probe_checkpoint_runtime_identity(
     })
     .await
 }
-
 fn provider_ingest_shutdown_wait(config: &SorafsProviderIngestRuntime) -> Duration {
     let source_budget = config.source_operation_timeout_ms.saturating_mul(3);
     let signer_budget = config.signer_timeout_ms.saturating_mul(4);
@@ -2678,7 +2524,6 @@ fn provider_ingest_shutdown_wait(config: &SorafsProviderIngestRuntime) -> Durati
     )
     .saturating_add(SHUTDOWN_WAIT_FLOOR)
 }
-
 fn configured_authenticated_source_qualification(
     config: &SorafsProviderIngestRuntime,
 ) -> ProviderIngestRuntimeProviderQualificationV1 {
@@ -2687,7 +2532,6 @@ fn configured_authenticated_source_qualification(
         config.authenticated_source_fetch_policy_digest,
     )
 }
-
 fn configured_completion_signer_resolver_qualification(
     config: &SorafsProviderIngestRuntime,
 ) -> ProviderIngestRuntimeProviderQualificationV1 {
@@ -2696,7 +2540,6 @@ fn configured_completion_signer_resolver_qualification(
         config.completion_signer_resolver_policy_digest,
     )
 }
-
 fn configured_completion_signer_binding(
     config: &SorafsProviderIngestRuntime,
 ) -> ProviderIngestCompletionSignerBindingV1 {
@@ -2710,7 +2553,6 @@ fn configured_completion_signer_binding(
         ),
     )
 }
-
 fn configured_checkpoint_qualification(
     config: &SorafsProviderIngestRuntime,
 ) -> ProviderIngestCheckpointProviderQualificationV1 {
@@ -2719,7 +2561,6 @@ fn configured_checkpoint_qualification(
         config.checkpoint_store_policy_digest,
     )
 }
-
 type NativeProviderIngestRuntimeV1 = ProviderIngestRuntimeV1<
     ObservedArchivedFinalizedAssignmentLedgerV1,
     AuthenticatedSourceAdapterV1,
@@ -2729,13 +2570,11 @@ type NativeProviderIngestRuntimeV1 = ProviderIngestRuntimeV1<
     NativeTransactionIngressV1,
     ProviderIngestSystemClockV1,
 >;
-
 /// Deployment-owned provider-ingest runtime adapters.
 pub struct ProviderIngestRuntimeAdaptersV1 {
     authenticated_source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1>,
     signer_resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1>,
 }
-
 impl ProviderIngestRuntimeAdaptersV1 {
     /// Bundle the authenticated source and governed signer resolver.
     #[must_use]
@@ -2749,7 +2588,6 @@ impl ProviderIngestRuntimeAdaptersV1 {
         }
     }
 }
-
 /// Opaque proof that provider-ingest's external source, signer, and checkpoint
 /// roles passed a state-free, bounded startup preflight.
 ///
@@ -2763,7 +2601,6 @@ pub(crate) struct QualifiedProviderIngestRuntimeAdaptersV1 {
     checkpoint_runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
     qualification: ProviderIngestStartupQualificationV1,
 }
-
 impl QualifiedProviderIngestRuntimeAdaptersV1 {
     /// Return the exact preflighted checkpoint runtime for `NodeHandle`
     /// construction. The token retains the same object for launch-time
@@ -2772,7 +2609,6 @@ impl QualifiedProviderIngestRuntimeAdaptersV1 {
         Arc::clone(&self.checkpoint_runtime)
     }
 }
-
 struct ProviderIngestStartContextV1 {
     network_id: NetworkId,
     state: Arc<State>,
@@ -2782,7 +2618,6 @@ struct ProviderIngestStartContextV1 {
     authenticated_source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1>,
     signer_resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1>,
 }
-
 /// Daemon-owned inputs needed to launch the supervised provider-ingest worker.
 pub(crate) struct ProviderIngestRuntimeStartArgsV1 {
     network_id: NetworkId,
@@ -2791,7 +2626,6 @@ pub(crate) struct ProviderIngestRuntimeStartArgsV1 {
     node: NodeHandle,
     finalized_ledger: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
 }
-
 impl ProviderIngestRuntimeStartArgsV1 {
     /// Bind one runtime launch to its exact network, node, and archive-only
     /// finalized reader.
@@ -2811,7 +2645,6 @@ impl ProviderIngestRuntimeStartArgsV1 {
         }
     }
 }
-
 struct ProviderIngestStartupQualificationV1 {
     expected_authenticated_source_qualification: ProviderIngestRuntimeProviderQualificationV1,
     expected_resolver_qualification: ProviderIngestRuntimeProviderQualificationV1,
@@ -2820,7 +2653,6 @@ struct ProviderIngestStartupQualificationV1 {
     provider_id: ProviderId,
     source_provider_ids: Vec<[u8; 32]>,
 }
-
 fn validate_startup_dependency_qualifications(
     config: &SorafsProviderIngestRuntime,
     authenticated_source: &dyn ProviderIngestAuthenticatedSourceRuntimeV1,
@@ -2857,7 +2689,6 @@ fn validate_startup_dependency_qualifications(
         eyre::eyre!("completion signer binding does not match SoraFS provider-ingest configuration")
     })
 }
-
 fn revalidate_startup_dependencies_after_probe(
     config: &SorafsProviderIngestRuntime,
     authenticated_source: &dyn ProviderIngestAuthenticatedSourceRuntimeV1,
@@ -2901,7 +2732,6 @@ fn revalidate_startup_dependencies_after_probe(
         Some(source_provider_ids),
     )
 }
-
 async fn qualify_external_runtime_adapters(
     config: &SorafsProviderIngestRuntime,
     provider_id: ProviderId,
@@ -3007,7 +2837,6 @@ async fn qualify_external_runtime_adapters(
         source_provider_ids,
     })
 }
-
 /// Qualify deployment-owned provider-ingest source, signer, and checkpoint
 /// roles without opening daemon, outbox, checkpoint, or filesystem state.
 ///
@@ -3037,7 +2866,6 @@ pub(crate) async fn preflight_runtime_adapters(
         qualification,
     })
 }
-
 async fn qualify_provider_ingest_startup(
     config: &SorafsProviderIngestRuntime,
     context: &ProviderIngestStartContextV1,
@@ -3092,7 +2920,6 @@ async fn qualify_provider_ingest_startup(
     }
     Ok(qualification)
 }
-
 fn provider_ingest_runtime_policy(
     config: &SorafsProviderIngestRuntime,
 ) -> ProviderIngestRuntimePolicyV1 {
@@ -3108,7 +2935,6 @@ fn provider_ingest_runtime_policy(
         ingress_timeout_ms: config.ingress_timeout_ms,
     }
 }
-
 fn provider_attestation_journal_policy(
     config: &SorafsProviderAttestationJournal,
 ) -> Result<MusubiProviderAttestationJournalPolicyV1> {
@@ -3134,7 +2960,6 @@ fn provider_attestation_journal_policy(
         .wrap_err("validate provider-attestation durable journal policy")?;
     Ok(policy)
 }
-
 fn validate_provider_attestation_runtime_binding(
     role: &str,
     binding: &SorafsProviderAttestationRuntimeBinding,
@@ -3147,7 +2972,6 @@ fn validate_provider_attestation_runtime_binding(
     }
     Ok(())
 }
-
 fn assemble_native_provider_ingest_runtime(
     config: &SorafsProviderIngestRuntime,
     context: &ProviderIngestStartContextV1,
@@ -3216,20 +3040,17 @@ fn assemble_native_provider_ingest_runtime(
     };
     Ok((runtime, handle))
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProviderIngestWorkerControlV1 {
     Continue,
     Stop,
 }
-
 fn provider_ingest_tick_error_is_transient(error: &ProviderIngestRuntimeErrorV1) -> bool {
     matches!(
         error,
         ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable
     )
 }
-
 struct ProviderIngestWorkerV1 {
     config: SorafsProviderIngestRuntime,
     runtime: NativeProviderIngestRuntimeV1,
@@ -3243,7 +3064,6 @@ struct ProviderIngestWorkerV1 {
     provider_id: ProviderId,
     source_provider_ids: Vec<[u8; 32]>,
 }
-
 impl ProviderIngestWorkerV1 {
     fn adapter_identity_probe(&self) -> RuntimeDependencyProbeV1 {
         if validate_dependency_identity(
@@ -3284,7 +3104,6 @@ impl ProviderIngestWorkerV1 {
             combine_runtime_dependency_probes(resolver, signer),
         )
     }
-
     async fn probe_dependencies_or_shutdown(
         &self,
         shutdown_signal: &ShutdownSignal,
@@ -3306,7 +3125,6 @@ impl ProviderIngestWorkerV1 {
             }
         }
     }
-
     fn record_successful_tick(&self, outcome: ProviderIngestTickOutcomeV1) -> bool {
         record_tick_outcome(&self.handle.counters, outcome);
         self.handle
@@ -3327,7 +3145,6 @@ impl ProviderIngestWorkerV1 {
             },
         )
     }
-
     async fn reconcile_or_shutdown(
         &mut self,
         shutdown_signal: &ShutdownSignal,
@@ -3395,7 +3212,6 @@ impl ProviderIngestWorkerV1 {
             }
         }
     }
-
     async fn tick(&mut self, shutdown_signal: &ShutdownSignal) -> ProviderIngestWorkerControlV1 {
         self.handle.tick_in_flight.store(true, Ordering::Release);
         self.handle
@@ -3495,7 +3311,6 @@ impl ProviderIngestWorkerV1 {
         }
         self.reconcile_or_shutdown(shutdown_signal).await
     }
-
     async fn run(mut self, shutdown_signal: ShutdownSignal) {
         let _liveness = ProviderIngestWorkerLivenessGuardV1::new(
             Arc::clone(&self.handle.worker_running),
@@ -3523,7 +3338,6 @@ impl ProviderIngestWorkerV1 {
         }
     }
 }
-
 /// Assemble and start supervised finalized-ledger provider ingest.
 ///
 /// Missing, test-marked, unready, or identity-substituted runtime adapters
@@ -3590,7 +3404,6 @@ struct ProviderIngestWorkerLivenessGuardV1 {
     worker_running: Arc<AtomicBool>,
     tick_in_flight: Arc<AtomicBool>,
 }
-
 impl ProviderIngestWorkerLivenessGuardV1 {
     fn new(worker_running: Arc<AtomicBool>, tick_in_flight: Arc<AtomicBool>) -> Self {
         worker_running.store(true, Ordering::Release);
@@ -3600,14 +3413,12 @@ impl ProviderIngestWorkerLivenessGuardV1 {
         }
     }
 }
-
 impl Drop for ProviderIngestWorkerLivenessGuardV1 {
     fn drop(&mut self) {
         self.tick_in_flight.store(false, Ordering::Release);
         self.worker_running.store(false, Ordering::Release);
     }
 }
-
 fn record_tick_outcome(
     counters: &ProviderIngestDaemonCountersV1,
     outcome: ProviderIngestTickOutcomeV1,
@@ -3645,7 +3456,6 @@ fn record_tick_outcome(
         Ordering::Relaxed,
     );
 }
-
 fn random_claim_owner() -> Result<ProviderIngestClaimOwnerV1> {
     for _ in 0..8 {
         let mut bytes = [0_u8; 32];
@@ -3658,7 +3468,6 @@ fn random_claim_owner() -> Result<ProviderIngestClaimOwnerV1> {
     }
     bail!("operating-system randomness repeatedly returned a zero provider-ingest claim owner")
 }
-
 fn random_provider_attestation_claim_owner() -> Result<MusubiProviderAttestationClaimOwnerV1> {
     for _ in 0..8 {
         let mut bytes = [0_u8; 32];
@@ -3671,7 +3480,6 @@ fn random_provider_attestation_claim_owner() -> Result<MusubiProviderAttestation
     }
     bail!("operating-system randomness repeatedly returned a zero provider-attestation claim owner")
 }
-
 fn validate_config(config: &SorafsProviderIngestRuntime) -> Result<()> {
     let authenticated_source_qualification = configured_authenticated_source_qualification(config);
     let completion_signer_resolver_qualification =
@@ -3735,14 +3543,12 @@ fn validate_config(config: &SorafsProviderIngestRuntime) -> Result<()> {
     }
     Ok(())
 }
-
 fn validate_dependency_identity(label: &str, expected: &str, actual: &str) -> Result<()> {
     if !is_production_runtime_handle(actual) || actual != expected {
         bail!("{label} adapter identity does not match SoraFS provider-ingest configuration");
     }
     Ok(())
 }
-
 fn validate_authenticated_source_inventory(
     source: &dyn ProviderIngestAuthenticatedSourceRuntimeV1,
     local_provider_id: [u8; 32],
@@ -3763,6 +3569,5 @@ fn validate_authenticated_source_inventory(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests;

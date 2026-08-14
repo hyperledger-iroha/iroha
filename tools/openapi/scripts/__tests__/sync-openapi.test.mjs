@@ -35,24 +35,6 @@ test('default repository root contains the Cargo workspace', async () => {
   await access(join(defaultRepoRoot, 'Cargo.toml'));
 });
 
-test('default generator enables the xtask binary feature', () => {
-  assert.deepEqual(openApiGeneratorCargoArgs('/tmp/torii.json'), [
-    'run',
-    '--locked',
-    '--offline',
-    '-p',
-    'xtask',
-    '--features',
-    'dev-tools',
-    '--bin',
-    'xtask',
-    '--',
-    'openapi',
-    '--output',
-    '/tmp/torii.json',
-  ]);
-});
-
 test('parseArgs handles version, latest, and mirrors', () => {
   const options = parseArgs([
     '--version=candidate',

@@ -1,22 +1,17 @@
 //! SM2 deterministic signing regression for the Rust SDK.
 #![cfg(feature = "sm")]
-
 use core::fmt::Write as _;
-use std::{fs, path::PathBuf};
-
 use hex::FromHex;
 use iroha::crypto::sm::{encode_sm2_private_key_payload, encode_sm2_public_key_payload};
 use iroha::crypto::{self, Algorithm, KeyPair, PrivateKey, PublicKey, Sm2PrivateKey, Sm2PublicKey};
 use norito::derive::JsonDeserialize;
-
+use std::{fs, path::PathBuf};
 struct DistIdGuard(String);
-
 impl Drop for DistIdGuard {
     fn drop(&mut self) {
         Sm2PublicKey::set_default_distid(self.0.clone()).expect("restore default distid");
     }
 }
-
 #[derive(Debug, JsonDeserialize)]
 struct Fixture {
     distid: String,
@@ -31,7 +26,6 @@ struct Fixture {
     r: String,
     s: String,
 }
-
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -40,12 +34,10 @@ fn fixture_path() -> PathBuf {
         .join("sm")
         .join("sm2_fixture.json")
 }
-
 fn load_fixture() -> Fixture {
     let payload = fs::read_to_string(fixture_path()).expect("fixture present");
     norito::json::from_str(&payload).expect("valid fixture JSON")
 }
-
 fn to_upper_hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -53,15 +45,12 @@ fn to_upper_hex(bytes: &[u8]) -> String {
     }
     out
 }
-
 #[test]
 fn sm2_signatures_are_deterministic() {
     let fixture = load_fixture();
-
     let original_distid = Sm2PublicKey::default_distid();
     Sm2PublicKey::set_default_distid(fixture.distid.clone()).expect("override distid");
     let _guard = DistIdGuard(original_distid);
-
     let seed = <[u8; 32]>::from_hex(&fixture.seed_hex).expect("fixture seed should yield 32 bytes");
     let private =
         Sm2PrivateKey::from_seed(&fixture.distid, &seed).expect("derive deterministic SM2 key");
@@ -70,7 +59,6 @@ fn sm2_signatures_are_deterministic() {
     let secret_bytes = private.secret_bytes();
     assert_eq!(to_upper_hex(&secret_bytes), fixture.private_key_hex);
     assert_eq!(to_upper_hex(&public_bytes), fixture.public_key_sec1_hex);
-
     let public_payload =
         encode_sm2_public_key_payload(&fixture.distid, &public_bytes).expect("public payload");
     let private_payload =
@@ -80,15 +68,12 @@ fn sm2_signatures_are_deterministic() {
         PrivateKey::from_bytes(Algorithm::Sm2, &private_payload).expect("SM2 private key"),
     )
     .expect("construct SM2 key pair");
-
     let payload = Vec::from_hex(&fixture.message_hex).expect("fixture message hex");
-
     let signature_a = crypto::Signature::try_new(key_pair.private_key(), &payload)
         .expect("SM2 fixture signature must sign");
     let signature_b = crypto::Signature::try_new(key_pair.private_key(), &payload)
         .expect("SM2 fixture signature must sign");
     assert_eq!(signature_a.payload(), signature_b.payload());
-
     let raw_signature = private.sign(&payload);
     assert_eq!(signature_a.payload(), raw_signature.as_bytes());
     assert_eq!(
@@ -105,7 +90,6 @@ fn sm2_signatures_are_deterministic() {
             .expect("SM2 public key must format as prefixed multihash"),
         fixture.public_key_prefixed
     );
-
     signature_a
         .verify(key_pair.public_key(), &payload)
         .expect("signature verifies");
@@ -123,7 +107,6 @@ fn sm2_signatures_are_deterministic() {
             .verify(key_pair.public_key(), &tampered)
             .is_err()
     );
-
     let actual_hex = to_upper_hex(signature_a.payload());
     assert_eq!(actual_hex, fixture.signature);
     assert_eq!(

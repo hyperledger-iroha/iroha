@@ -1,7 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
+import java.io.ByteArrayOutputStream
 import java.net.URI
-import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -10,6 +10,8 @@ import java.security.SecureRandom
 import java.security.Signature
 import java.util.Base64
 import java.util.Locale
+import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.address.AccountAddressException
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 /** Builds canonical request signatures for Torii app endpoints. */
@@ -23,6 +25,11 @@ object CanonicalRequestSigner {
     const val BODY_TIMESTAMP_MS = "timestamp_ms"
     const val BODY_NONCE = "nonce"
     const val BODY_SIGNATURE_BASE64 = "signature_base64"
+    const val CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1 = 64
+    const val CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1 = 64 * 1024
+    const val CANONICAL_REQUEST_MAX_METHOD_BYTES_V1 = 32
+    const val CANONICAL_REQUEST_MAX_PATH_BYTES_V1 = 64 * 1024
+    const val CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1 = 36 * 1024
     private const val BODY_WITNESS_BASE64 = "witness_base64"
 
     private val NONCE_RANDOM = SecureRandom()
@@ -32,22 +39,44 @@ object CanonicalRequestSigner {
     @JvmStatic
     fun canonicalQueryString(raw: String?): String {
         if (raw.isNullOrEmpty()) return ""
+        require(raw.toByteArray(StandardCharsets.UTF_8).size <= CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1) {
+            "canonical request query exceeds $CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1 raw UTF-8 bytes"
+        }
         val pairs = ArrayList<Pair<String, String>>()
         for (component in raw.split("&")) {
+            if (component.isEmpty()) continue
+            require(pairs.size < CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1) {
+                "canonical request query exceeds $CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1 pairs"
+            }
             val kv = component.split("=", limit = 2)
             val key = if (kv.isNotEmpty()) kv[0] else ""
             val value = if (kv.size > 1) kv[1] else ""
             pairs.add(urlDecode(key) to urlDecode(value))
         }
-        pairs.sortWith(compareBy<Pair<String, String>> { it.first }.thenBy { it.second })
+        pairs.sortWith { left, right ->
+            val keyOrder = compareUtf8(left.first, right.first)
+            if (keyOrder != 0) keyOrder else compareUtf8(left.second, right.second)
+        }
         return pairs.joinToString("&") { "${urlEncode(it.first)}=${urlEncode(it.second)}" }
     }
 
     /** Build canonical request bytes for signing. */
     @JvmStatic
     fun canonicalRequestMessage(method: String, uri: URI, body: ByteArray?): ByteArray {
+        require(
+            method.length <= CANONICAL_REQUEST_MAX_METHOD_BYTES_V1 &&
+                method.toByteArray(StandardCharsets.UTF_8).size <= CANONICAL_REQUEST_MAX_METHOD_BYTES_V1
+        ) {
+            "canonical request method exceeds $CANONICAL_REQUEST_MAX_METHOD_BYTES_V1 UTF-8 bytes"
+        }
+        val path = uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/"
+        require(
+            path.length <= CANONICAL_REQUEST_MAX_PATH_BYTES_V1 &&
+                path.toByteArray(StandardCharsets.UTF_8).size <= CANONICAL_REQUEST_MAX_PATH_BYTES_V1
+        ) {
+            "canonical request path exceeds $CANONICAL_REQUEST_MAX_PATH_BYTES_V1 UTF-8 bytes"
+        }
         val query = canonicalQueryString(uri.rawQuery)
-        val path = uri.rawPath ?: ""
         val bodyBytes = body ?: ByteArray(0)
         val digest: ByteArray
         try {
@@ -69,6 +98,7 @@ object CanonicalRequestSigner {
         timestampMs: Long,
         nonce: String
     ): ByteArray {
+        require(timestampMs >= 0) { "timestampMs must be non-negative" }
         requireExactNonBlank(nonce, "nonce")
         val base = canonicalRequestMessage(method, uri, body)
         val suffix = "\n$timestampMs\n$nonce".toByteArray(StandardCharsets.UTF_8)
@@ -155,7 +185,12 @@ object CanonicalRequestSigner {
         return body
     }
 
-    /** Build canonical signing headers with generated freshness metadata. */
+    /**
+     * Build canonical signing headers with generated freshness metadata.
+     *
+     * Canonical I105 identities are emitted as lowercase canonical hex in
+     * [HEADER_ACCOUNT]; printable ASCII aliases are emitted unchanged.
+     */
     @JvmStatic
     fun buildHeaders(
         networkId: NetworkId,
@@ -167,7 +202,12 @@ object CanonicalRequestSigner {
     ): Map<String, String> =
         buildHeaders(networkId, method, uri, body, accountId, privateKey, System.currentTimeMillis(), randomNonce())
 
-    /** Build canonical signing headers with explicit freshness metadata. */
+    /**
+     * Build canonical signing headers with explicit freshness metadata.
+     *
+     * Canonical I105 identities are emitted as lowercase canonical hex in
+     * [HEADER_ACCOUNT]; printable ASCII aliases are emitted unchanged.
+     */
     @JvmStatic
     fun buildHeaders(
         networkId: NetworkId,
@@ -181,14 +221,28 @@ object CanonicalRequestSigner {
     ): Map<String, String> {
         requireExactNonBlank(accountId, "accountId")
         requireExactNonBlank(nonce, "nonce")
+        val accountHeader = canonicalAccountHeaderValue(accountId)
         val message = canonicalRequestSignatureMessage(networkId, method, uri, body, timestampMs, nonce)
         val signatureBytes = signEd25519(privateKey, message)
         return mapOf(
-            HEADER_ACCOUNT to accountId,
+            HEADER_ACCOUNT to accountHeader,
             HEADER_SIGNATURE to Base64.getEncoder().encodeToString(signatureBytes),
             HEADER_TIMESTAMP_MS to timestampMs.toString(),
             HEADER_NONCE to nonce,
         )
+    }
+
+    private fun canonicalAccountHeaderValue(accountId: String): String {
+        try {
+            return AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null)
+                .address
+                .canonicalHex()
+        } catch (_: AccountAddressException) {
+            require(accountId.all { it.code in 0x21..0x7e }) {
+                "accountId must be a canonical I105 account or printable ASCII account alias"
+            }
+            return accountId
+        }
     }
 
     private fun bodyWithBodyAuthFreshness(
@@ -213,6 +267,16 @@ object CanonicalRequestSigner {
         require(!value.first().isWhitespace() && !value.last().isWhitespace()) {
             "$field must not contain surrounding whitespace"
         }
+        if (field == "accountId") {
+            require(value.toByteArray(StandardCharsets.UTF_8).size <= CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1) {
+                "accountId exceeds $CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1 UTF-8 bytes"
+            }
+        }
+        if (field == "nonce") {
+            require(value.toByteArray(StandardCharsets.UTF_8).size <= 256 && value.all { it.code in 0x21..0x7e }) {
+                "nonce must contain 1...256 non-whitespace ASCII bytes"
+            }
+        }
     }
 
     private fun signEd25519(privateKey: PrivateKey, message: ByteArray): ByteArray {
@@ -235,11 +299,49 @@ object CanonicalRequestSigner {
     }
 
     private fun urlDecode(value: String): String {
-        try {
-            return URLDecoder.decode(value, StandardCharsets.UTF_8.toString())
-        } catch (ex: Exception) {
-            throw IllegalArgumentException("failed to decode query component", ex)
+        val raw = value.toByteArray(StandardCharsets.UTF_8)
+        val decoded = ByteArrayOutputStream(raw.size)
+        var index = 0
+        while (index < raw.size) {
+            val byte = raw[index].toInt() and 0xff
+            if (byte == '+'.code) {
+                decoded.write(' '.code)
+                index += 1
+            } else if (byte == '%'.code && index + 2 < raw.size) {
+                val high = hexValue(raw[index + 1].toInt() and 0xff)
+                val low = hexValue(raw[index + 2].toInt() and 0xff)
+                if (high >= 0 && low >= 0) {
+                    decoded.write((high shl 4) or low)
+                    index += 3
+                } else {
+                    decoded.write(byte)
+                    index += 1
+                }
+            } else {
+                decoded.write(byte)
+                index += 1
+            }
         }
+        return String(decoded.toByteArray(), StandardCharsets.UTF_8)
+    }
+
+    private fun hexValue(value: Int): Int = when (value) {
+        in '0'.code..'9'.code -> value - '0'.code
+        in 'A'.code..'F'.code -> value - 'A'.code + 10
+        in 'a'.code..'f'.code -> value - 'a'.code + 10
+        else -> -1
+    }
+
+    private fun compareUtf8(left: String, right: String): Int {
+        val leftBytes = left.toByteArray(StandardCharsets.UTF_8)
+        val rightBytes = right.toByteArray(StandardCharsets.UTF_8)
+        val sharedLength = minOf(leftBytes.size, rightBytes.size)
+        for (index in 0 until sharedLength) {
+            val difference =
+                (leftBytes[index].toInt() and 0xff) - (rightBytes[index].toInt() and 0xff)
+            if (difference != 0) return difference
+        }
+        return leftBytes.size - rightBytes.size
     }
 
     private fun randomNonce(): String {

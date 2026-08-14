@@ -5,17 +5,14 @@
 //! size-bounded visitor, so callers can materialize entries without retaining
 //! the decoded archive in memory. Paths are returned as validated components
 //! so callers never need to split or normalize untrusted archive names.
-
+use flate2::{Compression, GzBuilder, bufread::GzDecoder};
 use std::{
     collections::BTreeMap,
     error::Error as StdError,
     fmt,
     io::{self, Read, Write},
 };
-
-use flate2::{Compression, GzBuilder, bufread::GzDecoder};
 use thiserror::Error;
-
 const TAR_BLOCK_BYTES: usize = 512;
 const TAR_BLOCK_BYTES_U64: u64 = TAR_BLOCK_BYTES as u64;
 const MAX_PORTABLE_COMPONENT_BYTES: usize = 255;
@@ -23,7 +20,6 @@ const MAX_PORTABLE_PATH_BYTES: usize = 255;
 const MAX_CANONICAL_USTAR_SIZE: u64 = 0o77_777_777_777;
 const CANONICAL_GZIP_HEADER: [u8; 10] =
     [0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff];
-
 /// Hard protocol ceiling for compressed bundle-archive bytes.
 pub const BUNDLE_ARCHIVE_PROTOCOL_MAX_COMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
 /// Hard protocol ceiling for decoded gzip/USTAR bytes.
@@ -34,7 +30,6 @@ pub const BUNDLE_ARCHIVE_PROTOCOL_MAX_ENTRIES: u32 = 65_536;
 pub const BUNDLE_ARCHIVE_PROTOCOL_MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
 /// Hard protocol ceiling for aggregate regular-file payload bytes.
 pub const BUNDLE_ARCHIVE_PROTOCOL_MAX_TOTAL_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-
 /// Resource limits applied while reading a native-bundle archive.
 ///
 /// All limits must be non-zero. `max_file_bytes` may not exceed
@@ -55,7 +50,6 @@ pub struct BundleArchiveLimits {
     /// Maximum sum of all declared regular-file sizes.
     pub max_total_file_bytes: u64,
 }
-
 impl BundleArchiveLimits {
     fn validate(self) -> Result<Self, BundleArchiveError> {
         if self.max_compressed_bytes == 0 {
@@ -121,7 +115,6 @@ impl BundleArchiveLimits {
         Ok(self)
     }
 }
-
 /// Kind of a validated native-bundle archive entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BundleArchiveEntryKind {
@@ -130,7 +123,6 @@ pub enum BundleArchiveEntryKind {
     /// A directory with a zero-length payload.
     Directory,
 }
-
 /// Metadata for one validated native-bundle archive entry.
 ///
 /// The entry borrows no decoder state and is valid only for the duration of
@@ -144,32 +136,27 @@ pub struct BundleArchiveEntry {
     mode: u32,
     size: u64,
 }
-
 impl BundleArchiveEntry {
     /// Return the canonical slash-separated relative path.
     #[must_use]
     pub fn path(&self) -> &str {
         &self.path
     }
-
     /// Return the validated path components.
     #[must_use]
     pub fn path_components(&self) -> &[String] {
         &self.path_components
     }
-
     /// Return the entry kind.
     #[must_use]
     pub fn kind(&self) -> BundleArchiveEntryKind {
         self.kind
     }
-
     /// Return the canonical USTAR permission mode.
     #[must_use]
     pub fn mode(&self) -> u32 {
         self.mode
     }
-
     /// Return the declared payload size.
     ///
     /// Directory entries always have size zero.
@@ -178,7 +165,6 @@ impl BundleArchiveEntry {
         self.size
     }
 }
-
 /// Counts and byte totals for a fully validated archive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BundleArchiveSummary {
@@ -188,39 +174,33 @@ pub struct BundleArchiveSummary {
     file_count: u32,
     total_file_bytes: u64,
 }
-
 impl BundleArchiveSummary {
     /// Return the number of compressed input bytes.
     #[must_use]
     pub fn compressed_bytes(&self) -> u64 {
         self.compressed_bytes
     }
-
     /// Return the number of decoded bytes, including USTAR framing.
     #[must_use]
     pub fn decoded_bytes(&self) -> u64 {
         self.decoded_bytes
     }
-
     /// Return the number of file and directory entries.
     #[must_use]
     pub fn entry_count(&self) -> u32 {
         self.entry_count
     }
-
     /// Return the number of regular-file entries.
     #[must_use]
     pub fn file_count(&self) -> u32 {
         self.file_count
     }
-
     /// Return the sum of all regular-file payload sizes.
     #[must_use]
     pub fn total_file_bytes(&self) -> u64 {
         self.total_file_bytes
     }
 }
-
 /// One borrowed regular file for deterministic canonical bundle encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BundleArchiveFile<'a> {
@@ -228,7 +208,6 @@ pub struct BundleArchiveFile<'a> {
     mode: u32,
     payload: &'a [u8],
 }
-
 impl<'a> BundleArchiveFile<'a> {
     /// Describe one regular file.
     ///
@@ -242,26 +221,22 @@ impl<'a> BundleArchiveFile<'a> {
             payload,
         }
     }
-
     /// Return the canonical relative archive path.
     #[must_use]
     pub const fn path(&self) -> &'a str {
         self.path
     }
-
     /// Return the canonical permission mode.
     #[must_use]
     pub const fn mode(&self) -> u32 {
         self.mode
     }
-
     /// Return the borrowed file payload.
     #[must_use]
     pub const fn payload(&self) -> &'a [u8] {
         self.payload
     }
 }
-
 /// Encode regular files as one deterministic canonical gzip/USTAR bundle.
 ///
 /// Entries are validated and sorted by their canonical relative path before
@@ -294,7 +269,6 @@ pub fn write_gzip_ustar<W: Write>(writer: W, files: &[BundleArchiveFile<'_>]) ->
     gzip.write_all(&zero_block)?;
     gzip.finish()
 }
-
 fn validate_bundle_archive_files_for_write<'a>(
     files: &'a [BundleArchiveFile<'a>],
 ) -> io::Result<Vec<&'a BundleArchiveFile<'a>>> {
@@ -313,7 +287,6 @@ fn validate_bundle_archive_files_for_write<'a>(
     })?;
     ordered.extend(files);
     ordered.sort_unstable_by(|left, right| left.path.cmp(right.path));
-
     let mut paths = BTreeMap::<Vec<String>, PathRecord>::new();
     for (index, file) in ordered.iter().enumerate() {
         if !matches!(file.mode, 0o644 | 0o755) {
@@ -366,11 +339,9 @@ fn validate_bundle_archive_files_for_write<'a>(
     }
     Ok(ordered)
 }
-
 fn invalid_write_input(error: BundleArchiveError) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, error.to_string())
 }
-
 fn canonical_file_header(file: &BundleArchiveFile<'_>) -> io::Result<[u8; TAR_BLOCK_BYTES]> {
     let path = file.path.as_bytes();
     let (prefix, name) = canonical_ustar_split(path).ok_or_else(|| {
@@ -412,7 +383,6 @@ fn canonical_file_header(file: &BundleArchiveFile<'_>) -> io::Result<[u8; TAR_BL
     header[148..156].copy_from_slice(rendered.as_bytes());
     Ok(header)
 }
-
 fn write_canonical_octal(field: &mut [u8], value: u64) -> io::Result<()> {
     let digits = field.len().checked_sub(1).ok_or_else(|| {
         io::Error::new(
@@ -431,7 +401,6 @@ fn write_canonical_octal(field: &mut [u8], value: u64) -> io::Result<()> {
     field[digits] = 0;
     Ok(())
 }
-
 /// Error returned when a native-bundle archive is malformed, unsafe, or over
 /// its configured limits.
 ///
@@ -441,25 +410,21 @@ fn write_canonical_octal(field: &mut [u8], value: u64) -> io::Result<()> {
 /// limit where it is safe to do so.
 #[derive(Debug)]
 pub struct BundleArchiveError(ArchiveError);
-
 impl fmt::Display for BundleArchiveError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
     }
 }
-
 impl StdError for BundleArchiveError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         self.0.source()
     }
 }
-
 impl From<ArchiveError> for BundleArchiveError {
     fn from(error: ArchiveError) -> Self {
         Self(error)
     }
 }
-
 #[derive(Debug, Error)]
 enum ArchiveError {
     #[error("invalid bundle archive limits: {0}")]
@@ -527,7 +492,6 @@ enum ArchiveError {
     #[error("gzip stream is followed by {bytes} trailing compressed bytes")]
     TrailingCompressedData { bytes: usize },
 }
-
 /// Validate and stream a gzip-compressed canonical USTAR native bundle.
 ///
 /// The compressed input is buffered only up to `limits.max_compressed_bytes`
@@ -573,11 +537,9 @@ where
     validate_gzip_header(&compressed)?;
     let compressed_bytes =
         u64::try_from(compressed.len()).map_err(|_| ArchiveError::CompressedAllocation)?;
-
     let gzip = GzDecoder::new(compressed.as_slice());
     let mut decoded = LimitedDecodedReader::new(gzip, limits.max_decoded_bytes);
     let state = visit_ustar_entries(&mut decoded, limits, &mut visitor)?;
-
     let decoded_bytes = decoded.bytes_read();
     let gzip = decoded.into_inner();
     let trailing = gzip.into_inner();
@@ -587,7 +549,6 @@ where
         }
         .into());
     }
-
     Ok(BundleArchiveSummary {
         compressed_bytes,
         decoded_bytes,
@@ -596,7 +557,6 @@ where
         total_file_bytes: state.total_file_bytes,
     })
 }
-
 #[derive(Debug, Default)]
 struct ArchiveState {
     paths: BTreeMap<Vec<String>, PathRecord>,
@@ -605,7 +565,6 @@ struct ArchiveState {
     file_count: u32,
     total_file_bytes: u64,
 }
-
 fn visit_ustar_entries<R, F>(
     decoded: &mut R,
     limits: BundleArchiveLimits,
@@ -623,7 +582,6 @@ where
             validate_terminator(decoded, &state)?;
             return Ok(state);
         }
-
         if state.entry_count == limits.max_entries {
             return Err(ArchiveError::EntryLimit {
                 limit: limits.max_entries,
@@ -643,7 +601,6 @@ where
         state.commit(entry, entry_number);
     }
 }
-
 fn validate_terminator<R: Read>(
     decoded: &mut R,
     state: &ArchiveState,
@@ -661,7 +618,6 @@ fn validate_terminator<R: Read>(
     }
     require_decoded_eof(decoded)
 }
-
 fn validate_entry(
     state: &ArchiveState,
     entry: &BundleArchiveEntry,
@@ -705,7 +661,6 @@ fn validate_entry(
     }
     Ok(())
 }
-
 fn visit_entry_payload<R, F>(
     decoded: &mut R,
     entry: &BundleArchiveEntry,
@@ -730,7 +685,6 @@ where
     }
     Ok(())
 }
-
 impl ArchiveState {
     fn commit(&mut self, entry: BundleArchiveEntry, entry_number: u32) {
         if entry.kind == BundleArchiveEntryKind::File {
@@ -742,14 +696,12 @@ impl ArchiveState {
         self.entry_count = entry_number;
     }
 }
-
 fn validate_gzip_header(compressed: &[u8]) -> Result<(), BundleArchiveError> {
     if !compressed.starts_with(&CANONICAL_GZIP_HEADER) {
         return Err(ArchiveError::InvalidGzipHeader.into());
     }
     Ok(())
 }
-
 fn read_compressed<R: Read>(mut reader: R, limit: u64) -> Result<Vec<u8>, BundleArchiveError> {
     let mut compressed = Vec::new();
     let mut total = 0_u64;
@@ -790,13 +742,11 @@ fn read_compressed<R: Read>(mut reader: R, limit: u64) -> Result<Vec<u8>, Bundle
         compressed.extend_from_slice(&buffer[..read]);
     }
 }
-
 struct LimitedDecodedReader<R> {
     inner: R,
     limit: u64,
     bytes_read: u64,
 }
-
 impl<R> LimitedDecodedReader<R> {
     fn new(inner: R, limit: u64) -> Self {
         Self {
@@ -805,16 +755,13 @@ impl<R> LimitedDecodedReader<R> {
             bytes_read: 0,
         }
     }
-
     fn bytes_read(&self) -> u64 {
         self.bytes_read
     }
-
     fn into_inner(self) -> R {
         self.inner
     }
 }
-
 impl<R: Read> Read for LimitedDecodedReader<R> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         if buffer.is_empty() {
@@ -830,7 +777,6 @@ impl<R: Read> Read for LimitedDecodedReader<R> {
                 )),
             };
         }
-
         let remaining = self.limit - self.bytes_read;
         let allowed = usize::try_from(remaining.min(buffer.len() as u64))
             .expect("allowed decoded read length fits usize");
@@ -842,7 +788,6 @@ impl<R: Read> Read for LimitedDecodedReader<R> {
         Ok(read)
     }
 }
-
 fn read_exact_decoded<R: Read>(
     reader: &mut R,
     buffer: &mut [u8],
@@ -860,11 +805,9 @@ fn read_exact_decoded<R: Read>(
     }
     Ok(())
 }
-
 fn is_zero_block(block: &[u8; TAR_BLOCK_BYTES]) -> bool {
     block.iter().all(|byte| *byte == 0)
 }
-
 fn require_decoded_eof<R: Read>(reader: &mut R) -> Result<(), BundleArchiveError> {
     let mut byte = [0_u8; 1];
     let read = reader
@@ -878,7 +821,6 @@ fn require_decoded_eof<R: Read>(reader: &mut R) -> Result<(), BundleArchiveError
     }
     Ok(())
 }
-
 fn read_payload_padding<R: Read>(
     reader: &mut R,
     entry: &BundleArchiveEntry,
@@ -895,7 +837,6 @@ fn read_payload_padding<R: Read>(
     }
     Ok(())
 }
-
 fn parse_header(
     header: &[u8; TAR_BLOCK_BYTES],
     entry: u32,
@@ -913,7 +854,6 @@ fn parse_header(
         size,
     })
 }
-
 fn validate_ustar_marker(
     header: &[u8; TAR_BLOCK_BYTES],
     entry: u32,
@@ -934,7 +874,6 @@ fn validate_ustar_marker(
     }
     Ok(())
 }
-
 fn validate_header_checksum(
     header: &[u8; TAR_BLOCK_BYTES],
     entry: u32,
@@ -961,7 +900,6 @@ fn validate_header_checksum(
     }
     Ok(())
 }
-
 fn parse_entry_kind(
     type_flag: u8,
     entry: u32,
@@ -972,7 +910,6 @@ fn parse_entry_kind(
         type_flag => Err(ArchiveError::UnsupportedType { entry, type_flag }.into()),
     }
 }
-
 fn parse_header_metadata(
     header: &[u8; TAR_BLOCK_BYTES],
     entry: u32,
@@ -1031,7 +968,6 @@ fn parse_header_metadata(
         size,
     ))
 }
-
 fn parse_header_path(
     header: &[u8; TAR_BLOCK_BYTES],
     entry: u32,
@@ -1069,7 +1005,6 @@ fn parse_header_path(
     }
     Ok((path, path_components))
 }
-
 fn parse_checksum(field: &[u8], entry: u32) -> Result<u64, BundleArchiveError> {
     if field.len() != 8
         || field[6] != 0
@@ -1084,7 +1019,6 @@ fn parse_checksum(field: &[u8], entry: u32) -> Result<u64, BundleArchiveError> {
     }
     fold_octal(&field[..6], entry, "checksum")
 }
-
 fn parse_octal(
     field: &[u8],
     digits: usize,
@@ -1114,7 +1048,6 @@ fn parse_octal(
     }
     fold_octal(&field[..digits], entry, field_name)
 }
-
 fn fold_octal(
     digits: &[u8],
     entry: u32,
@@ -1136,7 +1069,6 @@ fn fold_octal(
             })
     })
 }
-
 fn parse_string_field<'a>(
     field: &'a [u8],
     entry: u32,
@@ -1158,7 +1090,6 @@ fn parse_string_field<'a>(
     }
     Ok(&field[..nul])
 }
-
 fn canonical_ustar_split(path: &[u8]) -> Option<(&[u8], &[u8])> {
     if path.len() <= 100 {
         return Some((&[], path));
@@ -1171,7 +1102,6 @@ fn canonical_ustar_split(path: &[u8]) -> Option<(&[u8], &[u8])> {
         })
         .map(|(index, _)| (&path[..index], &path[index + 1..]))
 }
-
 fn validate_path(raw_path: &[u8], entry: u32) -> Result<(String, Vec<String>), BundleArchiveError> {
     if raw_path.is_empty() {
         return Err(ArchiveError::UnsafePath {
@@ -1201,7 +1131,6 @@ fn validate_path(raw_path: &[u8], entry: u32) -> Result<(String, Vec<String>), B
         }
         .into());
     }
-
     let mut components = Vec::new();
     for component in raw_path.split(|byte| *byte == b'/') {
         if component.is_empty() {
@@ -1254,12 +1183,10 @@ fn validate_path(raw_path: &[u8], entry: u32) -> Result<(String, Vec<String>), B
                 .expect("portable ASCII path component is valid UTF-8"),
         );
     }
-
     let path =
         String::from_utf8(raw_path.to_vec()).expect("portable ASCII archive path is valid UTF-8");
     Ok((path, components))
 }
-
 fn is_reserved_component(component: &[u8]) -> bool {
     let basename = component
         .split(|byte| *byte == b'.')
@@ -1276,24 +1203,20 @@ fn is_reserved_component(component: &[u8]) -> bool {
         && matches!(&uppercase[..3], b"COM" | b"LPT")
         && matches!(uppercase[3], b'1'..=b'9'))
 }
-
 #[derive(Debug)]
 struct PathRecord {
     original: Vec<String>,
     kind: BundleArchiveEntryKind,
 }
-
 fn folded_components(components: &[String]) -> Vec<String> {
     components
         .iter()
         .map(|component| component.to_ascii_lowercase())
         .collect()
 }
-
 fn display_components(components: &[String]) -> String {
     components.join("/")
 }
-
 fn check_path_conflicts(
     paths: &BTreeMap<Vec<String>, PathRecord>,
     entry: &BundleArchiveEntry,
@@ -1309,7 +1232,6 @@ fn check_path_conflicts(
         }
         .into());
     }
-
     for depth in 1..folded.len() {
         if let Some(parent) = paths.get(&folded[..depth])
             && parent.kind == BundleArchiveEntryKind::File
@@ -1321,7 +1243,6 @@ fn check_path_conflicts(
             .into());
         }
     }
-
     if entry.kind == BundleArchiveEntryKind::File
         && let Some((_, descendant)) = paths
             .range(folded.clone()..)
@@ -1336,7 +1257,6 @@ fn check_path_conflicts(
     }
     Ok(())
 }
-
 fn insert_path(paths: &mut BTreeMap<Vec<String>, PathRecord>, entry: &BundleArchiveEntry) {
     paths.insert(
         folded_components(&entry.path_components),
@@ -1346,27 +1266,21 @@ fn insert_path(paths: &mut BTreeMap<Vec<String>, PathRecord>, entry: &BundleArch
         },
     );
 }
-
 #[cfg(test)]
 mod tests {
-    use std::io::{Cursor, Write};
-
-    use flate2::{Compression, GzBuilder};
-
     use super::*;
-
+    use flate2::{Compression, GzBuilder};
+    use std::io::{Cursor, Write};
     #[derive(Clone, Copy)]
     enum TestKind {
         File,
         Directory,
     }
-
     struct TestEntry<'a> {
         path: &'a str,
         kind: TestKind,
         data: &'a [u8],
     }
-
     fn limits() -> BundleArchiveLimits {
         BundleArchiveLimits {
             max_compressed_bytes: 1 << 20,
@@ -1376,7 +1290,6 @@ mod tests {
             max_total_file_bytes: 1 << 18,
         }
     }
-
     fn write_octal(field: &mut [u8], value: u64) {
         let digits = field.len() - 1;
         let rendered = format!("{value:0digits$o}");
@@ -1384,14 +1297,12 @@ mod tests {
         field[..digits].copy_from_slice(rendered.as_bytes());
         field[digits] = 0;
     }
-
     fn refresh_checksum(header: &mut [u8; TAR_BLOCK_BYTES]) {
         header[148..156].fill(b' ');
         let checksum: u64 = header.iter().map(|byte| u64::from(*byte)).sum();
         let rendered = format!("{checksum:06o}\0 ");
         header[148..156].copy_from_slice(rendered.as_bytes());
     }
-
     fn header(entry: &TestEntry<'_>) -> [u8; TAR_BLOCK_BYTES] {
         let mut header = [0_u8; TAR_BLOCK_BYTES];
         let (prefix, name) = canonical_ustar_split(entry.path.as_bytes()).unwrap();
@@ -1425,7 +1336,6 @@ mod tests {
         refresh_checksum(&mut header);
         header
     }
-
     fn tar(entries: &[TestEntry<'_>]) -> Vec<u8> {
         let mut tar = Vec::new();
         for entry in entries {
@@ -1440,7 +1350,6 @@ mod tests {
         tar.resize(tar.len() + TAR_BLOCK_BYTES * 2, 0);
         tar
     }
-
     fn gzip(decoded: &[u8]) -> Vec<u8> {
         let mut encoder = GzBuilder::new()
             .mtime(0)
@@ -1454,7 +1363,6 @@ mod tests {
         );
         archive
     }
-
     fn visit_all(
         archive: &[u8],
         archive_limits: BundleArchiveLimits,
@@ -1468,7 +1376,6 @@ mod tests {
         })?;
         Ok((summary, visited))
     }
-
     fn one_file_tar(path: &str, data: &[u8]) -> Vec<u8> {
         tar(&[TestEntry {
             path,
@@ -1476,7 +1383,6 @@ mod tests {
             data,
         }])
     }
-
     #[test]
     fn canonical_writer_is_deterministic_and_round_trips() {
         let files = [
@@ -1490,7 +1396,6 @@ mod tests {
             &first[..CANONICAL_GZIP_HEADER.len()],
             &CANONICAL_GZIP_HEADER
         );
-
         let (summary, visited) = visit_all(&first, limits()).unwrap();
         assert_eq!(
             visited,
@@ -1505,7 +1410,6 @@ mod tests {
         assert_eq!(summary.entry_count(), 2);
         assert_eq!(summary.file_count(), 2);
     }
-
     #[test]
     fn canonical_writer_rejects_invalid_or_colliding_files() {
         for files in [
@@ -1526,7 +1430,6 @@ mod tests {
             assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         }
     }
-
     #[test]
     fn accepts_canonical_streamed_files_and_directories() {
         let decoded = tar(&[
@@ -1548,7 +1451,6 @@ mod tests {
         ]);
         let archive = gzip(&decoded);
         let (summary, visited) = visit_all(&archive, limits()).unwrap();
-
         assert_eq!(
             visited,
             vec![
@@ -1563,7 +1465,6 @@ mod tests {
         assert_eq!(summary.file_count(), 2);
         assert_eq!(summary.total_file_bytes(), 12);
     }
-
     #[test]
     fn accepts_the_canonical_long_path_split() {
         let path = format!("{}/{}", "a".repeat(90), "b".repeat(80));
@@ -1571,7 +1472,6 @@ mod tests {
         let (_, visited) = visit_all(&gzip(&decoded), limits()).unwrap();
         assert_eq!(visited, vec![(path, b"x".to_vec())]);
     }
-
     #[test]
     fn rejects_noncanonical_gzip_headers_and_empty_archives() {
         let decoded = one_file_tar("file", b"x");
@@ -1593,7 +1493,6 @@ mod tests {
                 .to_string()
                 .contains("canonical gzip header")
         );
-
         let empty_tar = vec![0_u8; TAR_BLOCK_BYTES * 2];
         assert!(
             visit_all(&gzip(&empty_tar), limits())
@@ -1613,7 +1512,6 @@ mod tests {
                 .contains("regular file")
         );
     }
-
     #[test]
     fn enforces_all_resource_limits() {
         let decoded = tar(&[
@@ -1629,36 +1527,29 @@ mod tests {
             },
         ]);
         let archive = gzip(&decoded);
-
         let mut constrained = limits();
         constrained.max_compressed_bytes = archive.len() as u64 - 1;
         assert!(visit_all(&archive, constrained).is_err());
-
         constrained = limits();
         constrained.max_decoded_bytes = decoded.len() as u64 - 1;
         constrained.max_file_bytes = 3;
         constrained.max_total_file_bytes = 6;
         assert!(visit_all(&archive, constrained).is_err());
-
         constrained = limits();
         constrained.max_entries = 1;
         assert!(visit_all(&archive, constrained).is_err());
-
         constrained = limits();
         constrained.max_file_bytes = 2;
         constrained.max_total_file_bytes = 6;
         assert!(visit_all(&archive, constrained).is_err());
-
         constrained = limits();
         constrained.max_file_bytes = 3;
         constrained.max_total_file_bytes = 5;
         assert!(visit_all(&archive, constrained).is_err());
-
         constrained = limits();
         constrained.max_entries = BUNDLE_ARCHIVE_PROTOCOL_MAX_ENTRIES + 1;
         assert!(visit_all(&archive, constrained).is_err());
     }
-
     #[test]
     fn validates_immutable_protocol_resource_ceilings() {
         let exact = BundleArchiveLimits {
@@ -1669,7 +1560,6 @@ mod tests {
             max_total_file_bytes: BUNDLE_ARCHIVE_PROTOCOL_MAX_TOTAL_FILE_BYTES,
         };
         assert_eq!(exact.validate().unwrap(), exact);
-
         let mut over = exact;
         over.max_compressed_bytes = BUNDLE_ARCHIVE_PROTOCOL_MAX_COMPRESSED_BYTES + 1;
         assert!(
@@ -1678,7 +1568,6 @@ mod tests {
                 .to_string()
                 .contains("max_compressed_bytes exceeds")
         );
-
         over = exact;
         over.max_decoded_bytes = BUNDLE_ARCHIVE_PROTOCOL_MAX_DECODED_BYTES + 1;
         assert!(
@@ -1687,7 +1576,6 @@ mod tests {
                 .to_string()
                 .contains("max_decoded_bytes exceeds")
         );
-
         over = exact;
         over.max_entries = BUNDLE_ARCHIVE_PROTOCOL_MAX_ENTRIES + 1;
         assert!(
@@ -1696,7 +1584,6 @@ mod tests {
                 .to_string()
                 .contains("max_entries exceeds")
         );
-
         over = exact;
         over.max_file_bytes = BUNDLE_ARCHIVE_PROTOCOL_MAX_FILE_BYTES + 1;
         assert!(
@@ -1705,7 +1592,6 @@ mod tests {
                 .to_string()
                 .contains("max_file_bytes exceeds")
         );
-
         over = exact;
         over.max_total_file_bytes = BUNDLE_ARCHIVE_PROTOCOL_MAX_TOTAL_FILE_BYTES + 1;
         assert!(
@@ -1715,7 +1601,6 @@ mod tests {
                 .contains("max_total_file_bytes exceeds")
         );
     }
-
     #[test]
     fn rejects_unsupported_entry_types() {
         for type_flag in [
@@ -1734,7 +1619,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn rejects_unsafe_and_colliding_paths() {
         for path in [
@@ -1761,7 +1645,6 @@ mod tests {
                 "unexpected error for {path}: {error}"
             );
         }
-
         let non_ascii = one_file_tar("é", b"x");
         assert!(
             visit_all(&gzip(&non_ascii), limits())
@@ -1769,7 +1652,6 @@ mod tests {
                 .to_string()
                 .contains("unsafe path")
         );
-
         for entries in [
             vec![("same", TestKind::File), ("same", TestKind::File)],
             vec![("Name", TestKind::File), ("name", TestKind::File)],
@@ -1788,7 +1670,6 @@ mod tests {
             assert!(visit_all(&gzip(&tar(&entries)), limits()).is_err());
         }
     }
-
     #[test]
     fn rejects_noncanonical_or_corrupt_headers() {
         let cases: &[(usize, u8)] = &[
@@ -1812,7 +1693,6 @@ mod tests {
                 "accepted mutation at header offset {offset}"
             );
         }
-
         let mut bad_checksum = one_file_tar("file", b"x");
         bad_checksum[148] = b'7';
         assert!(
@@ -1822,7 +1702,6 @@ mod tests {
                 .contains("checksum")
         );
     }
-
     #[test]
     fn rejects_noncanonical_metadata_modes_order_and_path_split() {
         for &(offset, value) in &[
@@ -1847,7 +1726,6 @@ mod tests {
                 "accepted metadata mutation at header offset {offset}"
             );
         }
-
         let mut file_mode = one_file_tar("file", b"x");
         write_octal(&mut file_mode[100..108], 0o600);
         let mut first_header =
@@ -1855,7 +1733,6 @@ mod tests {
         refresh_checksum(&mut first_header);
         file_mode[..TAR_BLOCK_BYTES].copy_from_slice(&first_header);
         assert!(visit_all(&gzip(&file_mode), limits()).is_err());
-
         let mut directory_mode = tar(&[
             TestEntry {
                 path: "dir",
@@ -1874,7 +1751,6 @@ mod tests {
         refresh_checksum(&mut first_header);
         directory_mode[..TAR_BLOCK_BYTES].copy_from_slice(&first_header);
         assert!(visit_all(&gzip(&directory_mode), limits()).is_err());
-
         let out_of_order = tar(&[
             TestEntry {
                 path: "b",
@@ -1893,7 +1769,6 @@ mod tests {
                 .to_string()
                 .contains("strictly after")
         );
-
         let mut alternate_split = one_file_tar("dir/file", b"x");
         alternate_split[..100].fill(0);
         alternate_split[..4].copy_from_slice(b"file");
@@ -1910,15 +1785,12 @@ mod tests {
                 .contains("canonical USTAR split")
         );
     }
-
     #[test]
     fn rejects_truncation_padding_and_trailing_data() {
         let canonical = one_file_tar("file", b"x");
-
         let mut truncated_tar = canonical.clone();
         truncated_tar.truncate(truncated_tar.len() - TAR_BLOCK_BYTES);
         assert!(visit_all(&gzip(&truncated_tar), limits()).is_err());
-
         let mut nonzero_padding = canonical.clone();
         nonzero_padding[TAR_BLOCK_BYTES + 1] = 1;
         assert!(
@@ -1927,7 +1799,6 @@ mod tests {
                 .to_string()
                 .contains("padding")
         );
-
         let mut nonzero_tar_trailer = canonical.clone();
         nonzero_tar_trailer.extend_from_slice(&[0_u8; TAR_BLOCK_BYTES]);
         nonzero_tar_trailer[TAR_BLOCK_BYTES * 4] = 1;
@@ -1937,15 +1808,12 @@ mod tests {
                 .to_string()
                 .contains("after exactly two USTAR terminator")
         );
-
         let mut partial_tar_trailer = canonical.clone();
         partial_tar_trailer.push(0);
         assert!(visit_all(&gzip(&partial_tar_trailer), limits()).is_err());
-
         let mut extra_zero_block = canonical.clone();
         extra_zero_block.extend_from_slice(&[0_u8; TAR_BLOCK_BYTES]);
         assert!(visit_all(&gzip(&extra_zero_block), limits()).is_err());
-
         let archive = gzip(&canonical);
         let mut compressed_suffix = archive.clone();
         compressed_suffix.push(0);
@@ -1955,7 +1823,6 @@ mod tests {
                 .to_string()
                 .contains("trailing compressed")
         );
-
         let mut second_member = archive.clone();
         second_member.extend_from_slice(&gzip(&[]));
         assert!(
@@ -1964,23 +1831,19 @@ mod tests {
                 .to_string()
                 .contains("trailing compressed")
         );
-
         let mut corrupt_crc = archive;
         let crc_offset = corrupt_crc.len() - 8;
         corrupt_crc[crc_offset] ^= 1;
         assert!(visit_all(&corrupt_crc, limits()).is_err());
-
         let archive = gzip(&canonical);
         let mut corrupt_size = archive.clone();
         let size_offset = corrupt_size.len() - 4;
         corrupt_size[size_offset] ^= 1;
         assert!(visit_all(&corrupt_size, limits()).is_err());
-
         for removed in 1..=7 {
             assert!(visit_all(&archive[..archive.len() - removed], limits()).is_err());
         }
     }
-
     #[test]
     fn requires_the_visitor_to_consume_each_payload() {
         let archive = gzip(&one_file_tar("file", b"payload"));

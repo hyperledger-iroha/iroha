@@ -1,11 +1,9 @@
 //! Secret-free composition of the exact first-release Taira privacy inputs.
-
-use std::{
-    collections::BTreeSet,
-    io::Write,
-    path::{Path, PathBuf},
+use super::{
+    MAX_INSTRUCTIONS_JSON_BYTES_V1, MAX_REPORT_JSON_BYTES_V1, create_new_file, read_bounded,
+    remove_created_file_if_unchanged_v1, resolved_new_output_path_v1,
+    validate_taira_privacy_bootstrap_v1,
 };
-
 #[cfg(test)]
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::Args as ClapArgs;
@@ -16,10 +14,9 @@ use iroha_core::privacy_engines::bootle_lantern::issuer::{
     taira_bootle_lantern_broker_contract_digest_v1,
     taira_bootle_lantern_issuer_profile_contract_digest_v1,
 };
-use iroha_crypto::{Hash, HashOf, sha256};
+use iroha_crypto::sha256;
 use iroha_data_model::{
     NetworkId,
-    block::BlockHeader,
     isi::{
         InstructionBox,
         privacy::{
@@ -31,15 +28,13 @@ use iroha_data_model::{
         PrivacyProtocolIdV1, privacy_exact12_matrix_bytes_v1,
     },
 };
-use iroha_genesis::RawGenesisTransaction;
+use iroha_genesis::{RawGenesisTransaction, validate_genesis_manifest_json};
 use norito::json::{Map as JsonMap, Value as JsonValue};
-
-use super::{
-    MAX_INSTRUCTIONS_JSON_BYTES_V1, MAX_REPORT_JSON_BYTES_V1, create_new_file, read_bounded,
-    remove_created_file_if_unchanged_v1, resolved_new_output_path_v1,
-    validate_taira_privacy_bootstrap_v1,
+use std::{
+    collections::BTreeSet,
+    io::Write,
+    path::{Path, PathBuf},
 };
-
 const MAX_TEMPLATE_BYTES_V1: u64 = 8 * 1024 * 1024;
 const MAX_BROKER_EXPORT_BYTES_V1: u64 = 4 * 1024 * 1024;
 const CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
@@ -61,7 +56,6 @@ const CANONICAL_CONFIG_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/config.toml");
 const CANONICAL_GENESIS_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/genesis.json");
-
 /// Inputs and fresh output paths for one complete Taira privacy release set.
 #[derive(Debug, ClapArgs)]
 pub(super) struct RenderTairaReleaseV1Args {
@@ -96,7 +90,6 @@ pub(super) struct RenderTairaReleaseV1Args {
     #[arg(long)]
     broker_public_output: PathBuf,
 }
-
 #[derive(Debug)]
 struct BrokerPublicMaterialV1 {
     public_export_sha256: String,
@@ -106,7 +99,6 @@ struct BrokerPublicMaterialV1 {
     policy_record_digest_hex: String,
     instruction_norito_sha256: String,
 }
-
 #[derive(Debug)]
 struct ReleaseArtifactsV1 {
     plan: Vec<u8>,
@@ -114,7 +106,6 @@ struct ReleaseArtifactsV1 {
     genesis: Vec<u8>,
     broker_public: Vec<u8>,
 }
-
 pub(super) fn render_taira_release_v1<T: Write>(
     args: RenderTairaReleaseV1Args,
     writer: &mut std::io::BufWriter<T>,
@@ -149,7 +140,6 @@ pub(super) fn render_taira_release_v1<T: Write>(
         MAX_TEMPLATE_BYTES_V1,
         "Taira genesis template",
     )?;
-
     let artifacts = compose_release_artifacts_v1(
         &activation_instructions,
         &activation_report,
@@ -197,7 +187,6 @@ pub(super) fn render_taira_release_v1<T: Write>(
     writeln!(writer, "{}", norito::json::to_json(&status)?)?;
     Ok(())
 }
-
 fn compose_release_artifacts_v1(
     activation_instructions: &[u8],
     activation_report: &[u8],
@@ -218,7 +207,6 @@ fn compose_release_artifacts_v1(
         broker_public: broker_export.to_vec(),
     })
 }
-
 #[cfg(test)]
 fn activation_material_v1(
     report_json: &[u8],
@@ -261,7 +249,6 @@ fn activation_material_v1(
     }
     Ok((hashes, encoded, boxes))
 }
-
 fn parse_broker_public_export_v1(bytes: &[u8]) -> color_eyre::Result<BrokerPublicMaterialV1> {
     let export: JsonValue = norito::json::from_slice(bytes)
         .wrap_err("Taira Bootle/Lantern broker public export is not strict JSON")?;
@@ -325,7 +312,6 @@ fn parse_broker_public_export_v1(bytes: &[u8]) -> color_eyre::Result<BrokerPubli
         AUTHORIZATION_LIFETIME_BLOCKS_V1,
         "broker public export",
     )?;
-
     let expected_issuer_id = hex::encode(sha256(ISSUER_ID_DOMAIN_V1));
     let expected_policy_id = hex::encode(sha256(POLICY_ID_DOMAIN_V1));
     expect_string_v1(
@@ -340,7 +326,6 @@ fn parse_broker_public_export_v1(bytes: &[u8]) -> color_eyre::Result<BrokerPubli
         &expected_policy_id,
         "broker public export",
     )?;
-
     for field in [
         "runtime_provider_policy_digest_hex",
         "issuer_parameter_id_hex",
@@ -356,7 +341,6 @@ fn parse_broker_public_export_v1(bytes: &[u8]) -> color_eyre::Result<BrokerPubli
             field,
         )?;
     }
-
     let instruction_hex = string_field_v1(
         fields,
         "registration_instruction_norito_hex",
@@ -470,7 +454,6 @@ fn parse_broker_public_export_v1(bytes: &[u8]) -> color_eyre::Result<BrokerPubli
     if fields.get("registration_instruction") != Some(&expected_registration_json) {
         bail!("broker structured registration differs from its boxed Norito instruction");
     }
-
     Ok(BrokerPublicMaterialV1 {
         public_export_sha256: hex::encode(sha256(bytes)),
         qualification_policy_digest_hex: string_field_v1(
@@ -485,7 +468,6 @@ fn parse_broker_public_export_v1(bytes: &[u8]) -> color_eyre::Result<BrokerPubli
         instruction_norito_sha256: claimed_instruction_sha256.to_owned(),
     })
 }
-
 fn render_release_plan_v1(
     bytes: &[u8],
     broker: &BrokerPublicMaterialV1,
@@ -528,7 +510,6 @@ fn render_release_plan_v1(
     }
     json_pretty_bytes_v1(&plan, "Taira privacy release plan")
 }
-
 fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
     let root = object_v1(plan, "privacy plan")?;
     expect_exact_keys_v1(
@@ -572,7 +553,6 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
         "CanEnactGovernance",
         "privacy plan",
     )?;
-
     let rollout = object_field_v1(root, "governance_rollout", "privacy plan")?;
     expect_exact_keys_v1(
         rollout,
@@ -632,7 +612,6 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
             "privacy plan template must forbid genesis activation and require a controller observation"
         );
     }
-
     validate_catalog_inventory_v1(object_field_v1(root, "privacy_catalog", "privacy plan")?)?;
     let bootle = object_field_v1(root, "bootle_lantern_issuer", "privacy plan")?;
     expect_exact_keys_v1(
@@ -777,7 +756,6 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
     }
     Ok(())
 }
-
 fn validate_catalog_inventory_v1(catalog: &JsonMap) -> color_eyre::Result<()> {
     expect_exact_keys_v1(
         catalog,
@@ -848,7 +826,6 @@ fn validate_catalog_inventory_v1(catalog: &JsonMap) -> color_eyre::Result<()> {
     }
     Ok(())
 }
-
 fn render_release_config_v1(
     bytes: &[u8],
     broker: &BrokerPublicMaterialV1,
@@ -941,7 +918,6 @@ fn render_release_config_v1(
     }
     Ok(rendered.into_bytes())
 }
-
 fn validate_secret_free_config_template_v1(config: &toml::Value) -> color_eyre::Result<()> {
     let root = config
         .as_table()
@@ -1008,7 +984,6 @@ fn validate_secret_free_config_template_v1(config: &toml::Value) -> color_eyre::
     )?;
     Ok(())
 }
-
 fn toml_table_field_v1<'a>(
     fields: &'a toml::Table,
     field: &str,
@@ -1019,7 +994,6 @@ fn toml_table_field_v1<'a>(
         .and_then(toml::Value::as_table)
         .ok_or_else(|| eyre!("{label} `{field}` must be a table"))
 }
-
 fn expect_toml_string_v1(
     fields: &toml::Table,
     field: &str,
@@ -1031,9 +1005,10 @@ fn expect_toml_string_v1(
     }
     Ok(())
 }
-
 fn render_release_genesis_v1(bytes: &[u8]) -> color_eyre::Result<Vec<u8>> {
     iroha_genesis::init_instruction_registry();
+    validate_genesis_manifest_json(bytes)
+        .wrap_err("Taira genesis template exceeds fixed resource bounds")?;
     let decoded_template: RawGenesisTransaction = norito::json::from_slice(bytes)
         .wrap_err("Taira genesis template cannot be decoded natively")?;
     if decoded_template.chain_id().as_str() != CHAIN_ID_V1
@@ -1060,7 +1035,7 @@ fn render_release_genesis_v1(bytes: &[u8]) -> color_eyre::Result<Vec<u8>> {
             );
         }
     }
-
+    drop(decoded_template);
     let genesis: JsonValue =
         norito::json::from_slice(bytes).wrap_err("Taira genesis template is not strict JSON")?;
     let root = object_v1(&genesis, "Taira genesis")?;
@@ -1078,7 +1053,6 @@ fn render_release_genesis_v1(bytes: &[u8]) -> color_eyre::Result<Vec<u8>> {
     if transactions.is_empty() {
         bail!("Taira genesis has no transactions");
     }
-
     let mut authority_registration_count = 0_usize;
     let mut governance_grant_count = 0_usize;
     let mut authority_registration_index = None;
@@ -1116,7 +1090,6 @@ fn render_release_genesis_v1(bytes: &[u8]) -> color_eyre::Result<Vec<u8>> {
         );
     }
     expect_canonical_template_bytes_v1(bytes, CANONICAL_GENESIS_TEMPLATE_V1, "Taira genesis")?;
-
     let final_transaction = transactions
         .last()
         .and_then(JsonValue::as_object)
@@ -1136,12 +1109,13 @@ fn render_release_genesis_v1(bytes: &[u8]) -> color_eyre::Result<Vec<u8>> {
         bail!("Taira genesis final transaction is not instruction-only");
     }
     let rendered = json_pretty_bytes_v1(&genesis, "Taira privacy release genesis")?;
+    validate_genesis_manifest_json(&rendered)
+        .wrap_err("Taira release genesis exceeds fixed resource bounds")?;
     if rendered != bytes {
         bail!("Taira release genesis changed while proving that privacy activation is absent");
     }
     Ok(rendered)
 }
-
 fn registered_account_id_v1(instruction: &JsonValue) -> Option<&str> {
     instruction
         .get("Register")?
@@ -1149,7 +1123,6 @@ fn registered_account_id_v1(instruction: &JsonValue) -> Option<&str> {
         .get("id")?
         .as_str()
 }
-
 fn governance_grant_destination_v1(instruction: &JsonValue) -> color_eyre::Result<Option<&str>> {
     let Some(permission) = instruction
         .get("Grant")
@@ -1172,26 +1145,22 @@ fn governance_grant_destination_v1(instruction: &JsonValue) -> color_eyre::Resul
         .ok_or_else(|| eyre!("Taira CanEnactGovernance genesis grant has no destination"))?;
     Ok(Some(destination))
 }
-
 fn json_pretty_bytes_v1(value: &JsonValue, label: &str) -> color_eyre::Result<Vec<u8>> {
     let mut rendered = norito::json::to_json_pretty(value)
         .wrap_err_with(|| format!("failed to render {label}"))?;
     rendered.push('\n');
     Ok(rendered.into_bytes())
 }
-
 fn object_v1<'a>(value: &'a JsonValue, label: &str) -> color_eyre::Result<&'a JsonMap> {
     value
         .as_object()
         .ok_or_else(|| eyre!("{label} must be a JSON object"))
 }
-
 fn object_mut_v1<'a>(value: &'a mut JsonValue, label: &str) -> color_eyre::Result<&'a mut JsonMap> {
     value
         .as_object_mut()
         .ok_or_else(|| eyre!("{label} must be a JSON object"))
 }
-
 fn object_field_v1<'a>(
     fields: &'a JsonMap,
     field: &str,
@@ -1202,7 +1171,6 @@ fn object_field_v1<'a>(
         .and_then(JsonValue::as_object)
         .ok_or_else(|| eyre!("{label} `{field}` must be an object"))
 }
-
 fn object_field_mut_v1<'a>(
     fields: &'a mut JsonMap,
     field: &str,
@@ -1213,7 +1181,6 @@ fn object_field_mut_v1<'a>(
         .and_then(JsonValue::as_object_mut)
         .ok_or_else(|| eyre!("{label} `{field}` must be an object"))
 }
-
 fn string_field_v1<'a>(
     fields: &'a JsonMap,
     field: &str,
@@ -1224,7 +1191,6 @@ fn string_field_v1<'a>(
         .and_then(JsonValue::as_str)
         .ok_or_else(|| eyre!("{label} `{field}` must be a string"))
 }
-
 fn string_array_field_v1(
     fields: &JsonMap,
     field: &str,
@@ -1244,7 +1210,6 @@ fn string_array_field_v1(
         })
         .collect()
 }
-
 fn expect_string_v1(
     fields: &JsonMap,
     field: &str,
@@ -1256,7 +1221,6 @@ fn expect_string_v1(
     }
     Ok(())
 }
-
 fn expect_u64_v1(
     fields: &JsonMap,
     field: &str,
@@ -1268,7 +1232,6 @@ fn expect_u64_v1(
     }
     Ok(())
 }
-
 fn expect_exact_keys_v1(
     fields: &JsonMap,
     expected: &[&str],
@@ -1281,7 +1244,6 @@ fn expect_exact_keys_v1(
     }
     Ok(())
 }
-
 fn fixed_nonzero_sha256_v1(value: &str, label: &str) -> color_eyre::Result<()> {
     if value.len() != 64
         || value == "0".repeat(64)
@@ -1293,7 +1255,6 @@ fn fixed_nonzero_sha256_v1(value: &str, label: &str) -> color_eyre::Result<()> {
     }
     Ok(())
 }
-
 fn decode_sha256_v1(value: &str, label: &str) -> color_eyre::Result<[u8; 32]> {
     fixed_nonzero_sha256_v1(value, label)?;
     let bytes = hex::decode(value).wrap_err_with(|| format!("failed to decode {label}"))?;
@@ -1301,7 +1262,6 @@ fn decode_sha256_v1(value: &str, label: &str) -> color_eyre::Result<[u8; 32]> {
         .try_into()
         .map_err(|_| eyre!("{label} must decode to exactly 32 bytes"))
 }
-
 fn expect_canonical_template_bytes_v1(
     actual: &[u8],
     canonical: &[u8],
@@ -1312,7 +1272,6 @@ fn expect_canonical_template_bytes_v1(
     }
     Ok(())
 }
-
 fn write_new_artifact_set_v1<const N: usize>(
     artifacts: [(&Path, &[u8], &str); N],
 ) -> color_eyre::Result<()> {
@@ -1354,11 +1313,12 @@ fn write_new_artifact_set_v1<const N: usize>(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{fs, sync::OnceLock};
-
+    use super::*;
+    use crate::privacy_bootstrap::{
+        TairaPrivacyBootstrapArtifactsV1, build_artifacts_from_profiles_v1,
+    };
     use iroha_core::{
         privacy_engines::bootle_lantern::issuer::{
             BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
@@ -1367,23 +1327,21 @@ mod tests {
             compiled_privacy_profile_v1, zk_x509_release_candidate_profile_material_v1,
         },
     };
-    use iroha_data_model::privacy::{
-        BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAllowedAttributeValuesV1,
-        PrivacyIssuerIdV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{
+        block::BlockHeader,
+        privacy::{
+            BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAllowedAttributeValuesV1,
+            PrivacyIssuerIdV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
+        },
     };
-
-    use super::*;
-    use crate::privacy_bootstrap::{
-        TairaPrivacyBootstrapArtifactsV1, build_artifacts_from_profiles_v1,
-    };
-
+    use std::{fs, sync::OnceLock};
     const PLAN_TEMPLATE_V1: &[u8] =
         include_bytes!("../../../../configs/soranexus/taira/privacy_bootstrap_plan.json");
     const CONFIG_TEMPLATE_V1: &[u8] =
         include_bytes!("../../../../configs/soranexus/taira/config.toml");
     const GENESIS_TEMPLATE_V1: &[u8] =
         include_bytes!("../../../../configs/soranexus/taira/genesis.json");
-
     fn activation_fixture_v1() -> TairaPrivacyBootstrapArtifactsV1 {
         static FIXTURE: OnceLock<TairaPrivacyBootstrapArtifactsV1> = OnceLock::new();
         FIXTURE
@@ -1406,7 +1364,6 @@ mod tests {
             })
             .clone()
     }
-
     fn policy_registration_fixture_v1() -> RegisterPrivacyBootleLanternIssuerPolicyV1 {
         let issuer = BootleLanternIssuerKeyPairV1::generate_from_secret_seed_v1(
             PrivacyParameterIdV1::new(sha256(b"release-composer-parameter-id")),
@@ -1426,7 +1383,6 @@ mod tests {
             .expect("derive valid governed issuer-policy fixture");
         RegisterPrivacyBootleLanternIssuerPolicyV1::new(policy)
     }
-
     fn broker_export_fixture_v1() -> Vec<u8> {
         let registration = policy_registration_fixture_v1();
         let instruction = InstructionBox::from(registration.clone());
@@ -1536,7 +1492,6 @@ mod tests {
         )
         .into_bytes()
     }
-
     fn mutate_export_v1(source: &[u8], mutate: impl FnOnce(&mut JsonMap)) -> Vec<u8> {
         let mut value: JsonValue = norito::json::from_slice(source).expect("parse export fixture");
         mutate(value.as_object_mut().expect("export object"));
@@ -1546,7 +1501,6 @@ mod tests {
         )
         .into_bytes()
     }
-
     #[test]
     fn complete_release_composition_is_native_deterministic_and_secret_free() {
         let activations = activation_fixture_v1();
@@ -1618,7 +1572,6 @@ mod tests {
         assert!(!String::from_utf8_lossy(&first.config).contains("bearer_token"));
         assert!(!String::from_utf8_lossy(&first.genesis).contains("principal_seed"));
     }
-
     #[test]
     fn bare_trailing_digest_and_secret_field_broker_substitutions_are_rejected() {
         let canonical = broker_export_fixture_v1();
@@ -1635,7 +1588,6 @@ mod tests {
             );
         });
         assert!(parse_broker_public_export_v1(&bare_export).is_err());
-
         let trailing = mutate_export_v1(&canonical, |fields| {
             let mut bytes = hex::decode(
                 fields
@@ -1655,7 +1607,6 @@ mod tests {
             );
         });
         assert!(parse_broker_public_export_v1(&trailing).is_err());
-
         let digest = mutate_export_v1(&canonical, |fields| {
             fields.insert(
                 "registration_instruction_norito_sha256".to_owned(),
@@ -1663,7 +1614,6 @@ mod tests {
             );
         });
         assert!(parse_broker_public_export_v1(&digest).is_err());
-
         let secret = mutate_export_v1(&canonical, |fields| {
             fields.insert(
                 "issuer_seed".to_owned(),
@@ -1672,7 +1622,6 @@ mod tests {
         });
         assert!(parse_broker_public_export_v1(&secret).is_err());
     }
-
     #[test]
     fn provider_qualification_profile_contract_and_principal_drift_are_rejected() {
         let canonical = broker_export_fixture_v1();
@@ -1691,7 +1640,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn coordinated_governance_authority_substitution_is_rejected_natively() {
         let mut plan: JsonValue =
@@ -1702,7 +1650,6 @@ mod tests {
         );
         assert!(validate_staging_plan_v1(&plan).is_err());
     }
-
     #[test]
     fn catalog_digest_type_and_unknown_field_substitutions_are_rejected_natively() {
         for mutation in 0_u8..3 {
@@ -1741,7 +1688,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn config_template_with_materialized_private_key_is_rejected() {
         let text = std::str::from_utf8(CONFIG_TEMPLATE_V1)
@@ -1760,7 +1706,6 @@ mod tests {
                 .contains("secret-free staging placeholder")
         );
     }
-
     #[test]
     fn config_template_with_materialized_soranet_transport_identity_is_rejected() {
         let broker = parse_broker_public_export_v1(&broker_export_fixture_v1())
@@ -1787,12 +1732,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn semantically_equivalent_template_byte_drift_is_rejected() {
         let broker = parse_broker_public_export_v1(&broker_export_fixture_v1())
             .expect("parse broker fixture");
-
         let mut plan = b"\n".to_vec();
         plan.extend_from_slice(PLAN_TEMPLATE_V1);
         assert!(
@@ -1801,7 +1744,6 @@ mod tests {
                 .to_string()
                 .contains("differs byte-for-byte")
         );
-
         let mut config = CONFIG_TEMPLATE_V1.to_vec();
         config.extend_from_slice(b"\n# unreviewed but semantically inert\n");
         assert!(
@@ -1810,7 +1752,6 @@ mod tests {
                 .to_string()
                 .contains("differs byte-for-byte")
         );
-
         let mut genesis = b"\n".to_vec();
         genesis.extend_from_slice(GENESIS_TEMPLATE_V1);
         assert!(
@@ -1820,7 +1761,6 @@ mod tests {
                 .contains("differs byte-for-byte")
         );
     }
-
     #[test]
     fn decoded_privacy_bootstrap_in_genesis_template_is_rejected() {
         let activations = activation_fixture_v1();
@@ -1853,7 +1793,6 @@ mod tests {
                 .contains("already contains a privacy bootstrap instruction")
         );
     }
-
     #[test]
     fn wrong_and_scoped_governance_grants_are_rejected_before_composition() {
         for scoped in [false, true] {
@@ -1921,7 +1860,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn release_output_set_never_overwrites_and_removes_partial_creations() {
         let directory = tempfile::tempdir().expect("temporary release directory");

@@ -1,10 +1,8 @@
 //! CUDA environment and config gate regressions.
-
 #[cfg(feature = "cuda")]
 use ivm::{AccelerationConfig, GpuManager, IVM};
 #[cfg(feature = "cuda")]
 use std::sync::{Mutex, MutexGuard, OnceLock};
-
 #[cfg(feature = "cuda")]
 struct AccelGuard {
     _lock: MutexGuard<'static, ()>,
@@ -12,7 +10,6 @@ struct AccelGuard {
     original_disable_cuda: Option<String>,
     original_force_selftest_fail: Option<String>,
 }
-
 #[cfg(feature = "cuda")]
 impl AccelGuard {
     fn new() -> Self {
@@ -20,7 +17,6 @@ impl AccelGuard {
             static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
             LOCK.get_or_init(|| Mutex::new(()))
         }
-
         let lock = accel_test_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -32,7 +28,6 @@ impl AccelGuard {
         }
     }
 }
-
 #[cfg(feature = "cuda")]
 fn restore_env_var(name: &str, value: &Option<String>) {
     unsafe {
@@ -42,7 +37,6 @@ fn restore_env_var(name: &str, value: &Option<String>) {
         }
     }
 }
-
 #[cfg(feature = "cuda")]
 impl Drop for AccelGuard {
     fn drop(&mut self) {
@@ -55,7 +49,6 @@ impl Drop for AccelGuard {
         ivm::set_acceleration_config(self.original);
     }
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn disable_cuda_via_env() {
@@ -69,7 +62,6 @@ fn disable_cuda_via_env() {
         "VM should not enable CUDA when IVM_DISABLE_CUDA is set"
     );
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn disable_cuda_env_present_values_fail_closed_for_vm_policy() {
@@ -85,7 +77,6 @@ fn disable_cuda_env_present_values_fail_closed_for_vm_policy() {
         );
     }
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn limit_gpu_count_respects_config() {
@@ -98,7 +89,6 @@ fn limit_gpu_count_respects_config() {
     cfg.enable_cuda = true;
     cfg.max_gpus = Some(1);
     ivm::set_acceleration_config(cfg);
-
     let mgr = match GpuManager::shared() {
         Some(m) => m,
         None => {
@@ -108,7 +98,6 @@ fn limit_gpu_count_respects_config() {
     };
     assert!(mgr.device_count() <= 1);
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn disable_cuda_via_config() {
@@ -120,18 +109,15 @@ fn disable_cuda_via_config() {
     let mut cfg = ivm::acceleration_config();
     cfg.enable_cuda = false;
     ivm::set_acceleration_config(cfg);
-
     let result = std::panic::catch_unwind(|| {
         assert!(ivm::GpuManager::init().is_none());
         ivm::GpuManager::shared()
     });
-
     match result {
         Ok(shared) => assert!(shared.is_none(), "manager should not initialize GPUs"),
         Err(_) => panic!("disable flag should not panic"),
     }
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn config_disable_marks_cuda_unavailable_without_gpu_probe() {
@@ -141,11 +127,9 @@ fn config_disable_marks_cuda_unavailable_without_gpu_probe() {
         std::env::remove_var("IVM_DISABLE_CUDA");
         std::env::remove_var("IVM_FORCE_CUDA_SELFTEST_FAIL");
     }
-
     let mut cfg = ivm::acceleration_config();
     cfg.enable_cuda = false;
     ivm::set_acceleration_config(cfg);
-
     assert!(ivm::cuda_disabled());
     assert_eq!(
         ivm::cuda_last_error_message().as_deref(),
@@ -161,24 +145,20 @@ fn config_disable_marks_cuda_unavailable_without_gpu_probe() {
         "disabled CUDA config should reject cached manager init"
     );
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn config_reenable_clears_previous_cuda_disable_status() {
     let _guard = AccelGuard::new();
     ivm::reset_cuda_backend_for_tests();
-
     let mut cfg = ivm::acceleration_config();
     cfg.enable_cuda = false;
     ivm::set_acceleration_config(cfg);
     assert!(ivm::cuda_disabled());
-
     cfg.enable_cuda = true;
     ivm::set_acceleration_config(cfg);
     assert!(!ivm::cuda_disabled());
     assert_eq!(ivm::cuda_last_error_message(), None);
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn disable_cuda_env_reports_backend_disable_before_gpu_probe() {
@@ -191,7 +171,6 @@ fn disable_cuda_env_reports_backend_disable_before_gpu_probe() {
     let mut cfg = ivm::acceleration_config();
     cfg.enable_cuda = true;
     ivm::set_acceleration_config(cfg);
-
     assert!(!ivm::cuda_available());
     assert!(ivm::cuda_disabled());
     assert!(
@@ -201,7 +180,6 @@ fn disable_cuda_env_reports_backend_disable_before_gpu_probe() {
         "backend should report the CUDA disable environment override"
     );
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn forced_cuda_selftest_failure_reports_status_without_gpu_probe() {
@@ -214,7 +192,6 @@ fn forced_cuda_selftest_failure_reports_status_without_gpu_probe() {
     let mut cfg = ivm::acceleration_config();
     cfg.enable_cuda = true;
     ivm::set_acceleration_config(cfg);
-
     assert!(!ivm::cuda_available());
     assert!(ivm::cuda_disabled());
     assert!(

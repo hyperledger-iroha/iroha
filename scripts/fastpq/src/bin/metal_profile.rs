@@ -1,17 +1,13 @@
 #![allow(unexpected_cfgs)]
-
 use std::{
     fs,
     io::{self, Write},
     path::PathBuf,
 };
-
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use norito::json::{self, Value};
-
 const TARGET_GPU_MS: f64 = 900.0;
-
 #[derive(Parser)]
 #[command(
     author,
@@ -23,11 +19,9 @@ struct Cli {
     #[arg(value_name = "PATH", required = true)]
     inputs: Vec<PathBuf>,
 }
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let mut writer = io::BufWriter::new(io::stdout());
-
     for (index, path) in cli.inputs.iter().enumerate() {
         let body = fs::read_to_string(path)
             .with_context(|| format!("read benchmark JSON {}", path.display()))?;
@@ -39,11 +33,9 @@ fn main() -> Result<()> {
         }
         summary.render_markdown(&mut writer)?;
     }
-
     writer.flush()?;
     Ok(())
 }
-
 #[derive(Clone, Debug)]
 struct ProfileSummary {
     label: String,
@@ -59,7 +51,6 @@ struct ProfileSummary {
     column_staging: Option<ColumnStagingSummary>,
     poseidon_micro: Option<PoseidonMicroSummary>,
 }
-
 impl ProfileSummary {
     fn from_value(label: String, root: &Value) -> Result<Self> {
         let object = root
@@ -90,7 +81,6 @@ impl ProfileSummary {
         let poseidon_micro = object
             .get("poseidon_microbench")
             .and_then(PoseidonMicroSummary::from_value);
-
         Ok(Self {
             label,
             rows,
@@ -106,15 +96,12 @@ impl ProfileSummary {
             poseidon_micro,
         })
     }
-
     fn total_gpu_ms(&self) -> f64 {
         self.operations.iter().filter_map(|op| op.gpu.mean_ms).sum()
     }
-
     fn total_cpu_ms(&self) -> f64 {
         self.operations.iter().filter_map(|op| op.cpu.mean_ms).sum()
     }
-
     fn render_markdown<W: Write>(&self, writer: &mut W) -> Result<()> {
         writeln!(writer, "### {}", self.label)?;
         if let Some(rows) = self.rows {
@@ -144,7 +131,6 @@ impl ProfileSummary {
             let backend = self.backend.as_deref().unwrap_or("unknown");
             writeln!(writer, "- execution: {} (backend: {})  ", mode, backend)?;
         }
-
         let gpu_total = self.total_gpu_ms();
         let cpu_total = self.total_cpu_ms();
         if gpu_total > 0.0 {
@@ -160,7 +146,6 @@ impl ProfileSummary {
         if cpu_total > 0.0 {
             writeln!(writer, "- CPU mean total: {:.3} ms  ", cpu_total)?;
         }
-
         writeln!(
             writer,
             "\n| Stage | Columns | Input len | GPU mean (ms) | CPU mean (ms) | GPU share | Speedup | Δ CPU (ms) |"
@@ -191,7 +176,6 @@ impl ProfileSummary {
                 format_delta(op.delta_ms)
             )?;
         }
-
         if let Some(op) = self.operations.iter().find(|op| op.zero_fill.is_some()) {
             if let Some(zero_fill) = &op.zero_fill {
                 writeln!(
@@ -206,7 +190,6 @@ impl ProfileSummary {
                 )?;
             }
         }
-
         match &self.queue {
             Some(queue) => {
                 if queue.dispatch_count.unwrap_or(0) == 0 {
@@ -260,7 +243,6 @@ impl ProfileSummary {
                 writeln!(writer, "\n- Queue telemetry: not captured.")?;
             }
         }
-
         if let Some(staging) = &self.column_staging {
             writeln!(
                 writer,
@@ -274,7 +256,6 @@ impl ProfileSummary {
                     .unwrap_or_else(|| "-".to_owned())
             )?;
         }
-
         if let Some(micro) = &self.poseidon_micro {
             writeln!(
                 writer,
@@ -302,11 +283,9 @@ impl ProfileSummary {
                 )?;
             }
         }
-
         Ok(())
     }
 }
-
 #[derive(Clone, Debug)]
 struct OperationProfile {
     name: String,
@@ -318,7 +297,6 @@ struct OperationProfile {
     delta_ms: Option<f64>,
     zero_fill: Option<ZeroFillStats>,
 }
-
 impl OperationProfile {
     fn from_value(value: &Value) -> Option<Self> {
         let name = as_string(value.get("operation"))?.to_owned();
@@ -333,7 +311,6 @@ impl OperationProfile {
             .get("speedup")
             .and_then(|obj| as_f64(obj.get("delta_ms")));
         let zero_fill = value.get("zero_fill").and_then(ZeroFillStats::from_value);
-
         Some(Self {
             name,
             columns,
@@ -346,14 +323,12 @@ impl OperationProfile {
         })
     }
 }
-
 #[derive(Clone, Copy, Debug, Default)]
 struct StageTimings {
     min_ms: Option<f64>,
     mean_ms: Option<f64>,
     max_ms: Option<f64>,
 }
-
 impl StageTimings {
     fn from_value(value: Option<&Value>) -> Self {
         let Some(obj) = value.and_then(Value::as_object) else {
@@ -365,7 +340,6 @@ impl StageTimings {
             max_ms: as_f64(obj.get("max_ms")),
         }
     }
-
     fn summary_string(&self) -> Option<String> {
         self.mean_ms.map(|mean| match (self.min_ms, self.max_ms) {
             (Some(min), Some(max))
@@ -377,13 +351,11 @@ impl StageTimings {
         })
     }
 }
-
 #[derive(Clone, Debug)]
 struct ZeroFillStats {
     bytes: Option<u64>,
     timings: StageTimings,
 }
-
 impl ZeroFillStats {
     fn from_value(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
@@ -393,7 +365,6 @@ impl ZeroFillStats {
         })
     }
 }
-
 #[derive(Clone, Debug)]
 struct QueueProfile {
     limit: Option<u32>,
@@ -407,7 +378,6 @@ struct QueueProfile {
     lanes: Vec<QueueLaneProfile>,
     poseidon: Option<Box<QueueProfile>>,
 }
-
 impl QueueProfile {
     fn from_value(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
@@ -438,12 +408,10 @@ impl QueueProfile {
                     .collect()
             })
             .unwrap_or_default();
-
         let poseidon = object
             .get("poseidon")
             .and_then(QueueProfile::from_value)
             .map(Box::new);
-
         Some(Self {
             limit: as_u32(object.get("limit")),
             dispatch_count: as_u32(object.get("dispatch_count")),
@@ -458,7 +426,6 @@ impl QueueProfile {
         })
     }
 }
-
 #[derive(Clone, Debug)]
 struct QueueLaneProfile {
     index: Option<u32>,
@@ -469,7 +436,6 @@ struct QueueLaneProfile {
     busy_ratio: Option<f64>,
     overlap_ratio: Option<f64>,
 }
-
 impl QueueLaneProfile {
     fn from_value(value: &Value, window_ms: Option<f64>) -> Option<Self> {
         let object = value.as_object()?;
@@ -502,7 +468,6 @@ impl QueueLaneProfile {
         })
     }
 }
-
 #[derive(Clone, Debug)]
 struct ColumnStagingSummary {
     batches: Option<u64>,
@@ -510,7 +475,6 @@ struct ColumnStagingSummary {
     wait_ms: Option<f64>,
     wait_ratio: Option<f64>,
 }
-
 impl ColumnStagingSummary {
     fn from_value(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
@@ -522,14 +486,12 @@ impl ColumnStagingSummary {
         })
     }
 }
-
 #[derive(Clone, Debug)]
 struct PoseidonMicroSummary {
     default_mode: Option<MicroModeSummary>,
     scalar_mode: Option<MicroModeSummary>,
     speedup_vs_scalar: Option<f64>,
 }
-
 impl PoseidonMicroSummary {
     fn from_value(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
@@ -542,7 +504,6 @@ impl PoseidonMicroSummary {
         })
     }
 }
-
 #[derive(Clone, Debug)]
 struct MicroModeSummary {
     mode: Option<String>,
@@ -550,7 +511,6 @@ struct MicroModeSummary {
     states: Option<u64>,
     timings: StageTimings,
 }
-
 impl MicroModeSummary {
     fn from_value(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
@@ -561,68 +521,55 @@ impl MicroModeSummary {
             timings: StageTimings::from_value(Some(value)),
         })
     }
-
     fn label(&self, fallback: &str) -> String {
         self.mode.clone().unwrap_or_else(|| fallback.to_owned())
     }
 }
-
 fn as_string(value: Option<&Value>) -> Option<&str> {
     value.and_then(Value::as_str)
 }
-
 fn as_u64(value: Option<&Value>) -> Option<u64> {
     value.and_then(Value::as_u64)
 }
-
 fn as_u32(value: Option<&Value>) -> Option<u32> {
     as_u64(value).and_then(|raw| u32::try_from(raw).ok())
 }
-
 fn as_f64(value: Option<&Value>) -> Option<f64> {
     value.and_then(Value::as_f64)
 }
-
 fn format_ms(value: Option<f64>) -> String {
     value
         .map(|ms| format!("{:.3}", ms))
         .unwrap_or_else(|| "-".to_owned())
 }
-
 fn format_timing(timings: &StageTimings) -> String {
     timings.summary_string().unwrap_or_else(|| "-".to_owned())
 }
-
 fn format_ratio(value: Option<f64>) -> String {
     value
         .map(|ratio| format!("{:.3}x", ratio))
         .unwrap_or_else(|| "-".to_owned())
 }
-
 fn format_pct(value: Option<f64>) -> String {
     value
         .map(|pct| format!("{:.1}%", pct))
         .unwrap_or_else(|| "-".to_owned())
 }
-
 fn format_delta(value: Option<f64>) -> String {
     value
         .map(|delta| format!("{:+.3}", delta))
         .unwrap_or_else(|| "-".to_owned())
 }
-
 fn format_u32(value: Option<u32>) -> String {
     value
         .map(|v| v.to_string())
         .unwrap_or_else(|| "-".to_owned())
 }
-
 fn format_u64(value: Option<u64>) -> String {
     value
         .map(|v| v.to_string())
         .unwrap_or_else(|| "-".to_owned())
 }
-
 fn format_bytes(value: u64) -> String {
     const UNITS: &[(&str, u64)] = &[("GiB", 1 << 30), ("MiB", 1 << 20), ("KiB", 1 << 10)];
     for (label, unit) in UNITS {
@@ -633,11 +580,9 @@ fn format_bytes(value: u64) -> String {
     }
     format!("{value} B")
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn parses_operations_and_totals() {
         let json = r#"

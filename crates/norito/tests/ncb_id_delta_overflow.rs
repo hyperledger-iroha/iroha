@@ -1,11 +1,9 @@
 //! Ensure forced id-delta encoding falls back when deltas exceed i64 range.
-
 use norito::columnar::{
     ComboPolicy, EnumBorrow, encode_ncb_u64_enum_bool, encode_ncb_u64_str_u32_bool_with_policy,
     encode_ncb_u64_u32_bool, view_ncb_u64_enum_bool, view_ncb_u64_str_u32_bool,
     view_ncb_u64_u32_bool,
 };
-
 #[test]
 fn ncb_u64_u32_bool_forced_delta_overflow_falls_back() {
     let rows = vec![(0u64, 1u32, false), (u64::MAX, 2u32, true)];
@@ -16,7 +14,6 @@ fn ncb_u64_u32_bool_forced_delta_overflow_falls_back() {
     assert_eq!(view.val(1), 2u32);
     assert!(view.flag(1));
 }
-
 #[test]
 fn ncb_u64_str_u32_bool_forced_delta_overflow_falls_back() {
     let rows = vec![(0u64, "alpha", 1u32, false), (u64::MAX, "beta", 2u32, true)];
@@ -31,7 +28,6 @@ fn ncb_u64_str_u32_bool_forced_delta_overflow_falls_back() {
     assert_eq!(view.val(1), 2u32);
     assert!(view.flag(1));
 }
-
 #[test]
 fn ncb_u64_enum_bool_forced_delta_overflow_falls_back() {
     let rows = vec![

@@ -1,5 +1,4 @@
 use norito::json::Error;
-
 #[test]
 fn helper_methods_emit_expected_messages() {
     assert_eq!(

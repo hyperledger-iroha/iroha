@@ -1322,6 +1322,18 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '    "write_sumeragi_v2_release_receipt_publication.py",\n',
+            "",
+            "release receipt component manifest must equal",
+        ),
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt_publication.py"),
+            "    return 0\n",
+            "    return 0\n\n\ndef _owned_unlink_name(*_args):\n    return True\n",
+            "release receipt component symbols must equal",
+        ),
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
             '("production-v2-core", "sumeragi::v2_core::tests", 38),',
             '("production-v2-core", "sumeragi::v2_core::tests", 39),',
             "production module receipt tuple must equal the exact shell",

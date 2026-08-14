@@ -3,22 +3,17 @@
 //! This module implements the pin/fetch/PoR queue coordination layer used by
 //! the Torii gateway and storage backend. It applies operator supplied limits
 //! and emits lightweight telemetry snapshots for the metrics pipeline.
-
+use crate::config::StorageConfig;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
-
 use thiserror::Error;
-
-use crate::config::StorageConfig;
-
 const LOCAL_PROVIDER_LABEL: &str = "local";
 const FETCH_RATE_SMOOTHING_WEIGHT: u64 = 4;
 const MAX_PROVIDER_KEY_BYTES: usize = 128;
 const MAX_TRACKED_FETCH_PROVIDERS: usize = 4_096;
-
 /// Configuration governing the pin/fetch/PoR schedulers.
 #[derive(Debug, Clone)]
 pub struct StorageSchedulerConfig {
@@ -37,7 +32,6 @@ pub struct StorageSchedulerConfig {
     /// Target interval for opportunistic PoR sampling when no governance request is pending.
     pub por_idle_interval: Duration,
 }
-
 impl StorageSchedulerConfig {
     /// Derive scheduler settings from the storage configuration.
     #[must_use]
@@ -45,7 +39,6 @@ impl StorageSchedulerConfig {
         let mut scheduler = StorageSchedulerConfig::default();
         let fetch_parallel = config.max_parallel_fetches().max(1);
         let por_interval = config.por_sample_interval_secs().max(1);
-
         // `max_pins` bounds durable manifest cardinality, not concurrent disk
         // writers. Reuse the explicit I/O concurrency budget so a high pin
         // inventory limit cannot create thousands of simultaneous ingests.
@@ -57,7 +50,6 @@ impl StorageSchedulerConfig {
         scheduler
     }
 }
-
 impl Default for StorageSchedulerConfig {
     fn default() -> Self {
         Self {
@@ -71,7 +63,6 @@ impl Default for StorageSchedulerConfig {
         }
     }
 }
-
 /// Scope of a fetch byte-budget refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FetchRateScope {
@@ -80,7 +71,6 @@ pub enum FetchRateScope {
     /// Budget assigned to one provider identity.
     Provider,
 }
-
 impl std::fmt::Display for FetchRateScope {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
@@ -89,7 +79,6 @@ impl std::fmt::Display for FetchRateScope {
         })
     }
 }
-
 /// Admission failures returned without parking an unbounded request thread.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum SchedulerAdmissionError {
@@ -155,7 +144,6 @@ pub enum SchedulerAdmissionError {
         component: &'static str,
     },
 }
-
 /// In-memory counters emitted by the storage telemetry layer.
 #[derive(Debug, Default, Clone)]
 pub struct StorageTelemetrySnapshot {
@@ -176,7 +164,6 @@ pub struct StorageTelemetrySnapshot {
     /// Number of PoR samples that failed during the current telemetry window.
     pub por_samples_failed: u64,
 }
-
 /// Metric label names surfaced via Prometheus.
 pub mod metrics {
     /// Gauge: total bytes stored on disk by the worker.
@@ -198,7 +185,6 @@ pub mod metrics {
     pub const STORAGE_POR_SAMPLES_FAILED_TOTAL: &str =
         "torii_sorafs_storage_por_samples_failed_total";
 }
-
 /// Summary of scheduler utilisation used by the shared telemetry pipeline.
 #[derive(Debug, Default, Clone)]
 pub struct SchedulerUtilisation {
@@ -209,7 +195,6 @@ pub struct SchedulerUtilisation {
     /// Running average of PoR worker utilisation expressed as percentage (basis points).
     pub por_utilisation_bps: u32,
 }
-
 /// Aggregated runtime state for the pin/fetch/PoR schedulers.
 #[derive(Debug)]
 pub struct StorageSchedulers {
@@ -220,7 +205,6 @@ pub struct StorageSchedulers {
     /// Rolling utilisation metrics.
     pub utilisation: SchedulerUtilisation,
 }
-
 impl StorageSchedulers {
     /// Construct schedulers with the supplied configuration.
     #[must_use]
@@ -232,13 +216,11 @@ impl StorageSchedulers {
         }
     }
 }
-
 /// Runtime facade applying concurrency and rate limits for storage operations.
 #[derive(Debug, Clone)]
 pub struct StorageSchedulersRuntime {
     inner: Arc<RuntimeInner>,
 }
-
 impl StorageSchedulersRuntime {
     /// Construct the runtime from the supplied configuration.
     #[must_use]
@@ -247,13 +229,11 @@ impl StorageSchedulersRuntime {
             inner: Arc::new(RuntimeInner::new(config)),
         }
     }
-
     /// Returns the underlying scheduler configuration.
     #[must_use]
     pub fn config(&self) -> StorageSchedulerConfig {
         self.inner.config()
     }
-
     /// Attempt a pin operation without waiting for an occupied worker slot.
     ///
     /// # Errors
@@ -270,7 +250,6 @@ impl StorageSchedulersRuntime {
         scope.finish();
         Ok(result)
     }
-
     /// Attempt a fetch operation without parking on concurrency or rate limits.
     ///
     /// Scheduler refusal is returned by the outer result. The inner result is
@@ -293,7 +272,6 @@ impl StorageSchedulersRuntime {
     {
         self.try_run_fetch_with_failure_accounting(requested_bytes, provider, false, work)
     }
-
     /// Attempt a fetch and conservatively charge the requested bytes when verified work fails.
     ///
     /// Use this boundary when the inner operation can consume bytes before discovering an
@@ -317,7 +295,6 @@ impl StorageSchedulersRuntime {
     {
         self.try_run_fetch_with_failure_accounting(requested_bytes, provider, true, work)
     }
-
     fn try_run_fetch_with_failure_accounting<F, T, E>(
         &self,
         requested_bytes: u64,
@@ -343,7 +320,6 @@ impl StorageSchedulersRuntime {
         scope.finish();
         Ok(result)
     }
-
     /// Attempt a PoR operation without waiting for an occupied worker slot.
     ///
     /// # Errors
@@ -360,30 +336,25 @@ impl StorageSchedulersRuntime {
         scope.finish();
         Ok(result)
     }
-
     /// Update the storage byte usage snapshot.
     pub fn update_storage_bytes(&self, bytes_used: u64, bytes_capacity: u64) {
         self.inner.update_storage_bytes(bytes_used, bytes_capacity);
     }
-
     /// Record aggregated PoR sampling results.
     pub fn record_por_samples(&self, success: u64, failed: u64) {
         self.inner.record_por_samples(success, failed);
     }
-
     /// Retrieve the current telemetry snapshot.
     #[must_use]
     pub fn telemetry_snapshot(&self) -> StorageTelemetrySnapshot {
         self.inner.telemetry_snapshot()
     }
-
     /// Retrieve the current utilisation snapshot.
     #[must_use]
     pub fn utilisation_snapshot(&self) -> SchedulerUtilisation {
         self.inner.utilisation_snapshot()
     }
 }
-
 #[derive(Debug)]
 struct RuntimeInner {
     schedulers: RwLock<StorageSchedulers>,
@@ -391,7 +362,6 @@ struct RuntimeInner {
     fetch: FetchLimiter,
     por: QueueLimiter,
 }
-
 impl RuntimeInner {
     fn new(mut config: StorageSchedulerConfig) -> Self {
         // A zero concurrency value must never turn a production limiter into
@@ -413,7 +383,6 @@ impl RuntimeInner {
             schedulers: RwLock::new(StorageSchedulers::new(config)),
         }
     }
-
     fn config(&self) -> StorageSchedulerConfig {
         self.schedulers
             .read()
@@ -421,7 +390,6 @@ impl RuntimeInner {
             .config
             .clone()
     }
-
     fn refresh_pin_metrics(&self) {
         let stats = self.pin.stats();
         let mut sched = self
@@ -432,7 +400,6 @@ impl RuntimeInner {
         sched.utilisation.pin_queue_utilisation_bps =
             utilisation_ratio(stats.inflight, sched.config.pin_queue_max_inflight);
     }
-
     fn refresh_fetch_metrics(&self) {
         let stats = self.fetch.stats();
         let mut sched = self
@@ -443,7 +410,6 @@ impl RuntimeInner {
         sched.utilisation.fetch_utilisation_bps =
             utilisation_ratio(stats.inflight, sched.config.fetch_concurrency);
     }
-
     fn refresh_por_metrics(&self) {
         let stats = self.por.stats();
         let mut sched = self
@@ -454,7 +420,6 @@ impl RuntimeInner {
         sched.utilisation.por_utilisation_bps =
             utilisation_ratio(stats.inflight, sched.config.por_concurrency);
     }
-
     fn record_fetch_sample(&self, bytes: u64, elapsed: Duration) {
         let sample_rate = if bytes == 0 || elapsed.is_zero() {
             0
@@ -465,7 +430,6 @@ impl RuntimeInner {
                 .unwrap_or(0);
             u64::try_from(rate).unwrap_or(u64::MAX)
         };
-
         let mut sched = self
             .schedulers
             .write()
@@ -476,7 +440,6 @@ impl RuntimeInner {
                 / FETCH_RATE_SMOOTHING_WEIGHT;
             return;
         }
-
         let current = sched.telemetry.fetch_bytes_per_sec as u128;
         let smoothed = if current == 0 {
             sample_rate as u128
@@ -486,7 +449,6 @@ impl RuntimeInner {
         };
         sched.telemetry.fetch_bytes_per_sec = smoothed as u64;
     }
-
     fn record_por_samples(&self, success: u64, failed: u64) {
         let mut sched = self
             .schedulers
@@ -497,7 +459,6 @@ impl RuntimeInner {
         sched.telemetry.por_samples_failed =
             sched.telemetry.por_samples_failed.saturating_add(failed);
     }
-
     fn update_storage_bytes(&self, bytes_used: u64, bytes_capacity: u64) {
         let mut sched = self
             .schedulers
@@ -506,7 +467,6 @@ impl RuntimeInner {
         sched.telemetry.bytes_used = bytes_used;
         sched.telemetry.bytes_capacity = bytes_capacity;
     }
-
     fn telemetry_snapshot(&self) -> StorageTelemetrySnapshot {
         self.schedulers
             .read()
@@ -514,7 +474,6 @@ impl RuntimeInner {
             .telemetry
             .clone()
     }
-
     fn utilisation_snapshot(&self) -> SchedulerUtilisation {
         self.schedulers
             .read()
@@ -523,13 +482,11 @@ impl RuntimeInner {
             .clone()
     }
 }
-
 #[derive(Debug)]
 struct QueueLimiter {
     limit: usize,
     state: Mutex<QueueState>,
 }
-
 impl QueueLimiter {
     fn new(limit: usize) -> Self {
         Self {
@@ -537,7 +494,6 @@ impl QueueLimiter {
             state: Mutex::new(QueueState::default()),
         }
     }
-
     fn try_acquire(&self) -> Result<Option<QueueGuard<'_>>, SchedulerStatePoisoned> {
         let mut guard = self.state.lock().map_err(|_| SchedulerStatePoisoned)?;
         if guard.inflight >= self.limit {
@@ -546,7 +502,6 @@ impl QueueLimiter {
         guard.inflight = guard.inflight.saturating_add(1);
         Ok(Some(QueueGuard { limiter: self }))
     }
-
     fn stats(&self) -> QueueStats {
         let guard = self
             .state
@@ -557,17 +512,14 @@ impl QueueLimiter {
         }
     }
 }
-
 #[derive(Debug, Default)]
 struct QueueState {
     inflight: usize,
 }
-
 #[derive(Debug)]
 struct QueueGuard<'a> {
     limiter: &'a QueueLimiter,
 }
-
 impl Drop for QueueGuard<'_> {
     fn drop(&mut self) {
         let mut guard = self
@@ -578,37 +530,30 @@ impl Drop for QueueGuard<'_> {
         guard.inflight = guard.inflight.saturating_sub(1);
     }
 }
-
 #[derive(Debug, Clone, Copy)]
 struct SchedulerStatePoisoned;
-
 #[derive(Debug, Default)]
 struct QueueStats {
     inflight: usize,
 }
-
 #[derive(Debug, Clone, Copy)]
 enum QueueKind {
     Pin,
     Por,
 }
-
 #[derive(Debug)]
 struct QueueScope<'a> {
     runtime: &'a RuntimeInner,
     kind: QueueKind,
     guard: Option<QueueGuard<'a>>,
 }
-
 impl<'a> QueueScope<'a> {
     fn try_new_pin(runtime: &'a RuntimeInner) -> Result<Self, SchedulerAdmissionError> {
         Self::try_new(runtime, QueueKind::Pin)
     }
-
     fn try_new_por(runtime: &'a RuntimeInner) -> Result<Self, SchedulerAdmissionError> {
         Self::try_new(runtime, QueueKind::Por)
     }
-
     fn try_new(
         runtime: &'a RuntimeInner,
         kind: QueueKind,
@@ -641,14 +586,12 @@ impl<'a> QueueScope<'a> {
         scope.refresh();
         Ok(scope)
     }
-
     fn finish(&mut self) {
         if let Some(guard) = self.guard.take() {
             drop(guard);
             self.refresh();
         }
     }
-
     fn refresh(&self) {
         match self.kind {
             QueueKind::Pin => self.runtime.refresh_pin_metrics(),
@@ -656,13 +599,11 @@ impl<'a> QueueScope<'a> {
         }
     }
 }
-
 impl Drop for QueueScope<'_> {
     fn drop(&mut self) {
         self.finish();
     }
 }
-
 #[derive(Debug)]
 struct FetchLimiter {
     global_limit: usize,
@@ -671,7 +612,6 @@ struct FetchLimiter {
     global_rate: Option<Arc<RateLimiter>>,
     provider_rate: Option<RateLimiterMap>,
 }
-
 impl FetchLimiter {
     fn new(
         global_limit: usize,
@@ -689,7 +629,6 @@ impl FetchLimiter {
                 .map(RateLimiterMap::new),
         }
     }
-
     fn try_acquire(
         &self,
         provider_key: &str,
@@ -698,7 +637,6 @@ impl FetchLimiter {
         if !canonical_provider_label(provider_key) {
             return Err(SchedulerAdmissionError::InvalidProviderLabel);
         }
-
         {
             let mut guard =
                 self.state
@@ -727,7 +665,6 @@ impl FetchLimiter {
                 .entry(provider_key.to_owned())
                 .or_default() += 1;
         }
-
         if let Some(rate) = &self.global_rate
             && let Err(err) = rate.try_acquire(requested_bytes, FetchRateScope::Global)
         {
@@ -743,14 +680,12 @@ impl FetchLimiter {
             self.release_concurrency(provider_key);
             return Err(err);
         }
-
         Ok(FetchPermit {
             limiter: self,
             provider_key: provider_key.to_owned(),
             requested_bytes,
         })
     }
-
     fn release(&self, provider_key: &str, requested_bytes: u64, actual_bytes: u64) {
         if requested_bytes > actual_bytes {
             let refund = requested_bytes - actual_bytes;
@@ -761,10 +696,8 @@ impl FetchLimiter {
                 map.refund(provider_key, refund);
             }
         }
-
         self.release_concurrency(provider_key);
     }
-
     fn release_concurrency(&self, provider_key: &str) {
         let mut guard = self
             .state
@@ -778,7 +711,6 @@ impl FetchLimiter {
             }
         }
     }
-
     fn stats(&self) -> FetchStats {
         let guard = self
             .state
@@ -789,7 +721,6 @@ impl FetchLimiter {
         }
     }
 }
-
 fn canonical_provider_label(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_PROVIDER_KEY_BYTES
@@ -797,25 +728,21 @@ fn canonical_provider_label(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
 }
-
 #[derive(Debug, Default)]
 struct FetchState {
     inflight: usize,
     per_provider_inflight: HashMap<String, usize>,
 }
-
 #[derive(Debug)]
 struct FetchPermit<'a> {
     limiter: &'a FetchLimiter,
     provider_key: String,
     requested_bytes: u64,
 }
-
 #[derive(Debug, Default)]
 struct FetchStats {
     inflight: usize,
 }
-
 #[derive(Debug)]
 struct FetchScope<'a> {
     runtime: &'a RuntimeInner,
@@ -823,7 +750,6 @@ struct FetchScope<'a> {
     actual_bytes: u64,
     duration: Duration,
 }
-
 impl<'a> FetchScope<'a> {
     fn try_new(
         runtime: &'a RuntimeInner,
@@ -840,12 +766,10 @@ impl<'a> FetchScope<'a> {
         scope.runtime.refresh_fetch_metrics();
         Ok(scope)
     }
-
     fn complete(&mut self, actual_bytes: u64, duration: Duration) {
         self.actual_bytes = actual_bytes;
         self.duration = duration;
     }
-
     fn finish(&mut self) {
         if let Some(permit) = self.permit.take() {
             permit.limiter.release(
@@ -859,19 +783,16 @@ impl<'a> FetchScope<'a> {
         }
     }
 }
-
 impl Drop for FetchScope<'_> {
     fn drop(&mut self) {
         self.finish();
     }
 }
-
 #[derive(Debug)]
 struct RateLimiter {
     capacity_per_sec: u64,
     state: Mutex<RateState>,
 }
-
 impl RateLimiter {
     fn new(capacity_per_sec: u64) -> Self {
         Self {
@@ -883,7 +804,6 @@ impl RateLimiter {
             }),
         }
     }
-
     fn try_acquire(
         &self,
         amount: u64,
@@ -921,7 +841,6 @@ impl RateLimiter {
         state.tokens -= amount;
         Ok(())
     }
-
     fn refund(&self, amount: u64) {
         if self.capacity_per_sec == 0 {
             return;
@@ -937,14 +856,12 @@ impl RateLimiter {
             .min(self.capacity_per_sec);
     }
 }
-
 #[derive(Debug)]
 struct RateState {
     tokens: u64,
     last_refill: Instant,
     fractional_token_nanos: u128,
 }
-
 impl RateState {
     fn refill(&mut self, capacity_per_sec: u64) {
         let now = Instant::now();
@@ -968,7 +885,6 @@ impl RateState {
         self.last_refill = now;
     }
 }
-
 fn retry_after_for_deficit(deficit: u64, capacity_per_sec: u64) -> Duration {
     if deficit == 0 || capacity_per_sec == 0 {
         return Duration::ZERO;
@@ -982,14 +898,12 @@ fn retry_after_for_deficit(deficit: u64, capacity_per_sec: u64) -> Duration {
         .max(1);
     Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
 }
-
 #[derive(Debug)]
 struct RateLimiterMap {
     limit_per_sec: u64,
     max_entries: usize,
     map: Mutex<HashMap<String, Arc<RateLimiter>>>,
 }
-
 impl RateLimiterMap {
     fn new(limit_per_sec: u64) -> Self {
         Self {
@@ -998,7 +912,6 @@ impl RateLimiterMap {
             map: Mutex::new(HashMap::new()),
         }
     }
-
     #[cfg(test)]
     fn with_max_entries(limit_per_sec: u64, max_entries: usize) -> Self {
         Self {
@@ -1007,7 +920,6 @@ impl RateLimiterMap {
             map: Mutex::new(HashMap::new()),
         }
     }
-
     fn try_acquire(&self, key: &str, amount: u64) -> Result<(), SchedulerAdmissionError> {
         if !canonical_provider_label(key) {
             return Err(SchedulerAdmissionError::InvalidProviderLabel);
@@ -1034,7 +946,6 @@ impl RateLimiterMap {
         };
         limiter.try_acquire(amount, FetchRateScope::Provider)
     }
-
     fn refund(&self, key: &str, amount: u64) {
         let limiter = {
             let map = self
@@ -1048,7 +959,6 @@ impl RateLimiterMap {
         }
     }
 }
-
 fn utilisation_ratio(inflight: usize, limit: usize) -> u32 {
     if limit == 0 {
         return 0;
@@ -1056,11 +966,9 @@ fn utilisation_ratio(inflight: usize, limit: usize) -> u32 {
     let capped = inflight.min(limit);
     ((capped * 10_000) / limit) as u32
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn fail_fast_pin_and_por_refuse_without_waiting() {
         let runtime = StorageSchedulersRuntime::new(StorageSchedulerConfig {
@@ -1068,7 +976,6 @@ mod tests {
             por_concurrency: 1,
             ..StorageSchedulerConfig::default()
         });
-
         let pin_guard = runtime.inner.pin.try_acquire().expect("acquire pin slot");
         let start = Instant::now();
         assert_eq!(
@@ -1077,7 +984,6 @@ mod tests {
         );
         assert!(start.elapsed() < Duration::from_millis(50));
         drop(pin_guard);
-
         let por_guard = runtime.inner.por.try_acquire().expect("acquire PoR slot");
         let start = Instant::now();
         assert_eq!(
@@ -1087,7 +993,6 @@ mod tests {
         assert!(start.elapsed() < Duration::from_millis(50));
         drop(por_guard);
     }
-
     #[test]
     fn fail_fast_fetch_refuses_global_and_provider_saturation() {
         let runtime = StorageSchedulersRuntime::new(StorageSchedulerConfig {
@@ -1098,7 +1003,6 @@ mod tests {
         });
         let scope = FetchScope::try_new(&runtime.inner, "provider-a".to_owned(), 0)
             .expect("acquire global fetch slot");
-
         let error = runtime
             .try_run_fetch(0, Some("provider-b"), || -> Result<Vec<u8>, ()> {
                 Ok(Vec::new())
@@ -1106,7 +1010,6 @@ mod tests {
             .expect_err("occupied global slot must refuse immediately");
         assert_eq!(error, SchedulerAdmissionError::FetchSaturated { limit: 1 });
         drop(scope);
-
         let runtime = StorageSchedulersRuntime::new(StorageSchedulerConfig {
             fetch_concurrency: 2,
             fetch_concurrency_per_provider: 1,
@@ -1126,7 +1029,6 @@ mod tests {
         );
         drop(scope);
     }
-
     #[test]
     fn fail_fast_rate_limiter_is_integer_and_burst_bounded() {
         let limiter = RateLimiter::new(100);
@@ -1152,7 +1054,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn provider_rate_registry_and_labels_are_bounded() {
         let map = RateLimiterMap::with_max_entries(100, 1);
@@ -1171,7 +1072,6 @@ mod tests {
             Err(SchedulerAdmissionError::InvalidProviderLabel)
         );
     }
-
     #[test]
     fn failed_fetch_work_releases_fail_fast_permit() {
         let runtime = StorageSchedulersRuntime::new(StorageSchedulerConfig {
@@ -1189,7 +1089,6 @@ mod tests {
             .expect("scheduler must admit first request")
             .expect_err("work failure must be preserved");
         assert_eq!(work_error, "injected");
-
         runtime
             .try_run_fetch(0, Some("provider-a"), || -> Result<Vec<u8>, ()> {
                 Ok(Vec::new())
@@ -1197,7 +1096,6 @@ mod tests {
             .expect("permit must be released after work failure")
             .expect("second work succeeds");
     }
-
     #[test]
     fn verified_fetch_failure_charges_the_admitted_byte_budget() {
         let runtime = StorageSchedulersRuntime::new(StorageSchedulerConfig {
@@ -1213,7 +1111,6 @@ mod tests {
             .expect("scheduler admits verified read")
             .expect_err("verified read failure is preserved");
         assert_eq!(work_error, "integrity failure");
-
         let global_rate = runtime
             .inner
             .fetch
@@ -1230,7 +1127,6 @@ mod tests {
             "failed verified work must not refund the admitted bytes"
         );
     }
-
     #[test]
     fn zero_concurrency_configuration_clamps_to_one() {
         let runtime = StorageSchedulersRuntime::new(StorageSchedulerConfig {
@@ -1246,7 +1142,6 @@ mod tests {
         assert_eq!(config.fetch_concurrency_per_provider, 1);
         assert_eq!(config.por_concurrency, 1);
     }
-
     #[test]
     fn storage_pin_inventory_does_not_expand_ingest_concurrency() {
         let storage = StorageConfig::builder()
@@ -1258,7 +1153,6 @@ mod tests {
         assert_eq!(config.fetch_concurrency, 3);
         assert_eq!(config.por_concurrency, 3);
     }
-
     #[test]
     fn poisoned_admission_state_fails_closed_without_repanicking() {
         let runtime = StorageSchedulersRuntime::new(StorageSchedulerConfig {
@@ -1276,7 +1170,6 @@ mod tests {
                 component: "pin queue"
             })
         );
-
         let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _guard = runtime.inner.fetch.state.lock().expect("lock fetch state");
             panic!("poison fetch state");
@@ -1293,7 +1186,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn poisoned_rate_limit_state_fails_closed_and_refunds_do_not_panic() {
         let limiter = RateLimiter::new(10);
@@ -1309,7 +1201,6 @@ mod tests {
             })
         );
         limiter.refund(1);
-
         let map = RateLimiterMap::with_max_entries(10, 1);
         let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _guard = map.map.lock().expect("lock provider map");
@@ -1324,7 +1215,6 @@ mod tests {
         );
         map.refund("provider-a", 1);
     }
-
     #[test]
     fn poisoned_telemetry_state_recovers_without_process_panic() {
         let runtime = StorageSchedulersRuntime::new(StorageSchedulerConfig::default());
@@ -1337,7 +1227,6 @@ mod tests {
             panic!("poison scheduler telemetry");
         }));
         assert!(poisoned.is_err());
-
         runtime.update_storage_bytes(7, 11);
         let snapshot = runtime.telemetry_snapshot();
         assert_eq!(snapshot.bytes_used, 7);

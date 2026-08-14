@@ -8,15 +8,12 @@
 //! We then benchmark view-iterate and materialize for each chosen layout.
 //!
 //! Run: cargo bench -p norito --bench adaptive_small_aos_ncb
-
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-
 fn rows_aos_friendly(n: usize) -> Vec<(u64, String, bool)> {
     (0..n as u64)
         .map(|i| (i << 56, format!("s{i}"), (i & 1) == 0))
         .collect()
 }
-
 fn rows_ncb_friendly(n: usize) -> Vec<(u64, String, bool)> {
     (0..n as u64)
         .map(|i| {
@@ -29,7 +26,6 @@ fn rows_ncb_friendly(n: usize) -> Vec<(u64, String, bool)> {
         })
         .collect()
 }
-
 fn bench_adaptive_small(c: &mut Criterion) {
     let mut group = c.benchmark_group("adaptive_small_u64_str_bool");
     for &n in &[8usize, 32, 64] {
@@ -46,7 +42,6 @@ fn bench_adaptive_small(c: &mut Criterion) {
             "expected AoS tag for aos-friendly dataset"
         );
         let aos_body = &aos_bytes[1..];
-
         // Sanity: AoS view/materialize produce identical accumulators
         let aos_acc_view = {
             let view = norito::columnar::view_aos_u64_str_bool(aos_body).expect("view");
@@ -70,7 +65,6 @@ fn bench_adaptive_small(c: &mut Criterion) {
             acc
         };
         assert_eq!(aos_acc_view, aos_acc_mat, "AoS accumulators must match");
-
         group.bench_with_input(BenchmarkId::new("aos_view_iter", n), &n, |b, &_n| {
             b.iter(|| {
                 let view = norito::columnar::view_aos_u64_str_bool(aos_body).expect("view");
@@ -84,7 +78,6 @@ fn bench_adaptive_small(c: &mut Criterion) {
                 std::hint::black_box(acc)
             })
         });
-
         group.bench_with_input(BenchmarkId::new("aos_materialize", n), &n, |b, &_n| {
             b.iter(|| {
                 let view = norito::columnar::view_aos_u64_str_bool(aos_body).expect("view");
@@ -101,7 +94,6 @@ fn bench_adaptive_small(c: &mut Criterion) {
                 std::hint::black_box(acc)
             })
         });
-
         // NCB-friendly dataset
         let owned = rows_ncb_friendly(n);
         let borrowed: Vec<(u64, &str, bool)> = owned
@@ -115,7 +107,6 @@ fn bench_adaptive_small(c: &mut Criterion) {
             "expected NCB tag for ncb-friendly dataset"
         );
         let ncb_body = &ncb_bytes[1..];
-
         // Sanity: NCB view/materialize produce identical accumulators
         let ncb_acc_view = {
             let view = norito::columnar::view_ncb_u64_str_bool(ncb_body).expect("view");
@@ -139,7 +130,6 @@ fn bench_adaptive_small(c: &mut Criterion) {
             acc
         };
         assert_eq!(ncb_acc_view, ncb_acc_mat, "NCB accumulators must match");
-
         group.bench_with_input(BenchmarkId::new("ncb_view_iter", n), &n, |b, &_n| {
             b.iter(|| {
                 let view = norito::columnar::view_ncb_u64_str_bool(ncb_body).expect("view");
@@ -153,7 +143,6 @@ fn bench_adaptive_small(c: &mut Criterion) {
                 std::hint::black_box(acc)
             })
         });
-
         group.bench_with_input(BenchmarkId::new("ncb_materialize", n), &n, |b, &_n| {
             b.iter(|| {
                 let view = norito::columnar::view_ncb_u64_str_bool(ncb_body).expect("view");
@@ -173,6 +162,5 @@ fn bench_adaptive_small(c: &mut Criterion) {
     }
     group.finish();
 }
-
 criterion_group!(benches, bench_adaptive_small);
 criterion_main!(benches);

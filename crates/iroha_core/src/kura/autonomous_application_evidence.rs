@@ -21,7 +21,6 @@ impl Kura {
             && self
                 .lane_block_application_receipt_matches_merge_log_without_sidecar_repair(&receipt)
     }
-
     /// Revalidate the exact predecessor of an autonomous proposal against a merge
     /// receipt and its authenticated merge-log carrier.
     pub(crate) fn autonomous_lane_block_predecessor_merge_receipt_revalidates_without_sidecar_repair(
@@ -56,5 +55,4 @@ impl Kura {
                 .lane_block_application_receipt_matches_merge_log_without_sidecar_repair(&receipt)
     }
 }
-
 include!("passive_diagnostic_reads.rs");

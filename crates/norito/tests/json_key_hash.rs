@@ -1,7 +1,6 @@
 //! Validate that compile-time `key_hash_const` matches TapeWalker::read_key_hash
 //! when `crc-key-hash` is enabled.
 #![cfg(all(feature = "json", feature = "crc-key-hash"))]
-
 #[test]
 fn key_hash_const_matches_runtime_crc32c() {
     let s = r#"{"id":1}"#;

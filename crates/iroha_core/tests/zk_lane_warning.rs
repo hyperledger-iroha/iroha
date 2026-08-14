@@ -2,20 +2,16 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 //! ZK lane reporting: background verification emits a non-forking pipeline warning.
-
-use std::{num::NonZeroU64, sync::Arc};
-
 use iroha_core::pipeline::zk_lane;
 use iroha_crypto::streaming::TransportCapabilityResolutionSnapshot;
 use iroha_data_model::events::pipeline::PipelineEventBox;
 use norito::streaming::{CapabilityFlags, HpkeSuite, PrivacyBucketGranularity};
-
+use std::{num::NonZeroU64, sync::Arc};
 #[tokio::test]
 async fn zk_lane_emits_warning_on_rejected_trace() {
     // Register a local events sender to capture warnings
     let (tx, mut rx) = tokio::sync::broadcast::channel::<iroha_data_model::events::EventBox>(16);
     zk_lane::register_events_sender(tx.clone());
-
     // Start the ZK lane (enabled=true). Use a tiny batch size to flush quickly.
     let cfg = iroha_config::parameters::actual::Halo2 {
         enabled: true,
@@ -27,7 +23,6 @@ async fn zk_lane_emits_warning_on_rejected_trace() {
         ..iroha_config::parameters::actual::Halo2::default()
     };
     let _ = zk_lane::start(&cfg);
-
     // Build a task whose constraint fails: gpr[0] = 1 but requires zero at cycle 0
     let mut gpr = [0u64; 256];
     gpr[0] = 1;
@@ -61,7 +56,6 @@ async fn zk_lane_emits_warning_on_rejected_trace() {
         zk_lane::try_submit(job),
         "zk lane must accept tasks when started"
     );
-
     // Expect a Pipeline::Warning with kind = "zk_trace_rejected" soon
     use tokio::time::{Duration, Instant, sleep};
     let deadline = Instant::now() + Duration::from_millis(500);
@@ -97,7 +91,6 @@ async fn zk_lane_emits_warning_on_rejected_trace() {
     }
     assert!(warned, "expected a pipeline warning for rejected ZK trace");
 }
-
 #[test]
 fn zk_task_digest_reflects_transport_metadata() {
     let trace = vec![ivm::zk::RegisterState {
@@ -119,7 +112,6 @@ fn zk_task_digest_reflects_transport_metadata() {
         negotiated_capabilities: None,
     };
     let base_digest = base.digest();
-
     let snapshot = TransportCapabilityResolutionSnapshot {
         hpke_suite: HpkeSuite::Kyber768AuthPsk,
         use_datagram: true,
@@ -130,11 +122,9 @@ fn zk_task_digest_reflects_transport_metadata() {
     let mut with_transport = base.clone();
     with_transport.transport_capabilities = Some(snapshot);
     assert_ne!(base_digest, with_transport.digest());
-
     let mut with_flags = base.clone();
     with_flags.negotiated_capabilities = Some(CapabilityFlags::from_bits(0b101));
     assert_ne!(base_digest, with_flags.digest());
-
     // Ensure both metadata fields together still produce deterministic digests.
     let mut combined = base.clone();
     combined.transport_capabilities = with_transport.transport_capabilities.clone();

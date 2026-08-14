@@ -1,8 +1,6 @@
 //! Ensure the canonical generated IVM header policy matches the implementation.
-
 const BEGIN: &str = "<!-- BEGIN GENERATED HEADER POLICY -->";
 const END: &str = "<!-- END GENERATED HEADER POLICY -->";
-
 fn expected_header_policy() -> String {
     let zk = ivm::ivm_mode::ZK;
     let vec = ivm::ivm_mode::VECTOR;
@@ -22,7 +20,6 @@ fn expected_header_policy() -> String {
     );
     format!("{BEGIN}\n{table}{END}")
 }
-
 fn assert_generated_header_policy(path: &std::path::Path, expected: &str) {
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
@@ -40,7 +37,6 @@ fn assert_generated_header_policy(path: &std::path::Path, expected: &str) {
         path.display()
     );
 }
-
 #[test]
 fn generated_header_policy_sections_are_up_to_date() {
     let source_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

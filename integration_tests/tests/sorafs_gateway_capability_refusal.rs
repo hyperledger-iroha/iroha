@@ -1,11 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests covering the `SoraFS` gateway capability refusal fixture bundle.
-
-use std::collections::{HashMap, HashSet};
-
 use integration_tests::sorafs_gateway_capability_refusal::{load_responses, load_scenarios};
 use norito::json::Value;
-
+use std::collections::{HashMap, HashSet};
 #[test]
 fn capability_refusal_scenarios_match_expected_ids() {
     let scenarios = load_scenarios().expect("load capability refusal scenarios");
@@ -14,7 +11,6 @@ fn capability_refusal_scenarios_match_expected_ids() {
         7,
         "capability refusal fixture must contain seven scenarios"
     );
-
     let mut ids: HashSet<String> = HashSet::new();
     for scenario in scenarios {
         assert!(
@@ -68,12 +64,10 @@ fn capability_refusal_scenarios_match_expected_ids() {
         );
     }
 }
-
 #[test]
 fn capability_refusal_responses_have_expected_shape() {
     let responses = load_responses().expect("load capability refusal responses");
     let mut status_by_error: HashMap<String, u16> = HashMap::new();
-
     for response in responses {
         let body = response
             .body
@@ -117,10 +111,8 @@ fn capability_refusal_responses_have_expected_shape() {
                 .is_some(),
             "capability refusal response must carry gateway metadata"
         );
-
         status_by_error.insert(error, response.status);
     }
-
     let expected = HashMap::from([
         ("unsupported_chunker".to_string(), 406),
         ("manifest_variant_missing".to_string(), 412),
@@ -130,7 +122,6 @@ fn capability_refusal_responses_have_expected_shape() {
         ("unsupported_encoding".to_string(), 406),
         ("proof_mismatch".to_string(), 422),
     ]);
-
     assert_eq!(
         status_by_error, expected,
         "capability refusal responses must match the canonical matrix"

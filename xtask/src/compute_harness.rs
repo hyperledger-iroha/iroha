@@ -1,12 +1,6 @@
 //! Shared helpers for compute fixtures, SLO reports, and the lightweight gateway.
 //! The helpers mirror the minimal entrypoints shipped in the `compute_gateway`
 //! binary so tests and CLI fixtures stay in sync.
-
-use std::{
-    collections::BTreeMap,
-    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-};
-
 use iroha_config::parameters::defaults::compute as compute_defaults;
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -17,7 +11,10 @@ use iroha_data_model::{
     },
     name::Name,
 };
-
+use std::{
+    collections::BTreeMap,
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+};
 /// Minimal error surface used by the compute harness.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ComputeHarnessError {
@@ -25,7 +22,6 @@ pub enum ComputeHarnessError {
     #[error("unknown entrypoint {0}")]
     UnknownEntrypoint(String),
 }
-
 /// Execute a built-in entrypoint and return the outcome and optional response bytes.
 pub fn execute_entrypoint(
     entrypoint: &str,
@@ -43,20 +39,17 @@ pub fn execute_entrypoint(
         }
         other => return Err(ComputeHarnessError::UnknownEntrypoint(other.to_string())),
     };
-
     let cycles = (payload.len() as u64)
         .saturating_mul(10_000)
         .saturating_add(5_000);
     if cycles > call.gas_limit.get() {
         response = None;
     }
-
     if let Some(resp) = &response
         && resp.len() as u64 > call.max_response_bytes.get()
     {
         response = None;
     }
-
     let outcome = if let Some(resp) = &response {
         ComputeOutcome {
             kind: ComputeOutcomeKind::Success,
@@ -74,7 +67,6 @@ pub fn execute_entrypoint(
     };
     Ok((outcome, response))
 }
-
 /// Compute metering for a request/response pair.
 pub fn meter(
     route: &ComputeRoute,
@@ -94,7 +86,6 @@ pub fn meter(
         .saturating_mul(10_000)
         .saturating_add(10_000);
     let duration_ms = 1 + (payload.len() as u64 / 256);
-
     let mut metering = ComputeMetering {
         cycles,
         ingress_bytes: ingress_bytes as u64,
@@ -103,7 +94,6 @@ pub fn meter(
         price_family: call.price_family.clone(),
         charged_units: 0,
     };
-
     if metering.cycles > route.gas_budget.get() {
         metering.cycles = route.gas_budget.get();
     }
@@ -112,7 +102,6 @@ pub fn meter(
     }
     metering
 }
-
 /// Compute charged units for metering based on known price families.
 pub fn charge_units(
     price_families: &BTreeMap<Name, ComputePriceWeights>,
@@ -129,7 +118,6 @@ pub fn charge_units(
             .saturating_mul(max_amplification_ratio.get() as u64);
         metering.egress_bytes = metering.egress_bytes.min(max_egress);
     }
-
     let price_family = price_families
         .get(&metering.price_family)
         .or_else(|| price_families.get(default_price_family))
@@ -138,7 +126,6 @@ pub fn charge_units(
     let amplified = amplifiers.apply(base_units, call.execution_class, call.determinism);
     metering.charged_units = amplified.min(max_cu_per_call.get());
 }
-
 /// Provide a deterministic default manifest for tests and CLI helpers.
 pub fn default_manifest() -> ComputeManifest {
     ComputeManifest {
@@ -190,7 +177,6 @@ pub fn default_manifest() -> ComputeManifest {
         }],
     }
 }
-
 /// Helper used by fixtures/tests to build a call from a manifest route.
 pub fn build_call_for_route(
     manifest: &ComputeManifest,
@@ -223,13 +209,11 @@ pub fn build_call_for_route(
     manifest.validate_call(&call)?;
     Ok(call)
 }
-
 /// Generate a deterministic payload (a..z cycling) of the requested length.
 #[must_use]
 pub fn payload_with_len(len: usize) -> Vec<u8> {
     (0..len).map(|i| b'a' + (i as u8 % 26)).collect()
 }
-
 /// Convenience wrapper for common SLO defaults.
 #[must_use]
 pub fn slo_targets() -> SloTargets {
@@ -242,7 +226,6 @@ pub fn slo_targets() -> SloTargets {
         target_p99_latency_ms: compute_defaults::target_p99_latency_ms(),
     }
 }
-
 /// Minimal struct used by the SLO harness to evaluate budgets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SloTargets {
@@ -259,13 +242,10 @@ pub struct SloTargets {
     /// p99 latency budget.
     pub target_p99_latency_ms: NonZeroU64,
 }
-
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::compute::{ComputeAuthz, ComputeCodec};
-
     use super::*;
-
+    use iroha_data_model::compute::{ComputeAuthz, ComputeCodec};
     #[test]
     fn entrypoint_respects_gas_and_size_caps() {
         let manifest = default_manifest();
@@ -283,7 +263,6 @@ mod tests {
             execute_entrypoint(&route.entrypoint, &payload, &call).expect("entrypoint");
         assert!(matches!(outcome.kind, ComputeOutcomeKind::Success));
         assert_eq!(response.as_ref().map(Vec::len), Some(payload.len()));
-
         let tiny_gas_call = iroha_data_model::compute::ComputeCall {
             gas_limit: NonZeroU64::new(1).unwrap(),
             ..call.clone()
@@ -296,7 +275,6 @@ mod tests {
         ));
         assert!(response_tiny.is_none());
     }
-
     #[test]
     fn metering_caps_egress_and_cycles() {
         let manifest = default_manifest();
@@ -317,7 +295,6 @@ mod tests {
         assert!(metering.egress_bytes <= route.max_response_bytes.get());
         assert_eq!(metering.price_family, route.price_family);
     }
-
     #[test]
     fn default_manifest_contains_expected_route() {
         let manifest = default_manifest();

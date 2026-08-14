@@ -4,29 +4,24 @@
 //! `/metrics` endpoints.  This module hides the blocking HTTP client behind
 //! `tokio::spawn_blocking` and normalises the responses into lightweight
 //! snapshots used by the TUI.
-
+use eyre::Result;
+use norito::{derive::JsonDeserialize, json};
 use std::{
     collections::HashMap,
     io::Read,
     time::{Duration, Instant},
 };
-
-use eyre::Result;
-use norito::{derive::JsonDeserialize, json};
 use tokio::{sync::mpsc, task::JoinHandle};
-
 pub const STATUS_HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 pub const METRICS_HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 pub const STATUS_BODY_LIMIT: usize = 128 * 1024;
 pub const METRICS_BODY_LIMIT: usize = 512 * 1024;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoticeLevel {
     Info,
     Warning,
     Critical,
 }
-
 impl NoticeLevel {
     pub const fn priority(self) -> u8 {
         match self {
@@ -36,7 +31,6 @@ impl NoticeLevel {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoticeKind {
     StatusFetchFailed,
@@ -49,14 +43,12 @@ pub enum NoticeKind {
     SmHelpersAdvertised,
     SmOpensslPreviewEnabled,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerNotice {
     pub level: NoticeLevel,
     pub kind: NoticeKind,
     pub message: String,
 }
-
 impl PeerNotice {
     fn info(kind: NoticeKind, message: impl Into<String>) -> Self {
         Self {
@@ -65,7 +57,6 @@ impl PeerNotice {
             message: message.into(),
         }
     }
-
     fn warning(kind: NoticeKind, message: impl Into<String>) -> Self {
         Self {
             level: NoticeLevel::Warning,
@@ -73,7 +64,6 @@ impl PeerNotice {
             message: message.into(),
         }
     }
-
     fn critical(kind: NoticeKind, message: impl Into<String>) -> Self {
         Self {
             level: NoticeLevel::Critical,
@@ -82,13 +72,11 @@ impl PeerNotice {
         }
     }
 }
-
 #[derive(Debug, Clone, JsonDeserialize, Default)]
 pub struct CryptoStatusPayload {
     pub sm_helpers_available: Option<bool>,
     pub sm_openssl_preview_enabled: Option<bool>,
 }
-
 #[derive(Debug, Clone, JsonDeserialize, Default)]
 pub struct StatusPayload {
     pub alias: Option<String>,
@@ -105,14 +93,12 @@ pub struct StatusPayload {
     pub governance: Option<json::Value>,
     pub crypto: Option<CryptoStatusPayload>,
 }
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MetricsSnapshot {
     pub gas_used: Option<u64>,
     pub fee_units: Option<u64>,
     pub fee_scale: Option<u64>,
 }
-
 #[derive(Debug, Clone)]
 pub struct PeerSnapshot {
     pub status: Option<StatusPayload>,
@@ -120,7 +106,6 @@ pub struct PeerSnapshot {
     pub latency: Option<Duration>,
     pub notices: Vec<PeerNotice>,
 }
-
 impl PeerSnapshot {
     pub fn primary_notice(&self) -> Option<&PeerNotice> {
         self.notices
@@ -128,18 +113,15 @@ impl PeerSnapshot {
             .max_by_key(|notice| notice.level.priority())
     }
 }
-
 #[derive(Debug, Clone)]
 pub struct PeerUpdate {
     pub index: usize,
     pub snapshot: PeerSnapshot,
 }
-
 pub struct PeerFetcher {
     rx: mpsc::Receiver<PeerUpdate>,
     handles: Vec<JoinHandle<()>>,
 }
-
 impl PeerFetcher {
     pub fn new(endpoints: Vec<String>, interval: Duration) -> Self {
         let (tx, rx) = mpsc::channel::<PeerUpdate>(endpoints.len().max(1) * 2);
@@ -186,12 +168,10 @@ impl PeerFetcher {
         }
         Self { rx, handles }
     }
-
     pub async fn recv(&mut self) -> Option<PeerUpdate> {
         self.rx.recv().await
     }
 }
-
 impl Drop for PeerFetcher {
     fn drop(&mut self) {
         for handle in &self.handles {
@@ -199,21 +179,16 @@ impl Drop for PeerFetcher {
         }
     }
 }
-
 fn fetch_once(index: usize, endpoint: &str) -> PeerUpdate {
     let mut notices = Vec::new();
-
     let trimmed = endpoint.trim_end_matches('/');
     let status_url = format!("{trimmed}/status");
     let metrics_url = format!("{trimmed}/metrics");
-
     let status_result = fetch_status(&status_url);
     let latency = status_result.as_ref().ok().and_then(|info| info.latency);
-
     if let Err(notice) = &status_result {
         notices.push(notice.clone());
     }
-
     let status = status_result.ok().and_then(|info| info.payload);
     if let Some(crypto) = status.as_ref().and_then(|payload| payload.crypto.as_ref()) {
         if crypto
@@ -235,7 +210,6 @@ fn fetch_once(index: usize, endpoint: &str) -> PeerUpdate {
             ));
         }
     }
-
     let metrics = match fetch_metrics(&metrics_url) {
         Ok(metrics) => metrics,
         Err(notice) => {
@@ -243,7 +217,6 @@ fn fetch_once(index: usize, endpoint: &str) -> PeerUpdate {
             MetricsSnapshot::default()
         }
     };
-
     PeerUpdate {
         index,
         snapshot: PeerSnapshot {
@@ -254,12 +227,10 @@ fn fetch_once(index: usize, endpoint: &str) -> PeerUpdate {
         },
     }
 }
-
 struct StatusFetch {
     payload: Option<StatusPayload>,
     latency: Option<Duration>,
 }
-
 fn fetch_status(url: &str) -> std::result::Result<StatusFetch, PeerNotice> {
     if let Some(descriptor) = parse_stub_descriptor(url, "/status") {
         let payload = stub_status_payload(descriptor.peer_index, descriptor.total_peers);
@@ -314,7 +285,6 @@ fn fetch_status(url: &str) -> std::result::Result<StatusFetch, PeerNotice> {
         latency,
     })
 }
-
 fn fetch_metrics(url: &str) -> std::result::Result<MetricsSnapshot, PeerNotice> {
     if let Some(descriptor) = parse_stub_descriptor(url, "/metrics") {
         return Ok(stub_metrics_snapshot(descriptor.peer_index));
@@ -358,7 +328,6 @@ fn fetch_metrics(url: &str) -> std::result::Result<MetricsSnapshot, PeerNotice> 
     }
     Ok(parse_prometheus_metrics(&text))
 }
-
 fn read_body_with_limit<R: Read>(mut reader: R, limit: usize) -> Result<(Vec<u8>, bool)> {
     let mut buf = Vec::new();
     {
@@ -372,7 +341,6 @@ fn read_body_with_limit<R: Read>(mut reader: R, limit: usize) -> Result<(Vec<u8>
         Ok((buf, false))
     }
 }
-
 fn parse_prometheus_metrics(text: &str) -> MetricsSnapshot {
     let mut values: HashMap<&str, u64> = HashMap::new();
     for line in text.lines() {
@@ -392,17 +360,14 @@ fn parse_prometheus_metrics(text: &str) -> MetricsSnapshot {
         fee_scale: values.get("block_fee_total_scale").copied(),
     }
 }
-
 pub struct StubCluster {
     urls: Vec<String>,
 }
-
 impl StubCluster {
     pub fn urls(&self) -> &[String] {
         &self.urls
     }
 }
-
 pub async fn spawn_stub_cluster(count: usize) -> Result<StubCluster> {
     let mut urls = Vec::with_capacity(count);
     for idx in 0..count {
@@ -410,13 +375,11 @@ pub async fn spawn_stub_cluster(count: usize) -> Result<StubCluster> {
     }
     Ok(StubCluster { urls })
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct StubDescriptor {
     peer_index: usize,
     total_peers: usize,
 }
-
 fn parse_stub_descriptor(url: &str, suffix: &str) -> Option<StubDescriptor> {
     let without_scheme = url.strip_prefix("stub://")?;
     let without_suffix = without_scheme.strip_suffix(suffix)?;
@@ -437,7 +400,6 @@ fn parse_stub_descriptor(url: &str, suffix: &str) -> Option<StubDescriptor> {
         total_peers,
     })
 }
-
 fn stub_status_payload(peer_index: usize, total_peers: usize) -> StatusPayload {
     StatusPayload {
         alias: Some("祭りノード".to_owned()),
@@ -454,7 +416,6 @@ fn stub_status_payload(peer_index: usize, total_peers: usize) -> StatusPayload {
         crypto: None,
     }
 }
-
 fn stub_metrics_snapshot(peer_index: usize) -> MetricsSnapshot {
     MetricsSnapshot {
         gas_used: Some(100 + peer_index as u64 * 17),
@@ -462,11 +423,9 @@ fn stub_metrics_snapshot(peer_index: usize) -> MetricsSnapshot {
         fee_scale: Some(0),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn parse_prometheus_extracts_expected_metrics() {
         let text = "# HELP\nblock_gas_used 123\nblock_fee_total_units 456\nblock_fee_total_scale 3\nother_metric 1";
@@ -475,20 +434,17 @@ mod tests {
         assert_eq!(metrics.fee_units, Some(456));
         assert_eq!(metrics.fee_scale, Some(3));
     }
-
     #[test]
     fn read_body_respects_limit() {
         let data = vec![b'x'; 16];
         let (body, truncated) = read_body_with_limit(std::io::Cursor::new(data), 32).unwrap();
         assert!(!truncated);
         assert_eq!(body.len(), 16);
-
         let data = vec![b'y'; 64];
         let (body, truncated) = read_body_with_limit(std::io::Cursor::new(data), 32).unwrap();
         assert!(truncated);
         assert_eq!(body.len(), 32);
     }
-
     #[test]
     fn parse_prometheus_skips_non_integer_samples() {
         let text = "block_gas_used 12.5\nblock_gas_used 42\nblock_fee_total_units NaN\nblock_fee_total_units 24\nblock_fee_total_scale oops\nblock_fee_total_scale 2";
@@ -497,7 +453,6 @@ mod tests {
         assert_eq!(metrics.fee_units, Some(24));
         assert_eq!(metrics.fee_scale, Some(2));
     }
-
     #[test]
     fn stub_descriptor_parses_expected_format() {
         let descriptor = parse_stub_descriptor("stub://peer/2/5/status", "/status").unwrap();
@@ -507,7 +462,6 @@ mod tests {
         assert!(parse_stub_descriptor("stub://other/1/2/status", "/status").is_none());
         assert!(parse_stub_descriptor("stub://peer/1/status", "/status").is_none());
     }
-
     #[test]
     fn stub_fetch_status_returns_payload() {
         let fetch = fetch_status("stub://peer/3/4/status").expect("stub status should succeed");
@@ -517,7 +471,6 @@ mod tests {
         assert_eq!(payload.blocks, Some(45));
         assert!(fetch.latency.is_some());
     }
-
     #[test]
     fn stub_fetch_metrics_returns_synthetic_values() {
         let metrics =

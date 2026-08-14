@@ -1,9 +1,7 @@
 // In-flight reservation and first-release refinement proofs.
 //
 // Included lexically by `verus_proofs` so public item paths remain unchanged.
-
 verus! {
-
 /// Verus-side lossless four-word projection of one 256-bit digest.
 #[derive(Copy, Clone)]
 pub struct ProductionDigest256Projection {
@@ -12,7 +10,6 @@ pub struct ProductionDigest256Projection {
     pub word2: u64,
     pub word3: u64,
 }
-
 /// Verus-side mirror of the production V1 transition witness.
 ///
 /// SHA-256 recomputation is intentionally kept in the production wrapper and
@@ -29,7 +26,13 @@ pub struct ProductionInFlightFirstReleaseTransitionWitnessV1 {
     pub after_state_digest: ProductionDigest256Projection,
     pub source_identity: ProductionDigest256Projection,
 }
-
+/// Exact Verus mirror of the production V1 witness's structural binding.
+pub closed spec fn production_in_flight_first_release_witness_binding_kernel(
+    projection: ProductionInFlightFirstReleaseTransitionProjection,
+    witness: ProductionInFlightFirstReleaseTransitionWitnessV1,
+) -> bool {
+    production_in_flight_first_release_witness_binding_body!(projection, witness)
+}
 /// Verus-side reverse classification of one terminal economic owner.
 #[derive(Copy, Clone)]
 pub struct ProductionInFlightFirstReleaseTerminalOwnerProjection {
@@ -38,7 +41,6 @@ pub struct ProductionInFlightFirstReleaseTerminalOwnerProjection {
     pub commit_terminal: bool,
     pub release_terminal: bool,
 }
-
 /// A successful primitive checker result is exactly the shared executable
 /// identity/state relation. Collection extraction and cross-store ordering are
 /// deliberately outside this theorem.
@@ -51,7 +53,6 @@ pub proof fn production_in_flight_reservation_transition_preserves_primitive_ide
 {
     reveal(check_production_in_flight_reservation_transition);
 }
-
 /// Every checked primitive snapshot reconstruction is noninterference for any
 /// independently valid composed first-release state.
 ///
@@ -86,7 +87,6 @@ pub proof fn production_in_flight_reservation_snapshot_replay_refines_composed_s
     reveal(production_in_flight_first_release_state_kernel);
     reveal(production_in_flight_first_release_transition_kernel);
 }
-
 /// Runtime commit cannot fabricate a commit barrier from absent ownership.
 pub proof fn production_in_flight_reservation_commit_rejects_absent_owner(
     projection: ProductionInFlightReservationTransitionProjection,
@@ -99,7 +99,6 @@ pub proof fn production_in_flight_reservation_commit_rejects_absent_owner(
 {
     reveal(production_in_flight_reservation_transition_kernel);
 }
-
 /// The composed checker accepts only the shared complete state/action kernel.
 pub proof fn production_in_flight_first_release_transition_refines_named_next(
     projection: ProductionInFlightFirstReleaseTransitionProjection,
@@ -110,7 +109,6 @@ pub proof fn production_in_flight_first_release_transition_refines_named_next(
 {
     reveal(check_production_in_flight_first_release_transition);
 }
-
 /// A structurally authenticated V1 witness names the exact checked action,
 /// parameters, and reviewed TLA+ source while refining the same composed
 /// relation as every production mutation boundary.
@@ -139,7 +137,6 @@ pub proof fn production_in_flight_first_release_witness_refines_named_next(
 {
     reveal(production_in_flight_first_release_witness_binding_kernel);
 }
-
 /// Snapshot reconstruction cannot manufacture a new abstract durable owner.
 pub proof fn production_in_flight_first_release_snapshot_recovery_is_stutter(
     projection: ProductionInFlightFirstReleaseTransitionProjection,
@@ -155,7 +152,6 @@ pub proof fn production_in_flight_first_release_snapshot_recovery_is_stutter(
 {
     reveal(production_in_flight_first_release_transition_kernel);
 }
-
 /// Local Kura custody recovery restores exactly one actor's volatile body and
 /// cannot manufacture READY authority or another durable/economic fact.
 pub proof fn production_in_flight_first_release_local_kura_rehydration_is_exact(
@@ -206,7 +202,6 @@ pub proof fn production_in_flight_first_release_local_kura_rehydration_is_exact(
 {
     reveal(production_in_flight_first_release_transition_kernel);
 }
-
 /// Kura rehydration fails closed when the actor lacks the exact durable payload.
 pub proof fn production_in_flight_first_release_local_kura_rehydration_rejects_missing_payload(
     projection: ProductionInFlightFirstReleaseTransitionProjection,
@@ -222,7 +217,6 @@ pub proof fn production_in_flight_first_release_local_kura_rehydration_rejects_m
 {
     reveal(production_in_flight_first_release_transition_kernel);
 }
-
 /// Kura rehydration cannot omit body publication or invent READY authority.
 pub proof fn production_in_flight_first_release_local_kura_rehydration_rejects_volatile_drift(
     projection: ProductionInFlightFirstReleaseTransitionProjection,
@@ -241,7 +235,6 @@ pub proof fn production_in_flight_first_release_local_kura_rehydration_rejects_v
 {
     reveal(production_in_flight_first_release_transition_kernel);
 }
-
 /// Terminal economic ownership and Kura retirement are resurrection barriers.
 pub proof fn production_in_flight_first_release_local_kura_rehydration_rejects_terminal_state(
     projection: ProductionInFlightFirstReleaseTransitionProjection,
@@ -271,7 +264,6 @@ pub proof fn production_in_flight_first_release_local_kura_rehydration_rejects_t
 {
     reveal(production_in_flight_first_release_transition_kernel);
 }
-
 /// Every extracted terminal owner is exclusive: WSV for commit, FIFO for release.
 pub proof fn production_in_flight_first_release_terminal_owner_is_exclusive(
     state: ProductionInFlightFirstReleaseStateProjection,
@@ -289,5 +281,4 @@ pub proof fn production_in_flight_first_release_terminal_owner_is_exclusive(
 {
     reveal(production_in_flight_first_release_terminal_owner);
 }
-
 } // verus!

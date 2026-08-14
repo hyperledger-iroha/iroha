@@ -2,10 +2,8 @@
 //!
 //! IVM private notes and PQ-MASP share the parent module's canonical native
 //! statement binding and deterministic evidence infrastructure.
-
 // This is a private continuation of the parent release-evidence module.
 use super::*;
-
 fn redigest_ivm_release_statement_v1(
     statement: &mut iroha_data_model::privacy::IrohaIvmPrivateNoteStarkStatementV1,
 ) -> Result<(), PrivacyReleaseEvidenceErrorClassV1> {
@@ -15,7 +13,6 @@ fn redigest_ivm_release_statement_v1(
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     Ok(())
 }
-
 fn native_bound_statement_material_v1(
     domain: &[u8],
     statement: &PrivacyStatementV1,
@@ -35,7 +32,6 @@ fn native_bound_statement_material_v1(
     material.extend_from_slice(binding_digest.as_bytes());
     Ok(material)
 }
-
 pub(super) fn run_ivm_private_note_stage_v1(
     case_kind: PrivacyReleaseCaseKindV1,
 ) -> Result<StageMaterialV1, PrivacyReleaseEvidenceErrorClassV1> {
@@ -58,7 +54,6 @@ pub(super) fn run_ivm_private_note_stage_v1(
     {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
-
     let proof_seed = stage_purpose_seed_v1(protocol_id, case_kind, b"canonical-proof")?;
     let mut proof_rng = EvidenceRng09::new(proof_seed);
     let consensus_limits = PrivacyConsensusLimitsV1::taira_default();
@@ -84,7 +79,6 @@ pub(super) fn run_ivm_private_note_stage_v1(
         &original_typed,
         &consensus_binding,
     )?;
-
     let (public_statement_material, failure_class) = match case_kind {
         PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd
         | PrivacyReleaseCaseKindV1::MaximumShapeResource => (
@@ -95,20 +89,17 @@ pub(super) fn run_ivm_private_note_stage_v1(
             let mut cross_context = statement.clone();
             cross_context.context.network_id = release_network_id_from_genesis_hash([0x4a; 32]);
             redigest_ivm_release_statement_v1(&mut cross_context)?;
-
             let mut cross_intent = statement.clone();
             let mut intent = *cross_intent.context.transaction_intent_digest.as_bytes();
             intent[0] ^= 0x80;
             cross_intent.context.transaction_intent_digest =
                 PrivacyTransactionIntentDigestV1::new(intent);
             redigest_ivm_release_statement_v1(&mut cross_intent)?;
-
             let mut cross_root = statement.clone();
             let mut root = *cross_root.state_root.as_bytes();
             root[0] ^= 0x80;
             cross_root.state_root = PrivacyRootV1::new(root);
             redigest_ivm_release_statement_v1(&mut cross_root)?;
-
             let mut cross_epoch = statement.clone();
             cross_epoch.root_epoch = cross_epoch
                 .root_epoch
@@ -116,7 +107,6 @@ pub(super) fn run_ivm_private_note_stage_v1(
                 .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
             cross_epoch.execution_epoch = cross_epoch.root_epoch;
             redigest_ivm_release_statement_v1(&mut cross_epoch)?;
-
             for mutation in [&cross_context, &cross_intent, &cross_root, &cross_epoch] {
                 if verify_ivm_private_note_v1(
                     mutation,
@@ -179,7 +169,6 @@ pub(super) fn run_ivm_private_note_stage_v1(
             {
                 return Err(PrivacyReleaseEvidenceErrorClassV1::InvalidWitnessPathAccepted);
             }
-
             let mut corrupt_header = proof.clone();
             let first = corrupt_header
                 .first_mut()
@@ -195,7 +184,6 @@ pub(super) fn run_ivm_private_note_stage_v1(
             {
                 return Err(PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted);
             }
-
             let mut corrupt_interior = proof.clone();
             let interior = corrupt_interior.len() / 2;
             let byte = corrupt_interior
@@ -212,7 +200,6 @@ pub(super) fn run_ivm_private_note_stage_v1(
             {
                 return Err(PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted);
             }
-
             let truncated_length = proof
                 .len()
                 .checked_sub(1)
@@ -233,7 +220,6 @@ pub(super) fn run_ivm_private_note_stage_v1(
             )
         }
     };
-
     Ok(StageMaterialV1 {
         public_statement_material,
         proof_artifacts: single_proof_artifact_v1(
@@ -258,7 +244,6 @@ pub(super) fn run_ivm_private_note_stage_v1(
         failure_class,
     })
 }
-
 pub(super) fn run_pq_masp_stage_v1(
     case_kind: PrivacyReleaseCaseKindV1,
 ) -> Result<StageMaterialV1, PrivacyReleaseEvidenceErrorClassV1> {
@@ -283,7 +268,6 @@ pub(super) fn run_pq_masp_stage_v1(
     {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
-
     let proof_seed = stage_purpose_seed_v1(protocol_id, case_kind, b"canonical-proof")?;
     let mut proof_rng = EvidenceRng09::new(proof_seed);
     let consensus_limits = PrivacyConsensusLimitsV1::taira_default();
@@ -310,7 +294,6 @@ pub(super) fn run_pq_masp_stage_v1(
         &original_typed,
         &consensus_binding,
     )?;
-
     let (public_statement_material, failure_class) = match case_kind {
         PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd
         | PrivacyReleaseCaseKindV1::MaximumShapeResource => (
@@ -320,31 +303,26 @@ pub(super) fn run_pq_masp_stage_v1(
         PrivacyReleaseCaseKindV1::PublicStatementBindingMutation => {
             let mut cross_context = statement.clone();
             cross_context.context.network_id = release_network_id_from_genesis_hash([0x51; 32]);
-
             let mut cross_intent = statement.clone();
             let mut intent = *cross_intent.context.transaction_intent_digest.as_bytes();
             intent[0] ^= 0x80;
             cross_intent.context.transaction_intent_digest =
                 PrivacyTransactionIntentDigestV1::new(intent);
-
             let mut cross_anchor = statement.clone();
             let mut anchor = *cross_anchor.anchor.as_bytes();
             anchor[0] ^= 0x80;
             cross_anchor.anchor = PrivacyRootV1::new(anchor);
-
             let mut cross_epoch = statement.clone();
             cross_epoch.anchor_epoch = cross_epoch
                 .anchor_epoch
                 .checked_add(1)
                 .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
             cross_epoch.authorization_epoch = cross_epoch.anchor_epoch;
-
             let mut cross_key = statement.clone();
             let mut key_digest = *cross_key.authorization_key_digest.as_bytes();
             key_digest[0] ^= 0x80;
             cross_key.authorization_key_digest =
                 iroha_data_model::privacy::PrivacyAuthorizationKeyDigestV1::new(key_digest);
-
             for mutation in [
                 &cross_context,
                 &cross_intent,
@@ -413,7 +391,6 @@ pub(super) fn run_pq_masp_stage_v1(
             {
                 return Err(PrivacyReleaseEvidenceErrorClassV1::InvalidWitnessPathAccepted);
             }
-
             let mut corrupt_header = proof.clone();
             let first = corrupt_header
                 .first_mut()
@@ -429,7 +406,6 @@ pub(super) fn run_pq_masp_stage_v1(
             {
                 return Err(PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted);
             }
-
             let mut corrupt_inner_header = proof.clone();
             let inner_header = corrupt_inner_header
                 .get_mut(PQ_MASP_AUTHORIZATION_HEADER_BYTES_V1)
@@ -445,7 +421,6 @@ pub(super) fn run_pq_masp_stage_v1(
             {
                 return Err(PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted);
             }
-
             let mut corrupt_interior = proof.clone();
             let interior = corrupt_interior.len() / 2;
             let byte = corrupt_interior
@@ -462,7 +437,6 @@ pub(super) fn run_pq_masp_stage_v1(
             {
                 return Err(PrivacyReleaseEvidenceErrorClassV1::ProofCorruptionAccepted);
             }
-
             let truncated_length = proof
                 .len()
                 .checked_sub(1)
@@ -483,7 +457,6 @@ pub(super) fn run_pq_masp_stage_v1(
             )
         }
     };
-
     Ok(StageMaterialV1 {
         public_statement_material,
         proof_artifacts: single_proof_artifact_v1(

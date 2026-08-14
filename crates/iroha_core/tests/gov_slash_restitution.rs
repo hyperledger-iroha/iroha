@@ -3,7 +3,6 @@
 //!
 //! Verifies manual slashing/restitution of governance bonds updates locks,
 //! ledgers, and balances.
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -26,13 +25,11 @@ use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
 fn setup_state(def_id: &AssetDefinitionId, receiver_id: &AccountId) -> State {
     let alice_id = ALICE_ID.clone();
     let escrow_id = BOB_ID.clone();
     let wonderland: iroha_data_model::domain::DomainId =
         iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain");
-
     let domain = Domain::new(wonderland.clone()).build(&alice_id);
     let alice_account = iroha_data_model::account::Account::new(ALICE_ID.clone()).build(&alice_id);
     let escrow_account = iroha_data_model::account::Account::new(BOB_ID.clone()).build(&alice_id);
@@ -57,7 +54,6 @@ fn setup_state(def_id: &AssetDefinitionId, receiver_id: &AccountId) -> State {
         AssetId::new(def_id.clone(), receiver_id.clone()),
         Quantity::from(0_u64),
     );
-
     let world = World::with_assets(
         [domain],
         [alice_account, escrow_account, receiver_account],
@@ -68,7 +64,6 @@ fn setup_state(def_id: &AssetDefinitionId, receiver_id: &AccountId) -> State {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query_handle);
-
     let mut gov_cfg = state.gov.clone();
     gov_cfg.plain_voting_enabled = true;
     gov_cfg.voting_asset_id = def_id.clone();
@@ -78,7 +73,6 @@ fn setup_state(def_id: &AssetDefinitionId, receiver_id: &AccountId) -> State {
     state.set_gov(gov_cfg);
     state
 }
-
 fn grant_governance_perms(
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
     referendum_id: &str,
@@ -100,7 +94,6 @@ fn grant_governance_perms(
             .expect("grant governance permission");
     }
 }
-
 fn seed_plain_referendum(
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
     referendum_id: &str,
@@ -115,7 +108,6 @@ fn seed_plain_referendum(
         },
     );
 }
-
 fn lock_slash_restitute(
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
     referendum_id: &str,
@@ -132,7 +124,6 @@ fn lock_slash_restitute(
         .clone()
         .execute(owner, tx)
         .expect("ballot should lock funds");
-
     let slash = iroha_data_model::isi::governance::SlashGovernanceLock {
         referendum_id: referendum_id.to_string(),
         owner: owner.clone(),
@@ -143,7 +134,6 @@ fn lock_slash_restitute(
         .clone()
         .execute(owner, tx)
         .expect("slash should succeed");
-
     let restitute = iroha_data_model::isi::governance::RestituteGovernanceLock {
         referendum_id: referendum_id.to_string(),
         owner: owner.clone(),
@@ -154,7 +144,6 @@ fn lock_slash_restitute(
         .execute(owner, tx)
         .expect("restitution should succeed");
 }
-
 #[test]
 fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
     let (receiver_id, _) = gen_account_in("wonderland");
@@ -166,16 +155,13 @@ fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
     let state = setup_state(&def_id, &receiver_id);
     let alice_id = ALICE_ID.clone();
     let referendum_id = "rid-slash";
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     grant_governance_perms(&mut stx, referendum_id, &alice_id);
     seed_plain_referendum(&mut stx, referendum_id);
     lock_slash_restitute(&mut stx, referendum_id, &alice_id);
     stx.apply();
-
     let escrow_asset_id = AssetId::new(def_id.clone(), BOB_ID.clone());
     let receiver_asset_id = AssetId::new(def_id.clone(), receiver_id.clone());
     let escrow_balance = sblock
@@ -192,7 +178,6 @@ fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
         .clone();
     assert_eq!(escrow_balance.into_inner(), Quantity::from(8_u64));
     assert_eq!(receiver_balance.into_inner(), Quantity::from(2_u64));
-
     let locks = sblock
         .world
         .governance_locks()
@@ -201,7 +186,6 @@ fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
     let rec = locks.locks.get(&alice_id).expect("alice lock after slash");
     assert_eq!(rec.amount, Quantity::from(8_u64));
     assert_eq!(rec.slashed, Quantity::from(2_u64));
-
     let ledger = sblock
         .world
         .governance_slashes()

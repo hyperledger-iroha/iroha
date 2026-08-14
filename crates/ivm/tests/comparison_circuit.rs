@@ -1,6 +1,5 @@
 #![cfg(feature = "ivm_zk_tests")]
 use ivm::halo2::{CmpCircuit, CmpOp};
-
 #[test]
 fn test_slt_sltu_circuit() {
     let slt = CmpCircuit {
@@ -11,7 +10,6 @@ fn test_slt_sltu_circuit() {
         result: 1,
     };
     assert!(slt.verify().is_ok());
-
     let sltu = CmpCircuit {
         op: CmpOp::Sltu,
         a: (-1i64) as u64,
@@ -21,7 +19,6 @@ fn test_slt_sltu_circuit() {
     };
     assert!(sltu.verify().is_ok());
 }
-
 #[test]
 fn test_seq_sne_circuit() {
     let seq = CmpCircuit {
@@ -49,7 +46,6 @@ fn test_seq_sne_circuit() {
     };
     assert!(seq_bits.verify().is_ok());
 }
-
 #[test]
 fn test_cmov_circuit() {
     let cmov_true = CmpCircuit {

@@ -3,12 +3,10 @@
 //! The first release admits confidential movement only through protocol-bound
 //! instructions such as Kagemusha V4. Retired generic and escrow-specific
 //! confidential wires must never re-enter the registry.
-
 use iroha_data_model::{
     instruction_registry,
     isi::offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
 };
-
 #[test]
 fn confidential_surface_excludes_retired_wires() {
     let retired = [
@@ -59,12 +57,10 @@ fn confidential_surface_excludes_retired_wires() {
         .concat(),
     ];
     let registry = instruction_registry::default();
-
     for retired in &retired {
         assert!(!registry.contains(retired));
         assert!(registry.decode(retired, &[]).is_none());
     }
-
     for specialized in [
         std::any::type_name::<TopUpKagemushaRecursiveV4>(),
         std::any::type_name::<RedeemKagemushaRecursiveV4>(),

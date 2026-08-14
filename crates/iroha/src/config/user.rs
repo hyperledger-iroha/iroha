@@ -1,7 +1,12 @@
 //! User configuration view.
-
-use std::{fmt, fs::File, io::Read as _, path::PathBuf, time::Duration};
-
+use crate::{
+    config::BasicAuth,
+    crypto::{KeyPair, PrivateKey, PublicKey},
+    data_model::{
+        name,
+        prelude::{AccountId, ChainId, DomainId, NetworkId},
+    },
+};
 use error_stack::{Report, ResultExt};
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_config_base::{
@@ -12,22 +17,12 @@ use iroha_config_base::{
 use iroha_torii_shared::{network_profile, network_profile_names};
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 use sorafs_orchestrator::AnonymityPolicy;
+use std::{fmt, fs::File, io::Read as _, path::PathBuf, time::Duration};
 use url::Url;
-
-use crate::{
-    config::BasicAuth,
-    crypto::{KeyPair, PrivateKey, PublicKey},
-    data_model::{
-        name,
-        prelude::{AccountId, ChainId, DomainId, NetworkId},
-    },
-};
-
 /// Minimal allowed transaction time-to-live.
 const MIN_TRANSACTION_TTL: Duration = Duration::from_secs(1);
 const MAX_PRIVATE_KEY_FILE_BYTES: u64 = 4 * 1024;
 const MAX_PUBLIC_IDENTITY_FILE_BYTES: u64 = 512;
-
 /// Root of the user-facing configuration loaded from TOML + env.
 #[derive(Clone, Debug, ReadConfig)]
 pub struct Root {
@@ -65,7 +60,6 @@ pub struct Root {
     /// Optional Musubi production-publication platform bindings.
     pub musubi: Musubi,
 }
-
 #[derive(thiserror::Error, Debug)]
 /// Errors found while validating or parsing user configuration.
 pub enum ParseError {
@@ -130,9 +124,7 @@ pub enum ParseError {
     #[error("Invalid exact network identity configuration")]
     InvalidNetworkIdentity,
 }
-
 type ReportResult<T, E> = core::result::Result<T, Report<[E]>>;
-
 fn valid_account_domain_scope_literal(value: &str) -> bool {
     if value.trim().is_empty() || value.trim() != value {
         return false;
@@ -143,7 +135,6 @@ fn valid_account_domain_scope_literal(value: &str) -> bool {
         name::canonicalize_domain_label(value).is_ok()
     }
 }
-
 fn resolve_account_private_key(
     inline: Option<WithOrigin<PrivateKey>>,
     file: Option<WithOrigin<PathBuf>>,
@@ -169,7 +160,6 @@ fn resolve_account_private_key(
             return None;
         }
     };
-
     let path = file.resolve_relative_path();
     let (_, origin) = file.into_tuple();
     if path.as_os_str().is_empty() {
@@ -206,7 +196,6 @@ fn resolve_account_private_key(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         let mode = metadata.permissions().mode();
         if mode & 0o077 != 0 {
             emitter.emit(Report::new(ParseError::KeyPair).attach(format!(
@@ -217,7 +206,6 @@ fn resolve_account_private_key(
             return None;
         }
     }
-
     let mut encoded = String::new();
     if let Err(err) = opened
         .take(MAX_PRIVATE_KEY_FILE_BYTES + 1)
@@ -258,7 +246,6 @@ fn resolve_account_private_key(
         }
     }
 }
-
 fn resolve_network_id_source(
     inline: Option<NetworkId>,
     file: Option<WithOrigin<PathBuf>>,
@@ -280,7 +267,6 @@ fn resolve_network_id_source(
             return None;
         }
     };
-
     let path = file.resolve_relative_path();
     if path.as_os_str().is_empty() {
         emitter.emit(
@@ -321,7 +307,6 @@ fn resolve_network_id_source(
         );
         return None;
     }
-
     let mut encoded = String::new();
     if let Err(err) = opened
         .take(MAX_PUBLIC_IDENTITY_FILE_BYTES + 1)
@@ -379,7 +364,6 @@ fn resolve_network_id_source(
         }
     }
 }
-
 impl Root {
     /// Validates user configuration for semantic errors and constructs a complete
     /// [`super::Config`].
@@ -390,14 +374,12 @@ impl Root {
         self.parse_with_musubi_sections()
             .map(|(configuration, _publication, _fetch)| configuration)
     }
-
     pub(crate) fn parse_with_musubi(
         self,
     ) -> ReportResult<(super::Config, MusubiPublication), ParseError> {
         self.parse_with_musubi_sections()
             .map(|(configuration, publication, _fetch)| (configuration, publication))
     }
-
     #[allow(clippy::too_many_lines)]
     fn parse_with_musubi_sections(
         self,
@@ -433,10 +415,8 @@ impl Root {
                     fetch: musubi_fetch,
                 },
         } = self;
-
         let mut emitter = Emitter::new();
         let network_id = resolve_network_id_source(network_id, network_id_file, &mut emitter);
-
         if tx_ttl.value().get() < MIN_TRANSACTION_TTL {
             emitter.emit(
                 Report::new(ParseError::TxTtlTooSmall)
@@ -446,7 +426,6 @@ impl Root {
                     )),
             )
         }
-
         if tx_timeout.value() > tx_ttl.value() {
             emitter.emit(
                 Report::new(ParseError::TxTimeoutVsTtl)
@@ -459,7 +438,6 @@ impl Root {
                     )),
             )
         }
-
         match torii_url.value().scheme() {
             "http" | "https" => {}
             scheme => emitter.emit(
@@ -526,7 +504,6 @@ impl Root {
             }
             None => chain_discriminant,
         };
-
         let (public_key, public_key_origin) = public_key.into_tuple();
         let private_key = resolve_account_private_key(private_key, private_key_file, &mut emitter);
         if !valid_account_domain_scope_literal(&domain_literal) {
@@ -542,7 +519,6 @@ impl Root {
                 .ok_or_emit(&mut emitter)
         });
         let account_id = AccountId::of(public_key);
-
         let (queue_root_path, queue_root_origin) = queue_root.into_tuple();
         if queue_root_path.as_os_str().is_empty() {
             emitter.emit(
@@ -554,14 +530,12 @@ impl Root {
                     .attach("connect.queue_root must point to the Connect queue root directory"),
             );
         }
-
         let Sorafs {
             alias_cache,
             rollout_phase,
             anonymity_policy,
         } = sorafs;
         let Soracloud { http_witness_file } = soracloud;
-
         let alias_policy = alias_cache.into_policy();
         let rollout_phase_value =
             SorafsRolloutPhase::parse(rollout_phase.as_str()).unwrap_or_else(|| {
@@ -592,12 +566,9 @@ impl Root {
                     phase_default_policy
                 })
             });
-
         emitter.into_result()?;
-
         let network_id =
             network_id.expect("network identity should be valid when emitter succeeds");
-
         Ok((
             super::Config {
                 chain: chain_id,
@@ -622,7 +593,6 @@ impl Root {
         ))
     }
 }
-
 /// Account parameters for building the default signer identity.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct Account {
@@ -648,7 +618,6 @@ pub struct Account {
     )]
     pub chain_discriminant: WithOrigin<u16>,
 }
-
 /// Transaction defaults used by the client.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct Transaction {
@@ -662,7 +631,6 @@ pub struct Transaction {
     #[config(default = "super::DEFAULT_TRANSACTION_NONCE")]
     pub nonce: bool,
 }
-
 /// Connect queue persistence and diagnostics.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct Connect {
@@ -670,7 +638,6 @@ pub struct Connect {
     #[config(default = "super::default_connect_queue_root()")]
     pub queue_root: WithOrigin<PathBuf>,
 }
-
 impl Default for Connect {
     fn default() -> Self {
         Self {
@@ -678,14 +645,12 @@ impl Default for Connect {
         }
     }
 }
-
 /// Soracloud-specific client settings.
 #[derive(Debug, Clone, Default, ReadConfig)]
 pub struct Soracloud {
     /// Optional path to a JSON canonical request witness used for multisig Soracloud HTTP.
     pub http_witness_file: Option<PathBuf>,
 }
-
 /// Musubi-specific platform client configuration.
 #[derive(Clone, Debug, Default, ReadConfig)]
 pub struct Musubi {
@@ -696,13 +661,14 @@ pub struct Musubi {
     /// Optional authenticated `SoraFS` archive-fetch bindings.
     pub fetch: MusubiFetch,
 }
-
 /// Raw authenticated archive-fetch values admitted from `[musubi.fetch]`.
 ///
-/// These fields have no environment mappings. API credentials are named only by
+/// These fields have no environment mappings. Operator credentials are named only by
 /// platform-owned files and are never embedded in this configuration value.
 #[derive(Clone, Default, ReadConfig)]
 pub struct MusubiFetch {
+    /// Exact genesis-lineage identity used to sign stream-token issuance requests.
+    pub network_id: Option<NetworkId>,
     /// Stable, non-secret client label sent to `SoraFS` token issuers.
     pub client_id: Option<String>,
     /// Optional bounded request timeout in milliseconds.
@@ -711,19 +677,18 @@ pub struct MusubiFetch {
     #[config(default)]
     pub provider_gateways: Vec<MusubiFetchProviderGateway>,
 }
-
 impl fmt::Debug for MusubiFetch {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("MusubiFetch")
             .field("configured", &!self.provider_gateways.is_empty())
+            .field("network_id_configured", &self.network_id.is_some())
             .field("provider_gateway_count", &self.provider_gateways.len())
             .field("request_timeout_ms", &self.request_timeout_ms)
             .finish_non_exhaustive()
     }
 }
-
-/// One trusted provider identity, HTTPS origin, and runtime-only API-token file.
+/// One trusted provider identity, HTTPS origin, and runtime-only operator key file.
 #[derive(Clone, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct MusubiFetchProviderGateway {
@@ -731,20 +696,27 @@ pub struct MusubiFetchProviderGateway {
     pub provider_id: String,
     /// Provider-specific `SoraFS` HTTPS origin.
     pub url: String,
-    /// Platform-owned file containing the provider's Torii API token.
-    pub api_token_file: String,
+    /// Canonical operator public key authorized by this provider.
+    pub operator_public_key: String,
+    /// Platform-owned file containing the provider-authorized operator private key.
+    pub operator_private_key_file: String,
 }
-
 impl fmt::Debug for MusubiFetchProviderGateway {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("MusubiFetchProviderGateway")
             .field("provider_id", &self.provider_id)
-            .field("api_token_configured", &!self.api_token_file.is_empty())
+            .field(
+                "operator_public_key_configured",
+                &!self.operator_public_key.is_empty(),
+            )
+            .field(
+                "operator_private_key_configured",
+                &!self.operator_private_key_file.is_empty(),
+            )
             .finish_non_exhaustive()
     }
 }
-
 /// Raw production-publication values admitted from `[musubi.publication]`.
 ///
 /// These fields deliberately have no environment mappings. The Musubi runtime performs the
@@ -769,7 +741,6 @@ pub struct MusubiPublication {
     /// Optional path to a canonical public namespace-delegation proof.
     pub namespace_delegation_file: Option<String>,
 }
-
 impl fmt::Debug for MusubiPublication {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -784,7 +755,6 @@ impl fmt::Debug for MusubiPublication {
             .finish_non_exhaustive()
     }
 }
-
 /// One public provider identity and private provider-specific readback HTTPS base.
 #[derive(Clone, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -794,7 +764,6 @@ pub struct MusubiPublicationProviderGateway {
     /// Provider-specific authenticated readback HTTPS base URL.
     pub url: String,
 }
-
 impl fmt::Debug for MusubiPublicationProviderGateway {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -803,7 +772,6 @@ impl fmt::Debug for MusubiPublicationProviderGateway {
             .finish_non_exhaustive()
     }
 }
-
 /// SoraFS-specific configuration.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct Sorafs {
@@ -816,7 +784,6 @@ pub struct Sorafs {
     /// Default `SoraNet` anonymity policy stage for gateway fetches.
     pub anonymity_policy: Option<String>,
 }
-
 impl Default for Sorafs {
     fn default() -> Self {
         Self {
@@ -826,7 +793,6 @@ impl Default for Sorafs {
         }
     }
 }
-
 /// Alias cache policy knobs surfaced to clients.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct AliasCache {
@@ -855,7 +821,6 @@ pub struct AliasCache {
     #[config(default = "defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS")]
     pub governance_grace: u64,
 }
-
 impl Default for AliasCache {
     fn default() -> Self {
         Self {
@@ -870,7 +835,6 @@ impl Default for AliasCache {
         }
     }
 }
-
 impl AliasCache {
     fn into_policy(self) -> AliasCachePolicy {
         AliasCachePolicy::new(
@@ -885,15 +849,11 @@ impl AliasCache {
         )
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf, str::FromStr, time::Duration};
-
-    use iroha_crypto::Algorithm;
-
     use super::*;
-
+    use iroha_crypto::Algorithm;
+    use std::{fs, path::PathBuf, str::FromStr, time::Duration};
     fn root_with_timeouts(ttl: Duration, timeout: Duration) -> Root {
         let key_pair =
             KeyPair::try_from_seed(b"iroha:config:user:tests".to_vec(), Algorithm::Ed25519)
@@ -938,14 +898,12 @@ mod tests {
             musubi: Musubi::default(),
         }
     }
-
     #[test]
     fn root_with_timeouts_uses_checked_fixture_seed_derivation() {
         let root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
         let expected =
             KeyPair::try_from_seed(b"iroha:config:user:tests".to_vec(), Algorithm::Ed25519)
                 .expect("derive expected user-config fixture key");
-
         assert_eq!(root.account.public_key.value(), expected.public_key());
         assert_eq!(
             root.account
@@ -956,7 +914,6 @@ mod tests {
             expected.private_key()
         );
     }
-
     #[test]
     fn network_id_file_supplies_the_exact_signing_domain() {
         let expected = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
@@ -967,17 +924,14 @@ mod tests {
         let identity_file = tempfile::NamedTempFile::new().expect("identity file");
         fs::write(identity_file.path(), format!("{expected}\n")).expect("write identity");
         let mut emitter = Emitter::new();
-
         let resolved = resolve_network_id_source(
             None,
             Some(WithOrigin::inline(identity_file.path().to_path_buf())),
             &mut emitter,
         );
-
         assert_eq!(resolved, Some(expected));
         assert!(emitter.into_result().is_ok());
     }
-
     #[test]
     fn network_id_rejects_ambiguous_inline_and_file_sources() {
         let expected = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
@@ -988,7 +942,6 @@ mod tests {
         let identity_file = tempfile::NamedTempFile::new().expect("identity file");
         fs::write(identity_file.path(), format!("{expected}\n")).expect("write identity");
         let mut emitter = Emitter::new();
-
         assert!(
             resolve_network_id_source(
                 Some(expected),
@@ -999,7 +952,6 @@ mod tests {
         );
         assert!(emitter.into_result().is_err());
     }
-
     #[test]
     fn parse_accepts_timeout_not_exceeding_ttl() {
         let ttl = Duration::from_secs(5);
@@ -1007,45 +959,35 @@ mod tests {
         let config = root_with_timeouts(ttl, timeout)
             .parse()
             .expect("configuration should be valid");
-
         assert_eq!(config.transaction_ttl, ttl);
         assert_eq!(config.transaction_status_timeout, timeout);
     }
-
     #[test]
     fn parse_preserves_account_chain_discriminant() {
         let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
         root.account.profile = None;
         root.account.chain_discriminant = WithOrigin::inline(777);
-
         let config = root.parse().expect("configuration should be valid");
-
         assert_eq!(config.account_chain_discriminant, 777);
     }
-
     #[test]
     fn parse_uses_account_profile_chain_discriminant() {
         let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
         root.account.profile = Some(iroha_torii_shared::NETWORK_PROFILE_TAIRA.to_owned());
-
         let config = root.parse().expect("configuration should be valid");
-
         assert_eq!(
             config.account_chain_discriminant,
             iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT
         );
     }
-
     #[test]
     fn parse_rejects_account_profile_discriminant_mismatch() {
         let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
         root.account.profile = Some(iroha_torii_shared::NETWORK_PROFILE_TAIRA.to_owned());
         root.account.chain_discriminant = WithOrigin::inline(753);
-
         let err = root
             .parse()
             .expect_err("profile/discriminant mismatch should be rejected");
-
         let parse_errors: Vec<_> = err
             .frames()
             .filter_map(|frame| frame.downcast_ref::<ParseError>())
@@ -1066,29 +1008,23 @@ mod tests {
             "expected profile mismatch error, found {parse_errors:?}"
         );
     }
-
     #[test]
     fn parse_uses_default_account_chain_discriminant_without_profile() {
         let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
         root.account.profile = None;
-
         let config = root.parse().expect("configuration should be valid");
-
         assert_eq!(
             config.account_chain_discriminant,
             defaults::common::chain_discriminant()
         );
     }
-
     #[test]
     fn parse_rejects_unknown_account_profile() {
         let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
         root.account.profile = Some("unknownnet".to_owned());
-
         let err = root
             .parse()
             .expect_err("unknown profile should be rejected");
-
         let parse_errors: Vec<_> = err
             .frames()
             .filter_map(|frame| frame.downcast_ref::<ParseError>())
@@ -1103,35 +1039,27 @@ mod tests {
             "expected invalid profile error, found {parse_errors:?}"
         );
     }
-
     #[test]
     fn parse_preserves_torii_request_timeout() {
         let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
         let timeout = Duration::from_secs(7);
         root.torii_request_timeout_ms = WithOrigin::inline(DurationMs::from(timeout));
-
         let config = root.parse().expect("configuration should be valid");
-
         assert_eq!(config.torii_request_timeout, timeout);
     }
-
     #[test]
     fn parse_preserves_soracloud_http_witness_file() {
         let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
         let witness_file = PathBuf::from("/tmp/soracloud-witness.json");
         root.soracloud.http_witness_file = Some(witness_file.clone());
-
         let config = root.parse().expect("configuration should be valid");
-
         assert_eq!(config.soracloud_http_witness_file, Some(witness_file));
     }
-
     #[test]
     fn parse_rejects_timeout_exceeding_ttl() {
         let err = root_with_timeouts(Duration::from_secs(2), Duration::from_secs(3))
             .parse()
             .expect_err("timeout longer than TTL should be rejected");
-
         let parse_errors: Vec<_> = err
             .frames()
             .filter_map(|frame| frame.downcast_ref::<ParseError>())
@@ -1144,12 +1072,10 @@ mod tests {
         );
         assert!(format!("{err:?}").contains("transaction status timeout must not exceed TTL"));
     }
-
     #[test]
     fn parse_rejects_empty_connect_queue_root() {
         let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
         root.connect.queue_root = WithOrigin::inline(PathBuf::new());
-
         let err = root
             .parse()
             .expect_err("empty connect.queue_root should be rejected");
@@ -1164,23 +1090,19 @@ mod tests {
             "expected `ParseError::EmptyConnectQueueRoot`, found {parse_errors:?}"
         );
     }
-
     #[test]
     fn parse_accepts_dataspace_account_domain_scope() {
         let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
         root.account.domain = "wonderland".to_owned();
-
         let config = root
             .parse()
             .expect("bare dataspace account scope should be accepted");
         assert_eq!(config.chain.as_str(), "test-chain");
     }
-
     #[test]
     fn parse_rejects_invalid_account_domain_scope_without_panicking() {
         let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
         root.account.domain = "wonderland universal".to_owned();
-
         let err = root
             .parse()
             .expect_err("invalid account scope should be rejected");

@@ -1,7 +1,4 @@
 //! End-to-end checks for the sorafs-node CLI helpers.
-
-use std::{fs, io, path::Path};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use ed25519_dalek::{Signer as _, SigningKey};
 use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3, compute_por_root};
@@ -13,12 +10,11 @@ use sorafs_manifest::{
     },
     provider_advert::{AdvertSignature, SignatureAlgorithm},
 };
+use std::{fs, io, path::Path};
 use tempfile::TempDir;
-
 fn ingest_tests_enabled() -> bool {
     std::env::var("SORAFS_NODE_SKIP_INGEST_TESTS").map_or(true, |value| value != "1")
 }
-
 fn build_manifest(
     payload: &[u8],
 ) -> Result<(CarBuildPlan, sorafs_manifest::ManifestV1), Box<dyn std::error::Error>> {
@@ -39,14 +35,12 @@ fn build_manifest(
         .build()?;
     Ok((plan, manifest))
 }
-
 #[test]
 fn sorafs_node_cli_help_documents_only_canonical_ingest_spellings()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut command = cargo_bin_cmd!("sorafs-node");
     let assertion = command.arg("--help").assert().success();
     let stderr = String::from_utf8(assertion.get_output().stderr.clone())?;
-
     assert!(stderr.contains(
         "ingest --data-dir=<dir> --manifest=<path> --payload=<path> [--plan-json-out=<path>]"
     ));
@@ -54,21 +48,16 @@ fn sorafs_node_cli_help_documents_only_canonical_ingest_spellings()
         "ingest por --data-dir=<dir> --challenge=<path> --proof=<path> [--verdict=<path>] [--manifest-id=<hex>] [--json-out=<path>]"
     ));
     assert!(!stderr.contains("ingest [manifest]"));
-
     Ok(())
 }
-
 #[test]
 fn sorafs_node_cli_rejects_manifest_subcommand_alias() -> Result<(), Box<dyn std::error::Error>> {
     let mut command = cargo_bin_cmd!("sorafs-node");
     let assertion = command.arg("ingest").arg("manifest").assert().failure();
     let stderr = String::from_utf8(assertion.get_output().stderr.clone())?;
-
     assert_eq!(stderr, "error: unknown option: manifest\n");
-
     Ok(())
 }
-
 #[test]
 fn sorafs_node_cli_rejects_por_manifest_option_alias() -> Result<(), Box<dyn std::error::Error>> {
     let mut command = cargo_bin_cmd!("sorafs-node");
@@ -79,32 +68,25 @@ fn sorafs_node_cli_rejects_por_manifest_option_alias() -> Result<(), Box<dyn std
         .assert()
         .failure();
     let stderr = String::from_utf8(assertion.get_output().stderr.clone())?;
-
     assert_eq!(stderr, "error: unknown option: --manifest=00\n");
-
     Ok(())
 }
-
 #[test]
 fn sorafs_node_cli_ingest_and_export_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
     if !ingest_tests_enabled() {
         eprintln!("skipping ingest roundtrip (SORAFS_NODE_SKIP_INGEST_TESTS=1)");
         return Ok(());
     }
-
     let temp_dir = TempDir::new()?;
     let temp_path = temp_dir.path().canonicalize()?;
     let storage_dir = temp_path.join("storage");
-
     let payload = b"sorafs-node CLI integration payload";
     let (_plan, manifest) = build_manifest(payload)?;
     let manifest_bytes = norito::to_bytes(&manifest)?;
-
     let manifest_path = temp_path.join("manifest.to");
     fs::write(&manifest_path, &manifest_bytes)?;
     let payload_path = temp_path.join("payload.bin");
     fs::write(&payload_path, payload)?;
-
     let ingest_plan_path = temp_path.join("ingest_plan.json");
     let mut ingest = cargo_bin_cmd!("sorafs-node");
     let ingest_assert = ingest
@@ -115,7 +97,6 @@ fn sorafs_node_cli_ingest_and_export_roundtrip() -> Result<(), Box<dyn std::erro
         .arg(format!("--plan-json-out={}", ingest_plan_path.display()))
         .assert()
         .success();
-
     let ingest_stdout = String::from_utf8(ingest_assert.get_output().stdout.clone())?;
     let ingest_json: norito::json::Value =
         norito::json::from_str(ingest_stdout.trim()).expect("ingest JSON");
@@ -124,11 +105,9 @@ fn sorafs_node_cli_ingest_and_export_roundtrip() -> Result<(), Box<dyn std::erro
         .and_then(norito::json::Value::as_str)
         .expect("manifest_id_hex present")
         .to_string();
-
     assert!(Path::new(&ingest_plan_path).exists());
     let ingest_plan_value: norito::json::Value =
         norito::json::from_slice(&fs::read(&ingest_plan_path)?)?;
-
     let export_manifest_path = temp_path.join("export_manifest.to");
     let export_payload_path = temp_path.join("export_payload.bin");
     let export_plan_path = temp_path.join("export_plan.json");
@@ -142,7 +121,6 @@ fn sorafs_node_cli_ingest_and_export_roundtrip() -> Result<(), Box<dyn std::erro
         .arg(format!("--plan-json-out={}", export_plan_path.display()))
         .assert()
         .success();
-
     let export_stdout = String::from_utf8(export_assert.get_output().stdout.clone())?;
     let export_json: norito::json::Value =
         norito::json::from_str(export_stdout.trim()).expect("export JSON");
@@ -152,31 +130,25 @@ fn sorafs_node_cli_ingest_and_export_roundtrip() -> Result<(), Box<dyn std::erro
             .and_then(norito::json::Value::as_str),
         Some(manifest_id.as_str())
     );
-
     let exported_manifest = fs::read(&export_manifest_path)?;
     let exported_payload = fs::read(&export_payload_path)?;
     assert_eq!(manifest_bytes, exported_manifest);
     assert_eq!(payload.to_vec(), exported_payload);
-
     let export_plan_value: norito::json::Value =
         norito::json::from_slice(&fs::read(&export_plan_path)?)?;
     assert_eq!(ingest_plan_value, export_plan_value);
-
     Ok(())
 }
-
 #[test]
 fn sorafs_node_cli_ingest_por_flow() -> Result<(), Box<dyn std::error::Error>> {
     if !ingest_tests_enabled() {
         eprintln!("skipping PoR ingest flow (SORAFS_NODE_SKIP_INGEST_TESTS=1)");
         return Ok(());
     }
-
     let temp_dir = TempDir::new()?;
     let temp_path = temp_dir.path().canonicalize()?;
     let storage_dir = temp_path.join("storage");
     fs::create_dir_all(&storage_dir)?;
-
     let base = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
@@ -185,7 +157,6 @@ fn sorafs_node_cli_ingest_por_flow() -> Result<(), Box<dyn std::error::Error>> {
     let challenge_path = base.join("challenge_v1.to");
     let proof_path = base.join("proof_v1.to");
     let verdict_path = base.join("verdict_v1.to");
-
     let mut cmd = cargo_bin_cmd!("sorafs-node");
     let assert = cmd
         .arg("ingest")
@@ -196,11 +167,9 @@ fn sorafs_node_cli_ingest_por_flow() -> Result<(), Box<dyn std::error::Error>> {
         .arg(format!("--verdict={}", verdict_path.display()))
         .assert()
         .success();
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone())?;
     let value: norito::json::Value =
         norito::json::from_str(stdout.trim()).expect("por ingest JSON output");
-
     assert_eq!(
         value
             .get("manifest_digest_hex")
@@ -227,30 +196,24 @@ fn sorafs_node_cli_ingest_por_flow() -> Result<(), Box<dyn std::error::Error>> {
             .and_then(norito::json::Value::as_u64),
         Some(3)
     );
-
     Ok(())
 }
-
 #[test]
 fn sorafs_node_cli_ingest_por_replays_proof() -> Result<(), Box<dyn std::error::Error>> {
     if !ingest_tests_enabled() {
         eprintln!("skipping PoR replay (SORAFS_NODE_SKIP_INGEST_TESTS=1)");
         return Ok(());
     }
-
     let temp_dir = TempDir::new()?;
     let temp_path = temp_dir.path().canonicalize()?;
     let storage_dir = temp_path.join("storage");
-
     let payload = b"sorafs-node PoR replay payload";
     let (_plan, manifest) = build_manifest(payload)?;
     let manifest_bytes = norito::to_bytes(&manifest)?;
-
     let manifest_path = temp_path.join("manifest_por.to");
     fs::write(&manifest_path, &manifest_bytes)?;
     let payload_path = temp_path.join("payload_por.bin");
     fs::write(&payload_path, payload)?;
-
     let mut ingest = cargo_bin_cmd!("sorafs-node");
     let ingest_assert = ingest
         .arg("ingest")
@@ -259,7 +222,6 @@ fn sorafs_node_cli_ingest_por_replays_proof() -> Result<(), Box<dyn std::error::
         .arg(format!("--payload={}", payload_path.display()))
         .assert()
         .success();
-
     let ingest_stdout = String::from_utf8(ingest_assert.get_output().stdout.clone())?;
     let ingest_json: norito::json::Value =
         norito::json::from_str(ingest_stdout.trim()).expect("ingest JSON");
@@ -268,7 +230,6 @@ fn sorafs_node_cli_ingest_por_replays_proof() -> Result<(), Box<dyn std::error::
         .and_then(norito::json::Value::as_str)
         .expect("manifest_id present")
         .to_string();
-
     let mut challenge = fixture_challenge();
     let manifest_digest: [u8; 32] = manifest.digest()?.into();
     challenge.manifest_digest = manifest_digest;
@@ -286,12 +247,10 @@ fn sorafs_node_cli_ingest_por_replays_proof() -> Result<(), Box<dyn std::error::
         challenge.drand_round,
     );
     let proof = fixture_proof(&challenge);
-
     let challenge_path = temp_path.join("challenge.to");
     let proof_path = temp_path.join("proof.to");
     fs::write(&challenge_path, norito::to_bytes(&challenge)?)?;
     fs::write(&proof_path, norito::to_bytes(&proof)?)?;
-
     let mut por = cargo_bin_cmd!("sorafs-node");
     let por_assert = por
         .arg("ingest")
@@ -302,7 +261,6 @@ fn sorafs_node_cli_ingest_por_replays_proof() -> Result<(), Box<dyn std::error::
         .arg(format!("--proof={}", proof_path.display()))
         .assert()
         .success();
-
     let por_stdout = String::from_utf8(por_assert.get_output().stdout.clone())?;
     let por_json: norito::json::Value =
         norito::json::from_str(por_stdout.trim()).expect("por JSON");
@@ -317,10 +275,8 @@ fn sorafs_node_cli_ingest_por_replays_proof() -> Result<(), Box<dyn std::error::
             .and_then(norito::json::Value::as_str),
         Some(digest_hex.as_str())
     );
-
     Ok(())
 }
-
 fn fixture_challenge() -> PorChallengeV1 {
     let manifest_digest = [2; 32];
     let provider_id = [3; 32];
@@ -357,7 +313,6 @@ fn fixture_challenge() -> PorChallengeV1 {
         deadline_at: 1_700_000_600,
     }
 }
-
 fn fixture_proof(challenge: &PorChallengeV1) -> PorProofV1 {
     let mut proof = PorProofV1 {
         version: POR_PROOF_VERSION_V1,

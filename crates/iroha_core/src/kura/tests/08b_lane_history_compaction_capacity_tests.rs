@@ -5,7 +5,6 @@ struct MergeReceiptCompactionFixture {
     descriptor: LaneBlockDescriptorV1,
     frontier: LaneMergeApplicationFrontierV1,
 }
-
 fn merge_receipt_compaction_fixture() -> MergeReceiptCompactionFixture {
     let temp_dir = TempDir::new().expect("create temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -22,7 +21,6 @@ fn merge_receipt_compaction_fixture() -> MergeReceiptCompactionFixture {
     let descriptor = execution.proposal.descriptor.clone();
     kura.install_lane_incarnation_marker_for_test(&lane_entry, descriptor.lane_incarnation, 0)
         .expect("install merge receipt lane marker");
-
     let mut blocks = DummyBlocks::new();
     let parent = blocks.next();
     let raw_carrier = blocks.next();
@@ -87,7 +85,6 @@ fn merge_receipt_compaction_fixture() -> MergeReceiptCompactionFixture {
         .is_some(),
         "the compact cursor must revalidate against the exact merge entry and carrier"
     );
-
     MergeReceiptCompactionFixture {
         temp_dir,
         lane_entry,
@@ -96,7 +93,6 @@ fn merge_receipt_compaction_fixture() -> MergeReceiptCompactionFixture {
         frontier,
     }
 }
-
 fn compact_fixture_lane_histories(
     kura: &Kura,
     lane_entry: &LaneConfigEntry,
@@ -115,7 +111,6 @@ fn compact_fixture_lane_histories(
         frontier,
     )
 }
-
 fn ensure_merge_receipt_lane_artifact_pair(
     fixture: &MergeReceiptCompactionFixture,
 ) -> (PathBuf, PathBuf) {
@@ -153,7 +148,6 @@ fn ensure_merge_receipt_lane_artifact_pair(
     }
     (data_path, index_path)
 }
-
 fn assert_terminal_frontier_recovery_error(error: Error, data_path: &Path) {
     match error {
         Error::IO(source, path) => {
@@ -169,7 +163,6 @@ fn assert_terminal_frontier_recovery_error(error: Error, data_path: &Path) {
         other => panic!("unexpected malformed compaction error: {other:?}"),
     }
 }
-
 #[test]
 fn lane_history_compaction_recovers_crash_temp_before_tight_capacity_refusal() {
     let mut fixture = merge_receipt_compaction_fixture();
@@ -191,7 +184,6 @@ fn lane_history_compaction_recovers_crash_temp_before_tight_capacity_refusal() {
         .refresh_disk_usage_bytes()
         .expect("refresh usage with staged compaction temps");
     let total_with_temps = fixture.kura.disk_usage_total.load(Ordering::Relaxed);
-
     Arc::get_mut(&mut fixture.kura)
         .expect("exclusive Kura before tight-cap compaction recovery")
         .max_disk_usage_bytes = 1;
@@ -242,7 +234,6 @@ fn lane_history_compaction_recovers_crash_temp_before_tight_capacity_refusal() {
             .expect("scan total bytes after recovery"),
         total_after_recovery,
     );
-
     let recovered_history = snapshot_regular_files_recursively(fixture.temp_dir.path());
     fixture
         .kura
@@ -262,7 +253,6 @@ fn lane_history_compaction_recovers_crash_temp_before_tight_capacity_refusal() {
         "startup and retirement must retain recovered history when compaction is capacity-blocked",
     );
 }
-
 #[test]
 fn lane_history_compaction_rejects_data_only_temp_before_capacity_refusal() {
     let mut fixture = merge_receipt_compaction_fixture();
@@ -281,7 +271,6 @@ fn lane_history_compaction_rejects_data_only_temp_before_capacity_refusal() {
     Arc::get_mut(&mut fixture.kura)
         .expect("exclusive Kura before malformed tight-cap recovery")
         .max_disk_usage_bytes = 1;
-
     let error =
         compact_fixture_lane_histories(&fixture.kura, &fixture.lane_entry, &fixture.frontier)
             .expect_err("data-only crash residue must fail before CapacityBlocked");
@@ -304,7 +293,6 @@ fn lane_history_compaction_rejects_data_only_temp_before_capacity_refusal() {
         "startup must not downgrade data-only rewrite residue to CapacityBlocked",
     );
 }
-
 #[test]
 fn lane_history_compaction_rejects_corrupt_temp_index_before_capacity_refusal() {
     let mut fixture = merge_receipt_compaction_fixture();
@@ -323,7 +311,6 @@ fn lane_history_compaction_rejects_corrupt_temp_index_before_capacity_refusal() 
     Arc::get_mut(&mut fixture.kura)
         .expect("exclusive Kura before corrupt tight-cap recovery")
         .max_disk_usage_bytes = 1;
-
     let error =
         compact_fixture_lane_histories(&fixture.kura, &fixture.lane_entry, &fixture.frontier)
             .expect_err("corrupt temp index must fail before CapacityBlocked");

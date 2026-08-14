@@ -11,13 +11,18 @@
 //! This module constructs only fresh successor bodies.  A reducer lock must be
 //! satisfied by loading and re-proposing the exact durable body, never by
 //! rebuilding it here.
-
-use std::{
-    collections::{BTreeSet, VecDeque},
-    num::{NonZeroU64, NonZeroUsize},
-};
-
 use super::v2_core::EventTag;
+use super::{
+    output_guard::ConsensusOutputGuard,
+    v2::LocalProposalDirective,
+    v2_chunks::{EncodedV2Payload, encode_payload},
+};
+use crate::{
+    block::BlockBuilder,
+    queue::{GlobalQueueSelectionLease, Queue, RoutingPlan, execution_context_for_routing_plan},
+    state::{State, StateReadOnly, WorldReadOnly, compute_confidential_feature_digest},
+    tx::AcceptedTransaction,
+};
 use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     block::{
@@ -33,20 +38,11 @@ use iroha_data_model::{
     transaction::TransactionEntrypoint,
 };
 use iroha_primitives::time::TimeSource;
+use std::{
+    collections::{BTreeSet, VecDeque},
+    num::{NonZeroU64, NonZeroUsize},
+};
 use thiserror::Error;
-
-use super::{
-    output_guard::ConsensusOutputGuard,
-    v2::LocalProposalDirective,
-    v2_chunks::{EncodedV2Payload, encode_payload},
-};
-use crate::{
-    block::BlockBuilder,
-    queue::{GlobalQueueSelectionLease, Queue, RoutingPlan, execution_context_for_routing_plan},
-    state::{State, StateReadOnly, WorldReadOnly, compute_confidential_feature_digest},
-    tx::AcceptedTransaction,
-};
-
 /// Hard local bounds applied to one candidate-assembly attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CandidateLimits {
@@ -54,7 +50,6 @@ pub(crate) struct CandidateLimits {
     max_payload_bytes: NonZeroUsize,
     max_queue_scan: NonZeroUsize,
 }
-
 impl CandidateLimits {
     /// Construct explicit transaction, exact-body, and queue-scan bounds.
     ///
@@ -79,23 +74,19 @@ impl CandidateLimits {
             max_queue_scan,
         })
     }
-
     /// Maximum entries selected across one complete carrier candidate.
     pub(crate) const fn max_transactions(self) -> NonZeroUsize {
         self.max_transactions
     }
-
     /// Maximum canonical carrier payload bytes.
     pub(crate) const fn max_payload_bytes(self) -> NonZeroUsize {
         self.max_payload_bytes
     }
-
     /// Maximum FIFO entries inspected during one selection attempt.
     pub(crate) const fn max_queue_scan(self) -> NonZeroUsize {
         self.max_queue_scan
     }
 }
-
 /// Deterministic block attachments prepared outside the global reducer.
 ///
 /// DA proof policies and the confidential-feature digest are intentionally not
@@ -128,7 +119,6 @@ pub(crate) struct CandidateAttachments {
     /// Only its compact certified reference is embedded in the block.
     pub(crate) certified_merge_entry: Option<MergeLedgerEntry>,
 }
-
 /// Read-only description of one canonically ordered proposal candidate.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CandidateDescriptor<'candidate> {
@@ -136,7 +126,6 @@ pub(crate) struct CandidateDescriptor<'candidate> {
     routing_plan: &'candidate RoutingPlan,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 }
-
 impl<'candidate> CandidateDescriptor<'candidate> {
     /// Build a read-only descriptor from one exact accepted entrypoint and
     /// routing plan.
@@ -150,23 +139,19 @@ impl<'candidate> CandidateDescriptor<'candidate> {
             entrypoint_hash: transaction.hash_as_entrypoint(),
         }
     }
-
     /// Borrow the accepted queue transaction.
     pub(crate) const fn transaction(self) -> &'candidate AcceptedTransaction<'static> {
         self.transaction
     }
-
     /// Borrow the full coordinator/participant routing plan.
     pub(crate) const fn routing_plan(self) -> &'candidate RoutingPlan {
         self.routing_plan
     }
-
     /// Canonical entrypoint hash used to bind routing and execution context.
     pub(crate) const fn entrypoint_hash(self) -> HashOf<TransactionEntrypoint> {
         self.entrypoint_hash
     }
 }
-
 /// Lane-local, Native AMX, and autonomous control-anchor material for a candidate.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PreparedCandidateWork {
@@ -179,7 +164,6 @@ pub(crate) struct PreparedCandidateWork {
     /// anchored without ordinary global execution.
     pub(crate) autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
 }
-
 impl PreparedCandidateWork {
     /// Construct work for a batch containing only available single-route entries.
     #[must_use]
@@ -198,7 +182,6 @@ pub(crate) struct CandidateWorkUnavailable {
     indices: BTreeSet<usize>,
     reason: String,
 }
-
 impl CandidateWorkUnavailable {
     /// Construct an unavailable-work result.
     #[must_use]
@@ -208,18 +191,15 @@ impl CandidateWorkUnavailable {
             reason: reason.into(),
         }
     }
-
     /// Candidate indices which must remain queued for a later height/view.
     pub(crate) fn indices(&self) -> &BTreeSet<usize> {
         &self.indices
     }
-
     /// Stable diagnostic supplied by the lane/AMX adapter.
     pub(crate) fn reason(&self) -> &str {
         &self.reason
     }
 }
-
 /// Snapshot adapter for lane-local and Native AMX readiness.
 ///
 /// Implementations must be deterministic for one committed state and input
@@ -239,7 +219,6 @@ pub(crate) trait CandidateWorkProvider {
         candidates: &[CandidateDescriptor<'_>],
     ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable>;
 }
-
 /// Exact parent authority available to the first executable candidate.
 ///
 /// Ordinary heights require the complete parent body and CommitQC. Exactly one context imported
@@ -251,7 +230,6 @@ pub(crate) enum CandidateParent<'parent> {
     /// Audited parent whose body predates the executable v2 ledger.
     Snapshot(&'parent wire::SnapshotBootstrapAnchor),
 }
-
 impl CandidateParent<'_> {
     fn height(self) -> wire::Height {
         match self {
@@ -259,7 +237,6 @@ impl CandidateParent<'_> {
             Self::Snapshot(anchor) => anchor.snapshot_height,
         }
     }
-
     pub(crate) fn hash(self) -> HashOf<iroha_data_model::block::BlockHeader> {
         match self {
             Self::Block(block) => block.hash(),
@@ -267,7 +244,6 @@ impl CandidateParent<'_> {
         }
     }
 }
-
 /// Conservative provider used when no certified Native AMX snapshot exists.
 ///
 /// Single-route transactions remain eligible. Native AMX transactions are
@@ -276,7 +252,6 @@ impl CandidateParent<'_> {
 #[derive(Clone, Copy, Debug, Default)]
 #[cfg(test)]
 pub(crate) struct SingleRouteWorkProvider;
-
 #[cfg(test)]
 impl CandidateWorkProvider for SingleRouteWorkProvider {
     fn prepare(
@@ -319,7 +294,6 @@ pub(crate) struct CandidateRequest<'request, Work> {
     /// Frozen readiness adapter for lane-local and Native AMX work.
     pub(crate) work_provider: Work,
 }
-
 /// Bounded proposal-selection diagnostics.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct CandidateScanReport {
@@ -338,7 +312,6 @@ pub(crate) struct CandidateScanReport {
     /// External transactions included in the final body.
     pub(crate) selected: usize,
 }
-
 /// Result of one bounded fresh-candidate assembly attempt.
 #[derive(Debug)]
 pub(crate) enum CandidateAssemblyOutcome {
@@ -347,7 +320,6 @@ pub(crate) enum CandidateAssemblyOutcome {
     /// The queue snapshot and internal providers contained no proposal work.
     NoProposalWork(CandidateScanReport),
 }
-
 /// A canonical successor body and its deterministic v2 dispersal plan.
 #[derive(Debug)]
 pub(crate) struct AssembledV2Candidate {
@@ -359,23 +331,19 @@ pub(crate) struct AssembledV2Candidate {
     scan_report: CandidateScanReport,
     _selection_lease: GlobalQueueSelectionLease,
 }
-
 impl AssembledV2Candidate {
     /// Exact reducer incarnation which authorized construction.
     pub(crate) const fn tag(&self) -> EventTag {
         self.tag
     }
-
     /// Borrow the signed canonical successor block.
     pub(crate) const fn block(&self) -> &SignedBlock {
         &self.block
     }
-
     /// Bounded queue-selection diagnostics.
     pub(crate) const fn scan_report(&self) -> CandidateScanReport {
         self.scan_report
     }
-
     /// Consume the candidate into the pieces used by body storage and transport.
     pub(crate) fn into_parts(
         self,
@@ -397,7 +365,6 @@ impl AssembledV2Candidate {
         )
     }
 }
-
 #[derive(Clone, Debug)]
 struct CandidateRecord {
     transaction: AcceptedTransaction<'static>,
@@ -406,7 +373,6 @@ struct CandidateRecord {
     encoded_len: usize,
     source_ordinal: usize,
 }
-
 impl CandidateRecord {
     fn descriptor(&self) -> CandidateDescriptor<'_> {
         CandidateDescriptor {
@@ -416,14 +382,12 @@ impl CandidateRecord {
         }
     }
 }
-
 /// Non-destructive bounded candidate assembler.
 #[derive(Clone, Debug)]
 pub(crate) struct V2CandidateAssembler {
     limits: CandidateLimits,
     time_source: TimeSource,
 }
-
 impl V2CandidateAssembler {
     /// Construct an assembler with explicit bounds and a production/mock clock.
     #[must_use]
@@ -433,7 +397,6 @@ impl V2CandidateAssembler {
             time_source,
         }
     }
-
     /// Assemble, sign, exactly encode, and deterministically chunk one fresh
     /// successor body.
     ///
@@ -455,7 +418,6 @@ impl V2CandidateAssembler {
         if request.queue.transaction_selection_durability_faulted() {
             return Err(CandidateError::RestartRequired);
         }
-
         let tag = request.directive.tag();
         let view = tag.view();
         let exact_payload_limit = self.limits.max_payload_bytes.get().min(
@@ -489,7 +451,6 @@ impl V2CandidateAssembler {
             exact_payload_limit,
             &mut report,
         );
-
         // Every iteration either returns or permanently removes at least one
         // of the at-most `max_queue_scan` inspected records.
         let max_attempts = self.limits.max_queue_scan.get().saturating_add(1);
@@ -521,7 +482,6 @@ impl V2CandidateAssembler {
                     }
                 };
             validate_prepared_work(request.context, view, &descriptors, &prepared_work)?;
-
             report.selected = selected.len();
             if !candidate_has_proposal_work(&selected, &request.attachments, &prepared_work) {
                 if request.queue.transaction_selection_durability_faulted() {
@@ -530,7 +490,6 @@ impl V2CandidateAssembler {
                 validate_request(&request)?;
                 return Ok(CandidateAssemblyOutcome::NoProposalWork(report));
             }
-
             let signing = request
                 .output_guard
                 .begin_fail_stop_operation()
@@ -552,7 +511,6 @@ impl V2CandidateAssembler {
             ) {
                 return Err(CandidateError::BuiltWithoutProposalWork);
             }
-
             let chunk_count = encoded_chunk_count(request.context.da_layout, canonical_wire.len())?;
             let within_size = canonical_wire.len() <= exact_payload_limit;
             let within_chunks = chunk_count
@@ -573,7 +531,6 @@ impl V2CandidateAssembler {
                     max_chunks: request.context.da_layout.max_chunk_count,
                 });
             }
-
             let subject = wire::BlockSubject {
                 parent_block_hash: Some(request.parent.hash()),
                 block_hash: block.hash(),
@@ -586,12 +543,10 @@ impl V2CandidateAssembler {
             };
             let encoded_payload = encode_payload(request.context, round, subject, &canonical_wire)
                 .map_err(|error| CandidateError::PayloadEncoding(error.to_string()))?;
-
             // The height owner is serialized in production, but recheck the
             // committed tip after all bounded external work so an accidental
             // concurrent block-sync commit cannot publish a stale candidate.
             validate_request(&request)?;
-
             report.selected = selected.len();
             let selected_hashes = selected
                 .iter()
@@ -611,10 +566,8 @@ impl V2CandidateAssembler {
                 _selection_lease: selection_lease,
             }));
         }
-
         Err(CandidateError::AssemblyDidNotConverge)
     }
-
     fn snapshot_routable_candidates(
         &self,
         queue: &Queue,
@@ -632,7 +585,6 @@ impl V2CandidateAssembler {
             .as_ref()
             .and_then(|entry| entry.execution_batch.as_ref())
             .is_some();
-
         let mut records = Vec::with_capacity(pending.len());
         for (source_ordinal, transaction) in pending.into_iter().enumerate() {
             report.inspected = report.inspected.saturating_add(1);
@@ -668,7 +620,6 @@ impl V2CandidateAssembler {
         }
         Ok(records)
     }
-
     #[allow(clippy::too_many_arguments)]
     fn build_block(
         &self,
@@ -732,7 +683,6 @@ impl V2CandidateAssembler {
                 .bind_certified_merge_application_context(&batch.application_block_header)
                 .map_err(|reason| CandidateError::MergeApplicationContext(reason.to_owned()))?;
         }
-
         let nexus = state.nexus_snapshot();
         builder = builder
             .with_da_commitments(attachments.da_commitments.clone())
@@ -744,7 +694,6 @@ impl V2CandidateAssembler {
             .with_previous_roster_evidence(attachments.previous_roster_evidence.clone())
             .with_npos_consensus_effects(attachments.npos_consensus_effects.clone())
             .with_sccp_commitment_root(attachments.sccp_commitment_root);
-
         let state_view = state.view();
         let confidential = compute_confidential_feature_digest(
             state_view.world(),
@@ -755,7 +704,6 @@ impl V2CandidateAssembler {
         drop(state_view);
         builder =
             builder.with_confidential_features((!confidential.is_empty()).then_some(confidential));
-
         let execution_context = selected
             .iter()
             .zip(&prepared_work.native_amx_receipts)
@@ -778,7 +726,6 @@ impl V2CandidateAssembler {
         }
         builder = builder
             .with_execution_context((!execution_context.is_empty()).then_some(execution_context));
-
         let mut events = Vec::new();
         let new_block = builder
             .try_sign_with_index(key_pair.private_key(), u64::from(local_validator))
@@ -811,7 +758,6 @@ impl V2CandidateAssembler {
         Ok((block, canonical_wire, events))
     }
 }
-
 fn candidate_has_proposal_work(
     selected: &[CandidateRecord],
     attachments: &CandidateAttachments,
@@ -837,7 +783,6 @@ fn candidate_has_proposal_work(
         || attachments.certified_merge_carrier_header.is_some()
         || attachments.certified_merge_entry.is_some()
 }
-
 /// Return whether a canonical resultless v2 body carries deterministic ledger
 /// work. The caller supplies the state-derived clock-progress decision for the
 /// exact parent: clock progress is semantic work even when no trigger fires in
@@ -866,7 +811,6 @@ pub(crate) fn candidate_block_has_proposal_work(
         || block.header().sccp_commitment_root().is_some()
         || time_trigger_clock_progress_required
 }
-
 fn stripped_carrier_context_matches(
     built_header: &BlockHeader,
     certified_header: &BlockHeader,
@@ -878,7 +822,6 @@ fn stripped_carrier_context_matches(
         && built_header.creation_time() == certified_header.creation_time()
         && built_header.view_change_index() == certified_header.view_change_index()
 }
-
 fn record_ordinary_execution_carrier_exclusion(
     certified_execution_selected: bool,
     report: &mut CandidateScanReport,
@@ -892,7 +835,6 @@ fn record_ordinary_execution_carrier_exclusion(
     report.carrier_excluded = report.carrier_excluded.saturating_add(1);
     true
 }
-
 fn validate_request<Work>(request: &CandidateRequest<'_, Work>) -> Result<(), CandidateError> {
     request
         .context
@@ -924,7 +866,6 @@ fn validate_request<Work>(request: &CandidateRequest<'_, Work>) -> Result<(), Ca
     if request.directive.locked_subject().is_some() {
         return Err(CandidateError::LockedBodyMustBeReproposed);
     }
-
     let local = request
         .context
         .roster
@@ -933,9 +874,7 @@ fn validate_request<Work>(request: &CandidateRequest<'_, Work>) -> Result<(), Ca
     if local.validator.public_key() != request.key_pair.public_key() {
         return Err(CandidateError::ConsensusKeyMismatch);
     }
-
     let parent_height = validate_candidate_parent(request.context, request.parent, request.state)?;
-
     if let Some(evidence) = &request.attachments.previous_roster_evidence
         && (evidence.height != parent_height || evidence.block_hash != request.parent.hash())
     {
@@ -943,7 +882,6 @@ fn validate_request<Work>(request: &CandidateRequest<'_, Work>) -> Result<(), Ca
     }
     Ok(())
 }
-
 fn validate_candidate_parent(
     context: &wire::HeightContext,
     parent: CandidateParent<'_>,
@@ -984,7 +922,6 @@ fn validate_candidate_parent(
     }
     Ok(parent_height)
 }
-
 fn order_records_by_fifo(records: &mut [CandidateRecord]) {
     records.sort_by(|left, right| {
         left.source_ordinal
@@ -992,7 +929,6 @@ fn order_records_by_fifo(records: &mut [CandidateRecord]) {
             .then_with(|| left.entrypoint_hash.cmp(&right.entrypoint_hash))
     });
 }
-
 fn effective_candidate_transaction_limit(
     configured_max: NonZeroUsize,
     protocol_max: NonZeroU64,
@@ -1001,7 +937,6 @@ fn effective_candidate_transaction_limit(
         .get()
         .min(usize::try_from(protocol_max.get()).unwrap_or(usize::MAX))
 }
-
 fn fill_selection(
     selected: &mut Vec<CandidateRecord>,
     reserve: &mut VecDeque<CandidateRecord>,
@@ -1025,7 +960,6 @@ fn fill_selection(
         selected.push(candidate);
     }
 }
-
 fn remove_unavailable_candidates(
     selected: &mut Vec<CandidateRecord>,
     unavailable: &CandidateWorkUnavailable,
@@ -1047,7 +981,6 @@ fn remove_unavailable_candidates(
     }
     Ok(())
 }
-
 fn validate_prepared_work(
     context: &wire::HeightContext,
     view: wire::View,
@@ -1075,9 +1008,7 @@ fn validate_prepared_work(
             }
         }
     }
-
     validate_autonomous_lane_payloads(context, candidates, &prepared.autonomous_lane_payloads)?;
-
     if prepared.lane_payload_ownerships.is_empty() {
         return Ok(());
     }
@@ -1120,7 +1051,6 @@ fn validate_prepared_work(
     }
     Ok(())
 }
-
 fn validate_autonomous_lane_payloads(
     context: &wire::HeightContext,
     candidates: &[CandidateDescriptor<'_>],
@@ -1132,7 +1062,6 @@ fn validate_autonomous_lane_payloads(
             max: MAX_MERGE_EXECUTION_ENTRYPOINTS,
         });
     }
-
     let ordinary_entrypoints = candidates
         .iter()
         .map(|candidate| Hash::from(candidate.entrypoint_hash()))
@@ -1156,7 +1085,6 @@ fn validate_autonomous_lane_payloads(
             },
         );
     }
-
     let mut previous_order_key = None;
     let mut route_incarnations = BTreeSet::new();
     let mut lane_blocks = BTreeSet::new();
@@ -1164,7 +1092,6 @@ fn validate_autonomous_lane_payloads(
     let mut descriptor_hashes = BTreeSet::new();
     let mut payload_hashes = BTreeSet::new();
     let mut autonomous_entrypoints = BTreeSet::new();
-
     for envelope in envelopes {
         if envelope.proposal_height != context.height {
             return Err(CandidateError::AutonomousLanePayloadHeightMismatch {
@@ -1172,7 +1099,6 @@ fn validate_autonomous_lane_payloads(
                 actual: envelope.proposal_height,
             });
         }
-
         let order_key = (
             envelope.lane_id,
             envelope.dataspace_id,
@@ -1214,7 +1140,6 @@ fn validate_autonomous_lane_payloads(
             return Err(CandidateError::AutonomousLanePayloadOrder);
         }
         previous_order_key = Some(order_key);
-
         let payload = crate::lane_consensus::decode_autonomous_lane_payload_envelope(
             envelope,
             expected_network_id,
@@ -1232,7 +1157,6 @@ fn validate_autonomous_lane_payloads(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn unavailable_native_amx_indices(candidates: &[CandidateDescriptor<'_>]) -> BTreeSet<usize> {
     candidates
@@ -1266,7 +1190,6 @@ fn encoded_chunk_count(
         .checked_mul(stripe_width)
         .ok_or(CandidateError::InvalidDataAvailabilityLayout)
 }
-
 /// Candidate construction failure.
 #[derive(Debug, Error)]
 pub(crate) enum CandidateError {
@@ -1478,16 +1401,17 @@ pub(crate) enum CandidateError {
     #[error("bounded Sumeragi v2 candidate assembly did not converge")]
     AssemblyDidNotConverge,
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{
-        borrow::Cow,
-        num::{NonZeroU64, NonZeroUsize},
-        sync::Arc,
-        time::Duration,
+    use super::*;
+    use crate::{
+        block::ValidBlock,
+        kura::Kura,
+        query::store::LiveQueryStore,
+        queue::{LaneQueueReservationKeyV2, RouteLeg, RouteLegRole, RoutingDecision},
+        state::{State, World},
+        sumeragi::network_topology::Topology,
     };
-
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         ChainId,
@@ -1499,21 +1423,15 @@ mod tests {
         transaction::TransactionBuilder,
     };
     use nonzero_ext::nonzero;
-
-    use super::*;
-    use crate::{
-        block::ValidBlock,
-        kura::Kura,
-        query::store::LiveQueryStore,
-        queue::{LaneQueueReservationKeyV2, RouteLeg, RouteLegRole, RoutingDecision},
-        state::{State, World},
-        sumeragi::network_topology::Topology,
+    use std::{
+        borrow::Cow,
+        num::{NonZeroU64, NonZeroUsize},
+        sync::Arc,
+        time::Duration,
     };
-
     fn nonzero(value: usize) -> NonZeroUsize {
         NonZeroUsize::new(value).expect("test value is non-zero")
     }
-
     fn accepted(seed: u8, _label: &str) -> AcceptedTransaction<'static> {
         let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("deterministic transaction key");
@@ -1526,7 +1444,6 @@ mod tests {
         .sign(key.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
     }
-
     fn record(seed: u8, label: &str, source_ordinal: usize) -> CandidateRecord {
         let transaction = accepted(seed, label);
         CandidateRecord {
@@ -1537,7 +1454,6 @@ mod tests {
             source_ordinal,
         }
     }
-
     fn autonomous_envelope(
         context: &wire::HeightContext,
         lane_id: LaneId,
@@ -1642,7 +1558,6 @@ mod tests {
         crate::lane_consensus::autonomous_lane_payload_envelope(&payload, network_id, context.epoch)
             .expect("construct valid autonomous candidate envelope")
     }
-
     fn snapshot_parent_fixture() -> (
         State,
         wire::HeightContext,
@@ -1723,7 +1638,6 @@ mod tests {
         context.validate().expect("fixture snapshot context");
         (state, context, anchor, key)
     }
-
     fn assemble_empty_snapshot_candidate(
         attachments: CandidateAttachments,
     ) -> CandidateAssemblyOutcome {
@@ -1765,7 +1679,6 @@ mod tests {
         })
         .expect("empty snapshot candidate assembly")
     }
-
     #[test]
     fn proposal_work_gate_defers_idle_candidate() {
         let outcome = assemble_empty_snapshot_candidate(CandidateAttachments::default());
@@ -1774,7 +1687,6 @@ mod tests {
         };
         assert_eq!(report, CandidateScanReport::default());
     }
-
     #[test]
     fn proposal_work_gate_normalizes_empty_control_bundles() {
         let outcome = assemble_empty_snapshot_candidate(CandidateAttachments {
@@ -1788,7 +1700,6 @@ mod tests {
         };
         assert_eq!(report, CandidateScanReport::default());
     }
-
     #[test]
     fn proposal_work_gate_preserves_time_trigger_work() {
         let outcome = assemble_empty_snapshot_candidate(CandidateAttachments {
@@ -1801,7 +1712,6 @@ mod tests {
         assert_eq!(candidate.scan_report(), CandidateScanReport::default());
         assert_eq!(candidate.block().external_entrypoints_cloned().count(), 0);
     }
-
     #[test]
     fn canonical_block_work_gate_preserves_transaction_autonomous_and_clock_work() {
         let (_state, context, _anchor, key) = snapshot_parent_fixture();
@@ -1811,11 +1721,9 @@ mod tests {
             candidate_block_has_proposal_work(&block, true),
             "state-derived clock progress is semantic proposal work"
         );
-
         let transaction = accepted(71, "canonical-block-external");
         block.set_external_entrypoints(vec![transaction.entrypoint().clone()]);
         assert!(candidate_block_has_proposal_work(&block, false));
-
         let mut autonomous: SignedBlock = ValidBlock::new_dummy(key.private_key()).into();
         autonomous.set_execution_context(Some(
             BlockExecutionContextBundle::default().with_autonomous_lane_payloads(vec![
@@ -1839,26 +1747,22 @@ mod tests {
         ));
         assert!(candidate_block_has_proposal_work(&autonomous, false));
     }
-
     #[test]
     fn proposal_work_gate_accepts_external_and_control_work() {
         let attachments = CandidateAttachments::default();
         let prepared = PreparedCandidateWork::default();
         assert!(!candidate_has_proposal_work(&[], &attachments, &prepared));
-
         let external = vec![record(39, "proposal-work", 0)];
         assert!(candidate_has_proposal_work(
             &external,
             &attachments,
             &prepared
         ));
-
         let control = CandidateAttachments {
             sccp_commitment_root: Some([0x5A; 32]),
             ..CandidateAttachments::default()
         };
         assert!(candidate_has_proposal_work(&[], &control, &prepared));
-
         let parent_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; 32]));
         let validator_key = KeyPair::try_from_seed(vec![40; 32], Algorithm::Ed25519)
@@ -1889,7 +1793,6 @@ mod tests {
             &prepared
         ));
     }
-
     #[test]
     fn snapshot_candidate_parent_is_exact_and_one_shot() {
         let (state, context, anchor, key) = snapshot_parent_fixture();
@@ -1898,7 +1801,6 @@ mod tests {
                 .expect("exact authenticated snapshot parent"),
             2
         );
-
         let mut wrong_hash = anchor;
         wrong_hash.snapshot_block_hash = HashOf::from_untyped_unchecked(Hash::new(b"wrong tip"));
         assert!(matches!(
@@ -1911,7 +1813,6 @@ mod tests {
             validate_candidate_parent(&context, CandidateParent::Snapshot(&wrong_height), &state),
             Err(CandidateError::ParentContextMismatch)
         ));
-
         let successor = ValidBlock::new_dummy_and_modify_header(key.private_key(), |header| {
             header.set_height(nonzero!(3_u64));
             header.set_prev_block_hash(Some(anchor.snapshot_block_hash));
@@ -1931,7 +1832,6 @@ mod tests {
             Err(CandidateError::ParentStateMismatch)
         ));
     }
-
     #[test]
     fn limits_require_scan_to_cover_maximum_batch() {
         assert!(matches!(
@@ -1943,7 +1843,6 @@ mod tests {
         ));
         assert!(CandidateLimits::new(nonzero(4), nonzero(1024), nonzero(4)).is_ok());
     }
-
     #[test]
     fn candidate_limit_never_exceeds_the_active_protocol_limit() {
         assert_eq!(
@@ -1955,7 +1854,6 @@ mod tests {
             2
         );
     }
-
     #[test]
     fn canonical_order_preserves_fifo_independent_of_entrypoint_hash() {
         let mut records = vec![
@@ -1976,7 +1874,6 @@ mod tests {
         let mut selected = Vec::new();
         let mut report = CandidateScanReport::default();
         fill_selection(&mut selected, &mut reserve, 2, usize::MAX, &mut report);
-
         assert_eq!(
             selected
                 .iter()
@@ -1986,7 +1883,6 @@ mod tests {
             "canonical payload order must not change FIFO batch membership"
         );
         assert!(selected[0].entrypoint_hash > selected[1].entrypoint_hash);
-
         order_records_by_fifo(&mut selected);
         assert!(
             selected
@@ -1996,7 +1892,6 @@ mod tests {
         );
         assert!(selected[0].entrypoint_hash > selected[1].entrypoint_hash);
     }
-
     #[test]
     fn single_route_provider_defers_native_amx_only() {
         let mut single = record(1, "single", 0);
@@ -2015,7 +1910,6 @@ mod tests {
             BTreeSet::from([1])
         );
     }
-
     #[test]
     fn autonomous_anchors_validate_without_ordinary_candidates() {
         let (_state, context, _anchor, _key) = snapshot_parent_fixture();
@@ -2051,18 +1945,15 @@ mod tests {
             autonomous_lane_payloads: envelopes,
         };
         assert!(validate_prepared_work(&context, 0, &[], &prepared).is_ok());
-
         let empty = PreparedCandidateWork::default();
         assert!(empty.autonomous_lane_payloads.is_empty());
         assert!(validate_prepared_work(&context, 0, &[], &empty).is_ok());
-
         let mut single_route_provider = SingleRouteWorkProvider;
         let provider_empty = single_route_provider
             .prepare(&context, 0, &[])
             .expect("test provider accepts an empty descriptor batch");
         assert!(provider_empty.autonomous_lane_payloads.is_empty());
     }
-
     #[test]
     fn autonomous_anchor_order_and_identity_duplicates_fail_closed() {
         let (_state, context, _anchor, _key) = snapshot_parent_fixture();
@@ -2088,7 +1979,6 @@ mod tests {
             &second_tx,
             71,
         );
-
         assert!(matches!(
             validate_autonomous_lane_payloads(&context, &[], &[second.clone(), first.clone()]),
             Err(CandidateError::AutonomousLanePayloadOrder)
@@ -2097,14 +1987,12 @@ mod tests {
             validate_autonomous_lane_payloads(&context, &[], &[first.clone(), first.clone()]),
             Err(CandidateError::AutonomousLanePayloadDuplicateRoute)
         ));
-
         let mut duplicate_proposal = second.clone();
         duplicate_proposal.proposal_hash = first.proposal_hash;
         assert!(matches!(
             validate_autonomous_lane_payloads(&context, &[], &[first.clone(), duplicate_proposal]),
             Err(CandidateError::AutonomousLanePayloadDuplicateProposal)
         ));
-
         let mut duplicate_payload = second;
         duplicate_payload.payload_hash = first.payload_hash;
         assert!(matches!(
@@ -2112,7 +2000,6 @@ mod tests {
             Err(CandidateError::AutonomousLanePayloadDuplicatePayload)
         ));
     }
-
     #[test]
     fn autonomous_anchor_entrypoints_are_disjoint_from_global_and_each_other() {
         let (_state, context, _anchor, _key) = snapshot_parent_fixture();
@@ -2132,7 +2019,6 @@ mod tests {
             validate_autonomous_lane_payloads(&context, &candidates, &[envelope]),
             Err(CandidateError::AutonomousLanePayloadOverlapsOrdinary)
         ));
-
         let shared_tx = accepted(36, "cross-lane-duplicate");
         let first = autonomous_envelope(
             &context,
@@ -2159,7 +2045,6 @@ mod tests {
             Err(CandidateError::AutonomousLanePayloadDuplicateEntrypoint)
         ));
     }
-
     #[test]
     fn autonomous_anchor_height_and_payload_authentication_fail_closed() {
         let (_state, context, _anchor, _key) = snapshot_parent_fixture();
@@ -2174,14 +2059,12 @@ mod tests {
             &transaction,
             111,
         );
-
         let mut wrong_height = envelope.clone();
         wrong_height.proposal_height = context.height.saturating_add(1);
         assert!(matches!(
             validate_autonomous_lane_payloads(&context, &[], &[wrong_height]),
             Err(CandidateError::AutonomousLanePayloadHeightMismatch { .. })
         ));
-
         let mut corrupt = envelope;
         corrupt.canonical_payload.push(0);
         assert!(matches!(
@@ -2189,7 +2072,6 @@ mod tests {
             Err(CandidateError::AutonomousLanePayloadInvalid(_))
         ));
     }
-
     #[test]
     fn autonomous_anchor_count_and_aggregate_bytes_are_bounded() {
         let (_state, context, _anchor, _key) = snapshot_parent_fixture();
@@ -2204,13 +2086,11 @@ mod tests {
             &transaction,
             121,
         );
-
         let too_many = vec![envelope.clone(); MAX_MERGE_EXECUTION_ENTRYPOINTS + 1];
         assert!(matches!(
             validate_autonomous_lane_payloads(&context, &[], &too_many),
             Err(CandidateError::AutonomousLanePayloadCountExceeded { .. })
         ));
-
         let mut large = envelope;
         large
             .canonical_payload
@@ -2240,7 +2120,6 @@ mod tests {
             "candidate admission must account exact canonical envelope bytes"
         );
     }
-
     #[test]
     fn chunk_count_rejects_invalid_rs16_geometry_and_matches_stripes() {
         let rs = wire::DataAvailabilityLayout {
@@ -2269,7 +2148,6 @@ mod tests {
         assert_eq!(encoded_chunk_count(rs, 17).expect("one stripe"), 6);
         assert_eq!(encoded_chunk_count(rs, 33).expect("two stripes"), 12);
     }
-
     #[test]
     fn unavailable_removal_is_bounded_and_keeps_canonical_survivors() {
         let mut selected = vec![
@@ -2298,7 +2176,6 @@ mod tests {
                 .any(|entry| entry.entrypoint_hash == removed_hash)
         );
     }
-
     #[test]
     fn certified_execution_filter_defers_every_ordinary_entrypoint() {
         let mut report = CandidateScanReport::default();
@@ -2319,21 +2196,17 @@ mod tests {
         );
         assert_eq!(report.carrier_excluded, 4);
     }
-
     #[test]
     fn certified_merge_carrier_context_rejects_timestamp_view_and_root_drift() {
         let parent = HashOf::from_untyped_unchecked(Hash::new(b"candidate carrier context parent"));
         let built = BlockHeader::new(nonzero!(7_u64), Some(parent), None, None, 1_000, 3);
         assert!(stripped_carrier_context_matches(&built, &built));
-
         let mut wrong_time = built.clone();
         wrong_time.creation_time_ms = wrong_time.creation_time_ms.saturating_add(1);
         assert!(!stripped_carrier_context_matches(&built, &wrong_time));
-
         let mut wrong_view = built.clone();
         wrong_view.set_view_change_index(4);
         assert!(!stripped_carrier_context_matches(&built, &wrong_view));
-
         let mut rooted = built.clone();
         rooted.merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(
             b"unexpected carrier transaction root",

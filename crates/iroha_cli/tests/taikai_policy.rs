@@ -2,7 +2,9 @@
 //!
 //! These tests prove that `iroha app taikai cek-rotate` and `iroha app taikai rpt-attest`
 //! emit deterministic Norito artefacts with the expected digests and metadata.
-
+use blake3::Hasher;
+use iroha_data_model::taikai::{CekRotationReceiptV1, ReplicationProofTokenV1};
+use norito::json::Value;
 use std::{
     borrow::Cow,
     fs::{self, File},
@@ -12,19 +14,12 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-
-use blake3::Hasher;
-use iroha_data_model::taikai::{CekRotationReceiptV1, ReplicationProofTokenV1};
-use norito::json::Value;
 use tempfile::tempdir;
-
 fn cli_binary() -> &'static str {
     env!("CARGO_BIN_EXE_iroha")
 }
-
 const CLI_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const CLI_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(10);
-
 fn status_with_timeout(mut command: Command) -> io::Result<ExitStatus> {
     command.stdin(Stdio::null());
     let mut child = command.spawn()?;
@@ -46,7 +41,6 @@ fn status_with_timeout(mut command: Command) -> io::Result<ExitStatus> {
         thread::sleep(CLI_COMMAND_POLL_INTERVAL.min(remaining));
     }
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn taikai_cli_emits_cek_receipt_and_rpt() {
@@ -55,7 +49,6 @@ fn taikai_cli_emits_cek_receipt_and_rpt() {
     fs::write(&gar_path, br#"{"gar":"demo"}"#).expect("write gar");
     let bundle_path = dir.path().join("bundle.bin");
     fs::write(&bundle_path, b"bundle-bytes").expect("write bundle");
-
     let receipt_path = dir.path().join("cek_receipt.to");
     let receipt_json = dir.path().join("cek_receipt.json");
     let hkdf_salt_hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -89,7 +82,6 @@ fn taikai_cli_emits_cek_receipt_and_rpt() {
     ]);
     let receipt_status = status_with_timeout(receipt_command).expect("spawn cek-rotate");
     assert!(receipt_status.success(), "cek-rotate command failed");
-
     let receipt_bytes = fs::read(&receipt_path).expect("read receipt");
     let receipt: CekRotationReceiptV1 =
         norito::decode_from_bytes(&receipt_bytes).expect("decode cek receipt Norito");
@@ -102,7 +94,6 @@ fn taikai_cli_emits_cek_receipt_and_rpt() {
     assert_eq!(receipt.issued_at_unix, 1_700_000_001);
     assert_eq!(receipt.notes.as_deref(), Some("rotation-plan"));
     assert_eq!(receipt.hkdf_salt, [0xaa; 32]);
-
     let receipt_json_value: Value =
         norito::json::from_slice(&fs::read(&receipt_json).expect("read receipt json"))
             .expect("parse receipt json");
@@ -112,7 +103,6 @@ fn taikai_cli_emits_cek_receipt_and_rpt() {
             .and_then(Value::as_str),
         Some("kms-demo")
     );
-
     let rpt_path = dir.path().join("rpt.to");
     let rpt_json = dir.path().join("rpt.json");
     let mut rpt_command = Command::new(cli_binary());
@@ -149,7 +139,6 @@ fn taikai_cli_emits_cek_receipt_and_rpt() {
     ]);
     let rpt_status = status_with_timeout(rpt_command).expect("spawn rpt-attest");
     assert!(rpt_status.success(), "rpt-attest command failed");
-
     let rpt_bytes = fs::read(&rpt_path).expect("read rpt");
     let rpt: ReplicationProofTokenV1 =
         norito::decode_from_bytes(&rpt_bytes).expect("decode rpt Norito");
@@ -166,7 +155,6 @@ fn taikai_cli_emits_cek_receipt_and_rpt() {
         rpt.distribution_bundle_digest,
         digest_file_for_cli(&bundle_path)
     );
-
     let rpt_json_value: Value =
         norito::json::from_slice(&fs::read(&rpt_json).expect("read rpt json"))
             .expect("parse rpt json");
@@ -178,7 +166,6 @@ fn taikai_cli_emits_cek_receipt_and_rpt() {
         Some(2)
     );
 }
-
 fn digest_file_for_cli(path: &Path) -> [u8; 32] {
     let mut hasher = Hasher::new();
     let label: Cow<'_, str> = path
@@ -188,7 +175,6 @@ fn digest_file_for_cli(path: &Path) -> [u8; 32] {
         .map_or_else(|| Cow::from("."), Cow::from);
     hasher.update(label.as_bytes());
     hasher.update(&[0xFF, b'F']);
-
     let mut file = File::open(path).expect("open file for digest");
     let mut buffer = [0u8; 8192];
     loop {
@@ -198,6 +184,5 @@ fn digest_file_for_cli(path: &Path) -> [u8; 32] {
         }
         hasher.update(&buffer[..read]);
     }
-
     *hasher.finalize().as_bytes()
 }

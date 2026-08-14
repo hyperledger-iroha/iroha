@@ -19,9 +19,7 @@ use iroha_data_model::{
         validate_musubi_account_id_v1,
     },
 };
-
 use super::public_musubi::MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES;
-
 #[test]
 fn provider_bundle_attestation_uses_dedicated_public_musubi_route() {
     assert_eq!(
@@ -29,16 +27,16 @@ fn provider_bundle_attestation_uses_dedicated_public_musubi_route() {
         "/v1/musubi/queries/provider-bundle-attestation"
     );
 }
-
 #[test]
-fn public_musubi_query_uses_fixed_route_without_account_headers() {
+fn public_musubi_query_signs_the_exact_fixed_route_and_body() {
     let response = json_response(StatusCode::OK, r#"{"result":"finalized"}"#);
     let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
     let query = norito::json!({"package": "apps.sora/demo"});
+    let client = client_with_base_url(base_url());
     let result: PublicMusubiQueryResultV1<Value> =
         with_mock_http(respond_with(&snapshots, response), || {
             post_public_musubi_query_v1(
-                &base_url(),
+                &client,
                 PublicMusubiQueryPathV1::ExactPackage,
                 &query,
                 Duration::from_secs(1),
@@ -46,7 +44,6 @@ fn public_musubi_query_uses_fixed_route_without_account_headers() {
         })
         .expect("public Musubi query");
     assert!(matches!(result, PublicMusubiQueryResultV1::Found(_)));
-
     let snapshot = snapshots.lock().expect("snapshot lock")[0].clone();
     assert_eq!(snapshot.method, HttpMethod::POST);
     assert_eq!(snapshot.url.path(), "/v1/musubi/queries/exact-package");
@@ -54,31 +51,44 @@ fn public_musubi_query_uses_fixed_route_without_account_headers() {
         snapshot.max_response_bytes,
         MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES
     );
-    assert!(snapshot.headers.iter().all(|(name, _)| {
-        ![
-            HEADER_ACCOUNT,
-            HEADER_SIGNATURE,
-            HEADER_TIMESTAMP_MS,
-            HEADER_NONCE,
-            "authorization",
-        ]
-        .iter()
-        .any(|forbidden| name.eq_ignore_ascii_case(forbidden))
-    }));
+    assert_canonical_account_signed_json_request(&client, &snapshot);
 }
-
+#[test]
+fn public_musubi_query_rejects_legacy_witness_injection_before_dispatch() {
+    let mut client = client_with_base_url(base_url());
+    client
+        .headers
+        .insert("x-IROHA-witness".to_owned(), "legacy-witness".to_owned());
+    let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+    let stored = Arc::clone(&snapshots);
+    let error = with_mock_http(
+        move |snapshot| {
+            stored.lock().expect("snapshot lock").push(snapshot);
+            Ok(empty_response(StatusCode::OK))
+        },
+        || {
+            post_public_musubi_query_v1::<_, Value>(
+                &client,
+                PublicMusubiQueryPathV1::ExactPackage,
+                &norito::json!({"package": "apps.sora/demo"}),
+                Duration::from_secs(1),
+            )
+        },
+    )
+    .expect_err("legacy witness headers must fail before dispatch");
+    assert!(error.to_string().contains("authenticated Musubi client"));
+    assert!(snapshots.lock().expect("snapshot lock").is_empty());
+}
 #[test]
 #[allow(clippy::too_many_lines)]
 fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
     const RETIRED_QUERY_CAP_BYTES: usize = 8 * 1024 * 1024;
-
     fn padded_name(prefix: String) -> Name {
         assert!(prefix.len() <= MAX_NAME_BYTES);
         format!("{prefix}{}", "\\".repeat(MAX_NAME_BYTES - prefix.len()))
             .parse()
             .expect("maximal fixture name")
     }
-
     fn near_limit_account() -> (AccountId, KeyPair) {
         let members = (0_u16..256)
             .map(|index| {
@@ -90,7 +100,6 @@ fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
                     .expect("near-limit account member")
             })
             .collect::<Vec<_>>();
-
         for count in (1..=members.len()).rev() {
             let account = AccountId::new_multisig(
                 MultisigPolicy::new(1, members[..count].to_vec())
@@ -105,7 +114,6 @@ fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
                 );
                 validate_musubi_account_id_v1(&account)
                     .expect("near-limit account is legal in Musubi");
-
                 let mut signer_seed = [0xC7; 32];
                 signer_seed[..2].copy_from_slice(&0_u16.to_le_bytes());
                 let signer = KeyPair::try_from_seed(signer_seed.to_vec(), Algorithm::Ed25519)
@@ -115,7 +123,6 @@ fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
         }
         panic!("at least one multisig member must fit the Musubi account bound");
     }
-
     let maximal_prerelease = (0..MUSUBI_MAX_PRERELEASE_IDENTIFIERS_V1)
         .map(|_| {
             MusubiPrereleaseIdentifierV1::AlphaNumeric(
@@ -141,7 +148,6 @@ fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
             .collect(),
     );
     requirement.validate().expect("maximal comparator AST");
-
     let dependency_domain: Name = "\\"
         .repeat(MAX_NAME_BYTES)
         .parse()
@@ -185,7 +191,6 @@ fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
             dependencies: Vec::new(),
         });
     }
-
     let exports = (0..MUSUBI_MAX_EXPORTS_V1)
         .map(|index| padded_name(format!("export-{index:04}-")))
         .collect::<Vec<_>>();
@@ -253,7 +258,6 @@ fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
             },
         }
     };
-
     let network_id = test_network_id();
     let namespace = MusubiNamespaceV1::new(&format!("{root_domain_text}.n"))
         .expect("maximal domain-qualified namespace");
@@ -302,7 +306,6 @@ fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
             "selected dependency prefix must be maximal for this bounded fixture"
         );
     }
-
     let exact_snapshot_for = |manifest: MusubiReleaseManifestV1| {
         let snapshot = MusubiRegistrySnapshotV1 {
             finalized_height: u64::MAX,
@@ -365,7 +368,6 @@ fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
             universal_release,
         }
     };
-
     let admitted_publication = publication_for(admitted_dependency_count);
     let admitted_snapshot = exact_snapshot_for(admitted_publication.manifest);
     admitted_snapshot
@@ -388,7 +390,6 @@ fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
     );
     drop(admitted_json);
     drop(admitted_snapshot);
-
     let full_dependency_count = publication_for(MUSUBI_MAX_DEPENDENCIES_V1);
     full_dependency_count
         .validate()
@@ -415,10 +416,10 @@ fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
         "the fixed cap must retain headroom above this full-dependency exact-release fixture"
     );
 }
-
 #[test]
 fn public_musubi_query_surfaces_missing_and_stale_cursor() {
     let query = norito::json!({"limit": 1_u64});
+    let client = client_with_base_url(base_url());
     let missing: PublicMusubiQueryResultV1<Value> = with_mock_http(
         respond_with(
             &Arc::new(Mutex::new(Vec::new())),
@@ -426,7 +427,7 @@ fn public_musubi_query_surfaces_missing_and_stale_cursor() {
         ),
         || {
             post_public_musubi_query_v1(
-                &base_url(),
+                &client,
                 PublicMusubiQueryPathV1::Versions,
                 &query,
                 Duration::from_secs(1),
@@ -435,7 +436,6 @@ fn public_musubi_query_surfaces_missing_and_stale_cursor() {
     )
     .expect("missing query result");
     assert!(matches!(missing, PublicMusubiQueryResultV1::NotFound));
-
     let stale: PublicMusubiQueryResultV1<Value> = with_mock_http(
         respond_with(
             &Arc::new(Mutex::new(Vec::new())),
@@ -443,7 +443,7 @@ fn public_musubi_query_surfaces_missing_and_stale_cursor() {
         ),
         || {
             post_public_musubi_query_v1(
-                &base_url(),
+                &client,
                 PublicMusubiQueryPathV1::OrderedPrefix,
                 &query,
                 Duration::from_secs(1),

@@ -1,17 +1,13 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! JS Norito fixture parity with Rust canonical encoding.
-
-use std::{fs, path::PathBuf, str::FromStr};
-
 use iroha_data_model::DomainId;
 use iroha_data_model::prelude::{
     AccountId, AssetDefinitionId, AssetId, Burn, InstructionBox, Mint, Quantity, TriggerId,
 };
 use norito::codec::{Decode, Encode};
-
+use std::{fs, path::PathBuf, str::FromStr};
 const FIXTURE_PUBLIC_KEY: &str =
     "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
-
 fn fixture_asset_id() -> AssetId {
     let public_key: iroha_data_model::PublicKey = FIXTURE_PUBLIC_KEY
         .parse()
@@ -23,14 +19,12 @@ fn fixture_asset_id() -> AssetId {
     );
     AssetId::new(definition, account)
 }
-
 #[derive(Debug)]
 struct InstructionFixture {
     id: String,
     instruction: norito::json::Value,
     encoded_hex: String,
 }
-
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -38,7 +32,6 @@ fn fixture_path(name: &str) -> PathBuf {
         .join("norito_instructions")
         .join(name)
 }
-
 fn load_fixture(name: &str) -> InstructionFixture {
     let raw = fs::read_to_string(fixture_path(name))
         .unwrap_or_else(|err| panic!("read {name} fixture: {err}"));
@@ -47,7 +40,6 @@ fn load_fixture(name: &str) -> InstructionFixture {
     let object = value
         .as_object()
         .unwrap_or_else(|| panic!("{name} JSON must be an object"));
-
     let fixture_id = object
         .get("fixture_id")
         .and_then(norito::json::Value::as_str)
@@ -62,28 +54,24 @@ fn load_fixture(name: &str) -> InstructionFixture {
         .get("instruction")
         .cloned()
         .unwrap_or_else(|| panic!("{name} must include instruction JSON"));
-
     InstructionFixture {
         id: fixture_id,
         instruction,
         encoded_hex,
     }
 }
-
 fn assert_fixture_matches(name: &str, expected_id: &str, expected_instruction: &InstructionBox) {
     let fixture = load_fixture(name);
     assert_eq!(
         fixture.id, expected_id,
         "fixture {name} id mismatch (expected {expected_id})"
     );
-
     let expected_instruction_json = norito::json::to_value(expected_instruction)
         .expect("serialize canonical Norito instruction JSON");
     assert_eq!(
         fixture.instruction, expected_instruction_json,
         "fixture {name} instruction payload should match canonical Norito JSON"
     );
-
     let mut canonical_bytes = Vec::new();
     expected_instruction.encode_to(&mut canonical_bytes);
     let canonical_hex = hex::encode(&canonical_bytes);
@@ -91,7 +79,6 @@ fn assert_fixture_matches(name: &str, expected_id: &str, expected_instruction: &
         fixture.encoded_hex, canonical_hex,
         "fixture {name} encoded_hex mismatch; canonical hex is {canonical_hex}"
     );
-
     let decoded =
         InstructionBox::decode(&mut canonical_bytes.as_slice()).expect("decode bytes via Norito");
     assert_eq!(
@@ -99,7 +86,6 @@ fn assert_fixture_matches(name: &str, expected_id: &str, expected_instruction: &
         expected_instruction.clone(),
         "decoded instruction should match expected canonical Norito instruction"
     );
-
     let mut roundtrip = Vec::new();
     decoded.encode_to(&mut roundtrip);
     assert_eq!(
@@ -107,7 +93,6 @@ fn assert_fixture_matches(name: &str, expected_id: &str, expected_instruction: &
         "Rust Norito encoding must match fixture bytes"
     );
 }
-
 #[test]
 fn burn_asset_fixture_matches_rust_encoding() {
     let expected_asset_id = fixture_asset_id();
@@ -120,7 +105,6 @@ fn burn_asset_fixture_matches_rust_encoding() {
         &expected_instruction,
     );
 }
-
 #[test]
 fn burn_asset_fractional_fixture_matches_rust_encoding() {
     let expected_asset_id = fixture_asset_id();
@@ -133,7 +117,6 @@ fn burn_asset_fractional_fixture_matches_rust_encoding() {
         &expected_instruction,
     );
 }
-
 #[test]
 fn mint_asset_fixture_matches_rust_encoding() {
     let expected_asset_id = fixture_asset_id();
@@ -146,7 +129,6 @@ fn mint_asset_fixture_matches_rust_encoding() {
         &expected_instruction,
     );
 }
-
 #[test]
 fn burn_trigger_repetitions_fixture_matches_rust_encoding() {
     let trigger_id = TriggerId::from_str("reconciliation_guard").expect("valid trigger id");

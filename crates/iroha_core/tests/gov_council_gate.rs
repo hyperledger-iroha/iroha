@@ -1,9 +1,5 @@
 //! Council gating for governance proposals: referenda open only after quorum.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
-use std::collections::BTreeMap;
-use std::num::NonZeroU64;
-
 use iroha_core::{
     governance::draw,
     kura::Kura,
@@ -26,7 +22,8 @@ use iroha_data_model::{
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
+use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 fn sample_contract_address(
     account_id: &iroha_data_model::account::AccountId,
     deploy_nonce: u64,
@@ -41,7 +38,6 @@ fn sample_contract_address(
     )
     .expect("sample contract address")
 }
-
 fn setup_council_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -61,7 +57,6 @@ fn setup_council_state() -> State {
     state.gov.parliament_quorum_bps = 5_000;
     state
 }
-
 fn enable_parliament_module(state: &mut State) {
     let nexus = state.nexus.get_mut();
     let mut parliament_module = iroha_config::parameters::actual::GovernanceModule::default();
@@ -69,7 +64,6 @@ fn enable_parliament_module(state: &mut State) {
     nexus.governance.default_module = Some("parliament".to_string());
     nexus.governance.modules = BTreeMap::from([("parliament".to_string(), parliament_module)]);
 }
-
 fn deployment_stage_bodies() -> [ParliamentBody; 6] {
     [
         ParliamentBody::RulesCommittee,
@@ -80,7 +74,6 @@ fn deployment_stage_bodies() -> [ParliamentBody; 6] {
         ParliamentBody::OversightCommittee,
     ]
 }
-
 fn all_stage_bodies() -> [ParliamentBody; 7] {
     [
         ParliamentBody::RulesCommittee,
@@ -92,7 +85,6 @@ fn all_stage_bodies() -> [ParliamentBody; 7] {
         ParliamentBody::FmaCommittee,
     ]
 }
-
 fn roster_root(bodies: &iroha_data_model::governance::types::ParliamentBodies) -> [u8; 32] {
     let encoded = norito::to_bytes(bodies).expect("encode roster bodies");
     let digest = Blake2b512::digest(encoded);
@@ -100,7 +92,6 @@ fn roster_root(bodies: &iroha_data_model::governance::types::ParliamentBodies) -
     root.copy_from_slice(&digest[..32]);
     root
 }
-
 fn sample_deploy_proposal(deploy_nonce: u64) -> ProposalKind {
     ProposalKind::DeployContract(DeployContractProposal {
         contract_address: sample_contract_address(&ALICE_ID, deploy_nonce),
@@ -110,7 +101,6 @@ fn sample_deploy_proposal(deploy_nonce: u64) -> ProposalKind {
         manifest_provenance: None,
     })
 }
-
 fn sample_runtime_upgrade_proposal() -> ProposalKind {
     ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
         manifest: RuntimeUpgradeManifest {
@@ -128,7 +118,6 @@ fn sample_runtime_upgrade_proposal() -> ProposalKind {
         },
     })
 }
-
 fn seed_referendum_and_proposal_with_kind(
     state: &mut State,
     pid: [u8; 32],
@@ -167,7 +156,6 @@ fn seed_referendum_and_proposal_with_kind(
                 .collect(),
         },
     );
-
     let h_start = header
         .height()
         .get()
@@ -201,11 +189,9 @@ fn seed_referendum_and_proposal_with_kind(
     stx.apply();
     block.commit().expect("commit genesis block");
 }
-
 fn seed_referendum_and_proposal(state: &mut State, pid: [u8; 32], rid: &str) {
     seed_referendum_and_proposal_with_kind(state, pid, rid, sample_deploy_proposal(0));
 }
-
 fn seed_proposal_without_referendum(state: &mut State, pid: [u8; 32]) {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -239,7 +225,6 @@ fn seed_proposal_without_referendum(state: &mut State, pid: [u8; 32]) {
                 .collect(),
         },
     );
-
     let pipeline =
         iroha_core::state::GovernancePipeline::seeded(header.height().get(), None, &stx.gov);
     stx.world.governance_proposals_mut().insert(
@@ -258,7 +243,6 @@ fn seed_proposal_without_referendum(state: &mut State, pid: [u8; 32]) {
     stx.apply();
     block.commit().expect("commit proposal-only block");
 }
-
 fn referendum_status(state: &State, rid: &str) -> iroha_core::state::GovernanceReferendumStatus {
     state
         .view()
@@ -269,7 +253,6 @@ fn referendum_status(state: &State, rid: &str) -> iroha_core::state::GovernanceR
         .expect("referendum present")
         .status
 }
-
 fn approve_at_height(
     state: &mut State,
     height: u64,
@@ -289,7 +272,6 @@ fn approve_at_height(
     stx.apply();
     block.commit().expect("commit approval block");
 }
-
 fn cast_ballot_at_height(
     state: &mut State,
     height: u64,
@@ -311,7 +293,6 @@ fn cast_ballot_at_height(
     stx.apply();
     block.commit().expect("commit parliament ballot block");
 }
-
 fn expect_ballot_error_at_height(
     state: &State,
     height: u64,
@@ -332,7 +313,6 @@ fn expect_ballot_error_at_height(
     .expect_err("parliament ballot must fail");
     format!("{err:?}")
 }
-
 fn set_body_roster_at_height(
     state: &mut State,
     height: u64,
@@ -357,7 +337,6 @@ fn set_body_roster_at_height(
     stx.apply();
     block.commit().expect("commit roster update block");
 }
-
 fn remove_body_roster_at_height(state: &mut State, height: u64, epoch: u64, body: ParliamentBody) {
     let height = NonZeroU64::new(height).expect("non-zero height");
     let mut block = state.block(BlockHeader::new(height, None, None, None, 0, 0));
@@ -373,7 +352,6 @@ fn remove_body_roster_at_height(state: &mut State, height: u64, epoch: u64, body
     stx.apply();
     block.commit().expect("commit roster removal block");
 }
-
 fn mutate_body_roster_at_height(
     state: &mut State,
     height: u64,
@@ -396,7 +374,6 @@ fn mutate_body_roster_at_height(
     stx.apply();
     block.commit().expect("commit roster mutation block");
 }
-
 fn mutate_snapshot_at_height(
     state: &mut State,
     height: u64,
@@ -421,7 +398,6 @@ fn mutate_snapshot_at_height(
     stx.apply();
     block.commit().expect("commit snapshot mutation block");
 }
-
 fn assert_quorum_records(state: &State, rid: &str) {
     let view = state.view();
     let approvals = view
@@ -433,7 +409,6 @@ fn assert_quorum_records(state: &State, rid: &str) {
         assert!(approvals.quorum_met(body, 0), "{body:?} quorum recorded");
     }
 }
-
 fn seed_snapshot_proposal(
     state: &mut State,
     pid: [u8; 32],
@@ -498,21 +473,18 @@ fn seed_snapshot_proposal(
     block.commit().expect("commit seed block");
     bodies
 }
-
 #[test]
 fn referendum_opens_after_council_quorum() {
     let mut state = setup_council_state();
     let pid = [0xAA; 32];
     let rid = hex::encode(pid);
     seed_referendum_and_proposal(&mut state, pid, &rid);
-
     let block2 = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
     block2.commit().expect("commit height 2");
     assert_eq!(
         referendum_status(&state, &rid),
         iroha_core::state::GovernanceReferendumStatus::Proposed
     );
-
     approve_at_height(
         &mut state,
         3,
@@ -525,14 +497,12 @@ fn referendum_opens_after_council_quorum() {
         iroha_core::state::GovernanceReferendumStatus::Proposed,
         "rules committee quorum alone must not open the referendum"
     );
-
     approve_at_height(&mut state, 4, ParliamentBody::AgendaCouncil, pid, &BOB_ID);
     assert_eq!(
         referendum_status(&state, &rid),
         iroha_core::state::GovernanceReferendumStatus::Proposed,
         "rules plus agenda quorum must not open the referendum"
     );
-
     for (idx, body) in [
         ParliamentBody::InterestPanel,
         ParliamentBody::ReviewPanel,
@@ -550,21 +520,18 @@ fn referendum_opens_after_council_quorum() {
             &ALICE_ID,
         );
     }
-
     assert_eq!(
         referendum_status(&state, &rid),
         iroha_core::state::GovernanceReferendumStatus::Open
     );
     assert_quorum_records(&state, &rid);
 }
-
 #[test]
 fn body_rejection_closes_and_prevents_later_opening() {
     let mut state = setup_council_state();
     let pid = [0xCD; 32];
     let rid = hex::encode(pid);
     seed_referendum_and_proposal(&mut state, pid, &rid);
-
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
     let mut stx = block.transaction();
     CastParliamentBallot {
@@ -576,7 +543,6 @@ fn body_rejection_closes_and_prevents_later_opening() {
     .expect("rejection ballot executes");
     stx.apply();
     block.commit().expect("commit rejection block");
-
     assert_eq!(
         referendum_status(&state, &rid),
         iroha_core::state::GovernanceReferendumStatus::Closed
@@ -591,7 +557,6 @@ fn body_rejection_closes_and_prevents_later_opening() {
             .status,
         iroha_core::state::GovernanceProposalStatus::Rejected
     ));
-
     let mut block = state.block(BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0));
     let mut stx = block.transaction();
     let err = ApproveGovernanceProposal {
@@ -605,7 +570,6 @@ fn body_rejection_closes_and_prevents_later_opening() {
         "unexpected error: {err:?}"
     );
 }
-
 #[test]
 fn duplicate_rejections_do_not_count_twice_for_rejection_quorum() {
     let mut state = setup_council_state();
@@ -621,7 +585,6 @@ fn duplicate_rejections_do_not_count_twice_for_rejection_quorum() {
         vec![ALICE_ID.clone(), BOB_ID.clone()],
         Vec::new(),
     );
-
     cast_ballot_at_height(
         &mut state,
         3,
@@ -638,7 +601,6 @@ fn duplicate_rejections_do_not_count_twice_for_rejection_quorum() {
         &ALICE_ID,
         ParliamentDecision::Reject,
     );
-
     let approvals = state
         .view()
         .world()
@@ -659,7 +621,6 @@ fn duplicate_rejections_do_not_count_twice_for_rejection_quorum() {
         referendum_status(&state, &rid),
         iroha_core::state::GovernanceReferendumStatus::Proposed
     );
-
     cast_ballot_at_height(
         &mut state,
         5,
@@ -683,7 +644,6 @@ fn duplicate_rejections_do_not_count_twice_for_rejection_quorum() {
         iroha_core::state::GovernanceProposalStatus::Rejected
     ));
 }
-
 #[test]
 fn duplicate_approvals_do_not_count_twice_for_body_quorum() {
     let mut state = setup_council_state();
@@ -699,7 +659,6 @@ fn duplicate_approvals_do_not_count_twice_for_body_quorum() {
         vec![ALICE_ID.clone(), BOB_ID.clone()],
         Vec::new(),
     );
-
     approve_at_height(
         &mut state,
         3,
@@ -714,7 +673,6 @@ fn duplicate_approvals_do_not_count_twice_for_body_quorum() {
         pid,
         &ALICE_ID,
     );
-
     let approvals = state
         .view()
         .world()
@@ -738,7 +696,6 @@ fn duplicate_approvals_do_not_count_twice_for_body_quorum() {
         iroha_core::state::GovernanceReferendumStatus::Proposed
     );
 }
-
 #[test]
 fn changed_approval_to_rejection_removes_approval_and_closes() {
     let mut state = setup_council_state();
@@ -753,7 +710,6 @@ fn changed_approval_to_rejection_removes_approval_and_closes() {
         vec![ALICE_ID.clone()],
         Vec::new(),
     );
-
     cast_ballot_at_height(
         &mut state,
         3,
@@ -770,7 +726,6 @@ fn changed_approval_to_rejection_removes_approval_and_closes() {
         &ALICE_ID,
         ParliamentDecision::Reject,
     );
-
     let approvals = state
         .view()
         .world()
@@ -802,7 +757,6 @@ fn changed_approval_to_rejection_removes_approval_and_closes() {
         iroha_core::state::GovernanceProposalStatus::Rejected
     ));
 }
-
 #[test]
 fn changed_rejection_to_abstain_removes_veto_pressure_without_closing() {
     let mut state = setup_council_state();
@@ -818,7 +772,6 @@ fn changed_rejection_to_abstain_removes_veto_pressure_without_closing() {
         vec![ALICE_ID.clone(), BOB_ID.clone()],
         Vec::new(),
     );
-
     cast_ballot_at_height(
         &mut state,
         3,
@@ -843,7 +796,6 @@ fn changed_rejection_to_abstain_removes_veto_pressure_without_closing() {
         &BOB_ID,
         ParliamentDecision::Reject,
     );
-
     let approvals = state
         .view()
         .world()
@@ -878,7 +830,6 @@ fn changed_rejection_to_abstain_removes_veto_pressure_without_closing() {
         iroha_core::state::GovernanceProposalStatus::Rejected
     ));
 }
-
 #[test]
 fn alternates_cannot_vote_until_promoted_into_members() {
     let mut state = setup_council_state();
@@ -893,7 +844,6 @@ fn alternates_cannot_vote_until_promoted_into_members() {
         vec![ALICE_ID.clone()],
         vec![BOB_ID.clone()],
     );
-
     {
         let mut block = state.block(BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0));
         let mut stx = block.transaction();
@@ -913,7 +863,6 @@ fn alternates_cannot_vote_until_promoted_into_members() {
             "rejected alternate vote must not leave a stage record"
         );
     }
-
     set_body_roster_at_height(
         &mut state,
         4,
@@ -923,7 +872,6 @@ fn alternates_cannot_vote_until_promoted_into_members() {
         Vec::new(),
     );
     approve_at_height(&mut state, 5, ParliamentBody::RulesCommittee, pid, &BOB_ID);
-
     let approvals = state
         .view()
         .world()
@@ -938,7 +886,6 @@ fn alternates_cannot_vote_until_promoted_into_members() {
     assert!(rules.approvers.contains(&*BOB_ID));
     assert!(!rules.approvers.contains(&*ALICE_ID));
 }
-
 #[test]
 fn body_membership_is_not_shared_across_rosters() {
     let mut state = setup_council_state();
@@ -961,7 +908,6 @@ fn body_membership_is_not_shared_across_rosters() {
         vec![BOB_ID.clone()],
         vec![ALICE_ID.clone()],
     );
-
     {
         let mut block = state.block(BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0));
         let mut stx = block.transaction();
@@ -976,7 +922,6 @@ fn body_membership_is_not_shared_across_rosters() {
             "unexpected rules cross-vote error: {err:?}"
         );
     }
-
     {
         let mut block = state.block(BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0));
         let mut stx = block.transaction();
@@ -1000,7 +945,6 @@ fn body_membership_is_not_shared_across_rosters() {
             .is_none(),
         "failed cross-body votes must not record approvals"
     );
-
     approve_at_height(
         &mut state,
         6,
@@ -1015,7 +959,6 @@ fn body_membership_is_not_shared_across_rosters() {
         "two correct body approvals are still short of the full parliament gate"
     );
 }
-
 #[test]
 fn runtime_upgrade_remains_closed_until_fma_quorum() {
     let mut state = setup_council_state();
@@ -1027,7 +970,6 @@ fn runtime_upgrade_remains_closed_until_fma_quorum() {
         &rid,
         sample_runtime_upgrade_proposal(),
     );
-
     for (idx, body) in deployment_stage_bodies().into_iter().enumerate() {
         approve_at_height(
             &mut state,
@@ -1042,7 +984,6 @@ fn runtime_upgrade_remains_closed_until_fma_quorum() {
         iroha_core::state::GovernanceReferendumStatus::Proposed,
         "runtime upgrade must not open before the FMA committee gate"
     );
-
     approve_at_height(&mut state, 8, ParliamentBody::FmaCommittee, pid, &BOB_ID);
     assert_eq!(
         referendum_status(&state, &rid),
@@ -1060,7 +1001,6 @@ fn runtime_upgrade_remains_closed_until_fma_quorum() {
         "FMA quorum should be recorded for runtime upgrades"
     );
 }
-
 #[test]
 fn abstain_neither_approves_nor_rejects_and_later_decision_replaces_it() {
     let mut state = setup_council_state();
@@ -1075,7 +1015,6 @@ fn abstain_neither_approves_nor_rejects_and_later_decision_replaces_it() {
         vec![ALICE_ID.clone()],
         Vec::new(),
     );
-
     cast_ballot_at_height(
         &mut state,
         3,
@@ -1102,7 +1041,6 @@ fn abstain_neither_approves_nor_rejects_and_later_decision_replaces_it() {
         referendum_status(&state, &rid),
         iroha_core::state::GovernanceReferendumStatus::Proposed
     );
-
     cast_ballot_at_height(
         &mut state,
         4,
@@ -1128,14 +1066,12 @@ fn abstain_neither_approves_nor_rejects_and_later_decision_replaces_it() {
         "later signed decision must replace the earlier abstention"
     );
 }
-
 #[test]
 fn deploy_fma_ballots_are_rejected_and_cannot_substitute_or_veto() {
     let mut state = setup_council_state();
     let pid = [0xE5; 32];
     let rid = hex::encode(pid);
     seed_referendum_and_proposal(&mut state, pid, &rid);
-
     for (idx, body) in [
         ParliamentBody::RulesCommittee,
         ParliamentBody::AgendaCouncil,
@@ -1171,7 +1107,6 @@ fn deploy_fma_ballots_are_rejected_and_cannot_substitute_or_veto() {
         iroha_core::state::GovernanceReferendumStatus::Proposed,
         "deploy proposals require oversight quorum; FMA approval is not a substitute"
     );
-
     let err = expect_ballot_error_at_height(
         &state,
         8,
@@ -1203,7 +1138,6 @@ fn deploy_fma_ballots_are_rejected_and_cannot_substitute_or_veto() {
             .is_none(),
         "non-required FMA ballots must not create stage records"
     );
-
     approve_at_height(
         &mut state,
         9,
@@ -1216,14 +1150,12 @@ fn deploy_fma_ballots_are_rejected_and_cannot_substitute_or_veto() {
         iroha_core::state::GovernanceReferendumStatus::Open
     );
 }
-
 #[test]
 fn post_open_stage_ballots_are_rejected_and_cannot_reclose_referendum() {
     let mut state = setup_council_state();
     let pid = [0xE8; 32];
     let rid = hex::encode(pid);
     seed_referendum_and_proposal(&mut state, pid, &rid);
-
     for (idx, body) in deployment_stage_bodies().into_iter().enumerate() {
         approve_at_height(
             &mut state,
@@ -1237,7 +1169,6 @@ fn post_open_stage_ballots_are_rejected_and_cannot_reclose_referendum() {
         referendum_status(&state, &rid),
         iroha_core::state::GovernanceReferendumStatus::Open
     );
-
     let err = expect_ballot_error_at_height(
         &state,
         8,
@@ -1266,7 +1197,6 @@ fn post_open_stage_ballots_are_rejected_and_cannot_reclose_referendum() {
         iroha_core::state::GovernanceProposalStatus::Rejected
     ));
 }
-
 #[test]
 fn stage_ballots_after_referendum_window_are_rejected_without_records() {
     let mut state = setup_council_state();
@@ -1274,7 +1204,6 @@ fn stage_ballots_after_referendum_window_are_rejected_without_records() {
     let pid = [0xE9; 32];
     let rid = hex::encode(pid);
     seed_referendum_and_proposal(&mut state, pid, &rid);
-
     let err = expect_ballot_error_at_height(
         &state,
         18,
@@ -1297,7 +1226,6 @@ fn stage_ballots_after_referendum_window_are_rejected_without_records() {
         "late-window ballot must not create stage records"
     );
 }
-
 #[test]
 fn missing_proposal_or_referendum_rejects_ballot_without_records() {
     let missing_pid = [0xEA; 32];
@@ -1324,7 +1252,6 @@ fn missing_proposal_or_referendum_rejects_ballot_without_records() {
             .is_none(),
         "missing proposal must not create stage records"
     );
-
     let mut no_referendum_state = setup_council_state();
     let no_referendum_pid = [0xEB; 32];
     let no_referendum_rid = hex::encode(no_referendum_pid);
@@ -1351,7 +1278,6 @@ fn missing_proposal_or_referendum_rejects_ballot_without_records() {
         "missing referendum must not create stage records"
     );
 }
-
 #[test]
 fn epoch_rollover_rejects_ballots_without_fresh_council_roster() {
     let mut state = setup_council_state();
@@ -1359,7 +1285,6 @@ fn epoch_rollover_rejects_ballots_without_fresh_council_roster() {
     let pid = [0xEE; 32];
     let rid = hex::encode(pid);
     seed_referendum_and_proposal(&mut state, pid, &rid);
-
     let err = expect_ballot_error_at_height(
         &state,
         3,
@@ -1386,7 +1311,6 @@ fn epoch_rollover_rejects_ballots_without_fresh_council_roster() {
         iroha_core::state::GovernanceReferendumStatus::Proposed
     );
 }
-
 #[test]
 fn malformed_body_rosters_reject_ballots_without_records() {
     let mut missing_state = setup_council_state();
@@ -1417,7 +1341,6 @@ fn malformed_body_rosters_reject_ballots_without_records() {
             "missing roster rejection must not record approvals"
         );
     }
-
     let mut empty_state = setup_council_state();
     let empty_pid = [0xE7; 32];
     let empty_rid = hex::encode(empty_pid);
@@ -1451,7 +1374,6 @@ fn malformed_body_rosters_reject_ballots_without_records() {
         "empty roster rejection must not record approvals"
     );
 }
-
 #[test]
 fn spoofed_roster_metadata_rejects_ballots_without_records() {
     let mut body_mismatch_state = setup_council_state();
@@ -1490,7 +1412,6 @@ fn spoofed_roster_metadata_rejects_ballots_without_records() {
             .is_none(),
         "spoofed body metadata must not create stage records"
     );
-
     let mut epoch_mismatch_state = setup_council_state();
     let epoch_mismatch_pid = [0xED; 32];
     let epoch_mismatch_rid = hex::encode(epoch_mismatch_pid);
@@ -1528,7 +1449,6 @@ fn spoofed_roster_metadata_rejects_ballots_without_records() {
         "stale embedded epoch must not create stage records"
     );
 }
-
 #[test]
 fn parliament_snapshot_allows_approvals_without_council_state() {
     let mut state = setup_council_state();
@@ -1536,7 +1456,6 @@ fn parliament_snapshot_allows_approvals_without_council_state() {
     let pid = [0xBC; 32];
     let rid = hex::encode(pid);
     let bodies = seed_snapshot_proposal(&mut state, pid, &rid, 1, None);
-
     for (idx, body) in deployment_stage_bodies().into_iter().enumerate() {
         let signer = bodies
             .rosters
@@ -1552,7 +1471,6 @@ fn parliament_snapshot_allows_approvals_without_council_state() {
             &signer,
         );
     }
-
     assert!(
         state.view().world().council().get(&0).is_none(),
         "council state should not be required for parliament snapshot approvals",
@@ -1562,7 +1480,6 @@ fn parliament_snapshot_allows_approvals_without_council_state() {
         iroha_core::state::GovernanceReferendumStatus::Open
     );
 }
-
 #[test]
 fn tampered_parliament_snapshot_commitment_rejects_ballots() {
     let mut state = setup_council_state();
@@ -1576,7 +1493,6 @@ fn tampered_parliament_snapshot_commitment_rejects_ballots() {
         .and_then(|roster| roster.members.first())
         .cloned()
         .expect("rules signer");
-
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
     let mut stx = block.transaction();
     let err = CastParliamentBallot {
@@ -1599,7 +1515,6 @@ fn tampered_parliament_snapshot_commitment_rejects_ballots() {
         iroha_core::state::GovernanceReferendumStatus::Proposed
     );
 }
-
 #[test]
 fn mismatched_snapshot_epoch_rejects_ballots_before_roster_use() {
     let mut state = setup_council_state();
@@ -1616,7 +1531,6 @@ fn mismatched_snapshot_epoch_rejects_ballots_before_roster_use() {
         .and_then(|roster| roster.members.first())
         .cloned()
         .expect("rules signer");
-
     let mut block = state.block(BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0));
     let mut stx = block.transaction();
     let err = CastParliamentBallot {
@@ -1639,7 +1553,6 @@ fn mismatched_snapshot_epoch_rejects_ballots_before_roster_use() {
         iroha_core::state::GovernanceReferendumStatus::Proposed
     );
 }
-
 #[test]
 fn snapshot_roster_metadata_mismatch_rejects_ballots_even_with_matching_root() {
     let mut state = setup_council_state();
@@ -1662,7 +1575,6 @@ fn snapshot_roster_metadata_mismatch_rejects_ballots_even_with_matching_root() {
         .and_then(|roster| roster.members.first())
         .cloned()
         .expect("rules signer");
-
     let mut block = state.block(BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0));
     let mut stx = block.transaction();
     let err = CastParliamentBallot {

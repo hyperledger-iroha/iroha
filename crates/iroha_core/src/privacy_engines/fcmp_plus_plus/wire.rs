@@ -9,9 +9,6 @@
 //! `O~ || I~ || R || SAL` per input, followed by the generalized
 //! Bulletproofs FCMP and its root-blind proof of knowledge, then the sole
 //! ordered aggregate output Bulletproofs+ range proof.
-
-use std::collections::BTreeSet;
-
 use super::{
     FCMP_MAX_OUTPUTS_NATIVE_V1, FCMP_POINT_BYTES_V1, FcmpNativeErrorV1, FcmpRangeProofV1,
     FcmpTreeCurveV1, FcmpTreeRootV1, fcmp_range_proof_size_v1,
@@ -21,7 +18,7 @@ use super::{
     },
     validate_fcmp_edwards_point_v1, validate_layer_count,
 };
-
+use std::collections::BTreeSet;
 /// Sole first-release FCMP++ proof-envelope magic and version.
 pub const FCMP_PROOF_WIRE_MAGIC_V1: [u8; 4] = *b"IFC1";
 /// Maximum FCMP++ input count accepted by the native first-release parser.
@@ -39,13 +36,11 @@ pub const FCMP_MIN_PROOF_WIRE_BYTES_V1: usize = 4_008;
 pub const FCMP_MAX_PROOF_WIRE_BYTES_V1: usize = 12_520;
 const ROOT_BLIND_POK_BYTES_V1: usize = 64;
 const COMMITMENT_WORD_LEN_V1: usize = 128;
-
 const C1_LEAVES_ROWS_PER_INPUT_V1: usize = 97;
 const C1_BRANCH_ROWS_PER_INPUT_V1: usize = 52;
 const C2_ROWS_PER_INPUT_PER_LAYER_V1: usize = 32;
 const C1_TARGET_ROWS_V1: usize = 256;
 const C2_TARGET_ROWS_V1: usize = 128;
-
 /// Authoritative public FCMP++ relation for one input.
 ///
 /// Upstream serializes O~/I~/R in the proof and supplies C~/L externally.
@@ -64,7 +59,6 @@ pub struct FcmpProofInputPublicV1 {
     /// Canonical non-identity key image/link tag `L`.
     pub key_image: [u8; 32],
 }
-
 impl FcmpProofInputPublicV1 {
     /// Validate one complete O~/I~/R/C~/L public relation.
     pub fn new(
@@ -88,7 +82,6 @@ impl FcmpProofInputPublicV1 {
         })
     }
 }
-
 /// Structurally decoded proof components for one FCMP++ input.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedFcmpProofInputV1 {
@@ -103,7 +96,6 @@ pub struct ParsedFcmpProofInputV1 {
     /// Six canonical Ed25519 scalar responses.
     pub sal_scalars: [[u8; 32]; 6],
 }
-
 /// Strictly framed but not yet cryptographically verified FCMP++ proof.
 ///
 /// Construction of this type proves only canonical structure and size.  It is
@@ -132,14 +124,12 @@ pub struct ParsedFcmpPlusPlusWireV1 {
     /// newly-created output commitments.
     pub range_proof: FcmpRangeProofV1,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct TapeSizer {
     words_per_commitment: usize,
     offset: usize,
     commitments: usize,
 }
-
 impl TapeSizer {
     fn new(commitment_len: usize) -> Result<Self, FcmpNativeErrorV1> {
         if commitment_len == 0 || commitment_len % COMMITMENT_WORD_LEN_V1 != 0 {
@@ -151,7 +141,6 @@ impl TapeSizer {
             commitments: 0,
         })
     }
-
     fn append_words(&mut self, words: usize) {
         for _ in 0..words {
             if self.offset == 0 {
@@ -163,7 +152,6 @@ impl TapeSizer {
             }
         }
     }
-
     fn append_branch(&mut self) -> Result<(), FcmpNativeErrorV1> {
         if self.offset != 0 {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
@@ -171,16 +159,13 @@ impl TapeSizer {
         self.commitments += 1;
         Ok(())
     }
-
     fn append_claimed_point(&mut self) {
         self.append_words(4);
     }
-
     fn append_divisor(&mut self) {
         self.append_words(2);
     }
 }
-
 fn next_power_of_two_at_least(value: usize, minimum: usize) -> Result<usize, FcmpNativeErrorV1> {
     value
         .max(1)
@@ -188,7 +173,6 @@ fn next_power_of_two_at_least(value: usize, minimum: usize) -> Result<usize, Fcm
         .map(|value| value.max(minimum))
         .ok_or(FcmpNativeErrorV1::TreeFull)
 }
-
 pub(super) fn ipa_rows(inputs: usize, layers: usize) -> Result<(usize, usize), FcmpNativeErrorV1> {
     let non_leaf_c1_branches = layers.saturating_sub(1) / 2;
     let c1_rows = inputs
@@ -215,14 +199,12 @@ pub(super) fn ipa_rows(inputs: usize, layers: usize) -> Result<(usize, usize), F
         next_power_of_two_at_least(c2_rows, C2_TARGET_ROWS_V1)?,
     ))
 }
-
 fn log2_power_of_two(value: usize) -> Result<usize, FcmpNativeErrorV1> {
     if !value.is_power_of_two() {
         return Err(FcmpNativeErrorV1::ArithmeticInvariant);
     }
     Ok(value.trailing_zeros() as usize)
 }
-
 fn fcmp_membership_proof_size_v1(inputs: usize, layers: usize) -> Result<usize, FcmpNativeErrorV1> {
     let (c1_rows, c2_rows) = ipa_rows(inputs, layers)?;
     let c1_ipa_elements = 2_usize
@@ -235,12 +217,10 @@ fn fcmp_membership_proof_size_v1(inputs: usize, layers: usize) -> Result<usize, 
         .checked_add(c1_ipa_elements)
         .and_then(|value| value.checked_add(c2_ipa_elements))
         .ok_or(FcmpNativeErrorV1::TreeFull)?;
-
     let mut c1 = TapeSizer::new(c1_rows)?;
     let mut c2 = TapeSizer::new(c2_rows)?;
     let mut c1_non_root_branches = 0_usize;
     let mut c2_non_root_branches = 0_usize;
-
     for _ in 0..inputs {
         for layer in 0..layers.saturating_sub(1) {
             if layer % 2 == 0 {
@@ -257,7 +237,6 @@ fn fcmp_membership_proof_size_v1(inputs: usize, layers: usize) -> Result<usize, 
     } else {
         c2.append_branch()?;
     }
-
     for _ in 0..inputs {
         c1.append_claimed_point();
         c1.append_claimed_point();
@@ -265,7 +244,6 @@ fn fcmp_membership_proof_size_v1(inputs: usize, layers: usize) -> Result<usize, 
         c1.append_claimed_point();
         c1.append_claimed_point();
     }
-
     let additional_c1_points = if c1_non_root_branches == 0 {
         0
     } else {
@@ -277,14 +255,12 @@ fn fcmp_membership_proof_size_v1(inputs: usize, layers: usize) -> Result<usize, 
     for _ in 0..additional_c1_points {
         c1.append_claimed_point();
     }
-
     let additional_c2_points = c2_non_root_branches
         .checked_add(inputs * usize::from(layers % 2 == 0))
         .ok_or(FcmpNativeErrorV1::TreeFull)?;
     for _ in 0..additional_c2_points {
         c2.append_claimed_point();
     }
-
     for commitments in [c1.commitments, c2.commitments] {
         let ni = 2_usize
             .checked_add(2 * (commitments / 2))
@@ -304,7 +280,6 @@ fn fcmp_membership_proof_size_v1(inputs: usize, layers: usize) -> Result<usize, 
         .and_then(|value| value.checked_add(ROOT_BLIND_POK_BYTES_V1))
         .ok_or(FcmpNativeErrorV1::TreeFull)
 }
-
 /// Return the unique `IFC1` wire size for input, tree-depth, and output counts.
 pub fn fcmp_plus_plus_wire_size_v1(
     inputs: usize,
@@ -336,7 +311,6 @@ pub fn fcmp_plus_plus_wire_size_v1(
         .and_then(|value| value.checked_add(range_bytes))
         .ok_or(FcmpNativeErrorV1::TreeFull)
 }
-
 fn take_array<const N: usize>(
     bytes: &[u8],
     cursor: &mut usize,
@@ -353,7 +327,6 @@ fn take_array<const N: usize>(
     *cursor = end;
     Ok(array)
 }
-
 /// Strictly decode the self-describing FCMP++ proof envelope.
 ///
 /// This function validates canonical points, canonical scalars, exact length,
@@ -391,7 +364,6 @@ pub fn decode_fcmp_plus_plus_wire_v1(
     if input_count != public_inputs.len() || layers != root.layers() {
         return Err(FcmpNativeErrorV1::ProofHeaderMismatch);
     }
-
     let mut pseudo_outs = BTreeSet::new();
     let mut key_images = BTreeSet::new();
     for input in public_inputs {
@@ -409,7 +381,6 @@ pub fn decode_fcmp_plus_plus_wire_v1(
             return Err(FcmpNativeErrorV1::DuplicateKeyImage);
         }
     }
-
     let mut cursor = FCMP_PROOF_WIRE_HEADER_BYTES_V1;
     let mut inputs = Vec::with_capacity(input_count);
     for (input_index, public_input) in public_inputs.iter().enumerate() {
@@ -429,7 +400,6 @@ pub fn decode_fcmp_plus_plus_wire_v1(
         {
             return Err(FcmpNativeErrorV1::ProofPublicInputMismatch { index: input_index });
         }
-
         let mut sal_points = [[0; 32]; SAL_POINT_COUNT_V1];
         for point in &mut sal_points {
             *point = take_array(bytes, &mut cursor)?;
@@ -450,7 +420,6 @@ pub fn decode_fcmp_plus_plus_wire_v1(
             sal_scalars,
         });
     }
-
     let membership_size = fcmp_membership_proof_size_v1(input_count, usize::from(layers))?;
     let circuit_size = membership_size
         .checked_sub(ROOT_BLIND_POK_BYTES_V1)
@@ -469,7 +438,6 @@ pub fn decode_fcmp_plus_plus_wire_v1(
         return Err(FcmpNativeErrorV1::EmptyCircuitProof);
     }
     cursor = circuit_end;
-
     let root_blind_commitment = take_array(bytes, &mut cursor)?;
     let root_blind_response = take_array(bytes, &mut cursor)?;
     match root.curve() {
@@ -482,7 +450,6 @@ pub fn decode_fcmp_plus_plus_wire_v1(
             decode_helioselene_scalar(root_blind_response)?;
         }
     }
-
     let range_size = fcmp_range_proof_size_v1(output_count)?;
     let range_end = cursor
         .checked_add(range_size)
@@ -514,7 +481,6 @@ pub fn decode_fcmp_plus_plus_wire_v1(
         range_proof,
     })
 }
-
 /// Decode a pinned upstream membership-only IFC1 fixture for differential
 /// tests. This path is absent from production builds: it supplies a
 /// structurally canonical dummy range suffix solely so the production parser
@@ -526,7 +492,6 @@ pub(super) fn decode_fcmp_membership_fixture_v1(
     root: FcmpTreeRootV1,
 ) -> Result<ParsedFcmpPlusPlusWireV1, FcmpNativeErrorV1> {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, scalar::Scalar};
-
     if bytes.len() < FCMP_PROOF_WIRE_HEADER_BYTES_V1
         || bytes.get(6..8) != Some([0_u8, 0_u8].as_slice())
     {
@@ -552,7 +517,6 @@ pub(super) fn decode_fcmp_membership_fixture_v1(
             expected: membership_only_len,
         });
     }
-
     let output_count = 1_usize;
     let mut framed = Vec::with_capacity(
         membership_only_len
@@ -584,15 +548,12 @@ pub(super) fn decode_fcmp_membership_fixture_v1(
     }
     decode_fcmp_plus_plus_wire_v1(&framed, public_inputs, root)
 }
-
 #[cfg(test)]
 mod tests {
-    use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, scalar::Scalar};
-    use iroha_data_model::privacy::FCMP_MAX_INPUTS_V1;
-
     use super::*;
     use crate::privacy_engines::fcmp_plus_plus::{build_fcmp_frontier_v1, output_from_multiples};
-
+    use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, scalar::Scalar};
+    use iroha_data_model::privacy::FCMP_MAX_INPUTS_V1;
     #[test]
     fn input_bound_matches_the_typed_consensus_model() {
         assert_eq!(
@@ -600,20 +561,22 @@ mod tests {
             usize::try_from(FCMP_MAX_INPUTS_V1).expect("model limit fits usize")
         );
     }
-
     fn point(multiple: u64) -> [u8; 32] {
         (ED25519_BASEPOINT_POINT * Scalar::from(multiple))
             .compress()
             .to_bytes()
     }
-
+    fn one_layer_root() -> FcmpTreeRootV1 {
+        build_fcmp_frontier_v1(&[output_from_multiples(1, 2, 3)])
+            .expect("root")
+            .root
+    }
     fn structural_wire(
         inputs: usize,
         root: FcmpTreeRootV1,
     ) -> (Vec<u8>, Vec<FcmpProofInputPublicV1>) {
         structural_wire_for_outputs(inputs, root, 1)
     }
-
     fn structural_wire_for_outputs(
         inputs: usize,
         root: FcmpTreeRootV1,
@@ -625,7 +588,6 @@ mod tests {
         wire[4] = u8::try_from(inputs).expect("test input count fits u8");
         wire[5] = root.layers();
         wire[6] = u8::try_from(outputs).expect("test output count fits u8");
-
         let mut cursor = FCMP_PROOF_WIRE_HEADER_BYTES_V1;
         let mut multiple = 10_u64;
         let mut public_inputs = Vec::with_capacity(inputs);
@@ -685,7 +647,6 @@ mod tests {
         assert_eq!(cursor, wire.len());
         (wire, public_inputs)
     }
-
     #[test]
     fn proof_size_matches_pinned_upstream_layout_kats() {
         // Exhaustively generated by full-chain-membership-proofs 0.1.0 at
@@ -747,7 +708,6 @@ mod tests {
             Err(FcmpNativeErrorV1::OutputCount { .. })
         ));
     }
-
     #[test]
     fn decoder_accepts_the_exact_compiled_maximum_and_rejects_plus_one_limits() {
         let root = FcmpTreeRootV1::new(
@@ -765,7 +725,6 @@ mod tests {
             decode_fcmp_plus_plus_wire_v1(&wire, &public, root).is_ok(),
             "the exact compiled maximum must remain decodable"
         );
-
         let mut trailing = wire.clone();
         trailing.push(0);
         assert_eq!(trailing.len(), FCMP_MAX_PROOF_WIRE_BYTES_V1 + 1);
@@ -776,7 +735,6 @@ mod tests {
                 expected: FCMP_MAX_PROOF_WIRE_BYTES_V1
             }) if actual == FCMP_MAX_PROOF_WIRE_BYTES_V1 + 1
         ));
-
         let mut too_many_inputs = wire.clone();
         too_many_inputs[4] =
             u8::try_from(FCMP_MAX_INPUTS_NATIVE_V1 + 1).expect("small compiled limit");
@@ -784,7 +742,6 @@ mod tests {
             decode_fcmp_plus_plus_wire_v1(&too_many_inputs, &public, root),
             Err(FcmpNativeErrorV1::InputCount { .. })
         ));
-
         let mut too_many_outputs = wire.clone();
         too_many_outputs[6] =
             u8::try_from(FCMP_MAX_OUTPUTS_NATIVE_V1 + 1).expect("small compiled limit");
@@ -792,7 +749,6 @@ mod tests {
             decode_fcmp_plus_plus_wire_v1(&too_many_outputs, &public, root),
             Err(FcmpNativeErrorV1::OutputCount { .. })
         ));
-
         let mut too_many_layers = wire;
         too_many_layers[5] = super::super::FCMP_MAX_TREE_LAYERS_V1 + 1;
         assert_eq!(
@@ -800,12 +756,9 @@ mod tests {
             Err(FcmpNativeErrorV1::LayerCount)
         );
     }
-
     #[test]
     fn strict_wire_roundtrip_shape_and_public_binding() {
-        let root = build_fcmp_frontier_v1(&[output_from_multiples(1, 2, 3)])
-            .expect("root")
-            .root;
+        let root = one_layer_root();
         let (wire, public) = structural_wire(1, root);
         let parsed =
             decode_fcmp_plus_plus_wire_v1(&wire, &public, root).expect("structural decode");
@@ -814,28 +767,22 @@ mod tests {
         assert_eq!(parsed.inputs.len(), 1);
         assert!(!parsed.circuit_proof.is_empty());
     }
-
     #[test]
     fn framing_and_noncanonical_components_fail_closed() {
-        let root = build_fcmp_frontier_v1(&[output_from_multiples(1, 2, 3)])
-            .expect("root")
-            .root;
+        let root = one_layer_root();
         let (wire, public) = structural_wire(1, root);
-
         let mut mutation = wire.clone();
         mutation[0] ^= 1;
         assert_eq!(
             decode_fcmp_plus_plus_wire_v1(&mutation, &public, root),
             Err(FcmpNativeErrorV1::ProofWireMagic)
         );
-
         let mut mutation = wire.clone();
         mutation[7] = 1;
         assert_eq!(
             decode_fcmp_plus_plus_wire_v1(&mutation, &public, root),
             Err(FcmpNativeErrorV1::ProofWireReserved)
         );
-
         assert!(matches!(
             decode_fcmp_plus_plus_wire_v1(&wire[..wire.len() - 1], &public, root),
             Err(FcmpNativeErrorV1::ProofLength { .. })
@@ -846,7 +793,6 @@ mod tests {
             decode_fcmp_plus_plus_wire_v1(&trailing, &public, root),
             Err(FcmpNativeErrorV1::ProofLength { .. })
         ));
-
         let mut identity = wire.clone();
         identity[FCMP_PROOF_WIRE_HEADER_BYTES_V1..FCMP_PROOF_WIRE_HEADER_BYTES_V1 + 32].fill(0);
         identity[FCMP_PROOF_WIRE_HEADER_BYTES_V1] = 1;
@@ -854,7 +800,6 @@ mod tests {
             decode_fcmp_plus_plus_wire_v1(&identity, &public, root),
             Err(FcmpNativeErrorV1::EdwardsPointIdentity)
         );
-
         let scalar_offset =
             FCMP_PROOF_WIRE_HEADER_BYTES_V1 + (3 + SAL_POINT_COUNT_V1) * FCMP_POINT_BYTES_V1;
         let mut noncanonical_scalar = wire.clone();
@@ -864,14 +809,10 @@ mod tests {
             Err(FcmpNativeErrorV1::ScalarEncoding)
         );
     }
-
     #[test]
     fn every_structural_wire_field_is_canonical_or_explicitly_opaque() {
-        let root = build_fcmp_frontier_v1(&[output_from_multiples(1, 2, 3)])
-            .expect("root")
-            .root;
+        let root = one_layer_root();
         let (wire, public) = structural_wire(2, root);
-
         for magic_index in 0..FCMP_PROOF_WIRE_MAGIC_V1.len() {
             let mut mutation = wire.clone();
             mutation[magic_index] ^= 1;
@@ -906,7 +847,6 @@ mod tests {
             decode_fcmp_plus_plus_wire_v1(&zero_outputs, &public, root),
             Err(FcmpNativeErrorV1::OutputCount { .. })
         ));
-
         for relation_index in 0..3 {
             let mut mutation = wire.clone();
             let offset = FCMP_PROOF_WIRE_HEADER_BYTES_V1 + relation_index * FCMP_POINT_BYTES_V1;
@@ -918,7 +858,6 @@ mod tests {
                 Err(FcmpNativeErrorV1::ProofPublicInputMismatch { index: 0 })
             );
         }
-
         let mut cursor = FCMP_PROOF_WIRE_HEADER_BYTES_V1;
         let identity = {
             let mut encoding = [0; 32];
@@ -945,7 +884,6 @@ mod tests {
                 cursor += FCMP_POINT_BYTES_V1;
             }
         }
-
         let membership_size =
             fcmp_membership_proof_size_v1(2, usize::from(root.layers())).expect("size");
         let circuit_size = membership_size - ROOT_BLIND_POK_BYTES_V1;
@@ -957,7 +895,6 @@ mod tests {
             "the parser must not pretend an opaque circuit-byte mutation is cryptographic verification"
         );
         cursor += circuit_size;
-
         let mut identity_root_blind = wire.clone();
         identity_root_blind[cursor..cursor + FCMP_POINT_BYTES_V1].fill(0);
         assert_eq!(
@@ -965,7 +902,6 @@ mod tests {
             Err(FcmpNativeErrorV1::CyclePointIdentity)
         );
         cursor += FCMP_POINT_BYTES_V1;
-
         let mut noncanonical_root_response = wire.clone();
         noncanonical_root_response[cursor..cursor + FCMP_POINT_BYTES_V1].fill(u8::MAX);
         assert_eq!(
@@ -976,21 +912,16 @@ mod tests {
         cursor += fcmp_range_proof_size_v1(1).expect("range size");
         assert_eq!(cursor, wire.len());
     }
-
     #[test]
     fn public_inputs_and_alternating_root_curves_fail_closed() {
-        let selene_root = build_fcmp_frontier_v1(&[output_from_multiples(1, 2, 3)])
-            .expect("root")
-            .root;
+        let selene_root = one_layer_root();
         let (wire, public) = structural_wire(1, selene_root);
-
         let mut mismatching_relation = public.clone();
         mismatching_relation[0].output_key_tilde = point(30_000);
         assert_eq!(
             decode_fcmp_plus_plus_wire_v1(&wire, &mismatching_relation, selene_root),
             Err(FcmpNativeErrorV1::ProofPublicInputMismatch { index: 0 })
         );
-
         let mut identity = [0; 32];
         identity[0] = 1;
         for field_index in 0..5 {
@@ -1007,7 +938,6 @@ mod tests {
                 decode_fcmp_plus_plus_wire_v1(&wire, &identity_public, selene_root),
                 Err(FcmpNativeErrorV1::EdwardsPointIdentity)
             );
-
             let mut noncanonical_public = public.clone();
             match field_index {
                 0 => noncanonical_public[0].output_key_tilde = [u8::MAX; 32],
@@ -1022,7 +952,6 @@ mod tests {
                 Err(FcmpNativeErrorV1::EdwardsPointEncoding)
             );
         }
-
         let helios_root = FcmpTreeRootV1::from_helios(
             2,
             crate::privacy_engines::fcmp_plus_plus::field::helios_hash_initializer(),
@@ -1032,10 +961,8 @@ mod tests {
             decode_fcmp_plus_plus_wire_v1(&wire, &public, helios_root),
             Err(FcmpNativeErrorV1::ProofHeaderMismatch)
         );
-
         let (helios_wire, helios_public) = structural_wire(1, helios_root);
         assert!(decode_fcmp_plus_plus_wire_v1(&helios_wire, &helios_public, helios_root).is_ok());
-
         let root_blind_offset = helios_wire.len()
             - fcmp_range_proof_size_v1(1).expect("range size")
             - ROOT_BLIND_POK_BYTES_V1;
@@ -1048,26 +975,21 @@ mod tests {
             Err(FcmpNativeErrorV1::CyclePointEncoding)
         );
     }
-
     #[test]
     fn duplicate_public_inputs_and_zero_circuit_proof_fail_closed() {
-        let root = build_fcmp_frontier_v1(&[output_from_multiples(1, 2, 3)])
-            .expect("root")
-            .root;
+        let root = one_layer_root();
         let (wire, mut public) = structural_wire(2, root);
         public[1].key_image = public[0].key_image;
         assert_eq!(
             decode_fcmp_plus_plus_wire_v1(&wire, &public, root),
             Err(FcmpNativeErrorV1::DuplicateKeyImage)
         );
-
         let (wire, mut public) = structural_wire(2, root);
         public[1].pseudo_out = public[0].pseudo_out;
         assert_eq!(
             decode_fcmp_plus_plus_wire_v1(&wire, &public, root),
             Err(FcmpNativeErrorV1::DuplicatePseudoOut)
         );
-
         let (mut wire, public) = structural_wire(1, root);
         let circuit_start = FCMP_PROOF_WIRE_HEADER_BYTES_V1 + FCMP_PROOF_INPUT_BYTES_V1;
         let circuit_size =
@@ -1078,12 +1000,9 @@ mod tests {
             Err(FcmpNativeErrorV1::EmptyCircuitProof)
         );
     }
-
     #[test]
     fn every_truncation_and_hostile_header_fails_without_panicking() {
-        let root = build_fcmp_frontier_v1(&[output_from_multiples(1, 2, 3)])
-            .expect("root")
-            .root;
+        let root = one_layer_root();
         let (wire, public) = structural_wire(2, root);
         for length in 0..wire.len() {
             let result = std::panic::catch_unwind(|| {
@@ -1098,7 +1017,6 @@ mod tests {
                 "truncated prefix length {length} was accepted"
             );
         }
-
         for header_index in 0..FCMP_PROOF_WIRE_HEADER_BYTES_V1 {
             for replacement in [0_u8, 1, u8::MAX] {
                 if wire[header_index] == replacement {

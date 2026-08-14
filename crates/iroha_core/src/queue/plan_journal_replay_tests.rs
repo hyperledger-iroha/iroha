@@ -1,7 +1,6 @@
 // Queue-plan replay, compaction, and storage-identity regression tests.
 //
 // Included by `queue::journal::tests` to preserve exact libtest names.
-
 #[test]
 fn prepared_replay_rejects_same_length_content_tamper_before_callback() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -22,7 +21,6 @@ fn prepared_replay_rejects_same_length_content_tamper_before_callback() {
     let callback_replay = journal
         .prepare_replay()
         .expect("prepare callback replay snapshot");
-
     let replacement_position = u64::try_from(
         raw_bootstrap_frame().len()
             + raw_frame(&QueuePlanJournalFrameV4::Put(first)).len()
@@ -48,7 +46,6 @@ fn prepared_replay_rejects_same_length_content_tamper_before_callback() {
         .expect("rewind payload byte");
     tamper.write_all(&byte).expect("tamper payload byte");
     tamper.sync_all().expect("publish in-place tamper");
-
     let error = verified_replay
         .into_verified_records()
         .expect_err("tampered latest frame must return no owned replay");
@@ -57,7 +54,6 @@ fn prepared_replay_rejects_same_length_content_tamper_before_callback() {
         error.to_string().contains("snapshot content changed"),
         "unexpected owned-replay tamper error: {error}",
     );
-
     let mut callbacks = 0_usize;
     let error = callback_replay
         .for_each_record(|_record| {
@@ -72,7 +68,6 @@ fn prepared_replay_rejects_same_length_content_tamper_before_callback() {
     );
     assert_eq!(callbacks, 0, "tampered owner must not reach the callback");
 }
-
 #[test]
 fn materialized_replay_rejects_wrong_record_identity_before_callback() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -93,7 +88,6 @@ fn materialized_replay_rejects_wrong_record_identity_before_callback() {
         .get_mut(&first.entrypoint_hash)
         .expect("first live index")
         .record = second;
-
     let mut callbacks = 0_usize;
     let error = replay
         .for_each_record(|_record| {
@@ -113,7 +107,6 @@ fn materialized_replay_rejects_wrong_record_identity_before_callback() {
         "wrong materialized Put must not reach callback"
     );
 }
-
 #[test]
 fn materialized_replay_rejects_later_record_corruption_before_any_callback() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -133,7 +126,6 @@ fn materialized_replay_rejects_later_record_corruption_before_any_callback() {
         .get_mut(&second_key)
         .expect("later live index")
         .record = first;
-
     let mut callbacks = 0_usize;
     let error = replay
         .for_each_record(|_record| {
@@ -153,7 +145,6 @@ fn materialized_replay_rejects_later_record_corruption_before_any_callback() {
         "a valid earlier record must remain private when a later record is corrupt",
     );
 }
-
 #[test]
 fn materialized_replay_rejects_same_identity_and_plan_with_changed_claim() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -172,7 +163,6 @@ fn materialized_replay_rejects_same_identity_and_plan_with_changed_claim() {
         .expect("materialized claim")
         .record;
     materialized.enqueue_timestamp_ms = materialized.enqueue_timestamp_ms.saturating_add(1);
-
     let mut callbacks = 0_usize;
     let error = replay
         .for_each_record(|_| {
@@ -187,7 +177,6 @@ fn materialized_replay_rejects_same_identity_and_plan_with_changed_claim() {
     );
     assert_eq!(callbacks, 0, "changed claim must not reach the callback");
 }
-
 #[test]
 fn prepared_replay_rejects_valid_historical_remove_rewrite_before_callback() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -229,7 +218,6 @@ fn prepared_replay_rejects_valid_historical_remove_rewrite_before_callback() {
         .sync_all_with_parent()
         .expect("sync historical Remove fixture");
     let replay = journal.prepare_replay().expect("prepare replay snapshot");
-
     let remove_position = u64::try_from(
         raw_bootstrap_frame()
             .len()
@@ -249,7 +237,6 @@ fn prepared_replay_rejects_valid_historical_remove_rewrite_before_callback() {
         .write_all(&changed_remove)
         .expect("rewrite valid historical Remove");
     tamper.sync_all().expect("publish valid Remove rewrite");
-
     let mut callbacks = 0_usize;
     let error = replay
         .for_each_record(|_| {
@@ -267,7 +254,6 @@ fn prepared_replay_rejects_valid_historical_remove_rewrite_before_callback() {
         "historical semantic rewrite must fail before any callback"
     );
 }
-
 #[test]
 fn compaction_preserves_live_fifo_order_and_uses_v4_frames() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -300,12 +286,10 @@ fn compaction_preserves_live_fifo_order_and_uses_v4_frames() {
             second.claim_digest().expect("hash second claim"),
         )])
         .expect("remove second");
-
     journal.compact_if_needed().expect("compact");
     journal
         .replace_strict_durable(fourth.clone())
         .expect("append through rebound post-compaction handle");
-
     assert_eq!(
         journal.replay().expect("replay"),
         vec![first.clone(), third.clone(), fourth.clone()]
@@ -326,7 +310,6 @@ fn compaction_preserves_live_fifo_order_and_uses_v4_frames() {
     );
     assert!(!path.with_extension("tmp").exists());
 }
-
 #[test]
 fn compaction_failure_after_temp_creation_is_reconciled_on_restart() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -344,11 +327,9 @@ fn compaction_failure_after_temp_creation_is_reconciled_on_restart() {
         .put_deferred_flush(expected.clone())
         .expect("append compaction fixture");
     journal.inject_fault(QueuePlanJournalTestFault::CompactionAfterTempCreate);
-
     let error = journal
         .compact_if_needed()
         .expect_err("post-create compaction failure must propagate");
-
     assert_eq!(error.kind(), io::ErrorKind::Other);
     assert!(journal.is_poisoned());
     assert!(path.with_extension("tmp").is_file());
@@ -365,7 +346,6 @@ fn compaction_failure_after_temp_creation_is_reconciled_on_restart() {
         "reconciled unpromoted temp must be durably removed"
     );
 }
-
 #[test]
 fn compaction_recovery_validates_atomic_remove_batch_prefix() {
     let first = record("compact-remove-batch-first");
@@ -388,7 +368,6 @@ fn compaction_recovery_validates_atomic_remove_batch_prefix() {
     canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::RemoveBatch(
         exact_removals.clone(),
     )));
-
     let valid_dir = tempfile::tempdir().expect("valid tempdir");
     let valid_path = valid_dir.path().join("compact-remove-batch-valid.norito");
     fs::write(&valid_path, &canonical).expect("write valid canonical");
@@ -403,7 +382,6 @@ fn compaction_recovery_validates_atomic_remove_batch_prefix() {
             .is_empty()
     );
     assert!(!valid_path.with_extension("tmp").exists());
-
     let absent = record("compact-remove-batch-absent");
     let mut invalid_removals = exact_removals;
     invalid_removals[1] = QueuePlanJournalRemovalV4 {
@@ -424,11 +402,9 @@ fn compaction_recovery_validates_atomic_remove_batch_prefix() {
     fs::write(&invalid_path, &invalid_canonical).expect("write invalid canonical");
     fs::write(invalid_path.with_extension("tmp"), raw_bootstrap_frame())
         .expect("write invalid compaction prefix");
-
     let error = QueuePlanJournal::open_with_limits(&invalid_path, limits(2), true)
         .err()
         .expect("compaction recovery must reject a partially matching atomic batch");
-
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert!(
         error
@@ -442,7 +418,6 @@ fn compaction_recovery_validates_atomic_remove_batch_prefix() {
     );
     assert!(invalid_path.with_extension("tmp").is_file());
 }
-
 #[test]
 fn recognized_compaction_prefixes_are_reconciled_against_canonical_state() {
     let first = record("compact-prefix-first");
@@ -478,14 +453,12 @@ fn recognized_compaction_prefixes_are_reconciled_against_canonical_state() {
     ];
     cuts.sort_unstable();
     cuts.dedup();
-
     for cut in cuts {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join(format!("compact-prefix-{cut}.norito"));
         fs::write(&path, &canonical).expect("write canonical history");
         fs::write(path.with_extension("tmp"), &compacted[..cut])
             .expect("write recognized compaction prefix");
-
         let journal = QueuePlanJournal::open_with_limits(&path, limits(2), true)
             .unwrap_or_else(|error| panic!("reconcile compaction prefix at cut {cut}: {error}"));
         assert_eq!(
@@ -502,7 +475,6 @@ fn recognized_compaction_prefixes_are_reconciled_against_canonical_state() {
         assert!(!path.with_extension("tmp").exists(), "cut={cut}");
     }
 }
-
 #[test]
 fn staged_compaction_temp_tears_are_durably_discarded_against_canonical_state() {
     let expected_record = record("compact-staged-tear");
@@ -518,25 +490,21 @@ fn staged_compaction_temp_tears_are_durably_discarded_against_canonical_state() 
     let mut bootstrap_body = bootstrap.clone();
     bootstrap_body[header] ^= 0x80;
     bootstrap_body[bootstrap_commit..].fill(0);
-
     let put_commit = put
         .len()
         .checked_sub(QUEUE_PLAN_JOURNAL_FRAME_COMMIT.len())
         .expect("Put commit");
     let put_checksum = put_commit.checked_sub(Hash::LENGTH).expect("Put checksum");
-
     let mut put_body = put.clone();
     put_body[header] ^= 0x80;
     put_body[put_commit..].fill(0);
     let mut full_put_body = bootstrap.clone();
     full_put_body.extend_from_slice(&put_body);
-
     let mut put_checksum_tear = put.clone();
     put_checksum_tear[put_checksum] ^= 0x80;
     put_checksum_tear[put_commit..].fill(0);
     let mut full_put_checksum = bootstrap.clone();
     full_put_checksum.extend_from_slice(&put_checksum_tear);
-
     let mut put_commit_tear = put;
     put_commit_tear[put_commit..].fill(0);
     let mut full_put_commit = bootstrap;
@@ -548,14 +516,12 @@ fn staged_compaction_temp_tears_are_durably_discarded_against_canonical_state() 
         ("put-checksum", full_put_checksum),
         ("put-commit", full_put_commit),
     ];
-
     for (case, temporary_bytes) in cases {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join(format!("compact-staged-{case}.norito"));
         let temporary = path.with_extension("tmp");
         fs::write(&path, &canonical).expect("write canonical history");
         fs::write(&temporary, temporary_bytes).expect("write staged compaction tear");
-
         let journal = QueuePlanJournal::open_with_limits(&path, limits(1), true)
             .unwrap_or_else(|error| panic!("reconcile staged {case} tear: {error}"));
         assert_eq!(
@@ -572,7 +538,6 @@ fn staged_compaction_temp_tears_are_durably_discarded_against_canonical_state() 
         assert!(!temporary.exists(), "case={case}");
     }
 }
-
 #[test]
 fn committed_corrupt_compaction_temp_is_retained_and_fails_closed() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -588,11 +553,9 @@ fn committed_corrupt_compaction_temp_is_retained_and_fails_closed() {
     unexpected[put_payload_offset] ^= 0x80;
     fs::write(&path, &canonical).expect("write canonical");
     fs::write(path.with_extension("tmp"), &unexpected).expect("write unexpected V4 temp");
-
     let error = QueuePlanJournal::open_with_limits(&path, limits(1), true)
         .err()
         .expect("unrelated canonical V4 temp must fail closed");
-
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert!(
         error
@@ -606,7 +569,6 @@ fn committed_corrupt_compaction_temp_is_retained_and_fails_closed() {
         unexpected
     );
 }
-
 #[test]
 fn orphaned_compaction_prefixes_cannot_recreate_a_missing_canonical_path() {
     let first = record("compact-orphaned-first");
@@ -619,7 +581,6 @@ fn orphaned_compaction_prefixes_cannot_recreate_a_missing_canonical_path() {
     let mut apparently_complete = first_of_two.clone();
     apparently_complete.extend_from_slice(&second_put);
     let partial_bootstrap = bootstrap[..bootstrap.len() - 1].to_vec();
-
     for (case, orphaned) in [
         ("partial-bootstrap", partial_bootstrap),
         ("bootstrap-only", bootstrap),
@@ -629,11 +590,9 @@ fn orphaned_compaction_prefixes_cannot_recreate_a_missing_canonical_path() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join(format!("compact-orphaned-{case}.norito"));
         fs::write(path.with_extension("tmp"), &orphaned).expect("write orphaned compaction prefix");
-
         let error = QueuePlanJournal::open_with_limits(&path, limits(2), true)
             .err()
             .expect("orphaned replacement cannot prove completeness");
-
         assert_eq!(error.kind(), io::ErrorKind::InvalidData, "case={case}");
         assert!(!path.exists(), "case={case}");
         assert_eq!(
@@ -643,7 +602,6 @@ fn orphaned_compaction_prefixes_cannot_recreate_a_missing_canonical_path() {
         );
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn compaction_recovery_rejects_temp_path_identity_swap_without_unlinking_replacement() {
@@ -664,13 +622,11 @@ fn compaction_recovery_rejects_temp_path_identity_swap_without_unlinking_replace
     let pending = open_pending_compaction_temp(&temporary, limits(1))
         .expect("open pending temp")
         .expect("pending temp exists");
-
     fs::rename(&temporary, &displaced).expect("displace verified temp pathname");
     let replacement = b"must-not-be-unlinked".to_vec();
     fs::write(&temporary, &replacement).expect("install distinct temp pathname");
     let error = reconcile_pending_compaction_temp(&path, limits(1), pending)
         .expect_err("temp identity swap must fail before unlink");
-
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert_eq!(
         fs::read(&temporary).expect("retain replacement pathname"),
@@ -681,7 +637,6 @@ fn compaction_recovery_rejects_temp_path_identity_swap_without_unlinking_replace
         raw_bootstrap_frame()
     );
 }
-
 #[test]
 fn compaction_rename_then_parent_failure_recovers_replacement_on_restart() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -710,11 +665,9 @@ fn compaction_rename_then_parent_failure_recovers_replacement_on_restart() {
         )])
         .expect("append tombstone");
     journal.inject_fault(QueuePlanJournalTestFault::CompactionAfterRename);
-
     journal
         .compact_if_needed()
         .expect_err("post-rename parent failure must propagate");
-
     assert!(journal.is_poisoned());
     assert!(
         !path.with_extension("tmp").exists(),
@@ -729,7 +682,6 @@ fn compaction_rename_then_parent_failure_recovers_replacement_on_restart() {
         vec![first]
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn cached_append_handle_rejects_atomic_path_replacement_without_split_brain() {
@@ -743,12 +695,10 @@ fn cached_append_handle_rejects_atomic_path_replacement_without_split_brain() {
     stale
         .replace_strict_durable(original.clone())
         .expect("seed original journal");
-
     fs::rename(&path, &displaced).expect("atomically displace journal pathname");
     fs::write(&path, []).expect("install distinct journal pathname");
     let displaced_before = fs::read(&displaced).expect("read displaced journal");
     let mut fresh = open(&path).expect("open replacement pathname concurrently");
-
     let error = stale
         .replace_strict_durable(stale_append)
         .expect_err("stale append handle must reject replaced pathname");
@@ -764,7 +714,6 @@ fn cached_append_handle_rejects_atomic_path_replacement_without_split_brain() {
         fresh.replay().expect("replay fresh journal").is_empty(),
         "the newly bound journal must not inherit stale-inode bytes"
     );
-
     fresh
         .replace_strict_durable(fresh_append.clone())
         .expect("fresh bound handle remains writable");
@@ -781,7 +730,6 @@ fn cached_append_handle_rejects_atomic_path_replacement_without_split_brain() {
         vec![original]
     );
 }
-
 #[test]
 fn second_same_inode_handle_rejects_unobserved_length_change() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -789,14 +737,12 @@ fn second_same_inode_handle_rejects_unobserved_length_change() {
     let first_record = record("two-handles-first");
     let mut first = open(&path).expect("open first handle");
     let mut stale_second = open(&path).expect("open second handle at same length");
-
     first
         .replace_strict_durable(first_record.clone())
         .expect("first handle appends");
     let error = stale_second
         .replace_strict_durable(record("two-handles-rejected"))
         .expect_err("second handle must not append across an unobserved length change");
-
     assert!(error.is_indeterminate());
     assert!(stale_second.is_poisoned());
     assert_eq!(
@@ -804,7 +750,6 @@ fn second_same_inode_handle_rejects_unobserved_length_change() {
         vec![first_record]
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn cached_append_handle_rejects_post_open_hardlink_count_drift() {
@@ -818,7 +763,6 @@ fn cached_append_handle_rejects_post_open_hardlink_count_drift() {
         .expect("seed journal");
     let original_bytes = fs::read(&path).expect("read original bytes");
     fs::hard_link(&path, &alias).expect("add second filesystem link");
-
     let error = journal
         .replace_strict_durable(record("hardlink-drift-rejected"))
         .expect_err("link-count drift must fail closed before append");
@@ -828,7 +772,6 @@ fn cached_append_handle_rejects_post_open_hardlink_count_drift() {
         fs::read(&path).expect("read rejected journal"),
         original_bytes
     );
-
     drop(journal);
     fs::remove_file(&alias).expect("remove adversarial hardlink");
     assert_eq!(
@@ -839,7 +782,6 @@ fn cached_append_handle_rejects_post_open_hardlink_count_drift() {
         vec![original]
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn cached_parent_handle_rejects_directory_replacement_before_sync() {
@@ -853,11 +795,9 @@ fn cached_parent_handle_rejects_directory_replacement_before_sync() {
     journal
         .replace_strict_durable(original.clone())
         .expect("seed parent-bound journal");
-
     fs::rename(&live_parent, &displaced_parent).expect("displace parent directory");
     fs::create_dir(&live_parent).expect("install distinct parent directory");
     fs::write(&path, []).expect("install distinct journal in replacement parent");
-
     let error = journal
         .sync_data_verified()
         .expect_err("cached parent identity drift must reject synchronization");
@@ -879,7 +819,6 @@ fn cached_parent_handle_rejects_directory_replacement_before_sync() {
             .is_empty()
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn prepared_replay_rejects_path_replacement_before_streaming() {
@@ -892,7 +831,6 @@ fn prepared_replay_rejects_path_replacement_before_streaming() {
         .replace_strict_durable(expected)
         .expect("seed replay snapshot");
     let replay = journal.prepare_replay().expect("prepare bound replay");
-
     fs::rename(&path, &displaced).expect("displace replay pathname");
     fs::write(&path, []).expect("install replacement replay pathname");
     let mut callbacks = 0_usize;
@@ -908,7 +846,6 @@ fn prepared_replay_rejects_path_replacement_before_streaming() {
         "path replacement must fail before any callback",
     );
 }
-
 #[test]
 fn prepared_replay_rejects_snapshot_length_extension_before_streaming() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -920,7 +857,6 @@ fn prepared_replay_rejects_snapshot_length_extension_before_streaming() {
         .replace_strict_durable(expected)
         .expect("seed replay snapshot");
     let replay = journal.prepare_replay().expect("prepare bound replay");
-
     let mut concurrent = OpenOptions::new()
         .append(true)
         .open(&path)
@@ -929,7 +865,6 @@ fn prepared_replay_rejects_snapshot_length_extension_before_streaming() {
         .write_all(&raw_frame(&QueuePlanJournalFrameV4::Put(appended)))
         .expect("extend replay snapshot");
     concurrent.sync_all().expect("publish extension");
-
     let mut callbacks = 0_usize;
     let error = replay
         .for_each_record(|_| {
@@ -940,7 +875,6 @@ fn prepared_replay_rejects_snapshot_length_extension_before_streaming() {
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert_eq!(callbacks, 0, "length drift must fail before streaming");
 }
-
 #[test]
 fn nested_parent_creation_is_restart_idempotent() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -951,13 +885,11 @@ fn nested_parent_creation_is_restart_idempotent() {
         .join("journal")
         .join("queue.norito");
     let expected = record("nested-parent-durability");
-
     let mut journal = open(&path).expect("create nested durable journal parent");
     journal
         .replace_strict_durable(expected.clone())
         .expect("persist nested-parent owner");
     drop(journal);
-
     assert!(path.parent().expect("journal parent").is_dir());
     assert_eq!(
         open(&path)
@@ -967,19 +899,16 @@ fn nested_parent_creation_is_restart_idempotent() {
         vec![expected]
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn symlinked_or_hardlinked_journal_and_untrusted_compaction_temp_are_rejected() {
     use std::os::unix::fs::symlink;
-
     let dir = tempfile::tempdir().expect("tempdir");
     let target = dir.path().join("target.norito");
     fs::write(&target, []).expect("target");
     let linked = dir.path().join("linked.norito");
     symlink(&target, &linked).expect("symlink");
     assert!(open(&linked).is_err());
-
     let real_parent = dir.path().join("real-parent");
     fs::create_dir(&real_parent).expect("create real parent");
     let indirect_parent = dir.path().join("indirect-parent");
@@ -996,7 +925,6 @@ fn symlinked_or_hardlinked_journal_and_untrusted_compaction_temp_are_rejected() 
         !real_parent.join("nested").exists(),
         "parent-chain rejection must precede directory creation"
     );
-
     let hardlinked = dir.path().join("hardlinked.norito");
     fs::hard_link(&target, &hardlinked).expect("hardlink");
     let hardlink_error = open(&hardlinked).err().expect("hardlink must fail closed");
@@ -1006,7 +934,6 @@ fn symlinked_or_hardlinked_journal_and_untrusted_compaction_temp_are_rejected() 
             .to_string()
             .contains("exactly one filesystem link")
     );
-
     let path = dir.path().join("stale-temp.norito");
     fs::write(&path, []).expect("journal");
     fs::write(path.with_extension("tmp"), b"stale").expect("temp");
@@ -1014,7 +941,6 @@ fn symlinked_or_hardlinked_journal_and_untrusted_compaction_temp_are_rejected() 
         open(&path).err().expect("stale temp").kind(),
         io::ErrorKind::InvalidData
     );
-
     let symlink_temp_path = dir.path().join("symlink-temp.norito");
     let symlink_temp = symlink_temp_path.with_extension("tmp");
     symlink(&target, &symlink_temp).expect("temp symlink");
@@ -1026,7 +952,6 @@ fn symlinked_or_hardlinked_journal_and_untrusted_compaction_temp_are_rejected() 
         !symlink_temp_path.exists(),
         "temp rejection must occur before creating a new journal"
     );
-
     let hardlink_temp_path = dir.path().join("hardlink-temp.norito");
     let hardlink_temp = hardlink_temp_path.with_extension("tmp");
     fs::hard_link(&target, &hardlink_temp).expect("hardlinked temp");
@@ -1041,7 +966,6 @@ fn symlinked_or_hardlinked_journal_and_untrusted_compaction_temp_are_rejected() 
         !hardlink_temp_path.exists(),
         "hardlink temp rejection must occur before creating a new journal"
     );
-
     let oversized_temp_path = dir.path().join("oversized-temp.norito");
     let oversized_temp = oversized_temp_path.with_extension("tmp");
     let oversized = OpenOptions::new()

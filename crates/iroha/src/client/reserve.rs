@@ -1,5 +1,10 @@
 //! Strict route and finalized-read validation for native `SoraFS` reserve APIs.
-
+use super::{
+    APPLICATION_JSON, DefaultRequestBuilder, RequestBuilder, Response,
+    SorafsReserveAppealReadbackFilter, SorafsReserveCommandRoute,
+    SorafsReserveEventsReadbackFilter, SorafsReserveFinalizedAnchor,
+    SorafsReserveMovementReadbackFilter, SorafsReserveProvidersReadbackFilter, StatusCode,
+};
 use eyre::{Result, eyre};
 use iroha_data_model::{
     events::data::sorafs::SorafsReserveLedgerEventKind,
@@ -22,25 +27,15 @@ use iroha_data_model::{
     transaction::{Executable, SignedTransaction},
 };
 use norito::json::Value;
-
-use super::{
-    APPLICATION_JSON, DefaultRequestBuilder, RequestBuilder, Response,
-    SorafsReserveAppealReadbackFilter, SorafsReserveCommandRoute,
-    SorafsReserveEventsReadbackFilter, SorafsReserveFinalizedAnchor,
-    SorafsReserveMovementReadbackFilter, SorafsReserveProvidersReadbackFilter, StatusCode,
-};
 const FINALIZED_RECORD_SCHEMA_V1: &str = "sorafs.reserve.finalized_record.v1";
 const RESERVE_DEFAULT_PAGE_LIMIT_V1: u32 = 100;
 const RESERVE_JSON_RESPONSE_MAX_BYTES_V1: usize = 8 * 1024 * 1024;
-
 fn response_error(kind: &str, detail: &str) -> eyre::Report {
     eyre!("invalid finalized SoraFS reserve {kind} response: {detail}")
 }
-
 fn request_error(kind: &str, detail: &str) -> eyre::Report {
     eyre!("invalid finalized SoraFS reserve {kind} request: {detail}")
 }
-
 fn parse_request_hash(value: &str, kind: &str) -> Result<[u8; 32]> {
     let mut decoded = [0u8; 32];
     if value.len() != 64
@@ -52,7 +47,6 @@ fn parse_request_hash(value: &str, kind: &str) -> Result<[u8; 32]> {
     }
     Ok(decoded)
 }
-
 fn validate_anchor(
     expected: &SorafsReserveFinalizedAnchor<'_>,
     kind: &str,
@@ -70,7 +64,6 @@ fn validate_anchor(
         _ => Err(request_error(kind, "finalized cursor is incomplete")),
     }
 }
-
 fn validate_limit(limit: Option<u32>, kind: &str) -> Result<usize> {
     let limit = limit.unwrap_or(RESERVE_DEFAULT_PAGE_LIMIT_V1);
     if !(1..=RESERVE_QUERY_MAX_ITEMS_V1).contains(&limit) {
@@ -78,7 +71,6 @@ fn validate_limit(limit: Option<u32>, kind: &str) -> Result<usize> {
     }
     Ok(usize::try_from(limit).expect("bounded reserve query limit fits usize"))
 }
-
 fn requested_event_cursor(
     filter: &SorafsReserveEventsReadbackFilter<'_>,
     kind: &str,
@@ -106,13 +98,11 @@ fn requested_event_cursor(
         _ => Err(request_error(kind, "event cursor is incomplete")),
     }
 }
-
 super::repair::define_finalized_event_validators!(
     ReserveFinalizedEventCursorV1,
     ReserveFinalizedCursorV1,
     response_error
 );
-
 fn exact_json_object(response: &Response<Vec<u8>>, kind: &str, keys: &[&str]) -> Result<Value> {
     if response.body().len() > RESERVE_JSON_RESPONSE_MAX_BYTES_V1 {
         return Err(response_error(
@@ -154,7 +144,6 @@ fn exact_json_object(response: &Response<Vec<u8>>, kind: &str, keys: &[&str]) ->
     }
     Ok(value)
 }
-
 fn exact_typed_payload<T>(value: Value, kind: &str, detail: &str) -> Result<T>
 where
     T: norito::json::JsonDeserialize + norito::json::JsonSerialize,
@@ -171,7 +160,6 @@ where
     }
     Ok(decoded)
 }
-
 fn validate_encoded_page<T: norito::core::NoritoSerialize>(page: &T, kind: &str) -> Result<()> {
     let encoded_len = norito::to_bytes(page)
         .map_err(|_| response_error(kind, "typed page cannot be encoded as canonical Norito"))?
@@ -184,7 +172,6 @@ fn validate_encoded_page<T: norito::core::NoritoSerialize>(page: &T, kind: &str)
     }
     Ok(())
 }
-
 fn exact_record_payload(
     response: &Response<Vec<u8>>,
     kind: &str,
@@ -211,7 +198,6 @@ fn exact_record_payload(
         .expect("exact record wrapper has its payload");
     Ok((cursor, payload))
 }
-
 fn validate_finalized_cursor(
     cursor: ReserveFinalizedCursorV1,
     expected: &SorafsReserveFinalizedAnchor<'_>,
@@ -228,7 +214,6 @@ fn validate_finalized_cursor(
     }
     Ok(())
 }
-
 fn validate_policy_record(record: &ReserveAuthorityPolicyRecordV1, kind: &str) -> Result<()> {
     record
         .policy
@@ -246,7 +231,6 @@ fn validate_policy_record(record: &ReserveAuthorityPolicyRecordV1, kind: &str) -
     }
     Ok(())
 }
-
 fn validate_provider_record(record: &ReserveProviderAccountV1, kind: &str) -> Result<()> {
     if record.terms.provider_id.0 == [0; 32]
         || record.terms.capacity_gib == 0
@@ -265,7 +249,6 @@ fn validate_provider_record(record: &ReserveProviderAccountV1, kind: &str) -> Re
     }
     Ok(())
 }
-
 fn validate_movement_record(record: &ReserveMovementRecordV1, kind: &str) -> Result<()> {
     let terminal_fields = record.decided_by.is_some()
         && record.decided_at_unix.is_some()
@@ -290,7 +273,6 @@ fn validate_movement_record(record: &ReserveMovementRecordV1, kind: &str) -> Res
     }
     Ok(())
 }
-
 fn validate_appeal_record(record: &ReserveAppealRecordV1, kind: &str) -> Result<()> {
     let terminal_fields = record.decided_by.is_some()
         && record.decided_at_unix.is_some()
@@ -313,7 +295,6 @@ fn validate_appeal_record(record: &ReserveAppealRecordV1, kind: &str) -> Result<
     }
     Ok(())
 }
-
 fn validate_event_record(record: &ReserveFinalizedEventV1, kind: &str) -> Result<()> {
     let event = &record.event;
     if event.occurred_at_unix_ms == 0
@@ -367,7 +348,6 @@ fn validate_event_record(record: &ReserveFinalizedEventV1, kind: &str) -> Result
     }
     Ok(())
 }
-
 pub(super) fn validate_id_page<T>(
     records: &[T],
     mut previous: Option<[u8; 32]>,
@@ -392,7 +372,6 @@ pub(super) fn validate_id_page<T>(
     }
     Ok(())
 }
-
 /// Require exact JSON and an untransformed response body for finalized reads.
 pub(super) fn finalized_json_request(builder: DefaultRequestBuilder) -> DefaultRequestBuilder {
     builder
@@ -400,7 +379,6 @@ pub(super) fn finalized_json_request(builder: DefaultRequestBuilder) -> DefaultR
         .header("Accept-Encoding", "identity")
         .max_response_bytes(RESERVE_JSON_RESPONSE_MAX_BYTES_V1)
 }
-
 /// Validate one finalized-anchor request before any HTTP call.
 pub(super) fn validate_anchor_request(
     expected: &SorafsReserveFinalizedAnchor<'_>,
@@ -408,7 +386,6 @@ pub(super) fn validate_anchor_request(
 ) -> Result<()> {
     validate_anchor(expected, kind).map(drop)
 }
-
 /// Validate one non-zero detail identifier and finalized anchor before HTTP.
 pub(super) fn validate_detail_request(
     id_hex: &str,
@@ -418,7 +395,6 @@ pub(super) fn validate_detail_request(
     parse_request_hash(id_hex, kind)?;
     validate_anchor_request(expected, kind)
 }
-
 /// Validate one provider-page request before any HTTP call.
 pub(super) fn validate_providers_request(
     filter: &SorafsReserveProvidersReadbackFilter<'_>,
@@ -431,7 +407,6 @@ pub(super) fn validate_providers_request(
         .transpose()?;
     Ok(())
 }
-
 /// Validate one movement-page request before any HTTP call.
 pub(super) fn validate_movements_request(
     filter: &SorafsReserveMovementReadbackFilter<'_>,
@@ -444,7 +419,6 @@ pub(super) fn validate_movements_request(
         .transpose()?;
     Ok(())
 }
-
 /// Validate one appeal-page request before any HTTP call.
 pub(super) fn validate_appeals_request(
     filter: &SorafsReserveAppealReadbackFilter<'_>,
@@ -457,7 +431,6 @@ pub(super) fn validate_appeals_request(
         .transpose()?;
     Ok(())
 }
-
 /// Validate one event-page request before any HTTP call.
 pub(super) fn validate_events_request(
     filter: &SorafsReserveEventsReadbackFilter<'_>,
@@ -472,7 +445,6 @@ pub(super) fn validate_events_request(
     }
     Ok(())
 }
-
 /// Validate a successful finalized reserve-policy response without rewriting it.
 pub(super) fn validate_policy_response(
     response: Response<Vec<u8>>,
@@ -488,7 +460,6 @@ pub(super) fn validate_policy_response(
     validate_finalized_cursor(cursor, expected, "policy")?;
     Ok(response)
 }
-
 macro_rules! define_id_page_response_validator {
     (
         $(#[$meta:meta])*
@@ -536,7 +507,6 @@ macro_rules! define_id_page_response_validator {
         }
     };
 }
-
 define_id_page_response_validator!(
     /// Validate a successful finalized reserve-provider page without rewriting it.
     validate_providers_response,
@@ -549,7 +519,6 @@ define_id_page_response_validator!(
     |account: &ReserveProviderAccountV1| account.terms.provider_id.0,
     |page: &ReserveProviderAccountPageV1| page.next_after.map(|provider| provider.0)
 );
-
 /// Validate a successful finalized reserve-provider record without rewriting it.
 pub(super) fn validate_provider_response(
     response: Response<Vec<u8>>,
@@ -574,7 +543,6 @@ pub(super) fn validate_provider_response(
     }
     Ok(response)
 }
-
 define_id_page_response_validator!(
     /// Validate a successful finalized reserve-movement page without rewriting it.
     validate_movements_response,
@@ -587,7 +555,6 @@ define_id_page_response_validator!(
     |movement: &ReserveMovementRecordV1| movement.movement_id,
     |page: &ReserveMovementPageV1| page.next_after
 );
-
 /// Validate a successful finalized reserve-movement record without rewriting it.
 pub(super) fn validate_movement_response(
     response: Response<Vec<u8>>,
@@ -610,7 +577,6 @@ pub(super) fn validate_movement_response(
     }
     Ok(response)
 }
-
 define_id_page_response_validator!(
     /// Validate a successful finalized reserve-appeal page without rewriting it.
     validate_appeals_response,
@@ -623,7 +589,6 @@ define_id_page_response_validator!(
     |appeal: &ReserveAppealRecordV1| appeal.appeal_id,
     |page: &ReserveAppealPageV1| page.next_after
 );
-
 /// Validate a successful finalized reserve-appeal record without rewriting it.
 pub(super) fn validate_appeal_response(
     response: Response<Vec<u8>>,
@@ -646,7 +611,6 @@ pub(super) fn validate_appeal_response(
     }
     Ok(response)
 }
-
 /// Validate a successful finalized reserve-event page without rewriting it.
 pub(super) fn validate_events_response(
     response: Response<Vec<u8>>,
@@ -708,7 +672,6 @@ pub(super) fn validate_events_response(
     }
     Ok(response)
 }
-
 impl SorafsReserveCommandRoute {
     pub(super) const fn expected_instruction_label(self) -> &'static str {
         match self {
@@ -722,14 +685,12 @@ impl SorafsReserveCommandRoute {
         }
     }
 }
-
 fn route_mismatch(route: SorafsReserveCommandRoute) -> eyre::Report {
     eyre!(
         "SoraFS reserve route requires exactly one `{}` native instruction",
         route.expected_instruction_label()
     )
 }
-
 /// Reject a transaction unless it contains the one native instruction selected by `route`.
 pub(super) fn validate_transaction_route(
     route: SorafsReserveCommandRoute,
@@ -779,11 +740,16 @@ pub(super) fn validate_transaction_route(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, sync::Arc, time::Duration};
-
+    use super::*;
+    use crate::{
+        client::evidence_http_tests::{
+            SnapshotStore, assert_single_accept_header, base_url, client_with_base_url,
+            empty_response, respond_with, with_mock_http,
+        },
+        http::StatusCode,
+    };
     use iroha_data_model::{
         Level,
         asset::AssetDefinitionId,
@@ -814,40 +780,27 @@ mod tests {
             Executable, FeePaymentIntent, IvmBytecode, SignedTransaction, TransactionBuilder,
         },
     };
-
-    use super::*;
-    use crate::{
-        client::evidence_http_tests::{
-            SnapshotStore, assert_single_accept_header, base_url, client_with_base_url,
-            empty_response, respond_with, with_mock_http,
-        },
-        http::StatusCode,
-    };
-
+    use std::{num::NonZeroU64, sync::Arc, time::Duration};
     const EXACT_RESERVE_TTL: Duration = Duration::from_secs(300);
     const MOVEMENT_ID: [u8; 32] = [0x61; 32];
     const APPEAL_ID: [u8; 32] = [0x62; 32];
-
     fn finalized_cursor() -> ReserveFinalizedCursorV1 {
         ReserveFinalizedCursorV1 {
             height: 7,
             block_hash: [0x71; 32],
         }
     }
-
     fn ordered_id(index: u32) -> [u8; 32] {
         let mut id = [0; 32];
         id[28..].copy_from_slice(&index.to_be_bytes());
         id
     }
-
     fn finalized_anchor<'a>(block_hash: &'a str) -> SorafsReserveFinalizedAnchor<'a> {
         SorafsReserveFinalizedAnchor {
             expected_finalized_height: Some(7),
             expected_finalized_block_hash_hex: Some(block_hash),
         }
     }
-
     fn policy_record(client: &super::super::Client) -> ReserveAuthorityPolicyRecordV1 {
         let policy = ReserveAuthorityPolicyV1 {
             version: RESERVE_AUTHORITY_POLICY_VERSION_V1,
@@ -882,7 +835,6 @@ mod tests {
             activated_at_unix: 1,
         }
     }
-
     fn provider_account(
         client: &super::super::Client,
         provider_id: [u8; 32],
@@ -911,7 +863,6 @@ mod tests {
             updated_at_unix: 1,
         }
     }
-
     fn movement_record(
         client: &super::super::Client,
         movement_id: [u8; 32],
@@ -931,7 +882,6 @@ mod tests {
             rationale: None,
         }
     }
-
     fn appeal_record(client: &super::super::Client, appeal_id: [u8; 32]) -> ReserveAppealRecordV1 {
         ReserveAppealRecordV1 {
             appeal_id,
@@ -948,7 +898,6 @@ mod tests {
             rationale: None,
         }
     }
-
     fn reserve_event(
         client: &super::super::Client,
         sequence: u64,
@@ -979,7 +928,6 @@ mod tests {
             },
         }
     }
-
     fn page_response<T: norito::json::JsonSerialize>(payload: &T) -> Response<Vec<u8>> {
         Response::builder()
             .status(StatusCode::OK)
@@ -987,7 +935,6 @@ mod tests {
             .body(norito::json::to_vec(payload).expect("encode reserve page"))
             .expect("build reserve page response")
     }
-
     fn record_response<T: norito::json::JsonSerialize>(
         key: &str,
         payload: &T,
@@ -1004,7 +951,6 @@ mod tests {
         );
         page_response(&Value::Object(wrapper))
     }
-
     fn non_ok_response() -> Response<Vec<u8>> {
         Response::builder()
             .status(StatusCode::CONFLICT)
@@ -1013,11 +959,9 @@ mod tests {
             .body(vec![0x00, 0xFF, 0x51, 0x00])
             .expect("build non-OK response")
     }
-
     fn assert_rejected<T>(result: Result<T>) {
         assert!(result.is_err());
     }
-
     fn event_page(events: Vec<ReserveFinalizedEventV1>) -> ReserveFinalizedEventPageV1 {
         ReserveFinalizedEventPageV1 {
             finalized_cursor: finalized_cursor(),
@@ -1026,21 +970,18 @@ mod tests {
             next_after: None,
         }
     }
-
     fn assert_movements_rejected(
         page: &ReserveMovementPageV1,
         filter: &SorafsReserveMovementReadbackFilter<'_>,
     ) {
         assert_rejected(validate_movements_response(page_response(page), filter));
     }
-
     fn assert_events_rejected(
         page: &ReserveFinalizedEventPageV1,
         filter: &SorafsReserveEventsReadbackFilter<'_>,
     ) {
         assert_rejected(validate_events_response(page_response(page), filter));
     }
-
     fn assert_exact_read_request(snapshot: &crate::http_default::RequestSnapshot, path: &str) {
         assert_eq!(snapshot.method, crate::http::Method::GET);
         assert_eq!(snapshot.url.path(), path);
@@ -1057,7 +998,6 @@ mod tests {
             RESERVE_JSON_RESPONSE_MAX_BYTES_V1
         );
     }
-
     fn sign_executable(client: &super::super::Client, executable: Executable) -> SignedTransaction {
         let gas_limit = executable
             .requires_transaction_gas_limit()
@@ -1074,7 +1014,6 @@ mod tests {
             .try_sign_transaction(builder)
             .expect("sign reserve route validation fixture")
     }
-
     fn sign_instruction(
         client: &super::super::Client,
         instruction: impl Into<InstructionBox>,
@@ -1084,7 +1023,6 @@ mod tests {
             Executable::Instructions(vec![instruction.into()].into()),
         )
     }
-
     fn movement(kind: ReserveMovementKindV1) -> RequestSorafsReserveMovement {
         RequestSorafsReserveMovement::new(
             MOVEMENT_ID,
@@ -1095,15 +1033,12 @@ mod tests {
             [0x64; 32],
         )
     }
-
     fn movement_decision(movement_id: [u8; 32]) -> DecideSorafsReserveMovement {
         DecideSorafsReserveMovement::new(movement_id, 1, [0x64; 32], true, "approved".to_owned())
     }
-
     fn appeal_decision(appeal_id: [u8; 32]) -> DecideSorafsReserveAppeal {
         DecideSorafsReserveAppeal::new(appeal_id, 1, [0x64; 32], true, "accepted".to_owned())
     }
-
     fn exact_route_instructions() -> [(SorafsReserveCommandRoute, InstructionBox); 7] {
         let provider_id = ProviderId::new([0x63; 32]);
         [
@@ -1158,7 +1093,6 @@ mod tests {
             ),
         ]
     }
-
     fn assert_rejected_before_http(
         client: &super::super::Client,
         route: SorafsReserveCommandRoute,
@@ -1172,7 +1106,6 @@ mod tests {
             || client.post_sorafs_reserve_transaction(route, transaction),
         );
     }
-
     #[test]
     fn reserve_route_validation_accepts_every_exact_instruction() {
         let client = client_with_base_url(base_url());
@@ -1182,13 +1115,11 @@ mod tests {
             validate_transaction_route(route, &transaction).expect("matching reserve route");
         }
     }
-
     #[test]
     fn reserve_route_validation_rejects_wrong_kind_and_identifiers_before_http() {
         let client = client_with_base_url(base_url());
         let withdrawal = sign_instruction(&client, movement(ReserveMovementKindV1::Withdrawal));
         assert_rejected_before_http(&client, SorafsReserveCommandRoute::TopUp, &withdrawal);
-
         let movement = sign_instruction(&client, movement_decision(MOVEMENT_ID));
         assert_rejected_before_http(
             &client,
@@ -1214,7 +1145,6 @@ mod tests {
             assert_rejected_before_http(&client, route, &transaction);
         }
     }
-
     #[test]
     fn reserve_route_validation_rejects_wrong_type_non_native_and_non_singleton_before_http() {
         let client = client_with_base_url(base_url());
@@ -1228,39 +1158,33 @@ mod tests {
             ),
         );
         assert_rejected_before_http(&client, SorafsReserveCommandRoute::TopUp, &draw);
-
         let log = sign_instruction(
             &client,
             Log::new(Level::INFO, "not a reserve instruction".into()),
         );
         assert_rejected_before_http(&client, SorafsReserveCommandRoute::TopUp, &log);
-
         let top_up: InstructionBox = movement(ReserveMovementKindV1::TopUp).into();
         let multiple = sign_executable(
             &client,
             Executable::Instructions(vec![top_up.clone(), top_up].into()),
         );
         assert_rejected_before_http(&client, SorafsReserveCommandRoute::TopUp, &multiple);
-
         let ivm = sign_executable(
             &client,
             Executable::Ivm(IvmBytecode::from_compiled(vec![0x00])),
         );
         assert_rejected_before_http(&client, SorafsReserveCommandRoute::TopUp, &ivm);
     }
-
     #[test]
     fn reserve_read_response_binding_accepts_exact_typed_records_and_pages() {
         let client = client_with_base_url(base_url());
         let hash = hex::encode(finalized_cursor().block_hash);
         let finalized = finalized_anchor(&hash);
-
         validate_policy_response(
             record_response("policy", &policy_record(&client)),
             &finalized,
         )
         .expect("exact policy record");
-
         let provider = provider_account(&client, [0x20; 32]);
         validate_provider_response(
             record_response("provider", &provider),
@@ -1284,7 +1208,6 @@ mod tests {
             },
         )
         .expect("exact provider page");
-
         let movement = movement_record(&client, [0x20; 32]);
         validate_movement_response(
             record_response("movement", &movement),
@@ -1306,7 +1229,6 @@ mod tests {
             },
         )
         .expect("exact movement page");
-
         let appeal = appeal_record(&client, [0x20; 32]);
         validate_appeal_response(
             record_response("appeal", &appeal),
@@ -1329,7 +1251,6 @@ mod tests {
         )
         .expect("exact appeal page");
     }
-
     #[test]
     fn reserve_event_response_binding_accepts_exact_successors() {
         let client = client_with_base_url(base_url());
@@ -1350,7 +1271,6 @@ mod tests {
             },
         )
         .expect("exact initial policy-activation page");
-
         let hash = hex::encode(finalized_cursor().block_hash);
         let after_hash = hex::encode([0x51; 32]);
         let events = vec![
@@ -1376,7 +1296,6 @@ mod tests {
         )
         .expect("exact contiguous event page");
     }
-
     #[test]
     fn reserve_page_response_binding_separates_json_transport_and_norito_bounds() {
         let client = client_with_base_url(base_url());
@@ -1404,7 +1323,6 @@ mod tests {
         );
         validate_appeals_response(response, &SorafsReserveAppealReadbackFilter::default())
             .expect("large escaped JSON with bounded canonical Norito is valid");
-
         let movements = (1..=RESERVE_DEFAULT_PAGE_LIMIT_V1)
             .map(|index| {
                 let mut movement = movement_record(&client, ordered_id(index));
@@ -1434,7 +1352,6 @@ mod tests {
                 .expect_err("oversized canonical Norito page must be rejected");
         assert!(error.to_string().contains("canonical Norito page exceeds"));
     }
-
     #[test]
     fn reserve_read_response_binding_rejects_media_wrapper_finality_and_detail_mismatch() {
         let client = client_with_base_url(base_url());
@@ -1468,7 +1385,6 @@ mod tests {
                 &SorafsReserveFinalizedAnchor::default(),
             ));
         }
-
         let mut wrapper = record_response("policy", &policy);
         let mut value: Value =
             norito::json::from_slice(wrapper.body()).expect("decode record wrapper");
@@ -1507,7 +1423,6 @@ mod tests {
                 .to_string()
                 .contains("body exceeds the JSON transport bound")
         );
-
         let wrong_hash = hex::encode([0x72; 32]);
         assert_rejected(validate_policy_response(
             record_response("policy", &policy),
@@ -1533,13 +1448,11 @@ mod tests {
             assert_rejected(response);
         }
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn reserve_read_response_binding_rejects_typed_semantic_mutants() {
         let client = client_with_base_url(base_url());
         let finalized = SorafsReserveFinalizedAnchor::default();
-
         for mutate in [
             |record: &mut ReserveAuthorityPolicyRecordV1| record.policy_digest = [0x99; 32],
             |record: &mut ReserveAuthorityPolicyRecordV1| record.activated_at_unix = 0,
@@ -1554,7 +1467,6 @@ mod tests {
                 &finalized,
             ));
         }
-
         let mut provider = provider_account(&client, [0x20; 32]);
         provider.terms.capacity_gib = 0;
         assert_rejected(validate_provider_response(
@@ -1586,7 +1498,6 @@ mod tests {
             mutate(&mut provider);
             assert_rejected(validate_provider_record(&provider, "provider"));
         }
-
         let mut movement = movement_record(&client, [0x20; 32]);
         movement.amount = "0".parse().expect("zero movement amount");
         assert_rejected(validate_movement_response(
@@ -1609,7 +1520,6 @@ mod tests {
             mutate(&mut movement);
             assert_rejected(validate_movement_record(&movement, "movement"));
         }
-
         let mut appeal = appeal_record(&client, [0x20; 32]);
         appeal.reason.clear();
         assert_rejected(validate_appeal_response(
@@ -1631,7 +1541,6 @@ mod tests {
             mutate(&mut appeal);
             assert_rejected(validate_appeal_record(&appeal, "appeal"));
         }
-
         let mut event = reserve_event(&client, 1, 5, [0x51; 32], 0);
         event.event.occurred_at_unix_ms = 0;
         assert_rejected(validate_events_response(
@@ -1653,7 +1562,6 @@ mod tests {
         invalid_kind.event.kind = SorafsReserveLedgerEventKind::MovementRequested;
         assert_rejected(validate_event_record(&invalid_kind, "event page"));
     }
-
     #[test]
     fn reserve_page_response_binding_rejects_bounds_order_exclusivity_and_continuation() {
         let client = client_with_base_url(base_url());
@@ -1670,14 +1578,12 @@ mod tests {
             ..SorafsReserveMovementReadbackFilter::default()
         };
         assert_movements_rejected(&page, &limit_one);
-
         page.movements = vec![second, first.clone()];
         let limit_two = SorafsReserveMovementReadbackFilter {
             limit: Some(2),
             ..SorafsReserveMovementReadbackFilter::default()
         };
         assert_movements_rejected(&page, &limit_two);
-
         page.movements = vec![first];
         let after = hex::encode([0x20; 32]);
         let not_exclusive = SorafsReserveMovementReadbackFilter {
@@ -1686,11 +1592,9 @@ mod tests {
             ..SorafsReserveMovementReadbackFilter::default()
         };
         assert_movements_rejected(&page, &not_exclusive);
-
         page.has_more = true;
         page.next_after = Some([0x21; 32]);
         assert_movements_rejected(&page, &limit_two);
-
         let page = ReserveMovementPageV1 {
             finalized_cursor: finalized_cursor(),
             movements: (1..=RESERVE_DEFAULT_PAGE_LIMIT_V1 + 1)
@@ -1710,7 +1614,6 @@ mod tests {
                 .contains("payload exceeds the requested limit")
         );
     }
-
     #[test]
     fn reserve_event_response_binding_rejects_gaps_finality_and_bad_continuations() {
         let client = client_with_base_url(base_url());
@@ -1733,7 +1636,6 @@ mod tests {
             },
         )
         .expect("empty terminal continuation page is valid");
-
         let mut wrong_initial_kind = reserve_event(&client, 1, 5, [0x51; 32], 0);
         wrong_initial_kind.event.kind = SorafsReserveLedgerEventKind::LifecycleAdvanced;
         wrong_initial_kind.event.provider_id = Some(ProviderId::new([0x63; 32]));
@@ -1761,12 +1663,10 @@ mod tests {
         ] {
             assert_events_rejected(&event_page(events), &filter);
         }
-
         let mut page = event_page(vec![reserve_event(&client, 1, 5, [0x51; 32], 0)]);
         page.has_more = true;
         page.next_after = Some(reserve_event(&client, 2, 5, [0x51; 32], 1).cursor());
         assert_events_rejected(&page, &filter);
-
         let page = ReserveFinalizedEventPageV1 {
             finalized_cursor: finalized_cursor(),
             events: (1_u64..=u64::from(RESERVE_DEFAULT_PAGE_LIMIT_V1 + 1))
@@ -1794,7 +1694,6 @@ mod tests {
                 .contains("payload exceeds the requested limit")
         );
     }
-
     #[test]
     fn reserve_malformed_filters_fail_before_http_and_non_ok_is_unchanged() {
         let client = client_with_base_url(base_url());
@@ -1813,7 +1712,6 @@ mod tests {
         );
         assert!(error.to_string().contains("event cursor is incomplete"));
         assert!(snapshots.lock().expect("snapshot lock").is_empty());
-
         assert!(
             validate_providers_request(&SorafsReserveProvidersReadbackFilter {
                 limit: Some(RESERVE_QUERY_MAX_ITEMS_V1 + 1),
@@ -1839,7 +1737,6 @@ mod tests {
         assert_eq!(response.headers()["x-reserve-proof"], "opaque");
         assert_eq!(response.body(), &[0x00, 0xFF, 0x51, 0x00]);
     }
-
     #[test]
     fn reserve_read_requests_pin_identity_json_and_transport_bound() {
         let client = client_with_base_url(base_url());

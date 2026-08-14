@@ -14,7 +14,6 @@ macro_rules! v2_apply_test {
         }
     };
 }
-
 v2_apply_test!(
     prospective_autoscale_retirement_queue_veto_rejects_exact_reserved_route,
     {
@@ -55,7 +54,6 @@ v2_apply_test!(
             Hash::new(b"retirement Queue-veto proposal"),
         );
         assert_eq!(queue.live_lane_reservations(), vec![reservation]);
-
         let queue_retirement_observer = queue.lock_lane_retirement_observer();
         let error = V2ApplyService::validate_autoscale_retirement_queue_binding(
             &queue_retirement_observer,
@@ -71,7 +69,6 @@ v2_apply_test!(
         assert!(message.contains("blocked by local Queue ownership"));
         assert!(message.contains(&format!("lane {}", reservation.lane_id.as_u32())));
         assert!(message.contains(&format!("dataspace {}", reservation.dataspace_id.as_u64())));
-
         let unrelated_incarnation = Hash::new(b"unrelated retirement incarnation");
         assert_ne!(unrelated_incarnation, reservation.lane_incarnation);
         V2ApplyService::validate_autoscale_retirement_queue_binding(
@@ -88,19 +85,16 @@ v2_apply_test!(
         );
     }
 );
-
 v2_apply_test!(merge_publication_emits_once_across_exact_retry, {
     let fixture = ApplyFixture::new();
     let mut store = fixture.reopen_body_store();
     fixture.execute(&mut store).expect("commit carrier parent");
-
     let mut entry = pending_merge_entry(&fixture.context, 0, b"v2 apply live publication fixture");
     entry.epoch_id = 1;
     entry.merge_qc.epoch_id = 1;
     entry.merge_qc.carrier_height = 2;
     entry.merge_qc.carrier_parent_hash = fixture.body.hash();
     entry.merge_qc.view = 0;
-
     let execution_context = BlockExecutionContextBundle::new(Vec::new())
         .with_merge_entry(CertifiedMergeLedgerReference::new(&entry));
     let carrier = BlockBuilder::new_with_time_source(Vec::new(), TimeSource::new_system())
@@ -124,7 +118,6 @@ v2_apply_test!(merge_publication_emits_once_across_exact_retry, {
     fixture
         .state
         .update_latest_block_header_cache_for_tests(carrier.header().clone());
-
     let mut events = fixture.service.events_sender.subscribe();
     fixture
         .service
@@ -138,7 +131,6 @@ v2_apply_test!(merge_publication_emits_once_across_exact_retry, {
     };
     assert_eq!(event.entry, entry);
     assert_eq!(fixture.state.merge_ledger.snapshot().len(), 1);
-
     fixture
         .service
         .publish_committed_block_merge_entry(&carrier)
@@ -160,7 +152,6 @@ v2_apply_test!(merge_publication_emits_once_across_exact_retry, {
         0
     );
 });
-
 v2_apply_test!(
     live_merge_publication_persists_application_receipt_before_retry,
     {
@@ -212,7 +203,6 @@ v2_apply_test!(
         fixture
             .state
             .update_latest_block_header_cache_for_tests(carrier.header().clone());
-
         fixture
             .service
             .publish_committed_block_merge_entry(&carrier)
@@ -226,7 +216,6 @@ v2_apply_test!(
             crate::kura::LaneBlockApplicationReceiptArtifactFormat::MergeExecution
         );
         let receipt_hash = HashOf::new(&receipt);
-
         fixture
             .service
             .publish_committed_block_merge_entry(&carrier)
@@ -278,7 +267,6 @@ v2_apply_test!(committed_merge_reservation_is_finalized_exactly_once, {
         [reservation.signed_transaction_hash],
         NonZeroUsize::new(1).expect("committed height"),
     );
-
     let staged_merge_queue_reservation_hashes =
         certified_merge_queue_reservation_hashes(Some(&entry))
             .expect("project exact staged reservation membership");
@@ -310,7 +298,6 @@ v2_apply_test!(committed_merge_reservation_is_finalized_exactly_once, {
         vec![reservation],
         "the exact reservation must survive until certified merge finalization"
     );
-
     assert_eq!(
         finalize_committed_block_merge_reservations(
             fixture.state.as_ref(),
@@ -340,7 +327,6 @@ v2_apply_test!(committed_merge_reservation_is_finalized_exactly_once, {
         "the post-commit boundary must be idempotent"
     );
 });
-
 v2_apply_test!(
     committed_merge_group_preflights_all_state_members_before_queue_cleanup,
     {
@@ -361,7 +347,6 @@ v2_apply_test!(
                 1024 * 1024,
             )
             .expect("install reservation journal");
-
         let owner = Hash::new(b"all-member preflight owner");
         let proposal = Hash::new(b"all-member preflight proposal");
         let first = fixture
@@ -399,7 +384,6 @@ v2_apply_test!(
             [keys[0].signed_transaction_hash],
             NonZeroUsize::new(1).expect("committed height"),
         );
-
         let reference = CertifiedMergeLedgerReference::new(&entry);
         let applications = authenticated_autonomous_carrier_application_projections(
             &reference,
@@ -425,7 +409,6 @@ v2_apply_test!(
             "all group owners must remain live after failed full-State preflight"
         );
         assert!(queue.lane_reservation_commit_barriers().is_empty());
-
         fixture.state.record_direct_committed_transactions(
             [keys[1].signed_transaction_hash],
             NonZeroUsize::new(1).expect("committed height"),
@@ -449,7 +432,6 @@ v2_apply_test!(
         assert!(queue.live_lane_reservations().is_empty());
     }
 );
-
 v2_apply_test!(
     committed_merge_two_groups_preflight_queue_before_any_cleanup,
     {
@@ -470,7 +452,6 @@ v2_apply_test!(
                 1024 * 1024,
             )
             .expect("install reservation journal");
-
         let first_transaction = fixture
             .body
             .external_transactions()
@@ -504,7 +485,6 @@ v2_apply_test!(
             Hash::new(b"later Queue-preflight owner"),
             Hash::new(b"later Queue-preflight proposal"),
         );
-
         let (_parent, mut entry) =
             merge_entry_with_reservation(&fixture.context, first_entrypoint, first);
         let (_later_parent, mut later_entry) =
@@ -536,7 +516,6 @@ v2_apply_test!(
             .expect("two-group result root");
         batch.execution_root = crate::merge::merge_execution_root(&batch.lanes);
         batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
-
         fixture.state.record_direct_committed_transactions(
             [
                 first.signed_transaction_hash,
@@ -553,7 +532,6 @@ v2_apply_test!(
         )
         .expect("authenticate both autonomous cleanup groups");
         assert_eq!(applications.len(), 2);
-
         let error = finalize_certified_merge_reservations_for_test(
             fixture.state.as_ref(),
             &queue,
@@ -577,7 +555,6 @@ v2_apply_test!(
         );
     }
 );
-
 v2_apply_test!(committed_merge_reservation_rejects_bare_norito, {
     let fixture = ApplyFixture::new();
     let transaction = fixture
@@ -629,7 +606,6 @@ v2_apply_test!(committed_merge_reservation_rejects_bare_norito, {
         [reservation.signed_transaction_hash],
         NonZeroUsize::new(1).expect("committed height"),
     );
-
     let reference = CertifiedMergeLedgerReference::new(&entry);
     let message = authenticated_autonomous_carrier_application_projections(
         &reference,
@@ -647,7 +623,6 @@ v2_apply_test!(committed_merge_reservation_rejects_bare_norito, {
         "malformed committed evidence must not consume queue ownership"
     );
 });
-
 v2_apply_test!(
     checked_apply_carrier_authorization_binds_exact_state_entry,
     {
@@ -773,7 +748,6 @@ v2_apply_test!(
                 .expect("fixture ApplyCarrier transition");
             (checked, projection)
         };
-
         let mut exact = CheckedCarrierApplications::for_block(&carrier);
         exact
             .bind_execution_batch(&reference, lane_count)
@@ -824,7 +798,6 @@ v2_apply_test!(
                 "a tampered witness must fail independent authentication",
             );
         }
-
         let snapshot_stutter = ProductionInFlightFirstReleaseTransitionProjection {
             action: crate::sumeragi::v2_core::IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT,
             actor: 0,
@@ -869,7 +842,6 @@ v2_apply_test!(
             Ok(()),
             "the real trait object must consume its move-only token against the exact State entry"
         );
-
         let mut wrong_cardinality = CheckedCarrierApplications::for_block(&carrier);
         wrong_cardinality
             .bind_execution_batch(&reference, lane_count.saturating_add(1))
@@ -882,7 +854,6 @@ v2_apply_test!(
             wrong_cardinality.consume_for_state_commit(carrier.hash(), Some(&entry)),
             Err("checked ApplyCarrier batch identity or cardinality changed before State commit")
         );
-
         let mut wrong_entry = CheckedCarrierApplications::for_block(&carrier);
         wrong_entry
             .bind_execution_batch(&reference, lane_count)
@@ -897,7 +868,6 @@ v2_apply_test!(
             wrong_entry.consume_for_state_commit(carrier.hash(), Some(&changed_entry)),
             Err("checked ApplyCarrier batch identity or cardinality changed before State commit")
         );
-
         let mut wrong_block = CheckedCarrierApplications::for_block(&carrier);
         wrong_block
             .bind_execution_batch(&reference, lane_count)
@@ -913,7 +883,6 @@ v2_apply_test!(
             wrong_block.consume_for_state_commit(other_block_hash, Some(&entry)),
             Err("checked ApplyCarrier block identity changed before State commit")
         );
-
         let mut changed_projection = CheckedCarrierApplications::for_block(&carrier);
         changed_projection
             .bind_execution_batch(&reference, lane_count)
@@ -931,7 +900,6 @@ v2_apply_test!(
             changed_projection.consume_for_state_commit(carrier.hash(), Some(&entry)),
             Err("checked ApplyCarrier projection changed before State commit")
         );
-
         let network_id = fixture.context.network_id;
         let fresh = authenticated_autonomous_carrier_application_projections(
             &reference, &entry, network_id,
@@ -949,7 +917,6 @@ v2_apply_test!(
         assert_eq!(fresh[0].projection.before.validator_count, 4);
         assert_ne!(fresh[0].projection.before.replicated_carrier_owners, 0);
         assert_ne!(fresh[0].projection.before.payload_binding_a, 1);
-
         let carrier_height = carrier.header().height().get();
         let carrier_hash = carrier.hash();
         let mut repair_authorizations = post_carrier_evidence_repair_authorizations(
@@ -977,7 +944,6 @@ v2_apply_test!(
         );
         assert_eq!(repair_projection.before, repair_projection.after);
         assert!(repair_projection.before.decision.wsv_committed);
-
         let wrong_carrier_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             b"unrelated post-carrier evidence repair block",
         ));
@@ -1032,7 +998,6 @@ v2_apply_test!(
                 .is_some(),
             "exact repair authority must reach receipt publication"
         );
-
         let exact_projection = fresh[0].projection;
         let authorization = fresh[0]
             .queue_cleanup_authorization()
@@ -1058,7 +1023,6 @@ v2_apply_test!(
                 .is_err()
         );
         assert_eq!(queue.live_lane_reservations(), vec![reservation]);
-
         let mut tampered_projection = exact_projection;
         tampered_projection.after.producer = 0b0010;
         assert!(
@@ -1070,7 +1034,6 @@ v2_apply_test!(
             "geometry drift must fail before Queue mutation"
         );
         assert_eq!(queue.live_lane_reservations(), vec![reservation]);
-
         assert_eq!(
             queue
                 .commit_lane_reservation_groups_with_authorization(vec![(
@@ -1083,7 +1046,6 @@ v2_apply_test!(
         assert!(queue.live_lane_reservations().is_empty());
     }
 );
-
 v2_apply_test!(
     startup_reconciliation_consumes_replayed_committed_merge_reservation,
     {
@@ -1118,7 +1080,6 @@ v2_apply_test!(
             Hash::new(b"stale committed reservation owner"),
             Hash::new(b"stale committed reservation proposal"),
         );
-
         // Reserve an independent uncommitted owner under the same original
         // incarnation before State advances or the lane is recreated. Its
         // durable journals model a separate process that crashes here.
@@ -1159,7 +1120,6 @@ v2_apply_test!(
             "both crash owners must belong to original incarnation A"
         );
         drop(stale_first_queue);
-
         let (parent, entry) =
             merge_entry_with_reservation(&fixture.context, entrypoint, reservation);
         let carrier = body_with_exact_merge_execution_header(&entry);
@@ -1183,7 +1143,6 @@ v2_apply_test!(
                 .get_durable_block_hash(NonZeroUsize::new(2).expect("carrier height")),
             Some(carrier.hash())
         );
-
         let missing_history_snapshot = first_queue
             .lane_reservation_reconciliation_snapshot()
             .expect("capture ownership before missing-State-history preflight");
@@ -1209,7 +1168,6 @@ v2_apply_test!(
             missing_history_snapshot,
             "missing canonical State history must not consume Queue ownership"
         );
-
         commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
         fixture.state.record_direct_committed_transactions(
             [reservation.signed_transaction_hash],
@@ -1237,7 +1195,6 @@ v2_apply_test!(
             "replacement incarnation B must activate at the next proposal height"
         );
         let verified_active_context = verified_successor_context_after_fixture_tip(&fixture);
-
         let replayed_queue = Queue::from_config(QueueConfig::default(), events_sender);
         let replay = replayed_queue
             .install_lane_reservation_journal(&journal_path, 1024 * 1024)
@@ -1259,7 +1216,6 @@ v2_apply_test!(
             "replayed committed ownership remains quarantined until State/Kura preflight"
         );
         fixture.kura.reset_merge_query_read_counters_for_test();
-
         let mismatched_snapshot = replayed_queue
             .lane_reservation_reconciliation_snapshot()
             .expect("capture cross-store height mismatch ownership");
@@ -1288,7 +1244,6 @@ v2_apply_test!(
             [reservation.signed_transaction_hash],
             NonZeroUsize::new(2).expect("exact merge-carrier State height"),
         );
-
         assert_eq!(
             reconcile_lane_reservation_ownership(
                 fixture.state.as_ref(),
@@ -1328,7 +1283,6 @@ v2_apply_test!(
             .expect("repeat startup reconciliation"),
             LaneReservationReconciliationSummary::default()
         );
-
         // The bypass above is deliberately limited to ownership already
         // proved committed by State and one exact canonical carrier. An
         // uncommitted owner from the original incarnation remains
@@ -1386,7 +1340,6 @@ v2_apply_test!(
         );
     }
 );
-
 v2_apply_test!(
     startup_reconciliation_validates_every_group_before_mutating_valid_prefix,
     {
@@ -1407,7 +1360,6 @@ v2_apply_test!(
                 1024 * 1024,
             )
             .expect("install reservation journal");
-
         let first_transaction = fixture
             .body
             .external_transactions()
@@ -1462,7 +1414,6 @@ v2_apply_test!(
             .lane_reservation_reconciliation_snapshot()
             .expect("capture immutable preflight snapshot");
         let verified_active_context = verified_successor_context_after_fixture_tip(&fixture);
-
         let error = reconcile_lane_reservation_ownership(
             fixture.state.as_ref(),
             &queue,
@@ -1485,7 +1436,6 @@ v2_apply_test!(
         assert!(queue.lane_reservation_commit_barriers().is_empty());
     }
 );
-
 v2_apply_test!(committed_group_recovery_accepts_exact_commit_prefix, {
     let fixture = ApplyFixture::new();
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
@@ -1556,7 +1506,6 @@ v2_apply_test!(committed_group_recovery_accepts_exact_commit_prefix, {
         keys[1..].to_vec()
     );
     assert_eq!(queue.lane_reservation_commit_barriers(), vec![keys[0]]);
-
     let (parent, entry) = merge_entry_with_reservations(&fixture.context, members);
     let carrier = body_with_exact_merge_execution_header(&entry);
     fixture
@@ -1574,7 +1523,6 @@ v2_apply_test!(committed_group_recovery_accepts_exact_commit_prefix, {
         NonZeroUsize::new(2).expect("exact committed suffix carrier State height"),
     );
     let verified_active_context = verified_successor_context_after_fixture_tip(&fixture);
-
     assert_eq!(
         reconcile_lane_reservation_ownership(
             fixture.state.as_ref(),
@@ -1592,7 +1540,6 @@ v2_apply_test!(committed_group_recovery_accepts_exact_commit_prefix, {
     assert!(queue.live_lane_reservations().is_empty());
     assert!(queue.lane_reservation_commit_barriers().is_empty());
 });
-
 v2_apply_test!(
     mixed_commit_barrier_group_preflights_malformed_later_group,
     {
@@ -1677,7 +1624,6 @@ v2_apply_test!(
             queue.lane_reservation_commit_barriers(),
             vec![first_keys[0]]
         );
-
         let (parent, entry) = merge_entry_with_reservations(&fixture.context, first_transactions);
         let carrier = body_with_exact_merge_execution_header(&entry);
         fixture
@@ -1702,7 +1648,6 @@ v2_apply_test!(
             .expect("capture mixed owner preflight snapshot");
         let barriers_before = queue.lane_reservation_commit_barriers();
         let verified_active_context = verified_successor_context_after_fixture_tip(&fixture);
-
         let error = reconcile_lane_reservation_ownership(
             fixture.state.as_ref(),
             &queue,
@@ -1724,7 +1669,6 @@ v2_apply_test!(
         assert_eq!(queue.lane_reservation_commit_barriers(), barriers_before);
     }
 );
-
 v2_apply_test!(replayed_mixed_commit_barrier_group_reopens_startup_gate, {
     let fixture = ApplyFixture::new_with_lane_lifecycle();
     let reservation_lane = install_recreatable_reservation_lane(&fixture);
@@ -1809,7 +1753,6 @@ v2_apply_test!(replayed_mixed_commit_barrier_group_reopens_startup_gate, {
         Some(new_incarnation)
     );
     let verified_active_context = verified_successor_context_after_fixture_tip(&fixture);
-
     let queue = Queue::from_config(QueueConfig::default(), events_sender);
     let replay = queue
         .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -1823,7 +1766,6 @@ v2_apply_test!(replayed_mixed_commit_barrier_group_reopens_startup_gate, {
         .replay_plan_journal(fixture.state.as_ref())
         .expect("replay quarantined mixed Commit/live plans");
     assert!(queue.lane_reservation_startup_reconciliation_pending());
-
     assert_eq!(
         reconcile_lane_reservation_ownership(
             fixture.state.as_ref(),
@@ -1842,7 +1784,6 @@ v2_apply_test!(replayed_mixed_commit_barrier_group_reopens_startup_gate, {
     assert!(queue.lane_reservation_commit_barriers().is_empty());
     assert!(!queue.lane_reservation_startup_reconciliation_pending());
 });
-
 v2_apply_test!(
     startup_reconciliation_rejects_partial_state_group_without_mutation,
     {
@@ -1874,7 +1815,6 @@ v2_apply_test!(
         let before = queue
             .lane_reservation_reconciliation_snapshot()
             .expect("capture partial-state ownership snapshot");
-
         let error = reconcile_lane_reservation_ownership(
             fixture.state.as_ref(),
             queue.as_ref(),
@@ -1899,7 +1839,6 @@ v2_apply_test!(
         assert!(queue.lane_reservation_release_barriers().is_empty());
     }
 );
-
 v2_apply_test!(strict_absence_releases_original_fifo_not_digest_order, {
     let fixture = ApplyFixture::new();
     let producer = KeyPair::try_from_seed(vec![0xB9; 32], Algorithm::BlsNormal)
@@ -2016,7 +1955,6 @@ v2_apply_test!(strict_absence_releases_original_fifo_not_digest_order, {
     fixture
         .execute(&mut store)
         .expect("finalize canonical body omitting the strictly absent payload");
-
     let reserved_count = snapshot.ordered_records.len();
     assert_eq!(
         reconcile_lane_reservation_ownership(
@@ -2047,7 +1985,6 @@ v2_apply_test!(strict_absence_releases_original_fifo_not_digest_order, {
         "strict absence must restore the exact pre-reservation FIFO sequence"
     );
 });
-
 v2_apply_test!(
     terminal_presweep_rejects_unquarantined_nonempty_queue_before_kura_inventory,
     {
@@ -2086,7 +2023,6 @@ v2_apply_test!(
             .expect("capture unquarantined terminal pre-sweep snapshot");
         assert!(!before.is_empty());
         assert!(!queue.lane_reservation_startup_reconciliation_pending());
-
         let error = crate::sumeragi::v2_lifecycle_recovery::reconcile_pending_autonomous_lifecycle_terminal_outcomes(
             fixture.state.as_ref(),
             &queue,
@@ -2103,7 +2039,6 @@ v2_apply_test!(
         );
     }
 );
-
 v2_apply_test!(
     empty_startup_plan_skips_canonical_cleanup_and_publishes_its_receipt,
     {
@@ -2138,7 +2073,6 @@ v2_apply_test!(
                 .is_empty(),
         );
         assert!(!queue.lane_reservation_startup_reconciliation_pending());
-
         let planning = plan_lane_reservation_ownership(
             fixture.state.as_ref(),
             queue.as_ref(),
@@ -2163,7 +2097,6 @@ v2_apply_test!(
         assert!(!queue.lane_reservation_startup_reconciliation_pending());
     }
 );
-
 v2_apply_test!(
     deferred_canonical_carrier_owned_and_absent_groups_complete_before_gate_publication,
     {
@@ -2203,7 +2136,6 @@ v2_apply_test!(
         }));
     }
 );
-
 v2_apply_test!(
     deferred_canonical_carrier_missing_after_queue_cleanup_keeps_startup_gate_closed,
     {
@@ -2254,7 +2186,6 @@ v2_apply_test!(
         );
     }
 );
-
 v2_apply_test!(
     finalized_hash_only_carrier_plans_recovery_before_queue_mutation,
     {
@@ -2307,7 +2238,6 @@ v2_apply_test!(
         let before = queue
             .lane_reservation_reconciliation_snapshot()
             .expect("capture pruned-carrier ownership snapshot");
-
         let planning = plan_lane_reservation_ownership(
             fixture.state.as_ref(),
             queue.as_ref(),
@@ -2383,7 +2313,6 @@ v2_apply_test!(
                 .expect("read pruned-carrier retirement state")
                 .is_none()
         );
-
         fixture
             .kura
             .cache_block_body(&canonical_body)
@@ -2413,7 +2342,6 @@ v2_apply_test!(
         );
     }
 );
-
 v2_apply_test!(canonical_exact_certified_autonomous_group_is_retained, {
     let fixture = ApplyFixture::new();
     let mut genesis_store = fixture.reopen_body_store();
@@ -2463,7 +2391,6 @@ v2_apply_test!(canonical_exact_certified_autonomous_group_is_retained, {
         .expect("finalize exact autonomous carrier");
     certify_autonomous_payload_for_test(&fixture, &payload);
     drop(queue);
-
     let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
     let replay = queue
         .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -2476,7 +2403,6 @@ v2_apply_test!(canonical_exact_certified_autonomous_group_is_retained, {
         .replay_plan_journal(fixture.state.as_ref())
         .expect("replay certified autonomous QueuePlan payloads");
     assert!(queue.lane_reservation_startup_reconciliation_pending());
-
     assert_eq!(
         reconcile_lane_reservation_ownership(
             fixture.state.as_ref(),
@@ -2519,7 +2445,6 @@ v2_apply_test!(canonical_exact_certified_autonomous_group_is_retained, {
             .is_none()
     );
 });
-
 v2_apply_test!(replayed_current_autonomous_group_reopens_startup_gate, {
     let fixture = ApplyFixture::new();
     let mut genesis_store = fixture.reopen_body_store();
@@ -2591,7 +2516,6 @@ v2_apply_test!(replayed_current_autonomous_group_reopens_startup_gate, {
         .persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
         .expect("persist current autonomous payload");
     drop(queue);
-
     let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
     let replay = queue
         .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -2614,7 +2538,6 @@ v2_apply_test!(replayed_current_autonomous_group_reopens_startup_gate, {
         selected.is_empty(),
         "replayed unreserved work must stay quarantined until evidence reconciliation"
     );
-
     assert_eq!(
         reconcile_lane_reservation_ownership(
             fixture.state.as_ref(),
@@ -2654,7 +2577,6 @@ v2_apply_test!(replayed_current_autonomous_group_reopens_startup_gate, {
         }]
     );
 });
-
 v2_apply_test!(
     prior_height_canonical_uncertified_owner_requires_historical_recovery,
     {
@@ -2712,7 +2634,6 @@ v2_apply_test!(
             .validate()
             .expect("valid next context for historical recovery");
         drop(queue);
-
         let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
         let replay = queue
             .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -2728,7 +2649,6 @@ v2_apply_test!(
         let before = queue
             .lane_reservation_reconciliation_snapshot()
             .expect("capture historical ownership snapshot");
-
         let planning = plan_lane_reservation_ownership(
             fixture.state.as_ref(),
             queue.as_ref(),
@@ -2777,7 +2697,6 @@ v2_apply_test!(
                 .expect("read historical retirement state")
                 .is_none()
         );
-
         assert_eq!(
             install_historical_autonomous_lane_recovery(
                 fixture.state.as_ref(),
@@ -2826,7 +2745,6 @@ v2_apply_test!(
             "corrupt immutable recovery evidence must fail closed"
         );
         std::fs::write(&recovery_path, recovery_bytes).expect("restore historical recovery seal");
-
         fixture
             .kura
             .reset_historical_autonomous_recovery_inventory_scans_for_test();
@@ -2876,9 +2794,7 @@ v2_apply_test!(
         assert!(!queue.lane_reservation_startup_reconciliation_pending());
     }
 );
-
 include!("v2_apply_unsealed_01c_historical_recovery.rs");
-
 v2_apply_test!(pending_merge_split_group_is_rejected, {
     let fixture = ApplyFixture::new();
     let producer = KeyPair::try_from_seed(vec![0xBB; 32], Algorithm::BlsNormal)
@@ -2930,7 +2846,6 @@ v2_apply_test!(pending_merge_split_group_is_rejected, {
             group.ordered_keys[group.ordered_keys.len() - 1..].to_vec(),
         ),
     ]);
-
     assert!(matches!(
         exact_pending_merge_for_group(&group, &by_transaction, &by_entry),
         Err(V2ReservationLifecycleError::PendingMergeBindingMismatch {
@@ -2939,7 +2854,6 @@ v2_apply_test!(pending_merge_split_group_is_rejected, {
         })
     ));
 });
-
 v2_apply_test!(committed_merge_split_carriers_are_rejected, {
     let fixture = ApplyFixture::new();
     let producer = KeyPair::try_from_seed(vec![0xBC; 32], Algorithm::BlsNormal)
@@ -2973,7 +2887,6 @@ v2_apply_test!(committed_merge_split_carriers_are_rejected, {
         BTreeSet::from([NonZeroUsize::new(2).expect("non-zero first carrier")]),
         BTreeSet::from([NonZeroUsize::new(3).expect("non-zero split carrier")]),
     ];
-
     assert!(matches!(
         exact_committed_carrier_height_for_group(&group, &carrier_heights),
         Err(V2ReservationLifecycleError::CommittedCarrierMismatch {
@@ -2982,5 +2895,4 @@ v2_apply_test!(committed_merge_split_carriers_are_rejected, {
         })
     ));
 });
-
 include!("v2_apply_unsealed_01b.rs");

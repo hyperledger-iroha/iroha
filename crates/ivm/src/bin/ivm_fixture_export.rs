@@ -4,13 +4,6 @@
 //! `cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --check`
 //! `cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --write`
 //! `cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --write --output-root /tmp/ivm-fixtures`
-
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-    process,
-};
-
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     events::{
@@ -25,22 +18,23 @@ use iroha_data_model::{
 };
 use ivm::prebuilt_fixtures::build_default_executor_program;
 use norito::json::{FastJsonWrite, JsonSerialize};
-
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process,
+};
 // Public deterministic fixture material; this key must never authorize a real account.
 const CONTRACT_MANIFEST_FIXTURE_SIGNER_SEED: [u8; 32] = [0x33; 32];
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     Check,
     Write,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Options {
     mode: Mode,
     output_root: PathBuf,
 }
-
 fn parse_options_from(arguments: &[String], default_output_root: &Path) -> Result<Options, String> {
     let mut mode = None;
     let mut output_root = None;
@@ -81,12 +75,10 @@ fn parse_options_from(arguments: &[String], default_output_root: &Path) -> Resul
         output_root: output_root.unwrap_or_else(|| default_output_root.to_path_buf()),
     })
 }
-
 fn parse_options() -> Result<Options, String> {
     let arguments: Vec<_> = env::args().skip(1).collect();
     parse_options_from(&arguments, &repository_root())
 }
-
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -94,7 +86,6 @@ fn repository_root() -> PathBuf {
         .expect("IVM crate belongs to the workspace")
         .to_path_buf()
 }
-
 struct ContractManifestFixtureDocument<'a> {
     event_filter_frame_hex: String,
     manifest: &'a ContractManifest,
@@ -102,7 +93,6 @@ struct ContractManifestFixtureDocument<'a> {
     signed_manifest: &'a ContractManifest,
     signed_manifest_compact_hex: String,
 }
-
 impl FastJsonWrite for ContractManifestFixtureDocument<'_> {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -148,7 +138,6 @@ impl FastJsonWrite for ContractManifestFixtureDocument<'_> {
         out.push('}');
     }
 }
-
 fn contract_manifest_fixture_types()
 -> Result<(EventFilterBox, ContractManifest, ContractManifest), String> {
     let event_filter = EventFilterBox::Time(TimeEventFilter(ExecutionTime::PreCommit));
@@ -202,7 +191,6 @@ fn contract_manifest_fixture_types()
         .map_err(|error| format!("sign contract-manifest fixture: {error}"))?;
     Ok((event_filter, manifest, signed_manifest))
 }
-
 fn render_contract_manifest_v1_fixture() -> Result<String, String> {
     let (event_filter, manifest, signed_manifest) = contract_manifest_fixture_types()?;
     let event_filter_frame = norito::encode_canonical(&event_filter)
@@ -219,14 +207,12 @@ fn render_contract_manifest_v1_fixture() -> Result<String, String> {
     rendered.push('\n');
     Ok(rendered)
 }
-
 struct SmartContractCodeExecutorHashesFixtureDocument {
     artifact_length: u64,
     code_hash_hex: String,
     abi_hash_hex: String,
     abi_version: u8,
 }
-
 impl FastJsonWrite for SmartContractCodeExecutorHashesFixtureDocument {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -261,7 +247,6 @@ impl FastJsonWrite for SmartContractCodeExecutorHashesFixtureDocument {
         out.push('}');
     }
 }
-
 fn render_smart_contract_code_executor_hashes_fixture(artifact: &[u8]) -> Result<String, String> {
     let parsed = ivm::ProgramMetadata::parse(artifact)
         .map_err(|error| format!("parse defaults/executor.to fixture: {error}"))?;
@@ -281,7 +266,6 @@ fn render_smart_contract_code_executor_hashes_fixture(artifact: &[u8]) -> Result
     rendered.push('\n');
     Ok(rendered)
 }
-
 fn publish(path: &Path, expected: &[u8], mode: Mode) -> Result<(), String> {
     if fs::read(path).ok().as_deref() == Some(expected) {
         eprintln!("fresh {}", path.display());
@@ -293,7 +277,6 @@ fn publish(path: &Path, expected: &[u8], mode: Mode) -> Result<(), String> {
             path.display()
         ));
     }
-
     let parent = path
         .parent()
         .ok_or_else(|| format!("fixture has no parent: {}", path.display()))?;
@@ -316,13 +299,11 @@ fn publish(path: &Path, expected: &[u8], mode: Mode) -> Result<(), String> {
     eprintln!("wrote {}", path.display());
     Ok(())
 }
-
 fn main() -> Result<(), String> {
     let Options {
         mode,
         output_root: root,
     } = parse_options()?;
-
     let contract_manifest_fixture = render_contract_manifest_v1_fixture()?;
     let default_executor = build_default_executor_program();
     let smart_contract_code_hashes_fixture =
@@ -363,11 +344,9 @@ fn main() -> Result<(), String> {
         .map_err(|error| format!("remove staging directory {}: {error}", stage.display()))?;
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn command_requires_an_explicit_mode_and_accepts_a_staged_output_root() {
         let default_root = Path::new("/workspace");
@@ -401,7 +380,6 @@ mod tests {
             parse_options_from(&["--write".to_owned(), "extra".to_owned()], default_root).is_err()
         );
     }
-
     #[test]
     fn command_rejects_malformed_output_root_options() {
         let default_root = Path::new("/workspace");
@@ -433,7 +411,6 @@ mod tests {
             assert!(parse_options_from(&arguments, default_root).is_err());
         }
     }
-
     #[test]
     fn contract_manifest_fixture_is_type_derived_signed_and_deterministic() {
         let (_, manifest, signed_manifest) =
@@ -454,7 +431,6 @@ mod tests {
                 &signed_manifest.signature_payload_bytes(),
             )
             .expect("fixture manifest signature");
-
         let rendered =
             render_contract_manifest_v1_fixture().expect("render contract-manifest fixture");
         assert_eq!(
@@ -479,7 +455,6 @@ mod tests {
             )))
         );
     }
-
     #[test]
     fn smart_contract_code_hash_fixture_is_metadata_validated_and_deterministic() {
         let artifact = build_default_executor_program();
@@ -489,7 +464,6 @@ mod tests {
         let abi_hash_hex = hex::encode(&artifact[abi_hash_start..ivm::HEADER_SIZE]);
         let rendered = render_smart_contract_code_executor_hashes_fixture(&artifact)
             .expect("render smart-contract code hash fixture");
-
         assert_eq!(
             render_smart_contract_code_executor_hashes_fixture(&artifact)
                 .expect("render smart-contract code hash fixture again"),
@@ -502,7 +476,6 @@ mod tests {
         assert!(rendered.contains(&format!("\"artifact_length\": {}", artifact.len())));
         assert!(rendered.contains(&format!("\"abi_version\": {}", parsed.metadata.abi_version)));
     }
-
     #[test]
     fn publish_is_checkable_idempotent_and_replaces_stale_bytes() {
         let directory = env::temp_dir().join(format!(
@@ -512,7 +485,6 @@ mod tests {
         ));
         let path = directory.join("fixture.to");
         let _ = fs::remove_dir_all(&directory);
-
         assert!(publish(&path, b"canonical", Mode::Check).is_err());
         publish(&path, b"canonical", Mode::Write).expect("publish fixture");
         publish(&path, b"canonical", Mode::Check).expect("fresh fixture passes check");
@@ -520,10 +492,8 @@ mod tests {
         assert!(publish(&path, b"canonical", Mode::Check).is_err());
         publish(&path, b"canonical", Mode::Write).expect("replace stale fixture");
         assert_eq!(fs::read(&path).expect("read fixture"), b"canonical");
-
         fs::remove_dir_all(directory).expect("remove test directory");
     }
-
     #[test]
     fn repository_root_contains_the_ivm_crate() {
         assert!(repository_root().join("crates/ivm/Cargo.toml").is_file());

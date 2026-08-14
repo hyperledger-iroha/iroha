@@ -1,7 +1,8 @@
 #![cfg(feature = "app_api")]
-
-use std::net::SocketAddr;
-
+use crate::{
+    JsonBody, SharedAppState,
+    sorafs::site::{decode_content_cid, encode_content_cid},
+};
 use axum::{
     body::Bytes,
     extract::{FromRequestParts, Path, State, connect_info::ConnectInfo},
@@ -12,15 +13,9 @@ use iroha_core::state::{StateReadOnly, WorldReadOnly};
 use iroha_data_model::soracloud::SoraRouteVisibilityV1;
 use mv::storage::StorageReadOnly;
 use norito::json::{self, Map, Value};
-
-use crate::{
-    JsonBody, SharedAppState,
-    sorafs::site::{decode_content_cid, encode_content_cid},
-};
-
+use std::net::SocketAddr;
 pub(crate) const APP_API_BINDING_CONFIG_NAME: &str = "torii/app_api_binding";
 pub(crate) const APP_API_MANIFEST_SCHEMA_VERSION_V1: u16 = 1;
-
 const ADAPTER_CONTRACT_VIEW_BATCH_V1: &str = "contract.view_batch.v1";
 const ADAPTER_SWAPS_FILLS_V1: &str = "contract.rollups.swaps_fills.v1";
 const ADAPTER_SWAPS_CANDLES_V1: &str = "contract.rollups.swaps_candles.v1";
@@ -39,7 +34,6 @@ const API_MANIFEST_FILE_NAMES: &[&str] = &[
     "soraswap-trader-api.json",
     "manifest.json",
 ];
-
 #[derive(
     crate::json_macros::JsonDeserialize,
     crate::json_macros::JsonSerialize,
@@ -55,7 +49,6 @@ pub(crate) struct ToriiAppApiRouteV1 {
     #[norito(default)]
     pub cache_ttl_ms: Option<u64>,
 }
-
 #[derive(
     crate::json_macros::JsonDeserialize,
     crate::json_macros::JsonSerialize,
@@ -73,7 +66,6 @@ pub(crate) struct ToriiAppApiManifestV1 {
     pub manifest_digest_hex: Option<String>,
     pub routes: Vec<ToriiAppApiRouteV1>,
 }
-
 #[derive(crate::json_macros::JsonDeserialize, Debug, Clone)]
 struct ToriiAppApiBindingV1 {
     pub schema_version: u16,
@@ -85,28 +77,24 @@ struct ToriiAppApiBindingV1 {
     #[norito(default)]
     pub routes: Vec<ToriiAppApiRouteV1>,
 }
-
 #[derive(Debug, Clone)]
 struct ResolvedBinding {
     service_id: String,
     last_update_sequence: u64,
     binding: ToriiAppApiBindingV1,
 }
-
 #[derive(Debug, Clone)]
 struct AppApiRouteSource {
     app_id: String,
     content_cid: Option<String>,
     service_id: Option<String>,
 }
-
 fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     let mut body = Map::new();
     body.insert("ok".into(), Value::Bool(false));
     body.insert("error".into(), Value::from(message.into()));
     (status, JsonBody(Value::Object(body))).into_response()
 }
-
 fn normalize_route_path(path: &str) -> Option<String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -122,15 +110,12 @@ fn normalize_route_path(path: &str) -> Option<String> {
     }
     Some(normalized)
 }
-
 fn normalize_dispatch_path(path: &str) -> Option<String> {
     normalize_route_path(path.trim_start_matches('/'))
 }
-
 fn is_supported_method(method: &str) -> bool {
     method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("POST")
 }
-
 fn adapter_is_supported(adapter: &str) -> bool {
     matches!(
         adapter,
@@ -147,7 +132,6 @@ fn adapter_is_supported(adapter: &str) -> bool {
             | ADAPTER_DLMM_HOOKS_V1
     )
 }
-
 fn validate_route(route: &ToriiAppApiRouteV1) -> Result<(), Response> {
     if !is_supported_method(&route.method) {
         return Err(json_error(
@@ -169,7 +153,6 @@ fn validate_route(route: &ToriiAppApiRouteV1) -> Result<(), Response> {
     }
     Ok(())
 }
-
 fn validate_manifest(
     manifest: &ToriiAppApiManifestV1,
     expected_cid: Option<&str>,
@@ -222,7 +205,6 @@ fn validate_manifest(
     }
     Ok(())
 }
-
 fn validate_binding(binding: &ToriiAppApiBindingV1) -> Result<(), Response> {
     if binding.schema_version != APP_API_MANIFEST_SCHEMA_VERSION_V1 {
         return Err(json_error(
@@ -250,7 +232,6 @@ fn validate_binding(binding: &ToriiAppApiBindingV1) -> Result<(), Response> {
     }
     Ok(())
 }
-
 fn binding_to_manifest(binding: &ToriiAppApiBindingV1) -> ToriiAppApiManifestV1 {
     ToriiAppApiManifestV1 {
         schema_version: binding.schema_version,
@@ -260,12 +241,10 @@ fn binding_to_manifest(binding: &ToriiAppApiBindingV1) -> ToriiAppApiManifestV1 
         routes: binding.routes.clone(),
     }
 }
-
 fn resolve_binding_candidates(state: &SharedAppState) -> Result<Vec<ResolvedBinding>, Response> {
     let state_view = state.state.view();
     let world = state_view.world();
     let mut candidates = Vec::new();
-
     for (service_id, deployment) in world.soracloud_service_deployments().iter() {
         let service_name = service_id.to_string();
         let Some(bundle) = world.soracloud_service_revisions().get(&(
@@ -301,7 +280,6 @@ fn resolve_binding_candidates(state: &SharedAppState) -> Result<Vec<ResolvedBind
             binding,
         });
     }
-
     candidates.sort_by(|left, right| {
         right
             .last_update_sequence
@@ -310,7 +288,6 @@ fn resolve_binding_candidates(state: &SharedAppState) -> Result<Vec<ResolvedBind
     });
     Ok(candidates)
 }
-
 fn route_to_json(route: &ToriiAppApiRouteV1) -> Value {
     let mut object = Map::new();
     object.insert("method".into(), Value::from(route.method.clone()));
@@ -322,7 +299,6 @@ fn route_to_json(route: &ToriiAppApiRouteV1) -> Value {
     );
     Value::Object(object)
 }
-
 fn manifest_to_json(manifest: &ToriiAppApiManifestV1) -> Value {
     let mut object = Map::new();
     object.insert(
@@ -350,7 +326,6 @@ fn manifest_to_json(manifest: &ToriiAppApiManifestV1) -> Value {
     );
     Value::Object(object)
 }
-
 fn binding_to_json(candidate: &ResolvedBinding) -> Value {
     let manifest = binding_to_manifest(&candidate.binding);
     let mut object = match manifest_to_json(&manifest) {
@@ -367,7 +342,6 @@ fn binding_to_json(candidate: &ResolvedBinding) -> Value {
     );
     Value::Object(object)
 }
-
 fn read_api_manifest_payload(
     state: &SharedAppState,
     stored: &sorafs_node::store::StoredManifest,
@@ -391,7 +365,6 @@ fn read_api_manifest_payload(
                 "SoraFS CID does not contain an app API manifest file",
             )
         })?;
-
     if file.size > API_MANIFEST_MAX_BYTES {
         return Err(json_error(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -414,7 +387,6 @@ fn read_api_manifest_payload(
             )
         })
 }
-
 async fn load_api_manifest_by_cid(
     state: &SharedAppState,
     cid: &str,
@@ -442,7 +414,6 @@ async fn load_api_manifest_by_cid(
     )?;
     Ok(manifest)
 }
-
 fn find_matching_route<'a>(
     routes: &'a [ToriiAppApiRouteV1],
     method: &Method,
@@ -454,7 +425,6 @@ fn find_matching_route<'a>(
             && adapter_is_supported(&route.adapter)
     })
 }
-
 async fn decode_query<T>(uri: &Uri) -> Result<T, Response>
 where
     T: norito::json::JsonDeserializeOwned + Send,
@@ -468,7 +438,6 @@ where
         .await
         .map(|crate::NoritoQuery(value)| value)
 }
-
 fn decode_json_body<T>(body: &Bytes) -> Result<T, Response>
 where
     T: norito::json::JsonDeserializeOwned,
@@ -480,7 +449,6 @@ where
         )
     })
 }
-
 fn attach_dispatch_headers(
     response: &mut Response,
     source: &AppApiRouteSource,
@@ -507,7 +475,6 @@ fn attach_dispatch_headers(
             .insert("x-torii-app-api-adapter", value);
     }
 }
-
 async fn dispatch_app_api_route(
     app: SharedAppState,
     headers: HeaderMap,
@@ -758,7 +725,6 @@ async fn dispatch_app_api_route(
     attach_dispatch_headers(&mut response, &source, route);
     response
 }
-
 async fn dispatch_manifest_path(
     app: SharedAppState,
     headers: HeaderMap,
@@ -784,7 +750,6 @@ async fn dispatch_manifest_path(
     };
     dispatch_app_api_route(app, headers, remote, method, uri, route, source, body).await
 }
-
 pub(crate) async fn handle_get_app_api_bindings(State(app): State<SharedAppState>) -> Response {
     let candidates = match resolve_binding_candidates(&app) {
         Ok(value) => value,
@@ -809,7 +774,6 @@ pub(crate) async fn handle_get_app_api_bindings(State(app): State<SharedAppState
     );
     JsonBody(Value::Object(body)).into_response()
 }
-
 pub(crate) async fn handle_get_app_api_cid_manifest(
     State(app): State<SharedAppState>,
     Path(cid): Path<String>,
@@ -820,7 +784,6 @@ pub(crate) async fn handle_get_app_api_cid_manifest(
     };
     JsonBody(manifest_to_json(&manifest)).into_response()
 }
-
 pub(crate) async fn handle_get_app_api_cid_path(
     State(app): State<SharedAppState>,
     method: Method,
@@ -843,7 +806,6 @@ pub(crate) async fn handle_get_app_api_cid_path(
     )
     .await
 }
-
 pub(crate) async fn handle_post_app_api_cid_path(
     State(app): State<SharedAppState>,
     method: Method,
@@ -875,7 +837,6 @@ pub(crate) async fn handle_post_app_api_cid_path(
     )
     .await
 }
-
 pub(crate) async fn handle_get_app_api_active_path(
     State(app): State<SharedAppState>,
     method: Method,
@@ -915,7 +876,6 @@ pub(crate) async fn handle_get_app_api_active_path(
     )
     .await
 }
-
 pub(crate) async fn handle_post_app_api_active_path(
     State(app): State<SharedAppState>,
     method: Method,
@@ -964,11 +924,9 @@ pub(crate) async fn handle_post_app_api_active_path(
     )
     .await
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn normalize_route_path_accepts_relative_and_absolute_paths() {
         assert_eq!(
@@ -982,7 +940,6 @@ mod tests {
         assert_eq!(normalize_route_path(""), None);
         assert_eq!(normalize_route_path("/v1//broken"), None);
     }
-
     #[test]
     fn find_matching_route_requires_method_path_and_adapter() {
         let routes = vec![ToriiAppApiRouteV1 {

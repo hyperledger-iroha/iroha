@@ -52,7 +52,6 @@ fn assert_passive_state_diagnostics(
     assert!(!ownership_data_temp.exists());
     assert!(!ownership_index_temp.exists());
 }
-
 #[test]
 fn pending_native_diagnostic_entry_rejects_forged_merge_qc_and_lane_bindings() {
     let (state, validator_keypairs, commit_keypairs, parent) = configured_two_lane_merge_state();
@@ -79,7 +78,6 @@ fn pending_native_diagnostic_entry_rejects_forged_merge_qc_and_lane_bindings() {
             .expect("the exact merge-QC-authenticated diagnostic entry is valid")
             .is_empty()
     );
-
     let mut forged_binding = entry.clone();
     forged_binding.active_lanes[1].incarnation =
         Hash::new(b"forged-pending-native-diagnostic-incarnation");
@@ -105,7 +103,6 @@ fn pending_native_diagnostic_entry_rejects_forged_merge_qc_and_lane_bindings() {
                 .is_err(),
             "active-lane bytes changed after certification must fail the merge-QC trust root",
         );
-
     let mut forged_qc = entry;
     forged_qc.merge_qc.aggregate_signature[0] ^= 0x80;
     assert!(
@@ -115,7 +112,6 @@ fn pending_native_diagnostic_entry_rejects_forged_merge_qc_and_lane_bindings() {
         "forged merge-QC bytes must fail before diagnostic rows are derived",
     );
 }
-
 #[test]
 fn historical_native_amx_recovery_and_diagnostics_share_the_frozen_source_boundary() {
     let source = include_str!("../state.rs");

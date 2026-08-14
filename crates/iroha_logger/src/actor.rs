@@ -1,12 +1,9 @@
 //! Actor encapsulating interaction with logger & telemetry subsystems.
-
+use crate::telemetry;
 use iroha_config::logger::Directives;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing_core::Subscriber;
 use tracing_subscriber::reload::{self, Error as ReloadError};
-
-use crate::telemetry;
-
 /// Handle for communicating with the logging actor.
 ///
 /// `LoggerHandle` is used to dynamically reload log levels and subscribe to
@@ -16,7 +13,6 @@ use crate::telemetry;
 pub struct LoggerHandle {
     sender: mpsc::Sender<Message>,
 }
-
 impl LoggerHandle {
     pub(crate) fn new<S: Subscriber>(
         handle: reload::Handle<tracing_subscriber::filter::EnvFilter, S>,
@@ -33,10 +29,8 @@ impl LoggerHandle {
             telemetry_forwarder_future: future_forward,
         };
         tokio::spawn(async move { actor.run().await });
-
         Self { sender: tx }
     }
-
     /// Reload the log level filter.
     ///
     /// # Errors
@@ -53,7 +47,6 @@ impl LoggerHandle {
             .await;
         Ok(rx.await??)
     }
-
     /// Subscribe to the telemetry events broadcasting.
     ///
     /// # Errors
@@ -73,7 +66,6 @@ impl LoggerHandle {
         Ok(rx.await?)
     }
 }
-
 enum Message {
     ReloadLevel {
         value: Directives,
@@ -84,7 +76,6 @@ enum Message {
         respond_to: oneshot::Sender<broadcast::Receiver<telemetry::Event>>,
     },
 }
-
 /// Possible errors that might occur while interacting with the actor.
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -95,7 +86,6 @@ pub enum Error {
     #[error("failed to communicate with the actor")]
     Communication(#[from] oneshot::error::RecvError),
 }
-
 struct LoggerActor<S: Subscriber> {
     message_receiver: mpsc::Receiver<Message>,
     telemetry_receiver: mpsc::Receiver<telemetry::ChannelEvent>,
@@ -103,7 +93,6 @@ struct LoggerActor<S: Subscriber> {
     telemetry_forwarder_future: broadcast::Sender<telemetry::Event>,
     level_handle: reload::Handle<tracing_subscriber::filter::EnvFilter, S>,
 }
-
 impl<S: Subscriber> LoggerActor<S> {
     async fn run(&mut self) {
         loop {
@@ -116,7 +105,6 @@ impl<S: Subscriber> LoggerActor<S> {
                         telemetry::Channel::Regular => &self.telemetry_forwarder_regular,
                         telemetry::Channel::Future => &self.telemetry_forwarder_future,
                     };
-
                     let _ = forward_to.send(event);
                 },
                 else => break
@@ -124,7 +112,6 @@ impl<S: Subscriber> LoggerActor<S> {
             tokio::task::yield_now().await;
         }
     }
-
     fn handle_message(&mut self, msg: Message) {
         match msg {
             Message::ReloadLevel { value, respond_to } => {

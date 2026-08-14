@@ -1,15 +1,12 @@
 //! Crate with macros that facilitate writing a custom executor
 // darling-generated code triggers this lint
 #![allow(clippy::needless_continue)]
-
 use manyhow::{Emitter, emit, manyhow};
 use proc_macro2::TokenStream;
-
 mod emitter_ext;
 use crate::emitter_ext::EmitterExt;
 mod default;
 mod entrypoint;
-
 /// Annotate the user-defined function that starts the execution of a executor.
 ///
 /// There are 4 acceptable forms of this macro usage. See examples.
@@ -29,23 +26,18 @@ mod entrypoint;
 #[proc_macro_attribute]
 pub fn migrate(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut emitter = Emitter::new();
-
     if !attr.is_empty() {
         emit!(
             emitter,
             "`#[migrate]` macro for Executor accepts no attributes"
         );
     }
-
     let Some(item) = emitter.handle(syn::parse2(item)) else {
         return emitter.finish_token_stream();
     };
-
     let result = entrypoint::impl_migrate_entrypoint(item);
-
     emitter.finish_token_stream_with(result)
 }
-
 /// Annotate the user-defined function that starts the execution of a executor.
 ///
 /// There are 4 acceptable forms of this macro usage. See examples.
@@ -80,23 +72,18 @@ pub fn migrate(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn entrypoint(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut emitter = Emitter::new();
-
     if !attr.is_empty() {
         emit!(
             emitter,
             "`#[entrypoint]` macro for Executor entrypoints accepts no attributes"
         );
     }
-
     let Some(item) = emitter.handle(syn::parse2(item)) else {
         return emitter.finish_token_stream();
     };
-
     let result = entrypoint::impl_validate_entrypoint(&mut emitter, item);
-
     emitter.finish_token_stream_with(result)
 }
-
 /// Implements the `iroha_executor::Validate` trait for the given `Executor` struct. As
 /// this trait has a `iroha_executor::prelude::Visit` at least this one should be implemented as well.
 ///
@@ -105,16 +92,12 @@ pub fn entrypoint(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_derive(Execute)]
 pub fn derive_execute(input: TokenStream) -> TokenStream {
     let mut emitter = Emitter::new();
-
     let Some(input) = emitter.handle(syn::parse2(input)) else {
         return emitter.finish_token_stream();
     };
-
     let result = default::impl_derive_execute(&mut emitter, &input);
-
     emitter.finish_token_stream_with(result)
 }
-
 /// Implements the `iroha_executor::prelude::Visit` trait on a given `Executor` struct.
 /// Users can supply custom overrides for any of the visit functions as freestanding functions
 /// in the same module via the `#[visit(custom(...))]` attribute by
@@ -147,16 +130,12 @@ pub fn derive_execute(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Visit, attributes(visit))]
 pub fn derive_visit(input: TokenStream) -> TokenStream {
     let mut emitter = Emitter::new();
-
     let Some(input) = emitter.handle(syn::parse2(input)) else {
         return emitter.finish_token_stream();
     };
-
     let result = default::impl_derive_visit(&mut emitter, &input);
-
     emitter.finish_token_stream_with(result)
 }
-
 /// Implements three default entrypoints on a given `Executor` struct: `execute_transaction`,
 /// `validate_query` and `execute_instruction`. The `migrate` entrypoint is implied to be
 /// implemented manually by the user at all times.
@@ -184,12 +163,9 @@ pub fn derive_visit(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Entrypoints, attributes(entrypoints))]
 pub fn derive_entrypoints(input: TokenStream) -> TokenStream {
     let mut emitter = Emitter::new();
-
     let Some(input) = emitter.handle(syn::parse2(input)) else {
         return emitter.finish_token_stream();
     };
-
     let result = default::impl_derive_entrypoints(&mut emitter, &input);
-
     emitter.finish_token_stream_with(result)
 }

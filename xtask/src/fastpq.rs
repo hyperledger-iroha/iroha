@@ -1,11 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    path::{Path, PathBuf},
-    process::Command,
-    time::{SystemTime, UNIX_EPOCH},
-};
-
+use crate::workspace_root;
 use blake3::hash as blake3_hash;
 use eyre::{Context, Result, bail, ensure, eyre};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
@@ -16,16 +9,19 @@ use norito::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339, macros::format_description};
-
-use crate::workspace_root;
-
 #[derive(Debug, Clone)]
 pub struct BenchInput {
     pub label: String,
     pub path: PathBuf,
 }
-
 #[derive(Debug)]
 pub struct BenchManifestOptions {
     pub benches: Vec<BenchInput>,
@@ -39,7 +35,6 @@ pub struct BenchManifestOptions {
     pub label_min_operation_speedup: BTreeMap<String, BTreeMap<String, f64>>,
     pub label_operation_filters: BTreeMap<String, BTreeSet<String>>,
 }
-
 impl Default for BenchManifestOptions {
     fn default() -> Self {
         Self {
@@ -56,13 +51,11 @@ impl Default for BenchManifestOptions {
         }
     }
 }
-
 pub fn default_manifest_path() -> PathBuf {
     workspace_root()
         .join("artifacts")
         .join("fastpq_bench_manifest.json")
 }
-
 pub fn default_matrix_manifest_path() -> PathBuf {
     workspace_root()
         .join("artifacts")
@@ -70,7 +63,6 @@ pub fn default_matrix_manifest_path() -> PathBuf {
         .join("matrix")
         .join("matrix_manifest.json")
 }
-
 pub fn default_stage_profile_dir() -> PathBuf {
     let timestamp = stage_profile_timestamp();
     workspace_root()
@@ -78,13 +70,11 @@ pub fn default_stage_profile_dir() -> PathBuf {
         .join("fastpq_stage_profiles")
         .join(timestamp)
 }
-
 #[derive(Serialize, JsonSerialize)]
 struct BenchHashes {
     blake3_hex: String,
     sha256_hex: String,
 }
-
 #[derive(Serialize, Default, JsonSerialize)]
 struct BenchMetadata {
     generated_at: Option<String>,
@@ -94,7 +84,6 @@ struct BenchMetadata {
     command: Option<String>,
     notes: Option<String>,
 }
-
 #[derive(Serialize, JsonSerialize)]
 struct BenchEntry {
     label: String,
@@ -115,7 +104,6 @@ struct BenchEntry {
     metadata: BenchMetadata,
     hashes: BenchHashes,
 }
-
 #[derive(Serialize, Default, JsonSerialize)]
 struct PoseidonMicrobenchSample {
     mean_ms: Option<f64>,
@@ -129,7 +117,6 @@ struct PoseidonMicrobenchSample {
     threadgroup_lanes: Option<u32>,
     states_per_lane: Option<u32>,
 }
-
 impl PoseidonMicrobenchSample {
     fn is_empty(&self) -> bool {
         self.mean_ms.is_none()
@@ -144,21 +131,18 @@ impl PoseidonMicrobenchSample {
             && self.states_per_lane.is_none()
     }
 }
-
 #[derive(Serialize, Default, JsonSerialize)]
 struct PoseidonMicrobenchSummary {
     default: Option<PoseidonMicrobenchSample>,
     scalar_lane: Option<PoseidonMicrobenchSample>,
     speedup_vs_scalar: Option<f64>,
 }
-
 #[derive(Serialize, JsonSerialize)]
 struct ConstraintSummary {
     require_rows: Option<u64>,
     max_operation_ms: BTreeMap<String, f64>,
     min_operation_speedup: BTreeMap<String, f64>,
 }
-
 #[derive(Serialize, JsonSerialize)]
 struct BenchManifestPayload {
     version: u32,
@@ -167,26 +151,22 @@ struct BenchManifestPayload {
     benches: Vec<BenchEntry>,
     constraints: ConstraintSummary,
 }
-
 #[derive(Serialize, JsonSerialize)]
 struct SignatureEnvelope {
     algorithm: String,
     public_key_hex: String,
     signature_hex: String,
 }
-
 #[derive(Serialize, JsonSerialize)]
 struct SignedBenchManifest {
     payload: BenchManifestPayload,
     signature: Option<SignatureEnvelope>,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct OperationStats {
     gpu_mean_ms: Option<f64>,
     speedup_ratio: Option<f64>,
 }
-
 impl OperationStats {
     fn from_value(value: &Value) -> OperationStats {
         let gpu_mean_ms = value.get("gpu_mean_ms").and_then(|v| v.as_f64());
@@ -197,7 +177,6 @@ impl OperationStats {
         }
     }
 }
-
 impl BenchManifestOptions {
     fn effective_max_operation_ms(&self, label: &str) -> BTreeMap<String, f64> {
         let mut map = self.max_operation_ms.clone();
@@ -211,7 +190,6 @@ impl BenchManifestOptions {
         }
         map
     }
-
     fn effective_min_operation_speedup(&self, label: &str) -> BTreeMap<String, f64> {
         let mut map = self.min_operation_speedup.clone();
         if let Some(per_label) = self.label_min_operation_speedup.get(label) {
@@ -225,7 +203,6 @@ impl BenchManifestOptions {
         map
     }
 }
-
 #[derive(Debug, Deserialize, JsonDeserialize)]
 struct MatrixManifest {
     version: u32,
@@ -242,7 +219,6 @@ struct MatrixManifest {
     #[norito(default)]
     devices: Vec<MatrixDeviceEntry>,
 }
-
 #[derive(Debug, Deserialize, JsonDeserialize)]
 struct MatrixDeviceEntry {
     label: String,
@@ -256,7 +232,6 @@ struct MatrixDeviceEntry {
     #[norito(default)]
     min_operation_speedup: BTreeMap<String, f64>,
 }
-
 fn apply_matrix_manifest(options: &mut BenchManifestOptions, manifest_path: &Path) -> Result<()> {
     let bytes = fs::read(manifest_path)
         .with_context(|| format!("read matrix manifest {}", manifest_path.display()))?;
@@ -297,7 +272,6 @@ fn apply_matrix_manifest(options: &mut BenchManifestOptions, manifest_path: &Pat
     }
     Ok(())
 }
-
 pub fn write_bench_manifest(mut options: BenchManifestOptions) -> Result<()> {
     if let Some(path) = options.matrix_manifest.clone() {
         apply_matrix_manifest(&mut options, &path)?;
@@ -305,13 +279,11 @@ pub fn write_bench_manifest(mut options: BenchManifestOptions) -> Result<()> {
     if options.benches.is_empty() {
         bail!("fastpq-bench-manifest requires at least one --bench label=path argument");
     }
-
     let mut entries = Vec::with_capacity(options.benches.len());
     for bench in &options.benches {
         let entry = parse_bench_entry(bench, &options)?;
         entries.push(entry);
     }
-
     let payload = BenchManifestPayload {
         version: 1,
         generated_unix_ms: current_unix_ms(),
@@ -323,39 +295,31 @@ pub fn write_bench_manifest(mut options: BenchManifestOptions) -> Result<()> {
             min_operation_speedup: options.min_operation_speedup.clone(),
         },
     };
-
     let payload_bytes = serde_json::to_vec(&payload).context("serialize bench manifest payload")?;
     let signature = if let Some(key_path) = options.signing_key.as_ref() {
         Some(sign_manifest(&payload_bytes, key_path)?)
     } else {
         None
     };
-
     let signed = SignedBenchManifest { payload, signature };
     let json = serde_json::to_json_pretty(&signed).context("serialize signed manifest")?;
-
     if let Some(parent) = options.output.parent() {
         fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
-
     fs::write(&options.output, json)
         .with_context(|| format!("write {}", options.output.display()))?;
-
     if let Ok(rel) = options.output.strip_prefix(workspace_root()) {
         println!("wrote {}", rel.display());
     } else {
         println!("wrote {}", options.output.display());
     }
-
     Ok(())
 }
-
 fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> Result<BenchEntry> {
     let bytes = fs::read(&bench.path)
         .with_context(|| format!("read benchmark {}", bench.path.display()))?;
     let blake3_hex = blake3_hash(&bytes).to_hex().to_string();
     let sha256_hex = hex::encode(Sha256::digest(&bytes));
-
     let bundle: Value = json::from_slice(&bytes)
         .with_context(|| format!("decode JSON from {}", bench.path.display()))?;
     let metadata_value = bundle
@@ -367,7 +331,6 @@ fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> 
         .get("benchmarks")
         .and_then(|v| v.as_object())
         .ok_or_else(|| eyre!("benchmarks block missing in {}", bench.path.display()))?;
-
     let rows = benchmarks_value
         .get("rows")
         .and_then(|v| v.as_u64())
@@ -377,7 +340,6 @@ fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> 
                 bench.path.display()
             )
         })?;
-
     if let Some(required) = constraints.require_rows {
         ensure!(
             rows >= required,
@@ -387,16 +349,13 @@ fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> 
             required
         );
     }
-
     let operations = benchmarks_value
         .get("operations")
         .and_then(|v| v.as_array())
         .ok_or_else(|| eyre!("benchmarks.operations missing in {}", bench.path.display()))?;
     let operation_map = build_operation_map(operations);
-
     let effective_max = constraints.effective_max_operation_ms(&bench.label);
     let effective_min = constraints.effective_min_operation_speedup(&bench.label);
-
     enforce_operation_limits(
         &bench.label,
         &operation_map,
@@ -413,7 +372,6 @@ fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> 
         "speedup_ratio",
         "min-operation-speedup",
     )?;
-
     let metadata = BenchMetadata {
         generated_at: metadata_value
             .get("generated_at")
@@ -440,7 +398,6 @@ fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> 
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned),
     };
-
     let benchmark_path = display_path(&bench.path);
     let gpu_backend = benchmarks_value
         .get("gpu_backend")
@@ -455,7 +412,6 @@ fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> 
             bench.label
         );
     }
-
     Ok(BenchEntry {
         label: bench.label.clone(),
         path: benchmark_path,
@@ -483,7 +439,6 @@ fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> 
         },
     })
 }
-
 fn parse_poseidon_microbench_summary(value: Option<&Value>) -> Option<PoseidonMicrobenchSummary> {
     let obj = value?.as_object()?;
     let default_sample = obj
@@ -502,7 +457,6 @@ fn parse_poseidon_microbench_summary(value: Option<&Value>) -> Option<PoseidonMi
         speedup_vs_scalar: speedup,
     })
 }
-
 fn parse_poseidon_microbench_sample(value: &Value) -> Option<PoseidonMicrobenchSample> {
     let obj = value.as_object()?;
     let sample = PoseidonMicrobenchSample {
@@ -531,7 +485,6 @@ fn parse_poseidon_microbench_sample(value: &Value) -> Option<PoseidonMicrobenchS
         Some(sample)
     }
 }
-
 fn build_operation_map(entries: &[Value]) -> BTreeMap<String, OperationStats> {
     let mut map = BTreeMap::new();
     for entry in entries {
@@ -541,7 +494,6 @@ fn build_operation_map(entries: &[Value]) -> BTreeMap<String, OperationStats> {
     }
     map
 }
-
 fn enforce_operation_limits<F>(
     label: &str,
     operations: &BTreeMap<String, OperationStats>,
@@ -573,7 +525,6 @@ where
     }
     Ok(())
 }
-
 fn sign_manifest(payload: &[u8], key_path: &Path) -> Result<SignatureEnvelope> {
     let key_hex = fs::read_to_string(key_path)
         .with_context(|| format!("read signing key {}", key_path.display()))?;
@@ -600,7 +551,6 @@ fn sign_manifest(payload: &[u8], key_path: &Path) -> Result<SignatureEnvelope> {
         signature_hex: hex::encode(signature.payload()),
     })
 }
-
 fn display_path(path: &Path) -> String {
     if let Ok(rel) = path.strip_prefix(workspace_root()) {
         rel.display().to_string()
@@ -608,7 +558,6 @@ fn display_path(path: &Path) -> String {
         path.display().to_string()
     }
 }
-
 fn current_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -617,7 +566,6 @@ fn current_unix_ms() -> u64 {
         .try_into()
         .unwrap_or(u64::MAX)
 }
-
 fn current_commit() -> Result<String> {
     let output = Command::new("git")
         .current_dir(workspace_root())
@@ -630,7 +578,6 @@ fn current_commit() -> Result<String> {
     let text = String::from_utf8(output.stdout).context("rev-parse output")?;
     Ok(text.trim().to_string())
 }
-
 #[derive(Debug)]
 pub struct StageProfileOptions {
     pub rows: usize,
@@ -645,7 +592,6 @@ pub struct StageProfileOptions {
     pub gpu_probe: bool,
     pub stages: Vec<StageKind>,
 }
-
 impl Default for StageProfileOptions {
     fn default() -> Self {
         Self {
@@ -663,7 +609,6 @@ impl Default for StageProfileOptions {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StageKind {
     Fft,
@@ -673,7 +618,6 @@ pub enum StageKind {
     PoseidonMerklePairs,
     Bn254PoseidonWords,
 }
-
 impl StageKind {
     pub fn from_str(raw: &str) -> Option<Self> {
         match raw.trim().to_ascii_lowercase().as_str() {
@@ -688,7 +632,6 @@ impl StageKind {
             _ => None,
         }
     }
-
     fn spec(self) -> StageSpec {
         match self {
             StageKind::Fft => StageSpec {
@@ -723,18 +666,15 @@ impl StageKind {
             },
         }
     }
-
     fn cuda_operation(self) -> &'static str {
         self.spec().operation
     }
 }
-
 struct StageSpec {
     label: &'static str,
     operation: &'static str,
     dir: &'static str,
 }
-
 #[derive(JsonSerialize)]
 struct StageProfileSummary {
     generated_at: String,
@@ -745,7 +685,6 @@ struct StageProfileSummary {
     capture_trace: bool,
     stages: Vec<StageSummary>,
 }
-
 #[derive(JsonSerialize)]
 struct StageSummary {
     stage: String,
@@ -769,7 +708,6 @@ struct StageSummary {
     #[norito(skip_serializing_if = "Option::is_none")]
     metal_heuristics: Option<Value>,
 }
-
 #[derive(JsonSerialize)]
 struct StageStats {
     cpu: StageStat,
@@ -784,14 +722,12 @@ struct StageStats {
     #[norito(skip_serializing_if = "Option::is_none")]
     input_len: Option<u64>,
 }
-
 #[derive(JsonSerialize)]
 struct StageStat {
     mean_ms: f64,
     min_ms: f64,
     max_ms: f64,
 }
-
 pub fn run_stage_profile(options: &StageProfileOptions) -> Result<PathBuf> {
     if options.stages.is_empty() {
         bail!("fastpq-stage-profile requires at least one --stage");
@@ -827,7 +763,6 @@ pub fn run_stage_profile(options: &StageProfileOptions) -> Result<PathBuf> {
     );
     Ok(summary_path)
 }
-
 fn run_stage(spec: StageSpec, options: &StageProfileOptions) -> Result<StageSummary> {
     eprintln!("fastpq-stage-profile: running {}", spec.label);
     let stage_dir = options.output_dir.join(spec.dir);
@@ -882,7 +817,6 @@ fn run_stage(spec: StageSpec, options: &StageProfileOptions) -> Result<StageSumm
         .with_context(|| format!("failed to parse {}", bench_path.display()))?;
     build_stage_summary(spec, &payload, &bench_path)
 }
-
 fn build_stage_summary(
     spec: StageSpec,
     payload: &Value,
@@ -923,7 +857,6 @@ fn build_stage_summary(
         metal_heuristics: report.get("metal_heuristics").cloned(),
     })
 }
-
 fn parse_stage_stats(value: &Value) -> Option<StageStats> {
     let cpu = value.get("cpu")?.as_object()?;
     let cpu_stats = StageStat {
@@ -956,7 +889,6 @@ fn parse_stage_stats(value: &Value) -> Option<StageStats> {
         input_len: value.get("input_len").and_then(|len| len.as_u64()),
     })
 }
-
 fn dedup_stages(stages: &[StageKind]) -> Vec<StageKind> {
     let mut set = BTreeSet::new();
     for stage in stages {
@@ -964,7 +896,6 @@ fn dedup_stages(stages: &[StageKind]) -> Vec<StageKind> {
     }
     set.into_iter().collect()
 }
-
 fn stage_profile_timestamp() -> String {
     OffsetDateTime::now_utc()
         .format(&format_description!(
@@ -972,7 +903,6 @@ fn stage_profile_timestamp() -> String {
         ))
         .unwrap_or_else(|_| "unknown".into())
 }
-
 #[derive(Debug, Clone)]
 pub struct CudaSuiteOptions {
     pub rows: usize,
@@ -998,7 +928,6 @@ pub struct CudaSuiteOptions {
     pub gpg_key: Option<String>,
     pub dry_run: bool,
 }
-
 impl Default for CudaSuiteOptions {
     fn default() -> Self {
         let output = default_cuda_bench_output_path();
@@ -1029,7 +958,6 @@ impl Default for CudaSuiteOptions {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 pub struct CudaSuiteResult {
     pub raw_output: PathBuf,
@@ -1037,7 +965,6 @@ pub struct CudaSuiteResult {
     pub summary: PathBuf,
     pub dry_run: bool,
 }
-
 #[derive(Clone, JsonSerialize)]
 struct RecordedCommand {
     program: String,
@@ -1045,7 +972,6 @@ struct RecordedCommand {
     env: BTreeMap<String, String>,
     cwd: String,
 }
-
 #[derive(JsonSerialize)]
 struct CudaSuiteSummary {
     raw_output: String,
@@ -1072,28 +998,23 @@ struct CudaSuiteSummary {
     labels: BTreeMap<String, String>,
     commands: Vec<RecordedCommand>,
 }
-
 struct CommandPlan {
     record: RecordedCommand,
     command: Command,
 }
-
 impl CudaSuiteOptions {
     fn operation_arg(&self) -> &'static str {
         self.operation
             .map(StageKind::cuda_operation)
             .unwrap_or("all")
     }
-
     fn requires_lde_threshold(&self) -> bool {
         self.operation.is_none() || self.operation == Some(StageKind::Lde)
     }
-
     fn requires_poseidon_threshold(&self) -> bool {
         self.operation.is_none() || self.operation == Some(StageKind::Poseidon)
     }
 }
-
 fn validate_cuda_suite_options(options: &CudaSuiteOptions) -> Result<()> {
     ensure!(options.rows > 0, "fastpq-cuda-suite requires --rows > 0");
     ensure!(
@@ -1128,7 +1049,6 @@ fn validate_cuda_suite_options(options: &CudaSuiteOptions) -> Result<()> {
     }
     Ok(())
 }
-
 pub fn run_cuda_suite(options: &CudaSuiteOptions) -> Result<CudaSuiteResult> {
     validate_cuda_suite_options(options)?;
     fs::create_dir_all(
@@ -1147,7 +1067,6 @@ pub fn run_cuda_suite(options: &CudaSuiteOptions) -> Result<CudaSuiteResult> {
             .unwrap_or_else(workspace_root),
     )
     .with_context(|| format!("failed to create {}", options.raw_output.display()))?;
-
     let mut bench = build_cuda_bench_command(options)?;
     let bench_record = bench.record.clone();
     let mut wrap = options
@@ -1155,7 +1074,6 @@ pub fn run_cuda_suite(options: &CudaSuiteOptions) -> Result<CudaSuiteResult> {
         .then(|| build_wrap_command(options))
         .transpose()?;
     let wrap_record = wrap.as_ref().map(|plan| plan.record.clone());
-
     let mut commands = Vec::new();
     if options.dry_run {
         commands.push(bench_record);
@@ -1174,17 +1092,14 @@ pub fn run_cuda_suite(options: &CudaSuiteOptions) -> Result<CudaSuiteResult> {
             dry_run: true,
         });
     }
-
     run_command(&mut bench)?;
     commands.push(bench_record);
-
     if let Some(plan) = wrap.as_mut() {
         run_command(plan)?;
         if let Some(record) = wrap_record {
             commands.push(record);
         }
     }
-
     let summary = write_cuda_suite_summary(options, &commands)?;
     eprintln!("fastpq-cuda-suite: wrote plan {}", display_path(&summary));
     Ok(CudaSuiteResult {
@@ -1194,7 +1109,6 @@ pub fn run_cuda_suite(options: &CudaSuiteOptions) -> Result<CudaSuiteResult> {
         dry_run: false,
     })
 }
-
 fn write_cuda_suite_summary(
     options: &CudaSuiteOptions,
     commands: &[RecordedCommand],
@@ -1234,7 +1148,6 @@ fn write_cuda_suite_summary(
         .with_context(|| format!("failed to write {}", summary_path.display()))?;
     Ok(summary_path)
 }
-
 fn run_command(plan: &mut CommandPlan) -> Result<()> {
     let status = plan.command.status().context("failed to execute command")?;
     ensure!(
@@ -1244,7 +1157,6 @@ fn run_command(plan: &mut CommandPlan) -> Result<()> {
     );
     Ok(())
 }
-
 fn build_cuda_bench_command(options: &CudaSuiteOptions) -> Result<CommandPlan> {
     validate_cuda_suite_options(options)?;
     let mut args = vec![
@@ -1283,10 +1195,8 @@ fn build_cuda_bench_command(options: &CudaSuiteOptions) -> Result<CommandPlan> {
     if options.require_gpu {
         args.push("--require-gpu".to_owned());
     }
-
     let mut env = BTreeMap::new();
     env.insert("FASTPQ_GPU".into(), "gpu".into());
-
     let workspace = workspace_root();
     let mut command = Command::new("cargo");
     command.current_dir(&workspace);
@@ -1294,7 +1204,6 @@ fn build_cuda_bench_command(options: &CudaSuiteOptions) -> Result<CommandPlan> {
     for (key, value) in &env {
         command.env(key, value);
     }
-
     Ok(CommandPlan {
         record: RecordedCommand {
             program: "cargo".into(),
@@ -1305,7 +1214,6 @@ fn build_cuda_bench_command(options: &CudaSuiteOptions) -> Result<CommandPlan> {
         command,
     })
 }
-
 fn build_wrap_command(options: &CudaSuiteOptions) -> Result<CommandPlan> {
     validate_cuda_suite_options(options)?;
     let mut args = vec![display_path(&options.wrapper)];
@@ -1346,12 +1254,10 @@ fn build_wrap_command(options: &CudaSuiteOptions) -> Result<CommandPlan> {
     }
     args.push(display_path(&options.raw_output));
     args.push(display_path(&options.output));
-
     let workspace = workspace_root();
     let mut command = Command::new("python3");
     command.current_dir(&workspace);
     command.args(args.iter());
-
     Ok(CommandPlan {
         record: RecordedCommand {
             program: "python3".into(),
@@ -1362,7 +1268,6 @@ fn build_wrap_command(options: &CudaSuiteOptions) -> Result<CommandPlan> {
         command,
     })
 }
-
 fn plan_summary_path(output: &Path) -> PathBuf {
     let parent = output
         .parent()
@@ -1375,11 +1280,9 @@ fn plan_summary_path(output: &Path) -> PathBuf {
         .unwrap_or("fastpq_cuda_bench");
     parent.join(format!("{stem}_plan.json"))
 }
-
 pub fn default_cuda_bench_output_path() -> PathBuf {
     default_cuda_bench_output_path_for_operation(None)
 }
-
 pub fn default_cuda_bench_output_path_for_operation(operation: Option<StageKind>) -> PathBuf {
     let stem = operation
         .map(StageKind::cuda_operation)
@@ -1390,7 +1293,6 @@ pub fn default_cuda_bench_output_path_for_operation(operation: Option<StageKind>
         .join("fastpq_benchmarks")
         .join(format!("{stem}_{}.json", stage_profile_timestamp()))
 }
-
 pub fn default_cuda_raw_output(output: &Path) -> PathBuf {
     let parent = output
         .parent()
@@ -1403,22 +1305,17 @@ pub fn default_cuda_raw_output(output: &Path) -> PathBuf {
         .unwrap_or("fastpq_cuda_bench");
     parent.join(format!("{stem}_raw.json"))
 }
-
 fn default_wrapper_path() -> PathBuf {
     workspace_root()
         .join("scripts")
         .join("fastpq")
         .join("wrap_benchmark.py")
 }
-
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
-    use tempfile::TempDir;
-
     use super::*;
-
+    use std::path::Path;
+    use tempfile::TempDir;
     fn sample_bundle(rows: u64) -> Value {
         norito::json!({
             "metadata": {
@@ -1463,14 +1360,12 @@ mod tests {
             "report": {}
         })
     }
-
     fn write_bundle(temp: &TempDir, name: &str, rows: u64) -> PathBuf {
         let path = temp.path().join(name);
         let json = sample_bundle(rows);
         fs::write(&path, norito::json::to_vec_pretty(&json).unwrap()).unwrap();
         path
     }
-
     #[test]
     fn sign_manifest_exports_checked_public_key_payload() {
         let temp = TempDir::new().expect("tempdir");
@@ -1484,9 +1379,7 @@ mod tests {
             .public_key()
             .try_to_bytes()
             .expect("fixture public key is well-formed");
-
         let signature = sign_manifest(b"bench manifest", &key_path).expect("sign manifest");
-
         assert_eq!(signature.algorithm, "ed25519");
         assert_eq!(signature.public_key_hex, hex::encode(expected_public));
         Signature::try_from_bytes(
@@ -1496,7 +1389,6 @@ mod tests {
         .verify(expected_key_pair.public_key(), b"bench manifest")
         .expect("checked manifest signature verifies");
     }
-
     #[test]
     fn build_stage_summary_extracts_stats() {
         let payload = norito::json!({
@@ -1529,7 +1421,6 @@ mod tests {
         assert!(summary.kernel_profiles.is_some());
         assert!(summary.stats.gpu.is_some());
     }
-
     #[test]
     fn dedup_stages_orders_unique() {
         let list = vec![
@@ -1545,7 +1436,6 @@ mod tests {
             vec![StageKind::Fft, StageKind::Lde, StageKind::Poseidon]
         );
     }
-
     #[test]
     fn manifest_writes_with_constraints() {
         let temp = TempDir::new().expect("tempdir");
@@ -1566,9 +1456,7 @@ mod tests {
             label_operation_filters: BTreeMap::new(),
         };
         options.max_operation_ms.extend([("fft".into(), 500.0)]);
-
         write_bench_manifest(options).expect("manifest succeeds");
-
         let manifest_text =
             fs::read_to_string(temp.path().join("manifest.json")).expect("read manifest");
         let manifest: serde_json::Value =
@@ -1602,7 +1490,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn manifest_rejects_bad_threshold() {
         let temp = TempDir::new().expect("tempdir");
@@ -1628,7 +1515,6 @@ mod tests {
                 .contains("rows 18000 below required threshold")
         );
     }
-
     #[test]
     fn matrix_constraints_enforced() {
         let temp = TempDir::new().expect("tempdir");
@@ -1649,7 +1535,6 @@ mod tests {
             norito::json::to_vec_pretty(&manifest_value).unwrap(),
         )
         .unwrap();
-
         let options = BenchManifestOptions {
             benches: vec![BenchInput {
                 label: "metal".into(),
@@ -1666,7 +1551,6 @@ mod tests {
             label_operation_filters: BTreeMap::new(),
         };
         write_bench_manifest(options).expect("matrix constraints pass");
-
         let mut slow_bundle = sample_bundle(20_000);
         if let Some(entries) = slow_bundle
             .get_mut("benchmarks")
@@ -1711,7 +1595,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn manifest_records_focused_operation_filter() {
         let temp = TempDir::new().expect("tempdir");
@@ -1729,7 +1612,6 @@ mod tests {
             );
         }
         fs::write(&path, norito::json::to_vec_pretty(&bundle).unwrap()).unwrap();
-
         let options = BenchManifestOptions {
             benches: vec![BenchInput {
                 label: "cuda-lde".into(),
@@ -1746,7 +1628,6 @@ mod tests {
             label_operation_filters: BTreeMap::new(),
         };
         write_bench_manifest(options).expect("manifest succeeds");
-
         let manifest_text =
             fs::read_to_string(temp.path().join("manifest.json")).expect("read manifest");
         let manifest: serde_json::Value =
@@ -1755,7 +1636,6 @@ mod tests {
         assert_eq!(bench["label"], norito::json!("cuda-lde"));
         assert_eq!(bench["operation_filter"], norito::json!("lde"));
     }
-
     #[test]
     fn manifest_records_matrix_operation_filters() {
         let temp = TempDir::new().expect("tempdir");
@@ -1773,7 +1653,6 @@ mod tests {
             norito::json::to_vec_pretty(&manifest_value).unwrap(),
         )
         .unwrap();
-
         let options = BenchManifestOptions {
             benches: vec![BenchInput {
                 label: "cuda".into(),
@@ -1790,7 +1669,6 @@ mod tests {
             label_operation_filters: BTreeMap::new(),
         };
         write_bench_manifest(options).expect("manifest succeeds");
-
         let manifest_text =
             fs::read_to_string(temp.path().join("manifest.json")).expect("read manifest");
         let manifest: serde_json::Value =
@@ -1801,7 +1679,6 @@ mod tests {
             norito::json!(["fft", "lde", "poseidon_hash_columns"])
         );
     }
-
     #[test]
     fn cuda_suite_defaults_land_in_artifacts_dir() {
         let defaults = CudaSuiteOptions::default();
@@ -1824,7 +1701,6 @@ mod tests {
             "raw output should share parent directory"
         );
     }
-
     #[test]
     fn filtered_cuda_default_output_includes_operation_name() {
         let output = default_cuda_bench_output_path_for_operation(Some(StageKind::Poseidon));
@@ -1834,7 +1710,6 @@ mod tests {
             "unexpected filtered output path: {output}"
         );
     }
-
     #[test]
     fn cuda_operation_filter_accepts_poseidon_merkle_and_bn254_aliases() {
         assert_eq!(
@@ -1858,7 +1733,6 @@ mod tests {
             "bn254_poseidon_words"
         );
     }
-
     #[test]
     fn cuda_suite_rejects_zero_dimensions_before_planning() {
         let temp = TempDir::new().expect("tempdir");
@@ -1902,7 +1776,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn cuda_suite_rejects_output_collision_when_wrapping() {
         let temp = TempDir::new().expect("tempdir");
@@ -1922,7 +1795,6 @@ mod tests {
             "unexpected collision error: {message}"
         );
     }
-
     #[test]
     fn cuda_suite_rejects_nonfinite_active_thresholds() {
         let temp = TempDir::new().expect("tempdir");
@@ -1942,7 +1814,6 @@ mod tests {
             "unexpected threshold error: {message}"
         );
     }
-
     #[test]
     fn cuda_suite_ignores_thresholds_when_wrapping_is_disabled() {
         let temp = TempDir::new().expect("tempdir");
@@ -1955,7 +1826,6 @@ mod tests {
         };
         build_cuda_bench_command(&options).expect("unused threshold should not block no-wrap run");
     }
-
     #[test]
     fn cuda_bench_command_builds_expected_args() {
         let temp = TempDir::new().expect("tempdir");
@@ -1988,7 +1858,6 @@ mod tests {
             norito::json::to_vec_pretty(&norito::json!({ "batches": [] })).unwrap(),
         )
         .expect("write row usage");
-
         let plan = build_cuda_bench_command(&options).expect("build bench");
         let args: Vec<_> = plan.record.args.clone();
         assert!(args.contains(&"--rows".to_string()));
@@ -2004,7 +1873,6 @@ mod tests {
             "FASTPQ_GPU env should be set"
         );
     }
-
     #[test]
     fn cuda_wrap_command_applies_labels_and_thresholds() {
         let temp = TempDir::new().expect("tempdir");
@@ -2020,7 +1888,6 @@ mod tests {
         options
             .labels
             .insert("device_class".into(), "xeon-rtx".into());
-
         let plan = build_wrap_command(&options).expect("wrap plan");
         let args = plan.record.args.join(" ");
         assert!(args.contains("--require-lde-mean-ms 777"));
@@ -2028,7 +1895,6 @@ mod tests {
         assert!(args.contains("device_class=xeon-rtx"));
         assert!(args.contains("--accel-instance xeon-rtx"));
     }
-
     #[test]
     fn cuda_wrap_command_skips_irrelevant_thresholds_for_filtered_runs() {
         let temp = TempDir::new().expect("tempdir");
@@ -2040,13 +1906,11 @@ mod tests {
             require_poseidon_mean_ms: 888.0,
             ..CudaSuiteOptions::default()
         };
-
         let plan = build_wrap_command(&options).expect("wrap plan");
         let args = plan.record.args.join(" ");
         assert!(!args.contains("--require-lde-mean-ms"));
         assert!(!args.contains("--require-poseidon-mean-ms"));
     }
-
     #[test]
     fn cuda_wrap_command_keeps_selected_threshold_for_poseidon_only() {
         let temp = TempDir::new().expect("tempdir");
@@ -2058,13 +1922,11 @@ mod tests {
             require_poseidon_mean_ms: 888.0,
             ..CudaSuiteOptions::default()
         };
-
         let plan = build_wrap_command(&options).expect("wrap plan");
         let args = plan.record.args.join(" ");
         assert!(!args.contains("--require-lde-mean-ms"));
         assert!(args.contains("--require-poseidon-mean-ms 888"));
     }
-
     #[test]
     fn cuda_suite_dry_run_writes_summary() {
         let temp = TempDir::new().expect("tempdir");
@@ -2080,7 +1942,6 @@ mod tests {
             dry_run: true,
             ..CudaSuiteOptions::default()
         };
-
         let result = run_cuda_suite(&options).expect("run dry suite");
         assert!(result.summary.exists());
         let summary_text = fs::read_to_string(&result.summary).expect("read summary");

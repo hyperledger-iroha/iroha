@@ -1,11 +1,8 @@
 //! Schema metadata test covering enums with implicit discriminants.
-
 mod common;
-
 use common::{assert_schema, entry};
 use iroha_schema::prelude::*;
 use norito::{Decode, Encode};
-
 #[derive(IntoSchema, Encode, Decode)]
 enum Foo {
     Variant1(bool),
@@ -15,7 +12,6 @@ enum Foo {
     _Variant4,
     Variant5(i32),
 }
-
 #[test]
 fn default_discriminants() {
     assert_schema::<Foo>(

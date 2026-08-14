@@ -46,7 +46,6 @@ fn run_verange_stage_v1(
     let proof_bytes = proof.encode();
     verify_batch_encoded(&statement, &proof_bytes)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected)?;
-
     let (public_statement_material, failure_class) = match case_kind {
         PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd
         | PrivacyReleaseCaseKindV1::MaximumShapeResource => (
@@ -98,7 +97,6 @@ fn run_verange_stage_v1(
             )
         }
     };
-
     Ok(StageMaterialV1 {
         public_statement_material,
         proof_artifacts: single_proof_artifact_v1(
@@ -120,7 +118,6 @@ fn run_verange_stage_v1(
         failure_class,
     })
 }
-
 fn verange_binding_v1(
     profile: VeRangeBitLengthV1,
     statement_digest: [u8; 32],
@@ -138,7 +135,6 @@ fn verange_binding_v1(
         &compiled,
     ))
 }
-
 fn verange_binding_from_compiled_profile_v1(
     statement_digest: [u8; 32],
     generator_digest: [u8; 32],
@@ -157,7 +153,6 @@ fn verange_binding_from_compiled_profile_v1(
         generator_digest,
     }
 }
-
 fn verange_statement_material_v1(
     profile: VeRangeBitLengthV1,
     commitments: &[crate::privacy_engines::p256::CompressedPointV1],
@@ -177,7 +172,6 @@ fn verange_statement_material_v1(
     append_p256_binding_material_v1(&mut material, binding);
     material
 }
-
 /// Return the exact canonical release descriptor for one closed protocol.
 ///
 /// Runner-side aggregate validation compares this byte-for-byte; a stage
@@ -225,7 +219,6 @@ pub const fn privacy_release_protocol_descriptor_v1(
         }
     }
 }
-
 fn stage_seed_v1(
     protocol_id: PrivacyProtocolIdV1,
     case_kind: PrivacyReleaseCaseKindV1,
@@ -236,7 +229,6 @@ fn stage_seed_v1(
     hash.update(case_kind.canonical_label().as_bytes());
     hash.finalize().into()
 }
-
 fn stage_purpose_seed_v1(
     protocol_id: PrivacyProtocolIdV1,
     case_kind: PrivacyReleaseCaseKindV1,
@@ -255,59 +247,47 @@ fn stage_purpose_seed_v1(
     }
     Ok(seed)
 }
-
 fn sha256_v1(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
-
 struct UnavailableIssuanceRngV1;
-
 impl RngCore for UnavailableIssuanceRngV1 {
     fn next_u32(&mut self) -> u32 {
         0
     }
-
     fn next_u64(&mut self) -> u64 {
         0
     }
-
     fn fill_bytes(&mut self, destination: &mut [u8]) {
         destination.fill(0);
     }
-
     fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError06> {
         Err(RngError06::new(
             "cached Bootle/Lantern issuance must not read randomness",
         ))
     }
 }
-
 impl CryptoRng for UnavailableIssuanceRngV1 {}
-
 struct EvidenceRng06 {
     seed: [u8; 32],
     counter: u64,
 }
-
 impl EvidenceRng06 {
     const fn new(seed: [u8; 32]) -> Self {
         Self { seed, counter: 0 }
     }
 }
-
 impl RngCore for EvidenceRng06 {
     fn next_u32(&mut self) -> u32 {
         let mut bytes = [0_u8; 4];
         self.fill_bytes(&mut bytes);
         u32::from_be_bytes(bytes)
     }
-
     fn next_u64(&mut self) -> u64 {
         let mut bytes = [0_u8; 8];
         self.fill_bytes(&mut bytes);
         u64::from_be_bytes(bytes)
     }
-
     fn fill_bytes(&mut self, destination: &mut [u8]) {
         let mut offset = 0;
         while offset < destination.len() {
@@ -322,41 +302,33 @@ impl RngCore for EvidenceRng06 {
             offset += take;
         }
     }
-
     fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError06> {
         self.fill_bytes(destination);
         Ok(())
     }
 }
-
 impl CryptoRng for EvidenceRng06 {}
-
 struct EvidenceRng09 {
     seed: [u8; 32],
     counter: u64,
 }
-
 impl EvidenceRng09 {
     const fn new(seed: [u8; 32]) -> Self {
         Self { seed, counter: 0 }
     }
 }
-
 impl rand::TryRngCore for EvidenceRng09 {
     type Error = core::convert::Infallible;
-
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         let mut bytes = [0_u8; 4];
         self.try_fill_bytes(&mut bytes)?;
         Ok(u32::from_be_bytes(bytes))
     }
-
     fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         let mut bytes = [0_u8; 8];
         self.try_fill_bytes(&mut bytes)?;
         Ok(u64::from_be_bytes(bytes))
     }
-
     fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
         let mut offset = 0;
         while offset < destination.len() {
@@ -373,5 +345,4 @@ impl rand::TryRngCore for EvidenceRng09 {
         Ok(())
     }
 }
-
 impl rand::TryCryptoRng for EvidenceRng09 {}

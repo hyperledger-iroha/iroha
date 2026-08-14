@@ -117,7 +117,6 @@ fn typed_finality_handoff_fences_changed_roster_after_sealing_active_writer() {
         .lifecycle_root_high_water_path_for_test();
     let predecessor_root =
         std::fs::read(&lifecycle_root).expect("read the active predecessor V3 root");
-
     let replacement = PeerId::new(
         KeyPair::try_from_seed(vec![0xE7; 32], Algorithm::BlsNormal)
             .expect("deterministic replacement validator")
@@ -148,7 +147,6 @@ fn typed_finality_handoff_fences_changed_roster_after_sealing_active_writer() {
         )
         .expect("sealed exact output durably fences active predecessor ownership");
     successor_construction.complete();
-
     assert!(
         !output_guard.restart_required(),
         "successful authority-gated rollover keeps successor output open"
@@ -195,7 +193,6 @@ fn typed_finality_handoff_fences_changed_roster_after_sealing_active_writer() {
             .is_empty(),
         "forced roster fencing must not forge requester-authenticated close prefixes"
     );
-
     let stale = successor_transport
         .admit_server_request(
             &requester,
@@ -240,7 +237,6 @@ fn typed_finality_handoff_fences_changed_roster_after_sealing_active_writer() {
             .expect("late predecessor completion is a sealed no-op")
     );
 }
-
 #[test]
 fn typed_finality_handoff_preserves_same_roster_current_chunk_for_retry() {
     let CertifiedSidecarServerFixture {
@@ -358,7 +354,6 @@ fn typed_finality_handoff_preserves_same_roster_current_chunk_for_retry() {
             Instant::now(),
         )
         .expect("same roster preserves responder ownership");
-
     assert_eq!(
         transitioned.server_service_generation_for_test(),
         predecessor_generation,
@@ -401,7 +396,6 @@ fn typed_finality_handoff_preserves_same_roster_current_chunk_for_retry() {
             .expect("sealed predecessor retries are terminal no-ops")
     );
 }
-
 #[test]
 fn typed_changed_roster_v3_lifecycle_failure_preserves_predecessor_pair() {
     let CertifiedSidecarServerFixture {
@@ -470,7 +464,6 @@ fn typed_changed_roster_v3_lifecycle_failure_preserves_predecessor_pair() {
     let retained = adapter
         .into_retained_merge_sidecars(handoff, &artifact, &successor)
         .expect("bind the V3 lifecycle fixture to its exact transport");
-
     let successor_construction = output_guard
         .begin_fail_stop_operation()
         .expect("successor construction starts while output remains open");
@@ -504,7 +497,6 @@ fn typed_changed_roster_v3_lifecycle_failure_preserves_predecessor_pair() {
         predecessor_root,
         "the V3 root must retain the predecessor commitment on write failure"
     );
-
     std::fs::remove_dir(lifecycle_temp).expect("remove the injected V3 state obstruction");
     let recovered_predecessor = MergeSidecarTransport::open_durable_with_server_stream_capacity(
         &kura.store_root(),
@@ -528,7 +520,6 @@ fn typed_changed_roster_v3_lifecycle_failure_preserves_predecessor_pair() {
         0
     );
     drop(recovered_predecessor);
-
     let recovered_successor = MergeSidecarTransport::open_durable_with_server_stream_capacity(
         &kura.store_root(),
         reply_source_capacity,

@@ -4,7 +4,6 @@
 //! exposes slot 56 through the stock authenticated local broker while keeping
 //! the Falcon trapdoor, bearer token, and stable principal seed in hardened
 //! service-credential files. Torii remains the only issuance replay-state authority.
-
 use std::{
     fmt,
     fs::File,
@@ -12,7 +11,6 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
-
 use crate::{
     BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
     IrohaRuntimeProviderBindingsV1, RuntimeProviderBrokerBackendsV1,
@@ -47,7 +45,6 @@ use iroha_torii::privacy_issuance_api::{
     BootleLanternIssuanceRuntimeProviderQualificationV1,
     BootleLanternIssuanceRuntimeProviderRegistryErrorV1,
 };
-
 const ISSUER_SEED_BYTES_V1: usize = 32;
 const PRINCIPAL_SEED_BYTES_V1: usize = 32;
 const MIN_BEARER_TOKEN_BYTES_V1: usize = 32;
@@ -57,12 +54,10 @@ const MAX_CREDENTIAL_PATH_COMPONENTS_V1: usize = 64;
 #[cfg(target_os = "linux")]
 const SYSTEMD_CREDENTIAL_DIRECTORY_V1: &str =
     "/run/credentials/taira-bootle-lantern-broker.service";
-
 const PARAMETER_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.issuer-parameter-id.v1";
 const PRINCIPAL_DIGEST_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.stable-principal.v1";
 const BEARER_TOKEN_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.taira.privacy.bootle-lantern.opaque-bearer-digest.v1";
-
 /// Stable payload-free failure from the standalone Taira broker launcher.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TairaBootleLanternBrokerErrorV1 {
@@ -83,7 +78,6 @@ pub enum TairaBootleLanternBrokerErrorV1 {
     /// Secure credential loading is unsupported on this platform.
     UnsupportedPlatform,
 }
-
 impl fmt::Display for TairaBootleLanternBrokerErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -104,9 +98,7 @@ impl fmt::Display for TairaBootleLanternBrokerErrorV1 {
         })
     }
 }
-
 impl std::error::Error for TairaBootleLanternBrokerErrorV1 {}
-
 /// Exact public deployment inputs for one Taira issuer broker.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TairaBootleLanternBrokerPublicConfigV1 {
@@ -118,7 +110,6 @@ pub struct TairaBootleLanternBrokerPublicConfigV1 {
     policy_id: PrivacyPolicyIdV1,
     authorization_lifetime_blocks: u64,
 }
-
 impl TairaBootleLanternBrokerPublicConfigV1 {
     /// Validate and construct exact public broker inputs.
     ///
@@ -163,7 +154,6 @@ impl TairaBootleLanternBrokerPublicConfigV1 {
             authorization_lifetime_blocks,
         })
     }
-
     /// Human-readable chain label retained for catalog metadata and display.
     ///
     /// Security bindings use [`Self::network_id`] and never this label alone.
@@ -171,43 +161,36 @@ impl TairaBootleLanternBrokerPublicConfigV1 {
     pub fn chain_id(&self) -> &ChainId {
         &self.chain_id
     }
-
     /// Exact genesis-header-derived identity used by every security binding.
     #[must_use]
     pub const fn network_id(&self) -> NetworkId {
         self.network_id
     }
-
     /// Exact production provider handle.
     #[must_use]
     pub fn handle(&self) -> &str {
         &self.handle
     }
-
     /// Exact non-zero provider-policy revision.
     #[must_use]
     pub const fn revision(&self) -> u64 {
         self.revision
     }
-
     /// Exact governed issuer identity.
     #[must_use]
     pub const fn issuer_id(&self) -> PrivacyIssuerIdV1 {
         self.issuer_id
     }
-
     /// Exact governed issuer-policy identity.
     #[must_use]
     pub const fn policy_id(&self) -> PrivacyPolicyIdV1 {
         self.policy_id
     }
-
     /// Exact authorization lifetime in committed block heights.
     #[must_use]
     pub const fn authorization_lifetime_blocks(&self) -> u64 {
         self.authorization_lifetime_blocks
     }
-
     fn bindings(
         &self,
     ) -> Result<BootleLanternIssuanceRuntimeProviderBindingsV1, TairaBootleLanternBrokerErrorV1>
@@ -220,30 +203,24 @@ impl TairaBootleLanternBrokerPublicConfigV1 {
         .map_err(|_| TairaBootleLanternBrokerErrorV1::InvalidPublicBinding)
     }
 }
-
 struct SecretMaterialV1 {
     bytes: Vec<u8>,
 }
-
 impl SecretMaterialV1 {
     fn new(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }
-
     fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
-
     fn as_exact_32(&self) -> Option<&[u8; 32]> {
         self.bytes.as_slice().try_into().ok()
     }
-
     fn scrub(&mut self) {
         self.bytes.fill(0);
         let _ = std::hint::black_box(&self.bytes);
     }
 }
-
 impl fmt::Debug for SecretMaterialV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -252,30 +229,25 @@ impl fmt::Debug for SecretMaterialV1 {
             .finish()
     }
 }
-
 impl Drop for SecretMaterialV1 {
     fn drop(&mut self) {
         self.scrub();
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CredentialFileIdentityV1 {
     device: u64,
     inode: u64,
 }
-
 struct OpenedCredentialV1 {
     secret: SecretMaterialV1,
     identity: CredentialFileIdentityV1,
 }
-
 struct CredentialBundleV1 {
     issuer_seed: SecretMaterialV1,
     bearer_token: SecretMaterialV1,
     principal_seed: SecretMaterialV1,
 }
-
 impl CredentialBundleV1 {
     fn load(
         issuer_seed_path: &Path,
@@ -310,7 +282,6 @@ impl CredentialBundleV1 {
         })
     }
 }
-
 /// Native deployment-owned implementation of broker slot 56.
 pub struct TairaBootleLanternIssuanceBrokerBackendV1 {
     config: TairaBootleLanternBrokerPublicConfigV1,
@@ -320,7 +291,6 @@ pub struct TairaBootleLanternIssuanceBrokerBackendV1 {
     principal_digest: [u8; 32],
     qualification: BootleLanternIssuanceRuntimeProviderQualificationV1,
 }
-
 impl fmt::Debug for TairaBootleLanternIssuanceBrokerBackendV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -333,7 +303,6 @@ impl fmt::Debug for TairaBootleLanternIssuanceBrokerBackendV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl TairaBootleLanternIssuanceBrokerBackendV1 {
     /// Load exactly three hardened service credentials and construct the native backend.
     ///
@@ -356,7 +325,6 @@ impl TairaBootleLanternIssuanceBrokerBackendV1 {
             CredentialBundleV1::load(issuer_seed_path, bearer_token_path, principal_seed_path)?;
         Self::from_credentials_v1(config, credentials)
     }
-
     fn from_credentials_v1(
         config: TairaBootleLanternBrokerPublicConfigV1,
         mut credentials: CredentialBundleV1,
@@ -401,7 +369,6 @@ impl TairaBootleLanternIssuanceBrokerBackendV1 {
         policy
             .validate_initial()
             .map_err(|_| TairaBootleLanternBrokerErrorV1::InvalidPublicBinding)?;
-
         let principal_digest_result = derive_nonzero_digest_v1(
             PRINCIPAL_DIGEST_DOMAIN_V1,
             &[
@@ -445,19 +412,16 @@ impl TairaBootleLanternIssuanceBrokerBackendV1 {
             qualification,
         })
     }
-
     /// Complete governed issuer policy exported by this backend.
     #[must_use]
     pub fn policy(&self) -> &BootleLanternIssuerPolicyV1 {
         &self.policy
     }
-
     /// Stable public principal commitment, independent of bearer rotation.
     #[must_use]
     pub const fn principal_digest(&self) -> [u8; 32] {
         self.principal_digest
     }
-
     /// Exact provider qualification derived from public policy and executable contracts.
     #[must_use]
     pub const fn public_qualification(
@@ -465,7 +429,6 @@ impl TairaBootleLanternIssuanceBrokerBackendV1 {
     ) -> BootleLanternIssuanceRuntimeProviderQualificationV1 {
         self.qualification
     }
-
     fn validate_expected_digests_v1(
         &self,
         expected_policy_record_digest: [u8; 32],
@@ -482,7 +445,6 @@ impl TairaBootleLanternIssuanceBrokerBackendV1 {
         }
         Ok(())
     }
-
     fn render_public_export_v1(&self) -> Result<String, TairaBootleLanternBrokerErrorV1> {
         let instruction = RegisterPrivacyBootleLanternIssuerPolicyV1::new(self.policy.clone());
         let instruction_box = InstructionBox::from(instruction.clone());
@@ -566,7 +528,6 @@ impl TairaBootleLanternIssuanceBrokerBackendV1 {
         norito::json::to_json(&norito::json::Value::Object(export))
             .map_err(|_| TairaBootleLanternBrokerErrorV1::EncodingFailed)
     }
-
     fn validate_crypto_call_bindings_v1(
         &self,
         context: &PrivacyStatementContextV1,
@@ -583,7 +544,6 @@ impl TairaBootleLanternIssuanceBrokerBackendV1 {
         }
         Ok(())
     }
-
     fn validate_authorization_principal_v1(
         &self,
         authorization: &BootleLanternIssuanceAuthorizationV1,
@@ -602,12 +562,10 @@ impl TairaBootleLanternIssuanceBrokerBackendV1 {
         Ok(())
     }
 }
-
 impl BootleLanternIssuanceBrokerBackendV1 for TairaBootleLanternIssuanceBrokerBackendV1 {
     fn handle(&self) -> &str {
         &self.config.handle
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -616,7 +574,6 @@ impl BootleLanternIssuanceBrokerBackendV1 for TairaBootleLanternIssuanceBrokerBa
     > {
         Ok(self.qualification)
     }
-
     fn bindings(
         &self,
     ) -> Result<
@@ -627,7 +584,6 @@ impl BootleLanternIssuanceBrokerBackendV1 for TairaBootleLanternIssuanceBrokerBa
             .bindings()
             .map_err(|_| BootleLanternIssuanceRuntimeProviderRegistryErrorV1::RejectedBindings)
     }
-
     fn authenticate(
         &self,
         opaque_credential: &[u8],
@@ -659,7 +615,6 @@ impl BootleLanternIssuanceBrokerBackendV1 for TairaBootleLanternIssuanceBrokerBa
             expires_at_height,
         })
     }
-
     fn prepare_authorization(
         &self,
         context: &PrivacyStatementContextV1,
@@ -689,7 +644,6 @@ impl BootleLanternIssuanceBrokerBackendV1 for TairaBootleLanternIssuanceBrokerBa
         )
         .map_err(map_backend_crypto_error_v1)
     }
-
     fn validate_request(
         &self,
         context: &PrivacyStatementContextV1,
@@ -712,7 +666,6 @@ impl BootleLanternIssuanceBrokerBackendV1 for TairaBootleLanternIssuanceBrokerBa
         )
         .map_err(map_backend_crypto_error_v1)
     }
-
     fn issue_validated(
         &self,
         context: &PrivacyStatementContextV1,
@@ -737,7 +690,6 @@ impl BootleLanternIssuanceBrokerBackendV1 for TairaBootleLanternIssuanceBrokerBa
         .map_err(map_backend_crypto_error_v1)
     }
 }
-
 #[derive(Parser)]
 #[command(
     name = "taira_bootle_lantern_broker",
@@ -748,7 +700,6 @@ struct BrokerCliV1 {
     #[command(subcommand)]
     command: BrokerCommandV1,
 }
-
 #[derive(Subcommand)]
 enum BrokerCommandV1 {
     /// Emit the complete public policy and registration instruction to stdout.
@@ -756,7 +707,6 @@ enum BrokerCommandV1 {
     /// Validate expected public digests and serve the stock slot-56 endpoint.
     Serve(ServeArgsV1),
 }
-
 #[derive(Clone, Args)]
 struct PublicArgsV1 {
     /// Human-readable chain name used only for configuration and display.
@@ -781,7 +731,6 @@ struct PublicArgsV1 {
     #[arg(long, value_parser = parse_canonical_nonzero_u64_v1)]
     authorization_lifetime_blocks: u64,
 }
-
 impl PublicArgsV1 {
     fn into_config(
         self,
@@ -797,7 +746,6 @@ impl PublicArgsV1 {
         )
     }
 }
-
 #[derive(Clone, Args)]
 struct CredentialPathArgsV1 {
     /// Absolute hardened credential path containing exactly 32 issuer-seed bytes.
@@ -810,7 +758,6 @@ struct CredentialPathArgsV1 {
     #[arg(long)]
     principal_seed_credential: PathBuf,
 }
-
 #[derive(Args)]
 struct ExportPublicArgsV1 {
     #[command(flatten)]
@@ -818,7 +765,6 @@ struct ExportPublicArgsV1 {
     #[command(flatten)]
     credentials: CredentialPathArgsV1,
 }
-
 #[derive(Args)]
 struct ServeArgsV1 {
     #[command(flatten)]
@@ -832,7 +778,6 @@ struct ServeArgsV1 {
     #[arg(long, value_parser = parse_nonzero_digest_hex_v1)]
     expected_qualification_policy_digest: [u8; 32],
 }
-
 /// Parse process arguments and run the standalone broker command.
 ///
 /// # Errors
@@ -842,7 +787,6 @@ struct ServeArgsV1 {
 pub async fn run_taira_bootle_lantern_broker_v1() -> Result<(), TairaBootleLanternBrokerErrorV1> {
     execute_cli_v1(BrokerCliV1::parse()).await
 }
-
 async fn execute_cli_v1(cli: BrokerCliV1) -> Result<(), TairaBootleLanternBrokerErrorV1> {
     match cli.command {
         BrokerCommandV1::ExportPublic(args) => {
@@ -891,7 +835,6 @@ async fn execute_cli_v1(cli: BrokerCliV1) -> Result<(), TairaBootleLanternBroker
         }
     }
 }
-
 async fn serve_until_termination_v1(
     bindings: IrohaRuntimeProviderBindingsV1,
     backends: RuntimeProviderBrokerBackendsV1,
@@ -919,7 +862,6 @@ async fn serve_until_termination_v1(
         }
     }
 }
-
 fn map_server_join_v1(
     result: Result<Result<(), crate::RuntimeProviderBrokerServerErrorV1>, tokio::task::JoinError>,
 ) -> Result<(), TairaBootleLanternBrokerErrorV1> {
@@ -927,7 +869,6 @@ fn map_server_join_v1(
         .map_err(|_| TairaBootleLanternBrokerErrorV1::BrokerFailed)?
         .map_err(|_| TairaBootleLanternBrokerErrorV1::BrokerFailed)
 }
-
 #[cfg(unix)]
 async fn wait_for_termination_signal_v1() -> Result<(), TairaBootleLanternBrokerErrorV1> {
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
@@ -941,14 +882,12 @@ async fn wait_for_termination_signal_v1() -> Result<(), TairaBootleLanternBroker
         }
     }
 }
-
 #[cfg(not(unix))]
 async fn wait_for_termination_signal_v1() -> Result<(), TairaBootleLanternBrokerErrorV1> {
     tokio::signal::ctrl_c()
         .await
         .map_err(|_| TairaBootleLanternBrokerErrorV1::BrokerFailed)
 }
-
 fn parse_canonical_nonzero_u64_v1(input: &str) -> Result<u64, String> {
     if input.is_empty()
         || !input.bytes().all(|byte| byte.is_ascii_digit())
@@ -964,7 +903,6 @@ fn parse_canonical_nonzero_u64_v1(input: &str) -> Result<u64, String> {
     }
     Ok(value)
 }
-
 fn parse_nonzero_digest_hex_v1(input: &str) -> Result<[u8; 32], String> {
     if input.len() != 64
         || !input
@@ -981,7 +919,6 @@ fn parse_nonzero_digest_hex_v1(input: &str) -> Result<[u8; 32], String> {
     }
     Ok(digest)
 }
-
 fn contains_forbidden_public_marker_v1(value: &str) -> bool {
     value
         .to_ascii_lowercase()
@@ -993,7 +930,6 @@ fn contains_forbidden_public_marker_v1(value: &str) -> bool {
             )
         })
 }
-
 fn is_strong_public_digest_v1(bytes: &[u8; 32]) -> bool {
     if *bytes == [0; 32] {
         return false;
@@ -1009,7 +945,6 @@ fn is_strong_public_digest_v1(bytes: &[u8; 32]) -> bool {
     }
     unique >= 8
 }
-
 fn is_weak_secret_v1(bytes: &[u8]) -> bool {
     if bytes.is_empty() || bytes.iter().all(|byte| *byte == 0) {
         return true;
@@ -1046,7 +981,6 @@ fn is_weak_secret_v1(bytes: &[u8]) -> bool {
     }
     false
 }
-
 fn hash_length_framed_v1(
     domain: &[u8],
     fields: &[&[u8]],
@@ -1067,7 +1001,6 @@ fn hash_length_framed_v1(
     }
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn derive_nonzero_digest_v1(
     domain: &[u8],
     fields: &[&[u8]],
@@ -1078,7 +1011,6 @@ fn derive_nonzero_digest_v1(
     }
     Ok(digest)
 }
-
 fn constant_time_equal_fixed_v1(left: &[u8; 32], right: &[u8; 32]) -> bool {
     let mut difference = 0_u8;
     for index in 0..32 {
@@ -1086,7 +1018,6 @@ fn constant_time_equal_fixed_v1(left: &[u8; 32], right: &[u8; 32]) -> bool {
     }
     difference == 0
 }
-
 fn map_qualification_error_v1(
     error: TairaBootleLanternBrokerQualificationErrorV1,
 ) -> TairaBootleLanternBrokerErrorV1 {
@@ -1103,7 +1034,6 @@ fn map_qualification_error_v1(
         }
     }
 }
-
 fn map_startup_crypto_error_v1(
     error: BootleLanternIssuanceErrorV1,
 ) -> TairaBootleLanternBrokerErrorV1 {
@@ -1119,7 +1049,6 @@ fn map_startup_crypto_error_v1(
         _ => TairaBootleLanternBrokerErrorV1::CryptographyUnavailable,
     }
 }
-
 fn map_backend_crypto_error_v1(
     error: BootleLanternIssuanceErrorV1,
 ) -> BootleLanternIssuanceBrokerBackendErrorV1 {
@@ -1139,7 +1068,6 @@ fn map_backend_crypto_error_v1(
         _ => BootleLanternIssuanceBrokerBackendErrorV1::InvalidRequest,
     }
 }
-
 #[cfg(unix)]
 fn load_credential_v1(
     path: &Path,
@@ -1147,9 +1075,7 @@ fn load_credential_v1(
     maximum_bytes: usize,
 ) -> Result<OpenedCredentialV1, TairaBootleLanternBrokerErrorV1> {
     use std::{ffi::OsString, os::unix::fs::MetadataExt as _};
-
     use rustix::fs::{AtFlags, FileType, Mode, OFlags};
-
     if minimum_bytes == 0 || minimum_bytes > maximum_bytes || !is_canonical_absolute_path_v1(path) {
         return Err(TairaBootleLanternBrokerErrorV1::CredentialRejected);
     }
@@ -1211,7 +1137,6 @@ fn load_credential_v1(
         ancestry.push((current, component.clone(), identity));
         current = child;
     }
-
     let named_before = rustix::fs::statat(&current, file_name, AtFlags::SYMLINK_NOFOLLOW)
         .map_err(|_| TairaBootleLanternBrokerErrorV1::CredentialRejected)?;
     validate_credential_stat_v1(
@@ -1242,9 +1167,7 @@ fn load_credential_v1(
     ) {
         return Err(TairaBootleLanternBrokerErrorV1::CredentialRejected);
     }
-
     run_after_credential_open_test_hook_v1(path);
-
     let read_limit = u64::try_from(maximum_bytes)
         .ok()
         .and_then(|maximum| maximum.checked_add(1))
@@ -1294,7 +1217,6 @@ fn load_credential_v1(
     }
     Ok(OpenedCredentialV1 { secret, identity })
 }
-
 #[cfg(not(unix))]
 fn load_credential_v1(
     _path: &Path,
@@ -1303,11 +1225,9 @@ fn load_credential_v1(
 ) -> Result<OpenedCredentialV1, TairaBootleLanternBrokerErrorV1> {
     Err(TairaBootleLanternBrokerErrorV1::UnsupportedPlatform)
 }
-
 #[cfg(unix)]
 fn is_canonical_absolute_path_v1(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt as _;
-
     let bytes = path.as_os_str().as_bytes();
     path.is_absolute()
         && bytes.len() > 1
@@ -1317,7 +1237,6 @@ fn is_canonical_absolute_path_v1(path: &Path) -> bool {
             .split(|byte| *byte == b'/')
             .any(|component| component == b"." || component == b"..")
 }
-
 #[cfg(target_os = "linux")]
 fn is_exact_systemd_credential_path_v1(path: &Path) -> bool {
     path.parent() == Some(Path::new(SYSTEMD_CREDENTIAL_DIRECTORY_V1))
@@ -1328,12 +1247,10 @@ fn is_exact_systemd_credential_path_v1(path: &Path) -> bool {
                 || name == b"taira-bootle-lantern-principal-seed"
         })
 }
-
 #[cfg(all(unix, not(target_os = "linux")))]
 const fn is_exact_systemd_credential_path_v1(_path: &Path) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn identity_from_stat_v1(
     stat: &rustix::fs::Stat,
@@ -1345,7 +1262,6 @@ fn identity_from_stat_v1(
             .map_err(|_| TairaBootleLanternBrokerErrorV1::CredentialRejected)?,
     })
 }
-
 #[cfg(unix)]
 fn validate_credential_stat_v1(
     stat: &rustix::fs::Stat,
@@ -1354,7 +1270,6 @@ fn validate_credential_stat_v1(
     allow_systemd_root_owner: bool,
 ) -> Result<(), TairaBootleLanternBrokerErrorV1> {
     use rustix::fs::FileType;
-
     let size = u64::try_from(stat.st_size)
         .map_err(|_| TairaBootleLanternBrokerErrorV1::CredentialRejected)?;
     let minimum = u64::try_from(minimum_bytes)
@@ -1376,7 +1291,6 @@ fn validate_credential_stat_v1(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 #[expect(
     clippy::too_many_arguments,
@@ -1399,7 +1313,6 @@ fn credential_metadata_fields_are_valid_v1(
         && mode & 0o777 == CREDENTIAL_FILE_MODE_V1
         && size.is_some_and(|size| size >= minimum_size && size <= maximum_size)
 }
-
 #[cfg(unix)]
 fn credential_metadata_is_valid_v1(
     metadata: &std::fs::Metadata,
@@ -1409,7 +1322,6 @@ fn credential_metadata_is_valid_v1(
     allow_systemd_root_owner: bool,
 ) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     metadata.dev() == identity.device
         && metadata.ino() == identity.inode
         && credential_metadata_fields_are_valid_v1(
@@ -1424,11 +1336,9 @@ fn credential_metadata_is_valid_v1(
             u64::try_from(maximum_bytes).unwrap_or(0),
         )
 }
-
 #[cfg(unix)]
 fn same_credential_metadata_v1(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.dev() == right.dev()
         && left.ino() == right.ino()
         && left.mode() == right.mode()
@@ -1441,11 +1351,9 @@ fn same_credential_metadata_v1(left: &std::fs::Metadata, right: &std::fs::Metada
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(all(test, unix))]
 static AFTER_CREDENTIAL_OPEN_TEST_HOOK_V1: std::sync::Mutex<Option<(PathBuf, PathBuf)>> =
     std::sync::Mutex::new(None);
-
 #[cfg(all(test, unix))]
 fn run_after_credential_open_test_hook_v1(path: &Path) {
     let replacement = {
@@ -1461,14 +1369,11 @@ fn run_after_credential_open_test_hook_v1(path: &Path) {
         std::fs::rename(replacement, path).expect("replace credential path after secure open");
     }
 }
-
 #[cfg(not(all(test, unix)))]
 fn run_after_credential_open_test_hook_v1(_path: &Path) {}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, OnceLock};
-
     use super::*;
     use iroha_core::privacy_engines::bootle_lantern::issuer::{
         holder_finalize_blind_issuance_v1, holder_prepare_blind_issuance_v1,
@@ -1477,14 +1382,12 @@ mod tests {
         PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1, PrivacyStatementSchemaDigestV1,
         PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
     };
-
     fn strong_32_v1(label: &[u8]) -> [u8; 32] {
         let digest = hash_length_framed_v1(b"iroha.taira.broker.test.strong32.v1", &[label])
             .expect("bounded test hash");
         assert!(is_strong_public_digest_v1(&digest));
         digest
     }
-
     fn network_id_v1(label: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(
             iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
@@ -1492,21 +1395,17 @@ mod tests {
             ),
         )
     }
-
     fn issuer_seed_v1() -> [u8; 32] {
         strong_32_v1(b"issuer-seed-primary")
     }
-
     fn principal_seed_v1() -> [u8; 32] {
         strong_32_v1(b"principal-seed-primary")
     }
-
     fn bearer_token_v1() -> Vec<u8> {
         let first = strong_32_v1(b"bearer-token-primary-first");
         let second = strong_32_v1(b"bearer-token-primary-second");
         [first.as_slice(), second.as_slice()].concat()
     }
-
     fn public_config_v1() -> TairaBootleLanternBrokerPublicConfigV1 {
         TairaBootleLanternBrokerPublicConfigV1::try_new(
             "fc56984b-2be7-431d-840e-21514d1883f0"
@@ -1521,7 +1420,6 @@ mod tests {
         )
         .expect("valid public test config")
     }
-
     fn backend_with_seed_v1(
         issuer_seed: [u8; 32],
         bearer_token: Vec<u8>,
@@ -1536,7 +1434,6 @@ mod tests {
         )
         .expect("construct native test backend")
     }
-
     fn backend_v1() -> Arc<TairaBootleLanternIssuanceBrokerBackendV1> {
         static BACKEND: OnceLock<Arc<TairaBootleLanternIssuanceBrokerBackendV1>> = OnceLock::new();
         Arc::clone(
@@ -1545,7 +1442,6 @@ mod tests {
             }),
         )
     }
-
     fn statement_context_v1() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
             network_id: public_config_v1().network_id,
@@ -1566,7 +1462,6 @@ mod tests {
             )),
         }
     }
-
     fn authorization_v1(
         backend: &TairaBootleLanternIssuanceBrokerBackendV1,
     ) -> BootleLanternIssuanceAuthorizationV1 {
@@ -1581,7 +1476,6 @@ mod tests {
             )
             .expect("prepare exact native authorization")
     }
-
     #[test]
     fn public_config_rejects_weak_marked_zero_and_overflow_bindings() {
         let baseline = public_config_v1();
@@ -1633,7 +1527,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn epoch_one_policy_is_closed_exact_and_self_validating() {
         let backend = backend_v1();
@@ -1660,7 +1553,6 @@ mod tests {
             policy.record_digest
         );
     }
-
     #[test]
     fn qualification_binds_public_inputs_shared_profile_contract_and_not_bearer() {
         let backend = backend_v1();
@@ -1683,7 +1575,6 @@ mod tests {
         assert!(is_strong_public_digest_v1(
             &taira_bootle_lantern_broker_contract_digest_v1()
         ));
-
         let mut substitutions = Vec::new();
         let mut changed = inputs;
         changed.runtime_provider_revision += 1;
@@ -1704,7 +1595,6 @@ mod tests {
                 .expect("principal-substituted digest"),
         );
         assert!(substitutions.iter().all(|digest| *digest != exact));
-
         let token_digest_a =
             derive_nonzero_digest_v1(BEARER_TOKEN_DIGEST_DOMAIN_V1, &[&bearer_token_v1()])
                 .expect("first token digest");
@@ -1720,7 +1610,6 @@ mod tests {
             exact
         );
     }
-
     #[test]
     fn expected_digest_gate_rejects_policy_or_qualification_drift() {
         let backend = backend_v1();
@@ -1742,7 +1631,6 @@ mod tests {
             Err(TairaBootleLanternBrokerErrorV1::ExpectedDigestMismatch)
         );
     }
-
     #[test]
     fn public_export_is_deterministic_complete_and_secret_free() {
         let backend = backend_v1();
@@ -1775,7 +1663,6 @@ mod tests {
             assert!(!first.contains(&secret));
         }
     }
-
     #[test]
     fn public_export_registration_is_the_exact_canonical_instruction_box() {
         let backend = backend_v1();
@@ -1808,7 +1695,6 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some(expected_sha256.as_str())
         );
-
         let direct = norito::to_bytes(&RegisterPrivacyBootleLanternIssuerPolicyV1::new(
             backend.policy().clone(),
         ))
@@ -1819,7 +1705,6 @@ mod tests {
         trailing.push(0);
         assert!(norito::decode_from_bytes::<InstructionBox>(&trailing).is_err());
     }
-
     #[test]
     fn authentication_is_bounded_stable_and_rejects_every_bearer_mutation() {
         let backend = backend_v1();
@@ -1843,7 +1728,6 @@ mod tests {
         assert_eq!(authorize.principal_digest, issue.principal_digest);
         assert_eq!(authorize.issued_at_height, 17);
         assert_eq!(authorize.expires_at_height, 81);
-
         for index in 0..token.len() {
             let mut substituted = token.clone();
             substituted[index] ^= 1;
@@ -1900,14 +1784,12 @@ mod tests {
             Err(BootleLanternIssuanceAuthenticationErrorV1::Unavailable)
         ));
     }
-
     #[test]
     fn crypto_boundary_rejects_network_genesis_policy_principal_lifetime_and_wire_substitution() {
         let backend = backend_v1();
         let context = statement_context_v1();
         let genesis = strong_32_v1(b"canonical-genesis");
         let authorization = authorization_v1(&backend);
-
         let mut wrong_context = context.clone();
         wrong_context.network_id = network_id_v1(b"substituted-genesis");
         assert!(matches!(
@@ -1967,7 +1849,6 @@ mod tests {
                     .is_err()
             );
         }
-
         for substituted_authorization in [
             issuer_prepare_blind_issuance_authorization_candidate_v1(
                 &backend.issuer,
@@ -2029,7 +1910,6 @@ mod tests {
             Err(BootleLanternIssuanceBrokerBackendErrorV1::InvalidRequest)
         ));
     }
-
     #[test]
     fn key_policy_substitution_is_a_policy_failure_before_request_decoding() {
         let primary = backend_v1();
@@ -2052,7 +1932,6 @@ mod tests {
             Err(BootleLanternIssuanceBrokerBackendErrorV1::PolicyMismatch)
         );
     }
-
     #[test]
     fn native_backend_completes_ila1_ilq1_ilr1_and_holder_finalization() {
         let backend = backend_v1();
@@ -2094,7 +1973,6 @@ mod tests {
         holder_finalize_blind_issuance_v1(state, &context, genesis, backend.policy(), response)
             .expect("independently finalize issued credential");
     }
-
     #[test]
     fn redacted_debug_errors_and_scrubbing_never_expose_secret_bytes() {
         let backend = backend_v1();
@@ -2119,7 +1997,6 @@ mod tests {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<TairaBootleLanternIssuanceBrokerBackendV1>();
     }
-
     #[test]
     fn cli_is_canonical_and_has_no_secret_or_config_value_surface() {
         let issuer_id = hex::encode(strong_32_v1(b"issuer-id-primary"));
@@ -2149,7 +2026,6 @@ mod tests {
             "/run/credentials/principal-seed",
         ];
         BrokerCliV1::try_parse_from(base).expect("accept canonical path-only secret CLI");
-
         for forbidden in [
             "--issuer-seed",
             "--issuer-seed-hex",
@@ -2176,11 +2052,9 @@ mod tests {
             assert!(parse_nonzero_digest_hex_v1(bad_digest).is_err());
         }
     }
-
     #[cfg(unix)]
     fn write_credential_v1(directory: &Path, name: &str, bytes: &[u8]) -> PathBuf {
         use std::os::unix::fs::PermissionsExt as _;
-
         let path = directory
             .canonicalize()
             .expect("canonical credential tempdir")
@@ -2193,7 +2067,6 @@ mod tests {
         .expect("set exact credential mode");
         path
     }
-
     #[cfg(unix)]
     fn credential_paths_v1(directory: &Path) -> (PathBuf, PathBuf, PathBuf) {
         (
@@ -2202,7 +2075,6 @@ mod tests {
             write_credential_v1(directory, "principal.seed", &principal_seed_v1()),
         )
     }
-
     #[cfg(unix)]
     #[test]
     fn credential_loader_accepts_only_three_distinct_exact_owner_mode_files() {
@@ -2218,40 +2090,34 @@ mod tests {
             Err(TairaBootleLanternBrokerErrorV1::CredentialRejected)
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn credential_loader_rejects_relative_symlink_ancestor_directory_and_hardlink_attacks() {
         use std::os::unix::fs::symlink;
-
         let directory = tempfile::tempdir().expect("credential tempdir");
         let seed = write_credential_v1(directory.path(), "seed", &issuer_seed_v1());
         assert_eq!(
             load_credential_v1(Path::new("relative-seed"), 32, 32).map(|_| ()),
             Err(TairaBootleLanternBrokerErrorV1::CredentialRejected)
         );
-
         let symlink_path = directory.path().join("seed-link");
         symlink(&seed, &symlink_path).expect("create final symlink attack");
         assert_eq!(
             load_credential_v1(&symlink_path, 32, 32).map(|_| ()),
             Err(TairaBootleLanternBrokerErrorV1::CredentialRejected)
         );
-
         let ancestor_link = directory.path().join("ancestor-link");
         symlink(directory.path(), &ancestor_link).expect("create ancestor symlink attack");
         assert_eq!(
             load_credential_v1(&ancestor_link.join("seed"), 32, 32).map(|_| ()),
             Err(TairaBootleLanternBrokerErrorV1::CredentialRejected)
         );
-
         let subdirectory = directory.path().join("not-a-file");
         std::fs::create_dir(&subdirectory).expect("create directory attack");
         assert_eq!(
             load_credential_v1(&subdirectory, 32, 32).map(|_| ()),
             Err(TairaBootleLanternBrokerErrorV1::CredentialRejected)
         );
-
         let hardlink = directory.path().join("seed-hardlink");
         std::fs::hard_link(&seed, &hardlink).expect("create hardlink attack");
         assert_eq!(
@@ -2259,7 +2125,6 @@ mod tests {
             Err(TairaBootleLanternBrokerErrorV1::CredentialRejected)
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn credential_loader_accepts_only_service_or_systemd_root_owner_and_exact_metadata() {
@@ -2311,7 +2176,6 @@ mod tests {
                 fields.0, fields.1, fields.2, fields.3, fields.4, uid, false, 32, 32,
             ));
         }
-
         use std::os::unix::fs::PermissionsExt as _;
         let directory = tempfile::tempdir().expect("credential tempdir");
         let path = write_credential_v1(directory.path(), "wrong-mode", &issuer_seed_v1());
@@ -2322,7 +2186,6 @@ mod tests {
             Err(TairaBootleLanternBrokerErrorV1::CredentialRejected)
         );
     }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn systemd_root_owner_exception_is_limited_to_three_exact_unit_credentials() {
@@ -2354,7 +2217,6 @@ mod tests {
             32,
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn credential_loader_rejects_truncation_extension_zero_and_weak_markers() {
@@ -2387,7 +2249,6 @@ mod tests {
             Err(TairaBootleLanternBrokerErrorV1::CredentialRejected)
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn credential_loader_detects_path_replacement_after_open() {
@@ -2412,12 +2273,10 @@ mod tests {
                 .is_none()
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn live_backend_uses_immutable_opened_credentials_until_restart() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let directory = tempfile::tempdir().expect("credential tempdir");
         let (issuer, bearer, principal) = credential_paths_v1(directory.path());
         let backend =

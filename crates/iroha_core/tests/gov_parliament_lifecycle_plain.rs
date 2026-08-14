@@ -1,6 +1,5 @@
 //! End-to-end SORA parliament lifecycle test for plain voting.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -31,12 +30,10 @@ use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
 const CITIZEN_COUNT: usize = 20;
 const CITIZEN_FUND: u128 = 15_000;
 const CITIZEN_BOND: u128 = 10_000;
 const BALLOT_LOCK: u128 = CITIZEN_FUND - CITIZEN_BOND;
-
 fn governance_contract_artifact() -> (Vec<u8>, ContractManifest) {
     let (artifact, _) = ivm::KotodamaCompiler::new()
         .compile_source_with_manifest(
@@ -52,14 +49,12 @@ seiyaku ParliamentPlainLifecycle {
         ivm::verify_contract_artifact(&artifact).expect("verify plain-governance artifact");
     (artifact, verified.manifest)
 }
-
 fn manifest_provenance(manifest: ContractManifest, signer: &KeyPair) -> ManifestProvenance {
     manifest
         .signed(signer)
         .provenance
         .expect("exact manifest should contain provenance")
 }
-
 fn proposal_contract_address(
     authority: &iroha_data_model::account::AccountId,
 ) -> iroha_data_model::smart_contract::ContractAddress {
@@ -73,7 +68,6 @@ fn proposal_contract_address(
     )
     .expect("proposal contract address")
 }
-
 #[test]
 fn sora_parliament_plain_lifecycle_with_20_citizens() {
     let domain_id: DomainId = DomainId::try_new("sora", "universal").expect("domain");
@@ -85,7 +79,6 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
             id
         })
         .collect();
-
     let domain = Domain::new(domain_id.clone()).build(&proposer_id);
     let asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -99,7 +92,6 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         None,
     )
     .build(&proposer_id);
-
     let proposer_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), proposer_id.clone()),
         Quantity::from(1_000_000_u64),
@@ -108,14 +100,12 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         AssetId::new(asset_def_id.clone(), escrow_id.clone()),
         Quantity::from(0_u64),
     );
-
     let proposer_account = Account::new(proposer_id.clone()).build(&proposer_id);
     let escrow_account = Account::new(escrow_id.clone()).build(&proposer_id);
     let citizen_accounts = citizens
         .iter()
         .cloned()
         .map(|id| Account::new(id.clone()).build(&proposer_id));
-
     let world = World::with_assets(
         [domain],
         std::iter::once(proposer_account)
@@ -126,11 +116,9 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         [proposer_asset, escrow_asset],
         [],
     );
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query_handle);
-
     let mut gov_cfg = state.gov.clone();
     gov_cfg.voting_asset_id = asset_def_id.clone();
     gov_cfg.citizenship_asset_id = asset_def_id.clone();
@@ -154,16 +142,13 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
     gov_cfg.fma_committee_size = 1;
     gov_cfg.parliament_alternate_size = Some(1);
     state.set_gov(gov_cfg);
-
     let (contract_artifact, contract_manifest) = governance_contract_artifact();
     let code_hash = contract_manifest.code_hash.expect("verified code hash");
     let abi_hash = contract_manifest.abi_hash.expect("verified ABI hash");
     let code_hash_hex = hex::encode(<[u8; 32]>::from(code_hash));
     let abi_hash_hex = hex::encode(<[u8; 32]>::from(abi_hash));
     let manifest_provenance = manifest_provenance(contract_manifest, &proposer_kp);
-
     let proposal_contract_address = proposal_contract_address(&proposer_id);
-
     let header_1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block_1 = state.block(header_1);
     let mut stx_1 = block_1.transaction();
@@ -179,7 +164,6 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
     }
     .execute(&proposer_id, &mut stx_1)
     .expect("register exact plain-governance artifact before proposal enactment");
-
     let propose_perm: Permission = CanProposeContractDeployment {
         contract_address: proposal_contract_address.clone(),
     }
@@ -187,17 +171,14 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
     Grant::account_permission(propose_perm, proposer_id.clone())
         .execute(&proposer_id, &mut stx_1)
         .expect("grant proposer permission");
-
     let enact_perm: Permission = CanEnactGovernance.into();
     Grant::account_permission(enact_perm, proposer_id.clone())
         .execute(&proposer_id, &mut stx_1)
         .expect("grant enact permission");
-
     let manage_parliament_perm: Permission = CanManageParliament.into();
     Grant::account_permission(manage_parliament_perm, proposer_id.clone())
         .execute(&proposer_id, &mut stx_1)
         .expect("grant parliament management permission");
-
     for citizen in &citizens {
         let ballot_perm: Permission = CanSubmitGovernanceBallot {
             referendum_id: "sora-parliament-lifecycle".to_string(),
@@ -207,7 +188,6 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
             .execute(&proposer_id, &mut stx_1)
             .expect("grant ballot permission");
     }
-
     for citizen in &citizens {
         Transfer::asset_quantity(
             AssetId::new(asset_def_id.clone(), proposer_id.clone()),
@@ -216,7 +196,6 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         )
         .execute(&proposer_id, &mut stx_1)
         .expect("fund citizen account");
-
         RegisterCitizen {
             owner: citizen.clone(),
             amount: CITIZEN_BOND.into(),
@@ -224,7 +203,6 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         .execute(citizen, &mut stx_1)
         .expect("bond citizenship");
     }
-
     PersistCouncilForEpoch {
         epoch: 0,
         members: citizens[..10].to_vec(),
@@ -232,7 +210,6 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
     }
     .execute(&proposer_id, &mut stx_1)
     .expect("persist council");
-
     ProposeDeployContract {
         contract_address: proposal_contract_address.clone(),
         code_hash_hex: code_hash_hex.clone(),
@@ -244,7 +221,6 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
     }
     .execute(&proposer_id, &mut stx_1)
     .expect("propose contract deployment");
-
     let (proposal_id, _) = stx_1
         .world
         .governance_proposals()
@@ -253,7 +229,6 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         .expect("proposal should exist");
     let proposal_id = *proposal_id;
     let referendum_id = hex::encode(proposal_id);
-
     let bypass_error = CastPlainBallot {
         referendum_id: referendum_id.clone(),
         owner: citizens[0].clone(),
@@ -272,7 +247,6 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         stx_1.world.governance_locks().get(&referendum_id).is_none(),
         "rejected bypass must not create a lock"
     );
-
     for citizen in &citizens {
         let citizen_balance = stx_1
             .world
@@ -286,7 +260,6 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
             Quantity::from(CITIZEN_FUND.saturating_sub(CITIZEN_BOND))
         );
     }
-
     let escrow_balance = stx_1
         .world
         .assets()
@@ -300,7 +273,6 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
             CITIZEN_BOND.saturating_mul(u128::try_from(CITIZEN_COUNT).expect("count fits in u128")),
         )
     );
-
     let stage_bodies = stx_1
         .world
         .parliament_bodies()
@@ -325,7 +297,6 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
             .execute(&signer, &mut stx_1)
             .expect("parliament body approval");
     }
-
     for (idx, citizen) in citizens.iter().enumerate() {
         let direction = if idx < 12 { 0 } else { 1 };
         CastPlainBallot {
@@ -338,7 +309,6 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         .execute(citizen, &mut stx_1)
         .expect("cast plain ballot");
     }
-
     let early_finalize = FinalizeReferendum {
         referendum_id: referendum_id.clone(),
         proposal_id,
@@ -350,12 +320,10 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
             .to_string()
             .contains("inclusive voting window")
     );
-
     stx_1.apply();
     block_1
         .commit()
         .expect("commit setup/approval/ballot block");
-
     let referendum_after_ballots = state
         .view()
         .world()
@@ -367,7 +335,6 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         referendum_after_ballots.status,
         iroha_core::state::GovernanceReferendumStatus::Open
     );
-
     for height in 2_u64..=11 {
         state
             .block(BlockHeader::new(
@@ -381,10 +348,8 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
             .commit()
             .expect("commit referendum lifecycle block");
     }
-
     let header_12 = BlockHeader::new(nonzero!(12_u64), None, None, None, 0, 0);
     let mut block_12 = state.block(header_12);
-
     let proposal_after_finalize = block_12
         .world
         .governance_proposals()
@@ -395,17 +360,14 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         proposal_after_finalize.status,
         iroha_core::state::GovernanceProposalStatus::Approved
     ));
-
     let referendum_window = block_12
         .world
         .governance_referenda()
         .get(&referendum_id)
         .copied()
         .expect("referendum exists before enact");
-
     let proposal_fingerprint = proposal_after_finalize.kind.fingerprint();
     let mut stx_12 = block_12.transaction();
-
     EnactReferendum {
         referendum_id: proposal_id,
         preimage_hash: proposal_fingerprint,
@@ -416,10 +378,8 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
     }
     .execute(&proposer_id, &mut stx_12)
     .expect("enact referendum");
-
     stx_12.apply();
     block_12.commit().expect("commit enact block");
-
     let proposal_after_enact = state
         .view()
         .world()
@@ -431,7 +391,6 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         proposal_after_enact.status,
         iroha_core::state::GovernanceProposalStatus::Enacted
     ));
-
     assert!(
         state
             .view()

@@ -1,14 +1,4 @@
 //! Benchmarks for world state view (WSV) operations.
-use std::{
-    collections::{BTreeMap, HashMap},
-    convert::TryFrom,
-    fs,
-    hint::black_box,
-    path::PathBuf,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
-
 use criterion::Criterion;
 use dashmap::{DashMap, DashSet};
 use iroha_crypto::KeyPair;
@@ -20,20 +10,26 @@ use ivm::{
     mock_wsv::{AccountId, AssetDefinitionId, DomainId, Mintable, Name},
     parallel::{Block, Scheduler, StateAccessSet, Transaction, TxResult},
 };
-
+use std::{
+    collections::{BTreeMap, HashMap},
+    convert::TryFrom,
+    fs,
+    hint::black_box,
+    path::PathBuf,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 const TRANSFER_ROUTES: [[(usize, usize); 3]; 4] = [
     [(0, 1), (1, 3), (3, 7)],
     [(0, 1), (1, 4), (4, 8)],
     [(0, 2), (2, 5), (5, 9)],
     [(0, 2), (2, 6), (6, 9)],
 ];
-
 #[derive(Clone)]
 struct AssetDefinition {
     mintable: Mintable,
     total_supply: Quantity,
 }
-
 impl AssetDefinition {
     fn new(mintable: Mintable) -> Self {
         Self {
@@ -42,7 +38,6 @@ impl AssetDefinition {
         }
     }
 }
-
 #[derive(Default)]
 struct ConcurrentWSV {
     domains: DashSet<DomainId>,
@@ -50,21 +45,17 @@ struct ConcurrentWSV {
     asset_definitions: DashMap<AssetDefinitionId, AssetDefinition>,
     balances: DashMap<(AccountId, AssetDefinitionId), Quantity>,
 }
-
 // DashMap and DashSet use interior mutability through `RwLock`, which prevents
 // automatic implementation of `RefUnwindSafe`. The benchmark does not rely on
 // unwind safety of these fields, so it is safe to assert this manually.
 impl std::panic::RefUnwindSafe for ConcurrentWSV {}
-
 impl ConcurrentWSV {
     fn register_domain(&self, id: DomainId) -> bool {
         self.domains.insert(id)
     }
-
     fn register_account(&self, id: AccountId) -> bool {
         self.accounts.insert(id)
     }
-
     fn register_asset_definition(
         &self,
         id: AssetDefinitionId,
@@ -78,7 +69,6 @@ impl ConcurrentWSV {
             .insert(id, AssetDefinition::new(mintable))
             .is_none()
     }
-
     fn mint(&self, account_id: AccountId, asset_id: AssetDefinitionId, amount: Quantity) -> bool {
         if !self.accounts.contains(&account_id) {
             return false;
@@ -107,7 +97,6 @@ impl ConcurrentWSV {
         *bal = next;
         true
     }
-
     fn transfer(
         &self,
         from: AccountId,
@@ -140,10 +129,8 @@ impl ConcurrentWSV {
         true
     }
 }
-
 const TOTAL_ASSETS: u64 = 1_000_000;
 const BATCH_SIZE: usize = 1000;
-
 fn bench_massive_wsv(c: &mut Criterion) {
     c.bench_function("create_1m_assets_transfer_multi_account", |b| {
         let cores = num_cpus::get_physical();
@@ -158,7 +145,6 @@ fn bench_massive_wsv(c: &mut Criterion) {
                 })
                 .collect(),
         );
-
         b.iter(|| {
             let wsv = Arc::new(ConcurrentWSV {
                 domains: DashSet::with_capacity(1),
@@ -214,7 +200,6 @@ fn bench_massive_wsv(c: &mut Criterion) {
                     }
                 });
             };
-
             for asset in 0..TOTAL_ASSETS {
                 let mut access = StateAccessSet::new();
                 access.write_keys.insert(format!("asset{asset}"));
@@ -233,7 +218,6 @@ fn bench_massive_wsv(c: &mut Criterion) {
         })
     });
 }
-
 fn mock_wsv_host_with_persisted_state(entries: usize, value_bytes: usize) -> (WsvHost, PathBuf) {
     let tmp_dir = std::env::temp_dir().join(format!(
         "ivm_bench_wsv_checkpoint_{}_{}",
@@ -262,7 +246,6 @@ fn mock_wsv_host_with_persisted_state(entries: usize, value_bytes: usize) -> (Ws
         tmp_dir,
     )
 }
-
 fn bench_mock_wsv_checkpoint_restore(c: &mut Criterion) {
     let mut group = c.benchmark_group("mock_wsv_checkpoint_restore");
     for entries in [128_usize, 2_048] {
@@ -277,7 +260,6 @@ fn bench_mock_wsv_checkpoint_restore(c: &mut Criterion) {
     }
     group.finish();
 }
-
 /// Entry point for the benchmark binary.
 fn main() {
     let mut c = Criterion::default().configure_from_args();

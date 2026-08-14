@@ -1,7 +1,5 @@
 //! AoS view tests for combo shapes: (u64, &str, u32, bool) and (u64, &[u8], u32, bool).
-
 use norito::columnar::{ADAPTIVE_TAG_AOS, view_aos_u64_bytes_u32_bool, view_aos_u64_str_u32_bool};
-
 #[test]
 fn aos_view_str_u32_bool() {
     let rows: Vec<(u64, &str, u32, bool)> = vec![(1, "a", 7, true), (2, "bc", 9, false)];
@@ -20,7 +18,6 @@ fn aos_view_str_u32_bool() {
     assert_eq!(view.val(1), 9);
     assert!(!view.flag(1));
 }
-
 #[test]
 fn aos_view_bytes_u32_bool() {
     let rows: Vec<(u64, &[u8], u32, bool)> =

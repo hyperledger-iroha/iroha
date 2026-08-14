@@ -227,6 +227,7 @@
     "connect.browser.d.ts",
     "nexus-app.d.ts",
     "kotodama-compiler.d.ts",
+    "operator-request.d.ts",
     "package.json",
     "native/iroha_js_host.checksums.json",
     "dist",

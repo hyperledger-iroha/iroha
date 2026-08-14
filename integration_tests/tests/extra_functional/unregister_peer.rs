@@ -1,8 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Peer unregister flows under churn.
-
-use std::time::{Duration, Instant};
-
 use eyre::{Report, Result, WrapErr, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -12,16 +9,15 @@ use iroha::{
 use iroha_test_network::{NetworkBuilder, NetworkPeer, domain_setup_instruction};
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
+use std::time::{Duration, Instant};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
 };
-
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     const PIPELINE_TIME: Duration = Duration::from_secs(2);
-
     // Given a network
     let builder = NetworkBuilder::new()
         .with_block_cadence(PIPELINE_TIME)
@@ -42,7 +38,6 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     let sync_timeout = network.sync_timeout().saturating_mul(3);
     let tx_timeout = sync_timeout;
     let client = network.client();
-
     let (account, _account_keypair) = gen_account_in("domain");
     let domain_id: DomainId = DomainId::try_new("domain", "universal")?;
     let asset_def: AssetDefinitionId = AssetDefinitionId::derive_from_components(
@@ -153,7 +148,6 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     {
         return Ok(());
     }
-
     // When assets are minted
     mint(&client, &asset_def, &account, 100_u32.into(), tx_timeout).await?;
     expected_height = expected_height.saturating_add(1);
@@ -196,7 +190,6 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         None => return Ok(()),
     };
     assert_eq!(new_peer_asset, Quantity::from(100_u32));
-
     // When a peer is unregistered
     submit_or_skip(
         client.clone(),
@@ -266,10 +259,8 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         None => return Ok(()),
     };
     assert_eq!(unregistered_asset, Quantity::from(100_u32));
-
     Ok(())
 }
-
 async fn find_asset(
     client: &Client,
     account: &AccountId,
@@ -282,10 +273,8 @@ async fn find_asset(
         .into_iter()
         .filter(|asset| asset.id().account() == &account_id)
         .find(|asset| asset.id().definition() == asset_definition);
-
     Ok(asset.map(|asset| asset.value().clone()))
 }
-
 async fn wait_for_asset(
     client: &Client,
     account: &AccountId,
@@ -318,7 +307,6 @@ async fn wait_for_asset(
         sleep(Duration::from_millis(200)).await;
     }
 }
-
 async fn mint(
     client: &Client,
     asset_definition_id: &AssetDefinitionId,
@@ -339,7 +327,6 @@ async fn mint(
     )
     .await
 }
-
 async fn submit_or_skip<I>(
     client: Client,
     instruction: I,
@@ -365,7 +352,6 @@ where
     )
     .await
 }
-
 async fn run_blocking_with_timeout<T, F>(
     task: F,
     timeout_duration: Duration,
@@ -381,7 +367,6 @@ where
         .map_err(|_| eyre!("{context} timed out"))?;
     result.map_err(Report::new)?
 }
-
 async fn wait_for_peer_count(
     client: &Client,
     expected: usize,

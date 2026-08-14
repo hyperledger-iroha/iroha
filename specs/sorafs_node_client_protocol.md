@@ -388,7 +388,11 @@ storage stats (`storage show`). Pin lists use `--limit`, `--max-bytes`, an
 exclusive `--after-digest-hex`, an optional lifecycle status, and an optional
 paired finalized height/block hash; there is no pin-list offset. Alias and
 replication lists retain their bounded `--limit`/`--offset` controls and filters
-(for example `--alias-namespace`, `--manifest-digest`). `repair list` uses a
+(for example `--alias-namespace`, `--manifest-digest`), but these legacy
+projections materialize the authoritative inventory before applying that page.
+They therefore require an exact canonical-account request signature and are
+classified as expensive compute; the page limit is not an anonymous scan
+budget. `repair list` uses a
 bounded immutable task-id cursor, an optional exact finalized height/block-hash
 pair, and optional `--ticket-id` for the singular finalized task. GC helpers (`gc
 inspect`, `gc dry-run`) scan the local storage directory to report retention
@@ -444,10 +448,12 @@ and SDKs can inspect manifests without issuing ad-hoc queries:
   retired predecessors fail before any state or fee effect.
 - `GET /v1/sorafs/aliases` lists active alias bindings with filters for
   `namespace` and `manifest_digest`; this separate legacy projection retains
-  its own bounded `limit`/`offset` controls.
+  its own bounded `limit`/`offset` controls and requires the four canonical
+  account request-signature headers.
 - `GET /v1/sorafs/replication` surfaces governance-issued replication orders.
   Clients can scope the response via `status=pending|completed|expired` and
-  `manifest_digest` query parameters.
+  `manifest_digest` query parameters. It has the same canonical-account
+  request-signature requirement as the alias projection.
 
 Pin list and single-manifest reads both bind native results directly to their
 `finalized_cursor`; there is no separate listing-attestation shape. The list
@@ -500,8 +506,11 @@ feed into scripting or capture in attestation logs.
 
 ### Storage Scheduler State
 
-Operators and monitoring agents can query `/v1/sorafs/storage/state` to
-retrieve the latest scheduler snapshot exposed by Torii. The response mirrors
+Operators can query `/v1/sorafs/storage/state` with a fresh exact-network
+operator signature to retrieve the latest local scheduler snapshot exposed by
+Torii. The route is not projected into public OpenAPI or SDK discovery, and
+missing, stale, replayed, wrong-network, or invalid signatures are rejected
+before handler work. The response mirrors
 `StorageStateResponseDto` and includes queue depth, fetch throughput, PoR worker
 utilisation, and the raw bytes-per-second counters wired from
 `StorageSchedulersRuntime`.【crates/iroha_torii/src/sorafs/api.rs:260】
@@ -546,9 +555,12 @@ and telemetry stay in sync.【crates/iroha_torii/tests/sorafs_discovery.rs:989-1
    derives a durable idempotency key from those committed fields before
    ingesting provider-supplied bytes. V1 exposes no public storage-upload route;
    HTTP requests cannot change storage/quota state or provider-keyed metadata.
-3. `POST /v1/sorafs/storage/fetch` using the returned manifest id, an offset,
-   and a bounded length. The response echoes the request fields and streams the
-   chunk data as `data_b64`.
+3. For a local operator diagnostic only, submit an exact-network
+   operator-signed `POST /v1/sorafs/storage/fetch` using the returned manifest
+   id, an offset, and a bounded length. Authentication and replay admission run
+   before JSON decoding. The response echoes the request fields and returns the
+   bytes as `data_b64`; public and provider-to-provider content transport uses
+   request-bound stream tokens with the CAR/chunk GET routes instead.
 4. Submit an authenticated `POST /v1/sorafs/proof/stream` PoR request bound to
    the canonical manifest digest and provider identifier. The request must carry
    the non-zero `expected_finalized_height` and canonical
@@ -556,7 +568,8 @@ and telemetry stay in sync.【crates/iroha_torii/tests/sorafs_discovery.rs:989-1
    in step one; Torii rejects an incomplete or stale cursor and streams only
    witnesses that verify against that record's committed root. The
    unauthenticated local storage PoR route is retired.
-5. `GET /v1/sorafs/storage/state` to verify the scheduler snapshot. A fully
+5. Send an exact-network operator-signed `GET /v1/sorafs/storage/state` to
+   verify the scheduler snapshot. A fully
    successful cycle drives `pin_queue_depth`, `fetch_inflight`, and
    `por_inflight` back to zero, bumps `fetch_bytes_per_sec` above zero (smoothing
    accounts for elapsed time), and increments `por_samples_success_total` by the
@@ -577,12 +590,13 @@ Range-enabled gateways mint signed stream tokens through
 `POST /v1/sorafs/storage/token`. Clients must supply canonical headers and
 the canonical request payload:
 
-- Header `X-API-Token`: exactly one configured Torii API credential. Stream
-  token issuance requires this credential even when the deployment-wide
-  `torii.require_api_token` switch is false. A missing or invalid credential is
-  rejected with HTTP `401`; enabling issuance without at least one canonical
-  `torii.api_tokens` credential is rejected at node startup. An inconsistent
-  runtime state still fails closed with HTTP `503`.
+- Headers `X-Iroha-Operator-Public-Key`, `X-Iroha-Operator-Timestamp-Ms`,
+  `X-Iroha-Operator-Nonce`, and `X-Iroha-Operator-Signature`: one fresh
+  canonical operator signature over the exact `NetworkId`, method, path,
+  sorted query, body, timestamp, and nonce. Missing, foreign-network, stale,
+  replayed, or invalid signatures are rejected before JSON decoding. Enabling
+  issuance while `torii.operator_signatures` is disabled is rejected at node
+  startup.
 - Header `X-SoraFS-Client`: a 1–128 byte visible-ASCII diagnostic label echoed
   to the caller. It is not authentication and is not a quota key. Missing,
   whitespace, control-character, and oversized values are rejected with HTTP
@@ -609,9 +623,9 @@ runtime signer, the handler responds with:
     signed the token. Clients cache this key to verify `signature_hex`.
   - `X-SoraFS-Token-Id` — the canonical identifier for the issued token body.
   - `X-SoraFS-Issuance-Quota-Remaining` — remaining issuance requests in the
-    current 60 s window for the authenticated API credential, not the echoed
-    client label. The gateway stores only a domain-separated credential digest
-    as the quota subject, so changing `X-SoraFS-Client` cannot reset the
+    current 60 s window for the authenticated operator key, not the echoed
+    client label. The gateway stores only a domain-separated operator-key
+    digest as the quota subject, so changing `X-SoraFS-Client` cannot reset the
     allowance. Zero/unlimited issuance policies are rejected. When the quota
     is exhausted the gateway returns `429` together with `Retry-After`
     indicating when the window resets and
@@ -658,20 +672,21 @@ the same identity before and after every signature and discards output on
 provider drift. No signing-seed file, key path, or environment enablement is
 accepted; signer credentials and private key material remain runtime-only.
 
-Authenticated-credential issuance and per-token quota state are bounded and
+Exact-operator issuance and per-token quota state are bounded and
 prune only expired or idle windows. A full state table never evicts an active
 budget (which would reset its quota); the gateway instead returns HTTP `503`
 with `Retry-After: 1`. Clock rollback and poisoned accounting state also fail
 closed with `503`.
 
-### Chunk Range Fetch RPC
+### Legacy Storage Fetch Diagnostic
 
-Once a manifest is pinned, clients retrieve deterministic byte ranges via
-`POST /v1/sorafs/storage/fetch`. The request body mirrors the DTO defined in
-Torii (`StorageFetchRequestDto`) and must include the manifest digest, the byte
-offset, and the number of bytes to return. The serving provider identity comes
-from the node's governed runtime configuration and cannot be supplied or
-overridden by the caller.【crates/iroha_torii/src/sorafs/api.rs:68】
+`POST /v1/sorafs/storage/fetch` is retained only as an operator-signed local
+diagnostic. The four `X-Iroha-Operator-*` headers bind the exact `NetworkId`,
+method, path, query, body, timestamp, and fresh nonce; middleware authenticates
+the retained body before JSON decoding. The request mirrors
+`StorageFetchRequestDto` and includes the manifest digest, byte offset, and
+number of bytes to return. The serving provider identity comes from governed
+runtime configuration and cannot be supplied or overridden by the caller.
 
 ```json
 {
@@ -684,6 +699,14 @@ overridden by the caller.【crates/iroha_torii/src/sorafs/api.rs:68】
 Nodes respond with a base64-encoded payload (`StorageFetchResponseDto`) and echo
 the offset and length so higher layers can verify alignment and track
 progress.【crates/iroha_torii/src/sorafs/api.rs:83】
+
+This route is not a provider-to-provider fallback. CID-site and
+query-projection cache misses preserve local-cache lookup but stop with a clear
+capability-required error before any legacy payload POST. Implementations must
+use a request-bound stream capability with
+`GET /v1/sorafs/storage/car/{manifest_id}` or
+`GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}`; they must not
+invent operator credentials or retry the legacy endpoint unsigned.
 
 Request parameters must honour the provider’s advertisement:
 
@@ -707,7 +730,8 @@ exercise downgrade paths and ensure the cache surfaces the correct warnings for
 providers missing range capabilities.【crates/iroha_torii/tests/sorafs_discovery.rs:333-392】【crates/iroha_torii/tests/sorafs_discovery.rs:410-435】
 
 When orchestrating multi-source retrieval, clients should iterate over the plan
-and submit fetch requests in `max_chunk_span`-bounded slices. The CLI’s
+and submit stream-token-bound CAR/chunk requests in `max_chunk_span`-bounded
+slices. The CLI’s
 end-to-end tests cover this flow and expose the resulting provider receipts so
 integrations can assert deterministic scheduling.【crates/sorafs_car/src/multi_fetch.rs:1341-1501】
 

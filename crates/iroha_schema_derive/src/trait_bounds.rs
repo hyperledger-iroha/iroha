@@ -2,23 +2,18 @@
 //!
 //! Based on the common derive strategy of adding bounds only for generic
 //! parameters that are used by generated schema fields.
-
-use std::iter;
-
+use crate::{IntoSchemaData, IntoSchemaField};
 use proc_macro2::Ident;
+use std::iter;
 use syn::{
     Generics, Type, TypePath, parse_quote,
     visit::{self, Visit},
 };
-
-use crate::{IntoSchemaData, IntoSchemaField};
-
 /// Visits the ast and checks if one of the given idents is found.
 struct ContainIdents<'a> {
     result: bool,
     idents: &'a [Ident],
 }
-
 impl<'ast> Visit<'ast> for ContainIdents<'_> {
     fn visit_ident(&mut self, i: &'ast Ident) {
         if self.idents.iter().any(|id| id == i) {
@@ -26,7 +21,6 @@ impl<'ast> Visit<'ast> for ContainIdents<'_> {
         }
     }
 }
-
 /// Checks if the given type contains one of the given idents.
 fn type_contain_idents(ty: &Type, idents: &[Ident]) -> bool {
     let mut visitor = ContainIdents {
@@ -36,13 +30,11 @@ fn type_contain_idents(ty: &Type, idents: &[Ident]) -> bool {
     visitor.visit_type(ty);
     visitor.result
 }
-
 /// Visits the ast and checks if a type path starts with the given ident.
 struct TypePathStartsWithIdent<'a> {
     result: bool,
     ident: &'a Ident,
 }
-
 impl<'ast> Visit<'ast> for TypePathStartsWithIdent<'_> {
     fn visit_type_path(&mut self, i: &'ast TypePath) {
         if let Some(segment) = i.path.segments.first()
@@ -51,11 +43,9 @@ impl<'ast> Visit<'ast> for TypePathStartsWithIdent<'_> {
             self.result = true;
             return;
         }
-
         visit::visit_type_path(self, i);
     }
 }
-
 /// Checks if the given type path or any containing type path starts with the given ident.
 fn type_path_or_sub_starts_with_ident(ty: &TypePath, ident: &Ident) -> bool {
     let mut visitor = TypePathStartsWithIdent {
@@ -65,7 +55,6 @@ fn type_path_or_sub_starts_with_ident(ty: &TypePath, ident: &Ident) -> bool {
     visitor.visit_type_path(ty);
     visitor.result
 }
-
 /// Checks if the given type or any containing type path starts with the given ident.
 fn type_or_sub_type_path_starts_with_ident(ty: &Type, ident: &Ident) -> bool {
     let mut visitor = TypePathStartsWithIdent {
@@ -75,7 +64,6 @@ fn type_or_sub_type_path_starts_with_ident(ty: &Type, ident: &Ident) -> bool {
     visitor.visit_type(ty);
     visitor.result
 }
-
 /// Visits the ast and collects all type paths that do not start or contain the given ident.
 ///
 /// Returns `T`, `N`, `A` for `Vec<(Recursive<T, N>, A)>` with `Recursive` as ident.
@@ -83,7 +71,6 @@ struct FindTypePathsNotStartOrContainIdent<'a> {
     result: Vec<TypePath>,
     ident: &'a Ident,
 }
-
 impl<'ast> Visit<'ast> for FindTypePathsNotStartOrContainIdent<'_> {
     fn visit_type_path(&mut self, i: &'ast TypePath) {
         if type_path_or_sub_starts_with_ident(i, self.ident) {
@@ -93,7 +80,6 @@ impl<'ast> Visit<'ast> for FindTypePathsNotStartOrContainIdent<'_> {
         }
     }
 }
-
 /// Collects all type paths that do not start or contain the given ident in the given type.
 ///
 /// Returns `T`, `N`, `A` for `Vec<(Recursive<T, N>, A)>` with `Recursive` as ident.
@@ -105,7 +91,6 @@ fn find_type_paths_not_start_or_contain_ident(ty: &Type, ident: &Ident) -> Vec<T
     visitor.visit_type(ty);
     visitor.result
 }
-
 #[allow(clippy::too_many_arguments)]
 /// Add required trait bounds to all generic types.
 ///
@@ -137,7 +122,6 @@ pub fn add(
     //     }
     //     None => Vec::new(),
     // };
-
     let ty_params = generics
         .type_params()
         .filter(|tp| skip_type_params.iter().all(|skip| skip != &tp.ident))
@@ -146,16 +130,13 @@ pub fn add(
     if ty_params.is_empty() {
         return;
     }
-
     let codec_types =
         get_types_to_add_trait_bound(input_ident, data, &ty_params, dumb_trait_bounds);
-
     let compact_types = collect_types(data, |t| t.codec_attrs.compact)
         .into_iter()
         // Only add a bound if the type uses a generic
         .filter(|ty| type_contain_idents(ty, &ty_params))
         .collect::<Vec<_>>();
-
     let skip_types = if codec_skip_bound.is_some() {
         let needs_default_bound = |f: &IntoSchemaField| f.codec_attrs.skip;
         collect_types(data, needs_default_bound)
@@ -166,22 +147,18 @@ pub fn add(
     } else {
         Vec::new()
     };
-
     if !codec_types.is_empty() || !compact_types.is_empty() || !skip_types.is_empty() {
         let where_clause = generics.make_where_clause();
-
         for ty in codec_types {
             where_clause
                 .predicates
                 .push(parse_quote!(#ty : #codec_bound))
         }
-
         for ty in compact_types {
             where_clause
                 .predicates
                 .push(parse_quote!(#crate_path::Compact<#ty> : #codec_bound))
         }
-
         for ty in skip_types {
             where_clause
                 .predicates
@@ -189,7 +166,6 @@ pub fn add(
         }
     }
 }
-
 /// Returns all types that must be added to the where clause with the respective trait bound.
 fn get_types_to_add_trait_bound(
     input_ident: &Ident,
@@ -226,7 +202,6 @@ fn get_types_to_add_trait_bound(
             .collect()
     }
 }
-
 fn collect_types(data: &IntoSchemaData, type_filter: fn(&IntoSchemaField) -> bool) -> Vec<Type> {
     match *data {
         IntoSchemaData::Struct(ref data) => data
@@ -235,7 +210,6 @@ fn collect_types(data: &IntoSchemaData, type_filter: fn(&IntoSchemaField) -> boo
             .filter(|f| type_filter(f))
             .map(|f| f.ty.clone())
             .collect(),
-
         IntoSchemaData::Enum(ref variants) => variants
             .iter()
             .filter(|variant| !variant.codec_attrs.skip)

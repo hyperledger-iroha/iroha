@@ -4,9 +4,6 @@
 //! Ensures that, for a block containing one bad signature among valid ones,
 //! the offending transaction identified by batch verification is stable across
 //! different input orders.
-
-use std::sync::Arc;
-
 use iroha_core::{
     block::{BlockValidationError as BErr, ValidBlock},
     prelude::*,
@@ -23,13 +20,11 @@ use iroha_data_model::{
     prelude::*,
 };
 use nonzero_ext::nonzero;
-
+use std::sync::Arc;
 fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, KeyPair) {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
-
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-
     let kp = checked_keypair_with_algorithm(algo);
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -49,23 +44,19 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, Ke
     state.set_crypto(crypto_cfg);
     (state, account_id, network_id, kp)
 }
-
 fn checked_signature_of<T: norito::codec::Encode>(
     private_key: &PrivateKey,
     payload: &T,
 ) -> SignatureOf<T> {
     SignatureOf::try_new(private_key, payload).expect("test fixture signing should succeed")
 }
-
 fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
     KeyPair::try_random_with_algorithm(algorithm)
         .expect("signature batch fixture key generation should succeed")
 }
-
 fn checked_bls_keypair() -> KeyPair {
     checked_keypair_with_algorithm(Algorithm::BlsNormal)
 }
-
 #[test]
 fn checked_keypair_with_algorithm_preserves_signature_algorithm() {
     assert_eq!(
@@ -78,7 +69,6 @@ fn checked_keypair_with_algorithm_preserves_signature_algorithm() {
     );
     assert_eq!(checked_bls_keypair().algorithm(), Algorithm::BlsNormal);
 }
-
 fn enable_batch_caps(state: &mut iroha_core::state::State) {
     let mut cfg = state.view().pipeline().clone();
     // Enable modest caps for all schemes (harmless for unused ones)
@@ -90,7 +80,6 @@ fn enable_batch_caps(state: &mut iroha_core::state::State) {
     }
     state.set_pipeline(cfg);
 }
-
 #[derive(Clone)]
 struct Lcg(u64);
 impl Lcg {
@@ -103,7 +92,6 @@ impl Lcg {
         self.0
     }
 }
-
 fn shuffle<T: Clone>(rng: &mut Lcg, v: &[T]) -> Vec<T> {
     let mut out = v.to_vec();
     let n = out.len();
@@ -113,7 +101,6 @@ fn shuffle<T: Clone>(rng: &mut Lcg, v: &[T]) -> Vec<T> {
     }
     out
 }
-
 fn mk_block_with_permuted_txs(
     state: &State,
     txs: Vec<SignedTransaction>,
@@ -188,12 +175,10 @@ fn mk_block_with_permuted_txs(
     }
     builder.build_with_signature(0, leader.private_key())
 }
-
 fn seed_genesis_block(state: &State) -> HashOf<BlockHeader> {
     if let Some(hash) = state.view().latest_block_hash() {
         return hash;
     }
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let leader = checked_bls_keypair();
     let genesis = BlockBuilder::new(header).build_with_signature(0, leader.private_key());
@@ -210,7 +195,6 @@ fn seed_genesis_block(state: &State) -> HashOf<BlockHeader> {
     state_block.commit().expect("genesis commit must succeed");
     genesis_hash
 }
-
 fn run_validate(
     state: &mut iroha_core::state::State,
     block: SignedBlock,
@@ -232,7 +216,6 @@ fn run_validate(
     .unpack(|_| {})
     .map_err(|(_, e)| Box::new(*e))
 }
-
 #[test]
 fn ed25519_batch_permutation_finds_same_bad_sig() {
     let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::Ed25519);
@@ -243,7 +226,6 @@ fn ed25519_batch_permutation_finds_same_bad_sig() {
     let height = nonzero!(2_u64);
     let proof_policy_bundle =
         iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
-
     // Build a few transactions where exactly one is signed by a wrong key
     let mk = |msg: &str, mismatched_sig: bool| {
         let mut tx = TransactionBuilder::new(
@@ -266,7 +248,6 @@ fn ed25519_batch_permutation_finds_same_bad_sig() {
     let tx_ok4 = mk("ok-4", false);
     let baseline = vec![tx_ok1, tx_ok2, tx_bad.clone(), tx_ok3, tx_ok4];
     let bad_sig = tx_bad.signature().clone();
-
     // Deterministic permutations
     let mut rng = Lcg::new(0xED_25_51_9D);
     for _ in 0..32 {
@@ -281,7 +262,6 @@ fn ed25519_batch_permutation_finds_same_bad_sig() {
         );
         let err = run_validate(&mut state, block, &authority, &leader)
             .expect_err("block must be rejected due to bad signature");
-
         match *err {
             BErr::TransactionAccept(AF::SignatureVerification(fail)) => {
                 assert_eq!(
@@ -293,7 +273,6 @@ fn ed25519_batch_permutation_finds_same_bad_sig() {
         }
     }
 }
-
 #[test]
 fn secp256k1_batch_permutation_finds_same_bad_sig() {
     let (mut state, authority, network_id, good) = setup_world_with_account(Algorithm::Secp256k1);
@@ -304,7 +283,6 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
     let height = nonzero!(2_u64);
     let proof_policy_bundle =
         iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
-
     let mk = |msg: &str, mismatched_sig: bool| {
         let mut tx = TransactionBuilder::new(
             network_id,
@@ -326,7 +304,6 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
     let tx_ok4 = mk("ok-4", false);
     let baseline = vec![tx_ok1, tx_ok2, tx_bad.clone(), tx_ok3, tx_ok4];
     let bad_sig = tx_bad.signature().clone();
-
     let mut rng = Lcg::new(0x53_45_43_50);
     for _ in 0..32 {
         let perm = shuffle(&mut rng, &baseline);
@@ -352,7 +329,6 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
         }
     }
 }
-
 #[test]
 #[cfg(feature = "bls")]
 fn bls_multimessage_batch_passes() {
@@ -363,7 +339,6 @@ fn bls_multimessage_batch_passes() {
     let height = nonzero!(2_u64);
     let proof_policy_bundle =
         iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
-
     let mk = |msg: &str| {
         TransactionBuilder::new(
             network_id,
@@ -374,7 +349,6 @@ fn bls_multimessage_batch_passes() {
         .sign(signer.private_key())
     };
     let txs = vec![mk("m1"), mk("m2"), mk("m3"), mk("m4"), mk("m5")];
-
     let block = mk_block_with_permuted_txs(
         &state,
         txs,
@@ -386,7 +360,6 @@ fn bls_multimessage_batch_passes() {
     run_validate(&mut state, block, &authority, &leader)
         .expect("valid BLS multi-message batch must pass");
 }
-
 #[test]
 #[cfg(feature = "bls")]
 fn bls_multimessage_batch_finds_same_bad_sig() {
@@ -398,7 +371,6 @@ fn bls_multimessage_batch_finds_same_bad_sig() {
     let height = nonzero!(2_u64);
     let proof_policy_bundle =
         iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
-
     let mk = |msg: &str, mismatched_sig: bool| {
         let mut tx = TransactionBuilder::new(
             network_id,
@@ -420,7 +392,6 @@ fn bls_multimessage_batch_finds_same_bad_sig() {
     let tx_ok4 = mk("ok-4", false);
     let baseline = vec![tx_ok1, tx_ok2, tx_bad.clone(), tx_ok3, tx_ok4];
     let bad_sig = tx_bad.signature().clone();
-
     let mut rng = Lcg::new(0xB150_0BAD);
     for _ in 0..32 {
         let perm = shuffle(&mut rng, &baseline);
@@ -434,7 +405,6 @@ fn bls_multimessage_batch_finds_same_bad_sig() {
         );
         let err = run_validate(&mut state, block, &authority, &leader)
             .expect_err("block must be rejected due to bad BLS signature");
-
         match *err {
             BErr::TransactionAccept(AF::SignatureVerification(fail)) => {
                 assert_eq!(
@@ -446,7 +416,6 @@ fn bls_multimessage_batch_finds_same_bad_sig() {
         }
     }
 }
-
 #[cfg(feature = "bls")]
 #[test]
 fn bls_batch_permutation_finds_same_bad_sig() {
@@ -458,7 +427,6 @@ fn bls_batch_permutation_finds_same_bad_sig() {
     let height = nonzero!(2_u64);
     let proof_policy_bundle =
         iroha_core::da::proof_policy_bundle(&state.view().nexus().lane_config);
-
     // Use distinct messages to exercise multi-message aggregation path
     let mk = |msg: &str, mismatched_sig: bool| {
         let mut tx = TransactionBuilder::new(
@@ -481,7 +449,6 @@ fn bls_batch_permutation_finds_same_bad_sig() {
     let tx_ok4 = mk("m5", false);
     let baseline = vec![tx_ok1, tx_ok2, tx_bad.clone(), tx_ok3, tx_ok4];
     let bad_sig = tx_bad.signature().clone();
-
     let mut rng = Lcg::new(0xB1_5B_4D);
     for _ in 0..16 {
         let perm = shuffle(&mut rng, &baseline);

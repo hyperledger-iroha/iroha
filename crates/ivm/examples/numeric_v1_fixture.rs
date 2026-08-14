@@ -1,10 +1,7 @@
 //! Generate the shared cross-SDK Kotodama V1 numeric wire fixture.
-
 use std::{env, fs, path::Path};
-
 #[path = "support/atomic_write.rs"]
 mod fixture_io;
-
 use iroha_crypto::Hash;
 use iroha_primitives::{
     bigint::BigInt,
@@ -17,7 +14,6 @@ use iroha_primitives::{
 };
 use ivm::{PointerType, numeric_tlv};
 use norito::json::{Map, Value};
-
 fn object(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
     let mut map = Map::new();
     for (key, value) in entries {
@@ -25,7 +21,6 @@ fn object(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
     }
     Value::Object(map)
 }
-
 fn valid(
     id: &'static str,
     kind: &'static str,
@@ -49,7 +44,6 @@ fn valid(
         ("envelope_hex", Value::from(hex::encode(envelope))),
     ])
 }
-
 fn invalid(
     id: &'static str,
     input: &'static str,
@@ -65,7 +59,6 @@ fn invalid(
         ("hex", Value::from(hex::encode(bytes))),
     ])
 }
-
 fn invalid_text(
     id: &'static str,
     kind: &'static str,
@@ -79,7 +72,6 @@ fn invalid_text(
         ("expected", Value::from(expected)),
     ])
 }
-
 fn int_vector(id: &'static str, value: BigInt) -> Value {
     let frame = IntValueV1::try_new(value.clone())
         .expect("bounded fixture integer")
@@ -96,7 +88,6 @@ fn int_vector(id: &'static str, value: BigInt) -> Value {
         envelope,
     )
 }
-
 fn decimal_vector(id: &'static str, value: Numeric) -> Value {
     value.validate_decimal().expect("canonical fixture decimal");
     let frame = DecimalValueV1::from_canonical_numeric(value.clone())
@@ -114,7 +105,6 @@ fn decimal_vector(id: &'static str, value: Numeric) -> Value {
         envelope,
     )
 }
-
 fn quantity_vector(id: &'static str, value: Quantity) -> Value {
     let frame = QuantityValueV1::new(value.clone())
         .encode_frame()
@@ -130,7 +120,6 @@ fn quantity_vector(id: &'static str, value: Quantity) -> Value {
         envelope,
     )
 }
-
 fn body(mantissa: &[u8], scale: Option<u8>) -> Vec<u8> {
     let mut body = Vec::with_capacity(4 + mantissa.len() + usize::from(scale.is_some()));
     body.extend_from_slice(
@@ -144,7 +133,6 @@ fn body(mantissa: &[u8], scale: Option<u8>) -> Vec<u8> {
     }
     body
 }
-
 fn frame(schema: [u8; 16], body: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity(NUMERIC_FRAME_HEADER_BYTES_V1 + body.len());
     frame.extend_from_slice(&norito::core::MAGIC);
@@ -162,7 +150,6 @@ fn frame(schema: [u8; 16], body: &[u8]) -> Vec<u8> {
     frame.extend_from_slice(body);
     frame
 }
-
 fn envelope(pointer_type: u16, version: u8, frame: &[u8]) -> Vec<u8> {
     let mut envelope = Vec::with_capacity(7 + frame.len() + Hash::LENGTH);
     envelope.extend_from_slice(&pointer_type.to_be_bytes());
@@ -176,7 +163,6 @@ fn envelope(pointer_type: u16, version: u8, frame: &[u8]) -> Vec<u8> {
     envelope.extend_from_slice(Hash::new(frame).as_ref());
     envelope
 }
-
 fn signed_endpoints() -> (BigInt, BigInt) {
     let maximum = vec![0xff_u8; MAX_MANTISSA_BYTES - 1]
         .into_iter()
@@ -191,7 +177,6 @@ fn signed_endpoints() -> (BigInt, BigInt) {
         BigInt::from_twos_bytes(&maximum).expect("maximum endpoint"),
     )
 }
-
 fn increment_unsigned_decimal(source: &str) -> String {
     assert!(
         !source.is_empty() && source.bytes().all(|byte| byte.is_ascii_digit()),
@@ -215,7 +200,6 @@ fn increment_unsigned_decimal(source: &str) -> String {
     }
     String::from_utf8(digits).expect("decimal digits are UTF-8")
 }
-
 /// Render the deterministic shared JSON fixture.
 pub fn render_fixture() -> String {
     let (minimum, maximum) = signed_endpoints();
@@ -261,7 +245,6 @@ pub fn render_fixture() -> String {
                 .expect("positive scale-28 value is a quantity"),
         ),
     ];
-
     let redundant_zero_frame = frame(INT_SCHEMA_HASH_V1, &body(&[0], None));
     let redundant_positive_frame = frame(INT_SCHEMA_HASH_V1, &body(&[1, 0], None));
     let redundant_negative_frame = frame(INT_SCHEMA_HASH_V1, &body(&[0xff, 0xff], None));
@@ -281,20 +264,15 @@ pub fn render_fixture() -> String {
         .expect("bounded attack integer")
         .encode_frame()
         .expect("canonical attack base");
-
     let mut wrong_schema_frame = canonical_int_frame.clone();
     wrong_schema_frame[6..22].copy_from_slice(&DECIMAL_SCHEMA_HASH_V1);
-
     let mut compressed_frame = canonical_int_frame.clone();
     compressed_frame[22] = 1;
-
     let mut layout_flags_frame = canonical_int_frame.clone();
     layout_flags_frame[39] = 1;
-
     let mut bad_crc_frame = canonical_int_frame.clone();
     let last = bad_crc_frame.len() - 1;
     bad_crc_frame[last] ^= 1;
-
     let canonical_int_envelope = numeric_tlv::encode_int(&BigInt::one()).expect("attack envelope");
     let frame_too_short = canonical_int_frame[..NUMERIC_FRAME_HEADER_BYTES_V1 - 1].to_vec();
     let mut invalid_header_frame = canonical_int_frame.clone();
@@ -312,7 +290,6 @@ pub fn render_fixture() -> String {
     let mut bad_hash_envelope = canonical_int_envelope.clone();
     let last = bad_hash_envelope.len() - 1;
     bad_hash_envelope[last] ^= 1;
-
     let mut oversized_envelope = canonical_int_envelope.clone();
     oversized_envelope[3..7].copy_from_slice(
         &u32::try_from(MAX_INT_FRAME_BYTES_V1 + 1)
@@ -326,7 +303,6 @@ pub fn render_fixture() -> String {
             .expect("envelope frame length field"),
     );
     envelope_length_mismatch[3..7].copy_from_slice(&(declared_frame_length - 1).to_be_bytes());
-
     let invalid_values = vec![
         invalid(
             "redundant_zero",
@@ -525,7 +501,6 @@ pub fn render_fixture() -> String {
             envelope_length_mismatch,
         ),
     ];
-
     let removable_scale_input = format!("1.{}", "0".repeat(29));
     let removable_scale_value = removable_scale_input
         .parse::<Numeric>()
@@ -732,7 +707,6 @@ pub fn render_fixture() -> String {
             "negative_quantity",
         ),
     ];
-
     let document = object([
         ("format", Value::from("iroha.numeric.v1")),
         (
@@ -753,7 +727,6 @@ pub fn render_fixture() -> String {
     rendered.push('\n');
     rendered
 }
-
 fn verify(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let expected = render_fixture();
     let actual = fs::read_to_string(path)?;
@@ -767,7 +740,6 @@ fn verify(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = env::args_os().skip(1);
     if let Some(flag) = arguments.next() {
@@ -791,11 +763,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     print!("{}", render_fixture());
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn unsigned_decimal_increment_handles_carry_boundaries() {
         assert_eq!(increment_unsigned_decimal("0"), "1");

@@ -4,15 +4,6 @@
 //! SHAKE256 over the complete pinned parameter manifest plus a typed matrix
 //! coordinate.  The matrices are initialized once and are identical on every
 //! peer.
-
-use std::sync::OnceLock;
-
-use sha2::{Digest, Sha256};
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
-
 use super::{
     JINDO_RING_DEGREE_V1,
     parameters::{JINDO_PARAMETER_MANIFEST_V1, JINDO_PARAMETERS_V1},
@@ -20,13 +11,17 @@ use super::{
         JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoPrimeModulusV1, JindoRnsPolynomialV1,
     },
 };
-
+use sha2::{Digest, Sha256};
+use sha3::{
+    Shake256,
+    digest::{ExtendableOutput, Update, XofReader},
+};
+use std::sync::OnceLock;
 const CRS_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.transparent-crs.v1";
 const INNER_MATRIX_LABEL_V1: &[u8] = b"inner-msis-A";
 const MLWE_MATRIX_LABEL_V1: &[u8] = b"mlwe-B-prime";
 const OUTER_MATRIX_LABEL_V1: &[u8] = b"outer-msis-D";
 const CRS_DIGEST_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.transparent-crs-digest.v1";
-
 /// Fixed transparent commitment matrices.
 pub(crate) struct JindoCommitKeyV1 {
     /// `A` in `R_q^(mu x (m+1))`, including the augmented blinder row.
@@ -36,7 +31,6 @@ pub(crate) struct JindoCommitKeyV1 {
     /// `D` in `R_qo^(kappa x mu*n)`.
     pub(crate) outer: Vec<Vec<JindoRnsPolynomialV1>>,
 }
-
 /// Return the process-wide fixed transparent commit key.
 pub(crate) fn commit_key_v1() -> &'static JindoCommitKeyV1 {
     static KEY: OnceLock<JindoCommitKeyV1> = OnceLock::new();
@@ -61,7 +55,6 @@ pub(crate) fn commit_key_v1() -> &'static JindoCommitKeyV1 {
         ),
     })
 }
-
 /// Digest the exact generated matrices in canonical row-major RNS order.
 pub(crate) fn crs_digest_v1() -> [u8; 32] {
     static DIGEST: OnceLock<[u8; 32]> = OnceLock::new();
@@ -76,7 +69,6 @@ pub(crate) fn crs_digest_v1() -> [u8; 32] {
         hash.finalize().into()
     })
 }
-
 fn digest_matrix(hash: &mut Sha256, label: &[u8], matrix: &[Vec<JindoRnsPolynomialV1>]) {
     digest_field(hash, label);
     Digest::update(
@@ -97,7 +89,6 @@ fn digest_matrix(hash: &mut Sha256, label: &[u8], matrix: &[Vec<JindoRnsPolynomi
         }
     }
 }
-
 fn digest_field(hash: &mut Sha256, value: &[u8]) {
     Digest::update(
         hash,
@@ -107,7 +98,6 @@ fn digest_field(hash: &mut Sha256, value: &[u8]) {
     );
     Digest::update(hash, value);
 }
-
 fn matrix(
     label: &[u8],
     rows: usize,
@@ -122,7 +112,6 @@ fn matrix(
         })
         .collect()
 }
-
 fn uniform_polynomial(
     label: &[u8],
     row: usize,
@@ -147,12 +136,10 @@ fn uniform_polynomial(
     JindoRnsPolynomialV1::from_residues(residues, moduli)
         .expect("rejection sampler emits canonical residues")
 }
-
 fn absorb(state: &mut Shake256, bytes: &[u8]) {
     state.update(&(bytes.len() as u64).to_le_bytes());
     state.update(bytes);
 }
-
 fn sample_uniform_modulus(reader: &mut impl XofReader, modulus: u64) -> u64 {
     debug_assert!(modulus > 1);
     let acceptance_limit = u64::MAX - (u64::MAX % modulus);
@@ -165,11 +152,9 @@ fn sample_uniform_modulus(reader: &mut impl XofReader, modulus: u64) -> u64 {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn transparent_key_has_the_exact_pinned_shape() {
         let key = commit_key_v1();
@@ -180,12 +165,10 @@ mod tests {
         assert_eq!(key.outer.len(), 3);
         assert!(key.outer.iter().all(|row| row.len() == 4));
     }
-
     #[test]
     fn transparent_key_is_initialized_once() {
         assert!(core::ptr::eq(commit_key_v1(), commit_key_v1()));
     }
-
     #[test]
     fn typed_matrix_coordinates_are_domain_separated() {
         let key = commit_key_v1();
@@ -201,7 +184,6 @@ mod tests {
                 .any(|coefficient| *coefficient != 0)
         );
     }
-
     #[test]
     fn transparent_crs_known_answer_prefix_is_frozen() {
         // The complete 1,020-byte parameter manifest is part of every SHAKE
@@ -215,14 +197,12 @@ mod tests {
         );
         assert!(first.iter().any(|v| *v != 0));
     }
-
     #[test]
     fn transparent_crs_digest_is_nonzero_and_cached() {
         let first = crs_digest_v1();
         assert_ne!(first, [0; 32]);
         assert_eq!(first, crs_digest_v1());
     }
-
     #[test]
     fn every_generated_residue_is_canonical() {
         let key = commit_key_v1();

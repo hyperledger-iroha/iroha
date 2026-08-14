@@ -1,23 +1,18 @@
 //! Minimal stand-in for the `kagami` binary used by the MOCHI supervisor integration tests.
-
-use std::{env, fs, path::PathBuf, process};
-
 use color_eyre::{Result, eyre::eyre};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey};
 use iroha_data_model::parameter::system::SumeragiConsensusMode;
 use mochi_core::sign_kagami_stub_genesis_from_config;
 use mochi_integration::kagami_default_manifest_json;
-
+use std::{env, fs, path::PathBuf, process};
 const DEFAULT_CHAIN_ID: &str = "mochi-mock-chain";
 const VERSION_OUTPUT: &str = "kagami_mock iroha3 test-stub";
-
 fn main() {
     if let Err(err) = run() {
         eprintln!("kagami_mock: {err:?}");
         process::exit(1);
     }
 }
-
 fn run() -> Result<()> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
@@ -38,7 +33,6 @@ fn run() -> Result<()> {
         )),
     }
 }
-
 #[derive(Debug, PartialEq, Eq)]
 struct SignArgs {
     manifest_path: PathBuf,
@@ -49,7 +43,6 @@ struct SignArgs {
     config_file: PathBuf,
     consensus_mode: Option<SumeragiConsensusMode>,
 }
-
 fn sign(args: Vec<String>) -> Result<()> {
     let parsed = parse_sign_args(&args)?;
     for (label, path) in [
@@ -66,7 +59,6 @@ fn sign(args: Vec<String>) -> Result<()> {
             "signed genesis output and bound manifest output must use different paths"
         ));
     }
-
     let private_record = fs::read_to_string(&parsed.private_key_file)?;
     let canonical_private = private_record
         .strip_suffix('\n')
@@ -92,7 +84,6 @@ fn sign(args: Vec<String>) -> Result<()> {
     fs::write(&parsed.expected_hash_out, format!("{}\n", block.hash()))?;
     Ok(())
 }
-
 fn parse_sign_args(args: &[String]) -> Result<SignArgs> {
     let manifest_path = args
         .first()
@@ -105,7 +96,6 @@ fn parse_sign_args(args: &[String]) -> Result<SignArgs> {
     let mut private_key_file = None;
     let mut config_file = None;
     let mut consensus_mode = None;
-
     let mut index = 1;
     while index < args.len() {
         match args[index].as_str() {
@@ -148,7 +138,6 @@ fn parse_sign_args(args: &[String]) -> Result<SignArgs> {
         }
         index += 1;
     }
-
     Ok(SignArgs {
         manifest_path,
         out_file: out_file.ok_or_else(|| eyre!("missing `--out-file` argument"))?,
@@ -162,14 +151,12 @@ fn parse_sign_args(args: &[String]) -> Result<SignArgs> {
         consensus_mode,
     })
 }
-
 struct GenerateArgs {
     ivm_dir: PathBuf,
     genesis_public_key: String,
     chain_id: String,
     consensus_mode: SumeragiConsensusMode,
 }
-
 fn generate(args: Vec<String>) -> Result<()> {
     let parsed = parse_generate_args(&args)?;
     let public_key: PublicKey = match parsed.genesis_public_key.parse() {
@@ -187,7 +174,6 @@ fn generate(args: Vec<String>) -> Result<()> {
             }
         }
     };
-
     let manifest = kagami_default_manifest_json(
         &public_key,
         &parsed.ivm_dir,
@@ -197,13 +183,11 @@ fn generate(args: Vec<String>) -> Result<()> {
     println!("{manifest}");
     Ok(())
 }
-
 fn parse_generate_args(args: &[String]) -> Result<GenerateArgs> {
     let mut ivm_dir = PathBuf::from(".");
     let mut genesis_public_key = None;
     let mut chain_id = DEFAULT_CHAIN_ID.to_owned();
     let mut consensus_mode = SumeragiConsensusMode::Permissioned;
-
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -231,7 +215,6 @@ fn parse_generate_args(args: &[String]) -> Result<GenerateArgs> {
         }
         index += 1;
     }
-
     let Some(genesis_public_key) = genesis_public_key else {
         return Err(eyre!("missing `--genesis-public-key` argument"));
     };
@@ -242,14 +225,12 @@ fn parse_generate_args(args: &[String]) -> Result<GenerateArgs> {
         consensus_mode,
     })
 }
-
 fn next_arg_value<'a>(args: &'a [String], index: &mut usize, flag: &str) -> Result<&'a str> {
     *index += 1;
     args.get(*index)
         .map(String::as_str)
         .ok_or_else(|| eyre!("{flag} requires a value"))
 }
-
 fn parse_consensus_mode(value: &str) -> Result<SumeragiConsensusMode> {
     match value {
         "permissioned" => Ok(SumeragiConsensusMode::Permissioned),
@@ -257,11 +238,9 @@ fn parse_consensus_mode(value: &str) -> Result<SumeragiConsensusMode> {
         other => Err(eyre!("unsupported consensus mode `{other}`")),
     }
 }
-
 fn verify(args: Vec<String>) -> Result<()> {
     let mut profile = None;
     let mut genesis = None;
-
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -280,7 +259,6 @@ fn verify(args: Vec<String>) -> Result<()> {
         }
         index += 1;
     }
-
     let Some(profile) = profile else {
         return Err(eyre!("missing `--profile` argument"));
     };
@@ -292,12 +270,10 @@ fn verify(args: Vec<String>) -> Result<()> {
         );
         return Ok(());
     }
-
     Err(eyre!(
         "missing or unreadable genesis path for profile {profile}"
     ))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,9 +281,7 @@ mod tests {
     use iroha_data_model::block::decode_framed_signed_block;
     use mochi_core::kagami_stub_genesis_policies_from_config;
     use norito::json::Value;
-
     const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
-
     fn peer_config(
         chain_id: &str,
         genesis_public_key: &PublicKey,
@@ -347,7 +321,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             signed = signed.display(),
         )
     }
-
     #[test]
     fn parse_generate_args_accepts_chain_id_and_consensus_mode() {
         let key_pair = KeyPair::random();
@@ -366,15 +339,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "abcd".to_owned(),
             "default".to_owned(),
         ];
-
         let parsed = parse_generate_args(&args).expect("parse mock kagami args");
-
         assert_eq!(parsed.ivm_dir, PathBuf::from("./ivm"));
         assert_eq!(parsed.genesis_public_key, key_pair.public_key().to_string());
         assert_eq!(parsed.chain_id, "local-chain");
         assert_eq!(parsed.consensus_mode, SumeragiConsensusMode::Npos);
     }
-
     #[test]
     fn generate_emits_manifest_with_requested_chain_id() {
         let key_pair = KeyPair::random();
@@ -387,7 +357,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         )
         .expect("generate mock manifest");
         let value: Value = norito::json::from_str(&manifest).expect("parse manifest json");
-
         assert_eq!(
             value.get("chain").and_then(Value::as_str),
             Some("custom-chain")
@@ -397,7 +366,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             Some("Permissioned")
         );
     }
-
     #[test]
     fn generate_accepts_current_supervisor_flags() {
         let key_pair = KeyPair::random();
@@ -413,10 +381,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "permissioned".to_owned(),
             "default".to_owned(),
         ];
-
         generate(args).expect("generate manifest via mock kagami");
     }
-
     #[test]
     fn parse_sign_args_accepts_current_supervisor_flags() {
         let args = vec![
@@ -434,7 +400,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "--consensus-mode".to_owned(),
             "permissioned".to_owned(),
         ];
-
         assert_eq!(
             parse_sign_args(&args).expect("parse mock kagami sign args"),
             SignArgs {
@@ -448,7 +413,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             }
         );
     }
-
     #[test]
     fn sign_publishes_block_before_bound_manifest() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -477,7 +441,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             peer_config("mock-sign-chain", key_pair.public_key(), &manifest, &signed),
         )
         .expect("write config");
-
         sign(vec![
             manifest.display().to_string(),
             "--out-file".to_owned(),
@@ -494,7 +457,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "permissioned".to_owned(),
         ])
         .expect("sign with mock kagami");
-
         let wire = fs::read(signed).expect("read signed output");
         let block = decode_framed_signed_block(&wire).expect("decode signed output");
         assert_eq!(
@@ -528,7 +490,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "decoded signed output must carry the config-derived confidential policy"
         );
     }
-
     #[test]
     fn sign_output_failure_preserves_existing_bound_manifest() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -562,7 +523,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             ),
         )
         .expect("write config");
-
         let _ = sign(vec![
             manifest.display().to_string(),
             "--out-file".to_owned(),
@@ -582,7 +542,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "permissioned".to_owned(),
         ])
         .expect_err("missing output parent should fail");
-
         assert_eq!(
             fs::read(bound).expect("read bound sentinel"),
             b"sentinel",
@@ -593,7 +552,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "expected hash must only publish after the block and bound manifest"
         );
     }
-
     #[test]
     fn version_probe_reports_iroha3_build_line() {
         assert!(VERSION_OUTPUT.contains("iroha3"));

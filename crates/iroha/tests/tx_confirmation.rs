@@ -1,7 +1,4 @@
 //! Tests for transaction confirmation stream behavior
-
-use std::{num::NonZeroU64, time::Duration};
-
 use eyre::Report;
 use futures_util::stream;
 use iroha::{
@@ -16,13 +13,12 @@ use iroha_data_model::{
     },
     nexus::{DataSpaceId, LaneId},
 };
+use std::{num::NonZeroU64, time::Duration};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-
 fn make_hash() -> HashOf<SignedTransaction> {
     HashOf::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]))
 }
-
 fn queued_event(hash: HashOf<SignedTransaction>) -> EventBox {
     let event = TransactionEvent {
         hash,
@@ -31,10 +27,8 @@ fn queued_event(hash: HashOf<SignedTransaction>) -> EventBox {
         dataspace_id: DataSpaceId::UNIVERSAL,
         status: TransactionStatus::Queued,
     };
-
     EventBox::Pipeline(PipelineEventBox::Transaction(event))
 }
-
 fn approved_event(hash: HashOf<SignedTransaction>, height: NonZeroU64) -> EventBox {
     let event = TransactionEvent {
         hash,
@@ -43,10 +37,8 @@ fn approved_event(hash: HashOf<SignedTransaction>, height: NonZeroU64) -> EventB
         dataspace_id: DataSpaceId::UNIVERSAL,
         status: TransactionStatus::Approved,
     };
-
     EventBox::Pipeline(PipelineEventBox::Transaction(event))
 }
-
 fn block_event(height: NonZeroU64, status: BlockStatus) -> EventBox {
     let header = BlockHeader {
         height,
@@ -67,7 +59,6 @@ fn block_event(height: NonZeroU64, status: BlockStatus) -> EventBox {
     let event = BlockEvent { header, status };
     EventBox::Pipeline(PipelineEventBox::Block(event))
 }
-
 #[test]
 fn prolonged_queue_returns_error() {
     let hash = make_hash();
@@ -89,7 +80,6 @@ fn prolonged_queue_returns_error() {
     });
     assert!(result.is_err());
 }
-
 #[test]
 fn duplicate_queue_before_approval_is_tolerated() {
     let hash = make_hash();
@@ -107,7 +97,6 @@ fn duplicate_queue_before_approval_is_tolerated() {
     });
     assert_eq!(result.unwrap(), hash);
 }
-
 #[test]
 fn batched_pipeline_events_confirm_transaction() {
     let hash = make_hash();
@@ -139,7 +128,6 @@ fn batched_pipeline_events_confirm_transaction() {
     });
     assert_eq!(result.unwrap(), hash);
 }
-
 fn assert_confirmation(block_status: BlockStatus) {
     let hash = make_hash();
     let height = NonZeroU64::new(1).unwrap();
@@ -155,12 +143,10 @@ fn assert_confirmation(block_status: BlockStatus) {
     });
     assert_eq!(result.unwrap(), hash);
 }
-
 #[test]
 fn applied_block_confirms_transaction() {
     assert_confirmation(BlockStatus::Applied);
 }
-
 #[test]
 fn committed_block_confirms_transaction() {
     assert_confirmation(BlockStatus::Committed);

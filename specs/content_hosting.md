@@ -33,7 +33,11 @@ individual files directly from Torii.
   auto-generates a manifest, emits optional `--manifest-out/--bundle-out`, and
   accepts `--auth`, `--cache-max-age-secs`, `--dataspace`, `--lane`, `--immutable`,
   and `--expires-at-height` overrides. `iroha content pack --root <dir>` builds
-  a deterministic tarball + manifest without submitting anything.
+  a deterministic tarball + manifest without submitting anything. Bundle-file
+  reads are capped before allocation. Directory packing streams traversal,
+  admits the configured file count and final padded tar size before retaining
+  each source, and builds into one exact-capacity archive buffer; symlinks and
+  other non-regular inputs fail closed.
 - **Config**: cache/auth knobs live under `content.*` in `iroha_config`
   (`default_cache_max_age_secs`, `max_cache_max_age_secs`, `immutable_bundles`,
   `default_auth_mode`) and are enforced at publish time.

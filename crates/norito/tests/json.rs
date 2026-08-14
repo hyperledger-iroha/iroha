@@ -1,11 +1,9 @@
 //! JSON helper tests for Norito (manual, no serde in lib).
 #![cfg(feature = "json")]
-
 use norito::{
     json as nj,
     json::{JsonDeserialize, JsonSerialize, Parser, from_json, write_json_string},
 };
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Sample {
     id: u64,
@@ -14,7 +12,6 @@ struct Sample {
     flag: bool,
     maybe: Option<u32>,
 }
-
 impl JsonSerialize for Sample {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -40,7 +37,6 @@ impl JsonSerialize for Sample {
         out.push('}');
     }
 }
-
 impl JsonDeserialize for Sample {
     fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, norito::json::Error> {
         p.skip_ws();
@@ -86,7 +82,6 @@ impl JsonDeserialize for Sample {
         })
     }
 }
-
 #[test]
 fn json_roundtrip_sample() {
     let v = Sample {
@@ -101,7 +96,6 @@ fn json_roundtrip_sample() {
     let out: Sample = from_json(&s).expect("json decode");
     assert_eq!(v, out);
 }
-
 #[test]
 fn typed_api_roundtrip() {
     let v = Sample {
@@ -114,16 +108,13 @@ fn typed_api_roundtrip() {
     let json = nj::to_json(&v).expect("to_json");
     let back: Sample = nj::from_json(&json).expect("from_json");
     assert_eq!(v, back);
-
     let buf = nj::to_vec(&v).expect("to_vec");
     let back_slice: Sample = nj::from_slice(&buf).expect("from_slice");
     assert_eq!(v, back_slice);
-
     let value = nj::to_value(&v).expect("to_value");
     let back_value: Sample = nj::from_value(value).expect("from_value");
     assert_eq!(v, back_value);
 }
-
 #[test]
 fn raw_value_api_compiles() {
     // Ensure RawValue/to_raw_value are available via norito::json::value
@@ -134,7 +125,6 @@ fn raw_value_api_compiles() {
     let parsed: nj::Value = nj::from_str(raw.get()).expect("from_str raw");
     assert_eq!(parsed, val);
 }
-
 #[test]
 fn value_deserialize_roundtrip() {
     let src = r#"{"a":[1,true,{"b":null}],"c":"str"}"#;

@@ -1,9 +1,4 @@
 //! Exact deterministic-CBOR byte layout for the closed Figure 9 release profile.
-
-use core::{cmp::Ordering, ops::Range};
-
-use once_cell::sync::Lazy;
-
 use super::{
     VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
     VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1, VEGA_MDL_MSO_PAYLOAD_BYTES_V1,
@@ -13,12 +8,11 @@ use super::{
     VEGA_MDL_BIRTH_RANDOM_BYTES_V1, VEGA_MDL_FULL_DATE_TEXT_BYTES_V1,
     VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1,
 };
-
+use core::{cmp::Ordering, ops::Range};
+use once_cell::sync::Lazy;
 pub(super) static FIGURE9_LAYOUT: Lazy<Figure9Layout> = Lazy::new(Figure9Layout::build);
-
 /// Canonical byte range of the per-element random salt in the birth record.
 pub(super) const FIGURE9_BIRTH_RANDOM_RANGE: Range<usize> = 13..29;
-
 #[derive(Clone, Debug)]
 pub(super) struct Figure9Layout {
     pub(super) issuer_template: Vec<u8>,
@@ -33,7 +27,6 @@ pub(super) struct Figure9Layout {
     pub(super) issuer_valid_until_datetime: Range<usize>,
     pub(super) birth_date: Range<usize>,
 }
-
 impl Figure9Layout {
     fn build() -> Self {
         const BIRTH_DIGEST: [u8; 32] = [
@@ -59,7 +52,6 @@ impl Figure9Layout {
         const SIGNED: &[u8] = b"2025-01-02T03:04:05Z";
         const VALID_FROM: &[u8] = b"2025-02-03T04:05:06Z";
         const VALID_UNTIL: &[u8] = b"2035-08-17T12:34:56Z";
-
         let birth_inner = cbor_map(vec![
             (cbor_text(b"digestID"), cbor_unsigned(1)),
             (cbor_text(b"random"), cbor_bytes(&RANDOM)),
@@ -67,7 +59,6 @@ impl Figure9Layout {
             (cbor_text(b"elementValue"), cbor_text(BIRTH_DATE)),
         ]);
         let birth_template = cbor_tag(24, cbor_bytes(&birth_inner));
-
         let device_key = cbor_map(vec![
             (cbor_unsigned(1), cbor_unsigned(2)),
             (cbor_negative(-1), cbor_unsigned(1)),
@@ -113,7 +104,6 @@ impl Figure9Layout {
             birth_template.len(),
             VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1
         );
-
         let issuer_birth_digest = find_exact(&issuer_template, &BIRTH_DIGEST);
         let issuer_device_x = find_exact(&issuer_template, &DEVICE_X);
         let issuer_device_y = find_exact(&issuer_template, &DEVICE_Y);
@@ -126,7 +116,6 @@ impl Figure9Layout {
             "Figure 9 birth random offset drifted"
         );
         let birth_date = find_exact(&birth_template, BIRTH_DATE);
-
         let mut issuer_fixed = vec![true; issuer_template.len()];
         for range in [
             issuer_birth_digest.clone(),
@@ -157,7 +146,6 @@ impl Figure9Layout {
         }
     }
 }
-
 fn find_exact(haystack: &[u8], needle: &[u8]) -> Range<usize> {
     let matches = haystack
         .windows(needle.len())
@@ -167,7 +155,6 @@ fn find_exact(haystack: &[u8], needle: &[u8]) -> Range<usize> {
     assert_eq!(matches.len(), 1, "Figure 9 placeholder must be unique");
     matches[0]..matches[0] + needle.len()
 }
-
 fn cbor_head(major: u8, value: u64) -> Vec<u8> {
     let mut encoded = Vec::new();
     match value {
@@ -191,28 +178,23 @@ fn cbor_head(major: u8, value: u64) -> Vec<u8> {
     }
     encoded
 }
-
 fn cbor_unsigned(value: u64) -> Vec<u8> {
     cbor_head(0, value)
 }
-
 fn cbor_negative(value: i64) -> Vec<u8> {
     let argument = u64::try_from(-(i128::from(value)) - 1).expect("negative CBOR value");
     cbor_head(1, argument)
 }
-
 fn cbor_bytes(value: &[u8]) -> Vec<u8> {
     let mut encoded = cbor_head(2, value.len() as u64);
     encoded.extend_from_slice(value);
     encoded
 }
-
 fn cbor_text(value: &[u8]) -> Vec<u8> {
     let mut encoded = cbor_head(3, value.len() as u64);
     encoded.extend_from_slice(value);
     encoded
 }
-
 fn cbor_array(values: Vec<Vec<u8>>) -> Vec<u8> {
     let mut encoded = cbor_head(4, values.len() as u64);
     for value in values {
@@ -220,7 +202,6 @@ fn cbor_array(values: Vec<Vec<u8>>) -> Vec<u8> {
     }
     encoded
 }
-
 fn cbor_map(mut entries: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<u8> {
     entries.sort_by(|left, right| deterministic_key_cmp(&left.0, &right.0));
     let mut encoded = cbor_head(5, entries.len() as u64);
@@ -230,21 +211,17 @@ fn cbor_map(mut entries: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<u8> {
     }
     encoded
 }
-
 fn cbor_tag(tag: u64, value: Vec<u8>) -> Vec<u8> {
     let mut encoded = cbor_head(6, tag);
     encoded.extend_from_slice(&value);
     encoded
 }
-
 fn deterministic_key_cmp(left: &[u8], right: &[u8]) -> Ordering {
     left.len().cmp(&right.len()).then_with(|| left.cmp(right))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn closed_layout_has_stable_lengths_offsets_and_no_unclassified_bytes() {
         let layout = &*FIGURE9_LAYOUT;

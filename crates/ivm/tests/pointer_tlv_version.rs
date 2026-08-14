@@ -1,7 +1,5 @@
 use ivm::{self, Memory, PointerType};
-
 mod common;
-
 fn build_tlv_with_version(ty: PointerType, ver: u8, payload: &[u8]) -> Vec<u8> {
     let payload = common::payload_for_type(ty, payload);
     let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
@@ -13,7 +11,6 @@ fn build_tlv_with_version(ty: PointerType, ver: u8, payload: &[u8]) -> Vec<u8> {
     tlv.extend_from_slice(&h);
     tlv
 }
-
 #[test]
 fn validate_tlv_rejects_wrong_version() {
     // Prepare memory and preload a TLV with version != 1

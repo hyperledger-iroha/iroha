@@ -1,14 +1,4 @@
 //! Exact catalog-to-backend assembly for isolated software signer services.
-
-use std::sync::Arc;
-
-use iroha_torii::sorafs::{
-    PotrGatewaySignerV1 as _, PotrProviderSignerV1 as _, StreamTokenRuntimeSigner as _,
-};
-use sorafs_node::{
-    GovernanceDagRuntimeSigner as _, evidence_viewer::EvidenceViewerReceiptSignerV1 as _,
-};
-
 use super::{
     adapter::{ExternalSoftwareSignerAdapterErrorV1, ExternalSoftwareSignerNativeAdapterV1},
     runtime_adapters::{
@@ -18,7 +8,13 @@ use super::{
         ExternalSoftwareSignerPotrProviderAdapterV1, ExternalSoftwareSignerStreamTokenAdapterV1,
     },
 };
-
+use iroha_torii::sorafs::{
+    PotrGatewaySignerV1 as _, PotrProviderSignerV1 as _, StreamTokenRuntimeSigner as _,
+};
+use sorafs_node::{
+    GovernanceDagRuntimeSigner as _, evidence_viewer::EvidenceViewerReceiptSignerV1 as _,
+};
+use std::sync::Arc;
 /// Deployment-owned set of every phase-one software-signing backend.
 #[derive(Clone, Default)]
 pub struct ExternalSoftwareSignerBackendsV1 {
@@ -33,7 +29,6 @@ pub struct ExternalSoftwareSignerBackendsV1 {
     pop_registry:
         Option<Arc<dyn iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1>>,
 }
-
 impl ExternalSoftwareSignerBackendsV1 {
     /// Construct an empty exact backend set.
     #[must_use]
@@ -50,7 +45,6 @@ impl ExternalSoftwareSignerBackendsV1 {
             pop_registry: None,
         }
     }
-
     /// Compose with the deployment registry for every non-signer slot.
     ///
     /// The complete catalog is partitioned before either resolver is called;
@@ -63,7 +57,6 @@ impl ExternalSoftwareSignerBackendsV1 {
         self.base_registry = Some(registry);
         self
     }
-
     /// Insert one native transaction signer, rejecting duplicates.
     pub fn insert_native(
         &mut self,
@@ -76,7 +69,6 @@ impl ExternalSoftwareSignerBackendsV1 {
         self.native[index] = Some(signer);
         Ok(())
     }
-
     /// Insert the sole Governance DAG signer.
     pub fn insert_governance_dag(
         &mut self,
@@ -84,7 +76,6 @@ impl ExternalSoftwareSignerBackendsV1 {
     ) -> Result<(), ExternalSoftwareSignerAdapterErrorV1> {
         insert_once(&mut self.governance_dag, signer)
     }
-
     /// Insert the sole PoTR gateway signer.
     pub fn insert_potr_gateway(
         &mut self,
@@ -92,7 +83,6 @@ impl ExternalSoftwareSignerBackendsV1 {
     ) -> Result<(), ExternalSoftwareSignerAdapterErrorV1> {
         insert_once(&mut self.potr_gateway, signer)
     }
-
     /// Insert the sole PoTR provider signer.
     pub fn insert_potr_provider(
         &mut self,
@@ -100,7 +90,6 @@ impl ExternalSoftwareSignerBackendsV1 {
     ) -> Result<(), ExternalSoftwareSignerAdapterErrorV1> {
         insert_once(&mut self.potr_provider, signer)
     }
-
     /// Insert the sole billing-statement signer.
     pub fn insert_billing_statement(
         &mut self,
@@ -108,7 +97,6 @@ impl ExternalSoftwareSignerBackendsV1 {
     ) -> Result<(), ExternalSoftwareSignerAdapterErrorV1> {
         insert_once(&mut self.billing_statement, signer)
     }
-
     /// Insert the sole evidence-viewer signer.
     pub fn insert_evidence_viewer(
         &mut self,
@@ -116,7 +104,6 @@ impl ExternalSoftwareSignerBackendsV1 {
     ) -> Result<(), ExternalSoftwareSignerAdapterErrorV1> {
         insert_once(&mut self.evidence_viewer, signer)
     }
-
     /// Insert the sole stream-token signer.
     pub fn insert_stream_token(
         &mut self,
@@ -124,7 +111,6 @@ impl ExternalSoftwareSignerBackendsV1 {
     ) -> Result<(), ExternalSoftwareSignerAdapterErrorV1> {
         insert_once(&mut self.stream_token, signer)
     }
-
     /// Insert the approved decorated PoP provider registry.
     pub fn insert_pop_registry(
         &mut self,
@@ -132,7 +118,6 @@ impl ExternalSoftwareSignerBackendsV1 {
     ) -> Result<(), ExternalSoftwareSignerAdapterErrorV1> {
         insert_once(&mut self.pop_registry, registry)
     }
-
     fn attach(
         self,
         mut backends: crate::RuntimeProviderBrokerBackendsV1,
@@ -176,7 +161,6 @@ impl ExternalSoftwareSignerBackendsV1 {
         }
         backends
     }
-
     fn validate_signer_subset(
         &self,
         bindings: &crate::IrohaRuntimeProviderBindingsV1,
@@ -303,7 +287,6 @@ impl ExternalSoftwareSignerBackendsV1 {
         Ok(())
     }
 }
-
 impl crate::RuntimeProviderBrokerBackendRegistryV1 for ExternalSoftwareSignerBackendsV1 {
     fn resolve(
         &self,
@@ -323,7 +306,6 @@ impl crate::RuntimeProviderBrokerBackendRegistryV1 for ExternalSoftwareSignerBac
         Ok(self.clone().attach(base))
     }
 }
-
 fn exact_public_binding(
     configured: &crate::IrohaRuntimeProviderBindingV1,
     signer: &super::protocol::SoftwareSignerPublicBindingV1,
@@ -336,7 +318,6 @@ fn exact_public_binding(
     }
     Ok(())
 }
-
 fn insert_once<T>(
     slot: &mut Option<Arc<T>>,
     value: Arc<T>,
@@ -350,7 +331,6 @@ where
     *slot = Some(value);
     Ok(())
 }
-
 const fn native_role_index(role: iroha_torii::SorafsNativeTransactionSignerRoleV1) -> usize {
     match role {
         iroha_torii::SorafsNativeTransactionSignerRoleV1::ProofOutcome => 0,
@@ -359,11 +339,9 @@ const fn native_role_index(role: iroha_torii::SorafsNativeTransactionSignerRoleV
         iroha_torii::SorafsNativeTransactionSignerRoleV1::Orderbook => 3,
     }
 }
-
 const fn registry_incomplete() -> crate::IrohaRuntimeProviderRegistryErrorV1 {
     crate::IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution
 }
-
 const fn registry_mismatch() -> crate::IrohaRuntimeProviderRegistryErrorV1 {
     crate::IrohaRuntimeProviderRegistryErrorV1::BindingMismatch
 }

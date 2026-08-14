@@ -1,22 +1,5 @@
 //! High-level orchestrator facade wiring SoraFS scoreboards to the async
 //! multi-source fetch loop implemented in `sorafs_car`.
-
-use std::{
-    cmp::Ordering as CmpOrdering,
-    collections::{HashMap, VecDeque},
-    future::Future,
-    io::Cursor,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    num::{NonZeroU32, NonZeroUsize},
-    pin::Pin,
-    str::FromStr,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering as AtomicOrdering},
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-
 use futures::future::join_all;
 use iroha_core::prelude::Hash;
 use iroha_data_model::{
@@ -51,6 +34,21 @@ use sorafs_manifest::{
     GovernanceProofs,
     validation::{PinPolicyConstraints, validate_manifest},
 };
+use std::{
+    cmp::Ordering as CmpOrdering,
+    collections::{HashMap, VecDeque},
+    future::Future,
+    io::Cursor,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    num::{NonZeroU32, NonZeroUsize},
+    pin::Pin,
+    str::FromStr,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use thiserror::Error;
 use tokio::{
     net::lookup_host,
@@ -59,7 +57,6 @@ use tokio::{
     time::sleep,
 };
 use url::Host;
-
 pub mod appeals;
 pub mod compliance;
 pub mod incentives;
@@ -71,7 +68,6 @@ pub mod routing_authority;
 pub mod soranet;
 pub mod taikai_cache;
 pub mod treasury;
-
 pub(crate) const SORANET_PQ_RANK_STEP_WEIGHT: u32 = 250;
 pub(crate) const SORANET_PQ_CERTIFICATE_BONUS: u32 = 500;
 pub(crate) const SORANET_BANDWIDTH_UNIT_BYTES: u64 = 256 * 1024; // 256 KiB per weight step.
@@ -97,26 +93,22 @@ const MIN_PRIVACY_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_PRIVACY_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const MIN_PRIVACY_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_PRIVACY_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
-
 #[derive(Clone, Copy)]
 struct OutboundNetworkPolicy {
     require_https: bool,
     allow_non_public: bool,
 }
-
 impl OutboundNetworkPolicy {
     const PRODUCTION: Self = Self {
         require_https: true,
         allow_non_public: false,
     };
-
     #[cfg(test)]
     const LOCAL_TEST: Self = Self {
         require_https: false,
         allow_non_public: true,
     };
 }
-
 #[derive(Debug, Error)]
 enum OutboundTargetError {
     #[error("URL exceeds the {HARD_MAX_PRIVACY_URL_BYTES}-byte limit")]
@@ -146,14 +138,12 @@ enum OutboundTargetError {
     #[error("DNS lookup returned more than {HARD_MAX_DNS_ANSWERS} addresses")]
     TooManyDnsAnswers,
 }
-
 fn is_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => is_public_ipv4(ip),
         IpAddr::V6(ip) => is_public_ipv6(ip),
     }
 }
-
 fn is_public_ipv4(ip: Ipv4Addr) -> bool {
     let [a, b, c, _] = ip.octets();
     !matches!(
@@ -174,7 +164,6 @@ fn is_public_ipv4(ip: Ipv4Addr) -> bool {
             | (172, 16..=31, _)
     )
 }
-
 fn is_public_ipv6(ip: Ipv6Addr) -> bool {
     if let Some(mapped) = ip.to_ipv4_mapped() {
         return is_public_ipv4(mapped);
@@ -196,7 +185,6 @@ fn is_public_ipv6(ip: Ipv6Addr) -> bool {
     }
     true
 }
-
 fn validate_public_dns_name(host: &str) -> Result<(), OutboundTargetError> {
     if host.is_empty()
         || host.len() > 253
@@ -226,7 +214,6 @@ fn validate_public_dns_name(host: &str) -> Result<(), OutboundTargetError> {
     }
     Ok(())
 }
-
 fn validate_outbound_url(
     url: &Url,
     policy: OutboundNetworkPolicy,
@@ -272,7 +259,6 @@ fn validate_outbound_url(
         .ok_or(OutboundTargetError::InvalidPort)?;
     Ok((host, port))
 }
-
 fn validate_resolved_addresses(
     host: &str,
     addresses: impl IntoIterator<Item = SocketAddr>,
@@ -296,7 +282,6 @@ fn validate_resolved_addresses(
     }
     Ok(addresses)
 }
-
 async fn resolve_and_validate_host(
     host: &str,
     port: u16,
@@ -314,6 +299,10 @@ async fn resolve_and_validate_host(
         })?;
     validate_resolved_addresses(host, addresses, policy)
 }
+use crate::proxy::{
+    BrowserExtensionManifest, LocalQuicProxyConfig, LocalQuicProxyHandle, PROXY_MANIFEST_ID,
+    PROXY_PROTOCOL_LABEL, ProxyError, ProxyMode, spawn_local_quic_proxy,
+};
 use compliance::{CompliancePolicy, ComplianceReason};
 use soranet::{
     CircuitEvent, CircuitId, CircuitInfo, CircuitManager, CircuitManagerConfig,
@@ -326,30 +315,8 @@ use taikai_cache::{
     TaikaiCacheHandle, TaikaiCacheStatsSnapshot, TaikaiPullQueueStats, TaikaiPullRequest,
     TaikaiPullTicket, TaikaiQueueError,
 };
-
-use crate::proxy::{
-    BrowserExtensionManifest, LocalQuicProxyConfig, LocalQuicProxyHandle, PROXY_MANIFEST_ID,
-    PROXY_PROTOCOL_LABEL, ProxyError, ProxyMode, spawn_local_quic_proxy,
-};
-
 /// Convenient re-exports for downstream callers.
 pub mod prelude {
-    pub use blake3::Hash as Blake3Hash;
-    pub use sorafs_car::{
-        CarBuildPlan, CarChunk, ChunkStore, FilePlan, InMemoryPayload, PorProof,
-        gateway::{GatewayFetchConfig, GatewayProviderInput},
-        multi_fetch::{
-            CapabilityMismatch, ChunkObserver, ChunkResponse, FetchOptions, FetchOutcome,
-            FetchProvider, FetchRequest, ProviderMetadata, RangeCapability, StreamBudget,
-            TransportHint,
-        },
-        scoreboard::{
-            Eligibility, IneligibilityReason, ProviderTelemetry, Scoreboard, ScoreboardConfig,
-            ScoreboardEntry, TelemetrySnapshot,
-        },
-    };
-    pub use sorafs_chunker::ChunkProfile;
-
     pub use crate::{
         AnonymityPolicy, CircuitRefreshReport, FetchSession, GatewayCarVerification,
         GatewayOrchestratorError, ManifestVerificationContext, ManifestVerificationError,
@@ -392,8 +359,22 @@ pub mod prelude {
             RewardLedgerSnapshot,
         },
     };
+    pub use blake3::Hash as Blake3Hash;
+    pub use sorafs_car::{
+        CarBuildPlan, CarChunk, ChunkStore, FilePlan, InMemoryPayload, PorProof,
+        gateway::{GatewayFetchConfig, GatewayProviderInput},
+        multi_fetch::{
+            CapabilityMismatch, ChunkObserver, ChunkResponse, FetchOptions, FetchOutcome,
+            FetchProvider, FetchRequest, ProviderMetadata, RangeCapability, StreamBudget,
+            TransportHint,
+        },
+        scoreboard::{
+            Eligibility, IneligibilityReason, ProviderTelemetry, Scoreboard, ScoreboardConfig,
+            ScoreboardEntry, TelemetrySnapshot,
+        },
+    };
+    pub use sorafs_chunker::ChunkProfile;
 }
-
 /// Outcome captured after reconciling the circuit manager with the current SoraNet state.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CircuitRefreshReport {
@@ -404,7 +385,6 @@ pub struct CircuitRefreshReport {
     /// Rotation records accumulated by the circuit manager.
     pub rotation_history: Vec<CircuitRotationRecord>,
 }
-
 /// Configuration describing how the orchestrator reacts to handshake downgrades.
 #[derive(Debug, Clone)]
 pub struct DowngradeRemediationConfig {
@@ -423,7 +403,6 @@ pub struct DowngradeRemediationConfig {
     /// Privacy modes that contribute to the downgrade counter (empty = all).
     pub modes: Vec<SoranetPrivacyModeV1>,
 }
-
 impl Default for DowngradeRemediationConfig {
     fn default() -> Self {
         Self {
@@ -437,7 +416,6 @@ impl Default for DowngradeRemediationConfig {
         }
     }
 }
-
 impl DowngradeRemediationConfig {
     /// Returns `true` if downgrade telemetry for the provided mode should be considered.
     #[must_use]
@@ -445,7 +423,6 @@ impl DowngradeRemediationConfig {
         self.modes.is_empty() || self.modes.iter().any(|candidate| candidate == &mode)
     }
 }
-
 #[derive(Default)]
 struct DowngradeState {
     recent: VecDeque<Instant>,
@@ -453,14 +430,12 @@ struct DowngradeState {
     active_mode: Option<ProxyMode>,
     revert_task: Option<JoinHandle<()>>,
 }
-
 pub(crate) struct DowngradeRemediator {
     runtime: Arc<AsyncMutex<LocalProxyRuntime>>,
     config: DowngradeRemediationConfig,
     metrics: Arc<iroha_telemetry::metrics::Metrics>,
     state: Arc<AsyncMutex<DowngradeState>>,
 }
-
 impl DowngradeRemediator {
     fn new(
         runtime: Arc<AsyncMutex<LocalProxyRuntime>>,
@@ -474,12 +449,10 @@ impl DowngradeRemediator {
             state: Arc::new(AsyncMutex::new(DowngradeState::default())),
         }
     }
-
     async fn proxy_label(&self) -> String {
         let guard = self.runtime.lock().await;
         guard.telemetry_label()
     }
-
     async fn observe_handshake_downgrade(&self, _timestamp_unix: u64, mode: SoranetPrivacyModeV1) {
         if !self.config.enabled || !self.config.matches_mode(mode) {
             return;
@@ -514,7 +487,6 @@ impl DowngradeRemediator {
         let resume_mode = self.config.resume_mode.clone();
         state.active_mode = Some(resume_mode.clone());
         drop(state);
-
         match apply_proxy_mode(&self.runtime, self.config.target_mode.clone()).await {
             Ok(_) => {
                 let label = self.proxy_label().await;
@@ -534,7 +506,6 @@ impl DowngradeRemediator {
             }
         }
     }
-
     fn spawn_revert_task(&self, resume_mode: ProxyMode) -> JoinHandle<()> {
         let runtime = Arc::clone(&self.runtime);
         let state = Arc::clone(&self.state);
@@ -574,7 +545,6 @@ impl DowngradeRemediator {
         })
     }
 }
-
 /// Errors surfaced by the orchestrator facade.
 #[derive(Debug, Error)]
 pub enum OrchestratorError {
@@ -606,7 +576,6 @@ pub enum OrchestratorError {
     #[error("unsafe SoraFS fetch resource configuration: {0}")]
     UnsafeResourceConfig(&'static str),
 }
-
 /// Transport policy applied when selecting providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TransportPolicy {
@@ -621,7 +590,6 @@ pub enum TransportPolicy {
     /// fetches (see `roadmap.md`, “SoraNet Anonymity Overlay Program” for the rollback checklist).
     DirectOnly,
 }
-
 impl TransportPolicy {
     pub fn label(self) -> &'static str {
         match self {
@@ -630,7 +598,6 @@ impl TransportPolicy {
             Self::DirectOnly => "direct-only",
         }
     }
-
     /// Parse a [`TransportPolicy`] from its exact canonical V1 label.
     pub fn parse(label: &str) -> Option<Self> {
         match label {
@@ -641,7 +608,6 @@ impl TransportPolicy {
         }
     }
 }
-
 /// Staged anonymity policy enforced while selecting SoraNet-capable providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[allow(clippy::enum_variant_names)]
@@ -654,7 +620,6 @@ pub enum AnonymityPolicy {
     /// Stage C: enforce PQ-only SoraNet paths, falling back to direct transports otherwise.
     StrictPq,
 }
-
 impl AnonymityPolicy {
     pub fn label(self) -> &'static str {
         match self {
@@ -663,7 +628,6 @@ impl AnonymityPolicy {
             Self::StrictPq => "anon-strict-pq",
         }
     }
-
     /// Parse an [`AnonymityPolicy`] from its exact canonical V1 label.
     pub fn parse(label: &str) -> Option<Self> {
         match label {
@@ -673,7 +637,6 @@ impl AnonymityPolicy {
             _ => None,
         }
     }
-
     /// Returns the next less strict policy, if any.
     #[must_use]
     pub const fn fallback(self) -> Option<Self> {
@@ -684,7 +647,6 @@ impl AnonymityPolicy {
         }
     }
 }
-
 /// Rollout phase controlling the default anonymity stage applied to SoraNet paths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RolloutPhase {
@@ -696,7 +658,6 @@ pub enum RolloutPhase {
     /// Default GA posture — enforce PQ-only SoraNet paths (Stage C).
     Default,
 }
-
 impl RolloutPhase {
     /// Stable string label used in config/CLI bindings.
     #[must_use]
@@ -707,7 +668,6 @@ impl RolloutPhase {
             Self::Default => "default",
         }
     }
-
     /// Parse a rollout phase from its exact canonical V1 label.
     pub fn parse(label: &str) -> Option<Self> {
         match label {
@@ -717,7 +677,6 @@ impl RolloutPhase {
             _ => None,
         }
     }
-
     /// Map the rollout phase to the default anonymity policy.
     #[must_use]
     pub const fn default_anonymity_policy(self) -> AnonymityPolicy {
@@ -728,7 +687,6 @@ impl RolloutPhase {
         }
     }
 }
-
 /// Write-mode hint forwarded by SDKs to tighten PQ expectations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WriteModeHint {
@@ -738,7 +696,6 @@ pub enum WriteModeHint {
     /// Upload workloads that require PQ-only paths end-to-end.
     UploadPqOnly,
 }
-
 impl WriteModeHint {
     /// Stable canonical V1 label used in JSON, logs, and metrics.
     #[must_use]
@@ -748,7 +705,6 @@ impl WriteModeHint {
             Self::UploadPqOnly => "upload-pq-only",
         }
     }
-
     /// Parse a [`WriteModeHint`] from its exact canonical V1 label.
     pub fn parse(label: &str) -> Option<Self> {
         match label {
@@ -757,13 +713,11 @@ impl WriteModeHint {
             _ => None,
         }
     }
-
     /// Returns `true` when the hint mandates PQ-only transport.
     #[must_use]
     pub const fn enforces_pq_only(self) -> bool {
         matches!(self, Self::UploadPqOnly)
     }
-
     /// Apply the hint to derive effective transport/anonymity policies.
     #[must_use]
     pub const fn apply(
@@ -777,7 +731,6 @@ impl WriteModeHint {
         }
     }
 }
-
 /// Configuration for polling relay admin privacy feeds.
 #[derive(Clone)]
 pub struct PrivacyEventsConfig {
@@ -788,7 +741,6 @@ pub struct PrivacyEventsConfig {
     /// Request timeout applied to each polling request.
     pub request_timeout: Duration,
 }
-
 impl Default for PrivacyEventsConfig {
     fn default() -> Self {
         Self {
@@ -798,7 +750,6 @@ impl Default for PrivacyEventsConfig {
         }
     }
 }
-
 impl PrivacyEventsConfig {
     /// Override the poll interval between successive requests.
     #[must_use]
@@ -806,14 +757,12 @@ impl PrivacyEventsConfig {
         self.poll_interval = interval;
         self
     }
-
     /// Override the request timeout applied to polling requests.
     #[must_use]
     pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = timeout;
         self
     }
-
     /// Override the aggregation bucket parameters.
     #[must_use]
     pub fn with_bucket(mut self, bucket: PrivacyBucketConfig) -> Self {
@@ -821,7 +770,6 @@ impl PrivacyEventsConfig {
         self
     }
 }
-
 /// Optional overrides forcing policy stages during fetches.
 #[derive(Debug, Clone, Default)]
 pub struct PolicyOverride {
@@ -830,7 +778,6 @@ pub struct PolicyOverride {
     /// Override for the anonymity policy applied during fetches.
     pub anonymity_policy: Option<AnonymityPolicy>,
 }
-
 impl PolicyOverride {
     /// Construct a new override from the supplied policies.
     #[must_use]
@@ -843,20 +790,17 @@ impl PolicyOverride {
             anonymity_policy,
         }
     }
-
     /// Returns `true` when neither transport nor anonymity overrides are configured.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.transport_policy.is_none() && self.anonymity_policy.is_none()
     }
-
     /// Attach a transport policy override.
     #[must_use]
     pub fn with_transport_policy(mut self, policy: TransportPolicy) -> Self {
         self.transport_policy = Some(policy);
         self
     }
-
     /// Attach an anonymity policy override.
     #[must_use]
     pub fn with_anonymity_policy(mut self, policy: AnonymityPolicy) -> Self {
@@ -864,7 +808,6 @@ impl PolicyOverride {
         self
     }
 }
-
 /// Combined configuration applied to scoreboard generation and fetch scheduling.
 #[derive(Clone)]
 pub struct OrchestratorConfig {
@@ -908,7 +851,6 @@ pub struct OrchestratorConfig {
     /// Optional Taikai cache configuration wired for SNNet-14 distribution pilots.
     pub taikai_cache: Option<TaikaiCacheConfig>,
 }
-
 impl OrchestratorConfig {
     /// Attach a telemetry region label used when emitting metrics.
     #[must_use]
@@ -916,21 +858,18 @@ impl OrchestratorConfig {
         self.telemetry_region = Some(region.into());
         self
     }
-
     /// Limit the number of providers selected from the scoreboard.
     #[must_use]
     pub fn with_max_providers(mut self, limit: NonZeroUsize) -> Self {
         self.max_providers = Some(limit);
         self
     }
-
     /// Override the transport policy used when ranking providers.
     #[must_use]
     pub fn with_transport_policy(mut self, policy: TransportPolicy) -> Self {
         self.transport_policy = policy;
         self
     }
-
     /// Configure the rollout phase controlling the default anonymity posture.
     #[must_use]
     pub fn with_rollout_phase(mut self, phase: RolloutPhase) -> Self {
@@ -940,7 +879,6 @@ impl OrchestratorConfig {
         }
         self
     }
-
     /// Override the anonymity policy.
     #[must_use]
     pub fn with_anonymity_policy(mut self, policy: AnonymityPolicy) -> Self {
@@ -948,77 +886,66 @@ impl OrchestratorConfig {
         self.anonymity_policy_override = Some(policy);
         self
     }
-
     /// Attach policy overrides that pin transport/anonymity stages.
     #[must_use]
     pub fn with_policy_override(mut self, overrides: PolicyOverride) -> Self {
         self.policy_override = overrides;
         self
     }
-
     /// Attach a guard set used to prioritise pinned SoraNet relays.
     #[must_use]
     pub fn with_guard_set(mut self, guard_set: GuardSet) -> Self {
         self.guard_set = Some(guard_set);
         self
     }
-
     /// Attach a relay directory describing SoraNet relays.
     #[must_use]
     pub fn with_relay_directory(mut self, directory: RelayDirectory) -> Self {
         self.relay_directory = Some(directory);
         self
     }
-
     /// Attach path hints used to refine relay selection and MASQUE bypass eligibility.
     #[must_use]
     pub fn with_relay_path_hints(mut self, hints: Vec<RelayPathHint>) -> Self {
         self.relay_path_hints = hints;
         self
     }
-
     /// Override the circuit manager configuration (set to `None` to disable lifecycle management).
     #[must_use]
     pub fn with_circuit_manager(mut self, config: Option<CircuitManagerConfig>) -> Self {
         self.circuit_manager = config;
         self
     }
-
     /// Configure the local QUIC proxy used for browser/SDK integrations.
     #[must_use]
     pub fn with_local_proxy(mut self, config: Option<LocalQuicProxyConfig>) -> Self {
         self.local_proxy = config;
         self
     }
-
     /// Override the write-mode hint applied during provider selection.
     #[must_use]
     pub fn with_write_mode(mut self, mode: WriteModeHint) -> Self {
         self.write_mode = mode;
         self
     }
-
     /// Attach an explicit compliance policy.
     #[must_use]
     pub fn with_compliance_policy(mut self, policy: CompliancePolicy) -> Self {
         self.compliance = policy;
         self
     }
-
     /// Override the privacy events polling configuration.
     #[must_use]
     pub fn with_privacy_events(mut self, config: Option<PrivacyEventsConfig>) -> Self {
         self.privacy_events = config;
         self
     }
-
     /// Attach a Taikai cache configuration. `None` disables the cache.
     #[must_use]
     pub fn with_taikai_cache(mut self, cache: Option<TaikaiCacheConfig>) -> Self {
         self.taikai_cache = cache;
         self
     }
-
     /// Configure the downgrade remediation policy.
     #[must_use]
     pub fn with_downgrade_remediation(
@@ -1029,7 +956,6 @@ impl OrchestratorConfig {
         self
     }
 }
-
 impl Default for OrchestratorConfig {
     fn default() -> Self {
         let fetch = FetchOptions {
@@ -1059,33 +985,26 @@ impl Default for OrchestratorConfig {
         }
     }
 }
-
 /// Helper utilities for configuring the orchestrator via Norito JSON payloads.
 pub mod bindings {
+    use super::*;
+    use norito::json::{Map, Value};
     use std::{
         collections::BTreeSet, convert::TryFrom, num::NonZeroU32, path::PathBuf, time::Duration,
     };
-
-    use norito::json::{Map, Value};
-
-    use super::*;
-
     /// Errors that may occur while parsing [`OrchestratorConfig`] from JSON.
     #[derive(Debug, Error)]
     #[error("{0}")]
     pub struct ConfigJsonError(String);
-
     impl ConfigJsonError {
         fn new(message: impl Into<String>) -> Self {
             Self(message.into())
         }
     }
-
     /// Serialise an [`OrchestratorConfig`] into a Norito JSON value.
     #[must_use]
     pub fn config_to_json(config: &OrchestratorConfig) -> Value {
         let mut root = Map::new();
-
         let mut scoreboard = Map::new();
         scoreboard.insert(
             "latency_cap_ms".into(),
@@ -1110,7 +1029,6 @@ pub mod bindings {
             );
         }
         root.insert("scoreboard".into(), Value::Object(scoreboard));
-
         let mut fetch = Map::new();
         fetch.insert(
             "verify_lengths".into(),
@@ -1131,7 +1049,6 @@ pub mod bindings {
             fetch.insert("global_parallel_limit".into(), Value::from(limit as u64));
         }
         root.insert("fetch".into(), Value::Object(fetch));
-
         if let Some(region) = &config.telemetry_region {
             root.insert("telemetry_region".into(), Value::String(region.clone()));
         }
@@ -1142,7 +1059,6 @@ pub mod bindings {
             "rollout_phase".into(),
             Value::from(config.rollout_phase.label()),
         );
-
         root.insert(
             "anonymity_policy".into(),
             Value::from(config.anonymity_policy.label()),
@@ -1170,11 +1086,9 @@ pub mod bindings {
             root.insert("policy_override".into(), Value::Null);
         }
         root.insert("write_mode".into(), Value::from(config.write_mode.label()));
-
         if !config.compliance.is_empty() {
             root.insert("compliance".into(), compliance_to_json(&config.compliance));
         }
-
         if !config.relay_path_hints.is_empty() {
             let hints = config
                 .relay_path_hints
@@ -1204,7 +1118,6 @@ pub mod bindings {
         } else {
             root.insert("relay_path_hints".into(), Value::Null);
         }
-
         match &config.privacy_events {
             Some(privacy) => {
                 let mut bucket = Map::new();
@@ -1232,7 +1145,6 @@ pub mod bindings {
                     "expected_shares".into(),
                     Value::from(u64::from(privacy.bucket.expected_shares)),
                 );
-
                 let mut privacy_value = Map::new();
                 privacy_value.insert(
                     "poll_interval_secs".into(),
@@ -1249,7 +1161,6 @@ pub mod bindings {
                 root.insert("privacy_events".into(), Value::Null);
             }
         }
-
         let mut circuit = Map::new();
         match &config.circuit_manager {
             Some(cfg) => {
@@ -1264,7 +1175,6 @@ pub mod bindings {
             }
         }
         root.insert("circuit_manager".into(), Value::Object(circuit));
-
         if let Some(proxy_cfg) = &config.local_proxy {
             let value =
                 norito::json::to_value(proxy_cfg).expect("local proxy config should serialise");
@@ -1272,7 +1182,6 @@ pub mod bindings {
         } else {
             root.insert("local_proxy".into(), Value::Null);
         }
-
         match &config.downgrade_remediation {
             Some(remediation) => {
                 let mut map = Map::new();
@@ -1315,29 +1224,23 @@ pub mod bindings {
                 root.insert("downgrade_remediation".into(), Value::Null);
             }
         }
-
         if let Some(cache) = &config.taikai_cache {
             root.insert("taikai_cache".into(), taikai_cache_to_json(cache));
         } else {
             root.insert("taikai_cache".into(), Value::Null);
         }
-
         Value::Object(root)
     }
-
     /// Parse an [`OrchestratorConfig`] from a Norito JSON value.
     pub fn config_from_json(value: &Value) -> Result<OrchestratorConfig, ConfigJsonError> {
         let root = value
             .as_object()
             .ok_or_else(|| ConfigJsonError::new("orchestrator config must be a JSON object"))?;
-
         let mut config = OrchestratorConfig::default();
-
         if let Some(scoreboard_value) = root.get("scoreboard") {
             let scoreboard = scoreboard_value
                 .as_object()
                 .ok_or_else(|| ConfigJsonError::new("scoreboard must be a JSON object"))?;
-
             if let Some(latency_value) = scoreboard.get("latency_cap_ms") {
                 let latency = latency_value
                     .as_u64()
@@ -1346,7 +1249,6 @@ pub mod bindings {
                     ConfigJsonError::new("scoreboard.latency_cap_ms exceeds u32::MAX")
                 })?;
             }
-
             if let Some(weight_value) = scoreboard.get("weight_scale") {
                 let weight = weight_value
                     .as_u64()
@@ -1357,14 +1259,12 @@ pub mod bindings {
                 config.scoreboard.weight_scale = NonZeroU32::new(weight_u32)
                     .ok_or_else(|| ConfigJsonError::new("scoreboard.weight_scale must be > 0"))?;
             }
-
             if let Some(grace_value) = scoreboard.get("telemetry_grace_secs") {
                 let secs = grace_value.as_u64().ok_or_else(|| {
                     ConfigJsonError::new("scoreboard.telemetry_grace_secs must be u64")
                 })?;
                 config.scoreboard.telemetry_grace_period = Duration::from_secs(secs);
             }
-
             if let Some(path_value) = scoreboard.get("persist_path") {
                 let path = path_value.as_str().ok_or_else(|| {
                     ConfigJsonError::new("scoreboard.persist_path must be a string")
@@ -1375,7 +1275,6 @@ pub mod bindings {
                     config.scoreboard.persist_path = None;
                 }
             }
-
             if let Some(now_value) = scoreboard.get("now_unix_secs") {
                 let now = now_value
                     .as_u64()
@@ -1383,12 +1282,10 @@ pub mod bindings {
                 config.scoreboard.now_unix_secs = now;
             }
         }
-
         if let Some(fetch_value) = root.get("fetch") {
             let fetch = fetch_value
                 .as_object()
                 .ok_or_else(|| ConfigJsonError::new("fetch must be a JSON object"))?;
-
             if let Some(verify_lengths) = fetch.get("verify_lengths") {
                 let verify_lengths = verify_lengths.as_bool().ok_or_else(|| {
                     ConfigJsonError::new("fetch.verify_lengths must be a boolean")
@@ -1400,7 +1297,6 @@ pub mod bindings {
                 }
                 config.fetch.verify_lengths = true;
             }
-
             if let Some(verify_digests) = fetch.get("verify_digests") {
                 let verify_digests = verify_digests.as_bool().ok_or_else(|| {
                     ConfigJsonError::new("fetch.verify_digests must be a boolean")
@@ -1412,7 +1308,6 @@ pub mod bindings {
                 }
                 config.fetch.verify_digests = true;
             }
-
             if let Some(retry_budget) = fetch.get("retry_budget") {
                 let retries = retry_budget.as_u64().ok_or_else(|| {
                     ConfigJsonError::new("fetch.retry_budget must be a positive integer")
@@ -1426,7 +1321,6 @@ pub mod bindings {
                 }
                 config.fetch.per_chunk_retry_limit = Some(retries);
             }
-
             if let Some(provider_threshold) = fetch.get("provider_failure_threshold") {
                 let value = provider_threshold.as_u64().ok_or_else(|| {
                     ConfigJsonError::new("fetch.provider_failure_threshold must be u64")
@@ -1441,7 +1335,6 @@ pub mod bindings {
                 }
                 config.fetch.provider_failure_threshold = value;
             }
-
             if let Some(global_limit) = fetch.get("global_parallel_limit") {
                 let limit = global_limit.as_u64().ok_or_else(|| {
                     ConfigJsonError::new("fetch.global_parallel_limit must be a positive integer")
@@ -1457,7 +1350,6 @@ pub mod bindings {
                 config.fetch.global_parallel_limit = Some(limit);
             }
         }
-
         if let Some(region_value) = root.get("telemetry_region") {
             let region = region_value.as_str().ok_or_else(|| {
                 ConfigJsonError::new("telemetry_region must be a string when present")
@@ -1468,7 +1360,6 @@ pub mod bindings {
                 config.telemetry_region = None;
             }
         }
-
         if let Some(max_providers) = root.get("max_providers") {
             let limit = max_providers
                 .as_u64()
@@ -1482,7 +1373,6 @@ pub mod bindings {
             }
             config.max_providers = NonZeroUsize::new(limit_usize);
         }
-
         if let Some(hints_value) = root.get("relay_path_hints") {
             if hints_value.is_null() {
                 config.relay_path_hints = Vec::new();
@@ -1576,7 +1466,6 @@ pub mod bindings {
                 config.relay_path_hints = hints;
             }
         }
-
         if let Some(phase_value) = root.get("rollout_phase") {
             let label = phase_value.as_str().ok_or_else(|| {
                 ConfigJsonError::new("rollout_phase must be a string when present")
@@ -1589,7 +1478,6 @@ pub mod bindings {
                 config.anonymity_policy = phase.default_anonymity_policy();
             }
         }
-
         if let Some(policy_value) = root.get("anonymity_policy_override") {
             let label = policy_value.as_str().ok_or_else(|| {
                 ConfigJsonError::new("anonymity_policy_override must be a string when present")
@@ -1602,7 +1490,6 @@ pub mod bindings {
             config.anonymity_policy = policy;
             config.anonymity_policy_override = Some(policy);
         }
-
         if let Some(policy_value) = root.get("anonymity_policy") {
             let label = policy_value.as_str().ok_or_else(|| {
                 ConfigJsonError::new("anonymity_policy must be a string when present")
@@ -1615,7 +1502,6 @@ pub mod bindings {
             config.anonymity_policy = policy;
             config.anonymity_policy_override = Some(policy);
         }
-
         if let Some(policy_value) = root.get("transport_policy") {
             let label = policy_value.as_str().ok_or_else(|| {
                 ConfigJsonError::new("transport_policy must be a string when present")
@@ -1626,7 +1512,6 @@ pub mod bindings {
                 )
             })?;
         }
-
         if let Some(override_value) = root.get("policy_override") {
             if override_value.is_null() {
                 config.policy_override = PolicyOverride::default();
@@ -1660,13 +1545,11 @@ pub mod bindings {
                 config.policy_override = overrides;
             }
         }
-
         if let Some(compliance_value) = root.get("compliance") {
             let compliance = compliance_value.as_object().ok_or_else(|| {
                 ConfigJsonError::new("compliance must be a JSON object when present")
             })?;
             let mut policy = CompliancePolicy::default();
-
             if let Some(jurisdictions) = compliance.get("operator_jurisdictions") {
                 let array = jurisdictions.as_array().ok_or_else(|| {
                     ConfigJsonError::new("compliance.operator_jurisdictions must be an array")
@@ -1685,7 +1568,6 @@ pub mod bindings {
                 }
                 policy.set_operator_jurisdictions(collected);
             }
-
             if let Some(opt_outs) = compliance.get("jurisdiction_opt_outs") {
                 let array = opt_outs.as_array().ok_or_else(|| {
                     ConfigJsonError::new("compliance.jurisdiction_opt_outs must be an array")
@@ -1702,7 +1584,6 @@ pub mod bindings {
                 }
                 policy.set_jurisdiction_opt_outs(set);
             }
-
             if let Some(opt_outs) = compliance.get("blinded_cid_opt_outs") {
                 let array = opt_outs.as_array().ok_or_else(|| {
                     ConfigJsonError::new("compliance.blinded_cid_opt_outs must be an array")
@@ -1730,7 +1611,6 @@ pub mod bindings {
                 }
                 policy.set_blinded_cid_opt_outs(set);
             }
-
             if let Some(contacts) = compliance.get("audit_contacts") {
                 let array = contacts.as_array().ok_or_else(|| {
                     ConfigJsonError::new("compliance.audit_contacts must be an array")
@@ -1752,7 +1632,6 @@ pub mod bindings {
                 }
                 policy.set_audit_contacts(collected);
             }
-
             if let Some(attestations) = compliance.get("attestations") {
                 let array = attestations.as_array().ok_or_else(|| {
                     ConfigJsonError::new("compliance.attestations must be an array")
@@ -1863,10 +1742,8 @@ pub mod bindings {
                 }
                 policy.set_attestations(collected);
             }
-
             config.compliance = policy;
         }
-
         if let Some(hints_value) = root.get("relay_path_hints") {
             if hints_value.is_null() {
                 config.relay_path_hints = Vec::new();
@@ -1942,7 +1819,6 @@ pub mod bindings {
                         })
                         .transpose()?
                         .unwrap_or(false);
-
                     let hint =
                         RelayPathHint::from_hex(relay_hex, avg_rtt_ms, region, asn, validator_lane)
                             .map_err(|err| {
@@ -1955,7 +1831,6 @@ pub mod bindings {
                 config.relay_path_hints = hints;
             }
         }
-
         if let Some(privacy_value) = root.get("privacy_events") {
             if privacy_value.is_null() {
                 config.privacy_events = None;
@@ -1963,9 +1838,7 @@ pub mod bindings {
                 let privacy_obj = privacy_value.as_object().ok_or_else(|| {
                     ConfigJsonError::new("privacy_events must be a JSON object or null")
                 })?;
-
                 let mut privacy_config = PrivacyEventsConfig::default();
-
                 if let Some(poll_value) = privacy_obj.get("poll_interval_secs") {
                     let secs = poll_value.as_u64().ok_or_else(|| {
                         ConfigJsonError::new(
@@ -1979,7 +1852,6 @@ pub mod bindings {
                     }
                     privacy_config.poll_interval = Duration::from_secs(secs);
                 }
-
                 if let Some(timeout_value) = privacy_obj.get("request_timeout_secs") {
                     let secs = timeout_value.as_u64().ok_or_else(|| {
                         ConfigJsonError::new(
@@ -1993,13 +1865,11 @@ pub mod bindings {
                     }
                     privacy_config.request_timeout = Duration::from_secs(secs);
                 }
-
                 if let Some(bucket_value) = privacy_obj.get("bucket") {
                     let bucket_obj = bucket_value.as_object().ok_or_else(|| {
                         ConfigJsonError::new("privacy_events.bucket must be a JSON object")
                     })?;
                     let mut bucket = PrivacyBucketConfig::default();
-
                     if let Some(secs) = bucket_obj.get("bucket_secs") {
                         bucket.bucket_secs = secs.as_u64().ok_or_else(|| {
                             ConfigJsonError::new(
@@ -2012,7 +1882,6 @@ pub mod bindings {
                             ));
                         }
                     }
-
                     if let Some(contributors) = bucket_obj.get("min_contributors") {
                         bucket.min_contributors = contributors.as_u64().ok_or_else(|| {
                             ConfigJsonError::new(
@@ -2020,7 +1889,6 @@ pub mod bindings {
                             )
                         })?;
                     }
-
                     if let Some(delay) = bucket_obj.get("flush_delay_buckets") {
                         bucket.flush_delay_buckets = delay.as_u64().ok_or_else(|| {
                             ConfigJsonError::new(
@@ -2028,7 +1896,6 @@ pub mod bindings {
                             )
                         })?;
                     }
-
                     if let Some(force) = bucket_obj.get("force_flush_buckets") {
                         bucket.force_flush_buckets = force.as_u64().ok_or_else(|| {
                             ConfigJsonError::new(
@@ -2036,7 +1903,6 @@ pub mod bindings {
                             )
                         })?;
                     }
-
                     if let Some(max_completed) = bucket_obj.get("max_completed_buckets") {
                         let value = max_completed.as_u64().ok_or_else(|| {
                             ConfigJsonError::new(
@@ -2054,7 +1920,6 @@ pub mod bindings {
                             ));
                         }
                     }
-
                     if let Some(expected) = bucket_obj.get("expected_shares") {
                         let value = expected.as_u64().ok_or_else(|| {
                             ConfigJsonError::new(
@@ -2067,7 +1932,6 @@ pub mod bindings {
                             )
                         })?;
                     }
-
                     bucket.validate().map_err(|err| {
                         ConfigJsonError::new(format!(
                             "privacy_events.bucket configuration invalid: {err}"
@@ -2075,17 +1939,14 @@ pub mod bindings {
                     })?;
                     privacy_config.bucket = bucket;
                 }
-
                 privacy_config.bucket.validate().map_err(|err| {
                     ConfigJsonError::new(format!(
                         "privacy_events.bucket configuration invalid: {err}"
                     ))
                 })?;
-
                 config.privacy_events = Some(privacy_config);
             }
         }
-
         if let Some(circuit_value) = root.get("circuit_manager") {
             let circuit_obj = circuit_value.as_object().ok_or_else(|| {
                 ConfigJsonError::new("circuit_manager must be a JSON object when present")
@@ -2134,7 +1995,6 @@ pub mod bindings {
                 config.circuit_manager = None;
             }
         }
-
         if let Some(write_mode_value) = root.get("write_mode") {
             let label = write_mode_value
                 .as_str()
@@ -2143,7 +2003,6 @@ pub mod bindings {
                 ConfigJsonError::new("write_mode must be one of read-only|upload-pq-only")
             })?;
         }
-
         if let Some(proxy_value) = root.get("local_proxy") {
             if proxy_value.is_null() {
                 config.local_proxy = None;
@@ -2155,7 +2014,6 @@ pub mod bindings {
                 config.local_proxy = Some(proxy_cfg);
             }
         }
-
         if let Some(remediation_value) = root.get("downgrade_remediation") {
             if remediation_value.is_null() {
                 config.downgrade_remediation = None;
@@ -2164,7 +2022,6 @@ pub mod bindings {
                     ConfigJsonError::new("downgrade_remediation must be an object or null")
                 })?;
                 let mut remediation = DowngradeRemediationConfig::default();
-
                 if let Some(enabled_value) = remediation_map.get("enabled") {
                     remediation.enabled = enabled_value.as_bool().ok_or_else(|| {
                         ConfigJsonError::new("downgrade_remediation.enabled must be a boolean")
@@ -2249,11 +2106,9 @@ pub mod bindings {
                         remediation.modes = modes;
                     }
                 }
-
                 config.downgrade_remediation = Some(remediation);
             }
         }
-
         if let Some(cache_value) = root.get("taikai_cache") {
             if cache_value.is_null() {
                 config.taikai_cache = None;
@@ -2262,10 +2117,8 @@ pub mod bindings {
                 config.taikai_cache = Some(cache);
             }
         }
-
         Ok(config)
     }
-
     fn taikai_cache_to_json(config: &TaikaiCacheConfig) -> Value {
         let mut root = Map::new();
         root.insert(
@@ -2292,7 +2145,6 @@ pub mod bindings {
             "cold_retention_secs".into(),
             Value::from(config.cold_retention.as_secs()),
         );
-
         let mut qos = Map::new();
         qos.insert(
             "priority_rate_bps".into(),
@@ -2311,7 +2163,6 @@ pub mod bindings {
             Value::from(u64::from(config.qos.burst_multiplier)),
         );
         root.insert("qos".into(), Value::Object(qos));
-
         let mut reliability = Map::new();
         reliability.insert(
             "failures_to_trip".into(),
@@ -2322,15 +2173,12 @@ pub mod bindings {
             Value::from(config.reliability.open_secs),
         );
         root.insert("reliability".into(), Value::Object(reliability));
-
         Value::Object(root)
     }
-
     fn taikai_cache_from_json(value: &Value) -> Result<TaikaiCacheConfig, ConfigJsonError> {
         let object = value
             .as_object()
             .ok_or_else(|| ConfigJsonError::new("taikai_cache must be a JSON object"))?;
-
         let hot_capacity = object
             .get("hot_capacity_bytes")
             .and_then(Value::as_u64)
@@ -2343,7 +2191,6 @@ pub mod bindings {
             .ok_or_else(|| {
                 ConfigJsonError::new("taikai_cache.hot_retention_secs must be an unsigned integer")
             })?;
-
         let warm_capacity = object
             .get("warm_capacity_bytes")
             .and_then(Value::as_u64)
@@ -2356,7 +2203,6 @@ pub mod bindings {
             .ok_or_else(|| {
                 ConfigJsonError::new("taikai_cache.warm_retention_secs must be an unsigned integer")
             })?;
-
         let cold_capacity = object
             .get("cold_capacity_bytes")
             .and_then(Value::as_u64)
@@ -2369,7 +2215,6 @@ pub mod bindings {
             .ok_or_else(|| {
                 ConfigJsonError::new("taikai_cache.cold_retention_secs must be an unsigned integer")
             })?;
-
         let qos_value = object
             .get("qos")
             .ok_or_else(|| ConfigJsonError::new("taikai_cache.qos section is required"))?;
@@ -2406,7 +2251,6 @@ pub mod bindings {
                     "taikai_cache.qos.burst_multiplier must be an unsigned integer",
                 )
             })?;
-
         Ok(TaikaiCacheConfig {
             hot_capacity_bytes: hot_capacity,
             hot_retention: Duration::from_secs(hot_retention_secs),
@@ -2452,10 +2296,8 @@ pub mod bindings {
             },
         })
     }
-
     fn compliance_to_json(policy: &CompliancePolicy) -> Value {
         let mut map = Map::new();
-
         if !policy.operator_jurisdictions().is_empty() {
             let values = policy
                 .operator_jurisdictions()
@@ -2464,7 +2306,6 @@ pub mod bindings {
                 .collect();
             map.insert("operator_jurisdictions".into(), Value::Array(values));
         }
-
         let jurisdiction_opt_outs: Vec<Value> = policy
             .jurisdiction_opt_outs()
             .map(|code| Value::String(code.to_string()))
@@ -2475,7 +2316,6 @@ pub mod bindings {
                 Value::Array(jurisdiction_opt_outs),
             );
         }
-
         let cid_opt_outs: Vec<Value> = policy
             .blinded_cid_opt_outs()
             .map(|digest| Value::String(hex::encode_upper(digest)))
@@ -2483,7 +2323,6 @@ pub mod bindings {
         if !cid_opt_outs.is_empty() {
             map.insert("blinded_cid_opt_outs".into(), Value::Array(cid_opt_outs));
         }
-
         if !policy.audit_contacts().is_empty() {
             let values = policy
                 .audit_contacts()
@@ -2492,7 +2331,6 @@ pub mod bindings {
                 .collect();
             map.insert("audit_contacts".into(), Value::Array(values));
         }
-
         if !policy.attestations().is_empty() {
             let entries = policy
                 .attestations()
@@ -2522,10 +2360,8 @@ pub mod bindings {
                 .collect();
             map.insert("attestations".into(), Value::Array(entries));
         }
-
         Value::Object(map)
     }
-
     fn normalise_iso_code(raw: &str) -> Result<String, String> {
         let trimmed = raw.trim();
         if trimmed.len() != 2 || !trimmed.chars().all(|c| c.is_ascii_alphabetic()) {
@@ -2536,7 +2372,6 @@ pub mod bindings {
         Ok(trimmed.to_ascii_uppercase())
     }
 }
-
 fn validate_provider_metadata_bounds(metadata: &ProviderMetadata) -> Result<(), &'static str> {
     for value in [
         metadata.provider_id.as_deref(),
@@ -2586,7 +2421,6 @@ fn validate_provider_metadata_bounds(metadata: &ProviderMetadata) -> Result<(), 
     }
     Ok(())
 }
-
 fn bounded_fetch_options(options: &FetchOptions) -> Result<FetchOptions, OrchestratorError> {
     let retry_limit =
         options
@@ -2619,7 +2453,6 @@ fn bounded_fetch_options(options: &FetchOptions) -> Result<FetchOptions, Orchest
     }
     Ok(options.clone())
 }
-
 /// Primary entry point for SoraFS orchestrator operations.
 pub struct Orchestrator {
     config: OrchestratorConfig,
@@ -2629,7 +2462,6 @@ pub struct Orchestrator {
     taikai_cache: Option<TaikaiCacheHandle>,
     taikai_cache_tracker: Option<Arc<Mutex<CacheAdmissionTracker>>>,
 }
-
 impl Clone for Orchestrator {
     fn clone(&self) -> Self {
         Self {
@@ -2642,30 +2474,25 @@ impl Clone for Orchestrator {
         }
     }
 }
-
 #[derive(Clone)]
 pub(crate) struct LocalProxyRuntime {
     config: LocalQuicProxyConfig,
     handle: Option<LocalQuicProxyHandle>,
 }
-
 impl LocalProxyRuntime {
     fn new(config: LocalQuicProxyConfig, handle: Option<LocalQuicProxyHandle>) -> Self {
         Self { config, handle }
     }
-
     fn telemetry_label(&self) -> String {
         self.config
             .telemetry_label
             .clone()
             .unwrap_or_else(|| "proxy".to_string())
     }
-
     #[allow(dead_code)]
     fn mode(&self) -> ProxyMode {
         self.config.proxy_mode.clone()
     }
-
     fn manifest(&self) -> Result<Option<BrowserExtensionManifest>, ProxyError> {
         match self.handle.as_ref() {
             Some(handle) => handle.browser_manifest(),
@@ -2673,7 +2500,6 @@ impl LocalProxyRuntime {
         }
     }
 }
-
 impl Orchestrator {
     /// Creates a new orchestrator with the supplied configuration.
     #[must_use]
@@ -2704,7 +2530,6 @@ impl Orchestrator {
                 "relay_path_hints supplied without a relay_directory; ignoring hints"
             );
         }
-
         let circuit_manager = config
             .circuit_manager
             .clone()
@@ -2768,20 +2593,17 @@ impl Orchestrator {
             taikai_cache_tracker,
         }
     }
-
     /// Returns the orchestrator configuration.
     #[must_use]
     pub fn config(&self) -> &OrchestratorConfig {
         &self.config
     }
-
     /// Returns the local proxy handle if one was spawned.
     pub async fn local_proxy(&self) -> Option<LocalQuicProxyHandle> {
         let runtime = self.proxy_runtime.as_ref()?;
         let guard = runtime.lock().await;
         guard.handle.clone()
     }
-
     async fn proxy_manifest(&self) -> Result<Option<BrowserExtensionManifest>, OrchestratorError> {
         let Some(runtime) = self.proxy_runtime.as_ref() else {
             return Ok(None);
@@ -2789,7 +2611,6 @@ impl Orchestrator {
         let guard = runtime.lock().await;
         Ok(guard.manifest()?)
     }
-
     /// Updates the local proxy runtime mode, restarting the proxy if necessary.
     pub async fn set_proxy_mode(
         &mut self,
@@ -2805,26 +2626,22 @@ impl Orchestrator {
         }
         Ok(manifest)
     }
-
     /// Returns the Taikai cache handle if configured.
     #[must_use]
     pub fn taikai_cache(&self) -> Option<Arc<Mutex<TaikaiCache>>> {
         self.taikai_cache.as_ref().map(TaikaiCacheHandle::cache)
     }
-
     /// Returns a clone of the Taikai cache handle so callers can interact
     /// with the cache and pull queue without managing the underlying mutexes.
     #[must_use]
     pub fn taikai_cache_handle(&self) -> Option<TaikaiCacheHandle> {
         self.taikai_cache.clone()
     }
-
     /// Returns the Taikai cache admission tracker if configured.
     #[must_use]
     pub fn taikai_cache_tracker(&self) -> Option<Arc<Mutex<CacheAdmissionTracker>>> {
         self.taikai_cache_tracker.clone()
     }
-
     /// Applies a cache admission gossip entry to the Taikai shard ring.
     pub fn apply_cache_admission_gossip(
         &self,
@@ -2846,7 +2663,6 @@ impl Orchestrator {
             }
         }
     }
-
     fn snapshot_taikai_cache_stats(&self) -> Option<TaikaiCacheStatsSnapshot> {
         self.taikai_cache
             .as_ref()
@@ -2862,13 +2678,11 @@ impl Orchestrator {
                 }
             })
     }
-
     fn snapshot_taikai_queue_stats(&self) -> Option<TaikaiPullQueueStats> {
         self.taikai_cache
             .as_ref()
             .map(TaikaiCacheHandle::queue_stats)
     }
-
     /// Refresh the circuit manager using the supplied timestamp.
     pub fn reconcile_circuits_at(
         &self,
@@ -2883,7 +2697,6 @@ impl Orchestrator {
         let Some(guard_set) = &self.config.guard_set else {
             return Ok(None);
         };
-
         let now_unix = now
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs())
@@ -2892,7 +2705,6 @@ impl Orchestrator {
             .config
             .write_mode
             .apply(self.config.transport_policy, self.config.anonymity_policy);
-
         let (events, active, rotation_history) = {
             let mut manager = manager
                 .lock()
@@ -2904,19 +2716,16 @@ impl Orchestrator {
             let rotation_history = manager.rotation_history().to_vec();
             (events, active, rotation_history)
         };
-
         Ok(Some(CircuitRefreshReport {
             events,
             active,
             rotation_history,
         }))
     }
-
     /// Refreshes circuits using `SystemTime::now()` as the reference timestamp.
     pub fn reconcile_circuits(&self) -> Result<Option<CircuitRefreshReport>, OrchestratorError> {
         self.reconcile_circuits_at(SystemTime::now())
     }
-
     /// Returns the currently active SoraNet circuits managed by the orchestrator.
     pub fn active_circuits(&self) -> Vec<CircuitInfo> {
         self.circuit_manager
@@ -2929,7 +2738,6 @@ impl Orchestrator {
             })
             .unwrap_or_default()
     }
-
     /// Returns the aggregated circuit rotation history.
     pub fn circuit_rotation_history(&self) -> Vec<CircuitRotationRecord> {
         self.circuit_manager
@@ -2943,7 +2751,6 @@ impl Orchestrator {
             })
             .unwrap_or_default()
     }
-
     /// Records a latency sample for the specified circuit.
     pub fn record_circuit_latency(&self, circuit_id: CircuitId, latency: Duration) -> bool {
         let Some(manager) = &self.circuit_manager else {
@@ -2954,7 +2761,6 @@ impl Orchestrator {
             .expect("soranet circuit manager mutex poisoned")
             .record_latency(circuit_id, latency)
     }
-
     /// Tears down every active circuit, returning rotation records for the retired paths.
     pub fn teardown_circuits(&self, now: SystemTime) -> Option<Vec<CircuitRotationRecord>> {
         let Some(manager) = &self.circuit_manager else {
@@ -2970,7 +2776,6 @@ impl Orchestrator {
             .teardown_all(now_unix);
         Some(records)
     }
-
     fn refresh_circuits(&self) -> Result<(), OrchestratorError> {
         if let Some(mut report) = self.reconcile_circuits()?
             && !report.events.is_empty()
@@ -2979,10 +2784,8 @@ impl Orchestrator {
                 debug!("soranet circuit event: {:?}", event);
             }
         }
-
         Ok(())
     }
-
     /// Builds a provider scoreboard from the supplied plan, adverts, and telemetry snapshot.
     ///
     /// When `ScoreboardConfig::persist_path` is set, the artefact is persisted automatically by
@@ -3006,7 +2809,6 @@ impl Orchestrator {
         scoreboard::build_scoreboard(plan, adverts, telemetry, &self.config.scoreboard)
             .map_err(OrchestratorError::Scoreboard)
     }
-
     /// Builds a scoreboard and immediately runs the multi-source fetch loop.
     pub async fn fetch_plan<F, Fut, E>(
         &self,
@@ -3023,7 +2825,6 @@ impl Orchestrator {
         let scoreboard = self.build_scoreboard(plan, adverts, telemetry)?;
         self.fetch_with_scoreboard(plan, &scoreboard, fetcher).await
     }
-
     /// Runs the fetch loop using an already constructed scoreboard.
     pub async fn fetch_with_scoreboard<F, Fut, E>(
         &self,
@@ -3039,7 +2840,6 @@ impl Orchestrator {
         self.refresh_circuits()?;
         self.execute_fetch(plan, scoreboard, fetcher).await
     }
-
     /// Runs the fetch loop using an already constructed scoreboard and a chunk observer.
     pub async fn fetch_with_scoreboard_and_observer<F, Fut, E, O>(
         &self,
@@ -3058,7 +2858,6 @@ impl Orchestrator {
         self.execute_fetch_with_observer(plan, scoreboard, fetcher, observer)
             .await
     }
-
     async fn execute_fetch<F, Fut, E>(
         &self,
         plan: &CarBuildPlan,
@@ -3120,7 +2919,6 @@ impl Orchestrator {
             &self.config.scoreboard,
             self.config.write_mode,
         )?;
-
         if providers.is_empty()
             || (self.config.write_mode.enforces_pq_only()
                 && !matches!(summary.status, PolicyStatus::Met))
@@ -3130,7 +2928,6 @@ impl Orchestrator {
             ctx.finish();
             return Err(OrchestratorError::from(error));
         }
-
         let privacy_collector = match self.config.privacy_events.as_ref() {
             Some(privacy_cfg) => {
                 let endpoints = privacy_endpoints_from_providers(&providers);
@@ -3156,7 +2953,6 @@ impl Orchestrator {
             }
             None => None,
         };
-
         let queue_bridge = self
             .taikai_cache_handle()
             .and_then(|handle| TaikaiQueueBridge::new(handle, plan));
@@ -3172,7 +2968,6 @@ impl Orchestrator {
         } else {
             multi_fetch::fetch_plan_parallel(plan, providers, fetcher, fetch_options).await
         };
-
         let session = match result {
             Ok(outcome) => {
                 let proxy_manifest = self.proxy_manifest().await?;
@@ -3196,14 +2991,11 @@ impl Orchestrator {
                 Err(OrchestratorError::from(error))
             }
         };
-
         if let Some(collector) = privacy_collector {
             collector.shutdown().await;
         }
-
         session
     }
-
     async fn execute_fetch_with_observer<F, Fut, E, O>(
         &self,
         plan: &CarBuildPlan,
@@ -3267,7 +3059,6 @@ impl Orchestrator {
             &self.config.scoreboard,
             self.config.write_mode,
         )?;
-
         if providers.is_empty()
             || (self.config.write_mode.enforces_pq_only()
                 && !matches!(summary.status, PolicyStatus::Met))
@@ -3277,7 +3068,6 @@ impl Orchestrator {
             ctx.finish();
             return Err(OrchestratorError::from(error));
         }
-
         let privacy_collector = match self.config.privacy_events.as_ref() {
             Some(privacy_cfg) => {
                 let endpoints = privacy_endpoints_from_providers(&providers);
@@ -3303,7 +3093,6 @@ impl Orchestrator {
             }
             None => None,
         };
-
         let queue_bridge = self
             .taikai_cache_handle()
             .and_then(|handle| TaikaiQueueBridge::new(handle, plan));
@@ -3327,7 +3116,6 @@ impl Orchestrator {
             )
             .await
         };
-
         let session = match result {
             Ok(outcome) => {
                 let proxy_manifest = self.proxy_manifest().await?;
@@ -3351,15 +3139,12 @@ impl Orchestrator {
                 Err(OrchestratorError::from(error))
             }
         };
-
         if let Some(collector) = privacy_collector {
             collector.shutdown().await;
         }
-
         session
     }
 }
-
 fn record_proxy_metric(region: &str, event: &str, reason: &str) {
     let metrics = global_or_default();
     metrics.inc_sorafs_orchestrator_transport_event(region, PROXY_PROTOCOL_LABEL, event, reason);
@@ -3373,7 +3158,6 @@ fn record_proxy_metric(region: &str, event: &str, reason: &str) {
         reason,
     );
 }
-
 async fn apply_proxy_mode(
     runtime: &Arc<AsyncMutex<LocalProxyRuntime>>,
     mode: ProxyMode,
@@ -3390,11 +3174,9 @@ async fn apply_proxy_mode(
         let handle = guard.handle.take();
         (previous_mode, label, config, handle)
     };
-
     if let Some(handle) = previous_handle {
         handle.shutdown().await;
     }
-
     match spawn_local_quic_proxy(config.clone()) {
         Ok(handle) => {
             let manifest = handle.browser_manifest()?;
@@ -3443,14 +3225,12 @@ async fn apply_proxy_mode(
         }
     }
 }
-
 #[derive(Default, Clone, Copy)]
 struct TransportSupport {
     has_soranet: bool,
     has_quic: bool,
     has_torii: bool,
 }
-
 impl TransportSupport {
     fn from_provider(provider: &FetchProvider) -> Self {
         let mut support = Self::default();
@@ -3466,11 +3246,9 @@ impl TransportSupport {
         }
         support
     }
-
     fn has_soranet(self) -> bool {
         self.has_soranet
     }
-
     fn protocol_label(&self) -> &'static str {
         if self.has_soranet {
             "soranet"
@@ -3483,26 +3261,21 @@ impl TransportSupport {
         }
     }
 }
-
 /// Returns `true` when the provider advertises SoraNet transport support.
 pub fn provider_supports_soranet(provider: &FetchProvider) -> bool {
     TransportSupport::from_provider(provider).has_soranet()
 }
-
 const MAJORITY_THRESHOLD: f64 = 2.0 / 3.0;
-
 #[derive(Default, Clone, Copy)]
 struct PqSupport {
     guard: bool,
     majority: bool,
     strict: bool,
 }
-
 /// Returns `true` when the provider satisfies PQ requirements for strict anonymity.
 pub fn provider_supports_pq(provider: &FetchProvider) -> bool {
     PqSupport::from_provider(provider).satisfies(AnonymityPolicy::StrictPq)
 }
-
 /// Outcome status reported for a staged anonymity policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyStatus {
@@ -3513,7 +3286,6 @@ pub enum PolicyStatus {
     /// Policy fell back to a degraded mode (brownout) due to insufficient PQ supply.
     Brownout,
 }
-
 /// Reason why a policy fell back to a degraded mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyFallback {
@@ -3530,7 +3302,6 @@ pub enum PolicyFallback {
     /// Compliance forced direct mode due to a blinded-CID opt-out.
     ComplianceBlindedCidOptOut,
 }
-
 impl From<ComplianceReason> for PolicyFallback {
     fn from(reason: ComplianceReason) -> Self {
         match reason {
@@ -3539,7 +3310,6 @@ impl From<ComplianceReason> for PolicyFallback {
         }
     }
 }
-
 /// Public report describing the applied anonymity policy and selection outcome.
 #[derive(Debug, Clone, Copy)]
 pub struct PolicyReport {
@@ -3560,20 +3330,17 @@ pub struct PolicyReport {
     /// Optional reason describing why the policy fell back to a degraded mode.
     pub fallback_reason: Option<PolicyFallback>,
 }
-
 impl PolicyReport {
     /// Returns how many selected providers relied on classical handshakes.
     #[must_use]
     pub fn selected_classical(&self) -> usize {
         self.selected_soranet_total.saturating_sub(self.selected_pq)
     }
-
     /// Indicates whether any classical providers were used.
     #[must_use]
     pub fn uses_classical(&self) -> bool {
         self.selected_classical() > 0
     }
-
     /// Ratio of PQ-capable providers among the selected SoraNet set.
     #[must_use]
     pub fn pq_ratio(&self) -> f64 {
@@ -3583,7 +3350,6 @@ impl PolicyReport {
             self.selected_pq as f64 / self.selected_soranet_total as f64
         }
     }
-
     /// Ratio of classical providers among the selected SoraNet set.
     #[must_use]
     pub fn classical_ratio(&self) -> f64 {
@@ -3593,7 +3359,6 @@ impl PolicyReport {
             self.selected_classical() as f64 / self.selected_soranet_total as f64
         }
     }
-
     /// Ratio of PQ-capable candidates in the scoreboard.
     #[must_use]
     pub fn candidate_ratio(&self) -> f64 {
@@ -3603,7 +3368,6 @@ impl PolicyReport {
             self.pq_candidates as f64 / self.total_candidates as f64
         }
     }
-
     /// Ratio of PQ deficit relative to the requested policy.
     #[must_use]
     pub fn deficit_ratio(&self) -> f64 {
@@ -3622,19 +3386,16 @@ impl PolicyReport {
             PolicyStatus::Brownout => (self.target_ratio() - self.pq_ratio()).clamp(0.0, 1.0),
         }
     }
-
     /// Ratio of PQ supply remaining in the candidate set after selection.
     #[must_use]
     pub fn supply_delta_ratio(&self) -> f64 {
         (self.candidate_ratio() - self.pq_ratio()).clamp(0.0, 1.0)
     }
-
     /// Indicates whether the policy resulted in a brownout.
     #[must_use]
     pub fn is_brownout(&self) -> bool {
         matches!(self.status, PolicyStatus::Brownout)
     }
-
     /// Indicates whether the brownout should be surfaced to operators.
     #[must_use]
     pub fn should_flag_brownout(&self) -> bool {
@@ -3644,7 +3405,6 @@ impl PolicyReport {
                 Some(PolicyFallback::NoSoranetCandidates)
             )
     }
-
     /// Returns a stable status label used for telemetry reporting.
     #[must_use]
     pub fn status_label(&self) -> &'static str {
@@ -3654,7 +3414,6 @@ impl PolicyReport {
             PolicyStatus::Brownout => "brownout",
         }
     }
-
     /// Returns a stable fallback reason label used for telemetry reporting.
     #[must_use]
     pub fn reason_label(&self) -> &'static str {
@@ -3668,7 +3427,6 @@ impl PolicyReport {
             None => "none",
         }
     }
-
     fn target_ratio(&self) -> f64 {
         match self.policy {
             AnonymityPolicy::GuardPq => {
@@ -3685,7 +3443,6 @@ impl PolicyReport {
         }
     }
 }
-
 /// Completed multi-provider fetch along with policy reporting metadata.
 #[derive(Debug, Clone)]
 pub struct FetchSession {
@@ -3702,7 +3459,6 @@ pub struct FetchSession {
     /// Snapshot of the Taikai cache pull queue after the fetch.
     pub taikai_cache_queue: Option<TaikaiPullQueueStats>,
 }
-
 /// Verification artefacts produced after validating manifest + CAR parity.
 #[derive(Debug, Clone)]
 pub struct GatewayCarVerification {
@@ -3725,7 +3481,6 @@ pub struct GatewayCarVerification {
     /// Number of PoR leaves observed during verification.
     pub por_leaf_count: usize,
 }
-
 /// Verification context required to validate a fetch against a manifest.
 #[derive(Debug, Clone)]
 pub struct ManifestVerificationContext<'a> {
@@ -3742,7 +3497,6 @@ pub struct ManifestVerificationContext<'a> {
     /// Chunk profile handle declared by the provider.
     pub chunk_profile_handle: &'a str,
 }
-
 impl<'a> ManifestVerificationContext<'a> {
     /// Constructs a verification context from individual fields.
     #[must_use]
@@ -3764,7 +3518,6 @@ impl<'a> ManifestVerificationContext<'a> {
         }
     }
 }
-
 impl<'a> From<&'a GatewayFetchedManifest> for ManifestVerificationContext<'a> {
     fn from(manifest: &'a GatewayFetchedManifest) -> Self {
         Self {
@@ -3777,7 +3530,6 @@ impl<'a> From<&'a GatewayFetchedManifest> for ManifestVerificationContext<'a> {
         }
     }
 }
-
 /// Errors surfaced while validating a fetched payload against a manifest.
 #[derive(Debug, Error)]
 pub enum ManifestVerificationError {
@@ -3800,7 +3552,6 @@ pub enum ManifestVerificationError {
     #[error("manifest verification failed: {0}")]
     Verification(String),
 }
-
 impl FetchSession {
     /// Verify the assembled payload against the supplied manifest context.
     ///
@@ -3819,7 +3570,6 @@ impl FetchSession {
             .expect("verification snapshot was just attached"))
     }
 }
-
 fn verify_fetch_against_manifest(
     plan: &CarBuildPlan,
     outcome: &FetchOutcome,
@@ -3839,14 +3589,12 @@ fn verify_fetch_against_manifest(
             expected: expected_chunks,
         });
     }
-
     let constraints = PinPolicyConstraints {
         require_council_signatures: true,
         ..PinPolicyConstraints::default()
     };
     validate_manifest(context.manifest, &constraints)
         .map_err(|err| ManifestVerificationError::ManifestValidation(err.to_string()))?;
-
     let payload = outcome.assemble_payload();
     let mut buffer = Cursor::new(Vec::new());
     let writer = CarWriter::new(plan, &payload)
@@ -3855,12 +3603,10 @@ fn verify_fetch_against_manifest(
         .write_to(&mut buffer)
         .map_err(|err| ManifestVerificationError::CarBuild(err.to_string()))?;
     let car_bytes = buffer.into_inner();
-
     let verification = CarVerifier::verify_full_car_with_plan(context.manifest, plan, &car_bytes)
         .map_err(|err| ManifestVerificationError::Verification(err.to_string()))?;
     let car_stats = verification.stats.clone();
     let por_leaf_count = verification.chunk_store.por_leaf_count();
-
     Ok(GatewayCarVerification {
         manifest_digest: context.manifest_digest,
         manifest_payload_digest: context.payload_digest,
@@ -3873,7 +3619,6 @@ fn verify_fetch_against_manifest(
         por_leaf_count,
     })
 }
-
 fn verify_gateway_payload_digest(
     plan: &CarBuildPlan,
     actual: blake3::Hash,
@@ -3886,7 +3631,6 @@ fn verify_gateway_payload_digest(
     }
     Ok(())
 }
-
 impl PqSupport {
     fn from_provider(provider: &FetchProvider) -> Self {
         let mut support = Self::default();
@@ -3926,17 +3670,14 @@ impl PqSupport {
                 support.majority = true;
             }
         }
-
         if support.strict {
             support.majority = true;
             support.guard = true;
         } else if support.majority {
             support.guard = true;
         }
-
         support
     }
-
     fn satisfies(self, policy: AnonymityPolicy) -> bool {
         match policy {
             AnonymityPolicy::GuardPq => self.guard || self.majority || self.strict,
@@ -3945,7 +3686,6 @@ impl PqSupport {
         }
     }
 }
-
 #[derive(Clone)]
 struct SoranetCandidate {
     provider: FetchProvider,
@@ -3956,7 +3696,6 @@ struct SoranetCandidate {
     reputation_weight: u32,
     identifier: String,
 }
-
 impl SoranetCandidate {
     fn new(
         provider: FetchProvider,
@@ -4004,7 +3743,6 @@ impl SoranetCandidate {
             provider_reputation
         };
         let identifier = canonical_provider_label(&provider);
-
         Self {
             provider,
             pq,
@@ -4015,7 +3753,6 @@ impl SoranetCandidate {
             identifier,
         }
     }
-
     fn capability_components(&self) -> GuardCapabilityComponents {
         GuardCapabilityComponents::from_inputs(
             self.pq_rank(),
@@ -4025,7 +3762,6 @@ impl SoranetCandidate {
             self.reputation_weight,
         )
     }
-
     fn pq_rank(&self) -> u8 {
         if self.pq.strict {
             3
@@ -4037,7 +3773,6 @@ impl SoranetCandidate {
             0
         }
     }
-
     fn capability_weight(&self) -> NonZeroU32 {
         let base_weight = self.provider.weight().get();
         let capability = self.capability_components();
@@ -4051,28 +3786,23 @@ impl SoranetCandidate {
         let guard_bonus = capability.guard_weight();
         let bandwidth_bonus = capability.bandwidth_units();
         let reputation_bonus = capability.reputation_weight();
-
         let weighted = base_weight
             .saturating_add(pq_rank_bonus)
             .saturating_add(pq_certificate_bonus)
             .saturating_add(guard_bonus)
             .saturating_add(bandwidth_bonus)
             .saturating_add(reputation_bonus);
-
         NonZeroU32::new(weighted).expect("capability-weighted score must remain non-zero")
     }
-
     fn into_weighted_provider(self) -> FetchProvider {
         let weighted = self.capability_weight();
         self.provider.with_weight(weighted)
     }
 }
-
 fn canonical_provider_label(provider: &FetchProvider) -> String {
     fn is_hex_identifier(value: &str) -> bool {
         value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit())
     }
-
     if let Some(metadata) = provider.metadata() {
         if let Some(hex_id) = metadata
             .provider_id
@@ -4094,7 +3824,6 @@ fn canonical_provider_label(provider: &FetchProvider) -> String {
     }
     provider.id().as_str().to_string()
 }
-
 fn guard_descriptor_for_provider<'a>(
     provider: &FetchProvider,
     catalog: &'a HashMap<[u8; 32], &'a RelayDescriptor>,
@@ -4111,10 +3840,8 @@ fn guard_descriptor_for_provider<'a>(
             }
         }
     }
-
     lookup_descriptor(provider.id().as_str(), catalog)
 }
-
 fn decode_relay_id(value: &str) -> Option<[u8; 32]> {
     let trimmed = value.trim();
     if trimmed.len() != 64 || !trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -4124,7 +3851,6 @@ fn decode_relay_id(value: &str) -> Option<[u8; 32]> {
     hex::decode_to_slice(trimmed, &mut relay_id).ok()?;
     Some(relay_id)
 }
-
 fn lookup_descriptor<'a>(
     value: &str,
     catalog: &'a HashMap<[u8; 32], &'a RelayDescriptor>,
@@ -4132,7 +3858,6 @@ fn lookup_descriptor<'a>(
     let relay_id = decode_relay_id(value)?;
     catalog.get(&relay_id).copied()
 }
-
 fn guard_record_for_provider<'a>(
     provider: &FetchProvider,
     catalog: &'a HashMap<[u8; 32], &'a GuardRecord>,
@@ -4149,10 +3874,8 @@ fn guard_record_for_provider<'a>(
             }
         }
     }
-
     lookup_guard_record(provider.id().as_str(), catalog)
 }
-
 fn lookup_guard_record<'a>(
     value: &str,
     catalog: &'a HashMap<[u8; 32], &'a GuardRecord>,
@@ -4160,7 +3883,6 @@ fn lookup_guard_record<'a>(
     let relay_id = decode_relay_id(value)?;
     catalog.get(&relay_id).copied()
 }
-
 fn compare_soranet_candidates(left: &SoranetCandidate, right: &SoranetCandidate) -> CmpOrdering {
     let left_capability = left.capability_components();
     let right_capability = right.capability_components();
@@ -4175,7 +3897,6 @@ fn compare_soranet_candidates(left: &SoranetCandidate, right: &SoranetCandidate)
         })
         .then_with(|| left.identifier.cmp(&right.identifier))
 }
-
 #[derive(Debug, Clone, Copy)]
 struct PolicySummary {
     policy: AnonymityPolicy,
@@ -4187,7 +3908,6 @@ struct PolicySummary {
     status: PolicyStatus,
     fallback_reason: Option<PolicyFallback>,
 }
-
 impl PolicySummary {
     fn new(policy: AnonymityPolicy, total_candidates: usize, pq_candidates: usize) -> Self {
         let status = if total_candidates == 0 {
@@ -4210,13 +3930,11 @@ impl PolicySummary {
             },
         }
     }
-
     fn update_selected_counts(&mut self, total: usize, pq: usize) {
         self.selected_soranet_total = total;
         self.selected_pq = pq;
         self.evaluate_outcome();
     }
-
     fn ratio(&self) -> f64 {
         if self.selected_soranet_total == 0 {
             0.0
@@ -4224,11 +3942,9 @@ impl PolicySummary {
             self.selected_pq as f64 / self.selected_soranet_total as f64
         }
     }
-
     fn selected_classical(&self) -> usize {
         self.selected_soranet_total.saturating_sub(self.selected_pq)
     }
-
     fn classical_ratio(&self) -> f64 {
         if self.selected_soranet_total == 0 {
             0.0
@@ -4236,12 +3952,10 @@ impl PolicySummary {
             self.selected_classical() as f64 / self.selected_soranet_total as f64
         }
     }
-
     #[allow(dead_code)]
     fn uses_classical(&self) -> bool {
         self.selected_classical() > 0
     }
-
     fn candidate_ratio(&self) -> f64 {
         if self.total_candidates == 0 {
             0.0
@@ -4249,7 +3963,6 @@ impl PolicySummary {
             self.pq_candidates as f64 / self.total_candidates as f64
         }
     }
-
     fn target_ratio(&self) -> f64 {
         match self.policy {
             AnonymityPolicy::GuardPq => {
@@ -4265,7 +3978,6 @@ impl PolicySummary {
             AnonymityPolicy::StrictPq => 1.0,
         }
     }
-
     fn deficit_ratio(&self) -> f64 {
         match self.status {
             PolicyStatus::Met => 0.0,
@@ -4282,15 +3994,12 @@ impl PolicySummary {
             PolicyStatus::Brownout => (self.target_ratio() - self.ratio()).clamp(0.0, 1.0),
         }
     }
-
     fn supply_delta_ratio(&self) -> f64 {
         (self.candidate_ratio() - self.ratio()).clamp(0.0, 1.0)
     }
-
     fn is_brownout(&self) -> bool {
         matches!(self.status, PolicyStatus::Brownout)
     }
-
     #[allow(dead_code)]
     fn should_flag_brownout(&self) -> bool {
         self.is_brownout()
@@ -4299,7 +4008,6 @@ impl PolicySummary {
                 Some(PolicyFallback::NoSoranetCandidates)
             )
     }
-
     fn outcome_label(&self) -> &'static str {
         match self.status {
             PolicyStatus::NotApplicable => "not_applicable",
@@ -4307,7 +4015,6 @@ impl PolicySummary {
             PolicyStatus::Brownout => "brownout",
         }
     }
-
     fn reason_label(&self) -> &'static str {
         match self.fallback_reason {
             Some(PolicyFallback::NoSoranetCandidates) => "no_soranet",
@@ -4319,14 +4026,12 @@ impl PolicySummary {
             None => "none",
         }
     }
-
     fn evaluate_outcome(&mut self) {
         if self.total_candidates == 0 {
             self.status = PolicyStatus::NotApplicable;
             self.fallback_reason = Some(PolicyFallback::NoSoranetCandidates);
             return;
         }
-
         match self.policy {
             AnonymityPolicy::GuardPq => {
                 if self.selected_pq >= 1 {
@@ -4362,15 +4067,12 @@ impl PolicySummary {
             }
         }
     }
-
     fn effective_policy(&self) -> AnonymityPolicy {
         self.effective_policy
     }
-
     fn set_effective_policy(&mut self, policy: AnonymityPolicy) {
         self.effective_policy = policy;
     }
-
     fn apply_compliance_override(&mut self, fallback: PolicyFallback) {
         self.status = PolicyStatus::NotApplicable;
         self.fallback_reason = Some(fallback);
@@ -4379,7 +4081,6 @@ impl PolicySummary {
         self.selected_pq = 0;
     }
 }
-
 impl From<PolicySummary> for PolicyReport {
     fn from(summary: PolicySummary) -> Self {
         Self {
@@ -4394,12 +4095,10 @@ impl From<PolicySummary> for PolicyReport {
         }
     }
 }
-
 struct SelectionOutcome {
     providers: Vec<FetchProvider>,
     summary: PolicySummary,
 }
-
 fn select_soranet_providers(
     candidates: Vec<SoranetCandidate>,
     policy: AnonymityPolicy,
@@ -4407,7 +4106,6 @@ fn select_soranet_providers(
     if candidates.is_empty() {
         return Vec::new();
     }
-
     let mut pq_candidates = Vec::new();
     let mut classical_candidates = Vec::new();
     for candidate in candidates.into_iter() {
@@ -4417,10 +4115,8 @@ fn select_soranet_providers(
             classical_candidates.push(candidate);
         }
     }
-
     pq_candidates.sort_by(compare_soranet_candidates);
     classical_candidates.sort_by(compare_soranet_candidates);
-
     match policy {
         AnonymityPolicy::GuardPq => {
             let mut providers: Vec<FetchProvider> = pq_candidates
@@ -4470,7 +4166,6 @@ fn select_soranet_providers(
         }
     }
 }
-
 fn eligible_providers(
     scoreboard: &Scoreboard,
     limit: Option<NonZeroUsize>,
@@ -4503,12 +4198,10 @@ fn eligible_providers(
             .map(|record| (record.relay_id, record))
             .collect::<HashMap<[u8; 32], &GuardRecord>>()
     });
-
     for entry in scoreboard.entries().iter().take(HARD_MAX_PROVIDERS) {
         if !matches!(entry.eligibility, Eligibility::Eligible) {
             continue;
         }
-
         if entry.provider.id().as_str().len() > HARD_MAX_PROVIDER_ID_BYTES
             || entry.provider.id().as_str().chars().any(char::is_control)
             || entry
@@ -4536,7 +4229,6 @@ fn eligible_providers(
         let guard_record = guard_record_index
             .as_ref()
             .and_then(|catalog| guard_record_for_provider(&provider, catalog));
-
         if support.has_soranet() {
             soranet_catalog.insert(provider_id, pq_support);
             soranet_candidates.push(SoranetCandidate::new(
@@ -4553,23 +4245,19 @@ fn eligible_providers(
             fallback.push(provider);
         }
     }
-
     let pq_candidate_count = soranet_candidates
         .iter()
         .filter(|candidate| candidate.pq.satisfies(anonymity_policy))
         .count();
-
     let mut summary = PolicySummary::new(
         anonymity_policy,
         soranet_candidates.len(),
         pq_candidate_count,
     );
-
     let base_candidates = soranet_candidates;
     let base_quic = quic;
     let base_torii = torii;
     let base_fallback = fallback;
-
     let build_providers = |mut soranet_selected: Vec<FetchProvider>| -> Vec<FetchProvider> {
         let mut providers = match transport_policy {
             TransportPolicy::SoranetPreferred => {
@@ -4589,16 +4277,12 @@ fn eligible_providers(
                 ordered
             }
         };
-
         if let Some(guards) = guard_set {
             providers = reorder_by_guard_set(providers, guards);
         }
-
         providers.truncate(effective_limit);
-
         providers
     };
-
     let compute_counts = |providers: &[FetchProvider]| {
         let mut selected_soranet_total = 0;
         let mut selected_pq = 0;
@@ -4613,7 +4297,6 @@ fn eligible_providers(
         }
         (selected_soranet_total, selected_pq)
     };
-
     let mut policy_used = anonymity_policy;
     let initial_selected = if matches!(
         transport_policy,
@@ -4625,17 +4308,14 @@ fn eligible_providers(
     };
     let mut providers = build_providers(initial_selected);
     let (mut selected_soranet_total, mut selected_pq) = compute_counts(&providers);
-
     if matches!(transport_policy, TransportPolicy::DirectOnly) {
         summary = PolicySummary::new(anonymity_policy, 0, 0);
         summary.set_effective_policy(anonymity_policy);
         summary.update_selected_counts(0, 0);
         return SelectionOutcome { providers, summary };
     }
-
     summary.set_effective_policy(policy_used);
     summary.update_selected_counts(selected_soranet_total, selected_pq);
-
     if !skip_policy_fallback && matches!(transport_policy, TransportPolicy::SoranetPreferred) {
         while selected_soranet_total == 0 {
             let Some(next_policy) = policy_used.fallback() else {
@@ -4645,26 +4325,21 @@ fn eligible_providers(
             let selected = select_soranet_providers(base_candidates.clone(), policy_used);
             let next_providers = build_providers(selected);
             let (next_total, next_pq) = compute_counts(&next_providers);
-
             providers = next_providers;
             selected_soranet_total = next_total;
             selected_pq = next_pq;
             summary.set_effective_policy(policy_used);
             summary.update_selected_counts(selected_soranet_total, selected_pq);
-
             if selected_soranet_total > 0 {
                 break;
             }
         }
     }
-
     if skip_policy_fallback && !matches!(summary.status, PolicyStatus::Met) {
         providers.clear();
     }
-
     SelectionOutcome { providers, summary }
 }
-
 #[derive(Clone, Copy)]
 struct GuardPreference {
     position: usize,
@@ -4674,12 +4349,10 @@ struct GuardPreference {
     reputation_weight: u32,
     pinned_at: u64,
 }
-
 fn reorder_by_guard_set(providers: Vec<FetchProvider>, guard_set: &GuardSet) -> Vec<FetchProvider> {
     if providers.is_empty() || guard_set.is_empty() {
         return providers;
     }
-
     let guard_preferences: HashMap<[u8; 32], GuardPreference> = guard_set
         .iter()
         .enumerate()
@@ -4697,7 +4370,6 @@ fn reorder_by_guard_set(providers: Vec<FetchProvider>, guard_set: &GuardSet) -> 
             )
         })
         .collect();
-
     struct ProviderOrdering {
         provider: FetchProvider,
         original_index: usize,
@@ -4709,7 +4381,6 @@ fn reorder_by_guard_set(providers: Vec<FetchProvider>, guard_set: &GuardSet) -> 
         position: usize,
         pinned_at: u64,
     }
-
     let mut keyed: Vec<ProviderOrdering> = providers
         .into_iter()
         .enumerate()
@@ -4773,7 +4444,6 @@ fn reorder_by_guard_set(providers: Vec<FetchProvider>, guard_set: &GuardSet) -> 
             }
         })
         .collect();
-
     keyed.sort_by(|left, right| {
         right
             .pinned
@@ -4790,10 +4460,8 @@ fn reorder_by_guard_set(providers: Vec<FetchProvider>, guard_set: &GuardSet) -> 
             .then_with(|| right.pinned_at.cmp(&left.pinned_at))
             .then_with(|| left.original_index.cmp(&right.original_index))
     });
-
     keyed.into_iter().map(|entry| entry.provider).collect()
 }
-
 fn guard_preference_for_provider<'a>(
     provider: &FetchProvider,
     guard_preferences: &'a HashMap<[u8; 32], GuardPreference>,
@@ -4813,7 +4481,6 @@ fn guard_preference_for_provider<'a>(
     }
     None
 }
-
 fn guard_preference_from_str<'a>(
     value: &str,
     guard_preferences: &'a HashMap<[u8; 32], GuardPreference>,
@@ -4821,7 +4488,6 @@ fn guard_preference_from_str<'a>(
     let relay_id = decode_relay_id(value)?;
     guard_preferences.get(&relay_id)
 }
-
 struct FetchMetricsCtx {
     manifest_id: String,
     region: String,
@@ -4833,7 +4499,6 @@ struct FetchMetricsCtx {
     policy_summary: PolicySummary,
     start: Instant,
 }
-
 impl FetchMetricsCtx {
     fn begin(
         plan: &CarBuildPlan,
@@ -4973,7 +4638,6 @@ impl FetchMetricsCtx {
             start: Instant::now(),
         })
     }
-
     fn on_success(&self, outcome: &FetchOutcome) {
         let duration_ms = self.start.elapsed().as_secs_f64() * 1_000.0;
         self.metrics.record_sorafs_orchestrator_duration(
@@ -4983,7 +4647,6 @@ impl FetchMetricsCtx {
         );
         self.otel
             .record_duration(&self.manifest_id, &self.region, &self.job_id, duration_ms);
-
         let mut retry_counts: HashMap<String, u64> = HashMap::new();
         let mut total_retries = 0;
         for receipt in &outcome.chunk_receipts {
@@ -5017,7 +4680,6 @@ impl FetchMetricsCtx {
                 .emit_retry(&self.manifest_id, &self.region, &provider, "retry", count);
             total_retries += count;
         }
-
         let mut total_provider_failures = 0;
         for report in outcome.provider_reports.iter() {
             let failures = report.failures as u64;
@@ -5047,7 +4709,6 @@ impl FetchMetricsCtx {
                 total_provider_failures += failures;
             }
         }
-
         let mut total_bytes: u64 = 0;
         let mut total_stalls: u64 = 0;
         let mut throughput_samples: u64 = 0;
@@ -5109,7 +4770,6 @@ impl FetchMetricsCtx {
         } else {
             0.0
         };
-
         self.telemetry.emit_success(
             &self.manifest_id,
             &self.region,
@@ -5123,7 +4783,6 @@ impl FetchMetricsCtx {
             &self.policy_summary,
         );
     }
-
     fn on_error(&self, error: &multi_fetch::MultiSourceError) {
         let duration_ms = self.start.elapsed().as_secs_f64() * 1_000.0;
         self.metrics.record_sorafs_orchestrator_duration(
@@ -5133,13 +4792,11 @@ impl FetchMetricsCtx {
         );
         self.otel
             .record_duration(&self.manifest_id, &self.region, &self.job_id, duration_ms);
-
         let reason = error_reason(error);
         self.metrics
             .inc_sorafs_orchestrator_failure(&self.manifest_id, &self.region, reason);
         self.otel
             .record_failure(&self.manifest_id, &self.region, Some(&self.job_id), reason);
-
         let provider_info = provider_from_error(error);
         if let Some((ref provider, ref provider_reason)) = provider_info {
             self.metrics.inc_sorafs_orchestrator_provider_failures(
@@ -5164,7 +4821,6 @@ impl FetchMetricsCtx {
                 1,
             );
         }
-
         self.telemetry.emit_error(
             &self.manifest_id,
             &self.region,
@@ -5176,7 +4832,6 @@ impl FetchMetricsCtx {
             &self.policy_summary,
         );
     }
-
     fn finish(&self) {
         self.metrics
             .sorafs_orchestrator_fetch_finished(&self.manifest_id, &self.region);
@@ -5184,17 +4839,14 @@ impl FetchMetricsCtx {
             .fetch_finished(&self.manifest_id, &self.region, &self.job_id);
     }
 }
-
 struct FetchTelemetryCtx {
     job_id: String,
     write_mode: WriteModeHint,
 }
-
 impl FetchTelemetryCtx {
     fn new(job_id: String, write_mode: WriteModeHint) -> Self {
         Self { job_id, write_mode }
     }
-
     fn emit_start(
         &self,
         manifest_id: &str,
@@ -5224,7 +4876,6 @@ impl FetchTelemetryCtx {
         let (global_parallel_limit, parallel_unbounded) = fetch_options
             .global_parallel_limit
             .map_or((0u64, true), |value| (value as u64, false));
-
         info!(
             target: "telemetry::sorafs.fetch.lifecycle",
             event = "start",
@@ -5261,7 +4912,6 @@ impl FetchTelemetryCtx {
         );
         Ok(())
     }
-
     #[allow(clippy::too_many_arguments)] // telemetry emission uses explicit context values
     fn emit_success(
         &self,
@@ -5307,7 +4957,6 @@ impl FetchTelemetryCtx {
             anonymity_brownout = policy_summary.is_brownout(),
         );
     }
-
     fn emit_error(
         &self,
         manifest_id: &str,
@@ -5365,7 +5014,6 @@ impl FetchTelemetryCtx {
             );
         }
     }
-
     fn emit_retry(
         &self,
         manifest_id: &str,
@@ -5384,7 +5032,6 @@ impl FetchTelemetryCtx {
             attempts = count,
         );
     }
-
     fn emit_provider_failure(
         &self,
         manifest_id: &str,
@@ -5403,7 +5050,6 @@ impl FetchTelemetryCtx {
             failures = count,
         );
     }
-
     fn emit_stall(
         &self,
         manifest_id: &str,
@@ -5423,7 +5069,6 @@ impl FetchTelemetryCtx {
         );
     }
 }
-
 #[derive(Debug, Error)]
 enum PrivacyCollectorError {
     #[error("invalid privacy bucket configuration: {0}")]
@@ -5435,13 +5080,11 @@ enum PrivacyCollectorError {
     #[error("privacy polling interval or timeout is outside the production resource envelope")]
     InvalidTiming,
 }
-
 struct PreparedPrivacyEndpoint {
     alias: String,
     url: Url,
     client: Arc<Client>,
 }
-
 async fn prepare_privacy_endpoint(
     alias: String,
     url: Url,
@@ -5458,7 +5101,6 @@ async fn prepare_privacy_endpoint(
     let addresses = resolve_and_validate_host(&host, port, policy)
         .await
         .map_err(|error| error.to_string())?;
-
     let mut builder = Client::builder()
         .timeout(request_timeout)
         .connect_timeout(request_timeout)
@@ -5478,7 +5120,6 @@ async fn prepare_privacy_endpoint(
     let client = Arc::new(builder.build().map_err(|error| error.to_string())?);
     Ok(PreparedPrivacyEndpoint { alias, url, client })
 }
-
 struct PrivacyCollector {
     aggregator: Arc<SoranetSecureAggregator>,
     metrics: Arc<iroha_telemetry::metrics::Metrics>,
@@ -5487,7 +5128,6 @@ struct PrivacyCollector {
     stop: Arc<AtomicBool>,
     notify: Arc<Notify>,
 }
-
 impl PrivacyCollector {
     async fn spawn(
         endpoints: Vec<(String, Url)>,
@@ -5504,7 +5144,6 @@ impl PrivacyCollector {
         )
         .await
     }
-
     async fn spawn_with_policy(
         endpoints: Vec<(String, Url)>,
         config: &PrivacyEventsConfig,
@@ -5531,7 +5170,6 @@ impl PrivacyCollector {
         {
             return Err(PrivacyCollectorError::InvalidTiming);
         }
-
         let aggregator = Arc::new(SoranetSecureAggregator::new(config.bucket)?);
         let stop = Arc::new(AtomicBool::new(false));
         let notify = Arc::new(Notify::new());
@@ -5540,7 +5178,6 @@ impl PrivacyCollector {
             prepare_privacy_endpoint(alias, url, config.request_timeout, policy)
         }))
         .await;
-
         for prepared in prepared_endpoints {
             let endpoint = match prepared {
                 Ok(endpoint) => endpoint,
@@ -5574,19 +5211,16 @@ impl PrivacyCollector {
                 .await;
             }));
         }
-
         if handles.is_empty() {
             metrics.set_soranet_privacy_collector_enabled(false);
             return Ok(None);
         }
-
         debug!(
             target: "telemetry::sorafs.privacy",
             collectors = handles.len(),
             "started privacy event collector"
         );
         metrics.set_soranet_privacy_collector_enabled(true);
-
         Ok(Some(Self {
             aggregator,
             metrics,
@@ -5596,7 +5230,6 @@ impl PrivacyCollector {
             notify,
         }))
     }
-
     #[cfg(test)]
     async fn spawn_for_local_test(
         endpoints: Vec<(String, Url)>,
@@ -5613,7 +5246,6 @@ impl PrivacyCollector {
         )
         .await
     }
-
     async fn shutdown(self) {
         let Self {
             aggregator,
@@ -5623,7 +5255,6 @@ impl PrivacyCollector {
             notify,
             ..
         } = self;
-
         stop.store(true, AtomicOrdering::Relaxed);
         notify.notify_waiters();
         for handle in handles.drain(..) {
@@ -5640,12 +5271,10 @@ impl PrivacyCollector {
         Self::flush_inner(&aggregator, &metrics);
         metrics.set_soranet_privacy_collector_enabled(false);
     }
-
     #[allow(dead_code)]
     fn flush(&self) {
         Self::flush_inner(&self.aggregator, &self.metrics);
     }
-
     fn flush_inner(
         aggregator: &Arc<SoranetSecureAggregator>,
         metrics: &Arc<iroha_telemetry::metrics::Metrics>,
@@ -5658,7 +5287,6 @@ impl PrivacyCollector {
         }
     }
 }
-
 #[derive(Debug, Error)]
 enum PrivacyResponseError {
     #[error("privacy response declares {length} bytes; maximum is {maximum}")]
@@ -5670,7 +5298,6 @@ enum PrivacyResponseError {
     #[error("privacy response is not valid UTF-8")]
     Utf8,
 }
-
 async fn read_bounded_privacy_response(
     mut response: Response,
 ) -> Result<String, PrivacyResponseError> {
@@ -5705,7 +5332,6 @@ async fn read_bounded_privacy_response(
     }
     String::from_utf8(body).map_err(|_| PrivacyResponseError::Utf8)
 }
-
 fn privacy_payload_shape_is_bounded(payload: &str) -> bool {
     payload.len() <= HARD_MAX_PRIVACY_RESPONSE_BYTES
         && payload
@@ -5716,7 +5342,6 @@ fn privacy_payload_shape_is_bounded(payload: &str) -> bool {
                 index < HARD_MAX_PRIVACY_PAYLOAD_LINES && line.len() <= HARD_MAX_PRIVACY_LINE_BYTES
             })
 }
-
 fn ingest_privacy_payload(
     aggregator: &SoranetSecureAggregator,
     metrics: &Arc<iroha_telemetry::metrics::Metrics>,
@@ -5782,7 +5407,6 @@ fn ingest_privacy_payload(
     }
     (events_ingested, shares_ingested, had_error)
 }
-
 #[allow(clippy::too_many_arguments)]
 async fn poll_privacy_endpoint(
     alias: String,
@@ -5799,7 +5423,6 @@ async fn poll_privacy_endpoint(
         if stop.load(AtomicOrdering::Relaxed) {
             break;
         }
-
         let alias_label = alias.as_str();
         match client
             .get(url.clone())
@@ -5883,7 +5506,6 @@ async fn poll_privacy_endpoint(
                     .inc();
             }
         }
-
         if let Some(remediator) = remediation.as_ref() {
             let mut policy_url = url.clone();
             policy_url.set_path("/policy/proxy-toggle");
@@ -5987,18 +5609,15 @@ async fn poll_privacy_endpoint(
                 }
             }
         }
-
         if stop.load(AtomicOrdering::Relaxed) {
             break;
         }
-
         tokio::select! {
             _ = notify.notified() => break,
             _ = sleep(interval) => {}
         }
     }
 }
-
 fn flush_privacy_buckets(
     aggregator: &SoranetSecureAggregator,
     metrics: &Arc<iroha_telemetry::metrics::Metrics>,
@@ -6009,7 +5628,6 @@ fn flush_privacy_buckets(
         metrics.record_soranet_privacy_bucket(&bucket);
     }
 }
-
 fn privacy_endpoints_from_providers(providers: &[FetchProvider]) -> Vec<(String, Url)> {
     let mut endpoints = Vec::with_capacity(providers.len().min(HARD_MAX_PRIVACY_ENDPOINTS));
     for provider in providers.iter().take(HARD_MAX_PRIVACY_ENDPOINTS) {
@@ -6044,23 +5662,19 @@ fn privacy_endpoints_from_providers(providers: &[FetchProvider]) -> Vec<(String,
     }
     endpoints
 }
-
 fn manifest_id_hex(plan: &CarBuildPlan) -> String {
     hex::encode(plan.payload_digest.as_bytes())
 }
-
 fn generate_job_id() -> Result<String, String> {
     let mut rng = OsRng;
     generate_job_id_with_rng(&mut rng)
 }
-
 fn generate_job_id_with_rng<R: TryCryptoRng + ?Sized>(rng: &mut R) -> Result<String, String> {
     let mut bytes = [0u8; 16];
     rng.try_fill_bytes(&mut bytes)
         .map_err(|error| error.to_string())?;
     Ok(hex::encode(bytes))
 }
-
 fn error_reason(error: &multi_fetch::MultiSourceError) -> &'static str {
     match error {
         multi_fetch::MultiSourceError::NoProviders => "no_providers",
@@ -6072,7 +5686,6 @@ fn error_reason(error: &multi_fetch::MultiSourceError) -> &'static str {
         multi_fetch::MultiSourceError::InternalInvariant(_) => "internal_invariant",
     }
 }
-
 fn provider_from_error(error: &multi_fetch::MultiSourceError) -> Option<(String, String)> {
     match error {
         multi_fetch::MultiSourceError::NoHealthyProviders {
@@ -6089,7 +5702,6 @@ fn provider_from_error(error: &multi_fetch::MultiSourceError) -> Option<(String,
         _ => None,
     }
 }
-
 fn attempt_failure_reason(failure: &AttemptFailure) -> &'static str {
     match failure {
         AttemptFailure::Provider { policy_block, .. } => {
@@ -6105,7 +5717,6 @@ fn attempt_failure_reason(failure: &AttemptFailure) -> &'static str {
         },
     }
 }
-
 fn wrap_fetcher_with_taikai_queue<F, Fut, E>(
     fetcher: F,
     bridge: Arc<TaikaiQueueBridge>,
@@ -6129,14 +5740,12 @@ where
             if lease.is_none() {
                 return (*fetcher)(request).await;
             }
-
             let batch_id = lease.as_ref().map(TaikaiQueueLease::batch_id);
             let mut primary = Box::pin((*fetcher)(request));
             let mut hedge_delay = Box::pin(sleep(hedge_after));
             let mut hedged: Option<Pin<Box<_>>> = None;
             let mut primary_result: Option<Result<ChunkResponse, E>> = None;
             let mut hedged_result: Option<Result<ChunkResponse, E>> = None;
-
             loop {
                 tokio::select! {
                     outcome = &mut primary, if primary_result.is_none() => {
@@ -6161,21 +5770,18 @@ where
                         hedged_result = Some(outcome);
                     }
                 }
-
                 if let Some(Ok(value)) = primary_result.take() {
                     if let Some(lease) = lease.take() {
                         lease.success();
                     }
                     return Ok(value);
                 }
-
                 if let Some(Ok(value)) = hedged_result.take() {
                     if let Some(lease) = lease.take() {
                         lease.success();
                     }
                     return Ok(value);
                 }
-
                 let primary_failed = matches!(primary_result, Some(Err(_)));
                 let hedged_failed = matches!(hedged_result, Some(Err(_)));
                 if primary_failed && hedged_failed {
@@ -6186,7 +5792,6 @@ where
                         hedged_result.expect("hedged result collected before returning")
                     });
                 }
-
                 if primary_failed && hedged.is_none() {
                     if let Some(lease) = lease.take() {
                         lease.failure();
@@ -6198,12 +5803,10 @@ where
         })
     }
 }
-
 struct TaikaiQueueBridge {
     handle: TaikaiCacheHandle,
     hedge_after: Duration,
 }
-
 impl TaikaiQueueBridge {
     fn new(handle: TaikaiCacheHandle, plan: &CarBuildPlan) -> Option<Arc<Self>> {
         if plan
@@ -6220,7 +5823,6 @@ impl TaikaiQueueBridge {
             None
         }
     }
-
     fn before_request(&self, request: &FetchRequest) -> Option<TaikaiQueueLease> {
         let hint = request.spec.taikai_segment_hint.as_ref()?;
         let key = taikai_segment_key_from_hint(hint)?;
@@ -6263,11 +5865,9 @@ impl TaikaiQueueBridge {
             Err(TaikaiQueueError::Unavailable) => None,
         }
     }
-
     fn hedge_after(&self) -> Duration {
         self.hedge_after
     }
-
     fn trigger_hedge(&self, id: crate::taikai_cache::TaikaiPullBatchId, now: Instant) -> bool {
         match self.handle.hedge_overdue_batches_at(now) {
             Ok(batches) => batches.iter().any(|batch| batch.id == id),
@@ -6282,13 +5882,11 @@ impl TaikaiQueueBridge {
         }
     }
 }
-
 struct TaikaiQueueLease {
     handle: TaikaiCacheHandle,
     ticket: TaikaiPullTicket,
     batch_id: crate::taikai_cache::TaikaiPullBatchId,
 }
-
 impl TaikaiQueueLease {
     fn new(
         handle: TaikaiCacheHandle,
@@ -6301,20 +5899,16 @@ impl TaikaiQueueLease {
             batch_id,
         }
     }
-
     fn success(self) {
         let _ = self.handle.complete_batch(self.ticket);
     }
-
     fn failure(self) {
         let _ = self.handle.fail_batch(self.ticket);
     }
-
     fn batch_id(&self) -> crate::taikai_cache::TaikaiPullBatchId {
         self.batch_id
     }
 }
-
 fn taikai_segment_key_from_hint(hint: &TaikaiSegmentHint) -> Option<TaikaiSegmentKey> {
     let event = TaikaiEventId::new(Name::from_str(&hint.event).ok()?);
     let stream = TaikaiStreamId::new(Name::from_str(&hint.stream).ok()?);
@@ -6326,7 +5920,6 @@ fn taikai_segment_key_from_hint(hint: &TaikaiSegmentHint) -> Option<TaikaiSegmen
         hint.sequence,
     ))
 }
-
 /// Errors surfaced when orchestrating gateway-backed fetches.
 #[derive(Debug, Error)]
 pub enum GatewayOrchestratorError {
@@ -6352,7 +5945,6 @@ pub enum GatewayOrchestratorError {
     #[error("manifest verification failed: {0}")]
     Verification(String),
 }
-
 impl From<ManifestVerificationError> for GatewayOrchestratorError {
     fn from(err: ManifestVerificationError) -> Self {
         match err {
@@ -6363,7 +5955,6 @@ impl From<ManifestVerificationError> for GatewayOrchestratorError {
         }
     }
 }
-
 /// Execute a gateway-backed fetch using the orchestrator facade.
 ///
 /// This helper wires the [`GatewayFetchContext`] into the high-level orchestrator by deriving
@@ -6428,11 +6019,9 @@ pub async fn fetch_via_gateway(
             meta
         })
         .collect();
-
     if metadata.is_empty() {
         return Err(GatewayOrchestratorError::NoEligibleProviders);
     }
-
     if let Some(limit) = max_peers {
         let limit = limit.max(1);
         config.max_providers = NonZeroUsize::new(limit);
@@ -6446,12 +6035,9 @@ pub async fn fetch_via_gateway(
     if !config.fetch.verify_lengths || !config.fetch.verify_digests {
         return Err(GatewayOrchestratorError::IntegrityVerificationDisabled);
     }
-
     let telemetry_snapshot = telemetry.map_or_else(TelemetrySnapshot::default, Clone::clone);
-
     let orchestrator = Orchestrator::new(config);
     let scoreboard = orchestrator.build_scoreboard(plan, &metadata, &telemetry_snapshot)?;
-
     if !scoreboard
         .entries()
         .iter()
@@ -6459,41 +6045,20 @@ pub async fn fetch_via_gateway(
     {
         return Err(GatewayOrchestratorError::NoEligibleProviders);
     }
-
     let fetcher = context.fetcher();
     let mut session = orchestrator
         .fetch_with_scoreboard(plan, &scoreboard, fetcher.as_closure())
         .await
         .map_err(GatewayOrchestratorError::from)?;
-
     let gateway_manifest = context.fetch_manifest().await?;
     let verification_context = ManifestVerificationContext::from(&gateway_manifest);
     session
         .verify_against_manifest(plan, verification_context)
         .map_err(GatewayOrchestratorError::from)?;
-
     Ok(session)
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{BTreeSet, HashMap},
-        convert::TryInto,
-        fmt,
-        fs::File,
-        io::{Read, Write},
-        net::{TcpListener, TcpStream},
-        num::{NonZeroU32, NonZeroUsize},
-        path::PathBuf,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicUsize, Ordering as AtomicOrdering},
-        },
-        thread,
-        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-    };
-
     use super::*;
     use crate::{
         bindings::{config_from_json, config_to_json},
@@ -6523,12 +6088,26 @@ mod tests {
     };
     use sorafs_chunker::ChunkProfile;
     use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
+    use std::{
+        collections::{BTreeSet, HashMap},
+        convert::TryInto,
+        fmt,
+        fs::File,
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        num::{NonZeroU32, NonZeroUsize},
+        path::PathBuf,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering as AtomicOrdering},
+        },
+        thread,
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    };
     use tokio::sync::Mutex as AsyncMutex;
-
     fn relay_id(byte: u8) -> [u8; 32] {
         [byte; 32]
     }
-
     fn entry_descriptor(id_byte: u8, weight: u32, endpoints: Vec<Endpoint>) -> RelayDescriptor {
         RelayDescriptor {
             relay_id: relay_id(id_byte),
@@ -6542,7 +6121,6 @@ mod tests {
             path_metadata: PathMetadata::default(),
         }
     }
-
     fn provider_metadata(id: &str) -> ProviderMetadata {
         let mut metadata = ProviderMetadata::new();
         metadata.provider_id = Some(id.to_owned());
@@ -6570,12 +6148,10 @@ mod tests {
         });
         metadata
     }
-
     fn assert_close(lhs: f64, rhs: f64) {
         let delta = (lhs - rhs).abs();
         assert!(delta < 1e-6, "expected {lhs} ≈ {rhs} (delta {delta})");
     }
-
     fn directory_descriptor(id: u8, roles: RelayRoles, pq: bool) -> RelayDescriptor {
         let mut descriptor = RelayDescriptor {
             relay_id: [id; 32],
@@ -6593,59 +6169,44 @@ mod tests {
         }
         descriptor
     }
-
     fn should_skip_socket_permission(message: &str) -> bool {
         message.contains("Operation not permitted") || message.contains("Permission denied")
     }
-
     #[derive(Debug)]
     struct HedgedTestError(&'static str);
-
     impl fmt::Display for HedgedTestError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str(self.0)
         }
     }
-
     impl std::error::Error for HedgedTestError {}
-
     struct FailingJobIdRng;
-
     #[derive(Debug)]
     struct FailingJobIdRngError;
-
     impl fmt::Display for FailingJobIdRngError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("failing SoraFS fetch job id RNG")
         }
     }
-
     impl TryRngCore for FailingJobIdRng {
         type Error = FailingJobIdRngError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingJobIdRngError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(FailingJobIdRngError)
         }
-
         fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
             Err(FailingJobIdRngError)
         }
     }
-
     impl TryCryptoRng for FailingJobIdRng {}
-
     #[test]
     fn fetch_job_id_reports_rng_failure() {
         let mut rng = FailingJobIdRng;
         let error = generate_job_id_with_rng(&mut rng).expect_err("RNG failure should propagate");
-
         assert!(error.contains("failing SoraFS fetch job id RNG"));
     }
-
     fn taikai_plan_with_hint(payload: &[u8]) -> CarBuildPlan {
         let digest = blake3::hash(payload);
         let hint = TaikaiSegmentHint {
@@ -6678,7 +6239,6 @@ mod tests {
             }],
         }
     }
-
     #[cfg(feature = "local-quic-proxy")]
     #[tokio::test(flavor = "multi_thread")]
     async fn downgrade_remediator_switches_proxy_mode() {
@@ -6713,7 +6273,6 @@ mod tests {
         };
         let remediator =
             DowngradeRemediator::new(Arc::clone(&runtime), remediation_cfg, Arc::clone(&metrics));
-
         remediator
             .observe_handshake_downgrade(0, SoranetPrivacyModeV1::Entry)
             .await;
@@ -6721,7 +6280,6 @@ mod tests {
             let guard = runtime.lock().await;
             assert_eq!(guard.mode(), ProxyMode::Bridge);
         }
-
         remediator
             .observe_handshake_downgrade(1, SoranetPrivacyModeV1::Entry)
             .await;
@@ -6730,7 +6288,6 @@ mod tests {
             let guard = runtime.lock().await;
             assert_eq!(guard.mode(), ProxyMode::MetadataOnly);
         }
-
         tokio::time::sleep(Duration::from_millis(180)).await;
         let final_handle = {
             let guard = runtime.lock().await;
@@ -6741,17 +6298,14 @@ mod tests {
             handle.shutdown().await;
         }
     }
-
     #[test]
     fn reconcile_circuits_returns_none_when_disabled() {
         test_logger();
-
         let config = OrchestratorConfig {
             circuit_manager: None,
             ..OrchestratorConfig::default()
         };
         let orchestrator = Orchestrator::new(config);
-
         assert!(
             orchestrator
                 .reconcile_circuits()
@@ -6770,11 +6324,9 @@ mod tests {
             "teardown should return None when circuits are disabled"
         );
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn taikai_fetch_wrapper_hedges_overdue_batches() {
         test_logger();
-
         let plan = taikai_plan_with_hint(&[0x01, 0x02, 0x03, 0x04]);
         let cache_config = TaikaiCacheConfig::default();
         let mut queue_config = TaikaiPullQueueConfig::tuned_for_cache(&cache_config);
@@ -6814,7 +6366,6 @@ mod tests {
             },
             attempt: 1,
         };
-
         let outcome = wrapped(request).await.expect("hedged fetch succeeds");
         assert_eq!(outcome.bytes, vec![0xAA, 0xBB, 0xCC, 0xDD]);
         assert_eq!(attempts.load(AtomicOrdering::SeqCst), 2);
@@ -6824,11 +6375,9 @@ mod tests {
             "expected hedged batch to be recorded, stats={stats:?}"
         );
     }
-
     #[test]
     fn reconcile_circuits_reports_and_teardown() {
         test_logger();
-
         let guard = GuardRecord {
             relay_id: [0xAA; 32],
             pinned_at_unix: 100,
@@ -6845,7 +6394,6 @@ mod tests {
             directory_descriptor(0x11, RelayRoles::new(false, true, false), true),
             directory_descriptor(0x22, RelayRoles::new(false, false, true), true),
         ]);
-
         let config = OrchestratorConfig {
             guard_set: Some(guard_set),
             relay_directory: Some(directory),
@@ -6854,7 +6402,6 @@ mod tests {
             ..OrchestratorConfig::default()
         };
         let orchestrator = Orchestrator::new(config);
-
         let initial_report = orchestrator
             .reconcile_circuits_at(UNIX_EPOCH + Duration::from_secs(10))
             .expect("initial reconciliation must succeed")
@@ -6873,13 +6420,11 @@ mod tests {
             initial_report.rotation_history.is_empty(),
             "rotation history should be empty after initial build"
         );
-
         let active_circuit = &initial_report.active[0];
         assert!(
             orchestrator.record_circuit_latency(active_circuit.id, Duration::from_millis(47)),
             "latency sample should be recorded for active circuit"
         );
-
         let rotated_report = orchestrator
             .reconcile_circuits_at(UNIX_EPOCH + Duration::from_secs(13))
             .expect("rotation reconciliation must succeed")
@@ -6898,7 +6443,6 @@ mod tests {
                 .any(|record| matches!(record.reason, CircuitRetirementReason::Expired)),
             "rotation history should record the expired circuit"
         );
-
         let teardown_records = orchestrator
             .teardown_circuits(UNIX_EPOCH + Duration::from_secs(20))
             .expect("teardown should return rotation records");
@@ -6917,7 +6461,6 @@ mod tests {
             "no circuits should remain active after teardown"
         );
     }
-
     fn spawn_privacy_server(
         status_line: &'static str,
         body: Option<String>,
@@ -6963,7 +6506,6 @@ mod tests {
                         Err(error) => panic!("failed to read privacy request: {error}"),
                     }
                 }
-
                 let request = String::from_utf8_lossy(&received);
                 let path = request
                     .lines()
@@ -6994,7 +6536,6 @@ mod tests {
         });
         Ok((url, handle))
     }
-
     fn spawn_single_privacy_response(
         status_line: &'static str,
         extra_headers: String,
@@ -7026,7 +6567,6 @@ mod tests {
         });
         Ok((url, handle))
     }
-
     #[test]
     fn outbound_url_policy_rejects_ssrf_shapes() {
         for raw in [
@@ -7055,7 +6595,6 @@ mod tests {
                 "unsafe URL was accepted: {raw}"
             );
         }
-
         for raw in [
             "https://privacy.example.org/events",
             "https://93.184.216.34/events",
@@ -7066,7 +6605,6 @@ mod tests {
                 .unwrap_or_else(|error| panic!("public URL {raw} was rejected: {error}"));
         }
     }
-
     #[test]
     fn dns_validation_rejects_mixed_private_answers_and_rebinding() {
         let public: SocketAddr = "93.184.216.34:443".parse().expect("public address");
@@ -7089,7 +6627,6 @@ mod tests {
             .as_slice(),
             &[public]
         );
-
         let excessive = (1..=HARD_MAX_DNS_ANSWERS + 1).map(|suffix| {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(93, 184, 216, suffix as u8)), 443)
         });
@@ -7102,7 +6639,6 @@ mod tests {
             Err(OutboundTargetError::TooManyDnsAnswers)
         ));
     }
-
     #[test]
     fn privacy_endpoint_extraction_only_accepts_bounded_https_urls() {
         let mut safe = ProviderMetadata::new();
@@ -7117,7 +6653,6 @@ mod tests {
         assert_eq!(endpoints.len(), 1);
         assert_eq!(endpoints[0].0, "safe");
     }
-
     #[test]
     fn fetch_resource_envelope_rejects_unbounded_and_excessive_values() {
         let mut options = FetchOptions {
@@ -7125,7 +6660,6 @@ mod tests {
             ..FetchOptions::default()
         };
         assert!(bounded_fetch_options(&options).is_ok());
-
         options.per_chunk_retry_limit = None;
         assert!(bounded_fetch_options(&options).is_err());
         options.per_chunk_retry_limit = Some(HARD_MAX_RETRIES_PER_CHUNK + 1);
@@ -7139,16 +6673,13 @@ mod tests {
         options.global_parallel_limit = Some(HARD_MAX_GLOBAL_PARALLEL_LIMIT + 1);
         assert!(bounded_fetch_options(&options).is_err());
     }
-
     #[test]
     fn privacy_payload_rejects_excessive_records_and_line_lengths() {
         let too_many_lines = "{}\n".repeat(HARD_MAX_PRIVACY_PAYLOAD_LINES + 1);
         assert!(!privacy_payload_shape_is_bounded(&too_many_lines));
-
         let oversized_line = "x".repeat(HARD_MAX_PRIVACY_LINE_BYTES + 1);
         assert!(!privacy_payload_shape_is_bounded(&oversized_line));
     }
-
     #[test]
     fn provider_metadata_bounds_reject_attacker_controlled_growth() {
         let mut metadata = ProviderMetadata::new();
@@ -7156,7 +6687,6 @@ mod tests {
             .map(|index| format!("capability-{index}"))
             .collect();
         assert!(validate_provider_metadata_bounds(&metadata).is_err());
-
         let mut metadata = ProviderMetadata::new();
         metadata.transport_hints = (0..=HARD_MAX_PROVIDER_TRANSPORT_HINTS)
             .map(|index| TransportHint {
@@ -7166,16 +6696,13 @@ mod tests {
             })
             .collect();
         assert!(validate_provider_metadata_bounds(&metadata).is_err());
-
         let mut metadata = ProviderMetadata::new();
         metadata.provider_id = Some("provider\nforged-log-line".into());
         assert!(validate_provider_metadata_bounds(&metadata).is_err());
-
         let mut metadata = ProviderMetadata::new();
         metadata.privacy_events_url = Some("https://privacy.example.org/events\n".into());
         assert!(validate_provider_metadata_bounds(&metadata).is_err());
     }
-
     #[tokio::test]
     async fn privacy_http_client_disables_redirects() {
         let (url, handle) = match spawn_single_privacy_response(
@@ -7203,7 +6730,6 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FOUND);
         handle.join().expect("redirect server exits");
     }
-
     #[tokio::test]
     async fn privacy_response_rejects_oversized_declared_length_before_body() {
         let declared = HARD_MAX_PRIVACY_RESPONSE_BYTES + 1;
@@ -7235,7 +6761,6 @@ mod tests {
         ));
         handle.join().expect("oversized response server exits");
     }
-
     #[test]
     fn compliance_example_config_parses() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -7246,7 +6771,6 @@ mod tests {
             norito::json::from_reader(file).expect("decode compliance example config");
         let config =
             bindings::config_from_json(&value).expect("parse orchestrator compliance config");
-
         assert_eq!(
             config.compliance.operator_jurisdictions(),
             &["US".to_string(), "JP".to_string()]
@@ -7305,7 +6829,6 @@ mod tests {
         assert_eq!(second.issued_at_ms(), 1_704_500_000_000);
         assert_eq!(second.expires_at_ms(), None);
     }
-
     #[test]
     fn compliance_config_roundtrips_in_json() {
         let digest = Hash::new(b"roundtrip");
@@ -7322,12 +6845,10 @@ mod tests {
             1_704_100_000_000,
             Some(1_706_100_000_000),
         )]);
-
         let config = OrchestratorConfig {
             compliance: policy.clone(),
             ..OrchestratorConfig::default()
         };
-
         let json = bindings::config_to_json(&config);
         let parsed = bindings::config_from_json(&json).expect("roundtrip compliance config");
         assert_eq!(parsed.compliance, policy);
@@ -7360,7 +6881,6 @@ mod tests {
             taikai_cache: Some(cache_config.clone()),
             ..OrchestratorConfig::default()
         };
-
         let json = bindings::config_to_json(&config);
         let parsed = bindings::config_from_json(&json).expect("roundtrip taikai cache config");
         assert_eq!(parsed.taikai_cache, Some(cache_config));
@@ -7369,7 +6889,6 @@ mod tests {
             .expect("orchestrator config serialises as JSON object");
         assert!(object.contains_key("taikai_cache"));
     }
-
     #[test]
     fn canonical_compliance_catalog_is_valid() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -7377,12 +6896,10 @@ mod tests {
         let file = File::open(&catalog_path).expect("open canonical compliance catalog");
         let catalog_value: Value =
             norito::json::from_reader(file).expect("decode canonical compliance catalog");
-
         let mut root = Map::new();
         root.insert("compliance".into(), catalog_value);
         let config = bindings::config_from_json(&Value::Object(root))
             .expect("parse canonical compliance catalog");
-
         assert!(config.compliance.operator_jurisdictions().is_empty());
         assert!(
             config
@@ -7404,13 +6921,11 @@ mod tests {
                 .any(|contact| contact.starts_with("https://"))
         );
     }
-
     #[test]
     fn orchestrator_defaults_to_guard_policy() {
         let config = OrchestratorConfig::default();
         assert_eq!(config.anonymity_policy, AnonymityPolicy::GuardPq);
     }
-
     #[test]
     fn orchestrator_refreshes_circuits_when_configured() {
         let directory = RelayDirectory::new(vec![
@@ -7435,11 +6950,9 @@ mod tests {
             .with_guard_set(guard_set)
             .with_circuit_manager(Some(CircuitManagerConfig::new(Duration::from_mins(5))));
         let orchestrator = Orchestrator::new(config);
-
         orchestrator
             .refresh_circuits()
             .expect("circuit refresh succeeds");
-
         let manager = orchestrator
             .circuit_manager
             .as_ref()
@@ -7448,7 +6961,6 @@ mod tests {
             .expect("lock circuit manager");
         assert_eq!(manager.active_circuits().len(), 1);
     }
-
     #[test]
     fn policy_parsers_accept_only_exact_v1_labels() {
         assert_eq!(
@@ -7486,7 +6998,6 @@ mod tests {
             WriteModeHint::parse("upload-pq-only"),
             Some(WriteModeHint::UploadPqOnly)
         );
-
         for alias in [
             "soranet_first",
             "soranet_strict",
@@ -7561,7 +7072,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn config_json_policy_override_accepts_only_exact_v1_labels() {
         let canonical = norito::json!({
@@ -7581,7 +7091,6 @@ mod tests {
             Some(AnonymityPolicy::StrictPq)
         );
         assert_eq!(parsed.write_mode, WriteModeHint::UploadPqOnly);
-
         for alias in [
             "soranet_first",
             "Soranet_Strict",
@@ -7627,7 +7136,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn config_json_roundtrip_includes_path_hints_and_circuit_ttl() {
         let relay_id = [0x11; 32];
@@ -7641,14 +7149,12 @@ mod tests {
         let config = OrchestratorConfig::default()
             .with_relay_path_hints(hints.clone())
             .with_circuit_manager(Some(CircuitManagerConfig::new(Duration::from_secs(9))));
-
         let value = config_to_json(&config);
         let parsed = config_from_json(&value).expect("parse config json");
         assert_eq!(parsed.relay_path_hints, hints);
         let circuit = parsed.circuit_manager.expect("circuit manager");
         assert_eq!(circuit.circuit_ttl(), Duration::from_secs(9));
     }
-
     #[test]
     fn config_json_rejects_validator_masque_bypass() {
         let value = norito::json!({
@@ -7658,7 +7164,6 @@ mod tests {
                 "validator_masque_bypass": true
             }
         });
-
         let err = match config_from_json(&value) {
             Ok(_) => panic!("bypass must be rejected"),
             Err(err) => err,
@@ -7669,7 +7174,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn config_json_rejects_invalid_relay_hint_boundaries() {
         let overflow = u64::from(u32::MAX) + 1;
@@ -7694,7 +7198,6 @@ mod tests {
                 "relay_path_hints".into(),
                 Value::Array(vec![hint]),
             )]));
-
             let err = match config_from_json(&value) {
                 Ok(_) => panic!("invalid relay hint must be rejected"),
                 Err(err) => err,
@@ -7705,7 +7208,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn guard_policy_reports_deficit_when_missing_pq() {
         let mut summary = PolicySummary::new(AnonymityPolicy::GuardPq, 3, 1);
@@ -7717,7 +7219,6 @@ mod tests {
         assert_close(summary.candidate_ratio(), 1.0 / 3.0);
         assert_close(summary.supply_delta_ratio(), 1.0 / 3.0);
     }
-
     #[test]
     fn guard_policy_zero_deficit_when_pq_present() {
         let mut summary = PolicySummary::new(AnonymityPolicy::GuardPq, 3, 2);
@@ -7729,7 +7230,6 @@ mod tests {
         assert_close(summary.candidate_ratio(), 2.0 / 3.0);
         assert_close(summary.supply_delta_ratio(), (2.0 / 3.0) - (1.0 / 3.0));
     }
-
     #[test]
     fn majority_policy_deficit_reflects_gap() {
         let mut summary = PolicySummary::new(AnonymityPolicy::MajorityPq, 4, 2);
@@ -7747,7 +7247,6 @@ mod tests {
             (0.5_f64 - (1.0_f64 / 3.0_f64)).clamp(0.0, 1.0),
         );
     }
-
     #[test]
     fn no_soranet_candidates_surface_full_deficit() {
         let summary = PolicySummary::new(AnonymityPolicy::StrictPq, 0, 0);
@@ -7755,26 +7254,22 @@ mod tests {
         assert_close(summary.deficit_ratio(), 1.0);
         assert_close(summary.candidate_ratio(), 0.0);
     }
-
     #[test]
     fn policy_report_preserves_effective_fallback_stage() {
         let mut summary = PolicySummary::new(AnonymityPolicy::StrictPq, 2, 0);
         summary.set_effective_policy(AnonymityPolicy::MajorityPq);
         summary.update_selected_counts(1, 0);
-
         let report = PolicyReport::from(summary);
         assert_eq!(report.policy, AnonymityPolicy::StrictPq);
         assert_eq!(report.effective_policy, AnonymityPolicy::MajorityPq);
         assert!(matches!(report.status, PolicyStatus::Brownout));
     }
-
     #[test]
     fn write_mode_hint_enforces_strict_policy() {
         let payload = vec![0x55; 2048];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
         let adverts = vec![provider_metadata("alpha")];
         let telemetry = TelemetrySnapshot::default();
-
         let config = OrchestratorConfig {
             write_mode: WriteModeHint::UploadPqOnly,
             ..OrchestratorConfig::default()
@@ -7783,7 +7278,6 @@ mod tests {
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &telemetry)
             .expect("scoreboard");
-
         let (transport_policy, anonymity_policy) = config
             .write_mode
             .apply(config.transport_policy, config.anonymity_policy);
@@ -7796,16 +7290,13 @@ mod tests {
             config.relay_directory.as_ref(),
             false,
         );
-
         assert_eq!(summary.policy, AnonymityPolicy::StrictPq);
         assert_eq!(summary.effective_policy(), AnonymityPolicy::StrictPq);
     }
-
     #[derive(Debug, Clone)]
     struct HarnessError {
         message: String,
     }
-
     impl HarnessError {
         fn provider(message: impl Into<String>) -> Self {
             Self {
@@ -7813,26 +7304,21 @@ mod tests {
             }
         }
     }
-
     impl fmt::Display for HarnessError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str(&self.message)
         }
     }
-
     impl std::error::Error for HarnessError {}
-
     #[test]
     fn build_scoreboard_persists_json() {
         let temp = tempfile::tempdir().expect("tempdir");
         let temp_root = temp.path().canonicalize().expect("canonical tempdir");
         let persist_path = temp_root.join("scoreboard.json");
-
         let payload = vec![0xAB; 8192];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
         let adverts = vec![provider_metadata("alpha")];
         let telemetry = TelemetrySnapshot::default();
-
         let scoreboard_cfg = ScoreboardConfig {
             persist_path: Some(persist_path.clone()),
             ..ScoreboardConfig::default()
@@ -7841,12 +7327,10 @@ mod tests {
             scoreboard: scoreboard_cfg,
             ..OrchestratorConfig::default()
         });
-
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &telemetry)
             .expect("scoreboard");
         assert_eq!(scoreboard.entries().len(), 1);
-
         let file = File::open(persist_path).expect("scoreboard file");
         let value: Value = norito::json::from_reader(file).expect("decode json");
         let entries = value
@@ -7862,7 +7346,6 @@ mod tests {
             .expect("provider id");
         assert_eq!(provider_id, "alpha");
     }
-
     #[test]
     fn fetch_uses_eligible_provider() {
         let payload = vec![0xCD; 4096];
@@ -7871,10 +7354,8 @@ mod tests {
         let mut bad = ProviderMetadata::new();
         bad.provider_id = Some("secondary".into());
         bad.range_capability = None;
-
         let adverts = vec![good, bad];
         let telemetry = TelemetrySnapshot::default();
-
         let orchestrator = Orchestrator::new(OrchestratorConfig::default());
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &telemetry)
@@ -7887,7 +7368,6 @@ mod tests {
             ),
             "secondary provider should be marked ineligible"
         );
-
         let payload_arc = Arc::new(payload);
         let fetcher = {
             let payload = Arc::clone(&payload_arc);
@@ -7901,7 +7381,6 @@ mod tests {
                 )))
             }
         };
-
         let session = block_on(orchestrator.fetch_with_scoreboard(&plan, &scoreboard, fetcher))
             .expect("fetch outcome");
         assert_eq!(session.outcome.chunks.len(), plan.chunks.len());
@@ -7916,14 +7395,12 @@ mod tests {
         assert_eq!(session.policy_report.selected_soranet_total, 1);
         assert!(!session.policy_report.uses_classical());
     }
-
     #[test]
     fn fetch_respects_max_providers_limit() {
         let payload = vec![0xAB; 4096];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
         let adverts = vec![provider_metadata("alpha"), provider_metadata("beta")];
         let telemetry = TelemetrySnapshot::default();
-
         let config = OrchestratorConfig {
             max_providers: NonZeroUsize::new(1),
             ..OrchestratorConfig::default()
@@ -7932,7 +7409,6 @@ mod tests {
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &telemetry)
             .expect("scoreboard");
-
         let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let payload_arc = Arc::new(payload.clone());
         let fetcher = {
@@ -7952,7 +7428,6 @@ mod tests {
                 )))
             }
         };
-
         let session = block_on(orchestrator.fetch_with_scoreboard(&plan, &scoreboard, fetcher))
             .expect("fetch outcome");
         let outcome = &session.outcome;
@@ -7966,43 +7441,36 @@ mod tests {
         assert_eq!(session.policy_report.status, PolicyStatus::Met);
         assert_eq!(session.policy_report.selected_soranet_total, 1);
     }
-
     #[test]
     fn transport_policy_prioritises_soranet_then_direct() {
         let payload = vec![0xCD; 2048];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-
         let mut soranet_meta = provider_metadata("soranet-alpha");
         soranet_meta.transport_hints = vec![TransportHint {
             protocol: "soranet".into(),
             protocol_id: 3,
             priority: 0,
         }];
-
         let mut quic_meta = provider_metadata("quic-beta");
         quic_meta.transport_hints = vec![TransportHint {
             protocol: "quic".into(),
             protocol_id: 2,
             priority: 0,
         }];
-
         let mut torii_meta = provider_metadata("torii-gamma");
         torii_meta.transport_hints = vec![TransportHint {
             protocol: "torii".into(),
             protocol_id: 1,
             priority: 0,
         }];
-
         let mut fallback_meta = provider_metadata("fallback-delta");
         fallback_meta.transport_hints.clear();
-
         let adverts = vec![soranet_meta, quic_meta, torii_meta, fallback_meta];
         let telemetry = TelemetrySnapshot::default();
         let orchestrator = Orchestrator::new(OrchestratorConfig::default());
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &telemetry)
             .expect("scoreboard");
-
         let SelectionOutcome { providers, .. } = eligible_providers(
             &scoreboard,
             None,
@@ -8016,7 +7484,6 @@ mod tests {
             .into_iter()
             .map(|provider| provider.id().as_str().to_string())
             .collect();
-
         assert_eq!(
             default_order,
             vec![
@@ -8026,7 +7493,6 @@ mod tests {
                 "fallback-delta".to_string(),
             ]
         );
-
         let SelectionOutcome { providers, .. } = eligible_providers(
             &scoreboard,
             None,
@@ -8040,12 +7506,10 @@ mod tests {
             .into_iter()
             .map(|provider| provider.id().as_str().to_string())
             .collect();
-
         assert_eq!(
             direct_order,
             vec!["quic-beta".to_string(), "torii-gamma".to_string()]
         );
-
         let SelectionOutcome { providers, .. } = eligible_providers(
             &scoreboard,
             None,
@@ -8059,54 +7523,45 @@ mod tests {
             .into_iter()
             .map(|provider| provider.id().as_str().to_string())
             .collect();
-
         assert_eq!(strict_order, vec!["soranet-alpha".to_string()]);
     }
-
     #[test]
     fn write_mode_hint_upload_enforces_soranet_strict() {
         let (transport, anonymity) = WriteModeHint::UploadPqOnly
             .apply(TransportPolicy::SoranetPreferred, AnonymityPolicy::GuardPq);
         assert_eq!(transport, TransportPolicy::SoranetStrict);
         assert_eq!(anonymity, AnonymityPolicy::StrictPq);
-
         let (transport_direct, anonymity_direct) = WriteModeHint::UploadPqOnly
             .apply(TransportPolicy::DirectOnly, AnonymityPolicy::GuardPq);
         assert_eq!(transport_direct, TransportPolicy::SoranetStrict);
         assert_eq!(anonymity_direct, AnonymityPolicy::StrictPq);
     }
-
     #[test]
     fn guard_set_prioritises_pinned_provider() {
         let payload = vec![0x42; 1024];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-
         let first_id_bytes = [0x11u8; 32];
         let second_id_bytes = [0x22u8; 32];
         let first_id_hex = hex::encode(first_id_bytes);
         let second_id_hex = hex::encode(second_id_bytes);
-
         let mut primary_meta = provider_metadata(&first_id_hex);
         primary_meta.transport_hints = vec![TransportHint {
             protocol: "soranet".into(),
             protocol_id: 3,
             priority: 0,
         }];
-
         let mut secondary_meta = provider_metadata(&second_id_hex);
         secondary_meta.transport_hints = vec![TransportHint {
             protocol: "soranet".into(),
             protocol_id: 3,
             priority: 0,
         }];
-
         let adverts = vec![primary_meta, secondary_meta];
         let telemetry = TelemetrySnapshot::default();
         let orchestrator = Orchestrator::new(OrchestratorConfig::default());
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &telemetry)
             .expect("scoreboard");
-
         let SelectionOutcome { providers, .. } = eligible_providers(
             &scoreboard,
             None,
@@ -8124,9 +7579,7 @@ mod tests {
                     .and_then(|meta| meta.provider_id.clone())
             })
             .collect();
-
         assert_eq!(baseline, vec![first_id_hex.clone(), second_id_hex.clone()]);
-
         let guard_set = GuardSet::new(vec![GuardRecord {
             relay_id: second_id_bytes,
             pinned_at_unix: 0,
@@ -8138,7 +7591,6 @@ mod tests {
             certificate: None,
             path_metadata: PathMetadata::default(),
         }]);
-
         let SelectionOutcome { providers, .. } = eligible_providers(
             &scoreboard,
             None,
@@ -8156,20 +7608,16 @@ mod tests {
                     .and_then(|meta| meta.provider_id.clone())
             })
             .collect();
-
         assert_eq!(prioritised, vec![second_id_hex, first_id_hex]);
     }
-
     #[test]
     fn guard_set_applies_capability_weighting() {
         let payload = vec![0xAA; 2048];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-
         let alpha_id_bytes = [0x31u8; 32];
         let beta_id_bytes = [0x41u8; 32];
         let alpha_id_hex = hex::encode(alpha_id_bytes);
         let beta_id_hex = hex::encode(beta_id_bytes);
-
         let mut alpha_meta = provider_metadata(&alpha_id_hex);
         alpha_meta.transport_hints = vec![TransportHint {
             protocol: "soranet".into(),
@@ -8182,19 +7630,16 @@ mod tests {
             protocol_id: 3,
             priority: 0,
         }];
-
         let mut alpha_telemetry = ProviderTelemetry::new(alpha_id_hex.clone());
         alpha_telemetry.staking_weight = Some(3.0);
         let mut beta_telemetry = ProviderTelemetry::new(beta_id_hex.clone());
         beta_telemetry.staking_weight = Some(1.0);
         let telemetry =
             TelemetrySnapshot::from_records(vec![alpha_telemetry.clone(), beta_telemetry.clone()]);
-
         let orchestrator = Orchestrator::new(OrchestratorConfig::default());
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &[alpha_meta.clone(), beta_meta.clone()], &telemetry)
             .expect("scoreboard");
-
         let SelectionOutcome { providers, .. } = eligible_providers(
             &scoreboard,
             None,
@@ -8213,7 +7658,6 @@ mod tests {
             })
             .collect();
         assert_eq!(baseline, vec![beta_id_hex.clone(), alpha_id_hex.clone()]);
-
         let guard_alpha_classical = GuardRecord {
             relay_id: alpha_id_bytes,
             pinned_at_unix: 0,
@@ -8255,7 +7699,6 @@ mod tests {
             })
             .collect();
         assert_eq!(pq_pref, vec![beta_id_hex.clone(), alpha_id_hex.clone()]);
-
         let guard_alpha_pq = GuardRecord {
             relay_id: alpha_id_bytes,
             pinned_at_unix: 10,
@@ -8297,7 +7740,6 @@ mod tests {
             })
             .collect();
         assert_eq!(weight_pref, vec![beta_id_hex.clone(), alpha_id_hex.clone()]);
-
         let guard_beta_equal = GuardRecord {
             relay_id: beta_id_bytes,
             pinned_at_unix: 20,
@@ -8331,7 +7773,6 @@ mod tests {
             reputation_pref,
             vec![alpha_id_hex.clone(), beta_id_hex.clone()]
         );
-
         let guard_alpha_high_bw = GuardRecord {
             relay_id: alpha_id_bytes,
             pinned_at_unix: 25,
@@ -8376,7 +7817,6 @@ mod tests {
             bandwidth_pref,
             vec![alpha_id_hex.clone(), beta_id_hex.clone()]
         );
-
         let guard_set = GuardSet::new(vec![guard_beta_low_bw, guard_alpha_high_bw]);
         let SelectionOutcome { providers, .. } = eligible_providers(
             &scoreboard,
@@ -8397,17 +7837,14 @@ mod tests {
             .collect();
         assert_eq!(pq_sorted, vec![alpha_id_hex, beta_id_hex]);
     }
-
     #[test]
     fn guard_set_weighting_updates_provider_weights_without_directory() {
         let payload = vec![0xCD; 4096];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-
         let alpha_bytes = [0x71u8; 32];
         let beta_bytes = [0x72u8; 32];
         let alpha_hex = hex::encode(alpha_bytes);
         let beta_hex = hex::encode(beta_bytes);
-
         let mut alpha_meta = provider_metadata(&alpha_hex);
         alpha_meta.capability_names = vec!["soranet_classic".into()];
         let mut beta_meta = provider_metadata(&beta_hex);
@@ -8416,13 +7853,11 @@ mod tests {
             "soranet_pq_guard".into(),
             "soranet_pq_strict".into(),
         ];
-
         let orchestrator = Orchestrator::new(OrchestratorConfig::default());
         let adverts = vec![alpha_meta.clone(), beta_meta.clone()];
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &TelemetrySnapshot::default())
             .expect("scoreboard");
-
         let guard_alpha = GuardRecord {
             relay_id: alpha_bytes,
             pinned_at_unix: 0,
@@ -8446,7 +7881,6 @@ mod tests {
             path_metadata: PathMetadata::default(),
         };
         let guard_set = GuardSet::new(vec![guard_alpha, guard_beta]);
-
         let SelectionOutcome { providers, .. } = eligible_providers(
             &scoreboard,
             None,
@@ -8456,13 +7890,11 @@ mod tests {
             None,
             false,
         );
-
         let provider_ids: Vec<String> = providers
             .iter()
             .filter_map(|provider| provider.metadata()?.provider_id.clone())
             .collect();
         assert_eq!(provider_ids, vec![beta_hex.clone(), alpha_hex.clone()]);
-
         let beta_weight = providers[0].weight().get();
         let alpha_weight = providers[1].weight().get();
         assert!(
@@ -8470,12 +7902,10 @@ mod tests {
             "expected PQ guard weighting to increase beta weight (alpha {alpha_weight}, beta {beta_weight})"
         );
     }
-
     #[test]
     fn policy_override_enforces_strict_stage_selection() {
         let payload = vec![0x77; 1024];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-
         let mut pq_meta = provider_metadata("relay-pq");
         pq_meta.transport_hints = vec![TransportHint {
             protocol: "soranet".into(),
@@ -8487,7 +7917,6 @@ mod tests {
             "soranet_pq_guard".into(),
             "soranet_pq_strict".into(),
         ];
-
         let mut classical_meta = provider_metadata("relay-classic");
         classical_meta.transport_hints = vec![TransportHint {
             protocol: "soranet".into(),
@@ -8495,7 +7924,6 @@ mod tests {
             priority: 0,
         }];
         classical_meta.capability_names = vec!["soranet_classic".into()];
-
         let orchestrator = Orchestrator::new(OrchestratorConfig::default());
         let scoreboard = orchestrator
             .build_scoreboard(
@@ -8504,7 +7932,6 @@ mod tests {
                 &TelemetrySnapshot::default(),
             )
             .expect("scoreboard");
-
         let SelectionOutcome { providers, summary } = eligible_providers(
             &scoreboard,
             None,
@@ -8524,7 +7951,6 @@ mod tests {
         );
         assert!(matches!(summary.status, PolicyStatus::Met));
         assert_eq!(summary.policy, AnonymityPolicy::StrictPq);
-
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &[classical_meta], &TelemetrySnapshot::default())
             .expect("scoreboard classical");
@@ -8540,24 +7966,20 @@ mod tests {
         assert!(providers.is_empty());
         assert!(matches!(summary.status, PolicyStatus::Brownout));
     }
-
     #[test]
     fn guard_directory_weights_soranet_candidates() {
         let payload = vec![0x99; 4096];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-
         let alpha_bytes = [0x11u8; 32];
         let beta_bytes = [0x22u8; 32];
         let gamma_bytes = [0x33u8; 32];
         let delta_bytes = [0x44u8; 32];
         let epsilon_bytes = [0x55u8; 32];
-
         let alpha_hex = hex::encode(alpha_bytes);
         let beta_hex = hex::encode(beta_bytes);
         let gamma_hex = hex::encode(gamma_bytes);
         let delta_hex = hex::encode(delta_bytes);
         let epsilon_hex = hex::encode(epsilon_bytes);
-
         fn with_bandwidth(mut metadata: ProviderMetadata, bytes_per_sec: u64) -> ProviderMetadata {
             metadata.stream_budget = Some(multi_fetch::StreamBudget {
                 max_in_flight: 4,
@@ -8566,7 +7988,6 @@ mod tests {
             });
             metadata
         }
-
         let mut alpha_meta = provider_metadata(&alpha_hex);
         alpha_meta = with_bandwidth(alpha_meta, 4 * 1024 * 1024);
         let mut beta_meta = provider_metadata(&beta_hex);
@@ -8577,7 +7998,6 @@ mod tests {
         delta_meta = with_bandwidth(delta_meta, 8 * 1024 * 1024);
         let mut epsilon_meta = provider_metadata(&epsilon_hex);
         epsilon_meta = with_bandwidth(epsilon_meta, 8 * 1024 * 1024);
-
         let telemetry = TelemetrySnapshot::from_records(vec![
             {
                 let mut record = ProviderTelemetry::new(alpha_hex.clone());
@@ -8605,7 +8025,6 @@ mod tests {
                 record
             },
         ]);
-
         let orchestrator = Orchestrator::new(OrchestratorConfig::default());
         let adverts = vec![
             alpha_meta.clone(),
@@ -8617,7 +8036,6 @@ mod tests {
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &telemetry)
             .expect("scoreboard");
-
         let mut alpha_descriptor =
             entry_descriptor(0x11, 150, vec![Endpoint::new("soranet://relay-alpha", 0)]);
         alpha_descriptor.pq_kem_public = Some(vec![0xAA]);
@@ -8639,7 +8057,6 @@ mod tests {
             entry_descriptor(0x55, 220, vec![Endpoint::new("soranet://relay-epsilon", 0)]);
         epsilon_descriptor.bandwidth_bytes_per_sec = 7 * 1024 * 1024;
         epsilon_descriptor.reputation_weight = 120;
-
         let directory = RelayDirectory::new(vec![
             alpha_descriptor,
             beta_descriptor,
@@ -8647,7 +8064,6 @@ mod tests {
             delta_descriptor,
             epsilon_descriptor,
         ]);
-
         let SelectionOutcome { providers, .. } = eligible_providers(
             &scoreboard,
             None,
@@ -8657,37 +8073,30 @@ mod tests {
             Some(&directory),
             false,
         );
-
         let ordered_ids: Vec<String> = providers
             .into_iter()
             .filter_map(|provider| provider.metadata()?.provider_id.clone())
             .collect();
-
         assert_eq!(
             ordered_ids,
             vec![delta_hex, epsilon_hex, gamma_hex, beta_hex, alpha_hex]
         );
     }
-
     #[test]
     fn capability_weighting_adjusts_provider_weights() {
         let payload = vec![0xAB; 1024];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-
         let alpha_bytes = [0x66u8; 32];
         let beta_bytes = [0x77u8; 32];
         let alpha_hex = hex::encode(alpha_bytes);
         let beta_hex = hex::encode(beta_bytes);
-
         let alpha_meta = provider_metadata(&alpha_hex);
         let beta_meta = provider_metadata(&beta_hex);
-
         let orchestrator = Orchestrator::new(OrchestratorConfig::default());
         let adverts = vec![alpha_meta.clone(), beta_meta.clone()];
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &TelemetrySnapshot::default())
             .expect("scoreboard");
-
         let base_weights: HashMap<String, u32> = scoreboard
             .entries()
             .iter()
@@ -8699,7 +8108,6 @@ mod tests {
                 Some((id, entry.provider.weight().get()))
             })
             .collect();
-
         let alpha_base = base_weights
             .get(&alpha_hex)
             .copied()
@@ -8709,20 +8117,16 @@ mod tests {
             .copied()
             .expect("expected beta base weight");
         assert_eq!(alpha_base, beta_base);
-
         let mut alpha_descriptor =
             entry_descriptor(0x66, 420, vec![Endpoint::new("soranet://relay-alpha", 0)]);
         alpha_descriptor.pq_kem_public = Some(vec![0xAA]);
         alpha_descriptor.bandwidth_bytes_per_sec = 12 * 1024 * 1024;
         alpha_descriptor.reputation_weight = 185;
-
         let mut beta_descriptor =
             entry_descriptor(0x77, 240, vec![Endpoint::new("soranet://relay-beta", 0)]);
         beta_descriptor.bandwidth_bytes_per_sec = 4 * 1024 * 1024;
         beta_descriptor.reputation_weight = 120;
-
         let directory = RelayDirectory::new(vec![alpha_descriptor, beta_descriptor]);
-
         let SelectionOutcome { providers, .. } = eligible_providers(
             &scoreboard,
             None,
@@ -8732,47 +8136,38 @@ mod tests {
             Some(&directory),
             false,
         );
-
         let provider_ids: Vec<String> = providers
             .iter()
             .filter_map(|provider| provider.metadata()?.provider_id.clone())
             .collect();
         assert_eq!(provider_ids, vec![beta_hex.clone(), alpha_hex.clone()]);
     }
-
     #[test]
     fn capability_weighting_is_deterministic_for_equal_descriptors() {
         let payload = vec![0xBC; 2048];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-
         let first_bytes = [0x21u8; 32];
         let second_bytes = [0x11u8; 32];
         let first_hex = hex::encode(first_bytes);
         let second_hex = hex::encode(second_bytes);
-
         let first_meta = provider_metadata(&first_hex);
         let second_meta = provider_metadata(&second_hex);
-
         let orchestrator = Orchestrator::new(OrchestratorConfig::default());
         let adverts = vec![first_meta.clone(), second_meta.clone()];
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &TelemetrySnapshot::default())
             .expect("scoreboard");
-
         let mut first_descriptor =
             entry_descriptor(0x21, 300, vec![Endpoint::new("soranet://relay-first", 0)]);
         first_descriptor.pq_kem_public = Some(vec![0x01]);
         first_descriptor.bandwidth_bytes_per_sec = 6 * 1024 * 1024;
         first_descriptor.reputation_weight = 140;
-
         let mut second_descriptor =
             entry_descriptor(0x11, 300, vec![Endpoint::new("soranet://relay-second", 0)]);
         second_descriptor.pq_kem_public = Some(vec![0x02]);
         second_descriptor.bandwidth_bytes_per_sec = 6 * 1024 * 1024;
         second_descriptor.reputation_weight = 140;
-
         let directory = RelayDirectory::new(vec![first_descriptor, second_descriptor]);
-
         let SelectionOutcome { providers, .. } = eligible_providers(
             &scoreboard,
             None,
@@ -8782,13 +8177,11 @@ mod tests {
             Some(&directory),
             false,
         );
-
         let ordered_ids: Vec<String> = providers
             .iter()
             .filter_map(|provider| provider.metadata()?.provider_id.clone())
             .collect();
         assert_eq!(ordered_ids, vec![second_hex.clone(), first_hex.clone()]);
-
         let first_weight = providers[0].weight().get();
         let second_weight = providers[1].weight().get();
         assert_eq!(
@@ -8796,17 +8189,14 @@ mod tests {
             "weights should remain equal when descriptors match (first {first_weight}, second {second_weight})"
         );
     }
-
     #[test]
     fn capability_weighting_prefers_pq_descriptor_with_lower_guard_weight() {
         let payload = vec![0xCD; 1536];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-
         let pq_bytes = [0x91u8; 32];
         let classical_bytes = [0x92u8; 32];
         let pq_hex = hex::encode(pq_bytes);
         let classical_hex = hex::encode(classical_bytes);
-
         let mut pq_meta = provider_metadata(&pq_hex);
         pq_meta.transport_hints = vec![TransportHint {
             protocol: "soranet".into(),
@@ -8814,7 +8204,6 @@ mod tests {
             priority: 0,
         }];
         pq_meta.capability_names = vec!["soranet_pq_guard".into()];
-
         let mut classical_meta = provider_metadata(&classical_hex);
         classical_meta.transport_hints = vec![TransportHint {
             protocol: "soranet".into(),
@@ -8822,19 +8211,16 @@ mod tests {
             priority: 0,
         }];
         classical_meta.capability_names = vec!["soranet_classical".into()];
-
         let orchestrator = Orchestrator::new(OrchestratorConfig::default());
         let adverts = vec![pq_meta.clone(), classical_meta.clone()];
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &TelemetrySnapshot::default())
             .expect("scoreboard");
-
         let mut pq_descriptor =
             entry_descriptor(0x91, 140, vec![Endpoint::new("soranet://pq-relay", 0)]);
         pq_descriptor.pq_kem_public = Some(vec![0xAA]);
         pq_descriptor.bandwidth_bytes_per_sec = 6 * 1024 * 1024;
         pq_descriptor.reputation_weight = 115;
-
         let mut classical_descriptor = entry_descriptor(
             0x92,
             260,
@@ -8842,9 +8228,7 @@ mod tests {
         );
         classical_descriptor.bandwidth_bytes_per_sec = 9 * 1024 * 1024;
         classical_descriptor.reputation_weight = 180;
-
         let directory = RelayDirectory::new(vec![pq_descriptor, classical_descriptor]);
-
         let SelectionOutcome { providers, .. } = eligible_providers(
             &scoreboard,
             None,
@@ -8854,25 +8238,20 @@ mod tests {
             Some(&directory),
             false,
         );
-
         let provider_ids: Vec<String> = providers
             .iter()
             .filter_map(|provider| provider.metadata()?.provider_id.clone())
             .collect();
-
         assert_eq!(provider_ids, vec![pq_hex, classical_hex]);
     }
-
     #[test]
     fn capability_weighting_uses_descriptor_when_guard_record_is_weaker() {
         let payload = vec![0xCE; 1024];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-
         let alpha_bytes = [0xA1u8; 32];
         let beta_bytes = [0xB2u8; 32];
         let alpha_hex = hex::encode(alpha_bytes);
         let beta_hex = hex::encode(beta_bytes);
-
         let mut alpha_meta = provider_metadata(&alpha_hex);
         alpha_meta.transport_hints = vec![TransportHint {
             protocol: "soranet".into(),
@@ -8880,7 +8259,6 @@ mod tests {
             priority: 0,
         }];
         alpha_meta.capability_names = vec!["soranet_pq_guard".into()];
-
         let mut beta_meta = provider_metadata(&beta_hex);
         beta_meta.transport_hints = vec![TransportHint {
             protocol: "soranet".into(),
@@ -8888,13 +8266,11 @@ mod tests {
             priority: 0,
         }];
         beta_meta.capability_names = vec!["soranet_pq_guard".into()];
-
         let orchestrator = Orchestrator::new(OrchestratorConfig::default());
         let adverts = vec![alpha_meta.clone(), beta_meta.clone()];
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &TelemetrySnapshot::default())
             .expect("scoreboard");
-
         let alpha_record = GuardRecord {
             relay_id: alpha_bytes,
             pinned_at_unix: 0,
@@ -8918,20 +8294,16 @@ mod tests {
             path_metadata: PathMetadata::default(),
         };
         let guard_set = GuardSet::new(vec![alpha_record, beta_record]);
-
         let mut alpha_descriptor =
             entry_descriptor(0xA1, 240, vec![Endpoint::new("soranet://relay-alpha", 0)]);
         alpha_descriptor.bandwidth_bytes_per_sec = 4 * 1024 * 1024;
         alpha_descriptor.reputation_weight = 180;
-
         let mut beta_descriptor =
             entry_descriptor(0xB2, 480, vec![Endpoint::new("soranet://relay-beta", 0)]);
         beta_descriptor.pq_kem_public = Some(vec![0x02]);
         beta_descriptor.bandwidth_bytes_per_sec = 9 * 1024 * 1024;
         beta_descriptor.reputation_weight = 260;
-
         let directory = RelayDirectory::new(vec![alpha_descriptor, beta_descriptor]);
-
         let SelectionOutcome { providers, .. } = eligible_providers(
             &scoreboard,
             None,
@@ -8941,13 +8313,11 @@ mod tests {
             Some(&directory),
             false,
         );
-
         let ordered_ids: Vec<String> = providers
             .iter()
             .filter_map(|provider| provider.metadata()?.provider_id.clone())
             .collect();
         assert_eq!(ordered_ids, vec![alpha_hex.clone(), beta_hex.clone()]);
-
         let alpha_weight = providers[0].weight().get();
         let beta_weight = providers[1].weight().get();
         assert!(
@@ -8955,30 +8325,24 @@ mod tests {
             "descriptor weighting should boost descriptor-provided guard metrics (alpha {alpha_weight}, beta {beta_weight})"
         );
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn direct_only_policy_rejects_soranet_only_providers() {
         test_logger();
-
         let payload = vec![0xEF; 2048];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-
         let mut soranet_only = provider_metadata("relay-soranet");
         soranet_only.transport_hints = vec![TransportHint {
             protocol: "soranet".into(),
             protocol_id: 3,
             priority: 0,
         }];
-
         let orchestrator = Orchestrator::new(OrchestratorConfig {
             transport_policy: TransportPolicy::DirectOnly,
             ..OrchestratorConfig::default()
         });
-
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &[soranet_only], &TelemetrySnapshot::default())
             .expect("scoreboard");
-
         let entry = scoreboard
             .entries()
             .first()
@@ -8987,31 +8351,24 @@ mod tests {
             matches!(entry.eligibility, Eligibility::Eligible),
             "transport filtering runs after eligibility evaluation"
         );
-
         let fetcher = |_request: FetchRequest| -> futures::future::Ready<
             Result<ChunkResponse, std::io::Error>,
         > { panic!("fetcher must not be called when no providers remain after filtering") };
-
         let error = orchestrator
             .fetch_with_scoreboard(&plan, &scoreboard, fetcher)
             .await
             .expect_err("direct-only policy must reject SoraNet-only providers");
-
         match error {
             OrchestratorError::MultiSource(multi_fetch::MultiSourceError::NoProviders) => {}
             other => panic!("expected NoProviders error, got {other:?}"),
         }
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn direct_only_policy_prefers_direct_transports_when_available() {
         test_logger();
-
         let payload = sample_payload(4096);
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-
         let soranet_meta = provider_metadata("relay-soranet");
-
         let mut direct_meta = provider_metadata("relay-torii");
         direct_meta.transport_hints = vec![TransportHint {
             protocol: "torii_http_range".into(),
@@ -9019,12 +8376,10 @@ mod tests {
             priority: 0,
         }];
         direct_meta.capability_names = vec!["torii_http_range".into()];
-
         let orchestrator = Orchestrator::new(OrchestratorConfig {
             transport_policy: TransportPolicy::DirectOnly,
             ..OrchestratorConfig::default()
         });
-
         let scoreboard = orchestrator
             .build_scoreboard(
                 &plan,
@@ -9032,12 +8387,10 @@ mod tests {
                 &TelemetrySnapshot::default(),
             )
             .expect("scoreboard");
-
         let observed_providers: Arc<AsyncMutex<Vec<String>>> =
             Arc::new(AsyncMutex::new(Vec::new()));
         let observed_handle = Arc::clone(&observed_providers);
         let payload = Arc::new(payload);
-
         let fetcher = move |request: FetchRequest| {
             let payload = Arc::clone(&payload);
             let observed_handle = Arc::clone(&observed_handle);
@@ -9053,12 +8406,10 @@ mod tests {
                 ))
             }
         };
-
         orchestrator
             .fetch_with_scoreboard(&plan, &scoreboard, fetcher)
             .await
             .expect("direct transports should satisfy fetch requests");
-
         let observed = observed_providers.lock().await;
         assert!(
             !observed.is_empty(),
@@ -9069,44 +8420,35 @@ mod tests {
             "direct-only policy must filter out SoraNet relays; saw {observed:?}"
         );
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn upload_mode_rejects_classical_only_guards() {
         let payload = vec![0xC1; 1024];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-
         let mut classical_meta = provider_metadata("relay-classic");
         classical_meta.capability_names = vec!["soranet_classic".into()];
-
         let orchestrator = Orchestrator::new(OrchestratorConfig {
             write_mode: WriteModeHint::UploadPqOnly,
             ..OrchestratorConfig::default()
         });
-
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &[classical_meta], &TelemetrySnapshot::default())
             .expect("scoreboard");
-
         let fetcher = |_request: FetchRequest| -> futures::future::Ready<
             Result<ChunkResponse, std::io::Error>,
         > { panic!("fetcher must not be invoked when upload mode rejects providers") };
-
         let error = orchestrator
             .fetch_with_scoreboard(&plan, &scoreboard, fetcher)
             .await
             .expect_err("upload mode must reject classical-only providers");
-
         match error {
             OrchestratorError::MultiSource(multi_fetch::MultiSourceError::NoProviders) => {}
             other => panic!("expected NoProviders error, got {other:?}"),
         }
     }
-
     #[test]
     fn anonymity_policy_guard_requires_pq_presence() {
         let payload = vec![0xAA; 2048];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-
         let mut pq_meta = provider_metadata("relay-pq");
         pq_meta.transport_hints = vec![TransportHint {
             protocol: "soranet".into(),
@@ -9114,7 +8456,6 @@ mod tests {
             priority: 0,
         }];
         pq_meta.capability_names = vec!["soranet_pq".into(), "soranet_pq_guard".into()];
-
         let mut classical_meta = provider_metadata("relay-classic");
         classical_meta.transport_hints = vec![TransportHint {
             protocol: "soranet".into(),
@@ -9122,13 +8463,11 @@ mod tests {
             priority: 0,
         }];
         classical_meta.capability_names = vec!["soranet_classic".into()];
-
         let adverts = vec![pq_meta, classical_meta];
         let orchestrator = Orchestrator::new(OrchestratorConfig::default());
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &TelemetrySnapshot::default())
             .expect("scoreboard");
-
         let SelectionOutcome { providers, summary } = eligible_providers(
             &scoreboard,
             None,
@@ -9138,12 +8477,10 @@ mod tests {
             None,
             false,
         );
-
         let provider_ids: Vec<_> = providers
             .into_iter()
             .filter_map(|provider| provider.metadata()?.provider_id.clone())
             .collect();
-
         assert_eq!(
             provider_ids,
             vec!["relay-pq".to_string(), "relay-classic".to_string()]
@@ -9153,12 +8490,10 @@ mod tests {
         assert_eq!(summary.selected_pq, 1);
         assert!(summary.fallback_reason.is_none());
     }
-
     #[test]
     fn anonymity_policy_strict_filters_non_pq_relays() {
         let payload = vec![0xBB; 1024];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-
         let mut strict_meta = provider_metadata("relay-strict");
         strict_meta.transport_hints = vec![TransportHint {
             protocol: "soranet".into(),
@@ -9166,7 +8501,6 @@ mod tests {
             priority: 0,
         }];
         strict_meta.capability_names = vec!["soranet_pq".into(), "soranet_pq_strict".into()];
-
         let mut classical_meta = provider_metadata("relay-classic");
         classical_meta.transport_hints = vec![TransportHint {
             protocol: "soranet".into(),
@@ -9174,14 +8508,11 @@ mod tests {
             priority: 0,
         }];
         classical_meta.capability_names = vec!["soranet_classic".into()];
-
         let orchestrator = Orchestrator::new(OrchestratorConfig::default());
-
         let adverts = vec![strict_meta.clone(), classical_meta.clone()];
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &TelemetrySnapshot::default())
             .expect("scoreboard");
-
         let SelectionOutcome { providers, summary } = eligible_providers(
             &scoreboard,
             None,
@@ -9191,23 +8522,19 @@ mod tests {
             None,
             false,
         );
-
         let selected_ids: Vec<_> = providers
             .iter()
             .filter_map(|provider| provider.metadata()?.provider_id.clone())
             .collect();
-
         assert_eq!(selected_ids, vec!["relay-strict".to_string()]);
         assert!(matches!(summary.status, PolicyStatus::Met));
         assert_eq!(summary.selected_soranet_total, 1);
         assert_eq!(summary.selected_pq, 1);
-
         // Remove the PQ-capable relay to trigger a strict-mode brownout.
         let adverts = vec![classical_meta];
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &TelemetrySnapshot::default())
             .expect("scoreboard");
-
         let SelectionOutcome { providers, summary } = eligible_providers(
             &scoreboard,
             None,
@@ -9217,12 +8544,10 @@ mod tests {
             None,
             false,
         );
-
         let selected_ids: Vec<_> = providers
             .iter()
             .filter_map(|provider| provider.metadata()?.provider_id.clone())
             .collect();
-
         assert_eq!(selected_ids, vec!["relay-classic".to_string()]);
         assert!(matches!(summary.status, PolicyStatus::Brownout));
         assert!(matches!(
@@ -9233,7 +8558,6 @@ mod tests {
         assert_eq!(summary.selected_pq, 0);
         assert_eq!(summary.effective_policy(), AnonymityPolicy::MajorityPq);
     }
-
     #[test]
     fn direct_mode_policy_example_is_valid() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -9243,37 +8567,31 @@ mod tests {
         let value: Value = norito::json::from_reader(file).expect("decode config json");
         let config =
             bindings::config_from_json(&value).expect("parse orchestrator config from example");
-
         assert_eq!(config.transport_policy, TransportPolicy::DirectOnly);
         assert_eq!(config.max_providers.map(|value| value.get()), Some(2));
         assert!(config.fetch.verify_digests);
         assert!(config.fetch.verify_lengths);
     }
-
     #[test]
     fn gateway_manifest_payload_digest_is_bound_to_fetch_plan() {
         let plan = CarBuildPlan::single_file(&sample_payload(4_096)).expect("plan");
         verify_gateway_payload_digest(&plan, plan.payload_digest)
             .expect("canonical payload digest");
-
         let forged = blake3::hash(b"forged gateway payload metadata");
         assert!(matches!(
             verify_gateway_payload_digest(&plan, forged),
             Err(ManifestVerificationError::PayloadDigestMismatch { .. })
         ));
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn fetch_via_gateway_rejects_insecure_provider_urls_before_selection() {
         test_logger();
-
         let payload = sample_payload(4096);
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
         let manifest_id_hex = to_hex(plan.payload_digest.as_bytes());
         let chunker_handle = "sorafs.sf1@1.0.0".to_string();
         let provider_alpha_id_hex = "11".repeat(32);
         let provider_beta_id_hex = "22".repeat(32);
-
         let gateway_config = GatewayFetchConfig {
             manifest_id_hex: manifest_id_hex.clone(),
             chunker_handle: chunker_handle.clone(),
@@ -9284,7 +8602,6 @@ mod tests {
             salt_epoch: None,
             expected_cache_version: None,
         };
-
         let providers = [
             GatewayProviderInput {
                 name: "alpha".to_string(),
@@ -9313,14 +8630,11 @@ mod tests {
                 privacy_events_url: None,
             },
         ];
-
         let mut alpha_telemetry = ProviderTelemetry::new("alpha");
         alpha_telemetry.penalty = true;
         let telemetry = TelemetrySnapshot::from_records([alpha_telemetry]);
-
         let mut config = OrchestratorConfig::default();
         config.fetch.per_chunk_retry_limit = Some(1);
-
         let err = fetch_via_gateway(
             config,
             &plan,
@@ -9331,14 +8645,12 @@ mod tests {
         )
         .await
         .expect_err("insecure gateway URLs must fail before provider selection");
-
         assert!(
             matches!(err, GatewayOrchestratorError::Build(_)),
             "expected gateway URL validation failure, got {err:?}"
         );
         assert!(err.to_string().contains("HTTPS"));
     }
-
     #[test]
     fn fetch_recovers_from_multi_provider_failures() {
         let payload = sample_payload(1 << 20);
@@ -9349,7 +8661,6 @@ mod tests {
             "expected at least three chunks in plan, got {}",
             specs.len()
         );
-
         let mut reference_store = ChunkStore::new();
         reference_store
             .ingest_bytes(&payload)
@@ -9359,7 +8670,6 @@ mod tests {
             plan.payload_digest.as_bytes(),
             "chunk-store digest should match plan digest"
         );
-
         let telemetry = TelemetrySnapshot::default();
         let orchestrator = Orchestrator::new(OrchestratorConfig::default());
         let metadata = vec![
@@ -9370,7 +8680,6 @@ mod tests {
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &metadata, &telemetry)
             .expect("scoreboard");
-
         let eligible_count = scoreboard
             .entries()
             .iter()
@@ -9380,7 +8689,6 @@ mod tests {
             eligible_count, 3,
             "all providers should be eligible for the fixture plan"
         );
-
         let payload_arc = Arc::new(payload.clone());
         let fetcher = {
             move |request: FetchRequest| {
@@ -9406,28 +8714,23 @@ mod tests {
                 }
             }
         };
-
         let session = block_on(orchestrator.fetch_with_scoreboard(&plan, &scoreboard, fetcher))
             .expect("fetch outcome");
         let outcome = &session.outcome;
-
         assert_eq!(outcome.chunks.len(), specs.len());
         assert_eq!(outcome.chunk_receipts.len(), specs.len());
-
         for (idx, receipt) in outcome.chunk_receipts.iter().enumerate() {
             assert_eq!(
                 receipt.chunk_index, idx,
                 "chunk receipts must preserve plan ordering"
             );
         }
-
         let fallback_receipt = &outcome.chunk_receipts[1];
         assert!(
             fallback_receipt.attempts > 1,
             "chunk 1 should require retries after induced failure"
         );
         assert_eq!(session.policy_report.status, PolicyStatus::Met);
-
         let served_providers: std::collections::HashSet<String> = outcome
             .chunk_receipts
             .iter()
@@ -9439,7 +8742,6 @@ mod tests {
                 "expected orchestrator to engage provider {provider}"
             );
         }
-
         let assembled = outcome.assemble_payload();
         assert_eq!(
             assembled.len(),
@@ -9450,7 +8752,6 @@ mod tests {
             assembled, payload,
             "assembled payload must be identical to original bytes"
         );
-
         let mut assembled_store = ChunkStore::new();
         assembled_store
             .ingest_plan(&assembled, &plan)
@@ -9465,7 +8766,6 @@ mod tests {
             reference_store.chunks(),
             "chunk metadata should remain deterministic"
         );
-
         let mut report_map: HashMap<String, (usize, usize, bool)> = HashMap::new();
         for report in &outcome.provider_reports {
             report_map.insert(
@@ -9492,14 +8792,12 @@ mod tests {
             "gamma should remain healthy while serving fallback chunks"
         );
     }
-
     #[test]
     fn fetch_records_metrics() {
         let payload = vec![0x11; 1024];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
         let adverts = vec![provider_metadata("primary")];
         let telemetry = TelemetrySnapshot::default();
-
         let orchestrator = Orchestrator::new(OrchestratorConfig {
             telemetry_region: Some("test-region".to_string()),
             ..OrchestratorConfig::default()
@@ -9507,11 +8805,9 @@ mod tests {
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &telemetry)
             .expect("scoreboard");
-
         let manifest_label = hex::encode(plan.payload_digest.as_bytes());
         let region_label = "test-region";
         let metrics = global_or_default();
-
         let gauge_before = metrics
             .sorafs_orchestrator_active_fetches
             .with_label_values(&[manifest_label.as_str(), region_label])
@@ -9541,7 +8837,6 @@ mod tests {
             .sorafs_orchestrator_classical_selected
             .with_label_values(&[region_label, stage_label])
             .get_sample_count();
-
         let payload_arc = Arc::new(payload);
         let attempts = Arc::new(AtomicUsize::new(0));
         let fetcher = {
@@ -9564,19 +8859,16 @@ mod tests {
                 }
             }
         };
-
         let session = block_on(orchestrator.fetch_with_scoreboard(&plan, &scoreboard, fetcher))
             .expect("fetch outcome");
         assert_eq!(session.outcome.chunks.len(), plan.chunks.len());
         assert_eq!(attempts.load(AtomicOrdering::SeqCst), 2);
         assert_eq!(session.policy_report.status, PolicyStatus::Met);
-
         let gauge_after = metrics
             .sorafs_orchestrator_active_fetches
             .with_label_values(&[manifest_label.as_str(), region_label])
             .get();
         assert_eq!(gauge_after, gauge_before);
-
         let retries_after = metrics
             .sorafs_orchestrator_retries_total
             .with_label_values(&[manifest_label.as_str(), "primary", "retry"])
@@ -9585,7 +8877,6 @@ mod tests {
             retries_after > retries_before,
             "expected retries counter to increase"
         );
-
         let failures_after = metrics
             .sorafs_orchestrator_provider_failures_total
             .with_label_values(&[manifest_label.as_str(), "primary", "session_failure"])
@@ -9594,7 +8885,6 @@ mod tests {
             failures_after > failures_before,
             "expected provider failure counter to increase"
         );
-
         let bytes_after = metrics
             .sorafs_orchestrator_bytes_total
             .with_label_values(&[manifest_label.as_str(), "primary"])
@@ -9609,7 +8899,6 @@ mod tests {
             bytes_after >= bytes_before + expected_bytes,
             "expected bytes counter to reflect fetched payload"
         );
-
         let stalls_after = metrics
             .sorafs_orchestrator_stalls_total
             .with_label_values(&[manifest_label.as_str(), "primary"])
@@ -9637,20 +8926,17 @@ mod tests {
             "expected classical selection histogram to record the session"
         );
     }
-
     #[test]
     fn pq_ratchet_fire_drill_records_metrics() {
         use futures::executor::block_on;
         fn pq_provider(id: &str) -> ProviderMetadata {
             provider_metadata(id)
         }
-
         fn classical_provider(id: &str) -> ProviderMetadata {
             let mut metadata = provider_metadata(id);
             metadata.capability_names = vec!["soranet_classic".into()];
             metadata
         }
-
         fn execute_fetch(
             policy: AnonymityPolicy,
             providers: Vec<ProviderMetadata>,
@@ -9668,7 +8954,6 @@ mod tests {
             let scoreboard = orchestrator
                 .build_scoreboard(&plan, &providers, &telemetry)
                 .expect("scoreboard");
-
             let payload_arc = Arc::new(payload);
             let fetcher = {
                 let payload = Arc::clone(&payload_arc);
@@ -9683,15 +8968,12 @@ mod tests {
                     }
                 }
             };
-
             let session = block_on(orchestrator.fetch_with_scoreboard(&plan, &scoreboard, fetcher))
                 .expect("fire drill fetch");
             session.policy_report
         }
-
         let region = "fire-drill";
         let metrics = global_or_default();
-
         // Stage A (Guard PQ) promotion check.
         let stage_guard = AnonymityPolicy::GuardPq;
         let labels_guard = [region, stage_guard.label(), "met", "none"];
@@ -9720,7 +9002,6 @@ mod tests {
             events_before_guard + 1,
             "Stage A policy event should increment"
         );
-
         // Stage B (Majority PQ) promotion check with enough PQ coverage.
         let stage_majority = AnonymityPolicy::MajorityPq;
         let labels_majority_met = [region, stage_majority.label(), "met", "none"];
@@ -9753,7 +9034,6 @@ mod tests {
             events_before_majority_met + 1,
             "Stage B promotion should increment policy events"
         );
-
         // Stage C (Strict PQ) promotion check with full PQ supply.
         let stage_strict = AnonymityPolicy::StrictPq;
         let labels_strict_met = [region, stage_strict.label(), "met", "none"];
@@ -9782,7 +9062,6 @@ mod tests {
             events_before_strict_met + 1,
             "Stage C promotion should increment policy events"
         );
-
         // Stage B brownout (demotion) with no PQ supply.
         let labels_majority_brownout = [
             region,
@@ -9836,7 +9115,6 @@ mod tests {
             brownouts_before_majority + 1,
             "Stage B brownout should increment brownout counter"
         );
-
         // Stage C brownout with fallback to Stage B.
         let strict_reason = "missing_strict_pq";
         let labels_strict_brownout = [region, stage_strict.label(), "brownout", strict_reason];
@@ -9885,7 +9163,6 @@ mod tests {
             "Stage C brownout should increment brownout counter"
         );
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn fetch_emits_telemetry_events() {
         let handle = test_logger();
@@ -9898,19 +9175,16 @@ mod tests {
                 return;
             }
         };
-
         let payload = vec![0x33; 2048];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
         let manifest_id_hex_str = manifest_id_hex(&plan);
         let adverts = vec![provider_metadata("primary")];
         let telemetry = TelemetrySnapshot::default();
-
         let config = OrchestratorConfig::default().with_telemetry_region("telemetry-test");
         let orchestrator = Orchestrator::new(config);
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &telemetry)
             .expect("scoreboard");
-
         let payload_arc = Arc::new(payload);
         let attempts = Arc::new(AtomicUsize::new(0));
         let fetcher = {
@@ -9933,13 +9207,11 @@ mod tests {
                 }
             }
         };
-
         let session = orchestrator
             .fetch_with_scoreboard(&plan, &scoreboard, fetcher)
             .await
             .expect("fetch outcome");
         assert_eq!(session.outcome.chunks.len(), plan.chunks.len());
-
         let expected_total_bytes: u64 = session
             .outcome
             .chunks
@@ -9947,13 +9219,11 @@ mod tests {
             .map(|chunk| chunk.len() as u64)
             .sum();
         assert_eq!(session.policy_report.status, PolicyStatus::Met);
-
         let mut saw_start = false;
         let mut saw_complete = false;
         let mut saw_retry = false;
         let mut saw_provider_failure = false;
         let mut saw_stall = false;
-
         for _ in 0..128 {
             let Ok(result) =
                 tokio::time::timeout(Duration::from_millis(200), receiver.recv()).await
@@ -10061,12 +9331,10 @@ mod tests {
                 }
                 _ => {}
             }
-
             if saw_start && saw_complete && saw_retry && saw_provider_failure {
                 break;
             }
         }
-
         if !(saw_start && saw_complete) {
             eprintln!(
                 "skipping fetch telemetry assertions (start={saw_start}, complete={saw_complete})"
@@ -10080,14 +9348,12 @@ mod tests {
             "unexpected stall event emitted during basic fetch"
         );
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn fetch_records_stall_metrics_for_slow_provider() {
         let payload = vec![0xAB; 4 * 1024];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
         let adverts = vec![provider_metadata("slow")];
         let telemetry = TelemetrySnapshot::default();
-
         let mut config = OrchestratorConfig::default();
         config.scoreboard.latency_cap_ms = 5;
         config.telemetry_region = Some("stall-test".to_string());
@@ -10095,14 +9361,12 @@ mod tests {
         let scoreboard = orchestrator
             .build_scoreboard(&plan, &adverts, &telemetry)
             .expect("scoreboard");
-
         let manifest_label = hex::encode(plan.payload_digest.as_bytes());
         let metrics = global_or_default();
         let stalls_before = metrics
             .sorafs_orchestrator_stalls_total
             .with_label_values(&[manifest_label.as_str(), "slow"])
             .get();
-
         let handle = test_logger();
         let mut receiver = match handle.subscribe_on_telemetry(Channel::Regular).await {
             Ok(receiver) => receiver,
@@ -10113,7 +9377,6 @@ mod tests {
                 return;
             }
         };
-
         let payload_arc = Arc::new(payload);
         let fetcher = {
             let payload = Arc::clone(&payload_arc);
@@ -10129,14 +9392,12 @@ mod tests {
                 }
             }
         };
-
         let session = orchestrator
             .fetch_with_scoreboard(&plan, &scoreboard, fetcher)
             .await
             .expect("fetch outcome");
         assert_eq!(session.outcome.chunks.len(), plan.chunks.len());
         assert_eq!(session.policy_report.status, PolicyStatus::Met);
-
         let stalls_after = metrics
             .sorafs_orchestrator_stalls_total
             .with_label_values(&[manifest_label.as_str(), "slow"])
@@ -10146,10 +9407,8 @@ mod tests {
             stalls_before + plan.chunks.len() as u64,
             "expected stall counter to reflect slow chunk delivery"
         );
-
         let mut saw_stall_event = false;
         let mut success_stall_count: Option<u64> = None;
-
         for _ in 0..128 {
             let Ok(result) =
                 tokio::time::timeout(Duration::from_millis(200), receiver.recv()).await
@@ -10190,7 +9449,6 @@ mod tests {
                 break;
             }
         }
-
         // Stall metrics are validated above; telemetry events may be dropped under heavy load.
         if saw_stall_event && let Some(count) = success_stall_count {
             assert_eq!(
@@ -10200,7 +9458,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn config_json_roundtrip_preserves_fields() {
         let mut config = OrchestratorConfig::default();
@@ -10225,10 +9482,8 @@ mod tests {
             asn: Some(64500),
             validator_lane: true,
         }];
-
         let value = bindings::config_to_json(&config);
         let parsed = bindings::config_from_json(&value).expect("parse config");
-
         assert_eq!(
             parsed.scoreboard.latency_cap_ms,
             config.scoreboard.latency_cap_ms
@@ -10278,7 +9533,6 @@ mod tests {
         assert_eq!(parsed_hint.asn, Some(64500));
         assert!(parsed_hint.validator_lane);
     }
-
     #[test]
     fn config_json_defaults_absent_validator_lane_to_false() {
         let mut value = bindings::config_to_json(&OrchestratorConfig::default());
@@ -10292,12 +9546,10 @@ mod tests {
                     Value::from("aa".repeat(32)),
                 )]))]),
             );
-
         let parsed = bindings::config_from_json(&value).expect("parse relay path hint");
         assert_eq!(parsed.relay_path_hints.len(), 1);
         assert!(!parsed.relay_path_hints[0].validator_lane);
     }
-
     #[test]
     fn config_json_rejects_non_boolean_validator_lane() {
         for invalid in [Value::from("true"), Value::from(1)] {
@@ -10312,7 +9564,6 @@ mod tests {
                         ("validator_lane".into(), invalid),
                     ]))]),
                 );
-
             let err = match bindings::config_from_json(&value) {
                 Ok(_) => panic!("non-boolean validator lane must be rejected"),
                 Err(err) => err,
@@ -10320,7 +9571,6 @@ mod tests {
             assert!(err.to_string().contains("validator_lane must be a boolean"));
         }
     }
-
     #[test]
     fn config_json_rejects_disabled_fetch_integrity_verification() {
         for field in ["verify_lengths", "verify_digests"] {
@@ -10333,7 +9583,6 @@ mod tests {
                 .as_object_mut()
                 .expect("fetch config should be an object");
             fetch.insert(field.to_string(), Value::Bool(false));
-
             let err = match bindings::config_from_json(&value) {
                 Ok(_) => panic!("disabled fetch integrity verification must be rejected"),
                 Err(err) => err,
@@ -10344,7 +9593,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn config_json_rejects_values_outside_resource_envelope() {
         for (field, value) in [
@@ -10375,7 +9623,6 @@ mod tests {
                 "unsafe fetch resource value was accepted: {field}={value}"
             );
         }
-
         for value in [0_u64, (HARD_MAX_PROVIDERS + 1) as u64] {
             let mut config = bindings::config_to_json(&OrchestratorConfig::default());
             config
@@ -10387,7 +9634,6 @@ mod tests {
                 "unsafe provider limit was accepted: {value}"
             );
         }
-
         for (field, value) in [
             ("poll_interval_secs", 0_u64),
             (
@@ -10413,12 +9659,10 @@ mod tests {
             );
         }
     }
-
     #[cfg(feature = "local-quic-proxy")]
     #[tokio::test(flavor = "multi_thread")]
     async fn privacy_collector_ingests_ndjson_and_updates_metrics() {
         test_logger();
-
         let bucket_secs = 60;
         let now_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -10427,7 +9671,6 @@ mod tests {
         let bucket_start = ((now_secs.saturating_sub(180)) / bucket_secs) * bucket_secs;
         let bucket_label = bucket_start.to_string();
         let mode = SoranetPrivacyModeV1::Middle;
-
         let events = [
             SoranetPrivacyEventV1 {
                 timestamp_unix: bucket_start,
@@ -10472,7 +9715,6 @@ mod tests {
                 }),
             },
         ];
-
         let ndjson = events
             .iter()
             .map(|event| {
@@ -10481,7 +9723,6 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-
         let downgrade_event = SoranetPrivacyEventV1 {
             timestamp_unix: bucket_start + 55,
             mode,
@@ -10495,7 +9736,6 @@ mod tests {
         };
         let downgrade_json = json::to_value(&downgrade_event).expect("encode downgrade");
         let policy_ndjson = json::to_string(&downgrade_json).expect("render downgrade ndjson line");
-
         let (url, server_handle) = match spawn_privacy_server(
             "200 OK",
             Some(ndjson),
@@ -10510,7 +9750,6 @@ mod tests {
             }
             Err(err) => panic!("bind mock privacy server listener: {err}"),
         };
-
         let config = PrivacyEventsConfig {
             bucket: PrivacyBucketConfig {
                 bucket_secs,
@@ -10524,7 +9763,6 @@ mod tests {
             poll_interval: Duration::from_secs(30),
             request_timeout: Duration::from_secs(2),
         };
-
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
         let proxy_cfg = LocalQuicProxyConfig {
             bind_addr: "127.0.0.1:0".into(),
@@ -10568,68 +9806,55 @@ mod tests {
         .await
         .expect("privacy collector spawn")
         .expect("privacy collector created");
-
         assert_eq!(
             metrics.soranet_privacy_collector_enabled.get(),
             1,
             "collector enabled gauge should be 1 while running"
         );
-
         tokio::time::sleep(Duration::from_millis(150)).await;
-
         {
             let guard = runtime.lock().await;
             assert_eq!(guard.mode(), ProxyMode::MetadataOnly);
         }
-
         collector.shutdown().await;
         let _ = server_handle.join();
-
         assert_eq!(
             metrics.soranet_privacy_collector_enabled.get(),
             0,
             "collector enabled gauge should reset after shutdown"
         );
-
         let accepted = metrics
             .soranet_privacy_circuit_events_total
             .with_label_values(&[mode.as_label(), &bucket_label, "accepted"])
             .get();
         assert_eq!(accepted, 1);
-
         let pow_rejected = metrics
             .soranet_privacy_circuit_events_total
             .with_label_values(&[mode.as_label(), &bucket_label, "pow_rejected"])
             .get();
         assert_eq!(pow_rejected, 1);
-
         let throttled = metrics
             .soranet_privacy_throttles_total
             .with_label_values(&[mode.as_label(), &bucket_label, "remote_quota"])
             .get();
         assert_eq!(throttled, 1);
-
         let verified_bytes = metrics
             .soranet_privacy_verified_bytes_total
             .with_label_values(&[mode.as_label(), &bucket_label])
             .get();
         assert_eq!(verified_bytes, 2_048);
-
         let suppressed = metrics
             .soranet_privacy_bucket_suppressed
             .with_label_values(&[mode.as_label(), &bucket_label])
             .get();
         assert_eq!(suppressed, 0.0);
-
         let max_active = metrics
             .soranet_privacy_active_circuits_max
             .with_label_values(&[mode.as_label(), &bucket_label])
             .get();
         assert_eq!(max_active, 6.0);
-
         let last_poll = metrics.soranet_privacy_last_poll_unixtime.get();
         assert!(last_poll > 0, "expected last poll timestamp to be recorded");
-
         let poll_errors = metrics
             .soranet_privacy_poll_errors_total
             .with_label_values(&["relay-alpha"])
@@ -10639,11 +9864,9 @@ mod tests {
             "no poll errors expected for successful response"
         );
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn privacy_collector_ignores_non_success_status() {
         test_logger();
-
         let (url, server_handle) = match spawn_privacy_server("503 Service Unavailable", None, None)
         {
             Ok(pair) => pair,
@@ -10655,7 +9878,6 @@ mod tests {
             }
             Err(err) => panic!("bind mock privacy server listener: {err}"),
         };
-
         let config = PrivacyEventsConfig {
             bucket: PrivacyBucketConfig {
                 bucket_secs: 60,
@@ -10669,7 +9891,6 @@ mod tests {
             poll_interval: Duration::from_secs(30),
             request_timeout: Duration::from_secs(2),
         };
-
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
         let collector = PrivacyCollector::spawn_for_local_test(
             vec![("relay-beta".to_string(), url)],
@@ -10681,52 +9902,42 @@ mod tests {
         .expect("privacy collector spawn")
         .expect("privacy collector created");
         let aggregator = Arc::clone(&collector.aggregator);
-
         assert_eq!(
             metrics.soranet_privacy_collector_enabled.get(),
             1,
             "collector enabled gauge should be 1 while running"
         );
-
         tokio::time::sleep(Duration::from_millis(150)).await;
-
         collector.shutdown().await;
         let _ = server_handle.join();
-
         assert_eq!(
             metrics.soranet_privacy_collector_enabled.get(),
             0,
             "collector enabled gauge should reset after shutdown"
         );
-
         assert!(
             aggregator.drain_ready_now().is_empty(),
             "no buckets expected when relay returns non-success status"
         );
-
         let metrics_dump = metrics.try_to_string().expect("encode metrics");
         assert!(
             !metrics_dump.contains("soranet_privacy_circuit_events_total"),
             "unexpected circuit metrics recorded:\n{metrics_dump}"
         );
-
         let last_poll = metrics.soranet_privacy_last_poll_unixtime.get();
         assert_eq!(
             last_poll, 0,
             "last poll gauge should remain unset on failure"
         );
-
         let poll_errors = metrics
             .soranet_privacy_poll_errors_total
             .with_label_values(&["relay-beta"])
             .get();
         assert!(poll_errors > 0, "expected poll error counter to increment");
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn privacy_collector_ingests_prio_shares_basic() {
         test_logger();
-
         let mut share_a = SoranetPrivacyPrioShareV1::new(1, 0, 60);
         share_a.mode = SoranetPrivacyModeV1::Entry;
         share_a.handshake_accept_share = 8;
@@ -10737,7 +9948,6 @@ mod tests {
         share_a.active_circuits_max_observed = Some(9);
         share_a.verified_bytes_share = 1_024;
         share_a.suppressed = false;
-
         let mut share_b = SoranetPrivacyPrioShareV1::new(2, 0, 60);
         share_b.mode = SoranetPrivacyModeV1::Entry;
         share_b.handshake_accept_share = 7;
@@ -10748,16 +9958,13 @@ mod tests {
         share_b.active_circuits_max_observed = Some(11);
         share_b.verified_bytes_share = 2_048;
         share_b.suppressed = false;
-
         let share_a_json = json::to_value(&share_a).expect("share to json");
         let share_b_json = json::to_value(&share_b).expect("share to json");
-
         let body = format!(
             "{}\n{}\n",
             json::to_string(&share_a_json).expect("serialize share"),
             json::to_string(&share_b_json).expect("serialize share")
         );
-
         let (url, server_handle) = match spawn_privacy_server("200 OK", Some(body), None) {
             Ok(pair) => pair,
             Err(err) if should_skip_socket_permission(&err.to_string()) => {
@@ -10768,7 +9975,6 @@ mod tests {
             }
             Err(err) => panic!("bind mock privacy server listener: {err}"),
         };
-
         let config = PrivacyEventsConfig {
             bucket: PrivacyBucketConfig {
                 bucket_secs: 60,
@@ -10782,7 +9988,6 @@ mod tests {
             poll_interval: Duration::from_secs(30),
             request_timeout: Duration::from_secs(2),
         };
-
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
         let collector = PrivacyCollector::spawn_for_local_test(
             vec![("relay-prio".to_string(), url)],
@@ -10793,44 +9998,35 @@ mod tests {
         .await
         .expect("privacy collector spawn")
         .expect("privacy collector created");
-
         assert_eq!(
             metrics.soranet_privacy_collector_enabled.get(),
             1,
             "collector enabled gauge should be 1 while running"
         );
-
         tokio::time::sleep(Duration::from_millis(150)).await;
-
         collector.shutdown().await;
         let _ = server_handle.join();
-
         assert_eq!(
             metrics.soranet_privacy_collector_enabled.get(),
             0,
             "collector enabled gauge should reset after shutdown"
         );
-
         let accepted = metrics
             .soranet_privacy_circuit_events_total
             .with_label_values(&["entry", "0", "accepted"])
             .get();
         assert_eq!(accepted, 15);
-
         let poll_errors = metrics
             .soranet_privacy_poll_errors_total
             .with_label_values(&["relay-prio"])
             .get();
         assert_eq!(poll_errors, 0);
-
         let last_poll = metrics.soranet_privacy_last_poll_unixtime.get();
         assert!(last_poll > 0, "expected last poll timestamp to be recorded");
     }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn privacy_collector_ingests_prio_shares() {
         test_logger();
-
         let mut share_a = SoranetPrivacyPrioShareV1::new(1, 0, 60);
         share_a.mode = SoranetPrivacyModeV1::Entry;
         share_a.handshake_accept_share = 8;
@@ -10841,7 +10037,6 @@ mod tests {
         share_a.active_circuits_max_observed = Some(9);
         share_a.verified_bytes_share = 1_024;
         share_a.suppressed = false;
-
         let mut share_b = SoranetPrivacyPrioShareV1::new(2, 0, 60);
         share_b.mode = SoranetPrivacyModeV1::Entry;
         share_b.handshake_accept_share = 7;
@@ -10852,16 +10047,13 @@ mod tests {
         share_b.active_circuits_max_observed = Some(11);
         share_b.verified_bytes_share = 2_048;
         share_b.suppressed = false;
-
         let share_a_json = json::to_value(&share_a).expect("share to json");
         let share_b_json = json::to_value(&share_b).expect("share to json");
-
         let body = format!(
             "{}\n{}\n",
             json::to_string(&share_a_json).expect("serialize share"),
             json::to_string(&share_b_json).expect("serialize share")
         );
-
         let (url, server_handle) = match spawn_privacy_server("200 OK", Some(body), None) {
             Ok(pair) => pair,
             Err(err) if should_skip_socket_permission(&err.to_string()) => {
@@ -10872,7 +10064,6 @@ mod tests {
             }
             Err(err) => panic!("bind mock privacy server listener: {err}"),
         };
-
         let config = PrivacyEventsConfig {
             bucket: PrivacyBucketConfig {
                 bucket_secs: 60,
@@ -10886,7 +10077,6 @@ mod tests {
             poll_interval: Duration::from_secs(30),
             request_timeout: Duration::from_secs(2),
         };
-
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
         let collector = PrivacyCollector::spawn_for_local_test(
             vec![("relay-prio".to_string(), url)],
@@ -10897,78 +10087,63 @@ mod tests {
         .await
         .expect("privacy collector spawn")
         .expect("privacy collector created");
-
         assert_eq!(
             metrics.soranet_privacy_collector_enabled.get(),
             1,
             "collector enabled gauge should be 1 while running"
         );
-
         tokio::time::sleep(Duration::from_millis(150)).await;
-
         collector.shutdown().await;
         let _ = server_handle.join();
-
         assert_eq!(
             metrics.soranet_privacy_collector_enabled.get(),
             0,
             "collector enabled gauge should reset after shutdown"
         );
-
         let mode_label = SoranetPrivacyModeV1::Entry.as_label();
         let bucket_label = share_a.bucket_start_unix.to_string();
-
         let accepted = metrics
             .soranet_privacy_circuit_events_total
             .with_label_values(&[mode_label, &bucket_label, "accepted"])
             .get();
         assert_eq!(accepted, 15);
-
         let pow_rejected = metrics
             .soranet_privacy_circuit_events_total
             .with_label_values(&[mode_label, &bucket_label, "pow_rejected"])
             .get();
         assert_eq!(pow_rejected, 3);
-
         let throttles = metrics
             .soranet_privacy_throttles_total
             .with_label_values(&[mode_label, &bucket_label, "congestion"])
             .get();
         assert_eq!(throttles, 3);
-
         let verified_bytes = metrics
             .soranet_privacy_verified_bytes_total
             .with_label_values(&[mode_label, &bucket_label])
             .get();
         assert_eq!(verified_bytes, 3_072);
-
         let suppressed = metrics
             .soranet_privacy_bucket_suppressed
             .with_label_values(&[mode_label, &bucket_label])
             .get();
         assert_eq!(suppressed, 0.0);
-
         let active_avg = metrics
             .soranet_privacy_active_circuits_avg
             .with_label_values(&[mode_label, &bucket_label])
             .get();
         assert_close(active_avg, 4.0);
-
         let active_max = metrics
             .soranet_privacy_active_circuits_max
             .with_label_values(&[mode_label, &bucket_label])
             .get();
         assert_eq!(active_max, 11.0);
     }
-
     fn sample_payload(len: usize) -> Vec<u8> {
         (0..len).map(|idx| (idx % 251) as u8).collect()
     }
-
     fn to_hex(bytes: &[u8]) -> String {
         hex::encode(bytes)
     }
-
     fn stream_token_b64(
         manifest_cid_hex: &str,
         provider_id_hex: &str,
@@ -10997,7 +10172,6 @@ mod tests {
         let bytes = norito::to_bytes(&token).expect("encode token");
         BASE64_STANDARD.encode(bytes)
     }
-
     fn gateway_public_key_hex() -> String {
         hex::encode(
             ed25519_dalek::SigningKey::from_bytes(&[0x42; 32])
@@ -11005,12 +10179,10 @@ mod tests {
                 .to_bytes(),
         )
     }
-
     struct MockGateway {
         base_url: String,
         join_handle: Option<thread::JoinHandle<()>>,
     }
-
     impl MockGateway {
         fn spawn(manifest_id_hex: String, plan: CarBuildPlan, payload: Vec<u8>) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
@@ -11019,7 +10191,6 @@ mod tests {
                 .expect("set blocking mode failed");
             let address = listener.local_addr().expect("local addr");
             let base_url = format!("http://{address}/");
-
             let expected = Arc::new(Mutex::new(build_chunk_map(
                 &manifest_id_hex,
                 &plan,
@@ -11029,18 +10200,15 @@ mod tests {
                 let expected = Arc::clone(&expected);
                 thread::spawn(move || serve_chunks(listener, expected))
             };
-
             Self {
                 base_url,
                 join_handle: Some(join_handle),
             }
         }
-
         fn base_url(&self) -> &str {
             &self.base_url
         }
     }
-
     impl Drop for MockGateway {
         fn drop(&mut self) {
             if let Some(handle) = self.join_handle.take() {
@@ -11048,7 +10216,6 @@ mod tests {
             }
         }
     }
-
     fn build_chunk_map(
         manifest_id_hex: &str,
         plan: &CarBuildPlan,
@@ -11064,7 +10231,6 @@ mod tests {
         }
         map
     }
-
     fn read_request(stream: &mut TcpStream) -> Option<String> {
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
@@ -11086,7 +10252,6 @@ mod tests {
         }
         String::from_utf8(request).ok()
     }
-
     fn respond(mut stream: TcpStream, body: Vec<u8>) {
         let header = format!(
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
@@ -11095,7 +10260,6 @@ mod tests {
         stream.write_all(header.as_bytes()).expect("write header");
         stream.write_all(&body).expect("write body");
     }
-
     fn serve_chunks(listener: TcpListener, responses: Arc<Mutex<HashMap<String, Vec<u8>>>>) {
         loop {
             let (mut stream, _) = match listener.accept() {
@@ -11130,7 +10294,6 @@ mod tests {
             }
         }
     }
-
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "needs loopback socket permissions"]
     async fn fetch_via_gateway_streams_chunks() {
@@ -11140,9 +10303,7 @@ mod tests {
         let chunker_handle = "sorafs.sf1@1.0.0".to_string();
         let provider_id_hex = "aa".repeat(32);
         let token_b64 = stream_token_b64(&manifest_id_hex, &provider_id_hex, &chunker_handle, 4);
-
         let gateway = MockGateway::spawn(manifest_id_hex.clone(), plan.clone(), payload.clone());
-
         let gateway_config = GatewayFetchConfig {
             manifest_id_hex: manifest_id_hex.clone(),
             chunker_handle: chunker_handle.clone(),
@@ -11161,10 +10322,8 @@ mod tests {
             stream_token_b64: token_b64,
             privacy_events_url: None,
         };
-
         let mut config = OrchestratorConfig::default();
         config.fetch.per_chunk_retry_limit = Some(2);
-
         let session = fetch_via_gateway(
             config,
             &plan,
@@ -11175,7 +10334,6 @@ mod tests {
         )
         .await
         .expect("fetch outcome");
-
         assert_eq!(
             session.outcome.chunks.len(),
             plan.try_chunk_fetch_specs().expect("valid CAR plan").len()
@@ -11183,7 +10341,6 @@ mod tests {
         let assembled: Vec<u8> = session.outcome.chunks.concat();
         assert_eq!(assembled, payload);
     }
-
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "needs loopback socket permissions"]
     async fn fetch_via_gateway_errors_without_providers() {
@@ -11200,7 +10357,6 @@ mod tests {
             salt_epoch: None,
             expected_cache_version: None,
         };
-
         let err = fetch_via_gateway(
             OrchestratorConfig::default(),
             &plan,

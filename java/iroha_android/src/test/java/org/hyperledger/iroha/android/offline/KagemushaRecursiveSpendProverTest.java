@@ -9,8 +9,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.PrivateKey;
+import java.security.Signature;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -19,8 +24,13 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
+import org.hyperledger.iroha.android.client.LocalSigningContext;
+import org.hyperledger.iroha.android.client.ToriiCanonicalRequestAuth;
+import org.hyperledger.iroha.android.client.transport.RequestReplayPolicy;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.SchemaHash;
@@ -1456,6 +1466,18 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void toriiLifecycleRoutesAndHeadersAreExact() {
+    final NetworkId networkId =
+        NetworkId.parse(
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
+    final NetworkId otherNetworkId =
+        NetworkId.parse(
+            "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22");
+    final KeyPair keyPair = generateEd25519KeyPair();
+    final long timestampMs = 1_700_000_000_500L;
+    final String nonce = "offline-lineage-1";
+    final ToriiCanonicalRequestAuth canonicalAuth =
+        new ToriiCanonicalRequestAuth(
+            "alice", message -> signEd25519(keyPair.getPrivate(), message), timestampMs, nonce);
     final AtomicReference<TransportRequest> captured = new AtomicReference<>();
     final KagemushaRecursiveSpendProver.ToriiClient client =
         KagemushaRecursiveSpendProver.newToriiClient(
@@ -1483,7 +1505,8 @@ public final class KagemushaRecursiveSpendProverTest {
                                           ? "OfflineOperationStatus"
                                           : unexpectedToriiRoute(request)))
                       .build());
-            });
+            },
+            new LocalSigningContext(networkId));
 
     final KagemushaRecursiveSpendProver.OfflineStatus status =
         client.getOfflineCapability().join();
@@ -1505,10 +1528,74 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.RecipientLineageQueryV2.class,
         new Class<?>[] {byte[].class},
         archive("iroha_torii_shared::offline_api::OfflineRecipientLineageRequest"));
-    client.getRecipientRegistrationLineage(query).join();
-    assert captured.get().uri().getPath().equals("/api/v1/offline/receiver-lineage");
-    assert captured.get().headers().get("Content-Type")
+    client.getRecipientRegistrationLineage(query, canonicalAuth).join();
+    final TransportRequest lineageRequest = captured.get();
+    assert lineageRequest.uri().getPath().equals("/api/v1/offline/receiver-lineage");
+    assert lineageRequest.headers().get("Content-Type")
         .equals(Arrays.asList("application/x-norito"));
+    assert lineageRequest.headers().get(CanonicalRequestSigner.HEADER_ACCOUNT)
+        .equals(Arrays.asList("alice"));
+    assert lineageRequest.headers().get(CanonicalRequestSigner.HEADER_TIMESTAMP_MS)
+        .equals(Arrays.asList(Long.toString(timestampMs)));
+    assert lineageRequest.headers().get(CanonicalRequestSigner.HEADER_NONCE)
+        .equals(Arrays.asList(nonce));
+    assert lineageRequest.replayPolicy() == RequestReplayPolicy.ONE_SHOT;
+    final byte[] signature =
+        Base64.getDecoder()
+            .decode(
+                lineageRequest.headers().get(CanonicalRequestSigner.HEADER_SIGNATURE).get(0));
+    assert verifyEd25519(
+        keyPair,
+        CanonicalRequestSigner.canonicalRequestSignatureMessage(
+            networkId,
+            lineageRequest.method(),
+            lineageRequest.uri(),
+            lineageRequest.body(),
+            timestampMs,
+            nonce),
+        signature);
+    assert !verifyEd25519(
+        keyPair,
+        CanonicalRequestSigner.canonicalRequestSignatureMessage(
+            otherNetworkId,
+            lineageRequest.method(),
+            lineageRequest.uri(),
+            lineageRequest.body(),
+            timestampMs,
+            nonce),
+        signature);
+    assert !verifyEd25519(
+        keyPair,
+        CanonicalRequestSigner.canonicalRequestSignatureMessage(
+            networkId,
+            "GET",
+            lineageRequest.uri(),
+            lineageRequest.body(),
+            timestampMs,
+            nonce),
+        signature);
+    assert !verifyEd25519(
+        keyPair,
+        CanonicalRequestSigner.canonicalRequestSignatureMessage(
+            networkId,
+            lineageRequest.method(),
+            URI.create("https://torii.example/api/v1/offline/readiness"),
+            lineageRequest.body(),
+            timestampMs,
+            nonce),
+        signature);
+    final byte[] substitutedBody =
+        Arrays.copyOf(lineageRequest.body(), lineageRequest.body().length + 1);
+    assert !verifyEd25519(
+        keyPair,
+        CanonicalRequestSigner.canonicalRequestSignatureMessage(
+            networkId,
+            lineageRequest.method(),
+            lineageRequest.uri(),
+            substitutedBody,
+            timestampMs,
+            nonce),
+        signature);
 
     final String operationId = repeat("11", 32);
     client
@@ -1564,7 +1651,10 @@ public final class KagemushaRecursiveSpendProverTest {
                       .setStatusCode(200)
                       .addHeader("Content-Type", "application/json")
                       .setBody(payload.getBytes(StandardCharsets.UTF_8))
-                      .build()));
+                      .build()),
+              new LocalSigningContext(
+                  NetworkId.parse(
+                      "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0")));
       boolean rejected = false;
       try {
         client.getOfflineCapability().join();
@@ -1816,6 +1906,37 @@ public final class KagemushaRecursiveSpendProverTest {
         siblings,
         directions,
         root);
+  }
+
+  private static KeyPair generateEd25519KeyPair() {
+    try {
+      return KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    } catch (final Exception error) {
+      throw new AssertionError(error);
+    }
+  }
+
+  private static byte[] signEd25519(final PrivateKey privateKey, final byte[] message) {
+    try {
+      final Signature signer = Signature.getInstance("Ed25519");
+      signer.initSign(privateKey);
+      signer.update(message);
+      return signer.sign();
+    } catch (final Exception error) {
+      throw new AssertionError(error);
+    }
+  }
+
+  private static boolean verifyEd25519(
+      final KeyPair keyPair, final byte[] message, final byte[] signature) {
+    try {
+      final Signature verifier = Signature.getInstance("Ed25519");
+      verifier.initVerify(keyPair.getPublic());
+      verifier.update(message);
+      return verifier.verify(signature);
+    } catch (final Exception error) {
+      throw new AssertionError(error);
+    }
   }
 
   private static void assertThrowsIllegalArgument(final Runnable action) {

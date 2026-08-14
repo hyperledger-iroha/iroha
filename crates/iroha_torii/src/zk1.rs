@@ -1,11 +1,8 @@
 //! Bounded parsing for the app-facing `ZK1` TLV envelope.
-
 /// Maximum number of TLV records accepted in one first-release `ZK1` envelope.
 pub(crate) const MAX_TLV_COUNT: usize = 64;
-
 const MAGIC: &[u8; 4] = b"ZK1\0";
 const MAX_TLV_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
-
 /// Parse and deduplicate the four-byte tags in a structurally valid `ZK1`
 /// envelope.
 ///
@@ -19,7 +16,6 @@ pub(crate) fn parse_tags(bytes: &[u8]) -> Result<Vec<String>, String> {
     if bytes.len() == MAGIC.len() {
         return Ok(Vec::new());
     }
-
     let mut tags = Vec::new();
     let mut pos = MAGIC.len();
     let mut tlv_count = 0usize;
@@ -28,14 +24,12 @@ pub(crate) fn parse_tags(bytes: &[u8]) -> Result<Vec<String>, String> {
         if tlv_count > MAX_TLV_COUNT {
             return Err(format!("too many ZK1 TLVs (maximum {MAX_TLV_COUNT})"));
         }
-
         let header_end = pos
             .checked_add(8)
             .ok_or_else(|| "ZK1 TLV header length overflow".to_owned())?;
         if header_end > bytes.len() {
             return Err("truncated TLV header".to_owned());
         }
-
         let tag_bytes: &[u8; 4] = bytes[pos..pos + 4]
             .try_into()
             .expect("bounded four-byte ZK1 tag slice");
@@ -46,7 +40,6 @@ pub(crate) fn parse_tags(bytes: &[u8]) -> Result<Vec<String>, String> {
         if !tags.contains(&tag) {
             tags.push(tag);
         }
-
         let len = u32::from_le_bytes(
             bytes[pos + 4..header_end]
                 .try_into()
@@ -64,14 +57,11 @@ pub(crate) fn parse_tags(bytes: &[u8]) -> Result<Vec<String>, String> {
         }
         pos = payload_end;
     }
-
     Ok(tags)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn tags_are_deduplicated_and_cardinality_is_bounded() {
         let mut envelope = MAGIC.to_vec();
@@ -80,12 +70,10 @@ mod tests {
             envelope.extend_from_slice(&0u32.to_le_bytes());
         }
         assert_eq!(parse_tags(&envelope), Ok(vec!["PROF".to_owned()]));
-
         envelope.extend_from_slice(b"IPAK");
         envelope.extend_from_slice(&0u32.to_le_bytes());
         assert!(parse_tags(&envelope).is_err());
     }
-
     #[test]
     fn malformed_envelopes_never_return_partial_tags() {
         let mut envelope = MAGIC.to_vec();

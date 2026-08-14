@@ -1,5 +1,13 @@
-use std::{fs, os::unix::fs::PermissionsExt as _, path::Path};
-
+use super::{
+    SoftwareSignerKeyAlgorithmV1, SoftwareSignerProvisioningV1, SoftwareSignerPurposeBindingV1,
+    SoftwareSignerRoleV1, SoftwareSignerServiceV1, SoftwareSignerSignatureReceiptV1,
+    SoftwareSignerWrappingKeyV1,
+    protocol::{
+        AdminCommandV1, AdminRequestV1, AdminStatusV1, SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1,
+        SignRequestV1, SignStatusV1, admin_request_digest, payload_digest, sign_request_digest,
+    },
+    typed_payload::{SoftwareSignerPurposeV1, encode_typed_signing_payload},
+};
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
     NetworkId,
@@ -15,30 +23,16 @@ use sorafs_manifest::{
     POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus, StreamTokenBodyV1,
     proof_stream::ProofStreamTier,
 };
-
-use super::{
-    SoftwareSignerKeyAlgorithmV1, SoftwareSignerProvisioningV1, SoftwareSignerPurposeBindingV1,
-    SoftwareSignerRoleV1, SoftwareSignerServiceV1, SoftwareSignerSignatureReceiptV1,
-    SoftwareSignerWrappingKeyV1,
-    protocol::{
-        AdminCommandV1, AdminRequestV1, AdminStatusV1, SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1,
-        SignRequestV1, SignStatusV1, admin_request_digest, payload_digest, sign_request_digest,
-    },
-    typed_payload::{SoftwareSignerPurposeV1, encode_typed_signing_payload},
-};
-
+use std::{fs, os::unix::fs::PermissionsExt as _, path::Path};
 const WRAPPING_KEY: [u8; 32] = [0xA5; 32];
-
 fn test_network_id() -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([0x53; Hash::LENGTH]),
     ))
 }
-
 fn wrapping_key() -> SoftwareSignerWrappingKeyV1 {
     SoftwareSignerWrappingKeyV1::try_from_bytes(WRAPPING_KEY).expect("valid wrapping key")
 }
-
 fn provisioning(
     role: SoftwareSignerRoleV1,
     algorithm: SoftwareSignerKeyAlgorithmV1,
@@ -107,12 +101,10 @@ fn provisioning(
         max_request_bytes: 1024 * 1024,
     }
 }
-
 fn temporary_parent() -> tempfile::TempDir {
     tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
         .expect("secure temporary parent")
 }
-
 fn provision(
     parent: &Path,
     role: SoftwareSignerRoleV1,
@@ -125,7 +117,6 @@ fn provision(
     )
     .expect("provision fixture signer")
 }
-
 fn sign_request(
     service: &SoftwareSignerServiceV1,
     operation_id: [u8; 32],
@@ -145,7 +136,6 @@ fn sign_request(
     request.request_digest = sign_request_digest(&request).expect("request digest");
     request
 }
-
 fn typed_request(
     service: &SoftwareSignerServiceV1,
     operation_id: [u8; 32],
@@ -157,7 +147,6 @@ fn typed_request(
         .expect("purpose belongs to fixture role");
     sign_request(service, operation_id, payload)
 }
-
 fn unsigned_potr_receipt(provider_id: [u8; 32]) -> PotrReceiptV1 {
     PotrReceiptV1 {
         version: POTR_RECEIPT_VERSION_V1,
@@ -179,7 +168,6 @@ fn unsigned_potr_receipt(provider_id: [u8; 32]) -> PotrReceiptV1 {
         provider_signature: None,
     }
 }
-
 fn evidence_checkpoint_anchor_message(binding: &super::SoftwareSignerPublicBindingV1) -> Vec<u8> {
     let checkpoint_handle = "runtime://sorafs/evidence-viewer/checkpoint-store/primary";
     let (_, public_key) = binding
@@ -213,7 +201,6 @@ fn evidence_checkpoint_anchor_message(binding: &super::SoftwareSignerPublicBindi
     message.extend_from_slice(public_key);
     message
 }
-
 fn assert_typed_signs(
     service: &SoftwareSignerServiceV1,
     operation_id: [u8; 32],
@@ -235,7 +222,6 @@ fn assert_typed_signs(
         )
         .expect("verify typed signature");
 }
-
 fn native_payload(service: &SoftwareSignerServiceV1) -> (Vec<u8>, [u8; 32]) {
     let binding = service.public_binding().expect("fixture binding");
     let builder = TransactionBuilder::new(
@@ -249,7 +235,6 @@ fn native_payload(service: &SoftwareSignerServiceV1) -> (Vec<u8>, [u8; 32]) {
     ))]);
     (builder.encode_payload(), builder.payload_hash_bytes())
 }
-
 fn admin_request(service: &SoftwareSignerServiceV1, command: AdminCommandV1) -> AdminRequestV1 {
     let binding_digest = service
         .public_binding()
@@ -263,7 +248,6 @@ fn admin_request(service: &SoftwareSignerServiceV1, command: AdminCommandV1) -> 
         command,
     }
 }
-
 #[test]
 fn native_signing_and_recovery_cover_ed25519_and_ml_dsa() {
     for (index, algorithm) in [
@@ -348,7 +332,6 @@ fn native_signing_and_recovery_cover_ed25519_and_ml_dsa() {
         );
     }
 }
-
 #[test]
 fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identities() {
     let governance_parent = temporary_parent();
@@ -376,7 +359,6 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
         governance.handle_sign_request(&sign_request(&governance, [0x02; 32], cross_role,)),
         Err(super::SoftwareSignerErrorV1::Rejected)
     );
-
     let provider_parent = temporary_parent();
     let provider = provision(
         provider_parent.path(),
@@ -404,7 +386,6 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
         Err(super::SoftwareSignerErrorV1::Rejected),
         "the raw protocol must enforce the provisioned provider identity"
     );
-
     let gateway_parent = temporary_parent();
     let gateway = provision(
         gateway_parent.path(),
@@ -417,7 +398,6 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
         SoftwareSignerPurposeV1::PotrGatewayReceipt,
         &receipt_message,
     );
-
     let billing_parent = temporary_parent();
     let billing = provision(
         billing_parent.path(),
@@ -441,7 +421,6 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
             Err(super::SoftwareSignerErrorV1::Rejected)
         );
     }
-
     let evidence_parent = temporary_parent();
     let evidence = provision(
         evidence_parent.path(),
@@ -501,7 +480,6 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
             .status,
         SignStatusV1::Equivocation
     );
-
     let stream_parent = temporary_parent();
     let stream = provision(
         stream_parent.path(),
@@ -528,7 +506,6 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
         SoftwareSignerPurposeV1::StreamToken,
         &stream_message,
     );
-
     let pop_parent = temporary_parent();
     let pop = provision(
         pop_parent.path(),
@@ -542,7 +519,6 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
     ] {
         assert_typed_signs(&pop, [operation; 32], purpose, &[operation; 32]);
     }
-
     for (role, algorithm) in [
         (
             SoftwareSignerRoleV1::GovernanceDag,
@@ -564,7 +540,6 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
         );
     }
 }
-
 #[test]
 fn native_roles_reject_cross_role_empty_and_promotion_domain_payloads() {
     let parent = temporary_parent();
@@ -590,7 +565,6 @@ fn native_roles_reject_cross_role_empty_and_promotion_domain_payloads() {
             .status,
         SignStatusV1::Rejected
     );
-
     let empty = TransactionBuilder::new(
         test_network_id(),
         authority,
@@ -604,7 +578,6 @@ fn native_roles_reject_cross_role_empty_and_promotion_domain_payloads() {
             .status,
         SignStatusV1::Rejected
     );
-
     let mut promotion = SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1.to_vec();
     promotion.extend_from_slice(br#"{"schema":"foundational"}"#);
     assert_eq!(
@@ -612,7 +585,6 @@ fn native_roles_reject_cross_role_empty_and_promotion_domain_payloads() {
         Err(super::SoftwareSignerErrorV1::Rejected)
     );
 }
-
 #[test]
 fn promotion_signs_exact_foundational_bytes_and_requires_ed25519() {
     let parent = temporary_parent();
@@ -704,7 +676,6 @@ fn promotion_signs_exact_foundational_bytes_and_requires_ed25519() {
             .verify(&binding.public_key, &mutation,)
             .is_err()
     );
-
     let invalid_parent = temporary_parent();
     assert!(
         SoftwareSignerServiceV1::provision(
@@ -718,7 +689,6 @@ fn promotion_signs_exact_foundational_bytes_and_requires_ed25519() {
         .is_err()
     );
 }
-
 #[test]
 fn sign_idempotency_replays_exact_bytes_and_audits_equivocation() {
     let parent = temporary_parent();
@@ -740,7 +710,6 @@ fn sign_idempotency_replays_exact_bytes_and_audits_equivocation() {
         .expect("idempotent replay");
     assert_eq!(replay.status, SignStatusV1::Replayed);
     assert_eq!(replay.signature, first.signature);
-
     payload.insert(SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1.len() + 1, b' ');
     let conflicting = sign_request(&service, [0x21; 32], payload);
     assert_eq!(
@@ -754,7 +723,6 @@ fn sign_idempotency_replays_exact_bytes_and_audits_equivocation() {
     SoftwareSignerServiceV1::open(parent.path().join("state"), wrapping_key())
         .expect("equivocation audit remains recoverable");
 }
-
 #[test]
 fn rotation_is_predecessor_bound_replay_safe_and_revocation_is_terminal() {
     let parent = temporary_parent();
@@ -797,7 +765,6 @@ fn rotation_is_predecessor_bound_replay_safe_and_revocation_is_terminal() {
             .status,
         AdminStatusV1::Replayed
     );
-
     let revoke = admin_request(
         &service,
         AdminCommandV1::Revoke {
@@ -829,7 +796,6 @@ fn rotation_is_predecessor_bound_replay_safe_and_revocation_is_terminal() {
             .revoked
     );
 }
-
 #[test]
 fn reviewed_successor_binding_rejects_complete_local_state_rollback() {
     let parent = temporary_parent();
@@ -856,7 +822,6 @@ fn reviewed_successor_binding_rejects_complete_local_state_rollback() {
         ))
         .expect("rotate signer");
     drop(service);
-
     fs::write(state.join("key-envelope-v1.norito"), old_envelope)
         .expect("restore predecessor envelope");
     fs::remove_file(state.join("audit-v1/00000000000000000002.norito"))
@@ -876,7 +841,6 @@ fn reviewed_successor_binding_rejects_complete_local_state_rollback() {
     assert!(super::SoftwareSignerServerV1::try_new(rolled_back, policy).is_err());
     assert!(!runtime.join("request.sock").exists());
 }
-
 #[test]
 fn wrong_key_corrupt_envelope_audit_and_permissions_fail_closed() {
     let parent = temporary_parent();
@@ -894,14 +858,12 @@ fn wrong_key_corrupt_envelope_audit_and_permissions_fail_closed() {
         )
         .is_err()
     );
-
     let envelope = state.join("key-envelope-v1.norito");
     fs::set_permissions(&envelope, fs::Permissions::from_mode(0o644))
         .expect("weaken envelope permissions");
     assert!(SoftwareSignerServiceV1::open(&state, wrapping_key()).is_err());
     fs::set_permissions(&envelope, fs::Permissions::from_mode(0o600))
         .expect("restore envelope permissions");
-
     let audit = state.join("audit-v1/00000000000000000001.norito");
     let mut bytes = fs::read(&audit).expect("read audit record");
     let last = bytes.last_mut().expect("non-empty audit record");
@@ -909,7 +871,6 @@ fn wrong_key_corrupt_envelope_audit_and_permissions_fail_closed() {
     fs::write(&audit, bytes).expect("corrupt audit record");
     assert!(SoftwareSignerServiceV1::open(&state, wrapping_key()).is_err());
 }
-
 #[test]
 fn state_symlinks_and_hardlinked_secret_envelopes_are_rejected() {
     let parent = temporary_parent();
@@ -923,13 +884,11 @@ fn state_symlinks_and_hardlinked_secret_envelopes_are_rejected() {
     let alias = parent.path().join("state-alias");
     std::os::unix::fs::symlink(&state, &alias).expect("create state symlink");
     assert!(SoftwareSignerServiceV1::open(&alias, wrapping_key()).is_err());
-
     let envelope = state.join("key-envelope-v1.norito");
     fs::hard_link(&envelope, parent.path().join("envelope-copy"))
         .expect("create envelope hard link");
     assert!(SoftwareSignerServiceV1::open(&state, wrapping_key()).is_err());
 }
-
 #[test]
 fn debug_output_redacts_runtime_key_and_envelope_ciphertext() {
     let key = wrapping_key();
@@ -947,7 +906,6 @@ fn debug_output_redacts_runtime_key_and_envelope_ciphertext() {
     assert!(debug.contains("[REDACTED]"));
     assert!(!debug.contains(&hex::encode(WRAPPING_KEY)));
 }
-
 #[test]
 fn startup_rejects_a_substituted_public_binding_before_socket_creation() {
     let parent = temporary_parent();
@@ -969,7 +927,6 @@ fn startup_rejects_a_substituted_public_binding_before_socket_creation() {
     .expect("substituted binding remains structurally valid");
     assert!(super::SoftwareSignerServerV1::try_new(service, policy).is_err());
     assert!(!runtime.join("request.sock").exists());
-
     let wrong_role_parent = temporary_parent();
     let mut wrong_role = provisioning(
         SoftwareSignerRoleV1::Repair,
@@ -982,7 +939,6 @@ fn startup_rejects_a_substituted_public_binding_before_socket_creation() {
     );
     assert!(!wrong_role_state.exists());
 }
-
 #[test]
 fn request_and_administrator_peer_identities_are_not_interchangeable() {
     let service_uid = rustix::process::geteuid().as_raw();
@@ -1006,7 +962,6 @@ fn request_and_administrator_peer_identities_are_not_interchangeable() {
         client_uid
     ));
 }
-
 #[test]
 fn cli_value_parsers_accept_only_canonical_role_and_algorithm_labels() {
     assert_eq!(

@@ -5,9 +5,6 @@
 //! global RBC session store. Availability is committed by the signed genesis
 //! context and observed through the authoritative v2 status and committed
 //! subject.
-
-use std::{num::NonZeroU64, time::Duration};
-
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -20,25 +17,22 @@ use iroha::{
     },
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
-
+use std::{num::NonZeroU64, time::Duration};
 const LARGE_PAYLOAD_BYTES: usize = 1024 * 1024;
 const TORII_CONTENT_HEADROOM_BYTES: usize = 2 * 1024 * 1024;
 const NETWORK_FRAME_BUDGET_BYTES: i64 = 128 * 1024 * 1024;
 const COMMIT_WAIT_BUDGET: Duration = Duration::from_secs(480);
-
 fn torii_max_content_len_for_payload(payload_bytes: usize) -> i64 {
     let inflated = payload_bytes.saturating_mul(12);
     let with_headroom = payload_bytes.saturating_add(TORII_CONTENT_HEADROOM_BYTES);
     i64::try_from(inflated.max(with_headroom)).unwrap_or(i64::MAX)
 }
-
 fn tx_limit_for_payload(payload_bytes: usize) -> NonZeroU64 {
     NonZeroU64::new(
         u64::try_from(torii_max_content_len_for_payload(payload_bytes)).unwrap_or(u64::MAX),
     )
     .expect("payload-driven transaction limit must be non-zero")
 }
-
 fn large_da_network_builder(peers: usize) -> NetworkBuilder {
     let tx_limit = tx_limit_for_payload(LARGE_PAYLOAD_BYTES);
     NetworkBuilder::new()
@@ -82,7 +76,6 @@ fn large_da_network_builder(peers: usize) -> NetworkBuilder {
             TransactionParameter::MaxDecompressedBytes(tx_limit),
         )))
 }
-
 fn validate_committed_da_status(status: &SumeragiV2Status, expected_height: u64) -> Result<()> {
     status
         .validate()
@@ -98,25 +91,21 @@ fn validate_committed_da_status(status: &SumeragiV2Status, expected_height: u64)
     );
     Ok(())
 }
-
 fn fetch_v2_status(client: Client) -> Result<SumeragiV2Status> {
     client
         .get_sumeragi_status()
         .wrap_err("fetch canonical Sumeragi v2 status")
 }
-
 async fn large_da_payload_commits_with_consistent_v2_subject_for_committee(
     peers: usize,
     scenario: &str,
 ) -> Result<()> {
     init_instruction_registry();
-
     let Some(network) =
         sandbox::start_network_async_or_skip(large_da_network_builder(peers), scenario).await?
     else {
         return Ok(());
     };
-
     network
         .ensure_blocks_with(|height| height.total >= 1)
         .await?;
@@ -132,14 +121,12 @@ async fn large_da_payload_commits_with_consistent_v2_subject_for_committee(
     })
     .await
     .wrap_err("join large DA payload submission")??;
-
     tokio::time::timeout(
         COMMIT_WAIT_BUDGET,
         network.ensure_blocks_with(|height| height.total >= expected_height),
     )
     .await
     .wrap_err("large DA payload did not commit within the budget")??;
-
     let required = network.peers().len().saturating_sub(1).max(1);
     let mut committed_subjects = Vec::new();
     for peer in network.peers() {
@@ -163,11 +150,9 @@ async fn large_da_payload_commits_with_consistent_v2_subject_for_committee(
             .all(|subject| *subject == expected_subject),
         "quorum peers must agree on the committed DA subject: {committed_subjects:?}"
     );
-
     network.shutdown().await;
     Ok(())
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn large_da_payload_commits_with_consistent_v2_subject_four_peers() -> Result<()> {
     large_da_payload_commits_with_consistent_v2_subject_for_committee(
@@ -176,7 +161,6 @@ async fn large_da_payload_commits_with_consistent_v2_subject_four_peers() -> Res
     )
     .await
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn large_da_payload_commits_with_consistent_v2_subject_seven_peers() -> Result<()> {
     large_da_payload_commits_with_consistent_v2_subject_for_committee(
@@ -185,7 +169,6 @@ async fn large_da_payload_commits_with_consistent_v2_subject_seven_peers() -> Re
     )
     .await
 }
-
 #[test]
 fn large_payload_limits_cover_transport_overhead() {
     let content_limit = torii_max_content_len_for_payload(LARGE_PAYLOAD_BYTES);

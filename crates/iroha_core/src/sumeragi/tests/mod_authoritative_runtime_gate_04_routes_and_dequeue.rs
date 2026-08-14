@@ -11,7 +11,6 @@ fn roster_origin_relay_completion_has_authenticated_source_count_and_byte_owner(
         .configure_roster(validators.clone())
         .expect("four validator owners, one authenticated relay, and anonymous fit");
     ingress.open().expect("open configured roster");
-
     let mut accepted = 0_usize;
     for index in 0..FORGED_OCCURRENCES {
         let origin = &validators[index % validators.len()];
@@ -58,7 +57,6 @@ fn roster_origin_relay_completion_has_authenticated_source_count_and_byte_owner(
                 .is_some_and(|lane| lane.entries.is_empty())
         }));
     }
-
     let relayed_completion = InboundBlockMessage::from_transport(
         v2_message_with_index(0),
         validators[0].clone(),
@@ -117,7 +115,6 @@ fn roster_origin_relay_completion_has_authenticated_source_count_and_byte_owner(
         .expect("the ordinary relay item remains after completion service");
     assert_eq!(ordinary.sender(), Some(&validators[0]));
     assert_eq!(ordinary.via(), Some(&authenticated_non_validator_via));
-
     let outsider = validator_peers(6)
         .pop()
         .expect("non-roster semantic origin fixture");
@@ -132,7 +129,6 @@ fn roster_origin_relay_completion_has_authenticated_source_count_and_byte_owner(
     ));
     assert!(ingress.try_recv().is_none());
 }
-
 #[test]
 fn fair_v2_ingress_retains_ready_head_until_downstream_admission() {
     let (handle, ingress, _relay_receiver) = test_sumeragi_handle(12);
@@ -144,10 +140,8 @@ fn fair_v2_ingress_retains_ready_head_until_downstream_admission() {
         .configure_roster(validators)
         .expect("two validators, their progress and TimeoutVote slots, and anonymous fit");
     ingress.open().expect("open configured roster");
-
     assert!(handle.try_incoming_block_message_from(attacker.clone(), v2_message()));
     assert!(handle.try_incoming_block_message_from(honest.clone(), v2_message()));
-
     let mut downstream_slots = 1_usize;
     let first = ingress
         .try_recv_if(|_| downstream_slots != 0)
@@ -155,14 +149,12 @@ fn fair_v2_ingress_retains_ready_head_until_downstream_admission() {
     downstream_slots -= 1;
     assert_eq!(first.sender(), Some(&attacker));
     assert_eq!(ingress.len(), 1);
-
     assert!(ingress.try_recv_if(|_| downstream_slots != 0).is_none());
     assert_eq!(
         ingress.len(),
         1,
         "failed downstream admission must not remove the honest head"
     );
-
     downstream_slots += 1;
     let retained = ingress
         .try_recv_if(|_| downstream_slots != 0)
@@ -170,7 +162,6 @@ fn fair_v2_ingress_retains_ready_head_until_downstream_admission() {
     assert_eq!(retained.sender(), Some(&honest));
     assert_eq!(ingress.len(), 0);
 }
-
 #[test]
 fn fair_v2_ingress_predicate_runs_outside_state_lock() {
     let (handle, ingress, _relay_receiver) = test_sumeragi_handle(10);
@@ -181,7 +172,6 @@ fn fair_v2_ingress_predicate_runs_outside_state_lock() {
         .expect("one validator and anonymous reserve fit");
     ingress.open().expect("open configured roster");
     assert!(handle.try_incoming_block_message_from(validator, v2_message()));
-
     let delivered = ingress
         .try_recv_if(|_| {
             assert!(
@@ -194,7 +184,6 @@ fn fair_v2_ingress_predicate_runs_outside_state_lock() {
     assert!(matches!(delivered.message(), BlockMessage::V2(_)));
     assert_eq!(ingress.len(), 0);
 }
-
 #[test]
 fn fair_v2_ingress_rotates_blocked_head_to_admissible_source() {
     let (handle, ingress, _relay_receiver) = test_sumeragi_handle(12);
@@ -206,23 +195,19 @@ fn fair_v2_ingress_rotates_blocked_head_to_admissible_source() {
         .configure_roster(validators)
         .expect("two validators, their progress and TimeoutVote slots, and anonymous fit");
     ingress.open().expect("open configured roster");
-
     assert!(handle.try_incoming_block_message_from(blocked.clone(), v2_message()));
     assert!(handle.try_incoming_block_message_from(admissible.clone(), v2_message()));
-
     let selected = ingress
         .try_recv_if(|inbound| inbound.sender() == Some(&admissible))
         .expect("later admissible source bypasses a blocked ready head");
     assert_eq!(selected.sender(), Some(&admissible));
     assert_eq!(ingress.len(), 1);
-
     let retained = ingress
         .try_recv_if(|_| true)
         .expect("blocked source remains queued after the bypass");
     assert_eq!(retained.sender(), Some(&blocked));
     assert_eq!(ingress.len(), 0);
 }
-
 #[test]
 fn fair_v2_ingress_bypasses_a_blocked_entry_within_the_same_source() {
     let (handle, ingress, _relay_receiver) = test_sumeragi_handle(9);
@@ -232,17 +217,14 @@ fn fair_v2_ingress_bypasses_a_blocked_entry_within_the_same_source() {
         .configure_roster([validator.clone()])
         .expect("validator plus anonymous lane fit");
     ingress.open().expect("open configured roster");
-
     assert!(handle.try_incoming_block_message_from(validator.clone(), v2_auxiliary_prepare(0),));
     assert!(handle.try_incoming_block_message_from(validator.clone(), v2_auxiliary_prepare(1),));
     assert!(handle.try_incoming_block_message_from(validator, v2_auxiliary_prepare(2),));
-
     let selected = ingress
         .try_recv_if(|inbound| vote_height(inbound) == Some(3))
         .expect("admissible later item bypasses a blocked same-source head");
     assert_eq!(vote_height(&selected), Some(3));
     assert_eq!(ingress.len(), 2);
-
     let first_retained = ingress
         .try_recv_if(|_| true)
         .expect("oldest blocked entry remains owned for a later fair turn");

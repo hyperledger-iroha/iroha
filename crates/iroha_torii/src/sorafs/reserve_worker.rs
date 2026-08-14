@@ -6,7 +6,6 @@
 //! through [`sorafs_node::reserve_transaction_forwarder`]. Keeping these
 //! decisions pure makes policy rotation, foreign-chain rejection, restart
 //! recovery, and idempotent semantic reconciliation byte-for-byte testable.
-
 use iroha_data_model::{
     ChainId,
     account::AccountId,
@@ -21,7 +20,6 @@ use sorafs_node::reserve_transaction_forwarder::{
     ReserveTransactionProjectionV1, ReserveTransactionReconciliationV1,
     validate_reserve_pending_delivery_v1, validate_reserve_reconciliation_material_v1,
 };
-
 /// Complete operation-scoped data read from one immutable finalized state view.
 ///
 /// Query failures are represented outside this type: a caller must defer the
@@ -48,7 +46,6 @@ pub(crate) struct ReserveFinalizedSnapshotV1 {
     /// Current appeal record for appeal-identity operations.
     pub appeal: Option<ReserveAppealRecordV1>,
 }
-
 /// Result of comparing retained semantic material with finalized ledger state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReserveSemanticReconciliationV1 {
@@ -63,7 +60,6 @@ pub(crate) enum ReserveSemanticReconciliationV1 {
     /// Finalized state contradicts the retained operation.
     Conflict(ReserveFinalizedCursorV1),
 }
-
 /// Observation of the exact retained signed transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReserveEnvelopeReconciliationV1 {
@@ -100,7 +96,6 @@ pub(crate) enum ReserveEnvelopeReconciliationV1 {
     /// Durable block/index state could not be inspected coherently.
     Unavailable,
 }
-
 /// Payload-free reason why one worker entry is intentionally left unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReserveWorkerDeferReasonV1 {
@@ -115,7 +110,6 @@ pub(crate) enum ReserveWorkerDeferReasonV1 {
     /// Durable signed-byte metadata is internally incomplete.
     InvalidDurableState,
 }
-
 /// One side-effect requested from the supervised reserve worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReserveWorkerActionV1 {
@@ -161,7 +155,6 @@ pub(crate) enum ReserveWorkerActionV1 {
     /// Leave the durable entry untouched until a later bounded scan.
     Defer(ReserveWorkerDeferReasonV1),
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FinalizedCursorRelationV1 {
     Same,
@@ -170,7 +163,6 @@ enum FinalizedCursorRelationV1 {
     ForkConflict,
     Invalid,
 }
-
 /// Compare one retained reserve operation with an exact finalized projection.
 ///
 /// Unique registration, movement, appeal, and decision identities can be
@@ -195,7 +187,6 @@ pub(crate) fn reconcile_reserve_semantics(
             ReserveSemanticReconciliationV1::Deferred
         };
     }
-
     let relation = finalized_cursor_relation(delivery, cursor);
     match relation {
         FinalizedCursorRelationV1::Invalid | FinalizedCursorRelationV1::Older => {
@@ -212,7 +203,6 @@ pub(crate) fn reconcile_reserve_semantics(
     if current_baseline_block_hash != delivery.baseline_finalized_block_hash {
         return ReserveSemanticReconciliationV1::Conflict(cursor);
     }
-
     if relation == FinalizedCursorRelationV1::Advanced {
         match unique_semantic_result(retained, finalized) {
             UniqueSemanticResultV1::Finalized => {
@@ -224,17 +214,14 @@ pub(crate) fn reconcile_reserve_semantics(
             UniqueSemanticResultV1::NotApplicableOrAbsent => {}
         }
     }
-
     if finalized.policy_record.as_ref() != Some(&retained.policy_record)
         || !finalized_projection_matches_retained(retained, finalized)
         || finalized_authority(retained, finalized) != Some(&retained.request.authority)
     {
         return ReserveSemanticReconciliationV1::Conflict(cursor);
     }
-
     ReserveSemanticReconciliationV1::Ready(cursor)
 }
-
 /// Select one safe durable transition for a pending delivery.
 ///
 /// Exact committed-envelope results take precedence over semantic projection
@@ -262,11 +249,9 @@ pub(crate) fn plan_reserve_worker_action(
             |finalized_cursor| ReserveWorkerActionV1::DeadLetterConflict { finalized_cursor },
         );
     }
-
     if !envelope_is_coherent(delivery, envelope, semantic_cursor) {
         return ReserveWorkerActionV1::Defer(ReserveWorkerDeferReasonV1::FinalizedStateUnavailable);
     }
-
     match envelope {
         ReserveEnvelopeReconciliationV1::Applied {
             transaction_digest,
@@ -297,11 +282,9 @@ pub(crate) fn plan_reserve_worker_action(
         | ReserveEnvelopeReconciliationV1::Absent { .. }
         | ReserveEnvelopeReconciliationV1::Unavailable => {}
     }
-
     if let ReserveSemanticReconciliationV1::Finalized(finalized_cursor) = semantics {
         return ReserveWorkerActionV1::FinalizeSemantic { finalized_cursor };
     }
-
     if matches!(envelope, ReserveEnvelopeReconciliationV1::Pending { .. }) {
         return match delivery.state {
             ReserveTransactionDeliveryStateV1::Signed
@@ -327,7 +310,6 @@ pub(crate) fn plan_reserve_worker_action(
     {
         return ReserveWorkerActionV1::Defer(ReserveWorkerDeferReasonV1::FinalizedStateUnavailable);
     }
-
     match semantics {
         ReserveSemanticReconciliationV1::Conflict(finalized_cursor) => {
             return ReserveWorkerActionV1::DeadLetterConflict { finalized_cursor };
@@ -345,7 +327,6 @@ pub(crate) fn plan_reserve_worker_action(
             unreachable!("semantic finalization returns before delivery-state planning")
         }
     }
-
     match delivery.state {
         ReserveTransactionDeliveryStateV1::Ready => {
             if delivery.signed_transaction_bytes.is_some() || delivery.transaction_digest.is_some()
@@ -409,7 +390,6 @@ pub(crate) fn plan_reserve_worker_action(
         },
     }
 }
-
 fn envelope_is_coherent(
     delivery: &ReserveTransactionPendingV1,
     envelope: ReserveEnvelopeReconciliationV1,
@@ -420,7 +400,6 @@ fn envelope_is_coherent(
     }
     let signed_material_is_complete = delivery.signed_transaction_bytes.is_some();
     let signed_material_is_absent = delivery.signed_transaction_bytes.is_none();
-
     match envelope {
         ReserveEnvelopeReconciliationV1::NotSigned => signed_material_is_absent,
         ReserveEnvelopeReconciliationV1::Unavailable => true,
@@ -448,15 +427,12 @@ fn envelope_is_coherent(
         }
     }
 }
-
 fn valid_pending_delivery(delivery: &ReserveTransactionPendingV1) -> bool {
     validate_reserve_pending_delivery_v1(delivery).is_ok()
 }
-
 fn valid_finalized_cursor(cursor: ReserveFinalizedCursorV1) -> bool {
     cursor.height != 0 && cursor.block_hash != [0; 32]
 }
-
 fn finalized_cursor_relation(
     delivery: &ReserveTransactionPendingV1,
     cursor: ReserveFinalizedCursorV1,
@@ -478,7 +454,6 @@ fn finalized_cursor_relation(
         core::cmp::Ordering::Equal => FinalizedCursorRelationV1::ForkConflict,
     }
 }
-
 fn finalized_projection_matches_retained(
     retained: &ReserveTransactionReconciliationV1,
     finalized: &ReserveFinalizedSnapshotV1,
@@ -507,7 +482,6 @@ fn finalized_projection_matches_retained(
         }
     }
 }
-
 fn finalized_authority<'a>(
     retained: &ReserveTransactionReconciliationV1,
     finalized: &'a ReserveFinalizedSnapshotV1,
@@ -529,14 +503,12 @@ fn finalized_authority<'a>(
             .map(|provider| &provider.terms.provider_account),
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UniqueSemanticResultV1 {
     NotApplicableOrAbsent,
     Finalized,
     Conflict,
 }
-
 fn unique_semantic_result(
     retained: &ReserveTransactionReconciliationV1,
     finalized: &ReserveFinalizedSnapshotV1,
@@ -669,7 +641,6 @@ fn unique_semantic_result(
         | ReserveOperationV1::RepayCredit(_) => UniqueSemanticResultV1::NotApplicableOrAbsent,
     }
 }
-
 fn same_movement_request(
     current: &ReserveMovementRecordV1,
     retained: &ReserveMovementRecordV1,
@@ -683,7 +654,6 @@ fn same_movement_request(
         && current.policy_digest == retained.policy_digest
         && current.requested_at_unix == retained.requested_at_unix
 }
-
 fn same_appeal_request(current: &ReserveAppealRecordV1, retained: &ReserveAppealRecordV1) -> bool {
     current.appeal_id == retained.appeal_id
         && current.provider_id == retained.provider_id
@@ -694,7 +664,6 @@ fn same_appeal_request(current: &ReserveAppealRecordV1, retained: &ReserveAppeal
         && current.expected_provider_revision == retained.expected_provider_revision
         && current.submitted_at_unix == retained.submitted_at_unix
 }
-
 fn semantic_cursor(semantics: ReserveSemanticReconciliationV1) -> Option<ReserveFinalizedCursorV1> {
     match semantics {
         ReserveSemanticReconciliationV1::Ready(cursor)
@@ -704,9 +673,9 @@ fn semantic_cursor(semantics: ReserveSemanticReconciliationV1) -> Option<Reserve
         | ReserveSemanticReconciliationV1::InvalidDurableState => None,
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         ChainId,
@@ -737,30 +706,22 @@ mod tests {
         ReserveTransactionProjectionV1, ReserveTransactionReconciliationV1,
     };
     use tempfile::TempDir;
-
-    use super::*;
-
     const CHAIN: &str = "reserve-worker-test";
-
     fn key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("test key")
     }
-
     fn account(key: &KeyPair) -> AccountId {
         AccountId::new(key.public_key().clone())
     }
-
     fn provider_id(seed: u8) -> ProviderId {
         ProviderId::new([seed; 32])
     }
-
     fn cursor(height: u64, seed: u8) -> ReserveFinalizedCursorV1 {
         ReserveFinalizedCursorV1 {
             height,
             block_hash: [seed; 32],
         }
     }
-
     fn policy_record(
         operations: &KeyPair,
         decision: &KeyPair,
@@ -794,7 +755,6 @@ mod tests {
             activated_at_unix: revision,
         }
     }
-
     fn provider_account(
         provider: &KeyPair,
         policy_digest: [u8; 32],
@@ -824,7 +784,6 @@ mod tests {
             updated_at_unix: 100,
         }
     }
-
     fn provider_context(
         operations: &KeyPair,
         decision: &KeyPair,
@@ -841,7 +800,6 @@ mod tests {
             finalized_cursor: cursor(11, 0x11),
         }
     }
-
     fn movement_context(
         operations: &KeyPair,
         decision: &KeyPair,
@@ -870,7 +828,6 @@ mod tests {
         };
         context
     }
-
     fn appeal_context(
         operations: &KeyPair,
         decision: &KeyPair,
@@ -899,7 +856,6 @@ mod tests {
         };
         context
     }
-
     fn registration_context(
         operations: &KeyPair,
         decision: &KeyPair,
@@ -915,7 +871,6 @@ mod tests {
             finalized_cursor: cursor(11, 0x11),
         }
     }
-
     fn forwarder() -> (ReserveTransactionForwarder, TempDir) {
         let state_dir = tempfile::tempdir().expect("reserve forwarder state directory");
         let forwarder = ReserveTransactionForwarder::open(
@@ -932,7 +887,6 @@ mod tests {
         .expect("durable reserve forwarder");
         (forwarder, state_dir)
     }
-
     fn retained_delivery(
         operation: ReserveOperationV1,
         context: &ReserveTransactionContextV1,
@@ -951,7 +905,6 @@ mod tests {
             .expect("retained");
         (delivery, retained)
     }
-
     fn snapshot_from_retained(
         delivery: &ReserveTransactionPendingV1,
         retained: &ReserveTransactionReconciliationV1,
@@ -984,13 +937,11 @@ mod tests {
         }
         snapshot
     }
-
     #[test]
     fn all_nine_native_operations_are_ready_only_on_the_exact_finalized_projection() {
         let operations = key(0x31);
         let decision = key(0x32);
         let provider = key(0x33);
-
         let registration = registration_context(&operations, &decision, &provider);
         let provider_projection = provider_context(&operations, &decision, &provider);
         let movement_projection = movement_context(&operations, &decision, &provider);
@@ -1109,7 +1060,6 @@ mod tests {
                 appeal_projection,
             ),
         ];
-
         for (operation, context) in operations_and_contexts {
             let (delivery, retained) = retained_delivery(operation, &context);
             let snapshot = snapshot_from_retained(&delivery, &retained, context.finalized_cursor);
@@ -1121,7 +1071,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn reconciliation_rejects_a_same_summary_substituted_operation() {
         let operations = key(0x38);
@@ -1147,14 +1096,12 @@ mod tests {
                 2,
                 context.policy_record.policy_digest,
             ));
-
         assert_eq!(
             reconcile_reserve_semantics(&ChainId::from(CHAIN), &delivery, &substituted, &snapshot,),
             ReserveSemanticReconciliationV1::InvalidDurableState,
             "same kind/provider/revision metadata must not hide a different operation payload",
         );
     }
-
     #[test]
     fn policy_rotation_and_foreign_chain_are_terminal_conflicts() {
         let operations = key(0x41);
@@ -1207,7 +1154,6 @@ mod tests {
             ReserveSemanticReconciliationV1::Conflict(advanced),
         );
     }
-
     #[test]
     fn unique_movement_and_appeal_results_finalize_across_policy_rotation() {
         let operations = key(0x51);
@@ -1254,7 +1200,6 @@ mod tests {
             reconcile_reserve_semantics(&ChainId::from(CHAIN), &delivery, &retained, &snapshot,),
             ReserveSemanticReconciliationV1::Finalized(cursor(12, 0x12)),
         );
-
         let appeal = ReserveOperationV1::SubmitAppeal(SubmitSorafsReserveAppeal::new(
             [0x92; 32],
             account.terms.provider_id,
@@ -1294,7 +1239,6 @@ mod tests {
             ReserveSemanticReconciliationV1::Finalized(cursor(12, 0x12)),
         );
     }
-
     #[test]
     fn exact_envelope_results_precede_semantic_conflicts_and_restart_absence_retries() {
         let operations = key(0x61);
@@ -1443,7 +1387,6 @@ mod tests {
                 finalized_cursor: applied,
             },
         );
-
         let mut corrupted = delivery;
         corrupted.signed_transaction_bytes = Some(vec![9, 9, 9]);
         assert_eq!(
@@ -1461,7 +1404,6 @@ mod tests {
             "signed-byte digest corruption must not be treated as transient chain absence",
         );
     }
-
     #[test]
     fn ready_delivery_requires_the_exact_injected_authority() {
         let operations = key(0x71);

@@ -1,15 +1,12 @@
 // MCP Connect session lifecycle regression.
-
 #[tokio::test]
 async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     enable_writer_mcp(&mut cfg);
     cfg.torii.connect.enabled = true;
-
     let app = build_router(cfg);
     let sid = B64.encode([0x55u8; 32]);
-
     let (status, create_call) = post_mcp(
         &app,
         norito::json!({
@@ -79,7 +76,6 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
         .and_then(Value::as_str)
         .expect("token_management present")
         .to_owned();
-
     let (status, ws_ticket_app_call) = post_mcp(
         &app,
         norito::json!({
@@ -128,7 +124,6 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             .as_str()
         )
     );
-
     let (status, ws_ticket_wallet_call) = post_mcp(
         &app,
         norito::json!({
@@ -159,7 +154,6 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             .and_then(Value::as_str),
         Some(format!("Bearer {token_wallet}").as_str())
     );
-
     let (status, status_call) = post_mcp(
         &app,
         norito::json!({
@@ -167,7 +161,11 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             "id": 111,
             "method": "tools/call",
             "params": {
-                "name": "connect.status"
+                "name": "connect.session.status",
+                "arguments": {
+                    "sid": sid,
+                    "token_management": token_management
+                }
             }
         }),
     )
@@ -175,14 +173,13 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
     assert_eq!(status, StatusCode::OK);
     assert!(
         !tool_is_error(&status_call),
-        "connect status should not be an MCP tool error"
+        "connect session status should not be an MCP tool error"
     );
     let status_structured = structured_content(&status_call);
     assert_eq!(
         status_structured.get("status").and_then(Value::as_u64),
         Some(200)
     );
-
     let (status, delete_call) = post_mcp(
         &app,
         norito::json!({
@@ -211,7 +208,6 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
         delete_structured.get("status").and_then(Value::as_u64),
         Some(204)
     );
-
     let (status, delete_again_call) = post_mcp(
         &app,
         norito::json!({
@@ -241,14 +237,12 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
         Some(404)
     );
 }
-
 #[tokio::test]
 async fn mcp_jsonrpc_connect_session_create_and_ticket_surfaces_create_error() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     enable_writer_mcp(&mut cfg);
     cfg.torii.connect.enabled = true;
-
     let app = build_router(cfg);
     for (id, tool_name) in [
         (1080, "connect.session.create_and_ticket"),
@@ -271,7 +265,6 @@ async fn mcp_jsonrpc_connect_session_create_and_ticket_surfaces_create_error() {
             }),
         )
         .await;
-
         assert_eq!(status, StatusCode::OK);
         assert!(
             tool_is_error(&call),

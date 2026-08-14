@@ -13,13 +13,11 @@ use iroha_data_model::{
     },
 };
 use nonzero_ext::nonzero;
-
 #[derive(Clone)]
 struct MockExec {
     data: Vec<Account>,
     page: usize,
 }
-
 impl MockExec {
     fn new(total: usize, page: usize) -> Self {
         let mut v = Vec::with_capacity(total);
@@ -32,11 +30,9 @@ impl MockExec {
         Self { data: v, page }
     }
 }
-
 impl QueryExecutor for MockExec {
     type Cursor = usize; // index of next element
     type Error = TypedBatchDowncastError;
-
     fn execute_singular_query(
         &self,
         _query: iroha_data_model::query::SingularQueryBox,
@@ -46,7 +42,6 @@ impl QueryExecutor for MockExec {
             actual: 0,
         })
     }
-
     fn start_query(
         &self,
         _query: QueryWithParams,
@@ -62,7 +57,6 @@ impl QueryExecutor for MockExec {
         };
         Ok((tuple, Some(remaining), cursor))
     }
-
     fn continue_query(
         _cursor: Self::Cursor,
     ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error> {
@@ -70,7 +64,6 @@ impl QueryExecutor for MockExec {
         Ok((tuple, Some(0), None))
     }
 }
-
 fn bench_builder_iter_1k_fetch_100(c: &mut Criterion) {
     let exec = MockExec::new(1_000, 100);
     c.bench_function("builder_iter_accounts_1k_fetch100", |b| {
@@ -82,7 +75,6 @@ fn bench_builder_iter_1k_fetch_100(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_builder_iter_10k_fetch_500(c: &mut Criterion) {
     let exec = MockExec::new(10_000, 500);
     c.bench_function("builder_iter_accounts_10k_fetch500", |b| {
@@ -94,7 +86,6 @@ fn bench_builder_iter_10k_fetch_500(c: &mut Criterion) {
         })
     });
 }
-
 fn main() {
     // Silence IVM banner if lower layers create it.
     #[allow(unused_imports)]

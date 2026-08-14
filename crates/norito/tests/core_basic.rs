@@ -1,15 +1,12 @@
 //! Core Norito functionality tests.
-
 use byteorder::{ByteOrder, LittleEndian};
 use iroha_schema::IntoSchema;
 use norito::core::*;
-
 fn crc64_test(data: &[u8]) -> u64 {
     let mut digest = crc64fast::Digest::new();
     digest.write(data);
     digest.sum64()
 }
-
 #[test]
 fn deterministic_primitives() {
     let value: u32 = 123;
@@ -17,7 +14,6 @@ fn deterministic_primitives() {
     let bytes2 = to_bytes(&value).unwrap();
     assert_eq!(bytes1, bytes2, "serialization is deterministic");
 }
-
 #[test]
 fn zero_copy_roundtrip() {
     let value: bool = true;
@@ -25,7 +21,6 @@ fn zero_copy_roundtrip() {
     let decoded: bool = decode_from_bytes(&bytes).unwrap();
     assert_eq!(value, decoded);
 }
-
 #[test]
 fn string_roundtrip() {
     let value = String::from("norito");
@@ -33,7 +28,6 @@ fn string_roundtrip() {
     let decoded: String = decode_from_bytes(&bytes).unwrap();
     assert_eq!(value, decoded);
 }
-
 #[test]
 fn str_roundtrip() {
     let value: &str = "slice";
@@ -41,46 +35,38 @@ fn str_roundtrip() {
     let decoded = decode_from_bytes::<&str>(&bytes).unwrap();
     assert_eq!(value, decoded);
 }
-
 #[test]
 fn cow_str_roundtrip() {
     use std::borrow::Cow;
-
     let borrowed: Cow<str> = Cow::Borrowed("borrowed");
     let bytes = to_bytes(&borrowed).unwrap();
     let decoded = decode_from_bytes::<Cow<'_, str>>(&bytes).unwrap();
     assert_eq!(borrowed, decoded);
-
     let owned: Cow<str> = Cow::Owned(String::from("owned"));
     let bytes = to_bytes(&owned).unwrap();
     let decoded = decode_from_bytes::<Cow<'_, str>>(&bytes).unwrap();
     assert_eq!(owned, decoded);
 }
-
 #[test]
 fn size_roundtrip() {
     let usize_val: usize = 42;
     let bytes = to_bytes(&usize_val).unwrap();
     let decoded: usize = decode_from_bytes(&bytes).unwrap();
     assert_eq!(usize_val, decoded);
-
     let isize_val: isize = -43;
     let bytes = to_bytes(&isize_val).unwrap();
     let decoded: isize = decode_from_bytes(&bytes).unwrap();
     assert_eq!(isize_val, decoded);
 }
-
 #[test]
 fn nonzero_u16_roundtrip() {
     use std::num::NonZeroU16;
-
     let value = NonZeroU16::new(5u16).unwrap();
     let bytes = to_bytes(&value).unwrap();
     let archived = from_bytes::<NonZeroU16>(&bytes).unwrap();
     let decoded = <NonZeroU16 as NoritoDeserialize>::deserialize(archived);
     assert_eq!(value, decoded);
 }
-
 #[test]
 fn header_serialization() {
     let value: u8 = 10;
@@ -95,7 +81,6 @@ fn header_serialization() {
     let checksum = LittleEndian::read_u64(&bytes[31..39]);
     assert_eq!(checksum, crc64_test(&bytes[Header::SIZE..]));
 }
-
 #[test]
 fn checksum_validation() {
     let value: u32 = 5;
@@ -107,25 +92,20 @@ fn checksum_validation() {
         Err(Error::ChecksumMismatch)
     ));
 }
-
 #[repr(C)]
 struct A(u32, u32);
-
 impl NoritoSerialize for A {
     fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error> {
         self.0.serialize(encoder)?;
         self.1.serialize(encoder)
     }
 }
-
 #[repr(C)]
 struct B(u64);
-
 impl<'a> NoritoDeserialize<'a> for B {
     fn deserialize(archived: &'a Archived<B>) -> Self {
         Self::try_deserialize(archived).expect("decode B")
     }
-
     fn try_deserialize(archived: &'a Archived<B>) -> Result<Self, Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let payload = norito::core::payload_range_from_ptr(ptr, core::mem::size_of::<u64>())?;
@@ -133,7 +113,6 @@ impl<'a> NoritoDeserialize<'a> for B {
         Ok(B(u64::from_le_bytes(bytes)))
     }
 }
-
 #[test]
 fn schema_mismatch() {
     let value = A(1, 2);
@@ -143,14 +122,12 @@ fn schema_mismatch() {
         Err(Error::SchemaMismatch)
     ));
 }
-
 #[test]
 fn core_decode_rejects_schema_mismatch() {
     let bytes = to_bytes(&123u32).unwrap();
     let err = decode_from_bytes::<i32>(&bytes).expect_err("schema mismatch must error");
     assert!(matches!(err, Error::SchemaMismatch));
 }
-
 #[test]
 fn version_error() {
     let value: u8 = 3;
@@ -161,7 +138,6 @@ fn version_error() {
         Err(Error::UnsupportedVersion { .. })
     ));
 }
-
 #[test]
 fn array_roundtrip() {
     let value = [1u32, 2, 3];
@@ -169,7 +145,6 @@ fn array_roundtrip() {
     let decoded: [u32; 3] = decode_from_bytes(&bytes).unwrap();
     assert_eq!(value, decoded);
 }
-
 #[test]
 fn array_string_roundtrip() {
     let value: [String; 2] = [String::from("foo"), String::from("bar")];
@@ -177,11 +152,9 @@ fn array_string_roundtrip() {
     let decoded: [String; 2] = decode_from_bytes(&bytes).unwrap();
     assert_eq!(value, decoded);
 }
-
 #[test]
 fn btreemap_roundtrip() {
     use std::collections::BTreeMap;
-
     let mut map = BTreeMap::new();
     map.insert(1u32, String::from("one"));
     map.insert(2, String::from("two"));
@@ -189,11 +162,9 @@ fn btreemap_roundtrip() {
     let decoded: BTreeMap<u32, String> = decode_from_bytes(&bytes).unwrap();
     assert_eq!(map, decoded);
 }
-
 #[test]
 fn hashmap_roundtrip() {
     use std::collections::HashMap;
-
     let mut map = HashMap::new();
     map.insert(String::from("a"), 1u32);
     map.insert(String::from("b"), 2);
@@ -201,18 +172,15 @@ fn hashmap_roundtrip() {
     let decoded: HashMap<String, u32> = decode_from_bytes(&bytes).unwrap();
     assert_eq!(map, decoded);
 }
-
 #[test]
 fn set_roundtrip() {
     use std::collections::{BTreeSet, HashSet};
-
     let mut bset = BTreeSet::new();
     bset.insert(String::from("a"));
     bset.insert(String::from("b"));
     let bytes = to_bytes(&bset).unwrap();
     let decoded: BTreeSet<String> = decode_from_bytes(&bytes).unwrap();
     assert_eq!(bset, decoded);
-
     let mut hset = HashSet::new();
     hset.insert(1u32);
     hset.insert(2);
@@ -220,11 +188,9 @@ fn set_roundtrip() {
     let decoded: HashSet<u32> = decode_from_bytes(&bytes).unwrap();
     assert_eq!(hset, decoded);
 }
-
 #[test]
 fn vecdeque_roundtrip() {
     use std::collections::VecDeque;
-
     let mut deque = VecDeque::new();
     deque.push_back(String::from("a"));
     deque.push_back(String::from("b"));
@@ -232,11 +198,9 @@ fn vecdeque_roundtrip() {
     let decoded: VecDeque<String> = decode_from_bytes(&bytes).unwrap();
     assert_eq!(deque, decoded);
 }
-
 #[test]
 fn linkedlist_roundtrip() {
     use std::collections::LinkedList;
-
     let mut list = LinkedList::new();
     list.push_back(1u32);
     list.push_back(2);
@@ -244,11 +208,9 @@ fn linkedlist_roundtrip() {
     let decoded: LinkedList<u32> = decode_from_bytes(&bytes).unwrap();
     assert_eq!(list, decoded);
 }
-
 #[test]
 fn binaryheap_roundtrip() {
     use std::collections::BinaryHeap;
-
     let mut heap = BinaryHeap::new();
     heap.push(3u32);
     heap.push(1);
@@ -257,7 +219,6 @@ fn binaryheap_roundtrip() {
     let decoded: BinaryHeap<u32> = decode_from_bytes(&bytes).unwrap();
     assert_eq!(heap.clone().into_sorted_vec(), decoded.into_sorted_vec());
 }
-
 #[test]
 fn tuple_roundtrip() {
     let value = (1u32, String::from("two"));
@@ -265,7 +226,6 @@ fn tuple_roundtrip() {
     let decoded: (u32, String) = decode_from_bytes(&bytes).unwrap();
     assert_eq!(value, decoded);
 }
-
 #[test]
 fn triple_roundtrip() {
     let value = (1u8, false, String::from("tri"));
@@ -274,13 +234,11 @@ fn triple_roundtrip() {
     let decoded = <(u8, bool, String) as NoritoDeserialize>::deserialize(archived);
     assert_eq!(value, decoded);
 }
-
 #[derive(IntoSchema, NoritoSerialize, NoritoDeserialize, PartialEq, Debug)]
 struct Mixed {
     name: String,
     nums: Vec<u32>,
 }
-
 #[test]
 fn derive_struct_variable_roundtrip() {
     let value = Mixed {
@@ -292,14 +250,12 @@ fn derive_struct_variable_roundtrip() {
     let decoded = Mixed::deserialize(archived);
     assert_eq!(value, decoded);
 }
-
 #[derive(IntoSchema, NoritoSerialize, NoritoDeserialize, PartialEq, Debug)]
 enum Custom {
     #[codec(index = 5)]
     Text(String),
     Numbers(Vec<u32>),
 }
-
 #[test]
 fn derive_enum_custom_index_roundtrip() {
     use Custom::*;
@@ -311,45 +267,37 @@ fn derive_enum_custom_index_roundtrip() {
         assert_eq!(v, decoded);
     }
 }
-
 #[test]
 fn rc_arc_roundtrip() {
     use std::{rc::Rc, sync::Arc};
-
     let rc = Rc::new(String::from("rc"));
     let bytes = to_bytes(&rc).unwrap();
     let archived = from_bytes::<Rc<String>>(&bytes).unwrap();
     let decoded = <Rc<String> as NoritoDeserialize>::deserialize(archived);
     assert_eq!(rc, decoded);
-
     let arc = Arc::new(99u64);
     let bytes = to_bytes(&arc).unwrap();
     let archived = from_bytes::<Arc<u64>>(&bytes).unwrap();
     let decoded = <Arc<u64> as NoritoDeserialize>::deserialize(archived);
     assert_eq!(arc, decoded);
 }
-
 #[test]
 fn cell_refcell_roundtrip() {
     use std::cell::{Cell, RefCell};
-
     let cell = Cell::new(5u32);
     let bytes = to_bytes(&cell).unwrap();
     let archived = from_bytes::<Cell<u32>>(&bytes).unwrap();
     let decoded = <Cell<u32> as NoritoDeserialize>::deserialize(archived);
     assert_eq!(cell.get(), decoded.get());
-
     let refcell = RefCell::new(String::from("inner"));
     let bytes = to_bytes(&refcell).unwrap();
     let archived = from_bytes::<RefCell<String>>(&bytes).unwrap();
     let decoded = <RefCell<String> as NoritoDeserialize>::deserialize(archived);
     assert_eq!(*refcell.borrow(), *decoded.borrow());
 }
-
 #[test]
 fn phantomdata_roundtrip() {
     use core::marker::PhantomData;
-
     let phantom: PhantomData<u32> = PhantomData;
     let bytes = to_bytes(&phantom).unwrap();
     let archived = from_bytes::<PhantomData<u32>>(&bytes).unwrap();

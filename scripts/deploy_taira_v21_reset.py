@@ -17,9 +17,9 @@ content-addressed root-owned code and validates all four configs before
 mutating the old cohort.  The
 receipt consumption is restored if deployment never reaches that first cohort
 mutation.  The rollout replaces all four LaunchDaemons as one cohort, proves
-ordinary node readiness, exact `is`/`is2` catalog identity, and advancing
-consensus, and proves one supervised child can restart without replacing its
-supervisor. Any failed rollout restores the prior cohort.
+ordinary node readiness, the exact seven-lane/five-dataspace Taira topology,
+and advancing consensus, and proves one supervised child can restart without
+replacing its supervisor. Any failed rollout restores the prior cohort.
 
 The controller never prints config contents, process command lines, HTTP
 bodies, or other runtime signing material.
@@ -46,34 +46,62 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable, NoReturn, Optional, Sequence
 
 try:
     from scripts import build_privacy_v1_boi_handoff as boi_handoff
+    from scripts.operator_http_headers import load_operator_context_from_file
     from scripts import taira_rollout_admission as rollout_admission
     from scripts import taira_constants
 except ModuleNotFoundError as error:
     if error.name != "scripts":
         raise
     import build_privacy_v1_boi_handoff as boi_handoff
+    from operator_http_headers import load_operator_context_from_file
     import taira_rollout_admission as rollout_admission
     import taira_constants
 
 PEER_COUNT = taira_constants.PEER_COUNT
 CHAIN_ID = taira_constants.CHAIN_ID
 CHAIN_DISCRIMINANT = taira_constants.CHAIN_DISCRIMINANT
+TAIRA_LANE_COUNT = 7
+UNIVERSAL_DATASPACE_ID = 0
+DPN_DATASPACE_ID = 10
 IS_DATASPACE_ID = 6647857470246403404
 IS2_DATASPACE_ID = 8477022798449861195
-IS_ROUTE_ALIAS = "external-poc"
-IS2_ROUTE_ALIAS = "boi-mobile"
+CBSI_DATASPACE_ID = 20
+CORE_LANE_ALIAS = "core"
+GOVERNANCE_LANE_ALIAS = "governance"
+ZK_LANE_ALIAS = "zk"
+DPN_LANE_ALIAS = "dpn"
+EXTERNAL_POC_LANE_ALIAS = "external-poc"
+BOI_MOBILE_LANE_ALIAS = "boi-mobile"
+CBSI_LANE_ALIAS = "cbsi"
+TAIRA_PHYSICAL_DATASPACES = (
+    ("universal", UNIVERSAL_DATASPACE_ID),
+    ("dpn", DPN_DATASPACE_ID),
+    ("is", IS_DATASPACE_ID),
+    ("is2", IS2_DATASPACE_ID),
+    ("cbsi", CBSI_DATASPACE_ID),
+)
+TAIRA_LANE_DATASPACE_BINDINGS = (
+    (0, CORE_LANE_ALIAS, "universal", UNIVERSAL_DATASPACE_ID),
+    (1, GOVERNANCE_LANE_ALIAS, "universal", UNIVERSAL_DATASPACE_ID),
+    (2, ZK_LANE_ALIAS, "universal", UNIVERSAL_DATASPACE_ID),
+    (3, DPN_LANE_ALIAS, "dpn", DPN_DATASPACE_ID),
+    (4, EXTERNAL_POC_LANE_ALIAS, "is", IS_DATASPACE_ID),
+    (5, BOI_MOBILE_LANE_ALIAS, "is2", IS2_DATASPACE_ID),
+    (6, CBSI_LANE_ALIAS, "cbsi", CBSI_DATASPACE_ID),
+)
 NODE_STORAGE_BUDGET_BYTES = 64 * 1024 * 1024 * 1024
 NODE_STORAGE_BUDGET_POLICY = "bounded-64-gib-per-validator"
 NODE_STORAGE_WEIGHTS = {
-    "kura_blocks_bps": 7_500,
+    "kura_blocks_bps": 7_499,
     "wsv_snapshots_bps": 2_000,
-    "sorafs_bps": 0,
+    "sorafs_bps": 1,
     "soranet_spool_bps": 250,
     "soravpn_spool_bps": 250,
 }
@@ -2812,6 +2840,55 @@ def http_ok(url: str, timeout: float = 2.0) -> None:
         fail(f"health endpoint response exceeds {MAX_HTTP_BYTES} bytes: {url}")
 
 
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """Prevent replay of a fresh operator signature at a redirected target."""
+
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        del request, file_pointer, code, message, headers, new_url
+        return None
+
+
+def build_operator_http_getter(network_id: str, private_key_file: Path) -> HttpGetter:
+    """Build a token-free, no-redirect getter with a fresh signature per request."""
+
+    context = load_operator_context_from_file(network_id, private_key_file)
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _RejectRedirects(),
+    )
+
+    def operator_http_json(url: str, timeout: float = 2.0) -> dict[str, Any]:
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.path != "/v1/sumeragi/status":
+            return http_json(url, timeout)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+        ):
+            fail("operator endpoint must be an absolute credential-free HTTP(S) URL")
+        target = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+        headers = context.headers("GET", target, b"")
+        headers.update(
+            {"Accept": "application/json", "User-Agent": "taira-v21-reset/1"}
+        )
+        request = urllib.request.Request(url, method="GET", headers=headers)
+        try:
+            with opener.open(request, timeout=timeout) as response:
+                if response.status != 200:
+                    fail(f"operator endpoint returned HTTP {response.status}: {url}")
+                body = response.read(MAX_HTTP_BYTES + 1)
+        except (OSError, urllib.error.URLError, TimeoutError) as error:
+            raise DeploymentError(f"operator endpoint is unavailable: {url}") from error
+        if len(body) > MAX_HTTP_BYTES:
+            fail(f"operator endpoint response exceeds {MAX_HTTP_BYTES} bytes: {url}")
+        return parse_json_bytes(body, f"operator response from {url}")
+
+    return operator_http_json
+
+
 def require_uint(value: object, label: str, *, positive: bool = False) -> int:
     """Require one non-boolean unsigned JSON integer."""
 
@@ -2885,7 +2962,7 @@ def published_dpn_validator_release_commit(status: dict[str, Any]) -> str:
 
 @dataclasses.dataclass(frozen=True)
 class PeerSample:
-    """Coherent committed and dataspace identity observed from one validator."""
+    """Coherent commit and lane/dataspace topology observed from one validator."""
 
     label: str
     height: int
@@ -2894,7 +2971,7 @@ class PeerSample:
     node: str
     build: str
     config: str
-    dataspace_catalog: str
+    nexus_topology: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -2906,7 +2983,7 @@ class FleetSample:
     context: str
     build: str
     config: str
-    dataspace_catalog: str
+    nexus_topology: str
     nodes: tuple[str, ...]
 
 
@@ -3091,7 +3168,7 @@ def validate_peer_health(
     getter: HttpGetter = http_json,
     health_getter: HealthGetter = http_ok,
 ) -> PeerSample:
-    """Validate ordinary readiness, dataspace identity, and durable consensus."""
+    """Validate readiness, exact lane/dataspace topology, and durable consensus."""
 
     root = f"http://127.0.0.1:{peer.torii_port}"
     health_getter(f"{root}/health", 2.0)
@@ -3101,29 +3178,83 @@ def validate_peer_health(
     lanes = lifecycle.get("lanes")
     if lifecycle.get("version") != 1 or lifecycle.get("nexus_enabled") is not True:
         fail(f"{peer.label} Nexus lifecycle identity is invalid")
+    lane_count = lifecycle.get("lane_count")
+    if (
+        not isinstance(lane_count, int)
+        or isinstance(lane_count, bool)
+        or lane_count != TAIRA_LANE_COUNT
+    ):
+        fail(f"{peer.label} Nexus lifecycle lane_count is not exactly 7")
     if not isinstance(lanes, list):
         fail(f"{peer.label} Nexus lifecycle omitted its lane catalog")
-    expected_dataspaces = {
-        IS_ROUTE_ALIAS: IS_DATASPACE_ID,
-        IS2_ROUTE_ALIAS: IS2_DATASPACE_ID,
-    }
-    observed_dataspaces: dict[str, int] = {}
-    for lane in lanes:
+    if len(lanes) != TAIRA_LANE_COUNT:
+        fail(f"{peer.label} Nexus lifecycle does not contain exactly seven lanes")
+    expected_lane_records = [
+        {"id": lane_id, "alias": lane_alias, "dataspace_id": dataspace_id}
+        for lane_id, lane_alias, _dataspace_alias, dataspace_id in (
+            TAIRA_LANE_DATASPACE_BINDINGS
+        )
+    ]
+    observed_lane_records: list[dict[str, int | str]] = []
+    seen_lane_ids: set[int] = set()
+    seen_lane_aliases: set[str] = set()
+    for position, lane in enumerate(lanes):
         if not isinstance(lane, dict):
-            fail(f"{peer.label} Nexus lifecycle contains a malformed lane")
+            fail(f"{peer.label} Nexus lifecycle lane {position} is malformed")
+        lane_id = lane.get("id")
         alias = lane.get("alias")
-        if alias in expected_dataspaces:
-            if alias in observed_dataspaces:
-                fail(f"{peer.label} Nexus lifecycle duplicates {alias}")
-            dataspace_id = lane.get("dataspace_id")
-            if not isinstance(dataspace_id, int) or isinstance(dataspace_id, bool):
-                fail(f"{peer.label} Nexus lifecycle has an invalid {alias} dataspace")
-            observed_dataspaces[alias] = dataspace_id
-    if observed_dataspaces != expected_dataspaces:
-        fail(f"{peer.label} does not expose the exact is/is2 dataspace identities")
+        dataspace_id = lane.get("dataspace_id")
+        if not isinstance(lane_id, int) or isinstance(lane_id, bool) or lane_id < 0:
+            fail(f"{peer.label} Nexus lifecycle lane {position} has an invalid id")
+        if not isinstance(alias, str) or not alias:
+            fail(f"{peer.label} Nexus lifecycle lane {position} has an invalid alias")
+        if (
+            not isinstance(dataspace_id, int)
+            or isinstance(dataspace_id, bool)
+            or dataspace_id < 0
+        ):
+            fail(
+                f"{peer.label} Nexus lifecycle lane {position} has an invalid dataspace id"
+            )
+        if lane_id in seen_lane_ids or alias in seen_lane_aliases:
+            fail(f"{peer.label} Nexus lifecycle duplicates a lane id or alias")
+        seen_lane_ids.add(lane_id)
+        seen_lane_aliases.add(alias)
+        observed_lane_records.append(
+            {"id": lane_id, "alias": alias, "dataspace_id": dataspace_id}
+        )
+    if observed_lane_records != expected_lane_records:
+        fail(
+            f"{peer.label} does not expose the exact canonical "
+            "seven-lane/five-dataspace topology"
+        )
+    observed_dataspace_ids = {
+        record["dataspace_id"] for record in observed_lane_records
+    }
+    expected_dataspace_ids = {
+        dataspace_id for _alias, dataspace_id in TAIRA_PHYSICAL_DATASPACES
+    }
+    if observed_dataspace_ids != expected_dataspace_ids:
+        fail(f"{peer.label} does not expose exactly five physical dataspaces")
     catalog_hash = lifecycle.get("catalog_hash")
     if not isinstance(catalog_hash, str) or BLOCK_HASH_RE.fullmatch(catalog_hash) is None:
         fail(f"{peer.label} Nexus lifecycle omitted a canonical catalog identity")
+
+    canonical_lane_binding_evidence = [
+        {
+            "lane_id": lane_id,
+            "lane_alias": lane_alias,
+            "dataspace_id": dataspace_id,
+            "dataspace_alias": dataspace_alias,
+        }
+        for lane_id, lane_alias, dataspace_alias, dataspace_id in (
+            TAIRA_LANE_DATASPACE_BINDINGS
+        )
+    ]
+    canonical_physical_dataspace_evidence = [
+        {"dataspace_id": dataspace_id, "dataspace_alias": dataspace_alias}
+        for dataspace_alias, dataspace_id in TAIRA_PHYSICAL_DATASPACES
+    ]
 
     status = getter(f"{root}/status", 2.0)
     blocks = require_uint(
@@ -3263,8 +3394,15 @@ def validate_peer_health(
         node=canonical(node_fingerprint),
         build=canonical(build_fingerprint),
         config=canonical(config_fingerprint),
-        dataspace_catalog=canonical(
-            {"catalog_hash": catalog_hash.lower(), "dataspaces": observed_dataspaces}
+        nexus_topology=canonical(
+            {
+                "observed_catalog_hash": catalog_hash.lower(),
+                "observed_lane_count": lane_count,
+                "canonical_lane_bindings": canonical_lane_binding_evidence,
+                "canonical_physical_dataspaces": (
+                    canonical_physical_dataspace_evidence
+                ),
+            }
         ),
     )
 
@@ -3298,7 +3436,7 @@ def capture_fleet(
             "context",
             "build",
             "config",
-            "dataspace_catalog",
+            "nexus_topology",
         ):
             if getattr(sample, field) != getattr(baseline, field):
                 fail(f"four-validator fleet disagrees on {field}")
@@ -3311,7 +3449,7 @@ def capture_fleet(
         context=baseline.context,
         build=baseline.build,
         config=baseline.config,
-        dataspace_catalog=baseline.dataspace_catalog,
+        nexus_topology=baseline.nexus_topology,
         nodes=nodes,
     )
 
@@ -3377,14 +3515,14 @@ def wait_for_advancement(
                 and current.block_hash != previous.block_hash
                 and current.build == previous.build
                 and current.config == previous.config
-                and current.dataspace_catalog == previous.dataspace_catalog
+                and current.nexus_topology == previous.nexus_topology
                 and current.nodes == previous.nodes
             ):
                 advanced = True
             else:
                 advanced = False
                 last_error = DeploymentError(
-                    "fleet has not advanced one stable common build/config/catalog"
+                    "fleet has not advanced one stable common build/config/topology"
                 )
         except (DeploymentError, OSError) as error:
             last_error = error
@@ -3986,7 +4124,7 @@ def apply_reset(
         "binary": str(installed_binary),
         "binary_sha256": sources.binary_sha256,
         "bundle": str(bundle.root),
-        "dataspace_catalog": restarted.dataspace_catalog,
+        "nexus_topology": restarted.nexus_topology,
         "end_block_hash": restarted.block_hash,
         "end_height": restarted.height,
         "peer_count": PEER_COUNT,
@@ -4060,6 +4198,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_MAXIMUM_FSYNC_LATENCY_MS,
     )
+    parser.add_argument("--operator-network-id")
+    parser.add_argument("--operator-private-key-file", type=Path)
     parser.add_argument(
         "--allow-absent-old-child",
         action="store_true",
@@ -4125,6 +4265,15 @@ def validate_arguments(args: argparse.Namespace) -> None:
         fail(f"--minimum-free-bytes may not be below {DEFAULT_MINIMUM_FREE_BYTES}")
     if not 1 <= args.maximum_fsync_latency_ms <= DEFAULT_MAXIMUM_FSYNC_LATENCY_MS:
         fail("--maximum-fsync-latency-ms must be positive and may not exceed 250")
+    if args.apply:
+        operator_network_id = getattr(args, "operator_network_id", None)
+        operator_private_key_file = getattr(args, "operator_private_key_file", None)
+        if not operator_network_id or operator_private_key_file is None:
+            fail(
+                "--apply requires --operator-network-id and --operator-private-key-file"
+            )
+        if not operator_private_key_file.is_absolute():
+            fail("--operator-private-key-file must be an absolute runtime-only path")
 
 
 def require_sealed_external_tool_identity() -> Optional[tuple[int, int]]:
@@ -4228,6 +4377,10 @@ def _execute_after_provisioned_authority_contracts(
         require_admission_archive_unchanged(locked_admission)
         require_admission_bound_inputs_unchanged(bundle, sources, locked_admission)
         old_cohort = capture_old_cohort(system_ops, **capture_options)
+        operator_getter = build_operator_http_getter(
+            args.operator_network_id,
+            args.operator_private_key_file,
+        )
         require_admission_bound_inputs_unchanged(bundle, sources, locked_admission)
         require_admission_archive_unchanged(locked_admission)
         with consume_admission_receipt(locked_admission) as consumption:
@@ -4238,6 +4391,7 @@ def _execute_after_provisioned_authority_contracts(
                 old_cohort,
                 rollout_starter=consumption.mark_rollout_started,
                 ops=system_ops,
+                getter=operator_getter,
             )
         report.update(
             {

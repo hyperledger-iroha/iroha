@@ -4,37 +4,6 @@
 //! envelope does not authenticate its consensus artifacts or make executable
 //! work. A future admission transaction must first reauthenticate the retained
 //! source against the verified height context and its owning durable store.
-
-use std::{mem::size_of, sync::Arc};
-
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
-use norito::codec::{Decode, DecodeAll as _, Encode};
-
-use crate::sumeragi::{
-    v2::{
-        AdapterEffect, ExactLiveWalPersistedContinuationCause, LiveWalFrameIdentity,
-        PersistedWalFrameLocatorV1, RecoveredDecisionApplyCandidateProjectionPermit,
-        RecoveredLifecycleNextWalVoteSealPermitV1, RecoveredWalFrameIdentity,
-        RegisteredPrepareInvalidBodyReportCapability, SignRequest, VerifiedHeightContext,
-    },
-    v2_body_store::{DurableBodyReceipt, DurableCertifiedFetchBodyReceipt, ValidatedBodyReceipt},
-    v2_certified_serve_payload_store::{
-        AuthenticatedRecoveredCertifiedServePayload,
-        AuthenticatedRecoveredCertifiedServePayloadState, CertifiedServePayloadNegativeOutcome,
-        DurableCertifiedServeAdmissionReceipt, DurableCertifiedServeCompletedReceipt,
-        DurableCertifiedServeNegativeReceipt,
-    },
-    v2_core::EventTag,
-    v2_runtime::{
-        LocalBodyReplayMintPermit, LocalProposalReadyCommandIdentity, PendingRuntimeEffectBinding,
-        RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1,
-        RecoveredWalCandidateProjectionPermit, RecoveredWalDecisionFetchPendingMintPermit,
-        RemoteProposalReplayMintPermit, RuntimeEffectOwnership, RuntimeIngressOwnershipEvidence,
-    },
-    v2_transport::AuthenticatedCertifiedBodyRequest,
-};
-
 use super::ledger::{
     DurableCertifiedFetchLedgerCensusPermit, DurableCertifiedFetchLedgerJoinPermit,
     LifecycleLedgerRecordV1,
@@ -63,13 +32,38 @@ use super::{
         PreparedLiveValidateSignRegistryWork, SealedBodySuccessorProjectionPermit,
     },
 };
-
+use crate::sumeragi::{
+    v2::{
+        AdapterEffect, ExactLiveWalPersistedContinuationCause, LiveWalFrameIdentity,
+        PersistedWalFrameLocatorV1, RecoveredDecisionApplyCandidateProjectionPermit,
+        RecoveredLifecycleNextWalVoteSealPermitV1, RecoveredWalFrameIdentity,
+        RegisteredPrepareInvalidBodyReportCapability, SignRequest, VerifiedHeightContext,
+    },
+    v2_body_store::{DurableBodyReceipt, DurableCertifiedFetchBodyReceipt, ValidatedBodyReceipt},
+    v2_certified_serve_payload_store::{
+        AuthenticatedRecoveredCertifiedServePayload,
+        AuthenticatedRecoveredCertifiedServePayloadState, CertifiedServePayloadNegativeOutcome,
+        DurableCertifiedServeAdmissionReceipt, DurableCertifiedServeCompletedReceipt,
+        DurableCertifiedServeNegativeReceipt,
+    },
+    v2_core::EventTag,
+    v2_runtime::{
+        LocalBodyReplayMintPermit, LocalProposalReadyCommandIdentity, PendingRuntimeEffectBinding,
+        RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1,
+        RecoveredWalCandidateProjectionPermit, RecoveredWalDecisionFetchPendingMintPermit,
+        RemoteProposalReplayMintPermit, RuntimeEffectOwnership, RuntimeIngressOwnershipEvidence,
+    },
+    v2_transport::AuthenticatedCertifiedBodyRequest,
+};
+use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+use norito::codec::{Decode, DecodeAll as _, Encode};
+use std::{mem::size_of, sync::Arc};
 const REPLAY_AUTHORITY_FORMAT_VERSION: u16 = 1;
 const MAX_REPLAY_AUTHORITY_BYTES: usize = 4 * 1024 * 1024;
 const EQUIVOCATION_SUBJECT_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:equivocation-subject:v1";
 const PRODUCER_TURN_PHYSICAL_DOMAIN: &[u8] =
     b"iroha:sumeragi:v2:lifecycle:producer-turn-physical:v1";
-
 /// Version-one replay envelope retained beside one lifecycle ledger row.
 ///
 /// The fields are private so neither decoded wire values nor an arbitrary
@@ -81,7 +75,6 @@ pub(in crate::sumeragi) struct LifecycleReplayAuthorityV1 {
     payload: ReplayPayloadBindingV1,
     source: LifecycleReplaySourceV1,
 }
-
 impl LifecycleReplayAuthorityV1 {
     /// Compare one terminal recovered-Decision Apply replay envelope with the
     /// exact full Kura finality artifact retained by CompleteTip recovery.
@@ -113,7 +106,6 @@ impl LifecycleReplayAuthorityV1 {
                 *subject,
             )
     }
-
     /// Rebind a persisted Fetch authority only when it is the canonical
     /// BodyFrame-backed Certified family used by the Ready completion.
     fn recover_durable_certified_fetch(
@@ -157,7 +149,6 @@ impl LifecycleReplayAuthorityV1 {
                 })
         .then_some(CertifiedFetchReplayEvidenceV1 { family })
     }
-
     /// Decode exactly one bounded canonical V1 envelope.
     fn decode_canonical(encoded: &[u8]) -> Result<Self, ReplayAuthorityCodecError> {
         if encoded.is_empty() || encoded.len() > MAX_REPLAY_AUTHORITY_BYTES {
@@ -174,7 +165,6 @@ impl LifecycleReplayAuthorityV1 {
         }
         Ok(authority)
     }
-
     /// Match all durable record coordinates without minting replay authority.
     pub(super) fn structurally_matches_record(
         &self,
@@ -187,7 +177,6 @@ impl LifecycleReplayAuthorityV1 {
         self.validate_record(context, key, work_class, stage, payload)
             .is_ok()
     }
-
     /// Rebind an already-retained Certified-Serve storage source to the exact
     /// terminal payload admitted by the coordinator's authenticated receipt
     /// boundary. The result remains inert persisted evidence.
@@ -223,14 +212,12 @@ impl LifecycleReplayAuthorityV1 {
             )
             .then_some(candidate)
     }
-
     /// Return whether two authorities retain the same exact persisted source family.
     pub(super) fn same_persisted_family(&self, other: &Self) -> bool {
         self.format_version == REPLAY_AUTHORITY_FORMAT_VERSION
             && other.format_version == REPLAY_AUTHORITY_FORMAT_VERSION
             && self.source == other.source
     }
-
     /// Test whether this authority retains one exact Certified-Serve frame hash.
     pub(super) fn certified_serve_frame_hash_is(&self, expected: Hash) -> bool {
         matches!(
@@ -239,7 +226,6 @@ impl LifecycleReplayAuthorityV1 {
                 if source.payload_hash == *expected.as_ref()
         )
     }
-
     /// Match the complete Certified-Serve storage origin against one sealed
     /// authenticated request and admission receipt.
     ///
@@ -262,7 +248,6 @@ impl LifecycleReplayAuthorityV1 {
             && source.payload_hash == *receipt.payload_hash().as_ref()
             && source.local_retainer == receipt.local_retainer()
     }
-
     /// Match the signed request retained by one Certified-Serve storage
     /// family without accepting a separately supplied payload receipt.
     ///
@@ -279,7 +264,6 @@ impl LifecycleReplayAuthorityV1 {
             && source.request == *authenticated.request()
             && HashOf::new(&source.request) == authenticated.request_hash()
     }
-
     #[cfg(test)]
     /// Replace only the Certified-Serve frame hash in a negative test fixture.
     pub(super) fn with_certified_serve_frame_hash_for_test(
@@ -293,7 +277,6 @@ impl LifecycleReplayAuthorityV1 {
         source.payload_hash = *frame_hash.as_ref();
         Some(changed)
     }
-
     #[cfg(test)]
     /// Change only an origin tag generation while preserving logical coordinates.
     pub(super) fn with_foreign_origin_generation_for_test(&self) -> Option<Self> {
@@ -306,7 +289,6 @@ impl LifecycleReplayAuthorityV1 {
         tag.generation = tag.generation.wrapping_add(1);
         (changed != *self && changed.is_bounded_canonical()).then_some(changed)
     }
-
     /// Return whether this value has one bounded canonical V1 encoding.
     ///
     /// LedgerV1 decodes the envelope as a nested field, so its outer frame
@@ -318,7 +300,6 @@ impl LifecycleReplayAuthorityV1 {
         encoded.len() <= MAX_REPLAY_AUTHORITY_BYTES
             && Self::decode_canonical(&encoded).is_ok_and(|decoded| decoded == *self)
     }
-
     fn validate_record(
         &self,
         context: LifecycleContext,
@@ -347,7 +328,6 @@ impl LifecycleReplayAuthorityV1 {
         Ok(())
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReplayAuthorityCodecError {
     FrameBounds,
@@ -355,7 +335,6 @@ enum ReplayAuthorityCodecError {
     NonCanonicalEncoding,
     UnsupportedVersion,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReplayAuthorityValidationError {
     UnsupportedVersion,
@@ -364,7 +343,6 @@ enum ReplayAuthorityValidationError {
     PayloadMismatch,
     RecordMismatch,
 }
-
 /// Fixed scalar projection of the process-local reducer tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
@@ -373,7 +351,6 @@ struct ReplayEventTagV1 {
     view: u64,
     generation: u64,
 }
-
 impl ReplayEventTagV1 {
     const fn new(height: u64, view: u64, generation: u64) -> Self {
         Self {
@@ -382,23 +359,19 @@ impl ReplayEventTagV1 {
             generation,
         }
     }
-
     fn matches_round(self, context: LifecycleContext, round: wire::ConsensusRound) -> bool {
         round_matches_context(context, round)
             && self.height == context.height()
             && self.view >= round.view
     }
-
     const fn generation(self) -> u64 {
         self.generation
     }
 }
-
 /// Fixed scalar code for the WAL record that owns a replay action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[repr(transparent)]
 struct ReplayWalRoleV1(u8);
-
 impl ReplayWalRoleV1 {
     const PROPOSAL_INTENT: Self = Self(0);
     const PREPARE_INTENT: Self = Self(1);
@@ -406,12 +379,10 @@ impl ReplayWalRoleV1 {
     const TIMEOUT_INTENT: Self = Self(3);
     const DECISION: Self = Self(4);
     const INSTALL_TIMEOUT: Self = Self(5);
-
     const fn matches(self, expected: Self) -> bool {
         self.0 == expected.0
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum LifecycleReplaySourceV1 {
@@ -428,7 +399,6 @@ enum LifecycleReplaySourceV1 {
     #[codec(index = 5)]
     CertifiedServeStorage(CertifiedServeStorageSourceV1),
 }
-
 impl LifecycleReplaySourceV1 {
     fn project(
         &self,
@@ -452,7 +422,6 @@ impl LifecycleReplaySourceV1 {
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct WalReplaySourceV1 {
@@ -461,7 +430,6 @@ struct WalReplaySourceV1 {
     tag: ReplayEventTagV1,
     action: WalReplayActionV1,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum WalReplayActionV1 {
@@ -484,7 +452,6 @@ enum WalReplayActionV1 {
         certified_sources: Vec<PeerId>,
     },
 }
-
 /// Canonical structural evidence attached to one authenticated recovered WAL vote.
 ///
 /// This value is deliberately cloneable because it is inert evidence, not
@@ -496,7 +463,6 @@ enum WalReplayActionV1 {
 pub(crate) struct RecoveredWalVoteReplayEvidenceV1 {
     authority: LifecycleReplayAuthorityV1,
 }
-
 /// Opaque adapter-authenticated authority for one WAL-owned follow-on Vote Sign.
 ///
 /// The exact unsigned Sign, authenticated WAL owner, canonical replay evidence,
@@ -504,6 +470,7 @@ pub(crate) struct RecoveredWalVoteReplayEvidenceV1 {
 /// until combined with the signed Broadcast parent; the live transaction and
 /// cold recovery path must retain the resulting pair as one authority.
 #[must_use = "a recovered follow-on Sign must remain sealed to its WAL and body authority"]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::sumeragi) struct RecoveredLifecycleNextWalVoteSealV1 {
     wal_identity: RecoveredWalFrameIdentity,
@@ -511,7 +478,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleNextWalVoteSealV1 {
     effect: AdapterEffect,
     validated: ValidatedBodyReceipt,
 }
-
 /// Complete replay-authorized projection of one recovered follow-on Vote Sign.
 ///
 /// The consumed adapter seal remains attached to its reconstructed pending
@@ -524,7 +490,6 @@ pub(in crate::sumeragi) struct RecoveredLifecycleNextWalVoteCandidateProjectionV
     pending: PendingRuntimeEffectBinding,
     candidate: CandidateAdmission,
 }
-
 /// Closed signed-Broadcast successor of one recovered follow-on WAL Vote.
 ///
 /// The signed effect, inherited pending owner, and replay-authorized admission
@@ -537,7 +502,6 @@ pub(super) struct RecoveredLifecycleNextWalVoteSignedBroadcastProjectionV1 {
     pending: PendingRuntimeEffectBinding,
     candidate: CandidateAdmission,
 }
-
 impl RecoveredLifecycleNextWalVoteSignedBroadcastProjectionV1 {
     /// Release the closed projection only to the WAL module's private permit.
     pub(super) fn consume_for_recovered_wal(
@@ -551,7 +515,6 @@ impl RecoveredLifecycleNextWalVoteSignedBroadcastProjectionV1 {
         (self.effect, self.pending, self.candidate)
     }
 }
-
 /// Canonical structural evidence for a recovered ProposalIntent or TimeoutIntent Sign.
 ///
 /// This is inert, cloneable evidence; executable authority remains in the
@@ -562,7 +525,6 @@ impl RecoveredLifecycleNextWalVoteSignedBroadcastProjectionV1 {
 pub(crate) struct RecoveredWalControlReplayEvidenceV1 {
     authority: LifecycleReplayAuthorityV1,
 }
-
 /// Canonical structural evidence for a recovered Decision-owned certified Fetch.
 ///
 /// The exact CommitQC and frozen ordered archive roster are persisted in the
@@ -573,7 +535,6 @@ pub(crate) struct RecoveredWalControlReplayEvidenceV1 {
 pub(crate) struct RecoveredWalDecisionFetchReplayEvidenceV1 {
     authority: LifecycleReplayAuthorityV1,
 }
-
 /// Canonical body-backed lineage for one recovered Commit Decision.
 ///
 /// The original payload-free Fetch authority remains unchanged. This seal
@@ -588,7 +549,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyReplayLineageV1 {
     body: RecoveredDecisionBodyPipelineReplayFamilyV1,
     apply: LifecycleReplayAuthorityV1,
 }
-
 /// Closed logical Store/Validate/Apply lineage derived by the fixed reducer preview.
 ///
 /// The three candidates and their concrete bindings remain private. Ledger,
@@ -601,13 +561,11 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyCandidateLineageV1 {
     validate: CandidateAdmission,
     apply: CandidateAdmission,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RecoveredDecisionBodyPipelineReplayFamilyV1 {
     source: BodyPipelineReplaySourceV1,
     body_frame: BodyFrameBindingV1,
 }
-
 /// One-shot candidate projection minted by consuming the runtime permit.
 ///
 /// The logical admission remains opaque outside the lifecycle recovery
@@ -617,7 +575,6 @@ struct RecoveredDecisionBodyPipelineReplayFamilyV1 {
 pub(in crate::sumeragi) struct RecoveredWalControlCandidateProjectionV1 {
     candidate: CandidateAdmission,
 }
-
 /// One-shot candidate projection for an exact recovered Decision Fetch.
 ///
 /// This wrapper exposes no candidate parts and can only be consumed by the
@@ -626,21 +583,18 @@ pub(in crate::sumeragi) struct RecoveredWalControlCandidateProjectionV1 {
 pub(in crate::sumeragi) struct RecoveredWalDecisionFetchCandidateProjectionV1 {
     candidate: CandidateAdmission,
 }
-
 impl RecoveredWalControlCandidateProjectionV1 {
     /// Consume the opaque projection inside the sealed WAL-recovery module.
     pub(super) fn into_candidate(self) -> CandidateAdmission {
         self.candidate
     }
 }
-
 impl RecoveredWalDecisionFetchCandidateProjectionV1 {
     /// Consume the opaque projection inside the sealed WAL-recovery module.
     pub(super) fn into_candidate(self) -> CandidateAdmission {
         self.candidate
     }
 }
-
 impl RecoveredWalControlReplayEvidenceV1 {
     /// Mint the canonical V1 authority for one already-authenticated control effect.
     pub(crate) fn from_sealed_recovered_control(
@@ -653,7 +607,6 @@ impl RecoveredWalControlReplayEvidenceV1 {
             authority: canonical,
         })
     }
-
     /// Compare the complete canonical authority with one opaque frame and effect.
     pub(crate) fn exactly_matches_recovered_control(
         &self,
@@ -665,7 +618,6 @@ impl RecoveredWalControlReplayEvidenceV1 {
             && LifecycleReplayAuthorityV1::decode_canonical(&self.authority.encode())
                 .is_ok_and(|canonical| canonical == self.authority)
     }
-
     /// Consume the one-shot runtime permit into one opaque control candidate.
     pub(in crate::sumeragi) fn project_recovered_control_candidate(
         &self,
@@ -678,7 +630,6 @@ impl RecoveredWalControlReplayEvidenceV1 {
         self.project_candidate(verified, locator, effect, pending)
             .map(|candidate| RecoveredWalControlCandidateProjectionV1 { candidate })
     }
-
     /// Recompute the admission and compare it without releasing either value.
     pub(in crate::sumeragi) fn project_recovered_control_candidate_for_comparison(
         &self,
@@ -691,7 +642,6 @@ impl RecoveredWalControlReplayEvidenceV1 {
         self.project_candidate(verified, locator, effect, pending)
             .is_some_and(|candidate| candidate == *expected)
     }
-
     fn project_candidate(
         &self,
         verified: &VerifiedHeightContext,
@@ -718,7 +668,6 @@ impl RecoveredWalControlReplayEvidenceV1 {
         )
     }
 }
-
 impl RecoveredWalDecisionFetchReplayEvidenceV1 {
     /// Mint canonical V1 evidence for one authenticated Decision Fetch.
     pub(crate) fn from_sealed_recovered_decision_fetch(
@@ -732,7 +681,6 @@ impl RecoveredWalDecisionFetchReplayEvidenceV1 {
             authority: canonical,
         })
     }
-
     /// Compare the complete canonical authority with one verified frame/effect pair.
     pub(crate) fn exactly_matches_recovered_decision_fetch(
         &self,
@@ -745,7 +693,6 @@ impl RecoveredWalDecisionFetchReplayEvidenceV1 {
             && LifecycleReplayAuthorityV1::decode_canonical(&self.authority.encode())
                 .is_ok_and(|canonical| canonical == self.authority)
     }
-
     /// Consume the private runtime permits into one opaque Fetch candidate.
     pub(in crate::sumeragi) fn project_recovered_decision_fetch_candidate(
         &self,
@@ -758,7 +705,6 @@ impl RecoveredWalDecisionFetchReplayEvidenceV1 {
         self.project_candidate(verified, locator, effect, pending)
             .map(|candidate| RecoveredWalDecisionFetchCandidateProjectionV1 { candidate })
     }
-
     /// Recompute and compare the candidate without releasing either value.
     pub(in crate::sumeragi) fn project_recovered_decision_fetch_candidate_for_comparison(
         &self,
@@ -771,7 +717,6 @@ impl RecoveredWalDecisionFetchReplayEvidenceV1 {
         self.project_candidate(verified, locator, effect, pending)
             .is_some_and(|candidate| candidate == *expected)
     }
-
     fn project_candidate(
         &self,
         verified: &VerifiedHeightContext,
@@ -797,7 +742,6 @@ impl RecoveredWalDecisionFetchReplayEvidenceV1 {
             self.authority.clone(),
         )
     }
-
     /// Reconstruct the pending binding only behind the private one-shot permit.
     pub(in crate::sumeragi) fn reconstruct_pending(
         &self,
@@ -814,7 +758,6 @@ impl RecoveredWalDecisionFetchReplayEvidenceV1 {
         )
     }
 }
-
 impl RecoveredDecisionApplyReplayLineageV1 {
     /// Derive the closed body lineage from one exact recovered Decision Fetch.
     ///
@@ -880,7 +823,6 @@ impl RecoveredDecisionApplyReplayLineageV1 {
         };
         body.authority_for(context, LifecycleStageKind::StoreBody)?;
         body.authority_for(context, LifecycleStageKind::ValidateBody)?;
-
         let apply_source = LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
             locator: locator.persisted_locator(),
             role: ReplayWalRoleV1::DECISION,
@@ -900,7 +842,6 @@ impl RecoveredDecisionApplyReplayLineageV1 {
         };
         lineage.is_stage_closed(context).then_some(lineage)
     }
-
     fn is_stage_closed(&self, context: LifecycleContext) -> bool {
         let Some(store) = self
             .body
@@ -967,7 +908,6 @@ impl RecoveredDecisionApplyReplayLineageV1 {
                 apply_payload,
             ) == Some(true)
     }
-
     /// Project only the first body-backed Store successor of the recovered Fetch.
     ///
     /// This does not require or fabricate a validation result. The full replay
@@ -1015,7 +955,6 @@ impl RecoveredDecisionApplyReplayLineageV1 {
             ) == Some(true))
         .then_some(candidate)
     }
-
     /// Consume the inert replay family into the sole fixed reducer-derived
     /// Store/Validate/Apply logical lineage.
     ///
@@ -1092,7 +1031,6 @@ impl RecoveredDecisionApplyReplayLineageV1 {
         lineage.is_exact(context).then_some(lineage)
     }
 }
-
 impl RecoveredDecisionApplyCandidateLineageV1 {
     fn candidate_matches_record(
         candidate: &CandidateAdmission,
@@ -1111,7 +1049,6 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
             && record.continuation() == Some(continuation)
             && record.replay_matches_candidate(candidate)
     }
-
     /// Construct one exact logical lineage for ledger-local restart tests.
     #[cfg(test)]
     pub(super) fn from_candidates_for_test(
@@ -1127,7 +1064,6 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
             apply,
         }
     }
-
     /// Recheck the complete fixed body lineage without releasing a candidate.
     pub(super) fn is_exact(&self, context: LifecycleContext) -> bool {
         let candidates = [&self.store, &self.validate, &self.apply];
@@ -1180,7 +1116,6 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
                 payload,
             ) == Some(true)
     }
-
     /// Bind the original payload-free Decision Fetch authority to the first
     /// body-backed Store successor without releasing either candidate.
     pub(super) fn exactly_follows_fetch_candidate(&self, fetch: &CandidateAdmission) -> bool {
@@ -1207,7 +1142,6 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
                 self.store.payload,
             ) == Some(true)
     }
-
     /// Build the only three durable successors permitted after the exact
     /// payload-free recovered Decision Fetch row.
     pub(super) fn successor_records(
@@ -1270,7 +1204,6 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
         .ok()?;
         Some([store, validate, apply])
     }
-
     /// Advance one already durable live Store and append its exact Validate/Apply tail.
     ///
     /// The Store ordinal can precede unrelated durable rows: its typed
@@ -1337,7 +1270,6 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
         .ok()?;
         Some([store, validate, apply])
     }
-
     /// Compare the exact crash-cut Store before its validation successor exists.
     pub(super) fn exactly_matches_live_store_record(
         &self,
@@ -1352,7 +1284,6 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
             super::schema::DurableContinuation::None,
         )
     }
-
     /// Compare all three successor rows, including the final live Apply.
     pub(super) fn exactly_matches_successor_records(
         &self,
@@ -1391,7 +1322,6 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
                 super::schema::DurableContinuation::None,
             )
     }
-
     /// Compare the complete recovered body chain after its Apply child was
     /// durably terminalized.
     ///
@@ -1436,7 +1366,6 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
                 super::schema::DurableContinuation::None,
             )
     }
-
     /// Insert only the final live Apply candidate after the complete durable
     /// body chain has been proven exact.
     pub(super) fn splice_apply_candidate_from_records(
@@ -1453,7 +1382,6 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
                 .insert(self.apply.key, self.apply.clone())
                 .is_none()
     }
-
     /// Compare one reconstructed logical candidate with the sole live Apply.
     pub(in crate::sumeragi) fn exactly_matches_apply_candidate(
         &self,
@@ -1461,7 +1389,6 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
     ) -> bool {
         candidate == &self.apply
     }
-
     /// Bind the retained validation result to this lineage's exact body frame.
     ///
     /// The receipt remains opaque to registry callers.  This fixed comparison
@@ -1477,7 +1404,6 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
                 && self.apply.payload == DurablePayloadReference::BodyFrame(frame)
         })
     }
-
     /// Confirm that recovery retained the exact Apply and no substituted value.
     pub(super) fn owns_spliced_apply_candidate(
         &self,
@@ -1486,7 +1412,6 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
         candidates.get(&self.apply.key) == Some(&self.apply)
     }
 }
-
 impl RecoveredDecisionBodyPipelineReplayFamilyV1 {
     fn authority_for(
         &self,
@@ -1507,7 +1432,6 @@ impl RecoveredDecisionBodyPipelineReplayFamilyV1 {
         )
     }
 }
-
 impl RecoveredWalVoteReplayEvidenceV1 {
     /// Build canonical evidence for one already-authenticated recovered phase vote.
     ///
@@ -1532,7 +1456,6 @@ impl RecoveredWalVoteReplayEvidenceV1 {
             .exactly_matches_recovered_vote(locator, tag, vote)
             .then_some(evidence)
     }
-
     /// Compare the complete canonical envelope with one sealed recovered vote.
     ///
     /// This is structural equality only. It cannot authenticate decoded WAL
@@ -1556,7 +1479,6 @@ impl RecoveredWalVoteReplayEvidenceV1 {
             && LifecycleReplayAuthorityV1::decode_canonical(&self.authority.encode())
                 .is_ok_and(|canonical| canonical == self.authority)
     }
-
     /// Project the exact recovered WAL vote into one replay-authorized Sign candidate.
     ///
     /// The opaque WAL locator and canonical authority remain inside the sealed
@@ -1595,7 +1517,6 @@ impl RecoveredWalVoteReplayEvidenceV1 {
             self.authority.clone(),
         )
     }
-
     /// Recompute and compare one recovered Vote candidate without releasing it.
     pub(in crate::sumeragi) fn project_recovered_vote_candidate_for_comparison(
         &self,
@@ -1634,7 +1555,6 @@ impl RecoveredWalVoteReplayEvidenceV1 {
             == Some(expected)
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredLifecycleNextWalVoteSealV1 {
     /// Seal one exact adapter successor against its authenticated WAL owner and body.
@@ -1673,7 +1593,6 @@ impl RecoveredLifecycleNextWalVoteSealV1 {
             validated,
         })
     }
-
     /// Compare the complete sealed binding without releasing any authority part.
     pub(in crate::sumeragi) fn exactly_matches(
         &self,
@@ -1695,7 +1614,6 @@ impl RecoveredLifecycleNextWalVoteSealV1 {
                 .replay_evidence
                 .exactly_matches_recovered_vote(wal_identity, *tag, vote)
     }
-
     /// Recheck the sealed successor against the WAL carrier's verified height.
     pub(in crate::sumeragi) fn matches_verified_height(
         &self,
@@ -1718,7 +1636,6 @@ impl RecoveredLifecycleNextWalVoteSealV1 {
             && durable.subject() == vote.subject
             && self.validated.execution_commitment() == vote.execution_commitment
     }
-
     /// Consume this full executable seal into one runtime-authenticated candidate.
     ///
     /// Every failure returns the intact seal. The pending owner is reconstructed
@@ -1768,7 +1685,6 @@ impl RecoveredLifecycleNextWalVoteSealV1 {
         }
         Ok(projection)
     }
-
     /// Rejoin the retained body marker to one exact recovered phase-vote repair.
     ///
     /// This comparison releases no receipt or replay constituent. It is the
@@ -1779,7 +1695,6 @@ impl RecoveredLifecycleNextWalVoteSealV1 {
     ) -> bool {
         repair.concrete_pair_matches_validation(&self.validated)
     }
-
     /// Construct a fully checked adapter-shaped seal for focused runtime tests.
     #[cfg(test)]
     pub(in crate::sumeragi) fn for_test(
@@ -1803,7 +1718,6 @@ impl RecoveredLifecycleNextWalVoteSealV1 {
         seal.exactly_matches(wal_identity, &seal.effect, &seal.validated)
             .then_some(seal)
     }
-
     /// Substitute only the opaque WAL owner in a focused fail-closed test.
     #[cfg(test)]
     pub(in crate::sumeragi) fn substitute_wal_identity_for_test(
@@ -1812,13 +1726,11 @@ impl RecoveredLifecycleNextWalVoteSealV1 {
     ) {
         self.wal_identity = wal_identity;
     }
-
     /// Substitute only the executable effect in a focused fail-closed test.
     #[cfg(test)]
     pub(in crate::sumeragi) fn substitute_effect_for_test(&mut self, effect: AdapterEffect) {
         self.effect = effect;
     }
-
     /// Substitute only the retained body authority in a focused fail-closed test.
     #[cfg(test)]
     pub(in crate::sumeragi) fn substitute_validated_for_test(
@@ -1828,7 +1740,6 @@ impl RecoveredLifecycleNextWalVoteSealV1 {
         self.validated = validated;
     }
 }
-
 impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
     /// Revalidate the full retained executable seal, pending owner, candidate,
     /// and canonical standalone Ready/Effect geometry.
@@ -1854,7 +1765,6 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
                 )
             && recovered_next_wal_vote_candidate_shape_is_exact(&self.candidate, context)
     }
-
     /// Admit this still-opaque projection into a focused scheduler fixture.
     ///
     /// The helper returns only the allocated owner coordinates; the candidate,
@@ -1893,7 +1803,6 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
     ) -> Option<AdapterEffect> {
         self.is_exact(verified).then(|| self.seal.effect.clone())
     }
-
     /// Project the exact signed Broadcast successor without releasing either
     /// the recovered Vote or the derived executable child.
     ///
@@ -1929,7 +1838,6 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
         )
         .then_some(projection)
     }
-
     /// Recheck a closed signed child against this exact recovered WAL Vote.
     pub(super) fn signed_broadcast_successor_is_exact(
         &self,
@@ -1951,12 +1859,10 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
             && exact_signed_broadcast_successor_candidate(verified, broadcast, pending).as_ref()
                 == Some(candidate)
     }
-
     /// Return the exact installed effect digest without exposing its binding.
     pub(super) fn digest(&self) -> LifecycleDigest {
         LifecycleDigest::new(*self.pending.exact_effect_identity().as_ref())
     }
-
     /// Recheck the complete executable carrier at one deterministic address.
     pub(super) fn validates_at(
         &self,
@@ -1978,7 +1884,6 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
             && universe == std::collections::BTreeSet::from([slot])
             && consumed == universe
     }
-
     /// Compare the exact Ready coordinator row, metadata, indexes, and geometry.
     pub(super) fn matches_current_ready_record(
         &self,
@@ -2018,7 +1923,6 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
             && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&address.owner)
             && coordinator.ready_index.contains(&address.ordinal)
     }
-
     /// Compare the exact claimed row and the coordinator's sole active lease.
     pub(super) fn matches_current_claimed_record(
         &self,
@@ -2064,7 +1968,6 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
             && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&address.owner)
             && !coordinator.ready_index.contains(&address.ordinal)
     }
-
     /// Project the exact retained Sign into the existing opaque worker task.
     pub(super) fn project_recovered_lifecycle_sign_task(
         &self,
@@ -2083,7 +1986,6 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
             request.clone(),
         )
     }
-
     /// Clone only the inert admission under the transition module's affine permit.
     pub(super) fn project_candidate_for_combined_transition(
         &self,
@@ -2091,7 +1993,6 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
     ) -> CandidateAdmission {
         self.candidate.clone()
     }
-
     /// Compare one fresh standalone ledger row with the complete sealed candidate.
     pub(super) fn exactly_matches_fresh_record(
         &self,
@@ -2153,7 +2054,6 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
                 .insert(self.candidate.key, self.candidate.clone())
                 .is_none()
     }
-
     /// Compare one cold-census entry without exposing its candidate key.
     pub(super) fn owns_spliced_candidate(
         &self,
@@ -2161,7 +2061,6 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
     ) -> bool {
         candidates.get(&self.candidate.key) == Some(&self.candidate)
     }
-
     /// Compare pair identity without exposing either next-Sign constituent.
     pub(super) fn is_distinct_from_broadcast_candidate(
         &self,
@@ -2169,7 +2068,6 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
     ) -> bool {
         self.candidate.key != broadcast.key && self.candidate.causal_root != broadcast.causal_root
     }
-
     /// Check cold-census vacancy without releasing the next-Sign key.
     pub(super) fn is_absent_from_candidates(
         &self,
@@ -2178,7 +2076,6 @@ impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
         !candidates.contains_key(&self.candidate.key)
     }
 }
-
 fn recovered_next_wal_vote_candidate_shape_is_exact(
     candidate: &CandidateAdmission,
     context: LifecycleContext,
@@ -2210,7 +2107,6 @@ fn recovered_next_wal_vote_candidate_shape_is_exact(
             .keys()
             .all(|slot| slot.capacity_class() == Some(super::schema::CapacityClass::Effect))
 }
-
 /// Non-decodable live authority for one exact fsynced WAL continuation.
 ///
 /// Payload-free stages retain their complete canonical V1 envelope. `Apply`
@@ -2223,7 +2119,6 @@ struct LiveWalPersistedReplaySealV1 {
     wal_identity: LiveWalFrameIdentity,
     state: LiveWalPersistedReplayStateV1,
 }
-
 #[derive(PartialEq, Eq)]
 enum LiveWalPersistedReplayStateV1 {
     Canonical {
@@ -2235,7 +2130,6 @@ enum LiveWalPersistedReplayStateV1 {
         source: WalReplaySourceV1,
     },
 }
-
 /// Exact live WAL continuation kept inseparable from its adapter effect.
 ///
 /// This move-only envelope is the linear transport returned by the adapter's
@@ -2248,7 +2142,6 @@ pub(in crate::sumeragi) struct SealedLiveWalPersistedEffectV1 {
     replay: LiveWalPersistedReplaySealV1,
     pending: LiveWalPersistedPendingV1,
 }
-
 #[derive(PartialEq, Eq)]
 enum LiveWalPersistedPendingV1 {
     PayloadFree(PendingRuntimeEffectBinding),
@@ -2256,7 +2149,6 @@ enum LiveWalPersistedPendingV1 {
     ApplyPending,
     ApplyBound(PendingRuntimeEffectBinding),
 }
-
 impl SealedLiveWalPersistedEffectV1 {
     /// Consume the adapter's one record-checked live continuation cause.
     pub(in crate::sumeragi) fn from_exact_live_append(
@@ -2290,7 +2182,6 @@ impl SealedLiveWalPersistedEffectV1 {
         };
         sealed.exactly_matches_effect().then_some(sealed)
     }
-
     /// Recheck the payload-free effect and pending owner minted at conversion.
     pub(super) fn exactly_binds_payload_free_pending(&self) -> bool {
         matches!(
@@ -2301,7 +2192,6 @@ impl SealedLiveWalPersistedEffectV1 {
             .replay
             .exactly_matches_payload_free_effect(&self.effect)
     }
-
     /// Replace the frame-derived placeholder owner of one exact vote-sign
     /// continuation with the predecessor-derived binding sealed by the Ready
     /// Validate adapter preflight.
@@ -2336,7 +2226,6 @@ impl SealedLiveWalPersistedEffectV1 {
             pending: LiveWalPersistedPendingV1::ValidateSignBound(pending),
         })
     }
-
     /// Recheck the sealed post-append Validate-to-Sign binding without
     /// releasing its effect or pending owner.
     pub(in crate::sumeragi) fn exactly_binds_validate_sign_pending(&self) -> bool {
@@ -2354,7 +2243,6 @@ impl SealedLiveWalPersistedEffectV1 {
             .replay
             .exactly_matches_payload_free_effect(&self.effect)
     }
-
     /// Project the exact replay-authorized Sign child without releasing its
     /// nested effect or predecessor-derived pending owner.
     ///
@@ -2397,7 +2285,6 @@ impl SealedLiveWalPersistedEffectV1 {
         )
         .ok_or(AdapterEffectAdmissionError::InvalidCarrier)
     }
-
     /// Consume the exact nested Validate-to-Sign continuation into one closed
     /// ordinary registry carrier.
     ///
@@ -2441,7 +2328,6 @@ impl SealedLiveWalPersistedEffectV1 {
             }),
         }
     }
-
     /// Compare the complete test effect and expected inherited causal key
     /// without releasing either sealed value.
     #[cfg(test)]
@@ -2458,7 +2344,6 @@ impl SealedLiveWalPersistedEffectV1 {
             )
             && self.exactly_binds_validate_sign_pending()
     }
-
     /// Complete `Apply` only from the exact retained Validate causal owner.
     ///
     /// TODO: Co-locate this seal with the work-registry join before production
@@ -2504,7 +2389,6 @@ impl SealedLiveWalPersistedEffectV1 {
             )),
         }
     }
-
     /// Bind completed `Apply` evidence to its exact retained Validate predecessor.
     pub(super) fn exactly_binds_validated_apply_successor(
         &self,
@@ -2522,7 +2406,6 @@ impl SealedLiveWalPersistedEffectV1 {
             .replay
             .exactly_matches_apply_effect(&self.effect, receipt)
     }
-
     fn exactly_matches_effect(&self) -> bool {
         match &self.pending {
             LiveWalPersistedPendingV1::PayloadFree(pending) => {
@@ -2543,7 +2426,6 @@ impl SealedLiveWalPersistedEffectV1 {
             LiveWalPersistedPendingV1::ApplyBound(_) => false,
         }
     }
-
     #[cfg(test)]
     /// Compare this sealed continuation with one exact test effect.
     pub(in crate::sumeragi) fn exactly_matches_effect_for_test(
@@ -2553,7 +2435,6 @@ impl SealedLiveWalPersistedEffectV1 {
         self.effect == *effect && self.exactly_matches_effect()
     }
 }
-
 impl LiveWalPersistedReplaySealV1 {
     /// Seal one exact effect released by an acknowledged live WAL append.
     ///
@@ -2588,7 +2469,6 @@ impl LiveWalPersistedReplaySealV1 {
         seal.exactly_matches_persisted_effect(effect)
             .then_some(seal)
     }
-
     /// Recheck the exact locator, action, tag, and payload-free V1 envelope.
     fn exactly_matches_payload_free_effect(&self, effect: &AdapterEffect) -> bool {
         matches!(
@@ -2597,7 +2477,6 @@ impl LiveWalPersistedReplaySealV1 {
                 if *stage != LifecycleStageKind::ApplyDecision
         ) && self.exactly_matches_persisted_effect(effect)
     }
-
     /// Complete only an exact pending `Apply` source with one durable body frame.
     ///
     /// The work registry calls this through its closed validated-completion
@@ -2657,7 +2536,6 @@ impl LiveWalPersistedReplaySealV1 {
             })
         }
     }
-
     /// Recheck the exact live WAL source and receipt-bound `Apply` envelope.
     fn exactly_matches_apply_effect(
         &self,
@@ -2702,7 +2580,6 @@ impl LiveWalPersistedReplaySealV1 {
             } if authority == &expected
         )
     }
-
     fn exactly_matches_persisted_effect(&self, effect: &AdapterEffect) -> bool {
         let Some(LiveWalReplayProjectionV1 {
             context,
@@ -2739,13 +2616,11 @@ impl LiveWalPersistedReplaySealV1 {
         }
     }
 }
-
 struct LiveWalReplayProjectionV1 {
     context: LifecycleContext,
     stage: LifecycleStageKind,
     source: WalReplaySourceV1,
 }
-
 /// Canonical inert replay evidence for one exact signed broadcast effect.
 ///
 /// The complete message remains inside the private canonical envelope. The
@@ -2757,7 +2632,6 @@ pub(super) struct SignedBroadcastReplayEvidenceV1 {
     authority: LifecycleReplayAuthorityV1,
     pending: DirectSignedPendingBindingV1,
 }
-
 /// Opaque decoded signed-Broadcast child awaiting its recovered WAL parent.
 ///
 /// Ledger bytes alone are not execution authority: this projection can be
@@ -2766,7 +2640,6 @@ pub(super) struct SignedBroadcastReplayEvidenceV1 {
 pub(super) struct DurableRecoveredSignedBroadcastChildV1 {
     effect: AdapterEffect,
 }
-
 impl DurableRecoveredSignedBroadcastChildV1 {
     /// Release the canonical signed effect only to its recovered-WAL parent.
     pub(super) fn consume_for_recovered_wal(
@@ -2776,7 +2649,6 @@ impl DurableRecoveredSignedBroadcastChildV1 {
         self.effect
     }
 }
-
 /// Authenticate the durable envelope shape without granting execution authority.
 pub(super) fn project_durable_recovered_signed_broadcast_child(
     context: LifecycleContext,
@@ -2803,7 +2675,6 @@ pub(super) fn project_durable_recovered_signed_broadcast_child(
         && exact_signed_broadcast_authority(&effect).as_ref() == Some(authority))
     .then_some(DurableRecoveredSignedBroadcastChildV1 { effect })
 }
-
 impl SignedBroadcastReplayEvidenceV1 {
     /// Seal one exact runtime-bound signed broadcast into canonical evidence.
     pub(super) fn from_exact_effect(
@@ -2819,7 +2690,6 @@ impl SignedBroadcastReplayEvidenceV1 {
             .exactly_matches_effect(effect, pending)
             .then_some(evidence)
     }
-
     /// Compare the whole canonical envelope and runtime binding with one effect.
     pub(super) fn exactly_matches_effect(
         &self,
@@ -2831,7 +2701,6 @@ impl SignedBroadcastReplayEvidenceV1 {
                 .is_some_and(|expected| expected == self.authority)
     }
 }
-
 /// Project the exact signed Broadcast child of one pending Sign owner.
 ///
 /// The pending binding remains non-decodable process authority. The returned
@@ -2879,7 +2748,6 @@ pub(super) fn exact_signed_broadcast_successor_candidate(
         authority,
     )
 }
-
 /// Rejoin one durable WAL Sign source to its exact signed Broadcast envelope.
 ///
 /// LedgerV1 invokes this for the four Sign-to-Broadcast continuation codes.
@@ -2895,7 +2763,6 @@ pub(super) fn signed_broadcast_continuation_is_exact(
     child_payload: DurablePayloadReference,
 ) -> Option<bool> {
     use super::schema::DurableContinuationEdge;
-
     if !matches!(
         edge,
         DurableContinuationEdge::SignProposalToBroadcast
@@ -2973,7 +2840,6 @@ pub(super) fn signed_broadcast_continuation_is_exact(
     };
     Some(exact)
 }
-
 /// Canonical inert replay evidence for one exact authenticated equivocation report.
 ///
 /// The canonical wire pair remains private, while the runtime-only pending
@@ -2985,7 +2851,6 @@ pub(super) struct SignedEquivocationReplayEvidenceV1 {
     authority: LifecycleReplayAuthorityV1,
     pending: DirectSignedPendingBindingV1,
 }
-
 impl SignedEquivocationReplayEvidenceV1 {
     /// Seal one exact runtime-bound authenticated conflict into canonical evidence.
     pub(super) fn from_exact_effect(
@@ -3001,7 +2866,6 @@ impl SignedEquivocationReplayEvidenceV1 {
             .exactly_matches_effect(effect, pending)
             .then_some(evidence)
     }
-
     /// Compare the whole canonical envelope and runtime binding with one report.
     pub(super) fn exactly_matches_effect(
         &self,
@@ -3013,7 +2877,6 @@ impl SignedEquivocationReplayEvidenceV1 {
                 .is_some_and(|expected| expected == self.authority)
     }
 }
-
 /// Seal the only raw adapter classes whose complete replay source and exact
 /// pending ownership are both present at direct admission.
 pub(super) fn exact_direct_signed_admission_authority(
@@ -3032,7 +2895,6 @@ pub(super) fn exact_direct_signed_admission_authority(
         _ => None,
     }
 }
-
 fn candidate_from_authorized_projection(
     active_context: LifecycleContext,
     projected: super::projection::AuthorityFreeAdmissionProjection,
@@ -3064,7 +2926,6 @@ fn candidate_from_authorized_projection(
         .replay_authority_is_exact(active_context)
         .then_some(candidate)
 }
-
 /// Project one exact body-pipeline successor from canonical live-WAL evidence.
 #[cfg(test)]
 pub(super) fn exact_live_wal_body_successor_candidate_for_test(
@@ -3104,7 +2965,6 @@ pub(super) fn exact_live_wal_body_successor_candidate_for_test(
     if !successor_is_exact {
         return None;
     }
-
     let wal_identity = LiveWalFrameIdentity::for_test(17, 18, [0xB7; 32]);
     let LiveWalReplayProjectionV1 {
         context,
@@ -3133,7 +2993,6 @@ pub(super) fn exact_live_wal_body_successor_candidate_for_test(
             .ok()?;
     candidate_from_authorized_projection(context, projected, payload, authority)
 }
-
 /// Project one exact invalid-body report from its retained Validate evidence.
 #[cfg(test)]
 pub(super) fn exact_invalid_body_report_candidate_for_test(
@@ -3177,13 +3036,11 @@ pub(super) fn exact_invalid_body_report_candidate_for_test(
         authority,
     )
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DirectSignedPendingBindingV1 {
     causal_lifecycle_key: [u8; 32],
     effect_identity: [u8; 32],
 }
-
 impl DirectSignedPendingBindingV1 {
     fn from_exact_effect(
         effect: &AdapterEffect,
@@ -3194,7 +3051,6 @@ impl DirectSignedPendingBindingV1 {
             effect_identity: *pending.exact_effect_identity().as_ref(),
         })
     }
-
     fn exactly_matches(
         &self,
         effect: &AdapterEffect,
@@ -3205,7 +3061,6 @@ impl DirectSignedPendingBindingV1 {
             && self.effect_identity == *pending.exact_effect_identity().as_ref()
     }
 }
-
 fn exact_signed_broadcast_authority(effect: &AdapterEffect) -> Option<LifecycleReplayAuthorityV1> {
     let AdapterEffect::Broadcast(message) = effect else {
         return None;
@@ -3250,7 +3105,6 @@ fn exact_signed_broadcast_authority(effect: &AdapterEffect) -> Option<LifecycleR
         ReplayPayloadBindingV1::None,
     )
 }
-
 fn exact_signed_equivocation_authority(
     effect: &AdapterEffect,
 ) -> Option<LifecycleReplayAuthorityV1> {
@@ -3276,11 +3130,9 @@ fn exact_signed_equivocation_authority(
         ReplayPayloadBindingV1::None,
     )
 }
-
 fn replay_context(round: wire::ConsensusRound) -> LifecycleContext {
     LifecycleContext::new(digest_from_bytes(round.context_id.0.as_ref()), round.height)
 }
-
 /// Opaque replay evidence for one ordinary Fetch emitted by authenticated Proposal ingress.
 ///
 /// This envelope is intentionally Clone because the signed Proposal and
@@ -3295,7 +3147,6 @@ pub(in crate::sumeragi) struct RemoteProposalFetchReplayEvidenceV1 {
     source: BodyPipelineReplaySourceV1,
     fetch_pending: Arc<PendingRuntimeEffectBinding>,
 }
-
 impl core::fmt::Debug for RemoteProposalFetchReplayEvidenceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -3303,7 +3154,6 @@ impl core::fmt::Debug for RemoteProposalFetchReplayEvidenceV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// Exact Proposal-origin seal waiting for the real durable Store receipt.
 #[derive(Clone)]
 #[must_use = "remote Proposal Store replay evidence must remain attached through durability"]
@@ -3313,7 +3163,6 @@ pub(in crate::sumeragi) struct RemoteProposalStoreReplayEvidenceV1 {
     source: BodyPipelineReplaySourceV1,
     store_pending: Arc<PendingRuntimeEffectBinding>,
 }
-
 impl core::fmt::Debug for RemoteProposalStoreReplayEvidenceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -3321,7 +3170,6 @@ impl core::fmt::Debug for RemoteProposalStoreReplayEvidenceV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// Canonical Proposal+BodyFrame evidence waiting for its exact Validate successor.
 #[derive(Clone)]
 #[must_use = "stored remote Proposal replay evidence must project to exact Validate work"]
@@ -3329,7 +3177,6 @@ pub(in crate::sumeragi) struct RemoteProposalStoredReplayEvidenceV1 {
     family: RemoteProposalBodyPipelineReplayFamilyV1,
     store_pending: Arc<PendingRuntimeEffectBinding>,
 }
-
 impl core::fmt::Debug for RemoteProposalStoredReplayEvidenceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -3337,7 +3184,6 @@ impl core::fmt::Debug for RemoteProposalStoredReplayEvidenceV1 {
             .finish_non_exhaustive()
     }
 }
-
 /// Canonical Proposal+BodyFrame evidence retained beside exact Validate work.
 #[derive(Clone)]
 #[must_use = "remote Proposal Validate replay evidence must remain attached through completion"]
@@ -3345,7 +3191,6 @@ pub(in crate::sumeragi) struct RemoteProposalValidateReplayEvidenceV1 {
     family: RemoteProposalBodyPipelineReplayFamilyV1,
     validate_pending: Arc<PendingRuntimeEffectBinding>,
 }
-
 impl core::fmt::Debug for RemoteProposalValidateReplayEvidenceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -3353,7 +3198,6 @@ impl core::fmt::Debug for RemoteProposalValidateReplayEvidenceV1 {
             .finish_non_exhaustive()
     }
 }
-
 #[derive(Clone)]
 struct RemoteProposalBodyPipelineReplayFamilyV1 {
     authenticated: crate::sumeragi::v2::AuthenticatedConsensusMessage,
@@ -3361,7 +3205,6 @@ struct RemoteProposalBodyPipelineReplayFamilyV1 {
     source: BodyPipelineReplaySourceV1,
     body_frame: BodyFrameBindingV1,
 }
-
 impl RemoteProposalFetchReplayEvidenceV1 {
     /// Sole production mint from an exact authenticated Proposal dispatch.
     pub(in crate::sumeragi) fn from_exact_authenticated_proposal(
@@ -3396,7 +3239,6 @@ impl RemoteProposalFetchReplayEvidenceV1 {
         };
         evidence.exactly_matches_fetch(effect).then_some(evidence)
     }
-
     /// Recheck the exact signed Proposal, ingress carrier, Fetch, and causal root.
     pub(in crate::sumeragi) fn exactly_matches_fetch(&self, effect: &AdapterEffect) -> bool {
         exact_remote_proposal_fetch(&self.authenticated, &self.ingress, effect).is_some_and(
@@ -3424,7 +3266,6 @@ impl RemoteProposalFetchReplayEvidenceV1 {
             },
         )
     }
-
     /// Compare the wrapper with the exact pending binding retained by its owner.
     pub(in crate::sumeragi) fn exactly_matches_fetch_pending(
         &self,
@@ -3433,7 +3274,6 @@ impl RemoteProposalFetchReplayEvidenceV1 {
     ) -> bool {
         self.exactly_matches_fetch(effect) && self.fetch_pending.as_ref() == pending
     }
-
     /// Return whether a retry carries the same opaque Proposal and runtime binding.
     pub(in crate::sumeragi) fn exactly_matches_retry(
         &self,
@@ -3449,7 +3289,6 @@ impl RemoteProposalFetchReplayEvidenceV1 {
             && self.source == candidate.source
             && self.fetch_pending == candidate.fetch_pending
     }
-
     /// Preflight the only accepted Fetch-to-Store causal projection.
     pub(in crate::sumeragi) fn exactly_projects_store(
         &self,
@@ -3466,7 +3305,6 @@ impl RemoteProposalFetchReplayEvidenceV1 {
                 .as_ref()
                 == Some(store_pending)
     }
-
     /// Consume the exact Fetch origin into its one Store successor.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn project_exact_store(
@@ -3492,14 +3330,12 @@ impl RemoteProposalFetchReplayEvidenceV1 {
         })
     }
 }
-
 impl RemoteProposalStoreReplayEvidenceV1 {
     /// Match the exact Store effect and inherited Proposal causal root.
     pub(in crate::sumeragi) fn exactly_matches_store(&self, effect: &AdapterEffect) -> bool {
         remote_proposal_store_matches(&self.authenticated, &self.ingress, &self.source, effect)
             && self.store_pending.exactly_binds_adapter_effect(effect)
     }
-
     /// Compare the Store wrapper with the exact pending binding retained by its owner.
     pub(in crate::sumeragi) fn exactly_matches_store_pending(
         &self,
@@ -3508,7 +3344,6 @@ impl RemoteProposalStoreReplayEvidenceV1 {
     ) -> bool {
         self.exactly_matches_store(effect) && self.store_pending.as_ref() == pending
     }
-
     /// Join only the exact durable BodyFrame produced by this Store.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn bind_durable_body(
@@ -3533,7 +3368,6 @@ impl RemoteProposalStoreReplayEvidenceV1 {
         })
     }
 }
-
 impl RemoteProposalStoredReplayEvidenceV1 {
     /// Recheck the canonical Proposal+BodyFrame family at Store.
     pub(in crate::sumeragi) fn exactly_matches_store(
@@ -3549,7 +3383,6 @@ impl RemoteProposalStoredReplayEvidenceV1 {
                 LifecycleStageKind::StoreBody,
             )
     }
-
     /// Project an exact canonical Store candidate for focused transition tests.
     #[cfg(test)]
     pub(super) fn project_candidate_for_test(
@@ -3587,7 +3420,6 @@ impl RemoteProposalStoredReplayEvidenceV1 {
         candidate_from_authorized_projection(active_context, projected, payload, authority)
             .ok_or(AdapterEffectAdmissionError::InvalidCarrier)
     }
-
     /// Consume Store evidence through the exact Store-to-Validate pending lineage.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn project_exact_validate(
@@ -3623,7 +3455,6 @@ impl RemoteProposalStoredReplayEvidenceV1 {
         })
     }
 }
-
 impl RemoteProposalValidateReplayEvidenceV1 {
     /// Recheck the canonical Proposal+BodyFrame family at Validate.
     pub(in crate::sumeragi) fn exactly_matches_validate(
@@ -3639,7 +3470,6 @@ impl RemoteProposalValidateReplayEvidenceV1 {
                 LifecycleStageKind::ValidateBody,
             )
     }
-
     /// Compare the Validate wrapper with the exact pending binding retained by its owner.
     pub(in crate::sumeragi) fn exactly_matches_validate_pending(
         &self,
@@ -3650,7 +3480,6 @@ impl RemoteProposalValidateReplayEvidenceV1 {
         self.exactly_matches_validate(effect, receipt) && self.validate_pending.as_ref() == pending
     }
 }
-
 fn exact_remote_proposal_fetch<'a>(
     authenticated: &'a crate::sumeragi::v2::AuthenticatedConsensusMessage,
     ingress: &RuntimeIngressOwnershipEvidence,
@@ -3679,7 +3508,6 @@ fn exact_remote_proposal_fetch<'a>(
         && tag.view() >= round.view)
         .then_some(proposal)
 }
-
 fn remote_proposal_fetch_effect(source: &BodyPipelineReplaySourceV1) -> Option<AdapterEffect> {
     let BodyPipelineOriginV1::Proposal(proposal) = &source.origin else {
         return None;
@@ -3697,7 +3525,6 @@ fn remote_proposal_fetch_effect(source: &BodyPipelineReplaySourceV1) -> Option<A
         certificate: None,
     })
 }
-
 fn remote_proposal_store_matches(
     authenticated: &crate::sumeragi::v2::AuthenticatedConsensusMessage,
     ingress: &RuntimeIngressOwnershipEvidence,
@@ -3724,7 +3551,6 @@ fn remote_proposal_store_matches(
         && *round == proposal.round
         && *subject == proposal.subject
 }
-
 fn exact_remote_proposal_body_pipeline_family(
     authenticated: &crate::sumeragi::v2::AuthenticatedConsensusMessage,
     ingress: &RuntimeIngressOwnershipEvidence,
@@ -3762,7 +3588,6 @@ fn exact_remote_proposal_body_pipeline_family(
         && family.is_exact_for_stage(LifecycleStageKind::ValidateBody))
     .then_some(family)
 }
-
 impl RemoteProposalBodyPipelineReplayFamilyV1 {
     fn is_exact_for_stage(&self, stage: LifecycleStageKind) -> bool {
         let wire::ConsensusMessageV2Payload::Proposal(proposal) = self.authenticated.payload()
@@ -3785,7 +3610,6 @@ impl RemoteProposalBodyPipelineReplayFamilyV1 {
             .is_some()
     }
 }
-
 fn remote_proposal_body_stage_matches(
     family: &RemoteProposalBodyPipelineReplayFamilyV1,
     effect: &AdapterEffect,
@@ -3836,7 +3660,6 @@ fn remote_proposal_body_stage_matches(
                 && family.is_exact_for_stage(stage)
         })
 }
-
 /// Move-only pre-intent replay seal for one exact local `AssembleBody -> StoreBody` owner.
 ///
 /// The private runtime mint permit prevents a cloned scheduling sidecar from
@@ -3848,7 +3671,6 @@ pub(in crate::sumeragi) struct LocalBodyPreIntentReplaySealV1 {
     source: BodyPipelineReplaySourceV1,
     store_pending: PendingRuntimeEffectBinding,
 }
-
 /// Canonical inert Validate evidence inherited only from the exact local Store owner.
 #[derive(Debug)]
 #[must_use = "local Validate replay evidence must remain attached through completion"]
@@ -3856,7 +3678,6 @@ pub(in crate::sumeragi) struct LocalValidateReplayEvidenceV1 {
     family: LocalBodyPipelineReplayFamilyV1,
     validate_pending: PendingRuntimeEffectBinding,
 }
-
 /// Inert replay evidence retained beside one exact queued `LocalProposalReady` owner.
 ///
 /// This value is deliberately not part of the cloneable runtime command. Its
@@ -3870,7 +3691,6 @@ pub(in crate::sumeragi) struct LocalProposalReadyReplayEvidenceV1 {
     validated_receipt: ValidatedBodyReceipt,
     command_identity: LocalProposalReadyCommandIdentity,
 }
-
 /// Inert composite joining one local body origin to its exact `ProposalIntent`.
 ///
 /// The runtime effect and its pending binding stay private and non-decodable.
@@ -3883,13 +3703,11 @@ pub(in crate::sumeragi) struct LocalProposalIntentReplayEvidenceV1 {
     effect: AdapterEffect,
     pending: PendingRuntimeEffectBinding,
 }
-
 #[derive(Debug, PartialEq, Eq)]
 struct LocalBodyPipelineReplayFamilyV1 {
     source: BodyPipelineReplaySourceV1,
     body_frame: BodyFrameBindingV1,
 }
-
 impl LocalBodyPreIntentReplaySealV1 {
     #[cfg(test)]
     fn for_test(
@@ -3909,7 +3727,6 @@ impl LocalBodyPreIntentReplaySealV1 {
         };
         seal.exactly_matches_store(effect, manifest).then_some(seal)
     }
-
     /// Consume the runtime's one-shot mint permit for the exact local Store owner.
     pub(in crate::sumeragi) fn from_exact_assemble_body(
         _permit: LocalBodyReplayMintPermit,
@@ -3942,7 +3759,6 @@ impl LocalBodyPreIntentReplaySealV1 {
         };
         seal.exactly_matches_store(effect, manifest).then_some(seal)
     }
-
     /// Recheck the exact Store effect, manifest, and non-decodable causal owner.
     pub(in crate::sumeragi) fn exactly_matches_store(
         &self,
@@ -3956,7 +3772,6 @@ impl LocalBodyPreIntentReplaySealV1 {
             LifecycleStageKind::StoreBody,
         ) && self.store_pending.exactly_binds_adapter_effect(effect)
     }
-
     /// Preflight the exact Store-to-Validate lineage before either worker is retired.
     pub(in crate::sumeragi) fn exactly_projects_validate(
         &self,
@@ -3983,7 +3798,6 @@ impl LocalBodyPreIntentReplaySealV1 {
                 .as_ref()
                 == Some(validate_pending)
     }
-
     /// Atomically join durability and project the exact Validate successor.
     ///
     /// This is the production Store-completion cut. A failed preflight returns
@@ -4020,7 +3834,6 @@ impl LocalBodyPreIntentReplaySealV1 {
         })
     }
 }
-
 impl LocalValidateReplayEvidenceV1 {
     /// Compare this canonical family with its exact inherited Validate owner.
     pub(in crate::sumeragi) fn exactly_matches_validate(
@@ -4036,7 +3849,6 @@ impl LocalValidateReplayEvidenceV1 {
                 LifecycleStageKind::ValidateBody,
             )
     }
-
     /// Compare one installed Validate task without exposing its pending owner.
     pub(in crate::sumeragi) fn exactly_matches_validate_task(
         &self,
@@ -4048,7 +3860,6 @@ impl LocalValidateReplayEvidenceV1 {
             && ownership.pending_adapter_effect_binding(effect).as_ref()
                 == Some(&self.validate_pending)
     }
-
     /// Consume successful validation into an exact local-proposal handoff.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn complete_local_proposal(
@@ -4082,7 +3893,6 @@ impl LocalValidateReplayEvidenceV1 {
         })
     }
 }
-
 impl LocalProposalReadyReplayEvidenceV1 {
     /// Match an idempotent local-build retry against the retained command.
     pub(in crate::sumeragi) fn exactly_matches_retry(
@@ -4101,7 +3911,6 @@ impl LocalProposalReadyReplayEvidenceV1 {
                 &self.validate_pending,
             )
     }
-
     /// Match terminal cleanup of the exact queued local-proposal command.
     pub(in crate::sumeragi) fn exactly_matches_retirement(
         &self,
@@ -4117,7 +3926,6 @@ impl LocalProposalReadyReplayEvidenceV1 {
             && manifest.subject == subject
             && self.exactly_matches_retry(command_identity, tag, manifest)
     }
-
     /// Match the complete queued handoff without exposing its source or receipt parts.
     pub(in crate::sumeragi) fn exactly_matches_handoff(
         &self,
@@ -4143,7 +3951,6 @@ impl LocalProposalReadyReplayEvidenceV1 {
                 LifecycleStageKind::ValidateBody,
             )
     }
-
     /// Identify this command's exact unsigned ProposalIntent before owner comparison.
     pub(in crate::sumeragi) fn exactly_matches_proposal_intent_effect(
         &self,
@@ -4166,7 +3973,6 @@ impl LocalProposalReadyReplayEvidenceV1 {
             && proposal.subject == manifest.subject
             && proposal.manifest == *manifest
     }
-
     /// Match only the exact ProposalIntent successor of this retained command.
     pub(in crate::sumeragi) fn exactly_matches_proposal_intent(
         &self,
@@ -4188,7 +3994,6 @@ impl LocalProposalReadyReplayEvidenceV1 {
                 .family
                 .is_exact_for_stage(LifecycleStageKind::ValidateBody)
     }
-
     /// Consume the exact queued command into one inseparable ProposalIntent composite.
     #[allow(clippy::result_large_err)]
     pub(in crate::sumeragi) fn bind_proposal_intent(
@@ -4210,7 +4015,6 @@ impl LocalProposalReadyReplayEvidenceV1 {
         })
     }
 }
-
 impl LocalProposalIntentReplayEvidenceV1 {
     /// Match an idempotent local-build retry after ProposalIntent was emitted.
     pub(in crate::sumeragi) fn exactly_matches_retry(
@@ -4223,7 +4027,6 @@ impl LocalProposalIntentReplayEvidenceV1 {
             .exactly_matches_retry(command_identity, tag, manifest)
             && self.pending.exactly_binds_adapter_effect(&self.effect)
     }
-
     /// Match terminal cleanup of the exact local ProposalIntent composite.
     pub(in crate::sumeragi) fn exactly_matches_retirement(
         &self,
@@ -4236,7 +4039,6 @@ impl LocalProposalIntentReplayEvidenceV1 {
             .exactly_matches_retirement(command_identity, tag, round, subject)
             && self.pending.exactly_binds_adapter_effect(&self.effect)
     }
-
     /// Recheck the complete ProposalIntent and causal owner without exposing parts.
     pub(in crate::sumeragi) fn exactly_matches_proposal_intent(
         &self,
@@ -4249,7 +4051,6 @@ impl LocalProposalIntentReplayEvidenceV1 {
             && &self.effect == effect
             && ownership.pending_adapter_effect_binding(effect).as_ref() == Some(&self.pending)
     }
-
     /// Identify a duplicate or foreign-owner emission of this exact ProposalIntent.
     pub(in crate::sumeragi) fn exactly_matches_proposal_intent_effect(
         &self,
@@ -4262,7 +4063,6 @@ impl LocalProposalIntentReplayEvidenceV1 {
                 .exactly_matches_proposal_intent_effect(command_identity, effect)
     }
 }
-
 fn exact_local_body_pipeline_family(
     source: &BodyPipelineReplaySourceV1,
     receipt: &DurableBodyReceipt,
@@ -4292,7 +4092,6 @@ fn exact_local_body_pipeline_family(
         && family.is_exact_for_stage(LifecycleStageKind::ValidateBody))
     .then_some(family)
 }
-
 impl LocalBodyPipelineReplayFamilyV1 {
     fn is_exact_for_stage(&self, stage: LifecycleStageKind) -> bool {
         let BodyPipelineOriginV1::LocalBody(manifest) = &self.source.origin else {
@@ -4313,7 +4112,6 @@ impl LocalBodyPipelineReplayFamilyV1 {
         .is_some()
     }
 }
-
 fn local_body_family_manifest_matches(
     family: &LocalBodyPipelineReplayFamilyV1,
     manifest: &wire::PayloadManifest,
@@ -4323,7 +4121,6 @@ fn local_body_family_manifest_matches(
         BodyPipelineOriginV1::LocalBody(retained) if retained == manifest
     )
 }
-
 fn local_body_source_matches(
     source: &BodyPipelineReplaySourceV1,
     effect: &AdapterEffect,
@@ -4357,7 +4154,6 @@ fn local_body_source_matches(
         && *round == manifest.round
         && *subject == manifest.subject
 }
-
 fn local_body_stage_matches(
     family: &LocalBodyPipelineReplayFamilyV1,
     effect: &AdapterEffect,
@@ -4371,7 +4167,6 @@ fn local_body_stage_matches(
         && exact_local_body_pipeline_family(&family.source, receipt)
             .is_some_and(|expected| expected == *family && family.is_exact_for_stage(stage))
 }
-
 /// Selector-authenticated origin awaiting one exact durable body-frame binding.
 ///
 /// This move-only value is not codec data. Its sole production mint accepts
@@ -4384,14 +4179,12 @@ pub(super) struct AuthenticatedCertifiedFetchReplayOriginV1 {
     request_hash: HashOf<wire::CertifiedBodyRequest>,
     response_hash: HashOf<wire::CertifiedBodyResponse>,
 }
-
 /// Canonical inert replay evidence for the certified Fetch stage.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[must_use = "certified Fetch replay evidence must remain attached to its closed carrier"]
 pub(super) struct CertifiedFetchReplayEvidenceV1 {
     family: CertifiedBodyPipelineReplayFamilyV1,
 }
-
 /// Opaque restart-stable projection of one body-fsynced Certified Fetch.
 ///
 /// The canonical digest binds the complete Fetch effect identity, its causal
@@ -4407,7 +4200,6 @@ pub(super) struct DurableCertifiedFetchReplayProjectionV1 {
     completion_digest: LifecycleDigest,
     expected_manifest_hash: HashOf<wire::PayloadManifest>,
 }
-
 /// Opaque result of the consuming LedgerV1/body-store Certified-Fetch join.
 #[must_use = "recovered durable Fetch authority must enter coordinator and registry recovery"]
 pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedRecoveredDurableCertifiedFetchV1
@@ -4415,7 +4207,6 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedRecoveredD
     completion: CertifiedFetchCompletion,
     candidate: CandidateAdmission,
 }
-
 /// Aggregate opaque recovery cut for every live BodyFrame-backed Fetch row.
 ///
 /// No row, candidate, effect, pending binding, or registry material can be
@@ -4428,7 +4219,6 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedRecoveredD
     ledger_frame_identity: LifecycleDigest,
     entries: Vec<AuthenticatedRecoveredDurableCertifiedFetchV1>,
 }
-
 /// One consuming startup phase for the complete recovered Ready-Fetch census.
 ///
 /// Candidate projection is moved into the logical recovery cut exactly once.
@@ -4439,18 +4229,15 @@ pub(super) struct PreparedDurableCertifiedFetchStartupV1 {
     ledger_frame_identity: LifecycleDigest,
     entries: Vec<PreparedDurableCertifiedFetchStartupEntryV1>,
 }
-
 struct PreparedDurableCertifiedFetchStartupEntryV1 {
     candidate: Option<CandidateAdmission>,
     completion: CertifiedFetchCompletion,
 }
-
 impl AuthenticatedRecoveredDurableCertifiedFetchV1 {
     fn is_exact(&self) -> bool {
         self.completion.matches_recovered_candidate(&self.candidate)
     }
 }
-
 impl AuthenticatedRecoveredDurableCertifiedFetchCensusV1 {
     fn from_exact_ledger_census(
         _permit: DurableCertifiedFetchLedgerCensusPermit,
@@ -4481,13 +4268,11 @@ impl AuthenticatedRecoveredDurableCertifiedFetchCensusV1 {
             entries,
         })
     }
-
     fn is_exact(&self) -> bool {
         self.entries
             .iter()
             .all(AuthenticatedRecoveredDurableCertifiedFetchV1::is_exact)
     }
-
     /// Compare against the exact opened frame and its complete live-Fetch count.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exactly_matches_opened_ledger(
@@ -4498,7 +4283,6 @@ impl AuthenticatedRecoveredDurableCertifiedFetchCensusV1 {
         self.ledger_frame_identity == ledger.frame_identity()
             && self.entries.len() == live_body_fetch_count
     }
-
     /// Consume the authenticated census into its single startup phase.
     pub(super) fn into_startup(
         self,
@@ -4531,7 +4315,6 @@ impl AuthenticatedRecoveredDurableCertifiedFetchCensusV1 {
                 .collect(),
         })
     }
-
     #[cfg(test)]
     pub(super) fn corrupt_first_completion_for_test(&mut self) {
         if let Some(entry) = self.entries.first_mut() {
@@ -4539,7 +4322,6 @@ impl AuthenticatedRecoveredDurableCertifiedFetchCensusV1 {
         }
     }
 }
-
 impl PreparedDurableCertifiedFetchStartupV1 {
     /// Verify the complete phase against one still-empty concrete registry.
     pub(super) fn preflights_empty_registry(
@@ -4560,7 +4342,6 @@ impl PreparedDurableCertifiedFetchStartupV1 {
                 })
             })
     }
-
     /// Move every exact logical candidate into one recovery map.
     ///
     /// Complete validation precedes mutation, and a second call is rejected.
@@ -4588,7 +4369,6 @@ impl PreparedDurableCertifiedFetchStartupV1 {
         }
         true
     }
-
     /// Install all retained concrete completions into one empty registry.
     ///
     /// The complete no-collision and carrier-integrity preflight precedes the
@@ -4623,7 +4403,6 @@ impl PreparedDurableCertifiedFetchStartupV1 {
         }
         Ok(())
     }
-
     /// Install the final-frame Fetch census beside one exact recovered-WAL
     /// authority carrier.
     ///
@@ -4656,7 +4435,6 @@ impl PreparedDurableCertifiedFetchStartupV1 {
         Ok(())
     }
 }
-
 /// Seal the complete opened-ledger Fetch census without releasing row parts.
 pub(in crate::sumeragi::v2_lifecycle_coordinator) fn seal_recovered_durable_certified_fetch_census(
     permit: DurableCertifiedFetchLedgerCensusPermit,
@@ -4667,19 +4445,15 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn seal_recovered_durable_cert
     )?;
     census.is_exact().then_some(census)
 }
-
 /// One-shot proof that a pending Fetch binding is reconstructed only while an
 /// exact frame-bound Certified replay family is still sealed.
 pub(in crate::sumeragi) struct DurableCertifiedFetchPendingMintPermit {
     _linearity: DurableCertifiedFetchPendingMintLinearity,
 }
-
 struct DurableCertifiedFetchPendingMintLinearity;
-
 impl Drop for DurableCertifiedFetchPendingMintLinearity {
     fn drop(&mut self) {}
 }
-
 impl DurableCertifiedFetchPendingMintPermit {
     fn new() -> Self {
         Self {
@@ -4687,14 +4461,12 @@ impl DurableCertifiedFetchPendingMintPermit {
         }
     }
 }
-
 /// Canonical inert replay evidence projected for the certified Store stage.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[must_use = "certified Store replay evidence must remain attached to its closed carrier"]
 pub(super) struct CertifiedStoreReplayEvidenceV1 {
     family: CertifiedBodyPipelineReplayFamilyV1,
 }
-
 /// Canonical inert replay evidence projected for the certified Validate stage.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[must_use = "certified Validate replay evidence must remain attached to its closed carrier"]
@@ -4702,7 +4474,6 @@ pub(in crate::sumeragi) struct CertifiedValidateReplayEvidenceV1 {
     family: CertifiedBodyPipelineReplayFamilyV1,
     validate_pending: DirectSignedPendingBindingV1,
 }
-
 /// Closed replay origin retained by an exact durable Validate carrier.
 ///
 /// Both variants are authenticated before this enum is constructed. The enum
@@ -4716,7 +4487,6 @@ pub(in crate::sumeragi) enum DurableValidateReplayEvidenceV1 {
     /// Ordinary body fetched from one exact signed remote Proposal.
     RemoteProposal(RemoteProposalValidateReplayEvidenceV1),
 }
-
 /// Canonical non-decodable replay evidence for one invalid certified body report.
 ///
 /// The body origin and complete canonical V1 envelope remain private. The
@@ -4729,22 +4499,19 @@ pub(in crate::sumeragi) struct InvalidBodyReportReplayEvidenceV1 {
     validate_origin: DurableValidateReplayEvidenceV1,
     report_pending: DirectSignedPendingBindingV1,
 }
-
 include!("v2_lifecycle_replay_authority_certified_serve.rs");
-
 include!("v2_lifecycle_replay_authority_certified_body.rs");
-
 include!("v2_lifecycle_replay_authority_payload_projection.rs");
 #[cfg(test)]
 mod tests {
     include!("tests/v2_lifecycle_replay_authority_fixtures.rs");
     include!("tests/v2_lifecycle_replay_authority_cases.rs");
 }
-
 #[cfg(test)]
 pub(super) use tests::{
     ReplayCase, durable_certified_fetch_projection_fixture, exact_body_record_fixture,
     exact_durable_certified_fetch_record_fixture, exact_local_body_record_fixture,
-    exact_record_fixture, exact_recovered_decision_terminal_family_fixture,
-    exact_replay_authority_for_payload_fixture, foreign_certified_serve_family_authority_fixture,
+    exact_pending_certified_fetch_candidate_fixture, exact_record_fixture,
+    exact_recovered_decision_terminal_family_fixture, exact_replay_authority_for_payload_fixture,
+    foreign_certified_serve_family_authority_fixture,
 };

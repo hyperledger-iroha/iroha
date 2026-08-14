@@ -3,7 +3,6 @@
 //! This crate hosts the canonical opcode tables, metadata layout, pointer-ABI
 //! helpers, syscall numbering, and related error types used by both the VM and
 //! the Kotodama compiler.
-
 pub mod access_hints;
 pub mod axt;
 pub mod codec;
@@ -23,9 +22,7 @@ pub mod private_input;
 pub mod state_value;
 pub mod sum;
 pub mod syscalls;
-
 pub use error::{HostOutputResource, Perm, VMError};
-
 /// Syscall policy determined by `ProgramMetadata.abi_version`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SyscallPolicy {

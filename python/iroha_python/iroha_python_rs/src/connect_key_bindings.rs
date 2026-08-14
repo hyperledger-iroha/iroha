@@ -1,5 +1,8 @@
 //! Python bindings for Connect key and exact-network session derivation.
-
+use super::{
+    PyNetworkId, ensure_ed25519_account, fixed_array, parse_exact_i105_account_id,
+    parse_permissions, parse_sign_in_proof, require_non_blank_unpadded, require_single_signatory,
+};
 use iroha_crypto::{
     KeyGenOption,
     kex::{KeyExchangeScheme, X25519Sha256},
@@ -13,12 +16,6 @@ use pyo3::{
     wrap_pyfunction,
 };
 use x25519_dalek::StaticSecret;
-
-use super::{
-    PyNetworkId, ensure_ed25519_account, fixed_array, parse_exact_i105_account_id,
-    parse_permissions, parse_sign_in_proof, require_non_blank_unpadded, require_single_signatory,
-};
-
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(generate_connect_keypair_py, module)?)?;
     module.add_function(wrap_pyfunction!(derive_connect_sid_py, module)?)?;
@@ -35,7 +32,6 @@ pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     Ok(())
 }
-
 #[pyo3::pyfunction]
 #[pyo3(name = "generate_connect_keypair")]
 /// Generate an X25519 keypair for Connect.
@@ -48,7 +44,6 @@ fn generate_connect_keypair_py(py: Python<'_>) -> PyResult<(Py<PyBytes>, Py<PyBy
     let private_bytes = Py::from(PyBytes::new(py, secret.to_bytes().as_ref()));
     Ok((private_bytes, public_bytes))
 }
-
 #[pyo3::pyfunction]
 #[pyo3(name = "connect_public_key_from_private")]
 /// Derive the public key corresponding to an X25519 private key.
@@ -59,7 +54,6 @@ fn connect_public_key_from_private_py(py: Python<'_>, private_key: &[u8]) -> PyR
     let (public, _) = scheme.keypair(KeyGenOption::FromPrivateKey(static_secret));
     Ok(Py::from(PyBytes::new(py, public.as_bytes())))
 }
-
 #[pyo3::pyfunction]
 #[pyo3(name = "derive_connect_sid")]
 /// Derive the exact-network Connect session identifier.
@@ -79,7 +73,6 @@ fn derive_connect_sid_py(
     let sid = connect_sdk::derive_session_id(network_id.as_inner(), &app_pk, &nonce);
     Ok(Py::from(PyBytes::new(py, &sid)))
 }
-
 #[pyo3::pyfunction]
 #[pyo3(name = "derive_connect_direction_keys")]
 /// Derive per-direction ChaCha20-Poly1305 keys from X25519 session material.
@@ -98,7 +91,6 @@ fn derive_connect_direction_keys_py(
     let wallet_bytes = Py::from(PyBytes::new(py, &k_wallet));
     Ok((app_bytes, wallet_bytes))
 }
-
 #[pyo3::pyfunction]
 #[pyo3(name = "build_connect_approve_preimage")]
 /// Build the canonical approval preimage for wallet signatures.
@@ -142,10 +134,8 @@ fn build_connect_approve_preimage_py(
         ));
     }
     ensure_ed25519_account(&account)?;
-
     let permissions_parsed = parse_permissions(permissions.cloned(), "permissions")?;
     let proof_parsed = parse_sign_in_proof(proof.cloned())?;
-
     let preimage = connect_sdk::build_approve_preimage(
         &Constraints {
             network_id: *network_id.as_inner(),
@@ -160,7 +150,6 @@ fn build_connect_approve_preimage_py(
     );
     Ok(Py::from(PyBytes::new(py, &preimage)))
 }
-
 #[pyo3::pyfunction]
 #[pyo3(name = "connect_relay_auth_hash")]
 /// Hash the exact relay token binding used by Connect approvals.
@@ -174,7 +163,6 @@ fn connect_relay_auth_hash_py(
     let relay_auth = connect_sdk::relay_auth_hash(&sid, relay_token);
     Ok(Py::from(PyBytes::new(py, &relay_auth)))
 }
-
 #[pyo3::pyfunction]
 #[pyo3(name = "verify_connect_approval_signature")]
 /// Verify one approval against the exact session identity and account key.

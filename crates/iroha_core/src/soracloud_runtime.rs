@@ -1,13 +1,4 @@
 //! Shared Soracloud runtime snapshot types, generated HF manifests, and execution traits.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::{NonZeroU16, NonZeroU32, NonZeroU64},
-    path::PathBuf,
-    sync::Arc,
-    time::Duration,
-};
-
 use crate::state::WorldReadOnly;
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -44,7 +35,13 @@ use norito::{
     codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
 };
-
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::{NonZeroU16, NonZeroU32, NonZeroU64},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 const HF_GENERATED_SERVICE_VERSION_V1: &str = "hf.generated.v1";
 const HF_GENERATED_SERVICE_MARKER_ENV: &str = "SORACLOUD_HF_GENERATED";
 const HF_GENERATED_SOURCE_ID_ENV: &str = "SORACLOUD_HF_SOURCE_ID";
@@ -54,7 +51,6 @@ const HF_GENERATED_MODEL_NAME_ENV: &str = "SORACLOUD_HF_MODEL_NAME";
 const HF_GENERATED_ROUTE_SUFFIX: &str = ".hf.soracloud.internal";
 const HF_GENERATED_ENTRYPOINT_INFER: &str = "infer";
 const HF_GENERATED_ENTRYPOINT_METADATA: &str = "metadata";
-
 /// Canonical Hugging Face source markers embedded into generated Soracloud service bundles.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SoracloudHfGeneratedSourceBinding {
@@ -67,7 +63,6 @@ pub struct SoracloudHfGeneratedSourceBinding {
     /// Normalized Soracloud model name.
     pub model_name: String,
 }
-
 fn hf_generated_entrypoint(name: &str, entry_pc: u64) -> ivm::EmbeddedEntrypointDescriptor {
     ivm::EmbeddedEntrypointDescriptor {
         name: name.to_owned(),
@@ -85,14 +80,12 @@ fn hf_generated_entrypoint(name: &str, entry_pc: u64) -> ivm::EmbeddedEntrypoint
         entry_pc,
     }
 }
-
 fn hf_generated_internal_host(service_name: &Name) -> String {
     format!(
         "{}{HF_GENERATED_ROUTE_SUFFIX}",
         service_name.as_ref().replace('_', "-")
     )
 }
-
 /// Return the deterministic shared IVM artifact used by generated HF services.
 #[must_use]
 pub fn soracloud_hf_generated_service_contract_artifact() -> Vec<u8> {
@@ -126,13 +119,10 @@ pub fn soracloud_hf_generated_service_contract_artifact() -> Vec<u8> {
     bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     bytes
 }
-
 /// Lease term used for deterministic HF-generated agent apartments.
 pub const HF_GENERATED_AGENT_LEASE_TICKS: u64 = 86_400;
-
 /// Autonomy budget applied to deterministic HF-generated agent apartments.
 pub const HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS: u64 = 1_000;
-
 /// Build the canonical generated Soracloud service bundle used for HF-backed deployments.
 #[must_use]
 pub fn build_soracloud_hf_generated_service_bundle(
@@ -156,7 +146,6 @@ pub fn build_soracloud_hf_generated_service_bundle(
         HF_GENERATED_MODEL_NAME_ENV.to_owned(),
         model_name.to_owned(),
     );
-
     let container = SoraContainerManifestV1 {
         schema_version: SORA_CONTAINER_MANIFEST_VERSION_V1,
         runtime: SoraContainerRuntimeV1::Ivm,
@@ -238,14 +227,12 @@ pub fn build_soracloud_hf_generated_service_bundle(
         ],
         artifacts: Vec::new(),
     };
-
     SoraDeploymentBundleV1 {
         schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
         container,
         service,
     }
 }
-
 /// Build the canonical generated agent apartment manifest used for HF-bound agents.
 #[must_use]
 pub fn build_soracloud_hf_generated_agent_manifest(
@@ -258,7 +245,6 @@ pub fn build_soracloud_hf_generated_agent_manifest(
         .as_ref()
         .map(|route| route.host.clone())
         .unwrap_or_else(|| hf_generated_internal_host(&service_bundle.service.service_name));
-
     AgentApartmentManifestV1 {
         schema_version: AGENT_APARTMENT_MANIFEST_VERSION_V1,
         apartment_name,
@@ -299,7 +285,6 @@ pub fn build_soracloud_hf_generated_agent_manifest(
         upgrade_policy: AgentUpgradePolicyV1::Governed,
     }
 }
-
 /// Extract canonical HF source markers from a generated Soracloud service bundle.
 #[must_use]
 pub fn soracloud_hf_generated_source_binding(
@@ -320,7 +305,6 @@ pub fn soracloud_hf_generated_source_binding(
     {
         return None;
     }
-
     let source_id = bundle
         .container
         .env
@@ -337,7 +321,6 @@ pub fn soracloud_hf_generated_source_binding(
     if marker != "1" {
         return None;
     }
-
     Some(SoracloudHfGeneratedSourceBinding {
         source_id,
         repo_id,
@@ -345,7 +328,6 @@ pub fn soracloud_hf_generated_source_binding(
         model_name,
     })
 }
-
 /// Return the synthesized HF bundle bytes when a service bundle is one of the canonical generated
 /// HF service bundles.
 #[must_use]
@@ -355,7 +337,6 @@ pub fn soracloud_hf_generated_bundle_payload_if_applicable(
     soracloud_hf_generated_source_binding(bundle)
         .map(|_binding| soracloud_hf_generated_service_contract_artifact())
 }
-
 /// Resolve the authoritative active HF placement serving a generated service binding.
 pub fn resolve_generated_hf_active_placement(
     world: &impl WorldReadOnly,
@@ -383,13 +364,11 @@ pub fn resolve_generated_hf_active_placement(
             matching_pool_ids.insert(member.pool_id.clone());
         }
     }
-
     if matching_pool_ids.len() > 1 {
         return Err(format!(
             "generated HF service `{service_name}` is bound to multiple active lease pools for source `{source_id}`"
         ));
     }
-
     let Some(pool_id) = matching_pool_ids.into_iter().next() else {
         return Ok(None);
     };
@@ -400,7 +379,6 @@ pub fn resolve_generated_hf_active_placement(
     };
     Ok(Some(placement))
 }
-
 /// Resolve the current authoritative primary host for a generated HF service.
 pub fn resolve_generated_hf_primary_assignment(
     world: &impl WorldReadOnly,
@@ -420,7 +398,6 @@ pub fn resolve_generated_hf_primary_assignment(
         })
         .cloned())
 }
-
 /// Distinguishes the local runtime role of a materialized service revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "revision_role", content = "value")]
@@ -430,7 +407,6 @@ pub enum SoracloudRuntimeRevisionRole {
     /// A canary candidate revision that must be materialized during rollout.
     CanaryCandidate,
 }
-
 /// Node-local mailbox materialization metadata for a handler.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct SoracloudRuntimeMailboxPlan {
@@ -445,7 +421,6 @@ pub struct SoracloudRuntimeMailboxPlan {
     /// Retention bound for queued messages.
     pub retention_blocks: u32,
 }
-
 /// Node-local hydration/materialization metadata for a referenced artifact.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct SoracloudRuntimeArtifactPlan {
@@ -462,7 +437,6 @@ pub struct SoracloudRuntimeArtifactPlan {
     /// Whether the artifact is already present in the node-local cache.
     pub available_locally: bool,
 }
-
 /// Node-local materialization plan for one active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct SoracloudRuntimeServicePlan {
@@ -571,7 +545,6 @@ pub struct SoracloudRuntimeServicePlan {
     /// Referenced artifacts that still need local hydration.
     pub artifacts: Vec<SoracloudRuntimeArtifactPlan>,
 }
-
 /// Node-local materialization plan for one Inrou microVM guest.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct SoracloudRuntimeInrouPlan {
@@ -599,7 +572,6 @@ pub struct SoracloudRuntimeInrouPlan {
     /// Logical volume identifier used as the authoritative mutable root disk.
     pub root_volume_name: String,
 }
-
 /// Node-local materialization plan for one lease-backed service volume.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct SoracloudRuntimeLeaseVolumePlan {
@@ -624,7 +596,6 @@ pub struct SoracloudRuntimeLeaseVolumePlan {
     /// revision by default.
     pub local_materialization_dir: String,
 }
-
 /// Node-local runtime topology projected for one hosted-HTTP replica slot.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct SoracloudRuntimeReplicaPlan {
@@ -647,7 +618,6 @@ pub struct SoracloudRuntimeReplicaPlan {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
 }
-
 /// Node-local materialization plan for an active agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct SoracloudRuntimeApartmentPlan {
@@ -678,13 +648,10 @@ pub struct SoracloudRuntimeApartmentPlan {
     /// Number of revoked policy capabilities.
     pub revoked_policy_capability_count: u32,
 }
-
 /// Schema version for persisted hosted-HTTP runtime state snapshots.
 pub const SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_VERSION_V1: u16 = 1;
-
 /// Canonical runtime-state filename written beside hosted-HTTP service materializations.
 pub const SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1: &str = "hosted_http_runtime.json";
-
 /// Node-local state projected for one hosted-HTTP replica materialized by the local runtime manager.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct SoracloudHostedHttpReplicaRuntimeStateV1 {
@@ -707,7 +674,6 @@ pub struct SoracloudHostedHttpReplicaRuntimeStateV1 {
     /// Timestamp when the replica state was last refreshed.
     pub updated_at_ms: u64,
 }
-
 /// Node-local state projected for a supervised hosted-HTTP Soracloud service revision.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct SoracloudHostedHttpRuntimeStateV1 {
@@ -736,10 +702,13 @@ pub struct SoracloudHostedHttpRuntimeStateV1 {
     /// Timestamp when the state file was last refreshed.
     pub updated_at_ms: u64,
 }
-
 /// Schema version for [`SoracloudApartmentAutonomyExecutionSummaryV1`].
 pub const SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1: u16 = 1;
-
+/// Maximum canonical JSON bytes persisted for one V1 apartment autonomy summary.
+///
+/// Runtime writers and every local control-plane reader share this ceiling so
+/// corrupted state cannot turn a status read into an unbounded allocation.
+pub const SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_MAX_BYTES_V1: u64 = 16 * 1024 * 1024;
 /// One successful service step executed inside a generated apartment autonomy workflow.
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub struct SoracloudApartmentAutonomyWorkflowStepSummaryV1 {
@@ -770,7 +739,6 @@ pub struct SoracloudApartmentAutonomyWorkflowStepSummaryV1 {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub response_text: Option<String>,
 }
-
 /// Node-local execution summary for one approved apartment autonomy run.
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub struct SoracloudApartmentAutonomyExecutionSummaryV1 {
@@ -825,7 +793,6 @@ pub struct SoracloudApartmentAutonomyExecutionSummaryV1 {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
-
 /// Runtime-manager materialization state for a canonical Hugging Face source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "status", content = "value")]
@@ -843,7 +810,6 @@ pub enum SoracloudRuntimeHfSourceStatus {
     /// The canonical source was retired and should not accept fresh joins.
     Retired,
 }
-
 /// Runtime-manager projection for one canonical Hugging Face source.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct SoracloudRuntimeHfSourcePlan {
@@ -900,7 +866,6 @@ pub struct SoracloudRuntimeHfSourcePlan {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
 }
-
 /// Persisted snapshot of node-local Soracloud runtime materialization state.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct SoracloudRuntimeSnapshot {
@@ -922,7 +887,6 @@ pub struct SoracloudRuntimeSnapshot {
     #[norito(default)]
     pub hf_sources: BTreeMap<String, SoracloudRuntimeHfSourcePlan>,
 }
-
 impl Default for SoracloudRuntimeSnapshot {
     fn default() -> Self {
         Self {
@@ -936,37 +900,30 @@ impl Default for SoracloudRuntimeSnapshot {
         }
     }
 }
-
 /// Read-only Soracloud runtime handle exposed to Torii and other consumers.
 pub trait SoracloudRuntimeReadHandle: Send + Sync {
     /// Return whether this handle is backed by the real embedded runtime manager.
     fn materialization_available(&self) -> bool {
         true
     }
-
     /// Return the latest node-local runtime materialization snapshot.
     fn snapshot(&self) -> SoracloudRuntimeSnapshot;
-
     /// Return the local runtime-manager state directory.
     fn state_dir(&self) -> PathBuf;
-
     /// Return the Soracloud-upload recipient advertised for user model uploads, when available.
     fn uploaded_model_encryption_recipient(
         &self,
     ) -> Option<SoracloudUploadedModelEncryptionRecipient> {
         None
     }
-
     /// Return the local peer id, when the runtime knows its host identity.
     fn local_peer_id(&self) -> Option<String> {
         None
     }
-
     /// Return the maximum time Torii should wait for an internal Soracloud proxy read.
     fn local_read_proxy_timeout(&self) -> Duration {
         Duration::from_secs(10)
     }
-
     /// Report a failed generated-HF proxy read targeting the authoritative primary host.
     fn report_generated_hf_proxy_failure(
         &self,
@@ -975,7 +932,6 @@ pub trait SoracloudRuntimeReadHandle: Send + Sync {
         _error: &SoracloudRuntimeExecutionError,
     ) {
     }
-
     /// Report a generated-HF proxy forwarding failure caused by the local assigned host before
     /// the request reached the authoritative primary.
     fn report_generated_hf_local_proxy_failure(
@@ -984,7 +940,6 @@ pub trait SoracloudRuntimeReadHandle: Send + Sync {
         _error: &SoracloudRuntimeExecutionError,
     ) {
     }
-
     /// Request authoritative HF host reconciliation after ingress observes routing failure.
     fn request_generated_hf_reconcile(
         &self,
@@ -992,7 +947,6 @@ pub trait SoracloudRuntimeReadHandle: Send + Sync {
         _error: &SoracloudRuntimeExecutionError,
     ) {
     }
-
     /// Request authoritative HF host reconciliation after ingress observes an assigned
     /// non-primary host answer a proxy request that targeted a different authoritative primary.
     ///
@@ -1006,7 +960,6 @@ pub trait SoracloudRuntimeReadHandle: Send + Sync {
     ) {
     }
 }
-
 /// Node-local uploaded-model encryption recipient descriptor exposed by the runtime handle.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SoracloudUploadedModelEncryptionRecipient {
@@ -1025,17 +978,14 @@ pub struct SoracloudUploadedModelEncryptionRecipient {
     /// Commitment over the public key bytes.
     pub public_key_fingerprint: Hash,
 }
-
 /// Runtime version string for deterministic private uploaded-model execution v1.
 pub const SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1: &str = "soracloud.quantized-cpu.v1";
-
 /// Fixed rounding rule used by the v1 quantized CPU runtime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SoracloudQuantizedRoundingV1 {
     /// Arithmetic right shift after adding half the scale, with ties rounded away from zero.
     NearestAwayFromZero,
 }
-
 /// Deterministic quantized linear model accepted by the v1 private CPU runtime.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SoracloudQuantizedCpuModelV1 {
@@ -1056,7 +1006,6 @@ pub struct SoracloudQuantizedCpuModelV1 {
     /// Explicit rounding mode, fixed for v1.
     pub rounding: SoracloudQuantizedRoundingV1,
 }
-
 impl SoracloudQuantizedCpuModelV1 {
     /// Validate the deterministic quantized model shape and arithmetic bounds.
     pub fn validate(&self) -> Result<(), SoracloudRuntimeExecutionError> {
@@ -1092,7 +1041,6 @@ impl SoracloudQuantizedCpuModelV1 {
         }
         Ok(())
     }
-
     /// Execute deterministic signed-integer inference on the CPU reference path.
     pub fn evaluate(&self, input: &[i32]) -> Result<Vec<i32>, SoracloudRuntimeExecutionError> {
         self.validate()?;
@@ -1102,7 +1050,6 @@ impl SoracloudQuantizedCpuModelV1 {
                 "quantized model input length does not match input_len",
             ));
         }
-
         let mut outputs = Vec::with_capacity(self.output_len);
         for output_index in 0..self.output_len {
             let row_start = output_index
@@ -1120,7 +1067,6 @@ impl SoracloudQuantizedCpuModelV1 {
         Ok(outputs)
     }
 }
-
 fn round_quantized_accumulator(
     value: i64,
     shift: u8,
@@ -1140,11 +1086,9 @@ fn round_quantized_accumulator(
         }
     }
 }
-
 fn append_private_model_commitment_part<T: Encode>(transcript: &mut Vec<u8>, value: &T) {
     transcript.extend(value.encode());
 }
-
 fn private_model_request_commitment(
     bundle: &SoraUploadedModelBundleV1,
     policy_id: &str,
@@ -1164,7 +1108,6 @@ fn private_model_request_commitment(
     append_private_model_commitment_part(&mut transcript, &input_commitment);
     Hash::new(transcript)
 }
-
 fn private_model_result_commitment(
     output_artifact: &SoraPrivateModelArtifactRefV1,
     output_commitment: Hash,
@@ -1178,7 +1121,6 @@ fn private_model_result_commitment(
     append_private_model_commitment_part(&mut transcript, &output_commitment);
     Hash::new(transcript)
 }
-
 /// Input envelope for deterministic private uploaded-model execution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SoracloudPrivateUploadedModelExecutionRequestV1 {
@@ -1195,7 +1137,6 @@ pub struct SoracloudPrivateUploadedModelExecutionRequestV1 {
     /// Monotonic Soracloud sequence emitted by the execution path.
     pub emitted_sequence: u64,
 }
-
 /// Result emitted by the deterministic private uploaded-model CPU runtime.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SoracloudPrivateUploadedModelExecutionResultV1 {
@@ -1204,7 +1145,6 @@ pub struct SoracloudPrivateUploadedModelExecutionResultV1 {
     /// Chain-facing receipt containing only commitments and encrypted artifact references.
     pub receipt: SoraPrivateUploadedModelExecutionReceiptV1,
 }
-
 /// Execute the deterministic quantized CPU runtime for a private uploaded model.
 pub fn execute_private_uploaded_model_quantized_cpu_v1(
     model: &SoracloudQuantizedCpuModelV1,
@@ -1242,7 +1182,6 @@ pub fn execute_private_uploaded_model_quantized_cpu_v1(
             format!("invalid encrypted output artifact: {err}"),
         )
     })?;
-
     let output = model.evaluate(&request.plaintext_input_i32)?;
     let input_commitment = Hash::new(request.plaintext_input_i32.encode());
     let output_commitment = Hash::new(output.encode());
@@ -1254,7 +1193,6 @@ pub fn execute_private_uploaded_model_quantized_cpu_v1(
     );
     let result_commitment =
         private_model_result_commitment(&request.output_artifact, output_commitment);
-
     let mut receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
         schema_version: SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
         receipt_id: Hash::prehashed([0; 32]),
@@ -1280,16 +1218,13 @@ pub fn execute_private_uploaded_model_quantized_cpu_v1(
             format!("invalid private uploaded model execution receipt: {err}"),
         )
     })?;
-
     Ok(SoracloudPrivateUploadedModelExecutionResultV1 {
         plaintext_output_i32: output,
         receipt,
     })
 }
-
 /// Shared Soracloud runtime handle type used across crate boundaries.
 pub type SharedSoracloudRuntimeHandle = Arc<dyn SoracloudRuntimeReadHandle>;
-
 /// Coarse execution failure category for embedded Soracloud runtime requests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum SoracloudRuntimeExecutionErrorKind {
@@ -1300,7 +1235,6 @@ pub enum SoracloudRuntimeExecutionErrorKind {
     /// The runtime hit an internal execution failure.
     Internal,
 }
-
 /// Structured error returned by the shared Soracloud runtime execution trait.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct SoracloudRuntimeExecutionError {
@@ -1309,7 +1243,6 @@ pub struct SoracloudRuntimeExecutionError {
     /// Human-readable detail preserved for logging and deterministic receipts.
     pub message: String,
 }
-
 impl SoracloudRuntimeExecutionError {
     /// Construct a new structured runtime execution error.
     #[must_use]
@@ -1320,7 +1253,6 @@ impl SoracloudRuntimeExecutionError {
         }
     }
 }
-
 /// Deterministic local read class for the Soracloud fast path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum SoracloudLocalReadKind {
@@ -1329,7 +1261,6 @@ pub enum SoracloudLocalReadKind {
     /// Read-only query bound to the committed state snapshot.
     Query,
 }
-
 /// Shared request envelope for deterministic local Soracloud reads.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct SoracloudLocalReadRequest {
@@ -1360,7 +1291,6 @@ pub struct SoracloudLocalReadRequest {
     /// Deterministic commitment over the request envelope.
     pub request_commitment: Hash,
 }
-
 /// Committed artifact/state binding attached to a certified local read response.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct SoracloudLocalReadBinding {
@@ -1373,7 +1303,6 @@ pub struct SoracloudLocalReadBinding {
     /// Bound artifact digest when the response is served from hydrated local content.
     pub artifact_hash: Option<Hash>,
 }
-
 /// Shared response envelope for deterministic local Soracloud reads.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct SoracloudLocalReadResponse {
@@ -1394,12 +1323,10 @@ pub struct SoracloudLocalReadResponse {
     /// Optional receipt emitted for audit-style certifications.
     pub runtime_receipt: Option<SoraRuntimeReceiptV1>,
 }
-
 /// Schema version for peer-to-peer Soracloud local-read proxy requests.
 pub const SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1: u16 = 1;
 /// Schema version for peer-to-peer Soracloud local-read proxy responses.
 pub const SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1: u16 = 1;
-
 /// Peer-to-peer local-read proxy request sent to the authoritative primary host.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct SoracloudLocalReadProxyRequestV1 {
@@ -1410,7 +1337,6 @@ pub struct SoracloudLocalReadProxyRequestV1 {
     /// Canonical local-read request to execute on the primary host.
     pub request: SoracloudLocalReadRequest,
 }
-
 /// Outcome for a peer-to-peer local-read proxy request.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum SoracloudLocalReadProxyOutcomeV1 {
@@ -1419,7 +1345,6 @@ pub enum SoracloudLocalReadProxyOutcomeV1 {
     /// Failed local-read execution.
     Err(SoracloudRuntimeExecutionError),
 }
-
 /// Peer-to-peer local-read proxy response sent back to the ingress node.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct SoracloudLocalReadProxyResponseV1 {
@@ -1430,7 +1355,6 @@ pub struct SoracloudLocalReadProxyResponseV1 {
     /// Execution result returned by the primary host.
     pub outcome: SoracloudLocalReadProxyOutcomeV1,
 }
-
 /// Deterministic state mutation produced by ordered Soracloud execution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SoracloudDeterministicStateMutation {
@@ -1449,7 +1373,6 @@ pub struct SoracloudDeterministicStateMutation {
     /// Deterministic commitment over the opaque payload.
     pub payload_commitment: Option<Hash>,
 }
-
 /// Shared request envelope for ordered Soracloud mailbox execution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SoracloudOrderedMailboxExecutionRequest {
@@ -1472,7 +1395,6 @@ pub struct SoracloudOrderedMailboxExecutionRequest {
     /// Outstanding mailbox message count before this execution is applied.
     pub authoritative_pending_mailbox_messages: u32,
 }
-
 /// Deterministic result of ordered Soracloud mailbox execution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SoracloudOrderedMailboxExecutionResult {
@@ -1489,7 +1411,6 @@ pub struct SoracloudOrderedMailboxExecutionResult {
     /// Deterministic runtime receipt for the execution.
     pub runtime_receipt: SoraRuntimeReceiptV1,
 }
-
 /// Shared request envelope for deterministic apartment execution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SoracloudApartmentExecutionRequest {
@@ -1506,7 +1427,6 @@ pub struct SoracloudApartmentExecutionRequest {
     /// Deterministic commitment over the apartment request.
     pub request_commitment: Hash,
 }
-
 /// Shared result for deterministic apartment execution.
 #[allow(missing_copy_implementations)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1520,7 +1440,6 @@ pub struct SoracloudApartmentExecutionResult {
     /// Deterministic commitment over the apartment result.
     pub result_commitment: Hash,
 }
-
 /// Shared execution interface for the embedded Soracloud runtime.
 pub trait SoracloudRuntime: SoracloudRuntimeReadHandle {
     /// Execute a deterministic local read against the committed runtime snapshot.
@@ -1528,23 +1447,19 @@ pub trait SoracloudRuntime: SoracloudRuntimeReadHandle {
         &self,
         request: SoracloudLocalReadRequest,
     ) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError>;
-
     /// Execute an ordered mailbox message during replicated state progression.
     fn execute_ordered_mailbox(
         &self,
         request: SoracloudOrderedMailboxExecutionRequest,
     ) -> Result<SoracloudOrderedMailboxExecutionResult, SoracloudRuntimeExecutionError>;
-
     /// Execute deterministic apartment work owned by the embedded runtime manager.
     fn execute_apartment(
         &self,
         request: SoracloudApartmentExecutionRequest,
     ) -> Result<SoracloudApartmentExecutionResult, SoracloudRuntimeExecutionError>;
 }
-
 /// Shared Soracloud runtime trait object used by the core replicated execution path.
 pub type SharedSoracloudRuntime = Arc<dyn SoracloudRuntime>;
-
 impl SoracloudLocalReadKind {
     /// Return the Soracloud handler class represented by this local read kind.
     #[must_use]
@@ -1555,7 +1470,6 @@ impl SoracloudLocalReadKind {
         }
     }
 }
-
 impl SoracloudRuntimeExecutionErrorKind {
     /// Stable label used when hashing synthetic failure receipts.
     #[must_use]
@@ -1567,7 +1481,6 @@ impl SoracloudRuntimeExecutionErrorKind {
         }
     }
 }
-
 impl SoracloudDeterministicStateMutation {
     /// Return `true` when this mutation writes payload bytes into authoritative service state.
     #[must_use]
@@ -1575,13 +1488,11 @@ impl SoracloudDeterministicStateMutation {
         matches!(self.operation, SoraStateMutationOperationV1::Upsert)
     }
 }
-
 impl From<SoracloudLocalReadKind> for SoraServiceHandlerClassV1 {
     fn from(value: SoracloudLocalReadKind) -> Self {
         value.handler_class()
     }
 }
-
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 /// Bounded runtime write-back instruction set used for internal Soracloud integration points.
@@ -1593,7 +1504,6 @@ pub enum SoracloudRuntimeInstruction {
     /// Persist an authoritative runtime receipt.
     RecordRuntimeReceipt(iroha_data_model::isi::soracloud::RecordSoracloudRuntimeReceipt),
 }
-
 impl SoracloudRuntimeInstruction {
     /// Convert the bounded runtime write-back into a regular instruction box.
     #[must_use]
@@ -1605,7 +1515,6 @@ impl SoracloudRuntimeInstruction {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1624,24 +1533,19 @@ mod tests {
         },
         sorafs::pin_registry::{ManifestDigest, StorageClass},
     };
-
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("Soracloud runtime fixture key generation should succeed")
     }
-
     fn checked_account_id() -> AccountId {
         AccountId::new(checked_keypair().public_key().clone())
     }
-
     fn checked_peer_id() -> PeerId {
         PeerId::from(checked_keypair().public_key().clone())
     }
-
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
-
     fn sample_private_model_artifact_ref(role: &str, seed: u8) -> SoraPrivateModelArtifactRefV1 {
         SoraPrivateModelArtifactRefV1 {
             schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
@@ -1651,7 +1555,6 @@ mod tests {
             artifact_role: role.to_owned(),
         }
     }
-
     fn sample_quantized_uploaded_model_bundle() -> SoraUploadedModelBundleV1 {
         let public_key_bytes = vec![7u8; 32];
         let wrapped_key_ciphertext = vec![9u8; 48];
@@ -1701,7 +1604,6 @@ mod tests {
             decryption_policy_ref: "policy/v1".to_owned(),
         }
     }
-
     fn seed_generated_hf_world_with_primary(
         primary_peer_id: &str,
     ) -> (World, String, String, String) {
@@ -1720,7 +1622,6 @@ mod tests {
             "gpt-oss",
         );
         let service_version = bundle.service.service_version.clone();
-
         world.soracloud_service_revisions_mut_for_testing().insert(
             (service_name_string.clone(), service_version.clone()),
             bundle.clone(),
@@ -1827,7 +1728,6 @@ mod tests {
                 last_error: None,
             },
         );
-
         (
             world,
             service_name_string,
@@ -1835,7 +1735,6 @@ mod tests {
             source_id.to_string(),
         )
     }
-
     #[test]
     fn generated_hf_service_bundle_is_admissible_and_tagged() {
         let bundle = build_soracloud_hf_generated_service_bundle(
@@ -1845,7 +1744,6 @@ mod tests {
             "main",
             "gpt-oss",
         );
-
         bundle
             .validate_for_admission()
             .expect("generated HF bundle should validate");
@@ -1864,14 +1762,12 @@ mod tests {
                 .visibility,
             SoraRouteVisibilityV1::Internal
         );
-
         let binding = soracloud_hf_generated_source_binding(&bundle)
             .expect("generated bundle should expose HF markers");
         assert_eq!(binding.repo_id, "openai/gpt-oss");
         assert_eq!(binding.resolved_revision, "main");
         assert_eq!(binding.model_name, "gpt-oss");
     }
-
     #[test]
     fn generated_hf_bundle_payload_matches_declared_bundle_hash() {
         let bundle = build_soracloud_hf_generated_service_bundle(
@@ -1881,12 +1777,10 @@ mod tests {
             "1234abcd",
             "llama",
         );
-
         let payload = soracloud_hf_generated_bundle_payload_if_applicable(&bundle)
             .expect("generated HF bundle should synthesize payload");
         assert_eq!(Hash::new(&payload), bundle.container.bundle_hash);
     }
-
     #[test]
     fn generated_hf_agent_manifest_tracks_service_container_and_host() {
         let bundle = build_soracloud_hf_generated_service_bundle(
@@ -1900,7 +1794,6 @@ mod tests {
             "hf_agent".parse().expect("valid apartment name"),
             &bundle,
         );
-
         manifest
             .validate()
             .expect("generated HF apartment manifest should validate");
@@ -1923,7 +1816,6 @@ mod tests {
         );
         assert_eq!(manifest.tool_capabilities.len(), 2);
     }
-
     #[test]
     fn resolve_generated_hf_primary_assignment_returns_warm_primary_for_bound_service() {
         let primary_peer_id = checked_peer_id().to_string();
@@ -1933,17 +1825,14 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query_handle);
         let view = state.view();
-
         let primary =
             resolve_generated_hf_primary_assignment(view.world(), &service_name, &source_id)
                 .expect("primary lookup should succeed")
                 .expect("generated service should resolve a primary assignment");
-
         assert_eq!(primary.peer_id, primary_peer_id);
         assert_eq!(primary.role, SoraHfPlacementHostRoleV1::Primary);
         assert_eq!(primary.status, SoraHfPlacementHostStatusV1::Warm);
     }
-
     #[test]
     fn private_uploaded_model_quantized_cpu_runtime_is_deterministic_and_receipted() {
         let model = SoracloudQuantizedCpuModelV1 {
@@ -1964,12 +1853,10 @@ mod tests {
             output_artifact: sample_private_model_artifact_ref("output", 0x22),
             emitted_sequence: 9,
         };
-
         let first =
             execute_private_uploaded_model_quantized_cpu_v1(&model, request.clone()).expect("run");
         let second =
             execute_private_uploaded_model_quantized_cpu_v1(&model, request).expect("rerun");
-
         assert_eq!(first.plaintext_output_i32, vec![20, -9]);
         assert_eq!(first, second);
         assert_eq!(
@@ -1984,7 +1871,6 @@ mod tests {
         );
         first.receipt.validate().expect("receipt validates");
     }
-
     #[test]
     fn private_uploaded_model_quantized_cpu_runtime_rejects_wrong_format() {
         let model = SoracloudQuantizedCpuModelV1 {

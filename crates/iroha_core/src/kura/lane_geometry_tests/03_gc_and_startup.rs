@@ -58,7 +58,6 @@ fn geometry_gc_crash_boundaries_replay_safely_after_restart() {
             assert!(!quarantine.exists());
             assert!(after_failure.pending_archive_gc.is_empty());
         }
-
         drop(kura);
         let restarted = open_kura(&root, &fixture.initial);
         restarted
@@ -76,7 +75,6 @@ fn geometry_gc_crash_boundaries_replay_safely_after_restart() {
         assert!(!quarantine.exists());
     }
 }
-
 #[test]
 fn storage_budget_purge_only_resumes_snapshot_proven_geometry_gc() {
     let temp = TempDir::new().expect("temporary directory");
@@ -86,7 +84,6 @@ fn storage_budget_purge_only_resumes_snapshot_proven_geometry_gc() {
     kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
     checkpoint_retired_geometry(&kura, &fixture, 20).expect_err("leave durable pending-GC intent");
     assert!(fixture.archive_root.exists());
-
     assert!(
         kura.purge_retired_segments()
             .expect("budget purge must validate retired geometry"),
@@ -105,7 +102,6 @@ fn storage_budget_purge_only_resumes_snapshot_proven_geometry_gc() {
             .expect("exact usage after purge")
     );
 }
-
 #[test]
 fn archive_gc_through_budget_purge_forces_a_paused_usage_scan_to_retry_exactly() {
     let temp = TempDir::new().expect("temporary directory");
@@ -118,7 +114,6 @@ fn archive_gc_through_budget_purge_forces_a_paused_usage_scan_to_retry_exactly()
     assert!(fixture.archive_root.exists());
     kura.refresh_disk_usage_bytes()
         .expect("establish exact pre-GC usage baseline");
-
     kura.pause_next_total_disk_usage_scan_after_scan_for_tests();
     let scan_kura = Arc::clone(&kura);
     let (scan_tx, scan_rx) = mpsc::channel();
@@ -128,7 +123,6 @@ fn archive_gc_through_budget_purge_forces_a_paused_usage_scan_to_retry_exactly()
             .expect("report usage scan result");
     });
     wait_for_total_usage_scan_pause(&kura);
-
     let purged = kura
         .purge_retired_segments()
         .expect("budget purge must validate retired geometry");
@@ -142,7 +136,6 @@ fn archive_gc_through_budget_purge_forces_a_paused_usage_scan_to_retry_exactly()
         .expect("paused usage scan must finish after release")
         .expect("retried usage scan succeeds");
     scan.join().expect("join paused usage scan");
-
     assert!(purged, "budget purge must resume the proven archive GC");
     assert!(
         remained_paused,
@@ -174,7 +167,6 @@ fn archive_gc_through_budget_purge_forces_a_paused_usage_scan_to_retry_exactly()
         "archive GC must publish its total-usage subtraction exactly"
     );
 }
-
 #[test]
 fn storage_budget_purge_never_deletes_uncheckpointed_geometry_by_age_or_pressure() {
     let temp = TempDir::new().expect("temporary directory");
@@ -185,7 +177,6 @@ fn storage_budget_purge_never_deletes_uncheckpointed_geometry_by_age_or_pressure
         .archive_root
         .join("lane_0000000001/previous_blocks/gc-payload.norito");
     assert!(sentinel.exists());
-
     let _ = kura.purge_retired_segments();
     assert!(fixture.archive_root.exists());
     assert_eq!(
@@ -200,12 +191,10 @@ fn storage_budget_purge_never_deletes_uncheckpointed_geometry_by_age_or_pressure
         2
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn geometry_sidecar_temp_symlink_and_regular_collision_fail_without_clobbering() {
     use std::os::unix::fs::symlink;
-
     for collision_kind in ["symlink", "regular"] {
         let temp = TempDir::new().expect("temporary directory");
         let root = temp.path().join(format!("kura-{collision_kind}"));
@@ -221,7 +210,6 @@ fn geometry_sidecar_temp_symlink_and_regular_collision_fail_without_clobbering()
         } else {
             fs::write(&collision, b"operator-owned").expect("journal temp collision");
         }
-
         kura.apply_lane_geometry_transition(
             &initial,
             &extended,
@@ -244,7 +232,6 @@ fn geometry_sidecar_temp_symlink_and_regular_collision_fail_without_clobbering()
         }
     }
 }
-
 #[test]
 fn geometry_inode_identity_detects_path_replacement() {
     let temp = TempDir::new().expect("temporary directory");
@@ -260,7 +247,6 @@ fn geometry_inode_identity_detects_path_replacement() {
     kura.require_geometry_path_identity(&path, false, identity)
         .expect_err("replacement inode must not pass identity revalidation");
 }
-
 #[test]
 fn geometry_gc_rejects_preexisting_quarantine_collision() {
     let temp = TempDir::new().expect("temporary directory");
@@ -283,7 +269,6 @@ fn geometry_gc_rejects_preexisting_quarantine_collision() {
         ));
     fs::create_dir(&quarantine).expect("quarantine collision");
     fs::write(quarantine.join("operator-data"), b"retain").expect("collision sentinel");
-
     kura.resume_proven_lane_geometry_archive_gc()
         .expect_err("root plus quarantine collision must fail closed");
     assert!(fixture.archive_root.exists());
@@ -292,7 +277,6 @@ fn geometry_gc_rejects_preexisting_quarantine_collision() {
         b"retain"
     );
 }
-
 #[cfg(any(
     target_vendor = "apple",
     target_os = "linux",
@@ -312,7 +296,6 @@ fn geometry_gc_quarantine_cannot_escape_a_substituted_parent() {
     let fixture = prepare_retired_geometry_archive(&kura, &root);
     kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
     checkpoint_retired_geometry(&kura, &fixture, 20).expect_err("leave pending deletion");
-
     let pending = kura
         .read_lane_geometry_journal()
         .expect("pending geometry journal")
@@ -341,7 +324,6 @@ fn geometry_gc_quarantine_cannot_escape_a_substituted_parent() {
         displaced_parent.clone(),
         outside_parent.clone(),
     ));
-
     let substitution_error = kura
         .resume_proven_lane_geometry_archive_gc()
         .expect_err("a substituted archive parent must fail GC closed");
@@ -388,12 +370,10 @@ fn geometry_gc_quarantine_cannot_escape_a_substituted_parent() {
         "failed parent revalidation must retain the durable GC intent"
     );
 }
-
 #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
 #[test]
 fn geometry_gc_descriptor_deletion_cannot_follow_a_substituted_parent() {
     use std::os::unix::fs::symlink;
-
     let temp = TempDir::new().expect("temporary directory");
     let configured_root = temp.path().join("kura");
     let kura = open_kura(&configured_root, &initial_and_extended_configs().0);
@@ -412,7 +392,6 @@ fn geometry_gc_descriptor_deletion_cannot_follow_a_substituted_parent() {
     let (parent_handle, _) = kura
         .open_geometry_parent(&archive_parent)
         .expect("authenticated deletion parent");
-
     let displaced_parent = root.join("descriptor-gc-parent.displaced");
     let outside_parent = temp.path().join("outside-descriptor-gc-parent");
     let outside_collision = outside_parent.join(".gc-authenticated");
@@ -421,7 +400,6 @@ fn geometry_gc_descriptor_deletion_cannot_follow_a_substituted_parent() {
         .expect("outside collision sentinel");
     fs::rename(&archive_parent, &displaced_parent).expect("displace authenticated parent");
     symlink(&outside_parent, &archive_parent).expect("substitute archive parent");
-
     Kura::remove_authenticated_geometry_tree_at(
         &parent_handle,
         std::ffi::OsStr::new(".gc-authenticated"),
@@ -439,7 +417,6 @@ fn geometry_gc_descriptor_deletion_cannot_follow_a_substituted_parent() {
         "the substituted path namespace must remain untouched"
     );
 }
-
 #[test]
 fn geometry_gc_rejects_unauthenticated_archive_collision_without_deleting_it() {
     let temp = TempDir::new().expect("temporary directory");
@@ -448,7 +425,6 @@ fn geometry_gc_rejects_unauthenticated_archive_collision_without_deleting_it() {
     let fixture = prepare_retired_geometry_archive(&kura, &root);
     let collision = fixture.archive_root.join("operator-data.txt");
     fs::write(&collision, b"must not delete").expect("seed unauthenticated collision");
-
     checkpoint_retired_geometry(&kura, &fixture, 20)
         .expect_err("unexpected archive content must fail closed");
     assert_eq!(
@@ -458,14 +434,12 @@ fn geometry_gc_rejects_unauthenticated_archive_collision_without_deleting_it() {
     let journal = kura.read_lane_geometry_journal().expect("pending journal");
     assert!(journal.records.is_empty());
     assert!(!journal.pending_archive_gc.is_empty());
-
     fs::remove_file(&collision).expect("operator resolves collision");
     let resumed = kura
         .resume_proven_lane_geometry_archive_gc()
         .expect("resume proven GC after repair");
     assert_eq!(resumed.removed_archive_roots, 1);
 }
-
 #[test]
 fn native_amx_archive_is_admissible_accounted_and_purged_without_touching_sibling() {
     let temp = TempDir::new().expect("temporary directory");
@@ -473,7 +447,6 @@ fn native_amx_archive_is_admissible_accounted_and_purged_without_touching_siblin
     let (kura, fixture) = prepare_native_amx_archive(&root);
     let sibling = root.join("operator-sibling.keep");
     fs::write(&sibling, b"retain across Native archive GC").expect("seed non-archive sibling");
-
     let native_paths = [&fixture.manifest, &fixture.receipt, &fixture.latest_index];
     for path in native_paths {
         assert!(
@@ -488,7 +461,6 @@ fn native_amx_archive_is_admissible_accounted_and_purged_without_touching_siblin
         &[],
     )
     .expect("exact Native manifest, receipt, and latest index are terminal");
-
     let recognized_bytes = native_paths
         .into_iter()
         .map(|path| {
@@ -503,7 +475,6 @@ fn native_amx_archive_is_admissible_accounted_and_purged_without_touching_siblin
         archived_bytes >= recognized_bytes && recognized_bytes > 0,
         "archive accounting must include Native manifest, receipt, and latest-index bytes"
     );
-
     durable_geometry_snapshot_identity(&kura, 20);
     kura.refresh_disk_usage_bytes()
         .expect("refresh usage with Native evidence archive");
@@ -541,7 +512,6 @@ fn native_amx_archive_is_admissible_accounted_and_purged_without_touching_siblin
         "authenticated Native archive purge must remain path-scoped"
     );
 }
-
 #[test]
 fn native_amx_archive_gc_rejects_malformed_truncated_and_oversized_evidence() {
     for corruption in [
@@ -619,7 +589,6 @@ fn native_amx_archive_gc_rejects_malformed_truncated_and_oversized_evidence() {
             }
             _ => unreachable!("enumerated corruption"),
         }
-
         let result = kura.ensure_archived_lane_work_released_for_test(
             &fixture.archived_blocks,
             &fixture.binding,
@@ -640,12 +609,10 @@ fn native_amx_archive_gc_rejects_malformed_truncated_and_oversized_evidence() {
         );
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn native_amx_archive_gc_rejects_symlinked_evidence_without_following_it() {
     use std::os::unix::fs::symlink;
-
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
     let outside = temp.path().join("operator-owned-native-manifest");
@@ -653,7 +620,6 @@ fn native_amx_archive_gc_rejects_symlinked_evidence_without_following_it() {
     let (kura, fixture) = prepare_native_amx_archive(&root);
     fs::remove_file(&fixture.manifest).expect("remove canonical Native manifest");
     symlink(&outside, &fixture.manifest).expect("install Native manifest symlink");
-
     kura.ensure_archived_lane_work_released_for_test(
         &fixture.archived_blocks,
         &fixture.binding,
@@ -671,7 +637,6 @@ fn native_amx_archive_gc_rejects_symlinked_evidence_without_following_it() {
             .is_symlink()
     );
     assert!(fixture.geometry.archive_root.exists());
-
     let hardlink_root = temp.path().join("hardlink-kura");
     let hardlink_outside = temp.path().join("operator-owned-native-hardlink");
     let (hardlink_kura, hardlink_fixture) = prepare_native_amx_archive(&hardlink_root);
@@ -690,7 +655,6 @@ fn native_amx_archive_gc_rejects_symlinked_evidence_without_following_it() {
     );
     assert!(hardlink_fixture.geometry.archive_root.exists());
 }
-
 #[test]
 fn tombstoned_autonomous_artifacts_are_retirement_archive_gc_admissible_and_accounted() {
     let temp = TempDir::new().expect("temporary directory");
@@ -714,7 +678,6 @@ fn tombstoned_autonomous_artifacts_are_retirement_archive_gc_admissible_and_acco
         &[],
     )
     .expect("an exact tombstone makes archived autonomous work terminal");
-
     let recognized_bytes = [
         &fixture.autonomous_attempt,
         &fixture.view_state,
@@ -734,7 +697,6 @@ fn tombstoned_autonomous_artifacts_are_retirement_archive_gc_admissible_and_acco
         archived_bytes >= recognized_bytes && recognized_bytes > 0,
         "archive accounting must include autonomous attempt, view, and latest-pointer bytes"
     );
-
     durable_geometry_snapshot_identity(&kura, 20);
     kura.refresh_disk_usage_bytes()
         .expect("refresh usage with autonomous archive");
@@ -758,7 +720,6 @@ fn tombstoned_autonomous_artifacts_are_retirement_archive_gc_admissible_and_acco
         "archive GC must publish exact post-removal disk accounting"
     );
 }
-
 #[test]
 fn autonomous_archive_gc_rejects_malformed_oversized_temporary_and_unexpected_artifacts() {
     for corruption in ["malformed", "oversized", "temporary", "unexpected"] {
@@ -804,7 +765,6 @@ fn autonomous_archive_gc_rejects_malformed_oversized_temporary_and_unexpected_ar
             }
             _ => unreachable!("enumerated corruption"),
         }
-
         let result = kura.ensure_archived_lane_work_released_for_test(
             &fixture.archived_blocks,
             &fixture.binding,
@@ -820,12 +780,10 @@ fn autonomous_archive_gc_rejects_malformed_oversized_temporary_and_unexpected_ar
         );
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn autonomous_archive_gc_rejects_symlinked_view_artifact_without_following_it() {
     use std::os::unix::fs::symlink;
-
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
     let outside = temp.path().join("operator-owned-view-state");
@@ -833,7 +791,6 @@ fn autonomous_archive_gc_rejects_symlinked_view_artifact_without_following_it() 
     let (kura, fixture) = prepare_tombstoned_autonomous_archive(&root);
     fs::remove_file(&fixture.view_state).expect("remove canonical archived view state");
     symlink(&outside, &fixture.view_state).expect("install autonomous view-state symlink");
-
     kura.ensure_archived_lane_work_released_for_test(
         &fixture.archived_blocks,
         &fixture.binding,
@@ -852,7 +809,6 @@ fn autonomous_archive_gc_rejects_symlinked_view_artifact_without_following_it() 
     );
     assert!(fixture.geometry.archive_root.exists());
 }
-
 #[test]
 fn geometry_gc_pins_unmerged_autonomous_work_and_preserves_global_claim_evidence() {
     let temp = TempDir::new().expect("temporary directory");
@@ -871,7 +827,6 @@ fn geometry_gc_pins_unmerged_autonomous_work_and_preserves_global_claim_evidence
         b"reservation/entrypoint claim outside retired geometry",
     )
     .expect("global claim sentinel");
-
     checkpoint_retired_geometry(&kura, &fixture.geometry, 20)
         .expect_err("unmerged autonomous sidecar must pin retired geometry");
     assert!(fixture.geometry.archive_root.exists());
@@ -882,7 +837,6 @@ fn geometry_gc_pins_unmerged_autonomous_work_and_preserves_global_claim_evidence
             .pending_archive_gc
             .is_empty()
     );
-
     // Restore the exact durable tombstone. Once the attempt is terminal, the
     // already-proven snapshot may release storage.
     fs::write(&fixture.view_state, terminal_view).expect("restore exact autonomous tombstone");
@@ -895,7 +849,6 @@ fn geometry_gc_pins_unmerged_autonomous_work_and_preserves_global_claim_evidence
         b"reservation/entrypoint claim outside retired geometry"
     );
 }
-
 #[test]
 fn geometry_gc_pins_certified_work_without_a_durable_merge_receipt() {
     let temp = TempDir::new().expect("temporary directory");
@@ -962,7 +915,6 @@ fn geometry_gc_pins_certified_work_without_a_durable_merge_receipt() {
         marker_set_root: Hash::new(b"markers"),
         receipt_hash: Hash::new(b"receipt"),
     };
-
     let error = kura
         .ensure_archived_lane_work_released_for_test(&archived_blocks, &binding, &[release])
         .expect_err("a merge release without its durable receipt must pin the archive");
@@ -977,7 +929,6 @@ fn geometry_gc_pins_certified_work_without_a_durable_merge_receipt() {
     assert_eq!(path, &kura.lane_geometry_journal_path());
     assert!(fixture.archive_root.exists());
 }
-
 #[test]
 fn geometry_gc_requires_bound_merge_receipt_durability_before_deletion() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1017,7 +968,6 @@ fn geometry_gc_requires_bound_merge_receipt_durability_before_deletion() {
         None,
     )
     .expect("publish merge-applied retirement");
-
     let journal = kura
         .read_lane_geometry_journal()
         .expect("retirement journal");
@@ -1043,7 +993,6 @@ fn geometry_gc_requires_bound_merge_receipt_durability_before_deletion() {
             "the merge receipt must remain page-cache readable before its barrier fails"
         );
     }
-
     let (snapshot_block_hash, snapshot_state_hash) = durable_geometry_snapshot_identity(&kura, 20);
     let bindings = kura
         .geometry_bindings(&initial, &initial_incarnations, &initial_activations)
@@ -1083,7 +1032,6 @@ fn geometry_gc_requires_bound_merge_receipt_durability_before_deletion() {
         receipt_data.is_file() && receipt_index.is_file(),
         "failed receipt durability must retain both readable sidecar files"
     );
-
     let resumed = kura
         .resume_proven_lane_geometry_archive_gc()
         .expect("receipt durability recovery resumes exact archived GC");
@@ -1093,14 +1041,12 @@ fn geometry_gc_requires_bound_merge_receipt_durability_before_deletion() {
         "the same authenticated archive is deleted only after barrier recovery"
     );
 }
-
 #[test]
 fn partial_multi_archive_gc_retains_intent_and_repairs_disk_accounting_on_resume() {
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
     let kura = open_kura(&root, &initial_and_extended_configs().0);
     let fixture = prepare_retired_geometry_archive(&kura, &root);
-
     let mut recreated_incarnations = fixture.extended_incarnations.clone();
     recreated_incarnations.insert(LaneId::new(1), Hash::prehashed([0x44; Hash::LENGTH]));
     let mut recreated_activations = fixture.extended_activations.clone();
@@ -1149,7 +1095,6 @@ fn partial_multi_archive_gc_retains_intent_and_repairs_disk_accounting_on_resume
         None,
     )
     .expect("publish second retirement");
-
     let journal = kura.read_lane_geometry_journal().expect("four transitions");
     assert_eq!(journal.records.len(), 4);
     let second_archive = root
@@ -1160,7 +1105,6 @@ fn partial_multi_archive_gc_retains_intent_and_repairs_disk_accounting_on_resume
     durable_geometry_snapshot_identity(&kura, 20);
     kura.refresh_disk_usage_bytes()
         .expect("usage before partial GC");
-
     checkpoint_retired_geometry(&kura, &fixture, 20)
         .expect_err("second archive collision interrupts a multi-root GC pass");
     assert!(
@@ -1185,7 +1129,6 @@ fn partial_multi_archive_gc_retains_intent_and_repairs_disk_accounting_on_resume
         exact_after_partial,
         "a failed partial pass must repair the live disk-usage cache to the exact retained tree"
     );
-
     fs::remove_file(&collision).expect("repair archive collision");
     let resumed = kura
         .resume_proven_lane_geometry_archive_gc()
@@ -1198,12 +1141,10 @@ fn partial_multi_archive_gc_retains_intent_and_repairs_disk_accounting_on_resume
             .expect("exact usage after completed resume")
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn geometry_gc_rejects_symlink_inside_archive_tree() {
     use std::os::unix::fs::symlink;
-
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
     let outside = temp.path().join("outside.txt");
@@ -1213,12 +1154,10 @@ fn geometry_gc_rejects_symlink_inside_archive_tree() {
     let archived_blocks = fixture.archive_root.join("lane_0000000001/previous_blocks");
     let link = archived_blocks.join("escape");
     symlink(&outside, &link).expect("seed archive symlink");
-
     checkpoint_retired_geometry(&kura, &fixture, 20).expect_err("archive symlink must fail closed");
     assert_eq!(fs::read(&outside).expect("outside retained"), b"outside");
     assert!(link.exists());
 }
-
 #[test]
 fn recovery_rejects_pre_release_journal_layout() {
     #[derive(Encode)]
@@ -1226,7 +1165,6 @@ fn recovery_rejects_pre_release_journal_layout() {
         version: u8,
         records: Vec<LaneGeometryIntent>,
     }
-
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
     let (initial, _) = initial_and_extended_configs();
@@ -1237,11 +1175,9 @@ fn recovery_rejects_pre_release_journal_layout() {
     };
     fs::write(kura.lane_geometry_journal_path(), pre_release.encode())
         .expect("write pre-release journal");
-
     kura.read_lane_geometry_journal()
         .expect_err("pre-release journal layout must fail closed");
 }
-
 #[test]
 fn recovery_rejects_corrupt_and_forged_journals() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1253,7 +1189,6 @@ fn recovery_rejects_corrupt_and_forged_journals() {
     fs::write(kura.lane_geometry_journal_path(), b"not norito").expect("write corrupt journal");
     kura.recover_lane_geometry_journal(&initial, &initial_incarnations, &initial_activations)
         .expect_err("corrupt journal must fail closed");
-
     fs::remove_file(kura.lane_geometry_journal_path()).expect("remove corrupt journal");
     kura.apply_lane_geometry_transition(
         &initial,
@@ -1272,7 +1207,6 @@ fn recovery_rejects_corrupt_and_forged_journals() {
         .expect("write forged lineage root");
     kura.recover_lane_geometry_journal(&extended, &extended_incarnations, &extended_activations)
         .expect_err("lineage-root tampering must invalidate the transition id");
-
     let mut forged_sequence = valid.clone();
     forged_sequence.records[0].transition_sequence = forged_sequence.records[0]
         .transition_sequence
@@ -1282,7 +1216,6 @@ fn recovery_rejects_corrupt_and_forged_journals() {
         .expect("write forged transition sequence");
     kura.recover_lane_geometry_journal(&extended, &extended_incarnations, &extended_activations)
         .expect_err("transition-sequence tampering must invalidate the transition id");
-
     let mut forged_height = valid.clone();
     forged_height.records[0].transition_height = forged_height.records[0]
         .transition_height
@@ -1292,7 +1225,6 @@ fn recovery_rejects_corrupt_and_forged_journals() {
         .expect("write forged transition height");
     kura.recover_lane_geometry_journal(&extended, &extended_incarnations, &extended_activations)
         .expect_err("transition-height tampering must invalidate the transition id");
-
     fs::write(kura.lane_geometry_journal_path(), valid.encode()).expect("restore valid journal");
     let mut forged = valid;
     forged.records[0].operations[0].archived_blocks_path = "../escape".to_owned();
@@ -1301,7 +1233,6 @@ fn recovery_rejects_corrupt_and_forged_journals() {
     kura.recover_lane_geometry_journal(&extended, &extended_incarnations, &extended_activations)
         .expect_err("forged archive path must fail closed");
 }
-
 #[test]
 fn recovery_rejects_noncontiguous_phase_frontiers() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1312,7 +1243,6 @@ fn recovery_rejects_noncontiguous_phase_frontiers() {
         .read_lane_geometry_journal()
         .expect("two-transition published journal");
     assert_eq!(valid.records.len(), 2);
-
     for (_label, phases, expected_message) in [
         (
             "published-after-rollback",
@@ -1340,7 +1270,6 @@ fn recovery_rejects_noncontiguous_phase_frontiers() {
         assert_geometry_io_error(&error, ErrorKind::InvalidData, expected_message);
     }
 }
-
 #[test]
 fn recovery_rejects_both_branch_v5_journal_layouts_without_migration() {
     #[derive(Encode)]
@@ -1352,7 +1281,6 @@ fn recovery_rejects_both_branch_v5_journal_layouts_without_migration() {
         pending_archive_gc: Vec<LaneGeometryPendingArchiveGc>,
         records: Vec<LaneGeometryIntent>,
     }
-
     #[derive(Encode)]
     struct LineageJournalV5 {
         version: u8,
@@ -1363,7 +1291,6 @@ fn recovery_rejects_both_branch_v5_journal_layouts_without_migration() {
         pending_archive_gc: Vec<LaneGeometryPendingArchiveGc>,
         records: Vec<LaneGeometryIntent>,
     }
-
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
     let (initial, _) = initial_and_extended_configs();
@@ -1394,11 +1321,9 @@ fn recovery_rejects_both_branch_v5_journal_layouts_without_migration() {
             .encode(),
         ),
     ];
-
     for (name, bytes) in obsolete_layouts {
         let journal_path = kura.lane_geometry_journal_path();
         fs::write(&journal_path, &bytes).expect("write obsolete v5 journal");
-
         let error = match kura.recover_lane_geometry_journal(
             &initial,
             &initial_incarnations,
@@ -1421,7 +1346,6 @@ fn recovery_rejects_both_branch_v5_journal_layouts_without_migration() {
         }
     }
 }
-
 #[test]
 fn recovery_rejects_prior_lane_geometry_checkpoint_version() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1437,7 +1361,6 @@ fn recovery_rejects_prior_lane_geometry_checkpoint_version() {
     checkpoint.commitment = geometry_checkpoint_commitment(checkpoint);
     fs::write(kura.lane_geometry_journal_path(), prior.encode())
         .expect("write prior-version checkpoint");
-
     let error = kura
         .recover_lane_geometry_journal(
             &fixture.initial,
@@ -1451,7 +1374,6 @@ fn recovery_rejects_prior_lane_geometry_checkpoint_version() {
         "lane geometry checkpoint commitment, catalog, height, block hash, or activation is invalid",
     );
 }
-
 #[test]
 fn configured_catalog_preflight_persists_baseline_before_any_lane_path() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1461,7 +1383,6 @@ fn configured_catalog_preflight_persists_baseline_before_any_lane_path() {
     let lane_config_a = RuntimeLaneConfig::from_catalog(&configured_a);
     let lane_config_b = RuntimeLaneConfig::from_catalog(&configured_b);
     let config = kura_config(&root);
-
     Kura::fail_after_configured_catalog_preflight_for_test(&root);
     let error = Kura::new_with_configured_lane_catalog(&config, &lane_config_a, &configured_a)
         .expect_err("injected crash must stop immediately after baseline establishment");
@@ -1478,20 +1399,16 @@ fn configured_catalog_preflight_persists_baseline_before_any_lane_path() {
         journal.configured_catalog_hash,
         Some(LaneLifecycleParameterV1::catalog_hash(&configured_a))
     );
-
     Kura::new_with_configured_lane_catalog(&config, &lane_config_b, &configured_b)
         .expect_err("a reconstructed process must reject a different configured catalog");
     assert_lane_paths_absent(&root, &lane_config_b);
-
     Kura::new_with_configured_lane_catalog(&config, &lane_config_a, &configured_a)
         .expect("the exact configured catalog must resume after the crash boundary");
 }
-
 #[cfg(unix)]
 #[test]
 fn configured_primary_preflight_rejects_block_path_symlink_before_external_write() {
     use std::os::unix::fs::symlink;
-
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
     let outside = temp.path().join("outside-blocks");
@@ -1506,7 +1423,6 @@ fn configured_primary_preflight_rejects_block_path_symlink_before_external_write
     let blocks = lane_config.primary().blocks_dir(&root);
     fs::create_dir_all(blocks.parent().expect("block parent")).expect("block parent");
     symlink(&outside, &blocks).expect("configured primary block symlink");
-
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
         .expect_err("configured primary block symlink must fail before BlockStore opens it");
     assert!(blocks.is_symlink());
@@ -1517,12 +1433,10 @@ fn configured_primary_preflight_rejects_block_path_symlink_before_external_write
     );
     assert!(!lane_config.primary().merge_log_path(&root).exists());
 }
-
 #[cfg(unix)]
 #[test]
 fn configured_primary_preflight_rejects_merge_path_symlink_before_external_write() {
     use std::os::unix::fs::symlink;
-
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
     let outside = temp.path().join("outside-merge.log");
@@ -1537,7 +1451,6 @@ fn configured_primary_preflight_rejects_merge_path_symlink_before_external_write
     let merge = lane_config.primary().merge_log_path(&root);
     fs::create_dir_all(merge.parent().expect("merge parent")).expect("merge parent");
     symlink(&outside, &merge).expect("configured primary merge symlink");
-
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
         .expect_err("configured primary merge symlink must fail before MergeLedgerLog opens it");
     assert!(merge.is_symlink());
@@ -1547,12 +1460,10 @@ fn configured_primary_preflight_rejects_merge_path_symlink_before_external_write
     );
     assert!(!lane_config.primary().blocks_dir(&root).exists());
 }
-
 #[cfg(unix)]
 #[test]
 fn configured_primary_preflight_rejects_core_block_file_symlinks_before_external_write() {
     use std::os::unix::fs::symlink;
-
     for file_name in [
         INDEX_FILE_NAME,
         DATA_FILE_NAME,
@@ -1577,11 +1488,9 @@ fn configured_primary_preflight_rejects_core_block_file_symlinks_before_external
         )
         .expect("bind configured primary");
         drop(kura);
-
         let child = lane_config.primary().blocks_dir(&root).join(file_name);
         fs::remove_file(&child).expect("remove core block file before symlink injection");
         symlink(&outside, &child).expect("inject core block-file symlink");
-
         Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
             .expect_err("configured primary descendants must be rejected before BlockStore opens");
         assert!(child.is_symlink());
@@ -1592,12 +1501,10 @@ fn configured_primary_preflight_rejects_core_block_file_symlinks_before_external
         );
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn configured_primary_preflight_rejects_root_sidecar_temp_symlink() {
     use std::os::unix::fs::symlink;
-
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
     let outside = temp.path().join("outside-roster-temp");
@@ -1617,7 +1524,6 @@ fn configured_primary_preflight_rejects_root_sidecar_temp_symlink() {
     drop(kura);
     let sidecar_temp = root.join("commit-rosters.norito.tmp");
     symlink(&outside, &sidecar_temp).expect("inject roster temp symlink");
-
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
         .expect_err("root sidecar temp symlink must fail before CommitRosterJournal opens");
     assert!(sidecar_temp.is_symlink());
@@ -1626,7 +1532,6 @@ fn configured_primary_preflight_rejects_root_sidecar_temp_symlink() {
         b"operator-owned-roster-temp"
     );
 }
-
 #[test]
 fn configured_primary_preflight_rejects_foreign_marker_before_kura_reconciliation() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1663,7 +1568,6 @@ fn configured_primary_preflight_rejects_foreign_marker_before_kura_reconciliatio
     )
     .expect("write foreign marker");
     drop(kura);
-
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
         .expect_err("foreign configured-primary marker must fail before Kura reconciliation");
     let marker = decode_exact::<LaneIncarnationMarker>(
@@ -1672,7 +1576,6 @@ fn configured_primary_preflight_rejects_foreign_marker_before_kura_reconciliatio
     .expect("decode retained marker");
     assert_eq!(marker.incarnation, Hash::prehashed([0xA2; Hash::LENGTH]));
 }
-
 #[test]
 fn configured_catalog_preflight_rejects_nonzero_physical_primary_without_mutation() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1700,7 +1603,6 @@ fn configured_catalog_preflight_rejects_nonzero_physical_primary_without_mutatio
     );
     assert!(!nonzero_root.exists());
 }
-
 #[test]
 fn configured_catalog_preflight_refuses_to_bind_a_nonpristine_root() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1710,7 +1612,6 @@ fn configured_catalog_preflight_refuses_to_bind_a_nonpristine_root() {
     fs::write(&sentinel, b"must-not-adopt-or-delete").expect("seed foreign ledger data");
     let configured = configured_primary_catalog("pristine-root-required");
     let lane_config = RuntimeLaneConfig::from_catalog(&configured);
-
     let error =
         Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
             .expect_err("a missing baseline must never bind an existing ledger root");
@@ -1727,7 +1628,6 @@ fn configured_catalog_preflight_refuses_to_bind_a_nonpristine_root() {
     assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
     assert_lane_paths_absent(&root, &lane_config);
 }
-
 #[test]
 fn authenticated_primary_restore_heals_missing_lane_artifact_namespace() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1736,7 +1636,6 @@ fn authenticated_primary_restore_heals_missing_lane_artifact_namespace() {
     let configured = RuntimeLaneConfig::from_catalog(&configured_catalog);
     let (incarnations, activation_heights) = initial_geometry();
     let configured_catalog_hash = LaneLifecycleParameterV1::catalog_hash(&configured_catalog);
-
     let (kura, _) = Kura::new_with_configured_lane_catalog(
         &kura_config(&root),
         &configured,
@@ -1762,7 +1661,6 @@ fn authenticated_primary_restore_heals_missing_lane_artifact_namespace() {
         !lane_artifacts.exists(),
         "fixture must restore an authenticated primary without its empty artifact namespace"
     );
-
     kura.restore_lane_segments_with_geometry_at_height_and_lineage_root(
         &configured,
         &incarnations,
@@ -1779,7 +1677,6 @@ fn authenticated_primary_restore_heals_missing_lane_artifact_namespace() {
     );
     drop(namespace);
     drop(kura);
-
     let (reopened, _) = Kura::new_with_configured_lane_catalog(
         &kura_config(&root),
         &configured,
@@ -1802,7 +1699,6 @@ fn authenticated_primary_restore_heals_missing_lane_artifact_namespace() {
         "reopened primary artifact namespace must retain its durable identity"
     );
 }
-
 #[test]
 fn configured_multilane_startup_defers_secondary_provisioning_to_geometry_journal() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1831,7 +1727,6 @@ fn configured_multilane_startup_defers_secondary_provisioning_to_geometry_journa
     let secondary_entry = configured.entry(LaneId::new(1)).expect("secondary lane");
     let secondary_blocks = secondary_entry.blocks_dir(&root);
     let secondary_merge = secondary_entry.merge_log_path(&root);
-
     let (kura, _) = Kura::new_with_configured_lane_catalog(
         &kura_config(&root),
         &configured,
@@ -1852,7 +1747,6 @@ fn configured_multilane_startup_defers_secondary_provisioning_to_geometry_journa
         kura.lane_storage_entry(LaneId::new(1)).is_err(),
         "authenticated Kura must not advertise an unowned secondary segment"
     );
-
     kura.apply_lane_geometry_transition(
         &initial,
         &configured,
@@ -1884,7 +1778,6 @@ fn configured_multilane_startup_defers_secondary_provisioning_to_geometry_journa
         .expect("secondary storage has the exact authoritative marker");
     assert!(secondary_merge.is_file());
     assert!(kura.lane_storage_entry(LaneId::new(1)).is_ok());
-
     drop(kura);
     let (reopened, _) = Kura::new_with_configured_lane_catalog(
         &kura_config(&root),
@@ -1902,7 +1795,6 @@ fn configured_multilane_startup_defers_secondary_provisioning_to_geometry_journa
     reopened
         .require_lane_marker(&secondary_binding)
         .expect("reopened secondary marker remains exact");
-
     fs::remove_dir_all(&secondary_blocks).expect("simulate loss of published secondary blocks");
     fs::remove_file(&secondary_merge).expect("simulate loss of published secondary merge log");
     let error = reopened
@@ -1920,7 +1812,6 @@ fn configured_multilane_startup_defers_secondary_provisioning_to_geometry_journa
     assert!(!secondary_blocks.exists());
     assert!(!secondary_merge.exists());
 }
-
 #[test]
 fn configured_multilane_startup_rejects_unjournaled_secondary_storage() {
     let temp = TempDir::new().expect("temporary directory");
@@ -1958,7 +1849,6 @@ fn configured_multilane_startup_rejects_unjournaled_secondary_storage() {
     fs::create_dir_all(&secondary_blocks).expect("seed unjournaled secondary directory");
     let sentinel = secondary_blocks.join("operator-sentinel");
     fs::write(&sentinel, b"must-not-adopt-or-delete").expect("seed unjournaled sentinel");
-
     let (kura, _) = Kura::new_with_configured_lane_catalog(
         &kura_config(&root),
         &configured,
@@ -1993,7 +1883,6 @@ fn configured_multilane_startup_rejects_unjournaled_secondary_storage() {
         "rejection must precede geometry intent publication"
     );
 }
-
 #[test]
 fn configured_catalog_preflight_recovers_exact_first_start_temp() {
     let temp = TempDir::new().expect("temporary directory");
@@ -2007,7 +1896,6 @@ fn configured_catalog_preflight_recovers_exact_first_start_temp() {
     };
     fs::write(root.join(JOURNAL_TEMP_FILE_NAME), expected.encode())
         .expect("simulate synced first-start temp before hard-link promotion");
-
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
         .expect("reconstructed process must promote the exact baseline temp");
     assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
@@ -2017,7 +1905,6 @@ fn configured_catalog_preflight_recovers_exact_first_start_temp() {
     .expect("decode promoted baseline journal");
     assert_eq!(recovered, expected);
 }
-
 #[test]
 fn configured_catalog_preflight_cleans_exact_startup_owned_hard_link_temp() {
     let temp = TempDir::new().expect("temporary directory");
@@ -2030,13 +1917,11 @@ fn configured_catalog_preflight_cleans_exact_startup_owned_hard_link_temp() {
     let journal_path = root.join(JOURNAL_FILE_NAME);
     fs::hard_link(&journal_path, root.join(JOURNAL_TEMP_FILE_NAME))
         .expect("simulate crash after durable hard-link promotion");
-
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
         .expect("exact startup-owned hard-link temp must be cleaned before lane storage opens");
     assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
     assert!(journal_path.is_file());
 }
-
 #[test]
 fn configured_catalog_preflight_rejects_unproven_restore_temp() {
     let temp = TempDir::new().expect("temporary directory");
@@ -2050,7 +1935,6 @@ fn configured_catalog_preflight_rejects_unproven_restore_temp() {
     let journal_path = root.join(JOURNAL_FILE_NAME);
     fs::copy(&journal_path, root.join(JOURNAL_RESTORE_TEMP_FILE_NAME))
         .expect("seed byte-identical but unowned restore temp");
-
     Kura::new_with_configured_lane_catalog(
         &kura_config(&root),
         &attempted_lane_config,
@@ -2060,7 +1944,6 @@ fn configured_catalog_preflight_rejects_unproven_restore_temp() {
     assert_lane_paths_absent(&root, &attempted_lane_config);
     assert!(root.join(JOURNAL_RESTORE_TEMP_FILE_NAME).is_file());
 }
-
 #[test]
 fn configured_catalog_preflight_discards_uncommitted_restore_temp() {
     let temp = TempDir::new().expect("temporary directory");
@@ -2080,7 +1963,6 @@ fn configured_catalog_preflight_discards_uncommitted_restore_temp() {
         b"synced-but-uncommitted-restore-bytes",
     )
     .expect("simulate crash before restore-temp rename");
-
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
         .expect("the final journal is the sole restore commit point");
     assert!(!root.join(JOURNAL_RESTORE_TEMP_FILE_NAME).exists());
@@ -2089,7 +1971,6 @@ fn configured_catalog_preflight_discards_uncommitted_restore_temp() {
         authoritative
     );
 }
-
 #[test]
 fn configured_catalog_preflight_discards_different_uncommitted_publication_temp() {
     let temp = TempDir::new().expect("temporary directory");
@@ -2114,7 +1995,6 @@ fn configured_catalog_preflight_discards_different_uncommitted_publication_temp(
         &different,
     )
     .expect("simulate crash before publication-temp rename");
-
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
         .expect("the final journal is the sole publication commit point");
     assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
@@ -2123,12 +2003,10 @@ fn configured_catalog_preflight_discards_different_uncommitted_publication_temp(
         authoritative
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn configured_catalog_preflight_rejects_reserved_temp_symlink_without_touching_target() {
     use std::os::unix::fs::symlink;
-
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
     let outside = temp.path().join("outside-temp-target");
@@ -2140,7 +2018,6 @@ fn configured_catalog_preflight_rejects_reserved_temp_symlink_without_touching_t
         .expect("establish authoritative baseline");
     let reserved = root.join(JOURNAL_TEMP_FILE_NAME);
     symlink(&outside, &reserved).expect("reserved temp symlink");
-
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
         .expect_err("reserved temp symlinks must never be deleted or followed");
     assert!(reserved.is_symlink());
@@ -2149,7 +2026,6 @@ fn configured_catalog_preflight_rejects_reserved_temp_symlink_without_touching_t
         b"operator-owned"
     );
 }
-
 #[test]
 fn configured_catalog_preflight_rejects_tampered_v6_structure_before_lane_mutation() {
     let temp = TempDir::new().expect("temporary directory");
@@ -2159,7 +2035,6 @@ fn configured_catalog_preflight_rejects_tampered_v6_structure_before_lane_mutati
     let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
     Kura::establish_or_verify_configured_lane_catalog_baseline(&root, baseline)
         .expect("establish valid v6 baseline");
-
     let journal_path = root.join(JOURNAL_FILE_NAME);
     let mut journal = decode_exact::<LaneGeometryJournal>(
         &fs::read(&journal_path).expect("read valid baseline journal"),
@@ -2190,12 +2065,10 @@ fn configured_catalog_preflight_rejects_tampered_v6_structure_before_lane_mutati
         operations: Vec::new(),
     });
     fs::write(&journal_path, journal.encode()).expect("write decodable structural forgery");
-
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
         .expect_err("correct baseline must not mask a malformed v6 journal");
     assert_lane_paths_absent(&root, &lane_config);
 }
-
 #[test]
 fn configured_catalog_preflight_rejects_version_mismatch_before_lane_mutation() {
     let temp = TempDir::new().expect("temporary directory");
@@ -2212,17 +2085,14 @@ fn configured_catalog_preflight_rejects_version_mismatch_before_lane_mutation() 
     .expect("decode valid baseline journal");
     journal.version = JOURNAL_VERSION.saturating_add(1);
     fs::write(&journal_path, journal.encode()).expect("write unsupported journal version");
-
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
         .expect_err("unsupported journal version must fail at the startup boundary");
     assert_lane_paths_absent(&root, &lane_config);
 }
-
 #[cfg(unix)]
 #[test]
 fn configured_catalog_preflight_rejects_journal_derived_symlink_before_lane_mutation() {
     use std::os::unix::fs::symlink;
-
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
     let configured = LaneCatalog::default();
@@ -2252,17 +2122,14 @@ fn configured_catalog_preflight_rejects_journal_derived_symlink_before_lane_muta
     fs::create_dir(&outside).expect("outside directory");
     symlink(&outside, &link).expect("inject journal-derived symlink");
     drop(kura);
-
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &initial, &configured)
         .expect_err("journal-derived symlink must fail before opening attempted lane storage");
     assert!(link.is_symlink());
 }
-
 #[cfg(unix)]
 #[test]
 fn configured_catalog_preflight_rejects_journal_symlink_before_lane_mutation() {
     use std::os::unix::fs::symlink;
-
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
     let configured = configured_primary_catalog("journal-symlink-baseline");
@@ -2273,7 +2140,6 @@ fn configured_catalog_preflight_rejects_journal_symlink_before_lane_mutation() {
     let outside_journal = temp.path().join("outside-journal.norito");
     fs::rename(&journal_path, &outside_journal).expect("move journal outside Kura root");
     symlink(&outside_journal, &journal_path).expect("replace journal with a symlink");
-
     let lane_config = RuntimeLaneConfig::from_catalog(&configured);
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
         .expect_err("configured-catalog journal symlink must fail closed");
@@ -2281,7 +2147,6 @@ fn configured_catalog_preflight_rejects_journal_symlink_before_lane_mutation() {
     assert!(journal_path.is_symlink());
     assert!(outside_journal.is_file());
 }
-
 #[cfg(unix)]
 #[test]
 fn configured_catalog_preflight_rejects_journal_identity_swap_before_lane_mutation() {
@@ -2295,7 +2160,6 @@ fn configured_catalog_preflight_rejects_journal_identity_swap_before_lane_mutati
     fs::copy(&journal_path, root.join(JOURNAL_IDENTITY_SWAP_FILE_NAME))
         .expect("prepare same-content replacement inode");
     Kura::replace_configured_catalog_journal_after_open_for_test(&root);
-
     let lane_config = RuntimeLaneConfig::from_catalog(&configured);
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
         .expect_err("journal identity replacement during read must fail closed");

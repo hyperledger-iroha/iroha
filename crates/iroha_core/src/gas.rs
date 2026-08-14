@@ -13,9 +13,6 @@
 //! Non-goals
 //! - Perfect proportionality to runtime wall-clock. Costs are calibrated to be
 //!   monotonic with payload sizes and relative complexity.
-
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
 use iroha_data_model::{
     isi as dm_isi,
@@ -26,7 +23,7 @@ use iroha_data_model::{
 use norito::decode_canonical;
 #[cfg(test)]
 use parking_lot::ReentrantMutex;
-
+use std::sync::atomic::{AtomicU64, Ordering};
 /// Per-instruction family base costs.
 /// Chosen to be small compared to the default per-block gas limit.
 // Tuned to target a simple fee envelope:
@@ -67,13 +64,11 @@ pub const DEFAULT_ZK_GAS_PER_NULLIFIER: u64 = 300;
 /// Default gas multiplier per commitment created by the transaction.
 pub const DEFAULT_ZK_GAS_PER_COMMITMENT: u64 = 500;
 const FIELD_ELEMENT_BYTES: usize = 32;
-
 /// Dynamic factors (per-byte) applied to encoded payloads where sensible.
 const PER_BYTE_JSON: u64 = 1; // charge per JSON byte
 const PER_BYTE_GENERIC: u64 = 0; // currently unused; reserved for future
 const PER_KAIGI_PROOF_BYTE: u64 = 5;
 const PER_BYTE_SEALED_COMMITMENT: u64 = 1;
-
 static ZK_GAS_BASE_VERIFY: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_BASE_VERIFY);
 static ZK_GAS_PER_PUBLIC_INPUT: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_PER_PUBLIC_INPUT);
 static ZK_GAS_PER_PROOF_BYTE: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_PER_PROOF_BYTE);
@@ -81,7 +76,6 @@ static ZK_GAS_PER_NULLIFIER: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_PER_NULLI
 static ZK_GAS_PER_COMMITMENT: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_PER_COMMITMENT);
 #[cfg(test)]
 static CONFIDENTIAL_GAS_TEST_LOCK: ReentrantMutex<()> = ReentrantMutex::new(());
-
 /// Consensus gas schedule installed from startup configuration or committed ZK policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ConfidentialGasSchedule {
@@ -96,7 +90,6 @@ pub(crate) struct ConfidentialGasSchedule {
     /// Gas multiplier applied per commitment emitted by the proof.
     pub per_commitment: u64,
 }
-
 impl Default for ConfidentialGasSchedule {
     fn default() -> Self {
         Self {
@@ -108,7 +101,6 @@ impl Default for ConfidentialGasSchedule {
         }
     }
 }
-
 impl From<ActualConfidentialGas> for ConfidentialGasSchedule {
     fn from(value: ActualConfidentialGas) -> Self {
         Self {
@@ -120,7 +112,6 @@ impl From<ActualConfidentialGas> for ConfidentialGasSchedule {
         }
     }
 }
-
 /// Install the confidential verification gas schedule at a consensus policy boundary.
 pub(crate) fn configure_confidential_gas(schedule: ConfidentialGasSchedule) {
     #[cfg(test)]
@@ -131,19 +122,16 @@ pub(crate) fn configure_confidential_gas(schedule: ConfidentialGasSchedule) {
     ZK_GAS_PER_NULLIFIER.store(schedule.per_nullifier, Ordering::Relaxed);
     ZK_GAS_PER_COMMITMENT.store(schedule.per_commitment, Ordering::Relaxed);
 }
-
 /// Deterministic cost for storing a sealed transaction commitment.
 #[must_use]
 pub fn meter_sealed_transaction_commitment(encoded_len: usize) -> u64 {
     let encoded_len = u64::try_from(encoded_len).unwrap_or(u64::MAX);
     BASE_SEALED_COMMITMENT.saturating_add(PER_BYTE_SEALED_COMMITMENT.saturating_mul(encoded_len))
 }
-
 #[cfg(test)]
 pub(crate) fn lock_confidential_gas_for_tests() -> impl Drop {
     CONFIDENTIAL_GAS_TEST_LOCK.lock()
 }
-
 #[cfg(test)]
 pub(crate) fn confidential_gas_schedule_for_tests() -> ConfidentialGasSchedule {
     ConfidentialGasSchedule {
@@ -154,27 +142,21 @@ pub(crate) fn confidential_gas_schedule_for_tests() -> ConfidentialGasSchedule {
         per_commitment: zk_gas_per_commitment(),
     }
 }
-
 fn zk_gas_base_verify() -> u64 {
     ZK_GAS_BASE_VERIFY.load(Ordering::Relaxed)
 }
-
 fn zk_gas_per_public_input() -> u64 {
     ZK_GAS_PER_PUBLIC_INPUT.load(Ordering::Relaxed)
 }
-
 fn zk_gas_per_proof_byte() -> u64 {
     ZK_GAS_PER_PROOF_BYTE.load(Ordering::Relaxed)
 }
-
 fn zk_gas_per_nullifier() -> u64 {
     ZK_GAS_PER_NULLIFIER.load(Ordering::Relaxed)
 }
-
 fn zk_gas_per_commitment() -> u64 {
     ZK_GAS_PER_COMMITMENT.load(Ordering::Relaxed)
 }
-
 fn halo2_public_input_count(attachment: &ProofAttachment) -> Option<u64> {
     let backend = attachment.backend.as_str();
     if crate::zk::verifier_backend_registry_tag_v1(backend)
@@ -190,7 +172,6 @@ fn halo2_public_input_count(attachment: &ProofAttachment) -> Option<u64> {
     }
     Some(((len as u64) + stride.saturating_sub(1)) / stride)
 }
-
 fn gas_for_proof_attachment(
     attachment: &ProofAttachment,
     nullifiers: usize,
@@ -208,11 +189,9 @@ fn gas_for_proof_attachment(
     gas = gas.saturating_add(zk_gas_per_commitment().saturating_mul(commitments_u64));
     gas
 }
-
 fn gas_for_recursive_kagemusha_topup_v4(topup: &dm_isi::offline::TopUpKagemushaRecursiveV4) -> u64 {
     gas_for_proof_attachment(&topup.request.shield_evidence.proof, 0, 1)
 }
-
 fn gas_for_recursive_kagemusha_redeem_v4(
     redeem: &dm_isi::offline::RedeemKagemushaRecursiveV4,
 ) -> u64 {
@@ -241,7 +220,6 @@ fn gas_for_recursive_kagemusha_redeem_v4(
     }
     gas
 }
-
 /// Compute gas for a single instruction using a simple schedule.
 #[allow(clippy::too_many_lines)]
 pub fn meter_instruction(instr: &InstructionBox) -> u64 {
@@ -252,12 +230,10 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     fn json_len(j: &iroha_primitives::json::Json) -> usize {
         j.get().len()
     }
-
     // Downcast by visiting known grouped enums first, then concrete types.
     // Fall back to Norito-encoded size to keep custom/unknown instructions
     // bounded deterministically.
     let any = instr.as_any();
-
     // Register
     if let Some(reg) = any.downcast_ref::<dm_isi::register::RegisterBox>() {
         return match reg {
@@ -270,7 +246,6 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
             dm_isi::register::RegisterBox::Trigger(_) => BASE_REGISTER + 50, // triggers slightly heavier
         };
     }
-
     // Unregister
     if let Some(unreg) = any.downcast_ref::<dm_isi::register::UnregisterBox>() {
         return match unreg {
@@ -283,7 +258,6 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
             | dm_isi::register::UnregisterBox::Trigger(_) => BASE_UNREGISTER,
         };
     }
-
     // Transfers
     if let Some(xfer) = any.downcast_ref::<dm_isi::transfer::TransferBox>() {
         return match xfer {
@@ -298,7 +272,6 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
         let count = u64::try_from(batch.entries().len()).unwrap_or(u64::MAX);
         return BASE_TRANSFER.saturating_mul(count);
     }
-
     // Mint / Burn
     if let Some(mint) = any.downcast_ref::<dm_isi::mint_burn::MintBox>() {
         return match mint {
@@ -312,7 +285,6 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
             dm_isi::mint_burn::BurnBox::TriggerRepetitions(_) => BASE_BURN / 2,
         };
     }
-
     // Key-value
     if let Some(kv) = any.downcast_ref::<dm_isi::SetKeyValueBox>() {
         let sz = match kv {
@@ -327,7 +299,6 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     if any.downcast_ref::<dm_isi::RemoveKeyValueBox>().is_some() {
         return BASE_REMOVE_KV;
     }
-
     // Permissions
     if any.downcast_ref::<dm_isi::GrantBox>().is_some() {
         return BASE_GRANT;
@@ -335,7 +306,6 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     if any.downcast_ref::<dm_isi::RevokeBox>().is_some() {
         return BASE_REVOKE;
     }
-
     // Misc
     if let Some(et) = any.downcast_ref::<dm_isi::ExecuteTrigger>() {
         let args_len = json_len(&et.args) as u64;
@@ -413,18 +383,15 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     {
         return BASE_REGISTER_SMART_CONTRACT;
     }
-
     // Fallback: charge based on Norito-encoded size of the instruction payload
     // This ensures determinism for unknown/custom instructions under custom executors.
     let bytes = instr.dyn_encode();
     BASE_CUSTOM + PER_BYTE_GENERIC.saturating_mul(bytes.len() as u64)
 }
-
 /// Compute gas for a sequence of instructions.
 pub fn meter_instructions(is: &[InstructionBox]) -> u64 {
     is.iter().map(meter_instruction).sum()
 }
-
 /// Return the portion of the gas schedule attributed to confidential ISIs.
 #[must_use]
 pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
@@ -446,24 +413,20 @@ pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
     }
     0
 }
-
 #[cfg(test)]
 mod tests {
-    use iroha_config::parameters::actual as cfg;
-    use iroha_data_model::prelude::*;
-    use iroha_primitives::json::Json;
-    use iroha_test_samples::gen_account_in;
-
     use super::*;
     use crate::{
         kura::Kura, query::store::LiveQueryStore, state::State,
         zk::test_utils::halo2_fixture_envelope,
     };
-
+    use iroha_config::parameters::actual as cfg;
+    use iroha_data_model::prelude::*;
+    use iroha_primitives::json::Json;
+    use iroha_test_samples::gen_account_in;
     fn sample_account() -> AccountId {
         gen_account_in("wonderland").0
     }
-
     #[test]
     fn set_kv_scales_with_value_length() {
         let id = sample_account();
@@ -473,7 +436,6 @@ mod tests {
         let g_big = meter_instruction(&InstructionBox::from(SetKeyValueBox::from(big)));
         assert!(g_big > g_small);
     }
-
     #[test]
     fn mint_and_transfer_have_nonzero_costs() {
         let a = sample_account();
@@ -493,7 +455,6 @@ mod tests {
         )));
         assert!(g_mint > 0 && g_xfer > 0);
     }
-
     #[test]
     fn sealed_commitment_cost_is_nonzero_and_size_sensitive() {
         let small = meter_sealed_transaction_commitment(32);
@@ -501,7 +462,6 @@ mod tests {
         assert!(small > 0);
         assert!(large > small);
     }
-
     #[test]
     fn batch_meter_sums_items() {
         let a = sample_account();
@@ -527,7 +487,6 @@ mod tests {
         let sum_inline = v.iter().map(meter_instruction).sum::<u64>();
         assert_eq!(sum_inline, meter_instructions(&v));
     }
-
     #[test]
     fn transfer_batch_gas_matches_entry_sum() {
         let from = sample_account();
@@ -565,20 +524,16 @@ mod tests {
         )));
         assert_eq!(batch_gas, expected);
     }
-
     #[test]
     fn calibration_bench_gas_snapshot() {
         let (authority, _) = gen_account_in("wonderland");
         let role_id: RoleId = "bench_role".parse().unwrap();
         let trigger_id: TriggerId = "bench_trg".parse().unwrap();
         let bench_domain: DomainId = DomainId::try_new("bench", "universal").unwrap();
-
         let register_domain: InstructionBox =
             dm_isi::register::Register::domain(Domain::new(bench_domain.clone())).into();
-
         let register_account: InstructionBox =
             dm_isi::register::Register::account(Account::new(authority.clone())).into();
-
         let asset_definition_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
@@ -595,27 +550,20 @@ mod tests {
                 )
             })
             .into();
-
         let set_account_kv: InstructionBox =
             dm_isi::SetKeyValue::account(authority.clone(), "k".parse().unwrap(), Json::new("v"))
                 .into();
-
         let grant_account_role: InstructionBox =
             dm_isi::Grant::account_role(role_id.clone(), authority.clone()).into();
-
         let revoke_account_role: InstructionBox =
             dm_isi::Revoke::account_role(role_id.clone(), authority.clone()).into();
-
         let execute_trigger: InstructionBox =
             dm_isi::ExecuteTrigger::new(trigger_id.clone()).into();
-
         let asset_id = AssetId::of(asset_definition_id.clone(), authority.clone());
         let mint_asset: InstructionBox =
             dm_isi::mint_burn::Mint::asset_quantity(1_u32, asset_id.clone()).into();
-
         let transfer_asset: InstructionBox =
             dm_isi::transfer::Transfer::asset_quantity(asset_id, 1_u32, authority.clone()).into();
-
         let cases = [
             ("RegisterDomain", register_domain, 200),
             ("RegisterAccount", register_account, 200),
@@ -627,7 +575,6 @@ mod tests {
             ("MintAsset", mint_asset, 150),
             ("TransferAsset", transfer_asset, 180),
         ];
-
         let mut total = 0_u64;
         for (label, instr, expected) in &cases {
             let expected = *expected;
@@ -641,12 +588,10 @@ mod tests {
         let expected_total: u64 = cases.iter().map(|(_, _, expected)| *expected).sum();
         assert_eq!(total, expected_total);
     }
-
     #[test]
     fn verify_proof_gas_matches_schedule() {
         let _gas_lock = super::lock_confidential_gas_for_tests();
         use iroha_data_model::{isi::zk::VerifyProof, proof::VerifyingKeyId};
-
         let schedule = super::ConfidentialGasSchedule::default();
         super::configure_confidential_gas(schedule);
         let fixture = halo2_fixture_envelope("halo2/ipa:gas-meter", [0u8; 32]);
@@ -667,11 +612,9 @@ mod tests {
         assert_eq!(gas, expected);
         assert_eq!(confidential_gas_cost(&instruction), expected);
     }
-
     #[test]
     fn proof_public_input_gas_rejects_alternate_norito_layout() {
         use iroha_data_model::proof::VerifyingKeyId;
-
         let fixture = halo2_fixture_envelope("halo2/ipa:canonical-gas-meter", [0u8; 32]);
         let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(&fixture.proof_bytes)
             .expect("fixture proof envelope is canonical");
@@ -687,7 +630,6 @@ mod tests {
                     .expect("fixture public-input count fits u64")
             )
         );
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let alternate_bytes = {
@@ -710,19 +652,15 @@ mod tests {
             "non-canonical envelopes must not supply consensus-visible gas metadata"
         );
     }
-
     #[test]
     fn state_configured_gas_schedule_updates_metering() {
         let _gas_lock = super::lock_confidential_gas_for_tests();
         use iroha_data_model::{isi::zk::VerifyProof, proof::VerifyingKeyId};
-
         configure_confidential_gas(ConfidentialGasSchedule::default());
-
         let world = crate::state::World::new();
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query);
-
         let mut zk_cfg = state.zk.clone();
         zk_cfg.gas = cfg::ConfidentialGas {
             proof_base: 777_000,
@@ -734,7 +672,6 @@ mod tests {
         state
             .set_zk(zk_cfg.clone())
             .expect("empty SCCP outbox accepts gas test configuration");
-
         let fixture = halo2_fixture_envelope("halo2/ipa:transfer-gas", [0u8; 32]);
         let proof_box = fixture.proof_box("halo2/ipa");
         let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
@@ -767,17 +704,14 @@ mod tests {
                 "non-registry backend {backend} must not be decoded for gas metadata"
             );
         }
-
         let verify_instr: InstructionBox = VerifyProof::new(attachment.clone()).into();
         let verify_gas = meter_instruction(&verify_instr);
         let expected_verify = zk_cfg.gas.proof_base
             + zk_cfg.gas.per_public_input.saturating_mul(public_inputs)
             + zk_cfg.gas.per_proof_byte.saturating_mul(proof_bytes);
         assert_eq!(verify_gas, expected_verify);
-
         configure_confidential_gas(ConfidentialGasSchedule::default());
     }
-
     #[test]
     fn confidential_gas_cost_zero_for_non_confidential_instr() {
         let account = sample_account();

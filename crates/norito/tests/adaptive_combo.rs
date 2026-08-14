@@ -1,5 +1,4 @@
 //! Adaptive tests for combo shapes: (u64, &str, u32, bool) and (u64, &[u8], u32, bool).
-
 use norito::{
     columnar as ncb,
     columnar::{
@@ -9,7 +8,6 @@ use norito::{
         should_use_columnar, view_ncb_u64_str_u32_bool,
     },
 };
-
 fn decode_ncb_str_u32_bool(body: &[u8]) -> Vec<(u64, String, u32, bool)> {
     let view = view_ncb_u64_str_u32_bool(body).expect("view");
     (0..view.len())
@@ -23,7 +21,6 @@ fn decode_ncb_str_u32_bool(body: &[u8]) -> Vec<(u64, String, u32, bool)> {
         })
         .collect()
 }
-
 #[test]
 fn adaptive_str_u32_small_prefers_aos() {
     let mut rows_owned: Vec<(u64, String, u32, bool)> = Vec::new();
@@ -56,7 +53,6 @@ fn adaptive_str_u32_small_prefers_aos() {
     let decoded = decode_rows_u64_str_u32_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows_owned);
 }
-
 #[test]
 fn adaptive_str_u32_large_prefers_ncb() {
     let mut rows_owned: Vec<(u64, String, u32, bool)> = Vec::new();
@@ -83,7 +79,6 @@ fn adaptive_str_u32_large_prefers_ncb() {
     let decoded = decode_rows_u64_str_u32_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows_owned);
 }
-
 #[test]
 fn adaptive_str_u32_small_can_choose_ncb_when_beneficial() {
     // Repeated small strings favor dictionary even for small n
@@ -107,7 +102,6 @@ fn adaptive_str_u32_small_can_choose_ncb_when_beneficial() {
     let decoded = decode_rows_u64_str_u32_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows_owned);
 }
-
 #[test]
 fn adaptive_bytes_u32_small_prefers_aos() {
     let mut rows_owned: Vec<(u64, Vec<u8>, u32, bool)> = Vec::new();
@@ -138,7 +132,6 @@ fn adaptive_bytes_u32_small_prefers_aos() {
     let decoded = decode_rows_u64_bytes_u32_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows_owned);
 }
-
 #[test]
 fn adaptive_bytes_u32_large_prefers_ncb() {
     let mut rows_owned: Vec<(u64, Vec<u8>, u32, bool)> = Vec::new();
@@ -165,7 +158,6 @@ fn adaptive_bytes_u32_large_prefers_ncb() {
     let decoded = decode_rows_u64_bytes_u32_bool_adaptive(&bytes).expect("decode");
     assert_eq!(decoded, rows_owned);
 }
-
 #[test]
 fn small_n_str_bool_long_repeated_prefers_ncb() {
     // Long repeated strings allow dictionary to dominate even at small N
@@ -180,7 +172,6 @@ fn small_n_str_bool_long_repeated_prefers_ncb() {
         .collect();
     assert_eq!(out, expected);
 }
-
 #[test]
 fn small_n_enum_name_repeated_prefers_ncb() {
     // Enum with repeated Name strings should select dictionary-coded NCB
@@ -200,7 +191,6 @@ fn small_n_enum_name_repeated_prefers_ncb() {
         .collect();
     assert_eq!(out, expected);
 }
-
 #[test]
 fn small_n_u32_bool_prefers_ncb() {
     // For (u64,u32,bool) at n=8, NCB is slightly smaller due to bitset
@@ -212,7 +202,6 @@ fn small_n_u32_bool_prefers_ncb() {
     let out = ncb::decode_rows_u64_u32_bool_adaptive(&bytes).expect("decode");
     assert_eq!(out, rows);
 }
-
 #[test]
 fn combo_policy_can_disable_dictionary() {
     const DICT_BIT: u8 = 0x80;
@@ -230,7 +219,6 @@ fn combo_policy_can_disable_dictionary() {
         .iter()
         .map(|(id, s, v, b)| (*id, s.as_str(), *v, *b))
         .collect();
-
     let default_bytes = ncb::encode_ncb_u64_str_u32_bool(&rows_borrowed);
     assert_ne!(
         default_bytes[4] & DICT_BIT,
@@ -249,7 +237,6 @@ fn combo_policy_can_disable_dictionary() {
         .collect();
     assert_eq!(decoded, expected);
 }
-
 #[test]
 fn combo_policy_can_force_dictionary() {
     const DICT_BIT: u8 = 0x80;
@@ -267,7 +254,6 @@ fn combo_policy_can_force_dictionary() {
         .iter()
         .map(|(id, s, v, b)| (*id, s.as_str(), *v, *b))
         .collect();
-
     let default_bytes = ncb::encode_ncb_u64_str_u32_bool(&rows_borrowed);
     assert_eq!(
         default_bytes[4] & DICT_BIT,
@@ -286,7 +272,6 @@ fn combo_policy_can_force_dictionary() {
         .collect();
     assert_eq!(decoded, expected);
 }
-
 #[test]
 fn combo_policy_can_disable_id_delta() {
     const ID_DELTA_BIT: u8 = 0x40;
@@ -297,7 +282,6 @@ fn combo_policy_can_disable_id_delta() {
         .iter()
         .map(|(id, s, v, b)| (*id, s.as_str(), *v, *b))
         .collect();
-
     let default_bytes = ncb::encode_ncb_u64_str_u32_bool(&rows_borrowed);
     assert_ne!(
         default_bytes[4] & ID_DELTA_BIT,
@@ -316,7 +300,6 @@ fn combo_policy_can_disable_id_delta() {
         .collect();
     assert_eq!(decoded, expected);
 }
-
 #[test]
 fn combo_policy_can_force_id_delta() {
     const ID_DELTA_BIT: u8 = 0x40;
@@ -334,7 +317,6 @@ fn combo_policy_can_force_id_delta() {
         .iter()
         .map(|(id, s, v, b)| (*id, s.as_str(), *v, *b))
         .collect();
-
     let default_bytes = ncb::encode_ncb_u64_str_u32_bool(&rows_borrowed);
     assert_eq!(
         default_bytes[4] & ID_DELTA_BIT,

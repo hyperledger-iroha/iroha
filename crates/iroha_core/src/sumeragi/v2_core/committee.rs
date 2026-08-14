@@ -5,22 +5,17 @@
 //! onto the production `n = 3f + 1` geometry without changing validator
 //! identities: [`ValidatorIndex`] values always refer to positions in the
 //! context's canonical roster.
-
-use std::{error::Error, fmt};
-
 use super::types::{
     HeightContext, MAX_FAULT_TOLERANCE, MAX_VOTING_ROSTER_LEN, MIN_FAULT_TOLERANCE,
     MIN_VOTING_ROSTER_LEN, ValidatorId,
 };
-
+use std::{error::Error, fmt};
 /// Stable position of a validator in the canonically ordered height roster.
 pub type ValidatorIndex = u32;
-
 /// Smallest production committee (`3 * 1 + 1`).
 pub const MIN_COMMITTEE_SIZE: usize = MIN_VOTING_ROSTER_LEN;
 /// Largest production committee (`3 * 10 + 1`).
 pub const MAX_COMMITTEE_SIZE: usize = MAX_VOTING_ROSTER_LEN;
-
 /// Role occupied by a validator in one projected height/view committee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommitteeRole {
@@ -33,7 +28,6 @@ pub enum CommitteeRole {
     /// A Set B validator available for the recovery path.
     SetBValidator,
 }
-
 /// Deterministic role assignment for one height and view.
 ///
 /// `order` is a permutation of stable roster indices. Set A occupies the
@@ -46,7 +40,6 @@ pub struct Committee {
     quorum_size: usize,
     order: Vec<ValidatorIndex>,
 }
-
 impl Committee {
     /// Projects a frozen height context onto the roles for `view`.
     ///
@@ -71,7 +64,6 @@ impl Committee {
             .map_err(|_| CommitteeError::ValidatorIndexOverflow(leader_position))?;
         Self::project_indices(context.height(), view, roster_len, leader_index)
     }
-
     /// Project roles from a stable roster length and already-derived leader
     /// index.
     ///
@@ -109,7 +101,6 @@ impl Committee {
                 .map_err(|_| CommitteeError::ValidatorIndexOverflow(roster_position))?;
             order.push(index);
         }
-
         Ok(Self {
             height,
             view,
@@ -118,61 +109,51 @@ impl Committee {
             order,
         })
     }
-
     /// Returns the height for which this projection was derived.
     #[must_use]
     pub const fn height(&self) -> u64 {
         self.height
     }
-
     /// Returns the projected view.
     #[must_use]
     pub const fn view(&self) -> u64 {
         self.view
     }
-
     /// Returns the tolerated Byzantine-validator count `f`.
     #[must_use]
     pub const fn fault_tolerance(&self) -> usize {
         self.fault_tolerance
     }
-
     /// Returns the exact quorum size `q = 2f + 1`.
     #[must_use]
     pub const fn quorum_size(&self) -> usize {
         self.quorum_size
     }
-
     /// Returns the complete role-ordered stable-index permutation.
     #[must_use]
     pub fn order(&self) -> &[ValidatorIndex] {
         &self.order
     }
-
     /// Returns Set A, including the leader and proxy tail.
     #[must_use]
     pub fn set_a(&self) -> &[ValidatorIndex] {
         &self.order[..self.quorum_size]
     }
-
     /// Returns Set B, which contains exactly `f` validators.
     #[must_use]
     pub fn set_b(&self) -> &[ValidatorIndex] {
         &self.order[self.quorum_size..]
     }
-
     /// Returns the first Set A member.
     #[must_use]
     pub fn leader(&self) -> ValidatorIndex {
         self.order[0]
     }
-
     /// Returns the last Set A member.
     #[must_use]
     pub fn proxy_tail(&self) -> ValidatorIndex {
         self.order[self.quorum_size - 1]
     }
-
     /// Looks up the projected role of a stable roster index.
     ///
     /// # Errors
@@ -197,7 +178,6 @@ impl Committee {
                 index,
                 roster_len: self.order.len(),
             })?;
-
         Ok(if position == 0 {
             CommitteeRole::Leader
         } else if position == self.quorum_size - 1 {
@@ -209,7 +189,6 @@ impl Committee {
         })
     }
 }
-
 fn validate_geometry(roster_len: usize) -> Result<usize, CommitteeError> {
     if roster_len < MIN_COMMITTEE_SIZE {
         return Err(CommitteeError::CommitteeTooSmall {
@@ -226,14 +205,12 @@ fn validate_geometry(roster_len: usize) -> Result<usize, CommitteeError> {
     if (roster_len - 1) % 3 != 0 {
         return Err(CommitteeError::InvalidCommitteeGeometry { actual: roster_len });
     }
-
     let fault_tolerance = (roster_len - 1) / 3;
     if !(MIN_FAULT_TOLERANCE..=MAX_FAULT_TOLERANCE).contains(&fault_tolerance) {
         return Err(CommitteeError::InvalidCommitteeGeometry { actual: roster_len });
     }
     Ok(fault_tolerance)
 }
-
 /// Failure to project or query a bounded Sumeragi committee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommitteeError {
@@ -268,7 +245,6 @@ pub enum CommitteeError {
         roster_len: usize,
     },
 }
-
 impl fmt::Display for CommitteeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -303,21 +279,17 @@ impl fmt::Display for CommitteeError {
         }
     }
 }
-
 impl Error for CommitteeError {}
-
 #[cfg(test)]
 mod tests {
     use super::super::types::{
         ContextId, Digest, HeightContext, NetworkId, Validator, VotingMode, VotingPower,
     };
     use super::*;
-
     fn validator_id(index: usize) -> ValidatorId {
         let marker = u8::try_from(index + 1).expect("committee fixtures are bounded to 31 members");
         ValidatorId::repeat(marker)
     }
-
     fn context(roster_len: usize, seed_offset: u8) -> HeightContext {
         let roster = (0..roster_len)
             .map(|index| Validator::new(validator_id(index), VotingPower::new(1)))
@@ -339,14 +311,12 @@ mod tests {
         )
         .expect("valid committee fixture context")
     }
-
     #[test]
     fn accepts_every_supported_three_f_plus_one_geometry() {
         for fault_tolerance in MIN_FAULT_TOLERANCE..=MAX_FAULT_TOLERANCE {
             let roster_len = 3 * fault_tolerance + 1;
             let committee =
                 Committee::project(&context(roster_len, 0), 0).expect("supported geometry");
-
             assert_eq!(committee.fault_tolerance(), fault_tolerance);
             assert_eq!(committee.quorum_size(), 2 * fault_tolerance + 1);
             assert_eq!(committee.order().len(), roster_len);
@@ -354,7 +324,6 @@ mod tests {
             assert_eq!(committee.set_b().len(), fault_tolerance);
         }
     }
-
     #[test]
     fn rejects_out_of_bound_and_non_three_f_plus_one_rosters() {
         assert_eq!(
@@ -376,11 +345,9 @@ mod tests {
             Err(CommitteeError::InvalidCommitteeGeometry { actual: 5 })
         );
     }
-
     #[test]
     fn projects_stable_indices_and_expected_roles() {
         let committee = Committee::project(&context(7, 2), 0).expect("valid committee");
-
         assert_eq!(committee.height(), 1);
         assert_eq!(committee.view(), 0);
         assert_eq!(committee.order(), &[2, 3, 4, 5, 6, 0, 1]);
@@ -400,12 +367,10 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn view_change_cyclically_rotates_one_height_permutation() {
         let context = context(7, 2);
         let base = Committee::project(&context, 0).expect("base view");
-
         for view in 0_u64..21 {
             let projected = Committee::project(&context, view).expect("rotated view");
             let rotation = usize::try_from(view % 7).expect("bounded rotation");
@@ -420,13 +385,11 @@ mod tests {
             assert_eq!(projected.order(), expected);
         }
     }
-
     #[test]
     fn projection_is_deterministic_for_a_frozen_height_context() {
         let context = context(10, 7);
         let first = Committee::project(&context, u64::MAX).expect("first projection");
         let second = Committee::project(&context, u64::MAX).expect("second projection");
-
         assert_eq!(first, second);
     }
 }

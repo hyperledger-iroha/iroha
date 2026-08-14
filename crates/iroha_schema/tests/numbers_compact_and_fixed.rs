@@ -1,11 +1,8 @@
 //! Schema metadata test verifying compact vs fixed integer encodings.
-
 mod common;
-
 use common::{assert_schema, entry};
 use iroha_schema::prelude::*;
 use norito::{Decode, Encode};
-
 #[derive(IntoSchema, Encode, Decode)]
 struct Foo {
     #[codec(compact)]
@@ -24,7 +21,6 @@ struct Foo {
     u128_compact: u128,
     u128_fixed: u128,
 }
-
 #[test]
 fn compact() {
     assert_schema::<Foo>(

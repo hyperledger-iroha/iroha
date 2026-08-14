@@ -2,7 +2,6 @@
 #[cfg(test)]
 mod kagemusha_v4_topup_provenance_tests {
     use iroha_crypto::HashOf;
-
     use super::*;
     use crate::{
         block::{
@@ -12,12 +11,10 @@ mod kagemusha_v4_topup_provenance_tests {
         domain::DomainId,
         peer::PeerId,
     };
-
     struct Fixture {
         statement: KagemushaRecursiveSpendPublicStatementV4,
         provenance: KagemushaRecursiveSpendTopUpProvenanceV4,
     }
-
     fn execution_commitment(seed: u8) -> ExecutionCommitment {
         let ordinary_writes_root = Hash::new([seed, 3]);
         let topup_anchor_root = Hash::new([seed, 4]);
@@ -33,13 +30,11 @@ mod kagemusha_v4_topup_provenance_tests {
         )
         .expect("test execution commitment")
     }
-
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new([
             seed, 0xF0,
         ])))
     }
-
     fn evidence(
         network_id: NetworkId,
         asset: &AssetDefinitionId,
@@ -136,7 +131,6 @@ mod kagemusha_v4_topup_provenance_tests {
             topup_finality_proof: proof,
         }
     }
-
     fn fixture_with_seeds(seeds: &[u8]) -> Fixture {
         let network_id = network_id(0x51);
         let asset = AssetDefinitionId::derive_from_components(
@@ -206,7 +200,6 @@ mod kagemusha_v4_topup_provenance_tests {
             },
         }
     }
-
     fn rejects(
         fixture: &Fixture,
         provenance: &KagemushaRecursiveSpendTopUpProvenanceV4,
@@ -218,7 +211,6 @@ mod kagemusha_v4_topup_provenance_tests {
                 .is_err()
         );
     }
-
     #[test]
     fn provenance_rejects_zero_many_duplicate_reordered_and_wrong_refs() {
         let fixture = fixture_with_seeds(&[0x11, 0x21]);
@@ -226,24 +218,19 @@ mod kagemusha_v4_topup_provenance_tests {
             .provenance
             .validate_for_statement_at_height(&fixture.statement, Some(50))
             .expect("canonical two-origin provenance");
-
         let mut zero = fixture.provenance.clone();
         zero.topup_finality_evidence.clear();
         rejects(&fixture, &zero, 50);
-
         let mut many = fixture.provenance.clone();
         many.topup_finality_evidence
             .push(fixture.provenance.topup_finality_evidence[0].clone());
         rejects(&fixture, &many, 50);
-
         let mut duplicate = fixture.provenance.clone();
         duplicate.topup_finality_evidence[1] = duplicate.topup_finality_evidence[0].clone();
         rejects(&fixture, &duplicate, 50);
-
         let mut reordered = fixture.provenance.clone();
         reordered.topup_finality_evidence.reverse();
         rejects(&fixture, &reordered, 50);
-
         let mut wrong_ref_fixture = fixture_with_seeds(&[0x11]);
         wrong_ref_fixture.statement.topup_anchor_refs[0] =
             KagemushaRecursiveSpendTopUpAnchorRefV2 {
@@ -252,7 +239,6 @@ mod kagemusha_v4_topup_provenance_tests {
             };
         rejects(&wrong_ref_fixture, &wrong_ref_fixture.provenance, 50);
     }
-
     #[test]
     fn topup_finality_height_context_rejects_zero_execution_policy_hash() {
         let fixture = fixture_with_seeds(&[0x22]);
@@ -262,7 +248,6 @@ mod kagemusha_v4_topup_provenance_tests {
             .height_context
             .clone();
         context.execution_policy_hash = Hash::prehashed([0; Hash::LENGTH]);
-
         assert!(matches!(
             context.validate_structure(),
             Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -270,7 +255,6 @@ mod kagemusha_v4_topup_provenance_tests {
             })
         ));
     }
-
     #[test]
     fn topup_finality_height_context_rejects_zero_network_identity() {
         let fixture = fixture_with_seeds(&[0x23]);
@@ -282,7 +266,6 @@ mod kagemusha_v4_topup_provenance_tests {
         context.network_id = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH])),
         );
-
         assert!(matches!(
             context.validate_structure(),
             Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -290,11 +273,9 @@ mod kagemusha_v4_topup_provenance_tests {
             })
         ));
     }
-
     #[test]
     fn provenance_rejects_wrong_context_binding_window_height_qc_and_size() {
         let fixture = fixture_with_seeds(&[0x31]);
-
         let mut wrong_network = fixture.statement.clone();
         wrong_network.network_id = network_id(0x52);
         assert!(
@@ -303,7 +284,6 @@ mod kagemusha_v4_topup_provenance_tests {
                 .validate_for_statement_at_height(&wrong_network, Some(50))
                 .is_err()
         );
-
         let mut wrong_asset = fixture.statement.clone();
         wrong_asset.asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("test domain"),
@@ -315,7 +295,6 @@ mod kagemusha_v4_topup_provenance_tests {
                 .validate_for_statement_at_height(&wrong_asset, Some(50))
                 .is_err()
         );
-
         let mut wrong_scale = fixture.statement.clone();
         wrong_scale.asset_scale = 3;
         assert!(
@@ -324,7 +303,6 @@ mod kagemusha_v4_topup_provenance_tests {
                 .validate_for_statement_at_height(&wrong_scale, Some(50))
                 .is_err()
         );
-
         let mut wrong_binding = fixture.statement.clone();
         wrong_binding.artifact_binding.manifest_sha256[0] ^= 1;
         assert!(
@@ -333,23 +311,18 @@ mod kagemusha_v4_topup_provenance_tests {
                 .validate_for_statement_at_height(&wrong_binding, Some(50))
                 .is_err()
         );
-
         let mut wrong_generation = fixture.provenance.clone();
         wrong_generation
             .topup_finality_roster_artifact
             .artifact_generation = "other-release".to_owned();
         rejects(&fixture, &wrong_generation, 50);
-
         let mut wrong_network = fixture.provenance.clone();
         wrong_network.topup_finality_roster_artifact.network_id = network_id(0x52);
         rejects(&fixture, &wrong_network, 50);
-
         let mut wrong_window = fixture.provenance.clone();
         wrong_window.topup_finality_roster_artifact.windows[0].withdraws_at_height = 42;
         rejects(&fixture, &wrong_window, 50);
-
         rejects(&fixture, &fixture.provenance, 41);
-
         let mut wrong_qc = fixture.provenance.clone();
         wrong_qc.topup_finality_evidence[0]
             .topup_finality_proof
@@ -357,7 +330,6 @@ mod kagemusha_v4_topup_provenance_tests {
             .height_context
             .height = 43;
         rejects(&fixture, &wrong_qc, 50);
-
         let mut oversized = fixture.provenance.clone();
         let mut parent_qc = oversized.topup_finality_evidence[0]
             .topup_finality_proof
@@ -373,7 +345,6 @@ mod kagemusha_v4_topup_provenance_tests {
             .parent_commit_qc = Some(parent_qc);
         rejects(&fixture, &oversized, 50);
     }
-
     #[test]
     fn compact_qc_rejects_foreign_or_future_proposal_origin() {
         let fixture = fixture_with_seeds(&[0x32]);
@@ -383,23 +354,19 @@ mod kagemusha_v4_topup_provenance_tests {
         compact_qc
             .validate_structure()
             .expect("fixture compact QC structure");
-
         let mut future = compact_qc.clone();
         future.certificate.proposal_round.view = future.certificate.round.view.saturating_add(1);
         assert!(future.validate_structure().is_err());
-
         let mut foreign_context = compact_qc.clone();
         foreign_context.certificate.proposal_round.context_id = HeightContextId(
             HashOf::from_untyped_unchecked(Hash::new(b"foreign compact QC proposal context")),
         );
         assert!(foreign_context.validate_structure().is_err());
-
         let mut foreign_height = compact_qc.clone();
         foreign_height.certificate.proposal_round.height =
             foreign_height.certificate.round.height.saturating_add(1);
         assert!(foreign_height.validate_structure().is_err());
     }
-
     #[test]
     fn provenance_merge_requires_one_exact_roster_and_exact_shared_evidence() {
         let left = fixture_with_seeds(&[0x11]);
@@ -420,7 +387,6 @@ mod kagemusha_v4_topup_provenance_tests {
                 .windows(2)
                 .all(|pair| pair[0] < pair[1])
         );
-
         let mut wrong_roster = right.provenance.clone();
         wrong_roster.topup_finality_roster_artifact.windows[0].validator_set_pops[0][0] ^= 1;
         assert!(
@@ -433,7 +399,6 @@ mod kagemusha_v4_topup_provenance_tests {
             )
             .is_err()
         );
-
         let shared = fixture_with_seeds(&[0x41]);
         let coalesced = KagemushaRecursiveSpendTopUpProvenanceV4::merge_for_statements_at(
             &[
@@ -444,7 +409,6 @@ mod kagemusha_v4_topup_provenance_tests {
         )
         .expect("identical shared origin is coalesced");
         assert_eq!(coalesced.topup_finality_evidence.len(), 1);
-
         let mut conflicting = shared.provenance.clone();
         conflicting.topup_finality_evidence[0]
             .topup_finality_proof
@@ -463,7 +427,6 @@ mod kagemusha_v4_topup_provenance_tests {
         );
     }
 }
-
 impl KagemushaRecursiveSpendVerifyRequestV4 {
     /// Validate the terminal receiver request and every V4 proof/provenance binding.
     ///
@@ -515,7 +478,6 @@ impl KagemushaRecursiveSpendVerifyRequestV4 {
         }
         Ok(())
     }
-
     /// Return the V4-domain binding of request, exact output note, and opaque bundle.
     ///
     /// # Errors
@@ -531,7 +493,6 @@ impl KagemushaRecursiveSpendVerifyRequestV4 {
         })
     }
 }
-
 impl KagemushaRecursiveSpendVerifyResultV4 {
     /// Enforce the single successful ABI-21 receiver-acceptance contract.
     ///
@@ -575,7 +536,6 @@ impl KagemushaRecursiveSpendVerifyResultV4 {
         Ok(())
     }
 }
-
 impl KagemushaRecursiveSpendRedeemBuildRequestV4 {
     /// Validate the common full/partial ABI-21 redemption-builder input.
     ///
@@ -619,7 +579,6 @@ impl KagemushaRecursiveSpendRedeemBuildRequestV4 {
         }
     }
 }
-
 impl KagemushaRecursiveSpendRedeemChangeBranchV4 {
     /// Validate the sole continuing child of a partial redemption.
     ///
@@ -704,7 +663,6 @@ impl KagemushaRecursiveSpendRedeemChangeBranchV4 {
         Ok(())
     }
 }
-
 impl KagemushaRecursiveSpendRedeemUnsignedV4 {
     /// Validate exact full-terminal or partial-with-one-change redemption semantics.
     ///
@@ -747,7 +705,6 @@ impl KagemushaRecursiveSpendRedeemUnsignedV4 {
             }),
         }
     }
-
     /// Return the exact V4 authorization payload digest.
     ///
     /// # Errors
@@ -768,7 +725,6 @@ impl KagemushaRecursiveSpendRedeemUnsignedV4 {
             operation_id: self.operation_id,
         })
     }
-
     /// Attach the matching recipient authorization without altering any signed field.
     ///
     /// # Errors
@@ -794,7 +750,6 @@ impl KagemushaRecursiveSpendRedeemUnsignedV4 {
         Ok(request)
     }
 }
-
 impl KagemushaRecursiveSpendRedeemBuildResultV4 {
     /// Validate the atomic unsigned request plus its optional change/witness package.
     ///
@@ -830,7 +785,6 @@ impl KagemushaRecursiveSpendRedeemBuildResultV4 {
             }),
         }
     }
-
     /// Validate this prepared result against the exact builder input.
     ///
     /// # Errors
@@ -857,7 +811,6 @@ impl KagemushaRecursiveSpendRedeemBuildResultV4 {
         }
         Ok(())
     }
-
     /// Attach authorization and retain local change membership state.
     ///
     /// # Errors
@@ -885,7 +838,6 @@ impl KagemushaRecursiveSpendRedeemBuildResultV4 {
         Ok(result)
     }
 }
-
 impl KagemushaRecursiveSpendRedeemRequestV4 {
     /// Reconstruct the exact canonical V4 fields covered by authorization.
     #[must_use]
@@ -902,7 +854,6 @@ impl KagemushaRecursiveSpendRedeemRequestV4 {
             operation_id: self.operation_id,
         }
     }
-
     /// Validate exact conservation and the self-contained recipient authorization.
     ///
     /// # Errors
@@ -926,7 +877,6 @@ impl KagemushaRecursiveSpendRedeemRequestV4 {
         }
         self.authorization.validate_for_payload(unsigned.digest()?)
     }
-
     /// Return the digest of every unsigned V4 redemption field.
     ///
     /// # Errors
@@ -935,7 +885,6 @@ impl KagemushaRecursiveSpendRedeemRequestV4 {
     pub fn unsigned_payload_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         self.unsigned_payload().digest()
     }
-
     /// Verify recipient authorization at authoritative Torii time.
     ///
     /// # Errors
@@ -947,7 +896,6 @@ impl KagemushaRecursiveSpendRedeemRequestV4 {
             .validate_for_payload_at(self.unsigned_payload_digest()?, now_ms)
     }
 }
-
 impl KagemushaRecursiveSpendRedeemResultV4 {
     /// Validate the canonical request archive and terminal/change result shape.
     ///

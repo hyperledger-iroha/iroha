@@ -3,14 +3,12 @@
 #![allow(clippy::manual_div_ceil)]
 use iroha_schema::IntoSchema;
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
-
 #[derive(Debug, Clone, PartialEq, IntoSchema, NoritoSerialize, NoritoDeserialize)]
 struct SampleHybrid {
     id: u64,
     name: String,
     values: Vec<u32>,
 }
-
 #[test]
 fn hybrid_struct_roundtrip() {
     let v = SampleHybrid {

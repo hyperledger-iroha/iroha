@@ -6,15 +6,6 @@
 //! exit hedging, and cache/queue telemetry. These transport-local structures
 //! influence retrieval policy only; they never replace committed ledger or
 //! governed manifest authority.
-
-use std::{
-    collections::{HashMap, VecDeque},
-    hash::{Hash, Hasher},
-    num::NonZeroUsize,
-    sync::{Arc, Mutex, MutexGuard},
-    time::{Duration, Instant},
-};
-
 use blake3::hash as blake3_hash;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use iroha_data_model::taikai::{
@@ -27,8 +18,14 @@ use norito::{
     to_bytes,
 };
 use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use std::{
+    collections::{HashMap, VecDeque},
+    hash::{Hash, Hasher},
+    num::NonZeroUsize,
+    sync::{Arc, Mutex, MutexGuard},
+    time::{Duration, Instant},
+};
 use thiserror::Error;
-
 fn verify_signature_for_signer(
     signature: &Signature,
     signer: &PublicKey,
@@ -45,7 +42,6 @@ fn verify_signature_for_signer(
     }
     signature.verify(signer, payload)
 }
-
 /// Cache tiers tracked by the hierarchy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, Hash)]
 pub enum CacheTierKind {
@@ -53,7 +49,6 @@ pub enum CacheTierKind {
     Warm,
     Cold,
 }
-
 impl CacheTierKind {
     #[must_use]
     pub fn label(self) -> &'static str {
@@ -64,7 +59,6 @@ impl CacheTierKind {
         }
     }
 }
-
 /// QoS class assigned to cached segments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, NoritoSerialize, NoritoDeserialize)]
 pub enum QosClass {
@@ -72,7 +66,6 @@ pub enum QosClass {
     Standard,
     Bulk,
 }
-
 impl QosClass {
     #[must_use]
     pub fn label(self) -> &'static str {
@@ -83,7 +76,6 @@ impl QosClass {
         }
     }
 }
-
 /// Logical identifier for a Taikai segment.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, NoritoSerialize, NoritoDeserialize)]
 pub struct SegmentKey {
@@ -92,7 +84,6 @@ pub struct SegmentKey {
     rendition_id: TaikaiRenditionId,
     segment_sequence: u64,
 }
-
 impl SegmentKey {
     #[must_use]
     pub fn new(
@@ -108,7 +99,6 @@ impl SegmentKey {
             segment_sequence,
         }
     }
-
     #[must_use]
     pub fn from_envelope(envelope: &TaikaiSegmentEnvelopeV1) -> Self {
         Self {
@@ -118,13 +108,11 @@ impl SegmentKey {
             segment_sequence: envelope.segment_sequence,
         }
     }
-
     #[must_use]
     pub fn sequence(&self) -> u64 {
         self.segment_sequence
     }
 }
-
 /// Cached segment (metadata + payload).
 #[derive(Debug, Clone)]
 pub struct CachedSegment {
@@ -132,7 +120,6 @@ pub struct CachedSegment {
     payload: Arc<[u8]>,
     qos: QosClass,
 }
-
 impl CachedSegment {
     #[must_use]
     pub fn new(envelope: TaikaiSegmentEnvelopeV1, payload: Arc<[u8]>, qos: QosClass) -> Self {
@@ -142,33 +129,27 @@ impl CachedSegment {
             qos,
         }
     }
-
     #[must_use]
     pub fn key(&self) -> SegmentKey {
         SegmentKey::from_envelope(&self.envelope)
     }
-
     #[must_use]
     pub fn size_bytes(&self) -> u64 {
         u64::try_from(self.payload.len()).expect("payload length fits into u64")
     }
-
     #[must_use]
     pub fn qos(&self) -> QosClass {
         self.qos
     }
-
     #[must_use]
     pub fn envelope(&self) -> &TaikaiSegmentEnvelopeV1 {
         &self.envelope
     }
-
     #[must_use]
     pub fn payload(&self) -> Arc<[u8]> {
         Arc::clone(&self.payload)
     }
 }
-
 /// Cache configuration values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaikaiCacheConfig {
@@ -181,7 +162,6 @@ pub struct TaikaiCacheConfig {
     pub qos: QosConfig,
     pub reliability: ReliabilityTuning,
 }
-
 impl Default for TaikaiCacheConfig {
     fn default() -> Self {
         Self {
@@ -196,7 +176,6 @@ impl Default for TaikaiCacheConfig {
         }
     }
 }
-
 impl TaikaiCacheConfig {
     #[must_use]
     pub(crate) fn reliability_config(&self) -> ReliabilityConfig {
@@ -207,7 +186,6 @@ impl TaikaiCacheConfig {
         )
     }
 }
-
 /// QoS configuration shared by the cache.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QosConfig {
@@ -216,7 +194,6 @@ pub struct QosConfig {
     pub bulk_rate_bps: u64,
     pub burst_multiplier: u32,
 }
-
 impl QosConfig {
     #[must_use]
     pub fn balanced() -> Self {
@@ -227,7 +204,6 @@ impl QosConfig {
             burst_multiplier: 3,
         }
     }
-
     fn params_for(&self, class: QosClass) -> (u64, u64) {
         let rate = match class {
             QosClass::Priority => self.priority_rate_bps,
@@ -238,14 +214,12 @@ impl QosConfig {
         (rate, capacity)
     }
 }
-
 /// Reliability tuning applied to shard selection and circuit breakers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReliabilityTuning {
     pub failures_to_trip: u32,
     pub open_secs: u64,
 }
-
 impl ReliabilityTuning {
     #[must_use]
     pub fn new(failures_to_trip: u32, open_secs: u64) -> Self {
@@ -255,7 +229,6 @@ impl ReliabilityTuning {
         }
     }
 }
-
 impl Default for ReliabilityTuning {
     fn default() -> Self {
         Self {
@@ -264,14 +237,12 @@ impl Default for ReliabilityTuning {
         }
     }
 }
-
 /// Reliability settings applied to shard selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ReliabilityConfig {
     failures_to_trip: u32,
     open_for: Duration,
 }
-
 impl ReliabilityConfig {
     fn new(failures_to_trip: u32, open_for: Duration) -> Self {
         let failures_to_trip = failures_to_trip.max(1);
@@ -286,14 +257,12 @@ impl ReliabilityConfig {
         }
     }
 }
-
 impl Default for ReliabilityConfig {
     fn default() -> Self {
         // Trip after three consecutive failures and hold the circuit open for 2 seconds.
         Self::new(3, Duration::from_secs(2))
     }
 }
-
 /// QoS enforcement error.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum QosError {
@@ -304,7 +273,6 @@ pub enum QosError {
         available: u64,
     },
 }
-
 #[derive(Debug)]
 struct TokenBucket {
     capacity: u64,
@@ -313,7 +281,6 @@ struct TokenBucket {
     refill_remainder_nanos: u128,
     last_refill: Instant,
 }
-
 impl TokenBucket {
     fn new(capacity: u64, refill_rate: u64, now: Instant) -> Self {
         Self {
@@ -324,7 +291,6 @@ impl TokenBucket {
             last_refill: now,
         }
     }
-
     fn refill(&mut self, now: Instant) {
         if now <= self.last_refill {
             return;
@@ -337,7 +303,6 @@ impl TokenBucket {
             self.refill_remainder_nanos = 0;
             return;
         }
-
         let refill_units = elapsed_nanos
             .saturating_mul(u128::from(self.refill_rate))
             .saturating_add(self.refill_remainder_nanos);
@@ -347,7 +312,6 @@ impl TokenBucket {
             self.refill_remainder_nanos = remainder;
             return;
         }
-
         let available_headroom = self.capacity.saturating_sub(self.tokens);
         if added >= u128::from(available_headroom) {
             self.tokens = self.capacity;
@@ -358,7 +322,6 @@ impl TokenBucket {
             self.refill_remainder_nanos = remainder;
         }
     }
-
     fn try_consume(&mut self, amount: u64, now: Instant) -> Result<(), QosError> {
         self.refill(now);
         if self.tokens >= amount {
@@ -373,12 +336,10 @@ impl TokenBucket {
         }
     }
 }
-
 #[derive(Debug)]
 struct QosEnforcer {
     buckets: HashMap<QosClass, TokenBucket>,
 }
-
 impl QosEnforcer {
     fn new(config: &QosConfig, now: Instant) -> Self {
         let mut buckets = HashMap::new();
@@ -388,7 +349,6 @@ impl QosEnforcer {
         }
         Self { buckets }
     }
-
     fn try_acquire(&mut self, class: QosClass, amount: u64, now: Instant) -> Result<(), QosError> {
         let bucket = self.buckets.get_mut(&class).expect("QoS bucket must exist");
         match bucket.try_consume(amount, now) {
@@ -403,23 +363,19 @@ impl QosEnforcer {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CircuitOpenUntil {
     Deadline(Instant),
     Indefinite,
 }
-
 impl CircuitOpenUntil {
     fn from_duration(now: Instant, open_for: Duration) -> Self {
         now.checked_add(open_for)
             .map_or(Self::Indefinite, Self::Deadline)
     }
-
     fn expired_at(self, now: Instant) -> bool {
         matches!(self, Self::Deadline(deadline) if deadline <= now)
     }
-
     fn is_open_at(self, now: Instant) -> bool {
         match self {
             Self::Deadline(deadline) => deadline > now,
@@ -427,13 +383,11 @@ impl CircuitOpenUntil {
         }
     }
 }
-
 #[derive(Debug, Default)]
 struct CircuitState {
     failures: u32,
     open_until: Option<CircuitOpenUntil>,
 }
-
 impl CircuitState {
     fn refresh(&mut self, now: Instant) -> bool {
         match self.open_until {
@@ -445,12 +399,10 @@ impl CircuitState {
             _ => false,
         }
     }
-
     fn is_open(&self, now: Instant) -> bool {
         self.open_until
             .is_some_and(|deadline| deadline.is_open_at(now))
     }
-
     fn record_failure(&mut self, config: &ReliabilityConfig, now: Instant) -> bool {
         self.failures = self.failures.saturating_add(1);
         if self.failures >= config.failures_to_trip {
@@ -460,27 +412,23 @@ impl CircuitState {
         }
         false
     }
-
     fn record_success(&mut self) -> bool {
         let was_open = self.open_until.take().is_some();
         self.failures = 0;
         was_open
     }
 }
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct ReliabilityStats {
     open_circuits: u64,
     failovers: u64,
 }
-
 #[derive(Debug, Default)]
 struct ShardReliability {
     config: ReliabilityConfig,
     states: HashMap<TaikaiShardId, CircuitState>,
     failovers: u64,
 }
-
 impl ShardReliability {
     fn new(config: ReliabilityConfig) -> Self {
         Self {
@@ -489,7 +437,6 @@ impl ShardReliability {
             failovers: 0,
         }
     }
-
     fn select(&mut self, ring: &TaikaiShardRing, key: &SegmentKey, now: Instant) -> ShardSelection {
         let Some((start_index, preferred)) = ring.locate_with_index(key) else {
             return ShardSelection {
@@ -498,7 +445,6 @@ impl ShardReliability {
                 failover: false,
             };
         };
-
         let ring_len = ring.len();
         let mut selected = None;
         for offset in 0..ring_len {
@@ -514,32 +460,27 @@ impl ShardReliability {
                 break;
             }
         }
-
         ShardSelection {
             preferred: Some(preferred),
             selected,
             failover: selected.is_some_and(|shard| Some(shard) != Some(preferred)),
         }
     }
-
     fn record_failure(&mut self, shard: TaikaiShardId, now: Instant) -> bool {
         let state = self.states.entry(shard).or_default();
         state.refresh(now);
         state.record_failure(&self.config, now)
     }
-
     fn record_success(&mut self, shard: TaikaiShardId, now: Instant) -> bool {
         let state = self.states.entry(shard).or_default();
         state.refresh(now);
         state.record_success()
     }
-
     fn shard_open(&mut self, shard: TaikaiShardId, now: Instant) -> bool {
         let state = self.states.entry(shard).or_default();
         let _ = state.refresh(now);
         state.is_open(now)
     }
-
     fn stats(&mut self, now: Instant) -> ReliabilityStats {
         let mut open_circuits = 0;
         for (shard, state) in self.states.iter_mut() {
@@ -556,7 +497,6 @@ impl ShardReliability {
         }
     }
 }
-
 #[derive(Debug)]
 struct CacheEntry {
     segment: Arc<CachedSegment>,
@@ -564,7 +504,6 @@ struct CacheEntry {
     inserted_at: Instant,
     last_accessed: Instant,
 }
-
 impl CacheEntry {
     fn new(segment: Arc<CachedSegment>, now: Instant) -> Self {
         let size_bytes = segment.size_bytes();
@@ -576,7 +515,6 @@ impl CacheEntry {
         }
     }
 }
-
 #[derive(Debug)]
 struct CacheTier {
     _kind: CacheTierKind,
@@ -586,7 +524,6 @@ struct CacheTier {
     order: VecDeque<SegmentKey>,
     used_bytes: u64,
 }
-
 impl CacheTier {
     fn new(kind: CacheTierKind, capacity_bytes: u64, retention: Duration) -> Self {
         Self {
@@ -598,13 +535,11 @@ impl CacheTier {
             used_bytes: 0,
         }
     }
-
     fn projected_used_bytes(capacity_bytes: u64, used_bytes: u64, size_bytes: u64) -> Option<u64> {
         used_bytes
             .checked_add(size_bytes)
             .filter(|total| *total <= capacity_bytes)
     }
-
     fn retention(&self) -> Option<Duration> {
         if self.retention.is_zero() {
             None
@@ -612,7 +547,6 @@ impl CacheTier {
             Some(self.retention)
         }
     }
-
     fn insert(&mut self, segment: Arc<CachedSegment>, now: Instant) -> CacheTierInsertResult {
         let expired = self.collect_expired(now);
         if self.capacity_bytes == 0 {
@@ -622,11 +556,9 @@ impl CacheTier {
                 expired,
             };
         }
-
         let key = segment.key();
         let size_bytes = segment.size_bytes();
         let mut demoted = Vec::new();
-
         if let Some(entry) = self.entries.get_mut(&key) {
             let used_without_entry = self.used_bytes.saturating_sub(entry.size_bytes);
             let Some(new_used_bytes) =
@@ -651,7 +583,6 @@ impl CacheTier {
                 expired,
             };
         }
-
         if size_bytes > self.capacity_bytes {
             return CacheTierInsertResult {
                 inserted: false,
@@ -659,7 +590,6 @@ impl CacheTier {
                 expired,
             };
         }
-
         while Self::projected_used_bytes(self.capacity_bytes, self.used_bytes, size_bytes).is_none()
         {
             if let Some((victim_key, victim_segment)) = self.evict_lru() {
@@ -668,7 +598,6 @@ impl CacheTier {
                 break;
             }
         }
-
         let Some(new_used_bytes) =
             Self::projected_used_bytes(self.capacity_bytes, self.used_bytes, size_bytes)
         else {
@@ -678,7 +607,6 @@ impl CacheTier {
                 expired,
             };
         };
-
         self.order.push_back(key.clone());
         self.used_bytes = new_used_bytes;
         self.entries.insert(key, CacheEntry::new(segment, now));
@@ -688,7 +616,6 @@ impl CacheTier {
             expired,
         }
     }
-
     fn get(&mut self, key: &SegmentKey, now: Instant) -> Option<Arc<CachedSegment>> {
         self.collect_expired(now);
         if let Some(entry) = self.entries.get_mut(key) {
@@ -701,7 +628,6 @@ impl CacheTier {
             None
         }
     }
-
     fn collect_expired(&mut self, now: Instant) -> Vec<SegmentKey> {
         let Some(retention) = self.retention() else {
             return Vec::new();
@@ -726,7 +652,6 @@ impl CacheTier {
         }
         expired
     }
-
     fn touch(&mut self, key: &SegmentKey) {
         if let Some(pos) = self.order.iter().position(|candidate| candidate == key)
             && pos + 1 != self.order.len()
@@ -735,7 +660,6 @@ impl CacheTier {
             self.order.push_back(entry);
         }
     }
-
     fn evict_lru(&mut self) -> Option<(SegmentKey, Arc<CachedSegment>)> {
         if let Some(key) = self.order.pop_front()
             && let Some(entry) = self.entries.remove(&key)
@@ -746,13 +670,11 @@ impl CacheTier {
         None
     }
 }
-
 struct CacheTierInsertResult {
     inserted: bool,
     demoted: Vec<(SegmentKey, Arc<CachedSegment>)>,
     expired: Vec<SegmentKey>,
 }
-
 /// Eviction metadata.
 #[derive(Debug, Clone)]
 pub struct CacheEviction {
@@ -760,13 +682,11 @@ pub struct CacheEviction {
     pub key: SegmentKey,
     pub reason: CacheEvictionReason,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheEvictionReason {
     Expired,
     Capacity,
 }
-
 impl CacheEvictionReason {
     #[must_use]
     pub fn label(self) -> &'static str {
@@ -776,7 +696,6 @@ impl CacheEvictionReason {
         }
     }
 }
-
 /// Promotion metadata captured during cache hits.
 #[derive(Debug, Clone)]
 pub struct CachePromotion {
@@ -784,14 +703,12 @@ pub struct CachePromotion {
     pub to: CacheTierKind,
     pub key: SegmentKey,
 }
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TierStats {
     pub hot: u64,
     pub warm: u64,
     pub cold: u64,
 }
-
 impl TierStats {
     pub(crate) fn increment(&mut self, tier: CacheTierKind) {
         match tier {
@@ -801,13 +718,11 @@ impl TierStats {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ReasonStats {
     pub expired: u64,
     pub capacity: u64,
 }
-
 impl ReasonStats {
     pub(crate) fn increment(&mut self, reason: CacheEvictionReason) {
         match reason {
@@ -816,14 +731,12 @@ impl ReasonStats {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EvictionStats {
     pub hot: ReasonStats,
     pub warm: ReasonStats,
     pub cold: ReasonStats,
 }
-
 impl EvictionStats {
     pub(crate) fn increment(&mut self, tier: CacheTierKind, reason: CacheEvictionReason) {
         match tier {
@@ -833,14 +746,12 @@ impl EvictionStats {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PromotionStats {
     pub warm_to_hot: u64,
     pub cold_to_warm: u64,
     pub cold_to_hot: u64,
 }
-
 impl PromotionStats {
     pub(crate) fn increment(&mut self, from: CacheTierKind, to: CacheTierKind) {
         match (from, to) {
@@ -851,14 +762,12 @@ impl PromotionStats {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct QosStats {
     pub priority: u64,
     pub standard: u64,
     pub bulk: u64,
 }
-
 impl QosStats {
     pub(crate) fn increment(&mut self, class: QosClass) {
         match class {
@@ -868,7 +777,6 @@ impl QosStats {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TaikaiCacheStatsSnapshot {
     pub hits: TierStats,
@@ -878,45 +786,36 @@ pub struct TaikaiCacheStatsSnapshot {
     pub promotions: PromotionStats,
     pub qos_denials: QosStats,
 }
-
 impl TaikaiCacheStatsSnapshot {
     pub(crate) fn record_hit(&mut self, tier: CacheTierKind) {
         self.hits.increment(tier);
     }
-
     pub(crate) fn record_miss(&mut self) {
         self.misses += 1;
     }
-
     pub(crate) fn record_insert(&mut self, tier: CacheTierKind) {
         self.inserts.increment(tier);
     }
-
     pub(crate) fn record_eviction(&mut self, tier: CacheTierKind, reason: CacheEvictionReason) {
         self.evictions.increment(tier, reason);
     }
-
     pub(crate) fn record_promotion(&mut self, from: CacheTierKind, to: CacheTierKind) {
         self.promotions.increment(from, to);
     }
-
     pub(crate) fn record_qos_denial(&mut self, class: QosClass) {
         self.qos_denials.increment(class);
     }
 }
-
 /// Insertion outcome summary.
 #[derive(Debug, Default, Clone)]
 pub struct TaikaiCacheInsertOutcome {
     pub inserted_into: Vec<CacheTierKind>,
     pub evicted: Vec<CacheEviction>,
 }
-
 impl TaikaiCacheInsertOutcome {
     fn record_insert(&mut self, tier: CacheTierKind) {
         self.inserted_into.push(tier);
     }
-
     fn record_capacity_evictions(
         &mut self,
         tier: CacheTierKind,
@@ -931,7 +830,6 @@ impl TaikaiCacheInsertOutcome {
         }
         entries
     }
-
     fn record_expirations(&mut self, tier: CacheTierKind, keys: Vec<SegmentKey>) {
         for key in keys {
             self.evicted.push(CacheEviction {
@@ -942,7 +840,6 @@ impl TaikaiCacheInsertOutcome {
         }
     }
 }
-
 /// Result returned by [`TaikaiCache::get`].
 #[derive(Debug, Clone, Default)]
 pub struct TaikaiCacheQueryOutcome {
@@ -950,7 +847,6 @@ pub struct TaikaiCacheQueryOutcome {
     pub hit_tier: Option<CacheTierKind>,
     pub promotions: Vec<CachePromotion>,
 }
-
 /// Hierarchical Taikai cache.
 #[derive(Debug)]
 pub struct TaikaiCache {
@@ -960,7 +856,6 @@ pub struct TaikaiCache {
     qos: QosEnforcer,
     stats: TaikaiCacheStatsSnapshot,
 }
-
 impl TaikaiCache {
     #[must_use]
     pub fn new(config: TaikaiCacheConfig) -> Self {
@@ -985,7 +880,6 @@ impl TaikaiCache {
             stats: TaikaiCacheStatsSnapshot::default(),
         }
     }
-
     pub fn try_acquire_qos(
         &mut self,
         class: QosClass,
@@ -1001,19 +895,16 @@ impl TaikaiCache {
             }
         }
     }
-
     pub fn insert(&mut self, segment: CachedSegment, now: Instant) -> TaikaiCacheInsertOutcome {
         let shared = Arc::new(segment);
         self.insert_shared(shared, now)
     }
-
     fn insert_shared(
         &mut self,
         segment: Arc<CachedSegment>,
         now: Instant,
     ) -> TaikaiCacheInsertOutcome {
         let mut outcome = TaikaiCacheInsertOutcome::default();
-
         let CacheTierInsertResult {
             inserted,
             demoted,
@@ -1025,7 +916,6 @@ impl TaikaiCache {
             outcome.record_insert(CacheTierKind::Hot);
             self.stats.record_insert(CacheTierKind::Hot);
         }
-
         while let Some((key, demoted_segment)) = to_demote.pop() {
             let CacheTierInsertResult {
                 inserted: warm_inserted,
@@ -1056,17 +946,14 @@ impl TaikaiCache {
                 }
             }
         }
-
         record_taikai_cache_insert_metrics(&segment, &outcome);
         for eviction in &outcome.evicted {
             self.stats.record_eviction(eviction.from, eviction.reason);
         }
         outcome
     }
-
     pub fn get(&mut self, key: &SegmentKey, now: Instant) -> TaikaiCacheQueryOutcome {
         let mut outcome = TaikaiCacheQueryOutcome::default();
-
         if let Some(segment) = self.hot.get(key, now) {
             outcome.hit_tier = Some(CacheTierKind::Hot);
             outcome.segment = Some(segment);
@@ -1102,14 +989,12 @@ impl TaikaiCache {
         } else {
             self.stats.record_miss();
         }
-
         record_taikai_cache_query_metrics(&outcome);
         for promotion in &outcome.promotions {
             self.stats.record_promotion(promotion.from, promotion.to);
         }
         outcome
     }
-
     pub fn purge_expired(&mut self, now: Instant) -> Vec<CacheEviction> {
         let mut evicted = Vec::new();
         for (tier, cache) in [
@@ -1131,32 +1016,27 @@ impl TaikaiCache {
         record_taikai_cache_evictions(&evicted);
         evicted
     }
-
     #[must_use]
     pub fn stats(&self) -> TaikaiCacheStatsSnapshot {
         self.stats
     }
 }
-
 /// Cache shard identifier.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
 )]
 pub struct TaikaiShardId(pub u16);
-
 /// Consistent hash ring.
 #[derive(Debug, Clone)]
 pub struct TaikaiShardRing {
     replicas: NonZeroUsize,
     ring: Vec<(u64, TaikaiShardId)>,
 }
-
 impl TaikaiShardRing {
     #[must_use]
     pub fn new(shards: Vec<TaikaiShardId>) -> Self {
         Self::with_replicas(shards, NonZeroUsize::new(128).unwrap())
     }
-
     #[must_use]
     pub fn with_replicas(shards: Vec<TaikaiShardId>, replicas: NonZeroUsize) -> Self {
         let mut ring = Vec::with_capacity(shards.len() * replicas.get());
@@ -1171,12 +1051,10 @@ impl TaikaiShardRing {
         ring.sort_by_key(|entry| entry.0);
         Self { replicas, ring }
     }
-
     #[must_use]
     pub fn locate(&self, key: &SegmentKey) -> Option<TaikaiShardId> {
         self.locate_with_index(key).map(|(_, shard)| shard)
     }
-
     #[must_use]
     pub fn locate_with_index(&self, key: &SegmentKey) -> Option<(usize, TaikaiShardId)> {
         if self.ring.is_empty() {
@@ -1197,39 +1075,32 @@ impl TaikaiShardRing {
         };
         Some((index, self.ring[index].1))
     }
-
     #[must_use]
     pub fn shard_at(&self, index: usize) -> Option<TaikaiShardId> {
         self.ring.get(index).map(|entry| entry.1)
     }
-
     #[must_use]
     pub fn replicas(&self) -> NonZeroUsize {
         self.replicas
     }
-
     #[must_use]
     pub fn len(&self) -> usize {
         self.ring.len()
     }
-
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.ring.is_empty()
     }
 }
-
 /// Identifier assigned to a pull batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TaikaiPullBatchId(u64);
-
 impl TaikaiPullBatchId {
     fn next(prev: &mut u64) -> Self {
         *prev = prev.wrapping_add(1).max(1);
         Self(*prev)
     }
 }
-
 /// Pull request tracked by the Taikai cache queue.
 #[derive(Debug, Clone)]
 pub struct TaikaiPullRequest {
@@ -1238,7 +1109,6 @@ pub struct TaikaiPullRequest {
     pub size_bytes: u64,
     pub payload_digest: Option<[u8; 32]>,
 }
-
 impl TaikaiPullRequest {
     #[must_use]
     pub fn new(
@@ -1255,7 +1125,6 @@ impl TaikaiPullRequest {
         }
     }
 }
-
 /// Batched pull issued to cache peers or exits.
 #[derive(Debug, Clone)]
 pub struct TaikaiPullBatch {
@@ -1266,7 +1135,6 @@ pub struct TaikaiPullBatch {
     pub segments: Vec<TaikaiPullRequest>,
     pub hedged: bool,
 }
-
 impl TaikaiPullBatch {
     fn new(
         id: TaikaiPullBatchId,
@@ -1286,26 +1154,22 @@ impl TaikaiPullBatch {
         }
     }
 }
-
 /// Ticket returned to callers so they can mark pull completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TaikaiPullTicket {
     id: TaikaiPullBatchId,
 }
-
 impl From<TaikaiPullBatchId> for TaikaiPullTicket {
     fn from(id: TaikaiPullBatchId) -> Self {
         Self { id }
     }
 }
-
 impl TaikaiPullTicket {
     #[must_use]
     pub fn id(self) -> TaikaiPullBatchId {
         self.id
     }
 }
-
 /// Queue statistics surfaced to operators and tests.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TaikaiPullQueueStats {
@@ -1319,7 +1183,6 @@ pub struct TaikaiPullQueueStats {
     pub failovers: u64,
     pub open_circuits: u64,
 }
-
 /// Configuration tuning batching/back-pressure behaviour of the queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TaikaiPullQueueConfig {
@@ -1329,7 +1192,6 @@ pub struct TaikaiPullQueueConfig {
     pub hedge_after: Duration,
     pub max_backlog_segments: usize,
 }
-
 impl TaikaiPullQueueConfig {
     #[must_use]
     pub fn tuned_for_cache(cache: &TaikaiCacheConfig) -> Self {
@@ -1343,7 +1205,6 @@ impl TaikaiPullQueueConfig {
         }
     }
 }
-
 impl Default for TaikaiPullQueueConfig {
     fn default() -> Self {
         Self {
@@ -1355,26 +1216,22 @@ impl Default for TaikaiPullQueueConfig {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 struct PendingPull {
     shard: Option<TaikaiShardId>,
     request: TaikaiPullRequest,
 }
-
 #[derive(Debug, Clone, Copy)]
 struct ShardSelection {
     preferred: Option<TaikaiShardId>,
     selected: Option<TaikaiShardId>,
     failover: bool,
 }
-
 #[derive(Debug)]
 struct InFlightBatch {
     batch: TaikaiPullBatch,
     issued_at: Instant,
 }
-
 /// Error raised when the queue cannot accept more work.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum TaikaiQueueError {
@@ -1383,7 +1240,6 @@ pub enum TaikaiQueueError {
     #[error("taikai pull queue is unavailable")]
     Unavailable,
 }
-
 /// Pull queue that coalesces cache requests before dispatch.
 pub struct TaikaiPullQueue {
     config: TaikaiPullQueueConfig,
@@ -1395,7 +1251,6 @@ pub struct TaikaiPullQueue {
     next_batch_id: u64,
     stats: TaikaiPullQueueStats,
 }
-
 impl TaikaiPullQueue {
     #[must_use]
     pub(crate) fn new(
@@ -1416,26 +1271,21 @@ impl TaikaiPullQueue {
             stats: TaikaiPullQueueStats::default(),
         }
     }
-
     pub fn set_shard_ring(&mut self, ring: TaikaiShardRing) {
         self.shard_ring = ring;
     }
-
     fn record_shaper_denial(&mut self, class: QosClass) {
         record_taikai_qos_denial(class);
         self.stats.shaper_denials.increment(class);
     }
-
     fn requeue_front(&mut self, drained: Vec<PendingPull>) {
         for pending in drained.into_iter().rev() {
             self.pending.push_front(pending);
         }
     }
-
     pub fn enqueue(&mut self, request: TaikaiPullRequest) -> Result<(), TaikaiQueueError> {
         self.enqueue_at(request, Instant::now())
     }
-
     pub fn enqueue_at(
         &mut self,
         request: TaikaiPullRequest,
@@ -1458,7 +1308,6 @@ impl TaikaiPullQueue {
         self.pending.push_back(PendingPull { shard, request });
         Ok(())
     }
-
     pub fn issue_ready_batch(&mut self, now: Instant) -> Option<TaikaiPullBatch> {
         if self.pending.is_empty() || self.in_flight.len() >= self.config.max_in_flight_batches {
             return None;
@@ -1491,11 +1340,9 @@ impl TaikaiPullQueue {
             segments.push(pending.request.clone());
             drained.push(pending);
         }
-
         if segments.is_empty() {
             return None;
         }
-
         if let Err(QosError::RateLimited { class, .. }) =
             self.shaper.try_acquire(qos, total_bytes, now)
         {
@@ -1503,7 +1350,6 @@ impl TaikaiPullQueue {
             self.requeue_front(drained);
             return None;
         }
-
         self.stats.pending_segments = self
             .stats
             .pending_segments
@@ -1522,7 +1368,6 @@ impl TaikaiPullQueue {
         record_taikai_queue_event("issued", Some(batch.qos));
         Some(batch)
     }
-
     pub fn issue_specific(&mut self, key: &SegmentKey, now: Instant) -> Option<TaikaiPullBatch> {
         if self.pending.is_empty() || self.in_flight.len() >= self.config.max_in_flight_batches {
             return None;
@@ -1556,7 +1401,6 @@ impl TaikaiPullQueue {
         record_taikai_queue_event("issued", Some(batch.qos));
         Some(batch)
     }
-
     pub fn cancel_pending(&mut self, key: &SegmentKey) -> bool {
         if self.pending.is_empty() {
             return false;
@@ -1578,7 +1422,6 @@ impl TaikaiPullQueue {
         }
         false
     }
-
     pub fn hedge_overdue_batches(&mut self, now: Instant) -> Vec<TaikaiPullBatch> {
         let mut hedged = Vec::new();
         let mut denied = Vec::new();
@@ -1607,11 +1450,9 @@ impl TaikaiPullQueue {
         }
         hedged
     }
-
     pub fn complete(&mut self, ticket: TaikaiPullTicket) -> bool {
         self.complete_at(ticket, Instant::now())
     }
-
     pub fn complete_at(&mut self, ticket: TaikaiPullTicket, now: Instant) -> bool {
         if let Some(state) = self.in_flight.remove(&ticket.id) {
             self.stats.in_flight_batches = self.stats.in_flight_batches.saturating_sub(1);
@@ -1624,7 +1465,6 @@ impl TaikaiPullQueue {
         }
         false
     }
-
     pub fn fail_at(&mut self, ticket: TaikaiPullTicket, now: Instant) -> bool {
         if let Some(state) = self.in_flight.remove(&ticket.id) {
             self.stats.in_flight_batches = self.stats.in_flight_batches.saturating_sub(1);
@@ -1637,7 +1477,6 @@ impl TaikaiPullQueue {
         }
         false
     }
-
     #[must_use]
     pub fn stats(&mut self) -> TaikaiPullQueueStats {
         let pending_batches = if self.pending.is_empty() {
@@ -1667,7 +1506,6 @@ impl TaikaiPullQueue {
         snapshot
     }
 }
-
 fn merge_qos(existing: QosClass, next: QosClass) -> QosClass {
     match (existing, next) {
         (QosClass::Priority, _) | (_, QosClass::Priority) => QosClass::Priority,
@@ -1675,7 +1513,6 @@ fn merge_qos(existing: QosClass, next: QosClass) -> QosClass {
         _ => QosClass::Bulk,
     }
 }
-
 /// Shared Taikai cache handle exposing both cache and queue to orchestrator users.
 #[derive(Clone)]
 pub struct TaikaiCacheHandle {
@@ -1683,14 +1520,12 @@ pub struct TaikaiCacheHandle {
     queue: Arc<Mutex<TaikaiPullQueue>>,
     queue_config: TaikaiPullQueueConfig,
 }
-
 impl TaikaiCacheHandle {
     #[must_use]
     pub fn from_config(config: TaikaiCacheConfig) -> Self {
         let queue_config = TaikaiPullQueueConfig::tuned_for_cache(&config);
         Self::with_queue_config(config, queue_config)
     }
-
     #[must_use]
     pub fn with_queue_config(
         config: TaikaiCacheConfig,
@@ -1709,21 +1544,17 @@ impl TaikaiCacheHandle {
             queue_config,
         }
     }
-
     #[must_use]
     pub fn cache(&self) -> Arc<Mutex<TaikaiCache>> {
         Arc::clone(&self.cache)
     }
-
     #[must_use]
     pub fn queue(&self) -> Arc<Mutex<TaikaiPullQueue>> {
         Arc::clone(&self.queue)
     }
-
     fn lock_queue(&self) -> Result<MutexGuard<'_, TaikaiPullQueue>, TaikaiQueueError> {
         self.queue.lock().map_err(|_| TaikaiQueueError::Unavailable)
     }
-
     #[must_use]
     pub fn queue_stats(&self) -> TaikaiPullQueueStats {
         self.queue
@@ -1731,25 +1562,21 @@ impl TaikaiCacheHandle {
             .map(|mut queue| queue.stats())
             .unwrap_or_default()
     }
-
     #[must_use]
     pub fn pull_queue_config(&self) -> TaikaiPullQueueConfig {
         self.queue_config
     }
-
     pub fn configure_shards(&self, shards: Vec<TaikaiShardId>) {
         if let Ok(mut queue) = self.queue.lock() {
             queue.set_shard_ring(TaikaiShardRing::new(shards));
         }
     }
-
     /// Enqueue a pull request, returning a back-pressure signal when the queue
     /// reaches its configured backlog.
     pub fn enqueue_pull(&self, request: TaikaiPullRequest) -> Result<(), TaikaiQueueError> {
         let mut queue = self.lock_queue()?;
         queue.enqueue(request)
     }
-
     /// Issue a batch that contains the specific segment key if capacity allows.
     pub fn issue_specific_at(
         &self,
@@ -1759,7 +1586,6 @@ impl TaikaiCacheHandle {
         let mut queue = self.lock_queue()?;
         Ok(queue.issue_specific(key, now))
     }
-
     /// Remove a pending pull request from the queue without issuing it.
     #[must_use]
     pub fn cancel_pending(&self, key: &SegmentKey) -> bool {
@@ -1768,7 +1594,6 @@ impl TaikaiCacheHandle {
             .map(|mut queue| queue.cancel_pending(key))
             .unwrap_or(false)
     }
-
     /// Issue the next ready pull batch using the provided timestamp.
     pub fn issue_ready_batch_at(
         &self,
@@ -1777,12 +1602,10 @@ impl TaikaiCacheHandle {
         let mut queue = self.lock_queue()?;
         Ok(queue.issue_ready_batch(now))
     }
-
     /// Convenience helper that issues a batch using `Instant::now()`.
     pub fn issue_ready_batch(&self) -> Result<Option<TaikaiPullBatch>, TaikaiQueueError> {
         self.issue_ready_batch_at(Instant::now())
     }
-
     /// Re-issues overdue batches (hedging) using the supplied timestamp.
     pub fn hedge_overdue_batches_at(
         &self,
@@ -1791,25 +1614,21 @@ impl TaikaiCacheHandle {
         let mut queue = self.lock_queue()?;
         Ok(queue.hedge_overdue_batches(now))
     }
-
     /// Convenience helper that hedges overdue batches using `Instant::now()`.
     pub fn hedge_overdue_batches(&self) -> Result<Vec<TaikaiPullBatch>, TaikaiQueueError> {
         self.hedge_overdue_batches_at(Instant::now())
     }
-
     /// Marks a previously issued batch as complete, freeing an in-flight slot.
     pub fn complete_batch(&self, ticket: TaikaiPullTicket) -> Result<bool, TaikaiQueueError> {
         let mut queue = self.lock_queue()?;
         Ok(queue.complete_at(ticket, Instant::now()))
     }
-
     /// Marks a previously issued batch as failed, updating reliability gates.
     pub fn fail_batch(&self, ticket: TaikaiPullTicket) -> Result<bool, TaikaiQueueError> {
         let mut queue = self.lock_queue()?;
         Ok(queue.fail_at(ticket, Instant::now()))
     }
 }
-
 fn record_taikai_cache_insert_metrics(
     segment: &Arc<CachedSegment>,
     outcome: &TaikaiCacheInsertOutcome,
@@ -1826,7 +1645,6 @@ fn record_taikai_cache_insert_metrics(
         metrics.record_taikai_cache_eviction(eviction.from.label(), eviction.reason.label());
     }
 }
-
 fn record_taikai_cache_query_metrics(outcome: &TaikaiCacheQueryOutcome) {
     let metrics = global_or_default();
     match (&outcome.segment, outcome.hit_tier) {
@@ -1841,7 +1659,6 @@ fn record_taikai_cache_query_metrics(outcome: &TaikaiCacheQueryOutcome) {
         metrics.record_taikai_cache_promotion(promotion.from.label(), promotion.to.label());
     }
 }
-
 fn record_taikai_cache_evictions(evicted: &[CacheEviction]) {
     if evicted.is_empty() {
         return;
@@ -1851,28 +1668,23 @@ fn record_taikai_cache_evictions(evicted: &[CacheEviction]) {
         metrics.record_taikai_cache_eviction(entry.from.label(), entry.reason.label());
     }
 }
-
 fn record_taikai_qos_denial(class: QosClass) {
     let metrics = global_or_default();
     metrics.inc_taikai_qos_denied(class.label());
 }
-
 fn record_taikai_queue_event(event: &str, class: Option<QosClass>) {
     let metrics = global_or_default();
     let class_label = class.map(QosClass::label).unwrap_or("none");
     metrics.inc_taikai_queue_event(event, class_label);
 }
-
 fn record_taikai_queue_depth(state: &str, value: u64) {
     let metrics = global_or_default();
     let clamped = i64::try_from(value).unwrap_or(i64::MAX);
     metrics.set_taikai_queue_depth(state, clamped);
 }
-
 fn shard_label(shard: TaikaiShardId) -> String {
     shard.0.to_string()
 }
-
 fn record_taikai_shard_failover(preferred: Option<TaikaiShardId>, selected: Option<TaikaiShardId>) {
     let metrics = global_or_default();
     let preferred = preferred
@@ -1883,12 +1695,10 @@ fn record_taikai_shard_failover(preferred: Option<TaikaiShardId>, selected: Opti
         .unwrap_or_else(|| "none".to_owned());
     metrics.inc_taikai_shard_failover(&preferred, &selected);
 }
-
 fn set_taikai_shard_open(shard: TaikaiShardId, open: bool) {
     let metrics = global_or_default();
     metrics.set_taikai_shard_circuit_open(&shard_label(shard), open);
 }
-
 /// Cache admission action recorded in gossip announcements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum CacheAdmissionAction {
@@ -1897,10 +1707,8 @@ pub enum CacheAdmissionAction {
     /// Cache evicted the referenced segment.
     Evict,
 }
-
 /// Version used by cache admission records.
 pub const CACHE_ADMISSION_VERSION_V1: u16 = 1;
-
 /// Signed cache admission record shared across the gossip plane.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct CacheAdmissionRecord {
@@ -1916,7 +1724,6 @@ pub struct CacheAdmissionRecord {
     pub issued_unix_ms: u64,
     pub expires_unix_ms: u64,
 }
-
 impl CacheAdmissionRecord {
     /// Build a cache admission record from a cached segment.
     ///
@@ -1958,27 +1765,22 @@ impl CacheAdmissionRecord {
             expires_unix_ms,
         })
     }
-
     #[must_use]
     pub fn expires_unix_ms(&self) -> u64 {
         self.expires_unix_ms
     }
-
     #[must_use]
     pub fn issued_unix_ms(&self) -> u64 {
         self.issued_unix_ms
     }
-
     #[must_use]
     pub fn segment(&self) -> &SegmentKey {
         &self.segment
     }
-
     fn canonical_bytes(&self) -> Result<Vec<u8>, CacheAdmissionError> {
         to_bytes(self).map_err(CacheAdmissionError::Serialization)
     }
 }
-
 /// Signed cache admission envelope.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct CacheAdmissionEnvelope {
@@ -1986,7 +1788,6 @@ pub struct CacheAdmissionEnvelope {
     signer: PublicKey,
     signature: Signature,
 }
-
 impl CacheAdmissionEnvelope {
     /// Sign a cache admission record with the provided key pair.
     ///
@@ -2006,7 +1807,6 @@ impl CacheAdmissionEnvelope {
             signature,
         })
     }
-
     /// Verify the signature and expiry of the envelope.
     ///
     /// # Errors
@@ -2023,17 +1823,14 @@ impl CacheAdmissionEnvelope {
         verify_signature_for_signer(&self.signature, self.signer(), &canonical)
             .map_err(|_| CacheAdmissionError::InvalidSignature)
     }
-
     #[must_use]
     pub fn body(&self) -> &CacheAdmissionRecord {
         &self.body
     }
-
     #[must_use]
     pub fn into_parts(self) -> (CacheAdmissionRecord, PublicKey, Signature) {
         (self.body, self.signer, self.signature)
     }
-
     #[must_use]
     pub fn from_parts(body: CacheAdmissionRecord, signer: PublicKey, signature: Signature) -> Self {
         Self {
@@ -2042,21 +1839,17 @@ impl CacheAdmissionEnvelope {
             signature,
         }
     }
-
     #[must_use]
     pub fn signer(&self) -> &PublicKey {
         &self.signer
     }
-
     #[must_use]
     pub fn signature(&self) -> &Signature {
         &self.signature
     }
 }
-
 /// Version used by cache admission gossip envelopes.
 pub const CACHE_ADMISSION_GOSSIP_VERSION_V1: u16 = 1;
-
 /// Signed cache admission gossip payload shared across CAA peers.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct CacheAdmissionGossipBody {
@@ -2066,7 +1859,6 @@ pub struct CacheAdmissionGossipBody {
     pub issued_unix_ms: u64,
     pub expires_unix_ms: u64,
 }
-
 impl CacheAdmissionGossipBody {
     /// Create a gossip body using the provided TTL and a random nonce.
     ///
@@ -2081,7 +1873,6 @@ impl CacheAdmissionGossipBody {
         let mut rng = OsRng;
         Self::with_nonce(envelope, issued_unix_ms, ttl, &mut rng)
     }
-
     /// Create a gossip body using an explicit nonce generator (deterministic in tests).
     ///
     /// # Errors
@@ -2116,27 +1907,22 @@ impl CacheAdmissionGossipBody {
             expires_unix_ms,
         })
     }
-
     fn canonical_bytes(&self) -> Result<Vec<u8>, CacheAdmissionError> {
         to_bytes(self).map_err(CacheAdmissionError::Serialization)
     }
-
     #[must_use]
     pub fn expires_unix_ms(&self) -> u64 {
         self.expires_unix_ms
     }
-
     #[must_use]
     pub fn issued_unix_ms(&self) -> u64 {
         self.issued_unix_ms
     }
-
     #[must_use]
     pub fn envelope(&self) -> &CacheAdmissionEnvelope {
         &self.envelope
     }
 }
-
 /// Gossip envelope carrying a signed admission/eviction announcement.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct CacheAdmissionGossip {
@@ -2144,7 +1930,6 @@ pub struct CacheAdmissionGossip {
     signer: PublicKey,
     signature: Signature,
 }
-
 impl CacheAdmissionGossip {
     /// Sign a gossip body with the provided governance key pair.
     ///
@@ -2164,7 +1949,6 @@ impl CacheAdmissionGossip {
             signature,
         })
     }
-
     /// Verify the gossip signature, expiry, and embedded admission envelope.
     ///
     /// # Errors
@@ -2182,7 +1966,6 @@ impl CacheAdmissionGossip {
         verify_signature_for_signer(&self.signature, self.signer(), &canonical)
             .map_err(|_| CacheAdmissionError::InvalidSignature)
     }
-
     /// Compute a deterministic digest for replay tracking.
     ///
     /// # Errors
@@ -2192,27 +1975,22 @@ impl CacheAdmissionGossip {
         let canonical = self.body.canonical_bytes()?;
         Ok(blake3_hash(&canonical).into())
     }
-
     #[must_use]
     pub fn body(&self) -> &CacheAdmissionGossipBody {
         &self.body
     }
-
     #[must_use]
     pub fn signer(&self) -> &PublicKey {
         &self.signer
     }
-
     #[must_use]
     pub fn signature(&self) -> &Signature {
         &self.signature
     }
-
     #[must_use]
     pub fn into_parts(self) -> (CacheAdmissionGossipBody, PublicKey, Signature) {
         (self.body, self.signer, self.signature)
     }
-
     #[must_use]
     pub fn from_parts(
         body: CacheAdmissionGossipBody,
@@ -2226,7 +2004,6 @@ impl CacheAdmissionGossip {
         }
     }
 }
-
 /// Deterministic replay filter for cache admission gossip entries.
 #[derive(Debug)]
 pub struct CacheAdmissionReplayFilter {
@@ -2235,7 +2012,6 @@ pub struct CacheAdmissionReplayFilter {
     window: VecDeque<(u64, [u8; 32])>,
     index: HashMap<[u8; 32], u64>,
 }
-
 impl CacheAdmissionReplayFilter {
     /// Create a replay filter with the provided TTL and capacity.
     ///
@@ -2260,7 +2036,6 @@ impl CacheAdmissionReplayFilter {
             index: HashMap::with_capacity(capacity),
         })
     }
-
     /// Observe a gossip entry, returning `true` when it is accepted and `false` on replay.
     ///
     /// # Errors
@@ -2290,7 +2065,6 @@ impl CacheAdmissionReplayFilter {
         }
         Ok(true)
     }
-
     fn evict_expired(&mut self, now_unix_ms: u64) {
         while let Some((expires, digest)) = self.window.front().copied() {
             if expires > now_unix_ms {
@@ -2301,7 +2075,6 @@ impl CacheAdmissionReplayFilter {
         }
     }
 }
-
 /// Errors produced by cache admission gossip helpers.
 #[derive(Debug, Error)]
 pub enum CacheAdmissionError {
@@ -2329,19 +2102,16 @@ pub enum CacheAdmissionError {
         expires_unix_ms: u64,
     },
 }
-
 /// Default replay TTL for cache admission gossip entries.
 pub const CACHE_ADMISSION_REPLAY_DEFAULT_TTL: Duration = Duration::from_secs(30);
 /// Default replay filter capacity for cache admission gossip entries.
 pub const CACHE_ADMISSION_REPLAY_DEFAULT_CAPACITY: usize = 1_024;
-
 /// Tracks cache admission gossip and keeps the pull queue's shard ring in sync.
 pub struct CacheAdmissionTracker {
     handle: TaikaiCacheHandle,
     replay: CacheAdmissionReplayFilter,
     active_shards: HashMap<TaikaiShardId, u64>,
 }
-
 impl CacheAdmissionTracker {
     /// Create a tracker with the provided replay filter.
     #[must_use]
@@ -2352,7 +2122,6 @@ impl CacheAdmissionTracker {
             active_shards: HashMap::new(),
         }
     }
-
     /// Create a tracker using default replay TTL and capacity.
     #[must_use]
     pub fn with_defaults(handle: TaikaiCacheHandle) -> Self {
@@ -2363,7 +2132,6 @@ impl CacheAdmissionTracker {
         .expect("default replay filter parameters are valid");
         Self::new(handle, replay)
     }
-
     /// Ingest a verified gossip entry, updating the shard ring when accepted.
     ///
     /// Returns `Ok(true)` when the gossip is accepted, `Ok(false)` on replay.
@@ -2389,7 +2157,6 @@ impl CacheAdmissionTracker {
         self.refresh_ring();
         Ok(true)
     }
-
     /// Evict expired shard entries and refresh the shard ring when it shrinks.
     #[must_use]
     pub fn evict_expired(&mut self, now_unix_ms: u64) -> bool {
@@ -2402,7 +2169,6 @@ impl CacheAdmissionTracker {
         }
         changed
     }
-
     /// Return the currently active shard identifiers.
     #[must_use]
     pub fn active_shards(&self) -> Vec<TaikaiShardId> {
@@ -2410,16 +2176,13 @@ impl CacheAdmissionTracker {
         shards.sort_unstable();
         shards
     }
-
     fn refresh_ring(&self) {
         self.handle.configure_shards(self.active_shards());
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{fmt, str::FromStr};
-
+    use super::*;
     use iroha_data_model::{
         da::types::{BlobDigest, StorageTicketId},
         name::Name,
@@ -2433,48 +2196,36 @@ mod tests {
         rand_core::{TryCryptoRng, TryRngCore},
         rngs::StdRng,
     };
-
-    use super::*;
-
+    use std::{fmt, str::FromStr};
     struct FailingCacheAdmissionNonceRng;
-
     #[derive(Debug)]
     struct FailingCacheAdmissionNonceRngError;
-
     impl fmt::Display for FailingCacheAdmissionNonceRngError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("failing cache admission nonce RNG")
         }
     }
-
     impl TryRngCore for FailingCacheAdmissionNonceRng {
         type Error = FailingCacheAdmissionNonceRngError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingCacheAdmissionNonceRngError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(FailingCacheAdmissionNonceRngError)
         }
-
         fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
             Err(FailingCacheAdmissionNonceRngError)
         }
     }
-
     impl TryCryptoRng for FailingCacheAdmissionNonceRng {}
-
     fn digest(value: u8) -> BlobDigest {
         let mut bytes = [0u8; 32];
         bytes.fill(value);
         BlobDigest::new(bytes)
     }
-
     fn storage_ticket(value: u8) -> StorageTicketId {
         StorageTicketId::new([value; 32])
     }
-
     fn sample_envelope(sequence: u64) -> TaikaiSegmentEnvelopeV1 {
         let event_id = TaikaiEventId::new(Name::from_str("global-keynote").expect("valid name"));
         let stream_id = TaikaiStreamId::new(Name::from_str("stage-a").expect("valid name"));
@@ -2502,22 +2253,18 @@ mod tests {
             version: TaikaiSegmentEnvelopeV1::VERSION,
         }
     }
-
     fn dummy_segment(sequence: u64, len: usize, qos: QosClass) -> CachedSegment {
         let envelope = sample_envelope(sequence);
         let payload = vec![0u8; len];
         CachedSegment::new(envelope, Arc::<[u8]>::from(payload), qos)
     }
-
     fn cache_admission_fixture_keypair() -> KeyPair {
         cache_admission_fixture_keypair_with_algorithm(Algorithm::Ed25519)
     }
-
     fn cache_admission_fixture_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_from_seed(vec![0xAB; 32], algorithm)
             .expect("derive cache admission fixture key")
     }
-
     fn cache_admission_gossip(
         shard: TaikaiShardId,
         sequence: u64,
@@ -2527,7 +2274,6 @@ mod tests {
         let key_pair = cache_admission_fixture_keypair();
         cache_admission_gossip_with_key_pair(shard, sequence, issued_ms, ttl, &key_pair)
     }
-
     fn cache_admission_gossip_with_key_pair(
         shard: TaikaiShardId,
         sequence: u64,
@@ -2553,18 +2299,15 @@ mod tests {
             CacheAdmissionGossipBody::with_nonce(envelope, issued_ms, ttl, &mut rng).unwrap();
         CacheAdmissionGossip::sign(body, key_pair).expect("gossip")
     }
-
     const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn signature_with_malformed_ed25519_r(
         signature: &Signature,
         replacement_r: &[u8; 32],
@@ -2573,23 +2316,19 @@ mod tests {
         payload[..replacement_r.len()].copy_from_slice(replacement_r);
         Signature::from_bytes(&payload)
     }
-
     #[test]
     fn cache_admission_fixture_keypair_uses_checked_seed_derivation() {
         let key_pair = cache_admission_fixture_keypair();
         let expected = KeyPair::try_from_seed(vec![0xAB; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("derive expected cache admission fixture key");
-
         assert_eq!(key_pair.public_key(), expected.public_key());
         assert_eq!(key_pair.private_key(), expected.private_key());
     }
-
     #[test]
     fn cache_admission_envelope_and_gossip_signatures_verify() {
         let issued_ms = 1_726_000_200_000;
         let ttl = Duration::from_secs(30);
         let gossip = cache_admission_gossip(TaikaiShardId(7), 42, issued_ms, ttl);
-
         gossip
             .body()
             .envelope()
@@ -2597,13 +2336,11 @@ mod tests {
             .expect("admission envelope verifies");
         gossip.verify(issued_ms).expect("admission gossip verifies");
     }
-
     #[test]
     fn cache_admission_record_rejects_zero_ttl() {
         let issuer = GuardDirectoryId::new("soranet/cache");
         let cached = dummy_segment(45, 512, QosClass::Priority);
         let issued_ms = 1_726_000_200_000;
-
         let error = CacheAdmissionRecord::from_segment(
             TaikaiShardId(7),
             issuer,
@@ -2614,10 +2351,8 @@ mod tests {
             Duration::ZERO,
         )
         .expect_err("zero-TTL admission records must be rejected");
-
         assert!(matches!(error, CacheAdmissionError::InvalidTtl));
     }
-
     #[test]
     fn cache_admission_envelope_rejects_exact_expiry_boundary() {
         let issued_ms = 1_726_000_200_000;
@@ -2627,11 +2362,9 @@ mod tests {
             .envelope()
             .clone();
         let expires = envelope.body().expires_unix_ms();
-
         let error = envelope
             .verify(expires)
             .expect_err("admission envelope must fail closed at exact expiry");
-
         assert!(matches!(
             error,
             CacheAdmissionError::Expired {
@@ -2640,18 +2373,15 @@ mod tests {
             } if now_unix_ms == expires && expires_unix_ms == expires
         ));
     }
-
     #[test]
     fn cache_admission_gossip_rejects_exact_expiry_boundary() {
         let issued_ms = 1_726_000_200_000;
         let ttl = Duration::from_secs(30);
         let gossip = cache_admission_gossip(TaikaiShardId(7), 47, issued_ms, ttl);
         let expires = gossip.body().expires_unix_ms();
-
         let error = gossip
             .verify(expires)
             .expect_err("admission gossip must fail closed at exact expiry");
-
         assert!(matches!(
             error,
             CacheAdmissionError::Expired {
@@ -2660,7 +2390,6 @@ mod tests {
             } if now_unix_ms == expires && expires_unix_ms == expires
         ));
     }
-
     #[test]
     fn cache_admission_envelope_rejects_malformed_ed25519_signature_r() {
         let issued_ms = 1_726_000_200_000;
@@ -2679,7 +2408,6 @@ mod tests {
                 signer.clone(),
                 signature_with_malformed_ed25519_r(&signature, &replacement_r),
             );
-
             assert!(
                 matches!(
                     envelope
@@ -2691,7 +2419,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn cache_admission_envelope_rejects_malformed_mldsa_signature_lengths() {
         let issued_ms = 1_726_000_200_000;
@@ -2706,7 +2433,6 @@ mod tests {
             .verify(issued_ms)
             .expect("valid ML-DSA envelope verifies before mutation");
         let (body, signer, signature) = envelope.into_parts();
-
         let mut extended = signature.payload().to_vec();
         extended.push(0);
         for (label, payload) in [
@@ -2721,7 +2447,6 @@ mod tests {
                 signer.clone(),
                 Signature::from_bytes(&payload),
             );
-
             assert!(
                 matches!(
                     envelope.verify(issued_ms).expect_err(
@@ -2733,7 +2458,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn cache_admission_gossip_rejects_malformed_ed25519_signature_r() {
         let issued_ms = 1_726_000_200_000;
@@ -2749,7 +2473,6 @@ mod tests {
                 signer.clone(),
                 signature_with_malformed_ed25519_r(&signature, &replacement_r),
             );
-
             assert!(
                 matches!(
                     gossip
@@ -2761,7 +2484,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn cache_admission_gossip_rejects_malformed_mldsa_signature_lengths() {
         let issued_ms = 1_726_000_200_000;
@@ -2773,7 +2495,6 @@ mod tests {
             .verify(issued_ms)
             .expect("valid ML-DSA gossip verifies before mutation");
         let (body, signer, signature) = gossip.into_parts();
-
         let mut extended = signature.payload().to_vec();
         extended.push(0);
         for (label, payload) in [
@@ -2788,7 +2509,6 @@ mod tests {
                 signer.clone(),
                 Signature::from_bytes(&payload),
             );
-
             assert!(
                 matches!(
                     gossip
@@ -2800,7 +2520,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn cache_admission_gossip_body_reports_nonce_rng_failure() {
         let issuer = GuardDirectoryId::new("soranet/cache");
@@ -2820,16 +2539,13 @@ mod tests {
         .expect("record");
         let envelope = CacheAdmissionEnvelope::sign(record, &key_pair).expect("envelope");
         let mut rng = FailingCacheAdmissionNonceRng;
-
         let error = CacheAdmissionGossipBody::with_nonce(envelope, issued_ms, ttl, &mut rng)
             .expect_err("nonce RNG failure");
-
         let CacheAdmissionError::RandomNonce(message) = error else {
             panic!("expected random nonce failure");
         };
         assert!(message.contains("failing cache admission nonce RNG"));
     }
-
     #[test]
     fn hot_eviction_demotes_to_warm() {
         let mut cache = TaikaiCache::new(TaikaiCacheConfig {
@@ -2842,12 +2558,10 @@ mod tests {
             qos: QosConfig::balanced(),
             reliability: ReliabilityTuning::default(),
         });
-
         let base = Instant::now();
         let seg_a = dummy_segment(1, 256, QosClass::Priority);
         let seg_b = dummy_segment(2, 256, QosClass::Priority);
         let seg_c = dummy_segment(3, 256, QosClass::Priority);
-
         cache.insert(seg_a.clone(), base);
         cache.insert(seg_b.clone(), base + Duration::from_millis(1));
         let outcome = cache.insert(seg_c.clone(), base + Duration::from_millis(2));
@@ -2860,7 +2574,6 @@ mod tests {
                     && ev.key.sequence() == 1
                     && ev.reason == CacheEvictionReason::Capacity)
         );
-
         let key_a = seg_a.key();
         let query = cache.get(&key_a, base + Duration::from_millis(3));
         assert_eq!(query.hit_tier, Some(CacheTierKind::Warm));
@@ -2871,15 +2584,12 @@ mod tests {
                 .any(|promo| promo.from == CacheTierKind::Warm && promo.to == CacheTierKind::Hot)
         );
     }
-
     #[test]
     fn cache_tier_insert_rejects_projected_used_byte_overflow() {
         let now = Instant::now();
         let mut tier = CacheTier::new(CacheTierKind::Hot, u64::MAX, Duration::ZERO);
         tier.used_bytes = u64::MAX - 1;
-
         let result = tier.insert(Arc::new(dummy_segment(9_000, 2, QosClass::Bulk)), now);
-
         assert!(!result.inserted);
         assert!(result.demoted.is_empty());
         assert!(result.expired.is_empty());
@@ -2887,7 +2597,6 @@ mod tests {
         assert!(tier.entries.is_empty());
         assert!(tier.order.is_empty());
     }
-
     #[test]
     fn cache_tier_replacement_rejects_projected_used_byte_overflow() {
         let now = Instant::now();
@@ -2896,19 +2605,16 @@ mod tests {
         let key = original.key();
         assert!(tier.insert(original, now).inserted);
         tier.used_bytes = u64::MAX;
-
         let result = tier.insert(
             Arc::new(dummy_segment(9_001, 2, QosClass::Bulk)),
             now + Duration::from_millis(1),
         );
-
         assert!(!result.inserted);
         assert_eq!(tier.used_bytes, u64::MAX);
         let entry = tier.entries.get(&key).expect("original entry remains");
         assert_eq!(entry.size_bytes, 1);
         assert_eq!(entry.segment.payload().len(), 1);
     }
-
     #[test]
     fn retention_purges_entries() {
         let mut cache = TaikaiCache::new(TaikaiCacheConfig {
@@ -2921,18 +2627,15 @@ mod tests {
             qos: QosConfig::balanced(),
             reliability: ReliabilityTuning::default(),
         });
-
         let base = Instant::now();
         let seg = dummy_segment(42, 128, QosClass::Standard);
         cache.insert(seg.clone(), base);
-
         let evicted = cache.purge_expired(base + Duration::from_secs(2));
         assert_eq!(evicted.len(), 1);
         assert_eq!(evicted[0].from, CacheTierKind::Hot);
         assert_eq!(evicted[0].key.sequence(), 42);
         assert_eq!(evicted[0].reason, CacheEvictionReason::Expired);
     }
-
     #[test]
     fn qos_bucket_enforces_limits() {
         let mut cache = TaikaiCache::new(TaikaiCacheConfig {
@@ -2950,7 +2653,6 @@ mod tests {
             },
             reliability: ReliabilityTuning::default(),
         });
-
         let now = Instant::now();
         cache
             .try_acquire_qos(QosClass::Priority, 512, now)
@@ -2963,32 +2665,27 @@ mod tests {
             .try_acquire_qos(QosClass::Priority, 512, now + Duration::from_secs(1))
             .expect("tokens refilled");
     }
-
     #[test]
     fn qos_bucket_preserves_large_integer_capacity_exactly() {
         let now = Instant::now();
         let capacity = (1_u64 << 53) + 1;
         let mut bucket = TokenBucket::new(capacity, 0, now);
-
         bucket
             .try_consume(1_u64 << 53, now)
             .expect("large exact capacity should be spendable");
         bucket
             .try_consume(1, now)
             .expect("last token must not be lost to floating-point rounding");
-
         let err = bucket
             .try_consume(1, now)
             .expect_err("capacity should now be exhausted exactly");
         assert!(matches!(err, QosError::RateLimited { available: 0, .. }));
     }
-
     #[test]
     fn qos_bucket_accumulates_subsecond_integer_refill_remainders() {
         let now = Instant::now();
         let mut bucket = TokenBucket::new(2, 2, now);
         bucket.try_consume(2, now).expect("initial burst");
-
         let halfway = now + Duration::from_millis(500);
         bucket
             .try_consume(1, halfway)
@@ -2997,12 +2694,10 @@ mod tests {
             .try_consume(1, halfway)
             .expect_err("no second token should be available yet");
         assert!(matches!(err, QosError::RateLimited { available: 0, .. }));
-
         bucket
             .try_consume(1, halfway + Duration::from_millis(500))
             .expect("second half-second refill should preserve the remainder");
     }
-
     #[test]
     fn taikai_cache_records_metrics() {
         let metrics = global_or_default();
@@ -3030,7 +2725,6 @@ mod tests {
             .sorafs_taikai_qos_denied_total
             .with_label_values(&["priority"])
             .get();
-
         let mut cache = TaikaiCache::new(TaikaiCacheConfig {
             hot_capacity_bytes: 512,
             hot_retention: Duration::from_secs(1),
@@ -3046,30 +2740,24 @@ mod tests {
             },
             reliability: ReliabilityTuning::default(),
         });
-
         let base = Instant::now();
         let seg_a = dummy_segment(10, 256, QosClass::Priority);
         let seg_b = dummy_segment(11, 256, QosClass::Priority);
         let seg_c = dummy_segment(12, 256, QosClass::Priority);
-
         cache.insert(seg_a.clone(), base);
         cache.insert(seg_b.clone(), base + Duration::from_millis(1));
         cache.insert(seg_c.clone(), base + Duration::from_millis(2));
-
         // Warm hit + promotion
         let _ = cache.get(&seg_a.key(), base + Duration::from_millis(3));
         // Miss
         let missing = dummy_segment(99, 64, QosClass::Bulk).key();
         let _ = cache.get(&missing, base + Duration::from_millis(4));
-
         // Expire and purge
         let _ = cache.purge_expired(base + Duration::from_secs(3));
-
         // Trigger QoS denial
         let _ = cache
             .try_acquire_qos(QosClass::Priority, 10_000, base)
             .expect_err("rate limit enforced");
-
         assert!(
             metrics
                 .sorafs_taikai_cache_query_total
@@ -3113,7 +2801,6 @@ mod tests {
                 > qos_before
         );
     }
-
     #[test]
     fn taikai_cache_stats_capture_activity() {
         let mut cache = TaikaiCache::new(TaikaiCacheConfig {
@@ -3136,7 +2823,6 @@ mod tests {
         let seg_b = dummy_segment(2, 128, QosClass::Priority);
         cache.insert(seg_a.clone(), now);
         cache.insert(seg_b.clone(), now);
-
         cache.get(&seg_a.key(), now);
         let missing = dummy_segment(42, 64, QosClass::Standard).key();
         cache.get(&missing, now);
@@ -3145,30 +2831,25 @@ mod tests {
                 .try_acquire_qos(QosClass::Priority, 1_024, now)
                 .is_err()
         );
-
         let stats = cache.stats();
         assert_eq!(stats.inserts.hot, 2);
         assert_eq!(stats.hits.hot, 1);
         assert_eq!(stats.misses, 1);
         assert_eq!(stats.qos_denials.priority, 1);
     }
-
     #[test]
     fn consistent_hash_ring_moves_subset_of_keys() {
         let shards: Vec<TaikaiShardId> = (0..4).map(TaikaiShardId).collect();
         let ring = TaikaiShardRing::new(shards.clone());
         assert_eq!(ring.replicas().get(), 128);
         assert!(!ring.is_empty());
-
         let keys: Vec<SegmentKey> = (0..64)
             .map(|seq| dummy_segment(seq, 128, QosClass::Standard).key())
             .collect();
         let initial: Vec<_> = keys.iter().map(|key| ring.locate(key)).collect();
-
         let mut expanded_shards = shards.clone();
         expanded_shards.push(TaikaiShardId(4));
         let expanded = TaikaiShardRing::new(expanded_shards);
-
         let reassigned = keys
             .iter()
             .zip(initial.iter())
@@ -3176,7 +2857,6 @@ mod tests {
             .count();
         assert!(reassigned <= keys.len() / 3);
     }
-
     #[test]
     fn taikai_pull_queue_coalesces_batches() {
         let mut queue = TaikaiPullQueue::new(
@@ -3224,7 +2904,6 @@ mod tests {
         assert_eq!(second.qos, QosClass::Bulk);
         assert!(queue.issue_ready_batch(now).is_none());
     }
-
     #[test]
     fn taikai_pull_queue_enforces_backpressure() {
         let mut queue = TaikaiPullQueue::new(
@@ -3265,7 +2944,6 @@ mod tests {
             .expect_err("backpressure");
         assert!(matches!(err, TaikaiQueueError::Backpressure { .. }));
     }
-
     #[test]
     fn taikai_pull_queue_issues_batches_without_rate_limits() {
         let mut queue = TaikaiPullQueue::new(
@@ -3285,7 +2963,6 @@ mod tests {
             .sorafs_taikai_queue_events_total
             .with_label_values(&["issued", "priority"])
             .get();
-
         let now = Instant::now();
         queue
             .enqueue_at(
@@ -3309,10 +2986,8 @@ mod tests {
                 now,
             )
             .expect("enqueue second");
-
         let first = queue.issue_ready_batch(now).expect("first batch");
         assert_eq!(first.segments.len(), 1);
-
         let second = queue.issue_ready_batch(now).expect("second batch");
         assert_eq!(second.segments.len(), 1);
         assert!(
@@ -3325,7 +3000,6 @@ mod tests {
         let stats = queue.stats();
         assert_eq!(stats.pending_segments, 0);
     }
-
     #[test]
     fn taikai_pull_queue_shapes_batches_and_requeues() {
         let mut queue = TaikaiPullQueue::new(
@@ -3368,15 +3042,12 @@ mod tests {
                 now,
             )
             .expect("enqueue second");
-
         let first = queue.issue_ready_batch(now).expect("first batch");
         assert_eq!(first.segments.len(), 1);
-
         assert!(queue.issue_ready_batch(now).is_none());
         let mut stats = queue.stats();
         assert_eq!(stats.pending_segments, 1);
         assert_eq!(stats.shaper_denials.priority, 1);
-
         let second = queue
             .issue_ready_batch(now + Duration::from_secs(1))
             .expect("second batch after refill");
@@ -3384,7 +3055,6 @@ mod tests {
         stats = queue.stats();
         assert_eq!(stats.pending_segments, 0);
     }
-
     #[test]
     fn taikai_pull_queue_hedges_after_timeout() {
         let mut queue = TaikaiPullQueue::new(
@@ -3423,7 +3093,6 @@ mod tests {
             batch.segments[0].key.sequence()
         );
     }
-
     #[test]
     fn taikai_pull_queue_hedging_respects_shaper_budget() {
         let mut queue = TaikaiPullQueue::new(
@@ -3455,9 +3124,7 @@ mod tests {
                 now,
             )
             .expect("enqueue");
-
         let _ = queue.issue_ready_batch(now).expect("batch issued");
-
         assert!(
             queue
                 .hedge_overdue_batches(now + Duration::from_millis(2))
@@ -3466,18 +3133,15 @@ mod tests {
         let stats = queue.stats();
         assert_eq!(stats.shaper_denials.priority, 1);
         assert_eq!(stats.hedged_batches, 0);
-
         let hedged = queue.hedge_overdue_batches(now + Duration::from_secs(1));
         assert_eq!(hedged.len(), 1);
         assert!(hedged[0].hedged);
     }
-
     #[test]
     fn circuit_state_uses_indefinite_open_deadline_on_instant_overflow() {
         let now = Instant::now();
         let config = ReliabilityConfig::new(1, Duration::from_secs(u64::MAX));
         let mut state = CircuitState::default();
-
         assert!(state.record_failure(&config, now));
         assert_eq!(state.failures, 0);
         assert!(matches!(
@@ -3487,11 +3151,9 @@ mod tests {
         assert!(state.is_open(now));
         assert!(!state.refresh(now + Duration::from_secs(1)));
         assert!(state.is_open(now + Duration::from_secs(1)));
-
         assert!(state.record_success());
         assert!(!state.is_open(now));
     }
-
     #[test]
     fn taikai_pull_queue_handles_overflowing_circuit_open_duration() {
         let mut queue = TaikaiPullQueue::new(
@@ -3513,13 +3175,11 @@ mod tests {
             128,
             None,
         );
-
         queue.enqueue_at(request.clone(), now).expect("enqueue");
         let first = queue.issue_ready_batch(now).expect("first batch");
         let preferred = first.shard.expect("preferred shard selected");
         assert!(queue.fail_at(TaikaiPullTicket::from(first.id), now));
         assert!(queue.reliability.shard_open(preferred, now));
-
         queue
             .enqueue_at(request, now + Duration::from_millis(1))
             .expect("enqueue after circuit opens");
@@ -3529,7 +3189,6 @@ mod tests {
         assert_ne!(failover.shard, Some(preferred));
         assert!(queue.stats().open_circuits >= 1);
     }
-
     #[test]
     fn taikai_pull_queue_trips_circuit_and_failsover() {
         let metrics = global_or_default();
@@ -3548,7 +3207,6 @@ mod tests {
             512,
             None,
         );
-
         let mut preferred = None;
         for _ in 0..ReliabilityConfig::default().failures_to_trip {
             queue.enqueue_at(request.clone(), now).expect("enqueue");
@@ -3557,7 +3215,6 @@ mod tests {
             let ticket = TaikaiPullTicket::from(batch.id);
             assert!(queue.fail_at(ticket, now));
         }
-
         let preferred = preferred.expect("preferred shard discovered");
         let preferred_label = shard_label(preferred);
         assert_eq!(
@@ -3567,17 +3224,14 @@ mod tests {
                 .get(),
             1
         );
-
         queue.enqueue_at(request, now).expect("enqueue");
         let batch = queue.issue_ready_batch(now).expect("failover batch");
         let selected = batch.shard.expect("shard selected");
         assert_ne!(selected, preferred);
-
         let stats = queue.stats();
         assert!(stats.failovers >= 1);
         assert_eq!(stats.open_circuits, 1);
     }
-
     #[test]
     fn taikai_cache_handle_exposes_queue_api() {
         let handle = TaikaiCacheHandle::from_config(TaikaiCacheConfig::default());
@@ -3589,7 +3243,6 @@ mod tests {
             None,
         );
         handle.enqueue_pull(request).expect("enqueue succeeds");
-
         let now = Instant::now();
         let batch = handle
             .issue_ready_batch_at(now)
@@ -3598,25 +3251,21 @@ mod tests {
         assert_eq!(batch.shard, Some(TaikaiShardId(7)));
         assert_eq!(batch.total_bytes, 768);
         assert!(!batch.hedged);
-
         assert!(
             handle
                 .hedge_overdue_batches_at(now + Duration::from_millis(50))
                 .expect("queue accessible")
                 .is_empty()
         );
-
         let hedged = handle
             .hedge_overdue_batches_at(now + Duration::from_millis(250))
             .expect("queue accessible");
         assert_eq!(hedged.len(), 1);
         assert!(hedged[0].hedged);
-
         let ticket = TaikaiPullTicket::from(batch.id);
         assert!(handle.complete_batch(ticket).expect("queue accessible"));
         assert!(!handle.complete_batch(ticket).expect("queue accessible"));
     }
-
     #[test]
     fn taikai_cache_handle_propagates_backpressure() {
         let handle = TaikaiCacheHandle::from_config(TaikaiCacheConfig::default());
@@ -3641,14 +3290,12 @@ mod tests {
             .expect_err("backpressure triggered");
         assert!(matches!(err, TaikaiQueueError::Backpressure { .. }));
     }
-
     #[test]
     fn cache_admission_tracker_updates_shard_ring() {
         let handle = TaikaiCacheHandle::from_config(TaikaiCacheConfig::default());
         let replay =
             CacheAdmissionReplayFilter::new(Duration::from_millis(250), 8).expect("replay filter");
         let mut tracker = CacheAdmissionTracker::new(handle.clone(), replay);
-
         let issued_ms = 1_726_000_500_000;
         let ttl = Duration::from_millis(200);
         let gossip = cache_admission_gossip(TaikaiShardId(7), 64, issued_ms, ttl);
@@ -3658,7 +3305,6 @@ mod tests {
                 .expect("ingestion succeeds")
         );
         assert_eq!(tracker.active_shards(), vec![TaikaiShardId(7)]);
-
         let request = TaikaiPullRequest::new(
             SegmentKey::from_envelope(&sample_envelope(900)),
             QosClass::Priority,
@@ -3673,13 +3319,11 @@ mod tests {
             .expect("batch emitted");
         assert_eq!(batch.shard, Some(TaikaiShardId(7)));
         let _ = handle.complete_batch(TaikaiPullTicket::from(batch.id));
-
         let expire_at = issued_ms
             .saturating_add(u64::try_from(ttl.as_millis()).expect("ttl fits in u64"))
             .saturating_add(1);
         assert!(tracker.evict_expired(expire_at));
         assert!(tracker.active_shards().is_empty());
-
         let request = TaikaiPullRequest::new(
             SegmentKey::from_envelope(&sample_envelope(901)),
             QosClass::Priority,
@@ -3693,23 +3337,19 @@ mod tests {
             .expect("batch emitted");
         assert_eq!(batch.shard, None);
     }
-
     #[test]
     fn cache_admission_tracker_rejects_exact_expiry_boundary() {
         let handle = TaikaiCacheHandle::from_config(TaikaiCacheConfig::default());
         let replay =
             CacheAdmissionReplayFilter::new(Duration::from_millis(250), 8).expect("replay filter");
         let mut tracker = CacheAdmissionTracker::new(handle, replay);
-
         let issued_ms = 1_726_000_500_000;
         let ttl = Duration::from_millis(200);
         let gossip = cache_admission_gossip(TaikaiShardId(7), 65, issued_ms, ttl);
         let expires = gossip.body().expires_unix_ms();
-
         let error = tracker
             .ingest(&gossip, expires)
             .expect_err("tracker must reject gossip at exact expiry");
-
         assert!(matches!(
             error,
             CacheAdmissionError::Expired {
@@ -3719,7 +3359,6 @@ mod tests {
         ));
         assert!(tracker.active_shards().is_empty());
     }
-
     #[test]
     fn cache_admission_replay_filter_reopens_at_exact_window_expiry() {
         let issued_ms = 1_726_000_500_000;
@@ -3727,7 +3366,6 @@ mod tests {
             cache_admission_gossip(TaikaiShardId(7), 66, issued_ms, Duration::from_secs(30));
         let mut replay =
             CacheAdmissionReplayFilter::new(Duration::from_millis(250), 8).expect("replay filter");
-
         assert!(
             replay
                 .observe(&gossip, issued_ms)
@@ -3744,7 +3382,6 @@ mod tests {
                 .expect("digest accepted exactly when replay window expires")
         );
     }
-
     #[test]
     fn taikai_pull_queue_issue_specific_respects_shaper() {
         let mut queue = TaikaiPullQueue::new(
@@ -3769,7 +3406,6 @@ mod tests {
         let first_key = first.key();
         let second_key = second.key();
         let now = Instant::now();
-
         queue
             .enqueue_at(
                 TaikaiPullRequest::new(first_key.clone(), QosClass::Priority, 256, None),
@@ -3782,20 +3418,17 @@ mod tests {
                 now,
             )
             .expect("enqueue second");
-
         let _ = queue.issue_ready_batch(now).expect("first batch issued");
         assert!(queue.issue_specific(&second_key, now).is_none());
         let stats = queue.stats();
         assert_eq!(stats.shaper_denials.priority, 1);
         assert_eq!(stats.pending_segments, 1);
-
         let batch = queue
             .issue_specific(&second_key, now + Duration::from_secs(1))
             .expect("second batch issued after refill");
         assert_eq!(batch.segments.len(), 1);
         assert_eq!(queue.stats().pending_segments, 0);
     }
-
     #[test]
     fn taikai_pull_queue_issue_specific_removes_target() {
         let mut queue = TaikaiPullQueue::new(
@@ -3833,7 +3466,6 @@ mod tests {
         assert!(queue.issue_specific(&second_key, Instant::now()).is_none());
         assert!(queue.issue_specific(&first_key, Instant::now()).is_some());
     }
-
     #[test]
     fn taikai_pull_queue_cancel_pending_drops_request() {
         let mut queue = TaikaiPullQueue::new(

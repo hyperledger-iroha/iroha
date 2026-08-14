@@ -244,7 +244,6 @@ public sealed partial class ToriiClientTests
         {
             Content = new StringContent("{\"ok\":true}"),
         });
-
         var options = new ToriiClientOptions
         {
             BearerToken = "dev-token",
@@ -253,7 +252,6 @@ public sealed partial class ToriiClientTests
                 CanonicalAccountId,
                 CanonicalPrivateKeySeed),
         };
-
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler), options);
         using var document = await client.GetJsonDocumentAsync("/v1/query", "gas_units=100&cursor_mode=stored", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -262,7 +260,9 @@ public sealed partial class ToriiClientTests
         Assert.Equal("dev-token", handler.LastRequest.Headers.Authorization?.Parameter);
         Assert.True(handler.LastRequest.Headers.Contains("X-Iroha-Account"));
         Assert.True(handler.LastRequest.Headers.Contains("X-Iroha-Signature"));
-        Assert.Equal(CanonicalAccountId, Assert.Single(handler.LastRequest.Headers.GetValues("X-Iroha-Account")));
+        Assert.Equal(
+            AccountAddress.Parse(CanonicalAccountId, AccountAddress.DefaultChainDiscriminant).CanonicalHex,
+            Assert.Single(handler.LastRequest.Headers.GetValues("X-Iroha-Account")));
         Assert.All(
             Assert.Single(handler.LastRequest.Headers.GetValues("X-Iroha-Nonce")),
             character => Assert.False(char.IsWhiteSpace(character)));
@@ -7688,7 +7688,7 @@ public sealed partial class ToriiClientTests
         yield return new object[] { "profile", "padding_budget_ms", RemoveTopLevelJsonField(VpnProfileRawResponseJson("padding_budget_ms", 50), "padding_budget_ms"), "must not be null" };
         yield return new object[] { "profile", "padding_budget_ms", VpnProfileRawResponseJson("padding_budget_ms", 0), "between 1" };
         yield return new object[] { "profile", "padding_budget_ms", VpnProfileRawResponseJson("padding_budget_ms", 65536), "unsigned 16-bit" };
-        yield return new object[] { "profile", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnProfileRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "must not be null" };
+        yield return new object[] { "profile", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnProfileRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "required" };
         yield return new object[] { "profile", "relay_tls_spki_sha256_hex", VpnProfileRawResponseJson("relay_tls_spki_sha256_hex", "0x" + VpnSpkiSha256Hex), "32-byte hex string" };
         foreach (var invalidAccountId in new[]
         {
@@ -7836,14 +7836,14 @@ public sealed partial class ToriiClientTests
         yield return new object[] { "quote", "mtu_bytes", VpnQuoteRawResponseJson("mtu_bytes", 1279), "equal 1280" };
         yield return new object[] { "quote", "flow_label_bits", VpnQuoteRawResponseJson("flow_label_bits", 23), "equal 24" };
         yield return new object[] { "quote", "padding_budget_ms", VpnQuoteRawResponseJson("padding_budget_ms", 0), "between 1" };
-        yield return new object[] { "quote", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "must not be null" };
-        yield return new object[] { "quote", "open_lease_instruction", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("open_lease_instruction", null), "open_lease_instruction"), "must not be null" };
+        yield return new object[] { "quote", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "required" };
+        yield return new object[] { "quote", "open_lease_instruction", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("open_lease_instruction", null), "open_lease_instruction"), "required" };
         yield return new object[] { "session", "exit_class", VpnSessionRawResponseJson("exit_class", "premium"), "must be one of" };
         yield return new object[] { "session", "lease_secs", VpnSessionRawResponseJson("lease_secs", (ulong)uint.MaxValue + 1), "between 1" };
         yield return new object[] { "session", "mtu_bytes", VpnSessionRawResponseJson("mtu_bytes", 1279), "equal 1280" };
         yield return new object[] { "session", "flow_label_bits", VpnSessionRawResponseJson("flow_label_bits", 23), "equal 24" };
         yield return new object[] { "session", "padding_budget_ms", VpnSessionRawResponseJson("padding_budget_ms", 0), "between 1" };
-        yield return new object[] { "session", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "must not be null" };
+        yield return new object[] { "session", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "required" };
         yield return new object[] { "session", "status", VpnSessionRawResponseJson("status", "connected"), "equal active" };
         yield return new object[] { "receipt", "exit_class", VpnReceiptRawResponseJson("exit_class", "premium"), "must be one of" };
         yield return new object[] { "receipt", "status", VpnReceiptRawResponseJson("status", "active"), "must be one of" };
@@ -9328,46 +9328,6 @@ public sealed partial class ToriiClientTests
     }
 
     [Fact]
-    public async Task SubmitSignedQueryAsyncAcceptsManagedEnvelope()
-    {
-        SignedQueryEnvelope? seenEnvelope = null;
-        using var handler = new RecordingHandler(request =>
-        {
-            Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal("/v1/query", request.RequestUri!.AbsolutePath);
-            Assert.Equal("limit=1", request.RequestUri.Query.TrimStart('?'));
-            Assert.Equal("application/x-norito", request.Content!.Headers.ContentType!.MediaType);
-
-            using var stream = request.Content.ReadAsStream();
-            using var buffer = new MemoryStream();
-            stream.CopyTo(buffer);
-            Assert.Equal(seenEnvelope!.VersionedNoritoBytes, buffer.ToArray());
-
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("""
-                    {
-                      "kind": "Singular",
-                      "value": {
-                        "kind": "FindParameters"
-                      }
-                    }
-                    """),
-            };
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        seenEnvelope = new SignedQueryBuilder(CanonicalAccountId, CanonicalNetworkId)
-            .FindParameters()
-            .BuildSigned(Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032"));
-
-        using var response = await client.SubmitSignedQueryAsync(seenEnvelope, query: "limit=1", cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal("Singular", response.RootElement.GetProperty("kind").GetString());
-        Assert.Equal("FindParameters", response.RootElement.GetProperty("value").GetProperty("kind").GetString());
-    }
-
-    [Fact]
     public async Task SubmitSignedQueryAsyncRejectsEmptyNoritoPayloadBeforeDispatch()
     {
         using var handler = new RecordingHandler(_ =>
@@ -10814,7 +10774,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
         var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
         {
             PolicyId = "phone#retail",
@@ -10846,7 +10806,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
         var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
         {
             PolicyId = "phone#retail",
@@ -10878,7 +10838,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 """{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"AQID"}""")),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
         var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
         {
             PolicyId = "phone#retail",
@@ -10915,7 +10875,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 attestationJson)),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
         var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
             new ToriiIdentifierResolveRequest
             {
@@ -10939,7 +10899,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent(responseJson),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
         var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
             new ToriiIdentifierResolveRequest
             {
@@ -10965,7 +10925,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("non-exact identifier policy id reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() => client.ResolveIdentifierAsync(
             new ToriiIdentifierResolveRequest
@@ -10991,7 +10951,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("non-exact identifier encrypted input reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() => client.ResolveIdentifierAsync(
             new ToriiIdentifierResolveRequest
@@ -11016,7 +10976,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 """{"policy_id":"phone#retail","account_id":"sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT"}""")),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
         var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
             new ToriiIdentifierResolveRequest
             {
@@ -11041,7 +11001,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent(IdentifierResolveEnvelopeJsonWithPatch(patchJson)),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
         var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
             new ToriiIdentifierResolveRequest
             {
@@ -11070,7 +11030,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent(IdentifierResolveEnvelopeJsonWithPatch(patchJson)),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
         var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
             new ToriiIdentifierResolveRequest
             {
@@ -11103,7 +11063,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 """{"kind":"signed","signature":"ABCD"}""")),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
         var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
             new ToriiIdentifierResolveRequest
             {
@@ -11134,7 +11094,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent(IdentifierResolveEnvelopeJsonWithPatch(patchJson)),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
         var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
             new ToriiIdentifierResolveRequest
             {
@@ -11156,7 +11116,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 """{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"AQID"}""")),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
         var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
         {
             PolicyId = "phone#retail",
@@ -11189,7 +11149,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent(IdentifierResolveEnvelopeJsonWithPatch(patchJson)),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
         var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
             new ToriiIdentifierResolveRequest
             {
@@ -11246,7 +11206,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 """{"kind":"signed","signature":"ABCD"}""")),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
         var resolved = await client.ResolveIdentifierAsync(new ToriiIdentifierResolveRequest
         {
             PolicyId = "phone#retail",
@@ -11304,7 +11264,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent(IdentifierResolveEnvelopeJsonWithPatch(patchJson)),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
         var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
             new ToriiIdentifierResolveRequest
             {
@@ -12615,7 +12575,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     public async Task GetPipelineTransactionDetailsAsyncPostsOneExactSignedQuery()
     {
         var transactionHash = new string('1', 64);
-        var signedQuery = new SignedIterableQueryBuilder(CanonicalAccountId, CanonicalNetworkId)
+        var signedQuery = new SignedIterableQueryBuilder(
+            CanonicalAccountId,
+            NetworkId.Parse(CanonicalNetworkId))
             .FindTransactionDetails(transactionHash)
             .BuildSigned(
                 CanonicalPrivateKeySeed,
@@ -13235,7 +13197,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             Content = new StringContent("""
                 {
-                  "algorithm": "scrypt-leading-zero-bits-v1",
+                  "algorithm": "scrypt-leading-zero-bits-v2",
+                  "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+                  "chain_discriminant": 753,
                   "difficulty_bits": 10,
                   "anchor_height": 68,
                   "anchor_block_hash_hex": "d5c0016a6345e8ea379da42aab1fdc16ba82756e19e0b63c48c14735e8caf7ef",
@@ -13251,7 +13215,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var puzzle = await client.GetAccountFaucetPuzzleAsync(cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal("scrypt-leading-zero-bits-v1", puzzle.Algorithm);
+        Assert.Equal("scrypt-leading-zero-bits-v2", puzzle.Algorithm);
+        Assert.Equal(OnboardingFixtureNetworkId, puzzle.NetworkId);
+        Assert.Equal((ushort)753, puzzle.ChainDiscriminant);
         Assert.Equal((byte)10, puzzle.DifficultyBits);
         Assert.Equal((ulong)68, puzzle.AnchorHeight);
         Assert.Equal((uint)8, puzzle.ScryptR);
@@ -13263,7 +13229,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object?[] { "algorithm", null, "must not be null" };
         yield return new object[] { "algorithm", " " + ToriiAccountFaucetPow.Algorithm, "surrounding whitespace" };
         yield return new object[] { "algorithm", ToriiAccountFaucetPow.Algorithm + "\u0001", "control characters" };
-        yield return new object[] { "algorithm", "scrypt-leading-zero-bits-v2", ToriiAccountFaucetPow.Algorithm };
+        yield return new object[] { "algorithm", "scrypt-leading-zero-bits-v1", ToriiAccountFaucetPow.Algorithm };
+        yield return new object?[] { "network_id", null, "canonical NetworkId string" };
+        yield return new object[] { "network_id", AlternateNetworkId.ToLowerInvariant(), "canonical checksummed NetworkId" };
+        yield return new object[] { "difficulty_bits", (byte)0, "positive" };
         yield return new object[] { "anchor_height", 0UL, "positive" };
         yield return new object?[] { "anchor_block_hash_hex", null, "must not be null" };
         yield return new object[] { "anchor_block_hash_hex", " " + ContractCodeHashHex, "surrounding whitespace" };
@@ -13272,12 +13241,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "anchor_block_hash_hex", new string('g', 64), "32-byte hex string" };
         yield return new object[] { "anchor_block_hash_hex", "0x" + ContractCodeHashHex, "32-byte hex string" };
         yield return new object[] { "anchor_block_hash_hex", ContractCodeHashHex + "\u0001", "control characters" };
-        yield return new object[] { "challenge_salt_hex", string.Empty, "non-empty even-length hex string" };
+        yield return new object[] { "challenge_salt_hex", string.Empty, "non-empty string" };
         yield return new object[] { "challenge_salt_hex", " abcd", "surrounding whitespace" };
         yield return new object[] { "challenge_salt_hex", "ab cd", "whitespace" };
-        yield return new object[] { "challenge_salt_hex", "abc", "even-length hex string" };
-        yield return new object[] { "challenge_salt_hex", "zz", "even-length hex string" };
-        yield return new object[] { "challenge_salt_hex", "ABCD", "lowercase" };
+        yield return new object[] { "challenge_salt_hex", "abc", "32-byte hex string" };
+        yield return new object[] { "challenge_salt_hex", "zz", "32-byte hex string" };
+        yield return new object[] { "challenge_salt_hex", "ABCD", "32-byte hex string" };
         yield return new object[] { "challenge_salt_hex", "abcd\u0001", "control characters" };
         yield return new object[] { "scrypt_log_n", (byte)0, "positive" };
         yield return new object[] { "scrypt_log_n", (byte)31, "less than 31" };
@@ -13329,6 +13298,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     public static IEnumerable<object[]> MissingAccountFaucetPuzzleRequiredFields()
     {
         yield return new object[] { "algorithm", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("algorithm", ToriiAccountFaucetPow.Algorithm), "algorithm") };
+        yield return new object[] { "network_id", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("network_id", CanonicalNetworkId), "network_id") };
+        yield return new object[] { "chain_discriminant", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("chain_discriminant", 753), "chain_discriminant") };
         yield return new object[] { "difficulty_bits", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("difficulty_bits", 10), "difficulty_bits") };
         yield return new object[] { "anchor_height", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("anchor_height", 68UL), "anchor_height") };
         yield return new object[] { "anchor_block_hash_hex", RemoveTopLevelJsonField(AccountFaucetPuzzleResponseJson("anchor_block_hash_hex", ContractCodeHashHex), "anchor_block_hash_hex") };
@@ -13398,11 +13369,13 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[]
         {
             "algorithm",
-            "{\"algorithm\":\"scrypt-leading-zero-bits-v1\",\"algorithm\":\"scrypt-leading-zero-bits-v1\"}",
+            "{\"algorithm\":\"scrypt-leading-zero-bits-v2\",\"algorithm\":\"scrypt-leading-zero-bits-v2\"}",
             "must not appear more than once",
         };
         yield return new object[] { "account faucet puzzle.audit.nonce", AccountFaucetPuzzleUnknownExtensionDuplicateJson(), "must not appear more than once" };
         yield return new object[] { "algorithm", AccountFaucetPuzzleResponseJson("algorithm", 1), "string" };
+        yield return new object[] { "network_id", AccountFaucetPuzzleResponseJson("network_id", 1), "canonical NetworkId string" };
+        yield return new object[] { "chain_discriminant", AccountFaucetPuzzleResponseJson("chain_discriminant", -1), "unsigned 16-bit integer" };
         yield return new object[] { "difficulty_bits", AccountFaucetPuzzleResponseJson("difficulty_bits", 256), "unsigned 8-bit integer" };
         yield return new object[] { "anchor_height", AccountFaucetPuzzleResponseJson("anchor_height", -1), "unsigned integer" };
         yield return new object[] { "scrypt_log_n", AccountFaucetPuzzleResponseJson("scrypt_log_n", -1), "unsigned 8-bit integer" };
@@ -13422,94 +13395,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             JsonSerializer.Deserialize<ToriiAccountFaucetPuzzle>(json));
 
         Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    [Fact]
-    public void FaucetPowComputeChallengeMatchesDeterministicVector()
-    {
-        var challenge = ToriiAccountFaucetPow.ComputeChallenge(
-            CanonicalAccountId,
-            68,
-            "d5c0016a6345e8ea379da42aab1fdc16ba82756e19e0b63c48c14735e8caf7ef");
-
-        Assert.Equal(
-            "9691ccf1c86c5df6182fd11748a58741affde6fe9db0ddc2e266f367e71e75d7",
-            Convert.ToHexString(challenge).ToLowerInvariant());
-    }
-
-    [Fact]
-    public void FaucetPowRejectsNonExactChallengeInputsBeforeDerivation()
-    {
-        const string accountId = CanonicalAccountId;
-        const string anchorHash = "d5c0016a6345e8ea379da42aab1fdc16ba82756e19e0b63c48c14735e8caf7ef";
-
-        AssertRejectsFaucetPowInput(
-            () => ToriiAccountFaucetPow.ComputeChallenge(" " + accountId, 68, anchorHash),
-            "accountId",
-            "whitespace");
-        AssertRejectsFaucetPowInput(
-            () => ToriiAccountFaucetPow.ComputeChallenge(accountId + "\u0001", 68, anchorHash),
-            "accountId",
-            "control characters");
-        AssertRejectsFaucetPowInput(
-            () => ToriiAccountFaucetPow.ComputeChallenge(accountId, 68, " " + anchorHash),
-            "anchorBlockHashHex",
-            "whitespace");
-        AssertRejectsFaucetPowInput(
-            () => ToriiAccountFaucetPow.ComputeChallenge(accountId, 68, anchorHash + "\u0001"),
-            "anchorBlockHashHex",
-            "control characters");
-        AssertRejectsFaucetPowInput(
-            () => ToriiAccountFaucetPow.ComputeChallenge(accountId, 68, "abc"),
-            "anchorBlockHashHex",
-            "even number of hexadecimal characters");
-        AssertRejectsFaucetPowInput(
-            () => ToriiAccountFaucetPow.ComputeChallenge(accountId, 68, "zz"),
-            "anchorBlockHashHex",
-            "even number of hexadecimal characters");
-        AssertRejectsFaucetPowInput(
-            () => ToriiAccountFaucetPow.ComputeChallenge(accountId, 68, anchorHash, ""),
-            "challengeSaltHex",
-            "null or whitespace");
-        AssertRejectsFaucetPowInput(
-            () => ToriiAccountFaucetPow.ComputeChallenge(accountId, 68, anchorHash, " 00"),
-            "challengeSaltHex",
-            "whitespace");
-    }
-
-    [Fact]
-    public void FaucetPowComputeDigestMatchesManagedScryptVector()
-    {
-        var challenge = Convert.FromHexString("8fedfb3e73b08653203dfedc046fe38e523503453d0efb639cfa0e9870550adf");
-        var digest = ToriiAccountFaucetPow.ComputeDigest(
-            Convert.FromHexString("0000000000000001"),
-            challenge,
-            scryptLogN: 4,
-            scryptR: 1,
-            scryptP: 1);
-
-        Assert.Equal(
-            "d9dd0907aba2a70b6bdf9b5a9f5b4ef621397e5f637190e80848384b0ac1745c",
-            Convert.ToHexString(digest).ToLowerInvariant());
-    }
-
-    [Theory]
-    [InlineData(0, "positive")]
-    [InlineData(31, "less than 31")]
-    public void FaucetPowComputeDigestRejectsUnsafeScryptLogN(int scryptLogN, string expectedMessage)
-    {
-        var challenge = Convert.FromHexString("8fedfb3e73b08653203dfedc046fe38e523503453d0efb639cfa0e9870550adf");
-
-        var error = Assert.Throws<ArgumentOutOfRangeException>(() =>
-            ToriiAccountFaucetPow.ComputeDigest(
-                Convert.FromHexString("0000000000000001"),
-                challenge,
-                checked((byte)scryptLogN),
-                scryptR: 1,
-                scryptP: 1));
-
-        Assert.Equal("scryptLogN", error.ParamName);
         Assert.Contains(expectedMessage, error.Message);
     }
 
@@ -13541,7 +13426,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     [Fact]
     public void FaucetPowVerifyRejectsNonExactNonceBeforeDigest()
     {
-        var puzzle = DeterministicFaucetPuzzle(difficultyBits: 0);
+        var puzzle = DeterministicFaucetPuzzle(difficultyBits: 1);
 
         AssertRejectsFaucetPowInput(
             () => ToriiAccountFaucetPow.Verify(CanonicalAccountId, puzzle, " 00", out _),
@@ -13572,10 +13457,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 MaxAttempts = 200,
             }, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal("00000000000000ae", solution.NonceHex);
-        Assert.Equal("0073801423add2a2a9caf50cddd3db01ba2fc8711a50a6fbd39431417d9c456b", solution.DigestHex);
-        Assert.Equal(9, solution.LeadingZeroBits);
-        Assert.Equal(175, solution.Attempts);
+        Assert.Equal("0000000000000010", solution.NonceHex);
+        Assert.Equal("003c190dfc175767ae397f1631cce0a2b0c5d3aec781abab7f319a8f3c149665", solution.DigestHex);
+        Assert.Equal(10, solution.LeadingZeroBits);
+        Assert.Equal(17, solution.Attempts);
     }
 
     [Fact]
@@ -13583,30 +13468,43 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         AssertRejectsFaucetPowInput(
             () => ToriiAccountFaucetPow.Solve(CanonicalAccountId, DeterministicFaucetPuzzleWithPrivateAlgorithm(
-                difficultyBits: 0,
+                difficultyBits: 1,
                 algorithm: " " + ToriiAccountFaucetPow.Algorithm)),
             "puzzle.Algorithm",
             "whitespace");
         AssertRejectsFaucetPowInput(
             () => ToriiAccountFaucetPow.Solve(CanonicalAccountId, DeterministicFaucetPuzzleWithPrivateAlgorithm(
-                difficultyBits: 0,
+                difficultyBits: 1,
                 algorithm: ToriiAccountFaucetPow.Algorithm + "\u0001")),
             "puzzle.Algorithm",
             "control characters");
         Assert.Throws<NotSupportedException>(() => ToriiAccountFaucetPow.Solve(
             CanonicalAccountId,
-            DeterministicFaucetPuzzleWithPrivateAlgorithm(difficultyBits: 0, algorithm: "scrypt-leading-zero-bits-v2"),
+            DeterministicFaucetPuzzleWithPrivateAlgorithm(difficultyBits: 1, algorithm: "scrypt-leading-zero-bits-v1"),
             cancellationToken: TestContext.Current.CancellationToken));
         AssertRejectsFaucetPowInput(
             () => ToriiAccountFaucetPow.Solve(" " + CanonicalAccountId, DeterministicFaucetPuzzle(
-                difficultyBits: 0)),
+                difficultyBits: 1)),
             "accountId",
             "whitespace");
         AssertRejectsFaucetPowInput(
             () => ToriiAccountFaucetPow.Solve("merchant@sora", DeterministicFaucetPuzzle(
-                difficultyBits: 0)),
+                difficultyBits: 1)),
             "accountId",
             "canonical I105");
+    }
+
+    [Fact]
+    public void FaucetPowVerifyRejectsZeroDifficultyBeforeWork()
+    {
+        var puzzle = DeterministicFaucetPuzzle(difficultyBits: 1);
+        SetPrivateField(puzzle, "difficultyBits", (byte)0);
+
+        var error = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ToriiAccountFaucetPow.Verify(CanonicalAccountId, puzzle, "00", out _));
+
+        Assert.Equal("puzzle.DifficultyBits", error.ParamName);
+        Assert.Contains("positive", error.Message);
     }
 
     [Fact]
@@ -13668,6 +13566,43 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Equal("QUEUED", response.Status);
     }
 
+    [Fact]
+    public async Task ClaimAccountFaucetAsyncPreservesPuzzleNetworkDiscriminant()
+    {
+        const ushort tairaDiscriminant = 369;
+        var accountId = AccountAddress.Parse(CanonicalAccountId)
+            .ToI105(tairaDiscriminant);
+        using var handler = new RecordingHandler(request =>
+        {
+            var payload = ReadBodyAsJson(request);
+            Assert.Equal(accountId, payload.RootElement.GetProperty("account_id").GetString());
+            return JsonResponse($$"""
+                {
+                  "account_id": "{{accountId}}",
+                  "asset_definition_id": "rose#wonderland",
+                  "asset_id": "rose#wonderland#{{accountId}}",
+                  "amount": "100",
+                  "tx_hash_hex": "{{ToriiTransactionHashHex}}",
+                  "status": "QUEUED"
+                }
+                """, HttpStatusCode.Accepted);
+        });
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
+
+        var response = await client.ClaimAccountFaucetAsync(
+            new ToriiAccountFaucetRequest
+            {
+                AccountId = accountId,
+                PowAnchorHeight = 68,
+                PowNonceHex = "00",
+            },
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(accountId, response.AccountId);
+    }
+
     public static IEnumerable<object[]> InvalidAccountFaucetClaimRequests()
     {
         yield return new object[]
@@ -13701,8 +13636,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 AccountId = CanonicalAccountId,
                 PowAnchorHeight = 68,
             },
-            "PowAnchorHeight",
-            "requires a nonce",
+            "PowNonceHex",
+            "required",
         };
         yield return new object[]
         {
@@ -13711,8 +13646,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 AccountId = CanonicalAccountId,
                 PowNonceHex = "00",
             },
-            "PowNonceHex",
-            "requires an anchor height",
+            "PowAnchorHeight",
+            "required",
         };
         yield return new object[]
         {
@@ -13808,6 +13743,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new ToriiAccountFaucetPuzzle
         {
             Algorithm = algorithm,
+            NetworkId = OnboardingFixtureNetworkId,
+            ChainDiscriminant = AccountAddress.DefaultChainDiscriminant,
             DifficultyBits = difficultyBits,
             AnchorHeight = 68,
             AnchorBlockHashHex = "d5c0016a6345e8ea379da42aab1fdc16ba82756e19e0b63c48c14735e8caf7ef",
@@ -13850,7 +13787,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 Content = new StringContent("""
                     {
-                      "algorithm": "scrypt-leading-zero-bits-v1",
+                      "algorithm": "scrypt-leading-zero-bits-v2",
+                      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+                      "chain_discriminant": 753,
                       "difficulty_bits": 8,
                       "anchor_height": 68,
                       "anchor_block_hash_hex": "d5c0016a6345e8ea379da42aab1fdc16ba82756e19e0b63c48c14735e8caf7ef",
@@ -13867,7 +13806,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var solution = await client.SolveAccountFaucetAsync(CanonicalAccountId, new ToriiAccountFaucetSolveOptions { MaxAttempts = 200 }, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal("00000000000000ae", solution.NonceHex);
+        Assert.Equal("0000000000000010", solution.NonceHex);
         Assert.Equal(CanonicalAccountId, solution.AccountId);
         Assert.Equal((ulong)68, solution.AnchorHeight);
     }
@@ -13886,7 +13825,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 {
                     Content = new StringContent("""
                         {
-                          "algorithm": "scrypt-leading-zero-bits-v1",
+                          "algorithm": "scrypt-leading-zero-bits-v2",
+                          "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+                          "chain_discriminant": 753,
                           "difficulty_bits": 8,
                           "anchor_height": 68,
                           "anchor_block_hash_hex": "d5c0016a6345e8ea379da42aab1fdc16ba82756e19e0b63c48c14735e8caf7ef",
@@ -13903,7 +13844,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             var payload = ReadBodyAsJson(request);
             Assert.Equal("/v1/accounts/faucet", request.RequestUri!.AbsolutePath);
             Assert.Equal(CanonicalAccountId, payload.RootElement.GetProperty("account_id").GetString());
-            Assert.Equal("00000000000000ae", payload.RootElement.GetProperty("pow_nonce_hex").GetString());
+            Assert.Equal("0000000000000010", payload.RootElement.GetProperty("pow_nonce_hex").GetString());
             Assert.Equal<ulong>(68, payload.RootElement.GetProperty("pow_anchor_height").GetUInt64());
 
             return new HttpResponseMessage(HttpStatusCode.Accepted)
@@ -14085,7 +14026,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object?[] { "account-faucet", "Status", "" };
 
         yield return new object?[] { "faucet-puzzle", "Algorithm", " " + ToriiAccountFaucetPow.Algorithm };
-        yield return new object?[] { "faucet-puzzle", "Algorithm", "scrypt-leading-zero-bits-v2" };
+        yield return new object?[] { "faucet-puzzle", "Algorithm", "scrypt-leading-zero-bits-v1" };
+        yield return new object?[] { "faucet-puzzle", "DifficultyBits", (byte)0 };
         yield return new object?[] { "faucet-puzzle", "AnchorHeight", 0UL };
         yield return new object?[] { "faucet-puzzle", "AnchorBlockHashHex", "0x" + ContractCodeHashHex };
         yield return new object?[] { "faucet-puzzle", "ChallengeSaltHex", "ABCD" };
@@ -19554,6 +19496,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ("faucet-puzzle", "Algorithm") => DeterministicFaucetPuzzle(8) with
             {
                 Algorithm = RequiredStringValue(value),
+            },
+            ("faucet-puzzle", "DifficultyBits") => DeterministicFaucetPuzzle(8) with
+            {
+                DifficultyBits = RequiredByteValue(value),
             },
             ("faucet-puzzle", "AnchorHeight") => DeterministicFaucetPuzzle(8) with
             {
@@ -26394,6 +26340,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var response = new JsonObject
         {
             ["algorithm"] = ToriiAccountFaucetPow.Algorithm,
+            ["network_id"] = CanonicalNetworkId,
+            ["chain_discriminant"] = 753,
             ["difficulty_bits"] = 10,
             ["anchor_height"] = 68,
             ["anchor_block_hash_hex"] = ContractCodeHashHex,
@@ -26430,16 +26378,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             AccountId = OnboardingFixtureAccountId,
             Permissions = [],
         };
-    }
-
-    private static string SharedOnboardingReceiptJson()
-    {
-        using var fixture = JsonDocument.Parse(File.ReadAllText(
-            Path.Combine(AppContext.BaseDirectory, "Fixtures", "alias_setup_v1.json")));
-        return fixture.RootElement
-            .GetProperty("account_onboarding_receipt_vector")
-            .GetProperty("receipt_json")
-            .GetRawText();
     }
 
     private static ToriiAccountOnboardingPlanReceipt SharedOnboardingReceipt() =>
@@ -27923,6 +27861,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             "account-faucet" => client.ClaimAccountFaucetAsync(new ToriiAccountFaucetRequest
             {
                 AccountId = CanonicalAccountId,
+                PowAnchorHeight = 68,
+                PowNonceHex = "00",
             }),
             "contract-call" => client.CallContractAsync(ValidContractCallRequest()),
             "multisig-propose" => client.ProposeMultisigAsync(ValidMultisigProposeRequest()),

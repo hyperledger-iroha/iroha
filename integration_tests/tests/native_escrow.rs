@@ -1,8 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Native asset escrow integration scenarios.
-
-use std::time::{Duration, Instant};
-
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -19,7 +16,7 @@ use iroha_crypto::Hash;
 use iroha_executor_data_model::permission::asset::CanTransferAsset;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
-
+use std::time::{Duration, Instant};
 fn wait_for_escrow_status(
     client: &Client,
     escrow_id: EscrowId,
@@ -28,10 +25,8 @@ fn wait_for_escrow_status(
 ) -> Result<AssetEscrowRecord> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
-
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "escrow was not queried".to_owned();
-
     while Instant::now() < deadline {
         match client.query_single(FindAssetEscrowById::new(escrow_id)) {
             Ok(record) => {
@@ -44,15 +39,12 @@ fn wait_for_escrow_status(
                 last_observed = format!("query failed: {err}");
             }
         }
-
         std::thread::sleep(POLL_INTERVAL);
     }
-
     Err(eyre!(
         "timed out waiting for escrow {escrow_id:?} to become {expected:?} after {context}; last_observed={last_observed}"
     ))
 }
-
 fn wait_for_asset_value(
     client: &Client,
     asset_id: &AssetId,
@@ -61,10 +53,8 @@ fn wait_for_asset_value(
 ) -> Result<Asset> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
-
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "asset was not queried".to_owned();
-
     while Instant::now() < deadline {
         match client.query_single(FindAssetById::new(asset_id.clone())) {
             Ok(asset) => {
@@ -77,15 +67,12 @@ fn wait_for_asset_value(
                 last_observed = format!("query failed: {err}");
             }
         }
-
         std::thread::sleep(POLL_INTERVAL);
     }
-
     Err(eyre!(
         "timed out waiting for asset {asset_id} to equal {expected} after {context}; last_observed={last_observed}"
     ))
 }
-
 fn wait_for_buyer_escrow(
     client: &Client,
     buyer: &AccountId,
@@ -94,10 +81,8 @@ fn wait_for_buyer_escrow(
 ) -> Result<Vec<AssetEscrowRecord>> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
-
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "buyer escrow index was not queried".to_owned();
-
     while Instant::now() < deadline {
         match client
             .query(FindAssetEscrowsByBuyer::new(buyer.clone()))
@@ -116,15 +101,12 @@ fn wait_for_buyer_escrow(
                 last_observed = format!("query failed: {err}");
             }
         }
-
         std::thread::sleep(POLL_INTERVAL);
     }
-
     Err(eyre!(
         "timed out waiting for buyer escrow index to include {escrow_id:?} after {context}; last_observed={last_observed}"
     ))
 }
-
 #[test]
 fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
     let context = stringify!(native_asset_escrow_aitai_flow_on_multi_peer_network);
@@ -135,7 +117,6 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-
     let result: Result<()> = (|| {
         let seller = ALICE_ID.clone();
         let (buyer, buyer_keypair) = gen_account_in("wonderland");
@@ -161,7 +142,6 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
             ],
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
-
         let escrow_id = EscrowId::new(Hash::new("native-aitai-flow"));
         client.submit_blocking(
             OpenAssetEscrow::with_evidence_hashes(
@@ -172,7 +152,6 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
             ),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
-
         let opened =
             wait_for_escrow_status(&client, escrow_id, AssetEscrowStatus::Open, "open escrow")?;
         let custody_asset_id = AssetId::of(asset_definition_id.clone(), opened.custody.clone());
@@ -194,7 +173,6 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
                 .is_err(),
             "active native escrow custody must not be drainable through generic transfer"
         );
-
         buyer_client.submit_blocking(
             AcceptAssetEscrow::new(escrow_id),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -207,7 +185,6 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
             ReleaseAssetEscrow::new(escrow_id),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
-
         let released = wait_for_escrow_status(
             &client,
             escrow_id,
@@ -230,7 +207,6 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
         )?;
         assert_eq!(*buyer_asset.value(), Quantity::from(40_u64));
         assert_eq!(*seller_asset.value(), Quantity::from(60_u64));
-
         let buyer_escrows = wait_for_buyer_escrow(
             &client,
             released.buyer.as_ref().expect("buyer recorded"),
@@ -238,16 +214,13 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
             "release escrow buyer index",
         )?;
         assert!(buyer_escrows.iter().any(|record| record.id == escrow_id));
-
         Ok(())
     })();
-
     if sandbox::handle_result(result, context)?.is_none() {
         return Ok(());
     }
     Ok(())
 }
-
 #[test]
 fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
     let context = stringify!(native_asset_lock_flow_on_multi_peer_network);
@@ -258,7 +231,6 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-
     let result: Result<()> = (|| {
         let source = ALICE_ID.clone();
         let (destination, destination_keypair) = gen_account_in("wonderland");
@@ -290,7 +262,6 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             ],
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
-
         let trusted_lock_id = EscrowId::new(Hash::new("native-asset-lock-trusted"));
         client.submit_blocking(
             OpenAssetLock::with_options(
@@ -304,7 +275,6 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             ),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
-
         let locked = wait_for_escrow_status(
             &client,
             trusted_lock_id,
@@ -327,7 +297,6 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             &Quantity::from(40_u64),
             "trusted lock custody credit",
         )?;
-
         client.submit_blocking(
             Grant::account_permission(
                 Permission::from(CanTransferAsset {
@@ -359,7 +328,6 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
                 .is_err(),
             "destination cannot draw down when a release authority is set"
         );
-
         release_authority_client.submit_blocking(
             DrawdownAssetLock::new(
                 trusted_lock_id,
@@ -395,7 +363,6 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
                 .is_err(),
             "a stale independently submitted drawdown must not debit custody twice"
         );
-
         client.submit_blocking(
             CancelAssetLock::new(trusted_lock_id, partially_drawn.remaining_amount.clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -413,7 +380,6 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             &Quantity::from(85_u64),
             "trusted lock cancellation refund",
         )?;
-
         let expiring_lock_id = EscrowId::new(Hash::new("native-asset-lock-expiring"));
         client.submit_blocking(
             OpenAssetLock::with_options(
@@ -456,10 +422,8 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             &Quantity::from(15_u64),
             "destination balance after expiry refund",
         )?;
-
         Ok(())
     })();
-
     if sandbox::handle_result(result, context)?.is_none() {
         return Ok(());
     }

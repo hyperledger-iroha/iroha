@@ -2,18 +2,6 @@
 //!
 //! By default outputs are written to the checked-in PDP fixture directory.
 //! `--output-dir PATH` targets one existing isolated PDP directory instead.
-
-use std::{
-    env,
-    error::Error,
-    ffi::OsString,
-    fs::{self, File},
-    path::{Component, Path, PathBuf},
-};
-
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt as _;
-
 use ed25519_dalek::SigningKey;
 use hex::encode;
 use norito::{
@@ -30,24 +18,29 @@ use sorafs_manifest::{
     validate_pdp_challenge_bytes, validate_pdp_challenge_proof_bytes,
     validate_pdp_commitment_challenge_proof_bytes, validate_pdp_proof_bytes,
 };
-
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
+use std::{
+    env,
+    error::Error,
+    ffi::OsString,
+    fs::{self, File},
+    path::{Component, Path, PathBuf},
+};
 const VALIDATION_GENERATED_AT: u64 = 123;
 const DEFAULT_FIXTURE_DIR: &str = "fixtures/sorafs_manifest/pdp";
 const MAX_OUTPUT_PATH_BYTES: usize = 4 << 10;
 const MAX_OUTPUT_PATH_COMPONENTS: usize = 64;
-
 #[derive(Debug, Eq, PartialEq)]
 struct Args {
     fixture_dir: PathBuf,
     help: bool,
 }
-
 struct BoundOutputDirectory {
     display_path: PathBuf,
     canonical_path: PathBuf,
     handle: File,
 }
-
 impl BoundOutputDirectory {
     fn open(path: &Path, label: &str) -> Result<Self, Box<dyn Error>> {
         require_real_directory_ancestry(path, label)?;
@@ -90,7 +83,6 @@ impl BoundOutputDirectory {
             handle,
         })
     }
-
     fn verify(&self, label: &str) -> Result<(), Box<dyn Error>> {
         require_real_directory_ancestry(&self.display_path, label)?;
         let lexical = fs::symlink_metadata(&self.display_path).map_err(|error| {
@@ -121,10 +113,8 @@ impl BoundOutputDirectory {
         Ok(())
     }
 }
-
 fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Box<dyn Error>> {
     const USAGE: &str = "usage: generate_pdp_fixtures [--output-dir PATH]";
-
     let args = args.into_iter().collect::<Vec<_>>();
     if args.len() == 1 && matches!(args[0].to_str(), Some("--help" | "-h")) {
         return Ok(Args {
@@ -138,7 +128,6 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Box<dyn 
     {
         return Err("`--help` must be used by itself".into());
     }
-
     let mut fixture_dir = None;
     let mut args = args.into_iter();
     while let Some(argument) = args.next() {
@@ -181,13 +170,11 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, Box<dyn 
             None => return Err(format!("{USAGE}; arguments must be valid UTF-8").into()),
         }
     }
-
     Ok(Args {
         fixture_dir: fixture_dir.unwrap_or_else(|| PathBuf::from(DEFAULT_FIXTURE_DIR)),
         help: false,
     })
 }
-
 fn validate_output_dir(path: &Path) -> Result<(), Box<dyn Error>> {
     let path_text = path
         .to_str()
@@ -197,7 +184,6 @@ fn validate_output_dir(path: &Path) -> Result<(), Box<dyn Error>> {
             format!("`--output-dir` path exceeds the {MAX_OUTPUT_PATH_BYTES}-byte bound").into(),
         );
     }
-
     let mut has_normal_component = false;
     let mut component_count = 0_usize;
     for component in path.components() {
@@ -226,7 +212,6 @@ fn validate_output_dir(path: &Path) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn require_real_directory_ancestry(path: &Path, label: &str) -> Result<(), Box<dyn Error>> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -261,12 +246,10 @@ fn require_real_directory_ancestry(path: &Path, label: &str) -> Result<(), Box<d
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn same_directory_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.is_dir() && right.is_dir() && left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(not(unix))]
 fn same_directory_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.is_dir()
@@ -274,7 +257,6 @@ fn same_directory_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.created().ok() == right.created().ok()
         && left.modified().ok() == right.modified().ok()
 }
-
 fn print_usage() {
     println!(
         "Usage: generate_pdp_fixtures [--output-dir PATH]\n\
@@ -284,7 +266,6 @@ fn print_usage() {
          fixture directory with an existing real `negative` child directory."
     );
 }
-
 fn main() -> Result<(), Box<dyn Error>> {
     let args = parse_args(env::args_os().skip(1))?;
     if args.help {
@@ -297,7 +278,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let negative_dir = fixture_dir.join("negative");
     let negative_binding =
         BoundOutputDirectory::open(&negative_dir, "negative PDP fixture output directory")?;
-
     let manifest_digest = [0x42; 32];
     let provider_id = [0x10; 32];
     let chunk_profile = chunk_profile()?;
@@ -351,7 +331,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         &signing_key,
     )?;
-
     write_norito_pair(
         &fixture_dir.join("commitment_v1"),
         &commitment,
@@ -381,7 +360,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         true,
         "SFS-PDP-DIAG-000",
     )?;
-
     let mut duplicate_hot_leaf_challenge = challenge.clone();
     duplicate_hot_leaf_challenge.samples[0].hot_leaf_indices = vec![0, 0];
     assert!(duplicate_hot_leaf_challenge.validate().is_err());
@@ -402,7 +380,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         false,
         "SFS-PDP-001",
     )?;
-
     let mut missing_signature_proof = proof.clone();
     missing_signature_proof.signature.signature = [0; 64];
     assert!(missing_signature_proof.validate().is_err());
@@ -423,7 +400,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         false,
         "SFS-SIG-008",
     )?;
-
     let mut missing_segment_path_proof = proof.clone();
     missing_segment_path_proof.proof_leaves[0]
         .segment_merkle_path
@@ -443,7 +419,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         &missing_segment_path_proof,
         "SFS-PDP-001",
     )?;
-
     let mut missing_hot_leaf_path_proof = proof.clone();
     missing_hot_leaf_path_proof.proof_leaves[0].hot_leaves[0]
         .segment_hot_merkle_path
@@ -466,7 +441,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         &missing_hot_leaf_path_proof,
         "SFS-PDP-001",
     )?;
-
     let mut late_proof = proof.clone();
     late_proof.issued_at_unix = challenge.response_deadline_unix + 1;
     let late_proof = sign_pdp_proof_ed25519_v1(late_proof, &signing_key)?;
@@ -482,7 +456,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         &late_proof,
         "SFS-POL-002",
     )?;
-
     let mut wrong_provider_proof = proof.clone();
     wrong_provider_proof.provider_id = [0x88; 32];
     let wrong_provider_proof = sign_pdp_proof_ed25519_v1(wrong_provider_proof, &signing_key)?;
@@ -498,7 +471,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         &wrong_provider_proof,
         "SFS-PDP-003",
     )?;
-
     let mut wrong_manifest_proof = proof.clone();
     wrong_manifest_proof.manifest_digest = [0x77; 32];
     let wrong_manifest_proof = sign_pdp_proof_ed25519_v1(wrong_manifest_proof, &signing_key)?;
@@ -514,7 +486,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         &wrong_manifest_proof,
         "SFS-PDP-003",
     )?;
-
     let mut wrong_path_proof = proof;
     wrong_path_proof.proof_leaves[0].segment_merkle_path[0][0] ^= 0x01;
     let wrong_path_proof = sign_pdp_proof_ed25519_v1(wrong_path_proof, &signing_key)?;
@@ -531,27 +502,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         &wrong_path_proof,
         "SFS-PDP-003",
     )?;
-
     negative_binding.verify("negative PDP fixture output directory")?;
     fixture_binding.verify("PDP fixture output directory")
 }
-
 fn chunk_profile() -> Result<ChunkingProfileV1, Box<dyn Error>> {
     let descriptor = sorafs_manifest::chunker_registry::lookup(ProfileId(1))
         .ok_or_else(|| std::io::Error::other("canonical SF1 chunking profile is not registered"))?;
     Ok(ChunkingProfileV1::from_descriptor(descriptor))
 }
-
 fn digest(label: &str) -> [u8; 32] {
     *blake3::hash(label.as_bytes()).as_bytes()
 }
-
 fn deterministic_payload(length: usize) -> Vec<u8> {
     (0..length)
         .map(|index| ((index.wrapping_mul(131).wrapping_add(17)) % 251) as u8)
         .collect()
 }
-
 fn write_pair_negative_outcome(
     negative_dir: &Path,
     proof_name: &str,
@@ -575,7 +541,6 @@ fn write_pair_negative_outcome(
         expected_code,
     )
 }
-
 fn write_bundle_negative_outcome(
     negative_dir: &Path,
     proof_name: &str,
@@ -602,7 +567,6 @@ fn write_bundle_negative_outcome(
         expected_code,
     )
 }
-
 fn write_expected_outcome(
     path: &Path,
     outcome: &sorafs_manifest::ValidationOutcomeV1,
@@ -619,7 +583,6 @@ fn write_expected_outcome(
     }
     write_fixture_file(path, format!("{}\n", to_string_pretty(outcome)?).as_bytes())
 }
-
 fn write_norito_pair<T>(
     base_path: &Path,
     value: &T,
@@ -637,7 +600,6 @@ where
     write_fixture_file(&base_path.with_extension("json"), json.as_bytes())?;
     Ok(())
 }
-
 fn write_fixture_file(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     let parent = path
         .parent()
@@ -664,7 +626,6 @@ fn write_fixture_file(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
-
     fs::write(path, bytes)?;
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -684,7 +645,6 @@ fn write_fixture_file(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn commitment_json(commitment: &PdpCommitmentV1) -> Value {
     let mut map = Map::new();
     map.insert("version".to_owned(), Value::from(commitment.version));
@@ -743,7 +703,6 @@ fn commitment_json(commitment: &PdpCommitmentV1) -> Value {
     map.insert("sealed_at".to_owned(), Value::from(commitment.sealed_at));
     Value::Object(map)
 }
-
 fn challenge_json(challenge: &PdpChallengeV1) -> Value {
     let mut map = Map::new();
     map.insert("version".to_owned(), Value::from(challenge.version));
@@ -790,7 +749,6 @@ fn challenge_json(challenge: &PdpChallengeV1) -> Value {
     );
     Value::Object(map)
 }
-
 fn proof_json(proof: &PdpProofV1) -> Value {
     let mut map = Map::new();
     map.insert("version".to_owned(), Value::from(proof.version));
@@ -829,7 +787,6 @@ fn proof_json(proof: &PdpProofV1) -> Value {
     );
     Value::Object(map)
 }
-
 fn chunk_profile_json(profile: &ChunkingProfileV1) -> Value {
     let mut map = Map::new();
     map.insert("profile_id".to_owned(), Value::from(profile.profile_id.0));
@@ -859,7 +816,6 @@ fn chunk_profile_json(profile: &ChunkingProfileV1) -> Value {
     );
     Value::Object(map)
 }
-
 fn sample_json(sample: &PdpSampleV1) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -878,7 +834,6 @@ fn sample_json(sample: &PdpSampleV1) -> Value {
     );
     Value::Object(map)
 }
-
 fn proof_leaf_json(leaf: &PdpProofLeafV1) -> Value {
     let mut map = Map::new();
     map.insert("segment_index".to_owned(), Value::from(leaf.segment_index));
@@ -905,7 +860,6 @@ fn proof_leaf_json(leaf: &PdpProofLeafV1) -> Value {
     );
     Value::Object(map)
 }
-
 fn hot_leaf_json(leaf: &PdpHotLeafProofV1) -> Value {
     let mut map = Map::new();
     map.insert("leaf_index".to_owned(), Value::from(leaf.leaf_index));

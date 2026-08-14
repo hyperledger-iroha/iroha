@@ -1,11 +1,12 @@
 //! Built-in handling for multisig instructions without requiring an executor upgrade.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    str::FromStr,
-    sync::LazyLock,
+use crate::{
+    smartcontracts::Execute,
+    smartcontracts::isi::domain::isi::ensure_controller_capabilities,
+    state::{
+        StateTransaction, WorldReadOnly, public_lane_reward_record_matches_key,
+        public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
+    },
 };
-
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     ValidationFail,
@@ -29,16 +30,11 @@ use iroha_executor_data_model::isi::multisig::{
     MultisigPropose, MultisigRegister, MultisigSpec,
 };
 use mv::storage::StorageReadOnly;
-
-use crate::{
-    smartcontracts::Execute,
-    smartcontracts::isi::domain::isi::ensure_controller_capabilities,
-    state::{
-        StateTransaction, WorldReadOnly, public_lane_reward_record_matches_key,
-        public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
-    },
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    str::FromStr,
+    sync::LazyLock,
 };
-
 const DELIMITER: char = '/';
 const MULTISIG: &str = "multisig";
 const MULTISIG_ACCOUNT_STATE: &str = "account";
@@ -63,7 +59,6 @@ static MULTISIG_HOME_DOMAIN_KEY: LazyLock<Name> = LazyLock::new(|| {
 });
 static MULTISIG_PROPOSAL_METADATA_PREFIX: LazyLock<String> =
     LazyLock::new(|| format!("{MULTISIG}{DELIMITER}proposals{DELIMITER}"));
-
 /// Execute a multisig instruction directly in the initial executor.
 ///
 /// # Errors
@@ -92,7 +87,6 @@ pub fn execute_multisig_instruction(
         }
     }
 }
-
 /// Return the concrete instructions a live multisig approval can execute.
 ///
 /// This read-only projection is used by non-bypassable deferred-execution admission. Missing,
@@ -113,14 +107,12 @@ pub(crate) fn live_proposal_instructions_for_approval(
     }
     Some((proposal.multisig_account_id, proposal.instructions))
 }
-
 pub(crate) fn is_reserved_multisig_metadata_key(key: &Name) -> bool {
     let literal = key.as_ref();
     literal == spec_key().as_ref()
         || literal == home_domain_key().as_ref()
         || literal.starts_with(MULTISIG_PROPOSAL_METADATA_PREFIX.as_str())
 }
-
 impl Execute for AddSignatory {
     fn execute(
         self,
@@ -179,7 +171,6 @@ impl Execute for AddSignatory {
         Ok(())
     }
 }
-
 impl Execute for RemoveSignatory {
     fn execute(
         self,
@@ -239,7 +230,6 @@ impl Execute for RemoveSignatory {
         let resolved_signatory_account =
             resolve_signatory_account(state_transaction, &signatory_account)
                 .map_err(map_validation_fail)?;
-
         let multisig_role_id = multisig_role_for(home_domain.as_ref(), &updated_account);
         if has_role(
             state_transaction,
@@ -259,11 +249,9 @@ impl Execute for RemoveSignatory {
             Revoke::account_role(signatory_role_id, updated_account.clone())
                 .execute(authority, state_transaction)?;
         }
-
         Ok(())
     }
 }
-
 impl Execute for SetAccountQuorum {
     fn execute(
         self,
@@ -294,16 +282,13 @@ impl Execute for SetAccountQuorum {
         Ok(())
     }
 }
-
 pub(crate) fn spec_key() -> Name {
     Name::from_str(&format!("{MULTISIG}{DELIMITER}spec"))
         .expect("constant string must be a valid name")
 }
-
 fn home_domain_key() -> Name {
     (*MULTISIG_HOME_DOMAIN_KEY).clone()
 }
-
 pub(crate) fn multisig_account_state_key(account: &AccountId) -> StatePath {
     StatePath::from_str(&format!(
         "{MULTISIG}{DELIMITER}{MULTISIG_ACCOUNT_STATE}{DELIMITER}{}",
@@ -311,7 +296,6 @@ pub(crate) fn multisig_account_state_key(account: &AccountId) -> StatePath {
     ))
     .expect("multisig account state path must be valid")
 }
-
 fn multisig_signatory_index_key(signatory: &AccountId) -> StatePath {
     StatePath::from_str(&format!(
         "{MULTISIG}{DELIMITER}{MULTISIG_SIGNATORY_INDEX_STATE}{DELIMITER}{}",
@@ -319,7 +303,6 @@ fn multisig_signatory_index_key(signatory: &AccountId) -> StatePath {
     ))
     .expect("multisig signatory state path must be valid")
 }
-
 fn multisig_proposal_state_prefix(account: &AccountId) -> StatePath {
     StatePath::from_str(&format!(
         "{MULTISIG}{DELIMITER}{MULTISIG_PROPOSAL_STATE}{DELIMITER}{}{DELIMITER}",
@@ -327,7 +310,6 @@ fn multisig_proposal_state_prefix(account: &AccountId) -> StatePath {
     ))
     .expect("multisig proposal state prefix must be valid")
 }
-
 fn multisig_proposal_state_key(
     multisig_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
@@ -339,7 +321,6 @@ fn multisig_proposal_state_key(
     ))
     .expect("constant string must be a valid state path")
 }
-
 fn multisig_proposal_terminal_state_prefix(account: &AccountId) -> StatePath {
     StatePath::from_str(&format!(
         "{MULTISIG}{DELIMITER}{MULTISIG_PROPOSAL_TERMINAL_STATE}{DELIMITER}{}{DELIMITER}",
@@ -347,7 +328,6 @@ fn multisig_proposal_terminal_state_prefix(account: &AccountId) -> StatePath {
     ))
     .expect("multisig proposal terminal state prefix must be valid")
 }
-
 fn multisig_proposal_terminal_state_key(
     multisig_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
@@ -359,7 +339,6 @@ fn multisig_proposal_terminal_state_key(
     ))
     .expect("multisig proposal terminal state path must be valid")
 }
-
 fn multisig_proposal_terminal_execution_state_key(
     terminal_entrypoint_hash: [u8; Hash::LENGTH],
     multisig_account: &AccountId,
@@ -372,7 +351,6 @@ fn multisig_proposal_terminal_execution_state_key(
     ))
     .expect("multisig proposal terminal execution path must be valid")
 }
-
 fn multisig_approval_outcome_state_key(
     entrypoint_hash: [u8; Hash::LENGTH],
     entrypoint_account: &AccountId,
@@ -385,7 +363,6 @@ fn multisig_approval_outcome_state_key(
     ))
     .expect("multisig approval outcome path must be valid")
 }
-
 fn account_role_suffix(account: &AccountId) -> String {
     const MAX_CANONICAL_SUFFIX_LEN: usize = 128;
     if let Ok(canonical_suffix) = account.canonical_i105() {
@@ -395,7 +372,6 @@ fn account_role_suffix(account: &AccountId) -> String {
     }
     HashOf::new(account).to_string()
 }
-
 fn multisig_role_for(
     home_domain: Option<&iroha_data_model::domain::DomainId>,
     account: &AccountId,
@@ -411,7 +387,6 @@ fn multisig_role_for(
     };
     literal.parse().expect("multisig role name must be valid")
 }
-
 fn rekey_multisig_account(
     state_transaction: &mut StateTransaction<'_, '_>,
     account: &AccountId,
@@ -426,17 +401,14 @@ fn rekey_multisig_account(
         &state_transaction.crypto.allowed_signing,
         &state_transaction.crypto.allowed_curve_ids,
     )?;
-
     if &updated_account == account {
         return Ok(account.clone());
     }
-
     if account_exists(state_transaction, &updated_account).map_err(map_validation_fail)? {
         return Err(InstructionExecutionError::InvariantViolation(
             format!("multisig account `{updated_account}` already exists").into(),
         ));
     }
-
     rekey_account_id(state_transaction, account, &updated_account, home_domain)?;
     state_transaction
         .world
@@ -446,7 +418,6 @@ fn rekey_multisig_account(
         .map_err(map_validation_fail)?;
     Ok(updated_account)
 }
-
 fn multisig_policy_from_spec(
     spec: &MultisigSpec,
 ) -> Result<MultisigPolicy, InstructionExecutionError> {
@@ -465,7 +436,6 @@ fn multisig_policy_from_spec(
     MultisigPolicy::new(spec.quorum.get(), members)
         .map_err(|err| InstructionExecutionError::InvariantViolation(format!("{err}").into()))
 }
-
 fn rekey_account_id(
     state_transaction: &mut StateTransaction<'_, '_>,
     old_account: &AccountId,
@@ -515,20 +485,17 @@ fn rekey_account_id(
             .into(),
         ));
     }
-
     if state_transaction.world.accounts.get(new_account).is_some() {
         return Err(InstructionExecutionError::InvariantViolation(
             format!("account `{new_account}` already exists").into(),
         ));
     }
-
     let account_value = state_transaction
         .world
         .accounts
         .get(old_account)
         .cloned()
         .ok_or_else(|| InstructionExecutionError::Find(FindError::Account(old_account.clone())))?;
-
     let mut labels_to_repoint: BTreeSet<_> = state_transaction
         .world
         .account_aliases_by_account
@@ -558,7 +525,6 @@ fn rekey_account_id(
     if let Some(label) = account_value.label().cloned() {
         labels_to_repoint.insert(label);
     }
-
     // Alias bindings and authoritative SNS ownership are one invariant. Scan the authoritative
     // namespace, rather than only the binding indexes, so acquired-but-unbound and
     // binding-cleared leases are migrated too. Preflight every update before mutating state.
@@ -591,7 +557,6 @@ fn rekey_account_id(
             ));
         }
     }
-
     // Build every continuity update before changing the account table. A malformed or missing
     // record must fail this canonical rekey atomically instead of leaving a partially moved
     // account when this helper is exercised directly.
@@ -627,7 +592,6 @@ fn rekey_account_id(
             })?;
         rekey_record_updates.push((label.clone(), record));
     }
-
     let old_multisig_role = multisig_role_for(home_domain, old_account);
     let new_multisig_role = multisig_role_for(home_domain, new_account);
     if old_multisig_role != new_multisig_role
@@ -641,7 +605,6 @@ fn rekey_account_id(
             format!("role `{new_multisig_role}` already exists").into(),
         ));
     }
-
     let assets_to_move: Vec<_> = state_transaction
         .world
         .assets_in_account_iter(old_account)
@@ -659,7 +622,6 @@ fn rekey_account_id(
             ));
         }
     }
-
     state_transaction
         .world
         .accounts
@@ -669,7 +631,6 @@ fn rekey_account_id(
         .world
         .accounts
         .insert(new_account.clone(), account_value.clone());
-
     for (label, record) in rekey_record_updates {
         state_transaction
             .world
@@ -685,7 +646,6 @@ fn rekey_account_id(
             .smart_contract_state
             .insert(storage_key, norito::codec::Encode::encode(&record));
     }
-
     if let Some(uaid) = account_value.uaid().copied() {
         state_transaction
             .world
@@ -693,7 +653,6 @@ fn rekey_account_id(
             .insert(uaid, new_account.clone());
         state_transaction.rebuild_space_directory_bindings(uaid);
     }
-
     if let Some(sequence) = state_transaction
         .world
         .tx_sequences
@@ -704,7 +663,6 @@ fn rekey_account_id(
             .tx_sequences
             .insert(new_account.clone(), sequence);
     }
-
     if let Some(perms) = state_transaction
         .world
         .account_permissions
@@ -715,7 +673,6 @@ fn rekey_account_id(
             .account_permissions
             .insert(new_account.clone(), perms);
     }
-
     if old_multisig_role != new_multisig_role {
         if let Some(mut role) = state_transaction
             .world
@@ -729,7 +686,6 @@ fn rekey_account_id(
                 .insert(new_multisig_role.clone(), role);
         }
     }
-
     let mut role_updates = Vec::new();
     for (role_id, _) in state_transaction.world.account_roles.iter() {
         let mut updated = role_id.clone();
@@ -747,7 +703,6 @@ fn rekey_account_id(
         state_transaction.world.account_roles.remove(old_key);
         state_transaction.world.account_roles.insert(new_key, ());
     }
-
     for asset_id in assets_to_move {
         let new_asset_id = iroha_data_model::asset::AssetId::with_scope(
             asset_id.definition().clone(),
@@ -775,7 +730,6 @@ fn rekey_account_id(
                 .insert(new_asset_id, meta);
         }
     }
-
     let nft_ids: Vec<_> = state_transaction
         .world
         .nfts_in_account_iter(old_account)
@@ -789,7 +743,6 @@ fn rekey_account_id(
             .world
             .replace_nft_owner_index(&nft_id, old_account, new_account);
     }
-
     let domain_ids: Vec<_> = state_transaction
         .world
         .domains_owned_by_iter(old_account)
@@ -803,7 +756,6 @@ fn rekey_account_id(
             .world
             .replace_domain_owner_index(&domain_id, old_account, new_account);
     }
-
     let asset_def_ids: Vec<_> = state_transaction
         .world
         .asset_definitions_owned_by_iter(old_account)
@@ -821,7 +773,6 @@ fn rekey_account_id(
             .world
             .replace_asset_definition_owner_index(&asset_def_id, old_account, new_account);
     }
-
     let provider_ids: Vec<_> = state_transaction
         .world
         .provider_owners
@@ -835,7 +786,6 @@ fn rekey_account_id(
             .provider_owners
             .insert(provider_id, new_account.clone());
     }
-
     replace_account_id_in_offline(state_transaction, old_account, new_account);
     replace_account_id_in_public_lane(state_transaction, old_account, new_account);
     replace_account_id_in_repo_agreements(state_transaction, old_account, new_account);
@@ -844,18 +794,14 @@ fn rekey_account_id(
     replace_account_id_in_governance(state_transaction, old_account, new_account);
     replace_account_id_in_oracle(state_transaction, old_account, new_account);
     replace_account_id_in_content_bundles(state_transaction, old_account, new_account);
-
     state_transaction
         .world
         .triggers
         .replace_account_id(old_account, new_account);
-
     state_transaction.invalidate_permission_cache_for_account(old_account);
     state_transaction.invalidate_permission_cache_for_account(new_account);
-
     Ok(())
 }
-
 pub(crate) fn replace_account_controller(
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -875,7 +821,6 @@ pub(crate) fn replace_account_controller(
         &state_transaction.crypto.allowed_signing,
         &state_transaction.crypto.allowed_curve_ids,
     )?;
-
     if &new_account == old_account {
         return Err(InstructionExecutionError::InvalidParameter(
             InvalidParameterError::SmartContract(format!(
@@ -883,13 +828,11 @@ pub(crate) fn replace_account_controller(
             )),
         ));
     }
-
     if account_exists(state_transaction, &new_account).map_err(map_validation_fail)? {
         return Err(InstructionExecutionError::InvariantViolation(
             format!("account `{new_account}` already exists").into(),
         ));
     }
-
     let previous_state = load_multisig_account_state_optional(state_transaction, old_account)
         .map_err(map_validation_fail)?;
     if old_account.multisig_policy().is_some() && previous_state.is_none() {
@@ -903,14 +846,12 @@ pub(crate) fn replace_account_controller(
     let home_domain = previous_state
         .as_ref()
         .and_then(|state| state.home_domain.clone());
-
     rekey_account_id(
         state_transaction,
         old_account,
         &new_account,
         home_domain.as_ref(),
     )?;
-
     if previous_state.is_some() {
         state_transaction
             .world
@@ -919,7 +860,6 @@ pub(crate) fn replace_account_controller(
         move_multisig_proposals(state_transaction, old_account, &new_account)
             .map_err(map_validation_fail)?;
     }
-
     let next_state = if let Some(policy) = new_account.multisig_policy() {
         Some(
             multisig_state_from_policy(
@@ -933,7 +873,6 @@ pub(crate) fn replace_account_controller(
     } else {
         None
     };
-
     reconcile_multisig_transition(
         authority,
         state_transaction,
@@ -942,10 +881,8 @@ pub(crate) fn replace_account_controller(
         next_state.as_ref(),
     )
     .map_err(map_validation_fail)?;
-
     Ok(new_account)
 }
-
 fn replace_account_id(target: &mut AccountId, old: &AccountId, new: &AccountId) -> bool {
     if target == old {
         *target = new.clone();
@@ -954,7 +891,6 @@ fn replace_account_id(target: &mut AccountId, old: &AccountId, new: &AccountId) 
         false
     }
 }
-
 fn replace_account_id_in_asset_id(
     asset_id: &iroha_data_model::asset::AssetId,
     old: &AccountId,
@@ -970,19 +906,16 @@ fn replace_account_id_in_asset_id(
         asset_id.clone()
     }
 }
-
 fn replace_account_id_in_vec(accounts: &mut Vec<AccountId>, old: &AccountId, new: &AccountId) {
     for account in accounts.iter_mut() {
         replace_account_id(account, old, new);
     }
 }
-
 fn replace_account_id_in_set(accounts: &mut BTreeSet<AccountId>, old: &AccountId, new: &AccountId) {
     if accounts.remove(old) {
         accounts.insert(new.clone());
     }
 }
-
 fn reconcile_multisig_transition(
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -993,7 +926,6 @@ fn reconcile_multisig_transition(
     let home_domain = previous_state
         .and_then(|state| state.home_domain.clone())
         .or_else(|| next_state.and_then(|state| state.home_domain.clone()));
-
     let previous_members = previous_state
         .map(|state| resolved_signatory_accounts(state_transaction, &state.spec))
         .transpose()?
@@ -1002,10 +934,8 @@ fn reconcile_multisig_transition(
         .map(|state| resolved_signatory_accounts(state_transaction, &state.spec))
         .transpose()?
         .unwrap_or_default();
-
     if previous_state.is_some() {
         let multisig_role_id = multisig_role_for(home_domain.as_ref(), active_account);
-
         for removed in previous_members
             .iter()
             .filter(|candidate| !next_members.contains(candidate))
@@ -1019,7 +949,6 @@ fn reconcile_multisig_transition(
                 authority,
             )?;
         }
-
         if next_state.is_none() {
             revoke_role_if_present(
                 state_transaction,
@@ -1032,7 +961,6 @@ fn reconcile_multisig_transition(
                 .map_err(map_find_error)?;
         }
     }
-
     if let Some(next_state) = next_state {
         persist_multisig_account_state(state_transaction, previous_state, next_state)?;
         let role_owner = if let Some(home_domain) = next_state.home_domain.as_ref() {
@@ -1048,10 +976,8 @@ fn reconcile_multisig_transition(
             &next_state.spec,
         )?;
     }
-
     Ok(())
 }
-
 fn clear_multisig_account_metadata(
     state_transaction: &mut StateTransaction<'_, '_>,
     account: &AccountId,
@@ -1061,7 +987,6 @@ fn clear_multisig_account_metadata(
     let _ = account.remove(&home_domain_key());
     Ok(())
 }
-
 fn revoke_role_if_present(
     state_transaction: &mut StateTransaction<'_, '_>,
     role_id: &RoleId,
@@ -1075,7 +1000,6 @@ fn revoke_role_if_present(
     }
     Ok(())
 }
-
 fn multisig_state_from_policy(
     state_transaction: &mut StateTransaction<'_, '_>,
     multisig_account: &AccountId,
@@ -1089,14 +1013,12 @@ fn multisig_state_from_policy(
         multisig_account,
         &spec,
     )?;
-
     Ok(MultisigAccountState::new(
         multisig_account.clone(),
         home_domain,
         spec,
     ))
 }
-
 fn multisig_spec_from_policy(
     multisig_account: &AccountId,
     policy: &MultisigPolicy,
@@ -1112,23 +1034,19 @@ fn multisig_spec_from_policy(
         })?;
         signatories.insert(signatory_account, weight);
     }
-
     let quorum = std::num::NonZeroU16::new(policy.threshold()).ok_or_else(|| {
         ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
             "multisig threshold is zero for `{multisig_account}`"
         )))
     })?;
-
     let transaction_ttl_ms = std::num::NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS)
         .expect("default multisig ttl must be non-zero");
-
     Ok(MultisigSpec {
         signatories,
         quorum,
         transaction_ttl_ms,
     })
 }
-
 fn replace_account_id_in_offline(
     state_transaction: &mut StateTransaction<'_, '_>,
     old: &AccountId,
@@ -1136,7 +1054,6 @@ fn replace_account_id_in_offline(
 ) {
     let _ = (state_transaction, old, new);
 }
-
 fn replace_account_id_in_public_lane(
     state_transaction: &mut StateTransaction<'_, '_>,
     old: &AccountId,
@@ -1162,7 +1079,6 @@ fn replace_account_id_in_public_lane(
                 .insert(new_key, record);
         }
     }
-
     let validator_keys: Vec<_> = state_transaction
         .world
         .public_lane_validators
@@ -1177,7 +1093,6 @@ fn replace_account_id_in_public_lane(
             replace_account_id(&mut record.stake_account, old, new);
         }
     }
-
     let mut stake_updates = Vec::new();
     for (key, record) in state_transaction.world.public_lane_stake_shares.iter() {
         if !public_lane_stake_share_matches_key(key, record) {
@@ -1211,7 +1126,6 @@ fn replace_account_id_in_public_lane(
                 .insert(new_key, record);
         }
     }
-
     let reward_keys: Vec<_> = state_transaction
         .world
         .public_lane_rewards
@@ -1228,7 +1142,6 @@ fn replace_account_id_in_public_lane(
             }
         }
     }
-
     let mut claim_updates = Vec::new();
     for (key, value) in state_transaction.world.public_lane_reward_claims.iter() {
         let (lane_id, account_id, asset_id) = key;
@@ -1262,7 +1175,6 @@ fn replace_account_id_in_public_lane(
             .insert(new_key, value);
     }
 }
-
 fn replace_account_id_in_repo_agreements(
     state_transaction: &mut StateTransaction<'_, '_>,
     old: &AccountId,
@@ -1288,7 +1200,6 @@ fn replace_account_id_in_repo_agreements(
         }
     }
 }
-
 fn replace_account_id_in_settlements(
     state_transaction: &mut StateTransaction<'_, '_>,
     old: &AccountId,
@@ -1318,7 +1229,6 @@ fn replace_account_id_in_settlements(
         }
     }
 }
-
 fn replace_account_id_in_citizens(
     state_transaction: &mut StateTransaction<'_, '_>,
     old: &AccountId,
@@ -1328,7 +1238,6 @@ fn replace_account_id_in_citizens(
         replace_account_id(&mut record.owner, old, new);
         state_transaction.world.citizens.insert(new.clone(), record);
     }
-
     let citizen_ids: Vec<_> = state_transaction
         .world
         .citizens
@@ -1341,7 +1250,6 @@ fn replace_account_id_in_citizens(
         }
     }
 }
-
 fn replace_account_id_in_governance(
     state_transaction: &mut StateTransaction<'_, '_>,
     old: &AccountId,
@@ -1362,7 +1270,6 @@ fn replace_account_id_in_governance(
             replace_account_id(&mut record.proposer, old, new);
         }
     }
-
     let approval_ids: Vec<_> = state_transaction
         .world
         .governance_stage_approvals
@@ -1380,7 +1287,6 @@ fn replace_account_id_in_governance(
             }
         }
     }
-
     let lock_ids: Vec<_> = state_transaction
         .world
         .governance_locks
@@ -1409,7 +1315,6 @@ fn replace_account_id_in_governance(
         locks.locks = updated;
         state_transaction.world.put_governance_locks(lock_id, locks);
     }
-
     let slash_ids: Vec<_> = state_transaction
         .world
         .governance_slashes
@@ -1434,7 +1339,6 @@ fn replace_account_id_in_governance(
             slashes.slashes = updated;
         }
     }
-
     let council_epochs: Vec<_> = state_transaction
         .world
         .council
@@ -1447,7 +1351,6 @@ fn replace_account_id_in_governance(
             replace_account_id_in_vec(&mut term.alternates, old, new);
         }
     }
-
     let body_epochs: Vec<_> = state_transaction
         .world
         .parliament_bodies
@@ -1463,7 +1366,6 @@ fn replace_account_id_in_governance(
         }
     }
 }
-
 fn replace_account_id_in_oracle(
     state_transaction: &mut StateTransaction<'_, '_>,
     old: &AccountId,
@@ -1480,7 +1382,6 @@ fn replace_account_id_in_oracle(
             replace_account_id_in_vec(&mut feed.providers, old, new);
         }
     }
-
     let change_ids: Vec<_> = state_transaction
         .world
         .oracle_changes
@@ -1497,7 +1398,6 @@ fn replace_account_id_in_oracle(
             }
         }
     }
-
     let dispute_ids: Vec<_> = state_transaction
         .world
         .oracle_disputes
@@ -1510,7 +1410,6 @@ fn replace_account_id_in_oracle(
             replace_account_id(&mut dispute.target, old, new);
         }
     }
-
     let mut provider_updates = Vec::new();
     for (key, value) in state_transaction.world.oracle_provider_stats.iter() {
         if key.provider_id == *old {
@@ -1529,7 +1428,6 @@ fn replace_account_id_in_oracle(
             .oracle_provider_stats
             .insert(new_key, value);
     }
-
     let observation_keys: Vec<_> = state_transaction
         .world
         .oracle_observations
@@ -1557,7 +1455,6 @@ fn replace_account_id_in_oracle(
         }
     }
 }
-
 fn replace_account_id_in_content_bundles(
     state_transaction: &mut StateTransaction<'_, '_>,
     old: &AccountId,
@@ -1575,7 +1472,6 @@ fn replace_account_id_in_content_bundles(
         }
     }
 }
-
 fn execute_register(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -1587,7 +1483,6 @@ fn execute_register(
         spec,
     } = instruction;
     validate_registration(state_transaction, &multisig_account_id, &spec)?;
-
     if account_exists(state_transaction, &multisig_account_id)? {
         let expected_account = AccountId::new_multisig(
             multisig_policy_from_spec(&spec).map_err(ValidationFail::InstructionFailed)?,
@@ -1628,12 +1523,10 @@ fn execute_register(
         )?;
         return Ok(());
     }
-
     let register_account = iroha_data_model::account::NewAccount::new(multisig_account_id.clone());
     Register::account(register_account)
         .execute(authority, state_transaction)
         .map_err(ValidationFail::InstructionFailed)?;
-
     let updated_account = rekey_multisig_account(
         state_transaction,
         &multisig_account_id,
@@ -1664,10 +1557,8 @@ fn execute_register(
         &updated_account,
         &spec,
     )?;
-
     Ok(())
 }
-
 fn execute_propose(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -1743,7 +1634,6 @@ fn execute_propose(
     let has_not_longer_ttl = instruction
         .transaction_ttl_ms
         .is_none_or(|override_ttl_ms| override_ttl_ms <= multisig_spec.transaction_ttl_ms);
-
     if !has_not_longer_ttl {
         iroha_logger::error!(
             proposer = %proposer,
@@ -1757,7 +1647,6 @@ fn execute_propose(
             "ttl violates the restriction".to_owned(),
         ));
     }
-
     if !(is_downward_proposal || has_multisig_role || is_signatory || is_self_proposal) {
         iroha_logger::error!(
             proposer = %proposer,
@@ -1775,7 +1664,6 @@ fn execute_propose(
             "not qualified to propose multisig".to_owned(),
         ));
     }
-
     match proposal_state(state_transaction, &multisig_account, &instructions_hash) {
         Ok(existing) if now_ms(state_transaction) < existing.expires_at_ms => {
             iroha_logger::warn!(
@@ -1803,7 +1691,6 @@ fn execute_propose(
             return Err(err);
         }
     }
-
     let now_ms = now_ms(state_transaction);
     if proposal_state(state_transaction, &multisig_account, &instructions_hash).is_ok() {
         if let Err(err) = prune_expired(
@@ -1835,7 +1722,6 @@ fn execute_propose(
         BTreeSet::from([proposer.clone()]),
         None,
     );
-
     let approve_me = MultisigApprove::new(multisig_account.clone(), instructions_hash);
     let resolved_signatories = match resolved_signatory_accounts(state_transaction, &multisig_spec)
     {
@@ -1899,7 +1785,6 @@ fn execute_propose(
             return Err(err);
         }
     }
-
     let proposal_state = MultisigProposalState::new(
         multisig_account,
         instructions_hash,
@@ -1934,7 +1819,6 @@ fn execute_propose(
         }
     }
 }
-
 fn execute_approve(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -1944,7 +1828,6 @@ fn execute_approve(
     let multisig_account = resolve_signatory_account(state_transaction, &instruction.account)?;
     let home_domain = multisig_home_domain(state_transaction, &multisig_account)?;
     let instructions_hash = instruction.instructions_hash;
-
     let spec = multisig_spec(state_transaction, &multisig_account)?;
     let has_multisig_role = state_transaction
         .world
@@ -1952,7 +1835,6 @@ fn execute_approve(
         .any(|role| role == &multisig_role_for(home_domain.as_ref(), &multisig_account));
     let is_signatory = spec_contains_signatory_subject(&spec, &approver);
     let is_self_approval = approver.subject_id() == multisig_account.subject_id();
-
     if !(has_multisig_role || is_signatory || is_self_approval) {
         return Err(ValidationFail::NotPermitted(
             "not qualified to approve multisig".to_owned(),
@@ -1973,7 +1855,6 @@ fn execute_approve(
         );
         return Err(err);
     }
-
     let Ok(mut proposal_state) =
         proposal_state(state_transaction, &multisig_account, &instructions_hash)
     else {
@@ -2004,7 +1885,6 @@ fn execute_approve(
         )?;
         return Ok(());
     }
-
     upsert_subject_approval(&mut proposal_state.approvals, approver);
     let approved_weight = approved_weight_by_subject(&spec, &proposal_state.approvals);
     let is_authenticated = approved_weight >= u32::from(spec.quorum.get());
@@ -2016,7 +1896,6 @@ fn execute_approve(
         is_authenticated,
         "multisig approval evaluated quorum"
     );
-
     if !is_authenticated {
         iroha_logger::info!(
             multisig_account = %multisig_account,
@@ -2039,7 +1918,6 @@ fn execute_approve(
         );
         return Ok(());
     }
-
     if is_authenticated {
         crate::validation_fee::enforce_deferred_instruction_list(
             &multisig_account,
@@ -2047,7 +1925,6 @@ fn execute_approve(
             state_transaction,
         )
         .map_err(|reason| ValidationFail::NotPermitted(reason.to_string()))?;
-
         let execution_id = (multisig_account.clone(), instructions_hash);
         begin_multisig_deferred_execution(
             &mut state_transaction.multisig_deferred_execution_stack,
@@ -2086,7 +1963,6 @@ fn execute_approve(
                 }
                 _ => unreachable!("proposal_state.is_relayed checked above"),
             }
-
             for instruction in proposal_state.instructions {
                 let instruction_debug = format!("{instruction:?}");
                 iroha_logger::info!(
@@ -2116,7 +1992,6 @@ fn execute_approve(
                     "multisig approval finished authenticated instruction"
                 );
             }
-
             store_multisig_approval_outcome(
                 state_transaction,
                 &instruction.account,
@@ -2131,14 +2006,11 @@ fn execute_approve(
         );
         execution_result?;
     }
-
     Ok(())
 }
-
 fn canceler_is_authorized(multisig_account: &AccountId, canceler: &AccountId) -> bool {
     canceler.subject_id() == multisig_account.subject_id()
 }
-
 fn execute_cancel(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -2147,27 +2019,23 @@ fn execute_cancel(
     let canceler = authority.clone();
     let multisig_account = resolve_signatory_account(state_transaction, &instruction.account)?;
     let instructions_hash = instruction.instructions_hash;
-
     if !canceler_is_authorized(&multisig_account, &canceler) {
         return Err(ValidationFail::NotPermitted(
             "multisig cancel must execute as the multisig account".to_owned(),
         ));
     }
-
     prune_expired(
         state_transaction,
         &multisig_account,
         &instructions_hash,
         &instruction.account,
     )?;
-
     let proposal_state = proposal_state(state_transaction, &multisig_account, &instructions_hash)?;
     if let Some(true) = proposal_state.is_relayed {
         return Err(ValidationFail::NotPermitted(
             "cannot cancel an executed relayed approval".to_owned(),
         ));
     }
-
     maybe_store_terminal_proposal_state(
         state_transaction,
         &proposal_state,
@@ -2176,7 +2044,6 @@ fn execute_cancel(
     )?;
     prune_down(state_transaction, &multisig_account, &instructions_hash)
 }
-
 fn execute_invalidate_outstanding(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -2191,7 +2058,6 @@ fn execute_invalidate_outstanding(
     }
     invalidate_outstanding_proposals(state_transaction, &multisig_account).map(|_| ())
 }
-
 fn deploy_relayer(
     state_transaction: &mut StateTransaction<'_, '_>,
     relayer: &AccountId,
@@ -2202,10 +2068,8 @@ fn deploy_relayer(
     let spec = multisig_spec(state_transaction, relayer)?;
     let relay_expires_at_ms =
         capped_relay_expiry(now_ms, parent_expires_at_ms, spec.transaction_ttl_ms.get());
-
     let relay_hash = HashOf::new(&vec![InstructionBox::from(relay.clone())]);
     let sub_relay = MultisigApprove::new(relayer.clone(), relay_hash);
-
     for signatory in resolved_signatory_accounts(state_transaction, &spec)? {
         if is_multisig(state_transaction, &signatory)? {
             deploy_relayer(
@@ -2217,7 +2081,6 @@ fn deploy_relayer(
             )?;
         }
     }
-
     let relay_value = MultisigProposalValue::new(
         vec![InstructionBox::from(relay.clone())],
         now_ms,
@@ -2238,12 +2101,10 @@ fn deploy_relayer(
         ),
     )
 }
-
 fn capped_relay_expiry(now_ms: u64, parent_expires_at_ms: u64, relayer_ttl_ms: u64) -> u64 {
     let local_expiry = now_ms.saturating_add(relayer_ttl_ms);
     local_expiry.min(parent_expires_at_ms)
 }
-
 fn begin_multisig_deferred_execution(
     execution_stack: &mut Vec<MultisigDeferredExecutionId>,
     execution_id: &MultisigDeferredExecutionId,
@@ -2259,7 +2120,6 @@ fn begin_multisig_deferred_execution(
     execution_stack.push(execution_id.clone());
     Ok(())
 }
-
 fn finish_multisig_deferred_execution(
     execution_stack: &mut Vec<MultisigDeferredExecutionId>,
     execution_id: &MultisigDeferredExecutionId,
@@ -2267,7 +2127,6 @@ fn finish_multisig_deferred_execution(
     let finished = execution_stack.pop();
     debug_assert_eq!(finished.as_ref(), Some(execution_id));
 }
-
 fn prune_expired(
     state_transaction: &mut StateTransaction<'_, '_>,
     multisig_account: &AccountId,
@@ -2283,7 +2142,6 @@ fn prune_expired(
         &mut BTreeSet::new(),
     )
 }
-
 fn prune_expired_with_guard(
     state_transaction: &mut StateTransaction<'_, '_>,
     multisig_account: &AccountId,
@@ -2305,12 +2163,10 @@ fn prune_expired_with_guard(
             "multisig proposal expiry traversal contains a cycle".to_owned(),
         ));
     }
-
     let result = (|| {
         if now_ms(state_transaction) < proposal_state.expires_at_ms {
             return Ok(());
         }
-
         for instruction in &proposal_state.instructions {
             if let Ok(MultisigInstructionBox::Approve(approve)) =
                 MultisigInstructionBox::try_from(instruction)
@@ -2325,7 +2181,6 @@ fn prune_expired_with_guard(
                 )?;
             }
         }
-
         maybe_store_terminal_proposal_state(
             state_transaction,
             &proposal_state,
@@ -2337,14 +2192,12 @@ fn prune_expired_with_guard(
     active_path.remove(&execution_id);
     result
 }
-
 fn prune_down(
     state_transaction: &mut StateTransaction<'_, '_>,
     multisig_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
 ) -> Result<(), ValidationFail> {
     let spec = multisig_spec(state_transaction, multisig_account)?;
-
     state_transaction
         .world
         .smart_contract_state
@@ -2352,7 +2205,6 @@ fn prune_down(
             multisig_account,
             instructions_hash,
         ));
-
     for signatory in resolved_signatory_accounts(state_transaction, &spec)? {
         let relay_hash = {
             let relay = MultisigApprove::new(multisig_account.clone(), *instructions_hash);
@@ -2362,10 +2214,8 @@ fn prune_down(
             prune_down(state_transaction, &signatory, &relay_hash)?;
         }
     }
-
     Ok(())
 }
-
 fn validate_registration(
     state_transaction: &mut StateTransaction<'_, '_>,
     _multisig_account: &AccountId,
@@ -2377,7 +2227,6 @@ fn validate_registration(
     ensure_multisig_graph_is_acyclic(roots, state_transaction)?;
     Ok(())
 }
-
 fn ensure_quorum_reachable(spec: &MultisigSpec) -> Result<(), ValidationFail> {
     let total_weight: u32 = spec
         .signatories
@@ -2385,16 +2234,13 @@ fn ensure_quorum_reachable(spec: &MultisigSpec) -> Result<(), ValidationFail> {
         .map(|weight| u32::from(*weight))
         .sum();
     let quorum = u32::from(spec.quorum.get());
-
     if total_weight < quorum {
         return Err(ValidationFail::NotPermitted(format!(
             "multisig quorum {quorum} exceeds total signatory weight {total_weight}"
         )));
     }
-
     Ok(())
 }
-
 fn ensure_signatories_are_single(spec: &MultisigSpec) -> Result<(), ValidationFail> {
     for account in spec.signatories.keys() {
         if account.controller().single_signatory().is_none() {
@@ -2405,7 +2251,6 @@ fn ensure_signatories_are_single(spec: &MultisigSpec) -> Result<(), ValidationFa
     }
     Ok(())
 }
-
 fn ensure_multisig_graph_is_acyclic(
     roots: impl IntoIterator<Item = AccountId>,
     state_transaction: &StateTransaction<'_, '_>,
@@ -2418,14 +2263,12 @@ fn ensure_multisig_graph_is_acyclic(
         Ok(spec.signatories.keys().cloned().collect())
     })
 }
-
 fn spec_contains_signatory_subject(spec: &MultisigSpec, account: &AccountId) -> bool {
     let subject = account.subject_id();
     spec.signatories
         .keys()
         .any(|signatory| signatory.subject_id() == subject)
 }
-
 fn approved_weight_by_subject(spec: &MultisigSpec, approvals: &BTreeSet<AccountId>) -> u32 {
     let approved_subjects: BTreeSet<_> = approvals.iter().map(AccountId::subject_id).collect();
     spec.signatories
@@ -2434,13 +2277,11 @@ fn approved_weight_by_subject(spec: &MultisigSpec, approvals: &BTreeSet<AccountI
         .map(|(_, weight)| u32::from(*weight))
         .sum()
 }
-
 fn upsert_subject_approval(approvals: &mut BTreeSet<AccountId>, approver: AccountId) {
     let approver_subject = approver.subject_id();
     approvals.retain(|approved| approved.subject_id() != approver_subject);
     approvals.insert(approver);
 }
-
 fn resolve_signatory_account(
     state_transaction: &StateTransaction<'_, '_>,
     signatory: &AccountId,
@@ -2451,14 +2292,12 @@ fn resolve_signatory_account(
         .map(|account| account.id().clone())
         .map_err(map_find_error)
 }
-
 fn resolve_account_for_instruction(
     state_transaction: &StateTransaction<'_, '_>,
     account: &AccountId,
 ) -> Result<AccountId, InstructionExecutionError> {
     resolve_signatory_account(state_transaction, account).map_err(map_validation_fail)
 }
-
 fn materialize_missing_signatory_accounts(
     state_transaction: &mut StateTransaction<'_, '_>,
     home_domain: Option<&iroha_data_model::domain::DomainId>,
@@ -2478,7 +2317,6 @@ fn materialize_missing_signatory_accounts(
     }
     Ok(())
 }
-
 fn ensure_signatory_account_exists(
     state_transaction: &mut StateTransaction<'_, '_>,
     signatory: &AccountId,
@@ -2501,7 +2339,6 @@ fn ensure_signatory_account_exists(
         Err(err) => Err(err),
     }
 }
-
 fn resolved_signatory_accounts(
     state_transaction: &StateTransaction<'_, '_>,
     spec: &MultisigSpec,
@@ -2517,7 +2354,6 @@ fn resolved_signatory_accounts(
     }
     Ok(accounts)
 }
-
 fn ensure_multisig_graph_is_acyclic_with<F>(
     roots: Vec<AccountId>,
     mut next: F,
@@ -2532,7 +2368,6 @@ where
             (root, path)
         })
         .collect();
-
     while let Some((current, path)) = stack.pop() {
         let children = next(current.clone())?;
         for child in children {
@@ -2553,17 +2388,14 @@ where
             stack.push((child, next_path));
         }
     }
-
     Ok(())
 }
-
 fn multisig_spec(
     state_transaction: &StateTransaction<'_, '_>,
     multisig_account: &AccountId,
 ) -> Result<MultisigSpec, ValidationFail> {
     Ok(load_multisig_account_state(state_transaction, multisig_account)?.spec)
 }
-
 fn is_multisig(
     state_transaction: &StateTransaction<'_, '_>,
     account: &AccountId,
@@ -2581,7 +2413,6 @@ fn is_multisig(
         Err(err) => Err(err),
     }
 }
-
 fn domain_owner(
     state_transaction: &StateTransaction<'_, '_>,
     domain_id: &iroha_data_model::domain::DomainId,
@@ -2592,7 +2423,6 @@ fn domain_owner(
         .map(|domain| domain.owned_by().clone())
         .map_err(map_find_error)
 }
-
 fn account_exists(
     state_transaction: &StateTransaction<'_, '_>,
     account_id: &AccountId,
@@ -2603,7 +2433,6 @@ fn account_exists(
         Err(err) => Err(map_find_error(err)),
     }
 }
-
 fn configure_roles(
     state_transaction: &mut StateTransaction<'_, '_>,
     role_owner: &AccountId,
@@ -2612,7 +2441,6 @@ fn configure_roles(
     spec: &MultisigSpec,
 ) -> Result<(), ValidationFail> {
     let signatories = resolved_signatory_accounts(state_transaction, spec)?;
-
     let multisig_role_id = multisig_role_for(home_domain, multisig_account);
     ensure_role_available(
         state_transaction,
@@ -2626,11 +2454,9 @@ fn configure_roles(
         multisig_account,
         role_owner,
     )?;
-
     for signatory in &signatories {
         let signatory_role_id = multisig_role_for(home_domain, signatory);
         let delegates = [signatory.clone(), multisig_account.clone()];
-
         ensure_role_available(
             state_transaction,
             role_owner,
@@ -2646,10 +2472,8 @@ fn configure_roles(
         )?;
         grant_role_if_needed(state_transaction, &multisig_role_id, signatory, role_owner)?;
     }
-
     Ok(())
 }
-
 fn multisig_spec_strict(
     state_transaction: &StateTransaction<'_, '_>,
     multisig_account: &AccountId,
@@ -2658,14 +2482,12 @@ fn multisig_spec_strict(
         .map(|state| state.spec)
         .map_err(map_validation_fail)
 }
-
 fn multisig_home_domain(
     state_transaction: &StateTransaction<'_, '_>,
     multisig_account: &AccountId,
 ) -> Result<Option<iroha_data_model::domain::DomainId>, ValidationFail> {
     Ok(load_multisig_account_state(state_transaction, multisig_account)?.home_domain)
 }
-
 fn ensure_role_available(
     state_transaction: &mut StateTransaction<'_, '_>,
     domain_owner: &AccountId,
@@ -2678,30 +2500,24 @@ fn ensure_role_available(
             .map_err(ValidationFail::InstructionFailed)?;
         return Ok(());
     }
-
     if has_role(state_transaction, domain_owner, role_id)? {
         return Ok(());
     }
-
     for delegate in delegates {
         if delegate == domain_owner || !has_role(state_transaction, delegate, role_id)? {
             continue;
         }
-
         Grant::account_role(role_id.clone(), domain_owner.clone())
             .execute(delegate, state_transaction)
             .map_err(ValidationFail::InstructionFailed)?;
-
         if has_role(state_transaction, domain_owner, role_id)? {
             return Ok(());
         }
     }
-
     Err(ValidationFail::NotPermitted(format!(
         "domain owner `{domain_owner}` must hold role `{role_id}` to configure multisig"
     )))
 }
-
 fn grant_role_if_needed(
     state_transaction: &mut StateTransaction<'_, '_>,
     role_id: &RoleId,
@@ -2711,12 +2527,10 @@ fn grant_role_if_needed(
     if has_role(state_transaction, account, role_id)? {
         return Ok(());
     }
-
     Grant::account_role(role_id.clone(), account.clone())
         .execute(authority, state_transaction)
         .map_err(ValidationFail::InstructionFailed)
 }
-
 fn has_role(
     state_transaction: &StateTransaction<'_, '_>,
     account: &AccountId,
@@ -2732,22 +2546,18 @@ fn has_role(
         }
         Err(err) => return Err(err),
     };
-
     state_transaction
         .world
         .account(&resolved_account)
         .map_err(map_find_error)?;
-
     Ok(state_transaction
         .world
         .account_roles_iter(&resolved_account)
         .any(|role| role == role_id))
 }
-
 fn role_exists(state_transaction: &StateTransaction<'_, '_>, role_id: &RoleId) -> bool {
     state_transaction.world.roles.get(role_id).is_some()
 }
-
 fn persist_multisig_account_state(
     state_transaction: &mut StateTransaction<'_, '_>,
     previous_account_state: Option<&MultisigAccountState>,
@@ -2769,7 +2579,6 @@ fn persist_multisig_account_state(
         home_domain_key(),
         Json::new(account_state.home_domain.clone()),
     );
-
     let bytes = norito::to_bytes(account_state).map_err(multisig_state_encode_error)?;
     state_transaction
         .world
@@ -2782,7 +2591,6 @@ fn persist_multisig_account_state(
     )?;
     Ok(())
 }
-
 fn multisig_signatory_index_members(account_state: &MultisigAccountState) -> BTreeSet<AccountId> {
     account_state
         .spec
@@ -2791,7 +2599,6 @@ fn multisig_signatory_index_members(account_state: &MultisigAccountState) -> BTr
         .map(AccountId::subject_id)
         .collect()
 }
-
 fn load_multisig_signatory_memberships(
     state_transaction: &StateTransaction<'_, '_>,
     signatory: &AccountId,
@@ -2802,7 +2609,6 @@ fn load_multisig_signatory_memberships(
     };
     norito::decode_from_bytes(bytes).map_err(multisig_state_decode_error)
 }
-
 fn store_multisig_signatory_memberships(
     state_transaction: &mut StateTransaction<'_, '_>,
     signatory: &AccountId,
@@ -2820,7 +2626,6 @@ fn store_multisig_signatory_memberships(
         .insert(key, bytes);
     Ok(())
 }
-
 fn sync_multisig_signatory_index(
     state_transaction: &mut StateTransaction<'_, '_>,
     previous_account_state: Option<&MultisigAccountState>,
@@ -2834,13 +2639,11 @@ fn sync_multisig_signatory_index(
         .unwrap_or_default();
     let previous_multisig_account_id = previous_account_state.map(|state| state.account_id.clone());
     let next_multisig_account_id = next_account_state.map(|state| state.account_id.clone());
-
     let member_ids: BTreeSet<_> = removed_members
         .iter()
         .chain(added_members.iter())
         .cloned()
         .collect();
-
     for signatory in member_ids {
         let mut memberships = load_multisig_signatory_memberships(state_transaction, &signatory)?;
         if let Some(previous_multisig_account_id) = previous_multisig_account_id.as_ref()
@@ -2855,10 +2658,8 @@ fn sync_multisig_signatory_index(
         }
         store_multisig_signatory_memberships(state_transaction, &signatory, &memberships)?;
     }
-
     Ok(())
 }
-
 fn load_multisig_account_state_optional(
     state_transaction: &StateTransaction<'_, '_>,
     multisig_account: &AccountId,
@@ -2890,7 +2691,6 @@ fn load_multisig_account_state_optional(
             ),
         )));
     }
-
     let account = state_transaction
         .world
         .account(&resolved_account)
@@ -2929,7 +2729,6 @@ fn load_multisig_account_state_optional(
     }
     Ok(Some(state))
 }
-
 fn load_multisig_account_state(
     state_transaction: &StateTransaction<'_, '_>,
     multisig_account: &AccountId,
@@ -2937,7 +2736,6 @@ fn load_multisig_account_state(
     load_multisig_account_state_optional(state_transaction, multisig_account)?
         .ok_or(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))
 }
-
 fn store_multisig_proposal_state(
     state_transaction: &mut StateTransaction<'_, '_>,
     proposal_state: &MultisigProposalState,
@@ -2952,7 +2750,6 @@ fn store_multisig_proposal_state(
     );
     Ok(())
 }
-
 fn store_multisig_proposal_terminal_state(
     state_transaction: &mut StateTransaction<'_, '_>,
     terminal_state: &MultisigProposalTerminalState,
@@ -2967,7 +2764,6 @@ fn store_multisig_proposal_terminal_state(
     );
     Ok(())
 }
-
 fn store_multisig_proposal_terminal_execution_state(
     state_transaction: &mut StateTransaction<'_, '_>,
     terminal_state: &MultisigProposalTerminalState,
@@ -3012,7 +2808,6 @@ fn store_multisig_proposal_terminal_execution_state(
     }
     Ok(())
 }
-
 fn store_multisig_approval_outcome(
     state_transaction: &mut StateTransaction<'_, '_>,
     entrypoint_account: &AccountId,
@@ -3057,7 +2852,6 @@ fn store_multisig_approval_outcome(
     }
     Ok(())
 }
-
 fn proposal_state(
     state_transaction: &StateTransaction<'_, '_>,
     multisig_account: &AccountId,
@@ -3072,7 +2866,6 @@ fn proposal_state(
         .ok_or(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))?;
     norito::decode_from_bytes::<MultisigProposalState>(bytes).map_err(multisig_state_decode_error)
 }
-
 fn proposal_state_value(proposal_state: &MultisigProposalState) -> MultisigProposalValue {
     MultisigProposalValue::new(
         proposal_state.instructions.clone(),
@@ -3082,7 +2875,6 @@ fn proposal_state_value(proposal_state: &MultisigProposalState) -> MultisigPropo
         proposal_state.is_relayed,
     )
 }
-
 fn proposal_is_cancel_wrapper(proposal_state: &MultisigProposalState) -> bool {
     matches!(
         proposal_state.instructions.as_slice(),
@@ -3093,7 +2885,6 @@ fn proposal_is_cancel_wrapper(proposal_state: &MultisigProposalState) -> bool {
             )
     )
 }
-
 fn maybe_store_terminal_proposal_state(
     state_transaction: &mut StateTransaction<'_, '_>,
     proposal_state: &MultisigProposalState,
@@ -3117,7 +2908,6 @@ fn maybe_store_terminal_proposal_state(
     )?;
     store_multisig_proposal_terminal_state(state_transaction, &terminal_state)
 }
-
 fn maybe_store_relayed_proposal_execution_state(
     state_transaction: &mut StateTransaction<'_, '_>,
     proposal_state: &MultisigProposalState,
@@ -3137,7 +2927,6 @@ fn maybe_store_relayed_proposal_execution_state(
         entrypoint_account,
     )
 }
-
 fn move_multisig_proposals(
     state_transaction: &mut StateTransaction<'_, '_>,
     old_account: &AccountId,
@@ -3158,13 +2947,11 @@ fn move_multisig_proposals(
             .map_err(multisig_state_decode_error)?;
         entries.push((key.clone(), state));
     }
-
     for (old_key, mut proposal_state) in entries {
         proposal_state.multisig_account_id = new_account.clone();
         store_multisig_proposal_state(state_transaction, &proposal_state)?;
         state_transaction.world.smart_contract_state.remove(old_key);
     }
-
     let terminal_prefix = multisig_proposal_terminal_state_prefix(old_account);
     let terminal_prefix_literal = terminal_prefix.as_ref().to_owned();
     let mut terminal_entries = Vec::new();
@@ -3180,16 +2967,13 @@ fn move_multisig_proposals(
             .map_err(multisig_state_decode_error)?;
         terminal_entries.push((key.clone(), state));
     }
-
     for (old_key, mut terminal_state) in terminal_entries {
         terminal_state.multisig_account_id = new_account.clone();
         store_multisig_proposal_terminal_state(state_transaction, &terminal_state)?;
         state_transaction.world.smart_contract_state.remove(old_key);
     }
-
     Ok(())
 }
-
 /// Cancel every outstanding native multisig proposal owned by `account`.
 ///
 /// Account recovery calls this immediately before replacing a controller, and
@@ -3221,7 +3005,6 @@ pub(crate) fn invalidate_outstanding_proposals(
         }
     }
     proposals.sort_by_key(|proposal| proposal.instructions_hash);
-
     let mut invalidated = Vec::with_capacity(proposals.len());
     for proposal in proposals {
         let proposal_key =
@@ -3236,7 +3019,6 @@ pub(crate) fn invalidate_outstanding_proposals(
             // nested relay. Its parent hash is the authoritative evidence.
             continue;
         }
-
         let terminal_status = if now_ms(state_transaction) >= proposal.expires_at_ms {
             MultisigProposalTerminalStatus::Expired
         } else {
@@ -3262,10 +3044,8 @@ pub(crate) fn invalidate_outstanding_proposals(
             &proposal.instructions_hash,
         )?;
     }
-
     Ok(invalidated)
 }
-
 #[cfg(test)]
 fn proposal_value(
     state_transaction: &StateTransaction<'_, '_>,
@@ -3281,7 +3061,6 @@ fn proposal_value(
         proposal_state.is_relayed,
     ))
 }
-
 fn now_ms(state_transaction: &StateTransaction<'_, '_>) -> u64 {
     state_transaction
         ._curr_block
@@ -3290,21 +3069,17 @@ fn now_ms(state_transaction: &StateTransaction<'_, '_>) -> u64 {
         .try_into()
         .expect("block creation time must fit into u64")
 }
-
 fn multisig_state_encode_error(err: norito::Error) -> ValidationFail {
     ValidationFail::InternalError(format!("failed to encode multisig state:\n{err}"))
 }
-
 fn multisig_state_decode_error(err: norito::Error) -> ValidationFail {
     ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
         "multisig state malformed:\n{err}"
     )))
 }
-
 fn map_find_error(err: FindError) -> ValidationFail {
     ValidationFail::InstructionFailed(InstructionExecutionError::Find(err))
 }
-
 fn map_validation_fail(err: ValidationFail) -> InstructionExecutionError {
     match err {
         ValidationFail::InstructionFailed(err) => err,
@@ -3321,11 +3096,9 @@ fn map_validation_fail(err: ValidationFail) -> InstructionExecutionError {
         other => InstructionExecutionError::InvariantViolation(other.to_string().into()),
     }
 }
-
 #[cfg(test)]
 mod tests {
     mod cancellation;
-
     use super::*;
     use crate::{
         executor::Executor,
@@ -3386,9 +3159,7 @@ mod tests {
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("multisig ISI fixture key generation should succeed")
     }
-
     include!("multisig/core_execution_tests.rs");
-
     fn assert_multisig_executes_fi_registration_alias_batch(include_registration_uaid: bool) {
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
@@ -3439,7 +3210,6 @@ mod tests {
         ])
         .expect("sbp dataspace catalog");
         state.nexus.write().fees.fee_asset_id = payment_asset_definition_id.to_string();
-
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
@@ -3484,7 +3254,6 @@ mod tests {
         )
         .execute(&signer1_id, &mut state_transaction)
         .expect("mint payment balance");
-
         let alias = AccountAlias::new(
             "clear-orbit-3941".parse().expect("label"),
             Some(AccountAliasDomain::new("hbl".parse().expect("domain"))),
@@ -3558,7 +3327,6 @@ mod tests {
             &MultisigApprove::new(multisig_id.clone(), instructions_hash),
         )
         .expect("signer2 approval executes FI registration batch");
-
         let lease = get_name_record(
             state_transaction.world(),
             &state_transaction.nexus.dataspace_catalog,
@@ -3581,7 +3349,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn register_existing_multisig_account_refreshes_ttl() {
         let kura = Kura::blank_kura_for_testing();
@@ -3597,7 +3364,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
-
         let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
         register_domain_with_name_lease(
@@ -3613,7 +3379,6 @@ mod tests {
             &owner_id,
             "register owner",
         );
-
         let signer = checked_keypair();
         let signer_id = new_account_id(&signer);
         register_account_in_domain(
@@ -3623,7 +3388,6 @@ mod tests {
             &signer_id,
             "register signer",
         );
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer_id.clone(), 1)]),
             quorum: NonZeroU16::new(1).unwrap(),
@@ -3639,7 +3403,6 @@ mod tests {
             ),
         )
         .expect("initial register");
-
         let registered_multisig_id =
             AccountId::new_multisig(multisig_policy_from_spec(&spec).expect("policy"));
         let refreshed_ttl = NonZeroU64::new(86_400_000).unwrap();
@@ -3657,14 +3420,12 @@ mod tests {
             ),
         )
         .expect("refresh existing multisig ttl");
-
         let stored_spec = multisig_spec(&state_transaction, &registered_multisig_id)
             .expect("refreshed spec must decode");
         assert_eq!(stored_spec.transaction_ttl_ms, refreshed_ttl);
         assert_eq!(stored_spec.signatories, refreshed_spec.signatories);
         assert_eq!(stored_spec.quorum, refreshed_spec.quorum);
     }
-
     #[test]
     fn register_materializes_missing_signatory_accounts() {
         let kura = Kura::blank_kura_for_testing();
@@ -3680,7 +3441,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
-
         let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
         register_domain_with_name_lease(
@@ -3696,7 +3456,6 @@ mod tests {
             &owner_id,
             "register owner",
         );
-
         let missing_signer = checked_keypair();
         let missing_signer_id = new_account_id(&missing_signer);
         let spec = MultisigSpec {
@@ -3704,7 +3463,6 @@ mod tests {
             quorum: NonZeroU16::new(2).unwrap(),
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
-
         let multisig_seed = new_account_id(&checked_keypair());
         execute_register(
             &mut state_transaction,
@@ -3712,7 +3470,6 @@ mod tests {
             MultisigRegister::with_account(multisig_seed, domain_id.clone(), spec.clone()),
         )
         .expect("register should materialize missing signatories");
-
         let created = state_transaction
             .world
             .account(&missing_signer_id)
@@ -3722,7 +3479,6 @@ mod tests {
             "auto-created signatory must carry multisig created_via marker"
         );
     }
-
     #[test]
     fn register_allows_non_owner_without_permission() {
         let kura = Kura::blank_kura_for_testing();
@@ -3738,7 +3494,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
-
         let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
         register_domain_with_name_lease(
@@ -3754,7 +3509,6 @@ mod tests {
             &owner_id,
             "register owner",
         );
-
         let registrar = checked_keypair();
         let registrar_id = new_account_id(&registrar);
         register_account_in_domain(
@@ -3764,14 +3518,12 @@ mod tests {
             &registrar_id,
             "register registrar",
         );
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(owner_id.clone(), 1)]),
             quorum: NonZeroU16::new(1).unwrap(),
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
         let multisig_seed = new_account_id(&checked_keypair());
-
         execute_register(
             &mut state_transaction,
             &registrar_id,
@@ -3779,7 +3531,6 @@ mod tests {
         )
         .expect("registrar without permission should register multisig");
     }
-
     #[test]
     fn register_persists_multisig_metadata_on_authority_account() {
         let kura = Kura::blank_kura_for_testing();
@@ -3795,7 +3546,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
-
         let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
         register_domain_with_name_lease(
@@ -3811,7 +3561,6 @@ mod tests {
             &owner_id,
             "register owner",
         );
-
         let signer = checked_keypair();
         let signer_id = new_account_id(&signer);
         register_account_in_domain(
@@ -3821,7 +3570,6 @@ mod tests {
             &signer_id,
             "register signer",
         );
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer_id.clone(), 1)]),
             quorum: NonZeroU16::new(1).unwrap(),
@@ -3834,7 +3582,6 @@ mod tests {
             MultisigRegister::with_account(multisig_seed, domain_id.clone(), spec.clone()),
         )
         .expect("register multisig");
-
         let registered_multisig_id = state_transaction
             .world
             .accounts_iter()
@@ -3861,7 +3608,6 @@ mod tests {
         let stored_home_domain: Option<iroha_data_model::domain::DomainId> = stored_home_domain
             .try_into_any_norito()
             .expect("home-domain should decode");
-
         assert_eq!(
             stored_spec, spec,
             "registered authority must expose spec metadata"
@@ -3872,7 +3618,6 @@ mod tests {
             "registered authority must expose home-domain metadata"
         );
     }
-
     #[test]
     fn register_invalid_spec_does_not_materialize_missing_signatory() {
         let kura = Kura::blank_kura_for_testing();
@@ -3888,7 +3633,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
-
         let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
         register_domain_with_name_lease(
@@ -3904,7 +3648,6 @@ mod tests {
             &owner_id,
             "register owner",
         );
-
         let missing_signer = checked_keypair();
         let missing_signer_id = new_account_id(&missing_signer);
         let invalid_spec = MultisigSpec {
@@ -3913,7 +3656,6 @@ mod tests {
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
         let multisig_seed = new_account_id(&checked_keypair());
-
         let err = execute_register(
             &mut state_transaction,
             &owner_id,
@@ -3932,7 +3674,6 @@ mod tests {
             "failed registration must not materialize missing signatories"
         );
     }
-
     #[test]
     fn register_existing_account_does_not_materialize_missing_signatory() {
         let kura = Kura::blank_kura_for_testing();
@@ -3948,7 +3689,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("acme", "universal").unwrap();
-
         let owner = checked_keypair();
         let owner_id = new_account_id(&owner);
         register_domain_with_name_lease(
@@ -3964,7 +3704,6 @@ mod tests {
             &owner_id,
             "register owner",
         );
-
         let missing_signer = checked_keypair();
         let missing_signer_id = new_account_id(&missing_signer);
         let spec = MultisigSpec {
@@ -3980,7 +3719,6 @@ mod tests {
             &multisig_seed,
             "pre-register multisig seed account",
         );
-
         execute_register(
             &mut state_transaction,
             &owner_id,
@@ -3995,7 +3733,6 @@ mod tests {
             "failed registration must not materialize missing signatories"
         );
     }
-
     #[test]
     fn add_signatory_updates_multisig_spec_and_roles() {
         let kura = Kura::blank_kura_for_testing();
@@ -4011,7 +3748,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
-
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         register_domain_with_name_lease(
@@ -4027,7 +3763,6 @@ mod tests {
             &owner_id,
             "register owner",
         );
-
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
@@ -4046,7 +3781,6 @@ mod tests {
             &signer2_id,
             "register signer2",
         );
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1)]),
             quorum: NonZeroU16::new(1).unwrap(),
@@ -4059,11 +3793,9 @@ mod tests {
             &spec,
             "register multisig account",
         );
-
         AddSignatory::new(multisig_id.clone(), signer2.public_key().clone())
             .execute(&owner_id, &mut state_transaction)
             .expect("add signatory");
-
         let mut updated_spec = spec.clone();
         updated_spec.signatories.insert(signer2_id.clone(), 1);
         let updated_policy = multisig_policy_from_spec(&updated_spec).expect("policy");
@@ -4117,7 +3849,6 @@ mod tests {
             "rekeyed authority should keep metadata spec in sync"
         );
     }
-
     #[test]
     fn add_signatory_keeps_alias_record_and_pending_proposal_approvable() {
         let kura = Kura::blank_kura_for_testing();
@@ -4133,7 +3864,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
-
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         register_domain_with_name_lease(
@@ -4149,7 +3879,6 @@ mod tests {
             &owner_id,
             "register owner",
         );
-
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer3 = checked_keypair();
@@ -4165,7 +3894,6 @@ mod tests {
                 "register signer",
             );
         }
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).unwrap(),
@@ -4185,7 +3913,6 @@ mod tests {
             &domain_id,
             "cbdc",
         );
-
         let instructions = Vec::<InstructionBox>::new();
         let instructions_hash = HashOf::new(&instructions);
         execute_propose(
@@ -4194,11 +3921,9 @@ mod tests {
             &MultisigPropose::new(multisig_id.clone(), instructions, None),
         )
         .expect("initial propose");
-
         AddSignatory::new(multisig_id.clone(), signer3.public_key().clone())
             .execute(&owner_id, &mut state_transaction)
             .expect("add signatory");
-
         let updated_spec = MultisigSpec {
             signatories: BTreeMap::from([
                 (signer1_id.clone(), 1),
@@ -4260,7 +3985,6 @@ mod tests {
             BTreeSet::from([signer1_id.clone()]),
             "existing approvals should survive add-signatory rekey"
         );
-
         let approval_entrypoint_hash = Hash::prehashed([0xd1; Hash::LENGTH]);
         state_transaction.tx_call_hash = Some(approval_entrypoint_hash);
         execute_approve(
@@ -4269,7 +3993,6 @@ mod tests {
             &MultisigApprove::new(updated_account.clone(), instructions_hash),
         )
         .expect("approval through rekeyed account");
-
         let outcome_key = multisig_approval_outcome_state_key(
             *approval_entrypoint_hash.as_ref(),
             &updated_account,
@@ -4285,7 +4008,6 @@ mod tests {
         assert_eq!(outcome.entrypoint_account_id, updated_account);
         assert_eq!(outcome.resolved_multisig_account_id, updated_account);
         assert_eq!(outcome.status, MultisigApprovalOutcomeStatusV1::Executed);
-
         let terminal_execution_key = multisig_proposal_terminal_execution_state_key(
             *approval_entrypoint_hash.as_ref(),
             &updated_account,
@@ -4319,7 +4041,6 @@ mod tests {
             Err(err) => panic!("unexpected proposal state after approval: {err:?}"),
         }
     }
-
     #[test]
     fn add_signatory_materializes_missing_account() {
         let kura = Kura::blank_kura_for_testing();
@@ -4335,7 +4056,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
-
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         register_domain_with_name_lease(
@@ -4351,7 +4071,6 @@ mod tests {
             &owner_id,
             "register owner",
         );
-
         let signer1 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         register_account_in_domain(
@@ -4361,7 +4080,6 @@ mod tests {
             &signer1_id,
             "register signer1",
         );
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1)]),
             quorum: NonZeroU16::new(1).unwrap(),
@@ -4374,7 +4092,6 @@ mod tests {
             &spec,
             "register multisig account",
         );
-
         let missing_signer = checked_keypair();
         let missing_signer_id = new_account_id(&missing_signer);
         assert!(
@@ -4384,11 +4101,9 @@ mod tests {
             ),
             "precondition: signatory account must be missing"
         );
-
         AddSignatory::new(multisig_id.clone(), missing_signer.public_key().clone())
             .execute(&owner_id, &mut state_transaction)
             .expect("add signatory should materialize missing account");
-
         let created = state_transaction
             .world
             .account(&missing_signer_id)
@@ -4398,7 +4113,6 @@ mod tests {
             "materialized account should be tagged as multisig-created"
         );
     }
-
     #[test]
     fn remove_signatory_updates_multisig_spec_and_revokes_roles() {
         let kura = Kura::blank_kura_for_testing();
@@ -4414,7 +4128,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
-
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         register_domain_with_name_lease(
@@ -4430,7 +4143,6 @@ mod tests {
             &owner_id,
             "register owner",
         );
-
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
@@ -4449,7 +4161,6 @@ mod tests {
             &signer2_id,
             "register signer2",
         );
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).unwrap(),
@@ -4470,11 +4181,9 @@ mod tests {
             &spec,
         )
         .expect("configure roles");
-
         RemoveSignatory::new(multisig_id.clone(), signer2.public_key().clone())
             .execute(&owner_id, &mut state_transaction)
             .expect("remove signatory");
-
         let updated_spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1)]),
             quorum: NonZeroU16::new(1).unwrap(),
@@ -4515,7 +4224,6 @@ mod tests {
             "multisig account should drop removed signatory role"
         );
     }
-
     #[test]
     fn remove_signatory_keeps_alias_record_and_pending_proposal_approvable() {
         let kura = Kura::blank_kura_for_testing();
@@ -4531,7 +4239,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
-
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         register_domain_with_name_lease(
@@ -4547,7 +4254,6 @@ mod tests {
             &owner_id,
             "register owner",
         );
-
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer3 = checked_keypair();
@@ -4563,7 +4269,6 @@ mod tests {
                 "register signer",
             );
         }
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([
                 (signer1_id.clone(), 1),
@@ -4587,7 +4292,6 @@ mod tests {
             &domain_id,
             "cbdc",
         );
-
         let instructions = Vec::<InstructionBox>::new();
         let instructions_hash = HashOf::new(&instructions);
         execute_propose(
@@ -4596,11 +4300,9 @@ mod tests {
             &MultisigPropose::new(multisig_id.clone(), instructions, None),
         )
         .expect("initial propose");
-
         RemoveSignatory::new(multisig_id.clone(), signer3.public_key().clone())
             .execute(&owner_id, &mut state_transaction)
             .expect("remove signatory");
-
         let updated_spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: spec.quorum,
@@ -4629,7 +4331,6 @@ mod tests {
             BTreeSet::from([signer1_id.clone()]),
             "existing approvals should survive remove-signatory rekey"
         );
-
         execute_approve(
             &mut state_transaction,
             &signer2_id,
@@ -4650,7 +4351,6 @@ mod tests {
             Err(err) => panic!("unexpected proposal state after approval: {err:?}"),
         }
     }
-
     #[test]
     fn set_account_quorum_updates_multisig_spec() {
         let kura = Kura::blank_kura_for_testing();
@@ -4666,7 +4366,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
-
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         register_domain_with_name_lease(
@@ -4682,7 +4381,6 @@ mod tests {
             &owner_id,
             "register owner",
         );
-
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
@@ -4701,7 +4399,6 @@ mod tests {
             &signer2_id,
             "register signer2",
         );
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(1).unwrap(),
@@ -4714,12 +4411,10 @@ mod tests {
             &spec,
             "register multisig account",
         );
-
         let new_quorum = NonZeroU16::new(2).unwrap();
         SetAccountQuorum::new(multisig_id.clone(), new_quorum)
             .execute(&owner_id, &mut state_transaction)
             .expect("set quorum");
-
         let updated_spec = MultisigSpec {
             signatories: spec.signatories.clone(),
             quorum: new_quorum,
@@ -4738,7 +4433,6 @@ mod tests {
             "multisig account should be rekeyed after quorum update"
         );
     }
-
     #[test]
     fn set_account_quorum_keeps_alias_record_and_pending_proposal_approvable() {
         let kura = Kura::blank_kura_for_testing();
@@ -4754,7 +4448,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
-
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         Register::domain(Domain::new(domain_id.clone()))
@@ -4767,7 +4460,6 @@ mod tests {
             &owner_id,
             "register owner",
         );
-
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer3 = checked_keypair();
@@ -4783,7 +4475,6 @@ mod tests {
                 "register signer",
             );
         }
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([
                 (signer1_id.clone(), 1),
@@ -4807,7 +4498,6 @@ mod tests {
             &domain_id,
             "cbdc",
         );
-
         let instructions = Vec::<InstructionBox>::new();
         let instructions_hash = HashOf::new(&instructions);
         execute_propose(
@@ -4816,12 +4506,10 @@ mod tests {
             &MultisigPropose::new(multisig_id.clone(), instructions, None),
         )
         .expect("initial propose");
-
         let new_quorum = NonZeroU16::new(2).unwrap();
         SetAccountQuorum::new(multisig_id.clone(), new_quorum)
             .execute(&owner_id, &mut state_transaction)
             .expect("set quorum");
-
         let updated_spec = MultisigSpec {
             signatories: spec.signatories.clone(),
             quorum: new_quorum,
@@ -4850,7 +4538,6 @@ mod tests {
             BTreeSet::from([signer1_id.clone()]),
             "existing approvals should survive quorum-change rekey"
         );
-
         execute_approve(
             &mut state_transaction,
             &signer2_id,
@@ -4871,7 +4558,6 @@ mod tests {
             Err(err) => panic!("unexpected proposal state after approval: {err:?}"),
         }
     }
-
     #[test]
     fn rekey_account_id_preflights_every_alias_lease_without_partial_mutation() {
         let kura = Kura::blank_kura_for_testing();
@@ -4889,7 +4575,6 @@ mod tests {
         let old_account = new_account_id(&checked_keypair());
         let new_account = new_account_id(&checked_keypair());
         let foreign_owner = new_account_id(&checked_keypair());
-
         register_domain_with_name_lease(
             &mut state_transaction,
             &old_account,
@@ -4935,7 +4620,6 @@ mod tests {
                 .expect("canonical lease")
                 .clone()
         });
-
         state_transaction
             .world
             .smart_contract_state
@@ -4957,7 +4641,6 @@ mod tests {
             .world
             .smart_contract_state
             .insert(lease_keys[0].clone(), canonical_leases[0].clone());
-
         let mut foreign_lease = account_alias_lease_record(&state_transaction, &aliases[1]);
         foreign_lease.owner = foreign_owner;
         state_transaction.world.smart_contract_state.insert(
@@ -4980,7 +4663,6 @@ mod tests {
             .world
             .smart_contract_state
             .insert(lease_keys[1].clone(), canonical_leases[1].clone());
-
         let mut inactive_lease = account_alias_lease_record(&state_transaction, &aliases[2]);
         inactive_lease.expires_at_ms = 0;
         state_transaction.world.smart_contract_state.insert(
@@ -5000,7 +4682,6 @@ mod tests {
             .world
             .smart_contract_state
             .insert(lease_keys[2].clone(), canonical_leases[2].clone());
-
         let mut malformed_lease = canonical_leases[3].clone();
         malformed_lease.push(0xFF);
         state_transaction
@@ -5026,7 +4707,6 @@ mod tests {
             .world
             .smart_contract_state
             .insert(lease_keys[3].clone(), canonical_leases[3].clone());
-
         let mut duplicate_replacement_lease =
             account_alias_lease_record(&state_transaction, &aliases[4]);
         let new_address = iroha_data_model::account::AccountAddress::from_account_id(&new_account)
@@ -5055,7 +4735,6 @@ mod tests {
             .world
             .smart_contract_state
             .insert(lease_keys[4].clone(), canonical_leases[4].clone());
-
         let canonical_rekey_record = state_transaction
             .world
             .account_rekey_records
@@ -5082,7 +4761,6 @@ mod tests {
             .account_rekey_records
             .insert(aliases[0].clone(), canonical_rekey_record.clone());
         assert_account_rekey_not_applied(&state_transaction, &old_account, &new_account, &aliases);
-
         let mut malformed_rekey_record = canonical_rekey_record.clone();
         malformed_rekey_record
             .transition_provenance
@@ -5107,7 +4785,6 @@ mod tests {
             .world
             .account_rekey_records
             .insert(aliases[0].clone(), canonical_rekey_record);
-
         rekey_account_id(
             &mut state_transaction,
             &old_account,
@@ -5133,7 +4810,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn rekey_account_id_migrates_acquired_unbound_and_binding_cleared_leases() {
         let state = State::new_with_chain(
@@ -5160,7 +4836,6 @@ mod tests {
             &old_account,
             "register account",
         );
-
         let aliases = ["acquired_unbound", "binding_cleared"].map(|label| {
             let alias = AccountAlias::new(
                 label.parse().expect("alias label"),
@@ -5201,7 +4876,6 @@ mod tests {
                     .is_none()
             );
         }
-
         rekey_account_id(
             &mut state_transaction,
             &old_account,
@@ -5209,7 +4883,6 @@ mod tests {
             Some(&domain_id),
         )
         .expect("all owned leases should migrate even without bindings");
-
         assert!(state_transaction.world.account(&old_account).is_err());
         assert!(state_transaction.world.account(&new_account).is_ok());
         let new_address = iroha_data_model::account::AccountAddress::from_account_id(&new_account)
@@ -5237,11 +4910,9 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn governance_lock_owner_rekey_keeps_expiry_index_exact() {
         use crate::state::{GovernanceLockRecord, GovernanceLocksForReferendum};
-
         let state = State::new_with_chain(
             World::new(),
             Kura::blank_kura_for_testing(),
@@ -5270,9 +4941,7 @@ mod tests {
         state_transaction
             .world
             .put_governance_locks(referendum_id.clone(), locks);
-
         replace_account_id_in_governance(&mut state_transaction, &old_account, &new_account);
-
         let locks = state_transaction
             .world
             .governance_locks
@@ -5295,7 +4964,6 @@ mod tests {
             Some(&BTreeSet::from([(referendum_id, new_account)])),
         );
     }
-
     #[test]
     fn rekey_account_id_updates_subject_domain_indexes() {
         let kura = Kura::blank_kura_for_testing();
@@ -5311,7 +4979,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("default", "universal").unwrap();
-
         let old_key = checked_keypair();
         let old_account = new_account_id(&old_key);
         Register::domain(Domain::new(domain_id.clone()))
@@ -5324,10 +4991,8 @@ mod tests {
             &old_account,
             "register old account",
         );
-
         let new_key = checked_keypair();
         let new_account = new_account_id(&new_key);
-
         rekey_account_id(
             &mut state_transaction,
             &old_account,
@@ -5335,7 +5000,6 @@ mod tests {
             Some(&domain_id),
         )
         .expect("rekey should succeed");
-
         assert!(
             matches!(
                 state_transaction.world.account(&old_account),
@@ -5347,10 +5011,8 @@ mod tests {
             state_transaction.world.account(&new_account).is_ok(),
             "new canonical account should be present after rekey"
         );
-
         let _ = domain_id;
     }
-
     #[test]
     fn rekey_settlement_receipt_updates_fx_detail_accounts_with_legs() {
         let state = State::new_with_chain(
@@ -5444,9 +5106,7 @@ mod tests {
             .world
             .settlement_receipts
             .insert(settlement_id.clone(), receipt);
-
         replace_account_id_in_settlements(&mut state_transaction, &old_account, &new_account);
-
         let receipt = state_transaction
             .world
             .settlement_receipts
@@ -5463,7 +5123,6 @@ mod tests {
         assert_eq!(details.owner, old_account);
         assert_eq!(details.destination_escrow, old_account);
     }
-
     #[test]
     fn rekey_public_lane_validators_ignores_mismatched_rows() {
         let kura = Kura::blank_kura_for_testing();
@@ -5477,7 +5136,6 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-
         let old_key = checked_keypair();
         let old_account = new_account_id(&old_key);
         let new_key = checked_keypair();
@@ -5498,7 +5156,6 @@ mod tests {
             reward_asset_definition.clone(),
             new_account.clone(),
         );
-
         state_transaction.world.public_lane_validators.insert(
             (valid_lane, old_account.clone()),
             iroha_data_model::nexus::PublicLaneValidatorRecord {
@@ -5587,9 +5244,7 @@ mod tests {
                 metadata: Metadata::default(),
             },
         );
-
         replace_account_id_in_public_lane(&mut state_transaction, &old_account, &new_account);
-
         assert!(
             state_transaction
                 .world
@@ -5605,7 +5260,6 @@ mod tests {
             .expect("matching validator row should move to the new key");
         assert_eq!(moved.validator, new_account);
         assert_eq!(moved.stake_account, new_account);
-
         let malformed = state_transaction
             .world
             .public_lane_validators
@@ -5616,7 +5270,6 @@ mod tests {
             "mismatched row must not be repaired into a live matching validator"
         );
         assert_eq!(malformed.stake_account, old_account);
-
         assert!(
             state_transaction
                 .world
@@ -5650,7 +5303,6 @@ mod tests {
                 .is_none(),
             "malformed stake-share row must not be moved into a live matching key"
         );
-
         let moved_reward = state_transaction
             .world
             .public_lane_rewards
@@ -5669,7 +5321,6 @@ mod tests {
         );
         assert_eq!(malformed_reward.shares[0].account, old_account);
     }
-
     #[test]
     fn rekey_account_id_moves_asset_holder_index_to_new_account() {
         let kura = Kura::blank_kura_for_testing();
@@ -5685,7 +5336,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("default", "universal").unwrap();
-
         let old_key = checked_keypair();
         let old_account = new_account_id(&old_key);
         Register::domain(Domain::new(domain_id.clone()))
@@ -5698,7 +5348,6 @@ mod tests {
             &old_account,
             "register old account",
         );
-
         let asset_def_id: iroha_data_model::asset::AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 domain_id.clone(),
@@ -5715,7 +5364,6 @@ mod tests {
         })
         .execute(&old_account, &mut state_transaction)
         .expect("register asset definition");
-
         let old_asset_id =
             iroha_data_model::asset::AssetId::new(asset_def_id.clone(), old_account.clone());
         let (_, old_asset_value) =
@@ -5726,10 +5374,8 @@ mod tests {
             .assets
             .insert(old_asset_id.clone(), old_asset_value);
         state_transaction.world.track_asset_holder(&old_asset_id);
-
         let new_key = checked_keypair();
         let new_account = new_account_id(&new_key);
-
         rekey_account_id(
             &mut state_transaction,
             &old_account,
@@ -5737,7 +5383,6 @@ mod tests {
             Some(&domain_id),
         )
         .expect("rekey should succeed");
-
         let new_asset_id = iroha_data_model::asset::AssetId::with_scope(
             asset_def_id.clone(),
             new_account.clone(),
@@ -5751,7 +5396,6 @@ mod tests {
             state_transaction.world.assets.get(&new_asset_id).is_some(),
             "new account asset row should exist"
         );
-
         let holders = state_transaction
             .world
             .asset_definition_holders
@@ -5766,7 +5410,6 @@ mod tests {
             "old account should be removed from holder index"
         );
     }
-
     #[test]
     fn multisig_register_preserves_explicit_home_domain() {
         let source_domain: iroha_data_model::domain::DomainId =
@@ -5782,7 +5425,6 @@ mod tests {
             source_domain.clone(),
             spec,
         );
-
         let signer_in_spec = register
             .spec
             .signatories
@@ -5792,7 +5434,6 @@ mod tests {
         assert_eq!(register.home_domain.as_ref(), Some(&source_domain));
         assert_eq!(signer_in_spec.controller(), signer.controller());
     }
-
     #[test]
     fn multisig_metadata_cannot_reconstruct_missing_native_account_state() {
         let kura = Kura::blank_kura_for_testing();
@@ -5806,7 +5447,6 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-
         let domain_id = DomainId::try_new("bsp", "cbsi").expect("parse FI domain");
         let owner_id = new_account_id(&checked_keypair());
         register_domain_with_name_lease(
@@ -5822,7 +5462,6 @@ mod tests {
             &owner_id,
             "register owner",
         );
-
         let signer_id = new_account_id(&checked_keypair());
         register_account_in_domain(
             &mut state_transaction,
@@ -5846,7 +5485,6 @@ mod tests {
             ),
         )
         .expect("register multisig");
-
         let registered_multisig_id =
             AccountId::new_multisig(multisig_policy_from_spec(&spec).expect("policy"));
         state_transaction
@@ -5872,7 +5510,6 @@ mod tests {
             "rejected proposal must not recreate native account state",
         );
     }
-
     #[test]
     fn multisig_metadata_must_match_native_account_state() {
         let kura = Kura::blank_kura_for_testing();
@@ -5886,7 +5523,6 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-
         let domain_id = DomainId::try_new("bsp", "cbsi").expect("parse FI domain");
         let owner_id = new_account_id(&checked_keypair());
         register_domain_with_name_lease(
@@ -5902,7 +5538,6 @@ mod tests {
             &owner_id,
             "register owner",
         );
-
         let signer_id = new_account_id(&checked_keypair());
         register_account_in_domain(
             &mut state_transaction,
@@ -5926,7 +5561,6 @@ mod tests {
             ),
         )
         .expect("register multisig");
-
         let registered_multisig_id =
             AccountId::new_multisig(multisig_policy_from_spec(&spec).expect("policy"));
         let mut divergent_spec = spec.clone();
@@ -5938,7 +5572,6 @@ mod tests {
             .expect("multisig account")
             .metadata
             .insert(spec_key(), Json::new(divergent_spec));
-
         let error = execute_propose(
             &mut state_transaction,
             &signer_id,
@@ -5950,7 +5583,6 @@ mod tests {
             ValidationFail::QueryFailed(QueryExecutionFail::Conversion(message))
                 if message.contains("multisig/spec metadata disagrees")
         ));
-
         let account = state_transaction
             .world
             .accounts
@@ -5960,7 +5592,6 @@ mod tests {
         account
             .metadata
             .insert(home_domain_key(), Json::new(None::<DomainId>));
-
         let error = execute_propose(
             &mut state_transaction,
             &signer_id,
@@ -5973,7 +5604,6 @@ mod tests {
                 if message.contains("home-domain metadata disagrees")
         ));
     }
-
     #[test]
     fn multisig_register_supports_domainless_home_domain() {
         let kura = Kura::blank_kura_for_testing();
@@ -5987,12 +5617,10 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-
         let owner_id = new_account_id(&checked_keypair());
         Register::account(iroha_data_model::account::NewAccount::new(owner_id.clone()))
             .execute(&owner_id, &mut state_transaction)
             .expect("register domainless owner");
-
         let signer = new_account_id(&checked_keypair());
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer.clone(), 1)]),
@@ -6000,7 +5628,6 @@ mod tests {
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
         let multisig_seed = new_account_id(&checked_keypair());
-
         execute_register(
             &mut state_transaction,
             &owner_id,
@@ -6011,7 +5638,6 @@ mod tests {
             ),
         )
         .expect("register domainless multisig");
-
         let registered_multisig_id = state_transaction
             .world
             .accounts_iter()
@@ -6036,11 +5662,9 @@ mod tests {
             "materialized signatory should remain present"
         );
     }
-
     #[test]
     fn multisig_spec_uses_domainless_subject_identity() {
         let shared_key = checked_keypair().public_key().clone();
-
         let first = AccountId::new(shared_key.clone());
         let second = AccountId::new(shared_key);
         let spec = MultisigSpec {
@@ -6048,14 +5672,12 @@ mod tests {
             quorum: NonZeroU16::new(1).unwrap(),
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
-
         assert_eq!(
             spec.signatories.len(),
             1,
             "domainless account ids must collapse identical subjects"
         );
     }
-
     #[test]
     fn set_account_quorum_rejects_unreachable_quorum() {
         let kura = Kura::blank_kura_for_testing();
@@ -6071,7 +5693,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
-
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         Register::domain(Domain::new(domain_id.clone()))
@@ -6084,7 +5705,6 @@ mod tests {
             &owner_id,
             "register owner",
         );
-
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
@@ -6103,7 +5723,6 @@ mod tests {
             &signer2_id,
             "register signer2",
         );
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(1).unwrap(),
@@ -6116,7 +5735,6 @@ mod tests {
             &spec,
             "register multisig account",
         );
-
         let unreachable_quorum = NonZeroU16::new(3).unwrap();
         let err = SetAccountQuorum::new(multisig_id, unreachable_quorum)
             .execute(&owner_id, &mut state_transaction)
@@ -6131,7 +5749,6 @@ mod tests {
             "unexpected error for unreachable quorum: {err:?}"
         );
     }
-
     #[test]
     fn multisig_propose_rejects_ttl_above_default() {
         let kura = Kura::blank_kura_for_testing();
@@ -6147,19 +5764,16 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("ttl", "universal").unwrap();
-
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
-
         register_domain_with_name_lease(
             &mut state_transaction,
             &signer1_id,
             &domain_id,
             "domain registration",
         );
-
         register_account_in_domain(
             &mut state_transaction,
             &signer1_id,
@@ -6174,7 +5788,6 @@ mod tests {
             &signer2_id,
             "register signer2",
         );
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).unwrap(),
@@ -6191,13 +5804,11 @@ mod tests {
                 InstructionBox::from(register),
             )
             .expect("multisig register");
-
         let policy = multisig_policy_from_spec(&spec).expect("policy");
         let expected_id = AccountId::new_multisig(policy);
         let override_ttl =
             NonZeroU64::new(spec.transaction_ttl_ms.get().saturating_add(1)).unwrap();
         let propose = MultisigPropose::new(expected_id.clone(), Vec::new(), Some(override_ttl));
-
         let result = Executor::Initial.execute_instruction(
             &mut state_transaction,
             &signer1_id,
@@ -6213,7 +5824,6 @@ mod tests {
             other => panic!("expected TTL violation, got {other:?}"),
         }
     }
-
     #[test]
     fn multisig_signatory_can_propose_without_roles() {
         let kura = Kura::blank_kura_for_testing();
@@ -6229,12 +5839,10 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("signatory", "universal").unwrap();
-
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
-
         register_domain_with_name_lease(
             &mut state_transaction,
             &signer1_id,
@@ -6255,7 +5863,6 @@ mod tests {
             &signer2_id,
             "register signer2",
         );
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).unwrap(),
@@ -6268,20 +5875,17 @@ mod tests {
             &spec,
             "register multisig account",
         );
-
         let instructions: Vec<InstructionBox> = Vec::new();
         let propose = MultisigPropose::new(multisig_id.clone(), instructions, None);
         execute_propose(&mut state_transaction, &signer1_id, &propose)
             .expect("signatory propose without roles");
     }
-
     #[test]
     fn multisig_propose_repairs_missing_state_from_controller() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("repairable", "universal").unwrap();
-
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
@@ -6314,7 +5918,6 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-
         register_domain_with_name_lease(
             &mut state_transaction,
             &signer1_id,
@@ -6335,7 +5938,6 @@ mod tests {
             &signer2_id,
             "register signer2",
         );
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).unwrap(),
@@ -6348,7 +5950,6 @@ mod tests {
             &spec,
             "register multisig account",
         );
-
         state_transaction
             .world
             .smart_contract_state
@@ -6368,7 +5969,6 @@ mod tests {
             .expect("registered multisig");
         account.metadata = Metadata::default();
         account.insert((*MULTISIG_CREATED_VIA_KEY).clone(), Json::new("implicit"));
-
         let instructions: Vec<InstructionBox> = Vec::new();
         let propose = MultisigPropose::new(multisig_id.clone(), instructions, None);
         let error = execute_propose(&mut state_transaction, &signer1_id, &propose)
@@ -6388,7 +5988,6 @@ mod tests {
         assert!(load_signatory_memberships(&state_transaction, &signer1_id).is_empty());
         assert!(load_signatory_memberships(&state_transaction, &signer2_id).is_empty());
     }
-
     #[test]
     fn multisig_register_indexes_signatory_memberships() {
         let kura = Kura::blank_kura_for_testing();
@@ -6404,12 +6003,10 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("signatory-index", "universal").unwrap();
-
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
-
         register_domain_with_name_lease(
             &mut state_transaction,
             &signer1_id,
@@ -6430,7 +6027,6 @@ mod tests {
             &signer2_id,
             "register signer2",
         );
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).unwrap(),
@@ -6443,7 +6039,6 @@ mod tests {
             &spec,
             "register multisig account",
         );
-
         assert_eq!(
             load_signatory_memberships(&state_transaction, &signer1_id),
             BTreeSet::from([multisig_account_id.clone()])
@@ -6453,7 +6048,6 @@ mod tests {
             BTreeSet::from([multisig_account_id])
         );
     }
-
     #[test]
     fn multisig_rekey_repoints_signatory_memberships() {
         let kura = Kura::blank_kura_for_testing();
@@ -6469,14 +6063,12 @@ mod tests {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("signatory-rekey", "universal").unwrap();
-
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer3 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
         let signer3_id = new_account_id(&signer3);
-
         register_domain_with_name_lease(
             &mut state_transaction,
             &signer1_id,
@@ -6496,7 +6088,6 @@ mod tests {
                 label,
             );
         }
-
         let initial_spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).unwrap(),
@@ -6509,14 +6100,12 @@ mod tests {
             &initial_spec,
             "register multisig account",
         );
-
         AddSignatory {
             account: initial_multisig_account_id.clone(),
             signatory: signer3.public_key().clone(),
         }
         .execute(&signer1_id, &mut state_transaction)
         .expect("add signatory");
-
         let updated_spec = MultisigSpec {
             signatories: BTreeMap::from([
                 (signer1_id.clone(), 1),
@@ -6528,7 +6117,6 @@ mod tests {
         };
         let updated_multisig_account_id =
             AccountId::new_multisig(multisig_policy_from_spec(&updated_spec).expect("policy"));
-
         assert_ne!(initial_multisig_account_id, updated_multisig_account_id);
         assert_eq!(
             load_signatory_memberships(&state_transaction, &signer1_id),
@@ -6543,7 +6131,6 @@ mod tests {
             BTreeSet::from([updated_multisig_account_id])
         );
     }
-
     #[test]
     fn multisig_approval_preserves_contract_call_trigger_metadata_for_non_default_entrypoints() {
         use iroha_data_model::{
@@ -6563,7 +6150,6 @@ mod tests {
             KotodamaCompiler,
             kotodama::compiler::{CompilerMode, CompilerOptions},
         };
-
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(
@@ -6572,18 +6158,15 @@ mod tests {
             query_handle,
             ChainId::from("multisig-trigger-contract-entrypoint"),
         );
-
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
         let owner_keypair = checked_keypair();
         let owner_id = new_account_id(&owner_keypair);
-
         Register::account(iroha_data_model::account::NewAccount::new(owner_id.clone()))
             .execute(&owner_id, &mut state_transaction)
             .expect("register owner");
@@ -6597,7 +6180,6 @@ mod tests {
         ))
         .execute(&owner_id, &mut state_transaction)
         .expect("register signer2");
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).unwrap(),
@@ -6626,7 +6208,6 @@ mod tests {
         )
         .execute(&owner_id, &mut state_transaction)
         .expect("grant trigger entrypoint permission to the multisig authority");
-
         let (program, manifest) =
             KotodamaCompiler::new_with_options(CompilerOptions {
                 mode: CompilerMode::Production,
@@ -6654,7 +6235,6 @@ seiyaku TriggerDispatch {
             manifest,
             6_061,
         );
-
         let trigger_id: iroha_data_model::trigger::TriggerId = "contract_dispatch".parse().unwrap();
         let mut trigger_metadata = Metadata::default();
         trigger_metadata.insert(
@@ -6676,7 +6256,6 @@ seiyaku TriggerDispatch {
             .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(trigger_metadata),
         );
-
         let instructions = vec![
             InstructionBox::from(Register::trigger(trigger)),
             InstructionBox::from(ExecuteTrigger::new(trigger_id.clone())),
@@ -6688,7 +6267,6 @@ seiyaku TriggerDispatch {
             &MultisigPropose::new(multisig_id.clone(), instructions, None),
         )
         .expect("signatory propose");
-
         let proposal = proposal_value(&state_transaction, &multisig_id, &instructions_hash)
             .expect("proposal exists after propose");
         let register = proposal
@@ -6711,14 +6289,12 @@ seiyaku TriggerDispatch {
             .try_into_any_norito::<String>()
             .expect("entrypoint metadata should decode as string");
         assert_eq!(stored_entrypoint, "alternate");
-
         execute_approve(
             &mut state_transaction,
             &signer2_id,
             &MultisigApprove::new(multisig_id.clone(), instructions_hash),
         )
         .expect("signatory approve should execute alternate entrypoint");
-
         let entrypoint_key: Name = "entrypoint".parse().expect("entrypoint metadata key");
         let executed_value = state_transaction
             .world
@@ -6732,7 +6308,6 @@ seiyaku TriggerDispatch {
             .expect("entrypoint account metadata should decode");
         assert_eq!(executed_value, norito::json!(2));
     }
-
     #[test]
     fn multisig_signatory_can_approve_without_roles() {
         let kura = Kura::blank_kura_for_testing();
@@ -6748,12 +6323,10 @@ seiyaku TriggerDispatch {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("signatory-approve", "universal").unwrap();
-
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
-
         register_domain_with_name_lease(
             &mut state_transaction,
             &signer1_id,
@@ -6774,7 +6347,6 @@ seiyaku TriggerDispatch {
             &signer2_id,
             "register signer2",
         );
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).unwrap(),
@@ -6787,12 +6359,10 @@ seiyaku TriggerDispatch {
             &spec,
             "register multisig account",
         );
-
         let instructions: Vec<InstructionBox> = Vec::new();
         let instructions_hash = HashOf::new(&instructions);
         let propose = MultisigPropose::new(multisig_id.clone(), instructions, None);
         execute_propose(&mut state_transaction, &signer1_id, &propose).expect("signatory propose");
-
         let pending_entrypoint_hash = Hash::prehashed([0xa4; Hash::LENGTH]);
         state_transaction.tx_call_hash = Some(pending_entrypoint_hash);
         let pending_approve = MultisigApprove::new(multisig_id.clone(), instructions_hash);
@@ -6817,13 +6387,11 @@ seiyaku TriggerDispatch {
         );
         assert_eq!(pending_outcome.entrypoint_account_id, multisig_id);
         assert_eq!(pending_outcome.resolved_multisig_account_id, multisig_id);
-
         let terminal_entrypoint_hash = Hash::prehashed([0xa5; Hash::LENGTH]);
         state_transaction.tx_call_hash = Some(terminal_entrypoint_hash);
         let approve = MultisigApprove::new(multisig_id.clone(), instructions_hash);
         execute_approve(&mut state_transaction, &signer2_id, &approve)
             .expect("signatory approve without roles");
-
         let execution_key = multisig_proposal_terminal_execution_state_key(
             *terminal_entrypoint_hash.as_ref(),
             &multisig_id,
@@ -6863,7 +6431,6 @@ seiyaku TriggerDispatch {
         );
         assert_eq!(executed_outcome.entrypoint_account_id, multisig_id);
         assert_eq!(executed_outcome.resolved_multisig_account_id, multisig_id);
-
         let mut conflicting_state = execution_state.terminal;
         conflicting_state.terminal_at_ms = conflicting_state.terminal_at_ms.saturating_add(1);
         let err = store_multisig_proposal_terminal_execution_state(
@@ -6884,7 +6451,6 @@ seiyaku TriggerDispatch {
             "conflicting write must not alter transaction-bound terminal state"
         );
     }
-
     #[test]
     fn relayed_multisig_execution_leaves_only_transaction_bound_terminal_state() {
         let kura = Kura::blank_kura_for_testing();
@@ -6898,7 +6464,6 @@ seiyaku TriggerDispatch {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-
         let relay_account = new_account_id(&checked_keypair());
         let relay_instructions = vec![InstructionBox::from(Log::new(
             Level::INFO,
@@ -6916,14 +6481,12 @@ seiyaku TriggerDispatch {
         );
         let terminal_entrypoint_hash = Hash::prehashed([0xb7; Hash::LENGTH]);
         state_transaction.tx_call_hash = Some(terminal_entrypoint_hash);
-
         maybe_store_relayed_proposal_execution_state(
             &mut state_transaction,
             &relay_state,
             &relay_account,
         )
         .expect("relayed execution should persist immutable evidence");
-
         let execution_key = multisig_proposal_terminal_execution_state_key(
             *terminal_entrypoint_hash.as_ref(),
             &relay_account,
@@ -6960,7 +6523,6 @@ seiyaku TriggerDispatch {
             "relayed lifecycle state remains active and must not create the mutable terminal key"
         );
     }
-
     #[test]
     fn terminal_state_rekey_does_not_fabricate_transaction_bound_execution_evidence() {
         let kura = Kura::blank_kura_for_testing();
@@ -6974,7 +6536,6 @@ seiyaku TriggerDispatch {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-
         let old_account = new_account_id(&checked_keypair());
         let new_account = new_account_id(&checked_keypair());
         let instructions = vec![InstructionBox::from(Log::new(
@@ -6997,12 +6558,10 @@ seiyaku TriggerDispatch {
         );
         store_multisig_proposal_terminal_state(&mut state_transaction, &terminal_state)
             .expect("historical terminal state should store");
-
         let rekey_entrypoint_hash = Hash::prehashed([0xc9; Hash::LENGTH]);
         state_transaction.tx_call_hash = Some(rekey_entrypoint_hash);
         move_multisig_proposals(&mut state_transaction, &old_account, &new_account)
             .expect("terminal state should move during rekey");
-
         let moved_bytes = state_transaction
             .world
             .smart_contract_state
@@ -7027,7 +6586,6 @@ seiyaku TriggerDispatch {
             "rekeying historical lifecycle state must not create execution evidence"
         );
     }
-
     #[test]
     fn deliberate_policy_change_invalidation_terminalizes_every_other_proposal_before_rekey() {
         let domain_id: iroha_data_model::domain::DomainId =
@@ -7051,7 +6609,6 @@ seiyaku TriggerDispatch {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_000, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-
         register_domain_with_name_lease(
             &mut state_transaction,
             &owner_id,
@@ -7090,7 +6647,6 @@ seiyaku TriggerDispatch {
             &domain_id,
             "company",
         );
-
         let active_instructions = vec![InstructionBox::from(Log::new(
             Level::INFO,
             "active before recovery".to_owned(),
@@ -7107,7 +6663,6 @@ seiyaku TriggerDispatch {
                 )),
             )
             .expect("create active proposal");
-
         let expired_instructions = vec![InstructionBox::from(Log::new(
             Level::INFO,
             "expired before recovery".to_owned(),
@@ -7139,7 +6694,6 @@ seiyaku TriggerDispatch {
             ),
         )
         .expect("seed expired proposal timestamp");
-
         let replacement1 = checked_keypair();
         let replacement2 = checked_keypair();
         let replacement_policy =
@@ -7164,7 +6718,6 @@ seiyaku TriggerDispatch {
                 )),
             )
             .expect("propose deliberate invalidating policy change");
-
         let unauthorized = execute_invalidate_outstanding(
             &mut state_transaction,
             &signer1_id,
@@ -7172,7 +6725,6 @@ seiyaku TriggerDispatch {
         )
         .expect_err("a signatory cannot directly invalidate company proposals");
         assert!(matches!(unauthorized, ValidationFail::NotPermitted(_)));
-
         state_transaction.tx_call_hash = Some(Hash::prehashed([0xd4; Hash::LENGTH]));
         Executor::Initial
             .execute_instruction(
@@ -7184,7 +6736,6 @@ seiyaku TriggerDispatch {
                 )),
             )
             .expect("approve and execute deliberate invalidating policy change");
-
         assert!(
             state_transaction
                 .world
@@ -7240,7 +6791,6 @@ seiyaku TriggerDispatch {
             "the executing policy-change proposal must finalize rather than cancel itself"
         );
     }
-
     #[test]
     fn multisig_approve_executes_staged_mint_like_trigger_with_json_args() {
         use iroha_data_model::{
@@ -7251,7 +6801,6 @@ seiyaku TriggerDispatch {
                 action::{Action, Repeats},
             },
         };
-
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(
@@ -7264,7 +6813,6 @@ seiyaku TriggerDispatch {
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
         let domain_id: DomainId = DomainId::try_new("staged", "universal").unwrap();
-
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
@@ -7286,7 +6834,6 @@ seiyaku TriggerDispatch {
             &signer2_id,
             "register signer2",
         );
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).unwrap(),
@@ -7305,7 +6852,6 @@ seiyaku TriggerDispatch {
         )
         .execute(&signer1_id, &mut state_transaction)
         .expect("grant staged mint permission");
-
         let src = format!(
             r#"
             seiyaku StagedMintRequest {{
@@ -7398,7 +6944,6 @@ seiyaku TriggerDispatch {
         Register::trigger(trigger)
             .execute(&multisig_id, &mut state_transaction)
             .expect("register event-argument-aware staged mint trigger");
-
         let args_json = format!(
             r#"{{
                 "ev": {{
@@ -7425,14 +6970,12 @@ seiyaku TriggerDispatch {
             &MultisigPropose::new(multisig_id.clone(), instructions, None),
         )
         .expect("signatory propose staged mint");
-
         execute_approve(
             &mut state_transaction,
             &signer2_id,
             &MultisigApprove::new(multisig_id.clone(), instructions_hash),
         )
         .expect("signatory approve should execute staged mint trigger");
-
         assert!(
             proposal_state(&state_transaction, &multisig_id, &instructions_hash).is_err(),
             "finalized proposal should be pruned from active proposal state"
@@ -7448,7 +6991,6 @@ seiyaku TriggerDispatch {
                 .is_some(),
             "finalized proposal should leave terminal proposal state"
         );
-
         let statuses = durable_state_values_under_contract_prefix(
             &state_transaction,
             &contract_address,
@@ -7465,7 +7007,6 @@ seiyaku TriggerDispatch {
             "staged mint trigger should persist pending status"
         );
     }
-
     #[test]
     fn multisig_propose_replaces_expired_duplicate() {
         let kura = Kura::blank_kura_for_testing();
@@ -7476,7 +7017,6 @@ seiyaku TriggerDispatch {
             query_handle,
             ChainId::from("multisig-expired-duplicate-replace"),
         );
-
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("retryable", "universal").unwrap();
         let signer1 = checked_keypair();
@@ -7488,12 +7028,10 @@ seiyaku TriggerDispatch {
             quorum: NonZeroU16::new(2).unwrap(),
             transaction_ttl_ms: NonZeroU64::new(1).unwrap(),
         };
-
         let multisig_id = {
             let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
             let mut block = state.block(block_header);
             let mut state_transaction = block.transaction();
-
             register_domain_with_name_lease(
                 &mut state_transaction,
                 &signer1_id,
@@ -7514,7 +7052,6 @@ seiyaku TriggerDispatch {
                 &signer2_id,
                 "register signer2",
             );
-
             let multisig_id = register_multisig_account(
                 &mut state_transaction,
                 &signer1_id,
@@ -7529,16 +7066,13 @@ seiyaku TriggerDispatch {
                 &MultisigPropose::new(multisig_id.clone(), instructions, None),
             )
             .expect("initial propose");
-
             state_transaction.apply();
             block.commit().expect("commit first block");
             multisig_id
         };
-
         let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 3, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-
         let instructions = Vec::<InstructionBox>::new();
         let instructions_hash = HashOf::new(&instructions);
         execute_propose(
@@ -7547,7 +7081,6 @@ seiyaku TriggerDispatch {
             &MultisigPropose::new(multisig_id.clone(), instructions, None),
         )
         .expect("expired duplicate should be replaced");
-
         let proposal = proposal_value(&state_transaction, &multisig_id, &instructions_hash)
             .expect("replacement proposal");
         assert_eq!(proposal.proposed_at_ms, 3);
@@ -7558,7 +7091,6 @@ seiyaku TriggerDispatch {
             "replacement proposal should record only the new proposer approval"
         );
     }
-
     #[test]
     fn multisig_register_accepts_cross_domain_signatory_subjects() {
         let state = State::new_with_chain(
@@ -7570,20 +7102,16 @@ seiyaku TriggerDispatch {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-
         let multisig_domain: iroha_data_model::domain::DomainId =
             DomainId::try_new("multisig-home", "universal").unwrap();
         let signer_domain: iroha_data_model::domain::DomainId =
             DomainId::try_new("signatory-remote", "universal").unwrap();
-
         let owner = checked_keypair();
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
-
         let owner_id = new_account_id(&owner);
         let signer1_remote = new_account_id(&signer1);
         let signer2_remote = new_account_id(&signer2);
-
         register_domain_with_name_lease(
             &mut state_transaction,
             &owner_id,
@@ -7596,7 +7124,6 @@ seiyaku TriggerDispatch {
             &signer_domain,
             "register signer domain",
         );
-
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -7623,7 +7150,6 @@ seiyaku TriggerDispatch {
             owner_id,
             "multisig domain owner should follow registering authority",
         );
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_remote.clone(), 1), (signer2_remote.clone(), 1)]),
             quorum: NonZeroU16::new(2).unwrap(),
@@ -7635,17 +7161,14 @@ seiyaku TriggerDispatch {
             multisig_domain.clone(),
             spec.clone(),
         );
-
         execute_register(&mut state_transaction, &owner_id, register)
             .expect("register multisig from cross-domain signatories");
-
         let registered_multisig_id = state_transaction
             .world
             .accounts_iter()
             .find(|account| account.id().multisig_policy().is_some())
             .map(|account| account.id().clone())
             .expect("registered multisig account");
-
         let stored_spec =
             multisig_spec(&state_transaction, &registered_multisig_id).expect("stored spec");
         assert!(
@@ -7668,7 +7191,6 @@ seiyaku TriggerDispatch {
             Some(multisig_domain),
             "registered multisig must retain the explicit home domain"
         );
-
         let instructions: Vec<InstructionBox> = Vec::new();
         let instructions_hash = HashOf::new(&instructions);
         execute_propose(
@@ -7684,7 +7206,6 @@ seiyaku TriggerDispatch {
         )
         .expect("remote-domain signatory should be able to approve by subject");
     }
-
     #[test]
     fn multisig_approval_counts_subject_once_with_multiple_domain_links() {
         let state = State::new_with_chain(
@@ -7696,22 +7217,18 @@ seiyaku TriggerDispatch {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-
         let home_domain: iroha_data_model::domain::DomainId =
             DomainId::try_new("subject-home", "universal").unwrap();
         let alt_domain: iroha_data_model::domain::DomainId =
             DomainId::try_new("subject-alt", "universal").unwrap();
-
         let owner = checked_keypair();
         let shared_subject = checked_keypair();
         let signer_b = checked_keypair();
         let signer_c = checked_keypair();
-
         let owner_id = new_account_id(&owner);
         let shared_account = new_account_id(&shared_subject);
         let signer_b_id = new_account_id(&signer_b);
         let signer_c_id = new_account_id(&signer_c);
-
         register_domain_with_name_lease(
             &mut state_transaction,
             &owner_id,
@@ -7724,7 +7241,6 @@ seiyaku TriggerDispatch {
             &alt_domain,
             "register alt domain",
         );
-
         for account in [
             owner_id.clone(),
             shared_account.clone(),
@@ -7744,7 +7260,6 @@ seiyaku TriggerDispatch {
             owner_id,
             "home domain owner should follow registering authority",
         );
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([
                 (shared_account.clone(), 1),
@@ -7761,14 +7276,12 @@ seiyaku TriggerDispatch {
             MultisigRegister::with_account(multisig_seed, home_domain.clone(), spec.clone()),
         )
         .expect("register multisig");
-
         let multisig_account = state_transaction
             .world
             .accounts_iter()
             .find(|account| account.id().multisig_policy().is_some())
             .map(|account| account.id().clone())
             .expect("registered multisig account");
-
         let instructions: Vec<InstructionBox> = Vec::new();
         let instructions_hash = HashOf::new(&instructions);
         let loaded_spec =
@@ -7814,14 +7327,12 @@ seiyaku TriggerDispatch {
             2,
             "same subject with multiple domain links must not satisfy quorum twice"
         );
-
         execute_approve(
             &mut state_transaction,
             &signer_c_id,
             &MultisigApprove::new(multisig_account.clone(), instructions_hash),
         )
         .expect("approve from third signatory");
-
         assert!(
             matches!(
                 proposal_value(&state_transaction, &multisig_account, &instructions_hash),
@@ -7830,7 +7341,6 @@ seiyaku TriggerDispatch {
             "proposal should be pruned after quorum is reached by distinct subjects"
         );
     }
-
     #[test]
     fn multisig_signatories_must_be_single_accounts() {
         let state = State::new_with_chain(
@@ -7844,13 +7354,10 @@ seiyaku TriggerDispatch {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("signatory-single", "universal").unwrap();
-
         let (owner, leaf_a, leaf_b) = (checked_keypair(), checked_keypair(), checked_keypair());
-
         let owner_id = new_account_id(&owner);
         let first_leaf_account_id = new_account_id(&leaf_a);
         let second_leaf_account_id = new_account_id(&leaf_b);
-
         register_domain_with_name_lease(
             &mut state_transaction,
             &owner_id,
@@ -7870,7 +7377,6 @@ seiyaku TriggerDispatch {
                 label,
             );
         }
-
         let child_spec = MultisigSpec {
             signatories: BTreeMap::from([
                 (first_leaf_account_id.clone(), 1),
@@ -7886,7 +7392,6 @@ seiyaku TriggerDispatch {
             &child_spec,
             "register child multisig account",
         );
-
         let parent_spec = MultisigSpec {
             signatories: BTreeMap::from([(owner_id.clone(), 1), (child_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).unwrap(),
@@ -7912,7 +7417,6 @@ seiyaku TriggerDispatch {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn multisig_deferred_execution_reenters_active_executor_and_preserves_valid_flow() {
         let state = State::new_with_chain(
@@ -7926,7 +7430,6 @@ seiyaku TriggerDispatch {
         let mut state_transaction = block.transaction();
         let domain_id = DomainId::try_new("deferred", "universal").expect("domain id");
         let signer_id = new_account_id(&checked_keypair());
-
         register_domain_with_name_lease(
             &mut state_transaction,
             &signer_id,
@@ -7952,7 +7455,6 @@ seiyaku TriggerDispatch {
             &spec,
             "register deferred-execution multisig",
         );
-
         let metadata_key: Name = "deferred_executor_valid".parse().expect("metadata key");
         let metadata_value = Json::new("validated");
         let valid_instructions = vec![InstructionBox::from(SetKeyValue::account(
@@ -7985,7 +7487,6 @@ seiyaku TriggerDispatch {
             Some(&metadata_value),
             "a valid deferred instruction should still execute"
         );
-
         let privileged_permission: Permission =
             iroha_executor_data_model::permission::executor::CanUpgradeExecutor.into();
         let privileged_instructions = vec![InstructionBox::from(Grant::account_permission(
@@ -8019,7 +7520,6 @@ seiyaku TriggerDispatch {
                 .any(|permission| permission == &privileged_permission),
             "denied deferred grant must not mutate permissions"
         );
-
         let denied_instructions = vec![InstructionBox::from(Log::new(
             Level::INFO,
             "deferred instruction must reach the active executor".to_owned(),
@@ -8051,7 +7551,6 @@ seiyaku TriggerDispatch {
             "failed deferred execution must unwind its recursion guard"
         );
     }
-
     #[test]
     fn multisig_deferred_execution_guard_rejects_cycles_and_excessive_depth() {
         let account = new_account_id(&checked_keypair());
@@ -8067,7 +7566,6 @@ seiyaku TriggerDispatch {
             .expect_err("an active proposal may not recursively execute itself");
         assert!(matches!(cycle_error, ValidationFail::NotPermitted(_)));
         finish_multisig_deferred_execution(&mut execution_stack, &first_id);
-
         let mut execution_ids = Vec::with_capacity(MAX_MULTISIG_DEFERRED_EXECUTION_DEPTH);
         for depth in 0..MAX_MULTISIG_DEFERRED_EXECUTION_DEPTH {
             let hash = HashOf::new(&vec![InstructionBox::from(Log::new(
@@ -8095,7 +7593,6 @@ seiyaku TriggerDispatch {
         }
         assert!(execution_stack.is_empty());
     }
-
     #[test]
     fn multisig_expiry_traversal_rejects_cycles_and_excessive_depth() {
         let member_key = checked_keypair();
@@ -8114,7 +7611,6 @@ seiyaku TriggerDispatch {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-
         let cycle_hash = HashOf::new(&Vec::<InstructionBox>::new());
         let cycle_instruction = MultisigApprove::new(multisig_id.clone(), cycle_hash);
         store_multisig_proposal_state(
@@ -8138,7 +7634,6 @@ seiyaku TriggerDispatch {
         )
         .expect_err("cyclic expiry traversal must fail closed");
         assert!(matches!(cycle_error, ValidationFail::NotPermitted(_)));
-
         let chain_hashes: Vec<_> = (0..=MAX_MULTISIG_DEFERRED_EXECUTION_DEPTH)
             .map(|depth| {
                 HashOf::new(&vec![InstructionBox::from(Log::new(
@@ -8171,7 +7666,6 @@ seiyaku TriggerDispatch {
         .expect_err("expiry traversal beyond the deterministic depth bound must fail");
         assert_eq!(depth_error, ValidationFail::TooComplex);
     }
-
     #[test]
     fn multisig_spec_missing_metadata_returns_error() {
         let kura = Kura::blank_kura_for_testing();
@@ -8187,7 +7681,6 @@ seiyaku TriggerDispatch {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("missing", "universal").unwrap();
-
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         register_domain_with_name_lease(
@@ -8203,7 +7696,6 @@ seiyaku TriggerDispatch {
             &owner_id,
             "register owner",
         );
-
         let err = multisig_spec(&state_transaction, &owner_id)
             .expect_err("missing multisig spec should error");
         match err {
@@ -8211,7 +7703,6 @@ seiyaku TriggerDispatch {
             other => panic!("unexpected error for missing multisig spec: {other:?}"),
         }
     }
-
     #[test]
     fn multisig_role_for_large_policy_uses_hash_suffix() {
         let domain_id: iroha_data_model::domain::DomainId =
@@ -8228,7 +7719,6 @@ seiyaku TriggerDispatch {
         let canonical = account
             .canonical_i105()
             .expect("large multisig policy should encode into canonical I105");
-
         let role_id = multisig_role_for(Some(&domain_id), &account);
         let role_name = role_id.name().to_string();
         let expected_suffix = HashOf::new(&account).to_string();
@@ -8241,7 +7731,6 @@ seiyaku TriggerDispatch {
             "large multisig role ids should still fall back to the hash suffix when the canonical literal is too long"
         );
     }
-
     #[test]
     fn multisig_approval_weight_sum_does_not_overflow() {
         let kura = Kura::blank_kura_for_testing();
@@ -8257,7 +7746,6 @@ seiyaku TriggerDispatch {
         let mut state_transaction = block.transaction();
         let domain_id: iroha_data_model::domain::DomainId =
             DomainId::try_new("weights", "universal").unwrap();
-
         let owner_key = checked_keypair();
         let owner_id = new_account_id(&owner_key);
         register_domain_with_name_lease(
@@ -8273,7 +7761,6 @@ seiyaku TriggerDispatch {
             &owner_id,
             "register owner",
         );
-
         let weight = u8::MAX;
         let signatory_count = (u16::MAX as usize / weight as usize) + 1;
         let mut signatories = BTreeMap::new();
@@ -8289,7 +7776,6 @@ seiyaku TriggerDispatch {
             );
             signatories.insert(signer_id, weight);
         }
-
         let spec = MultisigSpec {
             signatories: signatories.clone(),
             quorum: NonZeroU16::new(u16::MAX).unwrap(),
@@ -8302,7 +7788,6 @@ seiyaku TriggerDispatch {
             &spec,
             "register multisig account",
         );
-
         let instructions: Vec<InstructionBox> = Vec::new();
         let instructions_hash = HashOf::new(&instructions);
         let proposer = signatories
@@ -8318,7 +7803,6 @@ seiyaku TriggerDispatch {
                 InstructionBox::from(proposal),
             )
             .expect("multisig propose");
-
         let mut seeded_value = proposal_value(&state_transaction, &multisig_id, &instructions_hash)
             .expect("proposal value");
         seeded_value.approvals = signatories.keys().cloned().collect();
@@ -8335,7 +7819,6 @@ seiyaku TriggerDispatch {
             ),
         )
         .expect("seed approvals");
-
         let approver = signatories
             .keys()
             .next_back()
@@ -8349,13 +7832,11 @@ seiyaku TriggerDispatch {
                 InstructionBox::from(approve),
             )
             .expect("multisig approve");
-
         assert!(
             proposal_value(&state_transaction, &multisig_id, &instructions_hash).is_err(),
             "proposal should be pruned after reaching quorum"
         );
     }
-
     #[test]
     fn replace_account_controller_single_to_multisig_materializes_members_and_preserves_alias() {
         let domain_id: iroha_data_model::domain::DomainId =
@@ -8375,7 +7856,6 @@ seiyaku TriggerDispatch {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-
         register_domain_with_name_lease(
             &mut state_transaction,
             &owner_id,
@@ -8396,11 +7876,9 @@ seiyaku TriggerDispatch {
             &domain_id,
             "treasury",
         );
-
         let member1 = checked_keypair();
         let member2 = checked_keypair();
         let policy = multisig_policy_for_members(&[(&member1, 1), (&member2, 1)]);
-
         let updated_account = replace_account_controller(
             &owner_id,
             &mut state_transaction,
@@ -8408,7 +7886,6 @@ seiyaku TriggerDispatch {
             AccountController::multisig(policy),
         )
         .expect("replace single-key controller with multisig");
-
         assert!(
             multisig_spec(&state_transaction, &updated_account).is_ok(),
             "multisig replacement should persist native multisig state"
@@ -8441,7 +7918,6 @@ seiyaku TriggerDispatch {
             updated_account
         );
     }
-
     #[test]
     fn replace_account_controller_multisig_to_single_clears_memberships() {
         let domain_id: iroha_data_model::domain::DomainId =
@@ -8463,7 +7939,6 @@ seiyaku TriggerDispatch {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&signer1_id, &mut state_transaction)
             .expect("domain registration");
@@ -8479,7 +7954,6 @@ seiyaku TriggerDispatch {
                 label,
             );
         }
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).unwrap(),
@@ -8499,7 +7973,6 @@ seiyaku TriggerDispatch {
             &domain_id,
             "payments",
         );
-
         let replacement_key = checked_keypair();
         let replacement_account = AccountId::new(replacement_key.public_key().clone());
         let updated_account = replace_account_controller(
@@ -8509,7 +7982,6 @@ seiyaku TriggerDispatch {
             AccountController::single(replacement_key.public_key().clone()),
         )
         .expect("replace multisig controller with single-key");
-
         assert_eq!(updated_account, replacement_account);
         assert_eq!(
             load_signatory_memberships(&state_transaction, &signer1_id),
@@ -8532,7 +8004,6 @@ seiyaku TriggerDispatch {
             Some(&updated_account)
         );
     }
-
     #[test]
     fn replace_account_controller_multisig_to_multisig_repoints_memberships_and_preserves_outstanding_proposals()
      {
@@ -8557,7 +8028,6 @@ seiyaku TriggerDispatch {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&signer1_id, &mut state_transaction)
             .expect("domain registration");
@@ -8574,7 +8044,6 @@ seiyaku TriggerDispatch {
                 label,
             );
         }
-
         let initial_spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).unwrap(),
@@ -8587,7 +8056,6 @@ seiyaku TriggerDispatch {
             &initial_spec,
             "register multisig account",
         );
-
         let outstanding_instructions = vec![InstructionBox::from(Log::new(
             Level::INFO,
             "ordinary rekey must preserve me".to_owned(),
@@ -8604,7 +8072,6 @@ seiyaku TriggerDispatch {
                 )),
             )
             .expect("create outstanding proposal before ordinary rekey");
-
         let replacement_policy = multisig_policy_for_members(&[(&signer2, 1), (&signer3, 1)]);
         let updated_account = replace_account_controller(
             &signer1_id,
@@ -8613,7 +8080,6 @@ seiyaku TriggerDispatch {
             AccountController::multisig(replacement_policy),
         )
         .expect("replace multisig controller with new multisig policy");
-
         assert_eq!(
             load_signatory_memberships(&state_transaction, &signer1_id),
             BTreeSet::new()
@@ -8626,7 +8092,6 @@ seiyaku TriggerDispatch {
             load_signatory_memberships(&state_transaction, &signer3_id),
             BTreeSet::from([updated_account.clone()])
         );
-
         let updated_spec = multisig_spec(&state_transaction, &updated_account)
             .expect("updated multisig spec should be available");
         assert_eq!(

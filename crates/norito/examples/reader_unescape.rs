@@ -1,9 +1,7 @@
 //! Example: Streaming tokens and unescaping strings with Norito JSON.
 //! Run: `cargo run -p norito --example reader_unescape --features json -- "{\"name\":\"al\\u0069ce\"}"`
-
 #[cfg(feature = "json")]
 use norito::json::{Reader, Token, unescape_json_string};
-
 #[cfg(feature = "json")]
 fn main() {
     let input = std::env::args()
@@ -30,7 +28,6 @@ fn main() {
         }
     }
 }
-
 #[cfg(not(feature = "json"))]
 fn main() {
     eprintln!("Enable the `json` feature to run this example");

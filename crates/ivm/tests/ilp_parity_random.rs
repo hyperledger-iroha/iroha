@@ -1,10 +1,8 @@
 use ivm::{IVM, encoding, instruction};
 mod common;
-
 fn wide_rr(op: u8, rd: u8, rs1: u8, rs2: u8) -> u32 {
     encoding::wide::encode_rr(op, rd, rs1, rs2)
 }
-
 fn random_block(seed: u64, len: usize) -> Vec<u32> {
     // Simple LCG for deterministic pseudo-randomness
     let mut s = seed;
@@ -31,7 +29,6 @@ fn random_block(seed: u64, len: usize) -> Vec<u32> {
     }
     out
 }
-
 #[test]
 fn ilp_matches_sequential_for_random_blocks() {
     // Generate a handful of random ALU/shift-only programs and compare ILP vs sequential
@@ -49,7 +46,6 @@ fn ilp_matches_sequential_for_random_blocks() {
         }
         code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
         let prog = common::assemble(&code);
-
         // ILP run (max_cycles == 0)
         let mut vm_ilp = IVM::new(50_000);
         // Seed some registers deterministically
@@ -62,7 +58,6 @@ fn ilp_matches_sequential_for_random_blocks() {
         vm_ilp.load_program(&prog).unwrap();
         vm_ilp.run().unwrap();
         let regs_ilp = (1..32).map(|r| vm_ilp.register(r)).collect::<Vec<_>>();
-
         // Sequential run (disable ILP by setting max_cycles)
         let mut prog_seq = prog.clone();
         prog_seq[8..16].copy_from_slice(&1024u64.to_le_bytes());
@@ -76,7 +71,6 @@ fn ilp_matches_sequential_for_random_blocks() {
         vm_seq.load_program(&prog_seq).unwrap();
         vm_seq.run().unwrap();
         let regs_seq = (1..32).map(|r| vm_seq.register(r)).collect::<Vec<_>>();
-
         assert_eq!(regs_ilp, regs_seq, "ILP parity mismatch for seed {seed:#x}");
     }
 }

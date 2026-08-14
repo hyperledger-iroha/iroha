@@ -3,15 +3,9 @@
 //! Provides capability TLV parsing, transcript hashing, a deterministic Noise XX
 //! handshake simulation (with ML-KEM material, authenticated relay identity, and padded
 //! frames), plus helpers for salt/telemetry fixture generation.
-
-use std::{
-    convert::{TryFrom, TryInto},
-    fmt, fs,
-    ops::Deref,
-    path::{Path, PathBuf},
-    str::FromStr,
+use crate::{
+    Algorithm, KeyPair, PublicKey, SessionKey, Signature, kex::is_x25519_low_order_public_key,
 };
-
 use base64::{
     Engine as _, encoded_len as base64_encoded_len, engine::general_purpose::STANDARD as Base64,
 };
@@ -33,28 +27,28 @@ use soranet_pq::{
     generate_mlkem_keypair_from_os, hedged_chacha20_rng, mlkem_metadata, validate_mlkem_ciphertext,
     validate_mlkem_public_key,
 };
+use std::{
+    convert::{TryFrom, TryInto},
+    fmt, fs,
+    ops::Deref,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 use tempfile::TempDir;
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
-
-use crate::{
-    Algorithm, KeyPair, PublicKey, SessionKey, Signature, kex::is_x25519_low_order_public_key,
-};
-
 /// Domain separation tag for transcript hashing.
 const TRANSCRIPT_DOMAIN: &[u8] = b"soranet.transcript.v1";
 const EXPAND_MATERIAL_DOMAIN: &[u8] = b"soranet.expand-material.v1";
 const SESSION_KEY_IKM_DOMAIN: &[u8] = b"soranet.session-key.ikm.v1";
 const STEP_DOMAIN: &[u8] = b"soranet.noise.step.v1";
 const RELAY_AUTH_DOMAIN: &[u8] = b"soranet.handshake.relay-auth.v1";
-
 /// ALPN used by the public `SoraNet` QUIC transport.
 pub const SORANET_QUIC_ALPN: &[u8] = b"soranet/1";
 /// Placeholder TLS name used by non-VPN harnesses that do not terminate TLS.
 pub const DEFAULT_TLS_SERVER_NAME: &str = "soranet.invalid";
-
 const HYBRID_CLIENT_HELLO_TYPE: u8 = 0x11;
 const HYBRID_RELAY_RESPONSE_TYPE: u8 = 0x12;
 const PQFS_CLIENT_COMMIT_TYPE: u8 = 0x21;
@@ -62,23 +56,19 @@ const PQFS_RELAY_RESPONSE_TYPE: u8 = 0x22;
 const NK2_CONFIRM_LABEL: &[u8] = b"soranet.handshake.nk2.confirm.v1";
 const NK3_PRIMARY_CONFIRM_LABEL: &[u8] = b"soranet.handshake.nk3.confirm.primary.v1";
 const NK3_FORWARD_CONFIRM_LABEL: &[u8] = b"soranet.handshake.nk3.confirm.forward.v1";
-
 const DILITHIUM3_SIGNATURE_LEN: usize = 2701;
 const ED25519_SIGNATURE_LEN: usize = 64;
 const NOISE_SECRET_LEN: usize = 32;
 const NOISE_PADDING_BLOCK: usize = 1024;
 const TRANSCRIPT_BINDING_LEN: usize = 32;
-
 const STEP_NOTE_HYBRID_INIT: &str = "Client sends NK2 hybrid init";
 const STEP_NOTE_HYBRID_RESPONSE: &str = "Relay completes NK2 hybrid handshake";
 const STEP_NOTE_PQFS_COMMIT: &str = "Client commits NK3 forward-secure material";
 const STEP_NOTE_PQFS_RESPONSE: &str = "Relay finalises NK3 forward-secure handshake";
-
 /// Range reserved for GREASE TLVs which should be ignored during negotiation
 /// but still included in transcript hashing.
 const GREASE_RANGE_START: u16 = 0x7F00;
 const GREASE_RANGE_END: u16 = 0x7FFF;
-
 const SIGNATURE_PREFIX_DILITHIUM: &str = "dilithium3";
 const SIGNATURE_PREFIX_ED25519: &str = "ed25519";
 const TELEMETRY_DILITHIUM_LABEL: &[u8] = b"soranet.sig.dilithium.telemetry";
@@ -103,7 +93,6 @@ pub enum HandshakeSuite {
     /// Forward-secure PQ handshake with dual commitments.
     Nk3PqForwardSecure = 0x05,
 }
-
 impl HandshakeSuite {
     /// Canonical label used when rendering the negotiated handshake flavour.
     pub const fn label(self) -> &'static str {
@@ -113,10 +102,8 @@ impl HandshakeSuite {
         }
     }
 }
-
 impl TryFrom<u8> for HandshakeSuite {
     type Error = HarnessError;
-
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0x04 => Ok(Self::Nk2Hybrid),
@@ -127,38 +114,32 @@ impl TryFrom<u8> for HandshakeSuite {
         }
     }
 }
-
 impl From<HandshakeSuite> for u8 {
     fn from(value: HandshakeSuite) -> Self {
         value as u8
     }
 }
-
 impl fmt::Display for HandshakeSuite {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.label())
     }
 }
-
 #[derive(Debug)]
 struct SuiteList {
     suites: Vec<HandshakeSuite>,
     #[allow(dead_code)]
     required: bool,
 }
-
 impl SuiteList {
     fn preferred(&self) -> Option<HandshakeSuite> {
         self.suites.first().copied()
     }
 }
-
 #[derive(Debug)]
 struct HandshakeSuiteNegotiation {
     selected: HandshakeSuite,
     warnings: Vec<CapabilityWarning>,
 }
-
 /// Parsed capability TLV entry.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize)]
 pub struct CapabilityTlv {
@@ -169,14 +150,12 @@ pub struct CapabilityTlv {
     /// Whether the capability was marked as required by its TLV-specific flag.
     pub required: bool,
 }
-
 impl CapabilityTlv {
     /// Returns `true` when this capability occupies the GREASE-reserved range.
     pub fn is_grease(&self) -> bool {
         (GREASE_RANGE_START..=GREASE_RANGE_END).contains(&self.ty)
     }
 }
-
 /// Errors surfaced while parsing or validating the handshake inputs.
 #[derive(Debug, Error)]
 pub enum HarnessError {
@@ -245,7 +224,6 @@ pub enum HarnessError {
     #[error("signature encoding failed: {0}")]
     SignatureEncoding(String),
 }
-
 fn fill_random<R: TryCryptoRng>(
     rng: &mut R,
     operation: &'static str,
@@ -264,7 +242,6 @@ fn fill_random<R: TryCryptoRng>(
     }
     Ok(())
 }
-
 /// Parse a capability vector into structured TLVs.
 ///
 /// # Errors
@@ -273,11 +250,9 @@ pub fn parse_capabilities(buf: &[u8]) -> Result<Vec<CapabilityTlv>, HarnessError
     let mut offset = 0;
     let mut out = Vec::new();
     let mut seen_singletons = std::collections::BTreeSet::new();
-
     while offset < buf.len() {
         let (ty, len) = read_capability_header(buf, &mut offset)?;
         let mut value = read_capability_value(buf, &mut offset, len)?;
-
         let grease = (GREASE_RANGE_START..=GREASE_RANGE_END).contains(&ty);
         if !grease && !capability_is_known(ty) {
             return Err(HarnessError::CapabilityType(capability_label(ty)));
@@ -288,23 +263,18 @@ pub fn parse_capabilities(buf: &[u8]) -> Result<Vec<CapabilityTlv>, HarnessError
                 return Err(HarnessError::DuplicateCapability(capability_label(ty)));
             }
         }
-
         let required = parse_required_flag(ty, &mut value);
-
         out.push(CapabilityTlv {
             ty,
             value,
             required,
         });
     }
-
     if offset != buf.len() {
         return Err(HarnessError::ExtraBytes);
     }
-
     Ok(out)
 }
-
 fn read_capability_header(buf: &[u8], offset: &mut usize) -> Result<(u16, usize), HarnessError> {
     let start = *offset;
     let end = start
@@ -319,7 +289,6 @@ fn read_capability_header(buf: &[u8], offset: &mut usize) -> Result<(u16, usize)
         u16::from_be_bytes([header[2], header[3]]) as usize,
     ))
 }
-
 fn read_capability_value(
     buf: &[u8],
     offset: &mut usize,
@@ -335,7 +304,6 @@ fn read_capability_value(
     *offset = end;
     Ok(value.to_vec())
 }
-
 /// Helper to decode hex strings supplied on the CLI.
 ///
 /// # Errors
@@ -343,7 +311,6 @@ fn read_capability_value(
 pub fn decode_hex(input: &str) -> Result<Vec<u8>, HarnessError> {
     Ok(Vec::from_hex(input)?)
 }
-
 /// Decode a blinded CID salt from hex into a fixed 32-byte array.
 ///
 /// # Errors
@@ -357,7 +324,6 @@ pub fn decode_salt_hex(input: &str) -> Result<[u8; 32], HarnessError> {
     salt.copy_from_slice(&bytes);
     Ok(salt)
 }
-
 fn parse_timestamp_nanos(ts: &str) -> Result<i128, HarnessError> {
     let dt = OffsetDateTime::parse(ts, &Rfc3339).map_err(|source| HarnessError::Timestamp {
         timestamp: ts.to_owned(),
@@ -365,7 +331,6 @@ fn parse_timestamp_nanos(ts: &str) -> Result<i128, HarnessError> {
     })?;
     Ok(dt.unix_timestamp_nanos())
 }
-
 fn nanos_to_i64(value: i128, field: &str) -> Result<i64, HarnessError> {
     i64::try_from(value).map_err(|_| {
         HarnessError::Validation(format!(
@@ -373,11 +338,9 @@ fn nanos_to_i64(value: i128, field: &str) -> Result<i64, HarnessError> {
         ))
     })
 }
-
 fn option_str_to_value(value: Option<&str>) -> Value {
     value.map_or(Value::Null, Value::from)
 }
-
 fn capability_name(ty: u16) -> Option<&'static str> {
     match ty {
         CAPABILITY_PQKEM => Some("snnet.pqkem"),
@@ -390,14 +353,12 @@ fn capability_name(ty: u16) -> Option<&'static str> {
         _ => None,
     }
 }
-
 fn capability_label(ty: u16) -> String {
     capability_name(ty).map_or_else(
         || format!("type=0x{ty:04x}"),
         |name| format!("type=0x{ty:04x} ({name})"),
     )
 }
-
 fn capability_is_known(ty: u16) -> bool {
     matches!(
         ty,
@@ -410,11 +371,9 @@ fn capability_is_known(ty: u16) -> bool {
             | CAPABILITY_CONSTANT_RATE
     )
 }
-
 fn capability_allows_duplicates(ty: u16) -> bool {
     matches!(ty, CAPABILITY_PQKEM | CAPABILITY_PQSIG)
 }
-
 fn validate_capability_payload(ty: u16, value: &[u8]) -> Result<(), HarnessError> {
     match ty {
         CAPABILITY_PQKEM => {
@@ -476,7 +435,6 @@ fn validate_capability_payload(ty: u16, value: &[u8]) -> Result<(), HarnessError
     }
     Ok(())
 }
-
 fn parse_required_flag(ty: u16, value: &mut [u8]) -> bool {
     match ty {
         CAPABILITY_SUITE_LIST => value.first_mut().is_some_and(|first| {
@@ -490,7 +448,6 @@ fn parse_required_flag(ty: u16, value: &mut [u8]) -> bool {
         _ => false,
     }
 }
-
 fn apply_required_flag(ty: u16, value: &mut [u8], required: bool) {
     match ty {
         CAPABILITY_SUITE_LIST => {
@@ -514,7 +471,6 @@ fn apply_required_flag(ty: u16, value: &mut [u8], required: bool) {
         _ => {}
     }
 }
-
 fn parse_suite_list(cap: &CapabilityTlv) -> Result<SuiteList, HarnessError> {
     if cap.value.is_empty() {
         return Err(HarnessError::Validation(
@@ -562,21 +518,18 @@ fn parse_suite_list(cap: &CapabilityTlv) -> Result<SuiteList, HarnessError> {
         required: cap.required,
     })
 }
-
 fn suite_list_capability(caps: &[CapabilityTlv]) -> Result<Option<SuiteList>, HarnessError> {
     caps.iter()
         .find(|cap| cap.ty == CAPABILITY_SUITE_LIST)
         .map(parse_suite_list)
         .transpose()
 }
-
 fn suite_warning(message: impl Into<String>) -> CapabilityWarning {
     CapabilityWarning {
         capability_type: CAPABILITY_SUITE_LIST,
         message: message.into(),
     }
 }
-
 fn describe_suites(suites: &[HandshakeSuite]) -> String {
     suites
         .iter()
@@ -584,7 +537,6 @@ fn describe_suites(suites: &[HandshakeSuite]) -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
-
 fn handle_both_suite_lists(
     client: &SuiteList,
     relay: &SuiteList,
@@ -604,7 +556,6 @@ fn handle_both_suite_lists(
         ))],
         telemetry: None,
     })?;
-
     let mut warnings = Vec::new();
     if let Some(preferred) = client.preferred()
         && preferred != selected
@@ -624,17 +575,14 @@ fn handle_both_suite_lists(
             selected.label()
         )));
     }
-
     Ok(HandshakeSuiteNegotiation { selected, warnings })
 }
-
 fn negotiate_handshake_suite(
     client_caps: &[CapabilityTlv],
     relay_caps: &[CapabilityTlv],
 ) -> Result<HandshakeSuiteNegotiation, HarnessError> {
     let client_list = suite_list_capability(client_caps)?;
     let relay_list = suite_list_capability(relay_caps)?;
-
     match (client_list, relay_list) {
         (Some(client), Some(relay)) => handle_both_suite_lists(&client, &relay),
         (Some(client), None) => Err(HarnessError::Downgrade {
@@ -659,7 +607,6 @@ fn negotiate_handshake_suite(
         }),
     }
 }
-
 fn negotiate_handshake_suite_with_telemetry(
     client_caps: &[CapabilityTlv],
     relay_caps: &[CapabilityTlv],
@@ -681,7 +628,6 @@ fn negotiate_handshake_suite_with_telemetry(
         other => other,
     })
 }
-
 fn encode_signature(prefix: &str, bytes: &[u8]) -> Result<String, HarnessError> {
     let Some(encoded_len) = base64_encoded_len(bytes.len(), true) else {
         return Err(HarnessError::SignatureEncoding(
@@ -697,7 +643,6 @@ fn encode_signature(prefix: &str, bytes: &[u8]) -> Result<String, HarnessError> 
         .map_err(|err| HarnessError::SignatureEncoding(err.to_string()))?;
     Ok(format!("{prefix}:{encoded}"))
 }
-
 fn signature_pair_from_static(
     static_key: &[u8],
     payload: &[u8],
@@ -715,7 +660,6 @@ fn signature_pair_from_static(
         encode_signature(SIGNATURE_PREFIX_ED25519, ed.as_ref())?,
     ))
 }
-
 fn alarm_payload_map(spec: &FixtureSpec, alarm: AlarmSpec) -> Map {
     let mut map = Map::new();
     map.insert("relay_id".to_string(), Value::from(alarm.relay_id));
@@ -742,7 +686,6 @@ fn alarm_payload_map(spec: &FixtureSpec, alarm: AlarmSpec) -> Map {
     map.insert("counter".to_string(), Value::from(1u32));
     map
 }
-
 fn signed_alarm_value(
     spec: &FixtureSpec,
     alarm: AlarmSpec,
@@ -761,7 +704,6 @@ fn signed_alarm_value(
     map.insert("witness_signature".to_string(), Value::from(witness));
     Ok(Value::Object(map))
 }
-
 /// Compare client and relay capability vectors and produce warnings for missing
 /// required entries. GREASE capabilities are ignored.
 pub fn diff_capabilities(
@@ -789,12 +731,10 @@ pub fn diff_capabilities(
     }
     warnings
 }
-
 fn capability_contains_id(caps: &[CapabilityTlv], ty: u16, id: u8) -> bool {
     caps.iter()
         .any(|cap| cap.ty == ty && cap.value.first().copied() == Some(id))
 }
-
 fn push_selected_capability_warning(
     warnings: &mut Vec<CapabilityWarning>,
     role: &str,
@@ -813,7 +753,6 @@ fn push_selected_capability_warning(
         ),
     });
 }
-
 fn encode_capabilities(entries: &[CapabilityTlv]) -> Result<Vec<u8>, HarnessError> {
     let mut buf = Vec::new();
     for cap in entries {
@@ -832,7 +771,6 @@ fn encode_capabilities(entries: &[CapabilityTlv]) -> Result<Vec<u8>, HarnessErro
     }
     Ok(buf)
 }
-
 /// Return a capability vector based on `base` with the suite list replaced by `suites`.
 ///
 /// # Errors
@@ -869,7 +807,6 @@ pub fn update_suite_list(
     entries.sort_by_key(|cap| cap.ty);
     encode_capabilities(&entries)
 }
-
 /// Transcript hash inputs for the Noise XX handshake.
 #[derive(Debug)]
 pub struct TranscriptInputs<'a> {
@@ -890,7 +827,6 @@ pub struct TranscriptInputs<'a> {
     /// Optional resume hash supplied when resuming a session.
     pub resume_hash: Option<&'a [u8]>,
 }
-
 impl TranscriptInputs<'_> {
     /// Compute the transcript hash as described in the working draft.
     ///
@@ -900,28 +836,22 @@ impl TranscriptInputs<'_> {
     pub fn compute_hash(&self) -> Result<[u8; 32], HarnessError> {
         let mut hasher = Sha3_256::new();
         Update::update(&mut hasher, TRANSCRIPT_DOMAIN);
-
         let desc_hash = Sha3_256::digest(self.descriptor_commit);
         Update::update(&mut hasher, desc_hash.as_ref());
         Update::update(&mut hasher, self.client_nonce);
         Update::update(&mut hasher, self.relay_nonce);
-
         let cap_len = transcript_capability_len_bytes(self.capability_bytes.len())?;
         Update::update(&mut hasher, &cap_len);
         Update::update(&mut hasher, self.capability_bytes);
-
         Update::update(&mut hasher, &[self.kem_id]);
         Update::update(&mut hasher, &[self.sig_id]);
         Update::update(&mut hasher, &[self.handshake_suite as u8]);
-
         if let Some(resume) = self.resume_hash {
             Update::update(&mut hasher, resume);
         }
-
         Ok(hasher.finalize().into())
     }
 }
-
 fn transcript_capability_len_bytes(capability_len: usize) -> Result<[u8; 4], HarnessError> {
     let len = u32::try_from(capability_len).map_err(|_| {
         HarnessError::Validation(format!(
@@ -930,11 +860,9 @@ fn transcript_capability_len_bytes(capability_len: usize) -> Result<[u8; 4], Har
     })?;
     Ok(len.to_be_bytes())
 }
-
 /// Utility for pretty-printing capability TLVs.
 pub fn format_capabilities(caps: &[CapabilityTlv]) -> impl fmt::Display + '_ {
     struct Formatter<'a>(&'a [CapabilityTlv]);
-
     impl fmt::Display for Formatter<'_> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             for cap in self.0 {
@@ -950,10 +878,8 @@ pub fn format_capabilities(caps: &[CapabilityTlv]) -> impl fmt::Display + '_ {
             Ok(())
         }
     }
-
     Formatter(caps)
 }
-
 /// Helper structure for serialising capability summaries to JSON fixtures.
 #[derive(Debug, JsonSerialize)]
 /// JSON-friendly summary of capability TLVs.
@@ -961,7 +887,6 @@ pub struct CapabilitySummary<'a> {
     /// Capability entries to encode.
     pub tlvs: &'a [CapabilityTlv],
 }
-
 impl CapabilitySummary<'_> {
     /// Convert the TLV summary into human-readable JSON.
     ///
@@ -978,20 +903,16 @@ impl CapabilitySummary<'_> {
         json::to_string_pretty(&Value::from(map))
     }
 }
-
 /// Convenience type for passing optional hex on the CLI.
 /// Newtype wrapper for hex-decoded CLI inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HexInput(pub Vec<u8>);
-
 impl FromStr for HexInput {
     type Err = HarnessError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(HexInput(decode_hex(s)?))
     }
 }
-
 /// Parameters for generating a salt announcement JSON payload.
 #[derive(Debug, Copy, Clone)]
 pub struct SaltAnnouncementParams<'a> {
@@ -1012,7 +933,6 @@ pub struct SaltAnnouncementParams<'a> {
     /// Optional signature covering the announcement.
     pub signature: Option<&'a str>,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct SaltAnnouncement<'a> {
     epoch_id: u32,
@@ -1024,7 +944,6 @@ struct SaltAnnouncement<'a> {
     notes: Option<&'a str>,
     signature: Option<&'a str>,
 }
-
 /// Render a pretty-printed JSON `SaltAnnouncement` payload from the provided parameters.
 ///
 /// # Errors
@@ -1045,7 +964,6 @@ pub fn salt_announcement_json(params: &SaltAnnouncementParams<'_>) -> Result<Str
     let value = json::to_value(&payload)?;
     Ok(json::to_string_pretty(&value)?)
 }
-
 #[derive(Debug, JsonDeserialize)]
 struct SaltAnnouncementRecord {
     epoch_id: u32,
@@ -1057,7 +975,6 @@ struct SaltAnnouncementRecord {
     notes: Option<String>,
     signature: Option<String>,
 }
-
 /// Result of verifying a salt announcement fixture.
 #[derive(Debug)]
 pub struct SaltAnnouncementValidation {
@@ -1076,7 +993,6 @@ pub struct SaltAnnouncementValidation {
     /// Optional operator notes included in the announcement.
     pub notes: Option<String>,
 }
-
 /// Verify a `SaltAnnouncement` fixture stored on disk.
 ///
 /// # Errors
@@ -1084,7 +1000,6 @@ pub struct SaltAnnouncementValidation {
 pub fn verify_salt_vector(path: &Path) -> Result<SaltAnnouncementValidation, HarnessError> {
     let contents = fs::read_to_string(path)?;
     let record: SaltAnnouncementRecord = json::from_str(&contents)?;
-
     decode_salt_hex(&record.blinded_cid_salt_hex).map_err(|err| match err {
         HarnessError::SaltLength(len) => HarnessError::Validation(format!(
             "salt fixture {}: blinded_cid_salt_hex must decode to 32 bytes, got {len}",
@@ -1092,7 +1007,6 @@ pub fn verify_salt_vector(path: &Path) -> Result<SaltAnnouncementValidation, Har
         )),
         other => other,
     })?;
-
     if record.valid_after >= record.valid_until {
         return Err(HarnessError::Validation(format!(
             "salt fixture {}: valid_until ({}) must be greater than valid_after ({})",
@@ -1101,7 +1015,6 @@ pub fn verify_salt_vector(path: &Path) -> Result<SaltAnnouncementValidation, Har
             record.valid_after
         )));
     }
-
     if let Some(prev) = record.previous_epoch
         && prev.checked_add(1) != Some(record.epoch_id)
     {
@@ -1111,12 +1024,10 @@ pub fn verify_salt_vector(path: &Path) -> Result<SaltAnnouncementValidation, Har
             record.epoch_id
         )));
     }
-
     let has_signature = record
         .signature
         .as_ref()
         .is_some_and(|sig| !sig.trim().is_empty());
-
     Ok(SaltAnnouncementValidation {
         epoch_id: record.epoch_id,
         previous_epoch: record.previous_epoch,
@@ -1127,7 +1038,6 @@ pub fn verify_salt_vector(path: &Path) -> Result<SaltAnnouncementValidation, Har
         notes: record.notes,
     })
 }
-
 /// Alarm report emitted when capability negotiation detects misuse.
 #[derive(Debug, JsonSerialize)]
 pub struct AlarmReport<'a> {
@@ -1154,7 +1064,6 @@ pub struct AlarmReport<'a> {
     /// Optional witness signature accompanying the alarm.
     pub witness_signature: Option<&'a str>,
 }
-
 /// Render an alarm report into a canonical JSON value.
 ///
 /// # Errors
@@ -1193,7 +1102,6 @@ pub fn alarm_report_json(report: &AlarmReport<'_>) -> Result<String, HarnessErro
     );
     Ok(json::to_string_pretty(&Value::from(map))?)
 }
-
 /// Telemetry report summarising recent relay performance.
 #[derive(Debug)]
 pub struct TelemetryReport<'a> {
@@ -1216,7 +1124,6 @@ pub struct TelemetryReport<'a> {
     /// Optional witness signature attached to the telemetry packet.
     pub witness_signature: Option<&'a str>,
 }
-
 /// Render a `SoraNet` telemetry payload as pretty JSON, optionally signing it with a relay secret.
 ///
 /// # Errors
@@ -1251,7 +1158,6 @@ pub fn soranet_telemetry_json(
         "incident_reference".to_string(),
         option_str_to_value(report.incident_reference),
     );
-
     if let Some(key) = signing_key {
         let payload_value = Value::Object(map.clone());
         let payload_bytes = json::to_vec(&payload_value)?;
@@ -1273,10 +1179,8 @@ pub fn soranet_telemetry_json(
             option_str_to_value(report.witness_signature),
         );
     }
-
     Ok(json::to_string_pretty(&Value::Object(map))?)
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 /// Recorded handshake message exchanged between client and relay.
 pub struct HandshakeStep {
@@ -1289,7 +1193,6 @@ pub struct HandshakeStep {
     /// Additional notes describing the step.
     pub note: &'static str,
 }
-
 impl HandshakeStep {
     fn new(role: &'static str, action: &'static str, note: &'static str, message: Vec<u8>) -> Self {
         Self {
@@ -1300,7 +1203,6 @@ impl HandshakeStep {
         }
     }
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 /// Warning emitted when capability negotiation detects mismatches.
 pub struct CapabilityWarning {
@@ -1309,7 +1211,6 @@ pub struct CapabilityWarning {
     /// Human-readable warning message.
     pub message: String,
 }
-
 /// Output captured from a simulated handshake run.
 #[derive(Debug)]
 /// Artifacts produced by a deterministic handshake simulation.
@@ -1329,7 +1230,6 @@ pub struct SimulationResult {
     /// Chronological record of handshake steps.
     pub handshake_steps: Vec<HandshakeStep>,
 }
-
 /// Input parameters for performing a deterministic handshake simulation.
 #[derive(Debug)]
 pub struct SimulationParams<'a> {
@@ -1354,7 +1254,6 @@ pub struct SimulationParams<'a> {
     /// Selected signature suite identifier.
     pub sig_id: u8,
 }
-
 /// Execute a deterministic Noise XX handshake simulation.
 ///
 /// # Errors
@@ -1372,10 +1271,8 @@ pub fn simulate_handshake(params: &SimulationParams<'_>) -> Result<SimulationRes
         params.sig_id,
     )?;
     warnings.extend(diff_capabilities(&client_caps, &relay_caps));
-
     let client_static = validate_static_key("client", params.client_static_sk)?;
     let relay_static = validate_static_key("relay", params.relay_static_sk)?;
-
     let transcript_hash = TranscriptInputs {
         descriptor_commit: params.descriptor_commit,
         client_nonce: params.client_nonce,
@@ -1387,7 +1284,6 @@ pub fn simulate_handshake(params: &SimulationParams<'_>) -> Result<SimulationRes
         resume_hash: params.resume_hash,
     }
     .compute_hash()?;
-
     let artifacts = build_handshake_artifacts(
         params,
         &client_static,
@@ -1396,7 +1292,6 @@ pub fn simulate_handshake(params: &SimulationParams<'_>) -> Result<SimulationRes
         handshake_suite,
         &warnings,
     )?;
-
     Ok(SimulationResult {
         transcript_hash,
         warnings,
@@ -1407,26 +1302,21 @@ pub fn simulate_handshake(params: &SimulationParams<'_>) -> Result<SimulationRes
         handshake_steps: artifacts.steps,
     })
 }
-
 struct HandshakeArtifacts {
     steps: Vec<HandshakeStep>,
     telemetry_payloads: Vec<Vec<u8>>,
 }
-
 struct KemProfile {
     metadata: MlKemMetadata,
 }
-
 impl KemProfile {
     fn suite(&self) -> MlKemSuite {
         self.metadata.suite
     }
-
     fn parameters(&self) -> MlKemParameters {
         self.metadata.parameters
     }
 }
-
 struct SimulatedKemArtifacts {
     client_public: Vec<u8>,
     relay_public: Vec<u8>,
@@ -1434,13 +1324,11 @@ struct SimulatedKemArtifacts {
     confirmation: Vec<u8>,
     shared_secret: Vec<u8>,
 }
-
 #[derive(Clone, Copy)]
 enum KemVariant {
     Primary,
     ForwardSecure,
 }
-
 struct KemLabelSet {
     client: &'static [u8],
     relay: &'static [u8],
@@ -1448,7 +1336,6 @@ struct KemLabelSet {
     confirmation: &'static [u8],
     shared: &'static [u8],
 }
-
 struct DeterministicHandshakeMaterial {
     client_static_public: [u8; NOISE_SECRET_LEN],
     client_ephemeral_public: [u8; NOISE_SECRET_LEN],
@@ -1458,7 +1345,6 @@ struct DeterministicHandshakeMaterial {
     primary_kem: SimulatedKemArtifacts,
     forward_secure_kem: SimulatedKemArtifacts,
 }
-
 fn simulation_relay_identity_key(
     material: &DeterministicHandshakeMaterial,
 ) -> Result<KeyPair, HarnessError> {
@@ -1470,7 +1356,6 @@ fn simulation_relay_identity_key(
         },
     )
 }
-
 fn derive_kem_artifacts(
     variant: KemVariant,
     params: &SimulationParams<'_>,
@@ -1494,9 +1379,7 @@ fn derive_kem_artifacts(
             shared: b"soranet.kem.fs.shared.v1",
         },
     };
-
     let kem_params = profile.parameters();
-
     let client_public = expand_material(
         labels.client,
         &[client_static.as_ref(), params.client_nonce],
@@ -1535,7 +1418,6 @@ fn derive_kem_artifacts(
         ],
         kem_params.shared_secret,
     );
-
     SimulatedKemArtifacts {
         client_public,
         relay_public,
@@ -1544,7 +1426,6 @@ fn derive_kem_artifacts(
         shared_secret,
     }
 }
-
 fn derive_handshake_material(
     params: &SimulationParams<'_>,
     client_static: &[u8; NOISE_SECRET_LEN],
@@ -1554,7 +1435,6 @@ fn derive_handshake_material(
     let client_static_public =
         X25519PublicKey::from(&StaticSecret::from(*client_static)).to_bytes();
     let relay_static_public = X25519PublicKey::from(&StaticSecret::from(*relay_static)).to_bytes();
-
     let client_ephemeral_public = {
         let seed = Zeroizing::new(derive_seed(
             b"soranet.noise.client.ephemeral.v1",
@@ -1571,7 +1451,6 @@ fn derive_handshake_material(
         let secret = StaticSecret::from(*seed);
         X25519PublicKey::from(&secret).to_bytes()
     };
-
     let primary_kem = derive_kem_artifacts(
         KemVariant::Primary,
         params,
@@ -1586,7 +1465,6 @@ fn derive_handshake_material(
         relay_static,
         &profile,
     );
-
     Ok(DeterministicHandshakeMaterial {
         client_static_public,
         client_ephemeral_public,
@@ -1597,7 +1475,6 @@ fn derive_handshake_material(
         forward_secure_kem,
     })
 }
-
 #[allow(clippy::too_many_lines)]
 fn build_nk2_artifacts(
     params: &SimulationParams<'_>,
@@ -1606,7 +1483,6 @@ fn build_nk2_artifacts(
     warnings: &[CapabilityWarning],
 ) -> Result<HandshakeArtifacts, HarnessError> {
     let primary = &material.primary_kem;
-
     let mut client_init = Vec::new();
     client_init.push(HYBRID_CLIENT_HELLO_TYPE);
     append_len_prefixed(&mut client_init, params.client_nonce)?;
@@ -1625,7 +1501,6 @@ fn build_nk2_artifacts(
         None => client_init.push(0),
     }
     pad_to_noise_block(&mut client_init);
-
     let mut relay_response = Vec::new();
     relay_response.push(HYBRID_RELAY_RESPONSE_TYPE);
     append_len_prefixed(&mut relay_response, params.relay_nonce)?;
@@ -1650,7 +1525,6 @@ fn build_nk2_artifacts(
         DEFAULT_TLS_SERVER_NAME,
     )?;
     pad_to_noise_block(&mut relay_response);
-
     let mut telemetry_map = Map::new();
     telemetry_map.insert(
         "event".to_string(),
@@ -1685,7 +1559,6 @@ fn build_nk2_artifacts(
     telemetry_map.insert("signature".to_string(), Value::from(signature));
     telemetry_map.insert("witness_signature".to_string(), Value::from(witness));
     let telemetry_json = norito::json::to_string_pretty(&Value::Object(telemetry_map))?;
-
     Ok(HandshakeArtifacts {
         steps: vec![
             HandshakeStep::new(
@@ -1704,7 +1577,6 @@ fn build_nk2_artifacts(
         telemetry_payloads: vec![telemetry_json.into_bytes()],
     })
 }
-
 #[allow(clippy::too_many_lines)]
 fn build_nk3_artifacts(
     params: &SimulationParams<'_>,
@@ -1724,7 +1596,6 @@ fn build_nk3_artifacts(
         ],
         forward.shared_secret.len(),
     );
-
     let mut client_commit = Vec::new();
     client_commit.push(PQFS_CLIENT_COMMIT_TYPE);
     append_len_prefixed(&mut client_commit, params.client_nonce)?;
@@ -1745,7 +1616,6 @@ fn build_nk3_artifacts(
     }
     append_len_prefixed(&mut client_commit, &fs_commitment)?;
     pad_to_noise_block(&mut client_commit);
-
     let mut relay_response = Vec::new();
     relay_response.push(PQFS_RELAY_RESPONSE_TYPE);
     append_len_prefixed(&mut relay_response, params.relay_nonce)?;
@@ -1775,7 +1645,6 @@ fn build_nk3_artifacts(
         DEFAULT_TLS_SERVER_NAME,
     )?;
     pad_to_noise_block(&mut relay_response);
-
     let mut telemetry_map = Map::new();
     telemetry_map.insert(
         "event".to_string(),
@@ -1814,7 +1683,6 @@ fn build_nk3_artifacts(
     telemetry_map.insert("signature".to_string(), Value::from(signature));
     telemetry_map.insert("witness_signature".to_string(), Value::from(witness));
     let telemetry_json = norito::json::to_string_pretty(&Value::Object(telemetry_map))?;
-
     Ok(HandshakeArtifacts {
         steps: vec![
             HandshakeStep::new(
@@ -1833,7 +1701,6 @@ fn build_nk3_artifacts(
         telemetry_payloads: vec![telemetry_json.into_bytes()],
     })
 }
-
 fn build_handshake_artifacts(
     params: &SimulationParams<'_>,
     client_static: &[u8; NOISE_SECRET_LEN],
@@ -1852,7 +1719,6 @@ fn build_handshake_artifacts(
         }
     }
 }
-
 fn validate_static_key(label: &str, key: &[u8]) -> Result<[u8; NOISE_SECRET_LEN], HarnessError> {
     if key.len() != NOISE_SECRET_LEN {
         return Err(HarnessError::Validation(format!(
@@ -1864,26 +1730,22 @@ fn validate_static_key(label: &str, key: &[u8]) -> Result<[u8; NOISE_SECRET_LEN]
     out.copy_from_slice(key);
     Ok(out)
 }
-
 fn suite_for_kem_id(kem_id: u8) -> Result<MlKemSuite, HarnessError> {
     MlKemSuite::from_kem_id(kem_id).ok_or_else(|| {
         HarnessError::Validation(format!("unsupported ML-KEM identifier {kem_id:#04x}"))
     })
 }
-
 fn kem_profile(kem_id: u8) -> Result<KemProfile, HarnessError> {
     let suite = suite_for_kem_id(kem_id)?;
     let metadata = mlkem_metadata(suite);
     Ok(KemProfile { metadata })
 }
-
 fn derive_seed(label: &[u8], parts: &[&[u8]]) -> Result<[u8; NOISE_SECRET_LEN], HarnessError> {
     let material = expand_material(label, parts, NOISE_SECRET_LEN);
     material
         .try_into()
         .map_err(|_| HarnessError::Validation("failed to derive deterministic Noise secret".into()))
 }
-
 fn expand_material(label: &[u8], parts: &[&[u8]], len: usize) -> Vec<u8> {
     let mut hasher = Shake256::default();
     update_expand_material_component(&mut hasher, EXPAND_MATERIAL_DOMAIN);
@@ -1897,12 +1759,10 @@ fn expand_material(label: &[u8], parts: &[&[u8]], len: usize) -> Vec<u8> {
     reader.read(&mut out);
     out
 }
-
 fn update_expand_material_component(hasher: &mut Shake256, component: &[u8]) {
     Update::update(hasher, &(component.len() as u64).to_be_bytes());
     Update::update(hasher, component);
 }
-
 fn append_len_prefixed(buf: &mut Vec<u8>, data: &[u8]) -> Result<(), HarnessError> {
     let len = u16::try_from(data.len()).map_err(|_| {
         HarnessError::Validation(format!(
@@ -1914,7 +1774,6 @@ fn append_len_prefixed(buf: &mut Vec<u8>, data: &[u8]) -> Result<(), HarnessErro
     buf.extend_from_slice(data);
     Ok(())
 }
-
 fn pad_to_noise_block(buf: &mut Vec<u8>) {
     let rem = buf.len() % NOISE_PADDING_BLOCK;
     if rem != 0 {
@@ -1922,7 +1781,6 @@ fn pad_to_noise_block(buf: &mut Vec<u8>) {
         buf.resize(buf.len() + pad_len, 0);
     }
 }
-
 fn derive_ed25519_signature(
     label: &[u8],
     static_key: &[u8],
@@ -1933,7 +1791,6 @@ fn derive_ed25519_signature(
         .try_into()
         .map_err(|_| HarnessError::Validation("failed to derive Ed25519 signing key".into()))?;
     let signing = SigningKey::from_bytes(&seed);
-
     let mut hasher = Sha3_256::new();
     Update::update(&mut hasher, STEP_DOMAIN);
     for part in transcript_parts {
@@ -1943,7 +1800,6 @@ fn derive_ed25519_signature(
     let signature = signing.sign(&digest);
     Ok(signature.to_bytes())
 }
-
 fn relay_identity_bytes(key_pair: &KeyPair) -> Result<Vec<u8>, HarnessError> {
     let (algorithm, bytes) = key_pair
         .public_key()
@@ -1959,13 +1815,11 @@ fn relay_identity_bytes(key_pair: &KeyPair) -> Result<Vec<u8>, HarnessError> {
         // Preserve the original Ed25519 wire representation for compatibility.
         return Ok(bytes.to_vec());
     }
-
     let mut encoded = Vec::with_capacity(bytes.len() + 1);
     encoded.push(algorithm as u8);
     encoded.extend_from_slice(bytes);
     Ok(encoded)
 }
-
 fn parse_relay_identity(bytes: &[u8]) -> Result<PublicKey, HarnessError> {
     let (algorithm, payload) = if bytes.len() == 32 {
         (Algorithm::Ed25519, bytes)
@@ -1984,17 +1838,14 @@ fn parse_relay_identity(bytes: &[u8]) -> Result<PublicKey, HarnessError> {
         }
         (algorithm, payload)
     };
-
     PublicKey::from_bytes(algorithm, payload).map_err(|error| {
         HarnessError::Validation(format!("relay {algorithm} identity is invalid: {error}"))
     })
 }
-
 fn update_relay_auth_component(hasher: &mut Sha3_256, component: &[u8]) {
     Update::update(hasher, &(component.len() as u64).to_be_bytes());
     Update::update(hasher, component);
 }
-
 fn relay_auth_digest(
     suite: HandshakeSuite,
     client_hello: &[u8],
@@ -2022,7 +1873,6 @@ fn relay_auth_digest(
     }
     hasher.finalize().into()
 }
-
 #[allow(
     clippy::too_many_arguments,
     reason = "relay authentication keeps every protocol-bound input explicit"
@@ -2063,7 +1913,6 @@ fn append_relay_authentication(
     append_len_prefixed(frame, &relay_identity)?;
     append_len_prefixed(frame, signature.payload())
 }
-
 #[allow(
     clippy::too_many_arguments,
     reason = "relay authentication keeps every protocol-bound input explicit"
@@ -2112,7 +1961,6 @@ fn verify_relay_authentication(
             HarnessError::Validation("relay identity signature verification failed".into())
         })
 }
-
 fn read_relay_authentication(
     cursor: &mut MessageCursor<'_>,
 ) -> Result<(Vec<u8>, Vec<u8>), HarnessError> {
@@ -2136,7 +1984,6 @@ fn read_relay_authentication(
     }
     Ok((relay_identity, signature))
 }
-
 fn validate_noise_padding(
     context: &str,
     frame_len: usize,
@@ -2154,7 +2001,6 @@ fn validate_noise_padding(
     }
     Ok(())
 }
-
 /// Render a simulation report as pretty JSON.
 ///
 /// # Errors
@@ -2164,10 +2010,8 @@ pub fn simulation_report_json(
     filter: Option<&[u16]>,
 ) -> Result<String, HarnessError> {
     use std::collections::BTreeSet;
-
     let filter_set = filter.map(|slice| slice.iter().copied().collect::<BTreeSet<_>>());
     let matches = |ty: u16| filter_set.as_ref().is_none_or(|set| set.contains(&ty));
-
     let filtered_warnings: Vec<&CapabilityWarning> = result
         .warnings
         .iter()
@@ -2183,7 +2027,6 @@ pub fn simulation_report_json(
         .iter()
         .filter(|cap| matches(cap.ty))
         .collect();
-
     let capability_filter_value = filter_set.as_ref().map_or(Value::Null, |set| {
         let entries = set
             .iter()
@@ -2191,25 +2034,21 @@ pub fn simulation_report_json(
             .collect::<Vec<_>>();
         Value::Array(entries)
     });
-
     let mut warnings_arr = Vec::new();
     for warning in filtered_warnings {
         warnings_arr.push(json::to_value(warning)?);
     }
     let warnings_value = Value::Array(warnings_arr);
-
     let mut client_caps_arr = Vec::new();
     for cap in filtered_client_caps {
         client_caps_arr.push(json::to_value(cap)?);
     }
     let client_caps_value = Value::Array(client_caps_arr);
-
     let mut relay_caps_arr = Vec::new();
     for cap in filtered_relay_caps {
         relay_caps_arr.push(json::to_value(cap)?);
     }
     let relay_caps_value = Value::Array(relay_caps_arr);
-
     let mut handshake_steps_arr = Vec::new();
     for step in &result.handshake_steps {
         handshake_steps_arr.push(json::to_value(step)?);
@@ -2222,7 +2061,6 @@ pub fn simulation_report_json(
             .map(|payload| Value::from(hex::encode(payload)))
             .collect(),
     );
-
     let mut map = Map::new();
     map.insert(
         "transcript_hash_hex".to_string(),
@@ -2241,10 +2079,8 @@ pub fn simulation_report_json(
         "telemetry_payloads_hex".to_string(),
         telemetry_payloads_value,
     );
-
     Ok(json::to_string_pretty(&Value::Object(map))?)
 }
-
 #[derive(Clone, Copy)]
 struct FixtureSpec {
     id: &'static str,
@@ -2263,7 +2099,6 @@ struct FixtureSpec {
     expected_alarm: Option<AlarmSpec>,
     relay_role: u8,
 }
-
 #[derive(Clone, Copy)]
 struct AlarmSpec {
     relay_id: &'static str,
@@ -2271,7 +2106,6 @@ struct AlarmSpec {
     reason: &'static str,
     capability_value_hex: Option<&'static str>,
 }
-
 const FIXTURES: &[FixtureSpec] = &[
     FixtureSpec {
         id: "snnet-cap-001-success",
@@ -2364,7 +2198,6 @@ const FIXTURES: &[FixtureSpec] = &[
         relay_role: 0x01,
     },
 ];
-
 struct InteropSpec {
     id: &'static str,
     description: &'static str,
@@ -2381,9 +2214,7 @@ struct InteropSpec {
     kem_id: u8,
     sig_id: u8,
 }
-
 const INTEROP_LANGUAGES: &[&str] = &["rust", "go", "cpp"];
-
 const INTEROP_SPECS: &[InteropSpec] = &[
     InteropSpec {
         id: "snnet-interop-nk2-v1",
@@ -2430,7 +2261,6 @@ const INTEROP_SPECS: &[InteropSpec] = &[
         sig_id: 1,
     },
 ];
-
 struct SaltFixtureSpec {
     file: &'static str,
     epoch_id: u32,
@@ -2441,7 +2271,6 @@ struct SaltFixtureSpec {
     emergency_rotation: bool,
     notes: Option<&'static str>,
 }
-
 const SALT_FIXTURES: &[SaltFixtureSpec] = &[SaltFixtureSpec {
     file: "epoch-000042.norito.json",
     epoch_id: 42,
@@ -2452,7 +2281,6 @@ const SALT_FIXTURES: &[SaltFixtureSpec] = &[SaltFixtureSpec {
     emergency_rotation: false,
     notes: Some("Routine rotation"),
 }];
-
 /// Generate JSON fixtures describing supported capability combinations.
 ///
 /// # Errors
@@ -2470,7 +2298,6 @@ pub fn generate_capability_fixtures(output: &Path) -> Result<(), HarnessError> {
     generate_interop_vectors(output)?;
     Ok(())
 }
-
 /// Verify existing capability fixtures by re-running the simulations and alarms.
 ///
 /// # Errors
@@ -2483,12 +2310,10 @@ pub fn verify_fixtures(output: &Path) -> Result<(), HarnessError> {
             path = canonical.display()
         )));
     }
-
     let temp = TempDir::new()?;
     let temp_capabilities = temp.path().join("capabilities");
     fs::create_dir_all(&temp_capabilities)?;
     generate_capability_fixtures(&temp_capabilities)?;
-
     for spec in FIXTURES {
         compare_fixture(
             &capability_path(&temp_capabilities, spec.id),
@@ -2501,7 +2326,6 @@ pub fn verify_fixtures(output: &Path) -> Result<(), HarnessError> {
             )?;
         }
     }
-
     let canonical_salt = salt_dir(&canonical);
     let temp_salt = salt_dir(&temp_capabilities);
     for spec in SALT_FIXTURES {
@@ -2510,26 +2334,20 @@ pub fn verify_fixtures(output: &Path) -> Result<(), HarnessError> {
             &salt_path(&canonical_salt, spec.file),
         )?;
     }
-
     compare_interop_vectors(&temp_capabilities, &canonical)?;
-
     println!("verified fixtures at {}", canonical.display());
     Ok(())
 }
-
 fn interop_dir(base: &Path) -> PathBuf {
     base.parent()
         .map_or_else(|| base.join("interop"), |parent| parent.join("interop"))
 }
-
 fn interop_language_dir(base: &Path, language: &str) -> PathBuf {
     interop_dir(base).join(language)
 }
-
 fn interop_vector_path(base: &Path, language: &str, spec: &InteropSpec) -> PathBuf {
     interop_language_dir(base, language).join(format!("{}.json", spec.id))
 }
-
 fn decode_fixed_hex<const N: usize>(label: &str, input: &str) -> Result<[u8; N], HarnessError> {
     let bytes = decode_hex(input)?;
     if bytes.len() != N {
@@ -2542,7 +2360,6 @@ fn decode_fixed_hex<const N: usize>(label: &str, input: &str) -> Result<[u8; N],
     out.copy_from_slice(&bytes);
     Ok(out)
 }
-
 struct CapabilityContext {
     client_caps: Vec<u8>,
     relay_caps: Vec<u8>,
@@ -2550,7 +2367,6 @@ struct CapabilityContext {
     relay_tlvs: Vec<CapabilityTlv>,
     warnings: Vec<CapabilityWarning>,
 }
-
 fn prepare_capability_context(spec: &InteropSpec) -> Result<CapabilityContext, HarnessError> {
     let client_caps = update_suite_list(
         &DEFAULT_CLIENT_CAPABILITIES,
@@ -2564,7 +2380,6 @@ fn prepare_capability_context(spec: &InteropSpec) -> Result<CapabilityContext, H
     )?;
     let client_tlvs = parse_capabilities(&client_caps)?;
     let relay_tlvs = parse_capabilities(&relay_caps)?;
-
     let HandshakeSuiteNegotiation {
         selected,
         mut warnings,
@@ -2583,7 +2398,6 @@ fn prepare_capability_context(spec: &InteropSpec) -> Result<CapabilityContext, H
         )));
     }
     warnings.extend(diff_capabilities(&client_tlvs, &relay_tlvs));
-
     Ok(CapabilityContext {
         client_caps,
         relay_caps,
@@ -2592,7 +2406,6 @@ fn prepare_capability_context(spec: &InteropSpec) -> Result<CapabilityContext, H
         warnings,
     })
 }
-
 struct HandshakeInputs {
     client_static: [u8; NOISE_SECRET_LEN],
     relay_static: [u8; NOISE_SECRET_LEN],
@@ -2600,7 +2413,6 @@ struct HandshakeInputs {
     relay_nonce: [u8; NOISE_SECRET_LEN],
     resume_hash: Option<Vec<u8>>,
 }
-
 fn decode_handshake_inputs(spec: &InteropSpec) -> Result<HandshakeInputs, HarnessError> {
     Ok(HandshakeInputs {
         client_static: decode_fixed_hex("client_static_sk_hex", spec.client_static_sk_hex)?,
@@ -2610,7 +2422,6 @@ fn decode_handshake_inputs(spec: &InteropSpec) -> Result<HandshakeInputs, Harnes
         resume_hash: spec.resume_hash_hex.map(decode_hex).transpose()?,
     })
 }
-
 fn build_simulation_params<'a>(
     spec: &InteropSpec,
     capabilities: &'a CapabilityContext,
@@ -2629,7 +2440,6 @@ fn build_simulation_params<'a>(
         sig_id: spec.sig_id,
     }
 }
-
 fn compute_transcript_hash(
     params: &SimulationParams<'_>,
     suite: HandshakeSuite,
@@ -2646,7 +2456,6 @@ fn compute_transcript_hash(
     }
     .compute_hash()
 }
-
 struct SessionArtifacts {
     handshake: HandshakeArtifacts,
     session_key: Vec<u8>,
@@ -2655,7 +2464,6 @@ struct SessionArtifacts {
     forward_shared: Option<Vec<u8>>,
     dual_mix: Option<Vec<u8>>,
 }
-
 fn build_session_artifacts(
     spec: &InteropSpec,
     params: &SimulationParams<'_>,
@@ -2671,13 +2479,11 @@ fn build_session_artifacts(
             build_nk3_artifacts(params, transcript_hash, material, warnings)?
         }
     };
-
     let forward_shared = if spec.suite == HandshakeSuite::Nk3PqForwardSecure {
         Some(material.forward_secure_kem.shared_secret.clone())
     } else {
         None
     };
-
     let dual_mix = if spec.suite == HandshakeSuite::Nk3PqForwardSecure {
         Some(expand_material(
             b"soranet.kem.dual.mix.v1",
@@ -2691,7 +2497,6 @@ fn build_session_artifacts(
     } else {
         None
     };
-
     let session_inputs = SessionKeyInputs {
         suite: spec.suite,
         transcript_hash,
@@ -2699,7 +2504,6 @@ fn build_session_artifacts(
         forward_shared: forward_shared.as_deref(),
     };
     let (session_key, nk2_confirmation) = derive_session_key_and_confirmation(session_inputs)?;
-
     Ok(SessionArtifacts {
         handshake,
         session_key: session_key.payload().to_vec(),
@@ -2709,7 +2513,6 @@ fn build_session_artifacts(
         dual_mix,
     })
 }
-
 fn telemetry_payload_values(artifacts: &HandshakeArtifacts) -> Result<Vec<Value>, HarnessError> {
     let mut telemetry_arr = Vec::new();
     for payload in &artifacts.telemetry_payloads {
@@ -2719,14 +2522,12 @@ fn telemetry_payload_values(artifacts: &HandshakeArtifacts) -> Result<Vec<Value>
     }
     Ok(telemetry_arr)
 }
-
 fn warning_values(warnings: &[CapabilityWarning]) -> Result<Vec<Value>, HarnessError> {
     Ok(warnings
         .iter()
         .map(json::to_value)
         .collect::<Result<Vec<_>, _>>()?)
 }
-
 fn handshake_step_values(artifacts: &HandshakeArtifacts) -> Result<Vec<Value>, HarnessError> {
     Ok(artifacts
         .steps
@@ -2734,11 +2535,9 @@ fn handshake_step_values(artifacts: &HandshakeArtifacts) -> Result<Vec<Value>, H
         .map(json::to_value)
         .collect::<Result<Vec<_>, _>>()?)
 }
-
 fn optional_hex(bytes: Option<&[u8]>) -> Value {
     bytes.map_or(Value::Null, |slice| Value::from(hex::encode(slice)))
 }
-
 fn render_inputs_map(
     spec: &InteropSpec,
     capabilities: &CapabilityContext,
@@ -2754,7 +2553,6 @@ fn render_inputs_map(
         .iter()
         .map(json::to_value)
         .collect::<Result<Vec<_>, _>>()?;
-
     let mut inputs_map = Map::new();
     inputs_map.insert(
         "client_capabilities_hex".to_string(),
@@ -2798,7 +2596,6 @@ fn render_inputs_map(
     );
     Ok(inputs_map)
 }
-
 fn render_outputs_map(
     spec: &InteropSpec,
     transcript_hash: &[u8; 32],
@@ -2809,7 +2606,6 @@ fn render_outputs_map(
     let steps_arr = handshake_step_values(&session.handshake)?;
     let telemetry_arr = telemetry_payload_values(&session.handshake)?;
     let warnings_arr = warning_values(warnings)?;
-
     let mut outputs_map = Map::new();
     outputs_map.insert(
         "transcript_hash_hex".to_string(),
@@ -2852,13 +2648,11 @@ fn render_outputs_map(
     outputs_map.insert("warnings".to_string(), Value::from(warnings_arr));
     Ok(outputs_map)
 }
-
 fn build_interop_value(spec: &InteropSpec) -> Result<Value, HarnessError> {
     let capability_context = prepare_capability_context(spec)?;
     let inputs = decode_handshake_inputs(spec)?;
     let params = build_simulation_params(spec, &capability_context, &inputs);
     let transcript_hash = compute_transcript_hash(&params, spec.suite)?;
-
     let material = derive_handshake_material(&params, &inputs.client_static, &inputs.relay_static)?;
     let session = build_session_artifacts(
         spec,
@@ -2867,7 +2661,6 @@ fn build_interop_value(spec: &InteropSpec) -> Result<Value, HarnessError> {
         &material,
         &capability_context.warnings,
     )?;
-
     let inputs_map = render_inputs_map(spec, &capability_context, inputs.resume_hash.as_ref())?;
     let outputs_map = render_outputs_map(
         spec,
@@ -2876,7 +2669,6 @@ fn build_interop_value(spec: &InteropSpec) -> Result<Value, HarnessError> {
         &session,
         &capability_context.warnings,
     )?;
-
     let mut root = Map::new();
     root.insert("id".to_string(), Value::from(spec.id));
     root.insert("description".to_string(), Value::from(spec.description));
@@ -2889,10 +2681,8 @@ fn build_interop_value(spec: &InteropSpec) -> Result<Value, HarnessError> {
     root.insert("sig_id".to_string(), Value::from(spec.sig_id));
     root.insert("inputs".to_string(), Value::Object(inputs_map));
     root.insert("outputs".to_string(), Value::Object(outputs_map));
-
     Ok(Value::Object(root))
 }
-
 fn generate_interop_vectors(base: &Path) -> Result<(), HarnessError> {
     for language in INTEROP_LANGUAGES {
         fs::create_dir_all(interop_language_dir(base, language))?;
@@ -2911,7 +2701,6 @@ fn generate_interop_vectors(base: &Path) -> Result<(), HarnessError> {
     }
     Ok(())
 }
-
 fn compare_interop_vectors(temp: &Path, canonical: &Path) -> Result<(), HarnessError> {
     for spec in INTEROP_SPECS {
         for language in INTEROP_LANGUAGES {
@@ -2923,7 +2712,6 @@ fn compare_interop_vectors(temp: &Path, canonical: &Path) -> Result<(), HarnessE
     }
     Ok(())
 }
-
 fn write_fixture(output: &Path, spec: &FixtureSpec) -> Result<(), HarnessError> {
     decode_hex(spec.client_hex)?;
     decode_hex(spec.relay_hex)?;
@@ -2933,18 +2721,15 @@ fn write_fixture(output: &Path, spec: &FixtureSpec) -> Result<(), HarnessError> 
     if let Some(hex) = spec.resume_hash_hex {
         decode_hex(hex)?;
     }
-
     let warnings_values = spec
         .warnings
         .iter()
         .map(|warning| Value::from(*warning))
         .collect::<Vec<_>>();
-
     let expected_alarm_value = spec
         .expected_alarm
         .map(|alarm| signed_alarm_value(spec, alarm, &FIXTURE_RELAY_SIGNATURE_KEY))
         .transpose()?;
-
     let mut map = Map::new();
     map.insert("fixture_id".to_string(), Value::from(spec.id));
     map.insert("description".to_string(), Value::from(spec.description));
@@ -2986,7 +2771,6 @@ fn write_fixture(output: &Path, spec: &FixtureSpec) -> Result<(), HarnessError> 
     );
     map.insert("fixture_signature".to_string(), Value::Null);
     let fixture_json = Value::Object(map);
-
     let path = capability_path(output, spec.id);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -2997,7 +2781,6 @@ fn write_fixture(output: &Path, spec: &FixtureSpec) -> Result<(), HarnessError> 
     println!("wrote {}", canonical_path(&path).display());
     Ok(())
 }
-
 fn write_alarm_fixture(
     output: &Path,
     spec: &FixtureSpec,
@@ -3028,7 +2811,6 @@ fn write_alarm_fixture(
     map.insert("counter".to_string(), Value::from(1u32));
     map.insert("signature".to_string(), Value::Null);
     let json = Value::Object(map);
-
     let path = telemetry_path(output, spec.id);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -3037,7 +2819,6 @@ fn write_alarm_fixture(
     println!("wrote {}", canonical_path(&path).display());
     Ok(())
 }
-
 fn generate_salt_fixtures(dir: &Path) -> Result<(), HarnessError> {
     fs::create_dir_all(dir)?;
     for spec in SALT_FIXTURES {
@@ -3045,7 +2826,6 @@ fn generate_salt_fixtures(dir: &Path) -> Result<(), HarnessError> {
     }
     Ok(())
 }
-
 fn write_salt_fixture(dir: &Path, spec: &SaltFixtureSpec) -> Result<(), HarnessError> {
     let salt = decode_salt_hex(spec.blinded_cid_salt_hex)?;
     let json = salt_announcement_json(&SaltAnnouncementParams {
@@ -3058,7 +2838,6 @@ fn write_salt_fixture(dir: &Path, spec: &SaltFixtureSpec) -> Result<(), HarnessE
         notes: spec.notes,
         signature: None,
     })?;
-
     let path = salt_path(dir, spec.file);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -3067,33 +2846,27 @@ fn write_salt_fixture(dir: &Path, spec: &SaltFixtureSpec) -> Result<(), HarnessE
     println!("wrote {}", canonical_path(&path).display());
     Ok(())
 }
-
 fn capability_path(root: &Path, spec_id: &str) -> PathBuf {
     root.join(format!("{spec_id}.norito.json"))
 }
-
 fn telemetry_path(root: &Path, spec_id: &str) -> PathBuf {
     root.parent()
         .unwrap_or(root)
         .join("telemetry")
         .join(format!("{spec_id}-alarm.norito.json"))
 }
-
 fn salt_dir(capabilities_dir: &Path) -> PathBuf {
     capabilities_dir
         .parent()
         .unwrap_or(capabilities_dir)
         .join("salt")
 }
-
 fn salt_path(root: &Path, file: &str) -> PathBuf {
     root.join(file)
 }
-
 fn canonical_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
-
 fn compare_fixture(expected: &Path, actual: &Path) -> Result<(), HarnessError> {
     if !actual.exists() {
         return Err(HarnessError::Validation(format!(
@@ -3111,21 +2884,17 @@ fn compare_fixture(expected: &Path, actual: &Path) -> Result<(), HarnessError> {
     }
     Ok(())
 }
-
 /// Descriptor commitment used in the reference fixture bundle.
 pub const DEFAULT_DESCRIPTOR_COMMIT: [u8; 32] =
     hex_literal::hex!("76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f");
-
 /// Default capability vector advertised by clients during the handshake.
 pub const DEFAULT_CLIENT_CAPABILITIES: [u8; 40] = hex_literal::hex!(
     "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe"
 );
-
 /// Default capability vector advertised by relays during the handshake.
 pub const DEFAULT_RELAY_CAPABILITIES: [u8; 73] = hex_literal::hex!(
     "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f12000412345678"
 );
-
 /// Parameters controlling the runtime handshake.
 #[derive(Clone)]
 pub struct RuntimeParams<'a> {
@@ -3146,7 +2915,6 @@ pub struct RuntimeParams<'a> {
     /// Optional resume hash carried over from a previous circuit.
     pub resume_hash: Option<&'a [u8]>,
 }
-
 impl RuntimeParams<'_> {
     /// Return the canonical runtime parameters matching the published fixtures.
     #[must_use]
@@ -3163,7 +2931,6 @@ impl RuntimeParams<'_> {
         }
     }
 }
-
 /// Shared handshake outcome containing the derived session key and metadata.
 pub struct SessionSecrets {
     /// Session key derived from the hybrid handshake via transcript-bound HKDF.
@@ -3177,7 +2944,6 @@ pub struct SessionSecrets {
     /// Optional telemetry payload emitted as part of the handshake.
     pub telemetry_payload: Option<Vec<u8>>,
 }
-
 /// Opaque state retained by the client between `ClientHello` and `ClientFinish`.
 #[allow(dead_code)]
 pub struct ClientState {
@@ -3198,7 +2964,6 @@ pub struct ClientState {
     handshake_suite: HandshakeSuite,
     client_hello: Vec<u8>,
 }
-
 /// Opaque state retained by the relay between `RelayHello` and `ClientFinish`.
 #[allow(dead_code)]
 pub struct RelayState {
@@ -3236,20 +3001,17 @@ pub struct RelayState {
     pending_session: Option<SessionSecrets>,
     requires_client_finish: bool,
 }
-
 impl RelayState {
     /// Returns `true` if the relay must await a `ClientFinish` frame before the session is usable.
     pub fn requires_client_finish(&self) -> bool {
         self.requires_client_finish
     }
-
     /// Transcript hash derived during the handshake.
     #[must_use]
     pub const fn transcript_hash(&self) -> &[u8; 32] {
         &self.transcript_hash
     }
 }
-
 struct ClientHelloMaterials {
     nonce: [u8; 32],
     ephemeral_secret: StaticSecret,
@@ -3259,7 +3021,6 @@ struct ClientHelloMaterials {
     kem_secret: Zeroizing<Vec<u8>>,
     kem_public: Vec<u8>,
 }
-
 impl ClientHelloMaterials {
     fn into_state(
         self,
@@ -3272,7 +3033,6 @@ impl ClientHelloMaterials {
             Some((secret, public)) => (Some(secret), Some(public)),
             None => (None, None),
         };
-
         ClientState {
             client_nonce: self.nonce,
             client_ephemeral_secret: self.ephemeral_secret,
@@ -3293,7 +3053,6 @@ impl ClientHelloMaterials {
         }
     }
 }
-
 /// Build the `ClientHello` payload and return the state required for completion.
 ///
 /// # Errors
@@ -3311,10 +3070,8 @@ pub fn build_client_hello<R: TryCryptoRng>(
         params.client_capabilities,
         params.relay_capabilities,
     )?;
-
     let mut client_nonce = [0u8; 32];
     fill_random(rng, "building client hello nonce", &mut client_nonce)?;
-
     let mut client_static_bytes = Zeroizing::new([0u8; NOISE_SECRET_LEN]);
     fill_random(
         rng,
@@ -3323,7 +3080,6 @@ pub fn build_client_hello<R: TryCryptoRng>(
     )?;
     let client_static_secret = StaticSecret::from(*client_static_bytes);
     let client_static_public = X25519PublicKey::from(&client_static_secret).to_bytes();
-
     let mut client_ephemeral_bytes = Zeroizing::new([0u8; NOISE_SECRET_LEN]);
     fill_random(
         rng,
@@ -3332,7 +3088,6 @@ pub fn build_client_hello<R: TryCryptoRng>(
     )?;
     let client_ephemeral_secret = StaticSecret::from(*client_ephemeral_bytes);
     let client_ephemeral_public = X25519PublicKey::from(&client_ephemeral_secret).to_bytes();
-
     let mut kem_seed = Zeroizing::new([0u8; 32]);
     fill_random(rng, "building client ML-KEM seed", kem_seed.as_mut())?;
     let mut kem_rng = hedged_chacha20_rng(
@@ -3362,7 +3117,6 @@ pub fn build_client_hello<R: TryCryptoRng>(
         }
     }
 }
-
 fn build_client_hello_nk2(
     params: &RuntimeParams<'_>,
     materials: ClientHelloMaterials,
@@ -3384,12 +3138,9 @@ fn build_client_hello_nk2(
         client_init.push(0);
     }
     pad_to_noise_block(&mut client_init);
-
     let state = materials.into_state(params, HandshakeSuite::Nk2Hybrid, client_init.clone(), None);
-
     Ok((client_init, state))
 }
-
 fn build_client_hello_nk3(
     params: &RuntimeParams<'_>,
     materials: ClientHelloMaterials,
@@ -3403,7 +3154,6 @@ fn build_client_hello_nk3(
         Zeroizing::new(secret.deref().clone())
     };
     let forward_commitment = Sha3_256::digest(forward_public.as_slice()).to_vec();
-
     let mut client_commit = Vec::new();
     client_commit.push(PQFS_CLIENT_COMMIT_TYPE);
     append_len_prefixed(&mut client_commit, materials.nonce.as_ref())?;
@@ -3423,7 +3173,6 @@ fn build_client_hello_nk3(
     }
     append_len_prefixed(&mut client_commit, forward_commitment.as_slice())?;
     pad_to_noise_block(&mut client_commit);
-
     let forward_bundle = Some((forward_secret, forward_public.clone()));
     let state = materials.into_state(
         params,
@@ -3431,10 +3180,8 @@ fn build_client_hello_nk3(
         client_commit.clone(),
         forward_bundle,
     );
-
     Ok((client_commit, state))
 }
-
 #[cfg(test)]
 fn fixture_noise_state() -> RelayNoiseState {
     let static_secret = StaticSecret::from([0x11; NOISE_SECRET_LEN]);
@@ -3449,7 +3196,6 @@ fn fixture_noise_state() -> RelayNoiseState {
         static_public,
     }
 }
-
 #[cfg(test)]
 fn fixture_kem_artifacts(
     public: &[u8],
@@ -3464,7 +3210,6 @@ fn fixture_kem_artifacts(
         ciphertext: ciphertext.to_vec(),
     }
 }
-
 #[allow(dead_code)]
 struct HybridRelayParsed {
     relay_nonce: [u8; 32],
@@ -3480,7 +3225,6 @@ struct HybridRelayParsed {
     relay_identity: Vec<u8>,
     relay_signature: Vec<u8>,
 }
-
 #[allow(dead_code)]
 struct PqfsRelayParsed {
     relay_nonce: [u8; 32],
@@ -3501,7 +3245,6 @@ struct PqfsRelayParsed {
     relay_identity: Vec<u8>,
     relay_signature: Vec<u8>,
 }
-
 #[allow(dead_code)]
 fn parse_hybrid_relay_response(
     relay_message: &[u8],
@@ -3515,7 +3258,6 @@ fn parse_hybrid_relay_response(
             "expected hybrid relay response type ({HYBRID_RELAY_RESPONSE_TYPE:#04x}), got {msg_type:#04x}"
         )));
     }
-
     let relay_nonce_bytes = cursor.read_len_prefixed()?;
     if relay_nonce_bytes.len() != 32 {
         return Err(HarnessError::Validation(
@@ -3524,13 +3266,10 @@ fn parse_hybrid_relay_response(
     }
     let mut relay_nonce = [0u8; 32];
     relay_nonce.copy_from_slice(relay_nonce_bytes);
-
     let relay_ephemeral_pub =
         decode_noise_public_key("relay ephemeral key", cursor.read_len_prefixed()?)?;
-
     let relay_static_bytes = cursor.read_len_prefixed()?.to_vec();
     let relay_static_pub = decode_noise_public_key("relay static key", &relay_static_bytes)?;
-
     let relay_capabilities = cursor.read_len_prefixed()?.to_vec();
     let descriptor_commit = cursor.read_len_prefixed()?.to_vec();
     if descriptor_commit.as_slice() != expected_descriptor {
@@ -3540,17 +3279,13 @@ fn parse_hybrid_relay_response(
             hex::encode(&descriptor_commit)
         )));
     }
-
     let relay_kem_public = cursor.read_len_prefixed()?.to_vec();
     validate_mlkem_public_key(kem_suite, &relay_kem_public)
         .map_err(|err| HarnessError::Kem(err.to_string()))?;
-
     let kem_ciphertext = cursor.read_len_prefixed()?.to_vec();
     validate_mlkem_ciphertext(kem_suite, &kem_ciphertext)
         .map_err(|err| HarnessError::Kem(err.to_string()))?;
-
     let confirmation = cursor.read_len_prefixed()?.to_vec();
-
     let transcript_bytes = cursor.read_len_prefixed()?.to_vec();
     if transcript_bytes.len() != 32 {
         return Err(HarnessError::Validation(
@@ -3559,7 +3294,6 @@ fn parse_hybrid_relay_response(
     }
     let mut transcript_hash = [0u8; 32];
     transcript_hash.copy_from_slice(&transcript_bytes);
-
     let signed_relay_body = relay_message[..cursor.pos].to_vec();
     let (relay_identity, relay_signature) = read_relay_authentication(&mut cursor)?;
     validate_noise_padding(
@@ -3567,7 +3301,6 @@ fn parse_hybrid_relay_response(
         relay_message.len(),
         cursor.remaining_slice(),
     )?;
-
     Ok(HybridRelayParsed {
         relay_nonce,
         relay_ephemeral_pub,
@@ -3583,7 +3316,6 @@ fn parse_hybrid_relay_response(
         relay_signature,
     })
 }
-
 #[allow(dead_code)]
 fn parse_pqfs_relay_response(
     relay_message: &[u8],
@@ -3597,7 +3329,6 @@ fn parse_pqfs_relay_response(
             "expected pqfs relay response type ({PQFS_RELAY_RESPONSE_TYPE:#04x}), got {msg_type:#04x}"
         )));
     }
-
     let relay_nonce_bytes = cursor.read_len_prefixed()?;
     if relay_nonce_bytes.len() != 32 {
         return Err(HarnessError::Validation(
@@ -3606,13 +3337,10 @@ fn parse_pqfs_relay_response(
     }
     let mut relay_nonce = [0u8; 32];
     relay_nonce.copy_from_slice(relay_nonce_bytes);
-
     let relay_ephemeral_pub =
         decode_noise_public_key("relay ephemeral key", cursor.read_len_prefixed()?)?;
-
     let relay_static_bytes = cursor.read_len_prefixed()?.to_vec();
     let relay_static_pub = decode_noise_public_key("relay static key", &relay_static_bytes)?;
-
     let relay_capabilities = cursor.read_len_prefixed()?.to_vec();
     let descriptor_commit = cursor.read_len_prefixed()?.to_vec();
     if descriptor_commit.as_slice() != expected_descriptor {
@@ -3622,24 +3350,20 @@ fn parse_pqfs_relay_response(
             hex::encode(&descriptor_commit)
         )));
     }
-
     let primary_relay_public = cursor.read_len_prefixed()?.to_vec();
     validate_mlkem_public_key(kem_suite, &primary_relay_public)
         .map_err(|err| HarnessError::Kem(err.to_string()))?;
     let primary_ciphertext = cursor.read_len_prefixed()?.to_vec();
     validate_mlkem_ciphertext(kem_suite, &primary_ciphertext)
         .map_err(|err| HarnessError::Kem(err.to_string()))?;
-
     let forward_relay_public = cursor.read_len_prefixed()?.to_vec();
     validate_mlkem_public_key(kem_suite, &forward_relay_public)
         .map_err(|err| HarnessError::Kem(err.to_string()))?;
     let forward_ciphertext = cursor.read_len_prefixed()?.to_vec();
     validate_mlkem_ciphertext(kem_suite, &forward_ciphertext)
         .map_err(|err| HarnessError::Kem(err.to_string()))?;
-
     let primary_confirmation = cursor.read_len_prefixed()?.to_vec();
     let forward_confirmation = cursor.read_len_prefixed()?.to_vec();
-
     let transcript_bytes = cursor.read_len_prefixed()?.to_vec();
     if transcript_bytes.len() != 32 {
         return Err(HarnessError::Validation(
@@ -3648,10 +3372,8 @@ fn parse_pqfs_relay_response(
     }
     let mut transcript_hash = [0u8; 32];
     transcript_hash.copy_from_slice(&transcript_bytes);
-
     let forward_commitment = cursor.read_len_prefixed()?.to_vec();
     let dual_mix = cursor.read_len_prefixed()?.to_vec();
-
     let signed_relay_body = relay_message[..cursor.pos].to_vec();
     let (relay_identity, relay_signature) = read_relay_authentication(&mut cursor)?;
     validate_noise_padding(
@@ -3659,7 +3381,6 @@ fn parse_pqfs_relay_response(
         relay_message.len(),
         cursor.remaining_slice(),
     )?;
-
     Ok(PqfsRelayParsed {
         relay_nonce,
         relay_ephemeral_pub,
@@ -3680,7 +3401,6 @@ fn parse_pqfs_relay_response(
         relay_signature,
     })
 }
-
 /// Consume the relay response and derive the session key for the negotiated suite.
 ///
 /// # Errors
@@ -3703,7 +3423,6 @@ pub fn client_handle_relay_hello<R: TryCryptoRng>(
         }
     }
 }
-
 fn handle_nk2_client_finish(
     state: ClientState,
     relay_message: &[u8],
@@ -3721,7 +3440,6 @@ fn handle_nk2_client_finish(
         client_hello,
         ..
     } = state;
-
     let profile = kem_profile(kem_id)?;
     let parsed = parse_hybrid_relay_response(relay_message, &descriptor_commit, profile.suite())?;
     verify_relay_authentication(
@@ -3735,7 +3453,6 @@ fn handle_nk2_client_finish(
         params.transport_alpn,
         params.tls_server_name,
     )?;
-
     let (selected, _) = verify_capabilities_alignment(
         kem_id,
         sig_id,
@@ -3754,7 +3471,6 @@ fn handle_nk2_client_finish(
             telemetry,
         });
     }
-
     let transcript_inputs = TranscriptInputs {
         descriptor_commit: parsed.descriptor_commit.as_slice(),
         client_nonce: client_nonce.as_slice(),
@@ -3771,21 +3487,18 @@ fn handle_nk2_client_finish(
             "relay transcript hash mismatch in NK2 handshake".to_string(),
         ));
     }
-
     let shared_secret = decapsulate_mlkem(
         profile.suite(),
         client_kem_secret.as_ref(),
         &parsed.kem_ciphertext,
     )
     .map_err(|err| HarnessError::Kem(err.to_string()))?;
-
     let (session_key, confirmation) = derive_session_key_and_confirmation(SessionKeyInputs {
         suite: HandshakeSuite::Nk2Hybrid,
         transcript_hash: &transcript,
         primary_shared: shared_secret.as_bytes(),
         forward_shared: None,
     })?;
-
     if confirmation != parsed.confirmation {
         return Err(HarnessError::Validation(format!(
             "relay confirmation mismatch in NK2 handshake (expected {}, got {})",
@@ -3793,7 +3506,6 @@ fn handle_nk2_client_finish(
             hex::encode(&confirmation)
         )));
     }
-
     Ok((
         None,
         SessionSecrets {
@@ -3805,7 +3517,6 @@ fn handle_nk2_client_finish(
         },
     ))
 }
-
 fn ensure_nk3_negotiation(
     client_capabilities: &[u8],
     relay_capabilities: &[u8],
@@ -3828,7 +3539,6 @@ fn ensure_nk3_negotiation(
     }
     Ok(())
 }
-
 fn compute_nk3_transcript(
     parsed: &PqfsRelayParsed,
     client_nonce: &[u8; 32],
@@ -3855,7 +3565,6 @@ fn compute_nk3_transcript(
     }
     Ok(transcript)
 }
-
 fn decapsulate_nk3_secrets(
     suite: MlKemSuite,
     client_secret: &Zeroizing<Vec<u8>>,
@@ -3870,14 +3579,12 @@ fn decapsulate_nk3_secrets(
             "forward commitment mismatch in NK3 handshake".to_string(),
         ));
     }
-
     let primary_shared =
         decapsulate_mlkem(suite, client_secret.as_ref(), &parsed.primary_ciphertext)
             .map_err(|err| HarnessError::Kem(err.to_string()))?;
     let forward_shared =
         decapsulate_mlkem(suite, forward_secret.as_ref(), &parsed.forward_ciphertext)
             .map_err(|err| HarnessError::Kem(err.to_string()))?;
-
     let expected_primary_confirmation = compute_kem_confirmation(
         NK3_PRIMARY_CONFIRM_LABEL,
         primary_shared.as_bytes(),
@@ -3890,7 +3597,6 @@ fn decapsulate_nk3_secrets(
             hex::encode(&expected_primary_confirmation)
         )));
     }
-
     let expected_forward_confirmation = compute_kem_confirmation(
         NK3_FORWARD_CONFIRM_LABEL,
         forward_shared.as_bytes(),
@@ -3903,7 +3609,6 @@ fn decapsulate_nk3_secrets(
             hex::encode(&expected_forward_confirmation)
         )));
     }
-
     let expected_dual_mix = compute_dual_mix(
         primary_shared.as_bytes(),
         forward_shared.as_bytes(),
@@ -3916,10 +3621,8 @@ fn decapsulate_nk3_secrets(
             hex::encode(&expected_dual_mix)
         )));
     }
-
     Ok((primary_shared, forward_shared))
 }
-
 fn handle_nk3_client_finish(
     state: ClientState,
     relay_message: &[u8],
@@ -3939,14 +3642,12 @@ fn handle_nk3_client_finish(
         client_hello,
         ..
     } = state;
-
     let forward_kem_secret = forward_kem_secret.ok_or_else(|| {
         HarnessError::Validation("forward ML-KEM secret missing in NK3 handshake".to_string())
     })?;
     let forward_public = forward_kem_public.ok_or_else(|| {
         HarnessError::Validation("forward ML-KEM public key missing in NK3 handshake".to_string())
     })?;
-
     let profile = kem_profile(kem_id)?;
     let parsed = parse_pqfs_relay_response(relay_message, &descriptor_commit, profile.suite())?;
     verify_relay_authentication(
@@ -3960,14 +3661,12 @@ fn handle_nk3_client_finish(
         params.transport_alpn,
         params.tls_server_name,
     )?;
-
     ensure_nk3_negotiation(
         &client_capabilities,
         &parsed.relay_capabilities,
         kem_id,
         sig_id,
     )?;
-
     let transcript = compute_nk3_transcript(
         &parsed,
         &client_nonce,
@@ -3976,7 +3675,6 @@ fn handle_nk3_client_finish(
         sig_id,
         resume_hash.as_deref(),
     )?;
-
     let (primary_shared, forward_shared) = decapsulate_nk3_secrets(
         profile.suite(),
         &client_kem_secret,
@@ -3985,7 +3683,6 @@ fn handle_nk3_client_finish(
         &parsed,
         &transcript,
     )?;
-
     let (session_key, _final_confirmation) =
         derive_session_key_and_confirmation(SessionKeyInputs {
             suite: HandshakeSuite::Nk3PqForwardSecure,
@@ -3993,7 +3690,6 @@ fn handle_nk3_client_finish(
             primary_shared: primary_shared.as_bytes(),
             forward_shared: Some(forward_shared.as_bytes()),
         })?;
-
     Ok((
         None,
         SessionSecrets {
@@ -4005,7 +3701,6 @@ fn handle_nk3_client_finish(
         },
     ))
 }
-
 struct ClientHelloParsed {
     client_nonce: [u8; 32],
     handshake_suite: HandshakeSuite,
@@ -4019,7 +3714,6 @@ struct ClientHelloParsed {
     client_capabilities: Vec<u8>,
     resume_hash: Option<Vec<u8>>,
 }
-
 fn parse_client_hello(
     client_hello: &[u8],
     expected_resume: Option<&[u8]>,
@@ -4034,7 +3728,6 @@ fn parse_client_hello(
         ))),
     }
 }
-
 fn parse_client_hello_nk2(
     mut cursor: MessageCursor<'_>,
     expected_resume: Option<&[u8]>,
@@ -4047,7 +3740,6 @@ fn parse_client_hello_nk2(
     }
     let mut client_nonce = [0u8; 32];
     client_nonce.copy_from_slice(client_nonce_bytes);
-
     let suite_byte = cursor.read_u8()?;
     let handshake_suite = HandshakeSuite::try_from(suite_byte)?;
     if handshake_suite != HandshakeSuite::Nk2Hybrid {
@@ -4055,16 +3747,12 @@ fn parse_client_hello_nk2(
             "client advertised unsupported NK2 suite id {suite_byte:#04x}"
         )));
     }
-
     let kem_id = cursor.read_u8()?;
     let sig_id = cursor.read_u8()?;
-
     let client_ephemeral_public =
         decode_noise_public_key("client ephemeral key", cursor.read_exact(NOISE_SECRET_LEN)?)?;
-
     let client_static_bytes = cursor.read_len_prefixed()?.to_vec();
     let client_static_public = decode_noise_public_key("client static key", &client_static_bytes)?;
-
     let client_kem_public = cursor.read_len_prefixed()?.to_vec();
     let client_capabilities = cursor.read_len_prefixed()?.to_vec();
     let resume_flag = cursor.read_u8()?;
@@ -4073,7 +3761,6 @@ fn parse_client_hello_nk2(
     } else {
         None
     };
-
     match (expected_resume, resume_hash.as_deref()) {
         (Some(expected), Some(actual)) if actual != expected => {
             return Err(HarnessError::Validation(format!(
@@ -4094,13 +3781,11 @@ fn parse_client_hello_nk2(
         }
         _ => {}
     }
-
     validate_noise_padding(
         "nk2 client hello",
         cursor.buf.len(),
         cursor.remaining_slice(),
     )?;
-
     Ok(ClientHelloParsed {
         client_nonce,
         handshake_suite,
@@ -4115,7 +3800,6 @@ fn parse_client_hello_nk2(
         resume_hash,
     })
 }
-
 fn parse_client_hello_nk3(
     mut cursor: MessageCursor<'_>,
     expected_resume: Option<&[u8]>,
@@ -4128,7 +3812,6 @@ fn parse_client_hello_nk3(
     }
     let mut client_nonce = [0u8; 32];
     client_nonce.copy_from_slice(client_nonce_bytes);
-
     let suite_byte = cursor.read_u8()?;
     let handshake_suite = HandshakeSuite::try_from(suite_byte)?;
     if handshake_suite != HandshakeSuite::Nk3PqForwardSecure {
@@ -4136,16 +3819,12 @@ fn parse_client_hello_nk3(
             "client advertised unsupported NK3 suite id {suite_byte:#04x}"
         )));
     }
-
     let kem_id = cursor.read_u8()?;
     let sig_id = cursor.read_u8()?;
-
     let client_ephemeral_public =
         decode_noise_public_key("client ephemeral key", cursor.read_exact(NOISE_SECRET_LEN)?)?;
-
     let client_static_bytes = cursor.read_len_prefixed()?.to_vec();
     let client_static_public = decode_noise_public_key("client static key", &client_static_bytes)?;
-
     let client_kem_public = cursor.read_len_prefixed()?.to_vec();
     let forward_kem_public = cursor.read_len_prefixed()?.to_vec();
     let client_capabilities = cursor.read_len_prefixed()?.to_vec();
@@ -4155,7 +3834,6 @@ fn parse_client_hello_nk3(
     } else {
         None
     };
-
     match (expected_resume, resume_hash.as_deref()) {
         (Some(expected), Some(actual)) if actual != expected => {
             return Err(HarnessError::Validation(format!(
@@ -4176,14 +3854,12 @@ fn parse_client_hello_nk3(
         }
         _ => {}
     }
-
     let forward_commitment = cursor.read_len_prefixed()?.to_vec();
     validate_noise_padding(
         "nk3 client hello",
         cursor.buf.len(),
         cursor.remaining_slice(),
     )?;
-
     Ok(ClientHelloParsed {
         client_nonce,
         handshake_suite,
@@ -4198,7 +3874,6 @@ fn parse_client_hello_nk3(
         resume_hash,
     })
 }
-
 struct RelayNoiseState {
     nonce: [u8; 32],
     ephemeral_secret: StaticSecret,
@@ -4206,12 +3881,10 @@ struct RelayNoiseState {
     static_secret: StaticSecret,
     static_public: [u8; NOISE_SECRET_LEN],
 }
-
 impl RelayNoiseState {
     fn generate<R: TryCryptoRng>(rng: &mut R) -> Result<Self, HarnessError> {
         let mut nonce = [0u8; 32];
         fill_random(rng, "building relay nonce", &mut nonce)?;
-
         let mut ephemeral_bytes = Zeroizing::new([0u8; NOISE_SECRET_LEN]);
         fill_random(
             rng,
@@ -4220,7 +3893,6 @@ impl RelayNoiseState {
         )?;
         let ephemeral_secret = StaticSecret::from(*ephemeral_bytes);
         let ephemeral_public = X25519PublicKey::from(&ephemeral_secret).to_bytes();
-
         let mut static_bytes = Zeroizing::new([0u8; NOISE_SECRET_LEN]);
         fill_random(
             rng,
@@ -4229,7 +3901,6 @@ impl RelayNoiseState {
         )?;
         let static_secret = StaticSecret::from(*static_bytes);
         let static_public = X25519PublicKey::from(&static_secret).to_bytes();
-
         Ok(Self {
             nonce,
             ephemeral_secret,
@@ -4239,14 +3910,12 @@ impl RelayNoiseState {
         })
     }
 }
-
 struct RuntimeKemArtifacts {
     relay_public: Vec<u8>,
     relay_secret: Zeroizing<Vec<u8>>,
     shared_secret: Zeroizing<Vec<u8>>,
     ciphertext: Vec<u8>,
 }
-
 impl RuntimeKemArtifacts {
     fn encapsulate(suite: MlKemSuite, client_public: &[u8]) -> Result<Self, HarnessError> {
         validate_mlkem_public_key(suite, client_public)
@@ -4267,7 +3936,6 @@ impl RuntimeKemArtifacts {
         })
     }
 }
-
 fn ensure_kem_profile(
     params: &RuntimeParams<'_>,
     requested: u8,
@@ -4280,7 +3948,6 @@ fn ensure_kem_profile(
     }
     kem_profile(requested)
 }
-
 fn verify_capabilities_alignment(
     kem_id: u8,
     sig_id: u8,
@@ -4332,7 +3999,6 @@ fn verify_capabilities_alignment(
         })
     }
 }
-
 fn compute_relay_transcript(
     parsed: &ClientHelloParsed,
     relay_nonce: &[u8; 32],
@@ -4351,7 +4017,6 @@ fn compute_relay_transcript(
     }
     .compute_hash()
 }
-
 #[allow(dead_code)]
 fn build_hybrid_relay_response(
     client_init: &[u8],
@@ -4373,7 +4038,6 @@ fn build_hybrid_relay_response(
     append_len_prefixed(&mut relay_response, &primary.ciphertext)?;
     append_len_prefixed(&mut relay_response, confirmation)?;
     append_len_prefixed(&mut relay_response, transcript.as_ref())?;
-
     let relay_body = relay_response.clone();
     append_relay_authentication(
         &mut relay_response,
@@ -4388,7 +4052,6 @@ fn build_hybrid_relay_response(
     pad_to_noise_block(&mut relay_response);
     Ok(relay_response)
 }
-
 /// Aggregates the inputs needed to serialize a PQFS relay response.
 struct PqfsRelayResponseInputs<'ctx> {
     client_commit: &'ctx [u8],
@@ -4403,7 +4066,6 @@ struct PqfsRelayResponseInputs<'ctx> {
     dual_mix: &'ctx [u8],
     relay_identity_key: &'ctx KeyPair,
 }
-
 #[allow(dead_code)]
 fn build_pqfs_relay_response(
     inputs: &PqfsRelayResponseInputs<'_>,
@@ -4412,7 +4074,6 @@ fn build_pqfs_relay_response(
     let params = inputs.params;
     let primary = inputs.primary;
     let forward = inputs.forward;
-
     let mut relay_response = Vec::new();
     relay_response.push(PQFS_RELAY_RESPONSE_TYPE);
     append_len_prefixed(&mut relay_response, &noise.nonce)?;
@@ -4429,7 +4090,6 @@ fn build_pqfs_relay_response(
     append_len_prefixed(&mut relay_response, inputs.transcript.as_ref())?;
     append_len_prefixed(&mut relay_response, inputs.forward_commitment)?;
     append_len_prefixed(&mut relay_response, inputs.dual_mix)?;
-
     let relay_body = relay_response.clone();
     append_relay_authentication(
         &mut relay_response,
@@ -4444,7 +4104,6 @@ fn build_pqfs_relay_response(
     pad_to_noise_block(&mut relay_response);
     Ok(relay_response)
 }
-
 struct RelayStateInputs<'params, 'runtime> {
     parsed: ClientHelloParsed,
     params: &'params RuntimeParams<'runtime>,
@@ -4455,7 +4114,6 @@ struct RelayStateInputs<'params, 'runtime> {
     warnings: Vec<CapabilityWarning>,
     relay_hello: Vec<u8>,
 }
-
 fn assemble_relay_state(inputs: RelayStateInputs<'_, '_>) -> RelayState {
     let RelayStateInputs {
         parsed,
@@ -4467,7 +4125,6 @@ fn assemble_relay_state(inputs: RelayStateInputs<'_, '_>) -> RelayState {
         warnings,
         relay_hello,
     } = inputs;
-
     let ClientHelloParsed {
         client_nonce,
         client_static_public,
@@ -4479,7 +4136,6 @@ fn assemble_relay_state(inputs: RelayStateInputs<'_, '_>) -> RelayState {
         resume_hash,
         ..
     } = parsed;
-
     RelayState {
         client_nonce,
         client_ephemeral_public,
@@ -4515,7 +4171,6 @@ fn assemble_relay_state(inputs: RelayStateInputs<'_, '_>) -> RelayState {
         requires_client_finish: false,
     }
 }
-
 #[allow(dead_code)]
 fn process_nk2_client_hello<R: TryCryptoRng>(
     client_init: &[u8],
@@ -4536,19 +4191,16 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
             "NK2 handshake must not include forward KEM payload".into(),
         ));
     }
-
     let noise = RelayNoiseState::generate(rng)?;
     let primary = RuntimeKemArtifacts::encapsulate(kem_suite, &parsed.client_kem_public)?;
     let transcript =
         compute_relay_transcript(&parsed, &noise.nonce, params, HandshakeSuite::Nk2Hybrid)?;
-
     let (session_key, confirmation) = derive_session_key_and_confirmation(SessionKeyInputs {
         suite: HandshakeSuite::Nk2Hybrid,
         transcript_hash: &transcript,
         primary_shared: primary.shared_secret.as_ref(),
         forward_shared: None,
     })?;
-
     let relay_response = build_hybrid_relay_response(
         client_init,
         params,
@@ -4558,7 +4210,6 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
         &transcript,
         relay_identity_key,
     )?;
-
     let mut state = assemble_relay_state(RelayStateInputs {
         parsed,
         params,
@@ -4578,16 +4229,13 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
         telemetry_payload: None,
     });
     state.requires_client_finish = false;
-
     Ok((relay_response, state))
 }
-
 /// Required payloads carried by the NK3 client hello message.
 struct Nk3HandshakeRequirements {
     forward_public: Vec<u8>,
     forward_commitment: Vec<u8>,
 }
-
 impl Nk3HandshakeRequirements {
     fn collect(parsed: &ClientHelloParsed) -> Result<Self, HarnessError> {
         let _client_static_public = parsed.client_static_public.ok_or_else(|| {
@@ -4605,14 +4253,12 @@ impl Nk3HandshakeRequirements {
         })
     }
 }
-
 /// ML-KEM confirmation tags and dual-mix secret derived for NK3.
 struct Nk3ConfirmationBundle {
     primary: Vec<u8>,
     forward: Vec<u8>,
     dual_mix: Vec<u8>,
 }
-
 impl Nk3ConfirmationBundle {
     fn derive(
         primary_shared: &[u8],
@@ -4631,7 +4277,6 @@ impl Nk3ConfirmationBundle {
         })
     }
 }
-
 #[allow(dead_code)]
 fn process_nk3_client_hello<R: TryCryptoRng>(
     client_commit: &[u8],
@@ -4642,31 +4287,26 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
     relay_identity_key: &KeyPair,
 ) -> Result<(Vec<u8>, RelayState), HarnessError> {
     let requirements = Nk3HandshakeRequirements::collect(&parsed)?;
-
     let noise = RelayNoiseState::generate(rng)?;
     let primary = RuntimeKemArtifacts::encapsulate(kem_suite, &parsed.client_kem_public)?;
     let forward = RuntimeKemArtifacts::encapsulate(kem_suite, &requirements.forward_public)?;
-
     let transcript = compute_relay_transcript(
         &parsed,
         &noise.nonce,
         params,
         HandshakeSuite::Nk3PqForwardSecure,
     )?;
-
     let confirmations = Nk3ConfirmationBundle::derive(
         primary.shared_secret.as_ref(),
         forward.shared_secret.as_ref(),
         &transcript,
     )?;
-
     let (session_key, _) = derive_session_key_and_confirmation(SessionKeyInputs {
         suite: HandshakeSuite::Nk3PqForwardSecure,
         transcript_hash: &transcript,
         primary_shared: primary.shared_secret.as_ref(),
         forward_shared: Some(forward.shared_secret.as_ref()),
     })?;
-
     let response_inputs = PqfsRelayResponseInputs {
         client_commit,
         params,
@@ -4681,7 +4321,6 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
         relay_identity_key,
     };
     let relay_response = build_pqfs_relay_response(&response_inputs)?;
-
     let mut state = assemble_relay_state(RelayStateInputs {
         parsed,
         params,
@@ -4692,14 +4331,12 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
         warnings: Vec::new(),
         relay_hello: relay_response.clone(),
     });
-
     let RuntimeKemArtifacts {
         relay_public: forward_relay_public,
         relay_secret: forward_relay_secret,
         shared_secret: forward_shared_secret,
         ciphertext: forward_ciphertext,
     } = forward;
-
     state.forward_kem_secret = Some(forward_relay_secret);
     state.forward_kem_public = Some(forward_relay_public);
     state.forward_kem_shared = Some(forward_shared_secret);
@@ -4715,10 +4352,8 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
         telemetry_payload: None,
     });
     state.requires_client_finish = false;
-
     Ok((relay_response, state))
 }
-
 /// Parse an incoming `ClientHello` and craft the `RelayHello` response.
 ///
 /// # Errors
@@ -4754,7 +4389,6 @@ pub fn process_client_hello<R: TryCryptoRng>(
             telemetry,
         });
     }
-
     match parsed.handshake_suite {
         HandshakeSuite::Nk2Hybrid => {
             process_nk2_client_hello(client_hello, parsed, params, rng, profile.suite(), key_pair)
@@ -4764,7 +4398,6 @@ pub fn process_client_hello<R: TryCryptoRng>(
         }
     }
 }
-
 fn validate_runtime_params(params: &RuntimeParams<'_>) -> Result<(), HarnessError> {
     validate_transcript_field_len("descriptor commitment", params.descriptor_commit)?;
     validate_len_prefixed_field_len("client capability vector", params.client_capabilities)?;
@@ -4782,7 +4415,6 @@ fn validate_runtime_params(params: &RuntimeParams<'_>) -> Result<(), HarnessErro
     }
     Ok(())
 }
-
 fn validate_len_prefixed_field_len(label: &str, bytes: &[u8]) -> Result<(), HarnessError> {
     if bytes.len() > usize::from(u16::MAX) {
         return Err(HarnessError::Validation(format!(
@@ -4792,7 +4424,6 @@ fn validate_len_prefixed_field_len(label: &str, bytes: &[u8]) -> Result<(), Harn
     }
     Ok(())
 }
-
 fn validate_transcript_field_len(label: &str, bytes: &[u8]) -> Result<(), HarnessError> {
     if bytes.len() != TRANSCRIPT_BINDING_LEN {
         return Err(HarnessError::Validation(format!(
@@ -4802,7 +4433,6 @@ fn validate_transcript_field_len(label: &str, bytes: &[u8]) -> Result<(), Harnes
     }
     Ok(())
 }
-
 fn validate_client_kem_publics(
     parsed: &ClientHelloParsed,
     kem_suite: MlKemSuite,
@@ -4821,7 +4451,6 @@ fn validate_client_kem_publics(
     }
     Ok(())
 }
-
 /// Finalise the relay side of the handshake after the relay response is sent.
 ///
 /// # Errors
@@ -4840,7 +4469,6 @@ pub fn relay_finalize_handshake(
         "client-finish handshakes are no longer supported".into(),
     ))
 }
-
 fn build_telemetry_payload(
     kem_id: u8,
     sig_id: u8,
@@ -4897,7 +4525,6 @@ fn build_telemetry_payload(
         "witness_signature".to_string(),
         option_str_to_value(report.witness_signature),
     );
-
     let mut map = Map::new();
     map.insert("event".to_string(), Value::from("soranet_handshake"));
     map.insert("kem_id".to_string(), Value::from(kem_id));
@@ -4908,7 +4535,6 @@ fn build_telemetry_payload(
         .map(String::into_bytes)
         .map_err(HarnessError::from)
 }
-
 /// Inputs required to derive session keys and confirmation tags.
 #[derive(Clone, Copy)]
 struct SessionKeyInputs<'a> {
@@ -4917,7 +4543,6 @@ struct SessionKeyInputs<'a> {
     primary_shared: &'a [u8],
     forward_shared: Option<&'a [u8]>,
 }
-
 fn derive_session_key_and_confirmation(
     inputs: SessionKeyInputs<'_>,
 ) -> Result<(SessionKey, Vec<u8>), HarnessError> {
@@ -4927,7 +4552,6 @@ fn derive_session_key_and_confirmation(
         primary_shared,
         forward_shared,
     } = inputs;
-
     let (session_label, confirm_label) = match suite {
         HandshakeSuite::Nk2Hybrid => (
             b"soranet.handshake.nk2.session.v1",
@@ -4938,7 +4562,6 @@ fn derive_session_key_and_confirmation(
             b"soranet.handshake.nk3.confirm.v1",
         ),
     };
-
     let hk = match suite {
         HandshakeSuite::Nk2Hybrid => {
             hkdf_sha3_256_from_ikm_parts(Some(transcript_hash), &[primary_shared, transcript_hash])?
@@ -4965,11 +4588,9 @@ fn derive_session_key_and_confirmation(
             )?
         }
     };
-
     let mut session_key = Zeroizing::new(vec![0u8; 32]);
     hk.expand(session_label, session_key.as_mut_slice())
         .map_err(|_| HarnessError::Kdf)?;
-
     let confirmation = if suite == HandshakeSuite::Nk2Hybrid {
         let mut confirm = Zeroizing::new(vec![0u8; 32]);
         let hk_confirm = Hkdf::<Sha3_256>::new(Some(transcript_hash), primary_shared);
@@ -4983,10 +4604,8 @@ fn derive_session_key_and_confirmation(
             .map_err(|_| HarnessError::Kdf)?;
         confirm.to_vec()
     };
-
     Ok((SessionKey::from_zeroizing_vec(session_key), confirmation))
 }
-
 fn hkdf_sha3_256_from_ikm_parts(
     salt: Option<&[u8]>,
     ikm_parts: &[&[u8]],
@@ -4998,7 +4617,6 @@ fn hkdf_sha3_256_from_ikm_parts(
     }
     Ok(extract.finalize().1)
 }
-
 fn input_len_prefixed_hkdf_component(
     extract: &mut HkdfExtract<Sha3_256>,
     component: &[u8],
@@ -5008,7 +4626,6 @@ fn input_len_prefixed_hkdf_component(
     extract.input_ikm(component);
     Ok(())
 }
-
 fn compute_kem_confirmation(
     label: &[u8],
     shared_secret: &[u8],
@@ -5020,7 +4637,6 @@ fn compute_kem_confirmation(
         .map_err(|_| HarnessError::Kdf)?;
     Ok(confirmation)
 }
-
 fn compute_dual_mix(
     primary_shared: &[u8],
     forward_shared: &[u8],
@@ -5032,7 +4648,6 @@ fn compute_dual_mix(
         forward_shared.len(),
     )
 }
-
 fn decode_noise_public_key(
     label: &str,
     bytes: &[u8],
@@ -5051,22 +4666,18 @@ fn decode_noise_public_key(
     }
     Ok(public)
 }
-
 fn noise_public_key_is_low_order(public: &[u8; NOISE_SECRET_LEN]) -> bool {
     let public_key = X25519PublicKey::from(*public);
     is_x25519_low_order_public_key(&public_key)
 }
-
 struct MessageCursor<'a> {
     buf: &'a [u8],
     pos: usize,
 }
-
 impl<'a> MessageCursor<'a> {
     fn new(buf: &'a [u8]) -> Self {
         Self { buf, pos: 0 }
     }
-
     fn read_exact(&mut self, len: usize) -> Result<&'a [u8], HarnessError> {
         let end = match self.pos.checked_add(len) {
             Some(end) if end <= self.buf.len() => end,
@@ -5088,20 +4699,16 @@ impl<'a> MessageCursor<'a> {
         self.pos = end;
         Ok(slice)
     }
-
     fn read_u8(&mut self) -> Result<u8, HarnessError> {
         Ok(self.read_exact(1)?[0])
     }
-
     fn read_len_prefixed(&mut self) -> Result<&'a [u8], HarnessError> {
         let len_bytes = self.read_exact(2)?;
         let len = u16::from_be_bytes([len_bytes[0], len_bytes[1]]) as usize;
         self.read_exact(len)
     }
-
     fn remaining_slice(&self) -> &[u8] {
         self.buf.get(self.pos..).unwrap_or(&[])
     }
 }
-
 include!("handshake_tests.rs");

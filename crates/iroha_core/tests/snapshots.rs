@@ -1,14 +1,12 @@
 //! Test helpers for fixture-backed event snapshots.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(dead_code)]
+use iroha_data_model::events::prelude::EventBox;
 use std::{
     env, fs,
     io::Write,
     path::{Path, PathBuf},
 };
-
-use iroha_data_model::events::prelude::EventBox;
-
 /// Serialize events to canonical JSON, filtering out non-deterministic kinds.
 pub fn events_json_filtered(events: &[EventBox]) -> String {
     let mut filtered: Vec<_> = events
@@ -29,7 +27,6 @@ pub fn events_json_filtered(events: &[EventBox]) -> String {
     });
     norito::json::to_json_pretty(&filtered).expect("serialization should succeed")
 }
-
 fn fixtures_dir() -> PathBuf {
     // Integration test crate root is the iroha_core crate directory
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -37,13 +34,11 @@ fn fixtures_dir() -> PathBuf {
     p.push("fixtures");
     p
 }
-
 fn fixture_path(name: &str) -> PathBuf {
     let mut p = fixtures_dir();
     p.push(format!("{name}.json"));
     p
 }
-
 fn write_if_update_requested(path: &Path, content: &str) -> bool {
     let update = env::var("UPDATE_FIXTURES")
         .ok()
@@ -59,7 +54,6 @@ fn write_if_update_requested(path: &Path, content: &str) -> bool {
         false
     }
 }
-
 /// Assert that the given events match the named JSON fixture under `tests/fixtures/`.
 ///
 /// Set `UPDATE_FIXTURES=1` to create or refresh fixtures with the current output.

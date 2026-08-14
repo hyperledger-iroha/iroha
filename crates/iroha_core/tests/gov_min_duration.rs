@@ -1,6 +1,5 @@
 //! Enforce minimum lock duration for plain ballots.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -13,16 +12,13 @@ use iroha_data_model::{
 };
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
-
 fn checked_random_plain_ballot_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked plain ballot keypair")
 }
-
 #[test]
 fn plain_ballot_fixture_uses_checked_randomness() {
     let _key_pair = checked_random_plain_ballot_keypair();
 }
-
 #[test]
 fn plain_ballot_rejected_when_duration_below_min() {
     let kura = Kura::blank_kura_for_testing();
@@ -34,12 +30,10 @@ fn plain_ballot_rejected_when_duration_below_min() {
     cfg.min_bond_amount = 0_u64.into();
     cfg.conviction_step_blocks = 100;
     state.set_gov(cfg);
-
     let _kp = checked_random_plain_ballot_keypair();
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     let instr = CastPlainBallot {
         referendum_id: "rid-min-dur".to_string(),
         owner: ALICE_ID.clone(),

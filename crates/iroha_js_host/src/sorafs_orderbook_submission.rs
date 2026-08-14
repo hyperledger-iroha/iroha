@@ -1,14 +1,11 @@
 //! Strict native inspection for JavaScript SoraFS orderbook submission.
-
 #[rustfmt::skip]
 use iroha_data_model::{sorafs::orderbook_submission::{SorafsOrderbookSubmissionRouteV1, decode_and_verify_sorafs_orderbook_submission_receipt_v1, inspect_sorafs_orderbook_submission_for_discriminant_v1 as inspect_submission, parse_sorafs_orderbook_receipt_signer_v1, parse_sorafs_orderbook_submission_identity_v1}, transaction::TransactionSubmissionReceipt};
 use napi::bindgen_prelude::Uint8Array;
 use napi_derive::napi;
-
 fn invalid(message: impl Into<String>) -> napi::Error {
     napi::Error::new(napi::Status::InvalidArg, message.into())
 }
-
 /// Exact identities derived from one authenticated orderbook transaction.
 #[napi(object)]
 pub struct JsSorafsOrderbookSubmissionIdentityV1 {
@@ -19,7 +16,6 @@ pub struct JsSorafsOrderbookSubmissionIdentityV1 {
     /// Canonical signed-transaction identity.
     pub signed_transaction_hash: String,
 }
-
 /// Reject any noncanonical, unauthenticated, nonsingleton, or wrong-route wire.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -43,7 +39,6 @@ pub fn inspect_sorafs_orderbook_submission_v1(
         signed_transaction_hash: identity.signed_transaction_hash.to_string(),
     })
 }
-
 /// Verify and bind one exact Norito receipt to the submitted transaction and signer.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
@@ -60,7 +55,6 @@ pub fn verify_sorafs_orderbook_submission_receipt_v1(
     let receipt = decode_and_verify_sorafs_orderbook_submission_receipt_v1(receipt_norito.as_ref(), &identity, &signer).map_err(|error| invalid(error.to_string()))?;
     norito::json::to_json(&receipt).map_err(|error| invalid(error.to_string()))
 }
-
 /// Decode a Norito-framed transaction submission receipt into JSON.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]

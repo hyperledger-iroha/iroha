@@ -5,16 +5,13 @@
 //! the target type and delegate to `NoritoDeserialize`. The encoded lengths are
 //! tracked by container decoders (e.g., Vec/Option) so we can return the full
 //! slice length as bytes consumed.
-
 use norito::core::{DecodeFromSlice, Error, decode_field_canonical};
-
 fn decode_via_canonical<T>(bytes: &[u8]) -> Result<(T, usize), Error>
 where
     T: for<'de> norito::NoritoDeserialize<'de> + norito::NoritoSerialize,
 {
     decode_field_canonical::<T>(bytes)
 }
-
 // Helper macro to implement `DecodeFromSlice` for many local types.
 macro_rules! impl_decode_from_slice_via_archived {
     ($($ty:path),+ $(,)?) => {
@@ -27,7 +24,6 @@ macro_rules! impl_decode_from_slice_via_archived {
         )+
     };
 }
-
 // Core ID and value types
 impl_decode_from_slice_via_archived! {
     crate::ipfs::IpfsPath,
@@ -44,17 +40,13 @@ impl_decode_from_slice_via_archived! {
     crate::parameter::CustomParameterId,
     crate::sorafs::capacity::ProviderId,
 }
-
 // State / canonical keys (DecodeFromSlice derived on the type; no shim needed)
-
 // Transaction-related
 // Transaction-related (derive already supplies DecodeFromSlice for these)
-
 // Trigger entrypoints and related types
 impl_decode_from_slice_via_archived! {
     crate::trigger::time::TimeTriggerEntrypoint,
 }
-
 // Block-related
 impl_decode_from_slice_via_archived! {
     crate::block::header::BlockHeader,
@@ -63,7 +55,6 @@ impl_decode_from_slice_via_archived! {
     crate::smart_contract::manifest::ContractManifest,
     crate::smart_contract::manifest::AccessSetHints,
 }
-
 // Proof-related
 impl_decode_from_slice_via_archived! {
     crate::proof::ProofId,
@@ -76,7 +67,6 @@ impl_decode_from_slice_via_archived! {
     crate::events::data::proof::ProofRejected,
     crate::runtime::RuntimeUpgradeId,
 }
-
 // Kaigi components referenced by query/data-model responses
 impl_decode_from_slice_via_archived! {
     crate::kaigi::KaigiParticipantCommitment,
@@ -85,7 +75,6 @@ impl_decode_from_slice_via_archived! {
     crate::kaigi::KaigiRelayManifest,
     crate::kaigi::KaigiRelayRegistration,
 }
-
 // Query parameter and DSL types; keep only those not covered by derives
 impl_decode_from_slice_via_archived! {
     crate::query::parameters::ForwardCursor,
@@ -98,20 +87,17 @@ impl_decode_from_slice_via_archived! {
     crate::query::AnyQueryBox,
     crate::query::QueryResponse,
 }
-
 // Events and statuses
 impl_decode_from_slice_via_archived! {
     crate::events::pipeline::BlockStatus,
     crate::events::pipeline::TransactionStatus,
     crate::events::trigger_completed::TriggerCompletedOutcomeType,
 }
-
 // Transaction-related shims required by versioned types and proofs
 impl_decode_from_slice_via_archived! {
     crate::transaction::error::TransactionRejectionReason,
     crate::ValidationFail,
 }
-
 // Additional model and crypto types referenced by query responses and versioned wrappers
 impl_decode_from_slice_via_archived! {
     // Core model objects (use public re-exports)
@@ -177,14 +163,12 @@ impl_decode_from_slice_via_archived! {
     crate::soradns::ResolverRevocationRecordV1,
     crate::soradns::RadRevokeReason,
 }
-
 // Governance types (feature-gated, but default-enabled)
 #[cfg(feature = "governance")]
 impl_decode_from_slice_via_archived! {
     crate::governance::types::ProposalId,
     crate::governance::types::AtWindow,
 }
-
 // ISI Governance enums used in instruction params
 #[cfg(feature = "governance")]
 impl_decode_from_slice_via_archived! {

@@ -1,5 +1,4 @@
 // Runtime diagnostics fixtures and regression tests included in the parent test module.
-
 fn sample_native_amx_qc(
     phase: NativeAmxPhase,
     source_id: [u8; 32],
@@ -92,7 +91,6 @@ fn sample_native_amx_qc(
     )
     .expect("fixture validator set and proofs must align")
 }
-
 #[test]
 fn native_amx_grouped_receipt_structure_matches_rust_owned_fixture() {
     let document = grouped_native_amx_fixture_document();
@@ -107,7 +105,6 @@ fn native_amx_grouped_receipt_structure_matches_rust_owned_fixture() {
         .expect("Rust-owned grouped Native AMX fixture is structurally valid");
     validate_grouped_native_amx_application_evidence(&document)
         .expect("Rust-owned Native AMX application evidence is valid");
-
     for receipt in &commitment.native_amx_receipts {
         for leg in &receipt.legs {
             assert!(
@@ -116,7 +113,6 @@ fn native_amx_grouped_receipt_structure_matches_rust_owned_fixture() {
             );
         }
     }
-
     for (path, label) in [
         ("", "settlement commitment"),
         ("/native_amx_receipts/0", "receipt"),
@@ -165,7 +161,6 @@ fn native_amx_grouped_receipt_structure_matches_rust_owned_fixture() {
             "unknown {label} fields must fail exact Native AMX JSON decoding"
         );
     }
-
     let hint = LaneBlockProposalPayloadHintV1 {
         proposal_height: 42,
         proposal_view: 3,
@@ -186,7 +181,6 @@ fn native_amx_grouped_receipt_structure_matches_rust_owned_fixture() {
         "unknown payload-hint fields must fail exact Native AMX JSON decoding"
     );
 }
-
 fn npos_diagnostics() -> SumeragiNposDiagnostics {
     SumeragiNposDiagnostics {
         epoch_length_blocks: NonZeroU64::new(100).unwrap(),
@@ -201,7 +195,6 @@ fn npos_diagnostics() -> SumeragiNposDiagnostics {
         vrf_late_reveals_total: 3,
     }
 }
-
 fn diagnostics(npos: Option<SumeragiNposDiagnostics>) -> SumeragiDiagnosticsStatus {
     SumeragiDiagnosticsStatus {
         pipeline_execution: SumeragiPipelineExecutionStatus::default(),
@@ -229,7 +222,6 @@ fn diagnostics(npos: Option<SumeragiNposDiagnostics>) -> SumeragiDiagnosticsStat
         autonomous_lane_executions: Vec::new(),
     }
 }
-
 fn native_amx_participant_application(
     lane: u32,
     dataspace: u64,
@@ -259,7 +251,6 @@ fn native_amx_participant_application(
         state: SumeragiNativeAmxParticipantApplicationState::DurablyApplied,
     }
 }
-
 fn autonomous_lane_execution(lane: u32, lane_height: u64) -> SumeragiAutonomousLaneExecution {
     SumeragiAutonomousLaneExecution {
         lane_id: LaneId::new(lane),
@@ -297,7 +288,6 @@ fn autonomous_lane_execution(lane: u32, lane_height: u64) -> SumeragiAutonomousL
         stuck_reason: Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingMergeSelection),
     }
 }
-
 #[test]
 fn permissioned_diagnostics_omit_npos_shape() {
     let value = norito::json::to_value(&diagnostics(None)).expect("serialize diagnostics");
@@ -309,7 +299,6 @@ fn permissioned_diagnostics_omit_npos_shape() {
             .is_none()
     );
 }
-
 #[test]
 fn diagnostics_json_rejects_unknown_outer_and_npos_fields() {
     let mut outer = norito::json::to_value(&diagnostics(Some(npos_diagnostics())))
@@ -319,7 +308,6 @@ fn diagnostics_json_rejects_unknown_outer_and_npos_fields() {
         .expect("diagnostics object")
         .insert("unknown".to_owned(), norito::json::Value::from(1_u64));
     assert!(norito::json::from_value::<SumeragiDiagnosticsStatus>(outer).is_err());
-
     let mut nested = norito::json::to_value(&diagnostics(Some(npos_diagnostics())))
         .expect("serialize diagnostics");
     nested
@@ -329,7 +317,6 @@ fn diagnostics_json_rejects_unknown_outer_and_npos_fields() {
         .expect("NPoS diagnostics object")
         .insert("unknown".to_owned(), norito::json::Value::from(true));
     assert!(norito::json::from_value::<SumeragiDiagnosticsStatus>(nested).is_err());
-
     let mut missing_autonomous =
         norito::json::to_value(&diagnostics(None)).expect("serialize diagnostics");
     missing_autonomous
@@ -341,7 +328,6 @@ fn diagnostics_json_rejects_unknown_outer_and_npos_fields() {
         "the first-release autonomous diagnostics vector is required"
     );
 }
-
 #[test]
 fn native_amx_participant_diagnostics_roundtrip_and_validate() {
     let mut value = diagnostics(None);
@@ -352,13 +338,11 @@ fn native_amx_participant_diagnostics_roundtrip_and_validate() {
     value
         .validate_native_amx_participant_applications()
         .expect("valid ordered diagnostics");
-
     let encoded = value.encode();
     let mut encoded_input = encoded.as_slice();
     let decoded = SumeragiDiagnosticsStatus::decode_all(&mut encoded_input)
         .expect("decode diagnostics binary roundtrip");
     assert_eq!(decoded, value);
-
     let json = norito::json::to_value(&value).expect("serialize diagnostics JSON");
     let row = json
         .get("native_amx_participant_applications")
@@ -374,7 +358,6 @@ fn native_amx_participant_diagnostics_roundtrip_and_validate() {
         norito::json::from_value(json).expect("decode diagnostics JSON roundtrip");
     assert_eq!(json_roundtrip, value);
 }
-
 #[test]
 fn native_amx_participant_diagnostics_reject_bounds_order_and_geometry() {
     let mut value = diagnostics(None);
@@ -387,7 +370,6 @@ fn native_amx_participant_diagnostics_reject_bounds_order_and_geometry() {
         value.validate_native_amx_participant_applications(),
         Err("Native AMX participant diagnostics vector exceeds its hard limit")
     );
-
     value.native_amx_participant_applications = vec![
         native_amx_participant_application(4, 2),
         native_amx_participant_application(3, 8),
@@ -396,7 +378,6 @@ fn native_amx_participant_diagnostics_reject_bounds_order_and_geometry() {
         value.validate_native_amx_participant_applications(),
         Err("Native AMX participant diagnostics must be strictly ordered by route and incarnation")
     );
-
     let mut malformed = native_amx_participant_application(3, 8);
     malformed.predecessor_height = 6;
     assert_eq!(
@@ -439,7 +420,6 @@ fn native_amx_participant_diagnostics_reject_bounds_order_and_geometry() {
         Err("Native AMX participant diagnostics state disagrees with its application block")
     );
 }
-
 #[test]
 fn autonomous_lane_execution_diagnostics_roundtrip_order_and_bound() {
     let mut value = diagnostics(None);
@@ -454,13 +434,11 @@ fn autonomous_lane_execution_diagnostics_roundtrip_order_and_bound() {
     let decoded: SumeragiDiagnosticsStatus =
         norito::decode_from_bytes(&encoded).expect("decode diagnostics");
     assert_eq!(decoded, value);
-
     value.autonomous_lane_executions.reverse();
     assert_eq!(
         value.validate_autonomous_lane_executions(),
         Err("autonomous lane execution diagnostics must be strictly ordered by exact identity")
     );
-
     value.autonomous_lane_executions = (0..=SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX)
         .map(|index| {
             autonomous_lane_execution(u32::try_from(index).expect("fixture lane fits u32"), 1)
@@ -471,7 +449,6 @@ fn autonomous_lane_execution_diagnostics_roundtrip_order_and_bound() {
         Err("autonomous lane execution diagnostics vector exceeds its hard limit")
     );
 }
-
 #[test]
 fn autonomous_lane_execution_proposal_view_is_honest_at_queue_boundary() {
     let mut reservations = autonomous_lane_execution(1, 1);
@@ -498,7 +475,6 @@ fn autonomous_lane_execution_proposal_view_is_honest_at_queue_boundary() {
         json.get("proposal_view").is_none(),
         "an unknown proposal view must be omitted, not synthesized as zero"
     );
-
     reservations.proposal_view = Some(0);
     assert_eq!(
         reservations.validate(),
@@ -512,7 +488,6 @@ fn autonomous_lane_execution_proposal_view_is_honest_at_queue_boundary() {
     queue_conflict
         .validate()
         .expect("a Queue-only conflict may precede finalized proposal identity");
-
     let mut payload = autonomous_lane_execution(1, 1);
     payload.proposal_view = None;
     payload.source_bundle_hash = None;
@@ -533,12 +508,10 @@ fn autonomous_lane_execution_proposal_view_is_honest_at_queue_boundary() {
         Some(0)
     );
 }
-
 #[test]
 fn autonomous_lane_execution_stage_reasons_are_exhaustive_and_stable() {
     use SumeragiAutonomousLaneExecutionStage as Stage;
     use SumeragiAutonomousLaneExecutionStuckReason as Reason;
-
     let cases = [
         (
             Stage::ReservationsDurable,
@@ -615,7 +588,6 @@ fn autonomous_lane_execution_stage_reasons_are_exhaustive_and_stable() {
         }
     }
 }
-
 #[test]
 fn autonomous_lane_execution_conflict_is_explicit_and_fail_closed() {
     let mut reservations = autonomous_lane_execution(1, 1);
@@ -635,7 +607,6 @@ fn autonomous_lane_execution_conflict_is_explicit_and_fail_closed() {
         reservations.validate(),
         Err("autonomous lane execution proposal and descriptor hashes must appear together")
     );
-
     let mut row = autonomous_lane_execution(1, 1);
     row.transaction_count = 4_097;
     row.reservation_count = 4_097;
@@ -645,14 +616,12 @@ fn autonomous_lane_execution_conflict_is_explicit_and_fail_closed() {
     );
     row.transaction_count = 2;
     row.reservation_count = 2;
-
     row.highest_durable_stage = SumeragiAutonomousLaneExecutionStage::MergeCandidateDurable;
     row.stuck_reason = Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingGlobalCarrier);
     assert_eq!(
         row.validate(),
         Err("autonomous lane execution evidence does not match its durable stage")
     );
-
     row.highest_durable_stage = SumeragiAutonomousLaneExecutionStage::Conflict;
     row.stuck_reason = None;
     assert_eq!(
@@ -663,7 +632,6 @@ fn autonomous_lane_execution_conflict_is_explicit_and_fail_closed() {
     row.reservation_count = 1;
     row.validate().expect("explicit conflict row");
     row.reservation_count = 2;
-
     row.highest_durable_stage =
         SumeragiAutonomousLaneExecutionStage::KuraWsvApplicationReceiptDurable;
     row.stuck_reason =
@@ -672,7 +640,6 @@ fn autonomous_lane_execution_conflict_is_explicit_and_fail_closed() {
         row.validate(),
         Err("durable autonomous application stage requires a carrier identity")
     );
-
     row.merge_entry_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
         b"autonomous-diagnostics-merge-entry",
     )));
@@ -681,7 +648,6 @@ fn autonomous_lane_execution_conflict_is_explicit_and_fail_closed() {
         b"autonomous-diagnostics-carrier",
     )));
     row.validate().expect("complete durable application row");
-
     row.highest_durable_stage = SumeragiAutonomousLaneExecutionStage::QueueFinalized;
     row.stuck_reason = None;
     row.validate()

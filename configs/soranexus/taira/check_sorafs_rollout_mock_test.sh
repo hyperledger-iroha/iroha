@@ -26,6 +26,18 @@ make_fake_repo() {
     "${root}/state"
   cp "$SOURCE_SCRIPT" "${root}/configs/soranexus/taira/check_sorafs_rollout.sh"
 
+  printf '%s\n' 'test-only-runtime-operator-private-key' \
+    >"${root}/state/operator-private-key"
+  chmod 600 "${root}/state/operator-private-key"
+
+  cat >"${root}/scripts/operator_http_headers.py" <<'PY'
+#!/usr/bin/env python3
+print("X-Iroha-Operator-Public-Key: ed0120" + "11" * 32)
+print("X-Iroha-Operator-Timestamp-Ms: 1800000000000")
+print("X-Iroha-Operator-Nonce: " + "22" * 16)
+print("X-Iroha-Operator-Signature: " + "33" * 64)
+PY
+
   cat >"${root}/scripts/taira_bootstrap_canary.py" <<'PY'
 #!/usr/bin/env python3
 import os
@@ -112,6 +124,7 @@ url=""
 connect_timeout=""
 max_time=""
 headers=()
+operator_header_names=" "
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -154,6 +167,23 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+for header in "${headers[@]+"${headers[@]}"}"; do
+  header_name="$(printf '%s' "${header%%:*}" | tr '[:upper:]' '[:lower:]')"
+  operator_header_names+="${header_name} "
+done
+if [[ "$url" == */v1/sumeragi/status ]]; then
+  for required_header in \
+    x-iroha-operator-public-key \
+    x-iroha-operator-timestamp-ms \
+    x-iroha-operator-nonce \
+    x-iroha-operator-signature; do
+    if [[ "$operator_header_names" != *" ${required_header} "* ]]; then
+      echo "operator-protected status omitted ${required_header}" >&2
+      exit 94
+    fi
+  done
+fi
 
 
 for header in "${headers[@]+"${headers[@]}"}"; do
@@ -521,6 +551,8 @@ run_rollout() {
     CAPACITY_STATE_RECHECK_DELAY_SECONDS=0 \
     "${root}/configs/soranexus/taira/check_sorafs_rollout.sh" \
       --public-root https://taira.sora.org \
+      --operator-network-id hash:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#0000 \
+      --operator-private-key-file "${root}/state/operator-private-key" \
       "$@"
 }
 

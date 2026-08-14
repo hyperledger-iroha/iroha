@@ -1,5 +1,4 @@
 // Same-scope regression coverage extracted to keep the parent source budget bounded.
-
 #[test]
 fn raw_numeric_balance_mutation_is_reachable_only_inside_asset_module() {
     let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -23,7 +22,6 @@ fn raw_numeric_balance_mutation_is_reachable_only_inside_asset_module() {
             "raw balance primitive became crate-reachable: {exposed_signature}"
         );
     }
-
     let mut sources = Vec::new();
     collect_rust_sources(&source_root, &mut sources);
     for path in sources {
@@ -60,7 +58,6 @@ fn raw_numeric_balance_mutation_is_reachable_only_inside_asset_module() {
         );
     }
 }
-
 fn seed_test_account_alias_lease(
     state_transaction: &mut StateTransaction<'_, '_>,
     owner: &AccountId,
@@ -91,7 +88,6 @@ fn seed_test_account_alias_lease(
         norito::codec::Encode::encode(&record),
     );
 }
-
 fn seed_test_account_alias_binding(
     state_transaction: &mut StateTransaction<'_, '_>,
     owner: &AccountId,
@@ -110,7 +106,6 @@ fn seed_test_account_alias_binding(
         AccountRekeyRecord::new(alias.clone(), owner.clone()),
     );
 }
-
 fn fee_sponsor_custody_state() -> (State, AccountId, AssetDefinitionId, AssetId) {
     let custody_key =
         KeyPair::try_from_seed(vec![0xC5; 32], Algorithm::Ed25519).expect("custody fixture key");
@@ -141,7 +136,6 @@ fn fee_sponsor_custody_state() -> (State, AccountId, AssetDefinitionId, AssetId)
     state.nexus.get_mut().fees.sponsor_vault_custody_account_id = custody.clone();
     (state, custody, definition_id, source_id)
 }
-
 #[test]
 fn fee_sponsor_custody_transfer_needs_no_custody_signature_and_conserves_balance() {
     let (state, custody, definition_id, source_id) = fee_sponsor_custody_state();
@@ -150,7 +144,6 @@ fn fee_sponsor_custody_transfer_needs_no_custody_signature_and_conserves_balance
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xC5);
-
     let program_id = iroha_data_model::nexus::FeeSponsorProgramId::new(
         ALICE_ID.clone(),
         "custody-transfer-test"
@@ -166,7 +159,6 @@ fn fee_sponsor_custody_transfer_needs_no_custody_signature_and_conserves_balance
     );
     super::isi::execute_verified_fee_sponsor_charge(&mut stx, authorization)
         .expect("protocol custody transfer does not require custody authorization");
-
     let destination_id = AssetId::new(definition_id, BOB_ID.clone());
     assert_eq!(
         stx.world.assets.get(&source_id).map(|value| value.as_ref()),
@@ -189,7 +181,6 @@ fn fee_sponsor_custody_transfer_needs_no_custody_signature_and_conserves_balance
             && transfer.amount() == &Quantity::from(4_u32)
     )));
 }
-
 #[test]
 fn fee_sponsor_custody_burn_reduces_balance_and_total_supply_together() {
     let (state, _custody, definition_id, source_id) = fee_sponsor_custody_state();
@@ -200,7 +191,6 @@ fn fee_sponsor_custody_burn_reduces_balance_and_total_supply_together() {
         .increase_asset_total_amount(&definition_id, &Quantity::from(10_u32))
         .expect("seed aggregate supply");
     stx.world.internal_event_buf.clear();
-
     let program_id = iroha_data_model::nexus::FeeSponsorProgramId::new(
         ALICE_ID.clone(),
         "custody-burn-test"
@@ -215,7 +205,6 @@ fn fee_sponsor_custody_burn_reduces_balance_and_total_supply_together() {
     );
     super::isi::execute_verified_fee_sponsor_charge(&mut stx, authorization)
         .expect("protocol custody burn does not require custody authorization");
-
     assert_eq!(
         stx.world.assets.get(&source_id).map(|value| value.as_ref()),
         Some(&Quantity::from(8_u32))
@@ -238,7 +227,6 @@ fn fee_sponsor_custody_burn_reduces_balance_and_total_supply_together() {
         "burn must never be represented as an account-to-account transfer"
     );
 }
-
 fn build_asset_transfer_control_test_state(
     source_balance: u32,
 ) -> (State, AssetDefinitionId, AssetId) {
@@ -254,7 +242,6 @@ fn build_asset_transfer_control_test_state(
     let asset_definition = build_numeric_asset_definition(&asset_definition_id, "rose", &ALICE_ID);
     let source_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
     let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(source_balance));
-
     let world = World::with_assets(
         [domain],
         [alice_account, bob_account],
@@ -265,10 +252,8 @@ fn build_asset_transfer_control_test_state(
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-
     (state, asset_definition_id, source_asset_id)
 }
-
 #[test]
 fn user_transfer_rejects_third_party_source_before_mutation() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
@@ -278,7 +263,6 @@ fn user_transfer_rejects_third_party_source_before_mutation() {
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xA1);
     let event_count = stx.world.internal_event_buf.len();
-
     let error = execute_user_numeric_asset_transfer(
         &mut stx,
         &BOB_ID,
@@ -287,7 +271,6 @@ fn user_transfer_rejects_third_party_source_before_mutation() {
         Quantity::one(),
     )
     .expect_err("an authority without an exact grant must not debit another account");
-
     assert!(
         error
             .to_string()
@@ -308,7 +291,6 @@ fn user_transfer_rejects_third_party_source_before_mutation() {
         "authorization denial must precede event staging"
     );
 }
-
 #[test]
 fn user_transfer_accepts_exact_direct_asset_permission() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
@@ -325,7 +307,6 @@ fn user_transfer_accepts_exact_direct_asset_permission() {
             },
         ),
     );
-
     execute_user_numeric_asset_transfer(
         &mut stx,
         &BOB_ID,
@@ -334,7 +315,6 @@ fn user_transfer_accepts_exact_direct_asset_permission() {
         Quantity::from(3_u32),
     )
     .expect("the exact direct asset permission must authorize the debit");
-
     assert_eq!(
         asset_balance_or_zero(&stx, &source_asset_id),
         Quantity::from(7_u32)
@@ -344,7 +324,6 @@ fn user_transfer_accepts_exact_direct_asset_permission() {
         Quantity::from(3_u32)
     );
 }
-
 #[test]
 fn user_transfer_accepts_exact_definition_permission_from_assigned_role() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
@@ -366,7 +345,6 @@ fn user_transfer_accepts_exact_definition_permission_from_assigned_role() {
         crate::role::RoleIdWithOwner::new(BOB_ID.clone(), role_id),
         (),
     );
-
     execute_user_numeric_asset_transfer(
         &mut stx,
         &BOB_ID,
@@ -375,7 +353,6 @@ fn user_transfer_accepts_exact_definition_permission_from_assigned_role() {
         Quantity::from(4_u32),
     )
     .expect("the exact definition permission inherited from a role must authorize");
-
     assert_eq!(
         asset_balance_or_zero(&stx, &source_asset_id),
         Quantity::from(6_u32)
@@ -385,7 +362,6 @@ fn user_transfer_accepts_exact_definition_permission_from_assigned_role() {
         Quantity::from(4_u32)
     );
 }
-
 #[test]
 fn user_transfer_rejects_same_name_permissions_with_wrong_payloads() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
@@ -412,7 +388,6 @@ fn user_transfer_rejects_same_name_permissions_with_wrong_payloads() {
         crate::role::RoleIdWithOwner::new(BOB_ID.clone(), role_id),
         (),
     );
-
     execute_user_numeric_asset_transfer(
         &mut stx,
         &BOB_ID,
@@ -421,7 +396,6 @@ fn user_transfer_rejects_same_name_permissions_with_wrong_payloads() {
         Quantity::one(),
     )
     .expect_err("permission names without exact typed payloads must not authorize");
-
     assert_eq!(
         asset_balance_or_zero(&stx, &source_asset_id),
         Quantity::from(10_u32)
@@ -431,7 +405,6 @@ fn user_transfer_rejects_same_name_permissions_with_wrong_payloads() {
         Quantity::zero()
     );
 }
-
 #[test]
 fn zero_mint_rejects_before_account_admission_and_preserves_once_budget() {
     let domain_id = DomainId::try_new("mint_budget", "universal").expect("domain id");
@@ -463,11 +436,9 @@ fn zero_mint_rejects_before_account_admission_and_preserves_once_budget() {
     let mut stx = block.transaction();
     let destination_id = AssetId::new(definition_id.clone(), BOB_ID.clone());
     let event_count = stx.world.internal_event_buf.len();
-
     let error = Mint::asset_quantity(Quantity::zero(), destination_id.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect_err("a zero mint must be rejected before consuming issuance budget");
-
     assert!(
         error.to_string().contains("mint amount must be non-zero"),
         "unexpected zero-mint error: {error}"
@@ -488,7 +459,6 @@ fn zero_mint_rejects_before_account_admission_and_preserves_once_budget() {
         event_count,
         "zero mint must not stage events"
     );
-
     let valid_destination = AssetId::new(definition_id.clone(), ALICE_ID.clone());
     Mint::asset_quantity(Quantity::one(), valid_destination.clone())
         .execute(&ALICE_ID, &mut stx)
@@ -504,7 +474,6 @@ fn zero_mint_rejects_before_account_admission_and_preserves_once_budget() {
         Quantity::one()
     );
 }
-
 #[test]
 fn find_asset_definitions_filters_owner_with_owner_index() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -532,7 +501,6 @@ fn find_asset_definitions_filters_owner_with_owner_index() {
             .is_some_and(|ids| ids.contains(&alice_definition_id)),
         "world constructor should build the asset-definition owner index",
     );
-
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
@@ -544,10 +512,8 @@ fn find_asset_definitions_filters_owner_with_owner_index() {
         .unwrap()
         .map(|definition| definition.id().clone())
         .collect();
-
     assert_eq!(results, vec![alice_definition_id]);
 }
-
 fn asset_balance_or_zero(
     state_transaction: &crate::state::StateTransaction<'_, '_>,
     asset_id: &AssetId,
@@ -559,7 +525,6 @@ fn asset_balance_or_zero(
         .map(|asset| asset.as_ref().clone())
         .unwrap_or_else(Quantity::zero)
 }
-
 fn load_asset_transfer_control_store(
     state_transaction: &crate::state::StateTransaction<'_, '_>,
     account_id: &AccountId,
@@ -579,7 +544,6 @@ fn load_asset_transfer_control_store(
     raw.try_into_any_norito::<AssetTransferControlStoreV1>()
         .expect("stored control metadata decodes")
 }
-
 #[test]
 fn find_assets_returns_registered_balances() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -602,23 +566,19 @@ fn find_assets_returns_registered_balances() {
     .build(&ALICE_ID);
     let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     let asset = Asset::new(asset_id.clone(), Quantity::from(13_u32));
-
     let world = World::with_assets([domain], [account], [asset_def], [asset], []);
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
     let view = state.view();
-
     let iter = ValidQuery::execute(FindAssets, CompoundPredicate::PASS, &view)
         .expect("query execution succeeds");
     let assets: Vec<_> = iter.collect();
-
     assert_eq!(assets.len(), 1, "expected the pre-registered asset");
     let fetched = &assets[0];
     assert_eq!(fetched.id(), &asset_id);
     assert_eq!(*fetched.value(), Quantity::from(13_u32));
 }
-
 #[test]
 fn find_assets_by_account_id_limits_results_to_requested_owner() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -645,7 +605,6 @@ fn find_assets_by_account_id_limits_results_to_requested_owner() {
     let bob_asset_id = AssetId::new(asset_def_id.clone(), bob_id.clone());
     let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(13_u32));
     let bob_asset = Asset::new(bob_asset_id, Quantity::from(7_u32));
-
     let world = World::with_assets(
         [domain],
         [alice_account, bob_account],
@@ -657,17 +616,14 @@ fn find_assets_by_account_id_limits_results_to_requested_owner() {
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
     let view = state.view();
-
     let assets: Vec<_> = FindAssetsByAccountId::new(ALICE_ID.clone())
         .execute(CompoundPredicate::PASS, &view)
         .expect("query execution succeeds")
         .collect();
-
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0].id().account(), &*ALICE_ID);
     assert_eq!(assets[0].id(), &alice_asset_id);
 }
-
 #[test]
 fn find_assets_filters_by_account_predicate() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -694,7 +650,6 @@ fn find_assets_filters_by_account_predicate() {
     let bob_asset_id = AssetId::new(asset_def_id.clone(), bob_id.clone());
     let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(13_u32));
     let bob_asset = Asset::new(bob_asset_id, Quantity::from(7_u32));
-
     let world = World::with_assets(
         [domain],
         [alice_account, bob_account],
@@ -706,7 +661,6 @@ fn find_assets_filters_by_account_predicate() {
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
     let view = state.view();
-
     let mut predicate = PredicateJson::default();
     predicate.equals.push(EqualsCondition::new(
         "account",
@@ -715,16 +669,13 @@ fn find_assets_filters_by_account_predicate() {
     let filter = predicate
         .into_compound::<Asset>()
         .expect("predicate is valid JSON");
-
     let assets: Vec<_> = ValidQuery::execute(FindAssets, filter, &view)
         .expect("query execution succeeds")
         .collect();
-
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0].id(), &alice_asset_id);
     assert_eq!(*assets[0].value(), Quantity::from(13_u32));
 }
-
 #[test]
 fn asset_predicate_view_extracts_alias_fields_for_planner() {
     let account_filter =
@@ -734,7 +685,6 @@ fn asset_predicate_view_extracts_alias_fields_for_planner() {
         matches!(account_view.plan(), AssetQueryPlan::Subjects { .. }),
         "id.account should seed subject plan"
     );
-
     let definition_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -747,7 +697,6 @@ fn asset_predicate_view_extracts_alias_fields_for_planner() {
         matches!(definition_view.plan(), AssetQueryPlan::Definitions(_)),
         "id.definition should seed definition plan"
     );
-
     let domain_filter =
         CompoundPredicate::<Asset>::build(|p| p.equals("definition.domain", "wonderland"));
     let domain_view = AssetPredicateView::from_predicate(&domain_filter);
@@ -755,7 +704,6 @@ fn asset_predicate_view_extracts_alias_fields_for_planner() {
         matches!(domain_view.plan(), AssetQueryPlan::Domains { .. }),
         "definition.domain should seed domain plan"
     );
-
     let id_domain_filter =
         CompoundPredicate::<Asset>::build(|p| p.equals("id.definition.domain", "wonderland"));
     let id_domain_view = AssetPredicateView::from_predicate(&id_domain_filter);
@@ -763,7 +711,6 @@ fn asset_predicate_view_extracts_alias_fields_for_planner() {
         matches!(id_domain_view.plan(), AssetQueryPlan::Domains { .. }),
         "id.definition.domain should seed domain plan"
     );
-
     let asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
     let id_filter = CompoundPredicate::<Asset>::build(|p| {
         p.equals("id", asset_id.to_string())
@@ -775,7 +722,6 @@ fn asset_predicate_view_extracts_alias_fields_for_planner() {
     };
     assert_eq!(ids, vec![asset_id]);
 }
-
 #[test]
 fn find_assets_filters_by_id_account_alias_predicate() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -802,7 +748,6 @@ fn find_assets_filters_by_id_account_alias_predicate() {
     let bob_asset_id = AssetId::new(asset_def_id.clone(), bob_id.clone());
     let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(13_u32));
     let bob_asset = Asset::new(bob_asset_id, Quantity::from(7_u32));
-
     let world = World::with_assets(
         [domain],
         [alice_account, bob_account],
@@ -814,18 +759,15 @@ fn find_assets_filters_by_id_account_alias_predicate() {
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
     let view = state.view();
-
     let predicate =
         CompoundPredicate::<Asset>::build(|p| p.equals("id.account", ALICE_ID.to_string()));
     let assets: Vec<_> = ValidQuery::execute(FindAssets, predicate, &view)
         .expect("query execution succeeds")
         .collect();
-
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0].id(), &alice_asset_id);
     assert_eq!(*assets[0].value(), Quantity::from(13_u32));
 }
-
 #[test]
 fn find_assets_filters_by_exact_id_with_extra_predicate() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -852,7 +794,6 @@ fn find_assets_filters_by_exact_id_with_extra_predicate() {
     let bob_asset_id = AssetId::new(asset_def_id, bob_id.clone());
     let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(13_u32));
     let bob_asset = Asset::new(bob_asset_id, Quantity::from(7_u32));
-
     let world = World::with_assets(
         [domain],
         [alice_account, bob_account],
@@ -864,7 +805,6 @@ fn find_assets_filters_by_exact_id_with_extra_predicate() {
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
     let view = state.view();
-
     let predicate = CompoundPredicate::<Asset>::build(|p| {
         p.equals("id", alice_asset_id.to_string())
             .equals("id.definition.domain", domain_id.to_string())
@@ -872,12 +812,10 @@ fn find_assets_filters_by_exact_id_with_extra_predicate() {
     let assets: Vec<_> = ValidQuery::execute(FindAssets, predicate, &view)
         .expect("query execution succeeds")
         .collect();
-
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0].id(), &alice_asset_id);
     assert_eq!(*assets[0].value(), Quantity::from(13_u32));
 }
-
 #[test]
 fn find_assets_filters_by_account_and_domain_predicate() {
     let primary_domain_id: DomainId =
@@ -886,11 +824,9 @@ fn find_assets_filters_by_account_and_domain_predicate() {
         DomainId::try_new("redland", "universal").expect("domain id");
     let primary_domain = Domain::new(primary_domain_id.clone()).build(&ALICE_ID);
     let secondary_domain = Domain::new(secondary_domain_id.clone()).build(&ALICE_ID);
-
     let alice_account = build_account_in_domain(&ALICE_ID, &primary_domain_id);
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let bob_account = build_account_in_domain(&bob_id, &primary_domain_id);
-
     let primary_asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             primary_domain_id.clone(),
@@ -921,14 +857,12 @@ fn find_assets_filters_by_account_and_domain_predicate() {
         )
     }
     .build(&ALICE_ID);
-
     let alice_primary_asset_id = AssetId::new(primary_asset_def_id.clone(), ALICE_ID.clone());
     let alice_secondary_asset_id = AssetId::new(secondary_asset_def_id.clone(), ALICE_ID.clone());
     let bob_primary_asset_id = AssetId::new(primary_asset_def_id, bob_id.clone());
     let alice_primary_asset = Asset::new(alice_primary_asset_id.clone(), Quantity::from(13_u32));
     let alice_secondary_asset = Asset::new(alice_secondary_asset_id, Quantity::from(7_u32));
     let bob_primary_asset = Asset::new(bob_primary_asset_id, Quantity::from(5_u32));
-
     let world = World::with_assets(
         [primary_domain, secondary_domain],
         [alice_account, bob_account],
@@ -944,7 +878,6 @@ fn find_assets_filters_by_account_and_domain_predicate() {
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
     let view = state.view();
-
     let mut predicate = PredicateJson::default();
     predicate.equals.push(EqualsCondition::new(
         "account",
@@ -957,16 +890,13 @@ fn find_assets_filters_by_account_and_domain_predicate() {
     let filter = predicate
         .into_compound::<Asset>()
         .expect("predicate is valid JSON");
-
     let assets: Vec<_> = ValidQuery::execute(FindAssets, filter, &view)
         .expect("query execution succeeds")
         .collect();
-
     assert_eq!(assets.len(), 1);
     assert_eq!(assets[0].id(), &alice_primary_asset_id);
     assert_eq!(*assets[0].value(), Quantity::from(13_u32));
 }
-
 #[test]
 fn transfer_removes_metadata_when_balance_zero() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -990,7 +920,6 @@ fn transfer_removes_metadata_when_balance_zero() {
     .build(&ALICE_ID);
     let alice_asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
     let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(1_u32));
-
     let world = World::with_assets(
         [domain],
         [alice_account, bob_account],
@@ -1001,26 +930,21 @@ fn transfer_removes_metadata_when_balance_zero() {
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xB1);
-
     let key: Name = "tag".parse().expect("metadata key");
     let value = Json::from(norito::json!("seed"));
     SetAssetKeyValue::new(alice_asset_id.clone(), key, value)
         .execute(&ALICE_ID, &mut stx)
         .expect("set metadata");
-
     Transfer::asset_quantity(alice_asset_id.clone(), 1_u32, BOB_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("transfer succeeds");
-
     assert!(stx.world.assets.get(&alice_asset_id).is_none());
     assert!(stx.world.asset_metadata.get(&alice_asset_id).is_none());
 }
-
 #[test]
 fn full_balance_self_transfer_preserves_asset_metadata_and_indexes() {
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id parses");
@@ -1043,7 +967,6 @@ fn full_balance_self_transfer_preserves_asset_metadata_and_indexes() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xB2);
-
     let key: Name = "tag".parse().expect("metadata key parses");
     SetAssetKeyValue::new(
         asset_id.clone(),
@@ -1059,11 +982,9 @@ fn full_balance_self_transfer_preserves_asset_metadata_and_indexes() {
         .cloned()
         .expect("metadata exists before self-transfer");
     stx.world.internal_event_buf.clear();
-
     Transfer::asset_quantity(asset_id.clone(), Quantity::one(), ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("a full-balance self-transfer is an identity movement");
-
     assert_eq!(asset_balance_or_zero(&stx, &asset_id), Quantity::one());
     assert_eq!(
         stx.world.asset_metadata.get(&asset_id),
@@ -1103,11 +1024,9 @@ fn full_balance_self_transfer_preserves_asset_metadata_and_indexes() {
             && transfer.amount() == &Quantity::one()
     )));
 }
-
 #[test]
 fn asset_transfer_controls_require_asset_owner_authority() {
     let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -1120,7 +1039,6 @@ fn asset_transfer_controls_require_asset_owner_authority() {
     );
     seed_test_account_alias_binding(&mut stx, &ALICE_ID, &alice_alias);
     seed_test_account_alias_lease(&mut stx, &ALICE_ID, &alice_alias);
-
     let err = SetAssetTransferAvailability::new(
         ALICE_ID.clone(),
         asset_definition_id.clone(),
@@ -1135,7 +1053,6 @@ fn asset_transfer_controls_require_asset_owner_authority() {
         err.to_string().contains("owner is"),
         "unexpected error: {err}"
     );
-
     let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
         .parse()
         .expect("metadata key");
@@ -1148,15 +1065,12 @@ fn asset_transfer_controls_require_asset_owner_authority() {
         "rejected control instruction must not persist metadata"
     );
 }
-
 #[test]
 fn genesis_has_inherent_transfer_control_authority() {
     let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     SetAssetTransferAvailability::new(
         ALICE_ID.clone(),
         asset_definition_id.clone(),
@@ -1185,7 +1099,6 @@ fn genesis_has_inherent_transfer_control_authority() {
     );
     assert_eq!(record.holding_limit, Some(Quantity::from(5_000_u32)));
 }
-
 #[test]
 fn delegated_controls_use_exact_availability_scoped_daily_and_exact_holding() {
     let domain_id = DomainId::try_new("currency", "sbp").expect("asset definition domain");
@@ -1292,7 +1205,6 @@ fn delegated_controls_use_exact_availability_scoped_daily_and_exact_holding() {
     seed_test_account_alias_lease(&mut stx, &hbl_sbp_id, &hbl_sbp_alias);
     seed_test_account_alias_lease(&mut stx, &hbl_other_id, &hbl_other_alias);
     seed_test_account_alias_lease(&mut stx, &ubl_sbp_id, &ubl_sbp_alias);
-
     SetAssetTransferAvailability::new(
         hbl_sbp_id.clone(),
         asset_definition_id.clone(),
@@ -1330,7 +1242,6 @@ fn delegated_controls_use_exact_availability_scoped_daily_and_exact_holding() {
             .contains("required asset-owner transfer-control permission"),
         "unexpected blacklist authorization error: {blacklist_error}",
     );
-
     for (target, expected_error) in [
         (
             &hbl_other_id,
@@ -1386,7 +1297,6 @@ fn delegated_controls_use_exact_availability_scoped_daily_and_exact_holding() {
             "unexpected holding-limit error for {target}: {holding_error}",
         );
     }
-
     let exact = load_asset_transfer_control_store(&stx, &hbl_sbp_id);
     let exact = exact
         .find(&asset_definition_id)
@@ -1412,16 +1322,13 @@ fn delegated_controls_use_exact_availability_scoped_daily_and_exact_holding() {
         );
     }
 }
-
 #[test]
 fn availability_is_revisioned_and_only_blocks_account_transfers_until_reopened() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xCB);
-
     SetAssetTransferAvailability::new(
         ALICE_ID.clone(),
         asset_definition_id.clone(),
@@ -1432,7 +1339,6 @@ fn availability_is_revisioned_and_only_blocks_account_transfers_until_reopened()
     )
     .execute(&ALICE_ID, &mut stx)
     .expect("availability close succeeds");
-
     let err = Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect_err("disabled outgoing transfer must be rejected");
@@ -1442,7 +1348,6 @@ fn availability_is_revisioned_and_only_blocks_account_transfers_until_reopened()
             AssetTransferAdmissionError::OutgoingDisabled(_)
         )
     ));
-
     Mint::asset_quantity(2_u32, source_asset_id.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("mint is a supply operation, not an incoming transfer");
@@ -1463,7 +1368,6 @@ fn availability_is_revisioned_and_only_blocks_account_transfers_until_reopened()
         )),
         "mint and burn must not emit the transfer-specific event"
     );
-
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     Mint::asset_quantity(Quantity::one(), destination_asset_id.clone())
         .execute(&ALICE_ID, &mut stx)
@@ -1515,7 +1419,6 @@ fn availability_is_revisioned_and_only_blocks_account_transfers_until_reopened()
         asset_balance_or_zero(&stx, &destination_asset_id),
         Quantity::from(2_u32)
     );
-
     let store = load_asset_transfer_control_store(&stx, &ALICE_ID);
     let record = store
         .find(&asset_definition_id)
@@ -1526,17 +1429,14 @@ fn availability_is_revisioned_and_only_blocks_account_transfers_until_reopened()
     assert!(!record.blacklisted);
     assert!(record.usages.is_empty());
 }
-
 #[test]
 fn availability_reason_over_limit_is_rejected_without_persistence() {
     let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let reason =
         "x".repeat(iroha_data_model::asset::ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 + 1);
-
     let error = SetAssetTransferAvailability::new(
         ALICE_ID.clone(),
         asset_definition_id.clone(),
@@ -1547,7 +1447,6 @@ fn availability_reason_over_limit_is_rejected_without_persistence() {
     )
     .execute(&ALICE_ID, &mut stx)
     .expect_err("oversized persisted reason must be rejected");
-
     assert!(
         error.to_string().contains("maximum byte length"),
         "unexpected error: {error}"
@@ -1564,19 +1463,15 @@ fn availability_reason_over_limit_is_rejected_without_persistence() {
         "invalid reason must not persist transfer-control metadata"
     );
 }
-
 #[test]
 fn transfer_rejects_when_account_is_blacklisted_for_asset() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     SetAssetTransferBlacklist::new(ALICE_ID.clone(), asset_definition_id.clone(), true)
         .execute(&ALICE_ID, &mut stx)
         .expect("blacklist succeeds");
-
     let err = Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect_err("blacklisted outbound transfer must be rejected");
@@ -1584,7 +1479,6 @@ fn transfer_rejects_when_account_is_blacklisted_for_asset() {
         err.to_string().contains("blacklisted"),
         "unexpected error: {err}"
     );
-
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     assert_eq!(
         asset_balance_or_zero(&stx, &source_asset_id),
@@ -1594,7 +1488,6 @@ fn transfer_rejects_when_account_is_blacklisted_for_asset() {
         asset_balance_or_zero(&stx, &destination_asset_id),
         Quantity::zero()
     );
-
     let store = load_asset_transfer_control_store(&stx, &ALICE_ID);
     let record = store
         .find(&asset_definition_id)
@@ -1603,7 +1496,6 @@ fn transfer_rejects_when_account_is_blacklisted_for_asset() {
     assert!(record.outgoing_availability.is_enabled());
     assert!(record.usages.is_empty());
 }
-
 #[test]
 fn holding_limit_applies_to_transfer_and_mint_credit_paths() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
@@ -1612,7 +1504,6 @@ fn holding_limit_applies_to_transfer_and_mint_credit_paths() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xCA);
-
     SetAssetHoldingLimit::new(
         BOB_ID.clone(),
         asset_definition_id.clone(),
@@ -1620,7 +1511,6 @@ fn holding_limit_applies_to_transfer_and_mint_credit_paths() {
     )
     .execute(&ALICE_ID, &mut stx)
     .expect("asset owner sets destination holding limit");
-
     Transfer::asset_quantity(source_asset_id.clone(), 5_u32, BOB_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("credit exactly at holding limit");
@@ -1633,7 +1523,6 @@ fn holding_limit_applies_to_transfer_and_mint_credit_paths() {
             AssetTransferAdmissionError::HoldingLimitExceeded(_)
         )
     ));
-
     let mint_error = Mint::asset_quantity(1_u32, destination_asset_id.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect_err("mint above holding limit must fail");
@@ -1658,7 +1547,6 @@ fn holding_limit_applies_to_transfer_and_mint_credit_paths() {
             .and_then(|record| record.holding_limit.as_ref()),
         Some(&Quantity::from(5_u32))
     );
-
     SetAssetHoldingLimit::new(
         BOB_ID.clone(),
         asset_definition_id.clone(),
@@ -1680,7 +1568,6 @@ fn holding_limit_applies_to_transfer_and_mint_credit_paths() {
         Quantity::from(5_u32)
     );
 }
-
 #[test]
 fn exact_numeric_credit_precheck_enforces_holding_limit_without_mutation() {
     let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
@@ -1688,7 +1575,6 @@ fn exact_numeric_credit_precheck_enforces_holding_limit_without_mutation() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     SetAssetHoldingLimit::new(
         BOB_ID.clone(),
         asset_definition_id.clone(),
@@ -1696,7 +1582,6 @@ fn exact_numeric_credit_precheck_enforces_holding_limit_without_mutation() {
     )
     .execute(&ALICE_ID, &mut stx)
     .expect("asset owner sets destination holding limit");
-
     let (resolved_id, candidate) = stx
         .world
         .precheck_numeric_asset_credit(&destination_asset_id, &Quantity::from(5_u32))
@@ -1707,7 +1592,6 @@ fn exact_numeric_credit_precheck_enforces_holding_limit_without_mutation() {
         stx.world.assets.get(&destination_asset_id).is_none(),
         "read-only credit precheck must not create a balance"
     );
-
     super::super::isi::seed_numeric_asset_balance_exact_for_test(
         &mut stx.world,
         &resolved_id,
@@ -1729,7 +1613,6 @@ fn exact_numeric_credit_precheck_enforces_holding_limit_without_mutation() {
         Quantity::from(5_u32),
         "rejected exact credit must leave the balance unchanged"
     );
-
     SetAssetHoldingLimit::new(
         BOB_ID.clone(),
         asset_definition_id,
@@ -1754,14 +1637,12 @@ fn exact_numeric_credit_precheck_enforces_holding_limit_without_mutation() {
         Quantity::from(5_u32)
     );
 }
-
 #[test]
 fn duplicate_transfer_limit_windows_are_rejected() {
     let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let error = SetAssetTransferControl::new(
         ALICE_ID.clone(),
         asset_definition_id.clone(),
@@ -1797,7 +1678,6 @@ fn duplicate_transfer_limit_windows_are_rejected() {
         "rejected duplicate windows must not create control metadata",
     );
 }
-
 #[test]
 fn prepared_numeric_transfer_rejects_stale_balance_without_applying() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
@@ -1805,7 +1685,6 @@ fn prepared_numeric_transfer_rejects_stale_balance_without_applying() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let error = super::super::isi::apply_prepared_numeric_transfer_after_source_credit_for_test(
         &mut stx,
         &ALICE_ID,
@@ -1826,7 +1705,6 @@ fn prepared_numeric_transfer_rejects_stale_balance_without_applying() {
         "stale movement must not credit its destination"
     );
 }
-
 #[test]
 fn direct_typed_movement_identity_is_stable_and_purpose_bound() {
     let (state, asset_definition_id, source_id) = build_asset_transfer_control_test_state(10);
@@ -1851,7 +1729,6 @@ fn direct_typed_movement_identity_is_stable_and_purpose_bound() {
     )
     .expect("stable direct typed identity");
     assert_eq!(first, repeated);
-
     let distinct = super::super::isi::resolve_social_send_movement_identity_for_test(
         &stx,
         &ALICE_ID,
@@ -1861,7 +1738,6 @@ fn direct_typed_movement_identity_is_stable_and_purpose_bound() {
     .expect("purpose-bound direct identity");
     assert_ne!(first, distinct);
 }
-
 #[test]
 fn typed_movement_rejects_empty_purpose_binding_even_with_call_hash() {
     let (state, asset_definition_id, source_id) = build_asset_transfer_control_test_state(10);
@@ -1879,7 +1755,6 @@ fn typed_movement_rejects_empty_purpose_binding_even_with_call_hash() {
     .expect_err("empty typed purpose must fail closed");
     assert!(error.to_string().contains("binding must not be empty"));
 }
-
 #[test]
 fn atomic_batch_aggregates_repeated_source_before_enforcing_cap() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
@@ -1888,7 +1763,6 @@ fn atomic_batch_aggregates_repeated_source_before_enforcing_cap() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xD4);
-
     SetAssetTransferControl::new(
         ALICE_ID.clone(),
         asset_definition_id.clone(),
@@ -1899,7 +1773,6 @@ fn atomic_batch_aggregates_repeated_source_before_enforcing_cap() {
     )
     .execute(&ALICE_ID, &mut stx)
     .expect("configure source cap");
-
     let batch = TransferAssetBatch::new(vec![
         TransferAssetBatchEntry::with_leg_id(
             "first",
@@ -1938,16 +1811,13 @@ fn atomic_batch_aggregates_repeated_source_before_enforcing_cap() {
     );
     assert_eq!(stx.pending_transfer_transcript_count_for_testing(), 0);
 }
-
 #[test]
 fn transfer_allows_exact_cap_and_preserves_usage_on_rejected_overage() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 86_400_000, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     seed_test_call_hash(&mut stx, 0xB2);
-
     SetAssetTransferControl::new(
         ALICE_ID.clone(),
         asset_definition_id.clone(),
@@ -1958,11 +1828,9 @@ fn transfer_allows_exact_cap_and_preserves_usage_on_rejected_overage() {
     )
     .execute(&ALICE_ID, &mut stx)
     .expect("limit update succeeds");
-
     Transfer::asset_quantity(source_asset_id.clone(), 5_u32, BOB_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("exact-cap transfer must succeed");
-
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     assert_eq!(
         asset_balance_or_zero(&stx, &source_asset_id),
@@ -1972,7 +1840,6 @@ fn transfer_allows_exact_cap_and_preserves_usage_on_rejected_overage() {
         asset_balance_or_zero(&stx, &destination_asset_id),
         Quantity::from(5_u32)
     );
-
     let store_after_success = load_asset_transfer_control_store(&stx, &ALICE_ID);
     let record_after_success = store_after_success
         .find(&asset_definition_id)
@@ -1983,7 +1850,6 @@ fn transfer_allows_exact_cap_and_preserves_usage_on_rejected_overage() {
     assert_eq!(usage.window, AssetTransferControlWindow::Day);
     assert_eq!(usage.bucket_start_ms, 86_400_000);
     assert_eq!(usage.spent_amount, Quantity::from(5_u32));
-
     let err = Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect_err("over-cap transfer must be rejected");
@@ -1991,7 +1857,6 @@ fn transfer_allows_exact_cap_and_preserves_usage_on_rejected_overage() {
         err.to_string().contains("cap exceeded"),
         "unexpected error: {err}"
     );
-
     assert_eq!(
         asset_balance_or_zero(&stx, &source_asset_id),
         Quantity::from(5_u32)
@@ -2000,7 +1865,6 @@ fn transfer_allows_exact_cap_and_preserves_usage_on_rejected_overage() {
         asset_balance_or_zero(&stx, &destination_asset_id),
         Quantity::from(5_u32)
     );
-
     let store_after_rejection = load_asset_transfer_control_store(&stx, &ALICE_ID);
     let record_after_rejection = store_after_rejection
         .find(&asset_definition_id)
@@ -2012,7 +1876,6 @@ fn transfer_allows_exact_cap_and_preserves_usage_on_rejected_overage() {
     );
     assert_eq!(record_after_rejection.usages[0].bucket_start_ms, 86_400_000);
 }
-
 #[test]
 fn transfer_rejects_configured_offline_escrow_source() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -2036,7 +1899,6 @@ fn transfer_rejects_configured_offline_escrow_source() {
     .build(&ALICE_ID);
     let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(10_u32));
-
     let world = World::with_assets(
         [domain],
         [alice_account, bob_account],
@@ -2052,11 +1914,9 @@ fn transfer_rejects_configured_offline_escrow_source() {
         .offline
         .escrow_accounts
         .insert(asset_def_id.clone(), ALICE_ID.clone());
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let err = Transfer::asset_quantity(alice_asset_id.clone(), 1_u32, BOB_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect_err("generic transfer from escrow source must be rejected");
@@ -2064,7 +1924,6 @@ fn transfer_rejects_configured_offline_escrow_source() {
         err.to_string().contains("offline escrow account"),
         "unexpected error: {err}"
     );
-
     let source_balance = stx
         .world
         .assets
@@ -2072,14 +1931,12 @@ fn transfer_rejects_configured_offline_escrow_source() {
         .map(|asset| asset.as_ref().clone())
         .unwrap_or_else(Quantity::zero);
     assert_eq!(source_balance, Quantity::from(10_u32));
-
     let destination_asset = AssetId::new(asset_def_id, BOB_ID.clone());
     assert!(
         stx.world.assets.get(&destination_asset).is_none(),
         "destination account must not be credited"
     );
 }
-
 #[test]
 fn transfer_rejects_deterministically_derived_offline_escrow_source() {
     let chain_id: iroha_data_model::ChainId = "testnet".parse().expect("chain id");
@@ -2134,11 +1991,9 @@ fn transfer_rejects_deterministically_derived_offline_escrow_source() {
         .offline
         .escrow_accounts
         .insert(asset_def_id.clone(), BOB_ID.clone());
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
     let err = Transfer::asset_quantity(escrow_asset_id.clone(), 1_u32, BOB_ID.clone())
         .execute(&escrow_account, &mut stx)
         .expect_err("deterministically derived escrow source must be rejected");
@@ -2146,7 +2001,6 @@ fn transfer_rejects_deterministically_derived_offline_escrow_source() {
         err.to_string().contains("offline escrow account"),
         "unexpected error: {err}"
     );
-
     let source_balance = stx
         .world
         .assets
@@ -2154,14 +2008,12 @@ fn transfer_rejects_deterministically_derived_offline_escrow_source() {
         .map(|asset| asset.as_ref().clone())
         .unwrap_or_else(Quantity::zero);
     assert_eq!(source_balance, Quantity::from(10_u32));
-
     let destination_asset = AssetId::new(asset_def_id, BOB_ID.clone());
     assert!(
         stx.world.assets.get(&destination_asset).is_none(),
         "destination account must not be credited"
     );
 }
-
 #[test]
 fn find_assets_filters_by_definition_predicate() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -2217,13 +2069,11 @@ fn find_assets_filters_by_definition_predicate() {
             Quantity::from(3_u32),
         ),
     ];
-
     let world = World::with_assets([domain], accounts, definitions, assets, /*nfts*/ []);
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
     let view = state.view();
-
     let mut predicate = PredicateJson::default();
     predicate.equals.push(EqualsCondition::new(
         "definition",
@@ -2232,11 +2082,9 @@ fn find_assets_filters_by_definition_predicate() {
     let filter = predicate
         .into_compound::<Asset>()
         .expect("predicate is valid JSON");
-
     let assets: Vec<_> = ValidQuery::execute(FindAssets, filter, &view)
         .expect("query execution succeeds")
         .collect();
-
     assert_eq!(assets.len(), 2);
     assert!(
         assets
@@ -2252,7 +2100,6 @@ fn find_assets_filters_by_definition_predicate() {
     expected.sort();
     assert_eq!(ids, expected);
 }
-
 #[test]
 fn find_assets_filters_by_id_definition_alias_predicate() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -2308,19 +2155,16 @@ fn find_assets_filters_by_id_definition_alias_predicate() {
             Quantity::from(3_u32),
         ),
     ];
-
     let world = World::with_assets([domain], accounts, definitions, assets, /*nfts*/ []);
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
     let view = state.view();
-
     let predicate =
         CompoundPredicate::<Asset>::build(|p| p.equals("id.definition", rose_def_id.clone()));
     let assets: Vec<_> = ValidQuery::execute(FindAssets, predicate, &view)
         .expect("query execution succeeds")
         .collect();
-
     assert_eq!(assets.len(), 2);
     assert!(
         assets
@@ -2328,7 +2172,6 @@ fn find_assets_filters_by_id_definition_alias_predicate() {
             .all(|asset| asset.id().definition() == &rose_def_id)
     );
 }
-
 #[test]
 fn find_assets_filters_by_domain_predicate() {
     let wonderland_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -2390,13 +2233,11 @@ fn find_assets_filters_by_domain_predicate() {
             Quantity::from(42_u32),
         ),
     ];
-
     let world = World::with_assets(domains, accounts, definitions, assets, /*nfts*/ []);
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
     let view = state.view();
-
     let mut predicate = PredicateJson::default();
     predicate.equals.push(EqualsCondition::new(
         "domain",
@@ -2405,11 +2246,9 @@ fn find_assets_filters_by_domain_predicate() {
     let filter = predicate
         .into_compound::<Asset>()
         .expect("predicate is valid JSON");
-
     let assets: Vec<_> = ValidQuery::execute(FindAssets, filter, &view)
         .expect("query execution succeeds")
         .collect();
-
     assert_eq!(assets.len(), 2);
     for asset in &assets {
         assert_eq!(asset.id().definition(), &rose_def_id);
@@ -2423,7 +2262,6 @@ fn find_assets_filters_by_domain_predicate() {
     expected.sort();
     assert_eq!(ids, expected);
 }
-
 #[test]
 fn find_assets_filters_by_definition_domain_alias_predicate() {
     let wonderland_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -2485,19 +2323,16 @@ fn find_assets_filters_by_definition_domain_alias_predicate() {
             Quantity::from(42_u32),
         ),
     ];
-
     let world = World::with_assets(domains, accounts, definitions, assets, /*nfts*/ []);
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
     let view = state.view();
-
     let predicate =
         CompoundPredicate::<Asset>::build(|p| p.equals("definition.domain", "wonderland"));
     let assets: Vec<_> = ValidQuery::execute(FindAssets, predicate, &view)
         .expect("query execution succeeds")
         .collect();
-
     assert_eq!(assets.len(), 2);
     assert!(
         assets
@@ -2505,7 +2340,6 @@ fn find_assets_filters_by_definition_domain_alias_predicate() {
             .all(|asset| asset.id().definition() == &rose_def_id)
     );
 }
-
 #[test]
 fn nominal_asset_mutation_boundaries_reject_negative_values_and_underflow() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
@@ -2515,13 +2349,11 @@ fn nominal_asset_mutation_boundaries_reject_negative_values_and_underflow() {
     seed_test_call_hash(&mut stx, 0x91);
     let negative = Numeric::new(-1_i32, 0);
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-
     assert!(
         Quantity::try_from_numeric(negative).is_err(),
         "negative signed values must not cross the nominal asset boundary"
     );
     assert!(stx.world.assets.get(&destination_asset_id).is_none());
-
     let err = stx
         .world
         .decrease_asset_total_amount(&asset_definition_id, &Quantity::one())
@@ -2530,7 +2362,6 @@ fn nominal_asset_mutation_boundaries_reject_negative_values_and_underflow() {
         err,
         InstructionExecutionError::Math(MathError::NotEnoughQuantity)
     ));
-
     assert_eq!(
         stx.world
             .assets
@@ -2547,7 +2378,6 @@ fn nominal_asset_mutation_boundaries_reject_negative_values_and_underflow() {
         &Quantity::zero()
     );
 }
-
 #[test]
 fn asset_insert_and_totals_reject_values_outside_numeric_spec() {
     let domain_id = DomainId::try_new("integer_assets", "universal").expect("domain id");
@@ -2574,7 +2404,6 @@ fn asset_insert_and_totals_reject_values_outside_numeric_spec() {
     let mut stx = block.transaction();
     let asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
     let fractional_quantity: Quantity = "0.1".parse().expect("non-negative fractional quantity");
-
     let err = stx
         .world
         .asset_or_insert_exact(&asset_id, fractional_quantity.clone())
@@ -2605,7 +2434,6 @@ fn asset_insert_and_totals_reject_values_outside_numeric_spec() {
         "rejected out-of-spec values must not mutate aggregate supply"
     );
 }
-
 #[test]
 fn mint_restricted_asset_uses_current_dataspace_bucket() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -2627,19 +2455,16 @@ fn mint_restricted_asset_uses_current_dataspace_bucket() {
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let dsid = DataSpaceId::new(7);
     stx.current_dataspace_id = Some(dsid);
     stx.world.current_dataspace_id = Some(dsid);
-
     let mint_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     Mint::asset_quantity(5_u32, mint_id)
         .execute(&ALICE_ID, &mut stx)
         .expect("mint must succeed in dataspace context");
-
     let scoped_id = AssetId::with_scope(
         asset_def_id.clone(),
         ALICE_ID.clone(),
@@ -2657,7 +2482,6 @@ fn mint_restricted_asset_uses_current_dataspace_bucket() {
         "global bucket must stay empty for restricted assets"
     );
 }
-
 #[test]
 fn mint_restricted_asset_honors_explicit_dataspace_bucket_from_universal_route() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -2679,13 +2503,11 @@ fn mint_restricted_asset_honors_explicit_dataspace_bucket_from_universal_route()
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-
     let dsid = DataSpaceId::new(7);
     let scoped_id = AssetId::with_scope(
         asset_def_id.clone(),
@@ -2695,7 +2517,6 @@ fn mint_restricted_asset_honors_explicit_dataspace_bucket_from_universal_route()
     Mint::asset_quantity(5_u32, scoped_id.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("explicit dataspace scope must be honored from the universal route");
-
     assert!(
         stx.world.assets.get(&scoped_id).is_some(),
         "restricted asset must be stored under the requested dataspace scope"
@@ -2712,7 +2533,6 @@ fn mint_restricted_asset_honors_explicit_dataspace_bucket_from_universal_route()
         "universal dataspace bucket must not be used for explicit private scope"
     );
 }
-
 #[test]
 fn mint_restricted_asset_rejects_explicit_dataspace_bucket_mismatch() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -2734,13 +2554,11 @@ fn mint_restricted_asset_rejects_explicit_dataspace_bucket_mismatch() {
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.current_dataspace_id = Some(DataSpaceId::new(8));
     stx.world.current_dataspace_id = Some(DataSpaceId::new(8));
-
     let scoped_id = AssetId::with_scope(
         asset_def_id,
         ALICE_ID.clone(),
@@ -2749,7 +2567,6 @@ fn mint_restricted_asset_rejects_explicit_dataspace_bucket_mismatch() {
     let err = Mint::asset_quantity(5_u32, scoped_id)
         .execute(&ALICE_ID, &mut stx)
         .expect_err("private routes must reject explicit foreign dataspace scopes");
-
     match err {
         InstructionExecutionError::InvariantViolation(message) => {
             assert!(
@@ -2760,7 +2577,6 @@ fn mint_restricted_asset_rejects_explicit_dataspace_bucket_mismatch() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn mint_global_asset_rejects_non_authoritative_dataspace_route() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -2782,19 +2598,16 @@ fn mint_global_asset_rejects_non_authoritative_dataspace_route() {
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let private_dataspace = DataSpaceId::new(7);
     stx.current_dataspace_id = Some(private_dataspace);
     stx.world.current_dataspace_id = Some(private_dataspace);
-
     let mint_id = AssetId::new(asset_def_id, ALICE_ID.clone());
     let err = Mint::asset_quantity(5_u32, mint_id)
         .execute(&ALICE_ID, &mut stx)
         .expect_err("global asset writes must use the authoritative route");
-
     match err {
         InstructionExecutionError::InvariantViolation(message) => {
             assert!(

@@ -1,21 +1,17 @@
 //! M0 gateway baseline pack for the SoraGlobal Gateway CDN (SNNet-15M0).
 //! Generates H3 edge config, trustless verifier skeleton, and WAF/rate
 //! policies so early PoPs can run consistent drills.
-
+use eyre::{Result, WrapErr};
+use norito::{derive::JsonSerialize, json};
 use std::{
     fs::{self, File},
     path::PathBuf,
 };
-
-use eyre::{Result, WrapErr};
-use norito::{derive::JsonSerialize, json};
-
 #[derive(Debug)]
 pub struct GatewayM0Options {
     pub output_dir: PathBuf,
     pub edge_name: String,
 }
-
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct GatewayM0Outcome {
@@ -24,7 +20,6 @@ pub struct GatewayM0Outcome {
     pub trustless_verifier_path: PathBuf,
     pub waf_policy_path: PathBuf,
 }
-
 #[derive(Debug, JsonSerialize)]
 struct GatewayM0Summary {
     edge_name: String,
@@ -32,7 +27,6 @@ struct GatewayM0Summary {
     trustless_verifier_path: String,
     waf_policy_path: String,
 }
-
 /// Write the gateway M0 pack to disk and return the summary paths.
 pub fn write_gateway_m0_pack(options: GatewayM0Options) -> Result<GatewayM0Outcome> {
     let GatewayM0Options {
@@ -45,12 +39,10 @@ pub fn write_gateway_m0_pack(options: GatewayM0Options) -> Result<GatewayM0Outco
             output_dir.display()
         )
     })?;
-
     let edge_config_path = output_dir.join("gateway_edge_h3.yaml");
     let trustless_verifier_path = output_dir.join("gateway_trustless_verifier.toml");
     let waf_policy_path = output_dir.join("gateway_waf_policy.yaml");
     let summary_path = output_dir.join("gateway_m0_summary.json");
-
     fs::write(&edge_config_path, render_edge_h3_config(&edge_name))
         .wrap_err_with(|| format!("failed to write edge config {}", edge_config_path.display()))?;
     fs::write(&trustless_verifier_path, render_trustless_verifier_config()).wrap_err_with(
@@ -67,7 +59,6 @@ pub fn write_gateway_m0_pack(options: GatewayM0Options) -> Result<GatewayM0Outco
             waf_policy_path.display()
         )
     })?;
-
     let summary = GatewayM0Summary {
         edge_name: edge_name.clone(),
         edge_config_path: edge_config_path.display().to_string(),
@@ -86,7 +77,6 @@ pub fn write_gateway_m0_pack(options: GatewayM0Options) -> Result<GatewayM0Outco
             summary_path.display()
         )
     })?;
-
     Ok(GatewayM0Outcome {
         summary_path,
         edge_config_path,
@@ -94,7 +84,6 @@ pub fn write_gateway_m0_pack(options: GatewayM0Options) -> Result<GatewayM0Outco
         waf_policy_path,
     })
 }
-
 fn render_edge_h3_config(edge_name: &str) -> String {
     let label = sanitize_label(edge_name);
     format!(
@@ -133,7 +122,6 @@ gateway:\n\
         label = label
     )
 }
-
 fn render_trustless_verifier_config() -> String {
     "# Trustless verifier skeleton for SN15-M0 (streaming Merkle/KZG checks)\n\
 version = 1\n\
@@ -161,7 +149,6 @@ level = \"info\"\n\
 emit_metrics = true\n"
         .to_string()
 }
-
 fn render_waf_policy_pack() -> String {
     "# WAF + rate policy pack for SN15-M0\n\
 metadata:\n\
@@ -208,7 +195,6 @@ rules:\n\
 "
     .to_string()
 }
-
 fn sanitize_label(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {

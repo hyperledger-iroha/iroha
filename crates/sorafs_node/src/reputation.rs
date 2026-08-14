@@ -12,18 +12,8 @@
 //! interleaved committed journal cannot be partially projected.
 //! This module defines the complete projection contract; ledger mutation,
 //! storage, and native query/Torii wiring remain outside this service layer.
-
 pub mod runtime;
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::Path,
-    sync::{
-        Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-};
-
+use crate::durable_transaction_forwarder::{AtomicCheckpointStore, CheckpointStoreError};
 use iroha_data_model::{
     NetworkId,
     events::data::sorafs::SorafsRepairLedgerEventKind,
@@ -65,10 +55,15 @@ use sorafs_manifest::reputation::{
         ReputationSnapshotTrustPolicyV1, SignedReputationSnapshotV1, snapshot_signing_digest,
     },
 };
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+};
 use thiserror::Error;
-
-use crate::durable_transaction_forwarder::{AtomicCheckpointStore, CheckpointStoreError};
-
 /// Durable reputation-ingest policy schema version.
 pub const REPUTATION_INGEST_POLICY_VERSION_V1: u8 = 1;
 /// Durable reputation checkpoint schema version.
@@ -83,7 +78,6 @@ pub const REPUTATION_UNSIGNED_MATERIAL_ACKNOWLEDGEMENT_VERSION_V1: u8 = 1;
 pub const REPUTATION_INGEST_CHECKPOINT_FILE_NAME_V1: &str = "reputation-committed-ingest-v1.to";
 /// Single-writer lock file below the configured private state root.
 pub const REPUTATION_INGEST_LOCK_FILE_NAME_V1: &str = "reputation-committed-ingest-v1.lock";
-
 /// V1 provider ceiling, aligned with the canonical reputation scorer.
 pub const REPUTATION_INGEST_MAX_PROVIDERS_V1: u32 = 65_536;
 /// Hard cap on typed events presented in one atomic ingest batch.
@@ -98,12 +92,10 @@ pub const REPUTATION_INGEST_MAX_CHECKPOINT_BYTES_V1: u64 = 64 * 1024 * 1024;
 pub const REPUTATION_INGEST_MIN_CHECKPOINT_BYTES_V1: u64 = 64 * 1024;
 /// Hard cap on failed external delivery attempts retained for one release window.
 pub const REPUTATION_UNSIGNED_MATERIAL_MAX_DELIVERY_FAILURES_V1: u32 = 64;
-
 const CHECKPOINT_ELEMENT_AMPLIFICATION_LIMIT: usize = 16;
 const CHECKPOINT_ALLOCATION_AMPLIFICATION_LIMIT: usize = 16;
 const CHECKPOINT_ALLOCATION_FIXED_OVERHEAD_BYTES: usize = 4 * 1024 * 1024;
 const CHECKPOINT_MAX_NESTING_DEPTH: usize = 64;
-
 /// One canonical finalized-ledger source consumed by reputation scoring.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -124,7 +116,6 @@ pub enum ReputationSourceV1 {
     /// Native reserve/rent lifecycle feed.
     Reserve,
 }
-
 impl ReputationSourceV1 {
     /// Stable, bounded metric label for this source.
     #[must_use]
@@ -139,7 +130,6 @@ impl ReputationSourceV1 {
             Self::Reserve => "reserve",
         }
     }
-
     const fn bit(self) -> u16 {
         match self {
             Self::Proof => 1 << 0,
@@ -152,7 +142,6 @@ impl ReputationSourceV1 {
         }
     }
 }
-
 const ALL_SOURCES: [ReputationSourceV1; 7] = [
     ReputationSourceV1::Proof,
     ReputationSourceV1::Por,
@@ -162,13 +151,11 @@ const ALL_SOURCES: [ReputationSourceV1; 7] = [
     ReputationSourceV1::Token,
     ReputationSourceV1::Reserve,
 ];
-
 /// Governed set of finalized feeds required for one material release.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
 )]
 pub struct ReputationRequiredSourceMaskV1(u16);
-
 impl ReputationRequiredSourceMaskV1 {
     /// Canonical first-release source set.
     pub const ALL_V1: Self = Self(
@@ -180,42 +167,33 @@ impl ReputationRequiredSourceMaskV1 {
             | ReputationSourceV1::Token.bit()
             | ReputationSourceV1::Reserve.bit(),
     );
-
     /// No V1 source is intentionally omitted from the projector model.
     pub const UNAVAILABLE_NATIVE_V1: Self = Self::EMPTY;
-
     /// Empty source set.
     pub const EMPTY: Self = Self(0);
-
     /// Whether this mask contains `source`.
     #[must_use]
     pub const fn contains(self, source: ReputationSourceV1) -> bool {
         self.0 & source.bit() != 0
     }
-
     /// Raw stable bit representation.
     #[must_use]
     pub const fn bits(self) -> u16 {
         self.0
     }
-
     const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
-
     const fn difference(self, other: Self) -> Self {
         Self(self.0 & !other.0)
     }
-
     const fn is_empty(self) -> bool {
         self.0 == 0
     }
-
     const fn from_source(source: ReputationSourceV1) -> Self {
         Self(source.bit())
     }
 }
-
 /// Exact identity of one immutable finalized ledger view.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -226,7 +204,6 @@ pub struct ReputationFinalizedIdentityV1 {
     /// Exact finalized block hash.
     pub block_hash: [u8; 32],
 }
-
 impl ReputationFinalizedIdentityV1 {
     fn validate(self) -> Result<(), ReputationIngestError> {
         if self.height == 0 || self.block_hash == [0; 32] {
@@ -235,7 +212,6 @@ impl ReputationFinalizedIdentityV1 {
         Ok(())
     }
 }
-
 /// Exact identity of one source event in a finalized block.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -250,7 +226,6 @@ pub struct ReputationCommittedEventIdentityV1 {
     /// Source-event index within the committing block.
     pub event_index: u32,
 }
-
 impl ReputationCommittedEventIdentityV1 {
     fn validate(self) -> Result<(), ReputationIngestError> {
         if self.sequence == 0 || self.block_height == 0 || self.block_hash == [0; 32] {
@@ -259,7 +234,6 @@ impl ReputationCommittedEventIdentityV1 {
         Ok(())
     }
 }
-
 /// Governed, deterministic ingest policy for one reputation release window.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationIngestPolicyV1 {
@@ -290,7 +264,6 @@ pub struct ReputationIngestPolicyV1 {
     /// Maximum canonical checkpoint length.
     pub checkpoint_max_bytes: u64,
 }
-
 impl ReputationIngestPolicyV1 {
     /// Construct the strict first-release policy for one finalized block window.
     #[must_use]
@@ -317,7 +290,6 @@ impl ReputationIngestPolicyV1 {
             checkpoint_max_bytes: REPUTATION_INGEST_MAX_CHECKPOINT_BYTES_V1,
         }
     }
-
     /// Validate the canonical first-release policy.
     ///
     /// # Errors
@@ -351,13 +323,11 @@ impl ReputationIngestPolicyV1 {
         }
         Ok(())
     }
-
     fn canonical_digest(&self) -> Result<[u8; 32], ReputationIngestError> {
         self.validate()?;
         hash_canonical(b"sorafs-reputation-ingest-policy-v1", self)
     }
 }
-
 /// One set of typed pages read from a coherent finalized ledger view.
 ///
 /// Pages for a source may be omitted while another source catches up. Material
@@ -384,7 +354,6 @@ pub struct ReputationFinalizedBatchV1 {
     /// Complete ordered pages from `FindSorafsReserveProviders` at the same anchor.
     pub reserve_provider_pages: Vec<ReserveProviderAccountPageV1>,
 }
-
 /// Finalized source position bound into unsigned signing material.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationSourceFinalityV1 {
@@ -395,7 +364,6 @@ pub struct ReputationSourceFinalityV1 {
     /// Last committed source event, absent only when the feed is empty.
     pub last_event: Option<ReputationCommittedEventIdentityV1>,
 }
-
 /// Restart-safe query position for one physical committed ledger feed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationCommittedFeedCursorV1 {
@@ -408,7 +376,6 @@ pub struct ReputationCommittedFeedCursorV1 {
     /// Finalized block timestamp paired with `observed_through`.
     pub observed_at_unix_ms: u64,
 }
-
 /// Canonical unsigned material ready for independent threshold signers.
 ///
 /// The service returns the exact snapshot signing digest but contains no key,
@@ -442,7 +409,6 @@ pub struct ReputationUnsignedSigningMaterialV1 {
     /// Exact digest external threshold signers must sign.
     pub snapshot_signing_digest: [u8; 32],
 }
-
 /// Durable state of one externally delivered unsigned-material item.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -453,7 +419,6 @@ pub enum ReputationUnsignedMaterialDeliveryStateV1 {
     /// The governed retry ceiling was reached without acknowledgement.
     DeadLetter,
 }
-
 /// Canonical, payload-bounded item exposed to an external threshold-signing worker.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationUnsignedMaterialDeliveryV1 {
@@ -470,7 +435,6 @@ pub struct ReputationUnsignedMaterialDeliveryV1 {
     /// Current retry/dead-letter state.
     pub state: ReputationUnsignedMaterialDeliveryStateV1,
 }
-
 /// Payload-free durable acknowledgement retained after external delivery succeeds.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -489,7 +453,6 @@ pub struct ReputationUnsignedMaterialAcknowledgementV1 {
     /// Digest of the canonical externally signed result.
     pub signed_result_digest: [u8; 32],
 }
-
 /// Result of durably enqueuing deterministic unsigned material.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReputationMaterialEnqueueOutcomeV1 {
@@ -511,7 +474,6 @@ pub enum ReputationMaterialEnqueueOutcomeV1 {
         sequence: u64,
     },
 }
-
 /// Result of recording one idempotent external-delivery failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReputationMaterialFailureOutcomeV1 {
@@ -535,7 +497,6 @@ pub enum ReputationMaterialFailureOutcomeV1 {
         state: ReputationUnsignedMaterialDeliveryStateV1,
     },
 }
-
 /// Result of acknowledging one externally signed material delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReputationMaterialAcknowledgementOutcomeV1 {
@@ -544,7 +505,6 @@ pub enum ReputationMaterialAcknowledgementOutcomeV1 {
     /// The exact acknowledgement was already durable.
     ExactReplay,
 }
-
 /// Payload-free service counters with no provider or event labels.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ReputationIngestMetricsSnapshot {
@@ -583,7 +543,6 @@ pub struct ReputationIngestMetricsSnapshot {
     /// Idempotent material enqueue/failure/acknowledgement replays.
     pub material_exact_replays: u64,
 }
-
 #[derive(Debug, Default)]
 struct ReputationIngestMetrics {
     batches_applied: AtomicU64,
@@ -604,7 +563,6 @@ struct ReputationIngestMetrics {
     material_acknowledgements: AtomicU64,
     material_exact_replays: AtomicU64,
 }
-
 impl ReputationIngestMetrics {
     fn snapshot(&self) -> ReputationIngestMetricsSnapshot {
         ReputationIngestMetricsSnapshot {
@@ -630,7 +588,6 @@ impl ReputationIngestMetrics {
         }
     }
 }
-
 /// Result of one durable finalized batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReputationIngestOutcomeV1 {
@@ -642,7 +599,6 @@ pub enum ReputationIngestOutcomeV1 {
     /// Every event and finalized position exactly matched durable state.
     ExactReplay,
 }
-
 /// Payload-free source completion and queue status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReputationIngestStatusV1 {
@@ -667,7 +623,6 @@ pub struct ReputationIngestStatusV1 {
     /// Whether this release window's material has a durable acknowledgement.
     pub material_acknowledged: bool,
 }
-
 /// Deterministic ingest and persistence failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ReputationIngestError {
@@ -774,7 +729,6 @@ pub enum ReputationIngestError {
     #[error("reputation ingest runtime is poisoned")]
     RuntimePoisoned,
 }
-
 impl From<CheckpointStoreError> for ReputationIngestError {
     fn from(error: CheckpointStoreError) -> Self {
         match error {
@@ -787,7 +741,6 @@ impl From<CheckpointStoreError> for ReputationIngestError {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct SourceProgressV1 {
     source: ReputationSourceV1,
@@ -796,7 +749,6 @@ struct SourceProgressV1 {
     observed_at_unix_ms: u64,
     reserve_projection_digest: Option<[u8; 32]>,
 }
-
 impl SourceProgressV1 {
     fn empty(source: ReputationSourceV1) -> Self {
         Self {
@@ -808,7 +760,6 @@ impl SourceProgressV1 {
         }
     }
 }
-
 /// Physical committed feed whose sequence is globally contiguous.
 ///
 /// PoR, dispute, and token entries deliberately share `Journal`; their
@@ -828,7 +779,6 @@ pub enum ReputationCommittedFeedV1 {
     /// Native reserve/rent lifecycle feed.
     Reserve,
 }
-
 impl ReputationCommittedFeedV1 {
     /// Stable bounded label for metrics and operational status.
     #[must_use]
@@ -842,7 +792,6 @@ impl ReputationCommittedFeedV1 {
         }
     }
 }
-
 const ALL_COMMITTED_FEEDS: [ReputationCommittedFeedV1; 5] = [
     ReputationCommittedFeedV1::Proof,
     ReputationCommittedFeedV1::Journal,
@@ -850,20 +799,17 @@ const ALL_COMMITTED_FEEDS: [ReputationCommittedFeedV1; 5] = [
     ReputationCommittedFeedV1::Orderbook,
     ReputationCommittedFeedV1::Reserve,
 ];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EventReceiptV1 {
     feed: ReputationCommittedFeedV1,
     identity: ReputationCommittedEventIdentityV1,
     event_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum ReputationDisputeSignalV1 {
     Opened,
     Resolved { upheld: bool },
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum ReputationSignalV1 {
     Noop,
@@ -901,7 +847,6 @@ enum ReputationSignalV1 {
         violation: bool,
     },
 }
-
 impl ReputationSignalV1 {
     const fn provider_id(self) -> Option<ProviderId> {
         match self {
@@ -916,7 +861,6 @@ impl ReputationSignalV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PendingEventV1 {
     feed: ReputationCommittedFeedV1,
@@ -925,7 +869,6 @@ struct PendingEventV1 {
     occurred_at_unix_ms: u64,
     signal: ReputationSignalV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct SourceFinalityUpdateV1 {
     source: ReputationSourceV1,
@@ -935,13 +878,11 @@ struct SourceFinalityUpdateV1 {
     complete: bool,
     reserve_projection_digest: Option<[u8; 32]>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReserveStageRecordV1 {
     provider_id: ProviderId,
     stage: ReputationReserveStageV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PendingBatchV1 {
     target: ReputationFinalizedIdentityV1,
@@ -950,7 +891,6 @@ struct PendingBatchV1 {
     finality_updates: Vec<SourceFinalityUpdateV1>,
     reserve_stages: Vec<ReserveStageRecordV1>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderAccumulatorV1 {
     provider_id: ProviderId,
@@ -972,7 +912,6 @@ struct ProviderAccumulatorV1 {
     slashing_event: bool,
     reserve_stage: Option<ReputationReserveStageV1>,
 }
-
 impl ProviderAccumulatorV1 {
     const fn new(provider_id: ProviderId) -> Self {
         Self {
@@ -996,11 +935,9 @@ impl ProviderAccumulatorV1 {
             reserve_stage: None,
         }
     }
-
     const fn has_active_dispute(&self) -> bool {
         self.active_disputes > 0
     }
-
     fn apply(&mut self, signal: ReputationSignalV1) -> Result<(), ReputationIngestError> {
         match signal {
             ReputationSignalV1::Noop | ReputationSignalV1::ProviderObserved { .. } => {}
@@ -1131,7 +1068,6 @@ impl ProviderAccumulatorV1 {
         Ok(())
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationUnsignedMaterialOutboxEntryV1 {
     version: u8,
@@ -1141,7 +1077,6 @@ struct ReputationUnsignedMaterialOutboxEntryV1 {
     state: ReputationUnsignedMaterialDeliveryStateV1,
     failure_receipts: Vec<[u8; 32]>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationIngestCheckpointV1 {
     version: u8,
@@ -1155,7 +1090,6 @@ struct ReputationIngestCheckpointV1 {
     material_outbox: Option<ReputationUnsignedMaterialOutboxEntryV1>,
     material_acknowledgement: Option<ReputationUnsignedMaterialAcknowledgementV1>,
 }
-
 impl ReputationIngestCheckpointV1 {
     fn empty(policy_digest: [u8; 32]) -> Self {
         Self {
@@ -1174,14 +1108,12 @@ impl ReputationIngestCheckpointV1 {
             material_acknowledgement: None,
         }
     }
-
     fn progress(&self, source: ReputationSourceV1) -> &SourceProgressV1 {
         self.source_progress
             .iter()
             .find(|progress| progress.source == source)
             .expect("validated checkpoint contains every reputation source")
     }
-
     fn progress_mut(&mut self, source: ReputationSourceV1) -> &mut SourceProgressV1 {
         self.source_progress
             .iter_mut()
@@ -1189,7 +1121,6 @@ impl ReputationIngestCheckpointV1 {
             .expect("validated checkpoint contains every reputation source")
     }
 }
-
 const fn committed_feed_for_source(source: ReputationSourceV1) -> ReputationCommittedFeedV1 {
     match source {
         ReputationSourceV1::Proof => ReputationCommittedFeedV1::Proof,
@@ -1201,7 +1132,6 @@ const fn committed_feed_for_source(source: ReputationSourceV1) -> ReputationComm
         ReputationSourceV1::Reserve => ReputationCommittedFeedV1::Reserve,
     }
 }
-
 const fn primary_source_for_feed(feed: ReputationCommittedFeedV1) -> ReputationSourceV1 {
     match feed {
         ReputationCommittedFeedV1::Proof => ReputationSourceV1::Proof,
@@ -1211,20 +1141,17 @@ const fn primary_source_for_feed(feed: ReputationCommittedFeedV1) -> ReputationS
         ReputationCommittedFeedV1::Reserve => ReputationSourceV1::Reserve,
     }
 }
-
 fn checkpoint_progress_for_feed(
     checkpoint: &ReputationIngestCheckpointV1,
     feed: ReputationCommittedFeedV1,
 ) -> &SourceProgressV1 {
     checkpoint.progress(primary_source_for_feed(feed))
 }
-
 #[derive(Debug)]
 struct RuntimeState {
     checkpoint: ReputationIngestCheckpointV1,
     fingerprint: Option<[u8; 32]>,
 }
-
 /// Durable deterministic projector for finalized reputation source events.
 #[derive(Debug)]
 pub struct ReputationIngestService {
@@ -1235,7 +1162,6 @@ pub struct ReputationIngestService {
     durability_poisoned: AtomicBool,
     metrics: ReputationIngestMetrics,
 }
-
 impl ReputationIngestService {
     /// Open the durable projector and reconcile a crash-staged batch.
     ///
@@ -1275,7 +1201,6 @@ impl ReputationIngestService {
         service.reconcile_pending_on_open()?;
         Ok(service)
     }
-
     /// Ingest typed pages, durably stage them, and atomically acknowledge their
     /// deterministic projection.
     ///
@@ -1322,7 +1247,6 @@ impl ReputationIngestService {
         state.checkpoint = staged;
         state.fingerprint = Some(fingerprint);
         self.reconcile_pending_locked(&mut state, false)?;
-
         saturating_increment(&self.metrics.batches_applied);
         saturating_add(&self.metrics.events_applied, u64::from(events));
         saturating_add(&self.metrics.exact_replays, u64::from(exact_replays));
@@ -1331,7 +1255,6 @@ impl ReputationIngestService {
         }
         Ok(ReputationIngestOutcomeV1::Applied { events })
     }
-
     /// Return canonical unsigned snapshot material when every required native
     /// feed is complete through the exact release target.
     ///
@@ -1370,7 +1293,6 @@ impl ReputationIngestService {
         }
         build_signing_material(checkpoint, &self.policy, self.policy_digest)
     }
-
     /// Durably enqueue the exact deterministic material for external threshold signing.
     ///
     /// The V1 policy describes one immutable release window, so its outbox has
@@ -1414,7 +1336,6 @@ impl ReputationIngestService {
             }
             return Err(ReputationIngestError::MaterialOutboxConflict);
         }
-
         let mut updated = state.checkpoint.clone();
         updated.material_outbox = Some(ReputationUnsignedMaterialOutboxEntryV1 {
             version: REPUTATION_UNSIGNED_MATERIAL_DELIVERY_VERSION_V1,
@@ -1431,7 +1352,6 @@ impl ReputationIngestService {
         saturating_increment(&self.metrics.material_enqueued);
         Ok(ReputationMaterialEnqueueOutcomeV1::Enqueued { sequence: 1 })
     }
-
     /// Return the durable unsigned-material delivery, including dead letters.
     ///
     /// # Errors
@@ -1463,7 +1383,6 @@ impl ReputationIngestService {
             state: entry.state,
         }))
     }
-
     /// Return the payload-free durable acknowledgement, when present.
     ///
     /// # Errors
@@ -1481,7 +1400,6 @@ impl ReputationIngestService {
             .map_err(|_| ReputationIngestError::RuntimePoisoned)?;
         Ok(state.checkpoint.material_acknowledgement)
     }
-
     /// Durably record one failed external delivery attempt.
     ///
     /// `failure_receipt` is an opaque, payload-free idempotency digest created
@@ -1524,7 +1442,6 @@ impl ReputationIngestService {
         if entry.state == ReputationUnsignedMaterialDeliveryStateV1::DeadLetter {
             return Err(ReputationIngestError::MaterialDeliveryDeadLettered);
         }
-
         let mut updated = state.checkpoint.clone();
         let updated_entry = updated
             .material_outbox
@@ -1560,7 +1477,6 @@ impl ReputationIngestService {
         }
         Ok(state_after)
     }
-
     /// Durably acknowledge an externally signed result and remove its outbox item.
     ///
     /// The signed envelope must be structurally canonical and exactly bind the
@@ -1643,7 +1559,6 @@ impl ReputationIngestService {
         if entry.sequence != sequence || entry.material_digest != material_digest {
             return Err(ReputationIngestError::MaterialDeliveryMismatch);
         }
-
         let mut updated = state.checkpoint.clone();
         updated.material_outbox = None;
         updated.material_acknowledgement = Some(acknowledgement);
@@ -1654,7 +1569,6 @@ impl ReputationIngestService {
         saturating_increment(&self.metrics.material_acknowledgements);
         Ok(ReputationMaterialAcknowledgementOutcomeV1::Acknowledged)
     }
-
     /// Return restart-safe cursors for the five physical committed feeds.
     ///
     /// The PoR, dispute, and stream-token semantic sources intentionally share
@@ -1687,7 +1601,6 @@ impl ReputationIngestService {
             })
             .collect())
     }
-
     /// Return payload-free service status.
     ///
     /// # Errors
@@ -1737,13 +1650,11 @@ impl ReputationIngestService {
             material_acknowledged: state.checkpoint.material_acknowledgement.is_some(),
         })
     }
-
     /// Return payload-free counters.
     #[must_use]
     pub fn metrics(&self) -> ReputationIngestMetricsSnapshot {
         self.metrics.snapshot()
     }
-
     /// Return the exact canonical durable state bytes for replica parity checks.
     ///
     /// # Errors
@@ -1759,7 +1670,6 @@ impl ReputationIngestService {
             .map_err(|_| ReputationIngestError::RuntimePoisoned)?;
         norito::to_bytes(&state.checkpoint).map_err(|_| ReputationIngestError::CanonicalEncoding)
     }
-
     fn reconcile_pending_on_open(&self) -> Result<(), ReputationIngestError> {
         let mut state = self
             .state
@@ -1767,7 +1677,6 @@ impl ReputationIngestService {
             .map_err(|_| ReputationIngestError::RuntimePoisoned)?;
         self.reconcile_pending_locked(&mut state, true)
     }
-
     fn reconcile_pending_locked(
         &self,
         state: &mut RuntimeState,
@@ -1786,7 +1695,6 @@ impl ReputationIngestService {
         }
         Ok(())
     }
-
     fn commit_checkpoint(
         &self,
         checkpoint: &ReputationIngestCheckpointV1,
@@ -1813,7 +1721,6 @@ impl ReputationIngestService {
             }
         }
     }
-
     fn record_rejection(&self, error: ReputationIngestError) {
         match error {
             ReputationIngestError::EventReordered => {
@@ -1836,13 +1743,11 @@ impl ReputationIngestService {
         }
     }
 }
-
 #[derive(Debug)]
 struct PreparedPendingBatch {
     pending: PendingBatchV1,
     exact_replays: u32,
 }
-
 struct PrepareContext<'a> {
     checkpoint: &'a ReputationIngestCheckpointV1,
     policy: &'a ReputationIngestPolicyV1,
@@ -1856,7 +1761,6 @@ struct PrepareContext<'a> {
     encoded_page_bytes: usize,
     exact_replays: u32,
 }
-
 impl<'a> PrepareContext<'a> {
     fn new(
         checkpoint: &'a ReputationIngestCheckpointV1,
@@ -1916,11 +1820,9 @@ impl<'a> PrepareContext<'a> {
             exact_replays: 0,
         }
     }
-
     fn last(&self, feed: ReputationCommittedFeedV1) -> Option<ReputationCommittedEventIdentityV1> {
         self.working_last.get(&feed).copied().flatten()
     }
-
     fn accept_encoded_page<T: norito::NoritoSerialize>(
         &mut self,
         page: &T,
@@ -1942,7 +1844,6 @@ impl<'a> PrepareContext<'a> {
         }
         Ok(())
     }
-
     fn accept_event<T: norito::NoritoSerialize>(
         &mut self,
         feed: ReputationCommittedFeedV1,
@@ -1985,7 +1886,6 @@ impl<'a> PrepareContext<'a> {
         self.reject_known_block_fork(identity)?;
         let event_digest = hash_canonical(feed_event_domain(feed), event)?;
         let last = self.last(feed);
-
         if last.is_some_and(|cursor| identity.sequence <= cursor.sequence) {
             let retained = self
                 .receipt_index
@@ -2000,7 +1900,6 @@ impl<'a> PrepareContext<'a> {
                 .ok_or(ReputationIngestError::ArithmeticOverflow)?;
             return Ok(());
         }
-
         let expected_sequence = last.map_or(Ok(1), |cursor| {
             cursor
                 .sequence
@@ -2038,7 +1937,6 @@ impl<'a> PrepareContext<'a> {
         self.working_last.insert(feed, Some(identity));
         Ok(())
     }
-
     fn reject_known_block_fork(
         &self,
         identity: ReputationCommittedEventIdentityV1,
@@ -2053,7 +1951,6 @@ impl<'a> PrepareContext<'a> {
         Ok(())
     }
 }
-
 fn prepare_pending_batch(
     checkpoint: &ReputationIngestCheckpointV1,
     batch: &ReputationFinalizedBatchV1,
@@ -2092,7 +1989,6 @@ fn prepare_pending_batch(
         target,
         batch.finalized_at_unix_ms,
     )?;
-
     let mut context = PrepareContext::new(checkpoint, policy, target, batch.finalized_at_unix_ms);
     let mut updates = Vec::new();
     if !batch.proof_pages.is_empty() {
@@ -2123,7 +2019,6 @@ fn prepare_pending_batch(
             batch.finalized_at_unix_ms,
         )?);
     }
-
     let (reserve_update, reserve_stages) = if batch.reserve_pages.is_empty() {
         if !batch.reserve_provider_pages.is_empty() {
             return Err(ReputationIngestError::InvalidPage);
@@ -2171,7 +2066,6 @@ fn prepare_pending_batch(
     if let Some(update) = reserve_update {
         updates.push(update);
     }
-
     context.events.sort_by_key(|event| {
         (
             event.identity.block_height,
@@ -2181,7 +2075,6 @@ fn prepare_pending_batch(
         )
     });
     updates.sort_by_key(|update| update.source);
-
     updates.retain(|update| {
         let existing = checkpoint.progress(update.source);
         existing.last_event != update.last_event
@@ -2202,7 +2095,6 @@ fn prepare_pending_batch(
         },
     })
 }
-
 fn batch_target(
     batch: &ReputationFinalizedBatchV1,
 ) -> Result<ReputationFinalizedIdentityV1, ReputationIngestError> {
@@ -2267,7 +2159,6 @@ fn batch_target(
     }
     target.ok_or(ReputationIngestError::InvalidPage)
 }
-
 fn validate_global_target(
     previous: Option<ReputationFinalizedIdentityV1>,
     previous_at_unix_ms: u64,
@@ -2292,7 +2183,6 @@ fn validate_global_target(
     }
     Ok(())
 }
-
 fn prepare_proof_pages(
     context: &mut PrepareContext<'_>,
     pages: &[ProofOutcomeFinalizedEventPageV1],
@@ -2366,7 +2256,6 @@ fn prepare_proof_pages(
         pages.last().is_some_and(|page| !page.has_more),
     )
 }
-
 fn prepare_journal_pages(
     context: &mut PrepareContext<'_>,
     pages: &[ReputationJournalFinalizedEventPageV1],
@@ -2471,7 +2360,6 @@ fn prepare_journal_pages(
         )?,
     ])
 }
-
 const fn map_journal_page_error(error: ReputationJournalValidationError) -> ReputationIngestError {
     match error {
         ReputationJournalValidationError::EventSequenceGap => ReputationIngestError::EventGap,
@@ -2494,7 +2382,6 @@ const fn map_journal_page_error(error: ReputationJournalValidationError) -> Repu
         _ => ReputationIngestError::InvalidPage,
     }
 }
-
 fn prepare_repair_pages(
     context: &mut PrepareContext<'_>,
     pages: &[RepairFinalizedEventPageV1],
@@ -2564,7 +2451,6 @@ fn prepare_repair_pages(
         pages.last().is_some_and(|page| !page.has_more),
     )
 }
-
 fn prepare_orderbook_pages(
     context: &mut PrepareContext<'_>,
     pages: &[OrderbookFinalizedEventPageV1],
@@ -2624,7 +2510,6 @@ fn prepare_orderbook_pages(
         pages.last().is_some_and(|page| !page.has_more),
     )
 }
-
 fn prepare_reserve_pages(
     context: &mut PrepareContext<'_>,
     pages: &[ReserveFinalizedEventPageV1],
@@ -2684,7 +2569,6 @@ fn prepare_reserve_pages(
         pages.last().is_some_and(|page| !page.has_more),
     )
 }
-
 fn prepare_reserve_projection(
     pages: &[ReserveProviderAccountPageV1],
     target: ReputationFinalizedIdentityV1,
@@ -2711,7 +2595,6 @@ fn prepare_reserve_projection(
     let target_bytes =
         norito::to_bytes(&target).map_err(|_| ReputationIngestError::CanonicalEncoding)?;
     update_len_prefixed(&mut hasher, &target_bytes)?;
-
     for page in pages {
         if previous_promised_more && page.accounts.is_empty() {
             return Err(ReputationIngestError::InvalidPage);
@@ -2773,7 +2656,6 @@ fn prepare_reserve_projection(
     }
     Ok((stages, *hasher.finalize().as_bytes()))
 }
-
 fn canonical_reserve_stage_projection(
     checkpoint: &ReputationIngestCheckpointV1,
     target: ReputationFinalizedIdentityV1,
@@ -2789,7 +2671,6 @@ fn canonical_reserve_stage_projection(
     }
     stages
 }
-
 fn source_update(
     context: &PrepareContext<'_>,
     source: ReputationSourceV1,
@@ -2813,7 +2694,6 @@ fn source_update(
         reserve_projection_digest: existing.reserve_projection_digest,
     })
 }
-
 fn validate_event_page_chain<I>(page_count: usize, pages: I) -> Result<(), ReputationIngestError>
 where
     I: IntoIterator<
@@ -2844,7 +2724,6 @@ where
     }
     Ok(())
 }
-
 fn validate_encoded_page<T: norito::NoritoSerialize>(
     page: &T,
     max_page_bytes: usize,
@@ -2864,14 +2743,12 @@ fn validate_encoded_page<T: norito::NoritoSerialize>(
     }
     Ok(())
 }
-
 fn validate_page_item_count(observed: usize, maximum: usize) -> Result<(), ReputationIngestError> {
     if observed > maximum {
         return Err(ReputationIngestError::CapacityExceeded);
     }
     Ok(())
 }
-
 fn validate_page_event_order(
     previous: &mut Option<ReputationCommittedEventIdentityV1>,
     next: ReputationCommittedEventIdentityV1,
@@ -2898,7 +2775,6 @@ fn validate_page_event_order(
     *previous = Some(next);
     Ok(())
 }
-
 fn assert_page_target(
     expected: ReputationFinalizedIdentityV1,
     observed: ReputationFinalizedIdentityV1,
@@ -2908,7 +2784,6 @@ fn assert_page_target(
     }
     Ok(())
 }
-
 const fn proof_event_identity(
     event: &ProofOutcomeFinalizedEventV1,
 ) -> ReputationCommittedEventIdentityV1 {
@@ -2919,7 +2794,6 @@ const fn proof_event_identity(
         event_index: event.event_index,
     }
 }
-
 const fn journal_event_identity(
     event: &ReputationJournalFinalizedEventV1,
 ) -> ReputationCommittedEventIdentityV1 {
@@ -2930,7 +2804,6 @@ const fn journal_event_identity(
         event_index: event.event_index,
     }
 }
-
 const fn repair_event_identity(
     event: &RepairFinalizedEventV1,
 ) -> ReputationCommittedEventIdentityV1 {
@@ -2941,7 +2814,6 @@ const fn repair_event_identity(
         event_index: event.event_index,
     }
 }
-
 const fn orderbook_event_identity(
     event: &OrderbookFinalizedEventV1,
 ) -> ReputationCommittedEventIdentityV1 {
@@ -2952,7 +2824,6 @@ const fn orderbook_event_identity(
         event_index: event.event_index,
     }
 }
-
 const fn reserve_event_identity(
     event: &iroha_data_model::sorafs::reserve::ReserveFinalizedEventV1,
 ) -> ReputationCommittedEventIdentityV1 {
@@ -2963,7 +2834,6 @@ const fn reserve_event_identity(
         event_index: event.event_index,
     }
 }
-
 const fn reserve_stage(stage: ReserveLifecycleStage) -> ReputationReserveStageV1 {
     match stage {
         ReserveLifecycleStage::Active => ReputationReserveStageV1::Active,
@@ -2973,7 +2843,6 @@ const fn reserve_stage(stage: ReserveLifecycleStage) -> ReputationReserveStageV1
         ReserveLifecycleStage::Default => ReputationReserveStageV1::Default,
     }
 }
-
 fn apply_pending_batch(
     checkpoint: &mut ReputationIngestCheckpointV1,
     policy: &ReputationIngestPolicyV1,
@@ -3036,7 +2905,6 @@ fn apply_pending_batch(
             .reserve_stage = Some(record.stage);
     }
     checkpoint.providers = providers.into_values().collect();
-
     checkpoint
         .receipts
         .extend(pending.events.iter().map(|event| EventReceiptV1 {
@@ -3059,7 +2927,6 @@ fn apply_pending_batch(
         let remove = checkpoint.receipts.len() - receipt_limit;
         checkpoint.receipts.drain(..remove);
     }
-
     for update in &pending.finality_updates {
         let progress = checkpoint.progress_mut(update.source);
         progress.last_event = update.last_event;
@@ -3074,7 +2941,6 @@ fn apply_pending_batch(
     checkpoint.pending = None;
     validate_checkpoint(checkpoint, policy, checkpoint.policy_digest)
 }
-
 fn receipt_order_key(receipt: &EventReceiptV1) -> (u64, u32, ReputationCommittedFeedV1, u64) {
     (
         receipt.identity.block_height,
@@ -3083,7 +2949,6 @@ fn receipt_order_key(receipt: &EventReceiptV1) -> (u64, u32, ReputationCommitted
         receipt.identity.sequence,
     )
 }
-
 fn missing_sources(
     checkpoint: &ReputationIngestCheckpointV1,
     required: ReputationRequiredSourceMaskV1,
@@ -3097,7 +2962,6 @@ fn missing_sources(
     }
     required.difference(present)
 }
-
 fn build_signing_material(
     checkpoint: &ReputationIngestCheckpointV1,
     policy: &ReputationIngestPolicyV1,
@@ -3118,7 +2982,6 @@ fn build_signing_material(
     if checkpoint.providers.is_empty() {
         return Err(ReputationIngestError::EmptyProviderSet);
     }
-
     let mut provider_inputs = Vec::new();
     provider_inputs
         .try_reserve_exact(checkpoint.providers.len())
@@ -3237,7 +3100,6 @@ fn build_signing_material(
         snapshot_signing_digest: signing_digest,
     })
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
 struct ReputationSnapshotSeedV1 {
     network_id: NetworkId,
@@ -3250,7 +3112,6 @@ struct ReputationSnapshotSeedV1 {
     source_finality: Vec<ReputationSourceFinalityV1>,
     scoring_evidence_digest: [u8; 32],
 }
-
 fn ratio_bps(successes: u64, total: u64) -> Result<u16, ReputationIngestError> {
     if total == 0 || successes > total {
         return Err(ReputationIngestError::MetricUnavailable);
@@ -3261,7 +3122,6 @@ fn ratio_bps(successes: u64, total: u64) -> Result<u16, ReputationIngestError> {
     u16::try_from(numerator / u128::from(total))
         .map_err(|_| ReputationIngestError::ArithmeticOverflow)
 }
-
 fn zero_safe_ratio_bps(successes: u64, total: u64) -> Result<u16, ReputationIngestError> {
     if total == 0 {
         if successes == 0 {
@@ -3271,13 +3131,11 @@ fn zero_safe_ratio_bps(successes: u64, total: u64) -> Result<u16, ReputationInge
     }
     ratio_bps(successes, total)
 }
-
 fn checked_next(value: u64) -> Result<u64, ReputationIngestError> {
     value
         .checked_add(1)
         .ok_or(ReputationIngestError::ArithmeticOverflow)
 }
-
 fn decode_checkpoint(
     bytes: &[u8],
     policy: &ReputationIngestPolicyV1,
@@ -3301,7 +3159,6 @@ fn decode_checkpoint(
     validate_checkpoint(&checkpoint, policy, policy_digest)?;
     Ok(checkpoint)
 }
-
 fn ensure_checkpoint_size(
     checkpoint: &ReputationIngestCheckpointV1,
     policy: &ReputationIngestPolicyV1,
@@ -3313,7 +3170,6 @@ fn ensure_checkpoint_size(
     }
     Ok(())
 }
-
 fn checkpoint_decode_limits(
     encoded_bytes: usize,
 ) -> Result<norito::DecodeLimits, ReputationIngestError> {
@@ -3335,7 +3191,6 @@ fn checkpoint_decode_limits(
         CHECKPOINT_MAX_NESTING_DEPTH,
     ))
 }
-
 fn validate_checkpoint(
     checkpoint: &ReputationIngestCheckpointV1,
     policy: &ReputationIngestPolicyV1,
@@ -3368,7 +3223,6 @@ fn validate_checkpoint(
         None if checkpoint.latest_finalized_at_unix_ms == 0 => {}
         None => return Err(ReputationIngestError::InvalidCheckpoint),
     }
-
     for (expected, progress) in ALL_SOURCES.iter().zip(&checkpoint.source_progress) {
         if progress.source != *expected {
             return Err(ReputationIngestError::InvalidCheckpoint);
@@ -3430,7 +3284,6 @@ fn validate_checkpoint(
             return Err(ReputationIngestError::InvalidCheckpoint);
         }
     }
-
     let mut receipt_keys = BTreeSet::new();
     let mut previous_order = None;
     let mut final_feed_receipt = BTreeMap::new();
@@ -3502,7 +3355,6 @@ fn validate_checkpoint(
                     .map(finalized_identity_as_event_identity),
             ),
     )?;
-
     let mut previous_provider = None;
     for provider in &checkpoint.providers {
         if provider.provider_id.as_bytes() == &[0; 32]
@@ -3525,7 +3377,6 @@ fn validate_checkpoint(
     validate_material_delivery_state(checkpoint, policy, policy_digest)?;
     Ok(())
 }
-
 fn validate_material_delivery_state(
     checkpoint: &ReputationIngestCheckpointV1,
     policy: &ReputationIngestPolicyV1,
@@ -3542,7 +3393,6 @@ fn validate_material_delivery_state(
     if checkpoint.material_outbox.is_none() && checkpoint.material_acknowledgement.is_none() {
         return Ok(());
     }
-
     let expected_material = build_signing_material(checkpoint, policy, policy_digest)
         .map_err(|_| ReputationIngestError::InvalidCheckpoint)?;
     let expected_digest = unsigned_material_digest(&expected_material)
@@ -3590,7 +3440,6 @@ fn validate_material_delivery_state(
     }
     Ok(())
 }
-
 fn validate_pending(
     pending: &PendingBatchV1,
     checkpoint: &ReputationIngestCheckpointV1,
@@ -3622,7 +3471,6 @@ fn validate_pending(
         pending.finalized_at_unix_ms,
     )
     .map_err(|_| ReputationIngestError::InvalidCheckpoint)?;
-
     let mut previous_event_order = None;
     let mut event_keys = BTreeSet::new();
     let mut event_feeds = BTreeSet::new();
@@ -3684,7 +3532,6 @@ fn validate_pending(
             .chain(pending.events.iter().map(|event| event.identity))
             .chain(Some(finalized_identity_as_event_identity(pending.target))),
     )?;
-
     for feed in &event_feeds {
         let mut expected = checkpoint_progress_for_feed(checkpoint, *feed)
             .last_event
@@ -3710,7 +3557,6 @@ fn validate_pending(
             }
         }
     }
-
     let mut previous_source = None;
     let mut update_sources = BTreeSet::new();
     for update in &pending.finality_updates {
@@ -3776,7 +3622,6 @@ fn validate_pending(
     }
     Ok(())
 }
-
 fn pending_last_event(
     checkpoint: &ReputationIngestCheckpointV1,
     pending: &PendingBatchV1,
@@ -3791,7 +3636,6 @@ fn pending_last_event(
         .max_by_key(|identity| identity.sequence)
         .or_else(|| checkpoint_progress_for_feed(checkpoint, feed).last_event)
 }
-
 fn updates_cover_feed(
     sources: &BTreeSet<ReputationSourceV1>,
     feed: ReputationCommittedFeedV1,
@@ -3807,7 +3651,6 @@ fn updates_cover_feed(
         _ => sources.contains(&primary_source_for_feed(feed)),
     }
 }
-
 const fn signal_matches_feed(signal: ReputationSignalV1, feed: ReputationCommittedFeedV1) -> bool {
     match signal {
         ReputationSignalV1::Pdp { .. } | ReputationSignalV1::Potr { .. } => {
@@ -3835,7 +3678,6 @@ const fn signal_matches_feed(signal: ReputationSignalV1, feed: ReputationCommitt
         ),
     }
 }
-
 const fn signal_is_well_formed(signal: ReputationSignalV1) -> bool {
     match signal {
         ReputationSignalV1::Noop
@@ -3864,7 +3706,6 @@ const fn signal_is_well_formed(signal: ReputationSignalV1) -> bool {
         } => terminal || !breach && !slashing,
     }
 }
-
 fn validate_known_block_hashes<I>(identities: I) -> Result<(), ReputationIngestError>
 where
     I: IntoIterator<Item = ReputationCommittedEventIdentityV1>,
@@ -3880,7 +3721,6 @@ where
     }
     Ok(())
 }
-
 const fn finalized_identity_as_event_identity(
     identity: ReputationFinalizedIdentityV1,
 ) -> ReputationCommittedEventIdentityV1 {
@@ -3891,7 +3731,6 @@ const fn finalized_identity_as_event_identity(
         event_index: u32::MAX,
     }
 }
-
 fn hash_canonical<T: norito::NoritoSerialize>(
     domain: &'static [u8],
     value: &T,
@@ -3902,13 +3741,11 @@ fn hash_canonical<T: norito::NoritoSerialize>(
     update_len_prefixed(&mut hasher, &bytes)?;
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn unsigned_material_digest(
     material: &ReputationUnsignedSigningMaterialV1,
 ) -> Result<[u8; 32], ReputationIngestError> {
     hash_canonical(b"sorafs-reputation-unsigned-material-delivery-v1", material)
 }
-
 fn canonical_signed_result_digest(
     signed_result: &SignedReputationSnapshotV1,
 ) -> Result<[u8; 32], ReputationIngestError> {
@@ -3920,7 +3757,6 @@ fn canonical_signed_result_digest(
     update_len_prefixed(&mut hasher, &canonical)?;
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn update_len_prefixed(
     hasher: &mut blake3::Hasher,
     bytes: &[u8],
@@ -3930,7 +3766,6 @@ fn update_len_prefixed(
     hasher.update(bytes);
     Ok(())
 }
-
 const fn feed_event_domain(feed: ReputationCommittedFeedV1) -> &'static [u8] {
     match feed {
         ReputationCommittedFeedV1::Proof => b"sorafs-reputation-proof-event-v1",
@@ -3940,25 +3775,20 @@ const fn feed_event_domain(feed: ReputationCommittedFeedV1) -> &'static [u8] {
         ReputationCommittedFeedV1::Reserve => b"sorafs-reputation-reserve-event-v1",
     }
 }
-
 fn saturating_increment(counter: &AtomicU64) {
     saturating_add(counter, 1);
 }
-
 fn saturating_add(counter: &AtomicU64, value: u64) {
     let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         Some(current.saturating_add(value))
     });
 }
-
 fn checked_unix_millis_to_seconds(unix_ms: u64) -> Option<u64> {
     unix_ms.checked_div(1_000).filter(|seconds| *seconds != 0)
 }
-
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
+    use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -3995,14 +3825,11 @@ mod tests {
         ReputationSnapshotSignatureV1, ReputationTrustedSignerV1,
         SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
     };
+    use std::fs;
     use tempfile::TempDir;
-
-    use super::*;
-
     const TARGET_HEIGHT: u64 = 10;
     const TARGET_HASH: [u8; 32] = [0xA1; 32];
     const FINALIZED_AT_MS: u64 = 1_800_000_010_000;
-
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(
             HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -4010,17 +3837,14 @@ mod tests {
             )),
         )
     }
-
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
             .expect("derive deterministic account key");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn provider(seed: u8) -> ProviderId {
         ProviderId::new([seed.max(1); 32])
     }
-
     fn trust_policy() -> ReputationSnapshotTrustPolicyV1 {
         let signing_key = SigningKey::from_bytes(&[0x5A; 32]);
         ReputationSnapshotTrustPolicyV1 {
@@ -4039,7 +3863,6 @@ mod tests {
             revoked_signer_ids: Vec::new(),
         }
     }
-
     fn policy_for_trust_policy(
         trust_policy: &ReputationSnapshotTrustPolicyV1,
     ) -> ReputationIngestPolicyV1 {
@@ -4053,11 +3876,9 @@ mod tests {
             ReputationWeightsV1::default(),
         )
     }
-
     fn policy() -> ReputationIngestPolicyV1 {
         policy_for_trust_policy(&trust_policy())
     }
-
     fn proof_event(
         sequence: u64,
         block_height: u64,
@@ -4100,7 +3921,6 @@ mod tests {
             },
         }
     }
-
     fn potr_event(
         sequence: u64,
         block_height: u64,
@@ -4140,7 +3960,6 @@ mod tests {
             },
         }
     }
-
     fn journal_policy() -> ReputationJournalAuthorityPolicyV1 {
         ReputationJournalAuthorityPolicyV1 {
             version: REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
@@ -4152,7 +3971,6 @@ mod tests {
             max_source_age_ms: 24 * 60 * 60 * 1_000,
         }
     }
-
     fn por_journal_entry(
         provider_id: ProviderId,
         marker: u8,
@@ -4185,7 +4003,6 @@ mod tests {
         )
         .expect("valid PoR journal entry")
     }
-
     fn token_journal_entry(
         provider_id: ProviderId,
         marker: u8,
@@ -4212,7 +4029,6 @@ mod tests {
         )
         .expect("valid stream-token journal entry")
     }
-
     fn opened_dispute_entry(
         provider_id: ProviderId,
         marker: u8,
@@ -4235,7 +4051,6 @@ mod tests {
         )
         .expect("valid opened dispute entry")
     }
-
     fn resolved_dispute_entry(
         provider_id: ProviderId,
         opened: &ReputationJournalEntryV1,
@@ -4267,7 +4082,6 @@ mod tests {
         )
         .expect("valid resolved dispute entry")
     }
-
     fn journal_event(
         sequence: u64,
         event_index: u32,
@@ -4283,7 +4097,6 @@ mod tests {
             entry,
         }
     }
-
     fn journal_page(
         events: Vec<ReputationJournalFinalizedEventV1>,
     ) -> ReputationJournalFinalizedEventPageV1 {
@@ -4298,7 +4111,6 @@ mod tests {
             next_after: None,
         }
     }
-
     fn journal_only_batch(
         pages: Vec<ReputationJournalFinalizedEventPageV1>,
     ) -> ReputationFinalizedBatchV1 {
@@ -4307,7 +4119,6 @@ mod tests {
             ..empty_batch()
         }
     }
-
     fn proof_page(
         target_hash: [u8; 32],
         events: Vec<ProofOutcomeFinalizedEventV1>,
@@ -4322,7 +4133,6 @@ mod tests {
             next_after: None,
         }
     }
-
     fn proof_only_batch(
         target_hash: [u8; 32],
         events: Vec<ProofOutcomeFinalizedEventV1>,
@@ -4332,7 +4142,6 @@ mod tests {
             ..empty_batch()
         }
     }
-
     fn empty_batch() -> ReputationFinalizedBatchV1 {
         ReputationFinalizedBatchV1 {
             network_id: network_id(0x61),
@@ -4345,7 +4154,6 @@ mod tests {
             reserve_provider_pages: Vec::new(),
         }
     }
-
     fn repair_page(provider_id: ProviderId) -> RepairFinalizedEventPageV1 {
         RepairFinalizedEventPageV1 {
             finalized_cursor: RepairFinalizedCursorV1 {
@@ -4372,7 +4180,6 @@ mod tests {
             next_after: None,
         }
     }
-
     fn orderbook_page(provider_id: ProviderId) -> OrderbookFinalizedEventPageV1 {
         OrderbookFinalizedEventPageV1 {
             finalized_cursor: OrderbookFinalizedCursorV1 {
@@ -4400,7 +4207,6 @@ mod tests {
             next_after: None,
         }
     }
-
     fn reserve_event_page() -> ReserveFinalizedEventPageV1 {
         ReserveFinalizedEventPageV1 {
             finalized_cursor: ReserveFinalizedCursorV1 {
@@ -4412,7 +4218,6 @@ mod tests {
             next_after: None,
         }
     }
-
     fn reserve_provider_page(provider_id: ProviderId) -> ReserveProviderAccountPageV1 {
         ReserveProviderAccountPageV1 {
             finalized_cursor: ReserveFinalizedCursorV1 {
@@ -4446,7 +4251,6 @@ mod tests {
             next_after: None,
         }
     }
-
     fn all_sources_batch(provider_id: ProviderId) -> ReputationFinalizedBatchV1 {
         let opened_a = opened_dispute_entry(provider_id, 0x61, FINALIZED_AT_MS - 1_800);
         let opened_b = opened_dispute_entry(provider_id, 0x62, FINALIZED_AT_MS - 1_600);
@@ -4487,7 +4291,6 @@ mod tests {
             reserve_provider_pages: vec![reserve_provider_page(provider_id)],
         }
     }
-
     fn signed_material_result(
         material: &ReputationUnsignedSigningMaterialV1,
     ) -> SignedReputationSnapshotV1 {
@@ -4497,7 +4300,6 @@ mod tests {
             &SigningKey::from_bytes(&[0x5A; 32]),
         )
     }
-
     fn signed_material_result_with_signer(
         material: &ReputationUnsignedSigningMaterialV1,
         signer_id: &str,
@@ -4517,7 +4319,6 @@ mod tests {
             }],
         }
     }
-
     fn signed_material_result_generated_at(
         material: &ReputationUnsignedSigningMaterialV1,
         generated_at_unix: u64,
@@ -4541,7 +4342,6 @@ mod tests {
         adjusted.snapshot = snapshot;
         signed_material_result(&adjusted)
     }
-
     fn ready_material_service(
         verification_policy: &ReputationSnapshotTrustPolicyV1,
         provider_seed: u8,
@@ -4568,7 +4368,6 @@ mod tests {
             .expect("pending ready material");
         (root, service, delivery)
     }
-
     #[test]
     fn exact_replay_is_idempotent_and_byte_identical() {
         let root = TempDir::new().expect("state root");
@@ -4601,7 +4400,6 @@ mod tests {
         );
         assert_eq!(service.metrics().exact_replays, 1);
     }
-
     #[test]
     fn unified_journal_replay_is_byte_identical_and_advances_all_semantic_sources() {
         let root = TempDir::new().expect("journal state root");
@@ -4681,11 +4479,9 @@ mod tests {
         );
         assert_eq!(service.metrics().exact_replays, 2);
     }
-
     #[test]
     fn journal_gap_fork_equivocation_and_cross_page_continuation_fail_closed() {
         let provider_id = provider(13);
-
         let gap_root = TempDir::new().expect("journal gap root");
         let gap = ReputationIngestService::open(gap_root.path(), policy()).expect("open gap");
         assert_eq!(
@@ -4699,7 +4495,6 @@ mod tests {
             .expect_err("global journal gap rejected"),
             ReputationIngestError::EventGap
         );
-
         let paged_root = TempDir::new().expect("journal paged root");
         let paged = ReputationIngestService::open(paged_root.path(), policy()).expect("open paged");
         let first_event = journal_event(
@@ -4721,7 +4516,6 @@ mod tests {
                 .expect("contiguous journal pages"),
             ReputationIngestOutcomeV1::Applied { events: 2 }
         );
-
         let conflict_root = TempDir::new().expect("journal conflict root");
         let conflict =
             ReputationIngestService::open(conflict_root.path(), policy()).expect("open conflict");
@@ -4753,7 +4547,6 @@ mod tests {
             ReputationIngestError::FinalizedFork
         );
     }
-
     #[test]
     fn multiple_disputes_preserve_active_cardinality_across_pages() {
         let root = TempDir::new().expect("dispute state root");
@@ -4792,7 +4585,6 @@ mod tests {
             assert_eq!(accumulator.disputes_resolved, 1);
             assert_eq!(accumulator.disputes_upheld, 1);
         }
-
         service
             .ingest_finalized_batch(journal_only_batch(vec![journal_page(vec![journal_event(
                 4, 3, resolved_b,
@@ -4805,11 +4597,9 @@ mod tests {
         assert_eq!(accumulator.disputes_resolved, 2);
         assert_eq!(accumulator.disputes_upheld, 1);
     }
-
     #[test]
     fn reordered_gap_fork_and_equivocation_fail_closed() {
         let provider_id = provider(2);
-
         let reordered_root = TempDir::new().expect("reordered root");
         let reordered =
             ReputationIngestService::open(reordered_root.path(), policy()).expect("open service");
@@ -4823,7 +4613,6 @@ mod tests {
             ))
             .expect_err("reordered events rejected");
         assert_eq!(error, ReputationIngestError::EventReordered);
-
         let gap_root = TempDir::new().expect("gap root");
         let gap = ReputationIngestService::open(gap_root.path(), policy()).expect("open service");
         let error = gap
@@ -4833,7 +4622,6 @@ mod tests {
             ))
             .expect_err("gap rejected");
         assert_eq!(error, ReputationIngestError::EventGap);
-
         let conflict_root = TempDir::new().expect("conflict root");
         let conflict =
             ReputationIngestService::open(conflict_root.path(), policy()).expect("open service");
@@ -4851,14 +4639,12 @@ mod tests {
             ))
             .expect_err("same-height finalized fork rejected");
         assert_eq!(error, ReputationIngestError::FinalizedFork);
-
         let mut substituted = accepted;
         substituted.outcome.outcome_digest = [0xEE; 32];
         let error = conflict
             .ingest_finalized_batch(proof_only_batch(TARGET_HASH, vec![substituted]))
             .expect_err("same sequence with substituted payload rejected");
         assert_eq!(error, ReputationIngestError::EventEquivocation);
-
         let error = conflict
             .ingest_finalized_batch(proof_only_batch(
                 TARGET_HASH,
@@ -4867,7 +4653,6 @@ mod tests {
             .expect_err("completed feed cannot append at the same finalized anchor");
         assert_eq!(error, ReputationIngestError::EventEquivocation);
     }
-
     #[test]
     fn source_omission_blocks_material_until_global_journal_is_complete() {
         let root = TempDir::new().expect("state root");
@@ -4885,7 +4670,6 @@ mod tests {
                 .expect_err("available source omissions block material"),
             ReputationIngestError::MissingRequiredSources
         );
-
         let ready_root = TempDir::new().expect("ready state root");
         let ready =
             ReputationIngestService::open(ready_root.path(), policy()).expect("open ready service");
@@ -4927,7 +4711,6 @@ mod tests {
         assert_eq!(provider_input.metrics.dispute_rate_bps, 10_000);
         assert_eq!(provider_input.metrics.token_violation_rate_bps, 0);
     }
-
     #[test]
     fn reserve_completion_requires_same_anchor_stage_projection() {
         let root = TempDir::new().expect("state root");
@@ -4940,7 +4723,6 @@ mod tests {
             .expect_err("missing reserve provider projection rejected");
         assert_eq!(error, ReputationIngestError::ReserveStageResolutionMissing);
     }
-
     #[test]
     fn pagination_cannot_complete_with_an_empty_promised_tail() {
         let root = TempDir::new().expect("state root");
@@ -4959,7 +4741,6 @@ mod tests {
             ReputationIngestError::InvalidPage
         );
     }
-
     #[test]
     fn finalized_batch_from_same_label_foreign_network_is_rejected() {
         let root = TempDir::new().expect("state root");
@@ -4976,7 +4757,6 @@ mod tests {
             ReputationIngestError::NetworkIdMismatch
         );
     }
-
     #[test]
     fn restart_reconciles_a_durably_staged_batch() {
         let root = TempDir::new().expect("state root");
@@ -4999,7 +4779,6 @@ mod tests {
             state.checkpoint = staged;
             state.fingerprint = Some(fingerprint);
         }
-
         let restored =
             ReputationIngestService::open(root.path(), policy()).expect("reconcile restart");
         let status = restored.status().expect("restored status");
@@ -5031,7 +4810,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn corrupt_checkpoint_and_batch_bound_are_rejected() {
         let root = TempDir::new().expect("corrupt state root");
@@ -5053,7 +4831,6 @@ mod tests {
                 .expect_err("corrupt checkpoint rejected"),
             ReputationIngestError::InvalidCheckpoint
         );
-
         let bounded_root = TempDir::new().expect("bounded state root");
         let mut bounded_policy = policy();
         bounded_policy.max_pending_events = 1;
@@ -5072,7 +4849,6 @@ mod tests {
                 .expect_err("pending bound enforced"),
             ReputationIngestError::CapacityExceeded
         );
-
         let byte_bounded_root = TempDir::new().expect("byte-bounded state root");
         let mut byte_bounded_policy = policy();
         byte_bounded_policy.checkpoint_max_bytes = REPUTATION_INGEST_MIN_CHECKPOINT_BYTES_V1;
@@ -5094,7 +4870,6 @@ mod tests {
             ReputationIngestError::CapacityExceeded
         );
     }
-
     #[test]
     fn poisoned_runtime_blocks_all_authoritative_reads() {
         let root = TempDir::new().expect("state root");
@@ -5135,7 +4910,6 @@ mod tests {
             ReputationIngestError::CheckpointDurabilityUncertain
         );
     }
-
     #[test]
     fn replicas_produce_identical_checkpoint_and_unsigned_material_bytes() {
         let left_root = TempDir::new().expect("left root");
@@ -5150,7 +4924,6 @@ mod tests {
             left.canonical_checkpoint_bytes().expect("left bytes"),
             right.canonical_checkpoint_bytes().expect("right bytes")
         );
-
         let left_material = left
             .unsigned_signing_material()
             .expect("left unsigned material");
@@ -5163,7 +4936,6 @@ mod tests {
             norito::to_bytes(&right_material).expect("right material bytes")
         );
     }
-
     #[test]
     fn material_outbox_retry_dead_letter_and_acknowledgement_are_restart_safe() {
         let root = TempDir::new().expect("material outbox root");
@@ -5205,7 +4977,6 @@ mod tests {
                 }
             );
         }
-
         {
             let restored = ReputationIngestService::open(root.path(), ingest_policy.clone())
                 .expect("restore pending material");
@@ -5231,7 +5002,6 @@ mod tests {
                 ReputationMaterialFailureOutcomeV1::DeadLettered { failed_attempts: 2 }
             );
         }
-
         {
             let restored = ReputationIngestService::open(root.path(), ingest_policy.clone())
                 .expect("restore dead letter");
@@ -5267,7 +5037,6 @@ mod tests {
                     .is_none()
             );
         }
-
         let restored =
             ReputationIngestService::open(root.path(), ingest_policy).expect("restore ack");
         assert_eq!(
@@ -5303,7 +5072,6 @@ mod tests {
         );
         assert_eq!(acknowledgement.verified_at_unix, FINALIZED_AT_MS / 1_000);
     }
-
     #[test]
     fn material_outbox_corruption_and_substituted_receipts_fail_closed() {
         let root = TempDir::new().expect("material corruption root");
@@ -5350,7 +5118,6 @@ mod tests {
                 .checkpoint
                 .clone();
         }
-
         checkpoint
             .material_outbox
             .as_mut()
@@ -5367,7 +5134,6 @@ mod tests {
             ReputationIngestError::InvalidCheckpoint
         );
     }
-
     #[test]
     fn material_acknowledgement_checkpoint_binds_authoritative_finalized_time() {
         let verification_policy = trust_policy();
@@ -5389,7 +5155,6 @@ mod tests {
             .checkpoint
             .clone();
         drop(service);
-
         checkpoint
             .material_acknowledgement
             .as_mut()
@@ -5406,14 +5171,12 @@ mod tests {
             ReputationIngestError::InvalidCheckpoint
         );
     }
-
     #[test]
     fn material_ack_rejects_forged_revoked_duplicate_quorum_and_time_failures() {
         let mut base_policy = trust_policy();
         base_policy.valid_from_unix =
             FINALIZED_AT_MS / 1_000 - base_policy.max_snapshot_age_secs - 100;
         let (_root, service, delivery) = ready_material_service(&base_policy, 18);
-
         let forged = signed_material_result_with_signer(
             &delivery.material,
             "external-threshold-signer-1",
@@ -5425,7 +5188,6 @@ mod tests {
                 .expect_err("forged signature rejected"),
             ReputationIngestError::InvalidDeliveryReceipt
         );
-
         let mut duplicate = signed_material_result(&delivery.material);
         duplicate.signatures.push(duplicate.signatures[0].clone());
         assert_eq!(
@@ -5439,7 +5201,6 @@ mod tests {
                 .expect_err("duplicate signer rejected"),
             ReputationIngestError::InvalidDeliveryReceipt
         );
-
         let stale = signed_material_result_generated_at(
             &delivery.material,
             FINALIZED_AT_MS / 1_000 - base_policy.max_snapshot_age_secs - 1,
@@ -5466,7 +5227,6 @@ mod tests {
                 .expect("failed acknowledgements retain outbox")
                 .is_some()
         );
-
         let second_signer = ReputationTrustedSignerV1 {
             version: REPUTATION_TRUSTED_SIGNER_VERSION_V1,
             signer_id: "external-threshold-signer-2".to_owned(),
@@ -5474,7 +5234,6 @@ mod tests {
                 .verifying_key()
                 .to_bytes(),
         };
-
         let mut revoked_policy = trust_policy();
         revoked_policy.signers.push(second_signer.clone());
         revoked_policy.revoked_signer_ids = vec!["external-threshold-signer-1".to_owned()];
@@ -5492,7 +5251,6 @@ mod tests {
                 .expect_err("revoked signer rejected"),
             ReputationIngestError::InvalidDeliveryReceipt
         );
-
         let mut quorum_policy = trust_policy();
         quorum_policy.signers.push(second_signer);
         quorum_policy.min_signatures = 2;
@@ -5511,7 +5269,6 @@ mod tests {
             ReputationIngestError::InvalidDeliveryReceipt
         );
     }
-
     #[test]
     fn public_failures_are_payload_free() {
         let provider_id = provider(17);
@@ -5534,7 +5291,6 @@ mod tests {
             assert!(!debug.contains(&private_marker));
         }
     }
-
     #[test]
     fn checked_integer_paths_reject_overflow_without_wrapping() {
         let provider_id = provider(8);
@@ -5550,7 +5306,6 @@ mod tests {
             ReputationIngestError::ArithmeticOverflow
         );
         assert_eq!(accumulator.pdp_total, u64::MAX);
-
         let mut por = ProviderAccumulatorV1::new(provider_id);
         por.por_total = u64::MAX;
         assert_eq!(
@@ -5563,7 +5318,6 @@ mod tests {
             ReputationIngestError::ArithmeticOverflow
         );
         assert_eq!(por.por_total, u64::MAX);
-
         let mut token = ProviderAccumulatorV1::new(provider_id);
         token.token_observations = u64::MAX;
         assert_eq!(
@@ -5577,7 +5331,6 @@ mod tests {
             ReputationIngestError::ArithmeticOverflow
         );
         assert_eq!(token.token_observations, u64::MAX);
-
         let mut dispute = ProviderAccumulatorV1::new(provider_id);
         assert_eq!(
             dispute
@@ -5607,7 +5360,6 @@ mod tests {
             ReputationIngestError::ArithmeticOverflow
         );
     }
-
     #[test]
     fn event_cursor_constructors_remain_exact() {
         let proof = ProofOutcomeFinalizedEventCursorV1 {

@@ -1,5 +1,4 @@
 // Runtime/restart coverage for node-authoritative PoR projection replay.
-
 #[test]
 fn node_checkpoint_generation_rejects_pre_mutation_cursor_after_restart() {
     fn challenge_for(provider: u8, issued_at_offset: u64) -> PorChallengeV1 {
@@ -16,7 +15,6 @@ fn node_checkpoint_generation_rejects_pre_mutation_cursor_after_restart() {
         );
         challenge
     }
-
     let dir = tempdir().expect("temp dir");
     let config = sorafs_node::config::StorageConfig::builder()
         .enabled(true)
@@ -27,7 +25,6 @@ fn node_checkpoint_generation_rejects_pre_mutation_cursor_after_restart() {
         node.record_por_challenge_with_authority_update(&challenge)
             .expect("commit initial node-authoritative challenge");
     }
-
     let limits =
         PorStatusPageLimits::new(1, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1).expect("page limits");
     let coordinator = PorCoordinator::with_record_limit(64);
@@ -48,11 +45,9 @@ fn node_checkpoint_generation_rejects_pre_mutation_cursor_after_restart() {
         .next_cursor
         .expect("two statuses produce one continuation cursor");
     let issued_generation = first.snapshot_generation;
-
     node.record_por_challenge_with_authority_update(&challenge_for(0x93, 2))
         .expect("commit generation-advancing node mutation");
     drop(node);
-
     let restarted = sorafs_node::NodeHandle::new(config);
     let restored = restarted
         .por_status_authority_snapshot()

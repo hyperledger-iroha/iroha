@@ -1,6 +1,4 @@
 //! Reference SoraNet relay daemon entrypoint and CLI argument parsing.
-use std::path::PathBuf;
-
 use clap::Parser;
 use soranet_relay::{
     config::{ComplianceConfig, CongestionConfig, RelayConfig},
@@ -8,8 +6,8 @@ use soranet_relay::{
     error::RelayError,
     runtime::RelayRuntime,
 };
+use std::path::PathBuf;
 use tracing::info;
-
 #[derive(Parser, Debug)]
 #[command(
     name = "soranet-relay",
@@ -42,7 +40,6 @@ struct Args {
     #[arg(long, value_name = "PROFILE")]
     constant_rate_profile: Option<ConstantRateProfileName>,
 }
-
 #[tokio::main]
 async fn main() {
     if let Err(error) = try_main().await {
@@ -50,11 +47,9 @@ async fn main() {
         std::process::exit(1);
     }
 }
-
 async fn try_main() -> Result<(), RelayError> {
     let args = Args::parse();
     init_tracing(&args.log_level)?;
-
     let mut config = RelayConfig::load(&args.config)?;
     if let Some(limit) = args.max_circuits_per_client {
         let congestion = config
@@ -89,37 +84,29 @@ async fn try_main() -> Result<(), RelayError> {
     if let Some(profile) = args.constant_rate_profile {
         config.constant_rate_profile = profile;
     }
-
     let runtime = RelayRuntime::new(config)?;
-
     info!(
         mode = runtime.mode().as_label(),
         listen = runtime.listen(),
         "starting relay runtime"
     );
-
     let metrics = runtime.metrics();
     runtime.run().await?;
-
     let snapshot = metrics.snapshot();
     info!(
         success = snapshot.success,
         failure = snapshot.failure,
         "relay shutdown complete"
     );
-
     Ok(())
 }
-
 fn init_tracing(level: &str) -> Result<(), RelayError> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .or_else(|_| tracing_subscriber::EnvFilter::try_new(level))
         .map_err(|error| RelayError::Logging(error.to_string()))?;
-
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(false)
         .init();
-
     Ok(())
 }

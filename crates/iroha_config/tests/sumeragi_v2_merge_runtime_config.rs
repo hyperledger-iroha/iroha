@@ -1,17 +1,13 @@
 //! Validate explicit Sumeragi v2 merge-sidecar and signing-guard overrides.
-
-use std::{path::PathBuf, time::Duration};
-
 use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
 use iroha_config_base::{read::ConfigReader, toml::TomlSource};
-
+use std::{path::PathBuf, time::Duration};
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
     ConfigReader::new()
         .read_toml_with_extends(base_path)
         .expect("base config should load")
 }
-
 fn parse_actual_config(inline_toml: &str) -> Result<ActualConfig, String> {
     let table: toml::Table = inline_toml.parse().expect("inline TOML should parse");
     let user = base_reader()
@@ -20,7 +16,6 @@ fn parse_actual_config(inline_toml: &str) -> Result<ActualConfig, String> {
         .map_err(|error| format!("{error:?}"))?;
     user.parse().map_err(|error| format!("{error:?}"))
 }
-
 #[test]
 fn every_merge_runtime_override_reaches_the_actual_config() {
     let config = parse_actual_config(
@@ -46,7 +41,6 @@ merge_signing_guard_total_bytes = 18000000
     )
     .expect("valid explicit merge runtime overrides should parse");
     let limits = config.sumeragi.limits;
-
     assert_eq!(limits.merge_sidecar_inbound_session_capacity.get(), 11);
     assert_eq!(limits.merge_sidecar_inbound_sessions_per_peer.get(), 3);
     assert_eq!(
@@ -79,7 +73,6 @@ merge_signing_guard_total_bytes = 18000000
     assert_eq!(limits.merge_signing_guard_record_bytes.get(), 17_000_000);
     assert_eq!(limits.merge_signing_guard_total_bytes.get(), 18_000_000);
 }
-
 #[test]
 fn tight_valid_merge_runtime_geometry_is_admitted() {
     let inbound_bytes = defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_MIN;
@@ -112,7 +105,6 @@ merge_signing_guard_total_bytes = {total_bytes}
     ))
     .expect("every inclusive production minimum should form a valid runtime geometry");
     let limits = config.sumeragi.limits;
-
     assert_eq!(limits.merge_sidecar_inbound_session_capacity.get(), 2);
     assert_eq!(limits.merge_sidecar_inbound_sessions_per_peer.get(), 2);
     assert_eq!(

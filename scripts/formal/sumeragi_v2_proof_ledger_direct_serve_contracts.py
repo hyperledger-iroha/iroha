@@ -20,8 +20,8 @@ def _direct_serve_predecessor_production_source_fidelity_errors(
         "runner": base / "v2_runner.rs",
         "ordinary": base / "v2_runner" / "lifecycle_run_inner.rs",
         "pending": base / "v2_runner" / "lifecycle_pending_kura.rs",
-        "worker_cases": base / "v2_worker_io_and_selected_serve_cases_01_tests.rs",
-        "producer_cases": base / "v2_worker_selected_serve_cases_02_tests.rs",
+        "worker_cases": base / "tests" / "v2_worker_main_02.rs",
+        "producer_cases": base / "tests" / "v2_worker_main_03.rs",
         "runner_cases": base / "tests" / "v2_runner_unsealed_00.rs",
     }
     errors: list[str] = []
@@ -36,14 +36,15 @@ def _direct_serve_predecessor_production_source_fidelity_errors(
     sources = {
         role: path.read_text(encoding="utf-8") for role, path in paths.items()
     }
-    _reviewed_worker_path, reviewed_worker = _read_reviewed_rust_source(
-        repo_root,
-        paths["worker"].relative_to(repo_root).as_posix(),
-        errors,
-        "direct selected-Serve worker source",
-    )
-    if reviewed_worker:
-        sources["worker"] = reviewed_worker
+    for role in ("runtime", "effects", "worker", "runner"):
+        _reviewed_path, reviewed_source = _read_reviewed_rust_source(
+            repo_root,
+            paths[role].relative_to(repo_root).as_posix(),
+            errors,
+            f"direct selected-Serve {role} source",
+        )
+        if reviewed_source:
+            sources[role] = reviewed_source
 
     production_source = "\n".join(
         sources[role]
@@ -1467,6 +1468,23 @@ def _direct_serve_predecessor_production_source_fidelity_errors(
         ):
             _require_rust_token_sequence(
                 paths["worker"], item, sequence, f"{description} {claim}", errors
+            )
+        if name == "try_send_as":
+            _require_rust_token_sequence(
+                paths["worker"],
+                item,
+                """
+let rolled_back_shutdown = matches!(&command, V2IoCommand::Shutdown)
+    && state.serve_barrier.is_none()
+    && state.serve_ingress_reservation.is_none()
+    && state.serve_barrier_predecessors.is_empty()
+    && state.pending_serve_requests.is_empty();
+if exact_target_active
+    && exact_predecessor_ordinal.is_none()
+    && !rolled_back_shutdown
+""",
+                "ordinary worker command admission must let only an exact rolled-back shutdown bypass a dormant Serve waiter",
+                errors,
             )
 
     ordinary = _require_rust_item(

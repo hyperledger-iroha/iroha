@@ -1,15 +1,12 @@
 //! Tests for nonpanic, structured-error Norito decode paths.
 //! These validate that malformed inputs return errors instead of panicking.
-
-use std::num::NonZeroU32;
-
 use norito::{
     Error,
     core::{self, Header},
 };
 #[allow(unused_imports)]
 use norito::{NoritoSerialize, decode_from_bytes, to_bytes};
-
+use std::num::NonZeroU32;
 fn rewrite_checksum(bytes: &mut [u8]) {
     // Header layout: magic(4) maj(1) min(1) schema(16) comp(1) len(8) crc(8) flags(1) = 40 bytes
     const HDR: usize = 40;
@@ -22,7 +19,6 @@ fn rewrite_checksum(bytes: &mut [u8]) {
     let off = 4 + 1 + 1 + 16 + 1 + 8;
     bytes[off..off + 8].copy_from_slice(&crc);
 }
-
 #[test]
 fn decode_string_invalid_utf8_yields_error() {
     let ok = String::from("A");
@@ -39,14 +35,12 @@ fn decode_string_invalid_utf8_yields_error() {
     // leave length as 1, corrupt the first content byte following the length header
     bytes[hdr_len + lhdr] = 0xFF;
     rewrite_checksum(&mut bytes);
-
     let err = decode_from_bytes::<String>(&bytes).expect_err("invalid utf8 should error");
     match err {
         Error::InvalidUtf8 => {}
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn decode_option_invalid_tag_yields_error() {
     let v: Option<u32> = None;
@@ -55,14 +49,12 @@ fn decode_option_invalid_tag_yields_error() {
     let hdr_len = Header::SIZE;
     bytes[hdr_len] = 2;
     rewrite_checksum(&mut bytes);
-
     let err = decode_from_bytes::<Option<u32>>(&bytes).expect_err("invalid tag should error");
     match err {
         Error::InvalidTag { .. } => {}
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn decode_nonzero_zero_yields_error() {
     let nz = NonZeroU32::new(1).unwrap();
@@ -73,7 +65,6 @@ fn decode_nonzero_zero_yields_error() {
         *b = 0;
     }
     rewrite_checksum(&mut bytes);
-
     let err = decode_from_bytes::<NonZeroU32>(&bytes).expect_err("zero nonzero should error");
     match err {
         Error::InvalidNonZero => {}

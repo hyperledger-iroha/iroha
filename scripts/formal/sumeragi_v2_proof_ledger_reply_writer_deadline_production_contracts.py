@@ -147,7 +147,7 @@ _REPLY_WRITER_DEADLINE_WORKER_ITEM_SHA256 = {
 
 _REPLY_WRITER_DEADLINE_WORKER_TEST_SHA256 = {
     "ordinary_reply_timeout_grows_only_its_source_attempt_while_sibling_progresses": (
-        "a15228b661ee53543cadcc0f6dd6f6b02f6bde59816a33ff83d78e19d9e312bc"
+        "9921c8135a2cae120a03e930d644f10ace06d9956d12eb64fad2c70ac6e9d027"
     ),
     "closed_flush_on_delivery_active_unwritable_route_parks_without_cursor_advance": (
         "0f3fc3fc6668817adf3cf4092b6143fabe9a96dce60bf406c5d0d751c70cff7d"
@@ -221,6 +221,15 @@ def _reply_writer_deadline_production_source_fidelity_errors(
             sources[path] = ""
         else:
             sources[path] = path.read_text(encoding="utf-8")
+
+    _loaded_worker_path, reviewed_worker_source = _read_reviewed_rust_source(
+        repo_root,
+        worker_path.relative_to(repo_root).as_posix(),
+        errors,
+        "exact reply adaptive-attempt worker source",
+    )
+    if reviewed_worker_source:
+        sources[worker_path] = reviewed_worker_source
 
     token_cache = {
         path: rust_code_tokens(source) for path, source in sources.items()

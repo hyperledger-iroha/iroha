@@ -19,7 +19,6 @@ fn parse_trigger_decl_with_structured_data_filters_for_core_families() {
             asset_definition.parse().expect("asset definition");
         iroha_data_model::asset::AssetId::new(definition_id, account_id).canonical_literal()
     };
-
     let cases = vec![
         (
             TriggerDataFamily::Peer,
@@ -72,7 +71,6 @@ fn parse_trigger_decl_with_structured_data_filters_for_core_families() {
         (TriggerDataFamily::Configuration, "changed", vec![]),
         (TriggerDataFamily::Executor, "upgraded", vec![]),
     ];
-
     for (family, event, expected_matchers) in cases {
         let family_literal = match family {
             TriggerDataFamily::Peer => "peer",
@@ -124,7 +122,6 @@ fn parse_trigger_decl_with_structured_data_filters_for_core_families() {
         assert_eq!(actual_matchers, expected_matchers);
     }
 }
-
 #[test]
 fn parse_trigger_decl_with_pipeline_filter() {
     for (source_filter, expected_filter) in [

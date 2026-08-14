@@ -5,7 +5,6 @@ enum AutonomousLifecycleBootstrapCompletionFence<'queue> {
     #[cfg(test)]
     Test,
 }
-
 /// Exact bootstrap revalidation used only by custody-fenced completion.
 #[must_use = "the bootstrap completion revalidation must be handled"]
 struct AutonomousLifecycleBootstrapCompletionRevalidation {
@@ -14,7 +13,6 @@ struct AutonomousLifecycleBootstrapCompletionRevalidation {
     /// Whether the exact application receipt was observed during this refresh.
     receipt_terminal: bool,
 }
-
 /// Authorization mode for the low-level autonomous payload writer.
 #[derive(Clone, Copy)]
 enum LaneExecutablePayloadPersistenceMode<'bootstrap> {
@@ -25,20 +23,17 @@ enum LaneExecutablePayloadPersistenceMode<'bootstrap> {
     /// Live so canonical terminal reconciliation retains a complete lifecycle unit.
     SignedBootstrap(&'bootstrap AutonomousLifecycleBootstrapRecoveryAuthority),
 }
-
 #[must_use = "the authenticated bootstrap permit must be completed or deliberately dropped"]
 pub(crate) struct AutonomousLifecycleBootstrapCompletionPermit<'queue> {
     authority: AutonomousLifecycleBootstrapRecoveryAuthority,
     fence: AutonomousLifecycleBootstrapCompletionFence<'queue>,
 }
-
 /// Exact post-bootstrap cursor observation; a newer process must take over through Crash/Recover.
 #[must_use = "the post-bootstrap lifecycle lease must be consumed or deliberately dropped"]
 pub(crate) struct AutonomousLifecycleBootstrapCompletion {
     cursor_read: AutonomousLifecycleCursorRead,
     takeover_required: bool,
 }
-
 /// Result of completing a custody-fenced lifecycle bootstrap.
 #[must_use = "the bootstrap completion outcome must be handled"]
 pub(crate) enum AutonomousLifecycleBootstrapCompletionOutcome {
@@ -49,14 +44,12 @@ pub(crate) enum AutonomousLifecycleBootstrapCompletionOutcome {
     /// re-entering volatile consensus or releasing Queue ownership.
     AlreadyTerminal,
 }
-
 impl AutonomousLifecycleBootstrapCompletion {
     /// Whether the pre-signed historical Live owner must be taken over by this process generation.
     #[must_use]
     pub(crate) const fn takeover_required(&self) -> bool {
         self.takeover_required
     }
-
     /// Borrow the exact Live cursor durably read after bootstrap deletion.
     #[must_use]
     pub(crate) fn cursor(&self) -> &AutonomousLifecycleCursorV2 {
@@ -64,21 +57,18 @@ impl AutonomousLifecycleBootstrapCompletion {
             .cursor()
             .expect("completed bootstrap always returns its exact Live cursor")
     }
-
     /// Consume the completion into the ordinary move-only cursor read and CAS lease.
     #[must_use]
     pub(crate) fn into_cursor_read(self) -> AutonomousLifecycleCursorRead {
         self.cursor_read
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AutonomousLaneBlockViewStateReadMode {
     MainOnly,
     LatestReadOnly,
     Recover { pending_canonical_bytes: u64 },
 }
-
 /// Result of a lane auxiliary-artifact persistence attempt serialized with
 /// application-receipt publication and merge-frontier compaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,7 +79,6 @@ pub enum LaneBlockAuxiliaryPersistenceOutcome {
     /// payload/input state is terminal and must not be recreated.
     AlreadyTerminal,
 }
-
 /// Result of appending one authenticated autonomous NewView certificate while
 /// serialized with exact lane-application receipt publication.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,7 +89,6 @@ pub(crate) enum LaneBlockNewViewPersistenceOutcome {
     /// later view evidence may be written for its retained lifecycle attempt.
     AlreadyTerminal,
 }
-
 #[derive(Clone, Debug)]
 struct AutonomousLaneAttemptInventoryBudget {
     attempts_at_height: usize,
@@ -110,7 +98,6 @@ struct AutonomousLaneAttemptInventoryBudget {
     conceptual_files: usize,
     conceptual_bytes: u64,
 }
-
 impl AutonomousLaneAttemptInventoryBudget {
     fn empty() -> Self {
         Self {
@@ -122,18 +109,15 @@ impl AutonomousLaneAttemptInventoryBudget {
             conceptual_bytes: 0,
         }
     }
-
     fn has_reserved_terminal_outcome(&self, identity: (u64, u64)) -> bool {
         self.lifecycle_identities.contains(&identity)
             && !self.terminal_outcome_identities.contains(&identity)
     }
-
     fn needs_terminal_reservation_for_new_identity(&self, identity: (u64, u64)) -> bool {
         !self.lifecycle_identities.contains(&identity)
             && !self.terminal_outcome_identities.contains(&identity)
     }
 }
-
 struct AutonomousLifecycleTerminalPendingPublicationPlan {
     entry: LaneConfigEntry,
     identity: (u64, u64),
@@ -141,7 +125,6 @@ struct AutonomousLifecycleTerminalPendingPublicationPlan {
     outcome: AutonomousLifecycleTerminalOutcomeV1,
     pending_bytes: Option<Vec<u8>>,
 }
-
 impl Kura {
     fn active_autonomous_lifecycle_attempt_inventory_for_process_record(
         &self,
@@ -636,7 +619,6 @@ impl Kura {
         self.ensure_autonomous_lifecycle_process_generation_record_unchanged(process_record)?;
         Ok(inventory)
     }
-
     fn autonomous_two_height_coordinates(name: &str, prefix: &str) -> Option<(u64, u64)> {
         let raw = name
             .strip_prefix(prefix)?
@@ -650,19 +632,15 @@ impl Kura {
             && name == format!("{prefix}_{lane_block_height:020}_{proposal_height:020}.norito"))
         .then_some((lane_block_height, proposal_height))
     }
-
     fn autonomous_lane_block_attempt_coordinates(name: &str) -> Option<(u64, u64)> {
         Self::autonomous_two_height_coordinates(name, AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX)
     }
-
     fn autonomous_lifecycle_cursor_coordinates(name: &str) -> Option<(u64, u64)> {
         Self::autonomous_two_height_coordinates(name, AUTONOMOUS_LIFECYCLE_CURSOR_PREFIX)
     }
-
     fn autonomous_lifecycle_bootstrap_coordinates(name: &str) -> Option<(u64, u64)> {
         Self::autonomous_two_height_coordinates(name, AUTONOMOUS_LIFECYCLE_BOOTSTRAP_PREFIX)
     }
-
     fn autonomous_lane_block_attempt_view_temp_coordinates(name: &str) -> Option<(u64, u64)> {
         let stable_name = name.strip_suffix(".tmp")?;
         Self::autonomous_two_height_coordinates(
@@ -670,11 +648,9 @@ impl Kura {
             AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
         )
     }
-
     fn autonomous_lifecycle_terminal_outcome_coordinates(name: &str) -> Option<(u64, u64)> {
         Self::autonomous_two_height_coordinates(name, AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_PREFIX)
     }
-
     fn autonomous_lifecycle_terminal_outcome_path_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -685,7 +661,6 @@ impl Kura {
             "{AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_PREFIX}_{lane_block_height:020}_{proposal_height:020}.norito"
         ))
     }
-
     #[cfg(test)]
     pub(crate) fn autonomous_lifecycle_terminal_outcome_path_for_test(
         &self,
@@ -701,7 +676,6 @@ impl Kura {
             proposal_height,
         ))
     }
-
     fn decode_autonomous_lifecycle_terminal_outcome(
         path: &Path,
         bytes: &[u8],
@@ -748,7 +722,6 @@ impl Kura {
         }
         Ok(outcome)
     }
-
     fn validate_autonomous_lifecycle_terminal_outcome_budget(
         related_files: usize,
         related_bytes: u64,
@@ -799,7 +772,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn autonomous_lifecycle_terminal_source_from_merge_receipt(
         receipt: &LaneBlockApplicationReceiptArtifact,
     ) -> std::result::Result<AutonomousLifecycleTerminalOutcomeSourceV1, &'static str> {
@@ -828,7 +800,6 @@ impl Kura {
         source.validate_structure()?;
         Ok(source)
     }
-
     fn autonomous_lifecycle_terminal_source_matches_canonical_carrier_locked(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -846,7 +817,6 @@ impl Kura {
             &receipt_index_path,
         )
     }
-
     /// Revalidate a canonical terminal source against both its committed
     /// merge carrier and the exact durability-attested receipt pair at the
     /// caller-selected active or archived namespace.
@@ -965,7 +935,6 @@ impl Kura {
         )?;
         Ok(expected)
     }
-
     fn require_exact_autonomous_lifecycle_terminal_application_receipt_locked(
         &self,
         expected: &LaneBlockApplicationReceiptArtifact,
@@ -995,7 +964,6 @@ impl Kura {
         }
         Ok(())
     }
-
     #[cfg(test)]
     fn require_exact_autonomous_lifecycle_terminal_application_receipt_for_tests(
         &self,
@@ -1014,7 +982,6 @@ impl Kura {
             receipt_index_path,
         )
     }
-
     fn autonomous_lifecycle_terminal_source_matches_release_locked(
         &self,
         pending_canonical_bytes: Option<u64>,
@@ -1062,7 +1029,6 @@ impl Kura {
             )
         }
     }
-
     fn read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -1106,7 +1072,6 @@ impl Kura {
             .map_err(|message| Self::invalid_lane_artifact_error(path, message))?;
         Ok(cursor)
     }
-
     fn prepare_autonomous_lifecycle_terminal_outcome_pending_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -1218,7 +1183,6 @@ impl Kura {
             pending_bytes: Some(bytes),
         })
     }
-
     /// Validate the complete terminal Pending write set, including every lane
     /// namespace reservation and the exact configured Kura disk peak, before
     /// the first file is materialized.
@@ -1306,7 +1270,6 @@ impl Kura {
         }
         Ok(())
     }
-
     #[cfg(test)]
     fn autonomous_lifecycle_terminal_reservation_budget_for_tests(
         &self,
@@ -1326,7 +1289,6 @@ impl Kura {
             inventory.conceptual_bytes,
         ))
     }
-
     fn publish_preflighted_autonomous_lifecycle_terminal_outcome_pending_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -1354,7 +1316,6 @@ impl Kura {
         )?;
         Ok(())
     }
-
     fn persist_autonomous_lifecycle_terminal_outcome_pending_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -1374,7 +1335,6 @@ impl Kura {
         )?;
         Ok(plan.outcome)
     }
-
     /// Materialize and revalidate the complete source-outcome set for one
     /// canonical merge carrier while all Kura ordering locks are held.
     ///
@@ -1436,7 +1396,6 @@ impl Kura {
             carrier.block_height,
             carrier.block_hash,
         )?;
-
         let mut queue_authorizations = Vec::new();
         queue_authorizations.try_reserve_exact(batch.lanes.len())?;
         let mut complete_reservation_groups = Vec::new();
@@ -1568,7 +1527,6 @@ impl Kura {
             expected_network_id,
         ))
     }
-
     /// Persist and source-authenticate the complete durable source-outcome set
     /// for an exact committed merge entry.
     ///
@@ -1618,7 +1576,6 @@ impl Kura {
             },
         ))
     }
-
     /// Reconstruct a complete canonical carrier source-outcome set from one
     /// exact committed reservation group when startup has no outcome-file seed.
     ///
@@ -1675,7 +1632,6 @@ impl Kura {
                     "canonical lifecycle startup reconstruction lost its merge entry",
                 )
             })?;
-
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
@@ -1711,7 +1667,6 @@ impl Kura {
             },
         )
     }
-
     /// Persist a release Pending outcome after exact claims are Released and
     /// before Queue publishes FIFO ownership and forgets its barrier.
     pub(crate) fn persist_autonomous_lifecycle_release_terminal_outcome_pending(
@@ -1791,7 +1746,6 @@ impl Kura {
             source_outcome_hash: outcome.outcome_hash,
         })
     }
-
     /// Directly prove that every caller-expected terminal outcome still exists
     /// at its exact durable path, revalidates against its payload/cursor/source,
     /// and is either Pending or Complete.
@@ -1824,7 +1778,6 @@ impl Kura {
         let mut seen_entrypoint_hashes = BTreeSet::new();
         let mut preflighted = Vec::new();
         preflighted.try_reserve_exact(expected_groups.len())?;
-
         for expected in expected_groups {
             let expected_group = expected.binding();
             let expected_keys = expected.ordered_keys();
@@ -1858,7 +1811,6 @@ impl Kura {
                     ));
                 }
             }
-
             let identity = expected_group.identity;
             let entry = self.lane_storage_entry(identity.lane_id)?;
             let (active_incarnation, activation_height) =
@@ -1880,7 +1832,6 @@ impl Kura {
             }
             preflighted.push((expected, expected_group, entry, path));
         }
-
         let _sidecar_guard = self.sidecar_lock.lock();
         let mut verified = Vec::new();
         verified.try_reserve_exact(preflighted.len())?;
@@ -1991,7 +1942,6 @@ impl Kura {
         }
         Ok(verified)
     }
-
     /// Return every source-revalidated Pending outcome across active lane
     /// segments in deterministic carrier/route order.
     ///
@@ -2025,7 +1975,6 @@ impl Kura {
         let mut validated_release_groups = Vec::new();
         let mut observed_groups = BTreeMap::new();
         let mut outcomes_seen = 0_usize;
-
         for entry in entries {
             let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
             let directory_entries = match std::fs::read_dir(&directory) {
@@ -2090,7 +2039,6 @@ impl Kura {
                     ));
                 }
             }
-
             for ((lane_block_height, proposal_height), (path, outcome)) in outcomes {
                 let binding = outcome.binding();
                 let (active_incarnation, activation_height) =
@@ -2331,7 +2279,6 @@ impl Kura {
         recovered.extend(release_recoveries);
         Ok(recovered)
     }
-
     fn complete_autonomous_lifecycle_terminal_outcome(
         &self,
         reservation_group: LaneQueueReservationGroupBindingV1,
@@ -2508,7 +2455,6 @@ impl Kura {
         }
         Ok(())
     }
-
     /// Join canonical Queue terminal ownership to the exact current durable
     /// merge-carrier source outcome.
     pub(crate) fn complete_autonomous_lifecycle_canonical_terminal_outcome(
@@ -2529,7 +2475,6 @@ impl Kura {
             expected_source_outcome_hash,
         )
     }
-
     /// Join restored-FIFO Queue terminal ownership to the exact current
     /// retired-release source outcome.
     pub(crate) fn complete_autonomous_lifecycle_release_terminal_outcome(
@@ -2550,7 +2495,6 @@ impl Kura {
             expected_source_outcome_hash,
         )
     }
-
     /// Decode one retained terminal outcome while auditing archived lifecycle evidence.
     fn audit_autonomous_lifecycle_terminal_outcome_locked(
         &self,
@@ -2572,7 +2516,6 @@ impl Kura {
         let _ = Self::decode_autonomous_lifecycle_terminal_outcome(path, &bytes)?;
         Ok(())
     }
-
     /// Collect one startup terminal outcome, if `name` belongs to that namespace.
     fn collect_autonomous_lifecycle_terminal_outcome_for_startup_locked(
         &self,
@@ -2622,7 +2565,6 @@ impl Kura {
         }
         Ok(true)
     }
-
     /// Revalidate every collected startup outcome against its payload, cursor, and source.
     fn validate_autonomous_lifecycle_terminal_outcomes_on_startup_locked(
         &self,
@@ -2684,7 +2626,6 @@ impl Kura {
         Ok(())
     }
 }
-
 impl Kura {
     fn validate_autonomous_lifecycle_bootstrap_authority_identity_locked(
         &self,
@@ -2721,7 +2662,6 @@ impl Kura {
         }
         Ok(())
     }
-
     fn revalidate_autonomous_lifecycle_bootstrap_for_completion(
         &self,
         authority: AutonomousLifecycleBootstrapRecoveryAuthority,
@@ -2790,7 +2730,6 @@ impl Kura {
             receipt_terminal: already_terminal,
         })
     }
-
     fn publish_autonomous_lifecycle_bootstrap_cursor_stage(
         &self,
         authority: &AutonomousLifecycleBootstrapRecoveryAuthority,

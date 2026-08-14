@@ -5,18 +5,6 @@
 //! catch regression where the clap command tree fails to build or the
 //! binary cannot launch in automated environments.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
-use std::{
-    ffi::OsStr,
-    fs,
-    io::{self, Read},
-    path::{Path, PathBuf},
-    process::{Command, ExitStatus, Output, Stdio},
-    sync::LazyLock,
-    thread,
-    time::{Duration, Instant},
-};
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake3::hash;
 use iroha::{
@@ -47,10 +35,19 @@ use norito::{
     to_bytes,
 };
 use sorafs_orchestrator::treasury::{LedgerTransferRecord, TransferKind};
+use std::{
+    ffi::OsStr,
+    fs,
+    io::{self, Read},
+    path::{Path, PathBuf},
+    process::{Command, ExitStatus, Output, Stdio},
+    sync::LazyLock,
+    thread,
+    time::{Duration, Instant},
+};
 fn cli_binary() -> &'static str {
     env!("CARGO_BIN_EXE_iroha")
 }
-
 const ALICE_PUBLIC_KEY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const ALICE_PRIVATE_KEY: &str =
@@ -63,14 +60,12 @@ static BOB_ACCOUNT_LITERAL: LazyLock<String> =
     LazyLock::new(|| account_literal_from_public_key(BOB_PUBLIC_KEY));
 const SAMPLE_BUDGET_APPROVAL_ID: &str =
     "4f1a7b86d6c16245d9b5c0e9bd4732a6d01356f3172bbfa5ef5d9cde8790f221";
-
 fn xor_asset_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
         "xor".parse().unwrap(),
     )
 }
-
 fn xor_quantity_from_value(value: &Value) -> XorQuantity {
     let raw = value.as_str().expect("XOR quantity must be a JSON string");
     let quantity = raw.parse::<XorQuantity>().expect("canonical XOR quantity");
@@ -81,7 +76,6 @@ fn xor_quantity_from_value(value: &Value) -> XorQuantity {
     );
     quantity
 }
-
 fn assert_quantity_xor(amount: &Quantity, expected: &str) {
     let expected = expected
         .parse::<XorQuantity>()
@@ -92,7 +86,6 @@ fn assert_quantity_xor(amount: &Quantity, expected: &str) {
         "XOR quantity mismatch for amount {amount}"
     );
 }
-
 fn sample_reward_config_json() -> Value {
     let bond_asset_id = xor_asset_id().to_string();
     norito::json!({
@@ -112,16 +105,13 @@ fn sample_reward_config_json() -> Value {
         "metrics_log_path": null
     })
 }
-
 fn fixture_key_pair_from_seed(seed: Vec<u8>) -> KeyPair {
     KeyPair::try_from_seed(seed, Algorithm::Ed25519)
         .expect("fixture seed must derive a valid keypair")
 }
-
 fn fixture_key_pair(seed: u8) -> KeyPair {
     fixture_key_pair_from_seed(vec![seed; 32])
 }
-
 fn account_id(name: &str) -> AccountId {
     let digest = hash(name.as_bytes());
     let mut seed = digest.as_bytes().to_vec();
@@ -129,40 +119,32 @@ fn account_id(name: &str) -> AccountId {
     let key_pair = fixture_key_pair_from_seed(seed);
     AccountId::new(key_pair.public_key().clone())
 }
-
 fn account_literal_from_public_key(public_key: &str) -> String {
     let public_key = public_key.parse().expect("public key");
     AccountId::new(public_key).to_string()
 }
-
 fn alice_account_literal() -> &'static str {
     ALICE_ACCOUNT_LITERAL.as_str()
 }
-
 fn bob_account_literal() -> &'static str {
     BOB_ACCOUNT_LITERAL.as_str()
 }
-
 fn account_literal(account: &AccountId) -> String {
     account.to_string()
 }
-
 fn account_literal_for(name: &str) -> String {
     let account = account_id(name);
     account_literal(&account)
 }
-
 fn parse_account_literal(literal: &str) -> AccountId {
     AccountId::parse_encoded(literal)
         .expect("account literal should parse as encoded account id")
         .into_account_id()
 }
-
 fn account_id_for_domain(_label: &str, seed: u8) -> AccountId {
     let key_pair = fixture_key_pair(seed);
     AccountId::new(key_pair.public_key().clone())
 }
-
 #[test]
 fn fixture_key_pair_uses_checked_seed_derivation() {
     assert_eq!(fixture_key_pair(0x11).algorithm(), Algorithm::Ed25519);
@@ -171,7 +153,6 @@ fn fixture_key_pair_uses_checked_seed_derivation() {
         "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
     );
 }
-
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -179,7 +160,6 @@ fn workspace_root() -> PathBuf {
         .map(Path::to_path_buf)
         .expect("workspace root")
 }
-
 fn sample_metrics() -> RelayEpochMetricsV1 {
     RelayEpochMetricsV1 {
         relay_id: [0x11; 32],
@@ -194,7 +174,6 @@ fn sample_metrics() -> RelayEpochMetricsV1 {
         metadata: Metadata::default(),
     }
 }
-
 fn sample_bond_entry() -> RelayBondLedgerEntryV1 {
     RelayBondLedgerEntryV1 {
         relay_id: [0x11; 32],
@@ -204,13 +183,11 @@ fn sample_bond_entry() -> RelayBondLedgerEntryV1 {
         exit_capable: true,
     }
 }
-
 #[derive(Debug, NoritoSerialize)]
 struct TestLedgerExport {
     version: u16,
     transfers: Vec<LedgerTransferRecord>,
 }
-
 fn encode_ledger_export(export: &TestLedgerExport) -> Vec<u8> {
     const SCHEMA_OFFSET: usize = 4 + 1 + 1;
     const SCHEMA_LEN: usize = 16;
@@ -219,18 +196,15 @@ fn encode_ledger_export(export: &TestLedgerExport) -> Vec<u8> {
     bytes[SCHEMA_OFFSET..SCHEMA_OFFSET + SCHEMA_LEN].copy_from_slice(&schema);
     bytes
 }
-
 fn parse_instruction_stdout(stdout: &str) -> Vec<InstructionBox> {
     norito::json::from_str(stdout.trim()).expect("instruction output JSON")
 }
-
 fn repo_instruction(instruction: &InstructionBox) -> &RepoInstructionBox {
     instruction
         .as_any()
         .downcast_ref::<RepoInstructionBox>()
         .expect("repo instruction payload")
 }
-
 fn transfer_parts(instruction: &InstructionBox) -> (&AssetId, &Quantity, &AccountId) {
     let transfer_box = instruction
         .as_any()
@@ -241,14 +215,12 @@ fn transfer_parts(instruction: &InstructionBox) -> (&AssetId, &Quantity, &Accoun
         _ => panic!("expected asset transfer"),
     }
 }
-
 fn write_reward_config_file(dir: &torii_mock_support::TempDir) -> std::path::PathBuf {
     let config_path = dir.path().join("reward_config.json");
     let bytes = norito::json::to_vec(&sample_reward_config_json()).expect("encode config");
     fs::write(&config_path, bytes).expect("write config");
     config_path
 }
-
 #[test]
 fn incentives_init_fails_without_budget_id() {
     let temp_dir = torii_mock_support::TempDir::new("incentives_missing_budget").expect("temp dir");
@@ -260,7 +232,6 @@ fn incentives_init_fails_without_budget_id() {
     let bytes = norito::json::to_vec(&config).expect("encode config");
     fs::write(&config_path, bytes).expect("write config");
     let state_path = state_path(&temp_dir, "payout_state.json");
-
     let output = command()
         .args([
             "app",
@@ -287,7 +258,6 @@ fn incentives_init_fails_without_budget_id() {
         "stderr should mention missing budget_approval_id, got: {stderr}"
     );
 }
-
 fn write_metrics_file(
     dir: &torii_mock_support::TempDir,
     metrics: &RelayEpochMetricsV1,
@@ -298,7 +268,6 @@ fn write_metrics_file(
     fs::write(&path, bytes).expect("write metrics");
     path
 }
-
 fn write_bond_file(
     dir: &torii_mock_support::TempDir,
     bond: &RelayBondLedgerEntryV1,
@@ -308,7 +277,6 @@ fn write_bond_file(
     fs::write(&path, bytes).expect("write bond");
     path
 }
-
 fn write_metrics_snapshot(dir: &Path, metrics: &RelayEpochMetricsV1, suffix: &str) -> PathBuf {
     let relay_hex = hex::encode(metrics.relay_id);
     let file_name = format!("relay-{}-epoch-{}-{}.to", relay_hex, metrics.epoch, suffix);
@@ -317,10 +285,8 @@ fn write_metrics_snapshot(dir: &Path, metrics: &RelayEpochMetricsV1, suffix: &st
     fs::write(&path, bytes).expect("write metrics snapshot");
     path
 }
-
 fn proposal_id_hex(contract_address: &str, code: &[u8; 32], abi: &[u8; 32]) -> String {
     use iroha_crypto::blake2::{Blake2b512, digest::Digest as _};
-
     let contract_address_len =
         u32::try_from(contract_address.len()).expect("contract address length fits into u32");
     let mut input = Vec::with_capacity(
@@ -338,7 +304,6 @@ fn proposal_id_hex(contract_address: &str, code: &[u8; 32], abi: &[u8; 32]) -> S
     let digest = Blake2b512::digest(&input);
     hex::encode(&digest[..32])
 }
-
 fn write_daemon_config(
     dir: &torii_mock_support::TempDir,
     relay_hex: &str,
@@ -366,31 +331,25 @@ fn write_daemon_config(
     fs::write(&config_path, bytes).expect("write daemon config");
     config_path
 }
-
 fn state_path(dir: &torii_mock_support::TempDir, name: &str) -> std::path::PathBuf {
     dir.path().join(name)
 }
-
 fn read_state(path: &std::path::Path) -> Value {
     let bytes = fs::read(path).expect("read incentives state");
     norito::json::from_slice(&bytes).expect("decode incentives state")
 }
-
 fn settlement_instruction(instruction: &InstructionBox) -> &SettlementInstructionBox {
     instruction
         .as_any()
         .downcast_ref::<SettlementInstructionBox>()
         .expect("settlement instruction payload")
 }
-
 const CLI_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const CLI_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(10);
-
 struct TestCommand {
     inner: Command,
     timeout: Duration,
 }
-
 impl TestCommand {
     fn new(program: impl AsRef<OsStr>) -> Self {
         Self {
@@ -398,12 +357,10 @@ impl TestCommand {
             timeout: CLI_COMMAND_TIMEOUT,
         }
     }
-
     fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
         self.inner.arg(arg);
         self
     }
-
     fn args<I, S>(&mut self, args: I) -> &mut Self
     where
         I: IntoIterator<Item = S>,
@@ -412,17 +369,14 @@ impl TestCommand {
         self.inner.args(args);
         self
     }
-
     fn current_dir(&mut self, dir: impl AsRef<Path>) -> &mut Self {
         self.inner.current_dir(dir);
         self
     }
-
     fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
         self.inner.env(key, value);
         self
     }
-
     fn output(&mut self) -> io::Result<Output> {
         self.inner
             .stdin(Stdio::null())
@@ -438,14 +392,12 @@ impl TestCommand {
             let _ = join_pipe(stderr);
             return Err(command_timeout_error(&self.inner, self.timeout));
         };
-
         Ok(Output {
             status,
             stdout: join_pipe(stdout),
             stderr: join_pipe(stderr),
         })
     }
-
     fn status(&mut self) -> io::Result<ExitStatus> {
         self.inner.stdin(Stdio::null());
         let mut child = self.inner.spawn()?;
@@ -457,7 +409,6 @@ impl TestCommand {
         Ok(status)
     }
 }
-
 fn read_pipe<R>(mut pipe: R) -> thread::JoinHandle<Vec<u8>>
 where
     R: Read + Send + 'static,
@@ -468,13 +419,11 @@ where
         bytes
     })
 }
-
 fn join_pipe(handle: Option<thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
     handle
         .and_then(|handle| handle.join().ok())
         .unwrap_or_default()
 }
-
 fn wait_for_exit(
     child: &mut std::process::Child,
     timeout: Duration,
@@ -491,14 +440,12 @@ fn wait_for_exit(
         thread::sleep(CLI_COMMAND_POLL_INTERVAL.min(timeout - elapsed));
     }
 }
-
 fn command_timeout_error(command: &Command, timeout: Duration) -> io::Error {
     io::Error::new(
         io::ErrorKind::TimedOut,
         format!("command {command:?} timed out after {timeout:?}"),
     )
 }
-
 fn command() -> TestCommand {
     let mut cmd = TestCommand::new(cli_binary());
     // Disable ANSI color codes so the assertions can match plain text.
@@ -506,15 +453,12 @@ fn command() -> TestCommand {
     cmd.env("CLICOLOR", "0");
     cmd
 }
-
 #[test]
 fn soracles_aggregate_output_emits_instruction_payload() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("soracles_aggregate").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
-
     let request_hash = CryptoHash::new(b"soracles-cli-smoke-request");
     let evidence_hash = CryptoHash::new(b"soracles-cli-smoke-evidence");
     let output = command()
@@ -542,7 +486,6 @@ fn soracles_aggregate_output_emits_instruction_payload() {
         "soracles aggregate --output failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     let instructions = parse_instruction_stdout(&stdout);
     assert_eq!(instructions.len(), 1);
@@ -556,21 +499,18 @@ fn soracles_aggregate_output_emits_instruction_payload() {
     assert_eq!(aggregate.request_hash, request_hash);
     assert_eq!(aggregate.evidence_hashes, vec![evidence_hash]);
 }
-
 #[test]
 fn help_displays_top_level_usage() {
     let output = command()
         .arg("--help")
         .output()
         .expect("failed to execute iroha --help");
-
     assert!(
         output.status.success(),
         "expected --help to succeed, got status {:?} with stderr {}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("USAGE") || stdout.contains("Usage"),
@@ -581,21 +521,18 @@ fn help_displays_top_level_usage() {
         "unexpected help synopsis: {stdout}"
     );
 }
-
 #[test]
 fn version_matches_package_metadata() {
     let output = command()
         .arg("--version")
         .output()
         .expect("failed to execute iroha --version");
-
     assert!(
         output.status.success(),
         "expected --version to succeed, got status {:?} with stderr {}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     let expected_version = env!("CARGO_PKG_VERSION");
     assert!(
@@ -603,13 +540,11 @@ fn version_matches_package_metadata() {
         "version output `{stdout}` did not contain crate version {expected_version}"
     );
 }
-
 fn expect_subcommand_help(args: &[&str], expected_snippet: &str) {
     let output = command()
         .args(args)
         .output()
         .unwrap_or_else(|err| panic!("failed to execute iroha {args:?}: {err}"));
-
     assert!(
         output.status.success(),
         "expected iroha {:?} to succeed, got status {:?} with stderr {}",
@@ -617,14 +552,12 @@ fn expect_subcommand_help(args: &[&str], expected_snippet: &str) {
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains(expected_snippet),
         "help output for {args:?} missing `{expected_snippet}`\nstdout:{stdout}"
     );
 }
-
 #[test]
 fn multisig_help_is_accessible() {
     expect_subcommand_help(
@@ -632,7 +565,6 @@ fn multisig_help_is_accessible() {
         "Register a multisig account",
     );
 }
-
 #[test]
 fn gov_help_lists_commands() {
     expect_subcommand_help(
@@ -640,7 +572,6 @@ fn gov_help_lists_commands() {
         "Propose deployment of IVM bytecode",
     );
 }
-
 #[test]
 fn sorafs_fetch_help_is_accessible() {
     expect_subcommand_help(
@@ -648,7 +579,6 @@ fn sorafs_fetch_help_is_accessible() {
         "Orchestrate multi-provider chunk fetches",
     );
 }
-
 #[test]
 fn sorafs_repair_help_is_accessible() {
     expect_subcommand_help(
@@ -656,12 +586,10 @@ fn sorafs_repair_help_is_accessible() {
         "Repair queue helpers",
     );
 }
-
 #[test]
 fn sorafs_gc_help_is_accessible() {
     expect_subcommand_help(&["app", "sorafs", "gc", "--help"], "GC inspection helpers");
 }
-
 #[test]
 fn sorafs_reserve_quote_outputs_breakdown() {
     let output = command()
@@ -706,15 +634,12 @@ fn sorafs_reserve_quote_outputs_breakdown() {
         "120".parse::<XorQuantity>().expect("canonical quantity")
     );
 }
-
 #[test]
 fn sorafs_reserve_ledger_emits_instructions() {
     use torii_mock_support::TempDir;
-
     let temp_dir = TempDir::new("sorafs_reserve_ledger").expect("temp dir");
     let quote_path = temp_dir.path().join("reserve_quote.json");
     let quote_arg = quote_path.to_str().expect("utf8 path");
-
     let quote_status = command()
         .args([
             "app",
@@ -735,14 +660,11 @@ fn sorafs_reserve_ledger_emits_instructions() {
         .status()
         .expect("execute sorafs reserve quote");
     assert!(quote_status.success(), "reserve quote command failed");
-
     let reserve_account = account_id("reserve-sorafs");
     let reserve_account_label = account_literal(&reserve_account);
     let asset_definition_arg = xor_asset_id().to_string();
-
     let provider_account = parse_account_literal(alice_account_literal());
     let treasury_account = parse_account_literal(bob_account_literal());
-
     let output = command()
         .args([
             "app",
@@ -808,7 +730,6 @@ fn sorafs_reserve_ledger_emits_instructions() {
     );
     assert_eq!(rent_destination, &treasury_account);
     assert_quantity_xor(rent_amount_numeric, "120");
-
     let (reserve_source, reserve_amount_numeric, reserve_destination) =
         transfer_parts(&instructions[1]);
     assert_eq!(
@@ -818,15 +739,12 @@ fn sorafs_reserve_ledger_emits_instructions() {
     assert_eq!(reserve_destination, &reserve_account);
     assert_quantity_xor(reserve_amount_numeric, "240");
 }
-
 #[test]
 fn sorafs_reserve_lifecycle_projects_credit_draw() {
     use torii_mock_support::TempDir;
-
     let temp_dir = TempDir::new("sorafs_reserve_lifecycle").expect("temp dir");
     let quote_path = temp_dir.path().join("reserve_quote.json");
     let quote_arg = quote_path.to_str().expect("utf8 path");
-
     let quote_status = command()
         .args([
             "app",
@@ -847,7 +765,6 @@ fn sorafs_reserve_lifecycle_projects_credit_draw() {
         .status()
         .expect("execute sorafs reserve quote");
     assert!(quote_status.success(), "reserve quote command failed");
-
     let output = command()
         .args([
             "app",
@@ -897,7 +814,6 @@ fn sorafs_reserve_lifecycle_projects_credit_draw() {
         Some(false)
     );
 }
-
 #[test]
 fn sorafs_reserve_help_lists_local_projection_commands() {
     let output = command()
@@ -917,7 +833,6 @@ fn sorafs_reserve_help_lists_local_projection_commands() {
         );
     }
 }
-
 #[test]
 fn da_get_help_is_accessible() {
     expect_subcommand_help(
@@ -925,15 +840,12 @@ fn da_get_help_is_accessible() {
         "Fetch blobs via the multi-source orchestrator",
     );
 }
-
 #[test]
 fn gov_protected_set_produces_instruction_skeleton() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("gov_protected_set").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
-
     let output = command()
         .arg("--config")
         .arg(&config_path)
@@ -961,15 +873,12 @@ fn gov_protected_set_produces_instruction_skeleton() {
     assert!(entry.get("wire_id").is_some(), "wire_id missing");
     assert!(entry.get("payload_hex").is_some(), "payload_hex missing");
 }
-
 #[test]
 fn gov_deploy_meta_outputs_metadata_stub() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("gov_deploy_meta").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
-
     let output = command()
         .arg("--config")
         .arg(&config_path)
@@ -1000,17 +909,14 @@ fn gov_deploy_meta_outputs_metadata_stub() {
         "unexpected manifest approvers: {value:?}"
     );
 }
-
 #[test]
 fn gov_deploy_meta_accepts_manifest_approvers() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("gov_deploy_meta_approvers").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
     let validator = account_literal_for("validator");
     let bob = account_literal_for("bob");
-
     let output = command()
         .arg("--config")
         .arg(&config_path)
@@ -1043,13 +949,11 @@ fn gov_deploy_meta_accepts_manifest_approvers() {
         .collect();
     assert_eq!(collected, vec![validator.as_str(), bob.as_str()]);
 }
-
 #[test]
 fn gov_propose_deploy_against_mock() {
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -1058,7 +962,6 @@ fn gov_propose_deploy_against_mock() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
-
     let proposal_id =
         "feedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeed".to_string();
     let mut config_payload_map = json::Map::new();
@@ -1075,15 +978,12 @@ fn gov_propose_deploy_against_mock() {
     );
     let config_payload = json::Value::Object(config_payload_map);
     configure_governance(mock.base_url(), &config_payload).expect("configure governance");
-
     let temp_dir = TempDir::new("gov_propose_deploy").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
-
     let code_hash = "00".repeat(32);
     let abi_hash = "11".repeat(32);
     let contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
-
     let summary = command()
         .arg("--config")
         .arg(&config_path)
@@ -1113,7 +1013,6 @@ fn gov_propose_deploy_against_mock() {
         summary_out.trim_end(),
         format!("deploy propose: ok=true proposal_id={proposal_id}")
     );
-
     let json_output = command()
         .arg("--config")
         .arg(&config_path)
@@ -1149,13 +1048,11 @@ fn gov_propose_deploy_against_mock() {
         Some(proposal_id.as_str())
     );
 }
-
 #[test]
 fn gov_finalize_against_mock() {
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -1164,7 +1061,6 @@ fn gov_finalize_against_mock() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
-
     let finalize_response = norito::json!({
         "ok": true,
         "tx_instructions": [{
@@ -1177,15 +1073,12 @@ fn gov_finalize_against_mock() {
         "finalize_response": finalize_response,
     });
     configure_governance(mock.base_url(), &config_payload).expect("configure governance");
-
     let temp_dir = TempDir::new("gov_finalize").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
-
     let proposal_id =
         "feedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeed".to_string();
     let referendum_id = proposal_id.as_str();
-
     let summary = command()
         .arg("--config")
         .arg(&config_path)
@@ -1212,7 +1105,6 @@ fn gov_finalize_against_mock() {
         summary_out.trim_end(),
         format!("finalize: referendum_id={referendum_id} ok=true tx_instrs=1")
     );
-
     let json_output = command()
         .arg("--config")
         .arg(&config_path)
@@ -1246,13 +1138,11 @@ fn gov_finalize_against_mock() {
         Some("FinalizeReferendum")
     );
 }
-
 #[test]
 fn gov_enact_against_mock() {
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -1261,7 +1151,6 @@ fn gov_enact_against_mock() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
-
     let enact_response = norito::json!({
         "ok": true,
         "tx_instructions": [{
@@ -1274,14 +1163,11 @@ fn gov_enact_against_mock() {
         "enact_response": enact_response,
     });
     configure_governance(mock.base_url(), &config_payload).expect("configure governance");
-
     let temp_dir = TempDir::new("gov_enact").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
-
     let proposal_id =
         "feedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeed".to_string();
-
     let summary = command()
         .arg("--config")
         .arg(&config_path)
@@ -1300,7 +1186,6 @@ fn gov_enact_against_mock() {
         summary_out.trim_end(),
         format!("enact: proposal_id={proposal_id} ok=true tx_instrs=1")
     );
-
     let json_output = command()
         .arg("--config")
         .arg(&config_path)
@@ -1326,13 +1211,11 @@ fn gov_enact_against_mock() {
         Some("EnactProposal")
     );
 }
-
 #[test]
 fn gov_protected_namespaces_flow_against_mock() {
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -1343,7 +1226,6 @@ fn gov_protected_namespaces_flow_against_mock() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
-
     let config_payload = norito::json!({
         "protected_namespaces": {
             "found": true,
@@ -1351,11 +1233,9 @@ fn gov_protected_namespaces_flow_against_mock() {
         }
     });
     configure_governance(mock.base_url(), &config_payload).expect("configure governance");
-
     let temp_dir = TempDir::new("gov_protected_flow").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
-
     let initial = command()
         .arg("--config")
         .arg(&config_path)
@@ -1376,7 +1256,6 @@ fn gov_protected_namespaces_flow_against_mock() {
             .map(Vec::len),
         Some(1)
     );
-
     let apply = command()
         .arg("--config")
         .arg(&config_path)
@@ -1403,7 +1282,6 @@ fn gov_protected_namespaces_flow_against_mock() {
             .and_then(norito::json::Value::as_u64),
         Some(2)
     );
-
     let after = command()
         .arg("--config")
         .arg(&config_path)
@@ -1428,7 +1306,6 @@ fn gov_protected_namespaces_flow_against_mock() {
         .collect();
     assert_eq!(collected, vec!["apps", "system"]);
 }
-
 #[test]
 fn retired_server_contract_deployment_commands_are_absent() {
     for args in [
@@ -1454,14 +1331,12 @@ fn retired_server_contract_deployment_commands_are_absent() {
         );
     }
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn gov_governance_queries_against_mock() {
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -1470,7 +1345,6 @@ fn gov_governance_queries_against_mock() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
-
     let proposal_id =
         "feedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeed".to_string();
     let proposal_key = proposal_id.to_lowercase();
@@ -1484,7 +1358,6 @@ fn gov_governance_queries_against_mock() {
     proposal_payload.insert("proposal".to_string(), json::Value::Object(proposal_status));
     let mut proposals_map = json::Map::new();
     proposals_map.insert(proposal_key.clone(), json::Value::Object(proposal_payload));
-
     let referenda = json::Value::Array(vec![norito::json!({
         "id": "ref-plain",
         "referendum": {
@@ -1525,7 +1398,6 @@ fn gov_governance_queries_against_mock() {
         "referenda_with_expired": 2,
         "last_sweep_height": 90
     });
-
     let mut config_payload_map = json::Map::new();
     config_payload_map.insert("referenda".to_string(), referenda);
     config_payload_map.insert("proposals".to_string(), json::Value::Object(proposals_map));
@@ -1534,11 +1406,9 @@ fn gov_governance_queries_against_mock() {
     config_payload_map.insert("unlock_stats".to_string(), unlock_stats);
     let config_payload = json::Value::Object(config_payload_map);
     configure_governance(mock.base_url(), &config_payload).expect("configure governance");
-
     let temp_dir = TempDir::new("gov_queries").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
-
     let proposal = command()
         .arg("--config")
         .arg(&config_path)
@@ -1565,7 +1435,6 @@ fn gov_governance_queries_against_mock() {
             .and_then(norito::json::Value::as_bool),
         Some(true)
     );
-
     let locks = command()
         .arg("--config")
         .arg(&config_path)
@@ -1585,7 +1454,6 @@ fn gov_governance_queries_against_mock() {
             .and_then(norito::json::Value::as_str),
         Some("ref-plain")
     );
-
     let referendum = command()
         .arg("--config")
         .arg(&config_path)
@@ -1604,7 +1472,6 @@ fn gov_governance_queries_against_mock() {
         "expected referendum get to succeed, stderr: {}",
         String::from_utf8_lossy(&referendum.stderr)
     );
-
     let tally = command()
         .arg("--config")
         .arg(&config_path)
@@ -1624,7 +1491,6 @@ fn gov_governance_queries_against_mock() {
             .and_then(norito::json::Value::as_u64),
         Some(5)
     );
-
     let unlocks = command()
         .arg("--config")
         .arg(&config_path)
@@ -1645,7 +1511,6 @@ fn gov_governance_queries_against_mock() {
         Some(100)
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn gov_vote_plain_against_mock() {
@@ -1653,7 +1518,6 @@ fn gov_vote_plain_against_mock() {
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -1662,10 +1526,8 @@ fn gov_vote_plain_against_mock() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
-
     let owner = parse_account_literal(alice_account_literal());
     let owner_str = owner.to_string();
-
     let instruction = InstructionBox::from(CastPlainBallot {
         referendum_id: "ref-plain".to_owned(),
         owner: owner.clone(),
@@ -1674,7 +1536,6 @@ fn gov_vote_plain_against_mock() {
         direction: 0,
     });
     let payload_hex = hex::encode(norito::to_bytes(&instruction).expect("encode ballot"));
-
     let config_payload = norito::json!({
         "referenda": [{
             "id": "ref-plain",
@@ -1696,11 +1557,9 @@ fn gov_vote_plain_against_mock() {
     });
     configure_governance(mock.base_url(), &config_payload)
         .expect("configure governance responses in mock");
-
     let temp_dir = TempDir::new("gov_vote_plain").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
-
     let output = command()
         .arg("--config")
         .arg(&config_path)
@@ -1723,20 +1582,17 @@ fn gov_vote_plain_against_mock() {
         ])
         .output()
         .expect("failed to execute iroha app gov vote (plain)");
-
     assert!(
         output.status.success(),
         "expected gov vote plain to succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let value: norito::json::Value =
         norito::json::from_slice(&output.stdout).expect("vote plain output JSON");
     assert_eq!(
         value.get("ok").and_then(norito::json::Value::as_bool),
         Some(true)
     );
-
     let instructions = value
         .get("tx_instructions")
         .and_then(norito::json::Value::as_array)
@@ -1762,7 +1618,6 @@ fn gov_vote_plain_against_mock() {
         "payload fingerprint annotation missing"
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn gov_vote_plain_emits_summary_and_json() {
@@ -1770,7 +1625,6 @@ fn gov_vote_plain_emits_summary_and_json() {
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -1779,10 +1633,8 @@ fn gov_vote_plain_emits_summary_and_json() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
-
     let owner = parse_account_literal(alice_account_literal());
     let owner_str = owner.to_string();
-
     let instruction = InstructionBox::from(CastPlainBallot {
         referendum_id: "ref-plain".to_owned(),
         owner: owner.clone(),
@@ -1793,7 +1645,6 @@ fn gov_vote_plain_emits_summary_and_json() {
     let payload_bytes = norito::to_bytes(&instruction).expect("encode ballot");
     let payload_hex = hex::encode(&payload_bytes);
     let fingerprint = CryptoHash::new(&payload_bytes).to_string();
-
     let config_payload = norito::json!({
         "referenda": [{
             "id": "ref-plain",
@@ -1815,11 +1666,9 @@ fn gov_vote_plain_emits_summary_and_json() {
     });
     configure_governance(mock.base_url(), &config_payload)
         .expect("configure governance responses in mock");
-
     let temp_dir = TempDir::new("gov_vote_plain_summary").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
-
     let summary = command()
         .arg("--config")
         .arg(&config_path)
@@ -1854,7 +1703,6 @@ fn gov_vote_plain_emits_summary_and_json() {
         "vote plain: referendum_id=ref-plain ok=true accepted=true instrs=1 fingerprint={fingerprint} owner={owner_str} amount=500 duration_blocks=128 direction=Aye"
     );
     assert_eq!(summary_text.trim_end(), expected_summary);
-
     let output = command()
         .arg("--config")
         .arg(&config_path)
@@ -1919,12 +1767,10 @@ fn gov_vote_plain_emits_summary_and_json() {
         Some("Aye")
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn sorafs_incentives_service_cli_roundtrip() {
     use torii_mock_support::TempDir;
-
     let temp_dir = TempDir::new("incentives_service_cli_roundtrip").expect("temp dir");
     let state_path = state_path(&temp_dir, "payout_state.json");
     let config_path = write_reward_config_file(&temp_dir);
@@ -1932,7 +1778,6 @@ fn sorafs_incentives_service_cli_roundtrip() {
     let config_str = config_path.to_str().expect("utf-8 config path");
     let treasury = account_id("treasury");
     let treasury_literal = account_literal(&treasury);
-
     let output = command()
         .args([
             "app",
@@ -1955,7 +1800,6 @@ fn sorafs_incentives_service_cli_roundtrip() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(state_path.exists(), "state file not created");
-
     let state_json = read_state(&state_path);
     assert_eq!(state_json["version"].as_u64(), Some(1));
     let treasury_json_literal = treasury.canonical_i105().expect("treasury i105");
@@ -1963,14 +1807,12 @@ fn sorafs_incentives_service_cli_roundtrip() {
         state_json["treasury_account"].as_str(),
         Some(treasury_json_literal.as_str())
     );
-
     let metrics = sample_metrics();
     let metrics_path = write_metrics_file(&temp_dir, &metrics);
     let bond = sample_bond_entry();
     let bond_path = write_bond_file(&temp_dir, &bond);
     let instruction_out = temp_dir.path().join("instruction.to");
     let beneficiary_literal = account_literal_for("beneficiary");
-
     let output = command()
         .args([
             "app",
@@ -1997,19 +1839,15 @@ fn sorafs_incentives_service_cli_roundtrip() {
         "process failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let summary: Value = norito::json::from_slice(&output.stdout).expect("parse process summary");
     assert_eq!(summary["epoch"].as_u64(), Some(u64::from(metrics.epoch)));
-
     let instruction_bytes = fs::read(&instruction_out).expect("read instruction");
     let instruction: RelayRewardInstructionV1 =
         decode_from_bytes(&instruction_bytes).expect("decode instruction");
     assert_eq!(instruction.epoch, metrics.epoch);
-
     let state_json = read_state(&state_path);
     let payouts = state_json["payouts"].as_array().expect("payouts array");
     assert_eq!(payouts.len(), 1);
-
     let relay_hex = hex::encode(metrics.relay_id);
     let operator_literal = account_literal_for("operator");
     let output = command()
@@ -2047,10 +1885,8 @@ fn sorafs_incentives_service_cli_roundtrip() {
     );
     let dispute_json: Value = norito::json::from_slice(&output.stdout).expect("parse file output");
     let dispute_id = dispute_json["id"].as_u64().expect("dispute id");
-
     let state_json = read_state(&state_path);
     assert_eq!(state_json["disputes"].as_array().unwrap().len(), 1);
-
     let transfer_path = temp_dir.path().join("credit_transfer.to");
     let output = command()
         .args([
@@ -2083,7 +1919,6 @@ fn sorafs_incentives_service_cli_roundtrip() {
         "dispute resolve failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let transfer_bytes = fs::read(&transfer_path).expect("read transfer");
     let transfer_instr: InstructionBox =
         decode_from_bytes(&transfer_bytes).expect("decode transfer");
@@ -2097,7 +1932,6 @@ fn sorafs_incentives_service_cli_roundtrip() {
     assert_eq!(transfer.object, Quantity::from(25_u32));
     assert_eq!(transfer.destination, account_id("beneficiary"));
     assert_eq!(transfer.source.account, treasury);
-
     let state_json = read_state(&state_path);
     let disputes = state_json["disputes"].as_array().unwrap();
     let status = disputes[0]
@@ -2110,7 +1944,6 @@ fn sorafs_incentives_service_cli_roundtrip() {
         .and_then(Value::as_str)
         .expect("resolution kind");
     assert_eq!(resolution_kind, "Credit");
-
     let output = command()
         .args([
             "app",
@@ -2132,12 +1965,10 @@ fn sorafs_incentives_service_cli_roundtrip() {
     assert_eq!(dashboard["total_relays"].as_u64(), Some(1));
     assert_eq!(dashboard["total_open_disputes"].as_u64(), Some(0));
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
     use torii_mock_support::TempDir;
-
     let temp_dir = TempDir::new("incentives_service_cli_process_batch").expect("temp dir");
     let state_path = state_path(&temp_dir, "payout_state.json");
     let config_path = write_reward_config_file(&temp_dir);
@@ -2145,7 +1976,6 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
     let config_str = config_path.to_str().expect("utf-8 config path");
     let treasury = account_id("treasury");
     let treasury_literal = account_literal(&treasury);
-
     let output = command()
         .args([
             "app",
@@ -2167,18 +1997,15 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
         "init failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let metrics_a = sample_metrics();
     let mut metrics_b = metrics_a.clone();
     metrics_b.epoch += 1;
     metrics_b.verified_bandwidth_bytes += 500;
-
     let metrics_a_path = write_metrics_file(&temp_dir, &metrics_a);
     let metrics_b_path = write_metrics_file(&temp_dir, &metrics_b);
     let bond_path = write_bond_file(&temp_dir, &sample_bond_entry());
     let beneficiary_a_literal = account_literal_for("beneficiary-a");
     let beneficiary_b_literal = account_literal_for("beneficiary-b");
-
     let output = command()
         .args([
             "app",
@@ -2207,11 +2034,9 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
         "batch process failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let summary: Value = norito::json::from_slice(&output.stdout).expect("parse batch summary");
     let payouts = summary.as_array().expect("batch summary must be an array");
     assert_eq!(payouts.len(), 2);
-
     let state_json = read_state(&state_path);
     assert_eq!(
         state_json["payouts"]
@@ -2220,7 +2045,6 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
             .len(),
         2
     );
-
     let treasury_account = treasury.clone();
     let treasury_json_literal = treasury.canonical_i105().expect("treasury i105");
     assert_eq!(
@@ -2251,14 +2075,12 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
             destination: instruction.beneficiary.clone(),
         });
     }
-
     let export_file = temp_dir.path().join("ledger_export.to");
     let export_bytes = encode_ledger_export(&TestLedgerExport {
         version: 1,
         transfers: expected_transfers.clone(),
     });
     fs::write(&export_file, export_bytes).expect("write export");
-
     let output = command()
         .args([
             "app",
@@ -2278,7 +2100,6 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
         "reconcile failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let reconcile_summary: Value =
         norito::json::from_slice(&output.stdout).expect("parse reconcile summary");
     assert_eq!(reconcile_summary["clean"].as_bool(), Some(true));
@@ -2291,7 +2112,6 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
         Some(expected_transfers.len() as u64)
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn gov_vote_zk_against_mock() {
@@ -2299,7 +2119,6 @@ fn gov_vote_zk_against_mock() {
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -2308,7 +2127,6 @@ fn gov_vote_zk_against_mock() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
-
     let owner = parse_account_literal(alice_account_literal());
     let owner_str = owner.to_string();
     let nullifier = "11".repeat(32);
@@ -2322,14 +2140,12 @@ fn gov_vote_zk_against_mock() {
     let public_inputs_json =
         String::from_utf8(norito::json::to_vec(&hint_payload).expect("serialize hints to JSON"))
             .expect("hints JSON is utf8");
-
     let instruction = InstructionBox::from(CastZkBallot {
         election_id: "ref-zk".to_owned(),
         proof_b64: "AAA=".to_owned(),
         public_inputs_json,
     });
     let payload_hex = hex::encode(norito::to_bytes(&instruction).expect("encode zk ballot"));
-
     let config_payload = norito::json!({
         "referenda": [{
             "id": "ref-zk",
@@ -2351,11 +2167,9 @@ fn gov_vote_zk_against_mock() {
     });
     configure_governance(mock.base_url(), &config_payload)
         .expect("configure governance responses in mock");
-
     let temp_dir = TempDir::new("gov_vote_zk").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
-
     let output = command()
         .arg("--config")
         .arg(&config_path)
@@ -2384,13 +2198,11 @@ fn gov_vote_zk_against_mock() {
         ])
         .output()
         .expect("failed to execute iroha app gov vote (zk)");
-
     assert!(
         output.status.success(),
         "expected gov vote zk to succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let value: norito::json::Value =
         norito::json::from_slice(&output.stdout).expect("vote zk output JSON");
     let instructions = value
@@ -2428,7 +2240,6 @@ fn gov_vote_zk_against_mock() {
         "payload fingerprint annotation missing"
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn gov_vote_zk_emits_summary_and_json() {
@@ -2436,7 +2247,6 @@ fn gov_vote_zk_emits_summary_and_json() {
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -2445,7 +2255,6 @@ fn gov_vote_zk_emits_summary_and_json() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
-
     let owner = parse_account_literal(alice_account_literal());
     let owner_str = owner.to_string();
     let amount = "900";
@@ -2463,7 +2272,6 @@ fn gov_vote_zk_emits_summary_and_json() {
     let public_inputs_json =
         String::from_utf8(norito::json::to_vec(&hint_payload).expect("serialize hints to JSON"))
             .expect("hints JSON is utf8");
-
     let instruction = InstructionBox::from(CastZkBallot {
         election_id: "ref-zk".to_owned(),
         proof_b64: "BBB=".to_owned(),
@@ -2472,7 +2280,6 @@ fn gov_vote_zk_emits_summary_and_json() {
     let payload_bytes = norito::to_bytes(&instruction).expect("encode zk ballot");
     let payload_hex = hex::encode(&payload_bytes);
     let fingerprint = CryptoHash::new(&payload_bytes).to_string();
-
     let config_payload = norito::json!({
         "referenda": [{
             "id": "ref-zk",
@@ -2494,11 +2301,9 @@ fn gov_vote_zk_emits_summary_and_json() {
     });
     configure_governance(mock.base_url(), &config_payload)
         .expect("configure governance responses in mock");
-
     let temp_dir = TempDir::new("gov_vote_zk_summary").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
-
     let summary = command()
         .arg("--config")
         .arg(&config_path)
@@ -2539,7 +2344,6 @@ fn gov_vote_zk_emits_summary_and_json() {
         "vote zk: election_id=ref-zk ok=true accepted=true instrs=1 fingerprint={fingerprint} owner={owner_str} amount={amount} duration_blocks={duration_blocks} direction={direction} nullifier={nullifier}"
     );
     assert_eq!(summary_text.trim_end(), expected_summary);
-
     let output = command()
         .arg("--config")
         .arg(&config_path)
@@ -2620,7 +2424,6 @@ fn gov_vote_zk_emits_summary_and_json() {
         Some(nullifier.as_str())
     );
 }
-
 #[test]
 fn gov_vote_rejects_retired_zk_flag_aliases() {
     for (flag, value) in [
@@ -2654,7 +2457,6 @@ fn gov_vote_rejects_retired_zk_flag_aliases() {
         );
     }
 }
-
 #[test]
 fn gov_queries_reject_retired_id_alias() {
     for (label, query) in [
@@ -2674,13 +2476,11 @@ fn gov_queries_reject_retired_id_alias() {
         );
     }
 }
-
 #[test]
 fn gov_council_summary_against_mock() {
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -2689,13 +2489,11 @@ fn gov_council_summary_against_mock() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
-
     let temp_dir = TempDir::new("gov_council_summary").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
     let guardian_0 = account_literal_for("guardian-0");
     let guardian_1 = account_literal_for("guardian-1");
-
     let council_members = Value::Array(vec![
         Value::Object({
             let mut map = Map::new();
@@ -2729,7 +2527,6 @@ fn gov_council_summary_against_mock() {
         map
     });
     configure_governance(mock.base_url(), &config_payload).expect("configure governance");
-
     let summary = command()
         .arg("--config")
         .arg(&config_path)
@@ -2749,7 +2546,6 @@ fn gov_council_summary_against_mock() {
         guardian_0, guardian_1
     );
     assert_eq!(summary_line.trim(), expected_summary);
-
     let json_output = command()
         .arg("--config")
         .arg(&config_path)
@@ -2782,7 +2578,6 @@ fn gov_council_summary_against_mock() {
         .collect();
     assert_eq!(member_ids, vec![guardian_0.as_str(), guardian_1.as_str()]);
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn gov_audit_deploy_reports_results_against_mock() {
@@ -2790,7 +2585,6 @@ fn gov_audit_deploy_reports_results_against_mock() {
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -2801,7 +2595,6 @@ fn gov_audit_deploy_reports_results_against_mock() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
-
     let contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
     let code_bytes = b"mock-contract-code";
     let abi_bytes = b"mock-contract-abi";
@@ -2809,13 +2602,11 @@ fn gov_audit_deploy_reports_results_against_mock() {
     let abi_hash = CryptoHash::new(abi_bytes);
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
-
     let mut code_arr = [0u8; 32];
     code_arr.copy_from_slice(code_hash.as_ref());
     let mut abi_arr = [0u8; 32];
     abi_arr.copy_from_slice(abi_hash.as_ref());
     let proposal_hex = proposal_id_hex(contract_address, &code_arr, &abi_arr);
-
     let manifest_body = {
         let mut manifest = json::Map::new();
         manifest.insert(
@@ -2852,20 +2643,16 @@ fn gov_audit_deploy_reports_results_against_mock() {
             "abi_hash_hex".to_string(),
             json::Value::String(format!("0x{abi_hash_hex}")),
         );
-
         let mut kind = json::Map::new();
         kind.insert("DeployContract".to_string(), json::Value::Object(deploy));
-
         let mut proposal = json::Map::new();
         proposal.insert("status".to_string(), json::Value::String("Enacted".into()));
         proposal.insert("kind".to_string(), json::Value::Object(kind));
-
         let mut root = json::Map::new();
         root.insert("found".to_string(), json::Value::Bool(true));
         root.insert("proposal".to_string(), json::Value::Object(proposal));
         json::Value::Object(root)
     };
-
     let mut gov_contracts = json::Map::new();
     gov_contracts.insert(
         contract_address.to_string(),
@@ -2882,7 +2669,6 @@ fn gov_audit_deploy_reports_results_against_mock() {
     code_bytes_map.insert(code_hash_hex.clone(), code_bytes_body);
     let mut proposals = json::Map::new();
     proposals.insert(proposal_hex.clone(), proposal_body);
-
     let mut root = json::Map::new();
     root.insert("referenda".to_string(), norito::json!([]));
     root.insert(
@@ -2900,7 +2686,6 @@ fn gov_audit_deploy_reports_results_against_mock() {
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
     configure_governance(mock.base_url(), &config_payload).expect("configure governance");
-
     let output = command()
         .arg("--config")
         .arg(&config_path)
@@ -2980,15 +2765,12 @@ fn gov_audit_deploy_reports_results_against_mock() {
         Some(true)
     );
 }
-
 #[test]
 fn repo_initiate_emits_instruction_payload() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("repo_initiate").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
-
     let output = command()
         .arg("--config")
         .arg(&config_path)
@@ -3022,13 +2804,11 @@ fn repo_initiate_emits_instruction_payload() {
         ])
         .output()
         .expect("failed to execute iroha repo initiate");
-
     assert!(
         output.status.success(),
         "repo initiate failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     println!("repo initiate stdout: {stdout}");
     let instructions = parse_instruction_stdout(&stdout);
@@ -3045,30 +2825,24 @@ fn repo_initiate_emits_instruction_payload() {
         other => panic!("unexpected instruction variant: {other:?}"),
     }
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn da_submit_no_submit_emits_request_artifacts() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("da_submit_artifacts").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
-
     let payload_bytes = b"demo-da-payload";
     let payload_path = temp_dir.path().join("payload.bin");
     fs::write(&payload_path, payload_bytes).expect("write payload");
-
     let metadata_path = temp_dir.path().join("metadata.json");
     fs::write(
         &metadata_path,
         br#"{ "purpose": "test", "owner": "alice" }"#,
     )
     .expect("write metadata");
-
     let artifact_dir = temp_dir.path().join("da_artifacts");
     let blob_override = "ab".repeat(32);
-
     let mut cmd = command();
     cmd.arg("--config")
         .arg(&config_path)
@@ -3114,14 +2888,12 @@ fn da_submit_no_submit_emits_request_artifacts() {
         .arg("--artifact-dir")
         .arg(&artifact_dir)
         .arg("--no-submit");
-
     let output = cmd.output().expect("failed to execute iroha app da submit");
     assert!(
         output.status.success(),
         "iroha app da submit failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let request_path = artifact_dir.join("da_request.norito");
     assert!(request_path.exists(), "expected {request_path:?} to exist");
     let request_json_path = artifact_dir.join("da_request.json");
@@ -3129,7 +2901,6 @@ fn da_submit_no_submit_emits_request_artifacts() {
         fs::read_to_string(&request_json_path).expect("read da_request.json contents");
     let request_value: Value =
         norito::json::from_str(&request_json).expect("parse da_request.json");
-
     assert_eq!(
         request_value.get("lane_id").and_then(Value::as_u64),
         Some(42)
@@ -3139,7 +2910,6 @@ fn da_submit_no_submit_emits_request_artifacts() {
         request_value.get("sequence").and_then(Value::as_u64),
         Some(17)
     );
-
     let blob_class = request_value
         .get("blob_class")
         .and_then(Value::as_object)
@@ -3148,13 +2918,11 @@ fn da_submit_no_submit_emits_request_artifacts() {
         blob_class.get("class").and_then(Value::as_str),
         Some("GovernanceArtifact")
     );
-
     let payload_base64 = request_value
         .get("payload")
         .and_then(Value::as_str)
         .expect("payload base64");
     assert_eq!(payload_base64, BASE64.encode(payload_bytes));
-
     let client_blob_id_outer = request_value
         .get("client_blob_id")
         .and_then(Value::as_array)
@@ -3166,7 +2934,6 @@ fn da_submit_no_submit_emits_request_artifacts() {
     assert_eq!(client_blob_id.len(), 32);
     assert_eq!(client_blob_id[0].as_u64(), Some(0xab));
     assert_eq!(client_blob_id[31].as_u64(), Some(0xab));
-
     let retention = request_value
         .get("retention_policy")
         .and_then(Value::as_object)
@@ -3195,7 +2962,6 @@ fn da_submit_no_submit_emits_request_artifacts() {
         retention.get("hot_retention_secs").and_then(Value::as_u64),
         Some(3_600)
     );
-
     let metadata_items = request_value
         .get("metadata")
         .and_then(Value::as_object)
@@ -3203,10 +2969,8 @@ fn da_submit_no_submit_emits_request_artifacts() {
         .and_then(Value::as_array)
         .expect("metadata items");
     assert_eq!(metadata_items.len(), 2);
-
     let expected_purpose = BASE64.encode(b"test");
     let expected_owner = BASE64.encode(b"alice");
-
     let purpose_entry = metadata_items
         .iter()
         .find(|entry| entry.get("key").and_then(Value::as_str) == Some("purpose"))
@@ -3215,7 +2979,6 @@ fn da_submit_no_submit_emits_request_artifacts() {
         purpose_entry.get("value").and_then(Value::as_str),
         Some(expected_purpose.as_str())
     );
-
     let owner_entry = metadata_items
         .iter()
         .find(|entry| entry.get("key").and_then(Value::as_str) == Some("owner"))
@@ -3225,13 +2988,11 @@ fn da_submit_no_submit_emits_request_artifacts() {
         Some(expected_owner.as_str())
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn iroha_da_submit_records_pdp_commitment_receipt() {
-    use core::convert::TryFrom;
-
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use core::convert::TryFrom;
     use iroha_crypto::Signature;
     use iroha_data_model::{
         da::prelude::{BlobDigest, DaIngestReceipt, DaRentQuote, DaStripeLayout, StorageTicketId},
@@ -3246,7 +3007,6 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
         pdp::{PdpCommitmentV1, PdpMerkleTreeV1},
     };
     use torii_mock_support::{TempDir, write_client_config};
-
     fn fixed_digest(seed: u8) -> BlobDigest {
         let mut bytes = [0u8; 32];
         for (idx, byte) in bytes.iter_mut().enumerate() {
@@ -3255,7 +3015,6 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
         }
         BlobDigest::new(bytes)
     }
-
     let chunk_profile = ChunkingProfileV1 {
         profile_id: ProfileId(0),
         namespace: "inline".to_string(),
@@ -3301,7 +3060,6 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
     let pdp_header = BASE64.encode(&pdp_bytes);
     receipt.pdp_commitment = Some(pdp_bytes.clone());
     let receipt_body = norito::to_bytes(&receipt).expect("encode receipt");
-
     let temp_dir = TempDir::new("cli_da_submit_pdp").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
@@ -3331,7 +3089,6 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
     let fixture = Value::Object(fixture_map);
     let fixture_json = norito::json::to_string(&fixture).expect("serialize receipt fixture");
     fs::write(&fixture_path, fixture_json).expect("write fixture");
-
     let output = command()
         .arg("--config")
         .arg(&config_path)
@@ -3363,7 +3120,6 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
         "expected da submit to succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let receipt_json_path = artifact_dir.join("da_receipt.json");
     let receipt_json =
         fs::read_to_string(&receipt_json_path).expect("read da_receipt.json contents");
@@ -3373,7 +3129,6 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
         .and_then(Value::as_str)
         .expect("pdp_commitment field");
     assert_eq!(pdp_json, BASE64.encode(&pdp_bytes));
-
     let receipt_norito_path = artifact_dir.join("da_receipt.norito");
     let receipt_bytes = fs::read(&receipt_norito_path).expect("read da_receipt.norito contents");
     let archived = norito::from_bytes::<DaIngestReceipt>(&receipt_bytes).expect("decode receipt");
@@ -3391,7 +3146,6 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
         .expect("sora-pdp-commitment header");
     assert_eq!(stored_header, pdp_header);
 }
-
 #[test]
 fn da_rent_quote_outputs_summary_and_json() {
     const GIB: u64 = 12;
@@ -3402,7 +3156,6 @@ fn da_rent_quote_outputs_summary_and_json() {
     const PDP: &str = "0.45";
     const POTR: &str = "0.225";
     const EGRESS_CREDIT: &str = "0.0015";
-
     let summary_output = command()
         .args([
             "--output-format",
@@ -3422,7 +3175,6 @@ fn da_rent_quote_outputs_summary_and_json() {
         "rent-quote failed: {}",
         String::from_utf8_lossy(&summary_output.stderr)
     );
-
     let stdout = String::from_utf8_lossy(&summary_output.stdout);
     let mut lines = stdout.lines();
     let summary_line = lines.next().expect("rent-quote should emit a summary line");
@@ -3442,7 +3194,6 @@ fn da_rent_quote_outputs_summary_and_json() {
         lines.any(|line| line.starts_with("policy_source: ")),
         "rent-quote summary should include policy source: {stdout}"
     );
-
     let json_output = command()
         .args([
             "app",
@@ -3471,7 +3222,6 @@ fn da_rent_quote_outputs_summary_and_json() {
         value.get("months").and_then(Value::as_u64),
         Some(u64::from(MONTHS))
     );
-
     let quote = value
         .get("quote")
         .and_then(Value::as_object)
@@ -3492,7 +3242,6 @@ fn da_rent_quote_outputs_summary_and_json() {
         read_quantity(quote, "egress_credit_per_gib"),
         expected(EGRESS_CREDIT)
     );
-
     let projection = value
         .get("ledger_projection")
         .and_then(Value::as_object)
@@ -3513,11 +3262,9 @@ fn da_rent_quote_outputs_summary_and_json() {
         expected(EGRESS_CREDIT)
     );
 }
-
 #[test]
 fn da_rent_ledger_emits_transfer_plan() {
     use torii_mock_support::TempDir;
-
     const GIB: u64 = 12;
     const MONTHS: u32 = 3;
     const BASE: &str = "9";
@@ -3525,14 +3272,12 @@ fn da_rent_ledger_emits_transfer_plan() {
     const PROVIDER: &str = "7.2";
     const PDP: &str = "0.45";
     const POTR: &str = "0.225";
-
     let temp_dir = TempDir::new("da_rent_ledger_plan").expect("temp dir");
     let quote_path = temp_dir.path().join("rent_quote.json");
     let quote_path_str = quote_path
         .to_str()
         .expect("quote path must be valid UTF-8")
         .to_string();
-
     let quote_output = command()
         .args([
             "app",
@@ -3552,14 +3297,12 @@ fn da_rent_ledger_emits_transfer_plan() {
         "rent-quote failed: {}",
         String::from_utf8_lossy(&quote_output.stderr)
     );
-
     let payer_account = parse_account_literal(alice_account_literal());
     let treasury_account = parse_account_literal(bob_account_literal());
     let protocol_account = account_id("protocol-da-ledger");
     let provider_account = account_id("provider-da-ledger");
     let pdp_account = account_id("pdp-da-ledger");
     let potr_account = account_id("potr-da-ledger");
-
     let payer_arg = account_literal(&payer_account);
     let treasury_arg = account_literal(&treasury_account);
     let protocol_arg = account_literal(&protocol_account);
@@ -3567,7 +3310,6 @@ fn da_rent_ledger_emits_transfer_plan() {
     let pdp_arg = account_literal(&pdp_account);
     let potr_arg = account_literal(&potr_account);
     let asset_definition_arg = xor_asset_id().to_string();
-
     let ledger_output = command()
         .args([
             "app",
@@ -3597,7 +3339,6 @@ fn da_rent_ledger_emits_transfer_plan() {
         "rent-ledger failed: {}",
         String::from_utf8_lossy(&ledger_output.stderr)
     );
-
     let stdout = String::from_utf8_lossy(&ledger_output.stdout);
     let value: Value = norito::json::from_str(stdout.trim()).expect("rent-ledger output JSON");
     assert_eq!(
@@ -3651,7 +3392,6 @@ fn da_rent_ledger_emits_transfer_plan() {
             "retired implicit-unit alias `{retired}` must not be emitted"
         );
     }
-
     let instructions_value = value
         .get("instructions")
         .and_then(Value::as_array)
@@ -3665,44 +3405,35 @@ fn da_rent_ledger_emits_transfer_plan() {
         5,
         "expected rent ledger to emit five transfer instructions"
     );
-
     let payer_asset = AssetId::new(xor_asset_id(), payer_account.clone());
     let treasury_asset = AssetId::new(xor_asset_id(), treasury_account.clone());
-
     let (rent_source, rent_amount, rent_destination) = transfer_parts(&instructions[0]);
     assert_eq!(rent_source, &payer_asset);
     assert_eq!(rent_destination, &treasury_account);
     assert_quantity_xor(rent_amount, BASE);
-
     let (reserve_source, reserve_amount, reserve_destination) = transfer_parts(&instructions[1]);
     assert_eq!(reserve_source, &treasury_asset);
     assert_eq!(reserve_destination, &protocol_account);
     assert_quantity_xor(reserve_amount, RESERVE);
-
     let (provider_source, provider_amount, provider_destination) = transfer_parts(&instructions[2]);
     assert_eq!(provider_source, &treasury_asset);
     assert_eq!(provider_destination, &provider_account);
     assert_quantity_xor(provider_amount, PROVIDER);
-
     let (pdp_source, pdp_amount, pdp_destination) = transfer_parts(&instructions[3]);
     assert_eq!(pdp_source, &treasury_asset);
     assert_eq!(pdp_destination, &pdp_account);
     assert_quantity_xor(pdp_amount, PDP);
-
     let (potr_source, potr_amount, potr_destination) = transfer_parts(&instructions[4]);
     assert_eq!(potr_source, &treasury_asset);
     assert_eq!(potr_destination, &potr_account);
     assert_quantity_xor(potr_amount, POTR);
 }
-
 #[test]
 fn repo_unwind_emits_instruction_payload() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("repo_unwind").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
-
     let output = command()
         .arg("--config")
         .arg(&config_path)
@@ -3710,7 +3441,6 @@ fn repo_unwind_emits_instruction_payload() {
         .args(["app", "repo", "unwind", "--agreement-id", "daily_repo"])
         .output()
         .expect("failed to execute iroha repo unwind");
-
     assert!(
         output.status.success(),
         "repo unwind failed: {}",
@@ -3727,15 +3457,12 @@ fn repo_unwind_emits_instruction_payload() {
         other => panic!("unexpected instruction variant: {other:?}"),
     }
 }
-
 #[test]
 fn settlement_dvp_emits_instruction_payload() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("settlement_dvp").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
-
     let output = command()
         .arg("--config")
         .arg(&config_path)
@@ -3769,13 +3496,11 @@ fn settlement_dvp_emits_instruction_payload() {
         ])
         .output()
         .expect("failed to execute iroha settlement dvp");
-
     assert!(
         output.status.success(),
         "settlement dvp failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     let instructions = parse_instruction_stdout(&stdout);
     assert_eq!(instructions.len(), 1, "expected a single instruction");
@@ -3791,15 +3516,12 @@ fn settlement_dvp_emits_instruction_payload() {
         other => panic!("unexpected instruction variant: {other:?}"),
     }
 }
-
 #[test]
 fn settlement_pvp_emits_instruction_payload() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("settlement_pvp").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
-
     let output = command()
         .arg("--config")
         .arg(&config_path)
@@ -3829,13 +3551,11 @@ fn settlement_pvp_emits_instruction_payload() {
         ])
         .output()
         .expect("failed to execute iroha settlement pvp");
-
     assert!(
         output.status.success(),
         "settlement pvp failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     let instructions = parse_instruction_stdout(&stdout);
     assert_eq!(instructions.len(), 1, "expected a single instruction");
@@ -3851,16 +3571,13 @@ fn settlement_pvp_emits_instruction_payload() {
         other => panic!("unexpected instruction variant: {other:?}"),
     }
 }
-
 #[test]
 fn settlement_accepts_commit_atomicity() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let temp_dir = TempDir::new("settlement_atomicity").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     let iso_path = temp_dir.path().join("dvp_preview.xml");
     write_client_config(&config_path, "http://localhost").expect("write config");
-
     let output = command()
         .arg("--config")
         .arg(&config_path)
@@ -3896,7 +3613,6 @@ fn settlement_accepts_commit_atomicity() {
         ])
         .output()
         .expect("failed to execute iroha settlement dvp with atomicity flag");
-
     assert!(
         output.status.success(),
         "expected commit-first-leg atomicity to succeed: {}",
@@ -3916,14 +3632,12 @@ fn settlement_accepts_commit_atomicity() {
         "unexpected atomicity payload: {:?}",
         plan.atomicity()
     );
-
     let iso_xml = fs::read_to_string(&iso_path).expect("read iso preview");
     assert!(
         iso_xml.contains("COMMIT_FIRST_LEG"),
         "ISO preview should reflect atomicity"
     );
 }
-
 #[test]
 fn query_help_documents_stdin_flow() {
     expect_subcommand_help(
@@ -3931,7 +3645,6 @@ fn query_help_documents_stdin_flow() {
         "Query using JSON input from stdin",
     );
 }
-
 #[test]
 fn role_help_mentions_register() {
     expect_subcommand_help(
@@ -3939,7 +3652,6 @@ fn role_help_mentions_register() {
         "Register a role and grant it to the registrant",
     );
 }
-
 #[test]
 fn zk_help_mentions_attachments() {
     expect_subcommand_help(
@@ -3947,11 +3659,9 @@ fn zk_help_mentions_attachments() {
         "Manage ZK attachments in the app API",
     );
 }
-
 #[test]
 fn crypto_sm2_import_accepts_pem_files() {
     use torii_mock_support::{TempDir, write_client_config};
-
     let key =
         Sm2PrivateKey::new("pem-distid", [0x11; 32]).expect("deterministic SM2 key generation");
     let private_pem = key.to_pkcs8_pem().expect("encode SM2 private key");
@@ -3959,16 +3669,13 @@ fn crypto_sm2_import_accepts_pem_files() {
         .public_key()
         .to_public_key_pem()
         .expect("encode SM2 public key");
-
     let temp_dir = TempDir::new("crypto_sm2_import_pem").expect("create temp dir");
     let priv_path = temp_dir.path().join("private.pem");
     let pub_path = temp_dir.path().join("public.pem");
     fs::write(&priv_path, private_pem.as_bytes()).expect("write private PEM");
     fs::write(&pub_path, public_pem.as_bytes()).expect("write public PEM");
-
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, "http://localhost").expect("write config");
-
     let output = command()
         .arg("--config")
         .arg(&config_path)
@@ -3986,33 +3693,28 @@ fn crypto_sm2_import_accepts_pem_files() {
         ])
         .output()
         .expect("invoke iroha crypto sm2 import --private-key-pem-file");
-
     assert!(
         output.status.success(),
         "crypto sm2 import failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     let value: json::Value = json::from_str(stdout.trim()).expect("parse SM2 import JSON output");
     assert_eq!(
         value.get("distid").and_then(|v| v.as_str()),
         Some("pem-distid")
     );
-
     let output_public_pem = value
         .get("public_key_pem")
         .and_then(|v| v.as_str())
         .expect("public_key_pem field");
     assert_eq!(output_public_pem.trim_end(), public_pem.trim_end());
-
     let output_private_pem = value
         .get("private_key_pem")
         .and_then(|v| v.as_str())
         .expect("private_key_pem field");
     assert_eq!(output_private_pem.trim_end(), private_pem.trim_end());
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn incentives_daemon_processes_metrics_spool() {
@@ -4020,7 +3722,6 @@ fn incentives_daemon_processes_metrics_spool() {
         .expect("temp dir for incentives daemon");
     let reward_config_path = write_reward_config_file(&temp_dir);
     let state_path = state_path(&temp_dir, "daemon_state.json");
-
     let metrics_dir = temp_dir.path().join("metrics");
     fs::create_dir_all(&metrics_dir).expect("create metrics dir");
     let instruction_dir = temp_dir.path().join("instructions");
@@ -4031,7 +3732,6 @@ fn incentives_daemon_processes_metrics_spool() {
     fs::create_dir_all(&archive_dir).expect("create archive dir");
     let bonds_dir = temp_dir.path().join("bonds");
     fs::create_dir_all(&bonds_dir).expect("create bonds dir");
-
     let bond_entry = sample_bond_entry();
     let bond_path = bonds_dir.join("relay-bond.to");
     let bond_bytes = to_bytes(&bond_entry).expect("encode bond entry");
@@ -4039,7 +3739,6 @@ fn incentives_daemon_processes_metrics_spool() {
     let relay_hex = hex::encode(bond_entry.relay_id);
     let beneficiary_account = account_literal_for("relay1");
     let config_path = write_daemon_config(&temp_dir, &relay_hex, &beneficiary_account, &bond_path);
-
     let init_output = command()
         .args([
             "app",
@@ -4061,17 +3760,14 @@ fn incentives_daemon_processes_metrics_spool() {
         "incentives init failed: {}",
         String::from_utf8_lossy(&init_output.stderr)
     );
-
     let mut metrics_a = sample_metrics();
     metrics_a.epoch = 42;
     metrics_a.verified_bandwidth_bytes = 5_000;
     write_metrics_snapshot(&metrics_dir, &metrics_a, "a");
-
     let mut metrics_b = metrics_a.clone();
     metrics_b.epoch = 43;
     metrics_b.verified_bandwidth_bytes = 7_500;
     write_metrics_snapshot(&metrics_dir, &metrics_b, "b");
-
     let daemon_output = command()
         .args([
             "app",
@@ -4101,7 +3797,6 @@ fn incentives_daemon_processes_metrics_spool() {
         "incentives daemon failed: {}",
         String::from_utf8_lossy(&daemon_output.stderr)
     );
-
     let summary: Value =
         norito::json::from_slice(&daemon_output.stdout).expect("daemon summary json");
     assert_eq!(
@@ -4128,7 +3823,6 @@ fn incentives_daemon_processes_metrics_spool() {
             .is_empty(),
         "daemon reported errors: {summary:?}"
     );
-
     let state_json = read_state(&state_path);
     assert_eq!(
         state_json["payouts"]
@@ -4138,26 +3832,22 @@ fn incentives_daemon_processes_metrics_spool() {
         2,
         "state should record two payouts"
     );
-
     let mut instruction_files: Vec<PathBuf> = fs::read_dir(&instruction_dir)
         .expect("read instruction dir")
         .map(|entry| entry.expect("dir entry").path())
         .collect();
     instruction_files.sort();
     assert_eq!(instruction_files.len(), 2, "expected two instruction files");
-
     let transfer_files: Vec<_> = fs::read_dir(&transfer_dir)
         .expect("read transfer dir")
         .collect::<Result<Vec<_>, _>>()
         .expect("collect transfer dir");
     assert_eq!(transfer_files.len(), 2, "expected two transfer files");
-
     let archived_files: Vec<_> = fs::read_dir(&archive_dir)
         .expect("read archive dir")
         .collect::<Result<Vec<_>, _>>()
         .expect("collect archive dir");
     assert_eq!(archived_files.len(), 2, "expected archived metrics files");
-
     let instructions = instruction_files
         .iter()
         .map(|path| {
@@ -4166,7 +3856,6 @@ fn incentives_daemon_processes_metrics_spool() {
                 .expect("decode reward instruction")
         })
         .collect::<Vec<_>>();
-
     let treasury_account = parse_account_literal(alice_account_literal());
     let transfers = instructions
         .iter()
@@ -4190,7 +3879,6 @@ fn incentives_daemon_processes_metrics_spool() {
     let export_bytes = encode_ledger_export(&export);
     let ledger_export_path = temp_dir.path().join("ledger_export.to");
     fs::write(&ledger_export_path, export_bytes).expect("write ledger export");
-
     let reconcile_output = command()
         .args([
             "app",
@@ -4211,7 +3899,6 @@ fn incentives_daemon_processes_metrics_spool() {
         "reconcile failed: {}",
         String::from_utf8_lossy(&reconcile_output.stderr)
     );
-
     let reconcile_summary: Value =
         norito::json::from_slice(&reconcile_output.stdout).expect("reconcile summary json");
     assert!(
@@ -4231,13 +3918,11 @@ fn incentives_daemon_processes_metrics_spool() {
             .is_empty()
     );
 }
-
 #[test]
 fn sumeragi_summary_commands_against_torii_mock() {
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_sumeragi, write_client_config,
     };
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -4248,7 +3933,6 @@ fn sumeragi_summary_commands_against_torii_mock() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
-
     let temp_dir = TempDir::new("sumeragi_summary").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
@@ -4310,7 +3994,6 @@ fn sumeragi_summary_commands_against_torii_mock() {
         }),
     )
     .expect("configure canonical Sumeragi status");
-
     let assert_summary = |args: &[&str], expected: &str| {
         let output = command()
             .arg("--config")
@@ -4332,7 +4015,6 @@ fn sumeragi_summary_commands_against_torii_mock() {
             "unexpected summary for {args:?}, stdout: {stdout}"
         );
     };
-
     assert_summary(
         &["ops", "sumeragi", "status"],
         "protocol=3 height=10 view=2 phase=prepare leader=1 body=validated pending_persistence=- last_committed=9 restart_required=false",
@@ -4346,13 +4028,11 @@ fn sumeragi_summary_commands_against_torii_mock() {
         "availability_votes=123 collectors=3 rbc_pending_sessions=4 vrf_epoch=5 vrf_finalized=true reveals=6 late_reveals=7 committed_no_reveal=8 no_participation=9",
     );
 }
-
 #[test]
 fn tx_status_command_against_torii_mock() {
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_pipeline, write_client_config,
     };
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -4361,11 +4041,9 @@ fn tx_status_command_against_torii_mock() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
-
     let temp_dir = TempDir::new("tx_status").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
-
     let hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     configure_pipeline(
         mock.base_url(),
@@ -4383,7 +4061,6 @@ fn tx_status_command_against_torii_mock() {
         }),
     )
     .expect("configure pipeline");
-
     let output = command()
         .arg("--config")
         .arg(&config_path)
@@ -4401,7 +4078,6 @@ fn tx_status_command_against_torii_mock() {
     assert_eq!(payload["status"]["block_height"].as_u64(), Some(42));
     assert_eq!(payload["scope"].as_str(), Some("local"));
     assert_eq!(payload["resolved_from"].as_str(), Some("state"));
-
     let missing_hash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
     let missing = command()
         .arg("--config")
@@ -4420,13 +4096,11 @@ fn tx_status_command_against_torii_mock() {
         String::from_utf8_lossy(&missing.stderr)
     );
 }
-
 #[test]
 fn account_get_command_against_torii_mock() {
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_accounts, write_client_config,
     };
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -4435,12 +4109,10 @@ fn account_get_command_against_torii_mock() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
-
     let temp_dir = TempDir::new("account_get").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
     let account_id = alice_account_literal();
-
     configure_accounts(
         mock.base_url(),
         &norito::json!({
@@ -4455,7 +4127,6 @@ fn account_get_command_against_torii_mock() {
         }),
     )
     .expect("configure accounts");
-
     let output = command()
         .arg("--config")
         .arg(&config_path)
@@ -4477,7 +4148,6 @@ fn account_get_command_against_torii_mock() {
         payload.get("linked_domains").is_none(),
         "account get should not expose linked_domains"
     );
-
     let missing = command()
         .arg("--config")
         .arg(&config_path)
@@ -4495,15 +4165,12 @@ fn account_get_command_against_torii_mock() {
         String::from_utf8_lossy(&missing.stderr)
     );
 }
-
 // Coverage: The `zk_attachments_flow_against_torii_mock` test below exercises the
 // upload/list/get/delete CLI paths against the lightweight Torii mock.
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn zk_attachments_flow_against_torii_mock() {
     use torii_mock_support::{SpawnError, TempDir, ToriiMockProcess, write_client_config};
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -4512,14 +4179,11 @@ fn zk_attachments_flow_against_torii_mock() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
-
     let temp_dir = TempDir::new("zk_attachment_flow").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
-
     let payload_path = temp_dir.path().join("payload.json");
     fs::write(&payload_path, b"{\"hello\":\"world\"}").expect("write payload");
-
     let upload = command()
         .arg("--config")
         .arg(&config_path)
@@ -4533,7 +4197,6 @@ fn zk_attachments_flow_against_torii_mock() {
         "expected upload to succeed, stderr: {}",
         String::from_utf8_lossy(&upload.stderr)
     );
-
     let upload_meta: json::Value =
         json::from_slice(&upload.stdout).expect("upload returned JSON metadata");
     let attachment_id = upload_meta
@@ -4547,7 +4210,6 @@ fn zk_attachments_flow_against_torii_mock() {
             .and_then(json::Value::as_str),
         Some("application/json")
     );
-
     let list = command()
         .arg("--config")
         .arg(&config_path)
@@ -4575,7 +4237,6 @@ fn zk_attachments_flow_against_torii_mock() {
         listed_ids.contains(&attachment_id),
         "attachment id not found in list"
     );
-
     let download_path = temp_dir.path().join("download.bin");
     let get = command()
         .arg("--config")
@@ -4599,7 +4260,6 @@ fn zk_attachments_flow_against_torii_mock() {
     );
     let downloaded = fs::read(&download_path).expect("downloaded file readable");
     assert_eq!(downloaded, b"{\"hello\":\"world\"}");
-
     let delete = command()
         .arg("--config")
         .arg(&config_path)
@@ -4618,7 +4278,6 @@ fn zk_attachments_flow_against_torii_mock() {
         "expected delete to succeed, stderr: {}",
         String::from_utf8_lossy(&delete.stderr)
     );
-
     let list_after = command()
         .arg("--config")
         .arg(&config_path)
@@ -4647,12 +4306,10 @@ fn zk_attachments_flow_against_torii_mock() {
         "attachment id still present after deletion"
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn zk_prover_reports_flow_against_torii_mock() {
     use torii_mock_support::{SpawnError, TempDir, ToriiMockProcess, write_client_config};
-
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
@@ -4663,11 +4320,9 @@ fn zk_prover_reports_flow_against_torii_mock() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
-
     let temp_dir = TempDir::new("zk_prover_flow").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
-
     let list = command()
         .arg("--config")
         .arg(&config_path)
@@ -4690,7 +4345,6 @@ fn zk_prover_reports_flow_against_torii_mock() {
         .and_then(json::Value::as_str)
         .map(str::to_owned)
         .expect("report id present");
-
     let count_before = command()
         .arg("--config")
         .arg(&config_path)
@@ -4707,7 +4361,6 @@ fn zk_prover_reports_flow_against_torii_mock() {
         .trim()
         .parse()
         .expect("numeric count");
-
     let get = command()
         .arg("--config")
         .arg(&config_path)
@@ -4732,7 +4385,6 @@ fn zk_prover_reports_flow_against_torii_mock() {
         report_json.get("id").and_then(json::Value::as_str),
         Some(first_id.as_str())
     );
-
     let delete = command()
         .arg("--config")
         .arg(&config_path)
@@ -4752,7 +4404,6 @@ fn zk_prover_reports_flow_against_torii_mock() {
         "expected delete to succeed, stderr: {}",
         String::from_utf8_lossy(&delete.stderr)
     );
-
     let count_after = command()
         .arg("--config")
         .arg(&config_path)
@@ -4774,15 +4425,12 @@ fn zk_prover_reports_flow_against_torii_mock() {
         "deletion should reduce report count"
     );
 }
-
 #[test]
 fn address_convert_outputs_i105_by_default() {
     let key_pair = fixture_key_pair(0xA1);
     let account = AccountId::new(key_pair.public_key().clone());
-
     let expected_i105 =
         encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105 string");
-
     let output = command()
         .args(["tools", "address", "convert", &expected_i105])
         .output()
@@ -4808,15 +4456,12 @@ fn address_convert_outputs_i105_by_default() {
     };
     assert_eq!(rendered, expected_i105);
 }
-
 #[test]
 fn address_convert_json_summary_contains_i105_and_canonical_hex() {
     let key_pair = fixture_key_pair(0xB2);
     let account = AccountId::new(key_pair.public_key().clone());
-
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105 string");
     let canonical = encode_account_id_to_canonical_hex(&account).expect("canonical");
-
     let output = command()
         .args([
             "tools",
@@ -4836,7 +4481,6 @@ fn address_convert_json_summary_contains_i105_and_canonical_hex() {
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
-
     let summary: Value = norito::json::from_slice(&output.stdout).expect("parse summary");
     assert_eq!(
         summary
@@ -4875,7 +4519,6 @@ fn address_convert_json_summary_contains_i105_and_canonical_hex() {
         "input_domain should be null when no domain literal was provided"
     );
 }
-
 #[test]
 fn address_convert_rejects_domain_suffix() {
     let domain: iroha::data_model::domain::DomainId =
@@ -4884,7 +4527,6 @@ fn address_convert_rejects_domain_suffix() {
     let account = AccountId::new(key_pair.public_key().clone());
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
     let literal = format!("{i105}@{domain}");
-
     let output = command()
         .current_dir(workspace_root())
         .args([
@@ -4911,14 +4553,12 @@ fn address_convert_rejects_domain_suffix() {
         "unexpected stderr: {stderr}"
     );
 }
-
 #[test]
 fn address_convert_json_rejects_domain_suffix() {
     let key_pair = fixture_key_pair(0xC4);
     let account = AccountId::new(key_pair.public_key().clone());
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
     let literal = format!("{i105}@universal");
-
     let output = command()
         .current_dir(workspace_root())
         .args([
@@ -4948,13 +4588,11 @@ fn address_convert_json_rejects_domain_suffix() {
         "unexpected stderr: {stderr}"
     );
 }
-
 #[test]
 fn address_convert_json_summary_is_domainless() {
     let key_pair = fixture_key_pair(0xC4);
     let account = AccountId::new(key_pair.public_key().clone());
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
-
     let output = command()
         .current_dir(workspace_root())
         .args([
@@ -4984,23 +4622,18 @@ fn address_convert_json_summary_is_domainless() {
         None
     );
 }
-
 #[test]
 fn address_audit_reports_parsed_and_errors() {
     use torii_mock_support::TempDir;
-
     let local_account = account_id_for_domain("sora", 0xC3);
     let default_account = account_id_for_domain("default", 0x44);
-
     let local_i105 = encode_account_id_to_i105_for_discriminant(&local_account, 753).expect("i105");
     let default_i105 =
         encode_account_id_to_i105_for_discriminant(&default_account, 753).expect("i105");
-
     let temp_dir = TempDir::new("address_audit_report").expect("temp dir");
     let input_path = temp_dir.path().join("addresses.txt");
     let contents = format!("# sample addresses\n{local_i105}\n{default_i105}\ninvalid-address\n");
     fs::write(&input_path, contents).expect("write addresses");
-
     let output = command()
         .current_dir(workspace_root())
         .args([
@@ -5025,34 +4658,27 @@ fn address_audit_reports_parsed_and_errors() {
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
-
     let report: Value = norito::json::from_slice(&output.stdout).expect("report json");
     let stats = report.get("stats").expect("stats field");
     assert_address_audit_stats(stats);
-
     let entries = report
         .get("entries")
         .and_then(Value::as_array)
         .expect("entries");
     assert_eq!(entries.len(), 3);
-
     assert_parsed_entry_kind(entries, &local_i105, "default");
     assert_parsed_entry_kind(entries, &default_i105, "default");
     assert_error_entry(entries);
 }
-
 #[test]
 fn address_audit_rejects_domain_suffix() {
     use torii_mock_support::TempDir;
-
     let account = account_id_for_domain("wonderland", 0xE5);
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
     let literal = format!("{i105}@banka");
-
     let temp_dir = TempDir::new("address_audit_domain").expect("temp dir");
     let path = temp_dir.path().join("addresses.txt");
     fs::write(&path, format!("{literal}\n")).expect("write addresses");
-
     let output = command()
         .current_dir(workspace_root())
         .args([
@@ -5080,9 +4706,7 @@ fn address_audit_rejects_domain_suffix() {
         "unexpected stderr: {stderr}"
     );
 }
-
 include!("cli_smoke_address_audit_csv_test.rs");
-
 fn assert_address_audit_stats(stats_value: &Value) {
     let stats = stats_value
         .as_object()
@@ -5109,7 +4733,6 @@ fn assert_address_audit_stats(stats_value: &Value) {
         1
     );
 }
-
 fn assert_parsed_entry_kind(entries: &[Value], expected_input: &str, expected_kind: &str) {
     let parsed_entry = entry_by_input(entries, expected_input);
     assert_eq!(
@@ -5129,7 +4752,6 @@ fn assert_parsed_entry_kind(entries: &[Value], expected_input: &str, expected_ki
         expected_kind
     );
 }
-
 fn assert_error_entry(entries: &[Value]) {
     let entry = entry_by_status(entries, "error");
     assert_eq!(
@@ -5141,7 +4763,6 @@ fn assert_error_entry(entries: &[Value]) {
         "ERR_UNSUPPORTED_ADDRESS_FORMAT"
     );
 }
-
 fn entry_by_input<'a>(entries: &'a [Value], expected_input: &str) -> &'a Value {
     entries
         .iter()
@@ -5153,18 +4774,15 @@ fn entry_by_input<'a>(entries: &'a [Value], expected_input: &str) -> &'a Value {
         })
         .unwrap_or_else(|| panic!("missing entry for {expected_input}"))
 }
-
 fn entry_by_status<'a>(entries: &'a [Value], status: &str) -> &'a Value {
     entries
         .iter()
         .find(|entry| entry.get("status").and_then(Value::as_str) == Some(status))
         .unwrap_or_else(|| panic!("missing entry with status {status}"))
 }
-
 #[test]
 fn space_directory_manifest_audit_bundle_cli() {
     use torii_mock_support::TempDir;
-
     let workspace = workspace_root();
     let manifest_fixture = workspace
         .join("fixtures")
@@ -5184,7 +4802,6 @@ fn space_directory_manifest_audit_bundle_cli() {
         .to_str()
         .expect("profile path utf-8")
         .to_owned();
-
     let manifest_json: Value =
         json::from_slice(&fs::read(&manifest_fixture).expect("read manifest fixture"))
             .expect("parse manifest fixture");
@@ -5197,11 +4814,9 @@ fn space_directory_manifest_audit_bundle_cli() {
         .get("dataspace")
         .and_then(Value::as_u64)
         .expect("fixture dataspace");
-
     let temp_dir = TempDir::new("space_directory_audit_bundle").expect("temp dir");
     let bundle_dir = temp_dir.path().join("bundle");
     let bundle_dir_str = bundle_dir.to_str().expect("bundle path utf-8").to_owned();
-
     let status = command()
         .args([
             "app",
@@ -5220,15 +4835,12 @@ fn space_directory_manifest_audit_bundle_cli() {
         .status()
         .expect("run audit bundle CLI");
     assert!(status.success(), "audit bundle command failed");
-
     let bundle_path = bundle_dir.join("audit_bundle.json");
     assert!(bundle_path.exists(), "missing audit bundle output");
-
     let manifest_to_path = bundle_dir.join("manifest.to");
     let manifest_to_bytes = fs::read(&manifest_to_path).expect("read manifest Norito payload");
     let expected_hash = iroha_crypto::Hash::new(&manifest_to_bytes);
     let expected_hash_hex = hex::encode(expected_hash.as_ref());
-
     let bundle_json: Value =
         json::from_slice(&fs::read(&bundle_path).expect("read bundle")).expect("parse bundle json");
     assert_eq!(
@@ -5260,8 +4872,8 @@ fn space_directory_manifest_audit_bundle_cli() {
         "artifact manifest reference mismatch"
     );
 }
-
 mod torii_mock_support {
+    use norito::json;
     use std::{
         env, fmt, fs,
         io::{self, BufRead, BufReader, Read, Write},
@@ -5272,12 +4884,8 @@ mod torii_mock_support {
         thread,
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
-
-    use norito::json;
     use url::Url;
-
     const MOCK_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
-
     #[derive(Debug)]
     pub enum SpawnError {
         PythonUnavailable,
@@ -5285,7 +4893,6 @@ mod torii_mock_support {
         Io(io::Error),
         Setup(String),
     }
-
     impl fmt::Display for SpawnError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
@@ -5301,19 +4908,16 @@ mod torii_mock_support {
             }
         }
     }
-
     impl From<io::Error> for SpawnError {
         fn from(err: io::Error) -> Self {
             SpawnError::Io(err)
         }
     }
-
     pub struct ToriiMockProcess {
         child: std::process::Child,
         base_url: String,
         stdout_thread: Option<std::thread::JoinHandle<()>>,
     }
-
     impl ToriiMockProcess {
         pub fn spawn() -> Result<Self, SpawnError> {
             match TcpListener::bind(("127.0.0.1", 0)) {
@@ -5417,12 +5021,10 @@ mod torii_mock_support {
             }
             Err(SpawnError::PythonUnavailable)
         }
-
         pub fn base_url(&self) -> &str {
             &self.base_url
         }
     }
-
     impl Drop for ToriiMockProcess {
         fn drop(&mut self) {
             if self.child.try_wait().ok().flatten().is_none() {
@@ -5434,11 +5036,9 @@ mod torii_mock_support {
             }
         }
     }
-
     pub struct TempDir {
         path: PathBuf,
     }
-
     impl TempDir {
         pub fn new(prefix: &str) -> io::Result<Self> {
             let mut path = std::env::temp_dir();
@@ -5453,18 +5053,15 @@ mod torii_mock_support {
             fs::create_dir(&path)?;
             Ok(Self { path })
         }
-
         pub fn path(&self) -> &Path {
             &self.path
         }
     }
-
     impl Drop for TempDir {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
         }
     }
-
     pub fn write_client_config(path: &Path, base_url: &str) -> io::Result<()> {
         let torii_url = format!("{}/", base_url.trim_end_matches('/'));
         let contents = format!(
@@ -5483,7 +5080,6 @@ private_key = \"{private_key}\"\n",
         );
         fs::write(path, contents)
     }
-
     fn post_mock_config(base_url: &str, endpoint: &str, config: &json::Value) -> io::Result<()> {
         let base =
             Url::parse(base_url).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
@@ -5499,7 +5095,6 @@ private_key = \"{private_key}\"\n",
         let path = target.path().to_string();
         let body =
             json::to_vec(config).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
-
         let mut stream = TcpStream::connect((host, port))?;
         stream.set_read_timeout(Some(MOCK_STARTUP_TIMEOUT))?;
         stream.set_write_timeout(Some(MOCK_STARTUP_TIMEOUT))?;
@@ -5513,7 +5108,6 @@ private_key = \"{private_key}\"\n",
         )?;
         stream.write_all(&body)?;
         stream.flush()?;
-
         let mut response = String::new();
         stream.read_to_string(&mut response)?;
         if !(response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200")) {
@@ -5521,23 +5115,18 @@ private_key = \"{private_key}\"\n",
         }
         Ok(())
     }
-
     pub fn configure_governance(base_url: &str, config: &json::Value) -> io::Result<()> {
         post_mock_config(base_url, "__mock__/gov/config", config)
     }
-
     pub fn configure_pipeline(base_url: &str, config: &json::Value) -> io::Result<()> {
         post_mock_config(base_url, "__mock__/pipeline/config", config)
     }
-
     pub fn configure_accounts(base_url: &str, config: &json::Value) -> io::Result<()> {
         post_mock_config(base_url, "__mock__/accounts/config", config)
     }
-
     pub fn configure_sumeragi(base_url: &str, config: &json::Value) -> io::Result<()> {
         post_mock_config(base_url, "__mock__/sumeragi/config", config)
     }
-
     fn workspace_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -5545,7 +5134,6 @@ private_key = \"{private_key}\"\n",
             .map(Path::to_path_buf)
             .expect("workspace root")
     }
-
     fn python_path_env(root: &Path) -> String {
         let dir_str = root.join("python").to_string_lossy().into_owned();
         match env::var("PYTHONPATH") {
@@ -5553,7 +5141,6 @@ private_key = \"{private_key}\"\n",
             _ => dir_str,
         }
     }
-
     fn parse_base_url(line: &str) -> Result<String, SpawnError> {
         let value: json::Value = json::from_str(line).map_err(|err| {
             SpawnError::Setup(format!("mock server announced invalid JSON: {err}"))

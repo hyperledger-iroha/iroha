@@ -1,12 +1,10 @@
+use norito::derive::JsonDeserialize;
+use soranet_handshake_harness::{HandshakeSuite, SimulationParams, decode_hex, simulate_handshake};
 use std::{
     fs,
     path::PathBuf,
     time::{Duration, Instant},
 };
-
-use norito::derive::JsonDeserialize;
-use soranet_handshake_harness::{HandshakeSuite, SimulationParams, decode_hex, simulate_handshake};
-
 #[derive(JsonDeserialize)]
 struct InteropInputs {
     client_capabilities_hex: String,
@@ -18,7 +16,6 @@ struct InteropInputs {
     descriptor_commit_hex: String,
     resume_hash_hex: Option<String>,
 }
-
 #[derive(JsonDeserialize)]
 struct InteropFixture {
     suite: String,
@@ -26,7 +23,6 @@ struct InteropFixture {
     sig_id: u8,
     inputs: InteropInputs,
 }
-
 struct PerfFixture {
     suite: HandshakeSuite,
     kem_id: u8,
@@ -40,7 +36,6 @@ struct PerfFixture {
     descriptor_commit: [u8; 32],
     resume_hash: Option<Vec<u8>>,
 }
-
 impl PerfFixture {
     fn params(&self) -> SimulationParams<'_> {
         SimulationParams {
@@ -57,18 +52,14 @@ impl PerfFixture {
         }
     }
 }
-
 #[test]
 fn handshake_perf_gate() {
     let nk2 = load_fixture("snnet-interop-nk2-v1");
     let nk3 = load_fixture("snnet-interop-nk3-v1");
-
     let mut nk2_durations = measure_fixture(&nk2, 128);
     let mut nk3_durations = measure_fixture(&nk3, 128);
-
     let nk2_p99 = percentile(&mut nk2_durations, 0.99);
     let nk3_p99 = percentile(&mut nk3_durations, 0.99);
-
     assert!(
         nk2_p99 < Duration::from_millis(900),
         "NK2 handshake P99 {nk2_p99:?} exceeds 900 ms limit"
@@ -77,7 +68,6 @@ fn handshake_perf_gate() {
         nk3_p99 < Duration::from_millis(900),
         "NK3 handshake P99 {nk3_p99:?} exceeds 900 ms limit"
     );
-
     let nk2_avg = average_ms(&nk2_durations);
     let nk3_avg = average_ms(&nk3_durations);
     let ratio_limit = if cfg!(debug_assertions) {
@@ -92,7 +82,6 @@ fn handshake_perf_gate() {
         "NK3 average {nk3_avg:.3} ms exceeds {ratio_limit:.2}× regression over NK2 {nk2_avg:.3} ms"
     );
 }
-
 fn measure_fixture(fixture: &PerfFixture, iterations: usize) -> Vec<Duration> {
     let mut durations = Vec::with_capacity(iterations);
     for _ in 0..iterations {
@@ -107,13 +96,11 @@ fn measure_fixture(fixture: &PerfFixture, iterations: usize) -> Vec<Duration> {
     }
     durations
 }
-
 fn percentile(samples: &mut [Duration], pct: f64) -> Duration {
     samples.sort_unstable();
     let idx = ((samples.len() as f64 * pct).ceil() as usize).saturating_sub(1);
     samples[idx.min(samples.len().saturating_sub(1))]
 }
-
 fn average_ms(samples: &[Duration]) -> f64 {
     let total_ms: f64 = samples
         .iter()
@@ -121,7 +108,6 @@ fn average_ms(samples: &[Duration]) -> f64 {
         .sum::<f64>();
     total_ms / samples.len() as f64
 }
-
 fn load_fixture(id: &str) -> PerfFixture {
     let mut path = workspace_root();
     path.push("fixtures");
@@ -131,13 +117,11 @@ fn load_fixture(id: &str) -> PerfFixture {
     path.push(format!("{id}.json"));
     let contents = fs::read_to_string(path).expect("read interop fixture");
     let parsed: InteropFixture = norito::json::from_str(&contents).expect("parse interop fixture");
-
     let suite = match parsed.suite.as_str() {
         "nk2.hybrid.v1" => HandshakeSuite::Nk2Hybrid,
         "nk3.pq_forward_secure.v1" => HandshakeSuite::Nk3PqForwardSecure,
         other => panic!("unsupported suite {other}"),
     };
-
     PerfFixture {
         suite,
         kem_id: parsed.kem_id,
@@ -158,7 +142,6 @@ fn load_fixture(id: &str) -> PerfFixture {
             .map(|hex| decode_hex(hex).expect("resume hash hex")),
     }
 }
-
 fn decode_array<const N: usize>(hex: &str) -> [u8; N] {
     let bytes = decode_hex(hex).expect("raw hex decode");
     if bytes.len() != N {
@@ -168,7 +151,6 @@ fn decode_array<const N: usize>(hex: &str) -> [u8; N] {
     array.copy_from_slice(&bytes);
     array
 }
-
 fn workspace_root() -> PathBuf {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     crate_dir

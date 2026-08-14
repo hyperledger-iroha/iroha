@@ -1,24 +1,18 @@
 //! Basic tests for traits derived by [`IdEqOrdHash`] macro
-
-use std::collections::BTreeSet;
-
 use iroha_data_model_derive::IdEqOrdHash;
-
+use std::collections::BTreeSet;
 /// fake `Identifiable` trait
 ///
 /// Doesn't require `Into<IdBox>` implementation
 pub trait Identifiable: Ord + Eq {
     /// Type of the entity identifier
     type Id: Ord + Eq + core::hash::Hash;
-
     /// Get reference to the type identifier
     fn id(&self) -> &Self::Id;
 }
-
 /// Simple identifier wrapper used in the tests.
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 struct ObjectId(char);
-
 /// Example struct deriving `IdEqOrdHash`.
 #[derive(Debug, IdEqOrdHash)]
 struct Object {
@@ -42,7 +36,6 @@ struct ObjectWithTransparentId {
     #[allow(unused)]
     data: i32,
 }
-
 // some objects to play with in tests
 const ID_A: ObjectId = ObjectId('A');
 const ID_B: ObjectId = ObjectId('B');
@@ -73,7 +66,6 @@ const TRANSPARENT_OBJECT_2A: ObjectWithTransparentId = ObjectWithTransparentId {
     definitely_not_id: OBJECT_2A,
     data: 2,
 };
-
 #[test]
 fn id() {
     assert_eq!(OBJECT_1A.id(), &ID_A);
@@ -83,7 +75,6 @@ fn id() {
     assert_eq!(TRANSPARENT_OBJECT_1A.id(), &ID_A);
     assert_eq!(TRANSPARENT_OBJECT_1B.id(), &ID_B);
 }
-
 #[test]
 fn id_eq() {
     assert_eq!(OBJECT_1A, OBJECT_2A);
@@ -93,7 +84,6 @@ fn id_eq() {
     assert_eq!(TRANSPARENT_OBJECT_1A, TRANSPARENT_OBJECT_2A);
     assert_ne!(TRANSPARENT_OBJECT_1B, TRANSPARENT_OBJECT_2A);
 }
-
 #[test]
 fn id_ord() {
     assert!(OBJECT_1A < OBJECT_1B);
@@ -103,7 +93,6 @@ fn id_ord() {
     assert!(TRANSPARENT_OBJECT_1A < TRANSPARENT_OBJECT_1B);
     assert!(TRANSPARENT_OBJECT_1B > TRANSPARENT_OBJECT_1A);
 }
-
 #[test]
 fn id_hash() {
     let mut set = BTreeSet::new();

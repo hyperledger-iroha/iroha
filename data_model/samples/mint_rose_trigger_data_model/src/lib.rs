@@ -1,34 +1,28 @@
 //! Arguments to mint rose with args trigger
-#[allow(unused_imports)]
-use std::eprintln;
-use std::string::String;
-
 use iroha_data_model::prelude::Json;
 use norito::{
     Error as NoritoError,
     core::{NoritoDeserialize, NoritoSerialize},
     json::{self, JsonDeserialize, JsonSerialize, Parser},
 };
-
+#[allow(unused_imports)]
+use std::eprintln;
+use std::string::String;
 /// Arguments to mint rose with args trigger
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct MintRoseArgs {
     /// Amount to mint
     pub val: u32,
 }
-
 impl json::JsonDeserialize for MintRoseArgs {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
         parser.skip_ws();
         parser.expect(b'{')?;
         parser.skip_ws();
-
         let mut val: Option<u32> = None;
-
         while !parser.try_consume_char(b'}')? {
             let key = parser.parse_string()?;
             parser.expect(b':')?;
-
             match key.as_str() {
                 "val" => {
                     let raw = parser.parse_u64()?;
@@ -40,7 +34,6 @@ impl json::JsonDeserialize for MintRoseArgs {
                 }
                 _ => parser.skip_value()?,
             }
-
             parser.skip_ws();
             if !parser.try_consume_char(b',')? {
                 parser.expect(b'}')?;
@@ -48,13 +41,10 @@ impl json::JsonDeserialize for MintRoseArgs {
             }
             parser.skip_ws();
         }
-
         let val = val.ok_or_else(|| json::Error::Message("missing field `val`".into()))?;
-
         Ok(Self { val })
     }
 }
-
 impl JsonSerialize for MintRoseArgs {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -63,7 +53,6 @@ impl JsonSerialize for MintRoseArgs {
         out.push('}');
     }
 }
-
 impl From<MintRoseArgs> for Json {
     fn from(details: MintRoseArgs) -> Self {
         let json =
@@ -71,10 +60,8 @@ impl From<MintRoseArgs> for Json {
         Json::from_raw_json(json).expect("MintRoseArgs serializer must emit valid bounded JSON")
     }
 }
-
 impl TryFrom<&Json> for MintRoseArgs {
     type Error = NoritoError;
-
     fn try_from(payload: &Json) -> Result<Self, Self::Error> {
         let mut parser = Parser::new(payload.as_ref());
         let parsed = MintRoseArgs::json_deserialize(&mut parser)?;
@@ -88,13 +75,10 @@ impl TryFrom<&Json> for MintRoseArgs {
         Ok(parsed)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     extern crate std;
-
     #[test]
     fn mint_rose_args_roundtrip() {
         let args = MintRoseArgs { val: 42 };

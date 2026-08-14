@@ -5,17 +5,16 @@
 //! every reachable registry bundle is re-authenticated before it can become a
 //! compiler input. Filesystem-backed execution is qualified on Unix; other
 //! targets fail closed before reading workspace, cache, or test-source state.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    error::Error,
-    fmt, fs, io,
-    path::{Path, PathBuf},
+use crate::{
+    cache::{CachedCompilerPackageV1, MusubiCache},
+    compiler::validate_exact_registry_interfaces_v1,
+    graph::collect_local_members,
+    local_file::read_bounded_single_link_regular_file_v1,
+    lockfile::{LockedRootV1, LockfileV1},
+    manifest::{ConcreteDependency, DependencySpec, PortablePath, parse_manifest},
+    package::{is_excluded_directory, is_sensitive_component},
+    workspace::{DependencyKind, EffectiveDependency, Workspace, WorkspaceMember},
 };
-
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt as _;
-
 #[cfg(all(test, unix))]
 use iroha_data_model::musubi::MusubiExactDependencyEdgeV1;
 use iroha_data_model::musubi::{
@@ -37,18 +36,14 @@ use ivm::{
     },
     syscalls::compute_abi_hash,
 };
-
-use crate::{
-    cache::{CachedCompilerPackageV1, MusubiCache},
-    compiler::validate_exact_registry_interfaces_v1,
-    graph::collect_local_members,
-    local_file::read_bounded_single_link_regular_file_v1,
-    lockfile::{LockedRootV1, LockfileV1},
-    manifest::{ConcreteDependency, DependencySpec, PortablePath, parse_manifest},
-    package::{is_excluded_directory, is_sensitive_component},
-    workspace::{DependencyKind, EffectiveDependency, Workspace, WorkspaceMember},
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fmt, fs, io,
+    path::{Path, PathBuf},
 };
-
 /// Runtime controls for one authenticated Musubi workspace test invocation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceTestOptionsV1 {
@@ -65,7 +60,6 @@ pub struct WorkspaceTestOptionsV1 {
     /// Enable the Kotodama ZK compilation surface.
     pub zk_enabled: bool,
 }
-
 impl WorkspaceTestOptionsV1 {
     /// Construct canonical single-worker test controls for one chain.
     #[must_use]
@@ -80,7 +74,6 @@ impl WorkspaceTestOptionsV1 {
         }
     }
 }
-
 /// Structured report for one manifest-declared test target.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceTestTargetReportV1 {
@@ -93,14 +86,12 @@ pub struct WorkspaceTestTargetReportV1 {
     /// Non-printing IVM report for the discovered suite.
     pub report: KotoTestRunReportV1,
 }
-
 /// Complete deterministic report for all selected workspace test roots.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceTestReportV1 {
     /// Target reports ordered by package, target name, and portable source path.
     pub targets: Vec<WorkspaceTestTargetReportV1>,
 }
-
 impl WorkspaceTestReportV1 {
     /// Return the total number of successful test cases.
     #[must_use]
@@ -110,7 +101,6 @@ impl WorkspaceTestReportV1 {
             .map(|target| target.report.passed())
             .sum()
     }
-
     /// Return the total number of failed test cases.
     #[must_use]
     pub(crate) fn failed(&self) -> usize {
@@ -119,14 +109,12 @@ impl WorkspaceTestReportV1 {
             .map(|target| target.report.failed())
             .sum()
     }
-
     /// Return whether every selected test passed.
     #[must_use]
     pub(crate) fn is_success(&self) -> bool {
         self.failed() == 0
     }
 }
-
 /// Stable authenticated workspace test failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkspaceTestErrorV1 {
@@ -145,7 +133,6 @@ pub enum WorkspaceTestErrorV1 {
     /// Structured IVM discovery, compilation, or execution failed.
     Runner(String),
 }
-
 impl fmt::Display for WorkspaceTestErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -163,16 +150,13 @@ impl fmt::Display for WorkspaceTestErrorV1 {
         }
     }
 }
-
 impl Error for WorkspaceTestErrorV1 {}
-
 trait AuthenticatedTestRegistryV1 {
     fn load(
         &self,
         node: &MusubiVerificationNodeV1,
     ) -> Result<SourcePackageUnit, WorkspaceTestErrorV1>;
 }
-
 impl AuthenticatedTestRegistryV1 for MusubiCache {
     fn load(
         &self,
@@ -183,7 +167,6 @@ impl AuthenticatedTestRegistryV1 for MusubiCache {
             .and_then(|cached| cached_source_package(node, cached))
     }
 }
-
 /// Run tests for exactly `selected` workspace roots after authenticating their lock graph.
 ///
 /// Development dependencies are considered only on explicitly selected roots;
@@ -206,7 +189,6 @@ pub fn execute_workspace_tests_v1(
     ensure_test_runner_platform_supported_v1()?;
     execute_workspace_tests_with_source(cache, workspace, selected, lock, options)
 }
-
 fn ensure_test_runner_platform_supported_v1() -> Result<(), WorkspaceTestErrorV1> {
     if cfg!(unix) {
         Ok(())
@@ -216,7 +198,6 @@ fn ensure_test_runner_platform_supported_v1() -> Result<(), WorkspaceTestErrorV1
         Err(WorkspaceTestErrorV1::UnsupportedPlatform)
     }
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "workspace-test execution authenticates the exact lock graph, targets, and VM inputs in one ordered fail-closed workflow"
@@ -261,7 +242,6 @@ fn execute_workspace_tests_with_source<S: AuthenticatedTestRegistryV1>(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
-
     let expected_abi_hash = compute_abi_hash(SyscallPolicy::AbiV1);
     let registry_nodes = selected_registry_nodes(lock, &graph_roots)?;
     let mut registry_packages = Vec::with_capacity(registry_nodes.len());
@@ -282,7 +262,6 @@ fn execute_workspace_tests_with_source<S: AuthenticatedTestRegistryV1>(
         registry_packages.push(package);
     }
     validate_registry_interfaces(&registry_nodes, &registry_packages, options)?;
-
     let mut packages = registry_packages;
     for member in &local_members {
         if let Some(package) = local_source_package(
@@ -303,7 +282,6 @@ fn execute_workspace_tests_with_source<S: AuthenticatedTestRegistryV1>(
             "the exact test graph contains duplicate package identities".to_owned(),
         ));
     }
-
     let mut targets = Vec::new();
     let mut matched_filter = options.filter.is_none();
     for (member, root) in members.into_iter().zip(roots) {
@@ -363,7 +341,6 @@ fn execute_workspace_tests_with_source<S: AuthenticatedTestRegistryV1>(
     });
     Ok(WorkspaceTestReportV1 { targets })
 }
-
 fn validate_options(options: &WorkspaceTestOptionsV1) -> Result<(), WorkspaceTestErrorV1> {
     if options.jobs == 0 {
         return Err(WorkspaceTestErrorV1::Workspace(
@@ -382,7 +359,6 @@ fn validate_options(options: &WorkspaceTestOptionsV1) -> Result<(), WorkspaceTes
     }
     Ok(())
 }
-
 fn canonical_selected(
     selected: &[MusubiPackageSelectorV1],
 ) -> Result<Vec<MusubiPackageSelectorV1>, WorkspaceTestErrorV1> {
@@ -400,7 +376,6 @@ fn canonical_selected(
     }
     Ok(selected)
 }
-
 fn selected_lock_root<'a>(
     lock: &'a LockfileV1,
     member: &WorkspaceMember,
@@ -420,7 +395,6 @@ fn selected_lock_root<'a>(
     validate_declared_edges(member, root, include_dev)?;
     Ok(root)
 }
-
 fn validate_declared_edges(
     member: &WorkspaceMember,
     root: &LockedRootV1,
@@ -469,7 +443,6 @@ fn validate_declared_edges(
     }
     Ok(())
 }
-
 fn registry_requirement(
     dependency: &EffectiveDependency,
 ) -> Result<Option<(&MusubiPackageSelectorV1, &MusubiVersionReqV1)>, WorkspaceTestErrorV1> {
@@ -494,14 +467,12 @@ fn registry_requirement(
         ))),
     }
 }
-
 fn local_identity(member: &WorkspaceMember) -> String {
     format!(
         "local:{}@{}",
         member.package.selector, member.package.version
     )
 }
-
 fn test_root_imports(
     member: &WorkspaceMember,
     root: &LockedRootV1,
@@ -534,7 +505,6 @@ fn test_root_imports(
     }
     Ok(imports)
 }
-
 fn dependency_import_identity(
     root: &LockedRootV1,
     dependency: &EffectiveDependency,
@@ -576,7 +546,6 @@ fn dependency_import_identity(
     }
     Ok(edge.selected.to_string())
 }
-
 fn local_source_package(
     member: &WorkspaceMember,
     lock: &LockfileV1,
@@ -618,7 +587,6 @@ fn local_source_package(
         imports,
     }))
 }
-
 fn validate_registry_interfaces(
     nodes: &[&MusubiVerificationNodeV1],
     packages: &[SourcePackageUnit],
@@ -636,7 +604,6 @@ fn validate_registry_interfaces(
     )
     .map_err(WorkspaceTestErrorV1::Cache)
 }
-
 fn cached_source_package(
     node: &MusubiVerificationNodeV1,
     cached: CachedCompilerPackageV1,
@@ -715,7 +682,6 @@ fn cached_source_package(
             .collect(),
     })
 }
-
 fn validate_cached_manifest_edges(
     node: &MusubiVerificationNodeV1,
     dependencies: &BTreeMap<iroha_data_model::name::Name, DependencySpec>,
@@ -759,7 +725,6 @@ fn validate_cached_manifest_edges(
     }
     Ok(())
 }
-
 #[expect(
     clippy::case_sensitive_file_extension_comparisons,
     reason = "portable Musubi source paths require the canonical lowercase .ko suffix"
@@ -773,7 +738,6 @@ fn relative_library_source(path: &str, source_dir: &PortablePath) -> Option<Stri
         .filter(|relative| relative.ends_with(".ko") && !relative.is_empty())
         .map(ToOwned::to_owned)
 }
-
 fn selected_registry_nodes<'a>(
     lock: &'a LockfileV1,
     roots: &[&LockedRootV1],
@@ -805,20 +769,16 @@ fn selected_registry_nodes<'a>(
         .filter(|node| reachable.contains(&node.release))
         .collect())
 }
-
 const MAX_TEST_SOURCE_SET_DEPTH_V1: usize = 64;
-
 struct DeclaredTestSourceV1 {
     logical_path: String,
     unit: SourceModuleUnit,
 }
-
 #[derive(Default)]
 struct DeclaredTestSourceBudgetV1 {
     entries: usize,
     source_bytes: u64,
 }
-
 fn declared_test_sources(
     member: &WorkspaceMember,
     relative: &Path,
@@ -844,7 +804,6 @@ fn declared_test_sources(
             member.package.selector
         )));
     }
-
     let mut sources = Vec::new();
     let mut collisions = BTreeMap::new();
     let mut budget = DeclaredTestSourceBudgetV1::default();
@@ -890,7 +849,6 @@ fn declared_test_sources(
     sources.sort_by(|left, right| left.logical_path.cmp(&right.logical_path));
     Ok(sources)
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "the bounded recursive directory walk carries each confinement and resource-budget guard explicitly"
@@ -941,7 +899,6 @@ fn collect_declared_test_directory(
         names.push(name);
     }
     names.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
-
     for name in names {
         let physical = directory.join(&name);
         let child_relative = relative.join(&name);
@@ -995,7 +952,6 @@ fn collect_declared_test_directory(
             )));
         }
     }
-
     let after = fs::symlink_metadata(directory).map_err(|error| {
         WorkspaceTestErrorV1::Target(format!(
             "cannot reinspect test directory `{}`: {error}",
@@ -1012,7 +968,6 @@ fn collect_declared_test_directory(
     }
     Ok(())
 }
-
 fn read_declared_test_source(
     package_root: &Path,
     physical: &Path,
@@ -1027,7 +982,6 @@ fn read_declared_test_source(
         read_bounded_single_link_regular_file_v1,
     )
 }
-
 fn read_declared_test_source_with_reader<F>(
     package_root: &Path,
     physical: &Path,
@@ -1088,7 +1042,6 @@ where
         logical_path,
     })
 }
-
 fn validate_test_ancestors(root: &Path, relative: &Path) -> Result<(), WorkspaceTestErrorV1> {
     let mut current = root.to_path_buf();
     for component in relative.components() {
@@ -1119,7 +1072,6 @@ fn validate_test_ancestors(root: &Path, relative: &Path) -> Result<(), Workspace
     }
     Ok(())
 }
-
 fn portable_test_path(relative: &Path) -> Result<String, WorkspaceTestErrorV1> {
     let mut components = Vec::new();
     for component in relative.components() {
@@ -1142,7 +1094,6 @@ fn portable_test_path(relative: &Path) -> Result<String, WorkspaceTestErrorV1> {
         .map(|path| path.to_string())
         .map_err(|error| WorkspaceTestErrorV1::Target(error.to_string()))
 }
-
 fn register_test_path(
     collisions: &mut BTreeMap<String, String>,
     logical_path: &str,
@@ -1160,7 +1111,6 @@ fn register_test_path(
     }
     Ok(())
 }
-
 fn consume_test_entry_budget(
     budget: &mut DeclaredTestSourceBudgetV1,
 ) -> Result<(), WorkspaceTestErrorV1> {
@@ -1172,7 +1122,6 @@ fn consume_test_entry_budget(
     }
     Ok(())
 }
-
 fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -1184,7 +1133,6 @@ fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
         true
     }
 }
-
 fn metadata_is_safe_test_file(metadata: &fs::Metadata) -> bool {
     if metadata_is_link_or_reparse(metadata) || !metadata.is_file() {
         return false;
@@ -1198,11 +1146,9 @@ fn metadata_is_safe_test_file(metadata: &fs::Metadata) -> bool {
         false
     }
 }
-
 fn metadata_is_safe_test_directory(metadata: &fs::Metadata) -> bool {
     !metadata_is_link_or_reparse(metadata) && metadata.is_dir()
 }
-
 fn same_test_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -1222,14 +1168,13 @@ fn same_test_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         false
     }
 }
-
 #[cfg(all(test, unix))]
 mod tests {
-    use std::{cell::RefCell, fs, path::Path};
-
-    #[cfg(unix)]
-    use std::process::Command;
-
+    use super::*;
+    use crate::{
+        lockfile::LockedRootV1,
+        workspace::{Workspace, load_workspace},
+    };
     use iroha_data_model::{
         musubi::{
             ArchiveId, MusubiAbiBindingV1, MusubiContentDigestV1, MusubiPackageIdV1,
@@ -1242,19 +1187,14 @@ mod tests {
         linker::{ModuleBuildGraph, SourcePackageGraphRequest},
         session::CompilerSession,
     };
+    #[cfg(unix)]
+    use std::process::Command;
+    use std::{cell::RefCell, fs, path::Path};
     use tempfile::tempdir;
-
-    use super::*;
-    use crate::{
-        lockfile::LockedRootV1,
-        workspace::{Workspace, load_workspace},
-    };
-
     struct RecordingRegistry {
         releases: RefCell<Vec<String>>,
         packages: BTreeMap<String, SourcePackageUnit>,
     }
-
     impl RecordingRegistry {
         fn new(packages: impl IntoIterator<Item = SourcePackageUnit>) -> Self {
             Self {
@@ -1266,7 +1206,6 @@ mod tests {
             }
         }
     }
-
     impl AuthenticatedTestRegistryV1 for RecordingRegistry {
         fn load(
             &self,
@@ -1284,14 +1223,12 @@ mod tests {
                 })
         }
     }
-
     fn write(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create fixture parent");
         }
         fs::write(path, contents).expect("write fixture");
     }
-
     fn declared_source_fixture(contents: &str) -> (tempfile::TempDir, Workspace) {
         let temporary = tempdir().expect("tempdir");
         write(
@@ -1304,7 +1241,6 @@ mod tests {
             load_workspace(temporary.path().join("Musubi.toml")).expect("workspace fixture");
         (temporary, workspace)
     }
-
     fn package_manifest(name: &str, dependency: &str) -> String {
         format!(
             r#"manifest-version = 1
@@ -1328,7 +1264,6 @@ path = "tests/unit.ko"
 "#
         )
     }
-
     fn lock(roots: Vec<LockedRootV1>, nodes: Vec<MusubiVerificationNodeV1>) -> LockfileV1 {
         LockfileV1::new(
             "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
@@ -1344,7 +1279,6 @@ path = "tests/unit.ko"
         )
         .expect("valid lock")
     }
-
     fn structural_package(dataspace: u64, name: &str) -> MusubiPackageIdV1 {
         MusubiPackageIdV1::new(
             DataSpaceId::new(dataspace),
@@ -1352,7 +1286,6 @@ path = "tests/unit.ko"
             name.parse().expect("package name"),
         )
     }
-
     fn node(
         package: MusubiPackageIdV1,
         dependencies: Vec<MusubiExactDependencyEdgeV1>,
@@ -1370,7 +1303,6 @@ path = "tests/unit.ko"
             dependencies,
         }
     }
-
     fn source_package(
         release: &MusubiReleaseIdV1,
         source: &str,
@@ -1387,7 +1319,6 @@ path = "tests/unit.ko"
             imports,
         }
     }
-
     fn interface_digest(
         package: &SourcePackageUnit,
         packages: &[SourcePackageUnit],
@@ -1411,7 +1342,6 @@ path = "tests/unit.ko"
         .expect("typed package fixture");
         MusubiContentDigestV1::new(*validated.interface_fingerprint.as_ref())
     }
-
     #[test]
     fn rejects_invalid_controls_and_ambiguous_selection() {
         let mut options = WorkspaceTestOptionsV1::new(753);
@@ -1436,7 +1366,6 @@ path = "tests/unit.ko"
             Err(WorkspaceTestErrorV1::Workspace(_))
         ));
     }
-
     #[test]
     fn runs_tests_only_for_the_selected_workspace_root() {
         let temp = tempdir().expect("tempdir");
@@ -1492,14 +1421,12 @@ default-members = ["app"]
             &WorkspaceTestOptionsV1::new(753),
         )
         .expect("selected tests");
-
         assert_eq!(report.targets.len(), 1);
         assert_eq!(report.targets[0].package.to_string(), "test/app");
         assert_eq!(report.passed(), 1);
         assert_eq!(report.failed(), 0);
         assert!(report.is_success());
     }
-
     #[test]
     fn authenticates_and_executes_selected_dev_graph_with_transitive_normal_modules() {
         let temp = tempdir().expect("tempdir");
@@ -1578,12 +1505,10 @@ default-members = ["app"]
             &WorkspaceTestOptionsV1::new(753),
         )
         .expect("exact dev graph must compile and execute");
-
         assert!(report.is_success());
         assert_eq!(report.targets.len(), 1);
         assert_eq!(registry.releases.borrow().len(), 2);
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -1639,7 +1564,6 @@ core = { package = "test/core", version = "^1.0.0" }
                 "[dependencies]\nunused = { package = \"test/unused\", version = \"^1.0.0\" }",
             ),
         );
-
         let workspace = load_workspace(&temp.path().join("Musubi.toml")).expect("workspace");
         let app_selector: MusubiPackageSelectorV1 = "test/app".parse().expect("app selector");
         let helper_selector: MusubiPackageSelectorV1 =
@@ -1702,7 +1626,6 @@ core = { package = "test/core", version = "^1.0.0" }
             ],
         );
         let registry = RecordingRegistry::new([core_unit, unused_unit]);
-
         let report = execute_workspace_tests_with_source(
             &registry,
             &workspace,
@@ -1711,7 +1634,6 @@ core = { package = "test/core", version = "^1.0.0" }
             &WorkspaceTestOptionsV1::new(753),
         )
         .expect("pure-path registry graph must compile and execute");
-
         assert!(report.is_success());
         assert_eq!(
             registry.releases.into_inner(),
@@ -1719,7 +1641,6 @@ core = { package = "test/core", version = "^1.0.0" }
             "an unrelated workspace root must not enter the selected test graph"
         );
     }
-
     #[test]
     fn rejects_registry_source_whose_typed_interface_disagrees_with_lock() {
         let package_id = structural_package(1, "dep");
@@ -1739,11 +1660,9 @@ core = { package = "test/core", version = "^1.0.0" }
         let error =
             validate_registry_interfaces(&[&locked], &[package], &WorkspaceTestOptionsV1::new(753))
                 .expect_err("interface substitution must fail closed");
-
         assert!(matches!(error, WorkspaceTestErrorV1::Cache(_)));
         assert!(error.to_string().contains("typed interface"));
     }
-
     #[test]
     fn directory_target_runs_only_its_bounded_canonical_source_set() {
         let temp = tempdir().expect("tempdir");
@@ -1801,7 +1720,6 @@ core = { package = "test/core", version = "^1.0.0" }
             ["tests/nested/a.ko", "tests/z.ko"]
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn directory_target_rejects_hardlinked_sources_before_execution() {
@@ -1841,7 +1759,6 @@ core = { package = "test/core", version = "^1.0.0" }
         assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
         assert!(error.to_string().contains("hardlink"));
     }
-
     #[test]
     fn declared_test_source_accepts_a_bounded_regular_leaf() {
         let (_temporary, workspace) = declared_source_fixture("module Unit {}");
@@ -1852,7 +1769,6 @@ core = { package = "test/core", version = "^1.0.0" }
             .expect("workspace member");
         let source = member.package_root.join("tests/unit.ko");
         let mut budget = DeclaredTestSourceBudgetV1::default();
-
         let declared = read_declared_test_source(
             &member.package_root,
             &source,
@@ -1864,7 +1780,6 @@ core = { package = "test/core", version = "^1.0.0" }
         assert_eq!(declared.unit.source, "module Unit {}");
         assert_eq!(budget.source_bytes, 14);
     }
-
     #[cfg(unix)]
     #[test]
     fn declared_test_source_rejects_a_raced_regular_replacement() {
@@ -1878,7 +1793,6 @@ core = { package = "test/core", version = "^1.0.0" }
         let replacement = member.package_root.join("tests/replacement.ko");
         write(&replacement, "module Other {}");
         let mut budget = DeclaredTestSourceBudgetV1::default();
-
         let error = read_declared_test_source_with_reader(
             &member.package_root,
             &source,
@@ -1900,7 +1814,6 @@ core = { package = "test/core", version = "^1.0.0" }
         assert!(error.to_string().contains("securely read bounded"));
         assert_eq!(budget.source_bytes, 0);
     }
-
     #[cfg(unix)]
     #[test]
     fn declared_test_source_rejects_a_raced_fifo_without_blocking() {
@@ -1912,7 +1825,6 @@ core = { package = "test/core", version = "^1.0.0" }
             .expect("workspace member");
         let source = member.package_root.join("tests/unit.ko");
         let mut budget = DeclaredTestSourceBudgetV1::default();
-
         let error = read_declared_test_source_with_reader(
             &member.package_root,
             &source,
@@ -1938,7 +1850,6 @@ core = { package = "test/core", version = "^1.0.0" }
         assert!(error.to_string().contains("securely read bounded"));
         assert_eq!(budget.source_bytes, 0);
     }
-
     #[test]
     fn declared_test_source_rejects_an_oversized_sparse_leaf() {
         let temp = tempdir().expect("tempdir");
@@ -1959,13 +1870,11 @@ core = { package = "test/core", version = "^1.0.0" }
             .values()
             .next()
             .expect("workspace member");
-
         let error = declared_test_sources(member, Path::new("tests/unit.ko"))
             .expect_err("oversized test source must fail closed");
         assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
         assert!(error.to_string().contains("bounded regular file"));
     }
-
     #[cfg(unix)]
     #[test]
     fn declared_test_directory_rejects_a_fifo_leaf_without_opening_it() {
@@ -1990,18 +1899,15 @@ core = { package = "test/core", version = "^1.0.0" }
             .values()
             .next()
             .expect("workspace member");
-
         let error = declared_test_sources(member, Path::new("tests"))
             .expect_err("FIFO test source must fail without hanging");
         assert!(matches!(error, WorkspaceTestErrorV1::Target(_)));
         assert!(error.to_string().contains("hardlink or special file"));
     }
 }
-
 #[cfg(all(test, not(unix)))]
 mod unsupported_platform_tests {
     use super::{WorkspaceTestErrorV1, ensure_test_runner_platform_supported_v1};
-
     #[test]
     fn workspace_test_guard_returns_the_exact_platform_error() {
         assert_eq!(

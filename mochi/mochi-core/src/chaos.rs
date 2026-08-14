@@ -1,5 +1,13 @@
 //! Izanami-backed chaos helpers for the Mochi desktop shell.
-
+use crate::{Supervisor, ToriiClient};
+use color_eyre::{Result as EyreResult, eyre::eyre};
+use iroha_data_model::{block::SignedBlock, domain::DomainId, isi::InstructionBox};
+use iroha_genesis::GenesisBlock;
+use iroha_test_samples::ALICE_KEYPAIR;
+use izanami::faults::{
+    CpuStressConfig, DiskSaturationConfig, FaultClient, FaultConfig, FaultPeer, FaultScenarioKind,
+    NetworkLatencyConfig, NetworkPartitionConfig, apply_fault_scenario,
+};
 use std::{
     fs,
     path::PathBuf,
@@ -11,20 +19,8 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime},
 };
-
-use color_eyre::{Result as EyreResult, eyre::eyre};
-use iroha_data_model::{block::SignedBlock, domain::DomainId, isi::InstructionBox};
-use iroha_genesis::GenesisBlock;
-use iroha_test_samples::ALICE_KEYPAIR;
 use tokio::runtime::Handle;
 use toml::{Table, Value};
-
-use crate::{Supervisor, ToriiClient};
-use izanami::faults::{
-    CpuStressConfig, DiskSaturationConfig, FaultClient, FaultConfig, FaultPeer, FaultScenarioKind,
-    NetworkLatencyConfig, NetworkPartitionConfig, apply_fault_scenario,
-};
-
 /// Named chaos presets surfaced in the Mochi desktop shell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChaosPreset {
@@ -41,7 +37,6 @@ pub enum ChaosPreset {
     /// Wipe one peer's storage and bring it back.
     WipeAndRejoin,
 }
-
 impl ChaosPreset {
     /// Human-readable preset label.
     #[must_use]
@@ -55,7 +50,6 @@ impl ChaosPreset {
             Self::WipeAndRejoin => "Wipe and rejoin",
         }
     }
-
     /// One-line explanation suitable for UI cards.
     #[must_use]
     pub fn description(self) -> &'static str {
@@ -68,7 +62,6 @@ impl ChaosPreset {
             Self::WipeAndRejoin => "Blow away one peer's local storage and let it rejoin.",
         }
     }
-
     /// Reasonable default duration for the preset.
     #[must_use]
     pub fn default_duration(self) -> Duration {
@@ -81,7 +74,6 @@ impl ChaosPreset {
             Self::WipeAndRejoin => Duration::from_secs(6),
         }
     }
-
     /// Ordered list for UI selectors.
     #[must_use]
     pub fn all() -> [Self; 6] {
@@ -95,7 +87,6 @@ impl ChaosPreset {
         ]
     }
 }
-
 /// User-selected parameters for a single chaos run.
 #[derive(Debug, Clone)]
 pub struct ChaosRunRequest {
@@ -108,14 +99,12 @@ pub struct ChaosRunRequest {
     /// Deterministic seed forwarded to Izanami fault helpers.
     pub seed: u64,
 }
-
 /// Incremental progress update emitted while a chaos run is active.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChaosEvent {
     /// Human-readable progress line.
     pub message: String,
 }
-
 /// Final summary for a finished chaos run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChaosReport {
@@ -132,7 +121,6 @@ pub struct ChaosReport {
     /// Ordered event log captured during execution.
     pub events: Vec<String>,
 }
-
 /// Result of a chaos run, including the restored supervisor state.
 #[derive(Debug)]
 pub struct ChaosRunResult {
@@ -143,7 +131,6 @@ pub struct ChaosRunResult {
     /// Optional error from the run.
     pub error: Option<ChaosError>,
 }
-
 /// Chaos runner failures.
 #[derive(Debug, thiserror::Error)]
 pub enum ChaosError {
@@ -157,7 +144,6 @@ pub enum ChaosError {
     #[error("{0}")]
     Message(String),
 }
-
 /// Run a preset against a supervisor and return the restored supervisor with a report.
 pub fn run_chaos_preset<F>(
     supervisor: Supervisor,
@@ -175,13 +161,11 @@ where
         event_log.push(message.clone());
         on_event(ChaosEvent { message });
     };
-
     emit(format!(
         "Starting {} against {}.",
         request.preset.label(),
         request.peer_alias
     ));
-
     let shared = Arc::new(Mutex::new(supervisor));
     let result = match request.preset {
         ChaosPreset::PeerBounce => run_peer_bounce(&shared, &request.peer_alias, cancel, &mut emit),
@@ -248,7 +232,6 @@ where
                 )
             }),
     };
-
     let cancelled = cancel.load(Ordering::Relaxed);
     match &result {
         Ok(()) if cancelled => emit("Chaos run cancelled after the current action.".to_owned()),
@@ -256,12 +239,10 @@ where
         Err(ChaosError::Cancelled) => emit("Chaos run cancelled.".to_owned()),
         Err(err) => emit(format!("Chaos run failed: {err}")),
     }
-
     let supervisor = Arc::into_inner(shared)
         .expect("chaos peer handles should be dropped before recovering supervisor")
         .into_inner()
         .unwrap_or_else(|poison| poison.into_inner());
-
     let report = ChaosReport {
         preset: request.preset,
         peer_alias: request.peer_alias,
@@ -270,19 +251,16 @@ where
         cancelled: cancelled || matches!(result, Err(ChaosError::Cancelled)),
         events: event_log,
     };
-
     ChaosRunResult {
         supervisor,
         report,
         error: result.err(),
     }
 }
-
 #[derive(Clone)]
 struct MochiFaultClient {
     client: ToriiClient,
 }
-
 impl FaultClient for MochiFaultClient {
     fn submit_instruction<I>(&self, _instruction: I) -> EyreResult<()>
     where
@@ -293,7 +271,6 @@ impl FaultClient for MochiFaultClient {
         ))
     }
 }
-
 #[derive(Clone)]
 struct MochiFaultPeer {
     supervisor: Arc<Mutex<Supervisor>>,
@@ -303,7 +280,6 @@ struct MochiFaultPeer {
     isolated_trusted_peers_pop: Vec<Value>,
     client: MochiFaultClient,
 }
-
 impl MochiFaultPeer {
     fn from_shared(shared: &Arc<Mutex<Supervisor>>, alias: &str) -> Result<Self, ChaosError> {
         let guard = shared
@@ -358,30 +334,23 @@ impl MochiFaultPeer {
         })
     }
 }
-
 impl FaultPeer for MochiFaultPeer {
     type Client = MochiFaultClient;
-
     fn mnemonic(&self) -> &str {
         &self.alias
     }
-
     fn kura_store_dir(&self) -> PathBuf {
         self.kura_store_dir.clone()
     }
-
     fn client(&self) -> Self::Client {
         self.client.clone()
     }
-
     fn isolated_trusted_peer_entry(&self) -> EyreResult<String> {
         Ok(self.trusted_peer_entry.clone())
     }
-
     fn isolated_trusted_peers_pop_entries(&self) -> EyreResult<Vec<Value>> {
         Ok(self.isolated_trusted_peers_pop.clone())
     }
-
     fn shutdown(&self) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
         let supervisor = self.supervisor.clone();
         let alias = self.alias.clone();
@@ -391,7 +360,6 @@ impl FaultPeer for MochiFaultPeer {
             }
         })
     }
-
     fn restart_with_layers<'a>(
         &'a self,
         _config_layers: &'a Arc<Vec<Table>>,
@@ -411,7 +379,6 @@ impl FaultPeer for MochiFaultPeer {
         })
     }
 }
-
 fn run_peer_bounce<F>(
     shared: &Arc<Mutex<Supervisor>>,
     alias: &str,
@@ -437,7 +404,6 @@ where
         .start_peer(alias)
         .map_err(|err| ChaosError::Message(err.to_string()))
 }
-
 #[allow(clippy::too_many_arguments)]
 fn run_izanami_fault<F>(
     handle: &Handle,
@@ -481,7 +447,6 @@ where
         })
         .map_err(|err| ChaosError::Message(err.to_string()))
 }
-
 fn run_resource_pressure<F>(
     handle: &Handle,
     peer: MochiFaultPeer,
@@ -544,7 +509,6 @@ where
         emit,
     )
 }
-
 fn run_bad_actor<F>(
     client: MochiFaultClient,
     handle: &Handle,
@@ -582,7 +546,6 @@ where
     }
     Ok(())
 }
-
 fn sleep_with_cancel(duration: Duration, cancel: &AtomicBool) -> Result<(), ChaosError> {
     let start = Instant::now();
     while start.elapsed() < duration {
@@ -593,7 +556,6 @@ fn sleep_with_cancel(duration: Duration, cancel: &AtomicBool) -> Result<(), Chao
     }
     Ok(())
 }
-
 fn fault_config_for_latency(duration: Duration) -> FaultConfig {
     FaultConfig {
         interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -610,7 +572,6 @@ fn fault_config_for_latency(duration: Duration) -> FaultConfig {
         disk_saturation: None,
     }
 }
-
 fn fault_config_for_partition(duration: Duration) -> FaultConfig {
     FaultConfig {
         interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -626,7 +587,6 @@ fn fault_config_for_partition(duration: Duration) -> FaultConfig {
         disk_saturation: None,
     }
 }
-
 fn scenario_label(scenario: FaultScenarioKind) -> &'static str {
     match scenario {
         FaultScenarioKind::CrashRestart => "crash/restart fault",

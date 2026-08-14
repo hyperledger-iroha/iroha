@@ -3,9 +3,6 @@
 //! Each entry records the storage ticket and digest information for a
 //! confidential lane alongside the resolved policy version. Payload bytes are
 //! never kept here; only deterministic metadata derived from commitments.
-
-use std::collections::{BTreeMap, BTreeSet};
-
 use iroha_data_model::{
     da::{
         commitment::{DaCommitmentLocation, DaCommitmentRecord},
@@ -15,7 +12,7 @@ use iroha_data_model::{
     nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
-
+use std::collections::{BTreeMap, BTreeSet};
 /// Deterministic record for a confidential-compute commitment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfidentialComputeReceipt {
@@ -38,7 +35,6 @@ pub struct ConfidentialComputeReceipt {
     /// Audience labels allowed to fetch the payload.
     pub allowed_audiences: Vec<String>,
 }
-
 /// Receipt paired with its location in the block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfidentialComputeWithLocation {
@@ -47,7 +43,6 @@ pub struct ConfidentialComputeWithLocation {
     /// Location in the block bundle.
     pub location: DaCommitmentLocation,
 }
-
 /// In-memory index over confidential-compute receipts.
 #[derive(Clone, Debug, Default)]
 pub struct ConfidentialComputeStore {
@@ -56,7 +51,6 @@ pub struct ConfidentialComputeStore {
     by_lane_epoch: BTreeMap<(u32, u64, u64), ConfidentialComputeWithLocation>,
     by_block: BTreeMap<u64, Vec<ConfidentialComputeWithLocation>>,
 }
-
 impl ConfidentialComputeStore {
     /// Insert a record derived from a DA commitment if its identities are new.
     pub fn insert(
@@ -72,7 +66,6 @@ impl ConfidentialComputeStore {
         {
             return false;
         }
-
         let receipt = ConfidentialComputeReceipt {
             lane_id: record.lane_id,
             epoch: record.epoch,
@@ -96,7 +89,6 @@ impl ConfidentialComputeStore {
             .push(located);
         true
     }
-
     /// Retrieve a receipt by `(lane, epoch, sequence)`.
     #[must_use]
     pub fn get_by_lane_epoch_sequence(
@@ -107,24 +99,20 @@ impl ConfidentialComputeStore {
     ) -> Option<&ConfidentialComputeWithLocation> {
         self.by_lane_epoch.get(&(lane_id, epoch, sequence))
     }
-
     /// Receipts stored for a specific block height.
     #[must_use]
     pub fn receipts_at(&self, block_height: u64) -> Option<&[ConfidentialComputeWithLocation]> {
         self.by_block.get(&block_height).map(Vec::as_slice)
     }
-
     /// Return all receipts ordered by `(lane, epoch, sequence)`.
     pub fn all_sorted(&self) -> impl Iterator<Item = &ConfidentialComputeWithLocation> {
         self.by_lane_epoch.values()
     }
-
     /// Returns true when no receipts are stored.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.by_lane_epoch.is_empty()
     }
-
     /// Drop cached receipts belonging to retired lanes.
     pub fn prune_lanes(&mut self, retired: &BTreeSet<LaneId>) {
         if retired.is_empty() {
@@ -142,9 +130,9 @@ impl ConfidentialComputeStore {
         });
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
         da::{
@@ -153,9 +141,6 @@ mod tests {
         },
         nexus::LaneId,
     };
-
-    use super::*;
-
     fn policy(version: u32) -> ConfidentialComputePolicy {
         ConfidentialComputePolicy::new(
             ConfidentialComputeMechanism::Encryption,
@@ -163,7 +148,6 @@ mod tests {
             vec!["ops".to_string()],
         )
     }
-
     fn record(lane: u32, epoch: u64, sequence: u64) -> DaCommitmentRecord {
         let lane_byte = u8::try_from(lane).expect("lane fits in u8 for test fixture");
         let seq_byte = u8::try_from(sequence).expect("sequence fits in u8 for test fixture");
@@ -191,7 +175,6 @@ mod tests {
                 .expect("checked core confidential-store acknowledgement signature fixture"),
         )
     }
-
     #[test]
     fn inserts_and_deduplicates() {
         let mut store = ConfidentialComputeStore::default();
@@ -203,7 +186,6 @@ mod tests {
             block_height: 5,
             index_in_bundle: 0,
         };
-
         assert!(store.insert(&rec, loc, &policy));
         assert!(!store.insert(&conflict, loc, &policy));
         assert!(!store.insert(&rec, loc, &policy));
@@ -215,7 +197,6 @@ mod tests {
         assert_eq!(fetched.receipt.key_version, 1);
         assert_eq!(fetched.location.block_height, 5);
     }
-
     #[test]
     fn duplicate_manifest_is_rejected_from_indexes() {
         let mut store = ConfidentialComputeStore::default();
@@ -231,10 +212,8 @@ mod tests {
             block_height: 6,
             index_in_bundle: 0,
         };
-
         assert!(store.insert(&first, first_loc, &policy));
         assert!(!store.insert(&conflict, conflict_loc, &policy));
-
         assert_eq!(store.all_sorted().count(), 1);
         assert!(
             store.get_by_lane_epoch_sequence(1, 1, 3).is_none(),
@@ -245,7 +224,6 @@ mod tests {
             "manifest conflict must not enter the block index"
         );
     }
-
     #[test]
     fn duplicate_ticket_is_rejected_from_indexes() {
         let mut store = ConfidentialComputeStore::default();
@@ -261,10 +239,8 @@ mod tests {
             block_height: 6,
             index_in_bundle: 0,
         };
-
         assert!(store.insert(&first, first_loc, &policy));
         assert!(!store.insert(&conflict, conflict_loc, &policy));
-
         assert_eq!(store.all_sorted().count(), 1);
         assert!(
             store.get_by_lane_epoch_sequence(1, 1, 3).is_none(),
@@ -275,14 +251,11 @@ mod tests {
             "ticket conflict must not enter the block index"
         );
     }
-
     #[test]
     fn orders_by_lane_epoch_sequence() {
         let mut store = ConfidentialComputeStore::default();
         let policy = policy(2);
-
         let records = [record(1, 2, 0), record(1, 1, 1), record(0, 3, 5)];
-
         for (idx, rec) in records.iter().enumerate() {
             let loc = DaCommitmentLocation {
                 block_height: 9,
@@ -290,7 +263,6 @@ mod tests {
             };
             store.insert(rec, loc, &policy);
         }
-
         let ordered: Vec<_> = store
             .all_sorted()
             .map(|rec| {
@@ -303,14 +275,12 @@ mod tests {
             .collect();
         assert_eq!(ordered, vec![(0, 3, 5), (1, 1, 1), (1, 2, 0)]);
     }
-
     #[test]
     fn prunes_retired_lanes() {
         let mut store = ConfidentialComputeStore::default();
         let policy = policy(3);
         let rec_keep = record(0, 1, 1);
         let rec_drop = record(2, 1, 2);
-
         store.insert(
             &rec_keep,
             DaCommitmentLocation {
@@ -327,10 +297,8 @@ mod tests {
             },
             &policy,
         );
-
         let retired = BTreeSet::from([LaneId::new(2)]);
         store.prune_lanes(&retired);
-
         assert!(
             store.get_by_lane_epoch_sequence(0, 1, 1).is_some(),
             "kept lane should remain"

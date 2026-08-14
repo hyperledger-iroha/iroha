@@ -6,7 +6,14 @@
 //! - a single `u` element to bind the inner product term
 //!
 //! All generators are derived using SHA3-256 under a fixed DST.
-
+use crate::{
+    backend::{IpaBackend, traits::IpaGroup},
+    errors::Error,
+    hash::sha3_256,
+    norito_types::{IpaParams, ZkCurveId},
+};
+use once_cell::sync::{Lazy, OnceCell};
+use parking_lot::RwLock;
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
@@ -15,19 +22,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-
-use once_cell::sync::{Lazy, OnceCell};
-use parking_lot::RwLock;
-
-use crate::{
-    backend::{IpaBackend, traits::IpaGroup},
-    errors::Error,
-    hash::sha3_256,
-    norito_types::{IpaParams, ZkCurveId},
-};
-
 pub(crate) const PARAMS_REGISTRY_MAX_ENTRIES: usize = 32;
-
 /// IPA public parameters instantiated for backend `B`.
 #[derive(Clone, Debug)]
 pub struct Params<B: IpaBackend> {
@@ -37,7 +32,6 @@ pub struct Params<B: IpaBackend> {
     u: B::Group,
     fingerprint: OnceCell<[u8; 32]>,
 }
-
 impl<B: IpaBackend> Params<B> {
     /// Creates parameters for vectors of length `n` (must be a non-zero power of two).
     pub fn new(n: usize) -> Result<Self, Error> {
@@ -61,7 +55,6 @@ impl<B: IpaBackend> Params<B> {
             fingerprint: OnceCell::new(),
         })
     }
-
     /// Return a deliberately different valid generator ordering for transcript tests.
     #[cfg(test)]
     pub(crate) fn with_rotated_generators_for_test(&self) -> Self {
@@ -77,27 +70,22 @@ impl<B: IpaBackend> Params<B> {
             fingerprint: OnceCell::new(),
         }
     }
-
     /// Returns the vector length `n`.
     pub fn n(&self) -> usize {
         self.n
     }
-
     /// Returns the `g` generator vector.
     pub fn g(&self) -> &[B::Group] {
         &self.g
     }
-
     /// Returns the `h` generator vector.
     pub fn h(&self) -> &[B::Group] {
         &self.h
     }
-
     /// Returns the `u` generator.
     pub fn u(&self) -> B::Group {
         self.u
     }
-
     /// Compute and memoize a fingerprint for these parameters.
     pub fn fingerprint(&self) -> [u8; 32] {
         *self.fingerprint.get_or_init(|| {
@@ -113,7 +101,6 @@ impl<B: IpaBackend> Params<B> {
             )
         })
     }
-
     fn validate_wire_header(w: &IpaParams) -> Result<usize, Error> {
         if w.version != 1 {
             return Err(Error::UnsupportedVersion {
@@ -135,7 +122,6 @@ impl<B: IpaBackend> Params<B> {
         Ok(n)
     }
 }
-
 fn fingerprint_bytes(
     curve_id: u16,
     n: u32,
@@ -155,7 +141,6 @@ fn fingerprint_bytes(
     buf.extend_from_slice(u);
     sha3_256(&buf)
 }
-
 pub(crate) fn params_from_wire_backend<B>(w: &IpaParams) -> Result<Arc<Params<B>>, Error>
 where
     B: IpaBackend + 'static,
@@ -170,20 +155,16 @@ where
     let params = Arc::new(Params::<B>::new(n)?);
     Ok(PARAMS_REGISTRY.insert::<B>(n, params))
 }
-
 type ParamsKey = (TypeId, ZkCurveId, usize);
 type ParamsSlot = Arc<dyn Any + Send + Sync>;
-
 struct ParamsEntry {
     slot: ParamsSlot,
     last_used: u64,
 }
-
 struct ParamsRegistry {
     map: RwLock<HashMap<ParamsKey, ParamsEntry>>,
     clock: AtomicU64,
 }
-
 impl ParamsRegistry {
     fn new() -> Self {
         Self {
@@ -191,11 +172,9 @@ impl ParamsRegistry {
             clock: AtomicU64::new(0),
         }
     }
-
     fn tick(&self) -> u64 {
         self.clock.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
     }
-
     fn lookup<B>(&self, n: usize) -> Option<Arc<Params<B>>>
     where
         B: IpaBackend + 'static,
@@ -206,7 +185,6 @@ impl ParamsRegistry {
         entry.last_used = self.tick();
         entry.slot.clone().downcast::<Params<B>>().ok()
     }
-
     fn insert<B>(&self, n: usize, params: Arc<Params<B>>) -> Arc<Params<B>>
     where
         B: IpaBackend + 'static,
@@ -222,7 +200,6 @@ impl ParamsRegistry {
                 .downcast::<Params<B>>()
                 .expect("registry type mismatch");
         }
-
         if guard.len() >= PARAMS_REGISTRY_MAX_ENTRIES
             && let Some(evict_key) = guard
                 .iter()
@@ -231,7 +208,6 @@ impl ParamsRegistry {
         {
             guard.remove(&evict_key);
         }
-
         let slot = params.clone() as Arc<dyn Any + Send + Sync>;
         guard.insert(
             key,
@@ -244,13 +220,11 @@ impl ParamsRegistry {
             .downcast::<Params<B>>()
             .expect("registry type mismatch")
     }
-
     #[cfg(test)]
     fn clear(&self) {
         self.map.write().clear();
         self.clock.store(0, Ordering::Relaxed);
     }
-
     #[cfg(test)]
     fn contains<B>(&self, n: usize) -> bool
     where
@@ -261,14 +235,11 @@ impl ParamsRegistry {
             .contains_key(&(TypeId::of::<B>(), B::CURVE_ID, n))
     }
 }
-
 static PARAMS_REGISTRY: Lazy<ParamsRegistry> = Lazy::new(ParamsRegistry::new);
-
 #[cfg(test)]
 pub(crate) fn clear_params_registry_for_tests() {
     PARAMS_REGISTRY.clear();
 }
-
 #[cfg(test)]
 pub(crate) fn params_registry_contains_for_tests<B>(n: usize) -> bool
 where

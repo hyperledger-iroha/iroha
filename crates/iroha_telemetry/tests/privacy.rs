@@ -1,7 +1,4 @@
 //! Tests for the `SoraNet` privacy metrics aggregation pipeline.
-
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
 use iroha_data_model::soranet::privacy_metrics::{
     SoranetGarAbuseShareV1, SoranetPowFailureCountV1, SoranetPowFailureReasonV1,
     SoranetPrivacyEventActiveSampleV1, SoranetPrivacyEventGarAbuseCategoryV1,
@@ -14,11 +11,10 @@ use iroha_telemetry::privacy::{
     HandshakeFailure, PrivacyBucketConfig, PrivacyThrottleScope, SoranetSecureAggregator,
 };
 use norito::json;
-
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 fn ts(seconds: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(seconds)
 }
-
 #[test]
 fn emits_bucket_once_min_contributors_met() {
     let config = PrivacyBucketConfig {
@@ -32,7 +28,6 @@ fn emits_bucket_once_min_contributors_met() {
     };
     let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
     let mode = SoranetPrivacyModeV1::Middle;
-
     let base = ts(120);
     aggregator.record_handshake_success(mode, base, Some(80), Some(5));
     aggregator.record_throttle(mode, base, PrivacyThrottleScope::Congestion);
@@ -40,7 +35,6 @@ fn emits_bucket_once_min_contributors_met() {
     aggregator.record_throttle(mode, base, PrivacyThrottleScope::Emergency);
     aggregator.record_verified_bytes(mode, base, 4_096);
     aggregator.record_gar_category(mode, base, "Policy::Spam");
-
     aggregator.record_handshake_failure(
         mode,
         base + Duration::from_secs(5),
@@ -49,15 +43,11 @@ fn emits_bucket_once_min_contributors_met() {
         },
         Some(150),
     );
-
     aggregator.record_handshake_success(mode, base + Duration::from_secs(10), Some(120), Some(6));
-
     aggregator.record_active_sample(mode, base + Duration::from_secs(30), 8);
-
     let buckets = aggregator.drain_ready(ts(180));
     assert_eq!(buckets.len(), 1);
     let bucket = &buckets[0];
-
     assert_eq!(bucket.mode, mode);
     assert_eq!(bucket.bucket_start_unix, 120);
     assert_eq!(bucket.bucket_duration_secs, 60);
@@ -83,7 +73,6 @@ fn emits_bucket_once_min_contributors_met() {
     assert_eq!(bucket.verified_bytes_total, 4_096);
     assert_eq!(bucket.active_circuits_mean, Some(6));
     assert_eq!(bucket.active_circuits_max, Some(8));
-
     let labels: Vec<_> = bucket
         .rtt_percentiles_ms
         .iter()
@@ -93,12 +82,10 @@ fn emits_bucket_once_min_contributors_met() {
         labels.contains(&"p50") && labels.contains(&"p90") && labels.contains(&"p99"),
         "missing percentile labels: {labels:?}"
     );
-
     assert_eq!(bucket.gar_abuse_counts.len(), 1);
     assert_eq!(bucket.gar_abuse_counts[0].count, 1);
     assert_eq!(bucket.throttle_descriptor_total, 0);
 }
-
 #[test]
 fn force_flush_emits_suppressed_bucket() {
     let config = PrivacyBucketConfig {
@@ -112,7 +99,6 @@ fn force_flush_emits_suppressed_bucket() {
     };
     let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
     let mode = SoranetPrivacyModeV1::Middle;
-
     let base = ts(60);
     aggregator.record_handshake_success(mode, base, None, None);
     let buckets = aggregator.drain_ready(ts(240));
@@ -130,7 +116,6 @@ fn force_flush_emits_suppressed_bucket() {
     assert!(bucket.rtt_percentiles_ms.is_empty());
     assert!(bucket.gar_abuse_counts.is_empty());
 }
-
 #[test]
 fn aggregates_relay_and_replay_reasons() {
     let config = PrivacyBucketConfig {
@@ -145,7 +130,6 @@ fn aggregates_relay_and_replay_reasons() {
     let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
     let mode = SoranetPrivacyModeV1::Entry;
     let base = ts(120);
-
     aggregator.record_handshake_failure(
         mode,
         base,
@@ -162,13 +146,11 @@ fn aggregates_relay_and_replay_reasons() {
         },
         None,
     );
-
     let buckets = aggregator.drain_ready(ts(240));
     assert_eq!(buckets.len(), 1);
     let bucket = &buckets[0];
     assert_eq!(bucket.handshake_pow_reject_total, 2);
     assert_eq!(bucket.pow_rejects_by_reason.len(), 2);
-
     let mut reasons = bucket.pow_rejects_by_reason.clone();
     reasons.sort_by_key(|entry| entry.reason);
     assert_eq!(
@@ -186,7 +168,6 @@ fn aggregates_relay_and_replay_reasons() {
         }
     );
 }
-
 #[test]
 fn gar_categories_are_hashed_and_counted() {
     let config = PrivacyBucketConfig {
@@ -200,13 +181,11 @@ fn gar_categories_are_hashed_and_counted() {
     };
     let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
     let mode = SoranetPrivacyModeV1::Middle;
-
     let base = ts(60);
     aggregator.record_handshake_success(mode, base, None, None);
     aggregator.record_gar_category(mode, base, "Abuse::Spam");
     aggregator.record_gar_category(mode, base, "Abuse::Spam");
     aggregator.record_gar_category(mode, base, "Abuse::Fraud");
-
     let buckets = aggregator.drain_ready(ts(120));
     assert_eq!(buckets.len(), 1);
     let bucket = &buckets[0];
@@ -224,7 +203,6 @@ fn gar_categories_are_hashed_and_counted() {
         assert_ne!(entry.category_hash, [0u8; 8]);
     }
 }
-
 #[test]
 fn record_event_api_routes_to_expected_counters() {
     let config = PrivacyBucketConfig {
@@ -238,7 +216,6 @@ fn record_event_api_routes_to_expected_counters() {
     };
     let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
     let mode = SoranetPrivacyModeV1::Middle;
-
     aggregator.record_event(&SoranetPrivacyEventV1 {
         timestamp_unix: 60,
         mode,
@@ -291,7 +268,6 @@ fn record_event_api_routes_to_expected_counters() {
             label: "Policy::Spam".to_string(),
         }),
     });
-
     let buckets = aggregator.drain_ready(ts(120));
     assert_eq!(buckets.len(), 1);
     let bucket = &buckets[0];
@@ -318,7 +294,6 @@ fn record_event_api_routes_to_expected_counters() {
     assert_eq!(bucket.active_circuits_max, Some(7));
     assert!(!bucket.rtt_percentiles_ms.is_empty());
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn ndjson_feed_rehydrates_events() {
@@ -333,7 +308,6 @@ fn ndjson_feed_rehydrates_events() {
     };
     let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
     let mode = SoranetPrivacyModeV1::Entry;
-
     let events = [
         SoranetPrivacyEventV1 {
             timestamp_unix: 120,
@@ -387,7 +361,6 @@ fn ndjson_feed_rehydrates_events() {
             ),
         },
     ];
-
     let ndjson = events
         .iter()
         .map(|event| {
@@ -396,12 +369,10 @@ fn ndjson_feed_rehydrates_events() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-
     let ingested = aggregator
         .ingest_ndjson(&ndjson)
         .expect("ingest ndjson payload");
     assert_eq!(ingested, events.len());
-
     let buckets = aggregator.drain_ready(ts(240));
     assert_eq!(buckets.len(), 1, "expected exactly one bucket: {buckets:?}");
     let bucket = &buckets[0];
@@ -428,7 +399,6 @@ fn ndjson_feed_rehydrates_events() {
     assert_eq!(bucket.gar_abuse_counts.len(), 1);
     assert_eq!(bucket.gar_abuse_counts[0].count, 1);
 }
-
 #[test]
 fn prio_shares_combine_into_bucket() {
     let config = PrivacyBucketConfig {
@@ -442,7 +412,6 @@ fn prio_shares_combine_into_bucket() {
     };
     let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
     let mode = SoranetPrivacyModeV1::Middle;
-
     let mut share1 = SoranetPrivacyPrioShareV1::new(1, 120, 60);
     share1.mode = mode;
     share1.handshake_accept_share = 2;
@@ -453,12 +422,10 @@ fn prio_shares_combine_into_bucket() {
     share1.verified_bytes_share = 1_024;
     share1.rtt_bucket_shares = vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     share1.gar_abuse_shares = vec![SoranetGarAbuseShareV1::new([1u8; 8], 1)];
-
     aggregator
         .ingest_prio_share(share1)
         .expect("share ingested");
     assert!(aggregator.drain_ready(ts(180)).is_empty());
-
     let mut share2 = SoranetPrivacyPrioShareV1::new(2, 120, 60);
     share2.mode = mode;
     share2.handshake_accept_share = 1;
@@ -476,15 +443,12 @@ fn prio_shares_combine_into_bucket() {
         SoranetGarAbuseShareV1::new([1u8; 8], 2),
         SoranetGarAbuseShareV1::new([2u8; 8], 1),
     ];
-
     aggregator
         .ingest_prio_share(share2)
         .expect("share ingested");
-
     let buckets = aggregator.drain_ready(ts(240));
     assert_eq!(buckets.len(), 1);
     let bucket = &buckets[0];
-
     assert_eq!(bucket.mode, mode);
     assert!(!bucket.is_suppressed());
     assert!(bucket.suppression_reason.is_none());
@@ -520,7 +484,6 @@ fn prio_shares_combine_into_bucket() {
     assert_eq!(gar_counts[0].1, 3);
     assert_eq!(gar_counts[1].1, 1);
 }
-
 #[test]
 fn prio_shares_active_average_saturates() {
     let config = PrivacyBucketConfig {
@@ -534,22 +497,18 @@ fn prio_shares_active_average_saturates() {
     };
     let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
     let mode = SoranetPrivacyModeV1::Middle;
-
     let mut share1 = SoranetPrivacyPrioShareV1::new(1, 120, 60);
     share1.mode = mode;
     share1.handshake_accept_share = 1;
     share1.active_circuits_sum_share = i64::MAX;
     share1.active_circuits_sample_share = 1;
     share1.active_circuits_max_observed = Some(u64::MAX);
-
     let mut share2 = share1.clone();
     share2.collector_id = 2;
     share2.active_circuits_sample_share = 0;
-
     let mut share3 = share1.clone();
     share3.collector_id = 3;
     share3.active_circuits_sample_share = 0;
-
     aggregator
         .ingest_prio_share(share1)
         .expect("share ingested");
@@ -559,7 +518,6 @@ fn prio_shares_active_average_saturates() {
     aggregator
         .ingest_prio_share(share3)
         .expect("share ingested");
-
     let buckets = aggregator.drain_ready(ts(240));
     assert_eq!(buckets.len(), 1);
     let bucket = &buckets[0];
@@ -577,7 +535,6 @@ fn prio_shares_active_average_saturates() {
         "maximum should honour saturated share inputs"
     );
 }
-
 #[test]
 fn prio_shares_respect_min_contributors() {
     let config = PrivacyBucketConfig {
@@ -591,7 +548,6 @@ fn prio_shares_respect_min_contributors() {
     };
     let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
     let mode = SoranetPrivacyModeV1::Middle;
-
     let mut share1 = SoranetPrivacyPrioShareV1::new(1, 60, 60);
     share1.mode = mode;
     share1.handshake_accept_share = 2;
@@ -599,7 +555,6 @@ fn prio_shares_respect_min_contributors() {
     share1.active_circuits_sample_share = 2;
     share1.verified_bytes_share = 512;
     share1.rtt_bucket_shares = vec![0; 16];
-
     let mut share2 = SoranetPrivacyPrioShareV1::new(2, 60, 60);
     share2.mode = mode;
     share2.handshake_accept_share = 1;
@@ -608,14 +563,12 @@ fn prio_shares_respect_min_contributors() {
     share2.active_circuits_sample_share = 1;
     share2.verified_bytes_share = 256;
     share2.rtt_bucket_shares = vec![0; 16];
-
     aggregator
         .ingest_prio_share(share1)
         .expect("share ingested");
     aggregator
         .ingest_prio_share(share2)
         .expect("share ingested");
-
     let buckets = aggregator.drain_ready(ts(180));
     assert_eq!(buckets.len(), 1);
     let bucket = &buckets[0];
@@ -631,7 +584,6 @@ fn prio_shares_respect_min_contributors() {
     assert_eq!(bucket.verified_bytes_total, 0);
     assert!(bucket.gar_abuse_counts.is_empty());
 }
-
 #[test]
 fn prio_shares_surface_collector_suppression_reason() {
     let config = PrivacyBucketConfig {
@@ -645,24 +597,20 @@ fn prio_shares_surface_collector_suppression_reason() {
     };
     let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
     let mode = SoranetPrivacyModeV1::Entry;
-
     let mut share1 = SoranetPrivacyPrioShareV1::new(1, 60, 60);
     share1.mode = mode;
     share1.handshake_accept_share = 3;
     share1.suppressed = true;
-
     let mut share2 = SoranetPrivacyPrioShareV1::new(2, 60, 60);
     share2.mode = mode;
     share2.handshake_accept_share = 2;
     share2.suppressed = true;
-
     aggregator
         .ingest_prio_share(share1)
         .expect("share ingested");
     aggregator
         .ingest_prio_share(share2)
         .expect("share ingested");
-
     let buckets = aggregator.drain_ready(ts(120));
     assert_eq!(buckets.len(), 1);
     let bucket = &buckets[0];
@@ -672,7 +620,6 @@ fn prio_shares_surface_collector_suppression_reason() {
         Some(SoranetPrivacySuppressionReasonV1::CollectorSuppressed)
     );
 }
-
 #[test]
 fn stale_collector_shares_emit_suppressed_bucket() {
     let config = PrivacyBucketConfig {
@@ -686,13 +633,10 @@ fn stale_collector_shares_emit_suppressed_bucket() {
     };
     let aggregator = SoranetSecureAggregator::new(config).expect("config valid");
     let mode = SoranetPrivacyModeV1::Exit;
-
     let mut share = SoranetPrivacyPrioShareV1::new(1, 60, 60);
     share.mode = mode;
     share.handshake_accept_share = 1;
-
     aggregator.ingest_prio_share(share).expect("share ingested");
-
     let buckets = aggregator.drain_ready(ts(180));
     assert_eq!(buckets.len(), 1);
     let bucket = &buckets[0];

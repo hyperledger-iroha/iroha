@@ -10,7 +10,17 @@
 //! The compiled 128-bit Fiat--Shamir certificate is work-normalized in the
 //! classical random-oracle model.  The `pq_authorization` relation name does
 //! not assert an additional quantum-random-oracle reduction for this STARK.
-
+#[cfg(test)]
+use super::prover_randomness::TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1;
+#[cfg(test)]
+use super::zk_ace_stark::proof_test_guard;
+use super::zk_ace_stark::{
+    AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1, COMPILED_STARK_PROFILE_DESCRIPTOR_V1, MAX_PROOF_BYTES,
+    MAX_ROM_QUERY_LOG2_V1, PROVABLE_SOUNDNESS_BITS_V1, ZkAceAirRelationInputsV1, ZkAceStarkError,
+    prove_zk_ace_stark_v1_with_rng, verify_zk_ace_stark_v1,
+};
+#[cfg(test)]
+use iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID;
 use iroha_data_model::{
     NetworkId,
     privacy::{
@@ -24,30 +34,15 @@ use iroha_data_model::{
     },
 };
 use rand::TryCryptoRng;
-use thiserror::Error;
-use zeroize::Zeroize;
-
 /// Fallible cryptographic RNG contract accepted by the native prover.
 pub use rand::TryCryptoRng as ZkAceTryCryptoRngV1;
 /// Fallible RNG core contract re-exported for deterministic/adversarial tests
 /// without forcing transaction-builder crates to depend on `rand`.
 pub use rand::TryRngCore as ZkAceTryRngCoreV1;
-
-#[cfg(test)]
-use iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID;
 #[cfg(test)]
 use sha2::{Digest as _, Sha256};
-
-#[cfg(test)]
-use super::prover_randomness::TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1;
-#[cfg(test)]
-use super::zk_ace_stark::proof_test_guard;
-use super::zk_ace_stark::{
-    AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1, COMPILED_STARK_PROFILE_DESCRIPTOR_V1, MAX_PROOF_BYTES,
-    MAX_ROM_QUERY_LOG2_V1, PROVABLE_SOUNDNESS_BITS_V1, ZkAceAirRelationInputsV1, ZkAceStarkError,
-    prove_zk_ace_stark_v1_with_rng, verify_zk_ace_stark_v1,
-};
-
+use thiserror::Error;
+use zeroize::Zeroize;
 /// Secret witness accepted by the first-release native ZK-ACE engine.
 ///
 /// It intentionally implements neither `Debug`, `Clone`, `Copy`, nor any
@@ -58,7 +53,6 @@ pub struct ZkAcePrivacyWitnessV1 {
     pub(super) identity_blinding: [u8; 32],
     pub(super) replay_secret: [u8; 32],
 }
-
 impl ZkAcePrivacyWitnessV1 {
     /// Validate and take ownership of one native witness.
     ///
@@ -78,7 +72,6 @@ impl ZkAcePrivacyWitnessV1 {
         witness.validate()?;
         Ok(witness)
     }
-
     fn validate(&self) -> Result<(), ZkAcePrivacyWitnessValidationErrorV1> {
         if self.identity_root == [0; 32] {
             return Err(ZkAcePrivacyWitnessValidationErrorV1::ZeroIdentityRoot);
@@ -91,7 +84,6 @@ impl ZkAcePrivacyWitnessV1 {
         }
         Ok(())
     }
-
     /// Derive the public identity commitment under the only admitted domain.
     #[must_use]
     pub fn identity_commitment_v1(&self) -> PrivacyCommitmentV1 {
@@ -101,7 +93,6 @@ impl ZkAcePrivacyWitnessV1 {
             ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
         ))
     }
-
     /// Derive the typed replay nullifier without exposing the replay secret.
     #[must_use]
     pub fn replay_nullifier_v1(
@@ -118,13 +109,11 @@ impl ZkAcePrivacyWitnessV1 {
         ))
     }
 }
-
 impl Drop for ZkAcePrivacyWitnessV1 {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-
 impl Zeroize for ZkAcePrivacyWitnessV1 {
     fn zeroize(&mut self) {
         self.identity_root.zeroize();
@@ -132,7 +121,6 @@ impl Zeroize for ZkAcePrivacyWitnessV1 {
         self.replay_secret.zeroize();
     }
 }
-
 /// Rejected native witness shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum ZkAcePrivacyWitnessValidationErrorV1 {
@@ -146,7 +134,6 @@ pub enum ZkAcePrivacyWitnessValidationErrorV1 {
     #[error("ZK-ACE replay secret witness must be non-zero")]
     ZeroReplaySecret,
 }
-
 /// Transcript family frozen into the dedicated proof implementation.
 pub const ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1: &str = "iroha:privacy:zk-ace:transparent-stark:v1";
 /// Source and relation description frozen into the compiled profile.
@@ -174,19 +161,16 @@ pub const ZK_ACE_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [
     0x88, 0xb9, 0x47, 0x02, 0x57, 0x81, 0x53, 0x2f, 0x27, 0x58, 0x52, 0x13, 0x8c, 0xfd, 0x3b, 0xd1,
     0x82, 0x6a, 0x3b, 0xb1, 0xa8, 0x0b, 0xb3, 0xbf, 0xe5, 0xcb, 0x6e, 0xaf, 0xbc, 0x3c, 0x37, 0x1c,
 ];
-
 /// Return the frozen digest of the exact compiled native verifier profile.
 #[must_use]
 pub const fn zk_ace_compiled_profile_digest_v1() -> [u8; 32] {
     ZK_ACE_COMPILED_PROFILE_DIGEST_V1
 }
-
 /// Return the complete human-auditable compiled algebraic profile.
 #[must_use]
 pub const fn zk_ace_stark_profile_descriptor_v1() -> &'static [u8] {
     COMPILED_STARK_PROFILE_DESCRIPTOR_V1
 }
-
 #[cfg(test)]
 fn recompute_zk_ace_compiled_profile_digest_v1() -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -209,7 +193,6 @@ fn recompute_zk_ace_compiled_profile_digest_v1() -> [u8; 32] {
     );
     hasher.finalize().into()
 }
-
 #[cfg(test)]
 fn hash_field(hasher: &mut Sha256, field: &[u8]) {
     hasher.update(
@@ -219,7 +202,6 @@ fn hash_field(hasher: &mut Sha256, field: &[u8]) {
     );
     hasher.update(field);
 }
-
 fn project_air_relation_inputs_v1(
     public_inputs: &ZkAcePrivacyPublicInputsV1,
     authorization_digest: [u8; 32],
@@ -248,7 +230,6 @@ fn project_air_relation_inputs_v1(
         statement.amount,
     ))
 }
-
 fn validate_privacy_witness_relation(
     public_inputs: &ZkAcePrivacyPublicInputsV1,
     witness: &ZkAcePrivacyWitnessV1,
@@ -263,7 +244,6 @@ fn validate_privacy_witness_relation(
     }
     Ok(())
 }
-
 /// Generate the canonical randomized proof with injected fallible entropy.
 ///
 /// # Errors
@@ -294,7 +274,6 @@ pub fn prove_zk_ace_privacy_v1_with_rng<R: TryCryptoRng + ?Sized>(
         }
     })
 }
-
 /// Generate the canonical randomized proof using operating-system entropy.
 ///
 /// # Errors
@@ -307,7 +286,6 @@ pub fn prove_zk_ace_privacy_v1(
 ) -> Result<Vec<u8>, ZkAceNativeErrorV1> {
     prove_zk_ace_privacy_v1_with_rng(public_inputs, witness, &mut rand::rngs::OsRng)
 }
-
 /// Verify canonical proof bytes against exact typed public inputs.
 ///
 /// The effective byte ceiling is the smaller of the consensus caller limit
@@ -344,7 +322,6 @@ pub fn verify_zk_ace_privacy_v1(
     verify_zk_ace_stark_v1(&relation_inputs, proof)
         .map_err(|_| ZkAceNativeErrorV1::VerificationFailed)
 }
-
 fn validate_privacy_public_inputs(
     public_inputs: &ZkAcePrivacyPublicInputsV1,
 ) -> Result<(), ZkAceNativeErrorV1> {
@@ -360,7 +337,6 @@ fn validate_privacy_public_inputs(
         .validate(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| ZkAceNativeErrorV1::InvalidStatement)
 }
-
 /// Native ZK-ACE construction or verification failure.
 #[derive(Debug, PartialEq, Eq, Error)]
 pub enum ZkAceNativeErrorV1 {
@@ -413,11 +389,9 @@ pub enum ZkAceNativeErrorV1 {
     #[error("ZK-ACE native transparent STARK verification failed")]
     VerificationFailed,
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{str::FromStr as _, sync::OnceLock};
-
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         NetworkId,
@@ -439,38 +413,29 @@ mod tests {
         },
     };
     use rand::{TryCryptoRng, TryRngCore};
-
-    use super::*;
-
+    use std::{str::FromStr as _, sync::OnceLock};
     #[derive(Clone, Copy)]
     enum EntropyMode {
         Constant,
         Period(usize),
         PartialFailure,
     }
-
     #[derive(Debug)]
     struct InjectedEntropyError;
-
     impl core::fmt::Display for InjectedEntropyError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected ZK-ACE entropy failure")
         }
     }
-
     struct AdversarialRng(EntropyMode);
-
     impl TryRngCore for AdversarialRng {
         type Error = InjectedEntropyError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(InjectedEntropyError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(InjectedEntropyError)
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             match self.0 {
                 EntropyMode::Constant => destination.fill(0xA5),
@@ -489,42 +454,32 @@ mod tests {
             Ok(())
         }
     }
-
     impl TryCryptoRng for AdversarialRng {}
-
     struct PanicEntropyRng;
-
     impl TryRngCore for PanicEntropyRng {
         type Error = InjectedEntropyError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("deterministically invalid ZK-ACE input reached entropy")
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("deterministically invalid ZK-ACE input reached entropy")
         }
-
         fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
             panic!("deterministically invalid ZK-ACE input reached entropy")
         }
     }
-
     impl TryCryptoRng for PanicEntropyRng {}
-
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive test account");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn asset() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("test domain"),
             Name::from_str("zkace").expect("test asset"),
         )
     }
-
     fn public_inputs_and_witness() -> (ZkAcePrivacyPublicInputsV1, ZkAcePrivacyWitnessV1) {
         let witness = ZkAcePrivacyWitnessV1 {
             identity_root: [0x11; 32],
@@ -576,7 +531,6 @@ mod tests {
         public_inputs.statement.replay_nullifier = PrivacyNullifierV1::new(replay_nullifier);
         (public_inputs, witness)
     }
-
     fn fixture() -> &'static (ZkAcePrivacyPublicInputsV1, Vec<u8>) {
         static FIXTURE: OnceLock<(ZkAcePrivacyPublicInputsV1, Vec<u8>)> = OnceLock::new();
         let _guard = proof_test_guard();
@@ -587,7 +541,6 @@ mod tests {
             (public_inputs, proof)
         })
     }
-
     #[test]
     fn compiled_profile_digest_matches_every_exact_native_parameter() {
         assert_eq!(
@@ -599,7 +552,6 @@ mod tests {
             ZK_ACE_COMPILED_PROFILE_DIGEST_V1
         );
     }
-
     #[test]
     fn authorization_projection_breaks_only_replay_cycle() {
         let (public_inputs, _) = public_inputs_and_witness();
@@ -624,7 +576,6 @@ mod tests {
             expected
         );
     }
-
     #[test]
     fn typed_engine_roundtrips_and_enforces_both_caps() {
         let (public_inputs, proof) = fixture();
@@ -636,7 +587,6 @@ mod tests {
             Err(ZkAceNativeErrorV1::ProofTooLarge { .. })
         ));
     }
-
     #[test]
     fn malformed_typed_inputs_fail_before_proof_decoding() {
         let (public_inputs, _) = public_inputs_and_witness();
@@ -659,7 +609,6 @@ mod tests {
             Err(ZkAceNativeErrorV1::InvalidStatement)
         ));
     }
-
     #[test]
     fn producer_entropy_failures_are_typed_and_catastrophic_patterns_are_rejected() {
         let (public_inputs, witness) = public_inputs_and_witness();
@@ -690,7 +639,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn deterministic_public_and_witness_failures_precede_entropy_preflight() {
         let (public_inputs, witness) = public_inputs_and_witness();
@@ -700,7 +648,6 @@ mod tests {
             prove_zk_ace_privacy_v1_with_rng(&invalid_public, &witness, &mut PanicEntropyRng,),
             Err(ZkAceNativeErrorV1::PublicInputVersionMismatch { .. })
         ));
-
         let mut invalid_witness = witness;
         invalid_witness.identity_root[0] ^= 1;
         assert_eq!(
@@ -711,7 +658,6 @@ mod tests {
             ),
             Err(ZkAceNativeErrorV1::WitnessRelationMismatch)
         );
-
         let (public_inputs, mut invalid_blinding) = public_inputs_and_witness();
         invalid_blinding.identity_blinding[0] ^= 1;
         assert_eq!(
@@ -722,7 +668,6 @@ mod tests {
             ),
             Err(ZkAceNativeErrorV1::WitnessRelationMismatch)
         );
-
         let (public_inputs, mut invalid_replay_secret) = public_inputs_and_witness();
         invalid_replay_secret.replay_secret[0] ^= 1;
         assert_eq!(
@@ -734,7 +679,6 @@ mod tests {
             Err(ZkAceNativeErrorV1::WitnessRelationMismatch)
         );
     }
-
     #[test]
     fn every_typed_public_binding_and_sampled_corruption_rejects() {
         let (public_inputs, proof) = fixture();

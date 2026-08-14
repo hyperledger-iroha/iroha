@@ -8,19 +8,14 @@
 //!   - generic Merkle boundary: "`iroha:merkle:leaf:v1\0`"
 //! - Inner nodes: Hash("`iroha:merkle:internal:v1\0`" || left || right)
 //! - Odd leaf: promote left (no duplication)
-
 use iroha_crypto::{Hash, HashOf, MerkleTree};
-
 const TAG_TX_ENTRY: &[u8] = b"iroha:merkle:tx_entry:v1\x00";
-
 fn hex_upper(h: &Hash) -> String {
     hex::encode_upper(h.as_ref())
 }
-
 fn leaf_hash(payload: &[u8]) -> Hash {
     Hash::new([TAG_TX_ENTRY, payload].concat())
 }
-
 #[test]
 fn merkle_tx_entry_golden_vectors() {
     // Leaves for example payloads TX1..TX5
@@ -29,7 +24,6 @@ fn merkle_tx_entry_golden_vectors() {
     let l3 = HashOf::<[u8; 32]>::from_untyped_unchecked(leaf_hash(b"TX3"));
     let l4 = HashOf::<[u8; 32]>::from_untyped_unchecked(leaf_hash(b"TX4"));
     let l5 = HashOf::<[u8; 32]>::from_untyped_unchecked(leaf_hash(b"TX5"));
-
     // Check leaf digests against golden vectors (from the spec)
     assert_eq!(
         hex_upper(&Hash::from(l1)),
@@ -51,11 +45,9 @@ fn merkle_tx_entry_golden_vectors() {
         hex_upper(&Hash::from(l5)),
         "C11F8521B37737189040C425F8FB03D423F7B0B8DFBFD3DE5C9E746224326BA1"
     );
-
     // Empty block → no root
     let empty: MerkleTree<[u8; 32]> = [].into_iter().collect();
     assert!(empty.root().is_none());
-
     // One leaf → root = Hash(generic-leaf-domain || leaf1)
     let one: MerkleTree<[u8; 32]> = [l1].into_iter().collect();
     let root1 = one.root().expect("root");
@@ -63,7 +55,6 @@ fn merkle_tx_entry_golden_vectors() {
         hex_upper(&Hash::from(root1)),
         "456F653A4B11D8365FD11F548D358190F962DB4F08029CD11B18761E735FB9E9"
     );
-
     // Two leaves → Hash(internal-domain || domain(l1) || domain(l2))
     let two: MerkleTree<[u8; 32]> = [l1, l2].into_iter().collect();
     let root2 = two.root().expect("root");
@@ -71,7 +62,6 @@ fn merkle_tx_entry_golden_vectors() {
         hex_upper(&Hash::from(root2)),
         "8FAC977219F39BC9814C27646BCDC4E596495298F1B91591DCD0F5FF9A8B83FB"
     );
-
     // Three leaves (odd promotion on rightmost)
     let three: MerkleTree<[u8; 32]> = [l1, l2, l3].into_iter().collect();
     let root3 = three.root().expect("root");
@@ -79,7 +69,6 @@ fn merkle_tx_entry_golden_vectors() {
         hex_upper(&Hash::from(root3)),
         "CA262FB43518D436EB2911D23EE515E691F8D3BEECE65C17681CB4CCA44EC7C7"
     );
-
     // Four leaves (perfect tree)
     let four: MerkleTree<[u8; 32]> = [l1, l2, l3, l4].into_iter().collect();
     let root4 = four.root().expect("root");
@@ -87,7 +76,6 @@ fn merkle_tx_entry_golden_vectors() {
         hex_upper(&Hash::from(root4)),
         "A43A7568FBE96C94407E0C3DDF7AC2AB34C3861EA0FF0A102B75D90B212FA92B"
     );
-
     // Five leaves (deeper tree)
     let five: MerkleTree<[u8; 32]> = [l1, l2, l3, l4, l5].into_iter().collect();
     let root5 = five.root().expect("root");

@@ -1,5 +1,4 @@
 use ivm::{ProgramMetadata, ivm_cache::IvmCache};
-
 #[test]
 fn artifact_cache_key_ignores_non_version_header_fields() {
     // Same code (HALT) under headers that differ only in mode bits.
@@ -24,7 +23,6 @@ fn artifact_cache_key_ignores_non_version_header_fields() {
     }
     .encode();
     a_mode.extend_from_slice(&code);
-
     let mut cache = IvmCache::new(8);
     let (_m_base, d_base) = cache
         .get_or_predecode_artifact(&a_base)

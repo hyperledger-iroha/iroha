@@ -1,18 +1,14 @@
-use std::{cmp::Ordering, collections::HashMap};
-
-use norito::json::{self, Value};
-use thiserror::Error;
-
 use crate::events::{ResolverEvent, ResolverEventLog};
 pub use crate::state::BundleSnapshot;
-
+use norito::json::{self, Value};
+use std::{cmp::Ordering, collections::HashMap};
+use thiserror::Error;
 /// Structured records generated from resolver transparency logs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransparencyRecord {
     Bundle(Box<BundleRecord>),
     Resolver(ResolverRecord),
 }
-
 impl TransparencyRecord {
     #[must_use]
     pub fn to_json_value(&self) -> Value {
@@ -21,7 +17,6 @@ impl TransparencyRecord {
             Self::Resolver(record) => record.to_json_value(),
         }
     }
-
     #[must_use]
     pub fn to_tsv_row(&self) -> String {
         match self {
@@ -30,7 +25,6 @@ impl TransparencyRecord {
         }
     }
 }
-
 /// Bundle-specific transparency metrics captured from resolver events.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleRecord {
@@ -50,7 +44,6 @@ pub struct BundleRecord {
     pub freshness_signer: String,
     pub freshness_signature_hex: String,
 }
-
 /// Current bundle snapshot plus derived telemetry for report generation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleState {
@@ -62,7 +55,6 @@ pub struct BundleState {
     pub proof_ttl_secs: i64,
     pub cid_drift_total: u64,
 }
-
 impl BundleRecord {
     #[must_use]
     pub fn new(
@@ -79,7 +71,6 @@ impl BundleRecord {
         let cid_changed = previous
             .map(|p| p.car_root_cid != snapshot.car_root_cid)
             .unwrap_or(false);
-
         Self {
             timestamp,
             resolver_id,
@@ -98,7 +89,6 @@ impl BundleRecord {
             freshness_signature_hex: snapshot.freshness_signature_hex.clone(),
         }
     }
-
     #[must_use]
     pub fn to_json_value(&self) -> Value {
         let mut map = json::Map::new();
@@ -137,7 +127,6 @@ impl BundleRecord {
         );
         Value::Object(map)
     }
-
     #[must_use]
     pub fn to_tsv_row(&self) -> String {
         format!(
@@ -161,7 +150,6 @@ impl BundleRecord {
         )
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BundleEventKind {
     Added,
@@ -170,7 +158,6 @@ pub enum BundleEventKind {
     Removed,
     Expired,
 }
-
 impl BundleEventKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -183,7 +170,6 @@ impl BundleEventKind {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 struct BundleMetricState {
     snapshot: BundleSnapshot,
@@ -192,7 +178,6 @@ struct BundleMetricState {
     proof_ttl_secs: i64,
     cid_drift_total: u64,
 }
-
 impl BundleMetricState {
     fn from_snapshot(snapshot: &BundleSnapshot, timestamp: i64) -> Self {
         Self {
@@ -203,7 +188,6 @@ impl BundleMetricState {
             cid_drift_total: 0,
         }
     }
-
     fn update(&mut self, snapshot: &BundleSnapshot, timestamp: i64, cid_changed: bool) {
         self.snapshot = snapshot.clone();
         self.last_timestamp = timestamp;
@@ -214,14 +198,12 @@ impl BundleMetricState {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct MetricLine {
     pub metric: &'static str,
     pub labels: Vec<(&'static str, String)>,
     pub value: f64,
 }
-
 impl MetricLine {
     #[must_use]
     pub fn to_prometheus(&self) -> String {
@@ -253,7 +235,6 @@ impl MetricLine {
         rendered
     }
 }
-
 /// Resolver-advert transparency record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolverRecord {
@@ -261,7 +242,6 @@ pub struct ResolverRecord {
     pub resolver_id: String,
     pub event: ResolverEventKind,
 }
-
 impl ResolverRecord {
     #[must_use]
     pub fn to_json_value(&self) -> Value {
@@ -272,7 +252,6 @@ impl ResolverRecord {
         map.insert("event".into(), Value::from(self.event.as_str()));
         Value::Object(map)
     }
-
     #[must_use]
     pub fn to_tsv_row(&self) -> String {
         format!(
@@ -283,7 +262,6 @@ impl ResolverRecord {
         )
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolverEventKind {
     Added,
@@ -291,7 +269,6 @@ pub enum ResolverEventKind {
     Removed,
     Invalidated,
 }
-
 impl ResolverEventKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -303,21 +280,18 @@ impl ResolverEventKind {
         }
     }
 }
-
 /// Error raised while parsing transparency log lines.
 #[derive(Debug, Error)]
 pub enum TransparencyError {
     #[error("failed to parse resolver log line: {0}")]
     Parse(#[from] norito::json::Error),
 }
-
 /// Stateful tailer that converts resolver log lines into structured transparency records.
 #[derive(Debug, Default)]
 pub struct TransparencyTailer {
     bundles: HashMap<(String, String), BundleSnapshot>,
     bundle_metrics: HashMap<(String, String), BundleMetricState>,
 }
-
 impl TransparencyTailer {
     #[must_use]
     pub fn new() -> Self {
@@ -326,7 +300,6 @@ impl TransparencyTailer {
             bundle_metrics: HashMap::new(),
         }
     }
-
     /// Parse a JSON log line and produce structured records.
     pub fn ingest_line(
         &mut self,
@@ -335,14 +308,12 @@ impl TransparencyTailer {
         let log_record: ResolverEventLog = norito::json::from_str(line)?;
         Ok(self.ingest_event(log_record))
     }
-
     fn ingest_event(&mut self, log_record: ResolverEventLog) -> Vec<TransparencyRecord> {
         let ResolverEventLog {
             timestamp,
             resolver_id,
             event,
         } = log_record;
-
         match event {
             ResolverEvent::BundleAdded { namehash, snapshot } => {
                 let key = (resolver_id.clone(), namehash.clone());
@@ -460,7 +431,6 @@ impl TransparencyTailer {
             }
         }
     }
-
     fn apply_bundle_metrics(&mut self, key: &(String, String), record: &BundleRecord) {
         match record.event {
             BundleEventKind::Removed | BundleEventKind::Expired => {
@@ -474,7 +444,6 @@ impl TransparencyTailer {
             }
         }
     }
-
     #[must_use]
     pub fn metrics(&self) -> Vec<MetricLine> {
         let mut keys: Vec<_> = self.bundle_metrics.keys().cloned().collect();
@@ -508,7 +477,6 @@ impl TransparencyTailer {
         }
         lines
     }
-
     /// Snapshot the current bundle states tracked by the tailer.
     #[must_use]
     pub fn bundle_states(&self) -> Vec<BundleState> {
@@ -531,12 +499,10 @@ impl TransparencyTailer {
         states
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state::BundleSnapshot;
-
     fn sample_snapshot(version: u64, cid: &str) -> BundleSnapshot {
         BundleSnapshot {
             zone_version: version,
@@ -549,7 +515,6 @@ mod tests {
             freshness_signature_hex: "ff".into(),
         }
     }
-
     #[test]
     fn tailer_generates_bundle_records() {
         let mut tailer = TransparencyTailer::new();
@@ -576,7 +541,6 @@ mod tests {
         let json = bundle.to_json_value();
         assert_eq!(json["record_type"].as_str(), Some("bundle"));
         assert_eq!(json["resolver_id"].as_str(), Some("resolver-1"));
-
         let metrics = tailer.metrics();
         assert!(
             metrics.iter().any(|line| {
@@ -592,7 +556,6 @@ mod tests {
             "expected proof age metric for resolver-1 deadbeef"
         );
     }
-
     #[test]
     fn bundle_states_snapshot_sorted() {
         let mut tailer = TransparencyTailer::new();
@@ -614,7 +577,6 @@ mod tests {
             },
         };
         tailer.ingest_event(second);
-
         let mut states = tailer.bundle_states();
         assert_eq!(states.len(), 2);
         assert_eq!(states[0].resolver_id, "resolver-a");
@@ -624,7 +586,6 @@ mod tests {
         assert_eq!(states[1].resolver_id, "resolver-b");
         assert_eq!(states[1].namehash, "beef");
         assert_eq!(states[1].cid_drift_total, 0);
-
         // ingest drift update for resolver-b and confirm metrics carry over
         let third = ResolverEventLog {
             timestamp: 60,
@@ -641,7 +602,6 @@ mod tests {
         assert_eq!(states[1].cid_drift_total, 1);
         assert_eq!(states[1].last_timestamp, 60);
     }
-
     #[test]
     fn tailer_detects_cid_change_on_update() {
         let mut tailer = TransparencyTailer::new();
@@ -674,7 +634,6 @@ mod tests {
         assert!(bundle.cid_changed);
         assert_eq!(bundle.previous_zone_version, Some(1));
         assert_eq!(bundle.zone_version, 2);
-
         let metrics = tailer.metrics();
         assert!(
             metrics.iter().any(|line| {
@@ -690,7 +649,6 @@ mod tests {
             "expected CID drift counter to increment"
         );
     }
-
     #[test]
     fn tailer_removes_metrics_on_expiry() {
         let mut tailer = TransparencyTailer::new();
@@ -703,7 +661,6 @@ mod tests {
             },
         };
         tailer.ingest_event(add_log);
-
         let expire_log = ResolverEventLog {
             timestamp: 30,
             resolver_id: "resolver-1".into(),
@@ -719,7 +676,6 @@ mod tests {
         assert_eq!(record.event, BundleEventKind::Expired);
         assert!(tailer.metrics().is_empty());
     }
-
     #[test]
     fn tailer_emits_resolver_invalidation() {
         let mut tailer = TransparencyTailer::new();
@@ -731,7 +687,6 @@ mod tests {
                 snapshot: sample_snapshot(1, "cid1"),
             },
         });
-
         let log = ResolverEventLog {
             timestamp: 42,
             resolver_id: "resolver-1".into(),
@@ -747,7 +702,6 @@ mod tests {
         assert_eq!(rec.event, ResolverEventKind::Invalidated);
         assert!(tailer.metrics().is_empty());
     }
-
     #[test]
     fn tailer_emits_resolver_records() {
         let mut tailer = TransparencyTailer::new();

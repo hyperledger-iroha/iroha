@@ -936,12 +936,7 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1,
             )?;
-            validate_source_fetch_request(
-                &fetch,
-                &request.binding,
-                None,
-                session_network_id,
-            )?;
+            validate_source_fetch_request(&fetch, &request.binding, None, session_network_id)?;
         }
         (slot, OPERATION_SIGN_V1) if slot == signer_slot => {
             let signing = decode_canonical::<PurposeSignRequestWireV1>(
@@ -1445,7 +1440,6 @@ fn validate_operation_payload(
     }
     Ok(())
 }
-
 fn validate_moderation_panel_notification_archive_wire_scope(
     version: u16,
     slot: u16,
@@ -1462,7 +1456,6 @@ fn validate_moderation_panel_notification_archive_wire_scope(
     }
     Ok(())
 }
-
 fn validate_moderation_panel_notification_source_attest_wire_scope(
     version: u16,
     slot: u16,

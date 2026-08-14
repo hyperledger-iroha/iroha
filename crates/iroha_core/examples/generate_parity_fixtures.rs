@@ -4,9 +4,6 @@
 //!   cargo run -p `iroha_core` --example `generate_parity_fixtures`
 //!
 //! It writes fixtures under `crates/iroha_core/tests/fixtures/`.
-
-use std::{error::Error, fs, io::Write, path::PathBuf, sync::Arc, time::Duration};
-
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -14,23 +11,20 @@ use iroha_core::{
 };
 use iroha_data_model::{prelude::*, transaction::signed::TransactionSignatureError};
 use iroha_primitives::time::TimeSource;
+use std::{error::Error, fs, io::Write, path::PathBuf, sync::Arc, time::Duration};
 // use mv::storage::StorageReadOnly; // not needed in example
-
 const FIXTURE_TIME: Duration = Duration::from_millis(1);
-
 fn fixture_network_id() -> NetworkId {
     NetworkId::from_genesis_hash(iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
         iroha_crypto::Hash::new(b"core-parity-fixture-network"),
     ))
 }
-
 fn fixtures_dir() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     p.push("tests");
     p.push("fixtures");
     p
 }
-
 fn write_fixture(name: &str, content: &str) {
     let mut p = fixtures_dir();
     let _ = fs::create_dir_all(&p);
@@ -39,7 +33,6 @@ fn write_fixture(name: &str, content: &str) {
     f.write_all(content.as_bytes()).expect("write fixture");
     println!("wrote {}", p.display());
 }
-
 fn events_json_filtered(events: &[iroha_data_model::events::prelude::EventBox]) -> String {
     let mut filtered: Vec<_> = events
         .iter()
@@ -60,7 +53,6 @@ fn events_json_filtered(events: &[iroha_data_model::events::prelude::EventBox]) 
     });
     norito::json::to_json_pretty(&filtered).unwrap()
 }
-
 fn write_parity_fixture(
     name: &str,
     sequential: &[iroha_data_model::events::prelude::EventBox],
@@ -74,19 +66,16 @@ fn write_parity_fixture(
     );
     write_fixture(name, &sequential);
 }
-
 fn sign_fixture_transaction(
     mut builder: TransactionBuilder,
 ) -> Result<SignedTransaction, TransactionSignatureError> {
     builder.set_creation_time(FIXTURE_TIME);
     builder.try_sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
 }
-
 fn block_time_source() -> TimeSource {
     let (_, source) = TimeSource::new_mock(FIXTURE_TIME);
     source
 }
-
 fn run_block_and_events(
     parallel_apply: bool,
     chain_id: &ChainId,
@@ -139,7 +128,6 @@ fn run_block_and_events(
     let mut cfg = state.view().pipeline().clone();
     cfg.parallel_apply = parallel_apply;
     state.set_pipeline(cfg);
-
     // Build a signed block from txs
     let block: SignedBlock = {
         let accepted: Vec<_> = txs
@@ -163,7 +151,6 @@ fn run_block_and_events(
     drop(sb);
     Ok((events, state))
 }
-
 #[allow(clippy::too_many_lines)]
 fn main() -> Result<(), Box<dyn Error>> {
     // 1) Mint/Burn/Transfer
@@ -215,7 +202,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (events_par, _state_par) =
         run_block_and_events(true, &chain_id, network_id, vec![tx_mint, tx_burn, tx_xfer])?;
     write_parity_fixture("mint_burn_transfer", &events_seq, &events_par);
-
     // 2) KV + NFT lifecycle
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let nft_id: NftId = "n0$wonderland".parse().unwrap();
@@ -327,7 +313,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (events_seq, _) = run_block_and_events(false, &chain_id, network_id, txs.clone())?;
     let (events_par, _) = run_block_and_events(true, &chain_id, network_id, txs)?;
     write_parity_fixture("kv_and_nft_lifecycle", &events_seq, &events_par);
-
     // 3) Asset definition KV set/remove
     let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
@@ -364,7 +349,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let (events_par, _) = run_block_and_events(true, &chain_id, network_id, vec![tx_set, tx_rm])?;
     write_parity_fixture("asset_definition_kv", &events_seq, &events_par);
-
     // 4) Owner transfers (domain + asset definition)
     let tx_dom_xfer = sign_fixture_transaction(
         TransactionBuilder::new(
@@ -401,11 +385,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     write_parity_fixture("owner_transfer_domain_asset_def", &events_seq, &events_par);
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn parity_fixture_transaction_uses_checked_signing_and_verifies() {
         let alice_id = iroha_test_samples::ALICE_ID.clone();
@@ -418,11 +400,9 @@ mod tests {
             .with_instructions([Log::new(Level::INFO, "checked parity fixture".to_owned())]),
         )
         .expect("parity fixture transaction should sign");
-
         tx.verify_signature()
             .expect("checked parity fixture transaction signature should verify");
     }
-
     #[test]
     fn parity_fixture_block_uses_checked_signing() {
         let alice_id = iroha_test_samples::ALICE_ID.clone();
@@ -437,7 +417,6 @@ mod tests {
             .with_instructions([Log::new(Level::INFO, "checked parity block".to_owned())]),
         )
         .expect("parity fixture transaction should sign");
-
         let (_events, _state) = run_block_and_events(false, &chain_id, network_id, vec![tx])
             .expect("parity fixture block should sign");
     }

@@ -10,17 +10,13 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 use ff::{Field, PrimeField};
 use halo2_proofs::plonk::Expression;
-
 pub struct Gate<F: Field>(pub Expression<F>);
-
 impl<F: PrimeField> Gate<F> {
     fn ones() -> Expression<F> {
         Expression::Constant(F::ONE)
     }
-
     // Helper gates
     fn lagrange_interpolate(
         var: Expression<F>,
@@ -29,14 +25,11 @@ impl<F: PrimeField> Gate<F> {
     ) -> (F, Expression<F>) {
         assert_eq!(points.len(), evals.len());
         let deg = points.len();
-
         fn factorial(n: u64) -> u64 {
             if n < 2 { 1 } else { n * factorial(n - 1) }
         }
-
         // Scale the whole expression by factor to avoid divisions
         let factor = factorial((deg - 1) as u64);
-
         let numerator = |var: Expression<F>, eval: u32, idx: u64| {
             let mut expr = Self::ones();
             for i in 0..deg {
@@ -61,15 +54,12 @@ impl<F: PrimeField> Gate<F> {
                 F::from(factor / (denom as u64))
             }
         };
-
         let mut expr = Self::ones() * F::ZERO;
         for ((idx, _), eval) in points.iter().enumerate().zip(evals.iter()) {
             expr = expr + numerator(var.clone(), *eval, idx as u64) * denominator(idx as i32)
         }
-
         (F::from(factor), expr)
     }
-
     pub fn range_check(value: Expression<F>, lower_range: u64, upper_range: u64) -> Expression<F> {
         let mut expr = Self::ones();
         for i in lower_range..(upper_range + 1) {
@@ -77,7 +67,6 @@ impl<F: PrimeField> Gate<F> {
         }
         expr
     }
-
     /// Spread and range check on 2-bit word
     pub fn two_bit_spread_and_range(
         dense: Expression<F>,
@@ -89,10 +78,8 @@ impl<F: PrimeField> Gate<F> {
                 vec![0b00, 0b01, 0b10, 0b11],
                 vec![0b0000, 0b0001, 0b0100, 0b0101],
             );
-
             lagrange_poly - spread * factor
         };
-
         std::iter::empty()
             .chain(Some((
                 "two_bit_range_check",
@@ -103,7 +90,6 @@ impl<F: PrimeField> Gate<F> {
                 two_bit_spread(dense, spread),
             )))
     }
-
     /// Spread and range check on 3-bit word
     pub fn three_bit_spread_and_range(
         dense: Expression<F>,
@@ -117,10 +103,8 @@ impl<F: PrimeField> Gate<F> {
                     0b000000, 0b000001, 0b000100, 0b000101, 0b010000, 0b010001, 0b010100, 0b010101,
                 ],
             );
-
             lagrange_poly - spread * factor
         };
-
         std::iter::empty()
             .chain(Some((
                 "three_bit_range_check",

@@ -1,3 +1,12 @@
+use crate::{JsonTarget, write_json_output};
+use iroha_data_model::soranet::privacy_metrics::{
+    SoranetPrivacyBucketMetricsV1, SoranetPrivacyEventHandshakeFailureV1,
+    SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1, SoranetPrivacyEventV1,
+    SoranetPrivacyHandshakeFailureV1, SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
+    SoranetPrivacySuppressionReasonV1,
+};
+use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyConfigError, SoranetSecureAggregator};
+use norito::json::{self, Value};
 use std::{
     collections::BTreeMap,
     convert::TryFrom,
@@ -8,28 +17,14 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
-use iroha_data_model::soranet::privacy_metrics::{
-    SoranetPrivacyBucketMetricsV1, SoranetPrivacyEventHandshakeFailureV1,
-    SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1, SoranetPrivacyEventV1,
-    SoranetPrivacyHandshakeFailureV1, SoranetPrivacyModeV1, SoranetPrivacyPrioShareV1,
-    SoranetPrivacySuppressionReasonV1,
-};
-use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyConfigError, SoranetSecureAggregator};
-use norito::json::{self, Value};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
-use crate::{JsonTarget, write_json_output};
-
 pub const DEFAULT_MAX_BUCKET_RECORDS: usize = 25;
-
 #[derive(Clone, Debug)]
 pub struct PrivacyReportOptions {
     pub input_paths: Vec<PathBuf>,
     pub bucket_config: PrivacyBucketConfig,
     pub drain_at_unix: Option<u64>,
 }
-
 pub struct PrivacyReportResult {
     pub config: PrivacyBucketConfig,
     pub sources: Vec<PathBuf>,
@@ -40,12 +35,10 @@ pub struct PrivacyReportResult {
     pub buckets: Vec<SoranetPrivacyBucketMetricsV1>,
     suppression: BTreeMap<SoranetPrivacySuppressionReasonV1, SuppressionStats>,
 }
-
 impl PrivacyReportResult {
     fn suppression(&self) -> &BTreeMap<SoranetPrivacySuppressionReasonV1, SuppressionStats> {
         &self.suppression
     }
-
     pub fn suppression_ratio(&self) -> Option<f64> {
         if self.bucket_count == 0 {
             None
@@ -54,20 +47,17 @@ impl PrivacyReportResult {
         }
     }
 }
-
 #[derive(Default, Clone)]
 pub struct SuppressionStats {
     total: usize,
     by_mode: BTreeMap<SoranetPrivacyModeV1, usize>,
 }
-
 #[derive(Default)]
 struct IngestTotals {
     events: u64,
     shares: u64,
     max_bucket_idx: Option<u64>,
 }
-
 impl IngestTotals {
     fn seen_bucket(&mut self, timestamp: u64, bucket_secs: u64) {
         let idx = timestamp / bucket_secs;
@@ -77,7 +67,6 @@ impl IngestTotals {
         });
     }
 }
-
 pub fn run_privacy_report(
     options: &PrivacyReportOptions,
 ) -> Result<PrivacyReportResult, Box<dyn Error>> {
@@ -91,7 +80,6 @@ pub fn run_privacy_report(
     for path in &options.input_paths {
         ingest_path(&aggregator, path, bucket_secs, &mut totals)?;
     }
-
     let drain_idx = determine_drain_index(&totals, options, bucket_secs);
     let drain_time = system_time_from_index(drain_idx, bucket_secs);
     let mut buckets = aggregator.drain_ready(drain_time);
@@ -112,7 +100,6 @@ pub fn run_privacy_report(
         }
     }
     buckets.sort_by_key(|bucket| (bucket.bucket_start_unix, bucket.mode));
-
     Ok(PrivacyReportResult {
         config: options.bucket_config,
         sources: options.input_paths.clone(),
@@ -124,7 +111,6 @@ pub fn run_privacy_report(
         suppression,
     })
 }
-
 pub fn print_summary(result: &PrivacyReportResult, max_records: usize) {
     println!(
         "Processed {} file(s); events={} shares={}",
@@ -171,7 +157,6 @@ pub fn print_summary(result: &PrivacyReportResult, max_records: usize) {
         println!("  - {}", format_bucket(bucket));
     }
 }
-
 pub fn write_report_json(
     result: &PrivacyReportResult,
     json_out: JsonTarget,
@@ -180,7 +165,6 @@ pub fn write_report_json(
     let value = build_report_value(result, max_records);
     write_json_output(&value, json_out)
 }
-
 fn build_report_value(result: &PrivacyReportResult, max_records: usize) -> Value {
     let config = &result.config;
     let suppression: Vec<Value> = result
@@ -208,7 +192,6 @@ fn build_report_value(result: &PrivacyReportResult, max_records: usize) -> Value
         .take(max_records)
         .map(bucket_to_value)
         .collect();
-
     let mut config_obj = json::Map::new();
     config_obj.insert("bucket_secs".to_string(), Value::from(config.bucket_secs));
     config_obj.insert(
@@ -231,13 +214,11 @@ fn build_report_value(result: &PrivacyReportResult, max_records: usize) -> Value
         "expected_shares".to_string(),
         Value::from(config.expected_shares),
     );
-
     let sources = result
         .sources
         .iter()
         .map(|path| Value::from(path.display().to_string()))
         .collect();
-
     let mut root = json::Map::new();
     root.insert("config".to_string(), Value::Object(config_obj));
     root.insert("sources".to_string(), Value::Array(sources));
@@ -273,7 +254,6 @@ fn build_report_value(result: &PrivacyReportResult, max_records: usize) -> Value
     );
     Value::Object(root)
 }
-
 fn bucket_to_value(bucket: &SoranetPrivacyBucketMetricsV1) -> Value {
     let iso = format_bucket_timestamp(bucket.bucket_start_unix);
     let rtt_percentiles: Vec<Value> = bucket
@@ -299,7 +279,6 @@ fn bucket_to_value(bucket: &SoranetPrivacyBucketMetricsV1) -> Value {
             Value::Object(obj)
         })
         .collect();
-
     let mut handshake = json::Map::new();
     handshake.insert(
         "accept".to_string(),
@@ -321,7 +300,6 @@ fn bucket_to_value(bucket: &SoranetPrivacyBucketMetricsV1) -> Value {
         "other_failure".to_string(),
         Value::from(bucket.handshake_other_failure_total),
     );
-
     let mut throttle = json::Map::new();
     throttle.insert(
         "congestion".to_string(),
@@ -347,7 +325,6 @@ fn bucket_to_value(bucket: &SoranetPrivacyBucketMetricsV1) -> Value {
         "descriptor_replay".to_string(),
         Value::from(bucket.throttle_descriptor_replay_total),
     );
-
     let mut active = json::Map::new();
     active.insert(
         "mean".to_string(),
@@ -363,7 +340,6 @@ fn bucket_to_value(bucket: &SoranetPrivacyBucketMetricsV1) -> Value {
             .map(Value::from)
             .unwrap_or(Value::Null),
     );
-
     let mut root = json::Map::new();
     root.insert("mode".to_string(), Value::from(bucket.mode.as_label()));
     root.insert(
@@ -403,7 +379,6 @@ fn bucket_to_value(bucket: &SoranetPrivacyBucketMetricsV1) -> Value {
     );
     Value::Object(root)
 }
-
 fn build_sample(
     buckets: &[SoranetPrivacyBucketMetricsV1],
     max_records: usize,
@@ -422,7 +397,6 @@ fn build_sample(
         suppressed
     }
 }
-
 fn omitted_suffix(result: &PrivacyReportResult, shown: usize) -> String {
     let omitted = result.bucket_count.saturating_sub(shown);
     if omitted == 0 {
@@ -431,7 +405,6 @@ fn omitted_suffix(result: &PrivacyReportResult, shown: usize) -> String {
         format!(", {} omitted", omitted)
     }
 }
-
 fn format_bucket(bucket: &SoranetPrivacyBucketMetricsV1) -> String {
     let timestamp = format_bucket_timestamp(bucket.bucket_start_unix);
     if bucket.is_suppressed() {
@@ -459,7 +432,6 @@ fn format_bucket(bucket: &SoranetPrivacyBucketMetricsV1) -> String {
         )
     }
 }
-
 fn format_bucket_timestamp(bucket_start_unix: u64) -> String {
     OffsetDateTime::from_unix_timestamp(bucket_start_unix as i64)
         .map(|dt| {
@@ -468,7 +440,6 @@ fn format_bucket_timestamp(bucket_start_unix: u64) -> String {
         })
         .unwrap_or_else(|_| bucket_start_unix.to_string())
 }
-
 fn ingest_path(
     aggregator: &SoranetSecureAggregator,
     path: &Path,
@@ -523,7 +494,6 @@ fn ingest_path(
     }
     Ok(())
 }
-
 fn parse_fallback_event(value: &serde_json::Value) -> Option<SoranetPrivacyEventV1> {
     let timestamp_unix = value.get("timestamp_unix")?.as_u64()?;
     let mode = match value.get("mode")?.as_str()? {
@@ -574,7 +544,6 @@ fn parse_fallback_event(value: &serde_json::Value) -> Option<SoranetPrivacyEvent
         kind,
     })
 }
-
 fn determine_drain_index(
     totals: &IngestTotals,
     options: &PrivacyReportOptions,
@@ -594,19 +563,16 @@ fn determine_drain_index(
         current_unix_index(bucket_secs)
     }
 }
-
 fn system_time_from_index(idx: u64, bucket_secs: u64) -> SystemTime {
     let secs = idx.saturating_mul(bucket_secs);
     UNIX_EPOCH + Duration::from_secs(secs)
 }
-
 fn current_unix_index(bucket_secs: u64) -> u64 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_secs(0));
     now.as_secs() / bucket_secs.max(1)
 }
-
 fn wrap_config_error(err: PrivacyConfigError, config: &PrivacyBucketConfig) -> Box<dyn Error> {
     format!(
         "invalid privacy bucket config (bucket_secs={}, min_contributors={}): {err}",
@@ -614,15 +580,11 @@ fn wrap_config_error(err: PrivacyConfigError, config: &PrivacyBucketConfig) -> B
     )
     .into()
 }
-
 #[cfg(test)]
 mod tests {
-    use std::io::Write as _;
-
-    use tempfile::NamedTempFile;
-
     use super::*;
-
+    use std::io::Write as _;
+    use tempfile::NamedTempFile;
     fn write_log(lines: &[&str]) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("temp file");
         for line in lines {
@@ -630,7 +592,6 @@ mod tests {
         }
         file
     }
-
     fn base_config() -> PrivacyBucketConfig {
         PrivacyBucketConfig {
             bucket_secs: 60,
@@ -642,7 +603,6 @@ mod tests {
             max_share_lag_buckets: 12,
         }
     }
-
     #[test]
     fn summarizes_unsuppressed_bucket() {
         let log = write_log(&[
@@ -664,7 +624,6 @@ mod tests {
         assert_eq!(json["buckets"].as_array().unwrap().len(), 1);
         assert_eq!(json["suppression_ratio"], norito::json!(0.0));
     }
-
     #[test]
     fn reports_suppressed_bucket_breakdown() {
         let log = write_log(&[
@@ -690,7 +649,6 @@ mod tests {
         assert_eq!(stats.total, 1);
         assert_eq!(stats.by_mode.get(&SoranetPrivacyModeV1::Exit), Some(&1));
     }
-
     #[test]
     fn suppression_ratio_reports_fraction() {
         let mut events: Vec<&'static str> = vec![

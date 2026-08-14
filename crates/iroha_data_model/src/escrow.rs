@@ -1,29 +1,22 @@
 //! Generic asset escrow records and identifiers.
-
+use crate::{account::AccountId, asset::AssetDefinitionId, name::Name};
 use core::num::{NonZeroU32, NonZeroU64};
-
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
-
-use crate::{account::AccountId, asset::AssetDefinitionId, name::Name};
-
 /// Domain-separation prefix for escrow ids derived from Kotodama escrow names.
 pub const KOTODAMA_ESCROW_ID_PREFIX: &str = "kotodama-native-escrow:";
-
 /// Domain separator used to bind an external 32-byte conditional-escrow evidence digest.
 pub const CONDITIONAL_ESCROW_EVIDENCE_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:conditional-escrow-evidence:v1\0";
-
 /// Bind an external 32-byte evidence digest to a domain-separated Iroha hash.
 #[must_use]
 pub fn hash_conditional_escrow_evidence_digest(raw_digest: &[u8; Hash::LENGTH]) -> Hash {
     Hash::new_from_chunks(&[CONDITIONAL_ESCROW_EVIDENCE_DIGEST_DOMAIN_V1, raw_digest])
 }
-
 /// Stable identifier for a native asset escrow.
 ///
 /// In the first-release V1 contract, Norito binary and JSON codecs delegate
@@ -33,74 +26,68 @@ pub fn hash_conditional_escrow_evidence_digest(raw_digest: &[u8; Hash::LENGTH]) 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
 #[repr(transparent)]
 pub struct EscrowId(pub Hash);
-
 impl EscrowId {
     /// Construct an escrow identifier from a hash.
     #[must_use]
     pub const fn new(hash: Hash) -> Self {
         Self(hash)
     }
-
     /// Return the inner hash.
     #[must_use]
     pub const fn as_hash(&self) -> &Hash {
         &self.0
     }
-
     /// Derive the native escrow id used by Kotodama escrow builtins.
     #[must_use]
     pub fn from_kotodama_name(name: &Name) -> Self {
         Self(Hash::new(format!("{KOTODAMA_ESCROW_ID_PREFIX}{name}")))
     }
 }
-
 impl norito::core::NoritoSerialize for EscrowId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(&self.0, writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         norito::core::NoritoSerialize::encoded_len_hint(&self.0)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         norito::core::NoritoSerialize::encoded_len_exact(&self.0)
     }
 }
-
 impl<'de> norito::core::NoritoDeserialize<'de> for EscrowId {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("archived escrow id must be a canonical hash")
     }
-
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
         <Hash as norito::core::NoritoDeserialize>::try_deserialize(archived.cast()).map(Self)
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for EscrowId {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         <Hash as norito::core::DecodeFromSlice>::decode_from_slice(bytes)
             .map(|(hash, used)| (Self(hash), used))
     }
 }
-
 #[cfg(feature = "json")]
 impl FastJsonWrite for EscrowId {
     fn write_json(&self, out: &mut String) {
         self.0.write_json(out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.write_json_to(out)
+    }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for EscrowId {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         Hash::json_deserialize(parser).map(Self)
     }
 }
-
 /// Lifecycle state for a native asset escrow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -131,7 +118,6 @@ pub enum AssetEscrowStatus {
     /// Generic asset lock expired and refunded remaining custody.
     Expired,
 }
-
 /// Native asset escrow behavior family.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
@@ -151,7 +137,6 @@ pub enum AssetEscrowKind {
     /// Ordered, attestor-bound conditional custody that releases when every predicate passes.
     Conditional,
 }
-
 /// Typed value supplied by an attestor for a conditional escrow predicate.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -167,7 +152,6 @@ pub enum ConditionalEscrowValue {
     /// Non-negative numeric value.
     Quantity(Quantity),
 }
-
 /// Predicate evaluated by the ledger against a typed conditional-escrow attestation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -181,7 +165,6 @@ pub enum ConditionalEscrowPredicate {
     /// Require a numeric value no greater than this bound.
     QuantityAtMost(Quantity),
 }
-
 /// Attestor-bound predicate in an ordered conditional-escrow release policy.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -198,7 +181,6 @@ pub struct ConditionalEscrowOracleCondition {
     /// One-based attestation sequence. Every lower sequence must pass first.
     pub sequence: NonZeroU32,
 }
-
 /// Ledger-time window that bounds all attestations for one conditional escrow.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -211,7 +193,6 @@ pub struct ConditionalEscrowWithinCondition {
     /// Maximum duration from committed escrow creation time.
     pub duration_ms: NonZeroU64,
 }
-
 /// One immutable first-class condition in a conditional escrow.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -225,7 +206,6 @@ pub enum ConditionalEscrowCondition {
     /// Ledger-time window applying to all oracle predicates.
     Within(ConditionalEscrowWithinCondition),
 }
-
 impl ConditionalEscrowCondition {
     /// Return the immutable condition identifier.
     #[must_use]
@@ -236,7 +216,6 @@ impl ConditionalEscrowCondition {
         }
     }
 }
-
 /// Consensus-bound evidence for one satisfied oracle condition.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -253,7 +232,6 @@ pub struct ConditionalEscrowAttestation {
     /// Committed ledger timestamp in milliseconds.
     pub committed_at_ms: u64,
 }
-
 /// Query-visible satisfaction state for one conditional-escrow condition.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -268,7 +246,6 @@ pub struct ConditionalEscrowConditionState {
     /// Ledger timestamp at which this condition became satisfied.
     pub satisfied_at_ms: Option<u64>,
 }
-
 /// Court resolution details for a disputed escrow.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -287,7 +264,6 @@ pub struct AssetEscrowResolution {
     /// Unix timestamp (milliseconds) when the resolution was recorded.
     pub resolved_at_ms: u64,
 }
-
 /// Ledger-managed numeric asset escrow.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -344,7 +320,6 @@ pub struct AssetEscrowRecord {
     #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
     pub resolution: Option<AssetEscrowResolution>,
 }
-
 /// Prelude exports for native escrow records.
 pub mod prelude {
     pub use super::{
@@ -356,7 +331,6 @@ pub mod prelude {
         hash_conditional_escrow_evidence_digest,
     };
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,7 +340,6 @@ mod tests {
         codec::{Decode, Encode},
         core::DecodeFromSlice,
     };
-
     #[derive(Encode)]
     struct ForgedAssetEscrowRecord {
         id: EscrowId,
@@ -389,12 +362,10 @@ mod tests {
         closed_at_ms: Option<u64>,
         resolution: Option<AssetEscrowResolution>,
     }
-
     fn checked_seed_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked escrow fixture keypair")
     }
-
     #[test]
     fn asset_escrow_record_roundtrips_norito() {
         let seller_keypair = checked_seed_keypair(0x51);
@@ -425,13 +396,11 @@ mod tests {
             closed_at_ms: None,
             resolution: None,
         };
-
         let bytes = norito::to_bytes(&record).expect("encode");
         let decoded: AssetEscrowRecord = norito::decode_from_bytes(&bytes).expect("decode");
         assert_eq!(decoded, record);
         assert_eq!(decoded.buyer, Some(buyer));
     }
-
     #[test]
     fn negative_numeric_payload_cannot_decode_as_durable_asset_escrow_quantity() {
         let seller = AccountId::new(checked_seed_keypair(0x53).public_key().clone());
@@ -459,13 +428,11 @@ mod tests {
             resolution: None,
         };
         let encoded = forged.encode();
-
         assert!(
             AssetEscrowRecord::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as a durable escrow quantity"
         );
     }
-
     #[test]
     fn kotodama_escrow_id_derivation_is_stable() {
         let name: Name = "aitai_offer".parse().expect("valid name");
@@ -474,7 +441,6 @@ mod tests {
             EscrowId::new(Hash::new("kotodama-native-escrow:aitai_offer"))
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn escrow_id_json_is_a_canonical_hash_literal() {
@@ -492,7 +458,6 @@ mod tests {
             "the retired tuple-shaped EscrowId JSON must be rejected"
         );
     }
-
     #[test]
     fn escrow_id_norito_is_transparent_hash_bytes() {
         let id = EscrowId::new(Hash::new("sorafs-appeal-cancel-asset-lock-v1"));
@@ -505,13 +470,11 @@ mod tests {
         assert_eq!(decoded, id);
         assert_eq!(used, encoded.len());
     }
-
     #[test]
     fn escrow_id_keeps_distinct_schema_identity() {
         assert_eq!(EscrowId::type_name(), "EscrowId");
         assert_eq!(Hash::type_name(), "Hash");
         assert_ne!(EscrowId::type_name(), Hash::type_name());
-
         let schema = EscrowId::schema();
         assert!(schema.contains_key::<EscrowId>());
         assert!(schema.contains_key::<Hash>());
@@ -521,7 +484,6 @@ mod tests {
                 if fields.types == [core::any::TypeId::of::<Hash>()]
         ));
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn escrow_id_json_is_one_canonical_hash_literal() {
@@ -551,7 +513,6 @@ mod tests {
                 "the {label} compatibility representation must be rejected"
             );
         }
-
         let nested_instruction =
             format!(r#"{{"escrow_id":[{encoded}],"expected_remaining_amount":"20"}}"#);
         assert!(

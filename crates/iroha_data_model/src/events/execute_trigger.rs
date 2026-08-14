@@ -1,15 +1,12 @@
 //! Trigger execution event and filter
-
-use getset::Getters;
-use iroha_data_model_derive::model;
-
 pub use self::model::*;
 use super::*;
 use crate::prelude::*;
+use getset::Getters;
+use iroha_data_model_derive::model;
 #[model]
 mod model {
     use super::*;
-
     /// Trigger execution event. Produced every time the `ExecuteTrigger` instruction is executed.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[getset(get = "pub")]
@@ -23,7 +20,6 @@ mod model {
         #[getset(skip)]
         pub args: Json,
     }
-
     /// Filter for [`ExecuteTriggerEvent`].
     #[derive(
         Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Default, Getters, Decode, Encode, IntoSchema,
@@ -36,17 +32,14 @@ mod model {
         pub(super) authority: Option<AccountId>,
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(ExecuteTriggerEvent, ExecuteTriggerEventFilter);
-
 impl ExecuteTriggerEvent {
     /// Args to pass for trigger execution
     pub fn args(&self) -> &Json {
         &self.args
     }
 }
-
 impl ExecuteTriggerEventFilter {
     /// Creates a new [`ExecuteTriggerEventFilter`] accepting all [`ExecuteTriggerEvent`]s
     #[must_use]
@@ -57,7 +50,6 @@ impl ExecuteTriggerEventFilter {
             authority: None,
         }
     }
-
     /// Modifies a [`ExecuteTriggerEventFilter`] to accept only [`ExecuteTriggerEvent`]s originating from a specific trigger
     #[must_use]
     #[inline]
@@ -65,7 +57,6 @@ impl ExecuteTriggerEventFilter {
         self.trigger_id = Some(trigger_id);
         self
     }
-
     /// Modifies a [`ExecuteTriggerEventFilter`] to accept only [`ExecuteTriggerEvent`]s from triggers executed under specific authority
     #[must_use]
     #[inline]
@@ -73,21 +64,18 @@ impl ExecuteTriggerEventFilter {
         self.authority = Some(authority);
         self
     }
-
     /// Returns the trigger identifier constraint configured for this filter, if any.
     #[must_use]
     #[inline]
     pub fn trigger_id(&self) -> Option<&TriggerId> {
         self.trigger_id.as_ref()
     }
-
     /// Returns the authority constraint configured for this filter, if any.
     #[must_use]
     #[inline]
     pub fn authority(&self) -> Option<&AccountId> {
         self.authority.as_ref()
     }
-
     /// Ensures that this filter enforces the provided `authority`.
     ///
     /// If the filter already specifies a different authority, an error is returned.
@@ -109,11 +97,9 @@ impl ExecuteTriggerEventFilter {
         }
     }
 }
-
 #[cfg(feature = "transparent_api")]
 impl EventFilter for ExecuteTriggerEventFilter {
     type Event = ExecuteTriggerEvent;
-
     /// Check if `event` matches filter
     ///
     /// Event considered as matched if trigger ids are equal
@@ -128,11 +114,9 @@ impl EventFilter for ExecuteTriggerEventFilter {
         {
             return false;
         }
-
         true
     }
 }
-
 /// Exports common structs and enums from this module.
 pub mod prelude {
     pub use super::{ExecuteTriggerEvent, ExecuteTriggerEventFilter};

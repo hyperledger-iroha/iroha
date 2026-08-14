@@ -1,10 +1,8 @@
 //! Helpers for rendering and writing local application bootstrap files.
-
 use std::{
     fs, io,
     path::{Path, PathBuf},
 };
-
 /// Relative path for the generated environment file.
 pub const ENV_LOCAL_FILE: &str = ".env.local";
 /// Relative path for the generated TypeScript sample.
@@ -13,7 +11,6 @@ pub const TYPESCRIPT_SAMPLE_FILE: &str = ".mochi/generated/typescript/connect.ts
 pub const RUST_SAMPLE_FILE: &str = ".mochi/generated/rust/connect.rs";
 /// Relative path for the generated Kotlin sample.
 pub const KOTLIN_SAMPLE_FILE: &str = ".mochi/generated/kotlin/MochiConnect.kt";
-
 /// Inputs shared across generated bootstrap artifacts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapInputs {
@@ -30,7 +27,6 @@ pub struct BootstrapInputs {
     /// Optional private key for the preferred dev signer.
     pub private_key: Option<String>,
 }
-
 impl BootstrapInputs {
     /// Render shell `export` lines for copy/paste-friendly local development.
     #[must_use]
@@ -67,7 +63,6 @@ impl BootstrapInputs {
         }
         lines.join("\n")
     }
-
     /// Render a dotenv-style `.env.local` file.
     #[must_use]
     pub fn render_env_local(&self) -> String {
@@ -88,7 +83,6 @@ impl BootstrapInputs {
         lines.join("\n") + "\n"
     }
 }
-
 /// A generated bootstrap file and its relative destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapArtifact {
@@ -97,7 +91,6 @@ pub struct BootstrapArtifact {
     /// File contents ready to write.
     pub contents: String,
 }
-
 impl BootstrapArtifact {
     /// Join the artifact path onto a workspace root.
     #[must_use]
@@ -105,14 +98,12 @@ impl BootstrapArtifact {
         workspace_root.join(&self.relative_path)
     }
 }
-
 /// The full bootstrap bundle Mochi can write into a workspace.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapBundle {
     /// Generated artifacts in write order.
     pub artifacts: Vec<BootstrapArtifact>,
 }
-
 impl BootstrapBundle {
     /// Build the standard local-development bundle.
     #[must_use]
@@ -139,7 +130,6 @@ impl BootstrapBundle {
         }
     }
 }
-
 /// Errors raised while writing bootstrap artifacts.
 #[derive(Debug, thiserror::Error)]
 pub enum BootstrapWriteError {
@@ -150,7 +140,6 @@ pub enum BootstrapWriteError {
     #[error(transparent)]
     Io(#[from] io::Error),
 }
-
 /// Write a bundle to the target workspace.
 pub fn write_bootstrap_bundle(
     workspace_root: &Path,
@@ -171,7 +160,6 @@ pub fn write_bootstrap_bundle(
     }
     Ok(written)
 }
-
 /// Quote a shell value conservatively for copy/paste recipes.
 #[must_use]
 pub fn shell_quote(value: &str) -> String {
@@ -190,7 +178,6 @@ pub fn shell_quote(value: &str) -> String {
         format!("'{}'", trimmed.replace('\'', "'\"'\"'"))
     }
 }
-
 /// Ensure a host:port-ish value is rooted under `http://`.
 #[must_use]
 pub fn ensure_http_base(value: &str) -> String {
@@ -201,7 +188,6 @@ pub fn ensure_http_base(value: &str) -> String {
         format!("http://{trimmed}")
     }
 }
-
 fn dotenv_quote(value: &str) -> String {
     if value
         .chars()
@@ -212,7 +198,6 @@ fn dotenv_quote(value: &str) -> String {
         format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
     }
 }
-
 fn render_typescript_sample(inputs: &BootstrapInputs) -> String {
     format!(
         r#"export type IrohaLocalConfig = {{
@@ -241,7 +226,6 @@ export const irohaLocalDefaults: IrohaLocalConfig = {{
         private_key = render_ts_optional(inputs.private_key.as_deref()),
     )
 }
-
 fn render_rust_sample(inputs: &BootstrapInputs) -> String {
     format!(
         r#"#[derive(Debug, Clone)]
@@ -276,7 +260,6 @@ impl IrohaLocalConfig {{
         chain_id = inputs.chain_id,
     )
 }
-
 fn render_kotlin_sample(inputs: &BootstrapInputs) -> String {
     format!(
         r#"data class IrohaLocalConfig(
@@ -305,7 +288,6 @@ fun irohaLocalConfig(env: Map<String, String> = System.getenv()): IrohaLocalConf
         chain_id = inputs.chain_id,
     )
 }
-
 fn render_rust_optional(value: Option<&str>) -> String {
     match value {
         Some(value) => format!(
@@ -315,31 +297,26 @@ fn render_rust_optional(value: Option<&str>) -> String {
         None => "None".to_owned(),
     }
 }
-
 fn render_kotlin_optional(value: Option<&str>) -> String {
     match value {
         Some(value) => format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"")),
         None => "null".to_owned(),
     }
 }
-
 fn render_ts_optional(value: Option<&str>) -> String {
     match value {
         Some(value) => format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"")),
         None => "undefined".to_owned(),
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use tempfile::TempDir;
-
     use super::{
         BootstrapBundle, BootstrapInputs, BootstrapWriteError, ENV_LOCAL_FILE, KOTLIN_SAMPLE_FILE,
         RUST_SAMPLE_FILE, TYPESCRIPT_SAMPLE_FILE, ensure_http_base, shell_quote,
         write_bootstrap_bundle,
     };
-
+    use tempfile::TempDir;
     fn sample_inputs() -> BootstrapInputs {
         BootstrapInputs {
             api_base: "127.0.0.1:8080".to_owned(),
@@ -350,14 +327,12 @@ mod tests {
             private_key: Some("private key value".to_owned()),
         }
     }
-
     #[test]
     fn shell_quote_handles_spaces_and_single_quotes() {
         assert_eq!(shell_quote("mochi-local"), "mochi-local");
         assert_eq!(shell_quote("/tmp/mochi data"), "'/tmp/mochi data'");
         assert_eq!(shell_quote("alice's sandbox"), "'alice'\"'\"'s sandbox'");
     }
-
     #[test]
     fn ensure_http_base_adds_scheme_once() {
         assert_eq!(ensure_http_base("127.0.0.1:8080"), "http://127.0.0.1:8080");
@@ -366,7 +341,6 @@ mod tests {
             "http://127.0.0.1:8080"
         );
     }
-
     #[test]
     fn bootstrap_bundle_renders_expected_files() {
         let bundle = BootstrapBundle::render(&sample_inputs());
@@ -395,44 +369,36 @@ mod tests {
                 .contains("IROHA_MCP_URL=http://127.0.0.1:8080/v1/mcp")
         );
     }
-
     #[test]
     fn write_bootstrap_bundle_creates_files() {
         let temp = TempDir::new().expect("temp dir");
         let bundle = BootstrapBundle::render(&sample_inputs());
-
         let written =
             write_bootstrap_bundle(temp.path(), &bundle, false).expect("bundle should write");
-
         assert_eq!(written.len(), 4);
         assert!(temp.path().join(ENV_LOCAL_FILE).exists());
         assert!(temp.path().join(TYPESCRIPT_SAMPLE_FILE).exists());
         assert!(temp.path().join(RUST_SAMPLE_FILE).exists());
         assert!(temp.path().join(KOTLIN_SAMPLE_FILE).exists());
     }
-
     #[test]
     fn write_bootstrap_bundle_rejects_existing_files_without_replace() {
         let temp = TempDir::new().expect("temp dir");
         let bundle = BootstrapBundle::render(&sample_inputs());
         write_bootstrap_bundle(temp.path(), &bundle, false).expect("first write");
-
         let err = write_bootstrap_bundle(temp.path(), &bundle, false).expect_err("should fail");
         assert!(matches!(err, BootstrapWriteError::AlreadyExists { .. }));
     }
-
     #[test]
     fn write_bootstrap_bundle_replaces_existing_files_when_requested() {
         let temp = TempDir::new().expect("temp dir");
         let bundle = BootstrapBundle::render(&sample_inputs());
         write_bootstrap_bundle(temp.path(), &bundle, false).expect("first write");
-
         let updated = BootstrapBundle::render(&BootstrapInputs {
             chain_id: "updated-chain".to_owned(),
             ..sample_inputs()
         });
         write_bootstrap_bundle(temp.path(), &updated, true).expect("second write");
-
         let contents =
             std::fs::read_to_string(temp.path().join(ENV_LOCAL_FILE)).expect("read env file");
         assert!(contents.contains("IROHA_CHAIN_ID=updated-chain"));

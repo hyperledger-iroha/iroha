@@ -1,9 +1,7 @@
 //! End-to-end test: Kotodama pointer constructors lower to Norito TLVs and
 //! CoreHost validates TLVs for SetAccountDetail.
-
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 mod common;
-
 #[test]
 fn kotodama_set_account_detail_with_constructors() {
     // Kotodama program uses typed pointer constructors for the host call.
@@ -18,7 +16,6 @@ fn kotodama_set_account_detail_with_constructors() {
     // Use default compiler options (no forced VECTOR bit)
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile kotodama");
-
     // Allow ample cycles so the program can mirror TLVs and perform the syscall.
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());

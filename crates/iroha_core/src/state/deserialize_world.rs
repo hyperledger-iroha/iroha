@@ -23,7 +23,6 @@ struct MusubiPersistedState<'a> {
     resolver_index_revision: u64,
     replication_shortfall_releases: u64,
 }
-
 impl MusubiPersistedState<'_> {
     #[allow(clippy::too_many_lines)]
     fn validate(self) -> Result<(), json::Error> {
@@ -48,7 +47,6 @@ impl MusubiPersistedState<'_> {
         let aliases = self.aliases.view();
         let alias_history = self.alias_history.view();
         let governance_decisions = self.governance_decisions.view();
-
         let mut decision_actions = Vec::new();
         for (decision_id, consumption) in governance_decisions.iter() {
             consumption.validate().map_err(|error| {
@@ -63,7 +61,6 @@ impl MusubiPersistedState<'_> {
             }
             decision_actions.push(decision.action_digest);
         }
-
         for (package_id, metadata) in package_metadata.iter() {
             metadata.package.validate().map_err(|error| {
                 invalid_musubi_state("musubi_package_metadata", error.to_string())
@@ -78,7 +75,6 @@ impl MusubiPersistedState<'_> {
                 ));
             }
         }
-
         let mut member_accounts = BTreeMap::<MusubiPackageIdV1, Vec<AccountId>>::new();
         let mut owner_accounts = BTreeMap::<MusubiPackageIdV1, Vec<AccountId>>::new();
         for (member_key, member) in package_members.iter() {
@@ -128,7 +124,6 @@ impl MusubiPersistedState<'_> {
                     .push(member.account.clone());
             }
         }
-
         for (invite_id, invitation) in package_invitations.iter() {
             invitation.package.validate().map_err(|error| {
                 invalid_musubi_state("musubi_package_invitations", error.to_string())
@@ -178,7 +173,6 @@ impl MusubiPersistedState<'_> {
                 ));
             }
         }
-
         let mut pending_directory_counts = BTreeMap::<MusubiPackageIdV1, usize>::new();
         for (directory_key, entry) in maintainer_directory.iter() {
             entry.validate().map_err(|error| {
@@ -217,7 +211,6 @@ impl MusubiPersistedState<'_> {
                 ));
             }
         }
-
         for (package_id, package) in packages.iter() {
             package
                 .validate()
@@ -266,12 +259,10 @@ impl MusubiPersistedState<'_> {
                 ));
             }
         }
-
         let mut current_location_ids =
             BTreeMap::<ArchiveId, Vec<iroha_data_model::musubi::MusubiArchiveLocationIdV1>>::new();
         let mut location_providers =
             BTreeMap::<ArchiveId, BTreeSet<iroha_data_model::sorafs::capacity::ProviderId>>::new();
-
         for (attestation_key, record) in provider_bundle_attestations.iter() {
             record.validate().map_err(|error| {
                 invalid_musubi_state("musubi_provider_bundle_attestations", error.to_string())
@@ -305,7 +296,6 @@ impl MusubiPersistedState<'_> {
                 ));
             }
         }
-
         for (location_key, location) in archive_locations.iter() {
             location.validate().map_err(|error| {
                 invalid_musubi_state("musubi_archive_locations", error.to_string())
@@ -316,7 +306,6 @@ impl MusubiPersistedState<'_> {
                     "archive location references a missing archive",
                 )
             })?;
-
             let mut attestation_references = Vec::with_capacity(location.providers.len());
             let mut verification_lock_digest = None;
             for provider_id in &location.providers {
@@ -373,7 +362,6 @@ impl MusubiPersistedState<'_> {
                     .extend(location.providers.iter().copied());
             }
         }
-
         for (archive_id, archive) in archives.iter() {
             archive
                 .validate()
@@ -394,7 +382,6 @@ impl MusubiPersistedState<'_> {
                 ));
             }
         }
-
         for (archive_id, availability) in archive_availability.iter() {
             availability.validate().map_err(|error| {
                 invalid_musubi_state("musubi_archive_availability", error.to_string())
@@ -425,7 +412,6 @@ impl MusubiPersistedState<'_> {
                 ));
             }
         }
-
         let mut expected_references = BTreeMap::<ArchiveId, Vec<MusubiReleaseIdV1>>::new();
         for (archive_id, _) in archives.iter() {
             expected_references.insert(*archive_id, Vec::new());
@@ -468,7 +454,6 @@ impl MusubiPersistedState<'_> {
                 ));
             }
         }
-
         for (archive_id, references) in archive_reverse_references.iter() {
             references.validate().map_err(|error| {
                 invalid_musubi_state("musubi_archive_reverse_references", error.to_string())
@@ -526,7 +511,6 @@ impl MusubiPersistedState<'_> {
                 ),
             ));
         }
-
         let mut latest_selectable =
             BTreeMap::<MusubiPackageIdV1, Option<iroha_data_model::musubi::MusubiVersionV1>>::new();
         for (package_id, _) in packages.iter() {
@@ -593,7 +577,6 @@ impl MusubiPersistedState<'_> {
                 ));
             }
         }
-
         for (selector, entry) in public_directory.iter() {
             entry.validate().map_err(|error| {
                 invalid_musubi_state("musubi_public_directory", error.to_string())
@@ -632,7 +615,6 @@ impl MusubiPersistedState<'_> {
                 ));
             }
         }
-
         for (alias, record) in aliases.iter() {
             record
                 .alias
@@ -655,7 +637,6 @@ impl MusubiPersistedState<'_> {
                 ));
             }
         }
-
         let mut histories = BTreeMap::<MusubiAliasNameV1, Vec<&MusubiAliasHistoryEntryV1>>::new();
         for (history_key, entry) in alias_history.iter() {
             entry
@@ -745,7 +726,6 @@ impl MusubiPersistedState<'_> {
         Ok(())
     }
 }
-
 fn validate_musubi_governance_provenance(world: &World) -> Result<(), json::Error> {
     let decisions = world.musubi_governance_decisions.view();
     let proposals = world.governance_proposals.view();
@@ -759,7 +739,6 @@ fn validate_musubi_governance_provenance(world: &World) -> Result<(), json::Erro
     let mut policy_actions = Vec::new();
     let mut owner_recovery_revisions = BTreeSet::new();
     let mut owner_recovery_history: BTreeMap<MusubiPackageIdV1, Vec<(u64, u64)>> = BTreeMap::new();
-
     for (decision_id, consumption) in decisions.iter() {
         consumption.validate().map_err(|error| {
             invalid_musubi_state("musubi_governance_decisions", error.to_string())
@@ -810,7 +789,6 @@ fn validate_musubi_governance_provenance(world: &World) -> Result<(), json::Erro
             policy_actions.push((replacement, consumption.consumed_at_height));
         }
     }
-
     policy_actions.sort_by_key(|(replacement, _)| replacement.policy.revision);
     let mut reconstructed_policy = MusubiRegistryPolicyV1::default();
     let mut previous_policy_consumed_at = None;
@@ -857,7 +835,6 @@ fn validate_musubi_governance_provenance(world: &World) -> Result<(), json::Erro
             "current policy is not the exact result of retained Parliament decisions",
         ));
     }
-
     for (_, alias) in aliases.iter() {
         let pricing = pricing_policies
             .get(&alias.pricing_revision)
@@ -871,7 +848,6 @@ fn validate_musubi_governance_provenance(world: &World) -> Result<(), json::Erro
             .validate(pricing)
             .map_err(|error| invalid_musubi_state("musubi_aliases", error.to_string()))?;
     }
-
     for (action, consumption) in actions_by_digest.values().copied() {
         let digest = action.action_digest();
         match action {
@@ -1005,14 +981,12 @@ fn validate_musubi_governance_provenance(world: &World) -> Result<(), json::Erro
     }
     Ok(())
 }
-
 fn validate_musubi_live_projections(world: &World) -> Result<(), json::Error> {
     let world = world.view();
     for (archive_id, archive) in world.musubi_archives().iter() {
         let mut active_locations = 0_usize;
         let mut healthy_providers = BTreeSet::new();
         let mut maximum_location_revision = 1_u64;
-
         for (key, location) in world
             .musubi_archive_locations()
             .iter()
@@ -1064,7 +1038,6 @@ fn validate_musubi_live_projections(world: &World) -> Result<(), json::Error> {
                 "archive location revision is not the exact maximum retained location revision",
             ));
         }
-
         let active_locations = u8::try_from(active_locations).map_err(|_| {
             invalid_musubi_state(
                 "musubi_archive_availability",
@@ -1104,7 +1077,6 @@ fn validate_musubi_live_projections(world: &World) -> Result<(), json::Error> {
             ));
         }
     }
-
     for (_, row) in world.musubi_resolver_index().iter() {
         if row.index_revision < row.selection.storage.index_revision {
             return Err(invalid_musubi_state(
@@ -1135,7 +1107,6 @@ fn validate_musubi_live_projections(world: &World) -> Result<(), json::Error> {
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_lines)]
 fn parse_world(
     mut map: SnapshotJsonMap<'_>,
@@ -1157,7 +1128,6 @@ fn parse_world(
             });
         }
     }
-
     let parameters = take_parameters_cell(&mut map, "parameters")?;
     let peers: Cell<Peers> = take_required(&mut map, "peers")?;
     let domain_committees = take_required(&mut map, "domain_committees")?;
@@ -1460,7 +1430,6 @@ fn parse_world(
     let merge_global_state_root: Cell<Option<Hash>> =
         take_optional_default(&mut map, "merge_global_state_root")?;
     reject_unknown(&map, "world")?;
-
     let mut world = World {
         parameters,
         peers,
@@ -1809,7 +1778,6 @@ fn parse_world(
         })?;
     Ok(world)
 }
-
 struct BuildStateInputs {
     world: World,
     block_hashes: BlockHashes,
@@ -1831,7 +1799,6 @@ struct BuildStateInputs {
     #[cfg(feature = "telemetry")]
     telemetry: StateTelemetry,
 }
-
 fn build_state(
     inputs: BuildStateInputs,
     allow_durable_recovery: bool,
@@ -2010,7 +1977,6 @@ fn build_state(
     }
     Ok(state)
 }
-
 fn default_pipeline() -> iroha_config::parameters::actual::Pipeline {
     iroha_config::parameters::actual::Pipeline {
         dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,
@@ -2073,7 +2039,6 @@ fn default_pipeline() -> iroha_config::parameters::actual::Pipeline {
         amx_per_syscall_ns: iroha_config::parameters::defaults::pipeline::AMX_PER_SYSCALL_NS,
     }
 }
-
 pub(super) fn default_zk() -> iroha_config::parameters::actual::Zk {
     iroha_config::parameters::actual::Zk {
         halo2: iroha_config::parameters::actual::Halo2::default(),
@@ -2162,7 +2127,6 @@ pub(super) fn default_zk() -> iroha_config::parameters::actual::Zk {
         },
     }
 }
-
 #[allow(clippy::too_many_lines)]
 fn default_governance() -> iroha_config::parameters::actual::Governance {
     iroha_config::parameters::actual::Governance {
@@ -2268,7 +2232,6 @@ fn default_governance() -> iroha_config::parameters::actual::Governance {
             iroha_config::parameters::defaults::governance::PIPELINE_AGENDA_SLA_BLOCKS,
     }
 }
-
 fn reject_unknown(map: &SnapshotJsonMap<'_>, context: &str) -> Result<(), json::Error> {
     let Some(field) = map.first_key() else {
         return Ok(());
@@ -2278,7 +2241,6 @@ fn reject_unknown(map: &SnapshotJsonMap<'_>, context: &str) -> Result<(), json::
         message: "unknown field is not permitted in a signed first-release snapshot".to_owned(),
     })
 }
-
 #[cfg(test)]
 mod decode_tests {
     use iroha_crypto::SignatureOf;
@@ -2302,15 +2264,12 @@ mod decode_tests {
         ChunkerProfileHandle, ManifestRootCid, ProviderIngestCompletionSignerPolicyV1,
         ProviderIngestFinalizedAnchorV1,
     };
-
     use super::*;
-
     fn musubi_account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive deterministic Musubi snapshot account");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn musubi_package(name: &str) -> MusubiPackageIdV1 {
         MusubiPackageIdV1::new(
             DataSpaceId::new(7),
@@ -2318,7 +2277,6 @@ mod decode_tests {
             name.parse().expect("Musubi package name"),
         )
     }
-
     #[test]
     fn legacy_musubi_generic_state_rejects_entire_reserved_namespace() {
         for path in [
@@ -2332,7 +2290,6 @@ mod decode_tests {
         ] {
             let mut state = Storage::<StatePath, Vec<u8>>::default();
             state.insert(path.parse().expect("valid legacy state path"), vec![1]);
-
             let error = reject_legacy_musubi_state(&state)
                 .expect_err("every reserved legacy Musubi state path must block loading");
             assert!(
@@ -2340,7 +2297,6 @@ mod decode_tests {
                 "rejection must identify the exact legacy path: {error}"
             );
         }
-
         let mut unrelated = Storage::<StatePath, Vec<u8>>::default();
         unrelated.insert(
             "musubian_contract"
@@ -2351,7 +2307,6 @@ mod decode_tests {
         reject_legacy_musubi_state(&unrelated)
             .expect("a non-reserved prefix must not be mistaken for Musubi state");
     }
-
     fn retain_musubi_consumption_as(
         world: &mut World,
         decision_id: [u8; 32],
@@ -2392,7 +2347,6 @@ mod decode_tests {
             .insert(decision_id, consumption);
         action_digest
     }
-
     fn retain_musubi_consumption(
         world: &mut World,
         action: MusubiParliamentActionV1,
@@ -2410,7 +2364,6 @@ mod decode_tests {
             consumed_at_height,
         )
     }
-
     fn musubi_policy_successor(
         current: &MusubiRegistryPolicyV1,
         mode: MusubiRegistryAdmissionModeV1,
@@ -2424,7 +2377,6 @@ mod decode_tests {
             .expect("canonical policy successor");
         successor
     }
-
     fn seed_current_musubi_package(
         world: &mut World,
         package: &MusubiPackageIdV1,
@@ -2447,7 +2399,6 @@ mod decode_tests {
         };
         record.validate().expect("valid package fixture");
         world.musubi_packages.insert(package.clone(), record);
-
         let member = MusubiPackageMemberV1 {
             package: package.clone(),
             account: owner.clone(),
@@ -2461,7 +2412,6 @@ mod decode_tests {
             .insert(member.key(), member.clone());
         member
     }
-
     fn musubi_release_record(
         release: MusubiReleaseIdV1,
         artifact_governance: MusubiArtifactGovernanceStateV1,
@@ -2501,7 +2451,6 @@ mod decode_tests {
         record.validate().expect("valid release fixture");
         record
     }
-
     fn validate_musubi_persisted_snapshot(world: &World) -> Result<(), json::Error> {
         MusubiPersistedState {
             namespace_bindings: &world.musubi_namespace_bindings,
@@ -2530,7 +2479,6 @@ mod decode_tests {
         }
         .validate()
     }
-
     fn validate_musubi_publication_snapshot(world: &World) -> Result<(), json::Error> {
         validate_musubi_location_reverse_indices(
             &world.musubi_archives,
@@ -2544,7 +2492,6 @@ mod decode_tests {
         validate_musubi_persisted_snapshot(world)?;
         validate_musubi_live_projections(world)
     }
-
     #[allow(clippy::too_many_lines)]
     fn seeded_musubi_publication_snapshot()
     -> (World, MusubiReleaseIdV1, ArchiveId, MusubiPackageSelectorV1) {
@@ -2590,7 +2537,6 @@ mod decode_tests {
             changed_at_height: 1,
         };
         metadata.validate().expect("valid package metadata");
-
         let commitment = MusubiArchiveCommitmentV1 {
             root_cid: ManifestRootCid::from_blake3_digest([0x11; 32]).expect("archive root CID"),
             chunker: ChunkerProfileHandle {
@@ -2626,7 +2572,6 @@ mod decode_tests {
             verification_lock_digest: MusubiVerificationLockDigestV1::new([0x1A; 32]),
         };
         manifest.validate().expect("valid release manifest");
-
         let broker_keypair = KeyPair::try_from_seed(vec![62; 32], Algorithm::Ed25519)
             .expect("derive deterministic ingress broker key");
         let receipt_payload = MusubiSeedIngressReceiptPayloadV1 {
@@ -2678,7 +2623,6 @@ mod decode_tests {
             index_revision: 1,
         };
         availability.validate().expect("valid archive availability");
-
         let yank = MusubiReleaseYankV1 {
             release: release.clone(),
             yanked: false,
@@ -2728,7 +2672,6 @@ mod decode_tests {
             index_revision: 2,
         };
         directory.validate().expect("valid public directory entry");
-
         world
             .musubi_namespace_bindings
             .insert(binding.namespace.clone(), binding);
@@ -2766,10 +2709,8 @@ mod decode_tests {
         world.musubi_resolver_index_revision =
             Cell::new(MusubiResolverIndexRevisionV1::new(2).expect("resolver revision"));
         world.musubi_replication_shortfall_releases = Cell::new(1);
-
         (world, release, archive_id, selector)
     }
-
     #[allow(clippy::too_many_lines)]
     fn seed_provider_attested_location(
         world: &mut World,
@@ -2876,7 +2817,6 @@ mod decode_tests {
             state: MusubiArchiveLocationStateV1::Degraded,
         };
         location.validate().expect("valid archive location fixture");
-
         let mut updated_archive = archive;
         updated_archive.location_revision = 2;
         updated_archive.location_ids = vec![location_id];
@@ -2890,16 +2830,13 @@ mod decode_tests {
         world
             .musubi_archive_locations
             .insert(location.key(), location);
-
         attestation_key
     }
-
     #[test]
     fn musubi_publication_snapshot_validates_replication_shortfall_aggregate() {
         let (baseline, _, _, _) = seeded_musubi_publication_snapshot();
         validate_musubi_publication_snapshot(&baseline)
             .expect("one release on an unavailable archive has shortfall count one");
-
         let (mut mismatched, _, _, _) = seeded_musubi_publication_snapshot();
         mismatched.musubi_replication_shortfall_releases = Cell::new(0);
         let error = validate_musubi_publication_snapshot(&mismatched)
@@ -2911,14 +2848,12 @@ mod decode_tests {
             "unexpected shortfall mismatch diagnostic: {error}"
         );
     }
-
     #[test]
     fn musubi_persisted_state_rejects_missing_provider_attestation_record() {
         let (mut world, release, archive_id, _) = seeded_musubi_publication_snapshot();
         let attestation_key = seed_provider_attested_location(&mut world, &release, archive_id);
         validate_musubi_persisted_snapshot(&world)
             .expect("an archive location with its exact attestation record is valid");
-
         {
             let mut mutation = world.musubi_provider_bundle_attestations.block();
             mutation.remove(attestation_key);
@@ -2933,7 +2868,6 @@ mod decode_tests {
             "unexpected missing-attestation diagnostic: {error}"
         );
     }
-
     #[test]
     fn musubi_persisted_state_rejects_corrupt_provider_attestation_record() {
         let (mut world, release, archive_id, _) = seeded_musubi_publication_snapshot();
@@ -2949,7 +2883,6 @@ mod decode_tests {
         world
             .musubi_provider_bundle_attestations
             .insert(attestation_key, corrupt_record);
-
         let error = validate_musubi_persisted_snapshot(&world)
             .expect_err("a corrupt provider attestation record must fail closed");
         assert!(
@@ -2959,7 +2892,6 @@ mod decode_tests {
             "unexpected corrupt-attestation diagnostic: {error}"
         );
     }
-
     #[test]
     fn musubi_persisted_state_rejects_corrupt_provider_attestation_set_digest() {
         let (mut world, release, archive_id, _) = seeded_musubi_publication_snapshot();
@@ -2976,7 +2908,6 @@ mod decode_tests {
         world
             .musubi_archive_locations
             .insert(location_key, location);
-
         let error = validate_musubi_persisted_snapshot(&world)
             .expect_err("a corrupt provider-attestation aggregate must fail closed");
         assert!(
@@ -2986,14 +2917,12 @@ mod decode_tests {
             "unexpected corrupt-attestation-set diagnostic: {error}"
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn musubi_publication_snapshot_rejects_every_one_sided_projection_cut() {
         let (baseline, _, _, _) = seeded_musubi_publication_snapshot();
         validate_musubi_publication_snapshot(&baseline)
             .expect("complete home and universal publication projections are valid");
-
         let (mut universal_only, release, archive_id, _) = seeded_musubi_publication_snapshot();
         {
             let mut mutation = universal_only.musubi_releases.block();
@@ -3016,7 +2945,6 @@ mod decode_tests {
                 .contains("resolver row references a missing release"),
             "unexpected universal-only diagnostic: {error}"
         );
-
         let (mut home_only, release, archive_id, selector) = seeded_musubi_publication_snapshot();
         home_only.musubi_archive_reverse_references.insert(
             archive_id,
@@ -3043,7 +2971,6 @@ mod decode_tests {
                 .contains("archive reverse references are not the exact release set"),
             "unexpected home-only diagnostic: {error}"
         );
-
         let (missing_resolver, release, _, selector) = seeded_musubi_publication_snapshot();
         {
             let mut mutation = missing_resolver.musubi_resolver_index.block();
@@ -3063,7 +2990,6 @@ mod decode_tests {
                 .contains("release is missing its exact resolver row"),
             "unexpected missing-resolver diagnostic: {error}"
         );
-
         let (missing_directory, _, _, selector) = seeded_musubi_publication_snapshot();
         {
             let mut mutation = missing_directory.musubi_public_directory.block();
@@ -3078,7 +3004,6 @@ mod decode_tests {
                 .contains("package is missing its canonical public-directory entry"),
             "unexpected missing-directory diagnostic: {error}"
         );
-
         let (mut replayed, release, archive_id, selector) = seeded_musubi_publication_snapshot();
         let replayed_release = replayed
             .musubi_releases
@@ -3131,7 +3056,6 @@ mod decode_tests {
         validate_musubi_publication_snapshot(&replayed)
             .expect("an exact projection replay preserves the complete snapshot");
     }
-
     #[test]
     fn take_parameters_cell_accepts_canonical_mv_envelope() {
         let expected = Parameters::default();
@@ -3140,16 +3064,13 @@ mod decode_tests {
         canonical_map.insert("revert".to_owned(), json::Value::Null);
         canonical_map.insert("blocks".to_owned(), blocks);
         let canonical = json::Value::Object(canonical_map);
-
         let mut map = json::native::Map::new();
         map.insert("parameters".to_owned(), canonical);
         let mut map = SnapshotJsonMap::from_owned(map);
-
         let parsed = take_parameters_cell(&mut map, "parameters")
             .expect("canonical parameters MV envelope must be accepted");
         assert_eq!(parsed.view().get(), &expected);
     }
-
     #[test]
     fn borrowed_snapshot_map_rejects_duplicates_and_noncanonical_order() {
         let canonical = SnapshotJsonMap::parse(r#"{"first":0,"second":1}"#, "fixture")
@@ -3167,7 +3088,6 @@ mod decode_tests {
             "duplicate signed snapshot fields must fail closed"
         );
     }
-
     #[test]
     fn snapshot_record_order_must_be_strict_and_duplicate_free() {
         validate_canonical_snapshot_record_order(&[1_u8, 2, 3], "fixture", |value| *value)
@@ -3181,7 +3101,6 @@ mod decode_tests {
                 .is_err()
         );
     }
-
     #[test]
     fn snapshot_norito_records_require_exact_canonical_bytes() {
         let encoded = 7_u64.encode();
@@ -3193,7 +3112,6 @@ mod decode_tests {
                 .expect("canonical Norito record"),
             [7]
         );
-
         let mut trailing = encoded;
         trailing.push(0);
         let error = decode_snapshot_records::<u64>(
@@ -3205,18 +3123,15 @@ mod decode_tests {
         .expect_err("trailing or alternate Norito bytes must fail closed");
         assert!(error.to_string().contains("fixture"));
     }
-
     #[test]
     fn take_parameters_cell_rejects_legacy_blocks_envelope() {
         let expected = Parameters::default();
         let blocks = norito::json::to_value(&expected).expect("serialize parameters");
         let mut legacy_map = json::native::Map::new();
         legacy_map.insert("blocks".to_owned(), blocks);
-
         let mut map = json::native::Map::new();
         map.insert("parameters".to_owned(), json::Value::Object(legacy_map));
         let mut map = SnapshotJsonMap::from_owned(map);
-
         let error = take_parameters_cell(&mut map, "parameters")
             .err()
             .expect("legacy blocks-only parameters envelope must be rejected");
@@ -3225,7 +3140,6 @@ mod decode_tests {
             "unexpected diagnostic: {error}"
         );
     }
-
     #[test]
     fn musubi_provider_attestation_snapshot_store_roundtrips_and_is_required() {
         assert!(
@@ -3243,7 +3157,6 @@ mod decode_tests {
             .get(&attestation_key)
             .cloned()
             .expect("seeded provider attestation record");
-
         let mut map = json::native::Map::new();
         map.insert(
             "musubi_provider_bundle_attestations".to_owned(),
@@ -3258,7 +3171,6 @@ mod decode_tests {
             .expect("decode provider attestation snapshot store");
         assert_eq!(parsed.view().get(&attestation_key), Some(&expected));
         assert!(map.is_empty());
-
         let error = take_required::<
             Storage<MusubiProviderBundleAttestationKeyV1, MusubiProviderBundleAttestationRecordV1>,
         >(
@@ -3274,7 +3186,6 @@ mod decode_tests {
             "unexpected missing-field error: {error}"
         );
     }
-
     #[test]
     fn musubi_maintainer_directory_snapshot_store_roundtrips_and_is_required() {
         let package = MusubiPackageIdV1::new(
@@ -3313,7 +3224,6 @@ mod decode_tests {
         let mut expected = Storage::default();
         expected.insert(accepted_entry.key(), accepted_entry.clone());
         expected.insert(invitation_entry.key(), invitation_entry.clone());
-
         let mut map = json::native::Map::new();
         map.insert(
             "musubi_maintainer_directory".to_owned(),
@@ -3332,7 +3242,6 @@ mod decode_tests {
             Some(&invitation_entry)
         );
         assert!(map.is_empty());
-
         let error = take_required::<
             Storage<MusubiMaintainerDirectoryKeyV1, MusubiMaintainerDirectoryEntryV1>,
         >(
@@ -3346,7 +3255,6 @@ mod decode_tests {
             "unexpected missing-field error: {error}"
         );
     }
-
     #[test]
     fn take_musubi_namespace_bindings_rejects_missing_malformed_and_key_mismatch() {
         let namespace: MusubiNamespaceV1 = "universal".parse().expect("namespace");
@@ -3367,7 +3275,6 @@ mod decode_tests {
         let parsed =
             take_musubi_namespace_bindings(&mut map).expect("canonical namespace binding map");
         assert_eq!(parsed.view().get(&namespace), Some(&binding));
-
         let error = take_musubi_namespace_bindings(&mut SnapshotJsonMap::from_owned(
             json::native::Map::new(),
         ))
@@ -3377,7 +3284,6 @@ mod decode_tests {
             error.to_string().contains("musubi_namespace_bindings"),
             "unexpected missing-field error: {error}"
         );
-
         let mut malformed = Storage::default();
         malformed.insert(
             namespace.clone(),
@@ -3399,7 +3305,6 @@ mod decode_tests {
             error.to_string().contains("musubi_namespace_bindings"),
             "unexpected malformed-binding error: {error}"
         );
-
         let mismatched_namespace: MusubiNamespaceV1 =
             "other.universal".parse().expect("mismatched namespace");
         let mut mismatched = Storage::default();
@@ -3420,11 +3325,9 @@ mod decode_tests {
             "unexpected key-mismatch error: {error}"
         );
     }
-
     #[test]
     fn take_musubi_domain_generations_requires_canonical_persisted_values() {
         let domain = DomainId::try_new("packages", "universal").expect("domain id");
-
         let error = take_musubi_domain_ownership_generations(&mut SnapshotJsonMap::from_owned(
             json::native::Map::new(),
         ))
@@ -3436,7 +3339,6 @@ mod decode_tests {
                 .contains("musubi_domain_ownership_generations"),
             "unexpected missing-field error: {error}"
         );
-
         let empty: Storage<DomainId, u64> = Storage::default();
         let mut map = json::native::Map::new();
         map.insert(
@@ -3450,7 +3352,6 @@ mod decode_tests {
                 .view()
                 .is_empty()
         );
-
         for generation in [0, 1] {
             let mut generations = Storage::default();
             generations.insert(domain.clone(), generation);
@@ -3468,7 +3369,6 @@ mod decode_tests {
                 "unexpected generation {generation} error: {error}"
             );
         }
-
         let mut generations = Storage::default();
         generations.insert(domain.clone(), 4);
         let mut map = json::native::Map::new();
@@ -3481,7 +3381,6 @@ mod decode_tests {
             .expect("persisted generation four is canonical");
         assert_eq!(parsed.view().get(&domain), Some(&4));
     }
-
     #[test]
     fn take_musubi_policy_revision_and_shortfall_fail_closed() {
         let policy = MusubiRegistryPolicyV1::default();
@@ -3498,7 +3397,6 @@ mod decode_tests {
                 .get(),
             &policy
         );
-
         let mut invalid_policy = policy;
         invalid_policy.revision = 0;
         let mut map = json::native::Map::new();
@@ -3521,7 +3419,6 @@ mod decode_tests {
             .is_err(),
             "missing policy must fail"
         );
-
         let mut map = json::native::Map::new();
         map.insert(
             "musubi_resolver_index_revision".to_owned(),
@@ -3537,7 +3434,6 @@ mod decode_tests {
                 .get(),
             1
         );
-
         let mut map = json::native::Map::new();
         map.insert(
             "musubi_resolver_index_revision".to_owned(),
@@ -3559,7 +3455,6 @@ mod decode_tests {
             .is_err(),
             "missing resolver revision must fail"
         );
-
         let mut map = json::native::Map::new();
         map.insert(
             "musubi_replication_shortfall_releases".to_owned(),
@@ -3585,11 +3480,9 @@ mod decode_tests {
             "unexpected missing-shortfall error: {error}"
         );
     }
-
     #[test]
     fn musubi_resolver_checkpoint_keys_use_canonical_nonzero_decimal() {
         use mv::json::JsonKeyCodec;
-
         let revision = MusubiResolverIndexRevisionV1::new(42).expect("revision forty-two");
         let mut encoded = String::new();
         revision.encode_json_key(&mut encoded);
@@ -3605,7 +3498,6 @@ mod decode_tests {
             );
         }
     }
-
     #[test]
     fn musubi_resolver_checkpoints_are_required_and_canonically_anchored() {
         let revision = MusubiResolverIndexRevisionV1::new(1).expect("revision one");
@@ -3616,7 +3508,6 @@ mod decode_tests {
         };
         let mut checkpoints = Storage::default();
         checkpoints.insert(revision, checkpoint.clone());
-
         let mut map = json::native::Map::new();
         map.insert(
             "musubi_resolver_index_checkpoints".to_owned(),
@@ -3634,7 +3525,6 @@ mod decode_tests {
             .is_err(),
             "the clean schema must reject snapshots without checkpoint history"
         );
-
         let mut mismatched = Storage::default();
         mismatched.insert(
             MusubiResolverIndexRevisionV1::new(2).expect("revision two"),
@@ -3644,14 +3534,12 @@ mod decode_tests {
             validate_musubi_resolver_checkpoint_structure(&mismatched, 2).is_err(),
             "checkpoint keys must match embedded revisions"
         );
-
         let mut world = World::default();
         world.musubi_resolver_index_checkpoints = decoded;
         let canonical_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
         validate_musubi_resolver_checkpoint_anchors(&world, std::slice::from_ref(&canonical_hash))
             .expect("checkpoint binds its canonical finalized block");
-
         let fabricated_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB2; Hash::LENGTH]));
         assert!(
@@ -3663,7 +3551,6 @@ mod decode_tests {
             "a fabricated checkpoint tuple must fail restoration"
         );
     }
-
     #[test]
     fn musubi_governance_requires_exact_fingerprint_and_execution_boundary() {
         let genesis = MusubiRegistryPolicyV1::default();
@@ -3673,13 +3560,11 @@ mod decode_tests {
             expected_revision: genesis.revision,
         });
         let decision_id = ProposalKind::MusubiRegistryGovernance(action.clone()).fingerprint();
-
         let mut world = World::default();
         world.musubi_registry_policy = Cell::new(successor.clone());
         retain_musubi_consumption(&mut world, action.clone(), 10, 20, 20);
         validate_musubi_governance_provenance(&world)
             .expect("execution exactly at the boundary must pass");
-
         let mut consumption = world
             .musubi_governance_decisions
             .view()
@@ -3693,7 +3578,6 @@ mod decode_tests {
         let error = validate_musubi_governance_provenance(&world)
             .expect_err("pre-boundary consumption must fail");
         assert!(error.to_string().contains("consumed before"), "{error}");
-
         let wrong_id = if decision_id == [0xA5; 32] {
             [0x5A; 32]
         } else {
@@ -3706,7 +3590,6 @@ mod decode_tests {
             .expect_err("proposal fingerprint mismatch must fail");
         assert!(error.to_string().contains("fingerprint"), "{error}");
     }
-
     #[test]
     fn musubi_owner_recovery_current_projection_is_exact() {
         let mut world = World::default();
@@ -3720,7 +3603,6 @@ mod decode_tests {
         });
         retain_musubi_consumption(&mut world, action, 10, 20, 20);
         validate_musubi_governance_provenance(&world).expect("exact current recovery projection");
-
         let canonical_package = world
             .musubi_packages
             .view()
@@ -3744,7 +3626,6 @@ mod decode_tests {
         world
             .musubi_packages
             .insert(package.clone(), canonical_package);
-
         let key = member.key();
         {
             let mut members = world.musubi_package_members.block();
@@ -3760,7 +3641,6 @@ mod decode_tests {
         world
             .musubi_package_members
             .insert(key.clone(), member.clone());
-
         let mut wrong_member = member.clone();
         wrong_member.role = MusubiPackageRoleV1::Maintainer(MusubiMaintainerPermissionsV1 {
             publish: true,
@@ -3777,7 +3657,6 @@ mod decode_tests {
                 .to_string()
                 .contains("owner-recovery projection")
         );
-
         let mut wrong_member = member.clone();
         wrong_member.governance_revision = 1;
         world
@@ -3789,7 +3668,6 @@ mod decode_tests {
                 .to_string()
                 .contains("owner-recovery projection")
         );
-
         let mut wrong_member = member;
         wrong_member.accepted_at_height = 21;
         world.musubi_package_members.insert(key, wrong_member);
@@ -3800,14 +3678,12 @@ mod decode_tests {
                 .contains("consumption height")
         );
     }
-
     #[test]
     fn musubi_owner_recovery_rejects_duplicate_result_revision_but_accepts_later_state() {
         let mut world = World::default();
         let package = musubi_package("recovery-history");
         let current_owner = musubi_account(80);
         seed_current_musubi_package(&mut world, &package, &current_owner, 3, 30);
-
         let first = MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
             package: package.clone(),
             owners: vec![musubi_account(81)],
@@ -3816,7 +3692,6 @@ mod decode_tests {
         retain_musubi_consumption(&mut world, first, 10, 20, 20);
         validate_musubi_governance_provenance(&world)
             .expect("later current revision need not reproduce historical owners");
-
         let duplicate =
             MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
                 package,
@@ -3828,7 +3703,6 @@ mod decode_tests {
             .expect_err("two recoveries cannot claim the same result revision");
         assert!(error.to_string().contains("result revision"), "{error}");
     }
-
     #[test]
     fn musubi_policy_consumption_heights_are_nondecreasing() {
         let genesis = MusubiRegistryPolicyV1::default();
@@ -3845,14 +3719,12 @@ mod decode_tests {
                 policy: third.clone(),
                 expected_revision: second.revision,
             });
-
         let mut world = World::default();
         world.musubi_registry_policy = Cell::new(third);
         retain_musubi_consumption(&mut world, first_action, 10, 20, 21);
         retain_musubi_consumption(&mut world, second_action, 11, 21, 21);
         validate_musubi_governance_provenance(&world)
             .expect("equal same-block consumption heights are nondecreasing");
-
         let mut first = world
             .musubi_governance_decisions
             .view()
@@ -3866,14 +3738,12 @@ mod decode_tests {
             .expect_err("policy revision history cannot move backward in height");
         assert!(error.to_string().contains("consumption heights"), "{error}");
     }
-
     #[test]
     fn musubi_owner_recovery_consumption_heights_are_nondecreasing() {
         let mut world = World::default();
         let package = musubi_package("recovery-height-history");
         let current_owner = musubi_account(90);
         seed_current_musubi_package(&mut world, &package, &current_owner, 3, 21);
-
         let first = MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
             package: package.clone(),
             owners: vec![musubi_account(91)],
@@ -3886,12 +3756,10 @@ mod decode_tests {
             expected_revision: 2,
         });
         retain_musubi_consumption(&mut world, second, 11, 21, 21);
-
         let error = validate_musubi_governance_provenance(&world)
             .expect_err("owner-recovery history cannot move backward in execution height");
         assert!(error.to_string().contains("consumption heights"), "{error}");
     }
-
     #[test]
     fn alias_retarget_history_binds_exact_decision_consumption_height() {
         const CONSUMED_AT: u64 = 30;
@@ -3921,7 +3789,6 @@ mod decode_tests {
             .insert(key.clone(), history.clone());
         validate_musubi_governance_provenance(&world)
             .expect("exact consumption-height binding must pass");
-
         history.finalized_height = CONSUMED_AT + 1;
         history
             .validate()
@@ -3934,7 +3801,6 @@ mod decode_tests {
             "unexpected alias-height diagnostic: {error}"
         );
     }
-
     #[test]
     fn artifact_takedown_binds_exact_decision_consumption_height() {
         const CONSUMED_AT: u64 = 30;
@@ -3964,7 +3830,6 @@ mod decode_tests {
             .insert(release.clone(), record.clone());
         validate_musubi_governance_provenance(&world)
             .expect("exact consumption-height binding must pass");
-
         let mut mismatched = record;
         let MusubiArtifactGovernanceStateV1::TakenDown(takedown) =
             &mut mismatched.artifact_governance
@@ -3983,13 +3848,11 @@ mod decode_tests {
             "unexpected takedown-height diagnostic: {error}"
         );
     }
-
     #[test]
     fn musubi_governance_provenance_reconstructs_policy_and_requires_proposals() {
         let mut world = World::default();
         validate_musubi_governance_provenance(&world)
             .expect("genesis Musubi policy has an empty decision history");
-
         let mut unexplained_policy = MusubiRegistryPolicyV1::default();
         unexplained_policy.revision += 1;
         unexplained_policy.mode = iroha_data_model::musubi::MusubiRegistryAdmissionModeV1::Closed;
@@ -4000,7 +3863,6 @@ mod decode_tests {
             error.to_string().contains("exact result"),
             "unexpected unexplained-policy diagnostic: {error}"
         );
-
         let mut world = World::default();
         let mut successor = MusubiRegistryPolicyV1::default();
         successor.revision += 1;

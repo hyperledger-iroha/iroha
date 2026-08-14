@@ -4,17 +4,6 @@
 //! `cargo run --locked --offline -p connect_norito_bridge --features dev-tools --bin swift_parity_regen -- --check`
 //! `cargo run --locked --offline -p connect_norito_bridge --features dev-tools --bin swift_parity_regen -- --write`
 //! `cargo run --locked --offline -p connect_norito_bridge --features dev-tools --bin swift_parity_regen -- --write --output-root /tmp/swift-parity-stage`
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    env, fs,
-    io::{Read as _, Write as _},
-    num::NonZeroU32,
-    path::{Component, Path, PathBuf},
-    str::FromStr,
-    time::Duration,
-};
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use iroha_crypto::{Algorithm, HashOf, KeyPair};
 use iroha_data_model::{
@@ -31,7 +20,15 @@ use norito::{
     codec::Encode,
     json::{self, Map, Value},
 };
-
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    env, fs,
+    io::{Read as _, Write as _},
+    num::NonZeroU32,
+    path::{Component, Path, PathBuf},
+    str::FromStr,
+    time::Duration,
+};
 const DEFAULT_FIXTURES_PATH: &str = "IrohaSwift/Fixtures/swift_parity_payloads.json";
 const DEFAULT_OUT_DIR: &str = "IrohaSwift/Fixtures";
 const DEFAULT_MANIFEST_NAME: &str = "swift_parity_manifest.json";
@@ -44,26 +41,22 @@ const EXPECTED_FIXTURE_NAMES: [&str; 3] = [
     "swift_mint_asset_basic",
     "swift_transfer_asset_basic",
 ];
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     Check,
     Write,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Options {
     mode: Mode,
     output_root: PathBuf,
 }
-
 #[derive(Debug, norito::json::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct PayloadFileEntry {
     name: String,
     payload: PayloadSpec,
 }
-
 #[derive(Debug, norito::json::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct PayloadSpec {
@@ -76,21 +69,18 @@ struct PayloadSpec {
     fee_payment: FeePaymentSpec,
     metadata: BTreeMap<String, Value>,
 }
-
 #[derive(Debug, norito::json::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct ExecutableSpec {
     #[norito(rename = "Instructions")]
     instructions: Vec<InstructionSpec>,
 }
-
 #[derive(Debug, norito::json::JsonDeserialize, norito::json::JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct InstructionSpec {
     kind: String,
     arguments: InstructionArguments,
 }
-
 #[derive(Debug, norito::json::JsonDeserialize, norito::json::JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct InstructionArguments {
@@ -99,20 +89,17 @@ struct InstructionArguments {
     quantity: String,
     destination: String,
 }
-
 #[derive(Debug, norito::json::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct FeePaymentSpec {
     payer: String,
     value: FeePaymentValueSpec,
 }
-
 #[derive(Debug, norito::json::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct FeePaymentValueSpec {
     charge_limits: Vec<Value>,
 }
-
 #[derive(Clone)]
 struct FixtureOutput {
     name: String,
@@ -123,18 +110,15 @@ struct FixtureOutput {
     payload_hash: String,
     signed_hash: String,
 }
-
 struct RenderedFixtures {
     files: BTreeMap<PathBuf, Vec<u8>>,
     source_bytes: Vec<u8>,
 }
-
 #[derive(Debug)]
 struct PublishFailure {
     message: String,
     intended_landed: bool,
 }
-
 impl PublishFailure {
     fn before_publication(message: impl Into<String>) -> Self {
         Self {
@@ -143,22 +127,18 @@ impl PublishFailure {
         }
     }
 }
-
 struct ChainDiscriminantReset(u16);
-
 impl ChainDiscriminantReset {
     fn new(discriminant: u16) -> Self {
         let previous = address::set_chain_discriminant(discriminant);
         Self(previous)
     }
 }
-
 impl Drop for ChainDiscriminantReset {
     fn drop(&mut self) {
         address::set_chain_discriminant(self.0);
     }
 }
-
 fn parse_asset_definition_argument(raw: &str) -> Result<AssetDefinitionId, String> {
     let parsed = AssetDefinitionId::parse_address_literal(raw)
         .map_err(|err| format!("invalid asset definition '{raw}': {err}"))?;
@@ -167,7 +147,6 @@ fn parse_asset_definition_argument(raw: &str) -> Result<AssetDefinitionId, Strin
     }
     Ok(parsed)
 }
-
 fn parse_canonical_account(raw: &str, label: &str) -> Result<AccountId, String> {
     let account = AccountId::parse_encoded(raw)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
@@ -177,12 +156,10 @@ fn parse_canonical_account(raw: &str, label: &str) -> Result<AccountId, String> 
     }
     Ok(account)
 }
-
 fn canonical_dev_network_id() -> NetworkId {
     json::from_value(Value::String(CANONICAL_DEV_NETWORK_ID.to_owned()))
         .expect("the canonical Iroha3 dev network identity must remain valid")
 }
-
 impl FeePaymentSpec {
     fn to_intent(&self) -> Result<FeePaymentIntent, String> {
         if self.payer != "authority" {
@@ -197,7 +174,6 @@ impl FeePaymentSpec {
         Ok(FeePaymentIntent::authority(Vec::new(), None))
     }
 }
-
 impl PayloadSpec {
     fn to_builder(&self) -> Result<TransactionBuilder, String> {
         if self.network_id != canonical_dev_network_id() {
@@ -218,24 +194,20 @@ impl PayloadSpec {
         builder.set_ttl(Duration::from_millis(self.time_to_live_ms));
         let nonce = NonZeroU32::new(self.nonce).ok_or_else(|| "nonce must be > 0".to_string())?;
         builder.set_nonce(nonce);
-
         let mut metadata = Metadata::default();
         for (key, value) in &self.metadata {
             let name = Name::from_str(key).map_err(|_| format!("invalid metadata key '{key}'"))?;
             metadata.insert(name, Json::new(value.clone()));
         }
         builder = builder.with_metadata(metadata);
-
         if self.executable.instructions.len() != 1 {
             return Err("Swift parity fixtures require exactly one instruction".to_owned());
         }
         let instruction = self.executable.instructions[0].to_instruction(&authority)?;
         builder = builder.with_instructions([instruction]);
-
         Ok(builder)
     }
 }
-
 impl InstructionSpec {
     fn to_instruction(&self, authority: &AccountId) -> Result<InstructionBox, String> {
         let arguments = &self.arguments;
@@ -286,7 +258,6 @@ impl InstructionSpec {
         }
     }
 }
-
 fn parse_canonical_quantity(input: &str) -> Result<Quantity, String> {
     let quantity: Quantity = input
         .parse()
@@ -296,20 +267,17 @@ fn parse_canonical_quantity(input: &str) -> Result<Quantity, String> {
     }
     Ok(quantity)
 }
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(err) = run() {
         return Err(std::io::Error::other(err).into());
     }
     Ok(())
 }
-
 fn run() -> Result<(), String> {
     let repository_root = repository_root();
     let options = parse_options_from(&env::args().skip(1).collect::<Vec<_>>(), &repository_root)?;
     run_with_options(&repository_root.join(DEFAULT_FIXTURES_PATH), &options)
 }
-
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -317,7 +285,6 @@ fn repository_root() -> PathBuf {
         .expect("connect_norito_bridge belongs to the workspace")
         .to_path_buf()
 }
-
 fn parse_options_from(arguments: &[String], default_output_root: &Path) -> Result<Options, String> {
     let mut mode = None;
     let mut output_root = None;
@@ -358,7 +325,6 @@ fn parse_options_from(arguments: &[String], default_output_root: &Path) -> Resul
         output_root: output_root.unwrap_or_else(|| default_output_root.to_path_buf()),
     })
 }
-
 fn reject_symlinked_ancestry(path: &Path) -> Result<(), String> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -376,7 +342,6 @@ fn reject_symlinked_ancestry(path: &Path) -> Result<(), String> {
             path.display()
         ));
     }
-
     let mut ancestors: Vec<_> = absolute.ancestors().collect();
     ancestors.reverse();
     for ancestor in ancestors {
@@ -394,7 +359,6 @@ fn reject_symlinked_ancestry(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn validate_output_root(root: &Path) -> Result<PathBuf, String> {
     let absolute = if root.is_absolute() {
         root.to_path_buf()
@@ -429,7 +393,6 @@ fn validate_output_root(root: &Path) -> Result<PathBuf, String> {
     }
     Ok(canonical)
 }
-
 fn validate_fixture_inventory(entries: &mut [PayloadFileEntry]) -> Result<(), String> {
     let mut actual = BTreeSet::new();
     for entry in entries.iter() {
@@ -449,7 +412,6 @@ fn validate_fixture_inventory(entries: &mut [PayloadFileEntry]) -> Result<(), St
     entries.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(())
 }
-
 fn validate_fixture_semantics(entry: &PayloadFileEntry) -> Result<(), String> {
     let instruction = entry
         .payload
@@ -471,7 +433,6 @@ fn validate_fixture_semantics(entry: &PayloadFileEntry) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn validate_distinct_fixture_identities(fixtures: &[FixtureOutput]) -> Result<(), String> {
     if fixtures.len() != EXPECTED_FIXTURE_NAMES.len() {
         return Err(format!(
@@ -480,7 +441,6 @@ fn validate_distinct_fixture_identities(fixtures: &[FixtureOutput]) -> Result<()
             fixtures.len()
         ));
     }
-
     let mut payload_bytes = BTreeMap::<&[u8], &str>::new();
     let mut signed_bytes = BTreeMap::<&[u8], &str>::new();
     let mut payload_hashes = BTreeMap::<&str, &str>::new();
@@ -514,20 +474,16 @@ fn validate_distinct_fixture_identities(fixtures: &[FixtureOutput]) -> Result<()
     }
     Ok(())
 }
-
 fn render_fixtures(fixtures_path: &Path) -> Result<RenderedFixtures, String> {
     let _chain_guard = ChainDiscriminantReset::new(DEFAULT_CHAIN_DISCRIMINANT);
-
     let source_bytes = fs::read(&fixtures_path)
         .map_err(|err| format!("failed to read {}: {err}", fixtures_path.display()))?;
     let mut entries: Vec<PayloadFileEntry> = norito::json::from_slice(&source_bytes)
         .map_err(|err| format!("invalid payload JSON: {err}"))?;
     validate_fixture_inventory(&mut entries)?;
-
     let seed = hex::decode(SIGNING_SEED_HEX).map_err(|err| err.to_string())?;
     let keypair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
         .map_err(|err| format!("failed to derive fixture signing key: {err}"))?;
-
     let mut fixtures = Vec::with_capacity(entries.len());
     for entry in entries {
         validate_fixture_semantics(&entry)?;
@@ -557,7 +513,6 @@ fn render_fixtures(fixtures_path: &Path) -> Result<RenderedFixtures, String> {
                 entry.name
             ));
         }
-
         let fixture = FixtureOutput {
             name: entry.name,
             payload_bytes,
@@ -570,7 +525,6 @@ fn render_fixtures(fixtures_path: &Path) -> Result<RenderedFixtures, String> {
         fixtures.push(fixture);
     }
     validate_distinct_fixture_identities(&fixtures)?;
-
     let manifest_entries: Vec<Value> = fixtures
         .iter()
         .map(|fixture| {
@@ -595,12 +549,10 @@ fn render_fixtures(fixtures_path: &Path) -> Result<RenderedFixtures, String> {
             Value::Object(map)
         })
         .collect();
-
     let mut root = Map::new();
     root.insert("fixtures".into(), Value::Array(manifest_entries));
     let manifest_json = json::to_json_pretty(&Value::Object(root))
         .map_err(|err| format!("failed to serialize manifest: {err}"))?;
-
     let mut files = BTreeMap::new();
     for fixture in fixtures {
         files.insert(
@@ -617,7 +569,6 @@ fn render_fixtures(fixtures_path: &Path) -> Result<RenderedFixtures, String> {
         source_bytes,
     })
 }
-
 fn owned_relative_paths() -> [PathBuf; 4] {
     [
         Path::new(DEFAULT_OUT_DIR).join("swift_burn_asset_basic.norito"),
@@ -626,7 +577,6 @@ fn owned_relative_paths() -> [PathBuf; 4] {
         Path::new(DEFAULT_OUT_DIR).join(DEFAULT_MANIFEST_NAME),
     ]
 }
-
 fn validate_relative_output(relative: &Path) -> Result<(), String> {
     if relative.as_os_str().is_empty()
         || relative.is_absolute()
@@ -641,7 +591,6 @@ fn validate_relative_output(relative: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn ensure_safe_parent(
     root: &Path,
     relative: &Path,
@@ -710,7 +659,6 @@ fn ensure_safe_parent(
     }
     Ok(())
 }
-
 fn validate_existing_parent_chain(root: &Path, relative: &Path) -> Result<(), String> {
     validate_relative_output(relative)?;
     let mut current = root.to_path_buf();
@@ -749,7 +697,6 @@ fn validate_existing_parent_chain(root: &Path, relative: &Path) -> Result<(), St
     }
     Ok(())
 }
-
 fn validate_regular_file_metadata(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(format!(
@@ -760,7 +707,6 @@ fn validate_regular_file_metadata(path: &Path, metadata: &fs::Metadata) -> Resul
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-
         if metadata.nlink() != 1 {
             return Err(format!(
                 "generated output must have exactly one hard link: {} has {}",
@@ -771,14 +717,11 @@ fn validate_regular_file_metadata(path: &Path, metadata: &fs::Metadata) -> Resul
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 fn read_regular_file(path: &Path) -> Result<Option<Vec<u8>>, String> {
     let path_metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -798,7 +741,6 @@ fn read_regular_file(path: &Path) -> Result<Option<Vec<u8>>, String> {
             path.display()
         ));
     }
-
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
         .map_err(|err| format!("read {}: {err}", path.display()))?;
@@ -814,7 +756,6 @@ fn read_regular_file(path: &Path) -> Result<Option<Vec<u8>>, String> {
     }
     Ok(Some(bytes))
 }
-
 fn reject_orphan_swift_blobs(root: &Path) -> Result<(), String> {
     let fixtures_dir = root.join(DEFAULT_OUT_DIR);
     let metadata = match fs::symlink_metadata(&fixtures_dir) {
@@ -910,7 +851,6 @@ fn reject_orphan_swift_blobs(root: &Path) -> Result<(), String> {
         ))
     }
 }
-
 fn verify_preimage(path: &Path, expected: Option<&[u8]>) -> Result<(), String> {
     let actual = read_regular_file(path)?;
     if actual.as_deref() != expected {
@@ -921,7 +861,6 @@ fn verify_preimage(path: &Path, expected: Option<&[u8]>) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn verify_source_preimage(fixtures_path: &Path, expected: &[u8]) -> Result<(), String> {
     let actual = fs::read(fixtures_path)
         .map_err(|err| format!("re-read source fixture {}: {err}", fixtures_path.display()))?;
@@ -933,7 +872,6 @@ fn verify_source_preimage(fixtures_path: &Path, expected: &[u8]) -> Result<(), S
     }
     Ok(())
 }
-
 fn atomic_publish(
     root: &Path,
     relative: &Path,
@@ -964,7 +902,6 @@ fn atomic_publish(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         temporary
             .as_file()
             .set_permissions(fs::Permissions::from_mode(0o644))
@@ -1019,7 +956,6 @@ fn atomic_publish(
         }
     }
 }
-
 fn guarded_remove(root: &Path, relative: &Path, expected_preimage: &[u8]) -> Result<(), String> {
     validate_existing_parent_chain(root, relative)?;
     let path = root.join(relative);
@@ -1028,7 +964,6 @@ fn guarded_remove(root: &Path, relative: &Path, expected_preimage: &[u8]) -> Res
         .map_err(|err| format!("remove {} during rollback: {err}", path.display()))?;
     verify_preimage(&path, None)
 }
-
 fn compare_or_publish(
     root: &Path,
     relative: &Path,
@@ -1053,7 +988,6 @@ fn compare_or_publish(
     eprintln!("wrote {}", path.display());
     Ok(true)
 }
-
 fn capture_preimages(
     root: &Path,
     owned: &[PathBuf],
@@ -1065,7 +999,6 @@ fn capture_preimages(
     }
     Ok(preimages)
 }
-
 fn remove_created_directories(created_directories: &[PathBuf]) -> Result<(), String> {
     let mut failures = Vec::new();
     for directory in created_directories.iter().rev() {
@@ -1081,7 +1014,6 @@ fn remove_created_directories(created_directories: &[PathBuf]) -> Result<(), Str
         Err(failures.join("; "))
     }
 }
-
 fn error_after_directory_cleanup(created_directories: &[PathBuf], cause: String) -> String {
     if created_directories.is_empty() {
         return cause;
@@ -1094,7 +1026,6 @@ fn error_after_directory_cleanup(created_directories: &[PathBuf], cause: String)
         Err(cleanup) => format!("{cause}; task-created directory cleanup incomplete: {cleanup}"),
     }
 }
-
 fn rollback_published(
     root: &Path,
     rendered: &RenderedFixtures,
@@ -1135,7 +1066,6 @@ fn rollback_published(
         Err(failures.join("; "))
     }
 }
-
 fn error_after_rollback(
     root: &Path,
     rendered: &RenderedFixtures,
@@ -1174,7 +1104,6 @@ fn error_after_rollback(
         format!("{cause}; rollback incomplete: {}", failures.join("; "))
     }
 }
-
 fn publish_outputs_with_hook<F>(
     root: &Path,
     rendered: &RenderedFixtures,
@@ -1241,7 +1170,6 @@ where
     }
     Ok(published)
 }
-
 fn verify_rendered_outputs(
     root: &Path,
     rendered: &RenderedFixtures,
@@ -1261,7 +1189,6 @@ fn verify_rendered_outputs(
     }
     Ok(())
 }
-
 fn run_with_options(fixtures_path: &Path, options: &Options) -> Result<(), String> {
     let output_root = validate_output_root(&options.output_root)?;
     let rendered = render_fixtures(fixtures_path)?;
@@ -1283,7 +1210,6 @@ fn run_with_options(fixtures_path: &Path, options: &Options) -> Result<(), Strin
     {
         return Err("Swift parity renderer produced the wrong exact output inventory".to_owned());
     }
-
     if options.mode == Mode::Check {
         let preimages = capture_preimages(&output_root, &owned)?;
         for relative in &owned {
@@ -1305,7 +1231,6 @@ fn run_with_options(fixtures_path: &Path, options: &Options) -> Result<(), Strin
         verify_source_preimage(fixtures_path, &rendered.source_bytes)?;
         return verify_rendered_outputs(&output_root, &rendered, &owned);
     }
-
     let mut created_directories = Vec::new();
     for relative in &owned {
         if let Err(err) = ensure_safe_parent(&output_root, relative, &mut created_directories) {
@@ -1344,19 +1269,15 @@ fn run_with_options(fixtures_path: &Path, options: &Options) -> Result<(), Strin
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::Hash;
-
     use super::*;
+    use iroha_crypto::Hash;
     use iroha_data_model::{DomainId, transaction::Executable};
     use norito::json::Number;
-
     fn canonical_temp_root(directory: &tempfile::TempDir) -> PathBuf {
         fs::canonicalize(directory.path()).expect("canonical temporary directory")
     }
-
     fn identity_fixtures() -> Vec<FixtureOutput> {
         (0_u8..3)
             .map(|index| FixtureOutput {
@@ -1370,11 +1291,9 @@ mod tests {
             })
             .collect()
     }
-
     fn account_literal(account: &AccountId) -> String {
         account.to_string()
     }
-
     fn asset_definition_literal(domain: &str, name: &str) -> String {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new(domain, "universal").expect("domain"),
@@ -1382,7 +1301,6 @@ mod tests {
         )
         .to_string()
     }
-
     fn instruction_arguments(destination: &AccountId) -> InstructionArguments {
         InstructionArguments {
             action: "TransferAsset".into(),
@@ -1391,7 +1309,6 @@ mod tests {
             destination: account_literal(destination),
         }
     }
-
     fn payload_spec(authority: &AccountId, destination: &AccountId) -> PayloadSpec {
         PayloadSpec {
             network_id: canonical_dev_network_id(),
@@ -1414,13 +1331,11 @@ mod tests {
             metadata: BTreeMap::new(),
         }
     }
-
     fn source_document() -> Value {
         let bytes = fs::read(repository_root().join(DEFAULT_FIXTURES_PATH))
             .expect("read canonical Swift parity source");
         json::from_slice(&bytes).expect("decode canonical Swift parity source")
     }
-
     fn first_entry(document: &mut Value) -> &mut Map {
         document
             .as_array_mut()
@@ -1430,7 +1345,6 @@ mod tests {
             .as_object_mut()
             .expect("source entry object")
     }
-
     fn first_payload(document: &mut Value) -> &mut Map {
         first_entry(document)
             .get_mut("payload")
@@ -1438,11 +1352,9 @@ mod tests {
             .as_object_mut()
             .expect("payload object")
     }
-
     fn decode_document(document: Value) -> Result<Vec<PayloadFileEntry>, String> {
         json::from_value(document).map_err(|err| err.to_string())
     }
-
     #[test]
     fn command_requires_exactly_one_mode_and_accepts_a_staged_output_root() {
         let default_root = Path::new("/workspace");
@@ -1486,7 +1398,6 @@ mod tests {
             assert!(parse_options_from(&invalid, default_root).is_err());
         }
     }
-
     #[test]
     fn payload_builder_sets_nonce_and_ttl() {
         let keypair = KeyPair::try_from_seed(vec![0xCD; 32], Algorithm::Ed25519)
@@ -1511,7 +1422,6 @@ mod tests {
             _ => panic!("expected instruction executable"),
         }
     }
-
     #[test]
     fn payload_builder_rejects_zero_ttl_and_nonce() {
         let keypair = KeyPair::try_from_seed(vec![0xCE; 32], Algorithm::Ed25519)
@@ -1530,17 +1440,14 @@ mod tests {
             Some("nonce must be > 0")
         );
     }
-
     #[test]
     fn source_schema_rejects_missing_null_and_zero_ttl() {
         let mut missing = source_document();
         first_payload(&mut missing).remove("time_to_live_ms");
         assert!(decode_document(missing).is_err());
-
         let mut null = source_document();
         first_payload(&mut null).insert("time_to_live_ms".into(), Value::Null);
         assert!(decode_document(null).is_err());
-
         let mut zero = source_document();
         first_payload(&mut zero).insert("time_to_live_ms".into(), Value::Number(Number::U64(0)));
         let entries = decode_document(zero).expect("zero TTL is structurally an integer");
@@ -1549,30 +1456,24 @@ mod tests {
             Some("time_to_live_ms must be > 0")
         );
     }
-
     #[test]
     fn source_schema_requires_canonical_network_id_and_rejects_chain() {
         let mut missing = source_document();
         first_payload(&mut missing).remove("network_id");
         assert!(decode_document(missing).is_err());
-
         let mut null = source_document();
         first_payload(&mut null).insert("network_id".into(), Value::Null);
         assert!(decode_document(null).is_err());
-
         let mut legacy = source_document();
         first_payload(&mut legacy).remove("network_id");
         first_payload(&mut legacy).insert("chain".into(), Value::String("00000042".into()));
         assert!(decode_document(legacy).is_err());
-
         let mut aliased = source_document();
         first_payload(&mut aliased).insert("chain".into(), Value::String("00000042".into()));
         assert!(decode_document(aliased).is_err());
-
         let mut label = source_document();
         first_payload(&mut label).insert("network_id".into(), Value::String("00000042".into()));
         assert!(decode_document(label).is_err());
-
         let mut noncanonical = source_document();
         first_payload(&mut noncanonical).insert(
             "network_id".into(),
@@ -1580,7 +1481,6 @@ mod tests {
         );
         assert!(decode_document(noncanonical).is_err());
     }
-
     #[test]
     fn payload_builder_rejects_a_different_canonical_network_identity() {
         let keypair = KeyPair::try_from_seed(vec![0xCF; 32], Algorithm::Ed25519)
@@ -1597,28 +1497,23 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn source_schema_requires_metadata_object() {
         let mut missing = source_document();
         first_payload(&mut missing).remove("metadata");
         assert!(decode_document(missing).is_err());
-
         let mut null = source_document();
         first_payload(&mut null).insert("metadata".into(), Value::Null);
         assert!(decode_document(null).is_err());
     }
-
     #[test]
     fn source_executable_and_instruction_schemas_are_closed() {
         let mut source_unknown = source_document();
         first_entry(&mut source_unknown).insert("encoded".into(), Value::String("legacy".into()));
         assert!(decode_document(source_unknown).is_err());
-
         let mut payload_unknown = source_document();
         first_payload(&mut payload_unknown).insert("amount".into(), Value::String("1".into()));
         assert!(decode_document(payload_unknown).is_err());
-
         let mut fee_unknown = source_document();
         first_payload(&mut fee_unknown)
             .get_mut("fee_payment")
@@ -1627,7 +1522,6 @@ mod tests {
             .expect("fee-payment object")
             .insert("gas_limit".into(), Value::Number(Number::U64(1)));
         assert!(decode_document(fee_unknown).is_err());
-
         let mut legacy_executable = source_document();
         first_payload(&mut legacy_executable)
             .get_mut("executable")
@@ -1636,7 +1530,6 @@ mod tests {
             .expect("executable object")
             .insert("Ivm".into(), Value::String("AA==".into()));
         assert!(decode_document(legacy_executable).is_err());
-
         let mut legacy_instruction = source_document();
         first_payload(&mut legacy_instruction)
             .get_mut("executable")
@@ -1656,7 +1549,6 @@ mod tests {
             .insert("amount".into(), Value::String("1".into()));
         assert!(decode_document(legacy_instruction).is_err());
     }
-
     #[test]
     fn source_inventory_is_exact_and_deterministically_sorted() {
         let mut entries = decode_document(source_document()).expect("canonical source");
@@ -1669,11 +1561,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             EXPECTED_FIXTURE_NAMES
         );
-
         entries.pop();
         assert!(validate_fixture_inventory(&mut entries).is_err());
     }
-
     #[test]
     fn rendering_is_deterministic_and_owns_only_manifest_and_three_blobs() {
         let fixtures_path = repository_root().join(DEFAULT_FIXTURES_PATH);
@@ -1685,7 +1575,6 @@ mod tests {
             assert!(first.files.contains_key(&relative), "missing {relative:?}");
         }
         assert!(!first.files.contains_key(Path::new(DEFAULT_FIXTURES_PATH)));
-
         let manifest: Value =
             json::from_slice(&first.files[&Path::new(DEFAULT_OUT_DIR).join(DEFAULT_MANIFEST_NAME)])
                 .expect("rendered manifest JSON");
@@ -1721,11 +1610,9 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn renderer_rejects_duplicate_payload_and_signed_identities() {
         validate_distinct_fixture_identities(&identity_fixtures()).expect("distinct identities");
-
         let mut duplicate = identity_fixtures();
         duplicate[1].payload_bytes = duplicate[0].payload_bytes.clone();
         assert!(
@@ -1733,7 +1620,6 @@ mod tests {
                 .unwrap_err()
                 .contains("payload bytes")
         );
-
         let mut duplicate = identity_fixtures();
         duplicate[1].signed_bytes = duplicate[0].signed_bytes.clone();
         assert!(
@@ -1741,7 +1627,6 @@ mod tests {
                 .unwrap_err()
                 .contains("signed bytes")
         );
-
         let mut duplicate = identity_fixtures();
         duplicate[1].payload_hash = duplicate[0].payload_hash.clone();
         assert!(
@@ -1749,7 +1634,6 @@ mod tests {
                 .unwrap_err()
                 .contains("payload hash")
         );
-
         let mut duplicate = identity_fixtures();
         duplicate[1].signed_hash = duplicate[0].signed_hash.clone();
         assert!(
@@ -1758,7 +1642,6 @@ mod tests {
                 .contains("signed hash")
         );
     }
-
     #[test]
     fn staged_write_and_read_only_check_cover_every_owned_output() {
         let stage = tempfile::tempdir().expect("stage root");
@@ -1772,7 +1655,6 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             for relative in owned_relative_paths() {
                 let mode = fs::metadata(stage_root.join(relative))
                     .expect("inspect generated permissions")
@@ -1787,7 +1669,6 @@ mod tests {
             output_root: stage_root.clone(),
         };
         run_with_options(&source, &check).expect("staged check");
-
         let manifest_path = stage_root.join(Path::new(DEFAULT_OUT_DIR).join(DEFAULT_MANIFEST_NAME));
         let mut legacy_manifest: Value =
             json::from_slice(&fs::read(&manifest_path).expect("read staged manifest"))
@@ -1803,12 +1684,10 @@ mod tests {
         .expect("write altered manifest");
         assert!(run_with_options(&source, &check).is_err());
         run_with_options(&source, &write).expect("repair legacy manifest drift");
-
         let blob = stage_root.join(owned_relative_paths()[0].clone());
         fs::write(&blob, b"stale").expect("tamper staged blob");
         assert!(run_with_options(&source, &check).is_err());
     }
-
     #[test]
     fn check_mode_does_not_create_missing_output_directories() {
         let stage = tempfile::tempdir().expect("stage root");
@@ -1820,7 +1699,6 @@ mod tests {
         assert!(run_with_options(&repository_root().join(DEFAULT_FIXTURES_PATH), &check).is_err());
         assert_eq!(fs::read_dir(stage_root).expect("read stage").count(), 0);
     }
-
     #[test]
     fn unexpected_owned_blob_is_rejected_and_preserved() {
         let stage = tempfile::tempdir().expect("stage root");
@@ -1838,24 +1716,20 @@ mod tests {
         );
         assert_eq!(fs::read(orphan).expect("orphan remains"), b"legacy");
     }
-
     #[cfg(unix)]
     #[test]
     fn output_root_symlink_is_rejected() {
         use std::os::unix::fs::symlink;
-
         let parent = tempfile::tempdir().expect("parent");
         let target = tempfile::tempdir().expect("target");
         let link = canonical_temp_root(&parent).join("stage-link");
         symlink(target.path(), &link).expect("create stage symlink");
         assert!(validate_output_root(&link).is_err());
     }
-
     #[cfg(unix)]
     #[test]
     fn output_root_with_symlinked_ancestor_is_rejected() {
         use std::os::unix::fs::symlink;
-
         let parent = tempfile::tempdir().expect("parent");
         let parent_root = canonical_temp_root(&parent);
         let real = parent_root.join("real");
@@ -1869,12 +1743,10 @@ mod tests {
             fs::canonicalize(stage).expect("canonical stage")
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn nested_output_parent_symlink_is_rejected_without_external_writes() {
         use std::os::unix::fs::symlink;
-
         let stage = tempfile::tempdir().expect("stage root");
         let external = tempfile::tempdir().expect("external root");
         let stage_root = canonical_temp_root(&stage);
@@ -1894,7 +1766,6 @@ mod tests {
             0
         );
     }
-
     #[test]
     fn nested_owned_blob_is_rejected_and_preserved() {
         let stage = tempfile::tempdir().expect("stage root");
@@ -1913,12 +1784,10 @@ mod tests {
         );
         assert_eq!(fs::read(nested).expect("nested orphan remains"), b"legacy");
     }
-
     #[cfg(unix)]
     #[test]
     fn orphan_scan_rejects_symlinked_subtrees_without_following_them() {
         use std::os::unix::fs::symlink;
-
         let stage = tempfile::tempdir().expect("stage root");
         let external = tempfile::tempdir().expect("external root");
         let stage_root = canonical_temp_root(&stage);
@@ -1933,7 +1802,6 @@ mod tests {
             b"external"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn hardlinked_owned_output_is_rejected_without_replacement() {
@@ -1958,12 +1826,10 @@ mod tests {
         assert_eq!(fs::read(&blob).expect("blob preserved"), before);
         assert_eq!(fs::read(alias).expect("alias preserved"), before);
     }
-
     #[cfg(unix)]
     #[test]
     fn orphan_scan_rejects_non_utf8_entry_names() {
         use std::{ffi::OsString, os::unix::ffi::OsStringExt as _};
-
         let stage = tempfile::tempdir().expect("stage root");
         let stage_root = canonical_temp_root(&stage);
         let fixtures = stage_root.join(DEFAULT_OUT_DIR);
@@ -1972,7 +1838,6 @@ mod tests {
         fs::write(invalid, b"invalid name").expect("write non-UTF-8 entry");
         assert!(reject_orphan_swift_blobs(&stage_root).is_err());
     }
-
     #[test]
     fn failed_publication_rolls_back_existing_and_new_outputs() {
         let stage = tempfile::tempdir().expect("stage root");
@@ -2012,7 +1877,6 @@ mod tests {
             assert!(!stage_root.join(relative).exists());
         }
     }
-
     #[test]
     fn changed_preimage_is_preserved_instead_of_overwritten() {
         let stage = tempfile::tempdir().expect("stage root");
@@ -2033,7 +1897,6 @@ mod tests {
             b"concurrent"
         );
     }
-
     #[test]
     fn source_preimage_change_is_rejected_before_publication() {
         let stage = tempfile::tempdir().expect("stage root");
@@ -2046,7 +1909,6 @@ mod tests {
         fs::write(&source, changed).expect("change source after rendering");
         assert!(verify_source_preimage(&source, &rendered.source_bytes).is_err());
     }
-
     #[test]
     fn failed_publication_removes_empty_task_created_directories() {
         let stage = tempfile::tempdir().expect("stage root");
@@ -2074,7 +1936,6 @@ mod tests {
             0
         );
     }
-
     #[test]
     fn quantity_parser_rejects_noncanonical_text() {
         assert_eq!(
@@ -2082,7 +1943,6 @@ mod tests {
             Err("noncanonical quantity '1.2500'".to_owned())
         );
     }
-
     #[test]
     fn parse_asset_definition_argument_accepts_canonical_literal() {
         let canonical = asset_definition_literal("wonderland", "rose");

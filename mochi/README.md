@@ -112,7 +112,10 @@ Mochi publishes configs and genesis as immutable generations under `generations/
 The closed `generation.json` inventory binds every artifact and its BLAKE3 digest; the
 `current-generation` record is replaced atomically while `.generation.lock` serializes writers.
 Failed candidates never replace the selected record, and previously published generations remain
-available for audit.
+available for audit. Generation V1 seals at most 8,192 files, 16,384 total tree entries, 32
+directory levels, 4 MiB of relative-path text, and an 8 MiB canonical compact inventory. Mochi
+walks and hashes the tree incrementally and rejects the first over-limit entry before retaining it,
+so corrupt local state cannot turn publication or recovery into a directory-sized allocation.
 
 Each peer keeps mutable runtime data under
 `peers/<alias>/storage-generations/<generation-id>`, with independent `kura`, `snapshot`, and
@@ -124,7 +127,9 @@ the dedicated `storage-generations/<generation-id>/kura` root, and Mochi initial
 Snapshot metadata pins this as `storage_layout = "kura-subdirectory-v1"`; restore rejects older
 unmarked aggregate-layout snapshots and snapshots from another immutable generation. Config and
 genesis copies in a snapshot are audit evidence; restore verifies them and rewrites only mutable
-storage and logs.
+storage and logs. Snapshot digests stream file contents and enumerate each directory through a
+canonical 4,096-entry lexical window (maximum depth 64), so the digest supports long Kura histories
+without retaining a path or byte vector proportional to the whole snapshot.
 
 ## Repo-Shared Skill
 

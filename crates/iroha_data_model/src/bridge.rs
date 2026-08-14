@@ -1,15 +1,11 @@
 //! Bridge-related data types for wrapped assets and receipts.
 //! Feature-gated behind `bridge`.
-
-use std::{string::String, vec::Vec};
-
+use crate::{NetworkId, nexus::LaneId, proof::ProofBox};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+use std::{string::String, vec::Vec};
 use thiserror::Error;
-
-use crate::{NetworkId, nexus::LaneId, proof::ProofBox};
-
 /// Versioned SCCP network, lane, and source-identity wire types.
 pub mod sccp;
 mod sccp_registry;
@@ -50,7 +46,6 @@ pub use sccp_registry::{
     sccp_source_emitter_identity_hash_v1, sccp_source_identity_hash_v1,
     sccp_tron_destination_binding_hash_v1, sccp_v1_taira_xor_asset_definition_id,
 };
-
 /// Definition metadata for a wrapped asset originating from another chain.
 ///
 /// Stored alongside an Iroha asset definition to bind it to its origin.
@@ -68,7 +63,6 @@ pub struct WrappedAssetDef {
     /// Bridge lane identifier that minted this wrapped asset (canonical bytes).
     pub bridge_id: Vec<u8>,
 }
-
 /// A receipt emitted by the bridge lane to record a cross-chain action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -95,7 +89,6 @@ pub struct BridgeReceipt {
     /// Recipient identifier bytes (Iroha account id or external address payload).
     pub recipient: Vec<u8>,
 }
-
 /// Hash function used by bridge Merkle proofs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -111,7 +104,6 @@ pub enum BridgeHashFunction {
     /// Blake2b (mirrors Iroha’s internal hash).
     Blake2b,
 }
-
 /// Height range covered by a bridge proof artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -126,14 +118,12 @@ pub struct BridgeProofRange {
     /// Inclusive end height of the batch.
     pub end_height: u64,
 }
-
 impl BridgeProofRange {
     /// Returns `true` if the range is non-empty and ordered.
     #[must_use]
     pub const fn is_valid(&self) -> bool {
         self.start_height <= self.end_height
     }
-
     /// Length of the covered window (`end_height - start_height + 1`).
     #[must_use]
     pub const fn len(&self) -> u64 {
@@ -141,14 +131,12 @@ impl BridgeProofRange {
             .saturating_sub(self.start_height)
             .saturating_add(1)
     }
-
     /// Returns `true` when the range is empty.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
-
 /// ICS-style proof payload (hash-only light client).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -169,7 +157,6 @@ pub struct BridgeIcsProof {
     /// Hash function used when computing parent nodes.
     pub hash_function: BridgeHashFunction,
 }
-
 /// Transparent ZK proof payload (rolling recursive proof).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -186,7 +173,6 @@ pub struct BridgeTransparentProof {
     /// Optional recursion depth claimed by the prover.
     pub recursion_depth: Option<u32>,
 }
-
 /// Closed protocol-native backend identifiers for first-release SCCP proofs.
 ///
 /// Unlike a transparent proof backend, this identifier is not a caller-chosen
@@ -220,7 +206,6 @@ pub enum BridgeNativeProofBackendV1 {
     #[norito(rename = "solana_agave_v1")]
     SolanaAgave,
 }
-
 impl BridgeNativeProofBackendV1 {
     /// Return the stable, unambiguous bridge backend label.
     #[must_use]
@@ -232,7 +217,6 @@ impl BridgeNativeProofBackendV1 {
             Self::SolanaAgave => "bridge/sccp/native/solana-agave-v1",
         }
     }
-
     /// Return whether V1 admits this backend for the exact source-network profile.
     ///
     /// The closed first-release inventory contains only the three verifier
@@ -254,7 +238,6 @@ impl BridgeNativeProofBackendV1 {
         )
     }
 }
-
 /// Governed protocol-native trust anchor for one SCCP lane.
 ///
 /// `anchor_hash` is interpreted only by the closed `backend` verifier. Keeping
@@ -280,14 +263,12 @@ pub struct SccpNativeTrustAnchorV1 {
     /// by an admitted event proof.
     pub checkpoint_height: u64,
 }
-
 impl SccpNativeTrustAnchorV1 {
     /// Return whether the trust anchor contains a nonzero commitment.
     #[must_use]
     pub fn is_well_formed(self) -> bool {
         self.anchor_hash.iter().any(|byte| *byte != 0) && self.checkpoint_height != 0
     }
-
     /// Return whether an authenticated consensus-progress coordinate belongs
     /// to this anchor's governance interval.
     ///
@@ -306,7 +287,6 @@ impl SccpNativeTrustAnchorV1 {
             && inclusive_successor_boundary.is_none_or(|upper| anchor_interval_height <= upper)
     }
 }
-
 /// Canonically encoded SCCP protocol-native admission envelope.
 ///
 /// The SCCP crate owns and validates the typed envelope because it owns the
@@ -329,7 +309,6 @@ pub struct BridgeNativeProtocolProofV1 {
     /// Canonical Norito bytes of the typed SCCP native inbound proof.
     pub encoded_envelope: Vec<u8>,
 }
-
 impl BridgeNativeProtocolProofV1 {
     /// Return whether the container carries a nonzero route commitment and a
     /// nonempty canonical-envelope candidate.
@@ -339,7 +318,6 @@ impl BridgeNativeProtocolProofV1 {
             && !self.encoded_envelope.is_empty()
     }
 }
-
 /// Closed production destination verifier selected for an SCCP artifact.
 ///
 /// An unknown or caller-labelled backend is unrepresentable. The SCCP
@@ -368,7 +346,6 @@ pub enum BridgeSccpDestinationProofBackendV1 {
     #[norito(rename = "solana_groth16_bn254_v1")]
     SolanaGroth16Bn254,
 }
-
 impl BridgeSccpDestinationProofBackendV1 {
     /// Return the stable production verifier label used in proof diagnostics.
     #[must_use]
@@ -379,7 +356,6 @@ impl BridgeSccpDestinationProofBackendV1 {
             Self::SolanaGroth16Bn254 => "solana-groth16-bn254-v1",
         }
     }
-
     /// Return whether this closed verifier backend belongs to an exact
     /// external destination profile.
     #[must_use]
@@ -399,7 +375,6 @@ impl BridgeSccpDestinationProofBackendV1 {
         )
     }
 }
-
 /// Canonically encoded production SCCP destination-proof artifact.
 ///
 /// This closed container prevents production SCCP delivery from being routed
@@ -423,7 +398,6 @@ pub struct BridgeSccpDestinationProofV1 {
     /// Canonical Norito bytes of the typed SCCP destination artifact.
     pub encoded_artifact: Vec<u8>,
 }
-
 impl BridgeSccpDestinationProofV1 {
     /// Return whether the closed proof carries nonempty artifact bytes and an
     /// independently named route-configuration commitment.
@@ -442,7 +416,6 @@ impl BridgeSccpDestinationProofV1 {
             && !self.encoded_artifact.is_empty()
     }
 }
-
 /// Bridge proof payload kinds supported by the data model.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -466,7 +439,6 @@ pub enum BridgeProofPayload {
     #[codec(index = 3)]
     SccpDestination(BridgeSccpDestinationProofV1),
 }
-
 /// Typed verifier binding computed from a bridge proof payload.
 ///
 /// This value is not stored independently in [`BridgeProof`]. Keeping the
@@ -479,7 +451,6 @@ pub enum BridgeProofBinding {
     /// Commitment to the exact historical SCCP route configuration.
     SccpRouteConfigurationV1([u8; 32]),
 }
-
 impl BridgeProofBinding {
     /// Return the bound commitment bytes.
     #[must_use]
@@ -488,14 +459,12 @@ impl BridgeProofBinding {
             Self::VerifierManifest(hash) | Self::SccpRouteConfigurationV1(hash) => hash,
         }
     }
-
     /// Return whether the binding carries a nonzero commitment.
     #[must_use]
     pub fn is_well_formed(self) -> bool {
         self.hash().iter().any(|byte| *byte != 0)
     }
 }
-
 impl BridgeProofPayload {
     /// Return the role-preserving verifier binding carried by this payload.
     #[must_use]
@@ -514,7 +483,6 @@ impl BridgeProofPayload {
         }
     }
 }
-
 /// Bridge proof artifact with a payload-owned verifier binding.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -529,14 +497,12 @@ pub struct BridgeProof {
     /// Proof payload (generic ICS/ZK or one of the two closed SCCP proof roles).
     pub payload: BridgeProofPayload,
 }
-
 impl BridgeProof {
     /// Return the role-preserving verifier binding carried by the payload.
     #[must_use]
     pub const fn binding(&self) -> BridgeProofBinding {
         self.payload.binding()
     }
-
     /// Return a backend label suitable for hashing/id construction.
     #[must_use]
     pub fn backend_label(&self) -> String {
@@ -550,7 +516,6 @@ impl BridgeProof {
         }
     }
 }
-
 /// Stored bridge proof record with size metadata and commitment.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -567,17 +532,13 @@ pub struct BridgeProofRecord {
     /// Total encoded size of the stored proof (bytes).
     pub size_bytes: u32,
 }
-
 /// Current schema version of [`BridgeFinalityProof`].
 pub const BRIDGE_FINALITY_PROOF_VERSION_V2: u8 = 2;
-
 /// Current schema version of [`BridgeFinalityAttestationBodyV1`].
 pub const BRIDGE_FINALITY_ATTESTATION_VERSION_V1: u8 = 1;
-
 /// Domain separating a Torii finality attestation from every other node signature.
 pub const BRIDGE_FINALITY_ATTESTATION_SIGNATURE_DOMAIN_V1: &[u8] =
     b"iroha:bridge-finality-attestation:v1\0";
-
 /// Exact Sumeragi-v2 finality proof for one Iroha block.
 ///
 /// The durable finality artifact is the single source of consensus context,
@@ -600,7 +561,6 @@ pub struct BridgeFinalityProof {
     /// Exact immutable finality artifact persisted by the Sumeragi-v2 apply path.
     pub finality_artifact: crate::block::consensus_v2::finality::V2FinalityArtifact,
 }
-
 /// Exact challenge-bound statement signed by one Torii node for a durable-tip capture.
 ///
 /// `genesis_block_hash` is the first entry of the same committed state snapshot whose
@@ -636,7 +596,6 @@ pub struct BridgeFinalityAttestationBodyV1 {
     /// Exact current-source proof for that durable tip.
     pub finality_proof: BridgeFinalityProof,
 }
-
 impl BridgeFinalityAttestationBodyV1 {
     /// Return the domain-separated typed digest signed by the reporting node.
     #[must_use]
@@ -647,7 +606,6 @@ impl BridgeFinalityAttestationBodyV1 {
             &encoded,
         ]))
     }
-
     /// Validate all non-cryptographic duplicate bindings inside the signed body.
     ///
     /// # Errors
@@ -656,7 +614,6 @@ impl BridgeFinalityAttestationBodyV1 {
     /// challenge, node identity, reducer status, or embedded proof disagree.
     pub fn validate_consistency(&self) -> Result<(), BridgeFinalityAttestationValidationError> {
         use crate::block::consensus_v2::PROTOCOL_VERSION;
-
         if self.version != BRIDGE_FINALITY_ATTESTATION_VERSION_V1 {
             return Err(
                 BridgeFinalityAttestationValidationError::UnsupportedAttestationVersion {
@@ -720,7 +677,6 @@ impl BridgeFinalityAttestationBodyV1 {
         Ok(())
     }
 }
-
 /// One node's signature over an exact challenge-bound durable-tip statement.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -735,7 +691,6 @@ pub struct BridgeFinalityAttestationV1 {
     /// Signature made by `body.node_id` over `body.signing_hash()`.
     pub signature: iroha_crypto::SignatureOf<BridgeFinalityAttestationBodyV1>,
 }
-
 impl BridgeFinalityAttestationV1 {
     /// Validate the signed body and its reporting-node signature.
     ///
@@ -750,7 +705,6 @@ impl BridgeFinalityAttestationV1 {
             .map_err(|_| BridgeFinalityAttestationValidationError::InvalidNodeSignature)
     }
 }
-
 /// Failure while validating a challenge-bound node finality attestation.
 #[allow(variant_size_differences)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -812,7 +766,6 @@ pub enum BridgeFinalityAttestationValidationError {
     #[error("bridge finality attestation node signature is invalid")]
     InvalidNodeSignature,
 }
-
 /// Commitment covering a block hash and its exact Sumeragi-v2 context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -831,7 +784,6 @@ pub struct BridgeCommitment {
     /// Block hash bound into the commitment.
     pub block_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
 }
-
 /// Bundle containing a compact commitment and its exact typed finality proof.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -846,7 +798,6 @@ pub struct BridgeFinalityBundle {
     /// Exact typed finality proof authenticated by the bundle.
     pub finality_proof: BridgeFinalityProof,
 }
-
 /// Internal consistency failure for a bridge finality bundle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum BridgeFinalityBundleValidationError {
@@ -863,7 +814,6 @@ pub enum BridgeFinalityBundleValidationError {
     #[error("bridge commitment block hash does not match its finality proof")]
     BlockHashMismatch,
 }
-
 impl BridgeFinalityBundle {
     /// Validate the exact commitment/proof bindings.
     ///
@@ -888,7 +838,6 @@ impl BridgeFinalityBundle {
         Ok(())
     }
 }
-
 /// Errors surfaced when verifying bridge finality proofs.
 #[allow(variant_size_differences)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -980,7 +929,6 @@ pub enum BridgeFinalityVerifyError {
         height: u64,
     },
 }
-
 /// Failure while verifying a complete bridge finality bundle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum BridgeFinalityBundleVerifyError {
@@ -991,7 +939,6 @@ pub enum BridgeFinalityBundleVerifyError {
     #[error(transparent)]
     InvalidProof(#[from] BridgeFinalityVerifyError),
 }
-
 /// Stateful verifier for bridge finality proofs.
 ///
 /// The first proof must match an explicitly trusted Sumeragi-v2 height-context
@@ -1005,7 +952,6 @@ pub struct BridgeFinalityVerifier {
     trusted_context_id: Option<crate::block::consensus_v2::HeightContextId>,
     latest_proof: Option<BridgeFinalityProof>,
 }
-
 impl BridgeFinalityVerifier {
     /// Construct a verifier bound only to an exact network identity.
     ///
@@ -1018,7 +964,6 @@ impl BridgeFinalityVerifier {
             latest_proof: None,
         }
     }
-
     /// Construct a verifier bound to a network and first trusted v2 context id.
     #[must_use]
     pub fn with_context(
@@ -1031,7 +976,6 @@ impl BridgeFinalityVerifier {
             latest_proof: None,
         }
     }
-
     /// Replace the trusted first context and discard prior verifier progress.
     pub fn set_context_anchor(
         &mut self,
@@ -1040,7 +984,6 @@ impl BridgeFinalityVerifier {
         self.trusted_context_id = Some(trusted_context_id);
         self.latest_proof = None;
     }
-
     /// Verify a bridge finality proof against the configured expectations.
     ///
     /// # Errors
@@ -1079,11 +1022,9 @@ impl BridgeFinalityVerifier {
             .finality_artifact
             .verify()
             .map_err(BridgeFinalityVerifyError::CertificateVerification)?;
-
         self.latest_proof = Some(proof.clone());
         Ok(())
     }
-
     /// Verify a bundle's exact commitment bindings and advance this verifier
     /// with its embedded finality proof.
     ///
@@ -1101,7 +1042,6 @@ impl BridgeFinalityVerifier {
         Ok(())
     }
 }
-
 /// Verify one exact bridge finality proof without maintaining successor state.
 ///
 /// # Errors
@@ -1121,7 +1061,6 @@ pub fn verify_bridge_finality_proof(
         .verify()
         .map_err(BridgeFinalityVerifyError::CertificateVerification)
 }
-
 /// Verify one complete bridge finality bundle without maintaining successor state.
 ///
 /// This checks the exact commitment/proof bindings, expected network identity,
@@ -1140,7 +1079,6 @@ pub fn verify_bridge_finality_bundle(
     verify_bridge_finality_proof(&bundle.finality_proof, expected_network_id)?;
     Ok(())
 }
-
 fn validate_bridge_finality_proof_structure(
     proof: &BridgeFinalityProof,
     expected_network_id: &NetworkId,
@@ -1189,13 +1127,11 @@ fn validate_bridge_finality_proof_structure(
     }
     Ok(())
 }
-
 fn verify_successor_bridge_finality_proof(
     previous: &BridgeFinalityProof,
     current: &BridgeFinalityProof,
 ) -> Result<(), BridgeFinalityVerifyError> {
     use crate::block::consensus_v2::finality::verify_quorum_certificate_with_validator_pops;
-
     let parent = &previous.finality_artifact;
     let child = &current.finality_artifact;
     let context = &child.height_context;
@@ -1244,44 +1180,35 @@ fn verify_successor_bridge_finality_proof(
     )
     .map_err(BridgeFinalityVerifyError::CertificateVerification)
 }
-
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
-
+    use super::*;
+    use crate::{block::consensus_v2 as wire, peer::PeerId};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_primitives::numeric::Numeric;
     use iroha_version::DecodeAll;
-
-    use super::*;
-    use crate::{block::consensus_v2 as wire, peer::PeerId};
-
+    use std::num::NonZeroU64;
     fn test_network_id(seed: &str) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
             Hash::new(seed.as_bytes()),
         ))
     }
-
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
             panic!("{algorithm:?} bridge fixture key generation should succeed: {err}")
         })
     }
-
     fn checked_bls_keypair() -> KeyPair {
         checked_random_keypair_with_algorithm(Algorithm::BlsNormal)
     }
-
     struct V2Fixture {
         proof: BridgeFinalityProof,
         keys: Vec<KeyPair>,
         successor_keys: Option<Vec<KeyPair>>,
     }
-
     fn make_v2_fixture(network_seed: &str) -> V2Fixture {
         make_v2_fixture_config(network_seed, &[1, 1, 1, 1], &[0, 1, 2], false)
     }
-
     fn make_v2_fixture_with_quorum(
         network_seed: &str,
         powers: &[u64],
@@ -1289,17 +1216,14 @@ mod tests {
     ) -> V2Fixture {
         make_v2_fixture_config(network_seed, powers, signer_indices, false)
     }
-
     fn make_boundary_v2_fixture(network_seed: &str) -> V2Fixture {
         make_v2_fixture_config(network_seed, &[1, 1, 1, 1], &[0, 1, 2], true)
     }
-
     fn attestation_for_fixture(fixture: &V2Fixture) -> BridgeFinalityAttestationV1 {
         use crate::block::consensus_v2::{
             SumeragiV2BodyState, SumeragiV2CommitQcStatus, SumeragiV2HeightContextStatus,
             SumeragiV2LivenessStatus, SumeragiV2Status, SumeragiV2StatusPhase,
         };
-
         let artifact = &fixture.proof.finality_artifact;
         let context = &artifact.height_context;
         let signer = &fixture.keys[0];
@@ -1362,7 +1286,6 @@ mod tests {
             .expect("sign finality attestation fixture");
         BridgeFinalityAttestationV1 { body, signature }
     }
-
     #[expect(
         clippy::too_many_lines,
         reason = "the self-contained fixture builds one cryptographically coherent v2 artifact"
@@ -1378,7 +1301,6 @@ mod tests {
             GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
             ValidatorPower, Vote,
         };
-
         let mut keys = powers
             .iter()
             .map(|_| checked_bls_keypair())
@@ -1555,7 +1477,6 @@ mod tests {
             successor_keys,
         }
     }
-
     fn make_successor_v2_proof(parent: &V2Fixture) -> BridgeFinalityProof {
         let parent_artifact = &parent.proof.finality_artifact;
         let (epoch, epoch_end_height, mode, roster, validator_set_pops, quorum, leader_seed) =
@@ -1658,7 +1579,6 @@ mod tests {
         resign_v2_proof(&mut proof, signing_keys);
         proof
     }
-
     fn resign_v2_proof(proof: &mut BridgeFinalityProof, keys: &[KeyPair]) {
         let artifact = &mut proof.finality_artifact;
         artifact.commit_qc.round.context_id = artifact.height_context.id();
@@ -1692,7 +1612,6 @@ mod tests {
             iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
                 .expect("aggregate successor v2 commit votes");
     }
-
     fn rebind_v2_proof_to_header(proof: &mut BridgeFinalityProof, keys: &[KeyPair]) {
         let block_hash = proof.block_header.hash();
         proof.finality_artifact.block_hash = block_hash;
@@ -1704,7 +1623,6 @@ mod tests {
             .verify()
             .expect("rebound attack fixture remains internally cryptographically valid");
     }
-
     #[test]
     fn bridge_proof_range_helpers_cover_valid_invalid_and_saturating_cases() {
         let valid = BridgeProofRange {
@@ -1714,7 +1632,6 @@ mod tests {
         assert!(valid.is_valid());
         assert_eq!(valid.len(), 3);
         assert!(!valid.is_empty());
-
         let invalid = BridgeProofRange {
             start_height: 9,
             end_height: 4,
@@ -1722,7 +1639,6 @@ mod tests {
         assert!(!invalid.is_valid());
         assert_eq!(invalid.len(), 1);
         assert!(!invalid.is_empty());
-
         let saturated = BridgeProofRange {
             start_height: u64::MAX,
             end_height: u64::MAX,
@@ -1730,7 +1646,6 @@ mod tests {
         assert!(saturated.is_valid());
         assert_eq!(saturated.len(), 1);
     }
-
     #[test]
     fn bridge_proof_backend_label_matches_payload_kind() {
         let leaves = vec![[0xA1; 32], [0xB2; 32]];
@@ -1750,7 +1665,6 @@ mod tests {
             }),
         };
         assert_eq!(ics.backend_label(), "bridge/ics23");
-
         let transparent = BridgeProof {
             range: BridgeProofRange {
                 start_height: 2,
@@ -1763,7 +1677,6 @@ mod tests {
             }),
         };
         assert_eq!(transparent.backend_label(), "bridge/halo2/mock");
-
         let native = BridgeProof {
             range: BridgeProofRange {
                 start_height: 4,
@@ -1776,7 +1689,6 @@ mod tests {
             }),
         };
         assert_eq!(native.backend_label(), "bridge/sccp/native/tron-dpos-v1");
-
         let destination = BridgeProof {
             range: BridgeProofRange {
                 start_height: 5,
@@ -1789,7 +1701,6 @@ mod tests {
             }),
         };
         assert_eq!(destination.backend_label(), "evm-groth16-bn254-v1");
-
         for (payload, expected_index) in [
             (&ics.payload, 0_u32),
             (&transparent.payload, 1),
@@ -1802,7 +1713,6 @@ mod tests {
             assert_eq!(decoded_index, expected_index);
         }
     }
-
     #[test]
     fn bridge_proof_binding_preserves_commitment_role() {
         let manifest_hash = [0x31; 32];
@@ -1829,7 +1739,6 @@ mod tests {
                 encoded_envelope: vec![2],
             }),
         };
-
         assert_eq!(
             transparent.binding(),
             BridgeProofBinding::VerifierManifest(manifest_hash)
@@ -1845,7 +1754,6 @@ mod tests {
             BridgeProofBinding::SccpRouteConfigurationV1(route_hash),
             "equal bytes in different commitment roles must remain distinguishable"
         );
-
         let mut bit_flipped = route_hash;
         bit_flipped[17] ^= 0x80;
         assert_ne!(
@@ -1855,7 +1763,6 @@ mod tests {
         assert!(!BridgeProofBinding::VerifierManifest([0; 32]).is_well_formed());
         assert!(!BridgeProofBinding::SccpRouteConfigurationV1([0; 32]).is_well_formed());
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -1928,7 +1835,6 @@ mod tests {
                 "unknown native backend tag {unknown_tag} unexpectedly decoded"
             );
         }
-
         let proof = BridgeProof {
             range: BridgeProofRange {
                 start_height: 7,
@@ -1962,7 +1868,6 @@ mod tests {
             }
             .is_well_formed()
         );
-
         let zero_anchor = SccpNativeTrustAnchorV1 {
             backend: BridgeNativeProofBackendV1::EthereumBeacon,
             anchor_hash: [0; 32],
@@ -1979,7 +1884,6 @@ mod tests {
         let decoded = SccpNativeTrustAnchorV1::decode_all(&mut &encoded[..])
             .expect("native trust anchor must roundtrip");
         assert_eq!(decoded, anchor);
-
         #[cfg(feature = "json")]
         {
             let json = norito::json::to_json(&anchor).expect("native trust anchor JSON encodes");
@@ -1991,7 +1895,6 @@ mod tests {
             assert!(norito::json::from_str::<SccpNativeTrustAnchorV1>(&unknown_backend).is_err());
         }
     }
-
     #[test]
     fn sccp_destination_container_separates_all_commitment_roles() {
         for (backend, label) in [
@@ -2058,7 +1961,6 @@ mod tests {
             BridgeSccpDestinationProofBackendV1::decode_all(&mut unknown_backend.as_slice())
                 .is_err()
         );
-
         let proof = BridgeSccpDestinationProofV1 {
             backend: BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254,
             route_configuration_hash: [0x71; 32],
@@ -2083,7 +1985,6 @@ mod tests {
             .is_well_formed_for([0x72; 32], [0x73; 32])
         );
     }
-
     #[test]
     fn wrapped_asset_roundtrip() {
         let def = WrappedAssetDef {
@@ -2095,7 +1996,6 @@ mod tests {
         let dec = WrappedAssetDef::decode_all(&mut &buf[..]).expect("decode");
         assert_eq!(def, dec);
     }
-
     #[test]
     fn receipt_roundtrip() {
         let r = BridgeReceipt {
@@ -2112,7 +2012,6 @@ mod tests {
         let dec = BridgeReceipt::decode_all(&mut &buf[..]).expect("decode");
         assert_eq!(r, dec);
     }
-
     #[derive(Encode)]
     struct ForgedBridgeReceipt {
         lane: LaneId,
@@ -2124,7 +2023,6 @@ mod tests {
         asset_id: Vec<u8>,
         recipient: Vec<u8>,
     }
-
     #[test]
     fn bridge_receipt_rejects_negative_numeric_amount() {
         let forged = ForgedBridgeReceipt {
@@ -2143,7 +2041,6 @@ mod tests {
             "a negative signed payload must not decode as a bridge amount"
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn bridge_receipt_json_rejects_unknown_fields() {
@@ -2163,7 +2060,6 @@ mod tests {
                 .expect("canonical bridge receipt JSON decodes"),
             receipt
         );
-
         let hostile = canonical.replacen('{', "{\"adversarial_extension\":null,", 1);
         assert_ne!(hostile, canonical);
         assert!(
@@ -2171,7 +2067,6 @@ mod tests {
             "signed receipt JSON must reject unknown fields"
         );
     }
-
     #[test]
     fn sccp_outbound_message_key_roundtrip() {
         let key = SccpOutboundMessageKeyV1::new(
@@ -2186,7 +2081,6 @@ mod tests {
         let dec = SccpOutboundMessageKeyV1::decode_all(&mut &buf[..]).expect("decode");
         assert_eq!(key, dec);
     }
-
     #[test]
     fn sccp_outbound_message_record_roundtrip() {
         let record = SccpOutboundPendingMessageRecordV1 {
@@ -2201,14 +2095,12 @@ mod tests {
         let dec = SccpOutboundPendingMessageRecordV1::decode_all(&mut &buf[..]).expect("decode");
         assert_eq!(record, dec);
     }
-
     #[test]
     fn bridge_proof_roundtrip() {
         let leaves = vec![[0xAA; 32], [0xBB; 32]];
         let tree = iroha_crypto::MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(leaves.clone());
         let root_bytes: [u8; 32] = *tree.root().expect("root").as_ref();
         let proof = tree.get_proof(0).expect("proof");
-
         let proof = BridgeProof {
             range: BridgeProofRange {
                 start_height: 1,
@@ -2226,7 +2118,6 @@ mod tests {
         let dec = BridgeProof::decode_all(&mut &buf[..]).expect("decode");
         assert_eq!(proof, dec);
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn bridge_proof_json_rejects_unknown_fields_at_every_typed_boundary() {
@@ -2250,7 +2141,6 @@ mod tests {
             norito::json::from_json::<BridgeProof>(&canonical).expect("canonical JSON decodes"),
             proof
         );
-
         let mut retired_pin_value =
             norito::json::to_value(&proof).expect("serialize bridge proof value");
         let norito::json::Value::Object(retired_pin_object) = &mut retired_pin_value else {
@@ -2263,7 +2153,6 @@ mod tests {
             norito::json::from_json::<BridgeProof>(&retired_pin).is_err(),
             "retired caller-controlled retention hint must fail closed"
         );
-
         for path in [
             Vec::<&str>::new(),
             vec!["range"],
@@ -2292,12 +2181,10 @@ mod tests {
                 "unknown field at {path:?} must reject"
             );
         }
-
         let duplicate = canonical.replacen("\"range\":", "\"range\":null,\"range\":", 1);
         assert_ne!(duplicate, canonical);
         assert!(norito::json::from_json::<BridgeProof>(&duplicate).is_err());
     }
-
     #[test]
     fn bridge_proof_decoder_rejects_legacy_truncated_and_trailing_encodings() {
         #[derive(Encode)]
@@ -2307,14 +2194,12 @@ mod tests {
             payload: BridgeProofPayload,
             pinned: bool,
         }
-
         #[derive(Encode)]
         struct CallerPinnedBridgeProof {
             range: BridgeProofRange,
             payload: BridgeProofPayload,
             pinned: bool,
         }
-
         let proof = BridgeProof {
             range: BridgeProofRange {
                 start_height: 5,
@@ -2332,7 +2217,6 @@ mod tests {
                 .expect("canonical bridge proof decodes"),
             proof.clone()
         );
-
         for end in 0..canonical.len() {
             let mut truncated: &[u8] = &canonical[..end];
             assert!(
@@ -2343,7 +2227,6 @@ mod tests {
         let mut trailing = canonical;
         trailing.push(0);
         assert!(BridgeProof::decode_all(&mut trailing.as_slice()).is_err());
-
         let legacy = LegacyBridgeProof {
             range: proof.range,
             manifest_hash: [0xff; 32],
@@ -2352,7 +2235,6 @@ mod tests {
         }
         .encode();
         assert!(BridgeProof::decode_all(&mut legacy.as_slice()).is_err());
-
         let caller_pinned = CallerPinnedBridgeProof {
             range: proof.range,
             payload: proof.payload,
@@ -2364,7 +2246,6 @@ mod tests {
             "retired caller-controlled retention field must fail binary decoding"
         );
     }
-
     #[test]
     fn bridge_proof_transparent_zk_roundtrip() {
         let proof = BridgeProof {
@@ -2382,7 +2263,6 @@ mod tests {
         let dec = BridgeProof::decode_all(&mut &buf[..]).expect("decode");
         assert_eq!(proof, dec);
     }
-
     #[test]
     fn bridge_proof_record_roundtrip() {
         let proof = BridgeProof {
@@ -2405,39 +2285,33 @@ mod tests {
         let dec = BridgeProofRecord::decode_all(&mut &buf[..]).expect("decode");
         assert_eq!(record, dec);
     }
-
     #[test]
     fn bridge_finality_proof_roundtrip_preserves_exact_v2_artifact() {
         let fixture = make_v2_fixture("proof-chain");
         let encoded = fixture.proof.encode();
         let decoded = BridgeFinalityProof::decode_all(&mut encoded.as_slice()).expect("decode");
-
         assert_eq!(decoded, fixture.proof);
         decoded
             .finality_artifact
             .verify()
             .expect("roundtripped proof remains cryptographically valid");
     }
-
     #[test]
     fn bridge_finality_attestation_binds_challenge_node_genesis_status_and_proof() {
         let fixture = make_v2_fixture("attested-proof-chain");
         let attestation = attestation_for_fixture(&fixture);
         attestation.verify().expect("valid node attestation");
-
         let encoded = attestation.encode();
         let decoded = BridgeFinalityAttestationV1::decode_all(&mut encoded.as_slice())
             .expect("decode finality attestation");
         assert_eq!(decoded, attestation);
         decoded.verify().expect("roundtripped attestation verifies");
-
         let mut changed_challenge = attestation.clone();
         changed_challenge.body.challenge = *Hash::new(b"another capture challenge").as_ref();
         assert_eq!(
             changed_challenge.verify(),
             Err(BridgeFinalityAttestationValidationError::InvalidNodeSignature)
         );
-
         let mut changed_genesis = attestation.clone();
         changed_genesis.body.genesis_block_hash =
             HashOf::from_untyped_unchecked(Hash::new(b"another committed genesis"));
@@ -2445,7 +2319,6 @@ mod tests {
             changed_genesis.verify(),
             Err(BridgeFinalityAttestationValidationError::GenesisProofBlockMismatch)
         );
-
         let alternate = make_v2_fixture("attested-proof-chain");
         let mut substituted_genesis_proof = attestation;
         substituted_genesis_proof.body.genesis_block_hash = alternate.proof.block_header.hash();
@@ -2455,19 +2328,16 @@ mod tests {
             Err(BridgeFinalityAttestationValidationError::HeightOneProofMismatch)
         );
     }
-
     #[test]
     fn bridge_finality_attestation_rejects_replayable_or_mixed_node_status() {
         let fixture = make_v2_fixture("strict-attested-proof-chain");
         let attestation = attestation_for_fixture(&fixture);
-
         let mut zero_challenge = attestation.clone();
         zero_challenge.body.challenge = [0; 32];
         assert_eq!(
             zero_challenge.body.validate_consistency(),
             Err(BridgeFinalityAttestationValidationError::ZeroChallenge)
         );
-
         let mut mixed_node = attestation;
         mixed_node.body.status.node_fingerprint = Hash::new(b"another Torii node");
         assert_eq!(
@@ -2475,7 +2345,6 @@ mod tests {
             Err(BridgeFinalityAttestationValidationError::StatusNodeMismatch)
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     #[expect(
@@ -2488,7 +2357,6 @@ mod tests {
             Field(&'static str),
             Index(usize),
         }
-
         fn insert_hostile_field(value: &mut norito::json::Value, path: &[JsonPathStep]) {
             let mut current = value;
             for step in path {
@@ -2516,7 +2384,6 @@ mod tests {
             };
             object.insert("adversarial_extension".into(), norito::json::Value::Null);
         }
-
         use JsonPathStep::{Field, Index};
         let fixture = make_boundary_v2_fixture("closed-finality-json");
         let canonical =
@@ -2526,7 +2393,6 @@ mod tests {
                 .expect("canonical exact finality JSON decodes"),
             fixture.proof
         );
-
         let paths = [
             ("proof", vec![]),
             ("block header", vec![Field("block_header")]),
@@ -2649,7 +2515,6 @@ mod tests {
                 ],
             ),
         ];
-
         for (name, path) in paths {
             let mut hostile = norito::json::to_value(&fixture.proof)
                 .expect("serialize exact finality proof value");
@@ -2661,7 +2526,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn bridge_finality_bundle_roundtrip_commits_to_exact_context() {
         let fixture = make_v2_fixture("bundle-chain");
@@ -2676,7 +2540,6 @@ mod tests {
             },
             finality_proof: proof,
         };
-
         let encoded = bundle.encode();
         let decoded = BridgeFinalityBundle::decode_all(&mut encoded.as_slice()).expect("decode");
         assert_eq!(decoded, bundle);
@@ -2693,7 +2556,6 @@ mod tests {
                 .network_id,
         )
         .expect("stateless exact bundle verification succeeds");
-
         let mut verifier = BridgeFinalityVerifier::with_context(
             decoded
                 .finality_proof
@@ -2706,7 +2568,6 @@ mod tests {
             .verify_bundle(&decoded)
             .expect("stateful exact bundle verification succeeds");
     }
-
     #[test]
     fn bridge_finality_bundle_rejects_every_duplicate_binding_substitution() {
         let fixture = make_v2_fixture("bundle-chain");
@@ -2720,14 +2581,12 @@ mod tests {
             },
             finality_proof: proof,
         };
-
         let mut wrong_network = bundle.clone();
         wrong_network.commitment.network_id = test_network_id("other-network");
         assert_eq!(
             wrong_network.validate_consistency(),
             Err(BridgeFinalityBundleValidationError::NetworkIdMismatch)
         );
-
         let mut wrong_context = bundle.clone();
         wrong_context.commitment.height_context_id = make_v2_fixture("other-chain")
             .proof
@@ -2737,14 +2596,12 @@ mod tests {
             wrong_context.validate_consistency(),
             Err(BridgeFinalityBundleValidationError::ContextIdMismatch)
         );
-
         let mut wrong_height = bundle.clone();
         wrong_height.commitment.block_height += 1;
         assert_eq!(
             wrong_height.validate_consistency(),
             Err(BridgeFinalityBundleValidationError::BlockHeightMismatch)
         );
-
         let mut wrong_hash = bundle;
         wrong_hash.commitment.block_hash =
             HashOf::from_untyped_unchecked(Hash::new(b"substituted bundle commitment block hash"));
@@ -2753,7 +2610,6 @@ mod tests {
             Err(BridgeFinalityBundleValidationError::BlockHashMismatch)
         );
     }
-
     #[test]
     fn verifier_accepts_equal_vote_npos_quorum_with_context_anchor() {
         let fixture = make_v2_fixture("chain-a");
@@ -2762,28 +2618,23 @@ mod tests {
             proof.finality_artifact.height_context.network_id,
             proof.finality_artifact.context_id(),
         );
-
         verifier.verify(&proof).expect("valid exact v2 proof");
     }
-
     #[test]
     fn verifier_requires_an_explicit_context_anchor() {
         let fixture = make_v2_fixture("chain-a");
         let mut verifier =
             BridgeFinalityVerifier::new(fixture.proof.finality_artifact.height_context.network_id);
-
         assert!(matches!(
             verifier.verify(&fixture.proof),
             Err(BridgeFinalityVerifyError::MissingContextAnchor)
         ));
     }
-
     #[test]
     fn verifier_rejects_version_network_header_height_and_hash_drift() {
         let fixture = make_v2_fixture("chain-a");
         let expected_network = fixture.proof.finality_artifact.height_context.network_id;
         let context_id = fixture.proof.finality_artifact.context_id();
-
         let mut wrong_version = fixture.proof.clone();
         wrong_version.version = BRIDGE_FINALITY_PROOF_VERSION_V2 + 1;
         let mut verifier = BridgeFinalityVerifier::with_context(expected_network, context_id);
@@ -2791,7 +2642,6 @@ mod tests {
             verifier.verify(&wrong_version),
             Err(BridgeFinalityVerifyError::UnsupportedProofVersion { .. })
         ));
-
         let mut legacy_v1 = fixture.proof.clone();
         legacy_v1.version = 1;
         let mut verifier = BridgeFinalityVerifier::with_context(expected_network, context_id);
@@ -2802,14 +2652,12 @@ mod tests {
                 actual: 1,
             })
         ));
-
         let mut verifier =
             BridgeFinalityVerifier::with_context(test_network_id("other-chain"), context_id);
         assert!(matches!(
             verifier.verify(&fixture.proof),
             Err(BridgeFinalityVerifyError::NetworkIdMismatch { .. })
         ));
-
         let mut wrong_height = fixture.proof.clone();
         wrong_height.block_header = crate::block::BlockHeader::new(
             NonZeroU64::new(2).expect("non-zero height"),
@@ -2824,7 +2672,6 @@ mod tests {
             verifier.verify(&wrong_height),
             Err(BridgeFinalityVerifyError::BlockHeaderHeightMismatch { .. })
         ));
-
         let mut wrong_hash = fixture.proof.clone();
         wrong_hash.block_header = crate::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
@@ -2842,7 +2689,6 @@ mod tests {
             Err(BridgeFinalityVerifyError::BlockHeaderHashMismatch { .. })
         ));
     }
-
     #[test]
     fn verifier_rejects_self_consistent_header_parent_and_view_substitutions() {
         let mut parent_attack = make_v2_fixture("chain-a");
@@ -2874,7 +2720,6 @@ mod tests {
             verifier.verify(&parent_attack.proof),
             Err(BridgeFinalityVerifyError::BlockHeaderParentMismatch)
         );
-
         let mut view_attack = make_v2_fixture("chain-a");
         view_attack.proof.block_header.set_view_change_index(7);
         view_attack.proof.finality_artifact.commit_qc.round.view = 6;
@@ -2911,7 +2756,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn verifier_accepts_locked_block_decided_after_unchanged_reproposal() {
         let mut delayed = make_v2_fixture("chain-a");
@@ -2920,7 +2764,6 @@ mod tests {
         delayed.proof.finality_artifact.commit_qc.proposal_round =
             delayed.proof.finality_artifact.commit_qc.round;
         rebind_v2_proof_to_header(&mut delayed.proof, &delayed.keys);
-
         delayed
             .proof
             .finality_artifact
@@ -2934,7 +2777,6 @@ mod tests {
             .verify(&delayed.proof)
             .expect("bridge verification accepts an unchanged later-round re-proposal");
     }
-
     #[test]
     fn successor_rejects_a_resigned_wrong_header_predecessor() {
         let parent = make_v2_fixture("chain-a");
@@ -2945,7 +2787,6 @@ mod tests {
                 b"unrelated predecessor",
             ))));
         rebind_v2_proof_to_header(&mut child, &parent.keys);
-
         let mut verifier = BridgeFinalityVerifier::with_context(
             parent.proof.finality_artifact.height_context.network_id,
             parent.proof.finality_artifact.context_id(),
@@ -2958,13 +2799,11 @@ mod tests {
             Err(BridgeFinalityVerifyError::BlockHeaderParentMismatch)
         );
     }
-
     #[test]
     fn verifier_rejects_missing_or_invalid_roster_pops() {
         let fixture = make_v2_fixture("chain-a");
         let context = fixture.proof.finality_artifact.height_context.clone();
         let context_id = context.id();
-
         let mut missing = fixture.proof.clone();
         missing.finality_artifact.validator_set_pops.pop();
         let mut verifier = BridgeFinalityVerifier::with_context(context.network_id, context_id);
@@ -2974,7 +2813,6 @@ mod tests {
                 crate::block::consensus_v2::finality::V2FinalityValidationError::ProofOfPossessionCount { .. }
             ))
         ));
-
         let other = make_v2_fixture("chain-b");
         let mut invalid = fixture.proof;
         invalid.finality_artifact.validator_set_pops[3] =
@@ -2987,12 +2825,10 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn verifier_rejects_invalid_aggregate_signature() {
         let mut fixture = make_v2_fixture("chain-a");
         let context = fixture.proof.finality_artifact.height_context.clone();
-
         let mut oversized = fixture.proof.clone();
         oversized.finality_artifact.commit_qc.aggregate_signature =
             vec![0x7F; crate::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES + 1];
@@ -3005,7 +2841,6 @@ mod tests {
                 )
             ))
         ));
-
         fixture
             .proof
             .finality_artifact
@@ -3013,7 +2848,6 @@ mod tests {
             .aggregate_signature[0] ^= 0x80;
         let context_id = context.id();
         let mut verifier = BridgeFinalityVerifier::with_context(context.network_id, context_id);
-
         assert!(matches!(
             verifier.verify(&fixture.proof),
             Err(BridgeFinalityVerifyError::CertificateVerification(
@@ -3021,16 +2855,13 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn boundary_transition_cannot_be_replaced_without_old_roster_signatures() {
         use crate::block::consensus_v2::finality::{
             V2FinalityValidationError, V2QuorumCertificateVerificationError,
         };
-
         let fixture = make_boundary_v2_fixture("chain-a");
         let original_context = fixture.proof.finality_artifact.height_context.clone();
-
         let mut stale_context_id = fixture.proof.clone();
         stale_context_id
             .finality_artifact
@@ -3049,7 +2880,6 @@ mod tests {
                 V2FinalityValidationError::CertificateContextMismatch
             ))
         ));
-
         let mut forged_context_id = fixture.proof;
         forged_context_id
             .finality_artifact
@@ -3080,7 +2910,6 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn successor_rejects_a_resigned_boundary_epoch_end_substitution() {
         let parent = make_boundary_v2_fixture("chain-a");
@@ -3098,7 +2927,6 @@ mod tests {
         );
         let network_id = parent.proof.finality_artifact.height_context.network_id;
         let context_anchor = parent.proof.finality_artifact.context_id();
-
         let mut verifier = BridgeFinalityVerifier::with_context(network_id, context_anchor);
         verifier
             .verify(&parent.proof)
@@ -3106,7 +2934,6 @@ mod tests {
         verifier
             .verify(&child)
             .expect("exact authenticated successor schedule");
-
         let mut substituted = child;
         substituted
             .finality_artifact
@@ -3122,7 +2949,6 @@ mod tests {
         verify_bridge_finality_proof(&substituted, &network_id)
             .expect("substituted child is independently self-consistent");
         substituted.finality_artifact.commit_qc.aggregate_signature[0] ^= 0x80;
-
         let mut verifier = BridgeFinalityVerifier::with_context(network_id, context_anchor);
         verifier
             .verify(&parent.proof)
@@ -3133,16 +2959,13 @@ mod tests {
             "cheap authenticated-schedule rejection must precede hostile BLS work"
         );
     }
-
     #[test]
     fn rotated_boundary_rejects_old_permuted_pops_and_old_key_signatures() {
         use crate::block::consensus_v2::finality::V2QuorumCertificateVerificationError;
-
         let parent = make_boundary_v2_fixture("rotated-chain");
         let child = make_successor_v2_proof(&parent);
         let network_id = parent.proof.finality_artifact.height_context.network_id;
         let anchor = parent.proof.finality_artifact.context_id();
-
         let mut old_pops = child.clone();
         old_pops.finality_artifact.validator_set_pops =
             parent.proof.finality_artifact.validator_set_pops.clone();
@@ -3152,7 +2975,6 @@ mod tests {
             verifier.verify(&old_pops),
             Err(BridgeFinalityVerifyError::SuccessorContextMismatch)
         );
-
         let mut permuted_pops = child.clone();
         permuted_pops
             .finality_artifact
@@ -3164,7 +2986,6 @@ mod tests {
             verifier.verify(&permuted_pops),
             Err(BridgeFinalityVerifyError::SuccessorContextMismatch)
         );
-
         let mut old_key_signature = child;
         resign_v2_proof(&mut old_key_signature, &parent.keys);
         let mut verifier = BridgeFinalityVerifier::with_context(network_id, anchor);
@@ -3176,14 +2997,12 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn verifier_enforces_equal_vote_npos_quorum_and_context() {
         use crate::block::consensus_v2::{
             ValidationError,
             finality::{V2FinalityValidationError, V2QuorumCertificateVerificationError},
         };
-
         let too_few = make_v2_fixture_with_quorum("chain-a", &[1, 1, 1, 1], &[0, 1]);
         let err = too_few
             .proof
@@ -3198,7 +3017,6 @@ mod tests {
                 )
             )
         ));
-
         let weighted = make_v2_fixture_with_quorum("chain-a", &[70, 10, 10, 10], &[0, 1, 2]);
         let err = weighted
             .proof
@@ -3212,14 +3030,12 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn verifier_rejects_duplicate_unsorted_and_out_of_range_signers() {
         use crate::block::consensus_v2::{
             ValidationError,
             finality::{V2FinalityValidationError, V2QuorumCertificateVerificationError},
         };
-
         for signers in [vec![0, 0, 2], vec![1, 0, 2], vec![0, 1, 9]] {
             let mut fixture = make_v2_fixture("chain-a");
             fixture.proof.finality_artifact.commit_qc.signers = signers;
@@ -3239,7 +3055,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn verifier_rejects_wrong_trusted_context() {
         let fixture = make_v2_fixture("chain-a");
@@ -3248,7 +3063,6 @@ mod tests {
             fixture.proof.finality_artifact.height_context.network_id,
             other.proof.finality_artifact.context_id(),
         );
-
         assert!(matches!(
             verifier.verify(&fixture.proof),
             Err(BridgeFinalityVerifyError::UnexpectedContext { .. })

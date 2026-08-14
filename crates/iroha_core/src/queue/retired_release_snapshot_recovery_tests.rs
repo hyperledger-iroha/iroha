@@ -1,9 +1,7 @@
 // Signed retirement-snapshot reconciliation coverage stays in queue::tests.
-
 use crate::kura::{
     AutonomousLaneRetirementSnapshotAttemptAnchorV1, AutonomousLaneRetirementSnapshotEvidenceV1,
 };
-
 fn snapshot_lifecycle_projection_fixture(
     reservation_group: LaneQueueReservationGroupBindingV1,
     ordered_keys: Vec<LaneQueueReservationKeyV2>,
@@ -38,7 +36,6 @@ fn snapshot_lifecycle_projection_fixture(
         recovered_state,
     }
 }
-
 fn retired_release_snapshot_state_fixture(
     reservation_group: LaneQueueReservationGroupBindingV1,
     phase: AutonomousLaneRetirementQueueSnapshotPhaseV1,
@@ -112,7 +109,6 @@ fn retired_release_snapshot_state_fixture(
     assert!(production_in_flight_first_release_state_kernel(state));
     state
 }
-
 fn retired_release_lifecycle_projection_fixture(
     reservation_group: LaneQueueReservationGroupBindingV1,
     ordered_keys: Vec<LaneQueueReservationKeyV2>,
@@ -151,7 +147,6 @@ fn retired_release_lifecycle_projection_fixture(
         recovered_state,
     }
 }
-
 #[derive(Clone, Copy)]
 enum RetiredReleasePairMismatch {
     None,
@@ -160,7 +155,6 @@ enum RetiredReleasePairMismatch {
     LocalActor,
     RetirementHash,
 }
-
 fn authorize_retired_release_pair_fixture(
     phase: AutonomousLaneRetirementQueueSnapshotPhaseV1,
     local_actor_index: u16,
@@ -258,7 +252,6 @@ fn authorize_retired_release_pair_fixture(
         Some(planner_evidence),
     )
 }
-
 #[test]
 fn snapshot_recovery_accepts_prepared_retired_release_pair_for_local_committee_roles() {
     for local_actor_index in [0, 1] {
@@ -286,7 +279,6 @@ fn snapshot_recovery_accepts_prepared_retired_release_pair_for_local_committee_r
             .expect("consume exact paired action-25 stutter");
     }
 }
-
 #[test]
 fn snapshot_recovery_accepts_completed_retired_release_pair_with_full_prefix() {
     let authorization = authorize_retired_release_pair_fixture(
@@ -310,7 +302,6 @@ fn snapshot_recovery_accepts_completed_retired_release_pair_with_full_prefix() {
         .into_reconciliation_receipt()
         .expect("consume exact completed-release action-25 stutter");
 }
-
 #[test]
 fn snapshot_recovery_rejects_retired_release_pair_identity_drift() {
     for mismatch in [
@@ -330,7 +321,6 @@ fn snapshot_recovery_rejects_retired_release_pair_identity_drift() {
         ));
     }
 }
-
 #[test]
 fn retirement_snapshot_test_anchor_rejects_out_of_bounds_actor_indices() {
     let validator_set_hash = HashOf::<Vec<PeerId>>::from_untyped_unchecked(Hash::new(

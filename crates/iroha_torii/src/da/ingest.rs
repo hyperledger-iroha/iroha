@@ -1,15 +1,22 @@
 //! Data availability ingest handlers for Torii.
 
 #![allow(clippy::redundant_pub_crate)]
-
-use std::{
-    borrow::{Cow, ToOwned},
-    io::{ErrorKind, Read},
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+use super::persistence::{ReceiptInsertOutcome, receipt_signature_placeholder};
+use super::rs16::{
+    MAX_CANONICAL_PAYLOAD_BYTES, MAX_CHUNK_SIZE_BYTES, MAX_DATA_CHUNKS, MAX_DATA_SHARDS,
+    MAX_PARITY_SHARDS, MAX_ROW_PARITY_SOURCE_STRIPES, MAX_ROW_PARITY_STRIPES, MIN_CHUNK_SIZE_BYTES,
+    build_chunk_commitments, validate_erasure_work_budget,
 };
-
+use super::{
+    DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpoolBatchReport, persistence,
+    storage_class_label, taikai, taikai::taikai_ingest,
+};
+use crate::{
+    NoritoQuery, SharedAppState,
+    routing::MaybeTelemetry,
+    sorafs::api::ResponseError,
+    utils::{self, ResponseFormat},
+};
 use axum::{
     extract::{Extension, Path as AxumPath, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
@@ -59,50 +66,34 @@ use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1,
     pdp::{PdpCommitmentV1, PdpMerkleTreeV1},
 };
+use std::{
+    borrow::{Cow, ToOwned},
+    io::{ErrorKind, Read},
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use zstd::stream::read::Decoder as ZstdDecoder;
-
-use super::persistence::{ReceiptInsertOutcome, receipt_signature_placeholder};
-use super::rs16::{
-    MAX_CANONICAL_PAYLOAD_BYTES, MAX_CHUNK_SIZE_BYTES, MAX_DATA_CHUNKS, MAX_DATA_SHARDS,
-    MAX_PARITY_SHARDS, MAX_ROW_PARITY_SOURCE_STRIPES, MAX_ROW_PARITY_STRIPES, MIN_CHUNK_SIZE_BYTES,
-    build_chunk_commitments, validate_erasure_work_budget,
-};
-use super::{
-    DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpoolBatchReport, persistence,
-    storage_class_label, taikai, taikai::taikai_ingest,
-};
-use crate::{
-    NoritoQuery, SharedAppState,
-    routing::MaybeTelemetry,
-    sorafs::api::ResponseError,
-    utils::{self, ResponseFormat},
-};
-
 const HEADER_SORA_PDP_COMMITMENT: &str = "sora-pdp-commitment";
 const META_DA_REGISTRY_ALIAS: &str = "da.registry.alias";
 const META_DA_REGISTRY_OWNER: &str = "da.registry.owner";
 const BYTES_PER_GIB: u64 = 1024 * 1024 * 1024;
 const SECS_PER_MONTH: u64 = 30 * 24 * 60 * 60;
-
 #[derive(Debug)]
 struct CanonicalPayload<'a> {
     bytes: Cow<'a, [u8]>,
 }
-
 impl CanonicalPayload<'_> {
     fn as_slice(&self) -> &[u8] {
         &self.bytes
     }
-
     fn len(&self) -> usize {
         self.bytes.len()
     }
-
     fn into_vec(self) -> Vec<u8> {
         self.bytes.into_owned()
     }
 }
-
 async fn run_da_ingest_compute_job<T, F>(
     limiter: Arc<tokio::sync::Semaphore>,
     job: F,
@@ -133,7 +124,6 @@ where
         )
     })?
 }
-
 struct DaManifestComputeArtifacts {
     proof_scheme: DaProofScheme,
     canonical_payload: Vec<u8>,
@@ -145,7 +135,6 @@ struct DaManifestComputeArtifacts {
     taikai_trm_payload: Option<Vec<u8>>,
     queued_at_secs: u64,
 }
-
 #[allow(clippy::too_many_arguments)]
 fn compute_da_manifest_artifacts(
     request: &DaIngestRequest,
@@ -167,7 +156,6 @@ fn compute_da_manifest_artifacts(
     let canonical = normalize_payload(request)?;
     validate_request(request, canonical.as_slice())
         .map_err(|(status, message)| (status, message.to_owned()))?;
-
     let mut metadata = encrypt_governance_metadata(
         &request.metadata,
         governance_metadata_key,
@@ -186,7 +174,6 @@ fn compute_da_manifest_artifacts(
         &request.retention_policy,
     );
     let enforced_retention = expected_retention.clone();
-
     if matches!(request.blob_class, BlobClass::TaikaiSegment) {
         let payload_digest = BlobDigest::from_hash(blake3_hash(canonical.as_slice()));
         taikai::apply_taikai_ingest_tags(
@@ -197,7 +184,6 @@ fn compute_da_manifest_artifacts(
             request.total_size,
         )?;
     }
-
     let queued_at_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
@@ -213,7 +199,6 @@ fn compute_da_manifest_artifacts(
         rent_policy,
         chunking_observer,
     )?;
-
     Ok(DaManifestComputeArtifacts {
         proof_scheme,
         canonical_payload: canonical.into_vec(),
@@ -226,7 +211,6 @@ fn compute_da_manifest_artifacts(
         queued_at_secs,
     })
 }
-
 /// HTTP handler for `/v1/da/ingest`.
 pub async fn handler_post_da_ingest(
     State(app): State<SharedAppState>,
@@ -241,7 +225,6 @@ pub async fn handler_post_da_ingest(
             .map_err(|(status, message)| {
             ResponseError::from(build_error_response(status, message, format))
         })?;
-
     let telemetry = app.telemetry_handle();
     let cluster_label = app
         .da_ingest
@@ -249,7 +232,6 @@ pub async fn handler_post_da_ingest(
         .as_deref()
         .unwrap_or("default");
     let nexus = app.state.nexus_snapshot();
-
     if !nexus.enabled {
         return Err(ResponseError::from(build_error_response(
             StatusCode::BAD_REQUEST,
@@ -257,11 +239,9 @@ pub async fn handler_post_da_ingest(
             format,
         )));
     }
-
     validate_request_shape(&request).map_err(|(status, message)| {
         ResponseError::from(build_error_response(status, message, format))
     })?;
-
     let committed_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
     let compute_request = request;
     let governance_metadata_key = app.da_ingest.governance_metadata_key;
@@ -301,7 +281,6 @@ pub async fn handler_post_da_ingest(
         mut taikai_trm_payload,
         queued_at_secs,
     } = computed;
-
     if retention_mismatch {
         warn!(
             blob_class = ?request.blob_class,
@@ -310,11 +289,9 @@ pub async fn handler_post_da_ingest(
             "overriding DA retention policy to match configured network baseline"
         );
     }
-
     let fingerprint = manifest.fingerprint;
     let lane_epoch = LaneEpoch::new(request.lane_id, request.epoch);
     let replay_key = ReplayKey::new(lane_epoch, request.sequence, fingerprint);
-
     if let Some(artifacts) = load_duplicate_da_artifacts_if_receipt_present(
         app.da_receipt_log.as_ref(),
         &app.da_ingest.manifest_store_dir,
@@ -338,9 +315,7 @@ pub async fn handler_post_da_ingest(
             format,
         );
     }
-
     let outcome = app.da_replay_cache.insert(replay_key, Instant::now());
-
     match outcome {
         ReplayInsertOutcome::Fresh { .. } | ReplayInsertOutcome::Duplicate { .. } => {
             let duplicate = matches!(outcome, ReplayInsertOutcome::Duplicate { .. });
@@ -352,7 +327,6 @@ pub async fn handler_post_da_ingest(
                 manifest.rent_months,
                 &manifest.manifest.rent_quote,
             );
-
             if duplicate {
                 return handle_duplicate_da_ingest(
                     app.as_ref(),
@@ -363,7 +337,6 @@ pub async fn handler_post_da_ingest(
                     format,
                 );
             }
-
             let taikai_stream_label =
                 matches!(request.blob_class, BlobClass::TaikaiSegment).then(|| {
                     taikai::stream_label_from_metadata(&request.metadata)
@@ -428,9 +401,7 @@ pub async fn handler_post_da_ingest(
                 }
                 ResponseError::from(build_error_response(status, &message, format))
             })?;
-
             let mut spool_batch = DaSpoolBatch::new();
-
             {
                 let spool_dir = app.da_ingest.manifest_store_dir.clone();
                 let encoded = manifest.encoded.clone();
@@ -452,7 +423,6 @@ pub async fn handler_post_da_ingest(
                     .map_err(|err| err.to_string())
                 }));
             }
-
             {
                 let spool_dir = app.da_ingest.manifest_store_dir.clone();
                 let pdp_commitment = pdp_commitment.clone();
@@ -474,7 +444,6 @@ pub async fn handler_post_da_ingest(
                     .map_err(|err| err.to_string())
                 }));
             }
-
             let stripe_layout = stripe_layout_from_manifest(&manifest.manifest);
             let receipt = build_receipt(
                 &app.da_receipt_signer,
@@ -578,7 +547,6 @@ pub async fn handler_post_da_ingest(
                     .map_err(|err| err.to_string())
                 }));
             }
-
             {
                 let receipt_log = Arc::clone(&app.da_receipt_log);
                 let receipt = receipt.clone();
@@ -592,7 +560,6 @@ pub async fn handler_post_da_ingest(
                         .map_err(|err| err.to_string())
                 }));
             }
-
             let mut taikai_alias_rotation_event = None;
             if let Some(taikai) = taikai_artifacts {
                 {
@@ -616,7 +583,6 @@ pub async fn handler_post_da_ingest(
                         .map_err(|err| err.to_string())
                     }));
                 }
-
                 {
                     let spool_dir = app.da_ingest.manifest_store_dir.clone();
                     let indexes_json = taikai.indexes_json.clone();
@@ -638,7 +604,6 @@ pub async fn handler_post_da_ingest(
                         .map_err(|err| err.to_string())
                     }));
                 }
-
                 let ssm_bytes = taikai_ssm_payload.take().ok_or_else(|| {
                     build_error_response(
                         StatusCode::BAD_REQUEST,
@@ -646,7 +611,6 @@ pub async fn handler_post_da_ingest(
                         format,
                     )
                 })?;
-
                 let ssm_outcome = taikai::validate_taikai_ssm(
                     &ssm_bytes,
                     &manifest.manifest_hash,
@@ -662,7 +626,6 @@ pub async fn handler_post_da_ingest(
                 .map_err(|(status, message)| {
                     ResponseError::from(build_error_response(status, &message, format))
                 })?;
-
                 {
                     let spool_dir = app.da_ingest.manifest_store_dir.clone();
                     let ssm_bytes_for_spool = ssm_bytes.clone();
@@ -684,14 +647,12 @@ pub async fn handler_post_da_ingest(
                         .map_err(|err| err.to_string())
                     }));
                 }
-
                 iroha_logger::info!(
                     manifest_hash = %hex::encode(manifest.manifest_hash.as_ref()),
                     alias = %ssm_outcome.alias_label,
                     ssm_digest = %hex::encode(ssm_outcome.ssm_digest.as_ref()),
                     "accepted Taikai signing manifest"
                 );
-
                 if let Some(trm_bytes) = taikai_trm_payload.take() {
                     let routing_manifest = taikai::validate_taikai_trm(&trm_bytes, &taikai)
                         .map_err(|(status, message): (StatusCode, String)| {
@@ -712,7 +673,6 @@ pub async fn handler_post_da_ingest(
                                 ResponseError::from(build_error_response(status, &message, format))
                             })?;
                     }
-
                     let spool_dir = app.da_ingest.manifest_store_dir.clone();
                     let storage_ticket = manifest.storage_ticket.clone();
                     let lane_id = request.lane_id;
@@ -753,10 +713,8 @@ pub async fn handler_post_da_ingest(
                     taikai_alias_rotation_event =
                         Some((routing_manifest.clone(), manifest_digest_hex));
                 }
-
                 taikai::record_taikai_ingest_metrics(&telemetry, cluster_label, &taikai.telemetry);
             }
-
             let spool_report = flush_da_spool_batch(app.as_ref(), spool_batch).await;
             log_da_spool_failures(&spool_report);
             let mut receipt_log_recorded = false;
@@ -782,7 +740,6 @@ pub async fn handler_post_da_ingest(
                     &manifest_digest_hex,
                 );
             }
-
             let response = DaIngestResponse {
                 status: "accepted",
                 duplicate,
@@ -825,13 +782,11 @@ pub async fn handler_post_da_ingest(
         }
     }
 }
-
 struct DuplicateDaArtifacts {
     receipt_path: PathBuf,
     receipt: DaIngestReceipt,
     pdp_commitment_bytes: Vec<u8>,
 }
-
 fn load_duplicate_da_artifacts(
     receipt_log: &persistence::DaReceiptLog,
     spool_dir: &Path,
@@ -854,7 +809,6 @@ fn load_duplicate_da_artifacts(
         .receipt_for_duplicate(lane_epoch, sequence, fingerprint)
         .wrap_err("failed to load duplicate DA receipt")?
         .ok_or_else(|| eyre!("duplicate DA receipt was not found"))?;
-
     if receipt.storage_ticket != *storage_ticket {
         return Err(eyre!(
             "duplicate DA receipt storage ticket does not match replay fingerprint"
@@ -870,14 +824,12 @@ fn load_duplicate_da_artifacts(
             "duplicate DA receipt PDP commitment does not match durable PDP artifact"
         ));
     }
-
     Ok(DuplicateDaArtifacts {
         receipt_path,
         receipt,
         pdp_commitment_bytes,
     })
 }
-
 fn load_duplicate_da_artifacts_if_receipt_present(
     receipt_log: &persistence::DaReceiptLog,
     spool_dir: &Path,
@@ -893,7 +845,6 @@ fn load_duplicate_da_artifacts_if_receipt_present(
     {
         return Ok(None);
     }
-
     load_duplicate_da_artifacts(
         receipt_log,
         spool_dir,
@@ -904,7 +855,6 @@ fn load_duplicate_da_artifacts_if_receipt_present(
     )
     .map(Some)
 }
-
 fn handle_duplicate_da_ingest(
     app: &crate::AppState,
     telemetry: &MaybeTelemetry,
@@ -928,7 +878,6 @@ fn handle_duplicate_da_ingest(
             format,
         ))
     })?;
-
     duplicate_da_ingest_response_from_artifacts(
         telemetry,
         lane_epoch,
@@ -937,7 +886,6 @@ fn handle_duplicate_da_ingest(
         format,
     )
 }
-
 fn duplicate_da_ingest_response_from_artifacts(
     telemetry: &MaybeTelemetry,
     lane_epoch: LaneEpoch,
@@ -953,7 +901,6 @@ fn duplicate_da_ingest_response_from_artifacts(
             path: artifacts.receipt_path,
         },
     );
-
     let pdp_header_value = pdp_commitment_header_value(&artifacts.pdp_commitment_bytes).map_err(
         |(status, message)| ResponseError::from(build_error_response(status, &message, format)),
     )?;
@@ -969,7 +916,6 @@ fn duplicate_da_ingest_response_from_artifacts(
     );
     Ok(with_status(http_response, StatusCode::ACCEPTED))
 }
-
 /// HTTP handler for `/v1/da/manifests/{ticket}`.
 pub async fn handler_get_da_manifest(
     State(app): State<SharedAppState>,
@@ -979,7 +925,6 @@ pub async fn handler_get_da_manifest(
     utils::negotiate_json_only_response(headers.get(axum::http::header::ACCEPT))
         .map_err(ResponseError::from)?;
     let format = ResponseFormat::Json;
-
     let nexus_enabled = app.state.nexus_snapshot().enabled;
     if !nexus_enabled {
         return Err(ResponseError::from(build_error_response(
@@ -988,7 +933,6 @@ pub async fn handler_get_da_manifest(
             format,
         )));
     }
-
     let ticket_bytes = match parse_storage_ticket_hex(ticket_hex.trim()) {
         Ok(bytes) => bytes,
         Err(message) => {
@@ -1000,7 +944,6 @@ pub async fn handler_get_da_manifest(
         }
     };
     let ticket = StorageTicketId::new(ticket_bytes);
-
     let manifest_artifact = match persistence::load_manifest_artifact_from_spool(
         &app.da_ingest.manifest_store_dir,
         &ticket,
@@ -1022,7 +965,6 @@ pub async fn handler_get_da_manifest(
         }
     };
     let manifest_bytes = manifest_artifact.bytes.as_slice();
-
     let manifest: DaManifestV1 = match decode_from_bytes(manifest_bytes) {
         Ok(manifest) => manifest,
         Err(err) => {
@@ -1033,7 +975,6 @@ pub async fn handler_get_da_manifest(
             )));
         }
     };
-
     let plan = match build_plan_from_da_manifest(&manifest) {
         Ok(plan) => plan,
         Err(err) => {
@@ -1044,7 +985,6 @@ pub async fn handler_get_da_manifest(
             )));
         }
     };
-
     let chunk_plan = match try_chunk_fetch_plan_to_json(&plan) {
         Ok(plan) => plan,
         Err(err) => {
@@ -1066,7 +1006,6 @@ pub async fn handler_get_da_manifest(
         }
     };
     let manifest_hash = BlobDigest::from_hash(blake3_hash(manifest_bytes));
-
     let mut body = Map::new();
     body.insert(
         "storage_ticket".into(),
@@ -1100,7 +1039,6 @@ pub async fn handler_get_da_manifest(
         Value::from(manifest_bytes.len() as u64),
     );
     body.insert("chunk_plan".into(), chunk_plan);
-
     let response = utils::respond_value_with_format(Value::Object(body), format);
     attach_pdp_commitment_header_from_spool(
         &app.da_ingest.manifest_store_dir,
@@ -1110,7 +1048,6 @@ pub async fn handler_get_da_manifest(
         format,
     )
 }
-
 fn attach_pdp_commitment_header_from_spool(
     spool_dir: &Path,
     manifest_artifact: &persistence::LoadedManifestArtifact,
@@ -1148,7 +1085,6 @@ fn attach_pdp_commitment_header_from_spool(
     }
     Ok(response)
 }
-
 fn normalize_payload(
     request: &DaIngestRequest,
 ) -> Result<CanonicalPayload<'_>, (StatusCode, String)> {
@@ -1172,7 +1108,6 @@ fn normalize_payload(
             )
         })
     };
-
     match request.compression {
         Compression::Identity => Ok(CanonicalPayload {
             bytes: Cow::Borrowed(&request.payload),
@@ -1199,7 +1134,6 @@ fn normalize_payload(
         }),
     }
 }
-
 fn parse_storage_ticket_hex(input: &str) -> Result<[u8; 32], String> {
     if input.is_empty() {
         return Err("storage ticket must be provided".into());
@@ -1217,7 +1151,6 @@ fn parse_storage_ticket_hex(input: &str) -> Result<[u8; 32], String> {
     array.copy_from_slice(&bytes);
     Ok(array)
 }
-
 fn encode_pdp_commitment_bytes(
     commitment: &PdpCommitmentV1,
 ) -> Result<Vec<u8>, (StatusCode, String)> {
@@ -1228,7 +1161,6 @@ fn encode_pdp_commitment_bytes(
         )
     })
 }
-
 fn pdp_commitment_header_value(bytes: &[u8]) -> Result<HeaderValue, (StatusCode, String)> {
     let encoded = BASE64.encode(bytes);
     HeaderValue::from_str(&encoded).map_err(|err| {
@@ -1238,7 +1170,6 @@ fn pdp_commitment_header_value(bytes: &[u8]) -> Result<HeaderValue, (StatusCode,
         )
     })
 }
-
 fn decompress_reader<R>(
     reader: R,
     expected_len: usize,
@@ -1268,7 +1199,6 @@ where
         })?;
     verify_decompressed_len(buffer, expected_len, algorithm)
 }
-
 fn decompress_zstd(payload: &[u8], expected_len: usize) -> Result<Vec<u8>, (StatusCode, String)> {
     let decoder = ZstdDecoder::new(payload).map_err(|err| {
         (
@@ -1278,7 +1208,6 @@ fn decompress_zstd(payload: &[u8], expected_len: usize) -> Result<Vec<u8>, (Stat
     })?;
     decompress_reader(decoder, expected_len, "zstd")
 }
-
 fn verify_decompressed_len(
     buffer: Vec<u8>,
     expected_len: usize,
@@ -1297,13 +1226,11 @@ fn verify_decompressed_len(
         Ok(buffer)
     }
 }
-
 fn validate_request(
     request: &DaIngestRequest,
     canonical_payload: &[u8],
 ) -> Result<(), (StatusCode, &'static str)> {
     validate_request_shape(request)?;
-
     if request.total_size != canonical_payload.len() as u64 {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -1316,10 +1243,8 @@ fn validate_request(
             "canonical payload hash does not match payload_hash",
         ));
     }
-
     Ok(())
 }
-
 fn authenticate_da_ingest_request(
     request: &DaIngestRequest,
     principal: &crate::app_auth::VerifiedCanonicalRequest,
@@ -1348,14 +1273,12 @@ fn authenticate_da_ingest_request(
             "DA ingest authorization includes a signer outside the authenticated account witness",
         ));
     }
-
     request.verify_signatures().map_err(|_| {
         (
             StatusCode::UNAUTHORIZED,
             "DA ingest request signatures are invalid",
         )
     })?;
-
     if request
         .metadata
         .items
@@ -1367,10 +1290,8 @@ fn authenticate_da_ingest_request(
             "metadata entry `da.registry.owner` is retired; pin ownership comes from the authenticated account",
         ));
     }
-
     Ok(principal.account.clone())
 }
-
 fn validate_request_shape(request: &DaIngestRequest) -> Result<(), (StatusCode, &'static str)> {
     if request.total_size == 0 {
         return Err((
@@ -1378,35 +1299,30 @@ fn validate_request_shape(request: &DaIngestRequest) -> Result<(), (StatusCode, 
             "total_size must contain at least one byte",
         ));
     }
-
     if request.total_size > MAX_CANONICAL_PAYLOAD_BYTES {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,
             "total_size exceeds the 64 MiB DA ingest limit",
         ));
     }
-
     if request.chunk_size == 0 || !request.chunk_size.is_power_of_two() {
         return Err((
             StatusCode::BAD_REQUEST,
             "chunk_size must be a non-zero power of two",
         ));
     }
-
     if request.chunk_size < MIN_CHUNK_SIZE_BYTES {
         return Err((
             StatusCode::BAD_REQUEST,
             "chunk_size is below the supported 1 KiB minimum",
         ));
     }
-
     if request.chunk_size > MAX_CHUNK_SIZE_BYTES {
         return Err((
             StatusCode::BAD_REQUEST,
             "chunk_size exceeds supported maximum (2 MiB)",
         ));
     }
-
     let profile = request.erasure_profile;
     if profile.data_shards == 0 {
         return Err((
@@ -1414,35 +1330,30 @@ fn validate_request_shape(request: &DaIngestRequest) -> Result<(), (StatusCode, 
             "erasure profile must include at least one data shard",
         ));
     }
-
     if profile.data_shards > MAX_DATA_SHARDS {
         return Err((
             StatusCode::BAD_REQUEST,
             "erasure profile exceeds the 64 data-shard limit",
         ));
     }
-
     if profile.parity_shards < 2 {
         return Err((
             StatusCode::BAD_REQUEST,
             "erasure profile requires at least 2 parity shards",
         ));
     }
-
     if profile.parity_shards > MAX_PARITY_SHARDS {
         return Err((
             StatusCode::BAD_REQUEST,
             "erasure profile exceeds the 64 parity-shard limit",
         ));
     }
-
     if profile.row_parity_stripes > MAX_ROW_PARITY_STRIPES {
         return Err((
             StatusCode::BAD_REQUEST,
             "erasure profile exceeds the 64 row-parity-stripe limit",
         ));
     }
-
     let chunk_size = u64::from(request.chunk_size);
     let data_chunk_count_u64 = request.total_size.div_ceil(chunk_size);
     let data_chunk_count = usize::try_from(data_chunk_count_u64).map_err(|_| {
@@ -1457,7 +1368,6 @@ fn validate_request_shape(request: &DaIngestRequest) -> Result<(), (StatusCode, 
             "DA manifest exceeds the 1024 source-chunk limit",
         ));
     }
-
     let stripes = data_chunk_count.div_ceil(usize::from(profile.data_shards));
     if profile.row_parity_stripes > 0 && stripes > MAX_ROW_PARITY_SOURCE_STRIPES {
         return Err((
@@ -1479,10 +1389,8 @@ fn validate_request_shape(request: &DaIngestRequest) -> Result<(), (StatusCode, 
         usize::from(profile.row_parity_stripes),
     )
     .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
-
     Ok(())
 }
-
 fn lane_proof_scheme(
     nexus: &ConfigNexus,
     lane_id: LaneId,
@@ -1500,7 +1408,6 @@ fn lane_proof_scheme(
             )
         })
 }
-
 fn manifest_fingerprint(
     manifest: &DaManifestV1,
 ) -> Result<ReplayFingerprint, (StatusCode, String)> {
@@ -1512,7 +1419,6 @@ fn manifest_fingerprint(
     })?;
     Ok(ReplayFingerprint::from_hash(blake3_hash(&encoded)))
 }
-
 #[allow(clippy::too_many_arguments)]
 fn build_receipt(
     signer: &KeyPair,
@@ -1556,7 +1462,6 @@ fn build_receipt(
         })?;
     Ok(receipt)
 }
-
 fn stripe_layout_from_manifest(manifest: &DaManifestV1) -> DaStripeLayout {
     DaStripeLayout {
         total_stripes: manifest.total_stripes,
@@ -1564,7 +1469,6 @@ fn stripe_layout_from_manifest(manifest: &DaManifestV1) -> DaStripeLayout {
         row_parity_stripes: manifest.erasure_profile.row_parity_stripes,
     }
 }
-
 fn manifest_stripe_layout_fields(
     chunk_count: usize,
     erasure_profile: &ErasureProfile,
@@ -1601,7 +1505,6 @@ fn manifest_stripe_layout_fields(
         })?;
     Ok((total_stripes_full, shards_per_stripe))
 }
-
 fn chunk_profile_for_request(chunk_size: u32) -> ChunkProfile {
     let size = usize::try_from(chunk_size.max(1)).unwrap_or(usize::MAX);
     ChunkProfile {
@@ -1611,7 +1514,6 @@ fn chunk_profile_for_request(chunk_size: u32) -> ChunkProfile {
         break_mask: 1,
     }
 }
-
 fn try_build_chunk_store(
     request: &DaIngestRequest,
     canonical_payload: &[u8],
@@ -1625,12 +1527,10 @@ fn try_build_chunk_store(
     })?;
     Ok(store)
 }
-
 #[cfg(test)]
 fn build_chunk_store(request: &DaIngestRequest, canonical_payload: &[u8]) -> ChunkStore {
     try_build_chunk_store(request, canonical_payload).expect("test DA payload must be ingestible")
 }
-
 fn encrypt_governance_metadata(
     metadata: &ExtraMetadata,
     key: Option<&[u8; 32]>,
@@ -1639,10 +1539,8 @@ fn encrypt_governance_metadata(
     if metadata.items.is_empty() {
         return Ok(metadata.clone());
     }
-
     let mut encryptor: Option<SymmetricEncryptor<ChaCha20Poly1305>> = None;
     let mut processed = Vec::with_capacity(metadata.items.len());
-
     for entry in &metadata.items {
         let mut entry = entry.clone();
         match entry.visibility {
@@ -1665,7 +1563,6 @@ fn encrypt_governance_metadata(
                     )
                 })?;
                 let expected_label = key_label;
-
                 if encryptor.is_none() {
                     let enc = SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(key_bytes)
                         .map_err(|err| {
@@ -1684,7 +1581,6 @@ fn encrypt_governance_metadata(
                         "Torii governance metadata encryptor was not initialised".into(),
                     ));
                 };
-
                 match entry.encryption {
                     MetadataEncryption::None => {
                         let ciphertext = encryptor
@@ -1727,7 +1623,6 @@ fn encrypt_governance_metadata(
                                 }
                             }
                         }
-
                         encryptor
                             .decrypt_easy(entry.key.as_bytes(), &entry.value)
                             .map_err(|_| {
@@ -1745,10 +1640,8 @@ fn encrypt_governance_metadata(
         }
         processed.push(entry);
     }
-
     Ok(ExtraMetadata { items: processed })
 }
-
 fn role_tag(role: ChunkRole) -> u8 {
     match role {
         ChunkRole::Data => 0,
@@ -1757,7 +1650,6 @@ fn role_tag(role: ChunkRole) -> u8 {
         ChunkRole::StripeParity => 3,
     }
 }
-
 fn effective_chunk_role(commitment: &ChunkCommitment) -> ChunkRole {
     if commitment.parity && matches!(commitment.role, ChunkRole::Data) {
         ChunkRole::GlobalParity
@@ -1765,7 +1657,6 @@ fn effective_chunk_role(commitment: &ChunkCommitment) -> ChunkRole {
         commitment.role
     }
 }
-
 #[cfg(feature = "ipa-commitment")]
 fn ipa_scalar_from_chunk(commitment: &ChunkCommitment) -> IpaScalar {
     let mut hasher = Blake3Hasher::new();
@@ -1779,7 +1670,6 @@ fn ipa_scalar_from_chunk(commitment: &ChunkCommitment) -> IpaScalar {
     hasher.finalize_xof().fill(&mut wide);
     IpaScalar::from_uniform(&wide)
 }
-
 #[cfg(feature = "ipa-commitment")]
 pub fn ipa_commitment_from_chunks(
     commitments: &[ChunkCommitment],
@@ -1807,7 +1697,6 @@ pub fn ipa_commitment_from_chunks(
     })?;
     Ok(BlobDigest::new(commitment.to_bytes()))
 }
-
 #[cfg(not(feature = "ipa-commitment"))]
 pub fn ipa_commitment_from_chunks(
     _commitments: &[ChunkCommitment],
@@ -1817,7 +1706,6 @@ pub fn ipa_commitment_from_chunks(
         "IPA commitments require the `ipa-commitment` feature".to_owned(),
     ))
 }
-
 #[cfg(any(feature = "ipa-commitment", test))]
 fn ipa_params_len_for_commitment_count(count: usize) -> Result<usize, (StatusCode, String)> {
     if count == 0 {
@@ -1830,7 +1718,6 @@ fn ipa_params_len_for_commitment_count(count: usize) -> Result<usize, (StatusCod
         )
     })
 }
-
 fn compute_pdp_commitment(
     manifest_digest: &BlobDigest,
     manifest: &DaManifestV1,
@@ -1853,7 +1740,6 @@ fn compute_pdp_commitment(
     )
     .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
 }
-
 #[derive(Debug)]
 /// Manifest data captured during DA ingest for downstream spool writers.
 pub(crate) struct ManifestArtifacts {
@@ -1867,7 +1753,6 @@ pub(crate) struct ManifestArtifacts {
     pub(super) rent_gib: u64,
     pub(super) rent_months: u32,
 }
-
 #[allow(clippy::too_many_arguments)]
 fn resolve_manifest(
     request: &DaIngestRequest,
@@ -1889,7 +1774,6 @@ fn resolve_manifest(
         None,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 fn resolve_manifest_with_observer(
     request: &DaIngestRequest,
@@ -1905,13 +1789,11 @@ fn resolve_manifest_with_observer(
     let chunk_root = BlobDigest::new(*chunk_store.por_tree().root());
     let (total_stripes_full, shards_per_stripe) =
         manifest_stripe_layout_fields(chunk_store.chunks().len(), &request.erasure_profile)?;
-
     let chunking_started = Instant::now();
     let chunk_commitments = build_chunk_commitments(request, chunk_store, canonical_payload)?;
     if let Some(observer) = chunking_observer {
         observer(chunking_started.elapsed());
     }
-
     let (rent_gib, rent_months) = rent_usage_from_request(request.total_size, enforced_retention)?;
     let rent_quote = rent_policy.quote(rent_gib, rent_months).map_err(|err| {
         (
@@ -1919,7 +1801,6 @@ fn resolve_manifest_with_observer(
             format!("failed to compute DA rent quote: {err}"),
         )
     })?;
-
     let manifest_template = if let Some(bytes) = &request.norito_manifest {
         let manifest = decode_from_bytes::<DaManifestV1>(bytes).map_err(|err| {
             warn!(?err, "failed to decode DA manifest");
@@ -1939,7 +1820,6 @@ fn resolve_manifest_with_observer(
                 "manifest ipa_commitment does not match computed value".into(),
             ));
         };
-
         verify_manifest_against_request(
             request,
             &manifest,
@@ -1950,7 +1830,6 @@ fn resolve_manifest_with_observer(
             chunk_root,
             &rent_quote,
         )?;
-
         DaManifestV1 {
             version: manifest.version,
             storage_ticket: StorageTicketId::default(),
@@ -1987,7 +1866,6 @@ fn resolve_manifest_with_observer(
             issued_at_unix: 0,
         }
     };
-
     let fingerprint = manifest_fingerprint(&manifest_template)?;
     let storage_ticket = StorageTicketId::new(*fingerprint.as_bytes());
     let manifest = DaManifestV1 {
@@ -1998,7 +1876,6 @@ fn resolve_manifest_with_observer(
     let encoded =
         to_bytes(&manifest).map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
     let manifest_hash = BlobDigest::from_hash(blake3_hash(&encoded));
-
     Ok(ManifestArtifacts {
         manifest,
         encoded,
@@ -2011,7 +1888,6 @@ fn resolve_manifest_with_observer(
         rent_months,
     })
 }
-
 fn build_da_commitment_record(
     request: &DaIngestRequest,
     manifest: &ManifestArtifacts,
@@ -2037,7 +1913,6 @@ fn build_da_commitment_record(
         operator_signature.clone(),
     )
 }
-
 fn record_da_rent_quote_metrics(
     telemetry: &MaybeTelemetry,
     cluster_label: &str,
@@ -2056,7 +1931,6 @@ fn record_da_rent_quote_metrics(
         handle.record_da_rent_quote(cluster_label, storage_label, gib_months, rent_quote);
     });
 }
-
 fn record_da_chunking_metrics(telemetry: &MaybeTelemetry, elapsed: Duration) {
     if !telemetry.is_enabled() {
         return;
@@ -2065,7 +1939,6 @@ fn record_da_chunking_metrics(telemetry: &MaybeTelemetry, elapsed: Duration) {
         handle.observe_da_chunking_seconds(elapsed.as_secs_f64());
     });
 }
-
 fn record_da_receipt_metrics(
     telemetry: &MaybeTelemetry,
     lane_epoch: LaneEpoch,
@@ -2096,7 +1969,6 @@ fn record_da_receipt_metrics(
         );
     });
 }
-
 fn record_da_receipt_error_metrics(
     telemetry: &MaybeTelemetry,
     lane_epoch: LaneEpoch,
@@ -2115,7 +1987,6 @@ fn record_da_receipt_error_metrics(
         );
     });
 }
-
 async fn flush_da_spool_batch(app: &crate::AppState, batch: DaSpoolBatch) -> DaSpoolBatchReport {
     if let Some(spooler) = app.da_spooler.as_ref() {
         spooler.submit(batch).await
@@ -2123,7 +1994,6 @@ async fn flush_da_spool_batch(app: &crate::AppState, batch: DaSpoolBatch) -> DaS
         batch.execute_sync()
     }
 }
-
 fn log_da_spool_failures(report: &DaSpoolBatchReport) {
     for action in report.actions() {
         if let Some(error) = action.error() {
@@ -2136,7 +2006,6 @@ fn log_da_spool_failures(report: &DaSpoolBatchReport) {
         }
     }
 }
-
 fn da_spool_rejection_response(
     report: &DaSpoolBatchReport,
     format: ResponseFormat,
@@ -2151,7 +2020,6 @@ fn da_spool_rejection_response(
             ));
         }
     }
-
     let mut saw_receipt_log = false;
     for action in report.actions() {
         let Some(DaSpoolActionOutput::ReceiptOutcome(outcome)) = action.output() else {
@@ -2198,7 +2066,6 @@ fn da_spool_rejection_response(
             }
         }
     }
-
     if !saw_receipt_log {
         return Some(build_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -2206,24 +2073,20 @@ fn da_spool_rejection_response(
             format,
         ));
     }
-
     None
 }
-
 fn spool_report_action_ok(report: &DaSpoolBatchReport, kind: &'static str) -> bool {
     report
         .actions()
         .iter()
         .any(|action| action.kind() == kind && action.error().is_none())
 }
-
 fn da_metadata_error(key: &str, message: impl Into<String>) -> (StatusCode, String) {
     (
         StatusCode::BAD_REQUEST,
         format!("invalid DA metadata `{key}`: {}", message.into()),
     )
 }
-
 fn validate_public_metadata_entry(
     entry: &MetadataEntry,
     key: &str,
@@ -2236,7 +2099,6 @@ fn validate_public_metadata_entry(
     }
     Ok(())
 }
-
 fn registry_alias_from_metadata(
     metadata: &ExtraMetadata,
 ) -> Result<Option<String>, (StatusCode, String)> {
@@ -2259,7 +2121,6 @@ fn registry_alias_from_metadata(
     }
     Ok(Some(value.to_owned()))
 }
-
 #[allow(clippy::too_many_arguments)]
 fn verify_manifest_against_request(
     request: &DaIngestRequest,
@@ -2347,12 +2208,10 @@ fn verify_manifest_against_request(
             "manifest chunk count does not match chunker output".into(),
         ));
     }
-
     if manifest.blob_class == BlobClass::TaikaiSegment {
         taikai::validate_taikai_cache_hint(expected_metadata, &blob_hash, manifest.total_size)?;
         taikai::validate_da_proof_tier(expected_metadata, manifest.retention_policy.storage_class)?;
     }
-
     for (expected, actual) in computed_chunks.iter().zip(manifest.chunks.iter()) {
         if expected.index != actual.index
             || expected.offset != actual.offset
@@ -2386,16 +2245,13 @@ fn verify_manifest_against_request(
             ));
         }
     }
-
     Ok(())
 }
-
 fn build_error_response(status: StatusCode, message: &str, format: ResponseFormat) -> Response {
     let payload =
         iroha_torii_shared::ErrorEnvelope::new(error_code_for_status(status), message.to_owned());
     utils::respond_with_status_and_format(status, payload, format)
 }
-
 fn error_code_for_status(status: StatusCode) -> &'static str {
     match status {
         StatusCode::BAD_REQUEST => "bad_request",
@@ -2412,7 +2268,6 @@ fn error_code_for_status(status: StatusCode) -> &'static str {
         _ => "error",
     }
 }
-
 fn ceil_div_u64(value: u64, divisor: u64) -> u64 {
     if divisor == 0 {
         return 0;
@@ -2422,7 +2277,6 @@ fn ceil_div_u64(value: u64, divisor: u64) -> u64 {
     }
     value.div_ceil(divisor)
 }
-
 fn rent_usage_from_request(
     total_size: u64,
     retention: &RetentionPolicy,
@@ -2442,19 +2296,16 @@ fn rent_usage_from_request(
     })?;
     Ok((gib, months_u32))
 }
-
 fn with_status(mut response: Response, status: StatusCode) -> Response {
     *response.status_mut() = status;
     response
 }
-
 #[derive(JsonSerialize, norito::derive::NoritoSerialize)]
 struct DaIngestResponse {
     status: &'static str,
     duplicate: bool,
     receipt: Option<DaIngestReceipt>,
 }
-
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

@@ -1,10 +1,7 @@
 //! Telemetry accumulation helpers for SoraFS storage providers.
-
-use std::cmp::min;
-
 use sorafs_manifest::capacity::CapacityTelemetryV1;
+use std::cmp::min;
 use thiserror::Error;
-
 /// Tracks per-epoch telemetry metrics before emitting a [`CapacityTelemetryV1`] payload.
 #[derive(Debug, Clone)]
 pub struct TelemetryAccumulator {
@@ -21,7 +18,6 @@ pub struct TelemetryAccumulator {
     failed_replications: u32,
     notes: Option<String>,
 }
-
 impl TelemetryAccumulator {
     /// Construct a new telemetry accumulator for the given provider and epoch window.
     #[must_use]
@@ -41,12 +37,10 @@ impl TelemetryAccumulator {
             notes: None,
         }
     }
-
     /// Update the declared capacity to reflect governance changes.
     pub fn set_declared_capacity(&mut self, declared_capacity_gib: u64) {
         self.declared_capacity_gib = declared_capacity_gib;
     }
-
     /// Advance the window end epoch. Must be greater than the start epoch.
     pub fn set_window_end_epoch(&mut self, epoch: u64) -> Result<(), TelemetryError> {
         if epoch <= self.window_start_epoch {
@@ -58,7 +52,6 @@ impl TelemetryAccumulator {
         self.window_end_epoch = epoch;
         Ok(())
     }
-
     /// Record an utilisation sample covering `duration_secs` at `utilised_gib`.
     pub fn record_utilisation(
         &mut self,
@@ -77,7 +70,6 @@ impl TelemetryAccumulator {
             .ok_or(TelemetryError::UtilisationOverflow)?;
         Ok(())
     }
-
     /// Record uptime for the given observation window.
     pub fn record_uptime_sample(
         &mut self,
@@ -100,7 +92,6 @@ impl TelemetryAccumulator {
             .ok_or(TelemetryError::UptimeOverflow)?;
         Ok(())
     }
-
     /// Record a proof-of-retrievability sample outcome.
     pub fn record_por_sample(&mut self, success: bool) {
         self.por_total = self.por_total.saturating_add(1);
@@ -108,22 +99,18 @@ impl TelemetryAccumulator {
             self.por_successes = self.por_successes.saturating_add(1);
         }
     }
-
     /// Record a successful replication order completion.
     pub fn record_replication_success(&mut self) {
         self.successful_replications = self.successful_replications.saturating_add(1);
     }
-
     /// Record a failed replication order outcome.
     pub fn record_replication_failure(&mut self) {
         self.failed_replications = self.failed_replications.saturating_add(1);
     }
-
     /// Attach optional telemetry notes that will be emitted with the payload.
     pub fn set_notes<S: Into<String>>(&mut self, notes: Option<S>) {
         self.notes = notes.map(Into::into);
     }
-
     /// Build the canonical `CapacityTelemetryV1` payload for the current window.
     pub fn build_payload(&self) -> Result<CapacityTelemetryV1, TelemetryError> {
         let window_duration = self
@@ -136,13 +123,11 @@ impl TelemetryAccumulator {
         if window_duration == 0 {
             return Err(TelemetryError::ZeroWindowDuration);
         }
-
         let avg_utilised = self
             .utilised_gib_seconds
             .checked_div(window_duration as u128)
             .ok_or(TelemetryError::UtilisationOverflow)?;
         let utilised_capacity_gib = min(self.declared_capacity_gib, avg_utilised as u64);
-
         let uptime_percent_milli = if self.uptime_observed_seconds == 0 {
             100_000_u32
         } else {
@@ -150,14 +135,12 @@ impl TelemetryAccumulator {
                 self.uptime_seconds.saturating_mul(100_000) / self.uptime_observed_seconds.max(1);
             min(100_000_u64, ratio) as u32
         };
-
         let por_success_percent_milli = if self.por_total == 0 {
             100_000_u32
         } else {
             let ratio = self.por_successes.saturating_mul(100_000) / self.por_total.max(1);
             min(100_000_u32, ratio)
         };
-
         let mut telemetry = CapacityTelemetryV1 {
             version: sorafs_manifest::capacity::CAPACITY_TELEMETRY_VERSION_V1,
             provider_id: self.provider_id,
@@ -180,7 +163,6 @@ impl TelemetryAccumulator {
         Ok(telemetry)
     }
 }
-
 /// Errors surfaced while accumulating telemetry.
 #[derive(Debug, Error)]
 pub enum TelemetryError {
@@ -216,18 +198,15 @@ pub enum TelemetryError {
     #[error("telemetry payload validation failed: {0}")]
     TelemetryValidationFailed(sorafs_manifest::capacity::CapacityTelemetryValidationError),
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn sample_accumulator() -> TelemetryAccumulator {
         let mut acc = TelemetryAccumulator::new([0xAB; 32], 500, 1_700_000_000);
         acc.set_window_end_epoch(1_700_000_600)
             .expect("valid window");
         acc
     }
-
     #[test]
     fn build_payload_clamps_utilisation_to_declared_capacity() {
         let mut acc = sample_accumulator();
@@ -240,7 +219,6 @@ mod tests {
             "utilised GiB should not exceed declared capacity"
         );
     }
-
     #[test]
     fn record_uptime_sample_rejects_invalid_inputs() {
         let mut acc = sample_accumulator();
@@ -249,32 +227,27 @@ mod tests {
             zero_err,
             TelemetryError::InvalidUptimeSample { .. }
         ));
-
         let overflow_err = acc.record_uptime_sample(10, 5).unwrap_err();
         assert!(matches!(
             overflow_err,
             TelemetryError::InvalidUptimeSample { .. }
         ));
     }
-
     #[test]
     fn utilisation_accumulates_gib_seconds() {
         let mut acc = sample_accumulator();
         acc.record_utilisation(200, 300).expect("first sample");
         acc.record_utilisation(100, 150).expect("second sample");
-
         let payload = acc.build_payload().expect("payload");
         // (200 * 300 + 100 * 150) / 600 seconds = 125 GiB average
         assert_eq!(payload.utilised_capacity_gib, 125);
     }
-
     #[test]
     fn window_end_epoch_must_exceed_start() {
         let mut acc = TelemetryAccumulator::new([0u8; 32], 128, 42);
         let err = acc.set_window_end_epoch(42).unwrap_err();
         assert!(matches!(err, TelemetryError::InvalidWindow { .. }));
     }
-
     #[test]
     fn por_and_replication_counters_increment() {
         let mut acc = sample_accumulator();
@@ -282,7 +255,6 @@ mod tests {
         acc.record_por_sample(false);
         acc.record_replication_success();
         acc.record_replication_failure();
-
         acc.record_uptime_sample(540, 600).expect("uptime sample");
         let payload = acc.build_payload().expect("payload");
         assert_eq!(payload.successful_replications, 1);
@@ -290,7 +262,6 @@ mod tests {
         assert_eq!(payload.por_success_percent_milli, 50_000);
         assert_eq!(payload.uptime_percent_milli, 90_000);
     }
-
     #[test]
     fn aggregates_basic_metrics() {
         let provider = [0xAA; 32];
@@ -303,7 +274,6 @@ mod tests {
         acc.record_replication_success();
         acc.record_replication_failure();
         acc.set_notes(Some("window-ok"));
-
         let payload = acc.build_payload().expect("payload");
         assert_eq!(payload.provider_id, provider);
         assert_eq!(payload.declared_capacity_gib, 512);
@@ -314,7 +284,6 @@ mod tests {
         assert_eq!(payload.por_success_percent_milli, 50_000);
         assert_eq!(payload.notes.as_deref(), Some("window-ok"));
     }
-
     #[test]
     fn uptime_defaults_to_full_when_missing() {
         let mut acc = TelemetryAccumulator::new([0xAB; 32], 128, 10);
@@ -323,7 +292,6 @@ mod tests {
         assert_eq!(payload.uptime_percent_milli, 100_000);
         assert_eq!(payload.por_success_percent_milli, 100_000);
     }
-
     #[test]
     fn rejects_invalid_window() {
         let mut acc = TelemetryAccumulator::new([0; 32], 128, 42);

@@ -1,5 +1,4 @@
 use ivm::{IVM, Instruction, Memory, VMError};
-
 #[test]
 fn execute_add_sub() {
     let mut vm = IVM::new(u64::MAX);
@@ -21,7 +20,6 @@ fn execute_add_sub() {
     .unwrap();
     assert_eq!(vm.register(5), 5);
 }
-
 #[test]
 fn execute_r0_operand() {
     let mut vm = IVM::new(u64::MAX);
@@ -34,7 +32,6 @@ fn execute_r0_operand() {
     .unwrap();
     assert_eq!(vm.register(1), 42);
 }
-
 #[test]
 fn privacy_violation() {
     let mut vm = IVM::new(u64::MAX);
@@ -50,7 +47,6 @@ fn privacy_violation() {
     });
     assert!(matches!(res, Err(VMError::PrivacyViolation)));
 }
-
 #[test]
 fn load_store() {
     let mut vm = IVM::new(u64::MAX);
@@ -74,7 +70,6 @@ fn load_store() {
     .unwrap();
     assert_eq!(vm.memory.load_u64(addr + 8).unwrap(), 0x1234_5678_9abc_def0);
 }
-
 #[test]
 fn out_of_gas() {
     let mut vm = IVM::new(0); // no gas

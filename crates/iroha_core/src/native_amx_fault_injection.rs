@@ -5,35 +5,29 @@
 //! names one exact Native AMX source and phase; the hook durably acknowledges
 //! that the phase was crossed and then aborts the process. The acknowledgement
 //! makes the command one-shot across restart.
-
-use std::{
-    fs,
-    fs::{File, OpenOptions},
-    io::{Read, Write},
-    path::Path,
-};
-
+#[cfg(test)]
+use norito::json::Map;
+use norito::json::Value;
 #[cfg(feature = "test-network-native-amx-fault-injection")]
 use std::{
     env,
     path::PathBuf,
     sync::{Mutex, OnceLock},
 };
-
-#[cfg(test)]
-use norito::json::Map;
-use norito::json::Value;
-
+use std::{
+    fs,
+    fs::{File, OpenOptions},
+    io::{Read, Write},
+    path::Path,
+};
 #[cfg(feature = "test-network-native-amx-fault-injection")]
 const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_DIR";
 const COMMAND_FILE: &str = "native-amx-fault-command.norito.json";
 const ACK_FILE: &str = "native-amx-fault-ack.norito.json";
 const FORMAT_VERSION: u64 = 1;
 const MAX_FILE_BYTES: usize = 4 * 1024;
-
 #[cfg(feature = "test-network-native-amx-fault-injection")]
 static HOOK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
 /// Exact Native AMX phase at which the adversarial-test daemon aborts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NativeAmxFaultPhase {
@@ -44,13 +38,11 @@ pub(crate) enum NativeAmxFaultPhase {
     /// The complete result-bearing block overlay exists immediately before WSV publication.
     BeforeWorldCommit,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FaultCommand {
     phase: NativeAmxFaultPhase,
     source_id: [u8; 32],
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Evaluation {
     NoCommand,
@@ -58,7 +50,6 @@ enum Evaluation {
     AlreadyAcknowledged,
     Triggered,
 }
-
 /// Abort the feature-isolated daemon after durably acknowledging an exact cut.
 #[cfg(feature = "test-network-native-amx-fault-injection")]
 pub(crate) fn maybe_abort(phase: NativeAmxFaultPhase, source_id: [u8; 32]) {
@@ -84,7 +75,6 @@ pub(crate) fn maybe_abort(phase: NativeAmxFaultPhase, source_id: [u8; 32]) {
         }
     }
 }
-
 fn evaluate_and_acknowledge(
     root: &Path,
     phase: NativeAmxFaultPhase,
@@ -118,7 +108,6 @@ fn evaluate_and_acknowledge(
     }
     Ok(Evaluation::Triggered)
 }
-
 fn parse_command(bytes: &[u8]) -> Result<FaultCommand, String> {
     if bytes.is_empty() || bytes.len() > MAX_FILE_BYTES {
         return Err("command size is outside the bounded range".to_owned());
@@ -169,7 +158,6 @@ fn parse_command(bytes: &[u8]) -> Result<FaultCommand, String> {
         .map_err(|_| "source_id length changed while decoding".to_owned())?;
     Ok(FaultCommand { phase, source_id })
 }
-
 fn validate_private_root(root: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(root).map_err(|error| error.to_string())?;
     if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
@@ -184,7 +172,6 @@ fn validate_private_root(root: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn read_bounded_regular_file(path: &Path) -> std::io::Result<Vec<u8>> {
     let before = fs::symlink_metadata(path)?;
     if !before.file_type().is_file() || before.file_type().is_symlink() {
@@ -216,7 +203,6 @@ fn read_bounded_regular_file(path: &Path) -> std::io::Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-
 fn write_atomic_private_file(root: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
     let temporary = root.join(format!(".{name}.tmp-{}", std::process::id()));
     let target = root.join(name);
@@ -244,11 +230,9 @@ fn write_atomic_private_file(root: &Path, name: &str, bytes: &[u8]) -> Result<()
         .map_err(|error| error.to_string())?;
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn command(revision: u64, phase: NativeAmxFaultPhase, source_id: [u8; 32]) -> Vec<u8> {
         let phase = match phase {
             NativeAmxFaultPhase::AfterPrepareQc => "after_prepare_qc",
@@ -264,7 +248,6 @@ mod tests {
             .expect("encode command")
             .into_bytes()
     }
-
     #[test]
     fn exact_phase_and_source_trigger_once() {
         let root = tempfile::tempdir().expect("temporary root");
@@ -277,7 +260,6 @@ mod tests {
         let source_id = [0xA5; 32];
         let bytes = command(1, NativeAmxFaultPhase::AfterCommitQc, source_id);
         fs::write(root.path().join(COMMAND_FILE), &bytes).expect("write command");
-
         assert_eq!(
             evaluate_and_acknowledge(root.path(), NativeAmxFaultPhase::AfterPrepareQc, source_id)
                 .expect("phase mismatch is valid"),
@@ -303,12 +285,10 @@ mod tests {
             bytes
         );
     }
-
     #[test]
     fn parser_rejects_unknown_fields_and_noncanonical_source() {
         let valid = command(1, NativeAmxFaultPhase::BeforeWorldCommit, [7; 32]);
         assert!(parse_command(&valid).is_ok());
-
         let mut value: Value = norito::json::from_slice(&valid).expect("parse valid command");
         value
             .as_object_mut()
@@ -316,7 +296,6 @@ mod tests {
             .insert("extra".to_owned(), Value::from(true));
         let unknown = norito::json::to_json(&value).expect("encode unknown field");
         assert!(parse_command(unknown.as_bytes()).is_err());
-
         value
             .as_object_mut()
             .expect("command object")

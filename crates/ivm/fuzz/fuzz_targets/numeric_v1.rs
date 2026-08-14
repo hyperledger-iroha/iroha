@@ -1,5 +1,4 @@
 #![no_main]
-
 use iroha_primitives::{
     bigint::BigInt,
     numeric::{Numeric, NumericOperationError, Quantity, RoundingMode},
@@ -14,12 +13,10 @@ use ivm::{
     syscalls,
 };
 use libfuzzer_sys::fuzz_target;
-
 fuzz_target!(|data: &[u8]| {
     let Some((&mode, payload)) = data.split_first() else {
         return;
     };
-
     match mode {
         b'I' => fuzz_valid_int(payload),
         b'D' => fuzz_valid_decimal(payload),
@@ -40,7 +37,6 @@ fuzz_target!(|data: &[u8]| {
         },
     }
 });
-
 fn fuzz_envelope(envelope: &[u8]) {
     // Feed the complete attacker-controlled slice. Truncating it at the
     // largest valid envelope size would turn an oversized/trailing-data input
@@ -52,20 +48,17 @@ fn fuzz_envelope(envelope: &[u8]) {
         assert!(numeric_tlv::decode_quantity_bytes(envelope).is_err());
         return;
     }
-
     if let Ok(value) = numeric_tlv::decode_int_bytes(envelope) {
         let canonical = numeric_tlv::encode_int(&value).expect("decoded int must re-encode");
         assert_eq!(canonical, envelope);
         assert_eq!(numeric_tlv::decode_int_bytes(&canonical), Ok(value));
     }
-
     if let Ok(value) = numeric_tlv::decode_decimal_bytes(envelope) {
         let canonical =
             numeric_tlv::encode_decimal(&value).expect("decoded decimal must re-encode");
         assert_eq!(canonical, envelope);
         assert_eq!(numeric_tlv::decode_decimal_bytes(&canonical), Ok(value));
     }
-
     if let Ok(value) = numeric_tlv::decode_quantity_bytes(envelope) {
         let canonical =
             numeric_tlv::encode_quantity(&value).expect("decoded quantity must re-encode");
@@ -73,7 +66,6 @@ fn fuzz_envelope(envelope: &[u8]) {
         assert_eq!(numeric_tlv::decode_quantity_bytes(&canonical), Ok(value));
     }
 }
-
 fn fuzz_int_frame(frame: &[u8]) {
     if let Ok(value) = IntValueV1::decode_frame(frame) {
         assert_eq!(
@@ -82,7 +74,6 @@ fn fuzz_int_frame(frame: &[u8]) {
         );
     }
 }
-
 fn fuzz_decimal_frame(frame: &[u8]) {
     if let Ok(value) = DecimalValueV1::decode_frame(frame) {
         assert_eq!(
@@ -93,7 +84,6 @@ fn fuzz_decimal_frame(frame: &[u8]) {
         );
     }
 }
-
 fn fuzz_quantity_frame(frame: &[u8]) {
     if let Ok(value) = QuantityValueV1::decode_frame(frame) {
         assert_eq!(
@@ -104,14 +94,12 @@ fn fuzz_quantity_frame(frame: &[u8]) {
         );
     }
 }
-
 fn bounded_mantissa(payload: &[u8]) -> BigInt {
     // Every 64-byte two's-complement value is inside the signed 512-bit
     // language domain, including both endpoints and every logical limb width.
     BigInt::from_twos_bytes(&payload[..payload.len().min(64)])
         .expect("the bounded byte slice always fits the primitive bigint")
 }
-
 fn fuzz_valid_int(payload: &[u8]) {
     let value = bounded_mantissa(payload);
     let frame = IntValueV1::try_new(value.clone())
@@ -122,12 +110,10 @@ fn fuzz_valid_int(payload: &[u8]) {
         IntValueV1::decode_frame(&frame).map(IntValueV1::into_int),
         Ok(value.clone())
     );
-
     let envelope = numeric_tlv::encode_int(&value).expect("valid int envelope encodes");
     assert_eq!(numeric_tlv::decode_int_bytes(&envelope), Ok(value));
     exercise_envelope_corruptions(&envelope);
 }
-
 fn valid_decimal(payload: &[u8]) -> Numeric {
     let scale = payload.first().map_or(0, |byte| u32::from(*byte % 29));
     Numeric::try_new(
@@ -138,7 +124,6 @@ fn valid_decimal(payload: &[u8]) -> Numeric {
     .canonicalize_decimal()
     .expect("bounded decimal canonicalizes")
 }
-
 fn fuzz_valid_decimal(payload: &[u8]) {
     let value = valid_decimal(payload);
     let frame = DecimalValueV1::from_canonical_numeric(value.clone())
@@ -149,12 +134,10 @@ fn fuzz_valid_decimal(payload: &[u8]) {
         DecimalValueV1::decode_frame(&frame).map(DecimalValueV1::into_numeric),
         Ok(value.clone())
     );
-
     let envelope = numeric_tlv::encode_decimal(&value).expect("valid decimal envelope encodes");
     assert_eq!(numeric_tlv::decode_decimal_bytes(&envelope), Ok(value));
     exercise_envelope_corruptions(&envelope);
 }
-
 fn valid_quantity(payload: &[u8]) -> Quantity {
     let decimal = valid_decimal(payload);
     let non_negative = if decimal.mantissa().is_negative() {
@@ -177,7 +160,6 @@ fn valid_quantity(payload: &[u8]) -> Quantity {
     Quantity::from_canonical_numeric(non_negative)
         .expect("non-negative canonical decimal is a quantity")
 }
-
 fn fuzz_valid_quantity(payload: &[u8]) {
     let value = valid_quantity(payload);
     let frame = QuantityValueV1::new(value.clone())
@@ -187,35 +169,28 @@ fn fuzz_valid_quantity(payload: &[u8]) {
         QuantityValueV1::decode_frame(&frame).map(QuantityValueV1::into_quantity),
         Ok(value.clone())
     );
-
     let envelope = numeric_tlv::encode_quantity(&value).expect("valid quantity envelope encodes");
     assert_eq!(numeric_tlv::decode_quantity_bytes(&envelope), Ok(value));
     exercise_envelope_corruptions(&envelope);
 }
-
 fn exercise_envelope_corruptions(envelope: &[u8]) {
     let mut truncated = envelope.to_vec();
     truncated.pop();
     fuzz_envelope(&truncated);
-
     let mut trailing = envelope.to_vec();
     trailing.push(0xa5);
     fuzz_envelope(&trailing);
-
     let mut oversized = envelope.to_vec();
     oversized[3..7].copy_from_slice(&u32::MAX.to_be_bytes());
     fuzz_envelope(&oversized);
-
     let mut wrong_version = envelope.to_vec();
     wrong_version[2] = wrong_version[2].wrapping_add(1);
     fuzz_envelope(&wrong_version);
-
     let mut corrupted_payload = envelope.to_vec();
     let payload_index = 7 + (envelope.len().saturating_sub(39) / 2);
     corrupted_payload[payload_index] ^= 0x80;
     fuzz_envelope(&corrupted_payload);
 }
-
 fn split_payload(payload: &[u8]) -> (&[u8], &[u8]) {
     let Some((&selector, remaining)) = payload.split_first() else {
         return (&[], &[]);
@@ -223,12 +198,10 @@ fn split_payload(payload: &[u8]) -> (&[u8], &[u8]) {
     let split = usize::from(selector) % (remaining.len() + 1);
     remaining.split_at(split)
 }
-
 fn fuzz_decimal_arithmetic(payload: &[u8]) {
     let (lhs_payload, rhs_payload) = split_payload(payload);
     let lhs = valid_decimal(lhs_payload);
     let rhs = valid_decimal(rhs_payload);
-
     assert_eq!(
         lhs.try_decimal_add(&rhs),
         rhs.try_decimal_add(&lhs),
@@ -243,7 +216,6 @@ fn fuzz_decimal_arithmetic(payload: &[u8]) {
         assert_eq!(sum.try_decimal_sub(&rhs), Ok(lhs.clone()));
         assert_eq!(sum.try_decimal_sub(&lhs), Ok(rhs.clone()));
     }
-
     if rhs.is_zero() {
         assert_eq!(
             lhs.try_decimal_div_exact(&rhs),
@@ -252,7 +224,6 @@ fn fuzz_decimal_arithmetic(payload: &[u8]) {
     } else if let Ok(quotient) = lhs.try_decimal_div_exact(&rhs) {
         assert_eq!(quotient.try_decimal_mul(&rhs), Ok(lhs.clone()));
     }
-
     let output_scale = payload.first().map_or(0, |byte| u32::from(*byte % 29));
     let rounding_modes = [
         RoundingMode::TowardZero,
@@ -274,7 +245,6 @@ fn fuzz_decimal_arithmetic(payload: &[u8]) {
         assert!(quantized.scale() <= output_scale.min(lhs.scale()));
         assert_eq!(quantized.canonicalize_decimal(), Ok(quantized));
     }
-
     let lhs_quantity = valid_quantity(lhs_payload);
     let rhs_quantity = valid_quantity(rhs_payload);
     assert_eq!(
@@ -285,14 +255,12 @@ fn fuzz_decimal_arithmetic(payload: &[u8]) {
         assert_eq!(sum.try_sub(&rhs_quantity), Ok(lhs_quantity));
     }
 }
-
 fn numeric_program(syscall: u32) -> Vec<u8> {
     let mut program = ProgramMetadata::default_for(1, 0, 1).encode();
     program.extend_from_slice(&encoding::wide::encode_syscallx(syscall).to_le_bytes());
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     program
 }
-
 fn wrapping_add_vm(lhs: &BigInt, rhs: &BigInt, gas: u64) -> (IVM, u64) {
     let syscall = syscalls::SYSCALL_INT_WRAP_ADD;
     let mut vm = IVM::new(gas);
@@ -310,7 +278,6 @@ fn wrapping_add_vm(lhs: &BigInt, rhs: &BigInt, gas: u64) -> (IVM, u64) {
     vm.set_register(14, NUMERIC_FAILURE_TRAP);
     (vm, lhs_pointer)
 }
-
 fn result_int(vm: &IVM) -> BigInt {
     IntValueV1::decode_frame(
         vm.validate_tlv(vm.register(10))
@@ -320,17 +287,14 @@ fn result_int(vm: &IVM) -> BigInt {
     .expect("successful numeric result frame")
     .into_int()
 }
-
 fn fuzz_staged_out_of_gas(payload: &[u8]) {
     let (lhs_payload, rhs_payload) = split_payload(payload);
     let lhs = bounded_mantissa(lhs_payload);
     let rhs = bounded_mantissa(rhs_payload);
-
     let (mut baseline, _) = wrapping_add_vm(&lhs, &rhs, u64::MAX);
     baseline.run().expect("wrapping addition is total");
     let baseline_used = u64::MAX - baseline.remaining_gas();
     let baseline_result = result_int(&baseline);
-
     let mut budget_bytes = [0_u8; 8];
     let copied = payload.len().min(budget_bytes.len());
     budget_bytes[..copied].copy_from_slice(&payload[..copied]);
@@ -341,14 +305,12 @@ fn fuzz_staged_out_of_gas(payload: &[u8]) {
     let (mut candidate, original_result_pointer) = wrapping_add_vm(&lhs, &rhs, budget);
     let outcome = candidate.run();
     let consumed = budget - candidate.remaining_gas();
-
     if budget >= baseline_used {
         assert_eq!(outcome, Ok(()));
         assert_eq!(consumed, baseline_used);
         assert_eq!(result_int(&candidate), baseline_result);
         return;
     }
-
     match outcome {
         Err(VMError::SyscallOutOfGas { syscall, .. }) => {
             assert_eq!(syscall, syscalls::SYSCALL_INT_WRAP_ADD);

@@ -151,6 +151,20 @@ public struct AccountAddress {
         let header = try AddressHeader.decode(bytes[0])
         let (controller, cursor) = try ControllerPayload.decode(bytes: bytes, cursor: 1)
         guard cursor == bytes.count else { throw AccountAddressError.unexpectedTrailingBytes }
+        let canonicalHeader = try AddressHeader.new(
+            version: 0,
+            classId: controller.addressClass,
+            normVersion: 1
+        )
+        guard header.version == canonicalHeader.version else {
+            throw AccountAddressError.invalidHeaderVersion(header.version)
+        }
+        guard header.normVersion == canonicalHeader.normVersion else {
+            throw AccountAddressError.invalidNormVersion(header.normVersion)
+        }
+        guard header.classId.rawValue == canonicalHeader.classId.rawValue else {
+            throw AccountAddressError.unsupportedAddressFormat
+        }
         return AccountAddress(
             header: header,
             domain: .default,
@@ -494,6 +508,15 @@ private enum DomainSelector {
 private enum ControllerPayload {
     case singleKey(curve: CurveId, publicKey: Data)
     case multiSig(version: UInt8, threshold: UInt16, members: [MultisigMember])
+
+    var addressClass: AddressClass {
+        switch self {
+        case .singleKey:
+            return .singleKey
+        case .multiSig:
+            return .multiSig
+        }
+    }
 
     struct MultisigMember {
         let curve: CurveId

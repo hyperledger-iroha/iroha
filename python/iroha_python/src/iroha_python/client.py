@@ -45,8 +45,6 @@ from blake3 import blake3
 from iroha_torii_client.client import (
     ConfidentialGasSchedule,
     ConfigurationSnapshot,
-    SorafsOrderbookSubmissionAmbiguousError, SorafsOrderbookSubmissionIdentity,
-    SorafsOrderbookSubmissionReceipt, SorafsOrderbookSubmissionReceiptPayload,
     MultisigResponse,
     NetworkTimeRttBucket,
     NetworkTimeSample,
@@ -118,6 +116,10 @@ from iroha_torii_client.client import (
     OfflineVerifierStatus,
     OfflineVerifyingKeyJson,
     OfflineVerifyingKeyRecordJson,
+    SorafsOrderbookSubmissionAmbiguousError,
+    SorafsOrderbookSubmissionIdentity,
+    SorafsOrderbookSubmissionReceipt,
+    SorafsOrderbookSubmissionReceiptPayload,
     StreamingSoranetConfig,
     StreamingTransportConfig,
     SubscriptionActionResult,
@@ -200,6 +202,7 @@ from .connect import (
     _connect_session_info_from_response,
     _normalize_connect_session_request,
 )
+from .connect_transport import prepare_connect_websocket_request
 from .connect_models import (
     ConnectAdmissionManifest,
     ConnectAdmissionManifestEntry,
@@ -254,11 +257,41 @@ from .torii_client_governance_ballots import (
     bind_governance_ballot_network_id,
     create_torii_client_governance_ballot_mixin,
 )
-from .torii_client_streaming_query import create_torii_client_streaming_query_mixin
+from .torii_client_iso20022 import (
+    OperatorSigningContext,
+    ToriiClientIsoOperatorContextMixin,
+    get_iso_message_status as _get_iso_message_status,
+    is_iso_status_terminal as _is_iso_status_terminal,
+    normalize_iso_optional_string as _normalize_iso_optional_string,
+    normalize_iso_status as _normalize_iso_status,
+    normalize_iso_string_array as _normalize_iso_string_array,
+    normalize_iso_wait_kwargs as _normalize_iso_wait_kwargs,
+    normalize_pacs002_code as _normalize_pacs002_code,
+)
 from .torii_client_runtime_auth import (
     _validate_client_data_model,
     create_torii_client_runtime_auth_mixin,
 )
+from .torii_client_expensive_query_auth import ToriiClientExpensiveQueryAuthMixin
+from .torii_client_explorer_pagination import (
+    _normalize_explorer_cursor,
+    _normalize_explorer_limit,
+)
+from .torii_client_pipeline_status import (
+    _extract_pipeline_status_kind,
+    _normalize_transaction_status_scope,
+)
+from .torii_client_config_normalization import (
+    _coerce_duration_seconds,
+    _coerce_float,
+    _coerce_int,
+    _coerce_timeout_seconds,
+    _normalize_headers,
+    _parse_retry_methods,
+    _parse_retry_statuses,
+)
+from .torii_client_space_directory import create_torii_client_space_directory_mixin
+from .torii_client_streaming_query import create_torii_client_streaming_query_mixin
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .connect import _ConnectControlBase as ConnectControlBase  # noqa: F401
@@ -313,7 +346,8 @@ def _encode_sort_arg(sort_value: Optional[Any]) -> Optional[str]:
 DEFAULT_I105_DISCRIMINANT = 0x02F1
 # Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
 DATA_MODEL_VERSION = 4
-ACCOUNT_FAUCET_POW_DOMAIN_SEPARATOR = b"iroha:accounts:faucet:pow:v2"
+ACCOUNT_FAUCET_POW_ALGORITHM = "scrypt-leading-zero-bits-v2"
+ACCOUNT_FAUCET_POW_DOMAIN_SEPARATOR = b"iroha:accounts:faucet:pow:v3"
 ACCOUNT_ONBOARDING_TOKEN_HEADER = "X-Iroha-Onboarding-Token"
 
 
@@ -337,11 +371,18 @@ def _set_exact_header(headers: MutableMapping[str, str], name: str, value: str) 
     headers[name] = value
 
 
-def _reject_default_onboarding_header(headers: Mapping[str, Any], context: str) -> None:
-    if any(str(name).lower() == ACCOUNT_ONBOARDING_TOKEN_HEADER.lower() for name in headers):
+def _reject_reserved_default_headers(headers: Mapping[str, Any], context: str) -> None:
+    normalized = {str(name).lower() for name in headers}
+    if ACCOUNT_ONBOARDING_TOKEN_HEADER.lower() in normalized:
         raise ValueError(
             f"{context} must not contain {ACCOUNT_ONBOARDING_TOKEN_HEADER}; "
             "pass onboarding_token explicitly to onboard_account"
+        )
+    reserved_auth = "x-iroha-account x-iroha-signature x-iroha-timestamp-ms x-iroha-nonce x-iroha-witness"
+    if any(f" {name} " in f" {reserved_auth} " for name in normalized):
+        raise ValueError(
+            f"{context} must not contain canonical authentication headers; "
+            "configure canonical_request_auth instead"
         )
 
 
@@ -353,14 +394,6 @@ def _reject_alias_keys(
             raise TypeError(f"{context} does not accept {alias_key}; use {canonical_key}")
 
 
-_ISO_STATUS_VALUES = {
-    "pending": "Pending",
-    "accepted": "Accepted",
-    "committed": "Committed",
-    "rejected": "Rejected",
-}
-_ISO_NON_TERMINAL_STATUSES = frozenset({"Pending", "Accepted"})
-_PACS002_STATUS_CODES = frozenset({"ACTC", "ACSP", "ACSC", "ACWC", "PDNG", "RJCT"})
 _DEFAULT_ISO_POLL_INTERVAL_SECONDS = 2.0
 _DEFAULT_ISO_WAIT_ATTEMPTS = 12
 _MIN_ISO_POLL_INTERVAL_SECONDS = 0.01
@@ -904,17 +937,6 @@ def _normalize_network_id(value: Any, context: str) -> "NetworkId":
     return _require_network_id(value, context)
 
 
-def _normalize_canonical_genesis_hash(value: Any, context: str) -> bytes:
-    if not isinstance(value, (bytes, bytearray, memoryview)):
-        raise TypeError(f"{context} must be bytes-like")
-    digest = bytes(value)
-    if len(digest) != 32:
-        raise ValueError(f"{context} must be exactly 32 bytes")
-    if digest == bytes(32):
-        raise ValueError(f"{context} must not be the all-zero sentinel")
-    return digest
-
-
 def _normalize_optional_zk_verifying_key_status(value: Any, context: str) -> Optional[str]:
     normalized = _normalize_optional_string(value, context)
     if normalized is None:
@@ -1165,118 +1187,6 @@ def _normalize_string_list(value: Any, context: str) -> List[str]:
         if not isinstance(item, str):
             raise TypeError(f"{context}[{index}] must be a string")
         normalized.append(item)
-    return normalized
-
-
-def _normalize_iso_optional_string(
-    value: Any,
-    context: str,
-    *,
-    allow_empty: bool = False,
-) -> Optional[str]:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise TypeError(f"{context} must be a string")
-    trimmed = value.strip()
-    if not trimmed and not allow_empty:
-        return None
-    return trimmed
-
-
-def _normalize_iso_string_array(value: Any, context: str) -> Tuple[str, ...]:
-    if value is None:
-        return ()
-    if not isinstance(value, Sequence):
-        raise TypeError(f"{context} must be an array of strings")
-    entries: List[str] = []
-    for index, entry in enumerate(value):
-        if not isinstance(entry, str):
-            raise TypeError(f"{context}[{index}] must be a string")
-        trimmed = entry.strip()
-        if not trimmed:
-            raise ValueError(f"{context}[{index}] must be a non-empty string")
-        entries.append(trimmed)
-    return tuple(entries)
-
-
-def _normalize_iso_status(value: Any, context: str) -> str:
-    if not isinstance(value, str):
-        raise TypeError(f"{context} must be a string")
-    trimmed = value.strip().lower()
-    if not trimmed:
-        raise ValueError(f"{context} must be non-empty")
-    normalized = _ISO_STATUS_VALUES.get(trimmed)
-    if normalized is None:
-        allowed = ", ".join(sorted(_ISO_STATUS_VALUES.values()))
-        raise ValueError(f"{context} must be one of {allowed}")
-    return normalized
-
-
-def _normalize_pacs002_code(value: Any, context: str) -> Optional[str]:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise TypeError(f"{context} must be a string or null")
-    trimmed = value.strip().upper()
-    if not trimmed:
-        return None
-    if trimmed not in _PACS002_STATUS_CODES:
-        allowed = ", ".join(sorted(_PACS002_STATUS_CODES))
-        raise ValueError(f"{context} must be one of {allowed}")
-    return trimmed
-
-
-def _normalize_iso_payload(message: Any, context: str) -> bytes:
-    if isinstance(message, (bytes, bytearray, memoryview)):
-        payload = bytes(message)
-        if not payload:
-            raise ValueError(f"{context} must be non-empty")
-        return payload
-    if isinstance(message, str):
-        trimmed = message.strip()
-        if not trimmed:
-            raise ValueError(f"{context} must be a non-empty string")
-        return trimmed.encode("utf-8")
-    raise TypeError(f"{context} must be bytes or a UTF-8 string")
-
-
-def _is_iso_status_terminal(
-    status: Optional["IsoSubmissionRecord"],
-    resolve_on_accepted: bool,
-) -> bool:
-    if status is None:
-        return False
-    if status.status in _ISO_NON_TERMINAL_STATUSES:
-        return status.status == "Accepted" and resolve_on_accepted
-    return True
-
-
-def _normalize_iso_wait_kwargs(
-    options: Optional[Mapping[str, Any]],
-    *,
-    context: str,
-) -> Dict[str, Any]:
-    if options is None:
-        return {}
-    if not isinstance(options, Mapping):
-        raise TypeError(f"{context} must be a mapping when provided")
-    allowed = {"poll_interval", "max_attempts", "resolve_on_accepted", "timeout", "on_poll"}
-    extras = [key for key in options.keys() if key not in allowed]
-    if extras:
-        extras_str = ", ".join(sorted(extras))
-        raise ValueError(f"{context} contains unsupported fields: {extras_str}")
-    normalized: Dict[str, Any] = {}
-    if "poll_interval" in options:
-        normalized["poll_interval"] = options["poll_interval"]
-    if "max_attempts" in options:
-        normalized["max_attempts"] = options["max_attempts"]
-    if "resolve_on_accepted" in options:
-        normalized["resolve_on_accepted"] = options["resolve_on_accepted"]
-    if "timeout" in options:
-        normalized["timeout"] = options["timeout"]
-    if "on_poll" in options:
-        normalized["on_poll"] = options["on_poll"]
     return normalized
 
 
@@ -2580,7 +2490,6 @@ def _normalize_sorafs_reputation_canonical_auth(
         raise TypeError(f"{context}.signer must be callable")
     return canonical_auth
 
-
 def _normalize_sorafs_reputation_witness_header(value: Any, context: str) -> str:
     if not isinstance(value, str) or not value or value.strip() != value:
         raise ValueError(f"{context} must be exact canonical standard base64")
@@ -2645,20 +2554,20 @@ def _sorafs_reputation_request_auth(
     )
     account = entries.get("x-iroha-account")
     if account is not None:
-        account_id = _require_exact_non_empty_string(
-            account[1],
-            f"{context}.headers.X-Iroha-Account",
-        )
+        account_context = f"{context}.headers.X-Iroha-Account"
+        account_id = _require_exact_non_empty_string(account[1], account_context)
         canonical_account = _normalize_canonical_account_id(
-            account_id,
-            f"{context}.headers.X-Iroha-Account",
-            expected_discriminant=expected_discriminant,
+            account_id, account_context, expected_discriminant=expected_discriminant,
         )
         if canonical_account != account_id:
             raise ValueError(f"{context}.headers.X-Iroha-Account must be exact and canonical")
-        _set_exact_header(headers, "X-Iroha-Account", canonical_account)
+        account_header = canonical_account
+        if "@" not in canonical_account:
+            account_header = AccountAddress.parse_encoded(
+                canonical_account, expected_discriminant=expected_discriminant
+            ).canonical_hex()
+        _set_exact_header(headers, "X-Iroha-Account", account_header)
     return _validated_sorafs_reputation_header_strings(headers, context), None
-
 
 def _validated_sorafs_reputation_header_strings(
     headers: Mapping[str, Any],
@@ -2670,7 +2579,6 @@ def _validated_sorafs_reputation_header_strings(
             raise TypeError(f"{context}.headers.{name} must be a string")
         final_headers[name] = value
     return final_headers
-
 
 def _sorafs_reputation_headers(
     *,
@@ -3980,43 +3888,6 @@ class ExplorerAccountQrSnapshot:
             qr_version=qr_version,
             svg=svg,
         )
-
-
-_EXPLORER_CURSOR_MAX_LENGTH = 1_424
-_EXPLORER_CURSOR_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
-
-
-def _normalize_explorer_cursor(value: Any, label: str) -> Optional[str]:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise TypeError(f"{label} must be a string")
-    if not value or len(value) > _EXPLORER_CURSOR_MAX_LENGTH:
-        raise ValueError(f"{label} must contain 1..{_EXPLORER_CURSOR_MAX_LENGTH} characters")
-    if _EXPLORER_CURSOR_PATTERN.fullmatch(value) is None:
-        raise ValueError(f"{label} must be canonical base64url without padding")
-    padding = "=" * ((4 - len(value) % 4) % 4)
-    try:
-        decoded = base64.b64decode(
-            value + padding,
-            altchars=b"-_",
-            validate=True,
-        )
-    except (binascii.Error, ValueError) as error:
-        raise ValueError(f"{label} must be canonical base64url without padding") from error
-    if base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii") != value:
-        raise ValueError(f"{label} must be canonical base64url without padding")
-    return value
-
-
-def _normalize_explorer_limit(value: Any, label: str) -> Optional[int]:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{label} must be an integer")
-    if value < 1 or value > 100:
-        raise ValueError(f"{label} must be between 1 and 100")
-    return value
 
 
 @dataclass(frozen=True)
@@ -11284,7 +11155,7 @@ class ConnectPerIpSessions:
 
 @dataclass(frozen=True)
 class ConnectPolicyStatusSnapshot:
-    """Policy limits surfaced by `/v1/connect/status`."""
+    """Policy limits surfaced by operator-only `/v1/connect/status/aggregate`."""
 
     ws_max_sessions: int
     ws_per_ip_max_sessions: int
@@ -11342,7 +11213,7 @@ class ConnectPolicyStatusSnapshot:
 
 @dataclass(frozen=True)
 class ConnectStatusSnapshot:
-    """Runtime status snapshot returned by `/v1/connect/status`."""
+    """Runtime snapshot returned by operator-only `/v1/connect/status/aggregate`."""
 
     enabled: bool
     sessions_total: int
@@ -12304,18 +12175,6 @@ def _extract_torii_client_section(config: Optional[Mapping[str, Any]]) -> Mappin
     return config
 
 
-def _extract_pipeline_status_kind(payload: Any) -> Optional[str]:
-    """Return the pipeline status `kind` from a Torii response, if present."""
-
-    if not isinstance(payload, Mapping):
-        return None
-    status = payload.get("status")
-    if not isinstance(status, Mapping):
-        return None
-    kind = status.get("kind")
-    return kind if isinstance(kind, str) else None
-
-
 def _normalize_public_pipeline_status(payload: Any, expected_hash: str) -> Dict[str, Any]:
     """Validate and copy the metadata-only public pipeline response."""
 
@@ -12421,87 +12280,6 @@ def _pick_api_token(torii_section: Optional[Mapping[str, Any]]) -> Optional[str]
     if isinstance(tokens, str):
         return tokens
     return None
-
-
-def _coerce_int(value: Any, name: str, *, allow_zero: bool = False) -> Optional[int]:
-    if value is None or value == "":
-        return None
-    try:
-        number = int(value)
-    except (TypeError, ValueError):
-        raise TypeError(f"{name} must be an integer") from None
-    if number < 0 or (number == 0 and not allow_zero):
-        raise ValueError(f"{name} must be {'non-negative' if allow_zero else 'positive'}")
-    return number
-
-
-def _coerce_float(value: Any, name: str, *, allow_zero: bool = False) -> Optional[float]:
-    if value is None or value == "":
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        raise TypeError(f"{name} must be numeric") from None
-    if number < 0 or (number == 0 and not allow_zero):
-        raise ValueError(f"{name} must be greater than 0")
-    return number
-
-
-def _coerce_duration_seconds(value: Any, *, default_value: Any = None) -> Optional[float]:
-    millis = _coerce_float(value, "duration_ms", allow_zero=True)
-    if millis is not None:
-        return millis / 1000.0
-    seconds = _coerce_float(default_value, "duration", allow_zero=True)
-    return seconds
-
-
-def _coerce_timeout_seconds(value: Any, *, default_value: Any = None) -> Optional[float]:
-    result = _coerce_duration_seconds(value)
-    if result is not None:
-        return result
-    seconds = _coerce_float(default_value, "timeout", allow_zero=True)
-    return seconds
-
-
-def _parse_retry_statuses(value: Any) -> Optional[set[int]]:
-    if value is None or value == "":
-        return None
-    statuses: set[int] = set()
-    parts: Iterable[Any]
-    if isinstance(value, str):
-        parts = [part.strip() for part in value.split(",") if part.strip()]
-    elif isinstance(value, (list, tuple, set)):
-        parts = value
-    else:
-        parts = [value]
-    for entry in parts:
-        statuses.add(int(entry))
-    return statuses
-
-
-def _parse_retry_methods(value: Any) -> Optional[set[str]]:
-    if value is None or value == "":
-        return None
-    methods: set[str] = set()
-    entries: Iterable[Any]
-    if isinstance(value, str):
-        entries = [part.strip() for part in value.split(",") if part.strip()]
-    elif isinstance(value, (list, tuple, set)):
-        entries = value
-    else:
-        entries = [value]
-    for entry in entries:
-        methods.add(str(entry).upper())
-    return methods
-
-
-def _normalize_headers(headers: Any) -> Dict[str, str]:
-    normalized: Dict[str, str] = {}
-    if isinstance(headers, Mapping):
-        for key, value in headers.items():
-            if value is not None:
-                normalized[str(key)] = str(value)
-    return normalized
 
 
 def _require_crypto() -> ModuleType:
@@ -12645,8 +12423,12 @@ class _ContractCallBatchPlan:
 
 
 __all__ = [
-    "ToriiClient", "SorafsOrderbookSubmissionAmbiguousError", "SorafsOrderbookSubmissionIdentity",
-    "SorafsOrderbookSubmissionReceipt", "SorafsOrderbookSubmissionReceiptPayload",
+    "ToriiClient",
+    "OperatorSigningContext",
+    "SorafsOrderbookSubmissionAmbiguousError",
+    "SorafsOrderbookSubmissionIdentity",
+    "SorafsOrderbookSubmissionReceipt",
+    "SorafsOrderbookSubmissionReceiptPayload",
     "ContractCallIntent",
     "create_torii_client",
     "TransactionStatusError",
@@ -12785,7 +12567,6 @@ _DEFAULT_SUCCESS_STATUSES = frozenset({"Approved", "Committed", "Applied"})
 _DEFAULT_FAILURE_STATUSES = frozenset({"Rejected", "Expired"})
 _DEFAULT_RETRY_STATUSES = frozenset({502, 503, 504})
 _DEFAULT_RETRY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-_TRANSACTION_STATUS_SCOPES = frozenset({"local", "global"})
 _ZK_X509_PRIVACY_PROTOCOL_ID_V1 = "iroha-zk-x509-stark-p256-v0"
 _CONTRACT_CALL_BATCH_BINDING_DOMAIN_V1 = b"iroha:contract-call-batch-binding:v1\0"
 _CONTRACT_CALL_BATCH_ARGUMENTS_DOMAIN_V1 = b"iroha:contract-call-batch-arguments:v1\0"
@@ -12799,18 +12580,10 @@ _CONTRACT_CALL_RESERVED_METADATA_KEYS = frozenset(
 )
 
 
-def _normalize_transaction_status_scope(value: str, context: str) -> str:
-    normalized = _require_non_empty_string(value, context).lower()
-    if normalized not in _TRANSACTION_STATUS_SCOPES:
-        raise ValueError(f"{context} must be one of: local, global")
-    return normalized
-
-
 try:  # pragma: no cover - optional dependency
     import websocket
 except ImportError:  # pragma: no cover - optional dependency
     websocket = None
-
 
 class TransactionStatusError(RuntimeError):
     """Raised when a transaction reaches a terminal failure status."""
@@ -12834,7 +12607,6 @@ class DataModelMismatchError(RuntimeError):
         self.expected = expected
         self.actual = actual
 
-
 _ToriiClientStreamingQueryMixin = create_torii_client_streaming_query_mixin(
     require_crypto=_require_crypto,
     expect_sorafs_reputation_status=_expect_sorafs_reputation_status,
@@ -12853,6 +12625,12 @@ _ToriiClientGovernanceBallotMixin = create_torii_client_governance_ballot_mixin(
     normalize_zk_ballot_v1=_normalize_governance_zk_ballot_v1_payload,
     normalize_zk_ballot_proof_v1=_normalize_governance_zk_ballot_proof_payload,
 )
+_ToriiClientSpaceDirectoryMixin = create_torii_client_space_directory_mixin(
+    canonical_auth_type=ToriiCanonicalRequestAuth,
+    normalize_publish_request=_normalize_publish_space_directory_manifest_request,
+    normalize_revoke_request=_normalize_revoke_space_directory_manifest_request,
+    normalize_transaction_draft=_normalize_app_api_transaction_draft,
+)
 
 _ToriiClientRuntimeAuthMixin = create_torii_client_runtime_auth_mixin(
     node_capabilities_type=NodeCapabilities,
@@ -12861,8 +12639,10 @@ _ToriiClientRuntimeAuthMixin = create_torii_client_runtime_auth_mixin(
     runtime_abi_active_type=RuntimeAbiActive,
 )
 
-
 class ToriiClient(
+    _ToriiClientSpaceDirectoryMixin,
+    ToriiClientExpensiveQueryAuthMixin,
+    ToriiClientIsoOperatorContextMixin,
     _ToriiClientRuntimeAuthMixin,
     _ToriiClientGovernanceBallotMixin,
     _ToriiClientStreamingQueryMixin,
@@ -12883,6 +12663,7 @@ class ToriiClient(
         session: Optional[requests.Session] = None,
         *,
         local_signing_context: Optional[LocalSigningContext] = None,
+        operator_signing_context: Optional[OperatorSigningContext] = None,
         canonical_request_auth: Optional[ToriiCanonicalRequestAuth] = None,
         auth_token: Optional[str] = None,
         api_token: Optional[str] = None,
@@ -12907,6 +12688,7 @@ class ToriiClient(
         ):
             raise TypeError("local_signing_context must be a LocalSigningContext")
         self.__local_signing_context = local_signing_context
+        self._install_operator_signing_context(operator_signing_context)
         if canonical_request_auth is not None:
             canonical_request_auth = self._require_canonical_auth(
                 canonical_request_auth, "canonical_request_auth"
@@ -12915,7 +12697,7 @@ class ToriiClient(
                 canonical_request_auth.account_id,
                 "canonical_request_auth.account_id",
             )
-        self.__canonical_request_auth = canonical_request_auth
+        self._canonical_request_auth = canonical_request_auth
         self._chain_discriminant = normalize_i105_discriminant(
             DEFAULT_I105_DISCRIMINANT if chain_discriminant is None else chain_discriminant,
             "chain_discriminant",
@@ -12933,7 +12715,7 @@ class ToriiClient(
         }
         self._default_headers: Dict[str, str] = {"Accept": "application/json"}
         if default_headers:
-            _reject_default_onboarding_header(default_headers, "default_headers")
+            _reject_reserved_default_headers(default_headers, "default_headers")
             self._default_headers.update(default_headers)
         self._auth_token: Optional[str] = None
         self._api_token: Optional[str] = None
@@ -13067,7 +12849,7 @@ class ToriiClient(
         signed_transaction_versioned: bytes | bytearray | memoryview,
         *,
         canonical_auth: ToriiCanonicalRequestAuth,
-        canonical_genesis_hash: bytes | bytearray | memoryview,
+        network_id: "NetworkId",
         wait: bool = True,
         interval: float = 1.0,
         timeout: Optional[float] = 30.0,
@@ -13079,7 +12861,7 @@ class ToriiClient(
     ) -> tuple["SignedTransactionEnvelope", Any]:
         """Authenticate, live-gate, and submit one exact ZK-X509 action.
 
-        The signed wire is inspected locally against ``canonical_genesis_hash``
+        The signed wire is inspected locally against the exact ``network_id``
         before any network operation.  A fresh authoritative capability
         snapshot must then expose the unique ZK-X509 row with an available
         compiled profile and an active governed lifecycle.  No submission is
@@ -13089,23 +12871,16 @@ class ToriiClient(
         signing_context = self._require_local_signing_context(
             "submit_signed_privacy_zk_x509_identity_presentation_action_v1"
         )
-        canonical_genesis_hash = _normalize_canonical_genesis_hash(
-            canonical_genesis_hash,
-            "canonical_genesis_hash",
-        )
-        signing_network_bytes = bytes(signing_context.network_id.to_bytes())
-        if not hmac.compare_digest(
-            canonical_genesis_hash,
-            signing_network_bytes,
-        ):
+        network_id = _normalize_network_id(network_id, "network_id")
+        if network_id != signing_context.network_id:
             raise ValueError(
-                "canonical_genesis_hash does not match ToriiClient local_signing_context"
+                "network_id does not match ToriiClient local_signing_context"
             )
         crypto = _require_crypto()
         inspection = (
             crypto.inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
                 signed_transaction_versioned,
-                signing_network_bytes,
+                network_id,
             )
         )
         if not isinstance(inspection, Mapping) or inspection.get(
@@ -13188,7 +12963,7 @@ class ToriiClient(
     def _ensure_data_model_validation(self) -> None:
         _validate_client_data_model(
             self,
-            canonical_auth=self.__canonical_request_auth,
+            canonical_auth=self._canonical_request_auth,
             expected_version=DATA_MODEL_VERSION,
             mismatch_error_type=DataModelMismatchError,
         )
@@ -13752,7 +13527,7 @@ class ToriiClient(
     def update_default_headers(self, headers: Mapping[str, str]) -> None:
         """Merge `headers` into the default header set applied to every request."""
 
-        _reject_default_onboarding_header(headers, "headers")
+        _reject_reserved_default_headers(headers, "headers")
         self._default_headers.update(headers)
 
     def request_json(
@@ -13845,9 +13620,19 @@ class ToriiClient(
             private_key_hex=private_key_hex,
         )
         public_key = getattr(key, "public_key_multihash", None)
-        public_key_text = str(public_key or "").strip()
-        if not public_key_text:
-            raise TypeError("operator key pair must expose a non-empty public_key_multihash")
+        if not isinstance(public_key, str):
+            raise TypeError("operator key pair must expose a public_key_multihash string")
+        public_key_text = public_key
+        if (
+            not public_key_text
+            or public_key_text.strip() != public_key_text
+            or not public_key_text.isascii()
+            or any(
+                ord(character) < 0x21 or ord(character) > 0x7E
+                for character in public_key_text
+            )
+        ):
+            raise ValueError("operator public key must be exact non-empty printable ASCII")
         effective_timestamp = int(timestamp_ms if timestamp_ms is not None else time.time() * 1000)
         effective_nonce = nonce if nonce is not None else secrets.token_urlsafe(12)
         if effective_timestamp < 0:
@@ -14023,37 +13808,12 @@ class ToriiClient(
     # ISO 20022 bridge APIs
     # -------------------------
 
-    def _submit_iso_message(
-        self,
-        path: str,
-        message: Union[str, bytes, bytearray, memoryview],
-        *,
-        content_type: Optional[str],
-        timeout: Optional[float],
-        context: str,
-    ) -> Optional[Any]:
-        payload = _normalize_iso_payload(message, f"{context}.message")
-        headers = {
-            "Content-Type": content_type.strip()
-            if isinstance(content_type, str) and content_type.strip()
-            else "application/xml",
-            "Accept": "application/json",
-        }
-        response = self._request(
-            "POST",
-            path,
-            data=payload,
-            headers=headers,
-            timeout=timeout,
-        )
-        self._expect_status(response, (202,))
-        return self._maybe_json(response)
-
     def submit_iso_pacs008(
         self,
         message: Union[str, bytes, bytearray, memoryview],
         *,
         content_type: Optional[str] = None,
+        profile: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> Optional[Any]:
         """Submit a pacs.008 payload (`POST /v1/iso20022/pacs008`)."""
@@ -14062,6 +13822,7 @@ class ToriiClient(
             "/v1/iso20022/pacs008",
             message,
             content_type=content_type,
+            profile=profile,
             timeout=timeout,
             context="submit_iso_pacs008",
         )
@@ -14071,6 +13832,7 @@ class ToriiClient(
         message: Union[str, bytes, bytearray, memoryview],
         *,
         content_type: Optional[str] = None,
+        profile: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> Optional[IsoSubmissionRecord]:
         """Typed wrapper for :meth:`submit_iso_pacs008`."""
@@ -14078,6 +13840,7 @@ class ToriiClient(
         payload = self.submit_iso_pacs008(
             message,
             content_type=content_type,
+            profile=profile,
             timeout=timeout,
         )
         if payload is None:
@@ -14091,6 +13854,7 @@ class ToriiClient(
         message: Union[str, bytes, bytearray, memoryview],
         *,
         content_type: Optional[str] = None,
+        profile: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> Optional[Any]:
         """Submit a pacs.009 payload (`POST /v1/iso20022/pacs009`)."""
@@ -14099,6 +13863,7 @@ class ToriiClient(
             "/v1/iso20022/pacs009",
             message,
             content_type=content_type,
+            profile=profile,
             timeout=timeout,
             context="submit_iso_pacs009",
         )
@@ -14108,6 +13873,7 @@ class ToriiClient(
         message: Union[str, bytes, bytearray, memoryview],
         *,
         content_type: Optional[str] = None,
+        profile: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> Optional[IsoSubmissionRecord]:
         """Typed wrapper for :meth:`submit_iso_pacs009`."""
@@ -14115,6 +13881,7 @@ class ToriiClient(
         payload = self.submit_iso_pacs009(
             message,
             content_type=content_type,
+            profile=profile,
             timeout=timeout,
         )
         if payload is None:
@@ -14133,14 +13900,12 @@ class ToriiClient(
 
         normalized_id = _require_non_empty_string(message_id, "message_id")
         encoded_id = quote(normalized_id, safe="")
-        response = self._request(
-            "GET",
+        return _get_iso_message_status(
+            self,
             f"/v1/iso20022/messages/{encoded_id}",
-            headers={"Accept": "application/json"},
             timeout=timeout,
+            context="get_iso_message_status",
         )
-        self._expect_status(response, (200,))
-        return self._maybe_json(response)
 
     def get_iso_message_status_typed(
         self,
@@ -14199,6 +13964,7 @@ class ToriiClient(
         message: Union[str, bytes, bytearray, memoryview],
         *,
         content_type: Optional[str] = None,
+        profile: Optional[str] = None,
         timeout: Optional[float] = None,
         wait: Optional[Mapping[str, Any]] = None,
     ) -> IsoSubmissionRecord:
@@ -14207,6 +13973,7 @@ class ToriiClient(
         submission = self.submit_iso_pacs008_typed(
             message,
             content_type=content_type,
+            profile=profile,
             timeout=timeout,
         )
         if submission is None:
@@ -14219,6 +13986,7 @@ class ToriiClient(
         message: Union[str, bytes, bytearray, memoryview],
         *,
         content_type: Optional[str] = None,
+        profile: Optional[str] = None,
         timeout: Optional[float] = None,
         wait: Optional[Mapping[str, Any]] = None,
     ) -> IsoSubmissionRecord:
@@ -14227,6 +13995,7 @@ class ToriiClient(
         submission = self.submit_iso_pacs009_typed(
             message,
             content_type=content_type,
+            profile=profile,
             timeout=timeout,
         )
         if submission is None:
@@ -14263,7 +14032,7 @@ class ToriiClient(
         body = dict(envelope)
         if body.get("count_mode") is not None:
             body["count_mode"] = _normalize_count_mode_arg(body["count_mode"])
-        payload = self._post_json(
+        payload = self._expensive_query_json(
             "/v1/repo/agreements/query",
             body,
             context="repo agreements query",
@@ -14463,12 +14232,19 @@ class ToriiClient(
             context="sorafs orderbook receipts response",
         )
 
-    def _sorafs_orderbook_native_verifier(self) -> ModuleType: return _require_crypto()
+    def _sorafs_orderbook_native_verifier(self) -> ModuleType:
+        return _require_crypto()
 
     def _sorafs_orderbook_expected_network_id(self, value: Any, context: str) -> NetworkId:
-        if value is not None: raise ValueError(f"{context} derives network identity from local_signing_context")
+        if value is not None:
+            raise ValueError(
+                f"{context} derives network identity from local_signing_context"
+            )
         return self._require_local_signing_context(context).network_id
-    def _sorafs_orderbook_expected_chain_discriminant(self, context: str) -> int: del context; return self._chain_discriminant
+
+    def _sorafs_orderbook_expected_chain_discriminant(self, context: str) -> int:
+        del context
+        return self._chain_discriminant
 
     def list_sorafs_orderbook_events(
         self,
@@ -16177,9 +15953,15 @@ class ToriiClient(
         )
 
     def get_pipeline_preflight(self) -> ToriiPipelinePreflight:
-        """Return pipeline preflight diagnostics (`GET /v1/pipeline/preflight`)."""
+        """Return operator-authenticated pipeline preflight diagnostics."""
 
-        payload = self.request_json("GET", "/v1/pipeline/preflight", expected_status=(200,))
+        response = self._operator_get(
+            "/v1/pipeline/preflight",
+            headers={"Accept": "application/json"},
+            context="get_pipeline_preflight",
+        )
+        self._expect_status(response, (200,))
+        payload = self._maybe_json(response)
         if payload is None:
             raise TypeError("pipeline preflight response body was empty")
         if not isinstance(payload, Mapping):
@@ -16198,9 +15980,18 @@ class ToriiClient(
         return _configuration_snapshot_to_dict(snapshot)
 
     def get_configuration_typed(self) -> ConfigurationSnapshot:
-        """Typed configuration snapshot (`GET /v1/configuration`)."""
+        """Typed operator-authenticated node configuration snapshot."""
 
-        return super().get_configuration()
+        response = self._operator_get(
+            "/v1/configuration",
+            headers={"Accept": "application/json"},
+            context="get_configuration",
+        )
+        self._expect_status(response, (200,))
+        payload = self._maybe_json(response)
+        if not isinstance(payload, Mapping):
+            raise TypeError("configuration response must be a JSON object")
+        return ConfigurationSnapshot.from_payload(payload)
 
     def get_confidential_gas_schedule(self) -> Optional[Mapping[str, int]]:
         """Return the read-only confidential gas schedule as a mapping, when available."""
@@ -16304,11 +16095,12 @@ class ToriiClient(
         return self.request_json("GET", "/v1/blocks", params=params or None, expected_status=(200,))
 
     def get_pipeline_recovery(self, height: int) -> Optional[Any]:
-        """Fetch pipeline recovery sidecar for `height` (`GET /v1/pipeline/recovery/{height}`)."""
+        """Fetch an operator-authenticated pipeline recovery sidecar for `height`."""
 
-        response = self._request(
-            "GET",
+        response = self._operator_get(
             f"/v1/pipeline/recovery/{int(height)}",
+            headers={"Accept": "application/json"},
+            context="get_pipeline_recovery",
         )
         self._expect_status(response, {200, 404})
         return self._maybe_json(response)
@@ -16324,14 +16116,20 @@ class ToriiClient(
         return PipelineRecoverySidecar.from_payload(payload)
 
     def list_peers(self) -> Optional[Any]:
-        """List currently online peers (`GET /v1/peers`)."""
+        """List the operator-authenticated node-local online peer snapshot."""
 
-        return self.request_json("GET", "/v1/peers", expected_status=(200,))
+        response = self._operator_get(
+            "/v1/peers",
+            headers={"Accept": "application/json"},
+            context="list_peers",
+        )
+        self._expect_status(response, (200,))
+        return self._maybe_json(response)
 
     def list_peers_typed(self) -> List[PeerInfo]:
         """Return the online peer set as `PeerInfo` structures (`GET /v1/peers`)."""
 
-        payload = self.request_json("GET", "/v1/peers", expected_status=(200,))
+        payload = self.list_peers()
         if payload is None:
             return []
         if not isinstance(payload, list):
@@ -16366,12 +16164,12 @@ class ToriiClient(
         return entries
 
     def list_kaigi_relays(self) -> Optional[Any]:
-        """List registered Kaigi relays (`GET /v1/kaigi/relays`)."""
+        """List registered Kaigi relays with exact-network operator authentication."""
 
-        response = self._request(
-            "GET",
+        response = self._operator_get(
             "/v1/kaigi/relays",
             headers={"Accept": "application/json"},
+            context="list_kaigi_relays",
         )
         self._expect_status(response, (200,))
         return self._maybe_json(response)
@@ -16387,13 +16185,13 @@ class ToriiClient(
         return KaigiRelaySummaryList.from_payload(payload)
 
     def get_kaigi_relay(self, relay_id: str) -> Optional[Any]:
-        """Fetch metadata for a specific Kaigi relay (`GET /v1/kaigi/relays/{relay_id}`)."""
+        """Fetch one relay diagnostic with exact-network operator authentication."""
 
         relay_literal = self._normalize_canonical_account_id(relay_id, "relay_id")
-        response = self._request(
-            "GET",
+        response = self._operator_get(
             f"/v1/kaigi/relays/{quote(relay_literal, safe='')}",
             headers={"Accept": "application/json"},
+            context="get_kaigi_relay",
         )
         self._expect_status(response, (200, 404))
         if response.status_code == 404:
@@ -16414,12 +16212,12 @@ class ToriiClient(
         return KaigiRelayDetail.from_payload(payload)
 
     def get_kaigi_relays_health(self) -> Optional[Any]:
-        """Fetch aggregated Kaigi relay health metrics (`GET /v1/kaigi/relays/health`)."""
+        """Fetch aggregate relay health with exact-network operator authentication."""
 
-        response = self._request(
-            "GET",
+        response = self._operator_get(
             "/v1/kaigi/relays/health",
             headers={"Accept": "application/json"},
+            context="get_kaigi_relays_health",
         )
         self._expect_status(response, (200,))
         return self._maybe_json(response)
@@ -16452,9 +16250,18 @@ class ToriiClient(
         return _network_time_status_to_dict(status)
 
     def get_time_status_typed(self) -> NetworkTimeStatus:
-        """Typed Network Time Service diagnostics."""
+        """Typed operator-authenticated node-local Network Time Service diagnostics."""
 
-        return super().get_time_status()
+        response = self._operator_get(
+            "/v1/time/status",
+            headers={"Accept": "application/json"},
+            context="get_time_status",
+        )
+        self._expect_status(response, (200,))
+        payload = self._maybe_json(response)
+        if not isinstance(payload, Mapping):
+            raise TypeError("network time status response must be a JSON object")
+        return NetworkTimeStatus.from_payload(payload)
 
     # ------------------------------------------------------------------
     # Runtime & admission helpers
@@ -16705,14 +16512,11 @@ class ToriiClient(
                 query_name=query_name,
                 aggregate=aggregate,
             )
-        response = self._request(
-            "POST",
+        payload = self._expensive_query_json(
             f"/v1/accounts/{quote(canonical_account_id, safe='')}/assets/query",
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            body,
+            context="account assets query",
         )
-        self._expect_status(response, {200})
-        payload = self._maybe_json(response)
         if not isinstance(payload, dict):
             raise RuntimeError("unexpected account assets query response")
         return payload
@@ -16791,14 +16595,11 @@ class ToriiClient(
                 query_name=query_name,
                 aggregate=aggregate,
             )
-        response = self._request(
-            "POST",
+        payload = self._expensive_query_json(
             f"/v1/accounts/{quote(canonical_account_id, safe='')}/transactions/query",
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            body,
+            context="account transactions query",
         )
-        self._expect_status(response, {200})
-        payload = self._maybe_json(response)
         if not isinstance(payload, dict):
             raise RuntimeError("unexpected account transactions query response")
         return payload
@@ -16851,8 +16652,8 @@ class ToriiClient(
         """Query committed transactions globally or within the authenticated viewer scope.
 
         ``visible=True`` selects ``/v1/transactions/visible/query``. That endpoint
-        uses the bearer token configured on this client to derive the viewer's
-        server-side transaction visibility.
+        uses this client's exact-network canonical account authentication to
+        derive the viewer's server-side transaction visibility.
         """
 
         if not isinstance(visible, bool):
@@ -16884,14 +16685,11 @@ class ToriiClient(
                 aggregate=aggregate,
             )
         path = "/v1/transactions/visible/query" if visible else "/v1/transactions/query"
-        response = self._request(
-            "POST",
+        payload = self._expensive_query_json(
             path,
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            body,
+            context="transactions query",
         )
-        self._expect_status(response, {200})
-        payload = self._maybe_json(response)
         if not isinstance(payload, dict):
             raise RuntimeError("unexpected transactions query response")
         return payload
@@ -17024,50 +16822,6 @@ class ToriiClient(
             offset=offset,
         )
         return SpaceDirectoryManifestList.from_payload(payload)
-
-    def publish_space_directory_manifest(
-        self,
-        request: Mapping[str, Any],
-    ) -> AppApiTransactionDraft:
-        """Prepare a manifest-publication transaction for local signing."""
-
-        payload = _normalize_publish_space_directory_manifest_request(request)
-        response = self._request(
-            "POST",
-            "/v1/space-directory/manifests",
-            json_body=payload,
-            headers={"Accept": "application/json"},
-        )
-        self._expect_status(response, {200})
-        body = self._maybe_json(response)
-        if body is None:
-            raise RuntimeError("Space Directory manifest publish response was empty")
-        return _normalize_app_api_transaction_draft(
-            body,
-            "Space Directory manifest publish response",
-        )
-
-    def revoke_space_directory_manifest(
-        self,
-        request: Mapping[str, Any],
-    ) -> AppApiTransactionDraft:
-        """Prepare a manifest-revocation transaction for local signing."""
-
-        payload = _normalize_revoke_space_directory_manifest_request(request)
-        response = self._request(
-            "POST",
-            "/v1/space-directory/manifests/revoke",
-            json_body=payload,
-            headers={"Accept": "application/json"},
-        )
-        self._expect_status(response, {200})
-        body = self._maybe_json(response)
-        if body is None:
-            raise RuntimeError("Space Directory manifest revoke response was empty")
-        return _normalize_app_api_transaction_draft(
-            body,
-            "Space Directory manifest revoke response",
-        )
 
     def _handle_sorafs_alias_warning(self, warning: SorafsAliasWarning) -> None:
         """Internal hook for alias-proof warnings."""
@@ -18891,12 +18645,60 @@ class ToriiClient(
     ) -> Tuple[int, str]:
         """Solve a Torii account-faucet proof-of-work puzzle."""
 
-        account = _require_non_empty_string(account_id, "account_id")
-        difficulty_bits = int(puzzle["difficulty_bits"])
-        anchor_height = int(puzzle["anchor_height"])
-        anchor_hash = bytes.fromhex(str(puzzle["anchor_block_hash_hex"]))
+        from .crypto import NetworkId as ExactNetworkId
+
+        if not isinstance(puzzle, Mapping):
+            raise TypeError("account faucet puzzle must be an object")
+        algorithm = puzzle.get("algorithm")
+        if algorithm != ACCOUNT_FAUCET_POW_ALGORITHM:
+            raise ValueError(
+                "account faucet puzzle algorithm must be "
+                f"{ACCOUNT_FAUCET_POW_ALGORITHM}"
+            )
+        network_id_literal = puzzle.get("network_id")
+        if not isinstance(network_id_literal, str):
+            raise TypeError("account faucet puzzle network_id must be a string")
+        network_id = ExactNetworkId.parse(network_id_literal)
+        chain_discriminant = normalize_i105_discriminant(
+            puzzle.get("chain_discriminant"),
+            "account faucet puzzle chain_discriminant",
+        )
+        account = _normalize_exact_i105_account_id(
+            account_id,
+            "account_id",
+            expected_discriminant=chain_discriminant,
+        )
+        difficulty_bits = _normalize_positive_int(
+            puzzle.get("difficulty_bits"),
+            "account faucet puzzle difficulty_bits",
+            allow_zero=False,
+        )
+        if difficulty_bits > 255:
+            raise ValueError("account faucet puzzle difficulty_bits must fit an unsigned byte")
+        anchor_height = _normalize_positive_int(
+            puzzle.get("anchor_height"),
+            "account faucet puzzle anchor_height",
+            allow_zero=False,
+        )
+        anchor_hash_hex = puzzle.get("anchor_block_hash_hex")
+        if not isinstance(anchor_hash_hex, str) or re.fullmatch(
+            r"[0-9a-f]{64}", anchor_hash_hex
+        ) is None:
+            raise ValueError(
+                "account faucet puzzle anchor_block_hash_hex must be exact lowercase 32-byte hex"
+            )
+        anchor_hash = bytes.fromhex(anchor_hash_hex)
         challenge_salt_hex = puzzle.get("challenge_salt_hex")
-        challenge_salt = bytes.fromhex(str(challenge_salt_hex)) if challenge_salt_hex else None
+        if challenge_salt_hex is not None and (
+            not isinstance(challenge_salt_hex, str)
+            or re.fullmatch(r"[0-9a-f]{64}", challenge_salt_hex) is None
+        ):
+            raise ValueError(
+                "account faucet puzzle challenge_salt_hex must be null or exact lowercase 32-byte hex"
+            )
+        challenge_salt = (
+            bytes.fromhex(challenge_salt_hex) if challenge_salt_hex is not None else None
+        )
         scrypt_n = 1 << int(puzzle["scrypt_log_n"])
         scrypt_r = int(puzzle["scrypt_r"])
         scrypt_p = int(puzzle["scrypt_p"])
@@ -18904,6 +18706,7 @@ class ToriiClient(
             b"".join(
                 (
                     ACCOUNT_FAUCET_POW_DOMAIN_SEPARATOR,
+                    network_id.to_bytes(),
                     account.encode("utf-8"),
                     anchor_height.to_bytes(8, "big"),
                     anchor_hash,
@@ -19279,14 +19082,11 @@ class ToriiClient(
             query_name=query_name,
             aggregate=aggregate,
         )
-        response = self._request(
-            "POST",
+        payload = self._expensive_query_json(
             "/v1/rwas/query",
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            body,
+            context="RWA query",
         )
-        self._expect_status(response, {200})
-        payload = self._maybe_json(response)
         if not isinstance(payload, dict):
             raise RuntimeError("unexpected RWA query response")
         return payload
@@ -19401,14 +19201,11 @@ class ToriiClient(
             query_name=query_name,
             aggregate=aggregate,
         )
-        response = self._request(
-            "POST",
+        payload = self._expensive_query_json(
             "/v1/accounts/query",
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            body,
+            context="accounts query",
         )
-        self._expect_status(response, {200})
-        payload = self._maybe_json(response)
         if not isinstance(payload, dict):
             raise RuntimeError("unexpected accounts query response")
         return payload
@@ -19575,14 +19372,11 @@ class ToriiClient(
             query_name=query_name,
             aggregate=aggregate,
         )
-        response = self._request(
-            "POST",
+        payload = self._expensive_query_json(
             "/v1/assets/definitions/query",
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            body,
+            context="asset definitions query",
         )
-        self._expect_status(response, {200})
-        payload = self._maybe_json(response)
         if not isinstance(payload, dict):
             raise RuntimeError("unexpected assets definitions query response")
         return payload
@@ -19694,14 +19488,11 @@ class ToriiClient(
             query_name=query_name,
             aggregate=aggregate,
         )
-        response = self._request(
-            "POST",
+        payload = self._expensive_query_json(
             "/v1/domains/query",
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            body,
+            context="domains query",
         )
-        self._expect_status(response, {200})
-        payload = self._maybe_json(response)
         if not isinstance(payload, dict):
             raise RuntimeError("unexpected domains query response")
         return payload
@@ -19748,6 +19539,7 @@ class ToriiClient(
     ) -> Dict[str, Any]:
         """POST `/v1/assets/{definition}/holders/query` with a structured envelope."""
 
+        definition = _require_exact_token_string(asset_definition_id, "asset_definition_id")
         body = asset_holders_query_envelope(
             filter=filter,
             select=select,
@@ -19759,14 +19551,11 @@ class ToriiClient(
             query_name=query_name,
             aggregate=aggregate,
         )
-        response = self._request(
-            "POST",
-            f"/v1/assets/{asset_definition_id}/holders/query",
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+        payload = self._expensive_query_json(
+            f"/v1/assets/{quote(definition, safe='')}/holders/query",
+            body,
+            context="asset holders query",
         )
-        self._expect_status(response, {200})
-        payload = self._maybe_json(response)
         if not isinstance(payload, dict):
             raise RuntimeError("unexpected asset holders query response")
         return payload
@@ -20557,19 +20346,17 @@ class ToriiClient(
     def create_connect_session_info(
         self,
         payload: Mapping[str, Any],
-        *,
-        include_expiry: bool = True,
     ) -> ConnectSessionInfo:
-        """Create a session and parse the response into `ConnectSessionInfo`."""
+        """Create a session and parse the exact response into `ConnectSessionInfo`.
+
+        Session creation does not read the operator-only aggregate status endpoint.
+        The first-release response does not advertise an expiry timestamp, so
+        ``expires_at`` remains ``None``.
+        """
 
         request_body = _normalize_connect_session_request(payload)
         response = self.create_connect_session(request_body)
-        ttl_ms: Optional[int] = None
-        if include_expiry:
-            status_snapshot = self.get_connect_status_typed()
-            if status_snapshot is not None and status_snapshot.policy is not None:
-                ttl_ms = status_snapshot.policy.session_ttl_ms
-        return _connect_session_info_from_response(response, request_body, ttl_ms)
+        return _connect_session_info_from_response(response, request_body, None)
 
     def send_connect_control(
         self,
@@ -20635,35 +20422,34 @@ class ToriiClient(
                 "(`pip install iroha-python[ws]`) or add `websocket-client` to your environment."
             )
 
-        parsed = urlparse(self._base_url)
-        scheme = "wss" if parsed.scheme == "https" else "ws"
-        ws_path = "/v1/connect/ws"
-        query = urlencode({"sid": sid, "role": role, "token": token})
-        ws_url = urlunparse((scheme, parsed.netloc, ws_path, "", query, ""))
-
-        header_list: List[str] = []
-        combined_headers: Dict[str, str] = dict(self._default_headers)
-        combined_headers.pop("Accept", None)
-        if headers:
-            combined_headers.update(headers)
-        for key, value in combined_headers.items():
-            header_list.append(f"{key}: {value}")
+        ws_url, header_list, prepared_subprotocols = prepare_connect_websocket_request(
+            self._base_url,
+            sid,
+            role,
+            token,
+            headers=headers,
+            subprotocols=subprotocols,
+        )
 
         return websocket.create_connection(
             ws_url,
             timeout=timeout,
             header=header_list or None,
-            subprotocols=list(subprotocols) if subprotocols else None,
+            subprotocols=prepared_subprotocols,
         )
 
     def get_connect_status(self) -> Optional[Any]:
-        """Fetch Connect runtime status (`GET /v1/connect/status`)."""
+        """Fetch operator-authenticated Connect aggregate runtime status."""
 
-        return self.request_json(
-            "GET",
-            "/v1/connect/status",
-            expected_status=(200,),
+        response = self._operator_get(
+            "/v1/connect/status/aggregate",
+            headers={"Accept": "application/json"},
+            context="Connect aggregate status",
         )
+        if response.status_code == 404:
+            return None
+        self._expect_status(response, (200,))
+        return self._maybe_json(response)
 
     def get_connect_status_typed(self) -> Optional[ConnectStatusSnapshot]:
         """Typed wrapper for :meth:`get_connect_status`. Returns `None` when Connect is disabled."""
@@ -20860,24 +20646,42 @@ class ToriiClient(
 
     # Telemetry & Sumeragi helpers
     # ------------------------------------------------------------------
+    def _sumeragi_operator_json(self, path: str, *, context: str) -> Optional[Any]:
+        """Fetch one exact Sumeragi operator JSON resource exactly once."""
+
+        response = self._operator_get(
+            path,
+            headers={"Accept": "application/json"},
+            context=context,
+        )
+        self._expect_status(response, (200,))
+        return self._maybe_json(response)
+
     def get_sumeragi_telemetry(self) -> Optional[Any]:
-        """Fetch aggregated consensus telemetry (`GET /v1/sumeragi/telemetry`)."""
-        return self.request_json("GET", "/v1/sumeragi/telemetry", expected_status=(200,))
+        """Fetch operator-authenticated consensus telemetry."""
+
+        return self._sumeragi_operator_json(
+            "/v1/sumeragi/telemetry",
+            context="sumeragi telemetry",
+        )
 
     def get_sumeragi_telemetry_typed(self) -> SumeragiTelemetrySnapshot:
         """Return `/v1/sumeragi/telemetry` as a structured snapshot."""
-        payload = self.request_json("GET", "/v1/sumeragi/telemetry", expected_status=(200,))
+        payload = self.get_sumeragi_telemetry()
         if not isinstance(payload, Mapping):
             raise TypeError("telemetry response must be a JSON object")
         return SumeragiTelemetrySnapshot.from_payload(payload)
 
     def get_sumeragi_status(self) -> Optional[Any]:
         """Fetch the raw authoritative v2 consensus status JSON."""
-        return self.request_json("GET", "/v1/sumeragi/status", expected_status=(200,))
+        return self._sumeragi_operator_json(
+            "/v1/sumeragi/status",
+            context="sumeragi status",
+        )
 
     def get_sumeragi_status_typed(self) -> SumeragiStatusSnapshot:
         """Validate the fail-closed authoritative v2 reducer snapshot."""
-        payload = self._get_sccp_json_object(
+        payload = self._get_sumeragi_operator_json_object(
             "/v1/sumeragi/status",
             context="sumeragi status",
             maximum_body_bytes=1 * 1024 * 1024,
@@ -20887,11 +20691,14 @@ class ToriiClient(
 
     def get_sumeragi_diagnostics(self) -> Optional[Any]:
         """Fetch raw bounded Sumeragi operator and lane diagnostics."""
-        return self.request_json("GET", "/v1/sumeragi/diagnostics", expected_status=(200,))
+        return self._sumeragi_operator_json(
+            "/v1/sumeragi/diagnostics",
+            context="sumeragi diagnostics",
+        )
 
     def get_sumeragi_diagnostics_typed(self) -> SumeragiDiagnosticsSnapshot:
         """Validate `/v1/sumeragi/diagnostics` as a separate typed payload."""
-        payload = self._get_sccp_json_object(
+        payload = self._get_sumeragi_operator_json_object(
             "/v1/sumeragi/diagnostics",
             context="sumeragi diagnostics",
             maximum_body_bytes=16 * 1024 * 1024,
@@ -20912,14 +20719,17 @@ class ToriiClient(
         return SumeragiPacemakerSnapshot.from_payload(payload)
 
     def get_sumeragi_qc(self) -> Optional[Any]:
-        """Fetch HighestQC/LockedQC snapshot (`GET /v1/sumeragi/qc`)."""
+        """Fetch the operator-authenticated HighestQC/LockedQC snapshot."""
 
-        return self.request_json("GET", "/v1/sumeragi/qc", expected_status=(200,))
+        return self._sumeragi_operator_json(
+            "/v1/sumeragi/qc",
+            context="sumeragi quorum certificates",
+        )
 
     def get_sumeragi_qc_typed(self) -> SumeragiQcSnapshot:
         """Typed wrapper for :meth:`get_sumeragi_qc`."""
 
-        payload = self.request_json("GET", "/v1/sumeragi/qc", expected_status=(200,))
+        payload = self.get_sumeragi_qc()
         if not isinstance(payload, Mapping):
             raise TypeError("qc response must be a JSON object")
         return SumeragiQcSnapshot.from_payload(payload)
@@ -20928,10 +20738,9 @@ class ToriiClient(
         """Fetch commit QC details for a block hash (`GET /v1/sumeragi/commit-qcs/{block_hash}`)."""
 
         normalized = _normalize_hash_hex(block_hash_hex, "block_hash_hex")
-        return self.request_json(
-            "GET",
+        return self._sumeragi_operator_json(
             f"/v1/sumeragi/commit-qcs/{normalized}",
-            expected_status=(200,),
+            context="sumeragi commit quorum certificate",
         )
 
     def get_sumeragi_commit_qc_typed(self, block_hash_hex: str) -> SumeragiCommitQcRecord:
@@ -20943,14 +20752,17 @@ class ToriiClient(
         return SumeragiCommitQcRecord.from_payload(payload)
 
     def get_sumeragi_leader(self) -> Optional[Any]:
-        """Fetch leader index snapshot (`GET /v1/sumeragi/leader`)."""
+        """Fetch the operator-authenticated leader index snapshot."""
 
-        return self.request_json("GET", "/v1/sumeragi/leader", expected_status=(200,))
+        return self._sumeragi_operator_json(
+            "/v1/sumeragi/leader",
+            context="sumeragi leader",
+        )
 
     def get_sumeragi_leader_typed(self) -> SumeragiLeaderSnapshot:
         """Typed wrapper for :meth:`get_sumeragi_leader`."""
 
-        payload = self.request_json("GET", "/v1/sumeragi/leader", expected_status=(200,))
+        payload = self.get_sumeragi_leader()
         if not isinstance(payload, Mapping):
             raise TypeError("leader response must be a JSON object")
         return SumeragiLeaderSnapshot.from_payload(payload)
@@ -20958,20 +20770,15 @@ class ToriiClient(
     def get_sumeragi_evidence_count(self) -> Optional[Any]:
         """Return total persisted evidence records (`GET /v1/sumeragi/evidence/count`)."""
 
-        return self.request_json(
-            "GET",
+        return self._sumeragi_operator_json(
             "/v1/sumeragi/evidence/count",
-            expected_status=(200,),
+            context="sumeragi evidence count",
         )
 
     def get_sumeragi_evidence_count_typed(self) -> SumeragiEvidenceCount:
         """Typed wrapper for :meth:`get_sumeragi_evidence_count`."""
 
-        payload = self.request_json(
-            "GET",
-            "/v1/sumeragi/evidence/count",
-            expected_status=(200,),
-        )
+        payload = self.get_sumeragi_evidence_count()
         if not isinstance(payload, Mapping):
             raise TypeError("evidence count response must be a JSON object")
         return SumeragiEvidenceCount.from_payload(payload)
@@ -20992,11 +20799,12 @@ class ToriiClient(
             params["offset"] = int(offset)
         if kind is not None:
             params["kind"] = str(kind)
-        return self.request_json(
-            "GET",
-            "/v1/sumeragi/evidence",
-            params=params or None,
-            expected_status=(200,),
+        target = "/v1/sumeragi/evidence"
+        if params:
+            target = f"{target}?{urlencode(sorted(params.items()))}"
+        return self._sumeragi_operator_json(
+            target,
+            context="sumeragi evidence list",
         )
 
     def list_sumeragi_evidence_typed(
@@ -21029,14 +20837,17 @@ class ToriiClient(
         return SumeragiPhasesSnapshot.from_payload(payload)
 
     def get_sumeragi_params(self) -> Optional[Any]:
-        """Fetch on-chain Sumeragi parameters (`GET /v1/sumeragi/params`)."""
+        """Fetch operator-authenticated on-chain Sumeragi parameters."""
 
-        return self.request_json("GET", "/v1/sumeragi/params", expected_status=(200,))
+        return self._sumeragi_operator_json(
+            "/v1/sumeragi/params",
+            context="sumeragi parameters",
+        )
 
     def get_sumeragi_params_typed(self) -> SumeragiParamsSnapshot:
         """Typed wrapper for :meth:`get_sumeragi_params`."""
 
-        payload = self.request_json("GET", "/v1/sumeragi/params", expected_status=(200,))
+        payload = self.get_sumeragi_params()
         if not isinstance(payload, Mapping):
             raise TypeError("sumeragi params response must be a JSON object")
         return SumeragiParamsSnapshot.from_payload(payload)
@@ -21872,13 +21683,12 @@ class ToriiClient(
         )
         return TriggerListPage.from_payload(payload)
 
-
-
 def create_torii_client(
     base_url: str,
     *,
     session: Optional[requests.Session] = None,
     local_signing_context: Optional[LocalSigningContext] = None,
+    operator_signing_context: Optional[OperatorSigningContext] = None,
     auth_token: Optional[str] = None,
     api_token: Optional[str] = None,
     default_headers: Optional[Mapping[str, str]] = None,
@@ -21943,6 +21753,7 @@ def create_torii_client(
         base_url,
         session=session,
         local_signing_context=local_signing_context,
+        operator_signing_context=operator_signing_context,
         auth_token=auth_value,
         api_token=api_value,
         default_headers=header_merge,

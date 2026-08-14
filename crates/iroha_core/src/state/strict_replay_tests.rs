@@ -1,14 +1,18 @@
 //! Production-path tests for strict Sumeragi-v2 Kura replay.
-
-use std::{
-    collections::BTreeSet,
-    num::{NonZeroU64, NonZeroUsize},
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
-
+use super::{QueryIndexJournal, QueryProjectionCheckpointJournal, State, World, WorldReadOnly};
 use crate::sumeragi::v2_core::{EventTag, Generation};
+use crate::{
+    governance::manifest::LaneManifestRegistry,
+    kura::{CommitManifest, CommitManifestBindingState, Kura},
+    query::store::LiveQueryStore,
+    queue::Queue,
+    sumeragi::{
+        v2_apply::V2ApplyService,
+        v2_body_store::{BlockSignaturePolicy, V2BodyStore},
+        v2_chunks::encode_payload,
+        v2_effects::ApplyTask,
+    },
+};
 use iroha_config::parameters::actual::{LaneConfig as RuntimeLaneConfig, Queue as QueueConfig};
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
@@ -27,23 +31,14 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly;
 use norito::codec::Encode;
-
-use super::{QueryIndexJournal, QueryProjectionCheckpointJournal, State, World, WorldReadOnly};
-use crate::{
-    governance::manifest::LaneManifestRegistry,
-    kura::{CommitManifest, CommitManifestBindingState, Kura},
-    query::store::LiveQueryStore,
-    queue::Queue,
-    sumeragi::{
-        v2_apply::V2ApplyService,
-        v2_body_store::{BlockSignaturePolicy, V2BodyStore},
-        v2_chunks::encode_payload,
-        v2_effects::ApplyTask,
-    },
+use std::{
+    collections::BTreeSet,
+    num::{NonZeroU64, NonZeroUsize},
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
 };
-
 const HEIGHT: u64 = 1;
-
 /// Test-only mirror of Kura's private retained SCCP message layout.
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 #[norito(deny_unknown_fields)]
@@ -52,7 +47,6 @@ struct CorruptedKuraRetainedSccpMessage {
     context: SccpOutboundMessageContextV1,
     payload_bytes: Vec<u8>,
 }
-
 /// Test-only mirror used to install a disk-corrupted retained record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 #[norito(deny_unknown_fields)]
@@ -67,7 +61,6 @@ struct CorruptedKuraRetainedBlockRecord {
     merge_reference: Option<CertifiedMergeLedgerReference>,
     sccp_archive: Vec<CorruptedKuraRetainedSccpMessage>,
 }
-
 /// Test-only mirror used to install a disk-corrupted v2 finality envelope.
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 #[norito(deny_unknown_fields)]
@@ -76,14 +69,12 @@ struct CorruptedKuraV2FinalityRecord {
     block_header: BlockHeader,
     artifact: V2FinalityArtifact,
 }
-
 #[derive(Debug, PartialEq, Eq)]
 enum TreeEntry {
     Directory,
     File(Vec<u8>),
     Symlink(PathBuf),
 }
-
 fn kura_tree_fingerprint(kura: &Kura) -> Vec<(PathBuf, TreeEntry)> {
     fn visit(root: &Path, path: &Path, entries: &mut Vec<(PathBuf, TreeEntry)>) {
         let mut children = std::fs::read_dir(path)
@@ -118,16 +109,13 @@ fn kura_tree_fingerprint(kura: &Kura) -> Vec<(PathBuf, TreeEntry)> {
             }
         }
     }
-
     let root = kura.store_root();
     let mut entries = Vec::new();
     visit(&root, &root, &mut entries);
     entries
 }
-
 fn seed_recovery_candidates_for_read_only_prevalidation(kura: &Kura) {
     let root = kura.store_root();
-
     let query_source = root.join("atomic-replay-query-source.norito");
     let mut query = QueryIndexJournal::new(query_source.clone());
     query.set_latest(
@@ -144,7 +132,6 @@ fn seed_recovery_candidates_for_read_only_prevalidation(kura: &Kura) {
         QueryIndexJournal::journal_path(&root).with_extension("norito.tmp"),
     )
     .expect("install query-index recovery candidate");
-
     let projection_source = root.join("atomic-replay-projection-source.norito");
     let projection = QueryProjectionCheckpointJournal::new(projection_source.clone());
     projection
@@ -155,7 +142,6 @@ fn seed_recovery_candidates_for_read_only_prevalidation(kura: &Kura) {
         QueryProjectionCheckpointJournal::journal_path(&root).with_extension("norito.tmp"),
     )
     .expect("install projection recovery candidate");
-
     let merge_tail = root.join("merge_ledger").join("atomic-replay-tail.tmp");
     std::fs::create_dir_all(merge_tail.parent().expect("merge tail parent"))
         .expect("create merge-tail directory");
@@ -165,7 +151,6 @@ fn seed_recovery_candidates_for_read_only_prevalidation(kura: &Kura) {
     )
     .expect("write unpublished merge tail");
 }
-
 struct StateFingerprint {
     snapshot: Vec<u8>,
     height: usize,
@@ -175,14 +160,12 @@ struct StateFingerprint {
     commit_rosters: Vec<crate::commit_roster_journal::CommitRosterSnapshot>,
     merge_entries: Vec<iroha_data_model::merge::MergeLedgerEntry>,
 }
-
 #[derive(Debug, PartialEq, Eq)]
 struct RuntimeStateFingerprint {
     commit_rosters: Vec<crate::commit_roster_journal::CommitRosterSnapshot>,
     merge_entries: Vec<iroha_data_model::merge::MergeLedgerEntry>,
     runtime_debug: String,
 }
-
 impl RuntimeStateFingerprint {
     fn capture(state: &State) -> Self {
         Self {
@@ -211,7 +194,6 @@ impl RuntimeStateFingerprint {
         }
     }
 }
-
 impl StateFingerprint {
     fn capture(state: &State) -> Self {
         Self {
@@ -228,7 +210,6 @@ impl StateFingerprint {
                 .collect(),
         }
     }
-
     fn assert_unchanged(&self, state: &State) {
         assert_eq!(
             state.committed_height(),
@@ -266,7 +247,6 @@ impl StateFingerprint {
         );
     }
 }
-
 struct StrictReplayFixture {
     chain_id: ChainId,
     genesis_account: AccountId,
@@ -282,7 +262,6 @@ struct StrictReplayFixture {
     materialized_state: Arc<State>,
     apply_service: V2ApplyService,
 }
-
 struct TwoBlockReplayFixture {
     first: StrictReplayFixture,
     second_context: wire::HeightContext,
@@ -290,7 +269,6 @@ struct TwoBlockReplayFixture {
     second_artifact: wire::finality::V2FinalityArtifact,
     second_checkpoint_hash: Hash,
 }
-
 impl StrictReplayFixture {
     fn new() -> Self {
         let chain_id: ChainId = "strict-production-v2-replay".into();
@@ -348,7 +326,6 @@ impl StrictReplayFixture {
             crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(state.as_ref());
         context.validate().expect("validate fixture context");
         assert_eq!(context.leader(0), leader, "fixture must freeze its leader");
-
         let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(32);
         let queue = Arc::new(Queue::from_config(
             QueueConfig::default(),
@@ -372,7 +349,6 @@ impl StrictReplayFixture {
             events_sender,
             pops,
         );
-
         let transaction = TransactionBuilder::new(
             network_id,
             genesis_account.clone(),
@@ -443,7 +419,6 @@ impl StrictReplayFixture {
             aggregate_signature: Vec::new(),
         };
         Self::resign_certificate(&mut certificate, &keys);
-
         let body_root = tempfile::tempdir().expect("create exact-body store");
         let mut body_store = V2BodyStore::open_with_policy(
             body_root.path(),
@@ -469,7 +444,6 @@ impl StrictReplayFixture {
         let _completion = service
             .execute(&context, &mut body_store, &task)
             .expect("materialize the exact production durable tuple");
-
         let block = kura
             .get_block(NonZeroUsize::new(1).expect("non-zero height"))
             .expect("read committed canonical block")
@@ -490,7 +464,6 @@ impl StrictReplayFixture {
             .state_hash();
         let expected_snapshot =
             crate::snapshot::canonical_state_snapshot_bytes_for_tests(state.as_ref());
-
         Self {
             chain_id,
             genesis_account,
@@ -507,7 +480,6 @@ impl StrictReplayFixture {
             apply_service: service,
         }
     }
-
     fn into_two_block(self) -> TwoBlockReplayFixture {
         let second_context = wire::HeightContext {
             network_id: self.context.network_id.clone(),
@@ -537,7 +509,6 @@ impl StrictReplayFixture {
         let second_leader = second_context.leader(0);
         let second_leader_index =
             usize::try_from(second_leader).expect("height-two leader index fits usize");
-
         let creation_time_ms = (self.block.header().creation_time() + Duration::from_secs(1))
             .as_millis()
             .try_into()
@@ -604,7 +575,6 @@ impl StrictReplayFixture {
             aggregate_signature: Vec::new(),
         };
         Self::resign_certificate(&mut certificate, &self.keys);
-
         let body_root = tempfile::tempdir().expect("create height-two exact-body store");
         let mut body_store = V2BodyStore::open_with_policy(
             body_root.path(),
@@ -657,7 +627,6 @@ impl StrictReplayFixture {
             second_checkpoint_hash,
         }
     }
-
     fn new_state(
         kura: Arc<Kura>,
         chain_id: ChainId,
@@ -687,7 +656,6 @@ impl StrictReplayFixture {
         }
         state
     }
-
     fn replay_state(&self, kura: Arc<Kura>) -> State {
         Self::new_state(
             kura,
@@ -696,7 +664,6 @@ impl StrictReplayFixture {
             self.genesis_account.clone(),
         )
     }
-
     fn resign_certificate(certificate: &mut wire::QuorumCertificate, keys: &[KeyPair]) {
         let signatures = certificate
             .signers
@@ -726,11 +693,9 @@ impl StrictReplayFixture {
         )
         .expect("aggregate Commit votes");
     }
-
     fn exact_kura_copy(&self) -> Arc<Kura> {
         self.kura_with_block_and_artifact(self.block.clone(), self.artifact.clone())
     }
-
     fn kura_with_block_and_artifact(
         &self,
         block: SignedBlock,
@@ -751,7 +716,6 @@ impl StrictReplayFixture {
             .expect("store forked finality artifact");
         kura
     }
-
     fn fork_with_signature(&self, index: u64, private_key: &iroha_crypto::PrivateKey) -> Arc<Kura> {
         let mut block = self.block.clone();
         let signature = BlockSignature::new(
@@ -786,7 +750,6 @@ impl StrictReplayFixture {
         Self::resign_certificate(&mut artifact.commit_qc, &self.keys);
         self.kura_with_block_and_artifact(block, artifact)
     }
-
     fn fork_with_malformed_sccp_root(&self) -> Arc<Kura> {
         let mut block = self.block.clone();
         block.set_sccp_commitment_root(Some([0xA7; 32]));
@@ -798,7 +761,6 @@ impl StrictReplayFixture {
         block
             .replace_signatures(BTreeSet::from([signature]))
             .expect("replace malformed-SCCP block signature");
-
         let mut artifact = self.artifact.clone();
         artifact.block_hash = block.hash();
         artifact.subject.block_hash = block.hash();
@@ -823,7 +785,6 @@ impl StrictReplayFixture {
             .executed_block_wire_hash()
             .expect("encode malformed-SCCP executed block");
         Self::resign_certificate(&mut artifact.commit_qc, &self.keys);
-
         // Production finality publication intentionally rejects this tuple while preparing the
         // retained archive. Install the mutually correlated bytes through test-only corruption
         // hooks so strict replay, rather than the writer, remains the component under test.
@@ -837,7 +798,6 @@ impl StrictReplayFixture {
                 .with_authenticated_v2_commit_authority(&artifact);
         kura.store_commit_manifest(manifest)
             .expect("store malformed-SCCP manifest");
-
         let blocks_dir = RuntimeLaneConfig::default()
             .primary()
             .blocks_dir(&kura.store_root());
@@ -869,7 +829,6 @@ impl StrictReplayFixture {
             retained.encode(),
         )
         .expect("install malformed retained SCCP archive");
-
         let finality_dir = blocks_dir.join("v2_finality");
         std::fs::create_dir_all(&finality_dir).expect("create v2-finality directory");
         let finality = CorruptedKuraV2FinalityRecord {
@@ -881,7 +840,6 @@ impl StrictReplayFixture {
             .expect("install malformed-SCCP finality envelope");
         kura
     }
-
     fn overwrite_correlated_artifact(
         &self,
         kura: &Kura,
@@ -907,7 +865,6 @@ impl StrictReplayFixture {
         kura.overwrite_v2_finality_without_validation_for_tests(HEIGHT, artifact)
             .expect("overwrite correlated finality artifact");
     }
-
     fn assert_rejected_without_mutation(&self, kura: Arc<Kura>, expected_error: &str) {
         let mut replay_state = self.replay_state(Arc::clone(&kura));
         let before = StateFingerprint::capture(&replay_state);
@@ -921,7 +878,6 @@ impl StrictReplayFixture {
         before.assert_unchanged(&replay_state);
     }
 }
-
 macro_rules! strict_replay_test {
     ($name:ident, $body:block) => {
         #[test]
@@ -938,13 +894,11 @@ macro_rules! strict_replay_test {
         }
     };
 }
-
 strict_replay_test!(production_replay_accepts_the_exact_durable_v2_tuple, {
     let fixture = StrictReplayFixture::new();
     let mut replay_state = fixture.replay_state(Arc::clone(&fixture.kura));
     super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
         .expect("the exact production tuple replays");
-
     assert_eq!(replay_state.committed_height(), 1);
     assert_eq!(
         replay_state.latest_block_hash_fast(),
@@ -1029,7 +983,6 @@ strict_replay_test!(production_replay_accepts_the_exact_durable_v2_tuple, {
         "exact v2 replay must not require or synthesize a legacy roster sidecar"
     );
 });
-
 strict_replay_test!(
     production_replay_consumes_preinstalled_lane_manifest_snapshot,
     {
@@ -1037,7 +990,6 @@ strict_replay_test!(
         let mut replay_state = fixture.replay_state(Arc::clone(&fixture.kura));
         replay_state.install_lane_manifests(&Arc::new(LaneManifestRegistry::empty()));
         let before = StateFingerprint::capture(&replay_state);
-
         let error = super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
             .expect_err("replay must reject a durable block when its lane is absent");
         let diagnostic = format!("{error:?}");
@@ -1050,14 +1002,12 @@ strict_replay_test!(
             "replay rejection must expose the missing registry binding: {diagnostic}"
         );
         before.assert_unchanged(&replay_state);
-
         let nexus = replay_state.nexus_snapshot();
         let frozen =
             Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance));
         replay_state.install_lane_manifests(&frozen);
         super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
             .expect("the identical durable block replays after the lane snapshot is installed");
-
         assert_eq!(replay_state.committed_height(), 1);
         assert_eq!(
             replay_state.latest_block_hash_fast(),
@@ -1065,17 +1015,14 @@ strict_replay_test!(
         );
     }
 );
-
 strict_replay_test!(
     production_replay_rejects_missing_and_mismatched_sidecars_atomically,
     {
         let fixture = StrictReplayFixture::new();
-
         let kura = fixture.exact_kura_copy();
         kura.remove_wsv_checkpoint_without_binding_for_tests(HEIGHT)
             .expect("remove checkpoint");
         fixture.assert_rejected_without_mutation(kura, "missing WSV checkpoint");
-
         let kura = fixture.exact_kura_copy();
         let forged_checkpoint = Hash::new(b"forged strict replay WSV");
         let forged_manifest = CommitManifest::new(
@@ -1096,12 +1043,10 @@ strict_replay_test!(
         )
         .expect("forge checkpoint state hash");
         fixture.assert_rejected_without_mutation(kura, "WSV checkpoint mismatch");
-
         let kura = fixture.exact_kura_copy();
         kura.remove_commit_manifest_without_binding_for_tests(HEIGHT)
             .expect("remove commit manifest");
         fixture.assert_rejected_without_mutation(kura, "manifest is missing");
-
         let kura = fixture.exact_kura_copy();
         let mismatched_manifest = CommitManifest::new(
             HEIGHT,
@@ -1116,12 +1061,10 @@ strict_replay_test!(
             .expect("overwrite commit manifest");
         fixture
             .assert_rejected_without_mutation(kura, "commit manifest WSV checkpoint hash mismatch");
-
         let kura = fixture.exact_kura_copy();
         kura.remove_v2_finality_without_binding_for_tests(HEIGHT)
             .expect("remove finality artifact");
         fixture.assert_rejected_without_mutation(kura, "missing verified v2 finality artifact");
-
         let kura = fixture.exact_kura_copy();
         let mut mismatched_finality = fixture.artifact.clone();
         mismatched_finality.block_hash =
@@ -1131,33 +1074,28 @@ strict_replay_test!(
         fixture.assert_rejected_without_mutation(kura, "failed to verify v2 finality");
     }
 );
-
 strict_replay_test!(
     production_replay_rejects_correlated_finality_forgeries_atomically,
     {
         let fixture = StrictReplayFixture::new();
-
         let kura = fixture.exact_kura_copy();
         let mut missing_pop = fixture.artifact.clone();
         missing_pop.validator_set_pops[0].clear();
         kura.overwrite_v2_finality_without_validation_for_tests(HEIGHT, missing_pop)
             .expect("overwrite missing PoP");
         fixture.assert_rejected_without_mutation(kura, "failed to verify v2 finality");
-
         let kura = fixture.exact_kura_copy();
         let mut mismatched_pop = fixture.artifact.clone();
         mismatched_pop.validator_set_pops.swap(0, 1);
         kura.overwrite_v2_finality_without_validation_for_tests(HEIGHT, mismatched_pop)
             .expect("overwrite mismatched PoP");
         fixture.assert_rejected_without_mutation(kura, "failed to verify v2 finality");
-
         let kura = fixture.exact_kura_copy();
         let mut duplicate_signers = fixture.artifact.clone();
         duplicate_signers.commit_qc.signers = vec![0, 0, 2];
         kura.overwrite_v2_finality_without_validation_for_tests(HEIGHT, duplicate_signers)
             .expect("overwrite duplicate certificate signer");
         fixture.assert_rejected_without_mutation(kura, "failed to verify v2 finality");
-
         let kura = fixture.exact_kura_copy();
         let mut wrong_wire = fixture.artifact.clone();
         wrong_wire.subject.payload_hash = Hash::new(b"forged canonical SignedBlockWire");
@@ -1165,7 +1103,6 @@ strict_replay_test!(
         StrictReplayFixture::resign_certificate(&mut wrong_wire.commit_qc, &fixture.keys);
         fixture.overwrite_correlated_artifact(kura.as_ref(), wrong_wire);
         fixture.assert_rejected_without_mutation(kura, "canonical proposal wire image");
-
         let kura = fixture.exact_kura_copy();
         let mut wrong_executed_wire = fixture.artifact.clone();
         wrong_executed_wire
@@ -1175,7 +1112,6 @@ strict_replay_test!(
         StrictReplayFixture::resign_certificate(&mut wrong_executed_wire.commit_qc, &fixture.keys);
         fixture.overwrite_correlated_artifact(kura.as_ref(), wrong_executed_wire);
         fixture.assert_rejected_without_mutation(kura, "executed block wire image");
-
         let kura = fixture.exact_kura_copy();
         let mut wrong_execution = fixture.artifact.clone();
         wrong_execution
@@ -1187,25 +1123,21 @@ strict_replay_test!(
         fixture.assert_rejected_without_mutation(kura, "execution commitment differs");
     }
 );
-
 strict_replay_test!(
     production_replay_rejects_bad_block_signer_identity_atomically,
     {
         let fixture = StrictReplayFixture::new();
-
         let out_of_range = fixture.fork_with_signature(
             u64::try_from(fixture.context.roster.len()).expect("roster length fits u64"),
             fixture.keys[0].private_key(),
         );
         fixture.assert_rejected_without_mutation(out_of_range, "signatures");
-
         let rogue = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::BlsNormal)
             .expect("derive rogue signer");
         let wrong_key = fixture.fork_with_signature(0, rogue.private_key());
         fixture.assert_rejected_without_mutation(wrong_key, "signatures");
     }
 );
-
 strict_replay_test!(
     production_replay_returns_error_for_malformed_sccp_root_without_panicking,
     {
@@ -1214,7 +1146,6 @@ strict_replay_test!(
         fixture.assert_rejected_without_mutation(malformed, "SCCP");
     }
 );
-
 strict_replay_test!(
     production_replay_range_is_atomic_when_height_two_fails_late,
     {
@@ -1259,7 +1190,6 @@ strict_replay_test!(
             super::TIERED_SNAPSHOT_WORKER_SPAWNS.with(std::cell::Cell::get);
         #[cfg(feature = "sm")]
         let sm2_distid_before = iroha_crypto::sm::Sm2PublicKey::default_distid();
-
         let isolated_probe =
             super::isolated_state_for_replay_prevalidation(&replay_state, &fixture.first.kura)
                 .expect("construct read-only atomic replay State");
@@ -1321,7 +1251,6 @@ strict_replay_test!(
             "constructing isolated replay State must not recover or mutate Kura"
         );
         drop(isolated_probe);
-
         let before = StateFingerprint::capture(&replay_state);
         let error =
             super::replay_blocks_from_kura_range(&fixture.first.kura, &mut replay_state, 1, 2)

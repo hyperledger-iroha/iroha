@@ -1,14 +1,4 @@
 //! Shared harness for Norito-RPC ingress/capability tests to avoid ad-hoc runtimes.
-
-use std::{
-    num::NonZeroU64,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{SystemTime, UNIX_EPOCH},
-};
-
 use axum::{
     body::Body,
     extract::connect_info::ConnectInfo,
@@ -36,16 +26,21 @@ use iroha_logger::Level;
 use iroha_torii::{OnlinePeersProvider, Torii};
 use iroha_torii_shared::uri;
 use iroha_version::codec::EncodeVersioned;
+use std::{
+    num::NonZeroU64,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tower::ServiceExt as _;
-
 #[allow(dead_code)]
 const NORITO_MIME: &str = "application/x-norito";
-
 fn checked_norito_rpc_ed25519_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked Norito RPC Ed25519 fixture keypair")
 }
-
 #[test]
 fn norito_rpc_fixture_uses_checked_ed25519_key_generation() {
     let key_pair = checked_norito_rpc_ed25519_key_fixture();
@@ -53,16 +48,13 @@ fn norito_rpc_fixture_uses_checked_ed25519_key_generation() {
         .public_key()
         .try_algorithm()
         .expect("fixture Norito RPC public key has a valid algorithm");
-
     assert_eq!(algorithm, Algorithm::Ed25519);
 }
-
 /// Return a loopback peer address for Axum handlers that require `ConnectInfo`.
 #[must_use]
 pub fn loopback_connect_info() -> ConnectInfo<std::net::SocketAddr> {
     ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
 }
-
 /// Shared Norito-RPC harness used by integration tests to avoid ad-hoc runtimes.
 pub struct NoritoRpcHarness {
     /// Application router ready for HTTP testing.
@@ -73,7 +65,6 @@ pub struct NoritoRpcHarness {
     /// Exact genesis-lineage identity shared by the state and Torii admission.
     pub network_id: NetworkId,
 }
-
 impl NoritoRpcHarness {
     /// Construct a harness from a preconfigured `ActualRoot`.
     pub fn with_config(cfg: ActualRoot) -> Self {
@@ -94,7 +85,6 @@ impl NoritoRpcHarness {
         let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
         let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
         let _ = peers_tx;
-
         let torii = Torii::new_with_handle(
             cfg.common.chain.clone(),
             network_id,
@@ -110,14 +100,12 @@ impl NoritoRpcHarness {
             None,
             iroha_torii::MaybeTelemetry::disabled(),
         );
-
         Self {
             app: torii.api_router_for_tests(),
             cfg,
             network_id,
         }
     }
-
     /// Construct a harness by applying a small configuration delta to the minimal defaults.
     pub fn new<F>(mut configure: F) -> Self
     where
@@ -127,7 +115,6 @@ impl NoritoRpcHarness {
         configure(&mut cfg);
         Self::with_config(cfg)
     }
-
     /// Post a Norito-encoded transaction to the RPC endpoint.
     #[allow(dead_code)]
     pub async fn post_transaction(
@@ -136,25 +123,21 @@ impl NoritoRpcHarness {
         extra_headers: &[(&str, &str)],
     ) -> axum::response::Response {
         let mut builder = Request::builder().method("POST").uri(uri::TRANSACTION);
-
         if set_content_type {
             builder = builder.header(CONTENT_TYPE, NORITO_MIME);
         }
         for (name, value) in extra_headers {
             builder = builder.header(*name, *value);
         }
-
         let mut req = builder
             .body(Body::from(
                 sample_signed_transaction_for_network(self.network_id).encode_versioned(),
             ))
             .expect("request");
         req.extensions_mut().insert(loopback_connect_info());
-
         self.app.clone().oneshot(req).await.expect("response")
     }
 }
-
 /// Construct a signed transaction payload suitable for Norito-RPC ingress tests.
 #[allow(dead_code)]
 pub fn sample_signed_transaction() -> SignedTransaction {
@@ -163,7 +146,6 @@ pub fn sample_signed_transaction() -> SignedTransaction {
         config.genesis.expected_hash,
     ))
 }
-
 fn sample_signed_transaction_for_network(network_id: NetworkId) -> SignedTransaction {
     let key_pair = checked_norito_rpc_ed25519_key_fixture();
     let account = AccountId::of(key_pair.public_key().clone());
@@ -175,19 +157,16 @@ fn sample_signed_transaction_for_network(network_id: NetworkId) -> SignedTransac
     .with_instructions([Log::new(Level::INFO, "norito-rpc test".to_owned())])
     .sign(key_pair.private_key())
 }
-
 /// Construct a versioned external transaction payload suitable for public `/v1/pipeline/transactions` tests.
 #[allow(dead_code)]
 pub fn sample_transaction_bytes() -> Vec<u8> {
     sample_signed_transaction().encode_versioned()
 }
-
 /// Construct a bare signed-transaction payload used to assert legacy ingress rejection.
 #[allow(dead_code)]
 pub fn sample_bare_transaction_bytes() -> Vec<u8> {
     norito::to_bytes(&sample_signed_transaction()).expect("encode bare signed transaction")
 }
-
 /// Construct a versioned external transaction with a valid wire shape but invalid signature.
 #[allow(dead_code)]
 pub fn sample_invalid_signature_transaction_bytes() -> Vec<u8> {
@@ -202,13 +181,11 @@ pub fn sample_invalid_signature_transaction_bytes() -> Vec<u8> {
     )));
     tx.encode_versioned()
 }
-
 /// Construct a versioned internal entrypoint payload for negative public-ingress tests.
 #[allow(dead_code)]
 pub fn sample_transaction_entrypoint_bytes() -> Vec<u8> {
     TransactionEntrypoint::External(sample_signed_transaction()).encode_versioned()
 }
-
 /// Construct a signed query payload suitable for public `/v1/query` tests.
 #[allow(dead_code)]
 pub fn sample_signed_query() -> iroha_data_model::query::SignedQuery {
@@ -233,13 +210,11 @@ pub fn sample_signed_query() -> iroha_data_model::query::SignedQuery {
         )
         .sign(&key_pair)
 }
-
 /// Construct a versioned signed-query payload suitable for public `/v1/query` tests.
 #[allow(dead_code)]
 pub fn sample_query_bytes() -> Vec<u8> {
     sample_signed_query().encode_versioned()
 }
-
 /// Construct a versioned signed query with a valid wire shape but invalid signature.
 #[allow(dead_code)]
 pub fn sample_invalid_signature_query_bytes() -> Vec<u8> {
@@ -249,7 +224,6 @@ pub fn sample_invalid_signature_query_bytes() -> Vec<u8> {
         .last_mut()
         .expect("sample query signature payload is non-empty");
     *last ^= 0xFF;
-
     iroha_data_model::query::SignedQuery {
         signature: iroha_data_model::query::QuerySignature(SignatureOf::from_signature(
             Signature::from_bytes(&signature),
@@ -258,27 +232,22 @@ pub fn sample_invalid_signature_query_bytes() -> Vec<u8> {
     }
     .encode_versioned()
 }
-
 /// Construct a bare signed-query payload used to assert legacy ingress rejection.
 #[allow(dead_code)]
 pub fn sample_bare_query_bytes() -> Vec<u8> {
     norito::to_bytes(&sample_signed_query()).expect("encode bare signed query")
 }
-
 #[test]
 fn sample_signed_query_roundtrips_as_a_versioned_singular_request() {
     use iroha_version::codec::DecodeVersioned as _;
-
     let signed = sample_signed_query();
     assert!(matches!(
         signed.request(),
         QueryRequest::Singular(SingularQueryBox::FindAbiVersion(_))
     ));
-
     let bytes = signed.encode_versioned();
     let decoded = iroha_data_model::query::SignedQuery::decode_all_versioned(&bytes)
         .expect("decode versioned signed query");
-
     assert!(matches!(
         decoded.request(),
         QueryRequest::Singular(SingularQueryBox::FindAbiVersion(_))

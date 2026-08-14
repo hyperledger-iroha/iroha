@@ -3,11 +3,9 @@
 //! These tests focus on stability/parity properties rather than fixed bytes.
 //! They are intended to be extended with byte-for-byte goldens once the
 //! writer is canonicalized. For now, we assert roundtrip stability.
-
 #[cfg(feature = "json")]
 mod json_golden {
     use norito::json::{self, Value};
-
     fn samples() -> Vec<&'static str> {
         vec![
             "null",
@@ -30,7 +28,6 @@ mod json_golden {
             "{\"a\":1,\"b\":true,\"c\":\"x\"}",
         ]
     }
-
     #[test]
     fn roundtrip_value_stability() {
         for s in samples() {
@@ -40,7 +37,6 @@ mod json_golden {
             assert_eq!(v, v2, "roundtrip mismatch for input={s} out={out}");
         }
     }
-
     #[test]
     fn canonical_writer_small_object() {
         // Canonical: lexicographic key order, stable escapes, booleans/ints as-is.
@@ -48,7 +44,6 @@ mod json_golden {
         let out = json::to_string(&v).expect("stringify");
         assert_eq!(out, "{\"a\":1,\"b\":true,\"c\":\"x\\n\"}");
     }
-
     #[test]
     fn fast_writer_matches_canonical_output() {
         for sample in samples() {

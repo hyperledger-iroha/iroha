@@ -5,28 +5,23 @@
 //! secret-indexed S-box table is not an acceptable software fallback.  The
 //! implementation follows the FIPS 197 AES-256 schedule and round function
 //! with fixed-control-flow GF(2^8) arithmetic only.
-
 use zeroize::Zeroizing;
-
 const AES_BLOCK_BYTES: usize = 16;
 const AES_256_KEY_BYTES: usize = 32;
 const AES_256_ROUND_KEYS: usize = 15;
 const AES_256_SCHEDULE_WORDS: usize = 60;
 const RCON: [u8; 7] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40];
-
 /// Owning AES-256 key schedule for one holder-randomness stream.
 ///
 /// The schedule is neither cloneable nor printable and is wiped on drop.
 pub(super) struct ConstantTimeAes256KeyV1 {
     round_keys: Zeroizing<[[u8; AES_BLOCK_BYTES]; AES_256_ROUND_KEYS]>,
 }
-
 impl core::fmt::Debug for ConstantTimeAes256KeyV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ConstantTimeAes256KeyV1(<redacted>)")
     }
 }
-
 impl ConstantTimeAes256KeyV1 {
     /// Expand one exact 256-bit key into its 15 round keys.
     #[must_use]
@@ -34,7 +29,6 @@ impl ConstantTimeAes256KeyV1 {
         let mut round_keys = Zeroizing::new([[0_u8; AES_BLOCK_BYTES]; AES_256_ROUND_KEYS]);
         round_keys[0].copy_from_slice(&key[..AES_BLOCK_BYTES]);
         round_keys[1].copy_from_slice(&key[AES_BLOCK_BYTES..]);
-
         for index in 8..AES_256_SCHEDULE_WORDS {
             let mut temporary = Zeroizing::new(schedule_word(&round_keys, index - 1));
             if index % 8 == 0 {
@@ -51,10 +45,8 @@ impl ConstantTimeAes256KeyV1 {
             }
             set_schedule_word(&mut round_keys, index, &next);
         }
-
         Self { round_keys }
     }
-
     /// Encrypt one block without accelerator or device dispatch.
     #[must_use]
     pub(super) fn encrypt_block(&self, block: [u8; AES_BLOCK_BYTES]) -> [u8; AES_BLOCK_BYTES] {
@@ -72,7 +64,6 @@ impl ConstantTimeAes256KeyV1 {
         *state
     }
 }
-
 fn schedule_word(
     round_keys: &[[u8; AES_BLOCK_BYTES]; AES_256_ROUND_KEYS],
     index: usize,
@@ -81,7 +72,6 @@ fn schedule_word(
     let offset = (index % 4) * 4;
     core::array::from_fn(|byte| round_keys[round][offset + byte])
 }
-
 fn set_schedule_word(
     round_keys: &mut [[u8; AES_BLOCK_BYTES]; AES_256_ROUND_KEYS],
     index: usize,
@@ -93,25 +83,21 @@ fn set_schedule_word(
         round_keys[round][offset + byte] = word[byte];
     }
 }
-
 fn sub_word(word: &mut [u8; 4]) {
     for byte in word {
         *byte = aes_sbox(*byte);
     }
 }
-
 fn add_round_key(state: &mut [u8; AES_BLOCK_BYTES], round_key: &[u8; AES_BLOCK_BYTES]) {
     for (byte, key_byte) in state.iter_mut().zip(round_key) {
         *byte ^= key_byte;
     }
 }
-
 fn sub_bytes(state: &mut [u8; AES_BLOCK_BYTES]) {
     for byte in state {
         *byte = aes_sbox(*byte);
     }
 }
-
 fn shift_rows(state: &mut [u8; AES_BLOCK_BYTES]) {
     let previous = Zeroizing::new(*state);
     state[1] = previous[5];
@@ -127,7 +113,6 @@ fn shift_rows(state: &mut [u8; AES_BLOCK_BYTES]) {
     state[11] = previous[7];
     state[15] = previous[11];
 }
-
 fn mix_columns(state: &mut [u8; AES_BLOCK_BYTES]) {
     for column in 0..4 {
         let offset = column * 4;
@@ -142,13 +127,11 @@ fn mix_columns(state: &mut [u8; AES_BLOCK_BYTES]) {
         state[offset + 3] = a3 ^ sum ^ aes_xtime(a3 ^ a0);
     }
 }
-
 #[inline]
 fn aes_xtime(value: u8) -> u8 {
     let reduction_mask = 0_u8.wrapping_sub(value >> 7);
     (value << 1) ^ (0x1b & reduction_mask)
 }
-
 #[inline]
 fn gf256_multiply(mut left: u8, mut right: u8) -> u8 {
     let mut product = 0_u8;
@@ -160,7 +143,6 @@ fn gf256_multiply(mut left: u8, mut right: u8) -> u8 {
     }
     product
 }
-
 fn aes_sbox(value: u8) -> u8 {
     // Inversion as value^254; zero maps to zero.  The fixed addition chain
     // has no data-dependent branch or memory access.
@@ -184,11 +166,9 @@ fn aes_sbox(value: u8) -> u8 {
         ^ inverse.rotate_left(4)
         ^ 0x63
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const FIPS_SBOX: [u8; 256] = [
         0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab,
         0x76, 0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4,
@@ -209,7 +189,6 @@ mod tests {
         0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb,
         0x16,
     ];
-
     #[test]
     fn table_free_sbox_matches_every_fips_value() {
         for (input, expected) in FIPS_SBOX.iter().copied().enumerate() {
@@ -220,7 +199,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn aes256_matches_fips_197_appendix_c3() {
         let key = [
@@ -241,7 +219,6 @@ mod tests {
             expected
         );
     }
-
     #[test]
     fn aes256_uses_every_key_and_plaintext_byte() {
         let key = core::array::from_fn(|index| {

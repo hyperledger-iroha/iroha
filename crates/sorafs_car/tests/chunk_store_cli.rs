@@ -3,26 +3,22 @@ use norito::json::Value;
 use sorafs_car::{ChunkStore, fetch_plan::chunk_fetch_plan_from_json};
 use sorafs_chunker::fixtures::FixtureProfile;
 use tempfile::{NamedTempFile, TempDir};
-
 fn canonical_temp_base() -> std::path::PathBuf {
     std::env::temp_dir()
         .canonicalize()
         .expect("canonical temp dir")
 }
-
 fn tempdir() -> std::io::Result<TempDir> {
     tempfile::Builder::new()
         .prefix("sorafs-chunk-store-cli-")
         .tempdir_in(canonical_temp_base())
 }
-
 fn named_temp_file(label: &str) -> NamedTempFile {
     tempfile::Builder::new()
         .prefix(label)
         .tempfile_in(canonical_temp_base())
         .expect(label)
 }
-
 fn write_payload(path: &std::path::PathBuf, size: usize) -> Vec<u8> {
     let mut buf = vec![0u8; size];
     for (idx, byte) in buf.iter_mut().enumerate() {
@@ -31,19 +27,16 @@ fn write_payload(path: &std::path::PathBuf, size: usize) -> Vec<u8> {
     std::fs::write(path, &buf).expect("write payload");
     buf
 }
-
 #[test]
 fn cli_emits_chunk_metadata_for_fixture() {
     let fixture = FixtureProfile::SF1_V1.generate_vectors();
     let mut file = named_temp_file("tempfile");
     std::io::Write::write_all(&mut file, &fixture.input).expect("write fixture");
-
     let output = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(file.path())
         .output()
         .expect("run chunk store CLI");
     assert!(output.status.success(), "cli exited with failure");
-
     let json: Value =
         norito::json::from_slice(&output.stdout).expect("parse chunk store JSON output");
     assert_eq!(
@@ -52,7 +45,6 @@ fn cli_emits_chunk_metadata_for_fixture() {
             .expect("chunk_count"),
         fixture.chunk_lengths.len() as u64
     );
-
     let payload_digest = json
         .get("payload_digest_blake3")
         .and_then(Value::as_str)
@@ -61,13 +53,11 @@ fn cli_emits_chunk_metadata_for_fixture() {
         payload_digest,
         to_hex(blake3::hash(&fixture.input).as_bytes())
     );
-
     let input_bytes = json
         .get("input_bytes")
         .and_then(Value::as_u64)
         .expect("input_bytes field");
     assert_eq!(input_bytes as usize, fixture.input.len());
-
     let por_root = json
         .get("por_root_hex")
         .and_then(Value::as_str)
@@ -75,7 +65,6 @@ fn cli_emits_chunk_metadata_for_fixture() {
     let mut store = ChunkStore::new();
     store.ingest_bytes(&fixture.input).expect("ingest fixture");
     assert_eq!(por_root, to_hex(store.por_tree().root()));
-
     let specs = json
         .get("chunk_fetch_specs")
         .and_then(Value::as_array)
@@ -104,7 +93,6 @@ fn cli_emits_chunk_metadata_for_fixture() {
         fixture.chunk_lengths[0] as u64
     );
 }
-
 #[test]
 fn cli_lists_registered_profiles() {
     let output = cargo_bin_cmd!("sorafs_chunk_store")
@@ -112,7 +100,6 @@ fn cli_lists_registered_profiles() {
         .output()
         .expect("run list-profiles");
     assert!(output.status.success(), "cli exited with failure");
-
     let json: Value = norito::json::from_slice(&output.stdout).expect("parse profile list JSON");
     let array = json.as_array().expect("profile list array");
     assert!(!array.is_empty(), "expected at least one profile");
@@ -139,20 +126,17 @@ fn cli_lists_registered_profiles() {
         "sorafs.sf1@1.0.0"
     );
 }
-
 #[test]
 fn cli_accepts_profile_handle() {
     let fixture = FixtureProfile::SF1_V1.generate_vectors();
     let mut file = named_temp_file("tempfile");
     std::io::Write::write_all(&mut file, &fixture.input).expect("write fixture");
-
     let output = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(file.path())
         .arg("--profile=sorafs.sf1@1.0.0")
         .output()
         .expect("run chunk store CLI");
     assert!(output.status.success(), "cli exited with failure");
-
     let json: Value = norito::json::from_slice(&output.stdout).expect("parse chunk store JSON");
     let profile = json
         .get("profile")
@@ -180,13 +164,11 @@ fn cli_accepts_profile_handle() {
         "sorafs.sf1@1.0.0"
     );
 }
-
 #[test]
 fn cli_rejects_conflicting_profile_flags() {
     let fixture = FixtureProfile::SF1_V1.generate_vectors();
     let mut file = named_temp_file("tempfile");
     std::io::Write::write_all(&mut file, &fixture.input).expect("write fixture");
-
     let output = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(file.path())
         .arg("--profile-id=1")
@@ -203,13 +185,11 @@ fn cli_rejects_conflicting_profile_flags() {
         "expected conflict message, got {stderr}"
     );
 }
-
 #[test]
 fn cli_rejects_noncanonical_operator_inputs() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
     write_payload(&payload_path, 4096);
-
     for (arg, expected) in [
         ("--profile-id=01", "canonical unsigned decimal"),
         ("--profile= sorafs.sf1@1.0.0", "whitespace"),
@@ -232,7 +212,6 @@ fn cli_rejects_noncanonical_operator_inputs() {
         );
     }
 }
-
 #[test]
 fn cli_writes_por_json() {
     let fixture = FixtureProfile::SF1_V1.generate_vectors();
@@ -240,14 +219,12 @@ fn cli_writes_por_json() {
     std::io::Write::write_all(&mut file, &fixture.input).expect("write fixture");
     let por_path = named_temp_file("por file");
     let por_path = por_path.into_temp_path();
-
     let output = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(file.path())
         .arg(format!("--por-json-out={}", por_path.display()))
         .output()
         .expect("run chunk store CLI");
     assert!(output.status.success(), "cli exited with failure");
-
     let por_json: Value = norito::json::from_slice(&std::fs::read(&por_path).expect("read por"))
         .expect("parse por json");
     let root_hex = por_json
@@ -258,14 +235,12 @@ fn cli_writes_por_json() {
     store.ingest_bytes(&fixture.input).expect("ingest fixture");
     assert_eq!(root_hex, to_hex(store.por_tree().root()));
 }
-
 #[test]
 fn cli_writes_por_proof() {
     let fixture = FixtureProfile::SF1_V1.generate_vectors();
     let mut file = named_temp_file("tempfile");
     std::io::Write::write_all(&mut file, &fixture.input).expect("write fixture");
     let proof_path = named_temp_file("proof file").into_temp_path();
-
     let output = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(file.path())
         .arg("--por-proof=0:0:0")
@@ -273,7 +248,6 @@ fn cli_writes_por_proof() {
         .output()
         .expect("run chunk store CLI");
     assert!(output.status.success(), "cli exited with failure");
-
     let stdout_json: Value = norito::json::from_slice(&output.stdout).expect("parse stdout json");
     let proof_value = stdout_json
         .get("por_proof")
@@ -286,14 +260,12 @@ fn cli_writes_por_proof() {
             .expect("chunk index"),
         0
     );
-
     let proof_bytes = std::fs::read::<&std::path::Path>(proof_path.as_ref()).expect("read proof");
     let file_json: Value = norito::json::from_slice(&proof_bytes).expect("parse proof file");
     assert_eq!(
         &file_json,
         stdout_json.get("por_proof").expect("proof in stdout")
     );
-
     let mut store = ChunkStore::new();
     store.ingest_bytes(&fixture.input).expect("ingest fixture");
     let tree = store.por_tree();
@@ -308,7 +280,6 @@ fn cli_writes_por_proof() {
         .expect("leaf hex");
     assert_eq!(leaf_hex, expected_leaf_hex);
     assert!(proof.verify(tree.root()));
-
     let verify = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(file.path())
         .arg(format!("--por-proof-verify={}", proof_path.display()))
@@ -324,21 +295,18 @@ fn cli_writes_por_proof() {
         "expected por_proof_verified field"
     );
 }
-
 #[test]
 fn cli_writes_chunk_fetch_plan_json() {
     let fixture = FixtureProfile::SF1_V1.generate_vectors();
     let mut file = named_temp_file("tempfile");
     std::io::Write::write_all(&mut file, &fixture.input).expect("write fixture");
     let plan_path = named_temp_file("plan file").into_temp_path();
-
     let output = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(file.path())
         .arg(format!("--chunk-fetch-plan-out={}", plan_path.display()))
         .output()
         .expect("run chunk store CLI");
     assert!(output.status.success(), "cli exited with failure");
-
     let stdout_json: Value = norito::json::from_slice(&output.stdout).expect("parse stdout json");
     let stdout_specs = stdout_json
         .get("chunk_fetch_specs")
@@ -362,7 +330,6 @@ fn cli_writes_chunk_fetch_plan_json() {
         Some(payload_digest_hex.as_str())
     );
 }
-
 #[test]
 fn cli_persists_chunks_to_directory() {
     let tempdir = tempdir().expect("tempdir");
@@ -371,14 +338,12 @@ fn cli_persists_chunks_to_directory() {
     let chunk_dir = std::fs::canonicalize(tempdir.path())
         .expect("canonical tempdir")
         .join("persisted-chunks");
-
     let output = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(&payload_path)
         .arg(format!("--chunk-dir-out={}", chunk_dir.display()))
         .output()
         .expect("run chunk store CLI");
     assert!(output.status.success(), "cli exited with failure");
-
     let stdout_json: Value = norito::json::from_slice(&output.stdout).expect("parse stdout json");
     let persisted = stdout_json
         .get("persisted_chunks")
@@ -404,7 +369,6 @@ fn cli_persists_chunks_to_directory() {
         .and_then(Value::as_u64)
         .expect("chunk_count") as usize;
     assert_eq!(records.len(), chunk_count);
-
     for record in records {
         let record = record.as_object().expect("record object");
         let file_name = record
@@ -431,7 +395,6 @@ fn cli_persists_chunks_to_directory() {
         );
         assert_eq!(digest, to_hex(blake3::hash(&persisted_bytes).as_bytes()));
     }
-
     let partial_files: Vec<_> = std::fs::read_dir(&chunk_dir)
         .expect("read chunk dir")
         .filter_map(Result::ok)
@@ -442,7 +405,6 @@ fn cli_persists_chunks_to_directory() {
         "partial files should be renamed away"
     );
 }
-
 #[test]
 fn cli_persists_empty_payload_to_directory() {
     let tempdir = tempdir().expect("tempdir");
@@ -451,14 +413,12 @@ fn cli_persists_empty_payload_to_directory() {
     let chunk_dir = std::fs::canonicalize(tempdir.path())
         .expect("canonical tempdir")
         .join("empty-chunks");
-
     let output = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(&payload_path)
         .arg(format!("--chunk-dir-out={}", chunk_dir.display()))
         .output()
         .expect("run chunk store CLI");
     assert!(output.status.success(), "cli exited with failure");
-
     let stdout_json: Value = norito::json::from_slice(&output.stdout).expect("parse stdout json");
     assert_eq!(
         stdout_json
@@ -505,7 +465,6 @@ fn cli_persists_empty_payload_to_directory() {
         0
     );
 }
-
 #[test]
 fn cli_rejects_non_empty_chunk_directory() {
     let tempdir = tempdir().expect("tempdir");
@@ -516,14 +475,12 @@ fn cli_rejects_non_empty_chunk_directory() {
         .join("persisted-chunks");
     std::fs::create_dir(&chunk_dir).expect("create chunk dir");
     std::fs::write(chunk_dir.join("existing.bin"), b"do not remove").expect("write sentinel");
-
     let output = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(&payload_path)
         .arg(format!("--chunk-dir-out={}", chunk_dir.display()))
         .output()
         .expect("run chunk store CLI");
     assert!(!output.status.success(), "cli should reject non-empty dir");
-
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("must be absent for immutable publication"),
@@ -534,7 +491,6 @@ fn cli_rejects_non_empty_chunk_directory() {
         "preflight must not remove existing files"
     );
 }
-
 #[test]
 fn manifest_cli_persists_chunks_to_directory() {
     let tempdir = tempdir().expect("tempdir");
@@ -543,14 +499,12 @@ fn manifest_cli_persists_chunks_to_directory() {
     let chunk_dir = std::fs::canonicalize(tempdir.path())
         .expect("canonical tempdir")
         .join("manifest-chunks");
-
     let output = cargo_bin_cmd!("sorafs_manifest_chunk_store")
         .arg(&payload_path)
         .arg(format!("--chunk-dir-out={}", chunk_dir.display()))
         .output()
         .expect("run manifest chunk store CLI");
     assert!(output.status.success(), "cli exited with failure");
-
     let stdout_json: Value = norito::json::from_slice(&output.stdout).expect("parse stdout json");
     let persisted = stdout_json
         .get("persisted_chunks")
@@ -575,7 +529,6 @@ fn manifest_cli_persists_chunks_to_directory() {
         .expect("file_name");
     assert!(chunk_dir.join(first_file).is_file(), "chunk file missing");
 }
-
 #[test]
 fn manifest_cli_writes_report_to_json_out() {
     let tempdir = tempdir().expect("tempdir");
@@ -583,14 +536,12 @@ fn manifest_cli_writes_report_to_json_out() {
     let payload_path = temp_path.join("payload.bin");
     write_payload(&payload_path, 4096);
     let report_path = temp_path.join("manifest-report.json");
-
     let output = cargo_bin_cmd!("sorafs_manifest_chunk_store")
         .arg(&payload_path)
         .arg(format!("--json-out={}", report_path.display()))
         .output()
         .expect("run manifest chunk store CLI");
     assert!(output.status.success(), "cli exited with failure");
-
     let report: Value =
         norito::json::from_slice(&std::fs::read(&report_path).expect("read report"))
             .expect("parse report json");
@@ -602,13 +553,11 @@ fn manifest_cli_writes_report_to_json_out() {
         1
     );
 }
-
 #[test]
 fn manifest_cli_rejects_noncanonical_operator_inputs() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
     write_payload(&payload_path, 4096);
-
     for (arg, expected, include_payload) in [
         ("--profile-id=01", "canonical unsigned decimal", true),
         ("--profile= sorafs.sf1@1.0.0", "whitespace", true),
@@ -633,7 +582,6 @@ fn manifest_cli_rejects_noncanonical_operator_inputs() {
         );
     }
 }
-
 #[test]
 fn cli_writes_report_to_json_out() {
     let tempdir = tempdir().expect("tempdir");
@@ -641,14 +589,12 @@ fn cli_writes_report_to_json_out() {
     let payload_path = temp_path.join("payload.bin");
     write_payload(&payload_path, 4096);
     let report_path = temp_path.join("chunk-report.json");
-
     let output = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(&payload_path)
         .arg(format!("--json-out={}", report_path.display()))
         .output()
         .expect("run chunk store CLI");
     assert!(output.status.success(), "cli exited with failure");
-
     let report: Value =
         norito::json::from_slice(&std::fs::read(&report_path).expect("read report"))
             .expect("parse report json");
@@ -660,19 +606,16 @@ fn cli_writes_report_to_json_out() {
         1
     );
 }
-
 #[test]
 fn cli_writes_report_to_stdout_when_json_dash() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
     write_payload(&payload_path, 4096);
-
     let assert = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(&payload_path)
         .arg("--json-out=-")
         .assert()
         .success();
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8 stdout");
     let report: Value = norito::json::from_str(&stdout).expect("parse stdout json");
     assert_eq!(
@@ -683,19 +626,16 @@ fn cli_writes_report_to_stdout_when_json_dash() {
         1
     );
 }
-
 #[test]
 fn cli_writes_por_json_to_stdout_when_dash() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("input.bin");
     write_payload(&payload_path, 8 * 1024);
-
     let assert = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(&payload_path)
         .arg("--por-json-out=-")
         .assert()
         .success();
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8 stdout");
     let por_tree_value: Value = norito::json::from_str(&stdout).expect("parse stdout json");
     assert!(
@@ -703,19 +643,16 @@ fn cli_writes_por_json_to_stdout_when_dash() {
         "expected PoR JSON object when streaming to stdout"
     );
 }
-
 #[test]
 fn cli_writes_chunk_fetch_plan_to_stdout_when_dash() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("input.bin");
     write_payload(&payload_path, 8 * 1024);
-
     let assert = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(&payload_path)
         .arg("--chunk-fetch-plan-out=-")
         .assert()
         .success();
-
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8 stdout");
     let plan_value: Value = norito::json::from_str(&stdout).expect("parse chunk fetch plan");
     let plan = chunk_fetch_plan_from_json(&plan_value).expect("canonical V1 plan from stdout");
@@ -724,14 +661,12 @@ fn cli_writes_chunk_fetch_plan_to_stdout_when_dash() {
         "expected chunk fetch specs entries"
     );
 }
-
 #[test]
 fn cli_samples_por_leaves() {
     let fixture = FixtureProfile::SF1_V1.generate_vectors();
     let mut file = named_temp_file("tempfile");
     std::io::Write::write_all(&mut file, &fixture.input).expect("write fixture");
     let sample_path = named_temp_file("sample file").into_temp_path();
-
     let output = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(file.path())
         .arg("--por-sample=3")
@@ -740,19 +675,16 @@ fn cli_samples_por_leaves() {
         .output()
         .expect("run sampling CLI");
     assert!(output.status.success(), "cli exited with failure");
-
     let stdout_json: Value = norito::json::from_slice(&output.stdout).expect("parse stdout json");
     let samples = stdout_json
         .get("por_samples")
         .and_then(Value::as_array)
         .expect("por_samples array");
     assert_eq!(samples.len(), 3, "expected three samples");
-
     let mut seen = std::collections::HashSet::new();
     let mut store = ChunkStore::new();
     store.ingest_bytes(&fixture.input).expect("ingest fixture");
     let tree = store.por_tree();
-
     for sample in samples {
         let sample = sample.as_object().expect("sample object");
         let flat = sample
@@ -789,7 +721,6 @@ fn cli_samples_por_leaves() {
             expected_leaf_hex
         );
     }
-
     let sample_path_ref: &std::path::Path = sample_path.as_ref();
     let file_samples: Value =
         norito::json::from_slice(&std::fs::read(sample_path_ref).expect("read sample file"))
@@ -799,20 +730,17 @@ fn cli_samples_por_leaves() {
         stdout_json.get("por_samples").expect("samples in stdout")
     );
 }
-
 #[test]
 fn car_cli_truncates_samples_when_request_exceeds_leaves() {
     let fixture = FixtureProfile::SF1_V1.generate_vectors();
     let mut file = named_temp_file("tempfile");
     std::io::Write::write_all(&mut file, &fixture.input).expect("write fixture");
-
     let total_leaves = {
         let mut store = ChunkStore::new();
         store.ingest_bytes(&fixture.input).expect("ingest fixture");
         store.por_tree().leaf_count()
     };
     let request = total_leaves + 5;
-
     let output = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(file.path())
         .arg(format!("--por-sample={request}"))
@@ -820,7 +748,6 @@ fn car_cli_truncates_samples_when_request_exceeds_leaves() {
         .output()
         .expect("run sampling CLI");
     assert!(output.status.success(), "cli exited with failure");
-
     let stdout_json: Value = norito::json::from_slice(&output.stdout).expect("parse stdout json");
     let samples = stdout_json
         .get("por_samples")
@@ -835,7 +762,6 @@ fn car_cli_truncates_samples_when_request_exceeds_leaves() {
         "expected truncation flag when requesting more leaves than available"
     );
 }
-
 fn to_hex(bytes: &[u8]) -> String {
     const TABLE: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);

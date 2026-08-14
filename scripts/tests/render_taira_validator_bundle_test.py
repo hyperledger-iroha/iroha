@@ -25,6 +25,9 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 TAIRA_CONFIG_PATH = MODULE_PATH.parents[1] / "configs/soranexus/taira/config.toml"
+DEFAULT_TAIRA_CONFIG_PATH = (
+    MODULE_PATH.parents[1] / "defaults/kagami/iroha3-taira/config.toml"
+)
 TAIRA_GENESIS_PATH = MODULE_PATH.parents[1] / "configs/soranexus/taira/genesis.json"
 TAIRA_SECRETS_EXAMPLE_PATH = (
     MODULE_PATH.parents[1] / "configs/soranexus/taira/validator_secrets.example.toml"
@@ -35,7 +38,7 @@ TAIRA_CITIZEN_ID = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
 TAIRA_GENESIS_DEPLOYER_ID = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A"
 TAIRA_GAS_ASSET_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 TAIRA_CONSENSUS_FINGERPRINT = (
-    "0x341dc1312934c312e6fb5cc8fab0902acaa54c2ce3d60fd67ddac8969eea0a54"
+    "0x6679f78af39ad62147e20c504d21eadb579a9840fda4979e67b6b623d218cf37"
 )
 TAIRA_FEE_SPONSOR_SELECTORS = [
     "iroha.log",
@@ -131,6 +134,9 @@ def test_taira_templates_require_no_backend_offline_enrollment() -> None:
 
 def test_taira_runtime_paths_and_deploy_rate_are_release_pinned() -> None:
     config = tomllib.loads(TAIRA_CONFIG_PATH.read_text(encoding="utf-8"))
+    default_config = tomllib.loads(
+        DEFAULT_TAIRA_CONFIG_PATH.read_text(encoding="utf-8")
+    )
     genesis = json.loads(TAIRA_GENESIS_PATH.read_text(encoding="utf-8"))
 
     assert config["torii"]["address"] == "addr:0.0.0.0:18080#2F16"
@@ -148,6 +154,15 @@ def test_taira_runtime_paths_and_deploy_rate_are_release_pinned() -> None:
         == MODULE.TAIRA_TX_GOSSIP_PLAINTEXT_FRAME_BYTES
     )
     assert config["network"]["max_frame_bytes"] == MODULE.TAIRA_MAX_FRAME_BYTES
+    assert default_config["network"]["max_frame_bytes"] == MODULE.TAIRA_MAX_FRAME_BYTES
+    assert (
+        default_config["network"]["max_frame_bytes_block_sync"]
+        == MODULE.TAIRA_BLOCK_SYNC_PLAINTEXT_FRAME_BYTES
+    )
+    assert (
+        default_config["network"]["max_frame_bytes_tx_gossip"]
+        == MODULE.TAIRA_TX_GOSSIP_PLAINTEXT_FRAME_BYTES
+    )
     assert (
         genesis["sumeragi_v2"]["da_layout"]["max_payload_size_bytes"]
         == config["sumeragi"]["block"]["max_payload_bytes"]
@@ -211,9 +226,9 @@ def test_taira_bounds_each_shared_host_validator_storage_budget() -> None:
 
     assert storage["local_budget_bytes"] == 64 * 1024 * 1024 * 1024
     assert storage["disk_budget_weights"] == {
-        "kura_blocks_bps": 7_500,
+        "kura_blocks_bps": 7_499,
         "wsv_snapshots_bps": 2_000,
-        "sorafs_bps": 0,
+        "sorafs_bps": 1,
         "soranet_spool_bps": 250,
         "soravpn_spool_bps": 250,
     }

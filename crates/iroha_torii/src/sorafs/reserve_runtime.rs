@@ -8,9 +8,11 @@
 //! strict durable ingress can expose the resulting signed transaction.
 
 #![cfg(feature = "app_api")]
-
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
-
+use super::reserve_worker::{
+    ReserveEnvelopeReconciliationV1, ReserveFinalizedSnapshotV1, ReserveWorkerActionV1,
+    plan_reserve_worker_action, reconcile_reserve_semantics,
+};
+use crate::{SharedAppState, SoraFsReserveTransactionSigner};
 use axum::http::StatusCode;
 use blake3::hash as blake3_hash;
 use iroha_core::{
@@ -63,26 +65,18 @@ use sorafs_node::{
         validate_reserve_reconciliation_material_v1,
     },
 };
-
-use super::reserve_worker::{
-    ReserveEnvelopeReconciliationV1, ReserveFinalizedSnapshotV1, ReserveWorkerActionV1,
-    plan_reserve_worker_action, reconcile_reserve_semantics,
-};
-use crate::{SharedAppState, SoraFsReserveTransactionSigner};
-
+use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 const RESERVE_TELEMETRY_MAX_EVENTS_PER_SCAN_V1: usize = 1_024;
 const RESERVE_TELEMETRY_MAX_PROVIDERS_V1: usize = 4_096;
 const RESERVE_LIFECYCLE_STAGE_COUNT_V1: usize = 5;
 const RESERVE_MOVEMENT_STATUS_COUNT_V1: usize = 3;
 const RESERVE_RECONCILED_STATUS_COUNT_V1: usize = 2;
-
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SorafsReserveTransactionForwarderCursorV1 {
     after_sequence: Option<u64>,
     after_provider_id: Option<ProviderId>,
     telemetry: SorafsReserveFinalizedTelemetryProjectionV1,
 }
-
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SorafsReserveTransactionForwarderScanV1 {
     generated: usize,
@@ -99,7 +93,6 @@ pub(crate) struct SorafsReserveTransactionForwarderScanV1 {
     telemetry_catching_up: usize,
     telemetry_failed: usize,
 }
-
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct SorafsReserveFinalizedTelemetryProjectionV1 {
     after_event: Option<ReserveFinalizedEventCursorV1>,
@@ -107,7 +100,6 @@ struct SorafsReserveFinalizedTelemetryProjectionV1 {
     reconciled_counts: [u64; RESERVE_RECONCILED_STATUS_COUNT_V1],
     open_appeals: u64,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SorafsReserveFinalizedProviderMetricsV1 {
     finalized_cursor: ReserveFinalizedCursorV1,
@@ -118,13 +110,11 @@ struct SorafsReserveFinalizedProviderMetricsV1 {
     pending_movements: u64,
     open_appeals: u64,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SorafsReserveFinalizedTelemetryRefreshV1 {
     Published,
     CatchingUp,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SorafsReserveFinalizedTelemetryErrorV1 {
     FinalizedViewUnavailable,
@@ -135,7 +125,6 @@ enum SorafsReserveFinalizedTelemetryErrorV1 {
     ProviderCapacityExceeded,
     ProjectionMismatch,
 }
-
 impl SorafsReserveFinalizedTelemetryErrorV1 {
     const fn label(self) -> &'static str {
         match self {
@@ -149,7 +138,6 @@ impl SorafsReserveFinalizedTelemetryErrorV1 {
         }
     }
 }
-
 /// Reserve supervision uses one role-activation predicate.
 ///
 /// Provider storage keeps durable drain/reconciliation active even when new
@@ -162,7 +150,6 @@ struct ReserveWorkerSupervisionV1 {
     generation_enabled: bool,
     role_active: bool,
 }
-
 const fn reserve_worker_supervision(
     storage_enabled: bool,
     generation_enabled: bool,
@@ -172,7 +159,6 @@ const fn reserve_worker_supervision(
         role_active: storage_enabled || generation_enabled,
     }
 }
-
 fn spawn_reserve_worker_when_active(
     supervision: ReserveWorkerSupervisionV1,
     spawn: impl FnOnce(),
@@ -183,19 +169,16 @@ fn spawn_reserve_worker_when_active(
     spawn();
     true
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReserveGeneratedCandidateV1 {
     operation: ReserveOperationV1,
     context: ReserveTransactionContextV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReserveGenerationBatchV1 {
     candidates: Vec<ReserveGeneratedCandidateV1>,
     next_after_provider_id: Option<ProviderId>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReserveGenerationErrorV1 {
     FinalizedViewUnavailable,
@@ -205,7 +188,6 @@ enum ReserveGenerationErrorV1 {
     InvalidSpendableBalance,
     ArithmeticOverflow,
 }
-
 fn plan_generated_reserve_operation(
     policy_record: &ReserveAuthorityPolicyRecordV1,
     account: &ReserveProviderAccountV1,
@@ -229,7 +211,6 @@ fn plan_generated_reserve_operation(
             account.reserve_balance.clone(),
         )
         .map_err(|_| ReserveGenerationErrorV1::InvalidPolicyOrQuote)?;
-
     if periods_due != 0 {
         let maximum_periods = u64::from(RESERVE_RENT_MAX_BILLING_PERIODS_V1);
         let candidate_periods = u16::try_from(periods_due.min(maximum_periods))
@@ -256,7 +237,6 @@ fn plan_generated_reserve_operation(
             )));
         }
     }
-
     let days_past_due = account
         .rent_days_past_due_at(finalized_at_unix)
         .map_err(|_| ReserveGenerationErrorV1::InvalidProviderTimestamp)?;
@@ -279,13 +259,11 @@ fn plan_generated_reserve_operation(
         ),
     )))
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReserveCommittedExternalOutcomeV1 {
     Applied,
     Rejected,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReserveAuthoritativeTransactionOutcomeV1 {
     Absent,
@@ -293,13 +271,11 @@ enum ReserveAuthoritativeTransactionOutcomeV1 {
     Rejected,
     Unavailable,
 }
-
 #[derive(Debug)]
 struct ReserveFinalizedObservationV1 {
     snapshot: ReserveFinalizedSnapshotV1,
     transaction_outcome: Option<ReserveAuthoritativeTransactionOutcomeV1>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReserveTransactionSubmissionDispositionV1 {
     Submitted,
@@ -307,14 +283,12 @@ enum ReserveTransactionSubmissionDispositionV1 {
     Rejected,
     Ambiguous,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReserveTransactionSubmissionResultV1 {
     Submitted,
     Rejected,
     Deferred,
 }
-
 fn classify_local_reserve_transaction_submission(
     error: &iroha_core::queue::Error,
 ) -> ReserveTransactionSubmissionDispositionV1 {
@@ -329,7 +303,6 @@ fn classify_local_reserve_transaction_submission(
         _ => ReserveTransactionSubmissionDispositionV1::DefinitelyNotSubmitted,
     }
 }
-
 fn local_reserve_evidence_blocks_absence_retry(
     queue_pending: bool,
     cache_kind: Option<crate::PipelineStatusKind>,
@@ -345,7 +318,6 @@ fn local_reserve_evidence_blocks_absence_retry(
             )
         )
 }
-
 fn retained_reserve_transaction_digest(
     retained_digest: Option<[u8; 32]>,
     signed_transaction_bytes: Option<&[u8]>,
@@ -355,7 +327,6 @@ fn retained_reserve_transaction_digest(
     (*blake3_hash(signed_transaction_bytes).as_bytes() == retained_digest)
         .then_some(retained_digest)
 }
-
 fn classify_reserve_envelope(
     retained_digest: Option<[u8; 32]>,
     signed_transaction_bytes: Option<&[u8]>,
@@ -401,7 +372,6 @@ fn classify_reserve_envelope(
         }
     }
 }
-
 fn classify_exact_reserve_entrypoint_outcome(
     expected_hash: &HashOf<SignedTransaction>,
     block_available: bool,
@@ -428,7 +398,6 @@ fn classify_exact_reserve_entrypoint_outcome(
         }
     }
 }
-
 fn inspect_indexed_reserve_transaction(
     kura: &iroha_core::kura::Kura,
     transaction_hash: &HashOf<SignedTransaction>,
@@ -468,7 +437,6 @@ fn inspect_indexed_reserve_transaction(
             }),
     )
 }
-
 fn reserve_finalized_cursor_from_view(
     view: &impl StateReadOnly,
 ) -> Option<ReserveFinalizedCursorV1> {
@@ -481,12 +449,10 @@ fn reserve_finalized_cursor_from_view(
         })
         .filter(|cursor| cursor.height != 0 && cursor.block_hash != [0; 32])
 }
-
 fn current_reserve_finalized_cursor(state: &SharedAppState) -> Option<ReserveFinalizedCursorV1> {
     let view = state.state.query_view();
     reserve_finalized_cursor_from_view(&view)
 }
-
 const fn reserve_lifecycle_stage_index(stage: ReserveLifecycleStage) -> usize {
     match stage {
         ReserveLifecycleStage::Active => 0,
@@ -496,7 +462,6 @@ const fn reserve_lifecycle_stage_index(stage: ReserveLifecycleStage) -> usize {
         ReserveLifecycleStage::Default => 4,
     }
 }
-
 fn reserve_quantity_to_metric_micro_xor(
     amount: &XorQuantity,
 ) -> Result<u128, SorafsReserveFinalizedTelemetryErrorV1> {
@@ -514,7 +479,6 @@ fn reserve_quantity_to_metric_micro_xor(
         .and_then(|scaled| scaled.try_mantissa_u128())
         .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)
 }
-
 fn reserve_telemetry_event_shape_is_valid(
     event: &iroha_data_model::events::data::sorafs::SorafsReserveLedgerEvent,
 ) -> bool {
@@ -558,7 +522,6 @@ fn reserve_telemetry_event_shape_is_valid(
         }
     }
 }
-
 fn reserve_telemetry_event_cursor_is_successor(
     previous: Option<ReserveFinalizedEventCursorV1>,
     current: ReserveFinalizedEventCursorV1,
@@ -586,7 +549,6 @@ fn reserve_telemetry_event_cursor_is_successor(
         std::cmp::Ordering::Greater => false,
     }
 }
-
 fn apply_reserve_finalized_telemetry_event_page(
     projection: &mut SorafsReserveFinalizedTelemetryProjectionV1,
     page: &ReserveFinalizedEventPageV1,
@@ -604,7 +566,6 @@ fn apply_reserve_finalized_telemetry_event_page(
     {
         return Err(SorafsReserveFinalizedTelemetryErrorV1::InvalidEventPage);
     }
-
     let mut next = *projection;
     for record in &page.events {
         let cursor = record.cursor();
@@ -667,7 +628,6 @@ fn apply_reserve_finalized_telemetry_event_page(
     *projection = next;
     Ok(())
 }
-
 fn consume_reserve_finalized_telemetry_events(
     view: &impl StateReadOnly,
     finalized_cursor: ReserveFinalizedCursorV1,
@@ -698,7 +658,6 @@ fn consume_reserve_finalized_telemetry_events(
         }
     }
 }
-
 fn collect_reserve_finalized_provider_metrics(
     view: &impl StateReadOnly,
     finalized_cursor: ReserveFinalizedCursorV1,
@@ -714,7 +673,6 @@ fn collect_reserve_finalized_provider_metrics(
     };
     let mut after_provider_id = None;
     let mut provider_count = 0_usize;
-
     loop {
         let page = FindSorafsReserveProviders::new(
             Some(finalized_cursor),
@@ -746,7 +704,6 @@ fn collect_reserve_finalized_provider_metrics(
         {
             return Err(SorafsReserveFinalizedTelemetryErrorV1::ProviderCapacityExceeded);
         }
-
         let mut previous_provider_id = after_provider_id;
         for account in &page.accounts {
             let provider_id = account.terms.provider_id;
@@ -754,7 +711,6 @@ fn collect_reserve_finalized_provider_metrics(
                 return Err(SorafsReserveFinalizedTelemetryErrorV1::InvalidProviderPage);
             }
             previous_provider_id = Some(provider_id);
-
             let stage = reserve_lifecycle_stage_index(account.lifecycle_stage);
             metrics.lifecycle_stage_counts[stage] = metrics.lifecycle_stage_counts[stage]
                 .checked_add(1)
@@ -790,14 +746,12 @@ fn collect_reserve_finalized_provider_metrics(
                 .checked_add(u64::from(account.open_appeals))
                 .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
         }
-
         if !page.has_more {
             return Ok(metrics);
         }
         after_provider_id = page.next_after;
     }
 }
-
 fn refresh_sorafs_reserve_finalized_telemetry(
     state: &SharedAppState,
     projection: &mut SorafsReserveFinalizedTelemetryProjectionV1,
@@ -811,7 +765,6 @@ fn refresh_sorafs_reserve_finalized_telemetry(
             .with_metrics(|metrics| metrics.mark_sorafs_reserve_finalized_projection_unready());
         return Ok(SorafsReserveFinalizedTelemetryRefreshV1::CatchingUp);
     }
-
     let provider_metrics = collect_reserve_finalized_provider_metrics(&view, finalized_cursor)?;
     if provider_metrics.pending_movements != projection.custody_counts[0]
         || provider_metrics.open_appeals != projection.open_appeals
@@ -832,7 +785,6 @@ fn refresh_sorafs_reserve_finalized_telemetry(
     });
     Ok(SorafsReserveFinalizedTelemetryRefreshV1::Published)
 }
-
 fn collect_generated_reserve_operations_in_one_finalized_view(
     state: &SharedAppState,
     after_provider_id: Option<ProviderId>,
@@ -856,7 +808,6 @@ fn collect_generated_reserve_operations_in_one_finalized_view(
     if finalized_at_unix == 0 {
         return Err(ReserveGenerationErrorV1::InvalidFinalizedTimestamp);
     }
-
     let policy_record = FindSorafsReservePolicy::new()
         .execute(&view)
         .map_err(|_| ReserveGenerationErrorV1::InvalidPolicyOrQuote)?;
@@ -871,7 +822,6 @@ fn collect_generated_reserve_operations_in_one_finalized_view(
     {
         return Err(ReserveGenerationErrorV1::InvalidPolicyOrQuote);
     }
-
     let query_hard_limit = usize::try_from(RESERVE_QUERY_MAX_ITEMS_V1)
         .map_err(|_| ReserveGenerationErrorV1::ArithmeticOverflow)?;
     let query_limit = u32::try_from(policy.scan_batch_limit().min(query_hard_limit))
@@ -888,7 +838,6 @@ fn collect_generated_reserve_operations_in_one_finalized_view(
         (false, None) => None,
         _ => return Err(ReserveGenerationErrorV1::FinalizedViewUnavailable),
     };
-
     let mut candidates = Vec::with_capacity(page.accounts.len());
     for account in page.accounts {
         let asset_id = AssetId::of(
@@ -927,7 +876,6 @@ fn collect_generated_reserve_operations_in_one_finalized_view(
         next_after_provider_id,
     })
 }
-
 fn reserve_provider_id(retained: &ReserveTransactionReconciliationV1) -> Option<ProviderId> {
     retained
         .request
@@ -942,7 +890,6 @@ fn reserve_provider_id(retained: &ReserveTransactionReconciliationV1) -> Option<
             }
         })
 }
-
 fn reserve_movement_id(retained: &ReserveTransactionReconciliationV1) -> Option<[u8; 32]> {
     match &retained.request.operation {
         ReserveOperationV1::RequestMovement(instruction) => Some(*instruction.movement_id()),
@@ -956,7 +903,6 @@ fn reserve_movement_id(retained: &ReserveTransactionReconciliationV1) -> Option<
         | ReserveOperationV1::DecideAppeal(_) => None,
     }
 }
-
 fn reserve_appeal_id(retained: &ReserveTransactionReconciliationV1) -> Option<[u8; 32]> {
     match &retained.request.operation {
         ReserveOperationV1::SubmitAppeal(instruction) => Some(*instruction.appeal_id()),
@@ -970,7 +916,6 @@ fn reserve_appeal_id(retained: &ReserveTransactionReconciliationV1) -> Option<[u
         | ReserveOperationV1::RepayCredit(_) => None,
     }
 }
-
 fn reserve_snapshot_in_view(
     view: &impl StateReadOnly,
     delivery: &ReserveTransactionPendingV1,
@@ -983,13 +928,11 @@ fn reserve_snapshot_in_view(
         .and_then(|height| usize::try_from(height).ok())
         .and_then(|index| view.block_hashes().get(index))
         .map(|hash| *hash.as_ref());
-
     let policy_record = match FindSorafsReservePolicy::new().execute(view) {
         Ok(record) => Some(record),
         Err(QueryExecutionFail::Find(FindError::SorafsReservePolicy)) => None,
         Err(_) => return None,
     };
-
     let provider_id = reserve_provider_id(retained)?;
     let provider = match FindSorafsReserveProviderById::new(provider_id).execute(view) {
         Ok(provider) => Some(provider),
@@ -1000,14 +943,12 @@ fn reserve_snapshot_in_view(
         }
         Err(_) => return None,
     };
-
     let provider_owner = matches!(
         &retained.request.operation,
         ReserveOperationV1::RegisterProvider(_)
     )
     .then(|| view.world().provider_owners().get(&provider_id).cloned())
     .flatten();
-
     let movement = if let Some(movement_id) = reserve_movement_id(retained) {
         match FindSorafsReserveMovementById::new(movement_id).execute(view) {
             Ok(movement) => Some(movement),
@@ -1021,7 +962,6 @@ fn reserve_snapshot_in_view(
     } else {
         None
     };
-
     let appeal = if let Some(appeal_id) = reserve_appeal_id(retained) {
         match FindSorafsReserveAppealById::new(appeal_id).execute(view) {
             Ok(appeal) => Some(appeal),
@@ -1035,7 +975,6 @@ fn reserve_snapshot_in_view(
     } else {
         None
     };
-
     Some(ReserveFinalizedSnapshotV1 {
         finalized_cursor,
         baseline_block_hash,
@@ -1046,7 +985,6 @@ fn reserve_snapshot_in_view(
         appeal,
     })
 }
-
 fn observe_reserve_transaction_in_one_finalized_view(
     state: &SharedAppState,
     delivery: &ReserveTransactionPendingV1,
@@ -1084,7 +1022,6 @@ fn observe_reserve_transaction_in_one_finalized_view(
         transaction_outcome,
     })
 }
-
 fn decode_exact_reserve_signed_transaction(
     bytes: &[u8],
     request: &ReserveTransactionSigningRequestV1,
@@ -1121,7 +1058,6 @@ fn decode_exact_reserve_signed_transaction(
         _ => None,
     }
 }
-
 /// Start reserve generation and durable drain/reconciliation when the role is active.
 ///
 /// Storage enablement keeps the role active for restart recovery even when
@@ -1147,7 +1083,6 @@ pub(crate) fn spawn_sorafs_reserve_transaction_forwarder_worker(
                 "active SoraFS reserve/rent forwarder has no runtime signer; signing remains deferred"
             );
         }
-
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(policy.scan_interval());
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1195,7 +1130,6 @@ pub(crate) fn spawn_sorafs_reserve_transaction_forwarder_worker(
         );
     }
 }
-
 pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
     state: &SharedAppState,
     cursor: &mut SorafsReserveTransactionForwarderCursorV1,
@@ -1268,7 +1202,6 @@ pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
             return scan;
         }
     };
-
     for delivery in pending {
         cursor.after_sequence = Some(delivery.sequence);
         scan.scanned = scan.scanned.saturating_add(1);
@@ -1277,7 +1210,6 @@ pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
             warn!("durable native SoraFS reserve/rent delivery failed validation");
             continue;
         }
-
         let retained = match state
             .sorafs_node
             .reserve_transaction_operation_for_reconciliation(delivery.operation_id)
@@ -1307,7 +1239,6 @@ pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
             );
             continue;
         }
-
         let exact_transaction = match delivery.signed_transaction_bytes.as_deref() {
             Some(bytes) => {
                 if retained_reserve_transaction_digest(delivery.transaction_digest, Some(bytes))
@@ -1339,7 +1270,6 @@ pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
                 .map(|entry| entry.kind);
             local_reserve_evidence_blocks_absence_retry(queue_pending, cache_kind)
         });
-
         let Some(observation) = observe_reserve_transaction_in_one_finalized_view(
             state,
             &delivery,
@@ -1387,7 +1317,6 @@ pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
             envelope,
             semantics,
         );
-
         match action {
             ReserveWorkerActionV1::FinalizeExact {
                 transaction_digest,
@@ -1583,7 +1512,6 @@ pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
     }
     scan
 }
-
 async fn sign_sorafs_reserve_transaction(
     state: &SharedAppState,
     signer: Arc<dyn SoraFsReserveTransactionSigner>,
@@ -1620,7 +1548,6 @@ async fn sign_sorafs_reserve_transaction(
     }
     Some((transaction, bytes))
 }
-
 async fn submit_sorafs_reserve_transaction(
     state: &SharedAppState,
     operation_id: [u8; 32],
@@ -1689,7 +1616,6 @@ async fn submit_sorafs_reserve_transaction(
     if exact_transaction_bytes != transaction_bytes {
         return ReserveTransactionSubmissionResultV1::Deferred;
     }
-
     let disposition = if crate::should_execute_route_locally(state.as_ref(), routing_decision) {
         match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan_strict_durable(
             state.queue.clone(),
@@ -1719,7 +1645,6 @@ async fn submit_sorafs_reserve_transaction(
             ReserveTransactionSubmissionDispositionV1::Ambiguous
         }
     };
-
     match disposition {
         ReserveTransactionSubmissionDispositionV1::Submitted => {
             if state
@@ -1757,9 +1682,9 @@ async fn submit_sorafs_reserve_transaction(
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey};
     use iroha_data_model::{
         account::AccountId,
@@ -1775,20 +1700,15 @@ mod tests {
         },
         transaction::SignedTransaction,
     };
-
-    use super::*;
-
     fn cursor(height: u64, seed: u8) -> ReserveFinalizedCursorV1 {
         ReserveFinalizedCursorV1 {
             height,
             block_hash: [seed; 32],
         }
     }
-
     fn transaction_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; 32]))
     }
-
     fn finalized_reserve_event(
         sequence: u64,
         block_height: u64,
@@ -1796,7 +1716,6 @@ mod tests {
         kind: SorafsReserveLedgerEventKind,
     ) -> iroha_data_model::sorafs::reserve::ReserveFinalizedEventV1 {
         use iroha_data_model::events::data::sorafs::SorafsReserveLedgerEvent;
-
         let policy_event = kind == SorafsReserveLedgerEventKind::PolicyActivated;
         let provider_registration = kind == SorafsReserveLedgerEventKind::ProviderRegistered;
         let operation_event = matches!(
@@ -1835,7 +1754,6 @@ mod tests {
             },
         }
     }
-
     fn account(seed: u8) -> AccountId {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
             .expect("valid deterministic Ed25519 seed");
@@ -1843,7 +1761,6 @@ mod tests {
             KeyPair::from_private_key(private).expect("derive deterministic account keypair");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn policy_record(
         revision: u64,
         predecessor_policy_digest: Option<[u8; 32]>,
@@ -1876,7 +1793,6 @@ mod tests {
             activated_at_unix: 1,
         }
     }
-
     fn provider_account(
         policy_digest: [u8; 32],
         revision: u64,
@@ -1906,7 +1822,6 @@ mod tests {
             updated_at_unix: rent_charged_through_unix,
         }
     }
-
     fn period_rent(
         policy: &ReserveAuthorityPolicyRecordV1,
         account: &ReserveProviderAccountV1,
@@ -1924,14 +1839,12 @@ mod tests {
             .expect("reserve rent quote")
             .effective_rent
     }
-
     fn charged_periods(operation: &ReserveOperationV1) -> Option<u16> {
         match operation {
             ReserveOperationV1::ChargeRent(instruction) => Some(*instruction.billing_periods()),
             _ => None,
         }
     }
-
     #[test]
     fn generation_chooses_largest_affordable_batch_and_replays_same_tip_identically() {
         let first = policy_record(1, None);
@@ -1954,7 +1867,6 @@ mod tests {
             partially_affordable,
             "same finalized inputs must generate byte-identical semantics"
         );
-
         let abundant = rent
             .checked_mul_u64(20)
             .expect("abundant spendable balance");
@@ -1965,7 +1877,6 @@ mod tests {
             charged_periods(&capped),
             Some(RESERVE_RENT_MAX_BILLING_PERIODS_V1)
         );
-
         let rotated = policy_record(2, Some(first.policy_digest));
         let rotated_operation =
             plan_generated_reserve_operation(&rotated, &account, &seven_periods, finalized_at)
@@ -1977,7 +1888,6 @@ mod tests {
         assert_eq!(*rotated_charge.policy_digest(), rotated.policy_digest);
         assert_ne!(*rotated_charge.policy_digest(), account.policy_digest);
     }
-
     #[test]
     fn generation_catches_up_across_multiple_bounded_affordable_batches() {
         let policy = policy_record(1, None);
@@ -1995,7 +1905,6 @@ mod tests {
             charged_periods(&first),
             Some(RESERVE_RENT_MAX_BILLING_PERIODS_V1)
         );
-
         account.rent_charged_through_unix +=
             u64::from(RESERVE_RENT_MAX_BILLING_PERIODS_V1) * RESERVE_RENT_BILLING_PERIOD_SECONDS_V1;
         account.revision += 1;
@@ -2012,7 +1921,6 @@ mod tests {
             .expect("second catchup generation")
             .expect("second catchup batch");
         assert_eq!(charged_periods(&second), Some(3));
-
         let exact_account = provider_account(
             policy.policy_digest,
             9,
@@ -2023,7 +1931,6 @@ mod tests {
             .expect("one exact-balance period is due");
         assert_eq!(charged_periods(&exact), Some(1));
     }
-
     #[test]
     fn generation_uses_exact_boundary_age_and_avoids_lifecycle_revision_churn() {
         let policy = policy_record(1, None);
@@ -2041,7 +1948,6 @@ mod tests {
             None,
             "day zero and an unchanged warning stage must not churn the revision"
         );
-
         let one_day_overdue = exact_boundary + 86_400;
         let lifecycle = plan_generated_reserve_operation(
             &policy,
@@ -2056,7 +1962,6 @@ mod tests {
         };
         assert_eq!(*advance.days_past_due(), 1);
         assert_eq!(*advance.policy_digest(), policy.policy_digest);
-
         account.days_past_due = 1;
         account.lifecycle_stage = ReserveLifecycleStage::Grace;
         account.updated_at_unix = one_day_overdue;
@@ -2081,7 +1986,6 @@ mod tests {
             ReserveGenerationErrorV1::InvalidProviderTimestamp
         );
     }
-
     #[test]
     fn generation_converges_day_zero_custody_changes_and_charges_zero_rent() {
         let policy = policy_record(1, None);
@@ -2113,7 +2017,6 @@ mod tests {
             panic!("a pre-due top-up must converge lifecycle state");
         };
         assert_eq!(*advance_active.days_past_due(), 0);
-
         let mut withdrawn = topped_up.clone();
         withdrawn.reserve_balance = XorQuantity::zero();
         withdrawn.lifecycle_stage = ReserveLifecycleStage::Active;
@@ -2129,7 +2032,6 @@ mod tests {
             panic!("a pre-due withdrawal must converge lifecycle state");
         };
         assert_eq!(*advance_warning.days_past_due(), 0);
-
         let exact_boundary =
             topped_up.rent_charged_through_unix + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1;
         let zero_rent = plan_generated_reserve_operation(
@@ -2141,7 +2043,6 @@ mod tests {
         .expect("zero-rent generation")
         .expect("a zero-rent period still advances the ledger anchor");
         assert_eq!(charged_periods(&zero_rent), Some(1));
-
         let mut uncovered = withdrawn;
         uncovered.terms.tier = ReserveTier::TierC;
         let default_operation = plan_generated_reserve_operation(
@@ -2178,13 +2079,11 @@ mod tests {
             ReserveLifecycleStage::Default
         );
     }
-
     #[test]
     fn exact_applied_rejected_pending_and_absence_repeat_retained_digest_and_cursor() {
         let bytes = [0x51, 0x52, 0x53];
         let digest = *blake3_hash(&bytes).as_bytes();
         let finalized_cursor = cursor(12, 0x61);
-
         assert_eq!(
             classify_reserve_envelope(
                 Some(digest),
@@ -2238,7 +2137,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn exact_observation_fails_closed_on_missing_duplicate_or_unavailable_entrypoints() {
         let expected = transaction_hash(0x71);
@@ -2276,7 +2174,6 @@ mod tests {
             ReserveAuthoritativeTransactionOutcomeV1::Unavailable
         );
     }
-
     #[test]
     fn stale_cursor_and_mismatched_digest_never_create_authoritative_absence() {
         let bytes = [0x81, 0x82, 0x83];
@@ -2305,7 +2202,6 @@ mod tests {
             ReserveEnvelopeReconciliationV1::Unavailable
         );
     }
-
     #[test]
     fn finalized_telemetry_projection_rebuilds_across_pages_without_payload_labels() {
         let finalized_cursor = cursor(3, 0xF1);
@@ -2332,14 +2228,12 @@ mod tests {
             next_after: None,
         };
         let mut projection = SorafsReserveFinalizedTelemetryProjectionV1::default();
-
         apply_reserve_finalized_telemetry_event_page(&mut projection, &first, finalized_cursor)
             .expect("first finalized event page");
         assert_eq!(projection.custody_counts, [1, 0, 0]);
         assert_eq!(projection.open_appeals, 0);
         apply_reserve_finalized_telemetry_event_page(&mut projection, &second, finalized_cursor)
             .expect("second finalized event page");
-
         assert_eq!(
             projection.after_event,
             second.events.last().map(|event| event.cursor())
@@ -2348,7 +2242,6 @@ mod tests {
         assert_eq!(projection.reconciled_counts, [1, 0]);
         assert_eq!(projection.open_appeals, 0);
     }
-
     #[test]
     fn finalized_telemetry_page_failure_is_atomic_for_gaps_and_terminal_underflow() {
         let finalized_cursor = cursor(2, 0xF2);
@@ -2372,7 +2265,6 @@ mod tests {
             projection,
             SorafsReserveFinalizedTelemetryProjectionV1::default()
         );
-
         let terminal_without_request = ReserveFinalizedEventPageV1 {
             finalized_cursor,
             events: vec![finalized_reserve_event(
@@ -2397,7 +2289,6 @@ mod tests {
             SorafsReserveFinalizedTelemetryProjectionV1::default()
         );
     }
-
     #[test]
     fn finalized_telemetry_rejects_malformed_continuation_shape() {
         let finalized_cursor = cursor(1, 0xF3);
@@ -2418,22 +2309,18 @@ mod tests {
             SorafsReserveFinalizedTelemetryProjectionV1::default()
         );
     }
-
     #[test]
     fn reserve_metric_projection_truncates_sub_micro_precision_deterministically() {
         use iroha_primitives::numeric::Quantity;
-
         let one_nano = XorQuantity::try_from_quantity(
             Quantity::from_canonical_numeric(Numeric::new(1, 9))
                 .expect("one nano-XOR is canonical"),
         )
         .expect("one nano-XOR is within the exact XOR scale");
         let one_micro = XorQuantity::try_from_micro(1).expect("one micro-XOR");
-
         assert_eq!(reserve_quantity_to_metric_micro_xor(&one_nano), Ok(0));
         assert_eq!(reserve_quantity_to_metric_micro_xor(&one_micro), Ok(1));
     }
-
     #[test]
     fn reserve_supervision_uses_storage_or_generation_activation() {
         for (storage_enabled, generation_enabled, role_active) in [
@@ -2451,7 +2338,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn disabled_reserve_supervision_does_not_invoke_spawn_adapter() {
         let spawn_count = std::cell::Cell::new(0_u32);
@@ -2460,14 +2346,12 @@ mod tests {
             || spawn_count.set(spawn_count.get() + 1),
         ));
         assert_eq!(spawn_count.get(), 0);
-
         assert!(spawn_reserve_worker_when_active(
             reserve_worker_supervision(true, false),
             || spawn_count.set(spawn_count.get() + 1),
         ));
         assert_eq!(spawn_count.get(), 1);
     }
-
     #[test]
     fn local_queue_dispositions_preserve_strict_submitter_boundaries() {
         assert_eq!(

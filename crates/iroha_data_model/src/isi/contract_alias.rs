@@ -1,7 +1,5 @@
 //! Contract alias binding instructions.
-
 use super::*;
-
 isi! {
     /// Bind, update, or clear an alias for an existing contract address.
     ///
@@ -20,11 +18,9 @@ isi! {
         pub lease_expiry_ms: Option<u64>,
     }
 }
-
 impl SetContractAlias {
     /// Stable wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.contract.alias.set";
-
     /// Create a binding or update instruction.
     #[must_use]
     pub fn bind(
@@ -38,7 +34,6 @@ impl SetContractAlias {
             lease_expiry_ms,
         }
     }
-
     /// Create an instruction that clears the current alias binding.
     #[must_use]
     pub fn clear(contract_address: ContractAddress) -> Self {
@@ -49,9 +44,7 @@ impl SetContractAlias {
         }
     }
 }
-
 impl crate::seal::Instruction for SetContractAlias {}
-
 impl<'a> norito::core::DecodeFromSlice<'a> for SetContractAlias {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -59,7 +52,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetContractAlias {
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let contract_address = super::decode_aos_canonical_field::<ContractAddress>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -95,21 +87,17 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetContractAlias {
         ))
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
-    use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::nexus::DataSpaceId;
-
+    use iroha_crypto::{Algorithm, KeyPair};
+    use norito::core::DecodeFromSlice;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked contract-alias ISI fixture keypair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn contract_address() -> ContractAddress {
         ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -121,11 +109,9 @@ mod tests {
         )
         .expect("contract address")
     }
-
     fn contract_alias() -> ContractAlias {
         ContractAlias::from_components("router", Some("dex"), "universal").expect("contract alias")
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -136,7 +122,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     #[test]
     fn contract_alias_decode_from_slice_roundtrips() {
         let address = contract_address();
@@ -147,7 +132,6 @@ mod tests {
         ));
         assert_slice_roundtrip(SetContractAlias::clear(address));
     }
-
     #[test]
     fn contract_alias_registry_decodes_stable_id() {
         let registry = crate::isi::InstructionRegistry::new()

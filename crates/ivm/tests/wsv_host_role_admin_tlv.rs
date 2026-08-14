@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use iroha_crypto::{Hash, PublicKey};
 use iroha_primitives::numeric::Quantity;
 use ivm::{
@@ -8,10 +6,9 @@ use ivm::{
     syscalls,
 };
 use norito::to_bytes;
-
+use std::collections::HashMap;
 mod common;
 use common::assemble_syscalls;
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
         .map(|pty| common::payload_for_type(pty, payload))
@@ -25,21 +22,17 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 fn make_quantity_tlv(amount: impl Into<Quantity>) -> Vec<u8> {
     ivm::numeric_tlv::encode_quantity(&amount.into()).expect("encode quantity pointer envelope")
 }
-
 fn account(_domain: &str, public_key: &str) -> AccountId {
     let public_key: PublicKey = public_key.parse().unwrap();
     AccountId::new(public_key)
 }
-
 fn make_account_tlv(account: &AccountId) -> Vec<u8> {
     let account = account.to_string();
     make_tlv(PointerType::AccountId as u16, account.as_bytes())
 }
-
 fn make_account_norito_tlv(account: &AccountId) -> Vec<u8> {
     let payload = to_bytes(account).expect("encode account into Norito");
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
@@ -51,7 +44,6 @@ fn make_account_norito_tlv(account: &AccountId) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 #[test]
 fn create_role_grant_and_revoke_affects_permissions() {
     // alice is caller; bob recipient; asset rose#wonder for mint tests.
@@ -68,7 +60,6 @@ fn create_role_grant_and_revoke_affects_permissions() {
             iroha_data_model::DomainId::try_new("wonder", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
-
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     // Alice permissions to register entities
@@ -77,11 +68,9 @@ fn create_role_grant_and_revoke_affects_permissions() {
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&alice, PermissionToken::ManageRoles);
     // Note: No direct MintAsset permission for alice; the role will grant it.
-
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
     // Register domain wonder
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
@@ -89,7 +78,6 @@ fn create_role_grant_and_revoke_affects_permissions() {
     let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
-
     // Register bob account and rose asset definition
     let acc = make_account_norito_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
@@ -97,7 +85,6 @@ fn create_role_grant_and_revoke_affects_permissions() {
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
     vm.load_program(&prog_acc).unwrap();
     vm.run().expect("register account");
-
     let ad = make_tlv(
         PointerType::AssetDefinitionId as u16,
         rose.to_string().as_bytes(),
@@ -107,7 +94,6 @@ fn create_role_grant_and_revoke_affects_permissions() {
     let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET as u8]);
     vm.load_program(&prog_ad).unwrap();
     vm.run().expect("register asset def");
-
     // Create role `minter` with JSON perms: ["mint_asset:<id>"]
     let role = make_tlv(PointerType::Name as u16, b"minter");
     let json = format!("{{\"perms\":[\"mint_asset:{rose}\"]}}");
@@ -121,7 +107,6 @@ fn create_role_grant_and_revoke_affects_permissions() {
     let prog_crole = assemble_syscalls(&[syscalls::SYSCALL_CREATE_ROLE as u8]);
     vm.load_program(&prog_crole).unwrap();
     vm.run().expect("create role");
-
     // Grant role to alice
     let tlv_alice = make_account_tlv(&alice);
     let tlv_rname = make_tlv(PointerType::Name as u16, b"minter");
@@ -136,7 +121,6 @@ fn create_role_grant_and_revoke_affects_permissions() {
     let prog_grole = assemble_syscalls(&[syscalls::SYSCALL_GRANT_ROLE as u8]);
     vm.load_program(&prog_grole).unwrap();
     vm.run().expect("grant role");
-
     // Mint should now succeed (alice has role-derived MintAsset permission)
     let tlv_bob = make_account_tlv(&bob);
     let tlv_rose = make_tlv(
@@ -158,7 +142,6 @@ fn create_role_grant_and_revoke_affects_permissions() {
     let prog_mint = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET as u8]);
     vm.load_program(&prog_mint).unwrap();
     vm.run().expect("mint via role");
-
     // Revoke role; mint should be denied now
     vm.memory
         .preload_input(0, &tlv_alice)
@@ -171,7 +154,6 @@ fn create_role_grant_and_revoke_affects_permissions() {
     let prog_rrole = assemble_syscalls(&[syscalls::SYSCALL_REVOKE_ROLE as u8]);
     vm.load_program(&prog_rrole).unwrap();
     vm.run().expect("revoke role");
-
     // Try mint again → must fail since role removed and no direct permission
     vm.memory.preload_input(0, &tlv_bob).expect("preload input");
     vm.memory
@@ -187,7 +169,6 @@ fn create_role_grant_and_revoke_affects_permissions() {
     vm.set_register(12, Memory::INPUT_START + amount_offset);
     vm.load_program(&prog_mint).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
-
     // Delete role should succeed now that there are no assignees
     let rname = make_tlv(PointerType::Name as u16, b"minter");
     vm.memory.preload_input(0, &rname).expect("preload input");
@@ -196,7 +177,6 @@ fn create_role_grant_and_revoke_affects_permissions() {
     vm.load_program(&prog_drole).unwrap();
     vm.run().expect("delete role");
 }
-
 #[test]
 fn create_role_with_permissions_key_then_mint() {
     let alice = account(
@@ -212,7 +192,6 @@ fn create_role_with_permissions_key_then_mint() {
             iroha_data_model::DomainId::try_new("wonder", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
-
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
@@ -222,7 +201,6 @@ fn create_role_with_permissions_key_then_mint() {
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
     // Bootstrap domain/account/asset
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
@@ -230,14 +208,12 @@ fn create_role_with_permissions_key_then_mint() {
     let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
-
     let acc = make_account_norito_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
     vm.load_program(&prog_acc).unwrap();
     vm.run().expect("register account");
-
     let ad = make_tlv(
         PointerType::AssetDefinitionId as u16,
         rose.to_string().as_bytes(),
@@ -247,7 +223,6 @@ fn create_role_with_permissions_key_then_mint() {
     let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET as u8]);
     vm.load_program(&prog_ad).unwrap();
     vm.run().expect("register asset def");
-
     // Create role using "permissions" key
     let role = make_tlv(PointerType::Name as u16, b"minter_permkey");
     let json = format!("{{\"permissions\":[\"mint_asset:{rose}\"]}}");
@@ -261,7 +236,6 @@ fn create_role_with_permissions_key_then_mint() {
     let prog_crole = assemble_syscalls(&[syscalls::SYSCALL_CREATE_ROLE as u8]);
     vm.load_program(&prog_crole).unwrap();
     vm.run().expect("create role with permissions key");
-
     // Grant role and mint
     let tlv_alice = make_account_tlv(&alice);
     let rname = make_tlv(PointerType::Name as u16, b"minter_permkey");
@@ -276,7 +250,6 @@ fn create_role_with_permissions_key_then_mint() {
     let prog_grole = assemble_syscalls(&[syscalls::SYSCALL_GRANT_ROLE as u8]);
     vm.load_program(&prog_grole).unwrap();
     vm.run().expect("grant role");
-
     let tlv_bob = make_account_tlv(&bob);
     let tlv_rose = make_tlv(
         PointerType::AssetDefinitionId as u16,

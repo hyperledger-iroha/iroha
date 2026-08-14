@@ -1,28 +1,22 @@
 //! Deterministic reconciliation snapshots for repair and GC state.
-
+use crate::store::ChunkRefcountEntry;
 use blake3::hash;
 use iroha_data_model::sorafs::moderation_ledger::{RepairFinalizedCursorV1, RepairLedgerTaskV1};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::deal::XorQuantity;
 use sorafs_manifest::retention::RetentionSourceV1;
-
-use crate::store::ChunkRefcountEntry;
-
 pub(crate) const RECONCILIATION_SNAPSHOT_VERSION_V1: u8 = 1;
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct RepairReconciliationSnapshot {
     pub(crate) version: u8,
     pub(crate) finalized_cursor: RepairFinalizedCursorV1,
     pub(crate) tasks: Vec<RepairLedgerTaskV1>,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct RetentionReconciliationSnapshot {
     pub(crate) version: u8,
     pub(crate) manifests: Vec<RetentionReconciliationEntry>,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct RetentionReconciliationEntry {
     pub(crate) manifest_id: String,
@@ -31,7 +25,6 @@ pub(crate) struct RetentionReconciliationEntry {
     #[norito(default)]
     pub(crate) retention_source: Option<RetentionSourceV1>,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct GcReconciliationSnapshot {
     pub(crate) version: u8,
@@ -40,13 +33,11 @@ pub(crate) struct GcReconciliationSnapshot {
     #[norito(default)]
     pub(crate) chunk_refcounts: Vec<ChunkRefcountEntry>,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct AppealFinanceRollupReconciliationSnapshot {
     pub(crate) version: u8,
     pub(crate) rollups: Vec<AppealFinanceRollupReconciliationEntry>,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct AppealFinanceRollupReconciliationEntry {
     pub(crate) cycle: String,
@@ -57,7 +48,6 @@ pub(crate) struct AppealFinanceRollupReconciliationEntry {
     pub(crate) total_rewards_forfeited_treasury_xor: XorQuantity,
     pub(crate) generated_at_unix_ms: u64,
 }
-
 pub(crate) fn hash_snapshot<T: norito::core::NoritoSerialize>(
     snapshot: &T,
 ) -> Result<[u8; 32], norito::Error> {

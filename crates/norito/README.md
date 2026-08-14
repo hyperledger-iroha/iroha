@@ -50,6 +50,11 @@ The supported field-level attributes are:
   omits a JSON field.
 - `#[norito(with = "path::to::module")]` delegates JSON serialization and
   deserialization to the named helper module.
+- `#[norito(json = "path::to::module")]` is the compact equivalent for fields
+  whose helper module supplies `serialize`, `deserialize`, and the checked
+  `serialize_bounded` function.
+- `#[norito(bounded_with = "path::to::function")]` supplies only the checked
+  writer and can be paired with `with` when the functions are not colocated.
 - `#[norito(flatten)]` flattens a named field into its enclosing JSON object.
 - `#[norito(needs_size)]` forces an explicit packed-struct size entry.
 

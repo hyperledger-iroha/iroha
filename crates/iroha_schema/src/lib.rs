@@ -1,5 +1,4 @@
 //! Module for schematizing rust types in other languages for translation.
-
 use core::{
     num::{
         NonZeroI8, NonZeroI16, NonZeroI32, NonZeroI64, NonZeroI128, NonZeroU8, NonZeroU16,
@@ -7,6 +6,8 @@ use core::{
     },
     ops::RangeInclusive,
 };
+/// Derive schema. It will make your structure schemaable
+pub use iroha_schema_derive::*;
 use std::{
     borrow::ToOwned as _,
     boxed::Box,
@@ -17,10 +18,6 @@ use std::{
     vec,
     vec::Vec,
 };
-
-/// Derive schema. It will make your structure schemaable
-pub use iroha_schema_derive::*;
-
 /// An entry in the schema map
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MetaMapEntry {
@@ -31,22 +28,18 @@ pub struct MetaMapEntry {
     /// Details about the type representation
     pub metadata: Metadata,
 }
-
 /// Helper struct for building a full schema
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MetaMap(pub(crate) btree_map::BTreeMap<core::any::TypeId, MetaMapEntry>);
-
 impl PartialEq<btree_map::BTreeMap<core::any::TypeId, MetaMapEntry>> for MetaMap {
     fn eq(&self, other: &btree_map::BTreeMap<core::any::TypeId, MetaMapEntry>) -> bool {
         self.0.eq(other)
     }
 }
-
 impl MetaMap {
     fn key<K: 'static>() -> core::any::TypeId {
         core::any::TypeId::of::<K>()
     }
-
     /// Create new [`Self`]
     #[must_use]
     pub const fn new() -> MetaMap {
@@ -76,29 +69,24 @@ impl MetaMap {
     pub fn get<K: 'static>(&self) -> Option<&Metadata> {
         self.0.get(&Self::key::<K>()).map(|value| &value.metadata)
     }
-
     /// Iterate over all registered schema entries.
     pub fn iter(&self) -> impl Iterator<Item = (&core::any::TypeId, &MetaMapEntry)> {
         self.0.iter()
     }
 }
-
 impl IntoIterator for MetaMap {
     type Item = (core::any::TypeId, MetaMapEntry);
     type IntoIter = btree_map::IntoIter<core::any::TypeId, MetaMapEntry>;
-
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
     }
 }
-
 // NOTE: Using `ConstString` here would avoid heap allocations for static
 // identifiers, but that type lives in `iroha_primitives` which already depends
 // on this crate. Switching would introduce a cyclic dependency.  Until the
 // crates are reorganized (see issue #3943), we keep `Ident` as `String`.
 /// Identifier of the type
 pub type Ident = String;
-
 /// Globally unique type identifier
 ///
 /// No critical code should rely on this trait unless a test
@@ -107,15 +95,12 @@ pub trait TypeId: 'static {
     /// Return unique type id
     fn id() -> Ident;
 }
-
 /// `IntoSchema` trait
 pub trait IntoSchema: TypeId {
     /// Name under which a type is represented in the schema
     fn type_name() -> Ident;
-
     /// Insert descriptions of types referenced by [`Self`]
     fn update_schema_map(metamap: &mut MetaMap);
-
     /// Remove description of types referenced by [`Self`]
     fn remove_from_schema(metamap: &mut MetaMap) -> bool
     where
@@ -123,7 +108,6 @@ pub trait IntoSchema: TypeId {
     {
         metamap.remove::<Self>()
     }
-
     /// Return schema map of types referenced by [`Self`]
     #[must_use]
     fn schema() -> MetaMap {
@@ -132,13 +116,11 @@ pub trait IntoSchema: TypeId {
         map
     }
 }
-
 /// Applicable for types that represents decimal place of fixed point
 pub trait DecimalPlacesAware: 'static {
     /// decimal places of fixed point
     fn decimal_places() -> u32;
 }
-
 /// Metadata
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Metadata {
@@ -171,7 +153,6 @@ pub enum Metadata {
     /// A bitmap: integer where bits have a specific meaning
     Bitmap(BitmapMeta),
 }
-
 /// Array metadata
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ArrayMeta {
@@ -180,21 +161,18 @@ pub struct ArrayMeta {
     /// Length
     pub len: u128,
 }
-
 /// Vector metadata
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VecMeta {
     /// Type
     pub ty: core::any::TypeId,
 }
-
 /// Named fields
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NamedFieldsMeta {
     /// Fields
     pub declarations: Vec<Declaration>,
 }
-
 /// Field
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Declaration {
@@ -203,21 +181,18 @@ pub struct Declaration {
     /// Type
     pub ty: core::any::TypeId,
 }
-
 /// Unnamed fields
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UnnamedFieldsMeta {
     /// Field types
     pub types: Vec<core::any::TypeId>,
 }
-
 /// Enum metadata
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EnumMeta {
     /// Enum variants
     pub variants: Vec<EnumVariant>,
 }
-
 /// Enum variant
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EnumVariant {
@@ -228,7 +203,6 @@ pub struct EnumVariant {
     /// Its type
     pub ty: Option<core::any::TypeId>,
 }
-
 /// Result variant
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ResultMeta {
@@ -245,7 +219,6 @@ pub struct MapMeta {
     /// Value type
     pub value: core::any::TypeId,
 }
-
 /// Fixed metadata
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FixedMeta {
@@ -254,7 +227,6 @@ pub struct FixedMeta {
     /// Decimal places
     pub decimal_places: u32,
 }
-
 /// Integer mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntMode {
@@ -263,7 +235,6 @@ pub enum IntMode {
     /// Scale compact
     Compact,
 }
-
 /// Floating-point width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FloatMode {
@@ -272,7 +243,6 @@ pub enum FloatMode {
     /// IEEE 754 binary64 (`f64`)
     Binary64,
 }
-
 /// Bitmap metadata
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BitmapMeta {
@@ -281,7 +251,6 @@ pub struct BitmapMeta {
     /// Masks, specifying the meaning of the bits
     pub masks: Vec<BitmapMask>,
 }
-
 /// Bitmap mask
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BitmapMask {
@@ -291,11 +260,9 @@ pub struct BitmapMask {
     // while we can technically have masks with multiple bits set or intersecting masks, we currently only emit single-bit disjoint masks
     pub mask: u64,
 }
-
 /// Compact predicate. Just for documentation purposes
 #[derive(Debug, Clone)]
 pub struct Compact<T>(T);
-
 impl TypeId for () {
     fn id() -> String {
         "()".to_owned()
@@ -311,7 +278,6 @@ impl IntoSchema for () {
         }
     }
 }
-
 macro_rules! impl_schema_int {
     ($($t:ty),*) => {$(
         impl TypeId for $t {
@@ -329,7 +295,6 @@ macro_rules! impl_schema_int {
                 }
             }
         }
-
         impl TypeId for Compact<$t> {
             fn id() -> String {
                 format!("Compact<{}>", <$t as TypeId>::id())
@@ -339,7 +304,6 @@ macro_rules! impl_schema_int {
             fn type_name() -> String {
                 format!("Compact<{}>", <$t as IntoSchema>::type_name())
             }
-
             fn update_schema_map(map: &mut MetaMap) {
                 if !map.contains_key::<Self>() {
                     map.insert::<Self>(Metadata::Int(IntMode::Compact));
@@ -349,7 +313,6 @@ macro_rules! impl_schema_int {
     )*};
 }
 impl_schema_int!(u128, u64, u32, u16, u8, i128, i64, i32, i16, i8);
-
 macro_rules! impl_schema_float {
     ($($t:ty => $mode:ident),*) => {$(
         impl TypeId for $t {
@@ -357,12 +320,10 @@ macro_rules! impl_schema_float {
                 stringify!($t).to_owned()
             }
         }
-
         impl IntoSchema for $t {
             fn type_name() -> String {
                 stringify!($t).to_owned()
             }
-
             fn update_schema_map(map: &mut MetaMap) {
                 if !map.contains_key::<Self>() {
                     map.insert::<Self>(Metadata::Float(FloatMode::$mode));
@@ -371,9 +332,7 @@ macro_rules! impl_schema_float {
         }
     )*};
 }
-
 impl_schema_float!(f32 => Binary32, f64 => Binary64);
-
 macro_rules! impl_schema_non_zero_int {
     ($($src:ty => $dst:ty),*) => {$(
         impl TypeId for $src {
@@ -390,14 +349,12 @@ macro_rules! impl_schema_non_zero_int {
                     map.insert::<Self>(Metadata::Tuple(UnnamedFieldsMeta {
                         types: vec![core::any::TypeId::of::<$dst>()],
                     }));
-
                     <$dst as IntoSchema>::update_schema_map(map);
                 }
             }
         }
     )*};
 }
-
 impl_schema_non_zero_int!(
     NonZeroU128 => u128,
     NonZeroU64 => u64,
@@ -410,7 +367,6 @@ impl_schema_non_zero_int!(
     NonZeroI16 => i16,
     NonZeroI8 => i8
 );
-
 impl TypeId for String {
     fn id() -> String {
         "String".to_owned()
@@ -426,7 +382,6 @@ impl IntoSchema for String {
         }
     }
 }
-
 impl TypeId for bool {
     fn id() -> String {
         "bool".to_owned()
@@ -442,7 +397,6 @@ impl IntoSchema for bool {
         }
     }
 }
-
 impl<T: TypeId> TypeId for Vec<T> {
     fn id() -> String {
         format!("Vec<{}>", T::id())
@@ -457,12 +411,10 @@ impl<T: IntoSchema> IntoSchema for Vec<T> {
             map.insert::<Self>(Metadata::Vec(VecMeta {
                 ty: core::any::TypeId::of::<T>(),
             }));
-
             T::update_schema_map(map);
         }
     }
 }
-
 impl<T: TypeId> TypeId for Option<T> {
     fn id() -> String {
         format!("Option<{}>", T::id())
@@ -476,12 +428,10 @@ impl<T: IntoSchema> IntoSchema for Option<T> {
         if !map.contains_key::<Self>() {
             let t_type_id = core::any::TypeId::of::<T>();
             map.insert::<Self>(Metadata::Option(t_type_id));
-
             T::update_schema_map(map);
         }
     }
 }
-
 impl<T: TypeId> TypeId for Box<T> {
     fn id() -> String {
         format!("Box<{}>", T::id())
@@ -496,25 +446,21 @@ impl<T: IntoSchema> IntoSchema for Box<T> {
             if !map.contains_key::<T>() {
                 T::update_schema_map(map);
             }
-
             if let Some(schema) = map.get::<T>() {
                 map.insert::<Self>(schema.clone());
             }
         }
     }
 }
-
 impl<T: TypeId> TypeId for Arc<T> {
     fn id() -> String {
         format!("Arc<{}>", T::id())
     }
 }
-
 impl<T: IntoSchema> IntoSchema for Arc<T> {
     fn type_name() -> String {
         T::type_name()
     }
-
     fn update_schema_map(map: &mut MetaMap) {
         if !map.contains_key::<Self>() {
             if !map.contains_key::<T>() {
@@ -526,7 +472,6 @@ impl<T: IntoSchema> IntoSchema for Arc<T> {
         }
     }
 }
-
 impl TypeId for Box<str> {
     fn id() -> String {
         "String".to_owned()
@@ -541,14 +486,12 @@ impl IntoSchema for Box<str> {
             if !map.contains_key::<String>() {
                 String::update_schema_map(map);
             }
-
             if let Some(schema) = map.get::<String>() {
                 map.insert::<Self>(schema.clone());
             }
         }
     }
 }
-
 impl<T: TypeId, E: TypeId> TypeId for Result<T, E> {
     fn id() -> String {
         format!("Result<{}, {}>", T::id(), E::id())
@@ -564,13 +507,11 @@ impl<T: IntoSchema, E: IntoSchema> IntoSchema for Result<T, E> {
                 ok: core::any::TypeId::of::<T>(),
                 err: core::any::TypeId::of::<E>(),
             }));
-
             T::update_schema_map(map);
             E::update_schema_map(map);
         }
     }
 }
-
 impl<K: TypeId, V: TypeId> TypeId for btree_map::BTreeMap<K, V> {
     fn id() -> String {
         format!("SortedMap<{}, {}>", K::id(), V::id(),)
@@ -586,13 +527,11 @@ impl<K: IntoSchema, V: IntoSchema> IntoSchema for btree_map::BTreeMap<K, V> {
                 key: core::any::TypeId::of::<K>(),
                 value: core::any::TypeId::of::<V>(),
             }));
-
             K::update_schema_map(map);
             V::update_schema_map(map);
         }
     }
 }
-
 impl<K: TypeId> TypeId for btree_set::BTreeSet<K> {
     fn id() -> String {
         format!("SortedVec<{}>", K::id())
@@ -607,12 +546,10 @@ impl<K: IntoSchema> IntoSchema for btree_set::BTreeSet<K> {
             map.insert::<Self>(Metadata::Vec(VecMeta {
                 ty: core::any::TypeId::of::<K>(),
             }));
-
             K::update_schema_map(map);
         }
     }
 }
-
 impl<T: TypeId, const L: usize> TypeId for [T; L] {
     fn id() -> String {
         format!("Array<{}, {}>", T::id(), L)
@@ -628,36 +565,29 @@ impl<T: IntoSchema, const L: usize> IntoSchema for [T; L] {
                 ty: core::any::TypeId::of::<T>(),
                 len: L as u128,
             }));
-
             T::update_schema_map(map);
         }
     }
 }
-
 impl<T: TypeId> TypeId for RangeInclusive<T> {
     fn id() -> String {
         format!("RangeInclusive<{}>", T::id())
     }
 }
-
 impl<T: IntoSchema> IntoSchema for RangeInclusive<T> {
     fn type_name() -> String {
         format!("RangeInclusive<{}>", T::type_name())
     }
-
     fn update_schema_map(metamap: &mut MetaMap) {
         if !metamap.contains_key::<Self>() {
             metamap.insert::<Self>(Metadata::Tuple(UnnamedFieldsMeta {
                 types: vec![core::any::TypeId::of::<T>(), core::any::TypeId::of::<T>()],
             }));
-
             T::update_schema_map(metamap);
         }
     }
 }
-
 pub mod prelude {
     //! Exports common types.
-
     pub use super::*;
 }

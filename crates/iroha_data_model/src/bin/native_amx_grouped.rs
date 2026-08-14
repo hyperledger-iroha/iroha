@@ -1,7 +1,4 @@
 //! Rust-owned grouped Native AMX v2 JSON fixture generation.
-
-use std::{collections::BTreeSet, error::Error, fs, path::Path};
-
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, MerkleTree, Signature};
 use iroha_data_model::{
     NetworkId,
@@ -30,22 +27,19 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use norito::json::{self, Value};
-
+use std::{collections::BTreeSet, error::Error, fs, path::Path};
 pub const FIXTURE_BASENAME: &str = "native_amx_v2_grouped.json";
-
 const GROUP_SOURCE_COUNT: usize = 2;
 const VALIDATOR_COUNT: usize = 4;
 const MIN_QUORUM: usize = VALIDATOR_COUNT - (VALIDATOR_COUNT - 1) / 3;
 const APPLICATION_MANIFEST_LEAF_COUNT: u32 = 1;
 const EXECUTED_BLOCK_WIRE_FIXTURE: &[u8] = b"native-amx-v2-grouped-fixture-executed-block-wire";
-
 #[derive(Clone)]
 struct ParticipantFixture {
     proposal: LaneBlockProposalV1,
     settlement: LaneBlockCommitment,
     settlement_hash: HashOf<LaneBlockCommitment>,
 }
-
 struct FixtureContext {
     keypairs: Vec<KeyPair>,
     validators: Vec<PeerId>,
@@ -65,7 +59,6 @@ struct FixtureContext {
     sources: [[u8; 32]; GROUP_SOURCE_COUNT],
     entrypoints: [HashOf<TransactionEntrypoint>; GROUP_SOURCE_COUNT],
 }
-
 fn fixture_context() -> Result<FixtureContext, Box<dyn Error>> {
     let mut keyed_validators = (1_u8..=u8::try_from(VALIDATOR_COUNT)?)
         .map(|seed| {
@@ -88,7 +81,6 @@ fn fixture_context() -> Result<FixtureContext, Box<dyn Error>> {
         .map(|keypair| iroha_crypto::bls_normal_pop_prove(keypair.private_key()))
         .collect::<Result<Vec<_>, _>>()?;
     let validator_set_hash = HashOf::new(&validators);
-
     Ok(FixtureContext {
         keypairs,
         validators,
@@ -124,7 +116,6 @@ fn fixture_context() -> Result<FixtureContext, Box<dyn Error>> {
         ],
     })
 }
-
 fn participant_incarnation(
     context: &FixtureContext,
     lane_id: LaneId,
@@ -143,7 +134,6 @@ fn participant_incarnation(
         )
     }
 }
-
 fn grouped_settlement(
     context: &FixtureContext,
     lane_id: LaneId,
@@ -179,7 +169,6 @@ fn grouped_settlement(
         native_amx_receipts: Vec::new(),
     })
 }
-
 fn participant_fixture(
     context: &FixtureContext,
     lane_id: LaneId,
@@ -254,7 +243,6 @@ fn participant_fixture(
         settlement_hash,
     })
 }
-
 fn body(
     context: &FixtureContext,
     participant: &ParticipantFixture,
@@ -291,7 +279,6 @@ fn body(
         coordinator_proposal_hash: context.coordinator_proposal_hash,
     })
 }
-
 #[expect(
     clippy::large_types_passed_by_value,
     reason = "the QC takes ownership of the attestation body and stores it without a large clone"
@@ -325,7 +312,6 @@ fn qc(
         aggregate_signature,
     )?)
 }
-
 #[expect(
     clippy::large_types_passed_by_value,
     reason = "the rebuilt attestation body is consumed directly by the isolated control QC"
@@ -373,7 +359,6 @@ fn control_qc(
         aggregate_signature,
     )?)
 }
-
 fn rebuild_control_leg_committee(
     context: &FixtureContext,
     source: &NativeAmxLegRecordV2,
@@ -395,7 +380,6 @@ fn rebuild_control_leg_committee(
         .descriptor
         .computed_descriptor_hash();
     leg.participant_proposal.proposal_hash = leg.participant_proposal.computed_proposal_hash();
-
     let proposal_hash = leg.participant_proposal.proposal_hash;
     let mut prepare_body = leg.prepare_qc.body;
     prepare_body.participant_validator_set_hash = validator_set_hash;
@@ -423,7 +407,6 @@ fn rebuild_control_leg_committee(
     )?;
     Ok(leg)
 }
-
 fn leg(
     context: &FixtureContext,
     participant: &ParticipantFixture,
@@ -445,7 +428,6 @@ fn leg(
         )?,
     })
 }
-
 fn receipt(
     context: &FixtureContext,
     participants: &[ParticipantFixture],
@@ -469,7 +451,6 @@ fn receipt(
             .collect::<Result<Vec<_>, _>>()?,
     })
 }
-
 fn golden_commitment() -> Result<(LaneBlockCommitment, ParticipantFixture), Box<dyn Error>> {
     let mut context = fixture_context()?;
     let coordinator = participant_fixture(
@@ -502,7 +483,6 @@ fn golden_commitment() -> Result<(LaneBlockCommitment, ParticipantFixture), Box<
     };
     Ok((commitment, participants[1].clone()))
 }
-
 fn diagnostics(
     commitment: LaneBlockCommitment,
     remote: &ParticipantFixture,
@@ -533,7 +513,6 @@ fn diagnostics(
         autonomous_lane_executions: Vec::new(),
     }
 }
-
 fn participant_application(remote: &ParticipantFixture) -> SumeragiNativeAmxParticipantApplication {
     let descriptor = &remote.proposal.descriptor;
     SumeragiNativeAmxParticipantApplication {
@@ -553,27 +532,22 @@ fn participant_application(remote: &ParticipantFixture) -> SumeragiNativeAmxPart
         state: SumeragiNativeAmxParticipantApplicationState::DurablyApplied,
     }
 }
-
 fn same_participant_fixture(left: &ParticipantFixture, right: &ParticipantFixture) -> bool {
     left.proposal == right.proposal
         && left.settlement == right.settlement
         && left.settlement_hash == right.settlement_hash
 }
-
 fn application_block_hash() -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(Hash::new(
         b"native-amx-v2-grouped-fixture-application-block",
     ))
 }
-
 fn executed_block_wire_hash() -> Hash {
     Hash::new(EXECUTED_BLOCK_WIRE_FIXTURE)
 }
-
 fn executed_block_wire_len() -> u64 {
     u64::try_from(EXECUTED_BLOCK_WIRE_FIXTURE.len()).expect("grouped fixture wire length fits u64")
 }
-
 fn application_evidence(
     context: &FixtureContext,
     remote: &ParticipantFixture,
@@ -657,7 +631,6 @@ fn application_evidence(
         .copied()
         .map(Hash::from)
         .collect::<Vec<_>>();
-
     Ok(norito::json!({
         "active_lane_incarnations": [{
             "lane_id": (descriptor.lane_id),
@@ -677,7 +650,6 @@ fn application_evidence(
         }],
     }))
 }
-
 fn mutation(op: &str, path: &str, value: Option<Value>) -> Value {
     value.map_or_else(
         || {
@@ -695,7 +667,6 @@ fn mutation(op: &str, path: &str, value: Option<Value>) -> Value {
         },
     )
 }
-
 #[expect(
     clippy::needless_pass_by_value,
     reason = "the fixture helper owns the mutation vector so callers do not clone its JSON values"
@@ -708,15 +679,12 @@ fn controls(id: &str, validator: &str, mutations: Vec<Value>) -> Value {
         "mutations": (mutations),
     })
 }
-
 fn control(id: &str, mutation: Value) -> Value {
     controls(id, "receipt_group", vec![mutation])
 }
-
 fn evidence_control(id: &str, mutations: Vec<Value>) -> Value {
     controls(id, "application_evidence", mutations)
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "both coherent committee controls rebuild every grouped source and evidence projection together"
@@ -744,7 +712,6 @@ fn committee_consistency_controls(
     if canonical_validators.len() != VALIDATOR_COUNT || canonical_pops.len() != VALIDATOR_COUNT {
         return Err("Native AMX committee-control fixture geometry changed".into());
     }
-
     let mut duplicate_validators = canonical_validators.clone();
     duplicate_validators[1] = duplicate_validators[0].clone();
     let mut duplicate_pops = canonical_pops.clone();
@@ -768,7 +735,6 @@ fn committee_consistency_controls(
     let mut over_quorum_commitment = commitment.clone();
     let mut duplicate_remote: Option<ParticipantFixture> = None;
     let mut over_quorum_remote: Option<ParticipantFixture> = None;
-
     for (receipt_index, receipt) in commitment.native_amx_receipts.iter().enumerate() {
         let mut matching_legs = receipt
             .legs
@@ -790,7 +756,6 @@ fn committee_consistency_controls(
         {
             return Err("Native AMX grouped remote committee is not source-coherent".into());
         }
-
         let duplicate_leg = rebuild_control_leg_committee(
             context,
             remote_leg,
@@ -836,7 +801,6 @@ fn committee_consistency_controls(
             duplicate_leg.clone();
         over_quorum_commitment.native_amx_receipts[receipt_index].legs[leg_index] =
             over_quorum_leg.clone();
-
         let remote_leg_path =
             format!("/golden/receipt_group/native_amx_receipts/{receipt_index}/legs/{leg_index}");
         duplicate_mutations.push(mutation(
@@ -850,7 +814,6 @@ fn committee_consistency_controls(
             Some(json::to_value(&over_quorum_leg)?),
         ));
     }
-
     let duplicate_remote =
         duplicate_remote.ok_or("Native AMX duplicate-committee control has no participant")?;
     let over_quorum_remote =
@@ -881,7 +844,6 @@ fn committee_consistency_controls(
             &over_quorum_remote,
         ))?),
     ));
-
     Ok(vec![
         controls(
             "coherent_duplicate_validator_set",
@@ -895,7 +857,6 @@ fn committee_consistency_controls(
         ),
     ])
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "the five coherent hash-consistency controls stay together so their linked descriptor, proposal, and quorum-certificate mutations remain auditable"
@@ -907,7 +868,6 @@ fn hash_consistency_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
     let proposal = format!("{leg}/participant_proposal");
     let prepare = format!("{leg}/prepare_qc");
     let commit = format!("{leg}/commit_qc");
-
     let forged_validator_set_hash = HashOf::<Vec<PeerId>>::from_untyped_unchecked(Hash::new(
         b"native-amx-v2-negative-forged-validator-set-hash",
     ));
@@ -934,7 +894,6 @@ fn hash_consistency_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
         qc.body.participant_validator_set_hash = forged_validator_set_hash;
         qc.body.participant_proposal_hash = validator_hash_leg.participant_proposal.proposal_hash;
     }
-
     let mut stale_descriptor_leg = remote_leg.clone();
     stale_descriptor_leg
         .participant_proposal
@@ -949,7 +908,6 @@ fn hash_consistency_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
     ] {
         qc.body.participant_proposal_hash = stale_descriptor_leg.participant_proposal.proposal_hash;
     }
-
     let forged_proposal_hash = Hash::new(b"native-amx-v2-negative-forged-proposal-hash");
     let retired_plain_settlement_hash = HashOf::new(&remote_leg.participant_settlement);
     vec![
@@ -1191,7 +1149,6 @@ fn hash_consistency_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
         ),
     ]
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "the compact negative-control corpus is easier to audit as one ordered list"
@@ -1780,7 +1737,6 @@ fn negative_controls(
     controls.extend(committee_consistency_controls(context, commitment)?);
     Ok(controls)
 }
-
 fn validate_golden(diagnostics: &SumeragiDiagnosticsStatus) -> Result<(), Box<dyn Error>> {
     diagnostics
         .validate_native_amx_participant_applications()
@@ -1853,7 +1809,6 @@ fn validate_golden(diagnostics: &SumeragiDiagnosticsStatus) -> Result<(), Box<dy
     }
     Ok(())
 }
-
 fn document() -> Result<Value, Box<dyn Error>> {
     let context = fixture_context()?;
     let (commitment, remote) = golden_commitment()?;
@@ -1902,7 +1857,6 @@ fn document() -> Result<Value, Box<dyn Error>> {
         "negative_controls": (controls),
     }))
 }
-
 pub fn write_fixture(path: &Path, check_only: bool) -> Result<(), Box<dyn Error>> {
     let rendered = format!("{}\n", json::to_string_pretty(&document()?)?);
     if check_only {

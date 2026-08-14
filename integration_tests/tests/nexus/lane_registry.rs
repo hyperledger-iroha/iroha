@@ -1,21 +1,17 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration tests for the Nexus lane manifest registry.
-
-use std::{collections::BTreeMap, path::PathBuf, time::Duration};
-
 use eyre::Result;
 use iroha_config::parameters::actual::{GovernanceCatalog, GovernanceModule, LaneRegistry};
 use iroha_core::governance::manifest::LaneManifestRegistry;
 use iroha_data_model::nexus::{LaneCatalog, LaneConfig, LaneId, LaneStorageProfile};
 use nonzero_ext::nonzero;
-
+use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 fn fixtures_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("workspace root exists")
         .join(relative)
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn lane_manifest_registry_loads_fixture_manifests() -> Result<()> {
@@ -42,7 +38,6 @@ fn lane_manifest_registry_loads_fixture_manifests() -> Result<()> {
             },
         ],
     )?;
-
     let mut governance_catalog = GovernanceCatalog::default();
     governance_catalog.modules.insert(
         "parliament".to_string(),
@@ -51,16 +46,13 @@ fn lane_manifest_registry_loads_fixture_manifests() -> Result<()> {
             params: BTreeMap::new(),
         },
     );
-
     let registry_cfg = LaneRegistry {
         manifest_directory: Some(fixtures_path("fixtures/nexus/lanes/manifests")),
         cache_directory: Some(fixtures_path("fixtures/nexus/lanes/cache")),
         poll_interval: Duration::from_secs(0),
     };
-
     let registry =
         LaneManifestRegistry::from_config(&lane_catalog, &governance_catalog, &registry_cfg);
-
     let governance_status = registry
         .status(LaneId::new(1))
         .expect("governance lane status present");
@@ -104,7 +96,6 @@ fn lane_manifest_registry_loads_fixture_manifests() -> Result<()> {
             .any(|ns| ns.as_ref() == "apps"),
         "governance manifest should protect the `apps` namespace",
     );
-
     let zk_status = registry
         .status(LaneId::new(2))
         .expect("zk lane status present");
@@ -149,7 +140,6 @@ fn lane_manifest_registry_loads_fixture_manifests() -> Result<()> {
         1,
         "zk manifest should advertise a privacy commitment"
     );
-
     assert!(
         registry.missing_aliases().is_empty(),
         "all governance lanes should have manifests"
@@ -166,6 +156,5 @@ fn lane_manifest_registry_loads_fixture_manifests() -> Result<()> {
         registry.ensure_lane_ready(LaneId::new(2)).is_ok(),
         "overlay manifest should ready the zk lane"
     );
-
     Ok(())
 }

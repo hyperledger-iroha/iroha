@@ -1,21 +1,17 @@
 //! Gas cost golden tests for IVM opcodes and syscalls.
-
 mod common;
-
 use instruction::wide;
 use ivm::{
     IVM, VMError, cost_of as cost_of_opt,
     host::{DefaultHost, IVMHost},
     instruction,
 };
-
 fn push32(code: &mut Vec<u8>, word: u32) {
     code.extend_from_slice(&word.to_le_bytes());
 }
 fn halt32(code: &mut Vec<u8>) {
     code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
 }
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     use iroha_crypto::Hash;
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
@@ -27,53 +23,41 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 // Execution mode flag for VECTOR operations in ProgramMetadata
 const MODE_VECTOR: u8 = 0x02;
-
 fn cost_of(word: u32) -> u64 {
     cost_of_opt(word).expect("valid opcode must have gas cost")
 }
-
 fn cost_of_with_vl(word: u32, vector_len: usize) -> u64 {
     ivm::cost_of_with_params(word, vector_len, 0).expect("valid opcode must have gas cost")
 }
-
 fn wide_rr(op: u8, rd: u8, rs1: u8, rs2: u8) -> u32 {
     ivm::encoding::wide::encode_rr(op, rd, rs1, rs2)
 }
-
 fn wide_ri(op: u8, rd: u8, rs1: u8, imm: i8) -> u32 {
     ivm::encoding::wide::encode_ri(op, rd, rs1, imm)
 }
-
 fn wide_load(op: u8, rd: u8, base: u8, imm: i8) -> u32 {
     ivm::encoding::wide::encode_load(op, rd, base, imm)
 }
-
 fn wide_store(op: u8, base: u8, rs: u8, imm: i8) -> u32 {
     ivm::encoding::wide::encode_store(op, base, rs, imm)
 }
-
 fn wide_branch(op: u8, rs1: u8, rs2: u8, offset_words: i8) -> u32 {
     ivm::encoding::wide::encode_branch(op, rs1, rs2, offset_words)
 }
-
 fn wide_jump(op: u8, rd: u8, offset_words: i16) -> u32 {
     ivm::encoding::wide::encode_jump(op, rd, offset_words)
 }
-
 fn wide_sys(op: u8, imm8: u8) -> u32 {
     ivm::encoding::wide::encode_sys(op, imm8)
 }
-
 fn classic_encode_r16(op: u8, rd: u8, rs1: u8, rs2: u8) -> u16 {
     ((op & 0xF) as u16) << 12
         | ((rd & 0xF) as u16) << 8
         | ((rs1 & 0xF) as u16) << 4
         | (rs2 & 0xF) as u16
 }
-
 fn gas_for(instr: u32) -> u64 {
     let mut body = Vec::new();
     push32(&mut body, instr);
@@ -97,7 +81,6 @@ fn gas_for(instr: u32) -> u64 {
         ),
     }
 }
-
 #[test]
 fn gas_add_mul_div_load_store_branch() {
     let add = wide_rr(wide::arithmetic::ADD, 1, 2, 3);
@@ -113,7 +96,6 @@ fn gas_add_mul_div_load_store_branch() {
     let beq = wide_branch(wide::control::BEQ, 2, 3, 2);
     assert_eq!(gas_for(beq), cost_of(beq));
 }
-
 #[test]
 fn gas_branches_always_one() {
     // Construct BEQ/BNE/BLT/BGE/BLTU/BGEU encodings with zero offset
@@ -131,13 +113,11 @@ fn gas_branches_always_one() {
         assert_eq!(cost_of(mkb(op)), 1);
     }
 }
-
 #[test]
 fn indexed_scalar_load_has_one_gas_base_cost() {
     let load = ivm::encoding::wide::encode_literal(wide::memory::LDI64, 7, u16::MAX);
     assert_eq!(cost_of(load), 1);
 }
-
 #[test]
 fn gas_getgas_and_jumps_and_vector_sha() {
     // Property: sum(cost_of) over a linear sequence equals runtime gas
@@ -184,16 +164,13 @@ fn gas_getgas_and_jumps_and_vector_sha() {
     // JALR: I-type, opcode 0x67
     let jalr = wide_ri(wide::control::JALR, 2, 1, 0);
     assert_eq!(cost_of(jalr), 2);
-
     // VADD32: high byte 0x70
     let vadd32 = wide_rr(wide::crypto::VADD32, 0, 0, 0);
     assert_eq!(cost_of(vadd32), 2);
-
     // SHA256BLOCK: high byte 0x70
     let sha256blk = wide_rr(wide::crypto::SHA256BLOCK, 0, 0, 0);
     assert_eq!(cost_of(sha256blk), 50);
 }
-
 #[test]
 fn schedule_vs_runtime_syscall_extra() {
     // Sequence with a syscall that charges by contiguous eight-byte ABI words.
@@ -206,7 +183,6 @@ fn schedule_vs_runtime_syscall_extra() {
     let scall = wide_sys(wide::system::SCALL, ivm::syscalls::SYSCALL_ALLOC as u8);
     push32(&mut code, scall);
     halt32(&mut code);
-
     // Sum base schedule; 16 bytes cost base 1 + two ABI words.
     let words: Vec<u32> = code
         .chunks(4)
@@ -215,14 +191,12 @@ fn schedule_vs_runtime_syscall_extra() {
     let program = common::assemble(&code);
     let base: u64 = words.iter().map(|&w| cost_of(w)).sum();
     let expected = base + 3;
-
     let start = 10_000u64;
     let mut vm = IVM::new(start);
     vm.load_program(&program).unwrap();
     vm.run().unwrap();
     assert_eq!(start - vm.gas_remaining, expected);
 }
-
 #[test]
 fn v1_numeric_syscalls_use_staged_metering_without_a_quote() {
     let vm = IVM::new(10_000);
@@ -234,7 +208,6 @@ fn v1_numeric_syscalls_use_staged_metering_without_a_quote() {
         "numeric calls debit each bounded phase immediately and never reserve/refund a quote",
     );
 }
-
 #[test]
 fn v1_json_build_charge_golden() {
     assert_eq!(
@@ -248,7 +221,6 @@ fn v1_json_build_charge_golden() {
         "typed JSON getters charge their base plus inspected and materialized bytes"
     );
 }
-
 fn run_gas(code: &[u8]) -> u64 {
     let start = 10_000u64;
     let mut vm = IVM::new(start);
@@ -257,7 +229,6 @@ fn run_gas(code: &[u8]) -> u64 {
     vm.run().unwrap();
     start - vm.gas_remaining
 }
-
 #[test]
 fn branch_run_cost_taken_and_not_taken() {
     let mk_code = |branch: u32, r1: u64, r2: u64, with_filler: bool| -> u64 {
@@ -314,7 +285,6 @@ fn branch_run_cost_taken_and_not_taken() {
     assert_eq!(mk_code(beq_not_taken, 1, 2, true), expected_not_taken);
     assert_eq!(mk_code(beq_taken, 5, 5, true), expected_taken);
 }
-
 #[test]
 fn getgas_run_is_zero() {
     // GETGAS with rd=1
@@ -324,7 +294,6 @@ fn getgas_run_is_zero() {
     halt32(&mut code);
     assert_eq!(run_gas(&code), 0);
 }
-
 #[test]
 fn vector_and_sha_run_costs() {
     use ivm::ProgramMetadata;
@@ -350,7 +319,6 @@ fn vector_and_sha_run_costs() {
     let before = vm.gas_remaining;
     vm.run().unwrap();
     assert_eq!(before - vm.gas_remaining, 4);
-
     // Now SHA256BLOCK: needs a state in two vector registers and a 64-byte block in memory
     let mut program2 = ProgramMetadata {
         version_major: 1,
@@ -381,7 +349,6 @@ fn vector_and_sha_run_costs() {
     vm2.run().unwrap();
     assert_eq!(before2 - vm2.gas_remaining, 50);
 }
-
 #[test]
 fn vector_vand_vxor_vor_run_costs() {
     use ivm::ProgramMetadata;
@@ -412,7 +379,6 @@ fn vector_vand_vxor_vor_run_costs() {
     assert_eq!(run_vec(wide::crypto::VXOR), 2);
     assert_eq!(run_vec(wide::crypto::VOR), 2);
 }
-
 #[test]
 fn getgas_variants_different_rd() {
     // Build three GETGAS with different rd fields and HALT
@@ -424,7 +390,6 @@ fn getgas_variants_different_rd() {
     halt32(&mut code);
     assert_eq!(run_gas(&code), 0);
 }
-
 #[test]
 fn getgas_operand_variants_invariant_cost() {
     // Vary unused operand slots in GETGAS; gas remains 0
@@ -436,7 +401,6 @@ fn getgas_operand_variants_invariant_cost() {
     halt32(&mut code);
     assert_eq!(run_gas(&code), 0);
 }
-
 #[test]
 fn vector_vadd64_vrot32_run_costs() {
     use ivm::ProgramMetadata;
@@ -460,7 +424,6 @@ fn vector_vadd64_vrot32_run_costs() {
     let before = vm.gas_remaining;
     vm.run().unwrap();
     assert_eq!(before - vm.gas_remaining, 4);
-
     // VROT32 (rotate each lane by imm)
     let mut program2 = ProgramMetadata {
         version_major: 1,
@@ -482,7 +445,6 @@ fn vector_vadd64_vrot32_run_costs() {
     vm2.run().unwrap();
     assert_eq!(before2 - vm2.gas_remaining, 2);
 }
-
 #[test]
 fn getgas_imm_variants_invariant_cost() {
     // Vary destination and unused operand fields in GETGAS; gas remains 0
@@ -502,7 +464,6 @@ fn getgas_imm_variants_invariant_cost() {
     halt32(&mut code);
     assert_eq!(run_gas(&code), 0);
 }
-
 #[test]
 fn mixed_sequence_cumulative_gas() {
     // Build: BEQ not taken (1) + ADD (1) + SD (3) + LD (3) + HALT (0) = 8
@@ -536,7 +497,6 @@ fn mixed_sequence_cumulative_gas() {
     vm.run().unwrap();
     assert_eq!(start - vm.gas_remaining, expected);
 }
-
 #[test]
 fn vector_vadd64_vl_override_gas() {
     use ivm::ProgramMetadata;
@@ -561,7 +521,6 @@ fn vector_vadd64_vl_override_gas() {
     vm.run().unwrap();
     assert_eq!(before - vm.gas_remaining, 8);
 }
-
 #[test]
 fn jalr_invariance_gas() {
     // Helper to encode I-type JALR
@@ -570,7 +529,6 @@ fn jalr_invariance_gas() {
         assert_eq!(cost_of(jalr), 2);
     }
 }
-
 #[test]
 fn alignment_error_gas_charged_then_error() {
     // LD r1, 1(r2) → misaligned (addr % 8 != 0), should charge load gas then error
@@ -588,7 +546,6 @@ fn alignment_error_gas_charged_then_error() {
     assert!(matches!(res, Err(VMError::MisalignedAccess { .. })));
     assert_eq!(start - vm.gas_remaining, cost_of(ld));
 }
-
 #[test]
 fn vector_vand_vxor_vor_vl_override_gas() {
     use ivm::ProgramMetadata;
@@ -617,7 +574,6 @@ fn vector_vand_vxor_vor_vl_override_gas() {
     assert_eq!(run_vec(wide::crypto::VXOR), 4);
     assert_eq!(run_vec(wide::crypto::VOR), 4);
 }
-
 #[test]
 fn alignment_error_misaligned_offsets() {
     // STORE64 with offset 1 should misalign and still deduct cost
@@ -636,7 +592,6 @@ fn alignment_error_misaligned_offsets() {
         assert!(matches!(res, Err(VMError::MisalignedAccess { .. })));
         assert_eq!(start - vm.gas_remaining, cost_of(store));
     }
-
     // LOAD64 with offset 2 should misalign and charge cost
     {
         let load = wide_load(wide::memory::LOAD64, 1, 2, 2);
@@ -653,7 +608,6 @@ fn alignment_error_misaligned_offsets() {
         assert_eq!(start - vm.gas_remaining, cost_of(load));
     }
 }
-
 #[test]
 fn alignment_error_store_doubleword() {
     // SD misaligned: funct3=0x3, offset=4
@@ -671,7 +625,6 @@ fn alignment_error_store_doubleword() {
     let store = wide_store(wide::memory::STORE64, 2, 3, 4);
     assert_eq!(start - vm.gas_remaining, cost_of(store));
 }
-
 #[test]
 fn aligned_load_store_ok_gas() {
     // STORE64 followed by LOAD64 at aligned base should succeed.
@@ -693,20 +646,17 @@ fn aligned_load_store_ok_gas() {
     assert_eq!(start - vm.gas_remaining, expected);
     assert_eq!(vm.registers.get(4), 0x0000_0000_0000_0080u64);
 }
-
 #[test]
 fn jal_and_jalr_offsets_gas() {
     // JAL forward by 4 bytes (skip filler); schedule gas = 2
     let jal = wide_jump(wide::control::JAL, 1, 1);
     assert_eq!(cost_of(jal), 2);
-
     // JALR with imm offsets 0 and 0x20; gas 2
     for &imm in &[0i32, 0x20] {
         let jalr = wide_ri(wide::control::JALR, 1, 2, imm as i8);
         assert_eq!(cost_of(jalr), 2);
     }
 }
-
 #[test]
 fn executed_set_all_branch_variants() {
     // For each branch funct3 variant, test both taken and not taken
@@ -748,7 +698,6 @@ fn executed_set_all_branch_variants() {
         assert_eq!(start - vm.gas_remaining, expected);
     }
 }
-
 #[test]
 fn mixed_16_32_sequence_cumulative_gas() {
     // Mixed-width sequences are no longer supported: decoder rejects 16-bit words.
@@ -757,7 +706,6 @@ fn mixed_16_32_sequence_cumulative_gas() {
     code.extend_from_slice(&add16.to_le_bytes());
     push32(&mut code, wide_rr(wide::arithmetic::ADD, 4, 4, 4));
     push32(&mut code, ivm::encoding::wide::encode_halt());
-
     let start = 10_000u64;
     let mut vm = IVM::new(start);
     let program = common::assemble(&code);
@@ -774,7 +722,6 @@ fn mixed_16_32_sequence_cumulative_gas() {
         }
     }
 }
-
 #[test]
 fn vector_sequence_cumulative_gas() {
     use ivm::ProgramMetadata;
@@ -808,7 +755,6 @@ fn vector_sequence_cumulative_gas() {
     vm.run().unwrap();
     assert_eq!(start - vm.gas_remaining, expected);
 }
-
 #[test]
 fn poseidon_cost_property() {
     // Build register-form POSEIDON2 and HALT.
@@ -826,7 +772,6 @@ fn poseidon_cost_property() {
     vm.run().unwrap();
     assert_eq!(start - vm.gas_remaining, expected);
 }
-
 #[test]
 fn nested_branches_executed_set_property() {
     // Layout:
@@ -843,13 +788,11 @@ fn nested_branches_executed_set_property() {
     push32(&mut code, wide_branch(wide::control::BNE, 3, 4, 1));
     // HALT
     halt32(&mut code);
-
     let words: Vec<u32> = code
         .chunks(4)
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     let program = common::assemble(&code);
-
     // Case A: BEQ taken (r1==r2), BNE executed then HALT
     {
         let executed = [0usize, 2usize, 3usize];
@@ -864,7 +807,6 @@ fn nested_branches_executed_set_property() {
         vm.run().unwrap();
         assert_eq!(start - vm.gas_remaining, expected);
     }
-
     // Case B: BEQ not taken (r1!=r2), executes XOR, BNE, HALT
     {
         let executed = [0usize, 1usize, 2usize, 3usize];
@@ -880,7 +822,6 @@ fn nested_branches_executed_set_property() {
         assert_eq!(start - vm.gas_remaining, expected);
     }
 }
-
 #[test]
 fn vector_long_chain_cumulative_gas() {
     use ivm::ProgramMetadata;
@@ -914,7 +855,6 @@ fn vector_long_chain_cumulative_gas() {
     vm.run().unwrap();
     assert_eq!(start - vm.gas_remaining, expected);
 }
-
 #[test]
 fn crypto_schedule_cost_constants() {
     // Validate cost_of for several crypto ops that may be unimplemented at runtime
@@ -928,7 +868,6 @@ fn crypto_schedule_cost_constants() {
     assert_eq!(cost_of(mk(wide::crypto::ECDSAVERIFY)), 1500);
     assert_eq!(cost_of(mk(wide::crypto::DILITHIUMVERIFY)), 5000);
 }
-
 #[test]
 fn ed25519_batchverify_charges_per_entry() {
     use ed25519_dalek::{Signer, SigningKey};
@@ -949,27 +888,23 @@ fn ed25519_batchverify_charges_per_entry() {
     let request = ivm::signature::Ed25519BatchRequest { entries };
     let payload = norito::to_bytes(&request).expect("encode request");
     let tlv = make_tlv(ivm::PointerType::NoritoBytes as u16, &payload);
-
     let word = ivm::encoding::wide::encode_rr(wide::crypto::ED25519BATCHVERIFY, 5, 1, 2);
     let mut code = Vec::new();
     push32(&mut code, word);
     halt32(&mut code);
     let program = common::assemble(&code);
-
     let mut vm = IVM::new(10_000);
     let ptr = vm.alloc_input_tlv(&tlv).expect("alloc request");
     vm.set_register(1, ptr);
     vm.set_register(2, 0xFFFF);
     vm.load_program(&program).unwrap();
     vm.run().unwrap();
-
     let expected = cost_of(word)
         + ivm::gas::ed25519_batch_extra_gas(payload.len() as u64, request.entries.len() as u64);
     assert_eq!(10_000 - vm.gas_remaining, expected);
     assert_eq!(vm.register(5), 1);
     assert_eq!(vm.register(2), 0);
 }
-
 #[test]
 fn back_to_back_branches_executed_set() {
     // Program layout (all 32-bit):
@@ -991,7 +926,6 @@ fn back_to_back_branches_executed_set() {
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     let program = common::assemble(&code);
-
     // Case 1: BEQ taken (r1==r2), then BNE executes and is taken (r3!=r4): executed {0,1,3}
     {
         let executed = [0usize, 1usize, 3usize];
@@ -1021,7 +955,6 @@ fn back_to_back_branches_executed_set() {
         assert_eq!(start - vm.gas_remaining, expected);
     }
 }
-
 #[test]
 fn load_store_pair_executed_set() {
     use ivm::ProgramMetadata;
@@ -1032,13 +965,11 @@ fn load_store_pair_executed_set() {
     program.extend_from_slice(&load.to_le_bytes());
     program.extend_from_slice(&store.to_le_bytes());
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-
     let words: Vec<u32> = program[ProgramMetadata::default().encode().len()..]
         .chunks(4)
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     let expected: u64 = words.iter().map(|&w| cost_of(w)).sum();
-
     let start = 10_000u64;
     let mut vm = IVM::new(start);
     vm.load_program(&program).unwrap();
@@ -1050,7 +981,6 @@ fn load_store_pair_executed_set() {
     let stored = vm.memory.load_u64(base + 8).expect("store should succeed");
     assert_eq!(stored, 0x0102_0304_0506_0708u64);
 }
-
 // The following tests should be un-ignored once runtime handlers land for these ops.
 // They validate that runtime gas equals the schedule when execution succeeds.
 #[test]
@@ -1079,7 +1009,6 @@ fn sha3block_runtime_gas_matches_schedule() {
     vm.run().unwrap();
     assert_eq!(start - vm.gas_remaining, expected);
 }
-
 #[test]
 fn blake2s_runtime_gas_matches_schedule() {
     let word = ivm::encoding::wide::encode_rr(wide::crypto::BLAKE2S, 5, 1, 0);
@@ -1102,7 +1031,6 @@ fn blake2s_runtime_gas_matches_schedule() {
     vm.run().unwrap();
     assert_eq!(start - vm.gas_remaining, expected);
 }
-
 #[test]
 fn ed25519verify_runtime_gas_matches_schedule() {
     let word = ivm::encoding::wide::encode_rr(wide::crypto::ED25519VERIFY, 0, 0, 0);
@@ -1117,7 +1045,6 @@ fn ed25519verify_runtime_gas_matches_schedule() {
     vm.run().unwrap();
     assert_eq!(start - vm.gas_remaining, expected);
 }
-
 #[test]
 fn ecdsaverify_runtime_gas_matches_schedule() {
     let word = ivm::encoding::wide::encode_rr(wide::crypto::ECDSAVERIFY, 0, 0, 0);
@@ -1132,7 +1059,6 @@ fn ecdsaverify_runtime_gas_matches_schedule() {
     vm.run().unwrap();
     assert_eq!(start - vm.gas_remaining, expected);
 }
-
 #[test]
 fn dilithiumverify_runtime_gas_matches_schedule() {
     let word = ivm::encoding::wide::encode_rr(wide::crypto::DILITHIUMVERIFY, 0, 0, 0);
@@ -1147,7 +1073,6 @@ fn dilithiumverify_runtime_gas_matches_schedule() {
     vm.run().unwrap();
     assert_eq!(start - vm.gas_remaining, expected);
 }
-
 #[test]
 fn executed_set_branch_taken_and_not_taken() {
     // Helper encoders
@@ -1201,7 +1126,6 @@ fn executed_set_branch_taken_and_not_taken() {
         assert_eq!(start - vm.gas_remaining, expected);
     }
 }
-
 #[test]
 fn executed_set_jal_and_jalr_alignment() {
     // JAL to skip filler to HALT: executed = {JAL, HALT}
@@ -1234,7 +1158,6 @@ fn executed_set_jal_and_jalr_alignment() {
             base + penalty
         );
     }
-
     // JALR with odd target aligns to even: target=5 becomes 4; executed = {JALR, HALT at 4}
     {
         let mut code = Vec::new();

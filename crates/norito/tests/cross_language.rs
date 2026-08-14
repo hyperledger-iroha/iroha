@@ -1,5 +1,4 @@
 //! Cross-language fixture parity with Python and Java bindings.
-
 fn hex_to_bytes(hex: &str) -> Vec<u8> {
     let cleaned: String = hex.chars().filter(|c| !c.is_whitespace()).collect();
     cleaned
@@ -14,11 +13,9 @@ fn hex_to_bytes(hex: &str) -> Vec<u8> {
         })
         .collect()
 }
-
 fn bytes_to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
-
 #[test]
 fn python_sequence_fixture_with_wrong_minor_version_is_rejected() {
     let hex = "4e5254300027055a2713834c8240055a2713834c82400015000000000000002fc2516e36ed1be83f040404040401000000020000000300000004000000";
@@ -34,7 +31,6 @@ fn python_sequence_fixture_with_wrong_minor_version_is_rejected() {
         norito::decode_from_bytes::<Vec<u8>>(&bytes).expect_err("fixture must be rejected in v1");
     assert!(matches!(err, norito::Error::UnsupportedMinorVersion { .. }));
 }
-
 #[test]
 fn decode_python_adaptive_rows_fixture() {
     let hex = "000301010000000000000005616c69636501020000000000000003626f6200030000000000000007636861726c696501";
@@ -60,7 +56,6 @@ fn decode_python_adaptive_rows_fixture() {
     ];
     assert_eq!(decoded, expected);
 }
-
 #[test]
 fn decode_java_adaptive_rows_fixture() {
     let hex = "0002010a000000000000000564656c7461001400000000000000046563686f01";
@@ -81,7 +76,6 @@ fn decode_java_adaptive_rows_fixture() {
     ];
     assert_eq!(decoded, expected);
 }
-
 #[cfg(feature = "schema-structural")]
 #[test]
 fn structural_schema_hash_matches_bindings() {

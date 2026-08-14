@@ -4,7 +4,6 @@ struct CanonicalBundleFileWriterV1<'bytes> {
     offset: usize,
     matches: bool,
 }
-
 impl<'bytes> CanonicalBundleFileWriterV1<'bytes> {
     const fn new(expected: &'bytes [u8]) -> Self {
         Self {
@@ -13,12 +12,10 @@ impl<'bytes> CanonicalBundleFileWriterV1<'bytes> {
             matches: true,
         }
     }
-
     const fn finish(self) -> bool {
         self.matches && self.offset == self.expected.len()
     }
 }
-
 impl io::Write for CanonicalBundleFileWriterV1<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let Some(end) = self.offset.checked_add(bytes.len()) else {
@@ -32,12 +29,10 @@ impl io::Write for CanonicalBundleFileWriterV1<'_> {
         self.offset = end;
         Ok(bytes.len())
     }
-
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }
-
 fn decode_canonical_bundle_file_v1<T>(
     bytes: &[u8],
     maximum_bytes: u64,
@@ -65,7 +60,6 @@ where
     })
     .map_err(|_| ParseError::new(failure_reason))?;
     validate(&value).map_err(|_| ParseError::new(failure_reason))?;
-
     // Compare the canonical re-encoding directly against the caller's slice instead of first
     // materializing a second complete top-level metadata `Vec`. Norito's derived encoder can still
     // transiently buffer one length-delimited field, which is bounded by the file-size gate above.

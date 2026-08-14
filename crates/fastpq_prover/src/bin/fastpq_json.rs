@@ -1,12 +1,4 @@
 //! JSON CLI for FASTPQ measurement, proof generation, and verification.
-
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::PathBuf,
-    time::{Duration, Instant},
-};
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Parser, Subcommand};
 use fastpq_prover::gadgets::transfer::decode_transcripts;
@@ -30,7 +22,12 @@ use norito::{
     json, to_bytes,
 };
 use sha2::{Digest, Sha256};
-
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 #[derive(Parser)]
 #[command(name = "fastpq_json")]
 #[command(about = "FASTPQ JSON helper for measured budgets and receipt-bound proofs")]
@@ -38,7 +35,6 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 }
-
 #[derive(Subcommand)]
 enum Command {
     Measure {
@@ -58,7 +54,6 @@ enum Command {
         input: PathBuf,
     },
 }
-
 #[derive(Debug, Clone, JsonDeserialize)]
 struct MeasureInput {
     #[norito(default)]
@@ -73,7 +68,6 @@ struct MeasureInput {
     #[norito(default)]
     parameter: String,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct MeasureOutput {
     dataspace: String,
@@ -82,7 +76,6 @@ struct MeasureOutput {
     parameter: String,
     benchmarks: BTreeMap<String, BenchmarkResult>,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct BenchmarkResult {
     sample_count: usize,
@@ -95,7 +88,6 @@ struct BenchmarkResult {
     verifier_id: String,
     verifier_version: String,
 }
-
 #[derive(Debug, Clone, JsonDeserialize)]
 struct ProofRequest {
     #[norito(default)]
@@ -137,7 +129,6 @@ struct ProofRequest {
     #[norito(default)]
     relay_post_state_root: String,
 }
-
 #[derive(Debug, Clone, JsonDeserialize, JsonSerialize)]
 struct EffectBindingRequest {
     #[norito(default)]
@@ -157,7 +148,6 @@ struct EffectBindingRequest {
     #[norito(default)]
     destination_amount_i64: Option<i64>,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct ProofResponse {
     passed: bool,
@@ -178,7 +168,6 @@ struct ProofResponse {
     relay_envelope_hex: Option<String>,
     relay_ref: Option<RelayRefJson>,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct RelayRefJson {
     dataspace_id: u64,
@@ -186,13 +175,11 @@ struct RelayRefJson {
     lane_incarnation: String,
     block_height: u64,
 }
-
 #[derive(Debug, Clone, JsonDeserialize)]
 struct VerifyInput {
     request: ProofRequest,
     proof_bytes_base64: String,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct VerifyResponse {
     passed: bool,
@@ -203,7 +190,6 @@ struct VerifyResponse {
     trace_commitment: String,
     batch_manifest_sha256: String,
 }
-
 #[derive(Debug, Clone, JsonDeserialize)]
 struct InspectTransfersInput {
     batch_base64: String,
@@ -214,14 +200,12 @@ struct InspectTransfersInput {
     #[norito(default)]
     asset_definition_id: Option<String>,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct InspectTransfersOutput {
     transcripts_present: bool,
     transfer_count: usize,
     transfers: Vec<TransferInspectionRecord>,
 }
-
 #[derive(Debug, Clone, JsonSerialize)]
 struct TransferInspectionRecord {
     transcript_index: usize,
@@ -242,11 +226,9 @@ struct TransferInspectionRecord {
     to_balance_after: String,
     to_balance_after_units: Option<u64>,
 }
-
 fn default_relay_block_height() -> u64 {
     1
 }
-
 fn main() -> Result<(), String> {
     let cli = Cli::parse();
     match cli.command {
@@ -272,20 +254,17 @@ fn main() -> Result<(), String> {
         }
     }
 }
-
 fn read_json<T: json::JsonDeserialize>(path: &PathBuf) -> Result<T, String> {
     let raw = fs::read_to_string(path)
         .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
     json::from_str(&raw).map_err(|err| format!("failed to parse {}: {err}", path.display()))
 }
-
 fn print_json<T: json::JsonSerialize>(payload: &T) -> Result<(), String> {
     let encoded =
         json::to_string_pretty(payload).map_err(|err| format!("json encode failed: {err}"))?;
     println!("{encoded}");
     Ok(())
 }
-
 fn handle_measure(request: MeasureInput) -> Result<MeasureOutput, String> {
     let parameter = normalized_parameter(&request.parameter);
     let verifier_id = normalized_verifier_id(&request.verifier_id);
@@ -355,7 +334,6 @@ fn handle_measure(request: MeasureInput) -> Result<MeasureOutput, String> {
         benchmarks,
     })
 }
-
 fn handle_prove(request: ProofRequest) -> Result<ProofResponse, String> {
     let parameter = normalized_parameter(&request.parameter);
     let response_parameter = parameter.clone();
@@ -386,7 +364,6 @@ fn handle_prove(request: ProofRequest) -> Result<ProofResponse, String> {
         relay_ref: axt.relay_ref,
     })
 }
-
 struct AxtArtifacts {
     dataspace_id: String,
     descriptor: String,
@@ -397,7 +374,6 @@ struct AxtArtifacts {
     relay_envelope: Option<String>,
     relay_ref: Option<RelayRefJson>,
 }
-
 fn handle_verify(input: VerifyInput) -> Result<VerifyResponse, String> {
     let request = ProofRequest {
         parameter: normalized_parameter(&input.request.parameter),
@@ -422,7 +398,6 @@ fn handle_verify(input: VerifyInput) -> Result<VerifyResponse, String> {
         batch_manifest_sha256: batch_manifest_sha256(&request),
     })
 }
-
 fn handle_inspect_transfers(
     input: InspectTransfersInput,
 ) -> Result<InspectTransfersOutput, String> {
@@ -436,7 +411,6 @@ fn handle_inspect_transfers(
             transfers: Vec::new(),
         });
     };
-
     let source_filter = trimmed_filter(input.source_account_id);
     let destination_filter = trimmed_filter(input.destination_account_id);
     let asset_filter = trimmed_filter(input.asset_definition_id);
@@ -498,20 +472,17 @@ fn handle_inspect_transfers(
             });
         }
     }
-
     Ok(InspectTransfersOutput {
         transcripts_present: true,
         transfer_count: transfers.len(),
         transfers,
     })
 }
-
 fn trimmed_filter(value: Option<String>) -> Option<String> {
     value
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty())
 }
-
 fn prove_request(
     request: &ProofRequest,
 ) -> Result<(Vec<u8>, Duration, Duration, String, String), String> {
@@ -536,7 +507,6 @@ fn prove_request(
         batch_manifest_sha256(request),
     ))
 }
-
 fn build_batch_from_request(request: &ProofRequest) -> Result<TransitionBatch, String> {
     let binding = request_to_binding(request);
     if request.batch_base64.trim().is_empty() {
@@ -551,7 +521,6 @@ fn build_batch_from_request(request: &ProofRequest) -> Result<TransitionBatch, S
         .map_err(|err| format!("failed to bind AXT metadata to FASTPQ batch: {err}"))?;
     Ok(batch)
 }
-
 fn decode_request_batch(encoded: &str) -> Result<TransitionBatch, String> {
     let bytes = BASE64_STANDARD
         .decode(encoded.as_bytes())
@@ -563,7 +532,6 @@ fn decode_request_batch(encoded: &str) -> Result<TransitionBatch, String> {
         format!("failed to decode batch_base64 as FastpqTransitionBatch or TransitionBatch: {err}")
     })
 }
-
 fn build_axt_materials(request: &ProofRequest, proof_bytes: &[u8]) -> Result<AxtArtifacts, String> {
     let dsid = DataSpaceId::new(request.source_dsid);
     let (read_key, write_key) = axt_manifest_keys(request);
@@ -622,13 +590,11 @@ fn build_axt_materials(request: &ProofRequest, proof_bytes: &[u8]) -> Result<Axt
         relay_ref: relay.map(|relay| relay.relay_ref),
     })
 }
-
 struct RelayArtifacts {
     relay_envelope_hex: String,
     proof_blob_hex: String,
     relay_ref: RelayRefJson,
 }
-
 fn build_relay_artifacts(
     request: &ProofRequest,
     manifest_root: [u8; 32],
@@ -674,7 +640,6 @@ fn build_relay_artifacts(
         relay_ref: relay_ref_json,
     })
 }
-
 fn build_lane_relay_proof_blob(
     request: &ProofRequest,
     envelope: &LaneRelayEnvelope,
@@ -782,7 +747,6 @@ fn build_lane_relay_proof_blob(
         expiry_slot: Some(4_294_967_295),
     })
 }
-
 fn axt_manifest_keys(request: &ProofRequest) -> (String, String) {
     let corridor = if request.corridor.trim().is_empty() {
         "corridor".to_string()
@@ -801,16 +765,13 @@ fn axt_manifest_keys(request: &ProofRequest) -> (String, String) {
     );
     (read_key, write_key)
 }
-
 fn norito_hex<T: norito::NoritoSerialize>(value: &T) -> Result<String, String> {
     let bytes = to_bytes(value).map_err(|err| format!("Norito encode failed: {err}"))?;
     Ok(hex::encode(bytes))
 }
-
 fn hex_digest32(value: &str, field: &str) -> Result<[u8; 32], String> {
     decode_hex_digest(value, field)
 }
-
 fn normalized_parameter(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -819,7 +780,6 @@ fn normalized_parameter(value: &str) -> String {
         trimmed.to_string()
     }
 }
-
 fn normalized_verifier_id(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -828,7 +788,6 @@ fn normalized_verifier_id(value: &str) -> String {
         trimmed.to_string()
     }
 }
-
 fn normalized_verifier_version(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -837,7 +796,6 @@ fn normalized_verifier_version(value: &str) -> String {
         trimmed.to_string()
     }
 }
-
 fn normalized_claim_type(value: &str) -> Result<String, String> {
     let normalized = value.trim().to_ascii_lowercase();
     match normalized.as_str() {
@@ -845,7 +803,6 @@ fn normalized_claim_type(value: &str) -> Result<String, String> {
         _ => Err(format!("unsupported claim_type: {value}")),
     }
 }
-
 fn decode_hex_digest(value: &str, field: &str) -> Result<[u8; 32], String> {
     let normalized = value.trim().to_ascii_lowercase();
     let bytes = hex::decode(&normalized).map_err(|err| format!("{field} must be hex: {err}"))?;
@@ -854,7 +811,6 @@ fn decode_hex_digest(value: &str, field: &str) -> Result<[u8; 32], String> {
         .map_err(|_| format!("{field} must be 32 bytes of hex"))?;
     Ok(array)
 }
-
 fn digest32_with_domain(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(domain);
@@ -868,18 +824,15 @@ fn digest32_with_domain(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     output.copy_from_slice(&digest);
     output
 }
-
 fn dsid_bytes(source_dsid: u64) -> [u8; 16] {
     let mut output = [0_u8; 16];
     output[..8].copy_from_slice(&DataSpaceId::new(source_dsid).as_u64().to_le_bytes());
     output
 }
-
 fn batch_manifest_sha256(request: &ProofRequest) -> String {
     axt_batch_manifest_sha256(&request_to_binding(request))
         .unwrap_or_else(|err| panic!("batch manifest sha256 failed: {err}"))
 }
-
 fn request_to_binding(request: &ProofRequest) -> AxtFastpqBinding {
     AxtFastpqBinding {
         parameter: normalized_parameter(&request.parameter),
@@ -907,7 +860,6 @@ fn request_to_binding(request: &ProofRequest) -> AxtFastpqBinding {
         effect_binding: request.effect_binding.as_ref().map(effect_binding_to_model),
     }
 }
-
 fn effect_binding_to_model(binding: &EffectBindingRequest) -> AxtEffectBinding {
     AxtEffectBinding {
         destination_domain: binding.destination_domain.clone(),
@@ -920,15 +872,12 @@ fn effect_binding_to_model(binding: &EffectBindingRequest) -> AxtEffectBinding {
         destination_amount_i64: binding.destination_amount_i64,
     }
 }
-
 fn sha256_hex(bytes: &[u8]) -> String {
     sha256_hex_raw(bytes)
 }
-
 fn sha256_hex_raw(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
-
 fn percentile_usize(sorted_values: &[usize], numerator: usize, denominator: usize) -> usize {
     if sorted_values.is_empty() {
         return 0;
@@ -936,7 +885,6 @@ fn percentile_usize(sorted_values: &[usize], numerator: usize, denominator: usiz
     let index = percentile_index(sorted_values.len(), numerator, denominator);
     sorted_values[index]
 }
-
 fn percentile_f64(sorted_values: &[f64], numerator: usize, denominator: usize) -> f64 {
     if sorted_values.is_empty() {
         return 0.0;
@@ -944,7 +892,6 @@ fn percentile_f64(sorted_values: &[f64], numerator: usize, denominator: usize) -
     let index = percentile_index(sorted_values.len(), numerator, denominator);
     sorted_values[index]
 }
-
 fn percentile_index(len: usize, numerator: usize, denominator: usize) -> usize {
     let max_index = len.saturating_sub(1);
     if max_index == 0 || denominator == 0 {
@@ -957,15 +904,12 @@ fn percentile_index(len: usize, numerator: usize, denominator: usize) -> usize {
         .unwrap_or(0)
         .min(max_index)
 }
-
 fn duration_ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn proof_request(batch_base64: impl Into<String>) -> ProofRequest {
         ProofRequest {
             parameter: AXT_DEFAULT_PARAMETER.to_owned(),
@@ -991,7 +935,6 @@ mod tests {
             relay_post_state_root: String::new(),
         }
     }
-
     fn empty_batch_base64() -> String {
         let batch = TransitionBatch::new(
             AXT_DEFAULT_PARAMETER.to_string(),
@@ -1006,7 +949,6 @@ mod tests {
         );
         BASE64_STANDARD.encode(to_bytes(&batch).expect("encode transition batch"))
     }
-
     #[test]
     fn prove_and_verify_batch_builder_rejects_missing_execution_capture() {
         for batch_base64 in ["", " \t\n"] {
@@ -1016,7 +958,6 @@ mod tests {
             assert!(err.contains("synthetic descriptor-only batches are forbidden"));
         }
     }
-
     #[test]
     fn inspect_transfers_reports_absent_metadata() {
         let output = handle_inspect_transfers(InspectTransfersInput {
@@ -1026,12 +967,10 @@ mod tests {
             asset_definition_id: None,
         })
         .expect("inspect transfers");
-
         assert!(!output.transcripts_present);
         assert_eq!(output.transfer_count, 0);
         assert!(output.transfers.is_empty());
     }
-
     #[test]
     fn trimmed_filter_drops_empty_values() {
         assert_eq!(trimmed_filter(Some("  ".into())), None);

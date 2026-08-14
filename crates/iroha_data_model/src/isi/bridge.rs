@@ -1,7 +1,5 @@
 //! Bridge proof ingestion instructions.
-
 use super::*;
-
 /// Activation update for one exact governed SCCP route.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -20,7 +18,6 @@ pub struct SccpSetRouteActivationV1 {
     /// absent for every nonterminal transition.
     pub inbound_finality_cutoff: Option<crate::bridge::SccpInboundFinalityCutoffV1>,
 }
-
 /// Append-only native trust-anchor update for one exact governed SCCP lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -36,7 +33,6 @@ pub struct SccpAdvanceLaneTrustAnchorV1 {
     /// New family-tagged native checkpoint appended to retained history.
     pub next: crate::bridge::SccpNativeTrustAnchorV1,
 }
-
 /// First native trust-anchor installation for one exact governed SCCP lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -52,7 +48,6 @@ pub struct SccpInitializeLaneTrustAnchorV1 {
     /// First valid family-tagged native checkpoint.
     pub initial: crate::bridge::SccpNativeTrustAnchorV1,
 }
-
 /// Atomic registration input for one exact staged route.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -66,7 +61,6 @@ pub struct SccpRegisterRouteV1 {
     /// Optional initial lane anchor, or the exact current value when joining a lane.
     pub native_trust_anchor: Option<crate::bridge::SccpNativeTrustAnchorV1>,
 }
-
 /// Atomic cutover from one immutable route revision to its staged successor.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -89,7 +83,6 @@ pub struct SccpSwitchRouteRevisionV1 {
     /// Bidirectional state assigned to the successor.
     pub successor_next: crate::bridge::SccpRouteActivationV1,
 }
-
 /// Closed atomic SCCP route-governance action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -122,7 +115,6 @@ pub enum SccpRouteGovernanceActionV1 {
     #[codec(index = 5)]
     Remove(crate::bridge::SccpRouteKeyV1),
 }
-
 /// Complete action-bound preimage approved by SCCP route governance.
 ///
 /// The exact genesis-derived network identity is part of the canonical
@@ -142,7 +134,6 @@ pub struct SccpRouteGovernanceAnchorV1 {
     /// Complete closed registry action approved by the referendum.
     pub action: SccpRouteGovernanceActionV1,
 }
-
 impl SccpRouteGovernanceActionV1 {
     /// Validate invariants that do not require current world state.
     ///
@@ -156,7 +147,6 @@ impl SccpRouteGovernanceActionV1 {
     )]
     pub fn validate_static(&self) -> Result<(), crate::bridge::SccpRouteValidationError> {
         use crate::bridge::SccpRouteValidationError;
-
         match self {
             Self::Register(registration) => {
                 registration.route.validate_registration()?;
@@ -264,7 +254,6 @@ impl SccpRouteGovernanceActionV1 {
         }
     }
 }
-
 isi! {
     /// Submit a bridge proof artifact for verification and registry retention.
     #[cfg_attr(
@@ -277,16 +266,13 @@ isi! {
         pub proof: crate::bridge::BridgeProof,
     }
 }
-
 impl crate::seal::Instruction for SubmitBridgeProof {}
-
 impl SubmitBridgeProof {
     /// Construct a new submission wrapping the provided proof.
     pub fn new(proof: crate::bridge::BridgeProof) -> Self {
         Self { proof }
     }
 }
-
 isi! {
     /// Record a bridge receipt and emit a typed bridge event.
     #[cfg_attr(
@@ -299,16 +285,13 @@ isi! {
         pub receipt: crate::bridge::BridgeReceipt,
     }
 }
-
 impl crate::seal::Instruction for RecordBridgeReceipt {}
-
 impl RecordBridgeReceipt {
     /// Construct a new record instruction for the provided receipt.
     pub fn new(receipt: crate::bridge::BridgeReceipt) -> Self {
         Self { receipt }
     }
 }
-
 isi! {
     /// Rejected direct SCCP route-governance mutation token.
     ///
@@ -324,16 +307,13 @@ isi! {
         pub action: SccpRouteGovernanceActionV1,
     }
 }
-
 impl crate::seal::Instruction for ApplySccpRouteGovernance {}
-
 impl ApplySccpRouteGovernance {
     /// Construct a direct mutation token that admission will reject.
     pub fn new(action: SccpRouteGovernanceActionV1) -> Self {
         Self { action }
     }
 }
-
 isi! {
     /// Fund one exact route-scoped SCCP protocol escrow.
     #[cfg_attr(
@@ -350,9 +330,7 @@ isi! {
         pub amount: Quantity,
     }
 }
-
 impl crate::seal::Instruction for FundSccpRouteEscrow {}
-
 isi! {
     /// Refund one exact inactive route-scoped SCCP protocol escrow.
     #[cfg_attr(
@@ -369,20 +347,16 @@ isi! {
         pub amount: Quantity,
     }
 }
-
 impl crate::seal::Instruction for RefundSccpRouteEscrow {}
-
 fn bridge_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for SubmitBridgeProof {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = bridge_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let proof = super::decode_aos_canonical_field::<crate::bridge::BridgeProof>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -395,14 +369,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SubmitBridgeProof {
         Ok((Self { proof }, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RecordBridgeReceipt {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = bridge_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let receipt = super::decode_aos_canonical_field::<crate::bridge::BridgeReceipt>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -415,14 +387,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RecordBridgeReceipt {
         Ok((Self { receipt }, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for ApplySccpRouteGovernance {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = bridge_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let action = super::decode_aos_canonical_field::<SccpRouteGovernanceActionV1>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -435,7 +405,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ApplySccpRouteGovernance {
         Ok((Self { action }, offset))
     }
 }
-
 macro_rules! impl_sccp_route_escrow_decode_from_slice {
     ($ty:ty) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -444,7 +413,6 @@ macro_rules! impl_sccp_route_escrow_decode_from_slice {
                 if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
                     return super::decode_packed_instruction_payload::<Self>(bytes);
                 }
-
                 let mut offset = 0usize;
                 let route_key = super::decode_aos_canonical_field::<crate::bridge::SccpRouteKeyV1>(
                     super::read_aos_field(bytes, &mut offset, flags)?,
@@ -474,10 +442,8 @@ macro_rules! impl_sccp_route_escrow_decode_from_slice {
         }
     };
 }
-
 impl_sccp_route_escrow_decode_from_slice!(FundSccpRouteEscrow);
 impl_sccp_route_escrow_decode_from_slice!(RefundSccpRouteEscrow);
-
 isi! {
     /// Record an SCCP message payload for block-level commitment anchoring.
     #[cfg_attr(
@@ -492,9 +458,7 @@ isi! {
         pub payload_bytes: Vec<u8>,
     }
 }
-
 impl crate::seal::Instruction for RecordSccpMessage {}
-
 impl RecordSccpMessage {
     /// Construct an SCCP message record instruction for the exact governed context.
     pub fn new(
@@ -507,7 +471,6 @@ impl RecordSccpMessage {
         }
     }
 }
-
 #[cfg(test)]
 mod sccp_governance_tests {
     use super::*;
@@ -515,14 +478,12 @@ mod sccp_governance_tests {
         BridgeNativeProofBackendV1, SccpLaneIdV1, SccpNativeTrustAnchorV1, SccpNetworkV1,
         SccpRouteActivationV1, SccpRouteKeyV1, SccpRouteValidationError,
     };
-
     fn lane() -> SccpLaneIdV1 {
         SccpLaneIdV1 {
             source: SccpNetworkV1::EthereumMainnet,
             target: SccpNetworkV1::SoraTaira,
         }
     }
-
     fn anchor(hash: u8, height: u64) -> SccpNativeTrustAnchorV1 {
         SccpNativeTrustAnchorV1 {
             backend: BridgeNativeProofBackendV1::EthereumBeacon,
@@ -530,7 +491,6 @@ mod sccp_governance_tests {
             checkpoint_height: height,
         }
     }
-
     fn key(revision: u32) -> SccpRouteKeyV1 {
         SccpRouteKeyV1 {
             lane_id: lane(),
@@ -539,7 +499,6 @@ mod sccp_governance_tests {
             revision,
         }
     }
-
     #[test]
     fn trust_anchor_initialize_is_strict_none_to_some_cas() {
         let valid =
@@ -549,7 +508,6 @@ mod sccp_governance_tests {
                 initial: anchor(1, 100),
             });
         assert!(valid.validate_static().is_ok());
-
         let stale =
             SccpRouteGovernanceActionV1::InitializeTrustAnchor(SccpInitializeLaneTrustAnchorV1 {
                 lane_id: lane(),
@@ -560,7 +518,6 @@ mod sccp_governance_tests {
             stale.validate_static(),
             Err(SccpRouteValidationError::InvalidTrustAnchorInitialize)
         );
-
         let zero =
             SccpRouteGovernanceActionV1::InitializeTrustAnchor(SccpInitializeLaneTrustAnchorV1 {
                 lane_id: lane(),
@@ -575,7 +532,6 @@ mod sccp_governance_tests {
             Err(SccpRouteValidationError::InvalidTrustAnchorInitialize)
         );
     }
-
     #[test]
     fn trust_anchor_advance_rejects_same_rollback_and_cross_family() {
         let valid = SccpRouteGovernanceActionV1::AdvanceTrustAnchor(SccpAdvanceLaneTrustAnchorV1 {
@@ -584,7 +540,6 @@ mod sccp_governance_tests {
             next: anchor(2, 101),
         });
         assert!(valid.validate_static().is_ok());
-
         for next in [anchor(1, 101), anchor(2, 100), anchor(2, 99)] {
             let action =
                 SccpRouteGovernanceActionV1::AdvanceTrustAnchor(SccpAdvanceLaneTrustAnchorV1 {
@@ -597,7 +552,6 @@ mod sccp_governance_tests {
                 Err(SccpRouteValidationError::InvalidTrustAnchorAdvance)
             );
         }
-
         let cross_family =
             SccpRouteGovernanceActionV1::AdvanceTrustAnchor(SccpAdvanceLaneTrustAnchorV1 {
                 lane_id: lane(),
@@ -613,7 +567,6 @@ mod sccp_governance_tests {
             Err(SccpRouteValidationError::InvalidTrustAnchorAdvance)
         );
     }
-
     #[test]
     fn revision_switch_requires_checked_successor_and_draining_previous() {
         let valid = SccpRouteGovernanceActionV1::SwitchRevision(SccpSwitchRouteRevisionV1 {
@@ -625,7 +578,6 @@ mod sccp_governance_tests {
             successor_next: SccpRouteActivationV1::Bidirectional,
         });
         assert!(valid.validate_static().is_ok());
-
         let overflow = SccpRouteGovernanceActionV1::SwitchRevision(SccpSwitchRouteRevisionV1 {
             previous_key: key(u32::MAX),
             expected_previous: SccpRouteActivationV1::Bidirectional,
@@ -638,7 +590,6 @@ mod sccp_governance_tests {
             overflow.validate_static(),
             Err(SccpRouteValidationError::InvalidRouteRevision)
         );
-
         let unsafe_retire =
             SccpRouteGovernanceActionV1::SwitchRevision(SccpSwitchRouteRevisionV1 {
                 previous_key: key(1),
@@ -652,7 +603,6 @@ mod sccp_governance_tests {
             unsafe_retire.validate_static(),
             Err(SccpRouteValidationError::InvalidActivationTransition)
         );
-
         let safe_retire = SccpRouteGovernanceActionV1::SwitchRevision(SccpSwitchRouteRevisionV1 {
             previous_key: key(1),
             expected_previous: SccpRouteActivationV1::Bidirectional,
@@ -666,7 +616,6 @@ mod sccp_governance_tests {
         });
         assert!(safe_retire.validate_static().is_ok());
     }
-
     #[test]
     fn terminal_activation_requires_one_well_formed_inbound_finality_cutoff() {
         let cutoff = crate::bridge::SccpInboundFinalityCutoffV1 {
@@ -680,7 +629,6 @@ mod sccp_governance_tests {
             inbound_finality_cutoff: Some(cutoff),
         });
         assert!(valid.validate_static().is_ok());
-
         for inbound_finality_cutoff in [
             None,
             Some(crate::bridge::SccpInboundFinalityCutoffV1 {
@@ -703,7 +651,6 @@ mod sccp_governance_tests {
                 Err(SccpRouteValidationError::InvalidActivationTransition)
             );
         }
-
         let cutoff_on_live = SccpRouteGovernanceActionV1::SetActivation(SccpSetRouteActivationV1 {
             key: key(1),
             expected_current: SccpRouteActivationV1::Paused,
@@ -716,7 +663,6 @@ mod sccp_governance_tests {
         );
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RecordSccpMessage {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -724,7 +670,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RecordSccpMessage {
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let context = super::decode_aos_slice_field::<crate::bridge::SccpOutboundMessageContextV1>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -747,11 +692,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RecordSccpMessage {
         ))
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::{
         bridge::{
@@ -761,7 +703,7 @@ mod tests {
         nexus::LaneId,
         proof::ProofBox,
     };
-
+    use norito::core::DecodeFromSlice;
     fn proof() -> BridgeProof {
         BridgeProof {
             range: BridgeProofRange {
@@ -775,7 +717,6 @@ mod tests {
             }),
         }
     }
-
     fn receipt() -> BridgeReceipt {
         BridgeReceipt {
             lane: LaneId::from(1),
@@ -788,7 +729,6 @@ mod tests {
             recipient: b"alice@main".to_vec(),
         }
     }
-
     fn outbound_context() -> SccpOutboundMessageContextV1 {
         SccpOutboundMessageContextV1::new(
             SccpLaneIdV1 {
@@ -800,7 +740,6 @@ mod tests {
         )
         .expect("valid outbound context")
     }
-
     fn route_governance_action() -> SccpRouteGovernanceActionV1 {
         SccpRouteGovernanceActionV1::Remove(crate::bridge::SccpRouteKeyV1 {
             lane_id: SccpLaneIdV1 {
@@ -812,7 +751,6 @@ mod tests {
             revision: 1,
         })
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -823,7 +761,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, value: T)
     where
         T: crate::isi::Instruction
@@ -841,7 +778,6 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     fn bridge_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(SubmitBridgeProof::new(proof()));
@@ -849,7 +785,6 @@ mod tests {
         assert_slice_roundtrip(ApplySccpRouteGovernance::new(route_governance_action()));
         assert_slice_roundtrip(RecordSccpMessage::new(outbound_context(), vec![0xCA, 0xFE]));
     }
-
     #[test]
     fn bridge_registry_decodes_type_names() {
         let registry = crate::isi::InstructionRegistry::new()
@@ -857,7 +792,6 @@ mod tests {
             .register_slice::<RecordBridgeReceipt>()
             .register_slice::<ApplySccpRouteGovernance>()
             .register_slice::<RecordSccpMessage>();
-
         assert_registry_decodes(&registry, SubmitBridgeProof::new(proof()));
         assert_registry_decodes(&registry, RecordBridgeReceipt::new(receipt()));
         assert_registry_decodes(
@@ -869,7 +803,6 @@ mod tests {
             RecordSccpMessage::new(outbound_context(), vec![0xCA, 0xFE]),
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn record_bridge_receipt_json_rejects_unknown_instruction_fields() {
@@ -881,7 +814,6 @@ mod tests {
                 .expect("canonical bridge receipt instruction JSON decodes"),
             instruction
         );
-
         let hostile = canonical.replacen('{', "{\"adversarial_extension\":null,", 1);
         assert_ne!(hostile, canonical);
         assert!(

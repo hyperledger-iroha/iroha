@@ -1,10 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![doc = "Generate canonical Halo2 IPA IVM execution verifier and prover key artifacts."]
-
-use std::{env, fs, path::PathBuf};
-
 use base64::Engine as _;
-
+use std::{env, fs, path::PathBuf};
 fn take_arg(args: &mut Vec<String>, name: &str) -> Result<String, String> {
     let Some(index) = args.iter().position(|arg| arg == name) else {
         return Err(format!("missing required argument {name}"));
@@ -16,13 +13,11 @@ fn take_arg(args: &mut Vec<String>, name: &str) -> Result<String, String> {
     args.remove(index);
     Ok(value)
 }
-
 fn print_help(program: &str) {
     eprintln!(
         "Usage: {program} --vk-out <PATH> --pk-out <PATH> --template-out <PATH> [--name <VK_NAME>]"
     );
 }
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args().collect::<Vec<_>>();
     let program = args.remove(0);
@@ -30,7 +25,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         print_help(&program);
         return Ok(());
     }
-
     let vk_out = PathBuf::from(take_arg(&mut args, "--vk-out")?);
     let pk_out = PathBuf::from(take_arg(&mut args, "--pk-out")?);
     let template_out = PathBuf::from(take_arg(&mut args, "--template-out")?);
@@ -42,14 +36,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !args.is_empty() {
         return Err(format!("unexpected arguments: {}", args.join(" ")).into());
     }
-
     let vk_box = iroha_core::zk::halo2_ipa_ivm_execution_vk_box()
         .map_err(|err| format!("failed to build ivm-execution-v1 verifying key: {err}"))?;
     let pk = iroha_core::zk::derive_halo2_ipa_ivm_execution_proving_key_bytes(&vk_box)
         .map_err(|err| format!("failed to derive ivm-execution-v1 proving key: {err}"))?;
     let record = iroha_core::zk::halo2_ipa_ivm_execution_vk_record("core", 1)
         .map_err(|err| format!("failed to build ivm-execution-v1 VK record: {err}"))?;
-
     if let Some(parent) = vk_out.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -61,7 +53,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     fs::write(&vk_out, &vk_box.bytes)?;
     fs::write(&pk_out, &pk)?;
-
     let vk_bytes_b64 = base64::engine::general_purpose::STANDARD.encode(&vk_box.bytes);
     let template = format!(
         concat!(
@@ -94,7 +85,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vk_bytes_b64,
     );
     fs::write(&template_out, template)?;
-
     println!(
         "wrote vk={} pk={} template={}",
         vk_out.display(),

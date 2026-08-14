@@ -1,11 +1,8 @@
 //! Shared helper utilities for procedural macro crates.
-
 pub mod emitter;
 pub mod repr;
-
 pub use emitter::Emitter;
 pub use repr::{Repr, ReprAlignment, ReprKind, ReprPrimitive};
-
 /// Extension trait for [`darling::Error`] that attaches multiple spans.
 pub trait DarlingErrorExt: Sized {
     /// Attaches a combination of multiple spans to the error.
@@ -15,7 +12,6 @@ pub trait DarlingErrorExt: Sized {
     #[must_use]
     fn with_spans(self, spans: impl IntoIterator<Item = impl Into<proc_macro2::Span>>) -> Self;
 }
-
 impl DarlingErrorExt for darling::Error {
     fn with_spans(self, spans: impl IntoIterator<Item = impl Into<proc_macro2::Span>>) -> Self {
         let mut iter = spans.into_iter();
@@ -29,7 +25,6 @@ impl DarlingErrorExt for darling::Error {
         self.with_span(&joined)
     }
 }
-
 /// Finds an optional single attribute with specified name.
 ///
 /// Returns `None` if no attributes with specified name are found.
@@ -60,7 +55,6 @@ pub fn find_single_attr_opt<'a>(
     };
     Some(attr)
 }
-
 /// Parses a single list attribute `#[attr_name(...)]` returning `Ok(None)` when absent.
 ///
 /// # Errors
@@ -75,7 +69,6 @@ pub fn parse_single_list_attr_opt<Body: syn::parse::Parse>(
     let Some(attr) = find_single_attr_opt(&mut accumulator, attr_name, attrs) else {
         return accumulator.finish_with(None);
     };
-
     let mut kind = None;
     match &attr.meta {
         syn::Meta::Path(_) | syn::Meta::NameValue(_) => accumulator.push(darling::Error::custom(
@@ -85,10 +78,8 @@ pub fn parse_single_list_attr_opt<Body: syn::parse::Parse>(
             kind = accumulator.handle(syn::parse2(list.tokens.clone()).map_err(Into::into));
         }
     }
-
     accumulator.finish_with(kind)
 }
-
 /// Parses a single list attribute `#[attr_name(...)]`.
 ///
 /// # Errors
@@ -103,7 +94,6 @@ pub fn parse_single_list_attr<Body: syn::parse::Parse>(
     parse_single_list_attr_opt(attr_name, attrs)?
         .ok_or_else(|| darling::Error::custom(format!("Missing `#[{attr_name}(...)]` attribute")))
 }
-
 /// Macro for generating simple attribute structs that implement [`syn::parse::Parse`].
 #[macro_export]
 macro_rules! attr_struct {
@@ -123,7 +113,6 @@ macro_rules! attr_struct {
                 $field_vis $field_name : $field_ty
             ),*
         }
-
         impl syn::parse::Parse for $name {
             fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
                 Ok(Self {
@@ -135,38 +124,31 @@ macro_rules! attr_struct {
         }
     };
 }
-
 #[cfg(test)]
 mod tests {
-    use manyhow::{Error as ManyhowError, error_message};
-
     use super::*;
-
+    use manyhow::{Error as ManyhowError, error_message};
     #[test]
     fn emitter_finish_ok_when_no_errors() {
         let emitter = Emitter::new();
         assert!(emitter.finish().is_ok());
     }
-
     #[test]
     fn emitter_emit_and_finish_err() {
         let mut emitter = Emitter::new();
         emitter.emit(ManyhowError::from(error_message!("err")));
         assert!(emitter.finish().is_err());
     }
-
     #[test]
     fn emitter_handle_variants() {
         let mut emitter = Emitter::new();
         let val = emitter.handle::<manyhow::Error, _>(Ok(10));
         assert_eq!(val, Some(10));
-
         let val2: Option<i32> =
             emitter.handle::<ManyhowError, _>(Err(error_message!("oops").into()));
         assert!(val2.is_none());
         assert!(emitter.finish().is_err());
     }
-
     #[test]
     fn emitter_handle_or_default() {
         let mut emitter = Emitter::new();
@@ -175,20 +157,16 @@ mod tests {
         assert_eq!(val, 0);
         assert!(emitter.finish().is_err());
     }
-
     #[test]
     fn emitter_finish_with_and_finish_and() {
         let emitter = Emitter::new();
         assert_eq!(emitter.finish_with(5).unwrap(), 5);
-
         let res: manyhow::Result<i32> = Emitter::new().finish_and::<manyhow::Error, _>(Ok(3));
         assert_eq!(res.unwrap(), 3);
-
         let res_err: manyhow::Result<()> =
             Emitter::new().finish_and::<ManyhowError, _>(Err(error_message!("err").into()));
         assert!(res_err.is_err());
     }
-
     #[test]
     fn emitter_finish_token_stream() {
         let mut emitter = Emitter::new();
@@ -197,7 +175,6 @@ mod tests {
         emitter.finish_to_token_stream(&mut tokens);
         assert!(!tokens.is_empty());
     }
-
     #[test]
     fn attr_struct_macro_generates_parse_impl() {
         attr_struct! {
@@ -205,7 +182,6 @@ mod tests {
                 pub name: syn::Ident,
             }
         }
-
         let attr: ExampleAttr = syn::parse2(quote::quote!(value)).expect("parse attr");
         assert_eq!(attr.name.to_string(), "value");
     }

@@ -1,3 +1,6 @@
+use crate::JsonTarget;
+use eyre::{Context, Result, eyre};
+use norito::json::{Map, Value};
 use std::{
     collections::BTreeMap,
     fs::{self, File},
@@ -6,18 +9,11 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-
-use eyre::{Context, Result, eyre};
-use norito::json::{Map, Value};
 use time::OffsetDateTime;
-
-use crate::JsonTarget;
-
 const DEFAULT_PREFIX: &str = "203.0.113.0/24";
 const DEFAULT_TRUSTLESS_SERVICE: &str = "soranet-trustless-verifier.service";
 const DEFAULT_RESOLVER_SERVICE: &str = "soradns-resolver.service";
 const DEFAULT_HOLD_SECONDS: u64 = 120;
-
 struct Scenario {
     id: &'static str,
     title: &'static str,
@@ -25,7 +21,6 @@ struct Scenario {
     detection: &'static [&'static str],
     success: &'static [&'static str],
 }
-
 const SCENARIOS: &[Scenario] = &[
     Scenario {
         id: "prefix-withdrawal",
@@ -67,7 +62,6 @@ const SCENARIOS: &[Scenario] = &[
         ],
     },
 ];
-
 #[derive(Clone, Debug)]
 pub struct ChaosKitOptions {
     pub output_dir: PathBuf,
@@ -77,7 +71,6 @@ pub struct ChaosKitOptions {
     pub quarter_label: Option<String>,
     pub now: Option<SystemTime>,
 }
-
 #[derive(Clone, Debug)]
 pub struct ChaosKitOutcome {
     pub plan_json: PathBuf,
@@ -85,13 +78,11 @@ pub struct ChaosKitOutcome {
     pub log_path: PathBuf,
     pub scripts: Vec<PathBuf>,
 }
-
 #[derive(Clone, Debug)]
 pub struct ChaosReportOptions {
     pub log_path: PathBuf,
     pub output: JsonTarget,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChaosScenarioSummary {
     pub id: String,
@@ -101,7 +92,6 @@ pub struct ChaosScenarioSummary {
     pub detection_ms: Option<u64>,
     pub recovery_ms: Option<u64>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChaosSummary {
     pub generated_unix_ms: u64,
@@ -110,7 +100,6 @@ pub struct ChaosSummary {
     pub max_detection_ms: Option<u64>,
     pub max_recovery_ms: Option<u64>,
 }
-
 impl ChaosSummary {
     pub fn to_value(&self) -> Value {
         let scenario_values = self
@@ -133,7 +122,6 @@ impl ChaosSummary {
                 ])
             })
             .collect();
-
         value_object([
             ("generated_unix_ms", Value::from(self.generated_unix_ms)),
             ("log_path", Value::from(self.log_path.display().to_string())),
@@ -151,10 +139,8 @@ impl ChaosSummary {
         ])
     }
 }
-
 pub fn write_chaos_kit(options: ChaosKitOptions) -> Result<ChaosKitOutcome> {
     fs::create_dir_all(&options.output_dir).context("create chaos kit output directory")?;
-
     let now = options.now.unwrap_or_else(SystemTime::now);
     let quarter_label = options
         .quarter_label
@@ -163,7 +149,6 @@ pub fn write_chaos_kit(options: ChaosKitOptions) -> Result<ChaosKitOutcome> {
     let generated_ms = system_time_to_ms(now);
     let log_path = options.output_dir.join("chaos_events.ndjson");
     File::create(&log_path).context("create chaos log stub")?;
-
     let scenarios = build_scenarios(&options);
     let plan = value_object([
         ("generated_unix_ms", Value::from(generated_ms)),
@@ -179,16 +164,12 @@ pub fn write_chaos_kit(options: ChaosKitOptions) -> Result<ChaosKitOutcome> {
         ("log_path", Value::from("chaos_events.ndjson")),
         ("scenarios", Value::Array(scenarios.clone())),
     ]);
-
     let plan_json = options.output_dir.join("plan.json");
     write_json_file(&plan_json, &plan)?;
-
     let plan_markdown = options.output_dir.join("plan.md");
     let plan_text = build_plan_markdown(&quarter_label, &options, &scenarios);
     fs::write(&plan_markdown, plan_text).context("write chaos plan markdown")?;
-
     let scripts = write_scripts(&options, &log_path)?;
-
     Ok(ChaosKitOutcome {
         plan_json,
         plan_markdown,
@@ -196,7 +177,6 @@ pub fn write_chaos_kit(options: ChaosKitOptions) -> Result<ChaosKitOutcome> {
         scripts,
     })
 }
-
 pub fn summarize_log(options: ChaosReportOptions) -> Result<ChaosSummary> {
     let events = read_events(&options.log_path)?;
     let mut per_scenario: BTreeMap<String, Vec<ChaosEvent>> = BTreeMap::new();
@@ -209,27 +189,22 @@ pub fn summarize_log(options: ChaosReportOptions) -> Result<ChaosSummary> {
             .or_default()
             .push(event);
     }
-
     let mut summaries = Vec::new();
     let mut max_detection = None;
     let mut max_recovery = None;
-
     for (id, mut events) in per_scenario {
         events.sort_by_key(|event| event.ts_ms);
         let injects = events.iter().filter(|e| e.action == "inject").count();
         let detects = events.iter().filter(|e| e.action == "detect").count();
         let recovers = events.iter().filter(|e| e.action == "recover").count();
-
         let detection_ms = first_latency(&events, "inject", "detect");
         let recovery_ms = first_latency(&events, "inject", "recover");
-
         if let Some(value) = detection_ms {
             max_detection = Some(max_detection.unwrap_or(value).max(value));
         }
         if let Some(value) = recovery_ms {
             max_recovery = Some(max_recovery.unwrap_or(value).max(value));
         }
-
         summaries.push(ChaosScenarioSummary {
             id,
             injects,
@@ -239,7 +214,6 @@ pub fn summarize_log(options: ChaosReportOptions) -> Result<ChaosSummary> {
             recovery_ms,
         });
     }
-
     let summary = ChaosSummary {
         generated_unix_ms: system_time_to_ms(SystemTime::now()),
         log_path: options.log_path.clone(),
@@ -250,13 +224,11 @@ pub fn summarize_log(options: ChaosReportOptions) -> Result<ChaosSummary> {
     write_json_target(options.output, &summary.to_value())?;
     Ok(summary)
 }
-
 struct ChaosEvent {
     ts_ms: u64,
     scenario: String,
     action: String,
 }
-
 fn build_scenarios(options: &ChaosKitOptions) -> Vec<Value> {
     SCENARIOS
         .iter()
@@ -297,7 +269,6 @@ fn build_scenarios(options: &ChaosKitOptions) -> Vec<Value> {
         })
         .collect()
 }
-
 fn build_plan_markdown(
     quarter_label: &str,
     options: &ChaosKitOptions,
@@ -327,7 +298,6 @@ without hand-editing files.\n\
 ## Scenarios\n",
         options.pop_label, options.gateway_host, options.resolver_host
     ));
-
     for scenario in scenarios {
         let Some(id) = scenario.get("id").and_then(Value::as_str) else {
             continue;
@@ -354,7 +324,6 @@ without hand-editing files.\n\
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-
         text.push_str(&format!(
             "### {title} (`{id}`)\n\n{description}\n\n- Script: `scripts/{script}`\n- Detection signals:\n"
         ));
@@ -371,14 +340,11 @@ without hand-editing files.\n\
         }
         text.push('\n');
     }
-
     text
 }
-
 fn write_scripts(options: &ChaosKitOptions, log_path: &Path) -> Result<Vec<PathBuf>> {
     let scripts_dir = options.output_dir.join("scripts");
     fs::create_dir_all(&scripts_dir).context("create chaos scripts directory")?;
-
     let mut scripts = Vec::new();
     let prefix_script = scripts_dir.join(script_name("prefix-withdrawal"));
     write_script(
@@ -386,28 +352,23 @@ fn write_scripts(options: &ChaosKitOptions, log_path: &Path) -> Result<Vec<PathB
         &prefix_withdrawal_script(&scripts_dir, log_path, options),
     )?;
     scripts.push(prefix_script);
-
     let verifier_script = scripts_dir.join(script_name("trustless-verifier-failure"));
     write_script(
         &verifier_script,
         &trustless_verifier_script(&scripts_dir, log_path, options),
     )?;
     scripts.push(verifier_script);
-
     let resolver_script = scripts_dir.join(script_name("resolver-brownout"));
     write_script(
         &resolver_script,
         &resolver_brownout_script(&scripts_dir, log_path, options),
     )?;
     scripts.push(resolver_script);
-
     let logger_script = scripts_dir.join("log_event.sh");
     write_script(&logger_script, &log_event_script(&scripts_dir, log_path))?;
     scripts.push(logger_script);
-
     Ok(scripts)
 }
-
 fn prefix_withdrawal_script(
     scripts_dir: &Path,
     log_path: &Path,
@@ -458,7 +419,6 @@ log_event \"recover\" \"restored $PREFIX on $POP_LABEL\"
         scripts_dir.file_name().unwrap_or_default().to_string_lossy(),
     )
 }
-
 fn trustless_verifier_script(
     scripts_dir: &Path,
     log_path: &Path,
@@ -508,7 +468,6 @@ log_event \"recover\" \"started $SERVICE on $GATEWAY_HOST\"
         scripts_dir.file_name().unwrap_or_default().to_string_lossy(),
     )
 }
-
 fn resolver_brownout_script(
     scripts_dir: &Path,
     log_path: &Path,
@@ -558,7 +517,6 @@ log_event \"recover\" \"restored resolver $SERVICE on $RESOLVER_HOST\"
         scripts_dir.file_name().unwrap_or_default().to_string_lossy(),
     )
 }
-
 fn log_event_script(_scripts_dir: &Path, log_path: &Path) -> String {
     format!(
         "#!/usr/bin/env bash
@@ -585,7 +543,6 @@ echo \"[soranet-chaos] recorded $ACTION for $SCENARIO -> $LOG_PATH\"
         log_path.display()
     )
 }
-
 fn write_script(path: &Path, contents: &str) -> Result<()> {
     let mut file =
         File::create(path).with_context(|| format!("create script {}", path.display()))?;
@@ -596,7 +553,6 @@ fn write_script(path: &Path, contents: &str) -> Result<()> {
         .with_context(|| format!("set permissions on {}", path.display()))?;
     Ok(())
 }
-
 fn script_name(id: &str) -> String {
     match id {
         "prefix-withdrawal" => "prefix_withdrawal.sh".to_string(),
@@ -605,13 +561,11 @@ fn script_name(id: &str) -> String {
         other => format!("{other}.sh"),
     }
 }
-
 fn derive_quarter(now: SystemTime) -> String {
     let datetime = OffsetDateTime::from(now);
     let quarter = (datetime.month() as u8 - 1) / 3 + 1;
     format!("{}-Q{}", datetime.year(), quarter)
 }
-
 fn system_time_to_ms(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -619,7 +573,6 @@ fn system_time_to_ms(time: SystemTime) -> u64 {
         .try_into()
         .unwrap_or(u64::MAX)
 }
-
 fn read_events(log_path: &Path) -> Result<Vec<ChaosEvent>> {
     let file = File::open(log_path).with_context(|| format!("open log {}", log_path.display()))?;
     let reader = BufReader::new(file);
@@ -651,7 +604,6 @@ fn read_events(log_path: &Path) -> Result<Vec<ChaosEvent>> {
     }
     Ok(events)
 }
-
 fn first_latency(events: &[ChaosEvent], start: &str, end: &str) -> Option<u64> {
     let start_ts = events.iter().find(|event| event.action == start)?.ts_ms;
     let end_ts = events
@@ -660,14 +612,12 @@ fn first_latency(events: &[ChaosEvent], start: &str, end: &str) -> Option<u64> {
         .ts_ms;
     end_ts.checked_sub(start_ts)
 }
-
 fn write_json_file(path: &Path, value: &Value) -> Result<()> {
     let mut file = File::create(path).with_context(|| format!("create {}", path.display()))?;
     norito::json::to_writer_pretty(&mut file, value)?;
     file.write_all(b"\n")?;
     Ok(())
 }
-
 fn write_json_target(target: JsonTarget, value: &Value) -> Result<()> {
     let text = norito::json::to_string_pretty(value)? + "\n";
     match target {
@@ -683,7 +633,6 @@ fn write_json_target(target: JsonTarget, value: &Value) -> Result<()> {
     }
     Ok(())
 }
-
 fn value_object<I, K>(entries: I) -> Value
 where
     I: IntoIterator<Item = (K, Value)>,

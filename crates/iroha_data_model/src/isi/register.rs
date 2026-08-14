@@ -1,11 +1,8 @@
-use std::fmt::Display;
-
-#[cfg(feature = "json")]
-use norito::json::{FastJsonWrite, JsonSerialize};
-
 use super::*;
 use crate::{account::NewAccount, consensus::HsmBinding, domain::NewDomain};
-
+#[cfg(feature = "json")]
+use norito::json::{FastJsonWrite, JsonSerialize};
+use std::fmt::Display;
 isi! {
     /// Generic instruction for a registration of an object to the identifiable destination.
     ///
@@ -19,14 +16,12 @@ isi! {
         pub object: O::With,
     }
 }
-
 impl Register<Domain> {
     /// Constructs a new [`Register`] for a [`Domain`].
     pub fn domain(new_domain: NewDomain) -> Self {
         Self { object: new_domain }
     }
 }
-
 impl Register<Account> {
     /// Constructs a new [`Register`] for an [`Account`].
     pub fn account(new_account: NewAccount) -> Self {
@@ -35,7 +30,6 @@ impl Register<Account> {
         }
     }
 }
-
 impl Register<AssetDefinition> {
     /// Constructs a new [`Register`] for an [`AssetDefinition`].
     pub fn asset_definition(new_asset_definition: NewAssetDefinition) -> Self {
@@ -44,21 +38,18 @@ impl Register<AssetDefinition> {
         }
     }
 }
-
 impl Register<Nft> {
     /// Constructs a new [`Register`] for an [`Nft`].
     pub fn nft(new_nft: NewNft) -> Self {
         Self { object: new_nft }
     }
 }
-
 impl Register<Role> {
     /// Constructs a new [`Register`] for a [`Role`].
     pub fn role(new_role: NewRole) -> Self {
         Self { object: new_role }
     }
 }
-
 impl Register<Trigger> {
     /// Constructs a new [`Register`] for a [`Trigger`].
     pub fn trigger(new_trigger: Trigger) -> Self {
@@ -67,7 +58,6 @@ impl Register<Trigger> {
         }
     }
 }
-
 impl_display! {
     Register<O>
     where
@@ -77,7 +67,6 @@ impl_display! {
     "REGISTER `{}`",
     object,
 }
-
 impl_into_box! {
     RegisterPeerWithPop |
     Register<Domain> |
@@ -88,7 +77,6 @@ impl_into_box! {
     Register<Trigger>
 => RegisterBox
 }
-
 /// Register a peer for consensus participation with a BLS Proof-of-Possession.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -113,11 +101,9 @@ pub struct RegisterPeerWithPop {
     #[norito(default)]
     pub hsm: Option<HsmBinding>,
 }
-
 impl_display! {
     RegisterPeerWithPop => "REGISTER_PEER_WITH_POP `{}`", peer
 }
-
 impl RegisterPeerWithPop {
     /// Construct a new peer registration containing the given proof-of-possession bytes.
     #[must_use]
@@ -130,21 +116,18 @@ impl RegisterPeerWithPop {
             hsm: None,
         }
     }
-
     /// Attach an explicit activation height; must satisfy the lead-time policy.
     #[must_use]
     pub fn with_activation_at(mut self, activation_at: u64) -> Self {
         self.activation_at = Some(activation_at);
         self
     }
-
     /// Attach an expiry height for the consensus key.
     #[must_use]
     pub fn with_expiry_at(mut self, expiry_at: u64) -> Self {
         self.expiry_at = Some(expiry_at);
         self
     }
-
     /// Attach an HSM binding for the consensus key.
     #[must_use]
     pub fn with_hsm(mut self, hsm: HsmBinding) -> Self {
@@ -152,7 +135,6 @@ impl RegisterPeerWithPop {
         self
     }
 }
-
 isi! {
     /// Generic instruction for an unregistration of an object from the identifiable destination.
     pub struct Unregister<O: Identifiable> {
@@ -160,7 +142,6 @@ isi! {
         pub object: O::Id,
     }
 }
-
 impl_display! {
     Unregister<O>
     where
@@ -170,7 +151,6 @@ impl_display! {
     "UNREGISTER `{}`",
     object,
 }
-
 impl_into_box! {
     Unregister<Peer> |
     Unregister<Domain> |
@@ -181,28 +161,24 @@ impl_into_box! {
     Unregister<Trigger>
 => UnregisterBox
 }
-
 impl Unregister<Peer> {
     /// Constructs a new [`Unregister`] for a [`Peer`].
     pub fn peer(peer_id: PeerId) -> Self {
         Self { object: peer_id }
     }
 }
-
 impl Unregister<Domain> {
     /// Constructs a new [`Unregister`] for a [`Domain`].
     pub fn domain(domain_id: DomainId) -> Self {
         Self { object: domain_id }
     }
 }
-
 impl Unregister<Account> {
     /// Constructs a new [`Unregister`] for an [`Account`].
     pub fn account(account_id: AccountId) -> Self {
         Self { object: account_id }
     }
 }
-
 impl Unregister<AssetDefinition> {
     /// Constructs a new [`Unregister`] for an [`AssetDefinition`].
     pub fn asset_definition(asset_definition_id: AssetDefinitionId) -> Self {
@@ -211,28 +187,24 @@ impl Unregister<AssetDefinition> {
         }
     }
 }
-
 impl Unregister<Nft> {
     /// Constructs a new [`Unregister`] for an [`Asset`].
     pub fn nft(nft_id: NftId) -> Self {
         Self { object: nft_id }
     }
 }
-
 impl Unregister<Role> {
     /// Constructs a new [`Unregister`] for a [`Role`].
     pub fn role(role_id: RoleId) -> Self {
         Self { object: role_id }
     }
 }
-
 impl Unregister<Trigger> {
     /// Constructs a new [`Unregister`] for a [`Trigger`].
     pub fn trigger(trigger_id: TriggerId) -> Self {
         Self { object: trigger_id }
     }
 }
-
 #[cfg(feature = "json")]
 impl<O> FastJsonWrite for Register<O>
 where
@@ -245,8 +217,18 @@ where
         JsonSerialize::json_serialize(&self.object, out);
         out.push('}');
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"object\":")?;
+        JsonSerialize::json_serialize_to(&self.object, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
-
 #[cfg(feature = "json")]
 impl<O> FastJsonWrite for Unregister<O>
 where
@@ -259,8 +241,18 @@ where
         JsonSerialize::json_serialize(&self.object, out);
         out.push('}');
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"object\":")?;
+        JsonSerialize::json_serialize_to(&self.object, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
-
 isi_box! {
     /// Enum with all supported [`Register`] instructions.
     pub enum RegisterBox {
@@ -280,7 +272,6 @@ isi_box! {
         Trigger(Register<Trigger>),
     }
 }
-
 enum_type! {
     pub(crate) enum RegisterType {
         Peer,
@@ -292,7 +283,6 @@ enum_type! {
         Trigger,
     }
 }
-
 isi_box! {
     /// Enum with all supported [`Unregister`] instructions.
     pub enum UnregisterBox {
@@ -312,7 +302,6 @@ isi_box! {
         Trigger(Unregister<Trigger>),
     }
 }
-
 enum_type! {
     pub(crate) enum UnregisterType {
         Peer,
@@ -324,7 +313,6 @@ enum_type! {
         Trigger,
     }
 }
-
 // Seal implementations
 impl crate::seal::Instruction for RegisterBox {}
 impl crate::seal::Instruction for UnregisterBox {}
@@ -342,7 +330,6 @@ impl crate::seal::Instruction for Unregister<AssetDefinition> {}
 impl crate::seal::Instruction for Unregister<Nft> {}
 impl crate::seal::Instruction for Unregister<Role> {}
 impl crate::seal::Instruction for Unregister<Trigger> {}
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPeerWithPop {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -350,7 +337,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPeerWithPop {
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let peer = super::decode_aos_canonical_field::<PeerId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -388,7 +374,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPeerWithPop {
         ))
     }
 }
-
 impl<'a, O> norito::core::DecodeFromSlice<'a> for Register<O>
 where
     O: Registered,
@@ -401,7 +386,6 @@ where
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let object = super::decode_aos_canonical_field::<O::With>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -414,7 +398,6 @@ where
         Ok((Self { object }, offset))
     }
 }
-
 impl<'a, O> norito::core::DecodeFromSlice<'a> for Unregister<O>
 where
     O: Identifiable,
@@ -427,7 +410,6 @@ where
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let object = super::decode_aos_canonical_field::<O::Id>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -440,7 +422,6 @@ where
         Ok((Self { object }, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RegisterBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -497,7 +478,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterBox {
         Ok((value, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for UnregisterBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -556,7 +536,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for UnregisterBox {
         Ok((value, offset))
     }
 }
-
 // Stable wire IDs for encoding
 impl RegisterBox {
     /// Norito wire identifier for boxed register instructions.
@@ -566,44 +545,55 @@ impl UnregisterBox {
     /// Norito wire identifier for boxed unregister instructions.
     pub const WIRE_ID: &'static str = "iroha.unregister";
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::peer::PeerId;
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
     use norito::{
         codec::{Decode, Encode},
         core::DecodeFromSlice,
     };
-
-    use super::*;
-    use crate::peer::PeerId;
-
     fn public_key(seed: u8) -> PublicKey {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked register/unregister fixture keypair");
         key_pair.public_key().clone()
     }
-
     fn account(seed: u8) -> AccountId {
         AccountId::new(public_key(seed))
     }
-
     fn domain_id() -> DomainId {
         DomainId::try_new("wonderland", "universal").expect("domain id")
     }
-
     fn asset_definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(domain_id(), "rose".parse().expect("asset name"))
     }
-
     fn nft_id() -> NftId {
         NftId::of(domain_id(), "cheshire".parse().expect("nft name"))
     }
-
     fn role_id() -> RoleId {
         "auditor".parse().expect("role id")
     }
-
+    #[cfg(feature = "json")]
+    fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
+        let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len()).expect("serialize at exact bound"),
+            legacy
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(value, legacy.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn register_and_unregister_json_match_legacy_bytes_at_exact_bounds() {
+        assert_exact_json(&Register::domain(Domain::new(domain_id())));
+        assert_exact_json(&Register::account(Account::new(account(0x64))));
+        assert_exact_json(&Unregister::domain(domain_id()));
+        assert_exact_json(&Unregister::account(account(0x65)));
+    }
     fn register_peer_with_pop() -> RegisterPeerWithPop {
         RegisterPeerWithPop {
             peer: PeerId::new(public_key(0x60)),
@@ -617,7 +607,6 @@ mod tests {
             }),
         }
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Encode + for<'de> DecodeFromSlice<'de> + PartialEq + core::fmt::Debug,
@@ -627,7 +616,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, name: &str, value: T)
     where
         T: crate::isi::Instruction
@@ -645,7 +633,6 @@ mod tests {
             .unwrap_or_else(|err| panic!("decode {name}: {err}"));
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     fn register_peer_with_pop_roundtrip() {
         let isi = register_peer_with_pop();
@@ -653,7 +640,6 @@ mod tests {
         let decoded = RegisterPeerWithPop::decode(&mut &encoded[..]).expect("decode");
         assert_eq!(decoded, isi);
     }
-
     #[test]
     fn register_unregister_decode_from_slice_roundtrips() {
         let account = account(0x61);
@@ -668,7 +654,6 @@ mod tests {
         )));
         assert_slice_roundtrip(Register::nft(Nft::new(nft_id(), Metadata::default())));
         assert_slice_roundtrip(Register::role(Role::new(role_id(), account.clone())));
-
         assert_slice_roundtrip(Unregister::peer(PeerId::new(public_key(0x62))));
         assert_slice_roundtrip(Unregister::domain(domain_id()));
         assert_slice_roundtrip(Unregister::account(account));
@@ -679,12 +664,10 @@ mod tests {
             "nightly_tick".parse().expect("trigger id"),
         ));
     }
-
     #[test]
     fn register_unregister_boxes_registry_decode_stable_ids() {
         let account = account(0x63);
         let registry = crate::isi::registry::default();
-
         let register_cases = [
             RegisterBox::Peer(register_peer_with_pop()),
             RegisterBox::Domain(Register::domain(Domain::new(domain_id()))),
@@ -701,7 +684,6 @@ mod tests {
         for value in register_cases {
             assert_registry_decodes(&registry, RegisterBox::WIRE_ID, value);
         }
-
         let unregister_cases = [
             UnregisterBox::Peer(Unregister::peer(PeerId::new(public_key(0x64)))),
             UnregisterBox::Domain(Unregister::domain(domain_id())),

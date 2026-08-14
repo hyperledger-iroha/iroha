@@ -21,6 +21,22 @@ SPEC.loader.exec_module(MODULE)
 
 TAIRA_ALICE_ACCOUNT_ID = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
 TAIRA_BOB_ACCOUNT_ID = "testuﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
+TAIRA_NETWORK_ID = "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"
+
+
+def faucet_puzzle(*, difficulty_bits: int = 8) -> dict[str, object]:
+    return {
+        "algorithm": "scrypt-leading-zero-bits-v2",
+        "network_id": TAIRA_NETWORK_ID,
+        "chain_discriminant": 369,
+        "difficulty_bits": difficulty_bits,
+        "anchor_height": 5,
+        "anchor_block_hash_hex": "00" * 32,
+        "challenge_salt_hex": None,
+        "scrypt_log_n": 1,
+        "scrypt_r": 1,
+        "scrypt_p": 1,
+    }
 
 
 def test_leading_zero_bits_counts_prefix() -> None:
@@ -31,11 +47,32 @@ def test_leading_zero_bits_counts_prefix() -> None:
 def test_build_challenge_matches_known_digest() -> None:
     challenge = MODULE.build_challenge(
         account_id=TAIRA_ALICE_ACCOUNT_ID,
+        network_id=TAIRA_NETWORK_ID,
         anchor_height=5,
         anchor_block_hash_hex="00" * 32,
         challenge_salt_hex=None,
     )
-    assert challenge.hex() == "83cb5a1f745e13bdb4bf7e67dbf310275207cc3c0636db03a465ec1ec5046cab"
+    assert challenge.hex() == "e138135007220871e4053476d9d9655c7513cd46777e8725fe235f48af48bef2"
+
+
+def test_build_challenge_binds_exact_network_genesis() -> None:
+    foreign_network = "hash:A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7A7#4F51"
+    local = MODULE.build_challenge(
+        account_id=TAIRA_ALICE_ACCOUNT_ID,
+        network_id=TAIRA_NETWORK_ID,
+        anchor_height=5,
+        anchor_block_hash_hex="00" * 32,
+        challenge_salt_hex=None,
+    )
+    foreign = MODULE.build_challenge(
+        account_id=TAIRA_ALICE_ACCOUNT_ID,
+        network_id=foreign_network,
+        anchor_height=5,
+        anchor_block_hash_hex="00" * 32,
+        challenge_salt_hex=None,
+    )
+
+    assert local != foreign
 
 
 def test_scrypt_digest_matches_rfc_vector() -> None:
@@ -78,19 +115,16 @@ def test_scrypt_digest_skips_libressl_empty_output(monkeypatch) -> None:
 
 
 def test_solve_puzzle_returns_expected_nonce_for_easy_case() -> None:
-    puzzle = {
-        "difficulty_bits": 8,
-        "anchor_height": 5,
-        "anchor_block_hash_hex": "00" * 32,
-        "challenge_salt_hex": None,
-        "scrypt_log_n": 1,
-        "scrypt_r": 1,
-        "scrypt_p": 1,
-    }
+    puzzle = faucet_puzzle()
     body = MODULE.solve_puzzle(TAIRA_ALICE_ACCOUNT_ID, puzzle)
     assert body["account_id"] == TAIRA_ALICE_ACCOUNT_ID
     assert body["pow_anchor_height"] == 5
-    assert body["pow_nonce_hex"] == "00000000000003e1"
+    assert body["pow_nonce_hex"] == "0000000000000007"
+
+
+def test_solve_puzzle_rejects_zero_difficulty() -> None:
+    with pytest.raises(ValueError, match="difficulty_bits must be positive"):
+        MODULE.solve_puzzle(TAIRA_ALICE_ACCOUNT_ID, faucet_puzzle(difficulty_bits=0))
 
 
 def faucet_receipt(account_id: str = TAIRA_ALICE_ACCOUNT_ID) -> dict[str, str]:
@@ -159,6 +193,15 @@ def test_claim_faucet_requires_queued_receipt_and_canonical_finality(monkeypatch
         return next(responses)
 
     monkeypatch.setattr(MODULE, "_http_json", fake_http)
+    monkeypatch.setattr(
+        MODULE,
+        "solve_puzzle",
+        lambda account_id, _puzzle: {
+            "account_id": account_id,
+            "pow_anchor_height": 5,
+            "pow_nonce_hex": "00" * 8,
+        },
+    )
     monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
 
     result = MODULE.claim_faucet(
@@ -174,7 +217,15 @@ def test_claim_faucet_requires_queued_receipt_and_canonical_finality(monkeypatch
     )
     assert calls == [
         ("GET", "https://taira.sora.org/v1/accounts/faucet/puzzle", None),
-        ("POST", "https://taira.sora.org/v1/accounts/faucet", {"account_id": TAIRA_ALICE_ACCOUNT_ID}),
+        (
+            "POST",
+            "https://taira.sora.org/v1/accounts/faucet",
+            {
+                "account_id": TAIRA_ALICE_ACCOUNT_ID,
+                "pow_anchor_height": 5,
+                "pow_nonce_hex": "00" * 8,
+            },
+        ),
         ("GET", status_url, None),
         ("GET", status_url, None),
     ]
@@ -191,6 +242,15 @@ def test_claim_faucet_rejects_retired_synchronous_response(monkeypatch) -> None:
         ]
     )
     monkeypatch.setattr(MODULE, "_http_json", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr(
+        MODULE,
+        "solve_puzzle",
+        lambda account_id, _puzzle: {
+            "account_id": account_id,
+            "pow_anchor_height": 5,
+            "pow_nonce_hex": "00" * 8,
+        },
+    )
 
     with pytest.raises(RuntimeError, match="faucet claim failed: status=200"):
         MODULE.claim_faucet(TAIRA_ALICE_ACCOUNT_ID, "https://taira.sora.org")

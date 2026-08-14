@@ -1,6 +1,5 @@
 // Included by `soracloud::tests`; keeping the test here preserves its original
 // module path while separating exact-quantity boundary coverage from routes.
-
 #[test]
 fn wallet_quantity_boundary_preserves_subnano_and_wide_values() {
     let sub_nano: Quantity = "0.0000000001".parse().expect("bounded quantity");
@@ -22,7 +21,6 @@ fn wallet_quantity_boundary_preserves_subnano_and_wide_values() {
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
-
         let value = norito::json::to_value(&payload).expect("serialize exact wallet payload");
         let object = value.as_object().expect("wallet payload object");
         let amount_text = payload.amount.to_string();
@@ -32,7 +30,6 @@ fn wallet_quantity_boundary_preserves_subnano_and_wide_values() {
         );
         assert!(!object.contains_key("amount_nanos"));
     }
-
     for amount in ["-1", "+1", "01", "1.0", "0.00000000000000000000000000001"] {
         let raw = format!(
             "{{\"apartment_name\":\"ops_agent\",\"asset_definition\":\"asset\",\"amount\":\"{amount}\"}}"

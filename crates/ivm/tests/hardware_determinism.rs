@@ -4,7 +4,6 @@ use ivm::{IVM, Memory, encoding, instruction};
 mod common;
 #[cfg(feature = "cuda")]
 use common::{MODE_VECTOR, assemble_with_mode};
-
 #[cfg(feature = "cuda")]
 fn make_program() -> Vec<u8> {
     const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
@@ -14,12 +13,10 @@ fn make_program() -> Vec<u8> {
     prog.extend_from_slice(&HALT);
     assemble_with_mode(&prog, MODE_VECTOR)
 }
-
 #[cfg(feature = "cuda")]
 struct MockNode {
     use_cuda: bool,
 }
-
 #[cfg(feature = "cuda")]
 impl MockNode {
     fn execute(&self, prog: &[u8], block: &[u8; 64], initial: &[u32; 8]) -> [u32; 8] {
@@ -48,7 +45,6 @@ impl MockNode {
         out
     }
 }
-
 #[cfg(feature = "cuda")]
 #[test]
 fn test_consistent_across_hardware() {

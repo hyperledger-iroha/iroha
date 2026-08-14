@@ -4,9 +4,10 @@
 //! Kotodama programs before compiling them to IVM bytecode. The initial set of
 //! checks focuses on surface issues such as unused `state` declarations and
 //! obviously unreachable statements that follow a `return`.
-
-use std::collections::{HashMap, HashSet};
-
+use super::ast::{Block, Expr, Item, Pattern, PatternBinding, Program, Statement};
+use crate::builtins::{Builtin, BuiltinSurface, PointerConstructor};
+use crate::i18n::{self, Language, Message as I18nMessage, StateShadowContext};
+use crate::pointer_abi::{self, PointerType};
 use iroha_data_model::{
     isi::{
         BurnBox, ExecuteTrigger, GrantBox, InstructionBox, Log, MintBox, RegisterBox,
@@ -14,12 +15,7 @@ use iroha_data_model::{
     },
     query::{QueryRequest, SingularQueryBox},
 };
-
-use super::ast::{Block, Expr, Item, Pattern, PatternBinding, Program, Statement};
-use crate::builtins::{Builtin, BuiltinSurface, PointerConstructor};
-use crate::i18n::{self, Language, Message as I18nMessage, StateShadowContext};
-use crate::pointer_abi::{self, PointerType};
-
+use std::collections::{HashMap, HashSet};
 /// A lint warning produced by [`lint_program`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LintWarning {
@@ -34,7 +30,6 @@ pub struct LintWarning {
     /// Optional source span for inline editor surfacing.
     pub source: Option<LintSourceSpan>,
 }
-
 impl LintWarning {
     fn new(code: &'static str, message: LintMessage) -> Self {
         Self {
@@ -45,12 +40,10 @@ impl LintWarning {
             source: None,
         }
     }
-
     /// Render the lint message in the requested language.
     pub fn localized_message(&self, lang: Language) -> String {
         self.message.translate(lang)
     }
-
     /// Stable unified diagnostic code used by `koto check`, LSP, and SDK tools.
     pub fn diagnostic_code(&self) -> &'static str {
         match self.code {
@@ -67,12 +60,10 @@ impl LintWarning {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LintSeverity {
     Warning,
 }
-
 impl LintSeverity {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -80,7 +71,6 @@ impl LintSeverity {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LintCategory {
     Correctness,
@@ -88,7 +78,6 @@ pub enum LintCategory {
     PointerAbi,
     Triggers,
 }
-
 impl LintCategory {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -99,13 +88,11 @@ impl LintCategory {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LintSourceSpan {
     pub line: usize,
     pub column: usize,
 }
-
 fn lint_category(code: &str) -> LintCategory {
     match code {
         "nonliteral-state-path" | "opaque-access-hints" => LintCategory::AccessHints,
@@ -114,7 +101,6 @@ fn lint_category(code: &str) -> LintCategory {
         _ => LintCategory::Correctness,
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LintMessage {
     UnusedState {
@@ -136,7 +122,6 @@ pub enum LintMessage {
         message: String,
     },
 }
-
 impl LintMessage {
     fn translate(&self, lang: Language) -> String {
         match self {
@@ -175,7 +160,6 @@ impl LintMessage {
         }
     }
 }
-
 /// Run the Kotodama lint suite against an AST [`Program`].
 pub fn lint_program(program: &Program) -> Vec<LintWarning> {
     let mut warnings = Vec::new();
@@ -189,7 +173,6 @@ pub fn lint_program(program: &Program) -> Vec<LintWarning> {
     lint_opaque_access_hints(program, &mut warnings);
     warnings
 }
-
 const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
     Builtin::EscrowOpenOffer.source_name(),
     Builtin::EscrowAccept.source_name(),
@@ -219,10 +202,8 @@ const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
     Builtin::UseAssetHandle.source_name(),
     Builtin::AxtCommit.source_name(),
 ];
-
 const EXECUTE_INSTRUCTION_CALL: &str = "execute_instruction";
 const EXECUTE_QUERY_CALL: &str = "execute_query";
-
 fn decode_hex_or_raw_bytes(raw: &str) -> Option<Vec<u8>> {
     if let Some(trimmed) = raw.strip_prefix("0x") {
         if trimmed.len() % 2 == 0 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -238,7 +219,6 @@ fn decode_hex_or_raw_bytes(raw: &str) -> Option<Vec<u8>> {
     }
     Some(raw.as_bytes().to_vec())
 }
-
 fn decode_norito_bytes_literal(expr: &Expr) -> Option<Vec<u8>> {
     let raw = match expr.kind() {
         Expr::Source { .. } | Expr::Resolved { .. } => {
@@ -268,20 +248,16 @@ fn decode_norito_bytes_literal(expr: &Expr) -> Option<Vec<u8>> {
     };
     Some(payload)
 }
-
 fn decode_instruction_box_literal(args: &[Expr]) -> Option<InstructionBox> {
     let payload = decode_norito_bytes_literal(args.first()?)?;
     norito::decode_canonical(&payload).ok()
 }
-
 fn decode_query_request_literal(args: &[Expr]) -> Option<QueryRequest> {
     let payload = decode_norito_bytes_literal(args.first()?)?;
     norito::decode_canonical(&payload).ok()
 }
-
 fn instruction_box_is_hintable(instr: &InstructionBox) -> bool {
     let any = instr.as_any();
-
     if any.downcast_ref::<Log>().is_some() {
         return true;
     }
@@ -332,17 +308,14 @@ fn instruction_box_is_hintable(instr: &InstructionBox) -> bool {
             return true;
         }
     }
-
     false
 }
-
 fn query_request_is_hintable(request: &QueryRequest) -> bool {
     match request {
         QueryRequest::Singular(query) => matches!(query, SingularQueryBox::FindAssetById(_)),
         QueryRequest::Start(_) | QueryRequest::Continue(_) => false,
     }
 }
-
 fn is_literal_name_expr(expr: &Expr) -> bool {
     matches!(
         expr.kind(),
@@ -352,7 +325,6 @@ fn is_literal_name_expr(expr: &Expr) -> bool {
                 && args.first().is_some_and(|argument| matches!(argument.kind(), Expr::String(_)))
     )
 }
-
 fn escrow_call_is_hintable(name: &str, args: &[Expr]) -> Option<bool> {
     if [
         Builtin::EscrowOpenOffer,
@@ -371,7 +343,6 @@ fn escrow_call_is_hintable(name: &str, args: &[Expr]) -> Option<bool> {
         None
     }
 }
-
 fn is_literal_domain_expr(expr: &Expr) -> bool {
     let Expr::Call { name, args, .. } = expr.kind() else {
         return false;
@@ -383,7 +354,6 @@ fn is_literal_domain_expr(expr: &Expr) -> bool {
                 if iroha_data_model::domain::DomainId::parse_fully_qualified(raw).is_ok())
         })
 }
-
 fn is_account_access_hint_expr(expr: &Expr) -> bool {
     let Expr::Call { name, args, .. } = expr.kind() else {
         return false;
@@ -398,11 +368,9 @@ fn is_account_access_hint_expr(expr: &Expr) -> bool {
                 if iroha_data_model::account::AccountId::parse_encoded(raw).is_ok())
         })
 }
-
 fn transfer_domain_call_is_hintable(args: &[Expr]) -> bool {
     args.len() == 3 && is_literal_domain_expr(&args[1]) && is_account_access_hint_expr(&args[2])
 }
-
 fn lint_nonliteral_state_paths(program: &Program, warnings: &mut Vec<LintWarning>) {
     for item in &program.items {
         if let Item::Function(func) = item {
@@ -410,7 +378,6 @@ fn lint_nonliteral_state_paths(program: &Program, warnings: &mut Vec<LintWarning
         }
     }
 }
-
 fn lint_state_path_block(block: &Block, warnings: &mut Vec<LintWarning>) {
     for stmt in &block.statements {
         lint_state_path_stmt(stmt, warnings);
@@ -419,7 +386,6 @@ fn lint_state_path_block(block: &Block, warnings: &mut Vec<LintWarning>) {
         lint_state_path_expr(tail, warnings);
     }
 }
-
 fn lint_state_path_stmt(stmt: &Statement, warnings: &mut Vec<LintWarning>) {
     match stmt.kind() {
         Statement::Source { .. } | Statement::Resolved { .. } => {
@@ -485,7 +451,6 @@ fn lint_state_path_stmt(stmt: &Statement, warnings: &mut Vec<LintWarning>) {
         }
     }
 }
-
 fn lint_state_path_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
     match expr.kind() {
         Expr::Source { .. } | Expr::Resolved { .. } => {
@@ -604,7 +569,6 @@ fn lint_state_path_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
         | Expr::Ident(_) => {}
     }
 }
-
 fn lint_opaque_access_hints(program: &Program, warnings: &mut Vec<LintWarning>) {
     for item in &program.items {
         if let Item::Function(func) = item {
@@ -615,7 +579,6 @@ fn lint_opaque_access_hints(program: &Program, warnings: &mut Vec<LintWarning>) 
         }
     }
 }
-
 fn lint_opaque_access_block(block: &Block, warnings: &mut Vec<LintWarning>) {
     for stmt in &block.statements {
         lint_opaque_access_stmt(stmt, warnings);
@@ -624,7 +587,6 @@ fn lint_opaque_access_block(block: &Block, warnings: &mut Vec<LintWarning>) {
         lint_opaque_access_expr(tail, warnings);
     }
 }
-
 fn lint_opaque_access_stmt(stmt: &Statement, warnings: &mut Vec<LintWarning>) {
     match stmt.kind() {
         Statement::Source { .. } | Statement::Resolved { .. } => {
@@ -690,7 +652,6 @@ fn lint_opaque_access_stmt(stmt: &Statement, warnings: &mut Vec<LintWarning>) {
         }
     }
 }
-
 fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
     match expr.kind() {
         Expr::Source { .. } | Expr::Resolved { .. } => {
@@ -819,7 +780,6 @@ fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
         | Expr::Ident(_) => {}
     }
 }
-
 fn is_literal_state_key(expr: &Expr) -> bool {
     match expr.kind() {
         Expr::Source { .. } | Expr::Resolved { .. } => {
@@ -857,7 +817,6 @@ fn is_literal_state_key(expr: &Expr) -> bool {
         _ => false,
     }
 }
-
 fn is_literal_state_base_name(expr: &Expr) -> bool {
     let Expr::Call { name, args, .. } = expr.kind() else {
         return false;
@@ -870,7 +829,6 @@ fn is_literal_state_base_name(expr: &Expr) -> bool {
             .first()
             .is_some_and(|argument| matches!(argument.kind(), Expr::String(_) | Expr::Bytes(_)))
 }
-
 fn is_literal_state_path(expr: &Expr) -> bool {
     match expr.kind() {
         Expr::Source { .. } | Expr::Resolved { .. } => {
@@ -910,7 +868,6 @@ fn is_literal_state_path(expr: &Expr) -> bool {
         _ => false,
     }
 }
-
 fn lint_unused_state(program: &Program, warnings: &mut Vec<LintWarning>) {
     let state_names: Vec<String> = program
         .items
@@ -1047,7 +1004,6 @@ fn lint_unused_state(program: &Program, warnings: &mut Vec<LintWarning>) {
         }
     }
 }
-
 fn lint_state_shadowing(program: &Program, warnings: &mut Vec<LintWarning>) {
     let state_names: HashSet<String> = program
         .items
@@ -1060,7 +1016,6 @@ fn lint_state_shadowing(program: &Program, warnings: &mut Vec<LintWarning>) {
     if state_names.is_empty() {
         return;
     }
-
     for item in &program.items {
         if let Item::Function(func) = item {
             for param in &func.params {
@@ -1080,7 +1035,6 @@ fn lint_state_shadowing(program: &Program, warnings: &mut Vec<LintWarning>) {
         }
     }
 }
-
 fn lint_statement_shadowing_block(
     block: &Block,
     state_names: &HashSet<String>,
@@ -1091,7 +1045,6 @@ fn lint_statement_shadowing_block(
         lint_statement_state_shadowing(stmt, state_names, warnings, func_name);
     }
 }
-
 fn lint_statement_state_shadowing(
     stmt: &Statement,
     state_names: &HashSet<String>,
@@ -1202,7 +1155,6 @@ fn lint_statement_state_shadowing(
         }
     }
 }
-
 fn lint_unused_parameters(program: &Program, warnings: &mut Vec<LintWarning>) {
     for item in &program.items {
         if let Item::Function(func) = item {
@@ -1340,7 +1292,6 @@ fn lint_unused_parameters(program: &Program, warnings: &mut Vec<LintWarning>) {
         }
     }
 }
-
 fn lint_unreachable_after_return(program: &Program, warnings: &mut Vec<LintWarning>) {
     for item in &program.items {
         if let Item::Function(func) = item {
@@ -1406,7 +1357,6 @@ fn lint_unreachable_after_return(program: &Program, warnings: &mut Vec<LintWarni
         }
     }
 }
-
 fn collect_pattern_names<'a>(pattern: &'a Pattern, out: &mut Vec<&'a str>) {
     match pattern {
         Pattern::Name(name) => out.push(name.as_str()),
@@ -1417,7 +1367,6 @@ fn collect_pattern_names<'a>(pattern: &'a Pattern, out: &mut Vec<&'a str>) {
         }
     }
 }
-
 fn record_expr_idents(expr: &Expr, state_lookup: &HashSet<String>, hits: &mut HashSet<String>) {
     let mut stack = vec![expr];
     while let Some(e) = stack.pop() {
@@ -1532,7 +1481,6 @@ fn record_expr_idents(expr: &Expr, state_lookup: &HashSet<String>, hits: &mut Ha
         }
     }
 }
-
 fn record_block_idents(block: &Block, lookup: &HashSet<String>, hits: &mut HashSet<String>) {
     for statement in &block.statements {
         record_statement_idents(statement, lookup, hits);
@@ -1541,7 +1489,6 @@ fn record_block_idents(block: &Block, lookup: &HashSet<String>, hits: &mut HashS
         record_expr_idents(tail, lookup, hits);
     }
 }
-
 fn record_statement_idents(
     statement: &Statement,
     lookup: &HashSet<String>,
@@ -1611,7 +1558,6 @@ fn record_statement_idents(
         Statement::Return(None) | Statement::Break | Statement::Continue => {}
     }
 }
-
 const POINTER_CONSTRUCTORS: &[PointerConstructor] = &[
     PointerConstructor::AccountId,
     PointerConstructor::AssetDefinition,
@@ -1622,21 +1568,18 @@ const POINTER_CONSTRUCTORS: &[PointerConstructor] = &[
     PointerConstructor::Json,
     PointerConstructor::DataSpaceId,
 ];
-
 fn lint_pointer_constructor_usage(program: &Program, warnings: &mut Vec<LintWarning>) {
     let constructors: HashSet<&str> = POINTER_CONSTRUCTORS
         .iter()
         .map(|constructor| Builtin::PointerConstructor(*constructor).source_name())
         .collect();
     let mut literal_counts: HashMap<String, usize> = HashMap::new();
-
     for item in &program.items {
         if let Item::Function(func) = item {
             collect_pointer_literals_from_block(&func.body, &constructors, &mut literal_counts);
             lint_unused_pointer_constructor_block(&func.body, &constructors, &func.name, warnings);
         }
     }
-
     for (literal, count) in literal_counts {
         if count > 1 {
             warnings.push(LintWarning::new(
@@ -1650,7 +1593,6 @@ fn lint_pointer_constructor_usage(program: &Program, warnings: &mut Vec<LintWarn
         }
     }
 }
-
 fn lint_nonliteral_trigger_specs(program: &Program, warnings: &mut Vec<LintWarning>) {
     for item in &program.items {
         if let Item::Function(func) = item {
@@ -1658,7 +1600,6 @@ fn lint_nonliteral_trigger_specs(program: &Program, warnings: &mut Vec<LintWarni
         }
     }
 }
-
 fn lint_trigger_specs_in_block(block: &Block, func_name: &str, warnings: &mut Vec<LintWarning>) {
     for stmt in &block.statements {
         lint_trigger_specs_in_stmt(stmt, func_name, warnings);
@@ -1667,7 +1608,6 @@ fn lint_trigger_specs_in_block(block: &Block, func_name: &str, warnings: &mut Ve
         lint_trigger_specs_in_expr(tail, func_name, warnings);
     }
 }
-
 fn lint_trigger_specs_in_stmt(stmt: &Statement, func_name: &str, warnings: &mut Vec<LintWarning>) {
     match stmt.kind() {
         Statement::Source { .. } | Statement::Resolved { .. } => {
@@ -1735,7 +1675,6 @@ fn lint_trigger_specs_in_stmt(stmt: &Statement, func_name: &str, warnings: &mut 
         Statement::Return(None) | Statement::Break | Statement::Continue => {}
     }
 }
-
 fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<LintWarning>) {
     match expr.kind() {
         Expr::Source { .. } | Expr::Resolved { .. } => {
@@ -1854,7 +1793,6 @@ fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<L
         | Expr::Ident(_) => {}
     }
 }
-
 fn is_literal_trigger_spec(expr: &Expr) -> bool {
     match expr.kind() {
         Expr::Source { .. } | Expr::Resolved { .. } => {
@@ -1869,7 +1807,6 @@ fn is_literal_trigger_spec(expr: &Expr) -> bool {
         _ => false,
     }
 }
-
 fn collect_pointer_literals_from_stmt(
     stmt: &Statement,
     constructors: &HashSet<&str>,
@@ -1947,7 +1884,6 @@ fn collect_pointer_literals_from_stmt(
         }
     }
 }
-
 fn collect_pointer_literals_from_block(
     block: &Block,
     constructors: &HashSet<&str>,
@@ -1960,7 +1896,6 @@ fn collect_pointer_literals_from_block(
         collect_pointer_literals_from_expr(tail, constructors, counts);
     }
 }
-
 fn collect_pointer_literals_from_expr(
     expr: &Expr,
     constructors: &HashSet<&str>,
@@ -2087,7 +2022,6 @@ fn collect_pointer_literals_from_expr(
         | Expr::Ident(_) => {}
     }
 }
-
 fn lint_unused_pointer_constructor(
     stmt: &Statement,
     constructors: &HashSet<&str>,
@@ -2147,7 +2081,6 @@ fn lint_unused_pointer_constructor(
         | Statement::Continue => {}
     }
 }
-
 fn lint_unused_pointer_constructor_block(
     block: &Block,
     constructors: &HashSet<&str>,
@@ -2158,7 +2091,6 @@ fn lint_unused_pointer_constructor_block(
         lint_unused_pointer_constructor(stmt, constructors, func_name, warnings);
     }
 }
-
 fn warn_if_unused_pointer_call(
     expr: &Expr,
     constructors: &HashSet<&str>,
@@ -2181,13 +2113,11 @@ fn warn_if_unused_pointer_call(
         ));
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{i18n::Language, parser::parse_test_fragment as parse};
     use iroha_data_model::DomainId;
-
     #[test]
     fn record_expr_idents_collects_only_states() {
         let expr = Expr::Binary {
@@ -2203,7 +2133,6 @@ mod tests {
         assert!(hits.contains("counter"));
         assert!(!hits.contains("temp"));
     }
-
     #[test]
     fn lint_unused_state_flags_state() {
         let program = parse("state int counter; fn main() { let x = 1; }").unwrap();
@@ -2211,7 +2140,6 @@ mod tests {
         lint_unused_state(&program, &mut warnings);
         assert!(warnings.iter().any(|w| w.code == "unused-state"));
     }
-
     #[test]
     fn lint_unreachable_after_return_flags_code() {
         let program = parse("fn main() { return; let x = 1; }").unwrap();
@@ -2219,7 +2147,6 @@ mod tests {
         lint_unreachable_after_return(&program, &mut warnings);
         assert!(warnings.iter().any(|w| w.code == "unreachable-return"));
     }
-
     #[test]
     fn lint_program_combines_checks() {
         let program = parse("state int counter; fn main() { return; let x = counter; }").unwrap();
@@ -2227,7 +2154,6 @@ mod tests {
         assert_eq!(warnings.len(), 1, "only unreachable code should remain");
         assert_eq!(warnings[0].code, "unreachable-return");
     }
-
     #[test]
     fn lint_state_shadowing_flags_parameter() {
         let program = parse("state int balance; fn main(int balance) {}").unwrap();
@@ -2237,7 +2163,6 @@ mod tests {
             "expected state-shadowed lint when parameter matches state"
         );
     }
-
     #[test]
     fn lint_unused_parameters_flags_param() {
         let program = parse("fn main(int amount) { return; }").unwrap();
@@ -2248,7 +2173,6 @@ mod tests {
             .expect("expected unused-parameter lint for unused argument");
         assert_eq!(warning.diagnostic_code(), "K5003");
     }
-
     #[test]
     fn lint_unused_parameters_ignores_underscore() {
         let program = parse("fn main(int _unused) {}").unwrap();
@@ -2258,7 +2182,6 @@ mod tests {
             "underscore-prefixed arguments should not trigger unused-parameter lint"
         );
     }
-
     #[test]
     fn lint_warning_localizes_message() {
         let program = parse("state int counter; fn main() {}").unwrap();
@@ -2273,7 +2196,6 @@ mod tests {
             "expected localized message to reference the state name: {msg}"
         );
     }
-
     #[test]
     fn lint_duplicate_pointer_literals_warns() {
         let program = parse(
@@ -2287,7 +2209,6 @@ mod tests {
                 .any(|w| w.code == "duplicate-pointer-literal")
         );
     }
-
     #[test]
     fn lint_duplicate_json_name_literals_are_allowed() {
         let program =
@@ -2301,7 +2222,6 @@ mod tests {
             "JSON field names are cheap and intentionally repeated across payload builders"
         );
     }
-
     #[test]
     fn lint_unused_pointer_constructor_warns() {
         let program = parse(
@@ -2315,7 +2235,6 @@ mod tests {
                 .any(|w| w.code == "unused-pointer-constructor")
         );
     }
-
     #[test]
     fn lint_returned_pointer_constructor_is_consumed() {
         let program = parse(
@@ -2330,7 +2249,6 @@ mod tests {
             "return values must not be reported as discarded: {warnings:?}"
         );
     }
-
     #[test]
     fn lint_nonliteral_trigger_spec_warns() {
         let program =
@@ -2339,7 +2257,6 @@ mod tests {
         let warnings = lint_program(&program);
         assert!(warnings.iter().any(|w| w.code == "nonliteral-trigger-spec"));
     }
-
     #[test]
     fn lint_literal_trigger_spec_is_silent() {
         let program = parse("fn main() { ledger::trigger::register(Json::parse(\"{}\")); }")
@@ -2347,7 +2264,6 @@ mod tests {
         let warnings = lint_program(&program);
         assert!(!warnings.iter().any(|w| w.code == "nonliteral-trigger-spec"));
     }
-
     #[test]
     fn lint_nonliteral_state_map_key_is_silent() {
         let program =
@@ -2356,7 +2272,6 @@ mod tests {
         let warnings = lint_program(&program);
         assert!(warnings.is_empty());
     }
-
     #[test]
     fn lint_literal_state_map_key_is_silent() {
         let program = parse("state StateMap<int, int> Foo; fn main() { let _x = Foo.get(1); }")
@@ -2364,7 +2279,6 @@ mod tests {
         let warnings = lint_program(&program);
         assert!(warnings.is_empty());
     }
-
     #[test]
     fn lint_nonliteral_state_map_key_with_explicit_access_is_rejected() {
         let err = parse(
@@ -2375,7 +2289,6 @@ fn main(Name k) { let _x = Foo.get(k); }"#,
         .expect_err("manual access hints should be rejected");
         assert!(err.contains("access metadata is generated by the compiler"));
     }
-
     #[test]
     fn lint_nonliteral_state_path_warns() {
         for call in ["state::get(p)", "state::set(p, 1)", "state::delete(p)"] {
@@ -2388,7 +2301,6 @@ fn main(Name k) { let _x = Foo.get(k); }"#,
             );
         }
     }
-
     #[test]
     fn lint_literal_state_path_is_silent() {
         for call in [
@@ -2404,7 +2316,6 @@ fn main(Name k) { let _x = Foo.get(k); }"#,
             );
         }
     }
-
     #[test]
     fn lint_opaque_access_hints_warns() {
         let program =
@@ -2412,7 +2323,6 @@ fn main(Name k) { let _x = Foo.get(k); }"#,
         let warnings = lint_program(&program);
         assert!(warnings.iter().any(|w| w.code == "opaque-access-hints"));
     }
-
     #[test]
     fn lint_nft_set_metadata_is_precise_access() {
         let program = parse(
@@ -2424,7 +2334,6 @@ fn main(Name k) { let _x = Foo.get(k); }"#,
         let warnings = lint_program(&program);
         assert!(!warnings.iter().any(|w| w.code == "opaque-access-hints"));
     }
-
     #[test]
     fn lint_asset_registration_helpers_are_precise_access() {
         let program = parse(
@@ -2442,7 +2351,6 @@ fn main(AssetDefinitionId asset, AccountId owner) {
             "asset registration helpers should use compiler-derived asset keys"
         );
     }
-
     #[test]
     fn lint_subscription_helpers_are_precise_access() {
         let program = parse(
@@ -2460,7 +2368,6 @@ fn main() {
             "subscription helpers should use fixed compiler-derived context keys"
         );
     }
-
     #[test]
     fn lint_inline_submit_ballot_builder_is_precise_access() {
         let program = parse(
@@ -2484,7 +2391,6 @@ fn main() {
             "the inline submit-ballot builder only constructs a payload and should not warn about access hints"
         );
     }
-
     #[test]
     fn lint_transfer_domain_literal_target_is_precise_access() {
         let program = parse(
@@ -2505,7 +2411,6 @@ fn main() {
             "literal transfer_domain access should be compiler-derived"
         );
     }
-
     #[test]
     fn lint_transfer_domain_dynamic_target_still_warns() {
         let program = parse(
@@ -2523,7 +2428,6 @@ fn main() {
             "dynamic transfer_domain access should still warn"
         );
     }
-
     #[test]
     fn lint_native_escrow_literal_name_is_precise_access() {
         let program = parse(
@@ -2546,7 +2450,6 @@ fn main() {
             "literal native escrow helpers should not warn"
         );
     }
-
     #[test]
     fn lint_dynamic_escrow_name_still_warns() {
         let program = parse(
@@ -2564,7 +2467,6 @@ fn main() {
             "dynamic escrow names should still warn"
         );
     }
-
     #[test]
     fn lint_opaque_access_hints_with_explicit_access_is_rejected() {
         let err = parse(
@@ -2574,7 +2476,6 @@ fn main() { subscription_bill(); }"#,
         .expect_err("manual access hints should be rejected");
         assert!(err.contains("access metadata is generated by the compiler"));
     }
-
     #[test]
     fn lint_opaque_access_hints_execute_instruction_literal_is_silent() {
         use iroha_data_model::{
@@ -2582,7 +2483,6 @@ fn main() { subscription_bill(); }"#,
             asset::id::{AssetDefinitionId, AssetId},
             isi::{InstructionBox, Mint},
         };
-
         let account = AccountId::new(
             "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
                 .parse()
@@ -2598,7 +2498,6 @@ fn main() { subscription_bill(); }"#,
         let bytes = norito::to_bytes(&isi).expect("encode InstructionBox");
         let hex_payload = format!("0x{}", hex::encode(bytes));
         let src = format!("fn main() {{ execute_instruction(norito_bytes(\"{hex_payload}\")); }}");
-
         let program = parse(&src).expect("parse execute_instruction literal");
         let warnings = lint_program(&program);
         assert!(
@@ -2606,7 +2505,6 @@ fn main() { subscription_bill(); }"#,
             "literal execute_instruction payloads should not warn"
         );
     }
-
     #[test]
     fn lint_opaque_access_hints_execute_instruction_escrow_literal_is_silent() {
         use iroha_data_model::{
@@ -2622,7 +2520,6 @@ fn main() { subscription_bill(); }"#,
         let bytes = norito::to_bytes(&isi).expect("encode InstructionBox");
         let hex_payload = format!("0x{}", hex::encode(bytes));
         let src = format!("fn main() {{ execute_instruction(norito_bytes(\"{hex_payload}\")); }}");
-
         let program = parse(&src).expect("parse escrow execute_instruction literal");
         let warnings = lint_program(&program);
         assert!(
@@ -2630,7 +2527,6 @@ fn main() { subscription_bill(); }"#,
             "literal escrow execute_instruction payloads should not warn"
         );
     }
-
     #[test]
     fn lint_opaque_access_hints_execute_query_literal_is_silent() {
         use iroha_data_model::{
@@ -2639,7 +2535,6 @@ fn main() { subscription_bill(); }"#,
             query::asset::FindAssetById,
             query::{QueryRequest, SingularQueryBox},
         };
-
         let account = AccountId::new(
             "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
                 .parse()
@@ -2657,7 +2552,6 @@ fn main() { subscription_bill(); }"#,
         let bytes = norito::to_bytes(&request).expect("encode QueryRequest");
         let hex_payload = format!("0x{}", hex::encode(bytes));
         let src = format!("fn main() {{ execute_query(norito_bytes(\"{hex_payload}\")); }}");
-
         let program = parse(&src).expect("parse execute_query literal");
         let warnings = lint_program(&program);
         assert!(

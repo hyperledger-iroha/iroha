@@ -1,5 +1,4 @@
 //! Source-linked Verus kernels for exact body ownership, retirement, and bounded service.
-
 use crate::refinement::{
     CERTIFICATE_EVIDENCE_ABSENT, CERTIFICATE_EVIDENCE_INCOMING, CERTIFICATE_EVIDENCE_LOCAL,
     IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_SUBJECT, IDENTITY_KIND_CONSENSUS_CONTEXT,
@@ -12,9 +11,7 @@ use crate::verus_proofs::{
     production_enter_view_retains_high_prepare_qc_identity, production_kernel_relation,
 };
 use vstd::prelude::*;
-
 verus! {
-
 /// Verus-side shape of a fixed-width reducer incarnation.
 #[derive(Copy, Clone)]
 pub struct ProductionTagProjection {
@@ -25,7 +22,6 @@ pub struct ProductionTagProjection {
     /// Reducer generation consuming the body pipeline.
     pub generation: u64,
 }
-
 /// Verus mirror of the production effective-lock trace projection.
 #[derive(Copy, Clone)]
 pub struct EffectiveLockTraceProjection {
@@ -70,14 +66,12 @@ pub struct EffectiveLockTraceProjection {
     /// Persistent bounded-service cursor after selection.
     pub cursor_after: u8,
 }
-
 /// Verus instance of the compact production effective-lock trace relation.
 pub closed spec fn effective_lock_trace_step_is_valid(
     projection: EffectiveLockTraceProjection,
 ) -> bool {
     effective_lock_trace_step_body!(projection)
 }
-
 /// Exact Verus mirror of the production EnterView trace gate.
 pub closed spec fn production_enter_view_uses_post_install_effective_lock_kernel(
     trace: EffectiveLockTraceProjection,
@@ -87,28 +81,24 @@ pub closed spec fn production_enter_view_uses_post_install_effective_lock_kernel
         && enter_view_locked_prepare_qc_identity_body!(enter_view)
         && enter_view_high_prepare_qc_control_identity_body!(enter_view)
 }
-
 /// Exact Verus mirror of the production body-owner trace gate.
 pub closed spec fn production_body_ownership_preserves_effective_lock_kernel(
     projection: EffectiveLockTraceProjection,
 ) -> bool {
     effective_lock_trace_claim_body!(projection, 2u8)
 }
-
 /// Exact Verus mirror of the production capacity-retirement trace gate.
 pub closed spec fn production_body_capacity_retirement_preserves_effective_lock_kernel(
     projection: EffectiveLockTraceProjection,
 ) -> bool {
     effective_lock_trace_claim_body!(projection, 3u8)
 }
-
 /// Exact Verus mirror of the production bounded-service trace gate.
 pub closed spec fn production_body_service_refines_async_fairness_kernel(
     projection: EffectiveLockTraceProjection,
 ) -> bool {
     effective_lock_trace_claim_body!(projection, 4u8)
 }
-
 // ---------------------------------------------------------------------------
 // Source-linked body ownership and bounded-service kernels
 // ---------------------------------------------------------------------------
@@ -121,7 +111,6 @@ pub struct BoundedServiceSelectionProjection {
     /// Persistent cursor for the next invocation.
     pub next: u8,
 }
-
 /// Exact branch relation called by production `BoundedIngress::pop_next`.
 pub closed spec fn bounded_service_selection(
     cursor: u8,
@@ -137,7 +126,6 @@ pub closed spec fn bounded_service_selection(
         BoundedServiceSelectionProjection,
     )
 }
-
 /// Executable Verus instance of the production class selector.
 pub fn verified_bounded_service_selection(
     cursor: u8,
@@ -165,7 +153,6 @@ pub fn verified_bounded_service_selection(
     }
     selection
 }
-
 /// A ready class is selected in the same invocation, and invalid cursors
 /// cannot select work.
 pub proof fn bounded_service_selection_is_ready_or_fail_closed(
@@ -211,7 +198,6 @@ pub proof fn bounded_service_selection_is_ready_or_fail_closed(
 {
     reveal(bounded_service_selection);
 }
-
 /// When all classes stay ready, the production cursor serves each class once
 /// in three invocations. This is a bounded arbitration fact, not a temporal
 /// claim that the host invokes the runtime.
@@ -234,7 +220,6 @@ pub proof fn bounded_service_all_ready_cycle(cursor: u8)
 {
     reveal(bounded_service_selection);
 }
-
 /// Verus-side exact residual counters after body supersession.
 #[derive(Copy, Clone)]
 pub struct ExactBodyRetirementAccountingProjection {
@@ -243,7 +228,6 @@ pub struct ExactBodyRetirementAccountingProjection {
     /// Remaining pending-store byte-owner aggregate.
     pub store_after: u64,
 }
-
 /// Exact source-linked body supersession accounting relation.
 pub closed spec fn exact_body_retirement_accounting(
     ready_before: u64,
@@ -261,7 +245,6 @@ pub closed spec fn exact_body_retirement_accounting(
         ExactBodyRetirementAccountingProjection,
     )
 }
-
 /// Executable Verus instance of production supersession accounting.
 pub fn verified_exact_body_retirement_accounting(
     ready_before: u64,
@@ -298,7 +281,6 @@ pub fn verified_exact_body_retirement_accounting(
     }
     accounting
 }
-
 /// Source-linked classification of one completion stage across its two
 /// serialized owners (`0 = vacant`, `1 = exact`, `2 = invalid`).
 pub closed spec fn exact_body_completion_ownership(
@@ -317,7 +299,6 @@ pub closed spec fn exact_body_completion_ownership(
         2u8,
     )
 }
-
 /// The exact classifier admits one evidence-matching owner in only one lane.
 pub proof fn exact_body_completion_owner_is_unique(
     ingress_owners: usize,
@@ -339,7 +320,6 @@ pub proof fn exact_body_completion_owner_is_unique(
 {
     reveal(exact_body_completion_ownership);
 }
-
 /// Verus-side typed identity of one production exact-body owner.
 #[derive(Copy, Clone)]
 pub struct ProductionExactBodyOwnerProjection {
@@ -350,7 +330,6 @@ pub struct ProductionExactBodyOwnerProjection {
     /// Optional canonical manifest identity during certified acquisition.
     pub manifest_hash: Option<int>,
 }
-
 /// Verus-side result of typed exact-body owner binding.
 #[derive(Copy, Clone)]
 pub struct ProductionExactBodyOwnerBindingProjection {
@@ -359,7 +338,6 @@ pub struct ProductionExactBodyOwnerBindingProjection {
     /// Whether the key already had an owner before this binding.
     pub already_owned: bool,
 }
-
 /// Exact source-linked owner binding relation called by production.
 pub closed spec fn production_exact_body_owner_binding(
     current: Option<ProductionExactBodyOwnerProjection>,
@@ -372,7 +350,6 @@ pub closed spec fn production_exact_body_owner_binding(
         ProductionExactBodyOwnerBindingProjection
     )
 }
-
 /// Executable Verus instance of the production owner-binding branches.
 pub fn verified_production_exact_body_owner_binding(
     current: Option<ProductionExactBodyOwnerProjection>,
@@ -392,7 +369,6 @@ pub fn verified_production_exact_body_owner_binding(
     }
     binding
 }
-
 /// Exact immutable stage-owner identity relation called by Store/Validate.
 pub closed spec fn production_exact_body_stage_is_owned(
     owner: ProductionExactBodyOwnerProjection,
@@ -400,7 +376,6 @@ pub closed spec fn production_exact_body_stage_is_owned(
 ) -> bool {
     exact_body_owner_equal_body!(owner, stage)
 }
-
 /// A successful binding cannot replace tag, key, or existing manifest
 /// evidence; it may only fill an absent manifest identity.
 pub proof fn production_exact_body_binding_is_monotonic(
@@ -421,7 +396,6 @@ pub proof fn production_exact_body_binding_is_monotonic(
 {
     reveal(production_exact_body_owner_binding);
 }
-
 /// The four production body stages carry one immutable reducer/key identity
 /// and a monotonic manifest identity. A certified Fetch may begin without a
 /// manifest; BodyAvailable fills it exactly once, after which Store/Validate
@@ -449,7 +423,6 @@ pub proof fn production_fetch_available_store_validate_owner_is_immutable(
     reveal(production_exact_body_owner_binding);
     reveal(production_exact_body_stage_is_owned);
 }
-
 /// Exact source-linked rebind relation called after the service/runtime owner
 /// acknowledges a transfer.
 pub closed spec fn production_exact_body_owner_rebind(
@@ -464,7 +437,6 @@ pub closed spec fn production_exact_body_owner_rebind(
         ProductionExactBodyOwnerProjection
     )
 }
-
 /// Executable Verus instance of the exact production rebind branches.
 pub fn verified_production_exact_body_owner_rebind(
     current: ProductionExactBodyOwnerProjection,
@@ -494,7 +466,6 @@ pub fn verified_production_exact_body_owner_rebind(
     }
     rebound
 }
-
 // ---------------------------------------------------------------------------
 // Effective-lock production refinement claims
 // ---------------------------------------------------------------------------
@@ -529,7 +500,6 @@ pub closed spec fn production_enter_view_effective_lock_trace(
         cursor_after: 0u8,
     }
 }
-
 /// Exact trace projected from the executor's body-owner binding seam.
 pub closed spec fn production_body_ownership_effective_lock_trace(
     current: Option<ProductionExactBodyOwnerProjection>,
@@ -563,7 +533,6 @@ pub closed spec fn production_body_ownership_effective_lock_trace(
         cursor_after: 0u8,
     }
 }
-
 /// Exact trace projected from either executor body-retirement seam.
 pub closed spec fn production_body_capacity_retirement_effective_lock_trace(
     ready_before: u64,
@@ -602,7 +571,6 @@ pub closed spec fn production_body_capacity_retirement_effective_lock_trace(
         cursor_after: 0u8,
     }
 }
-
 /// Exact trace projected from one runtime bounded-service selection.
 pub closed spec fn production_body_service_effective_lock_trace(
     cursor: u8,
@@ -639,7 +607,6 @@ pub closed spec fn production_body_service_effective_lock_trace(
         cursor_after: selection.next,
     }
 }
-
 /// A reducer-accepted active `EnterView` carries the exact installed lock and
 /// matching recovery-fetch evidence into the shared effective-lock trace.
 pub proof fn production_enter_view_uses_post_install_effective_lock(
@@ -682,7 +649,6 @@ pub proof fn production_enter_view_uses_post_install_effective_lock(
         projection.enter_view,
     ));
 }
-
 /// A successful exact-owner binding creates one owner or reuses it without
 /// dropping previously installed manifest evidence.
 pub proof fn production_body_ownership_preserves_effective_lock(
@@ -730,7 +696,6 @@ pub proof fn production_body_ownership_preserves_effective_lock(
         production_body_ownership_effective_lock_trace(current, incoming, binding),
     ));
 }
-
 /// Successful exact retirement accounts for every retained, ready, and store
 /// byte without underflow or residual leakage.
 pub proof fn production_body_capacity_retirement_preserves_effective_lock(
@@ -781,7 +746,6 @@ pub proof fn production_body_capacity_retirement_preserves_effective_lock(
         ),
     ));
 }
-
 /// When any class is ready, the bounded-service cursor selects one exact
 /// ready class and advances to the unique next cursor.
 pub proof fn production_body_service_refines_async_fairness(
@@ -833,5 +797,4 @@ pub proof fn production_body_service_refines_async_fairness(
         ),
     ));
 }
-
 } // verus!

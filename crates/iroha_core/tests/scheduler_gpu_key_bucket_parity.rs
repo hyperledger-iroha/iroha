@@ -2,19 +2,15 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! scheduling outcomes or final state. This toggles the knob and compares events
 //! and balances for a mixed set of transactions.
-
-use std::{borrow::Cow, sync::Arc};
-
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
-use mv::storage::StorageReadOnly; // trait for .get()
-
+use mv::storage::StorageReadOnly;
+use std::{borrow::Cow, sync::Arc}; // trait for .get()
 mod snapshots;
-
 fn test_network_id(label: &[u8]) -> NetworkId {
     NetworkId::from_genesis_hash(
         iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
@@ -22,7 +18,6 @@ fn test_network_id(label: &[u8]) -> NetworkId {
         ),
     )
 }
-
 fn run_with_gpu_bucket(
     gpu_key_bucket: bool,
     network_id: &NetworkId,
@@ -64,7 +59,6 @@ fn run_with_gpu_bucket(
     let mut cfg = state.view().pipeline().clone();
     cfg.gpu_key_bucket = gpu_key_bucket;
     state.set_pipeline(cfg);
-
     // Build and execute block
     let block: SignedBlock = {
         let accepted: Vec<_> = txs
@@ -86,7 +80,6 @@ fn run_with_gpu_bucket(
     drop(sb);
     (json, state)
 }
-
 #[test]
 fn scheduler_gpu_key_bucket_parity() {
     let network_id = test_network_id(b"scheduler-gpu-key-bucket-parity");
@@ -99,7 +92,6 @@ fn scheduler_gpu_key_bucket_parity() {
         );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let b_coin = AssetId::of(rose.clone(), bob_id.clone());
-
     // Mixed instruction set to exercise scheduler prepass and DSU unions
     let txs: Vec<SignedTransaction> = vec![
         TransactionBuilder::new(
@@ -152,12 +144,10 @@ fn scheduler_gpu_key_bucket_parity() {
         .with_instructions([Burn::asset_quantity(2_u32, b_coin.clone())])
         .sign(alice_keypair.private_key()),
     ];
-
     // Compare with gpu_key_bucket OFF vs ON
     let (json_off, state_off) =
         run_with_gpu_bucket(false, &network_id, txs.clone(), &alice_id, &bob_id);
     let (json_on, state_on) = run_with_gpu_bucket(true, &network_id, txs, &alice_id, &bob_id);
-
     assert_eq!(
         json_off, json_on,
         "events must match with/without gpu_key_bucket"

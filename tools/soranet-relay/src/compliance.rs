@@ -3,7 +3,13 @@
 //! Logs are emitted in JSON Lines format, one event per line. Remote addresses
 //! are hashed with an optional salt so operators can correlate events without
 //! leaking raw client information.
-
+use crate::{
+    capability::NegotiatedCapabilities,
+    config::{ComplianceConfig, RelayMode},
+};
+use blake3::Hasher as Blake3Hasher;
+use iroha_crypto::soranet::handshake::HandshakeSuite;
+use norito::json::{self, Map, Value};
 use std::{
     fs::{self, File, OpenOptions},
     io::Write,
@@ -12,18 +18,8 @@ use std::{
     sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
-use blake3::Hasher as Blake3Hasher;
-use iroha_crypto::soranet::handshake::HandshakeSuite;
-use norito::json::{self, Map, Value};
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
-use crate::{
-    capability::NegotiatedCapabilities,
-    config::{ComplianceConfig, RelayMode},
-};
-
 /// Logger that writes compliance events to a JSON Lines file.
 #[derive(Debug)]
 pub struct ComplianceLogger {
@@ -34,7 +30,6 @@ pub struct ComplianceLogger {
     pipeline_spool_dir: Option<PathBuf>,
     writer: Mutex<File>,
 }
-
 /// Structured metadata describing a throttling decision for compliance logs.
 #[derive(Debug, Clone, Copy)]
 pub struct ThrottleAudit {
@@ -51,7 +46,6 @@ pub struct ThrottleAudit {
     /// Optional gap observed between attempts when throttled.
     pub observed_gap: Option<Duration>,
 }
-
 impl ComplianceLogger {
     /// Construct a logger from the validated configuration.
     ///
@@ -79,7 +73,6 @@ impl ComplianceLogger {
             writer: Mutex::new(file),
         }))
     }
-
     /// Record a successful handshake.
     #[allow(clippy::too_many_arguments)]
     pub fn log_handshake_success(
@@ -141,7 +134,6 @@ impl ComplianceLogger {
         }
         self.append(Value::Object(entry))
     }
-
     /// Record a rejected handshake with `reason`.
     #[allow(clippy::too_many_arguments)]
     pub fn log_handshake_reject(
@@ -215,7 +207,6 @@ impl ComplianceLogger {
         }
         self.append(Value::Object(entry))
     }
-
     /// Record the closure of a circuit along with selected telemetry.
     #[allow(clippy::too_many_arguments)]
     pub fn log_circuit_closed(
@@ -275,7 +266,6 @@ impl ComplianceLogger {
         entry.insert("reason".to_owned(), Value::String(reason.to_owned()));
         self.append(Value::Object(entry))
     }
-
     /// Record successful exit route resolution.
     #[allow(clippy::too_many_arguments)]
     pub fn log_exit_route_open(
@@ -340,7 +330,6 @@ impl ComplianceLogger {
         );
         self.append(Value::Object(entry))
     }
-
     /// Record a rejected exit route attempt.
     pub fn log_exit_route_reject(
         &self,
@@ -377,7 +366,6 @@ impl ComplianceLogger {
         entry.insert("reason".to_owned(), Value::String(reason.to_owned()));
         self.append(Value::Object(entry))
     }
-
     /// Record the ingestion result of a blinded bandwidth proof.
     #[allow(clippy::too_many_arguments)]
     pub fn log_bandwidth_proof(
@@ -446,7 +434,6 @@ impl ComplianceLogger {
         );
         self.append(Value::Object(entry))
     }
-
     fn append(&self, value: Value) -> Result<(), ComplianceError> {
         let rendered = json::to_string(&value)?;
         {
@@ -463,18 +450,14 @@ impl ComplianceLogger {
                 self.write_entry(&mut writer_guard, &rendered)?;
             }
         }
-
         if let Some(dir) = &self.pipeline_spool_dir {
             self.write_spool(dir, &rendered)?;
         }
-
         Ok(())
     }
-
     fn remote_digest(&self, remote: SocketAddr) -> String {
         self.salted_hash_hex(remote.to_string().as_bytes())
     }
-
     fn salted_hash_hex(&self, bytes: &[u8]) -> String {
         let mut hasher = Blake3Hasher::new();
         if let Some(salt) = &self.hash_salt {
@@ -483,7 +466,6 @@ impl ComplianceLogger {
         hasher.update(bytes);
         hasher.finalize().to_hex().to_string()
     }
-
     fn write_entry(&self, writer: &mut File, rendered: &str) -> Result<(), ComplianceError> {
         writer
             .write_all(rendered.as_bytes())
@@ -503,7 +485,6 @@ impl ComplianceLogger {
         })?;
         Ok(())
     }
-
     fn should_rotate(&self, writer: &File, next_len: usize) -> Result<bool, ComplianceError> {
         if self.max_bytes == 0 {
             return Ok(false);
@@ -517,7 +498,6 @@ impl ComplianceLogger {
             .len();
         Ok(size + next_len as u64 > self.max_bytes)
     }
-
     fn rotate_logs(&self) -> Result<(), ComplianceError> {
         if self.max_backups == 0 {
             return Ok(());
@@ -549,7 +529,6 @@ impl ComplianceLogger {
         }
         Ok(())
     }
-
     fn backup_path(&self, index: u8) -> PathBuf {
         let file_name = self
             .path
@@ -559,7 +538,6 @@ impl ComplianceLogger {
         let rotated = format!("{file_name}.{index}");
         self.path.with_file_name(rotated)
     }
-
     fn write_spool(&self, dir: &Path, payload: &str) -> Result<(), ComplianceError> {
         fs::create_dir_all(dir).map_err(|source| ComplianceError::Io {
             path: dir.to_path_buf(),
@@ -604,7 +582,6 @@ impl ComplianceLogger {
         Ok(())
     }
 }
-
 fn open_log_file(path: &Path) -> Result<File, ComplianceError> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -624,29 +601,24 @@ fn open_log_file(path: &Path) -> Result<File, ComplianceError> {
         })?;
     Ok(file)
 }
-
 fn timestamp_string() -> String {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        net::{IpAddr, Ipv4Addr, SocketAddr},
-    };
-
-    use norito::json::{self, Value as JsonValue};
-    use tempfile::tempdir;
-
     use super::*;
     use crate::capability::{
         GreaseEntry, KemAdvertisement, KemId, NegotiatedCapabilities, SignatureAdvertisement,
         SignatureId,
     };
-
+    use norito::json::{self, Value as JsonValue};
+    use std::{
+        fs,
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+    };
+    use tempfile::tempdir;
     fn build_logger() -> (ComplianceLogger, std::path::PathBuf, tempfile::TempDir) {
         let temp = tempdir().expect("tempdir");
         let log_path = temp.path().join("compliance.jsonl");
@@ -664,7 +636,6 @@ mod tests {
             .expect("logger");
         (logger, log_path, temp)
     }
-
     fn sample_negotiated() -> NegotiatedCapabilities {
         NegotiatedCapabilities {
             kem: KemAdvertisement {
@@ -684,13 +655,11 @@ mod tests {
             constant_rate: None,
         }
     }
-
     #[test]
     fn circuit_closed_event_logged() {
         let (logger, log_path, _temp) = build_logger();
         let remote = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4433);
         let signatures = vec![("dilithium3".to_owned(), true)];
-
         logger
             .log_circuit_closed(
                 remote,
@@ -704,11 +673,9 @@ mod tests {
                 "application_closed",
             )
             .expect("log circuit closed");
-
         let contents = std::fs::read_to_string(log_path).expect("read log");
         let line = contents.lines().next().expect("line");
         let value: JsonValue = norito::json::from_str(line).expect("json value");
-
         let expected_hash = blake3::hash(remote.to_string().as_bytes())
             .to_hex()
             .to_string();
@@ -729,7 +696,6 @@ mod tests {
         assert_eq!(signature["id"].as_str().unwrap(), "dilithium3");
         assert!(signature["required"].as_bool().expect("required bool"));
     }
-
     #[test]
     fn exit_route_events_logged() {
         let (logger, log_path, _temp) = build_logger();
@@ -738,7 +704,6 @@ mod tests {
         let route = [0x22u8; 32];
         let stream = [0x33u8; 32];
         let room = [0x44u8; 32];
-
         logger
             .log_exit_route_open(
                 remote,
@@ -764,12 +729,10 @@ mod tests {
                 "route missing",
             )
             .expect("log exit reject");
-
         let contents = std::fs::read_to_string(&log_path).expect("read log");
         let mut lines = contents.lines();
         let open: JsonValue = norito::json::from_str(lines.next().unwrap()).unwrap();
         let reject: JsonValue = norito::json::from_str(lines.next().unwrap()).unwrap();
-
         assert_eq!(open["event"].as_str().unwrap(), "exit_route_opened");
         assert_eq!(open["mode"].as_str().unwrap(), "exit");
         assert_eq!(open["stream"].as_str().unwrap(), "kaigi-stream");
@@ -794,13 +757,11 @@ mod tests {
             open["adapter_target_hash"].as_str().unwrap(),
             expected_target_hash
         );
-
         assert_eq!(reject["event"].as_str().unwrap(), "exit_route_rejected");
         assert_eq!(reject["stream"].as_str().unwrap(), "kaigi-stream");
         assert_eq!(reject["channel"].as_str().unwrap(), "deadbeef");
         assert_eq!(reject["reason"].as_str().unwrap(), "route missing");
     }
-
     #[test]
     fn spool_writes_handshake_payload() {
         let temp = tempdir().expect("tempdir");
@@ -818,7 +779,6 @@ mod tests {
         let logger = ComplianceLogger::from_config(&config)
             .expect("logger result")
             .expect("logger");
-
         let negotiated = sample_negotiated();
         let remote = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9001);
         logger
@@ -834,13 +794,11 @@ mod tests {
                 None,
             )
             .expect("write handshake spool entry");
-
         let entries: Vec<_> = fs::read_dir(&spool_dir)
             .expect("read spool dir")
             .collect::<Result<_, _>>()
             .expect("spool entries");
         assert_eq!(entries.len(), 1, "expected one spool file");
-
         let payload = fs::read_to_string(entries[0].path()).expect("read spool payload");
         let value: JsonValue = norito::json::from_str(&payload).expect("parse spool json");
         assert_eq!(value["event"].as_str().unwrap(), "handshake_accepted");
@@ -849,13 +807,11 @@ mod tests {
             .to_string();
         assert_eq!(value["remote_hash"].as_str().unwrap(), expected_hash);
     }
-
     #[test]
     fn success_log_includes_handshake_metrics() {
         let (logger, log_path, _temp) = build_logger();
         let negotiated = sample_negotiated();
         let warnings = vec!["client preferred NK3 but negotiated NK2".to_string()];
-
         logger
             .log_handshake_success(
                 SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9_000),
@@ -869,23 +825,19 @@ mod tests {
                 Some(42),
             )
             .expect("write log");
-
         let contents = fs::read_to_string(&log_path).expect("read log");
         let line = contents.lines().next().expect("line");
         let value: JsonValue = json::from_str(line).expect("json value");
-
         assert_eq!(value["handshake_millis"].as_u64(), Some(87));
         assert_eq!(value["handshake_bytes"].as_u64(), Some(2_048));
         assert_eq!(value["puzzle_verify_micros"].as_u64(), Some(42));
         let warnings_value = value["warnings"].as_array().expect("warnings array");
         assert_eq!(warnings_value.len(), 1);
     }
-
     #[test]
     fn reject_log_surfaces_warnings_and_latency() {
         let (logger, log_path, _temp) = build_logger();
         let warnings = vec!["relay omitted suite_list capability".to_string()];
-
         logger
             .log_handshake_reject(
                 SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9_001),
@@ -897,11 +849,9 @@ mod tests {
                 &warnings,
             )
             .expect("write log");
-
         let contents = fs::read_to_string(&log_path).expect("read log");
         let line = contents.lines().next().expect("line");
         let value: JsonValue = json::from_str(line).expect("json value");
-
         assert_eq!(value["handshake_millis"].as_u64(), Some(123));
         let warnings_value = value["warnings"].as_array().expect("warnings array");
         assert_eq!(warnings_value.len(), 1);
@@ -910,7 +860,6 @@ mod tests {
             Some("relay omitted suite_list capability")
         );
     }
-
     #[test]
     fn bandwidth_proof_events_include_status() {
         let (logger, log_path, _temp) = build_logger();
@@ -918,7 +867,6 @@ mod tests {
         let measurement = [0xAB; 32];
         let relay_id = [0xCD; 32];
         let verifier = "relay@sora";
-
         logger
             .log_bandwidth_proof(
                 remote,
@@ -936,7 +884,6 @@ mod tests {
                 None,
             )
             .expect("log proof");
-
         logger
             .log_bandwidth_proof(
                 remote,
@@ -954,12 +901,10 @@ mod tests {
                 Some("duplicate_measurement"),
             )
             .expect("log duplicate");
-
         let contents = fs::read_to_string(&log_path).expect("read log");
         let mut lines = contents.lines();
         let accepted: JsonValue = json::from_str(lines.next().unwrap()).unwrap();
         let rejected: JsonValue = json::from_str(lines.next().unwrap()).unwrap();
-
         let expected_remote_hash = blake3::hash(remote.to_string().as_bytes())
             .to_hex()
             .to_string();
@@ -985,12 +930,10 @@ mod tests {
             accepted["verifier_hash"].as_str(),
             Some(verifier_hash.as_str())
         );
-
         assert!(!rejected["accepted"].as_bool().unwrap());
         assert_eq!(rejected["reason"].as_str(), Some("duplicate_measurement"));
     }
 }
-
 /// Errors that may occur while logging compliance events.
 #[derive(Debug, Error)]
 pub enum ComplianceError {

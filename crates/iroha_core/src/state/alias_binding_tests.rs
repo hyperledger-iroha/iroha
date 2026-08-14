@@ -12,7 +12,6 @@ fn asset_alias_test_world() -> (World, AssetDefinitionId) {
         Some(domain_id.clone()),
     )
     .build(&authority);
-
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     (
@@ -20,7 +19,6 @@ fn asset_alias_test_world() -> (World, AssetDefinitionId) {
         definition_id,
     )
 }
-
 fn alias_in_domain(domain_id: &DomainId, label: Name) -> AccountAlias {
     AccountAlias::new(
         label,
@@ -28,7 +26,6 @@ fn alias_in_domain(domain_id: &DomainId, label: Name) -> AccountAlias {
         DataSpaceId::UNIVERSAL,
     )
 }
-
 fn seed_active_account_alias_binding(world: &mut World, owner: &AccountId, alias: &AccountAlias) {
     world.account_aliases.insert(alias.clone(), owner.clone());
     let mut aliases = world
@@ -45,7 +42,6 @@ fn seed_active_account_alias_binding(world: &mut World, owner: &AccountId, alias
         alias.clone(),
         AccountRekeyRecord::new(alias.clone(), owner.clone()),
     );
-
     let selector = crate::sns::selector_for_account_alias(alias, &DataSpaceCatalog::default())
         .expect("account alias selector");
     let address =
@@ -69,7 +65,6 @@ fn seed_active_account_alias_binding(world: &mut World, owner: &AccountId, alias
         .rebuild_account_scope_directory()
         .expect("active account alias must define a valid account scope");
 }
-
 fn seed_account_alias_lease(
     tx: &mut StateTransaction<'_, '_>,
     owner: &AccountId,
@@ -126,7 +121,6 @@ fn seed_account_alias_lease(
         norito::codec::Encode::encode(&record),
     );
 }
-
 #[test]
 fn new_for_testing_seeds_reserved_universal_dataspace_name_record() {
     let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
@@ -137,7 +131,6 @@ fn new_for_testing_seeds_reserved_universal_dataspace_name_record() {
         crate::kura::Kura::blank_kura_for_testing(),
         crate::query::store::LiveQueryStore::start_test(),
     );
-
     let view = state.view();
     assert_eq!(
         crate::sns::active_dataspace_owner_by_alias(
@@ -148,7 +141,6 @@ fn new_for_testing_seeds_reserved_universal_dataspace_name_record() {
         Some(genesis_id)
     );
 }
-
 #[test]
 fn reserved_universal_dataspace_seed_classifies_noop_then_permission_repair() {
     let owner = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
@@ -177,7 +169,6 @@ fn reserved_universal_dataspace_seed_classifies_noop_then_permission_repair() {
         .expect("classify seeded universal dataspace"),
         iroha_data_model::alias_setup::AliasPlanDispositionV1::NoOp
     );
-
     let removed = crate::alias_setup::exact_alias_permission_bundle(&intent)
         .into_iter()
         .next()
@@ -201,7 +192,6 @@ fn reserved_universal_dataspace_seed_classifies_noop_then_permission_repair() {
         iroha_data_model::alias_setup::AliasPlanDispositionV1::Repair
     );
 }
-
 #[test]
 fn asset_definition_alias_binding_status_classifies_lifecycle() {
     let leased_alias: AssetDefinitionAlias = "usd#lease".parse().expect("lease alias");
@@ -227,7 +217,6 @@ fn asset_definition_alias_binding_status_classifies_lifecycle() {
         binding.status_at(251),
         AssetDefinitionAliasLeaseStatus::ExpiredPendingCleanup
     );
-
     let permanent_binding = AssetDefinitionAliasBindingRecord {
         alias: "usd#permanent".parse().expect("permanent alias"),
         lease_expiry_ms: None,
@@ -239,7 +228,6 @@ fn asset_definition_alias_binding_status_classifies_lifecycle() {
         AssetDefinitionAliasLeaseStatus::Permanent
     );
     assert!(!permanent_binding.is_grace_expired_at(u64::MAX));
-
     let no_grace_binding = AssetDefinitionAliasBindingRecord {
         alias: "usd#no_grace".parse().expect("no-grace alias"),
         lease_expiry_ms: Some(200),
@@ -252,7 +240,6 @@ fn asset_definition_alias_binding_status_classifies_lifecycle() {
         no_grace_binding.status_at(200),
         AssetDefinitionAliasLeaseStatus::ExpiredPendingCleanup
     );
-
     let malformed_binding = AssetDefinitionAliasBindingRecord {
         alias: "usd#malformed".parse().expect("malformed alias"),
         lease_expiry_ms: None,
@@ -264,7 +251,6 @@ fn asset_definition_alias_binding_status_classifies_lifecycle() {
         "a grace-only record must never revive a permanent alias"
     );
 }
-
 #[test]
 fn contract_alias_binding_without_grace_expires_at_lease_boundary() {
     let binding = ContractAliasBindingRecord {
@@ -280,15 +266,12 @@ fn contract_alias_binding_without_grace_expires_at_lease_boundary() {
         ContractAliasLeaseStatus::ExpiredPendingCleanup
     );
 }
-
 #[test]
 fn alias_binding_rejects_incoherent_lease_windows() {
     let error = validate_alias_lease_window(None, Some(300), 100)
         .expect_err("grace without a lease must fail");
     assert!(error.to_string().contains("requires lease_expiry_ms"));
-
     let mut world = World::new();
-
     let contract_address = ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
             .parse()
@@ -308,7 +291,6 @@ fn alias_binding_rejects_incoherent_lease_windows() {
         )
         .expect_err("grace before expiry must fail");
     assert!(error.to_string().contains("must not precede"));
-
     let error = world
         .bind_contract_alias(
             &contract_address,
@@ -320,7 +302,6 @@ fn alias_binding_rejects_incoherent_lease_windows() {
         .expect_err("already-expired lease must fail");
     assert!(error.to_string().contains("greater than bound_at_ms"));
 }
-
 #[test]
 fn alias_index_rebuild_rejects_incoherent_persisted_lease_windows() {
     let (mut world, definition_id) = asset_alias_test_world();
@@ -338,7 +319,6 @@ fn alias_index_rebuild_rejects_incoherent_persisted_lease_windows() {
         .rebuild_asset_definition_alias_indexes()
         .expect_err("asset alias rebuild must reject grace without a lease");
     assert!(error.contains("requires lease_expiry_ms"));
-
     let contract_address = ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
             .parse()
@@ -365,7 +345,6 @@ fn alias_index_rebuild_rejects_incoherent_persisted_lease_windows() {
         .expect_err("contract alias rebuild must reject a non-forward lease");
     assert!(error.contains("greater than bound_at_ms"));
 }
-
 #[test]
 fn world_bind_contract_alias_keeps_indexes_consistent() {
     let mut world = World::new();
@@ -389,7 +368,6 @@ fn world_bind_contract_alias_keeps_indexes_consistent() {
     .expect("other contract address");
     let first_alias: ContractAlias = "router::universal".parse().expect("first alias");
     let second_alias: ContractAlias = "router_v2::universal".parse().expect("second alias");
-
     world
         .bind_contract_alias(
             &contract_address,
@@ -412,7 +390,6 @@ fn world_bind_contract_alias_keeps_indexes_consistent() {
             .alias,
         first_alias
     );
-
     world
         .bind_contract_alias(&contract_address, second_alias.clone(), None, None, 400)
         .expect("rebind alias");
@@ -430,7 +407,6 @@ fn world_bind_contract_alias_keeps_indexes_consistent() {
             .bound_at_ms,
         400
     );
-
     let err = world
         .bind_contract_alias(&other_contract_address, second_alias, None, None, 500)
         .expect_err("alias reuse across contracts must fail");
@@ -439,7 +415,6 @@ fn world_bind_contract_alias_keeps_indexes_consistent() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn contract_alias_time_lookup_rejects_index_without_binding_record() {
     let mut world = World::new();
@@ -456,7 +431,6 @@ fn contract_alias_time_lookup_rejects_index_without_binding_record() {
     world
         .contract_aliases
         .insert(alias.clone(), contract_address.clone());
-
     let view = world.view();
     assert_eq!(
         view.contract_address_by_alias(&alias),
@@ -469,7 +443,6 @@ fn contract_alias_time_lookup_rejects_index_without_binding_record() {
         "an index-only entry must never become an effective first-release binding"
     );
 }
-
 #[test]
 fn asset_alias_time_lookup_rejects_index_without_binding_record() {
     let (mut world, definition_id) = asset_alias_test_world();
@@ -477,7 +450,6 @@ fn asset_alias_time_lookup_rejects_index_without_binding_record() {
     world
         .asset_definition_aliases
         .insert(alias.clone(), definition_id.clone());
-
     let view = world.view();
     assert_eq!(
         view.asset_definition_id_by_alias(&alias),
@@ -490,7 +462,6 @@ fn asset_alias_time_lookup_rejects_index_without_binding_record() {
         "an index-only entry must never become an effective first-release binding"
     );
 }
-
 #[test]
 fn rebuild_asset_definition_alias_indexes_prefers_persisted_bindings() {
     let (mut world, definition_id) = asset_alias_test_world();
@@ -501,7 +472,6 @@ fn rebuild_asset_definition_alias_indexes_prefers_persisted_bindings() {
         grace_until_ms: Some(300),
         bound_at_ms: 100,
     };
-
     world.asset_definition_aliases = Storage::default();
     world.asset_definition_alias_bindings =
         std::iter::once((definition_id.clone(), binding.clone())).collect();
@@ -509,7 +479,6 @@ fn rebuild_asset_definition_alias_indexes_prefers_persisted_bindings() {
         .rebuild_asset_definition_alias_indexes()
         .expect("rebuild should succeed");
     let view = world.view();
-
     assert_eq!(
         view.asset_definition_aliases().get(&persisted_alias),
         Some(&definition_id)
@@ -538,7 +507,6 @@ fn rebuild_asset_definition_alias_indexes_prefers_persisted_bindings() {
         "stored asset definition alias must stay empty; bindings drive alias reads"
     );
 }
-
 #[test]
 fn rebuild_asset_definition_alias_indexes_preserves_mv_revert_maps() {
     let (mut world, existing_definition_id) = asset_alias_test_world();
@@ -570,7 +538,6 @@ fn rebuild_asset_definition_alias_indexes_preserves_mv_revert_maps() {
         grace_until_ms: None,
         bound_at_ms: 100,
     };
-
     {
         let mut definitions = world.asset_definitions.block();
         assert!(
@@ -589,16 +556,13 @@ fn rebuild_asset_definition_alias_indexes_preserves_mv_revert_maps() {
         );
         bindings.commit();
     }
-
     let definitions_before =
         norito::json::to_json(&world.asset_definitions).expect("serialize definitions");
     let bindings_before = norito::json::to_json(&world.asset_definition_alias_bindings)
         .expect("serialize alias bindings");
-
     world
         .rebuild_asset_definition_alias_indexes()
         .expect("rebuild should succeed");
-
     assert_eq!(
         norito::json::to_json(&world.asset_definitions).expect("serialize definitions"),
         definitions_before,
@@ -610,7 +574,6 @@ fn rebuild_asset_definition_alias_indexes_preserves_mv_revert_maps() {
         bindings_before,
         "rebuilding a derived index must preserve the authoritative binding MV history"
     );
-
     let definitions = world.asset_definitions.block_and_revert();
     assert!(
         definitions.get(&added_definition_id).is_none(),
@@ -624,7 +587,6 @@ fn rebuild_asset_definition_alias_indexes_preserves_mv_revert_maps() {
     );
     bindings.commit();
 }
-
 #[test]
 fn rebuild_asset_definition_alias_indexes_rejects_inline_alias_without_binding() {
     let (mut world, definition_id) = asset_alias_test_world();
@@ -641,7 +603,6 @@ fn rebuild_asset_definition_alias_indexes_rejects_inline_alias_without_binding()
     world
         .asset_definitions
         .insert(definition_id.clone(), stored_definition);
-
     let err = world
         .rebuild_asset_definition_alias_indexes()
         .expect_err("rebuild must reject inline asset-definition aliases");
@@ -652,7 +613,6 @@ fn rebuild_asset_definition_alias_indexes_rejects_inline_alias_without_binding()
         )
     );
 }
-
 #[test]
 fn rebuild_asset_definition_alias_indexes_rejects_inline_alias_even_with_binding() {
     let (mut world, definition_id) = asset_alias_test_world();
@@ -678,7 +638,6 @@ fn rebuild_asset_definition_alias_indexes_rejects_inline_alias_even_with_binding
     world
         .asset_definitions
         .insert(definition_id.clone(), stored_definition);
-
     let err = world
         .rebuild_asset_definition_alias_indexes()
         .expect_err("rebuild must reject inline asset-definition aliases");
@@ -689,7 +648,6 @@ fn rebuild_asset_definition_alias_indexes_rejects_inline_alias_even_with_binding
         )
     );
 }
-
 #[test]
 fn asset_definition_alias_lookup_stops_after_grace_even_before_sweep() {
     let (mut world, definition_id) = asset_alias_test_world();
@@ -708,7 +666,6 @@ fn asset_definition_alias_lookup_stops_after_grace_even_before_sweep() {
     world
         .rebuild_asset_definition_alias_indexes()
         .expect("rebuild should succeed");
-
     let view = world.view();
     assert_eq!(
         view.asset_definition_id_by_alias_at(&alias, 249),

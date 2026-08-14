@@ -1,52 +1,42 @@
 //! Regression tests for string length-prefix decoding.
-
 use norito::{
     NoritoDeserialize,
     core::{self, DecodeFlagsGuard, header_flags, reset_decode_state},
 };
-
 #[test]
 fn compact_len_string_preserves_leading_varint_byte() {
     let raw = vec![0x01, b'a'];
     let s = String::from_utf8(raw.clone()).expect("valid utf8");
-
     let mut payload = Vec::new();
     {
         let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
         core::write_len_to_vec(&mut payload, raw.len() as u64);
     }
     payload.extend_from_slice(&raw);
-
     let bytes = core::frame_bare_with_header_flags::<String>(&payload, header_flags::COMPACT_LEN)
         .expect("frame payload");
-
     reset_decode_state();
     let out: String = core::decode_from_bytes(&bytes).expect("decode string");
     assert_eq!(out.as_bytes(), s.as_bytes());
     reset_decode_state();
 }
-
 #[test]
 fn compact_len_str_preserves_leading_varint_byte() {
     let raw = vec![0x01, b'a'];
     let s = String::from_utf8(raw.clone()).expect("valid utf8");
-
     let mut payload = Vec::new();
     {
         let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
         core::write_len_to_vec(&mut payload, raw.len() as u64);
     }
     payload.extend_from_slice(&raw);
-
     let bytes = core::frame_bare_with_header_flags::<String>(&payload, header_flags::COMPACT_LEN)
         .expect("frame payload");
-
     reset_decode_state();
     let out: &str = core::decode_from_bytes(&bytes).expect("decode str");
     assert_eq!(out.as_bytes(), s.as_bytes());
     reset_decode_state();
 }
-
 #[test]
 fn archived_string_requires_bounded_payload_context() {
     reset_decode_state();
@@ -54,7 +44,6 @@ fn archived_string_requires_bounded_payload_context() {
     raw.extend_from_slice(&8u64.to_le_bytes());
     raw.extend_from_slice(b"abcdefgh");
     let s = String::from_utf8(raw.clone()).expect("valid utf8");
-
     let mut payload = Vec::new();
     {
         let _guard = DecodeFlagsGuard::enter(0);
@@ -65,7 +54,6 @@ fn archived_string_requires_bounded_payload_context() {
     let error = <String as NoritoDeserialize>::try_deserialize(archived.archived())
         .expect_err("an archived address alone must not authorize pointer reads");
     assert!(matches!(error, core::Error::MissingPayloadContext));
-
     let _payload = core::PayloadCtxGuard::enter(archived.bytes());
     let decoded =
         <String as NoritoDeserialize>::try_deserialize(archived.archived()).expect("decode string");

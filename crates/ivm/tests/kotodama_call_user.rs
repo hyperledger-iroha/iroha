@@ -1,8 +1,6 @@
 //! Tests for user-defined function calls in Kotodama.
-
 use ivm::{IVM, KotodamaCompiler};
 mod common;
-
 #[test]
 fn user_defined_call_returns_42() {
     // Repeated parameter types make the call named-only in V1.
@@ -14,7 +12,6 @@ fn user_defined_call_returns_42() {
     "#;
     let compiler = KotodamaCompiler::new();
     let program = compiler.compile_source(src).expect("compile kotodama");
-
     let mut vm = IVM::new(10_000);
     vm.load_program(&program).expect("load program");
     common::select_kotodama_entrypoint(&mut vm, &program, "main");

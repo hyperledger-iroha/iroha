@@ -2,9 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Ensures that enabling the skeleton parallel-apply path yields identical
 //! outcomes to the sequential apply path.
-
-use std::{borrow::Cow, collections::BTreeSet, sync::Arc, time::Duration};
-
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -13,12 +10,11 @@ use iroha_core::{
 use iroha_data_model::prelude::*;
 use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
+use std::{borrow::Cow, collections::BTreeSet, sync::Arc, time::Duration};
 mod snapshots;
 use snapshots::assert_events;
-
 // Use a fixed creation time so event fixtures do not depend on wall clock.
 const FIXTURE_TIME: Duration = Duration::from_millis(1);
-
 fn test_network_id(label: &[u8]) -> NetworkId {
     NetworkId::from_genesis_hash(
         iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
@@ -26,7 +22,6 @@ fn test_network_id(label: &[u8]) -> NetworkId {
         ),
     )
 }
-
 fn tx_builder(network_id: &NetworkId, authority: &AccountId) -> TransactionBuilder {
     let mut builder = TransactionBuilder::new(
         *network_id,
@@ -36,12 +31,10 @@ fn tx_builder(network_id: &NetworkId, authority: &AccountId) -> TransactionBuild
     builder.set_creation_time(FIXTURE_TIME);
     builder
 }
-
 fn block_time_source() -> TimeSource {
     let (_, source) = TimeSource::new_mock(FIXTURE_TIME);
     source
 }
-
 #[allow(clippy::too_many_lines)]
 #[test]
 fn parallel_apply_matches_sequential_for_log_and_mint() {
@@ -74,7 +67,6 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
     // Kura + query handles
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-
     // Two independent transactions: a mint and a log. Mint will take the standard path,
     // log is handled by detached path; overall results should match sequential mode.
     let tx1 = tx_builder(&network_id, &alice_id)
@@ -92,7 +84,6 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
     let tx2 = tx_builder(&network_id, &bob_id)
         .with_instructions([Log::new(Level::INFO, "t2".to_string())])
         .sign(iroha_test_samples::BOB_KEYPAIR.private_key());
-
     // Build a NewBlock with both transactions
     let tx1 = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
     let tx2 = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
@@ -103,7 +94,6 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
     .chain(0, None)
     .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
     .unpack(|_| {});
-
     // Run sequential apply
     let world_seq = build_world();
     let mut state_seq = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
@@ -184,7 +174,6 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         .validate_and_record_transactions(&mut sb_seq)
         .unpack(|_| {});
     sb_seq.commit().unwrap();
-
     // Run parallel-apply (skeleton path)
     let world_par = build_world();
     let mut state_par = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
@@ -264,7 +253,6 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         .validate_and_record_transactions(&mut sb_par)
         .unpack(|_| {});
     sb_par.commit().unwrap();
-
     // Compare results order and kinds
     let seq_ok: Vec<_> = vb_seq
         .as_ref()
@@ -277,12 +265,10 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         .map(|r| r.as_ref().is_ok())
         .collect();
     assert_eq!(seq_ok, par_ok, "approval/rejection sequence must match");
-
     // Compare that final state roots are identical
     let root_seq = vb_seq.as_ref().header().merkle_root();
     let root_par = vb_par.as_ref().header().merkle_root();
     assert_eq!(root_seq, root_par, "merkle roots must match");
-
     // Compare resulting asset balances (Alice's coin should be 10 in both states)
     let a_coin: AssetId = AssetId::of(
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -305,7 +291,6 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         .map_or_else(Quantity::zero, |v| v.clone().into_inner());
     assert_eq!(bal_seq, bal_par, "final balances must match");
 }
-
 fn run_block_and_events(
     parallel_apply: bool,
     network_id: &NetworkId,
@@ -370,7 +355,6 @@ fn run_block_and_events(
     let mut cfg = state.view().pipeline().clone();
     cfg.parallel_apply = parallel_apply;
     state.set_pipeline(cfg);
-
     // Build a signed block from txs
     let block: SignedBlock = {
         let accepted: Vec<_> = txs
@@ -391,9 +375,7 @@ fn run_block_and_events(
     drop(sb);
     (events, state)
 }
-
 // event_list_json moved to snapshot helpers; removed.
-
 #[test]
 fn events_snapshot_mint_burn_transfer_match_between_modes() {
     let network_id = test_network_id(b"parallel-apply-asset-events");
@@ -406,7 +388,6 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
         );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let b_coin = AssetId::of(rose.clone(), bob_id.clone());
-
     // Build three transactions: mint to Alice, burn from Bob, transfer Alice->Bob
     let tx_mint = tx_builder(&network_id, &alice_id)
         .with_instructions([Mint::asset_quantity(7_u32, a_coin.clone())])
@@ -421,7 +402,6 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
             bob_id.clone(),
         )])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-
     // Sequential
     let (events_seq, state_seq) = run_block_and_events(
         false,
@@ -436,11 +416,9 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
         vec![tx_mint, tx_burn, tx_xfer],
         vec![alice_id.clone(), bob_id.clone()],
     );
-
     // Fixture-backed parity snapshots
     assert_events("mint_burn_transfer", &events_seq);
     assert_events("mint_burn_transfer", &events_par);
-
     // Sanity: balances equal (Alice had 60 +7 -5 = 62; Bob 10 -3 +5 = 12)
     let bal = |state: &iroha_core::state::State, id: &AssetId| {
         state
@@ -453,7 +431,6 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
     assert_eq!(bal(&state_seq, &a_coin), bal(&state_par, &a_coin));
     assert_eq!(bal(&state_seq, &b_coin), bal(&state_par, &b_coin));
 }
-
 #[test]
 fn events_snapshot_kv_and_nft_match_between_modes() {
     use iroha_data_model::prelude::*;
@@ -462,7 +439,6 @@ fn events_snapshot_kv_and_nft_match_between_modes() {
     let bob_id = (*iroha_test_samples::BOB_ID).clone();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let nft_id: NftId = "n0$wonderland".parse().unwrap();
-
     // Build transactions exercising account/domain kv and full NFT lifecycle
     let tx_acc_set = tx_builder(&network_id, &alice_id)
         .with_instructions([SetKeyValue::account(
@@ -513,7 +489,6 @@ fn events_snapshot_kv_and_nft_match_between_modes() {
             "dk".parse().unwrap(),
         )])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-
     let txs = vec![
         tx_acc_set.clone(),
         tx_dom_set.clone(),
@@ -525,7 +500,6 @@ fn events_snapshot_kv_and_nft_match_between_modes() {
         tx_acc_rm.clone(),
         tx_dom_rm.clone(),
     ];
-
     // Sequential
     let (events_seq, _state_seq) = run_block_and_events(
         false,
@@ -540,11 +514,9 @@ fn events_snapshot_kv_and_nft_match_between_modes() {
         txs,
         vec![alice_id.clone(), bob_id.clone()],
     );
-
     assert_events("kv_and_nft_lifecycle", &events_seq);
     assert_events("kv_and_nft_lifecycle", &events_par);
 }
-
 #[test]
 fn events_snapshot_asset_definition_kv_match_between_modes() {
     let network_id = test_network_id(b"parallel-apply-asset-definition-kv");
@@ -553,7 +525,6 @@ fn events_snapshot_asset_definition_kv_match_between_modes() {
         DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
-
     let tx_set = tx_builder(&network_id, &alice_id)
         .with_instructions([SetKeyValue::asset_definition(
             ad.clone(),
@@ -567,7 +538,6 @@ fn events_snapshot_asset_definition_kv_match_between_modes() {
             "spec".parse().unwrap(),
         )])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-
     let (events_seq, _) = run_block_and_events(
         false,
         &network_id,
@@ -583,7 +553,6 @@ fn events_snapshot_asset_definition_kv_match_between_modes() {
     assert_events("asset_definition_kv", &events_seq);
     assert_events("asset_definition_kv", &events_par);
 }
-
 #[test]
 fn owner_transfer_domain_and_asset_def_parity() {
     let network_id = test_network_id(b"parallel-apply-owner-transfer");
@@ -594,7 +563,6 @@ fn owner_transfer_domain_and_asset_def_parity() {
         DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
-
     let tx_dom_xfer = tx_builder(&network_id, &alice_id)
         .with_instructions([Transfer::domain(
             alice_id.clone(),
@@ -609,7 +577,6 @@ fn owner_transfer_domain_and_asset_def_parity() {
             bob_id.clone(),
         )])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-
     // Sequential
     let (events_seq, state_seq) = run_block_and_events(
         false,
@@ -624,11 +591,9 @@ fn owner_transfer_domain_and_asset_def_parity() {
         vec![tx_dom_xfer, tx_ad_xfer],
         vec![alice_id.clone(), bob_id.clone()],
     );
-
     // Events parity via fixture snapshots
     assert_events("owner_transfer_domain_asset_def", &events_seq);
     assert_events("owner_transfer_domain_asset_def", &events_par);
-
     // State parity: owners equal
     let dom_owner_seq = state_seq
         .view()
@@ -648,7 +613,6 @@ fn owner_transfer_domain_and_asset_def_parity() {
     // ensure both updates target the intended owner instead of insisting on order parity.
     // Ownership transfer order is not deterministic across lanes; ensure parity instead of exact owner.
     assert_eq!(dom_owner_seq, dom_owner_par, "domain owners must match");
-
     let ad_owner_seq = state_seq
         .view()
         .world()

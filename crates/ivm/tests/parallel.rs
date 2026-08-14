@@ -1,11 +1,3 @@
-use std::{
-    any::Any,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
-
 use ivm::{
     IVM, VMError, encoding,
     host::{AccessLog, IVMHost},
@@ -16,10 +8,15 @@ use ivm::{
     },
     syscalls,
 };
-
+use std::{
+    any::Any,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 mod common;
 use common::{assemble, assemble_syscalls};
-
 #[test]
 fn test_state_apply() {
     let state = State::new();
@@ -36,7 +33,6 @@ fn test_state_apply() {
     assert_eq!(state.get(&"a".to_string()), Some(1));
     assert_eq!(state.get(&"b".to_string()), Some(2));
 }
-
 #[test]
 fn test_execution_context_init() {
     let mut access = StateAccessSet::new();
@@ -57,7 +53,6 @@ fn test_execution_context_init() {
     assert_eq!(ctx.read(&"k1".to_string()), Some(42));
     assert_eq!(ctx.gas_used, 0);
 }
-
 #[test]
 fn test_dependency_graph_conflicts() {
     let mut a1 = StateAccessSet::new();
@@ -89,7 +84,6 @@ fn test_dependency_graph_conflicts() {
     assert_eq!(graph.indegree[1], 1); // depends on tx0
     assert_eq!(graph.indegree[2], 0); // independent
 }
-
 #[test]
 fn test_ilp_scheduler_basic() {
     let make_tx = |read: Vec<&str>, write: Vec<&str>| {
@@ -127,7 +121,6 @@ fn test_ilp_scheduler_basic() {
     assert_eq!(result.tx_results.len(), 3);
     assert!(result.tx_results.iter().all(|r| r.success));
 }
-
 #[test]
 fn test_execution_context_write_updates() {
     let mut ctx = ExecutionContext::new();
@@ -137,7 +130,6 @@ fn test_execution_context_write_updates() {
     assert_eq!(ctx.read(&"x".to_string()), Some(10));
     assert_eq!(ctx.read(&"y".to_string()), Some(20));
 }
-
 #[test]
 fn test_result_buffer_ordering() {
     use ivm::parallel::ResultBuffer;
@@ -174,7 +166,6 @@ fn test_result_buffer_ordering() {
     assert_eq!(out[2].0, 2);
     assert!(buf.take_ready().is_none());
 }
-
 #[test]
 fn test_dependency_graph_write_conflict() {
     let mut set1 = StateAccessSet::new();
@@ -199,7 +190,6 @@ fn test_dependency_graph_write_conflict() {
     assert_eq!(graph.indegree[1], 1);
     assert_eq!(graph.adj[0], vec![1]);
 }
-
 #[test]
 fn test_ivm_execute_block_commits() {
     use ivm::{IVM, parallel::StateUpdate};
@@ -208,7 +198,6 @@ fn test_ivm_execute_block_commits() {
         key: "a".to_string(),
         value: 0,
     }]);
-
     let mut set1 = StateAccessSet::new();
     set1.write_keys.insert("a".to_string());
     let tx1 = Transaction {
@@ -216,7 +205,6 @@ fn test_ivm_execute_block_commits() {
         gas_limit: 0,
         access: set1,
     };
-
     let mut set2 = StateAccessSet::new();
     set2.read_keys.insert("a".to_string());
     set2.write_keys.insert("b".to_string());
@@ -225,7 +213,6 @@ fn test_ivm_execute_block_commits() {
         gas_limit: 0,
         access: set2,
     };
-
     let mut set3 = StateAccessSet::new();
     set3.write_keys.insert("c".to_string());
     let tx3 = Transaction {
@@ -233,17 +220,13 @@ fn test_ivm_execute_block_commits() {
         gas_limit: 0,
         access: set3,
     };
-
     let block = Block {
         transactions: vec![tx1, tx2, tx3],
     };
-
     let mut ivm = IVM::new_with_options(Some(2), state.clone(), u64::MAX);
     let result = ivm.execute_block(block);
-
     assert_eq!(result.tx_results.len(), 3);
 }
-
 #[test]
 fn test_scheduler_parallelism() {
     use std::time::Duration;
@@ -286,7 +269,6 @@ fn test_scheduler_parallelism() {
     // executes tasks in parallel. Accept any level of observed parallelism.
     assert!(max.load(Ordering::SeqCst) >= 1);
 }
-
 #[test]
 fn test_deterministic_results() {
     use ivm::{IVM, parallel::StateUpdate};
@@ -309,7 +291,6 @@ fn test_deterministic_results() {
     let block = Block {
         transactions: vec![tx1, tx2],
     };
-
     // Run twice and compare state
     let run_once = || {
         let state = State::new();
@@ -321,12 +302,10 @@ fn test_deterministic_results() {
         ivm.execute_block(block.clone());
         (state.get(&"x".to_string()), state.get(&"y".to_string()))
     };
-
     let first = run_once();
     let second = run_once();
     assert_eq!(first, second);
 }
-
 #[cfg(target_arch = "x86_64")]
 #[test]
 fn test_deterministic_results_htm() {
@@ -359,7 +338,6 @@ fn test_deterministic_results_htm() {
     let second = run_once();
     assert_eq!(first, second);
 }
-
 #[cfg(not(target_arch = "x86_64"))]
 #[test]
 fn test_deterministic_results_fallback() {
@@ -388,7 +366,6 @@ fn test_deterministic_results_fallback() {
     let second = run_once();
     assert_eq!(first, second);
 }
-
 #[test]
 fn test_parallel_block_executes_syscall() {
     let assembled = assemble_syscalls(&[syscalls::SYSCALL_ALLOC as u8]);
@@ -406,24 +383,20 @@ fn test_parallel_block_executes_syscall() {
     assert!(result.tx_results.iter().all(|res| res.success));
     assert!(ivm.host_mut_any().is_some());
 }
-
 #[derive(Clone)]
 struct CheckpointHost {
     calls: usize,
     fail_on: usize,
 }
-
 impl CheckpointHost {
     fn new(fail_on: usize) -> Self {
         Self { calls: 0, fail_on }
     }
 }
-
 impl IVMHost for CheckpointHost {
     fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
         Ok(0)
     }
-
     fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
         self.calls += 1;
         if self.calls == self.fail_on {
@@ -432,19 +405,15 @@ impl IVMHost for CheckpointHost {
             Ok(0)
         }
     }
-
     fn as_any(&mut self) -> &mut dyn Any {
         self
     }
-
     fn supports_concurrent_blocks(&self) -> bool {
         false
     }
-
     fn checkpoint(&self) -> Option<Box<dyn Any + Send>> {
         Some(Box::new(self.clone()))
     }
-
     fn restore(&mut self, snapshot: &dyn Any) -> bool {
         if let Some(saved) = snapshot.downcast_ref::<CheckpointHost>() {
             *self = saved.clone();
@@ -454,12 +423,10 @@ impl IVMHost for CheckpointHost {
         }
     }
 }
-
 #[derive(Clone)]
 struct AccessLoggingHost {
     log: AccessLog,
 }
-
 impl AccessLoggingHost {
     fn new() -> Self {
         Self {
@@ -467,12 +434,10 @@ impl AccessLoggingHost {
         }
     }
 }
-
 impl IVMHost for AccessLoggingHost {
     fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
         Ok(0)
     }
-
     fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
         self.log.read_keys.insert("key_a".to_string());
         self.log.write_keys.insert("key_a".to_string());
@@ -482,31 +447,25 @@ impl IVMHost for AccessLoggingHost {
         });
         Ok(0)
     }
-
     fn as_any(&mut self) -> &mut dyn Any {
         self
     }
-
     fn supports_concurrent_blocks(&self) -> bool {
         false
     }
-
     fn begin_tx(&mut self, _declared: &ivm::parallel::StateAccessSet) -> Result<(), VMError> {
         self.log.read_keys.clear();
         self.log.write_keys.clear();
         self.log.reg_tags.clear();
         Ok(())
     }
-
     fn finish_tx(&mut self) -> Result<AccessLog, VMError> {
         Ok(self.log.clone())
     }
-
     fn access_logging_supported(&self) -> bool {
         true
     }
 }
-
 #[test]
 fn block_rollback_restores_host_on_failure() {
     let scall = encoding::wide::encode_sys(instruction::wide::system::SCALL, 1).to_le_bytes();
@@ -515,38 +474,31 @@ fn block_rollback_restores_host_on_failure() {
     prog.extend_from_slice(&scall);
     prog.extend_from_slice(&halt);
     let assembled = assemble(&prog);
-
     let make_tx = || Transaction {
         code: assembled.clone(),
         gas_limit: 10,
         access: StateAccessSet::new(),
     };
-
     let block = Block {
         transactions: vec![make_tx(), make_tx()],
     };
-
     let mut ivm = IVM::new_with_options(Some(1), State::new(), 100);
     ivm.set_host(CheckpointHost::new(2));
-
     let result = ivm.execute_block(block);
     assert_eq!(result.tx_results.len(), 2);
     assert!(result.tx_results[0].success);
     assert!(!result.tx_results[1].success);
-
     let host = ivm
         .host_mut_any()
         .and_then(|h| h.downcast_mut::<CheckpointHost>())
         .expect("checkpoint host available");
     assert_eq!(host.calls, 1);
 }
-
 #[derive(Clone)]
 struct FinishErrorHost {
     restored: bool,
     checkpointed: bool,
 }
-
 impl FinishErrorHost {
     fn new() -> Self {
         Self {
@@ -555,38 +507,30 @@ impl FinishErrorHost {
         }
     }
 }
-
 impl IVMHost for FinishErrorHost {
     fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
         Ok(0)
     }
-
     fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
         Ok(0)
     }
-
     fn as_any(&mut self) -> &mut dyn Any {
         self
     }
-
     fn supports_concurrent_blocks(&self) -> bool {
         false
     }
-
     fn begin_tx(&mut self, _declared: &StateAccessSet) -> Result<(), VMError> {
         Ok(())
     }
-
     fn finish_tx(&mut self) -> Result<AccessLog, VMError> {
         Err(VMError::PermissionDenied)
     }
-
     fn checkpoint(&self) -> Option<Box<dyn Any + Send>> {
         let mut snapshot = self.clone();
         snapshot.checkpointed = true;
         Some(Box::new(snapshot))
     }
-
     fn restore(&mut self, snapshot: &dyn Any) -> bool {
         if let Some(saved) = snapshot.downcast_ref::<FinishErrorHost>() {
             *self = saved.clone();
@@ -597,7 +541,6 @@ impl IVMHost for FinishErrorHost {
         }
     }
 }
-
 #[test]
 fn finish_tx_error_triggers_restore() {
     let halt = encoding::wide::encode_halt().to_le_bytes();
@@ -612,14 +555,12 @@ fn finish_tx_error_triggers_restore() {
     };
     let mut ivm = IVM::new_with_options(Some(1), State::new(), 100);
     ivm.set_host(FinishErrorHost::new());
-
     let result = ivm.execute_block(block);
     assert_eq!(result.tx_results.len(), 1);
     assert!(
         !result.tx_results[0].success,
         "finish_tx error should abort tx"
     );
-
     let host = ivm
         .host_mut_any()
         .expect("host present")
@@ -634,7 +575,6 @@ fn finish_tx_error_triggers_restore() {
         "checkpoint should be captured before execution"
     );
 }
-
 #[test]
 fn block_fails_when_access_log_exceeds_declared() {
     let scall = encoding::wide::encode_sys(instruction::wide::system::SCALL, 1).to_le_bytes();
@@ -643,7 +583,6 @@ fn block_fails_when_access_log_exceeds_declared() {
     prog.extend_from_slice(&scall);
     prog.extend_from_slice(&halt);
     let assembled = assemble(&prog);
-
     let tx = Transaction {
         code: assembled.clone(),
         gas_limit: 10,
@@ -652,14 +591,12 @@ fn block_fails_when_access_log_exceeds_declared() {
     let block = Block {
         transactions: vec![tx],
     };
-
     let mut ivm = IVM::new_with_options(Some(1), State::new(), 100);
     ivm.set_host(AccessLoggingHost::new());
     let result = ivm.execute_block(block);
     assert_eq!(result.tx_results.len(), 1);
     assert!(!result.tx_results[0].success);
 }
-
 #[test]
 fn block_succeeds_with_logged_state_writes_committed() {
     let scall = encoding::wide::encode_sys(instruction::wide::system::SCALL, 1).to_le_bytes();
@@ -668,28 +605,23 @@ fn block_succeeds_with_logged_state_writes_committed() {
     prog.extend_from_slice(&scall);
     prog.extend_from_slice(&halt);
     let assembled = assemble(&prog);
-
     let mut access = StateAccessSet::new();
     access.read_keys.insert("key_a".to_string());
     access.write_keys.insert("key_a".to_string());
-
     let tx = Transaction {
         code: assembled.clone(),
         gas_limit: 10,
         access,
     };
-
     let block = Block {
         transactions: vec![tx],
     };
-
     let mut ivm = IVM::new_with_options(Some(1), State::new(), 100);
     ivm.set_host(AccessLoggingHost::new());
     let result = ivm.execute_block(block);
     assert_eq!(result.tx_results.len(), 1);
     assert!(result.tx_results[0].success);
 }
-
 #[cfg(target_arch = "x86_64")]
 #[test]
 fn test_htm_vs_mutex_consistency() {
@@ -698,7 +630,6 @@ fn test_htm_vs_mutex_consistency() {
         return;
     }
     let scheduler_stm = Scheduler::new_with_htm_flag(2, false);
-
     let mk_tx = |k: &str| {
         let mut access = StateAccessSet::new();
         access.write_keys.insert(k.to_string());
@@ -708,28 +639,23 @@ fn test_htm_vs_mutex_consistency() {
             access,
         }
     };
-
     let block = Block {
         transactions: vec![mk_tx("a"), mk_tx("b"), mk_tx("c")],
     };
-
     let res_htm = scheduler_htm.schedule_block(block.clone(), |_tx| TxResult {
         success: true,
         gas_used: 1,
     });
-
     let res_stm = scheduler_stm.schedule_block(block, |_tx| TxResult {
         success: true,
         gas_used: 1,
     });
-
     assert_eq!(res_htm.tx_results.len(), res_stm.tx_results.len());
     for (a, b) in res_htm.tx_results.iter().zip(res_stm.tx_results.iter()) {
         assert_eq!(a.success, b.success);
         assert_eq!(a.gas_used, b.gas_used);
     }
 }
-
 #[cfg(target_arch = "x86_64")]
 #[test]
 fn test_conflict_order_consistency_htm() {
@@ -767,7 +693,6 @@ fn test_conflict_order_consistency_htm() {
     assert_eq!(o_htm, vec![0, 1]);
     assert_eq!(o_htm, o_stm);
 }
-
 #[cfg(not(target_arch = "x86_64"))]
 #[test]
 fn test_conflict_order_consistency_no_htm() {
@@ -803,7 +728,6 @@ fn test_conflict_order_consistency_no_htm() {
     assert_eq!(first, vec![0, 1]);
     assert_eq!(first, second);
 }
-
 #[test]
 fn test_conflict_prediction_groups() {
     use std::time::Duration;
@@ -835,7 +759,6 @@ fn test_conflict_prediction_groups() {
         gas_limit: 0,
         access: set4,
     };
-
     let block = Block {
         transactions: vec![tx1, tx2, tx3, tx4],
     };
@@ -866,12 +789,10 @@ fn test_conflict_prediction_groups() {
             gas_used: 0,
         }
     });
-
     // When HTM is disabled the scheduler still allows parallel execution under
     // a mutex. Accept any level of parallelism.
     assert!(max.load(Ordering::SeqCst) >= 1);
 }
-
 #[test]
 fn test_execute_block_parallel_ops() {
     use ivm::{IVM, Instruction};
@@ -906,31 +827,26 @@ fn test_execute_block_parallel_ops() {
     assert_eq!(vm.register(5), 0b1010u64.wrapping_add(5));
     assert_eq!(vm.register(6), 0b1100u64.wrapping_sub(4));
 }
-
 #[test]
 fn parallel_instruction_batch_reserves_gas_before_work() {
     use ivm::{IVM, Instruction};
-
     let block: [Instruction; 16] = std::array::from_fn(|index| Instruction::AddImm {
         rd: (index + 1) as u16,
         rs: 0,
         imm: 1,
     });
     let mut underfunded = IVM::new(15);
-
     assert_eq!(
         underfunded.execute_block_parallel(&block),
         Err(VMError::OutOfGas)
     );
     assert_eq!(underfunded.gas_remaining, 15);
     assert!((1..=16).all(|register| underfunded.register(register) == 0));
-
     let mut funded = IVM::new(16);
     funded.execute_block_parallel(&block).unwrap();
     assert_eq!(funded.gas_remaining, 0);
     assert!((1..=16).all(|register| funded.register(register) == 1));
 }
-
 #[test]
 fn test_scheduler_dynamic_scaling() {
     let make_tx = || Transaction {

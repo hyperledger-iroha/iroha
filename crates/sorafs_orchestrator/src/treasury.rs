@@ -4,12 +4,7 @@
 //! treasury-facing workflow required by SNNet-7a: it converts epoch metrics into XOR transfers,
 //! records ledger state per relay/epoch, manages dispute lifecycles, and emits dashboard-friendly
 //! aggregates for relay operators and oversight tooling.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    str::FromStr,
-};
-
+use crate::incentives::RelayRewardEngine;
 use hex::encode as hex_encode;
 use iroha_core::soranet_incentives::RelayPayoutLedger;
 use iroha_data_model::{
@@ -33,13 +28,13 @@ use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity},
 };
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    str::FromStr,
+};
 use thiserror::Error;
-
-use crate::incentives::RelayRewardEngine;
-
 /// Identifier assigned to a dispute entry.
 pub type DisputeId = u64;
-
 /// End-to-end payout workflow used by the treasury daemon.
 #[derive(Debug, Clone)]
 pub struct RelayPayoutService {
@@ -48,7 +43,6 @@ pub struct RelayPayoutService {
     ledger: RewardLedger,
     disputes: RewardDisputeRegistry,
 }
-
 /// Batch input describing a relay payout to be processed.
 #[derive(Debug, Clone)]
 pub struct PayoutInput<'a> {
@@ -61,7 +55,6 @@ pub struct PayoutInput<'a> {
     /// Additional metadata propagated to the reward instruction.
     pub metadata: Metadata,
 }
-
 impl RelayPayoutService {
     /// Construct a new payout service from a reward engine and treasury ledger helper.
     #[must_use]
@@ -73,25 +66,21 @@ impl RelayPayoutService {
             disputes: RewardDisputeRegistry::default(),
         }
     }
-
     /// Access the underlying reward engine.
     #[must_use]
     pub fn reward_engine(&self) -> &RelayRewardEngine {
         &self.reward_engine
     }
-
     /// Access the ledger helper responsible for converting rewards into transfers.
     #[must_use]
     pub fn payout_ledger(&self) -> &RelayPayoutLedger {
         &self.payout_ledger
     }
-
     /// Returns the treasury account debited when materialising payouts.
     #[must_use]
     pub fn treasury_account(&self) -> &AccountId {
         self.payout_ledger.treasury_account()
     }
-
     /// Fetch a snapshot of the reward ledger for the specified relay.
     pub fn ledger_snapshot(
         &self,
@@ -99,7 +88,6 @@ impl RelayPayoutService {
     ) -> Result<RewardLedgerSnapshot, RewardLedgerError> {
         self.ledger.snapshot(relay_id)
     }
-
     /// Reconcile an exported XOR ledger snapshot against the recorded payout ledger.
     #[must_use]
     pub fn reconcile_ledger(&self, exports: &[LedgerTransferRecord]) -> LedgerReconciliationReport {
@@ -107,7 +95,6 @@ impl RelayPayoutService {
         let mut expected_amount = Quantity::zero();
         let mut total_expected_transfers = 0usize;
         let mut amount_arithmetic_errors = Vec::new();
-
         for (relay_id, entry) in self.ledger.iter() {
             for (&epoch, record) in &entry.payouts {
                 if let Some(summary) = record.transfer_summary(epoch)
@@ -130,7 +117,6 @@ impl RelayPayoutService {
                     total_expected_transfers += 1;
                     expected.insert(key, record);
                 }
-
                 for adjustment in &record.adjustments {
                     if adjustment.amount.is_zero() {
                         continue;
@@ -177,12 +163,10 @@ impl RelayPayoutService {
                 }
             }
         }
-
         let mut exported_amount = Quantity::zero();
         let mut matched_transfers = 0usize;
         let mut mismatched_transfers = Vec::new();
         let mut unexpected_transfers = Vec::new();
-
         for export in exports {
             accumulate_reconciliation_amount(
                 &mut exported_amount,
@@ -207,12 +191,10 @@ impl RelayPayoutService {
                 None => unexpected_transfers.push(export.clone()),
             }
         }
-
         let missing_transfers = expected
             .into_values()
             .map(|record| ExpectedLedgerTransfer { record })
             .collect();
-
         LedgerReconciliationReport {
             total_expected_transfers,
             matched_transfers,
@@ -224,7 +206,6 @@ impl RelayPayoutService {
             amount_arithmetic_errors,
         }
     }
-
     /// Evaluate metrics/bonds and emit a reward instruction alongside a transfer.
     pub fn process_epoch(
         &mut self,
@@ -235,7 +216,6 @@ impl RelayPayoutService {
     ) -> Result<PayoutOutcome, PayoutServiceError> {
         self.process_entry(metrics, bond_entry, beneficiary, metadata)
     }
-
     /// Evaluate metrics/bonds for a batch of relays and emit payout instructions.
     pub fn process_batch<'a, I>(
         &mut self,
@@ -255,7 +235,6 @@ impl RelayPayoutService {
         }
         Ok(outcomes)
     }
-
     fn process_entry(
         &mut self,
         metrics: &RelayEpochMetricsV1,
@@ -271,14 +250,12 @@ impl RelayPayoutService {
             .ledger
             .record_reward(instruction.clone(), transfer.clone())
             .map_err(PayoutServiceError::Ledger)?;
-
         Ok(PayoutOutcome {
             instruction,
             transfer,
             ledger_snapshot: snapshot,
         })
     }
-
     /// Record an externally supplied payout instruction.
     pub fn record_reward(
         &mut self,
@@ -290,7 +267,6 @@ impl RelayPayoutService {
             .map(|_| ())
             .map_err(PayoutServiceError::Ledger)
     }
-
     /// File a dispute against an epoch payout.
     #[allow(clippy::too_many_arguments)]
     pub fn file_dispute(
@@ -310,7 +286,6 @@ impl RelayPayoutService {
                 epoch,
             },
         )?;
-
         let norito_record = self.payout_ledger.open_dispute(
             payout_record.instruction.clone(),
             requested_amount,
@@ -318,7 +293,6 @@ impl RelayPayoutService {
             filed_at_unix,
             reason.clone(),
         );
-
         let filed = self.disputes.file(
             relay_id,
             epoch,
@@ -328,10 +302,8 @@ impl RelayPayoutService {
             norito_record,
         );
         record_dispute_metric("filed");
-
         Ok(filed)
     }
-
     /// Reject a dispute without adjusting the ledger.
     pub fn reject_dispute(
         &mut self,
@@ -346,7 +318,6 @@ impl RelayPayoutService {
         record_dispute_metric("rejected");
         Ok(rejected)
     }
-
     /// Resolve a dispute, optionally applying credits or claw-backs.
     pub fn resolve_dispute(
         &mut self,
@@ -358,7 +329,6 @@ impl RelayPayoutService {
             .disputes
             .resolve(dispute_id, resolution, resolved_at_unix)
             .map_err(PayoutServiceError::Registry)?;
-
         let (snapshot, transfer, resolution_label, adjustment) = match &dispute.status {
             DisputeStatus::Open => unreachable!("resolve() never returns an open dispute"),
             DisputeStatus::Rejected { .. } => (
@@ -401,11 +371,9 @@ impl RelayPayoutService {
                             resolved_at_unix,
                         )
                         .map_err(PayoutServiceError::Ledger)?;
-
                     let asset = AssetId::new(asset_def.clone(), self.treasury_account().clone());
                     let transfer: InstructionBox =
                         Transfer::asset_quantity(asset, amount.clone(), beneficiary.clone()).into();
-
                     (
                         snapshot,
                         Some(transfer),
@@ -436,7 +404,6 @@ impl RelayPayoutService {
                             resolved_at_unix,
                         )
                         .map_err(PayoutServiceError::Ledger)?;
-
                     let asset = AssetId::new(asset_def, beneficiary.clone());
                     let transfer: InstructionBox = Transfer::asset_quantity(
                         asset,
@@ -444,7 +411,6 @@ impl RelayPayoutService {
                         self.treasury_account().clone(),
                     )
                     .into();
-
                     (
                         snapshot,
                         Some(transfer),
@@ -454,33 +420,28 @@ impl RelayPayoutService {
                 }
             },
         };
-
         if let Some(label) = resolution_label {
             record_dispute_metric(label);
         }
         if let Some((kind, amount)) = adjustment {
             record_adjustment_metric(dispute.relay_id, &amount, kind);
         }
-
         Ok(DisputeOutcome {
             dispute,
             ledger_snapshot: snapshot,
             transfer,
         })
     }
-
     /// Access the internal reward ledger.
     #[must_use]
     pub fn ledger(&self) -> &RewardLedger {
         &self.ledger
     }
-
     /// Access the dispute registry.
     #[must_use]
     pub fn disputes(&self) -> &RewardDisputeRegistry {
         &self.disputes
     }
-
     /// Build an earnings dashboard across all tracked relays.
     pub fn earnings_dashboard(&self) -> Result<EarningsDashboard, RewardLedgerError> {
         let mut rows = Vec::new();
@@ -496,7 +457,6 @@ impl RelayPayoutService {
                 last_transfer,
             ));
         }
-
         Ok(EarningsDashboard {
             total_relays: rows.len(),
             total_open_disputes: open,
@@ -504,7 +464,6 @@ impl RelayPayoutService {
         })
     }
 }
-
 /// Outcome of a standard payout evaluation.
 #[derive(Debug, Clone)]
 pub struct PayoutOutcome {
@@ -515,7 +474,6 @@ pub struct PayoutOutcome {
     /// Ledger snapshot after recording the payout.
     pub ledger_snapshot: RewardLedgerSnapshot,
 }
-
 /// Result of resolving a dispute.
 #[derive(Debug, Clone)]
 pub struct DisputeOutcome {
@@ -526,7 +484,6 @@ pub struct DisputeOutcome {
     /// Optional transfer describing credits or claw-backs.
     pub transfer: Option<InstructionBox>,
 }
-
 /// Summary of a treasury transfer associated with a payout or dispute resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferSummary {
@@ -539,7 +496,6 @@ pub struct TransferSummary {
     /// Amount of XOR moved as part of the transfer.
     pub amount: Quantity,
 }
-
 /// Direction of a treasury transfer recorded in the incentive ledger.
 #[derive(
     Debug,
@@ -564,7 +520,6 @@ pub enum TransferKind {
     /// Debit adjustment clawing back funds (relay → treasury).
     Debit,
 }
-
 /// Record produced from a Sora XOR ledger export.
 #[derive(
     Debug,
@@ -595,7 +550,6 @@ pub struct LedgerTransferRecord {
     /// Destination account that received the transfer.
     pub destination: AccountId,
 }
-
 impl LedgerTransferRecord {
     fn from_summary(
         relay_id: RelayId,
@@ -614,7 +568,6 @@ impl LedgerTransferRecord {
             destination: summary.destination.clone(),
         }
     }
-
     fn key(&self) -> TransferKey {
         TransferKey {
             relay_id: self.relay_id,
@@ -624,7 +577,6 @@ impl LedgerTransferRecord {
         }
     }
 }
-
 /// Result of reconciling treasury exports with the payout ledger.
 #[derive(Debug, Clone)]
 pub struct LedgerReconciliationReport {
@@ -645,7 +597,6 @@ pub struct LedgerReconciliationReport {
     /// Transfers whose accumulation exceeded the bounded exact quantity domain.
     pub amount_arithmetic_errors: Vec<LedgerAmountArithmeticError>,
 }
-
 impl LedgerReconciliationReport {
     /// Returns `true` when the export matches the ledger without discrepancies.
     #[must_use]
@@ -656,14 +607,12 @@ impl LedgerReconciliationReport {
             && self.amount_arithmetic_errors.is_empty()
     }
 }
-
 /// Expected transfer that was absent from the external ledger export.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpectedLedgerTransfer {
     /// Transfer metadata recorded in the payout ledger.
     pub record: LedgerTransferRecord,
 }
-
 /// Transfer present in the export but mismatching the payout ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LedgerTransferMismatch {
@@ -674,7 +623,6 @@ pub struct LedgerTransferMismatch {
     /// Reasons describing which fields diverged.
     pub reasons: Vec<MismatchReason>,
 }
-
 /// Side of reconciliation where an amount conversion failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LedgerAmountSource {
@@ -683,7 +631,6 @@ pub enum LedgerAmountSource {
     /// Exported ledger transfer supplied for reconciliation.
     Exported,
 }
-
 /// Quantity-to-nanos conversion failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuantityToNanosError {
@@ -698,7 +645,6 @@ pub enum QuantityToNanosError {
     /// Adding this amount to the reconciliation total overflowed `u128`.
     TotalOverflow,
 }
-
 /// Exact amount arithmetic error captured during ledger reconciliation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LedgerAmountArithmeticError {
@@ -707,7 +653,6 @@ pub struct LedgerAmountArithmeticError {
     /// Transfer whose addition exceeded the bounded exact quantity domain.
     pub record: LedgerTransferRecord,
 }
-
 /// Dimension along which a mismatch occurred.
 #[derive(
     Debug,
@@ -730,7 +675,6 @@ pub enum MismatchReason {
     /// Destination account differed.
     Destination,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct TransferKey {
     relay_id: RelayId,
@@ -738,7 +682,6 @@ struct TransferKey {
     kind: TransferKind,
     dispute_id: Option<DisputeId>,
 }
-
 impl TransferKey {
     fn new(
         relay_id: RelayId,
@@ -753,7 +696,6 @@ impl TransferKey {
             dispute_id,
         }
     }
-
     fn from_record(record: &LedgerTransferRecord) -> Self {
         Self::new(
             record.relay_id,
@@ -763,7 +705,6 @@ impl TransferKey {
         )
     }
 }
-
 /// Aggregated dashboard surfaced to operators and oversight tooling.
 #[derive(Debug, Clone)]
 pub struct EarningsDashboard {
@@ -774,7 +715,6 @@ pub struct EarningsDashboard {
     /// Per-relay rows.
     pub rows: Vec<EarningsRow>,
 }
-
 /// Per-relay dashboard entry summarising payouts and adjustments.
 #[derive(Debug, Clone)]
 pub struct EarningsRow {
@@ -802,7 +742,6 @@ pub struct EarningsRow {
     /// Latest treasury transfer recorded for the relay (if available).
     pub last_transfer: Option<TransferSummary>,
 }
-
 impl EarningsRow {
     fn from_snapshot(
         snapshot: RewardLedgerSnapshot,
@@ -823,7 +762,6 @@ impl EarningsRow {
         }
     }
 }
-
 /// Errors surfaced by the payout service.
 #[derive(Debug, Error)]
 pub enum PayoutServiceError {
@@ -842,13 +780,11 @@ pub enum PayoutServiceError {
         epoch: u32,
     },
 }
-
 /// Ledger aggregating payouts and adjustments per relay.
 #[derive(Debug, Clone, Default)]
 pub struct RewardLedger {
     entries: BTreeMap<RelayId, RewardLedgerEntry>,
 }
-
 impl RewardLedger {
     fn record_reward(
         &mut self,
@@ -863,7 +799,6 @@ impl RewardLedger {
         entry.record(PayoutRecord::new(instruction, transfer))?;
         entry.snapshot()
     }
-
     fn apply_credit(
         &mut self,
         relay: RelayId,
@@ -880,7 +815,6 @@ impl RewardLedger {
         entry.apply_credit(epoch, dispute_id, amount, notes, applied_at_unix)?;
         entry.snapshot()
     }
-
     fn apply_debit(
         &mut self,
         relay: RelayId,
@@ -897,18 +831,15 @@ impl RewardLedger {
         entry.apply_debit(epoch, dispute_id, amount, notes, applied_at_unix)?;
         entry.snapshot()
     }
-
     fn snapshot(&self, relay: RelayId) -> Result<RewardLedgerSnapshot, RewardLedgerError> {
         self.entries
             .get(&relay)
             .ok_or(RewardLedgerError::UnknownRelay { relay })?
             .snapshot()
     }
-
     fn payout_record(&self, relay: RelayId, epoch: u32) -> Option<&PayoutRecord> {
         self.entries.get(&relay)?.payouts.get(&epoch)
     }
-
     fn payout_owner(&self, relay: RelayId, epoch: u32) -> Option<(AccountId, AssetDefinitionId)> {
         self.payout_record(relay, epoch).map(|record| {
             let beneficiary = record.instruction.beneficiary.clone();
@@ -916,12 +847,10 @@ impl RewardLedger {
             (beneficiary, asset_def)
         })
     }
-
     fn iter(&self) -> impl Iterator<Item = (&RelayId, &RewardLedgerEntry)> {
         self.entries.iter()
     }
 }
-
 /// Snapshot of a relay's ledger entry.
 #[derive(Debug, Clone)]
 pub struct RewardLedgerSnapshot {
@@ -935,7 +864,6 @@ pub struct RewardLedgerSnapshot {
     pub last_epoch: Option<u32>,
     pub last_reward_score: Option<u64>,
 }
-
 /// Ledger-level failures.
 #[derive(Debug, Error)]
 pub enum RewardLedgerError {
@@ -966,7 +894,6 @@ pub enum RewardLedgerError {
     #[error("negative net payout detected for relay {relay:?}")]
     NegativeNet { relay: RelayId },
 }
-
 #[derive(Debug, Clone)]
 struct RewardLedgerEntry {
     relay_id: RelayId,
@@ -978,7 +905,6 @@ struct RewardLedgerEntry {
     last_epoch: Option<u32>,
     last_reward_score: Option<u64>,
 }
-
 impl RewardLedgerEntry {
     fn new(relay_id: RelayId) -> Self {
         Self {
@@ -992,7 +918,6 @@ impl RewardLedgerEntry {
             last_reward_score: None,
         }
     }
-
     fn record(&mut self, record: PayoutRecord) -> Result<(), RewardLedgerError> {
         let epoch = record.instruction.epoch;
         if self.payouts.contains_key(&epoch) {
@@ -1001,7 +926,6 @@ impl RewardLedgerEntry {
                 epoch,
             });
         }
-
         let reward_score = record.instruction.reward_score;
         let payout_amount = record.instruction.payout_amount.clone();
         self.total_paid = self
@@ -1014,7 +938,6 @@ impl RewardLedgerEntry {
         self.last_reward_score = Some(reward_score);
         Ok(())
     }
-
     fn apply_credit(
         &mut self,
         epoch: u32,
@@ -1031,7 +954,6 @@ impl RewardLedgerEntry {
                 relay: self.relay_id,
                 epoch,
             })?;
-
         record.add_adjustment(
             dispute_id,
             AdjustmentKind::Credit,
@@ -1045,7 +967,6 @@ impl RewardLedgerEntry {
             .map_err(|_| RewardLedgerError::NumericOverflow)?;
         self.ensure_non_negative_net()
     }
-
     fn apply_debit(
         &mut self,
         epoch: u32,
@@ -1062,7 +983,6 @@ impl RewardLedgerEntry {
                 relay: self.relay_id,
                 epoch,
             })?;
-
         let available = record.net_amount()?;
         if amount.as_numeric() > &available {
             return Err(RewardLedgerError::InsufficientNet {
@@ -1072,7 +992,6 @@ impl RewardLedgerEntry {
                 available,
             });
         }
-
         record.add_adjustment(
             dispute_id,
             AdjustmentKind::Debit,
@@ -1086,7 +1005,6 @@ impl RewardLedgerEntry {
             .map_err(|_| RewardLedgerError::NumericOverflow)?;
         self.ensure_non_negative_net()
     }
-
     fn snapshot(&self) -> Result<RewardLedgerSnapshot, RewardLedgerError> {
         let net = self
             .total_paid
@@ -1097,7 +1015,6 @@ impl RewardLedgerEntry {
                 relay: self.relay_id,
             })?
             .into_numeric();
-
         Ok(RewardLedgerSnapshot {
             relay_id: self.relay_id,
             total_paid: self.total_paid.clone(),
@@ -1109,25 +1026,21 @@ impl RewardLedgerEntry {
             last_reward_score: self.last_reward_score,
         })
     }
-
     fn latest_transfer_summary(&self) -> Option<TransferSummary> {
         let (&epoch, record) = self.payouts.iter().next_back()?;
         record.transfer_summary(epoch)
     }
-
     fn ensure_non_negative_net(&self) -> Result<(), RewardLedgerError> {
         let _ = self.snapshot()?;
         Ok(())
     }
 }
-
 #[derive(Debug, Clone)]
 struct PayoutRecord {
     instruction: RelayRewardInstructionV1,
     transfer: InstructionBox,
     adjustments: Vec<AdjustmentRecord>,
 }
-
 impl PayoutRecord {
     fn new(instruction: RelayRewardInstructionV1, transfer: InstructionBox) -> Self {
         Self {
@@ -1136,7 +1049,6 @@ impl PayoutRecord {
             adjustments: Vec::new(),
         }
     }
-
     fn add_adjustment(
         &mut self,
         dispute_id: DisputeId,
@@ -1153,7 +1065,6 @@ impl PayoutRecord {
             applied_at_unix,
         ));
     }
-
     fn net_amount(&self) -> Result<Numeric, RewardLedgerError> {
         let mut net = self.instruction.payout_amount.as_numeric().clone();
         for adjustment in &self.adjustments {
@@ -1168,7 +1079,6 @@ impl PayoutRecord {
         }
         Ok(net)
     }
-
     fn transfer_summary(&self, epoch: u32) -> Option<TransferSummary> {
         let transfer_box = self.transfer.as_any().downcast_ref::<TransferBox>()?;
         let TransferBox::Asset(transfer) = transfer_box else {
@@ -1182,7 +1092,6 @@ impl PayoutRecord {
         })
     }
 }
-
 /// Adjustment recorded against a payout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdjustmentRecord {
@@ -1192,7 +1101,6 @@ pub struct AdjustmentRecord {
     pub notes: String,
     pub applied_at_unix: u64,
 }
-
 impl AdjustmentRecord {
     fn new(
         dispute_id: DisputeId,
@@ -1210,7 +1118,6 @@ impl AdjustmentRecord {
         }
     }
 }
-
 /// Direction of an adjustment applied to a payout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdjustmentKind {
@@ -1219,14 +1126,12 @@ pub enum AdjustmentKind {
     /// Treasury clawed back XOR.
     Debit,
 }
-
 /// Adjustment requested by the dispute filer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdjustmentRequest {
     pub kind: AdjustmentKind,
     pub amount: Quantity,
 }
-
 /// Record describing a lifecycle-managed dispute.
 #[derive(Debug, Clone)]
 pub struct RewardDispute {
@@ -1239,7 +1144,6 @@ pub struct RewardDispute {
     pub status: DisputeStatus,
     pub norito_record: RelayRewardDisputeV1,
 }
-
 impl RewardDispute {
     /// Access the Norito dispute record for persistence.
     #[must_use]
@@ -1247,7 +1151,6 @@ impl RewardDispute {
         &self.norito_record
     }
 }
-
 /// Status of a dispute in the registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DisputeStatus {
@@ -1264,7 +1167,6 @@ pub enum DisputeStatus {
         notes: String,
     },
 }
-
 /// Outcome registered when closing a dispute.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedDispute {
@@ -1272,7 +1174,6 @@ pub struct ResolvedDispute {
     pub amount: Option<Quantity>,
     pub notes: String,
 }
-
 /// Resolution direction used when closing a dispute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolutionKind {
@@ -1283,7 +1184,6 @@ pub enum ResolutionKind {
     /// XOR clawed back from the relay.
     Debit,
 }
-
 /// Operator-supplied resolution payload.
 #[derive(Debug, Clone)]
 pub enum DisputeResolution {
@@ -1294,7 +1194,6 @@ pub enum DisputeResolution {
     /// Debit XOR from the relay.
     Debit { amount: Quantity, notes: String },
 }
-
 /// Registry tracking disputes keyed by identifier and relay.
 #[derive(Debug, Default, Clone)]
 pub struct RewardDisputeRegistry {
@@ -1302,7 +1201,6 @@ pub struct RewardDisputeRegistry {
     disputes_by_relay: BTreeMap<RelayId, BTreeSet<DisputeId>>,
     next_id: DisputeId,
 }
-
 impl RewardDisputeRegistry {
     fn file(
         &mut self,
@@ -1315,7 +1213,6 @@ impl RewardDisputeRegistry {
     ) -> RewardDispute {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
-
         let dispute = RewardDispute {
             id,
             relay_id,
@@ -1326,16 +1223,13 @@ impl RewardDisputeRegistry {
             status: DisputeStatus::Open,
             norito_record,
         };
-
         self.disputes.insert(id, dispute.clone());
         self.disputes_by_relay
             .entry(relay_id)
             .or_default()
             .insert(id);
-
         dispute
     }
-
     fn resolve(
         &mut self,
         dispute_id: DisputeId,
@@ -1346,11 +1240,9 @@ impl RewardDisputeRegistry {
             .disputes
             .get_mut(&dispute_id)
             .ok_or(DisputeRegistryError::UnknownDispute { dispute_id })?;
-
         if !matches!(dispute.status, DisputeStatus::Open) {
             return Err(DisputeRegistryError::DisputeClosed { dispute_id });
         }
-
         let outcome = match resolution {
             DisputeResolution::NoChange { notes } => ResolvedDispute {
                 kind: ResolutionKind::NoChange,
@@ -1368,21 +1260,17 @@ impl RewardDisputeRegistry {
                 notes,
             },
         };
-
         dispute.status = DisputeStatus::Resolved {
             resolved_at_unix,
             outcome: outcome.clone(),
         };
         dispute.norito_record.status = RelayRewardDisputeStatusV1::Accepted;
         dispute.norito_record.resolution_metadata = resolution_metadata(&outcome, resolved_at_unix);
-
         if let Some(active) = self.disputes_by_relay.get_mut(&dispute.relay_id) {
             active.remove(&dispute_id);
         }
-
         Ok(dispute.clone())
     }
-
     fn reject(
         &mut self,
         dispute_id: DisputeId,
@@ -1393,11 +1281,9 @@ impl RewardDisputeRegistry {
             .disputes
             .get_mut(&dispute_id)
             .ok_or(DisputeRegistryError::UnknownDispute { dispute_id })?;
-
         if !matches!(dispute.status, DisputeStatus::Open) {
             return Err(DisputeRegistryError::DisputeClosed { dispute_id });
         }
-
         let notes = notes.into();
         dispute.status = DisputeStatus::Rejected {
             rejected_at_unix,
@@ -1405,26 +1291,21 @@ impl RewardDisputeRegistry {
         };
         dispute.norito_record.status = RelayRewardDisputeStatusV1::Rejected;
         dispute.norito_record.resolution_metadata = rejection_metadata(&notes, rejected_at_unix);
-
         if let Some(active) = self.disputes_by_relay.get_mut(&dispute.relay_id) {
             active.remove(&dispute_id);
         }
-
         Ok(dispute.clone())
     }
-
     fn open_count_for_relay(&self, relay_id: &RelayId) -> usize {
         self.disputes_by_relay
             .get(relay_id)
             .map(|set| set.len())
             .unwrap_or_default()
     }
-
     pub fn iter(&self) -> impl Iterator<Item = (&DisputeId, &RewardDispute)> {
         self.disputes.iter()
     }
 }
-
 /// Errors surfaced by the dispute registry.
 #[derive(Debug, Error)]
 pub enum DisputeRegistryError {
@@ -1435,13 +1316,11 @@ pub enum DisputeRegistryError {
     #[error("dispute {dispute_id} is already closed")]
     DisputeClosed { dispute_id: DisputeId },
 }
-
 fn metadata_insert(metadata: &mut Metadata, key: &str, value: impl Into<Json>) {
     if let Ok(name) = Name::from_str(key) {
         metadata.insert(name, value);
     }
 }
-
 fn resolution_metadata(outcome: &ResolvedDispute, timestamp: u64) -> Metadata {
     let mut metadata = Metadata::default();
     metadata_insert(
@@ -1468,7 +1347,6 @@ fn resolution_metadata(outcome: &ResolvedDispute, timestamp: u64) -> Metadata {
     metadata_insert(&mut metadata, "resolved_at_unix", Json::new(timestamp));
     metadata
 }
-
 fn rejection_metadata(notes: &str, timestamp: u64) -> Metadata {
     let mut metadata = Metadata::default();
     metadata_insert(&mut metadata, "resolution_kind", Json::new("rejected"));
@@ -1480,7 +1358,6 @@ fn rejection_metadata(notes: &str, timestamp: u64) -> Metadata {
     metadata_insert(&mut metadata, "resolved_at_unix", Json::new(timestamp));
     metadata
 }
-
 fn mismatch_reasons(
     expected: &LedgerTransferRecord,
     actual: &LedgerTransferRecord,
@@ -1497,13 +1374,11 @@ fn mismatch_reasons(
     }
     reasons
 }
-
 fn record_dispute_metric(action: &str) {
     if let Some(metrics) = iroha_telemetry::metrics::global() {
         metrics.inc_soranet_dispute(action);
     }
 }
-
 fn record_adjustment_metric(relay_id: RelayId, amount: &Quantity, kind: &str) {
     if let Some(metrics) = iroha_telemetry::metrics::global()
         && let Ok(nanos) = quantity_to_nanos(amount)
@@ -1511,7 +1386,6 @@ fn record_adjustment_metric(relay_id: RelayId, amount: &Quantity, kind: &str) {
         metrics.record_soranet_adjustment(&hex_encode(relay_id), nanos, kind);
     }
 }
-
 fn accumulate_reconciliation_amount(
     total: &mut Quantity,
     errors: &mut Vec<LedgerAmountArithmeticError>,
@@ -1526,7 +1400,6 @@ fn accumulate_reconciliation_amount(
         }),
     }
 }
-
 fn quantity_to_nanos(amount: &Quantity) -> Result<u128, QuantityToNanosError> {
     let scale = amount.scale();
     let mantissa = amount
@@ -1550,17 +1423,13 @@ fn quantity_to_nanos(amount: &Quantity) -> Result<u128, QuantityToNanosError> {
             .ok_or(QuantityToNanosError::NanosOverflow)
     }
 }
-
 mod relay_id_json {
+    use super::*;
     use hex::{decode, encode};
     use norito::json::{JsonDeserialize, JsonSerialize, Parser};
-
-    use super::*;
-
     pub fn serialize(relay_id: &RelayId, out: &mut String) {
         JsonSerialize::json_serialize(&encode(relay_id), out);
     }
-
     pub fn deserialize(parser: &mut Parser<'_>) -> Result<RelayId, norito::json::Error> {
         let value = String::json_deserialize(parser)?;
         let bytes = decode(&value).map_err(|err| norito::json::Error::Message(err.to_string()))?;
@@ -1575,11 +1444,10 @@ mod relay_id_json {
         Ok(relay_id)
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
+    use super::*;
+    use crate::incentives::RewardConfig;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId,
@@ -1589,34 +1457,26 @@ mod tests {
         name::Name,
         soranet::incentives::{RelayBondPolicyV1, RelayComplianceStatusV1},
     };
-
-    use super::*;
-    use crate::incentives::RewardConfig;
-
+    use std::sync::Arc;
     fn quantity(value: u32) -> Quantity {
         Quantity::from(value)
     }
-
     fn asset_id() -> AssetDefinitionId {
         let domain = DomainId::try_new("sora", "universal").expect("domain id");
         let name = Name::from_str("xor").expect("asset name");
         AssetDefinitionId::derive_from_components(domain, name)
     }
-
     fn budget_id() -> [u8; 32] {
         [0xCC; 32]
     }
-
     fn account_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive treasury account fixture key")
     }
-
     fn account(seed: u8) -> AccountId {
         let (public_key, _) = account_keypair(seed).into_parts();
         AccountId::new(public_key)
     }
-
     fn telemetry_handle() -> Arc<iroha_telemetry::metrics::Metrics> {
         if let Some(existing) = iroha_telemetry::metrics::global() {
             existing.clone()
@@ -1626,7 +1486,6 @@ mod tests {
             metrics
         }
     }
-
     fn bond_entry(amount: u32) -> RelayBondLedgerEntryV1 {
         RelayBondLedgerEntryV1 {
             relay_id: [0xAB; 32],
@@ -1636,7 +1495,6 @@ mod tests {
             exit_capable: true,
         }
     }
-
     fn metrics(epoch: u32, bandwidth: u128) -> RelayEpochMetricsV1 {
         RelayEpochMetricsV1 {
             relay_id: [0xAB; 32],
@@ -1651,7 +1509,6 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     fn reward_engine() -> RelayRewardEngine {
         let policy = RelayBondPolicyV1 {
             minimum_exit_bond: quantity(500),
@@ -1672,22 +1529,18 @@ mod tests {
         };
         RelayRewardEngine::new(config).expect("valid reward config")
     }
-
     fn payout_service() -> (RelayPayoutService, AccountId) {
         let treasury = account(42);
         let service =
             RelayPayoutService::new(reward_engine(), RelayPayoutLedger::new(treasury.clone()));
         (service, treasury)
     }
-
     #[test]
     fn account_helper_uses_checked_seed_derivation() {
         let account = account(42);
         let expected = AccountId::new(account_keypair(42).public_key().clone());
-
         assert_eq!(account, expected);
     }
-
     fn expected_exports(service: &RelayPayoutService) -> Vec<LedgerTransferRecord> {
         service
             .reconcile_ledger(&[])
@@ -1696,7 +1549,6 @@ mod tests {
             .map(|entry| entry.record)
             .collect()
     }
-
     #[test]
     fn process_epoch_records_payout() {
         let (mut service, _) = payout_service();
@@ -1705,7 +1557,6 @@ mod tests {
         let outcome = service
             .process_epoch(&metrics, &bond, account(1), Metadata::default())
             .expect("payout recorded");
-
         assert_eq!(outcome.instruction.payout_amount, quantity(100));
         assert_eq!(outcome.ledger_snapshot.total_paid, quantity(100));
         assert_eq!(
@@ -1713,14 +1564,12 @@ mod tests {
             quantity(100).into_numeric()
         );
     }
-
     #[test]
     fn process_batch_records_multiple_epochs() {
         let (mut service, _) = payout_service();
         let bond = bond_entry(1_000);
         let first = metrics(2, 900);
         let second = metrics(3, 1_200);
-
         let outcomes = service
             .process_batch([
                 PayoutInput {
@@ -1737,18 +1586,15 @@ mod tests {
                 },
             ])
             .expect("batch processed");
-
         assert_eq!(outcomes.len(), 2);
         assert_eq!(outcomes[0].instruction.epoch, first.epoch);
         assert_eq!(outcomes[1].instruction.epoch, second.epoch);
-
         let snapshot = service
             .ledger_snapshot(first.relay_id)
             .expect("ledger snapshot");
         assert_eq!(snapshot.epochs_recorded, 2);
         assert!(snapshot.net_paid > Numeric::zero());
     }
-
     #[test]
     fn credit_resolution_emits_transfer() {
         let (mut service, treasury) = payout_service();
@@ -1758,7 +1604,6 @@ mod tests {
         service
             .process_epoch(&metrics, &bond, beneficiary.clone(), Metadata::default())
             .expect("payout recorded");
-
         let dispute = service
             .file_dispute(
                 [0xAB; 32],
@@ -1777,7 +1622,6 @@ mod tests {
             dispute.norito_record().status,
             RelayRewardDisputeStatusV1::Pending
         );
-
         let outcome = service
             .resolve_dispute(
                 dispute.id,
@@ -1788,7 +1632,6 @@ mod tests {
                 60,
             )
             .expect("resolution succeeds");
-
         assert!(outcome.transfer.is_some());
         assert_eq!(
             outcome.dispute.norito_record.status,
@@ -1806,7 +1649,6 @@ mod tests {
         assert_eq!(transfer.destination, beneficiary);
         assert_eq!(transfer.object, quantity(25));
     }
-
     #[test]
     fn debit_resolution_claws_back() {
         let (mut service, treasury) = payout_service();
@@ -1816,7 +1658,6 @@ mod tests {
         service
             .process_epoch(&metrics, &bond, beneficiary.clone(), Metadata::default())
             .expect("payout recorded");
-
         let dispute = service
             .file_dispute(
                 [0xAB; 32],
@@ -1831,7 +1672,6 @@ mod tests {
                 }),
             )
             .expect("dispute filed");
-
         let outcome = service
             .resolve_dispute(
                 dispute.id,
@@ -1854,7 +1694,6 @@ mod tests {
         assert_eq!(transfer.destination, treasury);
         assert_eq!(transfer.object, quantity(40));
     }
-
     #[test]
     fn reject_dispute_updates_status() {
         let (mut service, _) = payout_service();
@@ -1863,7 +1702,6 @@ mod tests {
         service
             .process_epoch(&metrics, &bond, account(4), Metadata::default())
             .expect("payout recorded");
-
         let dispute = service
             .file_dispute(
                 [0xAB; 32],
@@ -1875,7 +1713,6 @@ mod tests {
                 None,
             )
             .expect("dispute filed");
-
         let rejected = service
             .reject_dispute(dispute.id, 90, "insufficient evidence")
             .expect("rejection succeeds");
@@ -1885,7 +1722,6 @@ mod tests {
             RelayRewardDisputeStatusV1::Rejected
         );
     }
-
     #[test]
     fn dispute_metrics_increment_for_resolution() {
         let metrics_handle = telemetry_handle();
@@ -1902,14 +1738,12 @@ mod tests {
             .soranet_reward_adjustment_nanos_total
             .with_label_values(&[relay_hex.as_str(), "credit"])
             .get() as u64;
-
         let (mut service, _) = payout_service();
         let bond = bond_entry(1_000);
         let metrics = metrics(18, 1_100);
         service
             .process_epoch(&metrics, &bond, account(18), Metadata::default())
             .expect("payout recorded");
-
         let dispute = service
             .file_dispute(
                 metrics.relay_id,
@@ -1924,7 +1758,6 @@ mod tests {
                 }),
             )
             .expect("dispute filed");
-
         service
             .resolve_dispute(
                 dispute.id,
@@ -1935,7 +1768,6 @@ mod tests {
                 1_020,
             )
             .expect("dispute resolved");
-
         let filed_after = metrics_handle
             .soranet_reward_disputes_total
             .with_label_values(&["filed"])
@@ -1948,11 +1780,9 @@ mod tests {
             .soranet_reward_adjustment_nanos_total
             .with_label_values(&[relay_hex.as_str(), "credit"])
             .get() as u64;
-
         let expected_credit =
             u64::try_from(quantity_to_nanos(&quantity(25)).expect("convert quantity"))
                 .expect("u64");
-
         assert!(
             filed_after >= filed_before.saturating_add(1),
             "expected filed counter to increase (before={filed_before}, after={filed_after})"
@@ -1966,7 +1796,6 @@ mod tests {
             "expected credit counter to increase by at least {expected_credit} (before={credit_before}, after={credit_after})"
         );
     }
-
     #[test]
     fn reject_dispute_records_metric() {
         let metrics_handle = telemetry_handle();
@@ -1974,14 +1803,12 @@ mod tests {
             .soranet_reward_disputes_total
             .with_label_values(&["rejected"])
             .get() as u64;
-
         let (mut service, _) = payout_service();
         let bond = bond_entry(1_000);
         let metrics = metrics(19, 1_000);
         service
             .process_epoch(&metrics, &bond, account(19), Metadata::default())
             .expect("payout recorded");
-
         let dispute = service
             .file_dispute(
                 metrics.relay_id,
@@ -1996,7 +1823,6 @@ mod tests {
         service
             .reject_dispute(dispute.id, 1_010, "no evidence")
             .expect("dispute rejected");
-
         let rejected_after = metrics_handle
             .soranet_reward_disputes_total
             .with_label_values(&["rejected"])
@@ -2006,19 +1832,16 @@ mod tests {
             "expected rejected counter to increase (before={rejected_before}, after={rejected_after})"
         );
     }
-
     #[test]
     fn dashboard_summarises_rows() {
         let (mut service, treasury) = payout_service();
         let bond = bond_entry(1_000);
-
         service
             .process_epoch(&metrics(5, 800), &bond, account(5), Metadata::default())
             .expect("payout recorded");
         service
             .process_epoch(&metrics(6, 600), &bond, account(5), Metadata::default())
             .expect("second payout recorded");
-
         let dispute = service
             .file_dispute(
                 [0xAB; 32],
@@ -2039,7 +1862,6 @@ mod tests {
                 120,
             )
             .expect("resolved");
-
         let dashboard = service.earnings_dashboard().expect("dashboard renders");
         assert_eq!(dashboard.total_relays, 1);
         assert_eq!(dashboard.rows[0].epochs_recorded, 2);
@@ -2053,22 +1875,18 @@ mod tests {
         assert_eq!(last_transfer.destination, account(5));
         assert_eq!(last_transfer.amount, quantity(80));
     }
-
     #[test]
     fn reconcile_matches_expected_transfers() {
         let (mut service, _) = payout_service();
         let bond = bond_entry(1_000);
-
         service
             .process_epoch(&metrics(10, 900), &bond, account(10), Metadata::default())
             .expect("epoch recorded");
         service
             .process_epoch(&metrics(11, 1_200), &bond, account(11), Metadata::default())
             .expect("epoch recorded");
-
         let exports = expected_exports(&service);
         let report = service.reconcile_ledger(&exports);
-
         assert!(report.is_clean());
         assert_eq!(report.matched_transfers, exports.len());
         assert_eq!(report.expected_amount, report.exported_amount);
@@ -2076,23 +1894,19 @@ mod tests {
         assert!(report.unexpected_transfers.is_empty());
         assert!(report.mismatched_transfers.is_empty());
     }
-
     #[test]
     fn reconcile_detects_missing_transfer() {
         let (mut service, _) = payout_service();
         let bond = bond_entry(1_000);
-
         service
             .process_epoch(&metrics(12, 1_000), &bond, account(12), Metadata::default())
             .expect("epoch recorded");
         service
             .process_epoch(&metrics(13, 1_050), &bond, account(13), Metadata::default())
             .expect("epoch recorded");
-
         let mut exports = expected_exports(&service);
         let missing = exports.pop().expect("at least one export");
         let report = service.reconcile_ledger(&exports);
-
         assert!(!report.is_clean());
         assert_eq!(report.missing_transfers.len(), 1);
         assert_eq!(
@@ -2101,39 +1915,31 @@ mod tests {
         );
         assert_eq!(report.matched_transfers, exports.len());
     }
-
     #[test]
     fn reconcile_reports_unexpected_transfer() {
         let (mut service, _) = payout_service();
         let bond = bond_entry(1_000);
-
         service
             .process_epoch(&metrics(14, 1_000), &bond, account(14), Metadata::default())
             .expect("epoch recorded");
-
         let mut exports = expected_exports(&service);
         let mut unexpected = exports[0].clone();
         unexpected.epoch += 100;
         exports.push(unexpected.clone());
-
         let report = service.reconcile_ledger(&exports);
         assert!(!report.is_clean());
         assert_eq!(report.unexpected_transfers.len(), 1);
         assert_eq!(report.unexpected_transfers[0], unexpected);
     }
-
     #[test]
     fn reconcile_detects_mismatch_amount() {
         let (mut service, _) = payout_service();
         let bond = bond_entry(1_000);
-
         service
             .process_epoch(&metrics(15, 1_000), &bond, account(15), Metadata::default())
             .expect("epoch recorded");
-
         let mut exports = expected_exports(&service);
         exports[0].amount = quantity(999);
-
         let report = service.reconcile_ledger(&exports);
         assert!(!report.is_clean());
         assert_eq!(report.mismatched_transfers.len(), 1);
@@ -2145,24 +1951,19 @@ mod tests {
                 .any(|reason| matches!(reason, MismatchReason::Amount))
         );
     }
-
     #[test]
     fn reconcile_accumulates_amounts_wider_than_u128_exactly() {
         let (mut service, _) = payout_service();
         let bond = bond_entry(1_000);
-
         service
             .process_epoch(&metrics(16, 1_000), &bond, account(16), Metadata::default())
             .expect("epoch recorded");
-
         let mut exports = expected_exports(&service);
         let too_wide = "340282366920938463463374607431768211456"
             .parse::<Quantity>()
             .expect("2^128 is a valid 512-bit quantity");
         exports[0].amount = too_wide.clone();
-
         let report = service.reconcile_ledger(&exports);
-
         assert!(!report.is_clean());
         assert!(report.amount_arithmetic_errors.is_empty());
         assert_eq!(report.exported_amount, too_wide);
@@ -2175,14 +1976,12 @@ mod tests {
                 .any(|reason| matches!(reason, MismatchReason::Amount))
         );
     }
-
     #[test]
     fn quantity_to_nanos_rejects_sub_nano_precision_instead_of_truncating() {
         let exact = "1.000000001"
             .parse::<Quantity>()
             .expect("canonical nano quantity");
         assert_eq!(quantity_to_nanos(&exact), Ok(1_000_000_001));
-
         let inexact = "0.0000000001"
             .parse::<Quantity>()
             .expect("canonical sub-nano quantity");
@@ -2191,7 +1990,6 @@ mod tests {
             Err(QuantityToNanosError::InexactNanos)
         );
     }
-
     #[test]
     fn reconcile_includes_adjustments() {
         let (mut service, treasury) = payout_service();
@@ -2200,11 +1998,9 @@ mod tests {
         let relay_id = [0xCD; 32];
         let mut metric = metrics(20, 1_200);
         metric.relay_id = relay_id;
-
         service
             .process_epoch(&metric, &bond, relay_account.clone(), Metadata::default())
             .expect("epoch recorded");
-
         let credit_dispute = service
             .file_dispute(
                 relay_id,
@@ -2230,7 +2026,6 @@ mod tests {
             )
             .expect("credit dispute resolved");
         assert!(credit_outcome.transfer.is_some());
-
         let debit_dispute = service
             .file_dispute(
                 relay_id,
@@ -2256,12 +2051,10 @@ mod tests {
             )
             .expect("debit dispute resolved");
         assert!(debit_outcome.transfer.is_some());
-
         let exports = expected_exports(&service);
         assert_eq!(exports.len(), 3);
         let report = service.reconcile_ledger(&exports);
         assert!(report.is_clean());
-
         let payout_count = exports
             .iter()
             .filter(|record| record.kind == TransferKind::Payout)
@@ -2274,11 +2067,9 @@ mod tests {
             .iter()
             .filter(|record| record.kind == TransferKind::Debit)
             .count();
-
         assert_eq!(payout_count, 1);
         assert_eq!(credit_count, 1);
         assert_eq!(debit_count, 1);
-
         // Ensure credit transfer points from treasury to relay and debit reverses.
         let credit = exports
             .iter()
@@ -2286,7 +2077,6 @@ mod tests {
             .expect("credit record present");
         assert_eq!(credit.source_asset.account, treasury);
         assert_eq!(credit.destination, relay_account);
-
         let debit = exports
             .iter()
             .find(|record| record.kind == TransferKind::Debit)
@@ -2294,32 +2084,26 @@ mod tests {
         assert_eq!(debit.source_asset.account, relay_account);
         assert_eq!(debit.destination, treasury);
     }
-
     #[test]
     fn replay_instruction_preserves_ledgers() {
         let (mut service, treasury) = payout_service();
         let bond = bond_entry(1_000);
         let metrics = metrics(30, 1_500);
-
         let outcome = service
             .process_epoch(&metrics, &bond, account(30), Metadata::default())
             .expect("epoch recorded");
-
         let instruction = outcome.instruction.clone();
-
         let mut replay_service =
             RelayPayoutService::new(reward_engine(), RelayPayoutLedger::new(treasury));
         replay_service
             .record_reward(instruction.clone())
             .expect("replay succeeds");
-
         let original_snapshot = service
             .ledger_snapshot(instruction.relay_id)
             .expect("original snapshot");
         let replay_snapshot = replay_service
             .ledger_snapshot(instruction.relay_id)
             .expect("replay snapshot");
-
         assert_eq!(original_snapshot.total_paid, replay_snapshot.total_paid);
         assert_eq!(original_snapshot.net_paid, replay_snapshot.net_paid);
         assert_eq!(

@@ -1,10 +1,8 @@
 //! Regression coverage for the documented schema sample payload.
-
 use norito::{
     core::{Header, header_flags},
     schema::SamplePayload,
 };
-
 #[test]
 fn sample_payload_matches_documented_compact_wire_layout() {
     let payload = SamplePayload {
@@ -13,10 +11,8 @@ fn sample_payload_matches_documented_compact_wire_layout() {
         label: "demo".into(),
         items: vec![1, 2, 3],
     };
-
     let encoded = norito::to_bytes(&payload).expect("encode sample payload");
     let (header, body) = encoded.split_at(Header::SIZE);
-
     assert_eq!(header[Header::SIZE - 1], header_flags::COMPACT_LEN);
     assert_eq!(
         body,

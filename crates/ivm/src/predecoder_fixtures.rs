@@ -1,16 +1,12 @@
 //! Helpers to generate predecoder golden fixtures (JSON/bin) for tests and tools.
 //!
 //! Exposed so unit tests can generate fixtures on demand without shelling out to Cargo.
-
+use crate::{ProgramMetadata, encoding, instruction, ivm_cache::IvmCache, kotodama::wide as kwide};
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-
-use sha2::{Digest, Sha256};
-
-use crate::{ProgramMetadata, encoding, instruction, ivm_cache::IvmCache, kotodama::wide as kwide};
-
 fn build_mixed_code() -> Vec<u8> {
     let mut code = Vec::new();
     // 1) Wide ADD r3 = r1 + r2
@@ -29,7 +25,6 @@ fn build_mixed_code() -> Vec<u8> {
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     code
 }
-
 fn json_object<I>(entries: I) -> norito::json::Value
 where
     I: IntoIterator<Item = (String, norito::json::Value)>,
@@ -40,7 +35,6 @@ where
     }
     norito::json::Value::Object(map)
 }
-
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
@@ -52,7 +46,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     }
     s
 }
-
 fn mixed_metadata_variants() -> [ProgramMetadata; 2] {
     [
         ProgramMetadata {
@@ -73,7 +66,6 @@ fn mixed_metadata_variants() -> [ProgramMetadata; 2] {
         },
     ]
 }
-
 /// Build the canonical named IVM artifacts in the mixed predecoder fixture.
 #[must_use]
 pub fn generated_predecoder_mixed_artifacts() -> Vec<(String, Vec<u8>)> {
@@ -96,7 +88,6 @@ pub fn generated_predecoder_mixed_artifacts() -> Vec<(String, Vec<u8>)> {
         })
         .collect()
 }
-
 /// Generate the default mixed predecoder fixtures under the given root directory.
 ///
 /// Layout (created if missing):
@@ -109,14 +100,11 @@ pub fn generated_predecoder_mixed_artifacts() -> Vec<(String, Vec<u8>)> {
 pub fn generate_predecoder_mixed_fixtures(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let artifacts_dir = root.join("artifacts");
     fs::create_dir_all(&artifacts_dir)?;
-
     // 1) Build code and decoded op list
     let code = build_mixed_code();
     let decoded = IvmCache::decode_stream(&code)?;
-
     // 2) Write code.bin
     fs::write(root.join("code.bin"), &code)?;
-
     // 3) Write decoded.json
     let decoded_items: Vec<_> = decoded
         .iter()
@@ -150,7 +138,6 @@ pub fn generate_predecoder_mixed_fixtures(root: &Path) -> Result<(), Box<dyn std
         root.join("decoded.json"),
         norito::json::to_json_pretty(&decoded_doc)?,
     )?;
-
     // 4) Header variants and artifacts
     let mut index_entries = vec![];
     for (m, (fname, artifact)) in mixed_metadata_variants()
@@ -190,7 +177,6 @@ pub fn generate_predecoder_mixed_fixtures(root: &Path) -> Result<(), Box<dyn std
             ),
         ]));
     }
-
     // 5) Write index.json summarizing artifacts
     let index_doc = json_object([
         (
@@ -218,10 +204,8 @@ pub fn generate_predecoder_mixed_fixtures(root: &Path) -> Result<(), Box<dyn std
         root.join("index.json"),
         norito::json::to_json_pretty(&index_doc)?,
     )?;
-
     Ok(())
 }
-
 /// Convenience: default fixtures path used by tests.
 pub fn default_predecoder_mixed_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/predecoder/mixed")

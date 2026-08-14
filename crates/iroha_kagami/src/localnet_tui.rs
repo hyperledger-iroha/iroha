@@ -1,16 +1,3 @@
-use std::{
-    fmt, fs,
-    io::{BufWriter, Write},
-    num::NonZeroU16,
-    path::PathBuf,
-};
-
-use clap::Args as ClapArgs;
-use color_eyre::eyre::WrapErr as _;
-use inquire::{Confirm, CustomType, Select, Text};
-use iroha_data_model::parameter::system::SumeragiConsensusMode;
-use iroha_test_samples::ALICE_ID;
-
 use crate::{
     Outcome, RunArgs,
     localnet::{
@@ -20,20 +7,28 @@ use crate::{
     },
     tui,
 };
-
+use clap::Args as ClapArgs;
+use color_eyre::eyre::WrapErr as _;
+use inquire::{Confirm, CustomType, Select, Text};
+use iroha_data_model::parameter::system::SumeragiConsensusMode;
+use iroha_test_samples::ALICE_ID;
+use std::{
+    fmt, fs,
+    io::{BufWriter, Write},
+    num::NonZeroU16,
+    path::PathBuf,
+};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SoraProfileChoice {
     None,
     Dataspace,
     Nexus,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConsensusModeChoice {
     Permissioned,
     Npos,
 }
-
 impl fmt::Display for SoraProfileChoice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -43,7 +38,6 @@ impl fmt::Display for SoraProfileChoice {
         }
     }
 }
-
 impl fmt::Display for ConsensusModeChoice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -52,7 +46,6 @@ impl fmt::Display for ConsensusModeChoice {
         }
     }
 }
-
 impl From<ConsensusModeChoice> for SumeragiConsensusMode {
     fn from(value: ConsensusModeChoice) -> Self {
         match value {
@@ -61,13 +54,11 @@ impl From<ConsensusModeChoice> for SumeragiConsensusMode {
         }
     }
 }
-
 struct ConsensusModePrompt {
     choices: Vec<ConsensusModeChoice>,
     default_index: usize,
     locked: bool,
 }
-
 fn default_localnet_output_directory() -> String {
     let temp_dir = std::env::temp_dir();
     let temp_dir = fs::canonicalize(&temp_dir).unwrap_or(temp_dir);
@@ -76,7 +67,6 @@ fn default_localnet_output_directory() -> String {
         .to_string_lossy()
         .into_owned()
 }
-
 fn consensus_mode_prompt(
     build_line: iroha_version::BuildLine,
     sora_profile: Option<SoraProfile>,
@@ -101,11 +91,9 @@ fn consensus_mode_prompt(
         locked: false,
     }
 }
-
 /// Interactive TUI to generate a bare-metal local network (no Docker).
 #[derive(ClapArgs, Debug, Clone)]
 pub struct LocalnetWizardArgs;
-
 impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
     #[allow(clippy::too_many_lines)]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
@@ -167,11 +155,9 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
         let out_dir = Text::new("Output directory?")
             .with_default(&default_out_dir)
             .prompt()?;
-
         let extra_accounts: u16 = CustomType::new("Extra accounts (in wonderland)?")
             .with_default(0u16)
             .prompt()?;
-
         let mut assets: Vec<AssetSpec> = Vec::new();
         if Confirm::new("Register a sample asset?")
             .with_default(true)
@@ -211,7 +197,6 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
                 });
             }
         }
-
         let opts = LocalnetOptions {
             build_line,
             sora_profile,
@@ -228,16 +213,13 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
             block_cadence_ms: None,
             consensus_mode,
         };
-
         tui::status("Generating localnet (interactive)");
         generate_localnet(&opts, writer).wrap_err("localnet wizard")
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn consensus_prompt_locks_permissioned_for_iroha2() {
         let prompt = consensus_mode_prompt(iroha_version::BuildLine::Iroha2, None);
@@ -245,7 +227,6 @@ mod tests {
         assert_eq!(prompt.choices, vec![ConsensusModeChoice::Permissioned]);
         assert_eq!(prompt.default_index, 0);
     }
-
     #[test]
     fn consensus_prompt_locks_npos_for_sora_nexus() {
         let prompt =
@@ -254,7 +235,6 @@ mod tests {
         assert_eq!(prompt.choices, vec![ConsensusModeChoice::Npos]);
         assert_eq!(prompt.default_index, 0);
     }
-
     #[test]
     fn consensus_prompt_allows_choice_for_non_nexus_iroha3() {
         let prompt = consensus_mode_prompt(iroha_version::BuildLine::Iroha3, None);
@@ -265,13 +245,11 @@ mod tests {
         );
         assert_eq!(prompt.default_index, 0);
     }
-
     #[test]
     fn default_output_directory_uses_the_canonical_os_temp_directory() {
         let expected_temp_dir = std::env::temp_dir();
         let expected_temp_dir = fs::canonicalize(&expected_temp_dir).unwrap_or(expected_temp_dir);
         let default = PathBuf::from(default_localnet_output_directory());
-
         assert_eq!(default, expected_temp_dir.join("iroha-localnet"));
         assert!(default.is_absolute());
     }

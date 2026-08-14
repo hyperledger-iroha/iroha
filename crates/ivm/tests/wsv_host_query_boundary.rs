@@ -1,5 +1,4 @@
 //! Strict V1 `SMARTCONTRACT_EXECUTE_QUERY` request boundary in the mock WSV host.
-
 use iroha_data_model::query::{QueryRequest, SingularQueryBox, executor::FindParameters};
 use iroha_primitives::json::Json;
 use ivm::{
@@ -8,7 +7,6 @@ use ivm::{
     syscalls,
 };
 use ivm_abi::codec::encode_canonical_norito;
-
 fn sample_account() -> AccountId {
     AccountId::new(
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
@@ -16,7 +14,6 @@ fn sample_account() -> AccountId {
             .expect("public key"),
     )
 }
-
 fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -27,7 +24,6 @@ fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&hash);
     out
 }
-
 fn execute_query(
     host: &mut WsvHost,
     vm: &mut IVM,
@@ -40,7 +36,6 @@ fn execute_query(
     vm.set_register(10, pointer);
     host.syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY, vm)
 }
-
 #[test]
 fn canonical_query_request_is_validated_before_not_implemented() {
     let caller = sample_account();
@@ -48,7 +43,6 @@ fn canonical_query_request_is_validated_before_not_implemented() {
     let mut vm = IVM::new(u64::MAX);
     let request = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
     let canonical = encode_canonical_norito(&request).expect("canonical QueryRequest");
-
     let alternate_flags =
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
     let ambient_guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
@@ -67,7 +61,6 @@ fn canonical_query_request_is_validated_before_not_implemented() {
     );
     drop(ambient_guard);
 }
-
 #[test]
 fn alternate_wrong_nominal_wrong_pointer_and_malformed_queries_are_rejected() {
     let caller = sample_account();
@@ -75,7 +68,6 @@ fn alternate_wrong_nominal_wrong_pointer_and_malformed_queries_are_rejected() {
     let mut vm = IVM::new(u64::MAX);
     let request = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
     let canonical = encode_canonical_norito(&request).expect("canonical QueryRequest");
-
     let alternate_flags =
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
     let alternate = {
@@ -87,7 +79,6 @@ fn alternate_wrong_nominal_wrong_pointer_and_malformed_queries_are_rejected() {
         execute_query(&mut host, &mut vm, PointerType::NoritoBytes, &alternate),
         Err(VMError::NoritoInvalid)
     );
-
     let wrong_nominal = encode_canonical_norito(&Json::from(norito::json::Value::Object(
         norito::json::Map::new(),
     )))

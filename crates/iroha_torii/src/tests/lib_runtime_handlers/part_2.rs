@@ -9,7 +9,6 @@ async fn handler_post_transaction_entrypoint_uses_authenticated_api_token_rate_l
         app_mut.require_api_token = true;
         app_mut.api_tokens_set = Arc::new(HashSet::from(["entrypoint-token".to_owned()]));
     }
-
     let first_keypair = checked_torii_test_keypair_from_seed_byte(
         0xc7,
         Algorithm::Ed25519,
@@ -43,7 +42,6 @@ async fn handler_post_transaction_entrypoint_uses_authenticated_api_token_rate_l
     .sign(second_keypair.private_key());
     let mut headers = HeaderMap::new();
     headers.insert("x-api-token", HeaderValue::from_static("entrypoint-token"));
-
     let first = super::handler_post_transaction_entrypoint(
         State(app.clone()),
         headers.clone(),
@@ -54,7 +52,6 @@ async fn handler_post_transaction_entrypoint_uses_authenticated_api_token_rate_l
     .expect("first token-keyed entrypoint accepted")
     .into_response();
     assert_eq!(first.status(), StatusCode::ACCEPTED);
-
     let err = match super::handler_post_transaction_entrypoint(
         State(app),
         headers,
@@ -68,7 +65,6 @@ async fn handler_post_transaction_entrypoint_uses_authenticated_api_token_rate_l
     };
     assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
 }
-
 #[tokio::test]
 async fn handler_post_transaction_entrypoint_reports_full_queue_before_rate_limit() {
     let mut app = mk_app_state_for_tests();
@@ -78,7 +74,6 @@ async fn handler_post_transaction_entrypoint_reports_full_queue_before_rate_limi
         app_mut.fee_policy = FeePolicy::Disabled;
     }
     install_single_slot_transaction_queue(&mut app);
-
     let keypair = checked_torii_test_keypair_from_seed_byte(
         0xcf,
         Algorithm::Ed25519,
@@ -111,7 +106,6 @@ async fn handler_post_transaction_entrypoint_reports_full_queue_before_rate_limi
         "x-api-token",
         HeaderValue::from_static("entrypoint-queue-before-rate"),
     );
-
     let first = super::handler_post_transaction_entrypoint(
         State(app.clone()),
         headers.clone(),
@@ -122,7 +116,6 @@ async fn handler_post_transaction_entrypoint_reports_full_queue_before_rate_limi
     .expect("first entrypoint should fill the queue")
     .into_response();
     assert_eq!(first.status(), StatusCode::ACCEPTED);
-
     let err = match super::handler_post_transaction_entrypoint(
         State(app.clone()),
         headers,
@@ -144,14 +137,12 @@ async fn handler_post_transaction_entrypoint_reports_full_queue_before_rate_limi
         Some("PRTRY:QUEUE_FULL")
     );
 }
-
 #[tokio::test]
 async fn handler_post_transaction_honors_prefer_return_minimal() {
     let mut app = mk_app_state_for_tests();
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-
     let keypair = checked_torii_test_keypair_from_seed_byte(
         0xc9,
         Algorithm::Ed25519,
@@ -171,7 +162,6 @@ async fn handler_post_transaction_honors_prefer_return_minimal() {
         HeaderName::from_static("prefer"),
         HeaderValue::from_static("respond-async, return=minimal"),
     );
-
     let response = super::handler_post_transaction(
         State(app),
         headers,
@@ -204,7 +194,6 @@ async fn handler_post_transaction_honors_prefer_return_minimal() {
         "minimal response should not sign a receipt body"
     );
 }
-
 fn transaction_batch_body_for_test(
     payloads: Vec<Vec<u8>>,
 ) -> crate::utils::extractors::NoritoBytes {
@@ -212,7 +201,6 @@ fn transaction_batch_body_for_test(
         norito::to_bytes(&payloads).expect("encode transaction batch envelope"),
     ))
 }
-
 #[test]
 fn transaction_ingress_compute_corridor_enforces_configured_parallelism() {
     let limiter = Arc::new(tokio::sync::Semaphore::new(2));
@@ -229,12 +217,10 @@ fn transaction_ingress_compute_corridor_enforces_configured_parallelism() {
             ..
         }
     ));
-
     drop(first);
     let replacement = try_acquire_transaction_ingress_compute(&limiter).expect("released capacity");
     drop((second, replacement));
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancelled_transaction_ingress_worker_retains_physical_capacity() {
     let limiter = Arc::new(tokio::sync::Semaphore::new(1));
@@ -253,11 +239,9 @@ async fn cancelled_transaction_ingress_worker_retains_physical_capacity() {
     started_rx
         .recv_timeout(Duration::from_secs(5))
         .expect("physical worker started");
-
     request.abort();
     let _ = request.await;
     let retained_after_cancellation = try_acquire_transaction_ingress_compute(&limiter).is_err();
-
     release_tx.send(()).expect("release physical worker");
     let replacement = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -275,7 +259,6 @@ async fn cancelled_transaction_ingress_worker_retains_physical_capacity() {
         "HTTP cancellation must not free capacity while physical work continues"
     );
 }
-
 #[test]
 fn transaction_batch_body_limit_rejects_before_decode() {
     let body = transaction_batch_body_for_test(vec![vec![0_u8; 16]]).0;
@@ -289,7 +272,6 @@ fn transaction_batch_body_limit_rejects_before_decode() {
         }
     ));
 }
-
 #[test]
 fn transaction_batch_declared_decoded_limit_rejects_compressed_expansion() {
     let payloads = vec![vec![0_u8; 64 * 1024]];
@@ -303,7 +285,6 @@ fn transaction_batch_declared_decoded_limit_rejects_compressed_expansion() {
         header.length > u64::try_from(body.len()).unwrap_or(u64::MAX),
         "fixture must expand beyond its encoded length"
     );
-
     let error = validate_transaction_batch_body_size(&body, body.len())
         .expect_err("declared decoded bytes over the limit must be rejected");
     assert!(matches!(
@@ -314,7 +295,6 @@ fn transaction_batch_declared_decoded_limit_rejects_compressed_expansion() {
         }
     ));
 }
-
 #[tokio::test]
 async fn transaction_batch_count_limit_rejects_before_transaction_decode() {
     let mut app = mk_app_state_for_tests();
@@ -322,7 +302,6 @@ async fn transaction_batch_count_limit_rejects_before_transaction_decode() {
         .expect("unique app state")
         .transaction_batch_max_transactions = 1;
     let body = transaction_batch_body_for_test(vec![vec![0xff], vec![0xff]]);
-
     let error =
         match super::handler_post_transactions_batch(State(app.clone()), HeaderMap::new(), body)
             .await
@@ -343,7 +322,6 @@ async fn transaction_batch_count_limit_rejects_before_transaction_decode() {
         "count rejection must not push a valid prefix"
     );
 }
-
 #[tokio::test]
 async fn transaction_batch_queue_capacity_rejects_before_transaction_decode() {
     let mut app = mk_app_state_for_tests();
@@ -380,7 +358,6 @@ async fn transaction_batch_queue_capacity_rejects_before_transaction_decode() {
     .expect("fixture transaction should fill the queue");
     assert_eq!(accepted.status(), StatusCode::ACCEPTED);
     assert_eq!(app.queue.active_len(), 1);
-
     let error = match super::handler_post_transactions_batch(
         State(app.clone()),
         HeaderMap::new(),
@@ -398,14 +375,12 @@ async fn transaction_batch_queue_capacity_rejects_before_transaction_decode() {
         "queue rejection must leave the existing transaction untouched"
     );
 }
-
 #[tokio::test]
 async fn handler_post_transactions_batch_accepts_multiple_payloads() {
     let mut app = mk_app_state_for_tests();
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-
     let keypair = checked_torii_test_keypair_from_seed_byte(
         0xca,
         Algorithm::Ed25519,
@@ -431,7 +406,6 @@ async fn handler_post_transactions_batch_accepts_multiple_payloads() {
         iroha_version::codec::EncodeVersioned::encode_versioned(&tx1),
         iroha_version::codec::EncodeVersioned::encode_versioned(&tx2),
     ];
-
     let response = super::handler_post_transactions_batch(
         State(app.clone()),
         HeaderMap::new(),
@@ -449,7 +423,6 @@ async fn handler_post_transactions_batch_accepts_multiple_payloads() {
     );
     assert_eq!(app.queue.active_len(), 2);
 }
-
 #[tokio::test]
 async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_batch() {
     let mut app = mk_app_state_for_tests();
@@ -460,7 +433,6 @@ async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_bat
         app_mut.require_api_token = true;
         app_mut.api_tokens_set = Arc::new(HashSet::from(["batch-token".to_owned()]));
     }
-
     let keypair = checked_torii_test_keypair_from_seed_byte(
         0xcb,
         Algorithm::Ed25519,
@@ -488,7 +460,6 @@ async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_bat
         axum::http::HeaderName::from_static("x-api-token"),
         HeaderValue::from_static("batch-token"),
     );
-
     let err = match super::handler_post_transactions_batch(
         State(app.clone()),
         headers,
@@ -499,7 +470,6 @@ async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_bat
         Ok(_) => panic!("expected token rate limit"),
         Err(err) => err,
     };
-
     assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(app.queue.active_len(), 0);
     assert!(
@@ -507,7 +477,6 @@ async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_bat
         "failed same-key batch should consume the token prefix that would have passed"
     );
 }
-
 #[tokio::test]
 async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_authorities() {
     let mut app = mk_app_state_for_tests();
@@ -518,7 +487,6 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
         app_mut.require_api_token = true;
         app_mut.api_tokens_set = Arc::new(HashSet::from(["batch-distinct-token".to_owned()]));
     }
-
     let network_id = *app.state.network_id_ref();
     let payloads = (0..3)
         .map(|index| {
@@ -546,7 +514,6 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
         axum::http::HeaderName::from_static("x-api-token"),
         HeaderValue::from_static("batch-distinct-token"),
     );
-
     let err = match super::handler_post_transactions_batch(
         State(app.clone()),
         headers,
@@ -557,7 +524,6 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
         Ok(_) => panic!("expected token rate limit"),
         Err(err) => err,
     };
-
     assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(app.queue.active_len(), 0);
     assert!(
@@ -565,14 +531,12 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
         "distinct authorities should still consume the shared API-token key"
     );
 }
-
 #[tokio::test]
 async fn handler_post_transactions_batch_rejects_invalid_ed25519_precheck_without_partial_push() {
     let mut app = mk_app_state_for_tests();
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-
     let keypair = checked_torii_test_keypair_from_seed_byte(
         0xd0,
         Algorithm::Ed25519,
@@ -602,7 +566,6 @@ async fn handler_post_transactions_batch_rejects_invalid_ed25519_precheck_withou
         iroha_version::codec::EncodeVersioned::encode_versioned(&tx1),
         iroha_version::codec::EncodeVersioned::encode_versioned(&tx2),
     ];
-
     let err = match super::handler_post_transactions_batch(
         State(app.clone()),
         HeaderMap::new(),
@@ -623,7 +586,6 @@ async fn handler_post_transactions_batch_rejects_invalid_ed25519_precheck_withou
     );
     assert_eq!(app.queue.active_len(), 0);
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history() {
@@ -647,9 +609,13 @@ async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history()
     let domain = Domain::new(domain_id).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let fee_sink_account = Account::new(fee_sink.clone()).build(&fee_sink);
-    let fee_asset_definition =
-        iroha_data_model::asset::AssetDefinition::numeric(fee_asset_id.clone(), "xor".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
-            .build(&authority);
+    let fee_asset_definition = iroha_data_model::asset::AssetDefinition::numeric(
+        fee_asset_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&authority);
     let world = World::with(
         [domain],
         [account, fee_sink_account],
@@ -657,7 +623,6 @@ async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history()
     );
     let mut app = mk_app_state_for_tests_with_world(world);
     configure_nexus_fee_admission_for_test(&mut app, &fee_asset_id, &fee_sink);
-
     let tx = TransactionBuilder::new(
         *app.state.network_id_ref(),
         authority.clone(),
@@ -667,7 +632,6 @@ async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history()
     .sign(keypair.private_key());
     let tx_hash = tx.hash();
     let tx_hash_hex = tx_hash.to_string();
-
     let response = match super::handler_post_transaction(
         State(app.clone()),
         HeaderMap::new(),
@@ -679,7 +643,6 @@ async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history()
         Ok(_) => panic!("expected Nexus fee admission rejection"),
         Err(err) => err.into_response(),
     };
-
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(
         response
@@ -693,7 +656,6 @@ async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history()
         !app.state.has_committed_transaction(tx_hash),
         "ingress rejection should not create committed history"
     );
-
     let explorer = super::handler_explorer_transaction_detail(
         State(app),
         HeaderMap::new(),
@@ -704,7 +666,6 @@ async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history()
     .expect("explorer detail response");
     assert_eq!(explorer.status(), StatusCode::NOT_FOUND);
 }
-
 #[tokio::test]
 async fn handler_policy_reports_tx_rate_limit_as_always_enforced() {
     let mut app = mk_app_state_for_tests();
@@ -713,13 +674,11 @@ async fn handler_policy_reports_tx_rate_limit_as_always_enforced() {
         app_mut.fee_policy = FeePolicy::Disabled;
         app_mut.high_load_tx_threshold = usize::MAX;
     }
-
     let response =
         super::handler_policy(State(app), HeaderMap::new(), crate::loopback_connect_info())
             .await
             .expect("policy response")
             .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
@@ -730,7 +689,6 @@ async fn handler_policy_reports_tx_rate_limit_as_always_enforced() {
         Some(&norito::json::Value::Bool(true))
     );
 }
-
 #[tokio::test]
 async fn handler_policy_reports_required_token_even_when_configuration_is_unavailable() {
     let mut app = mk_app_state_for_tests();
@@ -742,7 +700,6 @@ async fn handler_policy_reports_required_token_even_when_configuration_is_unavai
             limits::parse_cidr("127.0.0.0/8").expect("loopback CIDR"),
         ]);
     }
-
     let response =
         super::handler_policy(State(app), HeaderMap::new(), crate::loopback_connect_info())
             .await
@@ -762,14 +719,12 @@ async fn handler_policy_reports_required_token_even_when_configuration_is_unavai
         Some(&norito::json::Value::Bool(true))
     );
 }
-
 #[tokio::test]
 async fn handler_post_transaction_high_load_threshold_does_not_reject_before_enqueue() {
     let mut app = mk_app_state_for_tests();
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = 1;
-
     let keypair = checked_torii_test_keypair_from_seed_byte(
         0xd3,
         Algorithm::Ed25519,
@@ -791,7 +746,6 @@ async fn handler_post_transaction_high_load_threshold_does_not_reject_before_enq
     )
     .with_instructions([Log::new(Level::INFO, "early-shed-2".to_string())])
     .sign(keypair.private_key());
-
     let first = super::handler_post_transaction(
         State(app.clone()),
         HeaderMap::new(),
@@ -803,7 +757,6 @@ async fn handler_post_transaction_high_load_threshold_does_not_reject_before_enq
     .into_response();
     assert_eq!(first.status(), StatusCode::ACCEPTED);
     assert_eq!(app.queue.active_len(), 1);
-
     let second = super::handler_post_transaction(
         State(app.clone()),
         HeaderMap::new(),
@@ -816,14 +769,12 @@ async fn handler_post_transaction_high_load_threshold_does_not_reject_before_enq
     assert_eq!(second.status(), StatusCode::ACCEPTED);
     assert_eq!(app.queue.active_len(), 2);
 }
-
 #[tokio::test]
 async fn handler_post_transaction_allows_enqueue_when_queue_age_saturates() {
     let mut app = mk_app_state_for_tests();
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-
     let keypair = checked_torii_test_keypair_from_seed_byte(
         0xd4,
         Algorithm::Ed25519,
@@ -845,7 +796,6 @@ async fn handler_post_transaction_allows_enqueue_when_queue_age_saturates() {
     )
     .with_instructions([Log::new(Level::INFO, "age-shed-2".to_string())])
     .sign(keypair.private_key());
-
     let first = super::handler_post_transaction(
         State(app.clone()),
         HeaderMap::new(),
@@ -857,7 +807,6 @@ async fn handler_post_transaction_allows_enqueue_when_queue_age_saturates() {
     .into_response();
     assert_eq!(first.status(), StatusCode::ACCEPTED);
     assert_eq!(app.queue.active_len(), 1);
-
     let snapshot = app
         .queue
         .backdate_queued_transactions_for_tests(Duration::from_secs(3));
@@ -865,7 +814,6 @@ async fn handler_post_transaction_allows_enqueue_when_queue_age_saturates() {
         snapshot.saturated_by_age,
         "test setup should make queue age saturation observable"
     );
-
     let pressure = app.queue.pressure_snapshot();
     assert!(
         pressure.saturated_by_age,
@@ -875,7 +823,6 @@ async fn handler_post_transaction_allows_enqueue_when_queue_age_saturates() {
         !app.queue.current_backpressure().is_saturated(),
         "age-only queue pressure must not reject ingress before capacity"
     );
-
     let second = super::handler_post_transaction(
         State(app.clone()),
         HeaderMap::new(),
@@ -888,12 +835,10 @@ async fn handler_post_transaction_allows_enqueue_when_queue_age_saturates() {
     assert_eq!(second.status(), StatusCode::ACCEPTED);
     assert_eq!(app.queue.active_len(), 2);
 }
-
 #[tokio::test]
 async fn handler_post_transaction_returns_queue_full_only_for_real_capacity_overflow() {
     let mut app = mk_app_state_for_tests();
     install_single_slot_transaction_queue(&mut app);
-
     let keypair = checked_torii_test_keypair_from_seed_byte(
         0xd5,
         Algorithm::Ed25519,
@@ -915,7 +860,6 @@ async fn handler_post_transaction_returns_queue_full_only_for_real_capacity_over
     )
     .with_instructions([Log::new(Level::INFO, "queue-full-2".to_string())])
     .sign(keypair.private_key());
-
     let first = super::handler_post_transaction(
         State(app.clone()),
         HeaderMap::new(),
@@ -926,7 +870,6 @@ async fn handler_post_transaction_returns_queue_full_only_for_real_capacity_over
     .expect("first transaction should be accepted")
     .into_response();
     assert_eq!(first.status(), StatusCode::ACCEPTED);
-
     let err = match super::handler_post_transaction(
         State(app.clone()),
         HeaderMap::new(),
@@ -948,14 +891,12 @@ async fn handler_post_transaction_returns_queue_full_only_for_real_capacity_over
         Some("PRTRY:QUEUE_FULL")
     );
 }
-
 #[tokio::test]
 async fn handler_post_transaction_does_not_early_shed_when_only_inflight_tx_is_old() {
     let mut app = mk_app_state_for_tests();
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-
     let keypair = checked_torii_test_keypair_from_seed_byte(
         0xd6,
         Algorithm::Ed25519,
@@ -977,11 +918,9 @@ async fn handler_post_transaction_does_not_early_shed_when_only_inflight_tx_is_o
     )
     .with_instructions([Log::new(Level::INFO, "age-inflight-2".to_string())])
     .sign(keypair.private_key());
-
     let _ = app
         .queue
         .refresh_pressure_budget_from_block_time(Duration::ZERO);
-
     let first = super::handler_post_transaction(
         State(app.clone()),
         HeaderMap::new(),
@@ -992,7 +931,6 @@ async fn handler_post_transaction_does_not_early_shed_when_only_inflight_tx_is_o
     .expect("first transaction should be accepted")
     .into_response();
     assert_eq!(first.status(), StatusCode::ACCEPTED);
-
     let mut guards = Vec::new();
     app.queue.get_transactions_for_block(
         &app.state.view(),
@@ -1001,9 +939,7 @@ async fn handler_post_transaction_does_not_early_shed_when_only_inflight_tx_is_o
     );
     assert_eq!(guards.len(), 1, "queue should expose one in-flight guard");
     assert_eq!(app.queue.queued_len(), 0, "no queued transactions remain");
-
     std::thread::sleep(Duration::from_millis(2_100));
-
     let second = super::handler_post_transaction(
         State(app.clone()),
         HeaderMap::new(),
@@ -1019,29 +955,24 @@ async fn handler_post_transaction_does_not_early_shed_when_only_inflight_tx_is_o
         1,
         "second transaction should enqueue"
     );
-
     drop(guards);
 }
-
 #[test]
 fn signed_query_scope_classifies_trigger_inventory_queries_as_local_replicated() {
     let key_pair =
         checked_torii_test_ed25519_keypair(0xd7, "derive trigger inventory query fixture key");
     let authority = AccountId::new(key_pair.public_key().clone());
-
     let find_triggers = signed_find_triggers_query_for_test(authority.clone(), &key_pair);
     assert_eq!(
         super::signed_query_scope(&find_triggers.payload),
         super::SignedQueryScope::LocalReplicated
     );
-
     let find_active_ids = signed_find_active_trigger_ids_query_for_test(authority, &key_pair);
     assert_eq!(
         super::signed_query_scope(&find_active_ids.payload),
         super::SignedQueryScope::LocalReplicated
     );
 }
-
 #[test]
 fn signed_query_scope_classifies_exact_peer_inventory_as_public_control_plane() {
     let authority =
@@ -1050,13 +981,11 @@ fn signed_query_scope_classifies_exact_peer_inventory_as_public_control_plane() 
         &authority,
         iroha_data_model::query::QueryRequest::Start(build_find_peers_query_for_test()),
     );
-
     assert_eq!(
         super::signed_query_scope(&request),
         super::SignedQueryScope::PublicControlPlane
     );
 }
-
 #[test]
 fn signed_query_scope_rejects_cross_kind_target_payload_collisions() {
     let authority = checked_torii_test_account_id(
@@ -1075,7 +1004,6 @@ fn signed_query_scope_rejects_cross_kind_target_payload_collisions() {
     let mut global_roles_with_account_payload =
         build_find_roles_by_account_query_for_test(authority.clone());
     global_roles_with_account_payload.item = iroha_data_model::query::QueryItemKind::Role;
-
     for query in [
         history_with_target_payload,
         global_roles_with_account_payload,
@@ -1090,7 +1018,6 @@ fn signed_query_scope_rejects_cross_kind_target_payload_collisions() {
         );
     }
 }
-
 #[test]
 fn peer_inventory_scope_requires_exact_canonical_payload() {
     let authority = checked_torii_test_account_id(
@@ -1099,7 +1026,6 @@ fn peer_inventory_scope_requires_exact_canonical_payload() {
     );
     let mut trailing = build_find_peers_query_for_test();
     trailing.query_payload.push(0xa5);
-
     assert_eq!(
         super::signed_query_scope(&request_for_test(
             &authority,
@@ -1108,7 +1034,6 @@ fn peer_inventory_scope_requires_exact_canonical_payload() {
         super::SignedQueryScope::CrossDataspaceFanout
     );
 }
-
 #[test]
 fn signed_query_scope_uses_escrow_party_discriminants() {
     use iroha_data_model::{
@@ -1121,11 +1046,9 @@ fn signed_query_scope_uses_escrow_party_discriminants() {
             parameters::QueryParams,
         },
     };
-
     let authority =
         checked_torii_test_account_id(0xfa, "derive escrow query routing authority fixture key");
     let target = checked_torii_test_account_id(0xfb, "derive escrow query target fixture key");
-
     let seller_query = QueryWithParams {
         query: (),
         query_payload: norito::codec::Encode::encode(&FindAssetEscrowsBySeller {
@@ -1143,7 +1066,6 @@ fn signed_query_scope_uses_escrow_party_discriminants() {
         )),
         super::SignedQueryScope::TargetAccount(target.clone())
     );
-
     let buyer_query = QueryWithParams {
         query: (),
         query_payload: norito::codec::Encode::encode(&FindAssetEscrowsByBuyer {
@@ -1161,7 +1083,6 @@ fn signed_query_scope_uses_escrow_party_discriminants() {
         )),
         super::SignedQueryScope::TargetAccount(target.clone())
     );
-
     let legacy_item_tag = QueryWithParams {
         query: (),
         query_payload: norito::codec::Encode::encode(&FindAssetEscrowsBySeller {
@@ -1179,7 +1100,6 @@ fn signed_query_scope_uses_escrow_party_discriminants() {
         )),
         super::SignedQueryScope::CrossDataspaceFanout
     );
-
     let status_query = QueryWithParams {
         query: (),
         query_payload: norito::codec::Encode::encode(&FindAssetEscrowsByStatus {
@@ -1198,7 +1118,6 @@ fn signed_query_scope_uses_escrow_party_discriminants() {
         super::SignedQueryScope::CrossDataspaceFanout
     );
 }
-
 #[tokio::test]
 async fn public_peer_inventory_does_not_require_foreign_dataspace_read_grants() {
     let key_pair = checked_torii_test_ed25519_keypair(
@@ -1217,7 +1136,6 @@ async fn public_peer_inventory_does_not_require_foreign_dataspace_read_grants() 
         authority,
     )
     .sign(&key_pair);
-
     let response = super::handler_signed_query(
         State(app),
         HeaderMap::new(),
@@ -1229,11 +1147,9 @@ async fn public_peer_inventory_does_not_require_foreign_dataspace_read_grants() 
     .await
     .expect("canonical public peer inventory should execute locally")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     assert!(response.headers().get("x-iroha-routed-by").is_none());
 }
-
 #[test]
 fn account_id_inventory_does_not_collide_with_trigger_inventory_scope() {
     let authority =
@@ -1242,21 +1158,17 @@ fn account_id_inventory_does_not_collide_with_trigger_inventory_scope() {
         &authority,
         iroha_data_model::query::QueryRequest::Start(build_find_account_ids_query_for_test()),
     );
-
     assert_eq!(
         super::signed_query_scope(&request),
         super::SignedQueryScope::CrossDataspaceFanout
     );
 }
-
 #[test]
 fn query_scope_payload_matching_rejects_malformed_and_trailing_bytes() {
     use iroha_data_model::query::transaction::prelude::FindTransactions;
-
     let mut payload = norito::to_bytes(&FindTransactions::new())
         .expect("encode canonical transactions query payload");
     assert!(super::payload_matches_query::<FindTransactions>(&payload));
-
     payload.push(0xa5);
     assert!(
         !super::payload_matches_query::<FindTransactions>(&payload),
@@ -1267,28 +1179,21 @@ fn query_scope_payload_matching_rejects_malformed_and_trailing_bytes() {
         "malformed bytes must not inherit a privileged routing scope"
     );
 }
-
 #[test]
 fn iterable_target_account_query_builders_capture_target_payload() {
     let account_id =
         checked_torii_test_account_id(0xd8, "derive iterable account target fixture key");
-
     let domains_query = build_find_domains_by_account_query_for_test(account_id.clone());
     assert_domains_query_targets_account(&domains_query, &account_id);
-
     let assets_query = build_find_assets_by_account_query_for_test(account_id.clone());
     assert_assets_query_targets_account(&assets_query, &account_id);
-
     let nfts_query = build_find_nfts_by_account_query_for_test(account_id.clone());
     assert_nfts_query_targets_account(&nfts_query, &account_id);
-
     let permissions_query = build_find_permissions_by_account_query_for_test(account_id.clone());
     assert_permissions_query_targets_account(&permissions_query, &account_id);
-
     let roles_query = build_find_roles_by_account_query_for_test(account_id.clone());
     assert_roles_query_targets_account(&roles_query, &account_id);
 }
-
 #[test]
 fn iterable_target_domain_query_builders_capture_target_payload() {
     let domain_id =
@@ -1297,11 +1202,9 @@ fn iterable_target_domain_query_builders_capture_target_payload() {
         domain_id,
         "asset-definition".parse().expect("asset definition name"),
     );
-
     let accounts_query = build_find_accounts_with_asset_query_for_test(asset_definition_id.clone());
     assert_accounts_with_asset_query_targets_domain(&accounts_query, &asset_definition_id);
 }
-
 #[test]
 fn signed_query_scope_classifies_find_asset_by_id_as_target_account() {
     let account_id = checked_torii_test_account_id(0xd9, "derive asset-by-id account fixture key");
@@ -1312,7 +1215,6 @@ fn signed_query_scope_classifies_find_asset_by_id_as_target_account() {
         domain_id.clone(),
         "asset-definition".parse().expect("asset definition name"),
     );
-
     assert_eq!(
         super::signed_query_scope(&request_for_test(
             &authority,
@@ -1330,7 +1232,6 @@ fn signed_query_scope_classifies_find_asset_by_id_as_target_account() {
         super::SignedQueryScope::TargetAccount(account_id)
     );
 }
-
 #[test]
 fn signed_query_scope_classifies_find_asset_definition_by_id_as_target_domain() {
     let authority =
@@ -1341,7 +1242,6 @@ fn signed_query_scope_classifies_find_asset_definition_by_id_as_target_domain() 
         domain_id.clone(),
         "asset-definition".parse().expect("asset definition name"),
     );
-
     assert_eq!(
         super::signed_query_scope(&request_for_test(
             &authority,
@@ -1356,7 +1256,6 @@ fn signed_query_scope_classifies_find_asset_definition_by_id_as_target_domain() 
         super::SignedQueryScope::TargetDomain(domain_id)
     );
 }
-
 #[tokio::test]
 async fn signed_query_scope_for_app_keeps_opaque_find_asset_by_id_targeted_to_account() {
     let account_id =
@@ -1381,7 +1280,6 @@ async fn signed_query_scope_for_app_keeps_opaque_find_asset_by_id_targeted_to_ac
             ),
         ),
     );
-
     assert_eq!(
         super::signed_query_scope(&request),
         super::SignedQueryScope::TargetAccount(account_id.clone())
@@ -1391,7 +1289,6 @@ async fn signed_query_scope_for_app_keeps_opaque_find_asset_by_id_targeted_to_ac
         super::SignedQueryScope::TargetAccount(account_id)
     );
 }
-
 #[tokio::test]
 async fn signed_query_scope_for_app_classifies_opaque_find_asset_definition_by_id_as_target_domain()
 {
@@ -1415,7 +1312,6 @@ async fn signed_query_scope_for_app_classifies_opaque_find_asset_definition_by_i
             ),
         ),
     );
-
     assert_eq!(
         super::signed_query_scope(&request),
         super::SignedQueryScope::CrossDataspaceFanout
@@ -1425,7 +1321,6 @@ async fn signed_query_scope_for_app_classifies_opaque_find_asset_definition_by_i
         super::SignedQueryScope::TargetDomain(domain_id)
     );
 }
-
 #[tokio::test]
 async fn signed_query_scope_for_app_classifies_opaque_find_accounts_with_asset_as_target_domain() {
     let authority =
@@ -1444,7 +1339,6 @@ async fn signed_query_scope_for_app_classifies_opaque_find_accounts_with_asset_a
             build_find_accounts_with_asset_query_for_test(asset_definition_id),
         ),
     );
-
     assert_eq!(
         super::signed_query_scope(&request),
         super::SignedQueryScope::CrossDataspaceFanout
@@ -1454,7 +1348,6 @@ async fn signed_query_scope_for_app_classifies_opaque_find_accounts_with_asset_a
         super::SignedQueryScope::TargetDomain(domain_id)
     );
 }
-
 #[tokio::test]
 async fn resolve_signed_query_routing_for_app_uses_target_domain_route() {
     let authority_key_pair = checked_torii_test_ed25519_keypair(
@@ -1467,24 +1360,22 @@ async fn resolve_signed_query_routing_for_app_uses_target_domain_route() {
         configure_private_ingress_routes_for_test(&mut app);
     let query = authorize_query_for_test(
         iroha_data_model::query::QueryRequest::Singular(
-        iroha_data_model::query::SingularQueryBox::FindDomainById(
-            iroha_data_model::query::domain::prelude::FindDomainById::new(
-                iroha_data_model::domain::DomainId::try_new("hbl", "restricted")
-                    .expect("domain id"),
+            iroha_data_model::query::SingularQueryBox::FindDomainById(
+                iroha_data_model::query::domain::prelude::FindDomainById::new(
+                    iroha_data_model::domain::DomainId::try_new("hbl", "restricted")
+                        .expect("domain id"),
+                ),
             ),
-        ),
         ),
         authority,
     )
     .sign(&authority_key_pair);
-
     assert_eq!(
         super::resolve_signed_query_routing_for_app(app.as_ref(), &query)
             .expect("target-domain signed query should resolve a routed dataspace"),
         RoutingDecision::new(restricted_lane, restricted_dataspace)
     );
 }
-
 #[tokio::test]
 async fn resolve_signed_query_routing_for_app_uses_target_domain_route_for_opaque_asset_definition_query()
  {
@@ -1505,23 +1396,21 @@ async fn resolve_signed_query_routing_for_app_uses_target_domain_route_for_opaqu
     seed_asset_definition_for_test(&app, &asset_definition_id, Some(&domain_id));
     let query = authorize_query_for_test(
         iroha_data_model::query::QueryRequest::Singular(
-        iroha_data_model::query::SingularQueryBox::FindAssetDefinitionById(
-            iroha_data_model::query::asset::prelude::FindAssetDefinitionById::new(
-                asset_definition_id,
+            iroha_data_model::query::SingularQueryBox::FindAssetDefinitionById(
+                iroha_data_model::query::asset::prelude::FindAssetDefinitionById::new(
+                    asset_definition_id,
+                ),
             ),
-        ),
         ),
         authority,
     )
     .sign(&authority_key_pair);
-
     assert_eq!(
         super::resolve_signed_query_routing_for_app(app.as_ref(), &query)
             .expect("opaque asset-definition signed query should resolve a routed dataspace"),
         RoutingDecision::new(restricted_lane, restricted_dataspace)
     );
 }
-
 #[tokio::test]
 async fn resolve_signed_query_routing_for_app_uses_target_alias_route() {
     let authority_key_pair = checked_torii_test_ed25519_keypair(
@@ -1538,21 +1427,19 @@ async fn resolve_signed_query_routing_for_app_uses_target_alias_route() {
     );
     let query = authorize_query_for_test(
         iroha_data_model::query::QueryRequest::Singular(
-        iroha_data_model::query::SingularQueryBox::FindAccountByAlias(
-            iroha_data_model::query::account::prelude::FindAccountByAlias::new(alias),
-        ),
+            iroha_data_model::query::SingularQueryBox::FindAccountByAlias(
+                iroha_data_model::query::account::prelude::FindAccountByAlias::new(alias),
+            ),
         ),
         authority,
     )
     .sign(&authority_key_pair);
-
     assert_eq!(
         super::resolve_signed_query_routing_for_app(app.as_ref(), &query)
             .expect("target-alias signed query should resolve a routed dataspace"),
         RoutingDecision::new(restricted_lane, restricted_dataspace)
     );
 }
-
 #[test]
 fn signed_query_scope_classifies_target_account_queries() {
     let account_id = checked_torii_test_account_id(0xe3, "derive target-account scope fixture key");
@@ -1568,7 +1455,6 @@ fn signed_query_scope_classifies_target_account_queries() {
         domain_id.clone(),
         "asset-definition".parse().expect("asset definition name"),
     );
-
     assert_eq!(
         super::signed_query_scope(&request_for_test(
             &authority,
@@ -1702,14 +1588,12 @@ fn signed_query_scope_classifies_target_account_queries() {
         super::SignedQueryScope::TargetDomain(domain_id)
     );
 }
-
 #[test]
 fn signed_query_scope_classifies_account_permissions_queries_as_target_account() {
     let account_id =
         checked_torii_test_account_id(0xe5, "derive account permissions target fixture key");
     let authority =
         checked_torii_test_account_id(0xe6, "derive account permissions authority fixture key");
-
     assert_eq!(
         super::signed_query_scope(&request_for_test(
             &authority,
@@ -1720,7 +1604,6 @@ fn signed_query_scope_classifies_account_permissions_queries_as_target_account()
         super::SignedQueryScope::TargetAccount(account_id)
     );
 }
-
 #[tokio::test]
 async fn signed_query_scope_for_app_classifies_account_permissions_queries_as_target_account() {
     let account_id =
@@ -1728,7 +1611,6 @@ async fn signed_query_scope_for_app_classifies_account_permissions_queries_as_ta
     let authority =
         checked_torii_test_account_id(0xe8, "derive app account permissions authority fixture key");
     let app = mk_app_state_for_tests();
-
     assert_eq!(
         super::signed_query_scope_for_app(
             app.as_ref(),
@@ -1742,12 +1624,10 @@ async fn signed_query_scope_for_app_classifies_account_permissions_queries_as_ta
         super::SignedQueryScope::TargetAccount(account_id)
     );
 }
-
 #[test]
 fn signed_query_scope_classifies_find_transactions_as_authority_routed() {
     let authority =
         checked_torii_test_account_id(0xe9, "derive transactions authority fixture key");
-
     assert_eq!(
         super::signed_query_scope(&request_for_test(
             &authority,
@@ -1756,7 +1636,6 @@ fn signed_query_scope_classifies_find_transactions_as_authority_routed() {
         super::SignedQueryScope::AuthorityRouted
     );
 }
-
 #[tokio::test]
 async fn signed_query_authorization_allows_exact_self_target_without_broad_read_grant() {
     let authority = checked_torii_test_account_id(0xf1, "derive self-read authority fixture key");
@@ -1776,17 +1655,14 @@ async fn signed_query_authorization_allows_exact_self_target_without_broad_read_
         ),
     );
     let scope = super::signed_query_scope_for_app(app.as_ref(), &request);
-
     let routes = super::torii_authorized_signed_query_routes(app.as_ref(), &request, &scope)
         .expect("an account may read its exact identity routes");
-
     assert!(
         routes
             .iter()
             .any(|route| route.dataspace_id == restricted_dataspace)
     );
 }
-
 #[tokio::test]
 async fn signed_query_authorization_denies_foreign_restricted_account_without_exact_grant() {
     let target = checked_torii_test_account_id(0xf2, "derive foreign-read target fixture key");
@@ -1809,10 +1685,8 @@ async fn signed_query_authorization_denies_foreign_restricted_account_without_ex
         ),
     );
     let scope = super::signed_query_scope_for_app(app.as_ref(), &request);
-
     let response = super::torii_authorized_signed_query_routes(app.as_ref(), &request, &scope)
         .expect_err("foreign restricted account reads require an exact grant");
-
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(
         response
@@ -1821,7 +1695,6 @@ async fn signed_query_authorization_denies_foreign_restricted_account_without_ex
             .and_then(|value| value.to_str().ok()),
         Some("permission_denied")
     );
-
     grant_account_permission_for_test(
         &app,
         &authority,
@@ -1838,7 +1711,6 @@ async fn signed_query_authorization_denies_foreign_restricted_account_without_ex
             .any(|route| route.dataspace_id == restricted_dataspace)
     );
 }
-
 #[tokio::test]
 async fn signed_alias_query_requires_exact_alias_permission_not_broad_read_access() {
     let authority = checked_torii_test_account_id(0xfa, "derive alias query authority fixture key");
@@ -1857,11 +1729,9 @@ async fn signed_alias_query_requires_exact_alias_permission_not_broad_read_acces
         ),
     );
     let scope = super::signed_query_scope_for_app(app.as_ref(), &request);
-
     let response = super::torii_authorized_signed_query_routes(app.as_ref(), &request, &scope)
         .expect_err("an alias query without its exact permission must fail closed");
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
     grant_account_permission_for_test(
         &app,
         &authority,
@@ -1872,7 +1742,6 @@ async fn signed_alias_query_requires_exact_alias_permission_not_broad_read_acces
     );
     super::torii_authorized_signed_query_routes(app.as_ref(), &request, &scope)
         .expect_err("broad restricted-data read access must not substitute for alias access");
-
     grant_account_permission_for_test(
         &app,
         &authority,
@@ -1886,7 +1755,6 @@ async fn signed_alias_query_requires_exact_alias_permission_not_broad_read_acces
     assert_eq!(routes.len(), 1);
     assert_eq!(routes[0].dataspace_id, restricted_dataspace);
 }
-
 #[tokio::test]
 async fn signed_query_authorization_gates_global_history_and_replicated_inventories() {
     let authority = checked_torii_test_account_id(0xf4, "derive global-read authority fixture key");
@@ -1901,14 +1769,12 @@ async fn signed_query_authorization_gates_global_history_and_replicated_inventor
         &authority,
         iroha_data_model::query::QueryRequest::Start(build_find_triggers_query_for_test()),
     );
-
     for request in [&history, &triggers] {
         let scope = super::signed_query_scope_for_app(app.as_ref(), request);
         let response = super::torii_authorized_signed_query_routes(app.as_ref(), request, &scope)
             .expect_err("global restricted reads must fail without exact grants");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
-
     grant_account_permission_for_test(
         &app,
         &authority,
@@ -1923,14 +1789,12 @@ async fn signed_query_authorization_gates_global_history_and_replicated_inventor
             .expect("an exact grant for every restricted route should allow a global read");
     }
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn torii_target_scope_routes_resolve_alias_and_domain_dataspaces() {
     let mut app = mk_app_state_for_tests();
     let (_restricted_lane, restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
-
     let alias = iroha_data_model::account::AccountAlias::domainless(
         "banking".parse().expect("alias label"),
         restricted_dataspace,
@@ -1939,7 +1803,6 @@ async fn torii_target_scope_routes_resolve_alias_and_domain_dataspaces() {
         super::torii_target_alias_routes(app.as_ref(), &alias).expect("alias routes");
     assert_eq!(alias_routes.len(), 1);
     assert_eq!(alias_routes[0].dataspace_id, restricted_dataspace);
-
     let domain_id =
         iroha_data_model::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
     let domain_routes =
@@ -1947,7 +1810,6 @@ async fn torii_target_scope_routes_resolve_alias_and_domain_dataspaces() {
     assert_eq!(domain_routes.len(), 1);
     assert_eq!(domain_routes[0].dataspace_id, restricted_dataspace);
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn torii_account_read_routes_use_target_account_scope_for_signed_and_internal_reads() {
@@ -1966,14 +1828,12 @@ async fn torii_account_read_routes_use_target_account_scope_for_signed_and_inter
     let (_restricted_lane, configured_restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-
     let routes = super::torii_account_read_routes(app.as_ref(), &authority, None, true)
         .expect("target-account routes should resolve");
     let dataspaces = routes
         .into_iter()
         .map(|route| route.dataspace_id)
         .collect::<std::collections::BTreeSet<_>>();
-
     assert_eq!(
         dataspaces,
         std::collections::BTreeSet::from([
@@ -1988,7 +1848,6 @@ async fn torii_account_read_routes_use_target_account_scope_for_signed_and_inter
         "public dataspaces must remain visible in target-account routing",
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn torii_account_read_routes_keep_unsigned_public_reads_on_visible_routes() {
@@ -2007,14 +1866,12 @@ async fn torii_account_read_routes_keep_unsigned_public_reads_on_visible_routes(
     let (_restricted_lane, configured_restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-
     let routes = super::torii_account_read_routes(app.as_ref(), &authority, None, false)
         .expect("public visibility routes should resolve");
     let dataspaces = routes
         .into_iter()
         .map(|route| route.dataspace_id)
         .collect::<std::collections::BTreeSet<_>>();
-
     assert_eq!(
         dataspaces,
         std::collections::BTreeSet::from([DataSpaceId::UNIVERSAL, governance_dataspace]),
@@ -2025,7 +1882,6 @@ async fn torii_account_read_routes_keep_unsigned_public_reads_on_visible_routes(
         "unsigned public reads must not automatically gain private dataspace visibility",
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn torii_account_assets_read_routes_fan_out_across_all_dataspaces() {
@@ -2037,13 +1893,11 @@ async fn torii_account_assets_read_routes_fan_out_across_all_dataspaces() {
     let (_restricted_lane, configured_restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-
     let routes = super::torii_account_assets_read_routes(app.as_ref());
     let dataspaces = routes
         .into_iter()
         .map(|route| route.dataspace_id)
         .collect::<std::collections::BTreeSet<_>>();
-
     assert_eq!(
         dataspaces,
         std::collections::BTreeSet::from([
@@ -2054,7 +1908,6 @@ async fn torii_account_assets_read_routes_fan_out_across_all_dataspaces() {
         "account asset reads must fan out like asset-holder reads so dataspace-scoped balances are visible",
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn handler_account_assets_fanout_reports_merged_route_headers() {
@@ -2072,7 +1925,6 @@ async fn handler_account_assets_fanout_reports_merged_route_headers() {
     let (_restricted_lane, configured_restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-
     let uri: axum::http::Uri = format!("/v1/accounts/{authority}/assets")
         .parse()
         .expect("valid account assets uri");
@@ -2088,7 +1940,6 @@ async fn handler_account_assets_fanout_reports_merged_route_headers() {
     .await
     .expect("account assets should execute")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     assert!(
         response.headers().get("x-iroha-route-lane-id").is_none(),
@@ -2102,7 +1953,6 @@ async fn handler_account_assets_fanout_reports_merged_route_headers() {
         "account asset fanout should not expose a singular dataspace",
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn torii_account_permissions_read_routes_fan_out_across_all_dataspaces_for_signed_and_internal_reads()
@@ -2122,7 +1972,6 @@ async fn torii_account_permissions_read_routes_fan_out_across_all_dataspaces_for
     let (_restricted_lane, configured_restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-
     let routes = super::torii_account_permissions_read_routes(
         app.as_ref(),
         &authority,
@@ -2134,7 +1983,6 @@ async fn torii_account_permissions_read_routes_fan_out_across_all_dataspaces_for
         .into_iter()
         .map(|route| route.dataspace_id)
         .collect::<std::collections::BTreeSet<_>>();
-
     assert_eq!(
         dataspaces,
         std::collections::BTreeSet::from([
@@ -2149,14 +1997,12 @@ async fn torii_account_permissions_read_routes_fan_out_across_all_dataspaces_for
         ToriiFanoutRouteScopeV1::AllDataspaces
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn fanout_routed_by_uses_attempted_routes_even_when_only_local_payloads_survive() {
     let mut app = mk_app_state_for_tests();
     let (local_route, foreign_route) =
         configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
-
     assert_eq!(super::routed_by_for_routes(&app, &[local_route]), "local");
     assert_eq!(
         super::routed_by_for_routes(&app, &[local_route, foreign_route]),
@@ -2164,7 +2010,6 @@ async fn fanout_routed_by_uses_attempted_routes_even_when_only_local_payloads_su
         "fanout responses must report proxy routing when any attempted route is non-local"
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn torii_account_permissions_read_routes_keep_unsigned_public_reads_visible() {
@@ -2184,7 +2029,6 @@ async fn torii_account_permissions_read_routes_keep_unsigned_public_reads_visibl
     let (_restricted_lane, configured_restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-
     let routes =
         super::torii_account_permissions_read_routes(app.as_ref(), &authority, None, false)
             .expect("public visibility routes should resolve");
@@ -2192,7 +2036,6 @@ async fn torii_account_permissions_read_routes_keep_unsigned_public_reads_visibl
         .into_iter()
         .map(|route| route.dataspace_id)
         .collect::<std::collections::BTreeSet<_>>();
-
     assert_eq!(
         dataspaces,
         std::collections::BTreeSet::from([DataSpaceId::UNIVERSAL, governance_dataspace]),
@@ -2209,7 +2052,6 @@ async fn torii_account_permissions_read_routes_keep_unsigned_public_reads_visibl
         }
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn torii_target_account_routes_fan_out_when_local_scope_is_unknown() {
@@ -2223,14 +2065,12 @@ async fn torii_target_account_routes_fan_out_when_local_scope_is_unknown() {
     let (_restricted_lane, configured_restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-
     let routes = super::torii_target_account_routes(app.as_ref(), &authority)
         .expect("unknown target-account scope should fall back to all configured routes");
     let dataspaces = routes
         .into_iter()
         .map(|route| route.dataspace_id)
         .collect::<std::collections::BTreeSet<_>>();
-
     assert_eq!(
         dataspaces,
         std::collections::BTreeSet::from([
@@ -2241,7 +2081,6 @@ async fn torii_target_account_routes_fan_out_when_local_scope_is_unknown() {
         "target-account queries with unknown local scope should fan out across all configured dataspace routes",
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn nexus_fanout_recomputes_unknown_target_account_routes_from_catalog() {
@@ -2255,7 +2094,6 @@ async fn nexus_fanout_recomputes_unknown_target_account_routes_from_catalog() {
     let (_restricted_lane, configured_restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-
     let routes = super::torii_fanout_scope_routes(
         app.as_ref(),
         &ToriiFanoutRouteScopeV1::TargetAccount {
@@ -2267,7 +2105,6 @@ async fn nexus_fanout_recomputes_unknown_target_account_routes_from_catalog() {
         .into_iter()
         .map(|route| route.dataspace_id)
         .collect::<std::collections::BTreeSet<_>>();
-
     assert_eq!(
         dataspaces,
         std::collections::BTreeSet::from([
@@ -2278,7 +2115,6 @@ async fn nexus_fanout_recomputes_unknown_target_account_routes_from_catalog() {
         "Nexus must recompute unknown target-account fanout from its own dataspace catalog",
     );
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[test]
 fn nexus_fanout_proxy_variants_use_route_budget() {
@@ -2294,7 +2130,6 @@ fn nexus_fanout_proxy_variants_use_route_budget() {
         super::torii_proxy_request_kind_name(&query_request),
         "signed_query_fanout"
     );
-
     let read_request = ToriiProxyRequestKindV4::ReadFanout(super::torii_read_fanout_request(
         ToriiReadEndpointV1::AccountGet,
         ToriiFanoutRouteScopeV1::AllDataspaces,
@@ -2316,7 +2151,6 @@ fn nexus_fanout_proxy_variants_use_route_budget() {
         "read_fanout"
     );
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[test]
 fn http_route_timeout_covers_read_fanout_proxy_budget() {
@@ -2352,7 +2186,6 @@ fn http_route_timeout_covers_read_fanout_proxy_budget() {
         "ZK IVM prove can legitimately exceed the default route timeout"
     );
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[test]
 fn client_default_timeout_covers_nexus_fanout_http_budget() {
@@ -2364,7 +2197,6 @@ fn client_default_timeout_covers_nexus_fanout_http_budget() {
         fanout_http_budget,
     );
 }
-
 #[tokio::test]
 async fn handler_signed_query_executes_find_triggers_locally_with_multiple_dataspaces() {
     let key_pair =
@@ -2376,7 +2208,6 @@ async fn handler_signed_query_executes_find_triggers_locally_with_multiple_datas
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
         "test requires multiple dataspace routes"
     );
-
     let response = super::handler_signed_query(
         State(app),
         HeaderMap::new(),
@@ -2388,7 +2219,6 @@ async fn handler_signed_query_executes_find_triggers_locally_with_multiple_datas
     .await
     .expect("find triggers query should execute")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     assert!(
         response.headers().get("x-iroha-routed-by").is_none(),
@@ -2399,7 +2229,6 @@ async fn handler_signed_query_executes_find_triggers_locally_with_multiple_datas
         "local trigger queries should not publish a routed lane"
     );
 }
-
 #[tokio::test]
 async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_multiple_dataspaces() {
     let key_pair = checked_torii_test_ed25519_keypair(
@@ -2413,7 +2242,6 @@ async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_mult
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
         "test requires multiple dataspace routes"
     );
-
     let response = super::handler_signed_query(
         State(app),
         HeaderMap::new(),
@@ -2427,7 +2255,6 @@ async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_mult
     .await
     .expect("find active trigger ids query should execute")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     assert!(
         response.headers().get("x-iroha-routed-by").is_none(),
@@ -2441,12 +2268,10 @@ async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_mult
         "local trigger queries should not publish a routed dataspace"
     );
 }
-
 #[tokio::test]
 async fn handler_accounts_list_prefers_local_restricted_routes_on_private_ingress() {
     let mut app = mk_app_state_for_tests();
     configure_private_ingress_routes_for_test(&mut app);
-
     let response = super::handler_accounts_list(
         State(app),
         HeaderMap::new(),
@@ -2456,7 +2281,6 @@ async fn handler_accounts_list_prefers_local_restricted_routes_on_private_ingres
     .await
     .expect("accounts list should execute")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response
@@ -2467,7 +2291,6 @@ async fn handler_accounts_list_prefers_local_restricted_routes_on_private_ingres
         "private ingress account listings should stay on the local restricted lane",
     );
 }
-
 #[tokio::test]
 async fn handler_account_assets_fan_outs_across_visible_dataspaces() {
     let authority = checked_torii_test_account_id(
@@ -2476,7 +2299,6 @@ async fn handler_account_assets_fan_outs_across_visible_dataspaces() {
     );
     let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
     configure_multiple_dataspace_routes_for_test(&mut app);
-
     let uri: axum::http::Uri = format!("/v1/accounts/{authority}/assets")
         .parse()
         .expect("valid account assets uri");
@@ -2492,7 +2314,6 @@ async fn handler_account_assets_fan_outs_across_visible_dataspaces() {
     .await
     .expect("account assets should execute")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response
@@ -2514,7 +2335,6 @@ async fn handler_account_assets_fan_outs_across_visible_dataspaces() {
         "visible dataspace fanout should not expose a singular dataspace",
     );
 }
-
 #[tokio::test]
 async fn handler_transactions_query_fan_outs_across_dataspaces() {
     let mut app = mk_app_state_for_tests();
@@ -2523,7 +2343,6 @@ async fn handler_transactions_query_fan_outs_across_dataspaces() {
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
         "test requires multiple dataspace routes"
     );
-
     let env = crate::filter::QueryEnvelope {
         query: None,
         filter: None,
@@ -2546,7 +2365,6 @@ async fn handler_transactions_query_fan_outs_across_dataspaces() {
     .await
     .expect("transactions query should execute")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response
@@ -2561,7 +2379,6 @@ async fn handler_transactions_query_fan_outs_across_dataspaces() {
         "transaction query fanout should not expose a singular route lane",
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn public_dataspace_upstream_serves_routed_account_assets() {
@@ -2600,7 +2417,6 @@ async fn public_dataspace_upstream_serves_routed_account_assets() {
             .expect("serve upstream");
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
-
     let mut app = mk_app_state_for_tests();
     Arc::get_mut(&mut app)
         .expect("unique app state")
@@ -2608,7 +2424,6 @@ async fn public_dataspace_upstream_serves_routed_account_assets() {
         DataSpaceId::UNIVERSAL,
         format!("http://{addr}"),
     )]));
-
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let account_id =
         checked_torii_test_account_id(0xf7, "derive routed public upstream account fixture key")
@@ -2620,8 +2435,7 @@ async fn public_dataspace_upstream_serves_routed_account_assets() {
         Some("limit=500".to_owned()),
         Vec::new(),
     );
-    let response = execute_torii_read_for_route(&app, route, request).await;
-
+    let response = execute_torii_read_for_route(&app, route, request, None).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response
@@ -2641,7 +2455,6 @@ async fn public_dataspace_upstream_serves_routed_account_assets() {
     );
     upstream_task.abort();
 }
-
 #[tokio::test]
 async fn handler_account_get_fan_outs_across_global_dataspaces() {
     let authority = checked_torii_test_account_id(
@@ -2650,7 +2463,6 @@ async fn handler_account_get_fan_outs_across_global_dataspaces() {
     );
     let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
     configure_multiple_dataspace_routes_for_test(&mut app);
-
     let uri: axum::http::Uri = format!("/v1/accounts/{authority}")
         .parse()
         .expect("valid account uri");
@@ -2665,7 +2477,6 @@ async fn handler_account_get_fan_outs_across_global_dataspaces() {
     )
     .await
     .expect("account get should execute");
-
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response
@@ -2687,7 +2498,6 @@ async fn handler_account_get_fan_outs_across_global_dataspaces() {
         "global account fanout should not expose a singular dataspace",
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn routing_space_directory_manifests_reports_inactive_pending_and_uncataloged_expired_rows() {
@@ -2700,13 +2510,11 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
     let pending_dataspace = DataSpaceId::new(10);
     let expired_dataspace = DataSpaceId::new(11);
     let mut world = world_with_account(&authority);
-
     let mut bindings = iroha_core::nexus::space_directory::UaidDataspaceBindings::default();
     bindings.bind_account(pending_dataspace, authority.clone());
     world
         .uaid_dataspaces_mut_for_testing()
         .insert(uaid, bindings);
-
     let pending_manifest = iroha_data_model::nexus::AssetPermissionManifest {
         version: iroha_data_model::nexus::ManifestVersion::V1,
         uaid,
@@ -2718,7 +2526,6 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
     };
     let pending_record =
         iroha_core::nexus::space_directory::SpaceDirectoryManifestRecord::new(pending_manifest);
-
     let expired_manifest = iroha_data_model::nexus::AssetPermissionManifest {
         version: iroha_data_model::nexus::ManifestVersion::V1,
         uaid,
@@ -2732,14 +2539,12 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
         iroha_core::nexus::space_directory::SpaceDirectoryManifestRecord::new(expired_manifest);
     expired_record.lifecycle.mark_activated(21);
     expired_record.lifecycle.mark_expired(31);
-
     let mut set = iroha_core::nexus::space_directory::SpaceDirectoryManifestSet::default();
     set.upsert(pending_record);
     set.upsert(expired_record);
     world
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, set);
-
     let mut app = mk_app_state_for_tests_with_world(world);
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
@@ -2756,7 +2561,6 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
             ])
             .expect("dataspace catalog");
     }
-
     let response = routing::handle_v1_space_directory_manifests(
         app.state.clone(),
         AxPath(uaid.to_string()),
@@ -2772,7 +2576,6 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
     .await
     .expect("inactive manifest read should succeed")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
@@ -2782,7 +2585,6 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
     assert_eq!(json["total"].as_u64(), Some(2));
     let manifests = json["manifests"].as_array().expect("manifests array");
     assert_eq!(manifests.len(), 2);
-
     let pending = manifests
         .iter()
         .find(|row| row["dataspace_id"].as_u64() == Some(pending_dataspace.as_u64()))
@@ -2793,7 +2595,6 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
         pending["accounts"][0].as_str(),
         Some(authority.to_string().as_str())
     );
-
     let expired = manifests
         .iter()
         .find(|row| row["dataspace_id"].as_u64() == Some(expired_dataspace.as_u64()))
@@ -2809,7 +2610,6 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
         "uncataloged/unbound dataspaces should report empty account bindings",
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn handler_space_directory_manifests_executes_configured_dataspace_route_locally() {
@@ -2825,12 +2625,10 @@ async fn handler_space_directory_manifests_executes_configured_dataspace_route_l
     world
         .uaid_dataspaces_mut_for_testing()
         .insert(uaid, bindings);
-
     let mut app = mk_app_state_for_tests_with_world(world);
     let (restricted_lane, configured_restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-
     let response = super::handler_space_directory_manifests(
         State(app),
         HeaderMap::new(),
@@ -2847,7 +2645,6 @@ async fn handler_space_directory_manifests_executes_configured_dataspace_route_l
     .await
     .expect("manifest handler should execute")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response
@@ -2871,7 +2668,6 @@ async fn handler_space_directory_manifests_executes_configured_dataspace_route_l
             .and_then(|value| value.to_str().ok()),
         Some(restricted_dataspace.as_u64().to_string().as_str())
     );
-
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("manifest handler body");
@@ -2889,7 +2685,6 @@ async fn handler_space_directory_manifests_executes_configured_dataspace_route_l
         Some(authority.to_string().as_str())
     );
 }
-
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn handler_explorer_account_detail_uses_target_account_routes_for_internal_reads() {
@@ -2905,7 +2700,6 @@ async fn handler_explorer_account_detail_uses_target_account_routes_for_internal
     let (_restricted_lane, configured_restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-
     let response = super::handler_explorer_account_detail(
         State(app),
         axum::http::Method::GET,
@@ -2919,7 +2713,6 @@ async fn handler_explorer_account_detail_uses_target_account_routes_for_internal
     .await
     .expect("explorer account detail should execute")
     .into_response();
-
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response

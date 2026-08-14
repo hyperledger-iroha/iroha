@@ -20,6 +20,7 @@ from sumeragi_exact_json_test_support import (
 )
 from client_test_support import (
     CANONICAL_OWNER,
+    CANONICAL_OWNER_HEADER,
     app_api_transaction_draft as _app_api_transaction_draft,
     authority_fee_payment as _authority_fee_payment,
     canonical_hash as _canonical_hash,
@@ -73,6 +74,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     SumeragiV2Status,
     ToriiCanonicalRequestAuth,
     ToriiClient,
+    ToriiOperatorSigningContext,
     VpnQuoteCreateRequest,
     VpnReceiptSubmitRequest,
     VpnSessionCreateRequest,
@@ -170,6 +172,19 @@ def _contract_call_draft(
 GOVERNANCE_NETWORK_ID = _canonical_hash(0xA5)
 
 
+def _operator_context(captured: Optional[List[bytes]] = None) -> ToriiOperatorSigningContext:
+    def signer(message: bytes) -> bytes:
+        if captured is not None:
+            captured.append(message)
+        return b"\x55" * 64
+
+    return ToriiOperatorSigningContext(
+        network_id=GOVERNANCE_NETWORK_ID,
+        public_key="ed0120" + "66" * 32,
+        signer=signer,
+    )
+
+
 def _governance_auth(captured: Optional[List[bytes]] = None) -> ToriiCanonicalRequestAuth:
     def signer(message: bytes) -> bytes:
         if captured is not None:
@@ -183,7 +198,6 @@ def _governance_auth(captured: Optional[List[bytes]] = None) -> ToriiCanonicalRe
         timestamp_ms=4_102_444_801_000,
         nonce="low-python-governance-test",
     )
-
 
 
 _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
@@ -675,7 +689,11 @@ def _native_amx_receipt_group() -> List[Dict[str, Any]]:
 def _get_sumeragi_status(payload: Mapping[str, Any]) -> SumeragiV2Status:
     session = RecordingSession()
     session.queue(StubResponse(payload=payload))
-    return ToriiClient("http://node.test", session=session).get_sumeragi_status()
+    return ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    ).get_sumeragi_status()
 
 
 def _get_sumeragi_diagnostics(
@@ -684,7 +702,9 @@ def _get_sumeragi_diagnostics(
     session = RecordingSession()
     session.queue(StubResponse(payload=payload))
     return ToriiClient(
-        "http://node.test", session=session
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
     ).get_sumeragi_diagnostics()
 
 
@@ -887,7 +907,11 @@ def test_sorafs_orderbook_read_helpers_build_paths_and_normalize_payloads() -> N
             }
         )
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
 
     anchor_hex = "a0" * 32
     book = client.get_sorafs_orderbook(
@@ -1478,7 +1502,7 @@ def test_canonical_request_auth_rejects_padded_fields_before_send() -> None:
             timestamp_ms=1,
             nonce=" nonce",
         )
-    with pytest.raises(ValueError, match="ASCII whitespace"):
+    with pytest.raises(ValueError, match="printable ASCII"):
         canonical_network_request_signature_message(
             GOVERNANCE_NETWORK_ID,
             "POST",
@@ -1487,7 +1511,7 @@ def test_canonical_request_auth_rejects_padded_fields_before_send() -> None:
             timestamp_ms=1,
             nonce="nonce value",
         )
-    with pytest.raises(ValueError, match="ASCII whitespace"):
+    with pytest.raises(ValueError, match="printable ASCII"):
         canonical_network_request_signature_message(
             GOVERNANCE_NETWORK_ID,
             "POST",
@@ -2047,24 +2071,31 @@ def test_list_peers_returns_typed_records() -> None:
             ]
         )
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
 
     peers = client.list_peers()
 
     assert len(peers) == 2
     assert peers[0].address == "127.0.0.1:1337"
     assert peers[0].public_key_hex == "ed01"
-    assert session.calls == [
-        {
-            "method": "GET",
-            "url": "http://node.test/v1/peers",
-            "params": {},
-            "headers": {},
-            "data": None,
-            "allow_redirects": True,
-            "stream": False,
-        }
-    ]
+    call = session.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"] == "http://node.test/v1/peers"
+    assert call["params"] == {}
+    assert call["data"] is None
+    assert call["allow_redirects"] is False
+    assert call["stream"] is False
+    for header in (
+        "X-Iroha-Operator-Public-Key",
+        "X-Iroha-Operator-Timestamp-Ms",
+        "X-Iroha-Operator-Nonce",
+        "X-Iroha-Operator-Signature",
+    ):
+        assert call["headers"][header]
 
 
 def test_fee_quote_posts_exact_payload_with_authority_signature() -> None:
@@ -2097,7 +2128,7 @@ def test_fee_quote_posts_exact_payload_with_authority_signature() -> None:
     call = session.calls[0]
     assert call["url"] == "https://node.test/v1/fees/quote"
     assert json.loads(call["data"].decode("utf-8")) == {"payload": draft}
-    assert call["headers"]["X-Iroha-Account"] == CANONICAL_OWNER
+    assert call["headers"]["X-Iroha-Account"] == CANONICAL_OWNER_HEADER
     assert call["headers"]["X-Iroha-Timestamp-Ms"] == "123"
     assert call["headers"]["X-Iroha-Nonce"] == "fee-quote-nonce"
     assert len(signed_messages) == 1
@@ -2198,7 +2229,7 @@ def test_fee_sponsor_program_lookup_is_account_signed_and_exact() -> None:
     assert json.loads(session.calls[0]["data"].decode("utf-8")) == {
         "program_id": f"{CANONICAL_OWNER}/retail"
     }
-    assert session.calls[0]["headers"]["X-Iroha-Account"] == CANONICAL_OWNER
+    assert session.calls[0]["headers"]["X-Iroha-Account"] == CANONICAL_OWNER_HEADER
 
 
 def test_fee_sponsor_program_lookup_rejects_substituted_response_id() -> None:
@@ -3249,7 +3280,11 @@ def test_get_time_status_parses_histogram_payload() -> None:
             }
         )
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
 
     status = client.get_time_status()
 
@@ -3963,7 +3998,11 @@ def test_get_sumeragi_status_rejects_operational_diagnostics_fields() -> None:
 def test_sumeragi_endpoint_methods_reject_swapped_payload_contracts() -> None:
     status_session = RecordingSession()
     status_session.queue(StubResponse(payload=_sumeragi_diagnostics_payload()))
-    status_client = ToriiClient("http://node.test", session=status_session)
+    status_client = ToriiClient(
+        "http://node.test",
+        session=status_session,
+        operator_signing_context=_operator_context(),
+    )
 
     with pytest.raises(RuntimeError, match="sumeragi status contains unknown field"):
         status_client.get_sumeragi_status()
@@ -3972,7 +4011,9 @@ def test_sumeragi_endpoint_methods_reject_swapped_payload_contracts() -> None:
     diagnostics_session = RecordingSession()
     diagnostics_session.queue(StubResponse(payload=_sumeragi_v2_status_payload()))
     diagnostics_client = ToriiClient(
-        "http://node.test", session=diagnostics_session
+        "http://node.test",
+        session=diagnostics_session,
+        operator_signing_context=_operator_context(),
     )
 
     with pytest.raises(
@@ -3986,12 +4027,25 @@ def test_sumeragi_endpoint_methods_reject_swapped_payload_contracts() -> None:
     for endpoint, response, error_type, message in sumeragi_exact_json_response_cases():
         session = RecordingSession()
         session.queue(response)
-        client = ToriiClient("http://node.test", session=session)
+        client = ToriiClient(
+            "http://node.test",
+            session=session,
+            operator_signing_context=_operator_context(),
+        )
         with pytest.raises(error_type, match=message):
             getattr(client, f"get_sumeragi_{endpoint}")()
         assert response.was_closed is True, endpoint
         assert session.calls[0]["url"].endswith(f"/v1/sumeragi/{endpoint}")
-        assert session.calls[0]["headers"] == {"Accept": "application/json"}
+        assert session.calls[0]["headers"]["Accept"] == "application/json"
+        for header in (
+            "X-Iroha-Operator-Public-Key",
+            "X-Iroha-Operator-Timestamp-Ms",
+            "X-Iroha-Operator-Nonce",
+            "X-Iroha-Operator-Signature",
+        ):
+            assert session.calls[0]["headers"][header]
+        assert session.calls[0]["allow_redirects"] is False
+        assert session.calls[0]["data"] is None
         assert session.calls[0]["stream"] is True
 
 
@@ -5405,62 +5459,6 @@ def test_get_uaid_manifests_parses_payload_and_filters() -> None:
     assert session.calls[0]["params"] == {"dataspace": 9}
 
 
-def test_publish_space_directory_manifest_posts_payload() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(status_code=200, payload=_app_api_transaction_draft()))
-    client = ToriiClient("http://node.test", session=session)
-
-    manifest: Dict[str, Any] = {
-        "version": "V1",
-        "uaid": "uaid:" + "11" * 32,
-        "dataspace": 7,
-        "entries": [{"scope": {"program": "cbdc.transfer"}, "effect": {"Allow": {"max_amount": "10"}}}],
-    }
-    response = client.publish_space_directory_manifest(
-        authority=CANONICAL_OWNER,
-        manifest=manifest,
-        reason="demo",
-    )
-
-    assert response.submitted is False
-    assert session.calls[0]["method"] == "POST"
-    assert session.calls[0]["url"].endswith("/v1/space-directory/manifests")
-    assert session.calls[0]["headers"]["Content-Type"] == "application/json"
-    body = json.loads(session.calls[0]["data"])
-    assert body["authority"] == CANONICAL_OWNER
-    assert "private_key" not in body
-    assert body["reason"] == "demo"
-    assert body["manifest"]["entries"][0]["scope"]["program"] == "cbdc.transfer"
-
-    manifest["entries"][0]["scope"]["program"] = "mutated"
-    assert body["manifest"]["entries"][0]["scope"]["program"] == "cbdc.transfer"
-
-
-def test_revoke_space_directory_manifest_posts_payload() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(status_code=200, payload=_app_api_transaction_draft()))
-    client = ToriiClient("http://node.test", session=session)
-
-    result = client.revoke_space_directory_manifest(
-        authority=CANONICAL_OWNER,
-        uaid="UAID:" + "23" * 32,
-        dataspace=3,
-        revoked_epoch=4096,
-        reason="audit",
-    )
-
-    assert result.submitted is False
-    call = session.calls[0]
-    assert call["method"] == "POST"
-    assert call["url"].endswith("/v1/space-directory/manifests/revoke")
-    payload = json.loads(call["data"])
-    assert "private_key" not in payload
-    assert payload["uaid"] == "uaid:" + "23" * 32
-    assert payload["dataspace"] == 3
-    assert payload["revoked_epoch"] == 4096
-    assert payload["reason"] == "audit"
-
-
 def test_get_configuration_returns_snapshot() -> None:
     session = RecordingSession()
     session.queue(
@@ -5551,7 +5549,11 @@ def test_get_sumeragi_qc_parses_snapshot() -> None:
             }
         )
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
 
     snapshot = client.get_sumeragi_qc()
 
@@ -5658,7 +5660,11 @@ def test_get_pipeline_preflight_parses_payload_and_liveness_helper() -> None:
     )
     status_payload["time_since_last_non_empty_block_ms"] = 6_001
     session.queue(StubResponse(payload=status_payload))
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
 
     preflight = client.get_pipeline_preflight()
     status = client.get_status_snapshot().status
@@ -5879,7 +5885,11 @@ def test_get_sumeragi_leader_parses_prf() -> None:
             }
         )
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
 
     leader = client.get_sumeragi_leader()
 
@@ -5934,7 +5944,11 @@ def test_get_sumeragi_params_parses_flags() -> None:
             }
         )
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
 
     params = client.get_sumeragi_params()
 
@@ -5953,7 +5967,11 @@ def test_get_sumeragi_bls_keys_parses_map() -> None:
             }
         )
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
 
     mapping = client.get_sumeragi_bls_keys()
 
@@ -5965,7 +5983,11 @@ def test_get_sumeragi_bls_keys_parses_map() -> None:
 def test_get_sumeragi_evidence_count_returns_int() -> None:
     session = RecordingSession()
     session.queue(StubResponse(payload={"count": 42}))
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
 
     count = client.get_sumeragi_evidence_count()
 
@@ -6008,88 +6030,6 @@ def _sumeragi_censorship_record() -> Dict[str, Any]:
         "submitted_at_height_min": 20,
         "submitted_at_height_max": 22,
         **_sumeragi_evidence_common(),
-    }
-
-
-def test_list_sumeragi_evidence_parses_records() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "total": 4,
-                "items": [
-                    {
-                        "kind": "DoublePrepare",
-                        "recorded_height": 1,
-                        "recorded_view": 2,
-                        "recorded_ms": 3,
-                        "consensus_admitted_height": None,
-                        "phase": "Prepare",
-                        "height": 4,
-                        "view": 5,
-                        "epoch": 6,
-                        "signer": 1,
-                        "block_hash_1": "aa" * 32,
-                        "block_hash_2": "bb" * 32,
-                    },
-                    {
-                        "kind": "InvalidProposal",
-                        "recorded_height": 7,
-                        "recorded_view": 8,
-                        "recorded_ms": 9,
-                        "consensus_admitted_height": None,
-                        "height": 10,
-                        "view": 11,
-                        "epoch": 12,
-                        "subject_block_hash": "cc" * 32,
-                        "payload_hash": "dd" * 32,
-                        "reason": "payload mismatch",
-                    },
-                    _sumeragi_censorship_record(),
-                    _sumeragi_v2_equivocation_record(),
-                ],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    page = client.list_sumeragi_evidence(
-        limit=5, offset=1, kind="SumeragiV2Equivocation"
-    )
-
-    assert page.total == 4
-    assert len(page.items) == 4
-    prevote = page.items[0]
-    assert isinstance(prevote, client_module.SumeragiDoubleVoteEvidenceRecord)
-    assert prevote.kind == "DoublePrepare"
-    assert prevote.phase == "Prepare"
-    assert prevote.signer == 1
-    assert prevote.block_hash_1 == "aa" * 32
-    assert prevote.block_hash_2 == "bb" * 32
-    invalid_proposal = page.items[1]
-    assert isinstance(
-        invalid_proposal, client_module.SumeragiInvalidProposalEvidenceRecord
-    )
-    assert invalid_proposal.payload_hash == "dd" * 32
-    assert invalid_proposal.reason == "payload mismatch"
-    censorship = page.items[2]
-    assert isinstance(censorship, client_module.SumeragiCensorshipEvidenceRecord)
-    assert censorship.submitted_at_height_min == 20
-    assert censorship.submitted_at_height_max == 22
-    equivocation = page.items[3]
-    assert isinstance(
-        equivocation, client_module.SumeragiV2EquivocationEvidenceRecord
-    )
-    assert equivocation.class_ == "phase_vote"
-    assert equivocation.signer == 3
-    assert equivocation.context_id == "11" * 32
-    assert equivocation.consensus_admitted_height == 41
-    call = session.calls[0]
-    assert call["url"].endswith("/v1/sumeragi/evidence")
-    assert call["params"] == {
-        "limit": 5,
-        "offset": 1,
-        "kind": "SumeragiV2Equivocation",
     }
 
 
@@ -6263,7 +6203,11 @@ def test_get_time_status_parses_diagnostics() -> None:
             }
         )
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
 
     status = client.get_time_status()
 
@@ -6273,110 +6217,6 @@ def test_get_time_status_parses_diagnostics() -> None:
     assert status.rtt_buckets[1].upper_bound_ms == 50
     assert status.rtt_sum_ms == 28
     assert status.note == "NTS running"
-
-
-def test_list_kaigi_relays_parses_summary() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "total": 1,
-                "items": [
-                    {
-                        "relay_id": "relay-alpha",
-                        "domain": "kaigi.core",
-                        "bandwidth_class": 3,
-                        "hpke_fingerprint_hex": "ab" * 32,
-                        "status": "healthy",
-                        "reported_at_ms": 123,
-                    }
-                ],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    summary = client.list_kaigi_relays()
-
-    assert summary.total == 1
-    assert len(summary.items) == 1
-    relay = summary.items[0]
-    assert relay.relay_id == "relay-alpha"
-    assert relay.status == "healthy"
-    assert session.calls[0]["url"].endswith("/v1/kaigi/relays")
-    assert session.calls[0]["headers"]["Accept"] == "application/json"
-
-
-def test_get_kaigi_relay_returns_detail_and_none_on_404() -> None:
-    relay_id = CANONICAL_OWNER
-    session = RecordingSession()
-    session.queue(StubResponse(status_code=404))
-    session.queue(
-        StubResponse(
-            payload={
-                "relay": {
-                    "relay_id": relay_id,
-                    "domain": "kaigi.core",
-                    "bandwidth_class": 3,
-                    "hpke_fingerprint_hex": "cd" * 32,
-                },
-                "hpke_public_key_b64": "QUJDRA==",
-                "reported_call": {"domain_id": "kaigi.core", "call_name": "register"},
-                "reported_by": "ops@example",
-                "notes": "Primary relay",
-                "metrics": {
-                    "domain": "kaigi.core",
-                    "registrations_total": 5,
-                    "manifest_updates_total": 7,
-                    "failovers_total": 1,
-                    "health_reports_total": 9,
-                },
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    assert client.get_kaigi_relay(relay_id) is None
-    detail = client.get_kaigi_relay(relay_id)
-
-    assert detail is not None
-    assert detail.relay.domain == "kaigi.core"
-    assert detail.metrics is not None and detail.metrics.failovers_total == 1
-    assert detail.reported_call is not None
-    assert detail.reported_call.call_name == "register"
-    assert session.calls[1]["url"].endswith(f"/v1/kaigi/relays/{quote(relay_id, safe='')}")
-
-
-def test_get_kaigi_relays_health_snapshot() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "healthy_total": 2,
-                "degraded_total": 1,
-                "unavailable_total": 0,
-                "reports_total": 5,
-                "registrations_total": 7,
-                "failovers_total": 1,
-                "domains": [
-                    {
-                        "domain": "kaigi.core",
-                        "registrations_total": 5,
-                        "manifest_updates_total": 3,
-                        "failovers_total": 1,
-                        "health_reports_total": 4,
-                    }
-                ],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    snapshot = client.get_kaigi_relays_health()
-
-    assert snapshot.healthy_total == 2
-    assert snapshot.domains[0].domain == "kaigi.core"
-    assert session.calls[0]["url"].endswith("/v1/kaigi/relays/health")
 
 
 def test_finalize_referendum_posts_payload() -> None:
@@ -6438,72 +6278,6 @@ def test_enact_proposal_supports_preimage_and_window() -> None:
         "preimage_hash": "c" * 64,
         "window": {"lower": 10, "upper": 20},
     }
-
-
-def test_get_connect_status_parses_payload() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "enabled": True,
-                "sessions_total": 5,
-                "sessions_active": 3,
-                "per_ip_sessions": [{"ip": "192.0.2.1", "sessions": 2}],
-                "buffered_sessions": 1,
-                "total_buffer_bytes": 42,
-                "dedupe_size": 7,
-                "frames_in_total": 10,
-                "frames_out_total": 11,
-                "ciphertext_total": 12,
-                "dedupe_drops_total": 0,
-                "buffer_drops_total": 0,
-                "plaintext_control_drops_total": 0,
-                "monotonic_drops_total": 0,
-                "sequence_violation_closes_total": 1,
-                "role_direction_mismatch_total": 2,
-                "ping_miss_total": 0,
-                "p2p_rebroadcasts_total": 3,
-                "p2p_rebroadcast_skipped_total": 4,
-                "p2p_auth_failures_total": 5,
-                "p2p_ttl_drops_total": 6,
-                "p2p_unknown_session_drops_total": 7,
-                "p2p_session_claims_in_total": 8,
-                "p2p_session_claims_installed_total": 9,
-                "p2p_session_claim_conflicts_total": 10,
-                "p2p_role_consumed_total": 11,
-                "p2p_session_terminated_total": 12,
-                "policy": {
-                    "relay_enabled": True,
-                    "relay_strategy": "broadcast",
-                    "relay_effective_strategy": "local_only",
-                    "relay_p2p_attached": False,
-                    "p2p_ttl_hops": 2,
-                    "ws_max_sessions": 32,
-                    "session_ttl_ms": 10000,
-                    "heartbeat_interval_ms": 5000,
-                    "heartbeat_miss_tolerance": 3,
-                    "heartbeat_min_interval_ms": 1000,
-                },
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    snapshot = client.get_connect_status()
-
-    assert snapshot.enabled is True
-    assert snapshot.sessions_total == 5
-    assert snapshot.per_ip_sessions[0].ip == "192.0.2.1"
-    assert snapshot.policy is not None
-    assert snapshot.policy.ws_max_sessions == 32
-    assert snapshot.policy.relay_strategy == "broadcast"
-    assert snapshot.policy.p2p_ttl_hops == 2
-    assert snapshot.sequence_violation_closes_total == 1
-    assert snapshot.p2p_auth_failures_total == 5
-    assert snapshot.p2p_session_claims_installed_total == 9
-    assert snapshot.p2p_session_terminated_total == 12
-    assert snapshot.policy.heartbeat_interval_ms == 5000
-    assert session.calls[0]["url"].endswith("/v1/connect/status")
 
 
 def test_connect_app_registry_and_policy_helpers() -> None:

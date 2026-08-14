@@ -5,7 +5,6 @@
 //! Backend tag acceptance tests for ZK attachments (pre-verify path).
 //! - Trusted-setup families (e.g., `groth16/*`) are rejected at VK admission.
 //! - Halo2 curve mismatch is rejected at VK admission.
-
 use iroha_core::{
     executor::Executor, kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute,
     state::State, zk::test_utils::halo2_fixture_envelope,
@@ -13,10 +12,8 @@ use iroha_core::{
 use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
-
 #[path = "common/world_fixture.rs"]
 mod test_world;
-
 fn new_block_ctx() -> (State, iroha_data_model::block::BlockHeader) {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
@@ -25,7 +22,6 @@ fn new_block_ctx() -> (State, iroha_data_model::block::BlockHeader) {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     (state, header)
 }
-
 fn vk_record(
     circuit_id: &str,
     backend_tag: iroha_data_model::zk::BackendTag,
@@ -47,13 +43,11 @@ fn vk_record(
     record.gas_schedule_id = Some("halo2_default".into());
     record
 }
-
 #[test]
 fn trusted_setup_backend_label_is_unsupported() {
     let (state, header) = new_block_ctx();
     let mut block = state.block(header);
     let exec = Executor::default();
-
     let mut stx = block.transaction();
     let authority = ALICE_ID.clone();
     let perm = Permission::new(
@@ -63,7 +57,6 @@ fn trusted_setup_backend_label_is_unsupported() {
     Grant::account_permission(perm, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant manage vk");
-
     let vk_id = iroha_data_model::proof::VerifyingKeyId::new("groth16/bn254", "vk_groth16");
     let vk_box =
         iroha_data_model::proof::VerifyingKeyBox::new("groth16/bn254".into(), vec![7, 7, 7]);
@@ -87,13 +80,11 @@ fn trusted_setup_backend_label_is_unsupported() {
         "unexpected error: {msg}"
     );
 }
-
 #[test]
 fn halo2_curve_mismatch_rejected_at_vk_admission() {
     let (state, header) = new_block_ctx();
     let mut block = state.block(header);
     let exec = Executor::default();
-
     let authority = ALICE_ID.clone();
     let halo2_fixture = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add", [0u8; 32]);
     let vk_box = halo2_fixture

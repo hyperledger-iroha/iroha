@@ -1,21 +1,17 @@
 //! Wycheproof-derived SM2 signature regression suite.
 #![cfg(feature = "sm")]
-
-use std::sync::LazyLock;
-
 use hex::FromHex;
 use iroha_crypto::sm::{Sm2PublicKey, Sm2Signature};
 use norito::json::Value;
 use num_bigint::BigUint;
 use sm3::{Digest, Sm3};
-
+use std::sync::LazyLock;
 #[derive(Clone, Debug)]
 struct Point {
     x: BigUint,
     y: BigUint,
     infinity: bool,
 }
-
 #[derive(Clone)]
 struct Domain {
     p: BigUint,
@@ -24,7 +20,6 @@ struct Domain {
     n: BigUint,
     generator: Point,
 }
-
 impl Domain {
     fn new(p: BigUint, a: BigUint, b: BigUint, n: BigUint, gx: BigUint, gy: BigUint) -> Self {
         Self {
@@ -40,7 +35,6 @@ impl Domain {
         }
     }
 }
-
 static ZERO: LazyLock<BigUint> = LazyLock::new(|| BigUint::from(0u32));
 static ONE: LazyLock<BigUint> = LazyLock::new(|| BigUint::from(1u32));
 static DOMAINS: LazyLock<[Domain; 2]> = LazyLock::new(|| {
@@ -63,7 +57,6 @@ static DOMAINS: LazyLock<[Domain; 2]> = LazyLock::new(|| {
         ),
     ]
 });
-
 fn hex_to_vec(value: &str) -> Vec<u8> {
     if value.is_empty() {
         Vec::new()
@@ -71,11 +64,9 @@ fn hex_to_vec(value: &str) -> Vec<u8> {
         Vec::from_hex(value).unwrap_or_else(|err| panic!("invalid hex '{value}': {err}"))
     }
 }
-
 fn hex_to_biguint(hex: &str) -> BigUint {
     BigUint::from_bytes_be(&hex_to_vec(hex))
 }
-
 fn to_fixed_32(x: &BigUint) -> [u8; 32] {
     let bytes = x.to_bytes_be();
     assert!(bytes.len() <= 32, "value exceeds 32 bytes");
@@ -83,30 +74,24 @@ fn to_fixed_32(x: &BigUint) -> [u8; 32] {
     out[32 - bytes.len()..].copy_from_slice(&bytes);
     out
 }
-
 fn is_zero(value: &BigUint) -> bool {
     value.bits() == 0
 }
-
 fn mod_add(a: &BigUint, b: &BigUint, m: &BigUint) -> BigUint {
     (a + b) % m
 }
-
 fn mod_sub(a: &BigUint, b: &BigUint, m: &BigUint) -> BigUint {
     if a >= b { (a - b) % m } else { (a + m - b) % m }
 }
-
 fn mod_mul(a: &BigUint, b: &BigUint, m: &BigUint) -> BigUint {
     (a * b) % m
 }
-
 fn mod_inv(a: &BigUint, m: &BigUint) -> Option<BigUint> {
     if is_zero(a) {
         return None;
     }
     Some(a.modpow(&(m - BigUint::from(2u32)), m))
 }
-
 fn is_on_curve(point: &Point, domain: &Domain) -> bool {
     if point.infinity {
         return true;
@@ -121,7 +106,6 @@ fn is_on_curve(point: &Point, domain: &Domain) -> bool {
     );
     lhs == rhs
 }
-
 fn point_add(p: &Point, q: &Point, domain: &Domain) -> Option<Point> {
     if p.infinity {
         return Some(q.clone());
@@ -129,7 +113,6 @@ fn point_add(p: &Point, q: &Point, domain: &Domain) -> Option<Point> {
     if q.infinity {
         return Some(p.clone());
     }
-
     if p.x == q.x {
         let y_sum = mod_add(&p.y, &q.y, &domain.p);
         if is_zero(&y_sum) {
@@ -164,7 +147,6 @@ fn point_add(p: &Point, q: &Point, domain: &Domain) -> Option<Point> {
             infinity: false,
         });
     }
-
     let slope_num = mod_sub(&q.y, &p.y, &domain.p);
     let slope_den = mod_inv(&mod_sub(&q.x, &p.x, &domain.p), &domain.p)?;
     let slope = mod_mul(&slope_num, &slope_den, &domain.p);
@@ -184,7 +166,6 @@ fn point_add(p: &Point, q: &Point, domain: &Domain) -> Option<Point> {
         infinity: false,
     })
 }
-
 fn point_mul(k: &BigUint, point: &Point, domain: &Domain) -> Option<Point> {
     let mut n = k.clone();
     let mut acc = Point {
@@ -202,7 +183,6 @@ fn point_mul(k: &BigUint, point: &Point, domain: &Domain) -> Option<Point> {
     }
     Some(acc)
 }
-
 fn compute_za(domain: &Domain, distid: &str, pub_x: &BigUint, pub_y: &BigUint) -> [u8; 32] {
     let entla_bits = distid.len().checked_mul(8).expect("distid length overflow");
     let entla = u16::try_from(entla_bits).expect("distid within 65535 bits");
@@ -220,7 +200,6 @@ fn compute_za(domain: &Domain, distid: &str, pub_x: &BigUint, pub_y: &BigUint) -
     out.copy_from_slice(&digest);
     out
 }
-
 fn decode_point(bytes: &[u8]) -> Option<Point> {
     if bytes.len() != 65 || bytes[0] != 0x04 {
         return None;
@@ -233,7 +212,6 @@ fn decode_point(bytes: &[u8]) -> Option<Point> {
         infinity: false,
     })
 }
-
 fn verify_in_domain(
     domain: &Domain,
     distid: &str,
@@ -244,26 +222,21 @@ fn verify_in_domain(
     if !is_on_curve(public, domain) {
         return false;
     }
-
     let za = compute_za(domain, distid, &public.x, &public.y);
     let mut hasher = Sm3::new();
     hasher.update(za);
     hasher.update(message);
     let challenge = BigUint::from_bytes_be(&hasher.finalize());
-
     let sig_bytes = signature.to_bytes();
     let sig_r = BigUint::from_bytes_be(&sig_bytes[..32]);
     let sig_s = BigUint::from_bytes_be(&sig_bytes[32..]);
-
     if is_zero(&sig_r) || is_zero(&sig_s) || sig_r >= domain.n || sig_s >= domain.n {
         return false;
     }
-
     let r_plus_s = (&sig_r + &sig_s) % &domain.n;
     if is_zero(&r_plus_s) {
         return false;
     }
-
     let s_g = match point_mul(&sig_s, &domain.generator, domain) {
         Some(pt) => pt,
         None => return false,
@@ -279,12 +252,10 @@ fn verify_in_domain(
     if sum.infinity || !is_on_curve(&sum, domain) {
         return false;
     }
-
     let sum_x_mod = sum.x % &domain.n;
     let recomputed_r = (&challenge + sum_x_mod) % &domain.n;
     recomputed_r == sig_r
 }
-
 fn verify_sm2(
     distid: &str,
     public_bytes: &[u8],
@@ -297,12 +268,10 @@ fn verify_sm2(
     {
         return true;
     }
-
     DOMAINS
         .iter()
         .any(|domain| verify_in_domain(domain, distid, public_point, message, signature))
 }
-
 #[test]
 fn sm2_wycheproof_vectors() {
     const RAW: &str = include_str!("fixtures/wycheproof_sm2.json");
@@ -312,14 +281,12 @@ fn sm2_wycheproof_vectors() {
         "SM2",
         "unexpected algorithm identifier"
     );
-
     let total_tests = root["numberOfTests"]
         .as_u64()
         .expect("numberOfTests missing");
     let total_tests =
         usize::try_from(total_tests).expect("Wycheproof SM2 suite count fits in usize");
     let groups = root["testGroups"].as_array().expect("testGroups missing");
-
     let mut executed = 0usize;
     for group in groups {
         let distid = group["distid"].as_str().unwrap_or("1234567812345678");
@@ -338,7 +305,6 @@ fn sm2_wycheproof_vectors() {
             "Wycheproof SM2 key must be uncompressed"
         );
         let public_point = decode_point(&key_bytes).expect("decode SM2 public key");
-
         let tests = group["tests"].as_array().expect("tests array missing");
         for case in tests {
             executed += 1;
@@ -349,7 +315,6 @@ fn sm2_wycheproof_vectors() {
                 .as_str()
                 .unwrap_or("invalid")
                 .to_ascii_lowercase();
-
             let signature = if let Ok(sig) = Sm2Signature::from_der(&signature_bytes) {
                 sig
             } else {
@@ -361,7 +326,6 @@ fn sm2_wycheproof_vectors() {
                 );
                 continue;
             };
-
             let verified = verify_sm2(distid, &key_bytes, &public_point, &message, &signature);
             match result.as_str() {
                 "valid" => assert!(
@@ -379,6 +343,5 @@ fn sm2_wycheproof_vectors() {
             }
         }
     }
-
     assert_eq!(executed, total_tests, "Wycheproof SM2 test count mismatch");
 }

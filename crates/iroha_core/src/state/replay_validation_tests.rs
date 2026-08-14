@@ -1,5 +1,4 @@
-use std::sync::Arc;
-
+use super::*;
 use iroha_data_model::{
     ChainId, ValidationFail,
     account::AccountId,
@@ -16,9 +15,7 @@ use iroha_data_model::{
     transaction::{TransactionBuilder, error::TransactionRejectionReason},
 };
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-
-use super::*;
-
+use std::sync::Arc;
 fn run_replay_validation_test_on_stack(name: &'static str, test: fn()) {
     // The full replay pipeline has deep debug-mode stack use; do not depend on libtest's
     // platform-default worker stack for these integration-heavy scenarios.
@@ -31,7 +28,6 @@ fn run_replay_validation_test_on_stack(name: &'static str, test: fn()) {
         std::panic::resume_unwind(payload);
     }
 }
-
 fn replay_blocks_from_kura(
     kura: &Arc<Kura>,
     state: &mut State,
@@ -48,7 +44,6 @@ fn replay_blocks_from_kura(
         fallback_consensus_mode,
     )
 }
-
 /// Exercise legacy fixture blocks without weakening the production v2 replay boundary.
 ///
 /// Historical unit fixtures predate v2 finality artifacts. Production callers resolve to the
@@ -161,13 +156,11 @@ pub(super) fn replay_blocks_from_kura_range(
     }
     Ok(())
 }
-
 fn new_genesis_account(
     account_id: &iroha_data_model::account::AccountId,
 ) -> iroha_data_model::account::NewAccount {
     Account::new(account_id.clone())
 }
-
 fn configure_replay_fixture_parameters(state: &State) {
     let mut parameters = state.world.parameters.block();
     parameters.sumeragi.key_require_hsm = false;
@@ -176,7 +169,6 @@ fn configure_replay_fixture_parameters(state: &State) {
     ));
     parameters.commit();
 }
-
 fn rebind_test_execution_context_validators_and_resign(
     block: &mut SignedBlock,
     topology: &crate::sumeragi::network_topology::Topology,
@@ -216,7 +208,6 @@ fn rebind_test_execution_context_validators_and_resign(
         .replace_signatures(std::collections::BTreeSet::from([signature]))
         .expect("replace rebound block signature");
 }
-
 fn clear_test_execution_context_and_resign(
     block: &mut SignedBlock,
     private_key: &iroha_crypto::PrivateKey,
@@ -231,7 +222,6 @@ fn clear_test_execution_context_and_resign(
         .replace_signatures(std::collections::BTreeSet::from([signature]))
         .expect("replace legacy replay fixture signature");
 }
-
 fn previous_roster_evidence_for_parent(
     parent: &SignedBlock,
     roster: &[PeerId],
@@ -259,7 +249,6 @@ fn previous_roster_evidence_for_parent(
         stake_snapshot: None,
     }
 }
-
 fn commit_replay_validated_block_with_options(
     state: &State,
     topology: &crate::sumeragi::network_topology::Topology,
@@ -328,7 +317,6 @@ fn commit_replay_validated_block_with_options(
     }
     committed_signed
 }
-
 fn commit_replay_validated_block_with_signature_mode(
     state: &State,
     topology: &crate::sumeragi::network_topology::Topology,
@@ -345,7 +333,6 @@ fn commit_replay_validated_block_with_signature_mode(
         true,
     )
 }
-
 fn commit_replay_validated_block(
     state: &State,
     topology: &crate::sumeragi::network_topology::Topology,
@@ -360,7 +347,6 @@ fn commit_replay_validated_block(
         false,
     )
 }
-
 fn configure_private_replay_route(state: &mut State, lane_id: LaneId, dataspace_id: DataSpaceId) {
     let lane_catalog = LaneCatalog::new(
         std::num::NonZeroU32::new(4).expect("non-zero lane count"),
@@ -395,7 +381,6 @@ fn configure_private_replay_route(state: &mut State, lane_id: LaneId, dataspace_
         nexus.routing_policy.default_dataspace = dataspace_id;
     }
 }
-
 fn replay_fixture_state(
     kura: Arc<Kura>,
     chain_id: ChainId,
@@ -425,7 +410,6 @@ fn replay_fixture_state(
     configure_replay_fixture_parameters(&state);
     state
 }
-
 fn seed_space_directory_manifest_for_legacy_checkpoint_test(state: &State, dataspace: DataSpaceId) {
     let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(
         b"strict-replay-legacy-checkpoint-surface",
@@ -447,7 +431,6 @@ fn seed_space_directory_manifest_for_legacy_checkpoint_test(state: &State, datas
     manifests.insert(uaid, set);
     manifests.commit();
 }
-
 fn replay_missing_checkpoint_fixture(
     checkpoint_exists_only_at_later_height: bool,
 ) -> (eyre::Report, usize) {
@@ -478,7 +461,6 @@ fn replay_missing_checkpoint_fixture(
     let kura = Kura::blank_kura_for_testing();
     kura.store_block(Arc::new(genesis.clone()))
         .expect("store genesis without checkpoint");
-
     let block_count = if checkpoint_exists_only_at_later_height {
         let block2 = crate::block::BlockBuilder::new(Vec::new())
             .chain(0, Some(&genesis))
@@ -497,7 +479,6 @@ fn replay_missing_checkpoint_fixture(
     } else {
         1
     };
-
     let world = World::with(
         [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
         [new_genesis_account(&genesis_id).build(&genesis_id)],
@@ -520,7 +501,6 @@ fn replay_missing_checkpoint_fixture(
     let height = state.view().height();
     (err, height)
 }
-
 #[test]
 fn replay_rejects_missing_wsv_checkpoint_at_height_one() {
     let (err, height) = replay_missing_checkpoint_fixture(false);
@@ -530,7 +510,6 @@ fn replay_rejects_missing_wsv_checkpoint_at_height_one() {
         "missing checkpoint must fail before WSV mutation"
     );
 }
-
 #[test]
 fn replay_rejects_missing_checkpoint_before_first_present_checkpoint() {
     let (err, height) = replay_missing_checkpoint_fixture(true);
@@ -540,23 +519,19 @@ fn replay_rejects_missing_checkpoint_before_first_present_checkpoint() {
         "a later checkpoint cannot authorize an unbound prefix"
     );
 }
-
 #[test]
 fn replay_always_rejects_corrupted_genesis_signature() {
     let genesis_account = iroha_data_model::account::AccountId::new(
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
     );
-
     let tx = TransactionBuilder::new_genesis(
         genesis_account.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-
     let rogue_signer = crate::state::checked_keypair();
     let bad_block = SignedBlock::genesis(vec![tx], rogue_signer.private_key(), None, None);
-
     let kura = Kura::blank_kura_for_testing();
     let block_arc = Arc::new(bad_block);
     kura.store_block(Arc::clone(&block_arc))
@@ -567,7 +542,6 @@ fn replay_always_rejects_corrupted_genesis_signature() {
         iroha_crypto::Hash::new(b"unreachable corrupted genesis checkpoint"),
     )
     .expect("store checkpoint so signature validation is exercised");
-
     let query_handle = crate::query::store::LiveQueryStore::start_test();
     let world = World::with(
         [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account)],
@@ -575,12 +549,10 @@ fn replay_always_rejects_corrupted_genesis_signature() {
         [],
     );
     let mut state = State::new(world, Arc::clone(&kura), query_handle);
-
     let leader = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
     let topology = crate::sumeragi::network_topology::Topology::new(vec![
         iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
     ]);
-
     let err = replay_blocks_from_kura(&kura, &mut state, &topology, 1, ConsensusMode::Permissioned)
         .expect_err("replay must never bypass a corrupt block signature");
     assert!(
@@ -594,7 +566,6 @@ fn replay_always_rejects_corrupted_genesis_signature() {
         "invalid block must not mutate WSV"
     );
 }
-
 #[test]
 fn replay_skips_hash_only_blocks_only_when_restored_state_hash_matches() {
     let chain_id = ChainId::from("iroha:test:hash-only-replay");
@@ -612,7 +583,6 @@ fn replay_skips_hash_only_blocks_only_when_restored_state_hash_matches() {
             chain_id.clone(),
         )
     };
-
     let kura = Kura::blank_kura_for_testing();
     let snapshot_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x7A; Hash::LENGTH]));
@@ -621,7 +591,6 @@ fn replay_skips_hash_only_blocks_only_when_restored_state_hash_matches() {
     let height = NonZeroUsize::new(1).expect("non-zero test height");
     assert!(kura.is_hash_only_block_height(height));
     assert!(kura.get_block(height).is_none());
-
     let leader = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
     let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
         leader.public_key().clone(),
@@ -637,7 +606,6 @@ fn replay_skips_hash_only_blocks_only_when_restored_state_hash_matches() {
         iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
     )
     .expect("hash-only block covered by the restored state snapshot should be skipped");
-
     let mut unhydrated_state = make_state(Arc::clone(&kura));
     let missing_snapshot = replay_blocks_from_kura_range(
         &kura,
@@ -654,7 +622,6 @@ fn replay_skips_hash_only_blocks_only_when_restored_state_hash_matches() {
             .contains("not covered by the restored state block-hash list"),
         "{missing_snapshot:?}"
     );
-
     let mut mismatched_state = make_state(Arc::clone(&kura));
     mismatched_state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([0x7B; Hash::LENGTH]),
@@ -675,7 +642,6 @@ fn replay_skips_hash_only_blocks_only_when_restored_state_hash_matches() {
         "{mismatch:?}"
     );
 }
-
 #[test]
 fn replay_from_height_catches_up_state() {
     run_replay_validation_test_on_stack(
@@ -683,22 +649,18 @@ fn replay_from_height_catches_up_state() {
         replay_from_height_catches_up_state_impl,
     );
 }
-
 #[allow(clippy::too_many_lines)]
 fn replay_from_height_catches_up_state_impl() {
-    use std::borrow::Cow;
-
     use iroha_crypto::Algorithm;
     use iroha_data_model::peer::PeerId;
     use iroha_genesis::GENESIS_DOMAIN_ID;
-
+    use std::borrow::Cow;
     let chain_id = ChainId::from("iroha:test:partial-replay");
     let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
     let leader = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
         leader.public_key().clone(),
     )]);
-
     let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
     let user_domain_id: DomainId = DomainId::try_new("users", "universal").expect("domain id");
     let user_id = iroha_data_model::account::AccountId::new(user_keypair.public_key().clone());
@@ -714,7 +676,6 @@ fn replay_from_height_catches_up_state_impl() {
         None,
         None,
     );
-
     let tx_block2 = TransactionBuilder::new(
         *DEFAULT_TEST_NETWORK_ID,
         user_id.clone(),
@@ -728,7 +689,6 @@ fn replay_from_height_catches_up_state_impl() {
         .sign(leader.private_key())
         .unpack(|_| {});
     let signed_block2: SignedBlock = block2.into();
-
     let tx_block3 = TransactionBuilder::new(
         *DEFAULT_TEST_NETWORK_ID,
         user_id.clone(),
@@ -746,7 +706,6 @@ fn replay_from_height_catches_up_state_impl() {
         .sign(leader.private_key())
         .unpack(|_| {});
     let signed_block3: SignedBlock = block3.into();
-
     let make_world = || {
         World::with(
             [
@@ -786,7 +745,6 @@ fn replay_from_height_catches_up_state_impl() {
         .expect("store block2");
     kura.store_block(Arc::new(signed_block3.clone()))
         .expect("store block3");
-
     let mut state = State::new_with_chain(
         make_world(),
         Arc::clone(&kura),
@@ -794,11 +752,9 @@ fn replay_from_height_catches_up_state_impl() {
         chain_id.clone(),
     );
     configure_replay_fixture_parameters(&state);
-
     replay_blocks_from_kura(&kura, &mut state, &topology, 2, ConsensusMode::Permissioned)
         .expect("replay first two blocks");
     assert_eq!(state.view().height(), 2);
-
     let missing_checkpoint = replay_blocks_from_kura_range(
         &kura,
         &mut state,
@@ -815,7 +771,6 @@ fn replay_from_height_catches_up_state_impl() {
         "{missing_checkpoint:?}"
     );
     assert_eq!(state.view().height(), 2);
-
     kura.store_wsv_checkpoint(
         3,
         signed_block3.hash(),
@@ -835,7 +790,6 @@ fn replay_from_height_catches_up_state_impl() {
     assert_eq!(view.height(), 3);
     assert_eq!(view.latest_block_hash(), Some(signed_block3.hash()));
 }
-
 #[test]
 fn replay_rotates_topology_for_npos_prf_leader() {
     run_replay_validation_test_on_stack(
@@ -843,11 +797,8 @@ fn replay_rotates_topology_for_npos_prf_leader() {
         replay_rotates_topology_for_npos_prf_leader_impl,
     );
 }
-
 #[allow(clippy::too_many_lines)]
 fn replay_rotates_topology_for_npos_prf_leader_impl() {
-    use std::borrow::Cow;
-
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
         parameter::system::{Parameter, SumeragiConsensusMode, SumeragiNposParameters},
@@ -857,7 +808,7 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
     use iroha_test_samples::{
         SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
     };
-
+    use std::borrow::Cow;
     let chain_id = ChainId::from("iroha:test:npos-replay");
     let peer_a = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let peer_b = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -866,7 +817,6 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
         PeerId::new(peer_b.public_key().clone()),
     ];
     let topology = crate::sumeragi::network_topology::Topology::new(peers.clone());
-
     let height = 2;
     let view = 0u64;
     let seed = (1u8..=255)
@@ -875,12 +825,10 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
         .expect("seed should select non-zero leader index");
     let leader_index = topology.leader_index_prf(seed, height, view);
     assert_ne!(leader_index, 0, "leader rotation must be exercised");
-
     let npos_params = SumeragiNposParameters {
         epoch_seed: seed,
         ..Default::default()
     };
-
     let topology_entries = vec![
         GenesisTopologyEntry::new(
             PeerId::new(peer_a.public_key().clone()),
@@ -891,7 +839,6 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
             iroha_crypto::bls_normal_pop_prove(peer_b.private_key()).expect("generate pop b"),
         ),
     ];
-
     let (user_id, user_keypair) = gen_account_in("wonderland");
     let mut genesis_builder =
         GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
@@ -908,7 +855,6 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
         .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
         .expect("genesis");
     let genesis_signed = genesis_block.0.clone();
-
     let kura = Kura::blank_kura_for_testing();
     let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
     let make_world = || {
@@ -918,7 +864,6 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
             [],
         )
     };
-
     let tx = TransactionBuilder::new(
         *DEFAULT_TEST_NETWORK_ID,
         user_id.clone(),
@@ -973,7 +918,6 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
         .expect("store genesis");
     kura.store_block(Arc::new(signed_block))
         .expect("store block");
-
     let mut state = State::new_with_chain(
         make_world(),
         Arc::clone(&kura),
@@ -985,12 +929,10 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
         params_block.sumeragi.key_require_hsm = false;
         params_block.commit();
     }
-
     replay_blocks_from_kura(&kura, &mut state, &topology, 2, ConsensusMode::Npos)
         .expect("replay should validate prf leader");
     assert_eq!(state.view().height(), 2);
 }
-
 #[test]
 fn replay_uses_commit_roster_journal_for_signature_order() {
     run_replay_validation_test_on_stack(
@@ -998,11 +940,8 @@ fn replay_uses_commit_roster_journal_for_signature_order() {
         replay_uses_commit_roster_journal_for_signature_order_impl,
     );
 }
-
 #[allow(clippy::too_many_lines)]
 fn replay_uses_commit_roster_journal_for_signature_order_impl() {
-    use std::borrow::Cow;
-
     use iroha_config::{
         base::WithOrigin,
         kura::InitMode,
@@ -1014,7 +953,7 @@ fn replay_uses_commit_roster_journal_for_signature_order_impl() {
     use iroha_test_samples::{
         SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
     };
-
+    use std::borrow::Cow;
     let chain_id = ChainId::from("iroha:test:replay-roster-journal");
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let kura_cfg = KuraConfig {
@@ -1034,7 +973,6 @@ fn replay_uses_commit_roster_journal_for_signature_order_impl() {
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
-
     let peer_a = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let peer_b = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let roster = vec![
@@ -1051,7 +989,6 @@ fn replay_uses_commit_roster_journal_for_signature_order_impl() {
             iroha_crypto::bls_normal_pop_prove(peer_a.private_key()).expect("generate pop a"),
         ),
     ];
-
     let (user_id, user_keypair) = gen_account_in("wonderland");
     let mut genesis_builder =
         GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
@@ -1064,7 +1001,6 @@ fn replay_uses_commit_roster_journal_for_signature_order_impl() {
         .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
         .expect("genesis");
     let genesis_signed = genesis_block.0.clone();
-
     let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
     let world = World::with(
         [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
@@ -1093,7 +1029,6 @@ fn replay_uses_commit_roster_journal_for_signature_order_impl() {
     kura.store_block(Arc::new(genesis_signed.clone()))
         .expect("store genesis");
     configure_replay_fixture_parameters(&state);
-
     let tx = TransactionBuilder::new(
         state.network_id,
         user_id.clone(),
@@ -1131,7 +1066,6 @@ fn replay_uses_commit_roster_journal_for_signature_order_impl() {
         &signature_topology,
         signer_key,
     );
-
     let signed_block = commit_replay_validated_block_with_options(
         &state,
         &signature_topology,
@@ -1142,7 +1076,6 @@ fn replay_uses_commit_roster_journal_for_signature_order_impl() {
     );
     kura.store_block(Arc::new(signed_block.clone()))
         .expect("store block");
-
     let signatures: Vec<_> = signed_block.signatures().cloned().collect();
     let mut signers_bitmap = vec![0u8; roster.len().div_ceil(8)];
     for signature in &signatures {
@@ -1188,7 +1121,6 @@ fn replay_uses_commit_roster_journal_for_signature_order_impl() {
     state
         .record_commit_roster(&commit_cert, &checkpoint, None)
         .expect("commit-roster test setup should retain known journal durability");
-
     let replay_world = World::with(
         [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
         [new_genesis_account(&genesis_id).build(&genesis_id)],
@@ -1205,12 +1137,10 @@ fn replay_uses_commit_roster_journal_for_signature_order_impl() {
         params_block.sumeragi.key_require_hsm = false;
         params_block.commit();
     }
-
     let fallback_topology = crate::sumeragi::network_topology::Topology::new(vec![
         PeerId::new(peer_a.public_key().clone()),
         PeerId::new(peer_b.public_key().clone()),
     ]);
-
     replay_blocks_from_kura_range(
         &kura,
         &mut replay_state,
@@ -1232,7 +1162,6 @@ fn replay_uses_commit_roster_journal_for_signature_order_impl() {
     .expect("replay should honor commit roster journal ordering");
     assert_eq!(replay_state.view().height(), 2);
 }
-
 #[test]
 fn replay_rejects_non_authoritative_signature_topology_rotation() {
     run_replay_validation_test_on_stack(
@@ -1240,24 +1169,19 @@ fn replay_rejects_non_authoritative_signature_topology_rotation() {
         replay_rejects_non_authoritative_signature_topology_rotation_impl,
     );
 }
-
 #[allow(clippy::too_many_lines)]
 fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
-    use std::borrow::Cow;
-
     use iroha_crypto::Algorithm;
     use iroha_data_model::{DomainId, account::AccountId, peer::PeerId};
     use iroha_genesis::GENESIS_DOMAIN_ID;
-
+    use std::borrow::Cow;
     let chain_id = ChainId::from("iroha:test:replay-signature-rotation-recovery");
     let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
     let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
     let user_domain: DomainId = DomainId::try_new("users", "universal").expect("domain id");
     let user_id = AccountId::new(user_keypair.public_key().clone());
-
     crate::sumeragi::status::reset_commit_certs_for_tests();
     crate::sumeragi::status::reset_validator_checkpoints_for_tests();
-
     let peer_a = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let peer_b = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let fallback_peers = vec![
@@ -1266,7 +1190,6 @@ fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
     ];
     let fallback_topology =
         crate::sumeragi::network_topology::Topology::new(fallback_peers.clone());
-
     let tx_genesis = TransactionBuilder::new_genesis(
         genesis_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -1279,7 +1202,6 @@ fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
         None,
         None,
     );
-
     let world = World::with(
         [
             Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
@@ -1299,7 +1221,6 @@ fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
         commit_replay_validated_block(&state, &fallback_topology, genesis_block, &genesis_id);
     kura.store_block(Arc::new(genesis_block.clone()))
         .expect("store genesis");
-
     let height = 2_u64;
     let view = 0_u64;
     let prf_seed = {
@@ -1316,7 +1237,6 @@ fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
     } else {
         peer_a.private_key()
     };
-
     let tx_block2 = TransactionBuilder::new(
         state.network_id,
         user_id.clone(),
@@ -1339,7 +1259,6 @@ fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
         &expected_topology,
         mismatched_signer,
     );
-
     let signed_block2 = commit_replay_validated_block_with_signature_mode(
         &state,
         &expected_topology,
@@ -1349,7 +1268,6 @@ fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
     );
     kura.store_block(Arc::new(signed_block2.clone()))
         .expect("store block2");
-
     let replay_world = World::with(
         [
             Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
@@ -1368,7 +1286,6 @@ fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
         chain_id,
     );
     configure_replay_fixture_parameters(&replay_state);
-
     let err = replay_blocks_from_kura(
         &kura,
         &mut replay_state,
@@ -1392,7 +1309,6 @@ fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
         "unexpected replay rejection: {err:?}"
     );
 }
-
 #[test]
 fn replay_rejects_committed_execution_result_mismatch_without_mutating_that_block() {
     run_replay_validation_test_on_stack(
@@ -1400,13 +1316,10 @@ fn replay_rejects_committed_execution_result_mismatch_without_mutating_that_bloc
         replay_rejects_committed_execution_result_mismatch_impl,
     );
 }
-
 fn replay_rejects_committed_execution_result_mismatch_impl() {
-    use std::borrow::Cow;
-
     use iroha_crypto::{Algorithm, Hash};
     use iroha_data_model::transaction::signed::TransactionResultInner;
-
+    use std::borrow::Cow;
     let chain_id = ChainId::from("iroha:test:replay-result-mismatch");
     let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
     let leader = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1429,7 +1342,6 @@ fn replay_rejects_committed_execution_result_mismatch_impl() {
             [],
         )
     };
-
     let kura = Kura::blank_kura_for_testing();
     let materialize_state = State::new_with_chain(
         make_world(),
@@ -1438,7 +1350,6 @@ fn replay_rejects_committed_execution_result_mismatch_impl() {
         chain_id.clone(),
     );
     configure_replay_fixture_parameters(&materialize_state);
-
     let tx_genesis = TransactionBuilder::new_genesis(
         genesis_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -1455,7 +1366,6 @@ fn replay_rejects_committed_execution_result_mismatch_impl() {
         commit_replay_validated_block(&materialize_state, &topology, genesis_block, &genesis_id);
     kura.store_block(Arc::new(genesis_block.clone()))
         .expect("store genesis");
-
     let tx_block2 = TransactionBuilder::new(
         materialize_state.network_id,
         user_id.clone(),
@@ -1487,7 +1397,6 @@ fn replay_rejects_committed_execution_result_mismatch_impl() {
         .expect("store mismatched block");
     kura.store_wsv_checkpoint(2, block2_hash, Hash::new(b"not the replayed WSV"))
         .expect("store mismatched block WSV checkpoint");
-
     let mut replay_state = State::new_with_chain(
         make_world(),
         Arc::clone(&kura),
@@ -1495,7 +1404,6 @@ fn replay_rejects_committed_execution_result_mismatch_impl() {
         chain_id,
     );
     configure_replay_fixture_parameters(&replay_state);
-
     let err = replay_blocks_from_kura(
         &kura,
         &mut replay_state,
@@ -1519,7 +1427,6 @@ fn replay_rejects_committed_execution_result_mismatch_impl() {
         Some(genesis_block.hash())
     );
 }
-
 #[test]
 fn replay_rejects_exact_wsv_checkpoint_mismatch() {
     run_replay_validation_test_on_stack(
@@ -1527,12 +1434,9 @@ fn replay_rejects_exact_wsv_checkpoint_mismatch() {
         replay_rejects_exact_wsv_checkpoint_mismatch_impl,
     );
 }
-
 fn replay_rejects_exact_wsv_checkpoint_mismatch_impl() {
-    use std::borrow::Cow;
-
     use iroha_crypto::{Algorithm, Hash};
-
+    use std::borrow::Cow;
     let chain_id = ChainId::from("iroha:test:replay-wsv-checkpoint-mismatch");
     let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
     let leader = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1555,7 +1459,6 @@ fn replay_rejects_exact_wsv_checkpoint_mismatch_impl() {
             [],
         )
     };
-
     let kura = Kura::blank_kura_for_testing();
     let materialize_state = State::new_with_chain(
         make_world(),
@@ -1564,7 +1467,6 @@ fn replay_rejects_exact_wsv_checkpoint_mismatch_impl() {
         chain_id.clone(),
     );
     configure_replay_fixture_parameters(&materialize_state);
-
     let tx_genesis = TransactionBuilder::new_genesis(
         genesis_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -1581,7 +1483,6 @@ fn replay_rejects_exact_wsv_checkpoint_mismatch_impl() {
         commit_replay_validated_block(&materialize_state, &topology, genesis_block, &genesis_id);
     kura.store_block(Arc::new(genesis_block.clone()))
         .expect("store genesis");
-
     let tx_block2 = TransactionBuilder::new(
         materialize_state.network_id,
         user_id.clone(),
@@ -1608,7 +1509,6 @@ fn replay_rejects_exact_wsv_checkpoint_mismatch_impl() {
         None,
     )
     .expect("overwrite block2 WSV checkpoint");
-
     let mut replay_state = State::new_with_chain(
         make_world(),
         Arc::clone(&kura),
@@ -1616,7 +1516,6 @@ fn replay_rejects_exact_wsv_checkpoint_mismatch_impl() {
         chain_id,
     );
     configure_replay_fixture_parameters(&replay_state);
-
     replay_blocks_from_kura_range(
         &kura,
         &mut replay_state,
@@ -1630,7 +1529,6 @@ fn replay_rejects_exact_wsv_checkpoint_mismatch_impl() {
     let before_height = replay_state.committed_height();
     let before_hash = replay_state.latest_block_hash_fast();
     let before_merge = replay_state.merge_ledger.snapshot();
-
     let err = replay_blocks_from_kura_range(
         &kura,
         &mut replay_state,
@@ -1661,7 +1559,6 @@ fn replay_rejects_exact_wsv_checkpoint_mismatch_impl() {
             .all(|(after, before)| after.as_ref() == before.as_ref()),
         "checkpoint rejection must not publish merge-cache entries"
     );
-
     kura.overwrite_wsv_checkpoint_without_validation_for_tests(2, correct_checkpoint, None)
         .expect("replace unbound forged checkpoint with the exact canonical state hash");
     replay_blocks_from_kura_range(
@@ -1679,7 +1576,6 @@ fn replay_rejects_exact_wsv_checkpoint_mismatch_impl() {
         Some(signed_block2.hash())
     );
 }
-
 #[test]
 fn replay_rejects_legacy_space_directory_checkpoint_surface() {
     run_replay_validation_test_on_stack(
@@ -1687,14 +1583,11 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface() {
         replay_rejects_legacy_space_directory_checkpoint_surface_impl,
     );
 }
-
 #[allow(clippy::too_many_lines)]
 fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
-    use std::borrow::Cow;
-
     use iroha_crypto::Algorithm;
     use iroha_primitives::json::Json;
-
+    use std::borrow::Cow;
     let chain_id = ChainId::from("iroha:test:legacy-route-replay");
     let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
     let lane_id = LaneId::new(3);
@@ -1710,7 +1603,6 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
     let proof_policies = |height| {
         crate::da::active_proof_policy_bundle_at_height(&original_state.nexus_snapshot(), height)
     };
-
     let tx_genesis = TransactionBuilder::new_genesis(
         genesis_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -1728,7 +1620,6 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
         commit_replay_validated_block(&original_state, &topology, genesis_block, &genesis_id);
     kura.store_block(Arc::new(genesis_block.clone()))
         .expect("store genesis");
-
     let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
     let user_id = AccountId::new(user_keypair.public_key().clone());
     let domain_id = DomainId::try_new("settlement", "private-fixture").expect("domain id");
@@ -1794,7 +1685,6 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
         .expect("store legacy block");
     let canonical_prefix =
         crate::snapshot::canonical_state_snapshot_bytes_for_tests(&original_state);
-
     let block3_instructions = vec![
         InstructionBox::from(Mint::asset_quantity(5_u32, asset_id.clone())),
         InstructionBox::from(SetKeyValue::account(
@@ -1852,7 +1742,6 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
     );
     kura.overwrite_wsv_checkpoint_without_validation_for_tests(3, legacy_checkpoint, None)
         .expect("overwrite final WSV checkpoint with retired surface hash");
-
     let replay_kura = Kura::blank_kura_for_testing();
     let mut replay_state =
         replay_fixture_state(Arc::clone(&replay_kura), chain_id, lane_id, dataspace_id);
@@ -1877,7 +1766,6 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
             )
             .expect("copy replay checkpoint");
     }
-
     let err = replay_blocks_from_kura(
         &replay_kura,
         &mut replay_state,

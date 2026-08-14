@@ -57,8 +57,9 @@ served static authority against an expected file:
 
 If the OpenAPI endpoint is unavailable the diff is skipped automatically. The
 test also performs feature-gated smoke requests (e.g., `/v1/domains` under
-`app_api`, `/v1/connect/status` under `connect`) to verify the staged builder
-covers every route group.
+`app_api`, strict management-token `/v1/connect/status?sid=...`, and unsigned
+rejection at `/v1/connect/status/aggregate`) to verify the staged builder covers
+every route group.
 
 ## Routed Request Diagnostics
 

@@ -2,7 +2,6 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-
 use axum::{
     Router,
     body::Body,
@@ -11,9 +10,7 @@ use axum::{
 };
 use http_body_util::BodyExt as _;
 use tower::ServiceExt as _;
-
 use super::*;
-
 fn test_router(counter: Arc<AtomicUsize>) -> Router {
     Router::new()
         .route(
@@ -29,7 +26,6 @@ fn test_router(counter: Arc<AtomicUsize>) -> Router {
         .fallback(|| async { StatusCode::NOT_FOUND })
         .layer(axum::middleware::from_fn(enforce_strict_request_target))
 }
-
 fn sorafs_test_router(counter: Arc<AtomicUsize>) -> Router {
     let mount = |counter: Arc<AtomicUsize>| {
         get(move || {
@@ -56,7 +52,6 @@ fn sorafs_test_router(counter: Arc<AtomicUsize>) -> Router {
         .fallback(|| async { StatusCode::NOT_FOUND })
         .layer(axum::middleware::from_fn(enforce_strict_request_target))
 }
-
 fn offline_operation_test_router(counter: Arc<AtomicUsize>) -> Router {
     Router::new()
         .route(
@@ -72,7 +67,6 @@ fn offline_operation_test_router(counter: Arc<AtomicUsize>) -> Router {
         .fallback(|| async { StatusCode::NOT_FOUND })
         .layer(axum::middleware::from_fn(enforce_strict_request_target))
 }
-
 fn governance_selector_test_router(counter: Arc<AtomicUsize>) -> Router {
     let mount = |counter: Arc<AtomicUsize>| {
         get(
@@ -95,7 +89,6 @@ fn governance_selector_test_router(counter: Arc<AtomicUsize>) -> Router {
         .fallback(|| async { StatusCode::NOT_FOUND })
         .layer(axum::middleware::from_fn(enforce_strict_request_target))
 }
-
 fn catalog_cutover_test_router(counter: Arc<AtomicUsize>) -> Router {
     let mount = |counter: Arc<AtomicUsize>| {
         axum::routing::post(move || {
@@ -123,7 +116,6 @@ fn catalog_cutover_test_router(counter: Arc<AtomicUsize>) -> Router {
         .fallback(|| async { StatusCode::NOT_FOUND })
         .layer(axum::middleware::from_fn(enforce_strict_request_target))
 }
-
 #[tokio::test]
 async fn normalization_sequences_are_typed_bad_requests_before_handler_execution() {
     let counter = Arc::new(AtomicUsize::new(0));
@@ -165,7 +157,6 @@ async fn normalization_sequences_are_typed_bad_requests_before_handler_execution
     }
     assert_eq!(counter.load(Ordering::SeqCst), 0);
 }
-
 #[tokio::test]
 async fn trailing_slash_and_empty_wildcard_tail_do_not_alias_resources() {
     let counter = Arc::new(AtomicUsize::new(0));
@@ -193,7 +184,6 @@ async fn trailing_slash_and_empty_wildcard_tail_do_not_alias_resources() {
         assert_eq!(envelope.code(), "route_not_found", "path={path}");
     }
     assert_eq!(counter.load(Ordering::SeqCst), 0);
-
     let response = router
         .oneshot(
             Request::builder()
@@ -206,14 +196,12 @@ async fn trailing_slash_and_empty_wildcard_tail_do_not_alias_resources() {
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
-
 #[tokio::test]
 async fn offline_operation_id_rejects_percent_encoded_alias_before_handler_execution() {
     let counter = Arc::new(AtomicUsize::new(0));
     let router = offline_operation_test_router(Arc::clone(&counter));
     let canonical_id = "11".repeat(32);
     let encoded_id = format!("%31{}", &canonical_id[1..]);
-
     let response = router
         .clone()
         .oneshot(
@@ -235,7 +223,6 @@ async fn offline_operation_id_rejects_percent_encoded_alias_before_handler_execu
     let envelope: ErrorEnvelope = norito::json::from_slice(&body).expect("typed JSON error");
     assert_eq!(envelope.code(), "request_path_invalid");
     assert_eq!(counter.load(Ordering::SeqCst), 0);
-
     let response = router
         .oneshot(
             Request::builder()
@@ -248,7 +235,6 @@ async fn offline_operation_id_rejects_percent_encoded_alias_before_handler_execu
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
-
 #[tokio::test]
 async fn governance_selectors_are_canonical_mounted_path_segments_before_lookup() {
     let counter = Arc::new(AtomicUsize::new(0));
@@ -280,7 +266,6 @@ async fn governance_selectors_are_canonical_mounted_path_segments_before_lookup(
             .expect("response");
         assert!(!response.status().is_success(), "path={path}");
     }
-
     let response = router
         .clone()
         .oneshot(
@@ -298,7 +283,6 @@ async fn governance_selectors_are_canonical_mounted_path_segments_before_lookup(
         0,
         "noncanonical selectors must not reach state lookup"
     );
-
     for path in [
         "/v1/gov/referenda/ref-1",
         "/v1/gov/tally/A9_selector~with.dots",
@@ -322,12 +306,10 @@ async fn governance_selectors_are_canonical_mounted_path_segments_before_lookup(
         "canonical selectors must reach state lookup"
     );
 }
-
 #[tokio::test]
 async fn sorafs_root_and_stream_paths_reject_retired_and_normalized_aliases() {
     let counter = Arc::new(AtomicUsize::new(0));
     let router = sorafs_test_router(Arc::clone(&counter));
-
     let response = router
         .clone()
         .oneshot(
@@ -340,7 +322,6 @@ async fn sorafs_root_and_stream_paths_reject_retired_and_normalized_aliases() {
         .expect("response");
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert_eq!(counter.load(Ordering::SeqCst), 1);
-
     for (path, expected) in [
         ("/ws/reputation", StatusCode::NOT_FOUND),
         ("/sorafs/cid/bafyroot/", StatusCode::NOT_FOUND),
@@ -366,7 +347,6 @@ async fn sorafs_root_and_stream_paths_reject_retired_and_normalized_aliases() {
         1,
         "rejected aliases must not execute a SoraFS handler"
     );
-
     for retired_path in [
         "/v1/sorafs/deal/fund-provider",
         "/v1/sorafs/deal/fund-client",
@@ -398,7 +378,6 @@ async fn sorafs_root_and_stream_paths_reject_retired_and_normalized_aliases() {
         1,
         "retired deal requests must not execute any SoraFS handler"
     );
-
     let response = router
         .oneshot(
             Request::builder()
@@ -411,12 +390,10 @@ async fn sorafs_root_and_stream_paths_reject_retired_and_normalized_aliases() {
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert_eq!(counter.load(Ordering::SeqCst), 2);
 }
-
 #[tokio::test]
 async fn canonical_multisig_read_routes_reject_only_retired_spellings() {
     let counter = Arc::new(AtomicUsize::new(0));
     let router = catalog_cutover_test_router(Arc::clone(&counter));
-
     for retired_path in [
         "/v1/multisig/proposals/lookup",
         "/v1/multisig/proposals/list",
@@ -446,7 +423,6 @@ async fn canonical_multisig_read_routes_reject_only_retired_spellings() {
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{retired_path}");
     }
     assert_eq!(counter.load(Ordering::SeqCst), 0);
-
     for canonical_path in [
         "/v1/multisig/proposals/query",
         "/v1/multisig/proposals/resolve",
@@ -470,7 +446,6 @@ async fn canonical_multisig_read_routes_reject_only_retired_spellings() {
         );
     }
     assert_eq!(counter.load(Ordering::SeqCst), 3);
-
     for adversarial_path in [
         "/v1/multisig/proposals//query",
         "/v1/multisig/proposals/%2fquery",

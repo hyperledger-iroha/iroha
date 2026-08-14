@@ -1,7 +1,5 @@
 //! Deterministic governance sortition utilities for on-chain bodies.
-
-use std::collections::{BTreeMap, BTreeSet};
-
+use crate::governance::sortition;
 use iroha_config::parameters::actual::Governance;
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_data_model::{
@@ -11,9 +9,7 @@ use iroha_data_model::{
     isi::governance::CouncilDerivationKind,
 };
 use iroha_primitives::numeric::Quantity;
-
-use crate::governance::sortition;
-
+use std::collections::{BTreeMap, BTreeSet};
 /// Sortition result with winners and alternates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Draw {
@@ -22,7 +18,6 @@ pub struct Draw {
     /// Alternates to replace members that decline or are ineligible.
     pub alternates: Vec<AccountId>,
 }
-
 /// Replace a missing member with the next alternate. Returns `true` if replaced.
 pub fn replace_with_alternate(
     members: &mut [AccountId],
@@ -38,12 +33,10 @@ pub fn replace_with_alternate(
     }
     false
 }
-
 /// Domain separator for citizen draws.
 pub const CITIZEN_SEED_DOMAIN: &[u8] = b"gov:citizen:seed:v1";
 /// Domain separator for citizen sortition inputs.
 pub const CITIZEN_INPUT_DOMAIN: &[u8] = b"iroha:vrf:v1:citizen|";
-
 fn scored_output(seed: &[u8; 64], input_domain: &[u8], account_id: &AccountId) -> [u8; 32] {
     let input = sortition::build_input(input_domain, seed, account_id);
     let digest = Blake2b512::digest(input);
@@ -51,7 +44,6 @@ fn scored_output(seed: &[u8; 64], input_domain: &[u8], account_id: &AccountId) -
     output.copy_from_slice(&digest[..32]);
     output
 }
-
 /// Deterministic draw over bonded citizens.
 pub fn run_citizen_draw<'a, I>(
     network_id: &NetworkId,
@@ -87,7 +79,6 @@ where
         }
     });
     scored.dedup_by(|a, b| a.1 == b.1);
-
     let total = committee_size.saturating_add(alternate_size);
     let mut members = Vec::new();
     let mut alternates = Vec::new();
@@ -103,7 +94,6 @@ where
         alternates,
     }
 }
-
 /// Deterministically derive parliament bodies directly from bonded citizen candidates.
 ///
 /// Each body is sampled independently with body-specific domain tags. A citizen is unique within
@@ -135,7 +125,6 @@ where
             });
     let candidate_count = u32::try_from(dedup.len()).unwrap_or(u32::MAX);
     let candidates: Vec<(AccountId, Quantity)> = dedup.into_iter().collect();
-
     let alternates_per_body = gov_cfg
         .parliament_alternate_size
         .unwrap_or(gov_cfg.parliament_committee_size);
@@ -176,7 +165,6 @@ where
         rosters,
     }
 }
-
 /// Deterministically derive parliament rosters for all bodies from the persisted council draw.
 ///
 /// Uses per-body domain separators to shuffle the combined member+alternate list into distinct
@@ -193,11 +181,9 @@ pub fn derive_parliament_bodies(
     candidates.extend(council.alternates.iter().cloned());
     let mut seen = BTreeSet::new();
     candidates.retain(|id| seen.insert(id.clone()));
-
     let alternates_per_body = gov_cfg
         .parliament_alternate_size
         .unwrap_or(gov_cfg.parliament_committee_size);
-
     let mut rosters = std::collections::BTreeMap::new();
     for body in [
         ParliamentBody::RulesCommittee,
@@ -228,13 +214,11 @@ pub fn derive_parliament_bodies(
         };
         rosters.insert(body, roster);
     }
-
     ParliamentBodies {
         selection_epoch: epoch,
         rosters,
     }
 }
-
 fn body_committee_size(cfg: &Governance, body: ParliamentBody) -> usize {
     match body {
         ParliamentBody::RulesCommittee => cfg.rules_committee_size,
@@ -246,7 +230,6 @@ fn body_committee_size(cfg: &Governance, body: ParliamentBody) -> usize {
         ParliamentBody::FmaCommittee => cfg.fma_committee_size,
     }
 }
-
 fn body_seed_domain(body: ParliamentBody) -> &'static [u8] {
     match body {
         ParliamentBody::RulesCommittee => b"gov:parliament:body:rules:v1",
@@ -258,7 +241,6 @@ fn body_seed_domain(body: ParliamentBody) -> &'static [u8] {
         ParliamentBody::FmaCommittee => b"gov:parliament:body:fma:v1",
     }
 }
-
 fn body_input_domain(body: ParliamentBody) -> &'static [u8] {
     match body {
         ParliamentBody::RulesCommittee => b"iroha:vrf:v1:parliament:rules|",
@@ -270,7 +252,6 @@ fn body_input_domain(body: ParliamentBody) -> &'static [u8] {
         ParliamentBody::FmaCommittee => b"iroha:vrf:v1:parliament:fma|",
     }
 }
-
 fn body_selection(
     network_id: &NetworkId,
     epoch: u64,
@@ -297,7 +278,6 @@ fn body_selection(
         }
     });
     scored.dedup_by(|a, b| a.1 == b.1);
-
     let total_alternates = alternate_size.min(scored.len().saturating_sub(committee_size));
     let mut members = Vec::with_capacity(committee_size.min(scored.len()));
     let mut alternates = Vec::with_capacity(total_alternates);
@@ -312,7 +292,6 @@ fn body_selection(
     }
     (members, alternates)
 }
-
 fn body_selection_from_bonded(
     network_id: &NetworkId,
     epoch: u64,
@@ -336,7 +315,6 @@ fn body_selection_from_bonded(
         }
     });
     scored.dedup_by(|a, b| a.1 == b.1);
-
     let total_alternates = alternate_size.min(scored.len().saturating_sub(committee_size));
     let mut members = Vec::with_capacity(committee_size.min(scored.len()));
     let mut alternates = Vec::with_capacity(total_alternates);
@@ -351,31 +329,25 @@ fn body_selection_from_bonded(
     }
     (members, alternates)
 }
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId, account::AccountId, block::BlockHeader, governance::types::ParliamentBody,
     };
-
-    use super::*;
-
+    use std::collections::BTreeSet;
     fn mk_account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive governance draw fixture account key");
         let (public_key, _) = keypair.into_parts();
         AccountId::new(public_key)
     }
-
     fn network_id(label: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             label,
         )))
     }
-
     #[test]
     fn mk_account_uses_checked_seed_derivation() {
         let account = mk_account(1);
@@ -385,10 +357,8 @@ mod tests {
                 .public_key()
                 .clone(),
         );
-
         assert_eq!(account, expected);
     }
-
     #[test]
     fn citizen_draw_orders_without_rerolls() {
         let network_id = network_id(b"citizen-demo");
@@ -409,7 +379,6 @@ mod tests {
         let unique: BTreeSet<_> = combined.iter().collect();
         assert_eq!(unique.len(), 3, "draw must not re-roll candidates");
     }
-
     #[test]
     fn citizen_draw_ignores_bond_amounts() {
         let network_id = network_id(b"citizen-demo");
@@ -428,14 +397,11 @@ mod tests {
             (&accounts[2], 150_000u128),
             (&accounts[3], 1_500_000u128),
         ];
-
         let floor_draw = run_citizen_draw(&network_id, epoch, &beacon, floor_bonds, 2, 2);
         let high_draw = run_citizen_draw(&network_id, epoch, &beacon, high_bonds, 2, 2);
-
         assert_eq!(floor_draw.members, high_draw.members);
         assert_eq!(floor_draw.alternates, high_draw.alternates);
     }
-
     #[test]
     fn citizen_draw_deduplicates_duplicate_accounts_without_extra_chances() {
         let network_id = network_id(b"citizen-demo");
@@ -456,10 +422,8 @@ mod tests {
             (&accounts[2], 100u128),
             (&accounts[3], 100u128),
         ];
-
         let baseline_draw = run_citizen_draw(&network_id, epoch, &beacon, baseline, 2, 2);
         let duplicated_draw = run_citizen_draw(&network_id, epoch, &beacon, duplicated_whale, 2, 2);
-
         assert_eq!(baseline_draw.members, duplicated_draw.members);
         assert_eq!(baseline_draw.alternates, duplicated_draw.alternates);
         let combined: Vec<_> = duplicated_draw
@@ -474,7 +438,6 @@ mod tests {
             "duplicate citizen entries must not create duplicate seats"
         );
     }
-
     #[test]
     fn bonded_body_draws_deduplicate_candidates_and_ignore_whale_bonds() {
         let network_id = network_id(b"body-demo");
@@ -508,7 +471,6 @@ mod tests {
             (&accounts[4], 100u128),
             (&accounts[4], 40_000_000u128),
         ];
-
         let baseline_bodies = derive_parliament_bodies_from_bonded_citizens(
             &cfg,
             &network_id,
@@ -525,7 +487,6 @@ mod tests {
             inflated,
             CouncilDerivationKind::Manual,
         );
-
         for body in [
             ParliamentBody::RulesCommittee,
             ParliamentBody::AgendaCouncil,
@@ -556,7 +517,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn one_bonded_citizen_fills_each_actual_body_and_sets_one_person_quorum() {
         let network_id = network_id(b"body-one-citizen-demo");
@@ -575,7 +535,6 @@ mod tests {
             parliament_alternate_size: Some(25),
             ..Governance::default()
         };
-
         let bodies = derive_parliament_bodies_from_bonded_citizens(
             &cfg,
             &network_id,
@@ -584,7 +543,6 @@ mod tests {
             [(&citizen, 10_000_u128)],
             CouncilDerivationKind::Sortition,
         );
-
         for body in [
             ParliamentBody::RulesCommittee,
             ParliamentBody::AgendaCouncil,
@@ -607,7 +565,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn body_rosters_are_independently_domain_separated() {
         let network_id = network_id(b"body-domain-demo");
@@ -644,7 +601,6 @@ mod tests {
             accounts.iter().map(|account| (account, 100u128)),
             CouncilDerivationKind::Manual,
         );
-
         let distinct_member_lists: BTreeSet<_> = [
             ParliamentBody::RulesCommittee,
             ParliamentBody::AgendaCouncil,
@@ -669,7 +625,6 @@ mod tests {
             "body draws must not clone one shared membership list across all parliament bodies"
         );
     }
-
     #[test]
     fn forty_six_citizens_fill_all_default_body_members_independently() {
         let network_id = network_id(b"body-readiness-demo");
@@ -677,7 +632,6 @@ mod tests {
         let epoch = 46u64;
         let accounts: Vec<_> = (1..=46).map(mk_account).collect();
         let cfg = Governance::default();
-
         let bodies = derive_parliament_bodies_from_bonded_citizens(
             &cfg,
             &network_id,
@@ -686,7 +640,6 @@ mod tests {
             accounts.iter().map(|account| (account, 100u128)),
             CouncilDerivationKind::Manual,
         );
-
         for (body, expected) in [
             (ParliamentBody::RulesCommittee, 7),
             (ParliamentBody::AgendaCouncil, 9),
@@ -706,7 +659,6 @@ mod tests {
                 "{body:?} must not repeat a citizen within its own roster"
             );
         }
-
         let total_member_seats: usize = bodies
             .rosters
             .values()
@@ -723,7 +675,6 @@ mod tests {
             "independent body draws may reuse a citizen across bodies"
         );
     }
-
     #[test]
     fn bonded_body_draws_are_stable_under_candidate_order_permutation() {
         let network_id = network_id(b"body-order-demo");
@@ -750,7 +701,6 @@ mod tests {
         };
         let forward = accounts.iter().map(|account| (account, 100u128));
         let reverse = accounts.iter().rev().map(|account| (account, 100u128));
-
         let forward_bodies = derive_parliament_bodies_from_bonded_citizens(
             &cfg,
             &network_id,
@@ -772,7 +722,6 @@ mod tests {
             "candidate ordering supplied by an API must not bias parliament body draws"
         );
     }
-
     #[test]
     fn persisted_body_draws_deduplicate_member_and_alternate_overlap() {
         let network_id = network_id(b"body-demo");
@@ -813,7 +762,6 @@ mod tests {
             candidate_count: 8,
             derived_by: CouncilDerivationKind::Manual,
         };
-
         let bodies = derive_parliament_bodies(&cfg, &network_id, epoch, &beacon, &council);
         for (body, roster) in bodies.rosters {
             let combined: Vec<_> = roster

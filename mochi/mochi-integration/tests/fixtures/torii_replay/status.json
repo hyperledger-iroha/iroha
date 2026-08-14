@@ -1,13 +1,32 @@
 {
+  "build": {
+    "version": "",
+    "git_commit_sha": "",
+    "dpn_validator_release_commit": "",
+    "cargo_features": "",
+    "target_triple": ""
+  },
+  "observed_at_ms": 0,
   "peers": 2,
   "blocks": 5,
   "blocks_non_empty": 3,
   "commit_time_ms": 42,
   "txs_approved": 7,
   "txs_rejected": 1,
-  "uptime": { "secs": 123, "nanos": 0 },
+  "txs_rejected_recent_5m": 0,
+  "uptime": {
+    "secs": 123,
+    "nanos": 0
+  },
   "view_changes": 0,
   "queue_size": 4,
+  "queue_queued": 4,
+  "queue_inflight": 0,
+  "last_block_committed_at_ms": 0,
+  "last_non_empty_block_committed_at_ms": 0,
+  "time_since_last_block_ms": 0,
+  "time_since_last_non_empty_block_ms": 0,
+  "da_reschedule_total": 0,
   "crypto": {
     "sm_helpers_available": true,
     "sm_openssl_preview_enabled": false,
@@ -20,7 +39,20 @@
       "verifier_max_batch": 0
     }
   },
-  "sumeragi": null,
+  "stack": {
+    "requested_scheduler_bytes": 0,
+    "requested_prover_bytes": 0,
+    "requested_guest_bytes": 0,
+    "scheduler_bytes": 0,
+    "prover_bytes": 0,
+    "guest_bytes": 0,
+    "gas_to_stack_multiplier": 0,
+    "scheduler_clamped": false,
+    "prover_clamped": false,
+    "guest_clamped": false,
+    "pool_fallback_total": 0,
+    "budget_hit_total": 0
+  },
   "governance": {
     "proposals": {
       "proposed": 0,
@@ -53,5 +85,13 @@
     "recent_manifest_activations": []
   },
   "teu_lane_commit": [],
-  "teu_dataspace_backlog": []
+  "teu_dataspace_backlog": [],
+  "tx_gossip": {
+    "caps": {
+      "frame_cap_bytes": 0,
+      "drop_unknown_dataspace": false,
+      "restricted_fallback": "drop",
+      "restricted_public_policy": "refuse"
+    }
+  }
 }

@@ -234,6 +234,12 @@ response = client.submit_account_faucet_claim(
 )
 ```
 
+Faucet puzzles use `scrypt-leading-zero-bits-v2` with mandatory positive
+difficulty. The solver parses the puzzle's canonical checksummed `network_id`
+as a typed `NetworkId` and hashes its raw 32 bytes into the challenge before
+the exact canonical I105 account id and anchor, so a solution cannot be replayed
+against a same-label network with a different genesis.
+
 The same client owns the PoC-facing Torii application helpers for contract,
 SNS, and ZK bootstrap flows:
 
@@ -352,6 +358,7 @@ from iroha_python import (
     DataspaceSpec,
     LocalSigningContext,
     NetworkId,
+    ToriiCanonicalRequestAuth,
     ToriiClient,
     plan_dataspace,
     write_dataspace_plan,
@@ -378,6 +385,11 @@ write_dataspace_plan(plan, "build/dataspaces", force=True)
 client = ToriiClient(
     "http://127.0.0.1:8080",
     local_signing_context=LocalSigningContext(network_id),
+    canonical_request_auth=ToriiCanonicalRequestAuth(
+        network_id=network_id.literal,
+        account_id="<authority-account>",
+        signer=wallet.sign,
+    ),
 )
 status = client.smoke_dataspace("boi")
 print(status.dataspace_id, status.ready)
@@ -499,10 +511,35 @@ draft.register_rwa(
 
 `ToriiClient` also exposes the chain-state and explorer RWA read surfaces:
 
-```python
-from iroha_python import ToriiClient, rwa_query_envelope
+The ten existing high-level Python callers for ledger-wide JSON query POSTs
+(account transactions/assets, domains, accounts, global/visible transactions,
+repo agreements, asset holders/definitions, and RWAs) require an immutable
+genesis-derived `LocalSigningContext` plus matching `canonical_request_auth`.
+They sign the final method, percent-encoded path, query, and compact JSON body,
+then dispatch exactly once without redirects or retries. Aliases in the
+authenticating account, foreign genesis identities, precomputed auth headers,
+and inline secret arguments fail before dispatch. This package does not expose
+an NFT query method; use the Node SDK for that existing route.
 
-client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
+```python
+from iroha_python import (
+    LocalSigningContext,
+    NetworkId,
+    ToriiCanonicalRequestAuth,
+    ToriiClient,
+    rwa_query_envelope,
+)
+
+network_id = NetworkId.parse(exact_genesis_network_id)
+client = ToriiClient(
+    "https://torii.example",
+    local_signing_context=LocalSigningContext(network_id),
+    canonical_request_auth=ToriiCanonicalRequestAuth(
+        network_id=network_id.literal,
+        account_id=canonical_i105_account_id,
+        signer=wallet.sign,
+    ),
+)
 
 chain_page = client.list_rwas_typed(limit=20, offset=0)
 detail_page = client.list_explorer_rwas_typed(domain="commodities", limit=25)
@@ -612,13 +649,23 @@ import os
 
 from iroha_python import (
     DataEventFilter,
+    Ed25519KeyPair,
     NetworkId,
+    OperatorSigningContext,
     SseStreamError,
     ToriiCanonicalRequestAuth,
     create_torii_client,
 )
 
-client = create_torii_client("http://127.0.0.1:8080", auth_token="admin-token")
+# Load these two values from runtime-only operator configuration or a secret manager.
+network_id = NetworkId.parse(os.environ["IROHA_NETWORK_ID"])
+operator_key_pair = Ed25519KeyPair.from_private_key(
+    bytes.fromhex(os.environ["IROHA_OPERATOR_PRIVATE_KEY_HEX"])
+)
+client = create_torii_client(
+    "http://127.0.0.1:8080",
+    operator_signing_context=OperatorSigningContext(network_id, operator_key_pair),
+)
 
 # Stream verifying-key registry updates
 for event in client.stream_verifying_key_events(updated=True):
@@ -643,7 +690,7 @@ for block_event in client.stream_pipeline_blocks(status="Committed"):
 for evt in client.stream_events(filter=proof_filter, with_metadata=True):
     print(evt.id, evt.event, evt.data)
 
-# Inspect Connect availability with typed helpers
+# Inspect the operator-only Connect aggregate with typed helpers.
 status = client.get_connect_status_typed()
 if status and status.enabled:
     for entry in status.per_ip_sessions:
@@ -1328,18 +1375,28 @@ rejects every other mode.
 
 See `specs/finance/repo_runbook.md` for operator-facing CLI flows, determinism notes, and automation guidance covering both repo and settlement helpers.
 
-For Connect automation, pass `--status-only` to the CLI helper when you only need status telemetry; the helper skips session creation and frame construction in that mode.
+Connect aggregate telemetry is operator-only. Application automation should use
+the management token returned at session creation with
+`GET /v1/connect/status?sid=...` when inspecting its own session; it must not
+receive a node operator key.
 
 ## Typed Connect session helper
-`create_connect_session_info` returns a `ConnectSessionInfo` dataclass. When the node advertises a session TTL via `/v1/connect/status`, the helper populates `expires_at` with a UTC timestamp so callers know when to rotate tokens.
+`create_connect_session_info` returns a `ConnectSessionInfo` dataclass. The
+first-release session response does not advertise a wall-clock expiry, so
+`expires_at` remains `None`; clients must not infer it from operator-only
+aggregate policy.
 The response also carries `management_token` for session deletion/per-session status and `relay_token` for wallet/app relay authentication; keep the management token out of launch links and QR payloads.
+`ToriiClient.connect_websocket(...)` accepts only canonical 32-byte base64url
+session IDs and role tokens. It keeps the token out of the URL and sends it
+once as `Authorization: Bearer ...`; default, API-token, account, and operator
+authentication headers are not inherited by the WebSocket upgrade.
 When broadcast relay is enabled, Torii gossips session claims over authenticated
 Iroha P2P so app and wallet WebSockets can rendezvous through different Torii
 nodes. Claims expose token hashes and the relay MAC key to peers, not raw app,
 wallet, or management tokens.
 
 ### CLI walkthrough
-Run the end-to-end Connect CLI helper to stage a session, inspect policy limits, and emit an Open control frame:
+Run the end-to-end Connect CLI helper to stage a session and emit an Open control frame:
 
 ```bash
 python -m iroha_python.examples.connect_flow \
@@ -1348,21 +1405,20 @@ python -m iroha_python.examples.connect_flow \
   --sid '<derived-base64url-sid>' \
   --app-public-key '<32-byte-x25519-public-key-hex>' \
   --nonce '<16-byte-nonce-hex>' \
-  --auth-token admin-token \
   --app-name "Demo App" \
   --app-url https://demo.example \
   --app-icon-hash deadbeef \
   --frame-output connect-open.hex \
   --frame-json-output connect-open.json \
-  --status-json-output connect-status.json \
   --send-open
 ```
 
-The script prints the typed `ConnectSessionInfo`, shows the current `ConnectStatusSnapshot`, and encodes an `ConnectControlOpen` frame that can be relayed over WebSocket.
+The script prints the typed `ConnectSessionInfo` and encodes a
+`ConnectControlOpen` frame that can be relayed over WebSocket.
 
-Pass `--app-name` (optionally with `--app-url` and `--app-icon-hash`) to embed display metadata in the control frame so wallets can render the requesting application context. Alternatively, provide `--app-metadata-file metadata.json` with a JSON object containing `name` (and optional `url`, `icon_hash`) to keep CLI flags tidy. A starter template lives at `python/iroha_python/src/iroha_python/examples/connect_app_metadata.json`. Use `--frame-output <path>` (with optional `--frame-output-format binary`) to persist the encoded frame, `--frame-json-output <path>` for a base64-friendly JSON blob, and `--status-json-output <path>` to dump the typed Connect status snapshot for later automation.
+Pass `--app-name` (optionally with `--app-url` and `--app-icon-hash`) to embed display metadata in the control frame so wallets can render the requesting application context. Alternatively, provide `--app-metadata-file metadata.json` with a JSON object containing `name` (and optional `url`, `icon_hash`) to keep CLI flags tidy. A starter template lives at `python/iroha_python/src/iroha_python/examples/connect_app_metadata.json`. Use `--frame-output <path>` (with optional `--frame-output-format binary`) to persist the encoded frame and `--frame-json-output <path>` for a base64-friendly JSON blob.
 
-Run `python -m iroha_python.examples.connect_flow --write-app-metadata-template connect_app_metadata.json` to write the sample metadata file without contacting a node. When you only need runtime telemetry, pass `--status-only` (optionally with `--status-json-output status.json`) to skip session creation entirely.
+Run `python -m iroha_python.examples.connect_flow --write-app-metadata-template connect_app_metadata.json` to write the sample metadata file without contacting a node. The app-focused helper does not expose aggregate runtime telemetry because that endpoint requires a node operator signature.
 
 ```python
 info = client.create_connect_session_info({
@@ -1511,10 +1567,8 @@ client.send_connect_control_frame(
 # Binary fields (public keys, signatures) are base64-encoded automatically when the SDK
 # serializes the control payload for Torii.
 
-# Inspect Connect runtime status (returns `None` when Connect is disabled)
-status = client.get_connect_status()
-if status and status["enabled"]:
-    print("Active sessions:", status["sessions_active"])
+# Node operators may inspect the exact-network signed aggregate separately via
+# `operator_client.get_connect_status()`. Do not give its signing key to apps.
 ```
 ```
 
@@ -1542,7 +1596,11 @@ assert restored.payload.payload == b"hash"
 
 For repeated messaging, use `ConnectSessionKeys.derive(...)` and `ConnectSession` to manage per-direction keys, sequence counters, and anti-replay checks while calling the sealing helpers. `ConnectSession.snapshot_state()` returns a `ConnectSessionState` snapshot (including the monotonic counters and last-seen values) that can be serialised via `to_dict()` and restored with `ConnectSession.from_state(...)`. Persist the snapshot after every successful decrypt so wallets can resume after crashes without reusing sequence numbers, satisfying the PY6-P1 anti-replay requirement.
 
-Use `ToriiClient.get_pipeline_recovery_typed` to inspect pipeline recovery sidecars with structured DAG and transaction summaries before streaming pipeline events.
+Use `ToriiClient.get_pipeline_recovery_typed` to inspect pipeline recovery
+sidecars with structured DAG and transaction summaries before streaming
+pipeline events. This node-local helper requires the client's immutable
+`OperatorSigningContext`; it signs the exact height-substituted `GET` path and
+empty body, then dispatches once without redirects or retries.
 
 Use the typed account helpers (`list_account_assets_typed`, `list_account_transactions_typed`, and their query counterparts) to receive structured paginated results instead of raw JSON blobs when working with account inventories. The list endpoints accept an optional `asset_id` for pre-filtering.
 
@@ -1597,9 +1655,16 @@ Parliament ballot decisions use only the exact lowercase labels `approve`,
 ## Runtime upgrades and ABI helpers
 
 ```python
-from iroha_python import ToriiClient
+from iroha_python import NetworkId, OperatorSigningContext, ToriiClient
 
-client = ToriiClient("http://127.0.0.1:8080", auth_token="admin-token")
+operator_context = OperatorSigningContext(
+    NetworkId.parse(exact_network_id),
+    runtime_operator_key_pair,
+)
+client = ToriiClient(
+    "http://127.0.0.1:8080",
+    operator_signing_context=operator_context,
+)
 
 # Inspect ABI policy advertised by the node
 abi_state = client.get_runtime_abi_active()
@@ -1622,22 +1687,37 @@ proposal = client.propose_runtime_upgrade(manifest)
 # Later, coordinate activation/cancellation using the manifest id (hex string)
 activation = client.activate_runtime_upgrade("deadbeef" * 4)
 cancel = client.cancel_runtime_upgrade("0x" + "feedface" * 4)
+```
 
 ## Peer inventory & Network Time Service
 
 The client exposes typed access to `/v1/peers` and
 `/v1/time/{now,status}` so operators can capture evidence without falling back
-to `curl`:
+to `curl`. Peer inventory and time status are node-local, so use a separate
+client with an immutable `OperatorSigningContext` for the exact genesis
+`NetworkId`; bearer/API tokens are not a fallback. The same contract applies to
+`get_pipeline_preflight` and `get_pipeline_recovery`:
 
 ```python
-peers = client.list_peers_typed()
+from iroha_python import NetworkId, OperatorSigningContext, ToriiClient
+
+operator_context = OperatorSigningContext(
+    NetworkId.parse(exact_genesis_network_id),
+    operator_key_pair,
+)
+operator_client = ToriiClient(
+    "http://127.0.0.1:8080",
+    operator_signing_context=operator_context,
+)
+
+peers = operator_client.list_peers_typed()
 for peer in peers:
     print(peer.address, peer.id.public_key, peer.metadata)
 
 now = client.get_time_now_typed()
 print("cluster time:", now.now_ms, "offset", now.offset_ms)
 
-status = client.get_time_status_typed()
+status = operator_client.get_time_status_typed()
 for sample in status.samples:
     print(sample.peer, sample.last_offset_ms, sample.last_rtt_ms, sample.count)
 print("RTT buckets:", status.rtt.buckets)
@@ -1651,14 +1731,22 @@ automation notebook. The typed DTOs mirror the current Rust payloads.
 The `capture_node_admin_snapshot()` helper records `/v1/configuration`,
 `/v1/peers`, `/v1/time/{now,status}`, `/v1/telemetry/peers-info`, and
 `/v1/node/capabilities` with one call so runbooks and tests can store a
-deterministic evidence bundle:
+deterministic evidence bundle. Use a client carrying the immutable
+`operator_context` shown above; configuration, peer inventory, and time status
+are fresh exact-network operator reads. Node capabilities still use the
+explicit canonical account signer:
 
 ```python
-from iroha_python import create_torii_client
+from iroha_python import ToriiClient
 
-client = create_torii_client("http://127.0.0.1:8080", auth_token="admin-token")
+operator_client = ToriiClient(
+    "http://127.0.0.1:8080",
+    operator_signing_context=operator_context,
+)
 
-snapshot = client.capture_node_admin_snapshot()
+snapshot = operator_client.capture_node_admin_snapshot(
+    canonical_auth=canonical_auth,
+)
 print("queue capacity:", snapshot.configuration.queue.capacity)
 print("time offset:", snapshot.time_now.offset_ms)
 print("capabilities:", snapshot.node_capabilities.abi_version)
@@ -1700,7 +1788,13 @@ for domain in health.domains:
 
 `KaigiRelaySummary`, `KaigiRelayDetail`, and `KaigiRelayHealthSnapshot` mirror
 the current Rust payloads so dashboards and readiness scripts can validate the
-same DTOs.
+same DTOs. The three snapshot calls require the immutable exact-network
+context, generate fresh headers for the final encoded target and empty body,
+and dispatch once with redirects and retries disabled. Tokens and precomputed
+operator headers are rejected. List and health fail closed at Torii's hard
+relay diagnostic cap rather than materializing an unbounded registry. Keep the
+operator key runtime-only; the Kaigi SSE feed retains its separate streaming
+authentication contract.
 
 For configuration changes, the client now mirrors the `/v1/configuration` contract so
 admin scripts can stage updates without hand-editing JSON blobs. For example:
@@ -1766,8 +1860,8 @@ manifests = client.list_space_directory_manifests_typed(
 for record in manifests.manifests:
     print(record.dataspace_alias, record.status, record.manifest_hash)
 
-# Torii returns canonical transaction drafts; private signing material never
-# crosses the HTTP boundary.
+# Torii returns canonical transaction drafts; the client must already have an
+# immutable LocalSigningContext and matching canonical_request_auth configured.
 publish_draft = client.publish_space_directory_manifest(
     {
         "authority": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
@@ -1848,13 +1942,17 @@ client.delete_trigger(trigger_id)
 from iroha_python import DataEventFilter, ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="admin-token")
+operator_client = ToriiClient(
+    "http://127.0.0.1:8080",
+    operator_signing_context=operator_context,
+)
 
 # Batched history: inspect the latest committed blocks.
 recent_blocks = client.list_blocks(limit=5)
 print([row["height"] for row in recent_blocks.get("items", [])])
 
 # Detailed recovery snapshot for a specific height.
-sidecar = client.get_pipeline_recovery(height=42)
+sidecar = operator_client.get_pipeline_recovery(height=42)
 print(sidecar.get("transactions", []))
 
 # Subscribe to live pipeline transaction events (Queued → Executed → Committed).
@@ -2183,6 +2281,33 @@ the provider owner and four-part signer-policy chain; legacy, missing, and
 unknown fields fail decoding. Call `.to_payload()` for the schema-closed SDK
 JSON model or `.to_instruction()` for canonical Norito after rebuilding the
 native extension from the same source revision.
+
+## ISO 20022 operator requests
+
+The existing pacs.008, pacs.009, and message-status methods require an
+immutable signer bound to the node's exact genesis-derived `NetworkId`:
+
+```python
+from iroha_python import NetworkId, OperatorSigningContext, ToriiClient
+from iroha_python.crypto import Ed25519KeyPair
+
+operator_context = OperatorSigningContext(
+    NetworkId.parse(exact_network_id),
+    Ed25519KeyPair.from_private_key(operator_private_key),
+)
+client = ToriiClient(torii_url, operator_signing_context=operator_context)
+result = client.submit_iso_pacs008(
+    pacs008_xml,
+    profile="swift-cbpr-plus",
+)
+```
+
+Each submission and status poll generates a fresh timestamp and nonce and signs
+the exact method, path, sorted query, and body hash. Requests are dispatched
+once with transport retries and redirect following disabled. `profile` is a
+signed query parameter; bearer/API tokens, application-account auth headers,
+the retired `X-Iroha-Iso-Profile` header, and precomputed operator headers are
+rejected before dispatch.
 
 ## Configuration & overrides
 

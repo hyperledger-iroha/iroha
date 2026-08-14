@@ -1,11 +1,8 @@
 //! This test checks how the JSON-serialized schema looks.
 #![allow(unexpected_cfgs)]
 #![allow(dead_code)]
-
 mod common;
-
 use iroha_schema::IntoSchema;
-
 macro_rules! check_schemas {
     ($($case:literal => $ty:ident / $name:ident: $item:item)*) => {{
         $(
@@ -19,7 +16,6 @@ macro_rules! check_schemas {
         )*
     }};
 }
-
 #[test]
 fn test_struct() {
     check_schemas! {
@@ -40,7 +36,6 @@ fn test_struct() {
         struct TupleStruct(u32, u32);
     }
 }
-
 #[test]
 fn test_struct_codec_attr() {
     check_schemas! {
@@ -57,7 +52,6 @@ fn test_struct_codec_attr() {
         }
     }
 }
-
 #[test]
 fn test_transparent() {
     check_schemas! {
@@ -75,7 +69,6 @@ fn test_transparent() {
         enum TransparentEnum { Variant1, Variant2 }
     }
 }
-
 #[test]
 fn test_enum() {
     check_schemas! {
@@ -87,7 +80,6 @@ fn test_enum() {
         enum DataEnum { Variant1(u32), Variant3(String) }
     }
 }
-
 #[test]
 fn test_enum_with_norito_rename_all() {
     check_schemas! {
@@ -101,7 +93,6 @@ fn test_enum_with_norito_rename_all() {
         }
     }
 }
-
 #[test]
 fn test_enum_codec_attr() {
     check_schemas! {

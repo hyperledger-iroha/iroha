@@ -1,7 +1,6 @@
 use hkdf::Hkdf;
 use sha3::{Sha3_256, Sha3_512};
 use zeroize::Zeroizing;
-
 /// Enumerates the supported HKDF suites used by the `SoraNet` handshake.
 #[derive(Clone, Copy, Debug)]
 pub enum HkdfSuite {
@@ -10,7 +9,6 @@ pub enum HkdfSuite {
     /// HKDF based on SHA3-512.
     Sha3_512,
 }
-
 impl HkdfSuite {
     fn expand(self, salt: Option<&[u8]>, ikm: &[u8]) -> HkdfVariant {
         match self {
@@ -19,14 +17,11 @@ impl HkdfSuite {
         }
     }
 }
-
 enum HkdfVariant {
     Sha3_256(Hkdf<Sha3_256>),
     Sha3_512(Hkdf<Sha3_512>),
 }
-
 const HKDF_LABEL_SEPARATOR: &[u8] = b"\0";
-
 impl HkdfVariant {
     fn expand_multi_info(
         self,
@@ -47,20 +42,17 @@ impl HkdfVariant {
         }
     }
 }
-
 /// Namespaces the HKDF derivation with a protocol label and sub-label.
 #[derive(Clone, Copy, Debug)]
 pub struct HkdfDomain<'a> {
     namespace: &'a str,
     label: &'a str,
 }
-
 impl<'a> HkdfDomain<'a> {
     /// Construct a new domain by providing both namespace and label.
     pub const fn new(namespace: &'a str, label: &'a str) -> Self {
         Self { namespace, label }
     }
-
     /// Shortcut for the canonical `SoraNet` post-quantum namespace.
     pub const fn soranet(label: &'a str) -> Self {
         Self {
@@ -68,20 +60,17 @@ impl<'a> HkdfDomain<'a> {
             label,
         }
     }
-
     /// Returns the namespace component.
     #[must_use]
     pub const fn namespace(&self) -> &'a str {
         self.namespace
     }
-
     /// Returns the label component.
     #[must_use]
     pub const fn label(&self) -> &'a str {
         self.label
     }
 }
-
 /// Derive HKDF keying material with protocol domain separation.
 ///
 /// The `domain` tuple avoids cross-talk between the Diffie-Hellman portion of
@@ -110,18 +99,13 @@ pub fn derive_labeled_hkdf(
         length,
     )
 }
-
 #[cfg(test)]
 mod tests {
-    use std::sync::LazyLock;
-
-    use hex::ToHex;
-
     use super::*;
-
+    use hex::ToHex;
+    use std::sync::LazyLock;
     static IKM: LazyLock<Vec<u8>> = LazyLock::new(|| (0_u8..16).collect());
     static SALT: LazyLock<Vec<u8>> = LazyLock::new(|| (32_u8..48).collect());
-
     #[test]
     fn varying_domain_changes_output() {
         let base = derive_labeled_hkdf(
@@ -133,7 +117,6 @@ mod tests {
             32,
         )
         .unwrap();
-
         let other = derive_labeled_hkdf(
             HkdfSuite::Sha3_256,
             Some(&SALT),
@@ -143,10 +126,8 @@ mod tests {
             32,
         )
         .unwrap();
-
         assert_ne!(base.as_slice(), other.as_slice());
     }
-
     #[test]
     fn sha3_512_matches_expected_length() {
         let okm = derive_labeled_hkdf(
@@ -158,21 +139,17 @@ mod tests {
             64,
         )
         .unwrap();
-
         assert_eq!(okm.len(), 64);
     }
-
     #[test]
     fn domain_accessors_preserve_namespace_and_label() {
         let custom = HkdfDomain::new("custom-namespace", "custom-label");
         assert_eq!(custom.namespace(), "custom-namespace");
         assert_eq!(custom.label(), "custom-label");
-
         let soranet = HkdfDomain::soranet("KEM/2");
         assert_eq!(soranet.namespace(), "soranet/pq");
         assert_eq!(soranet.label(), "KEM/2");
     }
-
     #[test]
     fn zero_length_output_is_allowed() {
         let okm = derive_labeled_hkdf(
@@ -184,10 +161,8 @@ mod tests {
             0,
         )
         .unwrap();
-
         assert!(okm.is_empty());
     }
-
     #[test]
     fn invalid_length_is_reported() {
         let err = derive_labeled_hkdf(
@@ -199,10 +174,8 @@ mod tests {
             (255 * 32) + 1,
         )
         .expect_err("HKDF-SHA3-256 output is limited to 255 hash blocks");
-
         assert!(err.to_string().contains("too large output"));
     }
-
     #[test]
     fn labeled_hkdf_matches_legacy_contiguous_info_layout() {
         let domain = HkdfDomain::soranet("KEM/final");
@@ -213,7 +186,6 @@ mod tests {
         legacy_info.extend_from_slice(domain.label().as_bytes());
         legacy_info.push(0);
         legacy_info.extend_from_slice(context);
-
         let labeled =
             derive_labeled_hkdf(HkdfSuite::Sha3_512, Some(&SALT), &IKM, domain, context, 64)
                 .expect("labeled HKDF output");
@@ -222,10 +194,8 @@ mod tests {
         legacy
             .expand(&legacy_info, &mut legacy_okm)
             .expect("legacy contiguous HKDF output");
-
         assert_eq!(labeled.as_slice(), legacy_okm);
     }
-
     #[test]
     fn salt_and_context_are_domain_separating() {
         let base = derive_labeled_hkdf(
@@ -255,11 +225,9 @@ mod tests {
             64,
         )
         .unwrap();
-
         assert_ne!(base.as_slice(), different_context.as_slice());
         assert_ne!(base.as_slice(), different_salt.as_slice());
     }
-
     #[test]
     fn hkdf_suite_choice_is_domain_separating() {
         let sha3_256 = derive_labeled_hkdf(
@@ -280,10 +248,8 @@ mod tests {
             32,
         )
         .unwrap();
-
         assert_ne!(sha3_256.as_slice(), sha3_512.as_slice());
     }
-
     #[test]
     fn derive_is_deterministic() {
         let first = derive_labeled_hkdf(
@@ -295,7 +261,6 @@ mod tests {
             32,
         )
         .unwrap();
-
         let second = derive_labeled_hkdf(
             HkdfSuite::Sha3_256,
             Some(&SALT),
@@ -305,7 +270,6 @@ mod tests {
             32,
         )
         .unwrap();
-
         assert_eq!(first.encode_hex::<String>(), second.encode_hex::<String>());
     }
 }

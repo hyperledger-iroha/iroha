@@ -9,15 +9,6 @@
 //! and never cross the IPC boundary. ZK-AMS and ZK-X509 remain absent until
 //! their native release paths are genuinely available, so receipt issuance
 //! remains closed.
-
-use std::{
-    env,
-    io::{Read as _, Write as _},
-    num::NonZeroU32,
-    process::ExitCode,
-    time::Duration,
-};
-
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
     privacy_profiles::compiled_privacy_profile_v1,
@@ -48,8 +39,14 @@ use iroha_data_model::{
 };
 use iroha_version::codec::EncodeVersioned;
 use sha2::{Digest as _, Sha256};
+use std::{
+    env,
+    io::{Read as _, Write as _},
+    num::NonZeroU32,
+    process::ExitCode,
+    time::Duration,
+};
 use zeroize::Zeroizing;
-
 const REQUEST_SCHEMA: &str = "iroha.taira.privacy_action_driver_request";
 const RESPONSE_SCHEMA: &str = "iroha.taira.privacy_action_driver_response";
 const SCHEMA_VERSION: u8 = 1;
@@ -107,13 +104,11 @@ const VERANGE_GOVERNANCE_PERMISSION: &str = "CanEnactGovernance";
 const VERANGE_ACTIVATION_TEMPLATE_PROPOSED_AT_HEIGHT: u64 = 1;
 const MAX_COMPILED_PROFILE_BYTES: usize = 64 * 1024;
 const MAX_ACTIVATION_TEMPLATE_BYTES: usize = 64 * 1024;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ConstructibleOperationSpecV1 {
     operation: &'static str,
     protocol: &'static str,
 }
-
 const CONSTRUCTIBLE_OPERATION_SPECS_V1: [ConstructibleOperationSpecV1; 10] = [
     ConstructibleOperationSpecV1 {
         operation: ZK_ACE_OPERATION,
@@ -156,14 +151,12 @@ const CONSTRUCTIBLE_OPERATION_SPECS_V1: [ConstructibleOperationSpecV1; 10] = [
         protocol: "pq-masp-stark-v0",
     },
 ];
-
 fn constructible_operation_spec_v1(operation: &str) -> Option<ConstructibleOperationSpecV1> {
     CONSTRUCTIBLE_OPERATION_SPECS_V1
         .iter()
         .copied()
         .find(|spec| spec.operation == operation)
 }
-
 #[derive(Debug, Clone, norito::JsonDeserialize, norito::JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct BuildActionRequestV1 {
@@ -178,7 +171,6 @@ struct BuildActionRequestV1 {
     schema_version: u8,
     ttl_millis: u64,
 }
-
 #[derive(Debug, Clone, norito::JsonSerialize)]
 struct RequestIdBodyV1 {
     asset_definition_id: String,
@@ -191,7 +183,6 @@ struct RequestIdBodyV1 {
     schema_version: u8,
     ttl_millis: u64,
 }
-
 #[derive(Debug, norito::JsonSerialize)]
 struct BuildActionResponseV1 {
     availability: String,
@@ -209,7 +200,6 @@ struct BuildActionResponseV1 {
     transaction_norito_hex: String,
     transaction_sha256: String,
 }
-
 /// Public-only material a future sealed controller needs to admit the exact
 /// deterministic VeRange action identity and compiled verifier profile.
 ///
@@ -238,7 +228,6 @@ struct VeRangePublicAdmissionArtifactsV1 {
     statement_schema_digest_hex: String,
     verifier_digest_hex: String,
 }
-
 /// Canonical public requirements for a future controller-owned setup bundle.
 ///
 /// The relative-height activation record is a binding template, not a signed
@@ -268,15 +257,12 @@ struct VeRangeQualificationSetupRequirementsV1 {
     setup_authority_public_key_hex: String,
     setup_identity_binding_sha256: String,
 }
-
 fn sha256_bytes(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
-
 fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(sha256_bytes(bytes))
 }
-
 fn decode_hex_32(value: &str, label: &str, reject_zero: bool) -> Result<[u8; 32], String> {
     if value.len() != 64
         || !value
@@ -296,7 +282,6 @@ fn decode_hex_32(value: &str, label: &str, reject_zero: bool) -> Result<[u8; 32]
     }
     Ok(bytes)
 }
-
 fn request_id_body(request: &BuildActionRequestV1) -> RequestIdBodyV1 {
     RequestIdBodyV1 {
         asset_definition_id: request.asset_definition_id.clone(),
@@ -310,7 +295,6 @@ fn request_id_body(request: &BuildActionRequestV1) -> RequestIdBodyV1 {
         ttl_millis: request.ttl_millis,
     }
 }
-
 fn operation_availability_v1(protocol: &str) -> &'static str {
     if protocol == "iroha-jindo-polynomial-commitment-v0" {
         JINDO_EXPERIMENTAL_STATUS
@@ -318,7 +302,6 @@ fn operation_availability_v1(protocol: &str) -> &'static str {
         CONSTRUCTION_ONLY_STATUS
     }
 }
-
 fn operation_limitations_v1(protocol: &str) -> Vec<String> {
     let mut limitations = vec![MISSING_CONTROLLER_CASE_EVIDENCE.to_owned()];
     if protocol == "verange-transparent-range-v1" {
@@ -334,7 +317,6 @@ fn operation_limitations_v1(protocol: &str) -> Vec<String> {
     }
     limitations
 }
-
 fn compute_request_id(request: &BuildActionRequestV1) -> Result<String, String> {
     let body = norito::json::to_string(&request_id_body(request))
         .map_err(|error| format!("cannot encode request ID body: {error}"))?;
@@ -343,7 +325,6 @@ fn compute_request_id(request: &BuildActionRequestV1) -> Result<String, String> 
     hash.update(body.as_bytes());
     Ok(hex::encode(hash.finalize()))
 }
-
 fn derive_nonzero_seed(candidate: &[u8; 32], request_id: &[u8; 32], purpose: u8) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(SEED_DOMAIN);
@@ -356,7 +337,6 @@ fn derive_nonzero_seed(candidate: &[u8; 32], request_id: &[u8; 32], purpose: u8)
     }
     seed
 }
-
 fn derive_nonzero_verange_setup_seed(candidate: &[u8; 32]) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(VERANGE_SETUP_SEED_DOMAIN);
@@ -367,7 +347,6 @@ fn derive_nonzero_verange_setup_seed(candidate: &[u8; 32]) -> [u8; 32] {
     }
     seed
 }
-
 fn bounded_ed25519_authority_v1(
     authority: &AccountId,
     label: &str,
@@ -397,14 +376,12 @@ fn bounded_ed25519_authority_v1(
     }
     Ok((account_id, public_key_bytes))
 }
-
 fn verange_setup_authority_v1(candidate: &[u8; 32]) -> Result<AccountId, String> {
     let seed = Zeroizing::new(derive_nonzero_verange_setup_seed(candidate));
     let private_key = PrivateKey::from_bytes(Algorithm::Ed25519, seed.as_ref())
         .map_err(|error| format!("cannot derive VeRange qualification setup identity: {error}"))?;
     Ok(AccountId::new(PublicKey::from(private_key)))
 }
-
 fn verange_setup_identity_binding_v1(
     candidate: &[u8; 32],
     setup_account_id: &str,
@@ -422,7 +399,6 @@ fn verange_setup_identity_binding_v1(
     hash.update(setup_public_key);
     hex::encode(hash.finalize())
 }
-
 fn verange_public_admission_artifacts_v1(
     authority: &AccountId,
     policy_id: [u8; 32],
@@ -434,7 +410,6 @@ fn verange_public_admission_artifacts_v1(
     let setup_authority = verange_setup_authority_v1(candidate)?;
     let (setup_authority_account_id, setup_public_key_bytes) =
         bounded_ed25519_authority_v1(&setup_authority, "qualification setup")?;
-
     let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
         .map_err(|error| format!("native VeRange compiled profile is unavailable: {error}"))?;
     let compiled_profile = PrivacyCompiledProfileSnapshotV1::from(compiled);
@@ -472,7 +447,6 @@ fn verange_public_admission_artifacts_v1(
     {
         return Err("native VeRange activation template violates its byte bound".to_owned());
     }
-
     let compiled_profile_sha256 = sha256_hex(&compiled_profile_bytes);
     let setup_identity_binding_sha256 = verange_setup_identity_binding_v1(
         candidate,
@@ -507,7 +481,6 @@ fn verange_public_admission_artifacts_v1(
     let setup_requirements_json = norito::json::to_string(&setup_requirements)
         .map_err(|error| format!("cannot encode VeRange setup requirements: {error}"))?;
     let setup_requirements_sha256 = sha256_hex(setup_requirements_json.as_bytes());
-
     Ok(VeRangePublicAdmissionArtifactsV1 {
         action_authority_account_id: authority_account_id,
         action_authority_public_key_hex: hex::encode(public_key_bytes),
@@ -533,7 +506,6 @@ fn verange_public_admission_artifacts_v1(
         verifier_digest_hex: hex::encode(compiled_profile.verifier_digest.as_bytes()),
     })
 }
-
 fn read_request() -> Result<(BuildActionRequestV1, Vec<u8>), String> {
     if env::args_os().count() != 1 {
         return Err("the action driver accepts no command-line arguments".to_owned());
@@ -557,7 +529,6 @@ fn read_request() -> Result<(BuildActionRequestV1, Vec<u8>), String> {
     }
     Ok((request, input))
 }
-
 fn incremented_context_v1(
     context: &PrivacyReleaseTransactionContextV1,
     nonce_delta: u32,
@@ -585,7 +556,6 @@ fn incremented_context_v1(
         genesis_hash: context.genesis_hash,
     })
 }
-
 fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1, String> {
     if request.schema != REQUEST_SCHEMA || request.schema_version != SCHEMA_VERSION {
         return Err("action-driver request selects an unsupported contract".to_owned());
@@ -616,7 +586,6 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
     if compute_request_id(&request)? != request.request_id {
         return Err("action-driver request ID is not derived from the canonical body".to_owned());
     }
-
     let asset_definition_id: AssetDefinitionId = request
         .asset_definition_id
         .parse()
@@ -780,13 +749,11 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
         }
         _ => return Err("action-driver operation table is internally inconsistent".to_owned()),
     };
-
     let transaction_bytes = transaction.encode_versioned();
     if transaction_bytes.is_empty() || transaction_bytes.len() > MAX_TRANSACTION_BYTES {
         return Err("encoded action-driver transaction violates its byte bound".to_owned());
     }
     let transaction_hash_hex = hex::encode(transaction.hash().as_ref());
-
     Ok(BuildActionResponseV1 {
         availability: operation_availability_v1(operation.protocol).to_owned(),
         candidate_binding_sha256: request.candidate_binding_sha256,
@@ -804,7 +771,6 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
         transaction_sha256: sha256_hex(&transaction_bytes),
     })
 }
-
 fn run() -> Result<(), String> {
     let (request, mut request_bytes) = read_request()?;
     let response = build_response(request);
@@ -822,7 +788,6 @@ fn run() -> Result<(), String> {
         .map_err(|error| format!("cannot write action-driver response: {error}"))?;
     Ok(())
 }
-
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -832,14 +797,11 @@ fn main() -> ExitCode {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const REQUEST_ID_GOLDEN: &str =
         include_str!("../../../../fixtures/privacy_exact12_action_driver_request_id_v1.json");
-
     #[derive(Debug, norito::JsonDeserialize)]
     struct RequestIdGoldenV1 {
         canonical_request: String,
@@ -849,7 +811,6 @@ mod tests {
         schema: String,
         schema_version: u8,
     }
-
     #[test]
     fn python_and_rust_share_one_request_id_golden() {
         let golden: RequestIdGoldenV1 =
@@ -874,7 +835,6 @@ mod tests {
             golden.request_id
         );
     }
-
     #[test]
     fn verange_setup_identity_is_candidate_only() {
         let candidate = [0x11; 32];
@@ -882,7 +842,6 @@ mod tests {
         let network_id_before = [0x23; 32];
         let network_id_after = [0x45; 32];
         assert_ne!(network_id_before, network_id_after);
-
         let before = verange_setup_authority_v1(&candidate)
             .expect("derive candidate-bound setup identity")
             .to_string();
@@ -895,7 +854,6 @@ mod tests {
         assert_eq!(before, after);
         assert_ne!(before, substituted);
     }
-
     #[test]
     fn operation_table_contains_only_genuine_release_action_paths() {
         assert_eq!(CONSTRUCTIBLE_OPERATION_SPECS_V1.len(), 10);

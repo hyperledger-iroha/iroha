@@ -3,15 +3,12 @@
 //! These benchmarks measure the macro expansion performance of the derive
 //! helpers used by the data model. They are intended to catch regressions in
 //! compile-time behavior rather than runtime performance.
-
 use criterion::Criterion;
 use manyhow::Emitter;
 use syn::{Item, ItemMod, parse_quote};
-
 #[allow(dead_code, unused_imports)]
 #[path = "../src/model.rs"]
 mod model;
-
 /// Benchmark the cost of expanding `impl_model` on a small test module.
 fn bench_impl_model(c: &mut Criterion) {
     let module: ItemMod = parse_quote! {
@@ -22,7 +19,6 @@ fn bench_impl_model(c: &mut Criterion) {
             struct B;
         }
     };
-
     c.bench_function("impl_model_expansion", |b| {
         b.iter(|| {
             let mut emitter = Emitter::new();
@@ -30,7 +26,6 @@ fn bench_impl_model(c: &mut Criterion) {
         })
     });
 }
-
 /// Benchmark the cost of processing a single `Item` during macro expansion.
 fn bench_process_item(c: &mut Criterion) {
     let item: Item = parse_quote! {
@@ -38,14 +33,12 @@ fn bench_process_item(c: &mut Criterion) {
             value: u32,
         }
     };
-
     c.bench_function("process_item_expansion", |b| {
         b.iter(|| {
             model::process_item(item.clone());
         })
     });
 }
-
 /// Entrypoint for the benchmark binary.
 fn main() {
     let mut c = Criterion::default().configure_from_args();

@@ -37,7 +37,6 @@ impl DetachedDurableValidateExecution {
         })
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl ExecutedDurableValidateExecution {
     /// Borrow the body-store-minted closed result without separating it from
@@ -46,7 +45,6 @@ impl ExecutedDurableValidateExecution {
         &self.outcome
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedDurableValidateCompletion<'_> {
     /// Return the exact reducer coordinates retained across detached execution.
@@ -59,7 +57,6 @@ impl PreparedDurableValidateCompletion<'_> {
             self.executed.request.subject,
         )
     }
-
     /// Borrow the closed body-store outcome retained under the exact registry
     /// reattachment.
     pub(super) const fn outcome(&self) -> &DurableBodyValidationOutcome {
@@ -67,7 +64,6 @@ impl PreparedDurableValidateCompletion<'_> {
     }
 }
 // DURABLE_VALIDATE_ASYNC_HANDOFF_IMPLEMENTATION_END
-
 // DURABLE_VALIDATE_WAIT_DISPATCH_IMPLEMENTATION_BEGIN
 #[cfg_attr(not(test), allow(dead_code))]
 impl DurableValidateDispatch {
@@ -94,20 +90,17 @@ impl DurableValidateDispatch {
         }
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl ExecutedDurableValidateDispatch {
     /// Borrow the closed result without separating it from wake authority.
     pub(super) const fn outcome(&self) -> &DurableBodyValidationOutcome {
         self.executed.outcome()
     }
-
     #[cfg(test)]
     const fn wait_token_for_test(&self) -> WaitToken {
         self.wake.wait_token
     }
 }
-
 #[cfg(test)]
 impl DurableValidateDispatch {
     const fn wait_token_for_test(&self) -> WaitToken {
@@ -115,7 +108,6 @@ impl DurableValidateDispatch {
     }
 }
 // DURABLE_VALIDATE_WAIT_DISPATCH_IMPLEMENTATION_END
-
 // DURABLE_VALIDATE_VOLATILE_COMPLETION_IMPLEMENTATION_BEGIN
 #[cfg_attr(not(test), allow(dead_code))]
 impl DurableValidateCompletionAuthority {
@@ -123,42 +115,34 @@ impl DurableValidateCompletionAuthority {
     pub(super) const fn owner(self) -> OwnerId {
         self.address.owner
     }
-
     /// Existing lifecycle ordinal; completion never allocates another one.
     pub(super) const fn ordinal(self) -> u128 {
         self.address.ordinal
     }
-
     /// Equal-address physical slot retained across publication.
     pub(super) const fn slot(self) -> PhysicalSlotId {
         self.address.slot
     }
-
     /// Digest of the original closed Validate carrier.
     pub(super) const fn incumbent_digest(self) -> LifecycleDigest {
         self.incumbent_digest
     }
-
     /// Outcome-bound digest installed only for executable outcomes.
     pub(super) const fn replacement_digest(self) -> Option<LifecycleDigest> {
         self.replacement_digest
     }
-
     /// Exact wait token retained from the claimed-side dispatch cut.
     pub(super) const fn wait_token(self) -> WaitToken {
         self.wait_token
     }
-
     /// Exact immutable lifecycle key validated before async detachment.
     pub(super) const fn lifecycle_key(self) -> LifecycleKey {
         self.lifecycle_key
     }
-
     /// Exact immutable lifecycle stage validated before async detachment.
     pub(super) const fn lifecycle_stage(self) -> LifecycleStage {
         self.lifecycle_stage
     }
-
     /// Return whether the waiting row retains this completion's exact frame.
     pub(super) fn matches_durable_payload(self, payload: DurablePayloadReference) -> bool {
         self.payload == payload
@@ -167,7 +151,6 @@ impl DurableValidateCompletionAuthority {
                 payload,
             )
     }
-
     /// Whether this exact result must remain Waiting for merge-sidecar service.
     pub(super) const fn is_deferred_merge_sidecar(self) -> bool {
         matches!(
@@ -175,7 +158,6 @@ impl DurableValidateCompletionAuthority {
             DurableValidateOutcomeKind::DeferredMergeSidecar
         )
     }
-
     /// Construct the only Ready event authorized by this executable outcome.
     pub(super) fn ready_event(self) -> Option<ReadyEvent> {
         let replacement_digest = self.replacement_digest?;
@@ -193,14 +175,12 @@ impl DurableValidateCompletionAuthority {
         ))
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
     /// Borrow the sealed coordinator publication projection.
     pub(super) const fn authority(&self) -> DurableValidateCompletionAuthority {
         self.authority
     }
-
     /// Return this preflight only as an ownership-preserving typed failure.
     #[allow(clippy::result_large_err)]
     pub(super) fn fail(
@@ -212,7 +192,6 @@ impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
     ) {
         (error, self.dispatch)
     }
-
     /// Retain a missing merge-sidecar result without changing either live row.
     ///
     /// TODO: Consume this token only in a sealed sidecar registration plus
@@ -224,7 +203,6 @@ impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
             dispatch: self.dispatch,
         }
     }
-
     /// Stage the exact executable outcome as a same-address closed carrier.
     ///
     /// Every CAS and outcome comparison precedes mutation. Once installed, the
@@ -255,7 +233,6 @@ impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
                 )),
             );
         }
-
         let request = &self.dispatch.executed.request;
         let outcome = self.dispatch.outcome();
         let validation_error = match self.registry.entries.get(&authority.address) {
@@ -299,7 +276,6 @@ impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
                 )),
             );
         }
-
         let location = DurableValidatePublishedLocation {
             address: authority.address,
             incumbent_digest: authority.incumbent_digest,
@@ -390,7 +366,6 @@ impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
         Ok(staged)
     }
 }
-
 impl StagedDurableValidateCompletion<'_> {
     fn restore(&mut self) -> Option<ExecutedDurableValidateDispatch> {
         if !self.armed {
@@ -444,7 +419,6 @@ impl StagedDurableValidateCompletion<'_> {
             wake,
         })
     }
-
     /// Permanently retain the already-installed carrier and return only its
     /// precomputed Copy publication metadata.
     pub(super) fn commit(mut self) -> PublishedDurableValidateCompletion {
@@ -452,13 +426,11 @@ impl StagedDurableValidateCompletion<'_> {
         self.publication
     }
 }
-
 impl Drop for StagedDurableValidateCompletion<'_> {
     fn drop(&mut self) {
         drop(self.restore());
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl DeferredDurableValidateDispatch {
     /// Borrow the exact missing sidecar reference without exposing wake parts.
@@ -468,20 +440,17 @@ impl DeferredDurableValidateDispatch {
             .missing_merge_sidecar()
             .expect("deferred Validate token retains one exact merge-sidecar reference")
     }
-
     #[cfg(test)]
     const fn dispatch_for_test(&self) -> &ExecutedDurableValidateDispatch {
         &self.dispatch
     }
 }
-
 #[cfg(test)]
 impl PublishedValidated {
     const fn location_for_test(&self) -> DurableValidatePublishedLocation {
         self.location
     }
 }
-
 #[cfg(test)]
 impl PublishedRejected {
     const fn location_for_test(&self) -> DurableValidatePublishedLocation {
@@ -489,7 +458,6 @@ impl PublishedRejected {
     }
 }
 // DURABLE_VALIDATE_VOLATILE_COMPLETION_IMPLEMENTATION_END
-
 impl<'a> PreparedCertifiedFetchCompletion<'a> {
     /// Bind this drop-inert preflight to the exact body-store durability proof.
     ///
@@ -560,7 +528,6 @@ impl<'a> PreparedCertifiedFetchCompletion<'a> {
         if ready_projection.completion_digest() == self.location.incumbent_digest {
             retain_receipt!(CertifiedFetchCompletionError::ReplacementDigestMismatch);
         }
-
         Ok(PreparedDurableCertifiedFetchCompletion {
             registry: self.registry,
             location: self.location,
@@ -574,18 +541,15 @@ impl<'a> PreparedCertifiedFetchCompletion<'a> {
         })
     }
 }
-
 impl PreparedDurableCertifiedFetchCompletion<'_> {
     /// Borrow the opaque durable projection used by the coordinator's staged cut.
     pub(super) const fn ready_projection(&self) -> &DurableCertifiedFetchReplayProjectionV1 {
         &self.ready_projection
     }
-
     /// Return the exact Waiting incumbent address authenticated before persistence.
     pub(super) const fn waiting_location(&self) -> CertifiedFetchWaitingLocation {
         self.location
     }
-
     /// Revalidate the selector-retained exact response before LedgerV1 fsync.
     ///
     /// The later checked dequeue can then mint only an ownership carrier; its
@@ -613,7 +577,6 @@ impl PreparedDurableCertifiedFetchCompletion<'_> {
             &self.durable_receipt,
         )
     }
-
     /// Return the sealed receipt before any external queue mutation.
     ///
     /// The selector uses this only to reconstruct the complete opaque Phase-B
@@ -622,7 +585,6 @@ impl PreparedDurableCertifiedFetchCompletion<'_> {
     pub(super) fn abort_before_dequeue(self) -> DurableCertifiedFetchBodyReceipt {
         self.durable_receipt
     }
-
     /// Install the closed completion only after checked dequeue returned its
     /// exact owned response carrier. The occurrence is authenticated here and
     /// then dropped; installed work retains only restart-stable material.
@@ -702,7 +664,6 @@ impl PreparedDurableCertifiedFetchCompletion<'_> {
         );
     }
 }
-
 fn ingress_identity_matches_round(
     identity: PendingFairIngressIdentity,
     round: wire::ConsensusRound,
@@ -712,14 +673,12 @@ fn ingress_identity_matches_round(
     identity.context().height() == round.height
         && identity.context().id() == LifecycleDigest::new(context_id)
 }
-
 fn fetch_effect_matches_response(
     effect: &AdapterEffect,
     response: &wire::CertifiedBodyResponse,
 ) -> bool {
     fetch_effect_matches_manifest(effect, response.manifest.round, response.manifest.subject)
 }
-
 fn fetch_effect_matches_manifest(
     effect: &AdapterEffect,
     round: wire::ConsensusRound,
@@ -734,7 +693,6 @@ fn fetch_effect_matches_manifest(
         } if *fetch_round == round && *fetch_subject == subject
     )
 }
-
 fn durable_receipt_matches_fetch(
     receipt: &DurableCertifiedFetchBodyReceipt,
     effect: &AdapterEffect,
@@ -753,7 +711,6 @@ fn durable_receipt_matches_fetch(
         && durable_body.manifest_hash() == manifest_hash
         && fetch_effect_matches_manifest(effect, round, subject)
 }
-
 fn exact_selected_response_matches(
     ingress_identity: PendingFairIngressIdentity,
     inbound: &InboundBlockMessage,
@@ -790,7 +747,6 @@ fn exact_selected_response_matches(
             HashOf::new(&response.manifest),
         )
 }
-
 fn selected_certified_response(
     inbound: &InboundBlockMessage,
 ) -> Option<&wire::CertifiedBodyResponse> {
@@ -805,7 +761,6 @@ fn selected_certified_response(
     };
     Some(response)
 }
-
 #[cfg(test)]
 fn certified_pipeline_prepare_certificate_for_test(
     manifest: &wire::PayloadManifest,
@@ -822,7 +777,6 @@ fn certified_pipeline_prepare_certificate_for_test(
         aggregate_signature: vec![0xC1],
     }
 }
-
 #[cfg(test)]
 fn certified_pipeline_replay_evidence_for_test(
     tag: EventTag,
@@ -871,13 +825,11 @@ fn certified_pipeline_replay_evidence_for_test(
         store.project_validate(&store_effect, receipt, &validate_effect, validate_pending)?;
     Some((store, validate))
 }
-
 fn digest_from_hash(hash: &iroha_crypto::Hash) -> LifecycleDigest {
     let mut bytes = [0_u8; 32];
     bytes.copy_from_slice(hash.as_ref());
     LifecycleDigest::new(bytes)
 }
-
 fn durable_validate_body_payload(receipt: &DurableBodyReceipt) -> Option<DurablePayloadReference> {
     let mut context = [0_u8; 32];
     context.copy_from_slice(receipt.context_id().0.as_ref());
@@ -886,7 +838,6 @@ fn durable_validate_body_payload(receipt: &DurableBodyReceipt) -> Option<Durable
     projection::durable_body_frame_reference(active_context, receipt)
         .map(DurablePayloadReference::BodyFrame)
 }
-
 fn validate_validated_receipt_authority(
     validate: &DurableValidateBody,
     validated_receipt: &ValidatedBodyReceipt,
@@ -916,7 +867,6 @@ fn validate_validated_receipt_authority(
     }
     Ok(())
 }
-
 fn validated_body_completion_digest(
     incumbent_digest: LifecycleDigest,
     expected_manifest_hash: HashOf<wire::PayloadManifest>,
@@ -938,7 +888,6 @@ fn validated_body_completion_digest(
     preimage.extend_from_slice(&commitment);
     digest_from_hash(&Hash::new(preimage))
 }
-
 fn rejected_body_completion_digest(
     incumbent_digest: LifecycleDigest,
     expected_manifest_hash: HashOf<wire::PayloadManifest>,
@@ -955,7 +904,6 @@ fn rejected_body_completion_digest(
     preimage.push(identity.canonical_code());
     digest_from_hash(&Hash::new(preimage))
 }
-
 fn durable_validate_outcome_kind(
     outcome: &DurableBodyValidationOutcome,
 ) -> Option<DurableValidateOutcomeKind> {
@@ -971,7 +919,6 @@ fn durable_validate_outcome_kind(
         _ => None,
     }
 }
-
 fn durable_validate_completion_digest(
     incumbent_digest: LifecycleDigest,
     expected_manifest_hash: HashOf<wire::PayloadManifest>,
@@ -998,7 +945,6 @@ fn durable_validate_completion_digest(
         DurableValidateOutcomeKind::DeferredMergeSidecar => None,
     }
 }
-
 fn durable_validation_wait_source_for_request(
     request: &DetachedDurableValidateExecution,
 ) -> WaitSource {
@@ -1013,7 +959,6 @@ fn durable_validation_wait_source_for_request(
         request.lifecycle_stage,
     )
 }
-
 fn durable_validation_wait_source_from_exact_parts(
     address: ConcreteWorkAddress,
     incumbent_digest: LifecycleDigest,

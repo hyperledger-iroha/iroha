@@ -1,14 +1,12 @@
-use std::collections::HashMap;
-
 use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     IVM, Memory, PointerType,
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
+use std::collections::HashMap;
 mod common;
 use common::assemble_syscalls;
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
         .map(|pty| common::payload_for_type(pty, payload))
@@ -22,18 +20,15 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 fn account(domain: &str, public_key: &str) -> AccountId {
     let _domain = iroha_data_model::DomainId::try_new(domain, "universal").unwrap();
     let public_key: PublicKey = public_key.parse().unwrap();
     AccountId::new(public_key)
 }
-
 fn make_account_tlv(account: &AccountId) -> Vec<u8> {
     let account = account.to_string();
     make_tlv(PointerType::AccountId as u16, account.as_bytes())
 }
-
 #[test]
 fn create_transfer_set_nft_with_tlv() {
     let alice = account(
@@ -48,7 +43,6 @@ fn create_transfer_set_nft_with_tlv() {
         "wonder",
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
-
     let mut wsv = MockWorldStateView::new();
     // Register accounts in mock
     wsv.add_account_unchecked(alice.clone());
@@ -57,7 +51,6 @@ fn create_transfer_set_nft_with_tlv() {
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
     // Create NFT nft0 for alice
     let nft0 = "rose:uuid:0000$domain";
     let tlv_nft = make_tlv(PointerType::NftId as u16, nft0.as_bytes());
@@ -71,7 +64,6 @@ fn create_transfer_set_nft_with_tlv() {
     let prog_create = assemble_syscalls(&[syscalls::SYSCALL_NFT_MINT_ASSET as u8]);
     vm.load_program(&prog_create).unwrap();
     vm.run().expect("create nft via tlv failed");
-
     // Set NFT data as owner
     let tlv_nft = make_tlv(PointerType::NftId as u16, nft0.as_bytes());
     let tlv_key = make_tlv(PointerType::Name as u16, b"dpn_metadata");
@@ -91,7 +83,6 @@ fn create_transfer_set_nft_with_tlv() {
     let prog_set = assemble_syscalls(&[syscalls::SYSCALL_NFT_SET_METADATA as u8]);
     vm.load_program(&prog_set).unwrap();
     vm.run().expect("set nft data via tlv failed");
-
     // Transfer NFT to bob (caller=alice)
     let tlv_from = make_account_tlv(&alice);
     let tlv_nft = make_tlv(PointerType::NftId as u16, nft0.as_bytes());
@@ -114,13 +105,11 @@ fn create_transfer_set_nft_with_tlv() {
     let prog_xfer = assemble_syscalls(&[syscalls::SYSCALL_NFT_TRANSFER_ASSET as u8]);
     vm.load_program(&prog_xfer).unwrap();
     vm.run().expect("transfer nft via tlv failed");
-
     // Switch caller to an unrelated account before trying to mutate metadata again
     if let Some(any) = vm.host_mut_any() {
         let host = any.downcast_mut::<WsvHost>().expect("downcast WsvHost");
         host.set_caller_subject(carol.clone());
     }
-
     // Set NFT data as non-owner/non-issuer should now fail (caller=carol, owner=bob, issuer=alice)
     let tlv_nft = make_tlv(PointerType::NftId as u16, nft0.as_bytes());
     let tlv_key = make_tlv(PointerType::Name as u16, b"dpn_metadata");

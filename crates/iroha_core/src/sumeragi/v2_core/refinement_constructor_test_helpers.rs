@@ -1,5 +1,4 @@
 // Test-only constructor invariants included at `refinement` module scope.
-
 #[cfg(test)]
 fn assert_in_flight_first_release_actor_target_tampering_fails(
     accepted: ProductionInFlightFirstReleaseTransitionProjection,
@@ -19,7 +18,6 @@ fn assert_in_flight_first_release_actor_target_tampering_fails(
         "checked evidence must reject target substitution"
     );
 }
-
 #[cfg(test)]
 fn assert_in_flight_first_release_transport_constructors_fail_closed(
     reserved: ProductionInFlightFirstReleaseStateProjection,
@@ -34,7 +32,6 @@ fn assert_in_flight_first_release_transport_constructors_fail_closed(
             "fanout must reject invalid replica bitmap {invalid_replica:#x}"
         );
     }
-
     let mut missing_producer_custody = reserved;
     missing_producer_custody.session.bodies &= !reserved.producer;
     assert!(production_in_flight_first_release_state_kernel(
@@ -48,7 +45,6 @@ fn assert_in_flight_first_release_transport_constructors_fail_closed(
         .is_none(),
         "fanout must not fabricate absent producer custody"
     );
-
     let fanout =
         check_production_in_flight_first_release_fanout_from_producer_transition(reserved, 2)
             .expect("valid producer fanout must mint checked evidence")
@@ -62,13 +58,11 @@ fn assert_in_flight_first_release_transport_constructors_fail_closed(
     let mut expected_fanout = reserved;
     expected_fanout.session.bodies |= 2;
     assert_eq!(fanout.after, expected_fanout);
-
     let duplicate_fanout =
         check_production_in_flight_first_release_fanout_from_producer_transition(fanout.after, 2)
             .expect("an exact duplicate fanout is a valid idempotent stutter")
             .into_projection();
     assert_eq!(duplicate_fanout.before, duplicate_fanout.after);
-
     for (source, target) in [(4, 1), (2, 2), (2, 0), (3, 4)] {
         assert!(
             check_production_in_flight_first_release_serve_late_body_transition(
@@ -80,7 +74,6 @@ fn assert_in_flight_first_release_transport_constructors_fail_closed(
             "late-body service must reject source/target pair {source:#x}/{target:#x}"
         );
     }
-
     let crashed_target = check_production_in_flight_first_release_crash_transition(fanout.after, 4)
         .expect("a committee target can crash before body service")
         .into_projection()
@@ -90,7 +83,6 @@ fn assert_in_flight_first_release_transport_constructors_fail_closed(
             .is_none(),
         "late-body service must reject a crashed target"
     );
-
     let served =
         check_production_in_flight_first_release_serve_late_body_transition(fanout.after, 2, 4)
             .expect("authenticated source custody must serve one live target")
@@ -108,12 +100,10 @@ fn assert_in_flight_first_release_transport_constructors_fail_closed(
             .expect("an exact duplicate late-body service is a valid idempotent stutter")
             .into_projection();
     assert_eq!(duplicate_serve.before, duplicate_serve.after);
-
     for accepted in [fanout, served] {
         assert_in_flight_first_release_actor_target_tampering_fails(accepted, 0, 1);
     }
 }
-
 #[cfg(test)]
 fn assert_in_flight_first_release_crash_recovery_constructors_fail_closed(
     ready: ProductionInFlightFirstReleaseStateProjection,
@@ -129,7 +119,6 @@ fn assert_in_flight_first_release_crash_recovery_constructors_fail_closed(
         check_production_in_flight_first_release_recover_transition(ready, 4).is_none(),
         "recovery must reject a validator that is not crashed"
     );
-
     let crash = check_production_in_flight_first_release_crash_transition(ready, 4)
         .expect("one live validator must have an exact checked crash")
         .into_projection();
@@ -154,7 +143,6 @@ fn assert_in_flight_first_release_crash_recovery_constructors_fail_closed(
             "recovery must reject invalid actor bitmap {invalid_actor:#x}"
         );
     }
-
     let recovery = check_production_in_flight_first_release_recover_transition(crash.after, 4)
         .expect("one crashed validator must have an exact checked recovery")
         .into_projection();
@@ -170,7 +158,6 @@ fn assert_in_flight_first_release_crash_recovery_constructors_fail_closed(
     for accepted in [crash, recovery] {
         assert_in_flight_first_release_actor_target_tampering_fails(accepted, 0, 1);
     }
-
     let producer_crash =
         check_production_in_flight_first_release_crash_transition(ready, ready.producer)
             .expect("the selected producer has an exact checked crash")
@@ -185,7 +172,6 @@ fn assert_in_flight_first_release_crash_recovery_constructors_fail_closed(
     assert!(!producer_recovery.after.session.producer_alive);
     assert_eq!(producer_recovery.after.session.bodies & ready.producer, 0);
 }
-
 #[cfg(test)]
 fn assert_in_flight_first_release_stutter_constructors_are_exact(
     reserved: ProductionInFlightFirstReleaseStateProjection,
@@ -210,7 +196,6 @@ fn assert_in_flight_first_release_stutter_constructors_are_exact(
         .into_projection();
     assert_eq!(duplicate_snapshot, snapshot);
     assert_in_flight_first_release_actor_target_tampering_fails(snapshot, 1, 1);
-
     let mut changed_snapshot = reserved;
     changed_snapshot.session.bodies |= 2;
     assert!(production_in_flight_first_release_state_kernel(
@@ -229,7 +214,6 @@ fn assert_in_flight_first_release_stutter_constructors_are_exact(
         .is_none(),
         "snapshot replay must reject a non-stutter after-state"
     );
-
     assert!(
         check_production_in_flight_first_release_repair_post_carrier_evidence_transition(reserved)
             .is_none(),
@@ -253,7 +237,6 @@ fn assert_in_flight_first_release_stutter_constructors_are_exact(
         .into_projection();
     assert_eq!(duplicate_repair, repair);
     assert_in_flight_first_release_actor_target_tampering_fails(repair, 1, 1);
-
     let changed_repair = check_production_in_flight_first_release_crash_transition(applied, 4)
         .expect("valid crash supplies an independently valid non-stutter target")
         .into_projection()

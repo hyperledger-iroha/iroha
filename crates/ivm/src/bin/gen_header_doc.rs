@@ -3,18 +3,13 @@
 //!   cargo run -p ivm --features dev-tools --bin gen_header_doc -- --write
 //!   cargo run -p ivm --features dev-tools --bin gen_header_doc -- --check
 //!   cargo run -p ivm --features dev-tools --bin gen_header_doc -- --write --root /tmp/ivm-doc-stage
-
 use std::path::{Path, PathBuf};
-
 mod support;
-
 use support::{GeneratedOutput, parse_generation_options, sync_generated_outputs};
-
 const LAYOUT_BEGIN: &str = "<!-- BEGIN GENERATED HEADER LAYOUT -->";
 const LAYOUT_END: &str = "<!-- END GENERATED HEADER LAYOUT -->";
 const POLICY_BEGIN: &str = "<!-- BEGIN GENERATED HEADER POLICY -->";
 const POLICY_END: &str = "<!-- END GENERATED HEADER POLICY -->";
-
 fn render_header_layout_markdown() -> String {
     format!(
         "- Offsets and sizes ({} bytes total):\n\
@@ -29,7 +24,6 @@ fn render_header_layout_markdown() -> String {
         ivm::HEADER_SIZE
     )
 }
-
 fn render_header_policy_markdown() -> String {
     // Known bits from the public ivm_mode re-export
     let zk = ivm::ivm_mode::ZK;
@@ -38,7 +32,6 @@ fn render_header_policy_markdown() -> String {
     let known_bits = zk | vec | htm;
     let accepted_major = 1u8;
     let vector_len_max = 64u8;
-
     let mut md = String::new();
     md.push_str("| Field | Policy |\n");
     md.push_str("|---|---|\n");
@@ -54,11 +47,9 @@ fn render_header_policy_markdown() -> String {
     ));
     md
 }
-
 fn header_doc_paths(source_dir: &Path) -> Vec<PathBuf> {
     vec![source_dir.join("ivm_header.md")]
 }
-
 fn replace_generated_section(
     text: &str,
     begin_marker: &str,
@@ -87,12 +78,10 @@ fn replace_generated_section(
         ));
     }
     let end = end_start + end_marker.len();
-
     let mut rendered = text.to_owned();
     rendered.replace_range(begin..end, expected);
     Ok(rendered)
 }
-
 fn render_header_document(
     text: &str,
     include_layout: bool,
@@ -106,7 +95,6 @@ fn render_header_document(
     };
     replace_generated_section(&rendered, POLICY_BEGIN, POLICY_END, expected_policy)
 }
-
 fn prepare_header_outputs(
     paths: &[PathBuf],
     expected_layout: &str,
@@ -123,7 +111,6 @@ fn prepare_header_outputs(
         })
         .collect()
 }
-
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -131,7 +118,6 @@ fn workspace_root() -> PathBuf {
         .expect("workspace root")
         .to_path_buf()
 }
-
 fn main() {
     let options = match parse_generation_options(std::env::args().skip(1), workspace_root()) {
         Ok(options) => options,
@@ -145,7 +131,6 @@ fn main() {
     let expected_layout = format!("{LAYOUT_BEGIN}\n{layout}{LAYOUT_END}");
     let table = render_header_policy_markdown();
     let expected_policy = format!("{POLICY_BEGIN}\n{table}{POLICY_END}");
-
     let paths = header_doc_paths(&source_dir);
     let outputs = prepare_header_outputs(&paths, &expected_layout, &expected_policy)
         .unwrap_or_else(|error| panic!("render IVM header documents: {error}"));
@@ -157,21 +142,17 @@ fn main() {
         eprintln!("updated: {}", path.display());
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        sync::atomic::{AtomicU64, Ordering},
-    };
-
     use super::{
         LAYOUT_BEGIN, LAYOUT_END, POLICY_BEGIN, POLICY_END, prepare_header_outputs,
         render_header_document,
     };
-
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
-
     #[test]
     fn english_header_replaces_layout_and_policy() {
         let current = format!(
@@ -180,7 +161,6 @@ mod tests {
         let expected_layout = format!("{LAYOUT_BEGIN}\nlayout\n{LAYOUT_END}");
         let expected_policy = format!("{POLICY_BEGIN}\npolicy\n{POLICY_END}");
         let expected = format!("intro\n{expected_layout}\nmiddle\n{expected_policy}\ntail\n");
-
         assert_eq!(
             render_header_document(&current, true, &expected_layout, &expected_policy)
                 .expect("replace English generated sections"),
@@ -207,7 +187,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn late_marker_failure_does_not_publish_earlier_document() {
         let unique = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
@@ -223,7 +202,6 @@ mod tests {
         fs::write(&second, "missing policy markers\n").expect("write malformed later document");
         let before = fs::read(&first).expect("snapshot first document");
         let expected_policy = format!("{POLICY_BEGIN}\ncurrent\n{POLICY_END}");
-
         assert!(
             prepare_header_outputs(&[first.clone(), second], "unused", &expected_policy,).is_err()
         );
@@ -231,7 +209,6 @@ mod tests {
             fs::read(&first).expect("read first after late failure"),
             before
         );
-
         fs::remove_dir_all(source_dir).expect("remove temporary directory");
     }
 }

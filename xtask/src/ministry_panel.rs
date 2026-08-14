@@ -1,13 +1,10 @@
-use std::{
-    collections::BTreeMap,
-    convert::TryFrom,
-    error::Error,
-    fs,
-    io::{self, Write},
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+#[cfg(test)]
+use crate::ministry_agenda::{
+    ConflictDetail, HashFamilyImpact, ImpactTotals, SelectedMemberSummary, SortitionDigestSummary,
 };
-
+use crate::ministry_agenda::{
+    ConflictSource, ImpactReport, ProposalImpactSummary, SortitionSummary,
+};
 use eyre::{Context, Result, ensure, eyre};
 use hex::encode as hex_encode;
 use iroha_data_model::{
@@ -23,22 +20,20 @@ use iroha_data_model::{
 };
 use norito::json::{JsonDeserialize, Map as JsonMap, Value};
 use serde::de::DeserializeOwned;
-
-#[cfg(test)]
-use crate::ministry_agenda::{
-    ConflictDetail, HashFamilyImpact, ImpactTotals, SelectedMemberSummary, SortitionDigestSummary,
+use std::{
+    collections::BTreeMap,
+    convert::TryFrom,
+    error::Error,
+    fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
-use crate::ministry_agenda::{
-    ConflictSource, ImpactReport, ProposalImpactSummary, SortitionSummary,
-};
-
 type ParseResult<T> = std::result::Result<T, String>;
-
 pub enum Command {
     Synthesize(SynthesizeOptions),
     Packet(PacketOptions),
 }
-
 #[derive(Clone)]
 pub struct SynthesizeOptions {
     pub proposal_path: PathBuf,
@@ -49,7 +44,6 @@ pub struct SynthesizeOptions {
     pub language_override: Option<String>,
     pub generated_at_unix_ms: Option<u64>,
 }
-
 #[derive(Clone)]
 pub struct PacketOptions {
     pub synth: SynthesizeOptions,
@@ -58,29 +52,24 @@ pub struct PacketOptions {
     pub output_path: PathBuf,
     pub summary_out_path: Option<PathBuf>,
 }
-
 pub fn run(command: Command) -> Result<(), Box<dyn Error>> {
     match command {
         Command::Synthesize(options) => synthesize(options).map_err(|err| err.into()),
         Command::Packet(options) => packet(options).map_err(|err| err.into()),
     }
 }
-
 pub fn synthesize_summary(options: &SynthesizeOptions) -> Result<ReviewPanelSummaryV1> {
     validate_panel_round(&options.panel_round_id)?;
-
     let proposal: AgendaProposalV1 = load_json(&options.proposal_path, "proposal")?;
     proposal
         .validate()
         .map_err(|err| eyre!("proposal validation failed: {err}"))?;
-
     let manifest: ModerationReproManifestV1 = load_json(&options.ai_manifest_path, "AI manifest")?;
     ensure!(
         manifest.body.schema_version == MODERATION_REPRO_MANIFEST_VERSION_V1,
         "AI manifest uses unsupported schema version {}",
         manifest.body.schema_version
     );
-
     let volunteer_raw: Value = load_json(&options.volunteer_path, "volunteer dataset")?;
     let briefs = parse_volunteer_briefs(volunteer_raw, &proposal.proposal_id)?;
     let filtered: Vec<VolunteerBrief> = briefs
@@ -91,16 +80,13 @@ pub fn synthesize_summary(options: &SynthesizeOptions) -> Result<ReviewPanelSumm
         !filtered.is_empty(),
         "volunteer dataset contains no on-topic submissions"
     );
-
     build_review_panel_summary(options, &proposal, &manifest, &filtered)
 }
-
 fn synthesize(options: SynthesizeOptions) -> Result<()> {
     let summary = synthesize_summary(&options)?;
     write_summary(&summary, &options.output_path)?;
     Ok(())
 }
-
 fn packet(options: PacketOptions) -> Result<()> {
     let packet = build_packet(&options)?;
     if let Some(summary_out) = &options.summary_out_path {
@@ -113,7 +99,6 @@ fn packet(options: PacketOptions) -> Result<()> {
     );
     Ok(())
 }
-
 fn build_packet(options: &PacketOptions) -> Result<ReferendumPacketV1> {
     let summary = synthesize_summary(&options.synth)?;
     let proposal: AgendaProposalV1 =
@@ -138,7 +123,6 @@ fn build_packet(options: &PacketOptions) -> Result<ReferendumPacketV1> {
         impact_summary,
     })
 }
-
 fn load_json<T>(path: &Path, label: &str) -> Result<T>
 where
     T: JsonDeserialize,
@@ -148,7 +132,6 @@ where
     norito::json::from_slice(&bytes)
         .with_context(|| format!("failed to parse {label} JSON at {}", path.display()))
 }
-
 fn load_serde_json<T>(path: &Path, label: &str) -> Result<T>
 where
     T: DeserializeOwned,
@@ -158,7 +141,6 @@ where
     serde_json::from_slice(&bytes)
         .with_context(|| format!("failed to parse {label} JSON at {}", path.display()))
 }
-
 fn build_sortition_evidence(summary: &SortitionSummary) -> Result<ReferendumSortitionEvidence> {
     Ok(ReferendumSortitionEvidence {
         algorithm: summary.algorithm.clone(),
@@ -170,7 +152,6 @@ fn build_sortition_evidence(summary: &SortitionSummary) -> Result<ReferendumSort
         eligible_members: to_u32(summary.eligible_members, "eligible members")?,
     })
 }
-
 fn build_panelists(summary: &SortitionSummary) -> Result<Vec<ReferendumPanelist>> {
     summary
         .selected
@@ -192,7 +173,6 @@ fn build_panelists(summary: &SortitionSummary) -> Result<Vec<ReferendumPanelist>
         })
         .collect()
 }
-
 fn build_referendum_impact_summary(
     report: &ImpactReport,
     proposal_id: &str,
@@ -202,7 +182,6 @@ fn build_referendum_impact_summary(
         .iter()
         .find(|proposal| proposal.proposal_id == proposal_id)
         .ok_or_else(|| eyre!("impact report missing proposal `{proposal_id}`"))?;
-
     let hash_families = entry
         .hash_families
         .iter()
@@ -218,7 +197,6 @@ fn build_referendum_impact_summary(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-
     let conflicts = entry
         .conflicts
         .iter()
@@ -230,7 +208,6 @@ fn build_referendum_impact_summary(
             note: conflict.note.clone(),
         })
         .collect();
-
     Ok(ReferendumImpactSummary {
         report_generated_at: report.generated_at.clone(),
         total_targets: to_u32(entry.total_targets, "proposal targets")?,
@@ -240,20 +217,18 @@ fn build_referendum_impact_summary(
         conflicts,
     })
 }
-
 fn convert_conflict_source(source: ConflictSource) -> ReferendumImpactConflictSource {
     match source {
         ConflictSource::DuplicateRegistry => ReferendumImpactConflictSource::DuplicateRegistry,
         ConflictSource::PolicySnapshot => ReferendumImpactConflictSource::PolicySnapshot,
     }
 }
-
 fn to_u32(value: usize, label: &str) -> Result<u32> {
     u32::try_from(value).map_err(|_| eyre!("`{label}` value {value} exceeds u32 range"))
 }
-
 #[cfg(test)]
 mod parse_tests {
+    use super::*;
     use iroha_data_model::{
         ministry::{
             AGENDA_PROPOSAL_VERSION_V1, AgendaEvidenceAttachment, AgendaEvidenceKind,
@@ -268,9 +243,6 @@ mod parse_tests {
     };
     use norito::json::{JsonSerialize, Value as NoritoValue};
     use tempfile::TempDir;
-
-    use super::*;
-
     #[test]
     fn packet_command_emits_referendum_packet() {
         let tmp = TempDir::new().expect("tempdir");
@@ -287,7 +259,6 @@ mod parse_tests {
         serde_write(&impact_path, &sample_impact_report());
         let packet_path = tmp.path().join("packet.json");
         let summary_path = tmp.path().join("summary.json");
-
         let options = PacketOptions {
             synth: SynthesizeOptions {
                 proposal_path: proposal_path.clone(),
@@ -303,11 +274,8 @@ mod parse_tests {
             output_path: packet_path.clone(),
             summary_out_path: Some(summary_path.clone()),
         };
-
         packet(options).expect("packet workflow runs");
-
         assert!(summary_path.exists(), "summary output must be written");
-
         let packet_bytes = fs::read(&packet_path).expect("packet read");
         let packet: ReferendumPacketV1 =
             norito::json::from_slice(&packet_bytes).expect("packet decode");
@@ -316,7 +284,6 @@ mod parse_tests {
         assert_eq!(packet.panelists.len(), 2);
         assert_eq!(packet.impact_summary.hash_families.len(), 1);
     }
-
     fn write_norito_json<T>(path: &Path, value: &T)
     where
         T: JsonSerialize,
@@ -325,12 +292,10 @@ mod parse_tests {
             norito::json::to_vec_pretty(value).expect("serialize Norito-compatible structure");
         fs::write(path, bytes).expect("write Norito json");
     }
-
     fn write_norito_json_value(path: &Path, value: &NoritoValue) {
         let bytes = norito::json::to_vec_pretty(value).expect("serialize Norito value");
         fs::write(path, bytes).expect("write value json");
     }
-
     fn serde_write<T>(path: &Path, value: &T)
     where
         T: serde::Serialize,
@@ -338,7 +303,6 @@ mod parse_tests {
         let bytes = serde_json::to_vec_pretty(value).expect("serialize serde value");
         fs::write(path, bytes).expect("write serde json");
     }
-
     fn sample_proposal() -> AgendaProposalV1 {
         AgendaProposalV1 {
             version: AGENDA_PROPOSAL_VERSION_V1,
@@ -373,7 +337,6 @@ mod parse_tests {
             duplicates: vec![],
         }
     }
-
     fn sample_manifest() -> ModerationReproManifestV1 {
         let mut body = ModerationReproBodyV1 {
             schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
@@ -414,7 +377,6 @@ mod parse_tests {
             signatures: Vec::new(),
         }
     }
-
     fn sample_sortition_summary() -> SortitionSummary {
         SortitionSummary {
             format_version: 1,
@@ -471,7 +433,6 @@ mod parse_tests {
             ],
         }
     }
-
     fn sample_impact_report() -> ImpactReport {
         ImpactReport {
             format_version: 1,
@@ -512,7 +473,6 @@ mod parse_tests {
             },
         }
     }
-
     fn sample_volunteer_dataset() -> NoritoValue {
         NoritoValue::Array(vec![
             volunteer_entry(
@@ -523,7 +483,6 @@ mod parse_tests {
             volunteer_entry("oppose-1", "oppose", "https://evidence.example.org/oppose"),
         ])
     }
-
     fn volunteer_entry(id: &str, stance: &str, citation: &str) -> NoritoValue {
         let summary_title = format!("Summary {id}");
         let claim_id = format!("{id}-F1");
@@ -561,7 +520,6 @@ mod parse_tests {
         })
     }
 }
-
 fn write_summary(summary: &ReviewPanelSummaryV1, path: &Path) -> Result<()> {
     let bytes = norito::json::to_vec_pretty(summary)
         .context("failed to serialise review panel summary to JSON")?;
@@ -577,7 +535,6 @@ fn write_summary(summary: &ReviewPanelSummaryV1, path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 fn write_packet(packet: &ReferendumPacketV1, path: &Path) -> Result<()> {
     let bytes = norito::json::to_vec_pretty(packet)
         .context("failed to serialise referendum packet to JSON")?;
@@ -593,7 +550,6 @@ fn write_packet(packet: &ReferendumPacketV1, path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 fn parse_volunteer_briefs(value: Value, expected_proposal_id: &str) -> Result<Vec<VolunteerBrief>> {
     let entries = value
         .as_array()
@@ -606,7 +562,6 @@ fn parse_volunteer_briefs(value: Value, expected_proposal_id: &str) -> Result<Ve
     }
     Ok(briefs)
 }
-
 fn build_review_panel_summary(
     options: &SynthesizeOptions,
     proposal: &AgendaProposalV1,
@@ -619,7 +574,6 @@ fn build_review_panel_summary(
         stats.contains_key(&Stance::Support) && stats.contains_key(&Stance::Oppose),
         "volunteer dataset must include both support and oppose stances"
     );
-
     let manifest_hex = hex_encode(manifest.body.manifest_id);
     let highlights = build_highlights(
         briefs,
@@ -635,7 +589,6 @@ fn build_review_panel_summary(
         highlights.iter().any(|h| h.stance == "oppose"),
         "failed to generate an oppose highlight with citations"
     );
-
     warnings.extend(
         briefs
             .iter()
@@ -652,7 +605,6 @@ fn build_review_panel_summary(
                 )
             }),
     );
-
     let stance_distribution = build_stance_distribution(&stats);
     let total_briefs: u32 = stance_distribution
         .iter()
@@ -688,7 +640,6 @@ fn build_review_panel_summary(
             proposal.evidence.len()
         ),
     };
-
     let volunteer_references = briefs
         .iter()
         .map(|brief| ReviewPanelVolunteerReference {
@@ -703,7 +654,6 @@ fn build_review_panel_summary(
                 .count() as u32,
         })
         .collect();
-
     Ok(ReviewPanelSummaryV1 {
         version: REVIEW_PANEL_SUMMARY_VERSION_V1,
         proposal_id: proposal.proposal_id.clone(),
@@ -727,7 +677,6 @@ fn build_review_panel_summary(
         warnings,
     })
 }
-
 fn build_highlights(
     briefs: &[VolunteerBrief],
     manifest_hex: &str,
@@ -802,7 +751,6 @@ fn build_highlights(
     }
     Ok(highlights)
 }
-
 fn build_stance_distribution(stats: &BTreeMap<Stance, StanceStats>) -> Vec<ReviewPanelStanceCount> {
     let mut out = Vec::new();
     for stance in [Stance::Support, Stance::Oppose, Stance::Context] {
@@ -816,7 +764,6 @@ fn build_stance_distribution(stats: &BTreeMap<Stance, StanceStats>) -> Vec<Revie
     }
     out
 }
-
 fn aggregate_stance_stats(briefs: &[VolunteerBrief]) -> BTreeMap<Stance, StanceStats> {
     let mut stats: BTreeMap<Stance, StanceStats> = BTreeMap::new();
     for brief in briefs {
@@ -826,14 +773,12 @@ fn aggregate_stance_stats(briefs: &[VolunteerBrief]) -> BTreeMap<Stance, StanceS
     }
     stats
 }
-
 fn current_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
 }
-
 fn validate_panel_round(value: &str) -> Result<()> {
     ensure!(
         value.starts_with("RP-"),
@@ -845,7 +790,6 @@ fn validate_panel_round(value: &str) -> Result<()> {
     );
     Ok(())
 }
-
 #[derive(Clone, Debug)]
 struct VolunteerBrief {
     id: String,
@@ -855,7 +799,6 @@ struct VolunteerBrief {
     off_topic: bool,
     fact_rows: Vec<FactRow>,
 }
-
 impl VolunteerBrief {
     fn from_value(value: &Value, expected_proposal_id: &str) -> ParseResult<Self> {
         let map = value
@@ -901,7 +844,6 @@ impl VolunteerBrief {
         })
     }
 }
-
 #[derive(Clone, Debug)]
 struct FactRow {
     id: String,
@@ -910,7 +852,6 @@ struct FactRow {
     impact: Vec<String>,
     citations: Vec<String>,
 }
-
 fn parse_fact_rows(value: &Value) -> ParseResult<Vec<FactRow>> {
     let rows = value
         .as_array()
@@ -956,14 +897,12 @@ fn parse_fact_rows(value: &Value) -> ParseResult<Vec<FactRow>> {
     }
     Ok(out)
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Stance {
     Support,
     Oppose,
     Context,
 }
-
 impl Stance {
     fn parse(raw: &str) -> ParseResult<Self> {
         match raw.trim().to_lowercase().as_str() {
@@ -973,7 +912,6 @@ impl Stance {
             other => Err(format!("stance `{other}` is not supported")),
         }
     }
-
     const fn as_str(self) -> &'static str {
         match self {
             Self::Support => "support",
@@ -982,20 +920,17 @@ impl Stance {
         }
     }
 }
-
 #[derive(Clone)]
 struct HighlightSource {
     stance: Stance,
     brief_title: String,
     row: FactRow,
 }
-
 #[derive(Default)]
 struct StanceStats {
     brief_count: u32,
     fact_rows: u32,
 }
-
 fn require_string(map: &JsonMap, key: &str) -> ParseResult<String> {
     map.get(key)
         .and_then(Value::as_str)
@@ -1003,17 +938,14 @@ fn require_string(map: &JsonMap, key: &str) -> ParseResult<String> {
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("field `{key}` missing or not a string"))
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::ministry::{
         AGENDA_PROPOSAL_VERSION_V1, AgendaEvidenceAttachment, AgendaEvidenceKind,
         AgendaProposalAction, AgendaProposalSubmitter, AgendaProposalSummary, AgendaProposalTarget,
         AgendaProposalV1,
     };
-
-    use super::*;
-
     fn sample_proposal() -> AgendaProposalV1 {
         AgendaProposalV1 {
             version: AGENDA_PROPOSAL_VERSION_V1,
@@ -1048,7 +980,6 @@ mod tests {
             duplicates: vec![],
         }
     }
-
     fn sample_manifest() -> ModerationReproManifestV1 {
         use iroha_data_model::sorafs::moderation::{
             ModerationModelFingerprintV1, ModerationReproBodyV1, ModerationReproSignatureV1,
@@ -1104,7 +1035,6 @@ mod tests {
             }],
         }
     }
-
     fn sample_brief(stance: Stance, id: &str, claim_suffix: &str) -> VolunteerBrief {
         VolunteerBrief {
             id: id.into(),
@@ -1121,7 +1051,6 @@ mod tests {
             }],
         }
     }
-
     #[test]
     fn volunteer_parser_rejects_mismatched_proposal_id() {
         let value = norito::json!([{
@@ -1146,7 +1075,6 @@ mod tests {
             "unexpected error message: {err}"
         );
     }
-
     #[test]
     fn summary_requires_balanced_stances() {
         let options = SynthesizeOptions {
@@ -1168,7 +1096,6 @@ mod tests {
                 .contains("include both support and oppose stances")
         );
     }
-
     #[test]
     fn summary_includes_highlights_and_citations() {
         let options = SynthesizeOptions {

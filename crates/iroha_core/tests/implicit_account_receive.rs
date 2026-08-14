@@ -1,8 +1,5 @@
 //! End-to-end regressions for global implicit account receive admission.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
-use std::{num::NonZeroU64, sync::Arc};
-
 use iroha_core::{
     governance::manifest::LaneManifestRegistry,
     kura::Kura,
@@ -25,7 +22,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
-
+use std::{num::NonZeroU64, sync::Arc};
 fn balance(state: &State, id: &AssetId) -> Quantity {
     state
         .view()
@@ -34,7 +31,6 @@ fn balance(state: &State, id: &AssetId) -> Quantity {
         .get(id)
         .map_or_else(Quantity::zero, |value| value.clone().into_inner())
 }
-
 fn test_state(world: World) -> State {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -45,14 +41,12 @@ fn test_state(world: World) -> State {
     ));
     state
 }
-
 fn seeded_account(seed_byte: u8) -> (AccountId, KeyPair) {
     let key_pair = KeyPair::try_from_seed(vec![seed_byte; 32], Algorithm::Ed25519)
         .expect("seeded implicit account receive keypair should be valid");
     let account_id = AccountId::new(key_pair.public_key().clone());
     (account_id, key_pair)
 }
-
 fn build_account_in_domain(
     account_id: AccountId,
     _domain_id: DomainId,
@@ -60,7 +54,6 @@ fn build_account_in_domain(
 ) -> Account {
     Account::new(account_id.clone()).build(authority)
 }
-
 fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {
     BlockHeader::new(
         NonZeroU64::new(height).expect("height"),
@@ -71,7 +64,6 @@ fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {
         0,
     )
 }
-
 fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransaction<'static> {
     let network_id = *state.network_id_ref();
     let max_clock_drift = state
@@ -82,11 +74,9 @@ fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransacti
         .max_clock_drift();
     let tx_params = state.view().world().parameters().transaction();
     let crypto = state.crypto.read().clone();
-
     AcceptedTransaction::accept(tx, &network_id, max_clock_drift, tx_params, crypto.as_ref())
         .expect("transaction admission must succeed")
 }
-
 fn prepare_state(
     policy: Option<AccountAdmissionPolicy>,
     alice_balance: Quantity,
@@ -109,17 +99,13 @@ fn prepare_state(
     let alice_asset_id = AssetId::new(asset_def_id.clone(), alice_id.clone());
     let alice_asset = Asset::new(alice_asset_id.clone(), alice_balance);
     let alice_account = build_account_in_domain(alice_id.clone(), domain_id, &alice_id);
-
     let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
     let state = test_state(world);
-
     if let Some(policy) = policy {
         install_global_policy(&state, &alice_id, policy);
     }
-
     (state, alice_id, alice_kp, asset_def_id, alice_asset_id)
 }
-
 fn install_global_policy(state: &State, authority: &AccountId, policy: AccountAdmissionPolicy) {
     let mut block = state.block(block_header(1, 1_699_999_999_000));
     let mut stx = block.transaction();
@@ -129,14 +115,12 @@ fn install_global_policy(state: &State, authority: &AccountId, policy: AccountAd
     stx.apply();
     block.commit().expect("commit policy update");
 }
-
 #[test]
 fn transfer_to_missing_account_creates_account_by_default() {
     let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
         prepare_state(None, Quantity::from(50_u32));
     let network_id = *state.network_id_ref();
     let (dest, _) = seeded_account(2);
-
     let tx = TransactionBuilder::new(
         network_id,
         alice_id.clone(),
@@ -149,14 +133,11 @@ fn transfer_to_missing_account_creates_account_by_default() {
     )])
     .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
-
     let mut state_block = state.block(block_header(1, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
-
     let (_, result) = state_block.validate_transaction(accepted, &mut ivm_cache);
     assert!(result.is_ok(), "transfer must succeed: {result:?}");
     state_block.commit().expect("commit state");
-
     let created_via_key: Name = "iroha:created_via".parse().expect("metadata key");
     let details = state
         .view()
@@ -173,12 +154,10 @@ fn transfer_to_missing_account_creates_account_by_default() {
             .expect("implicit account must be tagged"),
         &Json::new("implicit")
     );
-
     let dest_asset_id = AssetId::new(asset_def_id, dest.clone());
     assert_eq!(balance(&state, &dest_asset_id), Quantity::from(10_u32));
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(40_u32));
 }
-
 #[test]
 fn transfer_to_missing_account_rejected_in_explicit_domain() {
     let policy = AccountAdmissionPolicy {
@@ -189,7 +168,6 @@ fn transfer_to_missing_account_rejected_in_explicit_domain() {
         prepare_state(Some(policy), Quantity::from(50_u32));
     let network_id = *state.network_id_ref();
     let (dest, _) = seeded_account(2);
-
     let tx = TransactionBuilder::new(
         network_id,
         alice_id.clone(),
@@ -202,10 +180,8 @@ fn transfer_to_missing_account_rejected_in_explicit_domain() {
     )])
     .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
-
     let mut state_block = state.block(block_header(1, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
-
     let (_, result) = state_block.validate_transaction(accepted, &mut ivm_cache);
     let err = result.expect_err("transfer must be rejected in ExplicitOnly domain");
     assert!(
@@ -219,7 +195,6 @@ fn transfer_to_missing_account_rejected_in_explicit_domain() {
         ),
         "unexpected error: {err:?}"
     );
-
     state_block.commit().expect("commit state");
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(50_u32));
     assert!(
@@ -227,14 +202,12 @@ fn transfer_to_missing_account_rejected_in_explicit_domain() {
         "destination must not exist after rejected transfer"
     );
 }
-
 #[test]
 fn multiple_receipts_in_one_tx_create_account_once() {
     let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
         prepare_state(None, Quantity::from(50_u32));
     let network_id = *state.network_id_ref();
     let (dest, _) = seeded_account(2);
-
     let tx = TransactionBuilder::new(
         network_id,
         alice_id.clone(),
@@ -246,21 +219,17 @@ fn multiple_receipts_in_one_tx_create_account_once() {
     ])
     .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
-
     let mut state_block = state.block(block_header(1, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
     let (_, result) = state_block.validate_transaction(accepted, &mut ivm_cache);
     assert!(result.is_ok(), "transfer must succeed: {result:?}");
     state_block.commit().expect("commit state");
-
     let dest_asset_id = AssetId::new(asset_def_id, dest.clone());
     assert_eq!(balance(&state, &dest_asset_id), Quantity::from(12_u32));
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(38_u32));
-
     let account_count = state.view().world().accounts().iter().count();
     assert_eq!(account_count, 2, "account should be created once");
 }
-
 #[test]
 fn transaction_quota_limits_implicit_accounts() {
     let policy = AccountAdmissionPolicy {
@@ -272,7 +241,6 @@ fn transaction_quota_limits_implicit_accounts() {
     let network_id = *state.network_id_ref();
     let (dest1, _) = seeded_account(2);
     let (dest2, _) = seeded_account(3);
-
     let tx = TransactionBuilder::new(
         network_id,
         alice_id.clone(),
@@ -284,7 +252,6 @@ fn transaction_quota_limits_implicit_accounts() {
     ])
     .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
-
     let mut state_block = state.block(block_header(1, 1_700_000_100_000));
     let mut ivm_cache = IvmCache::new();
     let (_, result) = state_block.validate_transaction(accepted, &mut ivm_cache);
@@ -304,7 +271,6 @@ fn transaction_quota_limits_implicit_accounts() {
         "unexpected error: {err:?}"
     );
     state_block.commit().expect("commit state");
-
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(40_u32));
     assert!(
         state.view().world().accounts().get(&dest1).is_none(),
@@ -315,7 +281,6 @@ fn transaction_quota_limits_implicit_accounts() {
         "dest2 must not be created on rejection"
     );
 }
-
 #[test]
 fn block_quota_limits_creations_across_transactions() {
     let policy = AccountAdmissionPolicy {
@@ -327,7 +292,6 @@ fn block_quota_limits_creations_across_transactions() {
     let network_id = *state.network_id_ref();
     let (dest1, _) = seeded_account(2);
     let (dest2, _) = seeded_account(3);
-
     let tx1 = TransactionBuilder::new(
         network_id,
         alice_id.clone(),
@@ -340,7 +304,6 @@ fn block_quota_limits_creations_across_transactions() {
     )])
     .sign(alice_kp.private_key());
     let accepted1 = accept_transaction(&state, tx1);
-
     let tx2 = TransactionBuilder::new(
         network_id,
         alice_id.clone(),
@@ -353,7 +316,6 @@ fn block_quota_limits_creations_across_transactions() {
     )])
     .sign(alice_kp.private_key());
     let accepted2 = accept_transaction(&state, tx2);
-
     let mut state_block = state.block(block_header(1, 1_700_000_200_000));
     let mut ivm_cache = IvmCache::new();
     let (_, res1) = state_block.validate_transaction(accepted1, &mut ivm_cache);
@@ -375,7 +337,6 @@ fn block_quota_limits_creations_across_transactions() {
         "unexpected error: {err:?}"
     );
     state_block.commit().expect("commit state");
-
     let dest1_asset_id = AssetId::new(asset_def_id.clone(), dest1.clone());
     assert_eq!(balance(&state, &dest1_asset_id), Quantity::from(10_u32));
     assert!(
@@ -384,7 +345,6 @@ fn block_quota_limits_creations_across_transactions() {
     );
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(50_u32));
 }
-
 #[test]
 fn missing_default_role_rejects_in_pipeline() {
     let role_id: RoleId = "missing".parse().expect("role id");
@@ -396,7 +356,6 @@ fn missing_default_role_rejects_in_pipeline() {
         prepare_state(Some(policy), Quantity::from(25_u32));
     let network_id = *state.network_id_ref();
     let (dest, _) = seeded_account(11);
-
     let tx = TransactionBuilder::new(
         network_id,
         alice_id.clone(),
@@ -409,7 +368,6 @@ fn missing_default_role_rejects_in_pipeline() {
     )])
     .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
-
     let mut state_block = state.block(block_header(1, 1_700_000_400_000));
     let mut ivm_cache = IvmCache::new();
     let (_, result) = state_block.validate_transaction(accepted, &mut ivm_cache);
@@ -429,21 +387,18 @@ fn missing_default_role_rejects_in_pipeline() {
         "unexpected error: {err:?}"
     );
     state_block.commit().expect("commit state");
-
     assert!(
         state.view().world().accounts().get(&dest).is_none(),
         "account must not be created on failure"
     );
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(25_u32));
 }
-
 #[test]
 fn implicit_account_can_spend_without_roles() {
     let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
         prepare_state(None, Quantity::from(20_u32));
     let network_id = *state.network_id_ref();
     let (bob_id, bob_kp) = seeded_account(5);
-
     let tx1 = TransactionBuilder::new(
         network_id,
         alice_id.clone(),
@@ -456,17 +411,14 @@ fn implicit_account_can_spend_without_roles() {
     )])
     .sign(alice_kp.private_key());
     let accepted1 = accept_transaction(&state, tx1);
-
     let mut block1 = state.block(block_header(1, 1_700_000_500_000));
     let mut ivm_cache = IvmCache::new();
     let (_, res1) = block1.validate_transaction(accepted1, &mut ivm_cache);
     assert!(res1.is_ok(), "first transfer should succeed: {res1:?}");
     block1.commit().expect("commit first block");
-
     let bob_asset_id = AssetId::new(asset_def_id.clone(), bob_id.clone());
     assert_eq!(balance(&state, &bob_asset_id), Quantity::from(7_u32));
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(13_u32));
-
     let tx2 = TransactionBuilder::new(
         network_id,
         bob_id.clone(),
@@ -479,7 +431,6 @@ fn implicit_account_can_spend_without_roles() {
     )])
     .sign(bob_kp.private_key());
     let accepted2 = accept_transaction(&state, tx2);
-
     let mut block2 = state.block(block_header(2, 1_700_000_600_000));
     let mut ivm_cache2 = IvmCache::new();
     let (_, res2) = block2.validate_transaction(accepted2, &mut ivm_cache2);
@@ -488,11 +439,9 @@ fn implicit_account_can_spend_without_roles() {
         "implicit account should be able to spend: {res2:?}"
     );
     block2.commit().expect("commit second block");
-
     assert_eq!(balance(&state, &bob_asset_id), Quantity::from(2_u32));
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(18_u32));
 }
-
 #[test]
 fn multi_receipts_within_transaction_succeed_in_open_domain() {
     let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
@@ -500,7 +449,6 @@ fn multi_receipts_within_transaction_succeed_in_open_domain() {
     let network_id = *state.network_id_ref();
     let (dest1, _) = seeded_account(2);
     let (dest2, _) = seeded_account(3);
-
     let tx = TransactionBuilder::new(
         network_id,
         alice_id.clone(),
@@ -512,14 +460,11 @@ fn multi_receipts_within_transaction_succeed_in_open_domain() {
     ])
     .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
-
     let mut state_block = state.block(block_header(1, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
-
     let (_, result) = state_block.validate_transaction(accepted, &mut ivm_cache);
     assert!(result.is_ok(), "batched transfers must succeed: {result:?}");
     state_block.commit().expect("commit state");
-
     let created_via_key: Name = "iroha:created_via".parse().expect("metadata key");
     for dest in [&dest1, &dest2] {
         let details = state
@@ -535,14 +480,12 @@ fn multi_receipts_within_transaction_succeed_in_open_domain() {
             Some(&Json::new("implicit"))
         );
     }
-
     let dest1_asset_id = AssetId::new(asset_def_id.clone(), dest1.clone());
     let dest2_asset_id = AssetId::new(asset_def_id, dest2.clone());
     assert_eq!(balance(&state, &dest1_asset_id), Quantity::from(5_u32));
     assert_eq!(balance(&state, &dest2_asset_id), Quantity::from(7_u32));
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(38_u32));
 }
-
 #[test]
 fn tx_cap_rejects_multiple_implicit_creations() {
     let policy = AccountAdmissionPolicy {
@@ -554,7 +497,6 @@ fn tx_cap_rejects_multiple_implicit_creations() {
     let network_id = *state.network_id_ref();
     let (dest1, _) = seeded_account(2);
     let (dest2, _) = seeded_account(3);
-
     let tx = TransactionBuilder::new(
         network_id,
         alice_id.clone(),
@@ -566,10 +508,8 @@ fn tx_cap_rejects_multiple_implicit_creations() {
     ])
     .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
-
     let mut state_block = state.block(block_header(1, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
-
     let (_, result) = state_block.validate_transaction(accepted, &mut ivm_cache);
     let err = result.expect_err("cap should reject second implicit creation");
     assert!(
@@ -586,7 +526,6 @@ fn tx_cap_rejects_multiple_implicit_creations() {
         ),
         "unexpected error: {err:?}"
     );
-
     state_block.commit().expect("commit state");
     assert!(
         state.view().world().accounts().get(&dest1).is_none(),

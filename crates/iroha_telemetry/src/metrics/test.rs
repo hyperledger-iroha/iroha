@@ -1,18 +1,13 @@
 #![allow(clippy::restriction)]
-
-use std::time::Duration;
-
-use norito::json::{self, Value};
-
 use super::*;
-
+use norito::json::{self, Value};
+use std::time::Duration;
 fn assert_float_metric_eq(actual: f64, expected: f64, context: &str) {
     assert!(
         (actual - expected).abs() < f64::EPSILON,
         "{context}: expected {expected}, got {actual}"
     );
 }
-
 #[test]
 fn quantity_micro_projection_preserves_fractional_xor() {
     let value = "0.0015"
@@ -24,7 +19,6 @@ fn quantity_micro_projection_preserves_fractional_xor() {
         "quantity micro projection",
     );
 }
-
 #[test]
 fn metrics_lifecycle() {
     let metrics = Metrics::default();
@@ -37,17 +31,14 @@ fn metrics_lifecycle() {
     println!("{:?}", Status::from(&metrics));
     println!("{:?}", Status::default());
 }
-
 #[test]
 fn sorafs_pin_resource_usage_exports_only_consensus_summary_values() {
     let metrics = Metrics::default();
     metrics.record_sorafs_pin_resource_usage(17, 4_096);
-
     let exported = metrics.try_to_string().expect("metrics should serialize");
     assert!(exported.contains("torii_sorafs_pin_retained_manifests 17"));
     assert!(exported.contains("torii_sorafs_pin_live_content_bytes 4096"));
 }
-
 #[test]
 fn nexus_status_exports_optional_rule_dataspace() {
     let policy = iroha_config::parameters::actual::LaneRoutingPolicy {
@@ -70,9 +61,7 @@ fn nexus_status_exports_optional_rule_dataspace() {
             },
         ],
     };
-
     let status = NexusStatus::from_routing_policy(&policy);
-
     assert_eq!(status.routing_policy.default_lane, 2);
     assert_eq!(status.routing_policy.default_dataspace, 10);
     assert_eq!(status.routing_policy.rules[0].lane, 3);
@@ -87,7 +76,6 @@ fn nexus_status_exports_optional_rule_dataspace() {
     assert_eq!(status.routing_policy.rules[1].lane, 4);
     assert_eq!(status.routing_policy.rules[1].dataspace_id, None);
 }
-
 #[test]
 fn pacemaker_metrics_are_exported() {
     let metrics = Metrics::default();
@@ -97,7 +85,6 @@ fn pacemaker_metrics_are_exported() {
         "metrics export missing pacemaker view timeout target"
     );
 }
-
 #[test]
 fn p2p_queue_depth_metric_accepts_updates() {
     let metrics = Metrics::default();
@@ -109,7 +96,6 @@ fn p2p_queue_depth_metric_accepts_updates() {
     );
     assert_eq!(metrics.p2p_queue_depth.with_label_values(&["Low"]).get(), 7);
 }
-
 #[test]
 fn soranet_reward_metrics_record_without_exporter() {
     let metrics = Metrics::default();
@@ -118,7 +104,6 @@ fn soranet_reward_metrics_record_without_exporter() {
     metrics.record_soranet_adjustment("relay_hex", 0, "credit");
     metrics.inc_soranet_dispute("filed");
 }
-
 #[test]
 fn records_norito_decode_failures() {
     let metrics = Metrics::default();
@@ -129,7 +114,6 @@ fn records_norito_decode_failures() {
         .get();
     assert_eq!(counter, 1, "decode failure counter increments");
 }
-
 #[test]
 fn records_norito_rpc_gate_outcomes() {
     let metrics = Metrics::default();
@@ -150,14 +134,11 @@ fn records_norito_rpc_gate_outcomes() {
         1
     );
 }
-
 #[test]
 fn records_api_token_hits_without_exporting_token_material() {
     let metrics = Metrics::default();
     let token = "super-secret-token";
-
     metrics.inc_torii_api_token_hit("v1/sccp/capabilities", "present");
-
     assert_eq!(
         metrics
             .torii_api_token_hits_total
@@ -178,7 +159,6 @@ fn records_api_token_hits_without_exporting_token_material() {
         "metrics output must not expose raw API token material"
     );
 }
-
 #[test]
 fn records_attachment_sanitizer_metrics() {
     let metrics = Metrics::default();
@@ -195,7 +175,6 @@ fn records_attachment_sanitizer_metrics() {
         .get_sample_count();
     assert_eq!(samples, 1);
 }
-
 #[test]
 fn records_da_chunking_latency() {
     let metrics = Metrics::default();
@@ -203,7 +182,6 @@ fn records_da_chunking_latency() {
     let samples = metrics.torii_da_chunking_seconds.get_sample_count();
     assert_eq!(samples, 1);
 }
-
 #[test]
 fn records_operator_auth_metrics() {
     let metrics = Metrics::default();
@@ -224,7 +202,6 @@ fn records_operator_auth_metrics() {
         1
     );
 }
-
 #[test]
 fn records_sns_registrar_status_metrics() {
     let metrics = Metrics::default();
@@ -245,7 +222,6 @@ fn records_sns_registrar_status_metrics() {
         1
     );
 }
-
 #[test]
 fn records_rbc_rebroadcast_skips_by_kind() {
     let metrics = Metrics::default();
@@ -272,24 +248,20 @@ fn records_rbc_rebroadcast_skips_by_kind() {
         1
     );
 }
-
 #[test]
 fn records_alias_cache_metrics() {
     let metrics = Metrics::default();
     metrics.record_sorafs_alias_cache("success", "fresh", 42.0);
-
     let refresh_counter = metrics
         .torii_sorafs_alias_cache_refresh_total
         .with_label_values(&["success", "fresh"])
         .get();
     assert_eq!(refresh_counter, 1, "alias cache counter increments");
-
     let age_samples = metrics
         .torii_sorafs_alias_cache_age_seconds
         .get_sample_count();
     assert_eq!(age_samples, 1, "alias cache age histogram records sample");
 }
-
 #[test]
 fn records_privacy_suppression_reason_metrics() {
     let metrics = Metrics::default();
@@ -299,9 +271,7 @@ fn records_privacy_suppression_reason_metrics() {
         60,
         SoranetPrivacySuppressionReasonV1::CollectorSuppressed,
     );
-
     metrics.record_soranet_privacy_bucket(&bucket);
-
     let suppression_gauge = metrics
         .soranet_privacy_bucket_suppressed
         .with_label_values(&["entry", "1"])
@@ -310,7 +280,6 @@ fn records_privacy_suppression_reason_metrics() {
         (suppression_gauge - 1.0).abs() < f64::EPSILON,
         "suppression gauge toggles"
     );
-
     let reason_counter = metrics
         .soranet_privacy_suppression_total
         .with_label_values(&["entry", "collector_suppressed"])
@@ -320,7 +289,6 @@ fn records_privacy_suppression_reason_metrics() {
         "suppression counter increments for the reason"
     );
 }
-
 fn sample_privacy_snapshot() -> PrivacyDrainSnapshot {
     let mut snapshot = PrivacyDrainSnapshot {
         drained_buckets: 5,
@@ -341,12 +309,10 @@ fn sample_privacy_snapshot() -> PrivacyDrainSnapshot {
         .insert(SoranetPrivacySuppressionReasonV1::CollectorSuppressed, 2);
     snapshot
 }
-
 #[test]
 fn records_privacy_queue_snapshot_metrics() {
     let metrics = Metrics::default();
     let snapshot = sample_privacy_snapshot();
-
     metrics.record_soranet_privacy_queue_snapshot(&snapshot);
     let open_entry = metrics
         .soranet_privacy_open_buckets
@@ -431,28 +397,23 @@ fn records_privacy_queue_snapshot_metrics() {
         "unspecified per-mode suppression resets to zero"
     );
 }
-
 #[test]
 fn records_tls_metrics() {
     let metrics = Metrics::default();
     metrics.set_sorafs_tls_state(true, Some(Duration::from_secs(90)));
     metrics.record_sorafs_tls_renewal("success");
-
     let expiry = metrics.torii_sorafs_tls_cert_expiry_seconds.get();
     assert!(
         (expiry - 90.0).abs() < f64::EPSILON,
         "TLS expiry gauge records seconds remaining"
     );
-
     let ech_enabled = metrics.torii_sorafs_tls_ech_enabled.get();
     assert_eq!(ech_enabled, 1, "ECH gauge reflects enabled state");
-
     let renewal_total = metrics
         .torii_sorafs_tls_renewal_total
         .with_label_values(&["success"])
         .get();
     assert_eq!(renewal_total, 1, "TLS renewal counter increments");
-
     metrics.set_sorafs_tls_state(false, None);
     assert_eq!(
         metrics.torii_sorafs_tls_ech_enabled.get(),
@@ -464,40 +425,34 @@ fn records_tls_metrics() {
         "TLS expiry gauge resets when expiry is unknown"
     );
 }
-
 #[test]
 fn records_proof_stream_metrics() {
     let metrics = Metrics::default();
     metrics.inc_sorafs_proof_stream_inflight("por");
     metrics.record_sorafs_proof_stream_event("por", "success", None, None, None, Some(42.0));
     metrics.dec_sorafs_proof_stream_inflight("por");
-
     let inflight = metrics
         .torii_sorafs_proof_stream_inflight
         .with_label_values(&["por"])
         .get();
     assert_eq!(inflight, 0, "inflight gauge returns to zero after dec");
-
     let total = metrics
         .torii_sorafs_proof_stream_events_total
         .with_label_values(&["por", "success", "ok"])
         .get();
     assert_eq!(total, 1, "proof stream counter increments");
-
     let samples = metrics
         .torii_sorafs_proof_stream_latency_ms
         .with_label_values(&["por"])
         .get_sample_count();
     assert_eq!(samples, 1, "latency histogram records observation");
 }
-
 #[test]
 fn records_torii_proof_metrics() {
     let metrics = Metrics::default();
     metrics.record_torii_proof_request("v1/zk/proof", "ok", 128, Duration::from_millis(5));
     metrics.inc_torii_proof_cache_hit("v1/zk/proof");
     metrics.inc_torii_proof_throttled("v1/zk/proof");
-
     assert_eq!(
         metrics
             .torii_proof_requests_total
@@ -539,7 +494,6 @@ fn records_torii_proof_metrics() {
         "proof throttle counter increments"
     );
 }
-
 #[test]
 fn records_torii_explorer_metrics() {
     let metrics = Metrics::default();
@@ -553,7 +507,6 @@ fn records_torii_explorer_metrics() {
         "error",
         Duration::from_millis(7),
     );
-
     assert_eq!(
         metrics
             .torii_explorer_requests_total
@@ -587,12 +540,10 @@ fn records_torii_explorer_metrics() {
         "explorer request latency histogram records error outcomes"
     );
 }
-
 #[test]
 fn records_sorafs_egress_reconciliation_metrics() {
     let metrics = Metrics::default();
     metrics.record_sorafs_egress_reconciliation("provider-a", 1_000, Some(1_100), Some(900));
-
     assert_float_metric_eq(
         metrics
             .torii_sorafs_egress_bytes
@@ -656,11 +607,9 @@ fn records_sorafs_egress_reconciliation_metrics() {
         "egress drift should be exported: {exported}"
     );
 }
-
 #[test]
 fn records_sorafs_governance_dag_publication_metrics() {
     let metrics = Metrics::default();
-
     metrics.record_sorafs_governance_dag_publish(
         "deal_settlement",
         "success",
@@ -677,7 +626,6 @@ fn records_sorafs_governance_dag_publication_metrics() {
     );
     metrics.set_sorafs_governance_dag_backlog("filesystem", 3);
     metrics.set_sorafs_governance_dag_head_age_seconds("filesystem", 45);
-
     assert_eq!(
         metrics
             .sorafs_governance_dag_publish_total
@@ -720,7 +668,6 @@ fn records_sorafs_governance_dag_publication_metrics() {
             .get(),
         45
     );
-
     let exported = metrics.try_to_string().expect("metrics should serialize");
     for metric_name in [
         "sorafs_governance_dag_publish_total",
@@ -735,7 +682,6 @@ fn records_sorafs_governance_dag_publication_metrics() {
         );
     }
 }
-
 #[test]
 fn records_sorafs_reputation_snapshot_metrics() {
     let metrics = Metrics::default();
@@ -748,7 +694,6 @@ fn records_sorafs_reputation_snapshot_metrics() {
             ("provider-c", 8_000, false),
         ],
     );
-
     assert_eq!(metrics.sorafs_reputation_ingest_lag_seconds.get(), 60);
     assert_eq!(metrics.sorafs_reputation_snapshot_age_seconds.get(), 60);
     assert_eq!(
@@ -765,7 +710,6 @@ fn records_sorafs_reputation_snapshot_metrics() {
         0,
         "initial snapshot seeds threshold state without false crossings"
     );
-
     metrics.record_sorafs_reputation_snapshot(
         200,
         210,
@@ -801,7 +745,6 @@ fn records_sorafs_reputation_snapshot_metrics() {
             .len(),
         2
     );
-
     let many_providers: Vec<(String, u16, bool)> = (0_u16..105)
         .map(|index| (format!("provider-{index:03}"), 10_000_u16 - index, false))
         .collect();
@@ -833,7 +776,6 @@ fn records_sorafs_reputation_snapshot_metrics() {
         "bounded reputation score should be exported: {exported}"
     );
 }
-
 #[test]
 fn records_committed_sorafs_reputation_runtime_metrics() {
     let metrics = Metrics::default();
@@ -854,7 +796,6 @@ fn records_committed_sorafs_reputation_runtime_metrics() {
     metrics.inc_sorafs_reputation_runtime_tick("success");
     metrics.inc_sorafs_reputation_runtime_tick("failure");
     metrics.inc_sorafs_reputation_runtime_tick("unbounded-input");
-
     assert_eq!(metrics.sorafs_reputation_runtime_live.get(), 1);
     assert_eq!(metrics.sorafs_reputation_runtime_ready.get(), 0);
     assert_eq!(
@@ -889,7 +830,6 @@ fn records_committed_sorafs_reputation_runtime_metrics() {
         );
     }
 }
-
 #[test]
 fn records_committed_sorafs_hedging_billing_runtime_metrics() {
     let metrics = Metrics::default();
@@ -921,7 +861,6 @@ fn records_committed_sorafs_hedging_billing_runtime_metrics() {
     metrics.inc_sorafs_hedging_billing_runtime_tick("success");
     metrics.inc_sorafs_hedging_billing_runtime_tick("failure");
     metrics.inc_sorafs_hedging_billing_runtime_tick("unbounded-input");
-
     assert_eq!(metrics.sorafs_hedging_billing_runtime_live.get(), 1);
     assert_eq!(metrics.sorafs_hedging_billing_runtime_ready.get(), 0);
     assert_eq!(
@@ -973,7 +912,6 @@ fn records_committed_sorafs_hedging_billing_runtime_metrics() {
         );
     }
 }
-
 #[test]
 fn records_sorafs_por_scheduler_metrics() {
     let metrics = Metrics::default();
@@ -982,7 +920,6 @@ fn records_sorafs_por_scheduler_metrics() {
     metrics.record_sorafs_por_scheduler_challenge(false, 0);
     metrics.record_sorafs_por_scheduler_challenge(true, 4);
     metrics.record_sorafs_por_scheduler_failure();
-
     assert_eq!(
         metrics
             .torii_sorafs_por_challenges_total
@@ -1006,7 +943,6 @@ fn records_sorafs_por_scheduler_metrics() {
     );
     assert_eq!(metrics.torii_sorafs_por_forced_challenges_total.get(), 1);
     assert_eq!(metrics.torii_sorafs_por_sampling_duplicates_total.get(), 4);
-
     let exported = metrics.try_to_string().expect("metrics should serialize");
     assert!(
         exported.contains("torii_sorafs_por_challenges_total{result=\"forced\"} 1"),
@@ -1027,32 +963,27 @@ fn records_sorafs_por_scheduler_metrics() {
         "PoR ingestion backlog gauge should be exported: {exported}"
     );
 }
-
 #[test]
 fn records_gateway_fixture_version() {
     let metrics = Metrics::default();
     metrics.set_sorafs_gateway_fixture_version("1.0.0");
-
     let initial = metrics
         .torii_sorafs_gateway_fixture_version
         .with_label_values(&["1.0.0"])
         .get();
     assert_eq!(initial, 1, "fixture version gauge set for current version");
-
     metrics.set_sorafs_gateway_fixture_version("1.0.1");
     let updated = metrics
         .torii_sorafs_gateway_fixture_version
         .with_label_values(&["1.0.1"])
         .get();
     assert_eq!(updated, 1, "fixture version gauge switches to new version");
-
     let previous = metrics
         .torii_sorafs_gateway_fixture_version
         .with_label_values(&["1.0.0"])
         .get();
     assert_eq!(previous, 0, "previous version gauge resets");
 }
-
 #[test]
 fn records_lane_settlement_snapshot_metrics() {
     let metrics = Metrics::default();
@@ -1121,19 +1052,16 @@ fn records_lane_settlement_snapshot_metrics() {
         "swapline gauge records utilisation"
     );
 }
-
 #[test]
 fn settlement_conversion_and_haircut_totals_increment() {
     let metrics = Metrics::default();
     metrics.inc_settlement_conversion_total("lane-1", "ds-7", "61CtjvNd9T3THAR65GsMVHr82Bjc", 4);
     metrics.inc_settlement_haircut_total("lane-1", "ds-7", 3_500_000);
-
     let conversions = metrics
         .settlement_conversion_total
         .with_label_values(&["lane-1", "ds-7", "61CtjvNd9T3THAR65GsMVHr82Bjc"])
         .get();
     assert_eq!(conversions, 4);
-
     let haircut = metrics
         .settlement_haircut_total
         .with_label_values(&["lane-1", "ds-7"])
@@ -1143,18 +1071,15 @@ fn settlement_conversion_and_haircut_totals_increment() {
         "haircut counter tracks XOR totals"
     );
 }
-
 #[test]
 fn records_chunk_range_metrics() {
     let metrics = Metrics::default();
     metrics.record_sorafs_chunk_range("car_range", 206, 4_096, None, None, None, None, None);
-
     let request_counter = metrics
         .torii_sorafs_chunk_range_requests_total
         .with_label_values(&["car_range", "206"])
         .get();
     assert_eq!(request_counter, 1, "chunk-range request counter increments");
-
     let bytes_counter = metrics
         .torii_sorafs_chunk_range_bytes_total
         .with_label_values(&["car_range"])
@@ -1163,14 +1088,12 @@ fn records_chunk_range_metrics() {
         bytes_counter, 4_096,
         "chunk-range bytes counter tracks payload"
     );
-
     metrics.set_sorafs_provider_range_capability("providers", 2);
     let provider_total = metrics
         .torii_sorafs_provider_range_capability_total
         .with_label_values(&["providers"])
         .get();
     assert_eq!(provider_total, 2, "provider capability gauge updates");
-
     metrics.inc_sorafs_routing_authority_cache("hit");
     metrics.inc_sorafs_routing_authority_cache("stale_rejected");
     metrics.inc_sorafs_routing_authority_cache("fork_rejected");
@@ -1207,14 +1130,12 @@ fn records_chunk_range_metrics() {
         1,
         "routing authority cache labels remain bounded"
     );
-
     metrics.inc_sorafs_range_fetch_throttle("concurrency");
     let throttle_total = metrics
         .torii_sorafs_range_fetch_throttle_events_total
         .with_label_values(&["concurrency"])
         .get();
     assert_eq!(throttle_total, 1, "throttle counter increments");
-
     metrics.inc_sorafs_range_fetch_concurrency();
     assert_eq!(
         metrics.torii_sorafs_range_fetch_concurrency_current.get(),
@@ -1228,7 +1149,6 @@ fn records_chunk_range_metrics() {
         "concurrency gauge decrements"
     );
 }
-
 #[test]
 fn records_sorafs_gc_metrics() {
     let metrics = Metrics::default();
@@ -1237,7 +1157,6 @@ fn records_sorafs_gc_metrics() {
     metrics.add_sorafs_gc_freed_bytes("retention_expired", 2_048);
     metrics.inc_sorafs_gc_blocked("repair_active");
     metrics.set_sorafs_gc_expired_snapshot(3, 120);
-
     assert_eq!(
         metrics
             .torii_sorafs_gc_runs_total
@@ -1272,13 +1191,11 @@ fn records_sorafs_gc_metrics() {
         120
     );
 }
-
 #[test]
 fn records_sorafs_reconciliation_metrics() {
     let metrics = Metrics::default();
     metrics.inc_sorafs_reconciliation_runs("success");
     metrics.set_sorafs_reconciliation_divergence_count(7);
-
     assert_eq!(
         metrics
             .torii_sorafs_reconciliation_runs_total
@@ -1291,11 +1208,9 @@ fn records_sorafs_reconciliation_metrics() {
         7
     );
 }
-
 #[test]
 fn records_orderbook_metrics_used_by_dashboard_and_alerts() {
     let metrics = Metrics::default();
-
     metrics.record_sorafs_orderbook_finalized_projection(
         42,
         1_800_000_000,
@@ -1310,7 +1225,6 @@ fn records_orderbook_metrics_used_by_dashboard_and_alerts() {
     );
     metrics.record_sorafs_orderbook_api_request("/v1/sorafs/orderbook/orders", false);
     metrics.record_sorafs_orderbook_api_request("/v1/sorafs/orderbook/orders", true);
-
     assert_eq!(
         metrics
             .torii_sorafs_orderbook_finalized_events_total
@@ -1332,7 +1246,6 @@ fn records_orderbook_metrics_used_by_dashboard_and_alerts() {
             .get(),
         1
     );
-
     let exported = metrics.try_to_string().expect("metrics text");
     for metric_name in [
         "torii_sorafs_orderbook_finalized_events_total",
@@ -1355,7 +1268,6 @@ fn records_orderbook_metrics_used_by_dashboard_and_alerts() {
         );
     }
 }
-
 #[test]
 fn gateway_compliance_metrics_are_registered_and_exposable() {
     let metrics = Metrics::default();
@@ -1378,7 +1290,6 @@ fn gateway_compliance_metrics_are_registered_and_exposable() {
         .torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds
         .set(1_800_000_000);
     metrics.torii_sorafs_gateway_compliance_ready.set(1);
-
     let exported = metrics.try_to_string().expect("metrics text");
     for metric_name in [
         "torii_sorafs_gateway_compliance_requests_total",
@@ -1394,14 +1305,11 @@ fn gateway_compliance_metrics_are_registered_and_exposable() {
         );
     }
 }
-
 #[test]
 fn orderbook_metric_labels_are_bounded_and_fail_closed() {
     let metrics = Metrics::default();
-
     metrics.record_sorafs_orderbook_api_request("/attacker/controlled/path", true);
     metrics.record_sorafs_orderbook_finalized_projection_failure("attacker-controlled-reason");
-
     assert_eq!(
         metrics
             .torii_sorafs_orderbook_api_requests_total
@@ -1423,11 +1331,9 @@ fn orderbook_metric_labels_are_bounded_and_fail_closed() {
         0
     );
 }
-
 #[test]
 fn records_gateway_compliance_metrics_used_by_dashboard_and_alerts() {
     let metrics = Metrics::default();
-
     metrics.record_sorafs_gateway_compliance_request("promote", "success");
     metrics.record_sorafs_gateway_compliance_serving_decision(
         "manifest_digest",
@@ -1436,7 +1342,6 @@ fn records_gateway_compliance_metrics_used_by_dashboard_and_alerts() {
     );
     metrics.record_sorafs_gateway_compliance_failure("serving", "expired_catalog");
     metrics.record_sorafs_gateway_compliance_serving_catalog(Some(42), Some(1_800_003_600), true);
-
     assert_eq!(
         metrics
             .torii_sorafs_gateway_compliance_requests_total
@@ -1471,7 +1376,6 @@ fn records_gateway_compliance_metrics_used_by_dashboard_and_alerts() {
         1_800_003_600
     );
     assert_eq!(metrics.torii_sorafs_gateway_compliance_ready.get(), 1);
-
     let exported = metrics.try_to_string().expect("metrics text");
     for metric_name in [
         "torii_sorafs_gateway_compliance_requests_total",
@@ -1487,11 +1391,9 @@ fn records_gateway_compliance_metrics_used_by_dashboard_and_alerts() {
         );
     }
 }
-
 #[test]
 fn gateway_compliance_metric_labels_are_bounded_and_state_fails_closed() {
     let metrics = Metrics::default();
-
     metrics.record_sorafs_gateway_compliance_request(
         "/attacker/controlled/path",
         "attacker-controlled-outcome",
@@ -1507,7 +1409,6 @@ fn gateway_compliance_metric_labels_are_bounded_and_state_fails_closed() {
     );
     metrics.record_sorafs_gateway_compliance_serving_catalog(Some(9), Some(10), true);
     metrics.mark_sorafs_gateway_compliance_unready();
-
     assert_eq!(
         metrics
             .torii_sorafs_gateway_compliance_requests_total
@@ -1531,11 +1432,9 @@ fn gateway_compliance_metric_labels_are_bounded_and_state_fails_closed() {
     );
     assert_eq!(metrics.torii_sorafs_gateway_compliance_ready.get(), 0);
 }
-
 #[test]
 fn records_hedging_billing_metrics_used_by_dashboard_and_alerts() {
     let metrics = Metrics::default();
-
     metrics.set_sorafs_hedging_reference_price_micro_usd("localnet", 2_000_000);
     metrics.set_sorafs_hedging_feed_lag_seconds("localnet", "primary", 120);
     metrics.set_sorafs_hedging_feed_divergence_bps("localnet", "primary", 75);
@@ -1544,7 +1443,6 @@ fn records_hedging_billing_metrics_used_by_dashboard_and_alerts() {
     metrics.record_sorafs_billing_statement_generation("localnet", "provider", false);
     metrics.set_sorafs_billing_statement_ack_backlog("localnet", 9);
     metrics.set_sorafs_billing_escrow_runway_seconds("localnet", "provider", 172_800);
-
     assert_eq!(
         metrics
             .torii_sorafs_hedging_xor_usd_reference_price_micro_usd
@@ -1580,7 +1478,6 @@ fn records_hedging_billing_metrics_used_by_dashboard_and_alerts() {
             .get(),
         9
     );
-
     let exported = metrics.try_to_string().expect("metrics text");
     for metric_name in [
         "torii_sorafs_hedging_xor_usd_reference_price_micro_usd",
@@ -1598,7 +1495,6 @@ fn records_hedging_billing_metrics_used_by_dashboard_and_alerts() {
         );
     }
 }
-
 fn record_sample_sorafs_reserve_finalized_projection(metrics: &Metrics) {
     metrics.record_sorafs_reserve_finalized_projection(&SorafsReserveFinalizedProjection {
         finalized_height: 42,
@@ -1611,12 +1507,10 @@ fn record_sample_sorafs_reserve_finalized_projection(metrics: &Metrics) {
         chain_reconciled_counts: [2, 1],
     });
 }
-
 #[test]
 fn records_sorafs_reserve_finalized_projection_metrics() {
     let metrics = Metrics::default();
     record_sample_sorafs_reserve_finalized_projection(&metrics);
-
     assert_eq!(
         metrics
             .torii_sorafs_reserve_lifecycle_stage_providers
@@ -1662,13 +1556,11 @@ fn records_sorafs_reserve_finalized_projection_metrics() {
         42
     );
 }
-
 #[test]
 fn bounds_sorafs_reserve_service_labels_and_records_failures() {
     let metrics = Metrics::default();
     metrics.record_sorafs_reserve_service_request("top_up", "accepted");
     metrics.inc_sorafs_reserve_service_rate_limit("top_up", "quota");
-
     assert_eq!(
         metrics
             .torii_sorafs_reserve_service_requests_total
@@ -1683,7 +1575,6 @@ fn bounds_sorafs_reserve_service_labels_and_records_failures() {
             .get(),
         1
     );
-
     metrics.record_sorafs_reserve_service_request("attacker-controlled", "also-controlled");
     assert_eq!(
         metrics
@@ -1692,7 +1583,6 @@ fn bounds_sorafs_reserve_service_labels_and_records_failures() {
             .get(),
         1
     );
-
     record_sample_sorafs_reserve_finalized_projection(&metrics);
     metrics.record_sorafs_reserve_finalized_projection_failure();
     assert_eq!(
@@ -1708,14 +1598,12 @@ fn bounds_sorafs_reserve_service_labels_and_records_failures() {
         1
     );
 }
-
 #[test]
 fn exports_sorafs_reserve_metric_families() {
     let metrics = Metrics::default();
     record_sample_sorafs_reserve_finalized_projection(&metrics);
     metrics.record_sorafs_reserve_service_request("top_up", "accepted");
     metrics.inc_sorafs_reserve_service_rate_limit("top_up", "quota");
-
     let exported = metrics.try_to_string().expect("metrics text");
     for metric_name in [
         "torii_sorafs_reserve_lifecycle_stage_providers",
@@ -1738,7 +1626,6 @@ fn exports_sorafs_reserve_metric_families() {
         );
     }
 }
-
 #[test]
 fn records_sorafs_repair_metrics() {
     let metrics = Metrics::default();
@@ -1751,7 +1638,6 @@ fn records_sorafs_repair_metrics() {
     metrics.set_sorafs_repair_backlog_oldest_age_seconds(300);
     metrics.inc_sorafs_repair_lease_expired("requeued");
     metrics.inc_sorafs_slash_proposals("submitted");
-
     assert_eq!(
         metrics
             .torii_sorafs_repair_tasks_total
@@ -1792,7 +1678,6 @@ fn records_sorafs_repair_metrics() {
         1
     );
 }
-
 #[test]
 fn repair_otel_handles_noop_without_exporter() {
     let otel = SorafsRepairOtel::new();
@@ -1804,7 +1689,6 @@ fn repair_otel_handles_noop_without_exporter() {
     otel.record_slash_proposal("submitted");
     let _ = global_sorafs_repair_otel();
 }
-
 #[test]
 fn gc_otel_handles_noop_without_exporter() {
     let otel = SorafsGcOtel::new();
@@ -1813,19 +1697,16 @@ fn gc_otel_handles_noop_without_exporter() {
     otel.record_blocked("repair_active");
     let _ = global_sorafs_gc_otel();
 }
-
 #[test]
 fn records_gar_violation_metrics() {
     let metrics = Metrics::default();
     metrics.record_sorafs_gar_violation("provider", "missing_id");
-
     let total = metrics
         .torii_sorafs_gar_violations_total
         .with_label_values(&["provider", "missing_id"])
         .get();
     assert_eq!(total, 1, "GAR violation counter increments");
 }
-
 #[test]
 fn records_gateway_refusal_metrics() {
     let metrics = Metrics::default();
@@ -1836,7 +1717,6 @@ fn records_gateway_refusal_metrics() {
         "provider123",
         "/v1/sorafs/storage/car/range",
     );
-
     let total = metrics
         .torii_sorafs_gateway_refusals_total
         .with_label_values(&[
@@ -1848,7 +1728,6 @@ fn records_gateway_refusal_metrics() {
         .get();
     assert_eq!(total, 1, "gateway refusal counter increments");
 }
-
 #[test]
 fn gateway_otel_handles_noop_without_exporter() {
     let otel = SorafsGatewayOtel::new();
@@ -1871,7 +1750,6 @@ fn gateway_otel_handles_noop_without_exporter() {
     otel.record_proof_verification("sf1", "success", "none", 12.0);
     let _ = global_sorafs_gateway_otel();
 }
-
 #[test]
 fn exports_canonical_gateway_metric_families() {
     let metrics = Metrics::default();
@@ -1896,7 +1774,6 @@ fn exports_canonical_gateway_metric_families() {
             .get(),
         1
     );
-
     let response = SorafsGatewayResponseMetricLabels {
         request,
         result: "success",
@@ -1905,7 +1782,6 @@ fn exports_canonical_gateway_metric_families() {
     };
     metrics.finish_sorafs_gateway_request(response, 42.0);
     metrics.record_sorafs_gateway_proof_verification("sf1", "failure", "sequence_invalid", 12.0);
-
     let response_labels = [
         request.endpoint,
         request.method,
@@ -1937,7 +1813,6 @@ fn exports_canonical_gateway_metric_families() {
             .get(),
         1
     );
-
     let exported = metrics.try_to_string().expect("gateway metrics text");
     for metric_name in [
         "sorafs_gateway_active",
@@ -1962,7 +1837,6 @@ fn exports_canonical_gateway_metric_families() {
         );
     }
 }
-
 #[test]
 fn node_otel_handles_noop_without_exporter() {
     let otel = SorafsNodeOtel::new();
@@ -1981,12 +1855,10 @@ fn node_otel_handles_noop_without_exporter() {
     );
     let _ = global_sorafs_node_otel();
 }
-
 #[test]
 fn records_gateway_fixture_metadata() {
     let metrics = Metrics::default();
     metrics.set_sorafs_gateway_fixture_metadata("v1", "sf1", "deadbeef", 123);
-
     let gauge = metrics
         .torii_sorafs_gateway_fixture_info
         .with_label_values(&["v1", "sf1", "deadbeef"])
@@ -1996,7 +1868,6 @@ fn records_gateway_fixture_metadata() {
         "fixture metadata gauge stores release timestamp"
     );
 }
-
 #[allow(clippy::too_many_lines)]
 fn sample_status() -> Status {
     Status {
@@ -2164,16 +2035,13 @@ fn sample_status() -> Status {
         da_receipt_cursors: Vec::new(),
     }
 }
-
 #[test]
 fn build_sumeragi_status_uses_cached_immutable_mode() {
     let metrics = Metrics::default();
     metrics.set_sumeragi_mode_tag("custom-mode");
-
     let status = build_sumeragi_status(&metrics);
     assert_eq!(status.mode_tag, "custom-mode");
 }
-
 #[test]
 fn build_sumeragi_status_promotes_stale_qc_gauges_to_commit_qc() {
     let metrics = Metrics::default();
@@ -2182,16 +2050,13 @@ fn build_sumeragi_status_promotes_stale_qc_gauges_to_commit_qc() {
     metrics.sumeragi_locked_qc_view.set(1);
     metrics.sumeragi_commit_qc_height.set(4_468);
     metrics.sumeragi_commit_qc_view.set(7);
-
     let status = build_sumeragi_status(&metrics);
-
     assert_eq!(status.commit_qc_height, 4_468);
     assert_eq!(status.commit_qc_view, 7);
     assert_eq!(status.highest_qc_height, 4_468);
     assert_eq!(status.locked_qc_height, 4_468);
     assert_eq!(status.locked_qc_view, 7);
 }
-
 #[test]
 fn build_sumeragi_status_preserves_qc_gauges_newer_than_commit_qc() {
     let metrics = Metrics::default();
@@ -2200,14 +2065,11 @@ fn build_sumeragi_status_preserves_qc_gauges_newer_than_commit_qc() {
     metrics.sumeragi_locked_qc_view.set(2);
     metrics.sumeragi_commit_qc_height.set(4_468);
     metrics.sumeragi_commit_qc_view.set(7);
-
     let status = build_sumeragi_status(&metrics);
-
     assert_eq!(status.highest_qc_height, 4_470);
     assert_eq!(status.locked_qc_height, 4_469);
     assert_eq!(status.locked_qc_view, 2);
 }
-
 #[test]
 fn build_sumeragi_status_includes_tx_queue_pressure_causes() {
     let metrics = Metrics::default();
@@ -2220,9 +2082,7 @@ fn build_sumeragi_status_includes_tx_queue_pressure_causes() {
     metrics.sumeragi_tx_queue_saturated_by_bytes.set(1);
     metrics.sumeragi_tx_queue_saturated_by_age.set(1);
     metrics.sumeragi_tx_queue_oldest_queued_age_ms.set(7_500);
-
     let status = build_sumeragi_status(&metrics);
-
     assert_eq!(status.tx_queue_depth, 31);
     assert_eq!(status.tx_queue_capacity, 64);
     assert_eq!(status.tx_queue_retained_bytes, 98_304);
@@ -2233,7 +2093,6 @@ fn build_sumeragi_status_includes_tx_queue_pressure_causes() {
     assert!(status.tx_queue_saturated_by_age);
     assert_eq!(status.tx_queue_oldest_queued_age_ms, 7_500);
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn serialize_status_json() {
@@ -2418,7 +2277,6 @@ fn serialize_status_json() {
     // https://docs.iroha.tech/reference/torii-endpoints.html#status-and-metrics
     expect_test::expect_file!["fixtures/status_snapshot.v1.json"].assert_eq(&format!("{actual}\n"));
 }
-
 #[test]
 fn status_from_metrics_includes_queue_and_block_liveness() {
     let metrics = Metrics::default();
@@ -2432,9 +2290,7 @@ fn status_from_metrics_includes_queue_and_block_liveness() {
     metrics
         .last_non_empty_block_committed_at_ms
         .set(now.saturating_sub(500));
-
     let status = Status::from(&metrics);
-
     assert!(status.observed_at_ms >= now);
     assert_eq!(status.queue_size, 8);
     assert_eq!(status.queue_queued, 5);

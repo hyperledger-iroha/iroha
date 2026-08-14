@@ -19,7 +19,6 @@ fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
     let retirement_hash = retirement.digest().expect("retirement digest");
     kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
         .expect("persist exact retirement and pending prefix");
-
     let paths = payload
         .entrypoint_hashes
         .iter()
@@ -56,7 +55,6 @@ fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
             )
         })
         .collect::<Vec<_>>();
-
     // Pending*/Active* is the only crash-reachable prepare ordering. An
     // Active/ReleasePending inversion must fail before the first claim is
     // normalized, leaving the entire adversarial group byte-identical.
@@ -79,7 +77,6 @@ fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
         before_prepare,
         "prepare rejection must occur before any claim or temp mutation",
     );
-
     fs::write(&paths[0], encode_claim(&pending[0])).expect("restore pending first claim");
     fs::write(&paths[1], encode_claim(&released[1])).expect("write released suffix");
     let barrier = retirement
@@ -102,7 +99,6 @@ fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
         before_finalize,
         "finalize rejection must occur before any claim or temp mutation",
     );
-
     // Released*/ReleasePending* is the exact crash prefix produced by the
     // finalizer. It must resume deterministically and remain idempotent
     // after reopening Kura.
@@ -116,14 +112,12 @@ fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
             *expected,
         );
     }
-
     drop(kura);
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
     reopened
         .finalize_autonomous_lane_slot_release(&retirement, &barrier, network_id, epoch)
         .expect("exact Released prefix retry is a storage stutter");
 }
-
 #[test]
 fn strict_reservation_batch_reads_historical_attempt_instead_of_later_latest() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -159,7 +153,6 @@ fn strict_reservation_batch_reads_historical_attempt_instead_of_later_latest() {
         .expect("finish first release");
     kura.persist_lane_executable_payload(&successor, network_id, epoch)
         .expect("persist later latest attempt");
-
     let groups = [first_group, successor_group];
     let expected_epochs = [epoch, epoch];
     let assert_exact_attempts = |kura: &Kura| {
@@ -183,12 +176,10 @@ fn strict_reservation_batch_reads_historical_attempt_instead_of_later_latest() {
         ));
     };
     assert_exact_attempts(kura.as_ref());
-
     drop(kura);
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
     assert_exact_attempts(reopened.as_ref());
 }
-
 #[test]
 fn strict_reservation_classifier_rejects_reordered_and_partial_groups() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -206,13 +197,11 @@ fn strict_reservation_classifier_rejects_reordered_and_partial_groups() {
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist two-reservation payload");
-
     let exact = autonomous_reservation_reconciliation_group(payload.reservation_keys.clone());
     assert!(matches!(
         kura.classify_autonomous_lane_reservation_group(&exact, network_id, epoch),
         Ok(AutonomousLaneReservationEvidenceV1::ExactLive { .. })
     ));
-
     let mut reordered_keys = payload.reservation_keys.clone();
     reordered_keys.reverse();
     let reordered = autonomous_reservation_reconciliation_group(reordered_keys);
@@ -220,14 +209,12 @@ fn strict_reservation_classifier_rejects_reordered_and_partial_groups() {
         kura.classify_autonomous_lane_reservation_group(&reordered, network_id, epoch),
         Err(AutonomousLaneReservationEvidenceError::ReservationVectorConflict)
     ));
-
     let partial = autonomous_reservation_reconciliation_group(vec![payload.reservation_keys[0]]);
     assert!(matches!(
         kura.classify_autonomous_lane_reservation_group(&partial, network_id, epoch),
         Err(AutonomousLaneReservationEvidenceError::ReservationVectorConflict)
     ));
 }
-
 #[test]
 fn strict_reservation_classifier_reports_malformed_attempt_as_error() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -251,7 +238,6 @@ fn strict_reservation_classifier_reports_malformed_attempt_as_error() {
     );
     let malformed = vec![0xFF, 0x00, 0xAA, 0x55];
     fs::write(&attempt_path, &malformed).expect("corrupt exact attempt");
-
     assert!(matches!(
         kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch),
         Err(AutonomousLaneReservationEvidenceError::Kura(_))
@@ -262,7 +248,6 @@ fn strict_reservation_classifier_reports_malformed_attempt_as_error() {
         "read-only classification must not recover or rewrite malformed evidence",
     );
 }
-
 #[test]
 fn strict_reservation_classifier_treats_missing_artifact_directory_as_stable_absence() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -277,7 +262,6 @@ fn strict_reservation_classifier_treats_missing_artifact_directory_as_stable_abs
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     let artifact_directory = Kura::lane_artifact_dir(&lane.blocks_dir(temp_dir.path()));
     assert!(!artifact_directory.exists());
-
     assert!(matches!(
         kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch),
         Ok(AutonomousLaneReservationEvidenceV1::StrictlyAbsent)
@@ -287,7 +271,6 @@ fn strict_reservation_classifier_treats_missing_artifact_directory_as_stable_abs
         "read-only strict absence classification must not create storage"
     );
 }
-
 #[test]
 fn strict_reservation_classifier_exposes_exact_certification() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -306,7 +289,6 @@ fn strict_reservation_classifier_exposes_exact_certification() {
         committed_lane_block_session_for_kura_proposal(&payload.origin_proposal, &signer);
     kura.persist_committed_lane_block_session(&session, &signer_pops)
         .expect("persist exact certified lane artifact");
-
     let classified = kura
         .classify_autonomous_lane_reservation_group(&group, network_id, epoch)
         .expect("strict certified classification");
@@ -318,7 +300,6 @@ fn strict_reservation_classifier_exposes_exact_certification() {
         } if exact_payload == payload && certification.is_certified()
     ));
 }
-
 #[test]
 fn strict_reservation_classifier_preserves_unresolved_temp_without_mutation() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -345,7 +326,6 @@ fn strict_reservation_classifier_preserves_unresolved_temp_without_mutation() {
     fs::write(&temp_path, staged).expect("write unresolved attempt temp");
     let canonical_temp_path =
         fs::canonicalize(&temp_path).expect("canonicalize unresolved attempt temp");
-
     let outcome = kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch);
     assert!(
         matches!(
@@ -361,7 +341,6 @@ fn strict_reservation_classifier_preserves_unresolved_temp_without_mutation() {
         "read-only classification must not promote or remove crash evidence",
     );
 }
-
 #[test]
 fn strict_reservation_classifier_rejects_same_height_other_attempt_when_exact_is_absent() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -386,13 +365,11 @@ fn strict_reservation_classifier_rejects_same_height_other_attempt_when_exact_is
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &missing);
     kura.persist_lane_executable_payload(&other, network_id, epoch)
         .expect("persist only the competing proposal-height attempt");
-
     assert!(matches!(
         kura.classify_autonomous_lane_reservation_group(&missing_group, network_id, epoch,),
         Err(AutonomousLaneReservationEvidenceError::OtherAttemptConflict)
     ));
 }
-
 #[test]
 fn strict_reservation_classifier_rejects_conflicting_certified_artifact() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -433,18 +410,15 @@ fn strict_reservation_classifier_rejects_conflicting_certified_artifact() {
         None,
         SidecarIndexOrigin::FirstWrite,
     ));
-
     assert!(matches!(
         kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch),
         Err(AutonomousLaneReservationEvidenceError::CertifiedArtifactConflict)
     ));
 }
-
 #[cfg(unix)]
 #[test]
 fn strict_reservation_classifier_rejects_symlinked_attempt_without_following_it() {
     use std::os::unix::fs::symlink;
-
     let temp_dir = TempDir::new().expect("temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
@@ -466,7 +440,6 @@ fn strict_reservation_classifier_rejects_symlinked_attempt_without_following_it(
     let target_bytes = b"must not be followed or changed";
     fs::write(&target_path, target_bytes).expect("write symlink target");
     symlink(&target_path, &attempt_path).expect("install symlinked attempt");
-
     assert!(matches!(
         kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch),
         Err(AutonomousLaneReservationEvidenceError::Kura(_))
@@ -482,7 +455,6 @@ fn strict_reservation_classifier_rejects_symlinked_attempt_without_following_it(
             .is_symlink()
     );
 }
-
 #[test]
 fn strict_reservation_classifier_rejects_oversized_certified_index_without_recovery() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -501,7 +473,6 @@ fn strict_reservation_classifier_rejects_oversized_certified_index_without_recov
         .expect("oversized certified index length");
     fs::write(&data_path, b"").expect("write empty certified data");
     fs::write(&index_path, vec![0_u8; index_len]).expect("write oversized certified index");
-
     assert!(matches!(
         kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch),
         Err(AutonomousLaneReservationEvidenceError::Kura(_))
@@ -514,7 +485,6 @@ fn strict_reservation_classifier_rejects_oversized_certified_index_without_recov
         "read-only classification must not truncate the oversized index",
     );
 }
-
 #[test]
 fn strict_reservation_classifier_rejects_live_exact_with_unretired_same_height_attempt() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -538,7 +508,6 @@ fn strict_reservation_classifier_rejects_live_exact_with_unretired_same_height_a
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist current exact payload");
-
     let other_lane_block_height = other.origin_proposal.descriptor.lane_block_height;
     let other_proposal_height = other.origin_proposal.descriptor.proposal_height;
     let other_attempt_path = Kura::autonomous_lane_block_attempt_path_for_entry(
@@ -562,7 +531,6 @@ fn strict_reservation_classifier_rejects_live_exact_with_unretired_same_height_a
     ))
     .expect("encode competing view state");
     fs::write(&other_view_path, &other_view_bytes).expect("write competing view state");
-
     assert!(matches!(
         kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch),
         Err(AutonomousLaneReservationEvidenceError::OtherAttemptConflict)
@@ -577,7 +545,6 @@ fn strict_reservation_classifier_rejects_live_exact_with_unretired_same_height_a
         "conflict classification must not recover either attempt",
     );
 }
-
 #[test]
 fn strict_reservation_classifier_rejects_live_historical_attempt_named_by_later_pointer() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -601,7 +568,6 @@ fn strict_reservation_classifier_rejects_live_historical_attempt_named_by_later_
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &historical);
     kura.persist_lane_executable_payload(&historical, network_id, epoch)
         .expect("persist historical live payload");
-
     let later_descriptor = &later.origin_proposal.descriptor;
     let later_attempt_path = Kura::autonomous_lane_block_attempt_path_for_entry(
         lane,
@@ -622,7 +588,6 @@ fn strict_reservation_classifier_rejects_live_historical_attempt_named_by_later_
         norito::encode_canonical(&AutonomousLaneBlockLatestAttemptV1::from_payload(&later))
             .expect("encode later latest pointer");
     fs::write(&latest_path, &latest_bytes).expect("replace latest pointer with later attempt");
-
     assert!(matches!(
         kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch),
         Err(AutonomousLaneReservationEvidenceError::OtherAttemptConflict)
@@ -637,7 +602,6 @@ fn strict_reservation_classifier_rejects_live_historical_attempt_named_by_later_
         "historical-live conflict classification must remain read-only",
     );
 }
-
 #[test]
 fn strict_reservation_classifier_rejects_conflicting_claim_temp_without_mutation() {
     let temp_dir = TempDir::new().expect("temp dir");
@@ -662,11 +626,8 @@ fn strict_reservation_classifier_rejects_conflicting_claim_temp_without_mutation
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist exact payload and claims");
     let entrypoint_hash = payload.entrypoint_hashes[0];
-    let claim_path = Kura::autonomous_lane_entrypoint_claim_path(
-        temp_dir.path(),
-        &network_id,
-        &entrypoint_hash,
-    );
+    let claim_path =
+        Kura::autonomous_lane_entrypoint_claim_path(temp_dir.path(), &network_id, &entrypoint_hash);
     let temp_path = Kura::autonomous_lane_entrypoint_claim_temp_path(&claim_path);
     let conflicting_claim = AutonomousLaneEntrypointClaimV3::new(&conflicting, entrypoint_hash);
     let temp_bytes =
@@ -674,7 +635,6 @@ fn strict_reservation_classifier_rejects_conflicting_claim_temp_without_mutation
     fs::write(&temp_path, &temp_bytes).expect("write conflicting claim temp");
     let canonical_temp_path =
         fs::canonicalize(&temp_path).expect("canonicalize conflicting claim temp");
-
     let outcome = kura.classify_autonomous_lane_reservation_group(&group, network_id, epoch);
     assert!(
         matches!(
@@ -690,7 +650,6 @@ fn strict_reservation_classifier_rejects_conflicting_claim_temp_without_mutation
         "claim preflight must not remove or promote a conflicting stage",
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
@@ -736,7 +695,6 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
         recreated_b.reservation_keys[0].signed_transaction_hash,
         "all three generations contend for the exact same FIFO transaction",
     );
-
     let first_b_record =
         historical_autonomous_recovery_record_for_kura(&first_b, &signer, b"incarnation-b-first");
     let incarnation_a_record = historical_autonomous_recovery_record_for_kura(
@@ -755,7 +713,6 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
         incarnation_a_record.recovery_id,
         recreated_b_record.recovery_id
     );
-
     let (first_b_session, first_b_pops) =
         committed_lane_block_session_for_kura_proposal(&first_b.origin_proposal, &signer);
     let (incarnation_a_session, incarnation_a_pops) =
@@ -765,7 +722,6 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
         );
     let (recreated_b_session, recreated_b_pops) =
         committed_lane_block_session_for_kura_proposal(&recreated_b.origin_proposal, &signer);
-
     let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
     let recreate_lane_storage = |stage: &str| {
         kura.reconcile_lane_segments_for_testing(&[], &[], &[(lane, lane)])
@@ -827,7 +783,6 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
         .expect("archive first incarnation B");
     let archived_first_b_record = first_b_archive.join(first_b_record_relative);
     assert!(archived_first_b_record.is_file());
-
     recreate_lane_storage("incarnation-A");
     assert!(
         !Kura::historical_autonomous_recovery_path_for_entry(
@@ -866,7 +821,6 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
         .expect("archive intermediate incarnation A");
     let archived_incarnation_a_record = incarnation_a_archive.join(incarnation_a_record_relative);
     assert!(archived_incarnation_a_record.is_file());
-
     recreate_lane_storage("recreated-B");
     assert!(
         !Kura::historical_autonomous_recovery_path_for_entry(
@@ -904,7 +858,6 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
             certification,
         }) if payload == recreated_b && certification.is_certified()
     ));
-
     for stale_record in [&first_b_record, &incarnation_a_record] {
         assert!(
             kura.persist_historical_autonomous_lane_recovery_record(stale_record)
@@ -930,7 +883,6 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
             Err(AutonomousLaneReservationEvidenceError::Kura(_))
         ));
     }
-
     let recreated_b_record_path = Kura::historical_autonomous_recovery_path_for_entry(
         lane,
         temp_dir.path(),
@@ -959,7 +911,6 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
         );
         fs::remove_file(&stale_target).expect("remove delayed stale recovery fixture");
     }
-
     assert_eq!(
         kura.historical_autonomous_lane_recovery_records_bounded(3)
             .expect("read exact recreated-B recovery inventory"),
@@ -987,7 +938,6 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
             .proposal,
         recreated_b.origin_proposal,
     );
-
     drop(kura);
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen recreated-B Kura");
     assert_eq!(
@@ -1026,7 +976,6 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
             certification,
         }) if payload == recreated_b && certification.is_certified()
     ));
-
     let lane_blocks = lane.blocks_dir(temp_dir.path());
     let historical_byte_limit = reopened.historical_autonomous_recovery_aggregate_byte_limit();
     let with_recovery =
@@ -1083,7 +1032,6 @@ fn historical_autonomous_recovery_record_for_kura(
         descriptor.validator_set[0].public_key(),
         signer.public_key()
     );
-
     let roster = descriptor
         .validator_set
         .iter()
@@ -1142,11 +1090,9 @@ fn historical_autonomous_recovery_record_for_kura(
         .validate()
         .expect("valid historical recovery fixture context");
     assert_eq!(
-        historical_context.network_id,
-        payload.network_id,
+        historical_context.network_id, payload.network_id,
         "fixture carrier context must bind the executable payload chain",
     );
-
     let executed_wire =
         norito::encode_canonical(payload).expect("encode historical recovery fixture wire");
     let executed_block_wire_len =

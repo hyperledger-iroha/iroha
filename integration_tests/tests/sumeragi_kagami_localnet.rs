@@ -1,14 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Kagami localnet bootstrap coverage for permissioned Sumeragi.
-
-use std::{
-    any::Any,
-    fs,
-    path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
-    time::{Duration, Instant},
-};
-
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::{kagami::resolve_kagami_bin, process as test_process, sandbox};
 use iroha::{
@@ -19,21 +10,25 @@ use iroha::{
 use iroha_test_network::{
     Program, fslock_ports::AllocatedPortBlock, init_instruction_registry, repo_root,
 };
+use std::{
+    any::Any,
+    fs,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    time::{Duration, Instant},
+};
 use tempfile::TempDir;
 use tokio::time::sleep;
-
 const LOCALNET_PEERS: u16 = 4;
 const READY_TIMEOUT: Duration = Duration::from_secs(180);
 const READY_POLL: Duration = Duration::from_millis(200);
 const LOCALNET_BLOCK_TIME_MS: u64 = 2_000;
 const LOCALNET_COMMIT_TIME_MS: u64 = 2_000;
 const LOG_TAIL_LINES: usize = 80;
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
     init_instruction_registry();
     let _guard = sandbox::serial_guard();
-
     let temp_dir = localnet_tempdir()?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
@@ -51,7 +46,6 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
             LOCALNET_PEERS,
             (api_ports, p2p_ports),
         )?;
-
         let client = load_localnet_client(&out_dir)?;
         wait_for_status_ready(&client, &mut localnet, READY_TIMEOUT).await?;
         let baseline = client.get_status()?.blocks_non_empty;
@@ -71,7 +65,6 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
         Ok(())
     }
     .await;
-
     if let Err(err) = result {
         if let Some(reason) = sandbox::sandbox_reason(&err) {
             eprintln!(
@@ -90,12 +83,10 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
     }
     Ok(())
 }
-
 fn alloc_port_block(count: u16) -> Result<AllocatedPortBlock> {
     std::panic::catch_unwind(|| AllocatedPortBlock::new(count))
         .map_err(|panic| eyre!(panic_message(&panic)))
 }
-
 fn panic_message(panic: &Box<dyn Any + Send>) -> String {
     let panic = panic.as_ref();
     panic.downcast_ref::<&str>().map_or_else(
@@ -108,13 +99,11 @@ fn panic_message(panic: &Box<dyn Any + Send>) -> String {
         |message| (*message).to_string(),
     )
 }
-
 struct KagamiLocalnet {
     dir: PathBuf,
     children: Vec<Child>,
     _port_reservations: (AllocatedPortBlock, AllocatedPortBlock),
 }
-
 impl KagamiLocalnet {
     fn start(
         out_dir: &Path,
@@ -137,7 +126,6 @@ impl KagamiLocalnet {
             let log_file_err = log_file
                 .try_clone()
                 .wrap_err_with(|| format!("clone log file {}", log_path.display()))?;
-
             let mut cmd = Command::new(irohad_bin);
             cmd.arg("--config").arg(&config_path);
             cmd.current_dir(out_dir);
@@ -152,14 +140,12 @@ impl KagamiLocalnet {
                 .wrap_err_with(|| format!("spawn iroha3d for peer {idx}"))?;
             children.push(child);
         }
-
         Ok(Self {
             dir: out_dir.to_path_buf(),
             children,
             _port_reservations: port_reservations,
         })
     }
-
     fn unexpected_exit_report(&mut self) -> Result<Option<String>> {
         for (idx, child) in self.children.iter_mut().enumerate() {
             let Some(status) = child
@@ -178,7 +164,6 @@ impl KagamiLocalnet {
         Ok(None)
     }
 }
-
 impl Drop for KagamiLocalnet {
     fn drop(&mut self) {
         for child in &mut self.children {
@@ -198,14 +183,12 @@ impl Drop for KagamiLocalnet {
         }
     }
 }
-
 fn localnet_tempdir() -> Result<TempDir> {
     let root = repo_root().join("target").join("kagami-localnet");
     fs::create_dir_all(&root)
         .wrap_err_with(|| format!("create localnet temp root {}", root.display()))?;
     tempfile::tempdir_in(&root).wrap_err("create localnet temp dir")
 }
-
 fn generate_localnet(out_dir: &Path, base_api_port: u16, base_p2p_port: u16) -> Result<()> {
     let kagami_bin = resolve_kagami_bin()?;
     let peers = LOCALNET_PEERS.to_string();
@@ -248,7 +231,6 @@ fn generate_localnet(out_dir: &Path, base_api_port: u16, base_p2p_port: u16) -> 
     );
     Ok(())
 }
-
 fn load_localnet_client(out_dir: &Path) -> Result<Client> {
     let client_path = out_dir.join("client.toml");
     let mut config = Config::load(LoadPath::Explicit(client_path.clone())).map_err(|err| {
@@ -260,7 +242,6 @@ fn load_localnet_client(out_dir: &Path) -> Result<Client> {
     config.transaction_status_timeout = READY_TIMEOUT;
     Ok(Client::new(config))
 }
-
 async fn wait_for_status_ready(
     client: &Client,
     localnet: &mut KagamiLocalnet,
@@ -280,7 +261,6 @@ async fn wait_for_status_ready(
         sleep(READY_POLL).await;
     }
 }
-
 fn log_tail(path: &Path, lines: usize) -> String {
     match fs::read_to_string(path) {
         Ok(contents) => {
@@ -291,7 +271,6 @@ fn log_tail(path: &Path, lines: usize) -> String {
         Err(err) => format!("failed to read log {}: {err}", path.display()),
     }
 }
-
 async fn wait_for_blocks_non_empty(
     client: &Client,
     target: u64,
@@ -311,7 +290,6 @@ async fn wait_for_blocks_non_empty(
         sleep(READY_POLL).await;
     }
 }
-
 async fn wait_for_validator_count_and_reducer(
     client: &Client,
     expected_peers: u64,

@@ -1,10 +1,7 @@
 //! Benchmark CRC64 over large payloads with zstd enabled (SIMD-accelerated CRC64).
-
-use std::io::Cursor;
-
 use crc64fast::Digest as Crc64Digest;
 use criterion::{BenchmarkId, Criterion};
-
+use std::io::Cursor;
 fn random_bytes(n: usize) -> Vec<u8> {
     // Deterministic pseudo-random bytes
     let mut v = Vec::with_capacity(n);
@@ -16,7 +13,6 @@ fn random_bytes(n: usize) -> Vec<u8> {
     }
     v
 }
-
 fn bench_crc64_compressed(c: &mut Criterion) {
     let mut group = c.benchmark_group("crc64_compressed");
     for &mib in &[1usize, 4, 16, 64] {
@@ -26,7 +22,6 @@ fn bench_crc64_compressed(c: &mut Criterion) {
         let compressed = zstd::encode_all(Cursor::new(&buf), 3).expect("zstd compress");
         let dec = zstd::decode_all(Cursor::new(&compressed)).expect("zstd decompress");
         assert_eq!(dec.len(), buf.len());
-
         group.bench_with_input(
             BenchmarkId::new("hardware", format!("{mib}MiB")),
             &dec,
@@ -37,7 +32,6 @@ fn bench_crc64_compressed(c: &mut Criterion) {
                 })
             },
         );
-
         group.bench_with_input(
             BenchmarkId::new("fallback", format!("{mib}MiB")),
             &dec,
@@ -48,7 +42,6 @@ fn bench_crc64_compressed(c: &mut Criterion) {
                 })
             },
         );
-
         // Optional: CRC over compressed bytes (for reference)
         group.bench_with_input(
             BenchmarkId::new("hardware_on_compressed", format!("{mib}MiB")),
@@ -60,7 +53,6 @@ fn bench_crc64_compressed(c: &mut Criterion) {
                 })
             },
         );
-
         // Streaming over decompressed bytes via zstd::Decoder, updating crc64fast::Digest
         group.bench_with_input(
             BenchmarkId::new("stream_hardware", format!("{mib}MiB")),
@@ -84,7 +76,6 @@ fn bench_crc64_compressed(c: &mut Criterion) {
     }
     group.finish();
 }
-
 fn main() {
     let mut c = Criterion::default().configure_from_args();
     bench_crc64_compressed(&mut c);

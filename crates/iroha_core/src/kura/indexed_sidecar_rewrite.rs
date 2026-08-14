@@ -1,5 +1,4 @@
 // Indexed-sidecar retention and crash-safe rewrite support.
-
 impl Kura {
     fn prune_indexed_sidecars(
         data_path: &Path,
@@ -11,7 +10,6 @@ impl Kura {
             data_path, index_path, retention, None, kind,
         )
     }
-
     fn prune_indexed_sidecars_with_pinned_height(
         data_path: &Path,
         index_path: &Path,
@@ -29,7 +27,6 @@ impl Kura {
             kind,
         )
     }
-
     #[cfg(test)]
     fn prune_indexed_sidecars_to_retention_window(
         data_path: &Path,
@@ -50,7 +47,6 @@ impl Kura {
             kind,
         )
     }
-
     fn prune_indexed_sidecars_through_terminal_frontier(
         data_path: &Path,
         index_path: &Path,
@@ -74,7 +70,6 @@ impl Kura {
             kind,
         )
     }
-
     fn truncate_indexed_sidecars_to_height(
         data_path: &Path,
         index_path: &Path,
@@ -97,7 +92,6 @@ impl Kura {
             kind,
         )
     }
-
     #[allow(clippy::too_many_lines)] // Rewriting covers many edge cases in one pass; keep consolidated.
     fn rewrite_indexed_sidecars(
         data_path: &Path,
@@ -273,7 +267,6 @@ impl Kura {
                 )
             }
         };
-
         let entries_to_read = if compacted_prefix_rewrite {
             output_entries
         } else {
@@ -377,7 +370,6 @@ impl Kura {
                 return true;
             }
         }
-
         let mut data = match std::fs::File::open(data_path) {
             Ok(file) => file,
             Err(err) => {
@@ -431,7 +423,6 @@ impl Kura {
                 prior_payload_end = entry.offset.checked_add(entry.len);
             }
         }
-
         // Keep temp paths distinct: `.with_extension("tmp")` would collapse
         // `*.norito` and `*.index` into the same `*.tmp` filename.
         let temp_data_path = data_path.with_extension("norito.tmp");
@@ -472,7 +463,6 @@ impl Kura {
             );
             return false;
         }
-
         let mut new_offset = 0u64;
         let empty_entry = SidecarIndexEntry { offset: 0, len: 0 }.to_bytes();
         for (vector_idx, entry) in entries
@@ -498,7 +488,6 @@ impl Kura {
                 }
                 continue;
             }
-
             if entry.len > STRICT_INIT_MAX_BLOCK_BYTES {
                 iroha_logger::warn!(
                     len = entry.len,
@@ -639,7 +628,6 @@ impl Kura {
                 );
                 return false;
             }
-
             let new_entry = SidecarIndexEntry {
                 offset: new_offset,
                 len: entry.len,
@@ -655,7 +643,6 @@ impl Kura {
             }
             new_offset = new_offset.saturating_add(entry.len);
         }
-
         if let Err(err) = new_data.flush() {
             iroha_logger::warn!(
                 ?err,
@@ -692,12 +679,10 @@ impl Kura {
             );
             return false;
         }
-
         drop(new_data);
         drop(new_index);
         drop(data);
         drop(index);
-
         // Make both temp directory entries durable before the first promotion. The temp index is
         // the recovery marker if the process crashes after publishing the new data file but before
         // publishing its matching index.
@@ -726,7 +711,6 @@ impl Kura {
             );
             return false;
         }
-
         if let Err(err) = std::fs::rename(&temp_data_path, data_path) {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
                 if let Err(remove_err) = std::fs::remove_file(data_path) {
@@ -837,7 +821,6 @@ impl Kura {
                 return false;
             }
         }
-
         let retained = match rewrite {
             #[cfg(test)]
             IndexedSidecarRewrite::RetainNewestWindow { .. } => output_entries,

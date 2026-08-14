@@ -1,10 +1,8 @@
 //! Exact-lock release guards for the first-party Microsoft Vega-MC boundary.
-
 use iroha_zkp_halo2::vega::{
     VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1, VegaMdlProofErrorV1, vega_mdl_proof_dimensions_v1,
     vega_mdl_verifier_digest_v1, vega_microsoft_fixture_conformance_v1,
 };
-
 const CRATE_MANIFEST: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
 const VEGA_FACADE: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/vega.rs"));
 const EXACT_BOUNDARY: &str = include_str!(concat!(
@@ -19,7 +17,6 @@ const PYTHON_PROOF: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../vendor/vega-prover/reference/fixtures/cubic/python_standalone_proof.bin"
 ));
-
 #[test]
 fn public_profile_identity_and_dimensions_remain_frozen() {
     assert_eq!(
@@ -36,7 +33,6 @@ fn public_profile_identity_and_dimensions_remain_frozen() {
     assert_eq!(dimensions.relaxed_outer_rounds, 9);
     assert_eq!(dimensions.relaxed_inner_rounds, 12);
 }
-
 #[test]
 fn production_boundary_cannot_compile_or_route_the_oracle_crates() {
     for forbidden_edge in [
@@ -68,7 +64,6 @@ fn production_boundary_cannot_compile_or_route_the_oracle_crates() {
         );
     }
 }
-
 #[test]
 fn first_party_verifier_accepts_the_independent_python_fixture() {
     assert_eq!(PYTHON_VERIFIER_KEY.len(), 200_292);
@@ -84,7 +79,6 @@ fn first_party_verifier_accepts_the_independent_python_fixture() {
     assert_eq!(step_outputs, 2);
     assert_eq!(core_outputs, 1);
 }
-
 #[test]
 fn first_party_codec_rejects_truncated_and_trailing_bytes() {
     assert!(
@@ -101,16 +95,13 @@ fn first_party_codec_rejects_truncated_and_trailing_bytes() {
         )
         .is_err()
     );
-
     let mut trailing_key = PYTHON_VERIFIER_KEY.to_vec();
     trailing_key.push(0);
     assert!(vega_microsoft_fixture_conformance_v1(&trailing_key, PYTHON_PROOF).is_err());
-
     let mut trailing_proof = PYTHON_PROOF.to_vec();
     trailing_proof.push(0);
     assert!(vega_microsoft_fixture_conformance_v1(PYTHON_VERIFIER_KEY, &trailing_proof).is_err());
 }
-
 #[test]
 fn first_party_verifier_rejects_equation_corruption() {
     let mut corrupted = PYTHON_PROOF.to_vec();

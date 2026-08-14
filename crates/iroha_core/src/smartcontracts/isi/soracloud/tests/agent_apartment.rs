@@ -1,5 +1,4 @@
 //! Authoritative SoraCloud agent-apartment ledger transition tests.
-
 use super::*;
 #[test]
 fn agent_apartment_lifecycle_instructions_record_authoritative_state() -> Result<(), eyre::Report> {
@@ -18,7 +17,6 @@ fn agent_apartment_lifecycle_instructions_record_authoritative_state() -> Result
         provenance: agent_deploy_provenance(manifest, 120, 500),
     })
     .execute(&ALICE_ID, &mut stx)?;
-
     let apartment_name: iroha_data_model::name::Name = "ops_agent".parse().expect("valid");
     let renew_payload = encode_agent_lease_renew_provenance_payload(apartment_name.as_ref(), 60)
         .expect("renew payload");
@@ -31,7 +29,6 @@ fn agent_apartment_lifecycle_instructions_record_authoritative_state() -> Result
         },
     })
     .execute(&ALICE_ID, &mut stx)?;
-
     let restart_payload =
         encode_agent_restart_provenance_payload(apartment_name.as_ref(), "manual-restart")
             .expect("restart payload");
@@ -44,7 +41,6 @@ fn agent_apartment_lifecycle_instructions_record_authoritative_state() -> Result
         },
     })
     .execute(&ALICE_ID, &mut stx)?;
-
     let revoke_payload = encode_agent_policy_revoke_provenance_payload(
         apartment_name.as_ref(),
         "agent.autonomy.run",
@@ -61,10 +57,8 @@ fn agent_apartment_lifecycle_instructions_record_authoritative_state() -> Result
         },
     })
     .execute(&ALICE_ID, &mut stx)?;
-
     stx.apply();
     state_block.commit()?;
-
     let view = state.view();
     let world = view.world();
     let record = world
@@ -99,7 +93,6 @@ fn agent_apartment_lifecycle_instructions_record_authoritative_state() -> Result
     );
     Ok(())
 }
-
 #[test]
 fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
 -> Result<(), eyre::Report> {
@@ -121,7 +114,6 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
         .header();
     let mut state_block = state.block(block_header);
     let mut stx = state_block.transaction();
-
     let wallet_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
         .parse()
         .expect("canonical wallet asset definition");
@@ -132,7 +124,6 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
         None,
     ))
     .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-
     iroha_data_model::isi::InstructionBox::from(isi::DeploySoracloudAgentApartment {
         manifest: ops_manifest.clone(),
         lease_ticks: 120,
@@ -147,11 +138,9 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
         provenance: agent_deploy_provenance(worker_manifest, 120, 250),
     })
     .execute(&ALICE_ID, &mut stx)?;
-
     let ops_name: iroha_data_model::name::Name = "ops_agent".parse().expect("valid");
     let worker_name: iroha_data_model::name::Name = "worker_agent".parse().expect("valid");
     let wallet_amount: Quantity = "0.001".parse().expect("wallet amount");
-
     let wallet_spend_payload = encode_agent_wallet_spend_provenance_payload(
         ops_name.as_ref(),
         "61CtjvNd9T3THAR65GsMVHr82Bjc",
@@ -168,7 +157,6 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
         },
     })
     .execute(&ALICE_ID, &mut stx)?;
-
     let wallet_approve_payload =
         encode_agent_wallet_approve_provenance_payload(ops_name.as_ref(), "ops_agent:wallet:3")
             .expect("wallet approve payload");
@@ -181,7 +169,6 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
         },
     })
     .execute(&ALICE_ID, &mut stx)?;
-
     let message_send_payload = encode_agent_message_send_provenance_payload(
         ops_name.as_ref(),
         worker_name.as_ref(),
@@ -200,7 +187,6 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
         },
     })
     .execute(&ALICE_ID, &mut stx)?;
-
     let message_ack_payload =
         encode_agent_message_ack_provenance_payload(worker_name.as_ref(), "worker_agent:mail:5")
             .expect("message ack payload");
@@ -213,7 +199,6 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
         },
     })
     .execute(&ALICE_ID, &mut stx)?;
-
     let artifact_allow_payload = encode_agent_artifact_allow_provenance_payload(
         ops_name.as_ref(),
         "hash:artifact#1",
@@ -230,7 +215,6 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
         },
     })
     .execute(&ALICE_ID, &mut stx)?;
-
     let autonomy_run_payload = encode_agent_autonomy_run_provenance_payload(
         ops_name.as_ref(),
         "hash:artifact#1",
@@ -256,10 +240,8 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
         },
     })
     .execute(&ALICE_ID, &mut stx)?;
-
     stx.apply();
     state_block.commit()?;
-
     let view = state.view();
     let world = view.world();
     let ops_record = world
@@ -296,7 +278,6 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
     assert_eq!(ops_record.checkpoint_count, 1);
     assert_eq!(ops_record.last_checkpoint_sequence, Some(8));
     assert_eq!(ops_record.artifact_allowlist.len(), 1);
-
     let worker_record = world
         .soracloud_agent_apartments()
         .get("worker_agent")
@@ -311,7 +292,6 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
     );
     Ok(())
 }
-
 #[test]
 fn record_agent_autonomy_execution_records_authoritative_audit_state() -> Result<(), eyre::Report> {
     let kura = Kura::blank_kura_for_testing();
@@ -325,7 +305,6 @@ fn record_agent_autonomy_execution_records_authoritative_audit_state() -> Result
         .header();
     let mut state_block = state.block(block_header);
     let mut stx = state_block.transaction();
-
     iroha_data_model::isi::InstructionBox::from(isi::DeploySoracloudAgentApartment {
         manifest: ops_manifest.clone(),
         lease_ticks: 120,
@@ -333,7 +312,6 @@ fn record_agent_autonomy_execution_records_authoritative_audit_state() -> Result
         provenance: agent_deploy_provenance(ops_manifest, 120, 500),
     })
     .execute(&ALICE_ID, &mut stx)?;
-
     let apartment_name: iroha_data_model::name::Name = "ops_agent".parse().expect("valid");
     let artifact_allow_payload = encode_agent_artifact_allow_provenance_payload(
         apartment_name.as_ref(),
@@ -351,7 +329,6 @@ fn record_agent_autonomy_execution_records_authoritative_audit_state() -> Result
         },
     })
     .execute(&ALICE_ID, &mut stx)?;
-
     let workflow_input_json = "{\"inputs\":\"nightly\"}";
     let autonomy_run_payload = encode_agent_autonomy_run_provenance_payload(
         apartment_name.as_ref(),
@@ -375,7 +352,6 @@ fn record_agent_autonomy_execution_records_authoritative_audit_state() -> Result
         },
     })
     .execute(&ALICE_ID, &mut stx)?;
-
     let approved_run = stx
         .world
         .soracloud_agent_apartments
@@ -407,10 +383,8 @@ fn record_agent_autonomy_execution_records_authoritative_audit_state() -> Result
         error: None,
     })
     .execute(&ALICE_ID, &mut stx)?;
-
     stx.apply();
     state_block.commit()?;
-
     let view = state.view();
     let world = view.world();
     let record = world

@@ -2,20 +2,17 @@
 //!
 //! The implementation shares the verifier-fixed layouts, transcript helpers,
 //! and concrete trace providers owned by the parent STARK module.
-
 // This is a private continuation of the parent module's fixed protocol
 // vocabulary; it does not define an independent extension surface.
 use super::*;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use rayon::prelude::*;
-
 #[derive(Clone, Copy)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) enum MainTraceColumnKindV1 {
     Base,
     Aux,
 }
-
 /// Exact ordered ownership of the six authenticated masked polynomial sets.
 ///
 /// Each group retains only the coefficients of the polynomials that were
@@ -27,7 +24,6 @@ pub(super) enum MainTraceColumnKindV1 {
 pub(super) struct MainTracePolynomialSetV1 {
     groups: [aggregate::MaskedTracePolynomialSetV1; FULL_PROFILE_TRACE_GROUPS_V1],
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainTracePolynomialSetV1 {
     pub(super) fn from_ordered_v1(
@@ -43,7 +39,6 @@ impl MainTracePolynomialSetV1 {
         set.validate_v1(layout, kind)?;
         Ok(set)
     }
-
     fn validate_v1(
         &self,
         layout: &AggregateProofLayoutV1,
@@ -64,7 +59,6 @@ impl MainTracePolynomialSetV1 {
         }
         Ok(())
     }
-
     fn group_v1(
         &self,
         layout: &AggregateProofLayoutV1,
@@ -77,7 +71,6 @@ impl MainTracePolynomialSetV1 {
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn registered_main_group_column_v1(
     layout: &AggregateProofLayoutV1,
@@ -118,7 +111,6 @@ fn registered_main_group_column_v1(
     }
     matched.ok_or(ZkX509StarkErrorV1::ProfileMismatch)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn commit_main_trace_group_v1<R: TryRngCore>(
     layout: &AggregateProofLayoutV1,
@@ -200,7 +192,6 @@ fn commit_main_trace_group_v1<R: TryRngCore>(
         (Ok(_), Some(_)) => Err(ZkX509StarkErrorV1::InternalInvariant),
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_trace_group_root_v1(
     kind: MainTraceColumnKindV1,
@@ -221,7 +212,6 @@ fn main_trace_group_root_v1(
         },
     }
 }
-
 fn map_credential_pre_aux_error_v1(
     error: super::super::credential_pre_aux::ZkX509CredentialPreAuxErrorV1,
 ) -> ZkX509StarkErrorV1 {
@@ -231,7 +221,6 @@ fn map_credential_pre_aux_error_v1(
         Error::Transcript | Error::Challenge => ZkX509StarkErrorV1::TranscriptMismatch,
     }
 }
-
 /// MAIN state after exactly six ordered base commitments and before X5B1.
 ///
 /// The type owns every challenge-independent child which must cross the joint
@@ -254,7 +243,6 @@ pub(crate) struct ZkX509MainAwaitingCredentialBindingV1<'a> {
     base_transcript_state: [u8; 32],
     pre_aux: ZkX509CredentialMainPreAuxV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509MainAwaitingCredentialBindingV1<'_> {
     fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
@@ -280,7 +268,6 @@ impl ZkX509MainAwaitingCredentialBindingV1<'_> {
             .map_err(|_| ZkX509StarkErrorV1::P256Witness)
     }
 }
-
 /// Composition-ready MAIN state after the sole X5B1 transition.
 ///
 /// Both trace-mask sets, all six base/aux roots, the exact terminal claims,
@@ -305,7 +292,6 @@ pub(crate) struct ZkX509MainCompositionPhaseV1<'a> {
     composition_transcript_state: [u8; 32],
     binding: ZkX509CredentialPreAuxBindingV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509MainCompositionPhaseV1<'_> {
     fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
@@ -344,7 +330,6 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         }
         Ok(())
     }
-
     fn prover_constraint_providers_v1(
         &self,
     ) -> Result<Vec<MainProverConstraintProviderV1<'_, '_>>, ZkX509StarkErrorV1> {
@@ -391,7 +376,6 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         }
         Ok(providers)
     }
-
     fn composition_material_v1(&self) -> Result<RetainedCompositionMaterialV1, ZkX509StarkErrorV1> {
         let providers = self.prover_constraint_providers_v1()?;
         main_composition_material_from_polynomials_v1(
@@ -403,7 +387,6 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         )
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn record_main_group_commitment_v1(
     group_index: usize,
@@ -440,7 +423,6 @@ pub(super) fn record_main_group_commitment_v1(
     }
     Ok(())
 }
-
 /// Commit exactly the six canonical MAIN base groups and yield the sole outer
 /// credential assembly hook.
 ///
@@ -486,7 +468,6 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
     let mut transcript =
         new_main_transcript_v1(&public.consensus_context_digest, assembly.verifier_profile)?;
     absorb_aggregate_layout_v1(&mut transcript, MAIN_LAYOUT_DOMAIN_V1, &layout)?;
-
     let mut trace_groups = Vec::new();
     let mut base_polynomials = Vec::new();
     trace_groups
@@ -495,7 +476,6 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
     base_polynomials
         .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
         .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-
     {
         let mut source = MainP256Log5TraceGroupSourceV1::for_base_v1(&layout, &p256)?;
         let (commitment, polynomials) =
@@ -605,7 +585,6 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
     phase.validate_v1()?;
     Ok((phase, pre_aux))
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
     /// Consume phase one, bind all challenge-dependent children with one X5B1
@@ -645,7 +624,6 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
         let mut log19 = MainLog19BoundTraceGroupSourceV1::bind_from_phase_v1(
             &layout, assembly, sha, p256, binding,
         )?;
-
         let mut aux_polynomials = Vec::new();
         aux_polynomials
             .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
@@ -776,7 +754,6 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
         Ok(phase)
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509MainCompositionPhaseV1<'_> {
     /// Consume the X5B1-bound phase and construct the canonical X5M1 proof.
@@ -792,7 +769,6 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         let composition_material = self.composition_material_v1()?;
         let compositions = &composition_material.evaluations;
         let shared_layout = self.layout.as_shared()?;
-
         let mut composition_roots = Vec::new();
         composition_roots
             .try_reserve_exact(SECURITY_LANES)
@@ -932,7 +908,6 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         for (base, mask) in fri_bases.iter_mut().zip(&fri_masks) {
             aggregate::add_fri_mask_oracle_v1(base, mask).map_err(map_aggregate_error_v1)?;
         }
-
         let grinding_state = self.transcript.state();
         let grinding_nonce = grind_nonce_v1(&grinding_state, ZK_X509_GRINDING_BITS_V1)
             .map_err(map_transparent_error_v1)?;
@@ -1004,7 +979,6 @@ impl ZkX509MainCompositionPhaseV1<'_> {
             base_openings.push(base);
             aux_openings.push(aux);
         }
-
         let composition_opening_indices =
             aggregate::composition_opening_indices_v1(&query_skeleton, &shared_layout)
                 .map_err(map_aggregate_error_v1)?;
@@ -1055,7 +1029,6 @@ impl ZkX509MainCompositionPhaseV1<'_> {
                 .map_err(map_aggregate_error_v1)?,
             );
         }
-
         let mut queries = Vec::new();
         queries
             .try_reserve_exact(query_indices.len())
@@ -1134,7 +1107,6 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         }
         drop(self.base_polynomials);
         drop(self.aux_polynomials);
-
         let fri_lanes = fri_materials
             .into_iter()
             .zip(fri_openings)
@@ -1166,7 +1138,6 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         encode_zk_x509_main_proof_envelope_v1(self.terminal_claims, &aggregate_bytes)
     }
 }
-
 /// Exact six-provider registry for the verifier-owned full MAIN layout.
 ///
 /// The layout is cloned only after every dimension and closed provider
@@ -1176,7 +1147,6 @@ pub(super) struct MainTraceProviderSetV1<'a> {
     layout: AggregateProofLayoutV1,
     groups: Vec<MainTraceGroupProviderV1<'a>>,
 }
-
 #[cfg(test)]
 impl<'a> MainTraceProviderSetV1<'a> {
     pub(super) fn new_v1(
@@ -1198,7 +1168,6 @@ impl<'a> MainTraceProviderSetV1<'a> {
             groups,
         })
     }
-
     fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
         self.layout.validate_exact_full_profile_registration_v1()?;
         if self.groups.len() != FULL_PROFILE_TRACE_GROUPS_V1
@@ -1213,7 +1182,6 @@ impl<'a> MainTraceProviderSetV1<'a> {
         }
         Ok(())
     }
-
     pub(super) fn registered_column_v1(
         &self,
         group_index: usize,
@@ -1223,7 +1191,6 @@ impl<'a> MainTraceProviderSetV1<'a> {
         self.validate_v1()?;
         registered_main_group_column_v1(&self.layout, group_index, kind, column_index)
     }
-
     pub(super) fn native_group_column_v1(
         &mut self,
         group_index: usize,
@@ -1254,7 +1221,6 @@ impl<'a> MainTraceProviderSetV1<'a> {
         Ok(column)
     }
 }
-
 /// Closed prover-side fixed-polynomial and quotient provider for one canonical
 /// MAIN trace group.
 ///
@@ -1270,7 +1236,6 @@ enum MainProverConstraintProviderV1<'phase, 'assembly> {
     Io(MainIoProverConstraintSourceV1),
     Log19(MainLog19ProverConstraintSourceV1<'assembly, 'phase>),
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainProverConstraintProviderV1<'_, '_> {
     fn native_trace_log2_v1(&self) -> u8 {
@@ -1283,7 +1248,6 @@ impl MainProverConstraintProviderV1<'_, '_> {
             Self::Log19(_) => 19,
         }
     }
-
     fn stream_fixed_polynomials_v1(
         &self,
         mut consume: impl FnMut(
@@ -1307,7 +1271,6 @@ impl MainProverConstraintProviderV1<'_, '_> {
             Self::Log19(source) => source.stream_fixed_polynomials_v1(consume),
         }
     }
-
     #[allow(clippy::too_many_arguments)]
     fn composition_value_v1(
         &self,
@@ -1368,13 +1331,11 @@ impl MainProverConstraintProviderV1<'_, '_> {
         }
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct ZeroizingMainFixedPolynomialSetV1 {
     registration: RegisteredSegmentLayoutV1,
     columns: Vec<Vec<F>>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for ZeroizingMainFixedPolynomialSetV1 {
     fn drop(&mut self) {
@@ -1383,7 +1344,6 @@ impl Drop for ZeroizingMainFixedPolynomialSetV1 {
         }
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn stream_main_fixed_polynomial_sets_v1(
     provider: &MainProverConstraintProviderV1<'_, '_>,
@@ -1435,7 +1395,6 @@ fn stream_main_fixed_polynomial_sets_v1(
     }
     consume(&completed)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn canonical_main_registration_index_v1(
     layout: &AggregateProofLayoutV1,
@@ -1462,7 +1421,6 @@ fn canonical_main_registration_index_v1(
         .filter(|index| layout.registered_segments.get(*index) == Some(&registration))
         .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_registration_trace_columns_on_coset_v1(
     layout: &AggregateProofLayoutV1,
@@ -1521,7 +1479,6 @@ fn main_registration_trace_columns_on_coset_v1(
     }
     Ok(columns)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_fixed_columns_on_coset_v1(
     fixed: &ZeroizingMainFixedPolynomialSetV1,
@@ -1573,7 +1530,6 @@ fn main_fixed_columns_on_coset_v1(
     }
     Ok(columns)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainQuotientRowScratchV1 {
     base_current: ZeroizingMainTraceColumnV1,
@@ -1583,7 +1539,6 @@ struct MainQuotientRowScratchV1 {
     fixed_current: ZeroizingMainTraceColumnV1,
     fixed_next: ZeroizingMainTraceColumnV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainQuotientRowScratchV1 {
     fn new_v1(registration: RegisteredSegmentLayoutV1) -> Self {
@@ -1602,7 +1557,6 @@ impl MainQuotientRowScratchV1 {
             fixed_next: ZeroizingMainTraceColumnV1(vec![F::ZERO; registration.segment.fixed_width]),
         }
     }
-
     fn fill_v1(
         &mut self,
         row: usize,
@@ -1639,7 +1593,6 @@ impl MainQuotientRowScratchV1 {
             *next_value = fixed[column][next];
         }
     }
-
     fn opening_v1(&self) -> RegisteredOpenedRowsV1<'_> {
         RegisteredOpenedRowsV1 {
             base_current: &self.base_current,
@@ -1649,7 +1602,6 @@ impl MainQuotientRowScratchV1 {
         }
     }
 }
-
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_registration_composition_coefficient_chunks_v1(
@@ -1698,7 +1650,6 @@ fn main_registration_composition_coefficient_chunks_v1(
     {
         return Err(ZkX509StarkErrorV1::InternalInvariant);
     }
-
     let mut quotients = (0..SECURITY_LANES)
         .map(|_| {
             let mut quotient = ZeroizingExtensionColumnV1(Vec::new());
@@ -1756,7 +1707,6 @@ fn main_registration_composition_coefficient_chunks_v1(
     drop(base);
     drop(aux);
     drop(fixed);
-
     let mut coefficient_chunks = Vec::new();
     coefficient_chunks
         .try_reserve_exact(SECURITY_LANES)
@@ -1771,7 +1721,6 @@ fn main_registration_composition_coefficient_chunks_v1(
     }
     Ok(coefficient_chunks)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(super) fn add_main_composition_coefficient_chunks_v1(
     accumulator: &mut [Vec<Vec<E>>],
@@ -1827,7 +1776,6 @@ pub(super) fn add_main_composition_coefficient_chunks_v1(
     }
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn evaluate_main_composition_coefficient_chunks_v1(
     coefficient_chunks: &[Vec<Vec<E>>],
@@ -1878,7 +1826,6 @@ fn evaluate_main_composition_coefficient_chunks_v1(
         })
         .collect()
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_composition_material_from_polynomials_v1(
     layout: &AggregateProofLayoutV1,
@@ -1966,7 +1913,6 @@ fn main_composition_material_from_polynomials_v1(
         coefficient_chunks,
     })
 }
-
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn main_fri_bases_from_polynomials_v1(
@@ -2011,7 +1957,6 @@ fn main_fri_bases_from_polynomials_v1(
             Ok::<_, ZkX509StarkErrorV1>(accumulator)
         })
         .collect::<Result<Vec<_>, _>>()?;
-
     for group_index in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
         let group_layout = layout
             .trace_groups
@@ -2107,14 +2052,12 @@ fn main_fri_bases_from_polynomials_v1(
         })
         .collect()
 }
-
 /// Exact six-provider registry used only for verifier-safe opened-row
 /// evaluation.
 pub(super) struct MainOpenedProviderSetV1<'a> {
     layout: AggregateProofLayoutV1,
     groups: Vec<MainOpenedGroupProviderV1<'a>>,
 }
-
 impl<'a> MainOpenedProviderSetV1<'a> {
     pub(super) fn new_v1(
         layout: &AggregateProofLayoutV1,
@@ -2135,7 +2078,6 @@ impl<'a> MainOpenedProviderSetV1<'a> {
             groups,
         })
     }
-
     fn validate_v1(&self) -> Result<(), ZkX509StarkErrorV1> {
         self.layout.validate_exact_full_profile_registration_v1()?;
         if self.groups.len() != FULL_PROFILE_TRACE_GROUPS_V1
@@ -2150,7 +2092,6 @@ impl<'a> MainOpenedProviderSetV1<'a> {
         }
         Ok(())
     }
-
     pub(super) fn registered_constraint_residues_v1(
         &mut self,
         registration: RegisteredSegmentLayoutV1,
@@ -2197,7 +2138,6 @@ impl<'a> MainOpenedProviderSetV1<'a> {
         provider.constraint_residues_v1(registration, query_index, next_query_index, x, opening)
     }
 }
-
 fn validate_main_opened_evaluation_shape_v1(
     providers: &MainOpenedProviderSetV1<'_>,
     query_index: usize,
@@ -2241,7 +2181,6 @@ fn validate_main_opened_evaluation_shape_v1(
     }
     Ok(())
 }
-
 pub(super) fn main_opened_composition_value_v1(
     providers: &mut MainOpenedProviderSetV1<'_>,
     query_index: usize,
@@ -2289,7 +2228,6 @@ pub(super) fn main_opened_composition_value_v1(
     }
     Ok(composition)
 }
-
 pub(super) fn validate_main_fri_mixes_v1(
     layout: &AggregateProofLayoutV1,
     mixes: &[Vec<FriMixV1>],
@@ -2323,7 +2261,6 @@ pub(super) fn validate_main_fri_mixes_v1(
     }
     Ok(())
 }
-
 /// Full MAIN verifier opened-row evaluator.
 ///
 /// This path is intentionally separate from prover fixed-polynomial streaming:
@@ -2334,7 +2271,6 @@ pub(super) struct MainOpenedRowEvaluatorV1<'a, 'providers> {
     pub(super) alphas: &'a [Vec<Vec<E>>],
     pub(super) mixes: &'a [Vec<FriMixV1>],
 }
-
 impl aggregate::AggregateOpenedRowEvaluatorV1 for MainOpenedRowEvaluatorV1<'_, '_> {
     fn evaluate_opened_row_v1(
         &mut self,
@@ -2388,7 +2324,6 @@ impl aggregate::AggregateOpenedRowEvaluatorV1 for MainOpenedRowEvaluatorV1<'_, '
         })
     }
 }
-
 #[cfg(test)]
 impl aggregate::AggregateOpenedRowEvaluatorV1 for DerOpenedRowEvaluatorV1<'_> {
     fn evaluate_opened_row_v1(
@@ -2476,7 +2411,6 @@ impl aggregate::AggregateOpenedRowEvaluatorV1 for DerOpenedRowEvaluatorV1<'_> {
         })
     }
 }
-
 #[cfg(test)]
 impl aggregate::AggregateOpenedRowEvaluatorV1 for IoOpenedRowEvaluatorV1<'_> {
     fn evaluate_opened_row_v1(
@@ -2545,7 +2479,6 @@ impl aggregate::AggregateOpenedRowEvaluatorV1 for IoOpenedRowEvaluatorV1<'_> {
         })
     }
 }
-
 #[cfg(test)]
 pub(super) struct ProjectionOpenedRowEvaluatorV1<'a> {
     pub(super) aggregate_layout: &'a AggregateProofLayoutV1,
@@ -2556,7 +2489,6 @@ pub(super) struct ProjectionOpenedRowEvaluatorV1<'a> {
     pub(super) mixes: &'a [FriMixV1],
     pub(super) lde_root: F,
 }
-
 #[cfg(test)]
 pub(super) struct P256OpenedRowEvaluatorV1<'a> {
     pub(super) material: &'a P256OpenedMaterialV1,
@@ -2565,7 +2497,6 @@ pub(super) struct P256OpenedRowEvaluatorV1<'a> {
     pub(super) mixes: &'a [Vec<FriMixV1>],
     pub(super) lde_root: F,
 }
-
 pub(super) fn p256_scalar_opened_residues_v1(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_>,
@@ -2639,7 +2570,6 @@ pub(super) fn p256_scalar_opened_residues_v1(
     }
     Ok(residues)
 }
-
 pub(super) fn p256_opened_residues_v1(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_>,
@@ -2970,7 +2900,6 @@ pub(super) fn p256_opened_residues_v1(
     }
     Ok(core::mem::take(&mut residues))
 }
-
 #[cfg(test)]
 impl aggregate::AggregateOpenedRowEvaluatorV1 for P256OpenedRowEvaluatorV1<'_> {
     fn evaluate_opened_row_v1(
@@ -3081,7 +3010,6 @@ impl aggregate::AggregateOpenedRowEvaluatorV1 for P256OpenedRowEvaluatorV1<'_> {
         })
     }
 }
-
 #[cfg(test)]
 impl aggregate::AggregateOpenedRowEvaluatorV1 for ProjectionOpenedRowEvaluatorV1<'_> {
     fn evaluate_opened_row_v1(
@@ -3149,7 +3077,6 @@ impl aggregate::AggregateOpenedRowEvaluatorV1 for ProjectionOpenedRowEvaluatorV1
         })
     }
 }
-
 fn main_pre_aux_from_decoded_proof_v1(
     public: ZkX509CredentialPublicBindingV1,
     verifier_profile: ZkX509MainVerifierProfileV1,
@@ -3171,7 +3098,6 @@ fn main_pre_aux_from_decoded_proof_v1(
     session.accept_decoded_base_groups_v1(&proof.aggregate.trace_groups)?;
     session.finish_pre_aux_v1()
 }
-
 /// Decode the canonical MAIN proof and mint its verifier-owned X5B1 input.
 ///
 /// This performs the exact aggregate shape decode before exposing the opaque
@@ -3187,7 +3113,6 @@ pub(crate) fn zk_x509_main_pre_aux_from_proof_v1(
     let proof = decode_zk_x509_segmented_stark_proof_v1(envelope.aggregate_proof, &layout)?;
     main_pre_aux_from_decoded_proof_v1(public, verifier_profile, &layout, &proof)
 }
-
 /// Verify the complete six-group, 49-registration canonical MAIN aggregate.
 ///
 /// Every fixed opening is reconstructed after post-grinding query derivation.
@@ -3211,7 +3136,6 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
     if !credential_binding.matches_main_pre_aux_v1(main_pre_aux) {
         return Err(ZkX509StarkErrorV1::TranscriptMismatch);
     }
-
     let mut transcript =
         new_main_transcript_v1(&public.consensus_context_digest, verifier_profile)?;
     absorb_aggregate_layout_v1(&mut transcript, MAIN_LAYOUT_DOMAIN_V1, &layout)?;
@@ -3282,7 +3206,6 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
         &expected_indices,
     )
     .map_err(map_aggregate_error_v1)?;
-
     let sha_shape = ZkX509ShaCallPublicShapeV1 {
         disclosed_attributes: rfc_statement.disclosed_attribute_indices.len(),
     };
@@ -3350,7 +3273,6 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
         &mut evaluator,
     )
     .map_err(map_aggregate_error_v1)?;
-
     Ok(ZkX509MainCaBindingV1 {
         public,
         sha_terminals: envelope.claims.sha.credential_call_terminals_v1(),

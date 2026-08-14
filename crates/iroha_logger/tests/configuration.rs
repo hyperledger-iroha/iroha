@@ -2,17 +2,14 @@
 //!
 //! Ensures telemetry events are routed to the expected channel and
 //! that structured fields are preserved as emitted.
-
-use std::time::Duration;
-
 use iroha_data_model::nexus::{DataSpaceId, LaneId};
 use iroha_logger::{
     info,
     telemetry::{Channel, Event, Fields},
     test_logger,
 };
+use std::time::Duration;
 use tokio::time;
-
 #[tokio::test]
 async fn telemetry_separation_custom() {
     let mut receiver = test_logger()

@@ -1,9 +1,3 @@
-use std::{
-    error::Error,
-    io::{BufRead, Read, Write},
-    time::Instant,
-};
-
 use norito::{
     NoritoSerialize,
     codec::encode_with_header_flags,
@@ -21,7 +15,11 @@ use norito::{
 };
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-
+use std::{
+    error::Error,
+    io::{BufRead, Read, Write},
+    time::Instant,
+};
 /// Parameters controlling the streaming entropy benchmark.
 #[derive(Clone, Debug)]
 pub struct EntropyBenchOptions {
@@ -36,7 +34,6 @@ pub struct EntropyBenchOptions {
     pub target_bitrates_mbps: Vec<f64>,
     pub tiny_clip_preset: bool,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PsnrMode {
     /// Luma-only PSNR (default).
@@ -44,7 +41,6 @@ pub enum PsnrMode {
     /// Full-frame PSNR over YUV420.
     Yuv,
 }
-
 impl PsnrMode {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -53,7 +49,6 @@ impl PsnrMode {
         }
     }
 }
-
 impl Default for EntropyBenchOptions {
     fn default() -> Self {
         Self {
@@ -70,7 +65,6 @@ impl Default for EntropyBenchOptions {
         }
     }
 }
-
 struct ModeBench {
     entropy_mode: EntropyMode,
     bundle_width: u8,
@@ -83,12 +77,10 @@ struct ModeBench {
     quantizer: u8,
     stream_bitrate_mbps: f64,
 }
-
 impl ModeBench {
     fn to_json(&self) -> Value {
         let elapsed_seconds = (self.encode_ms / 1_000.0).max(f64::MIN_POSITIVE);
         let bitrate_mbps = ((self.chunk_bytes as f64) * 8.0 / elapsed_seconds) / 1_000_000.0;
-
         let mut map = json::Map::new();
         map.insert(
             "entropy_mode".into(),
@@ -117,7 +109,6 @@ impl ModeBench {
         Value::Object(map)
     }
 }
-
 struct ModeOutcome {
     bench: ModeBench,
     segments: Vec<EncodedSegment>,
@@ -125,12 +116,10 @@ struct ModeOutcome {
     decoded_chroma: Vec<Chroma420Frame>,
     frame_duration_ns: u32,
 }
-
 struct QuantizerRun {
     quantizer: u8,
     outcome: ModeOutcome,
 }
-
 impl QuantizerRun {
     fn to_json(&self) -> Value {
         let mut map = json::Map::new();
@@ -139,7 +128,6 @@ impl QuantizerRun {
         Value::Object(map)
     }
 }
-
 /// Execute the bundled entropy benchmark.
 pub fn run_entropy_bench(options: EntropyBenchOptions) -> Result<Value, Box<dyn Error>> {
     if options.frames_per_segment == 0 {
@@ -148,7 +136,6 @@ pub fn run_entropy_bench(options: EntropyBenchOptions) -> Result<Value, Box<dyn 
     if options.segments == 0 {
         return Err("segments must be greater than zero".into());
     }
-
     let mut rng = ChaCha20Rng::seed_from_u64(0x5EED);
     let (frame_dimensions, frames, chroma_frames, frames_per_segment, segments, bundle_width) =
         if let Some(y4m_path) = options.y4m_in.as_ref() {
@@ -194,7 +181,6 @@ pub fn run_entropy_bench(options: EntropyBenchOptions) -> Result<Value, Box<dyn 
                 bundle_width,
             )
         };
-
     let mut quantizers = options.quantizers.clone();
     if quantizers.is_empty() {
         quantizers.push(16);
@@ -206,11 +192,9 @@ pub fn run_entropy_bench(options: EntropyBenchOptions) -> Result<Value, Box<dyn 
     }
     quantizers.sort_unstable();
     quantizers.dedup();
-
     if !BUNDLED_RANS_BUILD_AVAILABLE {
         return Err("Bundled rANS support is required; rebuild with ENABLE_RANS_BUNDLES=1".into());
     }
-
     let mut runs = Vec::with_capacity(quantizers.len());
     for quantizer in quantizers {
         let bundled = bench_mode(
@@ -229,10 +213,8 @@ pub fn run_entropy_bench(options: EntropyBenchOptions) -> Result<Value, Box<dyn 
             outcome: bundled,
         });
     }
-
     let primary_idx = select_primary_run(&runs, options.target_bitrates_mbps.first().copied());
     let primary = runs.get(primary_idx).ok_or("no quantizer runs executed")?;
-
     let quantizer_attempts = runs
         .iter()
         .map(|run| {
@@ -244,7 +226,6 @@ pub fn run_entropy_bench(options: EntropyBenchOptions) -> Result<Value, Box<dyn 
             )
         })
         .collect::<Vec<_>>();
-
     let bitrate_targets = build_bitrate_targets(&runs, &options.target_bitrates_mbps);
     let target_array = Value::Array(
         options
@@ -254,7 +235,6 @@ pub fn run_entropy_bench(options: EntropyBenchOptions) -> Result<Value, Box<dyn 
             .map(Value::from)
             .collect(),
     );
-
     let mut root = json::Map::new();
     root.insert(
         "frames_per_segment".into(),
@@ -294,7 +274,6 @@ pub fn run_entropy_bench(options: EntropyBenchOptions) -> Result<Value, Box<dyn 
     );
     root.insert("bench".into(), primary.outcome.bench.to_json());
     root.insert("bitrate_targets".into(), Value::Array(bitrate_targets));
-
     if let Some(out_path) = options.chunk_out {
         write_segment_bundles(
             &out_path,
@@ -325,10 +304,8 @@ pub fn run_entropy_bench(options: EntropyBenchOptions) -> Result<Value, Box<dyn 
             Some(&primary.outcome.decoded_chroma),
         )?;
     }
-
     Ok(json::Value::Object(root))
 }
-
 #[allow(clippy::too_many_arguments)]
 fn bench_mode(
     frame_dimensions: FrameDimensions,
@@ -350,7 +327,6 @@ fn bench_mode(
     if chroma.len() != frames.len() {
         return Err("chroma frame count does not match supplied frames".into());
     }
-
     let bundle_width = bundle_width.max(2);
     let config = BaselineEncoderConfig {
         frame_dimensions,
@@ -362,7 +338,6 @@ fn bench_mode(
         bundle_acceleration: bundle_accel,
         ..BaselineEncoderConfig::default()
     };
-
     let mut encoder = BaselineEncoder::new(config.clone());
     let mut encoded_segments = Vec::with_capacity(usize::from(segments));
     let encode_start = Instant::now();
@@ -377,7 +352,6 @@ fn bench_mode(
         )?);
     }
     let encode_ms = encode_start.elapsed().as_secs_f64() * 1_000.0;
-
     let chunk_bytes: usize = encoded_segments
         .iter()
         .map(|segment| {
@@ -388,7 +362,6 @@ fn bench_mode(
                 .sum::<usize>()
         })
         .sum();
-
     let decoder = BaselineDecoder::new(frame_dimensions, config.frame_duration_ns);
     let decode_start = Instant::now();
     let mut decoded_frames: Vec<RawFrame> =
@@ -423,7 +396,6 @@ fn bench_mode(
             frame_dimensions,
         )?),
     };
-
     Ok(ModeOutcome {
         bench: ModeBench {
             entropy_mode: EntropyMode::RansBundled,
@@ -448,13 +420,11 @@ fn bench_mode(
         frame_duration_ns: config.frame_duration_ns,
     })
 }
-
 struct ParsedY4m {
     dimensions: FrameDimensions,
     frames: Vec<RawFrame>,
     chroma: Vec<Chroma420Frame>,
 }
-
 fn parse_y4m_frames(path: &std::path::Path) -> Result<ParsedY4m, Box<dyn Error>> {
     let mut reader = std::io::BufReader::new(std::fs::File::open(path)?);
     let mut header = String::new();
@@ -484,7 +454,6 @@ fn parse_y4m_frames(path: &std::path::Path) -> Result<ParsedY4m, Box<dyn Error>>
     let luma_len = usize::from(width) * usize::from(height);
     let chroma_plane_len = luma_len / 4;
     let frame_len = luma_len + chroma_plane_len * 2;
-
     let mut frames = Vec::new();
     let mut chroma_frames = Vec::new();
     loop {
@@ -509,7 +478,6 @@ fn parse_y4m_frames(path: &std::path::Path) -> Result<ParsedY4m, Box<dyn Error>>
         chroma: chroma_frames,
     })
 }
-
 fn compute_psnr_y(
     reference: &[RawFrame],
     segments: u16,
@@ -558,7 +526,6 @@ fn compute_psnr_y(
     let mse = sum_sq_error / (total_samples as f64);
     Ok(10.0 * ((255.0_f64 * 255.0_f64) / mse).log10())
 }
-
 fn compute_psnr_yuv(
     reference: &[RawFrame],
     reference_chroma: &[Chroma420Frame],
@@ -652,7 +619,6 @@ fn compute_psnr_yuv(
     let mse = sum_sq_error / (total_samples as f64);
     Ok(10.0 * ((255.0_f64 * 255.0_f64) / mse).log10())
 }
-
 fn stream_bitrate_mbps(
     chunk_bytes: usize,
     frames_per_segment: u16,
@@ -670,7 +636,6 @@ fn stream_bitrate_mbps(
     }
     ((chunk_bytes as f64) * 8.0) / total_seconds / 1_000_000.0
 }
-
 fn attempt_entry(
     quantizer: u8,
     bench: &ModeBench,
@@ -689,7 +654,6 @@ fn attempt_entry(
     );
     Value::Object(map)
 }
-
 fn select_primary_run(runs: &[QuantizerRun], target_bitrate: Option<f64>) -> usize {
     if runs.is_empty() {
         return 0;
@@ -710,7 +674,6 @@ fn select_primary_run(runs: &[QuantizerRun], target_bitrate: Option<f64>) -> usi
         0
     }
 }
-
 fn bitrate_entry(quantizer: u8, bench: &ModeBench, target: f64) -> Value {
     let mut map = json::Map::new();
     map.insert("quantizer".into(), Value::from(quantizer));
@@ -735,7 +698,6 @@ fn bitrate_entry(quantizer: u8, bench: &ModeBench, target: f64) -> Value {
     );
     Value::Object(map)
 }
-
 fn best_entry_for_target(runs: &[QuantizerRun], target: f64) -> Option<Value> {
     runs.iter()
         .map(|run| (run.quantizer, &run.outcome.bench))
@@ -748,7 +710,6 @@ fn best_entry_for_target(runs: &[QuantizerRun], target: f64) -> Option<Value> {
         })
         .map(|(quantizer, bench)| bitrate_entry(quantizer, bench, target))
 }
-
 fn build_bitrate_targets(runs: &[QuantizerRun], targets: &[f64]) -> Vec<Value> {
     targets
         .iter()
@@ -764,7 +725,6 @@ fn build_bitrate_targets(runs: &[QuantizerRun], targets: &[f64]) -> Vec<Value> {
         })
         .collect()
 }
-
 fn write_y4m_frames(
     path: &std::path::Path,
     dimensions: FrameDimensions,
@@ -804,7 +764,6 @@ fn write_y4m_frames(
     }
     Ok(())
 }
-
 fn write_segment_bundles(
     path: &std::path::Path,
     segments: &[EncodedSegment],
@@ -876,7 +835,6 @@ fn write_segment_bundles(
     std::fs::write(path, bytes)?;
     Ok(())
 }
-
 /// Options driving `streaming-decode` invocations.
 #[derive(Clone, Debug)]
 pub struct DecodeOptions {
@@ -889,7 +847,6 @@ pub struct DecodeOptions {
     /// Mode controlling PSNR computation.
     pub psnr_mode: PsnrMode,
 }
-
 /// Decode a serialized bundle into a Y4M clip (and optional PSNR summary).
 pub fn run_streaming_decode(options: DecodeOptions) -> Result<Value, Box<dyn Error>> {
     let bytes = std::fs::read(&options.bundle_path)?;
@@ -932,9 +889,7 @@ pub fn run_streaming_decode(options: DecodeOptions) -> Result<Value, Box<dyn Err
             chroma_frames.push(chroma_frame);
         }
     }
-
     write_y4m_frames(&options.y4m_out, dims, &frames, Some(&chroma_frames))?;
-
     let mut root = json::Map::new();
     root.insert(
         "input".into(),
@@ -949,7 +904,6 @@ pub fn run_streaming_decode(options: DecodeOptions) -> Result<Value, Box<dyn Err
     root.insert("height".into(), Value::from(dims.height));
     root.insert("frame_duration_ns".into(), Value::from(frame_duration_ns));
     root.insert("psnr_mode".into(), Value::from(options.psnr_mode.as_str()));
-
     if let Some(reference) = options.reference_y4m.as_ref() {
         let parsed = parse_y4m_frames(reference)?;
         let psnr = compute_psnr_y(&parsed.frames, 1, &frames, dims)?;
@@ -970,11 +924,9 @@ pub fn run_streaming_decode(options: DecodeOptions) -> Result<Value, Box<dyn Err
             Value::from(reference.display().to_string()),
         );
     }
-
     let report = Value::Object(root);
     Ok(report)
 }
-
 fn build_frames(
     dimensions: FrameDimensions,
     count: usize,
@@ -988,7 +940,6 @@ fn build_frames(
     }
     Ok(frames)
 }
-
 fn build_chroma_frames(
     dimensions: FrameDimensions,
     count: usize,

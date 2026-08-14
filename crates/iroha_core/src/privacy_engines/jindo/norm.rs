@@ -3,12 +3,10 @@
 //! The largest squared coefficient sum does not fit `u128`.  This small
 //! four-limb accumulator avoids floating point, platform-dependent square
 //! roots, saturation, and a new big-integer dependency in consensus code.
-
 use super::{
     JINDO_RING_DEGREE_V1,
     ring::{JindoPrimeModulusV1, JindoRnsPolynomialV1},
 };
-
 /// Square of the exact pinned inner-response norm ceiling.
 ///
 /// The ceiling itself is `26_726_985_705_641_897_984`, the exact integer
@@ -19,7 +17,6 @@ pub(crate) const JINDO_RESPONSE_NORM_SQUARED_BOUND_V1: [u64; 4] = [
     0x0000_0000_0000_0002,
     0x0000_0000_0000_0000,
 ];
-
 /// Square of the exact pinned outer-relation norm ceiling.
 ///
 /// The ceiling itself is `4_811_910_842_327_350_272`.
@@ -29,10 +26,8 @@ pub(crate) const JINDO_DECOMPOSED_NORM_SQUARED_BOUND_V1: [u64; 4] = [
     0x0000_0000_0000_0000,
     0x0000_0000_0000_0000,
 ];
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct U256([u64; 4]);
-
 impl U256 {
     fn checked_add_square(&mut self, magnitude: u128) -> bool {
         let square = square_u128(magnitude);
@@ -44,7 +39,6 @@ impl U256 {
         }
         carry == 0
     }
-
     fn less_than(self, rhs: [u64; 4]) -> bool {
         for index in (0..4).rev() {
             if self.0[index] != rhs[index] {
@@ -54,7 +48,6 @@ impl U256 {
         false
     }
 }
-
 fn square_u128(value: u128) -> [u64; 4] {
     let limbs = [value as u64, (value >> 64) as u64];
     let mut product = [0_u64; 4];
@@ -79,7 +72,6 @@ fn square_u128(value: u128) -> [u64; 4] {
     }
     product
 }
-
 pub(crate) fn two_norm_squared_is_below_v1(
     polynomials: &[JindoRnsPolynomialV1],
     moduli: [JindoPrimeModulusV1; 2],
@@ -96,12 +88,10 @@ pub(crate) fn two_norm_squared_is_below_v1(
     }
     sum.less_than(bound_squared)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::privacy_engines::jindo::ring::JINDO_INNER_MODULI_V1;
-
     #[test]
     fn full_width_squaring_matches_independent_known_answers() {
         for (value, expected) in [
@@ -124,20 +114,16 @@ mod tests {
             assert_eq!(square_u128(value), expected);
         }
     }
-
     #[test]
     fn accumulator_detects_overflow_and_strict_boundary() {
         let accumulator = U256(JINDO_RESPONSE_NORM_SQUARED_BOUND_V1);
         assert!(!accumulator.less_than(JINDO_RESPONSE_NORM_SQUARED_BOUND_V1));
-
         let mut below = JINDO_RESPONSE_NORM_SQUARED_BOUND_V1;
         below[0] -= 1;
         assert!(U256(below).less_than(JINDO_RESPONSE_NORM_SQUARED_BOUND_V1));
-
         let mut overflow = U256([u64::MAX; 4]);
         assert!(!overflow.checked_add_square(1));
     }
-
     #[test]
     fn polynomial_norm_uses_balanced_crt_representatives() {
         let mut coefficients = [0_i128; JINDO_RING_DEGREE_V1];

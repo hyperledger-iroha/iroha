@@ -1,6 +1,5 @@
 //! Governance referendum window guard tests (plain ballots).
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -18,7 +17,6 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
-
 #[test]
 fn plain_ballot_rejected_outside_window() {
     // Build minimal state/transaction
@@ -55,7 +53,6 @@ fn plain_ballot_rejected_outside_window() {
         Grant::account_permission(ballot_perm, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("grant ballot permission");
-
         let ballot = CastPlainBallot {
             referendum_id: "ref-window".to_string(),
             owner: ALICE_ID.clone(),
@@ -72,7 +69,6 @@ fn plain_ballot_rejected_outside_window() {
             "unexpected error: {err}"
         );
     }
-
     {
         // Advance to block after end, ensure still rejected
         let header_late = BlockHeader::new(nonzero!(7_u64), None, None, None, 0, 0);

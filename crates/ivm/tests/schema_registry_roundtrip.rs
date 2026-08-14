@@ -1,7 +1,5 @@
 //! SchemaRegistry encode/decode sanity tests
-
 use ivm::schema_registry::{DefaultRegistry, SchemaRegistry};
-
 #[test]
 fn order_encode_decode_roundtrip() {
     let reg = DefaultRegistry::new();

@@ -1,13 +1,11 @@
 #![allow(clippy::manual_div_ceil)]
 use iroha_schema::IntoSchema;
 use norito::core::*;
-
 #[derive(IntoSchema, NoritoSerialize, NoritoDeserialize)]
 struct Rename {
     #[norito(rename = "z")]
     x: u32,
 }
-
 #[test]
 fn rename_roundtrip() {
     let r = Rename { x: 42 };
@@ -16,7 +14,6 @@ fn rename_roundtrip() {
     let decoded = <Rename as NoritoDeserialize>::deserialize(archived);
     assert_eq!(decoded.x, 42);
 }
-
 #[derive(IntoSchema, NoritoSerialize, NoritoDeserialize)]
 struct SkipDefault {
     a: u32,
@@ -25,7 +22,6 @@ struct SkipDefault {
     #[norito(default)]
     c: u32,
 }
-
 #[test]
 fn skip_and_default() {
     let s = SkipDefault { a: 5, b: 7, c: 9 };

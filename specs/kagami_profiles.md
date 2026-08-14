@@ -9,6 +9,17 @@ genesis manifests without juggling per-network knobs.
 - Verification: `cargo run -p iroha_kagami -- verify --profile <profile> --genesis <path> [--vrf-seed-hex <hex>]` replays profile expectations (chain id, DA/RBC, collectors, PoP coverage, consensus fingerprint). Supply `--vrf-seed-hex` only when verifying an NPoS manifest for taira/nexus.
 - Signed fixture bundles pass an explicit `--creation-time-ms` to `kagami genesis sign`; this fixes transaction and block timestamps so repeated profile generation produces identical `genesis.signed.nrt` bytes.
 - Every generated validator config allocates one isolated body-ingress byte partition per frozen validator, configured authenticated non-validator source, and anonymous source. The aggregate therefore scales with the complete generated committee instead of inheriting the four-validator default floor.
+- Topology: the Taira fixture renders seven logical lanes over the five catalogued
+  physical dataspaces (`universal`, `dpn`, `is`, `is2`, `cbsi`), with
+  `core`/`governance`/`zk` all bound to `universal`. The Nexus/Minamoto fixture
+  renders those three logical lanes in the single `universal` dataspace.
+  Namespace text remains a separate binding layer and is never promoted into
+  either catalog.
+- Physical-deployment limit: the deterministic Taira sample uses one harness
+  committee to test config/genesis binding. It does not provision five
+  disjoint server cohorts or their per-dataspace manifests, so it is not
+  deployable evidence for those physical boundaries; the rollout gate remains
+  fail-closed until the deployment repository supplies that evidence.
 - Sample bundles: pre-generated bundles live under `defaults/kagami/iroha3-{dev,taira,nexus}/` (genesis.json, config.toml, docker-compose.yml, verify.txt, README). Regenerate with `cargo xtask kagami-profiles [--profile <name>|all] [--out <dir>] [--kagami <bin>] [--nexus-xor-asset-definition-id <BASE58>]`; the Nexus flag is required when generating `iroha3-nexus` or `all`.
 - Mochi: `mochi`/`mochi-genesis` accept `--genesis-profile <profile>` and `--vrf-seed-hex <hex>` (NPoS only), forward them to Kagami, and print the same Kagami summary to stdout/stderr when a profile is used.
 

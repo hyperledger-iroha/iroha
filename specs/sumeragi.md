@@ -1,5 +1,13 @@
 # Sumeragi consensus
 
+Finite Sumeragi Torii reads are operator-only. For brevity, every
+`iroha[_cli] ... ops sumeragi ...` example in this specification assumes the
+global `--operator-private-key-file /absolute/runtime/operator.key` option.
+The key must be an explicitly supplied allow-listed operator key and is bound
+to the exact `network_id` in the client configuration; account keys, tokens,
+redirects, and retries are not fallbacks. `/v1/sumeragi/status/sse` remains the
+intentional public protocol-handshake stream.
+
 ## Authoritative Sumeragi v2 revision 4
 
 Revision 4 is the first-release production consensus contract. Wire and pure
@@ -779,9 +787,9 @@ the consensus backoff contract.
   reducer height/view/phase, frozen epoch/quorum, durable CommitQC, bounded queue
   pressure, and canonical lane evidence counts. Use the dedicated telemetry,
   RBC, and phase endpoints for non-consensus counters. Pair the view with
-  `iroha app nexus lane-report --only-incomplete --fail-on-incomplete` during
-  upgrades to fail a pipeline when retained lane sessions or certified blocks
-  have not completed their certification/application path.
+  `iroha --operator-private-key-file /absolute/runtime/operator.key app nexus lane-report --only-missing --fail-on-sealed` during
+  upgrades to fail a pipeline when a required lane-governance manifest remains
+  sealed.
 6. Once service resumes, document the incident and restore redundant-send and
    collector parameters to their baseline values.
 

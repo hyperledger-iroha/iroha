@@ -48,9 +48,7 @@
 //! mode-gated as `RefreshOnlyV1`, while governed `FullBootstrapV1` material is
 //! admitted and executed through explicit artifact-aware entry points so
 //! encrypted-zero refresh masks cannot be mixed into full-bootstrap jobs.
-
-use std::{fmt, string::String, sync::OnceLock, vec::Vec};
-
+use crate::{Algorithm, Hash, PrivateKey, PublicKey, SignatureOf, sha256};
 use blake2::{Blake2b, digest::consts::U32};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -59,12 +57,14 @@ use norito::derive::{JsonDeserialize, JsonSerialize};
 use rand::{Rng as _, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
 use sha2::{Digest as _, Sha256};
+use std::{fmt, string::String, sync::OnceLock, vec::Vec};
 use thiserror::Error;
-
-use crate::{Algorithm, Hash, PrivateKey, PublicKey, SignatureOf, sha256};
-
 type BfvBlake2b256 = Blake2b<U32>;
-
+macro_rules! invalid {
+    ($($arg:tt)*) => {
+        BfvError::InvalidParameters(format!($($arg)*))
+    };
+}
 const KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.keygen.v1";
 const BOUNDED_NOISE_KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.keygen.bounded_noise.v1";
 /// Seed-derivation domain for exact-lift BFV encryption and rotation refreshes.
@@ -587,7 +587,6 @@ const BFV_FULL_BOOTSTRAP_ARTIFACT_TEXT_PLACEHOLDER_MARKERS: &[&[u8]] = &[
 ];
 const BFV_FULL_BOOTSTRAP_COLLAPSED_PLACEHOLDER_MARKER_MIN_BYTES: usize = 5;
 static BFV_FULL_BOOTSTRAP_COLLAPSED_PLACEHOLDER_MARKERS: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
-
 fn push_bfv_full_bootstrap_release_audit_inert_artifact_digests_v1(
     digests: &mut Vec<(Hash, &'static str)>,
     artifact_header: &[u8],
@@ -627,7 +626,6 @@ fn push_bfv_full_bootstrap_release_audit_inert_artifact_digests_v1(
         }
     }
 }
-
 fn bfv_full_bootstrap_release_audit_inert_artifact_digests_for_header_v1(
     artifact_header: &[u8],
     min_body_bytes: usize,
@@ -657,7 +655,6 @@ fn bfv_full_bootstrap_release_audit_inert_artifact_digests_for_header_v1(
             .as_slice(),
     )
 }
-
 fn push_bfv_full_bootstrap_release_audit_delayed_placeholder_artifact_digest_variants_v1(
     digests: &mut Vec<Hash>,
     artifact_header: &[u8],
@@ -703,7 +700,6 @@ fn push_bfv_full_bootstrap_release_audit_delayed_placeholder_artifact_digest_var
         }
     }
 }
-
 fn push_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_variants_v1(
     digests: &mut Vec<Hash>,
     artifact_header: &[u8],
@@ -716,7 +712,6 @@ fn push_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_variants_v1
         uppercase_body,
         &[],
     ));
-
     let long_body_padding_len = BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PADDING_BYTES
         .checked_sub(body.len())
         .expect("BFV full-bootstrap release-audit placeholder bodies fit padding sentinel length");
@@ -726,7 +721,6 @@ fn push_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_variants_v1
         uppercase_body,
         &[&BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_X_PADDING[..long_body_padding_len]],
     ));
-
     let spaced_long_body_padding_len =
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PADDING_BYTES
             .checked_sub(body.len() + 1)
@@ -743,7 +737,6 @@ fn push_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_variants_v1
                 [..spaced_long_body_padding_len],
         ],
     ));
-
     digests.push(hash_chunks_with_optional_ascii_upper_body(
         &[
             artifact_header,
@@ -753,7 +746,6 @@ fn push_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_variants_v1
         uppercase_body,
         &[],
     ));
-
     for prefix in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES {
         digests.push(hash_chunks_with_optional_ascii_upper_body(
             &[artifact_header, *prefix],
@@ -762,14 +754,12 @@ fn push_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_variants_v1
             &[],
         ));
     }
-
     push_bfv_full_bootstrap_release_audit_delayed_placeholder_artifact_digest_variants_v1(
         digests,
         artifact_header,
         body,
         uppercase_body,
     );
-
     digests.push(hash_chunks_with_optional_ascii_upper_body(
         &[artifact_header, &[0xff]],
         body,
@@ -777,7 +767,6 @@ fn push_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_variants_v1
         &[],
     ));
 }
-
 fn push_bfv_full_bootstrap_release_audit_separator_spelled_placeholder_artifact_digests_v1(
     digests: &mut Vec<Hash>,
     artifact_header: &[u8],
@@ -799,7 +788,6 @@ fn push_bfv_full_bootstrap_release_audit_separator_spelled_placeholder_artifact_
             );
         }
     }
-
     for (token, suffix) in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SEPARATOR_SPELLED_BODY_SUFFIXES {
         for separator in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SEPARATOR_BYTES {
             let mut body = separator_spell_ascii_token(token, *separator);
@@ -819,7 +807,6 @@ fn push_bfv_full_bootstrap_release_audit_separator_spelled_placeholder_artifact_
         }
     }
 }
-
 fn bfv_full_bootstrap_release_audit_placeholder_artifact_digests_for_header_v1(
     artifact_header: &[u8],
 ) -> Option<&'static [Hash]> {
@@ -859,7 +846,6 @@ fn bfv_full_bootstrap_release_audit_placeholder_artifact_digests_for_header_v1(
             .as_slice(),
     )
 }
-
 fn is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_for_body_variant_v1(
     digest: &Hash,
     artifact_header: &[u8],
@@ -871,7 +857,6 @@ fn is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_for_body_vari
     {
         return true;
     }
-
     let long_body_padding_len = BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PADDING_BYTES
         .checked_sub(body.len())
         .expect("BFV full-bootstrap release-audit placeholder bodies fit padding sentinel length");
@@ -888,7 +873,6 @@ fn is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_for_body_vari
     {
         return true;
     }
-
     let spaced_long_body_padding_len =
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PADDING_BYTES
             .checked_sub(body.len() + 1)
@@ -909,7 +893,6 @@ fn is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_for_body_vari
     {
         return true;
     }
-
     if *digest
         == hash_chunks_with_optional_ascii_upper_body(
             &[
@@ -923,7 +906,6 @@ fn is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_for_body_vari
     {
         return true;
     }
-
     for prefix in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES {
         if *digest
             == hash_chunks_with_optional_ascii_upper_body(
@@ -936,7 +918,6 @@ fn is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_for_body_vari
             return true;
         }
     }
-
     if is_bfv_full_bootstrap_release_audit_delayed_placeholder_artifact_digest_for_body_variant_v1(
         digest,
         artifact_header,
@@ -945,7 +926,6 @@ fn is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_for_body_vari
     ) {
         return true;
     }
-
     *digest
         == hash_chunks_with_optional_ascii_upper_body(
             &[artifact_header, &[0xff]],
@@ -954,7 +934,6 @@ fn is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_for_body_vari
             &[],
         )
 }
-
 fn is_bfv_full_bootstrap_release_audit_delayed_placeholder_artifact_digest_for_body_variant_v1(
     digest: &Hash,
     artifact_header: &[u8],
@@ -1021,7 +1000,6 @@ fn is_bfv_full_bootstrap_release_audit_delayed_placeholder_artifact_digest_for_b
     }
     false
 }
-
 fn is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_for_body_v1(
     digest: &Hash,
     artifact_header: &[u8],
@@ -1045,7 +1023,6 @@ fn is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_for_body_v1(
         true,
     )
 }
-
 fn is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_v1(
     digest: &Hash,
     artifact_header: &[u8],
@@ -1065,7 +1042,6 @@ fn is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_v1(
             )
         })
 }
-
 fn bfv_full_bootstrap_release_audit_inert_body_digest_lengths_v1(
     min_body_bytes: usize,
 ) -> [usize; 4] {
@@ -1076,7 +1052,6 @@ fn bfv_full_bootstrap_release_audit_inert_body_digest_lengths_v1(
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_BODY_TEST_PADDING_BYTES + 1,
     ]
 }
-
 fn sha256_chunks_with_optional_ascii_upper_body(
     prefix_chunks: &[&[u8]],
     body: &[u8],
@@ -1099,7 +1074,6 @@ fn sha256_chunks_with_optional_ascii_upper_body(
     }
     hasher.finalize().into()
 }
-
 fn hash_chunks_with_optional_ascii_upper_body(
     prefix_chunks: &[&[u8]],
     body: &[u8],
@@ -1122,7 +1096,6 @@ fn hash_chunks_with_optional_ascii_upper_body(
     }
     Hash::prehashed(hasher.finalize().into())
 }
-
 fn push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
     digests: &mut Vec<[u8; Hash::LENGTH]>,
     body: &[u8],
@@ -1134,7 +1107,6 @@ fn push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
         uppercase_body,
         &[],
     ));
-
     let long_body_padding_len = BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES
         .checked_sub(body.len())
         .expect("BFV full-bootstrap native placeholder bodies fit padding sentinel length");
@@ -1144,7 +1116,6 @@ fn push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
         uppercase_body,
         &[&BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_X_PADDING[..long_body_padding_len]],
     ));
-
     let spaced_long_body_padding_len = BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_PADDING_BYTES
         .checked_sub(body.len() + 1)
         .expect("BFV full-bootstrap native placeholder bodies fit spaced padding sentinel length");
@@ -1157,14 +1128,12 @@ fn push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
             &BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_X_PADDING[..spaced_long_body_padding_len],
         ],
     ));
-
     digests.push(sha256_chunks_with_optional_ascii_upper_body(
         &[&BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_DIGEST_SPACE_PADDING],
         body,
         uppercase_body,
         &[],
     ));
-
     for prefix in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_DIGEST_PREFIXES {
         digests.push(sha256_chunks_with_optional_ascii_upper_body(
             &[*prefix],
@@ -1173,7 +1142,6 @@ fn push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
             &[],
         ));
     }
-
     for prefix in BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PLACEHOLDER_DIGEST_DELAY_PREFIXES {
         digests.push(sha256_chunks_with_optional_ascii_upper_body(
             &[*prefix],
@@ -1211,7 +1179,6 @@ fn push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
             ));
         }
     }
-
     digests.push(sha256_chunks_with_optional_ascii_upper_body(
         &[&[0xff]],
         body,
@@ -1219,7 +1186,6 @@ fn push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
         &[],
     ));
 }
-
 fn separator_spell_ascii_token(token: &[u8], separator: u8) -> Vec<u8> {
     let mut spelled = Vec::with_capacity(token.len().saturating_mul(2).saturating_sub(1));
     for (index, byte) in token.iter().copied().enumerate() {
@@ -1230,7 +1196,6 @@ fn separator_spell_ascii_token(token: &[u8], separator: u8) -> Vec<u8> {
     }
     spelled
 }
-
 fn push_bfv_full_bootstrap_native_payload_separator_spelled_digests_v1(
     digests: &mut Vec<[u8; Hash::LENGTH]>,
 ) {
@@ -1243,7 +1208,6 @@ fn push_bfv_full_bootstrap_native_payload_separator_spelled_digests_v1(
             push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
                 digests, &body, true,
             );
-
             let mut suffixed = body;
             suffixed.extend_from_slice(BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_PROOF_KEY_SUFFIX);
             push_bfv_full_bootstrap_native_payload_placeholder_body_digests_v1(
@@ -1270,7 +1234,6 @@ fn push_bfv_full_bootstrap_native_payload_separator_spelled_digests_v1(
         }
     }
 }
-
 fn bfv_full_bootstrap_native_payload_inert_digests_v1() -> &'static [[u8; Hash::LENGTH]] {
     BFV_FULL_BOOTSTRAP_NATIVE_PAYLOAD_INERT_DIGESTS_V1
         .get_or_init(|| {
@@ -1300,7 +1263,6 @@ fn bfv_full_bootstrap_native_payload_inert_digests_v1() -> &'static [[u8; Hash::
         })
         .as_slice()
 }
-
 fn is_bfv_full_bootstrap_native_payload_inert_digest_v1(digest: &[u8; Hash::LENGTH]) -> bool {
     bfv_full_bootstrap_native_payload_inert_digests_v1().contains(digest)
 }
@@ -1465,27 +1427,21 @@ const BFV_RNS_MODULUS_CHAIN_MAX_LIMBS: usize = 8;
 const BFV_PRIMITIVE_ROOT_DISCOVERY_MAX_CANDIDATES: u64 = 4_096;
 const BFV_ERROR_MULTIPLE_BOUND: u8 = 1;
 const BFV_BOUNDED_NOISE_COEFFICIENT_BOUND: u8 = 1;
-
 /// First-release multiplicative-depth budget for compact profile descriptors.
 pub const BFV_EXACT_EVALUATOR_MAX_MULTIPLICATIVE_DEPTH_U8: u8 = 16;
 /// First-release multiplicative-depth budget for the exact BFV evaluator bridge.
 pub const BFV_EXACT_EVALUATOR_MAX_MULTIPLICATIVE_DEPTH: u16 = 16;
-
 /// Registered RAM-LFE BFV plaintext modulus.
 ///
 /// RAM-LFE byte predicates evaluate `eq0(x) = 1 - x^256`; this requires a
 /// prime plaintext field that contains every byte value as a field element.
 pub const RAM_LFE_BFV_PLAINTEXT_MODULUS: u64 = 257;
-
 /// Registered RAM-LFE BFV ciphertext modulus.
 pub const RAM_LFE_BFV_CIPHERTEXT_MODULUS: u64 = RAM_LFE_BFV_PLAINTEXT_MODULUS * (1_u64 << 48);
-
 /// Number of BFV ciphertext slots in the registered RAM-LFE identifier envelope.
 pub const RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT: usize = 64;
-
 /// Maximum raw UTF-8 bytes accepted by the registered RAM-LFE identifier envelope.
 pub const RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES: u16 = 63;
-
 /// Registered RAM-LFE BFV RNS coefficient-modulus chain.
 ///
 /// The limbs are odd primes, strictly increasing, pairwise coprime, and
@@ -1495,7 +1451,6 @@ pub const RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES: u16 = 63;
 pub const RAM_LFE_BFV_RNS_MODULI_V1: [u64; 8] = [
     30_593, 30_977, 31_489, 31_873, 32_257, 33_409, 35_201, 35_969,
 ];
-
 /// Registered primitive `2n`-th roots for negacyclic NTT evaluation over
 /// [`RAM_LFE_BFV_RNS_MODULI_V1`].
 ///
@@ -1503,9 +1458,7 @@ pub const RAM_LFE_BFV_RNS_MODULI_V1: [u64; 8] = [
 /// before registered production RNS chains are admitted.
 pub const RAM_LFE_BFV_RNS_NEGACYCLIC_ROOTS_V1: [u64; 8] =
     [10_567, 4_247, 2_375, 14_967, 28_384, 4_557, 13_827, 22_798];
-
 type Polynomial = Vec<u64>;
-
 /// Public operation budget for the first-release exact BFV evaluator bridge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BfvEvaluationBudget {
@@ -1514,7 +1467,6 @@ pub struct BfvEvaluationBudget {
     /// Maximum public bootstrap refresh rounds.
     pub max_bootstrap_refresh_rounds: u16,
 }
-
 impl BfvEvaluationBudget {
     /// Return the budget used by the first-release exact BFV evaluator bridge.
     #[must_use]
@@ -1524,7 +1476,6 @@ impl BfvEvaluationBudget {
             max_bootstrap_refresh_rounds: BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS,
         }
     }
-
     /// Validate a planned BFV evaluation against this budget.
     ///
     /// # Errors
@@ -1537,16 +1488,18 @@ impl BfvEvaluationBudget {
             ));
         }
         if plan.ciphertext_multiplication_depth > self.max_multiplicative_depth {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV evaluation multiplicative depth {} exceeds budget {}",
-                plan.ciphertext_multiplication_depth, self.max_multiplicative_depth
-            )));
+                plan.ciphertext_multiplication_depth,
+                self.max_multiplicative_depth
+            ));
         }
         if plan.bootstrap_refresh_rounds > self.max_bootstrap_refresh_rounds {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV bootstrap refresh rounds {} exceed budget {}",
-                plan.bootstrap_refresh_rounds, self.max_bootstrap_refresh_rounds
-            )));
+                plan.bootstrap_refresh_rounds,
+                self.max_bootstrap_refresh_rounds
+            ));
         }
         if plan.ciphertext_multiplication_depth > 0 && plan.input_ciphertexts < 2 {
             return Err(BfvError::InvalidParameters(
@@ -1561,7 +1514,6 @@ impl BfvEvaluationBudget {
         Ok(())
     }
 }
-
 /// Planned BFV operation shape admitted before ciphertext evaluation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BfvEvaluationPlan {
@@ -1572,7 +1524,6 @@ pub struct BfvEvaluationPlan {
     /// Public bootstrap refresh rounds consumed by the operation.
     pub bootstrap_refresh_rounds: u16,
 }
-
 impl BfvEvaluationPlan {
     /// Build a plan for ciphertext addition over at least two inputs.
     ///
@@ -1591,7 +1542,6 @@ impl BfvEvaluationPlan {
             bootstrap_refresh_rounds: 0,
         })
     }
-
     /// Build a plan for a balanced ciphertext multiplication tree.
     ///
     /// # Errors
@@ -1604,7 +1554,6 @@ impl BfvEvaluationPlan {
             bootstrap_refresh_rounds: 0,
         })
     }
-
     /// Build a plan for one ciphertext rotation.
     ///
     /// # Errors
@@ -1621,7 +1570,6 @@ impl BfvEvaluationPlan {
             bootstrap_refresh_rounds: 0,
         })
     }
-
     /// Build a plan for public bootstrap refresh rounds over exactly one input.
     ///
     /// # Errors
@@ -1645,13 +1593,11 @@ impl BfvEvaluationPlan {
         })
     }
 }
-
 fn checked_plan_input_count(input_count: usize) -> Result<u16, BfvError> {
     u16::try_from(input_count).map_err(|_| {
         BfvError::InvalidParameters("BFV evaluation input count exceeds u16 bounds".to_owned())
     })
 }
-
 /// Return the multiplicative depth of a deterministic balanced multiply tree.
 ///
 /// # Errors
@@ -1679,7 +1625,6 @@ pub fn bfv_balanced_multiplication_depth(input_count: usize) -> Result<u16, BfvE
     }
     Ok(depth)
 }
-
 #[cfg(feature = "bfv-accel")]
 #[derive(Clone, Copy, Debug)]
 struct NttPrime {
@@ -1687,7 +1632,6 @@ struct NttPrime {
     primitive_root: u64,
     max_power_of_two: u32,
 }
-
 #[cfg(feature = "bfv-accel")]
 const CRT_NTT_PRIMES: [NttPrime; 4] = [
     NttPrime {
@@ -1711,7 +1655,6 @@ const CRT_NTT_PRIMES: [NttPrime; 4] = [
         max_power_of_two: 16,
     },
 ];
-
 /// Polynomial multiplication backend selected for BFV ring products.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BfvConvolutionBackend {
@@ -1720,7 +1663,6 @@ pub enum BfvConvolutionBackend {
     /// Exact CRT-NTT negacyclic multiplication.
     CrtNtt,
 }
-
 /// BFV parameter set.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -1734,7 +1676,6 @@ pub struct BfvParameters {
     /// Base-2 logarithm of the relinearization decomposition base.
     pub decomposition_base_log: u8,
 }
-
 impl BfvParameters {
     /// Validate the parameter set.
     ///
@@ -1774,9 +1715,9 @@ impl BfvParameters {
                 )
             })?;
         if self.ciphertext_modulus <= error_headroom {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "ciphertext_modulus must exceed 2 * plaintext_modulus * BFV error bound {BFV_ERROR_MULTIPLE_BOUND}"
-            )));
+            ));
         }
         if self.decomposition_base_log == 0 || self.decomposition_base_log > 16 {
             return Err(BfvError::InvalidParameters(
@@ -1808,13 +1749,11 @@ impl BfvParameters {
         }
         Ok(())
     }
-
     /// Report the polynomial-convolution backend used for BFV ring products.
     #[must_use]
     pub fn convolution_backend(&self) -> BfvConvolutionBackend {
         #[cfg(not(feature = "bfv-accel"))]
         let _ = self;
-
         #[cfg(feature = "bfv-accel")]
         {
             let Some(convolution_len) = self.degree().checked_mul(2) else {
@@ -1834,15 +1773,12 @@ impl BfvParameters {
         }
         BfvConvolutionBackend::ScalarSchoolbook
     }
-
     fn degree(&self) -> usize {
         usize::from(self.polynomial_degree)
     }
-
     fn decomposition_base(&self) -> u64 {
         1_u64 << self.decomposition_base_log
     }
-
     fn decomposition_digits(&self) -> Result<usize, BfvError> {
         self.validate()?;
         let mut digits = 0_usize;
@@ -1864,7 +1800,6 @@ impl BfvParameters {
         Ok(digits.max(1))
     }
 }
-
 /// BFV RNS coefficient-modulus chain.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -1872,7 +1807,6 @@ pub struct BfvRnsModulusChain {
     /// Ordered RNS coefficient-modulus limbs.
     pub moduli: Vec<u64>,
 }
-
 impl BfvRnsModulusChain {
     /// Validate this RNS chain against a BFV parameter set.
     ///
@@ -1883,7 +1817,6 @@ impl BfvRnsModulusChain {
     pub fn validate_for_parameters(&self, params: &BfvParameters) -> Result<(), BfvError> {
         validate_bfv_rns_modulus_chain(self, params).map(|_| ())
     }
-
     /// Validate that every RNS limb has a concrete primitive root for
     /// negacyclic NTT multiplication at this parameter set's ring degree.
     ///
@@ -1897,7 +1830,6 @@ impl BfvRnsModulusChain {
     pub fn validate_negacyclic_ntt_support(&self, params: &BfvParameters) -> Result<(), BfvError> {
         self.validate_for_parameters(params)
     }
-
     /// Validate that this RNS chain also fits the current exact-lift fallback.
     ///
     /// # Errors
@@ -1911,7 +1843,6 @@ impl BfvRnsModulusChain {
         let product = validate_bfv_rns_modulus_chain(self, params)?;
         validate_rns_exact_lift_product_bound(params, product)
     }
-
     /// Validate that the chain is wide enough for naive exact-lift
     /// ciphertext-modulus addition.
     ///
@@ -1931,13 +1862,12 @@ impl BfvRnsModulusChain {
         let product = validate_bfv_rns_modulus_chain(self, params)?;
         let required = exact_ciphertext_modulus_addition_rns_bound(params)?;
         if product < required {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV RNS modulus-chain product {product} does not cover exact ciphertext-modulus addition bound {required}"
-            )));
+            ));
         }
         Ok(())
     }
-
     /// Validate that the chain is wide enough for naive exact-lift
     /// ciphertext-modulus negacyclic multiplication.
     ///
@@ -1958,13 +1888,12 @@ impl BfvRnsModulusChain {
         let product = validate_bfv_rns_modulus_chain(self, params)?;
         let required = exact_ciphertext_modulus_negacyclic_product_rns_bound(params)?;
         if product < required {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV RNS modulus-chain product {product} does not cover exact ciphertext-modulus negacyclic product bound {required}"
-            )));
+            ));
         }
         Ok(())
     }
-
     /// Validate exact coverage for a sum of centered negacyclic products.
     ///
     /// This is the guard used by rounded BFV cross terms such as
@@ -1984,13 +1913,12 @@ impl BfvRnsModulusChain {
         let required =
             exact_ciphertext_modulus_negacyclic_product_sum_rns_bound(params, product_count)?;
         if product < required {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV RNS modulus-chain product {product} does not cover exact ciphertext-modulus negacyclic product-sum bound {required}"
-            )));
+            ));
         }
         Ok(())
     }
-
     /// Return the checked product of all RNS limbs.
     ///
     /// # Errors
@@ -1999,22 +1927,19 @@ impl BfvRnsModulusChain {
     pub fn product(&self) -> Result<u128, BfvError> {
         checked_rns_modulus_product(&self.moduli)
     }
-
     /// Return a stable digest over this RNS modulus chain.
     ///
     /// # Errors
     /// Returns [`BfvError`] when validation or canonical encoding fails.
     pub fn digest_for_parameters(&self, params: &BfvParameters) -> Result<Hash, BfvError> {
         self.validate_for_parameters(params)?;
-        let bytes = norito::encode_canonical(self).map_err(|err| {
-            BfvError::InvalidParameters(format!("RNS modulus-chain encoding failed: {err}"))
-        })?;
+        let bytes = norito::encode_canonical(self)
+            .map_err(|err| invalid!("RNS modulus-chain encoding failed: {err}"))?;
         Ok(Hash::new_from_chunks(&[
             BFV_RNS_MODULUS_CHAIN_DIGEST_DOMAIN,
             bytes.as_slice(),
         ]))
     }
-
     /// Decompose a BFV polynomial into limb-major RNS residues.
     ///
     /// # Errors
@@ -2039,7 +1964,6 @@ impl BfvRnsModulusChain {
             .collect();
         Ok(BfvRnsPolynomial { residues_by_limb })
     }
-
     /// Decompose a `Z_q` polynomial into centered limb-major RNS residues.
     ///
     /// Coefficients above the centered modulus midpoint are first interpreted
@@ -2071,7 +1995,6 @@ impl BfvRnsModulusChain {
             .collect();
         Ok(BfvRnsPolynomial { residues_by_limb })
     }
-
     /// Decompose a key-switch component into base digits in this RNS chain.
     ///
     /// Each returned RNS polynomial contains one base-`2^decomposition_base_log`
@@ -2092,9 +2015,9 @@ impl BfvRnsModulusChain {
         let product = self.product()?;
         let base = u128::from(params.decomposition_base());
         if product < base {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "RNS key-switch component decomposition chain product {product} does not cover decomposition base {base}"
-            )));
+            ));
         }
         validate_poly(
             params,
@@ -2106,7 +2029,6 @@ impl BfvRnsModulusChain {
             .map(|digit| self.decompose_polynomial(params, &digit))
             .collect()
     }
-
     /// Reconstruct coefficient values from limb-major RNS residues.
     ///
     /// # Errors
@@ -2130,7 +2052,6 @@ impl BfvRnsModulusChain {
             })
             .collect()
     }
-
     /// Extend an RNS polynomial from this chain into another modulus chain.
     ///
     /// This is an exact CRT basis-extension bridge: coefficients are
@@ -2156,9 +2077,9 @@ impl BfvRnsModulusChain {
         let source_product = self.product()?;
         let target_product = target_chain.product()?;
         if target_product < source_product {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV RNS basis-extension target product {target_product} does not cover source product {source_product}"
-            )));
+            ));
         }
         validate_rns_polynomial(params, self, polynomial)?;
         let coefficients = self.reconstruct_polynomial(params, polynomial)?;
@@ -2176,7 +2097,6 @@ impl BfvRnsModulusChain {
         validate_rns_polynomial(params, target_chain, &output)?;
         Ok(output)
     }
-
     /// Extend an RNS polynomial directly into target-chain limbs.
     ///
     /// This is the deterministic target-limb basis-extension boundary needed by
@@ -2203,7 +2123,6 @@ impl BfvRnsModulusChain {
         self.validate_for_parameters(params)?;
         target_chain.validate_for_parameters(params)?;
         validate_rns_polynomial(params, self, polynomial)?;
-
         let source_product = self.product()?;
         let source_limb_data = self
             .moduli
@@ -2213,21 +2132,19 @@ impl BfvRnsModulusChain {
                 let source_basis_mod_source = reduce_u128_to_u64_mod(source_basis, source_modulus)?;
                 let inverse = mod_inv_prime_u64(source_basis_mod_source, source_modulus)
                     .ok_or_else(|| {
-                        BfvError::InvalidParameters(format!(
+                        invalid!(
                             "BFV RNS basis-extension source limb {source_modulus} is not invertible"
-                        ))
+                        )
                     })?;
                 Ok((source_modulus, source_basis, inverse))
             })
             .collect::<Result<Vec<_>, BfvError>>()?;
-
         let mut residues_by_limb =
             vec![Vec::with_capacity(params.degree()); target_chain.moduli.len()];
         for coefficient_index in 0..params.degree() {
             let mut quotient = 0_u128;
             let mut remainder = 0_u128;
             let mut crt_digits = Vec::with_capacity(source_limb_data.len());
-
             for (source_limb_index, &(source_modulus, source_basis, inverse)) in
                 source_limb_data.iter().enumerate()
             {
@@ -2240,7 +2157,6 @@ impl BfvRnsModulusChain {
                             "BFV RNS basis-extension CRT term exceeds u128".to_owned(),
                         )
                     })?;
-
                 if remainder >= source_product - term {
                     remainder -= source_product - term;
                     quotient = quotient.checked_add(1).ok_or_else(|| {
@@ -2253,7 +2169,6 @@ impl BfvRnsModulusChain {
                 }
                 crt_digits.push((crt_digit, source_basis));
             }
-
             for (target_limb_index, &target_modulus) in target_chain.moduli.iter().enumerate() {
                 let mut target_residue = 0_u64;
                 for &(crt_digit, source_basis) in &crt_digits {
@@ -2281,12 +2196,10 @@ impl BfvRnsModulusChain {
                 ));
             }
         }
-
         let output = BfvRnsPolynomial { residues_by_limb };
         validate_rns_polynomial(params, target_chain, &output)?;
         Ok(output)
     }
-
     /// Extend a centered RNS polynomial directly into target-chain limbs.
     ///
     /// Source coefficients are reconstructed as canonical residues modulo the
@@ -2333,7 +2246,6 @@ impl BfvRnsModulusChain {
         validate_rns_polynomial(params, target_chain, &output)?;
         Ok(output)
     }
-
     /// Extend one canonical key-switch digit polynomial into another RNS chain.
     ///
     /// Unlike [`Self::basis_extend_polynomial`], this helper is specialized to
@@ -2360,15 +2272,15 @@ impl BfvRnsModulusChain {
         let base = u128::from(params.decomposition_base());
         let source_product = self.product()?;
         if source_product < base {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV RNS key-switch digit source product {source_product} does not cover decomposition base {base}"
-            )));
+            ));
         }
         let target_product = target_chain.product()?;
         if target_product < base {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV RNS key-switch digit target product {target_product} does not cover decomposition base {base}"
-            )));
+            ));
         }
         validate_rns_polynomial(params, self, polynomial)?;
         let coefficients = self.reconstruct_polynomial(params, polynomial)?;
@@ -2393,7 +2305,6 @@ impl BfvRnsModulusChain {
         validate_rns_polynomial(params, target_chain, &output)?;
         Ok(output)
     }
-
     /// Add two RNS polynomials coefficient-wise in the chain product ring.
     ///
     /// # Errors
@@ -2421,7 +2332,6 @@ impl BfvRnsModulusChain {
             .collect();
         Ok(BfvRnsPolynomial { residues_by_limb })
     }
-
     /// Multiply two RNS polynomials in `Z_Q[x] / (x^n + 1)`.
     ///
     /// # Errors
@@ -2445,7 +2355,6 @@ impl BfvRnsModulusChain {
             .collect();
         Ok(BfvRnsPolynomial { residues_by_limb })
     }
-
     /// Multiply an RNS polynomial by a `Z_q` polynomial through an exact RNS corridor.
     ///
     /// This is the key-switch digit product primitive: the left operand is
@@ -2465,7 +2374,6 @@ impl BfvRnsModulusChain {
         self.validate_exact_ciphertext_modulus_negacyclic_product_coverage(params)?;
         validate_rns_polynomial(params, self, lhs)?;
         validate_poly(params, rhs, "RNS exact-multiply rhs polynomial")?;
-
         let chain_product = self.product()?;
         let centered_abs_bound = exact_ciphertext_modulus_negacyclic_product_abs_bound(params)?;
         let rhs_rns = self.decompose_polynomial(params, rhs)?;
@@ -2482,7 +2390,6 @@ impl BfvRnsModulusChain {
             })
             .collect()
     }
-
     /// Multiply two `Z_q` polynomials and return exact centered raw coefficients.
     ///
     /// Unlike [`Self::multiply_ciphertext_modulus_polynomials_negacyclic_exact`],
@@ -2503,7 +2410,6 @@ impl BfvRnsModulusChain {
         self.validate_exact_ciphertext_modulus_negacyclic_product_sum_coverage(params, 1)?;
         validate_poly(params, lhs, "RNS centered multiply lhs polynomial")?;
         validate_poly(params, rhs, "RNS centered multiply rhs polynomial")?;
-
         let chain_product = self.product()?;
         let centered_abs_bound =
             exact_centered_ciphertext_modulus_negacyclic_product_abs_bound(params)?;
@@ -2517,7 +2423,6 @@ impl BfvRnsModulusChain {
             })
             .collect()
     }
-
     /// Multiply two `Z_q` polynomials and return rounded BFV product coefficients.
     ///
     /// This is the RNS exact bridge for the rounded BFV multiplication
@@ -2539,13 +2444,11 @@ impl BfvRnsModulusChain {
         self.validate_exact_ciphertext_modulus_negacyclic_product_sum_coverage(params, 1)?;
         validate_poly(params, lhs, "RNS scale-round multiply lhs polynomial")?;
         validate_poly(params, rhs, "RNS scale-round multiply rhs polynomial")?;
-
         let lhs_rns = self.decompose_centered_ciphertext_modulus_polynomial(params, lhs)?;
         let rhs_rns = self.decompose_centered_ciphertext_modulus_polynomial(params, rhs)?;
         let product_rns = self.multiply_rns_polynomials_negacyclic(params, &lhs_rns, &rhs_rns)?;
         self.scale_round_centered_product_polynomial_exact(params, &product_rns)
     }
-
     /// Multiply centered `Z_q` polynomials, target-limb basis-extend, and scale-round.
     ///
     /// The source chain evaluates the centered raw product exactly, then
@@ -2579,7 +2482,6 @@ impl BfvRnsModulusChain {
             rhs,
             "RNS target-limb scale-round multiply rhs polynomial",
         )?;
-
         let lhs_rns = self.decompose_centered_ciphertext_modulus_polynomial(params, lhs)?;
         let rhs_rns = self.decompose_centered_ciphertext_modulus_polynomial(params, rhs)?;
         let product_rns = self.multiply_rns_polynomials_negacyclic(params, &lhs_rns, &rhs_rns)?;
@@ -2587,7 +2489,6 @@ impl BfvRnsModulusChain {
             self.basis_extend_centered_polynomial_target_limbs(params, &product_rns, target_chain)?;
         target_chain.scale_round_centered_product_polynomial_exact(params, &target_product)
     }
-
     /// Scale-round a centered RNS product polynomial into rounded BFV `Z_q` coefficients.
     ///
     /// The input polynomial is interpreted as a centered negacyclic product
@@ -2608,7 +2509,6 @@ impl BfvRnsModulusChain {
     ) -> Result<Vec<u64>, BfvError> {
         self.scale_round_centered_product_polynomial_sum_exact(params, product, 1)
     }
-
     /// Add two centered RNS product polynomials and scale-round the sum.
     ///
     /// Both inputs are interpreted as centered negacyclic products represented
@@ -2630,7 +2530,6 @@ impl BfvRnsModulusChain {
         let sum = self.add_rns_polynomials(params, lhs, rhs)?;
         self.scale_round_centered_product_polynomial_sum_exact(params, &sum, 2)
     }
-
     /// Add centered product polynomials, target-limb basis-extend, and scale-round.
     ///
     /// This is the signed target-limb counterpart of
@@ -2659,7 +2558,6 @@ impl BfvRnsModulusChain {
             self.basis_extend_centered_polynomial_target_limbs(params, &sum, target_chain)?;
         target_chain.scale_round_centered_product_polynomial_sum_exact(params, &target_sum, 2)
     }
-
     fn scale_round_centered_product_polynomial_sum_exact(
         &self,
         params: &BfvParameters,
@@ -2684,7 +2582,6 @@ impl BfvRnsModulusChain {
             })
             .collect()
     }
-
     /// Add two ciphertext-modulus polynomials through an exact RNS corridor.
     ///
     /// This helper is intentionally guarded by
@@ -2705,7 +2602,6 @@ impl BfvRnsModulusChain {
         self.validate_exact_ciphertext_modulus_addition_coverage(params)?;
         validate_poly(params, lhs, "RNS exact-add lhs polynomial")?;
         validate_poly(params, rhs, "RNS exact-add rhs polynomial")?;
-
         let lhs_rns = self.decompose_polynomial(params, lhs)?;
         let rhs_rns = self.decompose_polynomial(params, rhs)?;
         let sum_rns = self.add_rns_polynomials(params, &lhs_rns, &rhs_rns)?;
@@ -2714,7 +2610,6 @@ impl BfvRnsModulusChain {
             .map(|coefficient| reduce_u128_to_u64_mod(coefficient, params.ciphertext_modulus))
             .collect()
     }
-
     /// Multiply two ciphertext-modulus polynomials through an exact RNS corridor.
     ///
     /// This helper is intentionally guarded by
@@ -2735,7 +2630,6 @@ impl BfvRnsModulusChain {
         self.validate_exact_ciphertext_modulus_negacyclic_product_coverage(params)?;
         validate_poly(params, lhs, "RNS exact-multiply lhs polynomial")?;
         validate_poly(params, rhs, "RNS exact-multiply rhs polynomial")?;
-
         let chain_product = self.product()?;
         let centered_abs_bound = exact_ciphertext_modulus_negacyclic_product_abs_bound(params)?;
         let lhs_rns = self.decompose_polynomial(params, lhs)?;
@@ -2754,7 +2648,6 @@ impl BfvRnsModulusChain {
             .collect()
     }
 }
-
 /// BFV polynomial represented as limb-major RNS residues.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -2762,7 +2655,6 @@ pub struct BfvRnsPolynomial {
     /// Residues grouped by modulus-chain limb, then polynomial coefficient.
     pub residues_by_limb: Vec<Vec<u64>>,
 }
-
 /// BFV secret key.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -2770,7 +2662,6 @@ pub struct BfvSecretKey {
     /// Ternary secret polynomial in `R_q`.
     pub s: Vec<u64>,
 }
-
 /// BFV public key.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -2780,7 +2671,6 @@ pub struct BfvPublicKey {
     /// Second public-key component.
     pub a: Vec<u64>,
 }
-
 /// One base-decomposition entry of the relinearization key.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -2790,7 +2680,6 @@ pub struct BfvRelinearizationKeyEntry {
     /// Second evaluation-key component.
     pub a: Vec<u64>,
 }
-
 /// Relinearization key for reducing quadratic ciphertexts back to size two.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -2798,7 +2687,6 @@ pub struct BfvRelinearizationKey {
     /// Decomposition entries, ordered from least- to most-significant digit.
     pub entries: Vec<BfvRelinearizationKeyEntry>,
 }
-
 /// Key-switching material for one BFV Galois automorphism.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -2808,7 +2696,6 @@ pub struct BfvGaloisKey {
     /// Key-switching entries encrypting `sigma_k(s)` under the original secret.
     pub entries: Vec<BfvRelinearizationKeyEntry>,
 }
-
 /// Public rotation key admitted for deterministic ciphertext-slot rotations.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -2823,7 +2710,6 @@ pub struct BfvRotationKey {
     /// evaluators can rotate and refresh slots without holding the secret key.
     pub zero_refresh: BfvCiphertext,
 }
-
 /// Execution mode advertised by a BFV bootstrap key.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
@@ -2835,7 +2721,6 @@ pub enum BfvBootstrapKeyMode {
     /// Governed full BFV bootstrapping circuit/key material with no encrypted-zero refresh masks.
     FullBootstrapV1,
 }
-
 /// Versioned commitments to full BFV bootstrap circuit/key material.
 ///
 /// This structure is the admission/digest surface for governed circuit material
@@ -2882,7 +2767,6 @@ pub struct BfvFullBootstrapCircuitMaterialV1 {
     /// Maximum multiplicative depth consumed by the bootstrap circuit.
     pub max_bootstrap_depth: u16,
 }
-
 /// Role declared by one concrete BFV full-bootstrap artifact payload.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -2907,7 +2791,6 @@ pub enum BfvFullBootstrapCircuitArtifactRoleV1 {
     /// Verifier-key bytes for the proof profile.
     VerifierKey,
 }
-
 impl BfvFullBootstrapCircuitArtifactRoleV1 {
     fn max_bytes(self) -> usize {
         match self {
@@ -2923,7 +2806,6 @@ impl BfvFullBootstrapCircuitArtifactRoleV1 {
         }
     }
 }
-
 /// Norito-encoded profile header and bytes for one full-bootstrap artifact.
 ///
 /// `BfvFullBootstrapCircuitArtifactBundleV1` stores these encoded payloads in
@@ -2950,7 +2832,6 @@ pub struct BfvFullBootstrapCircuitArtifactPayloadV1 {
     /// Artifact bytes for the declared role.
     pub payload: Vec<u8>,
 }
-
 /// Bound model declared by a BFV full-bootstrap execution proof statement.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -2961,7 +2842,6 @@ pub enum BfvFullBootstrapExecutionProofBoundModeV1 {
     /// Bounded-noise BFV-RNS metadata.
     BoundedNoise,
 }
-
 /// Public input/output claim for one BFV full-bootstrap execution proof.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -2983,7 +2863,6 @@ pub struct BfvFullBootstrapExecutionProofClaimV1 {
     /// Digest of the deterministic governed arithmetic trace for this claim.
     pub execution_witness_digest: Hash,
 }
-
 /// Canonical arithmetic trace profile for BFV full-bootstrap proofs.
 ///
 /// This profile is the typed release-artifact boundary for the native
@@ -3066,7 +2945,6 @@ pub struct BfvFullBootstrapArithmeticTraceProfileV1 {
     /// Whether bounded-noise proof statements are supported.
     pub supports_bounded_noise: bool,
 }
-
 /// Row-major native arithmetic trace material for one BFV full-bootstrap proof.
 ///
 /// `rows` is a deterministic Goldilocks field encoding of the validated
@@ -3093,7 +2971,6 @@ pub struct BfvFullBootstrapArithmeticTraceMaterialV1 {
     /// Row-major Goldilocks field rows for the dedicated BFV arithmetic AIR.
     pub rows: Vec<Vec<u64>>,
 }
-
 /// Full-domain AIR evaluation material for one BFV full-bootstrap trace.
 ///
 /// The first-release full-bootstrap AIR reduces the caller-validated arithmetic
@@ -3120,7 +2997,6 @@ pub struct BfvFullBootstrapArithmeticAirEvaluationMaterialV1 {
     /// Full-domain AIR composition values, zero for every first-release row.
     pub composition_values: Vec<u64>,
 }
-
 /// Transcript-derived public opening material for one BFV full-bootstrap trace.
 ///
 /// This is the typed proof-output boundary for the first-release transparent
@@ -3157,7 +3033,6 @@ pub struct BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1 {
     /// Opened next rows paired with `opened_rows`.
     pub opened_next_rows: Vec<Vec<u64>>,
 }
-
 /// Public-input schema for BFV full-bootstrap execution proofs.
 ///
 /// This is the typed payload for the proof public-input schema artifact. It
@@ -3363,7 +3238,6 @@ pub struct BfvFullBootstrapProofPublicInputSchemaV1 {
     /// Whether bounded-noise proof statements are supported.
     pub supports_bounded_noise: bool,
 }
-
 #[expect(
     clippy::struct_excessive_bools,
     reason = "contract material mirrors audited release-prover obligation bits"
@@ -3403,7 +3277,6 @@ struct BfvFullBootstrapReleaseProverContractMaterialV1 {
     rejects_stale_galois_key_set_replay: bool,
     rejects_stale_proof_key_artifacts: bool,
 }
-
 /// Backend-native key material for a BFV full-bootstrap proof profile.
 ///
 /// This is the typed payload for prover-key and verifier-key artifacts. The key
@@ -3503,7 +3376,6 @@ pub struct BfvFullBootstrapProofKeyV1 {
     /// Backend-native proof key bytes.
     pub key_material: Vec<u8>,
 }
-
 /// Canonical native BFV full-bootstrap proof-key material payload.
 ///
 /// This is the payload stored inside
@@ -3557,7 +3429,6 @@ pub struct BfvFullBootstrapNativeProofKeyMaterialV1 {
     /// Role-specific native payload bytes.
     pub native_payload: Vec<u8>,
 }
-
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct BfvFullBootstrapNativeGeneratedCircuitBodyV1 {
@@ -3611,7 +3482,6 @@ struct BfvFullBootstrapNativeGeneratedCircuitBodyV1 {
     rejects_stale_proof_key_artifacts: bool,
     arithmetic_air_constraint_system_body: Vec<u8>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1 {
     version: u16,
@@ -3633,7 +3503,6 @@ struct BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1 {
     queries: u16,
     merkle_arity: u8,
 }
-
 /// Canonical native STARK/FRI verifier-key payload for BFV full-bootstrap proofs.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 {
@@ -3674,7 +3543,6 @@ pub struct BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 {
     /// Native STARK hash selector.
     pub hash_fn: u8,
 }
-
 /// Typed envelope for backend-native BFV full-bootstrap proof-key bytes.
 ///
 /// This is the canonical inner byte format carried by
@@ -3780,7 +3648,6 @@ pub struct BfvFullBootstrapProofKeyMaterialEnvelopeV1 {
     /// Backend-native proof key bytes.
     pub native_key_material: Vec<u8>,
 }
-
 /// One diagonal plaintext mask in a packed-slot full-bootstrap linear transform.
 ///
 /// The evaluator rotates the input packed ciphertext left by `rotation_steps`,
@@ -3793,7 +3660,6 @@ pub struct BfvFullBootstrapLinearTransformDiagonalV1 {
     /// Plaintext polynomial mask in `Z_t[x] / (x^n + 1)`.
     pub plaintext: Vec<u64>,
 }
-
 /// Deterministic packed-slot linear transform used by full-bootstrap material.
 ///
 /// This is the typed payload for coefficient-to-slot and slot-to-coefficient
@@ -3810,7 +3676,6 @@ pub struct BfvFullBootstrapLinearTransformV1 {
     /// Diagonal rotation/mask entries evaluated in ascending schema order.
     pub diagonals: Vec<BfvFullBootstrapLinearTransformDiagonalV1>,
 }
-
 /// One automorphism/mask entry in a canonical packed-slot blind-rotation key.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -3820,7 +3685,6 @@ pub struct BfvFullBootstrapBlindRotationStepV1 {
     /// Binary packed-slot selector plaintext in `Z_t[x] / (x^n + 1)`.
     pub selector_plaintext: Vec<u64>,
 }
-
 /// Canonical blind-rotation material for the full-bootstrap circuit.
 ///
 /// This is the typed payload for the blind-rotation artifact. It binds the
@@ -3838,7 +3702,6 @@ pub struct BfvFullBootstrapBlindRotationKeyV1 {
     /// Canonical Galois automorphism and selector entries.
     pub steps: Vec<BfvFullBootstrapBlindRotationStepV1>,
 }
-
 /// Sample-extraction material for the full-bootstrap circuit.
 ///
 /// This is the typed payload for the sample-extraction artifact. It declares the
@@ -3857,7 +3720,6 @@ pub struct BfvFullBootstrapSampleExtractionV1 {
     /// Number of output ciphertext components. First-release BFV ciphertexts use two components.
     pub output_ciphertext_component_count: u16,
 }
-
 /// Key-switch entries for one raw sample secret coefficient.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -3867,7 +3729,6 @@ pub struct BfvFullBootstrapSampleExtractionSwitchKeyCoefficientV1 {
     /// Decomposition entries encrypting `base^d * s_i * X^0` under the RLWE secret.
     pub entries: Vec<BfvRelinearizationKeyEntry>,
 }
-
 /// Per-coefficient switch key for raw full-bootstrap sample extraction.
 ///
 /// This is the first executable key material for the final LWE-to-RLWE
@@ -3883,7 +3744,6 @@ pub struct BfvFullBootstrapSampleExtractionSwitchKeyV1 {
     /// Per-secret-coefficient switch entries ordered by coefficient index.
     pub coefficient_entries: Vec<BfvFullBootstrapSampleExtractionSwitchKeyCoefficientV1>,
 }
-
 /// Raw LWE-style sample extracted from one BFV/RLWE ciphertext coefficient.
 ///
 /// This is an executable full-bootstrap building block, not the final
@@ -3900,7 +3760,6 @@ pub struct BfvFullBootstrapRawExtractedSampleV1 {
     /// Public coefficients aligned with `BfvSecretKey::s`.
     pub secret_coefficients: Vec<u64>,
 }
-
 /// Executed full-bootstrap prefix trace before final sample key-switch/repacking.
 ///
 /// This is the current executable boundary for governed full-bootstrap
@@ -3927,7 +3786,6 @@ pub struct BfvFullBootstrapExecutionPrefixTraceV1 {
     /// Final ciphertext emitted by the governed slot-to-coefficient transform.
     pub slot_to_coefficient_output: BfvCiphertext,
 }
-
 /// Public per-stage bounds for the executable full-bootstrap prefix trace.
 ///
 /// `coefficient_zero_repack` only bounds coefficient zero of the diagnostic
@@ -3949,7 +3807,6 @@ pub struct BfvFullBootstrapExecutionPrefixTraceBoundsV1 {
     /// Whole-ciphertext bound after the governed slot-to-coefficient transform.
     pub slot_to_coefficient: u128,
 }
-
 /// Bootstrapping accumulator/test-vector material for the full-bootstrap circuit.
 ///
 /// This is the typed payload for the accumulator artifact. The accumulator must
@@ -3963,7 +3820,6 @@ pub struct BfvFullBootstrapAccumulatorV1 {
     /// Plaintext test-vector polynomial in `Z_t[x] / (x^n + 1)`.
     pub test_vector: Vec<u64>,
 }
-
 /// Concrete artifacts for a governed BFV full-bootstrap circuit.
 ///
 /// [`BfvFullBootstrapCircuitMaterialV1`] is intentionally commitment-only so
@@ -3992,7 +3848,6 @@ pub struct BfvFullBootstrapCircuitArtifactBundleV1 {
     /// Verifier-key bytes for the proof profile.
     pub verifier_key: Vec<u8>,
 }
-
 /// STARK/FRI and public-input layout recorded in release audit evidence.
 #[allow(clippy::struct_excessive_bools)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -4119,7 +3974,6 @@ pub struct BfvFullBootstrapReleaseAuditProofProfileV1 {
     /// Whether this release binds FRI queries to AIR commitment roots.
     pub binds_fri_queries_to_air_commitment_roots: bool,
 }
-
 /// Proof-key artifact summary recorded in release audit evidence.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -4147,7 +4001,6 @@ pub struct BfvFullBootstrapReleaseAuditKeyEvidenceV1 {
     /// Raw SHA-256 commitment bytes for the generated native circuit body.
     pub generated_circuit_body_digest: [u8; Hash::LENGTH],
 }
-
 /// Typed release audit evidence for BFV full-bootstrap generated artifacts.
 ///
 /// This evidence is derived only after concrete artifacts validate against
@@ -4204,7 +4057,6 @@ pub struct BfvFullBootstrapReleaseAuditEvidenceV1 {
     /// Verifier-key artifact summary.
     pub verifier_key: BfvFullBootstrapReleaseAuditKeyEvidenceV1,
 }
-
 /// Signable payload for an external BFV full-bootstrap release audit signoff.
 ///
 /// This payload binds a reviewer key to the deterministic release audit
@@ -4252,7 +4104,6 @@ pub struct BfvFullBootstrapReleaseAuditSignoffPayloadV1 {
     /// Public key whose signature authorizes this signoff.
     pub reviewer_public_key: PublicKey,
 }
-
 /// Signed external audit signoff for BFV full-bootstrap release artifacts.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -4266,7 +4117,6 @@ pub struct BfvFullBootstrapReleaseAuditSignoffV1 {
     /// Reviewer signature over `payload`.
     pub signature: SignatureOf<BfvFullBootstrapReleaseAuditSignoffPayloadV1>,
 }
-
 /// Publishable BFV full-bootstrap release audit record.
 ///
 /// This record packages deterministic release audit evidence with the reviewer
@@ -4285,7 +4135,6 @@ pub struct BfvFullBootstrapReleaseAuditRecordV1 {
     /// Reviewer signoff over `evidence`.
     pub signoff: BfvFullBootstrapReleaseAuditSignoffV1,
 }
-
 /// Machine-checkable decision in a BFV full-bootstrap release audit manifest.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -4296,7 +4145,6 @@ pub enum BfvFullBootstrapReleaseAuditVerdictV1 {
     /// The reviewed release artifacts are explicitly not approved for publication.
     Rejected,
 }
-
 /// Machine-checkable manifest for a BFV full-bootstrap release audit package.
 ///
 /// The manifest mirrors the signed audit record's reviewer, artifact, key, and
@@ -4353,7 +4201,6 @@ pub struct BfvFullBootstrapReleaseAuditManifestV1 {
     /// Public key authorized by the manifest for reviewer signoff.
     pub reviewer_public_key: PublicKey,
 }
-
 /// Publishable BFV full-bootstrap release audit package.
 ///
 /// This package carries the signed audit record plus the external report and
@@ -4380,7 +4227,6 @@ pub struct BfvFullBootstrapReleaseAuditPackageV1 {
     /// Evidence archive bytes whose digest is signed by `record`.
     pub audit_evidence_archive_bytes: Vec<u8>,
 }
-
 /// Public bootstrap key admitted for deterministic ciphertext refresh.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -4437,7 +4283,6 @@ pub struct BfvBootstrapKey {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub full_bootstrap_material: Option<BfvFullBootstrapCircuitMaterialV1>,
 }
-
 /// Evaluation keys required by public BFV evaluators.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -4454,7 +4299,6 @@ pub struct BfvEvaluationKeyBundle {
     #[norito(default)]
     pub bootstrap_key: Option<BfvBootstrapKey>,
 }
-
 /// Public transcript seed descriptor for a rotation refresh key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BfvRotationKeyTranscriptSeed<'a> {
@@ -4463,7 +4307,6 @@ pub struct BfvRotationKeyTranscriptSeed<'a> {
     /// Seed used by [`rotation_key_from_seed`] for this rotation key.
     pub seed: &'a [u8],
 }
-
 /// Public transcript seed descriptor for a bootstrap refresh key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BfvBootstrapKeyTranscriptSeed<'a> {
@@ -4474,32 +4317,27 @@ pub struct BfvBootstrapKeyTranscriptSeed<'a> {
     /// Seed used by [`bootstrap_key_with_max_refresh_rounds_from_seed`].
     pub seed: &'a [u8],
 }
-
 #[derive(Encode)]
 struct BfvRotationKeyTranscriptDigestMaterial {
     rotation_steps: u32,
     seed: Vec<u8>,
 }
-
 #[derive(Encode)]
 struct BfvBootstrapKeyTranscriptDigestMaterial {
     key_id: String,
     max_refresh_rounds: u16,
     seed: Vec<u8>,
 }
-
 #[derive(Encode)]
 struct BfvPublicKeyDigestMaterial {
     params: BfvParameters,
     public_key: BfvPublicKey,
 }
-
 #[derive(Encode)]
 struct BfvCiphertextDigestMaterial {
     params: BfvParameters,
     ciphertext: BfvCiphertext,
 }
-
 #[derive(Encode)]
 struct BfvPublicKeyProofStatementMaterial {
     version: u16,
@@ -4508,7 +4346,6 @@ struct BfvPublicKeyProofStatementMaterial {
     public_key: BfvPublicKey,
     public_key_digest: Hash,
 }
-
 #[derive(Encode)]
 struct BfvCiphertextProofStatementMaterial {
     version: u16,
@@ -4520,7 +4357,6 @@ struct BfvCiphertextProofStatementMaterial {
     ciphertext_digest: Hash,
     declared_bound: u128,
 }
-
 #[derive(Encode)]
 struct BfvRefreshTranscriptDigestMaterial {
     version: u16,
@@ -4531,7 +4367,6 @@ struct BfvRefreshTranscriptDigestMaterial {
     rotation_transcripts: Vec<BfvRotationKeyTranscriptDigestMaterial>,
     bootstrap_transcript: Option<BfvBootstrapKeyTranscriptDigestMaterial>,
 }
-
 #[derive(Encode)]
 struct BfvBootstrapKeyProofStatementMaterial {
     version: u16,
@@ -4543,7 +4378,6 @@ struct BfvBootstrapKeyProofStatementMaterial {
     bootstrap_round_digests: Vec<Hash>,
     bootstrap_key: BfvBootstrapKey,
 }
-
 #[derive(Encode)]
 struct BfvBootstrapKeyTranscriptProofStatementMaterial {
     version: u16,
@@ -4558,7 +4392,6 @@ struct BfvBootstrapKeyTranscriptProofStatementMaterial {
     bootstrap_round_digests: Vec<Hash>,
     bootstrap_key: BfvBootstrapKey,
 }
-
 #[derive(Encode)]
 struct BfvFullBootstrapMaterialProofStatementMaterial {
     version: u16,
@@ -4571,7 +4404,6 @@ struct BfvFullBootstrapMaterialProofStatementMaterial {
     max_refresh_rounds: u16,
     full_bootstrap_material_digest: Hash,
 }
-
 /// Typed prover input for a BFV full-bootstrap material proof.
 ///
 /// This material is the release-prover boundary for the governed material proof
@@ -4598,7 +4430,6 @@ pub struct BfvFullBootstrapMaterialProofInputMaterialV1 {
     /// Canonical statement hash exposed as the proof public input.
     pub statement_hash: Hash,
 }
-
 #[derive(Encode)]
 struct BfvFullBootstrapExecutionProofStatementMaterial {
     version: u16,
@@ -4610,7 +4441,6 @@ struct BfvFullBootstrapExecutionProofStatementMaterial {
     artifact_bundle_digest: Hash,
     claim: BfvFullBootstrapExecutionProofClaimV1,
 }
-
 /// Typed deterministic witness material for one BFV full-bootstrap execution claim.
 ///
 /// The material is the canonical proof-producing boundary for the first-release
@@ -4651,7 +4481,6 @@ pub struct BfvFullBootstrapExecutionWitnessDigestMaterialV1 {
     /// Deterministic public bounds propagated alongside `trace`.
     pub trace_bounds: BfvFullBootstrapExecutionPrefixTraceBoundsV1,
 }
-
 /// Typed prover input for one BFV full-bootstrap execution proof.
 ///
 /// This material is the release-prover boundary for a dedicated full-bootstrap
@@ -4673,7 +4502,6 @@ pub struct BfvFullBootstrapExecutionProofInputMaterialV1 {
     /// Canonical statement hash exposed as the proof public input.
     pub statement_hash: Hash,
 }
-
 /// Release-prover input package for one BFV full-bootstrap execution proof.
 ///
 /// This package binds the typed execution proof input material to the canonical
@@ -4712,7 +4540,6 @@ pub struct BfvFullBootstrapExecutionProverInputMaterialV1 {
     /// Governed native STARK/FRI verifier key paired with `prover_key`.
     pub verifier_key: BfvFullBootstrapProofKeyV1,
 }
-
 #[derive(Encode)]
 struct BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1 {
     version: u16,
@@ -4727,7 +4554,6 @@ struct BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1 {
     prover_key_digest: Hash,
     verifier_key_digest: Hash,
 }
-
 #[derive(Encode)]
 struct BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1 {
     version: u16,
@@ -4748,7 +4574,6 @@ struct BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1 {
     arithmetic_air_constraint_system_artifact_digest: Hash,
     arithmetic_air_constraint_system_digest: Hash,
 }
-
 /// Typed contract material for the first-release BFV full-bootstrap arithmetic AIR.
 ///
 /// This is the auditable payload behind
@@ -4837,7 +4662,6 @@ pub struct BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1 {
     /// Whether bounded-noise proof statements are supported.
     pub supports_bounded_noise: bool,
 }
-
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Encode)]
 #[expect(
@@ -4894,13 +4718,11 @@ struct BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1 {
     rejects_stale_galois_key_set_replay: bool,
     rejects_stale_proof_key_artifacts: bool,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BfvRefreshTranscriptMode {
     Exact,
     BoundedNoise,
 }
-
 impl BfvRefreshTranscriptMode {
     fn rotation_seed_label(self) -> &'static str {
         match self {
@@ -4908,35 +4730,30 @@ impl BfvRefreshTranscriptMode {
             Self::BoundedNoise => "bounded-noise rotation refresh transcript seed",
         }
     }
-
     fn bootstrap_seed_label(self) -> &'static str {
         match self {
             Self::Exact => "bootstrap refresh transcript seed",
             Self::BoundedNoise => "bounded-noise bootstrap refresh transcript seed",
         }
     }
-
     fn digest_domain(self) -> &'static [u8] {
         match self {
             Self::Exact => BFV_REFRESH_TRANSCRIPT_DIGEST_DOMAIN,
             Self::BoundedNoise => BFV_BOUNDED_NOISE_REFRESH_TRANSCRIPT_DIGEST_DOMAIN,
         }
     }
-
     fn public_key_proof_statement_domain(self) -> &'static [u8] {
         match self {
             Self::Exact => BFV_PUBLIC_KEY_PROOF_STATEMENT_DOMAIN,
             Self::BoundedNoise => BFV_BOUNDED_NOISE_PUBLIC_KEY_PROOF_STATEMENT_DOMAIN,
         }
     }
-
     fn ciphertext_proof_statement_domain(self) -> &'static [u8] {
         match self {
             Self::Exact => BFV_CIPHERTEXT_PROOF_STATEMENT_DOMAIN,
             Self::BoundedNoise => BFV_BOUNDED_NOISE_CIPHERTEXT_PROOF_STATEMENT_DOMAIN,
         }
     }
-
     fn bootstrap_key_proof_statement_domain(self) -> &'static [u8] {
         match self {
             Self::Exact => BFV_BOOTSTRAP_KEY_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN,
@@ -4945,7 +4762,6 @@ impl BfvRefreshTranscriptMode {
             }
         }
     }
-
     fn bootstrap_key_transcript_proof_statement_domain(self) -> &'static [u8] {
         match self {
             Self::Exact => BFV_BOOTSTRAP_KEY_TRANSCRIPT_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN,
@@ -4955,7 +4771,6 @@ impl BfvRefreshTranscriptMode {
         }
     }
 }
-
 impl BfvEvaluationKeyBundle {
     /// Validate evaluation-key shapes against BFV parameters.
     ///
@@ -4972,7 +4787,6 @@ impl BfvEvaluationKeyBundle {
         }
         Ok(())
     }
-
     /// Verify public encrypted-zero refresh transcripts for the whole bundle.
     ///
     /// This is a public admission diagnostic for the current deterministic
@@ -5001,7 +4815,6 @@ impl BfvEvaluationKeyBundle {
             BfvRefreshTranscriptMode::Exact,
         )
     }
-
     /// Verify public rounded encrypted-zero refresh transcripts for the bundle.
     ///
     /// This is the bounded-noise counterpart of
@@ -5031,7 +4844,6 @@ impl BfvEvaluationKeyBundle {
             BfvRefreshTranscriptMode::BoundedNoise,
         )
     }
-
     fn validate_refresh_transcripts_for_mode(
         &self,
         params: &BfvParameters,
@@ -5054,10 +4866,10 @@ impl BfvEvaluationKeyBundle {
         let mut seen_rotations = std::collections::BTreeSet::new();
         for transcript in rotation_transcripts {
             if !seen_rotations.insert(transcript.rotation_steps) {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "duplicate rotation refresh transcript for {} steps",
                     transcript.rotation_steps
-                )));
+                ));
             }
             if self
                 .rotation_keys
@@ -5097,7 +4909,6 @@ impl BfvEvaluationKeyBundle {
                 }
             }
         }
-
         Self::validate_bootstrap_refresh_transcript_for_mode(
             params,
             public_key,
@@ -5107,7 +4918,6 @@ impl BfvEvaluationKeyBundle {
         )?;
         Ok(())
     }
-
     fn validate_bootstrap_refresh_transcript_for_mode(
         params: &BfvParameters,
         public_key: &BfvPublicKey,
@@ -5170,7 +4980,6 @@ impl BfvEvaluationKeyBundle {
         }
         Ok(())
     }
-
     /// Return a stable digest over the public refresh transcript inventory.
     ///
     /// The digest is intended for governance/admission binding of the current
@@ -5198,7 +5007,6 @@ impl BfvEvaluationKeyBundle {
             BfvRefreshTranscriptMode::Exact,
         )
     }
-
     /// Return a stable digest over rounded public refresh transcripts.
     ///
     /// This is the bounded-noise counterpart of
@@ -5225,7 +5033,6 @@ impl BfvEvaluationKeyBundle {
             BfvRefreshTranscriptMode::BoundedNoise,
         )
     }
-
     /// Return the proof statement digest for a transcript-bound exact bootstrap key.
     ///
     /// This is the governance-facing statement hash for the current
@@ -5255,7 +5062,6 @@ impl BfvEvaluationKeyBundle {
             BfvRefreshTranscriptMode::Exact,
         )
     }
-
     /// Return the proof statement digest for a transcript-bound bounded bootstrap key.
     ///
     /// This is the bounded-noise counterpart of
@@ -5281,7 +5087,6 @@ impl BfvEvaluationKeyBundle {
             BfvRefreshTranscriptMode::BoundedNoise,
         )
     }
-
     fn refresh_transcript_digest_for_mode(
         &self,
         params: &BfvParameters,
@@ -5332,15 +5137,13 @@ impl BfvEvaluationKeyBundle {
             rotation_transcripts,
             bootstrap_transcript,
         };
-        let bytes = norito::encode_canonical(&material).map_err(|err| {
-            BfvError::InvalidParameters(format!("refresh transcript digest encoding failed: {err}"))
-        })?;
+        let bytes = norito::encode_canonical(&material)
+            .map_err(|err| invalid!("refresh transcript digest encoding failed: {err}"))?;
         Ok(Hash::new_from_chunks(&[
             mode.digest_domain(),
             bytes.as_slice(),
         ]))
     }
-
     fn bootstrap_key_zero_refresh_proof_statement_digest_for_transcript_mode(
         &self,
         params: &BfvParameters,
@@ -5392,16 +5195,13 @@ impl BfvEvaluationKeyBundle {
             bootstrap_key: bootstrap_key.clone(),
         };
         let bytes = norito::encode_canonical(&material).map_err(|err| {
-            BfvError::InvalidParameters(format!(
-                "bootstrap key transcript proof statement encoding failed: {err}"
-            ))
+            invalid!("bootstrap key transcript proof statement encoding failed: {err}")
         })?;
         Ok(Some(Hash::new_from_chunks(&[
             mode.bootstrap_key_transcript_proof_statement_domain(),
             bytes.as_slice(),
         ])))
     }
-
     /// Return the proof statement digest for admitted full-bootstrap material.
     ///
     /// This is the governance-facing statement hash for `FullBootstrapV1`
@@ -5458,16 +5258,13 @@ impl BfvEvaluationKeyBundle {
             full_bootstrap_material_digest,
         };
         let bytes = norito::encode_canonical(&material).map_err(|err| {
-            BfvError::InvalidParameters(format!(
-                "full-bootstrap material proof statement encoding failed: {err}"
-            ))
+            invalid!("full-bootstrap material proof statement encoding failed: {err}")
         })?;
         Ok(Some(Hash::new_from_chunks(&[
             BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_STATEMENT_DOMAIN,
             bytes.as_slice(),
         ])))
     }
-
     /// Verify that all public refresh ciphertexts decrypt to zero.
     ///
     /// This is a key-owner diagnostic for bundle construction. Public
@@ -5501,7 +5298,6 @@ impl BfvEvaluationKeyBundle {
         }
         Ok(())
     }
-
     /// Verify that all rounded public refresh ciphertexts decrypt to zero.
     ///
     /// This is the bounded-noise counterpart of [`Self::validate_zero_refreshes`]
@@ -5539,7 +5335,6 @@ impl BfvEvaluationKeyBundle {
         }
         Ok(())
     }
-
     /// Verify that evaluation keys are consistent with a secret key.
     ///
     /// This is a key-owner diagnostic for bundle construction. It checks that
@@ -5584,7 +5379,6 @@ impl BfvEvaluationKeyBundle {
         }
         Ok(())
     }
-
     /// Verify that bounded-noise evaluation keys match a secret key.
     ///
     /// This is the rounded BFV counterpart of
@@ -5620,7 +5414,6 @@ impl BfvEvaluationKeyBundle {
         }
         Ok(())
     }
-
     /// Return a stable digest over the evaluation-key bundle.
     ///
     /// # Errors
@@ -5628,16 +5421,14 @@ impl BfvEvaluationKeyBundle {
     pub fn digest(&self, params: &BfvParameters) -> Result<Hash, BfvError> {
         self.validate(params)?;
         validate_evaluation_key_bundle_digest_refresh_material_v1(self)?;
-        let bytes = norito::encode_canonical(self).map_err(|err| {
-            BfvError::InvalidParameters(format!("evaluation key encoding failed: {err}"))
-        })?;
+        let bytes = norito::encode_canonical(self)
+            .map_err(|err| invalid!("evaluation key encoding failed: {err}"))?;
         Ok(Hash::new_from_chunks(&[
             BFV_EVALUATION_KEY_DIGEST_DOMAIN,
             bytes.as_slice(),
         ]))
     }
 }
-
 /// Decode canonical BFV evaluation-key bundle bytes under a parameter set.
 ///
 /// # Errors
@@ -5655,7 +5446,6 @@ pub fn decode_bfv_evaluation_key_bundle_bytes_v1(
         |bundle: &BfvEvaluationKeyBundle| bundle.digest(params).map(|_| ()),
     )
 }
-
 /// Return the stable digest for canonical BFV evaluation-key bundle bytes.
 ///
 /// # Errors
@@ -5667,7 +5457,6 @@ pub fn bfv_evaluation_key_bundle_digest_from_bytes_v1(
     let (_, digest) = bfv_evaluation_key_bundle_and_digest_from_bytes_v1(params, bytes)?;
     Ok(digest)
 }
-
 /// Decode canonical BFV evaluation-key bundle bytes and return their digest.
 ///
 /// # Errors
@@ -5680,7 +5469,6 @@ pub fn bfv_evaluation_key_bundle_and_digest_from_bytes_v1(
     let digest = bundle.digest(params)?;
     Ok((bundle, digest))
 }
-
 /// Return a stable digest over the BFV Galois-key set used by full-bootstrap execution.
 ///
 /// The digest is bound into full-bootstrap execution witness material so a
@@ -5695,24 +5483,18 @@ pub fn bfv_full_bootstrap_galois_key_set_digest_v1(
 ) -> Result<Hash, BfvError> {
     validate_galois_key_set(params, galois_keys, "BFV full-bootstrap Galois key set")?;
     let params_bytes = norito::encode_canonical(params).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap Galois key set parameter encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap Galois key set parameter encoding failed: {err}")
     })?;
     let mut key_material = galois_keys.to_vec();
     key_material.sort_by_key(|key| key.automorphism_power);
-    let key_bytes = norito::encode_canonical(&key_material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap Galois key set encoding failed: {err}"
-        ))
-    })?;
+    let key_bytes = norito::encode_canonical(&key_material)
+        .map_err(|err| invalid!("BFV full-bootstrap Galois key set encoding failed: {err}"))?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_GALOIS_KEY_SET_DIGEST_DOMAIN,
         params_bytes.as_slice(),
         key_bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical BFV full-bootstrap Galois key-set bytes.
 ///
 /// Byte callers must provide the sorted canonical set encoding. The typed
@@ -5730,34 +5512,26 @@ pub fn decode_bfv_full_bootstrap_galois_key_set_bytes_v1(
 ) -> Result<Vec<BfvGaloisKey>, BfvError> {
     let label = "BFV full-bootstrap Galois key set bytes";
     if bytes.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if bytes.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be all-zero"
-        )));
+        return Err(invalid!("{label} must not be all-zero"));
     }
     let galois_keys = norito::decode_canonical::<Vec<BfvGaloisKey>>(bytes).map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "{label} must use canonical v1 bytes containing Norito-encoded Galois key-set material: {err}"
-        ))
+        )
     })?;
     validate_galois_key_set(params, &galois_keys, "BFV full-bootstrap Galois key set")?;
     let mut canonical_keys = galois_keys.clone();
     canonical_keys.sort_by_key(|key| key.automorphism_power);
-    let canonical_bytes = norito::encode_canonical(&canonical_keys).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} canonical encoding failed: {err}"))
-    })?;
+    let canonical_bytes = norito::encode_canonical(&canonical_keys)
+        .map_err(|err| invalid!("{label} canonical encoding failed: {err}"))?;
     if bytes != canonical_bytes {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must use canonical v1 bytes"
-        )));
+        return Err(invalid!("{label} must use canonical v1 bytes"));
     }
     Ok(canonical_keys)
 }
-
 /// Hash canonical BFV full-bootstrap Galois key-set bytes.
 ///
 /// # Errors
@@ -5770,7 +5544,6 @@ pub fn bfv_full_bootstrap_galois_key_set_digest_from_bytes_v1(
     let (_, digest) = bfv_full_bootstrap_galois_key_set_and_digest_from_bytes_v1(params, bytes)?;
     Ok(digest)
 }
-
 /// Decode canonical BFV full-bootstrap Galois key-set bytes and return their digest.
 ///
 /// # Errors
@@ -5784,7 +5557,6 @@ pub fn bfv_full_bootstrap_galois_key_set_and_digest_from_bytes_v1(
     let digest = bfv_full_bootstrap_galois_key_set_digest_v1(params, &galois_keys)?;
     Ok((galois_keys, digest))
 }
-
 /// Hash canonical Galois key-set bytes after binding them to witness material.
 ///
 /// This is the witness-bound companion to
@@ -5807,7 +5579,6 @@ pub fn bfv_full_bootstrap_galois_key_set_digest_from_bytes_for_witness_material_
         )?;
     Ok(digest)
 }
-
 /// Decode canonical Galois key-set bytes and return their witness-bound digest.
 ///
 /// This is the decoded-object companion to
@@ -5835,7 +5606,6 @@ pub fn bfv_full_bootstrap_galois_key_set_and_digest_from_bytes_for_witness_mater
     }
     Ok((galois_keys, decoded_digest))
 }
-
 /// Decode canonical Galois key-set bytes after binding them to witness material.
 ///
 /// This is the decoded-object companion to
@@ -5858,7 +5628,6 @@ pub fn validate_bfv_full_bootstrap_galois_key_set_bytes_for_witness_material_v1(
         )?;
     Ok(galois_keys)
 }
-
 /// BFV ciphertext with two components.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -5868,7 +5637,6 @@ pub struct BfvCiphertext {
     /// Second ciphertext polynomial.
     pub c1: Vec<u64>,
 }
-
 /// Typed prover input for exact-residual BFV public-key admission.
 ///
 /// The material binds the public statement hash to the concrete public key,
@@ -5900,7 +5668,6 @@ pub struct BfvExactResidualPublicKeyProofInputMaterialV1 {
     /// Canonical exact public-key statement hash exposed as public input.
     pub statement_hash: Hash,
 }
-
 /// Typed prover input for exact-residual BFV ciphertext admission.
 ///
 /// The material binds the public statement hash to the concrete public key,
@@ -5939,7 +5706,6 @@ pub struct BfvExactResidualCiphertextProofInputMaterialV1 {
     /// Canonical exact ciphertext statement hash exposed as public input.
     pub statement_hash: Hash,
 }
-
 /// Typed prover input for bounded-noise BFV public-key admission.
 ///
 /// The material binds the public statement hash to the concrete public key,
@@ -5968,7 +5734,6 @@ pub struct BfvBoundedNoisePublicKeyProofInputMaterialV1 {
     /// Canonical bounded-noise public-key statement hash exposed as public input.
     pub statement_hash: Hash,
 }
-
 /// Typed prover input for bounded-noise BFV ciphertext admission.
 ///
 /// The material binds the public statement hash to the concrete public key,
@@ -6007,7 +5772,6 @@ pub struct BfvBoundedNoiseCiphertextProofInputMaterialV1 {
     /// Canonical bounded-noise ciphertext statement hash exposed as public input.
     pub statement_hash: Hash,
 }
-
 /// Secret-key diagnostic for the first-release exact BFV residual.
 ///
 /// This is not a bounded-RLWE noise estimate. It decomposes each centered
@@ -6026,7 +5790,6 @@ pub struct BfvExactResidualProfile {
     /// Remaining margin to the centered residual capacity.
     pub residual_multiple_headroom: u128,
 }
-
 /// Secret-key diagnostic for rounded BFV plaintext scaling.
 ///
 /// Unlike [`BfvExactResidualProfile`], this profile measures centered
@@ -6046,7 +5809,6 @@ pub struct BfvBoundedNoiseProfile {
     /// Remaining margin to the centered rounded-decoding capacity.
     pub noise_headroom: u128,
 }
-
 /// Public BFV parameters published to clients for encrypted identifier input.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -6058,7 +5820,6 @@ pub struct BfvIdentifierPublicParameters {
     /// Maximum number of raw UTF-8 input bytes accepted by the envelope.
     pub max_input_bytes: u16,
 }
-
 /// BFV ciphertext envelope for identifier input.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -6066,7 +5827,6 @@ pub struct BfvIdentifierCiphertext {
     /// Scalar ciphertext slots: slot 0 is the byte length, followed by one slot per byte.
     pub slots: Vec<BfvCiphertext>,
 }
-
 impl BfvIdentifierPublicParameters {
     /// Validate the public parameters and envelope capacity.
     ///
@@ -6080,7 +5840,6 @@ impl BfvIdentifierPublicParameters {
         Ok(())
     }
 }
-
 fn validate_identifier_public_parameter_metadata(
     public_parameters: &BfvIdentifierPublicParameters,
 ) -> Result<(), BfvError> {
@@ -6089,7 +5848,6 @@ fn validate_identifier_public_parameter_metadata(
         public_parameters.max_input_bytes,
     )
 }
-
 fn validate_identifier_public_parameter_metadata_parts(
     params: &BfvParameters,
     max_input_bytes: u16,
@@ -6106,13 +5864,12 @@ fn validate_identifier_public_parameter_metadata_parts(
         ));
     }
     if max_input_bytes > RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "max_input_bytes must be at most {RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES} for the registered RAM-LFE BFV identifier profile"
-        )));
+        ));
     }
     Ok(())
 }
-
 /// Return the registered BFV parameter set used by RAM-LFE byte-slot programs.
 #[must_use]
 pub const fn ram_lfe_bfv_parameters_v1() -> BfvParameters {
@@ -6123,7 +5880,6 @@ pub const fn ram_lfe_bfv_parameters_v1() -> BfvParameters {
         decomposition_base_log: 12,
     }
 }
-
 /// Return the registered BFV RNS chain for RAM-LFE byte-slot programs.
 #[must_use]
 pub fn ram_lfe_bfv_rns_modulus_chain_v1() -> BfvRnsModulusChain {
@@ -6131,7 +5887,6 @@ pub fn ram_lfe_bfv_rns_modulus_chain_v1() -> BfvRnsModulusChain {
         moduli: RAM_LFE_BFV_RNS_MODULI_V1.to_vec(),
     }
 }
-
 /// Validate that parameters match a registered production BFV profile.
 ///
 /// # Errors
@@ -6146,7 +5901,6 @@ pub fn validate_registered_bfv_parameters(params: &BfvParameters) -> Result<(), 
     validate_bfv_seeded_encryption_residual_capacity(params)?;
     Ok(())
 }
-
 /// Return the registered BFV RNS chain for a production BFV parameter set.
 ///
 /// # Errors
@@ -6161,7 +5915,6 @@ pub fn registered_bfv_rns_modulus_chain(
     validate_registered_bfv_rns_negacyclic_roots(params, &chain)?;
     Ok(chain)
 }
-
 /// Return the stable digest for a registered BFV RNS modulus chain.
 ///
 /// # Errors
@@ -6171,7 +5924,6 @@ pub fn registered_bfv_rns_modulus_chain_digest(params: &BfvParameters) -> Result
     let chain = registered_bfv_rns_modulus_chain(params)?;
     chain.digest_for_parameters(params)
 }
-
 /// Return the registered BFV RNS chain used for key-switch decomposition.
 ///
 /// The returned chain is the smallest prefix of the registered evaluator chain
@@ -6189,7 +5941,6 @@ pub fn registered_bfv_key_switch_decomposition_chain(
     let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
     registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)
 }
-
 /// Return the stable digest for the registered key-switch decomposition chain.
 ///
 /// # Errors
@@ -6199,17 +5950,13 @@ pub fn registered_bfv_key_switch_decomposition_chain_digest(
     params: &BfvParameters,
 ) -> Result<Hash, BfvError> {
     let chain = registered_bfv_key_switch_decomposition_chain(params)?;
-    let bytes = norito::encode_canonical(&chain).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "RNS key-switch decomposition-chain encoding failed: {err}"
-        ))
-    })?;
+    let bytes = norito::encode_canonical(&chain)
+        .map_err(|err| invalid!("RNS key-switch decomposition-chain encoding failed: {err}"))?;
     Ok(Hash::new_from_chunks(&[
         BFV_RNS_KEY_SWITCH_DECOMPOSITION_CHAIN_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Return the registered BFV RNS chain used as centered scale-round source.
 ///
 /// The returned chain is the smallest prefix of the registered evaluator chain
@@ -6227,7 +5974,6 @@ pub fn registered_bfv_centered_scale_round_source_chain(
     let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
     registered_bfv_centered_scale_round_source_chain_for_evaluator(params, &evaluator_chain)
 }
-
 /// Return the stable digest for the registered centered scale-round source chain.
 ///
 /// # Errors
@@ -6237,17 +5983,13 @@ pub fn registered_bfv_centered_scale_round_source_chain_digest(
     params: &BfvParameters,
 ) -> Result<Hash, BfvError> {
     let chain = registered_bfv_centered_scale_round_source_chain(params)?;
-    let bytes = norito::encode_canonical(&chain).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "RNS centered scale-round source-chain encoding failed: {err}"
-        ))
-    })?;
+    let bytes = norito::encode_canonical(&chain)
+        .map_err(|err| invalid!("RNS centered scale-round source-chain encoding failed: {err}"))?;
     Ok(Hash::new_from_chunks(&[
         BFV_RNS_CENTERED_SCALE_ROUND_SOURCE_CHAIN_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Return the stable digest for a registered BFV parameter set.
 ///
 /// # Errors
@@ -6255,13 +5997,12 @@ pub fn registered_bfv_centered_scale_round_source_chain_digest(
 pub fn registered_bfv_parameter_digest(params: &BfvParameters) -> Result<Hash, BfvError> {
     validate_registered_bfv_parameters(params)?;
     let bytes = norito::encode_canonical(params)
-        .map_err(|err| BfvError::InvalidParameters(format!("parameter encoding failed: {err}")))?;
+        .map_err(|err| invalid!("parameter encoding failed: {err}"))?;
     Ok(Hash::new_from_chunks(&[
         BFV_PARAMETER_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Return the stable digest for a BFV public key under a parameter set.
 ///
 /// # Errors
@@ -6277,15 +6018,13 @@ pub fn bfv_public_key_digest(
         params: *params,
         public_key: public_key.clone(),
     };
-    let bytes = norito::encode_canonical(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!("public key digest encoding failed: {err}"))
-    })?;
+    let bytes = norito::encode_canonical(&material)
+        .map_err(|err| invalid!("public key digest encoding failed: {err}"))?;
     Ok(Hash::new_from_chunks(&[
         BFV_PUBLIC_KEY_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical BFV public key bytes under a parameter set.
 ///
 /// # Errors
@@ -6300,7 +6039,6 @@ pub fn decode_bfv_public_key_bytes_v1(
         bfv_public_key_digest(params, public_key).map(|_| ())
     })
 }
-
 /// Return the stable digest for canonical BFV public key bytes.
 ///
 /// # Errors
@@ -6312,7 +6050,6 @@ pub fn bfv_public_key_digest_from_bytes_v1(
     let (_, digest) = bfv_public_key_and_digest_from_bytes_v1(params, bytes)?;
     Ok(digest)
 }
-
 /// Decode canonical BFV public key bytes and return their stable digest.
 ///
 /// # Errors
@@ -6325,7 +6062,6 @@ pub fn bfv_public_key_and_digest_from_bytes_v1(
     let digest = bfv_public_key_digest(params, &public_key)?;
     Ok((public_key, digest))
 }
-
 /// Return the stable digest for a non-inert BFV ciphertext under a parameter set.
 ///
 /// This digest is the public commitment used by ciphertext proof-statement
@@ -6346,15 +6082,13 @@ pub fn bfv_ciphertext_digest(
         params: *params,
         ciphertext: ciphertext.clone(),
     };
-    let bytes = norito::encode_canonical(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!("ciphertext digest encoding failed: {err}"))
-    })?;
+    let bytes = norito::encode_canonical(&material)
+        .map_err(|err| invalid!("ciphertext digest encoding failed: {err}"))?;
     Ok(Hash::new_from_chunks(&[
         BFV_CIPHERTEXT_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical BFV ciphertext bytes under a parameter set.
 ///
 /// # Errors
@@ -6369,7 +6103,6 @@ pub fn decode_bfv_ciphertext_bytes_v1(
         bfv_ciphertext_digest(params, ciphertext).map(|_| ())
     })
 }
-
 /// Return the stable digest for canonical BFV ciphertext bytes.
 ///
 /// # Errors
@@ -6381,7 +6114,6 @@ pub fn bfv_ciphertext_digest_from_bytes_v1(
     let (_, digest) = bfv_ciphertext_and_digest_from_bytes_v1(params, bytes)?;
     Ok(digest)
 }
-
 /// Decode canonical BFV ciphertext bytes and return their stable digest.
 ///
 /// # Errors
@@ -6394,7 +6126,6 @@ pub fn bfv_ciphertext_and_digest_from_bytes_v1(
     let digest = bfv_ciphertext_digest(params, &ciphertext)?;
     Ok((ciphertext, digest))
 }
-
 fn decode_bfv_base_material_bytes_v1<T>(
     label: &str,
     bytes: &[u8],
@@ -6404,24 +6135,19 @@ where
     T: Decode + Encode,
 {
     if bytes.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if bytes.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be all-zero"
-        )));
+        return Err(invalid!("{label} must not be all-zero"));
     }
     let material = norito::decode_canonical::<T>(bytes).map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "{label} must use canonical v1 bytes containing Norito-encoded BFV material: {err}"
-        ))
+        )
     })?;
     validate(&material)?;
     Ok(material)
 }
-
 /// Return the public statement digest for exact-lift BFV public-key admission.
 ///
 /// This is the canonical public input for a proof that an admitted BFV public
@@ -6444,7 +6170,6 @@ pub fn bfv_public_key_proof_statement_digest(
         BfvRefreshTranscriptMode::Exact,
     )
 }
-
 /// Return the exact-lift public-key statement digest from canonical key bytes.
 ///
 /// # Errors
@@ -6460,7 +6185,6 @@ pub fn bfv_public_key_proof_statement_digest_from_public_key_bytes_v1(
     )?;
     Ok(digest)
 }
-
 /// Decode canonical public-key bytes and return the exact-lift statement digest.
 ///
 /// # Errors
@@ -6475,7 +6199,6 @@ pub fn bfv_public_key_proof_statement_and_digest_from_public_key_bytes_v1(
     let digest = bfv_public_key_proof_statement_digest(params, &public_key)?;
     Ok((public_key, digest))
 }
-
 /// Return the public statement digest for bounded-noise BFV public-key admission.
 ///
 /// This is the bounded-noise counterpart of
@@ -6495,7 +6218,6 @@ pub fn bfv_bounded_noise_public_key_proof_statement_digest(
         BfvRefreshTranscriptMode::BoundedNoise,
     )
 }
-
 /// Return the bounded-noise public-key statement digest from canonical key bytes.
 ///
 /// # Errors
@@ -6512,7 +6234,6 @@ pub fn bfv_bounded_noise_public_key_proof_statement_digest_from_public_key_bytes
         )?;
     Ok(digest)
 }
-
 /// Decode canonical public-key bytes and return the bounded-noise statement digest.
 ///
 /// # Errors
@@ -6527,7 +6248,6 @@ pub fn bfv_bounded_noise_public_key_proof_statement_and_digest_from_public_key_b
     let digest = bfv_bounded_noise_public_key_proof_statement_digest(params, &public_key)?;
     Ok((public_key, digest))
 }
-
 /// Return the public statement digest for exact-lift BFV ciphertext admission.
 ///
 /// This is the canonical public input for a future proof that an admitted
@@ -6555,7 +6275,6 @@ pub fn bfv_ciphertext_exact_residual_proof_statement_digest(
         BfvRefreshTranscriptMode::Exact,
     )
 }
-
 /// Return the exact-lift ciphertext statement digest from canonical material bytes.
 ///
 /// # Errors
@@ -6575,7 +6294,6 @@ pub fn bfv_ciphertext_exact_residual_proof_statement_digest_from_bytes_v1(
     )?;
     Ok(digest)
 }
-
 /// Decode canonical exact-lift ciphertext statement bytes and return their digest.
 ///
 /// # Errors
@@ -6603,7 +6321,6 @@ pub fn bfv_ciphertext_exact_residual_proof_statement_and_digest_from_bytes_v1(
     )?;
     Ok((public_key, ciphertext, digest))
 }
-
 /// Return the public statement digest for bounded-noise BFV ciphertext admission.
 ///
 /// This is the bounded-noise counterpart of
@@ -6629,7 +6346,6 @@ pub fn bfv_bounded_noise_ciphertext_proof_statement_digest(
         BfvRefreshTranscriptMode::BoundedNoise,
     )
 }
-
 /// Return the bounded-noise ciphertext statement digest from canonical material bytes.
 ///
 /// # Errors
@@ -6649,7 +6365,6 @@ pub fn bfv_bounded_noise_ciphertext_proof_statement_digest_from_bytes_v1(
     )?;
     Ok(digest)
 }
-
 /// Decode canonical bounded-noise ciphertext statement bytes and return their digest.
 ///
 /// # Errors
@@ -6677,7 +6392,6 @@ pub fn bfv_bounded_noise_ciphertext_proof_statement_and_digest_from_bytes_v1(
     )?;
     Ok((public_key, ciphertext, digest))
 }
-
 fn bfv_public_key_proof_statement_digest_for_mode(
     params: &BfvParameters,
     public_key: &BfvPublicKey,
@@ -6707,15 +6421,13 @@ fn bfv_public_key_proof_statement_digest_for_mode(
         public_key: public_key.clone(),
         public_key_digest,
     };
-    let bytes = norito::encode_canonical(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!("public-key proof statement encoding failed: {err}"))
-    })?;
+    let bytes = norito::encode_canonical(&material)
+        .map_err(|err| invalid!("public-key proof statement encoding failed: {err}"))?;
     Ok(Hash::new_from_chunks(&[
         mode.public_key_proof_statement_domain(),
         bytes.as_slice(),
     ]))
 }
-
 fn bfv_ciphertext_proof_statement_digest_for_mode(
     params: &BfvParameters,
     public_key: &BfvPublicKey,
@@ -6769,15 +6481,13 @@ fn bfv_ciphertext_proof_statement_digest_for_mode(
         ciphertext_digest,
         declared_bound,
     };
-    let bytes = norito::encode_canonical(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!("ciphertext proof statement encoding failed: {err}"))
-    })?;
+    let bytes = norito::encode_canonical(&material)
+        .map_err(|err| invalid!("ciphertext proof statement encoding failed: {err}"))?;
     Ok(Hash::new_from_chunks(&[
         mode.ciphertext_proof_statement_domain(),
         bytes.as_slice(),
     ]))
 }
-
 /// Build exact-residual BFV public-key proof input material.
 ///
 /// The returned material is fully validated and carries the same statement hash
@@ -6816,7 +6526,6 @@ pub fn bfv_exact_residual_public_key_proof_input_material_v1(
     validate_bfv_exact_residual_public_key_proof_input_material_v1(&material)?;
     Ok(material)
 }
-
 /// Validate exact-residual BFV public-key proof input material.
 ///
 /// # Errors
@@ -6903,7 +6612,6 @@ pub fn validate_bfv_exact_residual_public_key_proof_input_material_v1(
     }
     Ok(())
 }
-
 /// Build exact-residual BFV ciphertext proof input material.
 ///
 /// The returned material is fully validated and carries the same statement hash
@@ -6955,12 +6663,10 @@ pub fn bfv_exact_residual_ciphertext_proof_input_material_v1(
     validate_bfv_exact_residual_ciphertext_proof_input_material_v1(&material)?;
     Ok(material)
 }
-
 struct BfvExactResidualCiphertextProofInputWitness {
     profile: BfvExactResidualProfile,
     scaled_coefficients: Polynomial,
 }
-
 fn derive_bfv_exact_residual_ciphertext_proof_input_witness(
     params: &BfvParameters,
     secret_key: &BfvSecretKey,
@@ -6981,7 +6687,6 @@ fn derive_bfv_exact_residual_ciphertext_proof_input_witness(
         scaled_coefficients,
     })
 }
-
 fn exact_residual_multiples_i64(residual_multiples: &[i128]) -> Result<Vec<i64>, BfvError> {
     residual_multiples
         .iter()
@@ -6995,7 +6700,6 @@ fn exact_residual_multiples_i64(residual_multiples: &[i128]) -> Result<Vec<i64>,
         })
         .collect()
 }
-
 /// Validate exact-residual BFV ciphertext proof input material.
 ///
 /// # Errors
@@ -7022,7 +6726,6 @@ pub fn validate_bfv_exact_residual_ciphertext_proof_input_material_v1(
     validate_bfv_exact_residual_ciphertext_proof_input_material_witness(material, &witness)?;
     validate_bfv_exact_residual_ciphertext_proof_input_material_statement(material)
 }
-
 fn validate_bfv_exact_residual_ciphertext_proof_input_material_header(
     material: &BfvExactResidualCiphertextProofInputMaterialV1,
 ) -> Result<(), BfvError> {
@@ -7038,7 +6741,6 @@ fn validate_bfv_exact_residual_ciphertext_proof_input_material_header(
     }
     Ok(())
 }
-
 fn validate_bfv_exact_residual_ciphertext_proof_input_material_digests(
     material: &BfvExactResidualCiphertextProofInputMaterialV1,
 ) -> Result<(), BfvError> {
@@ -7064,7 +6766,6 @@ fn validate_bfv_exact_residual_ciphertext_proof_input_material_digests(
     }
     Ok(())
 }
-
 fn validate_bfv_exact_residual_ciphertext_proof_input_material_witness(
     material: &BfvExactResidualCiphertextProofInputMaterialV1,
     witness: &BfvExactResidualCiphertextProofInputWitness,
@@ -7106,14 +6807,14 @@ fn validate_bfv_exact_residual_ciphertext_proof_input_material_witness(
         "exact-residual BFV ciphertext proof input declared bound",
     )?;
     if material.actual_max_abs_residual_multiple > material.declared_bound {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "exact-residual BFV ciphertext proof input actual residual {} exceeds declared bound {}",
-            material.actual_max_abs_residual_multiple, material.declared_bound
-        )));
+            material.actual_max_abs_residual_multiple,
+            material.declared_bound
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_exact_residual_ciphertext_proof_input_material_statement(
     material: &BfvExactResidualCiphertextProofInputMaterialV1,
 ) -> Result<(), BfvError> {
@@ -7130,7 +6831,6 @@ fn validate_bfv_exact_residual_ciphertext_proof_input_material_statement(
     }
     Ok(())
 }
-
 /// Build bounded-noise BFV public-key proof input material.
 ///
 /// The returned material is fully validated and carries the same statement hash
@@ -7172,7 +6872,6 @@ pub fn bfv_bounded_noise_public_key_proof_input_material_v1(
     validate_bfv_bounded_noise_public_key_proof_input_material_v1(&material)?;
     Ok(material)
 }
-
 /// Validate bounded-noise BFV public-key proof input material.
 ///
 /// # Errors
@@ -7255,7 +6954,6 @@ pub fn validate_bfv_bounded_noise_public_key_proof_input_material_v1(
     }
     Ok(())
 }
-
 /// Build bounded-noise BFV ciphertext proof input material.
 ///
 /// The returned material is fully validated and carries the same statement hash
@@ -7307,13 +7005,11 @@ pub fn bfv_bounded_noise_ciphertext_proof_input_material_v1(
     validate_bfv_bounded_noise_ciphertext_proof_input_material_v1(&material)?;
     Ok(material)
 }
-
 struct BfvBoundedNoiseCiphertextProofInputWitness {
     profile: BfvBoundedNoiseProfile,
     scaled_coefficients: Polynomial,
     noise_polynomial: Polynomial,
 }
-
 fn derive_bfv_bounded_noise_ciphertext_proof_input_witness(
     params: &BfvParameters,
     secret_key: &BfvSecretKey,
@@ -7334,7 +7030,6 @@ fn derive_bfv_bounded_noise_ciphertext_proof_input_witness(
         noise_polynomial,
     })
 }
-
 fn bounded_noise_polynomial_from_scaled(
     params: &BfvParameters,
     scaled_coefficients: &[u64],
@@ -7348,7 +7043,6 @@ fn bounded_noise_polynomial_from_scaled(
         })
         .collect()
 }
-
 /// Validate bounded-noise BFV ciphertext proof input material.
 ///
 /// # Errors
@@ -7375,7 +7069,6 @@ pub fn validate_bfv_bounded_noise_ciphertext_proof_input_material_v1(
     validate_bfv_bounded_noise_ciphertext_proof_input_material_witness(material, &witness)?;
     validate_bfv_bounded_noise_ciphertext_proof_input_material_statement(material)
 }
-
 fn validate_bfv_bounded_noise_ciphertext_proof_input_material_header(
     material: &BfvBoundedNoiseCiphertextProofInputMaterialV1,
 ) -> Result<(), BfvError> {
@@ -7391,7 +7084,6 @@ fn validate_bfv_bounded_noise_ciphertext_proof_input_material_header(
     }
     Ok(())
 }
-
 fn validate_bfv_bounded_noise_ciphertext_proof_input_material_digests(
     material: &BfvBoundedNoiseCiphertextProofInputMaterialV1,
 ) -> Result<(), BfvError> {
@@ -7417,7 +7109,6 @@ fn validate_bfv_bounded_noise_ciphertext_proof_input_material_digests(
     }
     Ok(())
 }
-
 fn validate_bfv_bounded_noise_ciphertext_proof_input_material_witness(
     material: &BfvBoundedNoiseCiphertextProofInputMaterialV1,
     witness: &BfvBoundedNoiseCiphertextProofInputWitness,
@@ -7462,14 +7153,14 @@ fn validate_bfv_bounded_noise_ciphertext_proof_input_material_witness(
         "bounded-noise BFV ciphertext proof input declared bound",
     )?;
     if material.actual_max_abs_noise > material.declared_bound {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "bounded-noise BFV ciphertext proof input actual noise {} exceeds declared bound {}",
-            material.actual_max_abs_noise, material.declared_bound
-        )));
+            material.actual_max_abs_noise,
+            material.declared_bound
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_bounded_noise_ciphertext_proof_input_material_statement(
     material: &BfvBoundedNoiseCiphertextProofInputMaterialV1,
 ) -> Result<(), BfvError> {
@@ -7486,7 +7177,6 @@ fn validate_bfv_bounded_noise_ciphertext_proof_input_material_statement(
     }
     Ok(())
 }
-
 fn validate_bfv_public_key_proof_input_material_digest_aliases_v1(
     material_label: &str,
     public_key_digest: &Hash,
@@ -7500,7 +7190,6 @@ fn validate_bfv_public_key_proof_input_material_digest_aliases_v1(
         ],
     )
 }
-
 fn validate_bfv_ciphertext_proof_input_material_digest_aliases_v1(
     material_label: &str,
     public_key_digest: &Hash,
@@ -7516,7 +7205,6 @@ fn validate_bfv_ciphertext_proof_input_material_digest_aliases_v1(
         ],
     )
 }
-
 /// Hash exact-residual BFV public-key proof input material.
 ///
 /// # Errors
@@ -7532,7 +7220,6 @@ pub fn bfv_exact_residual_public_key_proof_input_material_digest_v1(
         material,
     )
 }
-
 /// Decode canonical exact-residual BFV public-key proof input material bytes.
 ///
 /// # Errors
@@ -7548,7 +7235,6 @@ pub fn decode_bfv_exact_residual_public_key_proof_input_material_bytes_v1(
         validate_bfv_exact_residual_public_key_proof_input_material_v1,
     )
 }
-
 /// Hash canonical exact-residual BFV public-key proof input material bytes.
 ///
 /// # Errors
@@ -7560,7 +7246,6 @@ pub fn bfv_exact_residual_public_key_proof_input_material_digest_from_bytes_v1(
         bfv_exact_residual_public_key_proof_input_material_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode exact-residual BFV public-key proof input bytes and return their digest.
 ///
 /// # Errors
@@ -7572,7 +7257,6 @@ pub fn bfv_exact_residual_public_key_proof_input_material_and_digest_from_bytes_
     let digest = bfv_exact_residual_public_key_proof_input_material_digest_v1(&material)?;
     Ok((material, digest))
 }
-
 /// Hash exact-residual public-key proof input bytes for a caller-owned key.
 ///
 /// # Errors
@@ -7590,7 +7274,6 @@ pub fn bfv_exact_residual_public_key_proof_input_material_digest_from_bytes_for_
         )?;
     Ok(digest)
 }
-
 /// Decode exact-residual public-key proof input bytes with a caller-owned key digest.
 ///
 /// This helper keeps the decoded proof input material and its digest bound to
@@ -7619,7 +7302,6 @@ pub fn bfv_exact_residual_public_key_proof_input_material_and_digest_from_bytes_
     )?;
     Ok((material, digest))
 }
-
 /// Decode exact-residual public-key proof input bytes for a caller-owned key.
 ///
 /// # Errors
@@ -7636,7 +7318,6 @@ pub fn validate_bfv_exact_residual_public_key_proof_input_material_bytes_for_pub
         )?;
     Ok(material)
 }
-
 /// Decode exact-residual public-key and proof-input bytes with the proof-input digest.
 ///
 /// # Errors
@@ -7663,7 +7344,6 @@ pub fn validate_bfv_exact_residual_public_key_proof_input_material_bytes_and_dig
         )?;
     Ok((public_key, material, proof_input_digest))
 }
-
 /// Decode exact-residual public-key and proof-input bytes with all admitted digests.
 ///
 /// # Errors
@@ -7694,7 +7374,6 @@ pub fn validate_bfv_exact_residual_public_key_proof_input_material_bytes_and_dig
         )?;
     Ok((public_key, material, public_key_digest, proof_input_digest))
 }
-
 /// Decode exact-residual public-key and proof-input bytes together.
 ///
 /// # Errors
@@ -7714,7 +7393,6 @@ pub fn validate_bfv_exact_residual_public_key_proof_input_material_bytes_for_pub
         )?;
     Ok((public_key, material))
 }
-
 /// Hash bounded-noise BFV public-key proof input material.
 ///
 /// # Errors
@@ -7730,7 +7408,6 @@ pub fn bfv_bounded_noise_public_key_proof_input_material_digest_v1(
         material,
     )
 }
-
 /// Decode canonical bounded-noise BFV public-key proof input material bytes.
 ///
 /// # Errors
@@ -7746,7 +7423,6 @@ pub fn decode_bfv_bounded_noise_public_key_proof_input_material_bytes_v1(
         validate_bfv_bounded_noise_public_key_proof_input_material_v1,
     )
 }
-
 /// Hash canonical bounded-noise BFV public-key proof input material bytes.
 ///
 /// # Errors
@@ -7758,7 +7434,6 @@ pub fn bfv_bounded_noise_public_key_proof_input_material_digest_from_bytes_v1(
         bfv_bounded_noise_public_key_proof_input_material_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode bounded-noise BFV public-key proof input bytes and return their digest.
 ///
 /// # Errors
@@ -7770,7 +7445,6 @@ pub fn bfv_bounded_noise_public_key_proof_input_material_and_digest_from_bytes_v
     let digest = bfv_bounded_noise_public_key_proof_input_material_digest_v1(&material)?;
     Ok((material, digest))
 }
-
 /// Hash bounded-noise public-key proof input bytes for a caller-owned key.
 ///
 /// # Errors
@@ -7788,7 +7462,6 @@ pub fn bfv_bounded_noise_public_key_proof_input_material_digest_from_bytes_for_p
         )?;
     Ok(digest)
 }
-
 /// Decode bounded-noise public-key proof input bytes with a caller-owned key digest.
 ///
 /// This helper keeps the decoded proof input material and its digest bound to
@@ -7817,7 +7490,6 @@ pub fn bfv_bounded_noise_public_key_proof_input_material_and_digest_from_bytes_f
     )?;
     Ok((material, digest))
 }
-
 /// Decode bounded-noise public-key proof input bytes for a caller-owned key.
 ///
 /// # Errors
@@ -7834,7 +7506,6 @@ pub fn validate_bfv_bounded_noise_public_key_proof_input_material_bytes_for_publ
         )?;
     Ok(material)
 }
-
 /// Decode bounded-noise public-key and proof-input bytes with the proof-input digest.
 ///
 /// # Errors
@@ -7861,7 +7532,6 @@ pub fn validate_bfv_bounded_noise_public_key_proof_input_material_bytes_and_dige
         )?;
     Ok((public_key, material, proof_input_digest))
 }
-
 /// Decode bounded-noise public-key and proof-input bytes with all admitted digests.
 ///
 /// # Errors
@@ -7892,7 +7562,6 @@ pub fn validate_bfv_bounded_noise_public_key_proof_input_material_bytes_and_dige
         )?;
     Ok((public_key, material, public_key_digest, proof_input_digest))
 }
-
 /// Decode bounded-noise public-key and proof-input bytes together.
 ///
 /// # Errors
@@ -7912,7 +7581,6 @@ pub fn validate_bfv_bounded_noise_public_key_proof_input_material_bytes_for_publ
         )?;
     Ok((public_key, material))
 }
-
 /// Hash exact-residual BFV ciphertext proof input material.
 ///
 /// # Errors
@@ -7928,7 +7596,6 @@ pub fn bfv_exact_residual_ciphertext_proof_input_material_digest_v1(
         material,
     )
 }
-
 /// Decode canonical exact-residual BFV ciphertext proof input material bytes.
 ///
 /// # Errors
@@ -7944,7 +7611,6 @@ pub fn decode_bfv_exact_residual_ciphertext_proof_input_material_bytes_v1(
         validate_bfv_exact_residual_ciphertext_proof_input_material_v1,
     )
 }
-
 /// Hash canonical exact-residual BFV ciphertext proof input material bytes.
 ///
 /// # Errors
@@ -7956,7 +7622,6 @@ pub fn bfv_exact_residual_ciphertext_proof_input_material_digest_from_bytes_v1(
         bfv_exact_residual_ciphertext_proof_input_material_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode exact-residual BFV ciphertext proof input bytes and return their digest.
 ///
 /// # Errors
@@ -7968,7 +7633,6 @@ pub fn bfv_exact_residual_ciphertext_proof_input_material_and_digest_from_bytes_
     let digest = bfv_exact_residual_ciphertext_proof_input_material_digest_v1(&material)?;
     Ok((material, digest))
 }
-
 /// Hash exact-residual ciphertext proof input bytes for caller-owned inputs.
 ///
 /// # Errors
@@ -7992,7 +7656,6 @@ pub fn bfv_exact_residual_ciphertext_proof_input_material_digest_from_bytes_for_
         )?;
     Ok(digest)
 }
-
 /// Decode exact-residual ciphertext proof input bytes with a caller-owned digest.
 ///
 /// This helper keeps the decoded proof input material and its digest bound to
@@ -8033,7 +7696,6 @@ pub fn bfv_exact_residual_ciphertext_proof_input_material_and_digest_from_bytes_
     )?;
     Ok((material, digest))
 }
-
 /// Decode exact-residual ciphertext proof input bytes for caller-owned inputs.
 ///
 /// # Errors
@@ -8057,7 +7719,6 @@ pub fn validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_for_cip
         )?;
     Ok(material)
 }
-
 /// Decode exact-residual ciphertext governance bytes with the proof-input digest.
 ///
 /// # Errors
@@ -8090,7 +7751,6 @@ pub fn validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_and_dig
         )?;
     Ok((public_key, ciphertext, material, proof_input_digest))
 }
-
 /// Decode exact-residual ciphertext governance bytes with all admitted digests.
 ///
 /// # Errors
@@ -8150,7 +7810,6 @@ pub fn validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_and_dig
         proof_input_digest,
     ))
 }
-
 /// Decode exact-residual ciphertext governance bytes and proof-input bytes together.
 ///
 /// # Errors
@@ -8182,7 +7841,6 @@ pub fn validate_bfv_exact_residual_ciphertext_proof_input_material_bytes_for_cip
         )?;
     Ok((public_key, ciphertext, material))
 }
-
 /// Hash bounded-noise BFV ciphertext proof input material.
 ///
 /// # Errors
@@ -8198,7 +7856,6 @@ pub fn bfv_bounded_noise_ciphertext_proof_input_material_digest_v1(
         material,
     )
 }
-
 /// Decode canonical bounded-noise BFV ciphertext proof input material bytes.
 ///
 /// # Errors
@@ -8214,7 +7871,6 @@ pub fn decode_bfv_bounded_noise_ciphertext_proof_input_material_bytes_v1(
         validate_bfv_bounded_noise_ciphertext_proof_input_material_v1,
     )
 }
-
 /// Hash canonical bounded-noise BFV ciphertext proof input material bytes.
 ///
 /// # Errors
@@ -8226,7 +7882,6 @@ pub fn bfv_bounded_noise_ciphertext_proof_input_material_digest_from_bytes_v1(
         bfv_bounded_noise_ciphertext_proof_input_material_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode bounded-noise BFV ciphertext proof input bytes and return their digest.
 ///
 /// # Errors
@@ -8238,7 +7893,6 @@ pub fn bfv_bounded_noise_ciphertext_proof_input_material_and_digest_from_bytes_v
     let digest = bfv_bounded_noise_ciphertext_proof_input_material_digest_v1(&material)?;
     Ok((material, digest))
 }
-
 /// Hash bounded-noise ciphertext proof input bytes for caller-owned inputs.
 ///
 /// # Errors
@@ -8262,7 +7916,6 @@ pub fn bfv_bounded_noise_ciphertext_proof_input_material_digest_from_bytes_for_c
         )?;
     Ok(digest)
 }
-
 /// Decode bounded-noise ciphertext proof input bytes with a caller-owned digest.
 ///
 /// This helper keeps the decoded proof input material and its digest bound to
@@ -8303,7 +7956,6 @@ pub fn bfv_bounded_noise_ciphertext_proof_input_material_and_digest_from_bytes_f
     )?;
     Ok((material, digest))
 }
-
 /// Decode bounded-noise ciphertext proof input bytes for caller-owned inputs.
 ///
 /// # Errors
@@ -8327,7 +7979,6 @@ pub fn validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_for_ciph
         )?;
     Ok(material)
 }
-
 /// Decode bounded-noise ciphertext governance bytes with the proof-input digest.
 ///
 /// # Errors
@@ -8360,7 +8011,6 @@ pub fn validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_dige
         )?;
     Ok((public_key, ciphertext, material, proof_input_digest))
 }
-
 /// Decode bounded-noise ciphertext governance bytes with all admitted digests.
 ///
 /// # Errors
@@ -8420,7 +8070,6 @@ pub fn validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_and_dige
         proof_input_digest,
     ))
 }
-
 /// Decode bounded-noise ciphertext governance bytes and proof-input bytes together.
 ///
 /// # Errors
@@ -8452,14 +8101,12 @@ pub fn validate_bfv_bounded_noise_ciphertext_proof_input_material_bytes_for_ciph
         )?;
     Ok((public_key, ciphertext, material))
 }
-
 fn validate_bfv_admission_public_key_proof_input_caller_v1(
     params: &BfvParameters,
     public_key: &BfvPublicKey,
 ) -> Result<(), BfvError> {
     bfv_public_key_digest(params, public_key).map(|_| ())
 }
-
 fn validate_bfv_admission_ciphertext_proof_input_caller_v1(
     params: &BfvParameters,
     public_key: &BfvPublicKey,
@@ -8468,7 +8115,6 @@ fn validate_bfv_admission_ciphertext_proof_input_caller_v1(
     validate_bfv_admission_public_key_proof_input_caller_v1(params, public_key)?;
     bfv_ciphertext_digest(params, ciphertext).map(|_| ())
 }
-
 fn validate_bfv_admission_public_key_proof_input_material_context_v1(
     label: &str,
     material_params: &BfvParameters,
@@ -8477,18 +8123,13 @@ fn validate_bfv_admission_public_key_proof_input_material_context_v1(
     expected_public_key: &BfvPublicKey,
 ) -> Result<(), BfvError> {
     if material_params != expected_params {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} parameter mismatch"
-        )));
+        return Err(invalid!("{label} parameter mismatch"));
     }
     if material_public_key != expected_public_key {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} public key mismatch"
-        )));
+        return Err(invalid!("{label} public key mismatch"));
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)]
 fn validate_bfv_admission_ciphertext_proof_input_material_context_v1(
     label: &str,
@@ -8510,9 +8151,7 @@ fn validate_bfv_admission_ciphertext_proof_input_material_context_v1(
         expected_public_key,
     )?;
     if material_ciphertext != expected_ciphertext {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} ciphertext mismatch"
-        )));
+        return Err(invalid!("{label} ciphertext mismatch"));
     }
     match mode {
         BfvRefreshTranscriptMode::Exact => validate_exact_residual_bound_within_centered_capacity(
@@ -8529,13 +8168,10 @@ fn validate_bfv_admission_ciphertext_proof_input_material_context_v1(
         }
     }
     if material_declared_bound != expected_declared_bound {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} declared bound mismatch"
-        )));
+        return Err(invalid!("{label} declared bound mismatch"));
     }
     Ok(())
 }
-
 fn decode_bfv_admission_proof_input_material_bytes_v1<T>(
     label: &str,
     bytes: &[u8],
@@ -8545,34 +8181,28 @@ where
     T: Decode + Encode,
 {
     if bytes.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if bytes.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be all-zero"
-        )));
+        return Err(invalid!("{label} must not be all-zero"));
     }
     let material = norito::decode_canonical::<T>(bytes).map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "{label} must use canonical v1 bytes containing Norito-encoded BFV proof input material: {err}"
-        ))
+        )
     })?;
     validate(&material)?;
     Ok(material)
 }
-
 fn bfv_admission_proof_input_material_digest_v1<T: Encode>(
     label: &str,
     domain: &[u8],
     material: &T,
 ) -> Result<Hash, BfvError> {
     let bytes = norito::encode_canonical(material)
-        .map_err(|err| BfvError::InvalidParameters(format!("{label} encoding failed: {err}")))?;
+        .map_err(|err| invalid!("{label} encoding failed: {err}"))?;
     Ok(Hash::new_from_chunks(&[domain, bytes.as_slice()]))
 }
-
 fn validate_public_key_not_all_zero(public_key: &BfvPublicKey) -> Result<(), BfvError> {
     if !public_key.b.is_empty() && public_key.b.iter().all(|&coefficient| coefficient == 0) {
         return Err(BfvError::InvalidParameters(
@@ -8586,7 +8216,6 @@ fn validate_public_key_not_all_zero(public_key: &BfvPublicKey) -> Result<(), Bfv
     }
     Ok(())
 }
-
 /// Public affine circuit over scalar ciphertext inputs.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -8596,7 +8225,6 @@ pub struct BfvAffineCircuit {
     /// Plaintext bias added to each output row.
     pub bias: Vec<u64>,
 }
-
 impl BfvAffineCircuit {
     /// Validate the circuit shape and plaintext coefficients.
     ///
@@ -8641,7 +8269,6 @@ impl BfvAffineCircuit {
         Ok(())
     }
 }
-
 /// Errors raised by the deterministic BFV baseline.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum BfvError {
@@ -8672,7 +8299,6 @@ pub enum BfvError {
     #[error("invalid BFV identifier envelope: {0}")]
     InvalidIdentifierEncoding(String),
 }
-
 /// Deterministic BFV key generation from a seed.
 ///
 /// # Errors
@@ -8684,7 +8310,6 @@ pub fn keygen_from_seed(
 ) -> Result<(BfvSecretKey, BfvPublicKey, BfvRelinearizationKey), BfvError> {
     validate_deterministic_seed("BFV keygen seed", seed)?;
     validate_bfv_seeded_encryption_residual_capacity(params)?;
-
     let mut rng = derive_rng(KEYGEN_DOMAIN, seed);
     let secret = sample_nonzero_secret_poly(params, &mut rng);
     let (b, a) = loop {
@@ -8696,10 +8321,8 @@ pub fn keygen_from_seed(
             break (b, a);
         }
     };
-
     let secret_sq = poly_mul_mod(params, &secret, &secret);
     let relin_entries = key_switch_entries_from_rng(params, &secret, &secret_sq, &mut rng)?;
-
     let secret_key = BfvSecretKey { s: secret };
     let public_key = BfvPublicKey { b, a };
     let relinearization_key = BfvRelinearizationKey {
@@ -8715,7 +8338,6 @@ pub fn keygen_from_seed(
     )?;
     Ok((secret_key, public_key, relinearization_key))
 }
-
 /// Verify that a BFV public key is consistent with a secret key.
 ///
 /// This is a key-owner diagnostic for key material construction. It checks
@@ -8742,7 +8364,6 @@ pub fn validate_public_key_secret_consistency(
     );
     validate_plaintext_multiple_residual_bound(params, &residual, &zero_poly(params), "public key")
 }
-
 /// Deterministic bounded-noise BFV public-key generation from a seed.
 ///
 /// This generates the same secret/public key shapes as [`keygen_from_seed`],
@@ -8764,7 +8385,6 @@ pub fn keygen_bounded_noise_from_seed(
         keygen_bounded_noise_with_relinearization_from_seed(params, seed)?;
     Ok((secret_key, public_key))
 }
-
 /// Deterministic bounded-noise BFV key generation with relinearization material.
 ///
 /// The relinearization entries encrypt raw `base^i * s^2` key-switch material
@@ -8781,7 +8401,6 @@ pub fn keygen_bounded_noise_with_relinearization_from_seed(
 ) -> Result<(BfvSecretKey, BfvPublicKey, BfvRelinearizationKey), BfvError> {
     validate_deterministic_seed("bounded-noise BFV keygen seed", seed)?;
     validate_bfv_bounded_noise_encryption_capacity(params)?;
-
     let mut rng = derive_rng(BOUNDED_NOISE_KEYGEN_DOMAIN, seed);
     let secret = sample_nonzero_secret_poly(params, &mut rng);
     let (b, a) = loop {
@@ -8793,7 +8412,6 @@ pub fn keygen_bounded_noise_with_relinearization_from_seed(
             break (b, a);
         }
     };
-
     let secret_key = BfvSecretKey { s: secret };
     let public_key = BfvPublicKey { b, a };
     let secret_sq = poly_mul_mod(params, &secret_key.s, &secret_key.s);
@@ -8813,7 +8431,6 @@ pub fn keygen_bounded_noise_with_relinearization_from_seed(
     )?;
     Ok((secret_key, public_key, relinearization_key))
 }
-
 /// Verify that a rounded BFV public key is consistent with a secret key.
 ///
 /// This key-owner diagnostic checks that `b + a*s` is bounded centered noise,
@@ -8843,7 +8460,6 @@ pub fn validate_bounded_noise_public_key_secret_consistency(
         "bounded-noise public key",
     )
 }
-
 /// Verify that a bounded-noise relinearization key matches a secret key.
 ///
 /// # Errors
@@ -8862,7 +8478,6 @@ pub fn validate_bounded_noise_relinearization_key_secret_consistency(
         "bounded-noise relinearization key",
     )
 }
-
 fn validate_bounded_noise_relinearization_key_secret_consistency_with_label(
     params: &BfvParameters,
     secret_key: &BfvSecretKey,
@@ -8880,7 +8495,6 @@ fn validate_bounded_noise_relinearization_key_secret_consistency_with_label(
         label,
     )
 }
-
 /// Encrypt a plaintext polynomial from a seed.
 ///
 /// The plaintext is encoded coefficient-wise under the plaintext modulus. The
@@ -8901,7 +8515,6 @@ pub fn encrypt_from_seed(
     validate_bfv_seeded_encryption_residual_capacity(params)?;
     validate_public_key(params, public_key)?;
     validate_public_key_not_all_zero(public_key)?;
-
     let encoded_plaintext = encode_plaintext(params, plaintext);
     let mut rng = derive_rng(BFV_ENCRYPT_SEED_DERIVATION_DOMAIN, seed);
     let u = sample_nonzero_small_poly(params, &mut rng);
@@ -8915,7 +8528,6 @@ pub fn encrypt_from_seed(
     let c1 = poly_add_mod(params, &poly_mul_mod(params, &public_key.a, &u), &e2);
     Ok(BfvCiphertext { c0, c1 })
 }
-
 /// Encrypt a plaintext polynomial with rounded BFV plaintext scaling.
 ///
 /// The plaintext is encoded as `(q / t) * m` in `R_q`, and fresh error
@@ -8937,7 +8549,6 @@ pub fn encrypt_bounded_noise_from_seed(
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     validate_public_key(params, public_key)?;
     validate_public_key_not_all_zero(public_key)?;
-
     let encoded_plaintext = encode_rounded_plaintext(params, plaintext)?;
     let mut rng = derive_rng(BFV_BOUNDED_NOISE_ENCRYPT_SEED_DERIVATION_DOMAIN, seed);
     let u = sample_nonzero_small_poly(params, &mut rng);
@@ -8951,7 +8562,6 @@ pub fn encrypt_bounded_noise_from_seed(
     let c1 = poly_add_mod(params, &poly_mul_mod(params, &public_key.a, &u), &e2);
     Ok(BfvCiphertext { c0, c1 })
 }
-
 /// Derive deterministic key-switching material for a BFV Galois automorphism.
 ///
 /// The key switches ciphertexts encrypted under `sigma_k(s)` back to the
@@ -8972,7 +8582,6 @@ pub fn galois_key_from_seed(
     validate_galois_automorphism_power(params, automorphism_power)?;
     validate_deterministic_seed("BFV Galois key seed", seed)?;
     validate_secret_key(params, secret_key)?;
-
     let target_secret = apply_galois_automorphism_poly(params, &secret_key.s, automorphism_power)?;
     let power_bytes = automorphism_power.to_le_bytes();
     let material: [u8; Hash::LENGTH] =
@@ -8993,7 +8602,6 @@ pub fn galois_key_from_seed(
     )?;
     Ok(key)
 }
-
 /// Derive deterministic bounded-noise Galois key-switching material.
 ///
 /// The key switches ciphertexts encrypted under `sigma_k(s)` back to the
@@ -9013,7 +8621,6 @@ pub fn galois_key_bounded_noise_from_seed(
     validate_deterministic_seed("bounded-noise BFV Galois key seed", seed)?;
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     validate_secret_key(params, secret_key)?;
-
     let target_secret = apply_galois_automorphism_poly(params, &secret_key.s, automorphism_power)?;
     let power_bytes = automorphism_power.to_le_bytes();
     let material: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[
@@ -9033,7 +8640,6 @@ pub fn galois_key_bounded_noise_from_seed(
     validate_bounded_noise_galois_key_secret_consistency(params, secret_key, &key)?;
     Ok(key)
 }
-
 /// Verify that a bounded-noise Galois key matches a secret key.
 ///
 /// # Errors
@@ -9052,7 +8658,6 @@ pub fn validate_bounded_noise_galois_key_secret_consistency(
         "bounded-noise Galois key",
     )
 }
-
 fn validate_bounded_noise_galois_key_secret_consistency_with_label(
     params: &BfvParameters,
     secret_key: &BfvSecretKey,
@@ -9071,7 +8676,6 @@ fn validate_bounded_noise_galois_key_secret_consistency_with_label(
         label,
     )
 }
-
 /// Apply a packed-polynomial BFV Galois automorphism and key switch back to `s`.
 ///
 /// The returned ciphertext decrypts under the original secret key to the
@@ -9091,7 +8695,6 @@ pub fn apply_galois_automorphism_ciphertext(
     validate_galois_key_metadata(params, galois_key)?;
     validate_galois_key_entries(params, galois_key)?;
     validate_ciphertext(params, ciphertext)?;
-
     let automorphed_c0 =
         apply_galois_automorphism_poly(params, &ciphertext.c0, galois_key.automorphism_power)?;
     let automorphed_c1 =
@@ -9103,7 +8706,6 @@ pub fn apply_galois_automorphism_ciphertext(
         &automorphed_c1,
     )
 }
-
 /// Apply a rounded BFV Galois automorphism and bounded-noise key switch back to `s`.
 ///
 /// # Errors
@@ -9118,7 +8720,6 @@ pub fn apply_galois_automorphism_ciphertext_bounded_noise(
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     validate_galois_key_entries(params, galois_key)?;
     validate_ciphertext(params, ciphertext)?;
-
     let automorphed_c0 =
         apply_galois_automorphism_poly(params, &ciphertext.c0, galois_key.automorphism_power)?;
     let automorphed_c1 =
@@ -9130,7 +8731,6 @@ pub fn apply_galois_automorphism_ciphertext_bounded_noise(
         &automorphed_c1,
     )
 }
-
 /// Apply a rounded BFV Galois automorphism through an exact RNS key-switch bridge.
 ///
 /// The ciphertext components are automorphed in scalar `Z_q` representation,
@@ -9152,7 +8752,6 @@ pub fn apply_galois_automorphism_ciphertext_bounded_noise_rns_exact(
     validate_bounded_noise_rns_evaluator_corridor(params, rns_chain)?;
     validate_galois_key_entries(params, galois_key)?;
     validate_ciphertext(params, ciphertext)?;
-
     let automorphed_c0 =
         apply_galois_automorphism_poly(params, &ciphertext.c0, galois_key.automorphism_power)?;
     let automorphed_c1 =
@@ -9165,7 +8764,6 @@ pub fn apply_galois_automorphism_ciphertext_bounded_noise_rns_exact(
         &automorphed_c1,
     )
 }
-
 /// Apply a rounded BFV Galois automorphism through the registered RNS bridge.
 ///
 /// This registered entry point delegates to the target-limb basis-extension
@@ -9185,7 +8783,6 @@ pub fn apply_galois_automorphism_ciphertext_bounded_noise_registered_rns_exact(
         params, galois_key, ciphertext,
     )
 }
-
 /// Apply a rounded BFV Galois automorphism through a target-limb RNS bridge.
 ///
 /// The transformed secret component is decomposed in `decomposition_chain`,
@@ -9213,7 +8810,6 @@ pub fn apply_galois_automorphism_ciphertext_bounded_noise_rns_basis_extension_ex
     )?;
     validate_galois_key_entries(params, galois_key)?;
     validate_ciphertext(params, ciphertext)?;
-
     let automorphed_c0 =
         apply_galois_automorphism_poly(params, &ciphertext.c0, galois_key.automorphism_power)?;
     let automorphed_c1 =
@@ -9227,7 +8823,6 @@ pub fn apply_galois_automorphism_ciphertext_bounded_noise_rns_basis_extension_ex
         &automorphed_c1,
     )
 }
-
 /// Apply a rounded BFV Galois automorphism through the registered target-limb RNS bridge.
 ///
 /// The evaluator chain and key-switch decomposition chain are derived from the
@@ -9254,7 +8849,6 @@ pub fn apply_galois_automorphism_ciphertext_bounded_noise_registered_rns_basis_e
         ciphertext,
     )
 }
-
 /// Apply a packed-polynomial BFV Galois automorphism through an exact RNS corridor.
 ///
 /// The ciphertext components are automorphed in the scalar `Z_q` representation,
@@ -9277,7 +8871,6 @@ pub fn apply_galois_automorphism_ciphertext_rns_exact(
     validate_galois_key_metadata(params, galois_key)?;
     validate_galois_key_entries(params, galois_key)?;
     validate_ciphertext(params, ciphertext)?;
-
     let automorphed_c0 =
         apply_galois_automorphism_poly(params, &ciphertext.c0, galois_key.automorphism_power)?;
     let automorphed_c1 =
@@ -9290,7 +8883,6 @@ pub fn apply_galois_automorphism_ciphertext_rns_exact(
         &automorphed_c1,
     )
 }
-
 /// Apply a packed-polynomial BFV Galois automorphism through the registered exact RNS corridor.
 ///
 /// The evaluator chain is derived from the registered production BFV profile,
@@ -9309,7 +8901,6 @@ pub fn apply_galois_automorphism_ciphertext_registered_rns_exact(
     let rns_chain = registered_bfv_rns_modulus_chain(params)?;
     apply_galois_automorphism_ciphertext_rns_exact(params, &rns_chain, galois_key, ciphertext)
 }
-
 /// Encode a full BFV packed-slot plaintext into polynomial coefficients.
 ///
 /// The registered RAM-LFE profile has `t = 257` and `n = 64`, so `t = 1 mod
@@ -9334,7 +8925,6 @@ pub fn encode_packed_plaintext_slots(
         )));
     }
     validate_plaintext(params, slots)?;
-
     let modulus = params.plaintext_modulus;
     let degree = params.degree();
     let mut coefficients = vec![0_u64; degree];
@@ -9368,7 +8958,6 @@ pub fn encode_packed_plaintext_slots(
     }
     Ok(coefficients)
 }
-
 /// Decode a full BFV packed-slot plaintext from polynomial coefficients.
 ///
 /// This is the inverse of [`encode_packed_plaintext_slots`] for batchable
@@ -9397,7 +8986,6 @@ pub fn decode_packed_plaintext_slots(
         .map(|&point| evaluate_plaintext_polynomial_mod(plaintext, point, params.plaintext_modulus))
         .collect())
 }
-
 /// Return the packed-slot permutation induced by a Galois automorphism.
 ///
 /// For the canonical slot order used by [`encode_packed_plaintext_slots`], the
@@ -9436,7 +9024,6 @@ pub fn packed_galois_slot_permutation(
         })
         .collect()
 }
-
 /// Return the Galois automorphism power for a canonical packed-slot left rotation.
 ///
 /// The registered packed slot order is the canonical odd-power CRT order used
@@ -9463,11 +9050,10 @@ pub fn packed_left_rotation_galois_automorphism_power(
             return Ok(power_u32);
         }
     }
-    Err(BfvError::InvalidParameters(format!(
+    Err(invalid!(
         "packed RotateLeft by {rotation_steps} slots is not representable by one BFV Galois automorphism"
-    )))
+    ))
 }
-
 /// Return every Galois automorphism power required for a packed left rotation.
 ///
 /// Single-automorphism rotations return one power. Other rotations return a
@@ -9488,7 +9074,6 @@ pub fn packed_left_rotation_galois_automorphism_powers(
             .collect()
     })
 }
-
 /// Rotate a packed BFV ciphertext left with a public Galois key.
 ///
 /// This applies a canonical packed-slot left rotation only when the requested
@@ -9507,14 +9092,13 @@ pub fn rotate_packed_ciphertext_slots_left(
 ) -> Result<BfvCiphertext, BfvError> {
     let expected_power = packed_left_rotation_galois_automorphism_power(params, rotation_steps)?;
     if galois_key.automorphism_power != expected_power {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "packed RotateLeft by {rotation_steps} slots requires Galois automorphism power {expected_power}, found {}",
             galois_key.automorphism_power
-        )));
+        ));
     }
     apply_galois_automorphism_ciphertext(params, galois_key, ciphertext)
 }
-
 /// Rotate a packed BFV ciphertext left with a public Galois-key schedule.
 ///
 /// This helper supports any non-zero cyclic packed-slot rotation for the
@@ -9543,9 +9127,9 @@ pub fn rotate_packed_ciphertext_slots_left_with_galois_keys(
             .iter()
             .find(|key| key.automorphism_power == automorphism_power)
             .ok_or_else(|| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "missing BFV Galois key for packed RotateLeft automorphism power {automorphism_power}"
-                ))
+                )
             })?;
         let transformed = apply_galois_automorphism_ciphertext(params, galois_key, ciphertext)?;
         let mask_plaintext = encode_packed_plaintext_slots(params, &mask_slots)?;
@@ -9561,7 +9145,6 @@ pub fn rotate_packed_ciphertext_slots_left_with_galois_keys(
         )
     })
 }
-
 /// Rotate a rounded BFV packed ciphertext left with bounded-noise Galois keys.
 ///
 /// This mirrors [`rotate_packed_ciphertext_slots_left_with_galois_keys`] for
@@ -9591,9 +9174,9 @@ pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise(
             .iter()
             .find(|key| key.automorphism_power == automorphism_power)
             .ok_or_else(|| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "missing BFV Galois key for bounded-noise packed RotateLeft automorphism power {automorphism_power}"
-                ))
+                )
             })?;
         let transformed =
             apply_galois_automorphism_ciphertext_bounded_noise(params, galois_key, ciphertext)?;
@@ -9611,7 +9194,6 @@ pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise(
         )
     })
 }
-
 /// Rotate a rounded BFV packed ciphertext left through exact RNS bridges.
 ///
 /// This is the RNS counterpart of
@@ -9641,9 +9223,9 @@ pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_ex
             .iter()
             .find(|key| key.automorphism_power == automorphism_power)
             .ok_or_else(|| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "missing BFV Galois key for bounded-noise RNS packed RotateLeft automorphism power {automorphism_power}"
-                ))
+                )
             })?;
         let transformed = apply_galois_automorphism_ciphertext_bounded_noise_rns_exact(
             params, rns_chain, galois_key, ciphertext,
@@ -9668,7 +9250,6 @@ pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_ex
         )
     })
 }
-
 /// Rotate a rounded BFV packed ciphertext through the registered RNS bridge.
 ///
 /// This registered entry point delegates to the target-limb basis-extension
@@ -9692,7 +9273,6 @@ pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_regist
         rotation_steps,
     )
 }
-
 /// Rotate a rounded BFV packed ciphertext left through target-limb RNS bridges.
 ///
 /// This is the basis-extension counterpart of
@@ -9735,9 +9315,9 @@ pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_ba
             .iter()
             .find(|key| key.automorphism_power == automorphism_power)
             .ok_or_else(|| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "missing BFV Galois key for bounded-noise basis-extension RNS packed RotateLeft automorphism power {automorphism_power}"
-                ))
+                )
             })?;
         let transformed =
             apply_galois_automorphism_ciphertext_bounded_noise_rns_basis_extension_exact(
@@ -9768,7 +9348,6 @@ pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_ba
         )
     })
 }
-
 /// Rotate a rounded BFV packed ciphertext through the registered target-limb RNS bridge.
 ///
 /// This is the production-oriented counterpart of
@@ -9799,7 +9378,6 @@ pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_regist
         rotation_steps,
     )
 }
-
 /// Rotate a packed BFV ciphertext left with a public Galois-key schedule
 /// through an exact RNS corridor.
 ///
@@ -9831,9 +9409,9 @@ pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_rns_exact(
             .iter()
             .find(|key| key.automorphism_power == automorphism_power)
             .ok_or_else(|| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "missing BFV Galois key for packed RotateLeft automorphism power {automorphism_power}"
-                ))
+                )
             })?;
         let transformed = apply_galois_automorphism_ciphertext_rns_exact(
             params, rns_chain, galois_key, ciphertext,
@@ -9858,7 +9436,6 @@ pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_rns_exact(
         )
     })
 }
-
 /// Rotate a packed BFV ciphertext left through the registered exact RNS corridor.
 ///
 /// The evaluator chain is derived from the registered production BFV profile
@@ -9883,7 +9460,6 @@ pub fn rotate_packed_ciphertext_slots_left_with_galois_keys_registered_rns_exact
         rotation_steps,
     )
 }
-
 fn packed_left_rotation_galois_schedule(
     params: &BfvParameters,
     rotation_steps: u32,
@@ -9915,7 +9491,6 @@ fn packed_left_rotation_galois_schedule(
     }
     Ok(schedule)
 }
-
 fn normalize_packed_rotation_steps(
     params: &BfvParameters,
     rotation_steps: u32,
@@ -9941,7 +9516,6 @@ fn normalize_packed_rotation_steps(
         )
     })
 }
-
 fn canonical_galois_automorphism_powers(params: &BfvParameters) -> Result<Vec<u32>, BfvError> {
     packed_plaintext_root(params)?;
     let degree = params.degree();
@@ -9968,7 +9542,6 @@ fn canonical_galois_automorphism_powers(params: &BfvParameters) -> Result<Vec<u3
     }
     Ok(powers)
 }
-
 /// Derive a deterministic one-round public bootstrap refresh key from a BFV public key.
 ///
 /// The resulting key contains an encryption of zero. Adding it to any
@@ -9996,7 +9569,6 @@ pub fn bootstrap_key_from_seed(
         seed,
     )
 }
-
 /// Derive a deterministic bounded public bootstrap refresh key from a BFV public key.
 ///
 /// The returned key contains one domain-separated encrypted-zero refresh
@@ -10053,7 +9625,6 @@ pub fn bootstrap_key_with_max_refresh_rounds_from_seed(
     validate_bootstrap_key(params, &bootstrap_key)?;
     Ok(bootstrap_key)
 }
-
 /// Derive a deterministic one-round bounded-noise bootstrap refresh key.
 ///
 /// The refresh ciphertext is a rounded BFV encryption of zero generated with
@@ -10078,7 +9649,6 @@ pub fn bootstrap_key_bounded_noise_from_seed(
         seed,
     )
 }
-
 /// Derive a deterministic bounded-noise public bootstrap refresh key.
 ///
 /// The returned key contains one domain-separated rounded BFV encrypted-zero
@@ -10135,7 +9705,6 @@ pub fn bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
     validate_bootstrap_key(params, &bootstrap_key)?;
     Ok(bootstrap_key)
 }
-
 /// Construct a governed full-bootstrap key from audited circuit material.
 ///
 /// Full-bootstrap keys do not carry public encrypted-zero refresh masks. This
@@ -10173,7 +9742,6 @@ pub fn full_bootstrap_key_from_material_v1(
     validate_bootstrap_key_admission_shape_metadata(params, &bootstrap_key)?;
     Ok(bootstrap_key)
 }
-
 /// Verify that every public bootstrap refresh ciphertext decrypts to zero.
 ///
 /// This is a key-owner diagnostic for the current encrypted-zero refresh path.
@@ -10206,7 +9774,6 @@ pub fn validate_bootstrap_key_zero_refreshes(
     }
     Ok(())
 }
-
 /// Verify that every bounded-noise bootstrap refresh ciphertext decrypts to zero.
 ///
 /// This is the rounded BFV counterpart of
@@ -10230,7 +9797,6 @@ pub fn validate_bootstrap_key_bounded_noise_zero_refreshes(
         "bounded-noise bootstrap key",
     )
 }
-
 fn validate_bootstrap_key_bounded_noise_zero_refreshes_with_label(
     params: &BfvParameters,
     secret_key: &BfvSecretKey,
@@ -10256,7 +9822,6 @@ fn validate_bootstrap_key_bounded_noise_zero_refreshes_with_label(
     }
     Ok(())
 }
-
 /// Verify that a bootstrap refresh key matches its public deterministic transcript.
 ///
 /// The current first-release bootstrap material is a bounded set of
@@ -10314,7 +9879,6 @@ pub fn validate_bootstrap_key_zero_refresh_transcript(
     }
     Ok(())
 }
-
 /// Verify that a bounded-noise bootstrap refresh key matches its public transcript.
 ///
 /// This recomputes every rounded BFV encrypted-zero refresh from the advertised
@@ -10369,7 +9933,6 @@ pub fn validate_bootstrap_key_bounded_noise_zero_refresh_transcript(
     }
     Ok(())
 }
-
 /// Return the public statement digest for proving exact bootstrap refresh masks encrypt zero.
 ///
 /// This is the canonical statement hash for the future proof-carrying
@@ -10394,7 +9957,6 @@ pub fn bootstrap_key_zero_refresh_proof_statement_digest(
         BfvRefreshTranscriptMode::Exact,
     )
 }
-
 /// Return the public statement digest for bounded-noise bootstrap zero proofs.
 ///
 /// This is the rounded BFV counterpart of
@@ -10417,7 +9979,6 @@ pub fn bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest(
         BfvRefreshTranscriptMode::BoundedNoise,
     )
 }
-
 fn bootstrap_key_zero_refresh_proof_statement_digest_for_mode(
     params: &BfvParameters,
     public_key: &BfvPublicKey,
@@ -10456,17 +10017,13 @@ fn bootstrap_key_zero_refresh_proof_statement_digest_for_mode(
         bootstrap_round_digests,
         bootstrap_key: bootstrap_key.clone(),
     };
-    let bytes = norito::encode_canonical(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "bootstrap key proof statement encoding failed: {err}"
-        ))
-    })?;
+    let bytes = norito::encode_canonical(&material)
+        .map_err(|err| invalid!("bootstrap key proof statement encoding failed: {err}"))?;
     Ok(Hash::new_from_chunks(&[
         mode.bootstrap_key_proof_statement_domain(),
         bytes.as_slice(),
     ]))
 }
-
 fn bootstrap_key_refresh_digest_summary_v1(
     bootstrap_key: &BfvBootstrapKey,
 ) -> Result<(u16, Hash, Vec<Hash>), BfvError> {
@@ -10482,12 +10039,8 @@ fn bootstrap_key_refresh_digest_summary_v1(
         "bootstrap key zero_refresh",
         &bootstrap_key.zero_refresh,
     )?;
-    let zero_refresh_bytes =
-        norito::encode_canonical(&bootstrap_key.zero_refresh).map_err(|err| {
-            BfvError::InvalidParameters(format!(
-                "bootstrap key zero_refresh summary encoding failed: {err}"
-            ))
-        })?;
+    let zero_refresh_bytes = norito::encode_canonical(&bootstrap_key.zero_refresh)
+        .map_err(|err| invalid!("bootstrap key zero_refresh summary encoding failed: {err}"))?;
     let zero_refresh_digest = Hash::new_from_chunks(&[
         BFV_BOOTSTRAP_KEY_ZERO_REFRESH_SUMMARY_DIGEST_DOMAIN,
         zero_refresh_bytes.as_slice(),
@@ -10509,9 +10062,7 @@ fn bootstrap_key_refresh_digest_summary_v1(
                 })?
                 .to_le_bytes();
             let refresh_bytes = norito::encode_canonical(refresh).map_err(|err| {
-                BfvError::InvalidParameters(format!(
-                    "bootstrap key round_refreshes[{index}] summary encoding failed: {err}"
-                ))
+                invalid!("bootstrap key round_refreshes[{index}] summary encoding failed: {err}")
             })?;
             Ok(Hash::new_from_chunks(&[
                 BFV_BOOTSTRAP_KEY_ROUND_REFRESH_SUMMARY_DIGEST_DOMAIN,
@@ -10526,7 +10077,6 @@ fn bootstrap_key_refresh_digest_summary_v1(
         bootstrap_round_digests,
     ))
 }
-
 fn validate_bootstrap_key_refresh_summary_consistency(
     bootstrap_key: &BfvBootstrapKey,
 ) -> Result<(), BfvError> {
@@ -10552,7 +10102,6 @@ fn validate_bootstrap_key_refresh_summary_consistency(
     }
     Ok(())
 }
-
 fn validate_evaluation_key_bundle_digest_refresh_material_v1(
     bundle: &BfvEvaluationKeyBundle,
 ) -> Result<(), BfvError> {
@@ -10585,7 +10134,6 @@ fn validate_evaluation_key_bundle_digest_refresh_material_v1(
     }
     Ok(())
 }
-
 fn validate_refresh_ciphertext_not_all_zero(
     label: &str,
     refresh: &BfvCiphertext,
@@ -10595,13 +10143,12 @@ fn validate_refresh_ciphertext_not_all_zero(
         && refresh.c0.iter().all(|&coefficient| coefficient == 0)
         && refresh.c1.iter().all(|&coefficient| coefficient == 0)
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must not be an all-zero refresh ciphertext"
-        )));
+        ));
     }
     Ok(())
 }
-
 /// Validate versioned full-bootstrap circuit material commitments.
 ///
 /// This binds the material to the registered BFV parameter profile plus the
@@ -10623,10 +10170,10 @@ pub fn validate_bfv_full_bootstrap_circuit_material_v1(
         &material.circuit_id,
     )?;
     if material.circuit_id != BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap circuit id `{}` does not match canonical `{BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1}`",
             material.circuit_id
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_circuit_material_required_digests_v1(material)?;
     let expected_parameter_digest = registered_bfv_parameter_digest(params)?;
@@ -10664,9 +10211,9 @@ pub fn validate_bfv_full_bootstrap_circuit_material_v1(
         ));
     }
     if material.max_bootstrap_depth > BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap max_bootstrap_depth exceeds supported limit {BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH}"
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_canonical_profile_artifact_digests_v1(
         "BFV full-bootstrap circuit material",
@@ -10677,7 +10224,6 @@ pub fn validate_bfv_full_bootstrap_circuit_material_v1(
     )?;
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_circuit_material_required_digests_v1(
     material: &BfvFullBootstrapCircuitMaterialV1,
 ) -> Result<(), BfvError> {
@@ -10739,7 +10285,6 @@ fn validate_bfv_full_bootstrap_circuit_material_required_digests_v1(
         ],
     )
 }
-
 /// Return a stable digest over full-bootstrap circuit material commitments.
 ///
 /// # Errors
@@ -10749,17 +10294,13 @@ pub fn bfv_full_bootstrap_circuit_material_digest(
     material: &BfvFullBootstrapCircuitMaterialV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_circuit_material_v1(params, material)?;
-    let bytes = norito::encode_canonical(material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap circuit material encoding failed: {err}"
-        ))
-    })?;
+    let bytes = norito::encode_canonical(material)
+        .map_err(|err| invalid!("BFV full-bootstrap circuit material encoding failed: {err}"))?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_CIRCUIT_MATERIAL_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical BFV full-bootstrap circuit material bytes.
 ///
 /// # Errors
@@ -10778,7 +10319,6 @@ pub fn decode_bfv_full_bootstrap_circuit_material_bytes_v1(
         },
     )
 }
-
 /// Return the stable digest for canonical BFV full-bootstrap circuit material bytes.
 ///
 /// # Errors
@@ -10791,7 +10331,6 @@ pub fn bfv_full_bootstrap_circuit_material_digest_from_bytes_v1(
     let (_, digest) = bfv_full_bootstrap_circuit_material_and_digest_from_bytes_v1(params, bytes)?;
     Ok(digest)
 }
-
 /// Decode and digest canonical BFV full-bootstrap circuit material bytes.
 ///
 /// This byte-admission helper keeps the decoded governed circuit material and
@@ -10808,7 +10347,6 @@ pub fn bfv_full_bootstrap_circuit_material_and_digest_from_bytes_v1(
     let material_digest = bfv_full_bootstrap_circuit_material_digest(params, &material)?;
     Ok((material, material_digest))
 }
-
 /// Return the non-circular digest of evaluator artifacts targeted by proof keys.
 ///
 /// This digest intentionally excludes prover/verifier key artifacts so proof-key
@@ -10825,7 +10363,6 @@ pub fn bfv_full_bootstrap_evaluator_artifact_set_digest_from_material_v1(
     validate_bfv_full_bootstrap_circuit_material_v1(params, material)?;
     bfv_full_bootstrap_evaluator_artifact_set_digest_from_governed_material_v1(material)
 }
-
 fn bfv_full_bootstrap_evaluator_artifact_set_digest_from_governed_material_v1(
     material: &BfvFullBootstrapCircuitMaterialV1,
 ) -> Result<Hash, BfvError> {
@@ -10855,7 +10392,6 @@ fn bfv_full_bootstrap_evaluator_artifact_set_digest_from_governed_material_v1(
         },
     )
 }
-
 /// Return the non-circular digest of concrete evaluator artifact bytes.
 ///
 /// # Errors
@@ -10881,9 +10417,9 @@ pub fn bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
         ));
     }
     if max_bootstrap_depth > BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap evaluator artifact set max_bootstrap_depth exceeds supported limit {BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH}"
-        )));
+        ));
     }
     for (role, bytes) in [
         (
@@ -10941,7 +10477,6 @@ pub fn bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
     )?;
     hash_bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(&digest_material)
 }
-
 fn validate_bfv_full_bootstrap_evaluator_artifact_set_bytes_v1(
     role: BfvFullBootstrapCircuitArtifactRoleV1,
     bytes: &[u8],
@@ -10956,7 +10491,6 @@ fn validate_bfv_full_bootstrap_evaluator_artifact_set_bytes_v1(
         bytes,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 fn bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(
     params: &BfvParameters,
@@ -10995,7 +10529,6 @@ fn bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(
             canonical_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(),
     })
 }
-
 fn bfv_full_bootstrap_evaluator_artifact_set_validation_material_v1(
     digest_material: &BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1,
 ) -> BfvFullBootstrapCircuitMaterialV1 {
@@ -11038,7 +10571,6 @@ fn bfv_full_bootstrap_evaluator_artifact_set_validation_material_v1(
         max_bootstrap_depth: digest_material.max_bootstrap_depth,
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn validate_bfv_full_bootstrap_evaluator_artifact_set_artifacts_v1(
     params: &BfvParameters,
@@ -11088,36 +10620,35 @@ fn validate_bfv_full_bootstrap_evaluator_artifact_set_artifacts_v1(
     )?;
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(
     digest_material: &BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1,
 ) -> Result<(), BfvError> {
     if digest_material.version
         != BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_VERSION_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap evaluator artifact set digest material version {} does not match canonical version {}",
             digest_material.version,
             BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_VERSION_V1
-        )));
+        ));
     }
     if digest_material.field_count
         != BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap evaluator artifact set digest material field count {} does not match canonical count {}",
             digest_material.field_count,
             BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_FIELD_COUNT_V1
-        )));
+        ));
     }
     if digest_material.evaluator_artifact_digest_count
         != BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_ARTIFACT_DIGEST_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap evaluator artifact set digest material artifact count {} does not match canonical count {}",
             digest_material.evaluator_artifact_digest_count,
             BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_MATERIAL_ARTIFACT_DIGEST_COUNT_V1
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_canonical_circuit_id(
         "BFV full-bootstrap evaluator artifact set digest material circuit id",
@@ -11130,9 +10661,9 @@ fn validate_bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(
         ));
     }
     if digest_material.max_bootstrap_depth > BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap evaluator artifact set digest material max_bootstrap_depth exceeds supported limit {BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH}"
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_digest_material_hashes(
         "BFV full-bootstrap evaluator artifact set digest material",
@@ -11186,22 +10717,18 @@ fn validate_bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(
         &digest_material.arithmetic_air_constraint_system_digest,
     )
 }
-
 fn hash_bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(
     digest_material: &BfvFullBootstrapEvaluatorArtifactSetDigestMaterialV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_evaluator_artifact_set_digest_material_v1(digest_material)?;
     let bytes = norito::encode_canonical(digest_material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap evaluator artifact set digest material encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap evaluator artifact set digest material encoding failed: {err}")
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_EVALUATOR_ARTIFACT_SET_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Encode one full-bootstrap artifact payload with its governed profile header.
 ///
 /// Callers should store the returned bytes in the matching field of
@@ -11243,9 +10770,9 @@ pub fn encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
         ));
     }
     if max_bootstrap_depth > BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap artifact max_bootstrap_depth exceeds supported limit {BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH}"
-        )));
+        ));
     }
     let artifact = BfvFullBootstrapCircuitArtifactPayloadV1 {
         circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
@@ -11259,53 +10786,41 @@ pub fn encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
         role,
         payload: payload.to_vec(),
     };
-    let bytes = norito::encode_canonical(&artifact).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap artifact payload encoding failed: {err}"
-        ))
-    })?;
+    let bytes = norito::encode_canonical(&artifact)
+        .map_err(|err| invalid!("BFV full-bootstrap artifact payload encoding failed: {err}"))?;
     if bytes.len() > role.max_bytes() {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap artifact payload length {} exceeds maximum {}",
             bytes.len(),
             role.max_bytes()
-        )));
+        ));
     }
     Ok(bytes)
 }
-
 fn validate_full_bootstrap_artifact_payload_canonical_bytes_v1<T: Encode>(
     label: &str,
     payload: &[u8],
     value: &T,
 ) -> Result<(), BfvError> {
-    let canonical_payload = norito::encode_canonical(value).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} payload canonical encoding failed: {err}"))
-    })?;
+    let canonical_payload = norito::encode_canonical(value)
+        .map_err(|err| invalid!("{label} payload canonical encoding failed: {err}"))?;
     if payload != canonical_payload {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} payload must use canonical v1 bytes"
-        )));
+        return Err(invalid!("{label} payload must use canonical v1 bytes"));
     }
     Ok(())
 }
-
 fn validate_full_bootstrap_artifact_envelope_canonical_bytes_v1(
     label: &str,
     bytes: &[u8],
     artifact: &BfvFullBootstrapCircuitArtifactPayloadV1,
 ) -> Result<(), BfvError> {
-    let canonical_bytes = norito::encode_canonical(artifact).map_err(|err| {
-        BfvError::InvalidParameters(format!("{label} canonical envelope encoding failed: {err}"))
-    })?;
+    let canonical_bytes = norito::encode_canonical(artifact)
+        .map_err(|err| invalid!("{label} canonical envelope encoding failed: {err}"))?;
     if bytes != canonical_bytes {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must use canonical v1 envelope bytes"
-        )));
+        return Err(invalid!("{label} must use canonical v1 envelope bytes"));
     }
     Ok(())
 }
-
 /// Validate a typed packed-slot linear transform for full-bootstrap material.
 ///
 /// # Errors
@@ -11342,29 +10857,29 @@ pub fn validate_bfv_full_bootstrap_linear_transform_v1(
     }
     let max_diagonals = degree.min(BFV_FULL_BOOTSTRAP_LINEAR_TRANSFORM_MAX_DIAGONALS);
     if transform.diagonals.len() > max_diagonals {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap linear transform diagonal count {} exceeds supported limit {max_diagonals}",
             transform.diagonals.len()
-        )));
+        ));
     }
     let mut seen_rotation_steps = Vec::with_capacity(transform.diagonals.len());
     for (index, diagonal) in transform.diagonals.iter().enumerate() {
         let rotation_steps = usize::try_from(diagonal.rotation_steps).map_err(|_| {
-            BfvError::InvalidParameters(format!(
+            invalid!(
                 "BFV full-bootstrap linear transform diagonal[{index}] rotation_steps exceeds platform usize"
-            ))
+            )
         })?;
         if rotation_steps >= degree {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap linear transform diagonal[{index}] rotation_steps {} must be less than packed slot count {degree}",
                 diagonal.rotation_steps
-            )));
+            ));
         }
         if seen_rotation_steps.contains(&diagonal.rotation_steps) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap linear transform diagonal[{index}] duplicates rotation_steps {}",
                 diagonal.rotation_steps
-            )));
+            ));
         }
         seen_rotation_steps.push(diagonal.rotation_steps);
         if diagonal.plaintext.len() != degree {
@@ -11377,14 +10892,13 @@ pub fn validate_bfv_full_bootstrap_linear_transform_v1(
         validate_plaintext(params, &diagonal.plaintext)?;
         let diagonal_slots = decode_packed_plaintext_slots(params, &diagonal.plaintext)?;
         if diagonal_slots.iter().all(|&slot| slot == 0) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap linear transform diagonal[{index}] plaintext must not decode to all-zero slots"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 /// Encode a typed coefficient/slot full-bootstrap linear-transform artifact.
 ///
 /// The returned bytes are a governed full-bootstrap artifact envelope whose
@@ -11402,11 +10916,8 @@ pub fn encode_bfv_full_bootstrap_linear_transform_artifact_v1(
 ) -> Result<Vec<u8>, BfvError> {
     validate_bfv_full_bootstrap_linear_transform_role(role)?;
     validate_bfv_full_bootstrap_linear_transform_v1(params, transform)?;
-    let payload = norito::encode_canonical(transform).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap linear transform encoding failed: {err}"
-        ))
-    })?;
+    let payload = norito::encode_canonical(transform)
+        .map_err(|err| invalid!("BFV full-bootstrap linear transform encoding failed: {err}"))?;
     encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
         params,
         max_bootstrap_depth,
@@ -11414,7 +10925,6 @@ pub fn encode_bfv_full_bootstrap_linear_transform_artifact_v1(
         &payload,
     )
 }
-
 /// Decode and validate a governed coefficient/slot linear-transform artifact.
 ///
 /// # Errors
@@ -11442,9 +10952,9 @@ pub fn decode_bfv_full_bootstrap_linear_transform_artifact_v1(
         &artifact.payload,
     )
     .map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap linear transform: {err}"
-        ))
+        )
     })?;
     validate_bfv_full_bootstrap_linear_transform_v1(params, &transform)?;
     validate_full_bootstrap_artifact_payload_canonical_bytes_v1(
@@ -11454,7 +10964,6 @@ pub fn decode_bfv_full_bootstrap_linear_transform_artifact_v1(
     )?;
     Ok(transform)
 }
-
 /// Construct canonical blind-rotation material for a packed-slot left rotation.
 ///
 /// The selector masks are encoded as packed plaintext polynomials so callers can
@@ -11499,7 +11008,6 @@ pub fn bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1(
     validate_bfv_full_bootstrap_blind_rotation_key_v1(params, &key)?;
     Ok(key)
 }
-
 /// Validate a typed full-bootstrap blind-rotation key payload.
 ///
 /// # Errors
@@ -11539,20 +11047,20 @@ pub fn validate_bfv_full_bootstrap_blind_rotation_key_v1(
     }
     let max_steps = BFV_EVALUATION_KEY_MAX_GALOIS_KEYS.min(degree);
     if key.steps.len() > max_steps {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap blind-rotation schedule count {} exceeds supported limit {max_steps}",
             key.steps.len()
-        )));
+        ));
     }
     let mut seen_powers = std::collections::BTreeSet::new();
     let mut decoded_selectors = Vec::with_capacity(key.steps.len());
     for (index, step) in key.steps.iter().enumerate() {
         validate_galois_automorphism_power(params, step.automorphism_power)?;
         if !seen_powers.insert(step.automorphism_power) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap blind-rotation step[{index}] duplicates automorphism_power {}",
                 step.automorphism_power
-            )));
+            ));
         }
         if step.selector_plaintext.len() != degree {
             return Err(BfvError::ShapeMismatch(format!(
@@ -11564,14 +11072,14 @@ pub fn validate_bfv_full_bootstrap_blind_rotation_key_v1(
         validate_plaintext(params, &step.selector_plaintext)?;
         let selector_slots = decode_packed_plaintext_slots(params, &step.selector_plaintext)?;
         if selector_slots.iter().all(|&slot| slot == 0) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap blind-rotation step[{index}] selector_plaintext must not be all zero"
-            )));
+            ));
         }
         if selector_slots.iter().any(|&slot| slot != 0 && slot != 1) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap blind-rotation step[{index}] selector slots must be binary"
-            )));
+            ));
         }
         decoded_selectors.push(selector_slots);
     }
@@ -11591,20 +11099,20 @@ pub fn validate_bfv_full_bootstrap_blind_rotation_key_v1(
         .enumerate()
     {
         if step.automorphism_power != *expected_power {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap blind-rotation step[{index}] automorphism_power {} does not match canonical packed-left-rotation power {}",
-                step.automorphism_power, expected_power
-            )));
+                step.automorphism_power,
+                expected_power
+            ));
         }
         if selector_slots != expected_selector_slots {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap blind-rotation step[{index}] selector_plaintext does not match canonical packed-left-rotation mask"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 /// Encode a typed full-bootstrap blind-rotation artifact.
 ///
 /// The returned bytes are a governed full-bootstrap artifact envelope whose
@@ -11619,11 +11127,8 @@ pub fn encode_bfv_full_bootstrap_blind_rotation_artifact_v1(
     key: &BfvFullBootstrapBlindRotationKeyV1,
 ) -> Result<Vec<u8>, BfvError> {
     validate_bfv_full_bootstrap_blind_rotation_key_v1(params, key)?;
-    let payload = norito::encode_canonical(key).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap blind rotation encoding failed: {err}"
-        ))
-    })?;
+    let payload = norito::encode_canonical(key)
+        .map_err(|err| invalid!("BFV full-bootstrap blind rotation encoding failed: {err}"))?;
     encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
         params,
         max_bootstrap_depth,
@@ -11631,7 +11136,6 @@ pub fn encode_bfv_full_bootstrap_blind_rotation_artifact_v1(
         &payload,
     )
 }
-
 /// Decode and validate a governed full-bootstrap blind-rotation artifact.
 ///
 /// # Errors
@@ -11655,9 +11159,9 @@ pub fn decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
     )?;
     let key = norito::decode_canonical::<BfvFullBootstrapBlindRotationKeyV1>(&artifact.payload)
         .map_err(|err| {
-            BfvError::InvalidParameters(format!(
+            invalid!(
                 "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap blind rotation key: {err}"
-            ))
+            )
         })?;
     validate_bfv_full_bootstrap_blind_rotation_key_v1(params, &key)?;
     if key.accumulator_digest != material.accumulator_digest {
@@ -11668,7 +11172,6 @@ pub fn decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
     validate_full_bootstrap_artifact_payload_canonical_bytes_v1(label, &artifact.payload, &key)?;
     Ok(key)
 }
-
 /// Validate a typed full-bootstrap sample-extraction payload.
 ///
 /// # Errors
@@ -11712,14 +11215,14 @@ pub fn validate_bfv_full_bootstrap_sample_extraction_v1(
         )));
     }
     if sample_extraction.extracted_coefficient_index >= degree_u16 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap sample extraction extracted_coefficient_index {} must be less than polynomial_degree {}",
-            sample_extraction.extracted_coefficient_index, params.polynomial_degree
-        )));
+            sample_extraction.extracted_coefficient_index,
+            params.polynomial_degree
+        ));
     }
     Ok(())
 }
-
 /// Encode a typed full-bootstrap sample-extraction artifact.
 ///
 /// The returned bytes are a governed full-bootstrap artifact envelope whose
@@ -11734,11 +11237,8 @@ pub fn encode_bfv_full_bootstrap_sample_extraction_artifact_v1(
     sample_extraction: BfvFullBootstrapSampleExtractionV1,
 ) -> Result<Vec<u8>, BfvError> {
     validate_bfv_full_bootstrap_sample_extraction_v1(params, sample_extraction)?;
-    let payload = norito::encode_canonical(&sample_extraction).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap sample extraction encoding failed: {err}"
-        ))
-    })?;
+    let payload = norito::encode_canonical(&sample_extraction)
+        .map_err(|err| invalid!("BFV full-bootstrap sample extraction encoding failed: {err}"))?;
     encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
         params,
         max_bootstrap_depth,
@@ -11746,7 +11246,6 @@ pub fn encode_bfv_full_bootstrap_sample_extraction_artifact_v1(
         &payload,
     )
 }
-
 /// Decode and validate governed full-bootstrap sample-extraction metadata.
 ///
 /// This helper accepts either a metadata-only payload or the executable
@@ -11789,9 +11288,9 @@ pub fn decode_bfv_full_bootstrap_sample_extraction_artifact_v1(
                 BfvFullBootstrapSampleExtractionSwitchKeyV1,
             >(&artifact.payload)
             .map_err(|switch_err| {
-                    BfvError::InvalidParameters(format!(
+                    invalid!(
                         "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap sample extraction or sample-extraction switch key: sample extraction: {sample_err}; switch key: {switch_err}"
-                    ))
+                    )
                 })?;
             validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, &switch_key)?;
             validate_full_bootstrap_artifact_payload_canonical_bytes_v1(
@@ -11803,7 +11302,6 @@ pub fn decode_bfv_full_bootstrap_sample_extraction_artifact_v1(
         }
     }
 }
-
 /// Encode typed full-bootstrap sample-extraction switch-key material.
 ///
 /// The returned bytes are a governed full-bootstrap artifact envelope whose
@@ -11818,9 +11316,7 @@ pub fn encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
 ) -> Result<Vec<u8>, BfvError> {
     validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, switch_key)?;
     let payload = norito::encode_canonical(switch_key).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap sample-extraction switch key encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap sample-extraction switch key encoding failed: {err}")
     })?;
     encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
         params,
@@ -11829,7 +11325,6 @@ pub fn encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
         &payload,
     )
 }
-
 /// Decode and validate governed full-bootstrap sample-extraction switch-key material.
 ///
 /// # Errors
@@ -11855,9 +11350,9 @@ pub fn decode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
         &artifact.payload,
     )
     .map_err(|err| {
-            BfvError::InvalidParameters(format!(
+            invalid!(
                 "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap sample-extraction switch key: {err}"
-            ))
+            )
         })?;
     validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, &switch_key)?;
     validate_full_bootstrap_artifact_payload_canonical_bytes_v1(
@@ -11867,7 +11362,6 @@ pub fn decode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
     )?;
     Ok(switch_key)
 }
-
 /// Validate raw-sample switch key material for full-bootstrap sample extraction.
 ///
 /// # Errors
@@ -11891,25 +11385,24 @@ pub fn validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(
             if entry.b.iter().all(|&coefficient| coefficient == 0)
                 && entry.a.iter().all(|&coefficient| coefficient == 0)
             {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "BFV full-bootstrap sample-extraction switch key coefficient[{index}] entry[{digit_index}] must not be all zero"
-                )));
+                ));
             }
             if entry.b.iter().all(|&coefficient| coefficient == 0) {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "BFV full-bootstrap sample-extraction switch key coefficient[{index}] entry[{digit_index}] b limb must not be all zero"
-                )));
+                ));
             }
             if entry.a.iter().all(|&coefficient| coefficient == 0) {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "BFV full-bootstrap sample-extraction switch key coefficient[{index}] entry[{digit_index}] a limb must not be all zero"
-                )));
+                ));
             }
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_sample_extraction_switch_key_metadata_v1(
     params: &BfvParameters,
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
@@ -11930,15 +11423,14 @@ fn validate_bfv_full_bootstrap_sample_extraction_switch_key_metadata_v1(
             )
         })?;
         if coefficient_entry.secret_coefficient_index != expected_index {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap sample-extraction switch key coefficient entry[{index}] has secret_coefficient_index {}, expected {expected_index}",
                 coefficient_entry.secret_coefficient_index
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 /// Derive deterministic exact raw-sample switch key material.
 ///
 /// Each coefficient entry encrypts one scalar secret coefficient as a
@@ -11988,7 +11480,6 @@ pub fn bfv_full_bootstrap_sample_extraction_switch_key_from_seed_v1(
     )?;
     Ok(key)
 }
-
 /// Derive deterministic bounded-noise raw-sample switch key material.
 ///
 /// This is the rounded BFV counterpart to
@@ -12046,7 +11537,6 @@ pub fn bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_from_seed_v
     )?;
     Ok(key)
 }
-
 /// Verify exact raw-sample switch key material against a secret key.
 ///
 /// This is an owner-side diagnostic proving each coefficient entry decrypts to
@@ -12075,7 +11565,6 @@ pub fn validate_bfv_full_bootstrap_sample_extraction_switch_key_secret_consisten
     }
     Ok(())
 }
-
 /// Verify bounded-noise raw-sample switch key material against a secret key.
 ///
 /// # Errors
@@ -12105,7 +11594,6 @@ pub fn validate_bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_se
     }
     Ok(())
 }
-
 /// Switch a raw extracted sample into a coefficient-zero RLWE ciphertext.
 ///
 /// Unlike
@@ -12152,7 +11640,6 @@ pub(crate) fn apply_bfv_full_bootstrap_sample_extraction_switch_key_registered_r
     validate_ciphertext(params, &ciphertext)?;
     Ok(ciphertext)
 }
-
 /// Switch a bounded-noise raw extracted sample into a coefficient-zero RLWE ciphertext.
 ///
 /// This is the rounded BFV counterpart to
@@ -12200,7 +11687,6 @@ pub(crate) fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_ke
     validate_ciphertext(params, &ciphertext)?;
     Ok(ciphertext)
 }
-
 /// Return the exact residual bound after raw-sample switch-key repacking.
 ///
 /// The bound adds one key-switch residual contribution per secret coefficient
@@ -12221,7 +11707,6 @@ pub(crate) fn bfv_full_bootstrap_sample_extraction_switch_key_output_residual_mu
         raw_sample_bound,
     )
 }
-
 fn bfv_full_bootstrap_sample_extraction_switch_key_output_residual_multiple_bound_from_raw_sample_bound_v1(
     params: &BfvParameters,
     raw_sample_bound: u128,
@@ -12248,7 +11733,6 @@ fn bfv_full_bootstrap_sample_extraction_switch_key_output_residual_multiple_boun
     )?;
     Ok(output_bound)
 }
-
 /// Return the bounded-noise bound after raw-sample switch-key repacking.
 ///
 /// # Errors
@@ -12268,7 +11752,6 @@ pub(crate) fn bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_outp
         raw_sample_noise_bound,
     )
 }
-
 fn bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_output_bound_from_raw_sample_bound_v1(
     params: &BfvParameters,
     raw_sample_noise_bound: u128,
@@ -12296,7 +11779,6 @@ fn bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_output_bound_fr
     )?;
     Ok(output_bound)
 }
-
 fn full_bootstrap_sample_extraction_switch_key_rng(
     domain: &'static [u8],
     seed: &[u8],
@@ -12310,7 +11792,6 @@ fn full_bootstrap_sample_extraction_switch_key_rng(
     let material: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[seed, &index.to_le_bytes()]).into();
     Ok(derive_rng(domain, &material))
 }
-
 fn full_bootstrap_sample_extraction_switch_target_secret(
     params: &BfvParameters,
     secret_key: &BfvSecretKey,
@@ -12326,20 +11807,19 @@ fn full_bootstrap_sample_extraction_switch_target_secret(
     target_secret[0] = *coefficient;
     Ok(target_secret)
 }
-
 fn validate_bfv_full_bootstrap_sample_switch_key_matches_sample(
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
 ) -> Result<(), BfvError> {
     if key.sample_extraction.extracted_coefficient_index != sample.source_coefficient_index {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap sample-extraction switch key coefficient index {} does not match raw sample source_coefficient_index {}",
-            key.sample_extraction.extracted_coefficient_index, sample.source_coefficient_index
-        )));
+            key.sample_extraction.extracted_coefficient_index,
+            sample.source_coefficient_index
+        ));
     }
     Ok(())
 }
-
 fn full_bootstrap_sample_extraction_switch_initial_ciphertext(
     params: &BfvParameters,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
@@ -12348,7 +11828,6 @@ fn full_bootstrap_sample_extraction_switch_initial_ciphertext(
     c0[0] = sample.constant_term;
     (c0, zero_poly(params))
 }
-
 fn full_bootstrap_sample_extraction_switch_component(
     params: &BfvParameters,
     coefficient: u64,
@@ -12357,7 +11836,6 @@ fn full_bootstrap_sample_extraction_switch_component(
     component[0] = coefficient;
     component
 }
-
 /// Extract one raw LWE-style sample from a BFV ciphertext.
 ///
 /// The returned sample decrypts under the coefficient vector in
@@ -12400,7 +11878,6 @@ pub(crate) fn apply_bfv_full_bootstrap_sample_extraction_raw_lwe_v1(
     validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, &sample)?;
     Ok(sample)
 }
-
 /// Extract one bounded-noise raw LWE-style sample from a BFV ciphertext.
 ///
 /// This is the rounded BFV counterpart to
@@ -12422,7 +11899,6 @@ pub(crate) fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_raw_lwe_v
     }
     apply_bfv_full_bootstrap_sample_extraction_raw_lwe_v1(params, ciphertext, sample_extraction)
 }
-
 /// Return the exact residual-multiple bound for raw full-bootstrap sample extraction.
 ///
 /// Raw extraction selects one coefficient from the source decrypt polynomial, so
@@ -12445,7 +11921,6 @@ pub(crate) fn bfv_full_bootstrap_raw_sample_extraction_output_residual_multiple_
     )?;
     Ok(input_bound)
 }
-
 /// Return the bounded-noise bound for raw full-bootstrap sample extraction.
 ///
 /// Raw extraction selects one coefficient from the source decrypt polynomial, so
@@ -12472,7 +11947,6 @@ pub(crate) fn bfv_full_bootstrap_raw_sample_extraction_bounded_noise_output_boun
     )?;
     Ok(input_noise_bound)
 }
-
 /// Validate a raw full-bootstrap sample extracted from one BFV ciphertext coefficient.
 ///
 /// # Errors
@@ -12489,10 +11963,11 @@ pub(crate) fn validate_bfv_full_bootstrap_raw_extracted_sample_v1(
         )
     })?;
     if sample.source_coefficient_index >= degree_u16 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap raw sample source_coefficient_index {} must be less than polynomial_degree {}",
-            sample.source_coefficient_index, params.polynomial_degree
-        )));
+            sample.source_coefficient_index,
+            params.polynomial_degree
+        ));
     }
     if sample.constant_term >= params.ciphertext_modulus {
         return Err(BfvError::ShapeMismatch(format!(
@@ -12517,7 +11992,6 @@ pub(crate) fn validate_bfv_full_bootstrap_raw_extracted_sample_v1(
     }
     Ok(())
 }
-
 /// Repack a raw extracted sample as a coefficient-zero BFV ciphertext.
 ///
 /// The returned ciphertext decrypts at coefficient zero to the same scaled
@@ -12549,7 +12023,6 @@ pub(crate) fn repack_bfv_full_bootstrap_raw_sample_as_coefficient_zero_ciphertex
     validate_ciphertext(params, &ciphertext)?;
     Ok(ciphertext)
 }
-
 /// Repack a bounded-noise raw extracted sample as a coefficient-zero ciphertext.
 ///
 /// This is the rounded BFV counterpart to
@@ -12568,7 +12041,6 @@ pub(crate) fn repack_bfv_full_bootstrap_raw_sample_as_bounded_noise_coefficient_
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     repack_bfv_full_bootstrap_raw_sample_as_coefficient_zero_ciphertext_v1(params, sample)
 }
-
 /// Return the coefficient-zero bound for raw-sample repacking.
 ///
 /// The diagnostic repack preserves the selected raw sample exactly at
@@ -12590,7 +12062,6 @@ pub(crate) fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_output_resid
         raw_sample_bound,
     )
 }
-
 fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_residual_bound_from_raw_sample_bound_v1(
     params: &BfvParameters,
     raw_sample_bound: u128,
@@ -12602,7 +12073,6 @@ fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_residual_bound_from_raw
     )?;
     Ok(raw_sample_bound)
 }
-
 /// Return the bounded-noise coefficient-zero bound for raw-sample repacking.
 ///
 /// This is the rounded BFV counterpart to
@@ -12625,7 +12095,6 @@ pub(crate) fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_nois
         raw_sample_noise_bound,
     )
 }
-
 fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_bound_from_raw_sample_bound_v1(
     params: &BfvParameters,
     raw_sample_noise_bound: u128,
@@ -12638,7 +12107,6 @@ fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_bound_fro
     )?;
     Ok(raw_sample_noise_bound)
 }
-
 /// Validate a typed full-bootstrap accumulator/test-vector payload.
 ///
 /// # Errors
@@ -12681,7 +12149,6 @@ pub fn validate_bfv_full_bootstrap_accumulator_v1(
     }
     Ok(())
 }
-
 /// Encode a typed full-bootstrap accumulator/test-vector artifact.
 ///
 /// The returned bytes are a governed full-bootstrap artifact envelope whose
@@ -12695,11 +12162,8 @@ pub fn encode_bfv_full_bootstrap_accumulator_artifact_v1(
     accumulator: &BfvFullBootstrapAccumulatorV1,
 ) -> Result<Vec<u8>, BfvError> {
     validate_bfv_full_bootstrap_accumulator_v1(params, accumulator)?;
-    let payload = norito::encode_canonical(accumulator).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap accumulator encoding failed: {err}"
-        ))
-    })?;
+    let payload = norito::encode_canonical(accumulator)
+        .map_err(|err| invalid!("BFV full-bootstrap accumulator encoding failed: {err}"))?;
     encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
         params,
         max_bootstrap_depth,
@@ -12707,7 +12171,6 @@ pub fn encode_bfv_full_bootstrap_accumulator_artifact_v1(
         &payload,
     )
 }
-
 /// Decode and validate a governed full-bootstrap accumulator artifact.
 ///
 /// # Errors
@@ -12731,9 +12194,9 @@ pub fn decode_bfv_full_bootstrap_accumulator_artifact_v1(
     )?;
     let accumulator = norito::decode_canonical::<BfvFullBootstrapAccumulatorV1>(&artifact.payload)
         .map_err(|err| {
-            BfvError::InvalidParameters(format!(
+            invalid!(
                 "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap accumulator: {err}"
-            ))
+            )
         })?;
     validate_bfv_full_bootstrap_accumulator_v1(params, &accumulator)?;
     validate_full_bootstrap_artifact_payload_canonical_bytes_v1(
@@ -12743,7 +12206,6 @@ pub fn decode_bfv_full_bootstrap_accumulator_artifact_v1(
     )?;
     Ok(accumulator)
 }
-
 /// Return the canonical BFV full-bootstrap arithmetic trace profile.
 #[must_use]
 pub fn bfv_full_bootstrap_arithmetic_trace_profile_v1() -> BfvFullBootstrapArithmeticTraceProfileV1
@@ -12793,7 +12255,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_profile_v1() -> BfvFullBootstrapArith
         supports_bounded_noise: true,
     }
 }
-
 /// Validate a typed BFV full-bootstrap arithmetic trace profile.
 ///
 /// # Errors
@@ -12804,16 +12265,18 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_profile_v1(
     profile: &BfvFullBootstrapArithmeticTraceProfileV1,
 ) -> Result<(), BfvError> {
     if profile.version != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PROFILE_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace profile version {} does not match canonical version {}",
-            profile.version, BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PROFILE_VERSION_V1
-        )));
+            profile.version,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PROFILE_VERSION_V1
+        ));
     }
     if profile.field_count != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PROFILE_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace profile field count {} does not match canonical count {}",
-            profile.field_count, BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PROFILE_FIELD_COUNT_V1
-        )));
+            profile.field_count,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PROFILE_FIELD_COUNT_V1
+        ));
     }
     validate_bfv_full_bootstrap_canonical_circuit_id(
         "BFV full-bootstrap arithmetic trace profile circuit id",
@@ -12937,7 +12400,6 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_profile_v1(
     }
     validate_bfv_full_bootstrap_arithmetic_trace_profile_obligations_v1(profile)
 }
-
 fn validate_bfv_full_bootstrap_arithmetic_trace_profile_obligations_v1(
     profile: &BfvFullBootstrapArithmeticTraceProfileV1,
 ) -> Result<(), BfvError> {
@@ -12981,9 +12443,9 @@ fn validate_bfv_full_bootstrap_arithmetic_trace_profile_obligations_v1(
         ),
     ] {
         if !is_bound {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap arithmetic trace profile must bind {label}"
-            )));
+            ));
         }
     }
     if !profile.supports_exact_residual_multiple {
@@ -13000,7 +12462,6 @@ fn validate_bfv_full_bootstrap_arithmetic_trace_profile_obligations_v1(
     }
     Ok(())
 }
-
 /// Return the digest for externally supplied BFV full-bootstrap arithmetic trace profile material.
 ///
 /// # Errors
@@ -13011,16 +12472,13 @@ pub fn bfv_full_bootstrap_arithmetic_trace_profile_digest_from_profile_v1(
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_arithmetic_trace_profile_v1(profile)?;
     let bytes = norito::encode_canonical(profile).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap arithmetic trace profile encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap arithmetic trace profile encoding failed: {err}")
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PROFILE_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical BFV full-bootstrap arithmetic trace profile bytes.
 ///
 /// # Errors
@@ -13036,7 +12494,6 @@ pub fn decode_bfv_full_bootstrap_arithmetic_trace_profile_bytes_v1(
         validate_bfv_full_bootstrap_arithmetic_trace_profile_v1,
     )
 }
-
 /// Return the digest for canonical BFV full-bootstrap arithmetic trace profile bytes.
 ///
 /// # Errors
@@ -13048,7 +12505,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_profile_digest_from_bytes_v1(
     let (_, digest) = bfv_full_bootstrap_arithmetic_trace_profile_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode and digest canonical BFV full-bootstrap arithmetic trace profile bytes.
 ///
 /// This byte-admission helper keeps the decoded arithmetic trace profile and
@@ -13065,7 +12521,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_profile_and_digest_from_bytes_v1(
         bfv_full_bootstrap_arithmetic_trace_profile_digest_from_profile_v1(&profile)?;
     Ok((profile, profile_digest))
 }
-
 /// Return the canonical BFV full-bootstrap arithmetic trace profile digest.
 ///
 /// # Errors
@@ -13075,12 +12530,10 @@ pub fn bfv_full_bootstrap_arithmetic_trace_profile_digest_v1() -> Result<Hash, B
         &bfv_full_bootstrap_arithmetic_trace_profile_v1(),
     )
 }
-
 fn canonical_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1() -> Hash {
     bfv_full_bootstrap_arithmetic_trace_profile_digest_v1()
         .expect("canonical BFV full-bootstrap arithmetic trace profile must encode")
 }
-
 /// Return the canonical typed BFV full-bootstrap arithmetic AIR contract.
 #[must_use]
 pub fn bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1()
@@ -13130,7 +12583,6 @@ pub fn bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1()
         supports_bounded_noise: true,
     }
 }
-
 /// Validate typed BFV full-bootstrap arithmetic AIR contract material.
 ///
 /// # Errors
@@ -13141,20 +12593,20 @@ pub fn validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(
     material: &BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1,
 ) -> Result<(), BfvError> {
     if material.version != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic AIR constraint-system material version {} does not match canonical version {}",
             material.version,
             BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_VERSION_V1
-        )));
+        ));
     }
     if material.field_count
         != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic AIR constraint-system material field count {} does not match canonical count {}",
             material.field_count,
             BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_FIELD_COUNT_V1
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_canonical_circuit_id(
         "BFV full-bootstrap arithmetic AIR constraint-system material circuit id",
@@ -13165,23 +12617,25 @@ pub fn validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(
         &material.arithmetic_trace_profile_digest,
     )?;
     if material.row_width != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic AIR constraint-system material row width {} does not match canonical width {}",
-            material.row_width, BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1
-        )));
+            material.row_width,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1
+        ));
     }
     let canonical_padded_rows = canonical_bfv_full_bootstrap_arithmetic_trace_padded_row_count_v1();
     if material.padded_row_count != canonical_padded_rows {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic AIR constraint-system material padded row count {} does not match canonical count {canonical_padded_rows}",
             material.padded_row_count
-        )));
+        ));
     }
     if material.private_row_count != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic AIR constraint-system material private row count {} does not match canonical count {}",
-            material.private_row_count, BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1
-        )));
+            material.private_row_count,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1
+        ));
     }
     if material.private_row_kind != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_KIND_V1 {
         return Err(BfvError::InvalidParameters(
@@ -13262,19 +12716,19 @@ pub fn validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(
     if material.composition_challenge_digest_bytes
         != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic AIR constraint-system material composition challenge digest byte length {} does not match canonical length {}",
             material.composition_challenge_digest_bytes,
             BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1
-        )));
+        ));
     }
     macro_rules! require_contract_flag {
         ($field:ident, $label:literal) => {
             if !material.$field {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "BFV full-bootstrap arithmetic AIR constraint-system material must enforce {}",
                     $label
-                )));
+                ));
             }
         };
     }
@@ -13346,7 +12800,6 @@ pub fn validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(
     require_contract_flag!(supports_bounded_noise, "bounded-noise claims");
     Ok(())
 }
-
 /// Return the digest for externally supplied BFV full-bootstrap arithmetic AIR contract material.
 ///
 /// # Errors
@@ -13357,16 +12810,15 @@ pub fn bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_material_
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(material)?;
     let bytes = norito::encode_canonical(material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "BFV full-bootstrap arithmetic AIR constraint-system material encoding failed: {err}"
-        ))
+        )
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical BFV full-bootstrap arithmetic AIR constraint-system material bytes.
 ///
 /// # Errors
@@ -13382,7 +12834,6 @@ pub fn decode_bfv_full_bootstrap_arithmetic_air_constraint_system_material_bytes
         validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1,
     )
 }
-
 /// Return the digest for canonical BFV full-bootstrap arithmetic AIR material bytes.
 ///
 /// # Errors
@@ -13395,7 +12846,6 @@ pub fn bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_bytes_v1(
         bfv_full_bootstrap_arithmetic_air_constraint_system_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode and digest canonical BFV full-bootstrap arithmetic AIR material bytes.
 ///
 /// This byte-admission helper keeps the decoded AIR constraint-system material
@@ -13419,7 +12869,6 @@ pub fn bfv_full_bootstrap_arithmetic_air_constraint_system_and_digest_from_bytes
         bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_material_v1(&material)?;
     Ok((material, material_digest))
 }
-
 /// Return the digest for the canonical BFV full-bootstrap arithmetic AIR contract.
 ///
 /// # Errors
@@ -13429,18 +12878,15 @@ pub fn bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1() -> Result
         &bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(),
     )
 }
-
 fn canonical_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1() -> Hash {
     bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1()
         .expect("canonical BFV full-bootstrap arithmetic AIR contract must encode")
 }
-
 fn canonical_bfv_full_bootstrap_arithmetic_trace_padded_row_count_v1() -> u16 {
     1_u16
         .checked_shl(u32::from(BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1))
         .expect("canonical BFV full-bootstrap native STARK domain fits u16")
 }
-
 fn validate_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1(
     label: &str,
     digest: &Hash,
@@ -13449,13 +12895,12 @@ fn validate_bfv_full_bootstrap_arithmetic_trace_profile_digest_v1(
     validate_no_full_bootstrap_placeholder_material_digest(label, digest)?;
     let expected = bfv_full_bootstrap_arithmetic_trace_profile_digest_v1()?;
     if *digest != expected {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} does not match canonical BFV full-bootstrap arithmetic trace profile"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(
     label: &str,
     digest: &Hash,
@@ -13464,18 +12909,16 @@ fn validate_bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1(
     validate_no_full_bootstrap_placeholder_material_digest(label, digest)?;
     let expected = bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1()?;
     if *digest != expected {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} does not match canonical BFV full-bootstrap arithmetic AIR constraint system"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn canonical_bfv_full_bootstrap_centered_scale_round_source_chain_digest_v1()
 -> Result<Hash, BfvError> {
     registered_bfv_centered_scale_round_source_chain_digest(&ram_lfe_bfv_parameters_v1())
 }
-
 fn validate_bfv_full_bootstrap_centered_scale_round_source_chain_digest_v1(
     label: &str,
     digest: &Hash,
@@ -13484,13 +12927,12 @@ fn validate_bfv_full_bootstrap_centered_scale_round_source_chain_digest_v1(
     validate_no_full_bootstrap_placeholder_material_digest(label, digest)?;
     let expected = canonical_bfv_full_bootstrap_centered_scale_round_source_chain_digest_v1()?;
     if *digest != expected {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} does not match canonical BFV centered scale-round source chain"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn canonical_bfv_full_bootstrap_proof_public_input_schema_artifact_digest_v1(
     params: &BfvParameters,
     max_bootstrap_depth: u16,
@@ -13502,13 +12944,11 @@ fn canonical_bfv_full_bootstrap_proof_public_input_schema_artifact_digest_v1(
     )?;
     Ok(Hash::new(&artifact))
 }
-
 fn canonical_bfv_full_bootstrap_proof_public_input_schema_payload_digest_v1()
 -> Result<Hash, BfvError> {
     let schema = bfv_full_bootstrap_proof_public_input_schema_v1();
     bfv_full_bootstrap_proof_public_input_schema_payload_digest_from_schema_v1(&schema)
 }
-
 /// Return the digest for externally supplied BFV full-bootstrap proof public-input schema material.
 ///
 /// # Errors
@@ -13519,13 +12959,10 @@ pub fn bfv_full_bootstrap_proof_public_input_schema_payload_digest_from_schema_v
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_proof_public_input_schema_v1(schema)?;
     let payload = norito::encode_canonical(schema).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap proof public-input schema payload encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap proof public-input schema payload encoding failed: {err}")
     })?;
     Ok(Hash::new(&payload))
 }
-
 /// Decode canonical BFV full-bootstrap proof public-input schema bytes.
 ///
 /// # Errors
@@ -13537,14 +12974,10 @@ pub fn decode_bfv_full_bootstrap_proof_public_input_schema_bytes_v1(
 ) -> Result<BfvFullBootstrapProofPublicInputSchemaV1, BfvError> {
     let label = "BFV full-bootstrap proof public-input schema bytes";
     if bytes.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if bytes.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be all-zero"
-        )));
+        return Err(invalid!("{label} must not be all-zero"));
     }
     let schema = norito::decode_canonical::<BfvFullBootstrapProofPublicInputSchemaV1>(bytes)
         .map_err(|err| {
@@ -13555,14 +12988,13 @@ pub fn decode_bfv_full_bootstrap_proof_public_input_schema_bytes_v1(
             {
                 return placeholder_err;
             }
-            BfvError::InvalidParameters(format!(
+            invalid!(
                 "{label} must use canonical v1 bytes containing Norito-encoded BFV material: {err}"
-            ))
+            )
         })?;
     validate_bfv_full_bootstrap_proof_public_input_schema_v1(&schema)?;
     Ok(schema)
 }
-
 /// Return the digest for canonical BFV full-bootstrap proof public-input schema bytes.
 ///
 /// # Errors
@@ -13574,7 +13006,6 @@ pub fn bfv_full_bootstrap_proof_public_input_schema_payload_digest_from_bytes_v1
         bfv_full_bootstrap_proof_public_input_schema_and_payload_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode and digest canonical BFV full-bootstrap proof public-input schema bytes.
 ///
 /// This byte-admission helper keeps the decoded proof public-input schema and
@@ -13590,7 +13021,6 @@ pub fn bfv_full_bootstrap_proof_public_input_schema_and_payload_digest_from_byte
         bfv_full_bootstrap_proof_public_input_schema_payload_digest_from_schema_v1(&schema)?;
     Ok((schema, schema_payload_digest))
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_payload_digest_v1(
     label: &str,
     digest: &Hash,
@@ -13599,13 +13029,12 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_payload_digest_v1(
     validate_no_full_bootstrap_placeholder_material_digest(label, digest)?;
     let expected = canonical_bfv_full_bootstrap_proof_public_input_schema_payload_digest_v1()?;
     if *digest != expected {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} does not match the canonical first-release proof public-input schema payload"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn canonical_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_digest_v1(
     params: &BfvParameters,
     max_bootstrap_depth: u16,
@@ -13617,7 +13046,6 @@ fn canonical_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_digest
     )?;
     Ok(Hash::new(&artifact))
 }
-
 fn validate_bfv_full_bootstrap_canonical_profile_artifact_digests_v1(
     context: &str,
     params: &BfvParameters,
@@ -13631,9 +13059,9 @@ fn validate_bfv_full_bootstrap_canonical_profile_artifact_digests_v1(
             max_bootstrap_depth,
         )?;
     if *proof_public_input_schema_digest != expected_schema_digest {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{context} proof public-input schema artifact digest does not match the canonical first-release schema artifact"
-        )));
+        ));
     }
     let expected_air_artifact_digest =
         canonical_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_digest_v1(
@@ -13641,13 +13069,12 @@ fn validate_bfv_full_bootstrap_canonical_profile_artifact_digests_v1(
             max_bootstrap_depth,
         )?;
     if *arithmetic_air_constraint_system_artifact_digest != expected_air_artifact_digest {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{context} arithmetic AIR artifact digest does not match the canonical first-release AIR artifact"
-        )));
+        ));
     }
     Ok(())
 }
-
 /// Return the canonical BFV full-bootstrap proof public-input schema.
 #[must_use]
 #[allow(clippy::too_many_lines)]
@@ -13780,7 +13207,6 @@ pub fn bfv_full_bootstrap_proof_public_input_schema_v1() -> BfvFullBootstrapProo
         supports_bounded_noise: true,
     }
 }
-
 fn bfv_full_bootstrap_release_prover_contract_material_v1()
 -> BfvFullBootstrapReleaseProverContractMaterialV1 {
     BfvFullBootstrapReleaseProverContractMaterialV1 {
@@ -13831,21 +13257,17 @@ fn bfv_full_bootstrap_release_prover_contract_material_v1()
         rejects_stale_proof_key_artifacts: true,
     }
 }
-
 fn bfv_full_bootstrap_release_prover_contract_digest_v1() -> Result<Hash, BfvError> {
     let material = bfv_full_bootstrap_release_prover_contract_material_v1();
     validate_bfv_full_bootstrap_release_prover_contract_material_v1(&material)?;
     let bytes = norito::encode_canonical(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap release-prover contract material encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap release-prover contract material encoding failed: {err}")
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_RELEASE_PROVER_CONTRACT_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 fn validate_bfv_full_bootstrap_release_prover_contract_digest_v1(
     label: &str,
     digest: &Hash,
@@ -13854,11 +13276,10 @@ fn validate_bfv_full_bootstrap_release_prover_contract_digest_v1(
     validate_no_full_bootstrap_placeholder_material_digest(label, digest)?;
     let expected = bfv_full_bootstrap_release_prover_contract_digest_v1()?;
     if *digest != expected {
-        return Err(BfvError::InvalidParameters(format!("{label} mismatch")));
+        return Err(invalid!("{label} mismatch"));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_prover_contract_material_v1(
     material: &BfvFullBootstrapReleaseProverContractMaterialV1,
 ) -> Result<(), BfvError> {
@@ -13866,7 +13287,6 @@ fn validate_bfv_full_bootstrap_release_prover_contract_material_v1(
     validate_bfv_full_bootstrap_release_prover_contract_material_domains_v1(material)?;
     validate_bfv_full_bootstrap_release_prover_contract_material_obligations_v1(material)
 }
-
 fn validate_bfv_full_bootstrap_release_prover_contract_material_layout_v1(
     material: &BfvFullBootstrapReleaseProverContractMaterialV1,
 ) -> Result<(), BfvError> {
@@ -13946,7 +13366,6 @@ fn validate_bfv_full_bootstrap_release_prover_contract_material_layout_v1(
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_prover_contract_material_domains_v1(
     material: &BfvFullBootstrapReleaseProverContractMaterialV1,
 ) -> Result<(), BfvError> {
@@ -14017,15 +13436,14 @@ fn validate_bfv_full_bootstrap_release_prover_contract_material_domains_v1(
     for (left_index, (left_label, left_domain)) in domains.iter().enumerate() {
         for (right_label, right_domain) in domains.iter().skip(left_index + 1) {
             if left_domain == right_domain {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "BFV full-bootstrap release-prover contract material digest domains for {left_label} and {right_label} must be distinct"
-                )));
+                ));
             }
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_prover_contract_material_obligations_v1(
     material: &BfvFullBootstrapReleaseProverContractMaterialV1,
 ) -> Result<(), BfvError> {
@@ -14092,14 +13510,13 @@ fn validate_bfv_full_bootstrap_release_prover_contract_material_obligations_v1(
         ),
     ] {
         if !is_bound {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap release-prover contract must bind {label}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 /// Validate a typed BFV full-bootstrap proof public-input schema.
 ///
 /// # Errors
@@ -14128,7 +13545,6 @@ pub fn validate_bfv_full_bootstrap_proof_public_input_schema_v1(
     validate_bfv_full_bootstrap_proof_public_input_schema_hash_shape_v1(schema)?;
     validate_bfv_full_bootstrap_proof_public_input_schema_capabilities_v1(schema)
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_digest_aliases_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
@@ -14146,7 +13562,6 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_digest_aliases_v1(
         ],
     )
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_identity_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
@@ -14161,27 +13576,26 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_identity_v1(
     )?;
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_statement_bindings_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
     if schema.statement_material_version
         != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_VERSION_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema statement material version {} does not match canonical version {}",
             schema.statement_material_version,
             BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_VERSION_V1
-        )));
+        ));
     }
     if schema.statement_material_field_count
         != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema statement material field count {} does not match canonical count {}",
             schema.statement_material_field_count,
             BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1
-        )));
+        ));
     }
     for (label, is_bound) in [
         ("parameter set", schema.binds_parameters),
@@ -14197,28 +13611,29 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_statement_bindings_v1(
         ),
     ] {
         if !is_bound {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap proof public-input schema must bind {label}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_claim_bindings_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
     if schema.claim_version != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema claim version {} does not match canonical version {}",
-            schema.claim_version, BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_VERSION_V1
-        )));
+            schema.claim_version,
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_VERSION_V1
+        ));
     }
     if schema.claim_field_count != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema claim field count {} does not match canonical count {}",
-            schema.claim_field_count, BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_FIELD_COUNT_V1
-        )));
+            schema.claim_field_count,
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_FIELD_COUNT_V1
+        ));
     }
     for (label, is_bound) in [
         ("slot index", schema.binds_slot_index),
@@ -14234,65 +13649,62 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_claim_bindings_v1(
         ),
     ] {
         if !is_bound {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap proof public-input schema must bind {label}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_hash_shape_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
     if schema.public_input_hash_count
         != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema hash count {} does not match canonical count {}",
             schema.public_input_hash_count,
             BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_COUNT_V1
-        )));
+        ));
     }
     if schema.public_input_hash_bytes
         != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_BYTES_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema hash byte length {} does not match canonical length {}",
             schema.public_input_hash_bytes,
             BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_BYTES_V1
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_air_contract_bindings_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
     validate_bfv_full_bootstrap_proof_public_input_schema_air_contract_shape_v1(schema)?;
     validate_bfv_full_bootstrap_proof_public_input_schema_air_contract_enforcement_flags_v1(schema)
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_air_contract_shape_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
     if schema.arithmetic_air_contract_version
         != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_VERSION_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema arithmetic AIR contract version {} does not match canonical version {}",
             schema.arithmetic_air_contract_version,
             BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_VERSION_V1
-        )));
+        ));
     }
     if schema.arithmetic_air_contract_field_count
         != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema arithmetic AIR contract field count {} does not match canonical count {}",
             schema.arithmetic_air_contract_field_count,
             BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_FIELD_COUNT_V1
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_canonical_bytes_label(
         "BFV full-bootstrap proof public-input schema composition challenge domain",
@@ -14302,15 +13714,14 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_air_contract_shape_v1(
     if schema.composition_challenge_digest_bytes
         != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema composition challenge digest byte length {} does not match canonical length {}",
             schema.composition_challenge_digest_bytes,
             BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_air_contract_enforcement_flags_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
@@ -14391,14 +13802,13 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_air_contract_enforcemen
         ),
     ] {
         if !is_bound {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap proof public-input schema must enforce {label}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_native_air_envelope_flags_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
@@ -14433,41 +13843,39 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_native_air_envelope_fla
         ),
     ] {
         if !is_bound {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap proof public-input schema must enforce native {label}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_release_prover_bindings_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
     validate_bfv_full_bootstrap_proof_public_input_schema_release_prover_layouts_v1(schema)?;
     validate_bfv_full_bootstrap_proof_public_input_schema_release_prover_binding_flags_v1(schema)
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_release_prover_layouts_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
     if schema.proof_input_material_version
         != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_VERSION_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema proof input material version {} does not match canonical version {}",
             schema.proof_input_material_version,
             BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_VERSION_V1
-        )));
+        ));
     }
     if schema.proof_input_material_field_count
         != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema proof input material field count {} does not match canonical count {}",
             schema.proof_input_material_field_count,
             BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_canonical_bytes_label(
         "BFV full-bootstrap proof public-input schema proof input material digest domain",
@@ -14510,42 +13918,41 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_release_prover_layouts_
     if schema.prover_input_material_version
         != BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_VERSION_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema prover input material version {} does not match canonical version {}",
             schema.prover_input_material_version,
             BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_VERSION_V1
-        )));
+        ));
     }
     if schema.prover_input_material_field_count
         != BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema prover input material field count {} does not match canonical count {}",
             schema.prover_input_material_field_count,
             BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_FIELD_COUNT_V1
-        )));
+        ));
     }
     if schema.air_evaluation_material_version
         != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_VERSION_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema AIR evaluation material version {} does not match canonical version {}",
             schema.air_evaluation_material_version,
             BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_VERSION_V1
-        )));
+        ));
     }
     if schema.air_evaluation_material_field_count
         != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema AIR evaluation material field count {} does not match canonical count {}",
             schema.air_evaluation_material_field_count,
             BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_FIELD_COUNT_V1
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_public_opening_material_contract_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
@@ -14557,24 +13964,23 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_public_opening_material
     if schema.public_opening_material_version
         != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_VERSION_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema public opening material version {} does not match canonical version {}",
             schema.public_opening_material_version,
             BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_VERSION_V1
-        )));
+        ));
     }
     if schema.public_opening_material_field_count
         != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema public opening material field count {} does not match canonical count {}",
             schema.public_opening_material_field_count,
             BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUNT_V1
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_proof_key_commitment_domains_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
@@ -14602,7 +14008,6 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_proof_key_commitment_do
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_release_prover_domain_separation_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
@@ -14643,15 +14048,14 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_release_prover_domain_s
     for (left_index, (left_label, left_domain)) in domains.iter().enumerate() {
         for (right_label, right_domain) in domains.iter().skip(left_index + 1) {
             if left_domain == right_domain {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "BFV full-bootstrap proof public-input schema release-prover material digest domains for {left_label} and {right_label} must be distinct"
-                )));
+                ));
             }
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_release_prover_binding_flags_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
@@ -14714,14 +14118,13 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_release_prover_binding_
         ),
     ] {
         if !is_bound {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap proof public-input schema must bind {label}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_witness_bindings_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
@@ -14733,37 +14136,37 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_witness_bindings_v1(
     if schema.witness_digest_material_version
         != BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_VERSION_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema witness material version {} does not match canonical version {}",
             schema.witness_digest_material_version,
             BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_VERSION_V1
-        )));
+        ));
     }
     if schema.witness_digest_material_field_count
         != BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema witness material field count {} does not match canonical count {}",
             schema.witness_digest_material_field_count,
             BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_FIELD_COUNT_V1
-        )));
+        ));
     }
     if schema.witness_trace_field_count != BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema witness trace field count {} does not match canonical count {}",
             schema.witness_trace_field_count,
             BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_FIELD_COUNT_V1
-        )));
+        ));
     }
     if schema.witness_trace_bounds_field_count
         != BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_BOUNDS_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof public-input schema witness trace bounds field count {} does not match canonical count {}",
             schema.witness_trace_bounds_field_count,
             BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_BOUNDS_FIELD_COUNT_V1
-        )));
+        ));
     }
     for (label, is_bound) in [
         (
@@ -14776,14 +14179,13 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_witness_bindings_v1(
         ),
     ] {
         if !is_bound {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap proof public-input schema must bind {label}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_public_input_schema_capabilities_v1(
     schema: &BfvFullBootstrapProofPublicInputSchemaV1,
 ) -> Result<(), BfvError> {
@@ -14801,7 +14203,6 @@ fn validate_bfv_full_bootstrap_proof_public_input_schema_capabilities_v1(
     }
     Ok(())
 }
-
 /// Encode a typed proof public-input schema artifact.
 ///
 /// The returned bytes are a governed full-bootstrap artifact envelope whose
@@ -14816,9 +14217,7 @@ pub fn encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
 ) -> Result<Vec<u8>, BfvError> {
     validate_bfv_full_bootstrap_proof_public_input_schema_v1(schema)?;
     let payload = norito::encode_canonical(schema).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap proof public-input schema encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap proof public-input schema encoding failed: {err}")
     })?;
     encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
         params,
@@ -14827,7 +14226,6 @@ pub fn encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
         &payload,
     )
 }
-
 /// Decode and validate a governed proof public-input schema artifact.
 ///
 /// # Errors
@@ -14852,14 +14250,13 @@ pub fn decode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
     let schema =
         norito::decode_canonical::<BfvFullBootstrapProofPublicInputSchemaV1>(&artifact.payload)
             .map_err(|err| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap proof public-input schema: {err}"
-                ))
+                )
             })?;
     validate_bfv_full_bootstrap_proof_public_input_schema_v1(&schema)?;
     Ok(schema)
 }
-
 /// Encode typed arithmetic AIR constraint-system material as a governed artifact.
 ///
 /// The returned bytes are a full-bootstrap artifact envelope whose inner
@@ -14874,9 +14271,9 @@ pub fn encode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
 ) -> Result<Vec<u8>, BfvError> {
     validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(material)?;
     let payload = norito::encode_canonical(material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "BFV full-bootstrap arithmetic AIR constraint-system material encoding failed: {err}"
-        ))
+        )
     })?;
     encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
         params,
@@ -14885,7 +14282,6 @@ pub fn encode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
         &payload,
     )
 }
-
 /// Decode and validate a governed arithmetic AIR constraint-system artifact.
 ///
 /// # Errors
@@ -14911,9 +14307,9 @@ pub fn decode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
         BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1,
     >(&artifact.payload)
     .map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap arithmetic AIR constraint-system material: {err}"
-        ))
+        )
     })?;
     validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(&air_material)?;
     let expected_content_digest =
@@ -14924,7 +14320,6 @@ pub fn decode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
     )?;
     Ok(air_material)
 }
-
 /// Encode canonical STARK/FRI verifier-key payload bytes for BFV full-bootstrap proofs.
 ///
 /// The returned bytes use the same Norito field layout as the native STARK/FRI
@@ -14969,12 +14364,9 @@ pub fn encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
         generated_circuit_body,
     };
     norito::encode_canonical(&payload).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap native verifier-key payload encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap native verifier-key payload encoding failed: {err}")
     })
 }
-
 /// Encode canonical transparent-prover native material for BFV full-bootstrap proofs.
 ///
 /// The first-release STARK/FRI backend is transparent and does not require
@@ -14997,7 +14389,6 @@ pub fn encode_bfv_full_bootstrap_native_stark_fri_prover_key_material_v1(
         &payload,
     )
 }
-
 /// Encode canonical native verifier material for BFV full-bootstrap proofs.
 ///
 /// # Errors
@@ -15014,7 +14405,6 @@ pub fn encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_v1(
         &payload,
     )
 }
-
 /// Encode native verifier material from an existing STARK/FRI verifier payload.
 ///
 /// # Errors
@@ -15035,7 +14425,6 @@ pub fn encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_from_pay
         verifier_key_payload,
     )
 }
-
 /// Decode and validate canonical native BFV full-bootstrap proof-key material.
 ///
 /// # Errors
@@ -15047,14 +14436,13 @@ pub fn decode_bfv_full_bootstrap_native_proof_key_material_v1(
     validate_bfv_full_bootstrap_native_proof_key_material_shape_v1(bytes)?;
     let material = norito::decode_canonical::<BfvFullBootstrapNativeProofKeyMaterialV1>(bytes)
         .map_err(|err| {
-            BfvError::InvalidParameters(format!(
+            invalid!(
                 "BFV full-bootstrap native proof key material must use canonical v1 bytes containing a Norito-encoded native material payload: {err}"
-            ))
+            )
         })?;
     validate_bfv_full_bootstrap_native_proof_key_material_object_v1(&material)?;
     Ok(material)
 }
-
 /// Decode native proof-key material bytes for an expected role and circuit.
 ///
 /// This is the byte-admission helper for release tooling that receives
@@ -15091,7 +14479,6 @@ pub fn validate_bfv_full_bootstrap_native_proof_key_material_bytes_for_role_and_
     }
     Ok(material)
 }
-
 /// Encode backend-native proof-key bytes into the canonical full-bootstrap envelope.
 ///
 /// The returned bytes are suitable for [`BfvFullBootstrapProofKeyV1::key_material`].
@@ -15124,9 +14511,9 @@ pub fn encode_bfv_full_bootstrap_proof_key_material_envelope_v1(
         ));
     }
     if max_bootstrap_depth > BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key material envelope max_bootstrap_depth exceeds supported limit {BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH}"
-        )));
+        ));
     }
     let parameter_digest = registered_bfv_parameter_digest(params)?;
     let rns_modulus_chain_digest = registered_bfv_rns_modulus_chain_digest(params)?;
@@ -15210,20 +14597,17 @@ pub fn encode_bfv_full_bootstrap_proof_key_material_envelope_v1(
         native_key_material: native_key_material.to_vec(),
     };
     let encoded = norito::encode_canonical(&envelope).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap proof key material envelope encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap proof key material envelope encoding failed: {err}")
     })?;
     if encoded.len() > BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key material envelope length {} exceeds maximum {}",
             encoded.len(),
             BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES
-        )));
+        ));
     }
     Ok(encoded)
 }
-
 /// Validate typed BFV full-bootstrap prover/verifier key material.
 ///
 /// # Errors
@@ -15238,63 +14622,64 @@ pub fn validate_bfv_full_bootstrap_proof_key_v1(
     validate_bfv_full_bootstrap_proof_key_role(role)?;
     validate_bfv_full_bootstrap_proof_key_profile_v1(key)?;
     if key.key_role != role {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key payload role {:?} does not match artifact role {:?}",
-            key.key_role, role
-        )));
+            key.key_role,
+            role
+        ));
     }
     validate_bfv_full_bootstrap_canonical_circuit_id(
         "BFV full-bootstrap proof key governed material circuit id",
         &material.circuit_id,
     )?;
     if key.circuit_id != material.circuit_id {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key circuit id does not match governed full-bootstrap material for {role:?}"
-        )));
+        ));
     }
     if key.parameter_digest != material.parameter_digest {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key parameter digest does not match governed full-bootstrap material for {role:?}"
-        )));
+        ));
     }
     if key.rns_modulus_chain_digest != material.rns_modulus_chain_digest {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key RNS modulus-chain digest does not match governed full-bootstrap material for {role:?}"
-        )));
+        ));
     }
     if key.key_switch_decomposition_chain_digest != material.key_switch_decomposition_chain_digest {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key key-switch decomposition-chain digest does not match governed full-bootstrap material for {role:?}"
-        )));
+        ));
     }
     if key.centered_scale_round_source_chain_digest
         != material.centered_scale_round_source_chain_digest
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key centered scale-round source-chain digest does not match governed full-bootstrap material for {role:?}"
-        )));
+        ));
     }
     if key.max_bootstrap_depth != material.max_bootstrap_depth {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key max bootstrap depth does not match governed full-bootstrap material for {role:?}"
-        )));
+        ));
     }
     if key.public_input_schema_digest != material.proof_public_input_schema_digest {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key public-input schema digest does not match governed full-bootstrap material for {role:?}"
-        )));
+        ));
     }
     let expected_evaluator_artifact_set_digest =
         bfv_full_bootstrap_evaluator_artifact_set_digest_from_governed_material_v1(material)?;
     if key.evaluator_artifact_set_digest != expected_evaluator_artifact_set_digest {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key evaluator artifact set digest does not match governed full-bootstrap material for {role:?}"
-        )));
+        ));
     }
     if key.proof_key_pair_commitment != material.proof_key_pair_commitment {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof-key pair commitment does not match governed full-bootstrap material for {role:?}"
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_proof_key_material_commitment_binding_v1(role, key)?;
     let governed_commitment = match role {
@@ -15303,19 +14688,18 @@ pub fn validate_bfv_full_bootstrap_proof_key_v1(
             material.verifier_key_material_commitment
         }
         _ => {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap artifact role {role:?} is not a proof-key role"
-            )));
+            ));
         }
     };
     if key.key_material_commitment != governed_commitment {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key material commitment does not match governed full-bootstrap material for {role:?}"
-        )));
+        ));
     }
     Ok(())
 }
-
 /// Return the domain-separated commitment to one typed proof-key payload's
 /// backend-native key bytes.
 ///
@@ -15389,7 +14773,6 @@ pub fn bfv_full_bootstrap_proof_key_material_commitment_v1(
         key.key_material.as_slice(),
     ]))
 }
-
 /// Return the generated-pair commitment for BFV full-bootstrap proof keys.
 ///
 /// The commitment is recomputed from the shared proof profile and both
@@ -15466,7 +14849,6 @@ pub fn bfv_full_bootstrap_proof_key_pair_commitment_v1(
         verifier_key.key_material.as_slice(),
     ]))
 }
-
 /// Construct a matched BFV full-bootstrap prover/verifier proof-key pair.
 ///
 /// # Errors
@@ -15601,7 +14983,6 @@ pub fn bfv_full_bootstrap_proof_key_pair_from_key_material_v1(
     validate_bfv_full_bootstrap_generated_proof_key_pair_v1(&prover_key, &verifier_key)?;
     Ok((prover_key, verifier_key))
 }
-
 fn validate_bfv_full_bootstrap_proof_key_material_commitment_binding_v1(
     role: BfvFullBootstrapCircuitArtifactRoleV1,
     key: &BfvFullBootstrapProofKeyV1,
@@ -15617,13 +14998,12 @@ fn validate_bfv_full_bootstrap_proof_key_material_commitment_binding_v1(
     validate_bfv_full_bootstrap_proof_key_advertised_material_commitment_preflight_v1(key)?;
     let expected_commitment = bfv_full_bootstrap_proof_key_material_commitment_v1(key)?;
     if key.key_material_commitment != expected_commitment {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key material commitment does not match key bytes for {role:?}"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_key_advertised_material_commitment_preflight_v1(
     key: &BfvFullBootstrapProofKeyV1,
 ) -> Result<(), BfvError> {
@@ -15653,7 +15033,6 @@ fn validate_bfv_full_bootstrap_proof_key_advertised_material_commitment_prefligh
         ],
     )
 }
-
 /// Decode proof-key material envelope bytes and bind them to a proof key.
 ///
 /// This helper is for callers that receive [`BfvFullBootstrapProofKeyV1`] and
@@ -15683,7 +15062,6 @@ pub fn validate_bfv_full_bootstrap_proof_key_material_envelope_bytes_for_key_v1(
     )?;
     Ok(envelope)
 }
-
 /// Decode a proof-key artifact and return its governed key-material commitment.
 ///
 /// This helper lets callers construct [`BfvFullBootstrapCircuitMaterialV1`]
@@ -15709,7 +15087,6 @@ pub fn bfv_full_bootstrap_proof_key_material_commitment_from_artifact_v1(
         )?;
     Ok(commitment)
 }
-
 /// Decode a proof-key artifact and return the key with its governed commitment.
 ///
 /// This is the decoded-object companion for
@@ -15735,7 +15112,6 @@ pub fn bfv_full_bootstrap_proof_key_material_commitment_from_artifact_decoded_v1
     let commitment = key.key_material_commitment;
     Ok((key, commitment))
 }
-
 /// Decode prover/verifier key artifacts and return their generated-pair commitment.
 ///
 /// # Errors
@@ -15756,7 +15132,6 @@ pub fn bfv_full_bootstrap_proof_key_pair_commitment_from_artifacts_v1(
         )?;
     Ok(commitment)
 }
-
 /// Decode prover/verifier key artifacts and return the validated generated pair.
 ///
 /// This is the decoded-object companion for
@@ -15789,7 +15164,6 @@ pub fn bfv_full_bootstrap_proof_key_pair_commitment_from_artifacts_decoded_v1(
     let commitment = prover_key.proof_key_pair_commitment;
     Ok((prover_key, verifier_key, commitment))
 }
-
 /// Decode a canonical prover/verifier proof-key artifact under the registered BFV profile.
 ///
 /// This validates the artifact envelope, role, registered BFV parameter
@@ -15814,7 +15188,6 @@ pub fn decode_bfv_full_bootstrap_proof_key_artifact_registered_profile_bytes_v1(
         bytes,
     )
 }
-
 /// Return the stable artifact digest for canonical registered-profile proof-key bytes.
 ///
 /// # Errors
@@ -15833,7 +15206,6 @@ pub fn bfv_full_bootstrap_proof_key_artifact_digest_from_bytes_v1(
     )?;
     Ok(digest)
 }
-
 /// Decode canonical registered-profile proof-key artifact bytes and return their digest.
 ///
 /// # Errors
@@ -15852,7 +15224,6 @@ pub fn bfv_full_bootstrap_proof_key_artifact_and_digest_from_bytes_v1(
     )?;
     Ok((key, Hash::new(bytes)))
 }
-
 fn decode_bfv_full_bootstrap_proof_key_artifact_registered_profile_v1(
     params: &BfvParameters,
     max_bootstrap_depth: u16,
@@ -15868,22 +15239,23 @@ fn decode_bfv_full_bootstrap_proof_key_artifact_registered_profile_v1(
         ));
     }
     if max_bootstrap_depth > BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap max_bootstrap_depth exceeds supported limit {BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH}"
-        )));
+        ));
     }
     let artifact = norito::decode_canonical::<BfvFullBootstrapCircuitArtifactPayloadV1>(bytes)
         .map_err(|err| {
-            BfvError::InvalidParameters(format!(
+            invalid!(
                 "{label} must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap artifact payload: {err}"
-            ))
+            )
         })?;
     validate_full_bootstrap_artifact_inner_payload_shape_v1(label, &artifact.payload)?;
     if artifact.role != role {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} role {:?} does not match expected role {:?}",
-            artifact.role, role
-        )));
+            artifact.role,
+            role
+        ));
     }
     validate_bfv_full_bootstrap_canonical_circuit_id(
         &format!("{label} circuit id"),
@@ -15891,48 +15263,49 @@ fn decode_bfv_full_bootstrap_proof_key_artifact_registered_profile_v1(
     )?;
     validate_bfv_full_bootstrap_artifact_profile_digest_preflight_v1(label, &artifact)?;
     if artifact.parameter_digest != registered_bfv_parameter_digest(params)? {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} parameter digest does not match registered BFV parameters"
-        )));
+        ));
     }
     if artifact.rns_modulus_chain_digest != registered_bfv_rns_modulus_chain_digest(params)? {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} RNS modulus-chain digest does not match registered BFV parameters"
-        )));
+        ));
     }
     if artifact.key_switch_decomposition_chain_digest
         != registered_bfv_key_switch_decomposition_chain_digest(params)?
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} key-switch decomposition-chain digest does not match registered BFV parameters"
-        )));
+        ));
     }
     if artifact.centered_scale_round_source_chain_digest
         != registered_bfv_centered_scale_round_source_chain_digest(params)?
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} centered scale-round source-chain digest does not match registered BFV parameters"
-        )));
+        ));
     }
     if artifact.max_bootstrap_depth != max_bootstrap_depth {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} max bootstrap depth does not match requested full-bootstrap material"
-        )));
+        ));
     }
     validate_full_bootstrap_artifact_envelope_canonical_bytes_v1(label, bytes, &artifact)?;
     let key = norito::decode_canonical::<BfvFullBootstrapProofKeyV1>(&artifact.payload).map_err(
         |err| {
-            BfvError::InvalidParameters(format!(
+            invalid!(
                 "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap proof key: {err}"
-            ))
+            )
         },
     )?;
     validate_bfv_full_bootstrap_proof_key_profile_v1(&key)?;
     if key.key_role != role {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key payload role {:?} does not match artifact role {:?}",
-            key.key_role, role
-        )));
+            key.key_role,
+            role
+        ));
     }
     validate_bfv_full_bootstrap_proof_key_artifact_profile_v1(
         &artifact,
@@ -15943,7 +15316,6 @@ fn decode_bfv_full_bootstrap_proof_key_artifact_registered_profile_v1(
     validate_bfv_full_bootstrap_proof_key_material_commitment_binding_v1(role, &key)?;
     Ok(key)
 }
-
 /// Encode a typed prover/verifier key artifact.
 ///
 /// The returned bytes are a governed full-bootstrap artifact envelope whose
@@ -15962,18 +15334,16 @@ pub fn encode_bfv_full_bootstrap_proof_key_artifact_v1(
     validate_bfv_full_bootstrap_proof_key_role(role)?;
     validate_bfv_full_bootstrap_proof_key_profile_v1(key)?;
     if key.key_role != role {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key payload role {:?} does not match artifact role {:?}",
-            key.key_role, role
-        )));
+            key.key_role,
+            role
+        ));
     }
     validate_bfv_full_bootstrap_proof_key_registered_profile_v1(params, max_bootstrap_depth, key)?;
     validate_bfv_full_bootstrap_proof_key_material_commitment_binding_v1(role, key)?;
-    let payload = norito::encode_canonical(key).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap proof key encoding failed: {err}"
-        ))
-    })?;
+    let payload = norito::encode_canonical(key)
+        .map_err(|err| invalid!("BFV full-bootstrap proof key encoding failed: {err}"))?;
     encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
         params,
         max_bootstrap_depth,
@@ -15981,7 +15351,6 @@ pub fn encode_bfv_full_bootstrap_proof_key_artifact_v1(
         &payload,
     )
 }
-
 /// Decode and validate a governed prover/verifier key artifact.
 ///
 /// # Errors
@@ -16007,15 +15376,14 @@ pub fn decode_bfv_full_bootstrap_proof_key_artifact_v1(
     )?;
     let key = norito::decode_canonical::<BfvFullBootstrapProofKeyV1>(&artifact.payload).map_err(
         |err| {
-            BfvError::InvalidParameters(format!(
+            invalid!(
                 "{label} payload must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap proof key: {err}"
-            ))
+            )
         },
     )?;
     validate_bfv_full_bootstrap_proof_key_v1(material, role, &key)?;
     Ok(key)
 }
-
 /// Validate concrete full-bootstrap artifacts against governed commitments.
 ///
 /// This is the artifact companion to
@@ -16088,7 +15456,6 @@ pub fn validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(
     }
     Ok(())
 }
-
 /// Derive governed full-bootstrap circuit material from concrete artifacts.
 ///
 /// This is the production counterpart of release artifact assembly: every
@@ -16140,7 +15507,6 @@ pub fn bfv_full_bootstrap_circuit_material_from_artifacts_v1(
     validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(params, &material, artifacts)?;
     Ok(material)
 }
-
 /// Derive governed full-bootstrap circuit material from canonical artifact-bundle bytes.
 ///
 /// # Errors
@@ -16159,7 +15525,6 @@ pub fn bfv_full_bootstrap_circuit_material_from_artifact_bundle_bytes_v1(
     )?;
     Ok(material)
 }
-
 /// Derive governed full-bootstrap circuit material and artifacts from canonical bytes.
 ///
 /// # Errors
@@ -16191,7 +15556,6 @@ pub fn bfv_full_bootstrap_circuit_material_from_artifact_bundle_bytes_decoded_v1
     )?;
     Ok((artifacts, material))
 }
-
 fn validate_bfv_full_bootstrap_circuit_artifact_bundle_envelope_bytes_shape_v1(
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
 ) -> Result<(), BfvError> {
@@ -16245,7 +15609,6 @@ fn validate_bfv_full_bootstrap_circuit_artifact_bundle_envelope_bytes_shape_v1(
     }
     Ok(())
 }
-
 /// Return the stable artifact-bundle digest implied by governed circuit material.
 ///
 /// # Errors
@@ -16274,7 +15637,6 @@ pub fn bfv_full_bootstrap_circuit_artifact_bundle_digest_from_material_v1(
         },
     )
 }
-
 /// Return a stable digest over concrete full-bootstrap artifacts.
 ///
 /// # Errors
@@ -16303,7 +15665,6 @@ pub fn bfv_full_bootstrap_circuit_artifact_bundle_digest(
     };
     hash_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(&digest_material)
 }
-
 /// Decode canonical BFV full-bootstrap circuit artifact-bundle bytes.
 ///
 /// # Errors
@@ -16324,7 +15685,6 @@ pub fn decode_bfv_full_bootstrap_circuit_artifact_bundle_bytes_v1(
         },
     )
 }
-
 /// Return the stable digest for canonical BFV full-bootstrap artifact-bundle bytes.
 ///
 /// # Errors
@@ -16340,7 +15700,6 @@ pub fn bfv_full_bootstrap_circuit_artifact_bundle_digest_from_bytes_v1(
     )?;
     Ok(digest)
 }
-
 /// Decode and digest canonical BFV full-bootstrap artifact-bundle bytes.
 ///
 /// This byte-admission helper keeps the decoded governed artifact bundle and
@@ -16360,12 +15719,10 @@ pub fn bfv_full_bootstrap_circuit_artifact_bundle_and_digest_from_bytes_v1(
         bfv_full_bootstrap_circuit_artifact_bundle_digest(params, material, &artifacts)?;
     Ok((artifacts, artifact_bundle_digest))
 }
-
 struct BfvFullBootstrapReleaseAuditDecodedKeyV1 {
     evidence: BfvFullBootstrapReleaseAuditKeyEvidenceV1,
     native: BfvFullBootstrapNativeProofKeyMaterialV1,
 }
-
 /// Derive deterministic audit evidence for governed BFV full-bootstrap release artifacts.
 ///
 /// The returned evidence is only emitted after all concrete artifacts validate
@@ -16493,7 +15850,6 @@ pub fn bfv_full_bootstrap_release_audit_evidence_v1(
     validate_bfv_full_bootstrap_release_audit_evidence_shape_v1(&evidence)?;
     Ok(evidence)
 }
-
 /// Validate typed BFV full-bootstrap release audit evidence.
 ///
 /// # Errors
@@ -16505,7 +15861,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_evidence_v1(
 ) -> Result<(), BfvError> {
     validate_bfv_full_bootstrap_release_audit_evidence_shape_v1(evidence)
 }
-
 fn validate_bfv_full_bootstrap_release_audit_registered_profile_digests_v1(
     evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
 ) -> Result<(), BfvError> {
@@ -16548,7 +15903,6 @@ fn validate_bfv_full_bootstrap_release_audit_registered_profile_digests_v1(
         &evidence.arithmetic_air_constraint_system_artifact_digest,
     )
 }
-
 fn decode_bfv_full_bootstrap_release_audit_canonical_bytes_v1<T>(
     label: &str,
     bytes: &[u8],
@@ -16558,24 +15912,19 @@ where
     T: Decode + Encode,
 {
     if bytes.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if bytes.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be all-zero"
-        )));
+        return Err(invalid!("{label} must not be all-zero"));
     }
     let value = norito::decode_canonical::<T>(bytes).map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "{label} must use canonical v1 bytes containing a Norito-encoded release-audit object: {err}"
-        ))
+        )
     })?;
     validate(&value)?;
     Ok(value)
 }
-
 /// Return the digest of typed BFV full-bootstrap release audit evidence.
 ///
 /// # Errors
@@ -16586,16 +15935,13 @@ pub fn bfv_full_bootstrap_release_audit_evidence_digest_v1(
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_release_audit_evidence_v1(evidence)?;
     let bytes = norito::encode_canonical(evidence).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap release audit evidence encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap release audit evidence encoding failed: {err}")
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical BFV full-bootstrap release audit evidence bytes.
 ///
 /// # Errors
@@ -16611,7 +15957,6 @@ pub fn decode_bfv_full_bootstrap_release_audit_evidence_bytes_v1(
         validate_bfv_full_bootstrap_release_audit_evidence_v1,
     )
 }
-
 /// Return the digest of canonical BFV full-bootstrap release audit evidence bytes.
 ///
 /// # Errors
@@ -16622,7 +15967,6 @@ pub fn bfv_full_bootstrap_release_audit_evidence_digest_from_bytes_v1(
     let (_, digest) = bfv_full_bootstrap_release_audit_evidence_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode and digest canonical BFV full-bootstrap release audit evidence bytes.
 ///
 /// This byte-admission helper keeps the decoded evidence and
@@ -16637,7 +15981,6 @@ pub fn bfv_full_bootstrap_release_audit_evidence_and_digest_from_bytes_v1(
     let evidence_digest = bfv_full_bootstrap_release_audit_evidence_digest_v1(&evidence)?;
     Ok((evidence, evidence_digest))
 }
-
 /// Derive and digest deterministic BFV full-bootstrap release audit evidence.
 ///
 /// # Errors
@@ -16650,7 +15993,6 @@ pub fn bfv_full_bootstrap_release_audit_evidence_digest(
     let evidence = bfv_full_bootstrap_release_audit_evidence_v1(params, material, artifacts)?;
     bfv_full_bootstrap_release_audit_evidence_digest_v1(&evidence)
 }
-
 /// Derive BFV full-bootstrap release audit evidence from canonical artifact-bundle bytes.
 ///
 /// # Errors
@@ -16669,7 +16011,6 @@ pub fn bfv_full_bootstrap_release_audit_evidence_from_artifact_bundle_bytes_v1(
         )?;
     Ok(evidence)
 }
-
 /// Derive BFV full-bootstrap release audit evidence and artifacts from canonical bytes.
 ///
 /// # Errors
@@ -16694,7 +16035,6 @@ pub fn bfv_full_bootstrap_release_audit_evidence_from_artifact_bundle_bytes_deco
     let evidence = bfv_full_bootstrap_release_audit_evidence_v1(params, material, &artifacts)?;
     Ok((artifacts, evidence))
 }
-
 /// Derive and digest release audit evidence from canonical artifact-bundle bytes.
 ///
 /// This byte-admission helper returns the decoded artifacts, derived evidence,
@@ -16724,7 +16064,6 @@ pub fn bfv_full_bootstrap_release_audit_evidence_and_digest_from_artifact_bundle
         )?;
     Ok((artifacts, evidence, evidence_digest))
 }
-
 /// Derive and digest release audit evidence from canonical artifact-bundle bytes.
 ///
 /// This byte-admission helper returns the decoded artifacts, derived evidence,
@@ -16757,7 +16096,6 @@ pub fn bfv_full_bootstrap_release_audit_evidence_and_digests_from_artifact_bundl
     let evidence_digest = bfv_full_bootstrap_release_audit_evidence_digest_v1(&evidence)?;
     Ok((artifacts, evidence, artifact_bundle_digest, evidence_digest))
 }
-
 /// Validate release audit evidence against canonical artifact-bundle bytes.
 ///
 /// # Errors
@@ -16784,7 +16122,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_evidence_for_artifact_bundle_by
     }
     Ok(())
 }
-
 /// Validate canonical release audit evidence bytes against canonical artifact-bundle bytes.
 ///
 /// This raw-byte admission helper rejects non-canonical evidence or
@@ -16811,7 +16148,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_evidence_bytes_for_artifact_bun
     )?;
     Ok(evidence)
 }
-
 /// Validate canonical release audit evidence and artifact-bundle bytes together.
 ///
 /// This raw-byte admission helper admits supplied evidence bytes before
@@ -16843,7 +16179,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_evidence_bytes_for_artifact_bun
         )?;
     Ok((artifacts, evidence))
 }
-
 /// Validate and digest canonical release audit evidence/artifact-bundle bytes together.
 ///
 /// This raw-byte admission helper admits supplied evidence bytes before
@@ -16877,7 +16212,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_evidence_bytes_and_digest_for_a
         )?;
     Ok((artifacts, evidence, evidence_digest))
 }
-
 /// Validate and digest canonical release audit evidence/artifact-bundle bytes together.
 ///
 /// This raw-byte admission helper admits supplied evidence bytes before
@@ -16921,7 +16255,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_evidence_bytes_and_digests_for_
     }
     Ok((artifacts, evidence, artifact_bundle_digest, evidence_digest))
 }
-
 /// Derive and digest release audit evidence from canonical artifact-bundle bytes.
 ///
 /// # Errors
@@ -16940,7 +16273,6 @@ pub fn bfv_full_bootstrap_release_audit_evidence_digest_from_artifact_bundle_byt
         )?;
     Ok(evidence_digest)
 }
-
 /// Build the signable payload for a BFV full-bootstrap release audit signoff.
 ///
 /// # Errors
@@ -16994,7 +16326,6 @@ pub fn bfv_full_bootstrap_release_audit_signoff_payload_v1(
     validate_bfv_full_bootstrap_release_audit_signoff_payload_for_evidence_v1(&payload, evidence)?;
     Ok(payload)
 }
-
 /// Sign BFV full-bootstrap release audit evidence with a reviewer key.
 ///
 /// # Errors
@@ -17013,9 +16344,9 @@ pub fn sign_bfv_full_bootstrap_release_audit_signoff_v1(
         reviewer_private_key,
     )?;
     let reviewer_public_key = PublicKey::from_private_key(reviewer_private_key).map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "BFV full-bootstrap release audit signoff reviewer public-key derivation failed: {err}"
-        ))
+        )
     })?;
     let payload = bfv_full_bootstrap_release_audit_signoff_payload_v1(
         evidence,
@@ -17025,9 +16356,7 @@ pub fn sign_bfv_full_bootstrap_release_audit_signoff_v1(
         &reviewer_public_key,
     )?;
     let signature = SignatureOf::try_new(reviewer_private_key, &payload).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap release audit signoff signing failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap release audit signoff signing failed: {err}")
     })?;
     let signoff = BfvFullBootstrapReleaseAuditSignoffV1 {
         version: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_VERSION_V1,
@@ -17038,7 +16367,6 @@ pub fn sign_bfv_full_bootstrap_release_audit_signoff_v1(
     validate_bfv_full_bootstrap_release_audit_signoff_for_evidence_v1(&signoff, evidence)?;
     Ok(signoff)
 }
-
 /// Validate a signed BFV full-bootstrap release audit signoff.
 ///
 /// # Errors
@@ -17048,16 +16376,18 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_v1(
     signoff: &BfvFullBootstrapReleaseAuditSignoffV1,
 ) -> Result<(), BfvError> {
     if signoff.version != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit signoff version {} does not match canonical version {}",
-            signoff.version, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_VERSION_V1
-        )));
+            signoff.version,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_VERSION_V1
+        ));
     }
     if signoff.field_count != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit signoff field count {} does not match canonical count {}",
-            signoff.field_count, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_FIELD_COUNT_V1
-        )));
+            signoff.field_count,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_FIELD_COUNT_V1
+        ));
     }
     validate_bfv_full_bootstrap_release_audit_signoff_payload_v1(&signoff.payload)?;
     validate_bfv_full_bootstrap_release_audit_signoff_signature_v1(signoff)?;
@@ -17065,23 +16395,21 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_v1(
         .signature
         .verify(&signoff.payload.reviewer_public_key, &signoff.payload)
         .map_err(|err| {
-            BfvError::InvalidParameters(format!(
+            invalid!(
                 "BFV full-bootstrap release audit signoff signature verification failed: {err}"
-            ))
+            )
         })
 }
-
 fn validate_bfv_full_bootstrap_release_audit_signoff_signature_v1(
     signoff: &BfvFullBootstrapReleaseAuditSignoffV1,
 ) -> Result<(), BfvError> {
     crate::ed25519_parse_signature(signoff.signature.payload()).map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "BFV full-bootstrap release audit signoff reviewer signature failed admission: {err}"
-        ))
+        )
     })?;
     Ok(())
 }
-
 /// Validate a signed BFV full-bootstrap release audit signoff against evidence.
 ///
 /// # Errors
@@ -17097,7 +16425,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_for_evidence_v1(
         evidence,
     )
 }
-
 /// Validate the reviewer identity and public key on a release audit signoff.
 ///
 /// # Errors
@@ -17128,7 +16455,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_trusted_reviewer_v1(
     }
     Ok(())
 }
-
 /// Validate a signed BFV full-bootstrap release audit signoff against artifacts.
 ///
 /// The evidence is derived from the governed material and concrete artifact
@@ -17148,7 +16474,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_for_artifacts_v1(
     let evidence = bfv_full_bootstrap_release_audit_evidence_v1(params, material, artifacts)?;
     validate_bfv_full_bootstrap_release_audit_signoff_for_evidence_v1(signoff, &evidence)
 }
-
 /// Return the digest of a typed BFV full-bootstrap release audit signoff.
 ///
 /// # Errors
@@ -17159,16 +16484,13 @@ pub fn bfv_full_bootstrap_release_audit_signoff_digest_v1(
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_release_audit_signoff_v1(signoff)?;
     let bytes = norito::encode_canonical(signoff).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap release audit signoff encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap release audit signoff encoding failed: {err}")
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical BFV full-bootstrap release audit signoff bytes.
 ///
 /// # Errors
@@ -17184,7 +16506,6 @@ pub fn decode_bfv_full_bootstrap_release_audit_signoff_bytes_v1(
         validate_bfv_full_bootstrap_release_audit_signoff_v1,
     )
 }
-
 /// Return the digest of canonical BFV full-bootstrap release audit signoff bytes.
 ///
 /// # Errors
@@ -17195,7 +16516,6 @@ pub fn bfv_full_bootstrap_release_audit_signoff_digest_from_bytes_v1(
     let (_, digest) = bfv_full_bootstrap_release_audit_signoff_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode and digest canonical BFV full-bootstrap release audit signoff bytes.
 ///
 /// This byte-admission helper keeps the decoded signed signoff and its
@@ -17210,7 +16530,6 @@ pub fn bfv_full_bootstrap_release_audit_signoff_and_digest_from_bytes_v1(
         bfv_full_bootstrap_release_audit_signoff_and_digests_from_bytes_v1(bytes)?;
     Ok((signoff, signoff_digest))
 }
-
 /// Decode canonical BFV full-bootstrap release audit signoff bytes and return their digests.
 ///
 /// This byte-admission helper keeps the decoded signed signoff, signed evidence
@@ -17227,7 +16546,6 @@ pub fn bfv_full_bootstrap_release_audit_signoff_and_digests_from_bytes_v1(
     let signoff_digest = bfv_full_bootstrap_release_audit_signoff_digest_v1(&signoff)?;
     Ok((signoff, evidence_digest, signoff_digest))
 }
-
 /// Validate canonical release audit signoff bytes against canonical evidence bytes.
 ///
 /// This raw-byte admission helper rejects non-canonical evidence or signoff
@@ -17255,7 +16573,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_evidence_byte
         )?;
     Ok((evidence, signoff))
 }
-
 /// Validate and digest canonical release audit signoff/evidence bytes.
 ///
 /// This raw-byte admission helper decodes evidence and signed signoff objects
@@ -17284,7 +16601,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_ev
         )?;
     Ok((evidence, signoff, signoff_digest))
 }
-
 /// Validate and digest canonical release audit signoff/evidence bytes.
 ///
 /// This raw-byte admission helper decodes evidence and signed signoff objects
@@ -17314,7 +16630,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_e
     validate_bfv_full_bootstrap_release_audit_signoff_for_evidence_v1(&signoff, &evidence)?;
     Ok((evidence, signoff, evidence_digest, signoff_digest))
 }
-
 /// Validate canonical release audit signoff bytes against artifact-bundle bytes.
 ///
 /// This byte-level handoff admits canonical signoff bytes before
@@ -17348,7 +16663,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_artifact_bund
         )?;
     Ok((artifacts, evidence, signoff))
 }
-
 /// Validate and digest canonical signoff bytes against artifact-bundle bytes.
 ///
 /// This byte-level handoff admits signed signoff bytes before governed
@@ -17382,7 +16696,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_ar
         )?;
     Ok((artifacts, evidence, signoff, signoff_digest))
 }
-
 /// Validate and digest canonical signoff bytes against artifact-bundle bytes.
 ///
 /// This byte-level handoff admits signed signoff bytes before governed
@@ -17425,7 +16738,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_a
         signoff_digest,
     ))
 }
-
 /// Validate and digest canonical signoff bytes against artifact-bundle bytes.
 ///
 /// This byte-level handoff admits signed signoff bytes before governed
@@ -17472,7 +16784,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_all_digests_f
         signoff_digest,
     ))
 }
-
 /// Validate canonical release audit signoff/evidence bytes against a trusted reviewer.
 ///
 /// This production admission helper starts from raw canonical evidence and
@@ -17504,7 +16815,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_evidence_byte
         )?;
     Ok((evidence, signoff))
 }
-
 /// Validate and digest canonical signoff/evidence bytes against a trusted reviewer.
 ///
 /// This production admission helper keeps decoded evidence, decoded signed
@@ -17537,7 +16847,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_ev
         )?;
     Ok((evidence, signoff, signoff_digest))
 }
-
 /// Validate and digest canonical signoff/evidence bytes against a trusted reviewer.
 ///
 /// This production admission helper keeps decoded evidence, decoded signed
@@ -17580,7 +16889,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_e
     )?;
     Ok((evidence, signoff, evidence_digest, signoff_digest))
 }
-
 /// Validate canonical signoff/artifact-bundle bytes against a trusted reviewer.
 ///
 /// # Errors
@@ -17613,7 +16921,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_for_artifact_bund
         )?;
     Ok((artifacts, evidence, signoff))
 }
-
 /// Validate and digest canonical signoff/artifact-bundle bytes against a trusted reviewer.
 ///
 /// # Errors
@@ -17647,7 +16954,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digest_for_ar
         )?;
     Ok((artifacts, evidence, signoff, signoff_digest))
 }
-
 /// Validate and digest canonical signoff/artifact-bundle bytes against a trusted reviewer.
 ///
 /// # Errors
@@ -17688,7 +16994,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_digests_for_a
         signoff_digest,
     ))
 }
-
 /// Validate and digest canonical signoff/artifact-bundle bytes against a trusted reviewer.
 ///
 /// # Errors
@@ -17738,7 +17043,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_bytes_and_all_digests_f
         signoff_digest,
     ))
 }
-
 /// Build a publishable BFV full-bootstrap release audit record.
 ///
 /// # Errors
@@ -17784,7 +17088,6 @@ pub fn bfv_full_bootstrap_release_audit_record_v1(
     )?;
     Ok(record)
 }
-
 /// Build a publishable BFV full-bootstrap release audit record from artifact bytes.
 ///
 /// This byte-level construction path rejects malformed reviewer material and
@@ -17822,7 +17125,6 @@ pub fn bfv_full_bootstrap_release_audit_record_for_artifact_bundle_bytes_v1(
         )?;
     Ok((artifacts, record))
 }
-
 /// Build and digest a BFV full-bootstrap release audit record from artifact bytes.
 ///
 /// This is the byte-level companion to
@@ -17861,7 +17163,6 @@ pub fn bfv_full_bootstrap_release_audit_record_and_digest_for_artifact_bundle_by
         )?;
     Ok((artifacts, record, record_digest))
 }
-
 /// Build and digest a BFV full-bootstrap release audit record from artifact bytes.
 ///
 /// This richer byte-level companion returns both the artifact-bundle digest
@@ -17900,7 +17201,6 @@ pub fn bfv_full_bootstrap_release_audit_record_and_digests_for_artifact_bundle_b
         )?;
     Ok((artifacts, record, artifact_bundle_digest, record_digest))
 }
-
 /// Build and digest a BFV full-bootstrap release audit record from artifact bytes.
 ///
 /// This byte-level construction helper returns the decoded artifact bundle,
@@ -17967,7 +17267,6 @@ pub fn bfv_full_bootstrap_release_audit_record_and_all_digests_for_artifact_bund
         record_digest,
     ))
 }
-
 /// Validate a publishable BFV full-bootstrap release audit record.
 ///
 /// # Errors
@@ -17977,23 +17276,24 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_v1(
     record: &BfvFullBootstrapReleaseAuditRecordV1,
 ) -> Result<(), BfvError> {
     if record.version != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_RECORD_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit record version {} does not match canonical version {}",
-            record.version, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_RECORD_VERSION_V1
-        )));
+            record.version,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_RECORD_VERSION_V1
+        ));
     }
     if record.field_count != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_RECORD_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit record field count {} does not match canonical count {}",
-            record.field_count, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_RECORD_FIELD_COUNT_V1
-        )));
+            record.field_count,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_RECORD_FIELD_COUNT_V1
+        ));
     }
     validate_bfv_full_bootstrap_release_audit_signoff_for_evidence_v1(
         &record.signoff,
         &record.evidence,
     )
 }
-
 /// Validate a release audit record against a trusted reviewer key.
 ///
 /// # Errors
@@ -18016,7 +17316,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_trusted_reviewer_v1(
         reviewer_public_key,
     )
 }
-
 /// Validate a release audit record against governed material and artifacts.
 ///
 /// # Errors
@@ -18043,7 +17342,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_for_artifacts_v1(
         &expected_evidence,
     )
 }
-
 /// Return the digest of a publishable BFV full-bootstrap release audit record.
 ///
 /// # Errors
@@ -18054,16 +17352,13 @@ pub fn bfv_full_bootstrap_release_audit_record_digest_v1(
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_release_audit_record_v1(record)?;
     let bytes = norito::encode_canonical(record).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap release audit record encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap release audit record encoding failed: {err}")
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_RECORD_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical BFV full-bootstrap release audit record bytes.
 ///
 /// # Errors
@@ -18079,7 +17374,6 @@ pub fn decode_bfv_full_bootstrap_release_audit_record_bytes_v1(
         validate_bfv_full_bootstrap_release_audit_record_v1,
     )
 }
-
 /// Return the digest of canonical BFV full-bootstrap release audit record bytes.
 ///
 /// # Errors
@@ -18090,7 +17384,6 @@ pub fn bfv_full_bootstrap_release_audit_record_digest_from_bytes_v1(
     let (_, digest) = bfv_full_bootstrap_release_audit_record_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode and digest canonical BFV full-bootstrap release audit record bytes.
 ///
 /// This byte-admission helper keeps the decoded signed record and its
@@ -18105,7 +17398,6 @@ pub fn bfv_full_bootstrap_release_audit_record_and_digest_from_bytes_v1(
         bfv_full_bootstrap_release_audit_record_and_digests_from_bytes_v1(bytes)?;
     Ok((record, record_digest))
 }
-
 /// Decode canonical BFV full-bootstrap release audit record bytes and return their digests.
 ///
 /// This byte-admission helper keeps the decoded signed record, computed evidence
@@ -18123,7 +17415,6 @@ pub fn bfv_full_bootstrap_release_audit_record_and_digests_from_bytes_v1(
     let record_digest = bfv_full_bootstrap_release_audit_record_digest_v1(&record)?;
     Ok((record, evidence_digest, signoff_digest, record_digest))
 }
-
 /// Validate canonical release audit record bytes against governed artifacts.
 ///
 /// This raw-byte admission helper rejects non-canonical record framing before
@@ -18144,7 +17435,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_for_artifacts_v1(
     )?;
     Ok(record)
 }
-
 /// Validate canonical artifact-bundle bytes and release audit record bytes together.
 ///
 /// This raw-byte admission helper admits the signed record bytes before
@@ -18176,7 +17466,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_for_artifact_bundl
         )?;
     Ok((artifacts, record))
 }
-
 /// Validate and digest canonical artifact-bundle and release-audit record bytes.
 ///
 /// This raw-byte admission helper admits the signed release-audit record bytes
@@ -18209,7 +17498,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_and_digest_for_art
         )?;
     Ok((artifacts, record, record_digest))
 }
-
 /// Validate and digest canonical artifact-bundle and release-audit record bytes.
 ///
 /// This richer byte-admission helper admits the signed release-audit record
@@ -18244,7 +17532,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_and_digests_for_ar
         )?;
     Ok((artifacts, record, artifact_bundle_digest, record_digest))
 }
-
 /// Validate and digest canonical artifact-bundle and release-audit record bytes.
 ///
 /// This byte-admission helper admits the signed release-audit record bytes
@@ -18292,7 +17579,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_and_all_digests_fo
         record_digest,
     ))
 }
-
 /// Validate canonical artifact-bundle and record bytes against a trusted reviewer.
 ///
 /// This production admission helper rejects non-canonical artifact or record
@@ -18328,7 +17614,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_for_artifact_bundl
         )?;
     Ok((artifacts, record))
 }
-
 /// Validate and digest canonical artifact-bundle/record bytes against a trusted reviewer.
 ///
 /// This production admission helper keeps the decoded artifacts, decoded signed
@@ -18365,7 +17650,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_and_digest_for_art
         )?;
     Ok((artifacts, record, record_digest))
 }
-
 /// Validate and digest canonical artifact-bundle/record bytes against a trusted reviewer.
 ///
 /// This richer production admission helper keeps the decoded artifacts, decoded
@@ -18404,7 +17688,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_and_digests_for_ar
         )?;
     Ok((artifacts, record, artifact_bundle_digest, record_digest))
 }
-
 /// Validate and digest canonical artifact-bundle/record bytes against a trusted reviewer.
 ///
 /// This production admission helper keeps the decoded artifacts, decoded signed
@@ -18459,7 +17742,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_record_bytes_and_all_digests_fo
         record_digest,
     ))
 }
-
 /// Build a machine-checkable BFV full-bootstrap release audit manifest.
 ///
 /// # Errors
@@ -18500,7 +17782,6 @@ pub fn bfv_full_bootstrap_release_audit_manifest_v1(
     validate_bfv_full_bootstrap_release_audit_manifest_for_record_v1(&manifest, record)?;
     Ok(manifest)
 }
-
 /// Build a BFV full-bootstrap release audit manifest from canonical record bytes.
 ///
 /// This byte-level construction path rejects non-canonical record framing
@@ -18522,7 +17803,6 @@ pub fn bfv_full_bootstrap_release_audit_manifest_for_record_bytes_v1(
         bfv_full_bootstrap_release_audit_manifest_and_digest_for_record_bytes_v1(record_bytes)?;
     Ok((record, manifest))
 }
-
 /// Build and digest a BFV full-bootstrap release audit manifest from record bytes.
 ///
 /// This is the byte-level companion to
@@ -18549,7 +17829,6 @@ pub fn bfv_full_bootstrap_release_audit_manifest_and_digest_for_record_bytes_v1(
         )?;
     Ok((record, manifest, manifest_digest))
 }
-
 /// Build and digest a BFV full-bootstrap release audit manifest from record bytes.
 ///
 /// This byte-level construction helper returns the decoded signed record,
@@ -18576,7 +17855,6 @@ pub fn bfv_full_bootstrap_release_audit_manifest_and_digests_for_record_bytes_v1
         )?;
     Ok((record, manifest, record_digest, manifest_digest))
 }
-
 /// Build and digest a BFV full-bootstrap release audit manifest from record bytes.
 ///
 /// This byte-level construction helper returns the decoded signed record,
@@ -18613,7 +17891,6 @@ pub fn bfv_full_bootstrap_release_audit_manifest_and_all_digests_for_record_byte
         manifest_digest,
     ))
 }
-
 /// Build a BFV full-bootstrap release audit manifest from artifact bytes.
 ///
 /// Reviewer material and external audit digests are preflighted before the
@@ -18651,7 +17928,6 @@ pub fn bfv_full_bootstrap_release_audit_manifest_for_artifact_bundle_bytes_v1(
         )?;
     Ok((artifacts, record, manifest))
 }
-
 /// Build and digest a BFV full-bootstrap release audit manifest from artifact bytes.
 ///
 /// # Errors
@@ -18686,7 +17962,6 @@ pub fn bfv_full_bootstrap_release_audit_manifest_and_digest_for_artifact_bundle_
         )?;
     Ok((artifacts, record, manifest, manifest_digest))
 }
-
 /// Build and digest a BFV full-bootstrap release audit manifest from artifact bytes.
 ///
 /// This byte-level construction helper returns the decoded artifact bundle,
@@ -18735,7 +18010,6 @@ pub fn bfv_full_bootstrap_release_audit_manifest_and_digests_for_artifact_bundle
         manifest_digest,
     ))
 }
-
 /// Build and digest a BFV full-bootstrap release audit manifest from artifact bytes.
 ///
 /// This byte-level construction helper returns the decoded artifact bundle,
@@ -18794,7 +18068,6 @@ pub fn bfv_full_bootstrap_release_audit_manifest_and_all_digests_for_artifact_bu
         manifest_digest,
     ))
 }
-
 /// Validate a BFV full-bootstrap release audit manifest.
 ///
 /// # Errors
@@ -18806,16 +18079,18 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_v1(
     manifest: &BfvFullBootstrapReleaseAuditManifestV1,
 ) -> Result<(), BfvError> {
     if manifest.version != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_MANIFEST_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit manifest version {} does not match canonical version {}",
-            manifest.version, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_MANIFEST_VERSION_V1
-        )));
+            manifest.version,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_MANIFEST_VERSION_V1
+        ));
     }
     if manifest.field_count != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_MANIFEST_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit manifest field count {} does not match canonical count {}",
-            manifest.field_count, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_MANIFEST_FIELD_COUNT_V1
-        )));
+            manifest.field_count,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_MANIFEST_FIELD_COUNT_V1
+        ));
     }
     validate_bfv_full_bootstrap_canonical_circuit_id(
         "BFV full-bootstrap release audit manifest circuit id",
@@ -18833,16 +18108,18 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_v1(
         ));
     }
     if manifest.package_version != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit manifest package version {} does not match canonical version {}",
-            manifest.package_version, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_VERSION_V1
-        )));
+            manifest.package_version,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_VERSION_V1
+        ));
     }
     if manifest.package_field_count != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit manifest package field count {} does not match canonical count {}",
-            manifest.package_field_count, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_FIELD_COUNT_V1
-        )));
+            manifest.package_field_count,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_FIELD_COUNT_V1
+        ));
     }
     let signed_commitments = [
         ("record digest", &manifest.record_digest),
@@ -18987,7 +18264,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_v1(
     )?;
     Ok(())
 }
-
 /// Validate a release audit manifest against a trusted reviewer key.
 ///
 /// # Errors
@@ -19018,7 +18294,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_trusted_reviewer_v1(
     }
     Ok(())
 }
-
 /// Validate a release audit manifest against its signed audit record.
 ///
 /// # Errors
@@ -19125,7 +18400,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_for_record_v1(
     }
     Ok(())
 }
-
 /// Return the digest of a BFV full-bootstrap release audit manifest.
 ///
 /// # Errors
@@ -19135,16 +18409,13 @@ pub fn bfv_full_bootstrap_release_audit_manifest_digest_v1(
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_release_audit_manifest_v1(manifest)?;
     let bytes = norito::encode_canonical(manifest).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap release audit manifest encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap release audit manifest encoding failed: {err}")
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_MANIFEST_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical BFV full-bootstrap release audit manifest bytes.
 ///
 /// # Errors
@@ -19160,7 +18431,6 @@ pub fn decode_bfv_full_bootstrap_release_audit_manifest_bytes_v1(
         validate_bfv_full_bootstrap_release_audit_manifest_v1,
     )
 }
-
 /// Return the digest of canonical BFV full-bootstrap release audit manifest bytes.
 ///
 /// # Errors
@@ -19171,7 +18441,6 @@ pub fn bfv_full_bootstrap_release_audit_manifest_digest_from_bytes_v1(
     let (_, digest) = bfv_full_bootstrap_release_audit_manifest_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode and digest canonical BFV full-bootstrap release audit manifest bytes.
 ///
 /// This byte-admission helper keeps the decoded manifest and caller-pinnable
@@ -19186,7 +18455,6 @@ pub fn bfv_full_bootstrap_release_audit_manifest_and_digest_from_bytes_v1(
         bfv_full_bootstrap_release_audit_manifest_and_digests_from_bytes_v1(bytes)?;
     Ok((manifest, manifest_digest))
 }
-
 /// Decode canonical BFV full-bootstrap release audit manifest bytes and return their digests.
 ///
 /// This byte-admission helper keeps the decoded manifest, manifest-embedded
@@ -19204,7 +18472,6 @@ pub fn bfv_full_bootstrap_release_audit_manifest_and_digests_from_bytes_v1(
     let manifest_digest = bfv_full_bootstrap_release_audit_manifest_digest_v1(&manifest)?;
     Ok((manifest, record_digest, evidence_digest, manifest_digest))
 }
-
 /// Validate canonical release audit manifest bytes against canonical record bytes.
 ///
 /// This byte-level production admission helper rejects non-canonical manifest or
@@ -19231,7 +18498,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_record_bytes
         )?;
     Ok((manifest, record))
 }
-
 /// Validate and digest canonical release audit manifest bytes against record bytes.
 ///
 /// This byte-level production admission helper rejects non-canonical manifest
@@ -19261,7 +18527,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_r
         )?;
     Ok((manifest, record, manifest_digest))
 }
-
 /// Validate and digest canonical release audit manifest bytes against record bytes.
 ///
 /// This byte-level production admission helper rejects non-canonical manifest
@@ -19292,7 +18557,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_
         )?;
     Ok((manifest, record, record_digest, manifest_digest))
 }
-
 /// Validate and digest canonical release audit manifest bytes against record bytes.
 ///
 /// This byte-level production admission helper rejects non-canonical manifest
@@ -19332,7 +18596,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_
         manifest_digest,
     ))
 }
-
 /// Validate canonical release audit manifest/record bytes against a trusted reviewer.
 ///
 /// This production admission helper starts from raw canonical manifest and
@@ -19363,7 +18626,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_record_bytes
         )?;
     Ok((manifest, record))
 }
-
 /// Validate and digest manifest/record bytes against a trusted reviewer.
 ///
 /// This production admission helper keeps the decoded manifest, decoded record,
@@ -19396,7 +18658,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_r
         )?;
     Ok((manifest, record, manifest_digest))
 }
-
 /// Validate and digest manifest/record bytes against a trusted reviewer.
 ///
 /// This production admission helper keeps the decoded manifest, decoded record,
@@ -19430,7 +18691,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_
         )?;
     Ok((manifest, record, record_digest, manifest_digest))
 }
-
 /// Validate and digest manifest/record bytes against a trusted reviewer.
 ///
 /// This production admission helper keeps the decoded manifest, decoded record,
@@ -19486,7 +18746,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_
         manifest_digest,
     ))
 }
-
 /// Validate canonical artifact-bundle, manifest, and record bytes against a trusted reviewer.
 ///
 /// This production admission helper admits the signed manifest and record bytes
@@ -19526,7 +18785,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_for_artifact_bun
         )?;
     Ok((artifacts, manifest, record))
 }
-
 /// Validate and digest artifact-bundle, manifest, and record bytes against a trusted reviewer.
 ///
 /// This production admission helper admits the signed manifest and record bytes
@@ -19568,7 +18826,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digest_for_a
         )?;
     Ok((artifacts, manifest, record, manifest_digest))
 }
-
 /// Validate and digest artifact-bundle, manifest, and record bytes against a trusted reviewer.
 ///
 /// This production admission helper admits the signed manifest and record bytes
@@ -19611,7 +18868,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_digests_for_
         )?;
     Ok((artifacts, manifest, record, record_digest, manifest_digest))
 }
-
 /// Validate and digest artifact-bundle, manifest, and record bytes against a trusted reviewer.
 ///
 /// This richer production admission helper admits the signed manifest and record
@@ -19676,7 +18932,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_manifest_bytes_and_all_digests_
         manifest_digest,
     ))
 }
-
 /// Build canonical BFV full-bootstrap release-audit report bytes from a report body.
 ///
 /// The returned bytes are prefixed with the v1 report header and can be passed
@@ -19696,7 +18951,6 @@ pub fn bfv_full_bootstrap_release_audit_report_bytes_v1(body: &[u8]) -> Result<V
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
     )
 }
-
 /// Build canonical BFV full-bootstrap release-audit evidence archive bytes from an archive body.
 ///
 /// The returned bytes are prefixed with the v1 archive header and can be passed
@@ -19716,7 +18970,6 @@ pub fn bfv_full_bootstrap_release_audit_archive_bytes_v1(body: &[u8]) -> Result<
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
     )
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "release-audit archive inventory intentionally enumerates signed evidence fields"
@@ -19836,7 +19089,6 @@ fn bfv_full_bootstrap_release_audit_archive_body_for_artifacts_v1(
     );
     Ok(archive_body)
 }
-
 fn bfv_full_bootstrap_release_audit_append_governed_artifact_hex_fields_v1(
     archive_body: &mut String,
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
@@ -19887,7 +19139,6 @@ fn bfv_full_bootstrap_release_audit_append_governed_artifact_hex_fields_v1(
         &hex::encode(&artifacts.verifier_key),
     );
 }
-
 /// Build deterministic BFV full-bootstrap release-audit inventory bytes.
 ///
 /// The returned `(report, archive)` pair carries the v1 headers required by
@@ -19949,7 +19200,6 @@ pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifacts_v
         &native_verifier_payload,
         artifacts,
     )?;
-
     let report_bytes = bfv_full_bootstrap_release_audit_report_bytes_v1(report_body.as_bytes())?;
     let archive_bytes = bfv_full_bootstrap_release_audit_archive_bytes_v1(archive_body.as_bytes())?;
     validate_bfv_full_bootstrap_release_audit_report_binds_release_evidence_digest_v1(
@@ -19998,7 +19248,6 @@ pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifacts_v
     )?;
     Ok((report_bytes, archive_bytes))
 }
-
 /// Build deterministic release-audit inventory bytes and their digests.
 ///
 /// This helper returns the generated report/archive byte pair together with the
@@ -20020,7 +19269,6 @@ pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_and_digests_for
         bfv_full_bootstrap_release_audit_artifact_digest_pair_v1(&report_bytes, &archive_bytes)?;
     Ok((report_bytes, archive_bytes, report_digest, archive_digest))
 }
-
 /// Build deterministic BFV full-bootstrap release-audit inventory bytes from artifact bytes.
 ///
 /// This byte-level handoff rejects non-canonical artifact-bundle framing before
@@ -20044,7 +19292,6 @@ pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_for_artifact_bu
         )?;
     Ok((artifacts, report_bytes, archive_bytes))
 }
-
 /// Build deterministic release-audit inventory bytes and digests from artifact bytes.
 ///
 /// This byte-level handoff rejects non-canonical artifact-bundle framing before
@@ -20086,7 +19333,6 @@ pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_and_digests_for
         archive_digest,
     ))
 }
-
 /// Build deterministic release-audit inventory bytes and all admitted digests from artifact bytes.
 ///
 /// This byte-level handoff rejects non-canonical artifact-bundle framing before
@@ -20135,7 +19381,6 @@ pub fn bfv_full_bootstrap_release_audit_report_and_archive_bytes_and_all_digests
         archive_digest,
     ))
 }
-
 /// Build a structural BFV full-bootstrap release audit package.
 ///
 /// This constructor validates canonical artifact commitments, signs the
@@ -20202,7 +19447,6 @@ pub fn bfv_full_bootstrap_release_audit_package_v1(
     )?;
     Ok(package)
 }
-
 /// Build a BFV full-bootstrap release audit package from externally reviewed bytes.
 ///
 /// This builder wraps [`bfv_full_bootstrap_release_audit_package_v1`] and then
@@ -20238,7 +19482,6 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_v1(
     validate_bfv_full_bootstrap_release_audit_package_external_review_markers_v1(&package)?;
     Ok(package)
 }
-
 /// Build an externally reviewed BFV full-bootstrap release audit package and digest.
 ///
 /// The returned digest is the package digest callers should pin in runtime
@@ -20269,7 +19512,6 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_and_digest_v1(
     let package_digest = bfv_full_bootstrap_release_audit_package_digest_v1(&package)?;
     Ok((package, package_digest))
 }
-
 /// Build a BFV full-bootstrap release audit package from canonical record and manifest bytes.
 ///
 /// This byte-level package handoff rejects malformed report/archive bytes
@@ -20303,7 +19545,6 @@ pub fn bfv_full_bootstrap_release_audit_package_for_record_and_manifest_bytes_v1
         )?;
     Ok((record, manifest, package))
 }
-
 #[expect(
     clippy::type_complexity,
     reason = "internal package assembly carries admitted objects and signed digests from one byte path"
@@ -20355,7 +19596,6 @@ fn bfv_full_bootstrap_release_audit_package_for_record_and_manifest_bytes_with_a
         manifest_digest,
     ))
 }
-
 /// Build and digest a BFV full-bootstrap release audit package from record and manifest bytes.
 ///
 /// # Errors
@@ -20384,7 +19624,6 @@ pub fn bfv_full_bootstrap_release_audit_package_and_digest_for_record_and_manife
         )?;
     Ok((record, manifest, package, package_digest))
 }
-
 /// Build and digest a BFV full-bootstrap release audit package from record and manifest bytes.
 ///
 /// This byte-level package handoff returns the record digest, manifest digest,
@@ -20425,7 +19664,6 @@ pub fn bfv_full_bootstrap_release_audit_package_and_digests_for_record_and_manif
         package_digest,
     ))
 }
-
 /// Build and digest a BFV full-bootstrap release audit package from record and manifest bytes.
 ///
 /// This byte-level package handoff returns the record, evidence, signoff,
@@ -20476,7 +19714,6 @@ pub fn bfv_full_bootstrap_release_audit_package_and_all_digests_for_record_and_m
         package_digest,
     ))
 }
-
 /// Build an externally reviewed BFV full-bootstrap release audit package from record and manifest bytes.
 ///
 /// # Errors
@@ -20505,7 +19742,6 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_for_record_and_m
     validate_bfv_full_bootstrap_release_audit_package_external_review_markers_v1(&package)?;
     Ok((record, manifest, package))
 }
-
 /// Build and digest an externally reviewed package from record and manifest bytes.
 ///
 /// This helper keeps canonical signed record/manifest admission, external
@@ -20538,7 +19774,6 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_and_digest_for_r
         )?;
     Ok((record, manifest, package, package_digest))
 }
-
 /// Build and digest an externally reviewed package from record and manifest bytes.
 ///
 /// This helper keeps canonical signed record/manifest admission, external
@@ -20580,7 +19815,6 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_and_digests_for_
         package_digest,
     ))
 }
-
 /// Build and digest an externally reviewed package from record and manifest bytes.
 ///
 /// This helper keeps canonical signed record/manifest admission, external
@@ -20640,7 +19874,6 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_and_all_digests_
         package_digest,
     ))
 }
-
 /// Build an externally reviewed BFV full-bootstrap release audit package from artifact bytes.
 ///
 /// This byte-level production handoff rejects malformed reviewer material and
@@ -20679,7 +19912,6 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_for_artifact_bun
         )?;
     Ok((artifacts, package))
 }
-
 fn bfv_full_bootstrap_release_audit_external_review_package_for_artifact_bundle_bytes_with_admitted_digest_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -20726,7 +19958,6 @@ fn bfv_full_bootstrap_release_audit_external_review_package_for_artifact_bundle_
     )?;
     Ok((artifacts, package, artifact_bundle_digest))
 }
-
 /// Build an externally reviewed BFV full-bootstrap release audit package and digest from artifact bytes.
 ///
 /// This is the byte-level companion to
@@ -20765,7 +19996,6 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_and_digest_for_a
         )?;
     Ok((artifacts, package, package_digest))
 }
-
 /// Build an externally reviewed BFV full-bootstrap release audit package and digests from artifact bytes.
 ///
 /// This helper returns the decoded artifact bundle, generated package, admitted
@@ -20804,7 +20034,6 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_and_digests_for_
         )?;
     Ok((artifacts, package, artifact_bundle_digest, package_digest))
 }
-
 /// Build an externally reviewed BFV full-bootstrap release audit package and all digests from artifact bytes.
 ///
 /// This helper returns the decoded artifact bundle, generated package, admitted
@@ -20868,7 +20097,6 @@ pub fn bfv_full_bootstrap_release_audit_external_review_package_and_all_digests_
         package_digest,
     ))
 }
-
 /// Build a deterministic BFV full-bootstrap release audit package from governed artifacts.
 ///
 /// This helper derives the v1 machine-checkable report and evidence archive
@@ -20908,7 +20136,6 @@ pub fn bfv_full_bootstrap_release_audit_package_for_artifacts_v1(
         reviewer_private_key,
     )
 }
-
 /// Build a deterministic BFV full-bootstrap release audit package and its digest.
 ///
 /// This helper keeps generated package bytes and their digest paired for
@@ -20936,7 +20163,6 @@ pub fn bfv_full_bootstrap_release_audit_package_and_digest_for_artifacts_v1(
     let package_digest = bfv_full_bootstrap_release_audit_package_digest_v1(&package)?;
     Ok((package, package_digest))
 }
-
 /// Build a deterministic BFV full-bootstrap release audit package from artifact bytes.
 ///
 /// This byte-level deterministic handoff rejects malformed reviewer material
@@ -20973,7 +20199,6 @@ pub fn bfv_full_bootstrap_release_audit_package_for_artifact_bundle_bytes_v1(
         )?;
     Ok((artifacts, package))
 }
-
 fn bfv_full_bootstrap_release_audit_package_for_artifact_bundle_bytes_with_admitted_digest_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -21018,7 +20243,6 @@ fn bfv_full_bootstrap_release_audit_package_for_artifact_bundle_bytes_with_admit
     )?;
     Ok((artifacts, package, artifact_bundle_digest))
 }
-
 /// Build a deterministic BFV full-bootstrap release audit package and digest from artifact bytes.
 ///
 /// This is the byte-level companion to
@@ -21054,7 +20278,6 @@ pub fn bfv_full_bootstrap_release_audit_package_and_digest_for_artifact_bundle_b
         )?;
     Ok((artifacts, package, package_digest))
 }
-
 /// Build a deterministic BFV full-bootstrap release audit package and digests from artifact bytes.
 ///
 /// This byte-level deterministic handoff returns the decoded artifact bundle,
@@ -21089,7 +20312,6 @@ pub fn bfv_full_bootstrap_release_audit_package_and_digests_for_artifact_bundle_
         )?;
     Ok((artifacts, package, artifact_bundle_digest, package_digest))
 }
-
 /// Build a deterministic BFV full-bootstrap release audit package and all digests from artifact bytes.
 ///
 /// This byte-level deterministic handoff returns the decoded artifact bundle,
@@ -21150,7 +20372,6 @@ pub fn bfv_full_bootstrap_release_audit_package_and_all_digests_for_artifact_bun
         package_digest,
     ))
 }
-
 fn validate_bfv_full_bootstrap_release_audit_package_matches_admitted_artifact_bundle_digest_v1(
     package: &BfvFullBootstrapReleaseAuditPackageV1,
     artifact_bundle_digest: &Hash,
@@ -21164,7 +20385,6 @@ fn validate_bfv_full_bootstrap_release_audit_package_matches_admitted_artifact_b
     }
     Ok(())
 }
-
 /// Validate a BFV full-bootstrap release audit package.
 ///
 /// # Errors
@@ -21178,16 +20398,18 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_v1(
     package: &BfvFullBootstrapReleaseAuditPackageV1,
 ) -> Result<(), BfvError> {
     if package.version != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit package version {} does not match canonical version {}",
-            package.version, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_VERSION_V1
-        )));
+            package.version,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_VERSION_V1
+        ));
     }
     if package.field_count != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit package field count {} does not match canonical count {}",
-            package.field_count, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_FIELD_COUNT_V1
-        )));
+            package.field_count,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_FIELD_COUNT_V1
+        ));
     }
     validate_nonzero_material_digest(
         "BFV full-bootstrap release audit package record digest",
@@ -21237,7 +20459,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_v1(
     }
     validate_bfv_full_bootstrap_release_audit_package_report_and_archive_v1(package)
 }
-
 fn validate_bfv_full_bootstrap_release_audit_package_report_and_archive_v1(
     package: &BfvFullBootstrapReleaseAuditPackageV1,
 ) -> Result<(), BfvError> {
@@ -21308,7 +20529,6 @@ fn validate_bfv_full_bootstrap_release_audit_package_report_and_archive_v1(
         &archive_commitments,
     )
 }
-
 /// Validate a release audit package against a trusted reviewer key.
 ///
 /// # Errors
@@ -21335,7 +20555,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_trusted_reviewer_v1(
         reviewer_public_key,
     )
 }
-
 /// Validate an audit package against governed material and artifacts.
 ///
 /// # Errors
@@ -21359,7 +20578,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_for_artifacts_v1(
         &package.record,
     )
 }
-
 /// Validate an audit package against governed artifacts and a trusted reviewer.
 ///
 /// # Errors
@@ -21386,7 +20604,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_for_artifacts_and_trust
         reviewer_public_key,
     )
 }
-
 /// Validate an audit package against governed artifacts, a trusted reviewer,
 /// and the caller-pinned package digest.
 ///
@@ -21416,7 +20633,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_r
         || bfv_full_bootstrap_release_audit_package_digest_v1(package),
     )
 }
-
 #[expect(
     clippy::too_many_arguments,
     reason = "validation must bind artifacts, reviewer identity, and the caller-pinned digest source in one path"
@@ -21470,7 +20686,6 @@ fn validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_revie
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_caller_pinned_package_digest_preflight_v1(
     expected_package_digest: &Hash,
 ) -> Result<(), BfvError> {
@@ -21483,7 +20698,6 @@ fn validate_bfv_full_bootstrap_release_audit_caller_pinned_package_digest_prefli
         expected_package_digest,
     )
 }
-
 /// Validate production external-review markers on a BFV full-bootstrap release audit package.
 ///
 /// # Errors
@@ -21531,7 +20745,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_external_review_markers
     )?;
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_package_external_review_marker_reviewer_id_v1(
     package: &BfvFullBootstrapReleaseAuditPackageV1,
 ) -> Result<(), BfvError> {
@@ -21566,7 +20779,6 @@ fn validate_bfv_full_bootstrap_release_audit_package_external_review_marker_revi
         audit_evidence_archive_body,
     )
 }
-
 fn bfv_full_bootstrap_release_audit_body_contains_machine_generated_marker_v1(body: &[u8]) -> bool {
     if bfv_full_bootstrap_release_audit_body_contains_ascii_case_insensitive_v1(
         body,
@@ -21580,7 +20792,6 @@ fn bfv_full_bootstrap_release_audit_body_contains_machine_generated_marker_v1(bo
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_MACHINE_GENERATED_COLLAPSED_MARKER_V1,
     )
 }
-
 fn validate_bfv_full_bootstrap_release_audit_body_starts_with_external_review_marker_v1(
     label: &str,
     body: &[u8],
@@ -21590,7 +20801,6 @@ fn validate_bfv_full_bootstrap_release_audit_body_starts_with_external_review_ma
         bfv_full_bootstrap_release_audit_external_review_marker_statement_v1(label, body, marker)?;
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_body_external_review_statement_reviewer_id_v1(
     label: &str,
     body: &[u8],
@@ -21605,7 +20815,6 @@ fn validate_bfv_full_bootstrap_release_audit_body_external_review_statement_revi
         reviewer_id,
     )
 }
-
 fn bfv_full_bootstrap_release_audit_external_review_marker_statement_v1<'a>(
     label: &str,
     body: &'a [u8],
@@ -21616,14 +20825,12 @@ fn bfv_full_bootstrap_release_audit_external_review_marker_statement_v1<'a>(
         || &body[..marker.len()] != marker
         || body.get(marker.len()) != Some(&b':')
     {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must start with {marker_text}: marker"
-        )));
+        return Err(invalid!("{label} must start with {marker_text}: marker"));
     }
     if bfv_full_bootstrap_release_audit_external_review_marker_count_v1(body, marker) != 1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must contain exactly one {marker_text}: marker"
-        )));
+        ));
     }
     let statement_start = marker.len() + 1;
     let statement_end = body[statement_start..]
@@ -21635,13 +20842,12 @@ fn bfv_full_bootstrap_release_audit_external_review_marker_statement_v1<'a>(
         label, statement,
     )?;
     if !statement.iter().any(|byte| !byte.is_ascii_whitespace()) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must include a non-empty external-review statement after the marker"
-        )));
+        ));
     }
     Ok(statement)
 }
-
 fn bfv_full_bootstrap_release_audit_external_review_marker_count_v1(
     body: &[u8],
     marker: &[u8],
@@ -21658,7 +20864,6 @@ fn bfv_full_bootstrap_release_audit_external_review_marker_count_v1(
         })
         .count()
 }
-
 fn bfv_full_bootstrap_release_audit_marker_followed_by_colon_v1(
     body: &[u8],
     mut index: usize,
@@ -21668,19 +20873,17 @@ fn bfv_full_bootstrap_release_audit_marker_followed_by_colon_v1(
     }
     body.get(index) == Some(&b':')
 }
-
 fn validate_bfv_full_bootstrap_release_audit_external_review_statement_printable_ascii_v1(
     label: &str,
     statement: &[u8],
 ) -> Result<(), BfvError> {
     if statement.iter().any(|byte| !matches!(*byte, b' '..=b'~')) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} external-review statement must be printable ASCII"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn bfv_full_bootstrap_release_audit_marker_start_has_token_boundary_v1(
     body: &[u8],
     marker_start: usize,
@@ -21690,7 +20893,6 @@ fn bfv_full_bootstrap_release_audit_marker_start_has_token_boundary_v1(
             .get(marker_start - 1)
             .is_none_or(|byte| !bfv_full_bootstrap_release_audit_label_join_byte_v1(*byte))
 }
-
 fn validate_bfv_full_bootstrap_release_audit_external_review_statement_reviewer_id_label_v1(
     label: &str,
     statement: &[u8],
@@ -21700,7 +20902,6 @@ fn validate_bfv_full_bootstrap_release_audit_external_review_statement_reviewer_
     let mut reviewer_label_count = 0_u8;
     let mut reviewer_label_matches = false;
     let mut has_review_text = false;
-
     statement
         .split(|byte| byte.is_ascii_whitespace() || matches!(*byte, b',' | b'(' | b')'))
         .filter(|token| !token.is_empty())
@@ -21710,38 +20911,36 @@ fn validate_bfv_full_bootstrap_release_audit_external_review_statement_reviewer_
             {
                 reviewer_label_count = reviewer_label_count.saturating_add(1);
                 if reviewer_label_count > 1 {
-                    return Err(BfvError::InvalidParameters(format!(
+                    return Err(invalid!(
                         "{label} external-review statement must contain exactly one signed reviewer id label"
-                    )));
+                    ));
                 }
                 reviewer_label_matches = value == reviewer_id;
             } else if bfv_full_bootstrap_release_audit_external_review_reviewer_id_label_has_case_drift_v1(token) {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "{label} external-review statement must use lowercase signed reviewer id labels"
-                )));
+                ));
             } else if bfv_full_bootstrap_release_audit_external_review_reviewer_id_label_has_separator_alias_v1(token) {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "{label} external-review statement must use canonical lowercase signed reviewer id labels"
-                )));
+                ));
             } else {
                 has_review_text |= token.iter().any(u8::is_ascii_alphanumeric);
             }
             Ok(())
         })?;
-
     if !reviewer_label_matches {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} external-review statement must contain the signed reviewer id"
-        )));
+        ));
     }
     if !has_review_text {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} external-review statement must contain review text beyond the signed reviewer id"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_external_review_statements_distinct_v1(
     audit_report_body: &[u8],
     audit_evidence_archive_body: &[u8],
@@ -21770,7 +20969,6 @@ fn validate_bfv_full_bootstrap_release_audit_external_review_statements_distinct
     }
     Ok(())
 }
-
 fn bfv_full_bootstrap_release_audit_external_review_statement_review_text_v1(
     statement: &[u8],
 ) -> Vec<u8> {
@@ -21792,7 +20990,6 @@ fn bfv_full_bootstrap_release_audit_external_review_statement_review_text_v1(
         })
         .collect()
 }
-
 fn bfv_full_bootstrap_release_audit_external_review_reviewer_id_label_value_v1(
     token: &[u8],
 ) -> Option<&[u8]> {
@@ -21801,7 +20998,6 @@ fn bfv_full_bootstrap_release_audit_external_review_reviewer_id_label_value_v1(
         .or_else(|| token.strip_prefix(b"reviewer="))
         .or_else(|| token.strip_prefix(b"reviewed-by="))
 }
-
 fn bfv_full_bootstrap_release_audit_external_review_reviewer_id_label_has_case_drift_v1(
     token: &[u8],
 ) -> bool {
@@ -21817,7 +21013,6 @@ fn bfv_full_bootstrap_release_audit_external_review_reviewer_id_label_has_case_d
             .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix) && candidate != prefix)
     })
 }
-
 fn bfv_full_bootstrap_release_audit_external_review_reviewer_id_label_has_separator_alias_v1(
     token: &[u8],
 ) -> bool {
@@ -21841,7 +21036,6 @@ fn bfv_full_bootstrap_release_audit_external_review_reviewer_id_label_has_separa
             && !label.eq_ignore_ascii_case(canonical)
     })
 }
-
 fn validate_bfv_full_bootstrap_release_audit_caller_pinned_package_digest_distinct_from_signed_commitments_v1(
     package: &BfvFullBootstrapReleaseAuditPackageV1,
     expected_package_digest: &Hash,
@@ -21894,14 +21088,13 @@ fn validate_bfv_full_bootstrap_release_audit_caller_pinned_package_digest_distin
     ];
     for (label, digest) in signed_commitments {
         if expected_package_digest == digest {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap release audit caller-pinned package digest must be distinct from {label}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_caller_pinned_package_digest_distinct_from_generated_body_commitments_v1(
     expected_package_digest: &Hash,
 ) -> Result<(), BfvError> {
@@ -21932,14 +21125,13 @@ fn validate_bfv_full_bootstrap_release_audit_caller_pinned_package_digest_distin
     ];
     for (label, digest) in generated_body_commitments {
         if expected_package_digest == digest {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap release audit caller-pinned package digest must be distinct from {label}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 /// Return the digest of a BFV full-bootstrap release audit package.
 ///
 /// # Errors
@@ -21949,16 +21141,13 @@ pub fn bfv_full_bootstrap_release_audit_package_digest_v1(
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_release_audit_package_v1(package)?;
     let bytes = norito::encode_canonical(package).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap release audit package encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap release audit package encoding failed: {err}")
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PACKAGE_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical BFV full-bootstrap release audit package bytes.
 ///
 /// This is the byte-admission companion to
@@ -21986,14 +21175,13 @@ pub fn decode_bfv_full_bootstrap_release_audit_package_bytes_v1(
     }
     let package = norito::decode_canonical::<BfvFullBootstrapReleaseAuditPackageV1>(bytes)
         .map_err(|err| {
-            BfvError::InvalidParameters(format!(
+            invalid!(
                 "BFV full-bootstrap release audit package bytes must use canonical v1 bytes containing a Norito-encoded package: {err}"
-            ))
+            )
         })?;
     validate_bfv_full_bootstrap_release_audit_package_v1(&package)?;
     Ok(package)
 }
-
 /// Return the digest of canonical BFV full-bootstrap release audit package bytes.
 ///
 /// # Errors
@@ -22004,7 +21192,6 @@ pub fn bfv_full_bootstrap_release_audit_package_digest_from_bytes_v1(
     let (_, digest) = bfv_full_bootstrap_release_audit_package_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode and digest canonical BFV full-bootstrap release audit package bytes.
 ///
 /// This byte-admission helper keeps the decoded package and caller-pinnable
@@ -22019,7 +21206,6 @@ pub fn bfv_full_bootstrap_release_audit_package_and_digest_from_bytes_v1(
         bfv_full_bootstrap_release_audit_package_and_digests_from_bytes_v1(bytes)?;
     Ok((package, package_digest))
 }
-
 /// Decode canonical BFV full-bootstrap release audit package bytes and return their digests.
 ///
 /// This byte-admission helper keeps the decoded package, package-embedded record
@@ -22035,7 +21221,6 @@ pub fn bfv_full_bootstrap_release_audit_package_and_digests_from_bytes_v1(
         bfv_full_bootstrap_release_audit_package_and_all_digests_from_bytes_v1(bytes)?;
     Ok((package, record_digest, manifest_digest, package_digest))
 }
-
 /// Decode canonical BFV full-bootstrap release audit package bytes and return all nested digests.
 ///
 /// This byte-admission helper keeps the decoded package, package-embedded
@@ -22075,7 +21260,6 @@ pub fn bfv_full_bootstrap_release_audit_package_and_all_digests_from_bytes_v1(
         package_digest,
     ))
 }
-
 /// Validate canonical BFV full-bootstrap release audit package bytes.
 ///
 /// This byte-level production admission helper rejects malformed caller-pinned
@@ -22118,7 +21302,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifacts_tru
     )?;
     Ok(package)
 }
-
 /// Validate canonical BFV full-bootstrap release audit package bytes.
 ///
 /// This byte-level production admission helper rejects malformed
@@ -22157,7 +21340,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifacts_tru
     )?;
     Ok((package, package_digest))
 }
-
 /// Validate canonical BFV full-bootstrap artifact-bundle and release-audit package bytes.
 ///
 /// This is the raw-byte production admission path for callers that receive both
@@ -22220,7 +21402,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bund
     )?;
     Ok((artifacts, package))
 }
-
 /// Validate canonical artifact-bundle and release-audit package bytes.
 ///
 /// This raw-byte production admission helper derives the caller-pinnable package
@@ -22261,7 +21442,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bund
         )?;
     Ok((artifacts, package, package_digest))
 }
-
 /// Validate canonical artifact-bundle and release-audit package bytes.
 ///
 /// This raw-byte production admission helper derives the artifact-bundle digest
@@ -22301,7 +21481,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bund
         )?;
     Ok((artifacts, package, artifact_bundle_digest, package_digest))
 }
-
 /// Validate canonical artifact-bundle and release-audit package bytes.
 ///
 /// This raw-byte production admission helper rejects malformed trusted-reviewer
@@ -22386,7 +21565,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_package_bytes_for_artifact_bund
         package_digest,
     ))
 }
-
 fn bfv_full_bootstrap_release_audit_artifact_digest_v1(
     label: &str,
     bytes: &[u8],
@@ -22395,36 +21573,28 @@ fn bfv_full_bootstrap_release_audit_artifact_digest_v1(
     expected_header: &[u8],
 ) -> Result<Hash, BfvError> {
     if bytes.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if bytes.len() > max_bytes {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} length {} exceeds maximum {max_bytes}",
             bytes.len()
-        )));
+        ));
     }
     if bytes.iter().all(|byte| *byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be all zero"
-        )));
+        return Err(invalid!("{label} must not be all zero"));
     }
     if !bytes.starts_with(expected_header) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must start with canonical v1 header"
-        )));
+        return Err(invalid!("{label} must start with canonical v1 header"));
     }
     let body = &bytes[expected_header.len()..];
     if body.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must include a non-empty body after the canonical v1 header"
-        )));
+        ));
     }
     if body.iter().all(|byte| *byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} body must not be all zero"
-        )));
+        return Err(invalid!("{label} body must not be all zero"));
     }
     validate_bfv_full_bootstrap_release_audit_artifact_body_not_placeholder_v1(label, body)?;
     validate_bfv_full_bootstrap_release_audit_artifact_body_min_bytes_v1(
@@ -22436,14 +21606,12 @@ fn bfv_full_bootstrap_release_audit_artifact_digest_v1(
     validate_bfv_full_bootstrap_release_audit_artifact_body_not_nested_v1(label, body)?;
     Ok(Hash::new(bytes))
 }
-
 fn bfv_full_bootstrap_release_audit_append_field(body: &mut String, label: &str, value: &str) {
     body.push_str("; ");
     body.push_str(label);
     body.push('=');
     body.push_str(value);
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "release-audit inventory output lists each signed proof-profile field explicitly"
@@ -22601,9 +21769,7 @@ fn bfv_full_bootstrap_release_audit_append_proof_profile_fields_v1(
         ),
     ] {
         let value = std::str::from_utf8(value).map_err(|err| {
-            BfvError::InvalidParameters(format!(
-                "BFV full-bootstrap release audit proof profile {label} is not UTF-8: {err}"
-            ))
+            invalid!("BFV full-bootstrap release audit proof profile {label} is not UTF-8: {err}")
         })?;
         bfv_full_bootstrap_release_audit_append_field(body, label, value);
     }
@@ -22623,7 +21789,6 @@ fn bfv_full_bootstrap_release_audit_append_proof_profile_fields_v1(
     );
     Ok(())
 }
-
 fn bfv_full_bootstrap_release_audit_artifact_digest_pair_v1(
     audit_report_bytes: &[u8],
     audit_evidence_archive_bytes: &[u8],
@@ -22648,7 +21813,6 @@ fn bfv_full_bootstrap_release_audit_artifact_digest_pair_v1(
     )?;
     Ok((audit_report_digest, audit_evidence_archive_digest))
 }
-
 fn bfv_full_bootstrap_release_audit_artifact_bytes_with_header_v1(
     label: &str,
     body: &[u8],
@@ -22657,14 +21821,10 @@ fn bfv_full_bootstrap_release_audit_artifact_bytes_with_header_v1(
     expected_header: &[u8],
 ) -> Result<Vec<u8>, BfvError> {
     if body.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} body must not be empty"
-        )));
+        return Err(invalid!("{label} body must not be empty"));
     }
     if body.iter().all(|byte| *byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} body must not be all zero"
-        )));
+        return Err(invalid!("{label} body must not be all zero"));
     }
     validate_bfv_full_bootstrap_release_audit_artifact_body_not_placeholder_v1(label, body)?;
     validate_bfv_full_bootstrap_release_audit_artifact_body_min_bytes_v1(
@@ -22677,13 +21837,11 @@ fn bfv_full_bootstrap_release_audit_artifact_bytes_with_header_v1(
     let total_len = expected_header
         .len()
         .checked_add(body.len())
-        .ok_or_else(|| {
-            BfvError::InvalidParameters(format!("{label} length exceeds usize bounds"))
-        })?;
+        .ok_or_else(|| invalid!("{label} length exceeds usize bounds"))?;
     if total_len > max_bytes {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} length {total_len} exceeds maximum {max_bytes}"
-        )));
+        ));
     }
     let mut bytes = Vec::with_capacity(total_len);
     bytes.extend_from_slice(expected_header);
@@ -22697,7 +21855,6 @@ fn bfv_full_bootstrap_release_audit_artifact_bytes_with_header_v1(
     )?;
     Ok(bytes)
 }
-
 fn validate_bfv_full_bootstrap_release_audit_artifact_bytes_v1(
     label: &str,
     bytes: &[u8],
@@ -22714,13 +21871,10 @@ fn validate_bfv_full_bootstrap_release_audit_artifact_bytes_v1(
         expected_header,
     )?;
     if actual_digest != expected_digest {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} digest mismatch"
-        )));
+        return Err(invalid!("{label} digest mismatch"));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_artifact_bodies_distinct_v1(
     audit_report_bytes: &[u8],
     audit_evidence_archive_bytes: &[u8],
@@ -22771,7 +21925,6 @@ fn validate_bfv_full_bootstrap_release_audit_artifact_bodies_distinct_v1(
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_report_binds_release_evidence_digest_v1(
     audit_report_bytes: &[u8],
     release_audit_evidence_digest: &Hash,
@@ -22796,7 +21949,6 @@ fn validate_bfv_full_bootstrap_release_audit_report_binds_release_evidence_diges
             .to_owned(),
     ))
 }
-
 fn validate_bfv_full_bootstrap_release_audit_report_binds_generated_artifact_commitments_v1(
     audit_report_bytes: &[u8],
     circuit_id: &str,
@@ -22841,7 +21993,6 @@ fn validate_bfv_full_bootstrap_release_audit_report_binds_generated_artifact_com
         proof_profile,
     )
 }
-
 fn validate_bfv_full_bootstrap_release_audit_report_field_index_contains_hash_v1(
     report_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     label: &str,
@@ -22856,11 +22007,10 @@ fn validate_bfv_full_bootstrap_release_audit_report_field_index_contains_hash_v1
     ) {
         return Ok(());
     }
-    Err(BfvError::InvalidParameters(format!(
+    Err(invalid!(
         "BFV full-bootstrap release audit report body must contain the signed {label}"
-    )))
+    ))
 }
-
 fn validate_bfv_full_bootstrap_release_audit_field_index_binds_proof_profile_obligations_v1(
     fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     artifact_label: &str,
@@ -22877,19 +22027,16 @@ fn validate_bfv_full_bootstrap_release_audit_field_index_binds_proof_profile_obl
         proof_profile,
     )
 }
-
 struct BfvFullBootstrapReleaseAuditProofProfileScalarObligationV1 {
     missing_label: &'static str,
     aliases: &'static [&'static [u8]],
     value: String,
 }
-
 struct BfvFullBootstrapReleaseAuditProofProfileDomainObligationV1<'a> {
     label: &'static str,
     aliases: &'static [&'static [u8]],
     value: &'a [u8],
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "release-audit proof-profile scalar obligations intentionally enumerate audited fields"
@@ -23029,7 +22176,6 @@ fn bfv_full_bootstrap_release_audit_proof_profile_scalar_obligations_v1(
         },
     ]
 }
-
 fn bfv_full_bootstrap_release_audit_proof_profile_domain_obligations_v1(
     proof_profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
 ) -> [BfvFullBootstrapReleaseAuditProofProfileDomainObligationV1<'_>; 8] {
@@ -23092,7 +22238,6 @@ fn bfv_full_bootstrap_release_audit_proof_profile_domain_obligations_v1(
         },
     ]
 }
-
 fn validate_bfv_full_bootstrap_release_audit_field_index_binds_scalar_proof_profile_obligations_v1(
     fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     artifact_label: &str,
@@ -23106,15 +22251,14 @@ fn validate_bfv_full_bootstrap_release_audit_field_index_binds_scalar_proof_prof
             obligation.aliases,
             &[obligation.value.as_bytes()],
         ) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap release audit {artifact_label} body must contain the signed {}",
                 obligation.missing_label
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_field_index_binds_domain_proof_profile_obligations_v1(
     fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     artifact_label: &str,
@@ -23128,15 +22272,14 @@ fn validate_bfv_full_bootstrap_release_audit_field_index_binds_domain_proof_prof
             obligation.aliases,
             &[obligation.value],
         ) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap release audit {artifact_label} body must contain the signed proof-profile {}",
                 obligation.label
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 struct BfvFullBootstrapReleaseAuditArchiveSignedCommitmentsV1<'a> {
     artifact_bundle_digest: &'a Hash,
     evaluator_artifact_set_digest: &'a Hash,
@@ -23159,17 +22302,14 @@ struct BfvFullBootstrapReleaseAuditArchiveSignedCommitmentsV1<'a> {
     prover_native_payload_digest: &'a Hash,
     verifier_native_payload_digest: &'a Hash,
 }
-
 #[derive(Clone, Copy)]
 struct BfvFullBootstrapReleaseAuditIndexedFieldV1<'a> {
     label: &'a [u8],
     value: &'a [u8],
 }
-
 struct BfvFullBootstrapReleaseAuditFieldIndexV1<'a> {
     fields: Vec<BfvFullBootstrapReleaseAuditIndexedFieldV1<'a>>,
 }
-
 fn bfv_full_bootstrap_release_audit_field_index_v1(
     body: &[u8],
 ) -> BfvFullBootstrapReleaseAuditFieldIndexV1<'_> {
@@ -23187,7 +22327,6 @@ fn bfv_full_bootstrap_release_audit_field_index_v1(
     bfv_full_bootstrap_release_audit_push_indexed_field_v1(&mut fields, &body[field_start..]);
     BfvFullBootstrapReleaseAuditFieldIndexV1 { fields }
 }
-
 fn bfv_full_bootstrap_release_audit_push_indexed_field_v1<'a>(
     fields: &mut Vec<BfvFullBootstrapReleaseAuditIndexedFieldV1<'a>>,
     field: &'a [u8],
@@ -23206,7 +22345,6 @@ fn bfv_full_bootstrap_release_audit_push_indexed_field_v1<'a>(
         bfv_full_bootstrap_release_audit_value_region_after_equals_v1(&field[equals_index + 1..]);
     fields.push(BfvFullBootstrapReleaseAuditIndexedFieldV1 { label, value });
 }
-
 fn bfv_full_bootstrap_release_audit_field_without_leading_label_padding_v1(field: &[u8]) -> &[u8] {
     let mut index = 0;
     while index < field.len() && matches!(field[index], b' ' | b'\t' | 0x0b | 0x0c) {
@@ -23214,7 +22352,6 @@ fn bfv_full_bootstrap_release_audit_field_without_leading_label_padding_v1(field
     }
     &field[index..]
 }
-
 fn bfv_full_bootstrap_release_audit_value_region_after_equals_v1(value: &[u8]) -> &[u8] {
     let mut index = 0;
     while index < value.len() && value[index].is_ascii_whitespace() {
@@ -23222,7 +22359,6 @@ fn bfv_full_bootstrap_release_audit_value_region_after_equals_v1(value: &[u8]) -
     }
     &value[index..]
 }
-
 fn bfv_full_bootstrap_release_audit_indexed_value_for_label_v1<'a>(
     fields: &'a BfvFullBootstrapReleaseAuditFieldIndexV1<'a>,
     label: &str,
@@ -23235,9 +22371,9 @@ fn bfv_full_bootstrap_release_audit_indexed_value_for_label_v1<'a>(
             field.label,
             label_aliases,
         ) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap release audit evidence archive body must contain only canonical {label} hex labels"
-            )));
+            ));
         }
         if !label_aliases
             .iter()
@@ -23248,19 +22384,18 @@ fn bfv_full_bootstrap_release_audit_indexed_value_for_label_v1<'a>(
         }
         matching_label_count += 1;
         if matching_label_count > 1 {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap release audit evidence archive body must contain exactly one canonical {label} hex label"
-            )));
+            ));
         }
         indexed_value = Some(field.value);
     }
     indexed_value.ok_or_else(|| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "BFV full-bootstrap release audit evidence archive body must contain canonical {label} hex"
-        ))
+        )
     })
 }
-
 fn bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
     fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     label_aliases: &[&[u8]],
@@ -23297,7 +22432,6 @@ fn bfv_full_bootstrap_release_audit_field_index_contains_labelled_value_v1(
     }
     matching_label_count == 1
 }
-
 fn bfv_full_bootstrap_release_audit_label_has_canonical_alias_drift_v1(
     label: &[u8],
     label_aliases: &[&[u8]],
@@ -23316,7 +22450,6 @@ fn bfv_full_bootstrap_release_audit_label_has_canonical_alias_drift_v1(
             !alias.is_empty() && normalized_label == ascii_lower_alnum_collapsed(alias)
         })
 }
-
 fn bfv_full_bootstrap_release_audit_field_index_contains_exact_labelled_value_v1(
     fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     label_aliases: &[&[u8]],
@@ -23352,7 +22485,6 @@ fn bfv_full_bootstrap_release_audit_field_index_contains_exact_labelled_value_v1
     }
     matching_label_count == 1
 }
-
 fn validate_bfv_full_bootstrap_release_audit_archive_binds_signed_commitments_v1(
     audit_evidence_archive_bytes: &[u8],
     circuit_id: &str,
@@ -23453,7 +22585,6 @@ fn validate_bfv_full_bootstrap_release_audit_archive_binds_signed_commitments_v1
         commitments.verifier_native_payload_digest,
     )
 }
-
 fn validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_digests_v1(
     archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     commitments: &BfvFullBootstrapReleaseAuditArchiveSignedCommitmentsV1<'_>,
@@ -23513,7 +22644,6 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_diges
         commitments.accumulator_digest,
     )
 }
-
 fn validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_digest_v1(
     archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     circuit_id: &str,
@@ -23538,7 +22668,6 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_
             .to_owned(),
     ))
 }
-
 fn validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_length_v1(
     archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     circuit_id: &str,
@@ -23563,7 +22692,6 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_
             .to_owned(),
     ))
 }
-
 fn validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_body_hex_v1(
     archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     circuit_id: &str,
@@ -23589,7 +22717,6 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_generated_circuit_
             .to_owned(),
     ))
 }
-
 fn validate_bfv_full_bootstrap_release_audit_archive_contains_native_payload_hex_v1(
     archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     circuit_id: &str,
@@ -23607,15 +22734,15 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_native_payload_hex
             encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(circuit_id)?,
         ),
         other => {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap release audit evidence archive native payload role {other:?} is not a proof-key role"
-            )));
+            ));
         }
     };
     if payload.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit evidence archive {label} must be non-empty"
-        )));
+        ));
     }
     let archive_payload =
         bfv_full_bootstrap_release_audit_archive_artifact_hex_bytes_from_index_v1(
@@ -23626,11 +22753,10 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_native_payload_hex
     if archive_payload.as_slice() == payload.as_slice() {
         return Ok(());
     }
-    Err(BfvError::InvalidParameters(format!(
+    Err(invalid!(
         "BFV full-bootstrap release audit evidence archive {label} hex does not match the canonical {label} bytes"
-    )))
+    ))
 }
-
 fn validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
     archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     label: &str,
@@ -23643,13 +22769,12 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_artifact_hex_v1(
         label_aliases,
     )?;
     if Hash::new(artifact_bytes.as_slice()) != *expected_digest {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit evidence archive {label} hex does not match the signed digest"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_archive_contains_exact_artifact_hex_v1(
     archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     label: &str,
@@ -23662,13 +22787,12 @@ fn validate_bfv_full_bootstrap_release_audit_archive_contains_exact_artifact_hex
         label_aliases,
     )?;
     if artifact_bytes.as_slice() != expected_artifact_bytes {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit evidence archive {label} hex does not match the governed artifact bytes"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn bfv_full_bootstrap_release_audit_archive_artifact_hex_bytes_from_index_v1(
     archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     label: &str,
@@ -23686,17 +22810,14 @@ fn bfv_full_bootstrap_release_audit_archive_artifact_hex_bytes_from_index_v1(
             .iter()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit evidence archive body must contain canonical {label} hex"
-        )));
+        ));
     }
     hex::decode(value).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap release audit evidence archive {label} hex is invalid: {err}"
-        ))
+        invalid!("BFV full-bootstrap release audit evidence archive {label} hex is invalid: {err}")
     })
 }
-
 fn validate_bfv_full_bootstrap_release_audit_archive_binds_governed_artifacts_v1(
     audit_evidence_archive_bytes: &[u8],
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
@@ -23763,7 +22884,6 @@ fn validate_bfv_full_bootstrap_release_audit_archive_binds_governed_artifacts_v1
         &artifacts.accumulator,
     )
 }
-
 fn validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v1(
     archive_fields: &BfvFullBootstrapReleaseAuditFieldIndexV1<'_>,
     label: &str,
@@ -23777,11 +22897,10 @@ fn validate_bfv_full_bootstrap_release_audit_archive_field_index_contains_hash_v
     ) {
         return Ok(());
     }
-    Err(BfvError::InvalidParameters(format!(
+    Err(invalid!(
         "BFV full-bootstrap release audit evidence archive body must contain the signed {label}"
-    )))
+    ))
 }
-
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_RELEASE_EVIDENCE_LABEL_ALIASES: &[&[u8]] = &[
     b"release-evidence-digest",
     b"release evidence digest",
@@ -24041,7 +23160,6 @@ const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_SEPARATES_PROOF_KEY_COMMITM
     b"proof-profile-separates-proof-key-material-and-pair-commitments",
     b"proof profile separates proof-key material and pair commitments",
 ];
-
 fn bfv_full_bootstrap_release_audit_archive_label_aliases_v1(
     label: &str,
 ) -> &'static [&'static [u8]] {
@@ -24082,7 +23200,6 @@ fn bfv_full_bootstrap_release_audit_archive_label_aliases_v1(
         _ => &[],
     }
 }
-
 #[cfg(test)]
 fn bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
     body: &[u8],
@@ -24128,7 +23245,6 @@ fn bfv_full_bootstrap_release_audit_body_contains_labelled_value_v1(
     }
     matching_label_count == 1
 }
-
 #[cfg(test)]
 fn bfv_full_bootstrap_release_audit_label_value_region_v1(
     body: &[u8],
@@ -24148,7 +23264,6 @@ fn bfv_full_bootstrap_release_audit_label_value_region_v1(
     }
     Some(&body[index..value_end])
 }
-
 fn bfv_full_bootstrap_release_audit_value_without_trailing_whitespace_v1(value: &[u8]) -> &[u8] {
     let end = value
         .iter()
@@ -24156,7 +23271,6 @@ fn bfv_full_bootstrap_release_audit_value_without_trailing_whitespace_v1(value: 
         .map_or(0, |index| index + 1);
     &value[..end]
 }
-
 fn bfv_full_bootstrap_release_audit_value_region_starts_with_value_v1(
     value_region: &[u8],
     value: &[u8],
@@ -24171,7 +23285,6 @@ fn bfv_full_bootstrap_release_audit_value_region_starts_with_value_v1(
         .iter()
         .all(u8::is_ascii_whitespace)
 }
-
 #[cfg(test)]
 fn bfv_full_bootstrap_release_audit_label_has_boundaries_v1(
     body: &[u8],
@@ -24184,7 +23297,6 @@ fn bfv_full_bootstrap_release_audit_label_has_boundaries_v1(
             .get(label_end)
             .is_none_or(|byte| !bfv_full_bootstrap_release_audit_label_join_byte_v1(*byte))
 }
-
 #[cfg(test)]
 fn bfv_full_bootstrap_release_audit_label_start_has_field_boundary_v1(
     body: &[u8],
@@ -24200,11 +23312,9 @@ fn bfv_full_bootstrap_release_audit_label_start_has_field_boundary_v1(
     }
     true
 }
-
 fn bfv_full_bootstrap_release_audit_label_join_byte_v1(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
 }
-
 fn bfv_full_bootstrap_release_audit_artifact_body_v1<'a>(
     label: &str,
     bytes: &'a [u8],
@@ -24212,20 +23322,16 @@ fn bfv_full_bootstrap_release_audit_artifact_body_v1<'a>(
     expected_header: &[u8],
 ) -> Result<&'a [u8], BfvError> {
     if !bytes.starts_with(expected_header) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must start with canonical v1 header"
-        )));
+        return Err(invalid!("{label} must start with canonical v1 header"));
     }
     let body = &bytes[expected_header.len()..];
     if body.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must include a non-empty body after the canonical v1 header"
-        )));
+        ));
     }
     if body.iter().all(|byte| *byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} body must not be all zero"
-        )));
+        return Err(invalid!("{label} body must not be all zero"));
     }
     validate_bfv_full_bootstrap_release_audit_artifact_body_min_bytes_v1(
         label,
@@ -24237,33 +23343,28 @@ fn bfv_full_bootstrap_release_audit_artifact_body_v1<'a>(
     validate_bfv_full_bootstrap_release_audit_artifact_body_not_placeholder_v1(label, body)?;
     Ok(body)
 }
-
 fn validate_bfv_full_bootstrap_release_audit_artifact_body_min_bytes_v1(
     label: &str,
     body: &[u8],
     min_body_bytes: usize,
 ) -> Result<(), BfvError> {
     if body.len() < min_body_bytes {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} body length {} is below minimum {min_body_bytes}",
             body.len()
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_artifact_body_not_blank_v1(
     label: &str,
     body: &[u8],
 ) -> Result<(), BfvError> {
     if body.iter().all(u8::is_ascii_whitespace) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} body must not be blank"
-        )));
+        return Err(invalid!("{label} body must not be blank"));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_artifact_body_not_nested_v1(
     label: &str,
     body: &[u8],
@@ -24277,13 +23378,12 @@ fn validate_bfv_full_bootstrap_release_audit_artifact_body_not_nested_v1(
         body.windows(nested_header.len())
             .any(|window| window == *nested_header)
     }) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} body must not contain a canonical audit artifact header"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_artifact_body_not_placeholder_v1(
     label: &str,
     body: &[u8],
@@ -24293,13 +23393,12 @@ fn validate_bfv_full_bootstrap_release_audit_artifact_body_not_placeholder_v1(
     if bfv_full_bootstrap_release_audit_bytes_contain_placeholder_text_v1(
         body_after_leading_whitespace,
     ) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} body must not contain placeholder audit artifact text"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn bfv_full_bootstrap_release_audit_bytes_may_contain_placeholder_text_v1(bytes: &[u8]) -> bool {
     bytes.iter().any(|byte| {
         matches!(
@@ -24308,7 +23407,6 @@ fn bfv_full_bootstrap_release_audit_bytes_may_contain_placeholder_text_v1(bytes:
         )
     })
 }
-
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_TEXT_TOKENS: &[&[u8]] = &[
     b"placeholder",
     b"replace-before-production",
@@ -24353,12 +23451,10 @@ const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_TEXT_TOKENS: &[&[u8]] = &[
 const BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PENDING_AUDIT_TOKENS: &[&[u8]] = &[b"pending", b"audit"];
 static BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_COLLAPSED_PLACEHOLDER_TEXT_TOKENS: OnceLock<Vec<Vec<u8>>> =
     OnceLock::new();
-
 fn bfv_full_bootstrap_release_audit_bytes_contain_placeholder_text_v1(bytes: &[u8]) -> bool {
     if !bfv_full_bootstrap_release_audit_bytes_may_contain_placeholder_text_v1(bytes) {
         return false;
     }
-
     if ascii_case_insensitive_contains_any_token(
         bytes,
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PLACEHOLDER_TEXT_TOKENS,
@@ -24376,7 +23472,6 @@ fn bfv_full_bootstrap_release_audit_bytes_contain_placeholder_text_v1(bytes: &[u
     {
         return true;
     }
-
     let collapsed_body = ascii_lower_alnum_collapsed(bytes);
     !collapsed_body.is_empty()
         && (bfv_full_bootstrap_release_audit_collapsed_placeholder_text_tokens()
@@ -24386,7 +23481,6 @@ fn bfv_full_bootstrap_release_audit_bytes_contain_placeholder_text_v1(bytes: &[u
                 .iter()
                 .all(|token| ascii_windows_contains(&collapsed_body, token)))
 }
-
 fn bfv_full_bootstrap_release_audit_collapsed_placeholder_text_tokens() -> &'static [Vec<u8>] {
     BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_COLLAPSED_PLACEHOLDER_TEXT_TOKENS
         .get_or_init(|| {
@@ -24402,14 +23496,12 @@ fn bfv_full_bootstrap_release_audit_collapsed_placeholder_text_tokens() -> &'sta
         })
         .as_slice()
 }
-
 fn bfv_full_bootstrap_release_audit_body_contains_ascii_case_insensitive_v1(
     body: &[u8],
     token: &[u8],
 ) -> bool {
     ascii_case_insensitive_contains_any_token(body, &[token])
 }
-
 fn ascii_case_insensitive_contains_any_token(body: &[u8], tokens: &[&[u8]]) -> bool {
     if tokens.iter().any(|token| token.is_empty()) {
         return true;
@@ -24437,7 +23529,6 @@ fn ascii_case_insensitive_contains_any_token(body: &[u8], tokens: &[&[u8]]) -> b
     }
     false
 }
-
 fn ascii_contains_separator_spelled_token(bytes: &[u8], token: &[u8]) -> bool {
     if token.len() < 2 {
         return false;
@@ -24471,7 +23562,6 @@ fn ascii_contains_separator_spelled_token(bytes: &[u8], token: &[u8]) -> bool {
     }
     false
 }
-
 fn ascii_lower_alnum_collapsed(bytes: &[u8]) -> Vec<u8> {
     bytes
         .iter()
@@ -24480,7 +23570,6 @@ fn ascii_lower_alnum_collapsed(bytes: &[u8]) -> Vec<u8> {
         .map(|byte| byte.to_ascii_lowercase())
         .collect()
 }
-
 fn bfv_full_bootstrap_release_audit_body_after_leading_whitespace_v1(body: &[u8]) -> &[u8] {
     let first_non_whitespace = body
         .iter()
@@ -24488,7 +23577,6 @@ fn bfv_full_bootstrap_release_audit_body_after_leading_whitespace_v1(body: &[u8]
         .unwrap_or(body.len());
     &body[first_non_whitespace..]
 }
-
 fn bfv_full_bootstrap_release_audit_body_without_edge_whitespace_v1(body: &[u8]) -> &[u8] {
     let start = body
         .iter()
@@ -24500,14 +23588,12 @@ fn bfv_full_bootstrap_release_audit_body_without_edge_whitespace_v1(body: &[u8])
         .map_or(start, |index| index + 1);
     &body[start..end]
 }
-
 fn bfv_full_bootstrap_release_audit_body_without_ascii_whitespace_v1(body: &[u8]) -> Vec<u8> {
     body.iter()
         .copied()
         .filter(|byte| !byte.is_ascii_whitespace())
         .collect()
 }
-
 fn bfv_full_bootstrap_release_audit_key_evidence_from_key_v1(
     key_digest: Hash,
     key: &BfvFullBootstrapProofKeyV1,
@@ -24553,7 +23639,6 @@ fn bfv_full_bootstrap_release_audit_key_evidence_from_key_v1(
     )?;
     Ok(BfvFullBootstrapReleaseAuditDecodedKeyV1 { evidence, native })
 }
-
 fn bfv_full_bootstrap_native_generated_circuit_body_digest_from_material_v1(
     native: &BfvFullBootstrapNativeProofKeyMaterialV1,
 ) -> Result<[u8; Hash::LENGTH], BfvError> {
@@ -24564,9 +23649,9 @@ fn bfv_full_bootstrap_native_generated_circuit_body_digest_from_material_v1(
                 BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1,
             >(&native.native_payload)
             .map_err(|err| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "BFV full-bootstrap native prover generated circuit body payload is invalid: {err}"
-                ))
+                )
             })?;
             Ok(payload.generated_circuit_body_digest)
         }
@@ -24576,19 +23661,18 @@ fn bfv_full_bootstrap_native_generated_circuit_body_digest_from_material_v1(
                     &native.native_payload,
                 )
                 .map_err(|err| {
-                    BfvError::InvalidParameters(format!(
+                    invalid!(
                         "BFV full-bootstrap native verifier generated circuit body payload is invalid: {err}"
-                    ))
+                    )
                 })?;
             Ok(payload.generated_circuit_body_digest)
         }
-        _ => Err(BfvError::InvalidParameters(format!(
+        _ => Err(invalid!(
             "BFV full-bootstrap artifact role {:?} is not a proof-key role",
             native.key_role
-        ))),
+        )),
     }
 }
-
 fn bfv_full_bootstrap_release_audit_proof_profile_from_key_and_native_v1(
     key: &BfvFullBootstrapProofKeyV1,
     native: &BfvFullBootstrapNativeProofKeyMaterialV1,
@@ -24596,10 +23680,11 @@ fn bfv_full_bootstrap_release_audit_proof_profile_from_key_and_native_v1(
     validate_bfv_full_bootstrap_proof_key_profile_v1(key)?;
     validate_bfv_full_bootstrap_native_proof_key_material_object_v1(native)?;
     if key.key_role != native.key_role {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit proof profile native proof-key role {:?} does not match audited key role {:?}",
-            native.key_role, key.key_role
-        )));
+            native.key_role,
+            key.key_role
+        ));
     }
     if key.centered_scale_round_source_chain_digest
         != native.centered_scale_round_source_chain_digest
@@ -24690,7 +23775,6 @@ fn bfv_full_bootstrap_release_audit_proof_profile_from_key_and_native_v1(
     validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(&profile)?;
     Ok(profile)
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "signoff validation lists each signed release-audit commitment explicitly"
@@ -24831,21 +23915,22 @@ fn validate_bfv_full_bootstrap_release_audit_signoff_payload_digests_v1(
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_signoff_payload_v1(
     payload: &BfvFullBootstrapReleaseAuditSignoffPayloadV1,
 ) -> Result<(), BfvError> {
     if payload.version != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_PAYLOAD_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit signoff payload version {} does not match canonical version {}",
-            payload.version, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_PAYLOAD_VERSION_V1
-        )));
+            payload.version,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_PAYLOAD_VERSION_V1
+        ));
     }
     if payload.field_count != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_PAYLOAD_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit signoff payload field count {} does not match canonical count {}",
-            payload.field_count, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_PAYLOAD_FIELD_COUNT_V1
-        )));
+            payload.field_count,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_PAYLOAD_FIELD_COUNT_V1
+        ));
     }
     validate_bfv_full_bootstrap_canonical_circuit_id(
         "BFV full-bootstrap release audit signoff payload circuit id",
@@ -24859,7 +23944,6 @@ fn validate_bfv_full_bootstrap_release_audit_signoff_payload_v1(
     )?;
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_signoff_payload_for_evidence_v1(
     payload: &BfvFullBootstrapReleaseAuditSignoffPayloadV1,
     evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
@@ -24944,7 +24028,6 @@ fn validate_bfv_full_bootstrap_release_audit_signoff_payload_for_evidence_v1(
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_native_circuit_fingerprint_v1(
     label: &str,
     circuit_id: &str,
@@ -24954,11 +24037,10 @@ fn validate_bfv_full_bootstrap_release_audit_native_circuit_fingerprint_v1(
     validate_no_full_bootstrap_placeholder_material_digest(label, fingerprint)?;
     let expected_fingerprint = bfv_full_bootstrap_native_proof_circuit_fingerprint_v1(circuit_id)?;
     if *fingerprint != expected_fingerprint {
-        return Err(BfvError::InvalidParameters(format!("{label} mismatch")));
+        return Err(invalid!("{label} mismatch"));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_generated_circuit_body_digest_v1(
     label: &str,
     circuit_id: &str,
@@ -24972,14 +24054,13 @@ fn validate_bfv_full_bootstrap_release_audit_generated_circuit_body_digest_v1(
     )?;
     let expected_generated_circuit_body =
         bfv_full_bootstrap_native_generated_circuit_body_v1(circuit_id)
-            .map_err(|err| BfvError::InvalidParameters(format!("{label} mismatch: {err}")))?;
+            .map_err(|err| invalid!("{label} mismatch: {err}"))?;
     let expected_digest = Hash::prehashed(sha256(&expected_generated_circuit_body));
     if *digest != expected_digest {
-        return Err(BfvError::InvalidParameters(format!("{label} mismatch")));
+        return Err(invalid!("{label} mismatch"));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_native_payload_digest_v1(
     label: &str,
     circuit_id: &str,
@@ -24996,11 +24077,10 @@ fn validate_bfv_full_bootstrap_release_audit_native_payload_digest_v1(
         label, role, circuit_id,
     )?;
     if *digest != Hash::prehashed(expected_digest) {
-        return Err(BfvError::InvalidParameters(format!("{label} mismatch")));
+        return Err(invalid!("{label} mismatch"));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
     label: &str,
     digest: &Hash,
@@ -25013,25 +24093,22 @@ fn validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
         min_body_bytes,
     ) {
         if let Some((_, error)) = sentinels.iter().find(|(sentinel, _)| sentinel == digest) {
-            return Err(BfvError::InvalidParameters(format!(
-                "{label} must not identify {error}"
-            )));
+            return Err(invalid!("{label} must not identify {error}"));
         }
         if is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_v1(
             digest,
             artifact_header,
         ) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "{label} must not identify a placeholder audit artifact"
-            )));
+            ));
         }
         return Ok(());
     }
-
     if *digest == Hash::new(artifact_header) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must not identify a header-only audit artifact"
-        )));
+        ));
     }
     for nested_header in [
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
@@ -25052,37 +24129,36 @@ fn validate_bfv_full_bootstrap_release_audit_external_artifact_digest_v1(
                 } else {
                     "delayed nested-header"
                 };
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "{label} must not identify a {qualifier} audit artifact"
-                )));
+                ));
             }
         }
     }
     for body_len in bfv_full_bootstrap_release_audit_inert_body_digest_lengths_v1(min_body_bytes) {
         let zero_body = vec![0_u8; body_len];
         if *digest == Hash::new_from_chunks(&[artifact_header, zero_body.as_slice()]) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "{label} must not identify a zero-body audit artifact"
-            )));
+            ));
         }
         for blank_byte in BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_BLANK_BODY_DIGEST_BYTES {
             let blank_body = vec![*blank_byte; body_len];
             if *digest != Hash::new_from_chunks(&[artifact_header, blank_body.as_slice()]) {
                 continue;
             }
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "{label} must not identify a blank-body audit artifact"
-            )));
+            ));
         }
     }
     if is_bfv_full_bootstrap_release_audit_placeholder_artifact_digest_v1(digest, artifact_header) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must not identify a placeholder audit artifact"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_distinct_bfv_full_bootstrap_release_audit_signed_commitments(
     context: &str,
     commitments: &[(&str, &Hash)],
@@ -25092,14 +24168,13 @@ fn validate_distinct_bfv_full_bootstrap_release_audit_signed_commitments(
             .iter()
             .find(|(_, prior)| *prior == *commitment)
         {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap release audit {context} {label} must be distinct from {prior_label}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_signed_generated_body_embedded_digest_aliases_v1(
     context: &str,
     circuit_id: &str,
@@ -25110,9 +24185,9 @@ fn validate_bfv_full_bootstrap_release_audit_signed_generated_body_embedded_dige
         &generated_circuit_body,
     )
     .map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "BFV full-bootstrap release audit {context} generated circuit body is invalid: {err}"
-        ))
+        )
     })?;
     let embedded_commitments = [
         (
@@ -25128,15 +24203,14 @@ fn validate_bfv_full_bootstrap_release_audit_signed_generated_body_embedded_dige
         let field_digest_bytes = <[u8; Hash::LENGTH]>::from(**field_digest);
         for (embedded_label, embedded_digest) in &embedded_commitments {
             if field_digest_bytes == *embedded_digest {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "BFV full-bootstrap release audit {context} {field_label} must be distinct from {embedded_label}"
-                )));
+                ));
             }
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_external_artifact_digest_pair_v1(
     context: &str,
     audit_report_digest: &Hash,
@@ -25165,13 +24239,12 @@ fn validate_bfv_full_bootstrap_release_audit_external_artifact_digest_pair_v1(
         BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_BODY_MIN_BYTES,
     )?;
     if audit_report_digest == audit_evidence_archive_digest {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit {context} report and evidence archive digests must be distinct"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_reviewer_id(
     reviewer_id: &str,
 ) -> Result<(), BfvError> {
@@ -25181,9 +24254,9 @@ fn validate_bfv_full_bootstrap_release_audit_reviewer_id(
         ));
     }
     if reviewer_id.len() > BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID_MAX_BYTES {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit reviewer id exceeds the maximum supported length {BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REVIEWER_ID_MAX_BYTES}"
-        )));
+        ));
     }
     if bfv_full_bootstrap_release_audit_bytes_contain_placeholder_text_v1(reviewer_id.as_bytes()) {
         return Err(BfvError::InvalidParameters(
@@ -25228,7 +24301,6 @@ fn validate_bfv_full_bootstrap_release_audit_reviewer_id(
     }
     Ok(())
 }
-
 fn validate_no_full_bootstrap_placeholder_release_audit_signed_commitments(
     context: &str,
     commitments: &[(&str, &Hash)],
@@ -25239,7 +24311,6 @@ fn validate_no_full_bootstrap_placeholder_release_audit_signed_commitments(
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
     reviewer_id: &str,
     reviewer_public_key: &PublicKey,
@@ -25250,7 +24321,6 @@ fn validate_bfv_full_bootstrap_release_audit_trusted_reviewer_inputs_v1(
         reviewer_public_key,
     )
 }
-
 /// Validate a trusted reviewer id for a BFV full-bootstrap release audit.
 ///
 /// # Errors
@@ -25262,7 +24332,6 @@ pub fn validate_bfv_full_bootstrap_release_audit_trusted_reviewer_id_v1(
 ) -> Result<(), BfvError> {
     validate_bfv_full_bootstrap_release_audit_reviewer_id(reviewer_id)
 }
-
 /// Validate a trusted reviewer public key for a BFV full-bootstrap release audit.
 ///
 /// # Errors
@@ -25276,76 +24345,67 @@ pub fn validate_bfv_full_bootstrap_release_audit_trusted_reviewer_public_key_v1(
         reviewer_public_key,
     )
 }
-
 fn validate_bfv_full_bootstrap_release_audit_reviewer_private_key(
     label: &str,
     reviewer_private_key: &PrivateKey,
 ) -> Result<(), BfvError> {
     let (algorithm, payload) = reviewer_private_key
         .try_to_bytes()
-        .map_err(|err| BfvError::InvalidParameters(format!("{label} is invalid: {err}")))?;
+        .map_err(|err| invalid!("{label} is invalid: {err}"))?;
     if algorithm != Algorithm::Ed25519 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must use Ed25519 reviewer private-key algorithm, found {algorithm}"
-        )));
+        ));
     }
     if payload.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} payload must not be empty"
-        )));
+        return Err(invalid!("{label} payload must not be empty"));
     }
     if payload.iter().all(|byte| *byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} payload must not be all zero"
-        )));
+        return Err(invalid!("{label} payload must not be all zero"));
     }
     PrivateKey::from_bytes(algorithm, &payload)
         .map(|_| ())
-        .map_err(|err| BfvError::InvalidParameters(format!("{label} is invalid: {err}")))
+        .map_err(|err| invalid!("{label} is invalid: {err}"))
 }
-
 fn validate_bfv_full_bootstrap_release_audit_reviewer_public_key(
     label: &str,
     reviewer_public_key: &PublicKey,
 ) -> Result<(), BfvError> {
     let (algorithm, payload) = reviewer_public_key
         .try_to_bytes()
-        .map_err(|err| BfvError::InvalidParameters(format!("{label} is invalid: {err}")))?;
+        .map_err(|err| invalid!("{label} is invalid: {err}"))?;
     if algorithm != Algorithm::Ed25519 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must use Ed25519 reviewer key algorithm, found {algorithm}"
-        )));
+        ));
     }
     if payload.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} payload must not be empty"
-        )));
+        return Err(invalid!("{label} payload must not be empty"));
     }
     if payload.iter().all(|byte| *byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} payload must not be all zero"
-        )));
+        return Err(invalid!("{label} payload must not be all zero"));
     }
     PublicKey::from_bytes(algorithm, payload)
         .map(|_| ())
-        .map_err(|err| BfvError::InvalidParameters(format!("{label} is invalid: {err}")))
+        .map_err(|err| invalid!("{label} is invalid: {err}"))
 }
-
 #[allow(clippy::too_many_lines)]
 fn validate_bfv_full_bootstrap_release_audit_evidence_shape_v1(
     evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
 ) -> Result<(), BfvError> {
     if evidence.version != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit evidence version {} does not match canonical version {}",
-            evidence.version, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_VERSION_V1
-        )));
+            evidence.version,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_VERSION_V1
+        ));
     }
     if evidence.field_count != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit evidence field count {} does not match canonical count {}",
-            evidence.field_count, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_FIELD_COUNT_V1
-        )));
+            evidence.field_count,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_EVIDENCE_FIELD_COUNT_V1
+        ));
     }
     validate_bfv_full_bootstrap_canonical_circuit_id(
         "BFV full-bootstrap release audit evidence circuit id",
@@ -25358,9 +24418,9 @@ fn validate_bfv_full_bootstrap_release_audit_evidence_shape_v1(
         ));
     }
     if evidence.max_bootstrap_depth > BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit evidence max_bootstrap_depth exceeds supported limit {BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH}"
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(&evidence.proof_profile)?;
     validate_distinct_bfv_full_bootstrap_release_audit_evidence_digests(evidence)?;
@@ -25498,7 +24558,6 @@ fn validate_bfv_full_bootstrap_release_audit_evidence_shape_v1(
     validate_bfv_full_bootstrap_release_audit_registered_profile_digests_v1(evidence)?;
     validate_bfv_full_bootstrap_release_audit_evidence_recomputed_digests_v1(evidence)
 }
-
 fn validate_bfv_full_bootstrap_release_audit_evidence_recomputed_digests_v1(
     evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
 ) -> Result<(), BfvError> {
@@ -25535,7 +24594,6 @@ fn validate_bfv_full_bootstrap_release_audit_evidence_recomputed_digests_v1(
                 .to_owned(),
         ));
     }
-
     let expected_artifact_bundle_digest =
         hash_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(
             &BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1 {
@@ -25561,7 +24619,6 @@ fn validate_bfv_full_bootstrap_release_audit_evidence_recomputed_digests_v1(
     }
     Ok(())
 }
-
 fn validate_distinct_bfv_full_bootstrap_release_audit_evidence_digests(
     evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
 ) -> Result<(), BfvError> {
@@ -25572,14 +24629,13 @@ fn validate_distinct_bfv_full_bootstrap_release_audit_evidence_digests(
             .iter()
             .find(|(_, prior)| *prior == *digest)
         {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap release audit evidence {label} must be distinct from {prior_label}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn bfv_full_bootstrap_release_audit_evidence_distinct_digest_entries(
     evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
 ) -> [(&'static str, [u8; 32]); 24] {
@@ -25678,7 +24734,6 @@ fn bfv_full_bootstrap_release_audit_evidence_distinct_digest_entries(
         ),
     ]
 }
-
 fn validate_no_full_bootstrap_placeholder_release_audit_evidence_digests(
     evidence: &BfvFullBootstrapReleaseAuditEvidenceV1,
 ) -> Result<(), BfvError> {
@@ -25774,22 +24829,23 @@ fn validate_no_full_bootstrap_placeholder_release_audit_evidence_digests(
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_lines)]
 fn validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(
     profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
 ) -> Result<(), BfvError> {
     if profile.version != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit proof profile version {} does not match canonical version {}",
-            profile.version, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_VERSION_V1
-        )));
+            profile.version,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_VERSION_V1
+        ));
     }
     if profile.field_count != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap release audit proof profile field count {} does not match canonical count {}",
-            profile.field_count, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_FIELD_COUNT_V1
-        )));
+            profile.field_count,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_PROOF_PROFILE_FIELD_COUNT_V1
+        ));
     }
     validate_bfv_full_bootstrap_release_audit_proof_profile_text_fields_v1(profile)?;
     validate_bfv_full_bootstrap_centered_scale_round_source_chain_digest_v1(
@@ -25814,7 +24870,6 @@ fn validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(
     validate_bfv_full_bootstrap_release_audit_proof_profile_native_air_envelope_v1(profile)?;
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_proof_profile_layout_v1(
     profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
 ) -> Result<(), BfvError> {
@@ -25864,7 +24919,6 @@ fn validate_bfv_full_bootstrap_release_audit_proof_profile_layout_v1(
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_proof_profile_advertised_obligations_v1(
     profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
 ) -> Result<(), BfvError> {
@@ -25908,7 +24962,6 @@ fn validate_bfv_full_bootstrap_release_audit_proof_profile_advertised_obligation
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_proof_profile_release_prover_domains_v1(
     profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
 ) -> Result<(), BfvError> {
@@ -25979,15 +25032,14 @@ fn validate_bfv_full_bootstrap_release_audit_proof_profile_release_prover_domain
     for (left_index, (left_label, left_domain)) in domains.iter().enumerate() {
         for (right_label, right_domain) in domains.iter().skip(left_index + 1) {
             if left_domain == right_domain {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "BFV full-bootstrap release audit proof profile release-prover material digest domains for {left_label} and {right_label} must be distinct"
-                )));
+                ));
             }
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_proof_profile_proof_key_commitment_domains_v1(
     profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
 ) -> Result<(), BfvError> {
@@ -26015,7 +25067,6 @@ fn validate_bfv_full_bootstrap_release_audit_proof_profile_proof_key_commitment_
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_proof_profile_native_air_envelope_v1(
     profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
 ) -> Result<(), BfvError> {
@@ -26032,7 +25083,6 @@ fn validate_bfv_full_bootstrap_release_audit_proof_profile_native_air_envelope_v
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_proof_profile_text_fields_v1(
     profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
 ) -> Result<(), BfvError> {
@@ -26058,7 +25108,6 @@ fn validate_bfv_full_bootstrap_release_audit_proof_profile_text_fields_v1(
     )?;
     Ok(())
 }
-
 fn bfv_full_bootstrap_release_audit_expected_native_payload_kind_v1(
     label: &str,
     expected_role: BfvFullBootstrapCircuitArtifactRoleV1,
@@ -26070,12 +25119,11 @@ fn bfv_full_bootstrap_release_audit_expected_native_payload_kind_v1(
         BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey => {
             Ok(BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_KIND_V1)
         }
-        _ => Err(BfvError::InvalidParameters(format!(
+        _ => Err(invalid!(
             "{label} release audit key evidence role is not a proof-key role"
-        ))),
+        )),
     }
 }
-
 fn bfv_full_bootstrap_release_audit_expected_native_payload_digest_v1(
     label: &str,
     expected_role: BfvFullBootstrapCircuitArtifactRoleV1,
@@ -26093,36 +25141,38 @@ fn bfv_full_bootstrap_release_audit_expected_native_payload_digest_v1(
             )?
         }
         _ => {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "{label} release audit key evidence role is not a proof-key role"
-            )));
+            ));
         }
     };
     Ok(sha256(&payload))
 }
-
 fn validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
     label: &str,
     expected_role: BfvFullBootstrapCircuitArtifactRoleV1,
     evidence: &BfvFullBootstrapReleaseAuditKeyEvidenceV1,
 ) -> Result<(), BfvError> {
     if evidence.version != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} release audit key evidence version {} does not match canonical version {}",
-            evidence.version, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_VERSION_V1
-        )));
+            evidence.version,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_VERSION_V1
+        ));
     }
     if evidence.field_count != BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} release audit key evidence field count {} does not match canonical count {}",
-            evidence.field_count, BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_FIELD_COUNT_V1
-        )));
+            evidence.field_count,
+            BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_KEY_EVIDENCE_FIELD_COUNT_V1
+        ));
     }
     if evidence.key_role != expected_role {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} release audit key evidence role {:?} does not match expected role {:?}",
-            evidence.key_role, expected_role
-        )));
+            evidence.key_role,
+            expected_role
+        ));
     }
     validate_bfv_full_bootstrap_release_audit_key_evidence_digest_aliases_v1(label, evidence)?;
     validate_bfv_full_bootstrap_centered_scale_round_source_chain_digest_v1(
@@ -26146,9 +25196,9 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
             &evidence.native_payload_circuit_id,
         )?;
     if evidence.native_circuit_fingerprint != expected_native_circuit_fingerprint {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} release audit native circuit fingerprint mismatch"
-        )));
+        ));
     }
     validate_nonzero_sha256_digest(
         &format!("{label} release audit native payload digest"),
@@ -26177,9 +25227,9 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
         &expected_generated_circuit_body,
     )?;
     if evidence.generated_circuit_body_digest != sha256(&expected_generated_circuit_body) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} release audit generated circuit body digest mismatch"
-        )));
+        ));
     }
     let expected_payload_kind =
         bfv_full_bootstrap_release_audit_expected_native_payload_kind_v1(label, expected_role)?;
@@ -26196,13 +25246,12 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_shape_v1(
             &evidence.native_payload_circuit_id,
         )?;
     if evidence.native_payload_digest != expected_native_payload_digest {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} release audit native payload digest mismatch"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_key_evidence_generated_body_digest_aliases_v1(
     label: &str,
     evidence: &BfvFullBootstrapReleaseAuditKeyEvidenceV1,
@@ -26211,11 +25260,7 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_generated_body_digest_
     let body = norito::decode_canonical::<BfvFullBootstrapNativeGeneratedCircuitBodyV1>(
         expected_generated_circuit_body,
     )
-    .map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "{label} release audit generated circuit body is invalid: {err}"
-        ))
-    })?;
+    .map_err(|err| invalid!("{label} release audit generated circuit body is invalid: {err}"))?;
     for (field_label, field_digest) in [
         ("native payload digest", evidence.native_payload_digest),
         (
@@ -26234,15 +25279,14 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_generated_body_digest_
             ),
         ] {
             if field_digest == embedded_digest {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "{label} release audit key evidence {field_label} must be distinct from {embedded_label}"
-                )));
+                ));
             }
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_release_audit_key_evidence_digest_aliases_v1(
     label: &str,
     evidence: &BfvFullBootstrapReleaseAuditKeyEvidenceV1,
@@ -26263,7 +25307,6 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_digest_aliases_v1(
         ],
     )
 }
-
 fn validate_bfv_full_bootstrap_release_audit_key_evidence_distinct_digest_bytes_v1(
     label: &str,
     evidence: &BfvFullBootstrapReleaseAuditKeyEvidenceV1,
@@ -26293,29 +25336,27 @@ fn validate_bfv_full_bootstrap_release_audit_key_evidence_distinct_digest_bytes_
             .iter()
             .find(|(_, prior)| prior == digest)
         {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "{label} release audit key evidence {entry_label} must be distinct from {prior_label}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn hash_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(
     digest_material: &BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1,
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(digest_material)?;
     let bytes = norito::encode_canonical(digest_material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "BFV full-bootstrap circuit artifact bundle digest material encoding failed: {err}"
-        ))
+        )
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 fn bfv_full_bootstrap_circuit_artifact_bundle_digest_for_alias_preflight_v1(
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
 ) -> Result<Hash, BfvError> {
@@ -26337,27 +25378,26 @@ fn bfv_full_bootstrap_circuit_artifact_bundle_digest_for_alias_preflight_v1(
     };
     hash_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(&digest_material)
 }
-
 fn validate_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(
     digest_material: &BfvFullBootstrapCircuitArtifactBundleDigestMaterialV1,
 ) -> Result<(), BfvError> {
     if digest_material.version
         != BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_VERSION_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap circuit artifact bundle digest material version {} does not match canonical version {}",
             digest_material.version,
             BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_VERSION_V1
-        )));
+        ));
     }
     if digest_material.artifact_digest_count
         != BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_ARTIFACT_DIGEST_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap circuit artifact bundle digest material artifact count {} does not match canonical count {}",
             digest_material.artifact_digest_count,
             BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_BUNDLE_DIGEST_MATERIAL_ARTIFACT_DIGEST_COUNT_V1
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_digest_material_hashes(
         "BFV full-bootstrap circuit artifact bundle digest material",
@@ -26392,7 +25432,6 @@ fn validate_bfv_full_bootstrap_circuit_artifact_bundle_digest_material_v1(
         ],
     )
 }
-
 /// Build typed proof input material for a dedicated BFV full-bootstrap material prover.
 ///
 /// # Errors
@@ -26424,7 +25463,6 @@ pub fn bfv_full_bootstrap_material_proof_input_material_v1(
     validate_bfv_full_bootstrap_material_proof_input_material_v1(&material)?;
     Ok(material)
 }
-
 /// Validate typed proof input material for a dedicated BFV full-bootstrap material prover.
 ///
 /// # Errors
@@ -26437,16 +25475,18 @@ pub fn validate_bfv_full_bootstrap_material_proof_input_material_v1(
     material: &BfvFullBootstrapMaterialProofInputMaterialV1,
 ) -> Result<(), BfvError> {
     if material.version != BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_INPUT_MATERIAL_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap material proof input material version {} does not match canonical version {}",
-            material.version, BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_INPUT_MATERIAL_VERSION_V1
-        )));
+            material.version,
+            BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_INPUT_MATERIAL_VERSION_V1
+        ));
     }
     if material.field_count != BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap material proof input material field count {} does not match canonical count {}",
-            material.field_count, BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1
-        )));
+            material.field_count,
+            BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1
+        ));
     }
     validate_nonzero_material_digest(
         "BFV full-bootstrap material proof input statement hash",
@@ -26491,13 +25531,10 @@ pub fn validate_bfv_full_bootstrap_material_proof_input_material_v1(
         &material.artifact_bundle,
     )
     .map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap material proof input artifact bundle failed validation: {err}"
-        ))
+        invalid!("BFV full-bootstrap material proof input artifact bundle failed validation: {err}")
     })?;
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_material_proof_input_digest_aliases_v1(
     material: &BfvFullBootstrapMaterialProofInputMaterialV1,
     governed_material: &BfvFullBootstrapCircuitMaterialV1,
@@ -26548,7 +25585,6 @@ fn validate_bfv_full_bootstrap_material_proof_input_digest_aliases_v1(
         ],
     )
 }
-
 /// Validate material proof input material against caller-owned governed artifacts.
 ///
 /// This companion validates the self-contained package, then reconstructs the
@@ -26580,7 +25616,6 @@ pub fn validate_bfv_full_bootstrap_material_proof_input_material_for_artifacts_v
     }
     Ok(())
 }
-
 /// Hash self-contained typed proof input material for a BFV full-bootstrap material proof.
 ///
 /// Prefer [`bfv_full_bootstrap_material_proof_input_material_digest_for_artifacts_v1`]
@@ -26595,16 +25630,13 @@ pub fn bfv_full_bootstrap_material_proof_input_material_digest_v1(
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_material_proof_input_material_v1(material)?;
     let bytes = norito::encode_canonical(material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap material proof input material encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap material proof input material encoding failed: {err}")
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical material proof input material bytes for BFV full-bootstrap governance.
 ///
 /// # Errors
@@ -26616,26 +25648,21 @@ pub fn decode_bfv_full_bootstrap_material_proof_input_material_bytes_v1(
 ) -> Result<BfvFullBootstrapMaterialProofInputMaterialV1, BfvError> {
     let label = "BFV full-bootstrap material proof input material bytes";
     if bytes.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if bytes.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be all-zero"
-        )));
+        return Err(invalid!("{label} must not be all-zero"));
     }
     let material =
         norito::decode_canonical::<BfvFullBootstrapMaterialProofInputMaterialV1>(bytes)
         .map_err(|err| {
-            BfvError::InvalidParameters(format!(
+            invalid!(
                 "{label} must use canonical v1 bytes containing Norito-encoded material proof input material: {err}"
-            ))
+            )
         })?;
     validate_bfv_full_bootstrap_material_proof_input_material_v1(&material)?;
     Ok(material)
 }
-
 /// Hash canonical material proof input material bytes for BFV full-bootstrap governance.
 ///
 /// # Errors
@@ -26648,7 +25675,6 @@ pub fn bfv_full_bootstrap_material_proof_input_material_digest_from_bytes_v1(
         bfv_full_bootstrap_material_proof_input_material_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode and digest canonical material proof input material bytes.
 ///
 /// This byte-admission helper keeps the decoded material proof input and its
@@ -26664,7 +25690,6 @@ pub fn bfv_full_bootstrap_material_proof_input_material_and_digest_from_bytes_v1
     let material_digest = bfv_full_bootstrap_material_proof_input_material_digest_v1(&material)?;
     Ok((material, material_digest))
 }
-
 /// Hash material proof input material after matching it to caller-owned artifacts.
 ///
 /// # Errors
@@ -26686,7 +25711,6 @@ pub fn bfv_full_bootstrap_material_proof_input_material_digest_for_artifacts_v1(
     )?;
     bfv_full_bootstrap_material_proof_input_material_digest_v1(material)
 }
-
 /// Hash canonical material proof input bytes after caller-owned artifact replay.
 ///
 /// # Errors
@@ -26709,7 +25733,6 @@ pub fn bfv_full_bootstrap_material_proof_input_material_digest_from_bytes_for_ar
         )?;
     Ok(digest)
 }
-
 /// Decode and digest canonical material proof input bytes after caller-owned artifact replay.
 ///
 /// This helper keeps the decoded material proof input and its digest bound to the
@@ -26743,7 +25766,6 @@ pub fn bfv_full_bootstrap_material_proof_input_material_and_digest_from_bytes_fo
     }
     Ok((material, material_digest))
 }
-
 /// Decode canonical material proof input bytes after caller-owned artifact replay.
 ///
 /// This is the decoded-object companion to
@@ -26772,7 +25794,6 @@ pub fn validate_bfv_full_bootstrap_material_proof_input_material_bytes_for_artif
         )?;
     Ok(material)
 }
-
 /// Decode canonical governance bytes for a BFV full-bootstrap material proof input.
 ///
 /// This raw-byte admission helper rejects non-canonical public-key,
@@ -26812,7 +25833,6 @@ pub fn validate_bfv_full_bootstrap_material_proof_input_material_bytes_for_gover
         )?;
     Ok((public_key, evaluation_keys, artifact_bundle, proof_input))
 }
-
 /// Decode canonical governance bytes with the material proof input digest.
 ///
 /// This helper returns decoded governance objects, decoded proof input material,
@@ -26863,7 +25883,6 @@ pub fn validate_bfv_full_bootstrap_material_proof_input_material_bytes_and_diges
         proof_input_digest,
     ))
 }
-
 /// Decode canonical governance bytes together with their material proof digests.
 ///
 /// This helper returns every decoded governance object, decoded proof input
@@ -26939,7 +25958,6 @@ pub fn validate_bfv_full_bootstrap_material_proof_input_material_bytes_and_diges
         proof_input_digest,
     ))
 }
-
 fn validate_bfv_full_bootstrap_execution_claim_galois_key_set_digest_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
@@ -26962,7 +25980,6 @@ fn validate_bfv_full_bootstrap_execution_claim_galois_key_set_digest_v1(
     }
     Ok(expected_galois_key_set_digest)
 }
-
 fn validate_bfv_full_bootstrap_execution_claim_digest_fields_v1(
     claim: &BfvFullBootstrapExecutionProofClaimV1,
 ) -> Result<(), BfvError> {
@@ -26974,7 +25991,6 @@ fn validate_bfv_full_bootstrap_execution_claim_digest_fields_v1(
         ],
     )
 }
-
 fn validate_bfv_full_bootstrap_execution_claim_ciphertext_digest_aliases_v1(
     params: &BfvParameters,
     claim: &BfvFullBootstrapExecutionProofClaimV1,
@@ -26990,15 +26006,14 @@ fn validate_bfv_full_bootstrap_execution_claim_ciphertext_digest_aliases_v1(
             ("output ciphertext digest", &output_ciphertext_digest),
         ] {
             if claim_digest == ciphertext_digest {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "BFV full-bootstrap execution proof claim {claim_label} must be distinct from {ciphertext_label}"
-                )));
+                ));
             }
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_execution_claim_statement_digest_aliases_v1(
     params: &BfvParameters,
     public_key: &BfvPublicKey,
@@ -27026,7 +26041,6 @@ fn validate_bfv_full_bootstrap_execution_claim_statement_digest_aliases_v1(
         ],
     )
 }
-
 /// Build typed deterministic witness material for a full-bootstrap claim.
 ///
 /// The material is derived by executing the governed full-bootstrap prefix
@@ -27115,10 +26129,11 @@ pub fn bfv_full_bootstrap_execution_witness_digest_material_v1(
         ));
     }
     if trace_bounds.slot_to_coefficient != claim.output_bound {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap execution witness output bound {} does not match deterministic governed bound {}",
-            claim.output_bound, trace_bounds.slot_to_coefficient
-        )));
+            claim.output_bound,
+            trace_bounds.slot_to_coefficient
+        ));
     }
     let material = full_bootstrap_material_from_key(bootstrap_key)?;
     let full_bootstrap_material_digest =
@@ -27145,7 +26160,6 @@ pub fn bfv_full_bootstrap_execution_witness_digest_material_v1(
     validate_bfv_full_bootstrap_execution_witness_digest_material_v1(&witness_material)?;
     Ok(witness_material)
 }
-
 /// Validate typed deterministic witness material for one full-bootstrap claim.
 ///
 /// This is the public admission companion to
@@ -27163,17 +26177,18 @@ pub fn validate_bfv_full_bootstrap_execution_witness_digest_material_v1(
     material: &BfvFullBootstrapExecutionWitnessDigestMaterialV1,
 ) -> Result<(), BfvError> {
     if material.version != BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap execution witness material version {} does not match canonical version {}",
-            material.version, BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_VERSION_V1
-        )));
+            material.version,
+            BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_VERSION_V1
+        ));
     }
     if material.field_count != BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap execution witness material field count {} does not match canonical count {}",
             material.field_count,
             BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_FIELD_COUNT_V1
-        )));
+        ));
     }
     let params = &material.params;
     validate_bfv_full_bootstrap_key_execution_preflight_v1(params, &material.bootstrap_key)?;
@@ -27288,10 +26303,11 @@ pub fn validate_bfv_full_bootstrap_execution_witness_digest_material_v1(
         }
     };
     if material.trace_bounds.raw_extracted_sample != expected_raw_extracted_sample_bound {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap execution witness raw extracted sample bound {} does not match blind-rotation bound {}",
-            material.trace_bounds.raw_extracted_sample, expected_raw_extracted_sample_bound
-        )));
+            material.trace_bounds.raw_extracted_sample,
+            expected_raw_extracted_sample_bound
+        ));
     }
     let expected_coefficient_zero_repack_output = match material.bound_mode {
         BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple => {
@@ -27328,10 +26344,11 @@ pub fn validate_bfv_full_bootstrap_execution_witness_digest_material_v1(
         }
     };
     if material.trace_bounds.coefficient_zero_repack != expected_coefficient_zero_repack_bound {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap execution witness coefficient-zero repack bound {} does not match raw sample bound {}",
-            material.trace_bounds.coefficient_zero_repack, expected_coefficient_zero_repack_bound
-        )));
+            material.trace_bounds.coefficient_zero_repack,
+            expected_coefficient_zero_repack_bound
+        ));
     }
     let expected_sample_switch_bound = match material.bound_mode {
         BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple => {
@@ -27348,10 +26365,11 @@ pub fn validate_bfv_full_bootstrap_execution_witness_digest_material_v1(
         }
     };
     if material.trace_bounds.sample_switch != expected_sample_switch_bound {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap execution witness sample-switch bound {} does not match raw sample bound {}",
-            material.trace_bounds.sample_switch, expected_sample_switch_bound
-        )));
+            material.trace_bounds.sample_switch,
+            expected_sample_switch_bound
+        ));
     }
     if material.trace.slot_to_coefficient_output != material.output_ciphertext {
         return Err(BfvError::InvalidParameters(
@@ -27360,14 +26378,14 @@ pub fn validate_bfv_full_bootstrap_execution_witness_digest_material_v1(
         ));
     }
     if material.trace_bounds.slot_to_coefficient != material.output_bound {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap execution witness trace output bound {} does not match witness output bound {}",
-            material.trace_bounds.slot_to_coefficient, material.output_bound
-        )));
+            material.trace_bounds.slot_to_coefficient,
+            material.output_bound
+        ));
     }
     Ok(())
 }
-
 /// Validate deterministic witness material against concrete governed artifacts.
 ///
 /// This artifact-aware companion recomputes the full-bootstrap prefix trace
@@ -27425,13 +26443,12 @@ pub fn validate_bfv_full_bootstrap_execution_witness_digest_material_for_artifac
             material,
             &expected_material,
         );
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap execution witness material {mismatch} does not match governed artifact trace"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn preflight_bfv_full_bootstrap_execution_artifact_galois_context_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -27459,7 +26476,6 @@ fn preflight_bfv_full_bootstrap_execution_artifact_galois_context_v1(
     bfv_full_bootstrap_galois_key_set_digest_v1(params, galois_keys)?;
     Ok(())
 }
-
 fn preflight_bfv_full_bootstrap_execution_public_key_artifact_galois_context_v1(
     params: &BfvParameters,
     public_key: &BfvPublicKey,
@@ -27475,7 +26491,6 @@ fn preflight_bfv_full_bootstrap_execution_public_key_artifact_galois_context_v1(
         galois_keys,
     )
 }
-
 fn bfv_full_bootstrap_execution_witness_artifact_mismatch_label_v1(
     material: &BfvFullBootstrapExecutionWitnessDigestMaterialV1,
     expected: &BfvFullBootstrapExecutionWitnessDigestMaterialV1,
@@ -27536,7 +26551,6 @@ fn bfv_full_bootstrap_execution_witness_artifact_mismatch_label_v1(
     }
     "typed material"
 }
-
 fn bfv_full_bootstrap_sample_extraction_from_raw_sample_v1(
     params: &BfvParameters,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
@@ -27556,7 +26570,6 @@ fn bfv_full_bootstrap_sample_extraction_from_raw_sample_v1(
     validate_bfv_full_bootstrap_sample_extraction_v1(params, sample_extraction)?;
     Ok(sample_extraction)
 }
-
 fn validate_bfv_full_bootstrap_execution_prefix_trace_v1(
     params: &BfvParameters,
     trace: &BfvFullBootstrapExecutionPrefixTraceV1,
@@ -27593,7 +26606,6 @@ fn validate_bfv_full_bootstrap_execution_prefix_trace_v1(
     validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, &trace.raw_extracted_sample)?;
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_execution_prefix_trace_bounds_v1(
     params: &BfvParameters,
     bound_mode: BfvFullBootstrapExecutionProofBoundModeV1,
@@ -27664,7 +26676,6 @@ fn validate_bfv_full_bootstrap_execution_prefix_trace_bounds_v1(
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_execution_witness_claim_bounds_v1(
     params: &BfvParameters,
     bound_mode: BfvFullBootstrapExecutionProofBoundModeV1,
@@ -27699,7 +26710,6 @@ fn validate_bfv_full_bootstrap_execution_witness_claim_bounds_v1(
         }
     }
 }
-
 /// Hash self-consistent externally held typed deterministic witness material.
 ///
 /// Prefer [`bfv_full_bootstrap_execution_witness_digest_from_material_for_artifacts_v1`]
@@ -27713,16 +26723,13 @@ pub fn bfv_full_bootstrap_execution_witness_digest_from_material_v1(
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_execution_witness_digest_material_v1(material)?;
     let bytes = norito::encode_canonical(material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap execution witness digest material encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap execution witness digest material encoding failed: {err}")
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical deterministic witness material bytes for a BFV full-bootstrap claim.
 ///
 /// # Errors
@@ -27734,26 +26741,21 @@ pub fn decode_bfv_full_bootstrap_execution_witness_digest_material_bytes_v1(
 ) -> Result<BfvFullBootstrapExecutionWitnessDigestMaterialV1, BfvError> {
     let label = "BFV full-bootstrap execution witness digest material bytes";
     if bytes.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if bytes.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be all-zero"
-        )));
+        return Err(invalid!("{label} must not be all-zero"));
     }
     let material =
         norito::decode_canonical::<BfvFullBootstrapExecutionWitnessDigestMaterialV1>(bytes)
             .map_err(|err| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "{label} must use canonical v1 bytes containing Norito-encoded execution witness material: {err}"
-                ))
+                )
             })?;
     validate_bfv_full_bootstrap_execution_witness_digest_material_v1(&material)?;
     Ok(material)
 }
-
 /// Hash canonical deterministic witness material bytes for a BFV full-bootstrap claim.
 ///
 /// # Errors
@@ -27765,7 +26767,6 @@ pub fn bfv_full_bootstrap_execution_witness_digest_from_material_bytes_v1(
         bfv_full_bootstrap_execution_witness_digest_material_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode canonical deterministic witness material bytes and return their digest.
 ///
 /// # Errors
@@ -27777,7 +26778,6 @@ pub fn bfv_full_bootstrap_execution_witness_digest_material_and_digest_from_byte
     let digest = bfv_full_bootstrap_execution_witness_digest_from_material_v1(&material)?;
     Ok((material, digest))
 }
-
 /// Hash externally held typed witness material after replaying it against artifacts.
 ///
 /// # Errors
@@ -27799,7 +26799,6 @@ pub fn bfv_full_bootstrap_execution_witness_digest_from_material_for_artifacts_v
     )?;
     bfv_full_bootstrap_execution_witness_digest_from_material_v1(material)
 }
-
 /// Hash canonical witness material bytes after replaying them against governed artifacts.
 ///
 /// # Errors
@@ -27822,7 +26821,6 @@ pub fn bfv_full_bootstrap_execution_witness_digest_from_material_bytes_for_artif
         )?;
     Ok(digest)
 }
-
 /// Decode canonical witness material bytes and return their artifact-bound digest.
 ///
 /// # Errors
@@ -27851,7 +26849,6 @@ pub fn bfv_full_bootstrap_execution_witness_digest_material_and_digest_from_byte
     )?;
     Ok((material, digest))
 }
-
 /// Decode canonical witness material bytes after replaying them against governed artifacts.
 ///
 /// This is the decoded-object companion to
@@ -27880,7 +26877,6 @@ pub fn validate_bfv_full_bootstrap_execution_witness_digest_material_bytes_for_a
         )?;
     Ok(material)
 }
-
 /// Return the deterministic arithmetic witness digest for a full-bootstrap claim.
 ///
 /// The digest is the domain-separated hash of the typed governed witness
@@ -27912,7 +26908,6 @@ pub fn bfv_full_bootstrap_execution_witness_digest_v1(
         &digest_material,
     )
 }
-
 /// Reconstruct the public execution proof claim from validated witness material.
 ///
 /// # Errors
@@ -27934,7 +26929,6 @@ pub fn bfv_full_bootstrap_execution_proof_claim_from_witness_material_v1(
         execution_witness_digest,
     })
 }
-
 /// Derive the canonical execution proof statement hash from typed witness material.
 ///
 /// This is the external prover companion to
@@ -27957,7 +26951,6 @@ pub fn bfv_full_bootstrap_execution_proof_statement_digest_from_witness_material
         )?;
     Ok(statement_hash)
 }
-
 fn bfv_full_bootstrap_execution_proof_statement_and_witness_digest_from_witness_material_v1(
     public_key: &BfvPublicKey,
     witness_material: &BfvFullBootstrapExecutionWitnessDigestMaterialV1,
@@ -27982,9 +26975,7 @@ fn bfv_full_bootstrap_execution_proof_statement_and_witness_digest_from_witness_
         claim,
     };
     let bytes = norito::encode_canonical(&statement).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "full-bootstrap execution proof statement encoding failed: {err}"
-        ))
+        invalid!("full-bootstrap execution proof statement encoding failed: {err}")
     })?;
     let statement_hash = Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_DOMAIN,
@@ -27992,7 +26983,6 @@ fn bfv_full_bootstrap_execution_proof_statement_and_witness_digest_from_witness_
     ]);
     Ok((statement_hash, execution_witness_digest))
 }
-
 /// Build typed proof input material for a dedicated BFV full-bootstrap prover.
 ///
 /// # Errors
@@ -28017,7 +27007,6 @@ pub fn bfv_full_bootstrap_execution_proof_input_material_v1(
     validate_bfv_full_bootstrap_execution_proof_input_material_v1(&material)?;
     Ok(material)
 }
-
 /// Validate typed proof input material for a dedicated BFV full-bootstrap prover.
 ///
 /// # Errors
@@ -28028,16 +27017,18 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_v1(
     material: &BfvFullBootstrapExecutionProofInputMaterialV1,
 ) -> Result<(), BfvError> {
     if material.version != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap execution proof input material version {} does not match canonical version {}",
-            material.version, BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_VERSION_V1
-        )));
+            material.version,
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_VERSION_V1
+        ));
     }
     if material.field_count != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap execution proof input material field count {} does not match canonical count {}",
-            material.field_count, BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1
-        )));
+            material.field_count,
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_FIELD_COUNT_V1
+        ));
     }
     validate_bfv_full_bootstrap_execution_proof_input_digest_aliases_v1(material)?;
     let (expected_statement_hash, execution_witness_digest) =
@@ -28062,7 +27053,6 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_v1(
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_execution_proof_input_digest_aliases_v1(
     material: &BfvFullBootstrapExecutionProofInputMaterialV1,
 ) -> Result<(), BfvError> {
@@ -28089,7 +27079,6 @@ fn validate_bfv_full_bootstrap_execution_proof_input_digest_aliases_v1(
     )?;
     validate_bfv_full_bootstrap_execution_proof_input_ciphertext_digest_aliases_v1(material)
 }
-
 fn validate_bfv_full_bootstrap_execution_proof_input_ciphertext_digest_aliases_v1(
     material: &BfvFullBootstrapExecutionProofInputMaterialV1,
 ) -> Result<(), BfvError> {
@@ -28115,7 +27104,6 @@ fn validate_bfv_full_bootstrap_execution_proof_input_ciphertext_digest_aliases_v
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_execution_proof_input_governed_material_digest_aliases_v1(
     material: &BfvFullBootstrapExecutionProofInputMaterialV1,
 ) -> Result<(), BfvError> {
@@ -28149,7 +27137,6 @@ fn validate_bfv_full_bootstrap_execution_proof_input_governed_material_digest_al
         ],
     )
 }
-
 /// Validate execution proof input material against concrete governed artifacts.
 ///
 /// This artifact-aware companion recomputes the embedded witness material from
@@ -28194,7 +27181,6 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_for_artifacts_
     }
     Ok(())
 }
-
 /// Validate execution proof input material against caller-owned public key and artifacts.
 ///
 /// This companion is for external prover handoff paths that keep the public
@@ -28232,7 +27218,6 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_for_public_key
         material,
     )
 }
-
 /// Hash self-consistent typed proof input material for a BFV full-bootstrap execution proof.
 ///
 /// Prefer [`bfv_full_bootstrap_execution_proof_input_material_digest_for_artifacts_v1`]
@@ -28246,16 +27231,13 @@ pub fn bfv_full_bootstrap_execution_proof_input_material_digest_v1(
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_execution_proof_input_material_v1(material)?;
     let bytes = norito::encode_canonical(material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap execution proof input material encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap execution proof input material encoding failed: {err}")
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_INPUT_MATERIAL_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical execution proof input material bytes for a BFV full-bootstrap proof.
 ///
 /// # Errors
@@ -28267,27 +27249,22 @@ pub fn decode_bfv_full_bootstrap_execution_proof_input_material_bytes_v1(
 ) -> Result<BfvFullBootstrapExecutionProofInputMaterialV1, BfvError> {
     let label = "BFV full-bootstrap execution proof input material bytes";
     if bytes.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if bytes.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be all-zero"
-        )));
+        return Err(invalid!("{label} must not be all-zero"));
     }
     let material = norito::decode_canonical::<BfvFullBootstrapExecutionProofInputMaterialV1>(
         bytes,
     )
     .map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "{label} must use canonical v1 bytes containing Norito-encoded execution proof input material: {err}"
-        ))
+        )
     })?;
     validate_bfv_full_bootstrap_execution_proof_input_material_v1(&material)?;
     Ok(material)
 }
-
 /// Hash canonical execution proof input material bytes for a BFV full-bootstrap proof.
 ///
 /// # Errors
@@ -28299,7 +27276,6 @@ pub fn bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_v1(
         bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode and digest canonical execution proof input material bytes.
 ///
 /// This byte-admission helper keeps the decoded proof input material and its
@@ -28314,7 +27290,6 @@ pub fn bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_v
     let material_digest = bfv_full_bootstrap_execution_proof_input_material_digest_v1(&material)?;
     Ok((material, material_digest))
 }
-
 /// Hash typed proof input material after replaying it against governed artifacts.
 ///
 /// # Errors
@@ -28336,7 +27311,6 @@ pub fn bfv_full_bootstrap_execution_proof_input_material_digest_for_artifacts_v1
     )?;
     bfv_full_bootstrap_execution_proof_input_material_digest_v1(material)
 }
-
 /// Hash typed proof input material after caller-public-key and artifact replay.
 ///
 /// # Errors
@@ -28360,7 +27334,6 @@ pub fn bfv_full_bootstrap_execution_proof_input_material_digest_for_public_key_a
     )?;
     bfv_full_bootstrap_execution_proof_input_material_digest_v1(material)
 }
-
 /// Hash canonical proof input material bytes after governed artifact replay.
 ///
 /// # Errors
@@ -28383,7 +27356,6 @@ pub fn bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_for_a
         )?;
     Ok(digest)
 }
-
 /// Decode and digest canonical proof input material bytes after governed artifact replay.
 ///
 /// This helper keeps the decoded proof input material and its digest bound to the
@@ -28417,7 +27389,6 @@ pub fn bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_f
     )?;
     Ok((material, material_digest))
 }
-
 /// Hash canonical proof input material bytes after caller-public-key and artifact replay.
 ///
 /// # Errors
@@ -28442,7 +27413,6 @@ pub fn bfv_full_bootstrap_execution_proof_input_material_digest_from_bytes_for_p
         )?;
     Ok(digest)
 }
-
 /// Decode and digest canonical proof input bytes after caller-public-key and artifact replay.
 ///
 /// # Errors
@@ -28475,7 +27445,6 @@ pub fn bfv_full_bootstrap_execution_proof_input_material_and_digest_from_bytes_f
     )?;
     Ok((material, material_digest))
 }
-
 /// Decode canonical proof input bytes after governed artifact replay.
 ///
 /// This is the decoded-object companion to
@@ -28504,7 +27473,6 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_arti
         )?;
     Ok(material)
 }
-
 /// Decode canonical proof input bytes after caller-public-key and artifact replay.
 ///
 /// This is the decoded-object companion to
@@ -28532,7 +27500,6 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_publ
         )?;
     Ok(material)
 }
-
 /// Decode canonical public-key bytes and proof-input bytes with the proof-input digest.
 ///
 /// # Errors
@@ -28565,7 +27532,6 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_dige
         )?;
     Ok((public_key, proof_input, proof_input_digest))
 }
-
 /// Decode canonical public-key bytes and proof-input bytes with all admitted digests.
 ///
 /// The supplied full-bootstrap key, artifact bundle, and Galois keys are
@@ -28616,7 +27582,6 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_dige
         proof_input_digest,
     ))
 }
-
 /// Decode canonical public-key bytes and execution proof-input bytes together.
 ///
 /// This raw-byte admission helper rejects non-canonical public-key or
@@ -28646,14 +27611,12 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_publ
         )?;
     Ok((public_key, proof_input))
 }
-
 struct BfvFullBootstrapExecutionGovernanceBytesV1 {
     public_key: BfvPublicKey,
     evaluation_keys: BfvEvaluationKeyBundle,
     artifact_bundle: BfvFullBootstrapCircuitArtifactBundleV1,
     galois_keys: Vec<BfvGaloisKey>,
 }
-
 fn decode_bfv_full_bootstrap_execution_governance_bytes_and_digests_after_key_preflight_v1<T>(
     params: &BfvParameters,
     public_key_bytes: &[u8],
@@ -28706,7 +27669,6 @@ fn decode_bfv_full_bootstrap_execution_governance_bytes_and_digests_after_key_pr
         key_preflight_output,
     ))
 }
-
 /// Decode canonical execution proof-input governance bytes together.
 ///
 /// This raw-byte admission helper rejects non-canonical public-key,
@@ -28755,7 +27717,6 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_bytes_for_gove
         proof_input,
     ))
 }
-
 /// Decode canonical proof-input governance bytes together with the proof-input digest.
 ///
 /// This helper returns decoded governance objects, decoded proof input material,
@@ -28817,7 +27778,6 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_dige
         proof_input_digest,
     ))
 }
-
 /// Decode canonical proof-input governance bytes together with their digests.
 ///
 /// This helper returns every decoded governance object, decoded proof input
@@ -28906,7 +27866,6 @@ pub fn validate_bfv_full_bootstrap_execution_proof_input_material_bytes_and_dige
         proof_input_digest,
     ))
 }
-
 /// Build row-major native arithmetic trace material for a BFV full-bootstrap proof input.
 ///
 /// # Errors
@@ -28935,7 +27894,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_material_v1(
     validate_bfv_full_bootstrap_arithmetic_trace_material_v1(&material)?;
     Ok(material)
 }
-
 /// Validate row-major native arithmetic trace material for a BFV full-bootstrap proof input.
 ///
 /// # Errors
@@ -28946,16 +27904,18 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_material_v1(
     material: &BfvFullBootstrapArithmeticTraceMaterialV1,
 ) -> Result<(), BfvError> {
     if material.version != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace material version {} does not match canonical version {}",
-            material.version, BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_VERSION_V1
-        )));
+            material.version,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_VERSION_V1
+        ));
     }
     if material.field_count != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace material field count {} does not match canonical count {}",
-            material.field_count, BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_FIELD_COUNT_V1
-        )));
+            material.field_count,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_FIELD_COUNT_V1
+        ));
     }
     validate_bfv_full_bootstrap_execution_proof_input_material_v1(&material.proof_input_material)?;
     validate_bfv_full_bootstrap_arithmetic_trace_material_digest_aliases_v1(material)?;
@@ -28964,10 +27924,11 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_material_v1(
         &material.arithmetic_trace_profile_digest,
     )?;
     if material.row_width != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace material row width {} does not match canonical width {}",
-            material.row_width, BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1
-        )));
+            material.row_width,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1
+        ));
     }
     let expected_active_rows = material
         .proof_input_material
@@ -28975,38 +27936,41 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_material_v1(
         .params
         .polynomial_degree;
     if material.active_row_count != expected_active_rows {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace material active row count {} does not match polynomial degree {}",
-            material.active_row_count, expected_active_rows
-        )));
+            material.active_row_count,
+            expected_active_rows
+        ));
     }
     if material.active_row_count != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace material active row count {} does not match private row count {}",
-            material.active_row_count, BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1
-        )));
+            material.active_row_count,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1
+        ));
     }
     let expected_padded_rows = canonical_bfv_full_bootstrap_arithmetic_trace_padded_row_count_v1();
     if material.padded_row_count != expected_padded_rows {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace material padded row count {} does not match canonical count {}",
-            material.padded_row_count, expected_padded_rows
-        )));
+            material.padded_row_count,
+            expected_padded_rows
+        ));
     }
     if material.rows.len() != usize::from(material.padded_row_count) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace material row count {} does not match padded row count {}",
             material.rows.len(),
             material.padded_row_count
-        )));
+        ));
     }
     for (row_index, row) in material.rows.iter().enumerate() {
         if row.len() != usize::from(material.row_width) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap arithmetic trace material row {row_index} width {} does not match canonical width {}",
                 row.len(),
                 material.row_width
-            )));
+            ));
         }
         for (column_index, &value) in row.iter().enumerate() {
             validate_bfv_full_bootstrap_goldilocks_field_element_v1(
@@ -29027,7 +27991,6 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_material_v1(
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_arithmetic_trace_material_digest_aliases_v1(
     material: &BfvFullBootstrapArithmeticTraceMaterialV1,
 ) -> Result<(), BfvError> {
@@ -29074,7 +28037,6 @@ fn validate_bfv_full_bootstrap_arithmetic_trace_material_digest_aliases_v1(
         ],
     )
 }
-
 /// Validate that sampled native AIR openings do not expose private BFV trace rows.
 ///
 /// The canonical row-major full-bootstrap trace stores witness material in
@@ -29100,25 +28062,24 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_opening_indices_v1(
     let mut seen_indices = std::collections::BTreeSet::new();
     for &index in opening_indices {
         if !seen_indices.insert(index) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap arithmetic trace opening index {index} is duplicated"
-            )));
+            ));
         }
         if index >= padded_row_count {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap arithmetic trace opening index {index} exceeds padded row count {padded_row_count}"
-            )));
+            ));
         }
         let next_index = (index + 1) % padded_row_count;
         if index < private_row_count || next_index < private_row_count {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap arithmetic trace opening index {index} exposes an unmasked private row"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 /// Validate canonical release verifier opening indices for the BFV full-bootstrap trace.
 ///
 /// This is the verifier-facing companion to
@@ -29135,14 +28096,13 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_v1
 ) -> Result<(), BfvError> {
     let expected_query_count = usize::from(BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1);
     if opening_indices.len() != expected_query_count {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace opening count {} does not match canonical STARK/FRI query count {expected_query_count}",
             opening_indices.len()
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_arithmetic_trace_opening_indices_v1(opening_indices)
 }
-
 /// Derive canonical verifier opening indices for a BFV full-bootstrap AIR transcript.
 ///
 /// The schedule is bound to both the public statement hash and the row-major
@@ -29183,7 +28143,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transc
         &statement_hash,
         &trace_material_digest,
     )?;
-
     let private_row_count = u32::from(BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1);
     let padded_row_count =
         u32::from(canonical_bfv_full_bootstrap_arithmetic_trace_padded_row_count_v1());
@@ -29208,7 +28167,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transc
                 .to_owned(),
         ));
     }
-
     let statement_hash_bytes: [u8; Hash::LENGTH] = statement_hash.into();
     let trace_material_digest_bytes: [u8; Hash::LENGTH] = trace_material_digest.into();
     let query_count_bytes = BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1.to_le_bytes();
@@ -29227,9 +28185,9 @@ pub fn bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transc
     let mut attempt = 0_u32;
     while openings.len() < expected_query_count {
         if attempt >= max_attempts {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap arithmetic trace opening transcript exhausted {max_attempts} attempts"
-            )));
+            ));
         }
         let query_index = u32::try_from(openings.len()).map_err(|_| {
             BfvError::InvalidParameters(
@@ -29267,20 +28225,18 @@ pub fn bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_from_transc
     validate_bfv_full_bootstrap_arithmetic_trace_canonical_opening_indices_v1(&openings)?;
     Ok(openings)
 }
-
 fn validate_bfv_full_bootstrap_statement_trace_transcript_digests_distinct_v1(
     context: &str,
     statement_hash: &Hash,
     trace_material_digest: &Hash,
 ) -> Result<(), BfvError> {
     if statement_hash == trace_material_digest {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{context} statement hash must be distinct from trace material digest"
-        )));
+        ));
     }
     Ok(())
 }
-
 /// Validate transcript-derived canonical verifier opening indices.
 ///
 /// This rejects shape-valid but hand-built or reordered public opening schedules
@@ -29309,7 +28265,6 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_transcript_opening_indices_v
     }
     Ok(())
 }
-
 /// Build one canonical public padding row for the BFV full-bootstrap arithmetic trace.
 ///
 /// Public padding rows carry no ciphertext or witness coefficients. They repeat
@@ -29339,19 +28294,19 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
     let padded_row_count =
         u32::from(canonical_bfv_full_bootstrap_arithmetic_trace_padded_row_count_v1());
     if row_index < private_row_count {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace public padding row index {row_index} is private"
-        )));
+        ));
     }
     if row_index >= padded_row_count {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace public padding row index {row_index} exceeds padded row count {padded_row_count}"
-        )));
+        ));
     }
     if slot_index >= private_row_count {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace public padding slot index {slot_index} exceeds parameter slot capacity {private_row_count}"
-        )));
+        ));
     }
     let row_index_field = bfv_full_bootstrap_goldilocks_field_from_u128_v1(
         "BFV full-bootstrap arithmetic trace public padding row index",
@@ -29378,7 +28333,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
     );
     Ok(row)
 }
-
 /// Validate opened public padding rows from the BFV full-bootstrap arithmetic trace.
 ///
 /// # Errors
@@ -29413,7 +28367,6 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_public_padding_opening_v1(
     )?;
     Ok(())
 }
-
 /// Validate transcript-derived public padding openings for a BFV full-bootstrap AIR proof.
 ///
 /// This helper combines canonical transcript-derived opening schedule replay
@@ -29440,18 +28393,18 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_transcript_public_padding_op
         trace_material_digest,
     )?;
     if opened_rows.len() != opening_indices.len() {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace opened row count {} does not match opening count {}",
             opened_rows.len(),
             opening_indices.len()
-        )));
+        ));
     }
     if opened_next_rows.len() != opening_indices.len() {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace opened next-row count {} does not match opening count {}",
             opened_next_rows.len(),
             opening_indices.len()
-        )));
+        ));
     }
     for (query_index, (&opening_index, (row, next_row))) in opening_indices
         .iter()
@@ -29467,14 +28420,13 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_transcript_public_padding_op
             bound_mode,
         )
         .map_err(|err| {
-            BfvError::InvalidParameters(format!(
+            invalid!(
                 "BFV full-bootstrap arithmetic trace public padding opening query {query_index} failed: {err}"
-            ))
+            )
         })?;
     }
     Ok(())
 }
-
 /// Build typed transcript-derived public opening material.
 ///
 /// # Errors
@@ -29534,7 +28486,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_from_transcri
     validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(&material)?;
     Ok(material)
 }
-
 /// Validate typed transcript-derived public opening material.
 ///
 /// # Errors
@@ -29545,53 +28496,56 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(
     material: &BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1,
 ) -> Result<(), BfvError> {
     if material.version != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace public opening material version {} does not match canonical version {}",
             material.version,
             BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_VERSION_V1
-        )));
+        ));
     }
     if material.field_count
         != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace public opening material field count {} does not match canonical count {}",
             material.field_count,
             BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_FIELD_COUNT_V1
-        )));
+        ));
     }
     if material.query_count != BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace public opening material query count {} does not match canonical count {}",
-            material.query_count, BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1
-        )));
+            material.query_count,
+            BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1
+        ));
     }
     if material.row_width != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace public opening material row width {} does not match canonical width {}",
-            material.row_width, BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1
-        )));
+            material.row_width,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1
+        ));
     }
     let expected_padded_row_count =
         canonical_bfv_full_bootstrap_arithmetic_trace_padded_row_count_v1();
     if material.padded_row_count != expected_padded_row_count {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace public opening material padded row count {} does not match canonical count {expected_padded_row_count}",
             material.padded_row_count
-        )));
+        ));
     }
     if material.private_row_count != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace public opening material private row count {} does not match canonical count {}",
-            material.private_row_count, BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1
-        )));
+            material.private_row_count,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1
+        ));
     }
     if material.opening_indices.len() != usize::from(material.query_count) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace public opening material opening count {} does not match query count {}",
             material.opening_indices.len(),
             material.query_count
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_arithmetic_trace_transcript_public_padding_openings_v1(
         &material.opening_indices,
@@ -29603,7 +28557,6 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(
         material.bound_mode,
     )
 }
-
 /// Build typed public opening material for a validated arithmetic trace.
 ///
 /// # Errors
@@ -29628,7 +28581,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_for_trace_v1(
             .bound_mode,
     )
 }
-
 /// Validate typed public opening material against its source trace material.
 ///
 /// # Errors
@@ -29654,7 +28606,6 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_for_
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_trace_digest_aliases_v1(
     trace_material: &BfvFullBootstrapArithmeticTraceMaterialV1,
     material: &BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1,
@@ -29700,7 +28651,6 @@ fn validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_trace_di
         ],
     )
 }
-
 /// Hash typed transcript-derived public opening material.
 ///
 /// # Errors
@@ -29711,16 +28661,15 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_v1(
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(material)?;
     let bytes = norito::encode_canonical(material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "BFV full-bootstrap arithmetic trace public opening material encoding failed: {err}"
-        ))
+        )
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical transcript-derived public opening material bytes.
 ///
 /// # Errors
@@ -29732,26 +28681,21 @@ pub fn decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_
 ) -> Result<BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1, BfvError> {
     let label = "BFV full-bootstrap arithmetic trace public opening material bytes";
     if bytes.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if bytes.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be all-zero"
-        )));
+        return Err(invalid!("{label} must not be all-zero"));
     }
     let material =
         norito::decode_canonical::<BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1>(bytes)
             .map_err(|err| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "{label} must use canonical v1 bytes containing Norito-encoded public opening material: {err}"
-                ))
+                )
             })?;
     validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(&material)?;
     Ok(material)
 }
-
 /// Hash canonical transcript-derived public opening material bytes.
 ///
 /// # Errors
@@ -29765,7 +28709,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_b
         )?;
     Ok(digest)
 }
-
 /// Decode and digest canonical transcript-derived public opening material bytes.
 ///
 /// This byte-admission helper keeps the decoded public opening material and
@@ -29782,7 +28725,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_and_digest_fr
         bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_v1(&material)?;
     Ok((material, material_digest))
 }
-
 /// Hash typed public opening material after checking it belongs to a trace.
 ///
 /// # Errors
@@ -29797,7 +28739,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_for_tr
     )?;
     bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_v1(material)
 }
-
 /// Hash canonical public opening material bytes after checking they belong to a trace.
 ///
 /// # Errors
@@ -29814,7 +28755,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_b
         )?;
     Ok(material_digest)
 }
-
 /// Decode and digest canonical public opening bytes after checking they belong to a trace.
 ///
 /// This helper keeps the decoded public opening material and its digest bound to
@@ -29839,7 +28779,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_and_digest_fr
     )?;
     Ok((material, material_digest))
 }
-
 /// Decode canonical public opening bytes after checking they belong to a trace.
 ///
 /// This is the decoded-object companion to
@@ -29862,7 +28801,6 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_byte
     )?;
     Ok(material)
 }
-
 fn validate_bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
     row_label: &str,
     row: &[u64],
@@ -29878,13 +28816,12 @@ fn validate_bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
         bound_mode,
     )?;
     if row != expected.as_slice() {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace public padding {row_label} does not match canonical row {row_index}"
-        )));
+        ));
     }
     Ok(())
 }
-
 /// Hash externally held row-major native arithmetic trace material.
 ///
 /// # Errors
@@ -29895,16 +28832,13 @@ pub fn bfv_full_bootstrap_arithmetic_trace_material_digest_v1(
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_arithmetic_trace_material_v1(material)?;
     let bytes = norito::encode_canonical(material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap arithmetic trace material encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap arithmetic trace material encoding failed: {err}")
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_MATERIAL_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical row-major native arithmetic trace material bytes.
 ///
 /// # Errors
@@ -29916,25 +28850,20 @@ pub fn decode_bfv_full_bootstrap_arithmetic_trace_material_bytes_v1(
 ) -> Result<BfvFullBootstrapArithmeticTraceMaterialV1, BfvError> {
     let label = "BFV full-bootstrap arithmetic trace material bytes";
     if bytes.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if bytes.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be all-zero"
-        )));
+        return Err(invalid!("{label} must not be all-zero"));
     }
     let material = norito::decode_canonical::<BfvFullBootstrapArithmeticTraceMaterialV1>(bytes)
         .map_err(|err| {
-            BfvError::InvalidParameters(format!(
+            invalid!(
                 "{label} must use canonical v1 bytes containing Norito-encoded arithmetic trace material: {err}"
-            ))
+            )
         })?;
     validate_bfv_full_bootstrap_arithmetic_trace_material_v1(&material)?;
     Ok(material)
 }
-
 /// Hash canonical row-major native arithmetic trace material bytes.
 ///
 /// # Errors
@@ -29945,7 +28874,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_material_digest_from_bytes_v1(
     let (_, digest) = bfv_full_bootstrap_arithmetic_trace_material_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode and digest canonical row-major native arithmetic trace material bytes.
 ///
 /// This byte-admission helper keeps the decoded trace material and its
@@ -29961,7 +28889,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_material_and_digest_from_bytes_v1(
     let material_digest = bfv_full_bootstrap_arithmetic_trace_material_digest_v1(&material)?;
     Ok((material, material_digest))
 }
-
 /// Hash canonical arithmetic trace material bytes after binding them to proof input material.
 ///
 /// # Errors
@@ -29979,7 +28906,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_material_digest_from_bytes_for_proof_
         )?;
     Ok(material_digest)
 }
-
 /// Decode and digest canonical arithmetic trace material bytes after proof-input replay.
 ///
 /// This helper keeps the decoded trace material and its digest bound to the same
@@ -30005,7 +28931,6 @@ pub fn bfv_full_bootstrap_arithmetic_trace_material_and_digest_from_bytes_for_pr
     }
     Ok((material, material_digest))
 }
-
 /// Decode canonical arithmetic trace material bytes after binding them to proof input material.
 ///
 /// This is the decoded-object companion to
@@ -30029,27 +28954,22 @@ pub fn validate_bfv_full_bootstrap_arithmetic_trace_material_bytes_for_proof_inp
         )?;
     Ok(material)
 }
-
 #[cfg(test)]
 fn bfv_full_bootstrap_goldilocks_add_v1(left: u64, right: u64) -> u64 {
     bfv_full_bootstrap_goldilocks_reduce_u128_v1(u128::from(left) + u128::from(right))
 }
-
 fn bfv_full_bootstrap_goldilocks_sub_v1(left: u64, right: u64) -> u64 {
     let modulus = u128::from(BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1);
     bfv_full_bootstrap_goldilocks_reduce_u128_v1(u128::from(left) + modulus - u128::from(right))
 }
-
 fn bfv_full_bootstrap_goldilocks_mul_v1(left: u64, right: u64) -> u64 {
     bfv_full_bootstrap_goldilocks_reduce_u128_v1(u128::from(left) * u128::from(right))
 }
-
 fn bfv_full_bootstrap_goldilocks_reduce_u128_v1(value: u128) -> u64 {
     let modulus = u128::from(BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1);
     u64::try_from(value % modulus)
         .expect("Goldilocks reduction is strictly smaller than the u64 modulus")
 }
-
 fn bfv_full_bootstrap_goldilocks_reduce_le_bytes_v1(bytes: &[u8]) -> u64 {
     let modulus = u128::from(BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1);
     let mut reduced = 0_u128;
@@ -30058,7 +28978,6 @@ fn bfv_full_bootstrap_goldilocks_reduce_le_bytes_v1(bytes: &[u8]) -> u64 {
     }
     u64::try_from(reduced).expect("Goldilocks reduction is strictly smaller than the u64 modulus")
 }
-
 fn bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
     statement_hash: Hash,
     trace_material_digest: Hash,
@@ -30109,7 +29028,6 @@ fn bfv_full_bootstrap_arithmetic_air_composition_challenge_v1(
     let reduced = bfv_full_bootstrap_goldilocks_reduce_le_bytes_v1(&challenge);
     Ok(if reduced == 0 { 1 } else { reduced })
 }
-
 fn bfv_full_bootstrap_arithmetic_air_composition_values_for_rows_v1(
     trace_material: &BfvFullBootstrapArithmeticTraceMaterialV1,
     rows: &[Vec<u64>],
@@ -30118,11 +29036,11 @@ fn bfv_full_bootstrap_arithmetic_air_composition_values_for_rows_v1(
         &trace_material.proof_input_material,
     )?;
     if rows.len() != usize::from(trace_material.padded_row_count) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic AIR composition row count {} does not match padded row count {}",
             rows.len(),
             trace_material.padded_row_count
-        )));
+        ));
     }
     let expected_rows =
         bfv_full_bootstrap_arithmetic_trace_rows_v1(&trace_material.proof_input_material)?;
@@ -30139,16 +29057,16 @@ fn bfv_full_bootstrap_arithmetic_air_composition_values_for_rows_v1(
         .enumerate()
         .map(|(row_index, (row, expected_row))| {
             if row.len() != usize::from(trace_material.row_width) {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "BFV full-bootstrap arithmetic AIR composition row {row_index} width {} does not match trace width {}",
                     row.len(),
                     trace_material.row_width
-                )));
+                ));
             }
             if expected_row.len() != row.len() {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "BFV full-bootstrap arithmetic AIR composition expected row {row_index} width mismatch"
-                )));
+                ));
             }
             let mut first_nonzero_composition_value = None;
             for (column_index, (&actual, &expected)) in
@@ -30180,7 +29098,6 @@ fn bfv_full_bootstrap_arithmetic_air_composition_values_for_rows_v1(
         })
         .collect()
 }
-
 /// Evaluate first-release BFV full-bootstrap arithmetic AIR composition values.
 ///
 /// # Errors
@@ -30196,7 +29113,6 @@ pub fn bfv_full_bootstrap_arithmetic_air_composition_values_v1(
         &trace_material.rows,
     )
 }
-
 /// Build first-release AIR evaluation material for a BFV full-bootstrap trace.
 ///
 /// # Errors
@@ -30226,7 +29142,6 @@ pub fn bfv_full_bootstrap_arithmetic_air_evaluation_material_v1(
     )?;
     Ok(material)
 }
-
 /// Validate first-release BFV full-bootstrap AIR evaluation material.
 ///
 /// # Errors
@@ -30243,29 +29158,30 @@ pub fn validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_v1(
     )?;
     let expected_row_count = canonical_bfv_full_bootstrap_arithmetic_trace_padded_row_count_v1();
     if material.trace_row_count != expected_row_count {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic AIR evaluation material trace row count {} does not match canonical count {expected_row_count}",
             material.trace_row_count
-        )));
+        ));
     }
     if material.trace_row_width != BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic AIR evaluation material trace row width {} does not match canonical width {}",
-            material.trace_row_width, BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1
-        )));
+            material.trace_row_width,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1
+        ));
     }
     if material.composition_value_count != expected_row_count {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic AIR evaluation material composition value count {} does not match canonical count {expected_row_count}",
             material.composition_value_count
-        )));
+        ));
     }
     if material.composition_values.len() != usize::from(material.composition_value_count) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic AIR evaluation material composition value length {} does not match count {}",
             material.composition_values.len(),
             material.composition_value_count
-        )));
+        ));
     }
     for (index, &value) in material.composition_values.iter().enumerate() {
         validate_bfv_full_bootstrap_goldilocks_field_element_v1(
@@ -30273,34 +29189,33 @@ pub fn validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_v1(
             value,
         )?;
         if value != 0 {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap arithmetic AIR evaluation composition value {index} must be zero"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_layout_v1(
     material: &BfvFullBootstrapArithmeticAirEvaluationMaterialV1,
 ) -> Result<(), BfvError> {
     if material.version != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic AIR evaluation material version {} does not match canonical version {}",
-            material.version, BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_VERSION_V1
-        )));
+            material.version,
+            BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_VERSION_V1
+        ));
     }
     if material.field_count != BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic AIR evaluation material field count {} does not match canonical count {}",
             material.field_count,
             BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_FIELD_COUNT_V1
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_aliases_v1(
     material: &BfvFullBootstrapArithmeticAirEvaluationMaterialV1,
 ) -> Result<(), BfvError> {
@@ -30318,7 +29233,6 @@ fn validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_aliases
         ],
     )
 }
-
 /// Validate AIR evaluation material against the row-major trace it evaluates.
 ///
 /// # Errors
@@ -30365,7 +29279,6 @@ pub fn validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_for_trace_
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_cross_layer_digest_aliases_v1(
     trace_material: &BfvFullBootstrapArithmeticTraceMaterialV1,
     evaluation_material: &BfvFullBootstrapArithmeticAirEvaluationMaterialV1,
@@ -30421,7 +29334,6 @@ fn validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_cross_layer_di
         ],
     )
 }
-
 /// Hash shape-valid typed AIR evaluation material for a BFV full-bootstrap trace.
 ///
 /// Prefer [`bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_for_trace_v1`]
@@ -30435,16 +29347,13 @@ pub fn bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_v1(
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_v1(material)?;
     let bytes = norito::encode_canonical(material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap arithmetic AIR evaluation material encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap arithmetic AIR evaluation material encoding failed: {err}")
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_EVALUATION_MATERIAL_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical typed AIR evaluation material bytes for a BFV full-bootstrap trace.
 ///
 /// # Errors
@@ -30456,26 +29365,21 @@ pub fn decode_bfv_full_bootstrap_arithmetic_air_evaluation_material_bytes_v1(
 ) -> Result<BfvFullBootstrapArithmeticAirEvaluationMaterialV1, BfvError> {
     let label = "BFV full-bootstrap arithmetic AIR evaluation material bytes";
     if bytes.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if bytes.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be all-zero"
-        )));
+        return Err(invalid!("{label} must not be all-zero"));
     }
     let material =
         norito::decode_canonical::<BfvFullBootstrapArithmeticAirEvaluationMaterialV1>(bytes)
             .map_err(|err| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "{label} must use canonical v1 bytes containing Norito-encoded AIR evaluation material: {err}"
-                ))
+                )
             })?;
     validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_v1(&material)?;
     Ok(material)
 }
-
 /// Hash canonical typed AIR evaluation material bytes for a BFV full-bootstrap trace.
 ///
 /// # Errors
@@ -30487,7 +29391,6 @@ pub fn bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_from_bytes_v
         bfv_full_bootstrap_arithmetic_air_evaluation_material_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode and digest canonical typed AIR evaluation material bytes.
 ///
 /// This byte-admission helper keeps the decoded AIR evaluation material and
@@ -30503,7 +29406,6 @@ pub fn bfv_full_bootstrap_arithmetic_air_evaluation_material_and_digest_from_byt
         bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_v1(&material)?;
     Ok((material, material_digest))
 }
-
 /// Hash typed AIR evaluation material after binding it to a BFV full-bootstrap trace.
 ///
 /// # Errors
@@ -30519,7 +29421,6 @@ pub fn bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_for_trace_v1
     )?;
     bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_v1(material)
 }
-
 /// Hash canonical AIR evaluation material bytes after binding them to a trace.
 ///
 /// # Errors
@@ -30536,7 +29437,6 @@ pub fn bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_from_bytes_f
         )?;
     Ok(material_digest)
 }
-
 /// Decode and digest canonical AIR evaluation bytes after binding them to a trace.
 ///
 /// This helper keeps the decoded AIR evaluation material and its digest bound to
@@ -30559,7 +29459,6 @@ pub fn bfv_full_bootstrap_arithmetic_air_evaluation_material_and_digest_from_byt
     )?;
     Ok((material, material_digest))
 }
-
 /// Decode canonical AIR evaluation bytes after binding them to a trace.
 ///
 /// This is the decoded-object companion to
@@ -30582,7 +29481,6 @@ pub fn validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_bytes_for_
         )?;
     Ok(material)
 }
-
 /// Build typed release-prover input material for a BFV full-bootstrap proof.
 ///
 /// # Errors
@@ -30637,21 +29535,22 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_v1(
     validate_bfv_full_bootstrap_execution_prover_input_material_v1(&material)?;
     Ok(material)
 }
-
 fn validate_bfv_full_bootstrap_execution_prover_input_layout_and_trace_v1(
     material: &BfvFullBootstrapExecutionProverInputMaterialV1,
 ) -> Result<&BfvFullBootstrapCircuitMaterialV1, BfvError> {
     if material.version != BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap execution prover input material version {} does not match canonical version {}",
-            material.version, BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_VERSION_V1
-        )));
+            material.version,
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_VERSION_V1
+        ));
     }
     if material.field_count != BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap execution prover input material field count {} does not match canonical count {}",
-            material.field_count, BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_FIELD_COUNT_V1
-        )));
+            material.field_count,
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_FIELD_COUNT_V1
+        ));
     }
     validate_bfv_full_bootstrap_execution_proof_input_material_v1(&material.proof_input_material)?;
     validate_bfv_full_bootstrap_arithmetic_trace_material_v1(&material.arithmetic_trace_material)?;
@@ -30673,7 +29572,6 @@ fn validate_bfv_full_bootstrap_execution_prover_input_layout_and_trace_v1(
     }
     full_bootstrap_material_from_key(&material.proof_input_material.witness_material.bootstrap_key)
 }
-
 fn validate_bfv_full_bootstrap_execution_prover_input_digest_aliases_v1(
     material: &BfvFullBootstrapExecutionProverInputMaterialV1,
 ) -> Result<(), BfvError> {
@@ -30776,7 +29674,6 @@ fn validate_bfv_full_bootstrap_execution_prover_input_digest_aliases_v1(
         &proof_input_public_key_digest,
     )
 }
-
 fn validate_bfv_full_bootstrap_execution_prover_input_verifier_key_profile_digest_aliases_v1(
     material: &BfvFullBootstrapExecutionProverInputMaterialV1,
     proof_input_public_key_digest: &Hash,
@@ -30874,7 +29771,6 @@ fn validate_bfv_full_bootstrap_execution_prover_input_verifier_key_profile_diges
         ],
     )
 }
-
 fn validate_bfv_full_bootstrap_execution_prover_input_embedded_material_digest_aliases_v1(
     material: &BfvFullBootstrapExecutionProverInputMaterialV1,
 ) -> Result<(), BfvError> {
@@ -30917,7 +29813,6 @@ fn validate_bfv_full_bootstrap_execution_prover_input_embedded_material_digest_a
         ],
     )
 }
-
 /// Validate typed release-prover input material for a BFV full-bootstrap proof.
 ///
 /// # Errors
@@ -31007,7 +29902,6 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_v1(
     )?;
     Ok(())
 }
-
 /// Validate release-prover input material against concrete governed artifacts.
 ///
 /// This artifact-aware companion recomputes the execution witness trace from
@@ -31080,7 +29974,6 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_for_artifacts
     }
     Ok(())
 }
-
 /// Validate release-prover input material against caller-owned public key and artifacts.
 ///
 /// This companion is for external prover handoff paths that keep the public
@@ -31116,7 +30009,6 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_for_public_ke
         material,
     )
 }
-
 /// Hash self-consistent typed release-prover input material for a BFV full-bootstrap proof.
 ///
 /// Prefer [`bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v1`]
@@ -31130,16 +30022,13 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_digest_v1(
 ) -> Result<Hash, BfvError> {
     validate_bfv_full_bootstrap_execution_prover_input_material_v1(material)?;
     let bytes = norito::encode_canonical(material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap execution prover input material encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap execution prover input material encoding failed: {err}")
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_EXECUTION_PROVER_INPUT_MATERIAL_DIGEST_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Decode canonical release-prover input material bytes for a BFV full-bootstrap proof.
 ///
 /// # Errors
@@ -31151,26 +30040,21 @@ pub fn decode_bfv_full_bootstrap_execution_prover_input_material_bytes_v1(
 ) -> Result<BfvFullBootstrapExecutionProverInputMaterialV1, BfvError> {
     let label = "BFV full-bootstrap execution prover input material bytes";
     if bytes.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if bytes.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be all-zero"
-        )));
+        return Err(invalid!("{label} must not be all-zero"));
     }
     let material =
         norito::decode_canonical::<BfvFullBootstrapExecutionProverInputMaterialV1>(bytes)
             .map_err(|err| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "{label} must use canonical v1 bytes containing Norito-encoded execution prover input material: {err}"
-                ))
+                )
             })?;
     validate_bfv_full_bootstrap_execution_prover_input_material_v1(&material)?;
     Ok(material)
 }
-
 /// Hash canonical release-prover input material bytes for a BFV full-bootstrap proof.
 ///
 /// # Errors
@@ -31182,7 +30066,6 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_digest_from_bytes_v1(
         bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_v1(bytes)?;
     Ok(digest)
 }
-
 /// Decode and digest canonical release-prover input material bytes.
 ///
 /// This byte-admission helper keeps the decoded prover input material and its
@@ -31197,7 +30080,6 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_
     let material_digest = bfv_full_bootstrap_execution_prover_input_material_digest_v1(&material)?;
     Ok((material, material_digest))
 }
-
 /// Hash typed release-prover input material after replaying it against governed artifacts.
 ///
 /// # Errors
@@ -31219,7 +30101,6 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_digest_for_artifacts_v
     )?;
     bfv_full_bootstrap_execution_prover_input_material_digest_v1(material)
 }
-
 /// Hash typed release-prover input material after caller-public-key and artifact replay.
 ///
 /// # Errors
@@ -31243,7 +30124,6 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_digest_for_public_key_
     )?;
     bfv_full_bootstrap_execution_prover_input_material_digest_v1(material)
 }
-
 /// Hash canonical release-prover input material bytes after governed artifact replay.
 ///
 /// # Errors
@@ -31266,7 +30146,6 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_digest_from_bytes_for_
         )?;
     Ok(digest)
 }
-
 /// Decode and digest canonical release-prover input bytes after governed artifact replay.
 ///
 /// This helper keeps the decoded prover input material and its digest bound to
@@ -31301,7 +30180,6 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_
     )?;
     Ok((material, material_digest))
 }
-
 /// Hash canonical release-prover input material bytes after caller-public-key and artifact replay.
 ///
 /// # Errors
@@ -31326,7 +30204,6 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_digest_from_bytes_for_
         )?;
     Ok(digest)
 }
-
 /// Decode and digest canonical release-prover input bytes after caller-public-key and artifact replay.
 ///
 /// # Errors
@@ -31359,7 +30236,6 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_and_digest_from_bytes_
     )?;
     Ok((material, material_digest))
 }
-
 /// Decode canonical release-prover input bytes after governed artifact replay.
 ///
 /// This is the decoded-object companion to
@@ -31389,7 +30265,6 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_art
         )?;
     Ok(material)
 }
-
 /// Decode canonical release-prover input bytes after caller-public-key and artifact replay.
 ///
 /// This is the decoded-object companion to
@@ -31417,7 +30292,6 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_pub
         )?;
     Ok(material)
 }
-
 /// Decode canonical public-key bytes and release-prover input bytes with the prover-input digest.
 ///
 /// # Errors
@@ -31450,7 +30324,6 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_dig
         )?;
     Ok((public_key, prover_input, prover_input_digest))
 }
-
 /// Decode canonical public-key bytes and release-prover input bytes with all admitted digests.
 ///
 /// The supplied full-bootstrap key, artifact bundle, and Galois keys are
@@ -31501,7 +30374,6 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_dig
         prover_input_digest,
     ))
 }
-
 /// Decode canonical public-key bytes and release-prover input bytes together.
 ///
 /// This raw-byte admission helper rejects non-canonical public-key or
@@ -31532,7 +30404,6 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_pub
         )?;
     Ok((public_key, prover_input))
 }
-
 /// Decode canonical release-prover input governance bytes together.
 ///
 /// This raw-byte admission helper rejects non-canonical public-key,
@@ -31582,7 +30453,6 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_bytes_for_gov
         prover_input,
     ))
 }
-
 /// Decode canonical release-prover governance bytes together with the prover-input digest.
 ///
 /// This helper returns decoded governance objects, decoded release-prover input
@@ -31644,7 +30514,6 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_dig
         prover_input_digest,
     ))
 }
-
 /// Decode canonical release-prover governance bytes together with their digests.
 ///
 /// This helper returns every decoded governance object, the decoded
@@ -31733,7 +30602,6 @@ pub fn validate_bfv_full_bootstrap_execution_prover_input_material_bytes_and_dig
         prover_input_digest,
     ))
 }
-
 #[allow(clippy::too_many_lines)]
 fn bfv_full_bootstrap_arithmetic_trace_rows_v1(
     proof_input_material: &BfvFullBootstrapExecutionProofInputMaterialV1,
@@ -31745,9 +30613,9 @@ fn bfv_full_bootstrap_arithmetic_trace_rows_v1(
     let padded_rows =
         usize::from(canonical_bfv_full_bootstrap_arithmetic_trace_padded_row_count_v1());
     if active_rows > padded_rows {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap arithmetic trace active rows {active_rows} exceed padded STARK rows {padded_rows}"
-        )));
+        ));
     }
     let statement_limbs =
         bfv_full_bootstrap_hash_goldilocks_limbs_v1(proof_input_material.statement_hash);
@@ -31890,17 +30758,16 @@ fn bfv_full_bootstrap_arithmetic_trace_rows_v1(
             );
         }
         if row.len() != usize::from(BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap arithmetic trace row {row_index} has width {} instead of {}",
                 row.len(),
                 BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1
-            )));
+            ));
         }
         rows.push(row);
     }
     Ok(rows)
 }
-
 fn push_bfv_full_bootstrap_ciphertext_trace_coefficients_v1(
     row: &mut Vec<u64>,
     label: &str,
@@ -31917,7 +30784,6 @@ fn push_bfv_full_bootstrap_ciphertext_trace_coefficients_v1(
     )?);
     Ok(())
 }
-
 fn bfv_full_bootstrap_bound_mode_goldilocks_field_v1(
     mode: BfvFullBootstrapExecutionProofBoundModeV1,
 ) -> u64 {
@@ -31926,7 +30792,6 @@ fn bfv_full_bootstrap_bound_mode_goldilocks_field_v1(
         BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise => 1,
     }
 }
-
 fn bfv_full_bootstrap_hash_goldilocks_limbs_v1(hash: Hash) -> [u64; 4] {
     let bytes: [u8; Hash::LENGTH] = hash.into();
     let mut limbs = [0_u64; 4];
@@ -31939,7 +30804,6 @@ fn bfv_full_bootstrap_hash_goldilocks_limbs_v1(hash: Hash) -> [u64; 4] {
     }
     limbs
 }
-
 /// Return the statement-bound native BFV full-bootstrap STARK/AIR domain tag.
 #[must_use]
 pub fn bfv_full_bootstrap_native_stark_air_domain_tag_v1(statement_hash: Hash) -> String {
@@ -31951,35 +30815,29 @@ pub fn bfv_full_bootstrap_native_stark_air_domain_tag_v1(statement_hash: Hash) -
     .into();
     hex::encode(domain_tag_digest)
 }
-
 fn bfv_full_bootstrap_goldilocks_field_from_u128_v1(
     label: &str,
     value: u128,
 ) -> Result<u64, BfvError> {
     if value >= u128::from(BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} value {value} cannot be injectively encoded in the native Goldilocks field"
-        )));
+        ));
     }
-    u64::try_from(value).map_err(|_| {
-        BfvError::InvalidParameters(format!(
-            "{label} value {value} exceeds native u64 field element range"
-        ))
-    })
+    u64::try_from(value)
+        .map_err(|_| invalid!("{label} value {value} exceeds native u64 field element range"))
 }
-
 fn validate_bfv_full_bootstrap_goldilocks_field_element_v1(
     label: &str,
     value: u64,
 ) -> Result<(), BfvError> {
     if value >= BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} is not a canonical native Goldilocks field element"
-        )));
+        ));
     }
     Ok(())
 }
-
 /// Build a full-bootstrap execution proof claim with its deterministic witness digest.
 ///
 /// # Errors
@@ -32023,7 +30881,6 @@ pub fn bfv_full_bootstrap_execution_proof_claim_with_witness_digest_v1(
         ..claim
     })
 }
-
 /// Return the statement digest after verifying the claim's execution witness digest.
 ///
 /// # Errors
@@ -32058,7 +30915,6 @@ pub fn bfv_full_bootstrap_execution_proof_statement_digest_with_witness_v1(
         claim,
     )
 }
-
 /// Return the public statement digest for one claimed full-bootstrap execution.
 ///
 /// This statement is the proof-facing binding for a concrete input/output
@@ -32165,16 +31021,13 @@ pub fn bfv_full_bootstrap_execution_proof_statement_digest_v1(
         claim: claim.clone(),
     };
     let bytes = norito::encode_canonical(&statement).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "full-bootstrap execution proof statement encoding failed: {err}"
-        ))
+        invalid!("full-bootstrap execution proof statement encoding failed: {err}")
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 /// Apply a typed full-bootstrap packed-slot linear transform through registered exact RNS paths.
 ///
 /// This evaluates the diagonal transform schema used by coefficient-to-slot
@@ -32224,7 +31077,6 @@ pub(crate) fn apply_bfv_full_bootstrap_linear_transform_registered_rns_exact_v1(
         )
     })
 }
-
 /// Apply a typed full-bootstrap packed-slot linear transform through bounded-noise RNS paths.
 ///
 /// # Errors
@@ -32271,7 +31123,6 @@ pub(crate) fn apply_bfv_full_bootstrap_linear_transform_bounded_noise_registered
         )
     })
 }
-
 /// Return the exact residual-multiple bound for a typed full-bootstrap linear transform.
 ///
 /// The helper mirrors [`apply_bfv_full_bootstrap_linear_transform_registered_rns_exact_v1`]:
@@ -32322,7 +31173,6 @@ pub(crate) fn bfv_full_bootstrap_linear_transform_output_residual_multiple_bound
         bounds => bfv_add_output_residual_multiple_bound(params, bounds),
     }
 }
-
 /// Return the bounded-noise bound for a typed full-bootstrap linear transform.
 ///
 /// This is the rounded BFV counterpart to
@@ -32388,7 +31238,6 @@ pub(crate) fn bfv_full_bootstrap_linear_transform_bounded_noise_output_bound_v1(
         bounds => bfv_add_bounded_noise_output_bound(params, bounds),
     }
 }
-
 /// Apply a typed full-bootstrap blind rotation through registered exact RNS paths.
 ///
 /// This consumes the governed selector schedule carried by
@@ -32417,10 +31266,10 @@ pub(crate) fn apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1(
             .iter()
             .find(|galois_key| galois_key.automorphism_power == step.automorphism_power)
             .ok_or_else(|| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "missing BFV Galois key for full-bootstrap blind-rotation automorphism power {}",
                     step.automorphism_power
-                ))
+                )
             })?;
         let transformed = apply_galois_automorphism_ciphertext_rns_exact(
             params, &rns_chain, galois_key, ciphertext,
@@ -32444,7 +31293,6 @@ pub(crate) fn apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1(
         )
     })
 }
-
 /// Apply a typed full-bootstrap blind rotation through bounded-noise RNS paths.
 ///
 /// The evaluator and key-switch decomposition chains are derived from the
@@ -32484,10 +31332,10 @@ pub(crate) fn apply_bfv_full_bootstrap_blind_rotation_bounded_noise_registered_r
             .iter()
             .find(|galois_key| galois_key.automorphism_power == step.automorphism_power)
             .ok_or_else(|| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "missing BFV Galois key for full-bootstrap bounded-noise blind-rotation automorphism power {}",
                     step.automorphism_power
-                ))
+                )
             })?;
         let transformed =
             apply_galois_automorphism_ciphertext_bounded_noise_rns_basis_extension_exact(
@@ -32517,7 +31365,6 @@ pub(crate) fn apply_bfv_full_bootstrap_blind_rotation_bounded_noise_registered_r
         )
     })
 }
-
 /// Return the exact residual-multiple bound for typed full-bootstrap blind rotation.
 ///
 /// This mirrors [`apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1`]:
@@ -32554,10 +31401,10 @@ pub(crate) fn bfv_full_bootstrap_blind_rotation_output_residual_multiple_bound_v
             .iter()
             .find(|galois_key| galois_key.automorphism_power == step.automorphism_power)
             .ok_or_else(|| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "missing BFV Galois key for full-bootstrap blind-rotation bound automorphism power {}",
                     step.automorphism_power
-                ))
+                )
             })?;
         let switched_bound =
             bfv_galois_key_switch_output_residual_multiple_bound(params, galois_key, input_bound)?;
@@ -32577,7 +31424,6 @@ pub(crate) fn bfv_full_bootstrap_blind_rotation_output_residual_multiple_bound_v
         bounds => bfv_add_output_residual_multiple_bound(params, bounds),
     }
 }
-
 /// Return the bounded-noise bound for typed full-bootstrap blind rotation.
 ///
 /// This is the rounded BFV counterpart to
@@ -32624,10 +31470,10 @@ pub(crate) fn bfv_full_bootstrap_blind_rotation_bounded_noise_output_bound_v1(
             .iter()
             .find(|galois_key| galois_key.automorphism_power == step.automorphism_power)
             .ok_or_else(|| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "missing BFV Galois key for full-bootstrap bounded-noise blind-rotation bound automorphism power {}",
                     step.automorphism_power
-                ))
+                )
             })?;
         let switched_bound = bfv_galois_key_switch_bounded_noise_output_bound(
             params,
@@ -32650,7 +31496,6 @@ pub(crate) fn bfv_full_bootstrap_blind_rotation_bounded_noise_output_bound_v1(
         bounds => bfv_add_bounded_noise_output_bound(params, bounds),
     }
 }
-
 /// Validate the proof-facing profile bound by full-bootstrap material.
 ///
 /// This is the verifier admission companion to
@@ -32706,7 +31551,6 @@ pub fn validate_bfv_full_bootstrap_material_proof_profile_v1(
     }
     Ok(())
 }
-
 /// Refresh a ciphertext with round zero from a public bootstrap key.
 ///
 /// # Errors
@@ -32719,7 +31563,6 @@ pub fn bootstrap_ciphertext(
 ) -> Result<BfvCiphertext, BfvError> {
     bootstrap_ciphertext_round(params, bootstrap_key, ciphertext, 0)
 }
-
 /// Refresh a ciphertext with one indexed public bootstrap-key round.
 ///
 /// # Errors
@@ -32749,7 +31592,6 @@ pub fn bootstrap_ciphertext_round(
         bootstrap_round_refresh(bootstrap_key, round_index)?,
     )
 }
-
 /// Refresh a ciphertext with consecutive public bootstrap-key rounds.
 ///
 /// The requested round count is validated against the key before the first
@@ -32787,7 +31629,6 @@ pub fn bootstrap_ciphertext_rounds(
     }
     Ok(refreshed)
 }
-
 /// Refresh a rounded BFV ciphertext with round zero from a bounded-noise bootstrap key.
 ///
 /// # Errors
@@ -32800,7 +31641,6 @@ pub fn bootstrap_ciphertext_bounded_noise(
 ) -> Result<BfvCiphertext, BfvError> {
     bootstrap_ciphertext_bounded_noise_round(params, bootstrap_key, ciphertext, 0)
 }
-
 /// Refresh a rounded BFV ciphertext with one indexed bounded-noise bootstrap round.
 ///
 /// # Errors
@@ -32829,7 +31669,6 @@ pub fn bootstrap_ciphertext_bounded_noise_round(
         bootstrap_round_refresh(bootstrap_key, round_index)?,
     )
 }
-
 /// Refresh a rounded BFV ciphertext with consecutive bounded-noise bootstrap rounds.
 ///
 /// The requested round count is validated against the key before the first
@@ -32866,7 +31705,6 @@ pub fn bootstrap_ciphertext_bounded_noise_rounds(
     }
     Ok(refreshed)
 }
-
 /// Refresh a ciphertext with round zero from a public bootstrap key through an
 /// exact RNS corridor.
 ///
@@ -32885,7 +31723,6 @@ pub fn bootstrap_ciphertext_rns_exact(
 ) -> Result<BfvCiphertext, BfvError> {
     bootstrap_ciphertext_rns_exact_round(params, rns_chain, bootstrap_key, ciphertext, 0)
 }
-
 /// Refresh a ciphertext with one indexed public bootstrap-key round through an
 /// exact RNS corridor.
 ///
@@ -32924,7 +31761,6 @@ pub fn bootstrap_ciphertext_rns_exact_round(
         bootstrap_round_refresh(bootstrap_key, round_index)?,
     )
 }
-
 /// Refresh a ciphertext with round zero through the registered exact RNS corridor.
 ///
 /// The evaluator chain is derived from the registered production BFV profile,
@@ -32940,7 +31776,6 @@ pub fn bootstrap_ciphertext_registered_rns_exact(
 ) -> Result<BfvCiphertext, BfvError> {
     bootstrap_ciphertext_registered_rns_exact_round(params, bootstrap_key, ciphertext, 0)
 }
-
 /// Refresh a ciphertext with one indexed round through the registered exact RNS corridor.
 ///
 /// The registered evaluator chain is derived before bootstrap-key or
@@ -32960,7 +31795,6 @@ pub fn bootstrap_ciphertext_registered_rns_exact_round(
     let rns_chain = registered_bfv_rns_modulus_chain(params)?;
     bootstrap_ciphertext_rns_exact_round(params, &rns_chain, bootstrap_key, ciphertext, round_index)
 }
-
 /// Refresh a ciphertext with consecutive public bootstrap-key rounds through
 /// an exact RNS corridor.
 ///
@@ -33007,7 +31841,6 @@ pub fn bootstrap_ciphertext_rns_exact_rounds(
     }
     Ok(refreshed)
 }
-
 /// Refresh a ciphertext with consecutive rounds through the registered exact RNS corridor.
 ///
 /// The registered evaluator chain is derived internally from the production
@@ -33033,7 +31866,6 @@ pub fn bootstrap_ciphertext_registered_rns_exact_rounds(
         refresh_rounds,
     )
 }
-
 /// Refresh a rounded BFV ciphertext with round zero through an exact RNS corridor.
 ///
 /// # Errors
@@ -33053,7 +31885,6 @@ pub fn bootstrap_ciphertext_bounded_noise_rns_exact(
         0,
     )
 }
-
 /// Refresh a rounded BFV ciphertext with one indexed bounded-noise bootstrap
 /// round through an exact RNS corridor.
 ///
@@ -33091,7 +31922,6 @@ pub fn bootstrap_ciphertext_bounded_noise_rns_exact_round(
         bootstrap_round_refresh(bootstrap_key, round_index)?,
     )
 }
-
 /// Refresh a rounded BFV ciphertext with round zero through the registered RNS corridor.
 ///
 /// # Errors
@@ -33110,7 +31940,6 @@ pub fn bootstrap_ciphertext_bounded_noise_registered_rns_exact(
         0,
     )
 }
-
 /// Refresh a rounded BFV ciphertext with one indexed round through the registered exact RNS corridor.
 ///
 /// The registered evaluator chain is derived before bootstrap-key or
@@ -33134,7 +31963,6 @@ pub fn bootstrap_ciphertext_bounded_noise_registered_rns_exact_round(
         round_index,
     )
 }
-
 /// Refresh a rounded BFV ciphertext with round zero through a target-limb RNS bridge.
 ///
 /// Bootstrap refresh itself is an addition-only encrypted-zero refresh, but
@@ -33161,7 +31989,6 @@ pub fn bootstrap_ciphertext_bounded_noise_rns_basis_extension_exact(
         0,
     )
 }
-
 /// Refresh a rounded BFV ciphertext with one indexed round through a target-limb RNS bridge.
 ///
 /// # Errors
@@ -33205,7 +32032,6 @@ pub fn bootstrap_ciphertext_bounded_noise_rns_basis_extension_exact_round(
         bootstrap_round_refresh(bootstrap_key, round_index)?,
     )
 }
-
 /// Refresh a rounded BFV ciphertext with round zero through the registered target-limb RNS bridge.
 ///
 /// # Errors
@@ -33224,7 +32050,6 @@ pub fn bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact(
         0,
     )
 }
-
 /// Refresh a rounded BFV ciphertext with one indexed round through the registered target-limb RNS bridge.
 ///
 /// The evaluator chain and key-switch decomposition chain are derived from the
@@ -33253,7 +32078,6 @@ pub fn bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_r
         round_index,
     )
 }
-
 /// Refresh a rounded BFV ciphertext with consecutive bounded-noise bootstrap
 /// rounds through an exact RNS corridor.
 ///
@@ -33299,7 +32123,6 @@ pub fn bootstrap_ciphertext_bounded_noise_rns_exact_rounds(
     }
     Ok(refreshed)
 }
-
 /// Refresh a rounded BFV ciphertext with consecutive rounds through the registered RNS corridor.
 ///
 /// This is the bounded-noise production wrapper for the current encrypted-zero
@@ -33324,7 +32147,6 @@ pub fn bootstrap_ciphertext_bounded_noise_registered_rns_exact_rounds(
         refresh_rounds,
     )
 }
-
 /// Refresh a rounded BFV ciphertext with consecutive rounds through a target-limb RNS bridge.
 ///
 /// The requested round count is validated against the key before the first
@@ -33376,7 +32198,6 @@ pub fn bootstrap_ciphertext_bounded_noise_rns_basis_extension_exact_rounds(
     }
     Ok(refreshed)
 }
-
 /// Refresh a rounded BFV ciphertext with consecutive rounds through the registered target-limb RNS bridge.
 ///
 /// This is the bounded-noise production wrapper for the current encrypted-zero
@@ -33405,7 +32226,6 @@ pub fn bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_r
         refresh_rounds,
     )
 }
-
 /// Validate the public inputs needed before full BFV bootstrap execution.
 ///
 /// This is the checked boundary shared by direct fail-closed entries and
@@ -33427,7 +32247,6 @@ pub fn validate_bfv_full_bootstrap_execution_preflight_v1(
     validate_ciphertext(params, ciphertext)?;
     validate_ciphertext_not_all_zero("BFV full-bootstrap execution input ciphertext", ciphertext)
 }
-
 /// Validate full-bootstrap execution inputs plus concrete circuit artifacts.
 ///
 /// This is the stronger preflight for artifact-aware execution. It keeps the
@@ -33455,7 +32274,6 @@ pub fn validate_bfv_full_bootstrap_execution_artifacts_preflight_v1(
         ciphertext,
     )
 }
-
 fn validate_bfv_full_bootstrap_execution_artifact_bundle_preflight_v1<'a>(
     params: &BfvParameters,
     bootstrap_key: &'a BfvBootstrapKey,
@@ -33472,7 +32290,6 @@ fn validate_bfv_full_bootstrap_execution_artifact_bundle_preflight_v1<'a>(
     )?;
     Ok(material)
 }
-
 fn validate_bfv_full_bootstrap_execution_artifact_bundle_public_key_digest_aliases_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -33500,7 +32317,6 @@ fn validate_bfv_full_bootstrap_execution_artifact_bundle_public_key_digest_alias
         ],
     )
 }
-
 fn full_bootstrap_material_from_key(
     bootstrap_key: &BfvBootstrapKey,
 ) -> Result<&BfvFullBootstrapCircuitMaterialV1, BfvError> {
@@ -33513,7 +32329,6 @@ fn full_bootstrap_material_from_key(
             )
         })
 }
-
 fn decode_full_bootstrap_execution_prefix_artifacts_v1(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -33556,7 +32371,6 @@ fn decode_full_bootstrap_execution_prefix_artifacts_v1(
         sample_switch_key,
     ))
 }
-
 fn validate_bfv_full_bootstrap_execution_galois_key_set_v1(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
@@ -33583,24 +32397,22 @@ fn validate_bfv_full_bootstrap_execution_galois_key_set_v1(
         slot_to_coefficient,
         &mut required_powers,
     )?;
-
     let supplied_powers = galois_keys
         .iter()
         .map(|key| key.automorphism_power)
         .collect::<std::collections::BTreeSet<_>>();
     if let Some(missing_power) = required_powers.difference(&supplied_powers).next() {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "missing BFV Galois key for full-bootstrap execution automorphism power {missing_power}"
-        )));
+        ));
     }
     if let Some(extra_power) = supplied_powers.difference(&required_powers).next() {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "unexpected BFV Galois key for full-bootstrap execution automorphism power {extra_power}"
-        )));
+        ));
     }
     validate_galois_key_set_entries(params, galois_keys)
 }
-
 fn collect_full_bootstrap_linear_transform_galois_powers_v1(
     params: &BfvParameters,
     transform: &BfvFullBootstrapLinearTransformV1,
@@ -33618,7 +32430,6 @@ fn collect_full_bootstrap_linear_transform_galois_powers_v1(
     }
     Ok(())
 }
-
 /// Execute the governed exact-RNS full-bootstrap prefix through raw sample extraction.
 ///
 /// This validates the same concrete artifacts as
@@ -33713,7 +32524,6 @@ pub(crate) fn apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exa
     validate_bfv_full_bootstrap_execution_prefix_trace_v1(params, &trace)?;
     Ok(trace)
 }
-
 /// Execute the governed bounded-noise full-bootstrap prefix through raw sample extraction.
 ///
 /// This is the rounded BFV counterpart to
@@ -33814,7 +32624,6 @@ pub(crate) fn apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_regi
     validate_bfv_full_bootstrap_execution_prefix_trace_v1(params, &trace)?;
     Ok(trace)
 }
-
 /// Return exact residual bounds for the executable full-bootstrap prefix trace.
 ///
 /// The helper validates the governed full-bootstrap key and artifact bundle,
@@ -33905,7 +32714,6 @@ pub(crate) fn bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple
     )?;
     Ok(bounds)
 }
-
 /// Return bounded-noise bounds for the executable full-bootstrap prefix trace.
 ///
 /// This is the rounded BFV counterpart to
@@ -33997,7 +32805,6 @@ pub(crate) fn bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bou
     )?;
     Ok(bounds)
 }
-
 fn validate_bfv_full_bootstrap_key_execution_preflight_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -34005,7 +32812,6 @@ fn validate_bfv_full_bootstrap_key_execution_preflight_v1(
     validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(params, bootstrap_key)?;
     validate_bootstrap_key_entries(params, bootstrap_key)
 }
-
 fn validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -34018,14 +32824,12 @@ fn validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(
     }
     validate_bootstrap_key_admission_shape_metadata(params, bootstrap_key)
 }
-
 fn full_bootstrap_artifacts_required_error() -> BfvError {
     BfvError::InvalidParameters(
         "full BFV bootstrap execution requires governed full-bootstrap circuit artifacts"
             .to_owned(),
     )
 }
-
 fn validate_bfv_full_bootstrap_release_audited_execution_gate_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -34050,7 +32854,6 @@ fn validate_bfv_full_bootstrap_release_audited_execution_gate_v1(
         trusted_reviewer_public_key,
     )
 }
-
 /// Execute one full BFV bootstrap with concrete governed artifacts.
 ///
 /// This artifact-aware entry point executes the deterministic
@@ -34078,7 +32881,6 @@ pub(crate) fn full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
     )?;
     Ok(trace.slot_to_coefficient_output)
 }
-
 /// Execute one audited full BFV bootstrap with concrete governed artifacts.
 ///
 /// The release audit package must validate against the governed material,
@@ -34118,7 +32920,6 @@ pub fn full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_e
         ciphertext,
     )
 }
-
 /// Execute one full BFV bootstrap over the registered exact RNS profile.
 ///
 /// Direct registered execution cannot reconstruct governed circuit artifacts
@@ -34137,7 +32938,6 @@ pub fn full_bootstrap_ciphertext_registered_rns_exact_v1(
     validate_bfv_full_bootstrap_execution_preflight_v1(params, bootstrap_key, ciphertext)?;
     Err(full_bootstrap_artifacts_required_error())
 }
-
 /// Return the exact residual-multiple bound for artifact-aware full bootstrap.
 ///
 /// The executable bound is propagated through the governed coefficient-to-slot,
@@ -34164,7 +32964,6 @@ pub(crate) fn bfv_full_bootstrap_with_artifacts_output_residual_multiple_bound_v
     )?;
     Ok(bounds.slot_to_coefficient)
 }
-
 /// Return the exact residual-multiple bound for an audited artifact-aware full bootstrap.
 ///
 /// Release-audit validation is applied before the governed artifact-bound trace
@@ -34204,7 +33003,6 @@ pub fn bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multipl
         input_bound,
     )
 }
-
 /// Return the exact residual-multiple bound for one full BFV bootstrap.
 ///
 /// Direct registered bound analysis cannot reconstruct governed circuit
@@ -34228,7 +33026,6 @@ pub fn bfv_full_bootstrap_output_residual_multiple_bound_v1(
     )?;
     Err(full_bootstrap_artifacts_required_error())
 }
-
 /// Execute one bounded-noise full BFV bootstrap with concrete governed artifacts.
 ///
 /// This is the rounded BFV counterpart to
@@ -34258,7 +33055,6 @@ pub(crate) fn full_bootstrap_ciphertext_with_artifacts_bounded_noise_registered_
     )?;
     Ok(trace.slot_to_coefficient_output)
 }
-
 /// Execute one audited bounded-noise full BFV bootstrap with concrete governed artifacts.
 ///
 /// The release audit package must validate against the governed material,
@@ -34299,7 +33095,6 @@ pub fn full_bootstrap_ciphertext_with_release_audited_artifacts_bounded_noise_re
         ciphertext,
     )
 }
-
 /// Execute one bounded-noise full BFV bootstrap over the registered RNS profile.
 ///
 /// Direct registered execution cannot reconstruct governed circuit artifacts
@@ -34322,7 +33117,6 @@ pub fn full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_ex
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     Err(full_bootstrap_artifacts_required_error())
 }
-
 /// Return the bounded-noise bound for artifact-aware full bootstrap.
 ///
 /// The executable bound is propagated through the governed coefficient-to-slot,
@@ -34350,7 +33144,6 @@ pub(crate) fn bfv_full_bootstrap_with_artifacts_bounded_noise_output_bound_v1(
     )?;
     Ok(bounds.slot_to_coefficient)
 }
-
 /// Return the bounded-noise bound for an audited artifact-aware full bootstrap.
 ///
 /// Release-audit validation is applied before bounded-noise trace bounds are
@@ -34391,7 +33184,6 @@ pub fn bfv_full_bootstrap_with_release_audited_artifacts_bounded_noise_output_bo
         input_noise_bound,
     )
 }
-
 /// Return the bounded-noise output bound for one full BFV bootstrap.
 ///
 /// Direct registered bound analysis cannot reconstruct governed circuit
@@ -34420,7 +33212,6 @@ pub fn bfv_full_bootstrap_bounded_noise_output_bound_v1(
     )?;
     Err(full_bootstrap_artifacts_required_error())
 }
-
 /// Derive a deterministic public slot-rotation key from a BFV public key.
 ///
 /// The resulting key contains an encryption of zero used to refresh every
@@ -34451,7 +33242,6 @@ pub fn rotation_key_from_seed(
     validate_rotation_key(params, &rotation_key)?;
     Ok(rotation_key)
 }
-
 /// Derive a deterministic bounded-noise public slot-rotation key.
 ///
 /// The resulting key contains a rounded BFV encryption of zero used to refresh
@@ -34483,7 +33273,6 @@ pub fn rotation_key_bounded_noise_from_seed(
     validate_rotation_key(params, &rotation_key)?;
     Ok(rotation_key)
 }
-
 /// Verify that a public rotation-key refresh ciphertext decrypts to zero.
 ///
 /// This is a key-owner diagnostic for the current outer-slot refresh path.
@@ -34505,7 +33294,6 @@ pub fn validate_rotation_key_zero_refresh(
         "rotation key zero_refresh",
     )
 }
-
 fn validate_rotation_key_zero_refresh_with_label(
     params: &BfvParameters,
     secret_key: &BfvSecretKey,
@@ -34522,7 +33310,6 @@ fn validate_rotation_key_zero_refresh_with_label(
         label,
     )
 }
-
 /// Verify that a bounded-noise rotation-key refresh ciphertext decrypts to zero.
 ///
 /// This checks the rounded BFV plaintext and fresh bounded-noise budget for the
@@ -34543,7 +33330,6 @@ pub fn validate_rotation_key_bounded_noise_zero_refresh(
         "bounded-noise rotation key zero_refresh",
     )
 }
-
 fn validate_rotation_key_bounded_noise_zero_refresh_with_label(
     params: &BfvParameters,
     secret_key: &BfvSecretKey,
@@ -34562,7 +33348,6 @@ fn validate_rotation_key_bounded_noise_zero_refresh_with_label(
         label,
     )
 }
-
 fn validate_bounded_noise_zero_refresh_ciphertext(
     params: &BfvParameters,
     secret_key: &BfvSecretKey,
@@ -34579,13 +33364,10 @@ fn validate_bounded_noise_zero_refresh_ciphertext(
         .iter()
         .any(|&coefficient| coefficient != 0)
     {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must decrypt to zero plaintext"
-        )));
+        return Err(invalid!("{label} must decrypt to zero plaintext"));
     }
     Ok(())
 }
-
 /// Verify that a rotation refresh key matches its public deterministic transcript.
 ///
 /// This check recomputes the encrypted-zero refresh mask from the advertised
@@ -34618,7 +33400,6 @@ pub fn validate_rotation_key_zero_refresh_transcript(
     }
     Ok(())
 }
-
 /// Verify that a bounded-noise rotation refresh key matches its public transcript.
 ///
 /// This recomputes the rounded BFV encrypted-zero refresh mask from the
@@ -34656,7 +33437,6 @@ pub fn validate_rotation_key_bounded_noise_zero_refresh_transcript(
     }
     Ok(())
 }
-
 /// Rotate an identifier ciphertext-slot envelope left and refresh each moved slot.
 ///
 /// This helper implements Soracloud `RotateLeft`: it rotates the outer vector of
@@ -34679,7 +33459,6 @@ pub fn rotate_ciphertext_slots_left(
     for slot in slots {
         validate_ciphertext(params, slot)?;
     }
-
     let mut rotated = slots.to_vec();
     rotated.rotate_left(normalized_steps);
     rotated
@@ -34687,7 +33466,6 @@ pub fn rotate_ciphertext_slots_left(
         .map(|slot| add_ciphertexts(params, slot, &rotation_key.zero_refresh))
         .collect()
 }
-
 /// Rotate an identifier ciphertext-slot envelope left and refresh each moved
 /// slot through an exact RNS corridor.
 ///
@@ -34710,7 +33488,6 @@ pub fn rotate_ciphertext_slots_left_rns_exact(
     for slot in slots {
         validate_ciphertext(params, slot)?;
     }
-
     let mut rotated = slots.to_vec();
     rotated.rotate_left(normalized_steps);
     rotated
@@ -34718,7 +33495,6 @@ pub fn rotate_ciphertext_slots_left_rns_exact(
         .map(|slot| add_ciphertexts_rns_exact(params, rns_chain, slot, &rotation_key.zero_refresh))
         .collect()
 }
-
 /// Rotate an identifier ciphertext-slot envelope through the registered exact RNS corridor.
 ///
 /// The registered evaluator chain is derived internally from the production
@@ -34736,7 +33512,6 @@ pub fn rotate_ciphertext_slots_left_registered_rns_exact(
     let rns_chain = registered_bfv_rns_modulus_chain(params)?;
     rotate_ciphertext_slots_left_rns_exact(params, &rns_chain, rotation_key, slots)
 }
-
 /// Rotate a rounded BFV ciphertext-slot envelope left and refresh each moved slot.
 ///
 /// This mirrors [`rotate_ciphertext_slots_left`] for the bounded-noise BFV-RNS
@@ -34759,7 +33534,6 @@ pub fn rotate_ciphertext_slots_left_bounded_noise(
     for slot in slots {
         validate_ciphertext(params, slot)?;
     }
-
     let mut rotated = slots.to_vec();
     rotated.rotate_left(normalized_steps);
     rotated
@@ -34767,7 +33541,6 @@ pub fn rotate_ciphertext_slots_left_bounded_noise(
         .map(|slot| add_ciphertexts(params, slot, &rotation_key.zero_refresh))
         .collect()
 }
-
 /// Rotate a rounded BFV ciphertext-slot envelope left through an exact RNS corridor.
 ///
 /// This is the RNS counterpart of
@@ -34790,7 +33563,6 @@ pub fn rotate_ciphertext_slots_left_bounded_noise_rns_exact(
     for slot in slots {
         validate_ciphertext(params, slot)?;
     }
-
     let mut rotated = slots.to_vec();
     rotated.rotate_left(normalized_steps);
     rotated
@@ -34798,7 +33570,6 @@ pub fn rotate_ciphertext_slots_left_bounded_noise_rns_exact(
         .map(|slot| add_ciphertexts_rns_exact(params, rns_chain, slot, &rotation_key.zero_refresh))
         .collect()
 }
-
 /// Rotate a rounded BFV ciphertext-slot envelope through a target-limb RNS bridge.
 ///
 /// Outer-slot rotation is addition-only after the public slot permutation, but
@@ -34830,7 +33601,6 @@ pub fn rotate_ciphertext_slots_left_bounded_noise_rns_basis_extension_exact(
     for slot in slots {
         validate_ciphertext(params, slot)?;
     }
-
     let mut rotated = slots.to_vec();
     rotated.rotate_left(normalized_steps);
     rotated
@@ -34840,7 +33610,6 @@ pub fn rotate_ciphertext_slots_left_bounded_noise_rns_basis_extension_exact(
         })
         .collect()
 }
-
 /// Rotate a rounded BFV ciphertext-slot envelope through the registered RNS corridor.
 ///
 /// This registered entry point delegates to the target-limb basis-extension
@@ -34862,7 +33631,6 @@ pub fn rotate_ciphertext_slots_left_bounded_noise_registered_rns_exact(
         slots,
     )
 }
-
 /// Rotate a rounded BFV ciphertext-slot envelope through the registered target-limb RNS bridge.
 ///
 /// The evaluator chain and key-switch decomposition chain are derived from the
@@ -34889,7 +33657,6 @@ pub fn rotate_ciphertext_slots_left_bounded_noise_registered_rns_basis_extension
         slots,
     )
 }
-
 /// Decrypt a ciphertext back into plaintext coefficients.
 ///
 /// # Errors
@@ -34902,7 +33669,6 @@ pub fn decrypt(
     let scaled = decrypt_scaled_coefficients(params, secret_key, ciphertext)?;
     Ok(decode_plaintext(params, &scaled))
 }
-
 /// Decrypt a ciphertext and return the exact residual profile.
 ///
 /// The profile is a secret-key diagnostic for the current deterministic
@@ -34921,7 +33687,6 @@ pub fn decrypt_with_exact_residual_profile(
     let scaled = decrypt_scaled_coefficients(params, secret_key, ciphertext)?;
     Ok(exact_residual_profile_from_scaled(params, &scaled))
 }
-
 /// Decrypt a rounded BFV ciphertext back into plaintext coefficients.
 ///
 /// # Errors
@@ -34934,7 +33699,6 @@ pub fn decrypt_bounded_noise(
     let scaled = decrypt_bounded_noise_scaled_coefficients(params, secret_key, ciphertext)?;
     decode_rounded_plaintext(params, &scaled)
 }
-
 /// Decrypt a rounded BFV ciphertext and return its centered noise profile.
 ///
 /// The profile measures each decrypted coefficient against the nearest
@@ -34951,7 +33715,6 @@ pub fn decrypt_with_bounded_noise_profile(
     let scaled = decrypt_bounded_noise_scaled_coefficients(params, secret_key, ciphertext)?;
     bounded_noise_profile_from_scaled(params, &scaled)
 }
-
 /// Decrypt a raw full-bootstrap extracted sample to one scaled BFV coefficient.
 ///
 /// # Errors
@@ -34980,7 +33743,6 @@ pub fn decrypt_bfv_full_bootstrap_raw_extracted_sample_scaled_v1(
     }
     Ok(scaled)
 }
-
 /// Decrypt a raw full-bootstrap extracted sample and return its exact residual profile.
 ///
 /// The returned profile has one coefficient: the selected source coefficient.
@@ -34997,7 +33759,6 @@ pub fn decrypt_bfv_full_bootstrap_raw_extracted_sample_with_exact_residual_profi
         decrypt_bfv_full_bootstrap_raw_extracted_sample_scaled_v1(params, secret_key, sample)?;
     Ok(exact_residual_profile_from_scaled(params, &[scaled]))
 }
-
 /// Decrypt a raw full-bootstrap extracted sample and return its bounded-noise profile.
 ///
 /// The returned profile has one coefficient: the selected source coefficient.
@@ -35016,7 +33777,6 @@ pub fn decrypt_bfv_full_bootstrap_raw_extracted_sample_with_bounded_noise_profil
         decrypt_bfv_full_bootstrap_raw_extracted_sample_scaled_v1(params, secret_key, sample)?;
     bounded_noise_profile_from_scaled(params, &[scaled])
 }
-
 /// Validate a rounded BFV ciphertext against a centered noise bound.
 ///
 /// # Errors
@@ -35040,20 +33800,19 @@ pub fn validate_ciphertext_bounded_noise(
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     let centered_decoding_capacity = rounded_plaintext_decoding_capacity(params)?;
     if max_abs_noise > centered_decoding_capacity {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} rounded-noise bound {max_abs_noise} exceeds centered decoding capacity {centered_decoding_capacity}",
-        )));
+        ));
     }
     let profile = decrypt_with_bounded_noise_profile(params, secret_key, ciphertext)?;
     if profile.max_abs_noise > max_abs_noise {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} rounded noise {} exceeds bound {max_abs_noise}",
             profile.max_abs_noise
-        )));
+        ));
     }
     Ok(profile)
 }
-
 /// Return the centered noise bound for rounded BFV ciphertext addition.
 ///
 /// Addition preserves rounded BFV semantics and adds the centered noise terms
@@ -35073,9 +33832,9 @@ pub fn bfv_add_bounded_noise_output_bound(
     let mut output_bound = 0_u128;
     for (index, &input_bound) in input_noise_bounds.iter().enumerate() {
         if input_bound > capacity {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV bounded-noise add input[{index}] bound {input_bound} exceeds rounded decoding capacity {capacity}"
-            )));
+            ));
         }
         output_bound = output_bound.checked_add(input_bound).ok_or_else(|| {
             BfvError::InvalidParameters(
@@ -35089,13 +33848,12 @@ pub fn bfv_add_bounded_noise_output_bound(
         ));
     }
     if output_bound > capacity {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV bounded-noise add output bound {output_bound} exceeds rounded decoding capacity {capacity}"
-        )));
+        ));
     }
     Ok(output_bound)
 }
-
 /// Return the centered noise bound for rounded BFV ciphertext subtraction.
 ///
 /// Subtraction negates the right-hand noise and adds it to the left-hand noise,
@@ -35112,7 +33870,6 @@ pub fn bfv_subtract_bounded_noise_output_bound(
 ) -> Result<u128, BfvError> {
     bfv_add_bounded_noise_output_bound(params, &[lhs_noise_bound, rhs_noise_bound])
 }
-
 /// Return the centered noise bound after adding public rounded plaintext.
 ///
 /// Adding rounded plaintext changes only the message term, not the ciphertext
@@ -35133,7 +33890,6 @@ pub fn bfv_add_plain_bounded_noise_output_bound(
     )?;
     Ok(input_noise_bound)
 }
-
 /// Return the centered noise bound after rounded BFV plaintext-scalar multiplication.
 ///
 /// # Errors
@@ -35170,7 +33926,6 @@ pub fn bfv_multiply_plain_scalar_bounded_noise_output_bound(
     )?;
     Ok(output_bound)
 }
-
 /// Return the centered noise bound after rounded BFV plaintext-polynomial multiplication.
 ///
 /// Each output coefficient receives a negacyclic sum of input-noise
@@ -35223,7 +33978,6 @@ pub fn bfv_multiply_plaintext_polynomial_bounded_noise_output_bound(
     )?;
     Ok(output_bound)
 }
-
 /// Return a conservative centered noise bound after rounded BFV multiplication.
 ///
 /// The bound accounts for plaintext/noise cross terms, the scaled noise product,
@@ -35255,7 +34009,6 @@ pub fn bfv_multiply_bounded_noise_output_bound(
         rhs_noise_bound,
         "BFV bounded-noise multiply rhs bound",
     )?;
-
     let degree = u128::from(params.polynomial_degree);
     let plaintext_bound = u128::from(params.plaintext_modulus.checked_sub(1).ok_or_else(|| {
         BfvError::InvalidParameters(
@@ -35323,7 +34076,6 @@ pub fn bfv_multiply_bounded_noise_output_bound(
     )?;
     Ok(output_bound)
 }
-
 /// Return the centered noise bound after one rounded BFV Galois key switch.
 ///
 /// A Galois automorphism preserves the input noise magnitude; bounded-noise
@@ -35363,7 +34115,6 @@ pub fn bfv_galois_key_switch_bounded_noise_output_bound(
     )?;
     Ok(output_bound)
 }
-
 /// Return the centered noise bound for bounded-noise packed-slot `RotateLeft`.
 ///
 /// The helper mirrors
@@ -35401,9 +34152,9 @@ pub fn bfv_packed_rotate_left_bounded_noise_output_bound(
             .iter()
             .find(|key| key.automorphism_power == automorphism_power)
             .ok_or_else(|| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "missing BFV Galois key for bounded-noise packed RotateLeft automorphism power {automorphism_power}"
-                ))
+                )
             })?;
         let switched_bound = bfv_galois_key_switch_bounded_noise_output_bound(
             params,
@@ -35426,7 +34177,6 @@ pub fn bfv_packed_rotate_left_bounded_noise_output_bound(
         bounds => bfv_add_bounded_noise_output_bound(params, bounds),
     }
 }
-
 /// Validate that an exact residual-multiple bound fits the centered lift capacity.
 ///
 /// This is a public metadata/admission preflight for callers that propagate
@@ -35444,7 +34194,6 @@ pub fn validate_bfv_exact_residual_multiple_capacity(
 ) -> Result<(), BfvError> {
     validate_exact_residual_bound_within_centered_capacity(params, bound, label)
 }
-
 /// Validate that a rounded BFV centered-noise bound fits the decoding capacity.
 ///
 /// This is a public metadata/admission preflight for callers that propagate
@@ -35464,7 +34213,6 @@ pub fn validate_bfv_bounded_noise_bound(
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     validate_bounded_noise_bound_within_decoding_capacity(params, bound, label)
 }
-
 /// Validate a ciphertext against an exact residual-multiple output bound.
 ///
 /// This is an owner-side diagnostic for first-release evaluated ciphertext
@@ -35493,20 +34241,19 @@ pub fn validate_ciphertext_exact_residual_multiple_bound(
     validate_ciphertext(params, ciphertext)?;
     let centered_residual_multiple_capacity = centered_residual_multiple_capacity(params);
     if max_abs_residual_multiple > centered_residual_multiple_capacity {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} residual bound {max_abs_residual_multiple} exceeds centered residual capacity {centered_residual_multiple_capacity}"
-        )));
+        ));
     }
     let profile = decrypt_with_exact_residual_profile(params, secret_key, ciphertext)?;
     if profile.max_abs_residual_multiple > max_abs_residual_multiple {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} residual {} exceeds exact residual bound {max_abs_residual_multiple}",
             profile.max_abs_residual_multiple
-        )));
+        ));
     }
     Ok(profile)
 }
-
 /// Return the exact residual-multiple bound for a ciphertext addition output.
 ///
 /// The bound is the checked sum of the caller-supplied input bounds. This
@@ -35549,7 +34296,6 @@ pub fn bfv_add_output_residual_multiple_bound(
     )?;
     Ok(output_bound)
 }
-
 /// Return the exact residual-multiple bound for a ciphertext subtraction output.
 ///
 /// Subtraction negates the right-hand residual and adds it to the left-hand
@@ -35588,7 +34334,6 @@ pub fn bfv_subtract_output_residual_multiple_bound(
     )?;
     Ok(output_bound)
 }
-
 /// Return a conservative exact residual-multiple bound for multiplication.
 ///
 /// The current exact plaintext-lift evaluator multiplies decrypted lifts of
@@ -35619,7 +34364,6 @@ pub fn bfv_multiply_output_residual_multiple_bound(
         rhs_bound,
         "BFV multiply rhs residual bound",
     )?;
-
     let degree = u128::from(params.polynomial_degree);
     let plaintext_modulus = u128::from(params.plaintext_modulus);
     let plaintext_bound = plaintext_modulus.checked_sub(1).ok_or_else(|| {
@@ -35673,7 +34417,6 @@ pub fn bfv_multiply_output_residual_multiple_bound(
     validate_relinearization_key(params, relinearization_key)?;
     Ok(output_bound)
 }
-
 /// Return the exact residual-multiple bound after adding public plaintext.
 ///
 /// Adding plaintext changes only the decoded message term, not the residual
@@ -35693,7 +34436,6 @@ pub fn bfv_add_plain_output_residual_multiple_bound(
     )?;
     Ok(input_bound)
 }
-
 /// Return the exact residual-multiple bound after plaintext-scalar multiplication.
 ///
 /// The current exact evaluator multiplies each residual multiple by the public
@@ -35732,7 +34474,6 @@ pub fn bfv_multiply_plain_scalar_output_residual_multiple_bound(
     )?;
     Ok(output_bound)
 }
-
 /// Return the exact residual-multiple bound after plaintext-polynomial multiplication.
 ///
 /// Plaintext polynomials are encoded with canonical non-negative `Z_t`
@@ -35779,7 +34520,6 @@ pub fn bfv_multiply_plaintext_polynomial_output_residual_multiple_bound(
     )?;
     Ok(output_bound)
 }
-
 /// Return exact residual-multiple bounds for a public affine circuit.
 ///
 /// For the current exact plaintext-lift evaluator, each output row has
@@ -35812,14 +34552,14 @@ pub fn bfv_affine_circuit_output_residual_multiple_bounds(
             let mut output_bound = 0_u128;
             for (&input_bound, &weight) in input_bounds.iter().zip(row) {
                 let contribution = input_bound.checked_mul(u128::from(weight)).ok_or_else(|| {
-                    BfvError::InvalidParameters(format!(
+                    invalid!(
                         "BFV affine output[{row_index}] residual bound exceeds deterministic limits"
-                    ))
+                    )
                 })?;
                 output_bound = output_bound.checked_add(contribution).ok_or_else(|| {
-                    BfvError::InvalidParameters(format!(
+                    invalid!(
                         "BFV affine output[{row_index}] residual bound exceeds deterministic limits"
-                    ))
+                    )
                 })?;
             }
             validate_exact_residual_bound_within_centered_capacity(
@@ -35831,7 +34571,6 @@ pub fn bfv_affine_circuit_output_residual_multiple_bounds(
         })
         .collect()
 }
-
 /// Return centered noise bounds for a public affine circuit over rounded BFV inputs.
 ///
 /// Each output row has conservative noise bound
@@ -35869,14 +34608,14 @@ pub fn bfv_affine_circuit_bounded_noise_output_bounds(
             let mut output_bound = 0_u128;
             for (&input_bound, &weight) in input_noise_bounds.iter().zip(row) {
                 let contribution = input_bound.checked_mul(u128::from(weight)).ok_or_else(|| {
-                    BfvError::InvalidParameters(format!(
+                    invalid!(
                         "BFV bounded-noise affine output[{row_index}] bound exceeds deterministic limits"
-                    ))
+                    )
                 })?;
                 output_bound = output_bound.checked_add(contribution).ok_or_else(|| {
-                    BfvError::InvalidParameters(format!(
+                    invalid!(
                         "BFV bounded-noise affine output[{row_index}] bound exceeds deterministic limits"
-                    ))
+                    )
                 })?;
             }
             validate_bounded_noise_bound_within_decoding_capacity(
@@ -35888,7 +34627,6 @@ pub fn bfv_affine_circuit_bounded_noise_output_bounds(
         })
         .collect()
 }
-
 /// Return exact residual-multiple bounds after outer ciphertext-slot rotation.
 ///
 /// This mirrors [`rotate_ciphertext_slots_left`]: input bounds are rotated by
@@ -35935,7 +34673,6 @@ pub fn bfv_rotate_slots_left_output_residual_multiple_bounds(
         })
         .collect()
 }
-
 /// Return centered noise bounds after bounded-noise outer ciphertext-slot rotation.
 ///
 /// This mirrors [`rotate_ciphertext_slots_left_bounded_noise`]: input bounds
@@ -35986,7 +34723,6 @@ pub fn bfv_rotate_slots_left_bounded_noise_output_bounds(
         })
         .collect()
 }
-
 /// Return centered noise bounds for bounded-noise outer rotation through a target-limb RNS bridge.
 ///
 /// The bound calculation matches [`bfv_rotate_slots_left_bounded_noise_output_bounds`],
@@ -36015,7 +34751,6 @@ pub fn bfv_rotate_slots_left_bounded_noise_rns_basis_extension_output_bounds(
     )?;
     bfv_rotate_slots_left_bounded_noise_output_bounds(params, rotation_key, input_noise_bounds)
 }
-
 /// Return centered noise bounds for registered target-limb bounded-noise outer rotation.
 ///
 /// The evaluator chain and key-switch decomposition chain are derived from the
@@ -36043,7 +34778,6 @@ pub fn bfv_rotate_slots_left_bounded_noise_registered_rns_basis_extension_output
         input_noise_bounds,
     )
 }
-
 /// Return the extra exact residual-multiple bound for one key-switch operation.
 ///
 /// Current deterministic key-switch entries carry plaintext-multiple error
@@ -36079,7 +34813,6 @@ pub fn bfv_key_switch_extra_residual_multiple_bound(
             )
         })
 }
-
 /// Return the exact residual-multiple bound after one Galois key switch.
 ///
 /// A Galois automorphism preserves the input residual magnitude; switching the
@@ -36116,7 +34849,6 @@ pub fn bfv_galois_key_switch_output_residual_multiple_bound(
     )?;
     Ok(output_bound)
 }
-
 /// Return the exact residual-multiple bound for packed-slot `RotateLeft`.
 ///
 /// The helper mirrors [`rotate_packed_ciphertext_slots_left_with_galois_keys`]:
@@ -36150,9 +34882,9 @@ pub fn bfv_packed_rotate_left_output_residual_multiple_bound(
             .iter()
             .find(|key| key.automorphism_power == automorphism_power)
             .ok_or_else(|| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "missing BFV Galois key for packed RotateLeft automorphism power {automorphism_power}"
-                ))
+                )
             })?;
         let switched_bound =
             bfv_galois_key_switch_output_residual_multiple_bound(params, galois_key, input_bound)?;
@@ -36172,7 +34904,6 @@ pub fn bfv_packed_rotate_left_output_residual_multiple_bound(
         bounds => bfv_add_output_residual_multiple_bound(params, bounds),
     }
 }
-
 /// Return the exact residual-multiple bound after public bootstrap refreshes.
 ///
 /// In the first-release refresh path, each public bootstrap round adds one
@@ -36221,7 +34952,6 @@ pub fn bfv_bootstrap_refresh_output_residual_multiple_bound(
     )?;
     Ok(output_bound)
 }
-
 /// Return the exact residual-multiple bound after key-authorized bootstrap refreshes.
 ///
 /// This variant first validates public bootstrap-key metadata, rejects reserved
@@ -36253,7 +34983,6 @@ pub fn bfv_bootstrap_key_refresh_output_residual_multiple_bound(
     validate_bootstrap_key_for_refresh_application(params, bootstrap_key)?;
     bfv_bootstrap_refresh_output_residual_multiple_bound(params, input_bound, refresh_rounds)
 }
-
 /// Return the centered noise bound after bounded-noise bootstrap refreshes.
 ///
 /// Each refresh round adds one rounded BFV encrypted-zero mask generated by
@@ -36315,7 +35044,6 @@ pub fn bfv_bootstrap_refresh_bounded_noise_output_bound(
     )?;
     Ok(output_bound)
 }
-
 /// Return the centered noise bound after key-authorized bounded-noise bootstrap refreshes.
 ///
 /// This variant first validates public bootstrap-key metadata, rejects reserved
@@ -36348,7 +35076,6 @@ pub fn bfv_bootstrap_key_refresh_bounded_noise_output_bound(
     validate_bootstrap_key_for_refresh_application(params, bootstrap_key)?;
     bfv_bootstrap_refresh_bounded_noise_output_bound(params, input_noise_bound, refresh_rounds)
 }
-
 /// Return the exact plaintext-multiple residual bound for seeded zero refreshes.
 ///
 /// The current first-release refresh masks are BFV encryptions of zero. After
@@ -36381,7 +35108,6 @@ pub fn bfv_encrypted_zero_refresh_residual_multiple_bound(
             )
         })
 }
-
 /// Validate that seeded BFV encryption has enough centered residual headroom.
 ///
 /// The deterministic first-release encryption/refresh format is only admitted
@@ -36400,13 +35126,12 @@ pub fn validate_bfv_seeded_encryption_residual_capacity(
     let residual_bound = bfv_encrypted_zero_refresh_residual_multiple_bound(params)?;
     let capacity = centered_residual_multiple_capacity(params);
     if capacity < residual_bound {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "ciphertext_modulus/plaintext_modulus centered capacity {capacity} is below seeded BFV encryption residual bound {residual_bound}"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_seeded_bootstrap_refresh_round_capacity(
     params: &BfvParameters,
     refresh_rounds: u16,
@@ -36414,27 +35139,24 @@ fn validate_bfv_seeded_bootstrap_refresh_round_capacity(
 ) -> Result<(), BfvError> {
     validate_bfv_seeded_encryption_residual_capacity(params)?;
     if refresh_rounds == 0 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} refresh-round capacity must be greater than zero"
-        )));
+        ));
     }
     let refresh_bound = bfv_encrypted_zero_refresh_residual_multiple_bound(params)?;
     let refresh_budget = refresh_bound
         .checked_mul(u128::from(refresh_rounds))
         .ok_or_else(|| {
-            BfvError::InvalidParameters(format!(
-                "{label} refresh-round residual budget exceeds deterministic limits"
-            ))
+            invalid!("{label} refresh-round residual budget exceeds deterministic limits")
         })?;
     let capacity = centered_residual_multiple_capacity(params);
     if refresh_budget > capacity {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} refresh-round residual budget {refresh_budget} exceeds centered residual capacity {capacity}"
-        )));
+        ));
     }
     Ok(())
 }
-
 /// Return the conservative centered noise bound for fresh rounded BFV encryption.
 ///
 /// For public-key residual `e_pk`, ternary encryption mask `u`, fresh error
@@ -36458,7 +35180,6 @@ pub fn bfv_fresh_bounded_noise_ciphertext_bound(params: &BfvParameters) -> Resul
             )
         })
 }
-
 /// Validate that rounded BFV encryption has enough decoding headroom.
 ///
 /// # Errors
@@ -36470,13 +35191,12 @@ pub fn validate_bfv_bounded_noise_encryption_capacity(
     let noise_bound = bfv_fresh_bounded_noise_ciphertext_bound(params)?;
     let capacity = rounded_plaintext_decoding_capacity(params)?;
     if capacity < noise_bound {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "rounded BFV decoding capacity {capacity} is below fresh encryption noise bound {noise_bound}"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
     params: &BfvParameters,
     refresh_rounds: u16,
@@ -36484,27 +35204,24 @@ fn validate_bfv_bounded_noise_bootstrap_refresh_round_capacity(
 ) -> Result<(), BfvError> {
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     if refresh_rounds == 0 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} refresh-round capacity must be greater than zero"
-        )));
+        ));
     }
     let refresh_bound = bfv_fresh_bounded_noise_ciphertext_bound(params)?;
     let refresh_budget = refresh_bound
         .checked_mul(u128::from(refresh_rounds))
         .ok_or_else(|| {
-            BfvError::InvalidParameters(format!(
-                "{label} refresh-round noise budget exceeds deterministic limits"
-            ))
+            invalid!("{label} refresh-round noise budget exceeds deterministic limits")
         })?;
     let capacity = rounded_plaintext_decoding_capacity(params)?;
     if refresh_budget > capacity {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} refresh-round noise budget {refresh_budget} exceeds centered decoding capacity {capacity}"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bounded_noise_rns_addition_corridor(
     params: &BfvParameters,
     rns_chain: &BfvRnsModulusChain,
@@ -36512,7 +35229,6 @@ fn validate_bounded_noise_rns_addition_corridor(
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     rns_chain.validate_exact_ciphertext_modulus_addition_coverage(params)
 }
-
 fn validate_bounded_noise_rns_evaluator_corridor(
     params: &BfvParameters,
     rns_chain: &BfvRnsModulusChain,
@@ -36520,7 +35236,6 @@ fn validate_bounded_noise_rns_evaluator_corridor(
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     validate_rns_exact_evaluator_chain(params, rns_chain)
 }
-
 fn validate_bounded_noise_rns_basis_extension_corridor(
     params: &BfvParameters,
     decomposition_chain: &BfvRnsModulusChain,
@@ -36535,7 +35250,6 @@ fn validate_bounded_noise_rns_basis_extension_corridor(
         label,
     )
 }
-
 fn decrypt_scaled_coefficients(
     params: &BfvParameters,
     secret_key: &BfvSecretKey,
@@ -36544,14 +35258,12 @@ fn decrypt_scaled_coefficients(
     params.validate()?;
     validate_ciphertext(params, ciphertext)?;
     validate_secret_key(params, secret_key)?;
-
     Ok(poly_add_mod(
         params,
         &ciphertext.c0,
         &poly_mul_mod(params, &ciphertext.c1, &secret_key.s),
     ))
 }
-
 fn decrypt_bounded_noise_scaled_coefficients(
     params: &BfvParameters,
     secret_key: &BfvSecretKey,
@@ -36561,14 +35273,12 @@ fn decrypt_bounded_noise_scaled_coefficients(
     validate_ciphertext(params, ciphertext)?;
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     validate_secret_key(params, secret_key)?;
-
     Ok(poly_add_mod(
         params,
         &ciphertext.c0,
         &poly_mul_mod(params, &ciphertext.c1, &secret_key.s),
     ))
 }
-
 fn exact_residual_profile_from_scaled(
     params: &BfvParameters,
     scaled: &[u64],
@@ -36599,7 +35309,6 @@ fn exact_residual_profile_from_scaled(
         residual_multiple_headroom,
     }
 }
-
 fn bounded_noise_profile_from_scaled(
     params: &BfvParameters,
     scaled: &[u64],
@@ -36631,16 +35340,13 @@ fn bounded_noise_profile_from_scaled(
         noise_headroom,
     })
 }
-
 fn centered_residual_multiple_capacity(params: &BfvParameters) -> u128 {
     u128::from(params.ciphertext_modulus / params.plaintext_modulus / 2)
 }
-
 fn rounded_plaintext_scale(params: &BfvParameters) -> Result<u64, BfvError> {
     params.validate()?;
     Ok(params.ciphertext_modulus / params.plaintext_modulus)
 }
-
 fn rounded_plaintext_decoding_capacity(params: &BfvParameters) -> Result<u128, BfvError> {
     let scale = rounded_plaintext_scale(params)?;
     let capacity = scale.checked_sub(1).ok_or_else(|| {
@@ -36650,7 +35356,6 @@ fn rounded_plaintext_decoding_capacity(params: &BfvParameters) -> Result<u128, B
     })? / 2;
     Ok(u128::from(capacity))
 }
-
 fn validate_bounded_noise_bound_within_decoding_capacity(
     params: &BfvParameters,
     bound: u128,
@@ -36658,13 +35363,12 @@ fn validate_bounded_noise_bound_within_decoding_capacity(
 ) -> Result<(), BfvError> {
     let capacity = rounded_plaintext_decoding_capacity(params)?;
     if bound > capacity {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} {bound} exceeds rounded decoding capacity {capacity}"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_exact_residual_bound_within_centered_capacity(
     params: &BfvParameters,
     bound: u128,
@@ -36673,13 +35377,12 @@ fn validate_exact_residual_bound_within_centered_capacity(
     params.validate()?;
     let capacity = centered_residual_multiple_capacity(params);
     if bound > capacity {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} {bound} exceeds centered residual capacity {capacity}"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn centered_polynomial_max_abs(
     params: &BfvParameters,
     polynomial: &[u64],
@@ -36692,7 +35395,6 @@ fn centered_polynomial_max_abs(
         .max()
         .unwrap_or(0))
 }
-
 fn validate_centered_noise_bound(
     params: &BfvParameters,
     polynomial: &[u64],
@@ -36703,14 +35405,13 @@ fn validate_centered_noise_bound(
     for (index, &coefficient) in polynomial.iter().enumerate() {
         let centered = center_lift(coefficient, params.ciphertext_modulus);
         if centered.unsigned_abs() > bound {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "{label} centered noise coefficient[{index}] {centered} exceeds bound {bound}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_refresh_ciphertext_decrypts_to_zero(
     params: &BfvParameters,
     secret_key: &BfvSecretKey,
@@ -36728,19 +35429,16 @@ fn validate_refresh_ciphertext_decrypts_to_zero(
         .iter()
         .any(|&coefficient| coefficient != 0)
     {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must decrypt to zero plaintext"
-        )));
+        return Err(invalid!("{label} must decrypt to zero plaintext"));
     }
     if profile.max_abs_residual_multiple > residual_bound {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} residual {} exceeds BFV encrypted-zero refresh bound {residual_bound}",
             profile.max_abs_residual_multiple
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_key_switch_entry_residuals(
     params: &BfvParameters,
     source_secret: &[u64],
@@ -36770,7 +35468,6 @@ fn validate_key_switch_entry_residuals(
     }
     Ok(())
 }
-
 fn validate_bounded_noise_key_switch_entry_residuals(
     params: &BfvParameters,
     source_secret: &[u64],
@@ -36801,7 +35498,6 @@ fn validate_bounded_noise_key_switch_entry_residuals(
     }
     Ok(())
 }
-
 fn validate_plaintext_multiple_residual_bound(
     params: &BfvParameters,
     actual: &[u64],
@@ -36822,20 +35518,19 @@ fn validate_plaintext_multiple_residual_bound(
         );
         let centered_residual = center_lift(residual, params.ciphertext_modulus);
         if centered_residual % plaintext_modulus != 0 {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "{label} coefficient {coefficient_index} has non-plaintext-multiple residual"
-            )));
+            ));
         }
         let residual_multiple = centered_residual / plaintext_modulus;
         if residual_multiple.unsigned_abs() > max_error_multiple {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "{label} coefficient {coefficient_index} residual exceeds BFV error bound {BFV_ERROR_MULTIPLE_BOUND}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 /// Homomorphically add two ciphertexts.
 ///
 /// # Errors
@@ -36853,7 +35548,6 @@ pub fn add_ciphertexts(
         c1: poly_add_mod(params, &lhs.c1, &rhs.c1),
     })
 }
-
 /// Homomorphically add two ciphertexts through an exact RNS corridor.
 ///
 /// This is a guarded evaluator bridge for parameter sets whose RNS chain is
@@ -36880,7 +35574,6 @@ pub fn add_ciphertexts_rns_exact(
         c1: rns_chain.add_ciphertext_modulus_polynomials_exact(params, &lhs.c1, &rhs.c1)?,
     })
 }
-
 /// Homomorphically add two rounded BFV ciphertexts through a caller-supplied RNS corridor.
 ///
 /// This mirrors [`add_ciphertexts_rns_exact`] while preflighting rounded BFV
@@ -36900,7 +35593,6 @@ pub fn add_ciphertexts_bounded_noise_rns_exact(
     validate_bounded_noise_rns_addition_corridor(params, rns_chain)?;
     add_ciphertexts_rns_exact(params, rns_chain, lhs, rhs)
 }
-
 /// Homomorphically add two ciphertexts through the registered exact RNS corridor.
 ///
 /// The evaluator chain is derived from the registered production BFV profile,
@@ -36918,7 +35610,6 @@ pub fn add_ciphertexts_registered_rns_exact(
     let rns_chain = registered_bfv_rns_modulus_chain(params)?;
     add_ciphertexts_rns_exact(params, &rns_chain, lhs, rhs)
 }
-
 /// Homomorphically add two rounded BFV ciphertexts through the registered RNS corridor.
 ///
 /// This mirrors [`add_ciphertexts_registered_rns_exact`] while preflighting
@@ -36935,7 +35626,6 @@ pub fn add_ciphertexts_bounded_noise_registered_rns_exact(
     let rns_chain = registered_bfv_rns_modulus_chain(params)?;
     add_ciphertexts_bounded_noise_rns_exact(params, &rns_chain, lhs, rhs)
 }
-
 /// Homomorphically subtract one ciphertext from another.
 ///
 /// # Errors
@@ -36953,7 +35643,6 @@ pub fn subtract_ciphertexts(
         c1: poly_sub_mod(params, &lhs.c1, &rhs.c1),
     })
 }
-
 /// Homomorphically subtract one ciphertext from another through an exact RNS corridor.
 ///
 /// This mirrors [`add_ciphertexts_rns_exact`] for evaluator paths that need
@@ -36978,7 +35667,6 @@ pub fn subtract_ciphertexts_rns_exact(
     };
     add_ciphertexts_rns_exact(params, rns_chain, lhs, &rhs_negated)
 }
-
 /// Homomorphically subtract rounded BFV ciphertexts through a caller-supplied RNS corridor.
 ///
 /// This mirrors [`subtract_ciphertexts_rns_exact`] while preflighting rounded
@@ -36999,7 +35687,6 @@ pub fn subtract_ciphertexts_bounded_noise_rns_exact(
     validate_bounded_noise_rns_addition_corridor(params, rns_chain)?;
     subtract_ciphertexts_rns_exact(params, rns_chain, lhs, rhs)
 }
-
 /// Homomorphically subtract one ciphertext from another through the registered exact RNS corridor.
 ///
 /// The evaluator chain is derived from the registered production BFV profile,
@@ -37017,7 +35704,6 @@ pub fn subtract_ciphertexts_registered_rns_exact(
     let rns_chain = registered_bfv_rns_modulus_chain(params)?;
     subtract_ciphertexts_rns_exact(params, &rns_chain, lhs, rhs)
 }
-
 /// Homomorphically subtract rounded BFV ciphertexts through the registered RNS corridor.
 ///
 /// This mirrors [`subtract_ciphertexts_registered_rns_exact`] while
@@ -37034,7 +35720,6 @@ pub fn subtract_ciphertexts_bounded_noise_registered_rns_exact(
     let rns_chain = registered_bfv_rns_modulus_chain(params)?;
     subtract_ciphertexts_bounded_noise_rns_exact(params, &rns_chain, lhs, rhs)
 }
-
 /// Add a plaintext scalar to the coefficient-0 slot of a ciphertext.
 ///
 /// # Errors
@@ -37054,7 +35739,6 @@ pub fn add_plain_scalar(
         c1: ciphertext.c1.clone(),
     })
 }
-
 /// Add a plaintext scalar through the registered production BFV profile.
 ///
 /// Plain scalar addition does not need RNS arithmetic, but this helper derives
@@ -37072,7 +35756,6 @@ pub fn add_plain_scalar_registered_rns_exact(
     let _rns_chain = registered_bfv_rns_modulus_chain(params)?;
     add_plain_scalar(params, ciphertext, scalar)
 }
-
 /// Add a rounded-BFV plaintext scalar to coefficient slot zero.
 ///
 /// This is the rounded plaintext-scaling counterpart of [`add_plain_scalar`].
@@ -37101,7 +35784,6 @@ pub fn add_plain_scalar_bounded_noise(
         c1: ciphertext.c1.clone(),
     })
 }
-
 /// Add a rounded-BFV plaintext scalar through the registered production BFV profile.
 ///
 /// The registered evaluator chain is derived before bounded-noise capacity and
@@ -37119,7 +35801,6 @@ pub fn add_plain_scalar_bounded_noise_registered_rns_exact(
     let _rns_chain = registered_bfv_rns_modulus_chain(params)?;
     add_plain_scalar_bounded_noise(params, ciphertext, scalar)
 }
-
 /// Multiply a ciphertext by a plaintext scalar modulo the plaintext modulus.
 ///
 /// # Errors
@@ -37137,7 +35818,6 @@ pub fn multiply_plain_scalar(
         c1: poly_scalar_mul_mod(params, &ciphertext.c1, scalar),
     })
 }
-
 /// Multiply a ciphertext by a plaintext scalar through the registered BFV profile.
 ///
 /// Plain scalar multiplication remains scalar arithmetic, but this helper
@@ -37155,7 +35835,6 @@ pub fn multiply_plain_scalar_registered_rns_exact(
     let _rns_chain = registered_bfv_rns_modulus_chain(params)?;
     multiply_plain_scalar(params, ciphertext, scalar)
 }
-
 /// Multiply a rounded BFV ciphertext by a public plaintext scalar.
 ///
 /// This is the bounded-noise counterpart of [`multiply_plain_scalar`]. It
@@ -37174,7 +35853,6 @@ pub fn multiply_plain_scalar_bounded_noise(
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     multiply_plain_scalar(params, ciphertext, scalar)
 }
-
 /// Multiply a rounded BFV ciphertext by a public plaintext scalar through the registered profile.
 ///
 /// This is the production-bound counterpart of
@@ -37192,7 +35870,6 @@ pub fn multiply_plain_scalar_bounded_noise_registered_rns_exact(
     let _rns_chain = registered_bfv_rns_modulus_chain(params)?;
     multiply_plain_scalar_bounded_noise(params, ciphertext, scalar)
 }
-
 /// Multiply a ciphertext by a plaintext polynomial modulo the plaintext modulus.
 ///
 /// The plaintext coefficients are encoded in `Z_t[x] / (x^n + 1)` and padded
@@ -37216,7 +35893,6 @@ pub fn multiply_plaintext_polynomial(
         c1: poly_mul_mod(params, &ciphertext.c1, &encoded),
     })
 }
-
 /// Multiply a rounded BFV ciphertext by a public plaintext polynomial.
 ///
 /// The plaintext polynomial is encoded in the plaintext ring, not as another
@@ -37242,7 +35918,6 @@ pub fn multiply_plaintext_polynomial_bounded_noise(
         c1: poly_mul_mod(params, &ciphertext.c1, &encoded),
     })
 }
-
 /// Multiply a ciphertext by a plaintext polynomial through an exact RNS corridor.
 ///
 /// This is used by packed-slot public mask schedules so ciphertext-mask
@@ -37276,7 +35951,6 @@ pub fn multiply_plaintext_polynomial_rns_exact(
         )?,
     })
 }
-
 /// Multiply a ciphertext by a plaintext polynomial through the registered exact RNS corridor.
 ///
 /// The evaluator chain is derived from the registered production BFV profile,
@@ -37294,7 +35968,6 @@ pub fn multiply_plaintext_polynomial_registered_rns_exact(
     let rns_chain = registered_bfv_rns_modulus_chain(params)?;
     multiply_plaintext_polynomial_rns_exact(params, &rns_chain, ciphertext, plaintext)
 }
-
 /// Multiply a rounded BFV ciphertext by a public plaintext polynomial through an exact RNS corridor.
 ///
 /// This is the bounded-noise counterpart of
@@ -37316,7 +35989,6 @@ pub fn multiply_plaintext_polynomial_bounded_noise_rns_exact(
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     multiply_plaintext_polynomial_rns_exact(params, rns_chain, ciphertext, plaintext)
 }
-
 /// Multiply a rounded BFV ciphertext by a public plaintext polynomial through the registered RNS corridor.
 ///
 /// This is the production-bound counterpart of
@@ -37335,7 +36007,6 @@ pub fn multiply_plaintext_polynomial_bounded_noise_registered_rns_exact(
     let rns_chain = registered_bfv_rns_modulus_chain(params)?;
     multiply_plaintext_polynomial_bounded_noise_rns_exact(params, &rns_chain, ciphertext, plaintext)
 }
-
 /// Multiply two ciphertexts and relinearize the result back to two components.
 ///
 /// # Errors
@@ -37351,7 +36022,6 @@ pub fn multiply_ciphertexts(
     validate_relinearization_key_entries(params, relinearization_key)?;
     validate_ciphertext(params, lhs)?;
     validate_ciphertext(params, rhs)?;
-
     let raw_c0 = poly_mul_mod(params, &lhs.c0, &rhs.c0);
     let raw_c1 = poly_add_mod(
         params,
@@ -37361,7 +36031,6 @@ pub fn multiply_ciphertexts(
     let raw_c2 = poly_mul_mod(params, &lhs.c1, &rhs.c1);
     relinearize(params, relinearization_key, &raw_c0, &raw_c1, &raw_c2)
 }
-
 /// Multiply two rounded BFV ciphertexts and relinearize.
 ///
 /// This computes exact centered raw products, applies deterministic
@@ -37392,7 +36061,6 @@ pub fn multiply_ciphertexts_bounded_noise(
     )?;
     validate_ciphertext(params, lhs)?;
     validate_ciphertext(params, rhs)?;
-
     let raw_c0 = poly_mul_centered_raw(params, &lhs.c0, &rhs.c0, "bounded BFV multiply c0")?;
     let lhs_c0_rhs_c1 = poly_mul_centered_raw(
         params,
@@ -37408,7 +36076,6 @@ pub fn multiply_ciphertexts_bounded_noise(
     )?;
     let raw_c1 = poly_add_centered_raw(&lhs_c0_rhs_c1, &lhs_c1_rhs_c0, "bounded BFV multiply c1")?;
     let raw_c2 = poly_mul_centered_raw(params, &lhs.c1, &rhs.c1, "bounded BFV multiply c2")?;
-
     let scaled_c0 = scale_round_raw_product_polynomial(params, &raw_c0)?;
     let scaled_c1 = scale_round_raw_product_polynomial(params, &raw_c1)?;
     let scaled_c2 = scale_round_raw_product_polynomial(params, &raw_c2)?;
@@ -37420,7 +36087,6 @@ pub fn multiply_ciphertexts_bounded_noise(
         &scaled_c2,
     )
 }
-
 /// Multiply two rounded BFV ciphertexts through an exact RNS raw-product bridge.
 ///
 /// Raw ciphertext products are evaluated in the supplied RNS chain and
@@ -37454,7 +36120,6 @@ pub fn multiply_ciphertexts_bounded_noise_rns_exact(
     )?;
     validate_ciphertext(params, lhs)?;
     validate_ciphertext(params, rhs)?;
-
     let (scaled_c0, scaled_c1, scaled_c2) =
         multiply_ciphertexts_bounded_noise_rns_scaled_components(params, rns_chain, lhs, rhs)?;
     relinearize_rns_exact(
@@ -37466,7 +36131,6 @@ pub fn multiply_ciphertexts_bounded_noise_rns_exact(
         &scaled_c2,
     )
 }
-
 /// Multiply two rounded BFV ciphertexts through the registered RNS bridge.
 ///
 /// This registered entry point delegates to the target-limb basis-extension
@@ -37490,7 +36154,6 @@ pub fn multiply_ciphertexts_bounded_noise_registered_rns_exact(
         rhs,
     )
 }
-
 /// Multiply two rounded BFV ciphertexts through a target-limb RNS bridge.
 ///
 /// Raw products are evaluated and scale-rounded through the minimal centered
@@ -37534,7 +36197,6 @@ pub fn multiply_ciphertexts_bounded_noise_rns_basis_extension_exact(
         rhs,
     )
 }
-
 fn multiply_ciphertexts_bounded_noise_rns_basis_extension_with_scale_round_source_exact(
     params: &BfvParameters,
     scale_round_source_chain: &BfvRnsModulusChain,
@@ -37568,7 +36230,6 @@ fn multiply_ciphertexts_bounded_noise_rns_basis_extension_with_scale_round_sourc
     )?;
     validate_ciphertext(params, lhs)?;
     validate_ciphertext(params, rhs)?;
-
     let (scaled_c0, scaled_c1, scaled_c2) =
         multiply_ciphertexts_bounded_noise_rns_target_limb_scaled_components(
             params,
@@ -37587,7 +36248,6 @@ fn multiply_ciphertexts_bounded_noise_rns_basis_extension_with_scale_round_sourc
         &scaled_c2,
     )
 }
-
 /// Multiply two rounded BFV ciphertexts through the registered target-limb RNS bridge.
 ///
 /// The evaluator chain and key-switch decomposition chain are derived from the
@@ -37620,7 +36280,6 @@ pub fn multiply_ciphertexts_bounded_noise_registered_rns_basis_extension_exact(
         rhs,
     )
 }
-
 fn multiply_ciphertexts_bounded_noise_rns_scaled_components(
     params: &BfvParameters,
     rns_chain: &BfvRnsModulusChain,
@@ -37647,7 +36306,6 @@ fn multiply_ciphertexts_bounded_noise_rns_scaled_components(
         )?;
     Ok((scaled_c0, scaled_c1, scaled_c2))
 }
-
 fn multiply_ciphertexts_bounded_noise_rns_target_limb_scaled_components(
     params: &BfvParameters,
     scale_round_source_chain: &BfvRnsModulusChain,
@@ -37690,7 +36348,6 @@ fn multiply_ciphertexts_bounded_noise_rns_target_limb_scaled_components(
         )?;
     Ok((scaled_c0, scaled_c1, scaled_c2))
 }
-
 fn multiply_add_ciphertext_modulus_centered_polynomials_negacyclic_scale_round_exact(
     params: &BfvParameters,
     rns_chain: &BfvRnsModulusChain,
@@ -37712,7 +36369,6 @@ fn multiply_add_ciphertext_modulus_centered_polynomials_negacyclic_scale_round_e
     let product_b = rns_chain.multiply_rns_polynomials_negacyclic(params, &lhs_b, &rhs_b)?;
     rns_chain.scale_round_add_centered_product_polynomials_exact(params, &product_a, &product_b)
 }
-
 /// Multiply two ciphertexts through an exact RNS corridor and relinearize.
 ///
 /// Raw ciphertext products and relinearization-key products are evaluated with
@@ -37744,7 +36400,6 @@ pub fn multiply_ciphertexts_rns_exact(
     )?;
     validate_ciphertext(params, lhs)?;
     validate_ciphertext(params, rhs)?;
-
     let raw_c0 = rns_chain
         .multiply_ciphertext_modulus_polynomials_negacyclic_exact(params, &lhs.c0, &rhs.c0)?;
     let lhs_c0_rhs_c1 = rns_chain
@@ -37767,7 +36422,6 @@ pub fn multiply_ciphertexts_rns_exact(
         &raw_c2,
     )
 }
-
 /// Multiply two ciphertexts through the registered exact RNS corridor.
 ///
 /// The evaluator chain is derived from the registered production BFV profile
@@ -37786,7 +36440,6 @@ pub fn multiply_ciphertexts_registered_rns_exact(
     let rns_chain = registered_bfv_rns_modulus_chain(params)?;
     multiply_ciphertexts_rns_exact(params, &rns_chain, relinearization_key, lhs, rhs)
 }
-
 /// Evaluate a public affine circuit over scalar ciphertext inputs.
 ///
 /// Each input ciphertext is expected to encode its scalar in coefficient 0. The
@@ -37804,7 +36457,6 @@ pub fn evaluate_affine_circuit(
     for ciphertext in inputs {
         validate_ciphertext(params, ciphertext)?;
     }
-
     let mut outputs = Vec::with_capacity(circuit.weights.len());
     for (row, &bias) in circuit.weights.iter().zip(&circuit.bias) {
         let mut accumulator = zero_ciphertext(params);
@@ -37816,7 +36468,6 @@ pub fn evaluate_affine_circuit(
     }
     Ok(outputs)
 }
-
 /// Evaluate a public affine circuit through the registered exact RNS corridor.
 ///
 /// Public scalar multiplication and bias addition stay in scalar form because
@@ -37837,7 +36488,6 @@ pub fn evaluate_affine_circuit_registered_rns_exact(
     for ciphertext in inputs {
         validate_ciphertext(params, ciphertext)?;
     }
-
     let mut outputs = Vec::with_capacity(circuit.weights.len());
     for (row, &bias) in circuit.weights.iter().zip(&circuit.bias) {
         let mut accumulator = zero_ciphertext(params);
@@ -37849,7 +36499,6 @@ pub fn evaluate_affine_circuit_registered_rns_exact(
     }
     Ok(outputs)
 }
-
 /// Evaluate a public affine circuit over rounded BFV scalar ciphertext inputs.
 ///
 /// This caller-supplied exact-RNS helper preflights rounded decoding capacity
@@ -37872,7 +36521,6 @@ pub fn evaluate_affine_circuit_bounded_noise_rns_exact(
     for ciphertext in inputs {
         validate_ciphertext(params, ciphertext)?;
     }
-
     let mut outputs = Vec::with_capacity(circuit.weights.len());
     for (row, &bias) in circuit.weights.iter().zip(&circuit.bias) {
         let mut accumulator = zero_ciphertext(params);
@@ -37884,7 +36532,6 @@ pub fn evaluate_affine_circuit_bounded_noise_rns_exact(
     }
     Ok(outputs)
 }
-
 /// Evaluate a public affine circuit over rounded BFV scalar ciphertext inputs.
 ///
 /// This production-oriented bounded-noise helper requires a registered BFV
@@ -37906,7 +36553,6 @@ pub fn evaluate_affine_circuit_bounded_noise_registered_rns_exact(
     for ciphertext in inputs {
         validate_ciphertext(params, ciphertext)?;
     }
-
     let mut outputs = Vec::with_capacity(circuit.weights.len());
     for (row, &bias) in circuit.weights.iter().zip(&circuit.bias) {
         let mut accumulator = zero_ciphertext(params);
@@ -37928,7 +36574,6 @@ pub fn evaluate_affine_circuit_bounded_noise_registered_rns_exact(
     }
     Ok(outputs)
 }
-
 /// Derive deterministic BFV key material for encrypted identifier input.
 ///
 /// The derived public parameters are suitable for publication in policy
@@ -37963,7 +36608,6 @@ pub fn derive_identifier_key_material_from_seed(
     public_parameters.validate()?;
     Ok((public_parameters, secret_key, relinearization_key))
 }
-
 /// Encrypt raw identifier bytes into a BFV ciphertext envelope.
 ///
 /// The envelope stores the byte length in slot 0 followed by one byte per slot.
@@ -37996,7 +36640,6 @@ pub fn encrypt_identifier_from_seed(
         .collect::<Result<Vec<_>, _>>()?;
     Ok(BfvIdentifierCiphertext { slots })
 }
-
 /// Decrypt a BFV ciphertext envelope back into raw identifier bytes.
 ///
 /// # Errors
@@ -38025,17 +36668,14 @@ pub fn decrypt_identifier(
         .collect::<Result<Vec<_>, _>>()?;
     decode_identifier_slots(public_parameters, &scalars)
 }
-
 /// Human-readable summary of one ciphertext slot decoded as a scalar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BfvScalar(pub u64);
-
 impl fmt::Display for BfvScalar {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
-
 fn validate_plaintext(params: &BfvParameters, plaintext: &[u64]) -> Result<(), BfvError> {
     params.validate()?;
     if plaintext.len() > params.degree() {
@@ -38055,7 +36695,6 @@ fn validate_plaintext(params: &BfvParameters, plaintext: &[u64]) -> Result<(), B
     }
     Ok(())
 }
-
 fn validate_plain_scalar(params: &BfvParameters, scalar: u64) -> Result<(), BfvError> {
     params.validate()?;
     if scalar >= params.plaintext_modulus {
@@ -38066,16 +36705,15 @@ fn validate_plain_scalar(params: &BfvParameters, scalar: u64) -> Result<(), BfvE
     }
     Ok(())
 }
-
 fn validate_secret_key(params: &BfvParameters, secret_key: &BfvSecretKey) -> Result<(), BfvError> {
     params.validate()?;
     validate_poly(params, &secret_key.s, "secret key")?;
     let negative_one = params.ciphertext_modulus - 1;
     for (index, &coefficient) in secret_key.s.iter().enumerate() {
         if !matches!(coefficient, 0 | 1) && coefficient != negative_one {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV secret key coefficient[{index}] must be ternary in {{0, 1, q-1}}"
-            )));
+            ));
         }
     }
     if !secret_key.s.is_empty() && secret_key.s.iter().all(|&coefficient| coefficient == 0) {
@@ -38085,7 +36723,6 @@ fn validate_secret_key(params: &BfvParameters, secret_key: &BfvSecretKey) -> Res
     }
     Ok(())
 }
-
 /// Validate BFV public-key shape against a parameter set.
 ///
 /// # Errors
@@ -38099,7 +36736,6 @@ pub fn validate_public_key(
     validate_poly(params, &public_key.b, "public key b")?;
     validate_poly(params, &public_key.a, "public key a")
 }
-
 fn validate_relinearization_key(
     params: &BfvParameters,
     relinearization_key: &BfvRelinearizationKey,
@@ -38107,14 +36743,12 @@ fn validate_relinearization_key(
     validate_relinearization_key_metadata(params, relinearization_key)?;
     validate_relinearization_key_entries(params, relinearization_key)
 }
-
 fn validate_relinearization_key_metadata(
     params: &BfvParameters,
     relinearization_key: &BfvRelinearizationKey,
 ) -> Result<(), BfvError> {
     validate_key_switch_entry_count(params, &relinearization_key.entries, "relinearization key")
 }
-
 fn validate_relinearization_key_entries(
     params: &BfvParameters,
     relinearization_key: &BfvRelinearizationKey,
@@ -38125,19 +36759,16 @@ fn validate_relinearization_key_entries(
         "relinearization key",
     )
 }
-
 fn validate_galois_key(params: &BfvParameters, galois_key: &BfvGaloisKey) -> Result<(), BfvError> {
     validate_galois_key_metadata(params, galois_key)?;
     validate_galois_key_entries(params, galois_key)
 }
-
 fn validate_galois_key_entries(
     params: &BfvParameters,
     galois_key: &BfvGaloisKey,
 ) -> Result<(), BfvError> {
     validate_key_switch_entries(params, &galois_key.entries, "Galois key")
 }
-
 fn validate_galois_key_metadata(
     params: &BfvParameters,
     galois_key: &BfvGaloisKey,
@@ -38146,7 +36777,6 @@ fn validate_galois_key_metadata(
     validate_galois_automorphism_power(params, galois_key.automorphism_power)?;
     Ok(())
 }
-
 fn validate_rotation_key(
     params: &BfvParameters,
     rotation_key: &BfvRotationKey,
@@ -38154,7 +36784,6 @@ fn validate_rotation_key(
     validate_rotation_key_metadata(params, rotation_key)?;
     validate_rotation_key_entries(params, rotation_key)
 }
-
 fn validate_rotation_key_for_refresh_application(
     params: &BfvParameters,
     rotation_key: &BfvRotationKey,
@@ -38162,7 +36791,6 @@ fn validate_rotation_key_for_refresh_application(
     validate_rotation_key(params, rotation_key)?;
     validate_ciphertext_not_all_zero("rotation key zero_refresh", &rotation_key.zero_refresh)
 }
-
 fn validate_rotation_key_metadata(
     params: &BfvParameters,
     rotation_key: &BfvRotationKey,
@@ -38175,37 +36803,34 @@ fn validate_rotation_key_metadata(
     }
     Ok(())
 }
-
 fn validate_rotation_key_entries(
     params: &BfvParameters,
     rotation_key: &BfvRotationKey,
 ) -> Result<(), BfvError> {
     validate_ciphertext(params, &rotation_key.zero_refresh)
 }
-
 fn validate_rotation_key_set_metadata(
     params: &BfvParameters,
     rotation_keys: &[BfvRotationKey],
 ) -> Result<(), BfvError> {
     params.validate()?;
     if rotation_keys.len() > BFV_EVALUATION_KEY_MAX_ROTATION_KEYS {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "evaluation-key bundle supports at most {BFV_EVALUATION_KEY_MAX_ROTATION_KEYS} rotation keys"
-        )));
+        ));
     }
     let mut seen_rotations = std::collections::BTreeSet::new();
     for key in rotation_keys {
         validate_rotation_key_metadata(params, key)?;
         if !seen_rotations.insert(key.rotation_steps) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "duplicate rotation key for {} steps",
                 key.rotation_steps
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_rotation_key_set_entries(
     params: &BfvParameters,
     rotation_keys: &[BfvRotationKey],
@@ -38215,7 +36840,6 @@ fn validate_rotation_key_set_entries(
     }
     Ok(())
 }
-
 fn validate_evaluation_key_bundle_metadata(
     params: &BfvParameters,
     bundle: &BfvEvaluationKeyBundle,
@@ -38228,7 +36852,6 @@ fn validate_evaluation_key_bundle_metadata(
     }
     Ok(())
 }
-
 fn validate_evaluation_key_bundle_zero_refresh_preflight(
     params: &BfvParameters,
     bundle: &BfvEvaluationKeyBundle,
@@ -38242,7 +36865,6 @@ fn validate_evaluation_key_bundle_zero_refresh_preflight(
     }
     Ok(())
 }
-
 fn validate_evaluation_key_bundle_key_switch_entries(
     params: &BfvParameters,
     bundle: &BfvEvaluationKeyBundle,
@@ -38250,7 +36872,6 @@ fn validate_evaluation_key_bundle_key_switch_entries(
     validate_relinearization_key_entries(params, &bundle.relinearization_key)?;
     validate_galois_key_set_entries(params, &bundle.galois_keys)
 }
-
 fn validate_galois_key_set(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
@@ -38259,7 +36880,6 @@ fn validate_galois_key_set(
     validate_galois_key_set_metadata(params, galois_keys, label)?;
     validate_galois_key_set_entries(params, galois_keys)
 }
-
 fn validate_galois_key_set_metadata(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
@@ -38267,23 +36887,22 @@ fn validate_galois_key_set_metadata(
 ) -> Result<(), BfvError> {
     params.validate()?;
     if galois_keys.len() > BFV_EVALUATION_KEY_MAX_GALOIS_KEYS {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} supports at most {BFV_EVALUATION_KEY_MAX_GALOIS_KEYS} Galois keys"
-        )));
+        ));
     }
     let mut seen_powers = std::collections::BTreeSet::new();
     for key in galois_keys {
         validate_galois_key_metadata(params, key)?;
         if !seen_powers.insert(key.automorphism_power) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "{label} contains duplicate Galois key for automorphism power {}",
                 key.automorphism_power
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_galois_key_set_entries(
     params: &BfvParameters,
     galois_keys: &[BfvGaloisKey],
@@ -38293,7 +36912,6 @@ fn validate_galois_key_set_entries(
     }
     Ok(())
 }
-
 fn validate_key_switch_entries(
     params: &BfvParameters,
     entries: &[BfvRelinearizationKeyEntry],
@@ -38302,7 +36920,6 @@ fn validate_key_switch_entries(
     validate_key_switch_entry_count(params, entries, label)?;
     validate_key_switch_entry_polynomials(params, entries, label)
 }
-
 fn validate_key_switch_entry_count(
     params: &BfvParameters,
     entries: &[BfvRelinearizationKeyEntry],
@@ -38319,7 +36936,6 @@ fn validate_key_switch_entry_count(
     }
     Ok(())
 }
-
 fn validate_key_switch_entry_polynomials(
     params: &BfvParameters,
     entries: &[BfvRelinearizationKeyEntry],
@@ -38330,19 +36946,18 @@ fn validate_key_switch_entry_polynomials(
         validate_poly(params, &entry.b, &format!("{label} b[{index}]"))?;
         validate_poly(params, &entry.a, &format!("{label} a[{index}]"))?;
         if entry.b.iter().all(|&coefficient| coefficient == 0) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "{label} entry[{index}] b component must not be all zero"
-            )));
+            ));
         }
         if entry.a.iter().all(|&coefficient| coefficient == 0) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "{label} entry[{index}] a component must not be all zero"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_key_switch_inputs(
     params: &BfvParameters,
     entries: &[BfvRelinearizationKeyEntry],
@@ -38362,7 +36977,6 @@ fn validate_key_switch_inputs(
         "key switch switching component",
     )
 }
-
 fn validate_refresh_preflight(
     params: &BfvParameters,
     rotation_transcripts: &[BfvRotationKeyTranscriptSeed<'_>],
@@ -38394,16 +37008,15 @@ fn validate_refresh_preflight(
     }
     Ok(())
 }
-
 fn validate_refresh_transcript_metadata(
     rotation_transcripts: &[BfvRotationKeyTranscriptSeed<'_>],
     bootstrap_transcript: Option<BfvBootstrapKeyTranscriptSeed<'_>>,
     mode: BfvRefreshTranscriptMode,
 ) -> Result<(), BfvError> {
     if rotation_transcripts.len() > BFV_EVALUATION_KEY_MAX_ROTATION_KEYS {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV refresh transcript supports at most {BFV_EVALUATION_KEY_MAX_ROTATION_KEYS} rotation transcripts"
-        )));
+        ));
     }
     let mut seen_rotations = std::collections::BTreeSet::new();
     for transcript in rotation_transcripts {
@@ -38413,10 +37026,10 @@ fn validate_refresh_transcript_metadata(
             ));
         }
         if !seen_rotations.insert(transcript.rotation_steps) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "duplicate rotation refresh transcript for {} steps",
                 transcript.rotation_steps
-            )));
+            ));
         }
         validate_refresh_transcript_seed(mode.rotation_seed_label(), transcript.seed)?;
     }
@@ -38426,49 +37039,38 @@ fn validate_refresh_transcript_metadata(
     }
     Ok(())
 }
-
 fn validate_refresh_transcript_seed(label: &str, seed: &[u8]) -> Result<(), BfvError> {
     if seed.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if seed.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be all zero"
-        )));
+        return Err(invalid!("{label} must not be all zero"));
     }
     validate_bfv_full_bootstrap_bytes_not_placeholder_text(label, seed)?;
     validate_bfv_full_bootstrap_binary_decorated_placeholder_text(label, seed)?;
     if seed.len() > BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} exceeds the maximum supported length {BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES}"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_deterministic_seed(label: &str, seed: &[u8]) -> Result<(), BfvError> {
     if seed.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if seed.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be all zero"
-        )));
+        return Err(invalid!("{label} must not be all zero"));
     }
     validate_bfv_full_bootstrap_bytes_not_placeholder_text(label, seed)?;
     validate_bfv_full_bootstrap_binary_decorated_placeholder_text(label, seed)?;
     if seed.len() > BFV_DETERMINISTIC_SEED_MAX_BYTES {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} exceeds the maximum supported length {BFV_DETERMINISTIC_SEED_MAX_BYTES}"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_galois_automorphism_power(
     params: &BfvParameters,
     automorphism_power: u32,
@@ -38485,9 +37087,9 @@ fn validate_galois_automorphism_power(
         )
     })?;
     if power == 0 || power >= cyclotomic_order {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV Galois automorphism power must be in 1..{cyclotomic_order}"
-        )));
+        ));
     }
     let cyclotomic_order_u64 = u64::try_from(cyclotomic_order).map_err(|_| {
         BfvError::InvalidParameters(
@@ -38501,13 +37103,11 @@ fn validate_galois_automorphism_power(
     }
     Ok(power)
 }
-
 fn validate_ciphertext(params: &BfvParameters, ciphertext: &BfvCiphertext) -> Result<(), BfvError> {
     params.validate()?;
     validate_poly(params, &ciphertext.c0, "ciphertext c0")?;
     validate_poly(params, &ciphertext.c1, "ciphertext c1")
 }
-
 fn validate_ciphertext_not_all_zero(
     label: &str,
     ciphertext: &BfvCiphertext,
@@ -38517,13 +37117,10 @@ fn validate_ciphertext_not_all_zero(
         && ciphertext.c0.iter().all(|&coefficient| coefficient == 0)
         && ciphertext.c1.iter().all(|&coefficient| coefficient == 0)
     {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be an all-zero ciphertext"
-        )));
+        return Err(invalid!("{label} must not be an all-zero ciphertext"));
     }
     Ok(())
 }
-
 fn validate_poly(params: &BfvParameters, poly: &[u64], label: &str) -> Result<(), BfvError> {
     params.validate()?;
     if poly.len() != params.degree() {
@@ -38544,7 +37141,6 @@ fn validate_poly(params: &BfvParameters, poly: &[u64], label: &str) -> Result<()
     }
     Ok(())
 }
-
 fn validate_bootstrap_key(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -38553,7 +37149,6 @@ fn validate_bootstrap_key(
     validate_bootstrap_key_shape_metadata(bootstrap_key)?;
     validate_bootstrap_key_entries(params, bootstrap_key)
 }
-
 fn validate_bootstrap_key_for_refresh_application(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -38561,7 +37156,6 @@ fn validate_bootstrap_key_for_refresh_application(
     validate_bootstrap_key(params, bootstrap_key)?;
     validate_bootstrap_key_refresh_material_not_inert(bootstrap_key)
 }
-
 fn validate_bootstrap_key_shape_metadata(bootstrap_key: &BfvBootstrapKey) -> Result<(), BfvError> {
     validate_bootstrap_key_id(&bootstrap_key.key_id)?;
     if let Some(public_key_digest) = bootstrap_key.public_key_digest.as_ref() {
@@ -38577,7 +37171,6 @@ fn validate_bootstrap_key_shape_metadata(bootstrap_key: &BfvBootstrapKey) -> Res
         }
     }
 }
-
 fn validate_bootstrap_key_admission_shape_metadata(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -38616,7 +37209,6 @@ fn validate_bootstrap_key_admission_shape_metadata(
     }
     Ok(())
 }
-
 fn validate_full_bootstrap_key_public_key_digest_aliases_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -38701,7 +37293,6 @@ fn validate_full_bootstrap_key_public_key_digest_aliases_v1(
         ],
     )
 }
-
 fn validate_bootstrap_key_public_key_digest(
     params: &BfvParameters,
     public_key: &BfvPublicKey,
@@ -38726,7 +37317,6 @@ fn validate_bootstrap_key_public_key_digest(
     }
     Ok(())
 }
-
 fn validate_bootstrap_key_public_key_digest_metadata(digest: &Hash) -> Result<(), BfvError> {
     validate_nonzero_material_digest("BFV bootstrap key public-key digest", digest)?;
     validate_no_full_bootstrap_placeholder_material_digest(
@@ -38734,7 +37324,6 @@ fn validate_bootstrap_key_public_key_digest_metadata(digest: &Hash) -> Result<()
         digest,
     )
 }
-
 fn validate_bootstrap_key_round_refresh_shape(
     bootstrap_key: &BfvBootstrapKey,
 ) -> Result<(), BfvError> {
@@ -38747,7 +37336,6 @@ fn validate_bootstrap_key_round_refresh_shape(
     }
     Ok(())
 }
-
 fn validate_bootstrap_key_refresh_mode(bootstrap_key: &BfvBootstrapKey) -> Result<(), BfvError> {
     match bootstrap_key.mode {
         BfvBootstrapKeyMode::RefreshOnlyV1 => {
@@ -38771,7 +37359,6 @@ fn validate_bootstrap_key_refresh_mode(bootstrap_key: &BfvBootstrapKey) -> Resul
         }
     }
 }
-
 fn validate_bootstrap_key_refresh_only_shape_metadata(
     bootstrap_key: &BfvBootstrapKey,
 ) -> Result<(), BfvError> {
@@ -38784,7 +37371,6 @@ fn validate_bootstrap_key_refresh_only_shape_metadata(
     }
     validate_bootstrap_key_round_refresh_shape(bootstrap_key)
 }
-
 fn validate_full_bootstrap_key_refresh_material_absent(
     bootstrap_key: &BfvBootstrapKey,
 ) -> Result<(), BfvError> {
@@ -38808,7 +37394,6 @@ fn validate_full_bootstrap_key_refresh_material_absent(
     }
     Ok(())
 }
-
 const BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_PREIMAGES: &[&[u8]] = &[
     b"pending BFV full-bootstrap proof-key pair commitment",
     b"pending BFV full-bootstrap proof-key material commitment",
@@ -38900,7 +37485,6 @@ const BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_DELAY_PREFIXES: &[&[u8]] = 
     b"governed material digest before placeholder: ",
 ];
 static BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGESTS_V1: OnceLock<Vec<Hash>> = OnceLock::new();
-
 fn push_bfv_full_bootstrap_placeholder_material_digests_v1(
     digests: &mut Vec<Hash>,
     preimage: &[u8],
@@ -38930,7 +37514,6 @@ fn push_bfv_full_bootstrap_placeholder_material_digests_v1(
         preimage,
     ]));
 }
-
 fn bfv_full_bootstrap_placeholder_material_digests_v1() -> &'static [Hash] {
     BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGESTS_V1
         .get_or_init(|| {
@@ -38949,20 +37532,15 @@ fn bfv_full_bootstrap_placeholder_material_digests_v1() -> &'static [Hash] {
         })
         .as_slice()
 }
-
 fn is_bfv_full_bootstrap_placeholder_material_digest_v1(digest: &Hash) -> bool {
     bfv_full_bootstrap_placeholder_material_digests_v1().contains(digest)
 }
-
 fn validate_nonzero_material_digest(label: &str, digest: &Hash) -> Result<(), BfvError> {
     if *digest == Hash::prehashed([0_u8; Hash::LENGTH]) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be the zero hash"
-        )));
+        return Err(invalid!("{label} must not be the zero hash"));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_digest_material_hashes(
     material_label: &str,
     digests: &[(&str, &Hash)],
@@ -38977,98 +37555,88 @@ fn validate_bfv_full_bootstrap_digest_material_hashes(
     for (index, (label, digest)) in digests.iter().enumerate() {
         if let Some((prior_label, _)) = digests[..index].iter().find(|(_, prior)| *prior == *digest)
         {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "{material_label} {label} must be distinct from {prior_label}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_no_full_bootstrap_placeholder_material_digest(
     label: &str,
     digest: &Hash,
 ) -> Result<(), BfvError> {
     if is_bfv_full_bootstrap_placeholder_material_digest_v1(digest) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must not be a placeholder full-bootstrap digest"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_nonzero_sha256_digest(
     label: &str,
     digest: &[u8; Hash::LENGTH],
 ) -> Result<(), BfvError> {
     if digest.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be the zero SHA-256 digest"
-        )));
+        return Err(invalid!("{label} must not be the zero SHA-256 digest"));
     }
     Ok(())
 }
-
 fn validate_no_bfv_full_bootstrap_inert_sha256_digest(
     label: &str,
     digest: &[u8; Hash::LENGTH],
 ) -> Result<(), BfvError> {
     if is_bfv_full_bootstrap_native_payload_inert_digest_v1(digest) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must not be an inert native payload digest"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_no_bfv_full_bootstrap_inert_generated_circuit_body_sha256_digest(
     label: &str,
     digest: &[u8; Hash::LENGTH],
 ) -> Result<(), BfvError> {
     if is_bfv_full_bootstrap_native_payload_inert_digest_v1(digest) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must not identify inert or placeholder generated circuit body material"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_linear_transform_role(
     role: BfvFullBootstrapCircuitArtifactRoleV1,
 ) -> Result<(), BfvError> {
     match role {
         BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey
         | BfvFullBootstrapCircuitArtifactRoleV1::SlotToCoefficientKey => Ok(()),
-        _ => Err(BfvError::InvalidParameters(format!(
+        _ => Err(invalid!(
             "BFV full-bootstrap artifact role {role:?} is not a linear-transform role"
-        ))),
+        )),
     }
 }
-
 fn validate_bfv_full_bootstrap_proof_key_role(
     role: BfvFullBootstrapCircuitArtifactRoleV1,
 ) -> Result<(), BfvError> {
     match role {
         BfvFullBootstrapCircuitArtifactRoleV1::ProverKey
         | BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey => Ok(()),
-        _ => Err(BfvError::InvalidParameters(format!(
+        _ => Err(invalid!(
             "BFV full-bootstrap artifact role {role:?} is not a proof-key role"
-        ))),
+        )),
     }
 }
-
 fn full_bootstrap_proof_key_role_label(
     role: BfvFullBootstrapCircuitArtifactRoleV1,
 ) -> Result<&'static [u8], BfvError> {
     match role {
         BfvFullBootstrapCircuitArtifactRoleV1::ProverKey => Ok(b"prover-key"),
         BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey => Ok(b"verifier-key"),
-        _ => Err(BfvError::InvalidParameters(format!(
+        _ => Err(invalid!(
             "BFV full-bootstrap artifact role {role:?} is not a proof-key role"
-        ))),
+        )),
     }
 }
-
 fn validate_bfv_full_bootstrap_proof_key_profile_v1(
     key: &BfvFullBootstrapProofKeyV1,
 ) -> Result<(), BfvError> {
@@ -39078,7 +37646,6 @@ fn validate_bfv_full_bootstrap_proof_key_profile_v1(
     validate_bfv_full_bootstrap_proof_key_public_input_layout_v1(key)?;
     validate_bfv_full_bootstrap_proof_key_material_payload_v1(key)
 }
-
 fn bfv_full_bootstrap_native_proof_circuit_fingerprint_material_v1(
     native_payload_circuit_id: &str,
 ) -> Result<BfvFullBootstrapNativeProofCircuitFingerprintMaterialV1, BfvError> {
@@ -39149,7 +37716,6 @@ fn bfv_full_bootstrap_native_proof_circuit_fingerprint_material_v1(
         rejects_stale_proof_key_artifacts: true,
     })
 }
-
 fn bfv_full_bootstrap_native_generated_circuit_body_v1(
     native_payload_circuit_id: &str,
 ) -> Result<Vec<u8>, BfvError> {
@@ -39165,9 +37731,9 @@ fn bfv_full_bootstrap_native_generated_circuit_body_v1(
         canonical_bfv_full_bootstrap_proof_public_input_schema_payload_digest_v1()?;
     let release_prover_contract_digest = bfv_full_bootstrap_release_prover_contract_digest_v1()?;
     let air_body = norito::encode_canonical(&air_material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "BFV full-bootstrap native generated circuit body AIR material encoding failed: {err}"
-        ))
+        )
     })?;
     let body = BfvFullBootstrapNativeGeneratedCircuitBodyV1 {
         version: BFV_FULL_BOOTSTRAP_NATIVE_GENERATED_CIRCUIT_BODY_VERSION_V1,
@@ -39228,28 +37794,24 @@ fn bfv_full_bootstrap_native_generated_circuit_body_v1(
         arithmetic_air_constraint_system_body: air_body,
     };
     norito::encode_canonical(&body).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap native generated circuit body encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap native generated circuit body encoding failed: {err}")
     })
 }
-
 fn bfv_full_bootstrap_native_proof_circuit_fingerprint_v1(
     native_payload_circuit_id: &str,
 ) -> Result<Hash, BfvError> {
     let material =
         bfv_full_bootstrap_native_proof_circuit_fingerprint_material_v1(native_payload_circuit_id)?;
     let bytes = norito::encode_canonical(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "BFV full-bootstrap native proof circuit fingerprint material encoding failed: {err}"
-        ))
+        )
     })?;
     Ok(Hash::new_from_chunks(&[
         BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_DOMAIN,
         bytes.as_slice(),
     ]))
 }
-
 fn encode_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
     native_payload_circuit_id: &str,
 ) -> Result<Vec<u8>, BfvError> {
@@ -39285,12 +37847,9 @@ fn encode_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
         merkle_arity: BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_MERKLE_ARITY_V1,
     };
     norito::encode_canonical(&payload).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap native transparent prover payload encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap native transparent prover payload encoding failed: {err}")
     })
 }
-
 fn encode_bfv_full_bootstrap_native_proof_key_material_v1(
     key_role: BfvFullBootstrapCircuitArtifactRoleV1,
     native_payload_kind: &str,
@@ -39334,14 +37893,11 @@ fn encode_bfv_full_bootstrap_native_proof_key_material_v1(
     };
     validate_bfv_full_bootstrap_native_proof_key_material_object_v1(&material)?;
     let encoded = norito::encode_canonical(&material).map_err(|err| {
-        BfvError::InvalidParameters(format!(
-            "BFV full-bootstrap native proof key material encoding failed: {err}"
-        ))
+        invalid!("BFV full-bootstrap native proof key material encoding failed: {err}")
     })?;
     validate_bfv_full_bootstrap_native_proof_key_material_shape_v1(&encoded)?;
     Ok(encoded)
 }
-
 fn validate_bfv_full_bootstrap_proof_key_backend_profile_v1(
     key: &BfvFullBootstrapProofKeyV1,
 ) -> Result<(), BfvError> {
@@ -39360,14 +37916,13 @@ fn validate_bfv_full_bootstrap_proof_key_backend_profile_v1(
         &key.circuit_id,
     )?;
     if key.circuit_id != BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key circuit id `{}` does not match canonical `{BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1}`",
             key.circuit_id
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_key_digests_and_depth_v1(
     key: &BfvFullBootstrapProofKeyV1,
 ) -> Result<(), BfvError> {
@@ -39378,13 +37933,12 @@ fn validate_bfv_full_bootstrap_proof_key_digests_and_depth_v1(
         ));
     }
     if key.max_bootstrap_depth > BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key max_bootstrap_depth exceeds supported limit {BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH}"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_key_commitment_profile_digests_v1(
     key: &BfvFullBootstrapProofKeyV1,
 ) -> Result<(), BfvError> {
@@ -39413,39 +37967,40 @@ fn validate_bfv_full_bootstrap_proof_key_commitment_profile_digests_v1(
         ],
     )
 }
-
 fn validate_bfv_full_bootstrap_proof_key_public_input_layout_v1(
     key: &BfvFullBootstrapProofKeyV1,
 ) -> Result<(), BfvError> {
     if key.statement_material_version
         != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_VERSION_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key statement material version {} does not match canonical version {}",
             key.statement_material_version,
             BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_VERSION_V1
-        )));
+        ));
     }
     if key.statement_material_field_count
         != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key statement material field count {} does not match canonical count {}",
             key.statement_material_field_count,
             BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1
-        )));
+        ));
     }
     if key.claim_version != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key claim version {} does not match canonical version {}",
-            key.claim_version, BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_VERSION_V1
-        )));
+            key.claim_version,
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_VERSION_V1
+        ));
     }
     if key.claim_field_count != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key claim field count {} does not match canonical count {}",
-            key.claim_field_count, BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_FIELD_COUNT_V1
-        )));
+            key.claim_field_count,
+            BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_FIELD_COUNT_V1
+        ));
     }
     validate_bfv_full_bootstrap_canonical_bytes_label(
         "BFV full-bootstrap proof key witness digest domain",
@@ -39455,51 +38010,52 @@ fn validate_bfv_full_bootstrap_proof_key_public_input_layout_v1(
     if key.witness_digest_material_version
         != BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_VERSION_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key witness material version {} does not match canonical version {}",
             key.witness_digest_material_version,
             BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_VERSION_V1
-        )));
+        ));
     }
     if key.witness_digest_material_field_count
         != BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key witness material field count {} does not match canonical count {}",
             key.witness_digest_material_field_count,
             BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_FIELD_COUNT_V1
-        )));
+        ));
     }
     if key.witness_trace_field_count != BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key witness trace field count {} does not match canonical count {}",
-            key.witness_trace_field_count, BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_FIELD_COUNT_V1
-        )));
+            key.witness_trace_field_count,
+            BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_FIELD_COUNT_V1
+        ));
     }
     if key.witness_trace_bounds_field_count
         != BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_BOUNDS_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key witness trace bounds field count {} does not match canonical count {}",
             key.witness_trace_bounds_field_count,
             BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_BOUNDS_FIELD_COUNT_V1
-        )));
+        ));
     }
     if key.public_input_hash_count != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key public-input hash count {} does not match canonical count {}",
             key.public_input_hash_count,
             BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_COUNT_V1
-        )));
+        ));
     }
     if key.public_input_hash_bytes != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_BYTES_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key public-input hash byte length {} does not match canonical length {}",
             key.public_input_hash_bytes,
             BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_BYTES_V1
-        )));
+        ));
     }
     if !key.supports_exact_residual_multiple {
         return Err(BfvError::InvalidParameters(
@@ -39514,7 +38070,6 @@ fn validate_bfv_full_bootstrap_proof_key_public_input_layout_v1(
     validate_bfv_full_bootstrap_proof_key_native_verifier_obligations_v1(key)?;
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_key_native_verifier_obligations_v1(
     key: &BfvFullBootstrapProofKeyV1,
 ) -> Result<(), BfvError> {
@@ -39582,14 +38137,13 @@ fn validate_bfv_full_bootstrap_proof_key_native_verifier_obligations_v1(
         ),
     ] {
         if !is_bound {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap proof key must advertise {label}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn bfv_full_bootstrap_proof_key_native_verifier_obligation_flags_v1(
     key: &BfvFullBootstrapProofKeyV1,
 ) -> [u8; 16] {
@@ -39612,13 +38166,11 @@ fn bfv_full_bootstrap_proof_key_native_verifier_obligation_flags_v1(
         u8::from(key.rejects_stale_proof_key_artifacts),
     ]
 }
-
 fn validate_bfv_full_bootstrap_proof_key_material_payload_v1(
     key: &BfvFullBootstrapProofKeyV1,
 ) -> Result<(), BfvError> {
     decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(key).map(|_| ())
 }
-
 fn validate_bfv_full_bootstrap_native_proof_key_material_shape_v1(
     bytes: &[u8],
 ) -> Result<(), BfvError> {
@@ -39628,11 +38180,11 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_shape_v1(
         ));
     }
     if bytes.len() > BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap native proof key material length {} exceeds maximum {}",
             bytes.len(),
             BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES
-        )));
+        ));
     }
     if bytes.iter().all(|&byte| byte == 0) {
         return Err(BfvError::InvalidParameters(
@@ -39649,7 +38201,6 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_shape_v1(
     )?;
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_native_proof_key_payload_shape_v1(
     bytes: &[u8],
 ) -> Result<(), BfvError> {
@@ -39659,11 +38210,11 @@ fn validate_bfv_full_bootstrap_native_proof_key_payload_shape_v1(
         ));
     }
     if bytes.len() > BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap native proof key payload length {} exceeds maximum {}",
             bytes.len(),
             BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES
-        )));
+        ));
     }
     if bytes.iter().all(|&byte| byte == 0) {
         return Err(BfvError::InvalidParameters(
@@ -39692,115 +38243,102 @@ fn validate_bfv_full_bootstrap_native_proof_key_payload_shape_v1(
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_canonical_circuit_id(
     label: &str,
     circuit_id: &str,
 ) -> Result<(), BfvError> {
     if circuit_id.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if circuit_id.len() > BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_CIRCUIT_ID_MAX_BYTES {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} length {} exceeds maximum {}",
             circuit_id.len(),
             BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_CIRCUIT_ID_MAX_BYTES
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
         label,
         circuit_id.as_bytes(),
     )?;
     if circuit_id.trim() != circuit_id {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must be canonical without surrounding whitespace"
-        )));
+        ));
     }
     if !circuit_id.bytes().all(|byte| byte.is_ascii_graphic()) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must contain only printable ASCII bytes without whitespace"
-        )));
+        ));
     }
     if circuit_id != BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} `{circuit_id}` does not match canonical `{BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1}`"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_canonical_text_label(
     label: &str,
     value: &str,
     expected: &str,
 ) -> Result<(), BfvError> {
     if value.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
         label,
         value.as_bytes(),
     )?;
     if value.trim() != value {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must be canonical without surrounding whitespace"
-        )));
+        ));
     }
     if !value.bytes().all(|byte| byte.is_ascii_graphic()) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must contain only printable ASCII bytes without whitespace"
-        )));
+        ));
     }
     if value != expected {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} `{value}` does not match canonical `{expected}`"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_canonical_bytes_label(
     label: &str,
     value: &[u8],
     expected: &[u8],
 ) -> Result<(), BfvError> {
     if value.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(label, value)?;
     if value.first().is_some_and(u8::is_ascii_whitespace)
         || value.last().is_some_and(u8::is_ascii_whitespace)
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must be canonical without surrounding whitespace"
-        )));
+        ));
     }
     if !value.iter().all(u8::is_ascii_graphic) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} must contain only printable ASCII bytes without whitespace"
-        )));
+        ));
     }
     if value != expected {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} does not match canonical bytes"
-        )));
+        return Err(invalid!("{label} does not match canonical bytes"));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_native_payload_circuit_id(
     label: &str,
     circuit_id: &str,
 ) -> Result<(), BfvError> {
     validate_bfv_full_bootstrap_canonical_circuit_id(label, circuit_id)
 }
-
 fn validate_bfv_full_bootstrap_native_stark_fri_common_profile_v1(
     label: &str,
     hash_fn: u8,
@@ -39811,43 +38349,40 @@ fn validate_bfv_full_bootstrap_native_stark_fri_common_profile_v1(
     merkle_arity: u8,
 ) -> Result<(), BfvError> {
     if hash_fn != BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_HASH_SHA256_V1 {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must use SHA-256 STARK/FRI"
-        )));
+        return Err(invalid!("{label} must use SHA-256 STARK/FRI"));
     }
     if n_log2 != BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} n_log2 {n_log2} does not match canonical {BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_N_LOG2_V1}"
-        )));
+        ));
     }
     if blowup_log2 > n_log2 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} blowup_log2 {blowup_log2} exceeds n_log2 {n_log2}"
-        )));
+        ));
     }
     if blowup_log2 != BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_BLOWUP_LOG2_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} blowup_log2 {blowup_log2} does not match canonical {BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_BLOWUP_LOG2_V1}"
-        )));
+        ));
     }
     if fold_arity != BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_FOLD_ARITY_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} fold_arity {fold_arity} does not match canonical {BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_FOLD_ARITY_V1}"
-        )));
+        ));
     }
     if queries != BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} queries {queries} does not match canonical {BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1}"
-        )));
+        ));
     }
     if merkle_arity != BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_MERKLE_ARITY_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} merkle_arity {merkle_arity} does not match canonical {BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_MERKLE_ARITY_V1}"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_native_generated_circuit_body_v1(
     label: &str,
     native_payload_circuit_id: &str,
@@ -39863,21 +38398,19 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_v1(
         generated_circuit_body_digest,
     )?;
     if generated_circuit_body.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} generated circuit body must not be empty"
-        )));
+        return Err(invalid!("{label} generated circuit body must not be empty"));
     }
     if generated_circuit_body.len() > BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body length {} exceeds maximum {}",
             generated_circuit_body.len(),
             BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES
-        )));
+        ));
     }
     if generated_circuit_body.iter().all(|byte| *byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body must not be all-zero"
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
         &format!("{label} generated circuit body"),
@@ -39894,20 +38427,15 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_v1(
         &body,
     )?;
     if *generated_circuit_body_digest != sha256(generated_circuit_body) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} generated circuit body digest mismatch"
-        )));
+        return Err(invalid!("{label} generated circuit body digest mismatch"));
     }
     let expected_body =
         bfv_full_bootstrap_native_generated_circuit_body_v1(native_payload_circuit_id)?;
     if generated_circuit_body != expected_body {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} generated circuit body mismatch"
-        )));
+        return Err(invalid!("{label} generated circuit body mismatch"));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_native_generated_circuit_body_embedded_air_v1(
     label: &str,
     native_payload_circuit_id: &str,
@@ -39917,49 +38445,49 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_embedded_air_v1(
         generated_circuit_body,
     )
     .map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "{label} generated circuit body is invalid or does not use canonical v1 bytes: {err}"
-        ))
+        )
     })?;
     validate_bfv_full_bootstrap_canonical_circuit_id(
         &format!("{label} generated circuit body circuit id"),
         &body.circuit_id,
     )?;
     if body.circuit_id != BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body circuit id mismatch"
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_native_payload_circuit_id(
         &format!("{label} generated circuit body payload circuit id"),
         &body.native_payload_circuit_id,
     )?;
     if body.native_payload_circuit_id != native_payload_circuit_id {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body payload circuit id mismatch"
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_native_generated_circuit_body_profile_v1(label, &body)?;
     let air_material = norito::decode_canonical::<
         BfvFullBootstrapArithmeticAirConstraintSystemMaterialV1,
     >(&body.arithmetic_air_constraint_system_body)
     .map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "{label} generated circuit body AIR material is invalid or does not use canonical v1 bytes: {err}"
-        ))
+        )
     })?;
     validate_bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(&air_material)?;
     let embedded_air_digest =
         bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_material_v1(&air_material)?;
     if body.arithmetic_air_constraint_system_digest != embedded_air_digest {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body AIR constraint-system digest mismatch"
-        )));
+        ));
     }
     if body.arithmetic_trace_profile_digest != air_material.arithmetic_trace_profile_digest {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body AIR trace-profile digest mismatch"
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_centered_scale_round_source_chain_digest_v1(
         &format!("{label} generated circuit body centered scale-round source-chain digest"),
@@ -39967,7 +38495,6 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_embedded_air_v1(
     )?;
     Ok(body)
 }
-
 fn validate_bfv_full_bootstrap_native_generated_circuit_body_sha256_digest_aliases_v1(
     label: &str,
     generated_circuit_body_digest: &[u8; Hash::LENGTH],
@@ -40004,27 +38531,24 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_sha256_digest_alias
             .iter()
             .find(|(_, prior)| prior == digest)
         {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "{label} {entry_label} must be distinct from {prior_label}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_native_generated_circuit_body_profile_v1(
     label: &str,
     body: &BfvFullBootstrapNativeGeneratedCircuitBodyV1,
 ) -> Result<(), BfvError> {
     if body.version != BFV_FULL_BOOTSTRAP_NATIVE_GENERATED_CIRCUIT_BODY_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} generated circuit body version mismatch"
-        )));
+        return Err(invalid!("{label} generated circuit body version mismatch"));
     }
     if body.field_count != BFV_FULL_BOOTSTRAP_NATIVE_GENERATED_CIRCUIT_BODY_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body field count mismatch"
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_native_generated_circuit_body_text_profile_v1(label, body)?;
     validate_bfv_full_bootstrap_native_stark_fri_common_profile_v1(
@@ -40060,7 +38584,6 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_profile_v1(
     validate_bfv_full_bootstrap_native_generated_circuit_body_public_input_layout_v1(label, body)?;
     validate_bfv_full_bootstrap_native_generated_circuit_body_obligations_v1(label, body)
 }
-
 fn validate_bfv_full_bootstrap_native_generated_circuit_body_digest_aliases_v1(
     label: &str,
     body: &BfvFullBootstrapNativeGeneratedCircuitBodyV1,
@@ -40091,7 +38614,6 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_digest_aliases_v1(
         ],
     )
 }
-
 fn validate_bfv_full_bootstrap_native_generated_circuit_body_text_profile_v1(
     label: &str,
     body: &BfvFullBootstrapNativeGeneratedCircuitBodyV1,
@@ -40118,7 +38640,6 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_text_profile_v1(
     )?;
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_native_generated_circuit_body_public_input_layout_v1(
     label: &str,
     body: &BfvFullBootstrapNativeGeneratedCircuitBodyV1,
@@ -40126,64 +38647,64 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_public_input_layout
     if body.statement_material_version
         != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_VERSION_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body statement material version mismatch"
-        )));
+        ));
     }
     if body.statement_material_field_count
         != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_MATERIAL_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body statement material field count mismatch"
-        )));
+        ));
     }
     if body.claim_version != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body claim version mismatch"
-        )));
+        ));
     }
     if body.claim_field_count != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_CLAIM_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body claim field count mismatch"
-        )));
+        ));
     }
     if body.witness_digest_material_version
         != BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_VERSION_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body witness material version mismatch"
-        )));
+        ));
     }
     if body.witness_digest_material_field_count
         != BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_MATERIAL_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body witness material field count mismatch"
-        )));
+        ));
     }
     if body.witness_trace_field_count != BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body witness trace field count mismatch"
-        )));
+        ));
     }
     if body.witness_trace_bounds_field_count
         != BFV_FULL_BOOTSTRAP_EXECUTION_PREFIX_TRACE_BOUNDS_FIELD_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body witness trace bounds field count mismatch"
-        )));
+        ));
     }
     if body.public_input_hash_count != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_COUNT_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body public-input hash count mismatch"
-        )));
+        ));
     }
     if body.public_input_hash_bytes != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUT_HASH_BYTES_V1
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body public-input hash byte length mismatch"
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_canonical_bytes_label(
         &format!("{label} generated circuit body witness digest domain"),
@@ -40191,18 +38712,17 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_public_input_layout
         BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_DOMAIN,
     )?;
     if !body.supports_exact_residual_multiple {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body must support exact residual-multiple claims"
-        )));
+        ));
     }
     if !body.supports_bounded_noise {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} generated circuit body must support bounded-noise claims"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_native_generated_circuit_body_obligations_v1(
     label: &str,
     body: &BfvFullBootstrapNativeGeneratedCircuitBodyV1,
@@ -40271,14 +38791,13 @@ fn validate_bfv_full_bootstrap_native_generated_circuit_body_obligations_v1(
         ),
     ] {
         if !is_bound {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "{label} generated circuit body must advertise {obligation}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
     native_payload_circuit_id: &str,
     bytes: &[u8],
@@ -40292,9 +38811,9 @@ fn validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
         BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1,
     >(bytes)
     .map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "BFV full-bootstrap native transparent prover payload is invalid or does not use canonical v1 bytes: {err}"
-        ))
+        )
     })?;
     if payload.version != BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_VERSION_V1 {
         return Err(BfvError::InvalidParameters(
@@ -40374,7 +38893,6 @@ fn validate_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_native_stark_fri_prover_payload_digest_aliases_v1(
     payload: &BfvFullBootstrapNativeStarkFriTransparentProverPayloadV1,
 ) -> Result<(), BfvError> {
@@ -40403,7 +38921,6 @@ fn validate_bfv_full_bootstrap_native_stark_fri_prover_payload_digest_aliases_v1
         &payload.generated_circuit_body_digest,
     )
 }
-
 fn validate_bfv_full_bootstrap_native_stark_fri_payload_generated_body_digest_aliases_v1(
     label: &str,
     arithmetic_trace_profile_digest: &Hash,
@@ -40434,14 +38951,13 @@ fn validate_bfv_full_bootstrap_native_stark_fri_payload_generated_body_digest_al
             .iter()
             .find(|(_, prior)| prior == digest)
         {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "{label} {entry_label} must be distinct from {prior_label}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 /// Validate canonical native STARK/FRI verifier-key payload bytes for BFV full-bootstrap proofs.
 ///
 /// The caller-expected native circuit id is validated before payload bytes are
@@ -40463,9 +38979,9 @@ pub fn validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
     let payload =
         norito::decode_canonical::<BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1>(bytes)
             .map_err(|err| {
-                BfvError::InvalidParameters(format!(
+                invalid!(
                     "BFV full-bootstrap native verifier payload is invalid or does not use canonical v1 bytes: {err}"
-                ))
+                )
             })?;
     if payload.version != BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_VERSION_V1 {
         return Err(BfvError::InvalidParameters(
@@ -40544,7 +39060,6 @@ pub fn validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_digest_aliases_v1(
     payload: &BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1,
 ) -> Result<(), BfvError> {
@@ -40573,22 +39088,23 @@ fn validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_digest_aliases_
         &payload.generated_circuit_body_digest,
     )
 }
-
 #[allow(clippy::too_many_lines)]
 fn validate_bfv_full_bootstrap_native_proof_key_material_object_v1(
     material: &BfvFullBootstrapNativeProofKeyMaterialV1,
 ) -> Result<(), BfvError> {
     if material.version != BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap native proof key material version {} does not match canonical version {}",
-            material.version, BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_VERSION_V1
-        )));
+            material.version,
+            BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_VERSION_V1
+        ));
     }
     if material.field_count != BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap native proof key material field count {} does not match canonical count {}",
-            material.field_count, BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_FIELD_COUNT_V1
-        )));
+            material.field_count,
+            BFV_FULL_BOOTSTRAP_NATIVE_PROOF_KEY_MATERIAL_FIELD_COUNT_V1
+        ));
     }
     validate_bfv_full_bootstrap_proof_key_role(material.key_role)?;
     validate_bfv_full_bootstrap_canonical_text_label(
@@ -40679,10 +39195,10 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_object_v1(
             BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_KIND_V1
         }
         _ => {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap artifact role {:?} is not a proof-key role",
                 material.key_role
-            )));
+            ));
         }
     };
     validate_bfv_full_bootstrap_canonical_text_label(
@@ -40703,13 +39219,12 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_object_v1(
                 &material.native_payload,
             )
         }
-        _ => Err(BfvError::InvalidParameters(format!(
+        _ => Err(invalid!(
             "BFV full-bootstrap artifact role {:?} is not a proof-key role",
             material.key_role
-        ))),
+        )),
     }
 }
-
 fn validate_bfv_full_bootstrap_native_proof_key_material_digest_aliases_v1(
     material: &BfvFullBootstrapNativeProofKeyMaterialV1,
 ) -> Result<(), BfvError> {
@@ -40736,7 +39251,6 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_digest_aliases_v1(
     )?;
     validate_bfv_full_bootstrap_native_proof_key_material_payload_digest_aliases_v1(material)
 }
-
 fn validate_bfv_full_bootstrap_native_proof_key_material_embedded_payload_digest_aliases_v1(
     material: &BfvFullBootstrapNativeProofKeyMaterialV1,
 ) -> Result<(), BfvError> {
@@ -40769,7 +39283,6 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_embedded_payload_digest
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_native_proof_key_material_payload_digest_aliases_from_generated_body_v1(
     native_payload_digest: &[u8; Hash::LENGTH],
     generated_circuit_body_digest: &[u8; Hash::LENGTH],
@@ -40795,15 +39308,14 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_payload_digest_aliases_
             ),
         ] {
             if *native_payload_digest == digest {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "BFV full-bootstrap native proof key material native payload digest must be distinct from {label}"
-                )));
+                ));
             }
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_native_proof_key_material_payload_digest_aliases_v1(
     material: &BfvFullBootstrapNativeProofKeyMaterialV1,
 ) -> Result<(), BfvError> {
@@ -40831,14 +39343,13 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_payload_digest_aliases_
             .iter()
             .find(|(_, prior)| prior == digest)
         {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV full-bootstrap native proof key material {entry_label} must be distinct from {prior_label}"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_native_proof_key_material_v1(
     native_key_material: &[u8],
     expected_role: BfvFullBootstrapCircuitArtifactRoleV1,
@@ -40853,7 +39364,6 @@ fn validate_bfv_full_bootstrap_native_proof_key_material_v1(
     }
     Ok(())
 }
-
 fn decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(
     key: &BfvFullBootstrapProofKeyV1,
 ) -> Result<BfvFullBootstrapProofKeyMaterialEnvelopeV1, BfvError> {
@@ -40865,34 +39375,29 @@ fn decode_bfv_full_bootstrap_proof_key_material_envelope_from_key_v1(
         &key.key_material,
     )
     .map_err(|err| {
-        BfvError::InvalidParameters(format!(
+        invalid!(
             "BFV full-bootstrap proof key material must use canonical v1 bytes containing a Norito-encoded proof-key material envelope: {err}"
-        ))
+        )
     })?;
     validate_bfv_full_bootstrap_proof_key_material_envelope_matches_key_v1(key, &envelope)?;
     Ok(envelope)
 }
-
 fn validate_bfv_full_bootstrap_proof_key_material_bytes_shape_v1(
     label: &str,
     key_material: &[u8],
 ) -> Result<(), BfvError> {
     if key_material.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if key_material.len() > BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} length {} exceeds maximum {}",
             key_material.len(),
             BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES
-        )));
+        ));
     }
     if key_material.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be all-zero"
-        )));
+        return Err(invalid!("{label} must not be all-zero"));
     }
     validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
         label,
@@ -40900,7 +39405,6 @@ fn validate_bfv_full_bootstrap_proof_key_material_bytes_shape_v1(
     )?;
     Ok(())
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "envelope validation mirrors every proof-key metadata field for auditability"
@@ -40910,26 +39414,28 @@ fn validate_bfv_full_bootstrap_proof_key_material_envelope_matches_key_v1(
     envelope: &BfvFullBootstrapProofKeyMaterialEnvelopeV1,
 ) -> Result<(), BfvError> {
     if envelope.version != BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_ENVELOPE_VERSION_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key material envelope version {} does not match canonical version {}",
-            envelope.version, BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_ENVELOPE_VERSION_V1
-        )));
+            envelope.version,
+            BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_ENVELOPE_VERSION_V1
+        ));
     }
     if envelope.field_count != BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_ENVELOPE_FIELD_COUNT_V1 {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV full-bootstrap proof key material envelope field count {} does not match canonical count {}",
-            envelope.field_count, BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_ENVELOPE_FIELD_COUNT_V1
-        )));
+            envelope.field_count,
+            BFV_FULL_BOOTSTRAP_PROOF_KEY_MATERIAL_ENVELOPE_FIELD_COUNT_V1
+        ));
     }
     validate_bfv_full_bootstrap_proof_key_material_envelope_digest_preflight_v1(envelope)?;
     validate_bfv_full_bootstrap_proof_key_material_envelope_text_preflight_v1(envelope)?;
     macro_rules! expect_envelope_field_match {
         ($field:ident, $label:literal) => {
             if &envelope.$field != &key.$field {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "BFV full-bootstrap proof key material envelope {} does not match proof key metadata",
                     $label
-                )));
+                ));
             }
         };
     }
@@ -41046,7 +39552,6 @@ fn validate_bfv_full_bootstrap_proof_key_material_envelope_matches_key_v1(
         envelope.key_role,
     )
 }
-
 fn validate_bfv_full_bootstrap_proof_key_material_envelope_digest_preflight_v1(
     envelope: &BfvFullBootstrapProofKeyMaterialEnvelopeV1,
 ) -> Result<(), BfvError> {
@@ -41085,7 +39590,6 @@ fn validate_bfv_full_bootstrap_proof_key_material_envelope_digest_preflight_v1(
         ],
     )
 }
-
 fn validate_bfv_full_bootstrap_proof_key_material_envelope_text_preflight_v1(
     envelope: &BfvFullBootstrapProofKeyMaterialEnvelopeV1,
 ) -> Result<(), BfvError> {
@@ -41109,7 +39613,6 @@ fn validate_bfv_full_bootstrap_proof_key_material_envelope_text_preflight_v1(
         BFV_FULL_BOOTSTRAP_EXECUTION_WITNESS_DIGEST_DOMAIN,
     )
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "pair validation enumerates every shared proof-key metadata field"
@@ -41133,10 +39636,10 @@ fn validate_bfv_full_bootstrap_proof_key_pair_profile_match_v1(
     macro_rules! expect_pair_field_match {
         ($field:ident, $label:literal) => {
             if &prover_key.$field != &verifier_key.$field {
-                return Err(BfvError::InvalidParameters(format!(
+                return Err(invalid!(
                     "BFV full-bootstrap proof-key pair {} does not match",
                     $label
-                )));
+                ));
             }
         };
     }
@@ -41241,7 +39744,6 @@ fn validate_bfv_full_bootstrap_proof_key_pair_profile_match_v1(
     );
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_generated_proof_key_pair_v1(
     prover_key: &BfvFullBootstrapProofKeyV1,
     verifier_key: &BfvFullBootstrapProofKeyV1,
@@ -41285,7 +39787,6 @@ fn validate_bfv_full_bootstrap_generated_proof_key_pair_v1(
     )?;
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_native_proof_key_pair_circuit_binding_v1(
     prover_key: &BfvFullBootstrapProofKeyV1,
     verifier_key: &BfvFullBootstrapProofKeyV1,
@@ -41299,7 +39800,6 @@ fn validate_bfv_full_bootstrap_native_proof_key_pair_circuit_binding_v1(
         &verifier_material,
     )
 }
-
 fn validate_bfv_full_bootstrap_native_proof_key_pair_circuit_binding_from_envelopes_v1(
     prover_material: &BfvFullBootstrapProofKeyMaterialEnvelopeV1,
     verifier_material: &BfvFullBootstrapProofKeyMaterialEnvelopeV1,
@@ -41323,7 +39823,6 @@ fn validate_bfv_full_bootstrap_native_proof_key_pair_circuit_binding_from_envelo
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_key_registered_profile_v1(
     params: &BfvParameters,
     max_bootstrap_depth: u16,
@@ -41365,7 +39864,6 @@ fn validate_bfv_full_bootstrap_proof_key_registered_profile_v1(
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_proof_key_artifact_profile_v1(
     artifact: &BfvFullBootstrapCircuitArtifactPayloadV1,
     max_bootstrap_depth: u16,
@@ -41407,7 +39905,6 @@ fn validate_bfv_full_bootstrap_proof_key_artifact_profile_v1(
     }
     Ok(())
 }
-
 fn full_bootstrap_artifact_label_for_role(
     role: BfvFullBootstrapCircuitArtifactRoleV1,
 ) -> &'static str {
@@ -41441,7 +39938,6 @@ fn full_bootstrap_artifact_label_for_role(
         }
     }
 }
-
 fn full_bootstrap_material_digest_for_role(
     material: &BfvFullBootstrapCircuitMaterialV1,
     role: BfvFullBootstrapCircuitArtifactRoleV1,
@@ -41470,7 +39966,6 @@ fn full_bootstrap_material_digest_for_role(
         BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey => &material.verifier_key_digest,
     }
 }
-
 fn decode_full_bootstrap_artifact_payload(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -41495,15 +39990,15 @@ fn decode_full_bootstrap_artifact_payload(
                 label, bytes,
             )?;
         }
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} digest does not match governed full-bootstrap material"
-        )));
+        ));
     }
     let artifact = norito::decode_canonical::<BfvFullBootstrapCircuitArtifactPayloadV1>(bytes)
         .map_err(|err| {
-            BfvError::InvalidParameters(format!(
+            invalid!(
                 "{label} must use canonical v1 bytes containing a Norito-encoded BFV full-bootstrap artifact payload: {err}"
-            ))
+            )
         })?;
     validate_full_bootstrap_artifact_payload_profile(
         params,
@@ -41515,52 +40010,41 @@ fn decode_full_bootstrap_artifact_payload(
     validate_full_bootstrap_artifact_envelope_canonical_bytes_v1(label, bytes, &artifact)?;
     Ok(artifact)
 }
-
 fn validate_full_bootstrap_artifact_envelope_bytes_shape_v1(
     label: &str,
     max_bytes: usize,
     bytes: &[u8],
 ) -> Result<(), BfvError> {
     if bytes.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be empty"
-        )));
+        return Err(invalid!("{label} must not be empty"));
     }
     if bytes.len() > max_bytes {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} length {} exceeds maximum {}",
             bytes.len(),
             max_bytes
-        )));
+        ));
     }
     if bytes.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be all-zero"
-        )));
+        return Err(invalid!("{label} must not be all-zero"));
     }
     Ok(())
 }
-
 fn validate_full_bootstrap_artifact_inner_payload_shape_v1(
     label: &str,
     payload: &[u8],
 ) -> Result<(), BfvError> {
     if payload.is_empty() {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} payload must not be empty"
-        )));
+        return Err(invalid!("{label} payload must not be empty"));
     }
     if payload.iter().all(|&byte| byte == 0) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} payload must not be all-zero"
-        )));
+        return Err(invalid!("{label} payload must not be all-zero"));
     }
     let payload_label = format!("{label} payload");
     validate_bfv_full_bootstrap_bytes_not_placeholder_text(&payload_label, payload)?;
     validate_bfv_full_bootstrap_binary_decorated_placeholder_text(&payload_label, payload)?;
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_bytes_not_placeholder_text(
     label: &str,
     bytes: &[u8],
@@ -41572,13 +40056,10 @@ fn validate_bfv_full_bootstrap_bytes_not_placeholder_text(
         return Ok(());
     }
     if bytes.iter().all(u8::is_ascii_whitespace) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be blank text"
-        )));
+        return Err(invalid!("{label} must not be blank text"));
     }
     validate_bfv_full_bootstrap_bytes_do_not_contain_placeholder_marker(label, bytes)
 }
-
 fn validate_bfv_full_bootstrap_bytes_do_not_contain_placeholder_marker(
     label: &str,
     bytes: &[u8],
@@ -41586,13 +40067,10 @@ fn validate_bfv_full_bootstrap_bytes_do_not_contain_placeholder_marker(
     let mut normalized = Vec::with_capacity(bytes.len());
     normalized.extend(bytes.iter().map(u8::to_ascii_lowercase));
     if bfv_full_bootstrap_ascii_text_contains_placeholder_marker(&normalized) {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not contain placeholder text"
-        )));
+        return Err(invalid!("{label} must not contain placeholder text"));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_binary_decorated_placeholder_text(
     label: &str,
     bytes: &[u8],
@@ -41600,9 +40078,7 @@ fn validate_bfv_full_bootstrap_binary_decorated_placeholder_text(
     let is_text_byte = |byte: &u8| byte.is_ascii_graphic() || byte.is_ascii_whitespace();
     if bytes.iter().all(is_text_byte) {
         if bytes.iter().all(u8::is_ascii_whitespace) {
-            return Err(BfvError::InvalidParameters(format!(
-                "{label} must not be blank text"
-            )));
+            return Err(invalid!("{label} must not be blank text"));
         }
         return Ok(());
     }
@@ -41620,14 +40096,11 @@ fn validate_bfv_full_bootstrap_binary_decorated_placeholder_text(
         validate_bfv_full_bootstrap_bytes_do_not_contain_placeholder_marker(label, decorated_text)?;
     }
     if saw_text_fragment && !saw_nonblank_text_fragment {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not be blank text"
-        )));
+        return Err(invalid!("{label} must not be blank text"));
     }
     validate_bfv_full_bootstrap_binary_fragmented_placeholder_text(label, bytes)?;
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_binary_fragmented_placeholder_text(
     label: &str,
     bytes: &[u8],
@@ -41644,13 +40117,10 @@ fn validate_bfv_full_bootstrap_binary_fragmented_placeholder_text(
             .iter()
             .any(|marker| ascii_windows_contains(&collapsed_text, marker))
     {
-        return Err(BfvError::InvalidParameters(format!(
-            "{label} must not contain placeholder text"
-        )));
+        return Err(invalid!("{label} must not contain placeholder text"));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
     label: &str,
     bytes: &[u8],
@@ -41658,7 +40128,6 @@ fn validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
     validate_bfv_full_bootstrap_bytes_not_placeholder_text(label, bytes)?;
     validate_bfv_full_bootstrap_binary_decorated_placeholder_text(label, bytes)
 }
-
 fn bfv_full_bootstrap_ascii_text_contains_placeholder_marker(normalized: &[u8]) -> bool {
     if BFV_FULL_BOOTSTRAP_ARTIFACT_TEXT_PLACEHOLDER_MARKERS
         .iter()
@@ -41674,7 +40143,6 @@ fn bfv_full_bootstrap_ascii_text_contains_placeholder_marker(normalized: &[u8]) 
         .iter()
         .any(|marker| ascii_windows_contains(&collapsed_text, marker))
 }
-
 fn bfv_full_bootstrap_collapsed_placeholder_markers() -> &'static [Vec<u8>] {
     BFV_FULL_BOOTSTRAP_COLLAPSED_PLACEHOLDER_MARKERS
         .get_or_init(|| {
@@ -41690,7 +40158,6 @@ fn bfv_full_bootstrap_collapsed_placeholder_markers() -> &'static [Vec<u8>] {
         })
         .as_slice()
 }
-
 fn ascii_alnum_collapsed(bytes: &[u8]) -> Vec<u8> {
     bytes
         .iter()
@@ -41698,7 +40165,6 @@ fn ascii_alnum_collapsed(bytes: &[u8]) -> Vec<u8> {
         .filter(u8::is_ascii_alphanumeric)
         .collect()
 }
-
 fn ascii_windows_contains(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.is_empty() || needle.len() > haystack.len() {
         return false;
@@ -41721,7 +40187,6 @@ fn ascii_windows_contains(haystack: &[u8], needle: &[u8]) -> bool {
     }
     false
 }
-
 fn validate_full_bootstrap_artifact_payload_profile(
     params: &BfvParameters,
     material: &BfvFullBootstrapCircuitMaterialV1,
@@ -41731,77 +40196,77 @@ fn validate_full_bootstrap_artifact_payload_profile(
 ) -> Result<(), BfvError> {
     validate_full_bootstrap_artifact_inner_payload_shape_v1(label, &artifact.payload)?;
     if artifact.role != expected_role {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} role {:?} does not match expected role {:?}",
-            artifact.role, expected_role
-        )));
+            artifact.role,
+            expected_role
+        ));
     }
     validate_bfv_full_bootstrap_canonical_circuit_id(
         &format!("{label} circuit id"),
         &artifact.circuit_id,
     )?;
     if artifact.circuit_id != material.circuit_id {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} circuit id does not match governed full-bootstrap material"
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_artifact_profile_digest_preflight_v1(label, artifact)?;
     if artifact.parameter_digest != material.parameter_digest {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} parameter digest does not match governed full-bootstrap material"
-        )));
+        ));
     }
     if artifact.parameter_digest != registered_bfv_parameter_digest(params)? {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} parameter digest does not match registered BFV parameters"
-        )));
+        ));
     }
     if artifact.rns_modulus_chain_digest != material.rns_modulus_chain_digest {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} RNS modulus-chain digest does not match governed full-bootstrap material"
-        )));
+        ));
     }
     if artifact.rns_modulus_chain_digest != registered_bfv_rns_modulus_chain_digest(params)? {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} RNS modulus-chain digest does not match registered BFV parameters"
-        )));
+        ));
     }
     if artifact.key_switch_decomposition_chain_digest
         != material.key_switch_decomposition_chain_digest
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} key-switch decomposition-chain digest does not match governed full-bootstrap material"
-        )));
+        ));
     }
     if artifact.key_switch_decomposition_chain_digest
         != registered_bfv_key_switch_decomposition_chain_digest(params)?
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} key-switch decomposition-chain digest does not match registered BFV parameters"
-        )));
+        ));
     }
     if artifact.centered_scale_round_source_chain_digest
         != material.centered_scale_round_source_chain_digest
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} centered scale-round source-chain digest does not match governed full-bootstrap material"
-        )));
+        ));
     }
     if artifact.centered_scale_round_source_chain_digest
         != registered_bfv_centered_scale_round_source_chain_digest(params)?
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} centered scale-round source-chain digest does not match registered BFV parameters"
-        )));
+        ));
     }
     if artifact.max_bootstrap_depth != material.max_bootstrap_depth {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} max bootstrap depth does not match governed full-bootstrap material"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_full_bootstrap_artifact_profile_digest_preflight_v1(
     label: &str,
     artifact: &BfvFullBootstrapCircuitArtifactPayloadV1,
@@ -41825,7 +40290,6 @@ fn validate_bfv_full_bootstrap_artifact_profile_digest_preflight_v1(
         ],
     )
 }
-
 fn validate_bootstrap_key_entries(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -41852,7 +40316,6 @@ fn validate_bootstrap_key_entries(
     }
     Ok(())
 }
-
 fn validate_bootstrap_key_refresh_material_not_inert(
     bootstrap_key: &BfvBootstrapKey,
 ) -> Result<(), BfvError> {
@@ -41868,12 +40331,10 @@ fn validate_bootstrap_key_refresh_material_not_inert(
     }
     Ok(())
 }
-
 fn validate_bootstrap_key_metadata(key_id: &str, max_refresh_rounds: u16) -> Result<(), BfvError> {
     validate_bootstrap_key_id(key_id)?;
     validate_bootstrap_key_refresh_round_metadata(max_refresh_rounds)
 }
-
 fn validate_bootstrap_key_refresh_round_metadata(max_refresh_rounds: u16) -> Result<(), BfvError> {
     if max_refresh_rounds == 0 {
         return Err(BfvError::InvalidParameters(
@@ -41881,13 +40342,12 @@ fn validate_bootstrap_key_refresh_round_metadata(max_refresh_rounds: u16) -> Res
         ));
     }
     if max_refresh_rounds > BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "bootstrap key max_refresh_rounds exceeds the supported limit {BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS}"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bootstrap_key_refresh_round_index_request(
     bootstrap_key: &BfvBootstrapKey,
     round_index: u16,
@@ -41898,7 +40358,6 @@ fn validate_bootstrap_key_refresh_round_index_request(
     validate_bootstrap_key_refresh_round_metadata(bootstrap_key.max_refresh_rounds)?;
     validate_bootstrap_refresh_round_index(bootstrap_key, round_index, context)
 }
-
 fn validate_bootstrap_key_refresh_round_count_request(
     bootstrap_key: &BfvBootstrapKey,
     refresh_rounds: u16,
@@ -41909,7 +40368,6 @@ fn validate_bootstrap_key_refresh_round_count_request(
     validate_bootstrap_key_refresh_round_metadata(bootstrap_key.max_refresh_rounds)?;
     validate_bootstrap_refresh_round_count(bootstrap_key, refresh_rounds, context)
 }
-
 fn validate_bootstrap_key_refresh_round_index_request_before_rns_corridor(
     bootstrap_key: &BfvBootstrapKey,
     round_index: u16,
@@ -41921,7 +40379,6 @@ fn validate_bootstrap_key_refresh_round_index_request_before_rns_corridor(
     }
     validate_bootstrap_refresh_round_index(bootstrap_key, round_index, context)
 }
-
 fn validate_bootstrap_key_refresh_round_count_request_before_rns_corridor(
     bootstrap_key: &BfvBootstrapKey,
     refresh_rounds: u16,
@@ -41929,20 +40386,16 @@ fn validate_bootstrap_key_refresh_round_count_request_before_rns_corridor(
 ) -> Result<(), BfvError> {
     validate_bootstrap_key_refresh_mode(bootstrap_key)?;
     if refresh_rounds == 0 {
-        return Err(BfvError::InvalidParameters(format!(
-            "{context} requires at least one round"
-        )));
+        return Err(invalid!("{context} requires at least one round"));
     }
     if !bootstrap_key_has_valid_refresh_round_metadata(bootstrap_key) {
         return Ok(());
     }
     validate_bootstrap_refresh_round_count(bootstrap_key, refresh_rounds, context)
 }
-
 fn bootstrap_key_has_valid_refresh_round_metadata(bootstrap_key: &BfvBootstrapKey) -> bool {
     (1..=BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS).contains(&bootstrap_key.max_refresh_rounds)
 }
-
 fn validate_bootstrap_key_id(key_id: &str) -> Result<(), BfvError> {
     if key_id.is_empty() {
         return Err(BfvError::InvalidParameters(
@@ -41950,9 +40403,9 @@ fn validate_bootstrap_key_id(key_id: &str) -> Result<(), BfvError> {
         ));
     }
     if key_id.len() > BFV_BOOTSTRAP_KEY_ID_MAX_BYTES {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "bootstrap key id exceeds the maximum supported length {BFV_BOOTSTRAP_KEY_ID_MAX_BYTES}"
-        )));
+        ));
     }
     validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
         "bootstrap key id",
@@ -41971,11 +40424,9 @@ fn validate_bootstrap_key_id(key_id: &str) -> Result<(), BfvError> {
     }
     Ok(())
 }
-
 fn is_bootstrap_key_id_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
 }
-
 fn bootstrap_refresh_round_seed(
     domain: &'static [u8],
     key_id: &str,
@@ -41992,7 +40443,6 @@ fn bootstrap_refresh_round_seed(
     ])
     .into()
 }
-
 fn bootstrap_round_refresh(
     bootstrap_key: &BfvBootstrapKey,
     round_index: u16,
@@ -42001,46 +40451,41 @@ fn bootstrap_round_refresh(
         .round_refreshes
         .get(usize::from(round_index))
         .ok_or_else(|| {
-            BfvError::InvalidParameters(format!(
+            invalid!(
                 "bootstrap refresh round {round_index} exceeds key max_refresh_rounds {}",
                 bootstrap_key.max_refresh_rounds
-            ))
+            )
         })
 }
-
 fn validate_bootstrap_refresh_round_count(
     bootstrap_key: &BfvBootstrapKey,
     refresh_rounds: u16,
     context: &str,
 ) -> Result<(), BfvError> {
     if refresh_rounds == 0 {
-        return Err(BfvError::InvalidParameters(format!(
-            "{context} requires at least one round"
-        )));
+        return Err(invalid!("{context} requires at least one round"));
     }
     if refresh_rounds > bootstrap_key.max_refresh_rounds {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{context} rounds {refresh_rounds} exceeds bootstrap key max_refresh_rounds {}",
             bootstrap_key.max_refresh_rounds
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bootstrap_refresh_round_index(
     bootstrap_key: &BfvBootstrapKey,
     round_index: u16,
     context: &str,
 ) -> Result<(), BfvError> {
     if round_index >= bootstrap_key.max_refresh_rounds {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{context} round index {round_index} exceeds bootstrap key max_refresh_rounds {}",
             bootstrap_key.max_refresh_rounds
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_bfv_rns_modulus_chain(
     chain: &BfvRnsModulusChain,
     params: &BfvParameters,
@@ -42051,7 +40496,6 @@ fn validate_bfv_rns_modulus_chain(
         BFV_PRIMITIVE_ROOT_DISCOVERY_MAX_CANDIDATES,
     )
 }
-
 fn validate_bfv_rns_modulus_chain_with_root_candidate_limit(
     chain: &BfvRnsModulusChain,
     params: &BfvParameters,
@@ -42059,23 +40503,21 @@ fn validate_bfv_rns_modulus_chain_with_root_candidate_limit(
 ) -> Result<u128, BfvError> {
     params.validate()?;
     if chain.moduli.len() > BFV_RNS_MODULUS_CHAIN_MAX_LIMBS {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV RNS modulus chain supports at most {BFV_RNS_MODULUS_CHAIN_MAX_LIMBS} limbs"
-        )));
+        ));
     }
     let root_order = bfv_negacyclic_ntt_root_order(params)?;
     let mut previous = 0_u64;
     for (index, &modulus) in chain.moduli.iter().enumerate() {
         if modulus <= params.plaintext_modulus {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV RNS modulus limb {index} must exceed plaintext modulus {}",
                 params.plaintext_modulus
-            )));
+            ));
         }
         if modulus.is_multiple_of(2) {
-            return Err(BfvError::InvalidParameters(format!(
-                "BFV RNS modulus limb {index} must be odd"
-            )));
+            return Err(invalid!("BFV RNS modulus limb {index} must be odd"));
         }
         if index > 0 && modulus <= previous {
             return Err(BfvError::InvalidParameters(
@@ -42083,14 +40525,12 @@ fn validate_bfv_rns_modulus_chain_with_root_candidate_limit(
             ));
         }
         if !is_prime_u64(modulus) {
-            return Err(BfvError::InvalidParameters(format!(
-                "BFV RNS modulus limb {index} must be prime"
-            )));
+            return Err(invalid!("BFV RNS modulus limb {index} must be prime"));
         }
         if !(modulus - 1).is_multiple_of(root_order) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV RNS modulus limb {index} must be 1 mod {root_order}"
-            )));
+            ));
         }
         if negacyclic_ntt_root_for_order_with_candidate_limit(
             modulus,
@@ -42099,9 +40539,9 @@ fn validate_bfv_rns_modulus_chain_with_root_candidate_limit(
         )
         .is_none()
         {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "BFV RNS modulus limb {index} has no supported primitive {root_order}-th negacyclic NTT root"
-            )));
+            ));
         }
         if chain.moduli[..index]
             .iter()
@@ -42113,17 +40553,15 @@ fn validate_bfv_rns_modulus_chain_with_root_candidate_limit(
         }
         previous = modulus;
     }
-
     let product = checked_rns_modulus_product(&chain.moduli)?;
     if product < u128::from(params.ciphertext_modulus) {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV RNS modulus-chain product {product} does not cover ciphertext modulus {}",
             params.ciphertext_modulus
-        )));
+        ));
     }
     Ok(product)
 }
-
 fn bfv_negacyclic_ntt_root_order(params: &BfvParameters) -> Result<u64, BfvError> {
     u64::from(params.polynomial_degree)
         .checked_mul(2)
@@ -42133,29 +40571,25 @@ fn bfv_negacyclic_ntt_root_order(params: &BfvParameters) -> Result<u64, BfvError
             )
         })
 }
-
 fn validate_rns_exact_evaluator_chain(
     params: &BfvParameters,
     chain: &BfvRnsModulusChain,
 ) -> Result<(), BfvError> {
     let product = validate_bfv_rns_modulus_chain(chain, params)?;
-
     let addition_required = exact_ciphertext_modulus_addition_rns_bound(params)?;
     if product < addition_required {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV RNS modulus-chain product {product} does not cover exact ciphertext-modulus addition bound {addition_required}"
-        )));
+        ));
     }
-
     let product_required = exact_ciphertext_modulus_negacyclic_product_rns_bound(params)?;
     if product < product_required {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV RNS modulus-chain product {product} does not cover exact ciphertext-modulus negacyclic product bound {product_required}"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_registered_bfv_rns_negacyclic_roots(
     params: &BfvParameters,
     chain: &BfvRnsModulusChain,
@@ -42173,14 +40607,13 @@ fn validate_registered_bfv_rns_negacyclic_roots(
         .enumerate()
     {
         if !is_primitive_root_of_order(modulus, root, root_order) {
-            return Err(BfvError::InvalidParameters(format!(
+            return Err(invalid!(
                 "registered BFV RNS root metadata for limb {index} is not a primitive {root_order}-th root"
-            )));
+            ));
         }
     }
     Ok(())
 }
-
 fn validate_rns_key_switch_decomposition_chain(
     params: &BfvParameters,
     chain: &BfvRnsModulusChain,
@@ -42189,13 +40622,12 @@ fn validate_rns_key_switch_decomposition_chain(
     let product = validate_bfv_rns_modulus_chain(chain, params)?;
     let decomposition_base = u128::from(params.decomposition_base());
     if product < decomposition_base {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} RNS chain product {product} does not cover BFV decomposition base {decomposition_base}"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_rns_key_switch_basis_extension_chains(
     params: &BfvParameters,
     decomposition_chain: &BfvRnsModulusChain,
@@ -42209,13 +40641,12 @@ fn validate_rns_key_switch_basis_extension_chains(
         .as_slice()
         .starts_with(decomposition_chain.moduli.as_slice())
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} RNS decomposition chain must be a prefix of the evaluator chain"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_rns_centered_scale_round_source_chain(
     params: &BfvParameters,
     chain: &BfvRnsModulusChain,
@@ -42224,13 +40655,12 @@ fn validate_rns_centered_scale_round_source_chain(
     let product = validate_bfv_rns_modulus_chain(chain, params)?;
     let required = exact_ciphertext_modulus_negacyclic_product_sum_rns_bound(params, 2)?;
     if product < required {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} RNS chain product {product} does not cover centered scale-round product-sum bound {required}"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn validate_rns_centered_scale_round_basis_extension_chains(
     params: &BfvParameters,
     source_chain: &BfvRnsModulusChain,
@@ -42244,13 +40674,12 @@ fn validate_rns_centered_scale_round_basis_extension_chains(
         .as_slice()
         .starts_with(source_chain.moduli.as_slice())
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} RNS source chain must be a prefix of the evaluator chain"
-        )));
+        ));
     }
     Ok(())
 }
-
 fn registered_bfv_key_switch_decomposition_chain_for_evaluator(
     params: &BfvParameters,
     evaluator_chain: &BfvRnsModulusChain,
@@ -42282,9 +40711,9 @@ fn registered_bfv_key_switch_decomposition_chain_for_evaluator(
         }
     }
     if product < required_product {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV key-switch decomposition-chain product {product} does not cover required product {required_product}"
-        )));
+        ));
     }
     let chain = BfvRnsModulusChain {
         moduli: evaluator_chain.moduli[..prefix_len].to_vec(),
@@ -42296,7 +40725,6 @@ fn registered_bfv_key_switch_decomposition_chain_for_evaluator(
     )?;
     Ok(chain)
 }
-
 fn registered_bfv_centered_scale_round_source_chain_for_evaluator(
     params: &BfvParameters,
     evaluator_chain: &BfvRnsModulusChain,
@@ -42314,7 +40742,6 @@ fn registered_bfv_centered_scale_round_source_chain_for_evaluator(
         "registered BFV centered scale-round source",
     )
 }
-
 fn bfv_centered_scale_round_source_chain_for_evaluator(
     params: &BfvParameters,
     evaluator_chain: &BfvRnsModulusChain,
@@ -42341,9 +40768,9 @@ fn bfv_centered_scale_round_source_chain_for_evaluator(
         }
     }
     if product < required_product {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} RNS chain product {product} does not cover required product {required_product}"
-        )));
+        ));
     }
     let chain = BfvRnsModulusChain {
         moduli: evaluator_chain.moduli[..prefix_len].to_vec(),
@@ -42351,7 +40778,6 @@ fn bfv_centered_scale_round_source_chain_for_evaluator(
     validate_rns_centered_scale_round_source_chain(params, &chain, label)?;
     Ok(chain)
 }
-
 fn checked_rns_modulus_product(moduli: &[u64]) -> Result<u128, BfvError> {
     if moduli.is_empty() {
         return Err(BfvError::InvalidParameters(
@@ -42364,7 +40790,6 @@ fn checked_rns_modulus_product(moduli: &[u64]) -> Result<u128, BfvError> {
         })
     })
 }
-
 fn validate_rns_exact_lift_product_bound(
     params: &BfvParameters,
     product: u128,
@@ -42391,7 +40816,6 @@ fn validate_rns_exact_lift_product_bound(
     }
     Ok(())
 }
-
 fn exact_ciphertext_modulus_addition_rns_bound(params: &BfvParameters) -> Result<u128, BfvError> {
     u128::from(params.ciphertext_modulus)
         .checked_mul(2)
@@ -42402,7 +40826,6 @@ fn exact_ciphertext_modulus_addition_rns_bound(params: &BfvParameters) -> Result
             )
         })
 }
-
 fn exact_ciphertext_modulus_negacyclic_product_abs_bound(
     params: &BfvParameters,
 ) -> Result<u128, BfvError> {
@@ -42416,7 +40839,6 @@ fn exact_ciphertext_modulus_negacyclic_product_abs_bound(
             )
         })
 }
-
 fn exact_centered_ciphertext_modulus_negacyclic_product_abs_bound(
     params: &BfvParameters,
 ) -> Result<u128, BfvError> {
@@ -42431,7 +40853,6 @@ fn exact_centered_ciphertext_modulus_negacyclic_product_abs_bound(
             )
         })
 }
-
 fn exact_ciphertext_modulus_negacyclic_product_rns_bound(
     params: &BfvParameters,
 ) -> Result<u128, BfvError> {
@@ -42444,7 +40865,6 @@ fn exact_ciphertext_modulus_negacyclic_product_rns_bound(
             )
         })
 }
-
 fn exact_ciphertext_modulus_negacyclic_product_sum_abs_bound(
     params: &BfvParameters,
     product_count: u16,
@@ -42464,7 +40884,6 @@ fn exact_ciphertext_modulus_negacyclic_product_sum_abs_bound(
             )
         })
 }
-
 fn exact_ciphertext_modulus_negacyclic_product_sum_rns_bound(
     params: &BfvParameters,
     product_count: u16,
@@ -42479,7 +40898,6 @@ fn exact_ciphertext_modulus_negacyclic_product_sum_rns_bound(
             )
         })
 }
-
 fn reduce_u128_to_u64_mod(value: u128, modulus: u64) -> Result<u64, BfvError> {
     u64::try_from(value % u128::from(modulus)).map_err(|_| {
         BfvError::InvalidParameters(
@@ -42487,7 +40905,6 @@ fn reduce_u128_to_u64_mod(value: u128, modulus: u64) -> Result<u64, BfvError> {
         )
     })
 }
-
 fn reduce_centered_source_residue_to_u64_mod(
     value: u128,
     source_product: u128,
@@ -42509,7 +40926,6 @@ fn reduce_centered_source_residue_to_u64_mod(
         Ok(target_modulus - residue)
     }
 }
-
 fn reduce_centered_rns_value_to_u64_mod(
     value: u128,
     rns_product: u128,
@@ -42536,7 +40952,6 @@ fn reduce_centered_rns_value_to_u64_mod(
         Ok(modulus - residue)
     }
 }
-
 fn reduce_centered_rns_value_to_i128(
     value: u128,
     rns_product: u128,
@@ -42564,7 +40979,6 @@ fn reduce_centered_rns_value_to_i128(
         BfvError::InvalidParameters("BFV RNS centered reconstruction exceeds i128".to_owned())
     })
 }
-
 fn validate_rns_polynomial(
     params: &BfvParameters,
     chain: &BfvRnsModulusChain,
@@ -42599,7 +41013,6 @@ fn validate_rns_polynomial(
     }
     Ok(())
 }
-
 fn validate_rns_polynomial_pair(
     params: &BfvParameters,
     chain: &BfvRnsModulusChain,
@@ -42610,7 +41023,6 @@ fn validate_rns_polynomial_pair(
     validate_rns_polynomial(params, chain, lhs)?;
     validate_rns_polynomial(params, chain, rhs)
 }
-
 fn validate_rns_key_switch_digit_polynomials(
     params: &BfvParameters,
     chain: &BfvRnsModulusChain,
@@ -42622,9 +41034,9 @@ fn validate_rns_key_switch_digit_polynomials(
     let base = u128::from(params.decomposition_base());
     let product = chain.product()?;
     if product < base {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "{label} RNS chain product {product} does not cover decomposition base {base}"
-        )));
+        ));
     }
     if digit_polynomials.len() != expected_digits {
         return Err(BfvError::ShapeMismatch(format!(
@@ -42648,7 +41060,6 @@ fn validate_rns_key_switch_digit_polynomials(
     }
     Ok(())
 }
-
 fn multiply_rns_limb_negacyclic(
     params: &BfvParameters,
     lhs: &[u64],
@@ -42658,7 +41069,6 @@ fn multiply_rns_limb_negacyclic(
     try_multiply_rns_limb_negacyclic_ntt(params, lhs, rhs, modulus)
         .unwrap_or_else(|| multiply_rns_limb_negacyclic_scalar(params, lhs, rhs, modulus))
 }
-
 fn multiply_rns_limb_negacyclic_scalar(
     params: &BfvParameters,
     lhs: &[u64],
@@ -42681,7 +41091,6 @@ fn multiply_rns_limb_negacyclic_scalar(
     }
     product
 }
-
 fn try_multiply_rns_limb_negacyclic_ntt(
     params: &BfvParameters,
     lhs: &[u64],
@@ -42707,7 +41116,6 @@ fn try_multiply_rns_limb_negacyclic_ntt(
     untwist_rns_limb(&mut lhs_ntt, inv_psi, modulus);
     Some(lhs_ntt)
 }
-
 fn negacyclic_ntt_root_for_order(modulus: u64, order: u64) -> Option<u64> {
     negacyclic_ntt_root_for_order_with_candidate_limit(
         modulus,
@@ -42715,7 +41123,6 @@ fn negacyclic_ntt_root_for_order(modulus: u64, order: u64) -> Option<u64> {
         BFV_PRIMITIVE_ROOT_DISCOVERY_MAX_CANDIDATES,
     )
 }
-
 fn negacyclic_ntt_root_for_order_with_candidate_limit(
     modulus: u64,
     order: u64,
@@ -42733,7 +41140,6 @@ fn negacyclic_ntt_root_for_order_with_candidate_limit(
     }
     primitive_root_of_order_with_candidate_limit(modulus, order, max_candidate)
 }
-
 fn registered_ram_lfe_negacyclic_ntt_root_index(modulus: u64, order: u64) -> Option<usize> {
     let registered_order =
         u64::from(ram_lfe_bfv_parameters_v1().polynomial_degree).checked_mul(2)?;
@@ -42744,7 +41150,6 @@ fn registered_ram_lfe_negacyclic_ntt_root_index(modulus: u64, order: u64) -> Opt
         .iter()
         .position(|&registered_modulus| registered_modulus == modulus)
 }
-
 fn is_primitive_root_of_order(modulus: u64, root: u64, order: u64) -> bool {
     order > 1
         && order.is_multiple_of(2)
@@ -42754,7 +41159,6 @@ fn is_primitive_root_of_order(modulus: u64, root: u64, order: u64) -> bool {
         && mod_pow_u64(root, order, modulus) == 1
         && mod_pow_u64(root, order / 2, modulus) == modulus - 1
 }
-
 fn primitive_root_of_order(modulus: u64, order: u64) -> Option<u64> {
     primitive_root_of_order_with_candidate_limit(
         modulus,
@@ -42762,7 +41166,6 @@ fn primitive_root_of_order(modulus: u64, order: u64) -> Option<u64> {
         BFV_PRIMITIVE_ROOT_DISCOVERY_MAX_CANDIDATES,
     )
 }
-
 fn primitive_root_of_order_with_candidate_limit(
     modulus: u64,
     order: u64,
@@ -42784,7 +41187,6 @@ fn primitive_root_of_order_with_candidate_limit(
     }
     None
 }
-
 fn twist_rns_limb(coefficients: &[u64], psi: u64, modulus: u64) -> Vec<u64> {
     let mut power = 1_u64;
     coefficients
@@ -42796,7 +41198,6 @@ fn twist_rns_limb(coefficients: &[u64], psi: u64, modulus: u64) -> Vec<u64> {
         })
         .collect()
 }
-
 fn untwist_rns_limb(coefficients: &mut [u64], inv_psi: u64, modulus: u64) {
     let mut power = 1_u64;
     for coefficient in coefficients {
@@ -42804,7 +41205,6 @@ fn untwist_rns_limb(coefficients: &mut [u64], inv_psi: u64, modulus: u64) {
         power = mul_mod_u64(power, inv_psi, modulus);
     }
 }
-
 fn ntt_in_place_mod(values: &mut [u64], root: u64, modulus: u64, invert: bool) -> Option<()> {
     let len = values.len();
     if len == 0 || !len.is_power_of_two() || modulus <= 2 {
@@ -42816,7 +41216,6 @@ fn ntt_in_place_mod(values: &mut [u64], root: u64, modulus: u64, invert: bool) -
     } else {
         root
     };
-
     let mut stage_len = 2_usize;
     while stage_len <= len {
         let step = mod_pow_u64(root, u64::try_from(len / stage_len).ok()?, modulus);
@@ -42833,7 +41232,6 @@ fn ntt_in_place_mod(values: &mut [u64], root: u64, modulus: u64, invert: bool) -
         }
         stage_len = stage_len.checked_mul(2)?;
     }
-
     if invert {
         let inv_len = mod_inv_prime_u64(u64::try_from(len).ok()?, modulus)?;
         for value in values {
@@ -42842,7 +41240,6 @@ fn ntt_in_place_mod(values: &mut [u64], root: u64, modulus: u64, invert: bool) -
     }
     Some(())
 }
-
 fn bit_reverse_permute_rns(values: &mut [u64]) {
     if values.is_empty() {
         return;
@@ -42855,14 +41252,12 @@ fn bit_reverse_permute_rns(values: &mut [u64]) {
         }
     }
 }
-
 fn mod_inv_prime_u64(value: u64, modulus: u64) -> Option<u64> {
     if modulus <= 2 || value.is_multiple_of(modulus) {
         return None;
     }
     Some(mod_pow_u64(value, modulus - 2, modulus))
 }
-
 fn reconstruct_rns_coefficient(residues: &[u64], moduli: &[u64]) -> Result<u128, BfvError> {
     if residues.len() != moduli.len() {
         return Err(BfvError::ShapeMismatch(format!(
@@ -42883,7 +41278,6 @@ fn reconstruct_rns_coefficient(residues: &[u64], moduli: &[u64]) -> Result<u128,
         }
         mixed[index] = coefficient;
     }
-
     let mut value = 0_u128;
     let mut weight = 1_u128;
     for (index, &coefficient) in mixed.iter().enumerate() {
@@ -42905,11 +41299,9 @@ fn reconstruct_rns_coefficient(residues: &[u64], moduli: &[u64]) -> Result<u128,
     }
     Ok(value)
 }
-
 fn is_prime_u64(candidate: u64) -> bool {
     const SMALL_PRIMES: [u64; 12] = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37];
     const MILLER_RABIN_BASES: [u64; 7] = [2, 325, 9_375, 28_178, 450_775, 9_780_504, 1_795_265_022];
-
     if candidate < 2 {
         return false;
     }
@@ -42921,14 +41313,12 @@ fn is_prime_u64(candidate: u64) -> bool {
             return false;
         }
     }
-
     let mut odd_factor = candidate - 1;
     let mut power_of_two = 0_u32;
     while odd_factor.is_multiple_of(2) {
         odd_factor /= 2;
         power_of_two = power_of_two.saturating_add(1);
     }
-
     'base: for base in MILLER_RABIN_BASES {
         let base = base % candidate;
         if base == 0 {
@@ -42948,7 +41338,6 @@ fn is_prime_u64(candidate: u64) -> bool {
     }
     true
 }
-
 fn mod_pow_u64(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     let mut result = 1_u64;
     while exponent != 0 {
@@ -42960,7 +41349,6 @@ fn mod_pow_u64(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     }
     result
 }
-
 fn gcd_u64(mut lhs: u64, mut rhs: u64) -> u64 {
     while rhs != 0 {
         let remainder = lhs % rhs;
@@ -42969,12 +41357,10 @@ fn gcd_u64(mut lhs: u64, mut rhs: u64) -> u64 {
     }
     lhs
 }
-
 fn derive_rng(domain: &[u8], seed: &[u8]) -> ChaCha20Rng {
     let material: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[domain, seed]).into();
     ChaCha20Rng::from_seed(material)
 }
-
 fn encode_identifier_slots(
     public_parameters: &BfvIdentifierPublicParameters,
     input: &[u8],
@@ -42995,7 +41381,6 @@ fn encode_identifier_slots(
     }
     Ok(slots)
 }
-
 fn decode_identifier_slots(
     public_parameters: &BfvIdentifierPublicParameters,
     slots: &[u64],
@@ -43032,7 +41417,6 @@ fn decode_identifier_slots(
         })
         .collect()
 }
-
 fn identifier_slot_count(max_input_bytes: u16) -> Result<usize, BfvError> {
     usize::from(max_input_bytes).checked_add(1).ok_or_else(|| {
         BfvError::InvalidIdentifierEncoding(
@@ -43040,7 +41424,6 @@ fn identifier_slot_count(max_input_bytes: u16) -> Result<usize, BfvError> {
         )
     })
 }
-
 fn decrypt_identifier_slot(
     public_parameters: &BfvIdentifierPublicParameters,
     secret_key: &BfvSecretKey,
@@ -43063,7 +41446,6 @@ fn decrypt_identifier_slot(
     }
     Ok(plaintext[0])
 }
-
 fn derive_identifier_slot_seed(seed: &[u8], index: usize) -> Result<[u8; Hash::LENGTH], BfvError> {
     let index = u64::try_from(index).map_err(|_| {
         BfvError::InvalidIdentifierEncoding(
@@ -43072,18 +41454,15 @@ fn derive_identifier_slot_seed(seed: &[u8], index: usize) -> Result<[u8; Hash::L
     })?;
     Ok(Hash::new_from_chunks(&[IDENTIFIER_SLOT_ENCRYPT_DOMAIN, seed, &index.to_le_bytes()]).into())
 }
-
 fn zero_poly(params: &BfvParameters) -> Polynomial {
     vec![0; params.degree()]
 }
-
 fn zero_ciphertext(params: &BfvParameters) -> BfvCiphertext {
     BfvCiphertext {
         c0: zero_poly(params),
         c1: zero_poly(params),
     }
 }
-
 fn sample_small_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
     (0..params.degree())
         .map(|_| match rng.random_range(0..=2_u8) {
@@ -43093,7 +41472,6 @@ fn sample_small_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomia
         })
         .collect()
 }
-
 fn sample_nonzero_small_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
     loop {
         let polynomial = sample_small_poly(params, rng);
@@ -43102,11 +41480,9 @@ fn sample_nonzero_small_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> P
         }
     }
 }
-
 fn sample_nonzero_secret_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
     sample_nonzero_small_poly(params, rng)
 }
-
 fn sample_error_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
     (0..params.degree())
         .map(
@@ -43118,7 +41494,6 @@ fn sample_error_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomia
         )
         .collect()
 }
-
 fn sample_nonzero_error_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
     loop {
         let polynomial = sample_error_poly(params, rng);
@@ -43127,7 +41502,6 @@ fn sample_nonzero_error_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> P
         }
     }
 }
-
 fn sample_bounded_noise_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
     (0..params.degree())
         .map(
@@ -43139,7 +41513,6 @@ fn sample_bounded_noise_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> P
         )
         .collect()
 }
-
 fn sample_nonzero_bounded_noise_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
     loop {
         let polynomial = sample_bounded_noise_poly(params, rng);
@@ -43148,13 +41521,11 @@ fn sample_nonzero_bounded_noise_poly(params: &BfvParameters, rng: &mut ChaCha20R
         }
     }
 }
-
 fn sample_uniform_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
     (0..params.degree())
         .map(|_| rng.random_range(0..params.ciphertext_modulus))
         .collect()
 }
-
 fn sample_nonzero_uniform_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) -> Polynomial {
     loop {
         let polynomial = sample_uniform_poly(params, rng);
@@ -43163,7 +41534,6 @@ fn sample_nonzero_uniform_poly(params: &BfvParameters, rng: &mut ChaCha20Rng) ->
         }
     }
 }
-
 fn encode_plaintext(params: &BfvParameters, plaintext: &[u64]) -> Polynomial {
     let mut encoded = zero_poly(params);
     for (slot, &coefficient) in plaintext.iter().enumerate() {
@@ -43171,7 +41541,6 @@ fn encode_plaintext(params: &BfvParameters, plaintext: &[u64]) -> Polynomial {
     }
     encoded
 }
-
 fn encode_rounded_plaintext(
     params: &BfvParameters,
     plaintext: &[u64],
@@ -43184,7 +41553,6 @@ fn encode_rounded_plaintext(
     }
     Ok(encoded)
 }
-
 fn decode_plaintext(params: &BfvParameters, scaled: &[u64]) -> Vec<u64> {
     scaled
         .iter()
@@ -43194,7 +41562,6 @@ fn decode_plaintext(params: &BfvParameters, scaled: &[u64]) -> Vec<u64> {
         })
         .collect()
 }
-
 fn decode_rounded_plaintext(params: &BfvParameters, scaled: &[u64]) -> Result<Vec<u64>, BfvError> {
     params.validate()?;
     let scale = i128::from(rounded_plaintext_scale(params)?);
@@ -43207,7 +41574,6 @@ fn decode_rounded_plaintext(params: &BfvParameters, scaled: &[u64]) -> Result<Ve
         })
         .collect()
 }
-
 fn scale_round_raw_product_polynomial(
     params: &BfvParameters,
     raw: &[i128],
@@ -43217,7 +41583,6 @@ fn scale_round_raw_product_polynomial(
         .map(|&coefficient| scale_round_raw_product_coefficient(params, coefficient))
         .collect()
 }
-
 fn scale_round_raw_product_coefficient(
     params: &BfvParameters,
     coefficient: i128,
@@ -43241,7 +41606,6 @@ fn scale_round_raw_product_coefficient(
     let rounded = if coefficient < 0 { -rounded } else { rounded };
     Ok(mod_q(rounded, params.ciphertext_modulus))
 }
-
 fn validate_raw_polynomial_len(
     params: &BfvParameters,
     raw: &[i128],
@@ -43257,7 +41621,6 @@ fn validate_raw_polynomial_len(
     }
     Ok(())
 }
-
 fn poly_mul_centered_raw(
     params: &BfvParameters,
     lhs: &[u64],
@@ -43273,34 +41636,25 @@ fn poly_mul_centered_raw(
         for (rhs_index, &rhs_coefficient) in rhs.iter().enumerate() {
             let rhs_centered = center_lift(rhs_coefficient, params.ciphertext_modulus);
             let product = lhs_centered.checked_mul(rhs_centered).ok_or_else(|| {
-                BfvError::InvalidParameters(format!(
-                    "{label} raw product coefficient exceeds deterministic limits"
-                ))
+                invalid!("{label} raw product coefficient exceeds deterministic limits")
             })?;
             let exponent = lhs_index.checked_add(rhs_index).ok_or_else(|| {
-                BfvError::InvalidParameters(format!(
-                    "{label} raw product exponent exceeds deterministic limits"
-                ))
+                invalid!("{label} raw product exponent exceeds deterministic limits")
             })?;
             if exponent >= degree {
                 let target = exponent - degree;
                 out[target] = out[target].checked_sub(product).ok_or_else(|| {
-                    BfvError::InvalidParameters(format!(
-                        "{label} raw negacyclic subtraction exceeds deterministic limits"
-                    ))
+                    invalid!("{label} raw negacyclic subtraction exceeds deterministic limits")
                 })?;
             } else {
                 out[exponent] = out[exponent].checked_add(product).ok_or_else(|| {
-                    BfvError::InvalidParameters(format!(
-                        "{label} raw negacyclic addition exceeds deterministic limits"
-                    ))
+                    invalid!("{label} raw negacyclic addition exceeds deterministic limits")
                 })?;
             }
         }
     }
     Ok(out)
 }
-
 fn poly_add_centered_raw(lhs: &[i128], rhs: &[i128], label: &str) -> Result<Vec<i128>, BfvError> {
     if lhs.len() != rhs.len() {
         return Err(BfvError::ShapeMismatch(format!(
@@ -43313,14 +41667,11 @@ fn poly_add_centered_raw(lhs: &[i128], rhs: &[i128], label: &str) -> Result<Vec<
         .zip(rhs)
         .map(|(&left, &right)| {
             left.checked_add(right).ok_or_else(|| {
-                BfvError::InvalidParameters(format!(
-                    "{label} raw polynomial addition exceeds deterministic limits"
-                ))
+                invalid!("{label} raw polynomial addition exceeds deterministic limits")
             })
         })
         .collect()
 }
-
 fn relinearize(
     params: &BfvParameters,
     relinearization_key: &BfvRelinearizationKey,
@@ -43330,7 +41681,6 @@ fn relinearize(
 ) -> Result<BfvCiphertext, BfvError> {
     key_switch(params, &relinearization_key.entries, c0, c1, c2)
 }
-
 fn key_switch(
     params: &BfvParameters,
     entries: &[BfvRelinearizationKeyEntry],
@@ -43355,7 +41705,6 @@ fn key_switch(
     }
     Ok(BfvCiphertext { c0: out0, c1: out1 })
 }
-
 fn key_switch_from_transformed_secret(
     params: &BfvParameters,
     entries: &[BfvRelinearizationKeyEntry],
@@ -43364,7 +41713,6 @@ fn key_switch_from_transformed_secret(
 ) -> Result<BfvCiphertext, BfvError> {
     key_switch(params, entries, c0, &zero_poly(params), transformed_c1)
 }
-
 fn key_switch_entries_from_rng(
     params: &BfvParameters,
     source_secret: &[u64],
@@ -43398,7 +41746,6 @@ fn key_switch_entries_from_rng(
     }
     Ok(entries)
 }
-
 fn key_switch_entries_bounded_noise_from_rng(
     params: &BfvParameters,
     source_secret: &[u64],
@@ -43432,7 +41779,6 @@ fn key_switch_entries_bounded_noise_from_rng(
     }
     Ok(entries)
 }
-
 fn relinearize_rns_exact(
     params: &BfvParameters,
     rns_chain: &BfvRnsModulusChain,
@@ -43443,7 +41789,6 @@ fn relinearize_rns_exact(
 ) -> Result<BfvCiphertext, BfvError> {
     key_switch_rns_exact(params, rns_chain, &relinearization_key.entries, c0, c1, c2)
 }
-
 fn relinearize_rns_exact_with_basis_extension(
     params: &BfvParameters,
     decomposition_chain: &BfvRnsModulusChain,
@@ -43463,7 +41808,6 @@ fn relinearize_rns_exact_with_basis_extension(
         c2,
     )
 }
-
 fn key_switch_from_transformed_secret_rns_exact(
     params: &BfvParameters,
     rns_chain: &BfvRnsModulusChain,
@@ -43480,7 +41824,6 @@ fn key_switch_from_transformed_secret_rns_exact(
         transformed_c1,
     )
 }
-
 fn key_switch_from_transformed_secret_rns_exact_with_basis_extension(
     params: &BfvParameters,
     decomposition_chain: &BfvRnsModulusChain,
@@ -43499,7 +41842,6 @@ fn key_switch_from_transformed_secret_rns_exact_with_basis_extension(
         transformed_c1,
     )
 }
-
 fn key_switch_rns_exact(
     params: &BfvParameters,
     rns_chain: &BfvRnsModulusChain,
@@ -43521,7 +41863,6 @@ fn key_switch_rns_exact(
         rns_chain.decompose_key_switch_component_polynomial(params, switching_component)?;
     key_switch_rns_exact_with_digit_polynomials(params, rns_chain, entries, c0, c1, &digits)
 }
-
 fn key_switch_rns_exact_with_basis_extension(
     params: &BfvParameters,
     decomposition_chain: &BfvRnsModulusChain,
@@ -43572,7 +41913,6 @@ fn key_switch_rns_exact_with_basis_extension(
         &evaluator_digits,
     )
 }
-
 fn key_switch_rns_exact_with_digit_polynomials(
     params: &BfvParameters,
     rns_chain: &BfvRnsModulusChain,
@@ -43615,7 +41955,6 @@ fn key_switch_rns_exact_with_digit_polynomials(
     }
     Ok(BfvCiphertext { c0: out0, c1: out1 })
 }
-
 fn apply_galois_automorphism_poly(
     params: &BfvParameters,
     poly: &[u64],
@@ -43650,7 +41989,6 @@ fn apply_galois_automorphism_poly(
     }
     Ok(output)
 }
-
 fn packed_plaintext_evaluation_points(params: &BfvParameters) -> Result<Vec<u64>, BfvError> {
     let root = packed_plaintext_root(params)?;
     (0..params.degree())
@@ -43673,7 +42011,6 @@ fn packed_plaintext_evaluation_points(params: &BfvParameters) -> Result<Vec<u64>
         })
         .collect()
 }
-
 fn packed_plaintext_root(params: &BfvParameters) -> Result<u64, BfvError> {
     params.validate()?;
     let degree = u64::from(params.polynomial_degree);
@@ -43685,15 +42022,14 @@ fn packed_plaintext_root(params: &BfvParameters) -> Result<u64, BfvError> {
     if !is_prime_u64(params.plaintext_modulus)
         || !(params.plaintext_modulus - 1).is_multiple_of(root_order)
     {
-        return Err(BfvError::InvalidParameters(format!(
+        return Err(invalid!(
             "BFV packed plaintext slots require a prime plaintext modulus congruent to 1 mod {root_order}"
-        )));
+        ));
     }
     primitive_root_of_order(params.plaintext_modulus, root_order).ok_or_else(|| {
         BfvError::InvalidParameters("BFV packed plaintext primitive root is unavailable".to_owned())
     })
 }
-
 fn multiply_plaintext_linear_factor(coefficients: &[u64], root: u64, modulus: u64) -> Vec<u64> {
     let mut output = vec![0_u64; coefficients.len() + 1];
     for (index, &coefficient) in coefficients.iter().enumerate() {
@@ -43706,13 +42042,11 @@ fn multiply_plaintext_linear_factor(coefficients: &[u64], root: u64, modulus: u6
     }
     output
 }
-
 fn evaluate_plaintext_polynomial_mod(coefficients: &[u64], point: u64, modulus: u64) -> u64 {
     coefficients.iter().rev().fold(0_u64, |acc, &coefficient| {
         add_mod_u64(mul_mod_u64(acc, point, modulus), coefficient, modulus)
     })
 }
-
 fn decompose_poly(params: &BfvParameters, poly: &[u64]) -> Result<Vec<Polynomial>, BfvError> {
     let digits = params.decomposition_digits()?;
     let base = params.decomposition_base();
@@ -43726,21 +42060,18 @@ fn decompose_poly(params: &BfvParameters, poly: &[u64]) -> Result<Vec<Polynomial
     }
     Ok(output)
 }
-
 fn poly_add_mod(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Polynomial {
     lhs.iter()
         .zip(rhs)
         .map(|(&left, &right)| add_mod_u64(left, right, params.ciphertext_modulus))
         .collect()
 }
-
 fn poly_sub_mod(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Polynomial {
     lhs.iter()
         .zip(rhs)
         .map(|(&left, &right)| sub_mod_u64(left, right, params.ciphertext_modulus))
         .collect()
 }
-
 fn poly_neg_mod(params: &BfvParameters, poly: &[u64]) -> Polynomial {
     poly.iter()
         .map(|&coefficient| {
@@ -43752,20 +42083,17 @@ fn poly_neg_mod(params: &BfvParameters, poly: &[u64]) -> Polynomial {
         })
         .collect()
 }
-
 fn poly_scalar_mul_mod(params: &BfvParameters, poly: &[u64], scalar: u64) -> Polynomial {
     poly.iter()
         .map(|&coefficient| mul_mod_u64(coefficient, scalar, params.ciphertext_modulus))
         .collect()
 }
-
 fn poly_mul_mod(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Polynomial {
     poly_mul_raw(params, lhs, rhs)
         .into_iter()
         .map(|coefficient| mod_q(coefficient, params.ciphertext_modulus))
         .collect()
 }
-
 fn poly_mul_raw(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Vec<i128> {
     #[cfg(feature = "bfv-accel")]
     if matches!(params.convolution_backend(), BfvConvolutionBackend::CrtNtt) {
@@ -43773,7 +42101,6 @@ fn poly_mul_raw(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Vec<i128> {
     }
     poly_mul_raw_scalar(params, lhs, rhs)
 }
-
 fn poly_mul_raw_scalar(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Vec<i128> {
     let lhs = lhs
         .iter()
@@ -43785,7 +42112,6 @@ fn poly_mul_raw_scalar(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Vec<
         .collect::<Vec<_>>();
     poly_mul_raw_scalar_i128(params, &lhs, &rhs)
 }
-
 fn poly_mul_raw_scalar_i128(params: &BfvParameters, lhs: &[i128], rhs: &[i128]) -> Vec<i128> {
     let n = params.degree();
     let mut acc = vec![0_i128; n];
@@ -43802,13 +42128,11 @@ fn poly_mul_raw_scalar_i128(params: &BfvParameters, lhs: &[i128], rhs: &[i128]) 
     }
     acc
 }
-
 #[cfg(feature = "bfv-accel")]
 fn poly_mul_raw_crt_ntt(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Vec<i128> {
     try_poly_mul_raw_crt_ntt(params, lhs, rhs)
         .unwrap_or_else(|| poly_mul_raw_scalar(params, lhs, rhs))
 }
-
 #[cfg(feature = "bfv-accel")]
 fn try_poly_mul_raw_crt_ntt(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Option<Vec<i128>> {
     let n = params.degree();
@@ -43824,7 +42148,6 @@ fn try_poly_mul_raw_crt_ntt(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) ->
     }
     Some(folded)
 }
-
 #[cfg(feature = "bfv-accel")]
 fn convolve_linear_crt_ntt(lhs: &[u64], rhs: &[u64]) -> Option<Vec<u128>> {
     let len = lhs.len().checked_mul(2)?;
@@ -43851,7 +42174,6 @@ fn convolve_linear_crt_ntt(lhs: &[u64], rhs: &[u64]) -> Option<Vec<u128>> {
         })
         .collect::<Option<Vec<_>>>()
 }
-
 #[cfg(feature = "bfv-accel")]
 fn convolve_linear_mod_prime(
     lhs: &[u64],
@@ -43879,7 +42201,6 @@ fn convolve_linear_mod_prime(
     ntt_in_place(&mut lhs_ntt, prime, true)?;
     Some(lhs_ntt)
 }
-
 #[cfg(feature = "bfv-accel")]
 fn ntt_in_place(values: &mut [u64], prime: NttPrime, invert: bool) -> Option<()> {
     let len = values.len();
@@ -43891,7 +42212,6 @@ fn ntt_in_place(values: &mut [u64], prime: NttPrime, invert: bool) -> Option<()>
     } else {
         root
     };
-
     let mut stage_len = 2_usize;
     while stage_len <= len {
         let step = mod_pow_prime(root, u64::try_from(len / stage_len).ok()?, modulus);
@@ -43911,7 +42231,6 @@ fn ntt_in_place(values: &mut [u64], prime: NttPrime, invert: bool) -> Option<()>
             None => break,
         };
     }
-
     if invert {
         let inv_len = mod_inv_prime(u64::try_from(len).ok()?, modulus);
         for value in values {
@@ -43920,7 +42239,6 @@ fn ntt_in_place(values: &mut [u64], prime: NttPrime, invert: bool) -> Option<()>
     }
     Some(())
 }
-
 #[cfg(feature = "bfv-accel")]
 fn root_for_length(prime: NttPrime, len: usize) -> Option<u64> {
     if len == 0 || prime.modulus <= 1 {
@@ -43937,7 +42255,6 @@ fn root_for_length(prime: NttPrime, len: usize) -> Option<u64> {
         prime.modulus,
     ))
 }
-
 #[cfg(feature = "bfv-accel")]
 fn bit_reverse_permute(values: &mut [u64]) {
     if values.is_empty() {
@@ -43951,7 +42268,6 @@ fn bit_reverse_permute(values: &mut [u64]) {
         }
     }
 }
-
 #[cfg(feature = "bfv-accel")]
 fn garner_reconstruct_u128(residues: &[u64], primes: &[NttPrime]) -> Option<u128> {
     if residues.len() != primes.len() {
@@ -43980,7 +42296,6 @@ fn garner_reconstruct_u128(residues: &[u64], primes: &[NttPrime]) -> Option<u128
     }
     Some(value)
 }
-
 #[cfg(feature = "bfv-accel")]
 fn add_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
     if modulus == 0 {
@@ -43988,7 +42303,6 @@ fn add_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
     }
     low_u64_from_u128((u128::from(lhs) + u128::from(rhs)) % u128::from(modulus))
 }
-
 #[cfg(feature = "bfv-accel")]
 fn sub_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
     if modulus == 0 {
@@ -44002,7 +42316,6 @@ fn sub_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
         modulus - (rhs - lhs)
     }
 }
-
 #[cfg(feature = "bfv-accel")]
 fn mul_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
     if modulus == 0 {
@@ -44010,7 +42323,6 @@ fn mul_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
     }
     low_u64_from_u128((u128::from(lhs) * u128::from(rhs)) % u128::from(modulus))
 }
-
 #[cfg(feature = "bfv-accel")]
 fn mod_pow_prime(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     if modulus == 0 {
@@ -44026,7 +42338,6 @@ fn mod_pow_prime(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     }
     result
 }
-
 #[cfg(feature = "bfv-accel")]
 fn mod_inv_prime(value: u64, modulus: u64) -> u64 {
     if modulus <= 1 {
@@ -44034,39 +42345,31 @@ fn mod_inv_prime(value: u64, modulus: u64) -> u64 {
     }
     mod_pow_prime(value, modulus - 2, modulus)
 }
-
 fn low_u64_from_u128(value: u128) -> u64 {
     let [b0, b1, b2, b3, b4, b5, b6, b7, _, _, _, _, _, _, _, _] = value.to_le_bytes();
     u64::from_le_bytes([b0, b1, b2, b3, b4, b5, b6, b7])
 }
-
 fn low_u64_from_i128(value: i128) -> u64 {
     let [b0, b1, b2, b3, b4, b5, b6, b7, _, _, _, _, _, _, _, _] = value.to_le_bytes();
     u64::from_le_bytes([b0, b1, b2, b3, b4, b5, b6, b7])
 }
-
 fn add_mod_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
     low_u64_from_u128((u128::from(lhs) + u128::from(rhs)) % u128::from(modulus))
 }
-
 fn sub_mod_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
     mod_q(i128::from(lhs) - i128::from(rhs), modulus)
 }
-
 fn mul_mod_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
     low_u64_from_u128((u128::from(lhs) * u128::from(rhs)) % u128::from(modulus))
 }
-
 fn mod_q(value: i128, modulus: u64) -> u64 {
     let modulus = i128::from(modulus);
     let reduced = value.rem_euclid(modulus);
     low_u64_from_i128(reduced)
 }
-
 fn mod_t(value: i128, modulus: u64) -> u64 {
     mod_q(value, modulus)
 }
-
 fn div_round_nearest_i128(value: i128, divisor: i128) -> Result<i128, BfvError> {
     if divisor <= 0 {
         return Err(BfvError::InvalidParameters(
@@ -44088,7 +42391,6 @@ fn div_round_nearest_i128(value: i128, divisor: i128) -> Result<i128, BfvError> 
         )
     })
 }
-
 fn ceil_div_u128(numerator: u128, denominator: u128) -> Result<u128, BfvError> {
     if denominator == 0 {
         return Err(BfvError::InvalidParameters(
@@ -44104,7 +42406,6 @@ fn ceil_div_u128(numerator: u128, denominator: u128) -> Result<u128, BfvError> {
             )
         })
 }
-
 fn center_lift(coefficient: u64, modulus: u64) -> i128 {
     let coefficient = i128::from(coefficient);
     let modulus = i128::from(modulus);
@@ -44114,7 +42415,6 @@ fn center_lift(coefficient: u64, modulus: u64) -> i128 {
         coefficient
     }
 }
-
 fn rotation_steps_mod_slot_count(
     rotation_steps: u32,
     slot_count: usize,
@@ -44141,7 +42441,6 @@ fn rotation_steps_mod_slot_count(
         )
     })
 }
-
 #[cfg(test)]
 #[allow(clippy::too_many_lines)]
 mod tests;

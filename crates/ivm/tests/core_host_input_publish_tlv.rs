@@ -1,9 +1,6 @@
 //! CoreHost: INPUT_PUBLISH_TLV rejects invalid pointer-ABI envelopes.
-
 use ivm::{CoreHost, IVM, VMError, syscalls};
-
 mod common;
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
     v.extend_from_slice(&type_id.to_be_bytes());
@@ -14,7 +11,6 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     v.extend_from_slice(&h);
     v
 }
-
 #[test]
 fn input_publish_rejects_unknown_type_id() {
     let mut vm = IVM::new(u64::MAX);

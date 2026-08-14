@@ -1,7 +1,4 @@
 //! Benchmarks the production Kotodama prepared-contract and warm-runtime cache path.
-
-use std::collections::BTreeMap;
-
 use criterion::Criterion;
 use iroha_core::smartcontracts::ivm::cache::IvmCache;
 use iroha_crypto::Hash;
@@ -10,17 +7,15 @@ use iroha_primitives::{json::Json, numeric_abi::IntValueV1};
 use ivm::{
     ProgramMetadata, host::DefaultHost, kotodama::compiler::Compiler, pointer_abi::PointerType,
 };
-
+use std::collections::BTreeMap;
 // Timing the cache path must not be coupled to the evolving deterministic
 // instruction/syscall schedule; gas behavior has separate golden tests.
 const GAS_LIMIT: u64 = u64::MAX;
-
 fn benchmark_program() -> Vec<u8> {
     Compiler::new()
         .compile_source("seiyaku Add { view fn add(int a, int b) -> int { return a + b; } }")
         .expect("compile benchmark contract")
 }
-
 fn entrypoint_pc(program: &[u8], name: &str) -> u64 {
     let metadata = ProgramMetadata::parse(program).expect("parse benchmark metadata");
     let entrypoint = metadata
@@ -33,7 +28,6 @@ fn entrypoint_pc(program: &[u8], name: &str) -> u64 {
         .expect("benchmark entrypoint exists");
     u64::try_from(metadata.prefix_len()).expect("metadata prefix fits u64") + entrypoint.entry_pc
 }
-
 fn pointer_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     bytes.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -47,7 +41,6 @@ fn pointer_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     bytes.extend_from_slice(Hash::new(payload).as_ref());
     bytes
 }
-
 fn argument_host(program: &[u8]) -> DefaultHost {
     let metadata = ProgramMetadata::parse(program).expect("parse benchmark metadata");
     let schema = metadata
@@ -70,7 +63,6 @@ fn argument_host(program: &[u8]) -> DefaultHost {
         pointer_tlv(PointerType::NoritoBytes, &record),
     )]))
 }
-
 fn bench_production_runtime_cache(c: &mut Criterion) {
     let program = benchmark_program();
     let code_hash = ivm::contract_code_hash(&program);
@@ -80,7 +72,6 @@ fn bench_production_runtime_cache(c: &mut Criterion) {
     let summary = cache
         .summarize_program_with_hash(code_hash, &program)
         .expect("prepare benchmark contract");
-
     // Seed the same shared prepared-runtime pool used by production contract
     // execution. Subsequent samples must hit the content-addressed summary and
     // restore the owned VM with dirty-page reset.
@@ -105,7 +96,6 @@ fn bench_production_runtime_cache(c: &mut Criterion) {
             Some(11)
         );
     }
-
     c.bench_function("kotodama_core_runtime_warm_add", |b| {
         b.iter(|| {
             let summary = cache
@@ -122,7 +112,6 @@ fn bench_production_runtime_cache(c: &mut Criterion) {
             std::hint::black_box(runtime.register(10));
         })
     });
-
     let stats = summary.prepared_contract_cache().stats();
     assert!(stats.runtime_hits > 0, "benchmark must exercise warm hits");
     assert!(
@@ -138,7 +127,6 @@ fn bench_production_runtime_cache(c: &mut Criterion) {
         "warm samples must not rebuild the runtime template"
     );
 }
-
 fn main() {
     ivm::set_banner_enabled(false);
     let mut criterion = Criterion::default().configure_from_args();

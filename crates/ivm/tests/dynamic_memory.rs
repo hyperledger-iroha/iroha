@@ -1,9 +1,7 @@
 use ivm::{IVM, Memory, encoding, instruction, syscalls};
 mod common;
 use common::assemble;
-
 const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
-
 #[test]
 fn test_heap_growth_allocation() {
     let mut vm = IVM::new(u64::MAX);
@@ -46,7 +44,6 @@ fn test_heap_growth_allocation() {
     assert_eq!(vm.register(3), 0xDEAD_BEEF);
     assert_eq!(vm.memory.heap_limit(), 0x30_000);
 }
-
 #[test]
 fn test_heap_grow_oob() {
     let mut vm = IVM::new(u64::MAX);
@@ -65,7 +62,6 @@ fn test_heap_grow_oob() {
     let res = vm.run();
     assert!(matches!(res, Err(ivm::VMError::OutOfMemory)));
 }
-
 #[test]
 fn test_heap_alloc_exact_limit() {
     let mut vm = IVM::new(u64::MAX);
@@ -97,7 +93,6 @@ fn test_heap_alloc_exact_limit() {
     assert_eq!(vm.register(10), Memory::HEAP_START);
     assert_eq!(vm.memory.heap_limit(), Memory::HEAP_MAX_SIZE);
 }
-
 #[test]
 fn test_heap_alloc_oob() {
     let mut vm = IVM::new(u64::MAX);
@@ -116,7 +111,6 @@ fn test_heap_alloc_oob() {
     let res = vm.run();
     assert!(matches!(res, Err(ivm::VMError::OutOfMemory)));
 }
-
 #[test]
 fn test_default_heap_supports_large_alloc_without_growth() {
     let mut vm = IVM::new(u64::MAX);

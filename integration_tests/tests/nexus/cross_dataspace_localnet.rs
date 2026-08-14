@@ -1,18 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Localnet cross-dataspace atomic swap regression test.
-
 use super::localnet_npos::npos_override_transactions;
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    io::{Read, Seek, SeekFrom},
-    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-    path::{Path, PathBuf},
-    thread,
-    time::{Duration, Instant},
-};
-
 use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::{StreamExt, future::try_join_all};
 use integration_tests::sandbox;
@@ -89,13 +77,21 @@ use iroha_test_network::{NetworkBuilder, NetworkPeer, genesis_factory_with_post_
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use norito::codec::{DecodeAll, Encode};
 use norito::json::Value as JsonValue;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    io::{Read, Seek, SeekFrom},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+    path::{Path, PathBuf},
+    thread,
+    time::{Duration, Instant},
+};
 use tokio::{
     runtime::Runtime,
     task::spawn_blocking,
     time::{sleep, timeout},
 };
 use toml::{Table, Value as TomlValue};
-
 const NEXUS_ALIAS: &str = "universal";
 const DS1_ALIAS: &str = "ds1";
 const DS2_ALIAS: &str = "ds2";
@@ -168,7 +164,6 @@ const AUTOSCALE_DRAIN_COMMITMENT_LOG_MARKER: &str =
     "committed globally certified lane autoscale drain frontier";
 const LANE_INCARNATION_MARKER_VERSION: u8 = 3;
 const LANE_INCARNATION_MARKER_FILE: &str = ".lane-incarnation.norito";
-
 #[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
 #[norito(deny_unknown_fields)]
 struct LaneIncarnationMarkerV3 {
@@ -181,46 +176,38 @@ struct LaneIncarnationMarkerV3 {
     block_store_digest: Hash,
     merge_log_digest: Hash,
 }
-
 #[derive(Clone)]
 struct ConfigLayer(Table);
-
 impl AsRef<Table> for ConfigLayer {
     fn as_ref(&self) -> &Table {
         &self.0
     }
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CorridorSeed {
     value: String,
     ordinal: usize,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CorridorRunMode {
     SeedCase,
     FaultSoak { duration: Duration },
 }
-
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
 }
-
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
 }
-
 fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("universal", "universal").expect("fee asset domain"),
         "xor".parse().expect("fee asset name"),
     )
 }
-
 fn parse_corridor_seed(raw: &str) -> Result<CorridorSeed> {
     ensure!(
         raw.len() == CORRIDOR_SEED_PREFIX.len() + 2 && raw.starts_with(CORRIDOR_SEED_PREFIX),
@@ -243,7 +230,6 @@ fn parse_corridor_seed(raw: &str) -> Result<CorridorSeed> {
         ordinal,
     })
 }
-
 fn parse_required_seed_flag(raw: Option<&str>) -> Result<bool> {
     match raw {
         None | Some("0") => Ok(false),
@@ -253,7 +239,6 @@ fn parse_required_seed_flag(raw: Option<&str>) -> Result<bool> {
         )),
     }
 }
-
 fn corridor_seed_from_env() -> Result<CorridorSeed> {
     let require_seed = match std::env::var(REQUIRE_CORRIDOR_SEED_ENV) {
         Ok(raw) => parse_required_seed_flag(Some(&raw))?,
@@ -277,7 +262,6 @@ fn corridor_seed_from_env() -> Result<CorridorSeed> {
         )),
     }
 }
-
 fn parse_fault_soak_duration(raw: Option<&str>) -> Result<Duration> {
     let seconds = match raw {
         None => FAULT_SOAK_DURATION_SECS,
@@ -291,7 +275,6 @@ fn parse_fault_soak_duration(raw: Option<&str>) -> Result<Duration> {
     );
     Ok(Duration::from_secs(seconds))
 }
-
 fn fault_soak_duration_from_env() -> Result<Duration> {
     match std::env::var(FAULT_SOAK_DURATION_ENV) {
         Ok(raw) => parse_fault_soak_duration(Some(&raw)),
@@ -301,42 +284,35 @@ fn fault_soak_duration_from_env() -> Result<Duration> {
         )),
     }
 }
-
 fn cross_dataspace_gas_account_id() -> AccountId {
     // Use an existing single-domain subject to keep staking literals unambiguous.
     ALICE_ID.clone()
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct ExpectedLaneValidatorBinding {
     validator: String,
     peer_id: String,
 }
-
 fn validator_authority_account_for_peer(index: usize) -> AccountId {
     let keypair = validator_authority_keypair(index);
     AccountId::new(keypair.public_key().clone())
 }
-
 fn validator_authority_keypair(index: usize) -> KeyPair {
     KeyPair::try_from_seed(validator_authority_seed(index), Algorithm::Ed25519)
         .expect("fixture cross-dataspace validator authority key")
 }
-
 fn validator_authority_seed(index: usize) -> Vec<u8> {
     let mut seed = vec![0_u8; 32];
     seed[0] = 0xC1;
     seed[1..9].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
     seed
 }
-
 fn expected_lane_binding_for_peer(index: usize, peer_id: &PeerId) -> ExpectedLaneValidatorBinding {
     ExpectedLaneValidatorBinding {
         validator: validator_authority_account_for_peer(index).to_string(),
         peer_id: peer_id.to_string(),
     }
 }
-
 fn localnet_builder(seed: &str) -> NetworkBuilder {
     let gas_account_str = cross_dataspace_gas_account_id()
         .canonical_i105()
@@ -369,7 +345,6 @@ fn localnet_builder(seed: &str) -> NetworkBuilder {
             );
             lane_nexus.insert("visibility".into(), TomlValue::String("public".to_owned()));
             lane_nexus.insert("metadata".into(), TomlValue::Table(Table::new()));
-
             let mut lane_ds1 = Table::new();
             lane_ds1.insert("index".into(), TomlValue::Integer(1));
             lane_ds1.insert("alias".into(), TomlValue::String("lane-ds1".to_owned()));
@@ -379,7 +354,6 @@ fn localnet_builder(seed: &str) -> NetworkBuilder {
                 TomlValue::String("restricted".to_owned()),
             );
             lane_ds1.insert("metadata".into(), TomlValue::Table(Table::new()));
-
             let mut lane_ds2 = Table::new();
             lane_ds2.insert("index".into(), TomlValue::Integer(2));
             lane_ds2.insert("alias".into(), TomlValue::String("lane-ds2".to_owned()));
@@ -389,7 +363,6 @@ fn localnet_builder(seed: &str) -> NetworkBuilder {
                 TomlValue::String("restricted".to_owned()),
             );
             lane_ds2.insert("metadata".into(), TomlValue::Table(Table::new()));
-
             let mut ds_nexus = Table::new();
             ds_nexus.insert("alias".into(), TomlValue::String(NEXUS_ALIAS.to_owned()));
             ds_nexus.insert("id".into(), TomlValue::Integer(NEXUS_ID_U64 as i64));
@@ -398,7 +371,6 @@ fn localnet_builder(seed: &str) -> NetworkBuilder {
                 TomlValue::String("main nexus dataspace".to_owned()),
             );
             ds_nexus.insert("fault_tolerance".into(), TomlValue::Integer(1));
-
             let mut ds1 = Table::new();
             ds1.insert("alias".into(), TomlValue::String(DS1_ALIAS.to_owned()));
             ds1.insert("id".into(), TomlValue::Integer(DS1_ID_U64 as i64));
@@ -411,7 +383,6 @@ fn localnet_builder(seed: &str) -> NetworkBuilder {
                 TomlValue::String("private dataspace one".to_owned()),
             );
             ds1.insert("fault_tolerance".into(), TomlValue::Integer(1));
-
             let mut ds2 = Table::new();
             ds2.insert("alias".into(), TomlValue::String(DS2_ALIAS.to_owned()));
             ds2.insert("id".into(), TomlValue::Integer(DS2_ID_U64 as i64));
@@ -424,21 +395,18 @@ fn localnet_builder(seed: &str) -> NetworkBuilder {
                 TomlValue::String("private dataspace two".to_owned()),
             );
             ds2.insert("fault_tolerance".into(), TomlValue::Integer(1));
-
             let mut matcher_alice = Table::new();
             matcher_alice.insert("account".into(), TomlValue::String(ALICE_ID.to_string()));
             let mut rule_alice = Table::new();
             rule_alice.insert("lane".into(), TomlValue::Integer(1));
             rule_alice.insert("dataspace".into(), TomlValue::String(DS1_ALIAS.to_owned()));
             rule_alice.insert("matcher".into(), TomlValue::Table(matcher_alice));
-
             let mut matcher_bob = Table::new();
             matcher_bob.insert("account".into(), TomlValue::String(BOB_ID.to_string()));
             let mut rule_bob = Table::new();
             rule_bob.insert("lane".into(), TomlValue::Integer(2));
             rule_bob.insert("dataspace".into(), TomlValue::String(DS2_ALIAS.to_owned()));
             rule_bob.insert("matcher".into(), TomlValue::Table(matcher_bob));
-
             let mut policy = Table::new();
             policy.insert("default_lane".into(), TomlValue::Integer(0));
             policy.insert(
@@ -452,7 +420,6 @@ fn localnet_builder(seed: &str) -> NetworkBuilder {
                     TomlValue::Table(rule_bob),
                 ]),
             );
-
             layer
                 .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 3_i64)
@@ -524,7 +491,6 @@ fn localnet_builder(seed: &str) -> NetworkBuilder {
                 );
         })
 }
-
 fn multilane_lane_catalog() -> LaneCatalog {
     let lane_count = NonZeroU32::new(3).expect("lane count");
     let lanes = vec![
@@ -552,13 +518,11 @@ fn multilane_lane_catalog() -> LaneCatalog {
     ];
     LaneCatalog::new(lane_count, lanes).expect("lane catalog")
 }
-
 fn multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
     let catalog = multilane_lane_catalog();
     let lane_config = ActualLaneConfig::from_catalog(&catalog);
     proof_policy_bundle(&lane_config)
 }
-
 fn npos_multilane_genesis_post_topology_transactions(
     topology: &[PeerId],
 ) -> Vec<Vec<InstructionBox>> {
@@ -649,7 +613,6 @@ fn npos_multilane_genesis_post_topology_transactions(
         )
         .into(),
     ];
-
     for (index, peer) in topology.iter().take(LANE_VALIDATOR_COUNT).enumerate() {
         let lane_index = if index < VALIDATORS_PER_LANE {
             NEXUS_LANE_INDEX
@@ -697,31 +660,25 @@ fn npos_multilane_genesis_post_topology_transactions(
         );
         bootstrap_tx.push(ActivatePublicLaneValidator::new(lane_id, validator_id).into());
     }
-
     vec![bootstrap_tx]
 }
-
 #[derive(Clone, Debug)]
 struct SumeragiObservation {
     canonical: SumeragiV2Status,
     diagnostics: SumeragiDiagnosticsStatus,
 }
-
 impl std::ops::Deref for SumeragiObservation {
     type Target = SumeragiDiagnosticsStatus;
-
     fn deref(&self) -> &Self::Target {
         &self.diagnostics
     }
 }
-
 fn sumeragi_observation(client: &Client) -> Result<SumeragiObservation> {
     Ok(SumeragiObservation {
         canonical: client.get_sumeragi_status()?,
         diagnostics: client.get_sumeragi_diagnostics()?,
     })
 }
-
 fn wait_for_height(
     client: &Client,
     target_height: u64,
@@ -729,7 +686,6 @@ fn wait_for_height(
 ) -> Result<SumeragiObservation> {
     wait_for_height_with_timeout(client, target_height, context, STATUS_WAIT_TIMEOUT)
 }
-
 fn wait_for_height_with_timeout(
     client: &Client,
     target_height: u64,
@@ -760,7 +716,6 @@ fn wait_for_height_with_timeout(
         "{context}: timed out waiting for block height >= {target_height}; last observed {last_height}{suffix}"
     ))
 }
-
 fn wait_for_height_with_tick_submitters_timeout_across_clients(
     mut clients_factory: impl FnMut() -> Vec<Client>,
     tick_submitters: Option<&[Client]>,
@@ -823,7 +778,6 @@ fn wait_for_height_with_tick_submitters_timeout_across_clients(
         "{context}: timed out waiting for block height >= {target_height}; last observed {last_height}{suffix}"
     ))
 }
-
 fn wait_for_lane_peers_commit_qc_at_least(
     network: &sandbox::SerializedNetwork,
     lane_index: u32,
@@ -843,7 +797,6 @@ fn wait_for_lane_peers_commit_qc_at_least(
         .canonical
         .last_committed_subject
         .map(|subject| subject.block_hash);
-
     let started = Instant::now();
     let mut last_observed = Vec::with_capacity(peers.len());
     let mut last_error: Option<String> = None;
@@ -894,7 +847,6 @@ fn wait_for_lane_peers_commit_qc_at_least(
         poll_count = poll_count.saturating_add(1);
         thread::sleep(STATUS_POLL_INTERVAL);
     }
-
     let suffix = last_error
         .map(|err| format!("; last status query error: {err}"))
         .unwrap_or_default();
@@ -902,7 +854,6 @@ fn wait_for_lane_peers_commit_qc_at_least(
         "{context}: timed out waiting for lane {lane_index} peers to converge on commit QC at least h{expected_height}:{expected_hash:?}; last observed {last_observed:?}{suffix}"
     ))
 }
-
 fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
     match client.query_single(FindAssetById::new(asset_id.clone())) {
         Ok(asset) => Ok(asset.value().clone()),
@@ -912,15 +863,12 @@ fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
         Err(err) => Err(eyre!(err)),
     }
 }
-
 fn asset_balance_variants(client: &Client, asset_id: &AssetId) -> Result<Vec<Quantity>> {
     Ok(vec![asset_balance(client, asset_id)?])
 }
-
 fn render_error_with_debug(err: &(impl core::fmt::Display + core::fmt::Debug)) -> String {
     format!("{err} ({err:?})")
 }
-
 fn bounded_observer_request_timeout(
     started: Instant,
     overall_timeout: Duration,
@@ -937,17 +885,14 @@ fn bounded_observer_request_timeout(
         .max(OBSERVER_QUERY_TIMEOUT_FLOOR)
         .min(remaining)
 }
-
 fn should_submit_tick(poll_count: u64, tick_every_polls: u64) -> bool {
     tick_every_polls > 0 && poll_count % tick_every_polls == 0
 }
-
 fn peer_indices_for_committed_lane_evidence(peer_count: usize) -> Vec<usize> {
     // Committed-lane rows are self-certified by the embedded lane QC. Do not
     // require a specific telemetry fanout peer to observe the same safety proof.
     (0..peer_count).collect()
 }
-
 fn submit_wait_tick(
     tick_submitter: &Client,
     context: &str,
@@ -976,7 +921,6 @@ fn submit_wait_tick(
         ));
     }
 }
-
 fn submit_wait_ticks(
     tick_submitters: &[Client],
     context: &str,
@@ -999,7 +943,6 @@ fn submit_wait_ticks(
         );
     }
 }
-
 #[test]
 fn bounded_observer_request_timeout_slices_remaining_budget() {
     let timeout = bounded_observer_request_timeout(Instant::now(), STATUS_WAIT_TIMEOUT, 4);
@@ -1016,7 +959,6 @@ fn bounded_observer_request_timeout_slices_remaining_budget() {
         "observer timeout should not exceed the remaining outer budget"
     );
 }
-
 #[derive(Debug)]
 struct RoutedJsonGetResponse {
     body: JsonValue,
@@ -1024,14 +966,12 @@ struct RoutedJsonGetResponse {
     route_lane_id: Option<String>,
     route_dataspace_id: Option<String>,
 }
-
 fn routed_header_string(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
         .and_then(|value| value.to_str().ok())
         .map(ToOwned::to_owned)
 }
-
 fn add_client_headers(
     client: &Client,
     mut request: reqwest::RequestBuilder,
@@ -1041,7 +981,6 @@ fn add_client_headers(
     }
     request
 }
-
 async fn torii_json_get(
     client: &Client,
     path_segments: &[String],
@@ -1064,7 +1003,6 @@ async fn torii_json_get(
             query.append_pair(key, value);
         }
     }
-
     let request = integration_tests::http::client()
         .get(url)
         .header(reqwest::header::ACCEPT, "application/json");
@@ -1079,7 +1017,6 @@ async fn torii_json_get(
             String::from_utf8_lossy(&body)
         ));
     }
-
     Ok(RoutedJsonGetResponse {
         body: norito::json::from_slice(&body)?,
         routed_by: routed_header_string(&headers, "x-iroha-routed-by"),
@@ -1087,7 +1024,6 @@ async fn torii_json_get(
         route_dataspace_id: routed_header_string(&headers, "x-iroha-route-dataspace-id"),
     })
 }
-
 async fn torii_json_get_with_retry(
     client: &Client,
     path_segments: &[String],
@@ -1125,7 +1061,6 @@ async fn torii_json_get_with_retry(
         "{context}: timed out after {attempts} attempts waiting for routed Torii GET{suffix}"
     ))
 }
-
 fn expect_local_or_proxy_fanout_headers(
     response: &RoutedJsonGetResponse,
     context: &str,
@@ -1147,21 +1082,18 @@ fn expect_local_or_proxy_fanout_headers(
     );
     Ok(())
 }
-
 #[derive(Clone, Copy, Debug)]
 struct DataspaceCommitmentObservation {
     height: u64,
     elapsed: Duration,
     approval_observed: bool,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct RoutedTransactionObservation {
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
     approved_height: Option<u64>,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LaneDomainProgress {
     lane_id: LaneId,
@@ -1181,7 +1113,6 @@ struct LaneDomainProgress {
     execution_status: String,
     executable_payload_available: bool,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LanePayloadOwnershipProgress {
     lane_id: LaneId,
@@ -1199,7 +1130,6 @@ struct LanePayloadOwnershipProgress {
     validator_count: u32,
     min_quorum: u32,
 }
-
 fn committed_lane_block_has_expected_quorum(
     block: &SumeragiCommittedLaneBlock,
     expected_validator_count: usize,
@@ -1224,7 +1154,6 @@ fn committed_lane_block_has_expected_quorum(
         && commit_qc_signer_count >= expected_quorum
         && commit_qc_signer_count <= validator_count
 }
-
 fn lane_payload_ownership_has_expected_quorum(
     ownership: &SumeragiLanePayloadOwnership,
     expected_validator_count: usize,
@@ -1242,7 +1171,6 @@ fn lane_payload_ownership_has_expected_quorum(
         && min_quorum == expected_quorum
         && ownership.validate_replay_material().is_ok()
 }
-
 fn dataspace_commitment_height_for(
     status: &SumeragiDiagnosticsStatus,
     lane_id: LaneId,
@@ -1259,7 +1187,6 @@ fn dataspace_commitment_height_for(
         .map(|commitment| commitment.block_height)
         .max()
 }
-
 fn lane_domain_progress_from_block(
     block: &SumeragiCommittedLaneBlock,
     dataspace_commitment_height: Option<u64>,
@@ -1283,7 +1210,6 @@ fn lane_domain_progress_from_block(
         executable_payload_available: block.executable_payload_available,
     }
 }
-
 fn latest_lane_domain_progress(
     status: &SumeragiDiagnosticsStatus,
     lane_id: LaneId,
@@ -1322,7 +1248,6 @@ fn latest_lane_domain_progress(
         })
         .map(|block| lane_domain_progress_from_block(block, dataspace_commitment_height))
 }
-
 fn lane_domain_progress_is_applied(progress: &LaneDomainProgress) -> bool {
     progress.executable_payload_available
         && matches!(
@@ -1331,7 +1256,6 @@ fn lane_domain_progress_is_applied(progress: &LaneDomainProgress) -> bool {
                 | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION
         )
 }
-
 fn latest_lane_domain_application_progress(
     status: &SumeragiDiagnosticsStatus,
     lane_id: LaneId,
@@ -1340,7 +1264,6 @@ fn latest_lane_domain_application_progress(
     latest_lane_domain_progress(status, lane_id, dataspace_id)
         .filter(lane_domain_progress_is_applied)
 }
-
 fn applied_lane_domain_progress(
     status: &SumeragiDiagnosticsStatus,
     lane_id: LaneId,
@@ -1384,7 +1307,6 @@ fn applied_lane_domain_progress(
     }
     latest_applied.map(|block| lane_domain_progress_from_block(block, dataspace_commitment_height))
 }
-
 fn latest_lane_payload_ownership_progress(
     status: &SumeragiDiagnosticsStatus,
     lane_id: LaneId,
@@ -1447,7 +1369,6 @@ fn latest_lane_payload_ownership_progress(
             min_quorum: ownership.lane_block_descriptor_min_quorum,
         })
 }
-
 fn lane_domain_progress_matches_candidate(
     observed: &LaneDomainProgress,
     candidate: &LaneDomainProgress,
@@ -1466,7 +1387,6 @@ fn lane_domain_progress_matches_candidate(
                         && observed.rbc_instance_hash == candidate.rbc_instance_hash
                         && observed.qc_mode_tag == candidate.qc_mode_tag))))
 }
-
 fn lane_domain_progress_same_tip_identity(
     left: &LaneDomainProgress,
     right: &LaneDomainProgress,
@@ -1483,7 +1403,6 @@ fn lane_domain_progress_same_tip_identity(
         && left.rbc_instance_hash == right.rbc_instance_hash
         && left.qc_mode_tag == right.qc_mode_tag
 }
-
 fn lane_domain_progress_is_after_baseline(
     progress: &LaneDomainProgress,
     baseline: &LaneDomainProgress,
@@ -1494,7 +1413,6 @@ fn lane_domain_progress_is_after_baseline(
         && (progress.lane_block_height, progress.lane_block_view)
             > (baseline.lane_block_height, baseline.lane_block_view)
 }
-
 fn lane_payload_ownership_progress_matches_candidate(
     observed: &LanePayloadOwnershipProgress,
     candidate: &LanePayloadOwnershipProgress,
@@ -1514,7 +1432,6 @@ fn lane_payload_ownership_progress_matches_candidate(
                         && observed.payload_ownership_hash == candidate.payload_ownership_hash
                         && observed.rbc_instance_hash == candidate.rbc_instance_hash))))
 }
-
 fn lane_payload_ownership_progress_same_tip_identity(
     left: &LanePayloadOwnershipProgress,
     right: &LanePayloadOwnershipProgress,
@@ -1531,7 +1448,6 @@ fn lane_payload_ownership_progress_same_tip_identity(
         && left.payload_ownership_hash == right.payload_ownership_hash
         && left.rbc_instance_hash == right.rbc_instance_hash
 }
-
 fn quorum_lane_domain_progress(
     observations: &[LaneDomainProgress],
     quorum_required: usize,
@@ -1562,7 +1478,6 @@ fn quorum_lane_domain_progress(
     }
     selected
 }
-
 fn quorum_lane_payload_ownership_progress(
     observations: &[LanePayloadOwnershipProgress],
     quorum_required: usize,
@@ -1595,7 +1510,6 @@ fn quorum_lane_payload_ownership_progress(
     }
     selected
 }
-
 fn lane_domain_progress_observations(
     network: &sandbox::SerializedNetwork,
     lane_id: LaneId,
@@ -1628,7 +1542,6 @@ fn lane_domain_progress_observations(
         })
         .collect()
 }
-
 fn lane_domain_application_observations(
     network: &sandbox::SerializedNetwork,
     lane_id: LaneId,
@@ -1661,7 +1574,6 @@ fn lane_domain_application_observations(
         })
         .collect()
 }
-
 fn raw_lane_domain_observation_summaries(
     network: &sandbox::SerializedNetwork,
     lane_id: LaneId,
@@ -1758,7 +1670,6 @@ fn raw_lane_domain_observation_summaries(
         })
         .collect()
 }
-
 fn lane_payload_ownership_progress_observations(
     network: &sandbox::SerializedNetwork,
     status_client: &Client,
@@ -1794,7 +1705,6 @@ fn lane_payload_ownership_progress_observations(
         })
         .collect()
 }
-
 fn wait_for_independent_lane_domain_progress(
     network: &sandbox::SerializedNetwork,
     leading_tick_submitters: &[Client],
@@ -1859,7 +1769,6 @@ fn wait_for_independent_lane_domain_progress(
         poll_count = poll_count.saturating_add(1);
         thread::sleep(STATUS_POLL_INTERVAL);
     }
-
     let suffix = last_error
         .map(|err| format!("; last status query/tick error: {err}"))
         .unwrap_or_default();
@@ -1875,7 +1784,6 @@ fn wait_for_independent_lane_domain_progress(
         trailing_lane.1.as_u64(),
     ))
 }
-
 fn wait_for_independent_lane_application_progress(
     network: &sandbox::SerializedNetwork,
     leading_tick_submitters: &[Client],
@@ -1895,7 +1803,6 @@ fn wait_for_independent_lane_application_progress(
         context,
     )
 }
-
 fn wait_for_independent_lane_application_progress_after(
     network: &sandbox::SerializedNetwork,
     leading_tick_submitters: &[Client],
@@ -1915,7 +1822,6 @@ fn wait_for_independent_lane_application_progress_after(
         context,
     )
 }
-
 fn current_lane_application_progress(
     network: &sandbox::SerializedNetwork,
     lane: (LaneId, DataSpaceId),
@@ -1925,7 +1831,6 @@ fn current_lane_application_progress(
         lane_domain_application_observations(network, lane.0, lane.1, &mut last_error);
     quorum_lane_domain_progress(&observations, 1)
 }
-
 fn wait_for_lane_application_progress_after(
     network: &sandbox::SerializedNetwork,
     tick_submitters: &[Client],
@@ -1963,7 +1868,6 @@ fn wait_for_lane_application_progress_after(
         poll_count = poll_count.saturating_add(1);
         thread::sleep(STATUS_POLL_INTERVAL);
     }
-
     let suffix = last_error
         .map(|err| format!("; last status query/tick error: {err}"))
         .unwrap_or_default();
@@ -1982,7 +1886,6 @@ fn wait_for_lane_application_progress_after(
         lane.1.as_u64(),
     ))
 }
-
 fn wait_for_independent_lane_application_progress_with_baseline(
     network: &sandbox::SerializedNetwork,
     leading_tick_submitters: &[Client],
@@ -2062,7 +1965,6 @@ fn wait_for_independent_lane_application_progress_with_baseline(
         poll_count = poll_count.saturating_add(1);
         thread::sleep(STATUS_POLL_INTERVAL);
     }
-
     let suffix = last_error
         .map(|err| format!("; last status query/tick error: {err}"))
         .unwrap_or_default();
@@ -2088,7 +1990,6 @@ fn wait_for_independent_lane_application_progress_with_baseline(
         trailing_lane.1.as_u64(),
     ))
 }
-
 fn wait_for_independent_lane_payload_ownership_progress(
     network: &sandbox::SerializedNetwork,
     status_client: &Client,
@@ -2154,7 +2055,6 @@ fn wait_for_independent_lane_payload_ownership_progress(
         poll_count = poll_count.saturating_add(1);
         thread::sleep(STATUS_POLL_INTERVAL);
     }
-
     let suffix = last_error
         .map(|err| format!("; last status query/tick error: {err}"))
         .unwrap_or_default();
@@ -2166,7 +2066,6 @@ fn wait_for_independent_lane_payload_ownership_progress(
         trailing_lane.1.as_u64(),
     ))
 }
-
 async fn wait_for_route_probe_approval(
     submitter: &Client,
     instruction: InstructionBox,
@@ -2191,17 +2090,14 @@ async fn wait_for_route_probe_approval(
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
-
     // Give the SSE subscription handshake a brief head start so we can
     // opportunistically observe the queued routing decision event.
     sleep(ROUTE_PROBE_SSE_HANDSHAKE_DELAY).await;
-
     let submitter_for_submit = submitter.clone();
     spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction))
         .await
         .map_err(|err| eyre!("{context}: route probe submit task join error: {err}"))?
         .map_err(|err| eyre!("{context}: failed to submit route probe transaction: {err}"))?;
-
     let mut first_seen_elapsed: Option<Duration> = None;
     let mut approved_height = None;
     let event_poll_deadline = Instant::now() + ROUTE_PROBE_APPROVAL_WAIT_TIMEOUT;
@@ -2250,7 +2146,6 @@ async fn wait_for_route_probe_approval(
             }
         }
     }
-
     events.close().await;
     let (height, approval_observed) = if let Some(height) = approved_height {
         (height, true)
@@ -2269,7 +2164,6 @@ async fn wait_for_route_probe_approval(
         approval_observed,
     })
 }
-
 async fn submit_transaction_with_route_observation(
     submitter: &Client,
     transaction: &SignedTransaction,
@@ -2282,16 +2176,13 @@ async fn submit_transaction_with_route_observation(
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
-
     sleep(ROUTE_PROBE_SSE_HANDSHAKE_DELAY).await;
-
     let submitter_for_submit = submitter.clone();
     let transaction_for_submit = transaction.clone();
     spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction_for_submit))
         .await
         .map_err(|err| eyre!("{context}: route-observed submit task join error: {err}"))?
         .map_err(|err| eyre!("{context}: failed to submit route-observed transaction: {err}"))?;
-
     let mut observed = None;
     let event_poll_deadline = Instant::now() + BLOCKING_CONFIRMATION_TIMEOUT;
     while Instant::now() <= event_poll_deadline {
@@ -2334,37 +2225,31 @@ async fn submit_transaction_with_route_observation(
             }
         }
     }
-
     events.close().await;
     observed.ok_or_else(|| eyre!("{context}: timed out observing queued transaction route"))
 }
-
 fn wait_for_expected_balances(
     expectations: &[BalanceExpectation<'_>],
     context: &str,
 ) -> Result<()> {
     wait_for_expected_balances_with_timeout(expectations, context, STATUS_WAIT_TIMEOUT)
 }
-
 struct BalanceExpectation<'a> {
     client: &'a Client,
     asset_id: &'a AssetId,
     expected: Quantity,
 }
-
 struct BalanceExpectationAcrossClients<'a> {
     clients: &'a [Client],
     asset_id: &'a AssetId,
     expected: Quantity,
 }
-
 fn total_balance_observer_request_slots(client_counts: impl IntoIterator<Item = usize>) -> usize {
     client_counts
         .into_iter()
         .map(|client_count| client_count.max(1))
         .sum()
 }
-
 fn wait_for_expected_balances_with_timeout(
     expectations: &[BalanceExpectation<'_>],
     context: &str,
@@ -2412,7 +2297,6 @@ fn wait_for_expected_balances_with_timeout(
         "{context}: timed out waiting for expected balances; last observed {last_observed:?}{suffix}"
     ))
 }
-
 fn wait_for_expected_balances_across_clients_with_tick_submitters_timeout(
     tick_submitters: &[Client],
     expectations: &[BalanceExpectationAcrossClients<'_>],
@@ -2452,7 +2336,6 @@ fn wait_for_expected_balances_across_clients_with_tick_submitters_timeout(
                 last_observed.push((expectation.asset_id.clone(), vec!["no clients".to_owned()]));
                 continue;
             }
-
             let mut expectation_matches = false;
             let mut observed_for_expectation = Vec::with_capacity(expectation.clients.len());
             for (client_index, client) in expectation.clients.iter().enumerate() {
@@ -2503,7 +2386,6 @@ fn wait_for_expected_balances_across_clients_with_tick_submitters_timeout(
         "{context}: timed out waiting for expected balances across clients with tick assist; last observed {last_observed:?}{suffix}"
     ))
 }
-
 fn wait_for_expected_balances_with_tick_timeout(
     tick_submitter: &Client,
     expectations: &[BalanceExpectation<'_>],
@@ -2517,7 +2399,6 @@ fn wait_for_expected_balances_with_tick_timeout(
         timeout_duration,
     )
 }
-
 fn wait_for_expected_balances_with_tick_submitters_timeout(
     tick_submitters: &[Client],
     expectations: &[BalanceExpectation<'_>],
@@ -2615,7 +2496,6 @@ fn wait_for_expected_balances_with_tick_submitters_timeout(
         "{context}: timed out waiting for expected balances with tick assist; last observed {last_observed:?}; buckets {bucket_context}{suffix}"
     ))
 }
-
 fn wait_for_account_permissions_across_clients(
     tick_submitters: &[Client],
     mut clients_factory: impl FnMut() -> Vec<Client>,
@@ -2688,7 +2568,6 @@ fn wait_for_account_permissions_across_clients(
         PERMISSION_VISIBILITY_WAIT_TIMEOUT
     ))
 }
-
 fn lane_validator_snapshot(
     snapshot: &JsonValue,
     context: &str,
@@ -2704,7 +2583,6 @@ fn lane_validator_snapshot(
         .get("items")
         .and_then(JsonValue::as_array)
         .ok_or_else(|| eyre!("{context}: lane validator response is missing items"))?;
-
     let mut active = BTreeSet::new();
     for item in items {
         let entry = item
@@ -2731,10 +2609,8 @@ fn lane_validator_snapshot(
             });
         }
     }
-
     Ok((usize::try_from(total).unwrap_or(usize::MAX), active))
 }
-
 fn wait_for_active_lane_validators(
     client: &Client,
     lane_id: LaneId,
@@ -2761,7 +2637,6 @@ fn wait_for_active_lane_validators(
         }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
-
     let suffix = last_error
         .map(|err| format!("; last query error: {err}"))
         .unwrap_or_default();
@@ -2773,7 +2648,6 @@ fn wait_for_active_lane_validators(
         last_active
     ))
 }
-
 fn leader_or_highest_height_peer_index(
     network: &sandbox::SerializedNetwork,
     status_client: &Client,
@@ -2782,7 +2656,6 @@ fn leader_or_highest_height_peer_index(
     if peers.is_empty() {
         return 0;
     }
-
     if let Ok(status) = status_client.get_sumeragi_status() {
         if let Ok(index) = usize::try_from(status.leader) {
             if index < peers.len() {
@@ -2797,7 +2670,6 @@ fn leader_or_highest_height_peer_index(
             }
         }
     }
-
     peers
         .iter()
         .enumerate()
@@ -2815,7 +2687,6 @@ fn leader_or_highest_height_peer_index(
         })
         .0
 }
-
 fn lane_bounded_peer_index(
     network: &sandbox::SerializedNetwork,
     status_client: &Client,
@@ -2826,7 +2697,6 @@ fn lane_bounded_peer_index(
         .next()
         .unwrap_or_else(|| leader_or_highest_height_peer_index(network, status_client))
 }
-
 fn lane_bounded_peer_indices(
     network: &sandbox::SerializedNetwork,
     status_client: &Client,
@@ -2836,14 +2706,12 @@ fn lane_bounded_peer_indices(
     if peers.is_empty() {
         return Vec::new();
     }
-
     let lane_index = lane_index as usize;
     let start = lane_index.saturating_mul(VALIDATORS_PER_LANE);
     let end = start.saturating_add(VALIDATORS_PER_LANE).min(peers.len());
     if start >= end {
         return vec![leader_or_highest_height_peer_index(network, status_client)];
     }
-
     let leader_index = status_client
         .get_sumeragi_status()
         .ok()
@@ -2871,7 +2739,6 @@ fn lane_bounded_peer_indices(
     });
     ranked.into_iter().map(|(index, _, _)| index).collect()
 }
-
 fn leader_targeted_client_for_lane(
     network: &sandbox::SerializedNetwork,
     status_client: &Client,
@@ -2882,7 +2749,6 @@ fn leader_targeted_client_for_lane(
     let index = lane_bounded_peer_index(network, status_client, lane_index);
     network.peers()[index].client_for(account_id, private_key.clone())
 }
-
 fn lane_targeted_clients_for_lane(
     network: &sandbox::SerializedNetwork,
     status_client: &Client,
@@ -2895,7 +2761,6 @@ fn lane_targeted_clients_for_lane(
         .map(|index| network.peers()[index].client_for(account_id, private_key.clone()))
         .collect()
 }
-
 fn duration_min_avg_max_secs(samples: &[Duration]) -> Option<(f64, f64, f64)> {
     let mut iter = samples.iter();
     let first = iter.next()?;
@@ -2912,7 +2777,6 @@ fn duration_min_avg_max_secs(samples: &[Duration]) -> Option<(f64, f64, f64)> {
     }
     Some((min, total / count as f64, max))
 }
-
 fn is_inconclusive_blocking_submit_error(error_text: &str) -> bool {
     error_text.contains("transaction.status_timeout_ms")
         || error_text.contains("haven't got tx confirmation within")
@@ -2920,18 +2784,15 @@ fn is_inconclusive_blocking_submit_error(error_text: &str) -> bool {
         || error_text.contains("Transaction submitter thread exited with error")
         || error_text.contains("Failed to send http POST request")
 }
-
 fn is_inconclusive_committed_outcome_error(error_text: &str) -> bool {
     error_text.contains("timed out waiting for committed transaction outcome")
 }
-
 fn is_expected_rollback_failure_text(error_text: &str) -> bool {
     error_text.contains("settlement leg requires 10000")
         || error_text.contains("requires 10000")
         || is_inconclusive_blocking_submit_error(error_text)
         || is_inconclusive_committed_outcome_error(error_text)
 }
-
 fn render_rejection_reason(
     reason: &iroha::data_model::transaction::error::TransactionRejectionReason,
 ) -> String {
@@ -2943,13 +2804,11 @@ fn render_rejection_reason(
         format!("{display}; details: {debug}")
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum CommittedTxOutcome {
     Applied,
     Rejected(String),
 }
-
 fn committed_tx_outcome_quorum(
     outcomes: &[CommittedTxOutcome],
     quorum_required: usize,
@@ -2962,7 +2821,6 @@ fn committed_tx_outcome_quorum(
     if applied_count >= quorum_required {
         return Some(CommittedTxOutcome::Applied);
     }
-
     let mut rejected_counts = BTreeMap::<&str, usize>::new();
     for outcome in outcomes {
         let CommittedTxOutcome::Rejected(reason) = outcome else {
@@ -2974,10 +2832,8 @@ fn committed_tx_outcome_quorum(
             return Some(CommittedTxOutcome::Rejected(reason.clone()));
         }
     }
-
     None
 }
-
 fn query_committed_tx_outcome(
     client: &Client,
     entry_hash: &HashOf<TransactionEntrypoint>,
@@ -3000,7 +2856,6 @@ fn query_committed_tx_outcome(
             })
         })
 }
-
 fn wait_for_committed_tx_outcome_across_clients(
     mut clients_factory: impl FnMut() -> Vec<Client>,
     entry_hash: HashOf<TransactionEntrypoint>,
@@ -3053,7 +2908,6 @@ fn wait_for_committed_tx_outcome_across_clients(
         "{context}: timed out waiting for committed transaction outcome quorum for transaction {entry_hash}; last observed {last_observed:?}{suffix}"
     ))
 }
-
 fn wait_for_committed_success_across_clients(
     clients_factory: impl FnMut() -> Vec<Client>,
     entry_hash: HashOf<TransactionEntrypoint>,
@@ -3072,7 +2926,6 @@ fn wait_for_committed_success_across_clients(
         )),
     }
 }
-
 fn wait_for_committed_rejection_reason_across_clients(
     clients_factory: impl FnMut() -> Vec<Client>,
     entry_hash: HashOf<TransactionEntrypoint>,
@@ -3091,7 +2944,6 @@ fn wait_for_committed_rejection_reason_across_clients(
         CommittedTxOutcome::Rejected(reason) => Ok(reason),
     }
 }
-
 fn submit_transaction_across_clients(
     mut clients_factory: impl FnMut() -> Vec<Client>,
     transaction: &SignedTransaction,
@@ -3120,7 +2972,6 @@ fn submit_transaction_across_clients(
         "{context}: failed to submit transaction through any routed observer{suffix}"
     ))
 }
-
 fn grant_exact_dvp_consents_across_clients(
     mut clients_factory: impl FnMut() -> Vec<Client>,
     settlements: &[(&DvpIsi, AssetId)],
@@ -3167,7 +3018,6 @@ fn grant_exact_dvp_consents_across_clients(
         BLOCKING_CONFIRMATION_TIMEOUT,
     )
 }
-
 fn entrypoint_occurrences(
     client: &Client,
     entrypoint_hashes: &[HashOf<TransactionEntrypoint>],
@@ -3193,7 +3043,6 @@ fn entrypoint_occurrences(
     }
     Ok(occurrences)
 }
-
 fn ensure_entrypoints_committed_once(
     client: &Client,
     entrypoint_hashes: &[HashOf<TransactionEntrypoint>],
@@ -3208,7 +3057,6 @@ fn ensure_entrypoints_committed_once(
     }
     Ok(())
 }
-
 fn wait_for_entrypoints_committed_once_on_all_peers(
     network: &sandbox::SerializedNetwork,
     entrypoint_hashes: &[HashOf<TransactionEntrypoint>],
@@ -3266,7 +3114,6 @@ fn wait_for_entrypoints_committed_once_on_all_peers(
         network.peers().len()
     ))
 }
-
 fn durable_native_participant_row(
     diagnostics: &SumeragiDiagnosticsStatus,
     lane_id: LaneId,
@@ -3307,7 +3154,6 @@ fn durable_native_participant_row(
     );
     Ok(Some(row))
 }
-
 fn durable_native_participant_evidence_is_after_baseline(
     row: &SumeragiNativeAmxParticipantApplication,
     lane_id: LaneId,
@@ -3338,7 +3184,6 @@ fn durable_native_participant_evidence_is_after_baseline(
     {
         return Ok(false);
     }
-
     let Some(baseline) = baseline else {
         return Ok(true);
     };
@@ -3367,7 +3212,6 @@ fn durable_native_participant_evidence_is_after_baseline(
         std::cmp::Ordering::Greater => Ok(true),
     }
 }
-
 fn wait_for_durable_native_participant_evidence_after(
     network: &sandbox::SerializedNetwork,
     lane_id: LaneId,
@@ -3454,7 +3298,6 @@ fn wait_for_durable_native_participant_evidence_after(
         network.peers().len()
     ))
 }
-
 fn rotating_validator_indices(seed_ordinal: usize, iteration: usize) -> [usize; 3] {
     let lane_offset = seed_ordinal
         .saturating_add(iteration)
@@ -3465,7 +3308,6 @@ fn rotating_validator_indices(seed_ordinal: usize, iteration: usize) -> [usize; 
         (VALIDATORS_PER_LANE * 2) + lane_offset,
     ]
 }
-
 fn shutdown_rotated_validators(
     runtime: &Runtime,
     peers: &[NetworkPeer],
@@ -3481,7 +3323,6 @@ fn shutdown_rotated_validators(
         Ok(())
     })
 }
-
 fn restart_rotated_validators(
     runtime: &Runtime,
     peers: &[NetworkPeer],
@@ -3506,21 +3347,18 @@ fn restart_rotated_validators(
         Ok(())
     })
 }
-
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct AutoscaleDrainIntentLog {
     height: u64,
     close_global_height: u64,
     initial_merged_lane_height: u64,
 }
-
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct AutoscaleDrainCommitmentLog {
     height: u64,
     carrier_height: u64,
     final_lane_block_height: u64,
 }
-
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct AutoscaleLifecycleLog {
     scale_out_heights: BTreeSet<u64>,
@@ -3528,7 +3366,6 @@ struct AutoscaleLifecycleLog {
     drain_commitments: BTreeSet<AutoscaleDrainCommitmentLog>,
     scale_in_heights: BTreeSet<u64>,
 }
-
 #[derive(Clone, Debug)]
 struct AutoscaleAutonomousEvidence {
     entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -3536,11 +3373,9 @@ struct AutoscaleAutonomousEvidence {
     lane_block_height: u64,
     descriptor_hash: Hash,
 }
-
 fn autoscale_storage_segment() -> String {
     format!("lane_{AUTOSCALE_LANE_INDEX:03}_elastic_lane_{AUTOSCALE_LANE_INDEX}")
 }
-
 fn active_lane_storage_ids(peer: &NetworkPeer) -> Result<BTreeSet<u32>> {
     let root = peer.kura_store_dir().join("blocks");
     if !root.exists() {
@@ -3580,7 +3415,6 @@ fn active_lane_storage_ids(peer: &NetworkPeer) -> Result<BTreeSet<u32>> {
     );
     Ok(ids)
 }
-
 fn expected_active_lane_storage_ids(expanded: bool) -> BTreeSet<u32> {
     let mut expected = [NEXUS_LANE_INDEX, DS1_LANE_INDEX, DS2_LANE_INDEX]
         .into_iter()
@@ -3590,7 +3424,6 @@ fn expected_active_lane_storage_ids(expanded: bool) -> BTreeSet<u32> {
     }
     expected
 }
-
 fn all_peers_have_lane_storage_profile(
     network: &sandbox::SerializedNetwork,
     expanded: bool,
@@ -3604,7 +3437,6 @@ fn all_peers_have_lane_storage_profile(
         .iter()
         .all(|ids| ids == &expected))
 }
-
 fn wait_for_autoscale_baseline(network: &sandbox::SerializedNetwork, context: &str) -> Result<()> {
     let started = Instant::now();
     let mut last_storage = Vec::new();
@@ -3673,7 +3505,6 @@ fn wait_for_autoscale_baseline(network: &sandbox::SerializedNetwork, context: &s
         "{context}: baseline did not converge to exactly lanes 0,1,2 with no active lane-3 diagnostics; storage={last_storage:?}; endpoints={last_diagnostics:?}"
     ))
 }
-
 fn peer_latest_stdout_log(peer: &NetworkPeer) -> Result<Option<PathBuf>> {
     let kura_store_dir = peer.kura_store_dir();
     let root = kura_store_dir
@@ -3704,7 +3535,6 @@ fn peer_latest_stdout_log(peer: &NetworkPeer) -> Result<Option<PathBuf>> {
     }
     Ok(latest.map(|(_, path)| path))
 }
-
 fn read_bounded_log_tail(path: &Path) -> Result<String> {
     let mut file = fs::File::open(path)?;
     let len = file.metadata()?.len();
@@ -3720,7 +3550,6 @@ fn read_bounded_log_tail(path: &Path) -> Result<String> {
     }
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
-
 fn log_unsigned_field(line: &str, field: &str) -> Option<u64> {
     let prefixes = [
         format!("{field}="),
@@ -3759,7 +3588,6 @@ fn log_unsigned_field(line: &str, field: &str) -> Option<u64> {
         _ => None,
     }
 }
-
 fn parse_autoscale_lifecycle_log(contents: &str) -> AutoscaleLifecycleLog {
     let mut evidence = AutoscaleLifecycleLog::default();
     for line in contents.lines() {
@@ -3806,7 +3634,6 @@ fn parse_autoscale_lifecycle_log(contents: &str) -> AutoscaleLifecycleLog {
     }
     evidence
 }
-
 fn peer_autoscale_lifecycle_log(peer: &NetworkPeer) -> Result<AutoscaleLifecycleLog> {
     let Some(path) = peer_latest_stdout_log(peer)? else {
         return Ok(AutoscaleLifecycleLog::default());
@@ -3821,7 +3648,6 @@ fn peer_autoscale_lifecycle_log(peer: &NetworkPeer) -> Result<AutoscaleLifecycle
         }
     }
 }
-
 fn read_lane_incarnation_marker(path: &Path) -> Result<LaneIncarnationMarkerV3> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("read lane incarnation marker {}", path.display()))?;
@@ -3848,18 +3674,15 @@ fn read_lane_incarnation_marker(path: &Path) -> Result<LaneIncarnationMarkerV3> 
     );
     Ok(marker)
 }
-
 fn active_autoscale_marker_path(peer: &NetworkPeer) -> PathBuf {
     peer.kura_store_dir()
         .join("blocks")
         .join(autoscale_storage_segment())
         .join(LANE_INCARNATION_MARKER_FILE)
 }
-
 fn active_autoscale_marker(peer: &NetworkPeer) -> Result<LaneIncarnationMarkerV3> {
     read_lane_incarnation_marker(&active_autoscale_marker_path(peer))
 }
-
 fn converged_active_autoscale_marker(
     network: &sandbox::SerializedNetwork,
 ) -> Result<LaneIncarnationMarkerV3> {
@@ -3881,7 +3704,6 @@ fn converged_active_autoscale_marker(
     );
     Ok(expected.clone())
 }
-
 fn archived_autoscale_markers(
     peer: &NetworkPeer,
 ) -> Result<Vec<(PathBuf, LaneIncarnationMarkerV3)>> {
@@ -3932,7 +3754,6 @@ fn archived_autoscale_markers(
     );
     Ok(markers)
 }
-
 fn archived_autoscale_marker_for_incarnation(
     peer: &NetworkPeer,
     incarnation: Hash,
@@ -3947,7 +3768,6 @@ fn archived_autoscale_marker_for_incarnation(
     );
     Ok(matches.into_iter().next())
 }
-
 fn read_peer_merge_ledger_entries(peer: &NetworkPeer) -> Result<Vec<MergeLedgerEntry>> {
     let root = peer.kura_store_dir().join("merge_ledger");
     if !root.exists() {
@@ -4011,7 +3831,6 @@ fn read_peer_merge_ledger_entries(peer: &NetworkPeer) -> Result<Vec<MergeLedgerE
     }
     Ok(by_epoch.into_values().collect())
 }
-
 fn autonomous_merge_entry(
     peer: &NetworkPeer,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -4035,7 +3854,6 @@ fn autonomous_merge_entry(
     );
     Ok(matches.into_iter().next())
 }
-
 fn drain_merge_entry(peer: &NetworkPeer, incarnation: Hash) -> Result<Option<MergeLedgerEntry>> {
     let target_lane = LaneId::new(AUTOSCALE_LANE_INDEX);
     let matches = read_peer_merge_ledger_entries(peer)?
@@ -4056,7 +3874,6 @@ fn drain_merge_entry(peer: &NetworkPeer, incarnation: Hash) -> Result<Option<Mer
     );
     Ok(matches.into_iter().next())
 }
-
 fn submit_autoscale_load(clients: &[Client], cycle: usize, tx_count: usize) -> Result<()> {
     ensure!(!clients.is_empty(), "autoscale load has no submitters");
     let mut accepted = 0_usize;
@@ -4084,7 +3901,6 @@ fn submit_autoscale_load(clients: &[Client], cycle: usize, tx_count: usize) -> R
     );
     Ok(())
 }
-
 fn wait_for_autoscale_expansion(
     network: &sandbox::SerializedNetwork,
     load_clients: &[Client],
@@ -4183,7 +3999,6 @@ fn wait_for_autoscale_expansion(
         "autoscale cycle {cycle}: timed out waiting for automatic 3->4 expansion on all {TOTAL_PEERS} peers through status, diagnostics, bounded logs, and Kura markers; storage={last_storage:?}; endpoints={last_endpoints:?}; logs={last_logs:?}; last_error={last_error:?}"
     ))
 }
-
 fn recreated_autoscale_lane_diagnostics_ready(
     diagnostics: &SumeragiDiagnosticsStatus,
     lane_id: LaneId,
@@ -4203,7 +4018,6 @@ fn recreated_autoscale_lane_diagnostics_ready(
     {
         return false;
     }
-
     latest_lane_domain_progress(diagnostics, lane_id, dataspace_id).is_some_and(|latest| {
         latest.lane_incarnation == expected_incarnation
             && latest.executable_payload_available
@@ -4213,7 +4027,6 @@ fn recreated_autoscale_lane_diagnostics_ready(
             )
     })
 }
-
 fn wait_for_recreated_autoscale_lane_ready(
     network: &sandbox::SerializedNetwork,
     load_clients: &[Client],
@@ -4317,7 +4130,6 @@ fn wait_for_recreated_autoscale_lane_ready(
         "{context}: recreated lane-3 incarnation did not become ready on every peer after restart; expected={expected_marker:?}; storage={last_storage:?}; marker={last_marker:?}; endpoints={last_endpoints:?}; last_load_error={last_load_error:?}"
     ))
 }
-
 fn build_default_route_transaction_for_autoscale_lane(
     client: &Client,
     cycle: usize,
@@ -4341,7 +4153,6 @@ fn build_default_route_transaction_for_autoscale_lane(
         })
         .ok_or_else(|| eyre!("failed to build a default-route transaction for elastic lane 3"))
 }
-
 fn wait_for_autoscale_autonomous_merge(
     network: &sandbox::SerializedNetwork,
     heartbeat_clients: &[Client],
@@ -4437,7 +4248,6 @@ fn wait_for_autoscale_autonomous_merge(
         "autoscale cycle {cycle}: timed out waiting for identical durable autonomous merge entry on all peers; entries={last_entries:?}; last_error={last_error:?}"
     ))
 }
-
 fn wait_for_active_autoscale_diagnostics_convergence(
     network: &sandbox::SerializedNetwork,
     marker: &LaneIncarnationMarkerV3,
@@ -4514,7 +4324,6 @@ fn wait_for_active_autoscale_diagnostics_convergence(
         "{context}: active lane-3 diagnostics did not converge on the exact autonomous descriptor and incarnation; rows={last_rows:?}"
     ))
 }
-
 fn execute_autoscale_autonomous_work(
     network: &sandbox::SerializedNetwork,
     clients: &[Client],
@@ -4552,7 +4361,6 @@ fn execute_autoscale_autonomous_work(
     )?;
     Ok(evidence)
 }
-
 fn validate_autoscale_drain_certificate(
     network_id: &NetworkId,
     certificate: &LaneDrainCertificateV1,
@@ -4626,7 +4434,6 @@ fn validate_autoscale_drain_certificate(
                 || final_frontier == initial_frontier),
         "lane-3 drain certificate carries non-empty, Native, or conflicting frontier evidence"
     );
-
     let expected_bitmap_len = certificate.validator_set.len().div_ceil(8);
     ensure!(
         certificate.signers_bitmap.len() == expected_bitmap_len,
@@ -4684,7 +4491,6 @@ fn validate_autoscale_drain_certificate(
     .map_err(|err| eyre!("lane-3 drain aggregate signature is invalid: {err:?}"))?;
     Ok(())
 }
-
 async fn fetch_autoscale_bridge_finality_proof(
     peer: &NetworkPeer,
     height: u64,
@@ -4727,7 +4533,6 @@ async fn fetch_autoscale_bridge_finality_proof(
         )
     })
 }
-
 fn exact_autoscale_carrier_height_context(
     runtime: &Runtime,
     network: &sandbox::SerializedNetwork,
@@ -4775,7 +4580,6 @@ fn exact_autoscale_carrier_height_context(
     }
     Ok(expected_context.clone())
 }
-
 fn validate_autoscale_merge_qc_height_context_binding(
     network_id: &NetworkId,
     context: &HeightContext,
@@ -4808,7 +4612,6 @@ fn validate_autoscale_merge_qc_height_context_binding(
         .validate_signers(&signers)
         .map_err(|err| eyre!("merge QC fails the historical equal-vote quorum: {err}"))
 }
-
 fn validate_autoscale_merge_qc(
     network_id: &NetworkId,
     context: &HeightContext,
@@ -4901,7 +4704,6 @@ fn validate_autoscale_merge_qc(
     .map_err(|err| eyre!("merge QC aggregate signature is invalid: {err:?}"))?;
     Ok(())
 }
-
 fn validate_autoscale_retirement_evidence(
     runtime: &Runtime,
     network: &sandbox::SerializedNetwork,
@@ -5008,7 +4810,6 @@ fn validate_autoscale_retirement_evidence(
     );
     Ok(retirement_height)
 }
-
 fn wait_for_autoscale_retirement(
     runtime: &Runtime,
     network: &sandbox::SerializedNetwork,
@@ -5159,20 +4960,17 @@ fn wait_for_autoscale_retirement(
         "autoscale cycle {cycle}: timed out waiting for evidence-aware drain, carried certificate, archive, and removal on all peers; entries={last_entries:?}; archives={last_archives:?}; logs={last_logs:?}; status={last_status:?}; last_error={last_error:?}"
     ))
 }
-
 #[derive(Debug)]
 struct KuraCopyPlan {
     directories: Vec<PathBuf>,
     files: Vec<KuraCopyFile>,
 }
-
 #[derive(Debug)]
 struct KuraCopyFile {
     source: PathBuf,
     relative: PathBuf,
     len: u64,
 }
-
 fn plan_kura_tree_copy(source: &Path, max_entries: usize, max_bytes: u64) -> Result<KuraCopyPlan> {
     let source_metadata = fs::symlink_metadata(source)?;
     ensure!(
@@ -5244,7 +5042,6 @@ fn plan_kura_tree_copy(source: &Path, max_entries: usize, max_bytes: u64) -> Res
     files.sort_by(|left, right| left.relative.cmp(&right.relative));
     Ok(KuraCopyPlan { directories, files })
 }
-
 fn copy_kura_tree_with_limits(
     source: &Path,
     destination: &Path,
@@ -5294,7 +5091,6 @@ fn copy_kura_tree_with_limits(
     }
     Ok(())
 }
-
 fn copy_kura_tree_bounded(source: &Path, destination: &Path) -> Result<()> {
     copy_kura_tree_with_limits(
         source,
@@ -5303,7 +5099,6 @@ fn copy_kura_tree_bounded(source: &Path, destination: &Path) -> Result<()> {
         AUTOSCALE_COPY_MAX_BYTES,
     )
 }
-
 fn offline_kura_config(store_dir: PathBuf) -> KuraConfig {
     KuraConfig {
         init_mode: InitMode::Strict,
@@ -5319,7 +5114,6 @@ fn offline_kura_config(store_dir: PathBuf) -> KuraConfig {
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
-
 fn assert_stale_archived_marker_rejected(
     peer: &NetworkPeer,
     stale_marker_path: &Path,
@@ -5364,7 +5158,6 @@ fn assert_stale_archived_marker_rejected(
     );
     Ok(())
 }
-
 #[allow(clippy::too_many_lines)]
 fn prove_g13p_autoscale_lifecycle(
     network: &sandbox::SerializedNetwork,
@@ -5384,12 +5177,10 @@ fn prove_g13p_autoscale_lifecycle(
         "G-13P lifecycle requires non-empty load clients and an exact 3->4 lane profile"
     );
     wait_for_autoscale_baseline(network, "G-13P autoscale baseline")?;
-
     let marker_a = wait_for_autoscale_expansion(network, load_clients, 1)?;
     let autonomous_a = execute_autoscale_autonomous_work(network, load_clients, &marker_a, 1)?;
     let (drain_a, archive_a_paths, retirement_a_height) =
         wait_for_autoscale_retirement(runtime, network, load_clients, &marker_a, &autonomous_a, 1)?;
-
     let marker_b = wait_for_autoscale_expansion(network, load_clients, 2)?;
     ensure!(
         marker_b.lane_id == marker_a.lane_id
@@ -5410,7 +5201,6 @@ fn prove_g13p_autoscale_lifecycle(
         "recreated lane reused incarnation A's autonomous source identity"
     );
     submit_autoscale_load(load_clients, 2, 64)?;
-
     let stale_probe_peer_index = seed.ordinal % TOTAL_PEERS;
     let stale_probe_peer = network.peers()[stale_probe_peer_index].clone();
     let stale_context =
@@ -5441,7 +5231,6 @@ fn prove_g13p_autoscale_lifecycle(
             ));
         }
     }
-
     wait_for_recreated_autoscale_lane_ready(
         network,
         load_clients,
@@ -5498,7 +5287,6 @@ fn prove_g13p_autoscale_lifecycle(
     );
     Ok(())
 }
-
 fn expected_post_swap_balances(completed_work_units: usize) -> Result<[Quantity; 4]> {
     let completed = u64::try_from(completed_work_units)
         .map_err(|_| eyre!("autonomous work-unit count does not fit u64"))?;
@@ -5522,13 +5310,11 @@ fn expected_post_swap_balances(completed_work_units: usize) -> Result<[Quantity;
         ),
     ])
 }
-
 #[derive(Debug)]
 struct CommittedSuccessOrHeightFallback {
     status: SumeragiObservation,
     committed_outcome_confirmed: bool,
 }
-
 fn wait_for_committed_success_or_height_fallback_across_clients(
     mut observer_factory: impl FnMut() -> Vec<Client>,
     tick_submitters: &[Client],
@@ -5607,14 +5393,12 @@ fn wait_for_committed_success_or_height_fallback_across_clients(
         }
     }
 }
-
 struct PhaseTimings {
     test_name: &'static str,
     started: Instant,
     phases: Vec<(String, Duration)>,
     summary_emitted: bool,
 }
-
 impl PhaseTimings {
     fn new(test_name: &'static str) -> Self {
         Self {
@@ -5624,7 +5408,6 @@ impl PhaseTimings {
             summary_emitted: false,
         }
     }
-
     fn phase<'a>(&'a mut self, label: impl Into<String>) -> PhaseGuard<'a> {
         PhaseGuard {
             timings: self,
@@ -5632,7 +5415,6 @@ impl PhaseTimings {
             started: Instant::now(),
         }
     }
-
     fn emit_summary(&mut self) {
         if self.summary_emitted || self.phases.is_empty() {
             return;
@@ -5659,19 +5441,16 @@ impl PhaseTimings {
         eprintln!("[phase-timer] total{:>57.3}s", total.as_secs_f64());
     }
 }
-
 impl Drop for PhaseTimings {
     fn drop(&mut self) {
         self.emit_summary();
     }
 }
-
 struct PhaseGuard<'a> {
     timings: &'a mut PhaseTimings,
     label: String,
     started: Instant,
 }
-
 impl Drop for PhaseGuard<'_> {
     fn drop(&mut self) {
         let elapsed = self.started.elapsed();
@@ -5683,7 +5462,6 @@ impl Drop for PhaseGuard<'_> {
         self.timings.phases.push((self.label.clone(), elapsed));
     }
 }
-
 #[test]
 fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     let seed = corridor_seed_from_env()?;
@@ -5692,7 +5470,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         cross_dataspace_atomic_swap_is_all_or_nothing_impl(context, seed, CorridorRunMode::SeedCase)
     })
 }
-
 #[test]
 #[ignore = "two-hour rotating-validator 13-peer fault soak"]
 fn cross_dataspace_two_hour_fault_soak_preserves_multilane_application() -> Result<()> {
@@ -5707,7 +5484,6 @@ fn cross_dataspace_two_hour_fault_soak_preserves_multilane_application() -> Resu
         )
     })
 }
-
 fn run_cross_dataspace_localnet_test_on_large_stack<F>(name: &'static str, test: F) -> Result<()>
 where
     F: FnOnce() -> Result<()> + Send + 'static,
@@ -5723,7 +5499,6 @@ where
         Err(panic) => std::panic::resume_unwind(panic),
     }
 }
-
 fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
     context: &'static str,
     seed: CorridorSeed,
@@ -5744,12 +5519,10 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
         };
         (network, rt)
     };
-
     let alice = network.client();
     let bob = network
         .peer()
         .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
-
     let (expected_nexus_validators, expected_ds1_validators, expected_ds2_validators) = {
         let _phase = phase_timings.phase("derive 4+4+4 lane validator sets");
         let peers = network.peers();
@@ -5798,7 +5571,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
             expected_ds2_validators,
         )
     };
-
     {
         let _phase = phase_timings.phase("wait for lane validators + cross-peer sync");
         wait_for_active_lane_validators(
@@ -5849,7 +5621,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
             )?;
         }
     }
-
     let nexus_alice_submitter = leader_targeted_client_for_lane(
         &network,
         &alice,
@@ -6114,7 +5885,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
         BOB_KEYPAIR.private_key(),
         DS2_LANE_INDEX,
     );
-
     {
         let _phase = phase_timings.phase("route probes: wrong-dataspace query/assert");
         ensure!(
@@ -6194,7 +5964,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                 expected_ds1_validators.len(),
                 expected_ds1_validators
             );
-
             let account_assets = torii_json_get_with_retry(
                 &nexus_alice_submitter,
                 &account_assets_path,
@@ -6219,7 +5988,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                 ds1_asset_literal,
                 account_asset_items
             );
-
             let asset_definition = torii_json_get_with_retry(
                 &nexus_alice_submitter,
                 &asset_definition_path,
@@ -6236,7 +6004,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                 "asset definition query through Nexus ingress returned unexpected id {:?}",
                 asset_definition.body["id"].as_str()
             );
-
             let account_summary = torii_json_get_with_retry(
                 &nexus_alice_submitter,
                 &account_summary_path,
@@ -6273,7 +6040,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
             Ok::<(), eyre::Report>(())
         })?;
     }
-
     let setup_grants_lane = (
         LaneId::new(NEXUS_LANE_INDEX),
         DataSpaceId::new(NEXUS_ID_U64),
@@ -6528,7 +6294,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
             "grant setup permissions visible on routed bob observers",
         )?;
     }
-
     let seeded_balances = [
         BalanceExpectation {
             client: &alice_on_ds1,
@@ -6581,7 +6346,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
             ),
         )
     };
-
     let mut durable_native_evidence = {
         let successful_swap = DvpIsi::new(
             "ds1ds2swapok".parse().expect("settlement id"),
@@ -6821,7 +6585,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                     CorridorRunMode::FaultSoak { .. } => {}
                 }
             }
-
             let iteration = completed_work_units;
             let iteration_started = Instant::now();
             let autonomous_pre_application = wait_for_independent_lane_application_progress(
@@ -6845,7 +6608,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                 offline_indices
             );
             shutdown_rotated_validators(&rt, &offline_peers, &outage_context)?;
-
             let outage_result = (|| -> Result<[HashOf<TransactionEntrypoint>; 3]> {
                 let soak_submitter = leader_targeted_client_for_lane(
                     &network,
@@ -6977,7 +6739,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                     &format!("work unit {iteration}: paired Native swaps remain net zero"),
                     SOAK_PHASE_WAIT_TIMEOUT,
                 )?;
-
                 let ds1_submitter = leader_targeted_client_for_lane(
                     &network,
                     &outage_status_client,
@@ -7095,7 +6856,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                 )?;
                 Ok([paired_swap_entry_hash, ds1_entry_hash, ds2_entry_hash])
             })();
-
             let restart_result =
                 restart_rotated_validators(&rt, &offline_peers, &config_layers, &outage_context);
             let entrypoint_hashes = match (outage_result, restart_result) {
@@ -7114,7 +6874,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                     "work unit {iteration}: transaction entrypoint identity was reused: {entrypoint_hash}"
                 );
             }
-
             let next_durable_native_evidence = wait_for_durable_native_participant_evidence_after(
                 &network,
                 LaneId::new(DS2_LANE_INDEX),
@@ -7130,7 +6889,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                 &entrypoint_hashes,
                 &format!("work unit {iteration}: exact-once canonical history"),
             )?;
-
             completed_work_units = completed_work_units.saturating_add(1);
             let expected_balances = expected_post_swap_balances(completed_work_units)?;
             let alice_ds1_balance_clients = lane_targeted_clients_for_lane(
@@ -7297,7 +7055,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
                 failure_text = Some(error_text);
                 break;
             }
-
             match wait_for_committed_rejection_reason_across_clients(
                 || {
                     lane_targeted_clients_for_lane(
@@ -7412,14 +7169,12 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
         ];
         wait_for_expected_balances(&rollback_baseline, "rollback balances after failing swap")?;
     }
-
     ensure!(
         swap_nonconverged_fallbacks <= SWAP_NONCONVERGED_FALLBACK_MAX,
         "swap fallback non-convergence exceeded threshold: observed {}, max {}",
         swap_nonconverged_fallbacks,
         SWAP_NONCONVERGED_FALLBACK_MAX
     );
-
     eprintln!(
         "[health] strict_work_passed={} strict_work_failed=0 strict_work_retries=0 setup_retries={} swap_fallbacks={} swap_nonconverged_fallbacks={}",
         completed_work_units,
@@ -7427,19 +7182,15 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
         swap_outcome_fallbacks,
         swap_nonconverged_fallbacks
     );
-
     phase_timings.emit_summary();
-
     Ok(())
 }
-
 #[test]
 fn cross_dataspace_localnet_genesis_preexecution_smoke() {
     // Build-only smoke test keeps genesis pre-execution coverage cheap and deterministic.
     let _guard = sandbox::serial_guard();
     let _network = localnet_builder(DEFAULT_CORRIDOR_SEED).build();
 }
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -7499,7 +7250,6 @@ mod tests {
         fs, panic,
         time::{Duration, Instant},
     };
-
     #[test]
     fn g13p_autoscale_log_parser_requires_exact_producer_fields() {
         let log = format!(
@@ -7516,7 +7266,6 @@ mod tests {
             commitment = AUTOSCALE_DRAIN_COMMITMENT_LOG_MARKER,
             scale_in = AUTOSCALE_SCALE_IN_LOG_MARKER,
         );
-
         let evidence = parse_autoscale_lifecycle_log(&log);
         assert_eq!(
             evidence.scale_out_heights,
@@ -7543,7 +7292,6 @@ mod tests {
             std::collections::BTreeSet::from([22])
         );
     }
-
     fn empty_sumeragi_diagnostics() -> SumeragiDiagnosticsStatus {
         SumeragiDiagnosticsStatus {
             pipeline_execution: Default::default(),
@@ -7571,7 +7319,6 @@ mod tests {
             autonomous_lane_executions: Vec::new(),
         }
     }
-
     fn deterministic_topology(peer_count: usize) -> Vec<PeerId> {
         (0..peer_count)
             .map(|index| {
@@ -7584,7 +7331,6 @@ mod tests {
             })
             .collect()
     }
-
     fn equal_vote_height_context() -> HeightContext {
         let mut validators = deterministic_topology(4);
         validators.sort();
@@ -7622,7 +7368,6 @@ mod tests {
             leader_seed: [0xA5; 32],
         }
     }
-
     fn decode_manifest_hash_fixture(raw: &str) -> [u8; 32] {
         assert_eq!(raw.len(), 64);
         let mut hash = [0_u8; 32];
@@ -7632,12 +7377,10 @@ mod tests {
         }
         hash
     }
-
     #[test]
     fn dataspace_fixture_manifest_hashes_derive_config_ids() {
         let ds1_hash = decode_manifest_hash_fixture(DS1_MANIFEST_HASH);
         let ds2_hash = decode_manifest_hash_fixture(DS2_MANIFEST_HASH);
-
         assert_eq!(NEXUS_ALIAS, "universal");
         assert_eq!(NEXUS_ID_U64, DataSpaceId::UNIVERSAL.as_u64());
         assert_eq!(DataSpaceId::from_hash(&ds1_hash).as_u64(), DS1_ID_U64);
@@ -7645,7 +7388,6 @@ mod tests {
         assert_ne!(DataSpaceId::from_hash(&ds1_hash), DataSpaceId::UNIVERSAL);
         assert_ne!(DataSpaceId::from_hash(&ds2_hash), DataSpaceId::UNIVERSAL);
     }
-
     #[test]
     fn corridor_seed_parser_accepts_exact_ten_seed_domain() {
         for ordinal in 0..CORRIDOR_SEED_COUNT {
@@ -7655,7 +7397,6 @@ mod tests {
             assert_eq!(parsed.ordinal, ordinal);
         }
     }
-
     #[test]
     fn corridor_seed_parser_rejects_noncanonical_or_out_of_matrix_values() {
         for raw in [
@@ -7669,7 +7410,6 @@ mod tests {
             assert!(parse_corridor_seed(raw).is_err(), "accepted {raw:?}");
         }
     }
-
     #[test]
     fn required_seed_flag_is_fail_closed() {
         assert!(!parse_required_seed_flag(None).unwrap());
@@ -7679,7 +7419,6 @@ mod tests {
             assert!(parse_required_seed_flag(Some(raw)).is_err());
         }
     }
-
     #[test]
     fn fault_soak_duration_accepts_exactly_two_hours() {
         assert_eq!(
@@ -7694,14 +7433,12 @@ mod tests {
             assert!(parse_fault_soak_duration(Some(raw)).is_err());
         }
     }
-
     #[test]
     fn outage_rotation_selects_one_validator_per_dataspace() {
         assert_eq!(rotating_validator_indices(0, 0), [0, 4, 8]);
         assert_eq!(rotating_validator_indices(1, 2), [3, 7, 11]);
         assert_eq!(rotating_validator_indices(1, 3), [0, 4, 8]);
     }
-
     #[test]
     fn autonomous_balance_model_is_bounded_and_monotonic() {
         let initial = expected_post_swap_balances(0).unwrap();
@@ -7709,12 +7446,10 @@ mod tests {
         assert_ne!(initial, after_one);
         assert!(expected_post_swap_balances(1_000_001).is_err());
     }
-
     #[test]
     fn asset_definition_helpers_keep_stake_and_fee_domains_distinct() {
         let stake_definition_id = stake_asset_definition_id();
         let fee_definition_id = nexus_fee_asset_definition_id();
-
         assert_eq!(stake_asset_id_literal(), stake_definition_id.to_string());
         assert_ne!(
             stake_definition_id.to_string(),
@@ -7722,7 +7457,6 @@ mod tests {
             "stake and fee helpers should not collapse cross-dataspace asset domains"
         );
     }
-
     #[test]
     fn committed_lane_evidence_peer_scan_is_not_lane_bound() {
         assert_eq!(
@@ -7735,12 +7469,10 @@ mod tests {
             Vec::<usize>::new()
         );
     }
-
     #[test]
     fn multilane_da_policy_bundle_preserves_lane_dataspace_order() {
         let bundle = multilane_da_proof_policy_bundle();
         let expected_hash = DaProofPolicyBundle::new(bundle.policies.clone()).policy_hash;
-
         assert_eq!(bundle.version, DaProofPolicyBundle::VERSION_V1);
         assert_eq!(bundle.policy_hash, expected_hash);
         assert_eq!(bundle.policies.len(), 3);
@@ -7755,7 +7487,6 @@ mod tests {
         assert_eq!(bundle.policies[2].dataspace_id.as_u64(), DS2_ID_U64);
         assert_eq!(bundle.policies[2].alias, "lane-ds2");
     }
-
     #[test]
     fn multilane_da_policy_bundle_hash_is_deterministic_and_order_sensitive() {
         let bundle = multilane_da_proof_policy_bundle();
@@ -7763,16 +7494,13 @@ mod tests {
         let mut reversed_policies = bundle.policies.clone();
         reversed_policies.reverse();
         let reversed_hash = DaProofPolicyBundle::new(reversed_policies).policy_hash;
-
         assert_eq!(bundle, repeated);
         assert_ne!(bundle.policy_hash, reversed_hash);
     }
-
     #[test]
     fn genesis_post_topology_builder_covers_all_lane_buckets() {
         let topology = deterministic_topology(TOTAL_PEERS);
         let transactions = npos_multilane_genesis_post_topology_transactions(&topology);
-
         assert_eq!(transactions.len(), 1);
         assert_eq!(
             transactions[0].len(),
@@ -7811,37 +7539,29 @@ mod tests {
             topology[VALIDATORS_PER_LANE * 2].to_string()
         );
     }
-
     #[test]
     fn genesis_post_topology_builder_is_deterministic_for_same_roster() {
         let topology = deterministic_topology(TOTAL_PEERS);
         let first = npos_multilane_genesis_post_topology_transactions(&topology);
         let second = npos_multilane_genesis_post_topology_transactions(&topology);
-
         assert_eq!(format!("{first:?}"), format!("{second:?}"));
     }
-
     #[test]
     fn genesis_post_topology_builder_rejects_wrong_peer_count() {
         let topology = deterministic_topology(TOTAL_PEERS - 1);
-
         let result =
             panic::catch_unwind(|| npos_multilane_genesis_post_topology_transactions(&topology));
-
         assert!(result.is_err());
     }
-
     #[test]
     fn cross_dataspace_gas_account_uses_alice_canonical_subject() {
         let gas_account = cross_dataspace_gas_account_id();
-
         assert_eq!(gas_account, ALICE_ID.clone());
         assert_eq!(
             gas_account.canonical_i105().expect("gas account i105"),
             ALICE_ID.canonical_i105().expect("alice i105")
         );
     }
-
     #[test]
     fn validator_authority_account_for_peer_is_deterministic_and_indexed() {
         let first = validator_authority_account_for_peer(2);
@@ -7849,7 +7569,6 @@ mod tests {
         let next = validator_authority_account_for_peer(3);
         let expected = KeyPair::try_from_seed(validator_authority_seed(2), Algorithm::Ed25519)
             .expect("fixture cross-dataspace validator authority key");
-
         assert_eq!(first, repeated);
         assert_ne!(first, next);
         assert_eq!(first, AccountId::new(expected.public_key().clone()));
@@ -7860,7 +7579,6 @@ mod tests {
                 .is_empty()
         );
     }
-
     #[test]
     fn expected_lane_binding_for_peer_pairs_validator_and_peer_id() {
         let mut seed = vec![0_u8; 32];
@@ -7868,16 +7586,13 @@ mod tests {
         let peer_key_pair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
             .expect("fixture cross-dataspace binding peer key");
         let peer_id = PeerId::new(peer_key_pair.public_key().clone());
-
         let binding = expected_lane_binding_for_peer(4, &peer_id);
-
         assert_eq!(binding.peer_id, peer_id.to_string());
         assert_eq!(
             binding.validator,
             validator_authority_account_for_peer(4).to_string()
         );
     }
-
     #[test]
     fn lane_validator_snapshot_filters_active_bindings_and_preserves_total() {
         let body = norito::json!({
@@ -7900,10 +7615,8 @@ mod tests {
                 },
             ],
         });
-
         let (total, active) =
             lane_validator_snapshot(&body, "lane validators").expect("lane snapshot should parse");
-
         assert_eq!(total, 3);
         assert_eq!(active.len(), 2);
         assert!(active.contains(&ExpectedLaneValidatorBinding {
@@ -7915,7 +7628,6 @@ mod tests {
             peer_id: "peer-c".to_owned(),
         }));
     }
-
     #[test]
     fn lane_validator_snapshot_rejects_malformed_payloads() {
         for (body, expected) in [
@@ -7959,18 +7671,15 @@ mod tests {
         ] {
             let err = lane_validator_snapshot(&body, "lane validators")
                 .expect_err("malformed lane snapshot should fail");
-
             assert!(
                 err.to_string().contains(expected),
                 "expected `{expected}` in `{err}`"
             );
         }
     }
-
     fn test_hash(tag: u8) -> Hash {
         Hash::new([tag; 4])
     }
-
     fn test_durable_native_participant_application(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -8002,7 +7711,6 @@ mod tests {
             state: SumeragiNativeAmxParticipantApplicationState::DurablyApplied,
         }
     }
-
     #[test]
     fn native_participant_progress_accepts_no_prior_row_after_carrier_floor() {
         let lane_id = LaneId::new(DS2_LANE_INDEX);
@@ -8016,7 +7724,6 @@ mod tests {
             11,
             0x40,
         );
-
         assert!(
             durable_native_participant_evidence_is_after_baseline(
                 &row,
@@ -8040,7 +7747,6 @@ mod tests {
             .expect("a pre-existing carrier at the floor is not new evidence")
         );
     }
-
     #[test]
     fn native_participant_progress_requires_strict_same_incarnation_advance() {
         let lane_id = LaneId::new(DS2_LANE_INDEX);
@@ -8062,7 +7768,6 @@ mod tests {
             21,
             0x60,
         );
-
         assert!(
             durable_native_participant_evidence_is_after_baseline(
                 &advanced,
@@ -8086,7 +7791,6 @@ mod tests {
             .expect("an identical replay is not progress")
         );
     }
-
     #[test]
     fn native_participant_progress_rejects_stale_incarnation() {
         let lane_id = LaneId::new(DS2_LANE_INDEX);
@@ -8100,7 +7804,6 @@ mod tests {
             21,
             0x70,
         );
-
         let error = durable_native_participant_evidence_is_after_baseline(
             &stale,
             lane_id,
@@ -8112,7 +7815,6 @@ mod tests {
         .expect_err("a stale incarnation must fail closed");
         assert!(error.to_string().contains("stale lane incarnation"));
     }
-
     #[test]
     fn native_participant_progress_rejects_same_height_conflict() {
         let lane_id = LaneId::new(DS2_LANE_INDEX);
@@ -8134,7 +7836,6 @@ mod tests {
             22,
             0x90,
         );
-
         let error = durable_native_participant_evidence_is_after_baseline(
             &conflicting,
             lane_id,
@@ -8149,7 +7850,6 @@ mod tests {
                 .to_string()
                 .contains("conflicts with the baseline at the same height")
         );
-
         let mut diagnostics = empty_sumeragi_diagnostics();
         diagnostics.native_amx_participant_applications =
             vec![SumeragiNativeAmxParticipantApplication {
@@ -8163,7 +7863,6 @@ mod tests {
                 .contains("conflicting participant evidence")
         );
     }
-
     fn test_lane_domain_progress(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -8189,7 +7888,6 @@ mod tests {
             executable_payload_available: true,
         }
     }
-
     fn test_lane_payload_ownership_progress(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -8214,7 +7912,6 @@ mod tests {
             min_quorum: 3,
         }
     }
-
     fn sample_committed_lane_block(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -8244,7 +7941,6 @@ mod tests {
             commit_qc_signer_count,
         }
     }
-
     #[test]
     fn recreated_lane_readiness_tolerates_pruned_history_but_fails_closed_on_latest() {
         let lane_id = LaneId::new(AUTOSCALE_LANE_INDEX);
@@ -8282,7 +7978,6 @@ mod tests {
             recreated_autoscale_lane_diagnostics_ready(&ready, lane_id, dataspace_id, incarnation,),
             "legitimately pruned older certified payloads must not block recreated-lane readiness"
         );
-
         let mut unavailable_latest = ready_latest.clone();
         unavailable_latest.execution_status =
             COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD.to_owned();
@@ -8299,7 +7994,6 @@ mod tests {
             ),
             "the latest certified row must remain executable"
         );
-
         let mut rejected_latest = ready_latest.clone();
         rejected_latest.execution_status =
             COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION.to_owned();
@@ -8315,7 +8009,6 @@ mod tests {
             ),
             "an executable but progress-blocking latest state must fail readiness"
         );
-
         let mut stale_older = pruned_older.clone();
         stale_older.lane_incarnation = test_hash(0xAA);
         assert!(
@@ -8330,7 +8023,6 @@ mod tests {
             ),
             "retained rows from a stale incarnation must fail readiness"
         );
-
         let mut malformed_older = pruned_older.clone();
         malformed_older.commit_qc_signer_count = quorum - 1;
         assert!(
@@ -8345,7 +8037,6 @@ mod tests {
             ),
             "malformed retained QC rows must fail readiness"
         );
-
         let mut conflicting_latest = ready_latest.clone();
         conflicting_latest.proposal_hash = test_hash(0xAB);
         assert!(
@@ -8361,7 +8052,6 @@ mod tests {
             "conflicting identities at the latest certified slot must fail readiness"
         );
     }
-
     #[test]
     fn merge_qc_binding_uses_exact_historical_equal_vote_height_context() {
         let historical = equal_vote_height_context();
@@ -8380,7 +8070,6 @@ mod tests {
             &[0, 1, 2],
         )
         .expect("exact historical equal-vote quorum should pass");
-
         let subquorum_error = validate_autoscale_merge_qc_height_context_binding(
             &historical.network_id,
             &historical,
@@ -8394,7 +8083,6 @@ mod tests {
             subquorum_error.to_string().contains("equal-vote"),
             "unexpected equal-vote quorum rejection: {subquorum_error}"
         );
-
         let mut current_rotated = equal_vote_height_context();
         current_rotated.height = 2;
         current_rotated.epoch = historical.epoch + 1;
@@ -8416,7 +8104,6 @@ mod tests {
             .is_err(),
             "a current rotated roster must not stand in for the historical carrier context"
         );
-
         let mut reordered = historical_validators.clone();
         reordered.swap(0, 1);
         assert!(
@@ -8432,7 +8119,6 @@ mod tests {
             "merge-QC validator order must match the frozen carrier roster exactly"
         );
     }
-
     #[test]
     fn bounded_kura_copy_preflights_limits_before_creating_destination() {
         let temp = tempfile::tempdir().expect("temporary Kura copy root");
@@ -8441,7 +8127,6 @@ mod tests {
         fs::create_dir(&source).expect("create source");
         let oversized = fs::File::create(source.join("oversized")).expect("create sparse file");
         oversized.set_len(9).expect("size sparse file");
-
         let error = copy_kura_tree_with_limits(&source, &destination, 1, 8)
             .expect_err("byte cap must reject the preflighted tree");
         assert!(
@@ -8454,7 +8139,6 @@ mod tests {
             "an oversized tree must be rejected before materializing a partial destination"
         );
     }
-
     #[test]
     fn bounded_kura_copy_enforces_aggregate_caps_and_exact_copy() {
         let temp = tempfile::tempdir().expect("temporary Kura copy root");
@@ -8467,7 +8151,6 @@ mod tests {
         fs::write(source.join("nested").join("leaf"), b"cd").expect("write leaf fixture");
         let lock = fs::File::create(source.join(".kura.lock")).expect("create source lock");
         lock.set_len(1_024).expect("size skipped source lock");
-
         copy_kura_tree_with_limits(&source, &destination, 3, 4)
             .expect("exact entry and byte bounds should copy");
         assert_eq!(
@@ -8482,7 +8165,6 @@ mod tests {
             !destination.join(".kura.lock").exists(),
             "the live Kura lock must not be cloned"
         );
-
         let error = copy_kura_tree_with_limits(&source, &capped_destination, 2, 4)
             .expect_err("aggregate entry cap must reject the tree");
         assert!(
@@ -8494,12 +8176,10 @@ mod tests {
             "entry-cap rejection must occur before destination creation"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn bounded_kura_copy_rejects_source_and_destination_symlinks() {
         use std::os::unix::fs::symlink;
-
         let temp = tempfile::tempdir().expect("temporary Kura copy root");
         let source = temp.path().join("source");
         let destination = temp.path().join("destination");
@@ -8507,7 +8187,6 @@ mod tests {
         fs::create_dir(&source).expect("create source");
         fs::create_dir(&victim).expect("create victim");
         symlink(&victim, source.join("linked-victim")).expect("create source symlink");
-
         let error = copy_kura_tree_with_limits(&source, &destination, 4, 64)
             .expect_err("source symlink must fail preflight");
         assert!(
@@ -8518,7 +8197,6 @@ mod tests {
             !destination.exists(),
             "source-symlink rejection must not create a destination"
         );
-
         fs::remove_file(source.join("linked-victim")).expect("remove source symlink");
         fs::write(source.join("regular"), b"ok").expect("write regular source");
         symlink(temp.path().join("missing"), &destination).expect("create broken destination link");
@@ -8536,7 +8214,6 @@ mod tests {
             "destination symlink must not be replaced"
         );
     }
-
     fn sample_lane_payload_ownership(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -8584,7 +8261,6 @@ mod tests {
         }
         ownership
     }
-
     #[test]
     fn committed_lane_block_quorum_requires_exact_lane_committee() {
         let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
@@ -8602,14 +8278,12 @@ mod tests {
             &valid,
             VALIDATORS_PER_LANE
         ));
-
         let mut under_quorum = valid.clone();
         under_quorum.commit_qc_signer_count = quorum - 1;
         assert!(!committed_lane_block_has_expected_quorum(
             &under_quorum,
             VALIDATORS_PER_LANE
         ));
-
         let mut wrong_committee = valid;
         wrong_committee.validator_count = (VALIDATORS_PER_LANE + 1) as u32;
         assert!(!committed_lane_block_has_expected_quorum(
@@ -8617,7 +8291,6 @@ mod tests {
             VALIDATORS_PER_LANE
         ));
     }
-
     #[test]
     fn latest_lane_domain_progress_requires_exact_dataspace_and_qc_quorum() {
         let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
@@ -8673,14 +8346,12 @@ mod tests {
             committed_lane_blocks: vec![wrong_dataspace, under_quorum, rejected, valid],
             ..empty_sumeragi_diagnostics()
         };
-
         let progress = latest_lane_domain_progress(
             &status,
             LaneId::new(DS1_LANE_INDEX),
             DataSpaceId::new(DS1_ID_U64),
         )
         .expect("valid exact-dataspace lane-domain QC progress");
-
         assert_eq!(
             progress.lane_block_height, 5,
             "committed QC evidence counts even when execution is not yet progress-ready"
@@ -8698,7 +8369,6 @@ mod tests {
             "wrong lane must not satisfy the progress probe"
         );
     }
-
     #[test]
     fn latest_lane_domain_application_progress_requires_applied_latest_row() {
         let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
@@ -8725,7 +8395,6 @@ mod tests {
             committed_lane_blocks: vec![applied_lower.clone(), unapplied_latest],
             ..empty_sumeragi_diagnostics()
         };
-
         assert_eq!(
             latest_lane_domain_progress(
                 &status,
@@ -8745,7 +8414,6 @@ mod tests {
             .is_none(),
             "an unapplied latest row must block receipt-backed application progress"
         );
-
         let direct_applied_latest = sample_committed_lane_block(
             LaneId::new(DS1_LANE_INDEX),
             DataSpaceId::new(DS1_ID_U64),
@@ -8769,7 +8437,6 @@ mod tests {
             Some(4),
             "direct execution receipt status should satisfy applied progress"
         );
-
         let mut unavailable_applied = applied_lower;
         unavailable_applied.executable_payload_available = false;
         let unavailable_status = SumeragiDiagnosticsStatus {
@@ -8786,7 +8453,6 @@ mod tests {
             "applied status without executable payload material must not count"
         );
     }
-
     #[test]
     fn applied_lane_domain_progress_accepts_lower_applied_certified_row() {
         let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
@@ -8823,7 +8489,6 @@ mod tests {
             committed_lane_blocks: vec![applied_lower.clone(), pending_latest, applied_top.clone()],
             ..empty_sumeragi_diagnostics()
         };
-
         let progress = applied_lane_domain_progress(
             &status,
             LaneId::new(DS1_LANE_INDEX),
@@ -8832,7 +8497,6 @@ mod tests {
         .expect("highest applied certified row should count");
         assert_eq!(progress.lane_block_height, 5);
         assert_eq!(progress.proposal_hash, applied_top.proposal_hash);
-
         let mut conflicting_top = applied_top.clone();
         conflicting_top.proposal_hash = test_hash(0x71);
         let ambiguous_status = SumeragiDiagnosticsStatus {
@@ -8849,7 +8513,6 @@ mod tests {
             "conflicting applied identities at the same top height must fail closed"
         );
     }
-
     #[test]
     fn quorum_lane_domain_progress_requires_quorum_at_candidate_height() {
         let lane_id = LaneId::new(DS1_LANE_INDEX);
@@ -8860,17 +8523,14 @@ mod tests {
             test_lane_domain_progress(lane_id, dataspace_id, 2, 1),
             test_lane_domain_progress(lane_id, dataspace_id, 3, 0),
         ];
-
         let progress =
             quorum_lane_domain_progress(&observations, 3).expect("height 2 has quorum support");
-
         assert_eq!(progress.lane_block_height, 2);
         assert_eq!(progress.lane_block_view, 0);
         assert!(
             quorum_lane_domain_progress(&observations, 5).is_none(),
             "larger than peer-count quorum must not be satisfied"
         );
-
         let mut conflicting_same_height = test_lane_domain_progress(lane_id, dataspace_id, 2, 0);
         conflicting_same_height.proposal_hash = test_hash(0xD1);
         let conflicting_observations = [
@@ -8881,7 +8541,6 @@ mod tests {
             quorum_lane_domain_progress(&conflicting_observations, 2).is_none(),
             "conflicting same-height committed-lane identities must not combine into quorum progress"
         );
-
         let incarnation_a = test_lane_domain_progress(lane_id, dataspace_id, 2, 0);
         let mut incarnation_b = incarnation_a.clone();
         incarnation_b.lane_incarnation = test_hash(0xE1);
@@ -8889,7 +8548,6 @@ mod tests {
             quorum_lane_domain_progress(&[incarnation_a, incarnation_b], 2).is_none(),
             "different lane incarnations must not combine into quorum progress"
         );
-
         let quorum_identity_a = test_lane_domain_progress(lane_id, dataspace_id, 4, 0);
         let mut quorum_identity_b = quorum_identity_a.clone();
         quorum_identity_b.proposal_hash = test_hash(0xD2);
@@ -8906,7 +8564,6 @@ mod tests {
             "conflicting top committed-lane identities with independent quorum must fail closed"
         );
     }
-
     #[test]
     fn lane_domain_progress_after_baseline_requires_strict_same_lane_tip_advance() {
         let lane_id = LaneId::new(DS1_LANE_INDEX);
@@ -8918,7 +8575,6 @@ mod tests {
         let wrong_lane = test_lane_domain_progress(LaneId::new(DS2_LANE_INDEX), dataspace_id, 5, 0);
         let mut wrong_incarnation = higher_height.clone();
         wrong_incarnation.lane_incarnation = test_hash(0xEE);
-
         assert!(!lane_domain_progress_is_after_baseline(
             &same_tip, &baseline
         ));
@@ -8939,7 +8595,6 @@ mod tests {
             &baseline
         ));
     }
-
     #[test]
     fn latest_lane_domain_progress_rejects_ambiguous_latest_committed_rows() {
         let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
@@ -8969,7 +8624,6 @@ mod tests {
             .is_some(),
             "exact duplicate committed-lane rows should remain idempotent"
         );
-
         let ambiguous = SumeragiDiagnosticsStatus {
             committed_lane_blocks: vec![valid, proposal_drift],
             ..empty_sumeragi_diagnostics()
@@ -8984,7 +8638,6 @@ mod tests {
             "same-slot committed-lane proposal drift must not publish cross-dataspace QC progress"
         );
     }
-
     #[test]
     fn latest_lane_domain_progress_rejects_malformed_latest_committed_row() {
         let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
@@ -9021,7 +8674,6 @@ mod tests {
             "malformed latest committed-lane rows must block cross-dataspace QC progress"
         );
     }
-
     #[test]
     fn latest_lane_payload_ownership_progress_requires_exact_replayable_quorum() {
         let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
@@ -9072,14 +8724,12 @@ mod tests {
             ],
             ..empty_sumeragi_diagnostics()
         };
-
         let progress = latest_lane_payload_ownership_progress(
             &status,
             LaneId::new(DS1_LANE_INDEX),
             DataSpaceId::new(DS1_ID_U64),
         )
         .expect("valid exact-dataspace lane payload ownership progress");
-
         assert_eq!(progress.lane_block_height, 3);
         assert_eq!(progress.accepted_transaction_count, 2);
         assert_eq!(progress.min_quorum, quorum);
@@ -9094,7 +8744,6 @@ mod tests {
             "wrong lane must not satisfy the ownership progress probe"
         );
     }
-
     #[test]
     fn latest_lane_payload_ownership_progress_rejects_malformed_latest_replay_row() {
         let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
@@ -9128,7 +8777,6 @@ mod tests {
             "malformed latest ownership replay rows must block lane-payload progress"
         );
     }
-
     #[test]
     fn latest_lane_payload_ownership_progress_rejects_ambiguous_latest_replay_identity() {
         let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
@@ -9157,7 +8805,6 @@ mod tests {
         conflicting.payload_ownership_hash = replay_hashes.payload_ownership_hash;
         conflicting.rbc_instance_hash = replay_hashes.rbc_instance_hash;
         conflicting.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
-
         let duplicate_status = SumeragiDiagnosticsStatus {
             lane_payload_ownerships: vec![valid.clone(), exact_duplicate],
             ..empty_sumeragi_diagnostics()
@@ -9171,7 +8818,6 @@ mod tests {
             .is_some(),
             "exact duplicate ownership rows should remain idempotent"
         );
-
         let ambiguous_status = SumeragiDiagnosticsStatus {
             lane_payload_ownerships: vec![valid, conflicting],
             ..empty_sumeragi_diagnostics()
@@ -9186,7 +8832,6 @@ mod tests {
             "same-slot ownership replay identity drift must not publish lane-payload progress"
         );
     }
-
     #[test]
     fn quorum_lane_payload_ownership_progress_requires_quorum_at_candidate_height() {
         let lane_id = LaneId::new(DS1_LANE_INDEX);
@@ -9197,17 +8842,14 @@ mod tests {
             test_lane_payload_ownership_progress(lane_id, dataspace_id, 2, 1, 12),
             test_lane_payload_ownership_progress(lane_id, dataspace_id, 3, 0, 13),
         ];
-
         let progress = quorum_lane_payload_ownership_progress(&observations, 3)
             .expect("height 2 ownership has quorum support");
-
         assert_eq!(progress.lane_block_height, 2);
         assert_eq!(progress.lane_block_view, 0);
         assert!(
             quorum_lane_payload_ownership_progress(&observations, 5).is_none(),
             "larger than peer-count quorum must not be satisfied"
         );
-
         let mut conflicting_same_height =
             test_lane_payload_ownership_progress(lane_id, dataspace_id, 2, 0, 11);
         conflicting_same_height.payload_ownership_hash = test_hash(0xC1);
@@ -9219,7 +8861,6 @@ mod tests {
             quorum_lane_payload_ownership_progress(&conflicting_observations, 2).is_none(),
             "conflicting same-height ownership identities must not combine into quorum progress"
         );
-
         let incarnation_a = test_lane_payload_ownership_progress(lane_id, dataspace_id, 2, 0, 11);
         let mut incarnation_b = incarnation_a.clone();
         incarnation_b.lane_incarnation = test_hash(0xE2);
@@ -9227,7 +8868,6 @@ mod tests {
             quorum_lane_payload_ownership_progress(&[incarnation_a, incarnation_b], 2).is_none(),
             "different lane incarnations must not combine into ownership quorum progress"
         );
-
         let quorum_identity_a =
             test_lane_payload_ownership_progress(lane_id, dataspace_id, 4, 0, 20);
         let mut quorum_identity_b = quorum_identity_a.clone();
@@ -9245,33 +8885,27 @@ mod tests {
             "conflicting top ownership identities with independent quorum must fail closed"
         );
     }
-
     #[test]
     fn duration_min_avg_max_secs_reports_expected_values() {
         assert!(duration_min_avg_max_secs(&[]).is_none());
-
         let (min, avg, max) = duration_min_avg_max_secs(&[
             Duration::from_millis(500),
             Duration::from_millis(1500),
             Duration::from_secs(1),
         ])
         .expect("duration summary");
-
         assert_eq!(min, 0.5);
         assert_eq!(avg, 1.0);
         assert_eq!(max, 1.5);
     }
-
     #[test]
     fn duration_min_avg_max_secs_handles_single_sample() {
         let (min, avg, max) =
             duration_min_avg_max_secs(&[Duration::from_millis(250)]).expect("duration summary");
-
         assert_eq!(min, 0.25);
         assert_eq!(avg, 0.25);
         assert_eq!(max, 0.25);
     }
-
     #[test]
     fn committed_tx_outcome_quorum_requires_matching_outcome_quorum() {
         assert_eq!(
@@ -9282,7 +8916,6 @@ mod tests {
             None,
             "minority applied observations must not satisfy committed outcome"
         );
-
         assert_eq!(
             committed_tx_outcome_quorum(
                 &[
@@ -9294,7 +8927,6 @@ mod tests {
             ),
             Some(CommittedTxOutcome::Applied)
         );
-
         assert_eq!(
             committed_tx_outcome_quorum(
                 &[
@@ -9308,7 +8940,6 @@ mod tests {
                 "insufficient funds".to_owned()
             ))
         );
-
         assert_eq!(
             committed_tx_outcome_quorum(
                 &[
@@ -9321,7 +8952,6 @@ mod tests {
             "split rejection reasons must fail closed"
         );
     }
-
     #[test]
     fn bounded_observer_request_timeout_handles_exhausted_and_large_budgets() {
         let exhausted = bounded_observer_request_timeout(
@@ -9330,14 +8960,12 @@ mod tests {
             4,
         );
         assert_eq!(exhausted, Duration::from_millis(1));
-
         let large_single_client =
             bounded_observer_request_timeout(Instant::now(), Duration::from_secs(90), 1);
         assert!(
             large_single_client <= OBSERVER_QUERY_TIMEOUT_CAP,
             "large per-client slice should be capped"
         );
-
         let short_budget =
             bounded_observer_request_timeout(Instant::now(), Duration::from_millis(500), 100);
         assert!(
@@ -9345,43 +8973,35 @@ mod tests {
             "short remaining budgets should not be inflated by the floor"
         );
     }
-
     #[test]
     fn bounded_observer_request_timeout_treats_zero_remaining_clients_as_one() {
         let timeout =
             bounded_observer_request_timeout(Instant::now(), OBSERVER_QUERY_TIMEOUT_CAP * 3, 0);
-
         assert!(
             timeout <= OBSERVER_QUERY_TIMEOUT_CAP,
             "zero remaining clients should still apply the per-peer cap"
         );
     }
-
     #[test]
     fn total_balance_observer_request_slots_counts_empty_sets_as_one_slot() {
         let slots = total_balance_observer_request_slots([3, 0, 2, 1]);
-
         assert_eq!(
             slots, 7,
             "empty balance observer sets should still consume one diagnostic slot"
         );
     }
-
     #[test]
     fn bounded_observer_request_timeout_applies_floor_when_slice_is_small() {
         let timeout = bounded_observer_request_timeout(Instant::now(), Duration::from_secs(9), 100);
-
         assert_eq!(
             timeout,
             Duration::from_secs(2),
             "small per-client slices should use the observer floor when the remaining budget allows it"
         );
     }
-
     #[test]
     fn bounded_observer_request_timeout_uses_divided_slice_between_floor_and_cap() {
         let timeout = bounded_observer_request_timeout(Instant::now(), Duration::from_secs(9), 3);
-
         assert!(
             timeout > Duration::from_secs(2),
             "divided slice should stay above the observer floor"
@@ -9391,7 +9011,6 @@ mod tests {
             "divided slice should be close to the remaining budget divided by clients"
         );
     }
-
     #[test]
     fn should_submit_tick_fires_on_initial_and_interval_polls() {
         assert!(should_submit_tick(0, 5));
@@ -9399,7 +9018,6 @@ mod tests {
         assert!(should_submit_tick(5, 5));
         assert!(!should_submit_tick(0, 0));
     }
-
     #[test]
     fn tx_fallback_error_classifiers_match_cross_dataspace_outcomes() {
         for error_text in [
@@ -9417,7 +9035,6 @@ mod tests {
         assert!(!is_inconclusive_blocking_submit_error(
             "settlement leg requires 10000"
         ));
-
         assert!(is_inconclusive_committed_outcome_error(
             "timed out waiting for committed transaction outcome"
         ));
@@ -9425,7 +9042,6 @@ mod tests {
             "transaction rejected by validation"
         ));
     }
-
     #[test]
     fn tx_fallback_error_classifiers_ignore_unrelated_phrases() {
         for error_text in [
@@ -9440,14 +9056,11 @@ mod tests {
                 "{error_text} should stay conclusive"
             );
         }
-
         assert!(!is_inconclusive_committed_outcome_error(
             "waiting for committed transaction outcome succeeded"
         ));
     }
-
     include!("cross_dataspace_localnet/rejection_classifier_tests.rs");
-
     #[test]
     fn fanout_header_helper_accepts_local_and_proxy_without_singular_route() {
         for routed_by in ["local", "proxy"] {
@@ -9457,11 +9070,9 @@ mod tests {
                 route_lane_id: None,
                 route_dataspace_id: None,
             };
-
             expect_local_or_proxy_fanout_headers(&response, "fanout")
                 .expect("local/proxy fanout response should pass");
         }
-
         let missing_route_source = RoutedJsonGetResponse {
             body: JsonValue::Null,
             routed_by: None,
@@ -9471,7 +9082,6 @@ mod tests {
         let err = expect_local_or_proxy_fanout_headers(&missing_route_source, "fanout")
             .expect_err("missing route source should fail");
         assert!(err.to_string().contains("expected local or proxy fanout"));
-
         let unknown_route_source = RoutedJsonGetResponse {
             body: JsonValue::Null,
             routed_by: Some("remote".to_owned()),
@@ -9481,7 +9091,6 @@ mod tests {
         let err = expect_local_or_proxy_fanout_headers(&unknown_route_source, "fanout")
             .expect_err("unknown route source should fail");
         assert!(err.to_string().contains("expected local or proxy fanout"));
-
         let singular_route = RoutedJsonGetResponse {
             body: JsonValue::Null,
             routed_by: Some("proxy".to_owned()),
@@ -9494,7 +9103,6 @@ mod tests {
             err.to_string()
                 .contains("fanout response should not expose a singular route lane")
         );
-
         let singular_dataspace = RoutedJsonGetResponse {
             body: JsonValue::Null,
             routed_by: Some("proxy".to_owned()),
@@ -9508,6 +9116,5 @@ mod tests {
                 .contains("fanout response should not expose a singular route dataspace")
         );
     }
-
     include!("cross_dataspace_localnet/error_render_test.rs");
 }

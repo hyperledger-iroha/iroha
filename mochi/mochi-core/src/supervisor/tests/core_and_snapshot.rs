@@ -1,7 +1,6 @@
 struct EnvVarGuard {
     key: &'static str,
 }
-
 impl EnvVarGuard {
     fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
         // SAFETY: tests serialize environment mutation within a single thread.
@@ -11,7 +10,6 @@ impl EnvVarGuard {
         Self { key }
     }
 }
-
 impl Drop for EnvVarGuard {
     fn drop(&mut self) {
         // SAFETY: matching set_var executed in a controlled test environment.
@@ -20,12 +18,10 @@ impl Drop for EnvVarGuard {
         }
     }
 }
-
 struct RestoringEnvVarGuard {
     key: &'static str,
     previous: Option<OsString>,
 }
-
 impl RestoringEnvVarGuard {
     fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
         let previous = env::var_os(key);
@@ -36,7 +32,6 @@ impl RestoringEnvVarGuard {
         Self { key, previous }
     }
 }
-
 impl Drop for RestoringEnvVarGuard {
     fn drop(&mut self) {
         // SAFETY: matching set_var executed in a controlled test environment.
@@ -49,7 +44,6 @@ impl Drop for RestoringEnvVarGuard {
         }
     }
 }
-
 fn write_version_stub(root: &Path, name: &str, build_line: &str) -> PathBuf {
     let script_path = root.join(format!("{name}.sh"));
     let script = format!(
@@ -76,7 +70,6 @@ esac
     }
     script_path
 }
-
 #[cfg(unix)]
 fn write_long_running_irohad_stub(root: &Path) -> PathBuf {
     let script_path = root.join("iroha3d-long-running-stub.sh");
@@ -98,7 +91,6 @@ exec /usr/bin/tail -f /dev/null
         .expect("set long-running iroha3d stub permissions");
     script_path
 }
-
 #[cfg(unix)]
 fn redirect_storage_generations_through_symlink(
     peer: &PeerHandle,
@@ -115,7 +107,6 @@ fn redirect_storage_generations_through_symlink(
         .expect("storage-generations directory");
     let original = storage_generations.with_file_name("storage-generations-original");
     fs::rename(storage_generations, &original).expect("move genuine storage hierarchy");
-
     let redirected_storage = attacker_root.join(storage_generation);
     fs::create_dir_all(
         redirected_storage
@@ -128,7 +119,6 @@ fn redirect_storage_generations_through_symlink(
     symlink(attacker_root, storage_generations).expect("redirect storage-generations");
     sentinel
 }
-
 #[cfg(unix)]
 fn write_cargo_build_stub(root: &Path) -> (PathBuf, PathBuf) {
     let stub_path = root.join("cargo_stub.sh");
@@ -177,7 +167,6 @@ exit 0
     let _ = fs::File::create(&log_path);
     (stub_path, log_path)
 }
-
 #[cfg(unix)]
 fn write_cargo_failure_stub(root: &Path) -> PathBuf {
     let stub_path = root.join("cargo_fail_stub.sh");
@@ -192,7 +181,6 @@ exit 1
     fs::set_permissions(&stub_path, perms).expect("set cargo failure stub permissions");
     stub_path
 }
-
 #[test]
 fn snapshot_label_sanitization_behaves() {
     assert_eq!(
@@ -205,7 +193,6 @@ fn snapshot_label_sanitization_behaves() {
     );
     assert!(sanitize_snapshot_label("%%%").is_none());
 }
-
 #[test]
 fn snapshot_label_collapses_separators_and_clamps_length() {
     let label = "___  noisy--Label...with__mixed---separators   ";
@@ -213,7 +200,6 @@ fn snapshot_label_collapses_separators_and_clamps_length() {
         sanitize_snapshot_label(label).as_deref(),
         Some("noisy-label-with-mixed-separators")
     );
-
     let long_label = "PREFIX".repeat(20);
     let sanitized = sanitize_snapshot_label(&long_label).expect("sanitized output");
     assert!(
@@ -225,7 +211,6 @@ fn snapshot_label_collapses_separators_and_clamps_length() {
         "sanitized label should keep leading alphas in lower-case"
     );
 }
-
 #[test]
 fn copy_dir_recursive_handles_missing_sources() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -236,7 +221,6 @@ fn copy_dir_recursive_handles_missing_sources() {
     let mut iter = fs::read_dir(&dest).expect("read destination dir");
     assert!(iter.next().is_none(), "destination should remain empty");
 }
-
 #[test]
 fn probe_version_output_parses_and_infers_build_line() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -254,14 +238,12 @@ exit 0
         perms.set_mode(0o755);
         fs::set_permissions(&script_path, perms).expect("set version script perms");
     }
-
     let (raw, version) =
         probe_version_output(&script_path, "custom-bin").expect("version probe succeeds");
     assert_eq!(version.as_deref(), Some("custom-bin iroha3 3.2.1"));
     let build_line = infer_build_line("custom-bin", &script_path, raw.as_deref());
     assert_eq!(build_line, BuildLine::Iroha3);
 }
-
 #[test]
 fn probe_version_output_honors_iroha2_output() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -279,13 +261,11 @@ exit 0
         perms.set_mode(0o755);
         fs::set_permissions(&script_path, perms).expect("set version script perms");
     }
-
     let (raw, _) =
         probe_version_output(&script_path, "weird-name").expect("version probe succeeds");
     let build_line = infer_build_line("weird-name", &script_path, raw.as_deref());
     assert_eq!(build_line, BuildLine::Iroha2);
 }
-
 #[test]
 fn compatibility_summary_includes_profile_and_fingerprint() {
     let report = CompatibilityReport {
@@ -301,7 +281,6 @@ fn compatibility_summary_includes_profile_and_fingerprint() {
         chain_id: "test-chain".to_owned(),
         profile: Some(GenesisProfile::Iroha3Dev),
     };
-
     let summary = report.summary_line();
     assert!(
         summary.contains("chain test-chain"),
@@ -316,7 +295,6 @@ fn compatibility_summary_includes_profile_and_fingerprint() {
         "summary should include verify fingerprint: {summary}"
     );
 }
-
 struct KagamiStub {
     _path_guard: EnvVarGuard,
     _log_guard: EnvVarGuard,
@@ -325,7 +303,6 @@ struct KagamiStub {
     _signature_guard: EnvVarGuard,
     log_path: PathBuf,
 }
-
 impl KagamiStub {
     fn install(root: &Path) -> Self {
         let script_path = root.join("kagami_stub.sh");
@@ -442,19 +419,16 @@ esac
             log_path,
         }
     }
-
     fn log_path(&self) -> &Path {
         &self.log_path
     }
 }
-
 struct StandaloneKagamiStub {
     script_path: PathBuf,
     log_path: PathBuf,
     _irohad_guard: EnvVarGuard,
     _iroha_cli_guard: EnvVarGuard,
 }
-
 impl StandaloneKagamiStub {
     fn create(root: &Path) -> Self {
         let script_path = root.join("kagami_override.sh");
@@ -553,21 +527,17 @@ esac
             _iroha_cli_guard: iroha_cli_guard,
         }
     }
-
     fn script_path(&self) -> &Path {
         &self.script_path
     }
-
     fn log_path(&self) -> &Path {
         &self.log_path
     }
 }
-
 fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
 }
-
 fn ports_available(context: &str) -> bool {
     match TcpListener::bind(("127.0.0.1", 0)) {
         Ok(listener) => {
@@ -586,7 +556,6 @@ fn ports_available(context: &str) -> bool {
         Err(err) => panic!("{context}: {err}"),
     }
 }
-
 fn test_peer_spec(
     paths: &NetworkPaths,
     alias: String,
@@ -598,7 +567,6 @@ fn test_peer_spec(
     let storage_dir = fs::canonicalize(peer_dir)?.join("storage");
     PeerSpec::new_in_generation(paths.root(), storage_dir, alias, torii_port, p2p_port)
 }
-
 fn test_genesis_material(paths: &NetworkPaths) -> GenesisMaterial {
     let genesis_dir = paths.root().join("test-fixtures").join("genesis");
     let manifest_path = genesis_dir.join(GENESIS_FILE_NAME);
@@ -616,7 +584,6 @@ fn test_genesis_material(paths: &NetworkPaths) -> GenesisMaterial {
         .expect("write genesis expected hash");
     fs::write(&public_key_path, format!("{}\n", key_pair.public_key()))
         .expect("write genesis public key");
-
     GenesisMaterial {
         generation_id: "00000000000000000000000000000000".to_owned(),
         key_pair,
@@ -632,13 +599,11 @@ fn test_genesis_material(paths: &NetworkPaths) -> GenesisMaterial {
         consensus_fingerprint: None,
     }
 }
-
 fn npos_preset_profile(preset: ProfilePreset) -> NetworkProfile {
     let mut profile = NetworkProfile::from_preset(preset);
     profile.consensus_mode = SumeragiConsensusMode::Npos;
     profile
 }
-
 #[test]
 fn binary_paths_default_respects_env_override() {
     let temp = tempfile::NamedTempFile::new().expect("temp file");
@@ -647,7 +612,6 @@ fn binary_paths_default_respects_env_override() {
     let binaries = BinaryPaths::default();
     assert_eq!(binaries.irohad_executable(), override_path.as_path());
 }
-
 #[test]
 fn binary_paths_default_respects_cli_env_override() {
     let temp = tempfile::NamedTempFile::new().expect("temp file");
@@ -656,7 +620,6 @@ fn binary_paths_default_respects_cli_env_override() {
     let binaries = BinaryPaths::default();
     assert_eq!(binaries.iroha_cli_executable(), override_path.as_path());
 }
-
 #[cfg(unix)]
 #[test]
 fn binary_paths_auto_builds_when_enabled() {
@@ -666,13 +629,11 @@ fn binary_paths_auto_builds_when_enabled() {
     fs::create_dir_all(&empty_path_dir).expect("create empty path dir");
     let target_dir = temp.path().join("target");
     fs::create_dir_all(&target_dir).expect("create target dir");
-
     let (cargo_stub, cargo_log) = write_cargo_build_stub(temp.path());
     let _cargo_guard = RestoringEnvVarGuard::set("CARGO", cargo_stub.as_os_str());
     let _target_guard = RestoringEnvVarGuard::set("CARGO_TARGET_DIR", target_dir.as_os_str());
     let _path_guard = RestoringEnvVarGuard::set("PATH", empty_path_dir.as_os_str());
     let _log_guard = RestoringEnvVarGuard::set("MOCHI_TEST_CARGO_LOG", cargo_log.as_os_str());
-
     let mut binaries = BinaryPaths::default().allow_auto_builds(true);
     binaries.irohad = PathBuf::from("iroha3d");
     binaries.irohad_verified = false;
@@ -689,7 +650,6 @@ fn binary_paths_auto_builds_when_enabled() {
     binaries.iroha_cli_build_attempted = false;
     binaries.iroha_cli_auto = true;
     binaries.iroha_cli_source = BinarySource::AutoDefault;
-
     let versions = binaries
         .probe_versions()
         .expect("probe versions should succeed");
@@ -700,7 +660,6 @@ fn binary_paths_auto_builds_when_enabled() {
             .all(|info| info.build_line == BuildLine::Iroha3),
         "auto-built binaries should report iroha3 build-line"
     );
-
     let log = fs::read_to_string(&cargo_log).expect("read cargo log");
     assert!(
         log.lines()
@@ -712,7 +671,6 @@ fn binary_paths_auto_builds_when_enabled() {
         3,
         "expected one cargo invocation per binary build"
     );
-
     let _ = binaries
         .probe_versions()
         .expect("second probe should succeed");
@@ -723,7 +681,6 @@ fn binary_paths_auto_builds_when_enabled() {
         "second probe should not trigger additional cargo builds"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn binary_paths_auto_build_failure_surfaces_error() {
@@ -733,19 +690,16 @@ fn binary_paths_auto_build_failure_surfaces_error() {
     fs::create_dir_all(&empty_path_dir).expect("create empty path dir");
     let target_dir = temp.path().join("target");
     fs::create_dir_all(&target_dir).expect("create target dir");
-
     let cargo_stub = write_cargo_failure_stub(temp.path());
     let _cargo_guard = RestoringEnvVarGuard::set("CARGO", cargo_stub.as_os_str());
     let _target_guard = RestoringEnvVarGuard::set("CARGO_TARGET_DIR", target_dir.as_os_str());
     let _path_guard = RestoringEnvVarGuard::set("PATH", empty_path_dir.as_os_str());
-
     let mut binaries = BinaryPaths::default().allow_auto_builds(true);
     binaries.irohad = PathBuf::from("iroha3d");
     binaries.irohad_verified = false;
     binaries.irohad_build_attempted = false;
     binaries.irohad_auto = true;
     binaries.irohad_source = BinarySource::AutoDefault;
-
     let err = binaries
         .ensure_irohad_ready()
         .expect_err("auto-build should surface failure");
@@ -760,7 +714,6 @@ fn binary_paths_auto_build_failure_surfaces_error() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn binary_paths_resolve_iroha_cli_alias_without_building() {
@@ -785,14 +738,12 @@ fn binary_paths_resolve_iroha_cli_alias_without_building() {
     let _cargo_guard = RestoringEnvVarGuard::set("CARGO", cargo_stub.as_os_str());
     let _target_guard = RestoringEnvVarGuard::set("CARGO_TARGET_DIR", empty_target_dir.as_os_str());
     let _path_guard = RestoringEnvVarGuard::set("PATH", path_dir.as_os_str());
-
     let mut binaries = BinaryPaths::default().allow_auto_builds(true);
     binaries.iroha_cli = PathBuf::from("iroha_cli");
     binaries.iroha_cli_verified = false;
     binaries.iroha_cli_build_attempted = false;
     binaries.iroha_cli_auto = true;
     binaries.iroha_cli_source = BinarySource::AutoDefault;
-
     assert_eq!(
         resolve_name_on_path(OsStr::new("iroha")).as_deref(),
         Some(iroha_stub.as_path())
@@ -801,7 +752,6 @@ fn binary_paths_resolve_iroha_cli_alias_without_building() {
         resolve_iroha_cli_alias().expect("iroha alias should be discoverable");
     assert_eq!(alias_path, iroha_stub);
     assert_eq!(alias_source, BinarySource::PathSearch);
-
     let resolved = binaries
         .ensure_iroha_cli_ready()
         .expect("iroha alias should resolve without cargo build");
@@ -809,7 +759,6 @@ fn binary_paths_resolve_iroha_cli_alias_without_building() {
     assert_eq!(binaries.iroha_cli_source, BinarySource::PathSearch);
     assert!(!binaries.iroha_cli_build_attempted);
 }
-
 #[cfg(unix)]
 #[test]
 fn binary_paths_rejects_build_line_mismatch() {
@@ -817,12 +766,10 @@ fn binary_paths_rejects_build_line_mismatch() {
     let temp = tempfile::tempdir().expect("tempdir");
     let iroha2_stub = write_version_stub(temp.path(), "iroha2-stub", "iroha2");
     let iroha3_stub = write_version_stub(temp.path(), "iroha3-stub", "iroha3");
-
     let mut binaries = BinaryPaths::default()
         .irohad(iroha2_stub)
         .kagami(iroha3_stub.clone())
         .iroha_cli(iroha3_stub);
-
     let err = binaries
         .verify_build_line(BuildLine::Iroha3)
         .expect_err("iroha2 binary should fail build-line verification");
@@ -839,7 +786,6 @@ fn binary_paths_rejects_build_line_mismatch() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn builder_creates_peer_configs() {
     if !ports_available("builder_creates_peer_configs") {
@@ -855,7 +801,6 @@ fn builder_creates_peer_configs() {
         .p2p_base_port(19000)
         .build()
         .expect("build supervisor");
-
     assert_eq!(supervisor.chain_id(), "test-chain");
     assert_eq!(supervisor.peers().len(), 4);
     let network_id = supervisor
@@ -891,7 +836,6 @@ fn builder_creates_peer_configs() {
             "Mochi peers must not share a transport identity"
         );
     }
-
     #[cfg(unix)]
     for peer in supervisor.peers() {
         let metadata = fs::symlink_metadata(peer.config_path()).expect("peer config metadata");
@@ -901,7 +845,6 @@ fn builder_creates_peer_configs() {
         assert_eq!(metadata.nlink(), 1);
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
     }
-
     let peer = &supervisor.peers()[0];
     let config_path = peer.config_path().to_path_buf();
     let contents = fs::read_to_string(config_path).expect("config readable");
@@ -914,7 +857,6 @@ fn builder_creates_peer_configs() {
         .parse::<iroha_primitives::addr::SocketAddr>()
         .expect("public addr literal")
         .to_literal();
-
     assert_eq!(
         value.get("chain").and_then(toml::Value::as_str),
         Some("test-chain")
@@ -1093,8 +1035,21 @@ fn builder_creates_peer_configs() {
         !identity_private.is_empty(),
         "identity private key should be populated"
     );
+    let operator_public_keys = value
+        .get("torii")
+        .and_then(toml::Value::as_table)
+        .and_then(|torii| torii.get("operator_signatures"))
+        .and_then(toml::Value::as_table)
+        .and_then(|operator| operator.get("allowed_public_keys"))
+        .and_then(toml::Value::as_array)
+        .expect("managed operator public keys");
+    assert!(
+        operator_public_keys
+            .iter()
+            .any(|value| value.as_str() == Some(identity_public)),
+        "managed streaming identity must be allow-listed for exact-network operator reads"
+    );
 }
-
 #[test]
 fn builder_reserves_unique_ports_across_torii_and_p2p() {
     if !ports_available("builder_reserves_unique_ports_across_torii_and_p2p") {
@@ -1110,7 +1065,6 @@ fn builder_reserves_unique_ports_across_torii_and_p2p() {
         .p2p_base_port(base_port)
         .build()
         .expect("build supervisor");
-
     let mut seen_ports = HashSet::new();
     for peer in supervisor.peers() {
         for addr in [peer.torii_address(), peer.p2p_address()] {
@@ -1125,7 +1079,6 @@ fn builder_reserves_unique_ports_across_torii_and_p2p() {
         }
     }
 }
-
 #[test]
 fn relative_data_root_renders_cwd_independent_peer_paths() {
     fn configured_path<'a>(config: &'a toml::Table, keys: &[&str]) -> &'a Path {
@@ -1145,7 +1098,6 @@ fn relative_data_root_renders_cwd_independent_peer_paths() {
                 .unwrap_or_else(|| panic!("`{label}` must be a path string")),
         )
     }
-
     fn resolve_from_peer_cwd(peer_cwd: &Path, path: &Path) -> PathBuf {
         if path.is_absolute() {
             path.to_path_buf()
@@ -1153,7 +1105,6 @@ fn relative_data_root_renders_cwd_independent_peer_paths() {
             peer_cwd.join(path)
         }
     }
-
     if !ports_available("relative_data_root_renders_cwd_independent_peer_paths") {
         return;
     }
@@ -1176,7 +1127,6 @@ fn relative_data_root_renders_cwd_independent_peer_paths() {
         resolve_data_root(data_root.path()).expect("preserve absolute data root"),
         data_root.path()
     );
-
     let _stub = KagamiStub::install(data_root.path());
     let profile = NetworkProfile::from_preset(ProfilePreset::FourPeerBft);
     let expected_network_root = data_root.path().join(profile.slug());
@@ -1186,13 +1136,11 @@ fn relative_data_root_renders_cwd_independent_peer_paths() {
         .p2p_base_port(31_000)
         .build()
         .expect("build supervisor from relative data root");
-
     assert_eq!(supervisor.paths().root(), expected_network_root);
     assert!(supervisor.genesis_manifest().is_absolute());
     assert!(supervisor.genesis_manifest().is_file());
     assert!(supervisor.genesis_block_file().is_absolute());
     assert!(supervisor.genesis_block_file().is_file());
-
     for peer in supervisor.peers() {
         assert!(peer.config_path().is_absolute());
         assert!(peer.config_path().is_file());
@@ -1215,7 +1163,6 @@ fn relative_data_root_renders_cwd_independent_peer_paths() {
             &fs::read_to_string(peer.config_path()).expect("read generated peer config"),
         )
         .expect("parse generated peer config");
-
         let genesis_file = configured_path(&config, &["genesis", "file"]);
         let genesis_manifest = configured_path(&config, &["genesis", "manifest_json"]);
         let rans_tables = configured_path(&config, &["streaming", "codec", "rans_tables_path"]);
@@ -1233,7 +1180,6 @@ fn relative_data_root_renders_cwd_independent_peer_paths() {
         assert_eq!(genesis_file, supervisor.genesis_block_file());
         assert_eq!(genesis_manifest, supervisor.genesis_manifest());
         assert!(rans_tables.starts_with(peer_cwd));
-
         for keys in [
             &["kura", "store_dir"][..],
             &["snapshot", "store_dir"][..],
@@ -1273,7 +1219,6 @@ fn relative_data_root_renders_cwd_independent_peer_paths() {
         }
     }
 }
-
 #[test]
 fn multi_peer_trusted_peers_list_everyone() {
     if !ports_available("multi_peer_trusted_peers_list_everyone") {
@@ -1288,9 +1233,7 @@ fn multi_peer_trusted_peers_list_everyone() {
         .p2p_base_port(17000)
         .build()
         .expect("build supervisor");
-
     assert_eq!(supervisor.peers().len(), 4);
-
     let first_config =
         fs::read_to_string(supervisor.peers()[0].config_path()).expect("config readable");
     let value: toml::Table = toml::from_str(&first_config).expect("valid toml");
@@ -1300,7 +1243,6 @@ fn multi_peer_trusted_peers_list_everyone() {
         .expect("array");
     assert_eq!(trusted.len(), 4);
 }
-
 #[test]
 fn multi_peer_configs_bound_soranet_pow_for_local_full_mesh() {
     if !ports_available("multi_peer_configs_bound_soranet_pow_for_local_full_mesh") {
@@ -1316,7 +1258,6 @@ fn multi_peer_configs_bound_soranet_pow_for_local_full_mesh() {
         .build()
         .expect("build four-peer supervisor");
     let mut revocation_paths = HashSet::new();
-
     for (index, peer) in supervisor.peers().iter().enumerate() {
         let config: toml::Table =
             toml::from_str(&fs::read_to_string(peer.config_path()).expect("peer config readable"))
@@ -1370,7 +1311,6 @@ fn multi_peer_configs_bound_soranet_pow_for_local_full_mesh() {
         );
     }
     assert_eq!(revocation_paths.len(), 4);
-
     let legacy = SupervisorBuilder::new(ProfilePreset::SinglePeer)
         .data_root(temp.path().join("single-peer"))
         .torii_base_port(30000)
@@ -1383,7 +1323,6 @@ fn multi_peer_configs_bound_soranet_pow_for_local_full_mesh() {
         "the historical profile name must still launch a safe committee"
     );
 }
-
 #[test]
 fn custom_profile_supports_seven_peers_with_unique_ports() {
     if !ports_available("custom_profile_supports_seven_peers_with_unique_ports") {
@@ -1399,9 +1338,7 @@ fn custom_profile_supports_seven_peers_with_unique_ports() {
         .p2p_base_port(17100)
         .build()
         .expect("build supervisor");
-
     assert_eq!(supervisor.peers().len(), 7);
-
     let mut seen_ports = HashSet::new();
     for peer in supervisor.peers() {
         for addr in [peer.torii_address(), peer.p2p_address()] {
@@ -1415,7 +1352,6 @@ fn custom_profile_supports_seven_peers_with_unique_ports() {
             );
         }
     }
-
     let first_config =
         fs::read_to_string(supervisor.peers()[0].config_path()).expect("config readable");
     let value: toml::Table = toml::from_str(&first_config).expect("valid toml");
@@ -1425,7 +1361,6 @@ fn custom_profile_supports_seven_peers_with_unique_ports() {
         .expect("array");
     assert_eq!(trusted.len(), 7);
 }
-
 #[test]
 fn profile_preset_preserves_consensus_mode() {
     let profile = NetworkProfile::custom(7, SumeragiConsensusMode::Npos).expect("profile");
@@ -1438,7 +1373,6 @@ fn profile_preset_preserves_consensus_mode() {
         SumeragiConsensusMode::Npos
     );
 }
-
 #[test]
 fn build_rejects_genesis_profile_without_npos() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1449,7 +1383,6 @@ fn build_rejects_genesis_profile_without_npos() {
         .set_profile(
             NetworkProfile::custom(4, SumeragiConsensusMode::Permissioned).expect("profile"),
         );
-
     let err = builder
         .build()
         .expect_err("expected consensus mode mismatch");
@@ -1459,7 +1392,6 @@ fn build_rejects_genesis_profile_without_npos() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn genesis_includes_topology() {
     if !ports_available("genesis_includes_topology") {
@@ -1472,7 +1404,6 @@ fn genesis_includes_topology() {
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
-
     let bytes = fs::read(supervisor.genesis_manifest()).expect("genesis manifest readable");
     let manifest: norito::json::Value =
         norito::json::from_slice(&bytes).expect("parse genesis json");
@@ -1491,7 +1422,6 @@ fn genesis_includes_topology() {
         "genesis manifest should include topology transaction"
     );
 }
-
 #[test]
 fn genesis_generation_invokes_kagami() {
     if !ports_available("genesis_generation_invokes_kagami") {
@@ -1504,7 +1434,6 @@ fn genesis_generation_invokes_kagami() {
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
-
     let log = fs::read_to_string(stub.log_path()).expect("kagami invocation log");
     assert!(
         log.contains("genesis") && log.contains("generate"),
@@ -1547,7 +1476,6 @@ fn genesis_generation_invokes_kagami() {
         "temporary genesis signing keys must be removed after kagami exits"
     );
 }
-
 #[test]
 fn generated_genesis_binds_topology_specific_block_cadence() {
     if !ports_available("generated_genesis_binds_topology_specific_block_cadence") {
@@ -1556,7 +1484,6 @@ fn generated_genesis_binds_topology_specific_block_cadence() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-
     for (preset, expected_cadence_ms) in [
         (ProfilePreset::SinglePeer, 1_000),
         (ProfilePreset::FourPeerBft, 1_000),
@@ -1573,7 +1500,6 @@ fn generated_genesis_binds_topology_specific_block_cadence() {
             .sumeragi()
             .block_cadence_ms()
             .get();
-
         assert_eq!(
             actual_cadence_ms,
             expected_cadence_ms,
@@ -1582,7 +1508,6 @@ fn generated_genesis_binds_topology_specific_block_cadence() {
         );
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn temporary_genesis_key_file_is_owner_only_and_removed_on_drop() {
@@ -1597,11 +1522,9 @@ fn temporary_genesis_key_file_is_owner_only_and_removed_on_drop() {
         fs::read_to_string(&path).expect("read temporary key"),
         format!("{}\n", ExposedPrivateKey(key_pair.private_key().clone()))
     );
-
     drop(key_file);
     assert!(!path.exists(), "temporary key should be removed on drop");
 }
-
 #[cfg(unix)]
 #[test]
 fn temporary_genesis_key_file_resolves_symlinked_directory_components() {
@@ -1610,7 +1533,6 @@ fn temporary_genesis_key_file_resolves_symlinked_directory_components() {
     fs::create_dir(&real_genesis_dir).expect("create real genesis directory");
     let linked_genesis_dir = temp.path().join("linked-genesis");
     symlink(&real_genesis_dir, &linked_genesis_dir).expect("link genesis directory");
-
     let key_file = TemporaryGenesisKeyFile::create(&linked_genesis_dir, &KeyPair::random())
         .expect("create key through symlinked directory");
     assert!(
@@ -1621,7 +1543,6 @@ fn temporary_genesis_key_file_resolves_symlinked_directory_components() {
         key_file.path().display()
     );
 }
-
 #[test]
 fn kagami_sign_failure_is_reported_and_removes_temporary_key() {
     if !ports_available("kagami_sign_failure_is_reported_and_removes_temporary_key") {
@@ -1631,7 +1552,6 @@ fn kagami_sign_failure_is_reported_and_removes_temporary_key() {
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
     let _failure = EnvVarGuard::set("MOCHI_KAGAMI_FAIL_SIGN", OsStr::new("1"));
-
     let error = match SupervisorBuilder::new(ProfilePreset::SinglePeer)
         .data_root(temp.path())
         .build()
@@ -1655,7 +1575,6 @@ fn kagami_sign_failure_is_reported_and_removes_temporary_key() {
         "temporary genesis signing key leaked after failure: {files:?}"
     );
 }
-
 #[test]
 fn genesis_profile_and_seed_forward_to_kagami() {
     if !ports_available("genesis_profile_and_seed_forward_to_kagami") {
@@ -1665,14 +1584,12 @@ fn genesis_profile_and_seed_forward_to_kagami() {
     let temp = tempfile::tempdir().expect("tempdir");
     let stub = KagamiStub::install(temp.path());
     let seed = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
-
     SupervisorBuilder::new(ProfilePreset::SinglePeer)
         .data_root(temp.path())
         .genesis_profile(GenesisProfile::Iroha3Dev)
         .vrf_seed_hex(seed)
         .build()
         .expect("build supervisor");
-
     let log = fs::read_to_string(stub.log_path()).expect("kagami invocation log");
     assert!(
         log.contains("--profile") && log.contains("iroha3-dev"),
@@ -1687,7 +1604,6 @@ fn genesis_profile_and_seed_forward_to_kagami() {
         "npos mode should be pinned when a genesis profile is used: {log}"
     );
 }
-
 #[test]
 fn peer_config_records_chain_and_fingerprint_header() {
     if !ports_available("peer_config_records_chain_and_fingerprint_header") {
@@ -1701,7 +1617,6 @@ fn peer_config_records_chain_and_fingerprint_header() {
         .genesis_profile(GenesisProfile::Iroha3Dev)
         .build()
         .expect("build supervisor");
-
     let manifest =
         RawGenesisTransaction::from_path(supervisor.genesis_manifest()).expect("genesis");
     let fingerprint = manifest
@@ -1714,12 +1629,10 @@ fn peer_config_records_chain_and_fingerprint_header() {
                 .map(|value| value.to_string())
         })
         .expect("consensus fingerprint");
-
     let peer = supervisor.peers().first().expect("peer");
     let config_text = fs::read_to_string(peer.config_path()).expect("read config");
     let expected_chain = format!("# mochi.chain_id = {}", supervisor.chain_id());
     let expected_fingerprint = format!("# mochi.consensus_fingerprint = {fingerprint}");
-
     assert!(
         config_text.contains(&expected_chain),
         "config should record chain id header"
@@ -1729,7 +1642,6 @@ fn peer_config_records_chain_and_fingerprint_header() {
         "config should record consensus fingerprint header"
     );
 }
-
 #[test]
 fn readiness_smoke_plan_uses_primary_signer_and_unique_nonces() {
     if !ports_available("readiness_smoke_plan_uses_primary_signer_and_unique_nonces") {
@@ -1742,12 +1654,10 @@ fn readiness_smoke_plan_uses_primary_signer_and_unique_nonces() {
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
-
     let plan = supervisor
         .readiness_smoke_plan_with_offset(3, 2)
         .expect("build readiness plan");
     assert_eq!(plan.transactions.len(), 3);
-
     let expected_authority = supervisor
         .readiness_smoke_signer()
         .expect("readiness signer available")
@@ -1766,7 +1676,6 @@ fn readiness_smoke_plan_uses_primary_signer_and_unique_nonces() {
         );
     }
 }
-
 #[test]
 fn export_snapshot_captures_storage_and_metadata() {
     if !ports_available("export_snapshot_captures_storage_and_metadata") {
@@ -1779,17 +1688,14 @@ fn export_snapshot_captures_storage_and_metadata() {
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
-
     let mut peer_aliases = Vec::new();
     let mut expected_storage = Vec::new();
     for (idx, peer) in supervisor.peers().iter().enumerate() {
         let storage_file = peer.storage_dir().join(format!("sentinel-{idx}.bin"));
         let storage_contents = format!("peer-storage-{idx}");
         fs::write(&storage_file, &storage_contents).expect("write storage sentinel");
-
         let snapshot_marker = peer.snapshot_dir().join("marker.txt");
         fs::write(&snapshot_marker, b"snapshot-marker").expect("write snapshot marker");
-
         let log_path = peer.log_path();
         if let Some(parent) = log_path.parent() {
             fs::create_dir_all(parent).expect("create logs directory");
@@ -1798,18 +1704,15 @@ fn export_snapshot_captures_storage_and_metadata() {
         peer_aliases.push(peer.alias().to_owned());
         expected_storage.push(storage_contents.into_bytes());
     }
-
     let snapshot_root = supervisor
         .export_snapshot(Some("Smoke Snapshot 2026"))
         .expect("export snapshot");
-
     assert_eq!(
         snapshot_root.file_name().unwrap(),
         std::ffi::OsStr::new("smoke-snapshot-2026"),
         "label should be sanitized before export"
     );
     assert!(snapshot_root.exists(), "snapshot directory should exist");
-
     let metadata_path = snapshot_root.join("metadata.json");
     let metadata_bytes = fs::read(&metadata_path).expect("read metadata");
     let metadata: Value =
@@ -1857,7 +1760,6 @@ fn export_snapshot_captures_storage_and_metadata() {
         peer_aliases.len(),
         "kura hashes should track every peer"
     );
-
     for (idx, alias) in peer_aliases.iter().enumerate() {
         let alias_root = snapshot_root.join("peers").join(alias);
         let storage_copy = alias_root
@@ -1869,7 +1771,6 @@ fn export_snapshot_captures_storage_and_metadata() {
             .join("marker.txt");
         let config_copy = alias_root.join("config.toml");
         let log_copy = alias_root.join("latest.log");
-
         assert_eq!(
             fs::read(&storage_copy).expect("storage copy should exist"),
             expected_storage[idx].as_slice(),
@@ -1897,7 +1798,6 @@ fn export_snapshot_captures_storage_and_metadata() {
             "kura hash should match exported storage contents"
         );
     }
-
     let genesis_copy = snapshot_root.join("genesis").join(GENESIS_FILE_NAME);
     let signed_genesis_copy = snapshot_root.join("genesis").join(GENESIS_SIGNED_FILE_NAME);
     assert!(
@@ -1909,7 +1809,6 @@ fn export_snapshot_captures_storage_and_metadata() {
         "snapshot should include the signed genesis wire file"
     );
 }
-
 #[test]
 fn snapshot_export_and_restore_hold_shared_selection_lease() {
     if !ports_available("snapshot_export_and_restore_hold_shared_selection_lease") {
@@ -1926,7 +1825,6 @@ fn snapshot_export_and_restore_hold_shared_selection_lease() {
     let expected = Some(supervisor.generation_id().to_owned());
     let storage = supervisor.peers()[0].storage_dir().to_path_buf();
     fs::write(storage.join("lease-marker"), b"snapshot").expect("write snapshot marker");
-
     let snapshot = supervisor
         .export_snapshot_with_selection_hook(Some("Selection Lease"), || {
             let error = GenerationTransaction::begin_replacing(&root, expected.clone())
@@ -1949,7 +1847,6 @@ fn snapshot_export_and_restore_hold_shared_selection_lease() {
     GenerationTransaction::begin_replacing(&root, expected)
         .expect("writer succeeds after snapshot operation releases its lease");
 }
-
 #[cfg(unix)]
 #[test]
 fn snapshot_operations_restore_exact_partial_running_set() {
@@ -1967,7 +1864,6 @@ fn snapshot_operations_restore_exact_partial_running_set() {
         .expect("build supervisor");
     supervisor.start_peer("peer0").expect("start peer0");
     supervisor.start_peer("peer2").expect("start peer2");
-
     let snapshot = supervisor
         .export_snapshot(Some("Partial Running Set"))
         .expect("export snapshot");
@@ -1978,7 +1874,6 @@ fn snapshot_operations_restore_exact_partial_running_set() {
         .map(|peer| peer.alias().to_owned())
         .collect::<Vec<_>>();
     assert_eq!(running_after_export, vec!["peer0", "peer2"]);
-
     supervisor
         .restore_snapshot(&snapshot)
         .expect("restore snapshot");
@@ -1991,7 +1886,6 @@ fn snapshot_operations_restore_exact_partial_running_set() {
     assert_eq!(running_after_restore, vec!["peer0", "peer2"]);
     supervisor.stop_all().expect("stop partial running set");
 }
-
 #[cfg(unix)]
 #[test]
 fn export_snapshot_failure_restores_full_running_set() {
@@ -2012,7 +1906,6 @@ fn export_snapshot_failure_restores_full_running_set() {
         .export_snapshot(Some("Duplicate Snapshot"))
         .expect("create first snapshot");
     assert!(supervisor.peers()[0].is_running());
-
     let error = supervisor
         .export_snapshot(Some("Duplicate Snapshot"))
         .expect_err("duplicate snapshot must fail after peers stop");
@@ -2023,7 +1916,6 @@ fn export_snapshot_failure_restores_full_running_set() {
     );
     supervisor.stop_all().expect("stop restored peer");
 }
-
 #[test]
 fn export_snapshot_preserves_multilane_catalog_and_ports() {
     if !ports_available("export_snapshot_preserves_multilane_catalog_and_ports") {
@@ -2032,7 +1924,6 @@ fn export_snapshot_preserves_multilane_catalog_and_ports() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-
     let mut nexus = toml::Table::new();
     nexus.insert("enabled".into(), toml::Value::Boolean(true));
     let mut lane0 = toml::Table::new();
@@ -2054,18 +1945,15 @@ fn export_snapshot_preserves_multilane_catalog_and_ports() {
         "dataspace_catalog".into(),
         toml::Value::Array(vec![toml::Value::Table(dataspace)]),
     );
-
     let mut supervisor =
         SupervisorBuilder::with_profile(npos_preset_profile(ProfilePreset::FourPeerBft))
             .data_root(temp.path())
             .nexus_config(nexus)
             .build()
             .expect("build supervisor");
-
     let snapshot_root = supervisor
         .export_snapshot(Some("Multilane Snapshot"))
         .expect("export snapshot");
-
     let genesis_bytes = fs::read(snapshot_root.join("genesis").join(GENESIS_FILE_NAME))
         .expect("read snapshot genesis");
     let manifest: Value = norito::json::from_slice(&genesis_bytes).expect("parse genesis json");
@@ -2074,7 +1962,6 @@ fn export_snapshot_preserves_multilane_catalog_and_ports() {
         .and_then(Value::as_str)
         .expect("chain field");
     assert_eq!(chain, supervisor.chain_id());
-
     let transactions = manifest
         .get("transactions")
         .and_then(Value::as_array)
@@ -2084,7 +1971,6 @@ fn export_snapshot_preserves_multilane_catalog_and_ports() {
         .filter_map(|tx| tx.get("topology").and_then(Value::as_array))
         .find(|entries| !entries.is_empty())
         .expect("non-empty topology transaction present");
-
     let actual_peer_ids: Vec<PeerId> = topology
         .iter()
         .map(|entry| {
@@ -2102,16 +1988,13 @@ fn export_snapshot_preserves_multilane_catalog_and_ports() {
         actual_peer_ids, expected_peer_ids,
         "snapshot genesis should preserve topology"
     );
-
     let peers_root = snapshot_root.join("peers");
     let mut seen_ports = HashSet::new();
     let mut genesis_files = HashSet::new();
-
     for peer in supervisor.peers() {
         let config_path = peers_root.join(peer.alias()).join("config.toml");
         let contents = fs::read_to_string(&config_path).expect("read snapshot config");
         let value: toml::Table = toml::from_str(&contents).expect("valid toml");
-
         let torii_addr = value
             .get("torii")
             .and_then(toml::Value::as_table)
@@ -2135,7 +2018,6 @@ fn export_snapshot_preserves_multilane_catalog_and_ports() {
                 "port {port} should be unique across exported configs"
             );
         }
-
         let genesis_file = value
             .get("genesis")
             .and_then(toml::Value::as_table)
@@ -2143,7 +2025,6 @@ fn export_snapshot_preserves_multilane_catalog_and_ports() {
             .and_then(toml::Value::as_str)
             .expect("genesis file path");
         genesis_files.insert(genesis_file.to_owned());
-
         let nexus_table = value
             .get("nexus")
             .and_then(toml::Value::as_table)
@@ -2196,14 +2077,12 @@ fn export_snapshot_preserves_multilane_catalog_and_ports() {
             Some(0)
         );
     }
-
     assert_eq!(
         genesis_files.len(),
         1,
         "all peers should share the same genesis manifest path"
     );
 }
-
 #[test]
 fn restore_snapshot_replaces_only_mutable_runtime_state() {
     if !ports_available("restore_snapshot_replaces_only_mutable_runtime_state") {
@@ -2216,7 +2095,6 @@ fn restore_snapshot_replaces_only_mutable_runtime_state() {
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
-
     let peer = &supervisor.peers()[0];
     let storage_dir = peer.storage_dir().to_path_buf();
     let snapshot_dir = peer.snapshot_dir().to_path_buf();
@@ -2224,7 +2102,6 @@ fn restore_snapshot_replaces_only_mutable_runtime_state() {
     let log_path = peer.log_path().to_path_buf();
     let genesis_path = supervisor.genesis_manifest().to_path_buf();
     let genesis_block_path = supervisor.genesis_block_file().to_path_buf();
-
     fs::write(storage_dir.join("marker.txt"), b"snapshot-data").expect("write storage marker");
     fs::write(snapshot_dir.join("inner.txt"), b"snapshot-inner").expect("write snapshot file");
     let original_config = fs::read(&config_path).expect("read original config");
@@ -2232,20 +2109,16 @@ fn restore_snapshot_replaces_only_mutable_runtime_state() {
         fs::create_dir_all(parent).expect("create log directory");
     }
     fs::write(&log_path, b"snapshot-log").expect("write log file");
-
     let snapshot_root = supervisor
         .export_snapshot(Some("Restore Demo 2026"))
         .expect("export snapshot");
-
     fs::write(storage_dir.join("marker.txt"), b"mutated-storage")
         .expect("overwrite storage marker");
     fs::remove_file(snapshot_dir.join("inner.txt")).expect("remove snapshot file");
     fs::write(&log_path, b"mutated-log").expect("mutate log");
-
     supervisor
         .restore_snapshot(&snapshot_root)
         .expect("restore snapshot by path");
-
     assert_eq!(
         fs::read(storage_dir.join("marker.txt")).expect("read storage marker after restore"),
         b"snapshot-data"
@@ -2272,7 +2145,6 @@ fn restore_snapshot_replaces_only_mutable_runtime_state() {
         fs::read(snapshot_root.join("genesis").join(GENESIS_SIGNED_FILE_NAME))
             .expect("read snapshot signed genesis")
     );
-
     let snapshot_name = snapshot_root
         .file_name()
         .unwrap()
@@ -2287,7 +2159,6 @@ fn restore_snapshot_replaces_only_mutable_runtime_state() {
         b"snapshot-data"
     );
 }
-
 #[test]
 fn restore_snapshot_rejects_genesis_hash_mismatch() {
     if !ports_available("restore_snapshot_rejects_genesis_hash_mismatch") {
@@ -2300,17 +2171,14 @@ fn restore_snapshot_rejects_genesis_hash_mismatch() {
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
-
     let snapshot_root = supervisor
         .export_snapshot(Some("Genesis Hash Mismatch"))
         .expect("export snapshot");
-
     fs::write(
         snapshot_root.join("genesis").join(GENESIS_FILE_NAME),
         b"mutated-genesis",
     )
     .expect("mutate snapshot genesis");
-
     let err = supervisor
         .restore_snapshot(&snapshot_root)
         .expect_err("restore should fail when genesis hash mismatches");
@@ -2322,7 +2190,6 @@ fn restore_snapshot_rejects_genesis_hash_mismatch() {
         other => panic!("expected SupervisorError::Config, got {other:?}"),
     }
 }
-
 #[test]
 fn restore_snapshot_rejects_tampered_signed_genesis_before_storage_mutation() {
     if !ports_available("restore_snapshot_rejects_tampered_signed_genesis_before_storage_mutation")
@@ -2349,7 +2216,6 @@ fn restore_snapshot_rejects_tampered_signed_genesis_before_storage_mutation() {
         b"tampered-signed-genesis",
     )
     .expect("tamper snapshot signed genesis");
-
     let error = supervisor
         .restore_snapshot(&snapshot_root)
         .expect_err("tampered signed genesis must fail before restore");
@@ -2366,7 +2232,6 @@ fn restore_snapshot_rejects_tampered_signed_genesis_before_storage_mutation() {
         "signed-genesis rejection must precede mutable storage replacement"
     );
 }
-
 #[test]
 fn restore_snapshot_rejects_tampered_peer_config_before_storage_mutation() {
     if !ports_available("restore_snapshot_rejects_tampered_peer_config_before_storage_mutation") {
@@ -2393,7 +2258,6 @@ fn restore_snapshot_rejects_tampered_peer_config_before_storage_mutation() {
         b"chain = \"tampered\"\n",
     )
     .expect("tamper snapshot peer config");
-
     let error = supervisor
         .restore_snapshot(&snapshot_root)
         .expect_err("tampered peer config must fail before restore");
@@ -2411,7 +2275,6 @@ fn restore_snapshot_rejects_tampered_peer_config_before_storage_mutation() {
         "peer-config rejection must precede mutable storage replacement"
     );
 }
-
 #[test]
 fn restore_snapshot_rejects_kura_hash_tampering() {
     if !ports_available("restore_snapshot_rejects_kura_hash_tampering") {
@@ -2424,14 +2287,12 @@ fn restore_snapshot_rejects_kura_hash_tampering() {
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
-
     let snapshot_root = supervisor
         .export_snapshot(Some("Kura Tamper"))
         .expect("export snapshot");
     let alias = supervisor.peers()[0].alias().to_owned();
     let storage_copy = snapshot_root.join("peers").join(&alias).join("storage");
     fs::write(storage_copy.join("tamper.bin"), b"tampered").expect("mutate snapshot storage");
-
     let err = supervisor
         .restore_snapshot(&snapshot_root)
         .expect_err("restore should fail when kura hash mismatches metadata");
@@ -2443,7 +2304,6 @@ fn restore_snapshot_rejects_kura_hash_tampering() {
         other => panic!("expected SupervisorError::Config, got {other:?}"),
     }
 }
-
 #[test]
 fn restore_snapshot_rejects_chain_mismatch() {
     if !ports_available("restore_snapshot_rejects_chain_mismatch") {
@@ -2456,7 +2316,6 @@ fn restore_snapshot_rejects_chain_mismatch() {
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
-
     let snapshot_root = supervisor
         .export_snapshot(Some("Chain Mismatch"))
         .expect("export snapshot");
@@ -2473,13 +2332,11 @@ fn restore_snapshot_rejects_chain_mismatch() {
         json::to_vec_pretty(&metadata).expect("serialize metadata"),
     )
     .expect("write mutated metadata");
-
     fs::write(
         supervisor.peers()[0].storage_dir().join("marker.txt"),
         b"mutated",
     )
     .expect("mutate storage");
-
     let err = supervisor
         .restore_snapshot(&snapshot_root)
         .expect_err("restore should fail when chains mismatch");
@@ -2491,7 +2348,6 @@ fn restore_snapshot_rejects_chain_mismatch() {
         other => panic!("expected SupervisorError::Config, got {other:?}"),
     }
 }
-
 #[test]
 fn restore_snapshot_rejects_missing_storage_layout() {
     if !ports_available("restore_snapshot_rejects_missing_storage_layout") {
@@ -2523,7 +2379,6 @@ fn restore_snapshot_rejects_missing_storage_layout() {
         .storage_dir()
         .join("live-layout-sentinel.bin");
     fs::write(&live_sentinel, b"live-state").expect("write live sentinel");
-
     let err = supervisor
         .restore_snapshot(&snapshot_root)
         .expect_err("unversioned storage layout must fail closed");
@@ -2541,7 +2396,6 @@ fn restore_snapshot_rejects_missing_storage_layout() {
         "layout rejection must happen before live storage is mutated"
     );
 }
-
 #[test]
 fn restore_snapshot_rejects_unknown_storage_layout() {
     if !ports_available("restore_snapshot_rejects_unknown_storage_layout") {
@@ -2573,7 +2427,6 @@ fn restore_snapshot_rejects_unknown_storage_layout() {
         .storage_dir()
         .join("live-layout-sentinel.bin");
     fs::write(&live_sentinel, b"live-state").expect("write live sentinel");
-
     let err = supervisor
         .restore_snapshot(&snapshot_root)
         .expect_err("unknown storage layout must fail closed");
@@ -2591,7 +2444,6 @@ fn restore_snapshot_rejects_unknown_storage_layout() {
         "layout rejection must happen before live storage is mutated"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn start_rejects_intermediate_storage_generations_symlink_before_spawn() {
@@ -2609,7 +2461,6 @@ fn start_rejects_intermediate_storage_generations_symlink_before_spawn() {
         .expect("build supervisor");
     let attacker = temp.path().join("attacker-start-storage");
     let sentinel = redirect_storage_generations_through_symlink(&supervisor.peers()[0], &attacker);
-
     let error = supervisor
         .start_all()
         .expect_err("intermediate storage symlink must fail closed");
@@ -2620,7 +2471,6 @@ fn start_rejects_intermediate_storage_generations_symlink_before_spawn() {
         b"must-not-touch"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn start_rejects_managed_kura_symlink_before_spawn() {
@@ -2642,7 +2492,6 @@ fn start_rejects_managed_kura_symlink_before_spawn() {
     fs::write(&sentinel, b"must-not-touch").expect("write attacker sentinel");
     symlink(&attacker, supervisor.peers()[0].storage_dir().join("kura"))
         .expect("redirect managed Kura directory");
-
     let error = supervisor
         .start_all()
         .expect_err("managed Kura symlink must fail closed");
@@ -2653,7 +2502,6 @@ fn start_rejects_managed_kura_symlink_before_spawn() {
         b"must-not-touch"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn export_rejects_intermediate_storage_generations_symlink_before_copy() {
@@ -2669,7 +2517,6 @@ fn export_rejects_intermediate_storage_generations_symlink_before_copy() {
         .expect("build supervisor");
     let attacker = temp.path().join("attacker-export-storage");
     let sentinel = redirect_storage_generations_through_symlink(&supervisor.peers()[0], &attacker);
-
     let error = supervisor
         .export_snapshot(Some("Must Not Exist"))
         .expect_err("intermediate storage symlink must fail closed");
@@ -2686,7 +2533,6 @@ fn export_rejects_intermediate_storage_generations_symlink_before_copy() {
         b"must-not-touch"
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn restore_rejects_intermediate_storage_generations_symlink_before_wipe() {
@@ -2705,7 +2551,6 @@ fn restore_rejects_intermediate_storage_generations_symlink_before_wipe() {
         .expect("export baseline snapshot");
     let attacker = temp.path().join("attacker-restore-storage");
     let sentinel = redirect_storage_generations_through_symlink(&supervisor.peers()[0], &attacker);
-
     let error = supervisor
         .restore_snapshot(&snapshot)
         .expect_err("intermediate storage symlink must fail before wipe");

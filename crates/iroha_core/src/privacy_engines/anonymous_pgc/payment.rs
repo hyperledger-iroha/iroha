@@ -20,11 +20,6 @@
 //! revealing the indices.  Since positive, zero, and negative openings are
 //! mutually exclusive and the admitted counts sum to `n`, these proofs cover
 //! exactly one sender, exactly `k` recipients, and exactly `n-k-1` decoys.
-
-use p256::{ProjectivePoint, Scalar, elliptic_curve::Field};
-use rand_core_06::{CryptoRng, RngCore};
-use sha2::{Digest, Sha256};
-
 use super::{
     AnonymousPgcError, AnonymousPgcParametersV1, AnonymousPgcPoolInvariantV1,
     TwistedElGamalCiphertextV1, TwistedElGamalPublicKeyV1,
@@ -33,7 +28,9 @@ use crate::privacy_engines::p256::{
     CanonicalScalarV1, CompressedPointV1, P256EngineError, SecretScalarV1, TranscriptBindingV1,
     TranscriptV1, health_checked_p256_rng_v1, random_nonzero_scalar,
 };
-
+use p256::{ProjectivePoint, Scalar, elliptic_curve::Field};
+use rand_core_06::{CryptoRng, RngCore};
+use sha2::{Digest, Sha256};
 /// Closed suite for the complete payment proof.
 pub const PGC_PAYMENT_SUITE_V1: &[u8] = b"iroha.anonymous-pgc.payment.p256.sha256.v1";
 /// Canonical payment-proof wire version.
@@ -47,7 +44,6 @@ pub const MAX_PGC_PAYMENT_PROOF_BYTES_V1: usize = 4 * 1024 * 1024;
 /// Closed supply-provenance fields bound into every payment statement.
 pub const PGC_PAYMENT_POOL_INVARIANT_SCHEMA_V1: &[u8] =
     b"total_supply:u32be|bootstrap_digest:32|bootstrap_proof_digest:32";
-
 const PAYMENT_MEMO_DIGEST_DOMAIN_V1: &[u8] = b"iroha.anonymous-pgc.payment.memo-and-ledger.v1";
 const WELL_FORMED_SUITE_V1: &[u8] = b"iroha.anonymous-pgc.payment.well-formed.v1";
 const BALANCE_SUITE_V1: &[u8] = b"iroha.anonymous-pgc.payment.balance.v1";
@@ -58,7 +54,6 @@ const DECOY_SELECTION_SUITE_V1: &[u8] = b"iroha.anonymous-pgc.payment.decoy-sele
 const SENDER_SELECTION_SUITE_V1: &[u8] = b"iroha.anonymous-pgc.payment.sender-selection.v1";
 const MAX_PROVER_RESTARTS: usize = 128;
 const RANGE_BITS: usize = 32;
-
 /// Public payment input, including the ledger ciphertexts queried at the
 /// statement's committed current root.
 #[derive(Clone, Copy, Debug)]
@@ -71,7 +66,6 @@ pub struct AnonymousPgcPaymentStatementV1<'a> {
     transcript_binding: TranscriptBindingV1<'a>,
     memo_and_ledger_digest: [u8; 32],
 }
-
 impl<'a> AnonymousPgcPaymentStatementV1<'a> {
     /// Construct a fully bound payment statement.
     ///
@@ -142,50 +136,42 @@ impl<'a> AnonymousPgcPaymentStatementV1<'a> {
             memo_and_ledger_digest,
         })
     }
-
     /// Ordered anonymity-set size.
     #[must_use]
     pub const fn anonymity_set_size(&self) -> usize {
         self.public_keys.len()
     }
-
     /// Exact positive-recipient count.
     #[must_use]
     pub const fn recipient_count(&self) -> usize {
         self.recipient_count
     }
-
     /// Immutable total-supply and bootstrap-provenance invariant for the pool.
     #[must_use]
     pub const fn pool_invariant(&self) -> AnonymousPgcPoolInvariantV1 {
         self.pool_invariant
     }
-
     /// Digest of the ordered public memo and queried current ciphertext table.
     #[must_use]
     pub const fn memo_and_ledger_digest(&self) -> [u8; 32] {
         self.memo_and_ledger_digest
     }
-
     /// Ordered public keys.
     #[must_use]
     pub const fn public_keys(&self) -> &'a [TwistedElGamalPublicKeyV1] {
         self.public_keys
     }
-
     /// Ordered public transfer memo.
     #[must_use]
     pub const fn transfer_ciphertexts(&self) -> &'a [TwistedElGamalCiphertextV1] {
         self.transfer_ciphertexts
     }
-
     /// Ordered current ledger ciphertexts.
     #[must_use]
     pub const fn current_balance_ciphertexts(&self) -> &'a [TwistedElGamalCiphertextV1] {
         self.current_balance_ciphertexts
     }
 }
-
 /// Secret payment openings supplied by the transaction builder.
 #[derive(Clone, Copy, Debug)]
 pub struct AnonymousPgcPaymentWitnessV1<'a> {
@@ -198,7 +184,6 @@ pub struct AnonymousPgcPaymentWitnessV1<'a> {
     /// Sender account secret key.
     pub sender_secret: &'a SecretScalarV1,
 }
-
 fn payment_proof_decode_limits(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     payload_len: usize,
@@ -250,7 +235,6 @@ fn payment_proof_decode_limits(
         32,
     ))
 }
-
 /// Canonical well-formedness proof for one transfer ciphertext.
 #[derive(
     Clone,
@@ -268,7 +252,6 @@ pub struct PgcTransferWellFormedProofV1 {
     randomness_response: CanonicalScalarV1,
     value_response: CanonicalScalarV1,
 }
-
 /// Schnorr proof that the aggregate transfer plaintext is zero.
 #[derive(
     Clone,
@@ -284,7 +267,6 @@ pub struct PgcBalanceConservationProofV1 {
     announcement: CompressedPointV1,
     randomness_response: CanonicalScalarV1,
 }
-
 /// Exact unsigned 32-bit Pedersen range proof.
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
@@ -295,7 +277,6 @@ pub struct PgcUnsignedRangeProofV1 {
     branch_challenges: [CanonicalScalarV1; RANGE_BITS * 2],
     branch_responses: [CanonicalScalarV1; RANGE_BITS * 2],
 }
-
 /// Proof that the hidden value in a Pedersen commitment is nonzero.
 #[derive(
     Clone,
@@ -315,7 +296,6 @@ pub struct PgcCommittedNonZeroProofV1 {
     inverse_blinding_response: CanonicalScalarV1,
     product_blinding_response: CanonicalScalarV1,
 }
-
 /// Exact range proof for `[1, 2^32-1]`.
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
@@ -325,7 +305,6 @@ pub struct PgcPositiveRangeProofV1 {
     unsigned: PgcUnsignedRangeProofV1,
     nonzero: PgcCommittedNonZeroProofV1,
 }
-
 /// Hidden selection of one recipient commitment and its committed index.
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
@@ -339,7 +318,6 @@ pub struct PgcRecipientSelectionProofV1 {
     index_blinding_responses: Vec<CanonicalScalarV1>,
     positive_range: PgcPositiveRangeProofV1,
 }
-
 /// Hidden selection of one zero-valued decoy and its committed index.
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
@@ -351,7 +329,6 @@ pub struct PgcDecoySelectionProofV1 {
     opening_responses: Vec<CanonicalScalarV1>,
     index_blinding_responses: Vec<CanonicalScalarV1>,
 }
-
 /// Hidden sender relation sharing one branch across ownership, transfer, and
 /// post-balance equations.
 #[derive(
@@ -370,7 +347,6 @@ pub struct PgcSenderSelectionProofV1 {
     transfer_range: PgcPositiveRangeProofV1,
     post_balance_range: PgcUnsignedRangeProofV1,
 }
-
 /// Canonical complete payment proof.
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
@@ -386,13 +362,11 @@ pub struct AnonymousPgcPaymentProofV1 {
     decoy_distinctness: Vec<PgcCommittedNonZeroProofV1>,
     sender: PgcSenderSelectionProofV1,
 }
-
 /// Fully verified all-or-nothing encrypted account effect.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifiedAnonymousPgcPaymentEffectV1 {
     next_balance_ciphertexts: Vec<TwistedElGamalCiphertextV1>,
 }
-
 impl VerifiedAnonymousPgcPaymentEffectV1 {
     /// Ordered successor ciphertexts.  The runtime must commit this complete
     /// vector atomically with the statement's successor root/epoch.
@@ -400,21 +374,18 @@ impl VerifiedAnonymousPgcPaymentEffectV1 {
     pub fn next_balance_ciphertexts(&self) -> &[TwistedElGamalCiphertextV1] {
         &self.next_balance_ciphertexts
     }
-
     /// Consume the verified effect.
     #[must_use]
     pub fn into_next_balance_ciphertexts(self) -> Vec<TwistedElGamalCiphertextV1> {
         self.next_balance_ciphertexts
     }
 }
-
 impl AnonymousPgcPaymentProofV1 {
     /// Encode this proof as canonical Norito.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         norito::codec::encode_adaptive(self)
     }
-
     /// Decode exactly one canonical proof and validate all statement-dependent
     /// dimensions before any curve equation is attempted.
     ///
@@ -443,7 +414,6 @@ impl AnonymousPgcPaymentProofV1 {
         proof.validate_shape(statement)?;
         Ok(proof)
     }
-
     fn validate_shape(
         &self,
         statement: &AnonymousPgcPaymentStatementV1<'_>,
@@ -484,7 +454,6 @@ impl AnonymousPgcPaymentProofV1 {
         Ok(())
     }
 }
-
 impl PgcTransferWellFormedProofV1 {
     fn validate(&self) -> Result<(), AnonymousPgcError> {
         let _ = self.announcement_left.to_projective()?;
@@ -494,7 +463,6 @@ impl PgcTransferWellFormedProofV1 {
         Ok(())
     }
 }
-
 impl PgcBalanceConservationProofV1 {
     fn validate(&self) -> Result<(), AnonymousPgcError> {
         let _ = self.announcement.to_projective()?;
@@ -502,7 +470,6 @@ impl PgcBalanceConservationProofV1 {
         Ok(())
     }
 }
-
 impl PgcUnsignedRangeProofV1 {
     fn validate(&self) -> Result<(), AnonymousPgcError> {
         for point in &self.bit_commitments {
@@ -514,7 +481,6 @@ impl PgcUnsignedRangeProofV1 {
         Ok(())
     }
 }
-
 impl PgcCommittedNonZeroProofV1 {
     fn validate(&self) -> Result<(), AnonymousPgcError> {
         let _ = self.inverse_commitment.to_projective()?;
@@ -526,14 +492,12 @@ impl PgcCommittedNonZeroProofV1 {
         Ok(())
     }
 }
-
 impl PgcPositiveRangeProofV1 {
     fn validate(&self) -> Result<(), AnonymousPgcError> {
         self.unsigned.validate()?;
         self.nonzero.validate()
     }
 }
-
 impl PgcRecipientSelectionProofV1 {
     fn validate(&self, count: usize) -> Result<(), AnonymousPgcError> {
         let _ = self.value_commitment.to_projective()?;
@@ -555,7 +519,6 @@ impl PgcRecipientSelectionProofV1 {
         self.positive_range.validate()
     }
 }
-
 impl PgcDecoySelectionProofV1 {
     fn validate(&self, count: usize) -> Result<(), AnonymousPgcError> {
         let _ = self.index_commitment.to_projective()?;
@@ -576,7 +539,6 @@ impl PgcDecoySelectionProofV1 {
         Ok(())
     }
 }
-
 impl PgcSenderSelectionProofV1 {
     fn validate(&self, count: usize) -> Result<(), AnonymousPgcError> {
         let _ = self.transfer_magnitude_commitment.to_projective()?;
@@ -600,7 +562,6 @@ impl PgcSenderSelectionProofV1 {
         self.post_balance_range.validate()
     }
 }
-
 /// Encrypt a signed transfer in the closed interval
 /// `[-(2^32-1), 2^32-1]`.
 ///
@@ -624,7 +585,6 @@ pub fn encrypt_signed_with_randomness(
         )?,
     })
 }
-
 /// Derive all post-payment encrypted balances in canonical key order.
 ///
 /// The returned vector is an all-or-nothing effect: verification callers must
@@ -646,7 +606,6 @@ pub fn derive_atomic_ciphertext_updates(
         .map(|(current, transfer)| super::add_ciphertexts(current, transfer))
         .collect()
 }
-
 fn payment_value_scalar(value: i64) -> Result<Scalar, AnonymousPgcError> {
     let magnitude = value.unsigned_abs();
     if magnitude > u64::from(u32::MAX) {
@@ -655,14 +614,12 @@ fn payment_value_scalar(value: i64) -> Result<Scalar, AnonymousPgcError> {
     let scalar = Scalar::from(magnitude);
     Ok(if value < 0 { -scalar } else { scalar })
 }
-
 fn pair_count(count: usize) -> Result<usize, AnonymousPgcError> {
     count
         .checked_mul(count.saturating_sub(1))
         .and_then(|value| value.checked_div(2))
         .ok_or(AnonymousPgcError::InvalidPaymentProofShape)
 }
-
 fn memo_and_ledger_digest(
     public_keys: &[TwistedElGamalPublicKeyV1],
     transfers: &[TwistedElGamalCiphertextV1],
@@ -690,7 +647,6 @@ fn memo_and_ledger_digest(
     }
     Ok(hash.finalize().into())
 }
-
 fn payment_transcript(
     suite: &'static [u8],
     statement: &AnonymousPgcPaymentStatementV1<'_>,
@@ -742,7 +698,6 @@ fn payment_transcript(
     }
     Ok(transcript)
 }
-
 fn append_role_and_ordinal(
     transcript: &mut TranscriptV1,
     role: &[u8],
@@ -752,19 +707,16 @@ fn append_role_and_ordinal(
     transcript.append_message(b"proof_ordinal", &ordinal.to_be_bytes())?;
     Ok(())
 }
-
 fn sum_scalars(values: impl IntoIterator<Item = Scalar>) -> Scalar {
     values
         .into_iter()
         .fold(Scalar::ZERO, |sum, value| sum + value)
 }
-
 fn sum_points(values: impl IntoIterator<Item = ProjectivePoint>) -> ProjectivePoint {
     values
         .into_iter()
         .fold(ProjectivePoint::IDENTITY, |sum, value| sum + value)
 }
-
 fn prove_well_formed<R>(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     index: usize,
@@ -817,7 +769,6 @@ where
     }
     Err(AnonymousPgcError::ProverRestartExhausted)
 }
-
 fn verify_well_formed(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     index: usize,
@@ -850,7 +801,6 @@ fn verify_well_formed(
     }
     Ok(())
 }
-
 fn prove_balance_conservation<R>(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     randomness: Scalar,
@@ -885,7 +835,6 @@ where
     }
     Err(AnonymousPgcError::ProverRestartExhausted)
 }
-
 fn verify_balance_conservation(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     proof: &PgcBalanceConservationProofV1,
@@ -911,7 +860,6 @@ fn verify_balance_conservation(
     }
     Ok(())
 }
-
 fn prove_unsigned_range<R>(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     role: &[u8],
@@ -938,7 +886,6 @@ where
             bit_blindings.push(bit_blinding);
         }
         bit_blindings.push(blinding - partial_blinding);
-
         let mut bit_commitments = Vec::with_capacity(RANGE_BITS);
         let mut failed = false;
         for (bit, bit_blinding) in bit_blindings.iter().copied().enumerate() {
@@ -966,7 +913,6 @@ where
         if summed_commitments != commitment {
             return Err(AnonymousPgcError::InvalidPaymentWitness);
         }
-
         let mut challenges = vec![Scalar::ZERO; RANGE_BITS * 2];
         let mut responses = vec![Scalar::ZERO; RANGE_BITS * 2];
         let mut real_masks = vec![Scalar::ZERO; RANGE_BITS];
@@ -1005,7 +951,6 @@ where
         if failed {
             continue;
         }
-
         let mut transcript = payment_transcript(RANGE_SUITE_V1, statement)?;
         append_role_and_ordinal(&mut transcript, role, ordinal)?;
         transcript.append_point(b"value_commitment", &commitment_encoded)?;
@@ -1055,7 +1000,6 @@ where
     }
     Err(AnonymousPgcError::ProverRestartExhausted)
 }
-
 fn verify_unsigned_range(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     role: &[u8],
@@ -1076,7 +1020,6 @@ fn verify_unsigned_range(
     if summed_commitments != commitment {
         return Err(AnonymousPgcError::PaymentProofEquationFailed);
     }
-
     let mut announcements = Vec::with_capacity(RANGE_BITS * 2);
     for bit in 0..RANGE_BITS {
         let bit_commitment = proof.bit_commitments[bit].to_projective()?;
@@ -1094,7 +1037,6 @@ fn verify_unsigned_range(
             )?);
         }
     }
-
     let mut transcript = payment_transcript(RANGE_SUITE_V1, statement)?;
     append_role_and_ordinal(&mut transcript, role, ordinal)?;
     transcript.append_point(b"value_commitment", &commitment_encoded)?;
@@ -1124,7 +1066,6 @@ fn verify_unsigned_range(
     }
     Ok(())
 }
-
 fn prove_committed_nonzero<R>(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     role: &[u8],
@@ -1192,7 +1133,6 @@ where
     }
     Err(AnonymousPgcError::ProverRestartExhausted)
 }
-
 fn verify_committed_nonzero(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     role: &[u8],
@@ -1225,7 +1165,6 @@ fn verify_committed_nonzero(
     }
     Ok(())
 }
-
 fn prove_positive_range<R>(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     role: &[u8],
@@ -1254,7 +1193,6 @@ where
         )?,
     })
 }
-
 fn verify_positive_range(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     role: &[u8],
@@ -1266,7 +1204,6 @@ fn verify_positive_range(
     verify_unsigned_range(statement, role, ordinal, commitment, &proof.unsigned)?;
     verify_committed_nonzero(statement, role, ordinal, commitment, &proof.nonzero)
 }
-
 fn recipient_selection_announcements(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     value_commitment: ProjectivePoint,
@@ -1299,7 +1236,6 @@ fn recipient_selection_announcements(
     }
     Ok(announcements)
 }
-
 fn recipient_selection_challenge(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     ordinal: u32,
@@ -1325,7 +1261,6 @@ fn recipient_selection_challenge(
         .challenge_nonzero_scalar(b"selection_challenge", 0)?
         .to_scalar()?)
 }
-
 fn prove_recipient_selection<R>(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     ordinal: u32,
@@ -1369,7 +1304,6 @@ where
         else {
             continue;
         };
-
         let n = statement.anonymity_set_size();
         let mut challenges = vec![Scalar::ZERO; n];
         let mut value_responses = vec![Scalar::ZERO; n];
@@ -1412,7 +1346,6 @@ where
         challenges[selected_index] = global_challenge - simulated_sum;
         value_responses[selected_index] = value_mask + challenges[selected_index] * rerandomizer;
         index_responses[selected_index] = index_mask + challenges[selected_index] * index_blinding;
-
         let value_blinding = transfer_randomness + rerandomizer;
         let positive_range = prove_positive_range(
             statement,
@@ -1445,7 +1378,6 @@ where
     }
     Err(AnonymousPgcError::ProverRestartExhausted)
 }
-
 fn verify_recipient_selection(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     ordinal: u32,
@@ -1499,7 +1431,6 @@ fn verify_recipient_selection(
         &proof.positive_range,
     )
 }
-
 fn decoy_selection_announcements(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     index_commitment: ProjectivePoint,
@@ -1530,7 +1461,6 @@ fn decoy_selection_announcements(
     }
     Ok(announcements)
 }
-
 fn decoy_selection_challenge(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     ordinal: u32,
@@ -1554,7 +1484,6 @@ fn decoy_selection_challenge(
         .challenge_nonzero_scalar(b"selection_challenge", 0)?
         .to_scalar()?)
 }
-
 fn prove_decoy_selection<R>(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     ordinal: u32,
@@ -1645,7 +1574,6 @@ where
     }
     Err(AnonymousPgcError::ProverRestartExhausted)
 }
-
 fn verify_decoy_selection(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     ordinal: u32,
@@ -1686,7 +1614,6 @@ fn verify_decoy_selection(
     }
     Ok(())
 }
-
 fn prove_distinct_indices<R>(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     role: &[u8],
@@ -1728,7 +1655,6 @@ where
     }
     Ok(proofs)
 }
-
 fn verify_distinct_indices(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     role: &[u8],
@@ -1753,20 +1679,17 @@ fn verify_distinct_indices(
     }
     Ok(())
 }
-
 type SenderAnnouncementsV1 = (
     CompressedPointV1,
     CompressedPointV1,
     CompressedPointV1,
     CompressedPointV1,
 );
-
 struct SenderPublicCommitmentsV1 {
     transfer_magnitude: ProjectivePoint,
     post_balance: ProjectivePoint,
     index: ProjectivePoint,
 }
-
 struct SenderResponseSlicesV1<'a> {
     challenges: &'a [Scalar],
     inverse_key: &'a [Scalar],
@@ -1774,7 +1697,6 @@ struct SenderResponseSlicesV1<'a> {
     transfer_blinding: &'a [Scalar],
     index_blinding: &'a [Scalar],
 }
-
 fn sender_selection_announcements(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     commitments: &SenderPublicCommitmentsV1,
@@ -1816,7 +1738,6 @@ fn sender_selection_announcements(
     }
     Ok(announcements)
 }
-
 fn sender_selection_challenge(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     transfer_magnitude_commitment: &CompressedPointV1,
@@ -1852,7 +1773,6 @@ fn sender_selection_challenge(
         .challenge_nonzero_scalar(b"selection_challenge", 0)?
         .to_scalar()?)
 }
-
 fn prove_sender_selection<R>(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     sender_index: usize,
@@ -1914,7 +1834,6 @@ where
         let Ok(index_commitment) = CompressedPointV1::from_projective(index_point) else {
             continue;
         };
-
         let n = statement.anonymity_set_size();
         let mut challenges = vec![Scalar::ZERO; n];
         let mut inverse_key_responses = vec![Scalar::ZERO; n];
@@ -1978,7 +1897,6 @@ where
         transfer_responses[sender_index] =
             transfer_mask + sender_challenge * (transfer_commitment_blinding + transfer_randomness);
         index_responses[sender_index] = index_mask + sender_challenge * index_blinding;
-
         let transfer_range = prove_positive_range(
             statement,
             b"sender-transfer-magnitude",
@@ -2029,7 +1947,6 @@ where
     }
     Err(AnonymousPgcError::ProverRestartExhausted)
 }
-
 fn verify_sender_selection(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     proof: &PgcSenderSelectionProofV1,
@@ -2107,7 +2024,6 @@ fn verify_sender_selection(
         &proof.post_balance_range,
     )
 }
-
 fn validate_payment_witness(
     statement: &AnonymousPgcPaymentStatementV1<'_>,
     witness: &AnonymousPgcPaymentWitnessV1<'_>,
@@ -2162,7 +2078,6 @@ fn validate_payment_witness(
         .map_err(|_| AnonymousPgcError::InvalidPaymentWitness)?;
     Ok((recipients, decoys, post_balance))
 }
-
 /// Prove the complete Anonymous-PGC payment legality relation.
 ///
 /// # Errors
@@ -2200,7 +2115,6 @@ where
     );
     let balance_conservation =
         prove_balance_conservation(statement, aggregate_randomness, &mut checked_rng)?;
-
     let mut recipients = Vec::with_capacity(recipient_indices.len());
     let mut recipient_blindings = Vec::with_capacity(recipient_indices.len());
     for (ordinal, index) in recipient_indices.iter().copied().enumerate() {
@@ -2229,7 +2143,6 @@ where
         &recipient_blindings,
         &mut checked_rng,
     )?;
-
     let mut decoys = Vec::with_capacity(decoy_indices.len());
     let mut decoy_blindings = Vec::with_capacity(decoy_indices.len());
     for (ordinal, index) in decoy_indices.iter().copied().enumerate() {
@@ -2255,7 +2168,6 @@ where
         &decoy_blindings,
         &mut checked_rng,
     )?;
-
     let sender_value = witness.transfer_values[witness.sender_index];
     let sender_magnitude = u32::try_from(sender_value.unsigned_abs())
         .map_err(|_| AnonymousPgcError::InvalidPaymentWitness)?;
@@ -2268,7 +2180,6 @@ where
         post_balance,
         &mut checked_rng,
     )?;
-
     let proof = AnonymousPgcPaymentProofV1 {
         version: PGC_PAYMENT_PROOF_VERSION_V1,
         well_formed,
@@ -2290,7 +2201,6 @@ where
     verify_payment(statement, &proof).map_err(|_| AnonymousPgcError::ProverSelfCheckFailed)?;
     Ok(proof)
 }
-
 /// Verify every payment sub-language and return the complete atomic encrypted
 /// account effect.
 ///
@@ -2352,7 +2262,6 @@ pub fn verify_payment(
         next_balance_ciphertexts,
     })
 }
-
 /// Decode and verify canonical opaque payment-proof bytes.
 ///
 /// # Errors
@@ -2366,27 +2275,22 @@ pub fn verify_payment_encoded(
     let proof = AnonymousPgcPaymentProofV1::decode_exact(proof_bytes, statement)?;
     verify_payment(statement, &proof)
 }
-
 #[cfg(test)]
 mod tests {
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
-
     use super::*;
     use crate::privacy_engines::anonymous_pgc::TwistedElGamalKeyPairV1;
-
+    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyDynamicUnsignedRangeProofV1 {
         bit_commitments: Vec<CompressedPointV1>,
         branch_challenges: Vec<CanonicalScalarV1>,
         branch_responses: Vec<CanonicalScalarV1>,
     }
-
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyDynamicPositiveRangeProofV1 {
         unsigned: LegacyDynamicUnsignedRangeProofV1,
         nonzero: PgcCommittedNonZeroProofV1,
     }
-
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyDynamicRecipientSelectionProofV1 {
         value_commitment: CompressedPointV1,
@@ -2396,7 +2300,6 @@ mod tests {
         index_blinding_responses: Vec<CanonicalScalarV1>,
         positive_range: LegacyDynamicPositiveRangeProofV1,
     }
-
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyDynamicSenderSelectionProofV1 {
         transfer_magnitude_commitment: CompressedPointV1,
@@ -2410,7 +2313,6 @@ mod tests {
         transfer_range: LegacyDynamicPositiveRangeProofV1,
         post_balance_range: LegacyDynamicUnsignedRangeProofV1,
     }
-
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyDynamicPaymentProofV1 {
         version: u8,
@@ -2422,7 +2324,6 @@ mod tests {
         decoy_distinctness: Vec<PgcCommittedNonZeroProofV1>,
         sender: LegacyDynamicSenderSelectionProofV1,
     }
-
     fn legacy_dynamic_unsigned_range_v1(
         proof: &PgcUnsignedRangeProofV1,
     ) -> LegacyDynamicUnsignedRangeProofV1 {
@@ -2432,7 +2333,6 @@ mod tests {
             branch_responses: proof.branch_responses.to_vec(),
         }
     }
-
     fn legacy_dynamic_positive_range_v1(
         proof: &PgcPositiveRangeProofV1,
     ) -> LegacyDynamicPositiveRangeProofV1 {
@@ -2441,7 +2341,6 @@ mod tests {
             nonzero: proof.nonzero,
         }
     }
-
     fn legacy_dynamic_payment_v1(
         proof: &AnonymousPgcPaymentProofV1,
     ) -> LegacyDynamicPaymentProofV1 {
@@ -2483,31 +2382,26 @@ mod tests {
             },
         }
     }
-
     struct KatRng {
         seed: [u8; 32],
         counter: u64,
     }
-
     impl KatRng {
         fn new(seed: [u8; 32]) -> Self {
             Self { seed, counter: 0 }
         }
     }
-
     impl RngCore for KatRng {
         fn next_u32(&mut self) -> u32 {
             let mut bytes = [0_u8; 4];
             self.fill_bytes(&mut bytes);
             u32::from_be_bytes(bytes)
         }
-
         fn next_u64(&mut self) -> u64 {
             let mut bytes = [0_u8; 8];
             self.fill_bytes(&mut bytes);
             u64::from_be_bytes(bytes)
         }
-
         fn fill_bytes(&mut self, destination: &mut [u8]) {
             let mut offset = 0;
             while offset < destination.len() {
@@ -2522,30 +2416,23 @@ mod tests {
                 offset += take;
             }
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
             self.fill_bytes(destination);
             Ok(())
         }
     }
-
     impl CryptoRng for KatRng {}
-
     struct PartialFailureRng;
-
     impl RngCore for PartialFailureRng {
         fn next_u32(&mut self) -> u32 {
             panic!("PGC payment must use the fallible RNG interface")
         }
-
         fn next_u64(&mut self) -> u64 {
             panic!("PGC payment must use the fallible RNG interface")
         }
-
         fn fill_bytes(&mut self, _destination: &mut [u8]) {
             panic!("PGC payment must use the fallible RNG interface")
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
             for (index, byte) in destination.iter_mut().take(19).enumerate() {
                 *byte = index as u8;
@@ -2555,15 +2442,12 @@ mod tests {
             ))
         }
     }
-
     impl CryptoRng for PartialFailureRng {}
-
     fn secret(value: u64) -> SecretScalarV1 {
         let mut bytes = [0_u8; 32];
         bytes[24..].copy_from_slice(&value.to_be_bytes());
         SecretScalarV1::from_bytes(bytes).expect("nonzero test scalar")
     }
-
     fn binding() -> TranscriptBindingV1<'static> {
         let parameters = AnonymousPgcParametersV1::get().expect("parameters");
         TranscriptBindingV1 {
@@ -2579,7 +2463,6 @@ mod tests {
             generator_digest: parameters.generator_digest(),
         }
     }
-
     struct Fixture {
         key_pairs: Vec<TwistedElGamalKeyPairV1>,
         public_keys: Vec<TwistedElGamalPublicKeyV1>,
@@ -2591,7 +2474,6 @@ mod tests {
         recipient_count: usize,
         total_supply: u32,
     }
-
     impl Fixture {
         fn new() -> Self {
             let mut key_pairs = (2_u64..18)
@@ -2653,7 +2535,6 @@ mod tests {
                 total_supply: 1_600,
             }
         }
-
         fn boundary_64() -> Self {
             let mut key_pairs = (1_000_u64..1_064)
                 .map(|value| TwistedElGamalKeyPairV1::from_secret(secret(value)).expect("key pair"))
@@ -2714,12 +2595,10 @@ mod tests {
                 total_supply: 640,
             }
         }
-
         fn pool_invariant(&self) -> AnonymousPgcPoolInvariantV1 {
             AnonymousPgcPoolInvariantV1::new(self.total_supply, [0x87; 32], [0x88; 32])
                 .expect("pool invariant")
         }
-
         fn statement(&self) -> AnonymousPgcPaymentStatementV1<'_> {
             AnonymousPgcPaymentStatementV1::new(
                 &self.public_keys,
@@ -2731,7 +2610,6 @@ mod tests {
             )
             .expect("payment statement")
         }
-
         fn witness(&self) -> AnonymousPgcPaymentWitnessV1<'_> {
             AnonymousPgcPaymentWitnessV1 {
                 transfer_values: &self.transfer_values,
@@ -2740,22 +2618,18 @@ mod tests {
                 sender_secret: self.key_pairs[self.sender_index].secret_scalar(),
             }
         }
-
         fn prove(&self) -> AnonymousPgcPaymentProofV1 {
             let mut rng = KatRng::new([0x91; 32]);
             prove_payment(&self.statement(), &self.witness(), &mut rng).expect("payment proof")
         }
     }
-
     fn mutate_scalar(value: CanonicalScalarV1) -> CanonicalScalarV1 {
         CanonicalScalarV1::from_scalar(value.to_scalar().expect("scalar") + Scalar::ONE)
     }
-
     fn negate_point(value: CompressedPointV1) -> CompressedPointV1 {
         CompressedPointV1::from_projective(-value.to_projective().expect("point"))
             .expect("nonidentity inverse")
     }
-
     #[test]
     fn complete_payment_proves_verifies_and_derives_atomic_effect() {
         let fixture = Fixture::new();
@@ -2791,7 +2665,6 @@ mod tests {
             120
         );
     }
-
     #[test]
     fn payment_known_answer_vector_is_stable() {
         let fixture = Fixture::new();
@@ -2808,7 +2681,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn first_release_rejects_legacy_dynamic_range_array_headers() {
         let fixture = Fixture::new();
@@ -2827,7 +2699,6 @@ mod tests {
             Err(AnonymousPgcError::InvalidNoritoEncoding)
         ));
     }
-
     #[test]
     fn complete_n64_boundary_fits_cap_decodes_verifies_and_is_atomic() {
         let fixture = Fixture::boundary_64();
@@ -2859,7 +2730,6 @@ mod tests {
             11
         );
     }
-
     #[test]
     fn rejects_cross_class_overlap_attempts_before_proof_composition() {
         let fixture = Fixture::new();
@@ -2932,7 +2802,6 @@ mod tests {
             Err(AnonymousPgcError::InvalidPaymentWitness)
         ));
     }
-
     #[test]
     fn rejects_false_witnesses_and_insolvency() {
         let mut fixture = Fixture::new();
@@ -2942,14 +2811,12 @@ mod tests {
             prove_payment(&fixture.statement(), &fixture.witness(), &mut rng),
             Err(AnonymousPgcError::InvalidPaymentWitness)
         ));
-
         let mut fixture = Fixture::new();
         fixture.transfer_values[3] = 1;
         assert!(matches!(
             prove_payment(&fixture.statement(), &fixture.witness(), &mut rng),
             Err(AnonymousPgcError::InvalidPaymentWitness)
         ));
-
         let mut fixture = Fixture::new();
         fixture.current_balances[fixture.sender_index] = super::super::encrypt_with_randomness(
             fixture.public_keys[fixture.sender_index],
@@ -2961,7 +2828,6 @@ mod tests {
             prove_payment(&fixture.statement(), &fixture.witness(), &mut rng),
             Err(AnonymousPgcError::InvalidPaymentWitness)
         ));
-
         let fixture = Fixture::new();
         let wrong_secret = secret(99);
         let wrong_witness = AnonymousPgcPaymentWitnessV1 {
@@ -2975,7 +2841,6 @@ mod tests {
             Err(AnonymousPgcError::InvalidPaymentWitness)
         ));
     }
-
     #[test]
     fn complete_payment_rejects_partial_entropy_failure_before_proof_emission() {
         let fixture = Fixture::new();
@@ -2990,28 +2855,23 @@ mod tests {
             ))
         ));
     }
-
     #[test]
     fn mutating_each_proof_family_is_rejected() {
         let fixture = Fixture::new();
         let statement = fixture.statement();
         let proof = fixture.prove();
-
         let mut changed = proof.clone();
         changed.well_formed[0].value_response =
             mutate_scalar(changed.well_formed[0].value_response);
         assert!(verify_payment(&statement, &changed).is_err());
-
         let mut changed = proof.clone();
         changed.balance_conservation.randomness_response =
             mutate_scalar(changed.balance_conservation.randomness_response);
         assert!(verify_payment(&statement, &changed).is_err());
-
         let mut changed = proof.clone();
         changed.recipients[0].value_blinding_responses[0] =
             mutate_scalar(changed.recipients[0].value_blinding_responses[0]);
         assert!(verify_payment(&statement, &changed).is_err());
-
         let mut changed = proof.clone();
         changed.recipients[0]
             .positive_range
@@ -3023,7 +2883,6 @@ mod tests {
                 .branch_responses[0],
         );
         assert!(verify_payment(&statement, &changed).is_err());
-
         let mut changed = proof.clone();
         changed.recipients[0]
             .positive_range
@@ -3035,42 +2894,34 @@ mod tests {
                 .inverse_response,
         );
         assert!(verify_payment(&statement, &changed).is_err());
-
         let mut changed = proof.clone();
         changed.recipient_distinctness[0].product_blinding_response =
             mutate_scalar(changed.recipient_distinctness[0].product_blinding_response);
         assert!(verify_payment(&statement, &changed).is_err());
-
         let mut changed = proof.clone();
         changed.decoys[0].opening_responses[0] =
             mutate_scalar(changed.decoys[0].opening_responses[0]);
         assert!(verify_payment(&statement, &changed).is_err());
-
         let mut changed = proof.clone();
         changed.decoy_distinctness[0].inverse_response =
             mutate_scalar(changed.decoy_distinctness[0].inverse_response);
         assert!(verify_payment(&statement, &changed).is_err());
-
         let mut changed = proof.clone();
         changed.sender.inverse_key_responses[0] =
             mutate_scalar(changed.sender.inverse_key_responses[0]);
         assert!(verify_payment(&statement, &changed).is_err());
-
         let mut changed = proof.clone();
         changed.sender.transfer_range.unsigned.branch_challenges[0] =
             mutate_scalar(changed.sender.transfer_range.unsigned.branch_challenges[0]);
         assert!(verify_payment(&statement, &changed).is_err());
-
         let mut changed = proof.clone();
         changed.sender.post_balance_range.branch_responses[0] =
             mutate_scalar(changed.sender.post_balance_range.branch_responses[0]);
         assert!(verify_payment(&statement, &changed).is_err());
-
         let mut changed = proof;
         changed.recipients.swap(0, 1);
         assert!(verify_payment(&statement, &changed).is_err());
     }
-
     #[test]
     fn every_ordered_memo_and_ledger_component_changes_the_bound_digest() {
         let fixture = Fixture::new();
@@ -3089,7 +2940,6 @@ mod tests {
                 .expect("digest"),
                 baseline
             );
-
             for component in 0..4 {
                 let mut transfers = fixture.transfers.clone();
                 let mut current = fixture.current_balances.clone();
@@ -3125,12 +2975,10 @@ mod tests {
             baseline
         );
     }
-
     #[test]
     fn proof_is_bound_to_current_table_ordered_memo_and_transcript() {
         let fixture = Fixture::new();
         let proof = fixture.prove();
-
         let mut wrong_current = fixture.current_balances.clone();
         wrong_current[0] =
             super::super::encrypt_with_randomness(fixture.public_keys[0], 101, &secret(333))
@@ -3145,7 +2993,6 @@ mod tests {
         )
         .expect("statement");
         assert!(verify_payment(&wrong_current_statement, &proof).is_err());
-
         let mut reordered_transfers = fixture.transfers.clone();
         reordered_transfers.swap(0, 1);
         let reordered_statement = AnonymousPgcPaymentStatementV1::new(
@@ -3158,7 +3005,6 @@ mod tests {
         )
         .expect("statement");
         assert!(verify_payment(&reordered_statement, &proof).is_err());
-
         let mut changed_binding = binding();
         changed_binding.statement_digest[0] ^= 1;
         let changed_statement = AnonymousPgcPaymentStatementV1::new(
@@ -3171,7 +3017,6 @@ mod tests {
         )
         .expect("statement");
         assert!(verify_payment(&changed_statement, &proof).is_err());
-
         for changed_invariant in [
             AnonymousPgcPoolInvariantV1::new(fixture.total_supply + 1, [0x87; 32], [0x88; 32])
                 .expect("changed supply"),
@@ -3196,7 +3041,6 @@ mod tests {
             assert!(verify_payment(&changed_statement, &proof).is_err());
         }
     }
-
     #[test]
     fn decoder_caps_versions_shapes_and_atomic_effects_fail_closed() {
         let fixture = Fixture::new();
@@ -3216,14 +3060,12 @@ mod tests {
             ),
             Err(AnonymousPgcError::EncodingTooLarge { .. })
         ));
-
         let mut unknown = proof.clone();
         unknown.version += 1;
         assert!(matches!(
             AnonymousPgcPaymentProofV1::decode_exact(&unknown.encode(), &statement),
             Err(AnonymousPgcError::UnsupportedPaymentProofVersion { .. })
         ));
-
         let mut oversized_count = proof.clone();
         oversized_count
             .decoy_distinctness
@@ -3244,17 +3086,14 @@ mod tests {
             AnonymousPgcPaymentProofV1::decode_exact(&forged, &statement),
             Err(AnonymousPgcError::InvalidNoritoEncoding)
         ));
-
         let mut wrong_shape = proof;
         wrong_shape.recipients.pop();
         assert!(matches!(
             AnonymousPgcPaymentProofV1::decode_exact(&wrong_shape.encode(), &statement),
             Err(AnonymousPgcError::InvalidPaymentProofShape)
         ));
-
         assert_eq!(pair_count(8).expect("recipient pairs"), 28);
         assert_eq!(pair_count(62).expect("n=64 decoy pairs"), 1_891);
-
         let mut cancelling_current = fixture.current_balances.clone();
         cancelling_current[5] = TwistedElGamalCiphertextV1 {
             left: CompressedPointV1::from_projective(
@@ -3281,7 +3120,6 @@ mod tests {
         ));
         assert!(verify_payment(&cancelling_statement, &fixture.prove()).is_err());
     }
-
     #[test]
     fn statement_and_signed_value_boundaries_are_strict() {
         let fixture = Fixture::new();

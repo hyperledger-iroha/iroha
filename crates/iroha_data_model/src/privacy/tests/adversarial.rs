@@ -27,14 +27,12 @@ fn public_balance_scope_never_accepts_universal_as_a_partition() {
         );
     }
 }
-
 #[test]
 fn zk_x509_policy_caps_ordering_and_transition_adversaries_fail_closed() {
     assert_zk_x509_policy_caps_and_ordering();
     assert_zk_x509_trust_anchor_transitions();
     assert_zk_x509_certificate_policy_transitions();
 }
-
 #[test]
 fn bootle_lantern_disclosures_are_fixed_direct_and_canonically_ordered() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -85,7 +83,6 @@ fn bootle_lantern_disclosures_are_fixed_direct_and_canonically_ordered() {
         }),
         Err(PrivacyStatementValidationError::TooManyBootleLanternDisclosures { count: 9, max: 8 })
     ));
-
     let mut all_boundaries = base;
     let PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement) = &mut all_boundaries else {
         unreachable!()
@@ -104,7 +101,6 @@ fn bootle_lantern_disclosures_are_fixed_direct_and_canonically_ordered() {
         .validate(&limits)
         .expect("all eight direct zero/maximum values are canonical");
 }
-
 #[test]
 fn zk_ace_policy_record_is_canonical_self_digested_and_roundtrips() {
     let record = zk_ace_policy(
@@ -119,7 +115,6 @@ fn zk_ace_policy_record_is_canonical_self_digested_and_roundtrips() {
             .expect("recompute canonical policy digest"),
         record.record_digest
     );
-
     let encoded = norito::to_bytes(&record).expect("encode ZK-ACE policy");
     let decoded: PrivacyZkAcePolicyRecordV1 =
         norito::decode_from_bytes(&encoded).expect("decode ZK-ACE policy");
@@ -127,7 +122,6 @@ fn zk_ace_policy_record_is_canonical_self_digested_and_roundtrips() {
     decoded
         .validate_initial()
         .expect("decoded policy validates");
-
     let json = norito::json::to_json(&record).expect("encode ZK-ACE policy JSON");
     let decoded_json: PrivacyZkAcePolicyRecordV1 =
         norito::json::from_json(&json).expect("decode ZK-ACE policy JSON");
@@ -143,14 +137,12 @@ fn zk_ace_policy_record_is_canonical_self_digested_and_roundtrips() {
         norito::json::from_json::<PrivacyZkAcePolicyRecordV1>(&unknown_field).is_err(),
         "unknown JSON fields must not create an alternate first-release policy encoding"
     );
-
     let mut zero_digest = record.clone();
     zero_digest.record_digest = PrivacyZkAcePolicyRecordDigestV1::new([0; 32]);
     assert_eq!(
         zero_digest.validate(),
         Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroRecordDigest)
     );
-
     let mut tamperings = Vec::new();
     let mut tampered = record.clone();
     tampered.policy_id = PrivacyPolicyIdV1::new(raw(90));
@@ -184,7 +176,6 @@ fn zk_ace_policy_record_is_canonical_self_digested_and_roundtrips() {
         );
     }
 }
-
 fn construct_zk_ace_policy_for_test(
     policy_id: PrivacyPolicyIdV1,
     identity_commitment: PrivacyCommitmentV1,
@@ -203,7 +194,6 @@ fn construct_zk_ace_policy_for_test(
         lifecycle,
     )
 }
-
 fn assert_zk_ace_policy_scalar_boundaries(
     policy_id: PrivacyPolicyIdV1,
     identity: PrivacyCommitmentV1,
@@ -266,7 +256,6 @@ fn assert_zk_ace_policy_scalar_boundaries(
         Err(PrivacyZkAcePolicyRecordValidationErrorV1::EmptySourceAllowlist)
     );
 }
-
 fn assert_zk_ace_policy_allowlist_and_origin_boundaries(
     policy_id: PrivacyPolicyIdV1,
     identity: PrivacyCommitmentV1,
@@ -290,7 +279,6 @@ fn assert_zk_ace_policy_allowlist_and_origin_boundaries(
             }
         )
     );
-
     let mut reversed = allowlist.to_vec();
     reversed.reverse();
     assert_eq!(
@@ -316,7 +304,6 @@ fn assert_zk_ace_policy_allowlist_and_origin_boundaries(
         ),
         Err(PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalSourceAllowlist)
     );
-
     let noncanonical_epoch = zk_ace_policy(2, 11, PrivacyZkAcePolicyLifecycleV1::Active);
     assert_eq!(
         noncanonical_epoch.validate_initial(),
@@ -332,7 +319,6 @@ fn assert_zk_ace_policy_allowlist_and_origin_boundaries(
         Err(PrivacyZkAcePolicyRecordValidationErrorV1::InitialPolicyNotActive)
     );
 }
-
 #[test]
 fn zk_ace_policy_registration_rejects_every_noncanonical_boundary() {
     let policy_id = PrivacyPolicyIdV1::new(raw(10));
@@ -342,14 +328,12 @@ fn zk_ace_policy_registration_rejects_every_noncanonical_boundary() {
     assert_zk_ace_policy_scalar_boundaries(policy_id, identity, digest, &allowlist);
     assert_zk_ace_policy_allowlist_and_origin_boundaries(policy_id, identity, digest, &allowlist);
 }
-
 #[test]
 fn zk_ace_rotation_rejects_replays_skips_noops_and_terminal_policies() {
     let current = zk_ace_policy(1, 11, PrivacyZkAcePolicyLifecycleV1::Active);
     let successor = zk_ace_policy(2, 21, PrivacyZkAcePolicyLifecycleV1::Active);
     validate_zk_ace_policy_rotation_v1(&current, &successor)
         .expect("canonical one-epoch identity rotation");
-
     let mut invalid_current = current.clone();
     invalid_current.record_digest = PrivacyZkAcePolicyRecordDigestV1::new(raw(90));
     assert_eq!(
@@ -370,7 +354,6 @@ fn zk_ace_rotation_rejects_replays_skips_noops_and_terminal_policies() {
             )
         )
     );
-
     let mut different_policy = successor.clone();
     different_policy.policy_id = PrivacyPolicyIdV1::new(raw(92));
     redigest_zk_ace_policy(&mut different_policy);
@@ -378,7 +361,6 @@ fn zk_ace_rotation_rejects_replays_skips_noops_and_terminal_policies() {
         validate_zk_ace_policy_rotation_v1(&current, &different_policy),
         Err(PrivacyZkAcePolicyTransitionValidationErrorV1::PolicyIdMismatch)
     );
-
     for epoch in [1, 3] {
         let candidate = zk_ace_policy(epoch, 21, PrivacyZkAcePolicyLifecycleV1::Active);
         assert!(matches!(
@@ -391,7 +373,6 @@ fn zk_ace_rotation_rejects_replays_skips_noops_and_terminal_policies() {
             ) if actual == epoch
         ));
     }
-
     let revoked_successor = zk_ace_policy(2, 21, PrivacyZkAcePolicyLifecycleV1::Revoked);
     assert_eq!(
         validate_zk_ace_policy_rotation_v1(&current, &revoked_successor),
@@ -402,7 +383,6 @@ fn zk_ace_rotation_rejects_replays_skips_noops_and_terminal_policies() {
         validate_zk_ace_policy_rotation_v1(&current, &no_op),
         Err(PrivacyZkAcePolicyTransitionValidationErrorV1::IdentityCommitmentUnchanged)
     );
-
     let revoked_current = zk_ace_policy(1, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
     assert_eq!(
         validate_zk_ace_policy_rotation_v1(&revoked_current, &successor),
@@ -415,20 +395,17 @@ fn zk_ace_rotation_rejects_replays_skips_noops_and_terminal_policies() {
         Err(PrivacyZkAcePolicyTransitionValidationErrorV1::EpochOverflow)
     );
 }
-
 #[test]
 fn zk_ace_revocation_is_one_step_terminal_and_content_preserving() {
     let current = zk_ace_policy(1, 11, PrivacyZkAcePolicyLifecycleV1::Active);
     let successor = zk_ace_policy(2, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
     validate_zk_ace_policy_revocation_v1(&current, &successor)
         .expect("canonical one-epoch revocation");
-
     let active_successor = zk_ace_policy(2, 11, PrivacyZkAcePolicyLifecycleV1::Active);
     assert_eq!(
         validate_zk_ace_policy_revocation_v1(&current, &active_successor),
         Err(PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationSuccessorNotRevoked)
     );
-
     let mut mutations = Vec::new();
     let mut changed_identity = successor.clone();
     changed_identity.identity_commitment = commitment(21);
@@ -456,7 +433,6 @@ fn zk_ace_revocation_is_one_step_terminal_and_content_preserving() {
             Err(PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationContentsChanged)
         );
     }
-
     let mut different_policy = successor.clone();
     different_policy.policy_id = PrivacyPolicyIdV1::new(raw(92));
     redigest_zk_ace_policy(&mut different_policy);
@@ -488,7 +464,6 @@ fn zk_ace_revocation_is_one_step_terminal_and_content_preserving() {
         Err(PrivacyZkAcePolicyTransitionValidationErrorV1::EpochOverflow)
     );
 }
-
 fn assert_bootle_lantern_policy_roundtrip(record: &BootleLanternIssuerPolicyV1) {
     record.validate_initial().expect("canonical initial record");
     assert_eq!(
@@ -514,7 +489,6 @@ fn assert_bootle_lantern_policy_roundtrip(record: &BootleLanternIssuerPolicyV1) 
         "unknown JSON fields must not create an alternate first-release policy encoding"
     );
 }
-
 fn assert_bootle_lantern_matrix_boundaries(record: &BootleLanternIssuerPolicyV1) {
     let mut invalid = record.clone();
     invalid.issuer_public_matrix.entries.pop();
@@ -574,7 +548,6 @@ fn assert_bootle_lantern_matrix_boundaries(record: &BootleLanternIssuerPolicyV1)
             }
         )
     ));
-
     let mut monomial_first_column: [BootleLanternPolynomialV1;
         BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1] =
         core::array::from_fn(|_| BootleLanternPolynomialV1 {
@@ -595,7 +568,6 @@ fn assert_bootle_lantern_matrix_boundaries(record: &BootleLanternIssuerPolicyV1)
             }
         )
     );
-
     let mut sparse_first_column: [BootleLanternPolynomialV1;
         BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1] =
         core::array::from_fn(|_| BootleLanternPolynomialV1 {
@@ -629,7 +601,6 @@ fn assert_bootle_lantern_matrix_boundaries(record: &BootleLanternIssuerPolicyV1)
         Err(BootleLanternIssuerPolicyValidationErrorV1::IssuerParameterDigestMismatch)
     );
 }
-
 fn dense_bootle_first_column()
 -> [BootleLanternPolynomialV1; BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1] {
     core::array::from_fn(|block| BootleLanternPolynomialV1 {
@@ -641,7 +612,6 @@ fn dense_bootle_first_column()
             .collect(),
     })
 }
-
 fn negacyclic_basis_shift(coefficients: &[u16], shift: usize) -> Vec<u16> {
     let mut shifted = vec![0_u16; coefficients.len()];
     for (index, coefficient) in coefficients.iter().copied().enumerate() {
@@ -658,7 +628,6 @@ fn negacyclic_basis_shift(coefficients: &[u16], shift: usize) -> Vec<u16> {
     }
     shifted
 }
-
 #[test]
 fn bootle_lantern_r512_matrix_constructor_is_exact_and_mutation_closed() {
     let first_column = dense_bootle_first_column();
@@ -694,7 +663,6 @@ fn bootle_lantern_r512_matrix_constructor_is_exact_and_mutation_closed() {
     matrix
         .validate_r512_multiplication_structure_v1()
         .expect("constructed matrix passes its structural validator");
-
     let dimension = BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1;
     let degree = BOOTLE_LANTERN_RING_DEGREE_V1;
     let mut wrong_entry_count = matrix.clone();
@@ -745,7 +713,6 @@ fn bootle_lantern_r512_matrix_constructor_is_exact_and_mutation_closed() {
         all_zero.validate_r512_multiplication_structure_v1(),
         Err(BootleLanternIssuerPolicyValidationErrorV1::AllZeroIssuerMatrix)
     );
-
     let mut dependent_blocks = 0_usize;
     for row in 0..dimension {
         for column in 0..dimension {
@@ -787,7 +754,6 @@ fn bootle_lantern_r512_matrix_constructor_is_exact_and_mutation_closed() {
         dependent_blocks, 56,
         "every dependent block must be checked"
     );
-
     let mut stale_dependents = matrix.clone();
     stale_dependents.entries[3 * dimension].coefficients[5] ^= 1;
     assert!(matches!(
@@ -801,7 +767,6 @@ fn bootle_lantern_r512_matrix_constructor_is_exact_and_mutation_closed() {
             }
         )
     ));
-
     let mut h = vec![0_u16; dimension * degree];
     for block in 0..dimension {
         for coefficient in 0..degree {
@@ -826,7 +791,6 @@ fn bootle_lantern_r512_matrix_constructor_is_exact_and_mutation_closed() {
         );
     }
 }
-
 fn assert_bootle_lantern_allowed_value_boundaries(record: &BootleLanternIssuerPolicyV1) {
     let mut invalid = record.clone();
     invalid.allowed_values.pop();
@@ -894,7 +858,6 @@ fn assert_bootle_lantern_allowed_value_boundaries(record: &BootleLanternIssuerPo
         Err(BootleLanternIssuerPolicyValidationErrorV1::RecordDigestMismatch)
     );
 }
-
 fn assert_bootle_lantern_policy_rotation_boundaries(record: &BootleLanternIssuerPolicyV1) {
     let mut successor = record.clone();
     successor.epoch = 2;
@@ -903,7 +866,6 @@ fn assert_bootle_lantern_policy_rotation_boundaries(record: &BootleLanternIssuer
     successor
         .validate_successor(record)
         .expect("strict policy rotation");
-
     let mut non_consecutive = successor.clone();
     non_consecutive.epoch = 3;
     redigest_bootle_lantern_policy(&mut non_consecutive);
@@ -942,7 +904,6 @@ fn assert_bootle_lantern_policy_rotation_boundaries(record: &BootleLanternIssuer
         revoked.validate_successor(&revoked),
         Err(BootleLanternIssuerPolicyValidationErrorV1::PolicyAlreadyRevoked)
     );
-
     let mut wrong_initial_epoch = record.clone();
     wrong_initial_epoch.epoch = 2;
     redigest_bootle_lantern_policy(&mut wrong_initial_epoch);
@@ -958,7 +919,6 @@ fn assert_bootle_lantern_policy_rotation_boundaries(record: &BootleLanternIssuer
         Err(BootleLanternIssuerPolicyValidationErrorV1::InitialPolicyMustBeActive)
     );
 }
-
 #[test]
 fn bootle_lantern_issuer_policy_is_canonical_bounded_and_rotates_monotonically() {
     let record = bootle_lantern_policy();
@@ -967,7 +927,6 @@ fn bootle_lantern_issuer_policy_is_canonical_bounded_and_rotates_monotonically()
     assert_bootle_lantern_allowed_value_boundaries(&record);
     assert_bootle_lantern_policy_rotation_boundaries(&record);
 }
-
 fn assert_orchard_count_and_ciphertext_boundaries(limits: &PrivacyConsensusLimitsV1) {
     let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
     let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
@@ -978,7 +937,6 @@ fn assert_orchard_count_and_ciphertext_boundaries(limits: &PrivacyConsensusLimit
         orchard.validate(limits),
         Err(PrivacyStatementValidationError::InvalidOrchardActionCount { count: 0, max: 2 })
     ));
-
     let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
     let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
         unreachable!()
@@ -992,7 +950,6 @@ fn assert_orchard_count_and_ciphertext_boundaries(limits: &PrivacyConsensusLimit
         orchard.validate(limits),
         Err(PrivacyStatementValidationError::InvalidOrchardActionCount { count: 3, max: 2 })
     ));
-
     for malformed_len in [
         ORCHARD_ENCRYPTED_NOTE_BYTES_V1 - 1,
         ORCHARD_ENCRYPTED_NOTE_BYTES_V1 + 1,
@@ -1031,7 +988,6 @@ fn assert_orchard_count_and_ciphertext_boundaries(limits: &PrivacyConsensusLimit
         ));
     }
 }
-
 fn assert_orchard_uniqueness_and_balance_boundaries(limits: &PrivacyConsensusLimitsV1) {
     let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
     let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
@@ -1043,7 +999,6 @@ fn assert_orchard_uniqueness_and_balance_boundaries(limits: &PrivacyConsensusLim
         orchard.validate(limits),
         Err(PrivacyStatementValidationError::DuplicateOrchardNullifier { index: 1 })
     );
-
     let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
     let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
         unreachable!()
@@ -1054,7 +1009,6 @@ fn assert_orchard_uniqueness_and_balance_boundaries(limits: &PrivacyConsensusLim
         orchard.validate(limits),
         Err(PrivacyStatementValidationError::DuplicateOrchardNoteCommitment { index: 1 })
     );
-
     let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
     let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
         unreachable!()
@@ -1072,7 +1026,6 @@ fn assert_orchard_uniqueness_and_balance_boundaries(limits: &PrivacyConsensusLim
             }
         )
     );
-
     let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
     let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
         unreachable!()
@@ -1084,7 +1037,6 @@ fn assert_orchard_uniqueness_and_balance_boundaries(limits: &PrivacyConsensusLim
         .validate(limits)
         .expect("zero is a canonical Pallas field encoding, not a schema sentinel");
 }
-
 fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimitsV1) {
     let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
     let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
@@ -1098,7 +1050,6 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             max: FCMP_MAX_INPUTS_V1
         })
     ));
-
     let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
     let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
         unreachable!()
@@ -1110,7 +1061,6 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             PrivacyFcmpTreeRootValidationErrorV1::InvalidLayerCount { layers: 0, .. }
         ))
     ));
-
     let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
     let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
         unreachable!()
@@ -1125,7 +1075,6 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             },
         })
     );
-
     for duplicate_key_image in [true, false] {
         let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
         let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
@@ -1146,7 +1095,6 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             );
         }
     }
-
     let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
     let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
         unreachable!()
@@ -1161,7 +1109,6 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             },
         })
     );
-
     let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
     let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
         unreachable!()
@@ -1174,7 +1121,6 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
         fcmp.validate(&limits),
         Err(PrivacyStatementValidationError::DuplicateFcmpOutputId { index: 1 })
     );
-
     let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
     let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
         unreachable!()
@@ -1184,7 +1130,6 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
         fcmp.validate(&limits),
         Err(PrivacyStatementValidationError::FcmpEncryptedOutputIdMismatch { index: 0 })
     );
-
     let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
     let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
         unreachable!()
@@ -1194,7 +1139,6 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
         fcmp.validate(&limits),
         Err(PrivacyStatementValidationError::MissingEncryptedOutput)
     );
-
     let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
     let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
         unreachable!()
@@ -1206,7 +1150,6 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             field: PrivacyTypedFieldV1::ActionDigest,
         })
     );
-
     let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
     let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
         unreachable!()
@@ -1216,7 +1159,6 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
         ivm.validate(&limits),
         Err(PrivacyStatementValidationError::ActionDigestMismatch)
     );
-
     let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
     let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
         unreachable!()
@@ -1233,7 +1175,6 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             bound_epoch: 16,
         })
     );
-
     let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
     let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
         unreachable!()
@@ -1249,7 +1190,6 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             max: IVM_PRIVATE_NOTE_MAX_INPUTS_V1
         })
     ));
-
     let mut pq = statement_for(PrivacyProtocolIdV1::PqMaspStarkV0);
     let PrivacyStatementV1::PqMaspStarkV0(statement) = &mut pq else {
         unreachable!()
@@ -1262,7 +1202,6 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             max: PQ_MASP_MAX_OUTPUTS_V1
         })
     ));
-
     let mut pq = statement_for(PrivacyProtocolIdV1::PqMaspStarkV0);
     let PrivacyStatementV1::PqMaspStarkV0(statement) = &mut pq else {
         unreachable!()
@@ -1276,7 +1215,6 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             bound_epoch: 18,
         })
     );
-
     let mut malformed = statement_for(PrivacyProtocolIdV1::PqMaspStarkV0);
     let PrivacyStatementV1::PqMaspStarkV0(statement) = &mut malformed else {
         unreachable!()
@@ -1287,7 +1225,6 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
         Err(PrivacyStatementValidationError::ZeroEncryptedOutputRecipient { index: 0 })
     ));
 }
-
 #[test]
 fn private_transfer_shapes_enforce_hard_caps_and_ordered_ciphertexts() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -1295,12 +1232,10 @@ fn private_transfer_shapes_enforce_hard_caps_and_ordered_ciphertexts() {
     assert_orchard_uniqueness_and_balance_boundaries(&limits);
     assert_other_private_transfer_shape_boundaries(&limits);
 }
-
 #[test]
 fn private_ivm_encrypted_output_codec_is_exact_and_fail_closed() {
     assert_eq!(PRIVACY_IVM_PRIVATE_NOTE_PLAINTEXT_BYTES_V1, 180);
     assert_eq!(PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, 224);
-
     let canonical = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
     let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &canonical else {
         unreachable!()
@@ -1314,7 +1249,6 @@ fn private_ivm_encrypted_output_codec_is_exact_and_fail_closed() {
         ciphertext.get(..4),
         Some(PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_MAGIC_V1.as_slice())
     );
-
     let mut malformed = Vec::new();
     let mut truncated = ciphertext.clone();
     truncated.pop();
@@ -1331,7 +1265,6 @@ fn private_ivm_encrypted_output_codec_is_exact_and_fail_closed() {
     let mut zero_payload = ciphertext;
     zero_payload[4 + PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_NONCE_BYTES_V1..].fill(0);
     malformed.push(zero_payload);
-
     for ciphertext in malformed {
         let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
         let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
@@ -1349,7 +1282,6 @@ fn private_ivm_encrypted_output_codec_is_exact_and_fail_closed() {
         );
     }
 }
-
 #[test]
 fn lifecycle_edges_preserve_history_and_retirement_is_terminal() {
     let proposed = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
@@ -1411,7 +1343,6 @@ fn lifecycle_edges_preserve_history_and_retirement_is_terminal() {
         .validate_transition_to(&retired)
         .expect("active retires");
     assert!(retired.validate_transition_to(&active).is_err());
-
     let invalid = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
         proposed_at_height: 3,
         activated_at_height: 3,
@@ -1425,7 +1356,6 @@ fn lifecycle_edges_preserve_history_and_retirement_is_terminal() {
     });
     assert!(active.validate_transition_to(&rewritten_history).is_err());
 }
-
 #[test]
 fn activation_effective_height_uses_active_lifecycle_payload() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -1438,7 +1368,6 @@ fn activation_effective_height_uses_active_lifecycle_payload() {
         activated_at_height: 2,
         state_since_height: 5,
     });
-
     assert_eq!(
         envelope.validate_against_activation(&activation, &limits, 4),
         Err(
@@ -1453,14 +1382,12 @@ fn activation_effective_height_uses_active_lifecycle_payload() {
         Ok(())
     );
 }
-
 #[test]
 fn envelopes_fail_closed_on_every_binding_and_resource_mutation() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
     let statement = statement_for(PrivacyProtocolIdV1::VeRangeTransparentRangeV1);
     let base = envelope(statement);
     base.validate_with_limits(&limits).expect("valid envelope");
-
     let mut invalid = base.clone();
     invalid.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
     assert!(invalid.validate_with_limits(&limits).is_err());
@@ -1497,12 +1424,10 @@ fn envelopes_fail_closed_on_every_binding_and_resource_mutation() {
     invalid = base.clone();
     invalid.proof = PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(vec![0; 3]));
     assert!(invalid.validate_with_limits(&limits).is_err());
-
     let mut proof_limited = limits;
     proof_limited.max_proof_bytes_per_action = 2;
     proof_limited.validate().expect("lower proof limit");
     assert!(base.validate_with_limits(&proof_limited).is_err());
-
     let mut governed = activation(&base);
     base.validate_against_activation(&governed, &limits, 2)
         .expect("active matching activation");
@@ -1534,7 +1459,6 @@ fn envelopes_fail_closed_on_every_binding_and_resource_mutation() {
         base.validate_against_activation(&governed, &limits, 2)
             .is_err()
     );
-
     let framed = norito::to_bytes(&base).expect("frame envelope");
     let mut truncated = framed.clone();
     truncated.pop();
@@ -1542,7 +1466,6 @@ fn envelopes_fail_closed_on_every_binding_and_resource_mutation() {
     let mut trailing = framed;
     trailing.push(0);
     assert!(norito::decode_from_bytes::<PrivacyProofEnvelopeV1>(&trailing).is_err());
-
     for unknown in [99_u32, u32::MAX] {
         assert!(PrivacyProofSystemIdV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err());
         assert!(PrivacyEngineIdV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err());

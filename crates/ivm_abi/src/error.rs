@@ -2,25 +2,20 @@
 //!
 //! Error variants cover common failure modes including privacy tag violations
 //! and hardware transactional memory aborts.
-use std::{error::Error as StdError, fmt};
-
 use crate::numeric::{NumericFaultV1, PointerAbiFaultV1};
-
+use std::{error::Error as StdError, fmt};
 /// Memory region permissions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Perm(u8);
-
 impl Perm {
     pub const NONE: Perm = Perm(0);
     pub const READ: Perm = Perm(1);
     pub const WRITE: Perm = Perm(2);
     pub const EXECUTE: Perm = Perm(4);
-
     pub fn contains(self, other: Perm) -> bool {
         (self.0 & other.0) == other.0
     }
 }
-
 // Enable bitwise OR for Perm flags
 use std::ops::BitOr;
 impl BitOr for Perm {
@@ -29,7 +24,6 @@ impl BitOr for Perm {
         Perm(self.0 | rhs.0)
     }
 }
-
 /// High-level trap category captured alongside the raw [`VMError`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VmTrapKind {
@@ -67,7 +61,6 @@ pub enum VmTrapKind {
     AmxBudgetExceeded,
     Other,
 }
-
 /// Consensus-retained host resource whose execution budget was exhausted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostOutputResource {
@@ -76,7 +69,6 @@ pub enum HostOutputResource {
     /// Aggregate encoded size of retained effect artifacts.
     Bytes,
 }
-
 /// Source location mapped from compiler-emitted debug metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VmSourceLocation {
@@ -85,7 +77,6 @@ pub struct VmSourceLocation {
     pub line: Option<u32>,
     pub column: Option<u32>,
 }
-
 /// Budget-related execution snapshot captured at trap time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VmBudgetSnapshot {
@@ -97,7 +88,6 @@ pub struct VmBudgetSnapshot {
     pub stack_limit_bytes: u64,
     pub stack_bytes_used: u64,
 }
-
 /// Additional execution context captured at trap time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VmExecutionContext {
@@ -108,7 +98,6 @@ pub struct VmExecutionContext {
     pub predecoded_loaded: bool,
     pub predecoded_hit: Option<bool>,
 }
-
 /// Structured runtime diagnostic emitted as a side channel when execution traps.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VmExecutionDiagnostic {
@@ -119,7 +108,6 @@ pub struct VmExecutionDiagnostic {
     pub budget: VmBudgetSnapshot,
     pub context: VmExecutionContext,
 }
-
 /// VM errors.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum VMError {
@@ -268,7 +256,6 @@ pub enum VMError {
         budget_ms: u64,
     },
 }
-
 impl VMError {
     /// Wrap an error with deterministic gas charged before surfacing it.
     #[must_use]
@@ -287,13 +274,11 @@ impl VMError {
             },
         }
     }
-
     /// Construct a metered `NotImplemented` error for a known syscall.
     #[must_use]
     pub fn metered_not_implemented(gas: u64, syscall: u32) -> Self {
         Self::metered(gas, VMError::NotImplemented { syscall })
     }
-
     /// Return the original error kind, peeling metered wrappers.
     #[must_use]
     pub fn as_unmetered(&self) -> &VMError {
@@ -302,7 +287,6 @@ impl VMError {
             error => error,
         }
     }
-
     /// Return the gas attached to this error, if it is metered.
     #[must_use]
     pub fn metered_gas(&self) -> Option<u64> {
@@ -311,7 +295,6 @@ impl VMError {
             _ => None,
         }
     }
-
     /// Consume this error and return the original unmetered error kind.
     #[must_use]
     pub fn into_unmetered(self) -> VMError {
@@ -320,7 +303,6 @@ impl VMError {
             error => error,
         }
     }
-
     /// Consume this error and split any attached gas from the original error.
     #[must_use]
     pub fn split_metered(self) -> (Option<u64>, VMError) {
@@ -330,7 +312,6 @@ impl VMError {
         }
     }
 }
-
 impl fmt::Display for VMError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -452,9 +433,7 @@ impl fmt::Display for VMError {
         }
     }
 }
-
 struct HexBytes<'a>(&'a [u8]);
-
 impl fmt::Display for HexBytes<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for byte in self.0 {
@@ -463,7 +442,6 @@ impl fmt::Display for HexBytes<'_> {
         Ok(())
     }
 }
-
 impl StdError for VMError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {

@@ -27,7 +27,6 @@ fn acknowledgement_precommit_fence_preserves_checkpoint_for_head_race() {
         request_nonce: [0x93; 32],
         authentication_proof: vec![0xAC],
     };
-
     let fence_calls = AtomicUsize::new(0);
     let mut advancing_head_fence = || {
         if fence_calls.fetch_add(1, Ordering::Relaxed) == 0 {
@@ -71,7 +70,6 @@ fn acknowledgement_precommit_fence_preserves_checkpoint_for_head_race() {
             .is_some(),
         "the external durable acknowledgement remains available for reconciliation"
     );
-
     let mut stable_head_fence = || Ok(());
     let reconciled = service
         .api_acknowledge_statement_with_precommit_fence(
@@ -83,7 +81,6 @@ fn acknowledgement_precommit_fence_preserves_checkpoint_for_head_race() {
     assert_eq!(reconciled.acknowledgement.statement_id, statement_id);
     assert_ne!(reconciled.anchor, anchor_before);
 }
-
 #[test]
 fn exposure_and_intent_pages_include_below_threshold_periods_without_auto_execution() {
     let root = tempfile::tempdir().expect("state root");
@@ -133,7 +130,6 @@ fn exposure_and_intent_pages_include_below_threshold_periods_without_auto_execut
             .expect_err("unknown exposure cursor"),
         HedgingBillingRuntimeApiErrorV1::InvalidRequest
     );
-
     let intents = service
         .api_hedge_intent_page(&request)
         .expect("empty hedge-intent page");
@@ -208,7 +204,6 @@ fn exposure_and_intent_pages_include_below_threshold_periods_without_auto_execut
         "targeted publication must not disturb an unrelated ready statement"
     );
 }
-
 #[test]
 fn exact_network_domain_roundtrips_and_rejects_cross_genesis_replay() {
     let policy = service_policy();
@@ -224,14 +219,12 @@ fn exact_network_domain_roundtrips_and_rejects_cross_genesis_replay() {
         HedgingBillingServicePolicyV1::from_canonical_bytes(&trailing),
         Err(HedgingBillingServiceError::InvalidPolicy)
     ));
-
     let event = event(1, "storage:network-domain:1", "1");
     let page = page(vec![event.clone()]);
     let page_bytes = norito::to_bytes(&page).expect("canonical page bytes");
     let decoded: HedgingBillingFinalizedEventPageV1 =
         norito::decode_from_bytes(&page_bytes).expect("decode canonical page");
     assert_eq!(decoded, page);
-
     let foreign_network = test_network_id(b"hedging-billing-foreign-genesis");
     assert_ne!(policy.network_id, foreign_network);
     let mut foreign_page = page.clone();
@@ -249,7 +242,6 @@ fn exact_network_domain_roundtrips_and_rejects_cross_genesis_replay() {
         event_replay_digest(policy.network_id, &event).expect("local replay identity"),
         event_replay_digest(foreign_network, &event).expect("foreign replay identity")
     );
-
     let checkpoint = HedgingBillingCheckpointV1::empty(&policy).expect("empty checkpoint");
     let checkpoint_bytes = encode_checkpoint(&checkpoint, &policy, &feed_policy())
         .expect("canonical checkpoint bytes");

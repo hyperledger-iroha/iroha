@@ -1,7 +1,6 @@
 #[test]
 fn validate_pop_payload_bytes_accepts_signed_publications() {
     let (credential, root, revocations) = signed_pop_material();
-
     let credential_bytes = to_bytes(&credential).expect("encode PoP credential");
     let outcome = validate_pop_payload_bytes(
         PopValidationPayloadKindV1::Credential,
@@ -14,7 +13,6 @@ fn validate_pop_payload_bytes_accepts_signed_publications() {
     assert!(outcome.context.iter().any(|field| {
         field.key == "credential_id_hex" && field.value == hex::encode(credential.credential_id)
     }));
-
     let root_bytes = to_bytes(&root).expect("encode PoP commitment root");
     let outcome = validate_pop_payload_bytes(
         PopValidationPayloadKindV1::CommitmentRoot,
@@ -24,7 +22,6 @@ fn validate_pop_payload_bytes_accepts_signed_publications() {
     );
     assert!(outcome.is_ok(), "{outcome:?}");
     assert_eq!(outcome.code, "SFS-OK-000");
-
     let revocation_bytes = to_bytes(&revocations).expect("encode PoP revocations");
     let outcome = validate_pop_payload_bytes(
         PopValidationPayloadKindV1::RevocationList,
@@ -34,7 +31,6 @@ fn validate_pop_payload_bytes_accepts_signed_publications() {
     );
     assert!(outcome.is_ok(), "{outcome:?}");
     assert_eq!(outcome.code, "SFS-OK-000");
-
     let bundle = issued_pop_bundle();
     let bundle_bytes = to_bytes(&bundle).expect("encode PoP issued bundle");
     let outcome = validate_pop_payload_bytes(
@@ -50,7 +46,6 @@ fn validate_pop_payload_bytes_accepts_signed_publications() {
             && field.value == bundle.revocation_list.list_version.to_string()
     }));
 }
-
 #[test]
 fn validate_pop_payload_bytes_accepts_request_and_proof_shapes() {
     let enrollment_bytes = to_bytes(&pop_enrollment()).expect("encode PoP enrollment");
@@ -61,7 +56,6 @@ fn validate_pop_payload_bytes_accepts_request_and_proof_shapes() {
         32,
     );
     assert!(outcome.is_ok(), "{outcome:?}");
-
     let renewal_bytes = to_bytes(&pop_renewal()).expect("encode PoP renewal");
     let outcome = validate_pop_payload_bytes(
         PopValidationPayloadKindV1::RenewalRequest,
@@ -70,7 +64,6 @@ fn validate_pop_payload_bytes_accepts_request_and_proof_shapes() {
         32,
     );
     assert!(outcome.is_ok(), "{outcome:?}");
-
     let proof = pop_membership_proof();
     let proof_bytes = to_bytes(&proof).expect("encode PoP proof");
     let outcome = validate_pop_payload_bytes(
@@ -101,7 +94,6 @@ fn validate_pop_payload_bytes_accepts_request_and_proof_shapes() {
         field.key == "proof_bytes_len" && field.value == proof.proof_bytes.len().to_string()
     }));
 }
-
 #[test]
 fn validate_pop_payload_bytes_rejects_malformed_norito() {
     let outcome = validate_pop_payload_bytes(
@@ -114,7 +106,6 @@ fn validate_pop_payload_bytes_rejects_malformed_norito() {
     assert_eq!(outcome.code, "SFS-NORITO-001");
     assert_eq!(outcome.category, CATEGORY_NORITO);
 }
-
 #[test]
 fn validate_pop_payload_bytes_rejects_oversize_and_noncanonical_archives() {
     let oversized = vec![0u8; POP_REFERENCE_PAYLOAD_MAX_BYTES_V1 + 1];
@@ -126,7 +117,6 @@ fn validate_pop_payload_bytes_rejects_oversize_and_noncanonical_archives() {
     );
     assert!(!outcome.is_ok());
     assert_eq!(outcome.code, "SFS-NORITO-001");
-
     let compressed = norito::to_compressed_bytes(
         &pop_enrollment(),
         Some(norito::CompressionConfig::default()),
@@ -142,7 +132,6 @@ fn validate_pop_payload_bytes_rejects_oversize_and_noncanonical_archives() {
     assert_eq!(outcome.code, "SFS-NORITO-001");
     assert!(outcome.message.contains("canonical Norito"), "{outcome:?}");
 }
-
 #[test]
 fn validate_pop_payload_bytes_rejects_signature_tampering() {
     let (mut credential, _, _) = signed_pop_material();

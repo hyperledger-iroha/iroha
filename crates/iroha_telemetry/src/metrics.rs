@@ -1,25 +1,12 @@
 //! [`Metrics`] and [`Status`]-related logic and functions.
 #![allow(clippy::doc_markdown)]
-
 /// Low-cardinality metrics for the Musubi V1 package ecosystem.
 pub mod musubi;
-
+use crate::privacy::PrivacyDrainSnapshot;
 use core::{
     convert::{TryFrom, TryInto},
     ops::Deref,
 };
-#[cfg(feature = "otel-exporter")]
-use std::collections::HashMap;
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    sync::{
-        Arc, Mutex, OnceLock, RwLock,
-        atomic::{AtomicBool, AtomicU64 as StdAtomicU64, Ordering},
-    },
-    time::{Duration, SystemTime, UNIX_EPOCH},
-    vec::Vec,
-};
-
 use iroha_config::{
     kura::FsyncMode,
     parameters::actual::{
@@ -53,18 +40,24 @@ use prometheus::{
     core::{AtomicU64, GenericGauge, GenericGaugeVec},
 };
 pub use prometheus::{GaugeVec, core::Collector};
-
-use crate::privacy::PrivacyDrainSnapshot;
-
+#[cfg(feature = "otel-exporter")]
+use std::collections::HashMap;
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    sync::{
+        Arc, Mutex, OnceLock, RwLock,
+        atomic::{AtomicBool, AtomicU64 as StdAtomicU64, Ordering},
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
+    vec::Vec,
+};
 /// Type for reporting amount of dropped messages for sumeragi
 pub type DroppedMessagesCounter = IntCounter;
 /// Type for reporting view change index of current round
 pub type ViewChangesGauge = GenericGauge<AtomicU64>;
-
 /// Thin wrapper around duration that `impl`s [`Default`]
 #[derive(Debug, Clone, Copy)]
 pub struct Uptime(pub Duration);
-
 /// Bounded labels shared by the canonical SoraFS gateway active-request metrics.
 #[derive(Debug, Clone, Copy)]
 pub struct SorafsGatewayRequestMetricLabels<'a> {
@@ -79,7 +72,6 @@ pub struct SorafsGatewayRequestMetricLabels<'a> {
     /// Negotiated gateway profile or `unknown` when it is unavailable.
     pub profile: &'a str,
 }
-
 /// Bounded labels shared by the canonical SoraFS gateway response metrics.
 #[derive(Debug, Clone, Copy)]
 pub struct SorafsGatewayResponseMetricLabels<'a> {
@@ -92,7 +84,6 @@ pub struct SorafsGatewayResponseMetricLabels<'a> {
     /// Bounded machine-readable error code, or `none` for successful responses.
     pub error_code: &'a str,
 }
-
 /// Common payload-free health values exported by a supervised SoraFS runtime.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SorafsRuntimeHealthMetricSnapshot {
@@ -103,7 +94,6 @@ pub struct SorafsRuntimeHealthMetricSnapshot {
     /// Whether every external dependency passed qualification and health checks.
     pub external_dependencies_ready: bool,
 }
-
 /// Payload-free journal and publication state for the SoraFS reputation runtime.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SorafsReputationPublicationMetricSnapshot {
@@ -112,7 +102,6 @@ pub struct SorafsReputationPublicationMetricSnapshot {
     /// Whether the current publication material is acknowledged.
     pub material_acknowledged: bool,
 }
-
 /// Payload-free values exported for the committed SoraFS reputation runtime.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SorafsReputationRuntimeMetricSnapshot {
@@ -127,7 +116,6 @@ pub struct SorafsReputationRuntimeMetricSnapshot {
     /// Number of providers represented by the committed projection.
     pub provider_count: u32,
 }
-
 /// Payload-free execution and finalized-projection state for hedging/billing.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SorafsHedgingBillingProjectionMetricSnapshot {
@@ -138,7 +126,6 @@ pub struct SorafsHedgingBillingProjectionMetricSnapshot {
     /// Whether a finalized projection is available.
     pub finalized_projection_ready: bool,
 }
-
 /// Payload-free values exported for the committed SoraFS hedging/billing runtime.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SorafsHedgingBillingRuntimeMetricSnapshot {
@@ -169,11 +156,9 @@ pub struct SorafsHedgingBillingRuntimeMetricSnapshot {
     /// Committed hedge intents retained by the projection.
     pub hedge_intents: u32,
 }
-
 type MicropaymentSampleSink = Arc<
     dyn Fn(&str, MicropaymentCreditSnapshot, MicropaymentTicketCounters) + Send + Sync + 'static,
 >;
-
 const SORAFS_REPUTATION_SCORE_LABEL_LIMIT: usize = 100;
 const SORAFS_ORDERBOOK_EVENT_LABELS: [&str; 8] = [
     "policy_activated",
@@ -256,27 +241,23 @@ const SORAFS_GATEWAY_COMPLIANCE_FAILURE_CLASS_LABELS: [&str; 10] = [
     "persistence",
     "internal",
 ];
-
 fn current_unix_time_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or_default()
 }
-
 impl Default for Uptime {
     fn default() -> Self {
         Self(Duration::from_millis(0))
     }
 }
-
 impl norito::core::NoritoSerialize for Uptime {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let pair = (self.0.as_secs(), self.0.subsec_nanos());
         norito::core::NoritoSerialize::serialize(&pair, writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for Uptime {
     fn deserialize(archived: &'a norito::core::Archived<Uptime>) -> Self {
         let (secs, nanos): (u64, u32) =
@@ -284,7 +265,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for Uptime {
         Uptime(Duration::from_secs(secs) + Duration::from_nanos(u64::from(nanos)))
     }
 }
-
 /// Snapshot of the configured stack settings for scheduler/prover pools and the guest VM.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StackSettingsSnapshot {
@@ -313,7 +293,6 @@ pub struct StackSettingsSnapshot {
     /// Gas→stack multiplier currently in effect.
     pub gas_to_stack_multiplier: u64,
 }
-
 static STACK_REQUESTED_SCHEDULER_BYTES: StdAtomicU64 = StdAtomicU64::new(0);
 static STACK_REQUESTED_PROVER_BYTES: StdAtomicU64 = StdAtomicU64::new(0);
 static STACK_REQUESTED_GUEST_BYTES: StdAtomicU64 = StdAtomicU64::new(0);
@@ -326,7 +305,6 @@ static STACK_GUEST_CLAMPED: StdAtomicU64 = StdAtomicU64::new(0);
 static STACK_POOL_FALLBACK_TOTAL: StdAtomicU64 = StdAtomicU64::new(0);
 static STACK_BUDGET_HIT_TOTAL: StdAtomicU64 = StdAtomicU64::new(0);
 static STACK_GAS_TO_STACK_MULTIPLIER: StdAtomicU64 = StdAtomicU64::new(0);
-
 /// Record the latest requested/applied stack settings.
 pub fn record_stack_limits(snapshot: StackSettingsSnapshot) {
     STACK_REQUESTED_SCHEDULER_BYTES.store(snapshot.requested_scheduler_bytes, Ordering::Relaxed);
@@ -348,7 +326,6 @@ pub fn record_stack_limits(snapshot: StackSettingsSnapshot) {
         metrics.apply_stack_snapshot(&stack_settings_snapshot());
     }
 }
-
 /// Record a change to the gas→stack multiplier used to derive guest stack limits.
 pub fn record_stack_gas_multiplier(multiplier: u64) {
     STACK_GAS_TO_STACK_MULTIPLIER.store(multiplier.max(1), Ordering::Relaxed);
@@ -356,7 +333,6 @@ pub fn record_stack_gas_multiplier(multiplier: u64) {
         metrics.apply_stack_snapshot(&stack_settings_snapshot());
     }
 }
-
 /// Increment the counter tracking fallbacks to an already-initialised Rayon pool.
 pub fn record_stack_pool_fallback() {
     STACK_POOL_FALLBACK_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -364,7 +340,6 @@ pub fn record_stack_pool_fallback() {
         metrics.apply_stack_snapshot(&stack_settings_snapshot());
     }
 }
-
 /// Increment the counter tracking guest stack budget clamps at VM construction time.
 pub fn record_stack_budget_hit() {
     STACK_BUDGET_HIT_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -372,7 +347,6 @@ pub fn record_stack_budget_hit() {
         metrics.apply_stack_snapshot(&stack_settings_snapshot());
     }
 }
-
 /// Snapshot the most recent stack settings for status/metric exports.
 pub fn stack_settings_snapshot() -> StackSettingsSnapshot {
     StackSettingsSnapshot {
@@ -390,17 +364,14 @@ pub fn stack_settings_snapshot() -> StackSettingsSnapshot {
         gas_to_stack_multiplier: STACK_GAS_TO_STACK_MULTIPLIER.load(Ordering::Relaxed),
     }
 }
-
 /// Helper container for fixed-size scheduler histogram buckets.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LayerWidthBuckets([u64; 8]);
-
 impl LayerWidthBuckets {
     /// Construct buckets directly from an array.
     pub const fn new(values: [u64; 8]) -> Self {
         Self(values)
     }
-
     /// Build buckets from a slice, truncating to the first eight entries.
     pub fn from_slice(values: &[u64]) -> Self {
         let mut buckets = [0_u64; 8];
@@ -408,30 +379,25 @@ impl LayerWidthBuckets {
         buckets[..len].copy_from_slice(&values[..len]);
         Self(buckets)
     }
-
     /// Borrow the underlying bucket array.
     pub const fn as_array(&self) -> &[u64; 8] {
         &self.0
     }
-
     /// Consume the wrapper, returning the inner bucket array.
     pub const fn into_inner(self) -> [u64; 8] {
         self.0
     }
 }
-
 impl From<[u64; 8]> for LayerWidthBuckets {
     fn from(values: [u64; 8]) -> Self {
         Self(values)
     }
 }
-
 impl From<LayerWidthBuckets> for [u64; 8] {
     fn from(value: LayerWidthBuckets) -> Self {
         value.0
     }
 }
-
 impl norito::core::NoritoSerialize for LayerWidthBuckets {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
@@ -440,7 +406,6 @@ impl norito::core::NoritoSerialize for LayerWidthBuckets {
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for LayerWidthBuckets {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let payload: (u64, u64, u64, u64, u64, u64, u64, u64) =
@@ -450,7 +415,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for LayerWidthBuckets {
         ])
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for LayerWidthBuckets {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (payload, used) = <(u64, u64, u64, u64, u64, u64, u64, u64)>::decode_from_slice(bytes)?;
@@ -463,7 +427,6 @@ impl<'a> DecodeFromSlice<'a> for LayerWidthBuckets {
         ))
     }
 }
-
 fn encode_hex_lower(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -473,7 +436,6 @@ fn encode_hex_lower(bytes: &[u8]) -> String {
     }
     out
 }
-
 impl<'a> DecodeFromSlice<'a> for Uptime {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let ((secs, nanos), used) = <(u64, u32)>::decode_from_slice(bytes)?;
@@ -482,7 +444,6 @@ impl<'a> DecodeFromSlice<'a> for Uptime {
         Ok((Uptime(duration), used))
     }
 }
-
 /// OpenTelemetry instrumentation for multi-source orchestrator metrics.
 #[cfg_attr(not(feature = "otel-exporter"), derive(Copy))]
 #[derive(Clone)]
@@ -520,13 +481,11 @@ pub struct SorafsFetchOtel {
     #[cfg(feature = "otel-exporter")]
     transport_events_total: Counter<u64>,
 }
-
 impl Default for SorafsFetchOtel {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[allow(clippy::unused_self, clippy::trivially_copy_pass_by_ref)] // retain &self API for OTEL-enabled builds
 impl SorafsFetchOtel {
     /// Create a new OTEL instrumentation bundle.
@@ -535,29 +494,24 @@ impl SorafsFetchOtel {
         #[cfg(feature = "otel-exporter")]
         {
             let meter = opentelemetry::global::meter("sorafs.fetch");
-
             let active_fetches = meter
                 .i64_up_down_counter("sorafs.fetch.active")
                 .with_description("Active SoraFS orchestrator fetch sessions.")
                 .with_unit("sessions")
                 .build();
-
             let duration_ms = meter
                 .f64_histogram("sorafs.fetch.duration_ms")
                 .with_description("Completed fetch duration in milliseconds.")
                 .with_unit("ms")
                 .build();
-
             let failures_total = meter
                 .u64_counter("sorafs.fetch.failures_total")
                 .with_description("Total number of orchestrator failures grouped by reason.")
                 .build();
-
             let retries_total = meter
                 .u64_counter("sorafs.fetch.retries_total")
                 .with_description("Retry attempts triggered during orchestrator sessions.")
                 .build();
-
             let provider_failures_total = meter
                 .u64_counter("sorafs.fetch.provider_failures_total")
                 .with_description("Provider-level failures observed while fetching chunks.")
@@ -612,7 +566,6 @@ impl SorafsFetchOtel {
                 .u64_counter("sorafs.fetch.transport_events_total")
                 .with_description("Transport events emitted by the orchestrator grouped by protocol/event/reason.")
                 .build();
-
             Self {
                 active_fetches,
                 duration_ms,
@@ -637,7 +590,6 @@ impl SorafsFetchOtel {
             Self {}
         }
     }
-
     /// Record fetch start for the manifest/region/job tuple.
     pub fn fetch_started(&self, manifest_id: &str, region: &str, job_id: &str) {
         #[cfg(feature = "otel-exporter")]
@@ -649,7 +601,6 @@ impl SorafsFetchOtel {
         }
         let _ = (self, manifest_id, region, job_id);
     }
-
     /// Record fetch completion for the manifest/region/job tuple.
     pub fn fetch_finished(&self, manifest_id: &str, region: &str, job_id: &str) {
         #[cfg(feature = "otel-exporter")]
@@ -661,7 +612,6 @@ impl SorafsFetchOtel {
         }
         let _ = (self, manifest_id, region, job_id);
     }
-
     /// Record fetch duration (ms).
     pub fn record_duration(&self, manifest_id: &str, region: &str, job_id: &str, duration_ms: f64) {
         #[cfg(feature = "otel-exporter")]
@@ -673,7 +623,6 @@ impl SorafsFetchOtel {
         }
         let _ = (self, manifest_id, region, job_id, duration_ms);
     }
-
     /// Increment failure counter.
     pub fn record_failure(
         &self,
@@ -690,7 +639,6 @@ impl SorafsFetchOtel {
         }
         let _ = (self, manifest_id, region, job_id, reason);
     }
-
     /// Increment retry counter.
     pub fn record_retries(
         &self,
@@ -720,7 +668,6 @@ impl SorafsFetchOtel {
             count,
         );
     }
-
     /// Record an anonymity policy event.
     pub fn record_policy_event(
         &self,
@@ -741,7 +688,6 @@ impl SorafsFetchOtel {
         }
         let _ = (self, manifest_id, region, job_id, stage, outcome, reason);
     }
-
     /// Record a transport event emitted by the orchestrator.
     pub fn record_transport_event(
         &self,
@@ -762,7 +708,6 @@ impl SorafsFetchOtel {
         }
         let _ = (self, manifest_id, region, job_id, protocol, event, reason);
     }
-
     /// Record the observed PQ-capable relay ratio for a session.
     pub fn record_pq_ratio(
         &self,
@@ -780,7 +725,6 @@ impl SorafsFetchOtel {
         }
         let _ = (self, manifest_id, region, job_id, stage, ratio);
     }
-
     /// Record the PQ-capable candidate ratio for a session.
     pub fn record_pq_candidate_ratio(
         &self,
@@ -799,7 +743,6 @@ impl SorafsFetchOtel {
         }
         let _ = (self, manifest_id, region, job_id, stage, ratio);
     }
-
     /// Record the PQ policy shortfall ratio for a session.
     pub fn record_pq_deficit_ratio(
         &self,
@@ -817,7 +760,6 @@ impl SorafsFetchOtel {
         }
         let _ = (self, manifest_id, region, job_id, stage, ratio);
     }
-
     /// Record the classical relay ratio for a session.
     pub fn record_classical_ratio(
         &self,
@@ -835,7 +777,6 @@ impl SorafsFetchOtel {
         }
         let _ = (self, manifest_id, region, job_id, stage, ratio);
     }
-
     /// Record the number of classical relays selected for a session.
     pub fn record_classical_selected(
         &self,
@@ -853,7 +794,6 @@ impl SorafsFetchOtel {
         }
         let _ = (self, manifest_id, region, job_id, stage, selected);
     }
-
     /// Record an anonymity policy brownout event.
     pub fn record_brownout_event(
         &self,
@@ -872,7 +812,6 @@ impl SorafsFetchOtel {
         }
         let _ = (self, manifest_id, region, job_id, stage, reason);
     }
-
     /// Increment provider failure counter.
     pub fn record_provider_failure(
         &self,
@@ -902,7 +841,6 @@ impl SorafsFetchOtel {
             count,
         );
     }
-
     /// Record per-chunk latency (milliseconds).
     pub fn record_chunk_latency(
         &self,
@@ -920,7 +858,6 @@ impl SorafsFetchOtel {
         }
         let _ = (self, manifest_id, region, job_id, provider_id, latency_ms);
     }
-
     /// Record bytes delivered for a chunk.
     pub fn record_bytes(
         &self,
@@ -940,7 +877,6 @@ impl SorafsFetchOtel {
         }
         let _ = (self, manifest_id, region, job_id, provider_id, bytes);
     }
-
     /// Increment stall counter for latency cap breaches.
     pub fn record_stall(
         &self,
@@ -957,7 +893,6 @@ impl SorafsFetchOtel {
         }
         let _ = (self, manifest_id, region, job_id, provider_id);
     }
-
     #[cfg(feature = "otel-exporter")]
     fn manifest_attributes(
         &self,
@@ -974,7 +909,6 @@ impl SorafsFetchOtel {
         attrs
     }
 }
-
 /// OpenTelemetry instrumentation for FASTPQ execution mode resolutions.
 #[cfg_attr(not(feature = "otel-exporter"), derive(Copy))]
 #[derive(Clone)]
@@ -984,13 +918,11 @@ pub struct FastpqOtel {
     #[cfg(feature = "otel-exporter")]
     poseidon_pipeline_resolutions_total: Counter<u64>,
 }
-
 impl Default for FastpqOtel {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[allow(clippy::unused_self)]
 impl FastpqOtel {
     /// Create a new FASTPQ instrumentation bundle.
@@ -1021,7 +953,6 @@ impl FastpqOtel {
             Self {}
         }
     }
-
     /// Record a FASTPQ execution mode resolution.
     #[cfg_attr(
         not(feature = "otel-exporter"),
@@ -1060,7 +991,6 @@ impl FastpqOtel {
             gpu_kind,
         );
     }
-
     /// Record a Poseidon pipeline resolution event.
     #[cfg_attr(
         not(feature = "otel-exporter"),
@@ -1100,7 +1030,6 @@ impl FastpqOtel {
         );
     }
 }
-
 /// Snapshot of a Metal queue lane captured by the FASTPQ runtime.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FastpqMetalQueueLaneSample {
@@ -1115,7 +1044,6 @@ pub struct FastpqMetalQueueLaneSample {
     /// Milliseconds this lane overlapped with other queues.
     pub overlap_ms: f64,
 }
-
 /// Aggregate Metal queue telemetry collected from the FASTPQ runtime.
 #[derive(Clone, Debug)]
 pub struct FastpqMetalQueueSample<'a> {
@@ -1134,7 +1062,6 @@ pub struct FastpqMetalQueueSample<'a> {
     /// Per-lane samples collected during the window.
     pub lanes: &'a [FastpqMetalQueueLaneSample],
 }
-
 /// OpenTelemetry instrumentation for repair scheduler metrics.
 #[cfg_attr(not(feature = "otel-exporter"), derive(Copy))]
 #[derive(Clone)]
@@ -1152,13 +1079,11 @@ pub struct SorafsRepairOtel {
     #[cfg(feature = "otel-exporter")]
     slash_proposals_total: Counter<u64>,
 }
-
 impl Default for SorafsRepairOtel {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[allow(clippy::unused_self, clippy::trivially_copy_pass_by_ref)]
 impl SorafsRepairOtel {
     /// Create a new instrumentation bundle for repair automation.
@@ -1208,7 +1133,6 @@ impl SorafsRepairOtel {
             Self {}
         }
     }
-
     /// Record a task transition for the given status label.
     pub fn record_task_transition(&self, status: &'static str) {
         #[cfg(feature = "otel-exporter")]
@@ -1220,7 +1144,6 @@ impl SorafsRepairOtel {
         }
         let _ = status;
     }
-
     /// Record repair latency in minutes for the supplied outcome label.
     pub fn record_latency(&self, minutes: f64, outcome: &'static str) {
         #[cfg(feature = "otel-exporter")]
@@ -1232,7 +1155,6 @@ impl SorafsRepairOtel {
         }
         let _ = (minutes, outcome);
     }
-
     /// Record the oldest queued repair task age in seconds.
     pub fn record_backlog_oldest_age_seconds(&self, age_secs: f64) {
         #[cfg(feature = "otel-exporter")]
@@ -1241,7 +1163,6 @@ impl SorafsRepairOtel {
         }
         let _ = age_secs;
     }
-
     /// Record the current repair queue depth for the supplied provider.
     pub fn record_queue_depth(&self, depth: u64, provider: &str) {
         #[cfg(feature = "otel-exporter")]
@@ -1256,7 +1177,6 @@ impl SorafsRepairOtel {
         }
         let _ = (depth, provider);
     }
-
     /// Record a lease expiry event for the supplied outcome label.
     pub fn record_lease_expired(&self, outcome: &'static str) {
         #[cfg(feature = "otel-exporter")]
@@ -1268,7 +1188,6 @@ impl SorafsRepairOtel {
         }
         let _ = outcome;
     }
-
     /// Record a slash proposal transition for the supplied outcome label.
     pub fn record_slash_proposal(&self, outcome: &'static str) {
         #[cfg(feature = "otel-exporter")]
@@ -1281,7 +1200,6 @@ impl SorafsRepairOtel {
         let _ = outcome;
     }
 }
-
 /// OpenTelemetry instrumentation for GC/retention sweeps.
 #[cfg_attr(not(feature = "otel-exporter"), derive(Copy))]
 #[derive(Clone)]
@@ -1295,13 +1213,11 @@ pub struct SorafsGcOtel {
     #[cfg(feature = "otel-exporter")]
     blocked_total: Counter<u64>,
 }
-
 impl Default for SorafsGcOtel {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[allow(clippy::unused_self, clippy::trivially_copy_pass_by_ref)]
 impl SorafsGcOtel {
     /// Create a new instrumentation bundle for GC sweeps.
@@ -1338,7 +1254,6 @@ impl SorafsGcOtel {
             Self {}
         }
     }
-
     /// Record a GC run with the supplied result label.
     pub fn record_run(&self, result: &'static str) {
         #[cfg(feature = "otel-exporter")]
@@ -1348,7 +1263,6 @@ impl SorafsGcOtel {
         }
         let _ = result;
     }
-
     /// Record a GC eviction with the supplied reason label and freed bytes.
     pub fn record_eviction(&self, reason: &str, freed_bytes: u64) {
         #[cfg(feature = "otel-exporter")]
@@ -1359,7 +1273,6 @@ impl SorafsGcOtel {
         }
         let _ = (reason, freed_bytes);
     }
-
     /// Record a blocked GC eviction with the supplied reason label.
     pub fn record_blocked(&self, reason: &str) {
         #[cfg(feature = "otel-exporter")]
@@ -1370,7 +1283,6 @@ impl SorafsGcOtel {
         let _ = reason;
     }
 }
-
 /// OpenTelemetry instrumentation for reconciliation snapshots.
 #[cfg_attr(not(feature = "otel-exporter"), derive(Copy))]
 #[derive(Clone)]
@@ -1380,13 +1292,11 @@ pub struct SorafsReconciliationOtel {
     #[cfg(feature = "otel-exporter")]
     divergence_total: Counter<u64>,
 }
-
 impl Default for SorafsReconciliationOtel {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[allow(clippy::unused_self, clippy::trivially_copy_pass_by_ref)]
 impl SorafsReconciliationOtel {
     /// Create a new OTEL instrumentation bundle for reconciliation snapshots.
@@ -1413,7 +1323,6 @@ impl SorafsReconciliationOtel {
             Self {}
         }
     }
-
     /// Record a reconciliation run with the supplied result label.
     pub fn record_run(&self, result: &'static str) {
         #[cfg(feature = "otel-exporter")]
@@ -1423,7 +1332,6 @@ impl SorafsReconciliationOtel {
         }
         let _ = result;
     }
-
     /// Record the divergence count observed in a reconciliation run.
     pub fn record_divergence(&self, count: u64) {
         #[cfg(feature = "otel-exporter")]
@@ -1433,7 +1341,6 @@ impl SorafsReconciliationOtel {
         let _ = count;
     }
 }
-
 /// OpenTelemetry instrumentation for Torii SoraFS gateway metrics.
 #[cfg_attr(not(feature = "otel-exporter"), derive(Copy))]
 #[derive(Clone)]
@@ -1449,13 +1356,11 @@ pub struct SorafsGatewayOtel {
     #[cfg(feature = "otel-exporter")]
     proof_duration_ms: OtelHistogram<f64>,
 }
-
 impl Default for SorafsGatewayOtel {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[allow(clippy::unused_self, clippy::trivially_copy_pass_by_ref)]
 impl SorafsGatewayOtel {
     /// Create a new OTEL instrumentation bundle for gateway metrics.
@@ -1464,37 +1369,31 @@ impl SorafsGatewayOtel {
         #[cfg(feature = "otel-exporter")]
         {
             let meter = opentelemetry::global::meter("sorafs.gateway");
-
             let active_requests = meter
                 .i64_up_down_counter("sorafs.gateway.active")
                 .with_description("Active SoraFS gateway HTTP requests.")
                 .with_unit("requests")
                 .build();
-
             let responses_total = meter
                 .u64_counter("sorafs.gateway.responses_total")
                 .with_description(
                     "Total SoraFS gateway responses grouped by endpoint and bounded outcome.",
                 )
                 .build();
-
             let ttfb_ms = meter
                 .f64_histogram("sorafs.gateway.ttfb_ms")
                 .with_description("Gateway time-to-first-byte histogram (milliseconds).")
                 .with_unit("ms")
                 .build();
-
             let proof_verifications_total = meter
                 .u64_counter("sorafs.gateway.proof_verifications_total")
                 .with_description("SoraFS proof verification outcomes grouped by profile.")
                 .build();
-
             let proof_duration_ms = meter
                 .f64_histogram("sorafs.gateway.proof_duration_ms")
                 .with_description("SoraFS proof verification duration (milliseconds).")
                 .with_unit("ms")
                 .build();
-
             Self {
                 active_requests,
                 responses_total,
@@ -1508,7 +1407,6 @@ impl SorafsGatewayOtel {
             Self {}
         }
     }
-
     /// Track the start of a gateway request for active request accounting.
     pub fn request_started_detailed(&self, labels: SorafsGatewayRequestMetricLabels<'_>) {
         #[cfg(feature = "otel-exporter")]
@@ -1521,14 +1419,12 @@ impl SorafsGatewayOtel {
             let _ = labels;
         }
     }
-
     /// Track the completion of a gateway request.
     pub fn request_completed_detailed(&self, labels: SorafsGatewayResponseMetricLabels<'_>) {
         #[cfg(feature = "otel-exporter")]
         {
             let active_attrs = Self::base_attrs(labels.request);
             self.active_requests.add(-1, &active_attrs);
-
             let mut attrs = active_attrs;
             attrs.push(KeyValue::new("result", labels.result.to_string()));
             attrs.push(KeyValue::new("status", labels.status.to_string()));
@@ -1540,7 +1436,6 @@ impl SorafsGatewayOtel {
             let _ = labels;
         }
     }
-
     /// Record a gateway latency observation with detailed labels.
     pub fn record_ttfb_detailed(
         &self,
@@ -1560,7 +1455,6 @@ impl SorafsGatewayOtel {
             let _ = (labels, latency_ms);
         }
     }
-
     /// Record a proof verification outcome using the gateway proof metrics.
     pub fn record_proof_verification(
         &self,
@@ -1584,7 +1478,6 @@ impl SorafsGatewayOtel {
             let _ = (profile_version, outcome, error_code, latency_ms);
         }
     }
-
     #[cfg(feature = "otel-exporter")]
     fn base_attrs(labels: SorafsGatewayRequestMetricLabels<'_>) -> Vec<KeyValue> {
         vec![
@@ -1596,14 +1489,12 @@ impl SorafsGatewayOtel {
         ]
     }
 }
-
 #[cfg(feature = "otel-exporter")]
 #[derive(Default, Clone)]
 struct PorSnapshot {
     success: u64,
     failure: u64,
 }
-
 /// OpenTelemetry instrumentation for embedded SoraFS node metrics.
 pub struct SorafsNodeOtel {
     #[cfg(feature = "otel-exporter")]
@@ -1644,7 +1535,6 @@ pub struct SorafsNodeOtel {
     por_totals: Arc<Mutex<HashMap<String, PorSnapshot>>>,
     micropayment_sink: RwLock<Option<MicropaymentSampleSink>>,
 }
-
 impl Clone for SorafsNodeOtel {
     fn clone(&self) -> Self {
         #[cfg(feature = "otel-exporter")]
@@ -1685,13 +1575,11 @@ impl Clone for SorafsNodeOtel {
             self.micropayment_tickets_duplicate_total.clone();
         #[cfg(feature = "otel-exporter")]
         let por_totals = self.por_totals.clone();
-
         let micropayment_sink = self
             .micropayment_sink
             .read()
             .map(|guard| guard.clone())
             .unwrap_or_default();
-
         Self {
             #[cfg(feature = "otel-exporter")]
             por_success_total,
@@ -1733,7 +1621,6 @@ impl Clone for SorafsNodeOtel {
         }
     }
 }
-
 /// Aggregated micropayment credit measurements captured for a single sampling window.
 #[derive(
     Debug,
@@ -1757,7 +1644,6 @@ pub struct MicropaymentCreditSnapshot {
     /// Exact outstanding balance after applying credit.
     pub outstanding: Quantity,
 }
-
 /// Lottery ticket counters observed during micropayment sampling.
 #[derive(
     Debug,
@@ -1778,7 +1664,6 @@ pub struct MicropaymentTicketCounters {
     /// Tickets ignored due to duplication.
     pub duplicate: u64,
 }
-
 #[allow(clippy::unused_self, clippy::trivially_copy_pass_by_ref)]
 impl SorafsNodeOtel {
     /// Create a new OTEL instrumentation bundle for SoraFS nodes.
@@ -1788,7 +1673,6 @@ impl SorafsNodeOtel {
         #[cfg(feature = "otel-exporter")]
         {
             let meter = opentelemetry::global::meter("sorafs.node");
-
             let build_counter = |name: &'static str, description: &'static str| {
                 meter
                     .u64_counter(name)
@@ -1803,7 +1687,6 @@ impl SorafsNodeOtel {
                         .with_unit(unit)
                         .build()
                 };
-
             let por_success_total = build_counter(
                 "sorafs.node.por_success_total",
                 "Total successful PoR samples per provider.",
@@ -1825,7 +1708,6 @@ impl SorafsNodeOtel {
                 "sorafs.node.deal_publish_total",
                 "Settlement artefact publish attempts per provider and outcome.",
             );
-
             let deal_histograms = [
                 (
                     "sorafs.node.deal_expected_charge_nano",
@@ -1846,12 +1728,10 @@ impl SorafsNodeOtel {
                 deal_outstanding_nano,
             ] = deal_histograms
                 .map(|(name, description)| build_histogram(name, description, "nano"));
-
             let deal_bond_slash_nano = build_counter(
                 "sorafs.node.deal_bond_slash_nano",
                 "Total bond slashes applied during settlements (nano XOR, truncated to u64).",
             );
-
             let micropayment_histograms = [
                 (
                     "sorafs.node.micropayment_charge_nano",
@@ -1882,7 +1762,6 @@ impl SorafsNodeOtel {
                 micropayment_outstanding_nano,
             ] = micropayment_histograms
                 .map(|(name, description)| build_histogram(name, description, "nano"));
-
             let micropayment_counters = [
                 (
                     "sorafs.node.micropayment_tickets_processed_total",
@@ -1902,7 +1781,6 @@ impl SorafsNodeOtel {
                 micropayment_tickets_won_total,
                 micropayment_tickets_duplicate_total,
             ] = micropayment_counters.map(|(name, description)| build_counter(name, description));
-
             Self {
                 por_success_total,
                 por_failure_total,
@@ -1932,7 +1810,6 @@ impl SorafsNodeOtel {
             }
         }
     }
-
     /// Record a storage scheduler snapshot.
     pub fn record_storage(
         &self,
@@ -1949,7 +1826,6 @@ impl SorafsNodeOtel {
                 let utilisation = (bytes_used as f64 / bytes_capacity as f64) * 100.0;
                 self.capacity_ratio_pct.record(utilisation, &attrs);
             }
-
             let mut totals = self
                 .por_totals
                 .lock()
@@ -1957,7 +1833,6 @@ impl SorafsNodeOtel {
             let entry = totals
                 .entry(provider_id.to_string())
                 .or_insert_with(PorSnapshot::default);
-
             if por_samples_success >= entry.success {
                 let delta = por_samples_success - entry.success;
                 if delta > 0 {
@@ -1966,7 +1841,6 @@ impl SorafsNodeOtel {
             } else {
                 entry.success = 0;
             }
-
             if por_samples_failed >= entry.failure {
                 let delta = por_samples_failed - entry.failure;
                 if delta > 0 {
@@ -1975,7 +1849,6 @@ impl SorafsNodeOtel {
             } else {
                 entry.failure = 0;
             }
-
             entry.success = por_samples_success;
             entry.failure = por_samples_failed;
         }
@@ -1990,7 +1863,6 @@ impl SorafsNodeOtel {
             );
         }
     }
-
     /// Record settlement telemetry for a completed deal window.
     pub fn record_deal_settlement(
         &self,
@@ -2033,7 +1905,6 @@ impl SorafsNodeOtel {
             );
         }
     }
-
     /// Record the outcome of a settlement artefact publish attempt.
     pub fn record_settlement_publish(&self, provider_id: &str, result: &str) {
         #[cfg(feature = "otel-exporter")]
@@ -2049,7 +1920,6 @@ impl SorafsNodeOtel {
             let _ = (provider_id, result);
         }
     }
-
     /// Record telemetry for a micropayment sampling window.
     pub fn record_micropayment_sample(
         &self,
@@ -2106,7 +1976,6 @@ impl SorafsNodeOtel {
             sink(provider_id, credits, tickets);
         }
     }
-
     /// Replace the current micropayment sample sink used for cross-component telemetry.
     pub fn set_micropayment_sink(&self, sink: Option<MicropaymentSampleSink>) {
         *self
@@ -2115,13 +1984,11 @@ impl SorafsNodeOtel {
             .expect("micropayment sink lock poisoned") = sink;
     }
 }
-
 impl Default for SorafsNodeOtel {
     fn default() -> Self {
         Self::new()
     }
 }
-
 impl norito::core::NoritoSerialize for MicropaymentCreditSnapshot {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
@@ -2134,7 +2001,6 @@ impl norito::core::NoritoSerialize for MicropaymentCreditSnapshot {
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for MicropaymentCreditSnapshot {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let (deterministic_charge, credit_generated, credit_applied, credit_carry, outstanding): (
@@ -2153,7 +2019,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for MicropaymentCreditSnapshot {
         }
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for MicropaymentCreditSnapshot {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (
@@ -2172,14 +2037,12 @@ impl<'a> DecodeFromSlice<'a> for MicropaymentCreditSnapshot {
         ))
     }
 }
-
 impl norito::core::NoritoSerialize for MicropaymentTicketCounters {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (self.processed, self.won, self.duplicate);
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for MicropaymentTicketCounters {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let (processed, won, duplicate): (u64, u64, u64) =
@@ -2191,7 +2054,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for MicropaymentTicketCounters {
         }
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for MicropaymentTicketCounters {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let ((processed, won, duplicate), used) = <(u64, u64, u64)>::decode_from_slice(bytes)?;
@@ -2205,7 +2067,6 @@ impl<'a> DecodeFromSlice<'a> for MicropaymentTicketCounters {
         ))
     }
 }
-
 /// Cached micropayment sample surfaced via `/status`.
 #[derive(
     Clone,
@@ -2223,7 +2084,6 @@ pub struct MicropaymentSampleStatus {
     /// Ticket counters observed for the sampling window.
     pub tickets: MicropaymentTicketCounters,
 }
-
 impl norito::core::NoritoSerialize for MicropaymentSampleStatus {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
@@ -2234,7 +2094,6 @@ impl norito::core::NoritoSerialize for MicropaymentSampleStatus {
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for MicropaymentSampleStatus {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let (provider_id_hex, credits, tickets): (
@@ -2249,7 +2108,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for MicropaymentSampleStatus {
         }
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for MicropaymentSampleStatus {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let ((provider_id_hex, credits, tickets), used) = <(
@@ -2267,7 +2125,6 @@ impl<'a> DecodeFromSlice<'a> for MicropaymentSampleStatus {
         ))
     }
 }
-
 /// Snapshot of Taikai ingest health per (cluster, stream) surfaced via `/status`.
 #[derive(
     Clone,
@@ -2297,7 +2154,6 @@ pub struct TaikaiIngestStatus {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub error_counts: Vec<TaikaiIngestErrorCounter>,
 }
-
 /// Aggregated error counter for a given reason.
 #[derive(
     Clone,
@@ -2315,19 +2171,16 @@ pub struct TaikaiIngestErrorCounter {
     /// Total occurrences observed by the node.
     pub total: u64,
 }
-
 /// Maximum number of stream snapshots retained for Taikai ingest status.
 const TAIKAI_INGEST_SNAPSHOT_CAP: usize = 256;
 /// Maximum distinct error reasons tracked per Taikai stream snapshot.
 const TAIKAI_INGEST_ERROR_REASON_CAP: usize = 32;
-
 #[derive(Clone, Debug, Default)]
 struct TaikaiIngestSnapshotInternal {
     last_latency_ms: Option<u32>,
     last_live_edge_drift_ms: Option<i32>,
     error_totals: BTreeMap<String, u64>,
 }
-
 /// Snapshot of alias rotation events coming from Taikai routing manifests.
 #[derive(
     Clone,
@@ -2361,7 +2214,6 @@ pub struct TaikaiAliasRotationStatus {
     /// UNIX timestamp (seconds) when this snapshot was last updated.
     pub last_updated_unix: u64,
 }
-
 #[derive(Clone, Debug, Default)]
 struct TaikaiAliasRotationSnapshotInternal {
     alias_namespace: String,
@@ -2372,10 +2224,8 @@ struct TaikaiAliasRotationSnapshotInternal {
     rotations_total: u64,
     last_updated_unix: u64,
 }
-
 type TaikaiAliasRotationSnapshots =
     Arc<RwLock<BTreeMap<(String, String, String), TaikaiAliasRotationSnapshotInternal>>>;
-
 #[derive(Clone, Copy)]
 struct TaikaiAliasRotationSnapshotArgs<'a> {
     cluster: &'a str,
@@ -2387,7 +2237,6 @@ struct TaikaiAliasRotationSnapshotArgs<'a> {
     window_end_sequence: u64,
     manifest_digest_hex: &'a str,
 }
-
 static GLOBAL_FASTPQ_OTEL: OnceLock<Arc<FastpqOtel>> = OnceLock::new();
 static GLOBAL_SORAFS_FETCH_OTEL: OnceLock<Arc<SorafsFetchOtel>> = OnceLock::new();
 static GLOBAL_SORAFS_REPAIR_OTEL: OnceLock<Arc<SorafsRepairOtel>> = OnceLock::new();
@@ -2395,25 +2244,21 @@ static GLOBAL_SORAFS_RECONCILIATION_OTEL: OnceLock<Arc<SorafsReconciliationOtel>
 static GLOBAL_SORAFS_GC_OTEL: OnceLock<Arc<SorafsGcOtel>> = OnceLock::new();
 static GLOBAL_SORAFS_GATEWAY_OTEL: OnceLock<Arc<SorafsGatewayOtel>> = OnceLock::new();
 static GLOBAL_SORAFS_NODE_OTEL: OnceLock<Arc<SorafsNodeOtel>> = OnceLock::new();
-
 /// Retrieve the global FASTPQ OTEL metrics handle.
 #[must_use]
 pub fn global_fastpq_otel() -> Arc<FastpqOtel> {
     Arc::clone(GLOBAL_FASTPQ_OTEL.get_or_init(|| Arc::new(FastpqOtel::new())))
 }
-
 /// Retrieve the global OTEL metrics handle used by the orchestrator.
 #[must_use]
 pub fn global_sorafs_fetch_otel() -> Arc<SorafsFetchOtel> {
     Arc::clone(GLOBAL_SORAFS_FETCH_OTEL.get_or_init(|| Arc::new(SorafsFetchOtel::new())))
 }
-
 /// Retrieve the global OTEL metrics handle used by repair automation.
 #[must_use]
 pub fn global_sorafs_repair_otel() -> Arc<SorafsRepairOtel> {
     Arc::clone(GLOBAL_SORAFS_REPAIR_OTEL.get_or_init(|| Arc::new(SorafsRepairOtel::new())))
 }
-
 /// Retrieve the global OTEL metrics handle used by reconciliation snapshots.
 #[must_use]
 pub fn global_sorafs_reconciliation_otel() -> Arc<SorafsReconciliationOtel> {
@@ -2421,37 +2266,30 @@ pub fn global_sorafs_reconciliation_otel() -> Arc<SorafsReconciliationOtel> {
         GLOBAL_SORAFS_RECONCILIATION_OTEL.get_or_init(|| Arc::new(SorafsReconciliationOtel::new())),
     )
 }
-
 /// Retrieve the global OTEL metrics handle used by GC automation.
 #[must_use]
 pub fn global_sorafs_gc_otel() -> Arc<SorafsGcOtel> {
     Arc::clone(GLOBAL_SORAFS_GC_OTEL.get_or_init(|| Arc::new(SorafsGcOtel::new())))
 }
-
 /// Retrieve the global OTEL metrics handle used by Torii gateway endpoints.
 #[must_use]
 pub fn global_sorafs_gateway_otel() -> Arc<SorafsGatewayOtel> {
     Arc::clone(GLOBAL_SORAFS_GATEWAY_OTEL.get_or_init(|| Arc::new(SorafsGatewayOtel::new())))
 }
-
 /// Retrieve the global OTEL metrics handle used by embedded SoraFS nodes.
 #[must_use]
 pub fn global_sorafs_node_otel() -> Arc<SorafsNodeOtel> {
     Arc::clone(GLOBAL_SORAFS_NODE_OTEL.get_or_init(|| Arc::new(SorafsNodeOtel::new())))
 }
-
 #[cfg(test)]
 mod tests {
-    use norito::{NoritoDeserialize, from_bytes, to_bytes};
-
     use super::*;
-
+    use norito::{NoritoDeserialize, from_bytes, to_bytes};
     fn find_metric_line<'a>(dump: &'a str, prefix: &str) -> &'a str {
         dump.lines()
             .find(|line| line.starts_with(prefix))
             .unwrap_or_else(|| panic!("metric line starting with `{prefix}` not found"))
     }
-
     fn parse_metric_value(line: &str) -> f64 {
         line.split_whitespace()
             .last()
@@ -2459,7 +2297,6 @@ mod tests {
             .parse::<f64>()
             .unwrap_or_else(|err| panic!("invalid metric value `{line}`: {err}"))
     }
-
     fn sample_lane_teu_status() -> NexusLaneTeuStatus {
         NexusLaneTeuStatus {
             lane_id: 0,
@@ -2509,7 +2346,6 @@ mod tests {
             manifest_runtime_upgrade: None,
         }
     }
-
     fn sample_dataspace_teu_status() -> NexusDataspaceTeuStatus {
         NexusDataspaceTeuStatus {
             lane_id: 0,
@@ -2523,31 +2359,25 @@ mod tests {
             description: None,
         }
     }
-
     #[test]
     fn dataspace_teu_status_roundtrips_fault_tolerance() {
         let mut status = sample_dataspace_teu_status();
         status.fault_tolerance = 2;
-
         let bytes = to_bytes(&status).expect("serialize status");
         let archived = from_bytes(&bytes).expect("deserialize status");
         let decoded = NexusDataspaceTeuStatus::deserialize(archived);
-
         assert_eq!(decoded.fault_tolerance, status.fault_tolerance);
     }
-
     #[test]
     fn recent_rejected_transactions_prune_after_window() {
         let metrics = Metrics::default();
         metrics.record_rejected_transactions(2, 1_000);
         metrics.record_rejected_transactions(3, 2_000);
-
         assert_eq!(metrics.last_rejection_at_ms(), Some(2_000));
         assert_eq!(metrics.txs_rejected_recent_5m(2_500), 5);
         assert_eq!(metrics.txs_rejected_recent_5m(302_000), 3);
         assert_eq!(metrics.txs_rejected_recent_5m(303_000), 0);
     }
-
     #[test]
     fn da_receipt_metrics_retain_only_the_latest_epoch_per_lane() {
         let metrics = Metrics::default();
@@ -2556,7 +2386,6 @@ mod tests {
         metrics.set_da_receipt_cursor(7, 3, 4);
         metrics.set_da_receipt_cursor(7, 2, u64::MAX);
         metrics.set_da_receipt_cursor(7, 4, 1);
-
         let status = metrics.da_receipt_cursor_status();
         assert_eq!(status.len(), 1);
         assert_eq!(status[0].lane_id, 7);
@@ -2594,7 +2423,6 @@ mod tests {
             "epoch must be a gauge value, never a Prometheus label"
         );
     }
-
     #[test]
     fn da_receipt_metric_lanes_are_capped_prunable_and_poison_tolerant() {
         let metrics = Metrics::default();
@@ -2612,7 +2440,6 @@ mod tests {
                 .iter()
                 .all(|cursor| cursor.lane_id != u32::MAX)
         );
-
         metrics.prune_da_receipt_lanes([7]);
         assert!(
             metrics
@@ -2627,7 +2454,6 @@ mod tests {
             }),
             "retired-lane receipt series must be removed"
         );
-
         let lanes = Arc::clone(&metrics.da_receipt_metric_lanes);
         let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _guard = lanes.write().expect("lock should initially be healthy");
@@ -2645,7 +2471,6 @@ mod tests {
             "metrics must recover the poisoned cache instead of panicking"
         );
     }
-
     #[test]
     fn status_strip_nexus_clears_lane_fields() {
         let mut status = Status {
@@ -2676,9 +2501,7 @@ mod tests {
             }),
             ..Status::default()
         };
-
         status.strip_nexus();
-
         assert!(status.teu_lane_commit.is_empty());
         assert!(status.teu_dataspace_backlog.is_empty());
         assert!(status.dataspace_catalog.is_empty());
@@ -2687,7 +2510,6 @@ mod tests {
         assert_eq!(consensus.lane_governance_sealed_total, 0);
         assert!(consensus.lane_governance_sealed_aliases.is_empty());
     }
-
     #[cfg(not(feature = "otel-exporter"))]
     #[test]
     fn sorafs_node_otel_new_and_record_sample_do_not_panic_without_exporter() {
@@ -2708,7 +2530,6 @@ mod tests {
             },
         );
     }
-
     #[test]
     fn micropayment_credit_snapshot_norito_roundtrip_preserves_exact_quantities() {
         let snapshot = MicropaymentCreditSnapshot {
@@ -2722,15 +2543,12 @@ mod tests {
                 .parse()
                 .expect("canonical exact quantity"),
         };
-
         let bytes = to_bytes(&snapshot).expect("encode exact micropayment snapshot");
         let archived = from_bytes::<MicropaymentCreditSnapshot>(&bytes)
             .expect("archive exact micropayment snapshot");
         let decoded = MicropaymentCreditSnapshot::deserialize(archived);
-
         assert_eq!(decoded, snapshot);
     }
-
     #[cfg(not(feature = "otel-exporter"))]
     #[test]
     fn sorafs_reconciliation_otel_new_and_record_do_not_panic_without_exporter() {
@@ -2738,7 +2556,6 @@ mod tests {
         otel.record_run("success");
         otel.record_divergence(2);
     }
-
     #[test]
     fn records_fastpq_execution_mode_metrics() {
         let metrics = Metrics::default();
@@ -2749,7 +2566,6 @@ mod tests {
             .get();
         assert_eq!(value, 1, "FASTPQ execution mode counter increments");
     }
-
     #[test]
     fn records_fastpq_gpu_disable_and_parity_metrics() {
         let metrics = Metrics::default();
@@ -2794,7 +2610,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn records_fastpq_proof_sidecar_metrics() {
         let metrics = Metrics::default();
@@ -2809,7 +2624,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn records_fastpq_metal_queue_metrics() {
         let metrics = Metrics::default();
@@ -2839,7 +2653,6 @@ mod tests {
             lanes: &lanes,
         };
         metrics.record_fastpq_metal_queue_stats("apple-m4", "m4", "integrated", &sample);
-
         let depth_limit = metrics
             .fastpq_metal_queue_depth
             .with_label_values(&["apple-m4", "m4", "integrated", "limit"])
@@ -2873,12 +2686,10 @@ mod tests {
             "lane duty cycle recorded"
         );
     }
-
     #[test]
     fn records_fastpq_zero_fill_metrics() {
         let metrics = Metrics::default();
         metrics.record_fastpq_zero_fill("apple-m4", "m4", "integrated", 0.25, 32_000);
-
         let duration = metrics
             .fastpq_zero_fill_duration_ms
             .with_label_values(&["apple-m4", "m4", "integrated"])
@@ -2891,19 +2702,16 @@ mod tests {
         // (32_000 bytes * 8 bits) / (0.25 ms * 1e6) = 1.024 Gbps
         assert!((bandwidth - 1.024).abs() < 1e-6);
     }
-
     #[test]
     fn scheduler_layer_width_buckets_norito_json_roundtrip() {
         let values = [1, 2, 3, 4, 5, 6, 7, 8];
         let buckets = SchedulerLayerWidthBuckets::from(values);
         assert_eq!(buckets.as_slice(), &values);
-
         let bytes = to_bytes(&buckets).expect("serialize buckets");
         let archived =
             from_bytes::<SchedulerLayerWidthBuckets>(&bytes).expect("archived buckets payload");
         let decoded = norito::core::NoritoDeserialize::deserialize(archived);
         assert_eq!(decoded.as_slice(), &values);
-
         let json_bytes = norito::json::to_vec(&buckets).expect("JSON encode buckets");
         let parsed: SchedulerLayerWidthBuckets =
             norito::json::from_slice(&json_bytes).expect("JSON decode buckets");
@@ -2914,7 +2722,6 @@ mod tests {
             "unexpected JSON payload: {json_repr}"
         );
     }
-
     #[test]
     fn scheduler_layer_width_buckets_from_slice_pads_and_truncates() {
         let input = [42_u64, 7, 9];
@@ -2922,19 +2729,16 @@ mod tests {
         let mut expected = [0_u64; 8];
         expected[..input.len()].copy_from_slice(&input);
         assert_eq!(buckets.as_slice(), &expected);
-
         let long_input = [11_u64; 16];
         let truncated = SchedulerLayerWidthBuckets::from_slice(&long_input);
         assert!(truncated.as_slice().iter().all(|&value| value == 11));
     }
-
     #[test]
     fn taikai_ingest_snapshot_tracks_latest_values() {
         let metrics = Metrics::default();
         metrics.observe_taikai_ingest_latency("cluster-a", "stream-main", 150);
         metrics.observe_taikai_live_edge_drift("cluster-a", "stream-main", -37);
         metrics.inc_taikai_ingest_error("cluster-a", "stream-main", "decode");
-
         let snapshots = metrics.taikai_ingest_status();
         assert_eq!(snapshots.len(), 1);
         let snapshot = &snapshots[0];
@@ -2946,7 +2750,6 @@ mod tests {
         assert_eq!(snapshot.error_counts[0].reason, "decode");
         assert_eq!(snapshot.error_counts[0].total, 1);
     }
-
     #[test]
     fn taikai_ingest_snapshot_prunes_oldest_streams() {
         let metrics = Metrics::default();
@@ -2954,7 +2757,6 @@ mod tests {
             let stream = format!("stream-{idx}");
             metrics.observe_taikai_ingest_latency("cluster-a", &stream, 10);
         }
-
         let snapshots = metrics.taikai_ingest_status();
         assert!(
             snapshots.len() <= TAIKAI_INGEST_SNAPSHOT_CAP,
@@ -2973,7 +2775,6 @@ mod tests {
             "oldest stream should be evicted"
         );
     }
-
     #[test]
     fn taikai_ingest_error_reasons_are_capped() {
         let metrics = Metrics::default();
@@ -2981,7 +2782,6 @@ mod tests {
             metrics.inc_taikai_ingest_error("cluster-a", "stream-main", &format!("reason-{idx}"));
         }
         metrics.inc_taikai_ingest_error("cluster-a", "stream-main", "reason-new");
-
         let snapshots = metrics.taikai_ingest_status();
         let snapshot = snapshots
             .iter()
@@ -3006,12 +2806,10 @@ mod tests {
             "oldest reason should be evicted to enforce the cap"
         );
     }
-
     #[test]
     fn taikai_ingest_drift_gauge_preserves_sign() {
         let metrics = Metrics::default();
         metrics.observe_taikai_live_edge_drift("cluster-a", "stream-main", -42);
-
         let dump = metrics.try_to_string().expect("metrics text");
         let line = find_metric_line(
             &dump,
@@ -3023,13 +2821,11 @@ mod tests {
             "expected signed drift gauge to retain negative value, got {value}"
         );
     }
-
     #[test]
     fn metrics_export_strips_lane_labels_when_nexus_disabled() {
         let metrics = Metrics::default();
         metrics.set_lane_block_height("lane-0", "global", 7);
         metrics.txs.with_label_values(&["committed"]).inc();
-
         let enabled = metrics
             .try_to_string_with_nexus_gate(true)
             .expect("metrics text");
@@ -3037,7 +2833,6 @@ mod tests {
             enabled.contains("nexus_lane_block_height"),
             "lane metrics should be present when Nexus is enabled"
         );
-
         let filtered = metrics
             .try_to_string_with_nexus_gate(false)
             .expect("filtered metrics");
@@ -3050,7 +2845,6 @@ mod tests {
             "non-lane metrics must remain after filtering: {filtered}"
         );
     }
-
     #[test]
     fn taikai_alias_rotation_snapshot_tracks_latest_manifest() {
         let metrics = Metrics::default();
@@ -3074,7 +2868,6 @@ mod tests {
             24,
             "cafebabe",
         );
-
         let snapshots = metrics.taikai_alias_rotation_status();
         assert_eq!(snapshots.len(), 1);
         let snapshot = &snapshots[0];
@@ -3088,7 +2881,6 @@ mod tests {
         assert_eq!(snapshot.manifest_digest_hex, "cafebabe");
         assert_eq!(snapshot.rotations_total, 2);
         assert!(snapshot.last_updated_unix > 0);
-
         let dump = metrics.try_to_string().expect("metrics text");
         let metric_line = find_metric_line(
             &dump,
@@ -3106,40 +2898,32 @@ mod tests {
             "expected counter to reflect total rotations"
         );
     }
-
     #[test]
     fn duplicate_metric_panic_flag_follows_override() {
         let flag = duplicate_metrics_flag();
         let previous = flag.load(Ordering::Relaxed);
-
         set_duplicate_metrics_panic(true);
         assert!(duplicate_metrics_should_panic());
         set_duplicate_metrics_panic(false);
         assert!(!duplicate_metrics_should_panic());
-
         // Restore prior state to avoid leaking configuration between tests.
         flag.store(previous, Ordering::Relaxed);
     }
-
     #[test]
     fn metrics_default_registers_without_duplicate_metrics() {
         struct DuplicateMetricsGuard(bool);
-
         impl Drop for DuplicateMetricsGuard {
             fn drop(&mut self) {
                 set_duplicate_metrics_panic(self.0);
             }
         }
-
         let flag = duplicate_metrics_flag();
         let previous = flag.load(Ordering::Relaxed);
         set_duplicate_metrics_panic(true);
         let _guard = DuplicateMetricsGuard(previous);
-
         let _metrics = Metrics::default();
     }
 }
-
 #[cfg(feature = "otel-exporter")]
 fn install_otlp_metrics_exporter(
     endpoint: &str,
@@ -3152,22 +2936,18 @@ fn install_otlp_metrics_exporter(
         Resource,
         metrics::{PeriodicReader, SdkMeterProvider},
     };
-
     let exporter = MetricExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint.to_owned())
         .build()?;
-
     let reader = PeriodicReader::builder(exporter)
         .with_interval(interval)
         .build();
-
     let mut attributes = Vec::with_capacity(resource.len() + 1);
     attributes.push(KeyValue::new("service.name", service_name.to_string()));
     for (key, value) in resource {
         attributes.push(KeyValue::new((*key).to_string(), (*value).to_string()));
     }
-
     let provider = SdkMeterProvider::builder()
         .with_resource(
             Resource::builder_empty()
@@ -3176,11 +2956,9 @@ fn install_otlp_metrics_exporter(
         )
         .with_reader(reader)
         .build();
-
     opentelemetry::global::set_meter_provider(provider);
     Ok(())
 }
-
 /// Install an OTLP exporter that streams SoraFS orchestrator metrics via OpenTelemetry.
 ///
 /// # Errors
@@ -3194,7 +2972,6 @@ pub fn install_sorafs_fetch_otlp_exporter(
 ) -> eyre::Result<()> {
     install_otlp_metrics_exporter(endpoint, service_name, resource, interval)
 }
-
 /// Stub exporter installer when the OTEL feature is disabled.
 ///
 /// # Errors
@@ -3208,7 +2985,6 @@ pub fn install_sorafs_fetch_otlp_exporter(
 ) -> eyre::Result<()> {
     eyre::bail!("otel-exporter feature is disabled; enable it to emit OTLP telemetry");
 }
-
 /// Install an OTLP exporter that streams Torii gateway metrics via OpenTelemetry.
 ///
 /// # Errors
@@ -3222,7 +2998,6 @@ pub fn install_sorafs_gateway_otlp_exporter(
 ) -> eyre::Result<()> {
     install_otlp_metrics_exporter(endpoint, service_name, resource, interval)
 }
-
 /// Stub gateway exporter installer when the OTEL feature is disabled.
 ///
 /// # Errors
@@ -3236,7 +3011,6 @@ pub fn install_sorafs_gateway_otlp_exporter(
 ) -> eyre::Result<()> {
     eyre::bail!("otel-exporter feature is disabled; enable it to emit OTLP telemetry");
 }
-
 /// Install an OTLP exporter that streams embedded node metrics via OpenTelemetry.
 ///
 /// # Errors
@@ -3250,7 +3024,6 @@ pub fn install_sorafs_node_otlp_exporter(
 ) -> eyre::Result<()> {
     install_otlp_metrics_exporter(endpoint, service_name, resource, interval)
 }
-
 /// Stub node exporter installer when the OTEL feature is disabled.
 ///
 /// # Errors
@@ -3264,61 +3037,7 @@ pub fn install_sorafs_node_otlp_exporter(
 ) -> eyre::Result<()> {
     eyre::bail!("otel-exporter feature is disabled; enable it to emit OTLP telemetry");
 }
-
-#[cfg(test)]
-mod otel_tests {
-    use std::sync::Arc;
-
-    use super::*;
-
-    #[test]
-    fn global_fetch_otel_is_singleton() {
-        let first = global_sorafs_fetch_otel();
-        let second = global_sorafs_fetch_otel();
-        assert!(
-            Arc::ptr_eq(&first, &second),
-            "expected OTEL handle to be singleton"
-        );
-    }
-
-    #[test]
-    fn global_gateway_otel_is_singleton() {
-        let first = global_sorafs_gateway_otel();
-        let second = global_sorafs_gateway_otel();
-        assert!(
-            Arc::ptr_eq(&first, &second),
-            "expected gateway OTEL handle to be singleton"
-        );
-    }
-
-    #[cfg(not(feature = "otel-exporter"))]
-    #[test]
-    fn installing_exporter_without_feature_fails() {
-        let result = install_sorafs_fetch_otlp_exporter(
-            "http://127.0.0.1:4317",
-            "sorafs-orchestrator",
-            &[],
-            Duration::from_secs(5),
-        );
-        assert!(
-            result.is_err(),
-            "expected exporter installation to fail without otel-exporter feature"
-        );
-    }
-
-    #[cfg(feature = "otel-exporter")]
-    #[tokio::test]
-    async fn installing_exporter_with_valid_configuration_succeeds() {
-        let result = install_sorafs_fetch_otlp_exporter(
-            "http://127.0.0.1:4317",
-            "sorafs-orchestrator-test",
-            &[("deployment.environment", "test")],
-            Duration::from_secs(3_600),
-        );
-        assert!(result.is_ok(), "OTLP exporter should install: {result:?}");
-    }
-}
-
+include!("metrics/otel_tests.rs");
 impl JsonSerialize for Uptime {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -3330,7 +3049,6 @@ impl JsonSerialize for Uptime {
         out.push('}');
     }
 }
-
 impl JsonDeserialize for Uptime {
     fn json_deserialize(p: &mut norito::json::Parser<'_>) -> Result<Self, norito::json::Error> {
         let mut map = norito::json::MapVisitor::new(p)?;
@@ -3363,22 +3081,18 @@ impl JsonDeserialize for Uptime {
         ))
     }
 }
-
 #[cfg(test)]
 mod serde_tests {
     use super::*;
     use norito::{from_bytes, to_bytes};
-
     #[test]
     fn uptime_json_roundtrip() {
         let uptime = Uptime(Duration::new(5, 123));
         let json = norito::json::to_json(&uptime).expect("serialize uptime");
         assert_eq!(json, "{\"secs\":5,\"nanos\":123}");
-
         let decoded: Uptime = norito::json::from_json(&json).expect("deserialize uptime");
         assert_eq!(decoded.0, uptime.0);
     }
-
     #[test]
     fn status_json_roundtrip() {
         let status = Status {
@@ -3432,7 +3146,6 @@ mod serde_tests {
         assert_eq!(decoded.peers, status.peers);
         assert_eq!(decoded.uptime.0, status.uptime.0);
     }
-
     #[test]
     fn sumeragi_consensus_status_norito_preserves_tx_queue_pressure_causes() {
         let status = SumeragiConsensusStatus {
@@ -3447,13 +3160,11 @@ mod serde_tests {
             tx_queue_oldest_queued_age_ms: 7_500,
             ..SumeragiConsensusStatus::default()
         };
-
         let bytes = to_bytes(&status).expect("encode sumeragi consensus status");
         let archived = from_bytes::<SumeragiConsensusStatus>(&bytes)
             .expect("archive sumeragi consensus status");
         let decoded: SumeragiConsensusStatus =
             norito::core::NoritoDeserialize::deserialize(archived);
-
         assert_eq!(decoded.tx_queue_depth, 31);
         assert_eq!(decoded.tx_queue_capacity, 64);
         assert_eq!(decoded.tx_queue_retained_bytes, 98_304);
@@ -3464,7 +3175,6 @@ mod serde_tests {
         assert!(decoded.tx_queue_saturated_by_age);
         assert_eq!(decoded.tx_queue_oldest_queued_age_ms, 7_500);
     }
-
     #[test]
     fn status_stack_snapshot_exports_sizes() {
         let metrics = Metrics::default();
@@ -3482,7 +3192,6 @@ mod serde_tests {
             budget_hit_total: 3,
             gas_to_stack_multiplier: 8,
         };
-
         record_stack_limits(snapshot);
         let snapshot_readback = stack_settings_snapshot();
         assert_eq!(
@@ -3494,7 +3203,6 @@ mod serde_tests {
             "stack snapshot should retain budget clamp count"
         );
         metrics.apply_stack_snapshot(&stack_settings_snapshot());
-
         let status = Status::from(&metrics);
         assert_eq!(status.stack.scheduler_bytes, snapshot.scheduler_bytes);
         assert_eq!(
@@ -3509,7 +3217,6 @@ mod serde_tests {
             status.stack.pool_fallback_total,
             snapshot.pool_fallback_total
         );
-
         assert_eq!(
             metrics
                 .ivm_stack_clamped
@@ -3522,23 +3229,19 @@ mod serde_tests {
             metrics.ivm_stack_budget_hit_total.get(),
             snapshot.budget_hit_total
         );
-
         record_stack_limits(StackSettingsSnapshot::default());
         metrics.apply_stack_snapshot(&stack_settings_snapshot());
     }
 }
-
 impl TypeId for Uptime {
     fn id() -> Ident {
         "Uptime".to_owned()
     }
 }
-
 impl IntoSchema for Uptime {
     fn type_name() -> Ident {
         Self::id()
     }
-
     fn update_schema_map(metamap: &mut MetaMap) {
         metamap.insert::<Self>(Metadata::Tuple(UnnamedFieldsMeta {
             types: vec![
@@ -3548,7 +3251,6 @@ impl IntoSchema for Uptime {
         }));
     }
 }
-
 /// TEU bucket contributions for a lane envelope (per slot).
 #[allow(missing_copy_implementations)]
 #[derive(
@@ -3570,11 +3272,9 @@ pub struct NexusLaneTeuBuckets {
     /// TEU consumed after circuit-breaker adjustments (caps lowered).
     pub circuit_breaker: u64,
 }
-
 #[allow(dead_code)]
 impl NexusLaneTeuBuckets {
     const LABELS: [&'static str; 4] = ["floor", "headroom", "must_serve", "circuit_breaker"];
-
     /// Returns an iterator over bucket labels paired with their TEU amounts.
     pub fn iter(self) -> impl Iterator<Item = (&'static str, u64)> {
         [
@@ -3586,7 +3286,6 @@ impl NexusLaneTeuBuckets {
         .into_iter()
     }
 }
-
 impl norito::core::NoritoSerialize for NexusLaneTeuBuckets {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
@@ -3598,7 +3297,6 @@ impl norito::core::NoritoSerialize for NexusLaneTeuBuckets {
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for NexusLaneTeuBuckets {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let (floor, headroom, must_serve, circuit_breaker) =
@@ -3611,7 +3309,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for NexusLaneTeuBuckets {
         }
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for NexusLaneTeuBuckets {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let ((floor, headroom, must_serve, circuit_breaker), used) =
@@ -3627,19 +3324,16 @@ impl<'a> DecodeFromSlice<'a> for NexusLaneTeuBuckets {
         ))
     }
 }
-
 /// Fixed-length histogram for scheduler layer widths.
 #[derive(Clone, Copy, Debug, Default, IntoSchema)]
 pub struct SchedulerLayerWidthBuckets {
     buckets: [u64; 8],
 }
-
 impl SchedulerLayerWidthBuckets {
     /// Construct from an exact array of buckets.
     pub const fn new(buckets: [u64; 8]) -> Self {
         Self { buckets }
     }
-
     /// Construct from an arbitrary slice, truncating or zero-padding as needed.
     pub fn from_slice(values: &[u64]) -> Self {
         let mut buckets = [0u64; 8];
@@ -3647,29 +3341,24 @@ impl SchedulerLayerWidthBuckets {
         buckets[..len].copy_from_slice(&values[..len]);
         Self { buckets }
     }
-
     /// Convert into the inner array.
     pub const fn into_inner(self) -> [u64; 8] {
         self.buckets
     }
-
     /// Borrow the buckets slice.
     pub const fn as_slice(&self) -> &[u64; 8] {
         &self.buckets
     }
-
     /// Return the buckets as a `Vec`.
     pub fn to_vec(self) -> Vec<u64> {
         self.buckets.to_vec()
     }
 }
-
 impl From<[u64; 8]> for SchedulerLayerWidthBuckets {
     fn from(value: [u64; 8]) -> Self {
         Self::new(value)
     }
 }
-
 impl norito::json::FastJsonWrite for SchedulerLayerWidthBuckets {
     fn write_json(&self, out: &mut String) {
         out.push('[');
@@ -3682,7 +3371,6 @@ impl norito::json::FastJsonWrite for SchedulerLayerWidthBuckets {
         out.push(']');
     }
 }
-
 impl norito::json::JsonDeserialize for SchedulerLayerWidthBuckets {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -3699,7 +3387,6 @@ impl norito::json::JsonDeserialize for SchedulerLayerWidthBuckets {
         Ok(Self { buckets })
     }
 }
-
 impl norito::core::NoritoSerialize for SchedulerLayerWidthBuckets {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
@@ -3715,7 +3402,6 @@ impl norito::core::NoritoSerialize for SchedulerLayerWidthBuckets {
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for SchedulerLayerWidthBuckets {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let (b0, b1, b2, b3, b4, b5, b6, b7) =
@@ -3725,7 +3411,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for SchedulerLayerWidthBuckets {
         }
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for SchedulerLayerWidthBuckets {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let ((b0, b1, b2, b3, b4, b5, b6, b7), used) =
@@ -3738,15 +3423,12 @@ impl<'a> DecodeFromSlice<'a> for SchedulerLayerWidthBuckets {
         ))
     }
 }
-
 impl std::ops::Index<usize> for SchedulerLayerWidthBuckets {
     type Output = u64;
-
     fn index(&self, index: usize) -> &Self::Output {
         &self.buckets[index]
     }
 }
-
 /// TEU deferral counters per lane.
 #[derive(
     Clone,
@@ -3767,7 +3449,6 @@ pub struct NexusLaneTeuDeferrals {
     /// Deferred because a circuit-breaker lowered the cap.
     pub circuit_breaker: u64,
 }
-
 #[allow(dead_code)]
 impl NexusLaneTeuDeferrals {
     /// Increments the deferral counter corresponding to the provided reason.
@@ -3785,7 +3466,6 @@ impl NexusLaneTeuDeferrals {
         }
     }
 }
-
 impl norito::core::NoritoSerialize for NexusLaneTeuDeferrals {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
@@ -3797,7 +3477,6 @@ impl norito::core::NoritoSerialize for NexusLaneTeuDeferrals {
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for NexusLaneTeuDeferrals {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let (cap_exceeded, envelope_limit, quota, circuit_breaker) =
@@ -3810,7 +3489,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for NexusLaneTeuDeferrals {
         }
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for NexusLaneTeuDeferrals {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let ((cap_exceeded, envelope_limit, quota, circuit_breaker), used) =
@@ -3826,7 +3504,6 @@ impl<'a> DecodeFromSlice<'a> for NexusLaneTeuDeferrals {
         ))
     }
 }
-
 /// Snapshot of per-lane TEU scheduling state exposed via `/status`.
 #[derive(
     Clone,
@@ -3928,27 +3605,23 @@ pub struct NexusLaneTeuStatus {
     /// Runtime-upgrade governance hook snapshot when configured.
     pub manifest_runtime_upgrade: Option<NexusLaneRuntimeUpgradeHookStatus>,
 }
-
 impl norito::core::NoritoSerialize for NexusLaneTeuStatus {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(&NexusLaneTeuStatusPayload::from(self), writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for NexusLaneTeuStatus {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let payload = NexusLaneTeuStatusPayload::deserialize(archived.cast());
         payload.into()
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for NexusLaneTeuStatus {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let payload = norito::codec::decode_adaptive::<NexusLaneTeuStatusPayload>(bytes)?;
         Ok((payload.into(), bytes.len()))
     }
 }
-
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize)]
 struct NexusLaneTeuStatusPayload {
     lane_id: u32,
@@ -3997,7 +3670,6 @@ struct NexusLaneTeuStatusPayload {
     manifest_protected_namespaces: Vec<String>,
     manifest_runtime_upgrade: Option<NexusLaneRuntimeUpgradeHookStatus>,
 }
-
 impl From<&NexusLaneTeuStatus> for NexusLaneTeuStatusPayload {
     fn from(value: &NexusLaneTeuStatus) -> Self {
         Self {
@@ -4049,7 +3721,6 @@ impl From<&NexusLaneTeuStatus> for NexusLaneTeuStatusPayload {
         }
     }
 }
-
 impl From<NexusLaneTeuStatusPayload> for NexusLaneTeuStatus {
     fn from(payload: NexusLaneTeuStatusPayload) -> Self {
         Self {
@@ -4101,7 +3772,6 @@ impl From<NexusLaneTeuStatusPayload> for NexusLaneTeuStatus {
         }
     }
 }
-
 /// Snapshot of the runtime-upgrade governance hook declared in a lane manifest.
 #[derive(
     Clone,
@@ -4122,7 +3792,6 @@ pub struct NexusLaneRuntimeUpgradeHookStatus {
     /// Allowed metadata identifiers declared by the manifest.
     pub allowed_ids: Vec<String>,
 }
-
 impl norito::core::NoritoSerialize for NexusLaneRuntimeUpgradeHookStatus {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
@@ -4134,7 +3803,6 @@ impl norito::core::NoritoSerialize for NexusLaneRuntimeUpgradeHookStatus {
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for NexusLaneRuntimeUpgradeHookStatus {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let (allow, require_metadata, metadata_key, allowed_ids) =
@@ -4147,7 +3815,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for NexusLaneRuntimeUpgradeHookStat
         }
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for NexusLaneRuntimeUpgradeHookStatus {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let ((allow, require_metadata, metadata_key, allowed_ids), used) =
@@ -4163,7 +3830,6 @@ impl<'a> DecodeFromSlice<'a> for NexusLaneRuntimeUpgradeHookStatus {
         ))
     }
 }
-
 /// Configured dataspace entry exposed through `/status` for preflight checks.
 #[derive(
     Clone,
@@ -4203,7 +3869,6 @@ pub struct NexusDataspaceCatalogStatus {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub protected_namespaces: Vec<String>,
 }
-
 /// Effective Nexus routing policy exposed through `/status`.
 #[derive(
     Clone,
@@ -4223,7 +3888,6 @@ pub struct NexusRoutingPolicyStatus {
     /// Ordered routing rules evaluated by Nexus.
     pub rules: Vec<NexusRoutingRuleStatus>,
 }
-
 /// Effective Nexus routing rule exposed through `/status`.
 #[derive(
     Clone,
@@ -4245,7 +3909,6 @@ pub struct NexusRoutingRuleStatus {
     /// Rule matcher.
     pub matcher: NexusRoutingMatcherStatus,
 }
-
 /// Nexus routing rule matcher exposed through `/status`.
 #[derive(
     Clone,
@@ -4271,7 +3934,6 @@ pub struct NexusRoutingMatcherStatus {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
-
 /// Nexus status snapshot exposed through `/status`.
 #[derive(
     Clone,
@@ -4287,7 +3949,6 @@ pub struct NexusStatus {
     /// Effective routing policy enforced by Nexus routing.
     pub routing_policy: NexusRoutingPolicyStatus,
 }
-
 impl From<&ActualLaneRoutingPolicy> for NexusRoutingPolicyStatus {
     fn from(policy: &ActualLaneRoutingPolicy) -> Self {
         Self {
@@ -4309,7 +3970,6 @@ impl From<&ActualLaneRoutingPolicy> for NexusRoutingPolicyStatus {
         }
     }
 }
-
 impl NexusStatus {
     /// Build a status snapshot from the effective Nexus routing policy.
     #[must_use]
@@ -4319,7 +3979,6 @@ impl NexusStatus {
         }
     }
 }
-
 /// Snapshot of per-dataspace scheduler state exposed via `/status`.
 #[derive(
     Clone,
@@ -4349,7 +4008,6 @@ pub struct NexusDataspaceTeuStatus {
     /// Optional description provided in configuration.
     pub description: Option<String>,
 }
-
 impl norito::core::NoritoSerialize for NexusDataspaceTeuStatus {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
@@ -4366,7 +4024,6 @@ impl norito::core::NoritoSerialize for NexusDataspaceTeuStatus {
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for NexusDataspaceTeuStatus {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let (
@@ -4393,7 +4050,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for NexusDataspaceTeuStatus {
         }
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for NexusDataspaceTeuStatus {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (
@@ -4428,7 +4084,6 @@ impl<'a> DecodeFromSlice<'a> for NexusDataspaceTeuStatus {
         ))
     }
 }
-
 /// Snapshot of core consensus state exposed via `/status`.
 #[derive(
     Clone,
@@ -4572,7 +4227,6 @@ pub struct SumeragiConsensusStatus {
     #[norito(default)]
     pub lane_governance_sealed_aliases: Vec<String>,
 }
-
 impl SumeragiConsensusStatus {
     /// Drop lane-specific fields when Nexus lanes are disabled.
     pub fn clear_nexus_fields(&mut self) {
@@ -4580,36 +4234,30 @@ impl SumeragiConsensusStatus {
         self.lane_governance_sealed_aliases.clear();
     }
 }
-
 impl norito::core::NoritoSerialize for SumeragiConsensusStatus {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = SumeragiConsensusStatusPayload::from(self);
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         SumeragiConsensusStatusPayload::from(self).encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         SumeragiConsensusStatusPayload::from(self).encoded_len_exact()
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for SumeragiConsensusStatus {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let payload = SumeragiConsensusStatusPayload::deserialize(archived.cast());
         payload.into()
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for SumeragiConsensusStatus {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let payload = norito::codec::decode_adaptive::<SumeragiConsensusStatusPayload>(bytes)?;
         Ok((payload.into(), bytes.len()))
     }
 }
-
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -4666,7 +4314,6 @@ struct SumeragiConsensusStatusPayload {
     tx_queue_saturated_by_age: bool,
     tx_queue_oldest_queued_age_ms: u64,
 }
-
 fn decode_field<'a, T: DecodeFromSlice<'a>>(
     bytes: &'a [u8],
     used: &mut usize,
@@ -4675,7 +4322,6 @@ fn decode_field<'a, T: DecodeFromSlice<'a>>(
     *used += len;
     Ok(value)
 }
-
 fn decode_prf_fields(
     bytes: &[u8],
     used: &mut usize,
@@ -4683,21 +4329,17 @@ fn decode_prf_fields(
     if *used >= bytes.len() {
         return Ok((None, 0, 0));
     }
-
     let seed = decode_field::<Option<String>>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((seed, 0, 0));
     }
-
     let height = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((seed, height, 0));
     }
-
     let view = decode_field::<u64>(bytes, used)?;
     Ok((seed, height, view))
 }
-
 #[allow(clippy::type_complexity)]
 fn decode_rbc_fields(
     bytes: &[u8],
@@ -4706,22 +4348,18 @@ fn decode_rbc_fields(
     if *used >= bytes.len() {
         return Ok((0, 0, 0, 0, 0, 0, 0, 0, 0));
     }
-
     let reschedules = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((reschedules, 0, 0, 0, 0, 0, 0, 0, 0));
     }
-
     let defer_ready = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((reschedules, defer_ready, 0, 0, 0, 0, 0, 0, 0));
     }
-
     let defer_chunks = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((reschedules, defer_ready, defer_chunks, 0, 0, 0, 0, 0, 0));
     }
-
     let sessions = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((
@@ -4736,7 +4374,6 @@ fn decode_rbc_fields(
             0,
         ));
     }
-
     let bytes_total = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((
@@ -4751,7 +4388,6 @@ fn decode_rbc_fields(
             0,
         ));
     }
-
     let level = decode_field::<u8>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((
@@ -4766,7 +4402,6 @@ fn decode_rbc_fields(
             0,
         ));
     }
-
     let deferrals = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((
@@ -4781,7 +4416,6 @@ fn decode_rbc_fields(
             0,
         ));
     }
-
     let persist_drops = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((
@@ -4796,7 +4430,6 @@ fn decode_rbc_fields(
             0,
         ));
     }
-
     let evictions = decode_field::<u64>(bytes, used)?;
     Ok((
         reschedules,
@@ -4810,7 +4443,6 @@ fn decode_rbc_fields(
         evictions,
     ))
 }
-
 fn decode_epoch_fields(
     bytes: &[u8],
     used: &mut usize,
@@ -4818,21 +4450,17 @@ fn decode_epoch_fields(
     if *used >= bytes.len() {
         return Ok((0, 0, 0));
     }
-
     let length = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((length, 0, 0));
     }
-
     let commit = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((length, commit, 0));
     }
-
     let reveal = decode_field::<u64>(bytes, used)?;
     Ok((length, commit, reveal))
 }
-
 fn decode_view_change_fields(
     bytes: &[u8],
     used: &mut usize,
@@ -4840,31 +4468,25 @@ fn decode_view_change_fields(
     if *used >= bytes.len() {
         return Ok((0, 0, 0, 0, 0));
     }
-
     let accepted = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((accepted, 0, 0, 0, 0));
     }
-
     let stale = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((accepted, stale, 0, 0, 0));
     }
-
     let rejected = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((accepted, stale, rejected, 0, 0));
     }
-
     let suggest = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((accepted, stale, rejected, suggest, 0));
     }
-
     let install = decode_field::<u64>(bytes, used)?;
     Ok((accepted, stale, rejected, suggest, install))
 }
-
 #[allow(clippy::type_complexity)]
 fn decode_commit_fields(
     bytes: &[u8],
@@ -4873,32 +4495,26 @@ fn decode_commit_fields(
     if *used >= bytes.len() {
         return Ok((0, 0, 0, 0, 0, 0, 0, 0, 0));
     }
-
     let present = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((present, 0, 0, 0, 0, 0, 0, 0, 0));
     }
-
     let counted = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((present, counted, 0, 0, 0, 0, 0, 0, 0));
     }
-
     let set_b = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((present, counted, set_b, 0, 0, 0, 0, 0, 0));
     }
-
     let required = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((present, counted, set_b, required, 0, 0, 0, 0, 0));
     }
-
     let cert_height = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((present, counted, set_b, required, cert_height, 0, 0, 0, 0));
     }
-
     let cert_view = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((
@@ -4913,7 +4529,6 @@ fn decode_commit_fields(
             0,
         ));
     }
-
     let cert_epoch = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((
@@ -4928,7 +4543,6 @@ fn decode_commit_fields(
             0,
         ));
     }
-
     let cert_signatures = decode_field::<u64>(bytes, used)?;
     if *used >= bytes.len() {
         return Ok((
@@ -4943,7 +4557,6 @@ fn decode_commit_fields(
             0,
         ));
     }
-
     let cert_validator_set_len = decode_field::<u64>(bytes, used)?;
     Ok((
         present,
@@ -4957,7 +4570,6 @@ fn decode_commit_fields(
         cert_validator_set_len,
     ))
 }
-
 impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
     #[allow(clippy::too_many_lines)] // Decode enumerates every field in a fixed order for stable wire layouts.
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
@@ -4974,7 +4586,6 @@ impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
         let tx_queue_depth = decode_field::<u64>(bytes, &mut used)?;
         let tx_queue_capacity = decode_field::<u64>(bytes, &mut used)?;
         let tx_queue_saturated = decode_field::<bool>(bytes, &mut used)?;
-
         let (epoch_length_blocks, epoch_commit_deadline_offset, epoch_reveal_deadline_offset) =
             decode_epoch_fields(bytes, &mut used)?;
         let (
@@ -5047,7 +4658,6 @@ impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
         } else {
             0
         };
-
         Ok((
             Self {
                 mode_tag,
@@ -5159,7 +4769,6 @@ impl From<&SumeragiConsensusStatus> for SumeragiConsensusStatusPayload {
         }
     }
 }
-
 impl From<SumeragiConsensusStatusPayload> for SumeragiConsensusStatus {
     fn from(payload: SumeragiConsensusStatusPayload) -> Self {
         Self {
@@ -5215,7 +4824,6 @@ impl From<SumeragiConsensusStatusPayload> for SumeragiConsensusStatus {
         }
     }
 }
-
 /// Cryptography-related status exposed via `/status`.
 #[derive(
     Clone,
@@ -5237,7 +4845,6 @@ pub struct CryptoStatus {
     #[norito(default)]
     pub halo2: Halo2Status,
 }
-
 /// Snapshot of the active Halo2 verifier configuration.
 #[derive(
     Clone,
@@ -5269,7 +4876,6 @@ pub struct Halo2Status {
     #[norito(default)]
     pub verifier_max_batch: u32,
 }
-
 #[allow(clippy::derivable_impls)]
 impl Default for CryptoStatus {
     fn default() -> Self {
@@ -5280,7 +4886,6 @@ impl Default for CryptoStatus {
         }
     }
 }
-
 /// Configured caps and frame limits for transaction gossip.
 #[derive(
     Clone,
@@ -5319,7 +4924,6 @@ pub struct TxGossipCaps {
     /// Policy for restricted payloads when only the public overlay is available (`refuse` or `forward`).
     pub restricted_public_policy: String,
 }
-
 impl Default for TxGossipCaps {
     fn default() -> Self {
         Self {
@@ -5334,7 +4938,6 @@ impl Default for TxGossipCaps {
         }
     }
 }
-
 /// Snapshot of the most recent gossip target selection for a dataspace.
 #[derive(
     Clone,
@@ -5385,7 +4988,6 @@ pub struct TxGossipStatus {
     /// Encoded frame length in bytes.
     pub frame_bytes: u64,
 }
-
 /// Aggregated transaction gossip snapshot for `/status`.
 #[derive(
     Clone,
@@ -5405,7 +5007,6 @@ pub struct TxGossipSnapshot {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub targets: Vec<TxGossipStatus>,
 }
-
 /// Highest DA receipt sequence observed per lane/epoch.
 #[derive(
     Clone,
@@ -5426,20 +5027,17 @@ pub struct DaReceiptCursorStatus {
     /// Highest recorded receipt sequence for the lane/epoch.
     pub highest_sequence: u64,
 }
-
 /// Bounded per-lane state for DA receipt metrics.
 #[derive(Clone, Copy, Debug, Default)]
 struct DaReceiptMetricLane {
     cursor: Option<DaReceiptMetricCursor>,
 }
-
 /// Latest DA receipt cursor retained for one lane.
 #[derive(Clone, Copy, Debug)]
 struct DaReceiptMetricCursor {
     epoch: u64,
     highest_sequence: u64,
 }
-
 const DA_RECEIPT_OUTCOME_LABELS: [&str; 9] = [
     "stored",
     "duplicate",
@@ -5451,7 +5049,6 @@ const DA_RECEIPT_OUTCOME_LABELS: [&str; 9] = [
     "error",
     "unknown",
 ];
-
 fn bounded_da_receipt_outcome(outcome: &str) -> &'static str {
     match outcome {
         "stored" => "stored",
@@ -5465,7 +5062,6 @@ fn bounded_da_receipt_outcome(outcome: &str) -> &'static str {
         _ => "unknown",
     }
 }
-
 fn da_receipt_metric_lane(
     lanes: &mut BTreeMap<u32, DaReceiptMetricLane>,
     lane_id: u32,
@@ -5479,7 +5075,6 @@ fn da_receipt_metric_lane(
         std::collections::btree_map::Entry::Vacant(_) => None,
     }
 }
-
 fn update_da_receipt_metric_cursor(
     lane: &mut DaReceiptMetricLane,
     epoch: u64,
@@ -5499,7 +5094,6 @@ fn update_da_receipt_metric_cursor(
     }
     *cursor
 }
-
 /// Stack sizing snapshot for scheduler/prover pools and guest VMs.
 #[derive(
     Clone,
@@ -5550,7 +5144,6 @@ pub struct StackStatus {
     #[norito(default)]
     pub budget_hit_total: u64,
 }
-
 impl From<StackSettingsSnapshot> for StackStatus {
     fn from(snapshot: StackSettingsSnapshot) -> Self {
         Self {
@@ -5569,7 +5162,6 @@ impl From<StackSettingsSnapshot> for StackStatus {
         }
     }
 }
-
 /// Response body for the Torii GET `/status` endpoint.
 #[derive(
     Clone,
@@ -5593,7 +5185,6 @@ pub struct BuildStatus {
     /// Target triple used to compile this binary.
     pub target_triple: String,
 }
-
 impl BuildStatus {
     fn current() -> Self {
         Self {
@@ -5613,7 +5204,6 @@ impl BuildStatus {
         }
     }
 }
-
 /// Response body for the Torii GET `/status` endpoint.
 #[derive(
     Clone,
@@ -5726,7 +5316,6 @@ pub struct Status {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub da_receipt_cursors: Vec<DaReceiptCursorStatus>,
 }
-
 impl Status {
     /// Remove Nexus lane/dataspace telemetry when Nexus mode is disabled.
     pub fn strip_nexus(&mut self) {
@@ -5740,7 +5329,6 @@ impl Status {
         }
     }
 }
-
 #[derive(Clone, Debug, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 struct StatusPayload {
     #[norito(default)]
@@ -5805,7 +5393,6 @@ struct StatusPayload {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     da_receipt_cursors: Vec<DaReceiptCursorStatus>,
 }
-
 impl From<&Status> for StatusPayload {
     fn from(status: &Status) -> Self {
         Self {
@@ -5846,7 +5433,6 @@ impl From<&Status> for StatusPayload {
         }
     }
 }
-
 impl From<StatusPayload> for Status {
     fn from(payload: StatusPayload) -> Self {
         Self {
@@ -5887,19 +5473,16 @@ impl From<StatusPayload> for Status {
         }
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for Status {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let payload = norito::codec::decode_adaptive::<StatusPayload>(bytes)?;
         Ok((payload.into(), bytes.len()))
     }
 }
-
 /// Number of manifest activation records retained in telemetry snapshots.
 pub const GOVERNANCE_MANIFEST_RECENT_CAP: usize = 8;
 const REJECTION_RECENT_WINDOW_MS: u64 = 5 * 60 * 1_000;
 const REJECTION_RECENT_EVENT_CAP: usize = 1_024;
-
 /// Governance-related telemetry snapshot embedded into [`Status`].
 #[derive(
     Clone,
@@ -5927,7 +5510,6 @@ pub struct GovernanceStatus {
     /// Total registered citizens with an active bond.
     pub citizens_total: u64,
 }
-
 /// Counts of governance proposals per status.
 #[derive(
     Copy,
@@ -5948,7 +5530,6 @@ pub struct GovernanceProposalCounters {
     /// Proposals that completed enactment.
     pub enacted: u64,
 }
-
 /// Counters tracking protected-namespace admission decisions.
 #[derive(
     Copy,
@@ -5967,7 +5548,6 @@ pub struct GovernanceProtectedNamespaceCounters {
     /// Checks that were rejected at admission time.
     pub rejected: u64,
 }
-
 /// Counters tracking manifest admission decisions (pre-quorum/protection breakdown).
 #[derive(
     Copy,
@@ -5996,7 +5576,6 @@ pub struct GovernanceManifestAdmissionCounters {
     /// Rejections triggered by runtime hook policies.
     pub runtime_hook_rejected: u64,
 }
-
 /// Counters tracking manifest quorum enforcement.
 #[derive(
     Copy,
@@ -6015,7 +5594,6 @@ pub struct GovernanceManifestQuorumCounters {
     /// Evaluations rejected due to insufficient approvals.
     pub rejected: u64,
 }
-
 /// Record of a manifest activation produced by governance enactment.
 #[derive(
     Clone,
@@ -6037,21 +5615,18 @@ pub struct GovernanceManifestActivation {
     /// Wall-clock timestamp in milliseconds when the activation was recorded.
     pub activated_at_ms: u64,
 }
-
 impl norito::core::NoritoSerialize for Status {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = StatusPayload::from(self);
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for Status {
     fn deserialize(archived: &'a norito::core::Archived<Status>) -> Self {
         let payload = StatusPayload::deserialize(archived.cast());
         payload.into()
     }
 }
-
 impl norito::core::NoritoSerialize for GovernanceStatus {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
@@ -6067,7 +5642,6 @@ impl norito::core::NoritoSerialize for GovernanceStatus {
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceStatus {
     fn deserialize(archived: &'a norito::core::Archived<GovernanceStatus>) -> Self {
         let (
@@ -6101,7 +5675,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceStatus {
         }
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for GovernanceStatus {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (
@@ -6141,14 +5714,12 @@ impl<'a> DecodeFromSlice<'a> for GovernanceStatus {
         ))
     }
 }
-
 impl norito::core::NoritoSerialize for GovernanceProposalCounters {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (self.proposed, self.approved, self.rejected, self.enacted);
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceProposalCounters {
     fn deserialize(archived: &'a norito::core::Archived<GovernanceProposalCounters>) -> Self {
         let (proposed, approved, rejected, enacted): (u64, u64, u64, u64) =
@@ -6161,7 +5732,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceProposalCounters {
         }
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for GovernanceProposalCounters {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let ((proposed, approved, rejected, enacted), used) =
@@ -6177,14 +5747,12 @@ impl<'a> DecodeFromSlice<'a> for GovernanceProposalCounters {
         ))
     }
 }
-
 impl norito::core::NoritoSerialize for GovernanceProtectedNamespaceCounters {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (self.total_checks, self.allowed, self.rejected);
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceProtectedNamespaceCounters {
     fn deserialize(
         archived: &'a norito::core::Archived<GovernanceProtectedNamespaceCounters>,
@@ -6198,7 +5766,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceProtectedNamespaceCou
         }
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for GovernanceProtectedNamespaceCounters {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let ((total_checks, allowed, rejected), used) =
@@ -6213,7 +5780,6 @@ impl<'a> DecodeFromSlice<'a> for GovernanceProtectedNamespaceCounters {
         ))
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for GovernanceManifestAdmissionCounters {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (
@@ -6242,14 +5808,12 @@ impl<'a> DecodeFromSlice<'a> for GovernanceManifestAdmissionCounters {
         ))
     }
 }
-
 impl norito::core::NoritoSerialize for GovernanceManifestQuorumCounters {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (self.total_checks, self.satisfied, self.rejected);
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceManifestQuorumCounters {
     fn deserialize(archived: &'a norito::core::Archived<GovernanceManifestQuorumCounters>) -> Self {
         let (total_checks, satisfied, rejected): (u64, u64, u64) =
@@ -6261,7 +5825,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceManifestQuorumCounter
         }
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for GovernanceManifestQuorumCounters {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let ((total_checks, satisfied, rejected), used) =
@@ -6276,7 +5839,6 @@ impl<'a> DecodeFromSlice<'a> for GovernanceManifestQuorumCounters {
         ))
     }
 }
-
 impl norito::core::NoritoSerialize for GovernanceManifestActivation {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (
@@ -6289,7 +5851,6 @@ impl norito::core::NoritoSerialize for GovernanceManifestActivation {
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceManifestActivation {
     fn deserialize(archived: &'a norito::core::Archived<GovernanceManifestActivation>) -> Self {
         let (contract_address, code_hash_hex, abi_hash_hex, height, activated_at_ms): (
@@ -6308,7 +5869,6 @@ impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceManifestActivation {
         }
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for GovernanceManifestActivation {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let ((contract_address, code_hash_hex, abi_hash_hex, height, activated_at_ms), used) =
@@ -6325,7 +5885,6 @@ impl<'a> DecodeFromSlice<'a> for GovernanceManifestActivation {
         ))
     }
 }
-
 fn build_sumeragi_status(metrics: &Metrics) -> SumeragiConsensusStatus {
     let commit_qc_height = metrics.sumeragi_commit_qc_height.get();
     let commit_qc_view = metrics.sumeragi_commit_qc_view.get();
@@ -6342,7 +5901,6 @@ fn build_sumeragi_status(metrics: &Metrics) -> SumeragiConsensusStatus {
     } else {
         (raw_locked_qc_height, raw_locked_qc_view)
     };
-
     SumeragiConsensusStatus {
         mode_tag: metrics.sumeragi_mode_tag(),
         leader_index: metrics.sumeragi_leader_index.get(),
@@ -6421,7 +5979,6 @@ fn build_sumeragi_status(metrics: &Metrics) -> SumeragiConsensusStatus {
         lane_governance_sealed_aliases: metrics.lane_governance_sealed_aliases(),
     }
 }
-
 fn governance_proposal_counters(metrics: &Metrics) -> GovernanceProposalCounters {
     let fetch = |label: &str| {
         metrics
@@ -6429,7 +5986,6 @@ fn governance_proposal_counters(metrics: &Metrics) -> GovernanceProposalCounters
             .with_label_values(&[label])
             .get()
     };
-
     GovernanceProposalCounters {
         proposed: fetch("proposed"),
         approved: fetch("approved"),
@@ -6437,7 +5993,6 @@ fn governance_proposal_counters(metrics: &Metrics) -> GovernanceProposalCounters
         enacted: fetch("enacted"),
     }
 }
-
 fn governance_protected_namespace_counters(
     metrics: &Metrics,
 ) -> GovernanceProtectedNamespaceCounters {
@@ -6449,14 +6004,12 @@ fn governance_protected_namespace_counters(
         .governance_protected_namespace_total
         .with_label_values(&["rejected"])
         .get();
-
     GovernanceProtectedNamespaceCounters {
         total_checks: allowed + rejected,
         allowed,
         rejected,
     }
 }
-
 fn governance_manifest_admission_counters(
     metrics: &Metrics,
 ) -> GovernanceManifestAdmissionCounters {
@@ -6466,14 +6019,12 @@ fn governance_manifest_admission_counters(
             .with_label_values(&[label])
             .get()
     };
-
     let allowed = fetch("allowed");
     let missing_manifest = fetch("missing_manifest");
     let non_validator = fetch("non_validator_authority");
     let quorum_rejected = fetch("quorum_rejected");
     let protected_rejected = fetch("protected_namespace_rejected");
     let runtime_rejected = fetch("runtime_hook_rejected");
-
     GovernanceManifestAdmissionCounters {
         total_checks: allowed
             + missing_manifest
@@ -6489,7 +6040,6 @@ fn governance_manifest_admission_counters(
         runtime_hook_rejected: runtime_rejected,
     }
 }
-
 fn governance_manifest_quorum_counters(metrics: &Metrics) -> GovernanceManifestQuorumCounters {
     let satisfied = metrics
         .governance_manifest_quorum_total
@@ -6499,14 +6049,12 @@ fn governance_manifest_quorum_counters(metrics: &Metrics) -> GovernanceManifestQ
         .governance_manifest_quorum_total
         .with_label_values(&["rejected"])
         .get();
-
     GovernanceManifestQuorumCounters {
         total_checks: satisfied + rejected,
         satisfied,
         rejected,
     }
 }
-
 fn governance_recent_manifest_activations(metrics: &Metrics) -> Vec<GovernanceManifestActivation> {
     metrics
         .governance_manifest_recent
@@ -6516,7 +6064,6 @@ fn governance_recent_manifest_activations(metrics: &Metrics) -> Vec<GovernanceMa
         .cloned()
         .collect()
 }
-
 fn sealed_lanes_total(metrics: &Metrics) -> u32 {
     metrics
         .nexus_lane_governance_sealed_total
@@ -6525,7 +6072,6 @@ fn sealed_lanes_total(metrics: &Metrics) -> u32 {
         .try_into()
         .unwrap_or(u32::MAX)
 }
-
 fn build_governance_status(metrics: &Metrics) -> GovernanceStatus {
     GovernanceStatus {
         proposals: governance_proposal_counters(metrics),
@@ -6538,7 +6084,6 @@ fn build_governance_status(metrics: &Metrics) -> GovernanceStatus {
         citizens_total: metrics.governance_citizens_total.get(),
     }
 }
-
 fn collect_teu_lane_commit(metrics: &Metrics) -> Vec<NexusLaneTeuStatus> {
     metrics
         .nexus_scheduler_lane_teu_status
@@ -6548,7 +6093,6 @@ fn collect_teu_lane_commit(metrics: &Metrics) -> Vec<NexusLaneTeuStatus> {
         .cloned()
         .collect()
 }
-
 fn collect_dataspace_catalog(metrics: &Metrics) -> Vec<NexusDataspaceCatalogStatus> {
     let mut entries: Vec<_> = metrics
         .nexus_scheduler_lane_teu_status
@@ -6584,7 +6128,6 @@ fn collect_dataspace_catalog(metrics: &Metrics) -> Vec<NexusDataspaceCatalogStat
     entries.sort_by_key(|entry| (entry.lane_id, entry.dataspace_id));
     entries
 }
-
 fn collect_teu_dataspace_backlog(metrics: &Metrics) -> Vec<NexusDataspaceTeuStatus> {
     metrics
         .nexus_scheduler_dataspace_teu_status
@@ -6594,11 +6137,9 @@ fn collect_teu_dataspace_backlog(metrics: &Metrics) -> Vec<NexusDataspaceTeuStat
         .cloned()
         .collect()
 }
-
 fn collect_da_receipt_cursors(metrics: &Metrics) -> Vec<DaReceiptCursorStatus> {
     metrics.da_receipt_cursor_status()
 }
-
 impl From<&Metrics> for Status {
     fn from(value: &Metrics) -> Self {
         let now_ms = current_unix_time_ms();
@@ -6675,7 +6216,6 @@ impl From<&Metrics> for Status {
         }
     }
 }
-
 impl<T> From<&T> for Status
 where
     T: Deref<Target = Metrics>,
@@ -6684,7 +6224,6 @@ where
         Self::from(&**value)
     }
 }
-
 /// Prometheus metric registry plus cached status snapshots exposed by telemetry.
 pub struct Metrics {
     /// Total number of transactions
@@ -7142,14 +6681,20 @@ pub struct Metrics {
     pub kaigi_relay_registration_bandwidth: HistogramVec,
     /// Kaigi: relay manifest updates grouped by domain and action.
     pub kaigi_relay_manifest_updates_total: IntCounterVec,
+    /// Kaigi: relay manifest updates grouped only by domain for bounded diagnostics.
+    pub kaigi_relay_manifest_updates_by_domain_total: IntCounterVec,
     /// Kaigi: relay manifest hop-count distribution per domain.
     pub kaigi_relay_manifest_hop_count: HistogramVec,
     /// Kaigi: relay failovers grouped by domain and call.
     pub kaigi_relay_failover_total: IntCounterVec,
+    /// Kaigi: relay failovers grouped only by domain for bounded diagnostics.
+    pub kaigi_relay_failovers_by_domain_total: IntCounterVec,
     /// Kaigi: relay failover hop-count distribution per domain.
     pub kaigi_relay_failover_hop_count: HistogramVec,
     /// Kaigi: relay health reports grouped by domain and status.
     pub kaigi_relay_health_reports_total: IntCounterVec,
+    /// Kaigi: relay health reports grouped only by domain for bounded diagnostics.
+    pub kaigi_relay_health_reports_by_domain_total: IntCounterVec,
     /// Kaigi: current relay health state labelled by domain and relay.
     pub kaigi_relay_health_state: IntGaugeVec,
     /// Number of sumeragi dropped messages
@@ -8477,16 +8022,13 @@ pub struct Metrics {
     /// Internal use only. Needed for generating the response.
     registry: Registry,
 }
-
 const METRIC_CATALOG_V1: &str = include_str!("metrics/catalog_v1.tsv");
 const METRIC_CATALOG_V1_HEADER: &str = "# iroha-telemetry-metric-catalog-v1";
 const METRIC_CATALOG_V1_ROWS: usize = 870;
-
 struct MetricSpecCursor {
     lines: std::str::Lines<'static>,
     row: usize,
 }
-
 impl MetricSpecCursor {
     fn v1() -> Self {
         let mut lines = METRIC_CATALOG_V1.lines();
@@ -8497,7 +8039,6 @@ impl MetricSpecCursor {
         );
         Self { lines, row: 0 }
     }
-
     fn spec(&mut self, expected_key: &str) -> (&'static str, &'static str) {
         let row = self.row + 1;
         let line = self
@@ -8519,17 +8060,14 @@ impl MetricSpecCursor {
         self.row = row;
         (name, help)
     }
-
     fn opts(&mut self, expected_key: &str) -> Opts {
         let (name, help) = self.spec(expected_key);
         Opts::new(name, help)
     }
-
     fn histogram_opts(&mut self, expected_key: &str) -> HistogramOpts {
         let (name, help) = self.spec(expected_key);
         HistogramOpts::new(name, help)
     }
-
     fn finish(mut self) {
         assert_eq!(
             self.row, METRIC_CATALOG_V1_ROWS,
@@ -8542,13 +8080,10 @@ impl MetricSpecCursor {
         );
     }
 }
-
 #[cfg(test)]
 mod metric_catalog_tests {
-    use std::collections::BTreeSet;
-
     use super::{METRIC_CATALOG_V1, METRIC_CATALOG_V1_HEADER, METRIC_CATALOG_V1_ROWS, Metrics};
-
+    use std::collections::BTreeSet;
     #[test]
     fn v1_catalog_is_complete_and_unique() {
         let mut lines = METRIC_CATALOG_V1.lines();
@@ -8573,7 +8108,6 @@ mod metric_catalog_tests {
         let _ = Metrics::default();
     }
 }
-
 impl Default for Metrics {
     #[allow(
         clippy::too_many_lines,
@@ -8829,7 +8363,6 @@ impl Default for Metrics {
             &["feed_id"],
         )
         .expect("Infallible");
-
         let fastpq_execution_mode_total = IntCounterVec::new(
             metric_specs.opts("fastpq_execution_mode_total"),
             &[
@@ -8904,7 +8437,6 @@ impl Default for Metrics {
             &["device_class", "chip_family", "gpu_kind"],
         )
         .expect("Infallible");
-
         let sm_syscall_failures_total = IntCounterVec::new(
             metric_specs.opts("sm_syscall_failures_total"),
             &["kind", "mode", "reason"],
@@ -9662,6 +9194,14 @@ impl Default for Metrics {
             &["domain", "action"],
         )
         .expect("Infallible");
+        let kaigi_relay_manifest_updates_by_domain_total = IntCounterVec::new(
+            Opts::new(
+                "kaigi_relay_manifest_updates_by_domain_total",
+                "Kaigi relay manifest updates grouped only by domain for bounded diagnostics",
+            ),
+            &["domain"],
+        )
+        .expect("Infallible");
         let kaigi_relay_manifest_hop_count = HistogramVec::new(
             metric_specs
                 .histogram_opts("kaigi_relay_manifest_hop_count")
@@ -9674,6 +9214,14 @@ impl Default for Metrics {
             &["domain", "call"],
         )
         .expect("Infallible");
+        let kaigi_relay_failovers_by_domain_total = IntCounterVec::new(
+            Opts::new(
+                "kaigi_relay_failovers_by_domain_total",
+                "Kaigi relay failovers grouped only by domain for bounded diagnostics",
+            ),
+            &["domain"],
+        )
+        .expect("Infallible");
         let kaigi_relay_failover_hop_count = HistogramVec::new(
             metric_specs
                 .histogram_opts("kaigi_relay_failover_hop_count")
@@ -9684,6 +9232,14 @@ impl Default for Metrics {
         let kaigi_relay_health_reports_total = IntCounterVec::new(
             metric_specs.opts("kaigi_relay_health_reports_total"),
             &["domain", "status"],
+        )
+        .expect("Infallible");
+        let kaigi_relay_health_reports_by_domain_total = IntCounterVec::new(
+            Opts::new(
+                "kaigi_relay_health_reports_by_domain_total",
+                "Kaigi relay health reports grouped only by domain for bounded diagnostics",
+            ),
+            &["domain"],
         )
         .expect("Infallible");
         let kaigi_relay_health_state = IntGaugeVec::new(
@@ -11046,7 +10602,6 @@ impl Default for Metrics {
             GenericGauge::with_opts(metric_specs.opts("merge_ledger_latest_epoch"))
                 .expect("Infallible");
         let merge_ledger_latest_root_hex: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
-
         // Torii metrics (app-facing): record filter complexity, match counts,
         // scan latencies, and approximate stream sizes. Labeled by endpoint.
         let torii_filter_depth = HistogramVec::new(
@@ -11149,7 +10704,6 @@ impl Default for Metrics {
             &["reason"],
         )
         .expect("Infallible");
-
         // Snapshot-lane counters
         let torii_query_snapshot_requests = IntCounterVec::new(
             metric_specs.opts("torii_query_snapshot_requests"),
@@ -11194,7 +10748,6 @@ impl Default for Metrics {
             &["mode"],
         )
         .expect("Infallible");
-
         // Torii Connect (Iroha Connect) metrics
         let torii_connect_sessions_total =
             GenericGauge::with_opts(metric_specs.opts("torii_connect_sessions_total"))
@@ -13004,7 +12557,6 @@ impl Default for Metrics {
             &["backend", "status"],
         )
         .expect("Infallible");
-
         // Block-level gas and fees (latest block)
         let block_gas_used =
             GenericGauge::with_opts(metric_specs.opts("block_gas_used")).expect("Infallible");
@@ -13022,7 +12574,6 @@ impl Default for Metrics {
         let block_fee_total_scale =
             GenericGauge::with_opts(metric_specs.opts("block_fee_total_scale"))
                 .expect("Infallible");
-
         // Network Time Service (basic gauges)
         let nts_offset_ms =
             IntGauge::with_opts(metric_specs.opts("nts_offset_ms")).expect("Infallible");
@@ -13064,7 +12615,6 @@ impl Default for Metrics {
             nts_rtt_ms_sum,
             nts_rtt_ms_count
         );
-
         // BLS signature verification counters per latest block
         let pipeline_sig_bls_agg_same =
             GenericGauge::with_opts(metric_specs.opts("pipeline_sig_bls_agg_same"))
@@ -13085,9 +12635,7 @@ impl Default for Metrics {
             &["lane", "result"],
         )
         .expect("Infallible");
-
         metric_specs.finish();
-
         register!(
             registry,
             txs,
@@ -13407,10 +12955,13 @@ impl Default for Metrics {
             kaigi_relay_registered_total,
             kaigi_relay_registration_bandwidth,
             kaigi_relay_manifest_updates_total,
+            kaigi_relay_manifest_updates_by_domain_total,
             kaigi_relay_manifest_hop_count,
             kaigi_relay_failover_total,
+            kaigi_relay_failovers_by_domain_total,
             kaigi_relay_failover_hop_count,
             kaigi_relay_health_reports_total,
+            kaigi_relay_health_reports_by_domain_total,
             kaigi_relay_health_state
         );
         register!(registry, pipeline_overlay_bytes);
@@ -13862,10 +13413,13 @@ impl Default for Metrics {
             kaigi_relay_registered_total,
             kaigi_relay_registration_bandwidth,
             kaigi_relay_manifest_updates_total,
+            kaigi_relay_manifest_updates_by_domain_total,
             kaigi_relay_manifest_hop_count,
             kaigi_relay_failover_total,
+            kaigi_relay_failovers_by_domain_total,
             kaigi_relay_failover_hop_count,
             kaigi_relay_health_reports_total,
+            kaigi_relay_health_reports_by_domain_total,
             kaigi_relay_health_state,
             dropped_messages,
             // Sumeragi dropped message counters (consensus and control paths)
@@ -14543,15 +14097,12 @@ impl Default for Metrics {
         metrics
     }
 }
-
 static GLOBAL_METRICS: OnceLock<Arc<Metrics>> = OnceLock::new();
-
 /// Retrieve the globally installed metrics registry, if any.
 #[must_use]
 pub fn global() -> Option<&'static Arc<Metrics>> {
     GLOBAL_METRICS.get()
 }
-
 /// Install the global metrics registry. Returns the input on failure if a registry
 /// was already installed.
 ///
@@ -14560,14 +14111,11 @@ pub fn global() -> Option<&'static Arc<Metrics>> {
 pub fn install_global(metrics: Arc<Metrics>) -> Result<(), Arc<Metrics>> {
     GLOBAL_METRICS.set(metrics)
 }
-
 /// Fetch the global metrics handle if available, otherwise install a default instance.
 pub fn global_or_default() -> Arc<Metrics> {
     Arc::clone(GLOBAL_METRICS.get_or_init(|| Arc::new(Metrics::default())))
 }
-
 static DUPLICATE_METRICS_PANIC: OnceLock<AtomicBool> = OnceLock::new();
-
 fn duplicate_metrics_default() -> bool {
     #[cfg(debug_assertions)]
     {
@@ -14583,20 +14131,16 @@ fn duplicate_metrics_default() -> bool {
         false
     }
 }
-
 fn duplicate_metrics_flag() -> &'static AtomicBool {
     DUPLICATE_METRICS_PANIC.get_or_init(|| AtomicBool::new(duplicate_metrics_default()))
 }
-
 fn duplicate_metrics_should_panic() -> bool {
     duplicate_metrics_flag().load(Ordering::Relaxed)
 }
-
 /// Override duplicate-metric panic behaviour (preferred over env vars).
 pub fn set_duplicate_metrics_panic(enabled: bool) {
     duplicate_metrics_flag().store(enabled, Ordering::Relaxed);
 }
-
 /// Buffer gauge values for a settlement lane.
 #[derive(Clone, Copy, Debug)]
 pub struct LaneSettlementBuffer {
@@ -14608,7 +14152,6 @@ pub struct LaneSettlementBuffer {
     /// `3.0` (XOR-only), or `4.0` (halt).
     pub status: f64,
 }
-
 /// Swapline utilisation metrics for a settlement lane.
 #[derive(Clone, Copy, Debug)]
 pub struct LaneSwaplineSnapshot<'a> {
@@ -14617,7 +14160,6 @@ pub struct LaneSwaplineSnapshot<'a> {
     /// XOR utilisation attributed to the swapline in micro units.
     pub utilisation_micro: u128,
 }
-
 /// Complete settlement snapshot for a single lane.
 #[derive(Clone, Copy, Debug)]
 pub struct LaneSettlementSnapshot<'a> {
@@ -14636,7 +14178,6 @@ pub struct LaneSettlementSnapshot<'a> {
     /// Optional settlement buffer occupancy telemetry.
     pub buffer: Option<LaneSettlementBuffer>,
 }
-
 /// Complete metrics projection derived from one finalized `SoraFS` reserve view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SorafsReserveFinalizedProjection {
@@ -14657,7 +14198,6 @@ pub struct SorafsReserveFinalizedProjection {
     /// Chain-reconciled movement counts ordered as approved and rejected.
     pub chain_reconciled_counts: [u64; 2],
 }
-
 impl Metrics {
     fn lock_sorafs_orderbook_projection_exposition(&self) -> std::sync::MutexGuard<'_, ()> {
         match self.sorafs_orderbook_projection_exposition_lock.lock() {
@@ -14665,14 +14205,12 @@ impl Metrics {
             Err(poisoned) => poisoned.into_inner(),
         }
     }
-
     fn lock_sorafs_gateway_compliance_exposition(&self) -> std::sync::MutexGuard<'_, ()> {
         match self.sorafs_gateway_compliance_exposition_lock.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         }
     }
-
     fn prune_recent_rejection_events(events: &mut VecDeque<(u64, u64)>, now_ms: u64) {
         let cutoff_ms = now_ms.saturating_sub(REJECTION_RECENT_WINDOW_MS);
         while matches!(events.front(), Some((timestamp_ms, _)) if *timestamp_ms < cutoff_ms) {
@@ -14682,14 +14220,12 @@ impl Metrics {
             events.pop_front();
         }
     }
-
     fn to_f64(value: u64) -> f64 {
         #[allow(clippy::cast_precision_loss)]
         {
             value as f64
         }
     }
-
     fn ratio_or_zero(numerator_ms: f64, window_ms: f64) -> f64 {
         if window_ms <= 0.0 {
             return 0.0;
@@ -14697,7 +14233,6 @@ impl Metrics {
         let ratio = numerator_ms / window_ms;
         ratio.clamp(0.0, 1.0)
     }
-
     /// Record a newly observed batch of rejected transactions for `/status` freshness reporting.
     pub fn record_rejected_transactions(&self, count: u64, observed_at_ms: u64) {
         if count == 0 {
@@ -14712,7 +14247,6 @@ impl Metrics {
         events.push_back((observed_at_ms, count));
         Self::prune_recent_rejection_events(&mut events, observed_at_ms);
     }
-
     /// Return the latest rejection timestamp observed by this node, if any.
     #[must_use]
     pub fn last_rejection_at_ms(&self) -> Option<u64> {
@@ -14721,7 +14255,6 @@ impl Metrics {
             timestamp_ms => Some(timestamp_ms),
         }
     }
-
     /// Return the number of rejected transactions observed within the last five minutes.
     #[must_use]
     pub fn txs_rejected_recent_5m(&self, now_ms: u64) -> u64 {
@@ -14734,7 +14267,6 @@ impl Metrics {
             .iter()
             .fold(0_u64, |total, (_, count)| total.saturating_add(*count))
     }
-
     /// Update stack sizing gauges and counters from the latest snapshot.
     pub fn apply_stack_snapshot(&self, snapshot: &StackSettingsSnapshot) {
         self.ivm_stack_bytes
@@ -14755,7 +14287,6 @@ impl Metrics {
         self.ivm_stack_bytes
             .with_label_values(&["guest", "applied"])
             .set(snapshot.guest_bytes);
-
         self.ivm_stack_clamped
             .with_label_values(&["scheduler"])
             .set(u64::from(snapshot.scheduler_clamped));
@@ -14765,7 +14296,6 @@ impl Metrics {
         self.ivm_stack_clamped
             .with_label_values(&["guest"])
             .set(u64::from(snapshot.guest_clamped));
-
         self.ivm_stack_gas_multiplier
             .set(snapshot.gas_to_stack_multiplier.max(1));
         self.ivm_stack_pool_fallback_total.reset();
@@ -14775,7 +14305,6 @@ impl Metrics {
         self.ivm_stack_budget_hit_total
             .inc_by(snapshot.budget_hit_total);
     }
-
     /// Record the current fsync policy used by Kura storage.
     pub fn set_kura_fsync_mode(&self, mode: FsyncMode) {
         let value = match mode {
@@ -14784,21 +14313,18 @@ impl Metrics {
         };
         self.kura_fsync_enabled.set(value);
     }
-
     /// Record a fsync failure for the given target.
     pub fn inc_kura_fsync_failure(&self, target: &str) {
         self.kura_fsync_failures_total
             .with_label_values(&[target])
             .inc();
     }
-
     /// Observe fsync latency in milliseconds for the given target.
     pub fn record_kura_fsync_latency(&self, target: &str, duration: Duration) {
         self.kura_fsync_latency_ms
             .with_label_values(&[target])
             .observe(duration.as_secs_f64() * 1000.0);
     }
-
     /// Update the active Space Directory manifest gauge for a specific dataspace/profile.
     pub fn set_space_directory_active_manifests(
         &self,
@@ -14811,28 +14337,24 @@ impl Metrics {
             .with_label_values(&[dataspace, dataspace_id, profile])
             .set(count);
     }
-
     /// Record the latest block height observed for a lane/dataspace pair.
     pub fn set_lane_block_height(&self, lane: &str, dataspace: &str, height: u64) {
         self.nexus_lane_block_height
             .with_label_values(&[lane, dataspace])
             .set(height);
     }
-
     /// Record the finality lag (in slots) for a lane/dataspace pair.
     pub fn set_lane_finality_lag(&self, lane: &str, dataspace: &str, lag: u64) {
         self.nexus_lane_finality_lag_slots
             .with_label_values(&[lane, dataspace])
             .set(lag);
     }
-
     /// Record the settlement backlog (XOR) for a lane/dataspace pair.
     pub fn set_lane_settlement_backlog(&self, lane: &str, dataspace: &str, backlog_micro: u128) {
         self.nexus_lane_settlement_backlog_xor
             .with_label_values(&[lane, dataspace])
             .set(u128_to_f64(backlog_micro));
     }
-
     /// Record aggregated DA rent usage and incentive breakdowns for telemetry dashboards.
     pub fn record_da_rent_quote(
         &self,
@@ -14861,7 +14383,6 @@ impl Metrics {
             .with_label_values(&labels)
             .inc_by(quantity_to_micro_f64(quote.potr_bonus.as_quantity()));
     }
-
     /// Record a DA receipt ingest outcome and optionally advance the cursor gauge.
     pub fn record_da_receipt_outcome(
         &self,
@@ -14893,12 +14414,10 @@ impl Metrics {
                 .set(cursor.highest_sequence);
         }
     }
-
     /// Observe DA chunking + erasure coding duration in seconds.
     pub fn observe_da_chunking_seconds(&self, seconds: f64) {
         self.torii_da_chunking_seconds.observe(seconds);
     }
-
     /// Record a Torii DA spool batch write outcome.
     pub fn record_torii_da_spool_batch(&self, outcome: &'static str, write_ms: f64) {
         self.torii_da_spool_batches_total
@@ -14907,7 +14426,6 @@ impl Metrics {
         self.torii_da_spool_batch_write_ms
             .observe(write_ms.max(0.0));
     }
-
     /// Record Torii DA spool artifact outcomes.
     pub fn record_torii_da_spool_artifact(
         &self,
@@ -14922,12 +14440,10 @@ impl Metrics {
             .with_label_values(&[kind, outcome])
             .inc_by(count);
     }
-
     /// Set the current Torii DA spool queue depth.
     pub fn set_torii_da_spool_queue_depth(&self, depth: u64) {
         self.torii_da_spool_queue_depth.set(depth);
     }
-
     /// Update the latest DA receipt cursor retained for a lane.
     pub fn set_da_receipt_cursor(&self, lane_id: u32, epoch: u64, sequence: u64) {
         let lane_label = lane_id.to_string();
@@ -14946,7 +14462,6 @@ impl Metrics {
             .with_label_values(&[&lane_label])
             .set(cursor.highest_sequence);
     }
-
     /// Remove all DA receipt metric state for retired lanes.
     pub fn prune_da_receipt_lanes(&self, lane_ids: impl IntoIterator<Item = u32>) {
         let mut lanes = self
@@ -14971,7 +14486,6 @@ impl Metrics {
             }
         }
     }
-
     /// Snapshot the latest DA receipt cursor retained for each lane.
     pub fn da_receipt_cursor_status(&self) -> Vec<DaReceiptCursorStatus> {
         self.da_receipt_metric_lanes
@@ -14987,7 +14501,6 @@ impl Metrics {
             })
             .collect()
     }
-
     /// Record a DA shard cursor event and track the latest block height per cursor.
     pub fn record_da_shard_cursor_event(
         &self,
@@ -15006,7 +14519,6 @@ impl Metrics {
             .with_label_values(&[&lane_label, &shard_label])
             .set(height);
     }
-
     /// Record the lag (in blocks) between the validated height and the last shard cursor advance.
     pub fn set_da_shard_cursor_lag(&self, lane_id: u32, shard_id: u32, lag_blocks: i64) {
         let lane_label = lane_id.to_string();
@@ -15015,14 +14527,12 @@ impl Metrics {
             .with_label_values(&[&lane_label, &shard_label])
             .set(lag_blocks);
     }
-
     /// Increment the manifest revision counter for a dataspace.
     pub fn inc_space_directory_revision(&self, dataspace: &str, dataspace_id: &str) {
         self.nexus_space_directory_revision_total
             .with_label_values(&[dataspace, dataspace_id])
             .inc();
     }
-
     /// Increment the manifest revocation counter for a dataspace/reason.
     pub fn inc_space_directory_revocations(
         &self,
@@ -15034,14 +14544,12 @@ impl Metrics {
             .with_label_values(&[dataspace, dataspace_id, reason])
             .inc();
     }
-
     /// Replace the cached list of sealed lane aliases used by status snapshots.
     pub fn set_lane_governance_sealed_aliases(&self, aliases: Vec<String>) {
         if let Ok(mut guard) = self.nexus_lane_governance_sealed_aliases.write() {
             *guard = aliases;
         }
     }
-
     /// Snapshot the cached sealed lane aliases.
     pub fn lane_governance_sealed_aliases(&self) -> Vec<String> {
         self.nexus_lane_governance_sealed_aliases
@@ -15049,21 +14557,18 @@ impl Metrics {
             .map(|guard| guard.clone())
             .unwrap_or_default()
     }
-
     /// Cache the current consensus mode tag for status exports.
     pub fn set_sumeragi_mode_tag(&self, mode_tag: &str) {
         if let Ok(mut guard) = self.sumeragi_mode_tag.write() {
             *guard = mode_tag.to_string();
         }
     }
-
     /// Snapshot the cached consensus mode tag.
     pub fn sumeragi_mode_tag(&self) -> String {
         self.sumeragi_mode_tag
             .read()
             .map_or_else(|_| PERMISSIONED_TAG.to_string(), |guard| guard.clone())
     }
-
     /// Record the canonical IVM gas schedule hash (split into two 64-bit gauges).
     pub fn set_ivm_gas_schedule_hash(&self, hash: &[u8; 32]) {
         let lo = u64::from_be_bytes(hash[..8].try_into().expect("slice length guarded"));
@@ -15071,7 +14576,6 @@ impl Metrics {
         self.ivm_gas_schedule_hash_lo.set(lo);
         self.ivm_gas_schedule_hash_hi.set(hi);
     }
-
     /// Record the current confidential gas schedule.
     pub fn set_confidential_gas_schedule(&self, gas: &ActualConfidentialGas) {
         self.confidential_gas_base_verify.set(gas.proof_base);
@@ -15081,91 +14585,78 @@ impl Metrics {
         self.confidential_gas_per_nullifier.set(gas.per_nullifier);
         self.confidential_gas_per_commitment.set(gas.per_commitment);
     }
-
     /// Record a rejected Torii account identifier along with the failure reason.
     pub fn inc_torii_address_invalid(&self, endpoint: &str, reason: &str) {
         self.torii_address_invalid_total
             .with_label_values(&[endpoint, reason])
             .inc();
     }
-
     /// Record an SNS registrar outcome grouped by result and suffix.
     pub fn inc_sns_registrar_status(&self, result: &str, suffix: &str) {
         self.sns_registrar_status_total
             .with_label_values(&[result, suffix])
             .inc();
     }
-
     /// Record the domain classification (implicit vs explicit, SNS suffix, etc.) emitted by Torii’s address handler.
     pub fn inc_torii_address_domain(&self, endpoint: &str, domain_kind: &str) {
         self.torii_address_domain_total
             .with_label_values(&[endpoint, domain_kind])
             .inc();
     }
-
     /// Record a Local-12 selector collision detected by Torii.
     pub fn inc_torii_address_collision(&self, endpoint: &str, kind: &str) {
         self.torii_address_collision_total
             .with_label_values(&[endpoint, kind])
             .inc();
     }
-
     /// Record a Local-12 selector collision grouped by endpoint + domain label.
     pub fn inc_torii_address_collision_domain(&self, endpoint: &str, domain: &str) {
         self.torii_address_collision_domain_total
             .with_label_values(&[endpoint, domain])
             .inc();
     }
-
     /// Increment the account literal selection counter.
     pub fn inc_torii_account_literal(&self, endpoint: &str, format: &str) {
         self.torii_account_literal_total
             .with_label_values(&[endpoint, format])
             .inc();
     }
-
     /// Record a Norito-RPC gate observation with rollout stage/outcome labels.
     pub fn inc_torii_norito_rpc_gate(&self, stage: &str, outcome: &str) {
         self.torii_norito_rpc_gate_total
             .with_label_values(&[stage, outcome])
             .inc();
     }
-
     /// Record an API-token-gated Torii endpoint hit without exposing token material.
     pub fn inc_torii_api_token_hit(&self, endpoint: &str, token_state: &str) {
         self.torii_api_token_hits_total
             .with_label_values(&[endpoint, token_state])
             .inc();
     }
-
     /// Record an operator auth event with action/result/reason labels.
     pub fn inc_torii_operator_auth(&self, action: &str, result: &str, reason: &str) {
         self.torii_operator_auth_total
             .with_label_values(&[action, result, reason])
             .inc();
     }
-
     /// Record an operator auth lockout with action/reason labels.
     pub fn inc_torii_operator_auth_lockout(&self, action: &str, reason: &str) {
         self.torii_operator_auth_lockout_total
             .with_label_values(&[action, reason])
             .inc();
     }
-
     /// Record a Norito-RPC decode failure emitted by Torii.
     pub fn inc_torii_norito_decode_failure(&self, payload_kind: &str, reason: &str) {
         self.torii_norito_decode_failures_total
             .with_label_values(&[payload_kind, reason])
             .inc();
     }
-
     /// Record a rejected attachment during Torii sanitization.
     pub fn inc_torii_attachment_reject(&self, reason: &str) {
         self.torii_attachment_reject_total
             .with_label_values(&[reason])
             .inc();
     }
-
     /// Record attachment sanitization latency in milliseconds.
     pub fn observe_torii_attachment_sanitize_ms(&self, millis: u64) {
         let millis = u32::try_from(millis).unwrap_or(u32::MAX);
@@ -15173,7 +14664,6 @@ impl Metrics {
             .with_label_values::<&str>(&[])
             .observe(f64::from(millis));
     }
-
     /// Record FASTPQ execution mode resolution metrics.
     pub fn record_fastpq_execution_mode(
         &self,
@@ -15207,7 +14697,6 @@ impl Metrics {
             );
         }
     }
-
     /// Record Poseidon pipeline resolution metrics for FASTPQ.
     pub fn record_fastpq_poseidon_mode(
         &self,
@@ -15241,7 +14730,6 @@ impl Metrics {
             );
         }
     }
-
     /// Increment a FASTPQ GPU accelerator disable event counter.
     pub fn inc_fastpq_gpu_disable(
         &self,
@@ -15255,7 +14743,6 @@ impl Metrics {
             .with_label_values(&[accelerator, reason, device_class, chip_family, gpu_kind])
             .inc();
     }
-
     /// Increment a FASTPQ sampled GPU parity failure counter.
     pub fn inc_fastpq_gpu_parity_failure(
         &self,
@@ -15269,19 +14756,16 @@ impl Metrics {
             .with_label_values(&[accelerator, reason, device_class, chip_family, gpu_kind])
             .inc();
     }
-
     /// Set FASTPQ proof sidecar queue depth.
     pub fn set_fastpq_proof_sidecar_queue_depth(&self, depth: u64) {
         self.fastpq_proof_sidecar_queue_depth.set(depth);
     }
-
     /// Increment a FASTPQ proof sidecar persistence event counter.
     pub fn inc_fastpq_proof_sidecar_event(&self, event: &str) {
         self.fastpq_proof_sidecar_events_total
             .with_label_values(&[event])
             .inc();
     }
-
     /// Record aggregated Metal queue statistics for FASTPQ.
     pub fn record_fastpq_metal_queue_stats(
         &self,
@@ -15302,14 +14786,12 @@ impl Metrics {
         self.fastpq_metal_queue_depth
             .with_label_values(&[device_class, chip_family, gpu_kind, "window_seconds"])
             .set(sample.window_ms.max(0.0) / 1_000.0);
-
         let window_ms = sample.window_ms.max(0.0);
         for (metric, value) in [("busy", sample.busy_ms), ("overlap", sample.overlap_ms)] {
             self.fastpq_metal_queue_ratio
                 .with_label_values(&[device_class, chip_family, gpu_kind, "global", metric])
                 .set(Self::ratio_or_zero(value, window_ms));
         }
-
         for lane in sample.lanes {
             let queue_label = format!("lane-{}", lane.index);
             for (metric, value) in [("busy", lane.busy_ms), ("overlap", lane.overlap_ms)] {
@@ -15325,7 +14807,6 @@ impl Metrics {
             }
         }
     }
-
     /// Record host zero-fill telemetry for FASTPQ Metal runs.
     pub fn record_fastpq_zero_fill(
         &self,
@@ -15353,7 +14834,6 @@ impl Metrics {
             .with_label_values(&[device_class, chip_family, gpu_kind])
             .set(bandwidth);
     }
-
     /// Record ISO bridge reference-data gauges.
     pub fn record_iso_reference_dataset(
         &self,
@@ -15381,7 +14861,6 @@ impl Metrics {
             .with_label_values(&[dataset])
             .set(records_value);
     }
-
     /// Record per-lane settlement telemetry for the latest block.
     pub fn record_lane_settlement_snapshot(&self, snapshot: LaneSettlementSnapshot<'_>) {
         let base_labels = [snapshot.lane_id, snapshot.dataspace_id];
@@ -15420,7 +14899,6 @@ impl Metrics {
         }
         self.set_lane_settlement_backlog(base_labels[0], base_labels[1], snapshot.xor_due_micro);
     }
-
     /// Increment conversion counters for a lane/dataspace/source token trio.
     pub fn inc_settlement_conversion_total(
         &self,
@@ -15436,7 +14914,6 @@ impl Metrics {
             .with_label_values(&[lane, dataspace, source])
             .inc_by(count);
     }
-
     /// Increment the cumulative haircut total (XOR units) for a lane/dataspace pair.
     pub fn inc_settlement_haircut_total(&self, lane: &str, dataspace: &str, haircut_micro: u128) {
         if haircut_micro == 0 {
@@ -15446,7 +14923,6 @@ impl Metrics {
             .with_label_values(&[lane, dataspace])
             .inc_by(u128_to_f64(haircut_micro) / 1_000_000.0);
     }
-
     /// Update queue/backlog telemetry for the SoraNet privacy aggregator.
     pub fn record_soranet_privacy_queue_snapshot(&self, snapshot: &PrivacyDrainSnapshot) {
         for mode in [
@@ -15523,13 +14999,11 @@ impl Metrics {
                 .inc_by(snapshot.evicted_completed);
         }
     }
-
     /// Update Prometheus metrics with a newly aggregated SoraNet privacy bucket.
     pub fn record_soranet_privacy_bucket(&self, bucket: &SoranetPrivacyBucketMetricsV1) {
         let mode_label = bucket.mode.as_label();
         let bucket_label_string = bucket.bucket_start_unix.to_string();
         let bucket_label = bucket_label_string.as_str();
-
         if bucket.is_suppressed() {
             let reason_label = bucket
                 .suppression_reason
@@ -15542,11 +15016,9 @@ impl Metrics {
                 .inc();
             return;
         }
-
         self.soranet_privacy_bucket_suppressed
             .with_label_values(&[mode_label, bucket_label])
             .set(0.0);
-
         for (kind, value) in [
             ("accepted", bucket.handshake_accept_total),
             ("pow_rejected", bucket.handshake_pow_reject_total),
@@ -15560,7 +15032,6 @@ impl Metrics {
                     .inc_by(value);
             }
         }
-
         for entry in &bucket.pow_rejects_by_reason {
             if entry.count > 0 {
                 self.soranet_privacy_pow_rejects_total
@@ -15568,7 +15039,6 @@ impl Metrics {
                     .inc_by(entry.count);
             }
         }
-
         for (scope, value) in [
             ("congestion", bucket.throttle_congestion_total),
             ("cooldown", bucket.throttle_cooldown_total),
@@ -15584,7 +15054,6 @@ impl Metrics {
                     .inc_by(value);
             }
         }
-
         if bucket.verified_bytes_total > 0 {
             let bytes = if bucket.verified_bytes_total > u128::from(u64::MAX) {
                 u64::MAX
@@ -15595,23 +15064,19 @@ impl Metrics {
                 .with_label_values(&[mode_label, bucket_label])
                 .inc_by(bytes);
         }
-
         let avg_value = bucket.active_circuits_mean.map_or(0.0, Self::to_f64);
         self.soranet_privacy_active_circuits_avg
             .with_label_values(&[mode_label, bucket_label])
             .set(avg_value);
-
         let max_value = bucket.active_circuits_max.map_or(0.0, Self::to_f64);
         self.soranet_privacy_active_circuits_max
             .with_label_values(&[mode_label, bucket_label])
             .set(max_value);
-
         for percentile in &bucket.rtt_percentiles_ms {
             self.soranet_privacy_rtt_millis
                 .with_label_values(&[mode_label, bucket_label, percentile.label.as_str()])
                 .set(Self::to_f64(percentile.value_ms));
         }
-
         for entry in &bucket.gar_abuse_counts {
             if entry.count == 0 {
                 continue;
@@ -15622,13 +15087,11 @@ impl Metrics {
                 .inc_by(entry.count);
         }
     }
-
     /// Update the privacy collector enabled flag.
     pub fn set_soranet_privacy_collector_enabled(&self, enabled: bool) {
         self.soranet_privacy_collector_enabled
             .set(i64::from(enabled));
     }
-
     /// Record the latest SoraFS metering snapshot for a provider.
     #[allow(clippy::too_many_arguments)]
     pub fn record_sorafs_metering(
@@ -15682,7 +15145,6 @@ impl Metrics {
             .with_label_values(&[provider])
             .set(por);
     }
-
     /// Record SoraFS egress counters and their drift against billing bytes.
     pub fn record_sorafs_egress_reconciliation(
         &self,
@@ -15698,7 +15160,6 @@ impl Metrics {
         self.torii_sorafs_egress_drift_ratio
             .with_label_values(&[provider, "billing"])
             .set(0.0);
-
         for (source, bytes) in [
             ("gateway", gateway_bytes),
             ("orchestrator", orchestrator_bytes),
@@ -15712,7 +15173,6 @@ impl Metrics {
                     .remove_label_values(&[provider, source]);
                 continue;
             };
-
             let observed_value = u64_to_f64(observed);
             self.torii_sorafs_egress_bytes
                 .with_label_values(&[provider, source])
@@ -15724,7 +15184,6 @@ impl Metrics {
                 .set(drift);
         }
     }
-
     /// Record a SoraFS Governance DAG publication attempt.
     pub fn record_sorafs_governance_dag_publish(
         &self,
@@ -15746,21 +15205,18 @@ impl Metrics {
                 .set(timestamp_seconds);
         }
     }
-
     /// Set SoraFS Governance DAG publication backlog for a sink.
     pub fn set_sorafs_governance_dag_backlog(&self, sink: &str, backlog: u64) {
         self.sorafs_governance_dag_backlog
             .with_label_values(&[sink])
             .set(backlog);
     }
-
     /// Set SoraFS Governance DAG head age in seconds for a sink.
     pub fn set_sorafs_governance_dag_head_age_seconds(&self, sink: &str, age_seconds: u64) {
         self.sorafs_governance_dag_head_age_seconds
             .with_label_values(&[sink])
             .set(age_seconds);
     }
-
     /// Mark the SoraFS orderbook telemetry projection unready without changing
     /// the last complete finalized snapshot.
     pub fn mark_sorafs_orderbook_finalized_projection_unready(&self) {
@@ -15768,7 +15224,6 @@ impl Metrics {
         self.torii_sorafs_orderbook_finalized_projection_ready
             .set(0);
     }
-
     /// Record a fail-closed finalized SoraFS orderbook projection failure.
     pub fn record_sorafs_orderbook_finalized_projection_failure(&self, reason: &str) {
         let _projection_exposition_guard = self.lock_sorafs_orderbook_projection_exposition();
@@ -15791,7 +15246,6 @@ impl Metrics {
             .with_label_values(&[reason])
             .inc();
     }
-
     /// Publish one complete immutable finalized SoraFS orderbook projection.
     ///
     /// Every label is selected from a closed vocabulary. Projection mutation
@@ -15847,7 +15301,6 @@ impl Metrics {
         self.torii_sorafs_orderbook_finalized_projection_ready
             .set(1);
     }
-
     /// Record one SoraFS orderbook API response using bounded labels.
     pub fn record_sorafs_orderbook_api_request(&self, route: &str, is_error: bool) {
         let route = match route {
@@ -15867,7 +15320,6 @@ impl Metrics {
             .with_label_values(&[route, outcome])
             .inc();
     }
-
     /// Record one authenticated SoraFS gateway-compliance control response.
     ///
     /// Caller-provided values are collapsed into fixed vocabularies before
@@ -15897,7 +15349,6 @@ impl Metrics {
             .with_label_values(&[operation, outcome])
             .inc();
     }
-
     /// Record one SoraFS gateway-compliance serving decision with bounded labels.
     pub fn record_sorafs_gateway_compliance_serving_decision(
         &self,
@@ -15928,7 +15379,6 @@ impl Metrics {
             .with_label_values(&[subject_kind, disposition, source])
             .inc();
     }
-
     /// Record one SoraFS gateway-compliance failure with bounded labels.
     pub fn record_sorafs_gateway_compliance_failure(&self, surface: &str, class: &str) {
         let surface = match surface {
@@ -15954,7 +15404,6 @@ impl Metrics {
             .with_label_values(&[surface, class])
             .inc();
     }
-
     /// Publish one atomic gateway-compliance serving-catalog snapshot.
     ///
     /// The ready bit is cleared before the sequence and expiry change and is
@@ -15976,13 +15425,11 @@ impl Metrics {
             self.torii_sorafs_gateway_compliance_ready.set(1);
         }
     }
-
     /// Mark the serving policy unavailable without publishing partial state.
     pub fn mark_sorafs_gateway_compliance_unready(&self) {
         let _exposition_guard = self.lock_sorafs_gateway_compliance_exposition();
         self.torii_sorafs_gateway_compliance_ready.set(0);
     }
-
     /// Set the latest SoraFS hedging XOR/USD reference price in micro-USD.
     pub fn set_sorafs_hedging_reference_price_micro_usd(
         &self,
@@ -15993,7 +15440,6 @@ impl Metrics {
             .with_label_values(&[cluster])
             .set(price_micro_usd);
     }
-
     /// Set SoraFS hedging feed lag in seconds for one source.
     pub fn set_sorafs_hedging_feed_lag_seconds(
         &self,
@@ -16005,7 +15451,6 @@ impl Metrics {
             .with_label_values(&[cluster, source])
             .set(lag_seconds);
     }
-
     /// Set SoraFS hedging feed divergence in basis points for one source.
     pub fn set_sorafs_hedging_feed_divergence_bps(
         &self,
@@ -16017,7 +15462,6 @@ impl Metrics {
             .with_label_values(&[cluster, source])
             .set(divergence_bps);
     }
-
     /// Set SoraFS hedging exposure drift in basis points for one asset.
     pub fn set_sorafs_hedging_exposure_drift_bps(
         &self,
@@ -16029,7 +15473,6 @@ impl Metrics {
             .with_label_values(&[cluster, asset])
             .set(drift_bps);
     }
-
     /// Record a SoraFS billing statement generation attempt.
     pub fn record_sorafs_billing_statement_generation(
         &self,
@@ -16046,14 +15489,12 @@ impl Metrics {
                 .inc();
         }
     }
-
     /// Set SoraFS billing statement acknowledgement backlog for a cluster.
     pub fn set_sorafs_billing_statement_ack_backlog(&self, cluster: &str, backlog: u64) {
         self.torii_sorafs_billing_statement_ack_backlog
             .with_label_values(&[cluster])
             .set(backlog);
     }
-
     /// Set SoraFS billing escrow runway in seconds for one account type.
     pub fn set_sorafs_billing_escrow_runway_seconds(
         &self,
@@ -16065,7 +15506,6 @@ impl Metrics {
             .with_label_values(&[cluster, account_type])
             .set(seconds);
     }
-
     /// Publish one complete, reconciled SoraFS reserve projection from a single finalized view.
     pub fn record_sorafs_reserve_finalized_projection(
         &self,
@@ -16074,14 +15514,12 @@ impl Metrics {
         const STAGES: [&str; 5] = ["active", "warning", "grace", "delinquent", "default"];
         const CUSTODY_STATUSES: [&str; 3] = ["pending", "approved", "rejected"];
         const RECONCILED_STATUSES: [&str; 2] = ["approved", "rejected"];
-
         self.torii_sorafs_reserve_lifecycle_stage_providers.reset();
         for (stage, count) in STAGES.into_iter().zip(projection.lifecycle_stage_counts) {
             self.torii_sorafs_reserve_lifecycle_stage_providers
                 .with_label_values(&[stage])
                 .set(count);
         }
-
         self.torii_sorafs_reserve_credit_draw_micro_xor.reset();
         self.torii_sorafs_reserve_credit_shortfall_micro_xor.reset();
         self.torii_sorafs_reserve_accrued_interest_micro_xor.reset();
@@ -16096,19 +15534,16 @@ impl Metrics {
                 .with_label_values(&[stage])
                 .set(u128_to_f64(projection.accrued_interest_micro_xor[index]));
         }
-
         self.torii_sorafs_reserve_defaulted_providers
             .set(projection.lifecycle_stage_counts[4]);
         self.torii_sorafs_reserve_appeal_backlog
             .set(projection.open_appeals);
-
         self.torii_sorafs_reserve_custody_movements.reset();
         for (status, count) in CUSTODY_STATUSES.into_iter().zip(projection.custody_counts) {
             self.torii_sorafs_reserve_custody_movements
                 .with_label_values(&[status])
                 .set(count);
         }
-
         self.torii_sorafs_reserve_chain_reconciled_movements.reset();
         for (status, count) in RECONCILED_STATUSES
             .into_iter()
@@ -16122,19 +15557,16 @@ impl Metrics {
             .set(projection.finalized_height);
         self.torii_sorafs_reserve_finalized_projection_ready.set(1);
     }
-
     /// Mark the finalized reserve projection unavailable without publishing partial gauges.
     pub fn mark_sorafs_reserve_finalized_projection_unready(&self) {
         self.torii_sorafs_reserve_finalized_projection_ready.set(0);
     }
-
     /// Record a failed finalized reserve projection attempt.
     pub fn record_sorafs_reserve_finalized_projection_failure(&self) {
         self.mark_sorafs_reserve_finalized_projection_unready();
         self.torii_sorafs_reserve_finalized_projection_failure_total
             .inc();
     }
-
     /// Record a SoraFS reserve service request outcome.
     pub fn record_sorafs_reserve_service_request(&self, route: &str, result: &str) {
         let route = match route {
@@ -16153,7 +15585,6 @@ impl Metrics {
             .with_label_values(&[route, result])
             .inc();
     }
-
     /// Increment a SoraFS reserve service rate-limit counter.
     pub fn inc_sorafs_reserve_service_rate_limit(&self, route: &str, reason: &str) {
         let route = match route {
@@ -16171,7 +15602,6 @@ impl Metrics {
             .with_label_values(&[route, reason])
             .inc();
     }
-
     /// Record the latest accepted SoraFS reputation snapshot metrics.
     pub fn record_sorafs_reputation_snapshot(
         &self,
@@ -16187,7 +15617,6 @@ impl Metrics {
             .set(generated_at_unix);
         self.sorafs_reputation_provider_count
             .set(u64::try_from(provider_scores.len()).unwrap_or(u64::MAX));
-
         let mut current_low_score_state = BTreeMap::new();
         let mut low_score_providers = 0_u64;
         for (provider_id, _, low_score) in provider_scores.iter().copied() {
@@ -16198,7 +15627,6 @@ impl Metrics {
         }
         self.sorafs_reputation_low_score_providers
             .set(low_score_providers);
-
         {
             let mut previous_low_score_state = self
                 .sorafs_reputation_low_score_state
@@ -16222,7 +15650,6 @@ impl Metrics {
             }
             *previous_low_score_state = current_low_score_state;
         }
-
         let mut ranked_scores = provider_scores.to_vec();
         ranked_scores.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
         let mut next_tracked = BTreeSet::new();
@@ -16235,7 +15662,6 @@ impl Metrics {
                 .set(f64::from(score_bps));
             next_tracked.insert(provider_id.to_owned());
         }
-
         let mut tracked = self
             .sorafs_reputation_score_tracked_providers
             .write()
@@ -16248,7 +15674,6 @@ impl Metrics {
         }
         *tracked = next_tracked;
     }
-
     /// Record payload-free committed reputation runtime status.
     pub fn record_sorafs_reputation_runtime_status(
         &self,
@@ -16273,7 +15698,6 @@ impl Metrics {
         self.sorafs_reputation_runtime_provider_count
             .set(u64::from(snapshot.provider_count));
     }
-
     /// Increment one bounded committed reputation runtime tick result.
     pub fn inc_sorafs_reputation_runtime_tick(&self, result: &str) {
         let result = match result {
@@ -16284,7 +15708,6 @@ impl Metrics {
             .with_label_values(&[result])
             .inc();
     }
-
     /// Record payload-free committed hedging/billing runtime status.
     pub fn record_sorafs_hedging_billing_runtime_status(
         &self,
@@ -16325,7 +15748,6 @@ impl Metrics {
         self.sorafs_hedging_billing_hedge_intents
             .set(u64::from(snapshot.hedge_intents));
     }
-
     /// Increment one bounded committed hedging/billing runtime tick result.
     pub fn inc_sorafs_hedging_billing_runtime_tick(&self, result: &str) {
         let result = match result {
@@ -16336,14 +15758,12 @@ impl Metrics {
             .with_label_values(&[result])
             .inc();
     }
-
     /// Record a rejected SoraFS capacity telemetry window.
     pub fn record_sorafs_capacity_telemetry_reject(&self, provider: &str, reason: &str) {
         self.torii_sorafs_capacity_telemetry_rejections_total
             .with_label_values(&[provider, reason])
             .inc();
     }
-
     /// Record the latest SoraFS fee projection for `provider`.
     pub fn record_sorafs_fee_projection(&self, provider: &str, fee: &Quantity) {
         let gauge_value = quantity_to_nano_f64(fee);
@@ -16351,28 +15771,24 @@ impl Metrics {
             .with_label_values(&[provider])
             .set(gauge_value);
     }
-
     /// Increment the capacity dispute counter for the provided result label.
     pub fn inc_sorafs_disputes(&self, result: &str) {
         self.torii_sorafs_disputes_total
             .with_label_values(&[result])
             .inc();
     }
-
     /// Increment the repair task counter for a status label.
     pub fn inc_sorafs_repair_tasks(&self, status: &str) {
         self.torii_sorafs_repair_tasks_total
             .with_label_values(&[status])
             .inc();
     }
-
     /// Observe repair latency in minutes for the supplied outcome label.
     pub fn observe_sorafs_repair_latency(&self, outcome: &str, minutes: f64) {
         self.torii_sorafs_repair_latency_minutes
             .with_label_values(&[outcome])
             .observe(minutes.max(0.0));
     }
-
     /// Record repair queue depth per provider.
     pub fn record_sorafs_repair_queue_depths(&self, depths: &[(String, u64)]) {
         self.torii_sorafs_repair_queue_depth.reset();
@@ -16382,74 +15798,63 @@ impl Metrics {
                 .set(*depth);
         }
     }
-
     /// Record the age (seconds) of the oldest queued repair task.
     pub fn set_sorafs_repair_backlog_oldest_age_seconds(&self, age_secs: u64) {
         self.torii_sorafs_repair_backlog_oldest_age_seconds
             .set(age_secs);
     }
-
     /// Increment the repair lease-expired counter for a given outcome label.
     pub fn inc_sorafs_repair_lease_expired(&self, outcome: &str) {
         self.torii_sorafs_repair_lease_expired_total
             .with_label_values(&[outcome])
             .inc();
     }
-
     /// Increment the slash proposal counter for a given outcome label.
     pub fn inc_sorafs_slash_proposals(&self, outcome: &str) {
         self.torii_sorafs_slash_proposals_total
             .with_label_values(&[outcome])
             .inc();
     }
-
     /// Increment the reconciliation run counter for the provided result label.
     pub fn inc_sorafs_reconciliation_runs(&self, result: &str) {
         self.torii_sorafs_reconciliation_runs_total
             .with_label_values(&[result])
             .inc();
     }
-
     /// Record the reconciliation divergence count for the latest snapshot.
     pub fn set_sorafs_reconciliation_divergence_count(&self, count: u64) {
         self.torii_sorafs_reconciliation_divergence_count.set(count);
     }
-
     /// Increment the GC run counter for the provided result label.
     pub fn inc_sorafs_gc_runs(&self, result: &str) {
         self.torii_sorafs_gc_runs_total
             .with_label_values(&[result])
             .inc();
     }
-
     /// Increment the GC eviction counter for the provided reason label.
     pub fn inc_sorafs_gc_evictions(&self, reason: &str) {
         self.torii_sorafs_gc_evictions_total
             .with_label_values(&[reason])
             .inc();
     }
-
     /// Add freed bytes for GC, labeled by eviction reason.
     pub fn add_sorafs_gc_freed_bytes(&self, reason: &str, bytes: u64) {
         self.torii_sorafs_gc_bytes_freed_total
             .with_label_values(&[reason])
             .inc_by(bytes);
     }
-
     /// Increment the GC blocked counter for the provided reason label.
     pub fn inc_sorafs_gc_blocked(&self, reason: &str) {
         self.torii_sorafs_gc_blocked_total
             .with_label_values(&[reason])
             .inc();
     }
-
     /// Record the expired manifest snapshot observed by GC.
     pub fn set_sorafs_gc_expired_snapshot(&self, expired_count: u64, oldest_age_secs: u64) {
         self.torii_sorafs_gc_expired_manifests.set(expired_count);
         self.torii_sorafs_gc_oldest_expired_age_seconds
             .set(oldest_age_secs);
     }
-
     /// Record the latest storage scheduler snapshot for a provider.
     #[allow(clippy::too_many_arguments)]
     pub fn record_sorafs_storage(
@@ -16500,7 +15905,6 @@ impl Metrics {
             );
         }
     }
-
     /// Record the PoR ingestion backlog for a manifest/provider pair.
     pub fn record_sorafs_por_ingestion_backlog(
         &self,
@@ -16512,7 +15916,6 @@ impl Metrics {
             .with_label_values(&[manifest, provider])
             .set(pending);
     }
-
     /// Record the cumulative PoR ingestion failures for a manifest/provider pair.
     pub fn record_sorafs_por_ingestion_failures(
         &self,
@@ -16524,7 +15927,6 @@ impl Metrics {
             .with_label_values(&[manifest, provider])
             .set(failures_total);
     }
-
     /// Record a PoR challenge emitted by the scheduler.
     pub fn record_sorafs_por_scheduler_challenge(&self, forced: bool, duplicate_samples: usize) {
         let result = if forced { "forced" } else { "scheduled" };
@@ -16540,14 +15942,12 @@ impl Metrics {
                 .inc_by(duplicate_samples);
         }
     }
-
     /// Record a PoR scheduler run failure.
     pub fn record_sorafs_por_scheduler_failure(&self) {
         self.torii_sorafs_por_challenges_total
             .with_label_values(&["failed"])
             .inc();
     }
-
     /// Record the current pin registry snapshot and replication SLA aggregates.
     #[allow(clippy::too_many_arguments)]
     pub fn record_sorafs_registry(
@@ -16573,9 +15973,7 @@ impl Metrics {
         self.torii_sorafs_registry_manifests_total
             .with_label_values(&["retired"])
             .set(manifests_retired);
-
         self.torii_sorafs_registry_aliases_total.set(alias_total);
-
         self.torii_sorafs_registry_orders_total
             .with_label_values(&["pending"])
             .set(orders_pending);
@@ -16585,10 +15983,8 @@ impl Metrics {
         self.torii_sorafs_registry_orders_total
             .with_label_values(&["expired"])
             .set(orders_expired);
-
         self.torii_sorafs_replication_backlog_total
             .set(orders_pending);
-
         self.torii_sorafs_replication_sla_total
             .with_label_values(&["met"])
             .set(sla_met);
@@ -16598,7 +15994,6 @@ impl Metrics {
         self.torii_sorafs_replication_sla_total
             .with_label_values(&["pending"])
             .set(orders_pending);
-
         record_gauge_stats(
             &self.torii_sorafs_replication_completion_latency_epochs,
             completion_latencies,
@@ -16608,7 +16003,6 @@ impl Metrics {
             deadline_slack_epochs,
         );
     }
-
     /// Record the O(1), consensus-maintained global SoraFS pin resource summary.
     pub fn record_sorafs_pin_resource_usage(
         &self,
@@ -16620,21 +16014,18 @@ impl Metrics {
         self.torii_sorafs_pin_live_content_bytes
             .set(live_content_bytes);
     }
-
     /// Increment the active fetch gauge for the orchestrator.
     pub fn sorafs_orchestrator_fetch_started(&self, manifest_id: &str, region: &str) {
         self.sorafs_orchestrator_active_fetches
             .with_label_values(&[manifest_id, region])
             .inc();
     }
-
     /// Decrement the active fetch gauge for the orchestrator.
     pub fn sorafs_orchestrator_fetch_finished(&self, manifest_id: &str, region: &str) {
         self.sorafs_orchestrator_active_fetches
             .with_label_values(&[manifest_id, region])
             .dec();
     }
-
     /// Observe fetch duration (milliseconds) for the orchestrator.
     pub fn record_sorafs_orchestrator_duration(
         &self,
@@ -16646,14 +16037,12 @@ impl Metrics {
             .with_label_values(&[manifest_id, region])
             .observe(duration_ms);
     }
-
     /// Increment orchestrator failure counter for the provided reason.
     pub fn inc_sorafs_orchestrator_failure(&self, manifest_id: &str, region: &str, reason: &str) {
         self.sorafs_orchestrator_fetch_failures_total
             .with_label_values(&[manifest_id, region, reason])
             .inc();
     }
-
     /// Increment orchestrator retry counter for the given provider.
     pub fn inc_sorafs_orchestrator_retries(
         &self,
@@ -16669,7 +16058,6 @@ impl Metrics {
             .with_label_values(&[manifest_id, provider_id, reason])
             .inc_by(count);
     }
-
     /// Increment orchestrator provider failure counter for the given provider.
     pub fn inc_sorafs_orchestrator_provider_failures(
         &self,
@@ -16685,7 +16073,6 @@ impl Metrics {
             .with_label_values(&[manifest_id, provider_id, reason])
             .inc_by(count);
     }
-
     /// Record per-chunk latency (milliseconds) for successful chunk deliveries.
     pub fn record_sorafs_orchestrator_chunk_latency(
         &self,
@@ -16697,7 +16084,6 @@ impl Metrics {
             .with_label_values(&[manifest_id, provider_id])
             .observe(latency_ms);
     }
-
     /// Increment the orchestrator byte counter for successful chunk deliveries.
     pub fn inc_sorafs_orchestrator_bytes(&self, manifest_id: &str, provider_id: &str, bytes: u64) {
         if bytes == 0 {
@@ -16707,14 +16093,12 @@ impl Metrics {
             .with_label_values(&[manifest_id, provider_id])
             .inc_by(bytes);
     }
-
     /// Increment the orchestrator stall counter when chunk latency exceeds the configured cap.
     pub fn inc_sorafs_orchestrator_stall(&self, manifest_id: &str, provider_id: &str) {
         self.sorafs_orchestrator_stalls_total
             .with_label_values(&[manifest_id, provider_id])
             .inc();
     }
-
     /// Increment the transport event counter for the orchestrator.
     pub fn inc_sorafs_orchestrator_transport_event(
         &self,
@@ -16727,7 +16111,6 @@ impl Metrics {
             .with_label_values(&[region, protocol, event, reason])
             .inc();
     }
-
     /// Record an anonymity policy event for the orchestrator.
     pub fn record_sorafs_orchestrator_policy_event(
         &self,
@@ -16740,14 +16123,12 @@ impl Metrics {
             .with_label_values(&[region, stage, outcome, reason])
             .inc();
     }
-
     /// Observe the PQ-capable relay selection ratio for a session.
     pub fn record_sorafs_orchestrator_pq_ratio(&self, stage: &str, region: &str, ratio: f64) {
         self.sorafs_orchestrator_pq_ratio
             .with_label_values(&[region, stage])
             .observe(ratio.clamp(0.0, 1.0));
     }
-
     /// Observe the PQ-capable relay candidate ratio for a session.
     pub fn record_sorafs_orchestrator_pq_candidate_ratio(
         &self,
@@ -16759,7 +16140,6 @@ impl Metrics {
             .with_label_values(&[region, stage])
             .observe(ratio.clamp(0.0, 1.0));
     }
-
     /// Observe the PQ policy shortfall ratio for a session.
     pub fn record_sorafs_orchestrator_pq_deficit_ratio(
         &self,
@@ -16771,7 +16151,6 @@ impl Metrics {
             .with_label_values(&[region, stage])
             .observe(ratio.clamp(0.0, 1.0));
     }
-
     /// Observe the classical relay selection ratio for a session.
     pub fn record_sorafs_orchestrator_classical_ratio(
         &self,
@@ -16783,7 +16162,6 @@ impl Metrics {
             .with_label_values(&[region, stage])
             .observe(ratio.clamp(0.0, 1.0));
     }
-
     /// Observe the classical relay selection count for a session.
     pub fn record_sorafs_orchestrator_classical_selected(
         &self,
@@ -16799,7 +16177,6 @@ impl Metrics {
             .with_label_values(&[region, stage])
             .observe(value);
     }
-
     fn update_taikai_snapshot<F>(&self, cluster: &str, stream: &str, update: F)
     where
         F: FnOnce(&mut TaikaiIngestSnapshotInternal),
@@ -16826,7 +16203,6 @@ impl Metrics {
             update(entry);
         }
     }
-
     /// Record the latest encoder-to-ingest latency for the given stream.
     pub fn record_taikai_ingest_latency_snapshot(
         &self,
@@ -16838,14 +16214,12 @@ impl Metrics {
             snapshot.last_latency_ms = Some(latency_ms);
         });
     }
-
     /// Record the latest live-edge drift for the given stream.
     pub fn record_taikai_ingest_drift_snapshot(&self, cluster: &str, stream: &str, drift_ms: i32) {
         self.update_taikai_snapshot(cluster, stream, |snapshot| {
             snapshot.last_live_edge_drift_ms = Some(drift_ms);
         });
     }
-
     /// Record an ingest error for the given stream and reason.
     pub fn record_taikai_ingest_error_snapshot(&self, cluster: &str, stream: &str, reason: &str) {
         let reason = reason.to_owned();
@@ -16862,7 +16236,6 @@ impl Metrics {
             }
         });
     }
-
     fn record_taikai_alias_rotation_snapshot(&self, snapshot: TaikaiAliasRotationSnapshotArgs<'_>) {
         if let Ok(mut guard) = self.taikai_alias_rotation_snapshots.write() {
             let entry = guard
@@ -16888,7 +16261,6 @@ impl Metrics {
                 .as_secs();
         }
     }
-
     /// Snapshot the current Taikai ingest telemetry for status payloads
     /// (bounded by `TAIKAI_INGEST_SNAPSHOT_CAP` streams).
     pub fn taikai_ingest_status(&self) -> Vec<TaikaiIngestStatus> {
@@ -16915,7 +16287,6 @@ impl Metrics {
             })
             .unwrap_or_default()
     }
-
     /// Snapshot the current alias rotation telemetry for status payloads.
     pub fn taikai_alias_rotation_status(&self) -> Vec<TaikaiAliasRotationStatus> {
         self.taikai_alias_rotation_snapshots
@@ -16941,7 +16312,6 @@ impl Metrics {
             })
             .unwrap_or_default()
     }
-
     /// Observe encoder-to-ingest latency for a Taikai segment.
     pub fn observe_taikai_ingest_latency(&self, cluster: &str, stream: &str, latency_ms: u32) {
         self.taikai_ingest_segment_latency_ms
@@ -16949,7 +16319,6 @@ impl Metrics {
             .observe(f64::from(latency_ms));
         self.record_taikai_ingest_latency_snapshot(cluster, stream, latency_ms);
     }
-
     /// Observe live-edge drift for a Taikai segment (absolute histogram + signed gauge).
     pub fn observe_taikai_live_edge_drift(&self, cluster: &str, stream: &str, drift_ms: i32) {
         let magnitude = drift_ms.unsigned_abs();
@@ -16961,7 +16330,6 @@ impl Metrics {
             .set(f64::from(drift_ms));
         self.record_taikai_ingest_drift_snapshot(cluster, stream, drift_ms);
     }
-
     /// Increment the Taikai ingest error counter.
     pub fn inc_taikai_ingest_error(&self, cluster: &str, stream: &str, reason: &str) {
         self.taikai_ingest_errors_total
@@ -16969,7 +16337,6 @@ impl Metrics {
             .inc();
         self.record_taikai_ingest_error_snapshot(cluster, stream, reason);
     }
-
     /// Record a Taikai alias rotation event derived from a routing manifest.
     #[allow(clippy::too_many_arguments)]
     pub fn record_taikai_alias_rotation(
@@ -16997,7 +16364,6 @@ impl Metrics {
             manifest_digest_hex,
         });
     }
-
     /// Record Taikai viewer rebuffer events.
     pub fn inc_taikai_viewer_rebuffer(&self, cluster: &str, stream: &str, count: u64) {
         if count == 0 {
@@ -17007,7 +16373,6 @@ impl Metrics {
             .with_label_values(&[cluster, stream])
             .inc_by(count);
     }
-
     /// Record Taikai viewer playback segments.
     pub fn inc_taikai_viewer_segments(&self, cluster: &str, stream: &str, count: u64) {
         if count == 0 {
@@ -17017,7 +16382,6 @@ impl Metrics {
             .with_label_values(&[cluster, stream])
             .inc_by(count);
     }
-
     /// Observe CEK fetch duration for a Taikai lane.
     pub fn observe_taikai_viewer_cek_fetch_duration(
         &self,
@@ -17029,35 +16393,30 @@ impl Metrics {
             .with_label_values(&[cluster, lane])
             .observe(f64::from(duration_ms));
     }
-
     /// Update PQ circuit health percentage for a cluster.
     pub fn set_taikai_viewer_pq_health(&self, cluster: &str, percent: f64) {
         self.taikai_viewer_pq_circuit_health
             .with_label_values(&[cluster])
             .set(percent.clamp(0.0, 100.0));
     }
-
     /// Update the seconds elapsed since the last CEK rotation for a lane.
     pub fn set_taikai_viewer_cek_rotation_age(&self, lane: &str, seconds: u64) {
         self.taikai_viewer_cek_rotation_seconds_ago
             .with_label_values(&[lane])
             .set(seconds);
     }
-
     /// Increment the Taikai viewer alert firing counter.
     pub fn inc_taikai_viewer_alert_firing(&self, cluster: &str, alertname: &str) {
         self.taikai_viewer_alerts_firing_total
             .with_label_values(&[cluster, alertname])
             .inc();
     }
-
     /// Record Taikai cache query outcomes.
     pub fn record_taikai_cache_query(&self, result: &str, tier: &str) {
         self.sorafs_taikai_cache_query_total
             .with_label_values(&[result, tier])
             .inc();
     }
-
     /// Record Taikai cache insert events (also increments byte counters).
     pub fn record_taikai_cache_insert(&self, tier: &str, bytes: u64) {
         self.sorafs_taikai_cache_insert_total
@@ -17065,21 +16424,18 @@ impl Metrics {
             .inc();
         self.record_taikai_cache_bytes("insert", tier, bytes);
     }
-
     /// Record Taikai cache evictions.
     pub fn record_taikai_cache_eviction(&self, tier: &str, reason: &str) {
         self.sorafs_taikai_cache_evictions_total
             .with_label_values(&[tier, reason])
             .inc();
     }
-
     /// Record Taikai cache promotions between tiers.
     pub fn record_taikai_cache_promotion(&self, from: &str, to: &str) {
         self.sorafs_taikai_cache_promotions_total
             .with_label_values(&[from, to])
             .inc();
     }
-
     /// Record Taikai cache byte totals for the provided event and tier.
     pub fn record_taikai_cache_bytes(&self, event: &str, tier: &str, bytes: u64) {
         if bytes == 0 {
@@ -17089,55 +16445,47 @@ impl Metrics {
             .with_label_values(&[event, tier])
             .inc_by(bytes);
     }
-
     /// Record Taikai QoS denials grouped by class.
     pub fn inc_taikai_qos_denied(&self, class: &str) {
         self.sorafs_taikai_qos_denied_total
             .with_label_values(&[class])
             .inc();
     }
-
     /// Record Taikai queue events grouped by event/class.
     pub fn inc_taikai_queue_event(&self, event: &str, class: &str) {
         self.sorafs_taikai_queue_events_total
             .with_label_values(&[event, class])
             .inc();
     }
-
     /// Set Taikai queue depth gauges grouped by state.
     pub fn set_taikai_queue_depth(&self, state: &str, value: i64) {
         self.sorafs_taikai_queue_depth
             .with_label_values(&[state])
             .set(value);
     }
-
     /// Increment the shard failover counter for the preferred → selected pair.
     pub fn inc_taikai_shard_failover(&self, preferred: &str, selected: &str) {
         self.sorafs_taikai_shard_failovers_total
             .with_label_values(&[preferred, selected])
             .inc();
     }
-
     /// Set the open/closed state gauge for a specific Taikai shard circuit.
     pub fn set_taikai_shard_circuit_open(&self, shard: &str, open: bool) {
         self.sorafs_taikai_shard_circuits_open
             .with_label_values(&[shard])
             .set(i64::from(open));
     }
-
     /// Increment the anonymity policy brownout counter for the session.
     pub fn inc_sorafs_orchestrator_brownout(&self, stage: &str, region: &str, reason: &str) {
         self.sorafs_orchestrator_brownouts_total
             .with_label_values(&[region, stage, reason])
             .inc();
     }
-
     /// Update the configured base payout (nano XOR) used by SoraNet rewards.
     pub fn set_soranet_reward_base_payout(&self, nanos: u128) {
         let value = u64::try_from(nanos).unwrap_or(u64::MAX);
         self.soranet_reward_base_payout_nanos.set(value);
     }
-
     /// Record a SoraNet reward event and associated payout volume.
     pub fn record_soranet_reward(&self, relay: &str, nanos: u128, result: &str) {
         self.soranet_reward_events_total
@@ -17150,14 +16498,12 @@ impl Metrics {
                 .inc_by(amount);
         }
     }
-
     /// Record a SoraNet reward skip with the provided reason label.
     pub fn record_soranet_reward_skip(&self, relay: &str, reason: &str) {
         self.soranet_reward_skips_total
             .with_label_values(&[relay, reason])
             .inc();
     }
-
     /// Record a SoraNet dispute adjustment.
     pub fn record_soranet_adjustment(&self, relay: &str, nanos: u128, kind: &str) {
         if nanos == 0 {
@@ -17168,21 +16514,18 @@ impl Metrics {
             .with_label_values(&[relay, kind])
             .inc_by(amount);
     }
-
     /// Increment the SoraNet dispute lifecycle counter for the provided action.
     pub fn inc_soranet_dispute(&self, action: &str) {
         self.soranet_reward_disputes_total
             .with_label_values(&[action])
             .inc();
     }
-
     /// Record a SoraNet PoW revocation store fallback.
     pub fn inc_soranet_pow_revocation_store(&self, reason: &str) {
         self.soranet_pow_revocation_store_total
             .with_label_values(&[reason])
             .inc();
     }
-
     /// Record proof endpoint request outcome and payload size.
     pub fn record_torii_proof_request(
         &self,
@@ -17203,7 +16546,6 @@ impl Metrics {
                 .inc_by(bytes);
         }
     }
-
     /// Record explorer endpoint request outcome and latency.
     pub fn record_torii_explorer_request(&self, endpoint: &str, outcome: &str, duration: Duration) {
         self.torii_explorer_requests_total
@@ -17213,21 +16555,18 @@ impl Metrics {
             .with_label_values(&[endpoint, outcome])
             .observe(duration.as_secs_f64());
     }
-
     /// Increment proof endpoint cache hit counter.
     pub fn inc_torii_proof_cache_hit(&self, endpoint: &str) {
         self.torii_proof_cache_hits_total
             .with_label_values(&[endpoint])
             .inc();
     }
-
     /// Increment proof throttling counter for the provided endpoint label.
     pub fn inc_torii_proof_throttled(&self, endpoint: &str) {
         self.torii_proof_throttled_total
             .with_label_values(&[endpoint])
             .inc();
     }
-
     /// Record alias cache observations emitted by the SoraFS gateway.
     pub fn record_sorafs_alias_cache(&self, result: &str, reason: &str, age_secs: f64) {
         self.torii_sorafs_alias_cache_refresh_total
@@ -17235,7 +16574,6 @@ impl Metrics {
             .inc();
         self.torii_sorafs_alias_cache_age_seconds.observe(age_secs);
     }
-
     /// Update gateway TLS state gauges.
     pub fn set_sorafs_tls_state(&self, ech_enabled: bool, expiry: Option<Duration>) {
         let expiry_secs = expiry.map_or(0.0, |duration| duration.as_secs_f64());
@@ -17243,14 +16581,12 @@ impl Metrics {
         self.torii_sorafs_tls_ech_enabled
             .set(i64::from(u8::from(ech_enabled)));
     }
-
     /// Record the outcome of a gateway TLS renewal attempt.
     pub fn record_sorafs_tls_renewal(&self, result: &str) {
         self.torii_sorafs_tls_renewal_total
             .with_label_values(&[result])
             .inc();
     }
-
     /// Publish the active SoraFS gateway fixture version gauge.
     pub fn set_sorafs_gateway_fixture_version(&self, version: &str) {
         self.torii_sorafs_gateway_fixture_version.reset();
@@ -17258,7 +16594,6 @@ impl Metrics {
             .with_label_values(&[version])
             .set(1);
     }
-
     /// Increment canonical active-request accounting for a SoraFS gateway route.
     pub fn start_sorafs_gateway_request(&self, labels: SorafsGatewayRequestMetricLabels<'_>) {
         self.sorafs_gateway_active
@@ -17273,7 +16608,6 @@ impl Metrics {
         #[cfg(feature = "otel-exporter")]
         global_sorafs_gateway_otel().request_started_detailed(labels);
     }
-
     /// Complete canonical active-request accounting and record response/TTFB metrics.
     pub fn finish_sorafs_gateway_request(
         &self,
@@ -17291,7 +16625,6 @@ impl Metrics {
         self.sorafs_gateway_active
             .with_label_values(&request_labels)
             .dec();
-
         let status = labels.status.to_string();
         let response_labels = [
             request.endpoint,
@@ -17309,7 +16642,6 @@ impl Metrics {
         self.sorafs_gateway_ttfb_ms
             .with_label_values(&response_labels)
             .observe(ttfb_ms);
-
         #[cfg(feature = "otel-exporter")]
         {
             let otel = global_sorafs_gateway_otel();
@@ -17317,7 +16649,6 @@ impl Metrics {
             otel.record_ttfb_detailed(labels, ttfb_ms);
         }
     }
-
     /// Record one canonical SoraFS proof-verification outcome and duration.
     pub fn record_sorafs_gateway_proof_verification(
         &self,
@@ -17333,7 +16664,6 @@ impl Metrics {
         self.sorafs_gateway_proof_duration_ms
             .with_label_values(&labels)
             .observe(duration_ms);
-
         #[cfg(feature = "otel-exporter")]
         global_sorafs_gateway_otel().record_proof_verification(
             profile_version,
@@ -17342,21 +16672,18 @@ impl Metrics {
             duration_ms,
         );
     }
-
     /// Increment the in-flight proof stream gauge for a given proof kind.
     pub fn inc_sorafs_proof_stream_inflight(&self, kind: &str) {
         self.torii_sorafs_proof_stream_inflight
             .with_label_values(&[kind])
             .inc();
     }
-
     /// Decrement the in-flight proof stream gauge for a given proof kind.
     pub fn dec_sorafs_proof_stream_inflight(&self, kind: &str) {
         self.torii_sorafs_proof_stream_inflight
             .with_label_values(&[kind])
             .dec();
     }
-
     /// Record a proof stream outcome and optional latency.
     pub fn record_sorafs_proof_stream_event(
         &self,
@@ -17378,7 +16705,6 @@ impl Metrics {
         }
         let _ = (provider_id, tier);
     }
-
     /// Record proof-health alert metrics for the given provider.
     #[allow(clippy::too_many_arguments)]
     pub fn record_sorafs_proof_health_alert(
@@ -17418,7 +16744,6 @@ impl Metrics {
             .with_label_values(&[provider_id])
             .set(i64::from(cooldown_active));
     }
-
     /// Record chunk-range fetch metadata emitted by the SoraFS gateway.
     #[allow(clippy::too_many_arguments)]
     pub fn record_sorafs_chunk_range(
@@ -17443,14 +16768,12 @@ impl Metrics {
         }
         let _ = (chunker, profile, provider_id, tier, latency_ms);
     }
-
     /// Set the provider range capability counters for the supplied feature label.
     pub fn set_sorafs_provider_range_capability(&self, feature: &str, count: i64) {
         self.torii_sorafs_provider_range_capability_total
             .with_label_values(&[feature])
             .set(count);
     }
-
     /// Record one bounded committed routing-authority cache outcome.
     pub fn inc_sorafs_routing_authority_cache(&self, outcome: &str) {
         let outcome = match outcome {
@@ -17461,31 +16784,26 @@ impl Metrics {
             .with_label_values(&[outcome])
             .inc();
     }
-
     /// Record a throttle event triggered while serving range fetch requests.
     pub fn inc_sorafs_range_fetch_throttle(&self, reason: &str) {
         self.torii_sorafs_range_fetch_throttle_events_total
             .with_label_values(&[reason])
             .inc();
     }
-
     /// Increment the active range fetch concurrency gauge.
     pub fn inc_sorafs_range_fetch_concurrency(&self) {
         self.torii_sorafs_range_fetch_concurrency_current.inc();
     }
-
     /// Decrement the active range fetch concurrency gauge.
     pub fn dec_sorafs_range_fetch_concurrency(&self) {
         self.torii_sorafs_range_fetch_concurrency_current.dec();
     }
-
     /// Record a GAR policy violation observed by the gateway.
     pub fn record_sorafs_gar_violation(&self, reason: &str, detail: &str) {
         self.torii_sorafs_gar_violations_total
             .with_label_values(&[reason, detail])
             .inc();
     }
-
     /// Record a deterministic gateway refusal emitted by Torii.
     pub fn record_sorafs_gateway_refusal(
         &self,
@@ -17500,7 +16818,6 @@ impl Metrics {
             .inc();
         let _ = status;
     }
-
     /// Publish metadata about the canonical SoraFS gateway fixture bundle.
     pub fn set_sorafs_gateway_fixture_metadata(
         &self,
@@ -17514,7 +16831,6 @@ impl Metrics {
             .with_label_values(&[version, profile, digest_hex])
             .set(gauge_value);
     }
-
     /// Convert the current [`Metrics`] into a Prometheus-readable format.
     ///
     /// # Errors
@@ -17529,7 +16845,6 @@ impl Metrics {
         Encoder::encode(&encoder, &metric_families, &mut buffer)?;
         Ok(String::from_utf8(buffer)?)
     }
-
     /// Convert metrics to Prometheus format, optionally stripping lane/dataspace-labelled series
     /// when Nexus is disabled.
     ///
@@ -17540,7 +16855,6 @@ impl Metrics {
         if nexus_enabled {
             return self.try_to_string();
         }
-
         let _projection_exposition_guard = self.lock_sorafs_orderbook_projection_exposition();
         let _gateway_compliance_exposition_guard = self.lock_sorafs_gateway_compliance_exposition();
         let mut buffer = Vec::new();
@@ -17554,9 +16868,7 @@ impl Metrics {
         Ok(String::from_utf8(buffer)?)
     }
 }
-
 include!("metrics/tail_projection.rs");
-
 #[cfg(test)]
 #[path = "metrics/test.rs"]
 mod test;

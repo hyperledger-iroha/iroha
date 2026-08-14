@@ -3,19 +3,15 @@
 // Depending on the target architecture, some explicit intrisics could be
 // used instead of the functions defined here.
 #![allow(dead_code)]
-
 // ========================================================================
 // Floating-point operations: emulated
 // ========================================================================
-
 // This file implements the FLR type for IEEE-754:2008 operations, with
 // the requirements listed in flr.rs (in particular, there is no support
 // for denormals, infinites or NaNs). The implementation uses only integer
 // operations and strives to be constant-time.
-
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FLR(u64);
-
 // lzcnt_nz(x) returns the number of leading zeros in the value x, assuming
 // that it is non-zero.
 // On x86 and x86-64, the bsr or lzcnt opcodes will be used (bsr does not
@@ -34,7 +30,6 @@ const fn lzcnt_nz(x: u64) -> u32 {
     // is non-constant-time on x86 without the lzcnt opcode.
     (x | 1).leading_zeros()
 }
-
 #[cfg(not(any(
     target_arch = "x86",
     target_arch = "x86_64",
@@ -54,29 +49,24 @@ const fn lzcnt_nz(x: u64) -> u32 {
         let m = ((y.wrapping_sub(1) as i32) >> n) as u32;
         (y | (m & x), c + (n & (m as u32)))
     }
-
     let y = x >> 32;
     let m = (y.wrapping_sub(1) >> 32) as u32;
     let x = (y as u32) | (m & (x as u32));
     let c = m & 32;
-
     let (x, c) = step(x, 16, c);
     let (x, c) = step(x, 8, c);
     let (x, c) = step(x, 4, c);
     let (x, c) = step(x, 2, c);
-
     // At this point, x != 0 and len(x) <= 2, i.e. x \in {1, 2, 3}.
     // We return c is x >= 2, or c + 1 if x = 1.
     c + (1 - (x >> 1))
 }
-
 // Given m and e, return m*2^n and e-n for an integer n such that
 // 2^63 <= m*2^n < 2^64. If m = 0 then this returns (0, e-63).
 const fn norm64(m: u64, e: i32) -> (u64, i32) {
     let c = lzcnt_nz(m | 1);
     (ulsh(m, c), e - (c as i32))
 }
-
 // Shifts by a 64-bit value, with a possibly secret shift count. We
 // assume the presence of a barrel shifter, so that the shift count
 // remains secret. On 64-bit architectures, we can make that
@@ -96,7 +86,6 @@ const fn norm64(m: u64, e: i32) -> (u64, i32) {
 const fn ursh(x: u64, c: u32) -> u64 {
     x >> c
 }
-
 #[cfg(not(any(
     target_arch = "x86_64",
     target_arch = "aarch64",
@@ -108,7 +97,6 @@ const fn ursh(x: u64, n: u32) -> u64 {
     let x = x ^ ((x ^ (x >> 32)) & ((n >> 5) as u64).wrapping_neg());
     x >> (n & 31)
 }
-
 #[cfg(any(
     target_arch = "x86_64",
     target_arch = "aarch64",
@@ -119,7 +107,6 @@ const fn ursh(x: u64, n: u32) -> u64 {
 const fn ulsh(x: u64, c: u32) -> u64 {
     x << c
 }
-
 #[cfg(not(any(
     target_arch = "x86_64",
     target_arch = "aarch64",
@@ -131,7 +118,6 @@ const fn ulsh(x: u64, n: u32) -> u64 {
     let x = x ^ ((x ^ (x << 32)) & ((n >> 5) as u64).wrapping_neg());
     x << (n & 31)
 }
-
 #[cfg(any(
     target_arch = "x86_64",
     target_arch = "aarch64",
@@ -142,7 +128,6 @@ const fn ulsh(x: u64, n: u32) -> u64 {
 const fn irsh(x: i64, c: u32) -> i64 {
     x >> c
 }
-
 #[cfg(not(any(
     target_arch = "x86_64",
     target_arch = "aarch64",
@@ -154,13 +139,10 @@ const fn irsh(x: i64, n: u32) -> i64 {
     let x = x ^ ((x ^ (x >> 32)) & ((n >> 5) as i64).wrapping_neg());
     x >> (n & 31)
 }
-
 // Convenient constant for a 63-bit mask.
 const M63: u64 = 0x7FFFFFFFFFFFFFFF;
-
 // Convenient constant for a 52-bit mask.
 const M52: u64 = 0x000FFFFFFFFFFFFF;
-
 impl FLR {
     // IMPLEMENTATION NOTES
     // ====================
@@ -199,7 +181,6 @@ impl FLR {
     // or also:
     //    z = (m & (m >> 1))
     //    cc = (z | (z >> 1)) & 1
-
     // This function makes a new value out of the provided sign bit s,
     // exponent e, and mantissa. Rules:
     //    Only the low bit of s is used (0 or 1), the upper bits are ignored.
@@ -215,7 +196,6 @@ impl FLR {
         let cc = (0xC8u64 >> ((m as u32) & 7)) & 1;
         Self((s << 63) + (((e + 1076) as u64) << 52) + (m >> 2) + cc)
     }
-
     // This function is similar to make(), but it sets e to the right value
     // (-1076) in case m = 0. m MUST be either 0 or in the [2^54,2^55-1]
     // range. Exponent e MUST NOT trigger a value overflow.
@@ -226,16 +206,13 @@ impl FLR {
         let cc = (0xC8u64 >> ((m as u32) & 7)) & 1;
         Self((s << 63) + ((e as u64) << 52) + (m >> 2) + cc)
     }
-
     pub(crate) const ZERO: Self = Self(0);
     pub(crate) const NZERO: Self = Self(1u64 << 63);
     pub(crate) const ONE: Self = Self::from_i64(1);
-
     #[inline(always)]
     pub(crate) const fn from_bits(bits: u64) -> Self {
         Self(bits)
     }
-
     // Convert a signed 64-bit integer to an FLR value.
     // Source value j must be in [-(2^63-1),+(2^63-1)] (i.e. -2^63 is
     // not allowed).
@@ -243,7 +220,6 @@ impl FLR {
     pub(crate) const fn from_i64(j: i64) -> Self {
         Self::scaled(j, 0)
     }
-
     // Convert a signed 32-bit integer to an FLR value.
     // The complete 32-bit range is allowed, and the conversion is always
     // exact (the original integer can be recovered exactly).
@@ -251,7 +227,6 @@ impl FLR {
     pub(crate) const fn from_i32(j: i32) -> Self {
         Self::scaled(j as i64, 0)
     }
-
     // For integer j in [-(2^63-1),+(2^63-1)] and integer sc, return
     // j*2^sc as a floating-point value. Input j = -2^63 is forbidden.
     // In the rest of the implementation, this function is called
@@ -264,21 +239,17 @@ impl FLR {
         // Extract sign bit and get absolute value.
         let s = (j >> 63) as u64;
         let j = ((j as u64) ^ s).wrapping_sub(s);
-
         // For now we suppose that i != 0. We normalize it to [2^63,2^64-1]
         // and adjust the exponent in consequence.
         let (m, e) = norm64(j, sc + 9);
-
         // Divide m by 2^9 to get it in [2^54, 2^55-1]. If any of the
         // dropped bits is 1, then the least significant bit of the output
         // should be 1 (sticky bit).
         let m = (m | ((m & 0x1FF) + 0x1FF)) >> 9;
-
         // At this point, either m = 0, or m is in [2^54, 2^55-1]. We can
         // use make_z(), which will adjust the exponent in case m = 0.
         Self::make_z(s, e, m)
     }
-
     // Encode to 8 bytes (IEEE-754 binary64 format, little-endian).
     // This is meant for tests only; this function does not need to be
     // constant-time.
@@ -286,7 +257,6 @@ impl FLR {
     pub(crate) fn encode(self) -> [u8; 8] {
         self.0.to_le_bytes()
     }
-
     // Decode from 8 bytes (IEEE-754 binary64 format, little-endian).
     // This is meant for tests only; this function does not need to be
     // constant-time.
@@ -299,7 +269,6 @@ impl FLR {
             _ => None,
         }
     }
-
     // Return self / 2.
     #[inline]
     pub(crate) fn half(self) -> Self {
@@ -311,7 +280,6 @@ impl FLR {
         let y = x.wrapping_sub(1u64 << 52);
         Self(y.wrapping_add(((x ^ y) >> 11) & (1u64 << 52)))
     }
-
     // Return self * 2.
     // (used in some tests)
     #[allow(dead_code)]
@@ -324,7 +292,6 @@ impl FLR {
         let d = ((x & 0x7FF0000000000000) + 0x7FF0000000000000) >> 11;
         Self(x.wrapping_add(d & (1u64 << 52)))
     }
-
     // Multiply this value by 2^63.
     #[inline]
     pub(crate) fn mul2p63(self) -> Self {
@@ -335,7 +302,6 @@ impl FLR {
         let d = ((d >> 11) as u64) & (63u64 << 52);
         Self(x.wrapping_add(d))
     }
-
     // Divide all values in the provided slice with 2^e, for e in the
     // 1 to 9 range (inclusive). The value of e is not considered secret.
     // This is a helper function used in the implementation of the FFT
@@ -355,7 +321,6 @@ impl FLR {
             f[i] = Self(y.wrapping_add(ov & ee));
         }
     }
-
     // Round this value to the nearest integer; the source must be in the
     // [-(2^63-1), +(2^63-1)] range.
     #[inline]
@@ -363,17 +328,14 @@ impl FLR {
         // Shifted mantissa to be in the [2^62,2^63-1] range (with the top
         // bit set).
         let m = ((self.0 << 10) | (1u64 << 62)) & M63;
-
         // Get the right-shift amount for the extracted mantissa.
         let e = 1085 - (((self.0 >> 52) as i32) & 0x7FF);
-
         // If the right-shift count is 64 or more, then the value will
         // round to zero. Note that this also handles the case of a
         // source value equal to zero, since its exponent field then
         // encodes (virtually) the value -1023.
         let m = m & ((((e - 64) as i64) >> 14) as u64);
         let e = (e & 63) as u32;
-
         // We need to apply rounding. Looking at the e+1 least significant
         // bits of m, denoted hmxxx (h = bit 2^e, m = bit 2^(e-1),
         // xxx = e-1 lowest bits), we need to add 1 to the shifted value
@@ -386,15 +348,12 @@ impl FLR {
         let y = ((z & 0x3FFFFFFFFFFFFFFF) + 0x3FFFFFFFFFFFFFFF) >> 1;
         let lo = (z | y) >> 61;
         let cc = (0xC8 >> (lo as u32)) & 1;
-
         // Do the shift + rounding.
         let x = ursh(m, e) + cc;
-
         // We have the rounded absolute value, we must apply the sign.
         let s = ((self.0 as i64) >> 63) as u64;
         (x ^ s).wrapping_sub(s) as i64
     }
-
     // Round this value to the largest integer not greater than the value
     // (i.e. round toward -infinity). The source must be in the
     // [-(2^63-1), +(2^63-1)] range.
@@ -406,10 +365,8 @@ impl FLR {
         let m = ((self.0 << 10) | (1u64 << 62)) & M63;
         let s = (self.0 as i64) >> 63;
         let x = ((m as i64) ^ s).wrapping_sub(s);
-
         // Get the right-shift amount for the extracted mantissa.
         let e = 1085 - (((self.0 >> 52) as i32) & 0x7FF);
-
         // If the right-shift count is 64 or more, then the value should
         // round to either 0 or -1, depending on the sign bit. If the
         // value is "minus zero" then we round it to -1 (arguably, this
@@ -418,10 +375,8 @@ impl FLR {
         // the shift count to 63 in that case (since the rounding is
         // just dropping some bits, there is no carry to account for).
         let e = ((e | ((63 - e) >> 16)) as u32) & 63;
-
         irsh(x, e)
     }
-
     // Round this value toward zero. The source must be in the
     // [-(2^63-1), +(2^63-1)] range.
     #[inline]
@@ -433,13 +388,10 @@ impl FLR {
         let m = ((self.0 << 10) | (1u64 << 62)) & M63;
         let e = 1085 - (((self.0 >> 52) as i32) & 0x7FF);
         let e = ((e | ((63 - e) >> 16)) as u32) & 63;
-
         let x = ursh(m, e);
-
         let s = (self.0 as i64) >> 63;
         ((x as i64) ^ s).wrapping_sub(s)
     }
-
     // Addition.
     #[inline]
     pub(crate) fn set_add(&mut self, other: Self) {
@@ -469,7 +421,6 @@ impl FLR {
         // values.
         let (x, y) = (self.0, other.0);
         let za = (x & M63).wrapping_sub(y & M63);
-
         // Since all values here remain far from infinites and NaNs,
         // neither x nor y may have an "all ones" exponent, hence
         // |za| < 2^63 - 2^52 (assuming za in signed interpretation).
@@ -477,7 +428,6 @@ impl FLR {
         let za = za | (za.wrapping_sub(1) & x);
         let m = (x ^ y) & (((za as i64) >> 63) as u64);
         let (x, y) = (x ^ m, y ^ m);
-
         // Extract sign bits, exponents and mantissas. The mantissas are
         // scaled up to [2^55,2^56-1] and the exponent is unbiased. If
         // an operand is 0, then its mantissa is set to 0 at this step,
@@ -487,28 +437,23 @@ impl FLR {
         let ex = ex & 0x7FF;
         let xu = ((x & M52) << 3) | ((((ex + 0x7FF) >> 11) as u64) << 55);
         let ex = (ex as i32) - 1078;
-
         let ey = (y >> 52) as u32;
         let sy = ey >> 11;
         let ey = ey & 0x7FF;
         let yu = ((y & M52) << 3) | ((((ey + 0x7FF) >> 11) as u64) << 55);
         let ey = (ey as i32) - 1078;
-
         // x has the larger exponent; hence, we only need to right-shift y.
         // If the shift count is larger than 59 bits then we clamp the
         // value to zero.
         let n = ex - ey;
         let yu = yu & ((((n - 60) >> 16) as i64) as u64);
         let n = (n as u32) & 63;
-
         // Right-shift y by n bits; the lowest bit of yu is sticky.
         let m = ulsh(1, n) - 1;
         let yu = ursh(yu | ((yu & m) + m), n);
-
         // We now add or subtract the mantissas, depending on the sign bits.
         let dm = ((sx ^ sy) as u64).wrapping_neg();
         let zu = xu.wrapping_add(yu.wrapping_sub((yu << 1) & dm));
-
         // The result may be smaller than abs(x), or slightly larger,
         // though no more than twice larger. We first normalize it to
         // [2^63, 2^64-1] (keeping track of the exponent), then shrink
@@ -516,24 +461,20 @@ impl FLR {
         let (zu, ez) = norm64(zu, ex);
         let zu = (zu | ((zu & 0x1FF) + 0x1FF)) >> 9;
         let ez = ez + 9;
-
         // As explained above, we only have to use the sign of x at this
         // point.
         *self = Self::make_z(sx as u64, ez, zu);
     }
-
     // Subtraction.
     #[inline(always)]
     pub(crate) fn set_sub(&mut self, other: Self) {
         self.set_add(Self(other.0 ^ (1u64 << 63)));
     }
-
     // Negation.
     #[inline(always)]
     pub(crate) fn set_neg(&mut self) {
         self.0 ^= 1u64 << 63;
     }
-
     // Multiplication.
     #[inline]
     pub(crate) fn set_mul(&mut self, other: Self) {
@@ -541,7 +482,6 @@ impl FLR {
         // operands, and multiply them together.
         let xu = (self.0 & M52) | (1u64 << 52);
         let yu = (other.0 & M52) | (1u64 << 52);
-
         // Compute the mantissa product.
         // We do not use a 64x64->128 product because:
         //  - On some 64-bit platforms this is not constant-time (e.g.
@@ -562,20 +502,17 @@ impl FLR {
         let w = (x1 as u64) * (y1 as u64);
         let zu = w + ((h + (z1 >> 25)) as u64);
         let z1 = z1 & 0x01FFFFFF;
-
         // We have 2^104 <= z < 2^106. We first scale it down to the
         // [2^54, 2^56-1] range with the lowest bit being sticky. This means
         // keeping zu and simply dropping z0 and z1, except that if z0 and
         // z1 are not both zero, then the lowest bit of zu must be set to 1.
         let zu = zu | ((((z0 | z1) + 0x01FFFFFF) >> 25) as u64);
-
         // We normalize the value to [2^54, 2^55-1] by right-shifting it
         // by 1 bit if its top bit is 1. We must take care to maintain the
         // stickiness of the least significant bit, and also remember whether
         // we did that extra shift.
         let es = ((zu >> 55) as u32) & 1;
         let zu = (zu >> es) | (zu & 1);
-
         // Aggregate scaling factor:
         //  - Each source exponent is biased by 1023.
         //  - Integral mantissas are scaled by 2^52, hence an extra 52
@@ -586,10 +523,8 @@ impl FLR {
         let ex = ((self.0 >> 52) as i32) & 0x7FF;
         let ey = ((other.0 >> 52) as i32) & 0x7FF;
         let e = ex + ey - 2100 + (es as i32);
-
         // Sign bit is the XOR of the operand sign bits.
         let s = (self.0 ^ other.0) >> 63;
-
         // Corrective action for zeros: if either of the operands is zero,
         // then the computations above are wrong, and we must clear the
         // mantissa and set the exponent to the right value in that case.
@@ -601,19 +536,16 @@ impl FLR {
         let zu = zu & !((dz as i64) as u64);
         *self = Self::make(s, e, zu);
     }
-
     // Squaring.
     #[inline(always)]
     pub(crate) fn square(self) -> Self {
         self * self
     }
-
     // Division.
     pub(crate) fn set_div(&mut self, other: Self) {
         // Extract mantissas (unsigned).
         let mut xu = (self.0 & M52) | (1u64 << 52);
         let yu = (other.0 & M52) | (1u64 << 52);
-
         // Perform bit-by-bit division of xu by yu; we run it for 55 bits.
         let mut q = 0;
         for _ in 0..55 {
@@ -623,19 +555,16 @@ impl FLR {
             xu <<= 1;
             q <<= 1;
         }
-
         // 55-bit quotient is in q, with an extra multiplication by 2.
         // Set the lowest bit to 1 if xu is non-zero at this point (this
         // is the sticky bit).
         q |= (xu | xu.wrapping_neg()) >> 63;
-
         // Quotient is at most 2^56-1, but cannot be lower than 2^54, since
         // both operands to the loop were in [2^52, 2^53-1]. We have
         // a situation similar to that of set_mul(); we make an extra
         // right shift if necessary, keeping track in es whether we did it.
         let es = ((q >> 55) as u32) & 1;
         q = (q >> es) | (q & 1);
-
         // Aggregate scaling factor:
         //  - Each source exponent is biased by 1023, with an extra 52 for
         //    considering the mantissas as integers; these two bias
@@ -647,10 +576,8 @@ impl FLR {
         let ex = ((self.0 >> 52) as i32) & 0x7FF;
         let ey = ((other.0 >> 52) as i32) & 0x7FF;
         let e = ex - ey - 55 + (es as i32);
-
         // Sign bit is the XOR of the operand sign bits.
         let s = (self.0 ^ other.0) >> 63;
-
         // Corrective action for zeros: if x was zero, then the above
         // computation is wrong and we must clamp q to 0, e to -1076,
         // and s to zero. We do not care about cases where y = 0 since
@@ -663,14 +590,12 @@ impl FLR {
         q &= dm;
         *self = Self::make(s, e, q);
     }
-
     // Absolute value (used for tests, does not need to be constant-time).
     #[allow(dead_code)]
     #[inline(always)]
     pub(crate) fn abs(self) -> Self {
         Self(self.0 & M63)
     }
-
     // Square root.
     pub(crate) fn sqrt(self) -> Self {
         // Extract exponent and mantissa. By assumption, the operand is
@@ -681,16 +606,13 @@ impl FLR {
         let mut xu = (self.0 & M52) | (1u64 << 52);
         let ex = ((self.0 >> 52) as u32) & 0x7FF;
         let mut e = (ex as i32) - 1023;
-
         // If the exponent is odd, then we double the mantissa and subtract
         // 1 from the exponent. We can then halve the exponent to account for
         // the square root operation.
         xu += ((-(e & 1) as i64) as u64) & xu;
         e >>= 1;
-
         // Double the mantissa.
         xu <<= 1;
-
         // The mantissa is now an integer in the [2^53,2^55-1] range. It
         // represents an value between 1 (inclusive) and 4 (exclusive) in
         // a fixed point notation (53 fractional bits). We compute the
@@ -707,25 +629,21 @@ impl FLR {
             xu <<= 1;
             r >>= 1;
         }
-
         // Now q is a rounded-low 54-bit value, with a leading 1, 52
         // fractional digits, and an additional guard bit. We add an
         // extra sticky bit to account for what remains of the operand.
         q <<= 1;
         q |= (xu | xu.wrapping_neg()) >> 63;
-
         // Result q is in the [2^54,2^55-1] range; we bias the exponent
         // by 54 bits (the value e at that point contains the "true"
         // exponent, but q is now considered an integer).
         e -= 54;
-
         // If the source value was zero, then we computed the square root
         // of 2^53 and set the exponent to -512, both of which are
         // incorrect; we clean this up here.
         q &= (((ex + 0x7FF) >> 11) as u64).wrapping_neg();
         Self::make_z(0, e, q)
     }
-
     // Compute 2^63*ccs*exp(-self), rounded to an integer. This function
     // assumes that 0 <= self < log(2) and 0 <= ccs <= 1; it returns a value
     // in [0,2^63] (low values are possible only if ccs is very small).
@@ -752,7 +670,6 @@ impl FLR {
                 + (z1 as u64) * (y1 as u64);
             y = Self::EXPM_COEFFS[i].wrapping_sub(c);
         }
-
         // The scaling factor must be applied at the end. Since y is now
         // in fixed-point notation, we have to convert the factor to the
         // same format, and we do an extra integer multiplication.
@@ -768,7 +685,6 @@ impl FLR {
             + (z1 as u64) * (y1 as u64);
         y
     }
-
     pub(crate) const EXPM_COEFFS: [u64; 13] = [
         0x00000004741183A3,
         0x00000036548CFC06,

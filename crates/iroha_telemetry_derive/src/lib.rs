@@ -1,17 +1,13 @@
 //! Attribute-like macro for instrumenting `isi` for `prometheus`
 //! metrics. See [`macro@metrics`] for more details.
-
 mod emitter_ext;
-
 use emitter_ext::EmitterExt;
 use manyhow::{Emitter, Result, emit, manyhow};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{FnArg, LitStr, Path, Type, parse::Parse, punctuated::Punctuated, token::Comma};
-
 // Procedural macro crates cannot export ordinary constants, so dedicated
 // `metric_*_label!` helpers below provide a public surface for downstream crates.
-
 /// Emit the canonical "total" metric label as a string literal.
 ///
 /// Usage: `metric_total_label!()` expands to `"total"`.
@@ -26,7 +22,6 @@ pub fn metric_total_label(input: proc_macro::TokenStream) -> proc_macro::TokenSt
     }
     "\"total\"".parse().expect("valid TokenStream")
 }
-
 /// Emit the canonical "success" metric label as a string literal.
 ///
 /// Usage: `metric_success_label!()` expands to `"success"`.
@@ -41,7 +36,6 @@ pub fn metric_success_label(input: proc_macro::TokenStream) -> proc_macro::Token
     }
     "\"success\"".parse().expect("valid TokenStream")
 }
-
 fn type_has_metrics_field(ty: &Type) -> bool {
     match ty {
         // This may seem fragile, but it isn't. We use the same convention
@@ -71,7 +65,6 @@ fn type_has_metrics_field(ty: &Type) -> bool {
         _ => false,
     }
 }
-
 /// The identifier of the first argument that has a type which has
 /// metrics.
 ///
@@ -96,27 +89,22 @@ fn arg_metrics(input: &Punctuated<FnArg, Comma>) -> Result<syn::Ident, &Punctuat
         })
         .ok_or(input)
 }
-
 struct MetricSpecs(#[allow(dead_code)] Vec<MetricSpec>); // `HashSet` — idiomatic; slow
-
 impl Parse for MetricSpecs {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let vars = Punctuated::<MetricSpec, Comma>::parse_terminated(input)?;
         Ok(Self(vars.into_iter().collect()))
     }
 }
-
 struct MetricSpec {
     metric_name: LitStr,
     #[cfg(feature = "metric-instrumentation")]
     timing: bool,
 }
-
 impl Parse for MetricSpec {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let timing_requested = <syn::Token![+]>::parse(input).is_ok();
         let metric_name_lit = syn::Lit::parse(input)?;
-
         let metric_name = match metric_name_lit {
             syn::Lit::Str(lit_str) => {
                 if lit_str.value().contains(' ') {
@@ -143,13 +131,11 @@ impl Parse for MetricSpec {
         })
     }
 }
-
 impl ToTokens for MetricSpec {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         self.metric_name.to_tokens(tokens);
     }
 }
-
 /// Macro for instrumenting an `isi`'s `impl execute` to track a given
 /// metric.  To specify a metric, put it as an attribute parameter
 /// inside quotes.
@@ -221,11 +207,9 @@ impl ToTokens for MetricSpec {
 #[proc_macro_attribute]
 pub fn metrics(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut emitter = Emitter::new();
-
     let Some(func): Option<syn::ItemFn> = emitter.handle(syn::parse2(item)) else {
         return emitter.finish_token_stream();
     };
-
     // This is a good sanity check. Possibly redundant.
     if func.sig.ident != "execute" {
         emit!(
@@ -234,7 +218,6 @@ pub fn metrics(attr: TokenStream, item: TokenStream) -> TokenStream {
             "Function should be an `impl execute`"
         );
     }
-
     if func.sig.inputs.is_empty() {
         emit!(
             emitter,
@@ -243,16 +226,12 @@ pub fn metrics(attr: TokenStream, item: TokenStream) -> TokenStream {
         );
         return emitter.finish_token_stream();
     }
-
     let Some(metric_specs): Option<MetricSpecs> = emitter.handle(syn::parse2(attr)) else {
         return emitter.finish_token_stream();
     };
-
     let result = impl_metrics(&mut emitter, &metric_specs, &func);
-
     emitter.finish_token_stream_with(result)
 }
-
 fn impl_metrics(emitter: &mut Emitter, specs: &MetricSpecs, func: &syn::ItemFn) -> TokenStream {
     let syn::ItemFn {
         attrs,
@@ -260,7 +239,6 @@ fn impl_metrics(emitter: &mut Emitter, specs: &MetricSpecs, func: &syn::ItemFn) 
         sig,
         block,
     } = func;
-
     match sig.output.clone() {
         syn::ReturnType::Default => emit!(
             emitter,
@@ -288,7 +266,6 @@ fn impl_metrics(emitter: &mut Emitter, specs: &MetricSpecs, func: &syn::ItemFn) 
             ),
         },
     }
-
     // Again this may seem fragile, but if we move the metrics from
     // the `WorldStateView`, we'd need to refactor many things anyway
     #[cfg_attr(not(feature = "metric-instrumentation"), allow(unused_variables))]
@@ -303,7 +280,6 @@ fn impl_metrics(emitter: &mut Emitter, specs: &MetricSpecs, func: &syn::ItemFn) 
             return quote!();
         }
     };
-
     #[cfg(feature = "metric-instrumentation")]
     let generated = {
         let (totals, successes, times, needs_timing) = write_metrics(&metric_arg_ident, specs);
@@ -328,7 +304,6 @@ fn impl_metrics(emitter: &mut Emitter, specs: &MetricSpecs, func: &syn::ItemFn) 
             }
         )
     };
-
     #[cfg(not(feature = "metric-instrumentation"))]
     let generated = {
         let _ = specs;
@@ -338,10 +313,8 @@ fn impl_metrics(emitter: &mut Emitter, specs: &MetricSpecs, func: &syn::ItemFn) 
             }
         )
     };
-
     generated
 }
-
 // NOTE: metrics wiring stays behind `metric-instrumentation` so builds can
 // opt in to ISI counters/timing without forcing telemetry overhead by default.
 #[cfg(feature = "metric-instrumentation")]
@@ -373,7 +346,6 @@ fn write_metrics(
         .collect();
     (totals, successes, times, needs_timing)
 }
-
 #[cfg(feature = "metric-instrumentation")]
 fn wrap_metrics(metric_arg_ident: &proc_macro2::Ident, body: &TokenStream) -> TokenStream {
     quote!(
@@ -387,11 +359,9 @@ fn wrap_metrics(metric_arg_ident: &proc_macro2::Ident, body: &TokenStream) -> To
         }
     )
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn metric_spec_parses_plus_prefix() {
         let spec: MetricSpec = syn::parse_str("+\"timed_metric\"").expect("parse metric spec");
@@ -399,7 +369,6 @@ mod tests {
         #[cfg(feature = "metric-instrumentation")]
         assert!(spec.timing);
     }
-
     #[test]
     fn metric_spec_parses_plain_name() {
         let spec: MetricSpec = syn::parse_str("\"plain_metric\"").expect("parse metric spec");
@@ -407,7 +376,6 @@ mod tests {
         #[cfg(feature = "metric-instrumentation")]
         assert!(!spec.timing);
     }
-
     #[cfg(feature = "metric-instrumentation")]
     #[test]
     fn wrap_metrics_emits_cfg_blocks() {
@@ -419,7 +387,6 @@ mod tests {
             .chars()
             .filter(|c| !c.is_whitespace())
             .collect();
-
         assert!(compact.contains("record_isi_total"));
         assert!(compact.contains("cfg(feature=\"telemetry\")"));
         assert!(compact.contains("cfg(not(feature=\"telemetry\"))"));

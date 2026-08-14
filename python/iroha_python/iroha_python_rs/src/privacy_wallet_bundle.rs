@@ -4,9 +4,18 @@
 //! signer seed is never materialized as a JSON string.  Protocol-specific
 //! witness bytes are decoded only after an authenticated execute request has
 //! passed every public binding and transaction-plan check.
-
+use crate::privacy_native_actions::{
+    AnonymousPgcPaymentActionRequestV1, BootleLanternPresentationActionRequestV1,
+    FcmpMembershipPaymentActionRequestV1, FcmpWalletOutputRequestV1, IvmPrivateNoteActionRequestV1,
+    IvmPrivateNoteOutputRequestV1, JindoPolynomialEvaluationActionRequestV1,
+    OrchardNoteActionRequestV1, PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1,
+    PqMaspNoteActionRequestV1, PqMaspOutputRequestV1, PrivacyNativeActionRequestV1,
+    VeRangeActionRequestV1, VegaCredentialPresentationActionRequestV1,
+    ZkAceAuthorizationActionRequestV1, ZkAmsActionRequestV1, ZkAmsAdmissionCredentialRequestV1,
+    ZkAmsBatchAdmissionActionRequestV1, ZkAmsProvisionAccountActionRequestV1,
+    parse_canonical_public_balance_scope_v1, privacy_native_action_capability_for_protocol_v1,
+};
 use core::fmt;
-
 use iroha_core::privacy_engines::{
     bootle_lantern::{relation::BootleLanternPresentationWitnessV1, ring::ApplicationPolynomialV1},
     fcmp_plus_plus::{
@@ -43,20 +52,7 @@ use iroha_data_model::{
 };
 use sha2::{Digest as _, Sha256};
 use zeroize::{Zeroize, Zeroizing};
-
-use crate::privacy_native_actions::{
-    AnonymousPgcPaymentActionRequestV1, BootleLanternPresentationActionRequestV1,
-    FcmpMembershipPaymentActionRequestV1, FcmpWalletOutputRequestV1, IvmPrivateNoteActionRequestV1,
-    IvmPrivateNoteOutputRequestV1, JindoPolynomialEvaluationActionRequestV1,
-    OrchardNoteActionRequestV1, PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1,
-    PqMaspNoteActionRequestV1, PqMaspOutputRequestV1, PrivacyNativeActionRequestV1,
-    VeRangeActionRequestV1, VegaCredentialPresentationActionRequestV1,
-    ZkAceAuthorizationActionRequestV1, ZkAmsActionRequestV1, ZkAmsAdmissionCredentialRequestV1,
-    ZkAmsBatchAdmissionActionRequestV1, ZkAmsProvisionAccountActionRequestV1,
-    parse_canonical_public_balance_scope_v1, privacy_native_action_capability_for_protocol_v1,
-};
 use zk_ace_prover::ZkAcePrivacyTransferV1;
-
 const MAGIC: &[u8; 4] = b"IPWB";
 const SCHEMA_VERSION: u8 = 1;
 const MAX_WALLET_ID_BYTES: usize = 512;
@@ -65,7 +61,6 @@ const MAX_PROTOCOL_BYTES: usize = 96;
 const MAX_OPERATION_SCHEMA_BYTES: usize = 128;
 const MAX_PUBLIC_ACTION_BYTES: usize = 512 * 1024;
 const PUBLIC_ACTION_DIGEST_DOMAIN: &[u8] = b"iroha-privacy-wallet-bundle-public-action-v1\0";
-
 /// Public, non-secret identity derived from one owner-only execution bundle.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrivacyWalletExecutionBundleManifestV1 {
@@ -82,7 +77,6 @@ pub struct PrivacyWalletExecutionBundleManifestV1 {
     /// Exact operation schema selected by the native dispatcher.
     pub operation_schema: &'static str,
 }
-
 /// Public import inspection retained beside the zeroizing bundle bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InspectedPrivacyWalletExecutionBundleV1 {
@@ -91,7 +85,6 @@ pub struct InspectedPrivacyWalletExecutionBundleV1 {
     /// Domain-separated digest of the exact canonical public action.
     pub public_action_digest: [u8; 32],
 }
-
 /// Fully decoded single-use bundle.
 ///
 /// This type intentionally implements neither `Clone` nor `Debug`.
@@ -103,25 +96,21 @@ pub(crate) struct DecodedPrivacyWalletExecutionBundleV1 {
     /// Sole transaction signing key.  `PrivateKey` owns zeroizing material.
     pub(crate) signer_private_key: PrivateKey,
 }
-
 /// Stable, non-secret bundle rejection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrivacyWalletBundleErrorV1 {
     stage: &'static str,
 }
-
 impl PrivacyWalletBundleErrorV1 {
     const fn at(stage: &'static str) -> Self {
         Self { stage }
     }
-
     /// Stable non-secret failure stage.
     #[must_use]
     pub const fn stage(self) -> &'static str {
         self.stage
     }
 }
-
 impl fmt::Display for PrivacyWalletBundleErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -131,9 +120,7 @@ impl fmt::Display for PrivacyWalletBundleErrorV1 {
         )
     }
 }
-
 impl std::error::Error for PrivacyWalletBundleErrorV1 {}
-
 struct BundleParts<'a> {
     wallet_id: &'a str,
     authority: &'a str,
@@ -142,17 +129,14 @@ struct BundleParts<'a> {
     signer_seed: &'a [u8; 32],
     protocol_witness: &'a [u8],
 }
-
 struct Cursor<'a> {
     source: &'a [u8],
     offset: usize,
 }
-
 impl<'a> Cursor<'a> {
     const fn new(source: &'a [u8]) -> Self {
         Self { source, offset: 0 }
     }
-
     fn take(&mut self, count: usize) -> Result<&'a [u8], PrivacyWalletBundleErrorV1> {
         let end = self
             .offset
@@ -165,7 +149,6 @@ impl<'a> Cursor<'a> {
         self.offset = end;
         Ok(value)
     }
-
     fn u16(&mut self) -> Result<u16, PrivacyWalletBundleErrorV1> {
         let bytes: [u8; 2] = self
             .take(2)?
@@ -173,7 +156,6 @@ impl<'a> Cursor<'a> {
             .map_err(|_| PrivacyWalletBundleErrorV1::at("u16"))?;
         Ok(u16::from_be_bytes(bytes))
     }
-
     fn u32(&mut self) -> Result<u32, PrivacyWalletBundleErrorV1> {
         let bytes: [u8; 4] = self
             .take(4)?
@@ -181,7 +163,6 @@ impl<'a> Cursor<'a> {
             .map_err(|_| PrivacyWalletBundleErrorV1::at("u32"))?;
         Ok(u32::from_be_bytes(bytes))
     }
-
     fn text(
         &mut self,
         maximum: usize,
@@ -196,7 +177,6 @@ impl<'a> Cursor<'a> {
         validate_text(value, stage)?;
         Ok(value)
     }
-
     fn bytes_u32(
         &mut self,
         maximum: usize,
@@ -209,7 +189,6 @@ impl<'a> Cursor<'a> {
         }
         self.take(length)
     }
-
     fn finish(self) -> Result<(), PrivacyWalletBundleErrorV1> {
         if self.offset == self.source.len() {
             Ok(())
@@ -218,7 +197,6 @@ impl<'a> Cursor<'a> {
         }
     }
 }
-
 fn validate_text(value: &str, stage: &'static str) -> Result<(), PrivacyWalletBundleErrorV1> {
     if value.trim() != value
         || value
@@ -229,7 +207,6 @@ fn validate_text(value: &str, stage: &'static str) -> Result<(), PrivacyWalletBu
     }
     Ok(())
 }
-
 fn validate_wallet_id(value: &str) -> Result<(), PrivacyWalletBundleErrorV1> {
     if value.len() > MAX_WALLET_ID_BYTES
         || !value.bytes().enumerate().all(|(index, byte)| {
@@ -247,7 +224,6 @@ fn validate_wallet_id(value: &str) -> Result<(), PrivacyWalletBundleErrorV1> {
     }
     Ok(())
 }
-
 fn validate_canonical_json_object(
     bytes: &[u8],
     maximum: usize,
@@ -269,7 +245,6 @@ fn validate_canonical_json_object(
     }
     Ok(())
 }
-
 fn parse_parts(bytes: &[u8]) -> Result<BundleParts<'_>, PrivacyWalletBundleErrorV1> {
     if bytes.len() > PRIVACY_NATIVE_ACTION_MAX_SECRET_BUNDLE_BYTES_V1 {
         return Err(PrivacyWalletBundleErrorV1::at("bundle-size"));
@@ -314,7 +289,6 @@ fn parse_parts(bytes: &[u8]) -> Result<BundleParts<'_>, PrivacyWalletBundleError
         protocol_witness,
     })
 }
-
 fn derive_manifest(
     parts: &BundleParts<'_>,
 ) -> Result<(PrivacyWalletExecutionBundleManifestV1, PrivateKey), PrivacyWalletBundleErrorV1> {
@@ -343,7 +317,6 @@ fn derive_manifest(
         private_key,
     ))
 }
-
 /// Domain-separated digest of one exact canonical public-action object.
 #[must_use]
 pub fn privacy_wallet_bundle_public_action_digest_v1(bytes: &[u8]) -> [u8; 32] {
@@ -352,7 +325,6 @@ pub fn privacy_wallet_bundle_public_action_digest_v1(bytes: &[u8]) -> [u8; 32] {
     digest.update(bytes);
     digest.finalize().into()
 }
-
 /// Inspect public identity without releasing any bundle byte.
 pub fn inspect_privacy_wallet_execution_bundle_v1(
     bytes: &[u8],
@@ -365,7 +337,6 @@ pub fn inspect_privacy_wallet_execution_bundle_v1(
         public_action_digest: privacy_wallet_bundle_public_action_digest_v1(parts.public_action),
     })
 }
-
 /// Decode the exact typed request only inside a single-use vault callback.
 pub(crate) fn decode_privacy_wallet_execution_bundle_v1(
     bytes: &mut [u8],
@@ -387,7 +358,6 @@ pub(crate) fn decode_privacy_wallet_execution_bundle_v1(
         signer_private_key,
     })
 }
-
 fn json_object(
     bytes: &[u8],
     maximum: usize,
@@ -403,7 +373,6 @@ fn json_object(
     };
     Ok(object)
 }
-
 fn exact_fields(
     object: &norito::json::Map,
     fields: &[&str],
@@ -414,7 +383,6 @@ fn exact_fields(
     }
     Ok(())
 }
-
 fn take_value(
     object: &mut norito::json::Map,
     field: &str,
@@ -424,7 +392,6 @@ fn take_value(
         .remove(field)
         .ok_or_else(|| PrivacyWalletBundleErrorV1::at(stage))
 }
-
 fn take_text(
     object: &mut norito::json::Map,
     field: &str,
@@ -440,7 +407,6 @@ fn take_text(
     validate_text(&value, stage)?;
     Ok(value)
 }
-
 fn take_u64(
     object: &mut norito::json::Map,
     field: &str,
@@ -450,7 +416,6 @@ fn take_u64(
         .as_u64()
         .ok_or_else(|| PrivacyWalletBundleErrorV1::at(stage))
 }
-
 fn take_u32(
     object: &mut norito::json::Map,
     field: &str,
@@ -459,7 +424,6 @@ fn take_u32(
     u32::try_from(take_u64(object, field, stage)?)
         .map_err(|_| PrivacyWalletBundleErrorV1::at(stage))
 }
-
 fn take_u8(
     object: &mut norito::json::Map,
     field: &str,
@@ -467,7 +431,6 @@ fn take_u8(
 ) -> Result<u8, PrivacyWalletBundleErrorV1> {
     u8::try_from(take_u64(object, field, stage)?).map_err(|_| PrivacyWalletBundleErrorV1::at(stage))
 }
-
 fn decode_lower_hex<const N: usize>(
     mut value: String,
     stage: &'static str,
@@ -486,7 +449,6 @@ fn decode_lower_hex<const N: usize>(
     }
     Ok(output)
 }
-
 fn take_hex<const N: usize>(
     object: &mut norito::json::Map,
     field: &str,
@@ -495,7 +457,6 @@ fn take_hex<const N: usize>(
 ) -> Result<[u8; N], PrivacyWalletBundleErrorV1> {
     decode_lower_hex(take_text(object, field, N * 2, stage)?, stage, allow_zero)
 }
-
 fn parse_decimal_u128(
     mut value: String,
     stage: &'static str,
@@ -515,7 +476,6 @@ fn parse_decimal_u128(
         _ => Err(PrivacyWalletBundleErrorV1::at(stage)),
     }
 }
-
 fn parse_decimal_i64(
     mut value: String,
     stage: &'static str,
@@ -534,7 +494,6 @@ fn parse_decimal_i64(
     value.zeroize();
     parsed.ok_or_else(|| PrivacyWalletBundleErrorV1::at(stage))
 }
-
 fn decode_lower_hex_vec(
     mut value: String,
     minimum_bytes: usize,
@@ -555,7 +514,6 @@ fn decode_lower_hex_vec(
     value.zeroize();
     decoded.ok_or_else(|| PrivacyWalletBundleErrorV1::at(stage))
 }
-
 fn take_hex_vec(
     object: &mut norito::json::Map,
     field: &str,
@@ -570,7 +528,6 @@ fn take_hex_vec(
         stage,
     )
 }
-
 fn value_object(
     value: norito::json::Value,
     fields: &[&str],
@@ -582,7 +539,6 @@ fn value_object(
     exact_fields(&object, fields, stage)?;
     Ok(object)
 }
-
 fn decode_fixed_hex_values<const N: usize>(
     values: Vec<norito::json::Value>,
     stage: &'static str,
@@ -598,7 +554,6 @@ fn decode_fixed_hex_values<const N: usize>(
         })
         .collect()
 }
-
 fn decode_path_v1(
     values: Vec<norito::json::Value>,
     stage: &'static str,
@@ -607,7 +562,6 @@ fn decode_path_v1(
         .try_into()
         .map_err(|_| PrivacyWalletBundleErrorV1::at(stage))
 }
-
 fn take_decimal_u128(
     object: &mut norito::json::Map,
     field: &str,
@@ -616,7 +570,6 @@ fn take_decimal_u128(
 ) -> Result<u128, PrivacyWalletBundleErrorV1> {
     parse_decimal_u128(take_text(object, field, 39, stage)?, stage, allow_zero)
 }
-
 fn take_array(
     object: &mut norito::json::Map,
     field: &str,
@@ -632,13 +585,11 @@ fn take_array(
     }
     Ok(values)
 }
-
 fn account_id(value: String, stage: &'static str) -> Result<AccountId, PrivacyWalletBundleErrorV1> {
     AccountId::parse_encoded(&value)
         .map(|parsed| parsed.into_account_id())
         .map_err(|_| PrivacyWalletBundleErrorV1::at(stage))
 }
-
 fn asset_definition_id(
     value: String,
     stage: &'static str,
@@ -647,16 +598,13 @@ fn asset_definition_id(
         .parse::<AssetDefinitionId>()
         .map_err(|_| PrivacyWalletBundleErrorV1::at(stage))
 }
-
 struct SecretJsonObject(norito::json::Map);
-
 impl Drop for SecretJsonObject {
     fn drop(&mut self) {
         let value = norito::json::Value::Object(core::mem::take(&mut self.0));
         zeroize_json_value(value);
     }
 }
-
 fn zeroize_json_value(value: norito::json::Value) {
     match value {
         norito::json::Value::String(mut string) => string.zeroize(),
@@ -676,7 +624,6 @@ fn zeroize_json_value(value: norito::json::Value) {
         | norito::json::Value::Number(_) => {}
     }
 }
-
 fn secret_object(bytes: &[u8]) -> Result<SecretJsonObject, PrivacyWalletBundleErrorV1> {
     json_object(
         bytes,
@@ -685,7 +632,6 @@ fn secret_object(bytes: &[u8]) -> Result<SecretJsonObject, PrivacyWalletBundleEr
     )
     .map(SecretJsonObject)
 }
-
 fn decode_zk_ace_request_v1(
     public_action: &[u8],
     protocol_witness: &[u8],
@@ -736,7 +682,6 @@ fn decode_zk_ace_request_v1(
     let transfer =
         ZkAcePrivacyTransferV1::try_new(policy, source, destination, public_balance_scope, amount)
             .map_err(|_| PrivacyWalletBundleErrorV1::at("zk-ace-transfer"))?;
-
     let mut secret = secret_object(protocol_witness)?;
     exact_fields(
         &secret.0,
@@ -771,7 +716,6 @@ fn decode_zk_ace_request_v1(
         ZkAceAuthorizationActionRequestV1 { transfer, witness },
     ))
 }
-
 fn decode_verange_request_v1(
     public_action: &[u8],
     protocol_witness: &[u8],
@@ -801,7 +745,6 @@ fn decode_verange_request_v1(
         64 => VeRangeBitLengthV1::Bits64,
         _ => return Err(PrivacyWalletBundleErrorV1::at("verange-bit-length")),
     };
-
     let mut secret = secret_object(protocol_witness)?;
     exact_fields(
         &secret.0,
@@ -850,7 +793,6 @@ fn decode_verange_request_v1(
         },
     ))
 }
-
 fn decode_zk_ams_governance_v1(
     public: &mut norito::json::Map,
 ) -> Result<ZkAmsPrivacyActionGovernanceV1, PrivacyWalletBundleErrorV1> {
@@ -899,7 +841,6 @@ fn decode_zk_ams_governance_v1(
         )?),
     })
 }
-
 fn decode_zk_ams_request_v1(
     public_action: &[u8],
     protocol_witness: &[u8],
@@ -930,7 +871,6 @@ fn decode_zk_ams_request_v1(
         "registry_id_hex",
         "registry_record_digest_hex",
     ];
-
     let mut public = json_object(
         public_action,
         MAX_PUBLIC_ACTION_BYTES,
@@ -1074,7 +1014,6 @@ fn decode_zk_ams_request_v1(
         _ => Err(PrivacyWalletBundleErrorV1::at("zk-ams-action")),
     }
 }
-
 fn decode_vega_request_v1(
     public_action: &[u8],
     protocol_witness: &[u8],
@@ -1130,7 +1069,6 @@ fn decode_vega_request_v1(
         "trusted_block_timestamp_ms",
         "vega-trusted-block-time",
     )?;
-
     let mut secret = secret_object(protocol_witness)?;
     exact_fields(
         &secret.0,
@@ -1195,7 +1133,6 @@ fn decode_vega_request_v1(
         },
     ))
 }
-
 fn decode_application_polynomial_v1(
     value: norito::json::Value,
     stage: &'static str,
@@ -1222,7 +1159,6 @@ fn decode_application_polynomial_v1(
     )
     .map_err(|_| PrivacyWalletBundleErrorV1::at(stage))
 }
-
 fn take_polynomial_array<const N: usize>(
     object: &mut norito::json::Map,
     field: &str,
@@ -1235,7 +1171,6 @@ fn take_polynomial_array<const N: usize>(
         .try_into()
         .map_err(|_| PrivacyWalletBundleErrorV1::at(stage))
 }
-
 fn decode_bootle_lantern_request_v1(
     public_action: &[u8],
     protocol_witness: &[u8],
@@ -1322,7 +1257,6 @@ fn decode_bootle_lantern_request_v1(
         },
     ))
 }
-
 fn decode_anonymous_pgc_request_v1(
     public_action: &[u8],
     protocol_witness: &[u8],
@@ -1386,7 +1320,6 @@ fn decode_anonymous_pgc_request_v1(
     if current_accounts.is_empty() || current_accounts.len() > 64 {
         return Err(PrivacyWalletBundleErrorV1::at("anonymous-pgc-accounts"));
     }
-
     let mut secret = secret_object(protocol_witness)?;
     exact_fields(
         &secret.0,
@@ -1465,7 +1398,6 @@ fn decode_anonymous_pgc_request_v1(
         },
     ))
 }
-
 fn decode_orchard_request_v1(
     public_action: &[u8],
     protocol_witness: &[u8],
@@ -1515,7 +1447,6 @@ fn decode_orchard_request_v1(
             "orchard-minimum-action-count",
         ));
     }
-
     let mut secret = secret_object(protocol_witness)?;
     exact_fields(&secret.0, &["changes", "spends"], "orchard-witness")?;
     let spends = take_array(&mut secret.0, "spends", 1, 2, "orchard-spends")?
@@ -1640,7 +1571,6 @@ fn decode_orchard_request_v1(
         },
     ))
 }
-
 fn decode_fcmp_tuple_v1(
     value: String,
     stage: &'static str,
@@ -1648,7 +1578,6 @@ fn decode_fcmp_tuple_v1(
     let bytes = decode_lower_hex::<96>(value, stage, false)?;
     FcmpOutputTupleV1::decode(&bytes).map_err(|_| PrivacyWalletBundleErrorV1::at(stage))
 }
-
 fn decode_fcmp_request_v1(
     public_action: &[u8],
     protocol_witness: &[u8],
@@ -1680,7 +1609,6 @@ fn decode_fcmp_request_v1(
     )
     .map_err(|_| PrivacyWalletBundleErrorV1::at("fcmp-root"))?;
     let root_epoch = take_u64(&mut public, "root_epoch", "fcmp-root-epoch")?;
-
     let mut secret = secret_object(protocol_witness)?;
     exact_fields(&secret.0, &["inputs", "outputs"], "fcmp-witness")?;
     let inputs = take_array(&mut secret.0, "inputs", 1, 2, "fcmp-inputs")?
@@ -1838,7 +1766,6 @@ fn decode_fcmp_request_v1(
         },
     ))
 }
-
 fn decode_ivm_note_v1(
     value: norito::json::Value,
     stage: &'static str,
@@ -1863,7 +1790,6 @@ fn decode_ivm_note_v1(
     )
     .map_err(|_| PrivacyWalletBundleErrorV1::at(stage))
 }
-
 fn decode_ivm_request_v1(
     public_action: &[u8],
     protocol_witness: &[u8],
@@ -1899,7 +1825,6 @@ fn decode_ivm_request_v1(
         false,
     )?);
     let root_epoch = take_u64(&mut public, "root_epoch", "ivm-root-epoch")?;
-
     let mut secret = secret_object(protocol_witness)?;
     exact_fields(
         &secret.0,
@@ -2007,7 +1932,6 @@ fn decode_ivm_request_v1(
         },
     ))
 }
-
 fn decode_pq_masp_note_v1(
     value: norito::json::Value,
     stage: &'static str,
@@ -2046,7 +1970,6 @@ fn decode_pq_masp_note_v1(
     )
     .map_err(|_| PrivacyWalletBundleErrorV1::at(stage))
 }
-
 fn decode_pq_masp_request_v1(
     public_action: &[u8],
     protocol_witness: &[u8],
@@ -2079,7 +2002,6 @@ fn decode_pq_masp_request_v1(
         false,
     )?);
     let anchor_epoch = take_u64(&mut public, "anchor_epoch", "pq-masp-anchor-epoch")?;
-
     let mut secret = secret_object(protocol_witness)?;
     exact_fields(
         &secret.0,
@@ -2170,7 +2092,6 @@ fn decode_pq_masp_request_v1(
         },
     ))
 }
-
 fn decode_jindo_request_v1(
     public_action: &[u8],
     protocol_witness: &[u8],
@@ -2218,7 +2139,6 @@ fn decode_jindo_request_v1(
         JindoPolynomialEvaluationActionRequestV1 { witness },
     ))
 }
-
 fn decode_protocol_request_v1(
     protocol_id: PrivacyProtocolIdV1,
     public_action: &[u8],
@@ -2261,11 +2181,9 @@ fn decode_protocol_request_v1(
         _ => Err(PrivacyWalletBundleErrorV1::at("unsupported-protocol")),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const WALLET_ID: &str = "wallet-retail-adult-001";
     const PROTOCOL: &str = "iroha-jindo-polynomial-commitment-v0";
     const OPERATION_SCHEMA: &str = "jindo_polynomial_evaluation_v1";
@@ -2279,7 +2197,6 @@ mod tests {
         "0000000000000000000000000000000000000000000000000000000000000000",
         "\"]]}"
     );
-
     fn text(output: &mut Vec<u8>, value: &str) {
         output.extend_from_slice(
             &u16::try_from(value.len())
@@ -2288,7 +2205,6 @@ mod tests {
         );
         output.extend_from_slice(value.as_bytes());
     }
-
     fn bytes_u32(output: &mut Vec<u8>, value: &[u8]) {
         output.extend_from_slice(
             &u32::try_from(value.len())
@@ -2297,13 +2213,11 @@ mod tests {
         );
         output.extend_from_slice(value);
     }
-
     fn authority_for_seed(seed: [u8; 32]) -> String {
         let private_key =
             PrivateKey::from_bytes(Algorithm::Ed25519, &seed).expect("test private key");
         AccountId::new(PublicKey::from(private_key)).to_string()
     }
-
     fn bundle_with(
         seed: [u8; 32],
         authority: &str,
@@ -2324,7 +2238,6 @@ mod tests {
         bytes_u32(&mut output, witness);
         output
     }
-
     fn canonical_bundle() -> Vec<u8> {
         let seed = [7; 32];
         bundle_with(
@@ -2336,7 +2249,6 @@ mod tests {
             WITNESS.as_bytes(),
         )
     }
-
     #[test]
     fn canonical_bundle_inspects_and_decodes_exact_jindo_request() {
         let mut bundle = canonical_bundle();
@@ -2371,7 +2283,6 @@ mod tests {
             PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
         );
     }
-
     #[test]
     fn every_truncation_and_every_suffix_is_rejected() {
         let bundle = canonical_bundle();
@@ -2390,11 +2301,9 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn outer_lengths_utf8_schema_protocol_and_seed_fail_closed() {
         let bundle = canonical_bundle();
-
         let mut bad_magic = bundle.clone();
         bad_magic[0] ^= 1;
         assert_eq!(
@@ -2403,7 +2312,6 @@ mod tests {
                 .stage(),
             "magic"
         );
-
         let mut bad_schema = bundle.clone();
         bad_schema[4] = 2;
         assert_eq!(
@@ -2412,11 +2320,9 @@ mod tests {
                 .stage(),
             "schema-version"
         );
-
         let mut length_overflow = bundle.clone();
         length_overflow[5..7].copy_from_slice(&u16::MAX.to_be_bytes());
         assert!(inspect_privacy_wallet_execution_bundle_v1(&length_overflow).is_err());
-
         let mut invalid_utf8 = bundle.clone();
         invalid_utf8[7] = 0xff;
         assert_eq!(
@@ -2425,7 +2331,6 @@ mod tests {
                 .stage(),
             "wallet-id"
         );
-
         let mut zero_seed_bundle = bundle_with(
             [0; 32],
             &authority_for_seed([7; 32]),
@@ -2444,7 +2349,6 @@ mod tests {
             .stage(),
             "signer-seed"
         );
-
         let unsupported = bundle_with(
             [7; 32],
             &authority_for_seed([7; 32]),
@@ -2455,7 +2359,6 @@ mod tests {
         );
         assert!(inspect_privacy_wallet_execution_bundle_v1(&unsupported).is_err());
     }
-
     #[test]
     fn authority_key_public_action_and_operation_schema_cannot_be_substituted() {
         let wrong_authority = bundle_with(
@@ -2472,7 +2375,6 @@ mod tests {
                 .stage(),
             "authority-key-mismatch"
         );
-
         let wrong_schema = bundle_with(
             [7; 32],
             &authority_for_seed([7; 32]),
@@ -2487,7 +2389,6 @@ mod tests {
                 .stage(),
             "operation-schema"
         );
-
         let mut bundle = canonical_bundle();
         assert_eq!(
             decode_privacy_wallet_execution_bundle_v1(
@@ -2500,7 +2401,6 @@ mod tests {
             "public-action-mismatch"
         );
     }
-
     #[test]
     fn duplicate_extra_reordered_and_noncanonical_witness_fields_are_rejected() {
         for witness in [
@@ -2542,7 +2442,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn duplicate_extra_empty_noncanonical_and_malformed_public_actions_are_rejected() {
         for public_action in [
@@ -2591,7 +2490,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn reserve_backed_public_actions_require_scope_and_reject_unknown_fields_first() {
         for public_action in [
@@ -2631,7 +2529,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn public_action_and_witness_u32_overflow_lengths_are_rejected() {
         let bundle = canonical_bundle();
@@ -2652,7 +2549,6 @@ mod tests {
         public_overflow[public_length_offset..public_length_offset + 4]
             .copy_from_slice(&u32::MAX.to_be_bytes());
         assert!(inspect_privacy_wallet_execution_bundle_v1(&public_overflow).is_err());
-
         let public_length = u32::from_be_bytes(
             bundle[public_length_offset..public_length_offset + 4]
                 .try_into()

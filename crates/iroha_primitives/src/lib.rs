@@ -24,17 +24,14 @@ pub mod small;
 pub mod soradns;
 pub mod time;
 pub mod unique_vec;
-
 #[cfg(feature = "json")]
 /// Re-export Norito's JSON derive macros for use within the crate.
 pub mod json_macros {
     pub use norito::derive::{JsonDeserialize, JsonSerialize};
 }
-
 #[cfg(not(feature = "json"))]
 /// Placeholder when the `json` feature is disabled.
 pub mod json_macros {}
-
 pub use crate::{
     bigint::{BigInt, BigIntError, MAX_BITS as BIGINT_MAX_BITS},
     numeric::{
@@ -45,21 +42,17 @@ pub use crate::{
     },
     numeric_abi::{DecimalValueV1, IntValueV1, NumericAbiError, QuantityValueV1},
 };
-
 mod ffi {
     //! Definitions and implementations of FFI related functionalities
-
     macro_rules! ffi_item {
         ($it: item $($attr: meta)?) => {
             #[cfg(all(not(feature = "ffi_export"), not(feature = "ffi_import")))]
             $it
-
             #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
             #[derive(iroha_ffi::FfiType)]
             #[iroha_ffi::ffi_export]
             $(#[$attr])?
             $it
-
             #[cfg(feature = "ffi_import")]
             iroha_ffi::ffi! {
                 #[iroha_ffi::ffi_import]
@@ -68,6 +61,5 @@ mod ffi {
             }
         };
     }
-
     pub(crate) use ffi_item;
 }

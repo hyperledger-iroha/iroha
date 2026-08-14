@@ -10,21 +10,17 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-use std::{convert::TryInto, marker::PhantomData};
-
+use crate::zk::kagemusha_sha256_table16_v4::{
+    AssignedBits, TABLE16_SPREAD_TABLE_ROWS,
+    util::{lebs2ip, spread_bits},
+};
 use ff::{Field, PrimeField};
 use halo2_proofs::{
     circuit::{Chip, Layouter, Region, Value},
     plonk::{Advice, Column, ConstraintSystem, Error, Expression, TableColumn},
     poly::Rotation,
 };
-
-use crate::zk::kagemusha_sha256_table16_v4::{
-    AssignedBits, TABLE16_SPREAD_TABLE_ROWS,
-    util::{lebs2ip, spread_bits},
-};
-
+use std::{convert::TryInto, marker::PhantomData};
 const BITS_4: usize = 1 << 4;
 const BITS_7: usize = 1 << 7;
 const BITS_10: usize = 1 << 10;
@@ -34,7 +30,6 @@ const BITS_14: usize = 1 << 14;
 const LAST_DENSE: u64 = (1 << 16) - 1;
 const FIRST_TAIL_DENSE: u64 = TABLE16_SPREAD_TABLE_ROWS as u64;
 const LAST_SPREAD: u64 = 0x5555_5555;
-
 /// An input word into a lookup, containing (tag, dense, spread)
 #[derive(Copy, Clone, Debug)]
 pub(super) struct SpreadWord<const DENSE: usize, const SPREAD: usize> {
@@ -42,7 +37,6 @@ pub(super) struct SpreadWord<const DENSE: usize, const SPREAD: usize> {
     pub dense: [bool; DENSE],
     pub spread: [bool; SPREAD],
 }
-
 /// Helper function that returns tag of 16-bit input
 pub fn get_tag(input: u16) -> u8 {
     let input = input as usize;
@@ -62,7 +56,6 @@ pub fn get_tag(input: u16) -> u8 {
         6
     }
 }
-
 impl<const DENSE: usize, const SPREAD: usize> SpreadWord<DENSE, SPREAD> {
     pub(super) fn new(dense: [bool; DENSE]) -> Self {
         assert!(DENSE <= 16);
@@ -72,7 +65,6 @@ impl<const DENSE: usize, const SPREAD: usize> SpreadWord<DENSE, SPREAD> {
             spread: spread_bits(dense),
         }
     }
-
     pub(super) fn try_new<T: TryInto<[bool; DENSE]> + std::fmt::Debug>(dense: T) -> Self
     where
         <T as TryInto<[bool; DENSE]>>::Error: std::fmt::Debug,
@@ -86,7 +78,6 @@ impl<const DENSE: usize, const SPREAD: usize> SpreadWord<DENSE, SPREAD> {
         }
     }
 }
-
 /// A variable stored in advice columns corresponding to a row of
 /// [`SpreadTableConfig`].
 #[derive(Clone, Debug)]
@@ -94,7 +85,6 @@ pub(super) struct SpreadVar<const DENSE: usize, const SPREAD: usize, F: PrimeFie
     pub dense: AssignedBits<DENSE, F>,
     pub spread: AssignedBits<SPREAD, F>,
 }
-
 impl<const DENSE: usize, const SPREAD: usize, F: PrimeField> SpreadVar<DENSE, SPREAD, F> {
     pub(super) fn with_lookup(
         region: &mut Region<'_, F>,
@@ -110,13 +100,10 @@ impl<const DENSE: usize, const SPREAD: usize, F: PrimeField> SpreadVar<DENSE, SP
                 lebs2ip(&word.dense) >= TABLE16_SPREAD_TABLE_ROWS as u64,
             ))
         });
-
         region.assign_advice(cols.tag, row, tag.map(|tag| F::from(tag as u64)));
         region.assign_advice(cols.tail, row, tail);
-
         let dense =
             AssignedBits::<DENSE, F>::assign_bits(region, || "dense", cols.dense, row, dense_val)?;
-
         let spread = AssignedBits::<SPREAD, F>::assign_bits(
             region,
             || "spread",
@@ -124,10 +111,8 @@ impl<const DENSE: usize, const SPREAD: usize, F: PrimeField> SpreadVar<DENSE, SP
             row,
             spread_val,
         )?;
-
         Ok(SpreadVar { dense, spread })
     }
-
     pub(super) fn without_lookup_fixed(
         region: &mut Region<'_, F>,
         dense_col: Column<Advice>,
@@ -138,7 +123,6 @@ impl<const DENSE: usize, const SPREAD: usize, F: PrimeField> SpreadVar<DENSE, SP
     ) -> Result<Self, Error> {
         let dense_val = word.dense;
         let spread_val = word.spread;
-
         let dense = AssignedBits::<DENSE, F>::assign_bits_fixed(
             region,
             || "dense",
@@ -146,7 +130,6 @@ impl<const DENSE: usize, const SPREAD: usize, F: PrimeField> SpreadVar<DENSE, SP
             dense_row,
             dense_val,
         )?;
-
         let spread = AssignedBits::<SPREAD, F>::assign_bits_fixed(
             region,
             || "spread",
@@ -154,10 +137,8 @@ impl<const DENSE: usize, const SPREAD: usize, F: PrimeField> SpreadVar<DENSE, SP
             spread_row,
             spread_val,
         )?;
-
         Ok(SpreadVar { dense, spread })
     }
-
     pub(super) fn without_lookup(
         region: &mut Region<'_, F>,
         dense_col: Column<Advice>,
@@ -168,7 +149,6 @@ impl<const DENSE: usize, const SPREAD: usize, F: PrimeField> SpreadVar<DENSE, SP
     ) -> Result<Self, Error> {
         let dense_val = word.map(|word| word.dense);
         let spread_val = word.map(|word| word.spread);
-
         let dense = AssignedBits::<DENSE, F>::assign_bits(
             region,
             || "dense",
@@ -176,7 +156,6 @@ impl<const DENSE: usize, const SPREAD: usize, F: PrimeField> SpreadVar<DENSE, SP
             dense_row,
             dense_val,
         )?;
-
         let spread = AssignedBits::<SPREAD, F>::assign_bits(
             region,
             || "spread",
@@ -184,11 +163,9 @@ impl<const DENSE: usize, const SPREAD: usize, F: PrimeField> SpreadVar<DENSE, SP
             spread_row,
             spread_val,
         )?;
-
         Ok(SpreadVar { dense, spread })
     }
 }
-
 #[derive(Clone, Debug)]
 pub(super) struct SpreadInputs {
     pub(super) tag: Column<Advice>,
@@ -196,39 +173,32 @@ pub(super) struct SpreadInputs {
     pub(super) spread: Column<Advice>,
     pub(super) tail: Column<Advice>,
 }
-
 #[derive(Clone, Debug)]
 pub(super) struct SpreadTable {
     pub(super) tag: TableColumn,
     pub(super) dense: TableColumn,
     pub(super) spread: TableColumn,
 }
-
 #[derive(Clone, Debug)]
 pub(super) struct SpreadTableConfig {
     pub input: SpreadInputs,
     pub table: SpreadTable,
 }
-
 #[derive(Clone, Debug)]
 pub(super) struct SpreadTableChip<F: Field> {
     config: SpreadTableConfig,
     _marker: PhantomData<F>,
 }
-
 impl<F: Field> Chip<F> for SpreadTableChip<F> {
     type Config = SpreadTableConfig;
     type Loaded = ();
-
     fn config(&self) -> &Self::Config {
         &self.config
     }
-
     fn loaded(&self) -> &Self::Loaded {
         &()
     }
 }
-
 impl<F: PrimeField> SpreadTableChip<F> {
     pub(super) fn configure_table(meta: &mut ConstraintSystem<F>) -> SpreadTable {
         SpreadTable {
@@ -237,7 +207,6 @@ impl<F: PrimeField> SpreadTableChip<F> {
             spread: meta.lookup_table_column(),
         }
     }
-
     #[cfg(test)]
     pub fn configure(
         meta: &mut ConstraintSystem<F>,
@@ -256,7 +225,6 @@ impl<F: PrimeField> SpreadTableChip<F> {
             table,
         )
     }
-
     pub(super) fn configure_with_table(
         meta: &mut ConstraintSystem<F>,
         input_tag: Column<Advice>,
@@ -273,14 +241,12 @@ impl<F: PrimeField> SpreadTableChip<F> {
             let spread_cur = meta.query_advice(input_spread, Rotation::cur());
             let tail_cur = meta.query_advice(input_tail, Rotation::cur());
             let loaded = Expression::Constant(F::ONE) - tail_cur;
-
             vec![
                 (loaded.clone() * tag_cur, table.tag),
                 (loaded.clone() * dense_cur, table.dense),
                 (loaded * spread_cur, table.spread),
             ]
         });
-
         // In the canonical table, dense == spread holds only for rows zero
         // and one, and both rows have tag zero. This proves tail is Boolean;
         // when it is one, the first component also forces input_tag == 6.
@@ -289,7 +255,6 @@ impl<F: PrimeField> SpreadTableChip<F> {
         meta.lookup("spread-table tail flag and tag", |meta| {
             let tag_cur = meta.query_advice(input_tag, Rotation::cur());
             let tail_cur = meta.query_advice(input_tail, Rotation::cur());
-
             vec![
                 (
                     tail_cur.clone() * (Expression::Constant(F::from(6)) - tag_cur),
@@ -299,7 +264,6 @@ impl<F: PrimeField> SpreadTableChip<F> {
                 (tail_cur, table.spread),
             ]
         });
-
         // For c = 65535 - dense, bit interleaving commutes with complement:
         // spread(dense) + spread(c) = spread(65535) = 0x5555_5555.
         // Looking up (tag=0, c, complement_spread) constrains c to 0..=15
@@ -308,7 +272,6 @@ impl<F: PrimeField> SpreadTableChip<F> {
             let dense_cur = meta.query_advice(input_dense, Rotation::cur());
             let spread_cur = meta.query_advice(input_spread, Rotation::cur());
             let tail_cur = meta.query_advice(input_tail, Rotation::cur());
-
             vec![
                 (Expression::Constant(F::ZERO), table.tag),
                 (
@@ -321,20 +284,17 @@ impl<F: PrimeField> SpreadTableChip<F> {
                 ),
             ]
         });
-
         // Since the complement lookup proves c <= 15, requiring
         // dense - 65527 = 8 - c to occur in the dense table leaves c <= 8.
         // Together the two lookups prove dense is exactly 65527..=65535.
         meta.lookup("spread-table tail lower endpoint", |meta| {
             let dense_cur = meta.query_advice(input_dense, Rotation::cur());
             let tail_cur = meta.query_advice(input_tail, Rotation::cur());
-
             vec![(
                 tail_cur * (dense_cur - Expression::Constant(F::from(FIRST_TAIL_DENSE))),
                 table.dense,
             )]
         });
-
         SpreadTableConfig {
             input: SpreadInputs {
                 tag: input_tag,
@@ -345,14 +305,12 @@ impl<F: PrimeField> SpreadTableChip<F> {
             table,
         }
     }
-
     pub fn load(
         config: SpreadTableConfig,
         layouter: &mut impl Layouter<F>,
     ) -> Result<<Self as Chip<F>>::Loaded, Error> {
         Self::load_table(config.table, layouter)
     }
-
     pub(super) fn load_table(
         config: SpreadTable,
         layouter: &mut impl Layouter<F>,
@@ -362,7 +320,6 @@ impl<F: PrimeField> SpreadTableChip<F> {
             |mut table| {
                 // We generate the row values lazily (we only need them during keygen).
                 let mut rows = SpreadTableConfig::generate::<F>();
-
                 for index in 0..TABLE16_SPREAD_TABLE_ROWS {
                     let mut row = None;
                     table.assign_cell(
@@ -387,19 +344,16 @@ impl<F: PrimeField> SpreadTableChip<F> {
                         || Value::known(row.map(|(_, _, spread)| spread).unwrap()),
                     )?;
                 }
-
                 Ok(())
             },
         )
     }
 }
-
 impl SpreadTableConfig {
     fn generate<F: PrimeField>() -> impl Iterator<Item = (F, F, F)> {
         (1..=(1 << 16)).scan((F::ZERO, F::ZERO, F::ZERO), |(tag, dense, spread), i| {
             // We computed this table row in the previous iteration.
             let res = (*tag, *dense, *spread);
-
             // i holds the zero-indexed row number for the next table row.
             match i {
                 BITS_4 | BITS_7 | BITS_10 | BITS_11 | BITS_13 | BITS_14 => *tag += F::ONE,
@@ -418,14 +372,17 @@ impl SpreadTableConfig {
                 // On odd-numbered rows we add one.
                 *spread += F::ONE;
             }
-
             Some(res)
         })
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::{
+        FIRST_TAIL_DENSE, LAST_SPREAD, SpreadTableChip, SpreadTableConfig, SpreadVar, SpreadWord,
+        get_tag,
+    };
+    use crate::zk::kagemusha_sha256_table16_v4::{TABLE16_SPREAD_TABLE_ROWS, util::i2lebsp};
     use halo2_proofs::halo2curves::pasta::Fp;
     use halo2_proofs::{
         circuit::{Layouter, V1, Value},
@@ -433,13 +390,6 @@ mod tests {
         plonk::{Circuit, ConstraintSystem, Error},
     };
     use rand::Rng;
-
-    use super::{
-        FIRST_TAIL_DENSE, LAST_SPREAD, SpreadTableChip, SpreadTableConfig, SpreadVar, SpreadWord,
-        get_tag,
-    };
-    use crate::zk::kagemusha_sha256_table16_v4::{TABLE16_SPREAD_TABLE_ROWS, util::i2lebsp};
-
     #[derive(Clone, Copy, Debug)]
     struct LookupWitness {
         tag: u64,
@@ -447,7 +397,6 @@ mod tests {
         spread: u64,
         tail: u64,
     }
-
     impl LookupWitness {
         fn canonical(word: u16) -> Self {
             Self {
@@ -458,28 +407,23 @@ mod tests {
             }
         }
     }
-
     #[derive(Clone, Debug)]
     struct LookupCircuit {
         rows: Vec<LookupWitness>,
     }
-
     impl Circuit<Fp> for LookupCircuit {
         type Config = SpreadTableConfig;
         type FloorPlanner = V1;
         type Params = ();
-
         fn without_witnesses(&self) -> Self {
             self.clone()
         }
-
         fn configure(meta: &mut ConstraintSystem<Fp>) -> Self::Config {
             let input_tag = meta.advice_column();
             let input_dense = meta.advice_column();
             let input_spread = meta.advice_column();
             SpreadTableChip::configure(meta, input_tag, input_dense, input_spread)
         }
-
         fn synthesize(
             &self,
             config: Self::Config,
@@ -516,7 +460,6 @@ mod tests {
             )
         }
     }
-
     fn interleave_u16_with_zeros(word: u16) -> u32 {
         let mut word: u32 = word.into();
         word = (word ^ (word << 8)) & 0x00ff00ff;
@@ -525,7 +468,6 @@ mod tests {
         word = (word ^ (word << 1)) & 0x55555555;
         word
     }
-
     #[test]
     fn lookup_table_fits_k16_and_accepts_the_constrained_tail() {
         let mut rows = [
@@ -554,13 +496,11 @@ mod tests {
         rows.extend((FIRST_TAIL_DENSE as u16..=u16::MAX).map(LookupWitness::canonical));
         let mut rng = rand::rng();
         rows.extend((0..10).map(|_| LookupWitness::canonical(rng.random())));
-
         let circuit = LookupCircuit { rows };
         MockProver::run(16, &circuit, vec![])
             .expect("k=16 spread-table synthesis")
             .assert_satisfied();
     }
-
     #[test]
     fn tags_cover_every_dense_width_boundary() {
         for (below, at, below_tag, at_tag) in [
@@ -576,7 +516,6 @@ mod tests {
         }
         assert_eq!(get_tag(u16::MAX), 6);
     }
-
     #[test]
     fn malformed_loaded_or_tail_tuple_is_rejected() {
         let canonical_last = LookupWitness::canonical(u16::MAX);
@@ -637,28 +576,23 @@ mod tests {
             assert!(prover.verify().is_err(), "{name} must be rejected");
         }
     }
-
     #[test]
     fn spread_var_assigns_the_tail_flag_for_the_top_word() {
         #[derive(Clone)]
         struct SpreadVarCircuit;
-
         impl Circuit<Fp> for SpreadVarCircuit {
             type Config = SpreadTableConfig;
             type FloorPlanner = V1;
             type Params = ();
-
             fn without_witnesses(&self) -> Self {
                 self.clone()
             }
-
             fn configure(meta: &mut ConstraintSystem<Fp>) -> Self::Config {
                 let tag = meta.advice_column();
                 let dense = meta.advice_column();
                 let spread = meta.advice_column();
                 SpreadTableChip::configure(meta, tag, dense, spread)
             }
-
             fn synthesize(
                 &self,
                 config: Self::Config,
@@ -679,7 +613,6 @@ mod tests {
                 )
             }
         }
-
         MockProver::run(16, &SpreadVarCircuit, vec![])
             .expect("top-word tail synthesis")
             .assert_satisfied();

@@ -1,31 +1,25 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Regression tests for Nexus lane commitment fixtures.
-
-use std::{fs, path::PathBuf};
-
 use eyre::{Result, WrapErr, ensure};
 use iroha_data_model::block::consensus::LaneBlockCommitment;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::{core::NoritoDeserialize as _, json};
-
+use std::{fs, path::PathBuf};
 struct CommitmentFixture {
     name: String,
     json_path: PathBuf,
     to_path: PathBuf,
     commitment: LaneBlockCommitment,
 }
-
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("workspace root")
         .to_path_buf()
 }
-
 fn lane_commitment_dir() -> PathBuf {
     repo_root().join("fixtures/nexus/lane_commitments")
 }
-
 fn load_lane_commitments() -> Result<Vec<CommitmentFixture>> {
     let dir = lane_commitment_dir();
     let mut fixtures = Vec::new();
@@ -59,7 +53,6 @@ fn load_lane_commitments() -> Result<Vec<CommitmentFixture>> {
     );
     Ok(fixtures)
 }
-
 #[test]
 fn lane_commitment_json_matches_norito_payloads() -> Result<()> {
     for fixture in load_lane_commitments()? {
@@ -88,7 +81,6 @@ fn lane_commitment_json_matches_norito_payloads() -> Result<()> {
     }
     Ok(())
 }
-
 #[test]
 #[allow(clippy::too_many_lines)] // fixture validation requires exhaustive assertions
 fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
@@ -107,7 +99,6 @@ fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
             fixture.commitment.total_local_amount,
             sum_local
         );
-
         let sum_due = fixture
             .commitment
             .receipts
@@ -122,7 +113,6 @@ fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
             fixture.commitment.total_xor_due,
             sum_due
         );
-
         let sum_after_haircut = fixture
             .commitment
             .receipts
@@ -137,7 +127,6 @@ fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
             fixture.commitment.total_xor_after_haircut,
             sum_after_haircut
         );
-
         ensure!(
             fixture.commitment.total_xor_due >= fixture.commitment.total_xor_after_haircut,
             "variance underflow for {}: due {} < after haircut {}",
@@ -170,7 +159,6 @@ fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
             fixture.commitment.total_xor_variance,
             summed_variance
         );
-
         let receipt_count = u64::try_from(fixture.commitment.receipts.len())
             .expect("receipt vector length fits in u64");
         ensure!(
@@ -180,7 +168,6 @@ fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
             fixture.commitment.tx_count,
             receipt_count
         );
-
         if let Some(metadata) = &fixture.commitment.swap_metadata {
             ensure!(
                 metadata.epsilon_bps > 0,
@@ -198,7 +185,6 @@ fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
                 fixture.name
             );
         }
-
         for (idx, receipt) in fixture.commitment.receipts.iter().enumerate() {
             ensure!(
                 receipt.xor_due >= receipt.xor_after_haircut,

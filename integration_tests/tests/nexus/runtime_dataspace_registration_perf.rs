@@ -1,14 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Runtime Nexus lane and dataspace-registration benchmark with isolated timing metrics.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    path::PathBuf,
-    thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-
 use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
@@ -43,12 +34,18 @@ use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManife
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;
 use norito::json::Value as JsonValue;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::PathBuf,
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
 };
 use toml::{Table, Value as TomlValue};
-
 const TOTAL_PEERS: usize = 4;
 const BENCH_ITERATIONS: usize = 5;
 const BENCH_ITERATIONS_ENV: &str = "IROHA_NEXUS_RUNTIME_BENCH_ITERATIONS";
@@ -69,14 +66,12 @@ fn parse_positive_usize_override(raw: Option<&str>, default: usize) -> usize {
         .filter(|value| *value > 0)
         .unwrap_or(default)
 }
-
 fn benchmark_iterations() -> usize {
     parse_positive_usize_override(
         std::env::var(BENCH_ITERATIONS_ENV).ok().as_deref(),
         BENCH_ITERATIONS,
     )
 }
-
 fn benchmark_lane_manifest_dir() -> PathBuf {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -88,7 +83,6 @@ fn benchmark_lane_manifest_dir() -> PathBuf {
         millis
     ))
 }
-
 fn benchmark_lane_manifest_peer_bindings() -> Vec<(String, String)> {
     let peer_key_pair =
         KeyPair::try_from_seed(benchmark_lane_manifest_peer_seed(0), Algorithm::BlsNormal)
@@ -98,13 +92,11 @@ fn benchmark_lane_manifest_peer_bindings() -> Vec<(String, String)> {
         PeerId::from(peer_key_pair.public_key().clone()).to_string(),
     )]
 }
-
 fn benchmark_lane_manifest_peer_seed(index: usize) -> Vec<u8> {
     let mut seed = format!("{BENCH_NETWORK_BASE_SEED}-peer-{index}").into_bytes();
     seed.extend_from_slice(b":bls");
     seed
 }
-
 fn write_benchmark_lane_manifest(manifest_dir: &PathBuf) {
     fs::create_dir_all(manifest_dir).expect("create benchmark manifest directory");
     let validators = benchmark_lane_manifest_peer_bindings()
@@ -144,7 +136,6 @@ fn write_benchmark_lane_manifest(manifest_dir: &PathBuf) {
     )
     .expect("write benchmark lane manifest");
 }
-
 fn runtime_registration_builder() -> NetworkBuilder {
     let manifest_dir = benchmark_lane_manifest_dir();
     write_benchmark_lane_manifest(&manifest_dir);
@@ -161,7 +152,6 @@ fn runtime_registration_builder() -> NetworkBuilder {
             );
             lane_nexus.insert("visibility".into(), TomlValue::String("public".to_owned()));
             lane_nexus.insert("metadata".into(), TomlValue::Table(Table::new()));
-
             let mut lane_benchmark = Table::new();
             lane_benchmark.insert("index".into(), TomlValue::Integer(1));
             lane_benchmark.insert(
@@ -174,7 +164,6 @@ fn runtime_registration_builder() -> NetworkBuilder {
             );
             lane_benchmark.insert("visibility".into(), TomlValue::String("public".to_owned()));
             lane_benchmark.insert("metadata".into(), TomlValue::Table(Table::new()));
-
             let mut ds_nexus = Table::new();
             ds_nexus.insert("alias".into(), TomlValue::String(NEXUS_ALIAS.to_owned()));
             ds_nexus.insert("id".into(), TomlValue::Integer(0));
@@ -183,7 +172,6 @@ fn runtime_registration_builder() -> NetworkBuilder {
                 TomlValue::String("runtime benchmark baseline dataspace".to_owned()),
             );
             ds_nexus.insert("fault_tolerance".into(), TomlValue::Integer(1));
-
             let mut ds_benchmark = Table::new();
             ds_benchmark.insert(
                 "alias".into(),
@@ -207,7 +195,6 @@ fn runtime_registration_builder() -> NetworkBuilder {
                 ),
             );
             ds_benchmark.insert("fault_tolerance".into(), TomlValue::Integer(1));
-
             let mut routing_policy = Table::new();
             let mut matcher_alice = Table::new();
             matcher_alice.insert("account".into(), TomlValue::String(ALICE_ID.to_string()));
@@ -227,7 +214,6 @@ fn runtime_registration_builder() -> NetworkBuilder {
                 "rules".into(),
                 TomlValue::Array(vec![TomlValue::Table(rule_alice)]),
             );
-
             layer
                 .write(["nexus", "enabled"], true)
                 // Dataspace-scoped manifest grants and publish/revoke ISI route canonically to a
@@ -257,7 +243,6 @@ fn runtime_registration_builder() -> NetworkBuilder {
                 );
         })
 }
-
 fn wait_for_lane_visibility(client: &Client, lane_id: LaneId, context: &str) -> Result<JsonValue> {
     let started = Instant::now();
     let mut last_error = String::new();
@@ -274,7 +259,6 @@ fn wait_for_lane_visibility(client: &Client, lane_id: LaneId, context: &str) -> 
         "{context}: timed out waiting for lane {lane_id} visibility; last error: {last_error}"
     ))
 }
-
 fn wait_for_all_peers_lane_visibility(
     network: &sandbox::SerializedNetwork,
     lane_id: LaneId,
@@ -288,7 +272,6 @@ fn wait_for_all_peers_lane_visibility(
     if pending.is_empty() {
         return Ok(());
     }
-
     let started = Instant::now();
     let mut last_errors: BTreeMap<usize, String> = BTreeMap::new();
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
@@ -302,7 +285,6 @@ fn wait_for_all_peers_lane_visibility(
                 }
             }
         }
-
         for peer_index in resolved {
             pending.remove(&peer_index);
             last_errors.remove(&peer_index);
@@ -312,12 +294,10 @@ fn wait_for_all_peers_lane_visibility(
         }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
-
     Err(eyre!(
         "{context}: timed out waiting for lane {lane_id} visibility on peers {pending:?}; last errors {last_errors:?}"
     ))
 }
-
 fn wait_for_lane_authoritative_binding(
     client: &Client,
     lane_id: LaneId,
@@ -346,12 +326,10 @@ fn wait_for_lane_authoritative_binding(
         }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
-
     Err(eyre!(
         "{context}: timed out waiting for authoritative bindings on lane {lane_id}; last snapshot {last_snapshot:?}; last error {last_error:?}"
     ))
 }
-
 fn wait_for_lane_absence(client: &Client, lane_id: LaneId, context: &str) -> Result<()> {
     let started = Instant::now();
     let mut last_present = String::new();
@@ -367,12 +345,10 @@ fn wait_for_lane_absence(client: &Client, lane_id: LaneId, context: &str) -> Res
             Err(_) => return Ok(()),
         }
     }
-
     Err(eyre!(
         "{context}: timed out waiting for lane {lane_id} removal; last visible snapshot {last_present}"
     ))
 }
-
 fn wait_for_all_peers_lane_absence(
     network: &sandbox::SerializedNetwork,
     lane_id: LaneId,
@@ -386,7 +362,6 @@ fn wait_for_all_peers_lane_absence(
     if pending.is_empty() {
         return Ok(());
     }
-
     let started = Instant::now();
     let mut last_visible: BTreeMap<usize, String> = BTreeMap::new();
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
@@ -406,7 +381,6 @@ fn wait_for_all_peers_lane_absence(
                 }
             }
         }
-
         for peer_index in resolved {
             pending.remove(&peer_index);
             last_visible.remove(&peer_index);
@@ -416,12 +390,10 @@ fn wait_for_all_peers_lane_absence(
         }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
-
     Err(eyre!(
         "{context}: timed out waiting for lane {lane_id} removal on peers {pending:?}; last visible snapshots {last_visible:?}"
     ))
 }
-
 fn wait_for_lane_visibility_with_status(
     client: &Client,
     lane_id: LaneId,
@@ -451,7 +423,6 @@ fn wait_for_lane_visibility_with_status(
         "{context}: timed out waiting for lane {lane_id} visibility; last height {last_height}; last visibility error: {last_error}"
     ))
 }
-
 fn wait_for_manifest_status(
     client: &Client,
     uaid_literal: &str,
@@ -489,7 +460,6 @@ fn wait_for_manifest_status(
         }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
-
     if last_error.is_empty() {
         Err(eyre!(
             "{context}: timed out waiting for UAID {uaid_literal} dataspace {} status {:?}; last statuses {last_statuses:?}",
@@ -504,7 +474,6 @@ fn wait_for_manifest_status(
         ))
     }
 }
-
 fn wait_for_all_peers_manifest_status(
     network: &sandbox::SerializedNetwork,
     uaid_literal: &str,
@@ -520,7 +489,6 @@ fn wait_for_all_peers_manifest_status(
     if pending.is_empty() {
         return Ok(());
     }
-
     let started = Instant::now();
     let mut last_errors: BTreeMap<usize, String> = BTreeMap::new();
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
@@ -569,14 +537,12 @@ fn wait_for_all_peers_manifest_status(
         }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
-
     Err(eyre!(
         "{context}: timed out waiting for UAID {uaid_literal} dataspace {} status {:?} on peers {pending:?}; last errors {last_errors:?}",
         dataspace.as_u64(),
         expected_status
     ))
 }
-
 fn wait_for_account_permissions(
     client: &Client,
     account_id: &AccountId,
@@ -607,7 +573,6 @@ fn wait_for_account_permissions(
         }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
-
     let suffix = last_error
         .map(|err| format!("; last permission query error: {err}"))
         .unwrap_or_default();
@@ -615,7 +580,6 @@ fn wait_for_account_permissions(
         "{context}: timed out waiting for permissions on {account_id}; required {required_permissions:?}; last observed {last_observed:?}{suffix}"
     ))
 }
-
 async fn ensure_publish_manifest_permission(client: &Client, dataspace: DataSpaceId) -> Result<()> {
     let required_permission = Permission::from(CanPublishSpaceDirectoryManifest { dataspace });
     let grant_instruction = InstructionBox::from(Grant::account_permission(
@@ -641,7 +605,6 @@ async fn ensure_publish_manifest_permission(client: &Client, dataspace: DataSpac
         "wait for CanPublishSpaceDirectoryManifest permission visibility",
     )
 }
-
 async fn submit_and_wait_for_tx_approval(
     submitter: &Client,
     transaction: SignedTransaction,
@@ -654,10 +617,8 @@ async fn submit_and_wait_for_tx_approval(
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
-
     // Give the event stream a brief head start to avoid missing early events.
     sleep(TX_SSE_HANDSHAKE_DELAY).await;
-
     let submit_started = Instant::now();
     let submitter_for_submit = submitter.clone();
     spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction))
@@ -665,7 +626,6 @@ async fn submit_and_wait_for_tx_approval(
         .map_err(|err| eyre!("{context}: transaction submit task join error: {err}"))?
         .map_err(|err| eyre!("{context}: failed to submit transaction: {err}"))?;
     let submit_latency = submit_started.elapsed();
-
     let commit_apply_started = Instant::now();
     timeout(COMMITTED_TX_OUTCOME_TIMEOUT, async {
         loop {
@@ -690,10 +650,8 @@ async fn submit_and_wait_for_tx_approval(
     .await
     .map_err(|_| eyre!("{context}: timed out waiting for transaction approval"))??;
     events.close().await;
-
     Ok((submit_latency, commit_apply_started.elapsed()))
 }
-
 fn benchmark_manifest(uaid: UniversalAccountId, issued_ms: u64) -> AssetPermissionManifest {
     AssetPermissionManifest {
         version: ManifestVersion::V1,
@@ -718,7 +676,6 @@ fn benchmark_manifest(uaid: UniversalAccountId, issued_ms: u64) -> AssetPermissi
         }],
     }
 }
-
 fn leader_or_highest_height_peer_index(
     network: &sandbox::SerializedNetwork,
     status_client: &Client,
@@ -727,7 +684,6 @@ fn leader_or_highest_height_peer_index(
     if peers.is_empty() {
         return 0;
     }
-
     if let Ok(status) = status_client.get_sumeragi_status() {
         if let Ok(index) = usize::try_from(status.leader) {
             if index < peers.len() {
@@ -742,7 +698,6 @@ fn leader_or_highest_height_peer_index(
             }
         }
     }
-
     peers
         .iter()
         .enumerate()
@@ -760,7 +715,6 @@ fn leader_or_highest_height_peer_index(
         })
         .0
 }
-
 fn duration_min_avg_max(samples: &[Duration]) -> Option<(Duration, Duration, Duration)> {
     let mut iter = samples.iter();
     let first = *iter.next()?;
@@ -777,7 +731,6 @@ fn duration_min_avg_max(samples: &[Duration]) -> Option<(Duration, Duration, Dur
     }
     Some((min, Duration::from_secs_f64(total / count as f64), max))
 }
-
 fn format_duration(duration: Duration) -> String {
     let secs = duration.as_secs_f64();
     if secs >= 1.0 {
@@ -788,7 +741,6 @@ fn format_duration(duration: Duration) -> String {
         format!("{:.3}us", secs * 1_000_000.0)
     }
 }
-
 fn emit_latency_stats(label: &str, samples: &[Duration]) {
     if let Some((min, avg, max)) = duration_min_avg_max(samples) {
         eprintln!(
@@ -799,7 +751,6 @@ fn emit_latency_stats(label: &str, samples: &[Duration]) {
         );
     }
 }
-
 fn submit_lane_lifecycle_plan(client: &Client, plan: &LaneLifecyclePlan) -> Result<()> {
     client
         .submit_lane_lifecycle_blocking(plan.clone())
@@ -808,7 +759,6 @@ fn submit_lane_lifecycle_plan(client: &Client, plan: &LaneLifecyclePlan) -> Resu
             "submit signed SetParameter(nexus_lane_lifecycle_v1) transaction and wait for apply",
         )
 }
-
 #[derive(Debug)]
 struct RegistrationIterationMetrics {
     lane_id: u32,
@@ -830,7 +780,6 @@ struct RegistrationIterationMetrics {
     manifest_revoke_total_latency: Duration,
     total_latency: Duration,
 }
-
 fn run_registration_iteration(
     rt: &tokio::runtime::Runtime,
     network: &sandbox::SerializedNetwork,
@@ -842,7 +791,6 @@ fn run_registration_iteration(
     let submitter_peer_index = leader_or_highest_height_peer_index(network, &status_probe_client);
     let submitter = network.peers()[submitter_peer_index].client();
     let started = Instant::now();
-
     let uaid_seed = format!("runtime-registration-uaid-{lane_raw}");
     let manifest_uaid = UniversalAccountId::from_hash(Hash::new(uaid_seed.as_bytes()));
     let manifest_uaid_literal = manifest_uaid.to_string();
@@ -858,7 +806,6 @@ fn run_registration_iteration(
             .unwrap_or(0),
         ),
     );
-
     let publish_started = Instant::now();
     let publish_tx = submitter.build_transaction(
         [InstructionBox::from(PublishSpaceDirectoryManifest {
@@ -887,7 +834,6 @@ fn run_registration_iteration(
             manifest_uaid_literal, submitter_peer_index
         )
     })?;
-
     let publish_visibility_started = Instant::now();
     wait_for_all_peers_manifest_status(
         network,
@@ -905,7 +851,6 @@ fn run_registration_iteration(
     })?;
     let manifest_publish_all_peer_visibility_latency = publish_visibility_started.elapsed();
     let manifest_publish_total_latency = publish_started.elapsed();
-
     let revoke_started = Instant::now();
     let revoke_tx = submitter.build_transaction(
         [InstructionBox::from(RevokeSpaceDirectoryManifest {
@@ -937,7 +882,6 @@ fn run_registration_iteration(
             manifest_uaid_literal, submitter_peer_index
         )
     })?;
-
     let revoke_visibility_started = Instant::now();
     wait_for_all_peers_manifest_status(
         network,
@@ -955,7 +899,6 @@ fn run_registration_iteration(
     })?;
     let manifest_revoke_all_peer_visibility_latency = revoke_visibility_started.elapsed();
     let manifest_revoke_total_latency = revoke_started.elapsed();
-
     let lane = LaneConfig {
         id: lane_id,
         dataspace_id: DataSpaceId::UNIVERSAL,
@@ -969,7 +912,6 @@ fn run_registration_iteration(
         additions: vec![lane],
         retire: Vec::new(),
     };
-
     let baseline_height = submitter
         .get_sumeragi_status()
         .map_err(|err| eyre!(err))
@@ -986,7 +928,6 @@ fn run_registration_iteration(
         })
         .max()
         .unwrap_or(0);
-
     let lane_started = Instant::now();
     let lane_submit_started = Instant::now();
     submit_lane_lifecycle_plan(&submitter, &plan)
@@ -996,7 +937,6 @@ fn run_registration_iteration(
             )
         })?;
     let lane_submit_latency = lane_submit_started.elapsed();
-
     let lane_apply_started = Instant::now();
     let submitter_height = match wait_for_lane_visibility_with_status(
         &submitter,
@@ -1025,7 +965,6 @@ fn run_registration_iteration(
     };
     let lane_commit_apply_latency = lane_apply_started.elapsed();
     let submitter_height_delta = submitter_height.saturating_sub(baseline_height);
-
     let lane_visibility_started = Instant::now();
     wait_for_all_peers_lane_visibility(
         network,
@@ -1048,7 +987,6 @@ fn run_registration_iteration(
         .unwrap_or(0)
         .saturating_sub(baseline_cluster_height);
     let lane_total_latency = lane_started.elapsed();
-
     let retire_plan = LaneLifecyclePlan {
         additions: Vec::new(),
         retire: vec![lane_id],
@@ -1078,7 +1016,6 @@ fn run_registration_iteration(
         "wait for all-peer lane retirement visibility",
     )
     .wrap_err_with(|| format!("wait for lane {} retirement on all peers", lane_id.as_u32()))?;
-
     let total_latency = started.elapsed();
     Ok(RegistrationIterationMetrics {
         lane_id: lane_raw,
@@ -1101,13 +1038,11 @@ fn run_registration_iteration(
         total_latency,
     })
 }
-
 #[test]
 fn runtime_registration_genesis_preexecution_smoke() {
     let _guard = sandbox::serial_guard();
     let _network = runtime_registration_builder().build();
 }
-
 #[test]
 fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
     let context = stringify!(runtime_nexus_registration_reports_lane_lifecycle_costs);
@@ -1116,7 +1051,6 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
     else {
         return Ok(());
     };
-
     ensure!(
         network.peers().len() == TOTAL_PEERS,
         "expected {TOTAL_PEERS} peers for runtime registration benchmark, got {}",
@@ -1132,10 +1066,8 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
                     format!("wait for benchmark manifest lane visibility on peer {peer_index}")
                 })?;
     }
-
     let bench_iterations = benchmark_iterations();
     eprintln!("[registration-perf] report-only lane+dataspace metrics (no threshold gating)");
-
     let grant_probe_client = network.peer().client();
     let grant_peer_index = leader_or_highest_height_peer_index(&network, &grant_probe_client);
     let grant_client = network.peers()[grant_peer_index].client();
@@ -1149,7 +1081,6 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
             BENCH_MANIFEST_DATASPACE.as_u64()
         )
     })?;
-
     let mut lane_submit_samples = Vec::with_capacity(bench_iterations);
     let mut lane_commit_apply_samples = Vec::with_capacity(bench_iterations);
     let mut lane_visibility_samples = Vec::with_capacity(bench_iterations);
@@ -1167,7 +1098,6 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
     let mut cluster_height_delta_samples = Vec::with_capacity(bench_iterations);
     let mut passes = 0usize;
     let mut failure: Option<eyre::Report> = None;
-
     for iteration in 0..bench_iterations {
         match run_registration_iteration(&rt, &network, iteration) {
             Ok(metrics) => {
@@ -1188,7 +1118,6 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
                 workflow_total_samples.push(metrics.total_latency);
                 submitter_height_delta_samples.push(metrics.submitter_height_delta);
                 cluster_height_delta_samples.push(metrics.cluster_height_delta);
-
                 eprintln!(
                     "[registration-perf] iter={}/{} lane={} uaid={} submitter_peer={} submitter_height_delta={} cluster_height_delta={} lane_submit={} lane_commit/apply={} lane_visibility={} lane_total={} publish_submit={} publish_commit/apply={} publish_visibility={} publish_total={} revoke_submit={} revoke_commit/apply={} revoke_visibility={} revoke_total={} total={}",
                     iteration + 1,
@@ -1220,7 +1149,6 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
             }
         }
     }
-
     let pass_rate = (passes as f64 / bench_iterations as f64) * 100.0;
     emit_latency_stats("lane submit latency", &lane_submit_samples);
     emit_latency_stats("lane commit/apply latency", &lane_commit_apply_samples);
@@ -1274,7 +1202,6 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
         "[registration-perf] iterations={} pass_rate={:.1}%",
         bench_iterations, pass_rate
     );
-
     if let Some(err) = failure {
         eprintln!(
             "[registration-perf] benchmark completed with lifecycle visibility failure: {err:?}"
@@ -1286,10 +1213,8 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
             "[registration-perf] benchmark completed with partial data: {passes}/{bench_iterations} successful iterations"
         );
     }
-
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1300,7 +1225,6 @@ mod tests {
     };
     use iroha::data_model::nexus::DataSpaceId;
     use std::time::Duration;
-
     fn decode_manifest_hash_fixture(raw: &str) -> [u8; 32] {
         assert_eq!(raw.len(), 64);
         let mut hash = [0_u8; 32];
@@ -1310,16 +1234,13 @@ mod tests {
         }
         hash
     }
-
     #[test]
     fn benchmark_dataspace_manifest_hash_derives_config_id() {
         let hash = decode_manifest_hash_fixture(BENCH_MANIFEST_DATASPACE_HASH);
-
         assert_eq!(NEXUS_ALIAS, "universal");
         assert_eq!(DataSpaceId::from_hash(&hash), BENCH_MANIFEST_DATASPACE);
         assert_ne!(BENCH_MANIFEST_DATASPACE, DataSpaceId::UNIVERSAL);
     }
-
     #[test]
     fn duration_min_avg_max_reports_expected_values() {
         let samples = [
@@ -1332,20 +1253,17 @@ mod tests {
         assert_eq!(avg, Duration::from_millis(20));
         assert_eq!(max, Duration::from_millis(30));
     }
-
     #[test]
     fn format_duration_selects_unit_by_scale() {
         assert_eq!(format_duration(Duration::from_secs(2)), "2.000s");
         assert_eq!(format_duration(Duration::from_millis(10)), "10.000ms");
         assert_eq!(format_duration(Duration::from_nanos(500)), "0.500us");
     }
-
     #[test]
     fn parse_positive_usize_override_uses_positive_input() {
         assert_eq!(parse_positive_usize_override(Some("8"), 5), 8);
         assert_eq!(parse_positive_usize_override(Some(" 3 "), 5), 3);
     }
-
     #[test]
     fn parse_positive_usize_override_falls_back_on_invalid_input() {
         assert_eq!(parse_positive_usize_override(None, 5), 5);
@@ -1353,14 +1271,12 @@ mod tests {
         assert_eq!(parse_positive_usize_override(Some("bad"), 5), 5);
         assert_eq!(parse_positive_usize_override(Some(""), 5), 5);
     }
-
     #[test]
     fn benchmark_lane_manifest_peer_binding_uses_checked_seed_derivation() {
         let expected_key_pair =
             KeyPair::try_from_seed(benchmark_lane_manifest_peer_seed(0), Algorithm::BlsNormal)
                 .expect("fixture runtime registration benchmark peer key");
         let expected_peer_id = PeerId::from(expected_key_pair.public_key().clone()).to_string();
-
         assert_eq!(
             benchmark_lane_manifest_peer_bindings(),
             vec![(ALICE_ID.to_string(), expected_peer_id)]

@@ -1,5 +1,4 @@
 //! Polynomial representation and commit/open operations via IPA.
-
 use crate::{
     IpaScalar, PolyOpenTranscriptMetadata,
     backend::{IpaBackend, traits::IpaGroup},
@@ -9,14 +8,12 @@ use crate::{
     params::Params,
     transcript::Transcript,
 };
-
 /// Dense polynomial over backend scalar field represented by its coefficients in
 /// ascending order, i.e., `coeffs[i]` is the coefficient of `x^i`.
 #[derive(Clone, Debug)]
 pub struct Polynomial<B: IpaBackend> {
     coeffs: Vec<B::Scalar>,
 }
-
 impl<B: IpaBackend> Polynomial<B> {
     fn absorb_statement(
         params: &Params<B>,
@@ -40,22 +37,18 @@ impl<B: IpaBackend> Polynomial<B> {
         );
         absorb_optional_metadata(transcript, "poly.domain_tag", metadata.domain_tag);
     }
-
     /// Creates a polynomial from coefficients in ascending order.
     pub fn from_coeffs(coeffs: Vec<B::Scalar>) -> Self {
         Self { coeffs }
     }
-
     /// Returns the number of coefficients.
     pub fn len(&self) -> usize {
         self.coeffs.len()
     }
-
     /// Returns true if the polynomial has no coefficients.
     pub fn is_empty(&self) -> bool {
         self.coeffs.is_empty()
     }
-
     /// Evaluates the polynomial at a point `x`.
     pub fn evaluate(&self, x: B::Scalar) -> B::Scalar {
         // Horner's rule
@@ -65,12 +58,10 @@ impl<B: IpaBackend> Polynomial<B> {
         }
         acc
     }
-
     /// Commits to the coefficient vector using the `g` generators from `params`.
     pub fn commit(&self, params: &Params<B>) -> Result<B::Group, Error> {
         commit_vec::<B>(params.g(), &self.coeffs)
     }
-
     /// Creates an opening proof at point `z` that the committed polynomial
     /// evaluates to `t` at `z`.
     pub fn open(
@@ -88,7 +79,6 @@ impl<B: IpaBackend> Polynomial<B> {
             PolyOpenTranscriptMetadata::default(),
         )
     }
-
     /// Creates an opening proof at point `z` and binds the supplied metadata
     /// into the Fiat-Shamir transcript before the first challenge is derived.
     pub fn open_with_metadata(
@@ -118,7 +108,6 @@ impl<B: IpaBackend> Polynomial<B> {
         let proof = IpaProver::<B>::prove(params, transcript, &self.coeffs, &b, p_g, t)?;
         Ok((proof, t))
     }
-
     /// Verifies an opening proof for the committed polynomial at point `z`
     /// with claimed evaluation `t`.
     pub fn verify_open(
@@ -139,7 +128,6 @@ impl<B: IpaBackend> Polynomial<B> {
             PolyOpenTranscriptMetadata::default(),
         )
     }
-
     /// Verifies an opening proof while binding the supplied metadata into the
     /// Fiat-Shamir transcript before challenge derivation.
     pub fn verify_open_with_metadata(
@@ -156,7 +144,6 @@ impl<B: IpaBackend> Polynomial<B> {
         )
         .map(|_| ())
     }
-
     /// Derive the verifier witness for an opening proof while binding the
     /// supplied metadata into the Fiat-Shamir transcript.
     ///
@@ -194,7 +181,6 @@ impl<B: IpaBackend> Polynomial<B> {
         }
     }
 }
-
 fn absorb_optional_metadata(transcript: &mut Transcript, scope: &str, value: Option<[u8; 32]>) {
     let mut payload = [0u8; 33];
     if let Some(bytes) = value {

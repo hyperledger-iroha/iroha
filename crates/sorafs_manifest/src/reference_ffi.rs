@@ -3,15 +3,9 @@
 //! The facade returns `ValidationOutcomeV1` encoded as Norito JSON so mobile and
 //! scripting SDKs can call the Rust reference validators without duplicating
 //! SoraFS wire-format logic.
-
 // The FFI surface returns full validation outcomes as errors so every caller
 // receives the same machine-readable diagnostics as the Rust reference CLI.
 #![allow(clippy::result_large_err)]
-
-use std::{mem, panic, slice, str};
-
-use norito::json;
-
 use crate::{
     FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, HedgingValidationPayloadKindV1,
     OrderbookValidationPayloadKindV1, PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1,
@@ -30,7 +24,8 @@ use crate::{
     validate_provider_advert_bytes, validate_repair_payload_bytes,
     validate_replication_order_bytes, validate_signed_replication_order_bytes,
 };
-
+use norito::json;
+use std::{mem, panic, slice, str};
 /// FFI repair payload kind selector for `RepairEvidenceV1`.
 pub const SORAFS_REFERENCE_REPAIR_KIND_EVIDENCE: u32 = 1;
 /// FFI repair payload kind selector for `RepairReportV1`.
@@ -47,7 +42,6 @@ pub const SORAFS_REFERENCE_REPAIR_KIND_ESCALATION_APPROVAL: u32 = 6;
 pub const SORAFS_REFERENCE_REPAIR_KIND_TASK_EVENT: u32 = 9;
 /// FFI repair payload kind selector for `RepairAuditEventV1`.
 pub const SORAFS_REFERENCE_REPAIR_KIND_AUDIT_EVENT: u32 = 10;
-
 /// FFI orderbook payload kind selector for `OrderRequestV1`.
 pub const SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST: u32 = 1;
 /// FFI orderbook payload kind selector for `OrderCancelV1`.
@@ -58,7 +52,6 @@ pub const SORAFS_REFERENCE_ORDERBOOK_KIND_TRADE_EVENT: u32 = 3;
 pub const SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_CHANNEL: u32 = 4;
 /// FFI orderbook payload kind selector for `SettlementReceiptV1`.
 pub const SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_RECEIPT: u32 = 5;
-
 /// FFI PoP payload kind selector for `PopCredentialV1`.
 pub const SORAFS_REFERENCE_POP_KIND_CREDENTIAL: u32 = 1;
 /// FFI PoP payload kind selector for `PopCommitmentRootV1`.
@@ -73,7 +66,6 @@ pub const SORAFS_REFERENCE_POP_KIND_RENEWAL_REQUEST: u32 = 5;
 pub const SORAFS_REFERENCE_POP_KIND_MEMBERSHIP_PROOF: u32 = 6;
 /// FFI PoP payload kind selector for `PopIssuedCredentialBundleV1`.
 pub const SORAFS_REFERENCE_POP_KIND_ISSUED_CREDENTIAL_BUNDLE: u32 = 7;
-
 /// FFI hedging payload kind selector for `HedgingPriceFeedV1`.
 pub const SORAFS_REFERENCE_HEDGING_KIND_PRICE_FEED: u32 = 1;
 /// FFI hedging payload kind selector for `HedgingReferencePriceDecisionV1`.
@@ -82,7 +74,6 @@ pub const SORAFS_REFERENCE_HEDGING_KIND_REFERENCE_PRICE_DECISION: u32 = 2;
 pub const SORAFS_REFERENCE_HEDGING_KIND_BILLING_LINE_ITEM: u32 = 3;
 /// FFI hedging payload kind selector for `BillingStatementV1`.
 pub const SORAFS_REFERENCE_HEDGING_KIND_BILLING_STATEMENT: u32 = 4;
-
 /// FFI bundle payload kind selector for `ProviderAdvertV1`.
 pub const SORAFS_REFERENCE_BUNDLE_KIND_PROVIDER_ADVERT: u32 = 1;
 /// FFI bundle payload kind selector for `ProviderAdmissionEnvelopeV1`.
@@ -121,7 +112,6 @@ pub const SORAFS_REFERENCE_BUNDLE_KIND_PDP_COMMITMENT: u32 = 17;
 pub const SORAFS_REFERENCE_BUNDLE_KIND_PDP_CHALLENGE: u32 = 18;
 /// FFI bundle payload kind selector for `PdpProofV1`.
 pub const SORAFS_REFERENCE_BUNDLE_KIND_PDP_PROOF: u32 = 19;
-
 /// FFI proof-stream profile selector for an omitted PoTR profile.
 pub const SORAFS_REFERENCE_PROFILE_NONE: u32 = 0;
 /// FFI proof-stream profile selector for hot retrieval.
@@ -130,7 +120,6 @@ pub const SORAFS_REFERENCE_PROFILE_HOT: u32 = 1;
 pub const SORAFS_REFERENCE_PROFILE_WARM: u32 = 2;
 /// FFI proof-stream profile selector for archive retrieval.
 pub const SORAFS_REFERENCE_PROFILE_ARCHIVE: u32 = 3;
-
 /// Maximum number of governance DAG blocks accepted by one head-chain FFI call.
 pub const SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1: u32 = 64;
 /// Exact byte length of every first-release Governance DAG CID.
@@ -139,7 +128,6 @@ pub const SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1: u32 = 32;
 pub const SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1: u32 = 67108864;
 /// Maximum UTF-8 label bytes accepted by one reference FFI input.
 pub const SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1: u32 = 1024;
-
 const CATEGORY_INTERNAL: &str = "internal";
 const SFS_FFI_ARGUMENT: &str = "SFS-FFI-001";
 const SFS_FFI_PANIC: &str = "SFS-FFI-002";
@@ -162,9 +150,7 @@ const _: () = assert!(
 const _: () = assert!(
     SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1 as usize == crate::GOVERNANCE_DAG_CID_BYTES_V1
 );
-
 struct FfiInputScope;
-
 /// Owned bytes returned from the SoraFS reference FFI.
 ///
 /// Call [`sorafs_reference_free_buffer`] exactly once when the caller is done
@@ -177,7 +163,6 @@ pub struct SorafsReferenceFfiBuffer {
     /// Number of bytes at `ptr`.
     pub len: usize,
 }
-
 impl SorafsReferenceFfiBuffer {
     fn from_bytes(bytes: Vec<u8>) -> Self {
         let len = bytes.len();
@@ -191,7 +176,6 @@ impl SorafsReferenceFfiBuffer {
         Self { ptr, len }
     }
 }
-
 /// Payload descriptor used by [`sorafs_reference_validate_bundle_json`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -207,7 +191,6 @@ pub struct SorafsReferenceFfiBundlePayload {
     /// Length of the optional UTF-8 label.
     pub label_len: usize,
 }
-
 /// Byte payload and UTF-8 label descriptor used by multi-input validators.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -221,7 +204,6 @@ pub struct SorafsReferenceFfiInput {
     /// Length of the optional UTF-8 label.
     pub label_len: usize,
 }
-
 /// Free a buffer returned by the SoraFS reference FFI.
 ///
 /// # Safety
@@ -238,7 +220,6 @@ pub unsafe extern "C" fn sorafs_reference_free_buffer(buffer: SorafsReferenceFfi
         drop(Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.len));
     }
 }
-
 /// Validate a Norito-encoded `ProviderAdvertV1` and return outcome JSON.
 ///
 /// # Safety
@@ -278,7 +259,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_provider_advert_json(
         ))
     })
 }
-
 /// Validate a Norito-encoded `ProviderAdmissionEnvelopeV1` and return outcome JSON.
 ///
 /// # Safety
@@ -310,7 +290,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_provider_admission_json(
         ))
     })
 }
-
 /// Validate a Norito-encoded `ProviderAdmissionRenewalV1` against an envelope.
 ///
 /// # Safety
@@ -368,7 +347,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_provider_admission_renewal_js
         ))
     })
 }
-
 /// Validate a Norito-encoded `ProviderAdmissionRevocationV1` against an envelope.
 ///
 /// # Safety
@@ -426,7 +404,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_provider_admission_revocation
         ))
     })
 }
-
 /// Validate a canonical appeal-finance `CancelAssetLock` V1 payload.
 ///
 /// # Safety
@@ -464,7 +441,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_appeal_finance_cancel_asset_l
         ))
     })
 }
-
 /// Validate a Norito-encoded `ReplicationOrderV1` and return outcome JSON.
 ///
 /// # Safety
@@ -492,7 +468,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_replication_order_json(
         Ok(validate_replication_order_bytes(input, label, generated_at))
     })
 }
-
 /// Validate a Norito-encoded `SignedReplicationOrderV1` and return outcome JSON.
 ///
 /// # Safety
@@ -530,7 +505,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_signed_replication_order_json
         ))
     })
 }
-
 /// Validate a Norito-encoded orderbook payload and return outcome JSON.
 ///
 /// `kind` must be one of the `SORAFS_REFERENCE_ORDERBOOK_KIND_*` constants.
@@ -567,7 +541,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_orderbook_json(
         ))
     })
 }
-
 /// Validate a Norito-encoded PoP payload and return outcome JSON.
 ///
 /// `kind` must be one of the `SORAFS_REFERENCE_POP_KIND_*` constants.
@@ -593,7 +566,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_pop_json(
         Ok(validate_pop_payload_bytes(kind, input, label, generated_at))
     })
 }
-
 /// Validate a Norito-encoded hedging/billing payload and return outcome JSON.
 ///
 /// `kind` must be one of the `SORAFS_REFERENCE_HEDGING_KIND_*` constants.
@@ -630,7 +602,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_hedging_json(
         ))
     })
 }
-
 /// Diagnose a Norito-encoded `PdpCommitmentV1` and return outcome JSON.
 ///
 /// Success is diagnostic-only and never authorizes production acceptance.
@@ -661,7 +632,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_commitment_json(
         Ok(validate_pdp_commitment_bytes(input, label, generated_at))
     })
 }
-
 /// Diagnose a Norito-encoded `PdpChallengeV1` and return outcome JSON.
 ///
 /// Success is diagnostic-only and never authorizes production acceptance.
@@ -692,7 +662,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_challenge_json(
         Ok(validate_pdp_challenge_bytes(input, label, generated_at))
     })
 }
-
 /// Diagnose a Norito-encoded `PdpProofV1` and return outcome JSON.
 ///
 /// Success does not evaluate signer admission or the commitment roots.
@@ -723,7 +692,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_proof_json(
         Ok(validate_pdp_proof_bytes(input, label, generated_at))
     })
 }
-
 /// Diagnose Norito-encoded `PdpCommitmentV1` and `PdpChallengeV1` bytes.
 ///
 /// Success does not evaluate provider admission or proof witnesses.
@@ -785,7 +753,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_commitment_challenge_json
         ))
     })
 }
-
 /// Diagnose Norito-encoded `PdpChallengeV1` and `PdpProofV1` bytes.
 ///
 /// Success does not evaluate provider admission or commitment roots.
@@ -847,7 +814,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_challenge_proof_json(
         ))
     })
 }
-
 /// Exhaustively diagnose PDP commitment, challenge, proof, and both roots.
 ///
 /// This FFI does not receive governed admission state. Success therefore uses
@@ -932,7 +898,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_pdp_json(
         ))
     })
 }
-
 /// Validate Norito-encoded `PorChallengeV1` and `PorProofV1` bytes.
 ///
 /// # Safety
@@ -984,7 +949,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_por_json(
         ))
     })
 }
-
 /// Validate a Norito-encoded `PotrReceiptV1` and return outcome JSON.
 ///
 /// `profile` must be one of the `SORAFS_REFERENCE_PROFILE_*` constants.
@@ -1015,7 +979,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_potr_json(
         ))
     })
 }
-
 /// Validate a Norito-encoded repair payload and return outcome JSON.
 ///
 /// `kind` must be one of the `SORAFS_REFERENCE_REPAIR_KIND_*` constants.
@@ -1046,7 +1009,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_repair_json(
         ))
     })
 }
-
 /// Validate a Norito-encoded `GovernanceLogNodeV1` and return outcome JSON.
 ///
 /// `expected_cid_ptr` and `expected_cid_len` must identify the canonical node
@@ -1092,7 +1054,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_governance_json(
         ))
     })
 }
-
 /// Validate a Norito-encoded `GovernanceDagBlockV1` and return outcome JSON.
 ///
 /// An empty `expected_block_cid` omits the external CID equality check. The
@@ -1162,7 +1123,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_governance_dag_block_json(
         ))
     })
 }
-
 /// Validate a signed `GovernanceDagHeadV1` against a bounded block chain.
 ///
 /// `blocks_ptr` references `blocks_len` payload/label descriptors ordered from
@@ -1202,7 +1162,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_governance_dag_head_chain_jso
         )?;
         let block_descriptors =
             read_governance_block_descriptors(&scope, blocks_ptr, blocks_len, generated_at)?;
-
         let mut aggregate_input_bytes = head_len.checked_add(head_label_len).ok_or_else(|| {
             invalid_argument_error(
                 "governance_dag_head_chain",
@@ -1219,7 +1178,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_governance_dag_head_chain_jso
                 generated_at,
             ));
         }
-
         let mut blocks = Vec::with_capacity(block_descriptors.len());
         for (index, block) in block_descriptors.iter().enumerate() {
             aggregate_input_bytes = aggregate_input_bytes
@@ -1257,7 +1215,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_governance_dag_head_chain_jso
             )?;
             blocks.push((bytes, label));
         }
-
         Ok(validate_governance_dag_head_chain_bytes(
             head,
             head_label,
@@ -1266,7 +1223,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_governance_dag_head_chain_jso
         ))
     })
 }
-
 /// Validate a fixture bundle payload set and return outcome JSON.
 ///
 /// `payloads_ptr` must reference `payloads_len` descriptors. Each descriptor
@@ -1334,7 +1290,6 @@ pub unsafe extern "C" fn sorafs_reference_validate_bundle_json(
         ))
     })
 }
-
 fn bundle_payload_maximum_bytes(kind: FixtureBundlePayloadKindV1) -> usize {
     match kind {
         FixtureBundlePayloadKindV1::PdpCommitment => PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
@@ -1343,7 +1298,6 @@ fn bundle_payload_maximum_bytes(kind: FixtureBundlePayloadKindV1) -> usize {
         _ => SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES,
     }
 }
-
 fn run_ffi(
     generated_at: u64,
     validate: impl FnOnce() -> Result<ValidationOutcomeV1, ValidationOutcomeV1>,
@@ -1361,7 +1315,6 @@ fn run_ffi(
     };
     outcome_json_buffer(&outcome)
 }
-
 fn outcome_json_buffer(outcome: &ValidationOutcomeV1) -> SorafsReferenceFfiBuffer {
     match json::to_string_pretty(outcome) {
         Ok(mut rendered) => {
@@ -1373,7 +1326,6 @@ fn outcome_json_buffer(outcome: &ValidationOutcomeV1) -> SorafsReferenceFfiBuffe
         ),
     }
 }
-
 fn read_input(
     scope: &FfiInputScope,
     ptr: *const u8,
@@ -1390,7 +1342,6 @@ fn read_input(
         generated_at,
     )
 }
-
 fn read_input_bounded(
     _scope: &FfiInputScope,
     ptr: *const u8,
@@ -1420,7 +1371,6 @@ fn read_input_bounded(
     // SAFETY: FFI callers must provide a pointer valid for `len` bytes.
     Ok(unsafe { slice::from_raw_parts(ptr, len) })
 }
-
 fn read_optional_input(
     scope: &FfiInputScope,
     ptr: *const u8,
@@ -1433,7 +1383,6 @@ fn read_optional_input(
     }
     read_input(scope, ptr, len, label, generated_at).map(Some)
 }
-
 fn read_optional_governance_cid(
     scope: &FfiInputScope,
     ptr: *const u8,
@@ -1451,7 +1400,6 @@ fn read_optional_governance_cid(
     }
     read_input_bounded(scope, ptr, len, label, exact_bytes, generated_at).map(Some)
 }
-
 fn read_label(
     scope: &FfiInputScope,
     ptr: *const u8,
@@ -1489,7 +1437,6 @@ fn read_label(
     }
     Ok(label.to_owned())
 }
-
 fn read_payload_descriptors(
     _scope: &FfiInputScope,
     ptr: *const SorafsReferenceFfiBundlePayload,
@@ -1533,7 +1480,6 @@ fn read_payload_descriptors(
     // SAFETY: FFI callers must provide a pointer valid for `len` descriptors.
     Ok(unsafe { slice::from_raw_parts(ptr, len) })
 }
-
 fn read_governance_block_descriptors(
     _scope: &FfiInputScope,
     ptr: *const SorafsReferenceFfiInput,
@@ -1579,7 +1525,6 @@ fn read_governance_block_descriptors(
     // keep all nested inputs alive for the duration of the call.
     Ok(unsafe { slice::from_raw_parts(ptr, len) })
 }
-
 fn profile_from_ffi(
     profile: u32,
     generated_at: u64,
@@ -1592,7 +1537,6 @@ fn profile_from_ffi(
         other => Err(unsupported_selector_error("profile", other, generated_at)),
     }
 }
-
 fn repair_kind_from_ffi(
     kind: u32,
     generated_at: u64,
@@ -1619,7 +1563,6 @@ fn repair_kind_from_ffi(
         )),
     }
 }
-
 fn orderbook_kind_from_ffi(
     kind: u32,
     generated_at: u64,
@@ -1647,7 +1590,6 @@ fn orderbook_kind_from_ffi(
         )),
     }
 }
-
 fn pop_kind_from_ffi(
     kind: u32,
     generated_at: u64,
@@ -1669,7 +1611,6 @@ fn pop_kind_from_ffi(
         other => Err(unsupported_selector_error("pop_kind", other, generated_at)),
     }
 }
-
 fn hedging_kind_from_ffi(
     kind: u32,
     generated_at: u64,
@@ -1692,7 +1633,6 @@ fn hedging_kind_from_ffi(
         )),
     }
 }
-
 fn bundle_kind_from_ffi(
     kind: u32,
     generated_at: u64,
@@ -1750,7 +1690,6 @@ fn bundle_kind_from_ffi(
         )),
     }
 }
-
 fn null_pointer_error(label: impl Into<String>, generated_at: u64) -> ValidationOutcomeV1 {
     ffi_error(
         SFS_FFI_ARGUMENT,
@@ -1760,7 +1699,6 @@ fn null_pointer_error(label: impl Into<String>, generated_at: u64) -> Validation
         generated_at,
     )
 }
-
 fn input_length_error(
     label: impl Into<String>,
     actual: usize,
@@ -1779,7 +1717,6 @@ fn input_length_error(
         generated_at,
     )
 }
-
 fn invalid_argument_error(
     label: impl Into<String>,
     reason: impl Into<String>,
@@ -1797,7 +1734,6 @@ fn invalid_argument_error(
         generated_at,
     )
 }
-
 fn missing_expected_node_cid_error(generated_at: u64) -> ValidationOutcomeV1 {
     ffi_error(
         SFS_FFI_ARGUMENT,
@@ -1810,7 +1746,6 @@ fn missing_expected_node_cid_error(generated_at: u64) -> ValidationOutcomeV1 {
         generated_at,
     )
 }
-
 fn unsupported_selector_error(
     selector: &str,
     value: u32,
@@ -1827,7 +1762,6 @@ fn unsupported_selector_error(
         generated_at,
     )
 }
-
 fn ffi_error(
     code: impl Into<String>,
     message: impl Into<String>,
@@ -1850,14 +1784,9 @@ fn ffi_error(
         generated_at,
     )
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf, slice};
-
-    use ed25519_dalek::{SIGNATURE_LENGTH, Signer, SigningKey};
-    use norito::json::Value;
-
+    use super::*;
     use crate::{
         BillingLineDirectionV1, BillingLineItemKindV1, BillingStatementV1, ByteRangeV1,
         GovernanceLogNodeV1, HEDGING_PRICE_FEED_VERSION_V1, HedgingFeedStatusV1,
@@ -1869,15 +1798,14 @@ mod tests {
         build_billing_statement_v1, derive_reference_price_decision_v1,
         sign_pop_credential_ed25519_v1, sign_settlement_receipt_ed25519_v1,
     };
-
-    use super::*;
-
+    use ed25519_dalek::{SIGNATURE_LENGTH, Signer, SigningKey};
+    use norito::json::Value;
+    use std::{fs, path::PathBuf, slice};
     fn workspace_fixture(path: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join(path)
     }
-
     unsafe fn read_and_free(buffer: SorafsReferenceFfiBuffer) -> Vec<u8> {
         let bytes = if buffer.ptr.is_null() || buffer.len == 0 {
             Vec::new()
@@ -1891,26 +1819,21 @@ mod tests {
         }
         bytes
     }
-
     fn outcome_from_buffer(buffer: SorafsReferenceFfiBuffer) -> Value {
         // SAFETY: test helper frees exactly the buffer returned by the FFI call.
         let bytes = unsafe { read_and_free(buffer) };
         json::from_slice(&bytes).expect("parse FFI outcome JSON")
     }
-
     #[test]
     fn ffi_buffer_from_bytes_handles_spare_capacity() {
         let mut bytes = Vec::with_capacity(64);
         bytes.extend_from_slice(b"spare capacity must not affect freeing");
         assert!(bytes.capacity() > bytes.len());
-
         let buffer = SorafsReferenceFfiBuffer::from_bytes(bytes);
-
         // SAFETY: the buffer was returned by the FFI buffer constructor under test.
         let returned = unsafe { read_and_free(buffer) };
         assert_eq!(returned, b"spare capacity must not affect freeing");
     }
-
     fn orderbook_settlement_receipt() -> SettlementReceiptV1 {
         let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
         sign_settlement_receipt_ed25519_v1(
@@ -1942,14 +1865,12 @@ mod tests {
         )
         .expect("sign orderbook settlement receipt")
     }
-
     fn hedging_digest(label: &str) -> [u8; 32] {
         let hash = blake3::hash(label.as_bytes());
         let mut out = [0_u8; 32];
         out.copy_from_slice(hash.as_bytes());
         out
     }
-
     fn hedging_feed(feed_id: &str, price: &str, observed_at_unix: u64) -> HedgingPriceFeedV1 {
         HedgingPriceFeedV1 {
             version: HEDGING_PRICE_FEED_VERSION_V1,
@@ -1962,7 +1883,6 @@ mod tests {
             status: HedgingFeedStatusV1::Ok,
         }
     }
-
     fn billing_statement() -> BillingStatementV1 {
         let reference_price = derive_reference_price_decision_v1(
             1_800,
@@ -2005,23 +1925,19 @@ mod tests {
         )
         .expect("billing statement")
     }
-
     fn pop_digest(seed: u8) -> [u8; 32] {
         [seed; 32]
     }
-
     fn pop_scalar(value: u64) -> [u8; 32] {
         let mut bytes = [0u8; 32];
         bytes[..8].copy_from_slice(&value.to_le_bytes());
         bytes
     }
-
     fn pop_nonce(value: u128) -> [u8; 32] {
         let mut bytes = [0u8; 32];
         bytes[..16].copy_from_slice(&value.to_le_bytes());
         bytes
     }
-
     fn unsigned_pop_credential(signing_key: &SigningKey) -> PopCredentialV1 {
         PopCredentialV1 {
             version: POP_CREDENTIAL_VERSION_V1,
@@ -2047,7 +1963,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn ffi_provider_advert_validator_returns_json_outcome() {
         let bytes = fs::read(workspace_fixture(
@@ -2055,7 +1970,6 @@ mod tests {
         ))
         .expect("read advert fixture");
         let label = b"advert.to";
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_provider_advert_json(
@@ -2067,14 +1981,12 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-OK-000")
         );
     }
-
     #[test]
     fn ffi_provider_admission_renewal_validator_returns_json_outcome() {
         let envelope = fs::read(workspace_fixture(
@@ -2087,7 +1999,6 @@ mod tests {
         .expect("read admission renewal fixture");
         let envelope_label = b"envelope.to";
         let renewal_label = b"renewal.to";
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_provider_admission_renewal_json(
@@ -2102,14 +2013,12 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-OK-000")
         );
     }
-
     #[test]
     fn ffi_provider_admission_revocation_validator_returns_json_outcome() {
         let envelope = fs::read(workspace_fixture(
@@ -2122,7 +2031,6 @@ mod tests {
         .expect("read admission revocation fixture");
         let envelope_label = b"envelope.to";
         let revocation_label = b"revocation.to";
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_provider_admission_revocation_json(
@@ -2137,14 +2045,12 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-OK-000")
         );
     }
-
     #[test]
     fn ffi_governance_validator_checks_expected_cid() {
         let bytes = fs::read(workspace_fixture(
@@ -2153,7 +2059,6 @@ mod tests {
         .expect("read governance fixture");
         let label = b"governance.to";
         let cid = b"bafywronggovernancenode";
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_governance_json(
@@ -2166,14 +2071,12 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-GOV-003")
         );
     }
-
     #[test]
     fn ffi_governance_validator_accepts_matching_expected_cid() {
         let bytes = fs::read(workspace_fixture(
@@ -2183,7 +2086,6 @@ mod tests {
         let node: GovernanceLogNodeV1 =
             norito::decode_from_bytes(&bytes).expect("decode governance fixture");
         let label = b"governance.to";
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_governance_json(
@@ -2196,14 +2098,12 @@ mod tests {
                 124,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-OK-000")
         );
     }
-
     #[test]
     fn ffi_governance_validator_rejects_missing_expected_cid() {
         let bytes = fs::read(workspace_fixture(
@@ -2211,7 +2111,6 @@ mod tests {
         ))
         .expect("read governance fixture");
         let label = b"governance.to";
-
         // SAFETY: non-null pointers reference live test vectors; the null CID pointer has
         // zero length and must be rejected before any read.
         let outcome = outcome_from_buffer(unsafe {
@@ -2225,7 +2124,6 @@ mod tests {
                 125,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
@@ -2239,11 +2137,9 @@ mod tests {
             "{outcome:?}"
         );
     }
-
     #[test]
     fn ffi_governance_validators_reject_noncanonical_expected_cid_lengths_before_read() {
         let bytes = [0xA5];
-
         // SAFETY: both calls reject the noncanonical CID length before reading
         // the deliberately null expected-CID pointer.
         let node_outcome = outcome_from_buffer(unsafe {
@@ -2261,7 +2157,6 @@ mod tests {
             node_outcome.get("code").and_then(Value::as_str),
             Some(SFS_FFI_ARGUMENT)
         );
-
         // SAFETY: same as above for the optional block CID.
         let block_outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_governance_dag_block_json(
@@ -2279,12 +2174,10 @@ mod tests {
             Some(SFS_FFI_ARGUMENT)
         );
     }
-
     #[test]
     fn ffi_governance_dag_block_validator_returns_json_outcome() {
         let bytes = [0xA5];
         let label = b"governance-block.to";
-
         // SAFETY: the pointers reference live test arrays for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_governance_dag_block_json(
@@ -2297,7 +2190,6 @@ mod tests {
                 126,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
@@ -2316,7 +2208,6 @@ mod tests {
             Some("governance-block.to")
         );
     }
-
     #[test]
     fn ffi_governance_dag_head_chain_preserves_ordered_block_labels() {
         let head = [0xA5];
@@ -2329,7 +2220,6 @@ mod tests {
             label_ptr: block_label.as_ptr(),
             label_len: block_label.len(),
         }];
-
         // SAFETY: the descriptor and nested pointers reference live test arrays for
         // the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
@@ -2343,7 +2233,6 @@ mod tests {
                 127,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
@@ -2363,11 +2252,9 @@ mod tests {
             Some("governance-block-0.to")
         );
     }
-
     #[test]
     fn ffi_governance_dag_head_chain_rejects_excess_block_descriptors() {
         let head = [0xA5];
-
         // SAFETY: the oversized descriptor count is rejected before the null
         // descriptor pointer is read.
         let outcome = outcome_from_buffer(unsafe {
@@ -2381,14 +2268,12 @@ mod tests {
                 128,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some(SFS_FFI_ARGUMENT)
         );
     }
-
     #[test]
     fn ffi_governance_dag_head_chain_rejects_misaligned_descriptors() {
         let head = [0xA5];
@@ -2402,7 +2287,6 @@ mod tests {
                 .add(1)
                 .cast::<SorafsReferenceFfiInput>()
         };
-
         // SAFETY: the deliberately misaligned pointer is rejected before access.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_governance_dag_head_chain_json(
@@ -2415,7 +2299,6 @@ mod tests {
                 129,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
@@ -2432,7 +2315,6 @@ mod tests {
                 }))
         );
     }
-
     #[test]
     fn ffi_signed_replication_order_validator_returns_json_outcome() {
         let order_bytes = fs::read(workspace_fixture(
@@ -2457,7 +2339,6 @@ mod tests {
         signed_order.signature.signature = signing_key.sign(&payload_bytes).to_bytes().to_vec();
         let bytes = norito::to_bytes(&signed_order).expect("encode signed order");
         let label = b"signed-order.to";
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_signed_replication_order_json(
@@ -2468,14 +2349,12 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-OK-000")
         );
     }
-
     #[test]
     fn ffi_appeal_finance_cancel_asset_lock_validator_returns_json_outcome() {
         let bytes = fs::read(workspace_fixture(
@@ -2483,7 +2362,6 @@ mod tests {
         ))
         .expect("read canonical CancelAssetLock fixture");
         let label = b"cancel_asset_lock_v1.to";
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
@@ -2494,20 +2372,17 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-OK-000")
         );
     }
-
     #[test]
     fn ffi_orderbook_validator_returns_json_outcome() {
         let receipt = orderbook_settlement_receipt();
         let bytes = norito::to_bytes(&receipt).expect("encode settlement receipt");
         let label = b"settlement-receipt.to";
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_orderbook_json(
@@ -2519,14 +2394,12 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-OK-000")
         );
     }
-
     #[test]
     fn ffi_orderbook_validator_rejects_bad_signature_fixture() {
         let payload = fs::read(workspace_fixture(
@@ -2534,7 +2407,6 @@ mod tests {
         ))
         .expect("read bad-signature order request fixture");
         let label = b"order_request_bad_signature_v1.to";
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_orderbook_json(
@@ -2546,7 +2418,6 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
@@ -2570,12 +2441,10 @@ mod tests {
             Some("order_request_bad_signature_v1.to")
         );
     }
-
     #[test]
     fn ffi_orderbook_validator_rejects_retired_runtime_snapshot_selector() {
         let bytes = b"retired runtime snapshot";
         let label = b"orderbook-runtime-snapshot.to";
-
         // SAFETY: the pointers reference live test arrays for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_orderbook_json(
@@ -2587,14 +2456,12 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-FFI-001")
         );
     }
-
     #[test]
     fn ffi_pop_validator_returns_json_outcome() {
         let signing_key = SigningKey::from_bytes(&[0x55; 32]);
@@ -2603,7 +2470,6 @@ mod tests {
                 .expect("sign PoP credential");
         let bytes = norito::to_bytes(&credential).expect("encode PoP credential");
         let label = b"pop-credential.to";
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_pop_json(
@@ -2615,20 +2481,17 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-OK-000")
         );
     }
-
     #[test]
     fn ffi_hedging_validator_returns_json_outcome() {
         let statement = billing_statement();
         let bytes = norito::to_bytes(&statement).expect("encode billing statement");
         let label = b"billing-statement.to";
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_hedging_json(
@@ -2640,18 +2503,15 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-OK-000")
         );
     }
-
     #[test]
     fn ffi_rejects_unknown_hedging_kind() {
         let bytes = b"not norito";
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_hedging_json(
@@ -2663,14 +2523,12 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-FFI-001")
         );
     }
-
     #[test]
     fn ffi_pdp_validator_returns_json_outcome() {
         let commitment = fs::read(workspace_fixture(
@@ -2688,7 +2546,6 @@ mod tests {
         let commitment_label = b"commitment.to";
         let challenge_label = b"challenge.to";
         let proof_label = b"proof.to";
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let commitment_outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_pdp_commitment_json(
@@ -2703,7 +2560,6 @@ mod tests {
             commitment_outcome.get("status").and_then(Value::as_str),
             Some("Ok")
         );
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let challenge_outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_pdp_challenge_json(
@@ -2718,7 +2574,6 @@ mod tests {
             challenge_outcome.get("status").and_then(Value::as_str),
             Some("Ok")
         );
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let commitment_challenge_outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_pdp_commitment_challenge_json(
@@ -2739,7 +2594,6 @@ mod tests {
                 .and_then(Value::as_str),
             Some("Ok")
         );
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let challenge_proof_outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_pdp_challenge_proof_json(
@@ -2760,7 +2614,6 @@ mod tests {
                 .and_then(Value::as_str),
             Some("Ok")
         );
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_pdp_json(
@@ -2779,7 +2632,6 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
@@ -2806,7 +2658,6 @@ mod tests {
             "{outcome:?}"
         );
     }
-
     #[test]
     fn ffi_pdp_proof_validator_rejects_negative_fixture() {
         let proof = fs::read(workspace_fixture(
@@ -2814,7 +2665,6 @@ mod tests {
         ))
         .expect("read negative PDP proof fixture");
         let label = b"missing-signature-proof.to";
-
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_pdp_proof_json(
@@ -2825,7 +2675,6 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
@@ -2836,7 +2685,6 @@ mod tests {
             Some("signature")
         );
     }
-
     #[test]
     fn ffi_bundle_validator_accepts_order_and_proof() {
         let order = fs::read(workspace_fixture(
@@ -2865,19 +2713,16 @@ mod tests {
                 label_len: proof_label.len(),
             },
         ];
-
         // SAFETY: payload descriptors point at live fixture bytes and labels.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_bundle_json(payloads.as_ptr(), payloads.len(), 120, 123)
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-OK-000")
         );
     }
-
     #[test]
     fn ffi_bundle_validator_accepts_pdp_payloads() {
         let order = fs::read(workspace_fixture(
@@ -2930,12 +2775,10 @@ mod tests {
                 label_len: proof_label.len(),
             },
         ];
-
         // SAFETY: payload descriptors point at live fixture bytes and labels.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_bundle_json(payloads.as_ptr(), payloads.len(), 120, 123)
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
@@ -2952,7 +2795,6 @@ mod tests {
             "{outcome:?}"
         );
     }
-
     #[test]
     fn ffi_bundle_validator_accepts_orderbook_payloads() {
         let order = fs::read(workspace_fixture(
@@ -2993,19 +2835,16 @@ mod tests {
                 label_len: receipt_label.len(),
             },
         ];
-
         // SAFETY: payload descriptors point at live fixture bytes and labels.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_bundle_json(payloads.as_ptr(), payloads.len(), 120, 123)
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-OK-000")
         );
     }
-
     #[test]
     fn ffi_rejects_null_non_empty_input() {
         // SAFETY: this intentionally passes a null pointer to validate error mapping.
@@ -3018,18 +2857,15 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-FFI-001")
         );
     }
-
     #[test]
     fn ffi_rejects_retired_and_unknown_repair_kinds() {
         let bytes = b"not norito";
-
         for kind in [7, 8, 999] {
             // SAFETY: the pointer references live test bytes for the duration of the call.
             let outcome = outcome_from_buffer(unsafe {
@@ -3042,7 +2878,6 @@ mod tests {
                     123,
                 )
             });
-
             assert_eq!(
                 outcome.get("status").and_then(Value::as_str),
                 Some("Error"),
@@ -3055,11 +2890,9 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn ffi_rejects_unknown_orderbook_kind() {
         let bytes = b"not norito";
-
         // SAFETY: the pointer references live test bytes for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_orderbook_json(
@@ -3071,18 +2904,15 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-FFI-001")
         );
     }
-
     #[test]
     fn ffi_rejects_unknown_pop_kind() {
         let bytes = b"not norito";
-
         // SAFETY: the pointer references live test bytes for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_pop_json(
@@ -3094,14 +2924,12 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-FFI-001")
         );
     }
-
     #[test]
     fn ffi_rejects_oversized_inputs_before_pointer_access() {
         // SAFETY: the oversized length is rejected before the null pointer can be accessed.
@@ -3114,7 +2942,6 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
@@ -3134,12 +2961,10 @@ mod tests {
                 }))
         );
     }
-
     #[test]
     fn ffi_rejects_non_utf8_and_control_character_labels() {
         let bytes = b"not norito";
         let labels: [&[u8]; 2] = [&[0xFF], b"forged\nlabel.to"];
-
         for label in labels {
             // SAFETY: both pointers reference live test bytes for the duration of the call.
             let outcome = outcome_from_buffer(unsafe {
@@ -3158,7 +2983,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn ffi_rejects_oversized_labels_before_pointer_access() {
         let bytes = b"not norito";
@@ -3172,14 +2996,12 @@ mod tests {
                 123,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-FFI-001")
         );
     }
-
     #[test]
     fn ffi_rejects_oversized_bundle_descriptor_count_before_pointer_access() {
         // SAFETY: the descriptor count is rejected before the null pointer can be accessed.
@@ -3191,14 +3013,12 @@ mod tests {
                 456,
             )
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-FFI-001")
         );
     }
-
     #[test]
     fn ffi_rejects_bundle_aggregate_length_before_payload_pointer_access() {
         let descriptor = SorafsReferenceFfiBundlePayload {
@@ -3208,20 +3028,17 @@ mod tests {
             label_ptr: std::ptr::null(),
             label_len: 0,
         };
-
         // SAFETY: the live descriptor is valid and its aggregate length is rejected before its
         // intentionally null payload pointer can be accessed.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_bundle_json(&descriptor, 1, 123, 456)
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-FFI-001")
         );
     }
-
     #[test]
     fn ffi_rejects_misaligned_bundle_descriptors_before_access() {
         let storage = vec![0u8; mem::size_of::<SorafsReferenceFfiBundlePayload>() + 1];
@@ -3229,12 +3046,10 @@ mod tests {
         // the resulting descriptor pointer before attempting a typed read.
         let misaligned =
             unsafe { storage.as_ptr().add(1) }.cast::<SorafsReferenceFfiBundlePayload>();
-
         // SAFETY: this adversarial call is specifically checking the pre-access alignment guard.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_bundle_json(misaligned, 1, 123, 456)
         });
-
         assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),

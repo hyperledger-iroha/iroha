@@ -30,7 +30,6 @@
 //!   per-value length prefixes; sequence length headers and packed-seq offsets
 //!   stay fixed `u64` in v1, and reserved layout bits are rejected when
 //!   decoding headers.
-
 //!
 //! Helpers
 //! - [`encode_canonical`], [`decode_canonical`], and
@@ -41,9 +40,7 @@
 //!   supplied layout flags. `norito::codec::encode_with_header_flags(value)`
 //!   returns both the bare payload and the recorded flags so callers can persist
 //!   the metadata alongside the bytes without relying on thread-local state.
-
 extern crate self as norito;
-
 use std::{
     alloc::{Layout, alloc, dealloc},
     cell::Cell,
@@ -59,6 +56,10 @@ pub mod core;
 pub mod schema;
 pub mod streaming;
 // Expose heuristics configuration helpers for hosts
+pub use codec::disable_packed_struct_layout;
+#[cfg(feature = "parallel-decode")]
+#[doc(hidden)]
+pub use core::decode_planned_sequence_parallel;
 pub use core::{
     Archived, ArchivedBox, Compression, CompressionConfig, DecodeLimits, Encoder, Error,
     NoritoDeserialize, NoritoSerialize, crc64_fallback, default_encode_flags, from_bytes,
@@ -68,22 +69,15 @@ pub use core::{
         select_layout_flags_for_size_with as select_layout_flags_with,
     },
     to_bytes, to_bytes_auto, to_bytes_in, to_compressed_bytes, with_decode_limits,
+    with_decode_limits_scope,
 };
-
-#[cfg(feature = "parallel-decode")]
-#[doc(hidden)]
-pub use core::decode_planned_sequence_parallel;
 #[doc(hidden)]
 pub use core::{BinarySequenceLayout, SequencePlan, SequenceSpan, plan_binary_sequence};
-
-pub use codec::disable_packed_struct_layout;
-
 struct ArchiveSlice {
     ptr: *mut u8,
     len: usize,
     layout: Option<Layout>,
 }
-
 impl ArchiveSlice {
     fn new_owned(src: &[u8], align: usize) -> Result<Self, Error> {
         let align = align.max(1);
@@ -94,7 +88,6 @@ impl ArchiveSlice {
                 layout: None,
             });
         }
-
         let layout =
             Layout::from_size_align(src.len(), align).map_err(|_| Error::LengthMismatch)?;
         core::reserve_decode_allocation(src.len())?;
@@ -113,7 +106,6 @@ impl ArchiveSlice {
             })
         }
     }
-
     fn new(src: &[u8], align: usize) -> Result<Self, Error> {
         if src.is_empty() {
             Ok(Self {
@@ -131,12 +123,10 @@ impl ArchiveSlice {
             Self::new_owned(src, align)
         }
     }
-
     fn as_slice(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.ptr as *const u8, self.len) }
     }
 }
-
 impl Drop for ArchiveSlice {
     fn drop(&mut self) {
         if let Some(layout) = self.layout {
@@ -146,7 +136,6 @@ impl Drop for ArchiveSlice {
         }
     }
 }
-
 #[doc(hidden)]
 #[inline]
 pub fn debug_trace_enabled() -> bool {
@@ -166,39 +155,33 @@ pub fn debug_trace_enabled() -> bool {
         false
     }
 }
-
 #[cfg(test)]
 mod trace_tests {
-    use std::env;
-
     use super::debug_trace_enabled;
-
+    use std::env;
     #[test]
     fn debug_trace_follows_env_flag() {
         let env_enabled = env::var_os("NORITO_TRACE").is_some();
         assert_eq!(debug_trace_enabled(), env_enabled);
     }
 }
-
 // Re-export selected JSON traits at the crate root for convenience
 pub use self::json::FastJsonWrite;
-
 pub mod yaml;
-
 pub mod derive {
     pub use norito_derive::{
         Decode, Encode, FastJson, FastJsonWrite, JsonDeserialize, JsonSerialize, NoritoDeserialize,
         NoritoSerialize,
     };
 }
-
 pub use derive::*;
-
 pub mod sequential;
-
 /// Bare Norito `Encode` and `Decode` traits used for compact payloads without a
 /// Norito header.
 pub mod codec {
+    pub use super::Error;
+    use super::{NoritoDeserialize, NoritoSerialize, core};
+    pub use crate::derive::{Decode, Encode};
     use std::{
         io::{Read, Write},
         sync::{
@@ -206,16 +189,10 @@ pub mod codec {
             atomic::{AtomicBool, Ordering},
         },
     };
-
-    pub use super::Error;
-    use super::{NoritoDeserialize, NoritoSerialize, core};
-    pub use crate::derive::{Decode, Encode};
-
     // Lightweight telemetry for the generic two-pass `encode_adaptive` path.
     // Separate from the columnar bucket to avoid conflating concerns.
     mod telemetry {
         use std::sync::atomic::{AtomicU64, Ordering};
-
         static CALLS: AtomicU64 = AtomicU64::new(0);
         static REENCODES: AtomicU64 = AtomicU64::new(0);
         static BYTES_ABS_DIFF_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -223,7 +200,6 @@ pub mod codec {
         static PASS1_TIME_NS_TOTAL: AtomicU64 = AtomicU64::new(0);
         #[cfg(feature = "adaptive-telemetry")]
         static PASS2_TIME_NS_TOTAL: AtomicU64 = AtomicU64::new(0);
-
         #[derive(Clone, Copy, Debug)]
         pub struct Snapshot {
             pub calls: u64,
@@ -234,7 +210,6 @@ pub mod codec {
             #[cfg(feature = "adaptive-telemetry")]
             pub pass2_time_ns_total: u64,
         }
-
         #[inline]
         pub fn record(
             call_reencoded: bool,
@@ -255,7 +230,6 @@ pub mod codec {
                 PASS2_TIME_NS_TOTAL.fetch_add(_pass2_ns, Ordering::Relaxed);
             }
         }
-
         pub fn snapshot() -> Snapshot {
             Snapshot {
                 calls: CALLS.load(Ordering::Relaxed),
@@ -267,7 +241,6 @@ pub mod codec {
                 pass2_time_ns_total: PASS2_TIME_NS_TOTAL.load(Ordering::Relaxed),
             }
         }
-
         #[allow(dead_code)]
         pub fn reset() {
             CALLS.store(0, Ordering::Relaxed);
@@ -280,12 +253,10 @@ pub mod codec {
             }
         }
     }
-
     struct CountingWriter<'a, W: Write> {
         inner: &'a mut W,
         bytes_written: usize,
     }
-
     impl<'a, W: Write> CountingWriter<'a, W> {
         fn new(inner: &'a mut W) -> Self {
             Self {
@@ -293,24 +264,20 @@ pub mod codec {
                 bytes_written: 0,
             }
         }
-
         fn bytes_written(&self) -> usize {
             self.bytes_written
         }
     }
-
     impl<W: Write> Write for CountingWriter<'_, W> {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
             let written = self.inner.write(buf)?;
             self.bytes_written = self.bytes_written.saturating_add(written);
             Ok(written)
         }
-
         fn flush(&mut self) -> std::io::Result<()> {
             self.inner.flush()
         }
     }
-
     /// Encode values into bytes using Norito.
     pub trait Encode: NoritoSerialize + Sized {
         /// Encode `self` into a new `Vec<u8>` without compression.
@@ -319,12 +286,10 @@ pub mod codec {
         fn encode(&self) -> Vec<u8> {
             encode_adaptive(self)
         }
-
         /// Encode `self` into the given writer without compression.
         fn encode_to<W: Write>(&self, writer: &mut W) {
             encode_adaptive_into(self, writer).expect("encoding should not fail");
         }
-
         /// Return the encoded length for `self` without allocating a buffer.
         fn encoded_len(&self) -> usize {
             if let Some(len) = self.encoded_len_exact() {
@@ -334,13 +299,10 @@ pub mod codec {
             encode_adaptive_into(self, &mut sink).expect("encoding should not fail")
         }
     }
-
     impl<T: NoritoSerialize + Sized> Encode for T {}
-
     /// Input stream for decoding.
     pub trait Input: Read {}
     impl<T: Read> Input for T {}
-
     /// Decode values from a byte stream produced by [`Encode`].
     pub trait Decode: for<'de> NoritoDeserialize<'de> + Sized {
         /// Attempt to decode `Self` from the given input.
@@ -352,13 +314,9 @@ pub mod codec {
             decode_adaptive::<Self>(&buf)
         }
     }
-
     impl<T> Decode for T where T: for<'de> NoritoDeserialize<'de> + Sized {}
-
     // Keep only the blanket Decode impl; container specializations are unnecessary
-
     static MANUAL_DISABLE_PACKED_STRUCT: AtomicBool = AtomicBool::new(false);
-
     fn packed_struct_disabled() -> bool {
         if MANUAL_DISABLE_PACKED_STRUCT.load(Ordering::Relaxed) {
             #[cfg(debug_assertions)]
@@ -392,7 +350,6 @@ pub mod codec {
             false
         }
     }
-
     /// Permanently disables packed-struct layout for the current process.
     ///
     /// Intended for debug/testing scenarios that require forcing AoS layouts.
@@ -406,12 +363,10 @@ pub mod codec {
             let _ = packed_struct_disabled();
         });
     }
-
     /// Bare encode using the fixed v1 layout flags.
     pub fn encode_adaptive<T: NoritoSerialize>(value: &T) -> Vec<u8> {
         encode_adaptive_with_flags(value, core::default_encode_flags())
     }
-
     fn encode_adaptive_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let encode_guard = core::EncodeContextGuard::enter();
         core::validate_header_flags(flags).expect("adaptive encode flags must be supported");
@@ -420,7 +375,6 @@ pub mod codec {
         if crate::debug_trace_enabled() {
             eprintln!("norito.codec.encode_adaptive: flags=0x{flags:02x}");
         }
-
         let mut payload = Vec::new();
         #[cfg(feature = "adaptive-telemetry")]
         let __t0 = std::time::Instant::now();
@@ -433,11 +387,9 @@ pub mod codec {
         let __pass1_ns = __t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         #[cfg(not(feature = "adaptive-telemetry"))]
         let __pass1_ns: u64 = 0;
-
         let fixed_offsets_used = core::fixed_offsets_used();
         let field_bitset_used = core::field_bitset_used();
         let compact_len_used = core::compact_len_used();
-
         {
             telemetry::record(false, payload.len(), payload.len(), __pass1_ns, 0);
             #[cfg(feature = "adaptive-telemetry-log")]
@@ -447,9 +399,7 @@ pub mod codec {
                 __pass1_ns
             );
         }
-
         drop(encode_guard);
-
         let final_flags = core::finalized_encode_flags(
             flags,
             fixed_offsets_used,
@@ -463,7 +413,6 @@ pub mod codec {
         core::record_last_header_flags(final_flags);
         payload
     }
-
     /// Bare encode into the provided writer using the fixed v1 layout flags.
     ///
     /// Returns the number of payload bytes written.
@@ -473,7 +422,6 @@ pub mod codec {
     ) -> Result<usize, Error> {
         encode_adaptive_into_with_flags(value, writer, core::default_encode_flags())
     }
-
     fn encode_adaptive_into_with_flags<T: NoritoSerialize, W: Write>(
         value: &T,
         writer: &mut W,
@@ -486,25 +434,22 @@ pub mod codec {
         if crate::debug_trace_enabled() {
             eprintln!("norito.codec.encode_adaptive_into: flags=0x{flags:02x}");
         }
-
         #[cfg(feature = "adaptive-telemetry")]
         let __t0 = std::time::Instant::now();
         let mut counting = CountingWriter::new(writer);
         {
             let _fg = core::DecodeFlagsGuard::enter(flags);
             let mut encoder = core::Encoder::new(&mut counting);
-            NoritoSerialize::serialize(value, &mut encoder).expect("encode pass 1");
+            NoritoSerialize::serialize(value, &mut encoder)?;
         }
         #[cfg(feature = "adaptive-telemetry")]
         let __pass1_ns = __t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         #[cfg(not(feature = "adaptive-telemetry"))]
         let __pass1_ns: u64 = 0;
-
         let payload_len = counting.bytes_written();
         let fixed_offsets_used = core::fixed_offsets_used();
         let field_bitset_used = core::field_bitset_used();
         let compact_len_used = core::compact_len_used();
-
         {
             telemetry::record(false, payload_len, payload_len, __pass1_ns, 0);
             #[cfg(feature = "adaptive-telemetry-log")]
@@ -513,9 +458,7 @@ pub mod codec {
                 payload_len, __pass1_ns
             );
         }
-
         drop(encode_guard);
-
         let final_flags = core::finalized_encode_flags(
             flags,
             fixed_offsets_used,
@@ -529,20 +472,16 @@ pub mod codec {
         core::record_last_header_flags(final_flags);
         Ok(payload_len)
     }
-
     #[cfg(test)]
     #[allow(clippy::items_after_test_module)]
     mod encode_tests {
         use super::Encode;
         use crate::{NoritoDeserialize, NoritoSerialize};
         use std::sync::atomic::{AtomicUsize, Ordering};
-
         static HINT_CALLS: AtomicUsize = AtomicUsize::new(0);
         static EXACT_CALLS: AtomicUsize = AtomicUsize::new(0);
-
         #[derive(Clone, Copy)]
         struct Hinted(u8);
-
         impl NoritoSerialize for Hinted {
             fn serialize(
                 &self,
@@ -551,19 +490,15 @@ pub mod codec {
                 encoder.write_all(&[self.0])?;
                 Ok(())
             }
-
             fn encoded_len_hint(&self) -> Option<usize> {
                 HINT_CALLS.fetch_add(1, Ordering::Relaxed);
                 Some(1)
             }
-
             fn encoded_len_exact(&self) -> Option<usize> {
                 None
             }
         }
-
         struct ExactLenOnly(u8);
-
         impl NoritoSerialize for ExactLenOnly {
             fn serialize(
                 &self,
@@ -572,19 +507,27 @@ pub mod codec {
                 encoder.write_all(&[self.0])?;
                 Ok(())
             }
-
             fn encoded_len_exact(&self) -> Option<usize> {
                 EXACT_CALLS.fetch_add(1, Ordering::Relaxed);
                 Some(1)
             }
         }
-
+        struct AlwaysFails;
+        impl NoritoSerialize for AlwaysFails {
+            fn serialize(
+                &self,
+                _encoder: &mut crate::core::Encoder<'_>,
+            ) -> Result<(), crate::Error> {
+                Err(crate::Error::Message(
+                    "intentional serializer failure".into(),
+                ))
+            }
+        }
         #[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
         struct AdaptiveFixedFields {
             tag: u8,
             digest: [u8; 32],
         }
-
         #[test]
         fn encode_to_matches_encode() {
             let value = vec![1u8, 2, 3, 4, 5];
@@ -593,14 +536,12 @@ pub mod codec {
             value.encode_to(&mut out);
             assert_eq!(bytes, out);
         }
-
         #[test]
         fn encoded_len_matches_encoded_bytes() {
             let value = (42u32, vec![7u8, 8, 9]);
             let bytes = value.encode();
             assert_eq!(value.encoded_len(), bytes.len());
         }
-
         #[test]
         fn encoded_len_uses_exact_len_when_available() {
             EXACT_CALLS.store(0, Ordering::Relaxed);
@@ -608,25 +549,30 @@ pub mod codec {
             assert_eq!(value.encoded_len(), 1);
             assert_eq!(EXACT_CALLS.load(Ordering::Relaxed), 1);
         }
-
         #[test]
-        fn seq_encodes_with_len_hints() {
+        fn seq_encoding_does_not_trust_len_hints() {
             HINT_CALLS.store(0, Ordering::Relaxed);
             let items = vec![Hinted(1), Hinted(2), Hinted(3)];
-            let _ = items.encode();
-            assert!(HINT_CALLS.load(Ordering::Relaxed) > 0);
+            assert_eq!(items.encode().last(), Some(&3));
+            assert_eq!(HINT_CALLS.load(Ordering::Relaxed), 0);
         }
-
+        #[test]
+        fn adaptive_writer_propagates_serializer_errors() {
+            let mut out = Vec::new();
+            let error = super::encode_adaptive_into(&AlwaysFails, &mut out)
+                .expect_err("fallible writer API must propagate serializer errors");
+            assert!(
+                matches!(error, crate::Error::Message(message) if message == "intentional serializer failure")
+            );
+            assert!(out.is_empty());
+        }
         #[test]
         fn take_last_encode_flags_reports_and_clears_adaptive_flags() {
             let _ = super::take_last_encode_flags();
-
             let _ = vec![1u8, 2, 3].encode();
-
             assert!(super::take_last_encode_flags().is_some());
             assert!(super::take_last_encode_flags().is_none());
         }
-
         #[test]
         fn adaptive_field_bitset_paths_retain_required_header_flags() {
             let value = AdaptiveFixedFields {
@@ -636,11 +582,9 @@ pub mod codec {
             let requested = crate::core::header_flags::FIELD_BITSET
                 | crate::core::header_flags::PACKED_STRUCT
                 | crate::core::header_flags::COMPACT_LEN;
-
             let payload = super::encode_adaptive_with_flags(&value, requested);
             let flags =
                 super::take_last_encode_flags().expect("adaptive vector encode records flags");
-
             let mut streamed_payload = Vec::new();
             let written =
                 super::encode_adaptive_into_with_flags(&value, &mut streamed_payload, requested)
@@ -650,7 +594,6 @@ pub mod codec {
                 super::take_last_encode_flags().expect("adaptive stream encode records flags");
             assert_eq!(streamed_payload, payload);
             assert_eq!(streamed_flags, flags);
-
             for (label, payload, flags) in [
                 ("vector", payload, flags),
                 ("stream", streamed_payload, streamed_flags),
@@ -672,7 +615,6 @@ pub mod codec {
             }
         }
     }
-
     /// Encode `value` and return both the bare payload and the exact header flags required
     /// to frame it for header-based decoding.
     pub fn encode_with_header_flags<T: NoritoSerialize>(value: &T) -> (Vec<u8>, u8) {
@@ -680,12 +622,10 @@ pub mod codec {
             core::encode_bare_with_flags(value).expect("encode_with_header_flags should succeed");
         (payload, flags)
     }
-
     /// Return and clear the header flags recorded by the most recent framed encode on this thread.
     pub fn take_last_encode_flags() -> Option<u8> {
         core::take_last_header_flags()
     }
-
     /// Bare decode using the fixed v1 layout flags.
     pub fn decode_adaptive<T>(bytes: &[u8]) -> Result<T, Error>
     where
@@ -716,7 +656,6 @@ pub mod codec {
             let archived = unsafe { &*(buf.as_ptr() as *const core::Archived<T>) };
             super::guarded_try_deserialize(|| <T as NoritoDeserialize>::try_deserialize(archived))
         }
-
         let flags = core::default_encode_flags();
         if crate::debug_trace_enabled() {
             eprintln!(
@@ -726,15 +665,12 @@ pub mod codec {
                 bytes.as_ptr()
             );
         }
-
         let min_size = core::archived_payload_size::<T>();
         let logical_len = bytes.len();
         if min_size > 0 && logical_len == 0 {
             return Err(core::Error::LengthMismatch);
         }
-
         let align = core::archived_payload_align::<T>();
-
         // If the payload is shorter than the established storage footprint,
         // pad temporary storage while keeping the logical length constrained
         // to the original slice for bounds checks during decode.
@@ -750,7 +686,6 @@ pub mod codec {
             _owned_pad = None;
             backing = bytes;
         }
-
         let aligned = match super::ArchiveSlice::new(backing, align) {
             Ok(slice) => slice,
             Err(err) => {
@@ -760,10 +695,8 @@ pub mod codec {
                 return Err(err);
             }
         };
-
         let aligned_slice = aligned.as_slice();
         let _reset = DecodeResetGuard;
-
         if crate::debug_trace_enabled() {
             if align <= 1 || aligned_slice.as_ptr() == bytes.as_ptr() {
                 eprintln!("norito.codec.decode_adaptive: aligned fast-path");
@@ -774,10 +707,8 @@ pub mod codec {
                 );
             }
         }
-
         decode_from_aligned::<T>(aligned_slice, flags, logical_len)
     }
-
     /// Bare decode from an exact slice using a type-provided slice decoder.
     ///
     /// Unlike [`Decode::decode`], this avoids copying when the caller already
@@ -795,7 +726,6 @@ pub mod codec {
             decode_exact_from_slice_under_active_limits(bytes)
         })
     }
-
     /// Bare decode from an exact slice under additional schema-specific limits.
     ///
     /// The caller-provided limits compose with the payload-derived defaults by
@@ -817,7 +747,6 @@ pub mod codec {
             })
         })
     }
-
     fn decode_exact_from_slice_under_active_limits<T>(bytes: &[u8]) -> Result<T, Error>
     where
         T: for<'de> NoritoDeserialize<'de> + for<'de> core::DecodeFromSlice<'de>,
@@ -828,15 +757,12 @@ pub mod codec {
         }
         Ok(value)
     }
-
     struct DecodeResetGuard;
-
     impl Drop for DecodeResetGuard {
         fn drop(&mut self) {
             crate::core::reset_decode_state();
         }
     }
-
     /// Decode values ensuring the input contains no trailing bytes.
     pub trait DecodeAll: Decode {
         /// Decode `Self` from `input` verifying that the entire stream is consumed.
@@ -847,20 +773,16 @@ pub mod codec {
             <Self as Decode>::decode(input)
         }
     }
-
     impl<T: Decode> DecodeAll for T {}
-
     /// Return a snapshot of the codec two-pass adaptive metrics.
     pub fn adaptive_metrics_snapshot() -> telemetry::Snapshot {
         telemetry::snapshot()
     }
-
     /// Reset codec adaptive metrics (intended for tests/benches).
     #[allow(dead_code)]
     pub fn adaptive_metrics_reset() {
         telemetry::reset()
     }
-
     /// JSON: export codec two-pass adaptive metrics as a compact JSON value.
     pub fn adaptive_metrics_json_value() -> crate::json::Value {
         let s = adaptive_metrics_snapshot();
@@ -884,13 +806,11 @@ pub mod codec {
         }
         crate::json::Value::Object(map)
     }
-
     /// JSON: export codec two-pass adaptive metrics as a compact JSON string.
     pub fn adaptive_metrics_json_string() -> String {
         let v = adaptive_metrics_json_value();
         crate::json::to_string(&v).unwrap_or_else(|_| String::from("{}"))
     }
-
     /// JSON: compute fieldwise delta between two codec telemetry JSON maps.
     pub fn adaptive_metrics_delta_json(
         prev: &crate::json::Value,
@@ -919,7 +839,6 @@ pub mod codec {
         Value::Object(out)
     }
 }
-
 /// Telemetry helpers aggregating Norito metrics for easy ingestion.
 pub mod telemetry {
     /// Reset all Norito telemetry buckets (columnar, codec, compression).
@@ -933,7 +852,6 @@ pub mod telemetry {
         }
         crate::core::compression_metrics_reset();
     }
-
     /// Build a compact JSON value aggregating columnar, codec, and compression telemetry.
     pub fn snapshot_json_value() -> crate::json::Value {
         let mut root = crate::json::Map::new();
@@ -950,13 +868,11 @@ pub mod telemetry {
         );
         crate::json::Value::Object(root)
     }
-
     /// Serialize the aggregated telemetry snapshot into a compact JSON string.
     pub fn snapshot_json_string() -> String {
         let v = snapshot_json_value();
         crate::json::to_string(&v).unwrap_or_else(|_| String::from("{}"))
     }
-
     /// JSON: compute fieldwise delta for the aggregated telemetry map.
     pub fn snapshot_delta_json(
         prev: &crate::json::Value,
@@ -991,7 +907,6 @@ pub mod telemetry {
         Value::Object(out)
     }
 }
-
 /// Minimal JSON serialization/deserialization helpers without `serde`.
 ///
 /// This module implements a compact JSON writer and a simple, recursive-descent
@@ -1017,13 +932,11 @@ pub mod telemetry {
 ///   benchmarking scenarios.
 pub mod json {
     use std::cell::Cell;
-
     use url::Url;
-
+    mod exact_string;
     pub use super::{
         JsonDeserialize as Deserialize, JsonDeserialize, JsonSerialize as Serialize, JsonSerialize,
     };
-
     /// Maximum structural nesting accepted while constructing a JSON [`Value`].
     ///
     /// A Kotodama boundary value may use the complete 256-level public type
@@ -1031,13 +944,10 @@ pub mod json {
     /// level covers that boundary envelope without relaxing the 256-level guard
     /// used by recursively owned typed decoders.
     pub const MAX_JSON_VALUE_NESTING_DEPTH: usize = crate::core::MAX_OWNED_VALUE_DECODE_DEPTH + 1;
-
     thread_local! {
         static OWNED_VALUE_DECODE_DEPTH: Cell<usize> = const { Cell::new(0) };
     }
-
     struct OwnedValueDecodeDepthGuard;
-
     impl OwnedValueDecodeDepthGuard {
         fn enter() -> Result<Self, Error> {
             OWNED_VALUE_DECODE_DEPTH.with(|depth| {
@@ -1054,7 +964,6 @@ pub mod json {
             })
         }
     }
-
     impl Drop for OwnedValueDecodeDepthGuard {
         fn drop(&mut self) {
             OWNED_VALUE_DECODE_DEPTH.with(|depth| {
@@ -1063,13 +972,11 @@ pub mod json {
             });
         }
     }
-
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum UnexpectedToken {
         Char(char),
         Eof,
     }
-
     impl std::fmt::Display for UnexpectedToken {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
@@ -1078,7 +985,6 @@ pub mod json {
             }
         }
     }
-
     // Dedicated error type for Norito JSON helpers (parser/writer/tape).
     #[derive(Debug, thiserror::Error, Clone)]
     pub enum Error {
@@ -1284,6 +1190,12 @@ pub mod json {
             limit: usize,
             context: &'static str,
         },
+        /// An active decode scope rejected allocation or structural work.
+        #[error("JSON decode resource limit exceeded")]
+        DecodeResourceLimit,
+        /// A fallible allocation needed by the JSON decoder failed.
+        #[error("JSON decode allocation failed")]
+        AllocationFailed,
         #[error("invalid utf8")]
         InvalidUtf8,
         #[error("{0}")]
@@ -1296,20 +1208,61 @@ pub mod json {
                 field: field.into(),
             }
         }
-
         #[inline]
         pub fn duplicate_field(field: impl Into<String>) -> Self {
             Self::DuplicateField {
                 field: field.into(),
             }
         }
-
         #[inline]
         pub fn unknown_field(field: impl Into<String>) -> Self {
             Self::UnknownField {
                 field: field.into(),
             }
         }
+        /// Return whether decoding stopped at a caller-provided resource bound.
+        #[doc(hidden)]
+        #[must_use]
+        pub const fn is_decode_resource_limit(&self) -> bool {
+            matches!(
+                self,
+                Self::DecodeResourceLimit
+                    | Self::AllocationFailed
+                    | Self::NestingDepthExceeded { .. }
+            )
+        }
+        /// Convert a core decode-budget failure without copying its diagnostics.
+        #[doc(hidden)]
+        pub fn from_decode_resource(error: crate::core::Error) -> Self {
+            if error.is_decode_resource_limit() {
+                Self::DecodeResourceLimit
+            } else {
+                Self::AllocationFailed
+            }
+        }
+    }
+    mod bounded;
+    mod canonical_base64;
+    mod validated;
+    pub use bounded::{
+        BoundedJsonError, FastJsonWrite, JsonWriteSink, to_json_bounded, to_json_bounded_boxed,
+        write_json_display_to, write_json_string_to, write_json_unbounded,
+    };
+    #[doc(hidden)]
+    pub use canonical_base64::{
+        write_bare_norito_base64_json, write_bare_norito_base64_json_to, write_base64_json,
+        write_base64_json_to, write_canonical_base64_json, write_canonical_base64_json_to,
+        write_with_unbounded_sink,
+    };
+    #[doc(hidden)]
+    pub use validated::write_validated_json_to;
+    /// Stream bytes as one uppercase-hex JSON string through a checked sink.
+    #[doc(hidden)]
+    pub fn write_upper_hex_json_string_to(
+        bytes: &[u8],
+        output: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        bounded::write_hex_to(bytes, output)
     }
     impl From<String> for Error {
         fn from(s: String) -> Self {
@@ -1329,25 +1282,20 @@ pub mod json {
     pub mod value {
         pub use super::RawValue;
         use super::{Error, Value, parse_value, to_json};
-
         pub fn to_raw_value(value: &Value) -> Result<Box<RawValue>, Error> {
             let json = to_json(value)?;
             Ok(Box::new(RawValue::from_string(json)))
         }
-
         pub fn from_raw_value(raw: &RawValue) -> Result<Value, Error> {
             parse_value(raw.get())
         }
-
         pub fn from_value<T: super::JsonDeserialize>(value: Value) -> Result<T, Error> {
             super::from_value(value)
         }
-
         pub fn to_value<T: super::JsonSerialize>(value: &T) -> Result<Value, Error> {
             super::to_value(value)
         }
     }
-
     // Native, serde-free JSON types and helpers
     #[inline]
     pub(crate) fn pos_from_offset(s: &str, pos: usize) -> (usize, usize, usize) {
@@ -1367,11 +1315,9 @@ pub mod json {
         (pos, line, col)
     }
     pub mod native {
+        use super::ValueIndex;
         use core::mem;
         use std::{collections::BTreeMap, ops::Index};
-
-        use super::ValueIndex;
-
         #[derive(Debug, Clone, Copy)]
         pub enum Number {
             I64(i64),
@@ -1423,7 +1369,6 @@ pub mod json {
                 Number::F64(v)
             }
         }
-
         impl PartialEq for Number {
             fn eq(&self, other: &Self) -> bool {
                 match (self, other) {
@@ -1439,9 +1384,7 @@ pub mod json {
                 }
             }
         }
-
         pub type Map = BTreeMap<String, Value>;
-
         fn decode_pointer_segment(segment: &str) -> Option<String> {
             if !segment.contains('~') {
                 return Some(segment.to_owned());
@@ -1461,7 +1404,6 @@ pub mod json {
             }
             Some(out)
         }
-
         /// One owned native JSON value.
         ///
         /// Parsing and parse-error cleanup are iterative, but the public
@@ -1479,9 +1421,7 @@ pub mod json {
             Array(Vec<Value>),
             Object(Map),
         }
-
         impl Eq for Value {}
-
         impl Value {
             pub fn is_null(&self) -> bool {
                 matches!(self, Value::Null)
@@ -1626,7 +1566,6 @@ pub mod json {
                 mem::replace(self, Value::Null)
             }
         }
-
         impl From<bool> for Value {
             fn from(v: bool) -> Self {
                 Value::Bool(v)
@@ -1702,13 +1641,11 @@ pub mod json {
                 Value::Array(v)
             }
         }
-
         impl From<Map> for Value {
             fn from(map: Map) -> Self {
                 Value::Object(map)
             }
         }
-
         static NULL: Value = Value::Null;
         impl Index<&str> for Value {
             type Output = Value;
@@ -1731,12 +1668,10 @@ pub mod json {
             }
         }
     }
-
     pub trait ValueIndex {
         fn index_into<'a>(&self, value: &'a Value) -> Option<&'a Value>;
         fn index_into_mut<'a>(&self, value: &'a mut Value) -> Option<&'a mut Value>;
     }
-
     impl ValueIndex for &str {
         fn index_into<'a>(&self, value: &'a Value) -> Option<&'a Value> {
             if let Value::Object(map) = value {
@@ -1745,7 +1680,6 @@ pub mod json {
                 None
             }
         }
-
         fn index_into_mut<'a>(&self, value: &'a mut Value) -> Option<&'a mut Value> {
             if let Value::Object(map) = value {
                 map.get_mut(*self)
@@ -1754,7 +1688,6 @@ pub mod json {
             }
         }
     }
-
     impl ValueIndex for String {
         fn index_into<'a>(&self, value: &'a Value) -> Option<&'a Value> {
             if let Value::Object(map) = value {
@@ -1763,7 +1696,6 @@ pub mod json {
                 None
             }
         }
-
         fn index_into_mut<'a>(&self, value: &'a mut Value) -> Option<&'a mut Value> {
             if let Value::Object(map) = value {
                 map.get_mut(self.as_str())
@@ -1772,7 +1704,6 @@ pub mod json {
             }
         }
     }
-
     impl ValueIndex for usize {
         fn index_into<'a>(&self, value: &'a Value) -> Option<&'a Value> {
             if let Value::Array(arr) = value {
@@ -1781,7 +1712,6 @@ pub mod json {
                 None
             }
         }
-
         fn index_into_mut<'a>(&self, value: &'a mut Value) -> Option<&'a mut Value> {
             if let Value::Array(arr) = value {
                 arr.get_mut(*self)
@@ -1790,11 +1720,9 @@ pub mod json {
             }
         }
     }
-
     pub type Map = native::Map;
     pub type Number = native::Number;
     pub type Value = native::Value;
-
     #[macro_export]
     macro_rules! json {
         (null) => { $crate::json::Value::Null };
@@ -1814,27 +1742,21 @@ pub mod json {
             }
         }};
     }
-
     mod schema_support {
+        use super::{JsonSerialize, Map, Number, Value};
         use core::{any::TypeId, convert::TryFrom};
-        use std::collections::{BTreeMap, btree_map::Entry as BTreeEntry};
-
         use iroha_schema::{
             ArrayMeta, BitmapMask, BitmapMeta, EnumMeta, EnumVariant, FixedMeta, FloatMode, Ident,
             IntMode, IntoSchema, MapMeta, MetaMap, MetaMapEntry, Metadata, NamedFieldsMeta,
             ResultMeta, TypeId as SchemaTypeId, UnnamedFieldsMeta,
         };
-
-        use super::{JsonSerialize, Map, Number, Value};
-
+        use std::collections::{BTreeMap, btree_map::Entry as BTreeEntry};
         type EntryMap = BTreeMap<TypeId, MetaMapEntry>;
-
         impl JsonSerialize for MetaMap {
             fn json_serialize(&self, out: &mut String) {
                 let entries: EntryMap = self.clone().into_iter().collect();
                 let mut sorted: BTreeMap<String, Value> = BTreeMap::new();
                 let mut duplicates: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-
                 for entry in entries.values() {
                     let value = metadata_to_value(&entry.metadata, &entries);
                     match sorted.entry(entry.type_name.clone()) {
@@ -1851,12 +1773,10 @@ pub mod json {
                         }
                     }
                 }
-
                 assert!(
                     duplicates.is_empty(),
                     "Duplicate type names: {duplicates:#?}"
                 );
-
                 let mut map = Map::new();
                 for (type_name, value) in sorted {
                     map.insert(type_name, value);
@@ -1864,7 +1784,6 @@ pub mod json {
                 Value::Object(map).json_serialize(out);
             }
         }
-
         fn metadata_to_value(meta: &Metadata, entries: &EntryMap) -> Value {
             match meta {
                 Metadata::String => {
@@ -1907,7 +1826,6 @@ pub mod json {
                 }
             }
         }
-
         fn lookup(entries: &EntryMap, type_id: TypeId, context: &'static str) -> String {
             entries
                 .get(&type_id)
@@ -1916,7 +1834,6 @@ pub mod json {
                     panic!("Failed to find type id `{type_id:?}` while serializing {context}")
                 })
         }
-
         fn tuple_metadata_to_value(meta: &UnnamedFieldsMeta, entries: &EntryMap) -> Value {
             match meta.types.as_slice() {
                 [] => Value::Null,
@@ -1930,7 +1847,6 @@ pub mod json {
                 }
             }
         }
-
         fn struct_fields_to_value(meta: &NamedFieldsMeta, entries: &EntryMap) -> Value {
             let mut out = Vec::with_capacity(meta.declarations.len());
             for decl in &meta.declarations {
@@ -1944,7 +1860,6 @@ pub mod json {
             }
             Value::Array(out)
         }
-
         fn enum_variants_to_value(meta: &EnumMeta, entries: &EntryMap) -> Value {
             let mut out = Vec::with_capacity(meta.variants.len());
             for EnumVariant {
@@ -1969,7 +1884,6 @@ pub mod json {
             }
             Value::Array(out)
         }
-
         fn fixed_meta_to_value(meta: &FixedMeta, entries: &EntryMap) -> Value {
             let mut obj = Map::new();
             obj.insert(
@@ -1982,7 +1896,6 @@ pub mod json {
             );
             Value::Object(obj)
         }
-
         fn array_meta_to_value(meta: &ArrayMeta, entries: &EntryMap) -> Value {
             let mut obj = Map::new();
             obj.insert(
@@ -1992,7 +1905,6 @@ pub mod json {
             obj.insert("len".to_owned(), u128_to_value(meta.len));
             Value::Object(obj)
         }
-
         fn map_meta_to_value(meta: &MapMeta, entries: &EntryMap) -> Value {
             let mut obj = Map::new();
             obj.insert(
@@ -2005,7 +1917,6 @@ pub mod json {
             );
             Value::Object(obj)
         }
-
         fn result_meta_to_value(meta: &ResultMeta, entries: &EntryMap) -> Value {
             let mut obj = Map::new();
             obj.insert(
@@ -2018,7 +1929,6 @@ pub mod json {
             );
             Value::Object(obj)
         }
-
         fn bitmap_meta_to_value(meta: &BitmapMeta, entries: &EntryMap) -> Value {
             let mut obj = Map::new();
             obj.insert(
@@ -2028,7 +1938,6 @@ pub mod json {
             obj.insert("masks".to_owned(), bitmap_masks_to_value(&meta.masks));
             Value::Object(obj)
         }
-
         fn bitmap_masks_to_value(masks: &[BitmapMask]) -> Value {
             let mut out = Vec::with_capacity(masks.len());
             for mask in masks {
@@ -2039,42 +1948,35 @@ pub mod json {
             }
             Value::Array(out)
         }
-
         fn int_mode_to_value(mode: IntMode) -> Value {
             match mode {
                 IntMode::FixedWidth => Value::String("FixedWidth".to_owned()),
                 IntMode::Compact => Value::String("Compact".to_owned()),
             }
         }
-
         fn float_mode_to_value(mode: FloatMode) -> Value {
             match mode {
                 FloatMode::Binary32 => Value::String("Binary32".to_owned()),
                 FloatMode::Binary64 => Value::String("Binary64".to_owned()),
             }
         }
-
         #[inline]
         fn type_name_of<T>() -> Ident {
             core::any::type_name::<T>().to_owned()
         }
-
         impl SchemaTypeId for Number {
             fn id() -> Ident {
                 type_name_of::<Self>()
             }
         }
-
         impl IntoSchema for Number {
             fn type_name() -> Ident {
                 type_name_of::<Self>()
             }
-
             fn update_schema_map(map: &mut MetaMap) {
                 if map.contains_key::<Self>() {
                     return;
                 }
-
                 let variants = vec![
                     EnumVariant {
                         tag: "I64".to_owned(),
@@ -2092,31 +1994,25 @@ pub mod json {
                         ty: Some(TypeId::of::<f64>()),
                     },
                 ];
-
                 map.insert::<Self>(Metadata::Enum(EnumMeta { variants }));
-
                 <i64 as IntoSchema>::update_schema_map(map);
                 <u64 as IntoSchema>::update_schema_map(map);
                 <f64 as IntoSchema>::update_schema_map(map);
             }
         }
-
         impl SchemaTypeId for Value {
             fn id() -> Ident {
                 type_name_of::<Self>()
             }
         }
-
         impl IntoSchema for Value {
             fn type_name() -> Ident {
                 type_name_of::<Self>()
             }
-
             fn update_schema_map(map: &mut MetaMap) {
                 if map.contains_key::<Self>() {
                     return;
                 }
-
                 let variants = vec![
                     EnumVariant {
                         tag: "Null".to_owned(),
@@ -2149,9 +2045,7 @@ pub mod json {
                         ty: Some(TypeId::of::<Map>()),
                     },
                 ];
-
                 map.insert::<Self>(Metadata::Enum(EnumMeta { variants }));
-
                 <bool as IntoSchema>::update_schema_map(map);
                 <Number as IntoSchema>::update_schema_map(map);
                 <String as IntoSchema>::update_schema_map(map);
@@ -2159,21 +2053,18 @@ pub mod json {
                 <std::collections::BTreeMap<String, Value> as IntoSchema>::update_schema_map(map);
             }
         }
-
         fn u128_to_value(len: u128) -> Value {
             match u64::try_from(len) {
                 Ok(v) => Value::from(v),
                 Err(_) => Value::String(len.to_string()),
             }
         }
-
         fn single_entry(key: &str, value: Value) -> Value {
             let mut map = Map::new();
             map.insert(key.to_owned(), value);
             Value::Object(map)
         }
     }
-
     /// Compute a compile-time key hash for JSON object field dispatch.
     ///
     /// The hash function mirrors `TapeWalker::read_key_hash` on plain ASCII keys
@@ -2231,7 +2122,6 @@ pub mod json {
             h
         }
     }
-
     #[inline]
     fn write_f64_json(x: f64, out: &mut String) {
         if !x.is_finite() {
@@ -2254,11 +2144,9 @@ pub mod json {
             out.push_str(formatted);
         }
     }
-
     // Native variants for Value
     fn write_value_to_string(v: &Value, out: &mut String, pretty: bool, depth: usize) {
         use native::Value as V;
-
         enum Task<'a> {
             Value(&'a Value, usize),
             Array {
@@ -2272,14 +2160,12 @@ pub mod json {
                 depth: usize,
             },
         }
-
         fn write_line_indent(out: &mut String, depth: usize) {
             out.push('\n');
             for _ in 0..depth {
                 out.push_str("  ");
             }
         }
-
         let mut tasks = vec![Task::Value(v, depth)];
         while let Some(task) = tasks.pop() {
             match task {
@@ -2386,12 +2272,10 @@ pub mod json {
     pub fn to_vec<T: JsonSerialize + ?Sized>(value: &T) -> Result<Vec<u8>, Error> {
         Ok(to_json(value)?.into_bytes())
     }
-
     /// serde-style API: serialize to a pretty-printed `Vec<u8>` (alloc-only helper).
     pub fn to_vec_pretty<T: JsonSerialize + ?Sized>(value: &T) -> Result<Vec<u8>, Error> {
         Ok(to_json_pretty(value)?.into_bytes())
     }
-
     /// Parse a typed value directly from `&str` using Norito's native JSON stack.
     ///
     /// This path intentionally avoids first constructing a recursive [`Value`]
@@ -2400,7 +2284,6 @@ pub mod json {
     pub fn from_str<T: JsonDeserialize>(s: &str) -> Result<T, Error> {
         from_json(s)
     }
-
     /// Parse from a UTF‑8 byte slice using Norito's native parser.
     ///
     /// This is the byte-slice counterpart of the direct typed [`from_str`]
@@ -2409,25 +2292,21 @@ pub mod json {
         let s = std::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)?;
         from_str(s)
     }
-
     /// Alias for `from_slice` for convenience.
     pub fn from_bytes<T: JsonDeserialize>(bytes: &[u8]) -> Result<T, Error> {
         from_slice(bytes)
     }
-
     /// Convert a native JSON `Value` into `T` using `JsonDeserialize`.
     pub fn from_value<T: JsonDeserialize>(v: Value) -> Result<T, Error> {
         let result = T::json_from_value(&v);
-        drop_json_values_iteratively(vec![v]);
+        drop_json_value_iteratively(v);
         result
     }
-
     /// Convert `value` into a native JSON `Value` using `JsonSerialize`.
     pub fn to_value<T: JsonSerialize + ?Sized>(value: &T) -> Result<Value, Error> {
         let json = to_json(value)?;
         parse_value(&json)
     }
-
     /// Convenience: parse a JSON `Value` from `&str` using Norito's parser.
     pub fn parse_value(s: &str) -> Result<Value, Error> {
         let mut parser = super::json::Parser::new(s);
@@ -2439,7 +2318,6 @@ pub mod json {
         }
         Ok(value.take())
     }
-
     /// Validate one complete JSON document without constructing an owned
     /// recursive [`Value`] tree.
     ///
@@ -2448,7 +2326,6 @@ pub mod json {
     pub fn validate_json(s: &str) -> Result<(), Error> {
         validate_json_at_depth(s, 1)
     }
-
     /// Validate one complete JSON document whose root will be embedded at
     /// `root_depth` in a larger document.
     ///
@@ -2472,7 +2349,6 @@ pub mod json {
         }
         Ok(())
     }
-
     fn ensure_json_value_depth(depth: usize) -> Result<(), Error> {
         if depth > MAX_JSON_VALUE_NESTING_DEPTH {
             return Err(Error::NestingDepthExceeded {
@@ -2483,92 +2359,24 @@ pub mod json {
         }
         Ok(())
     }
-
-    fn drop_json_values_iteratively(mut pending: Vec<Value>) {
-        while let Some(value) = pending.pop() {
-            match value {
-                Value::Array(mut values) => pending.append(&mut values),
-                Value::Object(values) => pending.extend(values.into_values()),
-                Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-            }
-        }
+    fn try_decode_vec_with_capacity<T>(entries: usize) -> Result<Vec<T>, Error> {
+        let requested_bytes = entries
+            .checked_mul(core::mem::size_of::<T>())
+            .ok_or(Error::DecodeResourceLimit)?;
+        crate::core::reserve_decode_allocation(requested_bytes)
+            .map_err(Error::from_decode_resource)?;
+        exact_string::allocate(entries)
     }
-
-    struct IterativeValueDropGuard(Option<Value>);
-
-    impl IterativeValueDropGuard {
-        fn new(value: Value) -> Self {
-            Self(Some(value))
-        }
-
-        fn take(&mut self) -> Value {
-            self.0.take().expect("iterative JSON value guard is empty")
-        }
+    fn try_decode_string_copy(value: &str) -> Result<String, Error> {
+        crate::core::reserve_decode_allocation(value.len()).map_err(Error::from_decode_resource)?;
+        let mut decoded = exact_string::allocate(value.len())?;
+        decoded.extend_from_slice(value.as_bytes());
+        // SAFETY: `value` is UTF-8 and was copied without modification.
+        Ok(unsafe { String::from_utf8_unchecked(decoded) })
     }
-
-    impl Drop for IterativeValueDropGuard {
-        fn drop(&mut self) {
-            if let Some(value) = self.0.take() {
-                drop_json_values_iteratively(vec![value]);
-            }
-        }
-    }
-
-    enum ValueParseFrame {
-        Array {
-            values: Vec<Value>,
-            child_depth: usize,
-        },
-        Object {
-            values: Map,
-            key: Option<String>,
-            child_depth: usize,
-        },
-    }
-
-    impl ValueParseFrame {
-        fn append_values_to(self, pending: &mut Vec<Value>) {
-            match self {
-                Self::Array { mut values, .. } => pending.append(&mut values),
-                Self::Object { values, .. } => pending.extend(values.into_values()),
-            }
-        }
-
-        fn finish(self) -> Value {
-            match self {
-                Self::Array { values, .. } => Value::Array(values),
-                Self::Object { values, .. } => Value::Object(values),
-            }
-        }
-    }
-
-    #[derive(Default)]
-    struct ValueParseState {
-        frames: Vec<ValueParseFrame>,
-        completed: Option<Value>,
-    }
-
-    impl ValueParseState {
-        fn take_completed(&mut self) -> Value {
-            self.completed
-                .take()
-                .expect("iterative JSON parser has no completed value")
-        }
-    }
-
-    impl Drop for ValueParseState {
-        fn drop(&mut self) {
-            let mut pending = Vec::new();
-            if let Some(value) = self.completed.take() {
-                pending.push(value);
-            }
-            for frame in self.frames.drain(..) {
-                frame.append_values_to(&mut pending);
-            }
-            drop_json_values_iteratively(pending);
-        }
-    }
-
+    mod value_drop;
+    pub use value_drop::drop_json_value_iteratively;
+    use value_drop::{IterativeValueDropGuard, ValueParseFrame, ValueParseState};
     fn parse_object_key(p: &mut Parser<'_>) -> Result<String, Error> {
         let key = p.parse_string()?;
         p.skip_ws();
@@ -2580,14 +2388,16 @@ pub mod json {
             Err(Error::ExpectedColon { byte, line, col })
         }
     }
-
     fn parse_value_internal(p: &mut Parser<'_>, depth: usize) -> Result<Value, Error> {
         enum AttachAction {
             ParseNext(usize),
             Close,
         }
-
-        let mut state = ValueParseState::default();
+        p.skip_ws();
+        let (profile, _) = preflight::value_profile_at_depth(p.input(), p.position(), depth)
+            .map_err(|error| p.lexical_preflight_error(error))?;
+        let frame_capacity = profile.max_nesting_depth().saturating_sub(depth);
+        let mut state = ValueParseState::with_frame_capacity(frame_capacity)?;
         let mut next_depth = depth;
         'parse: loop {
             ensure_json_value_depth(next_depth)?;
@@ -2600,15 +2410,17 @@ pub mod json {
                 }
                 Some(b't') | Some(b'f') => Some(Value::Bool(p.parse_bool()?)),
                 Some(b'[') => {
+                    let entries = p.preflight_container_entries(b'[')?;
+                    let values = try_decode_vec_with_capacity(entries)?;
                     p.bump();
                     p.skip_ws();
                     if p.peek() == Some(b']') {
                         p.bump();
-                        Some(Value::Array(Vec::new()))
+                        Some(Value::Array(values))
                     } else {
                         let child_depth = next_depth.saturating_add(1);
                         state.frames.push(ValueParseFrame::Array {
-                            values: Vec::new(),
+                            values,
                             child_depth,
                         });
                         next_depth = child_depth;
@@ -2616,6 +2428,9 @@ pub mod json {
                     }
                 }
                 Some(b'{') => {
+                    let entries = p.preflight_container_entries(b'{')?;
+                    crate::core::reserve_decode_btree_allocation::<String, Value>(entries)
+                        .map_err(Error::from_decode_resource)?;
                     p.bump();
                     p.skip_ws();
                     if p.peek() == Some(b'}') {
@@ -2640,7 +2455,6 @@ pub mod json {
                     return Err(Error::UnexpectedEof { byte, line, col });
                 }
             };
-
             loop {
                 let mut completed = IterativeValueDropGuard::new(state.take_completed());
                 if state.frames.is_empty() {
@@ -2720,7 +2534,6 @@ pub mod json {
             }
         }
     }
-
     fn parse_number_value(p: &mut super::json::Parser<'_>) -> Result<Value, Error> {
         let s = p.input();
         let bytes = s.as_bytes();
@@ -2847,18 +2660,15 @@ pub mod json {
         })?;
         Ok(Value::Number(n))
     }
-
     /// Convenience: parse a JSON `Value` from a byte slice.
     pub fn from_slice_value(bytes: &[u8]) -> Result<Value, Error> {
         let s = std::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)?;
         parse_value(s)
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
         use crate::json;
-
         #[test]
         fn owned_value_decode_depth_guard_is_bounded_and_restores() {
             let guards = (0..crate::core::MAX_OWNED_VALUE_DECODE_DEPTH)
@@ -2872,11 +2682,9 @@ pub mod json {
                     context: "owned JSON value",
                 }) if depth == crate::core::MAX_OWNED_VALUE_DECODE_DEPTH + 1
             ));
-
             drop(guards);
             OwnedValueDecodeDepthGuard::enter().expect("failed guard must restore JSON depth");
         }
-
         #[test]
         fn value_parser_enforces_structural_nesting_limit() {
             let at_limit = format!(
@@ -2885,8 +2693,7 @@ pub mod json {
                 "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH - 1)
             );
             let value = parse_value(&at_limit).expect("JSON nesting at the limit must decode");
-            drop_json_values_iteratively(vec![value]);
-
+            drop_json_value_iteratively(value);
             let over_limit = format!(
                 "{}null{}",
                 "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH),
@@ -2899,7 +2706,7 @@ pub mod json {
                     context: "JSON value",
                 }) if depth == MAX_JSON_VALUE_NESTING_DEPTH + 1 => {}
                 Ok(value) => {
-                    drop_json_values_iteratively(vec![value]);
+                    drop_json_value_iteratively(value);
                     panic!("owned parser accepted over-limit nesting");
                 }
                 Err(error) => panic!("owned parser returned wrong over-limit error: {error}"),
@@ -2913,7 +2720,6 @@ pub mod json {
                 }) if depth == MAX_JSON_VALUE_NESTING_DEPTH + 1
             ));
         }
-
         #[test]
         fn iterative_skip_enforces_structural_nesting_limit() {
             let at_limit = format!(
@@ -2924,7 +2730,6 @@ pub mod json {
             Parser::new(&at_limit)
                 .skip_value()
                 .expect("iterative skip must accept JSON nesting at the limit");
-
             let over_limit = format!(
                 "{}null{}",
                 "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH),
@@ -2939,7 +2744,6 @@ pub mod json {
                 }) if depth == MAX_JSON_VALUE_NESTING_DEPTH + 1
             ));
         }
-
         #[test]
         fn tape_walker_skip_reuses_strict_bounded_value_walk() {
             let at_limit = format!(
@@ -2952,7 +2756,6 @@ pub mod json {
                 .skip_value()
                 .expect("fast skip must accept JSON nesting at the limit");
             assert_eq!(walker.raw_pos(), at_limit.len());
-
             let over_limit = format!(
                 "{}null{}",
                 "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH),
@@ -2967,7 +2770,6 @@ pub mod json {
                     context: "JSON value",
                 }) if depth == MAX_JSON_VALUE_NESTING_DEPTH + 1
             ));
-
             for malformed in ["[}", r#"{"key":]}"#, "[1 2]", r#"{"key":1,"key":2}"#] {
                 let mut walker = TapeWalker::new(malformed);
                 assert!(
@@ -2976,7 +2778,6 @@ pub mod json {
                 );
             }
         }
-
         #[test]
         fn canonical_document_depth_scan_is_quote_aware_and_caps_at_first_failure() {
             assert_eq!(document_json_value_depth("   \n\t"), 0);
@@ -2997,7 +2798,6 @@ pub mod json {
                 3,
                 "an even backslash run must leave the following quote unescaped"
             );
-
             let far_over_limit = format!(
                 "{}null{}",
                 "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH + 64),
@@ -3009,7 +2809,6 @@ pub mod json {
                 "depth errors must report the first forbidden level"
             );
         }
-
         #[test]
         fn reader_enforces_complete_document_depth() {
             let at_limit = format!(
@@ -3027,7 +2826,6 @@ pub mod json {
                 token_count += 1;
             }
             assert_eq!(token_count, 2 * MAX_JSON_VALUE_NESTING_DEPTH - 1);
-
             let over_limit = format!(
                 "{}null{}",
                 "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH),
@@ -3043,7 +2841,6 @@ pub mod json {
                 }) if depth == MAX_JSON_VALUE_NESTING_DEPTH + 1
             ));
         }
-
         #[test]
         fn strict_validator_accounts_for_an_enclosing_document_depth() {
             let root_depth = 4;
@@ -3051,7 +2848,6 @@ pub mod json {
             let at_limit = format!("{}null{}", "[".repeat(wrappers), "]".repeat(wrappers));
             validate_json_at_depth(&at_limit, root_depth)
                 .expect("fragment at the enclosing-document depth boundary must pass");
-
             let over_limit = format!("[{at_limit}]");
             assert!(matches!(
                 validate_json_at_depth(&over_limit, root_depth),
@@ -3068,7 +2864,6 @@ pub mod json {
                 "JSON root depth must be at least 1"
             );
         }
-
         #[test]
         fn strict_validator_matches_owned_parser_for_edge_grammar() {
             for valid in [
@@ -3085,9 +2880,8 @@ pub mod json {
                 let value = parse_value(valid).unwrap_or_else(|error| {
                     panic!("owned parser rejected valid JSON {valid:?}: {error}")
                 });
-                drop_json_values_iteratively(vec![value]);
+                drop_json_value_iteratively(value);
             }
-
             for invalid in [
                 "01",
                 "1.",
@@ -3111,7 +2905,6 @@ pub mod json {
                     "owned parser accepted invalid JSON {invalid:?}"
                 );
             }
-
             for invalid in [r#""\uDD1E""#, r#"{"a":1,"a":}"#] {
                 let validator_error =
                     validate_json(invalid).expect_err("validator must reject diagnostic fixture");
@@ -3124,7 +2917,6 @@ pub mod json {
                 );
             }
         }
-
         #[test]
         fn iterative_parser_and_error_cleanup_fit_a_128k_stack() {
             let worker = std::thread::Builder::new()
@@ -3152,19 +2944,17 @@ pub mod json {
                     if rendered != at_255 {
                         return Err("iterative JSON writer changed the boundary value".to_owned());
                     }
-                    drop_json_values_iteratively(vec![value]);
-
+                    drop_json_value_iteratively(value);
                     let value = from_json::<Value>(&at_255).map_err(|error| error.to_string())?;
                     let raw = from_value::<RawValue>(value).map_err(|error| error.to_string())?;
                     if raw.get() != at_255 {
                         return Err("owned Value conversion changed boundary JSON".to_owned());
                     }
-
                     let trailing = format!("{at_255} null");
                     match from_json::<Value>(&trailing) {
                         Err(Error::TrailingCharacters { .. }) => {}
                         Ok(value) => {
-                            drop_json_values_iteratively(vec![value]);
+                            drop_json_value_iteratively(value);
                             return Err(
                                 "typed Value parser accepted trailing characters".to_owned()
                             );
@@ -3175,16 +2965,14 @@ pub mod json {
                             ));
                         }
                     }
-
                     let invalid_256th_wrapper = format!("[{at_255},]");
                     if validate_json(&invalid_256th_wrapper).is_ok() {
                         return Err("validator accepted a trailing comma".to_owned());
                     }
                     if let Ok(value) = parse_value(&invalid_256th_wrapper) {
-                        drop_json_values_iteratively(vec![value]);
+                        drop_json_value_iteratively(value);
                         return Err("owned parser accepted a trailing comma".to_owned());
                     }
-
                     let over_limit = format!(
                         "{}null{}",
                         "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH),
@@ -3193,7 +2981,7 @@ pub mod json {
                     match parse_value(&over_limit) {
                         Err(Error::NestingDepthExceeded { .. }) => {}
                         Ok(value) => {
-                            drop_json_values_iteratively(vec![value]);
+                            drop_json_value_iteratively(value);
                             return Err("owned parser accepted over-limit nesting".to_owned());
                         }
                         Err(error) => {
@@ -3211,7 +2999,6 @@ pub mod json {
                 .expect("128KiB JSON parser thread")
                 .expect("iterative JSON parser boundary");
         }
-
         #[test]
         fn parse_value_str_and_bytes_match() {
             let s = "{\"k\": [1, true, \"x\"]}";
@@ -3219,14 +3006,12 @@ pub mod json {
             let v2 = from_slice_value(s.as_bytes()).expect("from_slice_value");
             assert_eq!(v1, v2);
         }
-
         #[test]
         fn json_serialize_from_reference() {
             let value = "hello".to_string();
             let rendered = to_json(&&value).expect("serialize reference");
             assert_eq!(rendered, "\"hello\"");
         }
-
         #[test]
         fn finite_f64_json_roundtrips_exact_bits_and_overflow_is_rejected() {
             for value in [
@@ -3248,7 +3033,6 @@ pub mod json {
                     value.to_bits(),
                     "float JSON changed exact bits for {value:?} via {encoded}"
                 );
-
                 let mut walker = TapeWalker::new(&encoded);
                 let fast_decoded = walker
                     .parse_f64_inline()
@@ -3259,7 +3043,6 @@ pub mod json {
                     "fast float JSON changed exact bits for {value:?} via {encoded}"
                 );
             }
-
             for overflow in ["1e309", "-1e309"] {
                 assert!(
                     from_json::<f64>(overflow).is_err(),
@@ -3272,22 +3055,18 @@ pub mod json {
                 );
             }
         }
-
         #[test]
         fn fast_writer_handles_reference_fields() {
             use crate::derive::JsonSerialize;
-
             #[derive(JsonSerialize)]
             struct Borrowed<'a> {
                 field: &'a u32,
             }
-
             let inner = 42u32;
             let borrowed = Borrowed { field: &inner };
             let rendered = to_json(&borrowed).expect("serialize borrowed struct");
             assert_eq!(rendered, "{\"field\":42}");
         }
-
         #[test]
         fn object_macro_basic() {
             let value = json!({"key": 1u32, "flag": true});
@@ -3297,7 +3076,6 @@ pub mod json {
             let alt_string = to_json(&alt).expect("json render alt");
             assert_eq!(alt_string, "{\"another\":2}");
         }
-
         #[test]
         fn helpers_convert_to_value() {
             let value = crate::json::to_value(&42u32).expect("to_value");
@@ -3305,13 +3083,11 @@ pub mod json {
                 value,
                 crate::json::Value::Number(crate::json::Number::U64(42))
             );
-
             let array = crate::json::array([1u32, 2u32]).expect("array helper");
             assert_eq!(
                 array,
                 crate::json::Value::Array(vec![json!(1u32), json!(2u32)])
             );
-
             let object = crate::json::object([
                 ("alpha", crate::json::Value::from(1u32)),
                 ("beta", crate::json::Value::from(true)),
@@ -3320,7 +3096,6 @@ pub mod json {
             assert_eq!(object["alpha"], json!(1u32));
             assert_eq!(object["beta"], json!(true));
         }
-
         #[test]
         fn pretty_writer_handles_multibyte_strings() {
             let sample: String = [
@@ -3337,14 +3112,12 @@ pub mod json {
             let reparsed: Value = json::from_str(&rendered).expect("parse pretty-printed output");
             assert_eq!(reparsed["input"], Value::from(sample));
         }
-
         #[test]
         fn string_writer_emits_utf8_for_astral_scalars() {
             let mut rendered = String::new();
             write_json_string("emoji 😀", &mut rendered);
             assert_eq!(rendered, "\"emoji 😀\"");
         }
-
         #[test]
         fn string_writer_emits_utf8_for_line_separators() {
             let sample = format!("left{}\u{2029}right", '\u{2028}');
@@ -3352,14 +3125,12 @@ pub mod json {
             write_json_string(&sample, &mut rendered);
             assert_eq!(rendered, format!("\"{sample}\""));
         }
-
         #[test]
         fn string_writer_uses_lowercase_hex_for_control_escapes() {
             let mut rendered = String::new();
             write_json_string("a\u{000b}b", &mut rendered);
             assert_eq!(rendered, "\"a\\u000bb\"");
         }
-
         #[test]
         fn unescape_json_string_preserves_utf8_bytes() {
             let raw = format!("price: {}\\nend", '\u{00A2}');
@@ -3367,7 +3138,6 @@ pub mod json {
             let expected = format!("price: {}\nend", '\u{00A2}');
             assert_eq!(out, expected);
         }
-
         #[test]
         fn parse_u64_rejects_leading_zero() {
             let mut parser = Parser::new("01");
@@ -3379,7 +3149,6 @@ pub mod json {
                 other => panic!("unexpected error variant: {other:?}"),
             }
         }
-
         #[test]
         fn parse_i64_from_parser_rejects_leading_zero() {
             let mut parser = Parser::new("-012");
@@ -3390,7 +3159,6 @@ pub mod json {
                 other => panic!("unexpected error variant: {other:?}"),
             }
         }
-
         #[test]
         fn parse_number_token_rejects_leading_zero() {
             for sample in ["01", "-012"] {
@@ -3403,7 +3171,6 @@ pub mod json {
                 }
             }
         }
-
         #[test]
         fn parse_value_rejects_leading_zero() {
             for sample in ["01", "-012"] {
@@ -3415,7 +3182,6 @@ pub mod json {
             }
         }
     }
-
     /// Write JSON to an `io::Write` sink.
     #[cfg(feature = "json-std-io")]
     pub fn to_writer<W: std::io::Write, T: JsonSerialize>(
@@ -3427,7 +3193,6 @@ pub mod json {
             .write_all(json.as_bytes())
             .map_err(|e| Error::Message(e.to_string()))
     }
-
     /// Write pretty-printed JSON to an `io::Write` sink.
     #[cfg(feature = "json-std-io")]
     pub fn to_writer_pretty<W: std::io::Write, T: JsonSerialize>(
@@ -3439,7 +3204,6 @@ pub mod json {
             .write_all(json.as_bytes())
             .map_err(|e| Error::Message(e.to_string()))
     }
-
     /// Parse JSON from an `io::Read` source.
     #[cfg(feature = "json-std-io")]
     pub fn from_reader<R: std::io::Read, T: JsonDeserialize>(mut reader: R) -> Result<T, Error> {
@@ -3449,7 +3213,6 @@ pub mod json {
             .map_err(|e| Error::Message(e.to_string()))?;
         from_str(&buf)
     }
-
     /// Simple bump arena for unescaped string storage.
     pub struct Arena {
         buf: Vec<u8>,
@@ -3476,7 +3239,6 @@ pub mod json {
             unsafe { std::str::from_utf8_unchecked(&self.buf[start..end]) }
         }
     }
-
     /// Serialize a JSON string with proper escaping into `out`.
     fn write_json_string_charwise(s: &str, out: &mut String) {
         out.reserve(s.len() + 2);
@@ -3501,7 +3263,6 @@ pub mod json {
         }
         out.push('"');
     }
-
     pub fn write_json_string(s: &str, out: &mut String) {
         if !s.is_ascii() {
             write_json_string_charwise(s, out);
@@ -3762,19 +3523,22 @@ pub mod json {
             out.push('"');
         }
     }
-
     /// Trait for types that can be serialized to JSON.
     pub trait JsonSerialize {
         /// Serialize `self` into `out` as JSON.
         fn json_serialize(&self, out: &mut String);
-    }
-
-    impl JsonSerialize for bool {
-        fn json_serialize(&self, out: &mut String) {
-            out.push_str(if *self { "true" } else { "false" });
+        /// Serialize `self` into a checked JSON sink.
+        ///
+        /// Manual serializers retain their ordinary behaviour but fail closed
+        /// for bounded sinks until they explicitly implement this method.
+        fn json_serialize_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+            let Some(unbounded) = out.unbounded_output() else {
+                return Err(BoundedJsonError::Unsupported);
+            };
+            self.json_serialize(unbounded);
+            Ok(())
         }
     }
-
     #[inline]
     fn encode_hex(bytes: &[u8], out: &mut String) {
         const LOOKUP: &[u8; 16] = b"0123456789ABCDEF";
@@ -3786,7 +3550,6 @@ pub mod json {
         }
         out.push('"');
     }
-
     fn decode_hex<const N: usize>(s: &str) -> Result<[u8; N], Error> {
         if s.len() != N * 2 {
             return Err(Error::Message(format!(
@@ -3815,7 +3578,6 @@ pub mod json {
         }
         Ok(out)
     }
-
     #[inline]
     const fn decode_nibble(b: u8) -> Option<u8> {
         match b {
@@ -3849,11 +3611,6 @@ pub mod json {
         write_u128_json(out, v as u128)
     }
     #[inline]
-    fn write_u32_json(out: &mut String, v: u32) {
-        write_u64_json(out, v as u64)
-    }
-
-    #[inline]
     fn write_i64_json(out: &mut String, v: i64) {
         if v >= 0 {
             write_u64_json(out, v as u64);
@@ -3862,133 +3619,42 @@ pub mod json {
             write_u64_json(out, v.unsigned_abs());
         }
     }
-
-    impl JsonSerialize for core::num::NonZeroU128 {
-        fn json_serialize(&self, out: &mut String) {
-            write_u128_json(out, self.get());
-        }
-    }
-    impl JsonSerialize for core::num::NonZeroU64 {
-        fn json_serialize(&self, out: &mut String) {
-            write_u64_json(out, self.get());
-        }
-    }
-    impl JsonSerialize for core::num::NonZeroU32 {
-        fn json_serialize(&self, out: &mut String) {
-            write_u32_json(out, self.get());
-        }
-    }
-    impl JsonSerialize for core::num::NonZeroU16 {
-        fn json_serialize(&self, out: &mut String) {
-            write_u32_json(out, self.get() as u32);
-        }
-    }
-    impl JsonSerialize for core::num::NonZeroUsize {
-        fn json_serialize(&self, out: &mut String) {
-            write_u64_json(out, self.get() as u64);
-        }
-    }
-    impl JsonSerialize for str {
-        fn json_serialize(&self, out: &mut String) {
-            write_json_string(self, out);
-        }
-    }
-
-    impl JsonSerialize for std::time::Duration {
-        fn json_serialize(&self, out: &mut String) {
-            out.push('{');
-            out.push_str("\"secs\":");
-            JsonSerialize::json_serialize(&self.as_secs(), out);
-            out.push(',');
-            out.push_str("\"nanos\":");
-            JsonSerialize::json_serialize(&self.subsec_nanos(), out);
-            out.push('}');
-        }
-    }
-    impl<T: JsonSerialize> JsonSerialize for Option<T> {
-        fn json_serialize(&self, out: &mut String) {
-            match self {
-                Some(v) => v.json_serialize(out),
-                None => out.push_str("null"),
-            }
-        }
-    }
-    impl JsonSerialize for () {
-        fn json_serialize(&self, out: &mut String) {
-            out.push_str("null");
-        }
-    }
-    impl<T: JsonSerialize> JsonSerialize for Vec<T> {
-        fn json_serialize(&self, out: &mut String) {
-            out.push('[');
-            let mut first = true;
-            for v in self {
-                if !first {
-                    out.push(',');
-                }
-                first = false;
-                v.json_serialize(out);
-            }
-            out.push(']');
-        }
-    }
-
-    impl FastJsonWrite for Value {
-        fn write_json(&self, out: &mut String) {
-            write_value_to_string(self, out, false, 0);
-        }
-    }
-
     impl<T: JsonDeserialize> JsonDeserialize for Box<T> {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
             let _depth_guard = OwnedValueDecodeDepthGuard::enter()?;
-            T::json_deserialize(parser).map(Box::new)
+            crate::core::reserve_decode_box_allocation::<T>()
+                .map_err(Error::from_decode_resource)?;
+            let value = T::json_deserialize(parser)?;
+            Ok(Box::new(value))
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             let _depth_guard = OwnedValueDecodeDepthGuard::enter()?;
+            crate::core::reserve_decode_box_allocation::<T>()
+                .map_err(Error::from_decode_resource)?;
             T::json_from_value(value).map(Box::new)
         }
     }
-
     impl JsonDeserialize for Box<str> {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
             let string = String::json_deserialize(parser)?;
             Ok(string.into_boxed_str())
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Some(s) = value.as_str() {
-                return Ok(s.to_owned().into_boxed_str());
+                return try_decode_string_copy(s).map(String::into_boxed_str);
             }
             String::json_from_value(value).map(String::into_boxed_str)
         }
-
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
-            Ok(key.to_owned().into_boxed_str())
+            try_decode_string_copy(key).map(String::into_boxed_str)
         }
     }
-
-    impl<T: JsonSerialize + ?Sized> FastJsonWrite for Box<T> {
-        fn write_json(&self, out: &mut String) {
-            (**self).json_serialize(out);
-        }
-    }
-
-    /// Bridge: any type with a typed writer can serve as a JSON serializer.
-    impl<T: FastJsonWrite> JsonSerialize for T {
-        fn json_serialize(&self, out: &mut String) {
-            self.write_json(out)
-        }
-    }
-
     /// Serialize `value` into a compact JSON string.
     pub fn to_json<T: JsonSerialize + ?Sized>(value: &T) -> Result<String, Error> {
         let mut out = String::new();
         value.json_serialize(&mut out);
         Ok(out)
     }
-
     /// Build a Norito JSON array from an iterator of serializable values.
     pub fn array<T, I>(values: I) -> Result<Value, Error>
     where
@@ -4001,7 +3667,6 @@ pub mod json {
         }
         Ok(Value::Array(out))
     }
-
     /// Build a Norito JSON object from key/value pairs.
     pub fn object<K, V, I>(pairs: I) -> Result<Value, Error>
     where
@@ -4015,14 +3680,12 @@ pub mod json {
         }
         Ok(Value::Object(map))
     }
-
     /// Serialize `value` into a compact JSON string using the fast typed writer.
     ///
     /// Alias for `to_json` kept for symmetry with `to_json_pretty`.
     pub fn to_json_fast<T: JsonSerialize + ?Sized>(value: &T) -> Result<String, Error> {
         to_json(value)
     }
-
     /// Pretty-print the JSON representation of `value` deterministically.
     ///
     /// Rules:
@@ -4033,7 +3696,6 @@ pub mod json {
         let minified = to_json(value)?;
         Ok(pretty_format_minified_json(&minified))
     }
-
     /// Pretty-format a minified JSON string without reparsing.
     fn pretty_format_minified_json(input: &str) -> String {
         let bytes = input.as_bytes();
@@ -4114,7 +3776,6 @@ pub mod json {
         }
         out
     }
-
     /// Unescape a borrowed JSON string (without surrounding quotes) into an owned `String`.
     ///
     /// Intended for use with `Reader` tokens (`StringBorrowed` and `KeyBorrowed`).
@@ -4253,14 +3914,12 @@ pub mod json {
         }
         String::from_utf8(out).map_err(|_| Error::InvalidUtf8)
     }
-
     /// A minimal JSON parser over `&str`.
     #[derive(Clone, Copy)]
     pub struct Parser<'a> {
         s: &'a [u8],
         i: usize,
     }
-
     impl<'a> Parser<'a> {
         const LEADING_ZERO_MSG: &'static str = "leading zeros are not allowed in JSON numbers";
         #[inline]
@@ -4488,6 +4147,7 @@ pub mod json {
         /// Parse a JSON string with escaping support.
         pub fn parse_string(&mut self) -> Result<String, Error> {
             self.skip_ws();
+            let token_start = self.i;
             self.expect(b'"')?;
             // Fast path: scan for closing quote without encountering escapes or controls.
             let start = self.i;
@@ -4500,15 +4160,27 @@ pub mod json {
                     self.i = i + 1;
                     let st = std::str::from_utf8(slice)
                         .map_err(|_| self.err_at(start, "invalid utf8"))?;
-                    return Ok(st.to_string());
+                    crate::core::reserve_decode_allocation(st.len())
+                        .map_err(Error::from_decode_resource)?;
+                    let mut value = exact_string::allocate(st.len())?;
+                    value.extend_from_slice(st.as_bytes());
+                    // SAFETY: `st` was validated as UTF-8 and copied exactly.
+                    return Ok(unsafe { String::from_utf8_unchecked(value) });
                 }
                 if b == b'\\' || b < 0x20 {
                     break;
                 }
                 i += 1;
             }
-            // Slow path: build into a UTF-8 byte buffer, handling escapes
-            let mut out: Vec<u8> = Vec::with_capacity(16);
+            // Slow path: first determine the exact decoded length without
+            // allocating, then reserve and decode into that admitted buffer.
+            let decoded_bytes = {
+                let mut preflight = Parser::new_at(self.input(), token_start);
+                preflight.skip_string_bounded(usize::MAX)?
+            };
+            crate::core::reserve_decode_allocation(decoded_bytes)
+                .map_err(Error::from_decode_resource)?;
+            let mut out = exact_string::allocate(decoded_bytes)?;
             loop {
                 let b = self.bump().ok_or_else(|| {
                     let (byte, line, col) = self.pos_meta(self.i);
@@ -4654,14 +4326,14 @@ pub mod json {
                     b => out.push(b),
                 }
             }
-            let s = std::str::from_utf8(&out).map_err(|_| self.err_here("invalid utf8"))?;
-            Ok(s.to_string())
+            String::from_utf8(out).map_err(|_| self.err_here("invalid utf8"))
         }
         /// Parse a JSON array into `Vec<T>` using `JsonDeserialize` for elements.
         pub fn parse_array<T: JsonDeserialize>(&mut self) -> Result<Vec<T>, Error> {
+            let entries = self.preflight_container_entries(b'[')?;
+            let mut out = try_decode_vec_with_capacity(entries)?;
             self.skip_ws();
             self.expect(b'[')?;
-            let mut out = Vec::new();
             self.skip_ws();
             if matches!(self.peek(), Some(b']')) {
                 self.bump(); // consume ']'
@@ -4682,13 +4354,11 @@ pub mod json {
             }
             Ok(out)
         }
-
         /// Parse a JSON `f64` number using the generic implementation.
         #[inline]
         pub fn parse_f64(&mut self) -> Result<f64, Error> {
             <f64 as JsonDeserialize>::json_deserialize(self)
         }
-
         /// Try to consume a JSON `null` token without erroring when absent.
         #[inline]
         pub fn try_consume_null(&mut self) -> Result<bool, Error> {
@@ -4705,7 +4375,6 @@ pub mod json {
         pub fn skip_string(&mut self) -> Result<(), Error> {
             self.skip_string_bounded(usize::MAX).map(|_| ())
         }
-
         /// Parse and skip a JSON string while enforcing its exact decoded
         /// UTF-8 byte length before any owned string allocation.
         ///
@@ -4834,7 +4503,6 @@ pub mod json {
             }
             Ok(decoded_bytes)
         }
-
         fn skip_string_hex_quad(&mut self) -> Result<u32, Error> {
             let mut value = 0u32;
             for _ in 0..4 {
@@ -4855,7 +4523,6 @@ pub mod json {
             }
             Ok(value)
         }
-
         fn skip_object_key(&mut self) -> Result<String, Error> {
             let key = self.parse_string()?;
             self.skip_ws();
@@ -4867,7 +4534,94 @@ pub mod json {
                 Err(Error::ExpectedColon { byte, line, col })
             }
         }
-
+        fn preflight_container_entries(&mut self, opening: u8) -> Result<usize, Error> {
+            self.skip_ws();
+            if self.peek() != Some(opening) {
+                let (byte, line, col) = self.pos_meta(self.i);
+                return Err(if opening == b'[' {
+                    Error::ExpectedArrayStart { byte, line, col }
+                } else {
+                    Error::ExpectedObjectStart { byte, line, col }
+                });
+            }
+            let (profile, _) = preflight::value_profile_at_depth(self.input(), self.i, 1)
+                .map_err(|error| self.lexical_preflight_error(error))?;
+            let entries = profile.root_container_entries();
+            crate::core::enforce_decode_sequence_length(
+                u64::try_from(entries).map_err(|_| Error::DecodeResourceLimit)?,
+            )
+            .map_err(Error::from_decode_resource)?;
+            Ok(entries)
+        }
+        /// Count and charge the entries in the next object without allocating.
+        #[doc(hidden)]
+        pub fn preflight_object_entries(&mut self) -> Result<usize, Error> {
+            self.preflight_container_entries(b'{')
+        }
+        /// Count and charge the entries in the next array without allocating.
+        #[doc(hidden)]
+        pub fn preflight_array_entries(&mut self) -> Result<usize, Error> {
+            self.preflight_container_entries(b'[')
+        }
+        /// Borrow the exact source spelling of the next JSON value.
+        ///
+        /// The value boundary is found with the allocation-free bounded
+        /// lexical scanner. This is intended for typed dispatch (notably
+        /// tagged enums) that immediately parses the borrowed fragment and
+        /// therefore must not copy an attacker-sized `content` subtree first.
+        pub fn raw_value_slice(&mut self) -> Result<&'a str, Error> {
+            self.skip_ws();
+            let start = self.i;
+            let end = preflight::value_end_at_depth(self.input(), start, 1)
+                .map_err(|error| self.lexical_preflight_error(error))?;
+            self.i = end;
+            Ok(&self.input()[start..end])
+        }
+        /// Skip the next JSON value with bounded stack and no owned value tree.
+        ///
+        /// Duplicate object names remain the responsibility of a typed object
+        /// decoder. The lexical walk validates the complete value grammar,
+        /// including strings, numbers, delimiters, and nesting depth.
+        pub fn skip_value_lexical(&mut self) -> Result<(), Error> {
+            self.skip_ws();
+            let start = self.i;
+            self.i = preflight::value_end_at_depth(self.input(), start, 1)
+                .map_err(|error| self.lexical_preflight_error(error))?;
+            Ok(())
+        }
+        fn lexical_preflight_error(&self, error: preflight::JsonPreflightError) -> Error {
+            if error.resource_kind() == Some(preflight::JsonPreflightResource::NestingDepth) {
+                return Error::NestingDepthExceeded {
+                    depth: error.attempted(),
+                    limit: error.limit(),
+                    context: "JSON value",
+                };
+            }
+            let (byte, line, col) = self.pos_meta(error.offset());
+            if error.syntax_kind() == Some(preflight::JsonPreflightSyntax::UnexpectedToken) {
+                let found = self
+                    .s
+                    .get(error.offset())
+                    .map_or(UnexpectedToken::Eof, |byte| {
+                        UnexpectedToken::Char(char::from(*byte))
+                    });
+                return Error::UnexpectedCharacter {
+                    found,
+                    byte,
+                    line,
+                    col,
+                };
+            }
+            Error::WithPos {
+                msg: error.syntax_kind().map_or(
+                    "JSON lexical counter overflow",
+                    preflight::JsonPreflightSyntax::message,
+                ),
+                byte,
+                line,
+                col,
+            }
+        }
         /// Skip over the next exact JSON value without constructing an owned
         /// recursive [`Value`] tree.
         ///
@@ -4877,7 +4631,6 @@ pub mod json {
         pub fn skip_value(&mut self) -> Result<(), Error> {
             self.skip_value_at_depth(1)
         }
-
         /// Skip an exact JSON value that will appear at `root_depth` in its
         /// enclosing document.
         #[doc(hidden)]
@@ -4897,12 +4650,10 @@ pub mod json {
                     child_depth: usize,
                 },
             }
-
             enum Action {
                 ParseNext(usize),
                 Close,
             }
-
             let mut frames = Vec::<Frame>::new();
             let mut next_depth = root_depth;
             'parse: loop {
@@ -4952,7 +4703,6 @@ pub mod json {
                         return Err(Error::UnexpectedEof { byte, line, col });
                     }
                 }
-
                 loop {
                     let Some(frame) = frames.last_mut() else {
                         return Ok(());
@@ -5019,7 +4769,6 @@ pub mod json {
                 }
             }
         }
-
         /// Read a JSON object key and return its FNV-1a 64-bit hash.
         pub fn read_key_hash(&mut self) -> Result<u64, Error> {
             self.skip_ws();
@@ -5177,7 +4926,6 @@ pub mod json {
             }
             Ok(h)
         }
-
         /// Parse a JSON object key and return a borrowed `&str` when no escapes are present,
         /// or an owned `String` otherwise. This avoids allocating in the common fast path.
         ///
@@ -5245,12 +4993,10 @@ pub mod json {
             Ok(KeyRef::Owned(s))
         }
     }
-
     /// Trait for types that can be deserialized from JSON using the simple parser.
     pub trait JsonDeserialize: Sized {
         /// Parse `Self` from the parser.
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error>;
-
         /// Drop a value constructed before a top-level parse error is known.
         ///
         /// Most deserialized types use ordinary drop. Recursive native JSON
@@ -5258,25 +5004,19 @@ pub mod json {
         /// otherwise bounded parsing into recursive error cleanup.
         #[doc(hidden)]
         fn json_drop_after_error(self) {}
-
         /// Convert a pre-parsed [`Value`] into `Self`.
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             json_from_value_via_string::<Self>(value)
         }
-
         /// Convert a JSON object key into `Self`.
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
             json_from_value_via_string::<Self>(&Value::String(key.to_owned()))
         }
     }
-
     /// Marker trait mirroring `serde::de::DeserializeOwned` for Norito JSON.
     pub trait JsonDeserializeOwned: JsonDeserialize {}
-
     impl<T: JsonDeserialize> JsonDeserializeOwned for T {}
-
     pub use JsonDeserializeOwned as DeserializeOwned;
-
     fn json_from_value_via_string<T: JsonDeserialize>(value: &Value) -> Result<T, Error> {
         let json = to_json(value)?;
         let mut parser = Parser::new(&json);
@@ -5289,18 +5029,15 @@ pub mod json {
         }
         Ok(result)
     }
-
     impl JsonDeserialize for bool {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
             p.parse_bool()
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             value
                 .as_bool()
                 .ok_or_else(|| Error::Message("expected bool".into()))
         }
-
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
             match key {
                 "true" => Ok(true),
@@ -5366,12 +5103,10 @@ pub mod json {
         p.skip_ws();
         Ok(val)
     }
-
     impl JsonDeserialize for u128 {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
             parse_u128_from_parser(p)
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Value::Number(number) = value
                 && let Some(u) = number.as_u64()
@@ -5380,7 +5115,6 @@ pub mod json {
             }
             json_from_value_via_string(value)
         }
-
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
             key.parse::<u128>()
                 .map_err(|_| Error::Message("expected u128".into()))
@@ -5392,13 +5126,11 @@ pub mod json {
             core::num::NonZeroU128::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u128".into()))
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             let value = u128::json_from_value(value)?;
             core::num::NonZeroU128::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u128".into()))
         }
-
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
             let value = u128::json_from_map_key(key)?;
             core::num::NonZeroU128::new(value)
@@ -5409,14 +5141,12 @@ pub mod json {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
             p.parse_u64()
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Some(n) = value.as_u64() {
                 return Ok(n);
             }
             json_from_value_via_string(value)
         }
-
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
             key.parse::<u64>()
                 .map_err(|_| Error::Message("expected u64".into()))
@@ -5428,13 +5158,11 @@ pub mod json {
             core::num::NonZeroU64::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u64".into()))
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             let value = u64::json_from_value(value)?;
             core::num::NonZeroU64::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u64".into()))
         }
-
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
             let value = u64::json_from_map_key(key)?;
             core::num::NonZeroU64::new(value)
@@ -5448,13 +5176,11 @@ pub mod json {
             core::num::NonZeroU32::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u32".into()))
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             let value = u32::json_from_value(value)?;
             core::num::NonZeroU32::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero u32".into()))
         }
-
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
             let value = u32::json_from_map_key(key)?;
             core::num::NonZeroU32::new(value)
@@ -5466,14 +5192,12 @@ pub mod json {
             let n = p.parse_u64()?;
             u32::try_from(n).map_err(|_| Error::Message("u32 overflow".into()))
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Some(n) = value.as_u64() {
                 return u32::try_from(n).map_err(|_| Error::Message("u32 overflow".into()));
             }
             json_from_value_via_string(value)
         }
-
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
             key.parse::<u32>()
                 .map_err(|_| Error::Message("u32 overflow".into()))
@@ -5500,13 +5224,11 @@ pub mod json {
             core::num::NonZeroUsize::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero usize".into()))
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             let value = usize::json_from_value(value)?;
             core::num::NonZeroUsize::new(value)
                 .ok_or_else(|| Error::Message("expected non-zero usize".into()))
         }
-
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
             let value = usize::json_from_map_key(key)?;
             core::num::NonZeroUsize::new(value)
@@ -5518,14 +5240,12 @@ pub mod json {
             let n = p.parse_u64()?;
             u8::try_from(n).map_err(|_| Error::Message("u8 overflow".into()))
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Some(n) = value.as_u64() {
                 return u8::try_from(n).map_err(|_| Error::Message("u8 overflow".into()));
             }
             json_from_value_via_string(value)
         }
-
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
             key.parse::<u8>()
                 .map_err(|_| Error::Message("u8 overflow".into()))
@@ -5536,20 +5256,17 @@ pub mod json {
             let n = p.parse_u64()?;
             usize::try_from(n).map_err(|_| Error::Message("usize overflow".into()))
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Some(n) = value.as_u64() {
                 return usize::try_from(n).map_err(|_| Error::Message("usize overflow".into()));
             }
             json_from_value_via_string(value)
         }
-
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
             key.parse::<usize>()
                 .map_err(|_| Error::Message("usize overflow".into()))
         }
     }
-
     fn parse_i64_from_parser(p: &mut Parser<'_>) -> Result<i64, Error> {
         p.skip_ws();
         let input = p.input();
@@ -5617,7 +5334,6 @@ pub mod json {
         p.i = idx;
         Ok(value)
     }
-
     impl JsonDeserialize for i64 {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
             parse_i64_from_parser(p)
@@ -5716,26 +5432,22 @@ pub mod json {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
             p.parse_string()
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Some(s) = value.as_str() {
-                return Ok(s.to_owned());
+                return try_decode_string_copy(s);
             }
             json_from_value_via_string(value)
         }
-
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
-            Ok(key.to_owned())
+            try_decode_string_copy(key)
         }
     }
-
     impl JsonDeserialize for Url {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
             let raw = String::json_deserialize(parser)?;
             raw.parse()
                 .map_err(|e| Error::Message(format!("invalid url: {e}")))
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Some(s) = value.as_str() {
                 return s
@@ -5744,7 +5456,6 @@ pub mod json {
             }
             json_from_value_via_string(value)
         }
-
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
             key.parse()
                 .map_err(|e| Error::Message(format!("invalid url: {e}")))
@@ -5779,20 +5490,17 @@ pub mod json {
                 + std::time::Duration::from_nanos(u64::from(nanos)))
         }
     }
-
     impl JsonSerialize for std::path::PathBuf {
         fn json_serialize(&self, out: &mut String) {
             write_json_string(&self.to_string_lossy(), out);
         }
     }
-
     impl JsonDeserialize for std::path::PathBuf {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
             let raw = p.parse_string()?;
             Ok(std::path::PathBuf::from(raw))
         }
     }
-
     // NOTE: arena-backed string parsing API can be added here in a follow-up using a
     // dedicated reference type to handle lifetimes of input vs arena correctly.
     impl<T: JsonDeserialize> JsonDeserialize for Option<T> {
@@ -5807,7 +5515,6 @@ pub mod json {
             let v = T::json_deserialize(p)?;
             Ok(Some(v))
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if value.is_null() {
                 Ok(None)
@@ -5815,7 +5522,6 @@ pub mod json {
                 T::json_from_value(value).map(Some)
             }
         }
-
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
             if key == "null" {
                 Ok(None)
@@ -5838,10 +5544,9 @@ pub mod json {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
             p.parse_array::<T>()
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Value::Array(items) = value {
-                let mut out = Vec::with_capacity(items.len());
+                let mut out = try_decode_vec_with_capacity(items.len())?;
                 for item in items {
                     out.push(T::json_from_value(item)?);
                 }
@@ -5851,24 +5556,39 @@ pub mod json {
             }
         }
     }
-
     impl<T> JsonDeserialize for std::collections::BTreeSet<T>
     where
         T: JsonDeserialize + Ord,
     {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
-            let values: Vec<T> = p.parse_array()?;
+            let entries = p.preflight_container_entries(b'[')?;
+            crate::core::reserve_decode_btree_allocation::<T, ()>(entries)
+                .map_err(Error::from_decode_resource)?;
             let mut set = std::collections::BTreeSet::new();
-            for value in values {
+            p.skip_ws();
+            p.expect(b'[')?;
+            p.skip_ws();
+            if p.try_consume_char(b']')? {
+                return Ok(set);
+            }
+            loop {
+                let value = T::json_deserialize(p)?;
                 if !set.insert(value) {
                     return Err(Error::Message("duplicate element in set".into()));
                 }
+                p.skip_ws();
+                if p.try_consume_char(b',')? {
+                    continue;
+                }
+                p.expect(b']')?;
+                break;
             }
             Ok(set)
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Value::Array(items) = value {
+                crate::core::reserve_decode_btree_allocation::<T, ()>(items.len())
+                    .map_err(Error::from_decode_resource)?;
                 let mut set = std::collections::BTreeSet::new();
                 for item in items {
                     let v = T::json_from_value(item)?;
@@ -5882,28 +5602,23 @@ pub mod json {
             }
         }
     }
-
     impl JsonDeserialize for Value {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
             parse_value_internal(p, 1)
         }
-
         fn json_drop_after_error(self) {
-            drop_json_values_iteratively(vec![self]);
+            drop_json_value_iteratively(self);
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             Ok(value.clone())
         }
     }
-
     /// Structural index (scalar) representing offsets of JSON structural characters
     /// outside of strings. This is a scalar reference implementation; SIMD paths can
     /// replace the builder without changing the downstream walker.
     pub struct StructIndex {
         pub offsets: Vec<u32>,
     }
-
     #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
     type Stage1HelperFn = unsafe extern "C" fn(
         in_ptr: *const u8,
@@ -5912,7 +5627,6 @@ pub mod json {
         out_capacity: usize,
         out_len: *mut usize,
     ) -> i32;
-
     #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
     fn try_build_struct_index_with_helper(
         input: &str,
@@ -5938,7 +5652,6 @@ pub mod json {
         }
         Some(StructIndex { offsets })
     }
-
     #[inline]
     fn accel_tape_is_sane(input: &str, acc: &StructIndex) -> bool {
         let bytes = input.as_bytes();
@@ -5961,7 +5674,6 @@ pub mod json {
         }
         true
     }
-
     #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
     fn stage1_helper_self_test<F>(mut build: F) -> bool
     where
@@ -5972,7 +5684,6 @@ pub mod json {
             "{\"nested\":[{\"quote\":\"a\\\\\\\"b\"},2,3],\"tail\":true}",
             "[{\"k\":\"v\"}, {\"esc\":\"\\\\\\\\\"}, [1,2,{\"z\":0}]]",
         ];
-
         for input in CASES {
             let Some(acc) = build(input) else {
                 return false;
@@ -5984,10 +5695,8 @@ pub mod json {
                 return false;
             }
         }
-
         true
     }
-
     /// Build a structural index for `input`.
     ///
     /// Attempts a SIMD (NEON) path on AArch64 when enabled via the `simd-accel`
@@ -6003,7 +5712,6 @@ pub mod json {
         }
         let _ = tag;
     }
-
     #[cfg(all(debug_assertions, feature = "stage1-validate"))]
     #[inline]
     fn validate_accel(tag: &str, input: &str, acc: StructIndex) -> StructIndex {
@@ -6054,32 +5762,27 @@ pub mod json {
         }
         build_struct_index_scalar(input)
     }
-
     #[cfg(test)]
     mod accel_tape_validation_tests {
-        use std::{ptr, slice};
-
         #[cfg(feature = "parallel-stage1")]
         use super::build_struct_index_parallel;
         use super::{
             StructIndex, build_struct_index_scalar, extend_struct_index_scalar,
             stage1_helper_self_test, try_build_struct_index_with_helper, validate_accel,
         };
-
+        use std::{ptr, slice};
         #[test]
         fn validate_accel_rejects_out_of_bounds_offsets() {
             let input = "{\"a\":1}";
             let got = validate_accel("test", input, StructIndex { offsets: vec![999] });
             assert_eq!(got.offsets, build_struct_index_scalar(input).offsets);
         }
-
         #[test]
         fn validate_accel_rejects_non_structural_offsets() {
             let input = "{\"a\":1}";
             let got = validate_accel("test", input, StructIndex { offsets: vec![2] });
             assert_eq!(got.offsets, build_struct_index_scalar(input).offsets);
         }
-
         unsafe extern "C" fn stage1_helper_match(
             in_ptr: *const u8,
             len: usize,
@@ -6101,7 +5804,6 @@ pub mod json {
             }
             0
         }
-
         unsafe extern "C" fn stage1_helper_mismatch(
             in_ptr: *const u8,
             len: usize,
@@ -6126,7 +5828,6 @@ pub mod json {
             }
             0
         }
-
         unsafe extern "C" fn stage1_helper_error(
             _in_ptr: *const u8,
             _len: usize,
@@ -6136,7 +5837,6 @@ pub mod json {
         ) -> i32 {
             7
         }
-
         unsafe extern "C" fn stage1_helper_invalid_len(
             _in_ptr: *const u8,
             _len: usize,
@@ -6149,34 +5849,29 @@ pub mod json {
             }
             0
         }
-
         #[test]
         fn stage1_helper_self_test_accepts_matching_offsets() {
             assert!(stage1_helper_self_test(|input| {
                 try_build_struct_index_with_helper(input, stage1_helper_match)
             }));
         }
-
         #[test]
         fn stage1_helper_self_test_rejects_mismatched_offsets() {
             assert!(!stage1_helper_self_test(|input| {
                 try_build_struct_index_with_helper(input, stage1_helper_mismatch)
             }));
         }
-
         #[test]
         fn stage1_helper_self_test_rejects_helper_errors() {
             assert!(!stage1_helper_self_test(|input| {
                 try_build_struct_index_with_helper(input, stage1_helper_error)
             }));
         }
-
         #[test]
         fn helper_builder_rejects_invalid_reported_length() {
             let input = "{\"a\":1}";
             assert!(try_build_struct_index_with_helper(input, stage1_helper_invalid_len).is_none());
         }
-
         #[cfg(feature = "cuda-stage1")]
         #[test]
         fn cuda_stage1_backend_matches_scalar_when_required_or_available() {
@@ -6192,7 +5887,6 @@ pub mod json {
                 input.push_str("\",\"values\":[1,2,3]}");
             }
             input.push_str("]}");
-
             let got = super::cuda::build_struct_index_cuda(&input);
             let Some(got) = got else {
                 if std::env::var_os("JSONSTAGE1_CUDA_REQUIRE").is_some() {
@@ -6205,7 +5899,6 @@ pub mod json {
             };
             assert_eq!(got.offsets, build_struct_index_scalar(&input).offsets);
         }
-
         #[test]
         fn scalar_resume_matches_full_scan_across_mid_string_split() {
             let input = r#"{"s":"abc\\\"def\\\\ghi"}"#;
@@ -6225,20 +5918,17 @@ pub mod json {
             assert!(!tail_in_string);
             assert_eq!(tail_carry_bs_run_len, 0);
         }
-
         #[cfg(feature = "parallel-stage1")]
         #[test]
         fn parallel_stage1_matches_scalar_when_chunk_starts_inside_string() {
             let mut input = String::from("{\"s\":\"");
             input.push_str(&"a".repeat(300 * 1024));
             input.push_str("\",\"x\":1,\"tail\":[true,false,null]}");
-
             let scalar = build_struct_index_scalar(&input);
             let parallel =
                 build_struct_index_parallel(&input).expect("parallel stage1 should plan chunks");
             assert_eq!(parallel.offsets, scalar.offsets);
         }
-
         #[cfg(feature = "parallel-stage1")]
         #[test]
         fn parallel_stage1_matches_scalar_when_chunk_splits_escaped_quote() {
@@ -6251,13 +5941,11 @@ pub mod json {
             input.push('\\');
             input.push('"');
             input.push_str("still in string\",\"x\":1}");
-
             let scalar = build_struct_index_scalar(&input);
             let parallel =
                 build_struct_index_parallel(&input).expect("parallel stage1 should plan chunks");
             assert_eq!(parallel.offsets, scalar.offsets);
         }
-
         #[cfg(target_arch = "x86_64")]
         #[test]
         fn avx2_tail_resume_matches_scalar_at_string_boundary() {
@@ -6287,7 +5975,6 @@ pub mod json {
             let avx2 = unsafe { super::build_struct_index_avx2(&doc) }.expect("avx2 stage1");
             assert_eq!(scalar.offsets, avx2.offsets, "doc: {doc}");
         }
-
         #[cfg(target_arch = "x86_64")]
         #[test]
         fn avx2_tail_resume_matches_scalar_with_backslash_carry() {
@@ -6319,7 +6006,6 @@ pub mod json {
             let avx2 = unsafe { super::build_struct_index_avx2(&doc) }.expect("avx2 stage1");
             assert_eq!(scalar.offsets, avx2.offsets, "doc: {doc}");
         }
-
         #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
         #[test]
         fn neon_tail_resume_matches_scalar_at_string_boundary() {
@@ -6346,7 +6032,6 @@ pub mod json {
             let neon = unsafe { super::build_struct_index_neon(&doc) }.expect("neon stage1");
             assert_eq!(scalar.offsets, neon.offsets, "doc: {doc}");
         }
-
         #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
         #[test]
         fn neon_tail_resume_matches_scalar_with_backslash_carry() {
@@ -6376,7 +6061,6 @@ pub mod json {
             assert_eq!(scalar.offsets, neon.offsets, "doc: {doc}");
         }
     }
-
     pub fn build_struct_index(input: &str) -> StructIndex {
         // Small inputs: prefer the scalar reference to avoid accelerator overheads
         // Benchmarks (`examples/stage1_cutover`) show SIMD wins start to dominate
@@ -6457,10 +6141,8 @@ pub mod json {
         debug_stage1_backend("scalar");
         build_struct_index_scalar(input)
     }
-
     #[cfg(feature = "parallel-stage1")]
     const PAR_STAGE1_MIN_BYTES_DEFAULT: usize = 1 << 20;
-
     #[cfg(any(test, debug_assertions))]
     #[cfg(feature = "parallel-stage1")]
     fn par_min_bytes() -> usize {
@@ -6473,12 +6155,10 @@ pub mod json {
                 .unwrap_or(PAR_STAGE1_MIN_BYTES_DEFAULT) // 1 MiB default
         })
     }
-
     #[cfg(all(feature = "parallel-stage1", not(any(test, debug_assertions))))]
     fn par_min_bytes() -> usize {
         PAR_STAGE1_MIN_BYTES_DEFAULT
     }
-
     #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
     fn stage1_gpu_min_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
@@ -6486,13 +6166,10 @@ pub mod json {
             .lock()
             .expect("stage1 gpu min mutex")
     }
-
     #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
     const STAGE1_GPU_MIN_DEFAULT: usize = 192 * 1024;
-
     #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
     static STAGE1_GPU_MIN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
     #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
     fn stage1_gpu_min_bytes_locked(_guard: &std::sync::MutexGuard<'static, ()>) -> usize {
         use std::sync::atomic::Ordering;
@@ -6515,19 +6192,15 @@ pub mod json {
         STAGE1_GPU_MIN.store(min_bytes, Ordering::Relaxed);
         min_bytes
     }
-
     #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1"))]
     fn stage1_gpu_min_bytes() -> usize {
         let guard = stage1_gpu_min_lock();
         stage1_gpu_min_bytes_locked(&guard)
     }
-
     #[cfg(test)]
     mod stage1_gpu_min_tests {
-        use std::sync::atomic::Ordering;
-
         use super::{STAGE1_GPU_MIN, stage1_gpu_min_bytes_locked};
-
+        use std::sync::atomic::Ordering;
         #[test]
         fn defaults_when_env_missing() {
             let guard = super::stage1_gpu_min_lock();
@@ -6536,7 +6209,6 @@ pub mod json {
             assert_eq!(stage1_gpu_min_bytes_locked(&guard), 192 * 1024);
             STAGE1_GPU_MIN.store(0, Ordering::Relaxed);
         }
-
         #[test]
         fn respects_env_override() {
             let guard = super::stage1_gpu_min_lock();
@@ -6547,7 +6219,6 @@ pub mod json {
             STAGE1_GPU_MIN.store(0, Ordering::Relaxed);
         }
     }
-
     #[cfg(feature = "parallel-stage1")]
     fn build_struct_index_parallel(input: &str) -> Option<StructIndex> {
         let ncpu = std::thread::available_parallelism()
@@ -6557,7 +6228,6 @@ pub mod json {
         let chunk_goal = 256 * 1024; // 256 KiB target
         let max_chunks = ncpu * 4; // avoid oversharding
         let chunks = len.div_ceil(chunk_goal).clamp(2, max_chunks);
-
         // Partition input
         let mut ranges = Vec::with_capacity(chunks);
         let mut start = 0usize;
@@ -6569,7 +6239,6 @@ pub mod json {
             ranges.push((start, end));
             start = end;
         }
-
         // Compute all incoming quote-state variants per chunk, then compose the
         // states in chunk order. This keeps chunking parallel without assuming a
         // chunk starts outside a string.
@@ -6596,16 +6265,13 @@ pub mod json {
             }
             v
         };
-
         parts.sort_by_key(|part| part.base);
         Some(compose_stage1_chunks(parts))
     }
-
     #[cfg(all(feature = "parallel-stage1", feature = "bench-internal"))]
     pub fn build_struct_index_parallel_bench(input: &str) -> StructIndex {
         build_struct_index_parallel(input).unwrap_or_else(|| build_struct_index_scalar(input))
     }
-
     #[cfg(all(feature = "parallel-stage1", feature = "bench-internal"))]
     pub fn build_struct_index_parallel_with_chunks(
         input: &str,
@@ -6632,7 +6298,6 @@ pub mod json {
         parts.sort_by_key(|part| part.base);
         compose_stage1_chunks(parts)
     }
-
     #[cfg(feature = "parallel-stage1")]
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum Stage1ChunkState {
@@ -6640,7 +6305,6 @@ pub mod json {
         InsideEvenBackslash,
         InsideOddBackslash,
     }
-
     #[cfg(feature = "parallel-stage1")]
     impl Stage1ChunkState {
         fn initial(self) -> (bool, usize) {
@@ -6650,7 +6314,6 @@ pub mod json {
                 Self::InsideOddBackslash => (true, 1),
             }
         }
-
         fn from_end(in_string: bool, carry_bs_run_len: usize) -> Self {
             if !in_string {
                 Self::Outside
@@ -6660,7 +6323,6 @@ pub mod json {
                 Self::InsideOddBackslash
             }
         }
-
         fn index(self) -> usize {
             match self {
                 Self::Outside => 0,
@@ -6669,19 +6331,16 @@ pub mod json {
             }
         }
     }
-
     #[cfg(feature = "parallel-stage1")]
     struct Stage1ChunkVariant {
         offsets: Vec<u32>,
         end_state: Stage1ChunkState,
     }
-
     #[cfg(feature = "parallel-stage1")]
     struct Stage1ChunkPlan {
         base: usize,
         variants: [Stage1ChunkVariant; 3],
     }
-
     #[cfg(feature = "parallel-stage1")]
     fn plan_stage1_chunk(base: usize, input: &[u8]) -> Stage1ChunkPlan {
         Stage1ChunkPlan {
@@ -6693,7 +6352,6 @@ pub mod json {
             ],
         }
     }
-
     #[cfg(feature = "parallel-stage1")]
     fn scan_stage1_chunk_variant(
         base: usize,
@@ -6709,7 +6367,6 @@ pub mod json {
             end_state: Stage1ChunkState::from_end(end_in_string, end_carry_bs_run_len),
         }
     }
-
     #[cfg(feature = "parallel-stage1")]
     fn compose_stage1_chunks(parts: Vec<Stage1ChunkPlan>) -> StructIndex {
         let mut state = Stage1ChunkState::Outside;
@@ -6725,7 +6382,6 @@ pub mod json {
         }
         StructIndex { offsets }
     }
-
     // Continue the scalar structural scan from an arbitrary byte boundary while
     // preserving quote state and a trailing run of backslashes from the prior chunk.
     fn extend_struct_index_scalar(
@@ -6758,7 +6414,6 @@ pub mod json {
                 }
                 continue;
             }
-
             match byte {
                 b'"' => {
                     in_string = true;
@@ -6773,7 +6428,6 @@ pub mod json {
         }
         (in_string, carry_bs_run_len)
     }
-
     /// Reference scalar builder used for correctness and as a fallback.
     ///
     /// The fast paths (`build_struct_index_neon` / `build_struct_index_avx2`) already
@@ -6784,7 +6438,6 @@ pub mod json {
         let _ = extend_struct_index_scalar(input.as_bytes(), 0, &mut offsets, false, 0);
         StructIndex { offsets }
     }
-
     #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
     /// NEON-accelerated structural indexer with bitboard iteration.
     ///
@@ -6799,7 +6452,6 @@ pub mod json {
             let mut i = 0usize;
             let mut in_string = false;
             let mut carry_bs_run_len: usize = 0;
-
             #[inline(always)]
             fn to_mask(v: uint8x16_t) -> u16 {
                 unsafe {
@@ -6816,15 +6468,12 @@ pub mod json {
                     m
                 }
             }
-
             while i + 16 <= bytes.len() {
                 let ptr = bytes.as_ptr().add(i);
                 let v = vld1q_u8(ptr);
-
                 // Quote predicate
                 let is_quote = vceqq_u8(v, vdupq_n_u8(b'"'));
                 let qmask = to_mask(is_quote);
-
                 // Nibble-LUT classification for structurals { } [ ] : ,
                 // Map low-nibble -> allowed high-nibble groups (bits: 1=>0x2, 2=>0x3, 4=>0x5, 8=>0x7)
                 const STRUCT_LO: [u8; 16] = [
@@ -6846,7 +6495,6 @@ pub mod json {
                 // Test for nonzero intersection per lane -> 0xFF where true
                 let structurals = vtstq_u8(lo_map, hi_map);
                 let smask = to_mask(structurals);
-
                 // Compute mask of unescaped quotes using quote and backslash bitboards.
                 let bslash = vceqq_u8(v, vdupq_n_u8(b'\\'));
                 let bmask = to_mask(bslash);
@@ -6873,7 +6521,6 @@ pub mod json {
                     }
                     qm &= qm - 1; // clear lowest set bit
                 }
-
                 // Iterate union of unescaped quotes and structurals; toggle in_string on quotes
                 let mut union = unescaped | smask;
                 while union != 0 {
@@ -6888,7 +6535,6 @@ pub mod json {
                     }
                     union &= union - 1;
                 }
-
                 // Trailing backslash run length becomes carry for next block
                 // We still examine the block tail directly (cheaper than reconstructing a rank prefix)
                 let mut arr = [0u8; 16];
@@ -6902,7 +6548,6 @@ pub mod json {
                 carry_bs_run_len = t;
                 i += 16;
             }
-
             if i < bytes.len() {
                 let _ = extend_struct_index_scalar(
                     &bytes[i..],
@@ -6915,7 +6560,6 @@ pub mod json {
             Some(StructIndex { offsets })
         }
     }
-
     /// Helper to access the scalar reference builder for parity tests.
     ///
     /// Exposed under the `json` feature for integration tests comparing
@@ -6923,13 +6567,11 @@ pub mod json {
     pub fn build_struct_index_scalar_test(input: &str) -> StructIndex {
         build_struct_index_scalar(input)
     }
-
     #[cfg(feature = "bench-internal")]
     /// Expose scalar builder to benchmarks to compare against NEON and future GPU paths.
     pub fn build_struct_index_scalar_bench(input: &str) -> StructIndex {
         build_struct_index_scalar(input)
     }
-
     /// AVX2 Stage-1 builder using nibble-LUT (vpshufb) and bitboard iteration.
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2")]
@@ -6941,7 +6583,6 @@ pub mod json {
             let mut i = 0usize;
             let mut in_string = false;
             let mut carry_bs_run_len: usize = 0;
-
             // Prepare 32-byte lookup tables (lo/hi replicated)
             let lo_tbl_16: [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 12, 1, 12, 0, 0];
             let hi_tbl_16: [u8; 16] = [0, 0, 1, 2, 0, 4, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -6955,7 +6596,6 @@ pub mod json {
             );
             let mask_0f = _mm256_set1_epi8(0x0f_i8);
             let zero = _mm256_setzero_si256();
-
             while i + 32 <= bytes.len() {
                 let ptr = bytes.as_ptr().add(i) as *const __m256i;
                 let v = _mm256_loadu_si256(ptr);
@@ -6971,11 +6611,9 @@ pub mod json {
                 let nonzero =
                     _mm256_xor_si256(_mm256_cmpeq_epi8(inter, zero), _mm256_set1_epi8(-1));
                 let smask = _mm256_movemask_epi8(nonzero) as u32;
-
                 // Backslash bitboard for escaped-quote parity
                 let bslash = _mm256_cmpeq_epi8(v, _mm256_set1_epi8(b'\\' as i8));
                 let bmask = _mm256_movemask_epi8(bslash) as u32;
-
                 // Unescaped quotes: iterate only quote bits
                 let mut unescaped: u32 = 0;
                 while qmask != 0 {
@@ -6999,7 +6637,6 @@ pub mod json {
                     }
                     qmask &= qmask - 1;
                 }
-
                 // Iterate union and push offsets
                 let mut union = unescaped | smask;
                 while union != 0 {
@@ -7013,7 +6650,6 @@ pub mod json {
                     }
                     union &= union - 1;
                 }
-
                 // Trailing backslash run carry: examine bytes directly for the tail
                 let mut arr = [0u8; 32];
                 _mm256_storeu_si256(arr.as_mut_ptr() as *mut __m256i, v);
@@ -7026,7 +6662,6 @@ pub mod json {
                 carry_bs_run_len = t;
                 i += 32;
             }
-
             if i < bytes.len() {
                 let _ = extend_struct_index_scalar(
                     &bytes[i..],
@@ -7039,25 +6674,20 @@ pub mod json {
             Some(StructIndex { offsets })
         }
     }
-
     #[cfg(feature = "metal-stage1")]
     mod metal {
+        use super::StructIndex;
         use std::{
             ffi::{c_char, c_int, c_void},
             sync::{Mutex, OnceLock},
         };
-
-        use super::StructIndex;
-
         #[cfg(unix)]
         unsafe extern "C" {
             fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
             fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
             fn dlclose(handle: *mut c_void) -> c_int;
         }
-
         const RTLD_LAZY: c_int = 1;
-
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         #[link(name = "Metal", kind = "framework")]
         unsafe extern "C" {
@@ -7068,28 +6698,23 @@ pub mod json {
             fn objc_autoreleasePoolPush() -> *mut c_void;
             fn objc_autoreleasePoolPop(pool: *mut c_void);
         }
-
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         struct MetalLib {
             _handle: *mut c_void,
             func: super::Stage1HelperFn,
         }
-
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         unsafe impl Send for MetalLib {}
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         unsafe impl Sync for MetalLib {}
-
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         static METAL_LIB: OnceLock<Mutex<Option<MetalLib>>> = OnceLock::new();
-
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         pub(super) fn reset_cached_library() {
             if let Some(cache) = METAL_LIB.get() {
                 *cache.lock().expect("metal cache poisoned") = None;
             }
         }
-
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         unsafe fn load_metal_library() -> Option<MetalLib> {
             unsafe {
@@ -7100,9 +6725,7 @@ pub mod json {
                 if !avail {
                     return None;
                 }
-
                 use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
-
                 let mut lib = std::ptr::null_mut();
                 let mut candidates: Vec<PathBuf> = Vec::new();
                 if let Ok(exe) = env::current_exe()
@@ -7142,7 +6765,6 @@ pub mod json {
                 Some(MetalLib { _handle: lib, func })
             }
         }
-
         /// Attempt to build a structural tape using a dynamically loaded Metal implementation.
         /// Returns None when Metal is unavailable or the helper dylib is not present.
         pub fn build_struct_index_metal(input: &str) -> Option<StructIndex> {
@@ -7154,7 +6776,6 @@ pub mod json {
                     *guard = load_metal_library();
                 }
                 let lib = guard.as_ref()?;
-
                 super::try_build_struct_index_with_helper(input, lib.func)
             }
             #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
@@ -7164,45 +6785,35 @@ pub mod json {
             }
         }
     }
-
     #[cfg(feature = "cuda-stage1")]
     mod cuda {
+        use super::StructIndex;
         use std::{
             ffi::{c_char, c_int, c_void},
             sync::{Mutex, OnceLock},
         };
-
-        use super::StructIndex;
-
         #[cfg(unix)]
         unsafe extern "C" {
             fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
             fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
             fn dlclose(handle: *mut c_void) -> c_int;
         }
-
         const RTLD_LAZY: c_int = 1;
-
         struct CudaLib {
             _handle: *mut c_void,
             func: super::Stage1HelperFn,
         }
-
         unsafe impl Send for CudaLib {}
         unsafe impl Sync for CudaLib {}
-
         static CUDA_LIB: OnceLock<Mutex<Option<CudaLib>>> = OnceLock::new();
-
         pub(super) fn reset_cached_library() {
             if let Some(cache) = CUDA_LIB.get() {
                 *cache.lock().expect("cuda cache poisoned") = None;
             }
         }
-
         #[cfg(target_os = "macos")]
         unsafe fn load_cuda_library() -> Option<CudaLib> {
             use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
-
             let mut h = std::ptr::null_mut();
             let mut candidates: Vec<PathBuf> = Vec::new();
             if let Ok(exe) = env::current_exe()
@@ -7243,11 +6854,9 @@ pub mod json {
             }
             Some(CudaLib { _handle: h, func })
         }
-
         #[cfg(all(unix, not(target_os = "macos")))]
         unsafe fn load_cuda_library() -> Option<CudaLib> {
             use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
-
             let mut h = std::ptr::null_mut();
             let mut candidates: Vec<PathBuf> = Vec::new();
             if let Ok(exe) = env::current_exe()
@@ -7286,11 +6895,9 @@ pub mod json {
             }
             Some(CudaLib { _handle: h, func })
         }
-
         #[cfg(windows)]
         unsafe fn load_cuda_library() -> Option<CudaLib> {
             use std::{env, os::windows::ffi::OsStrExt, path::PathBuf, ptr};
-
             unsafe extern "system" {
                 fn SetDefaultDllDirectories(directory_flags: u32) -> i32;
                 fn LoadLibraryExW(
@@ -7301,11 +6908,9 @@ pub mod json {
                 fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const u8) -> *mut c_void;
                 fn FreeLibrary(h_lib_module: *mut c_void) -> i32;
             }
-
             const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x0000_1000;
             const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
             const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x0000_0100;
-
             static DLL_DIRECTORY_SETUP: OnceLock<bool> = OnceLock::new();
             if !*DLL_DIRECTORY_SETUP.get_or_init(|| unsafe {
                 let flags = LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_SYSTEM32;
@@ -7313,7 +6918,6 @@ pub mod json {
             }) {
                 return None;
             }
-
             let mut candidates: Vec<PathBuf> = Vec::new();
             if let Ok(exe) = env::current_exe()
                 && let Some(dir) = exe.parent()
@@ -7321,7 +6925,6 @@ pub mod json {
                 candidates.push(dir.join("jsonstage1_cuda.dll"));
                 candidates.push(dir.join("../lib").join("jsonstage1_cuda.dll"));
             }
-
             for path in candidates {
                 let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
                 let search_flags = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32;
@@ -7345,12 +6948,10 @@ pub mod json {
             }
             None
         }
-
         #[cfg(not(any(target_os = "macos", all(unix, not(target_os = "macos")), windows)))]
         unsafe fn load_cuda_library() -> Option<CudaLib> {
             None
         }
-
         pub fn build_struct_index_cuda(input: &str) -> Option<StructIndex> {
             unsafe {
                 let cache = CUDA_LIB.get_or_init(|| Mutex::new(None));
@@ -7359,12 +6960,10 @@ pub mod json {
                     *guard = load_cuda_library();
                 }
                 let lib = guard.as_ref()?;
-
                 super::try_build_struct_index_with_helper(input, lib.func)
             }
         }
     }
-
     fn document_json_value_depth(input: &str) -> usize {
         let bytes = input.as_bytes();
         let mut container_depth = 0_usize;
@@ -7376,7 +6975,6 @@ pub mod json {
         let first_forbidden_depth = MAX_JSON_VALUE_NESTING_DEPTH.saturating_add(1);
         let mut in_string = false;
         let mut escaped = false;
-
         for (offset, &byte) in bytes.iter().enumerate() {
             if in_string {
                 if escaped {
@@ -7392,7 +6990,6 @@ pub mod json {
                 in_string = true;
                 continue;
             }
-
             let matching_close = match byte {
                 b'{' => Some(b'}'),
                 b'[' => Some(b']'),
@@ -7405,13 +7002,11 @@ pub mod json {
             let Some(matching_close) = matching_close else {
                 continue;
             };
-
             container_depth = container_depth.saturating_add(1);
             maximum_depth = maximum_depth.max(container_depth);
             if maximum_depth >= first_forbidden_depth {
                 return first_forbidden_depth;
             }
-
             let mut next = offset.saturating_add(1);
             while matches!(bytes.get(next), Some(b' ' | b'\n' | b'\r' | b'\t')) {
                 next = next.saturating_add(1);
@@ -7423,10 +7018,8 @@ pub mod json {
                 }
             }
         }
-
         maximum_depth
     }
-
     /// A light walker over the structural index.
     pub struct TapeWalker<'a> {
         input: &'a str,
@@ -7437,7 +7030,6 @@ pub mod json {
         last_key_hi: usize,
         document_value_depth: usize,
     }
-
     /// Reset cached dynamic libraries used by the Stage-1 GPU/Metal accelerators.
     /// This allows callers to retry loading helper libraries without restarting the process.
     pub fn reset_stage1_backends() {
@@ -8112,7 +7704,6 @@ pub mod json {
                 Ok(h_fnv)
             }
         }
-
         fn skip_ws_raw(&mut self) {
             let bytes = self.input.as_bytes();
             while self.raw < bytes.len() {
@@ -8122,7 +7713,6 @@ pub mod json {
                 }
             }
         }
-
         /// Skip over the next JSON value using the structural index when possible.
         pub fn skip_value(&mut self) -> Result<(), Error> {
             self.ensure_document_depth()?;
@@ -8142,7 +7732,6 @@ pub mod json {
             self.sync_to_raw(parser.position());
             Ok(())
         }
-
         /// Return the last read key slice (without quotes), borrowed from input.
         pub fn last_key(&self) -> &'a str {
             // SAFETY: input is valid UTF-8, keys are inside quotes and by JSON rules contain valid UTF-8 bytes
@@ -8152,7 +7741,6 @@ pub mod json {
                 )
             }
         }
-
         /// Fast inline parse of a boolean at the current raw position.
         /// Advances `raw` past the token.
         pub fn parse_bool_inline(&mut self) -> Result<bool, Error> {
@@ -8170,7 +7758,6 @@ pub mod json {
             let (byte, line, col) = pos_from_offset(self.input, i.min(b.len()));
             Err(Error::ExpectedBool { byte, line, col })
         }
-
         /// Fast inline parse of a non-negative u64 at the current raw position.
         /// Advances `raw` past the number.
         pub fn parse_u64_inline(&mut self) -> Result<u64, Error> {
@@ -8211,7 +7798,6 @@ pub mod json {
             self.skip_ws();
             Ok(val)
         }
-
         /// Fast inline parse of a signed i64 at the current raw position.
         /// Advances `raw` past the number.
         pub fn parse_i64_inline(&mut self) -> Result<i64, Error> {
@@ -8291,7 +7877,6 @@ pub mod json {
             self.skip_ws();
             Ok(v)
         }
-
         /// Fast inline parse of a non-negative u128 at the current raw position.
         /// Advances `raw` past the number.
         pub fn parse_u128_inline(&mut self) -> Result<u128, Error> {
@@ -8352,7 +7937,6 @@ pub mod json {
             self.skip_ws();
             Ok(val)
         }
-
         /// Fast inline parse of an f64 at the current raw position.
         /// Advances `raw` past the number.
         pub fn parse_f64_inline(&mut self) -> Result<f64, Error> {
@@ -8435,7 +8019,6 @@ pub mod json {
             self.skip_ws();
             Ok(v)
         }
-
         /// Fast inline parse of a JSON string, returning a borrowed slice or an arena-owned string when escaping occurs.
         /// Advances `raw` past the string token.
         pub fn parse_string_ref_inline<'arena>(
@@ -8630,7 +8213,6 @@ pub mod json {
             Err(Error::UnterminatedString { byte, line, col })
         }
     }
-
     /// Streaming tokens over JSON input.
     #[derive(Debug, PartialEq)]
     pub enum Token<'a> {
@@ -8644,18 +8226,15 @@ pub mod json {
         Bool(bool),
         Null,
     }
-
     enum Ctx {
         Object { expecting_key: bool },
         Array,
     }
-
     /// Reader producing a zero-copy token stream using the structural tape.
     pub struct Reader<'a> {
         w: TapeWalker<'a>,
         stack: Vec<Ctx>,
     }
-
     impl<'a> Reader<'a> {
         pub fn new(input: &'a str) -> Self {
             Self {
@@ -8663,7 +8242,6 @@ pub mod json {
                 stack: Vec::new(),
             }
         }
-
         fn skip_commas(&mut self) {
             loop {
                 self.w.skip_ws();
@@ -8680,7 +8258,6 @@ pub mod json {
                 }
             }
         }
-
         /// Return the next token or None at end of input.
         pub fn next_token(&mut self) -> Result<Option<Token<'a>>, Error> {
             self.w.ensure_document_depth()?;
@@ -8690,7 +8267,6 @@ pub mod json {
             if self.w.raw_pos() >= bytes.len() {
                 return Ok(None);
             }
-
             // Handle immediate structural at raw without relying on the current idx
             let raw = self.w.raw_pos();
             match bytes[raw] {
@@ -8773,7 +8349,6 @@ pub mod json {
                 }
                 _ => {}
             }
-
             // If the next structural is ahead of raw, parse a scalar (number/bool/null) as value
             if let Some((off, ch)) = self.w.peek_struct() {
                 if off > self.w.raw_pos() {
@@ -8888,12 +8463,10 @@ pub mod json {
                     }
                 }
             }
-
             // Scalar path
             let c = bytes[self.w.raw_pos()];
             self.parse_scalar(c)
         }
-
         fn parse_scalar(&mut self, c: u8) -> Result<Option<Token<'a>>, Error> {
             let s = self.w.input();
             match c {
@@ -8971,12 +8544,10 @@ pub mod json {
                 }
             }
         }
-
         /// Return an iterator over tokens borrowing from this reader.
         pub fn tokens(&mut self) -> Tokens<'_, 'a> {
             Tokens { reader: self }
         }
-
         /// Inherent helper for tokenizing: returns the next token or None at end of input.
         /// This API matches tests/examples that expect `Result<Option<Token>, Error>`.
         #[allow(clippy::should_implement_trait)]
@@ -8984,12 +8555,10 @@ pub mod json {
             self.next_token()
         }
     }
-
     /// Iterator wrapper over `Reader`.
     pub struct Tokens<'r, 'a> {
         reader: &'r mut Reader<'a>,
     }
-
     impl<'r, 'a> Iterator for Tokens<'r, 'a> {
         type Item = Result<Token<'a>, Error>;
         fn next(&mut self) -> Option<Self::Item> {
@@ -9000,7 +8569,6 @@ pub mod json {
             }
         }
     }
-
     /// Deserialize `T` from JSON using the generic `JsonDeserialize` path.
     pub fn from_json<T: JsonDeserialize>(s: &str) -> Result<T, Error> {
         // Preflight the complete document once, before a generated typed
@@ -9018,7 +8586,6 @@ pub mod json {
         }
         Ok(v)
     }
-
     /// Deserialize `T` using a `FastFromJson` implementation plus the structural tape.
     pub fn from_json_fast<'a, T>(s: &'a str) -> Result<T, Error>
     where
@@ -9029,7 +8596,6 @@ pub mod json {
         w.ensure_document_depth()?;
         let mut arena = Arena::new();
         let value = T::parse(&mut w, &mut arena).map_err(|e| Error::Message(e.to_string()))?;
-
         // After parsing a top-level value, ensure no trailing non-whitespace remains.
         w.skip_ws();
         if w.raw_pos() < s.len() {
@@ -9039,7 +8605,6 @@ pub mod json {
         }
         Ok(value)
     }
-
     /// Smart fast path: skip the tape for tiny inputs using the generic typed parser.
     /// Falls back to the tape-based path for larger inputs.
     pub fn from_json_fast_smart<'a, T>(s: &'a str) -> Result<T, Error>
@@ -9053,7 +8618,6 @@ pub mod json {
         }
         from_json_fast::<T>(s)
     }
-
     /// Auto-select JSON decode path for typed values.
     ///
     /// - For small inputs (<= 256 bytes), prefers the lightweight generic typed parser to
@@ -9075,13 +8639,11 @@ pub mod json {
         }
         from_json_fast::<T>(s)
     }
-
     /// String reference that can borrow from input or from an arena.
     pub enum StrRef<'s, 'a> {
         Borrowed(&'s str),
         Owned(&'a str),
     }
-
     impl<'s, 'a> core::fmt::Display for StrRef<'s, 'a> {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             match self {
@@ -9090,7 +8652,6 @@ pub mod json {
             }
         }
     }
-
     impl<'a> Parser<'a> {
         /// Parse a JSON string and return a reference either borrowed from input or
         /// allocated in the provided arena when unescaping is required.
@@ -9280,149 +8841,17 @@ pub mod json {
             }
         }
     }
-
     /// Typed, tape-first decode (prototype): parse using the structural tape directly.
     /// Error type used by FastFromJson derives.
     pub type FastPathError = super::Error;
     pub trait FastFromJson<'a>: Sized {
         fn parse<'b>(w: &mut TapeWalker<'a>, arena: &'b mut Arena) -> Result<Self, FastPathError>;
     }
-    /// Typed, straight-line JSON writer.
-    pub trait FastJsonWrite {
-        fn write_json(&self, out: &mut String);
-    }
-
-    impl FastJsonWrite for u16 {
-        fn write_json(&self, out: &mut String) {
-            write_u64_json(out, u64::from(*self));
-        }
-    }
-    impl FastJsonWrite for u8 {
-        fn write_json(&self, out: &mut String) {
-            write_u64_json(out, u64::from(*self));
-        }
-    }
-    impl FastJsonWrite for usize {
-        fn write_json(&self, out: &mut String) {
-            write_u64_json(out, *self as u64);
-        }
-    }
-    impl FastJsonWrite for u32 {
-        fn write_json(&self, out: &mut String) {
-            write_u32_json(out, *self);
-        }
-    }
-    impl FastJsonWrite for u64 {
-        fn write_json(&self, out: &mut String) {
-            write_u64_json(out, *self);
-        }
-    }
-    impl FastJsonWrite for u128 {
-        fn write_json(&self, out: &mut String) {
-            write_u128_json(out, *self);
-        }
-    }
-    impl FastJsonWrite for i64 {
-        fn write_json(&self, out: &mut String) {
-            write_i64_json(out, *self);
-        }
-    }
-    impl FastJsonWrite for i32 {
-        fn write_json(&self, out: &mut String) {
-            write_i64_json(out, *self as i64);
-        }
-    }
-    impl FastJsonWrite for i16 {
-        fn write_json(&self, out: &mut String) {
-            write_i64_json(out, i64::from(*self));
-        }
-    }
-    impl FastJsonWrite for i8 {
-        fn write_json(&self, out: &mut String) {
-            write_i64_json(out, i64::from(*self));
-        }
-    }
-    impl FastJsonWrite for isize {
-        fn write_json(&self, out: &mut String) {
-            write_i64_json(out, *self as i64);
-        }
-    }
-
-    impl<T: JsonSerialize + Ord> FastJsonWrite for std::collections::BTreeSet<T> {
-        fn write_json(&self, out: &mut String) {
-            out.push('[');
-            let mut iter = self.iter();
-            if let Some(first) = iter.next() {
-                first.json_serialize(out);
-                for value in iter {
-                    out.push(',');
-                    value.json_serialize(out);
-                }
-            }
-            out.push(']');
-        }
-    }
-
-    impl<K, V> FastJsonWrite for std::collections::BTreeMap<K, V>
-    where
-        K: JsonSerialize + Ord,
-        V: JsonSerialize,
-    {
-        fn write_json(&self, out: &mut String) {
-            out.push('{');
-            let mut iter = self.iter();
-            if let Some((key, value)) = iter.next() {
-                key.json_serialize(out);
-                out.push(':');
-                value.json_serialize(out);
-                for (key, value) in iter {
-                    out.push(',');
-                    key.json_serialize(out);
-                    out.push(':');
-                    value.json_serialize(out);
-                }
-            }
-            out.push('}');
-        }
-    }
-
-    // Minimal writer for f64 used by derives. Non-finite values are encoded as null.
-    impl FastJsonWrite for f64 {
-        fn write_json(&self, out: &mut String) {
-            write_f64_json(*self, out);
-        }
-    }
-
-    impl<T: FastJsonWrite + ?Sized> FastJsonWrite for &T {
-        fn write_json(&self, out: &mut String) {
-            (**self).write_json(out);
-        }
-    }
-
-    impl<T: FastJsonWrite + ?Sized> FastJsonWrite for &mut T {
-        fn write_json(&self, out: &mut String) {
-            (**self).write_json(out);
-        }
-    }
-
-    impl FastJsonWrite for str {
-        fn write_json(&self, out: &mut String) {
-            write_json_string(self, out);
-        }
-    }
-
-    impl FastJsonWrite for String {
-        fn write_json(&self, out: &mut String) {
-            write_json_string(self, out);
-        }
-    }
-
     impl<const N: usize> JsonDeserialize for [u8; N] {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
             let raw = parser.parse_string()?;
             decode_hex::<N>(&raw)
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Some(s) = value.as_str() {
                 decode_hex::<N>(s)
@@ -9430,18 +8859,18 @@ pub mod json {
                 json_from_value_via_string(value)
             }
         }
-
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
             decode_hex::<N>(key)
         }
     }
-
     impl<const N: usize> FastJsonWrite for [u8; N] {
         fn write_json(&self, out: &mut String) {
             encode_hex(self, out);
         }
+        fn write_json_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+            bounded::write_hex_to(self, out)
+        }
     }
-
     impl<K, V> JsonDeserialize for std::collections::HashMap<K, V>
     where
         K: JsonDeserialize + Eq + core::hash::Hash,
@@ -9449,7 +8878,12 @@ pub mod json {
     {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
             let mut visitor = MapVisitor::new(parser)?;
+            let entries = visitor.total_entries();
+            crate::core::reserve_decode_hash_table_allocation::<(K, V)>(entries)
+                .map_err(Error::from_decode_resource)?;
             let mut map = std::collections::HashMap::new();
+            map.try_reserve(entries)
+                .map_err(|_| Error::AllocationFailed)?;
             while let Some(key) = visitor.next_key()? {
                 let key_ref = match &key {
                     KeyRef::Borrowed(s) => *s,
@@ -9464,10 +8898,13 @@ pub mod json {
             visitor.finish()?;
             Ok(map)
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Value::Object(obj) = value {
-                let mut map = std::collections::HashMap::with_capacity(obj.len());
+                crate::core::reserve_decode_hash_table_allocation::<(K, V)>(obj.len())
+                    .map_err(Error::from_decode_resource)?;
+                let mut map = std::collections::HashMap::new();
+                map.try_reserve(obj.len())
+                    .map_err(|_| Error::AllocationFailed)?;
                 for (k, v) in obj.iter() {
                     let parsed_key = K::json_from_map_key(k)?;
                     if map.insert(parsed_key, V::json_from_value(v)?).is_some() {
@@ -9480,7 +8917,6 @@ pub mod json {
             }
         }
     }
-
     impl<K, V> JsonDeserialize for std::collections::BTreeMap<K, V>
     where
         K: JsonDeserialize + Ord,
@@ -9488,6 +8924,9 @@ pub mod json {
     {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
             let mut visitor = MapVisitor::new(parser)?;
+            let entries = visitor.total_entries();
+            crate::core::reserve_decode_btree_allocation::<K, V>(entries)
+                .map_err(Error::from_decode_resource)?;
             let mut map = std::collections::BTreeMap::new();
             while let Some(key) = visitor.next_key()? {
                 let key_ref = match &key {
@@ -9503,9 +8942,10 @@ pub mod json {
             visitor.finish()?;
             Ok(map)
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Value::Object(obj) = value {
+                crate::core::reserve_decode_btree_allocation::<K, V>(obj.len())
+                    .map_err(Error::from_decode_resource)?;
                 let mut map = std::collections::BTreeMap::new();
                 for (k, v) in obj.iter() {
                     let parsed_key = K::json_from_map_key(k)?;
@@ -9519,15 +8959,19 @@ pub mod json {
             }
         }
     }
-
     impl<T> JsonDeserialize for std::collections::HashSet<T>
     where
         T: JsonDeserialize + Eq + core::hash::Hash,
     {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
+            let entries = parser.preflight_array_entries()?;
+            crate::core::reserve_decode_hash_table_allocation::<T>(entries)
+                .map_err(Error::from_decode_resource)?;
             parser.skip_ws();
             parser.expect(b'[')?;
             let mut set = std::collections::HashSet::new();
+            set.try_reserve(entries)
+                .map_err(|_| Error::AllocationFailed)?;
             parser.skip_ws();
             if parser.try_consume_char(b']')? {
                 return Ok(set);
@@ -9546,10 +8990,13 @@ pub mod json {
             }
             Ok(set)
         }
-
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Value::Array(items) = value {
-                let mut set = std::collections::HashSet::with_capacity(items.len());
+                crate::core::reserve_decode_hash_table_allocation::<T>(items.len())
+                    .map_err(Error::from_decode_resource)?;
+                let mut set = std::collections::HashSet::new();
+                set.try_reserve(items.len())
+                    .map_err(|_| Error::AllocationFailed)?;
                 for item in items {
                     let v = T::json_from_value(item)?;
                     if !set.insert(v) {
@@ -9562,7 +9009,6 @@ pub mod json {
             }
         }
     }
-
     impl<T> FastJsonWrite for std::collections::HashSet<T>
     where
         T: JsonSerialize + Eq + core::hash::Hash + Ord,
@@ -9581,14 +9027,42 @@ pub mod json {
             }
             out.push(']');
         }
+        fn write_json_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+            out.begin_container()?;
+            out.push('[')?;
+            let mut previous: Option<&T> = None;
+            for index in 0..self.len() {
+                let mut next: Option<&T> = None;
+                for candidate in self {
+                    if previous.is_some_and(|value| candidate <= value) {
+                        continue;
+                    }
+                    if next.is_none_or(|value| candidate < value) {
+                        next = Some(candidate);
+                    }
+                }
+                let Some(value) = next else {
+                    return Err(BoundedJsonError::LengthMismatch);
+                };
+                if index != 0 {
+                    out.push(',')?;
+                }
+                value.json_serialize_to(out)?;
+                previous = Some(value);
+            }
+            out.push(']')?;
+            out.end_container();
+            Ok(())
+        }
     }
-
     impl FastJsonWrite for Url {
         fn write_json(&self, out: &mut String) {
             write_json_string(self.as_str(), out);
         }
+        fn write_json_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+            write_json_string_to(self.as_str(), out)
+        }
     }
-
     /// Borrowed-or-owned key reference returned by `Parser::parse_key`.
     pub enum KeyRef<'a> {
         Borrowed(&'a str),
@@ -9605,31 +9079,26 @@ pub mod json {
         // Note: prefer `as_str()` or the `AsRef<str>` impl over an inherent
         // `as_ref` method to avoid clippy's confusion with the trait method.
     }
-
     impl<'a> AsRef<str> for KeyRef<'a> {
         #[inline]
         fn as_ref(&self) -> &str {
             self.as_str()
         }
     }
-
     /// Wrapper around a parsed JSON object key that offers typed conversions.
     pub struct CoerceKey<'a> {
         inner: KeyRef<'a>,
     }
-
     impl<'a> From<KeyRef<'a>> for CoerceKey<'a> {
         fn from(inner: KeyRef<'a>) -> Self {
             Self { inner }
         }
     }
-
     impl<'a> CoerceKey<'a> {
         #[inline]
         pub fn as_str(&self) -> &str {
             self.inner.as_str()
         }
-
         #[inline]
         pub fn into_owned(self) -> String {
             match self.inner {
@@ -9637,7 +9106,6 @@ pub mod json {
                 KeyRef::Owned(s) => s,
             }
         }
-
         pub fn parse<T>(&self) -> Result<T, Error>
         where
             T: core::str::FromStr,
@@ -9648,69 +9116,17 @@ pub mod json {
                 .map_err(|e| Error::Message(format!("failed to parse map key `{key}`: {e}")))
         }
     }
-
-    #[derive(Debug, Clone)]
-    pub struct RawValue {
-        inner: Box<str>,
-    }
-
-    impl RawValue {
-        #[inline]
-        pub fn from_boxed(inner: Box<str>) -> Self {
-            Self { inner }
-        }
-
-        #[inline]
-        pub fn from_string(s: String) -> Self {
-            Self {
-                inner: s.into_boxed_str(),
-            }
-        }
-
-        #[inline]
-        pub fn get(&self) -> &str {
-            &self.inner
-        }
-
-        #[inline]
-        pub fn as_str(&self) -> &str {
-            &self.inner
-        }
-
-        #[inline]
-        pub fn into_boxed_str(self) -> Box<str> {
-            self.inner
-        }
-
-        #[inline]
-        pub fn into_string(self) -> String {
-            self.inner.into()
-        }
-    }
-
-    impl JsonSerialize for RawValue {
-        fn json_serialize(&self, out: &mut String) {
-            out.push_str(self.get());
-        }
-    }
-
-    impl JsonDeserialize for RawValue {
-        fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
-            p.skip_ws();
-            let start = p.position();
-            p.skip_value()?;
-            let end = p.position();
-            let slice = &p.input()[start..end];
-            Ok(RawValue::from_string(slice.to_owned()))
-        }
-    }
-
+    mod raw_value;
+    pub use raw_value::RawValue;
+    mod preflight;
+    pub use preflight::{
+        JsonPreflightError, JsonPreflightLimits, JsonPreflightProfile, JsonPreflightResource,
+        JsonPreflightSyntax, preflight_slice,
+    };
     mod visitors;
     pub use visitors::{MapVisitor, SeqVisitor};
-
     pub trait Visitor<'a> {
         type Value;
-
         fn visit_null(self) -> Result<Self::Value, Error>;
         fn visit_bool(self, v: bool) -> Result<Self::Value, Error>;
         fn visit_i64(self, v: i64) -> Result<Self::Value, Error>;
@@ -9720,7 +9136,6 @@ pub mod json {
         fn visit_map(self, visitor: MapVisitor<'a, '_>) -> Result<Self::Value, Error>;
         fn visit_seq(self, visitor: SeqVisitor<'a, '_>) -> Result<Self::Value, Error>;
     }
-
     pub fn visit_value<'a, V>(parser: &mut Parser<'a>, visitor: V) -> Result<V::Value, Error>
     where
         V: Visitor<'a>,
@@ -9772,7 +9187,6 @@ pub mod json {
             }
         }
     }
-
     fn parse_number_token(parser: &mut Parser<'_>) -> Result<Number, Error> {
         parser.skip_ws();
         let s = parser.input();
@@ -9874,7 +9288,6 @@ pub mod json {
             .ok_or_else(|| Error::Message("json float out of range".to_owned()))?;
         Ok(n)
     }
-
     // ===== CRC32C helpers (portable + HW-accelerated byte update) =====
     #[inline]
     #[allow(dead_code)]
@@ -9895,7 +9308,6 @@ pub mod json {
         }
         crc32c_update_byte_sw(crc, byte)
     }
-
     #[inline]
     #[allow(dead_code)]
     fn crc32c_update_byte_sw(mut crc: u32, byte: u8) -> u32 {
@@ -9907,14 +9319,12 @@ pub mod json {
         }
         crc
     }
-
     #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
     #[target_feature(enable = "crc")]
     unsafe fn crc32c_hw_update_byte(crc: u32, byte: u8) -> u32 {
         use core::arch::aarch64::__crc32cb;
         __crc32cb(crc, byte)
     }
-
     #[cfg(all(feature = "simd-accel", target_arch = "x86_64"))]
     #[target_feature(enable = "sse4.2")]
     unsafe fn crc32c_hw_update_byte(crc: u32, byte: u8) -> u32 {
@@ -9922,7 +9332,6 @@ pub mod json {
         _mm_crc32_u8(crc, byte)
     }
 }
-
 /// Serialize an object into the given writer.
 pub fn serialize_into<W: Write, T: NoritoSerialize>(
     mut writer: W,
@@ -9942,7 +9351,6 @@ pub fn serialize_into<W: Write, T: NoritoSerialize>(
     }
     Ok(())
 }
-
 /// Deserialize an object from the provided reader.
 pub fn deserialize_from<R: Read, T>(reader: R) -> Result<T, Error>
 where
@@ -9950,7 +9358,6 @@ where
 {
     deserialize_stream(reader)
 }
-
 /// Deserialize an object from a stream, validating header and checksum without
 /// buffering the entire input.
 pub fn deserialize_stream<R: Read, T>(mut reader: R) -> Result<T, Error>
@@ -9958,7 +9365,6 @@ where
     for<'de> T: NoritoDeserialize<'de>,
 {
     use core::Header;
-
     let header = Header::read(&mut reader)?;
     core::prepare_header_decode(header.flags, header.minor, false)?;
     if header.schema != T::schema_hash() {
@@ -9974,7 +9380,6 @@ where
         .map_err(|_| Error::AllocationFailed {
             bytes: u64::try_from(payload_len).unwrap_or(u64::MAX),
         })?;
-
     match header.compression {
         Compression::None => {
             let mut buf = [0u8; 64 * 1024];
@@ -10019,12 +9424,10 @@ where
             }
         }
     }
-
     let crc = core::hardware_crc64(&payload);
     if crc != header.checksum {
         return Err(Error::ChecksumMismatch);
     }
-
     let min_size = core::archived_payload_size::<T>();
     let logical_len = payload.len();
     let padded = if min_size > 0 && logical_len < min_size {
@@ -10044,7 +9447,6 @@ where
         Some(buf) => buf,
         None => payload.as_slice(),
     };
-
     let archived = core::archived_from_slice::<T>(backing)?;
     let _payload_guard = if min_size > 0 && logical_len < min_size {
         core::PayloadCtxGuard::enter_with_len(archived.bytes(), logical_len)
@@ -10053,7 +9455,6 @@ where
     };
     guarded_try_deserialize(|| <T as NoritoDeserialize>::try_deserialize(archived.archived()))
 }
-
 fn decode_from_uncompressed_bytes<T>(bytes: &[u8], header: core::Header) -> Result<T, Error>
 where
     for<'de> T: NoritoDeserialize<'de>,
@@ -10077,7 +9478,6 @@ where
     if core::hardware_crc64(payload) != header.checksum {
         return Err(Error::ChecksumMismatch);
     }
-
     let flags = header.flags;
     let flags_hint = header.minor;
     let min_size = core::archived_payload_size::<T>();
@@ -10114,7 +9514,6 @@ where
         <T as NoritoDeserialize>::try_deserialize(archived.archived())
     })
 }
-
 /// Prelude with commonly used items.
 pub mod prelude {
     pub use super::{
@@ -10123,7 +9522,6 @@ pub mod prelude {
         deserialize_from, serialize_into,
     };
 }
-
 /// Encode a value with the canonical V1 layout and no compression.
 ///
 /// The result is independent of ambient layout guards.
@@ -10134,11 +9532,9 @@ where
     let _canonical_flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
     core::to_bytes(value)
 }
-
 const CANONICAL_DECODE_ALLOCATION_EXTRA_MULTIPLIER: usize = 63;
 const CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES: usize = 256 * 1024 * 1024;
 const CANONICAL_DECODE_FIXED_ALLOCATION_BYTES: usize = 64 * 1024;
-
 /// Return conservative decode limits derived from one complete encoded value.
 ///
 /// Packed boolean sequences may carry eight logical elements per encoded byte,
@@ -10172,7 +9568,6 @@ pub const fn canonical_decode_limits(payload_len: usize) -> DecodeLimits {
         core::MAX_OWNED_VALUE_DECODE_DEPTH,
     )
 }
-
 /// Decode an object from Norito-encoded bytes (compressed or not) under a
 /// payload-derived resource budget.
 ///
@@ -10189,7 +9584,6 @@ where
         decode_from_bytes_inner(bytes)
     })
 }
-
 fn decode_from_bytes_inner<T>(bytes: &[u8]) -> Result<T, Error>
 where
     for<'de> T: NoritoDeserialize<'de>,
@@ -10207,7 +9601,6 @@ where
     }
     Ok(value)
 }
-
 /// Decode a Norito archive with explicit per-value and cumulative resource
 /// limits.
 ///
@@ -10225,7 +9618,6 @@ where
 {
     with_decode_limits(limits, || decode_from_bytes_inner(bytes))
 }
-
 /// Decode one exact canonical V1 frame under payload-derived resource limits.
 ///
 /// In addition to ordinary validation, this rejects compression, alternate
@@ -10238,7 +9630,82 @@ where
 {
     decode_canonical_with_limits(bytes, canonical_decode_limits(bytes.len()))
 }
-
+/// Allocation-free writer that verifies a streamed frame against one exact
+/// byte slice.
+///
+/// Mismatches are sticky while writes continue to report full consumption, so
+/// a later serializer error cannot hide bytes that already diverged. Callers
+/// must separately require [`Self::is_complete`] after a successful stream.
+struct ExactSliceWriter<'a> {
+    expected: &'a [u8],
+    offset: usize,
+    mismatched: bool,
+}
+impl<'a> ExactSliceWriter<'a> {
+    const fn new(expected: &'a [u8]) -> Self {
+        Self {
+            expected,
+            offset: 0,
+            mismatched: false,
+        }
+    }
+    const fn mismatched(&self) -> bool {
+        self.mismatched
+    }
+    const fn is_complete(&self) -> bool {
+        !self.mismatched && self.offset == self.expected.len()
+    }
+}
+impl Write for ExactSliceWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let Some(end) = self.offset.checked_add(bytes.len()) else {
+            self.mismatched = true;
+            return Ok(bytes.len());
+        };
+        let Some(expected) = self.expected.get(self.offset..end) else {
+            self.mismatched = true;
+            self.offset = self.expected.len();
+            return Ok(bytes.len());
+        };
+        if expected != bytes {
+            self.mismatched = true;
+        }
+        self.offset = end;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+/// Verify that `value` encodes to exactly `expected` under the active layout.
+///
+/// The comparison streams the complete header, alignment padding, and payload
+/// directly over `expected`; it does not allocate a second frame-sized buffer.
+/// This preserves the ambient layout behavior of [`core::to_bytes`]. Callers
+/// that require the fixed canonical V1 layout should use
+/// [`decode_canonical_with_limits`] instead.
+///
+/// # Errors
+///
+/// Returns [`Error::NonCanonicalEncoding`] when any byte differs, the streamed
+/// frame overruns `expected`, or `expected` has an unconsumed suffix. Serializer
+/// and framing errors are returned unchanged when no mismatch was observed.
+#[doc(hidden)]
+pub fn verify_exact_frame<T>(value: &T, expected: &[u8]) -> Result<(), Error>
+where
+    T: NoritoSerialize,
+{
+    let mut exact = ExactSliceWriter::new(expected);
+    let encode_result = core::write_frame_to_writer(value, &mut exact);
+    if exact.mismatched() {
+        return Err(Error::NonCanonicalEncoding);
+    }
+    encode_result?;
+    if !exact.is_complete() {
+        return Err(Error::NonCanonicalEncoding);
+    }
+    Ok(())
+}
 /// Decode one exact canonical V1 frame under default and schema-specific limits.
 ///
 /// Nested Norito limit scopes compose by taking the stricter value in every
@@ -10250,7 +9717,6 @@ where
     for<'de> T: NoritoDeserialize<'de>,
 {
     use std::io::Cursor;
-
     // Canonical frames are always uncompressed. Header flags are
     // value-dependent because the encoder removes dynamic layout flags that
     // the concrete value did not use, so validate the advertised combination
@@ -10261,7 +9727,6 @@ where
     {
         return Err(Error::NonCanonicalEncoding);
     }
-
     let defaults = canonical_decode_limits(bytes.len());
     with_decode_limits(defaults, || {
         let _canonical_flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
@@ -10278,16 +9743,19 @@ where
             }
             Err(error) => return Err(error),
         };
-        let canonical = encode_canonical(&value)?;
-        if canonical.as_slice() != bytes {
+        let mut exact = ExactSliceWriter::new(bytes);
+        let canonical_result = core::write_canonical_to_writer(&value, &mut exact);
+        if exact.mismatched() {
+            return Err(Error::NonCanonicalEncoding);
+        }
+        canonical_result?;
+        if !exact.is_complete() {
             return Err(Error::NonCanonicalEncoding);
         }
         Ok(value)
     })
 }
-
 include!("canonical_codec_tests.rs");
-
 /// Convenience helper identical to `decode_from_bytes`.
 /// Accepts either compressed or uncompressed Norito payloads and returns `T`.
 pub fn decode_from_compressed_bytes<T>(bytes: &[u8]) -> Result<T, Error>
@@ -10296,7 +9764,6 @@ where
 {
     decode_from_bytes(bytes)
 }
-
 /// Decode from any `Read` implementor, validating header and checksum.
 /// This is a thin wrapper over `deserialize_stream` for convenience.
 pub fn decode_from_reader<R: Read, T>(reader: R) -> Result<T, Error>
@@ -10305,7 +9772,6 @@ where
 {
     deserialize_stream(reader)
 }
-
 /// Decode from a reader with explicit per-value and cumulative resource limits.
 ///
 /// # Errors
@@ -10321,7 +9787,6 @@ where
 {
     with_decode_limits(limits, || deserialize_stream(reader))
 }
-
 /// Streaming fold over a top-level `Vec<T>` payload without materializing the full payload.
 ///
 /// Validates header and CRC64 incrementally and feeds each element `T` to the folder `f`,
@@ -10335,7 +9800,6 @@ where
     {
         return f();
     }
-
     #[cfg(feature = "strict-safe")]
     {
         install_decode_panic_hook();
@@ -10372,7 +9836,6 @@ where
         }
     }
 }
-
 /// Run a type-erased field decoder with the same panic policy as
 /// [`guarded_try_deserialize`].
 ///
@@ -10388,7 +9851,6 @@ pub(crate) fn guarded_try_deserialize_erased(
         let _ = type_name;
         return decode();
     }
-
     #[cfg(feature = "strict-safe")]
     {
         install_decode_panic_hook();
@@ -10424,12 +9886,10 @@ pub(crate) fn guarded_try_deserialize_erased(
         }
     }
 }
-
 #[cfg(feature = "strict-safe")]
 thread_local! {
     static DECODE_PANIC_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
-
 /// Returns true when a Norito decode is running under panic suppression.
 #[must_use]
 pub fn decode_panic_suppressed() -> bool {
@@ -10442,12 +9902,10 @@ pub fn decode_panic_suppressed() -> bool {
         false
     }
 }
-
 #[cfg(all(test, feature = "strict-safe"))]
 thread_local! {
     static SUPPRESSED_DECODE_PANICS: Cell<usize> = const { Cell::new(0) };
 }
-
 #[cfg(feature = "strict-safe")]
 fn install_decode_panic_hook() {
     static HOOK: OnceLock<()> = OnceLock::new();
@@ -10466,13 +9924,11 @@ fn install_decode_panic_hook() {
         }));
     });
 }
-
 #[cfg(all(test, feature = "strict-safe"))]
 mod guarded_tests {
     use super::{
         Error, SUPPRESSED_DECODE_PANICS, decode_panic_suppressed, guarded_try_deserialize,
     };
-
     #[test]
     fn guarded_try_deserialize_catches_panics() {
         SUPPRESSED_DECODE_PANICS.with(|counter| counter.set(0));
@@ -10486,7 +9942,6 @@ mod guarded_tests {
             "panic hook suppression counter should increment"
         );
     }
-
     #[test]
     fn decode_panic_suppressed_tracks_scope() {
         assert!(!decode_panic_suppressed());
@@ -10498,11 +9953,9 @@ mod guarded_tests {
         assert!(!decode_panic_suppressed());
     }
 }
-
 #[cfg(all(test, not(feature = "strict-safe")))]
 mod guarded_non_strict_tests {
     use super::{Error, guarded_try_deserialize};
-
     #[test]
     fn guarded_try_deserialize_propagates_panics_without_strict_safe() {
         let result = std::panic::catch_unwind(|| {
@@ -10513,7 +9966,6 @@ mod guarded_non_strict_tests {
         assert!(result.is_err(), "expected panic to propagate");
     }
 }
-
 #[allow(dead_code)]
 fn stream_seq_fold_core<R, T, Acc, Init, F>(
     reader: R,
@@ -10530,7 +9982,6 @@ where
 {
     core::stream::fold_sequence_from_reader(reader, init, f, expected_schema, padding)
 }
-
 /// Streaming fold over a top-level `Vec<T>` payload without materializing the full payload.
 pub fn stream_vec_fold_from_reader<R, T, Acc, F>(reader: R, acc: Acc, f: F) -> Result<Acc, Error>
 where
@@ -10547,7 +9998,6 @@ where
         core::payload_alignment_padding_for::<Top<T>>(),
     )
 }
-
 /// Inspect the element count of a top-level `Vec<T>` under an exact semantic cap.
 ///
 /// This uses the same header, compression, layout-flag, and sequence-length
@@ -10577,7 +10027,6 @@ where
         max_elements,
     )
 }
-
 /// Collect a top-level `Vec<T>` by streaming, without buffering the entire payload.
 pub fn stream_vec_collect_from_reader<R, T>(reader: R) -> Result<Vec<T>, Error>
 where
@@ -10607,7 +10056,6 @@ where
         core::payload_alignment_padding_for::<Vec<T>>(),
     )
 }
-
 /// Collect a top-level `VecDeque<T>` by streaming.
 pub fn stream_vecdeque_collect_from_reader<R, T>(
     reader: R,
@@ -10640,7 +10088,6 @@ where
         core::payload_alignment_padding_for::<VecDeque<T>>(),
     )
 }
-
 /// Collect a top-level `LinkedList<T>` by streaming.
 pub fn stream_linkedlist_collect_from_reader<R, T>(
     reader: R,
@@ -10661,7 +10108,6 @@ where
         core::payload_alignment_padding_for::<LinkedList<T>>(),
     )
 }
-
 /// Collect a top-level `HashSet<T>` by streaming.
 pub fn stream_hashset_collect_from_reader<R, T>(
     reader: R,
@@ -10694,7 +10140,6 @@ where
         core::payload_alignment_padding_for::<HashSet<T>>(),
     )
 }
-
 /// Collect a top-level `BTreeSet<T>` by streaming.
 pub fn stream_btreeset_collect_from_reader<R, T>(
     reader: R,
@@ -10715,7 +10160,6 @@ where
         core::payload_alignment_padding_for::<BTreeSet<T>>(),
     )
 }
-
 fn stream_map_collect_core<R, K, V, M, Init, Insert>(
     reader: R,
     expected_schema: [u8; 16],
@@ -10731,14 +10175,12 @@ where
     Insert: FnMut(&mut M, K, V) -> Result<(), Error>,
 {
     use core::{Header, header_flags};
-
     let mut reader = reader;
     let header = Header::read(&mut reader)?;
     core::prepare_header_decode(header.flags, header.minor, false)?;
     if header.schema != expected_schema {
         return Err(Error::SchemaMismatch);
     }
-
     let flags = header.flags;
     let payload_len = core::payload_len_to_usize(header.length)?;
     let padding = match header.compression {
@@ -10749,7 +10191,6 @@ where
         core::stream::skip_padding(&mut reader, padding)?;
     }
     let _fg = core::DecodeFlagsGuard::enter(flags);
-
     let boxed: Box<dyn Read> = match header.compression {
         Compression::None => Box::new(reader),
         Compression::Zstd => {
@@ -10763,10 +10204,8 @@ where
             }
         }
     };
-
     let mut digesting = core::stream::DigestingReader::new(boxed);
     let mut remaining = payload_len;
-
     #[inline]
     fn read_exact_update<Rd: Read>(
         reader: &mut core::stream::DigestingReader<Rd>,
@@ -10780,7 +10219,6 @@ where
         *remaining = new_remaining;
         Ok(())
     }
-
     #[inline]
     fn read_u64_update<Rd: Read>(
         reader: &mut core::stream::DigestingReader<Rd>,
@@ -10790,7 +10228,6 @@ where
         read_exact_update(reader, remaining, &mut b)?;
         Ok(u64::from_le_bytes(b))
     }
-
     #[inline]
     fn read_varint_update<Rd: Read>(
         reader: &mut core::stream::DigestingReader<Rd>,
@@ -10822,13 +10259,11 @@ where
         }
         Err(Error::LengthMismatch)
     }
-
     let entries = {
         let v = read_u64_update(&mut digesting, &mut remaining)?;
         core::enforce_decode_sequence_length(v)?;
         core::stream::u64_to_usize(v)?
     };
-
     let mut map;
     if (flags & header_flags::PACKED_SEQ) == 0 {
         let len_bytes = if (flags & header_flags::COMPACT_LEN) != 0 {
@@ -10844,7 +10279,6 @@ where
             return Err(Error::LengthMismatch);
         }
         map = init(entries)?;
-
         let mut key_buf = Vec::new();
         let mut val_buf = Vec::new();
         for _ in 0..entries {
@@ -10868,7 +10302,6 @@ where
             let key = guarded_try_deserialize(|| K::try_deserialize(ak))?;
             drop(_key_depth);
             drop(_gk);
-
             let val_len = if (flags & header_flags::COMPACT_LEN) != 0 {
                 let v = read_varint_update(&mut digesting, &mut remaining)?;
                 core::enforce_decode_field_length(v)?;
@@ -10952,7 +10385,6 @@ where
             return Err(Error::LengthMismatch);
         }
         map = init(entries)?;
-
         let mut keys = try_decode_vec_with_capacity(entries)?;
         let mut key_buf = Vec::new();
         let mut key_remaining = key_total;
@@ -10974,7 +10406,6 @@ where
         if key_remaining != 0 {
             return Err(Error::LengthMismatch);
         }
-
         let mut val_buf = Vec::new();
         let mut val_remaining = val_total;
         for (key, size) in keys.into_iter().zip(val_sizes) {
@@ -10996,14 +10427,12 @@ where
             return Err(Error::LengthMismatch);
         }
     }
-
     if remaining != 0 {
         return Err(Error::LengthMismatch);
     }
     let _ = digesting.finalize(payload_len, header.checksum)?;
     Ok(map)
 }
-
 /// Collect a top-level `HashMap<K,V>` by streaming with minimal buffering.
 ///
 /// - Packed layout: reads varint sizes or u64 offsets for keys and values, then streams keys
@@ -11042,7 +10471,6 @@ where
         },
     )
 }
-
 pub fn stream_btreemap_collect_from_reader<R, K, V>(reader: R) -> Result<BTreeMap<K, V>, Error>
 where
     R: Read,
@@ -11063,13 +10491,11 @@ where
         },
     )
 }
-
 /// Types that can be finalized via `finish()` to verify integrity
 /// (e.g., CRC) when a stream is not fully consumed.
 pub trait Finishable {
     fn finish(self) -> Result<(), Error>;
 }
-
 impl<T> Finishable for StreamSeqIter<T>
 where
     T: for<'de> NoritoDeserialize<'de> + core::NoritoSerialize,
@@ -11078,7 +10504,6 @@ where
         StreamSeqIter::finish(self)
     }
 }
-
 impl<K, V> Finishable for StreamMapIter<K, V>
 where
     K: for<'de> NoritoDeserialize<'de> + core::NoritoSerialize,
@@ -11088,13 +10513,11 @@ where
         StreamMapIter::finish(self)
     }
 }
-
 /// RAII guard that calls `finish()` on drop and logs errors.
 pub struct StreamFinishGuard<T: Finishable> {
     inner: Option<T>,
     name: &'static str,
 }
-
 impl<T: Finishable> StreamFinishGuard<T> {
     pub fn new(iter: T, name: &'static str) -> Self {
         Self {
@@ -11111,7 +10534,6 @@ impl<T: Finishable> StreamFinishGuard<T> {
         self.into_inner()
     }
 }
-
 impl<T: Finishable> Drop for StreamFinishGuard<T> {
     fn drop(&mut self) {
         if let Some(iter) = self.inner.take()
@@ -11121,7 +10543,6 @@ impl<T: Finishable> Drop for StreamFinishGuard<T> {
         }
     }
 }
-
 #[cfg(test)]
 mod json_stage1_reset_tests {
     #[test]
@@ -11129,15 +10550,12 @@ mod json_stage1_reset_tests {
         crate::json::reset_stage1_backends();
     }
 }
-
 /// Canonical JSON literal helpers used by higher-level codecs.
 pub mod literal;
-
 /// Convenience to wrap a stream iterator and ensure `finish()` is called on drop.
 pub fn finish_on_drop<T: Finishable>(iter: T, name: &'static str) -> StreamFinishGuard<T> {
     StreamFinishGuard::new(iter, name)
 }
-
 /// Convenience constructor for a streaming iterator over a top-level `Vec<T>` payload.
 pub fn stream_seq_iter<R, T>(reader: R) -> Result<StreamSeqIter<T>, Error>
 where
@@ -11146,7 +10564,6 @@ where
 {
     StreamSeqIter::<T>::new(reader)
 }
-
 /// Construct a streaming sequence iterator with an owned decode-resource
 /// budget that remains active for every iteration and for [`StreamSeqIter::finish`].
 ///
@@ -11164,7 +10581,6 @@ where
 {
     StreamSeqIter::<T>::new_with_limits(reader, limits)
 }
-
 /// Streaming iterator over a top-level `Vec<T>` payload.
 pub struct StreamSeqIter<T> {
     reader: Option<core::stream::DigestingReader<Box<dyn Read>>>,
@@ -11178,7 +10594,6 @@ pub struct StreamSeqIter<T> {
     decode_budget: Option<core::DecodeBudgetContext>,
     _marker: std::marker::PhantomData<T>,
 }
-
 impl<T> StreamSeqIter<T>
 where
     T: for<'de> NoritoDeserialize<'de> + core::NoritoSerialize,
@@ -11190,7 +10605,6 @@ where
     /// Returns an error when the archive header or sequence metadata is invalid.
     pub fn new<R: Read + 'static>(mut reader: R) -> Result<Self, Error> {
         use core::Header;
-
         let header = Header::read(&mut reader)?;
         core::prepare_header_decode(header.flags, header.minor, true)?;
         type Top<U> = Vec<U>;
@@ -11207,7 +10621,6 @@ where
             core::stream::skip_padding(&mut reader, padding)?;
         }
         let flags_guard = core::DecodeFlagsGuard::enter(flags);
-
         let boxed: Box<dyn Read> = match header.compression {
             Compression::None => Box::new(reader),
             Compression::Zstd => {
@@ -11221,12 +10634,9 @@ where
                 }
             }
         };
-
         let mut digesting = core::stream::DigestingReader::new(boxed);
-
         let len_decoder = core::stream::SeqLenDecoder::new(&mut digesting, flags, payload_len)?;
         let remaining = len_decoder.total_len();
-
         Ok(Self {
             reader: Some(digesting),
             len_decoder,
@@ -11240,7 +10650,6 @@ where
             _marker: std::marker::PhantomData,
         })
     }
-
     /// Construct an iterator that owns and reapplies `limits` for its complete
     /// lazy lifetime.
     ///
@@ -11258,7 +10667,6 @@ where
         iterator.decode_budget = Some(context);
         Ok(iterator)
     }
-
     fn finalize(
         reader: core::stream::DigestingReader<Box<dyn Read>>,
         payload_len: usize,
@@ -11268,13 +10676,11 @@ where
         Ok(())
     }
 }
-
 impl<T> Iterator for StreamSeqIter<T>
 where
     T: for<'de> NoritoDeserialize<'de> + core::NoritoSerialize,
 {
     type Item = Result<T, Error>;
-
     fn next(&mut self) -> Option<Self::Item> {
         let decode_budget = self.decode_budget.clone();
         let _limits = decode_budget
@@ -11282,7 +10688,6 @@ where
             .map(core::DecodeLimitsGuard::enter_context);
         let _ = &self.flags_guard;
         let reader = self.reader.as_mut()?;
-
         if self.remaining == 0 {
             let mut reader = self.reader.take().unwrap();
             let tail = match self
@@ -11299,7 +10704,6 @@ where
             }
             return None;
         }
-
         match self.len_decoder.next_len(reader) {
             Ok(Some(len)) => {
                 match self.payload_len.checked_sub(reader.consumed()) {
@@ -11334,7 +10738,6 @@ where
                         guarded_try_deserialize(|| T::try_deserialize(archived))
                     }
                 };
-
                 self.remaining -= 1;
                 if self.remaining == 0 {
                     let mut reader = self.reader.take().unwrap();
@@ -11366,7 +10769,6 @@ where
         }
     }
 }
-
 impl<T> StreamSeqIter<T>
 where
     T: for<'de> NoritoDeserialize<'de> + core::NoritoSerialize,
@@ -11415,7 +10817,6 @@ where
         Ok(())
     }
 }
-
 /// Streaming iterator over a top-level `HashMap<K,V>`/`BTreeMap<K,V>` payload.
 pub struct StreamMapIter<K, V> {
     reader: Box<dyn Read>,
@@ -11436,9 +10837,7 @@ pub struct StreamMapIter<K, V> {
     kbuf: Vec<u8>,
     vbuf: Vec<u8>,
 }
-
 const STREAM_MAX_VARINT_BYTES: usize = 10;
-
 fn try_decode_vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, Error> {
     let bytes = capacity
         .checked_mul(std::mem::size_of::<T>())
@@ -11452,7 +10851,6 @@ fn try_decode_vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, Error> {
         })?;
     Ok(values)
 }
-
 fn try_resize_decode_buffer(buffer: &mut Vec<u8>, length: usize) -> Result<(), Error> {
     if length > buffer.capacity() {
         let additional = length
@@ -11468,7 +10866,6 @@ fn try_resize_decode_buffer(buffer: &mut Vec<u8>, length: usize) -> Result<(), E
     buffer.resize(length, 0);
     Ok(())
 }
-
 impl<K, V> StreamMapIter<K, V>
 where
     K: for<'de> NoritoDeserialize<'de>,
@@ -11489,7 +10886,6 @@ where
         *remaining = new_remaining;
         Ok(())
     }
-
     #[inline]
     fn read_exact_update_kbuf(&mut self) -> Result<(), Error> {
         let buf = &mut self.kbuf;
@@ -11500,7 +10896,6 @@ where
             buf,
         )
     }
-
     #[inline]
     fn read_exact_update_vbuf(&mut self) -> Result<(), Error> {
         let buf = &mut self.vbuf;
@@ -11511,7 +10906,6 @@ where
             buf,
         )
     }
-
     #[inline]
     fn read_u64_update(&mut self) -> Result<u64, Error> {
         let mut b = [0u8; 8];
@@ -11523,7 +10917,6 @@ where
         )?;
         Ok(u64::from_le_bytes(b))
     }
-
     #[inline]
     fn read_len(&mut self) -> Result<usize, Error> {
         let raw = if (self.flags & core::header_flags::COMPACT_LEN) != 0 {
@@ -11534,7 +10927,6 @@ where
         core::enforce_decode_field_length(raw)?;
         core::stream::u64_to_usize(raw)
     }
-
     #[inline]
     fn read_varint_update(&mut self) -> Result<u64, Error> {
         let mut result = 0u64;
@@ -11569,7 +10961,6 @@ where
         Err(Error::LengthMismatch)
     }
 }
-
 impl<K, V> StreamMapIter<K, V>
 where
     K: for<'de> NoritoDeserialize<'de> + core::NoritoSerialize,
@@ -11727,7 +11118,6 @@ where
                 return Err(Error::LengthMismatch);
             }
             values_remaining = Some(val_len);
-
             let mut ks = try_decode_vec_with_capacity(entries)?;
             let mut kb = Vec::new();
             let mut key_remaining = key_len;
@@ -11769,7 +11159,6 @@ where
             vbuf: Vec::new(),
         })
     }
-
     pub fn new_hash<R: Read + 'static>(reader: R) -> Result<Self, Error>
     where
         K: Eq + std::hash::Hash + Ord,
@@ -11777,7 +11166,6 @@ where
         type Top<KK, VV> = HashMap<KK, VV>;
         Self::new_with_schema(reader, <Top<K, V> as NoritoDeserialize>::schema_hash())
     }
-
     /// Construct a bounded lazy iterator over a `HashMap` archive.
     ///
     /// # Errors
@@ -11797,7 +11185,6 @@ where
         iterator.decode_budget = Some(context);
         Ok(iterator)
     }
-
     pub fn new_btree<R: Read + 'static>(reader: R) -> Result<Self, Error>
     where
         K: Ord,
@@ -11805,7 +11192,6 @@ where
         type Top<KK, VV> = BTreeMap<KK, VV>;
         Self::new_with_schema(reader, <Top<K, V> as NoritoDeserialize>::schema_hash())
     }
-
     /// Construct a bounded lazy iterator over a `BTreeMap` archive.
     ///
     /// # Errors
@@ -11825,7 +11211,6 @@ where
         iterator.decode_budget = Some(context);
         Ok(iterator)
     }
-
     /// Finish the map stream by consuming remaining bytes and verifying CRC.
     ///
     /// # Errors
@@ -11886,95 +11271,6 @@ where
         Ok(())
     }
 }
-
 include!("stream_map_iterator.rs");
-
 #[cfg(test)]
-mod archive_slice_tests {
-    use super::{ArchiveSlice, core};
-
-    #[test]
-    fn misaligned_slice_is_realigned() {
-        let align = core::archived_payload_align::<[u64; 2]>();
-        assert!(align > 1);
-
-        let backing = vec![0u8; align * 2 + 1];
-        let misaligned = &backing[1..1 + align * 2];
-        let slice = ArchiveSlice::new(misaligned, align).expect("allocate slice");
-
-        assert_eq!(slice.as_slice(), misaligned);
-        assert_eq!(slice.as_slice().as_ptr() as usize % align, 0);
-        assert!(slice.layout.is_some());
-    }
-
-    #[test]
-    fn unit_alignment_is_noop() {
-        let data = vec![1u8, 2, 3];
-        let slice = ArchiveSlice::new(&data, 1).expect("allocate slice");
-
-        assert_eq!(slice.as_slice(), &data[..]);
-        assert!(slice.layout.is_none());
-        assert_eq!(slice.ptr as *const u8, data.as_ptr());
-    }
-}
-
-#[cfg(test)]
-mod guarded_try_tests {
-    use super::{Error, guarded_try_deserialize};
-
-    #[test]
-    fn panic_is_mapped_to_decode_error() {
-        let result = guarded_try_deserialize::<(), _>(|| -> Result<(), Error> {
-            panic!("forced panic for decode guard test");
-        });
-
-        assert!(matches!(result, Err(Error::DecodePanic { .. })));
-    }
-}
-
-#[cfg(test)]
-mod stream_map_iter_tests {
-    use super::{Error, StreamMapIter, core};
-    use std::{collections::HashMap, io::Cursor};
-
-    fn frame_hashmap_payload(payload: &[u8], flags: u8) -> Vec<u8> {
-        core::frame_bare_with_header_flags::<HashMap<u8, u8>>(payload, flags)
-            .expect("frame payload")
-    }
-
-    #[test]
-    fn stream_map_nonpacked_rejects_key_len_overflow() {
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&1u64.to_le_bytes());
-        payload.extend_from_slice(&9u64.to_le_bytes());
-        payload.extend_from_slice(&0u64.to_le_bytes());
-
-        let bytes = frame_hashmap_payload(&payload, 0);
-        let mut iter = StreamMapIter::<u8, u8>::new_hash(Cursor::new(bytes)).expect("iter");
-        let item = iter.next().expect("item");
-        assert!(matches!(item, Err(Error::LengthMismatch)));
-    }
-
-    #[test]
-    fn stream_map_finish_empty_ok() {
-        let payload = 0u64.to_le_bytes().to_vec();
-        let bytes = frame_hashmap_payload(&payload, 0);
-        let iter = StreamMapIter::<u8, u8>::new_hash(Cursor::new(bytes)).expect("iter");
-        iter.finish().expect("finish");
-    }
-
-    #[test]
-    fn stream_map_packed_rejects_nonzero_first_offset() {
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&1u64.to_le_bytes());
-        payload.extend_from_slice(&1u64.to_le_bytes());
-        payload.extend_from_slice(&1u64.to_le_bytes());
-        payload.extend_from_slice(&0u64.to_le_bytes());
-        payload.extend_from_slice(&0u64.to_le_bytes());
-        payload.push(0u8);
-
-        let bytes = frame_hashmap_payload(&payload, core::header_flags::PACKED_SEQ);
-        let result = StreamMapIter::<u8, u8>::new_hash(Cursor::new(bytes));
-        assert!(matches!(result, Err(Error::LengthMismatch)));
-    }
-}
+include!("lib_tail_tests.rs");

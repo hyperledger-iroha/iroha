@@ -1,7 +1,5 @@
 //! Grouped Norito integration tests.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 #[path = "../flatten.rs"]
 mod flatten;
 #[path = "../floats.rs"]

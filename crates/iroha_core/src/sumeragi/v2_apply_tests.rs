@@ -1,5 +1,4 @@
 //! Test-only extensions and the stable v2 apply test module.
-
 #[derive(Default)]
 pub(super) struct FailureInjection {
     pub(super) kura_store: std::sync::atomic::AtomicBool,
@@ -7,7 +6,6 @@ pub(super) struct FailureInjection {
     pub(super) provider_ingest_archive_capture: std::sync::atomic::AtomicBool,
     pub(super) reputation_archive_capture: std::sync::atomic::AtomicBool,
 }
-
 /// Test-only durable-application crash boundary.
 pub(super) enum CrashPoint {
     /// After canonical block persistence.
@@ -19,7 +17,6 @@ pub(super) enum CrashPoint {
     /// After reputation archive capture.
     ReputationArchiveCapture,
 }
-
 /// Persist the exact payload, exact execution input, and immutable recovery
 /// record in crash-safe order after independently rebuilding every authority.
 #[cfg(test)]
@@ -31,7 +28,6 @@ pub(crate) fn install_historical_autonomous_lane_recovery(
     let record = preflight_historical_autonomous_lane_recovery(state, kura, input)?;
     persist_preflighted_historical_autonomous_lane_recovery(kura, &record)
 }
-
 /// Persist one record whose complete State authority was already validated.
 /// Kura performs its bounded namespace preflight, durable dependency checks,
 /// and collision checks at the persistence boundary.
@@ -54,7 +50,6 @@ pub(crate) fn persist_preflighted_historical_autonomous_lane_recovery(
             )
         })
 }
-
 impl AutonomousLaneQueueCarrierCleanupAuthorization {
     #[cfg(test)]
     fn from_projection_for_test(
@@ -67,14 +62,12 @@ impl AutonomousLaneQueueCarrierCleanupAuthorization {
         })
     }
 }
-
 impl AutonomousLaneQueueCarrierCleanupAuthorization {
     #[cfg(test)]
     fn accepted_projection_for_test(&self) -> ProductionInFlightFirstReleaseTransitionProjection {
         *self.checked_apply_carrier.accepted_projection()
     }
 }
-
 impl V2ApplyService {
     #[cfg(test)]
     fn finish_durable_apply_completion(
@@ -102,7 +95,6 @@ impl V2ApplyService {
         )
     }
 }
-
 impl V2ApplyService {
     pub(super) fn inject_test_crash(&self, point: CrashPoint) -> Result<(), V2ApplyError> {
         let (requested, error) = match point {
@@ -133,28 +125,24 @@ impl V2ApplyService {
         };
         if requested { Err(error) } else { Ok(()) }
     }
-
     #[cfg(test)]
     pub(in crate::sumeragi) fn fail_after_kura_store_for_test(&self) {
         self.test_failures
             .kura_store
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
-
     #[cfg(test)]
     fn fail_after_wsv_checkpoint_for_test(&self) {
         self.test_failures
             .wsv_checkpoint
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
-
     #[cfg(test)]
     fn fail_after_provider_ingest_archive_capture_for_test(&self) {
         self.test_failures
             .provider_ingest_archive_capture
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
-
     #[cfg(test)]
     fn fail_after_reputation_archive_capture_for_test(&self) {
         self.test_failures
@@ -162,7 +150,6 @@ impl V2ApplyService {
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
-
 #[cfg(test)]
 pub(super) fn snapshot_mismatch_context(staged: &[u8], committed: &[u8]) -> String {
     let first_difference = staged
@@ -182,7 +169,6 @@ pub(super) fn snapshot_mismatch_context(staged: &[u8], committed: &[u8]) -> Stri
         String::from_utf8_lossy(&committed[context_start..committed_end]),
     )
 }
-
 /// Execute the current typed reconciliation plan in focused no-network tests.
 ///
 /// Production callers retain and handle every non-ready planning outcome;
@@ -214,7 +200,6 @@ fn reconcile_lane_reservation_ownership(
         }
     }
 }
-
 /// Focused preflight harness for synthetic merge entries which deliberately
 /// lack a durable Kura carrier. Production cleanup additionally requires the
 /// canonical carrier/source-outcome authentication path.
@@ -240,7 +225,6 @@ fn finalize_certified_merge_reservations_for_test(
             });
         }
     }
-
     let mut authorized_groups = Vec::with_capacity(groups.len());
     for (group, application) in groups.into_iter().zip(applications) {
         let ordered_keys = group.into_iter().map(|(_, key)| key).collect::<Vec<_>>();
@@ -269,7 +253,6 @@ fn finalize_certified_merge_reservations_for_test(
     let (finalized_reservations, _terminal_evidence) = cleanup.into_parts();
     Ok(finalized_reservations)
 }
-
 fn install_live_lifecycle_cursor_for_apply_test(
     kura: &Kura,
     generation: &crate::kura::AutonomousLifecycleProcessGenerationClaim,
@@ -351,7 +334,6 @@ fn install_live_lifecycle_cursor_for_apply_test(
     );
     reservation_group
 }
-
 include!("tests/v2_apply_unsealed_00.rs");
 include!("tests/v2_apply_unsealed_01.rs");
 include!("tests/v2_apply_unsealed_02.rs");

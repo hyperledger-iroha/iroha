@@ -5,7 +5,6 @@ fn rbc_init_roundtrip_codec() {
     let dec = RbcInit::decode(&mut &bytes[..]).expect("decode rbc init");
     assert_eq!(init, dec);
 }
-
 #[test]
 fn rbc_chunk_roundtrip_codec() {
     let chunk = sample_rbc_chunk();
@@ -13,7 +12,6 @@ fn rbc_chunk_roundtrip_codec() {
     let dec = RbcChunk::decode(&mut &bytes[..]).expect("decode rbc chunk");
     assert_eq!(chunk, dec);
 }
-
 #[test]
 fn rbc_ready_roundtrip_codec() {
     let ready = sample_rbc_ready();
@@ -21,7 +19,6 @@ fn rbc_ready_roundtrip_codec() {
     let dec = RbcReady::decode(&mut &bytes[..]).expect("decode rbc ready");
     assert_eq!(ready, dec);
 }
-
 #[test]
 fn rbc_deliver_roundtrip_codec() {
     let deliver = sample_rbc_deliver();

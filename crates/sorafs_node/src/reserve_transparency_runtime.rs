@@ -5,14 +5,16 @@
 //! existing payload-free transparency adapter output, and advances its local
 //! cursor only after the durable source index accepts the entry. Query access,
 //! committed-state access, and source storage remain explicit injected seams.
-
-use std::{
-    collections::BTreeSet,
-    fmt,
-    path::{Component, PathBuf},
-    sync::Arc,
+use crate::{
+    NodeHandle, TransparencyLedgerSourceEntry, decode_local_checkpoint_canonical,
+    read_local_checkpoint_bounded,
+    reputation::runtime::{
+        REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1, ReputationExternalFailureV1,
+        ReputationFinalizedAnchorV1, ReputationFinalizedQueryV1,
+        ReputationRuntimeProviderQualificationV1,
+    },
+    reserve_finalized_event_source_entry, write_local_checkpoint_atomic_bounded,
 };
-
 use iroha_config::parameters::{
     actual::SorafsReserveTransparencyRuntime, validate_production_runtime_handle,
 };
@@ -24,27 +26,19 @@ use iroha_data_model::{
     },
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
-use thiserror::Error;
-
-use crate::{
-    NodeHandle, TransparencyLedgerSourceEntry, decode_local_checkpoint_canonical,
-    read_local_checkpoint_bounded,
-    reputation::runtime::{
-        REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1, ReputationExternalFailureV1,
-        ReputationFinalizedAnchorV1, ReputationFinalizedQueryV1,
-        ReputationRuntimeProviderQualificationV1,
-    },
-    reserve_finalized_event_source_entry, write_local_checkpoint_atomic_bounded,
+use std::{
+    collections::BTreeSet,
+    fmt,
+    path::{Component, PathBuf},
+    sync::Arc,
 };
-
+use thiserror::Error;
 /// Version of the durable reserve-transparency scanner checkpoint.
 pub const RESERVE_TRANSPARENCY_CHECKPOINT_VERSION_V1: u8 = 1;
 /// Fixed checkpoint filename below the configured private state directory.
 pub const RESERVE_TRANSPARENCY_CHECKPOINT_FILE_V1: &str = "reserve-transparency-scanner-v1.to";
-
 const CHECKPOINT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs-reserve-transparency-checkpoint-v1";
 const CHECKPOINT_MAX_SEQUENCE_ELEMENTS_V1: usize = 1_024;
-
 /// Failure returned by a fresh committed-state projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ReserveTransparencyCommittedProjectionErrorV1 {
@@ -55,7 +49,6 @@ pub enum ReserveTransparencyCommittedProjectionErrorV1 {
     #[error("finalized reserve cursor is not on the current committed chain")]
     ForkOrReorg,
 }
-
 /// Fresh committed-state verifier used by the scanner.
 pub trait ReserveTransparencyCommittedProjectionV1: Send + Sync {
     /// Open one fresh committed projection, verify every supplied exact
@@ -71,12 +64,10 @@ pub trait ReserveTransparencyCommittedProjectionV1: Send + Sync {
         expected: &[ReserveFinalizedCursorV1],
     ) -> Result<ReserveFinalizedCursorV1, ReserveTransparencyCommittedProjectionErrorV1>;
 }
-
 /// Opaque failure from the durable transparency source index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("durable transparency source index rejected the entry")]
 pub struct ReserveTransparencySourceSinkErrorV1;
-
 /// Durable idempotent sink for payload-free transparency source entries.
 pub trait ReserveTransparencySourceSinkV1: Send + Sync {
     /// Record one canonical source entry.
@@ -92,7 +83,6 @@ pub trait ReserveTransparencySourceSinkV1: Send + Sync {
         entry: TransparencyLedgerSourceEntry,
     ) -> Result<(), ReserveTransparencySourceSinkErrorV1>;
 }
-
 impl ReserveTransparencySourceSinkV1 for NodeHandle {
     fn record_source_entry(
         &self,
@@ -102,12 +92,10 @@ impl ReserveTransparencySourceSinkV1 for NodeHandle {
             .map_err(|_| ReserveTransparencySourceSinkErrorV1)
     }
 }
-
 /// Minimal exact-anchor query surface required by the scanner.
 pub trait ReserveTransparencyFinalizedQueryV1: Send + Sync {
     /// Stable credential-free provider handle.
     fn handle(&self) -> &str;
-
     /// Observe the active provider qualification.
     ///
     /// # Errors
@@ -117,7 +105,6 @@ pub trait ReserveTransparencyFinalizedQueryV1: Send + Sync {
     fn qualification(
         &self,
     ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1>;
-
     /// Select the exact immutable finalized anchor at or below the bound.
     ///
     /// # Errors
@@ -128,7 +115,6 @@ pub trait ReserveTransparencyFinalizedQueryV1: Send + Sync {
         network_id: &NetworkId,
         maximum_height: u64,
     ) -> Result<ReputationFinalizedAnchorV1, ReputationExternalFailureV1>;
-
     /// Fetch one bounded reserve-event page at the exact supplied anchor.
     ///
     /// # Errors
@@ -141,14 +127,12 @@ pub trait ReserveTransparencyFinalizedQueryV1: Send + Sync {
         limit: u32,
     ) -> Result<ReserveFinalizedEventPageV1, ReputationExternalFailureV1>;
 }
-
 /// Adapter narrowing the shared reputation finalized-query provider to the
 /// exact reserve-event methods required by the transparency scanner.
 #[derive(Clone)]
 pub struct ReputationReserveTransparencyQueryAdapterV1 {
     inner: Arc<dyn ReputationFinalizedQueryV1>,
 }
-
 impl ReputationReserveTransparencyQueryAdapterV1 {
     /// Wrap a qualified immutable finalized-query provider.
     #[must_use]
@@ -156,7 +140,6 @@ impl ReputationReserveTransparencyQueryAdapterV1 {
         Self { inner }
     }
 }
-
 impl fmt::Debug for ReputationReserveTransparencyQueryAdapterV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -165,18 +148,15 @@ impl fmt::Debug for ReputationReserveTransparencyQueryAdapterV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ReserveTransparencyFinalizedQueryV1 for ReputationReserveTransparencyQueryAdapterV1 {
     fn handle(&self) -> &str {
         self.inner.handle()
     }
-
     fn qualification(
         &self,
     ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1> {
         self.inner.qualification()
     }
-
     fn finalized_at_or_before(
         &self,
         network_id: &NetworkId,
@@ -185,7 +165,6 @@ impl ReserveTransparencyFinalizedQueryV1 for ReputationReserveTransparencyQueryA
         self.inner
             .finalized_at_or_before(network_id, maximum_height)
     }
-
     fn reserve_page(
         &self,
         anchor: &ReputationFinalizedAnchorV1,
@@ -195,7 +174,6 @@ impl ReserveTransparencyFinalizedQueryV1 for ReputationReserveTransparencyQueryA
         self.inner.reserve_page(anchor, after, limit)
     }
 }
-
 /// Scanner failure class used by supervision to distinguish bounded retry
 /// from fail-closed shutdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -236,7 +214,6 @@ pub enum ReserveTransparencyScannerErrorV1 {
     #[error("reserve transparency source entry could not be made durable")]
     SourceSink,
 }
-
 impl ReserveTransparencyScannerErrorV1 {
     /// Return whether supervision may retry this failure with bounded backoff.
     #[must_use]
@@ -247,7 +224,6 @@ impl ReserveTransparencyScannerErrorV1 {
         )
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReserveTransparencyCheckpointPayloadV1 {
     version: u8,
@@ -259,13 +235,11 @@ struct ReserveTransparencyCheckpointPayloadV1 {
     finalized_anchor: ReserveFinalizedCursorV1,
     after: Option<ReserveFinalizedEventCursorV1>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReserveTransparencyCheckpointV1 {
     payload: ReserveTransparencyCheckpointPayloadV1,
     digest: [u8; 32],
 }
-
 impl ReserveTransparencyCheckpointV1 {
     fn try_new(
         generation: u64,
@@ -288,7 +262,6 @@ impl ReserveTransparencyCheckpointV1 {
         let digest = checkpoint_payload_digest(&payload)?;
         Ok(Self { payload, digest })
     }
-
     fn validate_for(
         &self,
         network_id: &NetworkId,
@@ -320,7 +293,6 @@ impl ReserveTransparencyCheckpointV1 {
         Ok(())
     }
 }
-
 fn checkpoint_payload_digest(
     payload: &ReserveTransparencyCheckpointPayloadV1,
 ) -> Result<[u8; 32], ReserveTransparencyScannerErrorV1> {
@@ -334,7 +306,6 @@ fn checkpoint_payload_digest(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 /// Payload-free result of one bounded scanner tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReserveTransparencyTickOutcomeV1 {
@@ -348,7 +319,6 @@ pub struct ReserveTransparencyTickOutcomeV1 {
     /// Exact immutable anchor selected for this tick.
     pub finalized_anchor: ReserveFinalizedCursorV1,
 }
-
 /// Bounded restart-safe scanner for finalized reserve transparency entries.
 pub struct ReserveTransparencyScannerV1 {
     network_id: NetworkId,
@@ -363,7 +333,6 @@ pub struct ReserveTransparencyScannerV1 {
     sink: Arc<dyn ReserveTransparencySourceSinkV1>,
     checkpoint: Option<ReserveTransparencyCheckpointV1>,
 }
-
 impl fmt::Debug for ReserveTransparencyScannerV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -377,7 +346,6 @@ impl fmt::Debug for ReserveTransparencyScannerV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ReserveTransparencyScannerV1 {
     /// Validate dependencies and restore the canonical checkpoint.
     ///
@@ -445,7 +413,6 @@ impl ReserveTransparencyScannerV1 {
             checkpoint,
         })
     }
-
     /// Consume at most the configured page budget from one exact immutable
     /// committed anchor.
     ///
@@ -465,11 +432,9 @@ impl ReserveTransparencyScannerV1 {
             &self.query_handle,
             self.query_qualification,
         )?;
-
         let prior_anchors = self.checkpoint_anchors();
         let committed_head = self.verify_projection(&prior_anchors)?;
         validate_anchor(committed_head)?;
-
         let selected = self
             .query
             .finalized_at_or_before(&self.network_id, committed_head.height)
@@ -490,7 +455,6 @@ impl ReserveTransparencyScannerV1 {
         if selected_cursor != committed_head {
             return Err(ReserveTransparencyScannerErrorV1::ForkOrReorg);
         }
-
         let mut after = self
             .checkpoint
             .as_ref()
@@ -498,7 +462,6 @@ impl ReserveTransparencyScannerV1 {
         let mut pages = 0_u32;
         let mut events = 0_u32;
         let mut caught_up = false;
-
         while pages < self.max_pages_per_tick {
             assert_query_binding(
                 self.query.as_ref(),
@@ -515,12 +478,10 @@ impl ReserveTransparencyScannerV1 {
                 self.query_qualification,
             )?;
             let page_anchors = validate_page(&page, selected_cursor, after, self.page_items)?;
-
             let mut expected = prior_anchors.clone();
             expected.push(selected_cursor);
             expected.extend(page_anchors);
             self.verify_projection(&deduplicate_anchors(expected))?;
-
             pages = pages
                 .checked_add(1)
                 .ok_or(ReserveTransparencyScannerErrorV1::InvalidPage)?;
@@ -540,14 +501,12 @@ impl ReserveTransparencyScannerV1 {
                         .ok_or(ReserveTransparencyScannerErrorV1::InvalidPage)?;
                 }
             }
-
             caught_up = !page.has_more;
             if caught_up {
                 break;
             }
             after = page.next_after;
         }
-
         Ok(ReserveTransparencyTickOutcomeV1 {
             pages,
             events,
@@ -555,7 +514,6 @@ impl ReserveTransparencyScannerV1 {
             finalized_anchor: selected_cursor,
         })
     }
-
     fn checkpoint_anchors(&self) -> Vec<ReserveFinalizedCursorV1> {
         let Some(checkpoint) = self.checkpoint.as_ref() else {
             return Vec::new();
@@ -569,7 +527,6 @@ impl ReserveTransparencyScannerV1 {
         }
         deduplicate_anchors(anchors)
     }
-
     fn verify_projection(
         &self,
         expected: &[ReserveFinalizedCursorV1],
@@ -585,7 +542,6 @@ impl ReserveTransparencyScannerV1 {
                 }
             })
     }
-
     fn persist_progress(
         &mut self,
         finalized_anchor: ReserveFinalizedCursorV1,
@@ -628,7 +584,6 @@ impl ReserveTransparencyScannerV1 {
         Ok(())
     }
 }
-
 fn assert_query_binding(
     query: &dyn ReserveTransparencyFinalizedQueryV1,
     expected_handle: &str,
@@ -643,7 +598,6 @@ fn assert_query_binding(
     }
     Ok(())
 }
-
 fn validate_anchor(
     cursor: ReserveFinalizedCursorV1,
 ) -> Result<(), ReserveTransparencyScannerErrorV1> {
@@ -652,7 +606,6 @@ fn validate_anchor(
     }
     Ok(())
 }
-
 fn validate_selected_anchor(
     anchor: &ReputationFinalizedAnchorV1,
     expected_network_id: &NetworkId,
@@ -667,7 +620,6 @@ fn validate_selected_anchor(
     }
     Ok(())
 }
-
 fn validate_page(
     page: &ReserveFinalizedEventPageV1,
     selected: ReserveFinalizedCursorV1,
@@ -682,7 +634,6 @@ fn validate_page(
     {
         return Err(ReserveTransparencyScannerErrorV1::InvalidPage);
     }
-
     let mut previous = after;
     let mut anchors = Vec::with_capacity(page.events.len());
     for event in &page.events {
@@ -710,7 +661,6 @@ fn validate_page(
     }
     Ok(deduplicate_anchors(anchors))
 }
-
 fn deduplicate_anchors(anchors: Vec<ReserveFinalizedCursorV1>) -> Vec<ReserveFinalizedCursorV1> {
     anchors
         .into_iter()
@@ -718,18 +668,10 @@ fn deduplicate_anchors(anchors: Vec<ReserveFinalizedCursorV1>) -> Vec<ReserveFin
         .into_iter()
         .collect()
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeMap,
-        sync::{
-            Mutex,
-            atomic::{AtomicUsize, Ordering},
-        },
-        time::Duration,
-    };
-
+    use super::*;
+    use crate::reputation::ReputationFinalizedIdentityV1;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         account::{AccountId, ParsedAccountId},
@@ -739,13 +681,16 @@ mod tests {
             reserve::{ReserveFinalizedEventV1, ReserveLifecycleStage},
         },
     };
-
-    use super::*;
-    use crate::reputation::ReputationFinalizedIdentityV1;
-
+    use std::{
+        collections::BTreeMap,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
     const QUERY_HANDLE: &str = "ledger.finalized.primary";
     const QUERY_POLICY_DIGEST: [u8; 32] = [0xA5; 32];
-
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(
             HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -753,25 +698,21 @@ mod tests {
             )),
         )
     }
-
     #[derive(Debug)]
     struct MockQuery {
         network_id: NetworkId,
         anchor: ReserveFinalizedCursorV1,
         events: Vec<ReserveFinalizedEventV1>,
     }
-
     impl ReserveTransparencyFinalizedQueryV1 for MockQuery {
         fn handle(&self) -> &str {
             QUERY_HANDLE
         }
-
         fn qualification(
             &self,
         ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1> {
             Ok(query_qualification())
         }
-
         fn finalized_at_or_before(
             &self,
             network_id: &NetworkId,
@@ -788,7 +729,6 @@ mod tests {
                 finalized_at_unix_ms: 1_800_000_000_000,
             })
         }
-
         fn reserve_page(
             &self,
             anchor: &ReputationFinalizedAnchorV1,
@@ -819,20 +759,17 @@ mod tests {
             })
         }
     }
-
     #[derive(Debug)]
     struct MockProjection {
         network_id: NetworkId,
         hashes: Mutex<Vec<[u8; 32]>>,
     }
-
     impl MockProjection {
         fn replace_hash(&self, height: u64, hash: [u8; 32]) {
             let mut hashes = self.hashes.lock().expect("test projection lock");
             hashes[usize::try_from(height - 1).expect("test height fits usize")] = hash;
         }
     }
-
     impl ReserveTransparencyCommittedProjectionV1 for MockProjection {
         fn verify_committed_anchors(
             &self,
@@ -865,13 +802,11 @@ mod tests {
             })
         }
     }
-
     #[derive(Debug, Default)]
     struct MockSink {
         attempts: AtomicUsize,
         entries: Mutex<BTreeMap<String, TransparencyLedgerSourceEntry>>,
     }
-
     impl ReserveTransparencySourceSinkV1 for MockSink {
         fn record_source_entry(
             &self,
@@ -891,20 +826,17 @@ mod tests {
             Ok(())
         }
     }
-
     fn query_qualification() -> ReputationRuntimeProviderQualificationV1 {
         ReputationRuntimeProviderQualificationV1::new(
             REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
             QUERY_POLICY_DIGEST,
         )
     }
-
     fn test_account() -> AccountId {
         AccountId::parse_encoded("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
             .map(ParsedAccountId::into_account_id)
             .expect("test account id")
     }
-
     fn finalized_event(
         sequence: u64,
         block_height: u64,
@@ -927,7 +859,6 @@ mod tests {
             },
         }
     }
-
     fn scanner_config(state_dir: PathBuf) -> SorafsReserveTransparencyRuntime {
         SorafsReserveTransparencyRuntime {
             state_dir,
@@ -940,9 +871,7 @@ mod tests {
                 iroha_config::parameters::defaults::sorafs::storage::reserve_transparency_runtime::CHECKPOINT_MAX_BYTES,
         }
     }
-
     type TestDependencies = (Arc<MockQuery>, Arc<MockProjection>, Arc<MockSink>);
-
     fn test_dependencies() -> TestDependencies {
         let network_id = test_network_id();
         let hashes = vec![[0x11; 32], [0x22; 32], [0x33; 32]];
@@ -966,7 +895,6 @@ mod tests {
             Arc::new(MockSink::default()),
         )
     }
-
     fn scanner(
         config: &SorafsReserveTransparencyRuntime,
         query: Arc<MockQuery>,
@@ -986,13 +914,11 @@ mod tests {
         )
         .expect("construct test scanner")
     }
-
     #[test]
     fn restart_resumes_after_last_durable_event_without_duplication() {
         let temp = tempfile::tempdir().expect("temporary scanner root");
         let config = scanner_config(temp.path().join("scanner"));
         let (query, projection, sink) = test_dependencies();
-
         let mut first = scanner(
             &config,
             Arc::clone(&query),
@@ -1003,7 +929,6 @@ mod tests {
         assert_eq!(first_outcome.events, 1);
         assert!(!first_outcome.caught_up);
         drop(first);
-
         let mut restarted = scanner(
             &config,
             Arc::clone(&query),
@@ -1014,7 +939,6 @@ mod tests {
         assert_eq!(second_outcome.events, 1);
         assert!(second_outcome.caught_up);
         drop(restarted);
-
         let mut caught_up = scanner(&config, query, projection, Arc::clone(&sink));
         let replay_outcome = caught_up.tick().expect("restart at caught-up cursor");
         assert_eq!(replay_outcome.events, 0);
@@ -1022,7 +946,6 @@ mod tests {
         assert_eq!(sink.attempts.load(Ordering::Relaxed), 2);
         assert_eq!(sink.entries.lock().expect("test sink lock").len(), 2);
     }
-
     #[test]
     fn durable_source_replay_before_cursor_write_is_idempotent() {
         let temp = tempfile::tempdir().expect("temporary scanner root");
@@ -1032,14 +955,12 @@ mod tests {
             .expect("derive pre-crash source entry");
         sink.record_source_entry(replay_entry)
             .expect("simulate durable source write before crash");
-
         let mut scanner = scanner(&config, query, projection, Arc::clone(&sink));
         let outcome = scanner.tick().expect("replay exact source after restart");
         assert_eq!(outcome.events, 1);
         assert_eq!(sink.attempts.load(Ordering::Relaxed), 2);
         assert_eq!(sink.entries.lock().expect("test sink lock").len(), 1);
     }
-
     #[test]
     fn restart_fails_closed_when_persisted_anchor_left_committed_chain() {
         let temp = tempfile::tempdir().expect("temporary scanner root");
@@ -1053,7 +974,6 @@ mod tests {
         );
         first.tick().expect("persist initial exact cursor");
         drop(first);
-
         projection.replace_hash(3, [0xF3; 32]);
         let mut restarted = scanner(&config, query, projection, sink);
         assert_eq!(

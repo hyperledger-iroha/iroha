@@ -1,4 +1,4 @@
-/// Feature-isolated real-network consensus fault-injection control.
+//! Iroha node executable and feature-isolated real-network consensus fault-injection control.
 #[cfg(feature = "test-network-message-control")]
 mod consensus_message_control;
 /// Iroha server command-line interface and node bootstrap entrypoint.
@@ -41,44 +41,12 @@ pub mod sorafs_reputation_runtime;
 pub mod sorafs_reserve_transparency_runtime;
 /// Qualified stream-token gateway admission and durable callback reconciliation.
 mod sorafs_stream_token_gateway_runtime;
+/// Bounded local readers for startup trust-root artifacts.
+#[path = "main/startup_artifact.rs"]
+mod startup_artifact;
 /// Native Falcon-backed standalone Taira Bootle/Lantern issuer broker.
 #[cfg(feature = "daemon")]
 pub mod taira_bootle_lantern_broker;
-
-pub use runtime_provider_broker::{
-    BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
-    RuntimeProviderBrokerBackendRegistryV1, RuntimeProviderBrokerBackendsV1,
-    RuntimeProviderBrokerDeploymentV1, RuntimeProviderBrokerExecutableArgsV1,
-    RuntimeProviderBrokerExecutableErrorV1, RuntimeProviderBrokerExecutableV1,
-    RuntimeProviderBrokerLauncherErrorV1, RuntimeProviderBrokerLifecycleV1,
-    RuntimeProviderBrokerReadinessErrorV1, RuntimeProviderBrokerServerErrorV1,
-    StockGovernanceDagServiceRuntimeProviderRegistryV1,
-    load_runtime_provider_broker_catalog_file_v1, serve_runtime_provider_broker_v1,
-    serve_runtime_provider_broker_with_fallible_readiness_v1,
-    serve_runtime_provider_broker_with_lifecycle_v1,
-};
-pub use runtime_provider_registry::{
-    IrohaRuntimeProviderBindingV1, IrohaRuntimeProviderBindingsV1,
-    IrohaRuntimeProviderCatalogErrorV1, IrohaRuntimeProviderRegistryErrorV1,
-    IrohaRuntimeProviderRegistryV1, IrohaRuntimeProviderSlotV1,
-    RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1,
-};
-#[cfg(target_os = "windows")]
-use std::os::windows::{ffi::OsStrExt, fs::MetadataExt as _};
-use std::{
-    borrow::Cow,
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
-    convert::TryFrom,
-    env,
-    ffi::OsString,
-    fs,
-    future::Future,
-    num::NonZeroU64,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex, Weak},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-
 use crate::soracloud_runtime::{
     QueuedSoracloudRuntimeMutationSink, SoracloudRuntimeManager, SoracloudRuntimeManagerHandle,
 };
@@ -130,13 +98,13 @@ use iroha_core::{
 };
 use iroha_crypto::Algorithm;
 use iroha_data_model::query::{self as dm_query, ErasedIterQuery};
-use iroha_data_model::{block::decode_framed_signed_block, prelude::*, transaction::Executable};
 use iroha_data_model::{
     isi::RegisterPeerWithPop,
     parameter::system::{
         ConsensusHandshakeMetadata, confidential_metadata, consensus_metadata, crypto_metadata,
     },
 };
+use iroha_data_model::{prelude::*, transaction::Executable};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, Supervisor};
 use iroha_genesis::{
     GenesisBlock, ManifestCrypto, RawGenesisTransaction, compute_genesis_vk_set_hash,
@@ -154,19 +122,53 @@ use iroha_torii::Torii;
 pub use iroha_version::BuildLine;
 use norito::{codec::Encode, derive::JsonDeserialize, streaming::CapabilityFlags};
 use parking_lot::deadlock;
+pub use runtime_provider_broker::{
+    BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
+    RuntimeProviderBrokerBackendRegistryV1, RuntimeProviderBrokerBackendsV1,
+    RuntimeProviderBrokerDeploymentV1, RuntimeProviderBrokerExecutableArgsV1,
+    RuntimeProviderBrokerExecutableErrorV1, RuntimeProviderBrokerExecutableV1,
+    RuntimeProviderBrokerLauncherErrorV1, RuntimeProviderBrokerLifecycleV1,
+    RuntimeProviderBrokerReadinessErrorV1, RuntimeProviderBrokerServerErrorV1,
+    StockGovernanceDagServiceRuntimeProviderRegistryV1,
+    load_runtime_provider_broker_catalog_file_v1, serve_runtime_provider_broker_v1,
+    serve_runtime_provider_broker_with_fallible_readiness_v1,
+    serve_runtime_provider_broker_with_lifecycle_v1,
+};
+pub use runtime_provider_registry::{
+    IrohaRuntimeProviderBindingV1, IrohaRuntimeProviderBindingsV1,
+    IrohaRuntimeProviderCatalogErrorV1, IrohaRuntimeProviderRegistryErrorV1,
+    IrohaRuntimeProviderRegistryV1, IrohaRuntimeProviderSlotV1,
+    RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1,
+};
+use startup_artifact::{
+    INTEGRITY_BOUND_CONFIG_MAX_BYTES_V1, read_bounded_startup_artifact, read_genesis_manifest,
+    read_genesis_unlocked,
+};
+#[cfg(target_os = "windows")]
+use std::os::windows::{ffi::OsStrExt, fs::MetadataExt as _};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    convert::TryFrom,
+    env,
+    ffi::OsString,
+    fs,
+    future::Future,
+    num::NonZeroU64,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, Weak},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use tokio::{
     sync::{Semaphore, broadcast, mpsc, oneshot},
     task,
 };
-
 const NODE_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 /// Build-time source identity embedded for release artifact validation.
 const BUILD_SOURCE_ID: Option<&str> = option_env!("IROHA_GIT_COMMIT_HASH");
-
 fn startup_trace_enabled() -> bool {
     env::var_os("IROHA_STARTUP_TRACE").is_some()
 }
-
 fn log_startup_trace(stage: &'static str, started_at: Instant) {
     if startup_trace_enabled() {
         iroha_logger::info!(
@@ -176,7 +178,6 @@ fn log_startup_trace(stage: &'static str, started_at: Instant) {
         );
     }
 }
-
 fn torii_receipt_signer_or_derived(
     receipt_signer: Option<KeyPair>,
     node_key_pair: &KeyPair,
@@ -184,7 +185,6 @@ fn torii_receipt_signer_or_derived(
     if let Some(receipt_signer) = receipt_signer {
         return Ok(receipt_signer);
     }
-
     // A receipt key must survive process restarts because the durable DA log verifies historical
     // receipts during startup. Derive a separate key from the node identity instead of generating
     // an ephemeral key; the BLAKE3 KDF context prevents the derived key from being reused as the
@@ -210,9 +210,7 @@ fn torii_receipt_signer_or_derived(
     );
     Ok(key)
 }
-
 type ConsensusHandshakeMeta = ConsensusHandshakeMetadata;
-
 fn parse_handshake_meta_str(raw: &str) -> Result<ConsensusHandshakeMeta, norito::Error> {
     let metadata: ConsensusHandshakeMeta =
         norito::json::from_str(raw).map_err(norito::Error::from)?;
@@ -221,17 +219,14 @@ fn parse_handshake_meta_str(raw: &str) -> Result<ConsensusHandshakeMeta, norito:
         .map_err(|error| norito::Error::Message(error.clone()))?;
     Ok(metadata)
 }
-
 fn parse_manifest_crypto_str(raw: &str) -> Result<ManifestCrypto, norito::Error> {
     norito::json::from_str(raw).map_err(norito::Error::from)
 }
-
 fn parse_confidential_registry_meta_str(
     raw: &str,
 ) -> Result<ConfidentialRegistryMeta, norito::Error> {
     norito::json::from_str(raw).map_err(norito::Error::from)
 }
-
 fn decode_crypto_manifest_meta(payload: &Json) -> Result<ManifestCrypto, norito::Error> {
     match parse_manifest_crypto_str(payload.get()) {
         Ok(meta) => Ok(meta),
@@ -244,7 +239,6 @@ fn decode_crypto_manifest_meta(payload: &Json) -> Result<ManifestCrypto, norito:
         }
     }
 }
-
 fn decode_confidential_registry_meta(
     payload: &Json,
 ) -> Result<ConfidentialRegistryMeta, norito::Error> {
@@ -252,7 +246,6 @@ fn decode_confidential_registry_meta(
         norito::Error::Message("failed to decode confidential_registry_root payload".to_string())
     })
 }
-
 fn confidential_handshake_policy_digest(
     digest: iroha_data_model::confidential::ConfidentialFeatureDigest,
 ) -> iroha_data_model::confidential::ConfidentialFeatureDigest {
@@ -264,7 +257,6 @@ fn confidential_handshake_policy_digest(
         digest.zk_policy_hash,
     )
 }
-
 fn decode_consensus_handshake_meta(
     payload: &Json,
 ) -> Result<ConsensusHandshakeMeta, norito::Error> {
@@ -272,9 +264,7 @@ fn decode_consensus_handshake_meta(
         norito::Error::Message("failed to decode consensus_handshake_meta payload".to_string())
     })
 }
-
 type SharedSoraFsProviderCache = Arc<tokio::sync::RwLock<iroha_torii::sorafs::ProviderAdvertCache>>;
-
 #[derive(Debug)]
 enum SharedSoraFsProviderCacheError {
     AdmissionPolicyRequired,
@@ -300,7 +290,6 @@ enum SharedSoraFsProviderCacheError {
         source: iroha_torii::sorafs::ReplayCheckpointError,
     },
 }
-
 impl core::fmt::Display for SharedSoraFsProviderCacheError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -344,7 +333,6 @@ impl core::fmt::Display for SharedSoraFsProviderCacheError {
         }
     }
 }
-
 impl std::error::Error for SharedSoraFsProviderCacheError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -361,7 +349,6 @@ impl std::error::Error for SharedSoraFsProviderCacheError {
         }
     }
 }
-
 fn build_shared_sorafs_provider_cache(
     config: &Config,
 ) -> Result<Option<SharedSoraFsProviderCache>, SharedSoraFsProviderCacheError> {
@@ -369,12 +356,10 @@ fn build_shared_sorafs_provider_cache(
     if !discovery.discovery_enabled {
         return Ok(None);
     }
-
     let admission_cfg = discovery
         .admission
         .as_ref()
         .ok_or(SharedSoraFsProviderCacheError::AdmissionPolicyRequired)?;
-
     let trusted_council_keys = admission_cfg
         .trusted_council_keys
         .iter()
@@ -407,7 +392,6 @@ fn build_shared_sorafs_provider_cache(
         admission_cfg.signature_threshold.get(),
     )
     .map_err(SharedSoraFsProviderCacheError::InvalidCouncilPolicy)?;
-
     let mut capabilities = Vec::new();
     for name in &discovery.known_capabilities {
         let capability = iroha_torii::sorafs::parse_capability_name(name)
@@ -419,16 +403,13 @@ fn build_shared_sorafs_provider_cache(
         }
         capabilities.push(capability);
     }
-
     if capabilities.is_empty() {
         return Err(SharedSoraFsProviderCacheError::EmptyCapabilities);
     }
-
     let admission = Arc::new(
         iroha_torii::sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir, policy)
             .map_err(SharedSoraFsProviderCacheError::AdmissionRegistry)?,
     );
-
     let replay_checkpoint_path = if discovery.replay_checkpoint_path.is_absolute() {
         discovery.replay_checkpoint_path.clone()
     } else {
@@ -447,383 +428,14 @@ fn build_shared_sorafs_provider_cache(
         path: replay_checkpoint_path,
         source,
     })?;
-
     Ok(Some(Arc::new(tokio::sync::RwLock::new(cache))))
 }
-
-#[cfg(test)]
-mod shared_sorafs_provider_cache_tests {
-    use std::{
-        fs,
-        num::NonZeroUsize,
-        path::{Path, PathBuf},
-    };
-
-    use iroha_config::{
-        base::read::ConfigReader,
-        parameters::{actual::SorafsAdmission, user::Root as UserConfig},
-    };
-    use iroha_config_base::toml::TomlSource;
-    use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
-    use iroha_torii::sorafs::{ReplayCheckpointError, discovery::AdvertError};
-    use sorafs_manifest::{ProviderAdmissionCouncilPolicyError, ProviderAdvertV1};
-    use tempfile::TempDir;
-
-    use super::*;
-
-    fn base_config() -> Config {
-        let table = toml::toml! {
-            chain = "00000000-0000-0000-0000-000000000000"
-            public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-            private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
-
-            [network]
-            address = "addr:127.0.0.1:1337#8F78"
-            public_address = "addr:127.0.0.1:1337#8F78"
-
-            [torii]
-            address = "addr:127.0.0.1:8080#8942"
-
-            [genesis]
-            public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-            expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-
-            [streaming]
-            identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
-            identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
-        };
-
-        ConfigReader::new()
-            .with_toml_source(TomlSource::inline(table))
-            .read_and_complete::<UserConfig>()
-            .expect("shared provider-cache test config must be readable")
-            .parse()
-            .expect("shared provider-cache test config must parse")
-    }
-
-    fn ed25519_public_key(seed: u8) -> PublicKey {
-        let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
-            .expect("fixture Ed25519 seed must be valid");
-        PublicKey::from(private)
-    }
-
-    fn configure_discovery(config: &mut Config, temp: &TempDir) -> PathBuf {
-        let root = temp
-            .path()
-            .canonicalize()
-            .expect("canonical temporary provider-cache root");
-        let admission_dir = root.join("admission");
-        fs::create_dir_all(&admission_dir).expect("create fixture admission directory");
-        config.torii.data_dir = root.join("torii-data");
-        config.torii.sorafs_discovery.discovery_enabled = true;
-        config.torii.sorafs_discovery.known_capabilities =
-            vec!["torii_gateway".to_owned(), "chunk_range_fetch".to_owned()];
-        config.torii.sorafs_discovery.replay_checkpoint_path =
-            PathBuf::from("discovery/provider-advert-replay.to");
-        config.torii.sorafs_discovery.replay_checkpoint_max_entries =
-            NonZeroUsize::new(8).expect("non-zero bound");
-        config.torii.sorafs_discovery.admission = Some(SorafsAdmission {
-            envelopes_dir: admission_dir.clone(),
-            trusted_council_keys: vec![ed25519_public_key(0x45)],
-            signature_threshold: NonZeroUsize::new(1).expect("non-zero threshold"),
-        });
-        admission_dir
-    }
-
-    fn fixture_path(name: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fixtures/sorafs_manifest/provider_admission")
-            .join(name)
-    }
-
-    fn install_admission_fixture(admission_dir: &Path) {
-        fs::copy(
-            fixture_path("envelope_v1.to"),
-            admission_dir.join("envelope_v1.to"),
-        )
-        .expect("copy canonical provider admission fixture");
-    }
-
-    fn load_advert_fixture() -> ProviderAdvertV1 {
-        let bytes =
-            fs::read(fixture_path("advert_v1.to")).expect("read canonical provider advert fixture");
-        norito::decode_from_bytes(&bytes).expect("decode canonical provider advert fixture")
-    }
-
-    fn resign_advert(advert: &mut ProviderAdvertV1) {
-        let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[0x21; 32])
-            .expect("fixture provider Ed25519 seed must be valid");
-        let public = PublicKey::from(private.clone());
-        let (_, public_payload) = public
-            .try_to_bytes()
-            .expect("fixture provider public key must be well formed");
-        advert.signature.public_key = public_payload.to_vec();
-        advert.signature.signature = vec![0; 64];
-        let payload = advert
-            .signature_payload_bytes()
-            .expect("encode advert signature payload");
-        advert.signature.signature = Signature::try_new(&private, &payload)
-            .expect("sign provider advert fixture")
-            .payload()
-            .to_vec();
-    }
-
-    #[test]
-    fn disabled_discovery_is_side_effect_free_even_with_poisonous_config() {
-        let temp = tempfile::tempdir().expect("temporary provider-cache root");
-        let mut config = base_config();
-        config.torii.data_dir = temp.path().join("must-not-exist");
-        config.torii.sorafs_discovery.discovery_enabled = false;
-        config.torii.sorafs_discovery.known_capabilities = vec!["unknown".to_owned()];
-        config.torii.sorafs_discovery.admission = None;
-
-        let cache = build_shared_sorafs_provider_cache(&config)
-            .expect("disabled discovery must not validate unused configuration");
-
-        assert!(cache.is_none());
-        assert!(!config.torii.data_dir.exists());
-    }
-
-    #[test]
-    fn enabled_discovery_requires_admission_without_panicking() {
-        let mut config = base_config();
-        config.torii.sorafs_discovery.discovery_enabled = true;
-        config.torii.sorafs_discovery.admission = None;
-
-        let error = build_shared_sorafs_provider_cache(&config)
-            .expect_err("enabled discovery without admission must fail closed");
-
-        assert!(matches!(
-            error,
-            SharedSoraFsProviderCacheError::AdmissionPolicyRequired
-        ));
-    }
-
-    #[test]
-    fn malformed_capability_lists_are_typed_startup_errors() {
-        let temp = tempfile::tempdir().expect("temporary provider-cache root");
-        let mut config = base_config();
-        configure_discovery(&mut config, &temp);
-        config.torii.sorafs_discovery.known_capabilities = vec!["not-a-capability".to_owned()];
-
-        let error = build_shared_sorafs_provider_cache(&config)
-            .expect_err("unknown capability must fail closed");
-        assert!(matches!(
-            error,
-            SharedSoraFsProviderCacheError::UnknownCapability(name)
-                if name == "not-a-capability"
-        ));
-
-        config.torii.sorafs_discovery.known_capabilities =
-            vec!["torii".to_owned(), "torii_gateway".to_owned()];
-        let error = build_shared_sorafs_provider_cache(&config)
-            .expect_err("duplicate capability aliases must fail closed");
-        assert!(matches!(
-            error,
-            SharedSoraFsProviderCacheError::DuplicateCapability(name)
-                if name == "torii_gateway"
-        ));
-
-        config.torii.sorafs_discovery.known_capabilities.clear();
-        let error = build_shared_sorafs_provider_cache(&config)
-            .expect_err("empty capability list must fail closed");
-        assert!(matches!(
-            error,
-            SharedSoraFsProviderCacheError::EmptyCapabilities
-        ));
-    }
-
-    #[test]
-    fn malformed_admission_policies_are_typed_startup_errors() {
-        let temp = tempfile::tempdir().expect("temporary provider-cache root");
-        let mut config = base_config();
-        configure_discovery(&mut config, &temp);
-        let duplicate = ed25519_public_key(0x45);
-        config
-            .torii
-            .sorafs_discovery
-            .admission
-            .as_mut()
-            .expect("admission policy")
-            .trusted_council_keys = vec![duplicate.clone(), duplicate];
-
-        let error = build_shared_sorafs_provider_cache(&config)
-            .expect_err("duplicate council key must fail closed");
-        assert!(matches!(
-            error,
-            SharedSoraFsProviderCacheError::InvalidCouncilPolicy(
-                ProviderAdmissionCouncilPolicyError::DuplicateSigner { .. }
-            )
-        ));
-
-        let secp_private = PrivateKey::from_bytes(Algorithm::Secp256k1, &[0x31; 32])
-            .expect("fixture secp256k1 seed must be valid");
-        config
-            .torii
-            .sorafs_discovery
-            .admission
-            .as_mut()
-            .expect("admission policy")
-            .trusted_council_keys = vec![PublicKey::from(secp_private)];
-        let error = build_shared_sorafs_provider_cache(&config)
-            .expect_err("non-Ed25519 council key must fail closed");
-        assert!(matches!(
-            error,
-            SharedSoraFsProviderCacheError::UnsupportedCouncilKeyAlgorithm {
-                algorithm: Algorithm::Secp256k1,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn malformed_replay_checkpoint_is_a_typed_startup_error() {
-        let temp = tempfile::tempdir().expect("temporary provider-cache root");
-        let mut config = base_config();
-        configure_discovery(&mut config, &temp);
-        let checkpoint = config
-            .torii
-            .data_dir
-            .join(&config.torii.sorafs_discovery.replay_checkpoint_path);
-        fs::create_dir_all(checkpoint.parent().expect("checkpoint parent"))
-            .expect("create checkpoint parent");
-        fs::write(&checkpoint, b"not canonical Norito").expect("write corrupt checkpoint");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(&checkpoint, fs::Permissions::from_mode(0o600))
-                .expect("set private checkpoint permissions");
-        }
-
-        let error = build_shared_sorafs_provider_cache(&config)
-            .expect_err("corrupt checkpoint must fail startup");
-        assert!(matches!(
-            error,
-            SharedSoraFsProviderCacheError::ReplayCheckpoint {
-                path,
-                source: ReplayCheckpointError::Codec(_),
-            } if path == checkpoint
-        ));
-    }
-
-    #[test]
-    fn configured_replay_bound_is_enforced_by_shared_cache_startup() {
-        let temp = tempfile::tempdir().expect("temporary provider-cache root");
-        let mut config = base_config();
-        configure_discovery(&mut config, &temp);
-        config.torii.sorafs_discovery.replay_checkpoint_max_entries =
-            NonZeroUsize::new(usize::MAX).expect("maximum usize is non-zero");
-
-        let error = build_shared_sorafs_provider_cache(&config)
-            .expect_err("unsafe replay checkpoint bound must fail startup");
-        assert!(matches!(
-            error,
-            SharedSoraFsProviderCacheError::ReplayCheckpoint {
-                source: ReplayCheckpointError::ConfiguredLimitTooLarge {
-                    configured: usize::MAX,
-                    ..
-                },
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn shared_cache_persists_replay_rejection_across_irohad_restart() {
-        let temp = tempfile::tempdir().expect("temporary provider-cache root");
-        let mut config = base_config();
-        let admission_dir = configure_discovery(&mut config, &temp);
-        install_admission_fixture(&admission_dir);
-        let checkpoint = config
-            .torii
-            .data_dir
-            .join(&config.torii.sorafs_discovery.replay_checkpoint_path);
-
-        let original = load_advert_fixture();
-        let mut latest = original.clone();
-        latest.issued_at = latest.issued_at.saturating_add(1);
-        resign_advert(&mut latest);
-
-        let cache = build_shared_sorafs_provider_cache(&config)
-            .expect("initialize persistent shared cache")
-            .expect("enabled discovery cache");
-        {
-            let mut cache = cache.try_write().expect("exclusive cache guard");
-            let original_now = original.issued_at.saturating_add(1);
-            let prepared = cache
-                .validation_policy()
-                .prepare(original.clone(), original_now)
-                .expect("prepare original provider advert");
-            cache
-                .commit_prepared(prepared, original_now)
-                .expect("persist original provider advert");
-            let latest_now = latest.issued_at.saturating_add(1);
-            let prepared = cache
-                .validation_policy()
-                .prepare(latest.clone(), latest_now)
-                .expect("prepare latest provider advert");
-            cache
-                .commit_prepared(prepared, latest_now)
-                .expect("persist latest provider advert high-water mark");
-        }
-        drop(cache);
-
-        assert!(
-            checkpoint.exists(),
-            "relative replay path must resolve beneath Torii data_dir"
-        );
-
-        let restarted = build_shared_sorafs_provider_cache(&config)
-            .expect("restart with canonical replay checkpoint")
-            .expect("enabled discovery cache after restart");
-        let mut restarted = restarted.try_write().expect("exclusive restarted guard");
-        let stale_now = latest.issued_at.saturating_add(1);
-        let prepared = restarted
-            .validation_policy()
-            .prepare(original, stale_now)
-            .expect("stale advert remains otherwise authentic");
-        let stale_error = restarted
-            .commit_prepared(prepared, stale_now)
-            .expect_err("restart must preserve stale-advert rejection");
-        assert!(matches!(
-            stale_error,
-            AdvertError::NonMonotonicIssuedAt {
-                current_issued_at,
-                incoming_issued_at,
-                ..
-            } if current_issued_at == latest.issued_at
-                && incoming_issued_at < current_issued_at
-        ));
-
-        let mut conflicting = latest.clone();
-        conflicting.allow_unknown_capabilities = !conflicting.allow_unknown_capabilities;
-        resign_advert(&mut conflicting);
-        let conflict_now = latest.issued_at.saturating_add(1);
-        let prepared = restarted
-            .validation_policy()
-            .prepare(conflicting, conflict_now)
-            .expect("conflicting advert remains otherwise authentic");
-        let conflict_error = restarted
-            .commit_prepared(prepared, conflict_now)
-            .expect_err("restart must preserve conflicting same-timestamp rejection");
-        assert!(matches!(
-            conflict_error,
-            AdvertError::NonMonotonicIssuedAt {
-                current_issued_at,
-                incoming_issued_at,
-                ..
-            } if current_issued_at == latest.issued_at
-                && incoming_issued_at == current_issued_at
-        ));
-    }
-}
-
+include!("main/shared_sorafs_provider_cache_tests.rs");
 #[cfg(test)]
 mod handshake_payload_tests {
     use super::*;
     use iroha_genesis::{GenesisBuilder, ManifestCrypto};
     use std::path::PathBuf;
-
     fn handshake_payload_from_genesis() -> Json {
         let chain = iroha_data_model::ChainId::from("handshake-meta-test");
         let manifest = GenesisBuilder::new_without_executor(chain, PathBuf::from("."))
@@ -833,7 +445,6 @@ mod handshake_payload_tests {
         let genesis_block = manifest
             .build_and_sign(&keypair)
             .expect("sign genesis with meta");
-
         for tx in genesis_block.0.external_transactions() {
             if let Executable::Instructions(batch) = tx.instructions() {
                 for instr in batch {
@@ -848,7 +459,6 @@ mod handshake_payload_tests {
         }
         panic!("handshake payload not found");
     }
-
     #[test]
     fn decode_consensus_meta_rejects_nested_json_string_payload() {
         let payload = handshake_payload_from_genesis();
@@ -857,7 +467,6 @@ mod handshake_payload_tests {
             meta.mode,
             iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned
         );
-
         let stringified =
             Json::new(norito::json::to_json(&payload).expect("stringify handshake payload"));
         let err =
@@ -867,7 +476,6 @@ mod handshake_payload_tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn decode_consensus_meta_rejects_garbage() {
         let bad = Json::from_norito_value_ref(&norito::json::Value::String("not json".into()))
@@ -878,7 +486,6 @@ mod handshake_payload_tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn decode_consensus_meta_rejects_mangled_json() {
         let mangled = Json::from_norito_value_ref(&norito::json::Value::String(
@@ -891,7 +498,6 @@ mod handshake_payload_tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn decode_consensus_meta_rejects_unprefixed_hex_and_uppercase_tokens() {
         let fingerprint = "632eaff6fe3054ca279416357baae5ff7f28144b3bc6a83921f68d466c4ec0ab";
@@ -906,14 +512,12 @@ mod handshake_payload_tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn decode_crypto_manifest_meta_rejects_nested_json_string_payload() {
         let manifest = ManifestCrypto::default();
         let payload = Json::new(manifest.clone());
         let decoded = decode_crypto_manifest_meta(&payload).expect("decode normal payload");
         assert_eq!(decoded, manifest);
-
         let stringified =
             Json::new(norito::json::to_json(&payload).expect("stringify manifest payload"));
         let err = decode_crypto_manifest_meta(&stringified)
@@ -923,7 +527,6 @@ mod handshake_payload_tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn decode_crypto_manifest_meta_rejects_raw_quoted_legacy_payload() {
         let raw = r#""{"allowed_curve_ids":[1,3,4],"allowed_signing":["ed25519","secp256k1","bls_normal"],"default_hash":"blake2b-256","sm2_distid_default":"1234567812345678","sm_openssl_preview":false}""#;
@@ -932,7 +535,6 @@ mod handshake_payload_tests {
             "raw-quoted compatibility payload must be rejected at construction"
         );
     }
-
     #[test]
     fn decode_crypto_manifest_meta_rejects_backslash_escaped_object_payload() {
         let raw = r#"{\"allowed_curve_ids\":[1,3,4],\"allowed_signing\":[\"ed25519\",\"secp256k1\",\"bls_normal\"],\"default_hash\":\"blake2b-256\",\"sm2_distid_default\":\"1234567812345678\",\"sm_openssl_preview\":false}"#;
@@ -941,7 +543,6 @@ mod handshake_payload_tests {
             "backslash-escaped compatibility payload must be rejected at construction"
         );
     }
-
     #[test]
     fn decode_crypto_manifest_meta_rejects_mangled_key_value_separators() {
         let raw = r#"{"allowed_curve_ids""[1,3,4],"allowed_signing""["ed25519","secp256k1","bls_normal"],"default_hash""blake2b-256","sm2_distid_default""1234567812345678","sm_openssl_preview"false}"#;
@@ -950,7 +551,6 @@ mod handshake_payload_tests {
             "mangled compatibility payload must be rejected at construction"
         );
     }
-
     #[test]
     fn decode_confidential_registry_meta_handles_normal_json() {
         let hash = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -960,7 +560,6 @@ mod handshake_payload_tests {
             decode_confidential_registry_meta(&payload).expect("decode confidential payload");
         assert_eq!(decoded.vk_set_hash.as_deref(), Some(hash));
     }
-
     #[test]
     fn decode_confidential_registry_meta_rejects_mangled_key_value_separators() {
         let hash = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -969,7 +568,6 @@ mod handshake_payload_tests {
             "mangled compatibility payload must fail at construction"
         );
     }
-
     #[test]
     fn parse_confidential_registry_hash_treats_json_null_as_absent() {
         let payload = Json::from_raw_json("{\"vk_set_hash\":null}".to_string())
@@ -978,7 +576,6 @@ mod handshake_payload_tests {
             parse_confidential_registry_hash(&payload).expect("decode null confidential payload");
         assert_eq!(decoded, None);
     }
-
     #[test]
     fn confidential_handshake_digest_excludes_height_dependent_registry_fields() {
         let digest = iroha_data_model::confidential::ConfidentialFeatureDigest::new(
@@ -988,9 +585,7 @@ mod handshake_payload_tests {
             Some(1),
             Some([2; 32]),
         );
-
         let handshake = confidential_handshake_policy_digest(digest);
-
         assert_eq!(handshake.vk_set_hash, None);
         assert_eq!(handshake.poseidon_params_id, None);
         assert_eq!(handshake.pedersen_params_id, None);
@@ -998,26 +593,21 @@ mod handshake_payload_tests {
         assert_eq!(handshake.zk_policy_hash, Some([2; 32]));
     }
 }
-
 #[derive(Debug, JsonDeserialize)]
 struct ConfidentialRegistryMeta {
     #[norito(default)]
     vk_set_hash: Option<String>,
 }
-
 #[cfg(feature = "beep")]
 use ivm::IVM;
 use ivm::set_banner_enabled;
-
 /// Detect if the current terminal supports ANSI colors.
 pub fn is_coloring_supported() -> bool {
     supports_color::on(supports_color::Stream::Stdout).is_some()
 }
-
 fn default_terminal_colors_str() -> clap::builder::OsStr {
     is_coloring_supported().to_string().into()
 }
-
 /// Initialize the global query registry used to decode iterable queries.
 ///
 /// Iroha transports iterable queries as type-erased `QueryBox` values. The
@@ -1026,7 +616,6 @@ fn default_terminal_colors_str() -> clap::builder::OsStr {
 /// iterable query item types here.
 fn init_query_registry() {
     use iroha_data_model as dm;
-
     dm_query::set_query_registry(dm::query_registry![
         ErasedIterQuery<dm::domain::Domain>,
         ErasedIterQuery<dm::account::Account>,
@@ -1043,7 +632,6 @@ fn init_query_registry() {
         ErasedIterQuery<dm::block::BlockHeader>,
     ]);
 }
-
 #[cfg(feature = "telemetry")]
 fn init_global_metrics_handle(
     panic_on_duplicate_metrics: bool,
@@ -1060,22 +648,18 @@ fn init_global_metrics_handle(
         Arc::clone,
     )
 }
-
 fn nexus_topology_is_custom(nexus: &iroha_config::parameters::actual::Nexus) -> bool {
     nexus.uses_multilane_catalogs()
 }
-
 fn should_use_config_router(nexus: &iroha_config::parameters::actual::Nexus) -> bool {
     nexus.enabled && nexus_topology_is_custom(nexus)
 }
-
 fn ensure_manifest_crypto_matches(
     manifest: &RawGenesisTransaction,
     config: &Config,
 ) -> Result<(), String> {
     ensure_crypto_snapshot_matches_config(manifest.crypto(), config)
 }
-
 fn ensure_crypto_snapshot_matches_config(
     manifest_crypto: &ManifestCrypto,
     config: &Config,
@@ -1083,19 +667,15 @@ fn ensure_crypto_snapshot_matches_config(
     manifest_crypto
         .validate()
         .map_err(|err| format!("Invalid crypto section in genesis manifest: {err:?}"))?;
-
     let mut manifest_allowed = manifest_crypto.allowed_signing.clone();
     manifest_allowed.sort();
     manifest_allowed.dedup();
-
     let mut config_allowed = config.crypto.allowed_signing.clone();
     config_allowed.sort();
     config_allowed.dedup();
-
     let hashes_match = manifest_crypto
         .default_hash
         .eq_ignore_ascii_case(&config.crypto.default_hash);
-
     let distid_match = manifest_crypto.sm2_distid_default == config.crypto.sm2_distid_default;
     let manifest_sm_helpers = manifest_crypto
         .allowed_signing
@@ -1108,11 +688,9 @@ fn ensure_crypto_snapshot_matches_config(
         iroha_config::parameters::actual::Crypto::from(manifest_crypto.clone()).allowed_curve_ids;
     manifest_curves.sort_unstable();
     manifest_curves.dedup();
-
     let mut config_curves = config.crypto.allowed_curve_ids.clone();
     config_curves.sort_unstable();
     config_curves.dedup();
-
     if !hashes_match
         || manifest_allowed != config_allowed
         || !distid_match
@@ -1136,28 +714,13 @@ fn ensure_crypto_snapshot_matches_config(
             config.crypto.sm2_distid_default,
         ));
     }
-
     Ok(())
 }
-
-fn read_genesis_manifest(path: &Path) -> ReportResult<RawGenesisTransaction, StartError> {
-    let bytes = std::fs::read(path)
-        .change_context(StartError::InitKura)
-        .attach_with(|| format!("failed to read genesis manifest JSON at {}", path.display()))?;
-    norito::json::from_slice(&bytes).map_err(|err| {
-        Report::new(StartError::InitKura).attach(format!(
-            "failed to parse genesis manifest JSON at {}: {err}",
-            path.display()
-        ))
-    })
-}
-
 /// Ensure operator signature policy includes the node identity when requested by config.
 fn ensure_operator_node_key_allowlisted(config: &mut Config) {
     if !config.torii.operator_signatures.allow_node_key {
         return;
     }
-
     let node_public_key = config.common.key_pair.public_key().clone();
     if config
         .torii
@@ -1173,13 +736,11 @@ fn ensure_operator_node_key_allowlisted(config: &mut Config) {
             .push(node_public_key);
     }
 }
-
 #[cfg(feature = "beep")]
 fn startup_beep(enable_beep: bool) -> bool {
     if !enable_beep {
         return false;
     }
-
     IVM::beep_music();
     const SHA256_ABC_EXPECTED: [u8; 32] = [
         0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22,
@@ -1189,7 +750,6 @@ fn startup_beep(enable_beep: bool) -> bool {
     let _ = SHA256_ABC_EXPECTED;
     true
 }
-
 /// Iroha server CLI
 #[derive(clap::Args, Clone, Debug)]
 pub struct StartupArgs {
@@ -1219,7 +779,6 @@ pub struct StartupArgs {
     #[arg(long, value_name = "HEX", requires = "config")]
     pub config_blake3: Option<String>,
 }
-
 /// Complete command-line arguments for the Iroha server.
 #[derive(Parser, Debug)]
 #[command(
@@ -1282,7 +841,6 @@ pub struct Args {
     #[arg(long = "fastpq-gpu-kind", value_name = "LABEL")]
     pub fastpq_gpu_kind: Option<String>,
 }
-
 /// Top-level standard-launcher failure category.
 #[derive(Clone, Copy, Debug)]
 pub enum MainError {
@@ -1297,14 +855,12 @@ pub enum MainError {
     /// A supervised node subsystem failed while the daemon was running.
     IrohaRun,
 }
-
 /// Read-only Torii adapter that refuses committed reputation reads whenever
 /// the supervised daemon is not ready.
 #[derive(Debug, Clone)]
 struct ReadyReputationCommittedReaderV1 {
     runtime: sorafs_reputation_runtime::ReputationRuntimeHandleV1,
 }
-
 impl ReadyReputationCommittedReaderV1 {
     fn ensure_ready(&self) -> Result<(), sorafs_node::reputation::runtime::ReputationRuntimeError> {
         if self.runtime.status()?.ready {
@@ -1315,7 +871,6 @@ impl ReadyReputationCommittedReaderV1 {
         Err(sorafs_node::reputation::runtime::ReputationRuntimeError::External(failure))
     }
 }
-
 impl sorafs_node::reputation::runtime::ReputationCommittedReadApiV1
     for ReadyReputationCommittedReaderV1
 {
@@ -1328,7 +883,6 @@ impl sorafs_node::reputation::runtime::ReputationCommittedReadApiV1
         self.ensure_ready()?;
         self.runtime.committed_read_projection()
     }
-
     fn committed_snapshot_by_id(
         &self,
         snapshot_id: [u8; 16],
@@ -1339,7 +893,6 @@ impl sorafs_node::reputation::runtime::ReputationCommittedReadApiV1
         self.ensure_ready()?;
         self.runtime.committed_snapshot_by_id(snapshot_id)
     }
-
     fn committed_events_after(
         &self,
         sequence: u64,
@@ -1351,7 +904,6 @@ impl sorafs_node::reputation::runtime::ReputationCommittedReadApiV1
         self.runtime.committed_events_after(sequence)
     }
 }
-
 /// [Orchestrator](https://en.wikipedia.org/wiki/Orchestration_%28computing%29)
 /// of the system. It configures, coordinates and manages transactions
 /// and queries processing, work of consensus and storage.
@@ -1384,9 +936,7 @@ pub struct Iroha {
     sorafs_provider_ingest_completed_musubi_capture:
         Option<sorafs_node::ProviderIngestCompletedMusubiCaptureCoordinatorV1>,
 }
-
 include!("main/runtime_deps.rs");
-
 /// Error(s) that might occur while starting [`Iroha`]
 #[derive(Debug, Copy, Clone)]
 pub enum StartError {
@@ -1403,12 +953,10 @@ pub enum StartError {
     /// Failed to start the Torii API server
     StartTorii,
 }
-
 #[derive(Debug, Copy, Clone)]
 enum GenesisManifestError {
     ConsensusFingerprintMismatch,
 }
-
 impl core::fmt::Display for GenesisManifestError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -1418,9 +966,7 @@ impl core::fmt::Display for GenesisManifestError {
         }
     }
 }
-
 impl std::error::Error for GenesisManifestError {}
-
 impl std::fmt::Display for MainError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let key = match self {
@@ -1433,9 +979,7 @@ impl std::fmt::Display for MainError {
         write!(f, "{}", i18n::t(key))
     }
 }
-
 impl std::error::Error for MainError {}
-
 impl std::fmt::Display for StartError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let key = match self {
@@ -1449,9 +993,7 @@ impl std::fmt::Display for StartError {
         write!(f, "{}", i18n::t(key))
     }
 }
-
 impl std::error::Error for StartError {}
-
 struct NetworkRelay {
     sumeragi: SumeragiHandle,
     tx_gossiper: TransactionGossiperHandle,
@@ -1463,13 +1005,11 @@ struct NetworkRelay {
     #[cfg(feature = "test-network-message-control")]
     test_message_control: Option<Arc<SumeragiMessageController>>,
 }
-
 #[cfg(feature = "test-network-message-control")]
 type SumeragiMessageController = consensus_message_control::Controller<
     iroha_p2p::network::NetworkReplyRoute,
     HeldSumeragiRelayOwnership,
 >;
-
 struct NetworkRelayShared {
     sumeragi: SumeragiHandle,
     tx_gossiper: TransactionGossiperHandle,
@@ -1481,15 +1021,12 @@ struct NetworkRelayShared {
     #[cfg(feature = "test-network-message-control")]
     test_message_control: Option<Arc<SumeragiMessageController>>,
 }
-
 type RelayWorkItem = iroha_p2p::peer::message::PeerMessage<iroha_core::NetworkMessage>;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum SumeragiRelayClass {
     V2,
     Lane,
 }
-
 /// Checked capacity witness joining the two upstream authenticated-source
 /// credit lanes to the daemon's per-class relay corridor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1500,7 +1037,6 @@ struct SumeragiRelayCapacityGeometry {
     class_capacity: usize,
     retained_capacity: usize,
 }
-
 impl SumeragiRelayCapacityGeometry {
     fn checked(
         subscriber_base: usize,
@@ -1524,7 +1060,6 @@ impl SumeragiRelayCapacityGeometry {
             retained_capacity,
         })
     }
-
     const fn daemon_source_capacity_matches_two_upstream_lanes(self) -> bool {
         self.network_per_lane != 0
             && self.daemon_per_source != 0
@@ -1533,7 +1068,6 @@ impl SumeragiRelayCapacityGeometry {
                 Some(capacity) if capacity == self.daemon_per_source
             )
     }
-
     const fn class_corridor_covers_authenticated_sources(self) -> bool {
         self.authenticated_source_count != 0
             && self.class_capacity != 0
@@ -1548,7 +1082,6 @@ impl SumeragiRelayCapacityGeometry {
             )
     }
 }
-
 /// Terminal disposition of one exact daemon relay occurrence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SumeragiRelayTerminalOutcome {
@@ -1559,7 +1092,6 @@ pub(crate) enum SumeragiRelayTerminalOutcome {
     /// Preparation or downstream semantic admission failed.
     Failed,
 }
-
 impl SumeragiRelayClass {
     const fn label(self) -> &'static str {
         match self {
@@ -1568,20 +1100,17 @@ impl SumeragiRelayClass {
         }
     }
 }
-
 struct SumeragiRelayWorkItem {
     work: RelayWorkItem,
     #[cfg(feature = "test-network-message-control")]
     skip_test_control: bool,
     completion: Option<oneshot::Sender<SumeragiRelayTerminalOutcome>>,
 }
-
 /// One relay occurrence after exact layered ownership has been established.
 struct CreditedSumeragiRelayWorkItem {
     work: SumeragiRelayWorkItem,
     ownership: SumeragiRelayIngressOwnership,
 }
-
 /// Ownership crossing the relay-dispatch channel.
 ///
 /// Fresh network work retains its upstream credit inside `work` and adds the
@@ -1596,7 +1125,6 @@ enum SumeragiRelayIngressOwnership {
     #[cfg(feature = "test-network-message-control")]
     Rehydrated(SumeragiRelayRetention),
 }
-
 impl SumeragiRelayWorkItem {
     fn live(work: RelayWorkItem) -> Self {
         Self {
@@ -1606,7 +1134,6 @@ impl SumeragiRelayWorkItem {
             completion: None,
         }
     }
-
     #[cfg(feature = "test-network-message-control")]
     fn released(
         work: RelayWorkItem,
@@ -1619,23 +1146,19 @@ impl SumeragiRelayWorkItem {
         }
     }
 }
-
 trait SumeragiReplyRouteLiveness {
     fn is_active(&self) -> bool;
 }
-
 impl SumeragiReplyRouteLiveness for iroha_p2p::network::NetworkReplyRoute {
     fn is_active(&self) -> bool {
         iroha_p2p::network::NetworkReplyRoute::is_active(self)
     }
 }
-
 fn sumeragi_reply_route_terminal_if_inactive<R: SumeragiReplyRouteLiveness>(
     reply_route: &R,
 ) -> Option<SumeragiRelayTerminalOutcome> {
     (!reply_route.is_active()).then_some(SumeragiRelayTerminalOutcome::Retired)
 }
-
 #[cfg(feature = "test-network-message-control")]
 struct SumeragiRelayPreparationParts<R, O = ()> {
     peer: Peer,
@@ -1645,7 +1168,6 @@ struct SumeragiRelayPreparationParts<R, O = ()> {
     reply_route: Option<R>,
     ownership: O,
 }
-
 #[cfg(feature = "test-network-message-control")]
 enum SumeragiRelayPreparationBoundary<R, O = ()> {
     Held,
@@ -1657,14 +1179,12 @@ enum SumeragiRelayPreparationBoundary<R, O = ()> {
         ownership: Option<O>,
     },
 }
-
 #[cfg(feature = "test-network-message-control")]
 enum SumeragiRelayPreparationBoundaryError {
     InvalidPassDisposition,
     Controller(consensus_message_control::ControlError),
     MissingReplyRoute,
 }
-
 #[cfg(feature = "test-network-message-control")]
 fn prepare_sumeragi_relay_work_boundary<R: SumeragiReplyRouteLiveness, O>(
     controller: Option<&consensus_message_control::Controller<R, O>>,
@@ -1752,19 +1272,16 @@ fn prepare_sumeragi_relay_work_boundary<R: SumeragiReplyRouteLiveness, O>(
         ownership,
     })
 }
-
 #[cfg(feature = "test-network-message-control")]
 trait AuthenticatedSumeragiRelayWork {
     fn authenticated_via(&self) -> &PeerId;
 }
-
 #[cfg(feature = "test-network-message-control")]
 impl AuthenticatedSumeragiRelayWork for RelayWorkItem {
     fn authenticated_via(&self) -> &PeerId {
         iroha_p2p::peer::message::PeerMessage::authenticated_via(self)
     }
 }
-
 #[cfg(feature = "test-network-message-control")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HeldSumeragiReentryFailure {
@@ -1774,7 +1291,6 @@ enum HeldSumeragiReentryFailure {
     RouteMismatch,
     AuthenticatedViaMismatch,
 }
-
 #[cfg(feature = "test-network-message-control")]
 impl HeldSumeragiReentryFailure {
     const fn label(self) -> &'static str {
@@ -1787,7 +1303,6 @@ impl HeldSumeragiReentryFailure {
         }
     }
 }
-
 #[cfg(feature = "test-network-message-control")]
 enum HeldSumeragiReentry<W, O> {
     Ready {
@@ -1806,7 +1321,6 @@ enum HeldSumeragiReentry<W, O> {
         ownership: Option<O>,
     },
 }
-
 #[cfg(feature = "test-network-message-control")]
 fn rehydrate_held_sumeragi_relay_work<R, W, O>(
     held: consensus_message_control::HeldMessage<R, O>,
@@ -1882,14 +1396,12 @@ where
         ownership,
     }
 }
-
 #[derive(Clone)]
 struct SumeragiRelayIngress {
     v2: mpsc::Sender<CreditedSumeragiRelayWorkItem>,
     lane: mpsc::Sender<CreditedSumeragiRelayWorkItem>,
     source_credits: SumeragiRelaySourceCredits,
 }
-
 impl SumeragiRelayIngress {
     async fn send(
         &self,
@@ -1917,7 +1429,6 @@ impl SumeragiRelayIngress {
         };
         result.map_err(|error| error.0)
     }
-
     #[cfg(feature = "test-network-message-control")]
     async fn send_rehydrated(
         &self,
@@ -1953,7 +1464,6 @@ impl SumeragiRelayIngress {
         result.map_err(|error| error.0)
     }
 }
-
 #[cfg(any(test, feature = "test-network-message-control"))]
 fn sumeragi_rehydrated_ownership_matches(
     expected_source: &SumeragiRelaySource,
@@ -1963,19 +1473,16 @@ fn sumeragi_rehydrated_ownership_matches(
 ) -> bool {
     retained_source == expected_source && retained_geometry == expected_geometry
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct SumeragiRelaySource {
     class: SumeragiRelayClass,
     via: PeerId,
 }
-
 #[derive(Clone)]
 struct SumeragiRelaySourceCredits {
     geometry: SumeragiRelayCapacityGeometry,
     by_source: Arc<Mutex<BTreeMap<SumeragiRelaySource, Weak<Semaphore>>>>,
 }
-
 impl SumeragiRelaySourceCredits {
     fn new(geometry: SumeragiRelayCapacityGeometry) -> Self {
         assert!(geometry.daemon_source_capacity_matches_two_upstream_lanes());
@@ -1985,11 +1492,9 @@ impl SumeragiRelaySourceCredits {
             by_source: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
-
     const fn geometry(&self) -> SumeragiRelayCapacityGeometry {
         self.geometry
     }
-
     fn semaphore(&self, source: &SumeragiRelaySource) -> Arc<Semaphore> {
         let mut by_source = self
             .by_source
@@ -2003,7 +1508,6 @@ impl SumeragiRelaySourceCredits {
             semaphore
         })
     }
-
     #[cfg(test)]
     async fn acquire(&self, source: &SumeragiRelaySource) -> tokio::sync::OwnedSemaphorePermit {
         self.semaphore(source)
@@ -2011,14 +1515,12 @@ impl SumeragiRelaySourceCredits {
             .await
             .expect("daemon Sumeragi source-credit semaphores are never closed")
     }
-
     fn try_acquire(
         &self,
         source: &SumeragiRelaySource,
     ) -> Option<tokio::sync::OwnedSemaphorePermit> {
         self.semaphore(source).try_acquire_owned().ok()
     }
-
     #[cfg(test)]
     fn live_sources(&self) -> usize {
         self.by_source
@@ -2028,18 +1530,15 @@ impl SumeragiRelaySourceCredits {
             .filter(|semaphore| semaphore.strong_count() != 0)
             .count()
     }
-
     #[cfg(all(test, feature = "test-network-message-control"))]
     fn available_permits(&self, source: &SumeragiRelaySource) -> usize {
         self.semaphore(source).available_permits()
     }
 }
-
 enum PreparedSumeragiRelayItem {
     Block(Box<InboundBlockMessage>),
     Lane(Box<LaneRelayMessage>),
 }
-
 /// Complete layered ownership retained from daemon admission to a terminal outcome.
 struct SumeragiRelayRetention {
     /// Exact class and authenticated source owning both retained layers.
@@ -2049,13 +1548,11 @@ struct SumeragiRelayRetention {
     _p2p: iroha_p2p::peer::message::PeerMessageRetentionGuard,
     _daemon_source_credit: tokio::sync::OwnedSemaphorePermit,
 }
-
 #[cfg(feature = "test-network-message-control")]
 struct HeldSumeragiRelayOwnership {
     retention_guard: SumeragiRelayRetention,
     completion: Option<oneshot::Sender<SumeragiRelayTerminalOutcome>>,
 }
-
 struct PreparedSumeragiRelayWork {
     source: SumeragiRelaySource,
     item: PreparedSumeragiRelayItem,
@@ -2065,7 +1562,6 @@ struct PreparedSumeragiRelayWork {
     completion: Option<oneshot::Sender<SumeragiRelayTerminalOutcome>>,
     retry_eligible_at: Instant,
 }
-
 /// Bounded round-robin owner for retryable work, keyed by class and authenticated source.
 struct FairRetainedQueue<K, T> {
     capacity: usize,
@@ -2074,12 +1570,10 @@ struct FairRetainedQueue<K, T> {
     lanes: BTreeMap<K, VecDeque<T>>,
     ready: VecDeque<K>,
 }
-
 struct FairRetainedSelection<K, T> {
     trace: FairRetainedSelectionTrace<K>,
     item: T,
 }
-
 struct FairRetainedSelectionTrace<K> {
     source: K,
     selected_eligible: bool,
@@ -2089,12 +1583,10 @@ struct FairRetainedSelectionTrace<K> {
     selected_item_rank_before: usize,
     total_depth_before: usize,
 }
-
 enum FairRetainedPushError<T> {
     Full(T),
     SourceFull(T),
 }
-
 #[cfg(test)]
 impl<T> FairRetainedPushError<T> {
     fn into_item(self) -> T {
@@ -2103,7 +1595,6 @@ impl<T> FairRetainedPushError<T> {
         }
     }
 }
-
 impl<K: Clone + Ord, T> FairRetainedQueue<K, T> {
     fn new(capacity: usize, source_capacity: usize) -> Self {
         assert!(capacity > 0, "retained Sumeragi capacity must be non-zero");
@@ -2119,15 +1610,12 @@ impl<K: Clone + Ord, T> FairRetainedQueue<K, T> {
             ready: VecDeque::new(),
         }
     }
-
     fn has_capacity(&self) -> bool {
         self.len < self.capacity
     }
-
     fn is_empty(&self) -> bool {
         self.len == 0
     }
-
     fn push(&mut self, key: K, item: T) -> Result<(), FairRetainedPushError<T>> {
         if !self.has_capacity() {
             return Err(FairRetainedPushError::Full(item));
@@ -2144,18 +1632,15 @@ impl<K: Clone + Ord, T> FairRetainedQueue<K, T> {
         debug_assert!(self.len <= self.capacity);
         Ok(())
     }
-
     #[cfg(test)]
     fn pop(&mut self) -> Option<T> {
         self.pop_if(|_| true)
     }
-
     #[cfg(test)]
     fn pop_if(&mut self, mut eligible: impl FnMut(&T) -> bool) -> Option<T> {
         self.pop_if_with_trace(&mut eligible)
             .map(|selection| selection.item)
     }
-
     fn pop_if_with_trace(
         &mut self,
         mut eligible: impl FnMut(&T) -> bool,
@@ -2208,7 +1693,6 @@ impl<K: Clone + Ord, T> FairRetainedQueue<K, T> {
         None
     }
 }
-
 enum PrepareSumeragiRelayResult {
     Prepared(Box<PreparedSumeragiRelayWork>),
     /// Test control atomically owns the occurrence until an explicit release.
@@ -2227,7 +1711,6 @@ enum PrepareSumeragiRelayResult {
         completion: Option<oneshot::Sender<SumeragiRelayTerminalOutcome>>,
     },
 }
-
 enum SumeragiRelayAttempt {
     Terminal {
         outcome: SumeragiRelayTerminalOutcome,
@@ -2244,7 +1727,6 @@ enum SumeragiRelayAttempt {
         completion: Option<oneshot::Sender<SumeragiRelayTerminalOutcome>>,
     },
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SumeragiRelayFatalReason {
     IngressClosed,
@@ -2253,7 +1735,6 @@ enum SumeragiRelayFatalReason {
     BlockingTaskCancelled,
     BlockingTaskFailed,
 }
-
 impl SumeragiRelayFatalReason {
     const fn label(self) -> &'static str {
         match self {
@@ -2265,19 +1746,16 @@ impl SumeragiRelayFatalReason {
         }
     }
 }
-
 /// Maximum number of consecutive high-priority messages before yielding to an ordinary lane.
 const RELAY_HIGH_BURST: usize = 32;
 /// Upper bound between attempts while serialized Sumeragi ingress remains temporarily unavailable.
 const SUMERAGI_RELAY_RETRY_CADENCE: Duration = Duration::from_millis(10);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConsensusIngressDropReason {
     Rate,
     Bytes,
     Penalty,
 }
-
 impl ConsensusIngressDropReason {
     fn label(self) -> &'static str {
         match self {
@@ -2287,13 +1765,11 @@ impl ConsensusIngressDropReason {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LowPriorityIngressDropReason {
     Rate,
     Bytes,
 }
-
 impl LowPriorityIngressDropReason {
     fn label(self) -> &'static str {
         match self {
@@ -2302,20 +1778,17 @@ impl LowPriorityIngressDropReason {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug)]
 struct BucketConfig {
     rate_per_sec: std::num::NonZeroU32,
     burst: std::num::NonZeroU32,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct PenaltyConfig {
     threshold: u32,
     window: Duration,
     cooldown: Duration,
 }
-
 struct ConsensusIngressLimiter {
     msg_rate: Option<BucketConfig>,
     bytes_rate: Option<BucketConfig>,
@@ -2326,7 +1799,6 @@ struct ConsensusIngressLimiter {
     penalty: PenaltyConfig,
     peers: HashMap<PeerId, PeerIngressState>,
 }
-
 struct PeerIngressState {
     msg_bucket: Option<TokenBucket>,
     bytes_bucket: Option<TokenBucket>,
@@ -2336,18 +1808,15 @@ struct PeerIngressState {
     critical_bytes_bucket: Option<TokenBucket>,
     penalty: PenaltyTracker,
 }
-
 struct LowPriorityIngressLimiter {
     msg_rate: Option<BucketConfig>,
     bytes_rate: Option<BucketConfig>,
     peers: HashMap<PeerId, LowPriorityPeerState>,
 }
-
 struct LowPriorityPeerState {
     msg_bucket: Option<TokenBucket>,
     bytes_bucket: Option<TokenBucket>,
 }
-
 #[derive(Debug)]
 struct PenaltyTracker {
     threshold: u32,
@@ -2357,7 +1826,6 @@ struct PenaltyTracker {
     count: u32,
     cooldown_until: Option<Instant>,
 }
-
 #[derive(Debug)]
 struct TokenBucket {
     rate_per_sec: f64,
@@ -2365,20 +1833,17 @@ struct TokenBucket {
     tokens: f64,
     last_refill: Instant,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum IngressRateClass {
     Limited,
     Bulk,
     Critical,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct IngressPolicy {
     rate_class: Option<IngressRateClass>,
     apply_penalty: bool,
 }
-
 impl IngressPolicy {
     const fn limited() -> Self {
         Self {
@@ -2386,14 +1851,12 @@ impl IngressPolicy {
             apply_penalty: true,
         }
     }
-
     const fn bulk() -> Self {
         Self {
             rate_class: Some(IngressRateClass::Bulk),
             apply_penalty: false,
         }
     }
-
     const fn critical() -> Self {
         Self {
             rate_class: Some(IngressRateClass::Critical),
@@ -2401,7 +1864,6 @@ impl IngressPolicy {
         }
     }
 }
-
 impl BucketConfig {
     fn scaled(self, factor: u32) -> Self {
         let factor = factor.max(1);
@@ -2413,11 +1875,9 @@ impl BucketConfig {
         }
     }
 }
-
 impl ConsensusIngressLimiter {
     fn ingress_policy(msg: &iroha_core::NetworkMessage) -> IngressPolicy {
         use iroha_core::sumeragi::message::BlockMessage;
-
         match msg {
             iroha_core::NetworkMessage::SumeragiBlock(block) => match block.as_ref().as_ref() {
                 BlockMessage::KuraReplicaAdvert(_) => IngressPolicy::limited(),
@@ -2432,7 +1892,6 @@ impl ConsensusIngressLimiter {
                 BlockMessage::LaneHistoricalRecoveryResponse(_) => IngressPolicy::bulk(),
                 BlockMessage::V2(message) => {
                     use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
-
                     match &message.payload {
                         ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
                             IngressPolicy::bulk()
@@ -2476,7 +1935,6 @@ impl ConsensusIngressLimiter {
             _ => IngressPolicy::limited(),
         }
     }
-
     fn from_config(
         network: &iroha_config::parameters::actual::Network,
         signed_block_cadence: Duration,
@@ -2526,7 +1984,6 @@ impl ConsensusIngressLimiter {
             penalty,
         )
     }
-
     fn bulk_scale_factor(block_time: Duration) -> u32 {
         let base_ms =
             u128::from(iroha_config::parameters::defaults::sumeragi::BLOCK_CADENCE_MS).max(1);
@@ -2534,7 +1991,6 @@ impl ConsensusIngressLimiter {
         let scale = base_ms.div_ceil(block_ms);
         u32::try_from(scale).unwrap_or(u32::MAX).max(1)
     }
-
     #[allow(clippy::too_many_arguments)]
     fn new(
         msg_rate: Option<BucketConfig>,
@@ -2556,7 +2012,6 @@ impl ConsensusIngressLimiter {
             peers: HashMap::new(),
         }
     }
-
     #[cfg(test)]
     fn should_drop(
         &mut self,
@@ -2566,7 +2021,6 @@ impl ConsensusIngressLimiter {
     ) -> Option<ConsensusIngressDropReason> {
         self.should_drop_from(peer.id(), msg, size_bytes)
     }
-
     fn should_drop_from(
         &mut self,
         authenticated_via: &PeerId,
@@ -2635,7 +2089,6 @@ impl ConsensusIngressLimiter {
         None
     }
 }
-
 impl PeerIngressState {
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -2658,7 +2111,6 @@ impl PeerIngressState {
             penalty: PenaltyTracker::new(penalty),
         }
     }
-
     fn msg_bucket_for(&mut self, class: IngressRateClass) -> Option<&mut TokenBucket> {
         match class {
             IngressRateClass::Limited => self.msg_bucket.as_mut(),
@@ -2672,7 +2124,6 @@ impl PeerIngressState {
             }
         }
     }
-
     fn bytes_bucket_for(&mut self, class: IngressRateClass) -> Option<&mut TokenBucket> {
         match class {
             IngressRateClass::Limited => self.bytes_bucket.as_mut(),
@@ -2687,7 +2138,6 @@ impl PeerIngressState {
         }
     }
 }
-
 impl LowPriorityIngressLimiter {
     fn from_config(network: &iroha_config::parameters::actual::Network) -> Self {
         let msg_rate = network.low_priority_rate_per_sec.map(|rate| BucketConfig {
@@ -2700,7 +2150,6 @@ impl LowPriorityIngressLimiter {
         });
         Self::new(msg_rate, bytes_rate)
     }
-
     fn new(msg_rate: Option<BucketConfig>, bytes_rate: Option<BucketConfig>) -> Self {
         Self {
             msg_rate,
@@ -2708,7 +2157,6 @@ impl LowPriorityIngressLimiter {
             peers: HashMap::new(),
         }
     }
-
     #[cfg(test)]
     fn should_drop(
         &mut self,
@@ -2717,7 +2165,6 @@ impl LowPriorityIngressLimiter {
     ) -> Option<LowPriorityIngressDropReason> {
         self.should_drop_from(peer.id(), size_bytes)
     }
-
     fn should_drop_from(
         &mut self,
         authenticated_via: &PeerId,
@@ -2745,7 +2192,6 @@ impl LowPriorityIngressLimiter {
         None
     }
 }
-
 impl LowPriorityPeerState {
     fn new(now: Instant, msg_rate: Option<BucketConfig>, bytes_rate: Option<BucketConfig>) -> Self {
         Self {
@@ -2754,7 +2200,6 @@ impl LowPriorityPeerState {
         }
     }
 }
-
 impl PenaltyTracker {
     fn new(config: PenaltyConfig) -> Self {
         Self {
@@ -2766,7 +2211,6 @@ impl PenaltyTracker {
             cooldown_until: None,
         }
     }
-
     fn is_suppressed(&mut self, now: Instant) -> bool {
         if self.threshold == 0 {
             return false;
@@ -2779,7 +2223,6 @@ impl PenaltyTracker {
         }
         false
     }
-
     fn note_violation(&mut self, now: Instant) {
         if self.threshold == 0 {
             return;
@@ -2801,7 +2244,6 @@ impl PenaltyTracker {
         }
     }
 }
-
 impl TokenBucket {
     fn new(config: BucketConfig, now: Instant) -> Self {
         let capacity = f64::from(config.burst.get());
@@ -2812,7 +2254,6 @@ impl TokenBucket {
             last_refill: now,
         }
     }
-
     fn allow(&mut self, cost: f64, now: Instant) -> bool {
         if cost <= 0.0 {
             return true;
@@ -2828,7 +2269,6 @@ impl TokenBucket {
             false
         }
     }
-
     fn refill(&mut self, now: Instant) {
         let elapsed = now.saturating_duration_since(self.last_refill);
         if elapsed.is_zero() {
@@ -2839,7 +2279,6 @@ impl TokenBucket {
         self.last_refill = now;
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RelayReceiverKind {
     High,
@@ -2847,7 +2286,6 @@ enum RelayReceiverKind {
     Chunk,
     Low,
 }
-
 impl RelayReceiverKind {
     const fn label(self) -> &'static str {
         match self {
@@ -2858,25 +2296,21 @@ impl RelayReceiverKind {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RelayIngressLoopExit {
     ReceiverClosed(RelayReceiverKind),
     WorkerClosed(RelayReceiverKind),
 }
-
 enum RelayReceiverEvent<T> {
     Message(RelayReceiverKind, T),
     Closed,
     AllClosed,
 }
-
 const RELAY_ORDINARY_RECEIVERS: [RelayReceiverKind; 3] = [
     RelayReceiverKind::Payload,
     RelayReceiverKind::Chunk,
     RelayReceiverKind::Low,
 ];
-
 /// Fair, priority-aware receiver set shared by the relay ingress and worker stages.
 ///
 /// The high-priority lane may run for at most `high_burst` consecutive admissions while any
@@ -2888,7 +2322,6 @@ struct OrdinaryRelayReceiverState {
     chunk_open: bool,
     low_open: bool,
 }
-
 struct FairRelayReceivers<T> {
     high: mpsc::Receiver<T>,
     payload: mpsc::Receiver<T>,
@@ -2900,7 +2333,6 @@ struct FairRelayReceivers<T> {
     next_ordinary: usize,
     high_burst: usize,
 }
-
 impl<T: Send> FairRelayReceivers<T> {
     fn new(
         high: mpsc::Receiver<T>,
@@ -2926,7 +2358,6 @@ impl<T: Send> FairRelayReceivers<T> {
             high_burst,
         }
     }
-
     async fn recv(&mut self) -> Option<(RelayReceiverKind, T)> {
         loop {
             match self.recv_event().await {
@@ -2936,11 +2367,9 @@ impl<T: Send> FairRelayReceivers<T> {
             }
         }
     }
-
     async fn recv_event(&mut self) -> RelayReceiverEvent<T> {
         std::future::poll_fn(|cx| self.poll_recv_event(cx)).await
     }
-
     fn poll_recv_event(
         &mut self,
         cx: &mut std::task::Context<'_>,
@@ -2949,7 +2378,6 @@ impl<T: Send> FairRelayReceivers<T> {
         if ordinary_due && let Some(event) = self.poll_ordinary(cx) {
             return std::task::Poll::Ready(event);
         }
-
         if let Some(event) = Self::poll_receiver(
             RelayReceiverKind::High,
             &mut self.high,
@@ -2961,11 +2389,9 @@ impl<T: Send> FairRelayReceivers<T> {
             }
             return std::task::Poll::Ready(event);
         }
-
         if !ordinary_due && let Some(event) = self.poll_ordinary(cx) {
             return std::task::Poll::Ready(event);
         }
-
         if self.high_open
             || self.ordinary_state.payload_open
             || self.ordinary_state.chunk_open
@@ -2976,7 +2402,6 @@ impl<T: Send> FairRelayReceivers<T> {
             std::task::Poll::Ready(RelayReceiverEvent::AllClosed)
         }
     }
-
     fn poll_ordinary(&mut self, cx: &mut std::task::Context<'_>) -> Option<RelayReceiverEvent<T>> {
         for offset in 0..RELAY_ORDINARY_RECEIVERS.len() {
             let index = (self.next_ordinary + offset) % RELAY_ORDINARY_RECEIVERS.len();
@@ -3009,7 +2434,6 @@ impl<T: Send> FairRelayReceivers<T> {
         }
         None
     }
-
     fn poll_receiver(
         kind: RelayReceiverKind,
         receiver: &mut mpsc::Receiver<T>,
@@ -3031,11 +2455,9 @@ impl<T: Send> FairRelayReceivers<T> {
         }
     }
 }
-
 fn sumeragi_relay_class(message: &iroha_core::NetworkMessage) -> Option<SumeragiRelayClass> {
     use iroha_core::NetworkMessage::*;
     use iroha_core::sumeragi::message::BlockMessage;
-
     match message {
         SumeragiBlock(block) => match block.as_ref().as_ref() {
             BlockMessage::V2(_) | BlockMessage::KuraReplicaAdvert(_) => {
@@ -3060,7 +2482,6 @@ fn sumeragi_relay_class(message: &iroha_core::NetworkMessage) -> Option<Sumeragi
         _ => None,
     }
 }
-
 fn obsolete_sumeragi_relay_terminal_meta(
     message: &iroha_core::NetworkMessage,
 ) -> Option<(
@@ -3072,14 +2493,12 @@ fn obsolete_sumeragi_relay_terminal_meta(
     NetworkRelayShared::retired_sumeragi_message_meta(message)
         .map(|(kind, height, view)| (kind, height, view, SumeragiRelayTerminalOutcome::Delivered))
 }
-
 fn certified_merge_sidecar_ingress_reply_route(
     _message: &iroha_core::merge_sidecar::CertifiedMergeSidecarMessage,
     reply_route: iroha_p2p::network::NetworkReplyRoute,
 ) -> iroha_p2p::network::NetworkReplyRoute {
     reply_route
 }
-
 struct RetainedSumeragiRelayParts {
     peer: Peer,
     authenticated_via: PeerId,
@@ -3091,7 +2510,6 @@ struct RetainedSumeragiRelayParts {
     #[cfg(feature = "test-network-message-control")]
     skip_test_control: bool,
 }
-
 struct AuthorizedSumeragiRelayParts {
     peer: Peer,
     authenticated_via: PeerId,
@@ -3101,7 +2519,6 @@ struct AuthorizedSumeragiRelayParts {
     retention_guard: SumeragiRelayRetention,
     completion: Option<oneshot::Sender<SumeragiRelayTerminalOutcome>>,
 }
-
 struct SumeragiRelayBuildContext {
     peer: Peer,
     authenticated_via: PeerId,
@@ -3110,7 +2527,6 @@ struct SumeragiRelayBuildContext {
     retention_guard: SumeragiRelayRetention,
     completion: Option<oneshot::Sender<SumeragiRelayTerminalOutcome>>,
 }
-
 impl AuthorizedSumeragiRelayParts {
     fn into_message_and_context(self) -> (iroha_core::NetworkMessage, SumeragiRelayBuildContext) {
         (
@@ -3126,7 +2542,6 @@ impl AuthorizedSumeragiRelayParts {
         )
     }
 }
-
 impl SumeragiRelayBuildContext {
     fn terminal(self, outcome: SumeragiRelayTerminalOutcome) -> PrepareSumeragiRelayResult {
         PrepareSumeragiRelayResult::Terminal {
@@ -3135,7 +2550,6 @@ impl SumeragiRelayBuildContext {
             completion: self.completion,
         }
     }
-
     fn prepared(
         self,
         class: SumeragiRelayClass,
@@ -3154,7 +2568,6 @@ impl SumeragiRelayBuildContext {
         }))
     }
 }
-
 fn retain_sumeragi_relay_parts(work: CreditedSumeragiRelayWorkItem) -> RetainedSumeragiRelayParts {
     let CreditedSumeragiRelayWorkItem {
         work: relay_work,
@@ -3221,7 +2634,6 @@ fn retain_sumeragi_relay_parts(work: CreditedSumeragiRelayWorkItem) -> RetainedS
         skip_test_control,
     }
 }
-
 #[cfg(feature = "test-network-message-control")]
 fn log_sumeragi_relay_preparation_boundary_error(error: &SumeragiRelayPreparationBoundaryError) {
     match error {
@@ -3243,7 +2655,6 @@ fn log_sumeragi_relay_preparation_boundary_error(error: &SumeragiRelayPreparatio
         }
     }
 }
-
 fn prepare_sumeragi_block_relay_item(
     context: SumeragiRelayBuildContext,
     data: Arc<iroha_core::sumeragi::message::BlockMessageWire>,
@@ -3298,7 +2709,6 @@ fn prepare_sumeragi_block_relay_item(
         }
     }
 }
-
 fn prepare_sumeragi_lane_relay_item(
     context: SumeragiRelayBuildContext,
     message: iroha_core::NetworkMessage,
@@ -3306,7 +2716,6 @@ fn prepare_sumeragi_lane_relay_item(
     use iroha_core::NetworkMessage::{
         CertifiedMergeSidecar, LaneDrainVote, LaneRelay, MergeCommitteeSignature, NativeAmx,
     };
-
     let peer_id = context.peer.id().clone();
     let item = match message {
         LaneRelay(envelope) => LaneRelayMessage::Envelope(*envelope),
@@ -3357,7 +2766,6 @@ fn prepare_sumeragi_lane_relay_item(
         PreparedSumeragiRelayItem::Lane(Box::new(item)),
     )
 }
-
 impl NetworkRelayShared {
     fn authorize_sumeragi_relay_parts(
         &self,
@@ -3430,7 +2838,6 @@ impl NetworkRelayShared {
             completion,
         })
     }
-
     #[cfg(feature = "test-network-message-control")]
     fn apply_sumeragi_relay_test_control(
         &self,
@@ -3518,7 +2925,6 @@ impl NetworkRelayShared {
             }
         }
     }
-
     fn prepare_sumeragi_relay_work(
         &self,
         work: CreditedSumeragiRelayWorkItem,
@@ -3542,7 +2948,6 @@ impl NetworkRelayShared {
         }
     }
 }
-
 fn finish_sumeragi_block_ingress_attempt(
     source: SumeragiRelaySource,
     reply_route: iroha_p2p::network::NetworkReplyRoute,
@@ -3602,7 +3007,6 @@ fn finish_sumeragi_block_ingress_attempt(
         },
     }
 }
-
 #[cfg(test)]
 fn attempt_sumeragi_block_relay_work_for_test(
     sumeragi: &SumeragiHandle,
@@ -3628,7 +3032,6 @@ fn attempt_sumeragi_block_relay_work_for_test(
         disposition,
     )
 }
-
 fn attempt_sumeragi_lane_relay_work(
     shared: &NetworkRelayShared,
     source: SumeragiRelaySource,
@@ -3696,7 +3099,6 @@ fn attempt_sumeragi_lane_relay_work(
         },
     }
 }
-
 async fn attempt_sumeragi_relay_work(
     shared: &NetworkRelayShared,
     work: PreparedSumeragiRelayWork,
@@ -3787,7 +3189,6 @@ async fn attempt_sumeragi_relay_work(
         ),
     }
 }
-
 fn try_recv_sumeragi_relay_work(
     v2: &mut mpsc::Receiver<CreditedSumeragiRelayWorkItem>,
     lane: &mut mpsc::Receiver<CreditedSumeragiRelayWorkItem>,
@@ -3824,7 +3225,6 @@ fn try_recv_sumeragi_relay_work(
     }
     None
 }
-
 fn finish_sumeragi_relay_terminal(
     outcome: SumeragiRelayTerminalOutcome,
     retention_guard: SumeragiRelayRetention,
@@ -3835,7 +3235,6 @@ fn finish_sumeragi_relay_terminal(
     }
     drop(retention_guard);
 }
-
 fn retain_sumeragi_work(
     retained: &mut FairRetainedQueue<SumeragiRelaySource, PreparedSumeragiRelayWork>,
     work: PreparedSumeragiRelayWork,
@@ -3863,16 +3262,13 @@ fn retain_sumeragi_work(
         })
     })
 }
-
 fn sumeragi_relay_retry_is_eligible(work: &PreparedSumeragiRelayWork, now: Instant) -> bool {
     work.retry_eligible_at <= now
 }
-
 enum SumeragiRelayRetryRetentionError {
     Capacity(Box<PreparedSumeragiRelayWork>),
     RefinementViolation,
 }
-
 fn sumeragi_relay_retain_retry(
     retained: &mut FairRetainedQueue<SumeragiRelaySource, PreparedSumeragiRelayWork>,
     selection: &FairRetainedSelectionTrace<SumeragiRelaySource>,
@@ -3883,7 +3279,6 @@ fn sumeragi_relay_retain_retry(
         return retain_sumeragi_work(retained, work)
             .map_err(SumeragiRelayRetryRetentionError::Capacity);
     }
-
     let retry_source = work.source.clone();
     let retry_route = work.reply_route.clone();
     let retry_geometry = work.retention_guard.geometry;
@@ -3958,7 +3353,6 @@ fn sumeragi_relay_retain_retry(
             FairRetainedPushError::Full(work) | FairRetainedPushError::SourceFull(work) => work,
         }))
     })?;
-
     let selected_source_rank_after = retained
         .ready
         .iter()
@@ -4012,7 +3406,6 @@ fn sumeragi_relay_retain_retry(
         Err(SumeragiRelayRetryRetentionError::RefinementViolation)
     }
 }
-
 fn sumeragi_relay_source_capacity(
     class_capacity: usize,
     daemon_source_capacity: usize,
@@ -4020,39 +3413,33 @@ fn sumeragi_relay_source_capacity(
     (daemon_source_capacity != 0 && daemon_source_capacity <= class_capacity)
         .then_some(daemon_source_capacity)
 }
-
 fn new_sumeragi_relay_retained_queue(
     retained_capacity: usize,
     source_capacity: usize,
 ) -> FairRetainedQueue<SumeragiRelaySource, PreparedSumeragiRelayWork> {
     FairRetainedQueue::new(retained_capacity, source_capacity)
 }
-
 fn sumeragi_relay_source_credits(
     geometry: SumeragiRelayCapacityGeometry,
 ) -> SumeragiRelaySourceCredits {
     SumeragiRelaySourceCredits::new(geometry)
 }
-
 fn sumeragi_relay_dispatcher_capacity(class_capacity: usize) -> Option<usize> {
     class_capacity
         .checked_mul(2)
         .filter(|capacity| *capacity >= 2)
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SumeragiRelayDispatcherLifecycle {
     Running,
     GracefulShutdown,
     UnexpectedClosure,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SumeragiRelayFailureDisposition {
     RetireForShutdown,
     FailStop,
 }
-
 fn sumeragi_relay_dispatcher_lifecycle(
     shutdown_requested: bool,
     v2_open: bool,
@@ -4071,7 +3458,6 @@ fn sumeragi_relay_dispatcher_lifecycle(
         SumeragiRelayDispatcherLifecycle::UnexpectedClosure
     }
 }
-
 fn sumeragi_relay_failure_disposition(
     reason: SumeragiRelayFatalReason,
     shutdown_requested: bool,
@@ -4088,11 +3474,9 @@ fn sumeragi_relay_failure_disposition(
         SumeragiRelayFailureDisposition::FailStop
     }
 }
-
 fn sumeragi_relay_class_capacity(class_capacity: usize) -> Option<usize> {
     (class_capacity != 0).then_some(class_capacity)
 }
-
 fn sumeragi_relay_closed_fatal(
     class: SumeragiRelayClass,
     work: CreditedSumeragiRelayWorkItem,
@@ -4104,7 +3488,6 @@ fn sumeragi_relay_closed_fatal(
     );
     std::process::exit(1)
 }
-
 fn sumeragi_relay_source_credit_invariant_fatal(
     class: SumeragiRelayClass,
     work: SumeragiRelayWorkItem,
@@ -4116,7 +3499,6 @@ fn sumeragi_relay_source_credit_invariant_fatal(
     );
     std::process::exit(1)
 }
-
 fn sumeragi_relay_retention_invariant_fatal(
     reason: &'static str,
     work: PreparedSumeragiRelayWork,
@@ -4130,7 +3512,6 @@ fn sumeragi_relay_retention_invariant_fatal(
     );
     std::process::exit(1)
 }
-
 fn sumeragi_relay_retained_refinement_fatal(reason: &'static str) -> ! {
     iroha_logger::error!(
         reason,
@@ -4138,7 +3519,6 @@ fn sumeragi_relay_retained_refinement_fatal(reason: &'static str) -> ! {
     );
     std::process::exit(1)
 }
-
 async fn attempt_retained_sumeragi_relay_work(
     shared: &NetworkRelayShared,
     retained: &mut FairRetainedQueue<SumeragiRelaySource, PreparedSumeragiRelayWork>,
@@ -4199,7 +3579,6 @@ async fn attempt_retained_sumeragi_relay_work(
     }
     true
 }
-
 async fn run_sumeragi_relay_dispatcher(
     shared: Arc<NetworkRelayShared>,
     mut v2_rx: mpsc::Receiver<CreditedSumeragiRelayWorkItem>,
@@ -4251,10 +3630,8 @@ async fn run_sumeragi_relay_dispatcher(
                 } => finish_sumeragi_relay_terminal(outcome, retention_guard, completion),
             }
         }
-
         let attempted =
             attempt_retained_sumeragi_relay_work(&shared, &mut retained, &shutdown_signal).await;
-
         match sumeragi_relay_dispatcher_lifecycle(
             shutdown_signal.is_sent(),
             v2_open,
@@ -4278,7 +3655,6 @@ async fn run_sumeragi_relay_dispatcher(
         }
     }
 }
-
 fn spawn_sumeragi_relay_dispatcher(
     shared: Arc<NetworkRelayShared>,
     geometry: SumeragiRelayCapacityGeometry,
@@ -4306,14 +3682,12 @@ fn spawn_sumeragi_relay_dispatcher(
         source_capacity,
         shutdown_signal,
     ));
-
     SumeragiRelayIngress {
         v2: v2_tx,
         lane: lane_tx,
         source_credits,
     }
 }
-
 fn spawn_network_relay_worker(
     shared: &Arc<NetworkRelayShared>,
     sumeragi_ingress: &SumeragiRelayIngress,
@@ -4372,10 +3746,8 @@ fn spawn_network_relay_worker(
             });
         }
     });
-
     (work_high_tx, work_payload_tx, work_chunk_tx, work_low_tx)
 }
-
 async fn forward_relay_lane(
     mut receiver: mpsc::Receiver<RelayWorkItem>,
     tx: &mpsc::Sender<RelayWorkItem>,
@@ -4396,7 +3768,6 @@ async fn forward_relay_lane(
             );
             continue;
         }
-
         if let Some(class) = sumeragi_relay_class(&msg.payload)
             && let Some(sumeragi_ingress) = sumeragi_ingress
         {
@@ -4408,7 +3779,6 @@ async fn forward_relay_lane(
             }
             continue;
         }
-
         // `send` retains the exact owned item while this lane's bounded worker queue is full.
         // Each lane has an independent forwarder, so backpressure in one class cannot obstruct
         // admission in the other classes. The worker-side scheduler supplies bounded service
@@ -4425,7 +3795,6 @@ async fn forward_relay_lane(
             return RelayIngressLoopExit::WorkerClosed(kind);
         }
     }
-
     if fail_stop_on_close {
         iroha_logger::error!(
             receiver = kind.label(),
@@ -4435,7 +3804,6 @@ async fn forward_relay_lane(
     }
     RelayIngressLoopExit::ReceiverClosed(kind)
 }
-
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 async fn drive_network_relay_ingress(
@@ -4462,7 +3830,6 @@ async fn drive_network_relay_ingress(
     )
     .await
 }
-
 #[allow(clippy::too_many_arguments)]
 async fn drive_network_relay_ingress_inner(
     high_receiver: mpsc::Receiver<RelayWorkItem>,
@@ -4509,13 +3876,10 @@ async fn drive_network_relay_ingress_inner(
         ) => exit,
     }
 }
-
 fn high_priority_relay_filter() -> iroha_p2p::network::SubscriberFilter {
     use iroha_p2p::network::{SubscriberFilter, message::Topic};
-
     SubscriberFilter::topics([Topic::ConsensusSafety, Topic::Consensus, Topic::Control])
 }
-
 impl NetworkRelay {
     fn into_shared(self) -> NetworkRelayShared {
         NetworkRelayShared {
@@ -4530,11 +3894,9 @@ impl NetworkRelay {
             test_message_control: self.test_message_control,
         }
     }
-
     #[allow(clippy::too_many_lines)]
     async fn run(self, shutdown_signal: ShutdownSignal) {
         use iroha_p2p::network::{SubscriberFilter, message::Topic};
-
         let shared = Arc::new(self.into_shared());
         let base_cap = shared.network.subscriber_queue_cap().get();
         let network_per_lane = shared.network.authenticated_source_credit_capacity().get();
@@ -4701,7 +4063,6 @@ impl NetworkRelay {
             .map(std::num::NonZeroUsize::get)
             .unwrap_or(1)
             .clamp(1, 8);
-
         let high_filter = high_priority_relay_filter();
         let payload_filter = SubscriberFilter::topics([Topic::ConsensusPayload, Topic::BlockSync]);
         let chunk_filter = SubscriberFilter::topics([Topic::ConsensusChunk]);
@@ -4713,7 +4074,6 @@ impl NetworkRelay {
             Topic::Health,
             Topic::Other,
         ]);
-
         loop {
             let (high_sender, high_receiver) = mpsc::channel(high_cap);
             let (payload_sender, payload_receiver) = mpsc::channel(payload_cap);
@@ -4729,7 +4089,6 @@ impl NetworkRelay {
                     work_chunk_cap,
                     work_low_cap,
                 );
-
             let mut high_sender = Some(high_sender);
             let mut payload_sender = Some(payload_sender);
             let mut chunk_sender = Some(chunk_sender);
@@ -4748,7 +4107,6 @@ impl NetworkRelay {
                     }
                 }
             }
-
             if let Some(sender) = payload_sender.take() {
                 match shared
                     .network
@@ -4763,7 +4121,6 @@ impl NetworkRelay {
                     }
                 }
             }
-
             if let Some(sender) = chunk_sender.take() {
                 match shared
                     .network
@@ -4778,7 +4135,6 @@ impl NetworkRelay {
                     }
                 }
             }
-
             if let Some(sender) = low_sender.take() {
                 match shared
                     .network
@@ -4793,7 +4149,6 @@ impl NetworkRelay {
                     }
                 }
             }
-
             if high_sender.is_none()
                 && payload_sender.is_none()
                 && chunk_sender.is_none()
@@ -4833,7 +4188,6 @@ impl NetworkRelay {
         }
     }
 }
-
 impl NetworkRelayShared {
     fn consensus_ingress_allows(
         &self,
@@ -4842,7 +4196,6 @@ impl NetworkRelayShared {
         size_bytes: usize,
     ) -> bool {
         use iroha_core::NetworkMessage::*;
-
         if !matches!(
             msg,
             SumeragiBlock(_) | SumeragiControlFlow(_) | LaneDrainVote(_) | CertifiedMergeSidecar(_)
@@ -4859,7 +4212,6 @@ impl NetworkRelayShared {
         let Some(reason) = reason else {
             return true;
         };
-
         #[cfg(feature = "telemetry")]
         if let Some(metrics) = iroha_telemetry::metrics::global()
             && let Some(topic) = Self::consensus_ingress_topic_label(msg)
@@ -4907,7 +4259,6 @@ impl NetworkRelayShared {
         );
         false
     }
-
     #[allow(clippy::too_many_lines)]
     async fn handle_message(
         &self,
@@ -4942,12 +4293,10 @@ impl NetworkRelayShared {
         } else {
             (peer, msg, size_bytes)
         };
-
         let _ = self
             .handle_message_after_test_control(peer, authenticated_via, msg, size_bytes)
             .await;
     }
-
     #[allow(clippy::too_many_lines)]
     async fn handle_message_after_test_control(
         &self,
@@ -4957,7 +4306,6 @@ impl NetworkRelayShared {
         size_bytes: usize,
     ) -> bool {
         use iroha_core::NetworkMessage::*;
-
         if let Some((kind, height, view)) = Self::retired_sumeragi_message_meta(&msg) {
             iroha_logger::debug!(
                 %peer,
@@ -4968,11 +4316,9 @@ impl NetworkRelayShared {
             );
             return false;
         }
-
         if !self.consensus_ingress_allows(&authenticated_via, &msg, size_bytes) {
             return false;
         }
-
         if Self::should_apply_low_priority_ingress(&msg) {
             let reason = {
                 let mut limiter = self
@@ -4992,7 +4338,6 @@ impl NetworkRelayShared {
                 return false;
             }
         }
-
         match msg {
             SumeragiBlock(_)
             | SumeragiControlFlow(_)
@@ -5062,7 +4407,6 @@ impl NetworkRelayShared {
         }
         true
     }
-
     fn is_handled_by_dedicated_subscriber(msg: &iroha_core::NetworkMessage) -> bool {
         msg.is_torii_proxy_control_message()
             || matches!(
@@ -5070,10 +4414,8 @@ impl NetworkRelayShared {
                 iroha_core::NetworkMessage::Health | iroha_core::NetworkMessage::Connect(_)
             )
     }
-
     fn should_apply_low_priority_ingress(msg: &iroha_core::NetworkMessage) -> bool {
         use iroha_p2p::network::message::Topic;
-
         matches!(
             msg.topic(),
             Topic::TxGossip
@@ -5084,7 +4426,6 @@ impl NetworkRelayShared {
                 | Topic::Other
         ) || matches!(msg, iroha_core::NetworkMessage::StreamingControl(_))
     }
-
     fn retired_sumeragi_message_meta(
         msg: &iroha_core::NetworkMessage,
     ) -> Option<(&'static str, Option<u64>, Option<u64>)> {
@@ -5101,11 +4442,9 @@ impl NetworkRelayShared {
             _ => None,
         }
     }
-
     #[cfg(feature = "telemetry")]
     fn consensus_ingress_topic_label(msg: &iroha_core::NetworkMessage) -> Option<&'static str> {
         use iroha_p2p::network::message::Topic;
-
         if matches!(msg, iroha_core::NetworkMessage::LaneDrainVote(_)) {
             return Some("LaneDrainVote");
         }
@@ -5115,12 +4454,10 @@ impl NetworkRelayShared {
             _ => None,
         }
     }
-
     fn block_message_meta(
         msg: &iroha_core::sumeragi::message::BlockMessage,
     ) -> (&'static str, Option<u64>, Option<u64>) {
         use iroha_core::sumeragi::message::BlockMessage::*;
-
         match msg {
             BlockCreated(_)
             | BlockSyncUpdate(_)
@@ -5155,12 +4492,10 @@ impl NetworkRelayShared {
             V2(message) => Self::v2_block_message_meta(&message.payload),
         }
     }
-
     fn legacy_block_message_meta(
         msg: &iroha_core::sumeragi::message::BlockMessage,
     ) -> (&'static str, Option<u64>, Option<u64>) {
         use iroha_core::sumeragi::message::BlockMessage::*;
-
         match msg {
             BlockCreated(block) => {
                 let header = block.block.header();
@@ -5248,12 +4583,10 @@ impl NetworkRelayShared {
             _ => unreachable!("legacy metadata helper received a non-legacy block message"),
         }
     }
-
     fn lane_block_message_meta(
         msg: &iroha_core::sumeragi::message::BlockMessage,
     ) -> (&'static str, Option<u64>, Option<u64>) {
         use iroha_core::sumeragi::message::BlockMessage::*;
-
         match msg {
             LaneBlockProposal(proposal) => (
                 "LaneBlockProposal",
@@ -5346,12 +4679,10 @@ impl NetworkRelayShared {
             _ => unreachable!("lane metadata helper received a non-lane block message"),
         }
     }
-
     fn v2_block_message_meta(
         payload: &iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload,
     ) -> (&'static str, Option<u64>, Option<u64>) {
         use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
-
         match payload {
             ConsensusMessageV2Payload::Proposal(value) => (
                 "SumeragiV2Proposal",
@@ -5420,7 +4751,6 @@ impl NetworkRelayShared {
             ConsensusMessageV2Payload::VrfReveal(_) => ("SumeragiV2VrfReveal", None, None),
         }
     }
-
     fn control_flow_meta(
         msg: &iroha_core::sumeragi::message::ControlFlow,
     ) -> (&'static str, Option<u64>, Option<u64>) {
@@ -5430,11 +4760,14 @@ impl NetworkRelayShared {
         }
     }
 }
-
 #[cfg(test)]
 mod network_relay_tests {
-    use std::{num::NonZeroU64, time::Duration};
-
+    use super::{
+        BucketConfig, ConsensusIngressDropReason, ConsensusIngressLimiter, IngressRateClass,
+        LowPriorityIngressDropReason, LowPriorityIngressLimiter, NetworkRelayShared, PenaltyConfig,
+        SumeragiRelayClass, SumeragiRelayTerminalOutcome, obsolete_sumeragi_relay_terminal_meta,
+        sumeragi_relay_class,
+    };
     use iroha_core::{
         MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES, MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
         lane_consensus::{
@@ -5448,8 +4781,8 @@ mod network_relay_tests {
             },
         },
         torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V5, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV5,
+            TORII_PROXY_REQUEST_VERSION_V6, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV6,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
@@ -5469,20 +4802,12 @@ mod network_relay_tests {
         nexus::{DataSpaceId, LaneId},
         peer::{Peer, PeerId},
     };
-
-    use super::{
-        BucketConfig, ConsensusIngressDropReason, ConsensusIngressLimiter, IngressRateClass,
-        LowPriorityIngressDropReason, LowPriorityIngressLimiter, NetworkRelayShared, PenaltyConfig,
-        SumeragiRelayClass, SumeragiRelayTerminalOutcome, obsolete_sumeragi_relay_terminal_meta,
-        sumeragi_relay_class,
-    };
-
+    use std::{num::NonZeroU64, time::Duration};
     fn dummy_block_hash(byte: u8) -> HashOf<BlockHeader> {
         let mut bytes = [0_u8; Hash::LENGTH];
         bytes[0] = byte;
         HashOf::from_untyped_unchecked(Hash::prehashed(bytes))
     }
-
     #[cfg(feature = "test-network-message-control")]
     #[derive(Clone)]
     struct TestReplyRoute {
@@ -5491,7 +4816,6 @@ mod network_relay_tests {
         active: std::sync::Arc<std::sync::atomic::AtomicBool>,
         tenure: std::sync::Arc<()>,
     }
-
     #[cfg(feature = "test-network-message-control")]
     impl TestReplyRoute {
         fn new(semantic_target: PeerId, authenticated_via: PeerId) -> Self {
@@ -5502,24 +4826,20 @@ mod network_relay_tests {
                 tenure: std::sync::Arc::new(()),
             }
         }
-
         fn same_tenure(&self, other: &Self) -> bool {
             std::sync::Arc::ptr_eq(&self.tenure, &other.tenure)
         }
-
         fn cancel(&self) {
             self.active
                 .store(false, std::sync::atomic::Ordering::Release);
         }
     }
-
     #[cfg(feature = "test-network-message-control")]
     impl super::SumeragiReplyRouteLiveness for TestReplyRoute {
         fn is_active(&self) -> bool {
             self.active.load(std::sync::atomic::Ordering::Acquire)
         }
     }
-
     #[cfg(feature = "test-network-message-control")]
     struct TestRelayWork {
         peer: Peer,
@@ -5528,14 +4848,12 @@ mod network_relay_tests {
         size_bytes: usize,
         reply_route: TestReplyRoute,
     }
-
     #[cfg(feature = "test-network-message-control")]
     impl super::AuthenticatedSumeragiRelayWork for TestRelayWork {
         fn authenticated_via(&self) -> &PeerId {
             &self.authenticated_via
         }
     }
-
     #[cfg(feature = "test-network-message-control")]
     fn reattach_test_reply_route(
         peer: Peer,
@@ -5556,7 +4874,6 @@ mod network_relay_tests {
             reply_route,
         })
     }
-
     #[cfg(feature = "test-network-message-control")]
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -5567,13 +4884,11 @@ mod network_relay_tests {
             SumeragiRelayTerminalOutcome, prepare_sumeragi_relay_work_boundary,
             rehydrate_held_sumeragi_relay_work, sumeragi_reply_route_terminal_if_inactive,
         };
-
         let (_control_dir, controller) =
             super::consensus_message_control::Controller::<TestReplyRoute>::for_tests();
         let semantic_peer = sample_peer();
         let authenticated_via = sample_peer().id().clone();
         assert_ne!(semantic_peer.id(), &authenticated_via);
-
         controller.drain_subsequent_messages_for_tests();
         let live_route = TestReplyRoute::new(semantic_peer.id().clone(), authenticated_via.clone());
         let expected_live_route = live_route.clone();
@@ -5654,7 +4969,6 @@ mod network_relay_tests {
                 super::consensus_message_control::ReleaseOutcome::Delivered,
             )
             .expect("complete live held release");
-
         controller.drain_subsequent_messages_for_tests();
         let held_cancel_route =
             TestReplyRoute::new(semantic_peer.id().clone(), authenticated_via.clone());
@@ -5690,7 +5004,6 @@ mod network_relay_tests {
                 super::consensus_message_control::ReleaseOutcome::Retired,
             )
             .expect("retire occurrence canceled while held");
-
         controller.drain_subsequent_messages_for_tests();
         let cancelable_route =
             TestReplyRoute::new(semantic_peer.id().clone(), authenticated_via.clone());
@@ -5756,7 +5069,6 @@ mod network_relay_tests {
                 .expect("inspect post-retirement queue")
                 .is_none()
         );
-
         let protected_peer = sample_peer();
         let rejected_via = sample_peer().id().clone();
         let independent_peer = sample_peer();
@@ -5764,7 +5076,6 @@ mod network_relay_tests {
         assert_ne!(protected_peer.id(), &rejected_via);
         assert_ne!(independent_peer.id(), &independent_via);
         assert_ne!(rejected_via, independent_via);
-
         controller.drain_subsequent_messages_for_tests();
         let protected_route =
             TestReplyRoute::new(protected_peer.id().clone(), rejected_via.clone());
@@ -5802,7 +5113,6 @@ mod network_relay_tests {
             ),
             SumeragiRelayPreparationBoundary::Held
         ));
-
         let missing_ownership_route =
             TestReplyRoute::new(protected_peer.id().clone(), rejected_via.clone());
         let expected_missing_ownership_route = missing_ownership_route.clone();
@@ -5828,7 +5138,6 @@ mod network_relay_tests {
         assert!(super::SumeragiReplyRouteLiveness::is_active(
             &expected_missing_ownership_route
         ));
-
         let unsupported_route =
             TestReplyRoute::new(protected_peer.id().clone(), rejected_via.clone());
         let expected_unsupported_route = unsupported_route.clone();
@@ -5854,7 +5163,6 @@ mod network_relay_tests {
         assert!(super::SumeragiReplyRouteLiveness::is_active(
             &expected_unsupported_route
         ));
-
         assert!(matches!(
             rehydrate_held_sumeragi_relay_work(
                 super::consensus_message_control::HeldMessage::<TestReplyRoute, u64> {
@@ -5874,7 +5182,6 @@ mod network_relay_tests {
                 ownership: Some(43),
             }
         ));
-
         let wrong_target = sample_peer();
         assert_ne!(protected_peer.id(), wrong_target.id());
         let mismatched_route = TestReplyRoute::new(wrong_target.id().clone(), rejected_via.clone());
@@ -5901,7 +5208,6 @@ mod network_relay_tests {
         assert!(super::SumeragiReplyRouteLiveness::is_active(
             &expected_mismatched_route
         ));
-
         let substituted_via = sample_peer().id().clone();
         assert_ne!(rejected_via, substituted_via);
         let substituted_route =
@@ -5933,7 +5239,6 @@ mod network_relay_tests {
             expected_substituted_route.authenticated_via,
             substituted_via
         );
-
         for (expected_peer, expected_via, expected_route, expected_size) in [
             (protected_peer, rejected_via, expected_protected_route, 201),
             (
@@ -5988,7 +5293,6 @@ mod network_relay_tests {
                 .expect("inspect queue after independent source delivery")
                 .is_none()
         );
-
         let retry_route =
             TestReplyRoute::new(semantic_peer.id().clone(), authenticated_via.clone());
         assert_eq!(
@@ -6002,7 +5306,6 @@ mod network_relay_tests {
             Some(SumeragiRelayTerminalOutcome::Retired),
             "cancellation before retry requeue is terminal retirement"
         );
-
         let fresh_route =
             TestReplyRoute::new(semantic_peer.id().clone(), authenticated_via.clone());
         assert!(matches!(
@@ -6039,7 +5342,6 @@ mod network_relay_tests {
             }
         ));
     }
-
     #[test]
     fn block_message_blocking_ingress_policy_admits_only_authoritative_v2() {
         assert!(
@@ -6070,7 +5372,6 @@ mod network_relay_tests {
         assert!(sumeragi_v2_commit_certificate_request().requires_blocking_ingress());
         assert!(kura_replica_advert_block_message().requires_blocking_ingress());
     }
-
     fn kura_replica_advert_block_message() -> BlockMessage {
         let keeper = PeerId::new(KeyPair::random().public_key().clone());
         BlockMessage::KuraReplicaAdvert(KuraReplicaAdvertV1 {
@@ -6088,7 +5389,6 @@ mod network_relay_tests {
             signature: vec![0xA5; 96],
         })
     }
-
     #[test]
     fn kura_replica_advert_is_fixed_small_limited_v2_relay_work() {
         let message = kura_replica_advert_block_message();
@@ -6104,7 +5404,6 @@ mod network_relay_tests {
             NetworkRelayShared::block_message_meta(&message),
             ("KuraReplicaAdvert", Some(11), None)
         );
-
         let peer = sample_peer();
         let mut limiter = ConsensusIngressLimiter::new(
             None,
@@ -6128,7 +5427,6 @@ mod network_relay_tests {
             Some(ConsensusIngressDropReason::Bytes)
         );
     }
-
     #[test]
     fn obsolete_sumeragi_relay_message_completes_as_delivered() {
         assert_eq!(
@@ -6138,7 +5436,6 @@ mod network_relay_tests {
         );
         assert!(obsolete_sumeragi_relay_terminal_meta(&v2_vote_msg()).is_none());
     }
-
     #[test]
     fn sumeragi_v2_ingress_policy_and_metadata_match_payload_kind() {
         let chunk = v2_payload_chunk_block_message();
@@ -6148,7 +5445,6 @@ mod network_relay_tests {
             NetworkRelayShared::block_message_meta(&chunk),
             ("SumeragiV2PayloadChunk", None, None)
         );
-
         let request = sumeragi_v2_commit_certificate_request();
         let request_policy =
             ConsensusIngressLimiter::ingress_policy(&sumeragi_msg(request.clone()));
@@ -6158,7 +5454,6 @@ mod network_relay_tests {
             ("SumeragiV2CommitCertificateRequest", Some(9), None)
         );
     }
-
     pub fn sample_peer() -> Peer {
         let keypair = KeyPair::random();
         Peer::new(
@@ -6166,15 +5461,12 @@ mod network_relay_tests {
             keypair.public_key().clone(),
         )
     }
-
     fn nz_u32(value: u32) -> std::num::NonZeroU32 {
         std::num::NonZeroU32::new(value).expect("non-zero")
     }
-
     pub fn sumeragi_msg(msg: BlockMessage) -> iroha_core::NetworkMessage {
         iroha_core::NetworkMessage::SumeragiBlock(std::sync::Arc::new(BlockMessageWire::new(msg)))
     }
-
     fn lane_drain_vote_msg() -> iroha_core::NetworkMessage {
         let keypair = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
             .expect("generate lane-drain ingress fixture keypair");
@@ -6224,7 +5516,6 @@ mod network_relay_tests {
             bls_signature,
         }))
     }
-
     pub fn sample_v2_round(height: u64, view: u64) -> consensus_v2::ConsensusRound {
         consensus_v2::ConsensusRound {
             context_id: consensus_v2::HeightContextId(HashOf::from_untyped_unchecked(
@@ -6234,7 +5525,6 @@ mod network_relay_tests {
             view,
         }
     }
-
     pub fn sample_v2_subject() -> consensus_v2::BlockSubject {
         consensus_v2::BlockSubject {
             parent_block_hash: None,
@@ -6242,7 +5532,6 @@ mod network_relay_tests {
             payload_hash: Hash::prehashed([0x63; 32]),
         }
     }
-
     fn v2_vote_block_message() -> BlockMessage {
         BlockMessage::V2(consensus_v2::ConsensusMessageV2::new(
             consensus_v2::ConsensusMessageV2Payload::Vote(consensus_v2::Vote {
@@ -6263,7 +5552,6 @@ mod network_relay_tests {
             }),
         ))
     }
-
     fn v2_payload_chunk_block_message() -> BlockMessage {
         BlockMessage::V2(consensus_v2::ConsensusMessageV2::new(
             consensus_v2::ConsensusMessageV2Payload::PayloadChunk(consensus_v2::PayloadChunk {
@@ -6277,7 +5565,6 @@ mod network_relay_tests {
             }),
         ))
     }
-
     fn sample_v2_manifest() -> consensus_v2::PayloadManifest {
         consensus_v2::PayloadManifest {
             round: sample_v2_round(5, 7),
@@ -6288,7 +5575,6 @@ mod network_relay_tests {
             chunk_root: Hash::new(b"chunk-root"),
         }
     }
-
     fn v2_proposal_msg() -> iroha_core::NetworkMessage {
         let manifest = sample_v2_manifest();
         sumeragi_msg(BlockMessage::V2(ConsensusMessageV2::new(
@@ -6304,7 +5590,6 @@ mod network_relay_tests {
             }),
         )))
     }
-
     fn v2_certified_body_response_msg() -> iroha_core::NetworkMessage {
         sumeragi_msg(BlockMessage::V2(ConsensusMessageV2::new(
             ConsensusMessageV2Payload::CertifiedBodyResponse(consensus_v2::CertifiedBodyResponse {
@@ -6318,7 +5603,6 @@ mod network_relay_tests {
             }),
         )))
     }
-
     fn certified_merge_sidecar_control_messages() -> (
         iroha_core::NetworkMessage,
         iroha_core::NetworkMessage,
@@ -6330,7 +5614,6 @@ mod network_relay_tests {
             CertifiedMergeSidecarMessage, CertifiedMergeSidecarServiceGenerationV1,
             CertifiedMergeSidecarStreamEpochV1,
         };
-
         let requester = PeerId::new(KeyPair::random().public_key().clone());
         let responder = PeerId::new(KeyPair::random().public_key().clone());
         let stream_epoch = CertifiedMergeSidecarStreamEpochV1(
@@ -6375,11 +5658,9 @@ mod network_relay_tests {
         ));
         (close, ack, hint)
     }
-
     fn limited_msg() -> iroha_core::NetworkMessage {
         iroha_core::NetworkMessage::Health
     }
-
     fn sumeragi_v2_commit_certificate_request() -> BlockMessage {
         let requester = PeerId::new(KeyPair::random().public_key().clone());
         BlockMessage::V2(ConsensusMessageV2::new(
@@ -6399,11 +5680,9 @@ mod network_relay_tests {
             }),
         ))
     }
-
     pub fn v2_vote_msg() -> iroha_core::NetworkMessage {
         sumeragi_msg(v2_vote_block_message())
     }
-
     fn retired_vrf_commit_msg() -> iroha_core::NetworkMessage {
         sumeragi_msg(BlockMessage::VrfCommit(
             iroha_data_model::block::consensus::VrfCommit {
@@ -6414,7 +5693,6 @@ mod network_relay_tests {
             },
         ))
     }
-
     fn sample_lane_block_proposal() -> LaneBlockProposalV1 {
         let validator_set = vec![PeerId::new(KeyPair::random().public_key().clone())];
         let mut descriptor = LaneBlockDescriptorV1 {
@@ -6448,7 +5726,6 @@ mod network_relay_tests {
         proposal.proposal_hash = proposal.computed_proposal_hash();
         proposal
     }
-
     fn sample_lane_executable_payload() -> LaneExecutablePayloadV1 {
         let origin_proposal = sample_lane_block_proposal();
         let producer = origin_proposal.descriptor.validator_set[0].clone();
@@ -6467,7 +5744,6 @@ mod network_relay_tests {
             producer_signature: vec![0xAA],
         }
     }
-
     fn sample_lane_block_new_view_body() -> LaneBlockNewViewBodyV1 {
         let proposal = sample_lane_block_proposal();
         let descriptor = &proposal.descriptor;
@@ -6492,7 +5768,6 @@ mod network_relay_tests {
             qc_mode_tag: descriptor.qc_mode_tag.clone(),
         }
     }
-
     fn sample_lane_block_new_view_vote() -> LaneBlockNewViewVoteV1 {
         LaneBlockNewViewVoteV1 {
             body: sample_lane_block_new_view_body(),
@@ -6500,7 +5775,6 @@ mod network_relay_tests {
             bls_signature: vec![0xCC],
         }
     }
-
     fn sample_lane_block_new_view_certificate() -> LaneBlockNewViewCertificateV1 {
         LaneBlockNewViewCertificateV1 {
             body: sample_lane_block_new_view_body(),
@@ -6509,7 +5783,6 @@ mod network_relay_tests {
             bls_aggregate_signature: vec![0xDD],
         }
     }
-
     fn sample_lane_block_vote(phase: Phase) -> iroha_core::lane_consensus::LaneBlockVoteV1 {
         let proposal = sample_lane_block_proposal();
         iroha_core::lane_consensus::LaneBlockVoteV1 {
@@ -6519,7 +5792,6 @@ mod network_relay_tests {
             bls_signature: vec![0xAA],
         }
     }
-
     fn sample_lane_block_qc(phase: Phase) -> LaneBlockQcV1 {
         let proposal = sample_lane_block_proposal();
         LaneBlockQcV1 {
@@ -6532,23 +5804,20 @@ mod network_relay_tests {
             payload_availability_qc: None,
         }
     }
-
     fn lane_block_proposal_msg() -> iroha_core::NetworkMessage {
         sumeragi_msg(BlockMessage::LaneBlockProposal(sample_lane_block_proposal()))
     }
-
     fn lane_block_vote_msg(phase: Phase) -> iroha_core::NetworkMessage {
         sumeragi_msg(BlockMessage::LaneBlockVote(sample_lane_block_vote(phase)))
     }
-
     fn lane_block_qc_msg(phase: Phase) -> iroha_core::NetworkMessage {
         sumeragi_msg(BlockMessage::LaneBlockQc(sample_lane_block_qc(phase)))
     }
-
     fn torii_proxy_request_msg() -> iroha_core::NetworkMessage {
-        iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV5 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+        iroha_core::NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV6 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
             request_id: Hash::prehashed([0x41; 32]),
+            deadline_unix_ms: 1_900_000_000_000,
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
@@ -6565,7 +5834,6 @@ mod network_relay_tests {
             }),
         }))
     }
-
     fn torii_proxy_response_msg() -> iroha_core::NetworkMessage {
         iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
             schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
@@ -6577,7 +5845,6 @@ mod network_relay_tests {
             },
         }))
     }
-
     #[test]
     fn consensus_ingress_rate_limit_drops_burst() {
         let peer = sample_peer();
@@ -6598,14 +5865,12 @@ mod network_relay_tests {
                 cooldown: Duration::from_secs(1),
             },
         );
-
         assert_eq!(limiter.should_drop(&peer, &msg, 32), None);
         assert_eq!(
             limiter.should_drop(&peer, &msg, 32),
             Some(ConsensusIngressDropReason::Rate)
         );
     }
-
     #[test]
     fn consensus_ingress_critical_bypasses_limited_bucket() {
         let peer = sample_peer();
@@ -6636,7 +5901,6 @@ mod network_relay_tests {
                 cooldown: Duration::from_secs(10),
             },
         );
-
         assert_eq!(limiter.should_drop(&peer, &msg, 1), None);
         assert_eq!(
             limiter.should_drop(&peer, &msg, 1),
@@ -6650,7 +5914,6 @@ mod network_relay_tests {
         assert_eq!(limiter.should_drop(&peer, &lane_vote, 1), None);
         assert_eq!(limiter.should_drop(&peer, &lane_qc, 1), None);
     }
-
     #[test]
     fn consensus_ingress_proposal_uses_critical_bucket() {
         let peer = sample_peer();
@@ -6676,7 +5939,6 @@ mod network_relay_tests {
                 cooldown: Duration::from_secs(1),
             },
         );
-
         assert_eq!(limiter.should_drop(&peer, &msg, 1), None);
         assert_eq!(
             limiter.should_drop(&peer, &msg, 1),
@@ -6685,15 +5947,12 @@ mod network_relay_tests {
         assert_eq!(limiter.should_drop(&peer, &proposal, 1), None);
         assert_eq!(limiter.should_drop(&peer, &lane_proposal, 1), None);
     }
-
     #[test]
     fn consensus_ingress_v2_uses_critical_bucket() {
         let policy = ConsensusIngressLimiter::ingress_policy(&v2_vote_msg());
-
         assert_eq!(policy.rate_class, Some(IngressRateClass::Critical));
         assert!(!policy.apply_penalty);
     }
-
     #[test]
     fn block_message_meta_labels_lane_block_messages() {
         assert_eq!(
@@ -6745,7 +6004,6 @@ mod network_relay_tests {
             ("LaneBlockCert", Some(5), Some(7))
         );
     }
-
     #[test]
     fn block_message_meta_reports_v2_round_when_available() {
         assert_eq!(
@@ -6757,7 +6015,6 @@ mod network_relay_tests {
             ("SumeragiV2PayloadChunk", None, None)
         );
     }
-
     #[test]
     fn autonomous_lane_messages_use_expected_ingress_buckets() {
         let payload = sumeragi_msg(BlockMessage::LaneExecutablePayload(
@@ -6770,7 +6027,6 @@ mod network_relay_tests {
             sample_lane_block_new_view_certificate(),
         ));
         let drain_vote = lane_drain_vote_msg();
-
         assert_eq!(
             ConsensusIngressLimiter::ingress_policy(&payload).rate_class,
             Some(IngressRateClass::Critical)
@@ -6788,22 +6044,18 @@ mod network_relay_tests {
             Some(IngressRateClass::Critical)
         );
     }
-
     #[test]
     fn certified_merge_sidecar_close_is_limited_but_responder_controls_are_critical() {
         let (close, close_ack, generation_hint) = certified_merge_sidecar_control_messages();
-
         let close_policy = ConsensusIngressLimiter::ingress_policy(&close);
         assert_eq!(close_policy.rate_class, Some(IngressRateClass::Limited));
         assert!(close_policy.apply_penalty);
-
         for message in [&close_ack, &generation_hint] {
             let policy = ConsensusIngressLimiter::ingress_policy(message);
             assert_eq!(policy.rate_class, Some(IngressRateClass::Critical));
             assert!(!policy.apply_penalty);
         }
     }
-
     #[test]
     fn certified_merge_sidecar_messages_preserve_ingress_reply_route() {
         use iroha_core::merge_sidecar::{
@@ -6813,7 +6065,6 @@ mod network_relay_tests {
             CertifiedMergeSidecarStreamEpochV1,
         };
         use iroha_p2p::network::NetworkReplyRouteTestFixture;
-
         let (close, close_ack, generation_hint) = certified_merge_sidecar_control_messages();
         let into_sidecar = |message| {
             let iroha_core::NetworkMessage::CertifiedMergeSidecar(message) = message else {
@@ -6824,7 +6075,6 @@ mod network_relay_tests {
         let close = into_sidecar(close);
         let close_ack = into_sidecar(close_ack);
         let generation_hint = into_sidecar(generation_hint);
-
         let requester = PeerId::new(KeyPair::random().public_key().clone());
         let responder = PeerId::new(KeyPair::random().public_key().clone());
         let stream_epoch = CertifiedMergeSidecarStreamEpochV1(
@@ -6865,7 +6115,6 @@ mod network_relay_tests {
             chunk_count: 1,
             bytes: vec![0xA5],
         };
-
         let authenticated_via = PeerId::new(KeyPair::random().public_key().clone());
         let semantic_sender = PeerId::new(KeyPair::random().public_key().clone());
         let mut routes = NetworkReplyRouteTestFixture::new(authenticated_via);
@@ -6882,7 +6131,6 @@ mod network_relay_tests {
             assert!(retained.same_delivery(&route));
         }
     }
-
     #[test]
     fn lane_drain_vote_cannot_bypass_critical_rate_or_wire_size_limits() {
         let peer = sample_peer();
@@ -6891,7 +6139,6 @@ mod network_relay_tests {
             .expect("encode lane-drain vote")
             .len();
         assert!(encoded_len <= MAX_LANE_DRAIN_VOTE_WIRE_BYTES);
-
         let mut unconfigured = ConsensusIngressLimiter::new(
             None,
             None,
@@ -6910,7 +6157,6 @@ mod network_relay_tests {
             Some(ConsensusIngressDropReason::Bytes),
             "the hard cap must apply even when configurable byte buckets are disabled"
         );
-
         let mut rate_limited = ConsensusIngressLimiter::new(
             None,
             None,
@@ -6933,7 +6179,6 @@ mod network_relay_tests {
             Some(ConsensusIngressDropReason::Rate)
         );
     }
-
     #[test]
     fn consensus_ingress_critical_rate_limit_drops_burst() {
         let peer = sample_peer();
@@ -6954,7 +6199,6 @@ mod network_relay_tests {
                 cooldown: Duration::from_secs(10),
             },
         );
-
         assert_eq!(limiter.should_drop(&peer, &vote, 1), None);
         assert_eq!(
             limiter.should_drop(&peer, &vote, 1),
@@ -6965,7 +6209,6 @@ mod network_relay_tests {
             Some(ConsensusIngressDropReason::Rate)
         );
     }
-
     #[test]
     fn consensus_ingress_bulk_messages_use_bulk_bucket() {
         fn assert_bulk(peer: &Peer, msg: &iroha_core::NetworkMessage) {
@@ -6989,7 +6232,6 @@ mod network_relay_tests {
                     cooldown: Duration::from_secs(1),
                 },
             );
-
             assert_eq!(limiter.should_drop(peer, &standard, 1), None);
             assert_eq!(
                 limiter.should_drop(peer, &standard, 1),
@@ -7002,11 +6244,9 @@ mod network_relay_tests {
                 Some(ConsensusIngressDropReason::Rate)
             );
         }
-
         let peer = sample_peer();
         assert_bulk(&peer, &v2_certified_body_response_msg());
     }
-
     #[test]
     fn consensus_ingress_bytes_limit_drops_oversize() {
         let peer = sample_peer();
@@ -7027,14 +6267,12 @@ mod network_relay_tests {
                 cooldown: Duration::from_secs(1),
             },
         );
-
         assert_eq!(
             limiter.should_drop(&peer, &msg, 20),
             Some(ConsensusIngressDropReason::Bytes)
         );
         assert_eq!(limiter.should_drop(&peer, &msg, 5), None);
     }
-
     #[test]
     fn low_priority_ingress_rate_limit_drops_burst() {
         let peer = sample_peer();
@@ -7045,14 +6283,12 @@ mod network_relay_tests {
             }),
             None,
         );
-
         assert_eq!(limiter.should_drop(&peer, 32), None);
         assert_eq!(
             limiter.should_drop(&peer, 32),
             Some(LowPriorityIngressDropReason::Rate)
         );
     }
-
     #[test]
     fn low_priority_ingress_bytes_limit_drops_oversize() {
         let peer = sample_peer();
@@ -7063,19 +6299,16 @@ mod network_relay_tests {
                 burst: nz_u32(1),
             }),
         );
-
         assert_eq!(
             limiter.should_drop(&peer, 2),
             Some(LowPriorityIngressDropReason::Bytes)
         );
         assert_eq!(limiter.should_drop(&peer, 1), None);
     }
-
     #[test]
     fn dedicated_subscriber_message_set_includes_torii_proxy_frames() {
         let request = torii_proxy_request_msg();
         let response = torii_proxy_response_msg();
-
         assert!(NetworkRelayShared::is_handled_by_dedicated_subscriber(
             &request
         ));
@@ -7086,7 +6319,6 @@ mod network_relay_tests {
             &v2_vote_msg()
         ));
     }
-
     #[test]
     fn consensus_ingress_penalty_skips_critical_messages() {
         let peer = sample_peer();
@@ -7114,7 +6346,6 @@ mod network_relay_tests {
                 cooldown: Duration::from_secs(30),
             },
         );
-
         assert_eq!(limiter.should_drop(&peer, &msg, 8), None);
         assert_eq!(
             limiter.should_drop(&peer, &msg, 8),
@@ -7125,7 +6356,6 @@ mod network_relay_tests {
         assert_eq!(limiter.should_drop(&peer, &chunk, 8), None);
         assert_eq!(limiter.should_drop(&peer, &request, 8), None);
     }
-
     #[test]
     fn consensus_ingress_penalty_skips_bulk_messages() {
         let peer = sample_peer();
@@ -7153,7 +6383,6 @@ mod network_relay_tests {
                 cooldown: Duration::from_secs(30),
             },
         );
-
         assert_eq!(limiter.should_drop(&peer, &bulk, 8), None);
         assert_eq!(
             limiter.should_drop(&peer, &bulk, 8),
@@ -7161,7 +6390,6 @@ mod network_relay_tests {
         );
         assert_eq!(limiter.should_drop(&peer, &standard, 8), None);
     }
-
     #[test]
     fn consensus_ingress_critical_fallback_applies_penalty_when_unset() {
         let peer = sample_peer();
@@ -7182,7 +6410,6 @@ mod network_relay_tests {
                 cooldown: Duration::from_secs(30),
             },
         );
-
         assert_eq!(limiter.should_drop(&peer, &vote, 1), None);
         assert_eq!(
             limiter.should_drop(&peer, &vote, 1),
@@ -7193,7 +6420,6 @@ mod network_relay_tests {
             Some(ConsensusIngressDropReason::Penalty)
         );
     }
-
     #[cfg(feature = "telemetry")]
     #[test]
     fn consensus_ingress_topic_label_tracks_payload_topics() {
@@ -7202,26 +6428,22 @@ mod network_relay_tests {
             NetworkRelayShared::consensus_ingress_topic_label(&payload),
             Some("ConsensusPayload")
         );
-
         let chunk = sumeragi_msg(v2_payload_chunk_block_message());
         assert_eq!(
             NetworkRelayShared::consensus_ingress_topic_label(&chunk),
             Some("ConsensusChunk")
         );
-
         let vote = v2_vote_msg();
         assert_eq!(
             NetworkRelayShared::consensus_ingress_topic_label(&vote),
             None
         );
-
         let drain_vote = lane_drain_vote_msg();
         assert_eq!(
             NetworkRelayShared::consensus_ingress_topic_label(&drain_vote),
             Some("LaneDrainVote")
         );
     }
-
     #[test]
     fn consensus_ingress_penalty_suppresses_after_threshold() {
         let peer = sample_peer();
@@ -7242,7 +6464,6 @@ mod network_relay_tests {
                 cooldown: Duration::from_secs(30),
             },
         );
-
         assert_eq!(limiter.should_drop(&peer, &msg, 8), None);
         assert_eq!(
             limiter.should_drop(&peer, &msg, 8),
@@ -7258,22 +6479,18 @@ mod network_relay_tests {
         );
     }
 }
-
 fn snapshot_read_error_is_recoverable(error: &TryReadSnapshotError) -> bool {
     snapshot_read_error_is_recoverable_for_bootstrap(error, false)
 }
-
 fn snapshot_mode_allows_restore(mode: SnapshotMode) -> bool {
     !matches!(mode, SnapshotMode::Disabled)
 }
-
 fn snapshot_failure_allows_empty_state_fallback(
     error: &TryReadSnapshotError,
     provisional_imported_prefix: bool,
 ) -> bool {
     !provisional_imported_prefix && snapshot_read_error_is_recoverable(error)
 }
-
 fn preflight_empty_state_snapshot_fallback(
     kura: &Kura,
     network_id: &NetworkId,
@@ -7291,7 +6508,6 @@ fn preflight_empty_state_snapshot_fallback(
         )
     })
 }
-
 fn snapshot_read_error_is_recoverable_for_bootstrap(
     error: &TryReadSnapshotError,
     hard_fork_snapshot_bootstrap: bool,
@@ -7304,7 +6520,6 @@ fn snapshot_read_error_is_recoverable_for_bootstrap(
         _ => true,
     }
 }
-
 fn refresh_block_count_after_snapshot_load(
     block_count: &mut iroha_core::kura::BlockCount,
     committed_height: usize,
@@ -7324,7 +6539,6 @@ fn refresh_block_count_after_snapshot_load(
             "post-snapshot State height {committed_height} exceeds reconciled Kura height {durable_height}"
         ));
     }
-
     if block_count.0 != durable_height {
         iroha_logger::warn!(
             committed_height,
@@ -7336,7 +6550,6 @@ fn refresh_block_count_after_snapshot_load(
     block_count.0 = durable_height;
     Ok(())
 }
-
 fn authorize_kura_runtime_start(
     provisional_imported_prefix: bool,
     authenticated_snapshot_bootstrap: bool,
@@ -7354,7 +6567,6 @@ fn authorize_kura_runtime_start(
         (true, true) | (false, false) => Ok(()),
     }
 }
-
 fn apply_state_runtime_config_before_snapshot_auth(state: &mut State, config: &Config) {
     // These fields are process-local execution policy and do not touch Kura-owned geometry.
     // Settlement must be installed before replay because historical
@@ -7370,7 +6582,6 @@ fn apply_state_runtime_config_before_snapshot_auth(state: &mut State, config: &C
     state.content = config.content.clone();
     state.set_settlement(config.settlement.clone());
 }
-
 fn apply_state_geometry_config_before_kura_replay(
     state: &mut State,
     config: &Config,
@@ -7418,7 +6629,6 @@ fn apply_state_geometry_config_before_kura_replay(
         })?;
     Ok(())
 }
-
 fn install_zk_config_before_kura_replay(
     state: &mut State,
     config: &Config,
@@ -7427,7 +6637,6 @@ fn install_zk_config_before_kura_replay(
         .set_zk(config.zk.clone())
         .map_err(|error| Report::new(error).change_context(StartError::InitKura))
 }
-
 fn nexus_config_for_startup_replay(
     mut configured: iroha_config::parameters::actual::Nexus,
     restored: Option<&iroha_config::parameters::actual::Nexus>,
@@ -7444,7 +6653,6 @@ fn nexus_config_for_startup_replay(
     configured.autoscale.last_transition_height = restored.autoscale.last_transition_height;
     configured
 }
-
 /// Return the effective post-replay Nexus configuration used by runtime
 /// admission, routing, and manifest surfaces.
 ///
@@ -7453,7 +6661,6 @@ fn nexus_config_for_startup_replay(
 fn nexus_for_runtime_surfaces(state: &State) -> iroha_config::parameters::actual::Nexus {
     state.nexus_snapshot()
 }
-
 /// Freeze the exact manifest source snapshot used while reconstructing State from Kura.
 ///
 /// Replay executes ordinary transaction admission, so its registry must cover the same active
@@ -7467,52 +6674,44 @@ fn freeze_lane_manifests_for_startup_replay(
     } else {
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance)
     };
-    registry.validate_active_coverage()?;
+    registry.validate_active_coverage_for_catalog(&nexus.lane_catalog)?;
     Ok(Arc::new(registry))
 }
-
 /// Rebind the frozen startup sources to the effective catalog produced by replay.
 fn rebind_frozen_lane_manifests_after_startup_replay(
     frozen: &LaneManifestRegistryHandle,
     nexus: &iroha_config::parameters::actual::Nexus,
 ) -> Result<LaneManifestRegistryHandle, GovernanceGuardError> {
     let rebound = frozen.rebind(&nexus.lane_catalog, &nexus.governance);
-    rebound.validate_active_coverage()?;
+    rebound.validate_active_coverage_for_catalog(&nexus.lane_catalog)?;
     Ok(Arc::new(rebound))
 }
-
 #[cfg(test)]
 mod snapshot_read_error_tests {
     use super::*;
-    use std::num::NonZeroUsize;
-
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::BlockHeader;
-
+    use std::num::NonZeroUsize;
     fn dummy_block_hash(byte: u8) -> HashOf<BlockHeader> {
         let mut bytes = [0u8; Hash::LENGTH];
         bytes[0] = byte;
         HashOf::from_untyped_unchecked(Hash::prehashed(bytes))
     }
-
     #[test]
     fn snapshot_read_error_classifies_fatal_errors() {
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::NotFound
         ));
-
         let io = std::io::Error::other("boom");
         assert!(!snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::IO(io, std::path::PathBuf::from("snapshot.data"))
         ));
-
         assert!(!snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::NetworkIdMismatch {
                 expected: NetworkId::from_genesis_hash(dummy_block_hash(1)),
                 actual: NetworkId::from_genesis_hash(dummy_block_hash(2)),
             }
         ));
-
         let incompatible_zk = TryReadSnapshotError::ZkConfigInstall(
             iroha_core::state::ZkConfigInstallError::InvalidSccpPendingUsage {
                 usage: iroha_data_model::bridge::SccpOutboundPendingUsageV1 {
@@ -7530,7 +6729,6 @@ mod snapshot_read_error_tests {
             true,
         ));
     }
-
     #[test]
     fn snapshot_integrity_errors_are_recoverable() {
         assert!(snapshot_read_error_is_recoverable(
@@ -7539,62 +6737,50 @@ mod snapshot_read_error_tests {
                 actual: "beadfeed".into(),
             }
         ));
-
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::ChecksumMissing(std::path::PathBuf::from("snapshot.sha256"))
         ));
-
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::SignatureMissing(std::path::PathBuf::from("snapshot.sig"))
         ));
-
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::SignatureMalformed("bad sig".into())
         ));
-
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::SignatureInvalid("invalid sig".into())
         ));
-
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::MerkleMissing(std::path::PathBuf::from("snapshot.merkle.json"))
         ));
-
         let json_err = norito::json::from_str::<norito::json::Value>("not json").unwrap_err();
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::Serialization(json_err)
         ));
-
         let json_err = norito::json::from_str::<norito::json::Value>("not json").unwrap_err();
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::MerkleMetadata(json_err)
         ));
-
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::MerkleMetadataMalformed("bad merkle".into())
         ));
-
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::MerkleMismatch {
                 expected: "deadbeef".into(),
                 actual: "beadfeed".into(),
             }
         ));
-
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::MerkleChunkSizeMismatch {
                 expected: NonZeroUsize::new(1).unwrap(),
                 actual: NonZeroUsize::new(2).unwrap(),
             }
         ));
-
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::MerkleLengthMismatch {
                 expected: 10,
                 actual: 11,
             }
         ));
-
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::MerkleProofInvalid {
                 chunk: 0,
@@ -7602,7 +6788,6 @@ mod snapshot_read_error_tests {
             }
         ));
     }
-
     #[test]
     fn snapshot_bootstrap_recovery_obeys_height_and_import_policy() {
         let mismatched_height = TryReadSnapshotError::MismatchedHeight {
@@ -7617,17 +6802,14 @@ mod snapshot_read_error_tests {
             &mismatched_height,
             true,
         ));
-
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::MissingBlock { height: 1 }
         ));
-
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::MissingSpaceDirectoryManifestSection {
                 snapshot_height: 608
             }
         ));
-
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::MismatchedHash {
                 height: 1,
@@ -7636,7 +6818,6 @@ mod snapshot_read_error_tests {
             }
         ));
     }
-
     #[test]
     fn provisional_imported_prefix_makes_every_snapshot_failure_fatal() {
         let failures = vec![
@@ -7666,7 +6847,6 @@ mod snapshot_read_error_tests {
             false,
         ));
     }
-
     #[test]
     fn empty_state_fallback_preflight_propagates_geometry_failure_as_kura_start_error() {
         let kura = Kura::blank_kura_for_testing();
@@ -7676,7 +6856,6 @@ mod snapshot_read_error_tests {
             &iroha_data_model::nexus::LaneCatalog::default(),
         )
         .expect_err("missing authenticated geometry baseline must reject empty-state fallback");
-
         assert!(matches!(error.current_context(), StartError::InitKura));
         const FALLBACK_CONTEXT: &str = "cannot rebuild from an empty state because retained Kura \
             geometry no longer reaches the configured-primary replay floor";
@@ -7694,14 +6873,12 @@ mod snapshot_read_error_tests {
             "fallback rejection must retain the exact geometry cause: {rendered}"
         );
     }
-
     #[test]
     fn disabled_snapshot_mode_skips_restore() {
         assert!(snapshot_mode_allows_restore(SnapshotMode::ReadWrite));
         assert!(snapshot_mode_allows_restore(SnapshotMode::Readonly));
         assert!(!snapshot_mode_allows_restore(SnapshotMode::Disabled));
     }
-
     #[test]
     fn refresh_block_count_after_snapshot_load_uses_snapshot_height_when_ahead() {
         let mut block_count = iroha_core::kura::BlockCount(0);
@@ -7709,13 +6886,10 @@ mod snapshot_read_error_tests {
         let hashes = [dummy_block_hash(1), dummy_block_hash(2)];
         kura.extend_hash_only_suffix_from_verified_snapshot(&hashes)
             .expect("publish reconciled snapshot hashes");
-
         refresh_block_count_after_snapshot_load(&mut block_count, 2, kura.as_ref())
             .expect("refresh exact reconciled height");
-
         assert_eq!(block_count.0, 2);
     }
-
     #[test]
     fn refresh_block_count_after_snapshot_load_uses_exact_higher_kura_height() {
         let mut block_count = iroha_core::kura::BlockCount(9);
@@ -7723,26 +6897,21 @@ mod snapshot_read_error_tests {
         let hashes = (1_u8..=5).map(dummy_block_hash).collect::<Vec<_>>();
         kura.extend_hash_only_suffix_from_verified_snapshot(&hashes)
             .expect("publish reconciled Kura suffix");
-
         refresh_block_count_after_snapshot_load(&mut block_count, 2, kura.as_ref())
             .expect("replace stale count with exact durable Kura height");
-
         assert_eq!(block_count.0, 5);
     }
-
     #[test]
     fn refresh_block_count_rejects_state_ahead_of_reconciled_kura() {
         let mut block_count = iroha_core::kura::BlockCount(1);
         let kura = Kura::blank_kura_for_testing();
         kura.extend_hash_only_suffix_from_verified_snapshot(&[dummy_block_hash(1)])
             .expect("publish one durable hash");
-
         assert!(
             refresh_block_count_after_snapshot_load(&mut block_count, 2, kura.as_ref()).is_err()
         );
         assert_eq!(block_count.0, 1, "failed refresh preserves the prior count");
     }
-
     #[test]
     fn audited_kura_runtime_and_height_refresh_require_authenticated_snapshot_root() {
         let mut block_count = iroha_core::kura::BlockCount(0);
@@ -7757,16 +6926,13 @@ mod snapshot_read_error_tests {
         refresh_block_count_after_snapshot_load(&mut block_count, 7, kura.as_ref())
             .expect("authenticated exact height refresh");
         assert_eq!(block_count.0, 7);
-
         authorize_kura_runtime_start(false, false).expect("ordinary startup has no lineage");
         assert!(authorize_kura_runtime_start(false, true).is_err());
-
         // A normally signed carried lineage is valid after the one-time digest policy is disabled;
         // authorization follows the provisional Kura marker, not the current policy toggle.
         authorize_kura_runtime_start(true, true)
             .expect("policy-disabled carried lineage authenticates a provisional prefix");
     }
-
     #[test]
     fn provisional_imported_prefix_does_not_require_a_stored_genesis_body() {
         let kura = Kura::blank_kura_for_testing();
@@ -7775,7 +6941,6 @@ mod snapshot_read_error_tests {
         kura.extend_hash_only_suffix_from_verified_snapshot(&[genesis_hash])
             .expect("publish hash-only fixture");
         let count = iroha_core::kura::BlockCount(1);
-
         assert!(
             read_stored_genesis_block(kura.as_ref(), count, true)
                 .expect("provisional prefix uses its signed snapshot trust source")
@@ -7786,14 +6951,11 @@ mod snapshot_read_error_tests {
             "ordinary startup must not silently accept a missing genesis body"
         );
     }
-
     #[test]
     fn startup_nexus_merge_preserves_snapshot_topology_and_cooldown_only() {
-        use std::num::{NonZeroU32, NonZeroU64};
-
         use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
         use iroha_data_model::nexus::{LaneCatalog, LaneConfig, LaneId};
-
+        use std::num::{NonZeroU32, NonZeroU64};
         let catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane namespace"),
             vec![
@@ -7814,14 +6976,12 @@ mod snapshot_read_error_tests {
         };
         restored.autoscale.last_transition_height = 17;
         restored.autoscale.target_block_ms = NonZeroU64::new(777).expect("nonzero target");
-
         let mut configured = iroha_config::parameters::actual::Nexus {
             enabled: true,
             ..Default::default()
         };
         configured.autoscale.target_block_ms = NonZeroU64::new(321).expect("nonzero target");
         let merged = nexus_config_for_startup_replay(configured, Some(&restored));
-
         assert!(merged.enabled);
         assert_eq!(merged.lane_catalog, catalog);
         assert_eq!(merged.lane_config.entries().len(), 2);
@@ -7833,7 +6993,6 @@ mod snapshot_read_error_tests {
             "snapshot topology must not replace the process-configured baseline"
         );
     }
-
     #[test]
     fn startup_nexus_merge_uses_config_for_legacy_snapshot() {
         let mut configured = iroha_config::parameters::actual::Nexus {
@@ -7841,9 +7000,7 @@ mod snapshot_read_error_tests {
             ..Default::default()
         };
         configured.autoscale.last_transition_height = 9;
-
         let merged = nexus_config_for_startup_replay(configured, None);
-
         assert!(merged.enabled);
         assert_eq!(
             merged.lane_catalog,
@@ -7851,13 +7008,10 @@ mod snapshot_read_error_tests {
         );
         assert_eq!(merged.autoscale.last_transition_height, 9);
     }
-
     #[test]
     fn runtime_surfaces_use_post_replay_lane_catalog() {
-        use std::num::NonZeroU32;
-
         use iroha_data_model::nexus::{LaneCatalog, LaneConfig, LaneId};
-
+        use std::num::NonZeroU32;
         let configured = iroha_config::parameters::actual::Nexus {
             enabled: true,
             ..Default::default()
@@ -7875,7 +7029,6 @@ mod snapshot_read_error_tests {
             ],
         )
         .expect("valid replayed lane catalog");
-
         let mut state = State::new_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
@@ -7884,7 +7037,6 @@ mod snapshot_read_error_tests {
         state
             .set_nexus(replayed)
             .expect("install replayed Nexus topology");
-
         let runtime = nexus_for_runtime_surfaces(&state);
         assert_ne!(runtime.lane_catalog, configured.lane_catalog);
         assert!(
@@ -7896,12 +7048,10 @@ mod snapshot_read_error_tests {
             "runtime queue and manifest setup must see the replayed lane"
         );
     }
-
     #[test]
     fn startup_replay_installs_default_lane_manifest_snapshot_before_validation() {
         use iroha_core::governance::manifest::{GovernanceGuardReason, LaneManifestRegistry};
         use iroha_data_model::nexus::LaneId;
-
         let state = State::new_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
@@ -7919,26 +7069,21 @@ mod snapshot_read_error_tests {
             .ensure_lane_ready(LaneId::SINGLE)
             .expect_err("the modeled pre-replay snapshot has no bound manifest catalog");
         assert_eq!(absent.reason(), GovernanceGuardReason::UnknownLane);
-
         let nexus = iroha_config::parameters::actual::Nexus::default();
         let frozen = freeze_lane_manifests_for_startup_replay(&nexus)
             .expect("default lane is ready in the frozen startup registry");
         state.install_lane_manifests(&frozen);
-
         state
             .lane_manifests
             .read()
             .ensure_lane_ready(LaneId::SINGLE)
             .expect("atomic replay sees the configured default lane");
     }
-
     #[test]
     fn startup_replay_manifest_freeze_fails_closed_for_missing_governance_source() {
-        use std::num::NonZeroU32;
-
         use iroha_core::governance::manifest::GovernanceGuardReason;
         use iroha_data_model::nexus::{LaneCatalog, LaneConfig};
-
+        use std::num::NonZeroU32;
         let governed_lane = LaneConfig {
             governance: Some("parliament".to_owned()),
             ..LaneConfig::default()
@@ -7954,13 +7099,10 @@ mod snapshot_read_error_tests {
         };
         nexus.lane_catalog = catalog.clone();
         nexus.configured_lane_catalog = catalog;
-
         let error = freeze_lane_manifests_for_startup_replay(&nexus)
             .expect_err("governed replay lane without a frozen manifest must reject startup");
-
         assert_eq!(error.reason(), GovernanceGuardReason::MissingManifest);
     }
-
     #[test]
     fn post_replay_manifest_rebind_does_not_rescan_changed_sources() {
         let manifest_dir = tempfile::tempdir().expect("create manifest source directory");
@@ -7972,12 +7114,10 @@ mod snapshot_read_error_tests {
         let frozen = freeze_lane_manifests_for_startup_replay(&nexus)
             .expect("ungoverned default lane is ready without a manifest");
         assert!(!frozen.has_manifest_source_alias("default"));
-
         std::fs::write(manifest_dir.path().join("default.manifest.json"), b"{}")
             .expect("replace manifest source set after the startup freeze");
         let rebound = rebind_frozen_lane_manifests_after_startup_replay(&frozen, &nexus)
             .expect("frozen source set deterministically rebinds");
-
         assert!(!rebound.has_manifest_source_alias("default"));
         assert_eq!(
             rebound.consensus_policy_digest(),
@@ -7997,7 +7137,6 @@ mod snapshot_read_error_tests {
         );
     }
 }
-
 fn validate_reputation_runtime_provider_presence(
     runtime_enabled: bool,
     provider_presence: [bool; 4],
@@ -8024,7 +7163,6 @@ fn validate_reputation_runtime_provider_presence(
         Err("disabled SoraFS reputation runtime rejects unexpected runtime providers")
     }
 }
-
 fn validate_governance_dag_service_publisher_binding(
     storage: &iroha_config::parameters::actual::SorafsStorage,
     runtime_signer: Option<&dyn sorafs_node::GovernanceDagRuntimeSigner>,
@@ -8032,7 +7170,6 @@ fn validate_governance_dag_service_publisher_binding(
     if !storage.governance_dag_service.enabled {
         return Ok(());
     }
-
     let producer_public_key_hex = storage
         .governance_dag_publisher_public_key_hex
         .as_deref()
@@ -8057,7 +7194,6 @@ fn validate_governance_dag_service_publisher_binding(
                 .to_owned(),
         ));
     }
-
     let runtime_public_key_hex = runtime_signer
         .map(|signer| hex::encode(signer.public_key()))
         .ok_or_else(|| {
@@ -8074,7 +7210,6 @@ fn validate_governance_dag_service_publisher_binding(
     }
     Ok(())
 }
-
 fn resolve_governance_dag_service_launch(
     storage: &iroha_config::parameters::actual::SorafsStorage,
     runtime_deps: &IrohaRuntimeDeps,
@@ -8109,7 +7244,6 @@ fn resolve_governance_dag_service_launch(
         }
         return Ok(None);
     }
-
     let mut providers = sorafs_node::GovernanceDagServiceRuntimeProviders::default();
     if let Some(authenticator) = runtime_deps
         .sorafs_governance_dag_ipfs_authenticator
@@ -8138,7 +7272,6 @@ fn resolve_governance_dag_service_launch(
     sorafs_node::validate_governance_dag_service_runtime_providers(&view, &providers)?;
     Ok(Some((view, providers)))
 }
-
 fn validate_reputation_archive_presence(
     runtime_enabled: bool,
     archive_present: bool,
@@ -8153,7 +7286,6 @@ fn validate_reputation_archive_presence(
         }
     }
 }
-
 fn validate_provider_ingest_archive_presence(
     runtime_enabled: bool,
     archive_present: bool,
@@ -8168,7 +7300,6 @@ fn validate_provider_ingest_archive_presence(
         }
     }
 }
-
 fn validate_provider_attestation_journal_activation(configured: bool) -> Result<(), &'static str> {
     // Keep this pre-supervisor gate until the supervised child's archive scanner, local store,
     // durable time, approval-signer, and authenticated-inventory boundaries qualify.
@@ -8180,7 +7311,6 @@ fn validate_provider_attestation_journal_activation(configured: bool) -> Result<
         Ok(())
     }
 }
-
 fn validate_sorafs_native_signer_role_presence(
     role: &'static str,
     required: bool,
@@ -8210,14 +7340,12 @@ fn validate_sorafs_native_signer_role_presence(
         _ => Ok(()),
     }
 }
-
 const fn sorafs_native_signer_role_required(
     storage_enabled: bool,
     role_generation_enabled: bool,
 ) -> bool {
     storage_enabled || role_generation_enabled
 }
-
 fn validate_sorafs_native_signer_provider_presence(
     config: &Config,
     runtime_deps: &IrohaRuntimeDeps,
@@ -8257,7 +7385,6 @@ fn validate_sorafs_native_signer_provider_presence(
         runtime_deps.sorafs_orderbook_transaction_signer.is_some(),
     )
 }
-
 fn qualify_soracloud_runtime_signer_for_startup(
     production_mode: bool,
     configured: Option<&iroha_config::parameters::actual::SoracloudRuntimeMutationSignerBinding>,
@@ -8289,7 +7416,6 @@ fn qualify_soracloud_runtime_signer_for_startup(
         }
     }
 }
-
 impl Iroha {
     /// Starts Iroha with all its subsystems.
     ///
@@ -8321,7 +7447,6 @@ impl Iroha {
         ))
         .await
     }
-
     /// Starts Iroha with deployment-owned, runtime-only service dependencies.
     ///
     /// The standard daemon entry point does not adapt the validator node key
@@ -8512,7 +7637,6 @@ impl Iroha {
                 "failed to initialise config-bound SoraFS PoP runtime: {error}"
             ))
         })?;
-
         // Log detailed backtraces if a lock-order deadlock occurs so we can
         // diagnose stalls during long-running scenarios (e.g., integration tests).
         std::thread::spawn(|| {
@@ -8539,7 +7663,6 @@ impl Iroha {
                 }
             }
         });
-
         let (kura, mut block_count) =
             Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
                 &config.kura,
@@ -8566,19 +7689,16 @@ impl Iroha {
             .change_context(StartError::InitKura)?;
         let provisional_imported_prefix = kura.provisional_snapshot_bootstrap_pending();
         kura.configure_fastpq_proof_sidecar_limits(&config.zk.fastpq);
-
         let (live_query_store, child) =
             LiveQueryStore::from_config(config.live_query_store, supervisor.shutdown_signal())
                 .start();
         supervisor.monitor(child);
-
         let telemetry_profile = if config.telemetry_enabled {
             config.telemetry_profile
         } else {
             iroha_config::parameters::actual::TelemetryProfile::Disabled
         };
         let telemetry_capabilities = telemetry_profile.capabilities();
-
         #[cfg(feature = "telemetry")]
         let (metrics, state_telemetry, streaming_telemetry) = {
             let metrics =
@@ -8599,7 +7719,6 @@ impl Iroha {
             };
             (metrics, state, streaming)
         };
-
         let verification_key = config
             .snapshot
             .verification_public_key
@@ -8609,7 +7728,6 @@ impl Iroha {
             || config.common.key_pair.clone(),
             |key| iroha_crypto::KeyPair::from(key.clone()),
         );
-
         let genesis = load_deferred_normal_startup_genesis(
             provisional_imported_prefix,
             genesis,
@@ -8641,9 +7759,7 @@ impl Iroha {
             }
             StartupTrustRoot::AuthenticatedSnapshotPending => None,
         };
-
         let effective_genesis_public_key = config.genesis.public_key.clone();
-
         let mut loaded_state_from_snapshot = false;
         let snapshot_result = if snapshot_mode_allows_restore(config.snapshot.mode) {
             try_read_snapshot_with_bootstrap_policy(
@@ -8788,7 +7904,6 @@ impl Iroha {
             kura.refresh_v2_startup_replay_auxiliary_binding()
                 .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
         }
-
         // Resolve the complete replay boundary before selecting any consensus trust source. A
         // signed snapshot lineage is authoritative only when the typed imported prefix and exact
         // Kura boundary have already been authenticated.
@@ -8858,7 +7973,6 @@ impl Iroha {
             return Err(Report::new(StartError::InitKura)
                 .attach("Nexus requires the authenticated Sumeragi v2 mode to be NPoS"));
         }
-
         if !snapshot_bootstrap_active && block_count.0 > 0 {
             match kura
                 .v2_finality_artifact(1)
@@ -8911,7 +8025,6 @@ impl Iroha {
                 }
             }
         }
-
         if provisional_imported_prefix {
             // Check the complete pre-finalization body range before permitting deferred recovery
             // to mutate Kura. Deferred stage/manifest/finality recovery can change the replay
@@ -8942,7 +8055,6 @@ impl Iroha {
                 kura.as_ref(),
             )
             .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
-
             // Finalization runs deferred commit-manifest, retained-stage, finality, and carrier
             // recovery. Recompute from the resulting durable image and reauthenticate the exact
             // snapshot boundary; executing the pre-finalization plan would create a TOCTOU trust
@@ -8971,7 +8083,6 @@ impl Iroha {
                 "Kura imported-prefix storage remains provisional after authorization finalization",
             ));
         }
-
         // Generic state replay is authorized only through the contiguous prefix whose every
         // full-body height is checkpoint-, manifest-, and cryptographic-finality-complete. The
         // post-finalization preflight covers the complete recomputed range before geometry or WSV
@@ -9014,7 +8125,6 @@ impl Iroha {
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         supervisor.monitor(child);
         // Delay Arc wrapping until after we tweak state with config
-
         let (events_sender, _) = broadcast::channel(config.torii.events_buffer_capacity.get());
         // Register pipeline events sender for ZK lane reporting
         iroha_core::pipeline::zk_lane::register_events_sender(events_sender.clone());
@@ -9144,7 +8254,6 @@ impl Iroha {
             completed_releases = lane_reservation_replay.completed_releases,
             "lane queue reservation journal installed"
         );
-
         let journal_path = config
             .kura
             .store_dir
@@ -9173,7 +8282,6 @@ impl Iroha {
             tombstoned_expired = replay_summary.tombstoned_expired,
             "queue plan journal installed"
         );
-
         let compliance_policy_digest = state
             .lane_compliance_engine()
             .map(|engine| engine.consensus_policy_digest());
@@ -9185,7 +8293,6 @@ impl Iroha {
             lane_manifest_policy_digest,
         )?;
         let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;
-
         // Peer admission is frozen by exactly one authenticated startup root. Ordinary startup
         // uses signed genesis metadata. An audited hash-only import instead derives the handshake
         // from the authenticated snapshot WSV and its frozen v2 mode; it must not depend on an
@@ -9271,7 +8378,6 @@ impl Iroha {
             )
             .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
         }
-
         // If a genesis manifest JSON is provided via CLI, validate consensus fields.
         let cfg_manifest = config
             .genesis
@@ -9287,7 +8393,6 @@ impl Iroha {
             } else if genesis.is_none() {
                 config.crypto = manifest.crypto().clone().into();
             }
-
             let expected = match signed_consensus_mode {
                 iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned => {
                     iroha_core::sumeragi::consensus::PERMISSIONED_TAG
@@ -9309,13 +8414,11 @@ impl Iroha {
                     "Genesis manifest consensus_mode mismatch: manifest `{got}`, expected `{expected}`"
                 )));
             }
-
             if manifest.wire_protocol_version() != proto {
                 return Err(Report::new(StartError::InitKura).attach(format!(
                     "Genesis manifest wire_protocol_version is not v{proto}"
                 )));
             }
-
             if let Some(fingerprint) = manifest.consensus_fingerprint()
                 && fingerprint.into_bytes() != consensus_caps.consensus_fingerprint
             {
@@ -9325,7 +8428,6 @@ impl Iroha {
                 );
             }
         }
-
         let confidential_caps = iroha_p2p::ConfidentialHandshakeCaps {
             enabled: config.confidential.enabled,
             assume_valid: config.confidential.assume_valid,
@@ -9371,7 +8473,6 @@ impl Iroha {
         .attach_with(|| config.network.address.clone().into_attachment())
         .change_context(StartError::StartP2p)?;
         supervisor.monitor(child);
-
         if !snapshot_bootstrap_active && let Some(genesis_block) = genesis.as_ref() {
             // On non-empty storage, avoid re-validating the provided genesis signature.
             // Instead, ensure the optional provided payload matches the genesis already
@@ -9432,7 +8533,6 @@ impl Iroha {
                         ))
                         .change_context(StartError::InitKura));
                 }
-
                 // Execute genesis in a disposable state overlay. The signed
                 // RegisterPeerWithPop set is the only allowed height-one voting
                 // topology; plain peer registrations are observers.
@@ -9525,13 +8625,11 @@ impl Iroha {
             return Err(Report::new(StartError::InitKura)
                 .attach("missing genesis file for empty storage; provide `--genesis.file`"));
         }
-
         let snapshot_file = config
             .streaming
             .session_store_dir
             .clone()
             .join("sessions.norito");
-
         let mut streaming = iroha_core::streaming::StreamingHandle::with_key_material(
             config.streaming.key_material.clone(),
         )
@@ -9548,34 +8646,27 @@ impl Iroha {
         }
         configure_soranet_transport(&mut streaming, &config.streaming.soranet)?;
         streaming.set_snapshot_path(snapshot_file.clone());
-
         let snapshot_encryption_key =
             iroha_core::streaming::snapshot_session_key(&config.streaming.key_material);
-
         streaming
             .set_snapshot_encryption_key(&snapshot_encryption_key)
             .map_err(Report::from)
             .change_context(StartError::StartP2p)
             .map_err(|report| report.attach("failed to configure streaming snapshot encryption"))?;
-
         if let Err(err) = streaming.load_snapshots() {
             iroha_logger::warn!(?err, "Failed to load streaming session snapshots");
         }
         log_startup_trace("irohad.streaming.ready", startup_trace_started_at);
-
         iroha_core::streaming::set_global_handle(streaming.clone());
-
         let streaming_events_handle = streaming.clone();
         let ticket_events_rx = events_sender.subscribe();
         supervisor.monitor(tokio::spawn(async move {
             run_ticket_event_listener(streaming_events_handle, ticket_events_rx).await;
         }));
-
         #[cfg(feature = "telemetry")]
         start_telemetry(&logger, &config, &mut supervisor).await?;
         #[cfg(feature = "telemetry")]
         log_startup_trace("irohad.telemetry.ready", startup_trace_started_at);
-
         // Thread the remaining runtime preferences from config into state. ZK
         // configuration was installed once before Kura replay so hydrated SCCP
         // usage was checked against the actual configured caps at startup.
@@ -9616,7 +8707,6 @@ impl Iroha {
             use iroha_core::pipeline::access::{IvmStrategy, derive_for_transaction};
             use nonzero_ext::nonzero;
             use sha2::{Digest, Sha256};
-
             // Choose strategy based on configured pipeline prepass
             let view = state.query_view();
             let dyn_pre = state.pipeline_snapshot().dynamic_prepass;
@@ -9625,7 +8715,6 @@ impl Iroha {
             } else {
                 IvmStrategy::Conservative
             };
-
             // Deterministic fingerprint over interned access ids + call hashes
             fn fp_from_access(
                 key_count: usize,
@@ -9668,7 +8757,6 @@ impl Iroha {
                 }
                 hasher.finalize().into()
             }
-
             // Scan recent blocks for persisted sidecars and compare fingerprints
             let scan_n: usize = 16;
             let total = block_count.0;
@@ -9711,7 +8799,6 @@ impl Iroha {
                 }
             }
         }
-
         #[cfg(not(feature = "dag-recovery-verify"))]
         {
             // Recovery sidecar scan is optional and only used for diagnostics; keep it lightweight
@@ -9755,7 +8842,6 @@ impl Iroha {
                     .await;
             });
         }
-
         #[cfg(feature = "telemetry")]
         let telemetry = {
             let (metrics_reporter, child) = iroha_core::telemetry::start(
@@ -9769,10 +8855,8 @@ impl Iroha {
                 telemetry_capabilities.metrics_enabled(),
             );
             supervisor.monitor(child);
-
             metrics_reporter
         };
-
         let (peers_gossiper, child) = PeersGossiper::start(
             config.common.peer.id.clone(),
             expected_network_id,
@@ -9791,13 +8875,11 @@ impl Iroha {
         );
         supervisor.monitor(child);
         log_startup_trace("irohad.peers_gossiper.ready", startup_trace_started_at);
-
         #[cfg(feature = "telemetry")]
         let torii_telemetry =
             iroha_torii::MaybeTelemetry::from_profile(Some(telemetry.clone()), telemetry_profile);
         #[cfg(not(feature = "telemetry"))]
         let torii_telemetry = iroha_torii::MaybeTelemetry::from_profile(None, telemetry_profile);
-
         // The feature-isolated receiver controller must pin and acknowledge its
         // revision-1 rules before Sumeragi can enter the first post-genesis round.
         #[cfg(feature = "test-network-message-control")]
@@ -9811,7 +8893,6 @@ impl Iroha {
                 std::process::exit(1);
             }
         };
-
         let mut prepared_sorafs_provider_ingest_archive = if let Some(provider_ingest_config) =
             config.torii.sorafs_storage.provider_ingest_runtime.as_ref()
         {
@@ -9926,7 +9007,6 @@ impl Iroha {
         let sorafs_provider_ingest_runtime_query = prepared_sorafs_provider_ingest_archive
             .as_ref()
             .map(|prepared| Arc::clone(prepared.runtime_query()));
-
         let sorafs_reputation_retention_authority =
             runtime_deps.sorafs_reputation_retention_authority.clone();
         if config.torii.sorafs_storage.reputation_runtime.is_none()
@@ -10027,7 +9107,6 @@ impl Iroha {
             prepared_sorafs_reputation_archive.is_some(),
         )
         .map_err(|message| Report::new(StartError::StartP2p).attach(message))?;
-
         let genesis_for_consensus = if snapshot_bootstrap_active || stored_genesis_block.is_some() {
             None
         } else {
@@ -10073,7 +9152,6 @@ impl Iroha {
         })?;
         supervisor.monitor(child);
         log_startup_trace("irohad.sumeragi.started", startup_trace_started_at);
-
         let trusted = config.common.trusted_peers.value();
         let self_peer_id = trusted.myself.id().clone();
         let trusted_peers: BTreeSet<_> = std::iter::once(self_peer_id.clone())
@@ -10084,7 +9162,6 @@ impl Iroha {
             .max_by_key(|peer_id| peer_id.encoded_len())
             .cloned()
             .unwrap_or_else(|| self_peer_id.clone());
-
         let (tx_gossiper, child) = TransactionGossiper::from_config(
             config.transaction_gossiper,
             &config.network,
@@ -10096,13 +9173,11 @@ impl Iroha {
         )
         .start(supervisor.shutdown_signal());
         supervisor.monitor(child);
-
         if let Some(snapshot_maker) =
             SnapshotMaker::from_config(&config.snapshot, Arc::clone(&state), signing_key)
         {
             supervisor.monitor(snapshot_maker.start(supervisor.shutdown_signal()));
         }
-
         let sorafs_storage_config =
             sorafs_node::config::StorageConfig::from(&config.torii.sorafs_storage);
         let sorafs_repair_config =
@@ -10372,7 +9447,6 @@ impl Iroha {
         let shared_sorafs_cache = build_shared_sorafs_provider_cache(&config)
             .map_err(Report::new)
             .change_context(StartError::StartTorii)?;
-
         let sorafs_provider_ingest_runtime = if let Some(provider_ingest_config) =
             sorafs_provider_ingest_config
         {
@@ -10732,26 +9806,34 @@ impl Iroha {
             .with_local_host_identity(local_validator_account_id, local_peer_id),
             Arc::clone(&state),
         )
-        .with_sorafs_node(sorafs_node.clone());
+        .with_sorafs_node(sorafs_node.clone())
+        .with_remote_stream_token_operator_from_config(&config);
         let runtime_manager = if let Some(provider) = soracloud_hf_inference_credential_provider {
             runtime_manager.with_hf_inference_credential_provider(provider)
         } else {
             runtime_manager
         };
         let runtime_manager = if let Some(signer) = soracloud_runtime_mutation_signer {
-            let runtime_mutation_sink = Arc::new(
-                QueuedSoracloudRuntimeMutationSink::new(
-                    Arc::clone(&queue),
-                    Arc::clone(&state),
-                    signer,
-                    config.soracloud_runtime.submission.clone(),
-                )
-                .map_err(|error| {
-                    Report::new(StartError::StartTorii).attach(format!(
-                        "failed to construct qualified Soracloud runtime mutation sink: {error:#}"
-                    ))
-                })?,
+            #[cfg(feature = "embedded-soracloud-runtime")]
+            let runtime_mutation_sink = QueuedSoracloudRuntimeMutationSink::new(
+                Arc::clone(&queue),
+                Arc::clone(&state),
+                signer,
+                config.soracloud_runtime.submission.clone(),
             );
+            #[cfg(not(feature = "embedded-soracloud-runtime"))]
+            let runtime_mutation_sink = QueuedSoracloudRuntimeMutationSink::new(
+                Arc::new(config.common.chain.clone()),
+                Arc::clone(&queue),
+                Arc::clone(&state),
+                signer,
+                config.soracloud_runtime.submission.clone(),
+            );
+            let runtime_mutation_sink = Arc::new(runtime_mutation_sink.map_err(|error| {
+                Report::new(StartError::StartTorii).attach(format!(
+                    "failed to construct qualified Soracloud runtime mutation sink: {error:#}"
+                ))
+            })?);
             runtime_manager.with_mutation_sink(runtime_mutation_sink)
         } else {
             runtime_manager
@@ -10770,7 +9852,6 @@ impl Iroha {
             })?;
         state.set_soracloud_runtime(Some(Arc::new(soracloud_runtime.clone())));
         supervisor.monitor(child);
-
         ensure_operator_node_key_allowlisted(&mut config);
         let (kiso, child) = KisoHandle::start(config.clone());
         supervisor.monitor(child);
@@ -10799,7 +9880,6 @@ impl Iroha {
                     ))
                 })?,
         };
-
         let receipt_signer = torii_receipt_signer_or_derived(
             config.torii.receipt_signer.clone(),
             &config.common.key_pair,
@@ -10814,12 +9894,14 @@ impl Iroha {
                 Report::new(StartError::StartTorii)
                     .attach("VPN guard directory path missing after configuration validation")
             })?;
-            let snapshot = fs::read(snapshot_path).map_err(|error| {
-                Report::new(StartError::StartTorii).attach(format!(
-                    "failed to read VPN guard directory {}: {error}",
-                    snapshot_path.display()
-                ))
-            })?;
+            let snapshot =
+                iroha_crypto::soranet::directory::read_guard_directory_snapshot_file(snapshot_path)
+                    .map_err(|error| {
+                        Report::new(StartError::StartTorii).attach(format!(
+                            "failed to read VPN guard directory {}: {error}",
+                            snapshot_path.display()
+                        ))
+                    })?;
             let expected_digest = vpn.guard_directory_digest.ok_or_else(|| {
                 Report::new(StartError::StartTorii)
                     .attach("VPN guard directory digest missing after configuration validation")
@@ -11032,6 +10114,7 @@ impl Iroha {
         ) {
             supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
         }
+        let online_peers_provider = include!("main/online_peers_provider.rs");
         let torii = Torii::new_with_handle(
             config.common.chain.clone(),
             NetworkId::from_genesis_hash(config.genesis.expected_hash),
@@ -11043,7 +10126,7 @@ impl Iroha {
             kura.clone(),
             state.clone(),
             receipt_signer,
-            iroha_torii::OnlinePeersProvider::new(network.online_peers_receiver()),
+            online_peers_provider,
             Some(sumeragi.clone()),
             runtime_deps,
         );
@@ -11063,7 +10146,6 @@ impl Iroha {
             }),
             OnShutdown::Wait(Duration::from_secs(5)),
         ));
-
         let network_relay_shutdown = supervisor.shutdown_signal();
         supervisor.monitor(task::spawn(
             NetworkRelay {
@@ -11093,7 +10175,6 @@ impl Iroha {
         // Observer nodes are configured with `NodeRole::Observer`; Sumeragi suppresses
         // local consensus emissions in that case, so observers follow the chain and
         // serve queries without proposing or voting. Validators retain the full duties.
-
         let net_for_relay = network.clone();
         // The relay retains `kiso`, so its watch senders cannot close through ordinary
         // handle loss. Any pre-shutdown return means the supervised configuration
@@ -11113,11 +10194,9 @@ impl Iroha {
                 iroha_logger::error!(?err, "Config updates relay exited");
             }
         }));
-
         supervisor
             .setup_shutdown_on_os_signals()
             .change_context(StartError::ListenOsSignal)?;
-
         let (_availability, publication_child) = musubi_publication_service::
             build_and_start_injected_musubi_publication_private_service_v1(
                 musubi_publication_factory,
@@ -11132,9 +10211,7 @@ impl Iroha {
         if let Some(child) = publication_child {
             supervisor.monitor(child);
         }
-
         supervisor.shutdown_on_external_signal(shutdown_signal);
-
         Ok((
             Self {
                 kura,
@@ -11155,17 +10232,14 @@ impl Iroha {
             },
         ))
     }
-
     /// Read-only handle to the world state view.
     pub fn state(&self) -> &Arc<State> {
         &self.state
     }
-
     /// Access to the block storage handle.
     pub fn kura(&self) -> &Arc<Kura> {
         &self.kura
     }
-
     /// Access the daemon-owned archive-only provider-ingest finalized query.
     pub fn sorafs_provider_ingest_finalized_query(
         &self,
@@ -11173,17 +10247,14 @@ impl Iroha {
     {
         self.sorafs_provider_ingest_finalized_query.as_ref()
     }
-
     /// Access the embedded Soracloud runtime-manager handle.
     pub fn soracloud_runtime(&self) -> &SoracloudRuntimeManagerHandle {
         &self.soracloud_runtime
     }
-
     /// Streaming handle used for Torii and telemetry ingress.
     pub fn streaming(&self) -> iroha_core::streaming::StreamingHandle {
         self.streaming.clone()
     }
-
     /// Access the supervised committed `SoraFS` reputation status/metrics handle.
     #[must_use]
     pub fn sorafs_reputation_runtime(
@@ -11191,7 +10262,6 @@ impl Iroha {
     ) -> Option<&sorafs_reputation_runtime::ReputationRuntimeHandleV1> {
         self.sorafs_reputation_runtime.as_ref()
     }
-
     /// Access the supervised committed `SoraFS` hedging/billing status and
     /// metrics handle.
     #[must_use]
@@ -11200,7 +10270,6 @@ impl Iroha {
     ) -> Option<&sorafs_hedging_billing_runtime::HedgingBillingRuntimeHandleV1> {
         self.sorafs_hedging_billing_runtime.as_ref()
     }
-
     /// Access the supervised finalized-ledger `SoraFS` provider-ingest status
     /// and metrics handle.
     #[must_use]
@@ -11209,13 +10278,11 @@ impl Iroha {
     ) -> Option<&sorafs_provider_ingest_runtime::ProviderIngestRuntimeHandleV1> {
         self.sorafs_provider_ingest_runtime.as_ref()
     }
-
     /// Construct a manifest publisher for the active network.
     pub fn manifest_publisher(&self) -> ManifestPublisher<IrohaNetwork> {
         ManifestPublisher::new(self.streaming.clone(), self.network.clone())
     }
 }
-
 fn configure_soranet_transport(
     streaming: &mut iroha_core::streaming::StreamingHandle,
     soranet: &iroha_config::parameters::actual::StreamingSoranet,
@@ -11224,7 +10291,6 @@ fn configure_soranet_transport(
         streaming.set_soranet_transport(None);
         return Ok(());
     }
-
     let spool_dir = soranet.provision_spool_dir.clone();
     fs::create_dir_all(&spool_dir).map_err(|err| {
         Report::new(err)
@@ -11234,7 +10300,6 @@ fn configure_soranet_transport(
                 spool_dir.display()
             ))
     })?;
-
     let mut provisioner =
         FilesystemSoranetProvisioner::new(spool_dir, soranet.provision_spool_max_bytes.get());
     #[cfg(feature = "telemetry")]
@@ -11244,7 +10309,6 @@ fn configure_soranet_transport(
     streaming.set_soranet_transport(Some(Arc::new(provisioner)));
     Ok(())
 }
-
 #[cfg(feature = "telemetry")]
 async fn start_telemetry(
     logger: &LoggerHandle,
@@ -11253,14 +10317,12 @@ async fn start_telemetry(
 ) -> ReportResult<(), StartError> {
     const MSG_SUBSCRIBE: &str = "unable to subscribe to the channel";
     const MSG_START_TASK: &str = "unable to start the task";
-
     let telemetry_profile = if config.telemetry_enabled {
         config.telemetry_profile
     } else {
         iroha_config::parameters::actual::TelemetryProfile::Disabled
     };
     let telemetry_capabilities = telemetry_profile.capabilities();
-
     if !telemetry_capabilities.metrics_enabled() {
         iroha_logger::info!(
             ?telemetry_profile,
@@ -11268,7 +10330,6 @@ async fn start_telemetry(
         );
         return Ok(());
     }
-
     #[cfg(feature = "dev-telemetry")]
     {
         if telemetry_capabilities.developer_outputs_enabled() {
@@ -11297,7 +10358,6 @@ async fn start_telemetry(
             );
         }
     }
-
     if let Some(telemetry_cfg) = &config.telemetry {
         let receiver = logger
             .subscribe_on_telemetry(iroha_logger::telemetry::Channel::Regular)
@@ -11347,7 +10407,6 @@ async fn start_telemetry(
         Ok(())
     }
 }
-
 /// Relays local configuration-actor updates to local runtime components.
 ///
 /// Security-sensitive handshake policy is never accepted from, or propagated
@@ -11358,7 +10417,6 @@ struct ConfigUpdateReceivers {
     acl: tokio::sync::watch::Receiver<iroha_config::client_api::NetworkAcl>,
     handshake: tokio::sync::watch::Receiver<iroha_config::parameters::actual::SoranetHandshake>,
 }
-
 #[allow(clippy::too_many_lines)]
 async fn config_updates_relay(
     _kiso: KisoHandle,
@@ -11369,7 +10427,6 @@ async fn config_updates_relay(
 ) -> EyreResult<()> {
     #[cfg(not(feature = "telemetry"))]
     let _ = confidential_gas;
-
     let mut log_level_update = config_update_receivers.log_level;
     let mut acl_update = config_update_receivers.acl;
     let mut handshake_update = config_update_receivers.handshake;
@@ -11385,7 +10442,6 @@ async fn config_updates_relay(
     // for an actual Kiso change before rebuilding the runtime handshake state;
     // replaying the initial value would try to reopen its already-locked
     // persistent ticket-revocation store.
-
     // See https://github.com/tokio-rs/tokio/issues/5616 and
     // https://github.com/rust-lang/rust-clippy/issues/10636
     #[cfg(feature = "telemetry")]
@@ -11430,7 +10486,6 @@ async fn config_updates_relay(
             },
         };
     }
-
     #[cfg(not(feature = "telemetry"))]
     #[allow(clippy::redundant_pub_crate)]
     loop {
@@ -11473,10 +10528,8 @@ async fn config_updates_relay(
             },
         };
     }
-
     Ok(())
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum StartupTrustRoot {
     /// Normal startup is bound to one exact signed genesis instance.
@@ -11484,7 +10537,6 @@ enum StartupTrustRoot {
     /// An audited imported snapshot must authenticate its independent lineage before replay.
     AuthenticatedSnapshotPending,
 }
-
 impl StartupTrustRoot {
     fn resolve(
         authenticated_snapshot_pending: bool,
@@ -11499,13 +10551,11 @@ impl StartupTrustRoot {
             .map(Self::Genesis)
     }
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ResolvedGenesisTrustAnchor {
     public_key: PublicKey,
     consensus_header_hash: HashOf<BlockHeader>,
 }
-
 fn load_deferred_normal_startup_genesis(
     authenticated_snapshot_pending: bool,
     genesis: Option<GenesisBlock>,
@@ -11522,7 +10572,6 @@ fn load_deferred_normal_startup_genesis(
         .change_context(StartError::InitKura)
         .map(Some)
 }
-
 impl ResolvedGenesisTrustAnchor {
     fn resolve(
         public_key: &PublicKey,
@@ -11545,7 +10594,6 @@ impl ResolvedGenesisTrustAnchor {
         }
         Ok(anchor)
     }
-
     fn verify(&self, block: &GenesisBlock) -> ReportResult<(), StartError> {
         let embedded_key = genesis_public_key_from_genesis_block(block)?;
         if embedded_key != self.public_key {
@@ -11554,7 +10602,6 @@ impl ResolvedGenesisTrustAnchor {
                 self.public_key
             )));
         }
-
         let block_hash = block.0.hash();
         if block_hash != self.consensus_header_hash {
             return Err(Report::new(StartError::InitKura).attach(format!(
@@ -11562,7 +10609,6 @@ impl ResolvedGenesisTrustAnchor {
                 self.consensus_header_hash
             )));
         }
-
         let mut signatures = block.0.signatures();
         let signature = signatures.next().ok_or_else(|| {
             Report::new(StartError::InitKura)
@@ -11581,11 +10627,9 @@ impl ResolvedGenesisTrustAnchor {
                     self.public_key
                 ))
             })?;
-
         Ok(())
     }
 }
-
 fn read_stored_genesis_block(
     kura: &Kura,
     block_count: iroha_core::kura::BlockCount,
@@ -11608,7 +10652,6 @@ fn read_stored_genesis_block(
     };
     Ok(Some(GenesisBlock((*stored).clone())))
 }
-
 fn genesis_public_key_from_genesis_block(
     block: &GenesisBlock,
 ) -> ReportResult<PublicKey, StartError> {
@@ -11621,24 +10664,20 @@ fn genesis_public_key_from_genesis_block(
             .attach("stored genesis transaction authority is not a single-key account")
     })
 }
-
 fn genesis_account(public_key: PublicKey) -> Account {
     let genesis_account_id = AccountId::new(public_key);
     Account::new(genesis_account_id.clone()).build(&genesis_account_id)
 }
-
 fn genesis_domain(public_key: PublicKey) -> Domain {
     let genesis_account_id = AccountId::new(public_key);
     Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id)
 }
-
 #[cfg(test)]
 mod genesis_key_tests {
     use super::*;
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_genesis::GenesisBuilder;
     use std::path::PathBuf;
-
     fn signed_genesis(keypair: &KeyPair) -> GenesisBlock {
         GenesisBuilder::new_without_executor(
             ChainId::from("configured-genesis-trust-anchor-test"),
@@ -11648,7 +10687,6 @@ mod genesis_key_tests {
         .build_and_sign(keypair)
         .expect("build signed genesis")
     }
-
     fn signed_genesis_with_marker(keypair: &KeyPair, marker: &str) -> GenesisBlock {
         GenesisBuilder::new_without_executor(
             ChainId::from("configured-genesis-trust-anchor-test"),
@@ -11662,7 +10700,6 @@ mod genesis_key_tests {
         .build_and_sign(keypair)
         .expect("build marked signed genesis")
     }
-
     fn write_signed_genesis(path: &Path, genesis: &GenesisBlock) {
         let bytes = {
             let _registry_guard = instruction_registry_test_guard();
@@ -11671,7 +10708,6 @@ mod genesis_key_tests {
         };
         fs::write(path, bytes).expect("write signed genesis");
     }
-
     #[test]
     fn derives_genesis_pubkey_from_block_authority() {
         let chain = ChainId::from("derive-genesis-pubkey-test");
@@ -11684,16 +10720,13 @@ mod genesis_key_tests {
             genesis_public_key_from_genesis_block(&genesis_block).expect("derive genesis pubkey");
         assert_eq!(&derived, keypair.public_key());
     }
-
     #[test]
     fn genesis_domain_owner_matches_genesis_authority() {
         let keypair = iroha_crypto::KeyPair::random();
         let expected_owner = AccountId::new(keypair.public_key().clone());
         let domain = genesis_domain(keypair.public_key().clone());
-
         assert_eq!(domain.owned_by(), &expected_owner);
     }
-
     #[test]
     fn resolved_genesis_trust_anchor_accepts_matching_block() {
         let keypair = KeyPair::random();
@@ -11702,12 +10735,10 @@ mod genesis_key_tests {
             public_key: keypair.public_key().clone(),
             consensus_header_hash: genesis.0.hash(),
         };
-
         anchor
             .verify(&genesis)
             .expect("matching configured genesis trust anchor should verify");
     }
-
     #[test]
     fn resolved_genesis_trust_anchor_rejects_wrong_public_key() {
         let signer = KeyPair::random();
@@ -11716,7 +10747,6 @@ mod genesis_key_tests {
             public_key: KeyPair::random().public_key().clone(),
             consensus_header_hash: genesis.0.hash(),
         };
-
         let error = anchor
             .verify(&genesis)
             .expect_err("configured public-key mismatch must reject genesis");
@@ -11726,7 +10756,6 @@ mod genesis_key_tests {
             "unexpected mismatch diagnostic: {error:?}"
         );
     }
-
     #[test]
     fn resolved_genesis_trust_anchor_rejects_wrong_hash() {
         let keypair = KeyPair::random();
@@ -11737,7 +10766,6 @@ mod genesis_key_tests {
             public_key: keypair.public_key().clone(),
             consensus_header_hash: wrong_hash,
         };
-
         let error = anchor
             .verify(&genesis)
             .expect_err("configured genesis hash mismatch must reject genesis");
@@ -11747,12 +10775,10 @@ mod genesis_key_tests {
             "unexpected mismatch diagnostic: {error:?}"
         );
     }
-
     #[test]
     fn startup_trust_root_requires_local_artifact_to_match_configured_hash() {
         let keypair = KeyPair::random();
         let genesis = signed_genesis(&keypair);
-
         let root = StartupTrustRoot::resolve(
             false,
             keypair.public_key(),
@@ -11763,11 +10789,9 @@ mod genesis_key_tests {
         let StartupTrustRoot::Genesis(anchor) = root else {
             panic!("normal startup must resolve a genesis root");
         };
-
         assert_eq!(anchor.consensus_header_hash, genesis.0.hash());
         anchor.verify(&genesis).expect("resolved anchor verifies");
     }
-
     #[test]
     fn normal_startup_loads_genesis_deferred_by_snapshot_policy() {
         let keypair = KeyPair::random();
@@ -11776,40 +10800,31 @@ mod genesis_key_tests {
         let path = temp.path().join("genesis.nrt");
         write_signed_genesis(&path, &genesis);
         let signed_file = WithOrigin::inline(path);
-
         let loaded = load_deferred_normal_startup_genesis(false, None, Some(&signed_file))
             .expect("normal startup reads the protected local artifact")
             .expect("normal startup loads a genesis block");
-
         assert_eq!(loaded.0.hash(), genesis.0.hash());
     }
-
     #[test]
     fn provisional_snapshot_startup_does_not_read_deferred_genesis() {
         let temp = tempfile::tempdir().expect("temporary directory");
         let missing = WithOrigin::inline(temp.path().join("missing-genesis.nrt"));
-
         let loaded = load_deferred_normal_startup_genesis(true, None, Some(&missing))
             .expect("provisional snapshot startup defers to authenticated snapshot lineage");
-
         assert!(loaded.is_none());
     }
-
     #[test]
     fn snapshot_startup_selects_the_independent_pending_trust_root() {
         let keypair = KeyPair::random();
         let configured_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; 32]));
-
         let root = StartupTrustRoot::resolve(true, keypair.public_key(), configured_hash, None)
             .expect("an authenticated provisional snapshot is an independent trust root");
-
         assert!(matches!(
             root,
             StartupTrustRoot::AuthenticatedSnapshotPending
         ));
     }
-
     #[test]
     fn resolver_rejects_config_and_local_hash_disagreement() {
         let keypair = KeyPair::random();
@@ -11817,23 +10832,19 @@ mod genesis_key_tests {
         let configured_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB6; 32]));
         assert_ne!(configured_hash, genesis.0.hash());
-
         let error =
             StartupTrustRoot::resolve(false, keypair.public_key(), configured_hash, Some(&genesis))
                 .expect_err("two exact genesis sources must agree");
-
         assert!(matches!(error.current_context(), StartError::InitKura));
         assert!(
             format!("{error:?}").contains("differs from configured genesis.expected_hash"),
             "unexpected conflicting-anchor diagnostic: {error:?}"
         );
     }
-
     #[test]
     fn resolver_accepts_matching_config_and_local_hashes() {
         let keypair = KeyPair::random();
         let genesis = signed_genesis(&keypair);
-
         let root = StartupTrustRoot::resolve(
             false,
             keypair.public_key(),
@@ -11844,17 +10855,14 @@ mod genesis_key_tests {
         let StartupTrustRoot::Genesis(anchor) = root else {
             panic!("normal startup must resolve a genesis root");
         };
-
         assert_eq!(anchor.consensus_header_hash, genesis.0.hash());
     }
-
     #[test]
     fn configured_anchor_rejects_alternate_same_key_same_chain_genesis_with_local_body() {
         let keypair = KeyPair::random();
         let trusted = signed_genesis_with_marker(&keypair, "trusted genesis");
         let alternate = signed_genesis_with_marker(&keypair, "alternate genesis");
         assert_ne!(trusted.0.hash(), alternate.0.hash());
-
         let root = StartupTrustRoot::resolve(
             false,
             keypair.public_key(),
@@ -11868,21 +10876,18 @@ mod genesis_key_tests {
         let error = anchor
             .verify(&alternate)
             .expect_err("same signer and chain must not authorize another genesis instance");
-
         assert!(matches!(error.current_context(), StartError::InitKura));
         assert!(
             format!("{error:?}").contains("does not match the resolved genesis trust-anchor hash"),
             "unexpected alternate-genesis diagnostic: {error:?}"
         );
     }
-
     #[test]
     fn configured_hash_anchor_rejects_alternate_same_key_same_chain_genesis() {
         let keypair = KeyPair::random();
         let trusted = signed_genesis_with_marker(&keypair, "trusted genesis");
         let alternate = signed_genesis_with_marker(&keypair, "alternate genesis");
         assert_ne!(trusted.0.hash(), alternate.0.hash());
-
         let root = StartupTrustRoot::resolve(false, keypair.public_key(), trusted.0.hash(), None)
             .expect("configured expected hash resolves an exact anchor");
         let StartupTrustRoot::Genesis(anchor) = root else {
@@ -11891,7 +10896,6 @@ mod genesis_key_tests {
         let error = anchor
             .verify(&alternate)
             .expect_err("the configured hash must reject another genesis from the same signer");
-
         assert!(matches!(error.current_context(), StartError::InitKura));
         assert!(
             format!("{error:?}").contains("does not match the resolved genesis trust-anchor hash"),
@@ -11899,7 +10903,6 @@ mod genesis_key_tests {
         );
     }
 }
-
 /// Errors raised while reading configuration and genesis data.
 #[derive(Debug, Clone)]
 pub enum ConfigError {
@@ -11956,7 +10959,6 @@ pub enum ConfigError {
     /// SoraFS gateway automation was enabled while embedded storage was disabled.
     SorafsGatewayRequiresStorage,
 }
-
 impl core::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -12032,16 +11034,13 @@ impl core::fmt::Display for ConfigError {
         }
     }
 }
-
 impl std::error::Error for ConfigError {}
-
 /// Render the IVM scheduler banner line for a given core count.
 fn scheduler_banner_line(core_count: usize) -> String {
     let count = core_count.max(1);
     let core_label = if count == 1 { "core" } else { "cores" };
     format!("Using {count} {core_label}")
 }
-
 /// Translate FASTPQ Metal-related configuration into overrides understood by the prover.
 fn fastpq_metal_overrides_from_config(
     config: &iroha_config::parameters::actual::Fastpq,
@@ -12054,7 +11053,6 @@ fn fastpq_metal_overrides_from_config(
         debug_fused: config.metal_debug_fused,
     }
 }
-
 /// Apply concurrency settings (IVM scheduler + Rayon) derived from configuration.
 fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Concurrency) {
     let stack_outcome = ivm::apply_stack_sizes(
@@ -12092,7 +11090,6 @@ fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Conc
         );
     }
 }
-
 #[allow(clippy::too_many_lines)]
 /// Read the configuration and then a genesis block if specified.
 ///
@@ -12106,21 +11103,24 @@ pub fn read_config_and_genesis(
     args: &Args,
 ) -> ReportResult<(Config, Option<GenesisBlock>), ConfigError> {
     let mut config = ConfigReader::new();
-
     if let Some(path) = &args.config {
         config = if let Some(expected) = args.startup.config_blake3.as_deref() {
             if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                 return Err(Report::new(ConfigError::ReadConfig)
                     .attach("`--config-blake3` must contain exactly 64 hexadecimal digits"));
             }
-            let raw = fs::read(path)
-                .change_context(ConfigError::ReadConfig)
-                .attach_with(|| {
-                    format!(
-                        "failed to read integrity-bound configuration {}",
-                        path.display()
-                    )
-                })?;
+            let raw = read_bounded_startup_artifact(
+                path,
+                INTEGRITY_BOUND_CONFIG_MAX_BYTES_V1,
+                "integrity-bound configuration",
+            )
+            .change_context(ConfigError::ReadConfig)
+            .attach_with(|| {
+                format!(
+                    "failed to read integrity-bound configuration {}",
+                    path.display()
+                )
+            })?;
             let observed = blake3::hash(&raw).to_hex().to_string();
             if !expected.eq_ignore_ascii_case(&observed) {
                 return Err(Report::new(ConfigError::ReadConfig).attach(format!(
@@ -12153,7 +11153,6 @@ pub fn read_config_and_genesis(
                 .change_context(ConfigError::ReadConfig)?
         };
     }
-
     let sorafs_storage_enabled_is_explicit =
         config.contains_toml_parameter(["sorafs", "storage", "enabled"]);
     let sorafs_discovery_enabled_is_explicit =
@@ -12165,7 +11164,6 @@ pub fn read_config_and_genesis(
     if let Some(path) = args.genesis_manifest_json.as_ref() {
         config.genesis.manifest_json = Some(WithOrigin::inline(path.clone()));
     }
-
     if args.sora {
         let configured_sorafs_storage_enabled = config.torii.sorafs_storage.enabled;
         let configured_sorafs_discovery_enabled = config.torii.sorafs_discovery.discovery_enabled;
@@ -12177,7 +11175,6 @@ pub fn read_config_and_genesis(
             config.torii.sorafs_discovery.discovery_enabled = configured_sorafs_discovery_enabled;
         }
     }
-
     let sorafs_enabled = config.torii.sorafs_storage.enabled
         || config.torii.sorafs_discovery.discovery_enabled
         || config.torii.sorafs_repair.enabled
@@ -12185,7 +11182,6 @@ pub fn read_config_and_genesis(
     let nexus_requires_router = nexus_topology_is_custom(&config.nexus);
     let nexus_lane_overrides = config.nexus.has_lane_overrides();
     let requires_sora_profile = sorafs_enabled || nexus_requires_router || nexus_lane_overrides;
-
     if nexus_requires_router && !config.nexus.enabled {
         return Err(Report::new(ConfigError::NexusMultilaneDisabled).attach(
             format!(
@@ -12199,7 +11195,6 @@ pub fn read_config_and_genesis(
             "Nexus lane/dataspace/routing overrides require `nexus.enabled = true`; Iroha 2 runs strictly single-lane",
         ));
     }
-
     if !args.sora && requires_sora_profile {
         let mut sora_features = Vec::new();
         if sorafs_enabled {
@@ -12211,7 +11206,6 @@ pub fn read_config_and_genesis(
         if nexus_lane_overrides {
             sora_features.push("nexus lane configuration");
         }
-
         let detail = sora_features.join(", ");
         return Err(
             Report::new(ConfigError::SoraProfileRequired).attach(format!(
@@ -12219,11 +11213,9 @@ pub fn read_config_and_genesis(
             )),
         );
     }
-
     config.apply_storage_budget();
     let storage_budget_filesystems = reconcile_nexus_storage_budget(&mut config)?;
     warn_if_nexus_storage_budget_exceeds_available(&config, &storage_budget_filesystems);
-
     if let Some(mode) = args.fastpq_execution_mode {
         config.zk.fastpq.execution_mode = mode;
     }
@@ -12254,7 +11246,6 @@ pub fn read_config_and_genesis(
             config.zk.fastpq.gpu_kind = Some(trimmed.to_owned());
         }
     }
-
     if let Err(err) =
         fastpq_prover::apply_metal_overrides(fastpq_metal_overrides_from_config(&config.zk.fastpq))
     {
@@ -12266,31 +11257,23 @@ pub fn read_config_and_genesis(
     }
     #[cfg(feature = "fastpq-gpu")]
     preflight_fastpq_bn254_poseidon_words(&config.zk.fastpq);
-
     apply_concurrency_config(&config.concurrency);
-
     // Apply Norito settings immediately so subsequent Norito decode/encode (e.g., genesis)
     // uses the configured archive bounds and GPU offload policy.
     apply_norito_config(&config);
-
     // Apply hardware acceleration configuration for IVM (Metal/CUDA). Defaults enable all
     // available hardware; config can cap GPUs or disable specific backends. This does not
     // change outputs, only performance characteristics.
     apply_ivm_acceleration_config(&config.accel);
     rs16::set_simd_enabled(config.accel.enable_simd);
-
     iroha_data_model::account::address::set_chain_discriminant(
         *config.common.chain_discriminant.value(),
     );
-
     let genesis =
         read_genesis_for_snapshot_policy(&config.snapshot.bootstrap, config.genesis.file.as_ref())?;
-
     config.logger.terminal_colors = args.terminal_colors;
-
     Ok((config, genesis))
 }
-
 fn read_genesis_for_snapshot_policy(
     policy: &iroha_config::parameters::actual::SnapshotBootstrapPolicy,
     signed_file: Option<&WithOrigin<PathBuf>>,
@@ -12308,11 +11291,9 @@ fn read_genesis_for_snapshot_policy(
         .attach(signed_file.clone().into_attachment().display_path())?;
     Ok(Some(genesis))
 }
-
 #[cfg(test)]
 mod snapshot_bootstrap_genesis_tests {
     use super::*;
-
     fn enabled_policy() -> iroha_config::parameters::actual::SnapshotBootstrapPolicy {
         iroha_config::parameters::actual::SnapshotBootstrapPolicy {
             enabled: true,
@@ -12320,7 +11301,6 @@ mod snapshot_bootstrap_genesis_tests {
             audited_height: Some(7),
         }
     }
-
     #[test]
     fn enabled_audited_snapshot_does_not_read_missing_or_invalid_genesis() {
         let temp = tempfile::tempdir().expect("temporary directory");
@@ -12332,7 +11312,6 @@ mod snapshot_bootstrap_genesis_tests {
                 .expect("enabled snapshot bootstrap ignores legacy genesis bytes")
                 .is_none()
         );
-
         let missing = WithOrigin::inline(temp.path().join("missing-genesis.nrt"));
         assert!(
             read_genesis_for_snapshot_policy(&enabled_policy(), Some(&missing))
@@ -12340,7 +11319,6 @@ mod snapshot_bootstrap_genesis_tests {
                 .is_none()
         );
     }
-
     #[test]
     fn disabled_or_partial_snapshot_policy_never_bypasses_genesis_validation() {
         let temp = tempfile::tempdir().expect("temporary directory");
@@ -12355,7 +11333,6 @@ mod snapshot_bootstrap_genesis_tests {
             .is_err(),
             "disabled policy must decode and reject invalid configured genesis"
         );
-
         let partial = iroha_config::parameters::actual::SnapshotBootstrapPolicy {
             enabled: true,
             audited_sha256: None,
@@ -12376,7 +11353,6 @@ mod snapshot_bootstrap_genesis_tests {
         );
     }
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct StorageBudgetFilesystemProbe {
     filesystem_id: String,
@@ -12388,18 +11364,15 @@ struct StorageBudgetFilesystemProbe {
     managed_roots: Vec<PathBuf>,
     derived_budget_bytes: Option<u64>,
 }
-
 fn reconcile_nexus_storage_budget(
     config: &mut Config,
 ) -> ReportResult<Vec<StorageBudgetFilesystemProbe>, ConfigError> {
     if !config.nexus.enabled {
         return Ok(Vec::new());
     }
-
     if config.nexus.storage.local_budget_bytes.is_some() {
         return probe_nexus_storage_filesystems(config);
     }
-
     let mut filesystems = probe_nexus_storage_filesystems(config)?;
     let filesystem_budgets = derive_runtime_nexus_storage_budget(&filesystems)?;
     let aggregate_budget_bytes = config
@@ -12429,12 +11402,10 @@ fn reconcile_nexus_storage_budget(
     );
     Ok(filesystems)
 }
-
 fn probe_nexus_storage_filesystems(
     config: &Config,
 ) -> ReportResult<Vec<StorageBudgetFilesystemProbe>, ConfigError> {
     let mut groups = BTreeMap::<String, StorageBudgetFilesystemProbe>::new();
-
     for (component, root) in effective_nexus_storage_component_roots(config) {
         let lexical_root = normalize_budget_probe_path(root).ok_or_else(|| {
             Report::new(ConfigError::ParseConfig).attach(format!(
@@ -12459,7 +11430,6 @@ fn probe_nexus_storage_filesystems(
             ))
         })?;
         let managed_root = resolved_root.managed_root;
-
         groups
             .entry(filesystem_id.clone())
             .and_modify(|group| {
@@ -12485,7 +11455,6 @@ fn probe_nexus_storage_filesystems(
                 derived_budget_bytes: None,
             });
     }
-
     let mut groups: Vec<_> = groups.into_values().collect();
     for group in &mut groups {
         group.components.sort_unstable();
@@ -12512,7 +11481,6 @@ fn probe_nexus_storage_filesystems(
     });
     Ok(groups)
 }
-
 fn effective_nexus_storage_component_roots(
     config: &Config,
 ) -> Vec<(NexusStorageBudgetComponent, PathBuf)> {
@@ -12520,7 +11488,6 @@ fn effective_nexus_storage_component_roots(
         NexusStorageBudgetComponent::Kura,
         config.kura.store_dir.resolve_relative_path(),
     )];
-
     let tiered_state_root = config
         .tiered_state
         .da_store_root
@@ -12536,7 +11503,6 @@ fn effective_nexus_storage_component_roots(
     if let Some(tiered_state_root) = tiered_state_root {
         roots.push((NexusStorageBudgetComponent::WsvCold, tiered_state_root));
     }
-
     roots.push((
         NexusStorageBudgetComponent::Sorafs,
         config.torii.sorafs_storage.data_dir.clone(),
@@ -12551,7 +11517,6 @@ fn effective_nexus_storage_component_roots(
     ));
     roots
 }
-
 fn derive_runtime_nexus_storage_budget(
     filesystems: &[StorageBudgetFilesystemProbe],
 ) -> ReportResult<Vec<NexusStorageFilesystemBudget>, ConfigError> {
@@ -12604,14 +11569,12 @@ fn derive_runtime_nexus_storage_budget(
             components: filesystem.components.clone(),
         });
     }
-
     if filesystem_budgets.is_empty() {
         return Err(Report::new(ConfigError::ParseConfig)
             .attach("runtime Nexus storage derivation produced no filesystem budget groups"));
     }
     Ok(filesystem_budgets)
 }
-
 fn warn_if_nexus_storage_budget_exceeds_available(
     config: &Config,
     filesystems: &[StorageBudgetFilesystemProbe],
@@ -12619,14 +11582,12 @@ fn warn_if_nexus_storage_budget_exceeds_available(
     if filesystems.is_empty() || !config.nexus.enabled {
         return;
     }
-
     if filesystems
         .iter()
         .all(|filesystem| filesystem.derived_budget_bytes.is_some())
     {
         return;
     }
-
     for filesystem in filesystems {
         let Some(assigned_budget) = operator_explicit_budget_shortfall(config, filesystem) else {
             continue;
@@ -12642,7 +11603,6 @@ fn warn_if_nexus_storage_budget_exceeds_available(
         );
     }
 }
-
 fn operator_explicit_budget_shortfall(
     config: &Config,
     filesystem: &StorageBudgetFilesystemProbe,
@@ -12651,7 +11611,6 @@ fn operator_explicit_budget_shortfall(
     let required_growth = assigned_budget.saturating_sub(filesystem.managed_bytes);
     (required_growth > filesystem.available_bytes).then_some(assigned_budget)
 }
-
 fn effective_assigned_budget_for_filesystem(
     config: &Config,
     filesystem: &StorageBudgetFilesystemProbe,
@@ -12676,21 +11635,18 @@ fn effective_assigned_budget_for_filesystem(
             total.saturating_add(component_budget)
         })
 }
-
 fn nexus_storage_component_labels(components: &[NexusStorageBudgetComponent]) -> Vec<&'static str> {
     components
         .iter()
         .map(|component| component.as_str())
         .collect()
 }
-
 fn nexus_storage_component_order(component: NexusStorageBudgetComponent) -> usize {
     NexusStorageBudgetComponent::ORDER
         .iter()
         .position(|ordered| ordered == &component)
         .unwrap_or(usize::MAX)
 }
-
 fn normalize_budget_probe_path(path: PathBuf) -> Option<PathBuf> {
     let absolute = if path.is_absolute() {
         path
@@ -12715,7 +11671,6 @@ fn normalize_budget_probe_path(path: PathBuf) -> Option<PathBuf> {
     }
     Some(normalized)
 }
-
 fn nearest_existing_ancestor(path: &Path) -> std::io::Result<Option<PathBuf>> {
     let mut current = path.to_path_buf();
     loop {
@@ -12729,13 +11684,11 @@ fn nearest_existing_ancestor(path: &Path) -> std::io::Result<Option<PathBuf>> {
         }
     }
 }
-
 #[derive(Debug)]
 struct ResolvedStorageBudgetRoot {
     probe_path: PathBuf,
     managed_root: Option<PathBuf>,
 }
-
 fn resolve_budget_probe_root(
     lexical_root: &Path,
     component: NexusStorageBudgetComponent,
@@ -12770,7 +11723,6 @@ fn resolve_budget_probe_root(
             component.as_str()
         )));
     }
-
     let canonical_ancestor = fs::canonicalize(&existing_ancestor).map_err(|error| {
         filesystem_probe_config_error(format!(
             "failed to canonicalize Nexus storage ancestor `{}` (component `{}`): {error}",
@@ -12792,7 +11744,6 @@ fn resolve_budget_probe_root(
             component.as_str()
         )));
     }
-
     let missing_suffix = lexical_root
         .strip_prefix(&existing_ancestor)
         .expect("nearest ancestor must prefix the normalized storage root");
@@ -12814,7 +11765,6 @@ fn resolve_budget_probe_root(
         managed_root: root_exists.then_some(canonical_root),
     })
 }
-
 fn metadata_is_symlink_or_reparse(metadata: &fs::Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
@@ -12827,7 +11777,6 @@ fn metadata_is_symlink_or_reparse(metadata: &fs::Metadata) -> bool {
     #[cfg(not(target_os = "windows"))]
     false
 }
-
 fn deduplicate_managed_roots(roots: &mut Vec<PathBuf>) {
     roots.sort_by(|left, right| {
         left.components()
@@ -12843,11 +11792,9 @@ fn deduplicate_managed_roots(roots: &mut Vec<PathBuf>) {
     }
     *roots = unique;
 }
-
 fn managed_root_size(path: &Path, expected_filesystem_id: &str) -> std::io::Result<u64> {
     managed_root_size_with_identity(path, expected_filesystem_id, filesystem_identity)
 }
-
 fn managed_root_size_with_identity<F>(
     path: &Path,
     expected_filesystem_id: &str,
@@ -12872,7 +11819,6 @@ where
     if metadata.is_file() {
         return Ok(metadata.len());
     }
-
     let mut total = 0_u64;
     let mut stack = vec![path.to_path_buf()];
     while let Some(directory) = stack.pop() {
@@ -12930,27 +11876,23 @@ where
     }
     Ok(total)
 }
-
 fn filesystem_probe_config_error(detail: String) -> Report<ConfigError> {
     let report = Report::new(ConfigError::ParseConfig).attach(detail);
     #[cfg(not(any(unix, target_os = "windows")))]
     let report = report.attach("Nexus storage filesystem probing is unsupported on this platform");
     report
 }
-
 #[cfg(unix)]
 fn filesystem_identity(path: &Path) -> Option<String> {
     let stats = rustix::fs::stat(path).ok()?;
     Some(format!("dev:{}", stats.st_dev))
 }
-
 #[cfg(target_os = "windows")]
 fn filesystem_identity(path: &Path) -> Option<String> {
     let volume_mount_point = windows_volume_mount_point(path)?;
     let volume_name = windows_volume_name_for_mount_point(&volume_mount_point)?;
     Some(normalize_windows_volume_identity(&volume_name))
 }
-
 #[cfg(unix)]
 fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
     let stats = rustix::fs::statvfs(path).ok()?;
@@ -12959,7 +11901,6 @@ fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
     let total_bytes = stats.f_blocks.checked_mul(fragment_size)?;
     Some((available_bytes, total_bytes))
 }
-
 #[cfg(target_os = "windows")]
 fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
     let wide_path = windows_wide_path(path);
@@ -12975,17 +11916,14 @@ fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
     };
     (ok != 0).then_some((free_bytes_available, total_bytes))
 }
-
 #[cfg(not(any(unix, target_os = "windows")))]
 fn filesystem_space(_path: &Path) -> Option<(u64, u64)> {
     None
 }
-
 #[cfg(not(any(unix, target_os = "windows")))]
 fn filesystem_identity(_path: &Path) -> Option<String> {
     None
 }
-
 #[cfg(any(target_os = "windows", test))]
 fn normalize_windows_volume_mount_point(volume_mount_point: &str) -> String {
     let mut normalized = volume_mount_point.replace('/', "\\");
@@ -12994,23 +11932,19 @@ fn normalize_windows_volume_mount_point(volume_mount_point: &str) -> String {
     }
     normalized
 }
-
 #[cfg(any(target_os = "windows", test))]
 fn normalize_windows_volume_identity(volume_name: &str) -> String {
     let mut normalized = normalize_windows_volume_mount_point(volume_name);
     normalized.make_ascii_lowercase();
     format!("volume:{normalized}")
 }
-
 #[cfg(any(target_os = "windows", test))]
 fn windows_string_from_wide_buffer(buffer: &[u16]) -> Option<String> {
     let end = buffer.iter().position(|&unit| unit == 0)?;
     Some(String::from_utf16_lossy(&buffer[..end]))
 }
-
 #[cfg(target_os = "windows")]
 const WINDOWS_FILESYSTEM_PROBE_BUFFER_LEN: usize = 32_768;
-
 #[cfg(target_os = "windows")]
 #[allow(non_snake_case)]
 unsafe extern "system" {
@@ -13031,7 +11965,6 @@ unsafe extern "system" {
         cch_buffer_length: u32,
     ) -> i32;
 }
-
 #[cfg(target_os = "windows")]
 fn windows_wide_path(path: &Path) -> Vec<u16> {
     path.as_os_str()
@@ -13039,12 +11972,10 @@ fn windows_wide_path(path: &Path) -> Vec<u16> {
         .chain(std::iter::once(0))
         .collect()
 }
-
 #[cfg(target_os = "windows")]
 fn windows_wide_string(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
-
 #[cfg(target_os = "windows")]
 fn windows_query_volume_string<F>(mut query: F) -> Option<String>
 where
@@ -13055,7 +11986,6 @@ where
         .then(|| windows_string_from_wide_buffer(&buffer))
         .flatten()
 }
-
 #[cfg(target_os = "windows")]
 fn windows_volume_mount_point(path: &Path) -> Option<String> {
     let wide_path = windows_wide_path(path);
@@ -13064,7 +11994,6 @@ fn windows_volume_mount_point(path: &Path) -> Option<String> {
     })
     .map(|mount_point| normalize_windows_volume_mount_point(&mount_point))
 }
-
 #[cfg(target_os = "windows")]
 fn windows_volume_name_for_mount_point(volume_mount_point: &str) -> Option<String> {
     let wide_mount_point = windows_wide_string(volume_mount_point);
@@ -13072,7 +12001,6 @@ fn windows_volume_name_for_mount_point(volume_mount_point: &str) -> Option<Strin
         GetVolumeNameForVolumeMountPointW(wide_mount_point.as_ptr(), buffer, len)
     })
 }
-
 pub(crate) fn apply_ivm_acceleration_config(
     accel: &iroha_config::parameters::actual::Acceleration,
 ) {
@@ -13089,12 +12017,10 @@ pub(crate) fn apply_ivm_acceleration_config(
     };
     ivm::set_acceleration_config(ivm_cfg);
 }
-
 #[cfg(test)]
 mod build_line_tests {
     use super::{resolve_build_line_from_env, *};
     use iroha_config_base::toml::TomlSource;
-
     #[test]
     fn soracloud_runtime_manager_corridor_has_no_local_key_fallback() {
         let source = include_str!("main.rs");
@@ -13111,7 +12037,6 @@ mod build_line_tests {
             "Soracloud mutation authority must never fall back to the process-local node key"
         );
     }
-
     #[test]
     fn soracloud_production_fails_before_startup_without_signer_binding() {
         let mut dependencies = IrohaRuntimeDeps::default();
@@ -13125,7 +12050,6 @@ mod build_line_tests {
         );
         assert!(dependencies.is_empty());
     }
-
     #[test]
     fn native_signer_presence_gate_accepts_only_exact_enabled_and_disabled_shapes() {
         assert!(
@@ -13136,7 +12060,6 @@ mod build_line_tests {
                 .is_ok()
         );
     }
-
     #[test]
     fn storage_enabled_requires_native_signers_independently_of_generation_flags() {
         assert!(sorafs_native_signer_role_required(true, false));
@@ -13144,7 +12067,6 @@ mod build_line_tests {
         assert!(sorafs_native_signer_role_required(false, true));
         assert!(!sorafs_native_signer_role_required(false, false));
     }
-
     #[test]
     fn native_signer_presence_gate_rejects_enabled_missing_and_disabled_injected_roles() {
         assert_eq!(
@@ -13167,7 +12089,6 @@ mod build_line_tests {
             )
         );
     }
-
     #[test]
     fn native_signer_presence_gate_rejects_configured_missing_and_disabled_binding_roles() {
         assert_eq!(
@@ -13190,7 +12111,6 @@ mod build_line_tests {
     use std::{io::Write, num::NonZeroU32, path::Path};
     use tempfile::NamedTempFile;
     use toml::Table;
-
     pub fn minimal_config_table() -> Table {
         toml::from_str(
             r#"
@@ -13219,7 +12139,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         )
         .expect("minimal config")
     }
-
     pub fn multilane_config_table(enabled: bool) -> Table {
         toml::from_str(&format!(
             r#"
@@ -13262,7 +12181,6 @@ metadata = {{}}
         ))
         .expect("multilane config")
     }
-
     fn single_lane_override_config_table() -> Table {
         toml::from_str(
             r#"
@@ -13301,15 +12219,12 @@ metadata = {}
         )
         .expect("single-lane override config")
     }
-
     const NEXUS_DEFAULTS_BLAKE2B: &str =
         "43ec250ee2781bee657f89885a07a3d907da6e1d994ccb1e3ce21dfbae53f375";
-
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");
         Hash::new(bytes).to_string()
     }
-
     pub(super) fn load_unprovisioned_profile_for_inspection(path: &Path) -> Config {
         let source = std::fs::read_to_string(path).expect("read checked-in signing profile");
         let mut table: Table = toml::from_str(&source).expect("parse signing profile TOML");
@@ -13331,7 +12246,6 @@ metadata = {}
         Config::from_toml_source(TomlSource::inline(table))
             .expect("resolve signing profile for non-runtime inspection")
     }
-
     #[test]
     fn build_line_env_override_takes_precedence() {
         assert_eq!(
@@ -13347,7 +12261,6 @@ metadata = {}
             BuildLine::Iroha3
         );
     }
-
     #[test]
     fn operator_signatures_allowlist_adds_node_key_when_enabled() {
         let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
@@ -13355,9 +12268,7 @@ metadata = {}
         let node_public_key = config.common.key_pair.public_key().clone();
         config.torii.operator_signatures.allow_node_key = true;
         config.torii.operator_signatures.allowed_public_keys.clear();
-
         ensure_operator_node_key_allowlisted(&mut config);
-
         assert!(
             config
                 .torii
@@ -13367,7 +12278,6 @@ metadata = {}
             "node public key should be allow-listed when allow_node_key is enabled"
         );
     }
-
     #[test]
     fn operator_signatures_allowlist_keeps_node_key_unique() {
         let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
@@ -13379,9 +12289,7 @@ metadata = {}
             .operator_signatures
             .allowed_public_keys
             .push(node_public_key.clone());
-
         ensure_operator_node_key_allowlisted(&mut config);
-
         let count = config
             .torii
             .operator_signatures
@@ -13391,16 +12299,13 @@ metadata = {}
             .count();
         assert_eq!(count, 1, "node public key should not be duplicated");
     }
-
     #[test]
     fn operator_signatures_allowlist_respects_disabled_node_key_flag() {
         let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
             .expect("default config");
         config.torii.operator_signatures.allow_node_key = false;
         config.torii.operator_signatures.allowed_public_keys.clear();
-
         ensure_operator_node_key_allowlisted(&mut config);
-
         assert!(
             config
                 .torii
@@ -13410,7 +12315,6 @@ metadata = {}
             "allow-list should remain unchanged when allow_node_key is disabled"
         );
     }
-
     #[test]
     fn iroha2_disarms_soranet_streaming() {
         let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
@@ -13419,7 +12323,6 @@ metadata = {}
         enforce_build_line(BuildLine::Iroha2, &mut config).expect("should sanitize");
         assert!(!config.streaming.soranet.enabled);
     }
-
     #[test]
     fn iroha2_disarms_nexus_flag_without_multilane() {
         let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
@@ -13428,20 +12331,16 @@ metadata = {}
         enforce_build_line(BuildLine::Iroha2, &mut config).expect("nexus flag should be disarmed");
         assert!(!config.nexus.enabled);
     }
-
     #[test]
     fn iroha2_disarms_sorafs_switches() {
         let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
             .expect("default config");
         config.torii.sorafs_storage.enabled = true;
         config.torii.sorafs_discovery.discovery_enabled = true;
-
         enforce_build_line(BuildLine::Iroha2, &mut config).expect("should sanitize");
-
         assert!(!config.torii.sorafs_storage.enabled);
         assert!(!config.torii.sorafs_discovery.discovery_enabled);
     }
-
     #[test]
     fn iroha2_rejects_multilane_catalog() {
         let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
@@ -13463,12 +12362,10 @@ metadata = {}
         config.nexus.lane_catalog = catalog.clone();
         config.nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
-
         let err = enforce_build_line(BuildLine::Iroha2, &mut config).expect_err("must fail");
         let rendered = format!("{err:?}");
         assert!(rendered.contains("Nexus"));
     }
-
     #[test]
     fn iroha2_rejects_lane_overrides_without_nexus() {
         let err = Config::from_toml_source(TomlSource::inline(single_lane_override_config_table()))
@@ -13483,15 +12380,12 @@ metadata = {}
             "error should mention single-lane boundary: {rendered}"
         );
     }
-
     #[test]
     fn sora_profile_enables_nexus_and_catalog() {
         let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
             .expect("default config");
         assert!(config.nexus.enabled);
-
         config.apply_sora_profile();
-
         assert!(config.nexus.enabled);
         assert_eq!(config.nexus.lane_catalog.lane_count().get(), 3);
         assert_eq!(config.nexus.lane_config.entries().len(), 3);
@@ -13523,7 +12417,6 @@ metadata = {}
         assert!(nexus_topology_is_custom(&config.nexus));
         assert!(should_use_config_router(&config.nexus));
     }
-
     #[test]
     fn config_router_requires_enabled_flag() {
         let err = Config::from_toml_source(TomlSource::inline(multilane_config_table(false)))
@@ -13532,14 +12425,11 @@ metadata = {}
             format!("{err:?}").contains("nexus.enabled"),
             "missing nexus-enabled hint: {err:?}"
         );
-
         let config = Config::from_toml_source(TomlSource::inline(multilane_config_table(true)))
             .expect("enabled multilane config");
-
         assert!(nexus_topology_is_custom(&config.nexus));
         assert!(should_use_config_router(&config.nexus));
     }
-
     #[test]
     fn nexus_profile_defaults_enable_flag() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/nexus/config.toml");
@@ -13551,7 +12441,6 @@ metadata = {}
             "the unprovisioned profile must not be a runnable node config"
         );
         let config = load_unprovisioned_profile_for_inspection(&path);
-
         assert!(config.nexus.enabled);
         assert_eq!(config.nexus.dataspace_catalog.entries().len(), 1);
         assert!(nexus_topology_is_custom(&config.nexus));
@@ -13573,14 +12462,12 @@ metadata = {}
             .collect();
         assert_eq!(dataspace_aliases, ["universal"]);
     }
-
     #[test]
     fn nexus_profile_hash_matches_template() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/nexus/config.toml");
         let hash = file_blake2b_hex(&path);
         assert_eq!(hash, NEXUS_DEFAULTS_BLAKE2B);
     }
-
     #[test]
     fn sora_flag_enables_nexus_profile() {
         let mut config_file = NamedTempFile::new().expect("create temp config");
@@ -13592,7 +12479,6 @@ metadata = {}
                     .as_bytes(),
             )
             .expect("write config");
-
         let args = parse_args_from([
             "iroha3d",
             "--sora",
@@ -13602,13 +12488,10 @@ metadata = {}
                 .to_str()
                 .expect("temp config path to string"),
         ]);
-
         let (config, _) = read_config_and_genesis(&args).expect("parse config with --sora");
-
         let mut expected =
             Config::from_toml_source(TomlSource::inline(minimal_config_table())).expect("default");
         expected.apply_sora_profile();
-
         assert!(config.nexus.enabled);
         assert_eq!(config.nexus.lane_catalog, expected.nexus.lane_catalog);
         assert_eq!(
@@ -13634,7 +12517,6 @@ metadata = {}
             .collect();
         assert_eq!(dataspace_aliases, ["universal"]);
     }
-
     #[test]
     fn sora_flag_preserves_explicitly_disabled_sorafs_storage() {
         let mut config_file = NamedTempFile::new().expect("create temp config");
@@ -13648,7 +12530,6 @@ metadata = {}
                     .as_bytes(),
             )
             .expect("write config");
-
         let args = parse_args_from([
             "iroha3d",
             "--sora",
@@ -13658,17 +12539,14 @@ metadata = {}
                 .to_str()
                 .expect("temp config path to string"),
         ]);
-
         let (config, _) =
             read_config_and_genesis(&args).expect("parse config with explicit storage opt-out");
-
         assert!(config.nexus.enabled);
         assert!(
             !config.torii.sorafs_storage.enabled,
             "--sora must not override an explicit operator storage opt-out"
         );
     }
-
     #[test]
     fn single_lane_config_preserves_defaults_without_sora_flag() {
         let mut config_file = NamedTempFile::new().expect("create temp config");
@@ -13680,7 +12558,6 @@ metadata = {}
                     .as_bytes(),
             )
             .expect("write config");
-
         let args = parse_args_from([
             "iroha3d",
             "--config",
@@ -13689,15 +12566,12 @@ metadata = {}
                 .to_str()
                 .expect("temp config path to string"),
         ]);
-
         let (config, _) = read_config_and_genesis(&args).expect("parse config without --sora");
-
         assert!(config.nexus.enabled);
         assert_eq!(config.nexus.lane_catalog.lane_count().get(), 1);
         assert!(!nexus_topology_is_custom(&config.nexus));
         assert!(!should_use_config_router(&config.nexus));
     }
-
     #[test]
     fn multilane_config_requires_nexus_enabled_flag() {
         let mut config_file = NamedTempFile::new().expect("create temp config");
@@ -13709,7 +12583,6 @@ metadata = {}
                     .as_bytes(),
             )
             .expect("write config");
-
         let args = parse_args_from([
             "iroha3d",
             "--config",
@@ -13718,7 +12591,6 @@ metadata = {}
                 .to_str()
                 .expect("temp config path to string"),
         ]);
-
         let err =
             read_config_and_genesis(&args).expect_err("must reject disabled multilane config");
         let rendered = format!("{err:?}");
@@ -13728,7 +12600,6 @@ metadata = {}
         );
     }
 }
-
 #[cfg(test)]
 mod accel_tests {
     fn sha256_abc_digest() -> [u8; 32] {
@@ -13755,25 +12626,21 @@ mod accel_tests {
         }
         digest
     }
-
     const SHA256_ABC_EXPECTED: [u8; 32] = [
         0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22,
         0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00,
         0x15, 0xad,
     ];
-
     struct AccelTestGuard {
         original_config: ivm::AccelerationConfig,
         original_simd_override: Option<ivm::SimdChoice>,
         _simd_lock: std::sync::MutexGuard<'static, ()>,
     }
-
     impl AccelTestGuard {
         fn new() -> Self {
             let simd_lock = ivm::forced_simd_test_lock();
             let original_config = ivm::acceleration_config();
             let original_simd_override = ivm::set_forced_simd(None);
-
             Self {
                 original_config,
                 original_simd_override,
@@ -13781,14 +12648,12 @@ mod accel_tests {
             }
         }
     }
-
     impl Drop for AccelTestGuard {
         fn drop(&mut self) {
             ivm::set_acceleration_config(self.original_config);
             ivm::set_forced_simd(self.original_simd_override);
         }
     }
-
     #[test]
     fn accel_config_disables_cuda_parity_holds() {
         let _guard = AccelTestGuard::new();
@@ -13830,7 +12695,6 @@ mod accel_tests {
             "CUDA helper should report false when disabled"
         );
         assert_eq!(sha256_abc_digest(), SHA256_ABC_EXPECTED);
-
         let restore = iroha_config::parameters::actual::Acceleration {
             enable_simd: true,
             enable_cuda: true,
@@ -13845,7 +12709,6 @@ mod accel_tests {
         super::apply_ivm_acceleration_config(&restore);
         ivm::reset_cuda_backend_for_tests();
     }
-
     #[test]
     fn accel_config_disables_simd_parity_holds() {
         let _guard = AccelTestGuard::new();
@@ -13862,14 +12725,12 @@ mod accel_tests {
             prefer_cpu_sha2_max_leaves_x86: None,
         };
         super::apply_ivm_acceleration_config(&accel);
-
         let status = ivm::acceleration_runtime_status();
         assert!(
             !status.simd.configured && !status.simd.available,
             "SIMD backend should be marked unavailable when disabled"
         );
         let result_scalar = ivm::vadd32([9, 8, 7, 6], [1, 2, 3, 4]);
-
         let restore = iroha_config::parameters::actual::Acceleration {
             enable_simd: true,
             enable_cuda: original.enable_cuda,
@@ -13890,7 +12751,6 @@ mod accel_tests {
             "SIMD disablement must not change vector results"
         );
     }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn accel_config_disables_metal_parity_holds() {
@@ -13929,7 +12789,6 @@ mod accel_tests {
             "Metal pipelines must not compile when disabled"
         );
         assert_eq!(sha256_abc_digest(), SHA256_ABC_EXPECTED);
-
         let restore = iroha_config::parameters::actual::Acceleration {
             enable_simd: true,
             enable_cuda: true,
@@ -13945,14 +12804,11 @@ mod accel_tests {
         ivm::reset_metal_backend_for_tests();
     }
 }
-
 fn log_config_warning(message: &str) {
     iroha_logger::warn!(target: "config", "{message}");
 }
-
 #[cfg(test)]
 static INSTRUCTION_REGISTRY_TEST_LOCK: Mutex<()> = Mutex::new(());
-
 #[cfg(test)]
 fn instruction_registry_test_guard() -> std::sync::MutexGuard<'static, ()> {
     // `iroha_data_model` is linked into this unit-test binary as a normal
@@ -13963,48 +12819,15 @@ fn instruction_registry_test_guard() -> std::sync::MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
-
 fn read_genesis(path: &Path) -> ReportResult<GenesisBlock, ConfigError> {
     #[cfg(test)]
     let _registry_guard = instruction_registry_test_guard();
-
     read_genesis_unlocked(path)
 }
-
-fn read_genesis_unlocked(path: &Path) -> ReportResult<GenesisBlock, ConfigError> {
-    const PANIC_HELP: &str = concat!(
-        "Genesis decode panicked. A common cause is an invalid `Name` (identifiers ",
-        "must not contain whitespace or the characters `@`, `#`, `$`). ",
-        "Please sanitize identifiers in your genesis and re-sign the file."
-    );
-
-    // Ensure the instruction registry is populated before attempting to
-    // decode the genesis block. Tests may invoke this function directly
-    // without calling `init_genesis_instruction_registry` beforehand, which
-    // would otherwise cause a panic when deserializing `InstructionBox`
-    // values.
-    init_genesis_instruction_registry();
-    init_query_registry();
-
-    let bytes = std::fs::read(path).change_context(ConfigError::ReadGenesis)?;
-
-    // Norito decoding may panic inside data-model validators (e.g., `Name`) if
-    // the encoded genesis contains invalid identifiers. Catch panics to provide
-    // a clear diagnostic instead of aborting the process.
-    let decoded = std::panic::catch_unwind(|| decode_framed_signed_block(&bytes));
-
-    match decoded {
-        Ok(Ok(genesis)) => Ok(GenesisBlock(genesis)),
-        Ok(Err(versioned_err)) => Err(versioned_err).change_context(ConfigError::ReadGenesis),
-        Err(_panic) => Err(Report::new(ConfigError::ReadGenesis).attach(PANIC_HELP)),
-    }
-}
-
 fn resolve_norito_max_archive_len(cfg: &Config) -> u64 {
     let requested = cfg.norito.max_archive_len;
     let max_frame_bytes = u64::try_from(cfg.network.max_frame_bytes).unwrap_or(u64::MAX);
     let resolved = requested.max(max_frame_bytes);
-
     if resolved != requested {
         iroha_logger::warn!(
             target: "config",
@@ -14014,40 +12837,29 @@ fn resolve_norito_max_archive_len(cfg: &Config) -> u64 {
             "Norito max_archive_len too small for the configured network frame; increasing it so accepted frames remain decodable"
         );
     }
-
     resolved
 }
-
 /// Apply Norito operational configuration from config.
 fn apply_norito_config(cfg: &Config) {
     let max_archive_len = resolve_norito_max_archive_len(cfg);
     norito::core::set_max_archive_len(max_archive_len);
     norito::core::hw::set_gpu_compression_allowed(cfg.norito.allow_gpu_compression);
 }
-
 fn validate_config(config: &Config) -> ReportResult<(), ConfigError> {
     validate_network_frame_runtime_limit(config)?;
-
     let mut emitter = Emitter::new();
-
     validate_config_io(&mut emitter, config);
     validate_config_runtime(&mut emitter, config);
-
     finish_config_validation(emitter)
 }
-
 /// Validate configuration without probing or binding any listening socket.
 fn validate_config_offline(config: &Config) -> ReportResult<(), ConfigError> {
     validate_network_frame_runtime_limit(config)?;
-
     let mut emitter = Emitter::new();
-
     validate_config_static_io(&mut emitter, config);
     validate_config_runtime(&mut emitter, config);
-
     finish_config_validation(emitter)
 }
-
 /// Reject frame caps that cannot be encoded before any validation probes bind sockets.
 fn validate_network_frame_runtime_limit(config: &Config) -> ReportResult<(), ConfigError> {
     let configured = config.network.max_frame_bytes;
@@ -14056,7 +12868,6 @@ fn validate_network_frame_runtime_limit(config: &Config) -> ReportResult<(), Con
             ConfigError::NetworkFrameSizeExceedsRuntimeLimit { configured },
         ));
     }
-
     let plaintext_ceiling = iroha_p2p::frame_plaintext_cap(configured);
     for (path, topic_cap) in [
         (
@@ -14101,7 +12912,6 @@ fn validate_network_frame_runtime_limit(config: &Config) -> ReportResult<(), Con
     }
     Ok(())
 }
-
 fn finish_config_validation(emitter: Emitter<ConfigError>) -> ReportResult<(), ConfigError> {
     if let Err(report) = emitter.into_result() {
         let mut collected: Vec<ConfigError> = report
@@ -14109,20 +12919,16 @@ fn finish_config_validation(emitter: Emitter<ConfigError>) -> ReportResult<(), C
             .filter_map(|frame| frame.downcast_ref::<ConfigError>())
             .cloned()
             .collect();
-
         if let Some(mut aggregated) = collected.pop().map(Report::new) {
             while let Some(error) = collected.pop() {
                 aggregated = aggregated.change_context(error);
             }
             return Err(aggregated.change_context(ConfigError::ParseConfig));
         }
-
         return Err(Report::new(ConfigError::ParseConfig));
     }
-
     Ok(())
 }
-
 fn validate_config_io(emitter: &mut Emitter<ConfigError>, config: &Config) {
     // These cause race condition in tests, due to them actually binding TCP listeners
     // Since these validations are primarily for the convenience of the end user,
@@ -14132,15 +12938,12 @@ fn validate_config_io(emitter: &mut Emitter<ConfigError>, config: &Config) {
         validate_try_bind_address(emitter, &config.network.address);
         validate_try_bind_address(emitter, &config.torii.address);
     }
-
     validate_config_static_io(emitter, config);
 }
-
 fn validate_config_static_io(emitter: &mut Emitter<ConfigError>, config: &Config) {
     validate_directory_path(emitter, &config.kura.store_dir);
     // maybe validate only if snapshot mode is enabled
     validate_directory_path(emitter, &config.snapshot.store_dir);
-
     if config.network.address.value() == config.torii.address.value() {
         emitter.emit(
             Report::new(ConfigError::SameNetworkAndToriiAddrs)
@@ -14149,13 +12952,11 @@ fn validate_config_static_io(emitter: &mut Emitter<ConfigError>, config: &Config
         );
     }
 }
-
 fn validate_config_runtime(emitter: &mut Emitter<ConfigError>, config: &Config) {
     #[cfg(not(feature = "embedded-soracloud-runtime"))]
     if config.soracloud_runtime.production_mode {
         emitter.emit(Report::new(ConfigError::SoracloudRuntimeFeatureRequired));
     }
-
     let sorafs_storage_enabled = config.torii.sorafs_storage.enabled;
     let sorafs_gateway_compliance_enabled = config.torii.sorafs_gateway.compliance.is_some();
     if sorafs_storage_enabled && !sorafs_gateway_compliance_enabled {
@@ -14166,7 +12967,6 @@ fn validate_config_runtime(emitter: &mut Emitter<ConfigError>, config: &Config) 
     {
         emitter.emit(Report::new(ConfigError::SorafsGatewayRequiresStorage));
     }
-
     /// Warnings about unused configuration options are logged via the standard
     /// logger so that they are visible alongside other diagnostic messages.
     #[cfg(not(feature = "telemetry"))]
@@ -14175,14 +12975,12 @@ fn validate_config_runtime(emitter: &mut Emitter<ConfigError>, config: &Config) 
             "`telemetry` config is specified, but ignored, because Iroha is compiled without `telemetry` feature enabled",
         );
     }
-
     #[cfg(not(feature = "dev-telemetry"))]
     if config.dev_telemetry.out_file.is_some() {
         log_config_warning(
             "`dev_telemetry.out_file` config is specified, but ignored, because Iroha is compiled without `dev-telemetry` feature enabled",
         );
     }
-
     #[cfg(feature = "dev-telemetry")]
     if let Some(path) = &config.dev_telemetry.out_file {
         if path.value().parent().is_none() {
@@ -14198,7 +12996,6 @@ fn validate_config_runtime(emitter: &mut Emitter<ConfigError>, config: &Config) 
             );
         }
     }
-
     if config.sumeragi.role == iroha_config::parameters::actual::NodeRole::Validator {
         if !config.confidential.enabled {
             emitter.emit(
@@ -14216,13 +13013,11 @@ fn validate_config_runtime(emitter: &mut Emitter<ConfigError>, config: &Config) 
         }
     }
 }
-
 fn validate_directory_path(emitter: &mut Emitter<ConfigError>, path: &WithOrigin<PathBuf>) {
     #[derive(Debug)]
     struct InvalidDirPathError {
         path: PathBuf,
     }
-
     impl core::fmt::Display for InvalidDirPathError {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             write!(
@@ -14232,9 +13027,7 @@ fn validate_directory_path(emitter: &mut Emitter<ConfigError>, path: &WithOrigin
             )
         }
     }
-
     impl std::error::Error for InvalidDirPathError {}
-
     if path.value().is_file() {
         emitter.emit(
             Report::new(InvalidDirPathError {
@@ -14245,34 +13038,26 @@ fn validate_directory_path(emitter: &mut Emitter<ConfigError>, path: &WithOrigin
         );
     }
 }
-
 #[cfg(not(test))]
 fn validate_try_bind_address(_emitter: &mut Emitter<ConfigError>, value: &WithOrigin<SocketAddr>) {
     use std::net::TcpListener;
-
     if let Err(err) = TcpListener::bind(value.value()) {
         iroha_logger::warn!(addr = %value.value(), raw = ?err.raw_os_error(), err = ?err, "Skipping bind validation after failure");
     }
 }
-
 /// Configures globals of [`error_stack::Report`]
 fn configure_reports(args: &Args) {
-    use std::panic::Location;
-
     use error_stack::{Report, fmt::ColorMode};
-
+    use std::panic::Location;
     Report::set_color_mode(if args.terminal_colors {
         ColorMode::Color
     } else {
         ColorMode::None
     });
-
     // neither devs nor users benefit from it
     Report::install_debug_hook::<Location>(|_, _| {});
 }
-
 const BUILD_LINE_ENV: &str = "IROHA_BUILD_LINE";
-
 fn resolve_build_line_from_env(env_value: Option<String>, bin_name: &str) -> BuildLine {
     if let Some(val) = env_value {
         match val.trim().to_ascii_lowercase().as_str() {
@@ -14287,7 +13072,6 @@ fn resolve_build_line_from_env(env_value: Option<String>, bin_name: &str) -> Bui
     }
     BuildLine::from_bin_name(bin_name)
 }
-
 /// Run the stock daemon launcher for one build line.
 ///
 /// The stock binaries resolve supported runtime-only bindings through a
@@ -14305,7 +13089,6 @@ pub fn main_entry(default_build_line: BuildLine) {
         std::process::exit(1);
     }
 }
-
 /// Run the standard CLI launcher with a deployment-owned provider registry.
 ///
 /// An external deployment binary can call this function after constructing a
@@ -14328,7 +13111,6 @@ pub fn run_with_runtime_provider_registry(
     );
     run_main(build_line, Some(registry), None)
 }
-
 /// Run the standard CLI launcher with a deployment-owned private Musubi publication factory.
 ///
 /// The caller supplies a one-shot factory which receives the exact daemon-owned finalized-state,
@@ -14352,7 +13134,6 @@ pub fn run_with_musubi_publication(
     );
     run_main(build_line, None, Some(factory))
 }
-
 /// Run the standard CLI launcher with deployment-owned runtime providers and a private Musubi
 /// publication factory.
 ///
@@ -14379,7 +13160,6 @@ pub fn run_with_runtime_provider_registry_and_musubi_publication(
     );
     run_main(build_line, Some(registry), Some(factory))
 }
-
 fn parse_fastpq_execution_mode(value: &str) -> Result<FastpqExecutionMode, String> {
     match value.trim().to_ascii_lowercase().as_str() {
         "cpu" => Ok(FastpqExecutionMode::Cpu),
@@ -14387,7 +13167,6 @@ fn parse_fastpq_execution_mode(value: &str) -> Result<FastpqExecutionMode, Strin
         _ => Err("expected MODE to be one of: cpu, gpu".to_string()),
     }
 }
-
 fn parse_fastpq_poseidon_mode(value: &str) -> Result<FastpqPoseidonMode, String> {
     match value.trim().to_ascii_lowercase().as_str() {
         "cpu" => Ok(FastpqPoseidonMode::Cpu),
@@ -14395,11 +13174,9 @@ fn parse_fastpq_poseidon_mode(value: &str) -> Result<FastpqPoseidonMode, String>
         _ => Err("expected MODE to be one of: cpu, gpu".to_string()),
     }
 }
-
 fn parse_args() -> Args {
     parse_args_from(env::args_os())
 }
-
 fn parse_args_from<I, T>(args: I) -> Args
 where
     I: IntoIterator<Item = T>,
@@ -14428,7 +13205,6 @@ where
     }));
     Args::parse_from(filtered)
 }
-
 #[cfg(feature = "telemetry")]
 #[derive(Clone)]
 struct FastpqDeviceLabels {
@@ -14436,7 +13212,6 @@ struct FastpqDeviceLabels {
     chip_family: Arc<str>,
     gpu_kind: Arc<str>,
 }
-
 #[cfg(feature = "telemetry")]
 impl FastpqDeviceLabels {
     fn from_config(config: &iroha_config::parameters::actual::Fastpq) -> Self {
@@ -14447,7 +13222,6 @@ impl FastpqDeviceLabels {
         }
     }
 }
-
 #[cfg(feature = "telemetry")]
 fn normalize_fastpq_label(label: Option<String>, fallback: &str) -> Arc<str> {
     label
@@ -14461,7 +13235,6 @@ fn normalize_fastpq_label(label: Option<String>, fallback: &str) -> Arc<str> {
         })
         .map_or_else(|| Arc::from(fallback), Arc::from)
 }
-
 #[cfg(feature = "telemetry")]
 fn install_fastpq_execution_mode_probe(labels: &FastpqDeviceLabels) {
     let telemetry_labels = labels.clone();
@@ -14478,7 +13251,6 @@ fn install_fastpq_execution_mode_probe(labels: &FastpqDeviceLabels) {
         );
     });
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn preflight_fastpq_bn254_poseidon_words(config: &iroha_config::parameters::actual::Fastpq) {
     if !fastpq_poseidon_word_preflight_enabled(config) {
@@ -14488,7 +13260,6 @@ fn preflight_fastpq_bn254_poseidon_words(config: &iroha_config::parameters::actu
         );
         return;
     }
-
     if fastpq_prover::preflight_bn254_poseidon_word_batches() {
         iroha_logger::info!(
             target: "fastpq",
@@ -14501,7 +13272,6 @@ fn preflight_fastpq_bn254_poseidon_words(config: &iroha_config::parameters::actu
         );
     }
 }
-
 #[cfg(feature = "fastpq-gpu")]
 fn fastpq_poseidon_word_preflight_enabled(
     config: &iroha_config::parameters::actual::Fastpq,
@@ -14511,7 +13281,6 @@ fn fastpq_poseidon_word_preflight_enabled(
         FastpqPoseidonMode::Gpu => true,
     }
 }
-
 #[cfg(feature = "telemetry")]
 fn install_fastpq_poseidon_probe(labels: &FastpqDeviceLabels) {
     let telemetry_labels = labels.clone();
@@ -14527,7 +13296,6 @@ fn install_fastpq_poseidon_probe(labels: &FastpqDeviceLabels) {
         );
     });
 }
-
 #[cfg(feature = "telemetry")]
 fn install_fastpq_gpu_event_probe(labels: &FastpqDeviceLabels) {
     let telemetry_labels = labels.clone();
@@ -14554,7 +13322,6 @@ fn install_fastpq_gpu_event_probe(labels: &FastpqDeviceLabels) {
         }
     });
 }
-
 #[cfg(all(feature = "telemetry", feature = "fastpq-gpu", target_os = "macos"))]
 fn install_fastpq_queue_probe(labels: FastpqDeviceLabels) {
     use fastpq_prover::{
@@ -14565,11 +13332,9 @@ fn install_fastpq_queue_probe(labels: FastpqDeviceLabels) {
         FastpqMetalQueueLaneSample, FastpqMetalQueueSample, global_or_default,
     };
     use std::{sync::Arc, thread, time::Duration};
-
     enable_queue_depth_stats(true);
     enable_lde_host_stats(true);
     let labels = Arc::new(labels);
-
     thread::Builder::new()
         .name("fastpq-queue-telemetry".into())
         .spawn(move || {
@@ -14617,7 +13382,6 @@ fn install_fastpq_queue_probe(labels: FastpqDeviceLabels) {
         })
         .expect("spawn FASTPQ Metal queue telemetry thread");
 }
-
 fn run_main(
     build_line: BuildLine,
     runtime_provider_registry: Option<&dyn IrohaRuntimeProviderRegistryV1>,
@@ -14626,25 +13390,19 @@ fn run_main(
     >,
 ) -> ReportResult<(), MainError> {
     let args = parse_args();
-
     let lang = i18n::detect_language(args.language.as_deref());
     i18n::init(lang);
-
     configure_reports(&args);
-
     if args.startup.trace_config {
         iroha_config::enable_tracing()
             .change_context(MainError::TraceConfigSetup)
             .attach("was enabled by `--trace-config` argument")?;
     }
-
     // Ensure the instruction registry is initialized **before** we attempt to
     // read and decode the genesis block. Without this call, decoding the
-    // embedded `InstructionBox` values would panic with "instruction registry
-    // is not initialized".
+    // embedded `InstructionBox` values would panic with "instruction registry is not initialized".
     init_genesis_instruction_registry();
     init_query_registry();
-
     let (mut config, genesis) =
         read_config_and_genesis(&args).change_context(MainError::Config).attach_with(|| {
             args.config.as_ref().map_or_else(
@@ -14652,7 +13410,6 @@ fn run_main(
                 |path| format!("config path is specified by `--config` arg: {}", path.display()),
             )
         })?;
-
     enforce_build_line(build_line, &mut config)?;
     if args.startup.check_config {
         let qualification_seal_target = args
@@ -14727,7 +13484,6 @@ fn run_main(
         protocol_version = u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION),
         "Resolved build line; Sumeragi v2 data availability is mandatory"
     );
-
     #[cfg(feature = "telemetry")]
     let fastpq_device_labels = FastpqDeviceLabels::from_config(&config.zk.fastpq);
     #[cfg(feature = "telemetry")]
@@ -14738,7 +13494,6 @@ fn run_main(
     install_fastpq_gpu_event_probe(&fastpq_device_labels);
     #[cfg(all(feature = "telemetry", feature = "fastpq-gpu", target_os = "macos"))]
     install_fastpq_queue_probe(fastpq_device_labels.clone());
-
     // Concurrency configuration: set global Rayon pool and IVM scheduler limits.
     let min = if config.concurrency.scheduler_min_threads == 0 {
         // auto (physical cores) — defer to IVM internals
@@ -14774,7 +13529,6 @@ fn run_main(
         .build()
         .map_err(Report::from)
         .change_context(MainError::IrohaStart)?;
-
     let result = rt.block_on(run_node(
         config,
         genesis,
@@ -14784,7 +13538,6 @@ fn run_main(
     rt.shutdown_timeout(NODE_RUNTIME_SHUTDOWN_TIMEOUT);
     result
 }
-
 /// Pinned, validated destination for one root-owned catalog qualification seal.
 ///
 /// Preparation happens before the expensive qualification pass and keeps the
@@ -14800,10 +13553,8 @@ struct QualificationSealPublicationTarget {
     #[cfg(unix)]
     expected_uid: u32,
 }
-
 #[cfg(target_os = "macos")]
 const QUALIFICATION_SEAL_MACOS_ACL_COMMAND_MAX_OUTPUT_BYTES: usize = 64 * 1024;
-
 #[cfg(target_os = "macos")]
 fn run_bounded_macos_acl_command(
     program: &str,
@@ -14840,7 +13591,6 @@ fn run_bounded_macos_acl_command(
     }
     Ok(output)
 }
-
 #[cfg(target_os = "macos")]
 fn require_no_macos_extended_acl(path: &Path, label: &str) -> Result<(), String> {
     let output = run_bounded_macos_acl_command("/bin/ls", "-ldeq", path, label)?;
@@ -14853,7 +13603,6 @@ fn require_no_macos_extended_acl(path: &Path, label: &str) -> Result<(), String>
     }
     Ok(())
 }
-
 #[cfg(target_os = "macos")]
 fn clear_macos_extended_acl(path: &Path, label: &str) -> Result<(), String> {
     let output = run_bounded_macos_acl_command("/bin/chmod", "-N", path, label)?;
@@ -14865,11 +13614,9 @@ fn clear_macos_extended_acl(path: &Path, label: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 #[cfg(target_os = "macos")]
 fn same_qualification_seal_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-
     left.dev() == right.dev()
         && left.ino() == right.ino()
         && left.mode() == right.mode()
@@ -14882,7 +13629,6 @@ fn same_qualification_seal_metadata(left: &fs::Metadata, right: &fs::Metadata) -
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(target_os = "macos")]
 fn require_acl_free_pinned_path(opened: &fs::File, path: &Path, label: &str) -> Result<(), String> {
     let opened_before = opened
@@ -14916,7 +13662,6 @@ fn require_acl_free_pinned_path(opened: &fs::File, path: &Path, label: &str) -> 
     }
     Ok(())
 }
-
 impl QualificationSealPublicationTarget {
     fn prepare(config: &Config, requested_path: &Path) -> Result<Self, String> {
         let configured_path = config
@@ -14938,7 +13683,6 @@ impl QualificationSealPublicationTarget {
             ));
         }
         validate_qualification_seal_directory_separation(config, requested_path)?;
-
         #[cfg(unix)]
         {
             let effective_uid = rustix::process::geteuid().as_raw();
@@ -14958,12 +13702,10 @@ impl QualificationSealPublicationTarget {
             )
         }
     }
-
     #[must_use]
     fn path(&self) -> &Path {
         &self.path
     }
-
     fn publish_and_verify(
         self,
         config: &Config,
@@ -14998,11 +13740,9 @@ impl QualificationSealPublicationTarget {
             )
         }
     }
-
     #[cfg(unix)]
     fn prepare_for_owner(path: &Path, expected_uid: u32) -> Result<Self, String> {
         use std::os::unix::fs::MetadataExt as _;
-
         validate_canonical_absolute_path(path, "qualification seal path")?;
         let file_name = path
             .file_name()
@@ -15013,7 +13753,6 @@ impl QualificationSealPublicationTarget {
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
             .ok_or_else(|| "qualification seal path must have an absolute parent".to_owned())?;
-
         let mut ancestors = parent_path.ancestors().collect::<Vec<_>>();
         ancestors.reverse();
         for ancestor in ancestors {
@@ -15059,7 +13798,6 @@ impl QualificationSealPublicationTarget {
                 }
             }
         }
-
         let direct_parent = fs::symlink_metadata(parent_path).map_err(|error| {
             format!(
                 "failed to inspect qualification seal destination directory `{}`: {error}",
@@ -15072,7 +13810,6 @@ impl QualificationSealPublicationTarget {
                 parent_path.display()
             ));
         }
-
         let parent = fs::File::from(
             rustix::fs::open(
                 parent_path,
@@ -15127,7 +13864,6 @@ impl QualificationSealPublicationTarget {
                 ));
             }
         }
-
         Ok(Self {
             path: path.to_owned(),
             parent,
@@ -15135,7 +13871,6 @@ impl QualificationSealPublicationTarget {
             expected_uid,
         })
     }
-
     #[cfg(unix)]
     #[allow(clippy::too_many_lines)]
     fn publish_bytes_and_verify(
@@ -15147,12 +13882,10 @@ impl QualificationSealPublicationTarget {
             io::{Read as _, Seek as _, SeekFrom, Write as _},
             os::unix::fs::MetadataExt as _,
         };
-
         if canonical_bytes.is_empty() {
             return Err("canonical qualification seal bytes must not be empty".to_owned());
         }
         self.verify_parent_identity()?;
-
         let mut nonce = [0_u8; 16];
         rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut nonce).map_err(|error| {
             format!(
@@ -15182,7 +13915,6 @@ impl QualificationSealPublicationTarget {
                 format!("failed to create exclusive qualification seal staging file: {error}")
             })?,
         );
-
         let staged_result = (|| -> Result<(u64, u64), String> {
             staging.write_all(canonical_bytes).map_err(|error| {
                 format!("failed to write qualification seal staging file: {error}")
@@ -15201,7 +13933,6 @@ impl QualificationSealPublicationTarget {
             staging.sync_all().map_err(|error| {
                 format!("failed to sync immutable qualification seal staging file: {error}")
             })?;
-
             let before_acl_clear = staging.metadata().map_err(|error| {
                 format!("failed to inspect qualification seal staging file: {error}")
             })?;
@@ -15230,7 +13961,6 @@ impl QualificationSealPublicationTarget {
                     "qualification seal staging file",
                 )?;
             }
-
             let metadata = staging.metadata().map_err(|error| {
                 format!("failed to inspect ACL-free qualification seal staging file: {error}")
             })?;
@@ -15262,7 +13992,6 @@ impl QualificationSealPublicationTarget {
                         .to_owned(),
                 );
             }
-
             staging.seek(SeekFrom::Start(0)).map_err(|error| {
                 format!("failed to rewind qualification seal staging file: {error}")
             })?;
@@ -15299,7 +14028,6 @@ impl QualificationSealPublicationTarget {
             }
             Ok((metadata.dev(), metadata.ino()))
         })();
-
         let (staged_device, staged_inode) = match staged_result {
             Ok(identity) => identity,
             Err(error) => {
@@ -15310,7 +14038,6 @@ impl QualificationSealPublicationTarget {
                 return Err(error);
             }
         };
-
         if let Err(error) = rustix::fs::renameat_with(
             &self.parent,
             &staging_name,
@@ -15325,7 +14052,6 @@ impl QualificationSealPublicationTarget {
                 "failed to publish qualification seal without replacement: {error}"
             ));
         }
-
         let final_result = (|| -> Result<(), String> {
             let published = rustix::fs::statat(
                 &self.parent,
@@ -15352,7 +14078,6 @@ impl QualificationSealPublicationTarget {
             verify_final(&self.path)?;
             self.verify_parent_identity()
         })();
-
         if let Err(error) = final_result {
             let cleanup = match rustix::fs::statat(
                 &self.parent,
@@ -15394,14 +14119,11 @@ impl QualificationSealPublicationTarget {
                 )),
             };
         }
-
         Ok(())
     }
-
     #[cfg(unix)]
     fn verify_parent_identity(&self) -> Result<(), String> {
         use std::os::unix::fs::MetadataExt as _;
-
         let parent_path = self
             .path
             .parent()
@@ -15433,7 +14155,6 @@ impl QualificationSealPublicationTarget {
         Ok(())
     }
 }
-
 fn validate_canonical_absolute_path(path: &Path, label: &str) -> Result<(), String> {
     if !path.is_absolute() {
         return Err(format!("{label} must be absolute: {}", path.display()));
@@ -15451,7 +14172,6 @@ fn validate_canonical_absolute_path(path: &Path, label: &str) -> Result<(), Stri
     }
     Ok(())
 }
-
 fn validate_qualification_seal_directory_separation(
     config: &Config,
     seal_path: &Path,
@@ -15492,7 +14212,6 @@ fn validate_qualification_seal_directory_separation(
     }
     Ok(())
 }
-
 fn validate_config_for_check(
     config: &Config,
     genesis: Option<&GenesisBlock>,
@@ -15506,13 +14225,11 @@ fn validate_config_for_check(
         .map_err(Report::new)
         .change_context(MainError::Config)
         .attach("failed to validate the public runtime-provider binding catalog")?;
-
     if build_kagemusha_qualification_seal && genesis.is_none() {
         return Err(Report::new(MainError::Config).attach(
             "`--write-kagemusha-catalog-qualification-seal` requires locally available genesis so the seal is published only after full Kagemusha release and genesis validation",
         ));
     }
-
     let (catalog, qualification_seal) = if build_kagemusha_qualification_seal {
         let (catalog, seal) = load_and_build_configured_kagemusha_catalog_qualification_seal(
             config,
@@ -15531,7 +14248,6 @@ fn validate_config_for_check(
         })?;
         (catalog, None)
     };
-
     let Some(genesis) = genesis else {
         // Runtime startup can use an exact configured genesis hash with the
         // canonical body already persisted in Kura, or an authenticated
@@ -15539,7 +14255,6 @@ fn validate_config_for_check(
         // are complete even though body-level validation is pending.
         return Ok(None);
     };
-
     let configured_key = &config.genesis.public_key;
     let embedded_key =
         genesis_public_key_from_genesis_block(genesis).change_context(MainError::Config)?;
@@ -15548,7 +14263,6 @@ fn validate_config_for_check(
             "genesis authority `{embedded_key}` does not match configured genesis.public_key `{configured_key}`"
         )));
     }
-
     if genesis.0.hash() != config.genesis.expected_hash {
         return Err(Report::new(MainError::Config).attach(format!(
             "local genesis hash {} does not match configured genesis.expected_hash {}",
@@ -15556,12 +14270,10 @@ fn validate_config_for_check(
             config.genesis.expected_hash,
         )));
     }
-
     let genesis_account = AccountId::new(embedded_key);
     iroha_core::validate_genesis_block(&genesis.0, &genesis_account)
         .map_err(Report::new)
         .change_context(MainError::Config)?;
-
     let (signed_mode, signed_parameters) = signed_v2_genesis_context_metadata(genesis)
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
     let config_caps =
@@ -15588,10 +14300,8 @@ fn validate_config_for_check(
         block_cadence_ms,
         catalog,
     )?;
-
     Ok(qualification_seal)
 }
-
 fn load_configured_kagemusha_release_catalog(
     config: &Config,
 ) -> Result<iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4, String> {
@@ -15601,7 +14311,6 @@ fn load_configured_kagemusha_release_catalog(
     )
     .map_err(|error| format!("failed to authenticate Kagemusha V4 release catalog: {error}"))
 }
-
 fn load_and_build_configured_kagemusha_catalog_qualification_seal(
     config: &Config,
 ) -> Result<
@@ -15643,7 +14352,6 @@ fn load_and_build_configured_kagemusha_catalog_qualification_seal(
         ),
     }
 }
-
 fn install_configured_kagemusha_release_catalog(
     state: &mut State,
     config: &Config,
@@ -15651,11 +14359,9 @@ fn install_configured_kagemusha_release_catalog(
     state.set_kagemusha_release_catalog(load_configured_kagemusha_release_catalog(config)?);
     Ok(())
 }
-
 struct DisposableValidationRoot {
     path: PathBuf,
 }
-
 impl DisposableValidationRoot {
     fn create() -> std::io::Result<Self> {
         let parent = env::temp_dir();
@@ -15689,12 +14395,10 @@ impl DisposableValidationRoot {
             "failed to allocate a unique temporary validation directory after 32 attempts",
         ))
     }
-
     fn path(&self) -> &Path {
         &self.path
     }
 }
-
 impl Drop for DisposableValidationRoot {
     fn drop(&mut self) {
         if let Err(error) = fs::remove_dir_all(&self.path)
@@ -15708,7 +14412,6 @@ impl Drop for DisposableValidationRoot {
         }
     }
 }
-
 fn open_disposable_validation_kura(
     config: &Config,
     validation_root: &DisposableValidationRoot,
@@ -15736,7 +14439,6 @@ fn open_disposable_validation_kura(
     }
     Ok(kura)
 }
-
 /// Execute a locally available genesis against a disposable state overlay.
 ///
 /// This mirrors the fresh-node staging boundary closely enough to catch instruction-order,
@@ -15757,7 +14459,6 @@ fn validate_genesis_execution_offline(
         ))
     })?;
     let kura = open_disposable_validation_kura(config, &validation_root)?;
-
     let mut world = World::with(
         [genesis_domain(config.genesis.public_key.clone())],
         [genesis_account(config.genesis.public_key.clone())],
@@ -15795,7 +14496,6 @@ fn validate_genesis_execution_offline(
             ))
         })?;
     state.install_lane_manifests(&frozen_lane_manifests);
-
     let signed_voters =
         iroha_core::sumeragi::signed_genesis_voting_peers(genesis).map_err(|error| {
             Report::new(MainError::Config).attach(format!(
@@ -15818,7 +14518,6 @@ fn validate_genesis_execution_offline(
         Report::new(MainError::Config)
             .attach(format!("genesis instruction execution failed: {error}"))
     })?;
-
     let staged_block_cadence_ms = staged
         .world()
         .parameters()
@@ -15841,15 +14540,12 @@ fn validate_genesis_execution_offline(
             "failed to freeze staged Sumeragi v2 genesis: {error}"
         ))
     })?;
-
     Ok(())
 }
-
 fn enforce_build_line(build_line: BuildLine, config: &mut Config) -> ReportResult<(), MainError> {
     if build_line.is_iroha3() {
         return Ok(());
     }
-
     let mut disarmed = Vec::new();
     if config.streaming.soranet.enabled {
         config.streaming.soranet.enabled = false;
@@ -15863,35 +14559,29 @@ fn enforce_build_line(build_line: BuildLine, config: &mut Config) -> ReportResul
         config.torii.sorafs_discovery.discovery_enabled = false;
         disarmed.push("torii.sorafs_discovery.discovery_enabled");
     }
-
     let sora_features = config.uses_sora_features();
     let mut fatal = Vec::new();
     if sora_features {
         fatal.push("Nexus/multi-dataspace/SoraFS runtime");
     }
-
     if config.nexus.enabled && !sora_features {
         config.nexus.enabled = false;
         disarmed.push("nexus.enabled");
     }
-
     if !fatal.is_empty() {
         return Err(Report::new(MainError::Config).attach(format!(
             "Iroha 2 build forbids Nexus/Sora features; disable the following: {}",
             fatal.join(", ")
         )));
     }
-
     if !disarmed.is_empty() {
         eprintln!(
             "Iroha 2 build disabled Sora-only features at startup: {}",
             disarmed.join(", ")
         );
     }
-
     Ok(())
 }
-
 fn parse_confidential_registry_hash(payload: &Json) -> ReportResult<Option<[u8; 32]>, MainError> {
     let meta = decode_confidential_registry_meta(payload).map_err(|err| {
         Report::new(MainError::Config).attach(format!(
@@ -15920,7 +14610,6 @@ fn parse_confidential_registry_hash(payload: &Json) -> ReportResult<Option<[u8; 
         Ok(None)
     }
 }
-
 fn build_consensus_config_caps(
     nexus: &iroha_config::parameters::actual::Nexus,
     compliance_policy_digest: Option<[u8; 32]>,
@@ -15937,7 +14626,6 @@ fn build_consensus_config_caps(
                 "failed to construct Nexus consensus-policy digest: {err}"
             ))
         })?;
-
     Ok(iroha_p2p::ConsensusConfigCaps {
         // The signed genesis/world projection replaces this bootstrap value
         // before the handshake is exposed to peers.
@@ -15947,7 +14635,6 @@ fn build_consensus_config_caps(
         ivm_gas_schedule_hash: ivm::gas::schedule_hash().into(),
     })
 }
-
 fn consensus_caps_from_genesis(
     genesis: &GenesisBlock,
     config_caps: &iroha_p2p::ConsensusConfigCaps,
@@ -15955,7 +14642,6 @@ fn consensus_caps_from_genesis(
 ) -> Option<(String, String, iroha_p2p::ConsensusHandshakeCaps, u64)> {
     let mut params = iroha_data_model::parameter::Parameters::default();
     let mut handshake_entries = Vec::new();
-
     for tx in genesis.0.external_transactions() {
         if let Executable::Instructions(batch) = tx.instructions() {
             for instr in batch {
@@ -15972,7 +14658,6 @@ fn consensus_caps_from_genesis(
             }
         }
     }
-
     let [entry] = handshake_entries.as_slice() else {
         return None;
     };
@@ -15992,7 +14677,6 @@ fn consensus_caps_from_genesis(
         ),
     };
     params.sumeragi.block_cadence_ms = entry.block_cadence_ms;
-
     let (mode_tag, consensus_params, computed_fingerprint) =
         consensus_entry_caps(entry, &params).ok()?;
     if entry.consensus_fingerprint.into_bytes() != computed_fingerprint {
@@ -16008,7 +14692,6 @@ fn consensus_caps_from_genesis(
         .ok()?
         .fingerprint()
         .into();
-
     Some((
         mode_tag.clone(),
         expected_domain.to_owned(),
@@ -16021,7 +14704,6 @@ fn consensus_caps_from_genesis(
         consensus_params.block_cadence_ms.get(),
     ))
 }
-
 fn signed_v2_genesis_context_metadata(
     genesis: &GenesisBlock,
 ) -> core::result::Result<
@@ -16077,7 +14759,6 @@ fn signed_v2_genesis_context_metadata(
     };
     Ok((mode, metadata.sumeragi_v2))
 }
-
 fn consensus_entry_caps(
     entry: &ConsensusHandshakeMeta,
     params: &iroha_data_model::parameter::Parameters,
@@ -16105,15 +14786,12 @@ fn consensus_entry_caps(
             entry.sumeragi_v2,
         )
         .map_err(|error| eyre::eyre!(error))?;
-
     let fingerprint = iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint(
         &consensus_params,
     )
     .map_err(|error| eyre::eyre!(error))?;
-
     Ok((mode_tag.to_string(), consensus_params, fingerprint))
 }
-
 fn compute_consensus_handshake_caps(
     world: &impl iroha_core::state::WorldReadOnly,
     height: u64,
@@ -16135,7 +14813,6 @@ fn compute_consensus_handshake_caps(
             .attach(format!("invalid shared Sumeragi v2 configuration: {error}"))
     })
 }
-
 #[allow(clippy::too_many_lines)]
 fn verify_genesis_metadata(
     genesis: &GenesisBlock,
@@ -16172,7 +14849,6 @@ fn verify_genesis_metadata(
             }
         }
     }
-
     let mut handshake_entries = Vec::new();
     for set_param in instructions
         .iter()
@@ -16195,7 +14871,6 @@ fn verify_genesis_metadata(
             "genesis block missing consensus_handshake_meta parameter; regenerate genesis with consensus metadata populated",
         ));
     }
-
     let expected_mode = if mode_tag == iroha_core::sumeragi::consensus::PERMISSIONED_TAG {
         iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned
     } else if mode_tag == iroha_core::sumeragi::consensus::NPOS_TAG {
@@ -16204,7 +14879,6 @@ fn verify_genesis_metadata(
         return Err(Report::new(MainError::Config)
             .attach(format!("unknown consensus mode tag `{mode_tag}`")));
     };
-
     let expected_fp_hex = hex::encode(consensus_caps.consensus_fingerprint);
     let mut matched_meta: Option<ConsensusHandshakeMeta> = None;
     for meta in &handshake_entries {
@@ -16237,7 +14911,6 @@ fn verify_genesis_metadata(
             "none of the consensus_handshake_meta entries match the authenticated startup context (expected consensus_mode `{expected_mode:?}`, proto v{proto_version}, fingerprint 0x{expected_fp_hex}`); entries observed: {entries_summary}"
         )));
     };
-
     let mut params = iroha_data_model::parameter::Parameters::default();
     for set_param in instructions
         .iter()
@@ -16246,7 +14919,6 @@ fn verify_genesis_metadata(
         params.set_parameter(set_param.inner().clone());
     }
     params.sumeragi.block_cadence_ms = matched_meta.block_cadence_ms;
-
     let crypto_manifest_payload = instructions
         .iter()
         .filter_map(|instr| instr.as_any().downcast_ref::<SetParameter>())
@@ -16272,7 +14944,6 @@ fn verify_genesis_metadata(
         })?;
     ensure_crypto_snapshot_matches_config(&manifest_crypto, config)
         .map_err(|err| Report::new(MainError::Config).attach(err))?;
-
     let mode = if mode_tag == iroha_core::sumeragi::consensus::NPOS_TAG {
         iroha_data_model::block::consensus_v2::ConsensusMode::Npos
     } else {
@@ -16296,7 +14967,6 @@ fn verify_genesis_metadata(
             hex::encode(computed_fp)
         )));
     }
-
     let expected_vk_hash = compute_genesis_vk_set_hash(instructions.iter()).map_err(|err| {
         Report::new(MainError::Config).attach(format!(
             "failed to evaluate confidential registry instructions in genesis: {err}"
@@ -16333,7 +15003,6 @@ fn verify_genesis_metadata(
             "genesis confidential registry root mismatch: manifest {declared} vs expected {expected}"
         )));
     }
-
     let mut genesis_peers: BTreeMap<PeerId, RegisterPeerWithPop> = BTreeMap::new();
     for register in instructions
         .iter()
@@ -16349,7 +15018,6 @@ fn verify_genesis_metadata(
             )));
         }
     }
-
     let trusted = config.common.trusted_peers.value();
     let expected_validators = filter_validators_from_trusted(trusted);
     if expected_validators.is_empty() {
@@ -16361,7 +15029,6 @@ fn verify_genesis_metadata(
         }
         return Ok(());
     }
-
     for peer_id in expected_validators {
         let entry = genesis_peers
             .remove(&peer_id)
@@ -16376,7 +15043,6 @@ fn verify_genesis_metadata(
                     "genesis lacks RegisterPeerWithPop for validator {peer_id}"
                 ))
             })?;
-
         let bls_pk = peer_id.public_key();
         match bls_pk.try_algorithm() {
             Ok(Algorithm::BlsNormal) => {}
@@ -16407,7 +15073,6 @@ fn verify_genesis_metadata(
             )));
         }
     }
-
     if !genesis_peers.is_empty() {
         let extras = genesis_peers
             .keys()
@@ -16418,10 +15083,8 @@ fn verify_genesis_metadata(
             "genesis encodes unexpected validators with PoP: {extras}"
         )));
     }
-
     Ok(())
 }
-
 async fn run_node(
     config: Config,
     genesis: Option<GenesisBlock>,
@@ -16435,14 +15098,11 @@ async fn run_node(
         Report::new(MainError::Logger).attach(err)
     })?;
     validate_config(&config).change_context(MainError::Config)?;
-
     set_banner_enabled(config.ivm.banner.show);
-
     // Print a retro Norito banner with applied settings when enabled.
     if config.ivm.banner.show {
         log_norito_banner(&config);
     }
-
     iroha_logger::info!(
         version = env!("CARGO_PKG_VERSION"),
         git_commit_sha = VERGEN_GIT_SHA,
@@ -16453,14 +15113,11 @@ async fn run_node(
         "{}",
         i18n::t("info.welcome"),
     );
-
     if genesis.is_some() {
         iroha_logger::debug!("Submitting genesis.");
     }
-
     #[cfg(feature = "beep")]
     startup_beep(config.ivm.banner.beep);
-
     let shutdown_on_panic = ShutdownSignal::new();
     let default_hook = std::panic::take_hook();
     let signal_clone = shutdown_on_panic.clone();
@@ -16483,7 +15140,6 @@ async fn run_node(
         }
         default_hook(info);
     }));
-
     let start = Iroha::start_with_runtime_deps(
         config,
         genesis,
@@ -16497,14 +15153,12 @@ async fn run_node(
         .change_context(MainError::IrohaStart)?;
     supervisor_fut.await.change_context(MainError::IrohaRun)
 }
-
 /// Print a startup banner with applied Norito codec settings in a retro style.
 fn log_norito_banner(cfg: &Config) {
     // Snapshot core settings
     let n = &cfg.norito;
     let gpu_allowed = n.allow_gpu_compression;
     let gpu_probe_status = if gpu_allowed { "deferred" } else { "disabled" };
-
     // UTF‑8 box drawing and kana render nicely in modern terminals.
     let art = r"
 ╔══════════════════════════════════════════════════════════════════════╗
@@ -16517,7 +15171,6 @@ fn log_norito_banner(cfg: &Config) {
 ║              └────────────────────────────────────┘                  ║
 ╚══════════════════════════════════════════════════════════════════════╝
 ";
-
     // Compose settings block
     let msg = format!(
         "\n{}\nNorito settings:\n  - max_archive_len: {}\n  - gpu_offload_allowed: {}\n  - gpu_backend_probe: {}\n",
@@ -16526,10 +15179,8 @@ fn log_norito_banner(cfg: &Config) {
         gpu_allowed,
         gpu_probe_status,
     );
-
     iroha_logger::info!(target: "norito", "{}", msg);
 }
-
 #[cfg(test)]
 mod tests {
     use super::build_line_tests::{
@@ -16538,19 +15189,16 @@ mod tests {
     #[allow(unused_imports)]
     use super::*;
     use iroha_config_base::toml::TomlSource;
-
     const GOVERNANCE_DAG_PUBLISHER_HANDLE: &str = "pkcs11:governance-dag-publisher";
     const GOVERNANCE_DAG_PUBLISHER_PEER_ID: &str = "governance-dag-publisher";
     const GOVERNANCE_DAG_PUBLISHER_POLICY_DIGEST: [u8; 32] = [0xA5; 32];
     const GOVERNANCE_DAG_CHECKPOINT_STORE_HANDLE: &str =
         "sealed:governance-dag:producer-checkpoint";
     const GOVERNANCE_DAG_CHECKPOINT_STORE_POLICY_DIGEST: [u8; 32] = [0xA6; 32];
-
     #[derive(Debug)]
     struct GovernanceDagPublisherBindingSigner {
         key_pair: iroha_crypto::KeyPair,
     }
-
     impl GovernanceDagPublisherBindingSigner {
         fn from_seed(seed: u8) -> Self {
             Self {
@@ -16558,7 +15206,6 @@ mod tests {
                     .expect("derive Governance DAG publisher key"),
             }
         }
-
         fn public_key_bytes(&self) -> [u8; 32] {
             self.key_pair
                 .public_key()
@@ -16568,17 +15215,13 @@ mod tests {
                 .expect("Ed25519 public key has 32 bytes")
         }
     }
-
     include!("main_tests/governance_dag_publisher_binding_signer.rs");
-
     #[derive(Debug)]
     struct GovernanceDagCheckpointBindingStore;
-
     impl sorafs_node::GovernanceDagSealedCheckpointStore for GovernanceDagCheckpointBindingStore {
         fn handle(&self) -> &str {
             GOVERNANCE_DAG_CHECKPOINT_STORE_HANDLE
         }
-
         fn qualification(
             &self,
         ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
@@ -16589,14 +15232,12 @@ mod tests {
                 ),
             )
         }
-
         fn load(
             &self,
             _slot: sorafs_node::GovernanceDagSealedStateSlot,
         ) -> Result<Option<sorafs_node::GovernanceDagSealedStateRecord>, String> {
             Ok(None)
         }
-
         fn compare_and_swap(
             &self,
             _slot: sorafs_node::GovernanceDagSealedStateSlot,
@@ -16605,7 +15246,6 @@ mod tests {
         ) -> Result<(), String> {
             Ok(())
         }
-
         fn delete(
             &self,
             _slot: sorafs_node::GovernanceDagSealedStateSlot,
@@ -16614,11 +15254,9 @@ mod tests {
             Ok(())
         }
     }
-
     fn governance_dag_publisher_public_key(seed: u8) -> [u8; 32] {
         GovernanceDagPublisherBindingSigner::from_seed(seed).public_key_bytes()
     }
-
     fn governance_dag_service_storage(
         public_key: [u8; 32],
     ) -> iroha_config::parameters::actual::SorafsStorage {
@@ -16643,12 +15281,10 @@ mod tests {
         storage.governance_dag_service.publisher_public_key_hex = Some(public_key_hex);
         storage
     }
-
     #[cfg(target_os = "macos")]
     struct MacosAclGuard {
         path: PathBuf,
     }
-
     #[cfg(target_os = "macos")]
     impl Drop for MacosAclGuard {
         fn drop(&mut self) {
@@ -16658,7 +15294,6 @@ mod tests {
                 .status();
         }
     }
-
     #[cfg(target_os = "macos")]
     fn add_macos_acl(path: &Path, entry: &str) -> MacosAclGuard {
         let output = std::process::Command::new("/bin/chmod")
@@ -16677,21 +15312,17 @@ mod tests {
             path: path.to_path_buf(),
         }
     }
-
     #[test]
     fn high_priority_relay_subscribes_to_consensus_safety() {
         use iroha_p2p::network::{SubscriberFilter, message::Topic};
-
         assert_eq!(
             high_priority_relay_filter(),
             SubscriberFilter::topics([Topic::ConsensusSafety, Topic::Consensus, Topic::Control,])
         );
     }
-
     #[test]
     fn standard_launcher_does_not_derive_six_sorafs_authority_signers_from_node_key() {
         let dependencies = IrohaRuntimeDeps::default();
-
         assert!(dependencies.sorafs_stream_token_signer.is_none());
         assert!(dependencies.sorafs_proof_outcome_signer.is_none());
         assert!(dependencies.sorafs_repair_transaction_signer.is_none());
@@ -16757,14 +15388,12 @@ mod tests {
         );
         assert!(dependencies.sorafs_reputation_retention_authority.is_none());
     }
-
     #[test]
     fn governance_dag_service_accepts_exact_embedded_publisher_binding() {
         let signer = Arc::new(GovernanceDagPublisherBindingSigner::from_seed(0x51));
         let public_key = signer.public_key_bytes();
         let storage = governance_dag_service_storage(public_key);
         let runtime_deps = IrohaRuntimeDeps::default().with_sorafs_governance_dag_signer(signer);
-
         validate_governance_dag_service_publisher_binding(
             &storage,
             runtime_deps.sorafs_governance_dag_signer.as_deref(),
@@ -16785,7 +15414,6 @@ mod tests {
         );
         assert!(storage.governance_dag_dir.is_some());
     }
-
     #[test]
     fn disabled_governance_dag_service_leaves_shared_checkpoint_store_for_local_producer() {
         let signer = Arc::new(GovernanceDagPublisherBindingSigner::from_seed(0x57));
@@ -16797,10 +15425,8 @@ mod tests {
             .with_sorafs_governance_dag_checkpoint_store(Arc::new(
                 GovernanceDagCheckpointBindingStore,
             ));
-
         let launch = resolve_governance_dag_service_launch(&storage, &runtime_deps)
             .expect("disabled public service must leave producer-owned roles available");
-
         assert!(
             launch.is_none(),
             "disabled public service must not start a supervised service"
@@ -16812,7 +15438,6 @@ mod tests {
             "the same resolved checkpoint store remains available for NodeRuntimeDeps"
         );
     }
-
     #[test]
     fn governance_dag_publisher_binding_signer_produces_valid_ed25519_signatures() {
         let signer = GovernanceDagPublisherBindingSigner::from_seed(0x50);
@@ -16824,7 +15449,6 @@ mod tests {
             .expect("sign payload");
         let repeated = sorafs_node::GovernanceDagRuntimeSigner::sign(&signer, purpose, &payload)
             .expect("repeat signing");
-
         assert_eq!(signature, repeated);
         assert_eq!(
             sorafs_node::GovernanceDagRuntimeSigner::handle(&signer),
@@ -16834,7 +15458,6 @@ mod tests {
             .verify(signer.key_pair.public_key(), &payload)
             .expect("deterministic Governance DAG signature must verify");
     }
-
     #[test]
     fn governance_dag_service_rejects_substituted_publisher_configuration() {
         let signer = GovernanceDagPublisherBindingSigner::from_seed(0x52);
@@ -16842,7 +15465,6 @@ mod tests {
         let mut storage = governance_dag_service_storage(producer_public_key);
         storage.governance_dag_service.publisher_public_key_hex =
             Some(hex::encode(governance_dag_publisher_public_key(0x53)));
-
         let error = validate_governance_dag_service_publisher_binding(&storage, Some(&signer))
             .expect_err("substituted service publisher key must fail before state access");
         assert!(
@@ -16851,12 +15473,10 @@ mod tests {
                 .contains("does not match the embedded producer configuration")
         );
     }
-
     #[test]
     fn governance_dag_service_rejects_missing_or_substituted_runtime_signer() {
         let public_key = governance_dag_publisher_public_key(0x54);
         let storage = governance_dag_service_storage(public_key);
-
         let missing = resolve_governance_dag_service_launch(&storage, &IrohaRuntimeDeps::default())
             .expect_err("missing embedded producer signer must fail before state access");
         assert!(
@@ -16864,7 +15484,6 @@ mod tests {
                 .to_string()
                 .contains("requires the embedded producer runtime signer")
         );
-
         let substituted = GovernanceDagPublisherBindingSigner::from_seed(0x55);
         let error = validate_governance_dag_service_publisher_binding(&storage, Some(&substituted))
             .expect_err("substituted runtime signer must fail before state access");
@@ -16874,14 +15493,12 @@ mod tests {
                 .contains("does not match the embedded producer runtime signer")
         );
     }
-
     #[test]
     fn governance_dag_service_rejects_missing_embedded_producer_configuration() {
         let signer = GovernanceDagPublisherBindingSigner::from_seed(0x56);
         let public_key = signer.public_key_bytes();
         let mut storage = governance_dag_service_storage(public_key);
         storage.governance_dag_publisher_public_key_hex = None;
-
         let error = validate_governance_dag_service_publisher_binding(&storage, Some(&signer))
             .expect_err("missing embedded producer binding must fail before state access");
         assert!(
@@ -16890,7 +15507,6 @@ mod tests {
                 .contains("requires the embedded producer public-key binding")
         );
     }
-
     #[test]
     fn repository_iroha3_dev_default_config_requests_no_runtime_providers() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -16898,13 +15514,11 @@ mod tests {
         let config = load_unprovisioned_profile_for_inspection(&path);
         let bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
             .expect("project default provider bindings");
-
         assert!(
             bindings.is_empty(),
             "stock newcomer defaults must not require a deployment registry"
         );
     }
-
     #[test]
     fn reputation_runtime_provider_presence_fails_closed_in_both_modes() {
         assert!(validate_reputation_runtime_provider_presence(false, [false; 4]).is_ok());
@@ -16947,7 +15561,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn reputation_archive_presence_matches_runtime_enablement() {
         assert!(validate_reputation_archive_presence(false, false).is_ok());
@@ -16963,7 +15576,6 @@ mod tests {
             Err("disabled SoraFS reputation runtime rejects an unexpected Sumeragi archive")
         );
     }
-
     #[test]
     fn provider_ingest_archive_presence_matches_runtime_enablement() {
         assert!(validate_provider_ingest_archive_presence(false, false).is_ok());
@@ -16979,7 +15591,6 @@ mod tests {
             Err("disabled SoraFS provider-ingest runtime rejects an unexpected finalized archive")
         );
     }
-
     #[test]
     fn provider_attestation_journal_remains_fail_closed_until_activation_is_qualified() {
         assert!(validate_provider_attestation_journal_activation(false).is_ok());
@@ -16989,7 +15600,6 @@ mod tests {
                 "SoraFS provider-attestation journal capture is not yet activation-qualified; the concrete finalized-archive scanner, bounded store initialization, rollback-resistant time, approval signer, and authenticated inventory must be wired before enabling it"
             )
         );
-
         let startup = include_str!("main.rs")
             .split_once("pub(crate) async fn start_with_runtime_deps")
             .expect("runtime-dependency startup entry")
@@ -17005,7 +15615,6 @@ mod tests {
             "an unqualified capture request must fail before any supervised child starts"
         );
     }
-
     #[test]
     fn provider_ingest_archive_is_qualified_and_installed_before_runtime_startup() {
         let source = include_str!("main.rs");
@@ -17056,7 +15665,6 @@ mod tests {
             "provider ingest must consume the opaque state-free preflight token"
         );
     }
-
     #[test]
     fn enabled_reputation_runtime_has_no_validator_key_submitter_fallback() {
         let reputation_startup = include_str!("main.rs")
@@ -17083,7 +15691,6 @@ mod tests {
             "enabled reputation startup must pass the injected monotonic journal checkpoint provider"
         );
     }
-
     #[test]
     fn reputation_runtime_defers_assembly_until_archive_activation() {
         let source = include_str!("main.rs");
@@ -17112,14 +15719,12 @@ mod tests {
             "deferred assembly must retain the exact prepared activation probe"
         );
     }
-
     #[test]
     fn configured_appeal_finance_roles_have_exact_ordered_bindings() {
         use iroha_config::parameters::actual::{
             SorafsAppealFinanceCheckpointBinding, SorafsAppealFinanceSignerBinding,
         };
         use iroha_crypto::KeyPair;
-
         let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
             .expect("resolve repository default config");
         let signer_a = KeyPair::try_from_seed(vec![0xA1; 32], Algorithm::Ed25519)
@@ -17155,7 +15760,6 @@ mod tests {
             revision: 3,
             policy_digest: [0xA3; 32],
         });
-
         let bindings = IrohaRuntimeProviderBindingsV1::try_from_config(&config)
             .expect("project configured appeal-finance provider bindings");
         let observed: Vec<_> = bindings
@@ -17169,7 +15773,6 @@ mod tests {
                 )
             })
             .collect();
-
         assert_eq!(
             observed,
             vec![
@@ -17204,7 +15807,6 @@ mod tests {
             "multiple bindings for the appeal-finance signer role are intentional"
         );
     }
-
     #[test]
     fn standard_launcher_resolves_and_forwards_deployment_runtime_dependencies() {
         let compact_source: String = include_str!("main.rs")
@@ -17225,7 +15827,6 @@ mod tests {
             .split_once("fnlog_norito_banner(")
             .expect("run_node source boundary")
             .0;
-
         assert!(
             run_main_source.contains(
                 "runtime_provider_registry::resolve_runtime_deps(&config,runtime_provider_registry)"
@@ -17261,7 +15862,6 @@ mod tests {
                 .contains("letruntime_deps=IrohaRuntimeDeps::default();rt.block_on(run_node("),
             "standard CLI startup must not replace registry output with Default"
         );
-
         let validation = run_main_source
             .find("validate_config_offline(&config).change_context(MainError::Config)?")
             .expect("offline validation in run_main");
@@ -17287,14 +15887,12 @@ mod tests {
             "fixed-binding preflight must precede broker construction, and provider resolution must precede Tokio/node startup"
         );
     }
-
     #[test]
     fn explicit_musubi_private_factory_is_late_bound_and_supervised_fail_closed() {
         let compact_source: String = include_str!("main.rs")
             .chars()
             .filter(|character| !character.is_whitespace())
             .collect();
-
         assert!(
             compact_source.contains("run_main(build_line,None,None)"),
             "the stock launcher must not construct or start a private publication service"
@@ -17311,7 +15909,6 @@ mod tests {
             compact_source.contains("run_main(build_line,Some(registry),Some(factory))"),
             "the combined custom launcher must inject both deployment-owned dependencies and the late-bound publication factory"
         );
-
         let startup_source = compact_source
             .split_once("pub(crate)asyncfnstart_with_runtime_deps(")
             .expect("start_with_runtime_deps source")
@@ -17354,7 +15951,6 @@ mod tests {
             "the private factory must receive ready daemon handles after replay, start only after fallible signal setup, and join the node supervisor"
         );
     }
-
     #[test]
     fn standard_launcher_source_forbids_six_node_key_sorafs_signer_adaptations() {
         let compact_source: String = include_str!("main.rs")
@@ -17376,7 +15972,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn standard_launcher_forwards_external_sorafs_runtime_dependencies() {
         let compact_source: String = include_str!("main.rs")
@@ -17485,7 +16080,6 @@ mod tests {
             "unconfigured ACME automation must reject an injected client"
         );
     }
-
     #[test]
     fn standard_launcher_forwards_and_supervises_por_replay_archival() {
         let compact_source: String = include_str!("main.rs")
@@ -17510,7 +16104,6 @@ mod tests {
         let reputation_only_worker = compact_source
             .find("sorafs_por_replay_archive_runtime::start_reputation_reconciliation(")
             .expect("launcher starts PoR reputation reconciliation without optional archival");
-
         assert!(
             clone < inject
                 && inject < node
@@ -17527,7 +16120,6 @@ mod tests {
             "the reputation-only callback worker must use validated bounded runtime policy"
         );
     }
-
     #[test]
     fn standard_launcher_forwards_both_fenced_privacy_roles_to_the_node() {
         let source = include_str!("main.rs");
@@ -17588,9 +16180,7 @@ mod tests {
             "irohad must retain the raw producer checkpoint store inside its prebuilt node instead of injecting it into Torii a second time"
         );
     }
-
     include!("main/governance_dag_launcher_tests.rs");
-
     #[test]
     fn standard_launcher_binds_kura_local_peer_before_start() {
         let compact_source: String = include_str!("main.rs")
@@ -17613,7 +16203,6 @@ mod tests {
             "Kura eviction authority must bind the configured local PeerId exactly once before its runtime starts"
         );
     }
-
     #[test]
     fn standard_launcher_pop_runtime_uses_only_config_and_the_injected_registry() {
         let compact_source: String = include_str!("main.rs")
@@ -17651,45 +16240,36 @@ mod tests {
             );
         }
     }
-
     mod scheduler_banner {
         use super::*;
-
         #[test]
         fn formats_core_count() {
             assert_eq!(scheduler_banner_line(1), "Using 1 core");
             assert_eq!(scheduler_banner_line(4), "Using 4 cores");
         }
-
         #[test]
         fn clamps_zero_to_one_core() {
             assert_eq!(scheduler_banner_line(0), "Using 1 core");
         }
     }
-
     mod replay_startup_config {
         use super::*;
-
         #[test]
         fn installs_actual_zk_and_settlement_config_before_kura_replay() {
             let config_table = toml::toml! {
                 chain = "00000000-0000-0000-0000-000000000000"
                 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
                 private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
-
                 [network]
                 address = "addr:127.0.0.1:1337#8F78"
                 public_address = "addr:127.0.0.1:1337#8F78"
-
                 [genesis]
                 public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
                 file = "./genesis.signed.nrt"
                 expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-
                 [streaming]
                 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
                 identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
-
                 [torii]
                 address = "addr:127.0.0.1:8080#8942"
             };
@@ -17713,15 +16293,12 @@ mod tests {
                 offline_asset_definition_id.clone(),
                 offline_escrow_account_id.clone(),
             );
-
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let mut state = State::new_for_testing(World::new(), kura, query);
-
             install_zk_config_before_kura_replay(&mut state, &config)
                 .expect("fresh state accepts actual ZK configuration");
             apply_state_runtime_config_before_snapshot_auth(&mut state, &config);
-
             let installed = state.zk_snapshot();
             assert_eq!(
                 installed.sccp.max_pending_outbound_messages,
@@ -17742,11 +16319,9 @@ mod tests {
             );
         }
     }
-
     mod fastpq_overrides {
         use super::*;
         use iroha_config::parameters::actual::{Fastpq, FastpqExecutionMode, FastpqPoseidonMode};
-
         #[test]
         fn maps_metal_overrides_from_config() {
             let cfg = Fastpq {
@@ -17769,7 +16344,6 @@ mod tests {
                 metal_debug_enum: true,
                 metal_debug_fused: false,
             };
-
             let overrides = fastpq_metal_overrides_from_config(&cfg);
             assert_eq!(overrides.max_in_flight, Some(8));
             assert_eq!(overrides.threadgroup_size, Some(128));
@@ -17777,7 +16351,6 @@ mod tests {
             assert!(overrides.debug_enum);
             assert!(!overrides.debug_fused);
         }
-
         #[cfg(feature = "fastpq-gpu")]
         #[test]
         fn poseidon_word_preflight_respects_fastpq_config() {
@@ -17801,7 +16374,6 @@ mod tests {
                 metal_debug_enum: false,
                 metal_debug_fused: false,
             };
-
             assert!(!fastpq_poseidon_word_preflight_enabled(&cfg));
             cfg.poseidon_mode = FastpqPoseidonMode::Gpu;
             assert!(fastpq_poseidon_word_preflight_enabled(&cfg));
@@ -17809,10 +16381,8 @@ mod tests {
             assert!(!fastpq_poseidon_word_preflight_enabled(&cfg));
         }
     }
-
     mod torii_receipt_signer_selection {
         use super::*;
-
         #[test]
         fn default_is_stable_and_domain_separated_from_node_identity() {
             let node = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -17824,7 +16394,6 @@ mod tests {
             assert_eq!(first.public_key(), second.public_key());
             assert_ne!(first.public_key(), node.public_key());
         }
-
         #[test]
         fn different_node_identities_derive_different_receipt_signers() {
             let first_node = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -17835,7 +16404,6 @@ mod tests {
                 .expect("second checked receipt signer derivation should succeed");
             assert_ne!(first.public_key(), second.public_key());
         }
-
         #[test]
         fn preserves_configured_receipt_signer() {
             let configured = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -17846,18 +16414,16 @@ mod tests {
             assert_eq!(signer.algorithm(), Algorithm::Ed25519);
         }
     }
-
     mod relay_ingress {
         use super::*;
         use iroha_core::torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V5, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV5,
+            TORII_PROXY_REQUEST_VERSION_V6, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV6,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         };
         use iroha_crypto::Hash;
         use iroha_data_model::nexus::{DataSpaceId, LaneId};
-
         #[test]
         fn torii_proxy_frames_are_not_low_priority() {
             let route = ToriiRouteHintV1 {
@@ -17865,9 +16431,10 @@ mod tests {
                 dataspace_id: DataSpaceId::new(0),
             };
             let request =
-                iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV5 {
-                    schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+                iroha_core::NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV6 {
+                    schema_version: TORII_PROXY_REQUEST_VERSION_V6,
                     request_id: Hash::new(b"torii-proxy-request"),
+                    deadline_unix_ms: 1_900_000_000_000,
                     hop_count: 1,
                     max_hops: 3,
                     visited_peer_ids: Vec::new(),
@@ -17890,7 +16457,6 @@ mod tests {
                         body: Vec::new(),
                     },
                 }));
-
             assert!(!NetworkRelayShared::should_apply_low_priority_ingress(
                 &request
             ));
@@ -17899,10 +16465,8 @@ mod tests {
             ));
         }
     }
-
     mod norito_archive_len {
         use super::*;
-
         fn base_config() -> Config {
             let table = toml::toml! {
                 chain = "00000000-0000-0000-0000-000000000000"
@@ -17911,65 +16475,50 @@ mod tests {
                 trusted_peers_pop = [
                   { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
                 ]
-
                 [network]
                 address = "addr:127.0.0.1:1337#8F78"
                 public_address = "addr:127.0.0.1:1337#8F78"
-
                 [torii]
                 address = "addr:127.0.0.1:8080#8942"
-
                 [genesis]
                 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-
                 [streaming]
                 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
                 identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
             };
-
             Config::from_toml_source(TomlSource::inline(table)).expect("base config")
         }
-
         #[test]
         fn resolves_to_network_frame_when_larger() {
             let mut config = base_config();
             config.norito.max_archive_len = 32 * 1024 * 1024;
             config.network.max_frame_bytes = 128 * 1024 * 1024;
-
             let resolved = resolve_norito_max_archive_len(&config);
-
             assert_eq!(resolved, 128 * 1024 * 1024);
         }
-
         #[test]
         fn preserves_requested_when_already_largest() {
             let mut config = base_config();
             config.norito.max_archive_len = 256 * 1024 * 1024;
             config.network.max_frame_bytes = 64 * 1024 * 1024;
-
             let resolved = resolve_norito_max_archive_len(&config);
-
             assert_eq!(resolved, 256 * 1024 * 1024);
         }
     }
-
     mod consensus_ingress_limits {
         use super::*;
         use std::num::NonZeroU32;
-
         #[test]
         fn bulk_scale_factor_scales_for_faster_block_time() {
             let scale = ConsensusIngressLimiter::bulk_scale_factor(Duration::from_millis(50));
             assert_eq!(scale, 20);
         }
-
         #[test]
         fn bulk_scale_factor_clamps_for_slower_pipelines() {
             let scale = ConsensusIngressLimiter::bulk_scale_factor(Duration::from_secs(5));
             assert_eq!(scale, 1);
         }
-
         #[test]
         fn bucket_config_scaled_multiplies_rate_and_burst() {
             let cfg = BucketConfig {
@@ -17981,7 +16530,6 @@ mod tests {
             assert_eq!(scaled.burst.get(), 6);
         }
     }
-
     mod relay_fairness {
         use super::*;
         use crate::network_relay_tests::{
@@ -17991,14 +16539,12 @@ mod tests {
         use iroha_data_model::block::consensus_v2;
         use iroha_p2p::network::{NetworkReplyRoute, NetworkReplyRouteTestFixture};
         use tokio::sync::mpsc;
-
         fn relay_source(class: SumeragiRelayClass) -> SumeragiRelaySource {
             SumeragiRelaySource {
                 class,
                 via: PeerId::new(KeyPair::random().public_key().clone()),
             }
         }
-
         fn relay_geometry(
             subscriber_base: usize,
             network_per_lane: usize,
@@ -18011,7 +16557,6 @@ mod tests {
             )
             .expect("test relay geometry must be exactly representable")
         }
-
         fn relay_with_upstream_source_credit(
             authenticated_peer: Peer,
             semantic_peer: Option<Peer>,
@@ -18029,14 +16574,12 @@ mod tests {
             );
             relay
         }
-
         struct DaemonCreditSourceFixture {
             authenticated_via: PeerId,
             responsive_via: PeerId,
             upstream: Arc<Semaphore>,
             responsive_upstream: Arc<Semaphore>,
         }
-
         fn enqueue_daemon_credit_source_fixture(
             high: &mpsc::Sender<RelayWorkItem>,
             network_per_lane: usize,
@@ -18061,7 +16604,6 @@ mod tests {
             }
             high.try_send(relay_with_upstream_source_credit(via, None, 9, &upstream))
                 .expect("A9 remains behind A1..A8 on the same high-priority lane");
-
             let responsive = sample_peer();
             let responsive_via = responsive.id().clone();
             let responsive_upstream = Arc::new(Semaphore::new(1));
@@ -18079,7 +16621,6 @@ mod tests {
                 responsive_upstream,
             }
         }
-
         async fn observe_daemon_credit_delivery_ranks(
             receiver: &mut mpsc::Receiver<CreditedSumeragiRelayWorkItem>,
             authenticated_via: &PeerId,
@@ -18105,7 +16646,6 @@ mod tests {
             }
             (responsive_rank, ninth_rank)
         }
-
         fn indexed_v2_vote_block_message(height: u64, marker: u8) -> BlockMessage {
             BlockMessage::V2(consensus_v2::ConsensusMessageV2::new(
                 consensus_v2::ConsensusMessageV2Payload::Vote(consensus_v2::Vote {
@@ -18126,7 +16666,6 @@ mod tests {
                 }),
             ))
         }
-
         async fn prepared_v2_relay_work(
             peer: Peer,
             message: BlockMessage,
@@ -18186,7 +16725,6 @@ mod tests {
                 route,
             )
         }
-
         fn exact_retry(attempt: SumeragiRelayAttempt) -> PreparedSumeragiRelayWork {
             match attempt {
                 SumeragiRelayAttempt::Retry(work) => work,
@@ -18195,7 +16733,6 @@ mod tests {
                 }
             }
         }
-
         fn finish_delivered_attempt(attempt: SumeragiRelayAttempt) {
             match attempt {
                 SumeragiRelayAttempt::Terminal {
@@ -18217,7 +16754,6 @@ mod tests {
                 }
             }
         }
-
         fn retry_next_exact_relay(
             retained: &mut FairRetainedQueue<SumeragiRelaySource, PreparedSumeragiRelayWork>,
             expected_source: &SumeragiRelaySource,
@@ -18243,7 +16779,6 @@ mod tests {
                     .any(|work| work.reply_route.same_delivery(expected_route))
             );
         }
-
         fn finish_next_delivered_relay(
             retained: &mut FairRetainedQueue<SumeragiRelaySource, PreparedSumeragiRelayWork>,
             expected_source: &SumeragiRelaySource,
@@ -18262,7 +16797,6 @@ mod tests {
                 selection.item,
             ));
         }
-
         fn fill_real_inner_ingress(handle: &SumeragiHandle, capacity: usize) {
             for offset in 0..capacity {
                 let offset = u8::try_from(offset).expect("fixture offset fits u8");
@@ -18278,7 +16812,6 @@ mod tests {
                 ));
             }
         }
-
         fn drain_real_inner_ingress(
             harness: &iroha_core::sumeragi::SumeragiIngressTestHarness,
             count: usize,
@@ -18291,7 +16824,6 @@ mod tests {
                 );
             }
         }
-
         #[test]
         fn retained_sumeragi_geometry_is_checked() {
             let zero_geometry = SumeragiRelayCapacityGeometry {
@@ -18332,7 +16864,6 @@ mod tests {
             assert_eq!(sumeragi_relay_class_capacity(1), Some(1));
             assert_eq!(sumeragi_relay_dispatcher_capacity(1), Some(2));
             assert_eq!(sumeragi_relay_dispatcher_capacity(usize::MAX), None);
-
             let geometry = relay_geometry(1, 1, 4);
             let source = relay_source(SumeragiRelayClass::V2);
             assert!(sumeragi_rehydrated_ownership_matches(
@@ -18353,7 +16884,6 @@ mod tests {
                 geometry,
             ));
         }
-
         #[test]
         fn retained_sumeragi_dispatcher_only_exits_after_drained_shutdown() {
             assert_eq!(
@@ -18398,7 +16928,6 @@ mod tests {
                 );
             }
         }
-
         #[test]
         fn retained_sumeragi_queue_rotates_across_sources_and_classes() {
             let v2_a = relay_source(SumeragiRelayClass::V2);
@@ -18412,13 +16941,11 @@ mod tests {
                 via: v2_b.via.clone(),
             };
             let mut queue = FairRetainedQueue::new(8, 4);
-
             assert!(queue.push(v2_a.clone(), 1).is_ok());
             assert!(queue.push(v2_a, 2).is_ok());
             assert!(queue.push(lane_a, 3).is_ok());
             assert!(queue.push(v2_b, 4).is_ok());
             assert!(queue.push(lane_b, 5).is_ok());
-
             assert_eq!(
                 [
                     queue.pop(),
@@ -18430,13 +16957,11 @@ mod tests {
                 [Some(1), Some(3), Some(4), Some(5), Some(2)]
             );
         }
-
         #[test]
         fn source_saturation_returns_exact_copy_and_preserves_responsive_reserve() {
             let saturated = relay_source(SumeragiRelayClass::V2);
             let responsive = relay_source(SumeragiRelayClass::V2);
             let mut queue = FairRetainedQueue::new(8, 4);
-
             for item in 0..4 {
                 assert!(queue.push(saturated.clone(), item).is_ok());
             }
@@ -18449,7 +16974,6 @@ mod tests {
                 queue.push(responsive, 99).is_ok(),
                 "a saturated source must leave isolated admission for a responsive source"
             );
-
             let retrying = queue
                 .pop()
                 .expect("saturated source owns first service rank");
@@ -18461,7 +16985,6 @@ mod tests {
                 "responsive work must be serviced after one retrying source turn"
             );
         }
-
         #[test]
         fn retry_ineligible_source_cannot_block_responsive_service() {
             let stalled = relay_source(SumeragiRelayClass::V2);
@@ -18478,14 +17001,12 @@ mod tests {
                 queue.push(responsive, (2_u8, now)).is_ok(),
                 "enqueue responsive source"
             );
-
             assert_eq!(
                 queue.pop_if(|(_, eligible_at)| *eligible_at <= now),
                 Some((2, now)),
                 "one complete fair scan must bypass a retry-ineligible source"
             );
         }
-
         #[tokio::test]
         async fn daemon_source_credit_layers_over_upstream_and_preserves_the_ninth_exact_owner() {
             // Each authenticated source owns 16 credits in each of the safety
@@ -18515,10 +17036,8 @@ mod tests {
             let (work_payload_tx, _work_payload_rx) = mpsc::channel(1);
             let (work_chunk_tx, _work_chunk_rx) = mpsc::channel(1);
             let (work_low_tx, _work_low_rx) = mpsc::channel(1);
-
             let sources = enqueue_daemon_credit_source_fixture(&high_tx, network_per_lane);
             drop(high_tx);
-
             let forward_ingress = ingress.clone();
             let forwarder = tokio::spawn(async move {
                 drive_network_relay_ingress_inner(
@@ -18536,7 +17055,6 @@ mod tests {
                 .await
             });
             let _open_sibling_inputs = (payload_tx, chunk_tx, low_tx);
-
             tokio::time::timeout(Duration::from_millis(250), async {
                 while v2_rx.len() != 10 {
                     tokio::task::yield_now().await;
@@ -18544,7 +17062,6 @@ mod tests {
             })
             .await
             .expect("matched daemon geometry must pass same-lane A1 through A9 and then B");
-
             assert_eq!(ingress.source_credits.live_sources(), 2);
             let (responsive_rank, ninth_rank) = observe_daemon_credit_delivery_ranks(
                 &mut v2_rx,
@@ -18570,7 +17087,6 @@ mod tests {
             assert_eq!(sources.upstream.available_permits(), network_per_lane);
             assert_eq!(sources.responsive_upstream.available_permits(), 1);
         }
-
         #[tokio::test]
         async fn same_source_safety_and_shared_high_credits_cross_daemon_without_head_of_line_wait()
         {
@@ -18599,7 +17115,6 @@ mod tests {
                     .try_acquire_owned()
                     .expect("shared-high source credit remains"),
             );
-
             let (high_tx, high_rx) = mpsc::channel(2);
             high_tx
                 .try_send(safety)
@@ -18620,7 +17135,6 @@ mod tests {
                 )
                 .await
             });
-
             tokio::time::timeout(Duration::from_millis(250), async {
                 while v2_rx.len() != 2 {
                     tokio::task::yield_now().await;
@@ -18649,7 +17163,6 @@ mod tests {
                 RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::High)
             ));
         }
-
         #[tokio::test]
         async fn base_one_four_sources_reserve_both_upstream_lanes_without_head_of_line_wait() {
             let geometry = relay_geometry(1, 1, 4);
@@ -18703,7 +17216,6 @@ mod tests {
                 )
                 .await
             });
-
             tokio::time::timeout(Duration::from_millis(250), async {
                 while v2_rx.len() != geometry.class_capacity {
                     tokio::task::yield_now().await;
@@ -18716,7 +17228,6 @@ mod tests {
                 assert_eq!(safety.available_permits(), 0);
                 assert_eq!(shared_high.available_permits(), 0);
             }
-
             let mut delivered_by_source = BTreeMap::<PeerId, usize>::new();
             while let Some(credited) = v2_rx.recv().await {
                 *delivered_by_source
@@ -18740,7 +17251,6 @@ mod tests {
                 RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::High)
             ));
         }
-
         #[cfg(feature = "test-network-message-control")]
         #[tokio::test]
         async fn hold_release_same_source_reconnect_retires_old_delivery_without_rebinding_new_route()
@@ -18750,13 +17260,11 @@ mod tests {
                 HeldSumeragiRelayOwnership,
             >::for_tests();
             let source_credits = SumeragiRelaySourceCredits::new(relay_geometry(1, 1, 1));
-
             controller.drain_subsequent_messages_for_tests();
             let peer = sample_peer();
             let mut fixture =
                 NetworkReplyRouteTestFixture::with_source_capacity(peer.id().clone(), 4);
             let upstream = Arc::new(Semaphore::new(2));
-
             let old_route = fixture.mint(peer.id().clone());
             let mut old_relay = RelayWorkItem::new(peer.clone(), v2_vote_msg(), 101);
             old_relay
@@ -18806,7 +17314,6 @@ mod tests {
                 ),
                 SumeragiRelayPreparationBoundary::Held
             ));
-
             let reconnect_route = fixture.mint(peer.id().clone());
             assert!(old_route.same_source(&reconnect_route));
             assert!(!old_route.same_tenure(&reconnect_route));
@@ -18865,11 +17372,9 @@ mod tests {
             ));
             assert_eq!(upstream.available_permits(), 0);
             assert_eq!(source_credits.available_permits(&source), 0);
-
             assert!(fixture.retire(&old_route));
             assert!(!old_route.is_active());
             assert!(reconnect_route.is_active());
-
             let held_old = controller
                 .next_release()
                 .expect("take old held release")
@@ -18925,7 +17430,6 @@ mod tests {
             );
             assert_eq!(upstream.available_permits(), 1);
             assert_eq!(source_credits.available_permits(&source), 1);
-
             let held_reconnect = controller
                 .next_release()
                 .expect("take reconnect held release")
@@ -18996,7 +17500,6 @@ mod tests {
                     .is_none()
             );
         }
-
         #[cfg(feature = "test-network-message-control")]
         #[tokio::test]
         async fn hold_release_preserves_exact_layered_ownership_until_recorded_terminal() {
@@ -19005,7 +17508,6 @@ mod tests {
                 HeldSumeragiRelayOwnership,
             >::for_tests();
             let source_credits = SumeragiRelaySourceCredits::new(relay_geometry(1, 1, 1));
-
             controller.drain_subsequent_messages_for_tests();
             let peer = sample_peer();
             let mut fixture =
@@ -19060,7 +17562,6 @@ mod tests {
                 outcome.try_recv(),
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty)
             ));
-
             let held = controller
                 .next_release()
                 .expect("take held release")
@@ -19087,7 +17588,6 @@ mod tests {
             };
             assert_eq!(upstream.available_permits(), 0);
             assert_eq!(source_credits.available_permits(&source), 1);
-
             let (v2, mut v2_rx) = mpsc::channel(2);
             let (lane, _lane_rx) = mpsc::channel(2);
             let ingress = SumeragiRelayIngress {
@@ -19134,7 +17634,6 @@ mod tests {
             );
             assert_eq!(upstream.available_permits(), 1);
             assert_eq!(source_credits.available_permits(&source), 2);
-
             controller.drain_subsequent_messages_for_tests();
             let peer = sample_peer();
             let mut fixture =
@@ -19222,7 +17721,6 @@ mod tests {
             assert_eq!(upstream.available_permits(), 1);
             assert_eq!(source_credits.available_permits(&source), 2);
         }
-
         #[tokio::test]
         async fn saturated_sumeragi_dispatch_does_not_hold_normal_worker_permits() {
             let (v2_tx, mut v2_rx) = mpsc::channel(1);
@@ -19247,7 +17745,6 @@ mod tests {
                     .is_ok(),
                 "prefill retained v2 ingress"
             );
-
             let (high_tx, high_rx) = mpsc::channel(1);
             let (low_tx, low_rx) = mpsc::channel(1);
             let (work_high_tx, _work_high_rx) = mpsc::channel(1);
@@ -19262,7 +17759,6 @@ mod tests {
                     33,
                 ))
                 .expect("enqueue ordinary relay work");
-
             let high_ingress = sumeragi_ingress.clone();
             let high_forwarder = tokio::spawn(async move {
                 forward_relay_lane(
@@ -19285,7 +17781,6 @@ mod tests {
                 )
                 .await
             });
-
             let ordinary = tokio::time::timeout(Duration::from_millis(100), work_low_rx.recv())
                 .await
                 .expect("ordinary relay lane must remain schedulable")
@@ -19295,7 +17790,6 @@ mod tests {
             let _all_permits = worker_permits
                 .try_acquire_many_owned(2)
                 .expect("retained Sumeragi send must not consume normal worker permits");
-
             let first = v2_rx.recv().await.expect("prefilled retained item");
             assert_eq!(first.work.work.payload_bytes, 11);
             drop(first);
@@ -19305,7 +17799,6 @@ mod tests {
                 .expect("retained ingress remains open");
             assert_eq!(second.work.work.payload_bytes, 22);
             drop(second);
-
             drop((high_tx, low_tx));
             assert!(matches!(
                 high_forwarder.await.expect("high forwarder must not panic"),
@@ -19316,14 +17809,12 @@ mod tests {
                 RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Low)
             ));
         }
-
         #[tokio::test]
         async fn real_inner_ingress_retry_preserves_a_copies_and_bounds_b_service_rank() {
             const INNER_CAPACITY: usize = 3;
             let harness = iroha_core::sumeragi::SumeragiIngressTestHarness::new(INNER_CAPACITY);
             let handle = harness.handle();
             fill_real_inner_ingress(&handle, INNER_CAPACITY);
-
             let peer_a = sample_peer();
             let peer_b = sample_peer();
             let source_a = SumeragiRelaySource {
@@ -19361,30 +17852,23 @@ mod tests {
                 43,
             )
             .await;
-
             let mut retained = FairRetainedQueue::new(8, 4);
             assert!(retained.push(source_a.clone(), a1).is_ok(), "retain A1");
             assert!(retained.push(source_a.clone(), a2).is_ok(), "retain A2");
             assert!(retained.push(source_b.clone(), b).is_ok(), "retain B");
-
             retry_next_exact_relay(&mut retained, &source_a, &handle, &a1_route);
             retry_next_exact_relay(&mut retained, &source_b, &handle, &b_route);
             assert!(matches!(
                 a1_outcome.try_recv(),
                 Err(oneshot::error::TryRecvError::Empty)
             ));
-
             drain_real_inner_ingress(&harness, INNER_CAPACITY);
-
             finish_next_delivered_relay(&mut retained, &source_a, &handle, Some(&a2_route));
             drop(harness.pop_block().expect("release accepted A2"));
-
             finish_next_delivered_relay(&mut retained, &source_b, &handle, Some(&b_route));
             drop(harness.pop_block().expect("release accepted B"));
-
             finish_next_delivered_relay(&mut retained, &source_a, &handle, Some(&a1_route));
             drop(harness.pop_block().expect("release accepted A1"));
-
             assert_eq!(
                 a2_outcome.await.expect("A2 completion remains connected"),
                 SumeragiRelayTerminalOutcome::Delivered
@@ -19399,7 +17883,6 @@ mod tests {
             );
             assert!(retained.is_empty());
         }
-
         #[tokio::test]
         async fn worker_scheduler_bounds_every_ordinary_lane_under_continuous_high_backlog() {
             let ordinary_lane_count = RELAY_ORDINARY_RECEIVERS.len();
@@ -19409,7 +17892,6 @@ mod tests {
             let (payload_tx, payload_rx) = mpsc::channel(1);
             let (chunk_tx, chunk_rx) = mpsc::channel(1);
             let (low_tx, low_rx) = mpsc::channel(1);
-
             for id in 0..high_messages {
                 high_tx
                     .try_send(u16::try_from(id).expect("test message id fits in u16"))
@@ -19418,14 +17900,12 @@ mod tests {
             payload_tx.try_send(10_001).expect("enqueue payload work");
             chunk_tx.try_send(10_002).expect("enqueue chunk work");
             low_tx.try_send(10_003).expect("enqueue low work");
-
             let mut receivers =
                 FairRelayReceivers::new(high_rx, payload_rx, chunk_rx, low_rx, RELAY_HIGH_BURST);
             let mut payload_rank = None;
             let mut chunk_rank = None;
             let mut low_rank = None;
             let mut high_served = 0;
-
             for rank in 1..=service_bound {
                 let (kind, _message) = receivers.recv().await.expect("queued relay work");
                 match kind {
@@ -19441,17 +17921,14 @@ mod tests {
                     }
                 }
             }
-
             assert_eq!(payload_rank, Some(RELAY_HIGH_BURST + 1));
             assert_eq!(chunk_rank, Some(2 * (RELAY_HIGH_BURST + 1)));
             assert_eq!(low_rank, Some(service_bound));
             assert_eq!(high_served, high_messages);
-
             // Keep all senders alive through the assertions: the bound above is caused by the
             // scheduler, not by high-lane closure or exhaustion detection.
             drop((high_tx, payload_tx, chunk_tx, low_tx));
         }
-
         #[tokio::test]
         async fn shared_scheduler_bounds_chunk_and_low_under_continuous_payload_backlog() {
             let (_high_tx, high_rx) = mpsc::channel(1);
@@ -19465,13 +17942,11 @@ mod tests {
             low_tx.try_send(65).expect("enqueue low work");
             let mut receivers =
                 FairRelayReceivers::new(high_rx, payload_rx, chunk_rx, low_rx, RELAY_HIGH_BURST);
-
             let mut order = Vec::new();
             for _ in 0..4 {
                 let (kind, _message) = receivers.recv().await.expect("queued relay work");
                 order.push(kind);
             }
-
             assert_eq!(
                 order,
                 [
@@ -19482,7 +17957,6 @@ mod tests {
                 ]
             );
         }
-
         #[tokio::test]
         async fn worker_scheduler_drains_closed_lanes_and_stops_only_when_all_are_closed() {
             let (high_tx, high_rx) = mpsc::channel(1);
@@ -19493,12 +17967,10 @@ mod tests {
             chunk_tx.try_send(2).expect("enqueue chunk work");
             drop((high_tx, payload_tx, chunk_tx, low_tx));
             let mut receivers = FairRelayReceivers::new(high_rx, payload_rx, chunk_rx, low_rx, 1);
-
             assert_eq!(receivers.recv().await, Some((RelayReceiverKind::High, 1)));
             assert_eq!(receivers.recv().await, Some((RelayReceiverKind::Chunk, 2)));
             assert_eq!(receivers.recv().await, None);
         }
-
         #[tokio::test]
         async fn relay_ingress_forwards_chunk_and_low_with_continuous_payload_backlog() {
             let (high_tx, high_rx) = mpsc::channel(1);
@@ -19522,7 +17994,6 @@ mod tests {
             }
             chunk_tx.try_send(work()).expect("enqueue chunk work");
             low_tx.try_send(work()).expect("enqueue low work");
-
             let ingress = tokio::spawn(async move {
                 drive_network_relay_ingress(
                     high_rx,
@@ -19536,7 +18007,6 @@ mod tests {
                 )
                 .await
             });
-
             tokio::time::timeout(Duration::from_millis(100), work_chunk_rx.recv())
                 .await
                 .expect("chunk lane must reach its worker queue within the service bound")
@@ -19545,7 +18015,6 @@ mod tests {
                 .await
                 .expect("low lane must reach its worker queue within the service bound")
                 .expect("low worker queue remains open");
-
             drop(high_tx);
             let exit = tokio::time::timeout(Duration::from_millis(100), ingress)
                 .await
@@ -19555,10 +18024,8 @@ mod tests {
                 exit,
                 RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::High)
             );
-
             drop((payload_tx, chunk_tx, low_tx));
         }
-
         #[tokio::test]
         async fn relay_ingress_retains_exact_item_while_worker_lane_is_full() {
             let (high_tx, high_rx) = mpsc::channel(1);
@@ -19574,7 +18041,6 @@ mod tests {
                 "127.0.0.1:0".parse().expect("socket address"),
                 keypair.public_key().clone(),
             );
-
             work_payload_tx
                 .try_send(RelayWorkItem::new(
                     peer.clone(),
@@ -19589,7 +18055,6 @@ mod tests {
                     99,
                 ))
                 .expect("enqueue retained payload item");
-
             let ingress = tokio::spawn(async move {
                 drive_network_relay_ingress(
                     high_rx,
@@ -19603,7 +18068,6 @@ mod tests {
                 )
                 .await
             });
-
             let first = work_payload_rx
                 .recv()
                 .await
@@ -19614,7 +18078,6 @@ mod tests {
                 .expect("retained item must be admitted after capacity opens")
                 .expect("payload worker queue remains open");
             assert_eq!(retained.payload_bytes, 99);
-
             drop(high_tx);
             let exit = tokio::time::timeout(Duration::from_millis(100), ingress)
                 .await
@@ -19626,7 +18089,6 @@ mod tests {
             );
             drop((payload_tx, chunk_tx, low_tx));
         }
-
         #[tokio::test]
         async fn relay_ingress_requests_restart_when_receiver_closes() {
             let (_high_tx, high_rx) = mpsc::channel(1);
@@ -19637,7 +18099,6 @@ mod tests {
             let (work_payload_tx, _work_payload_rx) = mpsc::channel(1);
             let (work_chunk_tx, _work_chunk_rx) = mpsc::channel(1);
             let (work_low_tx, _work_low_rx) = mpsc::channel(1);
-
             drop(payload_tx);
             let exit = tokio::time::timeout(
                 Duration::from_millis(100),
@@ -19654,16 +18115,13 @@ mod tests {
             )
             .await
             .expect("relay ingress should notice closed receiver");
-
             assert_eq!(
                 exit,
                 RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Payload)
             );
-
             drop(chunk_tx);
             drop(low_tx);
         }
-
         #[tokio::test]
         async fn relay_ingress_requests_restart_when_worker_queue_closes() {
             let (_high_tx, high_rx) = mpsc::channel(1);
@@ -19674,7 +18132,6 @@ mod tests {
             let (work_payload_tx, work_payload_rx) = mpsc::channel(1);
             let (work_chunk_tx, _work_chunk_rx) = mpsc::channel(1);
             let (work_low_tx, _work_low_rx) = mpsc::channel(1);
-
             drop(work_payload_rx);
             let keypair = KeyPair::random();
             payload_tx
@@ -19687,7 +18144,6 @@ mod tests {
                     0,
                 ))
                 .expect("enqueue payload message");
-
             let exit = tokio::time::timeout(
                 Duration::from_millis(100),
                 drive_network_relay_ingress(
@@ -19703,24 +18159,20 @@ mod tests {
             )
             .await
             .expect("relay ingress should notice closed worker queue");
-
             assert_eq!(
                 exit,
                 RelayIngressLoopExit::WorkerClosed(RelayReceiverKind::Payload)
             );
-
             drop(chunk_tx);
             drop(low_tx);
         }
     }
-
     #[cfg(feature = "telemetry")]
     mod metrics_bootstrap {
         #[allow(unused_imports)]
         use super::*;
         use serial_test::serial;
         use std::sync::Arc;
-
         #[test]
         #[serial]
         fn init_global_metrics_handle_is_idempotent() {
@@ -19729,11 +18181,9 @@ mod tests {
             assert!(Arc::ptr_eq(&first, &second));
         }
     }
-
     mod cli_args {
         #[allow(unused_imports)]
         use super::*;
-
         #[test]
         fn whitespace_only_arguments_are_ignored() {
             let parsed = parse_args_from(vec![
@@ -19741,20 +18191,16 @@ mod tests {
                 OsString::from(" "),
                 OsString::from("--trace-config"),
             ]);
-
             assert!(parsed.startup.trace_config);
         }
-
         #[test]
         fn surrounding_whitespace_is_trimmed() {
             let parsed = parse_args_from(vec![
                 OsString::from("iroha3d"),
                 OsString::from("   --trace-config  "),
             ]);
-
             assert!(parsed.startup.trace_config);
         }
-
         #[test]
         fn meaningful_arguments_are_preserved() {
             let parsed = parse_args_from(vec![
@@ -19762,7 +18208,6 @@ mod tests {
                 OsString::from("--config"),
                 OsString::from("config.toml"),
             ]);
-
             assert_eq!(
                 parsed.config,
                 Some(PathBuf::from("config.toml")),
@@ -19770,20 +18215,16 @@ mod tests {
             );
         }
     }
-
     mod manifest_crypto_checks {
-        use std::sync::Arc;
-
         use super::*;
         use iroha_config::base::toml::TomlSource;
         use iroha_core::{kura::Kura, query::store::LiveQueryStore};
         use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
-
+        use std::sync::Arc;
         fn sample_manifest() -> RawGenesisTransaction {
             GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
                 .build_raw()
         }
-
         fn sample_config_table() -> toml::Table {
             toml::toml! {
                 chain = "00000000-0000-0000-0000-000000000000"
@@ -19792,28 +18233,22 @@ mod tests {
                 trusted_peers_pop = [
                   { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
                 ]
-
                 [network]
                 address = "addr:127.0.0.1:1337#8F78"
                 public_address = "addr:127.0.0.1:1337#8F78"
-
                 [genesis]
                 public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
                 file = "./genesis.signed.nrt"
                 expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-
                 [streaming]
                 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
                 identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
-
                 [torii]
                 address = "addr:127.0.0.1:8080#8942"
-
                 [logger]
                 format = "pretty"
             }
         }
-
         fn sample_config() -> Config {
             ConfigReader::new()
                 .with_toml_source(TomlSource::inline(sample_config_table()))
@@ -19822,7 +18257,6 @@ mod tests {
                 .parse()
                 .expect("sample config should parse")
         }
-
         fn configure_exact_moderation_strict_ingress(config: &mut Config) {
             let qualification = iroha_torii::sorafs::moderation_runtime::
                 torii_moderation_strict_ingress_qualification_v1();
@@ -19888,7 +18322,6 @@ mod tests {
                 },
             );
         }
-
         fn genesis_staging_state_for_test(
             config: &Config,
             genesis: &GenesisBlock,
@@ -19937,7 +18370,6 @@ mod tests {
             state.install_lane_manifests(&lane_manifests);
             (state, kura)
         }
-
         fn staged_context_hashes_for_test(
             genesis: &RawGenesisTransaction,
             genesis_authority: &KeyPair,
@@ -19985,7 +18417,6 @@ mod tests {
                     .expect("derive staged execution-policy identity"),
             )
         }
-
         fn bind_staged_context_for_test(
             genesis: RawGenesisTransaction,
             genesis_authority: &KeyPair,
@@ -20002,7 +18433,6 @@ mod tests {
                 .build_and_sign(genesis_authority)
                 .expect("sign context-bound genesis fixture")
         }
-
         #[test]
         fn manifest_crypto_matches_config() {
             let manifest = sample_manifest();
@@ -20010,7 +18440,6 @@ mod tests {
             ensure_manifest_crypto_matches(&manifest, &config)
                 .expect("expected manifest and config to match");
         }
-
         #[test]
         fn detects_hash_mismatch() {
             let manifest = sample_manifest();
@@ -20023,7 +18452,6 @@ mod tests {
                 "error should mention hash: {err}"
             );
         }
-
         #[test]
         fn detects_allowed_signing_mismatch() {
             let mut manifest = sample_manifest();
@@ -20033,7 +18461,6 @@ mod tests {
                 ..Default::default()
             };
             manifest = manifest.into_builder().with_crypto(crypto).build_raw();
-
             let config = sample_config();
             let err = ensure_manifest_crypto_matches(&manifest, &config)
                 .expect_err("allowed signing mismatch should be detected");
@@ -20042,13 +18469,11 @@ mod tests {
                 "error should mention allowed_signing mismatch: {err}"
             );
         }
-
         #[test]
         fn detects_allowed_curve_ids_mismatch() {
             let manifest = sample_manifest();
             let mut config = sample_config();
             config.crypto.allowed_curve_ids.push(2);
-
             let err = ensure_manifest_crypto_matches(&manifest, &config)
                 .expect_err("curve id mismatch should be detected");
             assert!(
@@ -20056,7 +18481,6 @@ mod tests {
                 "error should mention allowed_curve_ids mismatch: {err}"
             );
         }
-
         #[test]
         fn verify_genesis_metadata_rejects_crypto_mismatch_in_block() -> eyre::Result<()> {
             let _registry_guard = instruction_registry_test_guard();
@@ -20068,14 +18492,12 @@ mod tests {
                 .build_raw()
                 .with_consensus_meta();
             let genesis_block = manifest.build_and_sign(&genesis_keys)?;
-
             let mut instructions = Vec::new();
             for tx in genesis_block.0.external_transactions() {
                 if let Executable::Instructions(batch) = tx.instructions() {
                     instructions.extend(batch.iter().cloned());
                 }
             }
-
             let handshake_meta = instructions
                 .iter()
                 .filter_map(|instr| instr.as_any().downcast_ref::<SetParameter>())
@@ -20109,12 +18531,10 @@ mod tests {
                 consensus_fingerprint,
                 config: config_caps,
             };
-
             config.genesis.public_key = genesis_keys.public_key().clone();
             config.common.chain = chain;
             config.common.key_pair = genesis_keys.clone();
             config.crypto.allowed_signing = vec![Algorithm::Ed25519];
-
             let err =
                 verify_genesis_metadata(&genesis_block, &config, &consensus_caps, &mode_tag, proto)
                     .expect_err("crypto mismatch should be detected");
@@ -20123,28 +18543,22 @@ mod tests {
                 report.contains("crypto manifest") || report.contains("crypto mismatch"),
                 "unexpected error: {report}"
             );
-
             Ok(())
         }
-
         #[test]
         fn genesis_validation_accepts_bls_controllers_when_crypto_config_applied() {
-            use std::sync::Arc;
-
             use iroha_core::{block::ValidBlock, kura::Kura, query::store::LiveQueryStore};
             use iroha_data_model::{account::curve::CurveId, prelude::*};
             use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-
+            use std::sync::Arc;
             let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
-
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
             let genesis_account_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
             let domain_id: DomainId =
                 DomainId::try_new("wonderland", "universal").expect("valid domain id");
             let bls_keypair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let bls_account_id = AccountId::new(bls_keypair.public_key().clone());
-
             let tx = TransactionBuilder::new_genesis(
                 genesis_account_id.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -20160,7 +18574,6 @@ mod tests {
                 None,
                 None,
             );
-
             let world = World::with(
                 [genesis_domain(
                     SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
@@ -20178,7 +18591,6 @@ mod tests {
                 LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
             );
             state.install_lane_manifests(&lane_manifests);
-
             let mut crypto = iroha_config::parameters::actual::Crypto::default();
             if !crypto.allowed_signing.contains(&Algorithm::BlsNormal) {
                 crypto.allowed_signing.push(Algorithm::BlsNormal);
@@ -20195,7 +18607,6 @@ mod tests {
             curve_ids.dedup();
             crypto.allowed_curve_ids = curve_ids;
             state.set_crypto(crypto);
-
             let topology = Topology::new(vec![PeerId::new(
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
             )]);
@@ -20211,7 +18622,6 @@ mod tests {
                 false,
             )
             .unpack(|_| {});
-
             if let Err((block, error)) = result {
                 let results = block
                     .results()
@@ -20223,12 +18633,10 @@ mod tests {
                 );
             }
         }
-
         #[test]
         fn fresh_v2_genesis_staging_does_not_commit_state_or_kura() {
             let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
-
             let chain_id = ChainId::from("fresh-v2-genesis-staging-test");
             let genesis_authority = iroha_crypto::KeyPair::try_from_seed(
                 b"fresh-v2-genesis-authority".to_vec(),
@@ -20255,7 +18663,6 @@ mod tests {
             let raw_genesis = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
                 .set_topology(topology)
                 .build_raw();
-
             let authority_id = AccountId::new(genesis_authority.public_key().clone());
             let mut config = sample_config();
             config.common.chain = chain_id.clone();
@@ -20269,7 +18676,6 @@ mod tests {
             }
             let genesis = bind_staged_context_for_test(raw_genesis, &genesis_authority, &config);
             let (state, _kura) = genesis_staging_state_for_test(&config, &genesis);
-
             let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&genesis)
                 .expect("signed voting roster");
             let topology = Topology::new(voters);
@@ -20306,11 +18712,9 @@ mod tests {
                     .all(|entry| entry.power == 1)
             );
             drop(staged);
-
             assert_eq!(state.committed_height(), before_height);
             assert_eq!(state.committed_block_hashes_snapshot(), before_hashes);
         }
-
         struct OfflineSemanticGenesisFixture {
             config: Config,
             genesis: GenesisBlock,
@@ -20319,7 +18723,6 @@ mod tests {
             parameters: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
             cadence_ms: u64,
         }
-
         fn offline_semantic_genesis_fixture(
             extra_instructions: impl IntoIterator<Item = InstructionBox>,
         ) -> OfflineSemanticGenesisFixture {
@@ -20343,7 +18746,6 @@ mod tests {
                 })
                 .collect();
             let authority = AccountId::new(genesis_authority.public_key().clone());
-
             config.common.chain = chain_id.clone();
             config.genesis.public_key = genesis_authority.public_key().clone();
             if !config
@@ -20388,13 +18790,11 @@ mod tests {
                 cadence_ms,
             }
         }
-
         #[test]
         fn check_config_offline_executes_available_genesis() {
             let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
             let fixture = offline_semantic_genesis_fixture([]);
-
             validate_genesis_execution_offline(
                 &fixture.config,
                 &fixture.genesis,
@@ -20407,7 +18807,6 @@ mod tests {
             )
             .expect("valid genesis should execute in the disposable overlay");
         }
-
         #[test]
         fn check_config_installs_offline_catalog_before_genesis_activation() {
             let source = include_str!("main.rs");
@@ -20433,7 +18832,6 @@ mod tests {
                 !check_path.contains("ensure_mandatory_offline"),
                 "offline support must not introduce a genesis readiness gate"
             );
-
             let runtime_path = source
                 .split_once("pub async fn start_with_runtime_deps(")
                 .expect("runtime startup")
@@ -20446,18 +18844,15 @@ mod tests {
                     .contains("install_configured_kagemusha_release_catalog(&mut state, &config)")
             );
         }
-
         #[test]
         fn check_config_accepts_taira_without_offline_backend_settings() {
             let mut config = sample_config();
             config.common.chain = ChainId::from("taira");
             config.confidential.enabled = true;
             config.confidential.assume_valid = false;
-
             validate_config_for_check(&config, None, false)
                 .expect("Taira has universal offline primitives without backend enablement");
         }
-
         #[test]
         fn check_config_qualifies_the_fixed_moderation_strict_ingress() {
             let mut exact = sample_config();
@@ -20467,7 +18862,6 @@ mod tests {
                     .expect("exact fixed moderation ingress must pass static check-config")
                     .is_none()
             );
-
             for (mutation, expected) in [
                 (0, "runtime-provider binding is substituted"),
                 (1, "runtime-provider binding is stale or revoked"),
@@ -20490,7 +18884,6 @@ mod tests {
                 assert!(format!("{report:#}").contains(expected));
             }
         }
-
         #[test]
         fn configured_kagemusha_catalog_loader_is_optional_for_every_asset() {
             let mut config = sample_config();
@@ -20501,7 +18894,6 @@ mod tests {
                     .expect("an omitted verifier cache uses an empty catalog")
                     .is_empty()
             );
-
             config.settlement.offline.escrow_accounts.insert(
                 iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     iroha_data_model::domain::DomainId::try_new("offline", "universal")
@@ -20515,7 +18907,6 @@ mod tests {
                     .expect("runtime escrow state must not require a process-local catalog")
                     .is_empty()
             );
-
             config.settlement.offline.kagemusha_release_policy_path =
                 Some(PathBuf::from("/tmp/policy.norito"));
             assert!(
@@ -20525,7 +18916,6 @@ mod tests {
                     .contains("configured together")
             );
         }
-
         #[test]
         fn configured_kagemusha_catalog_loader_uses_seal_without_fallback() {
             let mut config = sample_config();
@@ -20538,7 +18928,6 @@ mod tests {
                 .offline
                 .kagemusha_catalog_qualification_seal_path =
                 Some(PathBuf::from("/missing/catalog-seal.norito"));
-
             let error = load_configured_kagemusha_release_catalog(&config)
                 .err()
                 .expect("configured seal must select the fail-closed sealed loader");
@@ -20547,11 +18936,9 @@ mod tests {
                 "unexpected sealed catalog error: {error}"
             );
         }
-
         #[test]
         fn qualification_seal_check_requires_local_genesis() {
             let config = sample_config();
-
             let error = validate_config_for_check(&config, None, true).err().expect(
                 "seal publication must wait for full Kagemusha release and genesis validation",
             );
@@ -20561,7 +18948,6 @@ mod tests {
                 "unexpected missing-genesis error: {rendered}"
             );
         }
-
         #[test]
         fn check_config_offline_rejects_genesis_instruction_failure() {
             let _registry_guard = instruction_registry_test_guard();
@@ -20573,7 +18959,6 @@ mod tests {
                 Register::domain(Domain::new(duplicate_domain)).into(),
             ];
             let fixture = offline_semantic_genesis_fixture(instructions);
-
             let error = validate_genesis_execution_offline(
                 &fixture.config,
                 &fixture.genesis,
@@ -20591,7 +18976,6 @@ mod tests {
                 "unexpected offline validation error: {rendered}"
             );
         }
-
         #[test]
         fn consensus_config_caps_use_canonical_v2_fields() {
             let config = sample_config();
@@ -20603,7 +18987,6 @@ mod tests {
                 None,
             )
             .expect("default Nexus config should produce a policy digest");
-
             assert_eq!(caps.v2_config_fingerprint, [0; 32]);
             assert_eq!(caps.nexus_policy_digest, expected_nexus_policy_digest);
             assert_eq!(
@@ -20611,16 +18994,13 @@ mod tests {
                 <[u8; 32]>::from(ivm::gas::schedule_hash())
             );
         }
-
         #[test]
         fn consensus_caps_use_frozen_height_context_mode() {
             use iroha_core::{kura::Kura, query::store::LiveQueryStore};
-
             let config = sample_config();
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .expect("config caps should build");
             let signed_context = iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended();
-
             let permissioned_state = State::new_for_testing(
                 World::new(),
                 Kura::blank_kura_for_testing(),
@@ -20651,7 +19031,6 @@ mod tests {
             );
             let permissioned_fp = caps_perm.consensus_fingerprint;
             let permissioned_v2_config_fp = caps_perm.config.v2_config_fingerprint;
-
             let npos_world = World::new();
             {
                 let mut block = npos_world.block();
@@ -20692,11 +19071,9 @@ mod tests {
                 "the frozen height-context mode must change the consensus fingerprint"
             );
         }
-
         #[test]
         fn verify_genesis_metadata_rejects_consensus_mode_mismatch() -> eyre::Result<()> {
             use iroha_data_model::parameter::system::SumeragiConsensusMode;
-
             let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
             let config = sample_config();
@@ -20717,13 +19094,11 @@ mod tests {
                     .with_consensus_mode(SumeragiConsensusMode::Npos)
                     .with_consensus_meta()
                     .build_and_sign(&genesis_keys)?;
-
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let (mode_tag, _bls_domain, consensus_caps, _) =
                 consensus_caps_from_genesis(&permissioned_genesis, &config_caps, &config.sumeragi)
                     .expect("permissioned signed genesis must produce canonical v2 caps");
-
             let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;
             let err =
                 verify_genesis_metadata(&npos_genesis, &config, &consensus_caps, &mode_tag, proto)
@@ -20732,20 +19107,16 @@ mod tests {
                 format!("{err:?}").contains("consensus_mode"),
                 "error should mention consensus_mode mismatch: {err:?}"
             );
-
             Ok(())
         }
-
         #[test]
         fn verify_genesis_metadata_rejects_fingerprint_mismatch() -> eyre::Result<()> {
             use iroha_core::{kura::Kura, query::store::LiveQueryStore};
-
             let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
             let mut config = sample_config();
             let genesis_keys = config.common.key_pair.clone();
             let chain = config.common.chain.clone();
-
             // Build a canonical manifest with consensus metadata, then tamper with the advertised
             // fingerprint so genesis validation should fail.
             let manifest = GenesisBuilder::new_without_executor(chain, PathBuf::from("."))
@@ -20767,7 +19138,6 @@ mod tests {
             let tampered: RawGenesisTransaction =
                 norito::json::value::from_value(manifest_value).expect("decode tampered manifest");
             let genesis_block = tampered.build_and_sign(&genesis_keys)?;
-
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let kura = Kura::blank_kura_for_testing();
@@ -20784,7 +19154,6 @@ mod tests {
                 iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
             )
             .expect("valid v2 handshake config");
-
             // Diverge the runtime chain after computing consensus caps to force a
             // fingerprint mismatch without altering the embedded handshake metadata.
             config.common.chain = ChainId::from("fingerprint-mismatch");
@@ -20798,10 +19167,8 @@ mod tests {
                     .contains("fingerprint"),
                 "expected fingerprint mismatch error, got {err:?}"
             );
-
             Ok(())
         }
-
         #[cfg(feature = "sm")]
         #[test]
         fn manifest_crypto_applies_without_genesis_block() -> eyre::Result<()> {
@@ -20817,26 +19184,21 @@ mod tests {
             {
                 genesis_table.remove("file");
             }
-
             let mut manifest_crypto = ManifestCrypto::default();
             manifest_crypto.default_hash = "sm3-256".to_owned();
             manifest_crypto.allowed_signing = vec![Algorithm::Ed25519, Algorithm::Sm2];
             manifest_crypto.sm2_distid_default = "CN1234567812345678".to_owned();
-
             let manifest = GenesisBuilder::new_without_executor(
                 ChainId::from("test-chain"),
                 PathBuf::from("."),
             )
             .with_crypto(manifest_crypto)
             .build_raw();
-
             let temp_dir = tempfile::tempdir()?;
             let config_path = temp_dir.path().join("config.toml");
             let manifest_path = temp_dir.path().join("manifest.json");
-
             std::fs::write(&config_path, toml::to_string(&config_table)?)?;
             std::fs::write(&manifest_path, norito::json::to_vec(&manifest)?)?;
-
             let (config, genesis) = read_config_and_genesis(&Args {
                 config: Some(config_path),
                 genesis_manifest_json: Some(manifest_path),
@@ -20856,32 +19218,26 @@ mod tests {
                 fastpq_gpu_kind: None,
             })
             .map_err(|report| eyre::eyre!("{report:?}"))?;
-
             assert!(genesis.is_none());
             assert!(config.crypto.default_hash.eq_ignore_ascii_case("sm3-256"));
             assert!(config.crypto.allowed_signing.contains(&Algorithm::Sm2));
             assert_eq!(config.crypto.sm2_distid_default, "CN1234567812345678");
-
             Ok(())
         }
     }
-
     mod config_integration {
+        #[allow(unused_imports)]
+        use super::*;
         use assertables::assert_contains;
         use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, bls_normal_pop_prove};
         use iroha_genesis::GenesisBuilder;
         use iroha_primitives::addr::socket_addr;
         use path_absolutize::Absolutize as _;
-
-        #[allow(unused_imports)]
-        use super::*;
-
         fn config_factory(genesis_public_key: &PublicKey) -> toml::Table {
             let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let pubkey = keypair.public_key().clone();
             let privkey = keypair.private_key().clone();
             let pop = bls_normal_pop_prove(&privkey).expect("pop prove");
-
             let mut table = toml::Table::new();
             iroha_config::base::toml::Writer::new(&mut table)
                 .write("chain", "0")
@@ -20932,7 +19288,6 @@ mod tests {
             );
             table
         }
-
         fn config_test_args(config_path: PathBuf, genesis_manifest_json: Option<PathBuf>) -> Args {
             Args {
                 config: Some(config_path),
@@ -20953,7 +19308,6 @@ mod tests {
                 fastpq_gpu_kind: None,
             }
         }
-
         #[test]
         fn integrity_bound_config_is_hashed_and_parsed_from_one_buffer() -> eyre::Result<()> {
             let genesis_key_pair = KeyPair::random();
@@ -20965,10 +19319,8 @@ mod tests {
             let expected = blake3::hash(raw.as_bytes()).to_hex().to_string();
             let mut args = config_test_args(config_path.clone(), None);
             args.startup.config_blake3 = Some(expected);
-
             read_config_and_genesis(&args)
                 .map_err(|report| eyre::eyre!("valid integrity-bound config failed: {report:?}"))?;
-
             std::fs::write(&config_path, format!("{raw}\n# changed after admission\n"))?;
             let error = read_config_and_genesis(&args)
                 .expect_err("changed integrity-bound config must fail closed");
@@ -20978,7 +19330,6 @@ mod tests {
             );
             Ok(())
         }
-
         #[test]
         fn integrity_bound_config_rejects_extends() -> eyre::Result<()> {
             let genesis_key_pair = KeyPair::random();
@@ -20993,7 +19344,6 @@ mod tests {
             std::fs::write(&config_path, raw.as_bytes())?;
             let mut args = config_test_args(config_path, None);
             args.startup.config_blake3 = Some(blake3::hash(raw.as_bytes()).to_hex().to_string());
-
             let error = read_config_and_genesis(&args)
                 .expect_err("integrity-bound config must not resolve external extends");
             assert!(
@@ -21002,7 +19352,6 @@ mod tests {
             );
             Ok(())
         }
-
         fn load_config_with_overrides<F>(
             mut adjust: F,
         ) -> eyre::Result<(Config, tempfile::TempDir, PathBuf)>
@@ -21015,36 +19364,28 @@ mod tests {
             let genesis = raw
                 .build_and_sign(&genesis_key_pair)
                 .expect("build genesis");
-
             let mut config = config_factory(genesis_key_pair.public_key());
             iroha_config::base::toml::Writer::new(&mut config)
                 .write(["genesis", "file"], "./genesis/genesis.signed.nrt")
                 .write(["kura", "store_dir"], "../storage")
                 .write(["snapshot", "store_dir"], "../snapshots")
                 .write(["dev_telemetry", "out_file"], "../logs/telemetry");
-
             adjust(&mut config, &genesis_key_pair);
-
             let dir = tempfile::tempdir()?;
             let config_dir = dir.path().join("config");
             let genesis_dir = config_dir.join("genesis");
             std::fs::create_dir_all(&genesis_dir)?;
-
             let config_path = config_dir.join("config.toml");
             let genesis_path = genesis_dir.join("genesis.signed.nrt");
             let executor_path = genesis_dir.join("executor.to");
-
             std::fs::write(&config_path, toml::to_string(&config)?)?;
             std::fs::write(&genesis_path, genesis.0.encode_wire()?)?;
             std::fs::write(&executor_path, "")?;
-
             let (config, _genesis) =
                 read_config_and_genesis(&config_test_args(config_path.clone(), None))
                     .map_err(|report| eyre::eyre!("{report:?}"))?;
-
             Ok((config, dir, config_path))
         }
-
         #[test]
         fn cli_genesis_manifest_path_overrides_config() -> eyre::Result<()> {
             let (_config, dir, config_path) = load_config_with_overrides(|table, _| {
@@ -21053,13 +19394,11 @@ mod tests {
             })?;
             let manifest_path = dir.path().join("bound-genesis.json");
             std::fs::write(&manifest_path, b"{}")?;
-
             let (config, _genesis) = read_config_and_genesis(&config_test_args(
                 config_path,
                 Some(manifest_path.clone()),
             ))
             .map_err(|report| eyre::eyre!("{report:?}"))?;
-
             assert_eq!(
                 config
                     .genesis
@@ -21071,7 +19410,6 @@ mod tests {
             );
             Ok(())
         }
-
         fn parse_config_with_overrides<F>(
             mut adjust: F,
         ) -> eyre::Result<(Config, tempfile::TempDir, PathBuf)>
@@ -21084,16 +19422,12 @@ mod tests {
                 .write(["kura", "store_dir"], "../storage")
                 .write(["snapshot", "store_dir"], "../snapshots")
                 .write(["dev_telemetry", "out_file"], "../logs/telemetry");
-
             adjust(&mut config, &genesis_key_pair);
-
             let dir = tempfile::tempdir()?;
             let config_dir = dir.path().join("config");
             std::fs::create_dir_all(&config_dir)?;
-
             let config_path = config_dir.join("config.toml");
             std::fs::write(&config_path, toml::to_string(&config)?)?;
-
             let mut reader = ConfigReader::new();
             reader = reader
                 .read_toml_with_extends(&config_path)
@@ -21103,28 +19437,23 @@ mod tests {
                 .map_err(|report| eyre::eyre!("{report:?}"))?
                 .parse()
                 .map_err(|report| eyre::eyre!("{report:?}"))?;
-
             Ok((config, dir, config_path))
         }
-
         #[test]
         fn relative_file_paths_resolution() -> eyre::Result<()> {
             // Given
-
             let genesis_key_pair = KeyPair::random();
             let raw = GenesisBuilder::new_without_executor(ChainId::from("chain"), ".").build_raw();
             iroha_genesis::init_instruction_registry();
             let genesis = raw
                 .build_and_sign(&genesis_key_pair)
                 .expect("build genesis");
-
             let mut config = config_factory(genesis_key_pair.public_key());
             iroha_config::base::toml::Writer::new(&mut config)
                 .write(["genesis", "file"], "./genesis/genesis.signed.nrt")
                 .write(["kura", "store_dir"], "../storage")
                 .write(["snapshot", "store_dir"], "../snapshots")
                 .write(["dev_telemetry", "out_file"], "../logs/telemetry");
-
             let dir = tempfile::tempdir()?;
             let genesis_path = dir.path().join("config/genesis/genesis.signed.nrt");
             let executor_path = dir.path().join("config/genesis/executor.to");
@@ -21134,11 +19463,8 @@ mod tests {
             std::fs::write(config_path, toml::to_string(&config)?)?;
             std::fs::write(genesis_path, genesis.0.encode_wire()?)?;
             std::fs::write(executor_path, "")?;
-
             let config_path = dir.path().join("config/config.toml");
-
             // When
-
             let (config, genesis) = read_config_and_genesis(&Args {
                 config: Some(config_path),
                 genesis_manifest_json: None,
@@ -21159,12 +19485,9 @@ mod tests {
             })
             .map_err(|report| eyre::eyre!("{report:?}"))?;
             validate_config(&config).map_err(|report| eyre::eyre!("{report:?}"))?;
-
             // Then
-
             // No need to check whether genesis.file is resolved - if not, genesis wouldn't be read
             assert!(genesis.is_some());
-
             assert_eq!(
                 config.kura.store_dir.resolve_relative_path().absolutize()?,
                 dir.path().join("storage")
@@ -21186,10 +19509,8 @@ mod tests {
                     .absolutize()?,
                 dir.path().join("logs/telemetry")
             );
-
             Ok(())
         }
-
         fn storage_budget_probe(
             total_bytes: u64,
             available_bytes: u64,
@@ -21206,7 +19527,6 @@ mod tests {
                 derived_budget_bytes: None,
             }
         }
-
         #[test]
         fn runtime_derived_budget_does_not_mutate_operator_configuration() -> eyre::Result<()> {
             let (mut config, _dir, config_path) =
@@ -21216,7 +19536,6 @@ mod tests {
             let original_config = std::fs::read_to_string(&config_path)?;
             assert!(config.nexus.storage.local_budget_bytes.is_none());
             assert!(config.nexus.storage.effective_local_budget_bytes.is_none());
-
             let filesystem_budget = NexusStorageFilesystemBudget {
                 budget_bytes: NonZeroU64::new(800).expect("non-zero budget"),
                 components: vec![NexusStorageBudgetComponent::Kura],
@@ -21224,7 +19543,6 @@ mod tests {
             let aggregate = config
                 .apply_derived_storage_budget(&[filesystem_budget])
                 .expect("valid filesystem budget");
-
             assert_eq!(aggregate.get(), 800);
             assert!(config.nexus.storage.local_budget_bytes.is_none());
             assert_eq!(
@@ -21239,13 +19557,11 @@ mod tests {
             assert_eq!(std::fs::read_to_string(config_path)?, original_config);
             Ok(())
         }
-
         #[cfg(unix)]
         #[test]
         fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode()
         -> eyre::Result<()> {
             use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
             let (_parsed, _dir, config_path) =
                 parse_config_with_overrides(|table, _genesis_key| {
                     iroha_config::base::toml::Writer::new(table).write(["nexus", "enabled"], true);
@@ -21254,7 +19570,6 @@ mod tests {
             let original_bytes = std::fs::read(&config_path)?;
             let original_metadata = std::fs::metadata(&config_path)?;
             assert_eq!(original_metadata.mode() & 0o777, 0o400);
-
             let (config, _genesis) = read_config_and_genesis(&Args {
                 config: Some(config_path.clone()),
                 genesis_manifest_json: None,
@@ -21278,14 +19593,12 @@ mod tests {
                 config.nexus.storage.effective_local_budget_bytes.is_some(),
                 "startup must complete runtime reconciliation"
             );
-
             let final_metadata = std::fs::metadata(&config_path)?;
             assert_eq!(std::fs::read(&config_path)?, original_bytes);
             assert_eq!(final_metadata.mode(), original_metadata.mode());
             assert_eq!(final_metadata.ino(), original_metadata.ino());
             Ok(())
         }
-
         #[test]
         fn operator_local_budget_initializes_the_effective_budget() -> eyre::Result<()> {
             let (config, _dir, config_path) =
@@ -21294,7 +19607,6 @@ mod tests {
                         .write(["nexus", "enabled"], true)
                         .write(["nexus", "storage", "local_budget_bytes"], 4_096_i64);
                 })?;
-
             assert_eq!(
                 config
                     .nexus
@@ -21311,7 +19623,6 @@ mod tests {
                     .map(iroha_config::base::util::Bytes::get),
                 Some(4_096)
             );
-
             let persisted: toml::Value = toml::from_str(&std::fs::read_to_string(config_path)?)?;
             let storage = persisted
                 .get("nexus")
@@ -21330,7 +19641,6 @@ mod tests {
             assert!(storage.get("max_disk_usage_bytes").is_none());
             Ok(())
         }
-
         #[test]
         fn runtime_budget_uses_checked_capacity_minus_ceil_headroom() {
             let probe = storage_budget_probe(1_001, 301, 0);
@@ -21339,21 +19649,17 @@ mod tests {
             assert_eq!(budgets.len(), 1);
             assert_eq!(budgets[0].budget_bytes.get(), 100);
         }
-
         #[test]
         fn runtime_budget_is_stable_across_restart_usage_splits() {
             let before_restart = storage_budget_probe(1_000, 700, 100);
             let after_restart = storage_budget_probe(1_000, 300, 500);
-
             let before = derive_runtime_nexus_storage_budget(&[before_restart])
                 .expect("safe pre-restart budget");
             let after = derive_runtime_nexus_storage_budget(&[after_restart])
                 .expect("safe post-restart budget");
-
             assert_eq!(before[0].budget_bytes, after[0].budget_bytes);
             assert_eq!(before[0].budget_bytes.get(), 600);
         }
-
         #[test]
         fn runtime_budget_rejects_existing_usage_above_the_safe_cap() {
             let probe = storage_budget_probe(1_000, 100, 150);
@@ -21365,7 +19671,6 @@ mod tests {
                 "{diagnostic}"
             );
         }
-
         #[test]
         fn runtime_budget_rejects_zero_underflow_and_overflow() {
             for probe in [
@@ -21379,21 +19684,17 @@ mod tests {
                 );
             }
         }
-
         #[cfg(unix)]
         include!("main/runtime_budget_and_config_tests.rs");
     }
-
     include!("main/startup_tail_tests.rs");
 }
-
 /// Result type returned by daemon launcher and startup operations.
 pub type ReportResult<T, E> = core::result::Result<T, Report<E>>;
 const VERGEN_GIT_SHA: &str = match option_env!("VERGEN_GIT_SHA") {
     Some(value) => value,
     None => "unknown",
 };
-
 const VERGEN_CARGO_FEATURES: &str = match option_env!("VERGEN_CARGO_FEATURES") {
     Some(value) => value,
     None => "unknown",

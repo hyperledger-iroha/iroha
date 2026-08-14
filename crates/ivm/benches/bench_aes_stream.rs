@@ -1,6 +1,5 @@
 //! Bench multi-round AES streaming helpers (CPU/Metal/CUDA under the hood).
 use criterion::Criterion;
-
 fn make_blocks(n: usize) -> Vec<[u8; 16]> {
     let mut v = vec![[0u8; 16]; n];
     for (i, blk) in v.iter_mut().enumerate() {
@@ -9,7 +8,6 @@ fn make_blocks(n: usize) -> Vec<[u8; 16]> {
     }
     v
 }
-
 fn make_round_keys(n: usize) -> Vec<[u8; 16]> {
     let mut rks = Vec::with_capacity(n);
     let base = [
@@ -23,7 +21,6 @@ fn make_round_keys(n: usize) -> Vec<[u8; 16]> {
     }
     rks
 }
-
 fn bench_aesenc_stream(c: &mut Criterion) {
     let blocks = 16384usize; // 16k blocks
     let rounds = 9usize; // stream of 9 rounds (not full AES)
@@ -50,7 +47,6 @@ fn bench_aesenc_stream(c: &mut Criterion) {
         })
     });
 }
-
 fn bench_aesdec_stream(c: &mut Criterion) {
     let blocks = 16384usize;
     let rounds = 9usize;
@@ -77,7 +73,6 @@ fn bench_aesdec_stream(c: &mut Criterion) {
         })
     });
 }
-
 fn main() {
     let mut c = Criterion::default().configure_from_args();
     bench_aesenc_stream(&mut c);

@@ -10,14 +10,11 @@ use ivm::{
     },
     host::DefaultHost,
 };
-
 const AXT_VERIFY_EMPTY_GAS: u64 = 64;
 const AXT_GAS_BASE: u64 = 16;
-
 fn axt_gas(payload_len: usize) -> u64 {
     AXT_GAS_BASE.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
 }
-
 #[test]
 fn default_host_unknown_syscalls_return_unknown() {
     for number in [0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF, 0xBF, 0xDF] {
@@ -29,7 +26,6 @@ fn default_host_unknown_syscalls_return_unknown() {
         }
     }
 }
-
 fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
     tlv.extend_from_slice(&(ty as u16).to_be_bytes());
@@ -40,12 +36,10 @@ fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
     tlv.extend_from_slice(&h);
     tlv
 }
-
 fn store_tlv(vm: &mut IVM, ty: PointerType, value: &[u8]) -> u64 {
     let tlv = make_tlv(ty, value);
     vm.alloc_input_tlv(&tlv).expect("alloc input")
 }
-
 fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
     let mut payload = Vec::new();
     payload.extend_from_slice(domain);
@@ -54,7 +48,6 @@ fn test_digest(domain: &[u8], parts: &[&[u8]]) -> iroha_crypto::Hash {
     }
     iroha_crypto::Hash::new(payload)
 }
-
 fn proof_blob_for(dsid: DataSpaceId, manifest_root: [u8; 32], proof_seed: &[u8]) -> ProofBlob {
     let source_tx_commitment = test_digest(b"ivm-host-test:source-tx", &[proof_seed]);
     let claim_digest = test_digest(b"ivm-host-test:claim", &[proof_seed]);
@@ -91,12 +84,10 @@ fn proof_blob_for(dsid: DataSpaceId, manifest_root: [u8; 32], proof_seed: &[u8])
         expiry_slot: None,
     }
 }
-
 #[test]
 fn default_host_axt_syscalls_dispatch_and_fail_closed_without_verifier() {
     let mut vm = IVM::new(1_000_000);
     let mut host = DefaultHost::new();
-
     let dsid = DataSpaceId::new(21);
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -113,7 +104,6 @@ fn default_host_axt_syscalls_dispatch_and_fail_closed_without_verifier() {
         host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
         Ok(axt_gas(desc_bytes.len()))
     );
-
     let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
     let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
     let manifest = TouchManifest {
@@ -128,14 +118,12 @@ fn default_host_axt_syscalls_dispatch_and_fail_closed_without_verifier() {
         host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
         Ok(axt_gas(ds_bytes.len().saturating_add(manifest_bytes.len())))
     );
-
     vm.set_register(10, ds_ptr);
     vm.set_register(11, 0);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
         Ok(AXT_VERIFY_EMPTY_GAS)
     );
-
     let proof = proof_blob_for(dsid, [1; 32], b"default-host-sequence");
     let proof_ptr = store_tlv(
         &mut vm,
@@ -148,7 +136,6 @@ fn default_host_axt_syscalls_dispatch_and_fail_closed_without_verifier() {
         host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
         Err(VMError::PermissionDenied)
     ));
-
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = AssetHandle {
         scope: vec!["transfer".into()],
@@ -200,14 +187,12 @@ fn default_host_axt_syscalls_dispatch_and_fail_closed_without_verifier() {
         host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
         Err(VMError::PermissionDenied)
     ));
-
     // The inline proof failed closed, so commit must not turn the preflighted
     // proof shape into AXT acceptance.
     assert!(matches!(
         host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
         Err(VMError::PermissionDenied)
     ));
-
     vm.set_register(10, ds_ptr);
     vm.set_register(11, manifest_ptr);
     assert!(matches!(

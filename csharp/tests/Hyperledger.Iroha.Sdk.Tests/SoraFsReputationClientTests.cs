@@ -703,7 +703,9 @@ public sealed class SoraFsReputationClientTests
         Assert.Equal("no-store", Assert.Single(request.Headers["Cache-Control"]));
         Assert.False(request.Headers.ContainsKey("Last-Event-ID"));
         Assert.False(request.Headers.ContainsKey("X-Iroha-Witness"));
-        Assert.Equal(AccountId, Assert.Single(request.Headers["X-Iroha-Account"]));
+        Assert.Equal(
+            AccountAddress.Parse(AccountId, AccountAddress.DefaultChainDiscriminant).CanonicalHex,
+            Assert.Single(request.Headers["X-Iroha-Account"]));
 
         var nonce = RequestNonce(request);
         Assert.Equal(32, nonce.Length);

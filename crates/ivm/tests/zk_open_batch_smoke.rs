@@ -2,7 +2,6 @@ use h2::norito_helpers as nh;
 use iroha_zkp_halo2 as h2;
 use iroha_zkp_halo2::backend::pallas::PallasBackend;
 use ivm::zk_verify::batch_verify_open_envelopes;
-
 #[test]
 fn zk_open_batch_smoke() {
     // Build two identical envelopes that should verify successfully.
@@ -26,7 +25,6 @@ fn zk_open_batch_smoke() {
     assert_eq!(res.len(), 2);
     assert!(res.iter().all(|r| matches!(r, Ok(true))));
 }
-
 #[test]
 fn zk_open_batch_mixed_validity_ok_and_bad() {
     // Build a valid envelope (ToyP61, small vector length)
@@ -50,7 +48,6 @@ fn zk_open_batch_mixed_validity_ok_and_bad() {
         public_inputs_schema_hash: None,
         domain_tag: None,
     };
-
     // Build an invalid envelope by corrupting `t` while keeping the rest consistent.
     let mut bad_public = env_ok.public.clone();
     let mut corrupted_t = bad_public.t;
@@ -65,7 +62,6 @@ fn zk_open_batch_mixed_validity_ok_and_bad() {
         public_inputs_schema_hash: None,
         domain_tag: None,
     };
-
     let res = batch_verify_open_envelopes(&[env_ok, env_bad]);
     assert_eq!(res.len(), 2);
     assert!(matches!(res[0], Ok(true)), "first must verify");

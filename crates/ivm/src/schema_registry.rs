@@ -3,16 +3,13 @@
 //! Schemas are resolved only through explicitly registered names and families.
 //! Unsupported names fail closed; registered schemas expose a stable 32-byte id
 //! and version for host metadata.
-
-use std::sync::Arc;
-
 use iroha_crypto::Hash as IrohaHash;
 use iroha_data_model::query::{
     QueryRequest, QueryResponse,
     json_wrappers::{QueryRequestJson, query_request_from_json, query_request_to_json},
 };
 use ivm_abi::codec::{decode_canonical_norito, encode_canonical_norito};
-
+use std::sync::Arc;
 // Canonical schema type definitions used by the default registry for encoding/decoding.
 // Keep these at module scope so Norito type identity remains stable across encode/decode.
 #[derive(norito::Decode, norito::Encode, Clone, Debug)]
@@ -20,21 +17,18 @@ struct OrderSchema {
     qty: i64,
     side: String,
 }
-
 #[derive(norito::Decode, norito::Encode, Clone, Debug)]
 struct OrderByTimeSchema {
     qty: i64,
     side: String,
     tif: u32,
 }
-
 #[derive(norito::Decode, norito::Encode, Clone, Debug)]
 struct TradeV1Schema {
     qty: i64,
     price: i64,
     side: String,
 }
-
 #[derive(norito::Decode, norito::Encode, Clone, Debug)]
 struct TradeV2Schema {
     qty: i64,
@@ -42,14 +36,12 @@ struct TradeV2Schema {
     side: String,
     venue: String,
 }
-
 /// Public schema info (id + version).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SchemaInfo {
     pub id: [u8; 32],
     pub version: u16,
 }
-
 /// Registry interface used by hosts.
 pub trait SchemaRegistry {
     /// Return schema info for the given name.
@@ -65,42 +57,33 @@ pub trait SchemaRegistry {
     /// Return the canonical current version for a base name.
     fn current(&self, base: &str) -> Option<(String, SchemaInfo)>;
 }
-
 impl<T: SchemaRegistry + ?Sized> SchemaRegistry for Arc<T> {
     fn info(&self, name: &str) -> Option<SchemaInfo> {
         (**self).info(name)
     }
-
     fn resolve_family(&self, name: &str) -> Option<String> {
         (**self).resolve_family(name)
     }
-
     fn encode_json(&self, name: &str, json: &[u8]) -> Option<Vec<u8>> {
         (**self).encode_json(name, json)
     }
-
     fn decode_to_json(&self, name: &str, bytes: &[u8]) -> Option<Vec<u8>> {
         (**self).decode_to_json(name, bytes)
     }
-
     fn list_versions(&self, base: &str) -> Option<Vec<(String, SchemaInfo)>> {
         (**self).list_versions(base)
     }
-
     fn current(&self, base: &str) -> Option<(String, SchemaInfo)> {
         (**self).current(base)
     }
 }
-
 /// Production default registry for the host schema syscalls.
 #[derive(Default)]
 pub struct DefaultRegistry;
-
 impl DefaultRegistry {
     pub fn new() -> Self {
         Self
     }
-
     fn info_order(&self) -> SchemaInfo {
         SchemaInfo {
             id: IrohaHash::new(b"Order@1").into(),
@@ -137,7 +120,6 @@ impl DefaultRegistry {
             version: 1,
         }
     }
-
     fn exact_object<'a>(
         value: &'a norito::json::Value,
         expected_fields: &[&str],
@@ -150,7 +132,6 @@ impl DefaultRegistry {
         .then_some(object)
     }
 }
-
 impl SchemaRegistry for DefaultRegistry {
     fn info(&self, name: &str) -> Option<SchemaInfo> {
         match name {
@@ -163,7 +144,6 @@ impl SchemaRegistry for DefaultRegistry {
             _ => None,
         }
     }
-
     fn resolve_family(&self, name: &str) -> Option<String> {
         match name {
             "Order" | "OrderByTime" => Some("Order".to_owned()),
@@ -173,7 +153,6 @@ impl SchemaRegistry for DefaultRegistry {
             _ => None,
         }
     }
-
     fn encode_json(&self, name: &str, json: &[u8]) -> Option<Vec<u8>> {
         match name {
             "Order" => {
@@ -229,7 +208,6 @@ impl SchemaRegistry for DefaultRegistry {
             _ => None,
         }
     }
-
     fn decode_to_json(&self, name: &str, bytes: &[u8]) -> Option<Vec<u8>> {
         match name {
             "Order" => {
@@ -276,7 +254,6 @@ impl SchemaRegistry for DefaultRegistry {
             _ => None,
         }
     }
-
     fn list_versions(&self, base: &str) -> Option<Vec<(String, SchemaInfo)>> {
         let mut out = Vec::new();
         match base {
@@ -298,7 +275,6 @@ impl SchemaRegistry for DefaultRegistry {
         }
         Some(out)
     }
-
     fn current(&self, base: &str) -> Option<(String, SchemaInfo)> {
         match base {
             "Order" => Some(("OrderByTime".to_string(), self.info_order_by_time())),
@@ -309,17 +285,14 @@ impl SchemaRegistry for DefaultRegistry {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use norito::json as njson;
-
     use super::*;
     use iroha_data_model::query::{
         QueryRequest, QueryResponse, SingularQueryBox, SingularQueryOutputBox,
         executor::prelude::FindParameters, runtime::AbiVersion,
     };
-
+    use norito::json as njson;
     fn eq_json(a: &[u8], b: &[u8]) -> bool {
         let va: njson::Value = match njson::from_slice(a) {
             Ok(v) => v,
@@ -331,7 +304,6 @@ mod tests {
         };
         va == vb
     }
-
     #[test]
     fn order_roundtrip() {
         let reg = DefaultRegistry::new();
@@ -340,7 +312,6 @@ mod tests {
         let dec = reg.decode_to_json("Order", &enc).expect("decode to json");
         assert!(eq_json(input, &dec));
     }
-
     #[test]
     fn registry_codec_is_ambient_independent_and_rejects_alternate_layout() {
         let reg = DefaultRegistry::new();
@@ -374,7 +345,6 @@ mod tests {
             .expect("decode canonical Order under alternate ambient flags");
         assert!(eq_json(input, &decoded));
     }
-
     #[test]
     fn order_by_time_roundtrip() {
         let reg = DefaultRegistry::new();
@@ -385,12 +355,10 @@ mod tests {
             .expect("decode to json");
         assert!(eq_json(input, &dec));
     }
-
     #[test]
     fn order_by_time_accepts_maximum_tif() {
         let reg = DefaultRegistry::new();
         let input = format!(r#"{{"qty":5,"side":"sell","tif":{}}}"#, u32::MAX);
-
         let enc = reg
             .encode_json("OrderByTime", input.as_bytes())
             .expect("encode maximum tif");
@@ -398,10 +366,8 @@ mod tests {
             .decode_to_json("OrderByTime", &enc)
             .expect("decode maximum tif");
         let value: njson::Value = njson::from_slice(&dec).expect("parse decoded JSON");
-
         assert_eq!(value["tif"].as_u64(), Some(u64::from(u32::MAX)));
     }
-
     #[test]
     fn order_by_time_rejects_tif_outside_u32() {
         let reg = DefaultRegistry::new();
@@ -413,7 +379,6 @@ mod tests {
             .is_none()
         );
     }
-
     #[test]
     fn registry_metadata_is_coherent_for_base_and_exact_names() {
         let reg = DefaultRegistry::new();
@@ -423,7 +388,6 @@ mod tests {
             ("QueryRequest", &["QueryRequest"], "QueryRequest"),
             ("QueryResponse", &["QueryResponse"], "QueryResponse"),
         ];
-
         for (family, exact_names, expected_current) in families {
             assert_eq!(reg.resolve_family(family).as_deref(), Some(family));
             let versions = reg.list_versions(family).expect("known family versions");
@@ -445,7 +409,6 @@ mod tests {
             assert_eq!(reg.info(&current.0), Some(current.1));
             assert!(versions.contains(&current));
         }
-
         for unknown in ["UnknownSchema", "OrderV2", "TradeV3", "Query"] {
             assert_eq!(reg.resolve_family(unknown), None);
             assert_eq!(reg.info(unknown), None);
@@ -453,7 +416,6 @@ mod tests {
             assert_eq!(reg.current(unknown), None);
         }
     }
-
     #[test]
     fn manual_schema_encoders_require_exact_json_shapes() {
         let reg = DefaultRegistry::new();
@@ -504,7 +466,6 @@ mod tests {
                 &br#"{"qty":5,"price":7,"side":"buy","venue":9}"#[..],
             ),
         ];
-
         for (label, schema, json) in invalid {
             assert!(
                 reg.encode_json(schema, json).is_none(),
@@ -512,7 +473,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn trade_v1_roundtrip_fields() {
         let reg = DefaultRegistry::new();
@@ -524,7 +484,6 @@ mod tests {
         assert_eq!(v["price"].as_i64().unwrap(), 1001);
         assert_eq!(v["side"].as_str().unwrap(), "buy");
     }
-
     #[test]
     fn trade_v2_roundtrip_fields() {
         let reg = DefaultRegistry::new();
@@ -537,7 +496,6 @@ mod tests {
         assert_eq!(v["side"].as_str().unwrap(), "sell");
         assert_eq!(v["venue"].as_str().unwrap(), "X");
     }
-
     #[test]
     fn query_request_roundtrip() {
         let reg = DefaultRegistry::new();
@@ -552,7 +510,6 @@ mod tests {
             .expect("decode to json");
         assert!(eq_json(&json_bytes, &dec));
     }
-
     #[test]
     fn query_response_roundtrip() {
         let reg = DefaultRegistry::new();

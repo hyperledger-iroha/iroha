@@ -5,7 +5,6 @@
 //! - Execution falls back to the scalar path and still matches known vectors
 //!
 //! Skips on non-macOS or when the `metal` feature is not enabled.
-
 #[cfg(target_os = "macos")]
 #[test]
 fn metal_backend_disables_on_forced_selftest_failure_and_parity_holds() {
@@ -14,10 +13,8 @@ fn metal_backend_disables_on_forced_selftest_failure_and_parity_holds() {
         eprintln!("metal feature not enabled; skipping test");
         return;
     }
-
     // Safety: Ensure we start with a fresh state so init path runs.
     ivm::release_metal_state();
-
     // Force the self-test to fail
     #[cfg_attr(not(feature = "metal"), allow(unused_unsafe))]
     unsafe {
@@ -25,7 +22,6 @@ fn metal_backend_disables_on_forced_selftest_failure_and_parity_holds() {
         // Also make sure it isn't re-enabled
         std::env::set_var("IVM_DISABLE_METAL", "0");
     }
-
     // Trigger Metal init path (this will run self-test and disable on mismatch)
     let _ = ivm::vadd32([1, 2, 3, 4], [4, 3, 2, 1]);
     let was_available = ivm::metal_available();
@@ -38,7 +34,6 @@ fn metal_backend_disables_on_forced_selftest_failure_and_parity_holds() {
         ivm::metal_disabled(),
         "metal_disabled should be true after forced fail"
     );
-
     // Verify fallback parity using the known "abc" single-block digest
     let mut state = [
         0x6a09e667u32,
@@ -57,7 +52,6 @@ fn metal_backend_disables_on_forced_selftest_failure_and_parity_holds() {
     block[3] = 0x80;
     block[63] = 24;
     ivm::sha256_compress(&mut state, &block);
-
     let mut digest = [0u8; 32];
     for (i, word) in state.iter().enumerate() {
         digest[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
@@ -68,7 +62,6 @@ fn metal_backend_disables_on_forced_selftest_failure_and_parity_holds() {
         0x15, 0xad,
     ];
     assert_eq!(digest, expected, "scalar fallback must match known digest");
-
     #[cfg_attr(not(feature = "metal"), allow(unused_unsafe))]
     unsafe {
         std::env::remove_var("IVM_FORCE_METAL_SELFTEST_FAIL");
@@ -76,7 +69,6 @@ fn metal_backend_disables_on_forced_selftest_failure_and_parity_holds() {
     }
     ivm::reset_metal_backend_for_tests();
 }
-
 #[cfg(all(target_os = "macos", feature = "metal"))]
 #[test]
 fn metal_backend_respects_config_disable_and_falls_back() {
@@ -85,7 +77,6 @@ fn metal_backend_respects_config_disable_and_falls_back() {
         eprintln!("No Metal GPU available; skipping test");
         return;
     }
-
     ivm::release_metal_state();
     let pre_compiles = ivm::bit_pipe_compile_count();
     ivm::set_acceleration_config(ivm::AccelerationConfig {
@@ -99,7 +90,6 @@ fn metal_backend_respects_config_disable_and_falls_back() {
         prefer_cpu_sha2_max_leaves_aarch64: None,
         prefer_cpu_sha2_max_leaves_x86: None,
     });
-
     assert!(
         !ivm::metal_available(),
         "metal_available should report false after config disable"
@@ -108,7 +98,6 @@ fn metal_backend_respects_config_disable_and_falls_back() {
         ivm::metal_disabled(),
         "metal_disabled should reflect config gating"
     );
-
     let result = ivm::vadd32([1, 2, 3, 4], [4, 3, 2, 1]);
     assert_eq!(result, [5, 5, 5, 5]);
     assert_eq!(
@@ -116,7 +105,6 @@ fn metal_backend_respects_config_disable_and_falls_back() {
         pre_compiles,
         "Disabling Metal must prevent pipeline compilation"
     );
-
     ivm::set_acceleration_config(ivm::AccelerationConfig {
         enable_simd: true,
         enable_metal: true,

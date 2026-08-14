@@ -16,7 +16,6 @@ fn abi_hash_markdown_matches_computed_values() {
         rows.push(line.to_string());
     }
     assert_eq!(rows.len(), 1, "expected one policy row (ABI v1)");
-
     let mut parsed = Vec::new();
     for row in rows {
         let parts: Vec<_> = row.split('|').map(|s| s.trim()).collect();

@@ -16,20 +16,15 @@
 //!
 //! Size and structural limits are enforced to reject oversized or malformed payloads
 //! deterministically (see [`StarkVerifierLimits`]).
-
 #![allow(clippy::needless_pass_by_value)]
-
+use crate::json_macros::{JsonDeserialize, JsonSerialize};
 use fastpq_prover::{hash_field_elements, pack_bytes};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-
-use crate::json_macros::{JsonDeserialize, JsonSerialize};
-
 /// Goldilocks prime modulus p = 2^64 - 2^32 + 1
 const MOD_P: u128 = (1u128 << 64) - (1u128 << 32) + 1;
 const MOD_P_U64: u64 = MOD_P as u64;
 const GOLDILOCKS_GENERATOR: u64 = 7;
-
 /// Supported hash selector for the STARK envelope.
 pub const STARK_HASH_SHA256_V1: u8 = 1;
 /// Selector for a Poseidon2 transcript and Merkle commitments.
@@ -47,7 +42,6 @@ pub const STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2: u8 = 3;
 pub const STARK_FRI_CONSENSUS_MIN_QUERIES: u16 = 48;
 /// Trace width of the generic OpenVerify binding AIR used by STARK/FRI v1 proofs.
 pub const STARK_BINDING_AIR_TRACE_WIDTH_V1: u16 = 6;
-
 const MAX_DOMAIN_LOG2: u8 = 24;
 const MAX_FRI_LAYERS: usize = 32;
 const MAX_FRI_QUERIES: usize = 64;
@@ -57,7 +51,6 @@ const MAX_AIR_WIDTH: usize = 64;
 const MAX_DOMAIN_TAG_LEN: usize = 64;
 const MAX_TRANSCRIPT_LABEL_LEN: usize = 128;
 const MAX_ENVELOPE_BYTES: usize = 1 << 20; // 1 MiB guard for decoded envelopes
-
 pub(crate) const STARK_FRI_QUERY_INDEX_REPEATED_ERROR: &str = "FRI query index repeated";
 const STARK_FRI_BOUNDED_QUERY_REJECTION_ATTEMPTS: usize = 8;
 #[cfg(test)]
@@ -68,7 +61,6 @@ const GENERIC_STARK_AIR_ZK_ACE_RESERVED_ERROR: &str =
 const GENERIC_STARK_AIR_IVM_EXECUTION_RESERVED_ERROR: &str = "generic STARK AIR prover cannot target the IVM execution circuit; use the IVM execution STARK prover";
 const GENERIC_STARK_AIR_SORACLOUD_RESERVED_ERROR: &str = "generic STARK AIR prover cannot target a Soracloud FHE relation; a dedicated typed Soracloud verifier is required";
 const GENERIC_STARK_AIR_GOVERNANCE_RESERVED_ERROR: &str = "generic STARK AIR prover cannot target a governance vote role; a dedicated semantic governance circuit is required";
-
 fn validate_stark_transcript_label(label: &str, max_len: usize) -> Result<(), &'static str> {
     if label.is_empty() {
         return Err("transcript label must not be empty");
@@ -81,7 +73,6 @@ fn validate_stark_transcript_label(label: &str, max_len: usize) -> Result<(), &'
     }
     Ok(())
 }
-
 fn validate_stark_circuit_id(circuit_id: &str) -> Result<(), &'static str> {
     if circuit_id.is_empty() {
         return Err("circuit id must not be empty");
@@ -94,7 +85,6 @@ fn validate_stark_circuit_id(circuit_id: &str) -> Result<(), &'static str> {
     }
     Ok(())
 }
-
 fn stark_air_circuit_id_targets_reserved_circuit(circuit_id: &str, canonical: &str) -> bool {
     let trimmed = circuit_id.trim();
     trimmed == canonical
@@ -102,28 +92,24 @@ fn stark_air_circuit_id_targets_reserved_circuit(circuit_id: &str, canonical: &s
             .strip_suffix(canonical)
             .is_some_and(|prefix| prefix.ends_with(':') || prefix.ends_with('/'))
 }
-
 fn stark_air_circuit_id_targets_bfv_full_bootstrap(circuit_id: &str) -> bool {
     stark_air_circuit_id_targets_reserved_circuit(
         circuit_id,
         iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
     )
 }
-
 fn stark_air_circuit_id_targets_zk_ace(circuit_id: &str) -> bool {
     stark_air_circuit_id_targets_reserved_circuit(
         circuit_id,
         iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
     )
 }
-
 fn stark_air_circuit_id_targets_ivm_execution(circuit_id: &str) -> bool {
     stark_air_circuit_id_targets_reserved_circuit(
         circuit_id,
         crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
     )
 }
-
 fn stark_air_circuit_id_targets_governance_vote_relation(circuit_id: &str) -> bool {
     [
         crate::zk::GOVERNANCE_BALLOT_CIRCUIT_ID_V1,
@@ -132,7 +118,6 @@ fn stark_air_circuit_id_targets_governance_vote_relation(circuit_id: &str) -> bo
     .into_iter()
     .any(|canonical| stark_air_circuit_id_targets_reserved_circuit(circuit_id, canonical))
 }
-
 fn stark_air_circuit_id_targets_soracloud_fhe_relation(circuit_id: &str) -> bool {
     [
         iroha_data_model::soracloud::SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
@@ -143,7 +128,6 @@ fn stark_air_circuit_id_targets_soracloud_fhe_relation(circuit_id: &str) -> bool
     .into_iter()
     .any(|canonical| stark_air_circuit_id_targets_reserved_circuit(circuit_id, canonical))
 }
-
 fn validate_generic_stark_air_circuit_id(circuit_id: &str) -> Result<(), String> {
     validate_stark_circuit_id(circuit_id)
         .map_err(|err| format!("invalid STARK AIR circuit_id: {err}"))?;
@@ -164,7 +148,6 @@ fn validate_generic_stark_air_circuit_id(circuit_id: &str) -> Result<(), String>
     }
     Ok(())
 }
-
 fn validate_stark_domain_tag(domain_tag: &str, max_len: usize) -> Result<(), &'static str> {
     if domain_tag.is_empty() {
         return Err("domain tag must not be empty");
@@ -177,7 +160,6 @@ fn validate_stark_domain_tag(domain_tag: &str, max_len: usize) -> Result<(), &'s
     }
     Ok(())
 }
-
 /// Tunable limits applied during STARK envelope verification to prevent denial-of-service inputs.
 ///
 /// These values can tighten the built-in protocol caps for a caller, but they
@@ -206,7 +188,6 @@ pub struct StarkVerifierLimits {
     /// Caller cap for encoded envelope size, clamped to the native byte budget.
     pub max_envelope_bytes: usize,
 }
-
 impl Default for StarkVerifierLimits {
     fn default() -> Self {
         Self {
@@ -223,49 +204,38 @@ impl Default for StarkVerifierLimits {
         }
     }
 }
-
 fn effective_max_domain_log2(limits: &StarkVerifierLimits) -> u8 {
     limits.max_domain_log2.min(MAX_DOMAIN_LOG2)
 }
-
 fn effective_max_blowup_log2(limits: &StarkVerifierLimits) -> u8 {
     limits.max_blowup_log2.min(MAX_DOMAIN_LOG2)
 }
-
 fn effective_max_fold_arity(limits: &StarkVerifierLimits) -> u8 {
     limits.max_fold_arity.min(1 << 5)
 }
-
 fn effective_max_queries(limits: &StarkVerifierLimits) -> usize {
     limits.max_queries.min(MAX_FRI_QUERIES)
 }
-
 fn effective_max_merkle_depth(limits: &StarkVerifierLimits) -> usize {
     limits.max_merkle_depth.min(MAX_MERKLE_DEPTH)
 }
-
 fn effective_max_aux_terms(limits: &StarkVerifierLimits) -> usize {
     limits.max_aux_terms.min(MAX_AUX_TERMS)
 }
-
 fn effective_max_air_width(limits: &StarkVerifierLimits) -> usize {
     limits.max_air_width.min(MAX_AIR_WIDTH)
 }
-
 fn effective_max_domain_tag_len(limits: &StarkVerifierLimits) -> usize {
     limits.max_domain_tag_len.min(MAX_DOMAIN_TAG_LEN)
 }
-
 fn effective_max_transcript_label_len(limits: &StarkVerifierLimits) -> usize {
     limits
         .max_transcript_label_len
         .min(MAX_TRANSCRIPT_LABEL_LEN)
 }
-
 fn effective_max_envelope_bytes(limits: &StarkVerifierLimits) -> usize {
     limits.max_envelope_bytes.min(MAX_ENVELOPE_BYTES)
 }
-
 /// Goldilocks field element with canonical modular reduction.
 ///
 /// This backend keeps values in the range `[0, MOD_P)` and implements the
@@ -274,28 +244,23 @@ fn effective_max_envelope_bytes(limits: &StarkVerifierLimits) -> usize {
 /// callers do not need to pre-normalise inputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Fq(u64);
-
 impl Fq {
     /// Construct an element from an arbitrary 64-bit integer by reducing it
     /// modulo `MOD_P`.
     fn new(v: u64) -> Self {
         Self::reduce(v as u128)
     }
-
     /// Construct from canonical representative. Returns `None` if the input is
     /// outside `[0, MOD_P)`.
     fn from_canonical_u64(v: u64) -> Option<Self> {
         if v >= MOD_P_U64 { None } else { Some(Self(v)) }
     }
-
     fn zero() -> Self {
         Self(0)
     }
-
     fn one() -> Self {
         Self(1)
     }
-
     fn add(self, rhs: Self) -> Self {
         let mut x = (self.0 as u128) + (rhs.0 as u128);
         if x >= MOD_P {
@@ -303,19 +268,16 @@ impl Fq {
         }
         Self(x as u64)
     }
-
     fn sub(self, rhs: Self) -> Self {
         let a = self.0 as u128;
         let b = rhs.0 as u128;
         let x = if a >= b { a - b } else { (a + MOD_P) - b };
         Self(x as u64)
     }
-
     fn mul(self, rhs: Self) -> Self {
         let x = (self.0 as u128) * (rhs.0 as u128);
         Self::reduce(x)
     }
-
     fn pow(self, mut e: u128) -> Self {
         let mut base = self;
         let mut acc = Self::one();
@@ -328,7 +290,6 @@ impl Fq {
         }
         acc
     }
-
     fn inv(self) -> Option<Self> {
         if self.0 == 0 {
             return None;
@@ -336,21 +297,17 @@ impl Fq {
         // Fermat's little theorem: a^(p-2) mod p
         Some(self.pow((MOD_P - 2) as u128))
     }
-
     fn to_le_bytes(self) -> [u8; 8] {
         self.0.to_le_bytes()
     }
-
     fn reduce(v: u128) -> Self {
         Self((v % MOD_P) as u64)
     }
 }
-
 fn two_inv() -> Fq {
     // (p + 1) / 2 for the odd Goldilocks prime.
     Fq(((MOD_P + 1) / 2) as u64)
 }
-
 fn domain_x_for_pair(layer_domain: usize, pair_index: usize) -> Option<Fq> {
     if layer_domain < 2 || !layer_domain.is_power_of_two() || pair_index >= layer_domain / 2 {
         return None;
@@ -360,20 +317,17 @@ fn domain_x_for_pair(layer_domain: usize, pair_index: usize) -> Option<Fq> {
     let root = Fq::new(GOLDILOCKS_GENERATOR).pow(exponent);
     Some(root.pow(pair_index as u128))
 }
-
 fn fri_fold_pair(y0: Fq, y1: Fq, beta: Fq, x: Fq) -> Option<Fq> {
     let inv_2x = x.mul(Fq::from_canonical_u64(2)?).inv()?;
     let even = y0.add(y1).mul(two_inv());
     let odd = y0.sub(y1).mul(inv_2x);
     Some(even.add(beta.mul(odd)))
 }
-
 fn u64_to_digest_le(val: u64) -> [u8; 32] {
     let mut out = [0u8; 32];
     out[..8].copy_from_slice(&val.to_le_bytes());
     out
 }
-
 fn digest_le_to_u64(bytes: &[u8; 32]) -> Option<u64> {
     if bytes[8..].iter().any(|b| *b != 0) {
         return None;
@@ -382,7 +336,6 @@ fn digest_le_to_u64(bytes: &[u8; 32]) -> Option<u64> {
         bytes[..8].try_into().expect("slice length"),
     ))
 }
-
 /// Transcript helper: derive a 64-bit field element challenge from label+bytes.
 fn challenge(params: &StarkFriParamsV1, label: &str, bytes: &[u8]) -> Option<Fq> {
     match params.hash_fn {
@@ -414,7 +367,6 @@ fn challenge(params: &StarkFriParamsV1, label: &str, bytes: &[u8]) -> Option<Fq>
         _ => None,
     }
 }
-
 /// Compute SHA-256 hash of a leaf value with domain separation.
 fn leaf_hash(val: Fq) -> [u8; 32] {
     let mut h = Sha256::new();
@@ -422,7 +374,6 @@ fn leaf_hash(val: Fq) -> [u8; 32] {
     h.update(&val.to_le_bytes());
     h.finalize().into()
 }
-
 /// Hash an internal node as SHA-256(left || right).
 fn node_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     let mut h = Sha256::new();
@@ -430,7 +381,6 @@ fn node_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     h.update(right);
     h.finalize().into()
 }
-
 fn poseidon_domain_hash_u64(domain: &[u8], values: &[u64]) -> u64 {
     let packed = pack_bytes(domain);
     let len_field = u64::try_from(packed.length).unwrap_or(u64::MAX);
@@ -440,7 +390,6 @@ fn poseidon_domain_hash_u64(domain: &[u8], values: &[u64]) -> u64 {
     limbs.extend_from_slice(values);
     hash_field_elements(&limbs)
 }
-
 fn poseidon_leaf_hash(val: Fq) -> [u8; 32] {
     // Domain-separated leaf hashing to avoid collisions with internal nodes.
     u64_to_digest_le(poseidon_domain_hash_u64(
@@ -448,7 +397,6 @@ fn poseidon_leaf_hash(val: Fq) -> [u8; 32] {
         &[val.0],
     ))
 }
-
 fn poseidon_node_hash(left: &[u8; 32], right: &[u8; 32]) -> Option<[u8; 32]> {
     let l = digest_le_to_u64(left)?;
     let r = digest_le_to_u64(right)?;
@@ -457,7 +405,6 @@ fn poseidon_node_hash(left: &[u8; 32], right: &[u8; 32]) -> Option<[u8; 32]> {
         &[l, r],
     )))
 }
-
 /// Verify a Merkle inclusion proof for a leaf value to `root`.
 fn merkle_verify(params: &StarkFriParamsV1, root: &[u8; 32], leaf: Fq, path: &MerklePath) -> bool {
     let mut acc = match params.hash_fn {
@@ -495,7 +442,6 @@ fn merkle_verify(params: &StarkFriParamsV1, root: &[u8; 32], leaf: Fq, path: &Me
     }
     &acc == root
 }
-
 fn merkle_path_index(path: &MerklePath) -> Option<usize> {
     let depth = path.siblings.len();
     if depth == 0 {
@@ -515,7 +461,6 @@ fn merkle_path_index(path: &MerklePath) -> Option<usize> {
     }
     Some(index)
 }
-
 fn merkle_path_depth_ok(
     path: &MerklePath,
     expected_depth: usize,
@@ -542,19 +487,16 @@ fn merkle_path_depth_ok(
     }
     true
 }
-
 /// Verify a STARK FRI envelope under `zk-stark` with default limits.
 pub fn verify_stark_fri_envelope(bytes: &[u8]) -> bool {
     verify_stark_fri_envelope_with_limits(bytes, &StarkVerifierLimits::default())
 }
-
 fn log2_usize(value: usize) -> Option<usize> {
     if value == 0 || !value.is_power_of_two() {
         return None;
     }
     Some(usize::BITS as usize - 1 - value.leading_zeros() as usize)
 }
-
 fn layers_required(params: &StarkFriParamsV1) -> Option<usize> {
     if params.fold_arity < 2 {
         return None;
@@ -577,7 +519,6 @@ fn layers_required(params: &StarkFriParamsV1) -> Option<usize> {
     }
     Some(layers)
 }
-
 fn validate_params(
     params: &StarkFriParamsV1,
     roots_len: usize,
@@ -630,7 +571,6 @@ fn validate_params(
     }
     Some(required_layers)
 }
-
 fn validate_stark_opening_commitment_params_with_limits_v1(
     params: &StarkFriParamsV1,
     limits: &StarkVerifierLimits,
@@ -643,12 +583,10 @@ fn validate_stark_opening_commitment_params_with_limits_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     include!("zk_stark/tests.rs");
 }
-
 #[cfg(test)]
 fn derive_query_index(
     label: &str,
@@ -666,7 +604,6 @@ fn derive_query_index(
     let (word, _) = derive_query_challenge_word(label, params, roots, query_idx, 0)?;
     Some((u128::from(word) % (domain as u128)) as usize)
 }
-
 fn extend_query_challenge_preimage(
     preimage: &mut Vec<u8>,
     label: &str,
@@ -698,7 +635,6 @@ fn extend_query_challenge_preimage(
     }
     Some(())
 }
-
 fn derive_query_challenge_word(
     label: &str,
     params: &StarkFriParamsV1,
@@ -745,7 +681,6 @@ fn derive_query_challenge_word(
         _ => None,
     }
 }
-
 fn derive_bounded_query_offset(
     label: &str,
     params: &StarkFriParamsV1,
@@ -771,7 +706,6 @@ fn derive_bounded_query_offset(
     }
     Err("FRI query index derivation failed")
 }
-
 fn derive_query_indices_without_replacement(
     label: &str,
     params: &StarkFriParamsV1,
@@ -785,7 +719,6 @@ fn derive_query_indices_without_replacement(
     if query_count > domain {
         return Err("FRI query count exceeds domain size");
     }
-
     let mut swaps = BTreeMap::new();
     let mut indices = Vec::with_capacity(query_count);
     for query_number in 0..query_count {
@@ -806,7 +739,6 @@ fn derive_query_indices_without_replacement(
     }
     Ok(indices)
 }
-
 /// Norito-serializable Merkle path (dirs as bitset, siblings as hashes).
 #[derive(
     Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
@@ -817,7 +749,6 @@ pub struct MerklePath {
     /// Sibling hashes from leaf to root (one per level)
     pub siblings: Vec<[u8; 32]>,
 }
-
 /// Parameters for a binary multi-round FRI check.
 #[derive(
     Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
@@ -840,7 +771,6 @@ pub struct StarkFriParamsV1 {
     /// Domain tag mixed into transcripts and query sampling
     pub domain_tag: String,
 }
-
 /// Minimal verifying-key payload for the `stark/fri/*` backends.
 ///
 /// This is stored inside [`iroha_data_model::proof::VerifyingKeyBox::bytes`] and
@@ -869,7 +799,6 @@ pub struct StarkFriVerifyingKeyV1 {
     /// Hash function selector (`1 = SHA-256`, `2 = Poseidon2`).
     pub hash_fn: u8,
 }
-
 /// Maximum canonical encoding accepted for a STARK/FRI V1 verifying key.
 ///
 /// The payload contains one bounded circuit identifier and a fixed set of
@@ -877,7 +806,6 @@ pub struct StarkFriVerifyingKeyV1 {
 /// registry input to inherit a caller-sized decode budget.
 pub const STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES: usize = 4 * 1024;
 const STARK_FRI_VERIFYING_KEY_V1_MAX_NESTING_DEPTH: usize = 8;
-
 /// Decode one exact canonical STARK/FRI V1 verifying-key payload under a
 /// schema-specific resource budget.
 ///
@@ -904,7 +832,6 @@ pub fn decode_stark_fri_verifying_key_v1(bytes: &[u8]) -> Result<StarkFriVerifyi
     norito::decode_canonical_with_limits(bytes, limits)
         .map_err(|err| format!("invalid canonical STARK/FRI verifier key: {err}"))
 }
-
 /// Validate that a STARK/FRI verifier-key payload uses ledger-grade verifier parameters.
 ///
 /// This is a control-plane floor for proof-system admission. It rejects historical
@@ -977,11 +904,9 @@ pub fn validate_stark_fri_canonical_verifying_key_payload(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod verifying_key_decode_tests {
     use super::*;
-
     fn canonical_payload() -> StarkFriVerifyingKeyV1 {
         StarkFriVerifyingKeyV1 {
             version: 1,
@@ -994,7 +919,6 @@ mod verifying_key_decode_tests {
             hash_fn: STARK_HASH_SHA256_V1,
         }
     }
-
     #[test]
     fn bounded_verifying_key_decode_accepts_canonical_payload() {
         let payload = canonical_payload();
@@ -1005,7 +929,6 @@ mod verifying_key_decode_tests {
         assert_eq!(decoded.queries, payload.queries);
         assert_eq!(decoded.hash_fn, payload.hash_fn);
     }
-
     #[test]
     fn bounded_verifying_key_decode_rejects_alternate_layout() {
         let payload = canonical_payload();
@@ -1022,7 +945,6 @@ mod verifying_key_decode_tests {
             "registry decoder must accept only the canonical layout"
         );
     }
-
     #[test]
     fn bounded_verifying_key_decode_rejects_huge_declared_inner_length() {
         let payload = canonical_payload();
@@ -1034,13 +956,11 @@ mod verifying_key_decode_tests {
             .expect("encoded circuit id");
         assert!(circuit_offset > 0, "circuit id must carry a length prefix");
         bytes[circuit_offset - 1] = u8::MAX;
-
         assert!(
             decode_stark_fri_verifying_key_v1(&bytes).is_err(),
             "a tiny frame must not allocate from an attacker-declared inner length"
         );
     }
-
     #[test]
     fn bounded_verifying_key_decode_rejects_oversized_frame() {
         let bytes = vec![0_u8; STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES + 1];
@@ -1049,7 +969,6 @@ mod verifying_key_decode_tests {
         assert!(error.contains("exceeds"), "unexpected error: {error}");
     }
 }
-
 /// Commitments for multiple layers and optional composition root.
 #[derive(
     Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
@@ -1062,7 +981,6 @@ pub struct StarkCommitmentsV1 {
     /// Optional composition polynomial root over the final layer domain (length n >> L)
     pub comp_root: Option<[u8; 32]>,
 }
-
 /// Auxiliary term contributing to the composition polynomial evaluation.
 #[derive(
     Debug,
@@ -1083,7 +1001,6 @@ pub struct StarkCompositionTermV1 {
     /// Coefficient multiplied with the value
     pub coeff: u64,
 }
-
 /// Composition leaf data stored under `comp_root`.
 #[derive(
     Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
@@ -1100,7 +1017,6 @@ pub struct StarkCompositionValueV1 {
     /// Inclusion path for the leaf under `comp_root`
     pub path: MerklePath,
 }
-
 /// Sampled AIR trace and composition opening for one verifier query.
 #[derive(
     Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
@@ -1121,7 +1037,6 @@ pub struct StarkAirOpeningV1 {
     /// Inclusion path for `composition_value` under [`StarkAirProofV1::composition_root`].
     pub composition_path: MerklePath,
 }
-
 /// Verifier-owned AIR statement carried by V1 STARK proofs.
 #[derive(
     Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
@@ -1142,7 +1057,6 @@ pub struct StarkAirProofV1 {
     /// Sampled AIR openings, one per FRI query.
     pub openings: Vec<StarkAirOpeningV1>,
 }
-
 /// Decommitment for one fold step at layer `k`.
 #[derive(
     Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
@@ -1167,7 +1081,6 @@ pub struct FoldDecommitV1 {
     /// Merkle path for the folded value z in the next layer (k+1)
     pub path_z: MerklePath,
 }
-
 /// STARK proof carrying commitments and query decommitments.
 #[derive(
     Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
@@ -1187,7 +1100,6 @@ pub struct StarkProofV1 {
     /// V1 AIR section binding sampled trace and composition openings to FRI.
     pub air: Option<StarkAirProofV1>,
 }
-
 /// Verification envelope for STARK FRI multi-round (binary) proofs.
 #[derive(
     Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
@@ -1200,7 +1112,6 @@ pub struct StarkVerifyEnvelopeV1 {
     /// Transcript label to domain-separate instances
     pub transcript_label: String,
 }
-
 fn merkle_levels_from_values(
     params: &StarkFriParamsV1,
     values: &[Fq],
@@ -1238,7 +1149,6 @@ fn merkle_levels_from_values(
     }
     Some(levels)
 }
-
 fn merkle_path_from_levels(index: usize, levels: &[Vec<[u8; 32]>]) -> Option<MerklePath> {
     let leaf_level = levels.first()?;
     if index >= leaf_level.len() {
@@ -1272,11 +1182,9 @@ fn merkle_path_from_levels(index: usize, levels: &[Vec<[u8; 32]>]) -> Option<Mer
     }
     Some(MerklePath { dirs, siblings })
 }
-
 fn merkle_root_from_levels(levels: &[Vec<[u8; 32]>]) -> Option<[u8; 32]> {
     levels.last()?.first().copied()
 }
-
 fn merkle_levels_from_hashes(
     params: &StarkFriParamsV1,
     leaves: Vec<[u8; 32]>,
@@ -1307,7 +1215,6 @@ fn merkle_levels_from_hashes(
     }
     Some(levels)
 }
-
 fn merkle_verify_hash(
     params: &StarkFriParamsV1,
     root: &[u8; 32],
@@ -1345,7 +1252,6 @@ fn merkle_verify_hash(
     }
     &acc == root
 }
-
 /// Build a v1 STARK Merkle root from canonical field values.
 pub(crate) fn stark_merkle_root_from_field_values_v1(
     params: &StarkFriParamsV1,
@@ -1359,7 +1265,6 @@ pub(crate) fn stark_merkle_root_from_field_values_v1(
     let levels = merkle_levels_from_values(params, &values)?;
     merkle_root_from_levels(&levels)
 }
-
 /// Build a v1 STARK AIR trace Merkle root from row-major trace values.
 pub(crate) fn stark_air_trace_root_from_rows_v1(
     params: &StarkFriParamsV1,
@@ -1372,7 +1277,6 @@ pub(crate) fn stark_air_trace_root_from_rows_v1(
     let levels = merkle_levels_from_hashes(params, trace_leaves)?;
     merkle_root_from_levels(&levels)
 }
-
 /// Build a v1 STARK Merkle root and path from canonical field values.
 #[cfg(test)]
 pub(crate) fn stark_merkle_root_and_path_from_field_values_v1(
@@ -1391,7 +1295,6 @@ pub(crate) fn stark_merkle_root_and_path_from_field_values_v1(
         merkle_path_from_levels(index, &levels)?,
     ))
 }
-
 /// Build a deterministic V1 STARK/FRI envelope from canonical field values.
 #[cfg(test)]
 pub(crate) fn stark_synthesize_fri_envelope_from_field_values_v1(
@@ -1408,7 +1311,6 @@ pub(crate) fn stark_synthesize_fri_envelope_from_field_values_v1(
     synthesize_stark_fri_envelope_from_values(params, transcript_label, values, extra_query_roots)
         .ok()
 }
-
 /// Verify that one native AIR opening is bound to its Merkle path indices and roots.
 #[cfg(test)]
 pub(crate) fn validate_stark_air_opening_commitment_roots_v1(
@@ -1423,7 +1325,6 @@ pub(crate) fn validate_stark_air_opening_commitment_roots_v1(
         &StarkVerifierLimits::default(),
     )
 }
-
 /// Verify that one native AIR opening is bound to its Merkle path indices and roots.
 pub(crate) fn validate_stark_air_opening_commitment_roots_with_limits_v1(
     params: &StarkFriParamsV1,
@@ -1479,7 +1380,6 @@ pub(crate) fn validate_stark_air_opening_commitment_roots_with_limits_v1(
     }
     Ok(())
 }
-
 /// Validate FRI query-chain shape, commitments, folds, and return transcript-derived base indices.
 pub(crate) fn validate_stark_fri_query_shape_and_indices_v1(
     params: &StarkFriParamsV1,
@@ -1497,7 +1397,6 @@ pub(crate) fn validate_stark_fri_query_shape_and_indices_v1(
         &StarkVerifierLimits::default(),
     )
 }
-
 pub(crate) fn validate_stark_fri_query_shape_and_indices_with_limits_v1(
     params: &StarkFriParamsV1,
     transcript_label: &str,
@@ -1596,7 +1495,6 @@ pub(crate) fn validate_stark_fri_query_shape_and_indices_with_limits_v1(
     }
     Ok(base_indices)
 }
-
 pub(crate) fn validate_stark_fri_query_shape_for_base_indices_v1(
     params: &StarkFriParamsV1,
     transcript_label: &str,
@@ -1613,7 +1511,6 @@ pub(crate) fn validate_stark_fri_query_shape_for_base_indices_v1(
         &StarkVerifierLimits::default(),
     )
 }
-
 pub(crate) fn validate_stark_fri_query_shape_for_base_indices_with_limits_v1(
     params: &StarkFriParamsV1,
     transcript_label: &str,
@@ -1717,7 +1614,6 @@ pub(crate) fn validate_stark_fri_query_shape_for_base_indices_with_limits_v1(
     }
     Ok(base_indices.to_vec())
 }
-
 /// Verify that an AIR opening is the value opened by the first FRI layer.
 pub(crate) fn validate_stark_air_opening_first_fri_value_v1(
     opening: &StarkAirOpeningV1,
@@ -1737,11 +1633,9 @@ pub(crate) fn validate_stark_air_opening_first_fri_value_v1(
     }
     Ok(())
 }
-
 fn stark_air_trace_width() -> usize {
     usize::from(STARK_BINDING_AIR_TRACE_WIDTH_V1)
 }
-
 #[derive(Clone, Copy)]
 struct StarkAirExplicitVerificationContext<'a> {
     circuit_id: &'a str,
@@ -1750,7 +1644,6 @@ struct StarkAirExplicitVerificationContext<'a> {
     composition_values: &'a [u64],
     base_indices: Option<&'a [usize]>,
 }
-
 #[derive(Clone, Copy)]
 enum StarkAirVerificationContext<'a> {
     Binding,
@@ -1762,12 +1655,10 @@ enum StarkAirVerificationContext<'a> {
     },
     Explicit(&'a StarkAirExplicitVerificationContext<'a>),
 }
-
 impl StarkAirVerificationContext<'_> {
     fn allows_auxiliary_composition(self) -> bool {
         matches!(self, Self::Binding)
     }
-
     fn trace_width(self) -> usize {
         match self {
             Self::Binding => stark_air_trace_width(),
@@ -1778,7 +1669,6 @@ impl StarkAirVerificationContext<'_> {
         }
     }
 }
-
 fn stark_air_digest_limbs(public_digest: &[u8; 32]) -> [u64; 4] {
     let mut limbs = [0u64; 4];
     for (idx, chunk) in public_digest.chunks_exact(8).enumerate() {
@@ -1788,7 +1678,6 @@ fn stark_air_digest_limbs(public_digest: &[u8; 32]) -> [u64; 4] {
     }
     limbs
 }
-
 fn stark_air_row(index: usize, public_digest: &[u8; 32]) -> Option<Vec<u64>> {
     let index = u64::try_from(index).ok()?;
     let index = (u128::from(index) % MOD_P) as u64;
@@ -1796,7 +1685,6 @@ fn stark_air_row(index: usize, public_digest: &[u8; 32]) -> Option<Vec<u64>> {
     let width = u64::try_from(stark_air_trace_width()).ok()?;
     Some(vec![index, limbs[0], limbs[1], limbs[2], limbs[3], width])
 }
-
 fn stark_air_trace_leaf_hash(params: &StarkFriParamsV1, row: &[u64]) -> Option<[u8; 32]> {
     if row
         .iter()
@@ -1822,7 +1710,6 @@ fn stark_air_trace_leaf_hash(params: &StarkFriParamsV1, row: &[u64]) -> Option<[
         _ => None,
     }
 }
-
 fn stark_air_composition_value(
     index: usize,
     domain_size: usize,
@@ -1850,7 +1737,6 @@ fn stark_air_composition_value(
     }
     Some(acc)
 }
-
 fn stark_air_composition_value_for_context(
     context: StarkAirVerificationContext<'_>,
     index: usize,
@@ -1910,7 +1796,6 @@ fn stark_air_composition_value_for_context(
         }
     }
 }
-
 fn stark_air_context_matches_statement(
     params: &StarkFriParamsV1,
     air: &StarkAirProofV1,
@@ -1970,7 +1855,6 @@ fn stark_air_context_matches_statement(
         }
     }
 }
-
 fn bfv_full_bootstrap_statement_hash_is_admissible(
     statement_hash: iroha_crypto::Hash,
     slot_index: u32,
@@ -1984,7 +1868,6 @@ fn bfv_full_bootstrap_statement_hash_is_admissible(
     )
     .is_ok()
 }
-
 fn bfv_full_bootstrap_public_padding_inputs_are_admissible(
     statement_hash: iroha_crypto::Hash,
     trace_material_digest: iroha_crypto::Hash,
@@ -1998,7 +1881,6 @@ fn bfv_full_bootstrap_public_padding_inputs_are_admissible(
         )
         .is_ok()
 }
-
 fn bfv_full_bootstrap_expected_base_indices_v1(
     statement_hash: iroha_crypto::Hash,
     trace_material_digest: iroha_crypto::Hash,
@@ -2030,7 +1912,6 @@ fn bfv_full_bootstrap_expected_base_indices_v1(
         })
         .collect()
 }
-
 fn stark_air_query_roots(roots: &[[u8; 32]], air: Option<&StarkAirProofV1>) -> Vec<[u8; 32]> {
     let mut query_roots = roots.to_vec();
     if let Some(air) = air {
@@ -2040,7 +1921,6 @@ fn stark_air_query_roots(roots: &[[u8; 32]], air: Option<&StarkAirProofV1>) -> V
     }
     query_roots
 }
-
 fn bfv_full_bootstrap_stark_air_params_v1(statement_hash: iroha_crypto::Hash) -> StarkFriParamsV1 {
     StarkFriParamsV1 {
         version: 1,
@@ -2053,7 +1933,6 @@ fn bfv_full_bootstrap_stark_air_params_v1(statement_hash: iroha_crypto::Hash) ->
         domain_tag: iroha_crypto::bfv_full_bootstrap_native_stark_air_domain_tag_v1(statement_hash),
     }
 }
-
 fn bfv_full_bootstrap_stark_air_params_match_v1(
     actual: &StarkFriParamsV1,
     expected: &StarkFriParamsV1,
@@ -2067,7 +1946,6 @@ fn bfv_full_bootstrap_stark_air_params_match_v1(
         && actual.hash_fn == expected.hash_fn
         && actual.domain_tag == expected.domain_tag
 }
-
 fn bfv_full_bootstrap_stark_air_transcript_label_v1(attempt: u32) -> String {
     if attempt == 0 {
         return iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1.to_owned();
@@ -2077,11 +1955,9 @@ fn bfv_full_bootstrap_stark_air_transcript_label_v1(attempt: u32) -> String {
         iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1
     )
 }
-
 fn bfv_full_bootstrap_stark_air_transcript_label_allowed_v1(label: &str) -> bool {
     label == iroha_crypto::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1
 }
-
 fn validate_stark_prover_params(
     params: &StarkFriParamsV1,
     transcript_label: &str,
@@ -2127,7 +2003,6 @@ fn validate_stark_prover_params(
     }
     layers_required(params).ok_or_else(|| "invalid STARK folding parameters".to_owned())
 }
-
 fn fri_round_challenge(
     params: &StarkFriParamsV1,
     transcript_label: &str,
@@ -2149,7 +2024,6 @@ fn fri_round_challenge(
     tb.extend_from_slice(root);
     challenge(params, "stark:fri:r:k", &tb)
 }
-
 #[cfg(test)]
 fn synthesize_stark_fri_envelope_from_values(
     params: StarkFriParamsV1,
@@ -2165,7 +2039,6 @@ fn synthesize_stark_fri_envelope_from_values(
         None,
     )
 }
-
 fn synthesize_stark_fri_envelope_from_values_with_base_indices(
     params: StarkFriParamsV1,
     transcript_label: String,
@@ -2181,12 +2054,10 @@ fn synthesize_stark_fri_envelope_from_values_with_base_indices(
         return Err("STARK base evaluations do not match domain size".to_owned());
     }
     let fold_arity = params.fold_arity as usize;
-
     let mut layer_values = Vec::with_capacity(required_layers + 1);
     let mut layer_merkle = Vec::with_capacity(required_layers + 1);
     let mut roots = Vec::with_capacity(required_layers + 1);
     layer_values.push(base_values);
-
     for round in 0..required_layers {
         let current = layer_values
             .get(round)
@@ -2221,10 +2092,8 @@ fn synthesize_stark_fri_envelope_from_values_with_base_indices(
         .ok_or_else(|| "failed to derive STARK final FRI root".to_owned())?;
     roots.push(final_root);
     layer_merkle.push(final_levels);
-
     let mut query_roots = roots.clone();
     query_roots.extend_from_slice(extra_query_roots);
-
     let query_count = params.queries as usize;
     let query_indices = if let Some(base_indices) = base_indices {
         if base_indices.len() != query_count {
@@ -2301,7 +2170,6 @@ fn synthesize_stark_fri_envelope_from_values_with_base_indices(
         }
         queries.push(chain);
     }
-
     let envelope = StarkVerifyEnvelopeV1 {
         params,
         proof: StarkProofV1 {
@@ -2319,7 +2187,6 @@ fn synthesize_stark_fri_envelope_from_values_with_base_indices(
     };
     Ok(envelope)
 }
-
 /// Build a deterministic STARK FRI proof envelope that passes native verification.
 ///
 /// The generated witness uses all-zero layer evaluations and deterministic Merkle openings for
@@ -2339,7 +2206,6 @@ fn synthesize_stark_fri_envelope_bytes(
         synthesize_stark_fri_envelope_from_values(params, transcript_label, values, &[])?;
     norito::to_bytes(&envelope).map_err(|err| format!("failed to encode STARK envelope: {err}"))
 }
-
 fn validate_stark_composition_terms(
     constant: u64,
     z_coeff: u64,
@@ -2370,7 +2236,6 @@ fn validate_stark_composition_terms(
     }
     Ok(())
 }
-
 /// Build the V1 public AIR statement digest for composition terms.
 pub fn stark_air_public_digest_from_composition(
     constant: u64,
@@ -2390,7 +2255,6 @@ pub fn stark_air_public_digest_from_composition(
     }
     Ok(h.finalize().into())
 }
-
 /// Build a V1 STARK/FRI AIR envelope from caller-validated rows and composition values.
 ///
 /// Domain-specific AIR callers remain responsible for proving that the supplied rows and
@@ -2417,7 +2281,6 @@ pub(crate) fn prove_stark_fri_air_envelope_from_rows_and_composition_values_byte
         None,
     )
 }
-
 #[cfg(test)]
 pub(crate) fn prove_stark_fri_air_envelope_from_rows_and_composition_values_with_base_indices_bytes(
     params: StarkFriParamsV1,
@@ -2439,7 +2302,6 @@ pub(crate) fn prove_stark_fri_air_envelope_from_rows_and_composition_values_with
         Some(base_indices),
     )
 }
-
 /// Build a reserved-circuit AIR envelope with an explicit query schedule.
 pub(crate) fn prove_stark_fri_reserved_air_envelope_from_rows_and_composition_values_with_base_indices_bytes(
     params: StarkFriParamsV1,
@@ -2462,7 +2324,6 @@ pub(crate) fn prove_stark_fri_reserved_air_envelope_from_rows_and_composition_va
         Some(base_indices),
     )
 }
-
 fn prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes_for_validated_circuit(
     params: StarkFriParamsV1,
     transcript_label: String,
@@ -2490,7 +2351,6 @@ fn prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes_for_valid
         base_indices,
     )
 }
-
 fn prove_stark_fri_air_envelope_from_rows_and_composition_values_fq_bytes(
     params: StarkFriParamsV1,
     transcript_label: String,
@@ -2533,7 +2393,6 @@ fn prove_stark_fri_air_envelope_from_rows_and_composition_values_fq_bytes(
             return Err("STARK AIR row contains non-canonical field element".to_owned());
         }
     }
-
     let trace_leaves = rows
         .iter()
         .map(|row| {
@@ -2545,13 +2404,11 @@ fn prove_stark_fri_air_envelope_from_rows_and_composition_values_fq_bytes(
         .ok_or_else(|| "failed to build STARK AIR trace commitment".to_owned())?;
     let trace_root = merkle_root_from_levels(&trace_levels)
         .ok_or_else(|| "failed to derive STARK AIR trace root".to_owned())?;
-
     let composition_levels = merkle_levels_from_values(&params, &composition_values)
         .ok_or_else(|| "failed to build STARK AIR composition commitment".to_owned())?;
     let composition_root = merkle_root_from_levels(&composition_levels)
         .ok_or_else(|| "failed to derive STARK AIR composition root".to_owned())?;
     let extra_query_roots = [trace_root, composition_root, public_digest];
-
     let mut envelope = synthesize_stark_fri_envelope_from_values_with_base_indices(
         params,
         transcript_label,
@@ -2562,7 +2419,6 @@ fn prove_stark_fri_air_envelope_from_rows_and_composition_values_fq_bytes(
     if envelope.proof.commits.roots.first().copied() != Some(composition_root) {
         return Err("STARK AIR composition root does not match FRI base root".to_owned());
     }
-
     let query_indices = if let Some(base_indices) = base_indices {
         validate_stark_fri_query_shape_for_base_indices_v1(
             &envelope.params,
@@ -2647,7 +2503,6 @@ fn prove_stark_fri_air_envelope_from_rows_and_composition_values_fq_bytes(
     }
     Ok(bytes)
 }
-
 /// Build a deterministic V1 STARK/FRI envelope with an explicit verifier-owned AIR section.
 pub fn prove_stark_fri_air_envelope_bytes(
     params: StarkFriParamsV1,
@@ -2663,7 +2518,6 @@ pub fn prove_stark_fri_air_envelope_bytes(
         public_digest,
     )
 }
-
 /// Build an AIR envelope for crate-owned reserved circuits after caller-side family checks.
 pub(crate) fn prove_stark_fri_reserved_air_envelope_bytes(
     params: StarkFriParamsV1,
@@ -2680,7 +2534,6 @@ pub(crate) fn prove_stark_fri_reserved_air_envelope_bytes(
         public_digest,
     )
 }
-
 fn prove_stark_fri_air_envelope_bytes_for_validated_circuit(
     params: StarkFriParamsV1,
     transcript_label: String,
@@ -2691,7 +2544,6 @@ fn prove_stark_fri_air_envelope_bytes_for_validated_circuit(
     let domain = 1usize
         .checked_shl(u32::from(params.n_log2))
         .ok_or_else(|| "STARK domain size overflow".to_owned())?;
-
     let rows = (0..domain)
         .map(|index| {
             stark_air_row(index, &public_digest)
@@ -2723,7 +2575,6 @@ fn prove_stark_fri_air_envelope_bytes_for_validated_circuit(
         None,
     )
 }
-
 /// Build a V1 STARK/FRI AIR envelope from caller-validated rows and zero composition values.
 ///
 /// This helper only constructs commitments and transcript-derived openings. Domain-specific AIR
@@ -2751,7 +2602,6 @@ pub fn prove_stark_fri_zero_composition_air_envelope_bytes(
         None,
     )
 }
-
 /// Build a canonical BFV full-bootstrap native STARK/FRI AIR proof envelope for Core internals.
 ///
 /// The proof is synthesized from validated
@@ -2813,7 +2663,6 @@ pub(crate) fn prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(
         )
     }
 }
-
 /// Verify a canonical BFV full-bootstrap native STARK/FRI AIR proof envelope.
 ///
 /// This is the default-limit companion to
@@ -2829,7 +2678,6 @@ pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope(
         material,
     )
 }
-
 /// Verify a BFV full-bootstrap native STARK/FRI AIR proof from public padding data.
 ///
 /// This verifier-facing check does not require the private row-major trace. It
@@ -2855,7 +2703,6 @@ pub fn verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
         bound_mode,
     )
 }
-
 /// Verify a BFV full-bootstrap native STARK/FRI AIR proof from public padding data with limits.
 #[must_use]
 pub fn verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
@@ -2942,7 +2789,6 @@ pub fn verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limi
         .iter()
         .all(|opening| opening.composition_value == 0)
 }
-
 fn bfv_full_bootstrap_air_openings_match_public_opening_material_v1(
     air: &StarkAirProofV1,
     material: &iroha_crypto::BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1,
@@ -2960,7 +2806,6 @@ fn bfv_full_bootstrap_air_openings_match_public_opening_material_v1(
                 == Some(opening.next_row.as_slice())
     })
 }
-
 /// Verify a BFV full-bootstrap native STARK/FRI AIR proof envelope with limits.
 ///
 /// Generic STARK verification is only the first stage. This BFV wrapper also
@@ -3070,7 +2915,6 @@ pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
     )
     .is_ok()
 }
-
 /// Build a deterministic V1 STARK/FRI envelope with verifier-owned composition terms.
 pub fn prove_stark_fri_composition_envelope_bytes(
     params: StarkFriParamsV1,
@@ -3130,7 +2974,6 @@ pub fn prove_stark_fri_composition_envelope_bytes(
     ivm::codec::encode_canonical_norito(&envelope)
         .map_err(|err| format!("failed to encode STARK envelope: {err}"))
 }
-
 fn verify_stark_air_opening(
     params: &StarkFriParamsV1,
     air: &StarkAirProofV1,
@@ -3221,12 +3064,10 @@ fn verify_stark_air_opening(
     }
     true
 }
-
 /// Verify a STARK FRI envelope under `zk-stark` with caller-provided limits.
 pub fn verify_stark_fri_envelope_with_limits(bytes: &[u8], limits: &StarkVerifierLimits) -> bool {
     verify_stark_fri_envelope_with_context(bytes, limits, StarkAirVerificationContext::Binding)
 }
-
 /// Verify a STARK FRI AIR envelope against caller-provided trace rows and composition values.
 #[cfg(test)]
 pub(crate) fn verify_stark_fri_air_envelope_from_rows_and_composition_values(
@@ -3245,7 +3086,6 @@ pub(crate) fn verify_stark_fri_air_envelope_from_rows_and_composition_values(
         composition_values,
     )
 }
-
 /// Verify a STARK FRI AIR envelope against caller-provided trace rows and composition values.
 pub(crate) fn verify_stark_fri_air_envelope_from_rows_and_composition_values_with_limits(
     bytes: &[u8],
@@ -3268,7 +3108,6 @@ pub(crate) fn verify_stark_fri_air_envelope_from_rows_and_composition_values_wit
         StarkAirVerificationContext::Explicit(&explicit),
     )
 }
-
 pub(crate) fn verify_stark_fri_air_envelope_from_rows_and_composition_values_with_base_indices_with_limits(
     bytes: &[u8],
     limits: &StarkVerifierLimits,
@@ -3291,7 +3130,6 @@ pub(crate) fn verify_stark_fri_air_envelope_from_rows_and_composition_values_wit
         StarkAirVerificationContext::Explicit(&explicit),
     )
 }
-
 fn verify_stark_fri_envelope_with_context(
     bytes: &[u8],
     limits: &StarkVerifierLimits,
@@ -3407,7 +3245,6 @@ fn verify_stark_fri_envelope_with_context(
             Err(_) => return false,
         },
     };
-
     for (qi, (chain, base_index)) in env
         .proof
         .queries
@@ -3439,7 +3276,6 @@ fn verify_stark_fri_envelope_with_context(
         let mut idx_layer = base_index;
         let mut layer_domain = total_domain;
         let mut last_z: Option<Fq> = None;
-
         for (k, decommit) in chain.iter().enumerate() {
             if layer_domain < fold_arity {
                 return false;
@@ -3449,7 +3285,6 @@ fn verify_stark_fri_envelope_with_context(
             if expected_j >= expected_pairs || decommit.j as usize != expected_j {
                 return false;
             }
-
             let depth_current = match log2_usize(layer_domain) {
                 Some(v) => v,
                 None => return false,
@@ -3490,7 +3325,6 @@ fn verify_stark_fri_envelope_with_context(
             if idx_y0 != expected_y0 || idx_y1 != expected_y1 || idx_z != expected_j {
                 return false;
             }
-
             let mut tb = Vec::new();
             tb.extend_from_slice(env.transcript_label.as_bytes());
             tb.extend_from_slice(&env.params.version.to_le_bytes());
@@ -3509,7 +3343,6 @@ fn verify_stark_fri_envelope_with_context(
                 Some(v) => v,
                 None => return false,
             };
-
             let y0 = match Fq::from_canonical_u64(decommit.y0) {
                 Some(v) => v,
                 None => return false,
@@ -3546,11 +3379,9 @@ fn verify_stark_fri_envelope_with_context(
             layer_domain /= fold_arity;
             idx_layer = expected_j;
         }
-
         if last_z != Some(Fq::zero()) {
             return false;
         }
-
         if let (Some(comp_root), Some(cv_all)) =
             (env.proof.commits.comp_root, env.proof.comp_values.as_ref())
         {

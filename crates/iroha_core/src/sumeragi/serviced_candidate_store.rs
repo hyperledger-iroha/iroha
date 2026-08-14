@@ -8,22 +8,6 @@
 //! process-generation local because proposal, quorum-pool, and body-pipeline
 //! state can be volatile; restart must permit retransmission to reconstruct
 //! that state.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::{Arc, Mutex},
-};
-
-#[cfg(test)]
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
-
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
-use norito::codec::{Decode, DecodeAll, Encode};
-
 use super::{
     FairV2IngressLeaderWireIdentity, FairV2IngressLeaderWireSlot,
     FairV2IngressLeaderWireSourceClass, FairV2IngressLeaderWireToken,
@@ -40,7 +24,18 @@ use super::{
         check_production_leader_wire_admission_transition,
     },
 };
-
+use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+use norito::codec::{Decode, DecodeAll, Encode};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Mutex},
+};
+#[cfg(test)]
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 // Version 3 records only restart-safe terminal retirements. Version 4 adds a
 // separate, equally bounded producer-continuation lifecycle table. Active
 // records retain identity/slot/ordinal metadata but never claim to persist the
@@ -60,10 +55,8 @@ const MAX_PRODUCER_CONTINUATION_HANDOFFS: usize = 3;
 const LEADER_WIRE_FORMAT_VERSION: u16 = 2;
 const LEADER_WIRE_FRAME_MAGIC: &[u8; 8] = b"SUMVWIRE";
 const LEADER_WIRE_RECORD_HEADROOM_BYTES: u64 = 8 * 1024;
-
 /// Closed service-stage carrier shared by adapter policy and durable records.
 pub(crate) const SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE: usize = 11;
-
 /// Project the persisted `DeferredEventKind` code onto the closed service
 /// stage carrier. Internal callbacks and retry triggers are deliberately
 /// untracked, so a decoded producer identity cannot invent a stage for them.
@@ -77,7 +70,6 @@ pub(crate) const fn serviced_candidate_stage_for_kind_code(kind: u8) -> Option<u
         _ => None,
     }
 }
-
 /// Physical replay class for one drained producer occurrence.
 ///
 /// This is node-local admission metadata, not a wire field. It is repeated in
@@ -92,7 +84,6 @@ pub(crate) enum ProducerContinuationSourceClass {
     /// Replay depends on a concrete reconstructed-body completion owner.
     VolatileBody,
 }
-
 /// Project the persisted event-kind code onto its exact physical replay class.
 pub(crate) const fn producer_continuation_source_class_for_kind_code(
     kind: u8,
@@ -104,7 +95,6 @@ pub(crate) const fn producer_continuation_source_class_for_kind_code(
         _ => None,
     }
 }
-
 /// Route-neutral identity of one reducer occurrence.
 ///
 /// `context_id`, `height`, and `owner` deliberately repeat the snapshot header
@@ -125,7 +115,6 @@ pub(crate) struct ServicedCandidateKey {
     kind: u8,
     evidence: [u8; 32],
 }
-
 impl ServicedCandidateKey {
     /// Construct a key from a fully validated, immutable semantic projection.
     #[allow(clippy::too_many_arguments)]
@@ -154,55 +143,45 @@ impl ServicedCandidateKey {
             evidence,
         }
     }
-
     /// Leader derived from the semantic occurrence's source view.
     #[cfg(test)]
     pub(crate) const fn leader(self) -> wire::ValidatorIndex {
         self.leader
     }
-
     /// View carried by the semantic occurrence itself.
     pub(crate) const fn source_view(self) -> wire::View {
         self.source_view
     }
-
     /// Optional exact subject or highest-certificate target carried by the
     /// semantic occurrence.
     pub(crate) const fn target(self) -> Option<[u8; 32]> {
         self.target
     }
-
     /// Height context which prevents a terminal identity from crossing forks.
     pub(crate) const fn context_id(self) -> wire::HeightContextId {
         self.context_id
     }
-
     /// Exact height at which the semantic occurrence was consumed.
     pub(crate) const fn height(self) -> wire::Height {
         self.height
     }
-
     /// Validator-local owner bound into the durable snapshot header.
     pub(crate) const fn owner(self) -> [u8; 32] {
         self.owner
     }
-
     /// Protocol phase projected by the serviced reducer occurrence.
     pub(crate) const fn phase(self) -> u8 {
         self.phase
     }
-
     /// Closed reducer-event kind used to derive stage and replay class.
     pub(crate) const fn kind(self) -> u8 {
         self.kind
     }
-
     /// Semantic adapter lane which owned the serviced occurrence.
     #[cfg(test)]
     pub(crate) const fn class(self) -> u8 {
         self.class
     }
-
     fn belongs_to(
         self,
         context_id: wire::HeightContextId,
@@ -212,7 +191,6 @@ impl ServicedCandidateKey {
         self.context_id == context_id && self.height == height && self.owner == owner
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedServicedCandidate {
@@ -220,7 +198,6 @@ struct PersistedServicedCandidate {
     /// Consumer episode metadata used only for strict-view reclamation.
     service_view: wire::View,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedServicedCandidatesV3 {
@@ -232,7 +209,6 @@ struct PersistedServicedCandidatesV3 {
     decision_reclaimed: bool,
     records: Vec<PersistedServicedCandidate>,
 }
-
 /// Node-local index into the immutable lifecycle-stage address space.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
@@ -242,20 +218,17 @@ pub(crate) struct ProducerContinuationAddress {
     /// Closed eleven-class reducer service-stage projection.
     stage: u8,
 }
-
 impl ProducerContinuationAddress {
     /// Bounded lifecycle slot reused only through terminal anti-ABA replacement.
     pub(crate) const fn lifecycle_slot(self) -> u64 {
         self.lifecycle_slot
     }
-
     /// Exact reducer service stage at this bounded slot.
     #[cfg(test)]
     pub(crate) const fn stage(self) -> u8 {
         self.stage
     }
 }
-
 /// Full route-neutral identity stored behind a node-local continuation index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
@@ -271,7 +244,6 @@ pub(crate) struct ProducerContinuationIdentity {
     /// Exact reducer service stage, repeated for fail-closed validation.
     stage: u8,
 }
-
 impl ProducerContinuationIdentity {
     /// Construct one identity from an allocator-owned bounded lifecycle slot.
     ///
@@ -299,7 +271,6 @@ impl ProducerContinuationIdentity {
             stage,
         })
     }
-
     /// Project the bounded node-local address used only as the table index.
     pub(crate) const fn address(self) -> ProducerContinuationAddress {
         ProducerContinuationAddress {
@@ -307,32 +278,26 @@ impl ProducerContinuationIdentity {
             stage: self.stage,
         }
     }
-
     /// Exact serviced candidate frozen by this continuation.
     pub(crate) const fn candidate(self) -> ServicedCandidateKey {
         self.candidate
     }
-
     /// Immutable causal lifecycle identity shared by exact successors.
     pub(crate) const fn causal_lifecycle_key(self) -> Hash {
         self.causal_lifecycle_key
     }
-
     /// Immutable first-admission ordinal used for anti-ABA replacement.
     pub(crate) const fn admission_ordinal(self) -> u128 {
         self.admission_ordinal
     }
-
     /// Exact reducer service-stage projection.
     pub(crate) const fn stage(self) -> u8 {
         self.stage
     }
-
     fn has_exact_stage(self) -> bool {
         serviced_candidate_stage_for_kind_code(self.candidate.kind) == Some(self.stage)
     }
 }
-
 /// Monotone producer-continuation lifecycle state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub(crate) enum ProducerContinuationStatus {
@@ -343,7 +308,6 @@ pub(crate) enum ProducerContinuationStatus {
     /// Durable high-watermark prevents resurrection at the retired address.
     Terminal,
 }
-
 /// Opaque capability naming one exact producer reservation at the runtime cut.
 ///
 /// The token itself is process-local. Its complete identity is also stored in
@@ -355,7 +319,6 @@ pub(crate) struct ProducerContinuationHandoffToken {
     identity: ProducerContinuationIdentity,
     source_class: ProducerContinuationSourceClass,
 }
-
 impl ProducerContinuationHandoffToken {
     fn from_reserved(record: &ProducerContinuationRecord) -> Option<Self> {
         (record.status == ProducerContinuationStatus::Reserved).then_some(Self {
@@ -363,23 +326,19 @@ impl ProducerContinuationHandoffToken {
             source_class: record.source_class,
         })
     }
-
     /// Full immutable identity of the drained producer occurrence.
     pub(crate) const fn identity(self) -> ProducerContinuationIdentity {
         self.identity
     }
-
     /// Bounded node-local address occupied by the reservation.
     pub(crate) const fn address(self) -> ProducerContinuationAddress {
         self.identity.address()
     }
-
     /// Physical source class frozen before the source can retire.
     #[cfg(test)]
     pub(crate) const fn source_class(self) -> ProducerContinuationSourceClass {
         self.source_class
     }
-
     /// Whether this capability still names the exact reserved record.
     pub(crate) fn matches_reserved(self, record: &ProducerContinuationRecord) -> bool {
         record.status == ProducerContinuationStatus::Reserved
@@ -387,7 +346,6 @@ impl ProducerContinuationHandoffToken {
             && record.source_class == self.source_class
     }
 }
-
 /// Restart-stable read-only proof that one exact producer identity is terminal.
 ///
 /// This token can only be reconstructed from a validated v4 terminal record.
@@ -399,7 +357,6 @@ pub(crate) struct ProducerContinuationTerminalToken {
     identity: ProducerContinuationIdentity,
     source_class: ProducerContinuationSourceClass,
 }
-
 impl ProducerContinuationTerminalToken {
     fn from_terminal(record: &ProducerContinuationRecord) -> Option<Self> {
         (record.status == ProducerContinuationStatus::Terminal).then_some(Self {
@@ -407,18 +364,15 @@ impl ProducerContinuationTerminalToken {
             source_class: record.source_class,
         })
     }
-
     /// Full immutable identity which cannot be resurrected at its old stage.
     pub(crate) const fn identity(self) -> ProducerContinuationIdentity {
         self.identity
     }
-
     /// Physical replay class frozen before terminal publication.
     pub(crate) const fn source_class(self) -> ProducerContinuationSourceClass {
         self.source_class
     }
 }
-
 /// Outcome of reserving one bounded lifecycle-stage address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProducerContinuationReservation {
@@ -429,7 +383,6 @@ pub(crate) enum ProducerContinuationReservation {
     /// A terminal older-view address was reused by a newer lifecycle.
     ReplacedTerminal,
 }
-
 /// Persisted value for one exact producer-continuation lifecycle.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
@@ -443,7 +396,6 @@ pub(crate) struct ProducerContinuationRecord {
     /// Canonically ordered exact successors emitted by the drained parent.
     handoff_candidates: Vec<ProducerContinuationIdentity>,
 }
-
 impl ProducerContinuationRecord {
     /// Construct a record from one exact identity and its frozen successors.
     pub(crate) fn new(
@@ -481,40 +433,33 @@ impl ProducerContinuationRecord {
             handoff_candidates,
         })
     }
-
     /// Full route-neutral identity of the drained candidate.
     pub(crate) const fn identity(&self) -> ProducerContinuationIdentity {
         self.identity
     }
-
     /// Physical replay class frozen with the drained producer occurrence.
     pub(crate) const fn source_class(&self) -> ProducerContinuationSourceClass {
         self.source_class
     }
-
     /// Monotone lifecycle status.
     pub(crate) const fn status(&self) -> ProducerContinuationStatus {
         self.status
     }
-
     /// Mint the exact acknowledgement capability for a live reservation.
     pub(crate) fn handoff_token(&self) -> Option<ProducerContinuationHandoffToken> {
         ProducerContinuationHandoffToken::from_reserved(self)
     }
-
     /// Reconstruct the read-only durable proof for a terminal record.
     pub(crate) fn terminal_token(&self) -> Option<ProducerContinuationTerminalToken> {
         ProducerContinuationTerminalToken::from_terminal(self)
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedProducerContinuation {
     address: ProducerContinuationAddress,
     record: ProducerContinuationRecord,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedServicedCandidatesV4 {
@@ -528,7 +473,6 @@ struct PersistedServicedCandidatesV4 {
     records: Vec<PersistedServicedCandidate>,
     producer_continuations: Vec<PersistedProducerContinuation>,
 }
-
 struct DecodedServicedCandidates {
     context_id: wire::HeightContextId,
     height: wire::Height,
@@ -539,7 +483,6 @@ struct DecodedServicedCandidates {
     records: Vec<PersistedServicedCandidate>,
     producer_continuations: Vec<PersistedProducerContinuation>,
 }
-
 /// Restored tombstone set and its one-shot durable-Decision reclamation flag.
 pub(crate) struct RestoredServicedCandidates {
     /// Canonically ordered, context-bound records.
@@ -550,7 +493,6 @@ pub(crate) struct RestoredServicedCandidates {
     /// Whether the pre-Decision epoch has already been reclaimed.
     pub(crate) decision_reclaimed: bool,
 }
-
 /// Durable position of one generic productive leader-wire lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) enum LeaderWireLifecycleStatus {
@@ -568,7 +510,6 @@ pub(crate) enum LeaderWireLifecycleStatus {
     /// Independently verified durable evidence suppresses resurrection.
     Terminal,
 }
-
 impl LeaderWireLifecycleStatus {
     /// Whether this logical lifecycle still blocks replacement of its slot.
     ///
@@ -577,7 +518,6 @@ impl LeaderWireLifecycleStatus {
     const fn is_active(self) -> bool {
         matches!(self, Self::Dormant | Self::Ingress | Self::Runtime)
     }
-
     const fn refinement_code(self) -> u8 {
         match self {
             Self::Dormant => LEADER_WIRE_LIFECYCLE_DORMANT,
@@ -588,7 +528,6 @@ impl LeaderWireLifecycleStatus {
         }
     }
 }
-
 /// Exact serialized-runtime identity bound when ingress drains successfully.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
@@ -596,7 +535,6 @@ pub(crate) struct LeaderWireRuntimeOwner {
     causal_lifecycle_key: Hash,
     admission_ordinal: u128,
 }
-
 impl LeaderWireRuntimeOwner {
     /// Construct a non-zero downstream owner for one exact producer lifecycle.
     pub(crate) fn new(causal_lifecycle_key: Hash, admission_ordinal: u128) -> Result<Self, String> {
@@ -608,18 +546,15 @@ impl LeaderWireRuntimeOwner {
             admission_ordinal,
         })
     }
-
     /// Immutable causal key shared with the adapter producer reservation.
     pub(crate) const fn causal_lifecycle_key(self) -> Hash {
         self.causal_lifecycle_key
     }
-
     /// Immutable runtime admission ordinal restored after a crash.
     pub(crate) const fn admission_ordinal(self) -> u128 {
         self.admission_ordinal
     }
 }
-
 /// Persisted projection of an independently durable body receipt.
 ///
 /// Construction requires the non-forgeable receipt returned by `V2BodyStore`.
@@ -637,7 +572,6 @@ pub(crate) struct LeaderWireDurableBodyTerminalEvidence {
     frame_hash: Hash,
     runtime_owner: LeaderWireRuntimeOwner,
 }
-
 impl LeaderWireDurableBodyTerminalEvidence {
     fn from_receipt(
         receipt: &DurableBodyReceipt,
@@ -655,7 +589,6 @@ impl LeaderWireDurableBodyTerminalEvidence {
             runtime_owner,
         }
     }
-
     fn matches_receipt(&self, receipt: &DurableBodyReceipt) -> bool {
         self.context_id == receipt.context_id()
             && self.height == receipt.round().height
@@ -665,7 +598,6 @@ impl LeaderWireDurableBodyTerminalEvidence {
             && self.frame_hash == receipt.frame_hash()
     }
 }
-
 /// Restart-stable terminal authority for one generic leader-wire lifecycle.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub(crate) enum LeaderWireStableTerminalEvidence {
@@ -674,13 +606,11 @@ pub(crate) enum LeaderWireStableTerminalEvidence {
     /// Exact proposal bytes exist in the independently recovered body store.
     DurableBody(LeaderWireDurableBodyTerminalEvidence),
 }
-
 impl From<ProducerContinuationTerminalToken> for LeaderWireStableTerminalEvidence {
     fn from(terminal: ProducerContinuationTerminalToken) -> Self {
         Self::Producer(terminal)
     }
 }
-
 /// Opaque durable epoch boundary reconstructed by the already-opened adapter.
 ///
 /// The generic ingress snapshot is opened only after safety-WAL replay. This
@@ -698,7 +628,6 @@ pub(crate) struct LeaderWireRecoveryAuthority {
     durable_view: wire::View,
     decision_durable: bool,
 }
-
 impl LeaderWireRecoveryAuthority {
     /// Mint the recovery cut only from a replay-complete adapter.
     pub(super) const fn from_replayed_adapter(
@@ -716,7 +645,6 @@ impl LeaderWireRecoveryAuthority {
             decision_durable,
         }
     }
-
     fn matches_geometry(
         self,
         context_id: wire::HeightContextId,
@@ -725,7 +653,6 @@ impl LeaderWireRecoveryAuthority {
     ) -> bool {
         self.context_id == context_id && self.height == height && self.owner == owner
     }
-
     /// Advance this WAL-derived authority to a certified durable view.
     pub(super) fn advance_view(self, durable_view: wire::View) -> Result<Self, String> {
         if durable_view < self.durable_view {
@@ -736,7 +663,6 @@ impl LeaderWireRecoveryAuthority {
             ..self
         })
     }
-
     /// Refine this WAL-derived authority after Decision is durable.
     pub(super) const fn with_durable_decision(self) -> Self {
         Self {
@@ -744,7 +670,6 @@ impl LeaderWireRecoveryAuthority {
             ..self
         }
     }
-
     fn monotonically_extends(self, previous: Self) -> bool {
         self.context_id == previous.context_id
             && self.height == previous.height
@@ -752,12 +677,10 @@ impl LeaderWireRecoveryAuthority {
             && self.durable_view >= previous.durable_view
             && (!previous.decision_durable || self.decision_durable)
     }
-
     /// Return whether this durable cut permanently rejects one lifecycle token.
     pub(super) fn obsoletes(self, token: &FairV2IngressLeaderWireToken) -> bool {
         self.obsoletes_identity(&token.identity)
     }
-
     fn obsoletes_identity(self, identity: &FairV2IngressLeaderWireIdentity) -> bool {
         // A certified view or Decision closes reducer-producing control, not
         // transport completion. The selected block can still be missing when
@@ -767,7 +690,6 @@ impl LeaderWireRecoveryAuthority {
             && (self.decision_durable || identity.view < self.durable_view)
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedLeaderWireLifecycleRecord {
@@ -776,7 +698,6 @@ struct PersistedLeaderWireLifecycleRecord {
     runtime_owner: Option<LeaderWireRuntimeOwner>,
     terminal_evidence: Option<LeaderWireStableTerminalEvidence>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedLeaderWireLifecycles {
@@ -790,7 +711,6 @@ struct PersistedLeaderWireLifecycles {
     scheduler_ordinal_high_watermark: u128,
     records: Vec<PersistedLeaderWireLifecycleRecord>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LeaderWireLifecycleState {
     /// Current process-local safety-WAL cut. The snapshot never serializes it;
@@ -808,7 +728,6 @@ struct LeaderWireLifecycleState {
     /// cut can retire them first without requiring requester retransmission.
     replay_dormant: BTreeSet<FairV2IngressLeaderWireSlot>,
 }
-
 fn leader_wire_lifecycle_identity_projection(
     token: &FairV2IngressLeaderWireToken,
 ) -> CanonicalIdentityProjection {
@@ -819,7 +738,6 @@ fn leader_wire_lifecycle_identity_projection(
         *identity.as_ref(),
     )
 }
-
 fn leader_wire_admission_trace_projection(
     state: &LeaderWireLifecycleState,
     capacity: usize,
@@ -924,7 +842,6 @@ fn leader_wire_admission_trace_projection(
             && terminal_evidence_before,
     })
 }
-
 /// Validated restart image for binding the fair-ingress in-memory owner table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LeaderWireLifecycleRestore {
@@ -932,25 +849,21 @@ pub(crate) struct LeaderWireLifecycleRestore {
     scheduler_ordinal_high_watermark: u128,
     records: Vec<LeaderWireLifecycleRestoredRecord>,
 }
-
 impl LeaderWireLifecycleRestore {
     /// Largest immutable fair-ingress ordinal present in the snapshot.
     pub(crate) const fn last_admission_ordinal(&self) -> u64 {
         self.last_admission_ordinal
     }
-
     /// Largest actor-global scheduler ordinal reserved by this gate.
     pub(crate) const fn scheduler_ordinal_high_watermark(&self) -> u128 {
         self.scheduler_ordinal_high_watermark
     }
-
     /// Canonically ordered lifecycle records; active statuses are
     /// selector-dormant Dormant until exact physical replay.
     pub(crate) fn records(&self) -> &[LeaderWireLifecycleRestoredRecord] {
         &self.records
     }
 }
-
 /// One exact record returned by a validated leader-wire restore.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LeaderWireLifecycleRestoredRecord {
@@ -959,29 +872,24 @@ pub(crate) struct LeaderWireLifecycleRestoredRecord {
     runtime_owner: Option<LeaderWireRuntimeOwner>,
     terminal_evidence: Option<LeaderWireStableTerminalEvidence>,
 }
-
 impl LeaderWireLifecycleRestoredRecord {
     /// Exact generic token retaining its original fair-ingress ordinal.
     pub(crate) const fn token(&self) -> &FairV2IngressLeaderWireToken {
         &self.token
     }
-
     /// Restored status; every nonterminal disk status reopens as Dormant.
     pub(crate) const fn status(&self) -> LeaderWireLifecycleStatus {
         self.status
     }
-
     /// Prior runtime owner used to rebind a replay to its old producer slot.
     pub(crate) const fn runtime_owner(&self) -> Option<LeaderWireRuntimeOwner> {
         self.runtime_owner
     }
-
     /// Typed stable evidence, present exactly for durable Terminal records.
     pub(crate) const fn terminal_evidence(&self) -> Option<&LeaderWireStableTerminalEvidence> {
         self.terminal_evidence.as_ref()
     }
 }
-
 /// Result of atomically admitting a generic leader-wire identity to ingress.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LeaderWireLifecycleAdmissionReceipt {
@@ -989,43 +897,36 @@ pub(crate) struct LeaderWireLifecycleAdmissionReceipt {
     status: LeaderWireLifecycleStatus,
     inserted: bool,
 }
-
 impl LeaderWireLifecycleAdmissionReceipt {
     /// Persisted token; an exact retry receives the incumbent old ordinal.
     pub(crate) const fn token(&self) -> &FairV2IngressLeaderWireToken {
         &self.token
     }
-
     /// Status observed at admission, including terminal suppression.
     pub(crate) const fn status(&self) -> LeaderWireLifecycleStatus {
         self.status
     }
-
     /// Whether this call allocated a new bounded lifecycle record.
     pub(crate) const fn inserted(&self) -> bool {
         self.inserted
     }
 }
-
 /// Receipt proving that ingress-to-runtime transfer was durably recorded.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LeaderWireLifecycleRuntimeReceipt {
     token: FairV2IngressLeaderWireToken,
     owner: LeaderWireRuntimeOwner,
 }
-
 impl LeaderWireLifecycleRuntimeReceipt {
     /// Generic ingress token transferred to the runtime.
     pub(crate) const fn token(&self) -> &FairV2IngressLeaderWireToken {
         &self.token
     }
-
     /// Exact downstream owner which must match producer acknowledgement.
     pub(crate) const fn owner(&self) -> LeaderWireRuntimeOwner {
         self.owner
     }
 }
-
 /// Context-bound synchronous persistence gate shared with fair ingress.
 ///
 /// `admit_ingress` synchronizes the Ingress record before admission may report
@@ -1050,7 +951,6 @@ pub(crate) struct LeaderWireLifecycleStoreGate {
     max_frame_bytes: u64,
     state: Mutex<LeaderWireLifecycleState>,
 }
-
 /// Atomic per-height snapshot stored beside the safety WAL.
 #[derive(Debug)]
 pub(crate) struct ServicedCandidateStore {
@@ -1065,7 +965,6 @@ pub(crate) struct ServicedCandidateStore {
     producer_continuation_lifecycle_capacity: u64,
     max_frame_bytes: u64,
 }
-
 fn producer_continuations_are_valid(
     persisted: &[PersistedProducerContinuation],
     context_id: wire::HeightContextId,
@@ -1120,7 +1019,6 @@ fn producer_continuations_are_valid(
     }
     true
 }
-
 fn leader_wire_terminal_matches_runtime(
     terminal: ProducerContinuationTerminalToken,
     token: &FairV2IngressLeaderWireToken,
@@ -1141,7 +1039,6 @@ fn leader_wire_terminal_matches_runtime(
         && identity.causal_lifecycle_key() == runtime_owner.causal_lifecycle_key
         && identity.admission_ordinal() == runtime_owner.admission_ordinal
 }
-
 /// Bind the independently retained reducer projection to the exact productive
 /// control-wire phase. The causal lifecycle key already commits the complete
 /// wire identity (including full subject and authenticated origin); the
@@ -1152,7 +1049,6 @@ fn leader_wire_control_phase_matches_candidate(
     candidate: ServicedCandidateKey,
 ) -> bool {
     use super::FairV2IngressLeaderWirePhase;
-
     matches!(
         (token.identity.phase, candidate.kind(), candidate.phase()),
         (FairV2IngressLeaderWirePhase::Proposal, 1, 0)
@@ -1164,7 +1060,6 @@ fn leader_wire_control_phase_matches_candidate(
             | (FairV2IngressLeaderWirePhase::TimeoutCertificate, 5, 3)
     )
 }
-
 fn leader_wire_body_terminal_matches_runtime(
     terminal: &LeaderWireDurableBodyTerminalEvidence,
     token: &FairV2IngressLeaderWireToken,
@@ -1190,7 +1085,6 @@ fn leader_wire_body_terminal_matches_runtime(
                 | super::FairV2IngressLeaderWireSourceClass::CertifiedResponse
         )
 }
-
 fn leader_wire_stable_terminal_matches_runtime(
     terminal: &LeaderWireStableTerminalEvidence,
     token: &FairV2IngressLeaderWireToken,
@@ -1227,7 +1121,6 @@ fn leader_wire_stable_terminal_matches_runtime(
         }
     }
 }
-
 impl LeaderWireLifecycleStoreGate {
     /// Derive the finite source/phase/chunk owner universe from frozen roster
     /// and existing payload-chunk geometry. Each roster member owns an
@@ -1249,7 +1142,6 @@ impl LeaderWireLifecycleStoreGate {
             .filter(|capacity| *capacity != 0)
             .ok_or_else(|| "leader-wire lifecycle capacity overflowed".to_owned())
     }
-
     /// Open a context-bound leader-wire snapshot through the safety WAL's
     /// one-shot adjacent-store authority.
     ///
@@ -1291,7 +1183,6 @@ impl LeaderWireLifecycleStoreGate {
             durable_bodies,
         )
     }
-
     /// Test-only raw-path adapter for the sealed production constructor.
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
@@ -1321,7 +1212,6 @@ impl LeaderWireLifecycleStoreGate {
             durable_bodies,
         )
     }
-
     #[allow(clippy::too_many_arguments)]
     fn open_with_storage(
         storage: SafetyWalLeaderWireStoreAuthority,
@@ -1387,12 +1277,10 @@ impl LeaderWireLifecycleStoreGate {
         let restore = gate.restore()?;
         Ok((gate, restore))
     }
-
     /// Whether two handles name the same synchronous persistence gate.
     pub(crate) fn ptr_eq(left: &Arc<Self>, right: &Arc<Self>) -> bool {
         Arc::ptr_eq(left, right)
     }
-
     /// Whether a proposed fair-ingress binding has identical frozen geometry.
     pub(crate) fn matches_geometry(
         &self,
@@ -1409,7 +1297,6 @@ impl LeaderWireLifecycleStoreGate {
             && self.max_chunk_count == max_chunk_count
             && Self::derived_capacity(roster.len(), max_chunk_count) == Ok(capacity)
     }
-
     /// Return the current canonical restart projection.
     pub(crate) fn restore(&self) -> Result<LeaderWireLifecycleRestore, String> {
         let state = self
@@ -1418,7 +1305,6 @@ impl LeaderWireLifecycleStoreGate {
             .map_err(|_| "leader-wire lifecycle store lock was poisoned".to_owned())?;
         Ok(Self::restore_from_state(&state))
     }
-
     /// Logical scheduler ordinals of every durable Ingress owner.
     ///
     /// Runtime and Terminal records have crossed this selector cut. Restored
@@ -1440,7 +1326,6 @@ impl LeaderWireLifecycleStoreGate {
             .map(|record| record.token.scheduler_ordinal)
             .collect())
     }
-
     /// Minimum logical scheduler ordinal among durable Ingress owners.
     ///
     /// This projection is useful for diagnostics and lifecycle tests only.
@@ -1451,7 +1336,6 @@ impl LeaderWireLifecycleStoreGate {
     pub(crate) fn earliest_ingress_scheduler_ordinal(&self) -> Result<Option<u128>, String> {
         Ok(self.ingress_scheduler_ordinals()?.into_iter().next())
     }
-
     /// Look up an exact semantic retry before allocating another scheduler
     /// ordinal. This is the coalescing preflight used by fair ingress; it never
     /// mutates durable state.
@@ -1472,7 +1356,6 @@ impl LeaderWireLifecycleStoreGate {
             })
         }))
     }
-
     /// Return whether the latest live safety-WAL cut rejects this identity.
     pub(crate) fn identity_is_obsolete(
         &self,
@@ -1484,7 +1367,6 @@ impl LeaderWireLifecycleStoreGate {
             .map_err(|_| "leader-wire lifecycle store lock was poisoned".to_owned())?;
         Ok(state.recovery_authority.obsoletes_identity(identity))
     }
-
     /// Apply a live, WAL-authorized recovery cut and retire its exact dormant set.
     ///
     /// Fair ingress supplies the complete mirrored dormant set while holding
@@ -1521,7 +1403,6 @@ impl LeaderWireLifecycleStoreGate {
                 "leader-wire recovery cut disagreed with dormant ingress ownership".to_owned(),
             );
         }
-
         let previous = state.clone();
         state.recovery_authority = next;
         for slot in &retiring {
@@ -1541,7 +1422,6 @@ impl LeaderWireLifecycleStoreGate {
         }
         Ok(())
     }
-
     /// Atomically persist an Ingress owner before fair ingress returns Accepted.
     ///
     /// An exact Dormant retry receives the incumbent token, preserving both
@@ -1680,7 +1560,6 @@ impl LeaderWireLifecycleStoreGate {
             inserted: true,
         })
     }
-
     #[cfg(test)]
     pub(crate) fn reserve(
         &self,
@@ -1688,7 +1567,6 @@ impl LeaderWireLifecycleStoreGate {
     ) -> Result<LeaderWireLifecycleAdmissionReceipt, String> {
         self.admit_ingress(token)
     }
-
     #[cfg(test)]
     pub(crate) fn mark_ingress(&self, token: &FairV2IngressLeaderWireToken) -> Result<(), String> {
         let receipt = self
@@ -1699,7 +1577,6 @@ impl LeaderWireLifecycleStoreGate {
         }
         Ok(())
     }
-
     /// Durably transfer an ingress token to one exact serialized-runtime owner.
     pub(crate) fn mark_runtime(
         &self,
@@ -1738,7 +1615,6 @@ impl LeaderWireLifecycleStoreGate {
             owner,
         })
     }
-
     /// Publish a same-process tombstone without claiming restart-stable proof.
     ///
     /// This state coalesces exact retransmission until process exit. Restore
@@ -1770,7 +1646,6 @@ impl LeaderWireLifecycleStoreGate {
             }
         })
     }
-
     /// Publish the generic Terminal after typed stable evidence exists.
     pub(crate) fn mark_terminal(
         &self,
@@ -1812,7 +1687,6 @@ impl LeaderWireLifecycleStoreGate {
             }
         })
     }
-
     /// Publish a producer-backed stable terminal after producer-first ordering.
     pub(crate) fn mark_producer_terminal(
         &self,
@@ -1824,7 +1698,6 @@ impl LeaderWireLifecycleStoreGate {
             LeaderWireStableTerminalEvidence::Producer(producer_terminal),
         )
     }
-
     /// Publish a body-backed stable terminal from a non-forgeable store receipt.
     pub(crate) fn mark_durable_body_terminal(
         &self,
@@ -1842,7 +1715,6 @@ impl LeaderWireLifecycleStoreGate {
             ),
         )
     }
-
     fn transition(
         &self,
         token: &FairV2IngressLeaderWireToken,
@@ -1877,7 +1749,6 @@ impl LeaderWireLifecycleStoreGate {
         }
         Ok(())
     }
-
     fn restore_from_state(state: &LeaderWireLifecycleState) -> LeaderWireLifecycleRestore {
         LeaderWireLifecycleRestore {
             last_admission_ordinal: state.last_admission_ordinal,
@@ -1894,7 +1765,6 @@ impl LeaderWireLifecycleStoreGate {
                 .collect(),
         }
     }
-
     fn load_and_reconcile(
         &self,
         recovery_authority: LeaderWireRecoveryAuthority,
@@ -2117,7 +1987,6 @@ impl LeaderWireLifecycleStoreGate {
         state.replay_dormant = replay_dormant;
         Ok(changed)
     }
-
     fn persist_locked(&self, state: &LeaderWireLifecycleState) -> Result<(), String> {
         let snapshot = PersistedLeaderWireLifecycles {
             format_version: LEADER_WIRE_FORMAT_VERSION,
@@ -2135,7 +2004,6 @@ impl LeaderWireLifecycleStoreGate {
         self.storage.publish_atomic(&frame, self.max_frame_bytes)
     }
 }
-
 impl ServicedCandidateStore {
     /// Open the height-bound snapshot through the safety WAL's one-shot
     /// serviced-candidate authority.
@@ -2164,7 +2032,6 @@ impl ServicedCandidateStore {
             record_capacity,
         )
     }
-
     /// Test-only raw-path adapter for the sealed production constructor.
     #[cfg(test)]
     pub(crate) fn open(
@@ -2187,7 +2054,6 @@ impl ServicedCandidateStore {
             record_capacity,
         )
     }
-
     #[cfg(test)]
     fn open_with_capacities(
         safety_wal_path: &Path,
@@ -2207,7 +2073,6 @@ impl ServicedCandidateStore {
             producer_continuation_capacity,
         )
     }
-
     fn open_with_storage_and_capacities(
         storage: SafetyWalServicedCandidateStoreAuthority,
         context_id: wire::HeightContextId,
@@ -2262,7 +2127,6 @@ impl ServicedCandidateStore {
         let restored = store.load()?;
         Ok((store, restored))
     }
-
     fn load(&self) -> Result<RestoredServicedCandidates, String> {
         let Some(bytes) = self.storage.read_bounded(self.max_frame_bytes)? else {
             return Ok(RestoredServicedCandidates {
@@ -2344,7 +2208,6 @@ impl ServicedCandidateStore {
             decision_reclaimed: state.decision_reclaimed,
         })
     }
-
     /// Reserve one bounded lifecycle-stage address without evicting live work.
     ///
     /// An occupied address coalesces only an exact immutable record. Reuse by
@@ -2418,7 +2281,6 @@ impl ServicedCandidateStore {
         producer_continuations.insert(address, record);
         Ok(ProducerContinuationReservation::ReplacedTerminal)
     }
-
     /// Publish one complete canonical snapshot before its candidate owner retires.
     ///
     /// # Errors
@@ -2433,7 +2295,6 @@ impl ServicedCandidateStore {
     ) -> Result<(), String> {
         self.persist_with_producer_continuations(records, &BTreeMap::new(), decision_reclaimed)
     }
-
     /// Publish tombstones and the separately bounded producer-continuation
     /// lifecycle table.
     ///
@@ -2518,7 +2379,6 @@ impl ServicedCandidateStore {
         let frame = encode_frame_v4(&state, self.max_frame_bytes)?;
         self.storage.publish_atomic(&frame, self.max_frame_bytes)
     }
-
     /// Remove and directory-sync the finalized height's obsolete snapshot.
     ///
     /// # Errors
@@ -2528,14 +2388,12 @@ impl ServicedCandidateStore {
     pub(crate) fn retire(self) -> Result<(), String> {
         self.storage.retire(self.max_frame_bytes)
     }
-
     /// Return the exact snapshot path for failure-injection tests.
     #[cfg(test)]
     pub(crate) fn path_for_test(&self) -> &Path {
         &self.path
     }
 }
-
 fn encode_leader_wire_frame(
     state: &PersistedLeaderWireLifecycles,
     max_frame_bytes: u64,
@@ -2561,7 +2419,6 @@ fn encode_leader_wire_frame(
     frame.extend_from_slice(&payload);
     Ok(frame)
 }
-
 fn decode_leader_wire_frame(
     bytes: &[u8],
     max_frame_bytes: u64,
@@ -2608,7 +2465,6 @@ fn decode_leader_wire_frame(
     }
     Ok(state)
 }
-
 fn encode_payload_frame(
     version: u16,
     payload: Vec<u8>,
@@ -2634,14 +2490,12 @@ fn encode_payload_frame(
     frame.extend_from_slice(&payload);
     Ok(frame)
 }
-
 fn encode_frame_v4(
     state: &PersistedServicedCandidatesV4,
     max_frame_bytes: u64,
 ) -> Result<Vec<u8>, String> {
     encode_payload_frame(FORMAT_VERSION, state.encode(), max_frame_bytes)
 }
-
 #[cfg(test)]
 fn encode_frame_v3(
     state: &PersistedServicedCandidatesV3,
@@ -2649,7 +2503,6 @@ fn encode_frame_v3(
 ) -> Result<Vec<u8>, String> {
     encode_payload_frame(FORMAT_VERSION_V3, state.encode(), max_frame_bytes)
 }
-
 fn decode_frame(bytes: &[u8], max_frame_bytes: u64) -> Result<DecodedServicedCandidates, String> {
     if bytes.len() < FRAME_HEADER_BYTES
         || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_frame_bytes
@@ -2729,7 +2582,6 @@ fn decode_frame(bytes: &[u8], max_frame_bytes: u64) -> Result<DecodedServicedCan
         _ => unreachable!("unsupported versions return before payload decode"),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2738,18 +2590,14 @@ mod tests {
         FairV2IngressLeaderWireSourceClass,
     };
     use tempfile::TempDir;
-
     const OWNER_A: [u8; 32] = [0xA1; 32];
     const OWNER_B: [u8; 32] = [0xB2; 32];
-
     fn context() -> wire::HeightContext {
         context_with_roster_len(4)
     }
-
     fn context_with_roster_len(roster_len: usize) -> wire::HeightContext {
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::{NetworkId, block::BlockHeader, peer::PeerId};
-
         assert!((4..=31).contains(&roster_len) && (roster_len - 1) % 3 == 0);
         let mut roster = (0..roster_len)
             .map(|index| {
@@ -2801,7 +2649,6 @@ mod tests {
         context.validate().expect("valid snapshot-bound context");
         context
     }
-
     fn successor_context(predecessor: &wire::HeightContext) -> wire::HeightContext {
         let round = wire::ConsensusRound {
             context_id: predecessor.id(),
@@ -2845,13 +2692,11 @@ mod tests {
         assert_ne!(successor.id(), predecessor.id());
         successor
     }
-
     fn leader_wire_recovery_authority(
         context: &wire::HeightContext,
     ) -> LeaderWireRecoveryAuthority {
         leader_wire_recovery_authority_at(context, OWNER_A, 0, false)
     }
-
     fn leader_wire_recovery_authority_at(
         context: &wire::HeightContext,
         owner: [u8; 32],
@@ -2866,7 +2711,6 @@ mod tests {
             decision_durable,
         )
     }
-
     fn key_with_kind(
         context: &wire::HeightContext,
         source_view: u64,
@@ -2886,11 +2730,9 @@ mod tests {
             [evidence; 32],
         )
     }
-
     fn key(context: &wire::HeightContext, source_view: u64, evidence: u8) -> ServicedCandidateKey {
         key_with_kind(context, source_view, evidence, 2)
     }
-
     fn candidate_kind_for_stage(stage: u8) -> u8 {
         match stage {
             0..=6 => stage,
@@ -2901,7 +2743,6 @@ mod tests {
             _ => panic!("test producer stage must be tracked"),
         }
     }
-
     fn state(
         store: &ServicedCandidateStore,
         records: Vec<PersistedServicedCandidate>,
@@ -2921,7 +2762,6 @@ mod tests {
             producer_continuations: Vec::new(),
         }
     }
-
     fn v3_state(
         store: &ServicedCandidateStore,
         records: Vec<PersistedServicedCandidate>,
@@ -2937,7 +2777,6 @@ mod tests {
             records,
         }
     }
-
     fn continuation_identity(
         context: &wire::HeightContext,
         lifecycle_slot: u64,
@@ -2953,7 +2792,6 @@ mod tests {
         )
         .expect("valid producer-continuation identity")
     }
-
     fn continuation_record(
         context: &wire::HeightContext,
         lifecycle_slot: u64,
@@ -2985,7 +2823,6 @@ mod tests {
         ProducerContinuationRecord::new(identity, status, handoff_candidates)
             .expect("valid producer-continuation record")
     }
-
     fn leader_wire_token(
         context: &wire::HeightContext,
         view: wire::View,
@@ -3016,7 +2853,6 @@ mod tests {
             source_class: FairV2IngressLeaderWireSourceClass::Control,
         }
     }
-
     fn leader_wire_slot_token(
         context: &wire::HeightContext,
         origin: &PeerId,
@@ -3053,7 +2889,6 @@ mod tests {
             source_class: phase.source_class(),
         }
     }
-
     fn leader_wire_body_token(
         context: &wire::HeightContext,
         receipt: &DurableBodyReceipt,
@@ -3083,7 +2918,6 @@ mod tests {
             source_class: FairV2IngressLeaderWireSourceClass::CertifiedResponse,
         }
     }
-
     fn matching_terminal(
         context: &wire::HeightContext,
         runtime_owner: LeaderWireRuntimeOwner,
@@ -3126,7 +2960,6 @@ mod tests {
             .terminal_token()
             .expect("terminal token")
     }
-
     fn terminal_continuation_at_view(
         context: &wire::HeightContext,
         lifecycle_slot: u64,
@@ -3150,12 +2983,10 @@ mod tests {
         ProducerContinuationRecord::new(identity, ProducerContinuationStatus::Terminal, Vec::new())
             .expect("valid terminal continuation")
     }
-
     fn write_frame(store: &ServicedCandidateStore, state: &PersistedServicedCandidatesV4) {
         let frame = encode_frame_v4(state, store.max_frame_bytes).expect("encode fixture frame");
         fs::write(store.path_for_test(), frame).expect("write fixture frame");
     }
-
     #[test]
     fn snapshot_roundtrips_and_rejects_a_b_a_resurrection() {
         let directory = TempDir::new().expect("temporary directory");
@@ -3181,15 +3012,12 @@ mod tests {
                 .expect("same-height reopen");
         assert_eq!(restored.records, records);
     }
-
     #[cfg(all(unix, not(target_os = "espidf")))]
     #[test]
     fn serviced_candidate_recovery_rejects_substituted_wal_directory() {
         use std::os::unix::fs::symlink;
-
         const NETWORK: [u8; 32] = [0x41; 32];
         const KEY: [u8; 32] = [0x42; 32];
-
         let context = context();
         let seed = TempDir::new().expect("seed directory");
         let seed_wal = seed.path().join("wal").join("00000000000000000007.wal");
@@ -3216,7 +3044,6 @@ mod tests {
             .persist(&BTreeMap::from([(recovered_key, 9)]), false)
             .expect("publish seed recovered state");
         let injected_frame = fs::read(seed_store.path_for_test()).expect("read seed frame");
-
         let target = TempDir::new().expect("target directory");
         let target_parent = target.path().join("wal");
         let target_wal = target_parent.join("00000000000000000007.wal");
@@ -3237,7 +3064,6 @@ mod tests {
         let adjacent_name = "00000000000000000007.wal.serviced-candidates";
         fs::write(foreign.join(adjacent_name), &injected_frame).expect("inject foreign snapshot");
         symlink(&foreign, &target_parent).expect("substitute WAL directory");
-
         assert!(
             ServicedCandidateStore::open_with_safety_wal_authority(
                 target_authority,
@@ -3254,7 +3080,6 @@ mod tests {
             injected_frame
         );
     }
-
     #[test]
     fn v4_roundtrips_terminal_producer_continuations_and_v3_upgrades_canonically() {
         let directory = TempDir::new().expect("temporary directory");
@@ -3296,7 +3121,6 @@ mod tests {
                 .expect("restore v4 producer continuations");
         assert_eq!(restored.records, serviced);
         assert_eq!(restored.producer_continuations, producer_continuations);
-
         let active =
             continuation_record(&context, 3, 3, 4, ProducerContinuationStatus::Reserved, &[]);
         let active_table = BTreeMap::from([(active.identity.address(), active.clone())]);
@@ -3311,7 +3135,6 @@ mod tests {
             active_restored.producer_continuations[&active.identity.address()].status(),
             ProducerContinuationStatus::Reserved
         );
-
         let materialized = continuation_record(
             &context,
             4,
@@ -3334,7 +3157,6 @@ mod tests {
             &materialized_restored.producer_continuations[&materialized.identity.address()];
         assert_eq!(reopened.status(), ProducerContinuationStatus::Reserved);
         assert!(reopened.handoff_candidates.is_empty());
-
         let v3_wal = directory.path().join("v3-compatible.wal");
         let (v3_store, _) =
             ServicedCandidateStore::open(&v3_wal, context.id(), context.height, OWNER_A, 4)
@@ -3364,12 +3186,10 @@ mod tests {
             &FORMAT_VERSION.to_le_bytes()
         );
     }
-
     #[cfg(all(unix, not(target_os = "espidf")))]
     #[test]
     fn leader_wire_gate_rejects_substituted_wal_directory() {
         use std::os::unix::fs::symlink;
-
         let context = context();
         let root = TempDir::new().expect("leader-wire target directory");
         let parent = root.path().join("wal");
@@ -3399,7 +3219,6 @@ mod tests {
             context.da_layout.max_chunk_count,
         )
         .expect("derive leader-wire capacity");
-
         assert!(
             LeaderWireLifecycleStoreGate::open_with_safety_wal_authority(
                 storage,
@@ -3419,7 +3238,6 @@ mod tests {
         assert!(!retained.join(adjacent).exists());
         assert!(!foreign.join(adjacent).exists());
     }
-
     #[test]
     fn leader_wire_gate_restores_both_high_waters_and_normalizes_active_cuts() {
         let directory = TempDir::new().expect("temporary directory");
@@ -3449,7 +3267,6 @@ mod tests {
         assert_eq!(restore.last_admission_ordinal(), 0);
         assert_eq!(restore.scheduler_ordinal_high_watermark(), 0);
         assert!(gate.matches_geometry(context.id(), context.height, &roster, capacity, max_chunks));
-
         let token = leader_wire_token(&context, 2, 7, 41, 1);
         let reserved = gate.reserve(token.clone()).expect("persist Reserved");
         assert!(reserved.inserted());
@@ -3458,7 +3275,6 @@ mod tests {
             LeaderWireRuntimeOwner::new(token.identity_hash(), 41).expect("runtime owner");
         gate.mark_runtime(&token, runtime_owner)
             .expect("persist Runtime");
-
         let (reopened, restore) = LeaderWireLifecycleStoreGate::open(
             &wal,
             context.id(),
@@ -3503,7 +3319,6 @@ mod tests {
             Some(41)
         );
     }
-
     #[test]
     fn leader_wire_gate_retains_independent_cross_origin_phase_and_chunk_slots() {
         let directory = TempDir::new().expect("temporary directory");
@@ -3532,7 +3347,6 @@ mod tests {
             &[],
         )
         .expect("open leader-wire owner-universe gate");
-
         let mut slots = vec![
             (FairV2IngressLeaderWirePhase::Proposal, None),
             (FairV2IngressLeaderWirePhase::PrepareVote, None),
@@ -3548,7 +3362,6 @@ mod tests {
                 .map(|chunk_index| (FairV2IngressLeaderWirePhase::Chunk, Some(chunk_index))),
         );
         assert_eq!(slots.len(), per_origin_capacity);
-
         let mut admitted = Vec::with_capacity(capacity);
         for origin in &roster {
             for (phase, chunk_index) in &slots {
@@ -3567,7 +3380,6 @@ mod tests {
                     .reserve(token.clone())
                     .expect("reserve exact owner slot");
                 assert!(reserved.inserted());
-
                 let mut retry = token.clone();
                 retry.admission_ordinal = ordinal
                     .checked_add(u64::try_from(capacity).expect("capacity fits u64"))
@@ -3581,7 +3393,6 @@ mod tests {
                 admitted.push(token);
             }
         }
-
         let (reopened, restored) = LeaderWireLifecycleStoreGate::open(
             &wal,
             context.id(),
@@ -3652,7 +3463,6 @@ mod tests {
             );
         }
         assert_eq!(admitted.len(), capacity);
-
         let terminal_target = admitted
             .iter()
             .find(|token| token.slot.phase == FairV2IngressLeaderWirePhase::PrepareVote)
@@ -3678,7 +3488,6 @@ mod tests {
         reopened
             .mark_producer_terminal(&runtime, producer_terminal)
             .expect("publish exact restart-stable terminal");
-
         let (terminal_gate, terminal_restore) = LeaderWireLifecycleStoreGate::open(
             &wal,
             context.id(),
@@ -3702,7 +3511,6 @@ mod tests {
             LeaderWireLifecycleStatus::Terminal
         );
         assert_eq!(terminal_record.token(), &terminal_target);
-
         let mut terminal_retry = terminal_target.clone();
         terminal_retry.admission_ordinal =
             u64::try_from(capacity + 1).expect("capacity successor fits u64");
@@ -3715,7 +3523,6 @@ mod tests {
         assert_eq!(suppressed.status(), LeaderWireLifecycleStatus::Terminal);
         assert_eq!(suppressed.token(), &terminal_target);
     }
-
     #[test]
     fn leader_wire_gate_reconciles_producer_first_terminal_crash() {
         let directory = TempDir::new().expect("temporary directory");
@@ -3750,7 +3557,6 @@ mod tests {
         gate.mark_runtime(&token, runtime_owner)
             .expect("mark runtime");
         let producer_terminal = matching_terminal(&context, runtime_owner, &token);
-
         let (reconciled, restore) = LeaderWireLifecycleStoreGate::open(
             &wal,
             context.id(),
@@ -3779,7 +3585,6 @@ mod tests {
             .expect("exact terminal retry is suppressed");
         assert_eq!(suppressed.status(), LeaderWireLifecycleStatus::Terminal);
         assert_eq!(suppressed.token().scheduler_ordinal(), 73);
-
         assert!(
             LeaderWireLifecycleStoreGate::open(
                 &wal,
@@ -3797,7 +3602,6 @@ mod tests {
             "wire Terminal without its producer terminal fails closed"
         );
     }
-
     #[test]
     fn leader_wire_gate_rejects_producer_terminal_from_foreign_view_or_phase() {
         let directory = TempDir::new().expect("temporary directory");
@@ -3832,7 +3636,6 @@ mod tests {
         let runtime = gate
             .mark_runtime(&token, runtime_owner)
             .expect("mark runtime");
-
         let mut foreign_view = token.clone();
         foreign_view.identity.view = 1;
         let foreign_view_terminal = matching_terminal(&context, runtime_owner, &foreign_view);
@@ -3841,7 +3644,6 @@ mod tests {
                 .is_err(),
             "same causal owner and ordinal cannot authenticate a foreign source view"
         );
-
         let mut foreign_phase = token.clone();
         foreign_phase.identity.phase = FairV2IngressLeaderWirePhase::CommitVote;
         foreign_phase.slot.phase = FairV2IngressLeaderWirePhase::CommitVote;
@@ -3851,7 +3653,6 @@ mod tests {
                 .is_err(),
             "same causal owner and ordinal cannot authenticate a foreign protocol phase"
         );
-
         let (reopened, restore) = LeaderWireLifecycleStoreGate::open(
             &wal,
             context.id(),
@@ -3883,7 +3684,6 @@ mod tests {
             .mark_producer_terminal(&runtime, matching_terminal(&context, runtime_owner, &token))
             .expect("exact view and phase publish the producer terminal");
     }
-
     #[test]
     fn leader_wire_recovery_authority_retires_obsolete_records_and_retains_highwaters() {
         for (label, durable_view, decision_durable, publish_terminal) in [
@@ -3929,7 +3729,6 @@ mod tests {
                 )
                 .expect("publish independently durable terminal before Decision");
             }
-
             let (reopened, restore) = LeaderWireLifecycleStoreGate::open(
                 &wal,
                 context.id(),
@@ -3974,7 +3773,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn leader_wire_recovery_cut_keeps_body_transport_admissible() {
         for (label, durable_view, decision_durable, control_view) in
@@ -4011,7 +3809,6 @@ mod tests {
                 &[],
             )
             .expect("open leader-wire gate at the durable cut");
-
             let control = leader_wire_token(&context, control_view, 1, 1, 0x91);
             let origin = context.roster[0].validator.clone();
             let chunk = leader_wire_slot_token(
@@ -4030,7 +3827,6 @@ mod tests {
                 3,
                 3,
             );
-
             assert!(
                 gate.identity_is_obsolete(&control.identity)
                     .expect("inspect control identity"),
@@ -4058,7 +3854,6 @@ mod tests {
                 .expect("the downstream request must authenticate the certified response");
         }
     }
-
     #[test]
     fn leader_wire_recovery_cuts_preserve_historical_response_and_conflict_fence() {
         let directory = TempDir::new().expect("temporary directory");
@@ -4108,7 +3903,6 @@ mod tests {
         gate.reserve(proposal.clone())
             .expect("reserve view-scoped proposal");
         drop(gate);
-
         let (gate, restore) = LeaderWireLifecycleStoreGate::open(
             &wal,
             context.id(),
@@ -4123,7 +3917,6 @@ mod tests {
         )
         .expect("reopen leader-wire owners as dormant");
         assert_eq!(restore.records().len(), 2);
-
         let advanced = leader_wire_recovery_authority_at(&context, OWNER_A, 3, false);
         gate.advance_recovery_cut(advanced, &BTreeSet::from([proposal.slot.clone()]))
             .expect("retire only the view-scoped dormant owner");
@@ -4144,7 +3937,6 @@ mod tests {
             restore.records()[0].status(),
             LeaderWireLifecycleStatus::Dormant
         );
-
         let replay = gate
             .admit_ingress(response.clone())
             .expect("reactivate the exact historical response");
@@ -4159,7 +3951,6 @@ mod tests {
             gate.admit_ingress(conflicting).is_err(),
             "the view-cut exception must not weaken one-owner same-slot conflict fencing"
         );
-
         let decision = leader_wire_recovery_authority_at(&context, OWNER_A, 3, true);
         drop(gate);
         let (gate, restore) = LeaderWireLifecycleStoreGate::open(
@@ -4190,7 +3981,6 @@ mod tests {
         gate.admit_ingress(response)
             .expect("the exact decided-body response can reactivate after restart");
     }
-
     #[test]
     fn leader_wire_live_recovery_cut_retires_only_dormant_records_and_is_monotone() {
         for (label, next_view, decision_durable) in
@@ -4226,7 +4016,6 @@ mod tests {
             let token = leader_wire_token(&context, 2, 11, 73, 2);
             gate.reserve(token.clone()).expect("reserve restart owner");
             drop(gate);
-
             let (gate, restore) = LeaderWireLifecycleStoreGate::open(
                 &wal,
                 context.id(),
@@ -4246,7 +4035,6 @@ mod tests {
                 LeaderWireLifecycleStatus::Dormant,
                 "{label}"
             );
-
             let next =
                 leader_wire_recovery_authority_at(&context, OWNER_A, next_view, decision_durable);
             let expected = BTreeSet::from([token.slot.clone()]);
@@ -4267,7 +4055,6 @@ mod tests {
                 .expect("advance the live recovery cut");
             gate.advance_recovery_cut(next, &BTreeSet::new())
                 .expect("repeating the exact recovery cut is idempotent");
-
             let restored = gate.restore().expect("inspect retired dormant owner");
             assert!(restored.records().is_empty(), "{label}");
             assert_eq!(restored.last_admission_ordinal(), 11, "{label}");
@@ -4277,7 +4064,6 @@ mod tests {
                     .expect("inspect live recovery cut"),
                 "{label} rejects the retired identity without an exact retry"
             );
-
             let regressed = leader_wire_recovery_authority_at(
                 &context,
                 OWNER_A,
@@ -4289,7 +4075,6 @@ mod tests {
                     .is_err(),
                 "{label} cannot regress durable view/Decision authority"
             );
-
             let fresh = leader_wire_token(&context, 3, 12, 74, 3);
             if decision_durable {
                 assert!(
@@ -4301,7 +4086,6 @@ mod tests {
                     .expect("the cut admits a current-view replacement");
             }
         }
-
         for retained_status in [
             LeaderWireLifecycleStatus::Ingress,
             LeaderWireLifecycleStatus::Runtime,
@@ -4341,7 +4125,6 @@ mod tests {
                 gate.mark_runtime(&token, runtime_owner)
                     .expect("publish active runtime owner");
             }
-
             gate.advance_recovery_cut(
                 leader_wire_recovery_authority_at(&context, OWNER_A, 3, false),
                 &BTreeSet::new(),
@@ -4363,7 +4146,6 @@ mod tests {
                 "active retention must not roll the recovery authority back"
             );
         }
-
         {
             let directory = TempDir::new().expect("temporary recovery-cut rollback directory");
             let context = context();
@@ -4438,7 +4220,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn leader_wire_gate_rejects_foreign_recovery_authority() {
         let directory = TempDir::new().expect("temporary directory");
@@ -4469,9 +4250,7 @@ mod tests {
             "replay authority cannot cross the owner-bound snapshot geometry"
         );
     }
-
     include!("serviced_candidate_store/body_terminal_recovery_tests.rs");
-
     #[test]
     fn leader_wire_gate_rejects_duplicate_scheduler_and_low_high_watermarks() {
         for defect in ["duplicate-scheduler", "low-high-water"] {
@@ -4551,7 +4330,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn leader_wire_gate_rolls_back_failed_atomic_status_publications() {
         fn replace_snapshot_with_directory(gate: &LeaderWireLifecycleStoreGate) {
@@ -4562,7 +4340,6 @@ mod tests {
             }
             std::fs::create_dir(&gate.path).expect("replace snapshot with directory");
         }
-
         {
             let directory = TempDir::new().expect("temporary directory");
             let context = context();
@@ -4598,7 +4375,6 @@ mod tests {
             assert_eq!(restored.last_admission_ordinal(), 0);
             assert_eq!(restored.scheduler_ordinal_high_watermark(), 0);
         }
-
         for failed_cut in ["ingress", "runtime", "volatile-terminal", "terminal"] {
             let directory = TempDir::new().expect("temporary directory");
             let context = context();
@@ -4681,7 +4457,6 @@ mod tests {
                 _ => unreachable!(),
             }
         }
-
         {
             let directory = TempDir::new().expect("temporary directory");
             let context = context();
@@ -4752,7 +4527,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn snapshot_rejects_corruption_stale_context_and_capacity_exhaustion() {
         let directory = TempDir::new().expect("temporary directory");
@@ -4819,7 +4593,6 @@ mod tests {
             "checksum corruption is rejected"
         );
     }
-
     #[test]
     fn decision_reclamation_is_canonical_only_for_an_empty_snapshot() {
         let directory = TempDir::new().expect("temporary directory");
@@ -4841,7 +4614,6 @@ mod tests {
                 .expect("restore canonical reclaimed state");
         assert!(restored.records.is_empty());
         assert!(restored.decision_reclaimed);
-
         let forged = state(
             &store,
             vec![PersistedServicedCandidate {
@@ -4855,7 +4627,6 @@ mod tests {
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 2).is_err(),
             "a checksummed nonempty Decision-reclaimed mutation fails closed"
         );
-
         let orphan =
             continuation_record(&context, 1, 1, 1, ProducerContinuationStatus::Terminal, &[]);
         let mut forged_orphan = state(&store, Vec::new(), true);
@@ -4869,12 +4640,10 @@ mod tests {
             "a Decision-reclaimed snapshot cannot restore an orphan producer high-watermark"
         );
     }
-
     #[test]
     fn snapshot_rejects_truncation_version_ordering_duplicates_and_oversize() {
         let directory = TempDir::new().expect("temporary directory");
         let context = context();
-
         let wal = directory.path().join("truncated.wal");
         let (store, _) =
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 2)
@@ -4893,7 +4662,6 @@ mod tests {
         assert!(
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 2).is_err()
         );
-
         let wal = directory.path().join("version.wal");
         let (store, _) =
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 2)
@@ -4907,7 +4675,6 @@ mod tests {
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 2).is_err(),
             "the retired v2 schema fails closed instead of being guessed"
         );
-
         for (name, records) in [
             (
                 "unordered",
@@ -4947,7 +4714,6 @@ mod tests {
                 "{name} records must be rejected"
             );
         }
-
         let wal = directory.path().join("oversize.wal");
         let (store, _) =
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 1)
@@ -4959,12 +4725,10 @@ mod tests {
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 1).is_err()
         );
     }
-
     #[test]
     fn v4_rejects_noncanonical_or_over_capacity_producer_tables() {
         let directory = TempDir::new().expect("temporary directory");
         let context = context();
-
         let first =
             continuation_record(&context, 1, 1, 1, ProducerContinuationStatus::Terminal, &[]);
         let second =
@@ -4977,7 +4741,6 @@ mod tests {
             address: second.identity.address(),
             record: second,
         };
-
         for (name, continuations) in [
             (
                 "producer-unordered",
@@ -5001,7 +4764,6 @@ mod tests {
                 "{name} must fail closed"
             );
         }
-
         let wal = directory.path().join("active-hash-only.wal");
         let (store, _) =
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 2)
@@ -5019,7 +4781,6 @@ mod tests {
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 2).is_err(),
             "startup must reject Materialized metadata without an exact successor"
         );
-
         let wal = directory.path().join("producer-service-mismatch.wal");
         let (store, _) =
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 2)
@@ -5043,7 +4804,6 @@ mod tests {
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 2).is_err(),
             "a terminal producer cannot bind a different serviced identity"
         );
-
         let wal = directory.path().join("producer-capacity.wal");
         let (store, _) =
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 1)
@@ -5083,7 +4843,6 @@ mod tests {
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 1).is_err(),
             "producer-continuation capacity is checked independently"
         );
-
         let wal = directory.path().join("version-layout-confusion.wal");
         let (store, _) =
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 1)
@@ -5098,7 +4857,6 @@ mod tests {
             "a v4 payload is never reinterpreted through the v3 decoder"
         );
     }
-
     #[test]
     fn producer_identity_stage_projection_rejects_foreign_root_and_successor_stages() {
         let context = context();
@@ -5133,7 +4891,6 @@ mod tests {
                 "untracked event kind {untracked_kind} cannot claim a service stage"
             );
         }
-
         let directory = TempDir::new().expect("temporary directory");
         let wal = directory.path().join("foreign-root-stage.wal");
         let (store, _) =
@@ -5158,7 +4915,6 @@ mod tests {
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 1).is_err(),
             "a decoded root cannot occupy a foreign service stage"
         );
-
         let wal = directory.path().join("foreign-successor-stage.wal");
         let (store, _) =
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 1)
@@ -5182,7 +4938,6 @@ mod tests {
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 1).is_err(),
             "a decoded successor receives the same exact stage validation"
         );
-
         let wal = directory.path().join("foreign-source-class.wal");
         let (store, _) =
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 1)
@@ -5212,7 +4967,6 @@ mod tests {
             "a decoded record cannot strengthen its physical replay source"
         );
     }
-
     #[test]
     fn bounded_slot_reuse_requires_terminal_strict_view_and_ordinal_advance() {
         let directory = TempDir::new().expect("temporary directory");
@@ -5235,7 +4989,6 @@ mod tests {
                 .expect("coalesce exact retry"),
             ProducerContinuationReservation::Coalesced
         );
-
         let same_view = terminal_continuation_at_view(&context, 1, 2, 2, 1, 2);
         assert!(
             store
@@ -5250,7 +5003,6 @@ mod tests {
                 .is_err(),
             "view advance alone cannot reuse a terminal address"
         );
-
         for episode in 2_u8..=64 {
             let replacement = terminal_continuation_at_view(
                 &context,
@@ -5278,7 +5030,6 @@ mod tests {
                 .is_err(),
             "a stale ABA writer cannot replace the newer terminal owner"
         );
-
         let out_of_geometry = terminal_continuation_at_view(&context, 2, 65, 2, 65, 65);
         assert!(
             store
@@ -5286,7 +5037,6 @@ mod tests {
                 .is_err(),
             "the allocator slot must remain inside the frozen lifecycle capacity"
         );
-
         let mut active = terminal_continuation_at_view(&context, 1, 64, 2, 64, 64);
         active.status = ProducerContinuationStatus::Reserved;
         continuations.insert(active.identity.address(), active.clone());
@@ -5297,7 +5047,6 @@ mod tests {
                 .is_err(),
             "a live bounded address is never evicted"
         );
-
         store
             .persist_with_producer_continuations(&BTreeMap::new(), &continuations, false)
             .expect("persist a live bounded address as restart admission metadata");
@@ -5332,7 +5081,6 @@ mod tests {
                 .expect("restore bounded terminal table");
         assert_eq!(restored.producer_continuations, continuations);
     }
-
     #[test]
     fn one_logical_candidate_cannot_resurrect_at_another_bounded_address() {
         let directory = TempDir::new().expect("temporary directory");
@@ -5346,7 +5094,6 @@ mod tests {
         store
             .reserve_producer_continuation(&mut continuations, first.clone())
             .expect("reserve original logical candidate");
-
         let mut resurrected = first;
         resurrected.identity.lifecycle_slot = 2;
         resurrected.identity.admission_ordinal = 2;
@@ -5359,7 +5106,6 @@ mod tests {
         );
         assert_eq!(continuations.len(), 1);
     }
-
     #[test]
     fn snapshot_rejects_nonregular_artifacts() {
         let directory = TempDir::new().expect("temporary directory");
@@ -5373,12 +5119,10 @@ mod tests {
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 1).is_err()
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn snapshot_load_and_retire_never_follow_substituted_symlinks() {
         use std::os::unix::fs::symlink;
-
         let directory = TempDir::new().expect("temporary directory");
         let context = context();
         let wal = directory.path().join("symlink.wal");
@@ -5396,12 +5140,10 @@ mod tests {
             "load must reject a multiply linked snapshot"
         );
         fs::remove_file(hard_link).expect("restore single-link fixture");
-
         let target = directory.path().join("target.snapshot");
         fs::rename(&snapshot, &target).expect("move direct frame to symlink target");
         let target_before = fs::read(&target).expect("read target before substitution");
         symlink(&target, &snapshot).expect("substitute snapshot symlink");
-
         assert!(
             ServicedCandidateStore::open(&wal, context.id(), context.height, OWNER_A, 1).is_err(),
             "load must reject a direct-path symlink"
@@ -5417,7 +5159,6 @@ mod tests {
         );
         assert!(snapshot.is_symlink());
     }
-
     #[test]
     fn finalized_snapshot_retirement_leaves_successor_rollover_empty() {
         let directory = TempDir::new().expect("temporary directory");
@@ -5464,7 +5205,6 @@ mod tests {
         let snapshot_path = store.path_for_test().to_path_buf();
         store.retire().expect("retire finalized-height snapshot");
         assert!(!snapshot_path.exists());
-
         let successor_wal = directory.path().join("00000000000000000008.wal");
         let (_successor, restored) = ServicedCandidateStore::open(
             &successor_wal,

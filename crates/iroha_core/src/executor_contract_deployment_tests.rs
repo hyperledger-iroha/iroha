@@ -1,7 +1,6 @@
 fn contract_deployment_permission() -> Permission {
     executor_permission::smart_contract::CanRegisterSmartContractCode.into()
 }
-
 fn bundled_default_user_provided_executor() -> super::Executor {
     let raw_executor = data_model_executor::Executor::new(IvmBytecode::from_compiled(
         include_bytes!("../../../defaults/executor.to").to_vec(),
@@ -10,7 +9,6 @@ fn bundled_default_user_provided_executor() -> super::Executor {
         super::LoadedExecutor::load(raw_executor).expect("load bundled default executor"),
     )
 }
-
 fn contract_upload_instruction(code_hash: Hash, chunk_index: u32) -> InstructionBox {
     UploadSmartContractCodeChunk {
         code_hash,
@@ -21,7 +19,6 @@ fn contract_upload_instruction(code_hash: Hash, chunk_index: u32) -> Instruction
     }
     .into()
 }
-
 fn contract_deployment_bootstrap_instructions(
     authority: &AccountId,
     account: iroha_data_model::account::NewAccount,
@@ -34,7 +31,6 @@ fn contract_deployment_bootstrap_instructions(
         deployment,
     ]
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
@@ -43,7 +39,6 @@ fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
     let network_id = executor_test_network_id(b"contract-deployment-bootstrap-shape");
     let code_hash = Hash::new(b"contract deployment bootstrap shape");
     let world = World::new();
-
     let sign = |instructions: Vec<InstructionBox>| {
         TransactionBuilder::new(
             network_id,
@@ -82,7 +77,6 @@ fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
             .is_err(),
         "authorization must bind the complete signed instruction sequence"
     );
-
     let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
         seiyaku_name: None,
         code_hash: Some(code_hash),
@@ -107,7 +101,6 @@ fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
         &authority,
         &sign(manifest_bootstrap)
     ));
-
     let other = checked_account_id();
     assert!(
         ContractDeploymentSelfBootstrapAuthorization::derive(
@@ -139,7 +132,6 @@ fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
         &authority,
         &sign(wrong_destination)
     ));
-
     let mut metadata = Metadata::default();
     metadata.insert(
         "bootstrap-note".parse().expect("metadata key"),
@@ -156,7 +148,6 @@ fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
         &authority,
         &sign(decorated)
     ));
-
     let malformed_permission = Permission::new(
         "CanRegisterSmartContractCode".to_owned(),
         Json::from(norito::json!({ "unexpected": true })),
@@ -172,7 +163,6 @@ fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
         &authority,
         &sign(malformed)
     ));
-
     let non_initial_chunk = contract_deployment_bootstrap_instructions(
         &authority,
         Account::new(authority.clone()),
@@ -184,7 +174,6 @@ fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
         &authority,
         &sign(non_initial_chunk)
     ));
-
     let mut shifted = exact.clone();
     shifted.insert(
         0,
@@ -195,7 +184,6 @@ fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
         &authority,
         &sign(shifted)
     ));
-
     let mut atomic_deployment = exact.clone();
     atomic_deployment.push(
         iroha_data_model::isi::smart_contract_code::CommitContractDeployment {
@@ -222,7 +210,6 @@ fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
         ),
         "atomic deployment must require an authority that existed before the transaction"
     );
-
     let proved_transaction = TransactionBuilder::new(
         network_id,
         authority.clone(),
@@ -242,7 +229,6 @@ fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
         &authority,
         &proved_transaction
     ));
-
     let existing_world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
     assert!(!allows_contract_deployment_self_bootstrap(
         &existing_world.view(),
@@ -250,7 +236,6 @@ fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
         &exact_transaction
     ));
 }
-
 #[test]
 fn initial_executor_bootstraps_missing_deployment_authority_and_meters_grant() {
     let keypair = checked_keypair();
@@ -289,7 +274,6 @@ fn initial_executor_bootstraps_missing_deployment_authority_and_meters_grant() {
         !(state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty()),
         "bootstrap exception must be exercised outside genesis"
     );
-
     super::Executor::Initial
         .execute_transaction(
             &mut state_transaction,
@@ -300,7 +284,6 @@ fn initial_executor_bootstraps_missing_deployment_authority_and_meters_grant() {
         .expect("exact missing-authority bootstrap must execute");
     assert_eq!(state_transaction.last_tx_gas_used, expected_gas);
     state_transaction.apply();
-
     block
         .world
         .account(&authority)
@@ -320,7 +303,6 @@ fn initial_executor_bootstraps_missing_deployment_authority_and_meters_grant() {
     assert_eq!(progress.descriptor.chunk_count, 1);
     assert_eq!(progress.received_chunks, 1);
 }
-
 #[test]
 fn default_user_provided_executor_bootstraps_missing_deployment_authority() {
     let keypair = checked_keypair();
@@ -351,7 +333,6 @@ fn default_user_provided_executor_bootstraps_missing_deployment_authority() {
         &authority,
         &transaction
     ));
-
     let executor = bundled_default_user_provided_executor();
     let super::Executor::UserProvided(loaded_executor) = &executor else {
         unreachable!("test constructs a user-provided executor")
@@ -364,7 +345,6 @@ fn default_user_provided_executor_bootstraps_missing_deployment_authority() {
         !(state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty()),
         "user-provided bootstrap must be exercised outside genesis"
     );
-
     executor
         .execute_transaction(
             &mut state_transaction,
@@ -384,7 +364,6 @@ fn default_user_provided_executor_bootstraps_missing_deployment_authority() {
         runtime_stats_before.dirty_resets + 2
     );
     state_transaction.apply();
-
     block
         .world
         .account(&authority)
@@ -405,7 +384,6 @@ fn default_user_provided_executor_bootstraps_missing_deployment_authority() {
     assert_eq!(progress.descriptor.chunk_count, 1);
     assert_eq!(progress.received_chunks, 1);
 }
-
 #[test]
 fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispatch() {
     let keypair = checked_keypair();
@@ -440,7 +418,6 @@ fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispat
         &authority,
         &transaction
     ));
-
     let executor = bundled_default_user_provided_executor();
     let super::Executor::UserProvided(loaded_executor) = &executor else {
         unreachable!("test constructs a user-provided executor")
@@ -467,7 +444,6 @@ fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispat
         runtime_stats_before.hits + runtime_stats_before.misses + 1,
         "only the idempotent account registration may reach the runtime before Core rejects the grant"
     );
-
     block
         .world
         .account(&authority)
@@ -486,7 +462,6 @@ fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispat
             .is_none()
     );
 }
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committing_state() {
@@ -494,7 +469,6 @@ fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committ
     let authority = AccountId::new(keypair.public_key().clone());
     let chain = ChainId::from("contract-deployment-bootstrap-user-provided-adversarial");
     let code_hash = Hash::new(b"default user-provided adversarial deployment bootstrap");
-
     let mut metadata = Metadata::default();
     metadata.insert(
         "bootstrap-note".parse().expect("metadata key"),
@@ -520,7 +494,6 @@ fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committ
         contract_upload_instruction(code_hash, 0),
         Grant::account_permission(contract_deployment_permission(), authority.clone()).into(),
     ];
-
     for (label, instructions, expected_runtime_checkouts) in [
         ("decorated registration", decorated, 1),
         ("malformed same-name grant", malformed, 1),
@@ -544,7 +517,6 @@ fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committ
             !allows_contract_deployment_self_bootstrap(&block.world, &authority, &transaction),
             "{label} must not qualify for the bootstrap exception"
         );
-
         let executor = bundled_default_user_provided_executor();
         let super::Executor::UserProvided(loaded_executor) = &executor else {
             unreachable!("test constructs a user-provided executor")
@@ -573,7 +545,6 @@ fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committ
             runtime_stats_before.hits + runtime_stats_before.misses + expected_runtime_checkouts,
             "unexpected user-provided runtime dispatch count for {label}"
         );
-
         assert!(
             block.world.account(&authority).is_err(),
             "rejected {label} must not commit its provisional account"
@@ -591,7 +562,6 @@ fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committ
         );
     }
 }
-
 #[test]
 fn user_provided_borrowed_overlay_rejects_deployment_permission_before_runtime_dispatch() {
     let authority = checked_account_id();
@@ -610,7 +580,6 @@ fn user_provided_borrowed_overlay_rejects_deployment_permission_before_runtime_d
         unreachable!("test constructs a user-provided executor")
     };
     let (runtime_stats_before, _) = loaded_executor.runtime_pool_snapshot();
-
     let error = executor
         .execute_borrowed_overlay_instruction(
             &mut state_transaction,
@@ -632,7 +601,6 @@ fn user_provided_borrowed_overlay_rejects_deployment_permission_before_runtime_d
             .any(|permission| permission.name() == "CanRegisterSmartContractCode")
     );
 }
-
 #[test]
 fn initial_executor_denies_preexisting_deployment_self_grant_without_state_change() {
     let keypair = checked_keypair();
@@ -673,7 +641,6 @@ fn initial_executor_denies_preexisting_deployment_self_grant_without_state_chang
         !(state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty()),
         "bootstrap replay must be exercised outside genesis"
     );
-
     let error = super::Executor::Initial
         .execute_transaction(
             &mut state_transaction,
@@ -698,7 +665,6 @@ fn initial_executor_denies_preexisting_deployment_self_grant_without_state_chang
             .is_none()
     );
 }
-
 #[test]
 fn initial_executor_denies_deployment_permission_grant_revoke_and_malformed_payload() {
     let authority = checked_account_id();
@@ -724,7 +690,6 @@ fn initial_executor_denies_deployment_permission_grant_revoke_and_malformed_payl
         Json::from(norito::json!({ "scope": "not-canonical" })),
     );
     let role_id: RoleId = "deployment_bootstrap_role".parse().expect("role id");
-
     for instruction in [
         Grant::account_permission(canonical.clone(), authority.clone()).into(),
         Grant::account_permission(malformed, authority.clone()).into(),
@@ -746,7 +711,6 @@ fn initial_executor_denies_deployment_permission_grant_revoke_and_malformed_payl
         assert!(matches!(error, ValidationFail::NotPermitted(message) if
             message.contains("only allowed inside the genesis block")));
     }
-
     let stored: BTreeSet<_> = state_transaction
         .world
         .account_permissions_iter(&authority)
@@ -755,7 +719,6 @@ fn initial_executor_denies_deployment_permission_grant_revoke_and_malformed_payl
         .collect();
     assert_eq!(stored, BTreeSet::from([canonical]));
 }
-
 #[test]
 fn initial_executor_denies_post_genesis_governed_offline_self_grants() {
     let authority = checked_account_id();
@@ -767,7 +730,6 @@ fn initial_executor_denies_post_genesis_governed_offline_self_grants() {
     );
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
     let mut state_transaction = block.transaction();
-
     for name in [
         "CanManageOfflineEscrow",
         "CanActivateKagemushaRecursiveReleaseV4",

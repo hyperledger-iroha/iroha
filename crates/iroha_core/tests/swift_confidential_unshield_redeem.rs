@@ -1,7 +1,4 @@
 //! Cross-language acceptance for Swift-built confidential-unshield redeem attachments.
-
-use std::{env, fs};
-
 use iroha_core::zk::{
     ZK_BACKEND_HALO2_IPA,
     confidential_v2::{
@@ -15,7 +12,7 @@ use iroha_data_model::{
     proof::{ProofAttachment, VerifyingKeyId},
     zk::{BackendTag, OpenVerifyEnvelope},
 };
-
+use std::{env, fs};
 #[test]
 fn swift_confidential_unshield_redeem_attachment_is_canonical_and_verifies() {
     let Ok(path) = env::var("IROHA_SWIFT_UNSHIELD_ATTACHMENT_PATH") else {
@@ -32,7 +29,6 @@ fn swift_confidential_unshield_redeem_attachment_is_canonical_and_verifies() {
         .key
         .as_ref()
         .expect("canonical unshield-v3 verifier record carries inline key");
-
     assert_eq!(attachment.backend.as_str(), ZK_BACKEND_HALO2_IPA);
     assert_eq!(
         attachment.vk_ref,
@@ -46,7 +42,6 @@ fn swift_confidential_unshield_redeem_attachment_is_canonical_and_verifies() {
     assert!(attachment.lane_privacy.is_none());
     ensure_confidential_unshield_v3_canonical_vk_box(vk)
         .expect("Swift attachment record is bound to the canonical verifier key");
-
     let envelope: OpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
         .expect("Swift attachment carries canonical OpenVerifyEnvelope");
     assert_eq!(envelope.backend, BackendTag::Halo2IpaPasta);

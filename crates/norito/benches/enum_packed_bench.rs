@@ -2,7 +2,6 @@
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 #[cfg(feature = "bench-internal")]
 use norito::{NoritoDeserialize, NoritoSerialize, codec, decode_from_bytes, to_bytes};
-
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -11,7 +10,6 @@ struct TuplePayload {
     label: String,
     blob: Vec<u8>,
 }
-
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -19,7 +17,6 @@ struct NamedPayload {
     name: String,
     flag: bool,
 }
-
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -27,7 +24,6 @@ struct NestedPayload {
     maybe: Option<String>,
     res: Result<u32, String>,
 }
-
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -37,7 +33,6 @@ enum PackedEnum {
     Named(NamedPayload),
     Nested(NestedPayload),
 }
-
 #[cfg(feature = "bench-internal")]
 fn make_dataset(n: usize) -> Vec<PackedEnum> {
     let mut out = Vec::with_capacity(n);
@@ -69,7 +64,6 @@ fn make_dataset(n: usize) -> Vec<PackedEnum> {
     }
     out
 }
-
 #[cfg(feature = "bench-internal")]
 fn enum_packed_bench(c: &mut Criterion) {
     let n: usize = std::env::var("ENUM_BENCH_N")
@@ -77,10 +71,8 @@ fn enum_packed_bench(c: &mut Criterion) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(2000);
     let data = make_dataset(n);
-
     let mut group = c.benchmark_group("enum_packed");
     group.throughput(Throughput::Elements(n as u64));
-
     // Encode (headered)
     group.bench_function("encode_headered_to_bytes", |b| {
         b.iter_batched(
@@ -97,7 +89,6 @@ fn enum_packed_bench(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     // Encode using the bare Norito codec.
     group.bench_function("encode_bare_codec", |b| {
         b.iter_batched(
@@ -114,14 +105,12 @@ fn enum_packed_bench(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-
     // Precompute bytes for decode benches
     let headered_bytes: Vec<Vec<u8>> = data.iter().map(|v| to_bytes(v).unwrap()).collect();
     let bare_bytes: Vec<Vec<u8>> = data
         .iter()
         .map(<PackedEnum as codec::Encode>::encode)
         .collect();
-
     // Decode (headered) + equality check
     group.bench_function("decode_headered_roundtrip_eq", |b| {
         b.iter(|| {
@@ -133,7 +122,6 @@ fn enum_packed_bench(c: &mut Criterion) {
             }
         })
     });
-
     // Decode (bare) + equality check
     group.bench_function("decode_bare_roundtrip_eq", |b| {
         b.iter(|| {
@@ -145,16 +133,12 @@ fn enum_packed_bench(c: &mut Criterion) {
             }
         })
     });
-
     group.finish();
 }
-
 #[cfg(feature = "bench-internal")]
 criterion_group!(benches, enum_packed_bench);
-
 #[cfg(feature = "bench-internal")]
 criterion_main!(benches);
-
 #[cfg(not(feature = "bench-internal"))]
 fn main() {
     eprintln!("Enable the `bench-internal` feature to run this benchmark.");

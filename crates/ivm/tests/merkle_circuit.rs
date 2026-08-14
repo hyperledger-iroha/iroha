@@ -2,7 +2,6 @@
 use ivm::halo2::{
     MerkleCircuit, MerklePublic, MerkleWitness, verify_merkle_path, verify_merkle_path_with_dirs,
 };
-
 #[test]
 fn test_merkle_circuit_verify_ok() {
     let mut path = [0u64; 32];
@@ -23,7 +22,6 @@ fn test_merkle_circuit_verify_ok() {
     );
     assert!(circuit.verify().is_ok());
 }
-
 #[test]
 fn test_merkle_circuit_bad_root() {
     let mut path = [0u64; 32];
@@ -39,7 +37,6 @@ fn test_merkle_circuit_bad_root() {
     let circuit = MerkleCircuit::new(witness, public);
     assert!(circuit.verify().is_err());
 }
-
 #[test]
 fn test_merkle_verify_with_dirs_matches_index() {
     // Construct a simple synthetic path and compare the index-based and
@@ -53,7 +50,6 @@ fn test_merkle_verify_with_dirs_matches_index() {
     // Compute roots using both index-based and dirs-based verifiers at
     // different depths, and ensure they agree at each requested depth.
     // The index-based helper consumes exactly `depth` levels for parity.
-
     // Build dirs bitmask from index and compare at multiple depths
     for depth in [8usize, 16, 32] {
         let dirs = index; // lower bits encode directions per level
@@ -62,7 +58,6 @@ fn test_merkle_verify_with_dirs_matches_index() {
         assert_eq!(root_idx, root_dirs);
     }
 }
-
 #[test]
 fn test_merkle_verify_with_dirs_rejects_wrong_dirs() {
     let mut path = [0u64; 32];
@@ -72,7 +67,6 @@ fn test_merkle_verify_with_dirs_rejects_wrong_dirs() {
     let leaf = 4242u64;
     let index = 0b_00101u32;
     let root_idx = verify_merkle_path(leaf, index, &path);
-
     // Flip one direction bit; result must differ from the index-based root
     let dirs_wrong = index ^ 0b_00100u32; // flip bit at level 2
     let root_dirs = verify_merkle_path_with_dirs(leaf, dirs_wrong, &path, 8);

@@ -1,61 +1,51 @@
 use ivm::{IVM, Memory, Perm, VMError, encoding, instruction};
 mod common;
 use common::assemble;
-
 fn push_word(code: &mut Vec<u8>, word: u32) {
     code.extend_from_slice(&word.to_le_bytes());
 }
-
 fn halt(code: &mut Vec<u8>) {
     push_word(code, encoding::wide::encode_halt());
 }
-
 fn store64(code: &mut Vec<u8>, base: u8, rs: u8, imm: i8) {
     push_word(
         code,
         encoding::wide::encode_store(instruction::wide::memory::STORE64, base, rs, imm),
     );
 }
-
 fn load64(code: &mut Vec<u8>, rd: u8, base: u8, imm: i8) {
     push_word(
         code,
         encoding::wide::encode_load(instruction::wide::memory::LOAD64, rd, base, imm),
     );
 }
-
 fn addi(code: &mut Vec<u8>, rd: u8, rs: u8, imm: i8) {
     push_word(
         code,
         encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, rd, rs, imm),
     );
 }
-
 fn sll(code: &mut Vec<u8>, rd: u8, rs1: u8, rs2: u8) {
     push_word(
         code,
         encoding::wide::encode_rr(instruction::wide::arithmetic::SLL, rd, rs1, rs2),
     );
 }
-
 fn srl(code: &mut Vec<u8>, rd: u8, rs1: u8, rs2: u8) {
     push_word(
         code,
         encoding::wide::encode_rr(instruction::wide::arithmetic::SRL, rd, rs1, rs2),
     );
 }
-
 fn sra(code: &mut Vec<u8>, rd: u8, rs1: u8, rs2: u8) {
     push_word(
         code,
         encoding::wide::encode_rr(instruction::wide::arithmetic::SRA, rd, rs1, rs2),
     );
 }
-
 #[test]
 fn test_memory_access() {
     let mut vm = IVM::new(u64::MAX);
-
     // 1. Test basic store and load: store 0x12345678 at an address, load it back
     let addr = Memory::HEAP_START;
     vm.set_register(1, addr);
@@ -68,7 +58,6 @@ fn test_memory_access() {
     vm.load_program(&prog).unwrap();
     vm.run().expect("Store/Load failed");
     assert_eq!(vm.register(3), 0x12345678);
-
     // 2. Test misaligned access: attempt SH at an odd address -> MisalignedAccess error
     vm.set_register(1, Memory::HEAP_START + 1);
     vm.set_register(2, 0xABCD);
@@ -82,7 +71,6 @@ fn test_memory_access() {
         matches!(res, Err(VMError::MisalignedAccess { .. })),
         "Expected misaligned access error"
     );
-
     // 3. Test out-of-bounds access: SB to an address outside defined regions -> MemoryAccessViolation
     let out_addr = Memory::HEAP_START + Memory::HEAP_SIZE; // just beyond heap
     vm.set_register(1, out_addr);
@@ -102,7 +90,6 @@ fn test_memory_access() {
             },
         "Expected MemoryAccessViolation with WRITE perm"
     );
-
     // 4. Test manual sign/zero extension for byte-sized value using shifts.
     vm.set_register(1, Memory::HEAP_START);
     vm.set_register(2, 0xFF);
@@ -127,7 +114,6 @@ fn test_memory_access() {
     assert_eq!(vm.register(5), 0xFFFF_FFFF_FFFF_FFFF);
     assert_eq!(vm.register(6), 0x0000_00FF);
 }
-
 #[test]
 fn test_doubleword_load_store() {
     let mut vm = IVM::new(u64::MAX);
@@ -142,7 +128,6 @@ fn test_doubleword_load_store() {
     vm.run().expect("sd/ld failed");
     assert_eq!(vm.register(3), 0x1122_3344_5566_7788);
 }
-
 #[test]
 fn test_code_region_is_read_only() {
     let mut vm = IVM::new(u64::MAX);
@@ -161,7 +146,6 @@ fn test_code_region_is_read_only() {
         _ => panic!("Expected MemoryAccessViolation"),
     }
 }
-
 #[test]
 fn test_misaligned_load() {
     let mut vm = IVM::new(u64::MAX);
@@ -174,7 +158,6 @@ fn test_misaligned_load() {
     let res = vm.run();
     assert!(matches!(res, Err(VMError::MisalignedAccess { .. })));
 }
-
 #[test]
 fn test_halfword_sign_extension() {
     let mut vm = IVM::new(u64::MAX);
@@ -198,7 +181,6 @@ fn test_halfword_sign_extension() {
     assert_eq!(vm.register(5), 0xFFFF_FFFF_FFFF_FF00);
     assert_eq!(vm.register(6), 0x0000_0000_0000_FF00u64);
 }
-
 #[test]
 fn test_misaligned_store_word() {
     let mut vm = IVM::new(u64::MAX);
@@ -212,7 +194,6 @@ fn test_misaligned_store_word() {
     let res = vm.run();
     assert!(matches!(res, Err(VMError::MisalignedAccess { .. })));
 }
-
 #[test]
 fn test_stack_region_bounds() {
     // Valid access at the end of stack
@@ -226,7 +207,6 @@ fn test_stack_region_bounds() {
     let prog = assemble(&ok_prog);
     vm.load_program(&prog).unwrap();
     vm.run().expect("stack store should succeed");
-
     // Out of bounds
     let mut vm2 = IVM::new(u64::MAX);
     vm2.set_register(1, Memory::STACK_START + Memory::STACK_SIZE);
@@ -242,7 +222,6 @@ fn test_stack_region_bounds() {
         })
     ));
 }
-
 #[test]
 fn test_input_output_regions() {
     let mut vm = IVM::new(u64::MAX);
@@ -259,7 +238,6 @@ fn test_input_output_regions() {
         }
     ));
 }
-
 #[test]
 fn test_heap_is_not_executable() {
     let mut vm = IVM::new(u64::MAX);
@@ -281,7 +259,6 @@ fn test_heap_is_not_executable() {
         matches!(res, Err(VMError::MemoryAccessViolation { perm, .. }) if perm.contains(Perm::EXECUTE))
     );
 }
-
 #[test]
 fn test_signed_word_load() {
     let mut vm = IVM::new(u64::MAX);
@@ -300,7 +277,6 @@ fn test_signed_word_load() {
     vm.run().expect("signed word load");
     assert_eq!(vm.register(6), 0xFFFF_FFFF_FFFF_FF80_u64);
 }
-
 #[test]
 fn test_vector_load_store() {
     let mut vm = IVM::new(u64::MAX);
@@ -319,7 +295,6 @@ fn test_vector_load_store() {
     assert_eq!(vm.register(4), 0x0102_0304_0506_0708);
     assert_eq!(vm.register(5), 0x1112_1314_1516_1718);
 }
-
 #[test]
 fn test_heap_alloc_syscall() {
     use ivm::syscalls;
@@ -340,7 +315,6 @@ fn test_heap_alloc_syscall() {
     let addr = vm.register(10);
     assert!((Memory::HEAP_START..Memory::HEAP_START + Memory::HEAP_SIZE).contains(&addr));
 }
-
 #[test]
 fn test_bulk_store_and_load() {
     let mut vm = IVM::new(u64::MAX);

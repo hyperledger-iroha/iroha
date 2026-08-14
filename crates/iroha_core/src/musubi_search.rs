@@ -3,14 +3,6 @@
 //! This index is deliberately process-local and absent from [`crate::state::World`].
 //! Consensus resolution continues to use the universal sparse resolver index; this
 //! projection serves only description, keyword, namespace, and package-name search.
-
-use std::{
-    borrow::Borrow,
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-    ops::Bound::{Excluded, Unbounded},
-};
-
 use iroha_data_model::{
     events::data::musubi::MusubiEvent,
     musubi::{
@@ -21,13 +13,17 @@ use iroha_data_model::{
     },
 };
 use norito::codec::Encode as _;
-
+use std::{
+    borrow::Borrow,
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    ops::Bound::{Excluded, Unbounded},
+};
 /// Maximum document terms retained after deterministic priority ordering.
 pub const MUSUBI_SEARCH_MAX_DOCUMENT_TERMS_V1: usize = 256;
 /// Maximum candidate package rows inspected for a multi-term page.
 pub const MUSUBI_SEARCH_MAX_CANDIDATE_SCAN_V1: usize = 16_384;
 const MUSUBI_SEARCH_QUERY_HASH_DOMAIN_V1: &[u8] = b"iroha.musubi.search-query.v1";
-
 /// Failure while rebuilding or querying the non-consensus search projection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MusubiSearchError {
@@ -46,7 +42,6 @@ pub enum MusubiSearchError {
     /// The process-local projection revision overflowed.
     RevisionOverflow,
 }
-
 impl fmt::Display for MusubiSearchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -62,9 +57,7 @@ impl fmt::Display for MusubiSearchError {
         })
     }
 }
-
 impl std::error::Error for MusubiSearchError {}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct MusubiSearchDocument {
     claimed_namespace: Option<iroha_data_model::musubi::MusubiNamespaceV1>,
@@ -72,20 +65,17 @@ struct MusubiSearchDocument {
     metadata_revision: u64,
     terms: BTreeSet<String>,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MusubiSearchSliceV1 {
     hits: Vec<MusubiSearchHitV1>,
     next_after: Option<MusubiPackageIdV1>,
 }
-
 /// Process-local rich-search state rebuildable solely from finalized Musubi events.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MusubiSearchProjectionV1 {
     documents: BTreeMap<MusubiPackageIdV1, MusubiSearchDocument>,
     postings: BTreeMap<String, BTreeSet<MusubiPackageIdV1>>,
 }
-
 /// Anchored process-local search index updated only from finalized Musubi events.
 ///
 /// The index and its revision are operator-local discovery state. Dependency
@@ -96,7 +86,6 @@ pub struct MusubiSearchIndexV1 {
     projection: MusubiSearchProjectionV1,
     snapshot: Option<MusubiSearchSnapshotV1>,
 }
-
 impl MusubiSearchProjectionV1 {
     /// Rebuild a fresh projection from a canonically ordered finalized event stream.
     pub fn rebuild<I>(events: I) -> Result<Self, MusubiSearchError>
@@ -110,7 +99,6 @@ impl MusubiSearchProjectionV1 {
         }
         Ok(projection)
     }
-
     /// Rebuild from a consistent finalized package/metadata state snapshot.
     ///
     /// This is the bounded recovery path used after process restart or event-stream
@@ -167,7 +155,6 @@ impl MusubiSearchProjectionV1 {
         }
         Ok(projection)
     }
-
     /// Apply one event after its containing block is finalized.
     ///
     /// Events unrelated to rich package discovery are intentionally ignored. Exact
@@ -175,7 +162,6 @@ impl MusubiSearchProjectionV1 {
     pub fn apply_finalized(&mut self, event: &MusubiEvent) -> Result<(), MusubiSearchError> {
         self.apply_finalized_changed(event).map(|_| ())
     }
-
     fn apply_finalized_changed(&mut self, event: &MusubiEvent) -> Result<bool, MusubiSearchError> {
         match event {
             MusubiEvent::PackageClaimed(event) => {
@@ -230,7 +216,6 @@ impl MusubiSearchProjectionV1 {
             _ => Ok(false),
         }
     }
-
     /// Search exact normalized terms without scanning the package directory.
     ///
     /// All query terms must match. `after` is the last structural package key from
@@ -308,13 +293,11 @@ impl MusubiSearchProjectionV1 {
         });
         Ok(MusubiSearchSliceV1 { hits, next_after })
     }
-
     /// Number of currently projected package documents.
     #[must_use]
     pub fn document_count(&self) -> usize {
         self.documents.len()
     }
-
     fn contains_hit(&self, package: &MusubiPackageIdV1, terms: &BTreeSet<String>) -> bool {
         self.documents.get(package).is_some_and(|document| {
             document.claimed_namespace.is_some()
@@ -322,7 +305,6 @@ impl MusubiSearchProjectionV1 {
                 && terms.iter().all(|term| document.terms.contains(term))
         })
     }
-
     fn remove_postings(&mut self, package: &MusubiPackageIdV1) {
         let Some(document) = self.documents.get(package) else {
             return;
@@ -338,7 +320,6 @@ impl MusubiSearchProjectionV1 {
             }
         }
     }
-
     fn insert_postings(&mut self, package: &MusubiPackageIdV1) {
         let terms = self
             .documents
@@ -356,7 +337,6 @@ impl MusubiSearchProjectionV1 {
         }
     }
 }
-
 impl MusubiSearchIndexV1 {
     /// Rebuild an anchored projection from one consistent finalized world-state view.
     pub fn rebuild_records<P, M>(
@@ -378,19 +358,16 @@ impl MusubiSearchIndexV1 {
             snapshot: Some(snapshot),
         })
     }
-
     /// Return the exact finalized projection anchor, if genesis is available.
     #[must_use]
     pub const fn snapshot(&self) -> Option<MusubiSearchSnapshotV1> {
         self.snapshot
     }
-
     /// Number of currently projected package documents.
     #[must_use]
     pub fn document_count(&self) -> usize {
         self.projection.document_count()
     }
-
     /// Apply one finalized event and advance the search-specific projection revision.
     ///
     /// `finalized_height` and `finalized_block_hash` must identify the block that
@@ -436,7 +413,6 @@ impl MusubiSearchIndexV1 {
         });
         Ok(true)
     }
-
     /// Execute one exact-token query against the anchored discovery projection.
     pub fn search(
         &self,
@@ -484,7 +460,6 @@ impl MusubiSearchIndexV1 {
         Ok(page)
     }
 }
-
 /// Return the finalized height carried by a search-affecting event.
 #[must_use]
 pub const fn search_event_height(event: &MusubiEvent) -> Option<u64> {
@@ -494,7 +469,6 @@ pub const fn search_event_height(event: &MusubiEvent) -> Option<u64> {
         _ => None,
     }
 }
-
 fn search_query_hash(request: &MusubiSearchQueryV1) -> MusubiQueryHashV1 {
     let mut canonical = request.clone();
     canonical.page.cursor = None;
@@ -515,7 +489,6 @@ fn search_query_hash(request: &MusubiSearchQueryV1) -> MusubiQueryHashV1 {
     payload.extend_from_slice(&encoded);
     MusubiQueryHashV1::new(*iroha_crypto::Hash::new(&payload).as_ref())
 }
-
 fn document_terms(
     package: &MusubiPackageIdV1,
     document: &MusubiSearchDocument,
@@ -536,7 +509,6 @@ fn document_terms(
     }
     terms
 }
-
 fn insert_components(value: &str, terms: &mut BTreeSet<String>) {
     for component in value.split_whitespace() {
         if terms.len() >= MUSUBI_SEARCH_MAX_DOCUMENT_TERMS_V1 {
@@ -545,7 +517,6 @@ fn insert_components(value: &str, terms: &mut BTreeSet<String>) {
         insert_exact_and_words(component, terms);
     }
 }
-
 fn insert_exact_and_words(value: &str, terms: &mut BTreeSet<String>) {
     if value.len() <= MUSUBI_MAX_SEARCH_TERM_BYTES_V1
         && value
@@ -556,7 +527,6 @@ fn insert_exact_and_words(value: &str, terms: &mut BTreeSet<String>) {
     }
     insert_words(value, terms);
 }
-
 fn insert_words(value: &str, terms: &mut BTreeSet<String>) {
     for word in value.split(|character: char| !character.is_alphanumeric()) {
         if terms.len() >= MUSUBI_SEARCH_MAX_DOCUMENT_TERMS_V1 {
@@ -569,7 +539,6 @@ fn insert_words(value: &str, terms: &mut BTreeSet<String>) {
         insert_term(normalized, terms);
     }
 }
-
 fn insert_term(term: String, terms: &mut BTreeSet<String>) {
     if !term.is_empty()
         && term.len() <= MUSUBI_MAX_SEARCH_TERM_BYTES_V1
@@ -578,9 +547,9 @@ fn insert_term(term: String, terms: &mut BTreeSet<String>) {
         terms.insert(term);
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId,
@@ -592,15 +561,11 @@ mod tests {
         },
         nexus::DataSpaceId,
     };
-
-    use super::*;
-
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed derives account");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn package(name: &str) -> MusubiPackageIdV1 {
         MusubiPackageIdV1::new(
             DataSpaceId::new(9),
@@ -608,7 +573,6 @@ mod tests {
             name.parse().expect("package name"),
         )
     }
-
     fn claimed(package: MusubiPackageIdV1) -> MusubiEvent {
         MusubiEvent::PackageClaimed(MusubiPackageClaimedEventV1 {
             package,
@@ -618,7 +582,6 @@ mod tests {
             finalized_height: 1,
         })
     }
-
     fn metadata(
         package: MusubiPackageIdV1,
         revision: u64,
@@ -627,7 +590,6 @@ mod tests {
     ) -> MusubiEvent {
         metadata_at(package, revision, revision, description, keywords)
     }
-
     fn metadata_at(
         package: MusubiPackageIdV1,
         revision: u64,
@@ -650,7 +612,6 @@ mod tests {
             changed_at_height: height,
         })
     }
-
     fn query(text: &str, limit: u32) -> MusubiSearchQueryV1 {
         MusubiSearchQueryV1 {
             query: text.to_owned(),
@@ -660,7 +621,6 @@ mod tests {
             },
         }
     }
-
     fn search_projection(projection: &MusubiSearchProjectionV1, text: &str) -> MusubiSearchSliceV1 {
         let request = query(text, 50);
         let terms = request
@@ -670,7 +630,6 @@ mod tests {
             .collect::<BTreeSet<_>>();
         projection.search(&terms, None, 50).expect("search")
     }
-
     #[test]
     fn rebuild_and_incremental_application_are_identical() {
         let package = package("proof-kit");
@@ -695,7 +654,6 @@ mod tests {
         assert_eq!(page.hits.len(), 1);
         assert_eq!(page.hits[0].package.name.as_str(), "proof-kit");
     }
-
     #[test]
     fn metadata_replacement_removes_stale_description_tokens() {
         let package = package("codec");
@@ -710,7 +668,6 @@ mod tests {
         assert_eq!(current.hits.len(), 1);
         assert_eq!(current.hits[0].metadata_revision, 2);
     }
-
     #[test]
     fn hyphenated_description_matches_its_exact_term_and_words() {
         let package = package("proofs");
@@ -724,7 +681,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn inconsistent_same_revision_metadata_is_rejected() {
         let package = package("codec");
@@ -737,7 +693,6 @@ mod tests {
             Err(MusubiSearchError::InconsistentFinalizedEvent)
         );
     }
-
     #[test]
     fn finalized_state_rebuild_produces_an_anchored_search_page() {
         let package = package("math-kit");
@@ -779,7 +734,6 @@ mod tests {
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].package.name.as_str(), "math-kit");
     }
-
     #[test]
     fn search_cursor_binds_query_and_projection_revision() {
         let first = package("alpha-kit");
@@ -806,14 +760,12 @@ mod tests {
         let second_page = index.search(&continuation).expect("second page");
         assert_eq!(second_page.items.len(), 1);
         assert!(second_page.next_cursor.is_none());
-
         let mut changed_query = query("deterministic", 1);
         changed_query.page.cursor = Some(cursor.clone());
         assert_eq!(
             index.search(&changed_query),
             Err(MusubiSearchError::StaleCursor)
         );
-
         let replacement = metadata(package("alpha-kit"), 2, "fast verifier", &["cryptography"]);
         index
             .apply_finalized(&replacement, 2, [2; 32])
@@ -823,7 +775,6 @@ mod tests {
             Err(MusubiSearchError::StaleCursor)
         );
     }
-
     #[test]
     fn finalized_anchor_is_monotonic_and_accepts_same_block_events() {
         let package_id = package("same-block");
@@ -854,7 +805,6 @@ mod tests {
                 .expect("idempotent duplicate")
         );
         assert_eq!(index.snapshot().expect("snapshot").projection_revision, 2);
-
         let conflicting_same_height =
             metadata_at(package_id.clone(), 2, 1, "second metadata", &["second"]);
         assert_eq!(
@@ -867,7 +817,6 @@ mod tests {
                 .apply_finalized(&second, 2, [2; 32])
                 .expect("advance finalized anchor")
         );
-
         let regressed = metadata_at(package_id, 3, 1, "regressed metadata", &["third"]);
         assert_eq!(
             index.apply_finalized(&regressed, 1, [1; 32]),
@@ -881,7 +830,6 @@ mod tests {
                 projection_revision: 3,
             })
         );
-
         let mut overflow = index;
         overflow
             .snapshot

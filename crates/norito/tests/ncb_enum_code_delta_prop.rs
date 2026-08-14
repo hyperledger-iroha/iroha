@@ -1,7 +1,5 @@
 //! Deterministic tests for enum NCB with code-delta sequences.
-
 use norito::columnar as ncb;
-
 fn assert_enum_rows(
     view: &ncb::NcbU64EnumBoolView<'_>,
     expected: &[(u64, ncb::RowEnumOwned, bool)],
@@ -28,7 +26,6 @@ fn assert_enum_rows(
         }
     }
 }
-
 #[test]
 fn enum_code_delta_alternating() {
     let name = "alpha";
@@ -52,7 +49,6 @@ fn enum_code_delta_alternating() {
     let view = ncb::view_ncb_u64_enum_bool(&prefixed[3..]).expect("view enum ncb");
     assert_enum_rows(&view, &expected);
 }
-
 #[test]
 fn enum_code_delta_wrap() {
     let base = u32::MAX - 2;
@@ -87,7 +83,6 @@ fn enum_code_delta_wrap() {
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view wrap");
     assert_enum_rows(&view, &expected);
 }
-
 #[test]
 fn enum_code_and_id_delta() {
     let rows = vec![

@@ -4,20 +4,6 @@
 //! workspace crate. It validates Norito-encoded provider adverts and
 //! replication orders, then emits stable `ValidationOutcomeV1`
 //! JSON/table/YAML output.
-
-use std::{
-    collections::BTreeSet,
-    env,
-    fs::{self, OpenOptions},
-    io::{self, Read, Write},
-    path::{Component, Path, PathBuf},
-    process::ExitCode,
-    time::{SystemTime, UNIX_EPOCH},
-};
-
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use iroha_crypto::sha256;
 use norito::json;
@@ -43,7 +29,17 @@ use sorafs_manifest::{
     validate_provider_advert_bytes, validate_repair_payload_bytes,
     validate_replication_order_bytes, validate_signed_replication_order_bytes,
 };
-
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::{
+    collections::BTreeSet,
+    env,
+    fs::{self, OpenOptions},
+    io::{self, Read, Write},
+    path::{Component, Path, PathBuf},
+    process::ExitCode,
+    time::{SystemTime, UNIX_EPOCH},
+};
 fn main() -> ExitCode {
     match run(env::args().skip(1)) {
         Ok(code) => code,
@@ -53,14 +49,12 @@ fn main() -> ExitCode {
         }
     }
 }
-
 fn run(args: impl IntoIterator<Item = String>) -> Result<ExitCode, CliError> {
     let args: Vec<String> = args.into_iter().collect();
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         print_usage();
         return Ok(ExitCode::SUCCESS);
     }
-
     let command = args
         .first()
         .ok_or(CliError::Config("missing command".to_owned()))?;
@@ -84,7 +78,6 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<ExitCode, CliError> {
         ))),
     }
 }
-
 fn run_advert(args: AdvertArgs) -> Result<ExitCode, CliError> {
     let input = args.input.ok_or(CliError::Config(
         "advert requires --input <path>".to_owned(),
@@ -100,7 +93,6 @@ fn run_advert(args: AdvertArgs) -> Result<ExitCode, CliError> {
         None => unix_time_now()
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
-
     let bytes = read_cli_bytes_bounded(&input, PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1)?;
     let outcome =
         validate_provider_advert_bytes(&bytes, input.display().to_string(), now, generated_at);
@@ -108,14 +100,12 @@ fn run_advert(args: AdvertArgs) -> Result<ExitCode, CliError> {
         write_json_outcome(&path, &outcome)?;
     }
     print_outcome(&outcome, format)?;
-
     if outcome.is_ok() {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
     }
 }
-
 fn run_admission(args: AdmissionArgs) -> Result<ExitCode, CliError> {
     let input = args.input.ok_or(CliError::Config(
         "admission requires --input <path>".to_owned(),
@@ -126,7 +116,6 @@ fn run_admission(args: AdmissionArgs) -> Result<ExitCode, CliError> {
         None => unix_time_now()
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
-
     let bytes = fs::read(&input)
         .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
     let outcome = if let Some(renewal) = args.renewal {
@@ -161,14 +150,12 @@ fn run_admission(args: AdmissionArgs) -> Result<ExitCode, CliError> {
         write_json_outcome(&path, &outcome)?;
     }
     print_outcome(&outcome, format)?;
-
     if outcome.is_ok() {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
     }
 }
-
 fn run_order(args: OrderArgs) -> Result<ExitCode, CliError> {
     let input = args.order.ok_or(CliError::Config(
         "order requires --order <path> or --signed-order <path>".to_owned(),
@@ -179,7 +166,6 @@ fn run_order(args: OrderArgs) -> Result<ExitCode, CliError> {
         None => unix_time_now()
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
-
     let bytes = fs::read(&input)
         .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
     let outcome = if args.signed {
@@ -191,14 +177,12 @@ fn run_order(args: OrderArgs) -> Result<ExitCode, CliError> {
         write_json_outcome(&path, &outcome)?;
     }
     print_outcome(&outcome, format)?;
-
     if outcome.is_ok() {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
     }
 }
-
 fn run_orderbook(args: OrderbookArgs) -> Result<ExitCode, CliError> {
     let input = args.input.ok_or(CliError::Config(
         "orderbook requires --input <path>".to_owned(),
@@ -212,7 +196,6 @@ fn run_orderbook(args: OrderbookArgs) -> Result<ExitCode, CliError> {
         None => unix_time_now()
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
-
     let bytes = read_cli_bytes_bounded(&input, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1)?;
     let outcome =
         validate_orderbook_payload_bytes(kind, &bytes, input.display().to_string(), generated_at);
@@ -220,14 +203,12 @@ fn run_orderbook(args: OrderbookArgs) -> Result<ExitCode, CliError> {
         write_json_outcome(&path, &outcome)?;
     }
     print_outcome(&outcome, format)?;
-
     if outcome.is_ok() {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
     }
 }
-
 fn run_pop(args: PopArgs) -> Result<ExitCode, CliError> {
     let input = args
         .input
@@ -241,7 +222,6 @@ fn run_pop(args: PopArgs) -> Result<ExitCode, CliError> {
         None => unix_time_now()
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
-
     let bytes = fs::read(&input)
         .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
     let outcome =
@@ -250,14 +230,12 @@ fn run_pop(args: PopArgs) -> Result<ExitCode, CliError> {
         write_json_outcome(&path, &outcome)?;
     }
     print_outcome(&outcome, format)?;
-
     if outcome.is_ok() {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
     }
 }
-
 fn run_hedging(args: HedgingArgs) -> Result<ExitCode, CliError> {
     let input = args.input.ok_or(CliError::Config(
         "hedging requires --input <path>".to_owned(),
@@ -271,7 +249,6 @@ fn run_hedging(args: HedgingArgs) -> Result<ExitCode, CliError> {
         None => unix_time_now()
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
-
     let bytes = fs::read(&input)
         .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
     let outcome =
@@ -280,14 +257,12 @@ fn run_hedging(args: HedgingArgs) -> Result<ExitCode, CliError> {
         write_json_outcome(&path, &outcome)?;
     }
     print_outcome(&outcome, format)?;
-
     if outcome.is_ok() {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
     }
 }
-
 fn run_pdp(args: PdpArgs) -> Result<ExitCode, CliError> {
     let format = args.format.unwrap_or(OutputFormat::Table);
     let generated_at = match args.generated_at {
@@ -295,7 +270,6 @@ fn run_pdp(args: PdpArgs) -> Result<ExitCode, CliError> {
         None => unix_time_now()
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
-
     let outcome = match (&args.commitment, &args.challenge, &args.proof) {
         (None, None, None) => {
             return Err(CliError::Config(
@@ -364,23 +338,19 @@ fn run_pdp(args: PdpArgs) -> Result<ExitCode, CliError> {
             validate_pdp_proof_bytes(&proof_bytes, proof.display().to_string(), generated_at)
         }
     };
-
     if let Some(path) = args.telemetry_out {
         write_json_outcome(&path, &outcome)?;
     }
     print_outcome(&outcome, format)?;
-
     if outcome.is_ok() {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
     }
 }
-
 fn read_cli_bytes(path: &Path) -> Result<Vec<u8>, CliError> {
     fs::read(path).map_err(|err| CliError::Io(format!("failed to read {}: {err}", path.display())))
 }
-
 fn read_cli_bytes_bounded(path: &Path, maximum_bytes: usize) -> Result<Vec<u8>, CliError> {
     let maximum_u64 = u64::try_from(maximum_bytes)
         .map_err(|_| CliError::Internal("CLI byte ceiling exceeds u64".to_owned()))?;
@@ -420,7 +390,6 @@ fn read_cli_bytes_bounded(path: &Path, maximum_bytes: usize) -> Result<Vec<u8>, 
     }
     Ok(bytes)
 }
-
 fn run_por(args: PorArgs) -> Result<ExitCode, CliError> {
     let challenge = args.challenge.ok_or(CliError::Config(
         "por requires --challenge <path>".to_owned(),
@@ -434,7 +403,6 @@ fn run_por(args: PorArgs) -> Result<ExitCode, CliError> {
         None => unix_time_now()
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
-
     let challenge_bytes = fs::read(&challenge)
         .map_err(|err| CliError::Io(format!("failed to read {}: {err}", challenge.display())))?;
     let proof_bytes = fs::read(&proof)
@@ -450,14 +418,12 @@ fn run_por(args: PorArgs) -> Result<ExitCode, CliError> {
         write_json_outcome(&path, &outcome)?;
     }
     print_outcome(&outcome, format)?;
-
     if outcome.is_ok() {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
     }
 }
-
 fn run_potr(args: PotrArgs) -> Result<ExitCode, CliError> {
     let receipt = args.receipt.ok_or(CliError::Config(
         "potr requires --receipt <path>".to_owned(),
@@ -468,7 +434,6 @@ fn run_potr(args: PotrArgs) -> Result<ExitCode, CliError> {
         None => unix_time_now()
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
-
     let bytes = fs::read(&receipt)
         .map_err(|err| CliError::Io(format!("failed to read {}: {err}", receipt.display())))?;
     let outcome = validate_potr_receipt_bytes(
@@ -481,14 +446,12 @@ fn run_potr(args: PotrArgs) -> Result<ExitCode, CliError> {
         write_json_outcome(&path, &outcome)?;
     }
     print_outcome(&outcome, format)?;
-
     if outcome.is_ok() {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
     }
 }
-
 fn run_repair(args: RepairArgs) -> Result<ExitCode, CliError> {
     let input = args.input.ok_or(CliError::Config(
         "repair requires --input <path>".to_owned(),
@@ -502,7 +465,6 @@ fn run_repair(args: RepairArgs) -> Result<ExitCode, CliError> {
         None => unix_time_now()
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
-
     let bytes = fs::read(&input)
         .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
     let outcome =
@@ -511,14 +473,12 @@ fn run_repair(args: RepairArgs) -> Result<ExitCode, CliError> {
         write_json_outcome(&path, &outcome)?;
     }
     print_outcome(&outcome, format)?;
-
     if outcome.is_ok() {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
     }
 }
-
 fn run_bundle(args: BundleArgs) -> Result<ExitCode, CliError> {
     let bundle = args.bundle.ok_or(CliError::Config(
         "bundle requires --bundle <directory>".to_owned(),
@@ -534,7 +494,6 @@ fn run_bundle(args: BundleArgs) -> Result<ExitCode, CliError> {
         None => unix_time_now()
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
-
     let payloads = read_bundle_payloads(&bundle)?;
     let borrowed = payloads
         .iter()
@@ -551,14 +510,12 @@ fn run_bundle(args: BundleArgs) -> Result<ExitCode, CliError> {
         write_json_outcome(&path, &outcome)?;
     }
     print_outcome(&outcome, format)?;
-
     if outcome.is_ok() {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
     }
 }
-
 fn run_governance(args: GovernanceArgs) -> Result<ExitCode, CliError> {
     let format = args.format.unwrap_or(OutputFormat::Table);
     let generated_at = match args.generated_at {
@@ -566,7 +523,6 @@ fn run_governance(args: GovernanceArgs) -> Result<ExitCode, CliError> {
         None => unix_time_now()
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
-
     let modes = usize::from(args.node.is_some())
         + usize::from(args.block.is_some())
         + usize::from(args.head.is_some());
@@ -576,7 +532,6 @@ fn run_governance(args: GovernanceArgs) -> Result<ExitCode, CliError> {
                 .to_owned(),
         ));
     }
-
     let outcome = if let Some(node) = args.node {
         if !args.blocks.is_empty() {
             return Err(CliError::Config(
@@ -649,16 +604,13 @@ fn run_governance(args: GovernanceArgs) -> Result<ExitCode, CliError> {
         write_json_outcome(&path, &outcome)?;
     }
     print_outcome(&outcome, format)?;
-
     if outcome.is_ok() {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
     }
 }
-
 const RELEASE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
-
 fn run_release_manifest(args: ReleaseManifestArgs) -> Result<ExitCode, CliError> {
     let manifest_path = args.manifest.ok_or(CliError::Config(
         "release-manifest requires --manifest <path>".to_owned(),
@@ -670,7 +622,6 @@ fn run_release_manifest(args: ReleaseManifestArgs) -> Result<ExitCode, CliError>
         "release-manifest requires --public-key-fingerprint <hex>".to_owned(),
     ))?;
     let reviewed_fingerprint = parse_release_fingerprint(&fingerprint_text)?;
-
     let manifest = read_release_input(
         &manifest_path,
         "release manifest",
@@ -707,7 +658,6 @@ fn run_release_manifest(args: ReleaseManifestArgs) -> Result<ExitCode, CliError>
             "release manifest public key must not be weak or small-order".to_owned(),
         ));
     }
-
     match (
         args.signature,
         args.signing_seed,
@@ -786,7 +736,6 @@ fn run_release_manifest(args: ReleaseManifestArgs) -> Result<ExitCode, CliError>
         )),
     }
 }
-
 fn run_sign(args: SignArgs) -> Result<ExitCode, CliError> {
     match args.kind {
         Some(SignKind::Advert) => run_sign_advert(args),
@@ -799,7 +748,6 @@ fn run_sign(args: SignArgs) -> Result<ExitCode, CliError> {
         )),
     }
 }
-
 fn run_sign_advert(args: SignArgs) -> Result<ExitCode, CliError> {
     let input = args.input.clone().ok_or(CliError::Config(
         "sign --kind advert requires --input <path>".to_owned(),
@@ -818,7 +766,6 @@ fn run_sign_advert(args: SignArgs) -> Result<ExitCode, CliError> {
         None => unix_time_now()
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
-
     let seed = read_signing_seed(&args)?;
     let input_bytes = read_cli_bytes_bounded(&input, PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1)?;
     let mut advert = match decode_provider_advert_v1(&input_bytes) {
@@ -837,7 +784,6 @@ fn run_sign_advert(args: SignArgs) -> Result<ExitCode, CliError> {
             return Ok(ExitCode::from(2));
         }
     };
-
     sign_provider_advert(&mut advert, &seed)?;
     let signed_bytes = norito::to_bytes(&advert).map_err(|err| {
         CliError::Internal(format!("failed to encode signed provider advert: {err}"))
@@ -862,7 +808,6 @@ fn run_sign_advert(args: SignArgs) -> Result<ExitCode, CliError> {
         "signed_provider_advert",
         output.display().to_string(),
     ));
-
     if outcome.is_ok() {
         fs::write(&output, signed_bytes)
             .map_err(|err| CliError::Io(format!("failed to write {}: {err}", output.display())))?;
@@ -871,14 +816,12 @@ fn run_sign_advert(args: SignArgs) -> Result<ExitCode, CliError> {
         write_json_outcome(&path, &outcome)?;
     }
     print_outcome(&outcome, format)?;
-
     if outcome.is_ok() {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
     }
 }
-
 fn run_sign_order(args: SignArgs) -> Result<ExitCode, CliError> {
     let input = args.input.clone().ok_or(CliError::Config(
         "sign --kind order requires --input <path>".to_owned(),
@@ -892,7 +835,6 @@ fn run_sign_order(args: SignArgs) -> Result<ExitCode, CliError> {
         None => unix_time_now()
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
-
     let seed = read_signing_seed(&args)?;
     let input_bytes = fs::read(&input)
         .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
@@ -911,7 +853,6 @@ fn run_sign_order(args: SignArgs) -> Result<ExitCode, CliError> {
             return Ok(ExitCode::from(2));
         }
     };
-
     let signed_order = sign_replication_order(order, &seed)?;
     let signed_bytes = norito::to_bytes(&signed_order).map_err(|err| {
         CliError::Internal(format!("failed to encode signed replication order: {err}"))
@@ -935,7 +876,6 @@ fn run_sign_order(args: SignArgs) -> Result<ExitCode, CliError> {
         "signed_replication_order",
         output.display().to_string(),
     ));
-
     if outcome.is_ok() {
         fs::write(&output, signed_bytes)
             .map_err(|err| CliError::Io(format!("failed to write {}: {err}", output.display())))?;
@@ -944,14 +884,12 @@ fn run_sign_order(args: SignArgs) -> Result<ExitCode, CliError> {
         write_json_outcome(&path, &outcome)?;
     }
     print_outcome(&outcome, format)?;
-
     if outcome.is_ok() {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
     }
 }
-
 fn run_sign_orderbook(args: SignArgs) -> Result<ExitCode, CliError> {
     let input = args.input.clone().ok_or(CliError::Config(
         "sign --kind orderbook requires --input <path>".to_owned(),
@@ -968,7 +906,6 @@ fn run_sign_orderbook(args: SignArgs) -> Result<ExitCode, CliError> {
         None => unix_time_now()
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
-
     let seed = read_signing_seed(&args)?;
     let input_bytes = read_cli_bytes_bounded(&input, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1)?;
     let signed_bytes = match sign_orderbook_payload_bytes(payload_kind, &input_bytes, &seed) {
@@ -1027,7 +964,6 @@ fn run_sign_orderbook(args: SignArgs) -> Result<ExitCode, CliError> {
         signed_orderbook_input_kind(payload_kind),
         output.display().to_string(),
     ));
-
     if outcome.is_ok() {
         fs::write(&output, signed_bytes)
             .map_err(|err| CliError::Io(format!("failed to write {}: {err}", output.display())))?;
@@ -1036,14 +972,12 @@ fn run_sign_orderbook(args: SignArgs) -> Result<ExitCode, CliError> {
         write_json_outcome(&path, &outcome)?;
     }
     print_outcome(&outcome, format)?;
-
     if outcome.is_ok() {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
     }
 }
-
 fn run_sign_governance(args: SignArgs) -> Result<ExitCode, CliError> {
     let input = args.input.clone().ok_or(CliError::Config(
         "sign --kind governance requires --input <path>".to_owned(),
@@ -1057,7 +991,6 @@ fn run_sign_governance(args: SignArgs) -> Result<ExitCode, CliError> {
         None => unix_time_now()
             .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
     };
-
     let seed = read_signing_seed(&args)?;
     let input_bytes = fs::read(&input)
         .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
@@ -1077,7 +1010,6 @@ fn run_sign_governance(args: SignArgs) -> Result<ExitCode, CliError> {
             return Ok(ExitCode::from(2));
         }
     };
-
     sign_governance_log_node(&mut node, &seed)?;
     let signed_bytes = norito::to_bytes(&node).map_err(|err| {
         CliError::Internal(format!(
@@ -1104,7 +1036,6 @@ fn run_sign_governance(args: SignArgs) -> Result<ExitCode, CliError> {
         "signed_governance_log_node",
         output.display().to_string(),
     ));
-
     if outcome.is_ok() {
         fs::write(&output, signed_bytes)
             .map_err(|err| CliError::Io(format!("failed to write {}: {err}", output.display())))?;
@@ -1113,14 +1044,12 @@ fn run_sign_governance(args: SignArgs) -> Result<ExitCode, CliError> {
         write_json_outcome(&path, &outcome)?;
     }
     print_outcome(&outcome, format)?;
-
     if outcome.is_ok() {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
     }
 }
-
 #[derive(Debug, Default)]
 struct AdvertArgs {
     input: Option<PathBuf>,
@@ -1129,7 +1058,6 @@ struct AdvertArgs {
     now: Option<u64>,
     generated_at: Option<u64>,
 }
-
 impl AdvertArgs {
     fn parse(args: &[String]) -> Result<Self, CliError> {
         let mut parsed = AdvertArgs::default();
@@ -1183,7 +1111,6 @@ impl AdvertArgs {
         Ok(parsed)
     }
 }
-
 #[derive(Debug, Default)]
 struct AdmissionArgs {
     input: Option<PathBuf>,
@@ -1193,7 +1120,6 @@ struct AdmissionArgs {
     telemetry_out: Option<PathBuf>,
     generated_at: Option<u64>,
 }
-
 impl AdmissionArgs {
     fn parse(args: &[String]) -> Result<Self, CliError> {
         let mut parsed = AdmissionArgs::default();
@@ -1255,7 +1181,6 @@ impl AdmissionArgs {
         Ok(parsed)
     }
 }
-
 #[derive(Debug, Default)]
 struct PdpArgs {
     commitment: Option<PathBuf>,
@@ -1265,7 +1190,6 @@ struct PdpArgs {
     telemetry_out: Option<PathBuf>,
     generated_at: Option<u64>,
 }
-
 impl PdpArgs {
     fn parse(args: &[String]) -> Result<Self, CliError> {
         let mut parsed = PdpArgs::default();
@@ -1322,7 +1246,6 @@ impl PdpArgs {
         Ok(parsed)
     }
 }
-
 #[derive(Debug, Default)]
 struct PorArgs {
     challenge: Option<PathBuf>,
@@ -1331,7 +1254,6 @@ struct PorArgs {
     telemetry_out: Option<PathBuf>,
     generated_at: Option<u64>,
 }
-
 impl PorArgs {
     fn parse(args: &[String]) -> Result<Self, CliError> {
         let mut parsed = PorArgs::default();
@@ -1382,7 +1304,6 @@ impl PorArgs {
         Ok(parsed)
     }
 }
-
 #[derive(Debug, Default)]
 struct PotrArgs {
     receipt: Option<PathBuf>,
@@ -1391,7 +1312,6 @@ struct PotrArgs {
     telemetry_out: Option<PathBuf>,
     generated_at: Option<u64>,
 }
-
 #[derive(Debug, Default)]
 struct PopArgs {
     input: Option<PathBuf>,
@@ -1400,7 +1320,6 @@ struct PopArgs {
     telemetry_out: Option<PathBuf>,
     generated_at: Option<u64>,
 }
-
 impl PopArgs {
     fn parse(args: &[String]) -> Result<Self, CliError> {
         let mut parsed = PopArgs::default();
@@ -1451,7 +1370,6 @@ impl PopArgs {
         Ok(parsed)
     }
 }
-
 #[derive(Debug, Default)]
 struct RepairArgs {
     input: Option<PathBuf>,
@@ -1460,7 +1378,6 @@ struct RepairArgs {
     telemetry_out: Option<PathBuf>,
     generated_at: Option<u64>,
 }
-
 impl RepairArgs {
     fn parse(args: &[String]) -> Result<Self, CliError> {
         let mut parsed = RepairArgs::default();
@@ -1511,7 +1428,6 @@ impl RepairArgs {
         Ok(parsed)
     }
 }
-
 #[derive(Debug, Default)]
 struct HedgingArgs {
     input: Option<PathBuf>,
@@ -1520,7 +1436,6 @@ struct HedgingArgs {
     telemetry_out: Option<PathBuf>,
     generated_at: Option<u64>,
 }
-
 impl HedgingArgs {
     fn parse(args: &[String]) -> Result<Self, CliError> {
         let mut parsed = HedgingArgs::default();
@@ -1571,7 +1486,6 @@ impl HedgingArgs {
         Ok(parsed)
     }
 }
-
 #[derive(Debug, Default)]
 struct OrderbookArgs {
     input: Option<PathBuf>,
@@ -1580,7 +1494,6 @@ struct OrderbookArgs {
     telemetry_out: Option<PathBuf>,
     generated_at: Option<u64>,
 }
-
 impl OrderbookArgs {
     fn parse(args: &[String]) -> Result<Self, CliError> {
         let mut parsed = OrderbookArgs::default();
@@ -1631,7 +1544,6 @@ impl OrderbookArgs {
         Ok(parsed)
     }
 }
-
 #[derive(Debug, Default)]
 struct BundleArgs {
     bundle: Option<PathBuf>,
@@ -1640,7 +1552,6 @@ struct BundleArgs {
     now: Option<u64>,
     generated_at: Option<u64>,
 }
-
 impl BundleArgs {
     fn parse(args: &[String]) -> Result<Self, CliError> {
         let mut parsed = BundleArgs::default();
@@ -1694,7 +1605,6 @@ impl BundleArgs {
         Ok(parsed)
     }
 }
-
 #[derive(Debug, Default)]
 struct GovernanceArgs {
     node: Option<PathBuf>,
@@ -1706,7 +1616,6 @@ struct GovernanceArgs {
     telemetry_out: Option<PathBuf>,
     generated_at: Option<u64>,
 }
-
 impl GovernanceArgs {
     fn parse(args: &[String]) -> Result<Self, CliError> {
         let mut parsed = GovernanceArgs::default();
@@ -1786,7 +1695,6 @@ impl GovernanceArgs {
         Ok(parsed)
     }
 }
-
 #[derive(Debug, Default)]
 struct ReleaseManifestArgs {
     manifest: Option<PathBuf>,
@@ -1797,7 +1705,6 @@ struct ReleaseManifestArgs {
     signature_out: Option<PathBuf>,
     development_local_signing: bool,
 }
-
 impl ReleaseManifestArgs {
     fn parse(args: &[String]) -> Result<Self, CliError> {
         let mut parsed = Self::default();
@@ -1880,7 +1787,6 @@ impl ReleaseManifestArgs {
         Ok(parsed)
     }
 }
-
 fn set_release_path(target: &mut Option<PathBuf>, value: &str, flag: &str) -> Result<(), CliError> {
     if target.is_some() {
         return Err(CliError::Config(format!(
@@ -1893,7 +1799,6 @@ fn set_release_path(target: &mut Option<PathBuf>, value: &str, flag: &str) -> Re
     *target = Some(PathBuf::from(value));
     Ok(())
 }
-
 fn set_release_string(
     target: &mut Option<String>,
     value: &str,
@@ -1910,7 +1815,6 @@ fn set_release_string(
     *target = Some(value.to_owned());
     Ok(())
 }
-
 #[derive(Debug, Default)]
 struct SignArgs {
     kind: Option<SignKind>,
@@ -1924,7 +1828,6 @@ struct SignArgs {
     now: Option<u64>,
     generated_at: Option<u64>,
 }
-
 impl SignArgs {
     fn parse(args: &[String]) -> Result<Self, CliError> {
         let mut parsed = SignArgs::default();
@@ -2007,7 +1910,6 @@ impl SignArgs {
         Ok(parsed)
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SignKind {
     Advert,
@@ -2015,7 +1917,6 @@ enum SignKind {
     Orderbook,
     Governance,
 }
-
 impl PotrArgs {
     fn parse(args: &[String]) -> Result<Self, CliError> {
         let mut parsed = PotrArgs::default();
@@ -2066,7 +1967,6 @@ impl PotrArgs {
         Ok(parsed)
     }
 }
-
 #[derive(Debug, Default)]
 struct OrderArgs {
     order: Option<PathBuf>,
@@ -2075,7 +1975,6 @@ struct OrderArgs {
     telemetry_out: Option<PathBuf>,
     generated_at: Option<u64>,
 }
-
 impl OrderArgs {
     fn parse(args: &[String]) -> Result<Self, CliError> {
         let mut parsed = OrderArgs::default();
@@ -2133,7 +2032,6 @@ impl OrderArgs {
         }
         Ok(parsed)
     }
-
     fn set_order(&mut self, path: PathBuf, signed: bool, flag: &str) -> Result<(), CliError> {
         if self.order.is_some() {
             return Err(CliError::Config(format!(
@@ -2145,14 +2043,12 @@ impl OrderArgs {
         Ok(())
     }
 }
-
 #[derive(Debug, Clone, Copy)]
 enum OutputFormat {
     Json,
     Table,
     Yaml,
 }
-
 impl OutputFormat {
     fn parse(value: &str) -> Result<Self, CliError> {
         match value {
@@ -2165,7 +2061,6 @@ impl OutputFormat {
         }
     }
 }
-
 #[derive(Debug)]
 enum CliError {
     Validation(String),
@@ -2173,7 +2068,6 @@ enum CliError {
     Io(String),
     Internal(String),
 }
-
 impl CliError {
     fn exit_code(&self) -> u8 {
         match self {
@@ -2184,7 +2078,6 @@ impl CliError {
         }
     }
 }
-
 impl std::fmt::Display for CliError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -2195,22 +2088,18 @@ impl std::fmt::Display for CliError {
         }
     }
 }
-
 impl std::error::Error for CliError {}
-
 fn require_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str, CliError> {
     args.get(index)
         .map(String::as_str)
         .ok_or_else(|| CliError::Config(format!("{flag} requires a value")))
 }
-
 fn parse_u64_flag(value: &str, flag: &str) -> Result<u64, CliError> {
     require_canonical_unsigned_decimal(value, flag)?;
     value
         .parse::<u64>()
         .map_err(|err| CliError::Config(format!("{flag} must be an unsigned integer: {err}")))
 }
-
 fn require_canonical_unsigned_decimal(value: &str, flag: &str) -> Result<(), CliError> {
     let bytes = value.as_bytes();
     if bytes.is_empty()
@@ -2223,7 +2112,6 @@ fn require_canonical_unsigned_decimal(value: &str, flag: &str) -> Result<(), Cli
     }
     Ok(())
 }
-
 fn parse_cid_arg_bytes(value: &str) -> Result<Vec<u8>, CliError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -2248,7 +2136,6 @@ fn parse_cid_arg_bytes(value: &str) -> Result<Vec<u8>, CliError> {
     }
     Ok(trimmed.as_bytes().to_vec())
 }
-
 fn parse_profile(value: &str) -> Result<ProofStreamTier, CliError> {
     match value {
         "hot" => Ok(ProofStreamTier::Hot),
@@ -2259,7 +2146,6 @@ fn parse_profile(value: &str) -> Result<ProofStreamTier, CliError> {
         ))),
     }
 }
-
 fn parse_repair_kind(value: &str) -> Result<RepairValidationPayloadKindV1, CliError> {
     match value {
         "task" => Ok(RepairValidationPayloadKindV1::TaskRecord),
@@ -2275,7 +2161,6 @@ fn parse_repair_kind(value: &str) -> Result<RepairValidationPayloadKindV1, CliEr
         ))),
     }
 }
-
 fn parse_pop_kind(value: &str) -> Result<PopValidationPayloadKindV1, CliError> {
     match value {
         "credential" => Ok(PopValidationPayloadKindV1::Credential),
@@ -2290,7 +2175,6 @@ fn parse_pop_kind(value: &str) -> Result<PopValidationPayloadKindV1, CliError> {
         ))),
     }
 }
-
 fn parse_hedging_kind(value: &str) -> Result<HedgingValidationPayloadKindV1, CliError> {
     match value {
         "price-feed" => Ok(HedgingValidationPayloadKindV1::PriceFeed),
@@ -2302,7 +2186,6 @@ fn parse_hedging_kind(value: &str) -> Result<HedgingValidationPayloadKindV1, Cli
         ))),
     }
 }
-
 fn parse_orderbook_kind(value: &str) -> Result<OrderbookValidationPayloadKindV1, CliError> {
     match value {
         "order-request" => Ok(OrderbookValidationPayloadKindV1::OrderRequest),
@@ -2315,7 +2198,6 @@ fn parse_orderbook_kind(value: &str) -> Result<OrderbookValidationPayloadKindV1,
         ))),
     }
 }
-
 fn parse_orderbook_sign_kind(value: &str) -> Result<OrderbookValidationPayloadKindV1, CliError> {
     let kind = parse_orderbook_kind(value)?;
     if matches!(
@@ -2331,7 +2213,6 @@ fn parse_orderbook_sign_kind(value: &str) -> Result<OrderbookValidationPayloadKi
         )))
     }
 }
-
 fn parse_sign_kind(value: &str) -> Result<SignKind, CliError> {
     match value {
         "advert" => Ok(SignKind::Advert),
@@ -2343,7 +2224,6 @@ fn parse_sign_kind(value: &str) -> Result<SignKind, CliError> {
         ))),
     }
 }
-
 fn read_signing_seed(args: &SignArgs) -> Result<[u8; 32], CliError> {
     match (&args.key_hex, &args.key) {
         (Some(_), Some(_)) => Err(CliError::Config(
@@ -2364,7 +2244,6 @@ fn read_signing_seed(args: &SignArgs) -> Result<[u8; 32], CliError> {
         )),
     }
 }
-
 fn parse_ed25519_seed_hex(value: &str, flag: &str) -> Result<[u8; 32], CliError> {
     require_canonical_seed_hex(value, flag)?;
     let bytes = hex::decode(value).map_err(|err| {
@@ -2385,7 +2264,6 @@ fn parse_ed25519_seed_hex(value: &str, flag: &str) -> Result<[u8; 32], CliError>
     }
     Ok(seed)
 }
-
 fn require_canonical_seed_hex(value: &str, flag: &str) -> Result<(), CliError> {
     let bytes = value.as_bytes();
     if bytes.len() != 64
@@ -2403,7 +2281,6 @@ fn require_canonical_seed_hex(value: &str, flag: &str) -> Result<(), CliError> {
     }
     Ok(())
 }
-
 fn parse_release_fingerprint(value: &str) -> Result<[u8; 32], CliError> {
     let bytes = value.as_bytes();
     if bytes.len() != 64
@@ -2423,7 +2300,6 @@ fn parse_release_fingerprint(value: &str) -> Result<[u8; 32], CliError> {
         .try_into()
         .expect("exact release fingerprint length checked above"))
 }
-
 fn verify_release_signature(
     verifying_key: &VerifyingKey,
     manifest: &[u8],
@@ -2443,7 +2319,6 @@ fn verify_release_signature(
             )
         })
 }
-
 fn read_release_input(
     path: &Path,
     label: &str,
@@ -2455,7 +2330,6 @@ fn read_release_input(
     let before = fs::symlink_metadata(&direct_path)
         .map_err(|err| CliError::Io(format!("failed to inspect {label}: {err}")))?;
     validate_release_metadata(label, &before, maximum_bytes, secret)?;
-
     let mut options = OpenOptions::new();
     options.read(true);
     set_release_no_follow(&mut options);
@@ -2471,7 +2345,6 @@ fn read_release_input(
             "{label} changed while being opened"
         )));
     }
-
     let capacity = usize::try_from(opened.len())
         .map_err(|_| CliError::Validation(format!("{label} exceeds host size limits")))?;
     let mut bytes = Vec::with_capacity(capacity);
@@ -2499,7 +2372,6 @@ fn read_release_input(
     }
     Ok(bytes)
 }
-
 fn release_direct_path(path: &Path, label: &str) -> Result<PathBuf, CliError> {
     if path.as_os_str().is_empty()
         || path
@@ -2533,7 +2405,6 @@ fn release_direct_path(path: &Path, label: &str) -> Result<PathBuf, CliError> {
     }
     Ok(direct_path)
 }
-
 fn validate_release_metadata(
     label: &str,
     metadata: &fs::Metadata,
@@ -2572,7 +2443,6 @@ fn validate_release_metadata(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn release_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev()
@@ -2583,12 +2453,10 @@ fn release_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(not(unix))]
 fn release_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
-
 fn write_release_signature(path: &Path, signature: &[u8; 64]) -> Result<(), CliError> {
     let direct_path = release_direct_path(path, "release manifest signature output")?;
     match fs::symlink_metadata(&direct_path) {
@@ -2604,7 +2472,6 @@ fn write_release_signature(path: &Path, signature: &[u8; 64]) -> Result<(), CliE
             )));
         }
     }
-
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -2655,20 +2522,16 @@ fn write_release_signature(path: &Path, signature: &[u8; 64]) -> Result<(), CliE
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn set_release_no_follow(options: &mut OpenOptions) {
     options.custom_flags(release_no_follow_flag());
 }
-
 #[cfg(not(unix))]
 fn set_release_no_follow(_options: &mut OpenOptions) {}
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn release_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -2684,7 +2547,6 @@ fn release_no_follow_flag() -> i32 {
 fn release_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -2701,7 +2563,6 @@ fn release_no_follow_flag() -> i32 {
 fn release_no_follow_flag() -> i32 {
     0
 }
-
 fn sign_provider_advert(advert: &mut ProviderAdvertV1, seed: &[u8; 32]) -> Result<(), CliError> {
     let signing_key = SigningKey::from_bytes(seed);
     advert.signature = AdvertSignature {
@@ -2718,7 +2579,6 @@ fn sign_provider_advert(advert: &mut ProviderAdvertV1, seed: &[u8; 32]) -> Resul
     advert.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
     Ok(())
 }
-
 fn sign_replication_order(
     order: ReplicationOrderV1,
     seed: &[u8; 32],
@@ -2742,7 +2602,6 @@ fn sign_replication_order(
     signed_order.signature.signature = signature.to_bytes().to_vec();
     Ok(signed_order)
 }
-
 #[derive(Debug)]
 enum SignOrderbookPayloadError {
     Decode,
@@ -2750,7 +2609,6 @@ enum SignOrderbookPayloadError {
     Sign(String),
     Encode(String),
 }
-
 fn sign_orderbook_payload_bytes(
     kind: OrderbookValidationPayloadKindV1,
     input_bytes: &[u8],
@@ -2785,7 +2643,6 @@ fn sign_orderbook_payload_bytes(
         other => Err(SignOrderbookPayloadError::UnsupportedKind(other)),
     }
 }
-
 fn orderbook_payload_public_key(
     kind: OrderbookValidationPayloadKindV1,
     input_bytes: &[u8],
@@ -2817,7 +2674,6 @@ fn orderbook_payload_public_key(
         ))),
     }
 }
-
 fn orderbook_kind_label(kind: OrderbookValidationPayloadKindV1) -> &'static str {
     match kind {
         OrderbookValidationPayloadKindV1::OrderRequest => "order-request",
@@ -2827,7 +2683,6 @@ fn orderbook_kind_label(kind: OrderbookValidationPayloadKindV1) -> &'static str 
         OrderbookValidationPayloadKindV1::SettlementReceipt => "settlement-receipt",
     }
 }
-
 fn signed_orderbook_input_kind(kind: OrderbookValidationPayloadKindV1) -> &'static str {
     match kind {
         OrderbookValidationPayloadKindV1::OrderRequest => "signed_orderbook_order_request",
@@ -2838,7 +2693,6 @@ fn signed_orderbook_input_kind(kind: OrderbookValidationPayloadKindV1) -> &'stat
         _ => "signed_orderbook_payload",
     }
 }
-
 fn sign_governance_log_node(
     node: &mut GovernanceLogNodeV1,
     seed: &[u8; 32],
@@ -2857,14 +2711,12 @@ fn sign_governance_log_node(
     };
     Ok(())
 }
-
 #[derive(Debug)]
 struct OwnedBundlePayload {
     kind: FixtureBundlePayloadKindV1,
     label: String,
     bytes: Vec<u8>,
 }
-
 const BUNDLE_PAYLOAD_CANDIDATES: &[(FixtureBundlePayloadKindV1, &[&str])] = &[
     (
         FixtureBundlePayloadKindV1::ProviderAdvert,
@@ -2988,7 +2840,6 @@ const BUNDLE_PAYLOAD_CANDIDATES: &[(FixtureBundlePayloadKindV1, &[&str])] = &[
         ],
     ),
 ];
-
 fn read_bundle_payloads(bundle: &Path) -> Result<Vec<OwnedBundlePayload>, CliError> {
     if !bundle.is_dir() {
         return Err(CliError::Io(format!(
@@ -2996,7 +2847,6 @@ fn read_bundle_payloads(bundle: &Path) -> Result<Vec<OwnedBundlePayload>, CliErr
             bundle.display()
         )));
     }
-
     let mut payloads = Vec::new();
     let mut seen_paths = BTreeSet::new();
     for &(kind, candidates) in BUNDLE_PAYLOAD_CANDIDATES {
@@ -3014,10 +2864,8 @@ fn read_bundle_payloads(bundle: &Path) -> Result<Vec<OwnedBundlePayload>, CliErr
             });
         }
     }
-
     Ok(payloads)
 }
-
 fn write_json_outcome(path: &PathBuf, outcome: &ValidationOutcomeV1) -> Result<(), CliError> {
     let mut json = json::to_string_pretty(outcome)
         .map_err(|err| CliError::Internal(format!("failed to render outcome JSON: {err}")))?;
@@ -3025,7 +2873,6 @@ fn write_json_outcome(path: &PathBuf, outcome: &ValidationOutcomeV1) -> Result<(
     fs::write(path, json)
         .map_err(|err| CliError::Io(format!("failed to write {}: {err}", path.display())))
 }
-
 fn print_outcome(outcome: &ValidationOutcomeV1, format: OutputFormat) -> Result<(), CliError> {
     match format {
         OutputFormat::Json => {
@@ -3049,7 +2896,6 @@ fn print_outcome(outcome: &ValidationOutcomeV1, format: OutputFormat) -> Result<
     io::Write::flush(&mut io::stdout())
         .map_err(|err| CliError::Io(format!("failed to flush stdout: {err}")))
 }
-
 fn render_yaml(outcome: &ValidationOutcomeV1) -> String {
     let mut rendered = String::new();
     rendered.push_str(&format!("status: {}\n", yaml_string(&outcome.status)));
@@ -3082,7 +2928,6 @@ fn render_yaml(outcome: &ValidationOutcomeV1) -> String {
     rendered.push_str(&format!("generated_at: {}\n", outcome.generated_at));
     rendered
 }
-
 fn yaml_string(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len() + 2);
     escaped.push('"');
@@ -3099,14 +2944,12 @@ fn yaml_string(value: &str) -> String {
     escaped.push('"');
     escaped
 }
-
 fn unix_time_now() -> Option<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()
         .map(|duration| duration.as_secs())
 }
-
 fn print_usage() {
     println!(
         "\
@@ -3141,17 +2984,14 @@ Exit codes:
 "
     );
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn workspace_fixture(path: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join(path)
     }
-
     #[test]
     fn output_format_parse_accepts_supported_values() {
         assert!(matches!(
@@ -3167,7 +3007,6 @@ mod tests {
             Ok(OutputFormat::Yaml)
         ));
     }
-
     #[test]
     fn output_format_parse_rejects_unknown_values() {
         assert!(matches!(
@@ -3175,7 +3014,6 @@ mod tests {
             Err(CliError::Config(message)) if message.contains("unsupported --format")
         ));
     }
-
     #[test]
     fn bounded_cli_reader_accepts_boundary_and_rejects_one_over() {
         let directory = tempfile::tempdir().expect("temporary input directory");
@@ -3187,7 +3025,6 @@ mod tests {
                 .expect("exact input boundary"),
             vec![0xA5; PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1]
         );
-
         fs::write(
             &path,
             vec![0xA5; PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1 + 1],
@@ -3198,7 +3035,6 @@ mod tests {
             Err(CliError::Validation(message)) if message.contains("input ceiling")
         ));
     }
-
     #[test]
     fn bounded_orderbook_cli_reader_accepts_boundary_and_rejects_one_over() {
         let directory = tempfile::tempdir().expect("temporary input directory");
@@ -3211,7 +3047,6 @@ mod tests {
                 .len(),
             ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1
         );
-
         fs::write(
             &path,
             vec![0xA5; ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1 + 1],
@@ -3222,7 +3057,6 @@ mod tests {
             Err(CliError::Validation(message)) if message.contains("input ceiling")
         ));
     }
-
     #[test]
     fn parse_u64_flag_rejects_noncanonical_values() {
         assert_eq!(parse_u64_flag("0", "--now").expect("canonical zero"), 0);
@@ -3230,7 +3064,6 @@ mod tests {
             parse_u64_flag("1700000000", "--generated-at").expect("canonical timestamp"),
             1_700_000_000
         );
-
         for value in ["", " 1", "1 ", "+1", "-1", "01", "1_000", "0x10"] {
             assert!(matches!(
                 parse_u64_flag(value, "--now"),
@@ -3239,7 +3072,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn advert_args_parse_reads_input_format_and_timestamps() {
         let args = [
@@ -3256,7 +3088,6 @@ mod tests {
         assert_eq!(parsed.now, Some(5));
         assert_eq!(parsed.generated_at, Some(6));
     }
-
     #[test]
     fn admission_args_parse_reads_input_format_and_generated_at() {
         let args = [
@@ -3271,7 +3102,6 @@ mod tests {
         assert_eq!(parsed.telemetry_out, Some(PathBuf::from("out.json")));
         assert_eq!(parsed.generated_at, Some(6));
     }
-
     #[test]
     fn admission_args_parse_rejects_envelope_alias() {
         let args = ["--envelope=envelope.to".to_owned()];
@@ -3280,7 +3110,6 @@ mod tests {
             Err(CliError::Config(message)) if message.contains("unknown admission option")
         ));
     }
-
     #[test]
     fn admission_args_parse_reads_renewal_and_revocation_flags() {
         let args = [
@@ -3291,7 +3120,6 @@ mod tests {
         assert_eq!(parsed.input, Some(PathBuf::from("envelope.to")));
         assert_eq!(parsed.renewal, Some(PathBuf::from("renewal.to")));
         assert_eq!(parsed.revocation, None);
-
         let args = [
             "--input=envelope.to".to_owned(),
             "--revocation=revocation.to".to_owned(),
@@ -3301,7 +3129,6 @@ mod tests {
         assert_eq!(parsed.renewal, None);
         assert_eq!(parsed.revocation, Some(PathBuf::from("revocation.to")));
     }
-
     #[test]
     fn admission_args_parse_rejects_renewal_revocation_conflict() {
         let args = [
@@ -3315,7 +3142,6 @@ mod tests {
                 if message.contains("either --renewal or --revocation")
         ));
     }
-
     #[test]
     fn por_args_parse_reads_inputs_format_and_generated_at() {
         let args = [
@@ -3332,7 +3158,6 @@ mod tests {
         assert_eq!(parsed.telemetry_out, Some(PathBuf::from("out.json")));
         assert_eq!(parsed.generated_at, Some(6));
     }
-
     #[test]
     fn pdp_args_parse_reads_inputs_format_and_generated_at() {
         let args = [
@@ -3351,7 +3176,6 @@ mod tests {
         assert_eq!(parsed.telemetry_out, Some(PathBuf::from("out.json")));
         assert_eq!(parsed.generated_at, Some(6));
     }
-
     #[test]
     fn potr_args_parse_reads_receipt_profile_format_and_generated_at() {
         let args = [
@@ -3368,7 +3192,6 @@ mod tests {
         assert_eq!(parsed.telemetry_out, Some(PathBuf::from("out.json")));
         assert_eq!(parsed.generated_at, Some(6));
     }
-
     #[test]
     fn bundle_args_parse_reads_directory_format_and_timestamps() {
         let args = [
@@ -3388,7 +3211,6 @@ mod tests {
         assert_eq!(parsed.now, Some(5));
         assert_eq!(parsed.generated_at, Some(6));
     }
-
     #[test]
     fn governance_args_parse_reads_node_cid_format_and_generated_at() {
         let cid = format!("hex:{}", "a5".repeat(32));
@@ -3406,7 +3228,6 @@ mod tests {
         assert_eq!(parsed.telemetry_out, Some(PathBuf::from("out.json")));
         assert_eq!(parsed.generated_at, Some(6));
     }
-
     #[test]
     fn governance_args_parse_rejects_input_alias() {
         assert!(matches!(
@@ -3414,7 +3235,6 @@ mod tests {
             Err(CliError::Config(message)) if message.contains("unknown governance option")
         ));
     }
-
     #[test]
     fn governance_args_parse_reads_head_and_block_chain() {
         let args = [
@@ -3433,7 +3253,6 @@ mod tests {
         );
         assert!(matches!(parsed.format, Some(OutputFormat::Json)));
     }
-
     #[test]
     fn parse_cid_arg_bytes_accepts_exact_prefixed_and_bare_hex_cids() {
         let expected = vec![0x0A; 32];
@@ -3447,7 +3266,6 @@ mod tests {
             expected
         );
     }
-
     #[test]
     fn sign_args_parse_reads_advert_signing_flags() {
         let args = [
@@ -3478,7 +3296,6 @@ mod tests {
         assert_eq!(parsed.now, Some(5));
         assert_eq!(parsed.generated_at, Some(6));
     }
-
     #[test]
     fn parse_sign_kind_accepts_only_exact_v1_names() {
         assert_eq!(parse_sign_kind("advert").unwrap(), SignKind::Advert);
@@ -3496,7 +3313,6 @@ mod tests {
             assert!(parse_sign_kind(alias).is_err());
         }
     }
-
     #[test]
     fn parse_orderbook_sign_kind_accepts_only_signable_payloads() {
         assert_eq!(
@@ -3516,7 +3332,6 @@ mod tests {
             Err(CliError::Config(message)) if message.contains("expected order-request")
         ));
     }
-
     #[test]
     fn parse_ed25519_seed_hex_accepts_canonical_lowercase_hex() {
         let seed = parse_ed25519_seed_hex(
@@ -3526,7 +3341,6 @@ mod tests {
         .expect("parse seed");
         assert_eq!(seed, [0xAA; 32]);
     }
-
     #[test]
     fn parse_ed25519_seed_hex_rejects_wrong_length() {
         assert!(matches!(
@@ -3534,7 +3348,6 @@ mod tests {
             Err(CliError::Config(message)) if message.contains("lowercase hex")
         ));
     }
-
     #[test]
     fn parse_ed25519_seed_hex_rejects_noncanonical_text() {
         for value in [
@@ -3551,7 +3364,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn parse_ed25519_seed_hex_rejects_all_zero_seed_material() {
         assert!(matches!(
@@ -3562,7 +3374,6 @@ mod tests {
             Err(CliError::Config(message)) if message.contains("must not be all zero")
         ));
     }
-
     #[test]
     fn read_signing_seed_accepts_key_hex_and_rejects_conflicts() {
         let parsed = SignArgs {
@@ -3572,7 +3383,6 @@ mod tests {
             ..SignArgs::default()
         };
         assert_eq!(read_signing_seed(&parsed).unwrap(), [0xAA; 32]);
-
         let conflict = SignArgs {
             key_hex: Some(
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
@@ -3585,7 +3395,6 @@ mod tests {
             Err(CliError::Config(message)) if message.contains("either --key-hex or --key")
         ));
     }
-
     #[test]
     fn sign_provider_advert_replaces_signature_with_verified_ed25519_signature() {
         let fixture = workspace_fixture("fixtures/sorafs_manifest/provider_admission/advert_v1.to");
@@ -3594,16 +3403,13 @@ mod tests {
             norito::decode_from_bytes(&bytes).expect("decode advert fixture");
         let original_public_key = advert.signature.public_key.clone();
         let seed = [0xA5; 32];
-
         sign_provider_advert(&mut advert, &seed).expect("sign advert");
-
         let expected_key = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
         assert_eq!(advert.signature.public_key, expected_key.to_vec());
         assert_ne!(advert.signature.public_key, original_public_key);
         assert!(advert.signature_strict);
         advert.verify_signature().expect("signed advert verifies");
     }
-
     #[test]
     fn sign_replication_order_returns_verified_ed25519_envelope() {
         let fixture = workspace_fixture("fixtures/sorafs_manifest/replication_order/order_v1.to");
@@ -3611,9 +3417,7 @@ mod tests {
         let order: ReplicationOrderV1 =
             norito::decode_from_bytes(&bytes).expect("decode order fixture");
         let seed = [0xA7; 32];
-
         let signed_order = sign_replication_order(order.clone(), &seed).expect("sign order");
-
         let expected_key = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
         assert_eq!(signed_order.version, SIGNED_REPLICATION_ORDER_VERSION_V1);
         assert_eq!(signed_order.order, order);
@@ -3626,7 +3430,6 @@ mod tests {
             .verify_signature()
             .expect("signed replication order verifies");
     }
-
     #[test]
     fn sign_orderbook_payload_bytes_returns_verified_signed_payloads() {
         let seed = [0xB7; 32];
@@ -3645,7 +3448,6 @@ mod tests {
                 "fixtures/sorafs_manifest/orderbook/settlement_receipt_v1.to",
             ),
         ];
-
         for (kind, fixture_path) in cases {
             let fixture = workspace_fixture(fixture_path);
             let bytes = fs::read(fixture).expect("read orderbook fixture");
@@ -3660,7 +3462,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn sign_governance_log_node_replaces_signature_with_verified_ed25519_signature() {
         let fixture = workspace_fixture("fixtures/sorafs_manifest/governance/node_v1.to");
@@ -3669,16 +3470,13 @@ mod tests {
             norito::decode_from_bytes(&bytes).expect("decode governance fixture");
         let original_public_key = node.publisher_signature.public_key.clone();
         let seed = [0xA6; 32];
-
         sign_governance_log_node(&mut node, &seed).expect("sign governance node");
-
         let expected_key = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
         assert_eq!(node.publisher_signature.public_key, expected_key.to_vec());
         assert_ne!(node.publisher_signature.public_key, original_public_key);
         node.verify_publisher_signature()
             .expect("signed governance node verifies");
     }
-
     #[test]
     fn parse_profile_accepts_only_exact_v1_names() {
         assert!(matches!(parse_profile("hot"), Ok(ProofStreamTier::Hot)));
@@ -3691,7 +3489,6 @@ mod tests {
             assert!(parse_profile(alias).is_err());
         }
     }
-
     #[test]
     fn repair_args_parse_reads_kind_input_format_and_generated_at() {
         let args = [
@@ -3711,7 +3508,6 @@ mod tests {
         assert_eq!(parsed.telemetry_out, Some(PathBuf::from("out.json")));
         assert_eq!(parsed.generated_at, Some(6));
     }
-
     #[test]
     fn repair_args_parse_rejects_payload_flag_aliases() {
         for flag in [
@@ -3730,7 +3526,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn parse_repair_kind_accepts_only_exact_v1_names() {
         assert!(matches!(
@@ -3778,7 +3573,6 @@ mod tests {
             assert!(parse_repair_kind(alias).is_err());
         }
     }
-
     #[test]
     fn repair_cli_rejects_retired_envelope_and_worker_aliases() {
         for kind in [
@@ -3793,7 +3587,6 @@ mod tests {
                 "retired repair kind alias {kind} must be rejected"
             );
         }
-
         for flag in [
             "--signed-auditor-request=retired.to",
             "--signed-auditor=retired.to",
@@ -3808,7 +3601,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn pop_args_parse_reads_kind_input_format_and_generated_at() {
         let args = [
@@ -3828,7 +3620,6 @@ mod tests {
         assert_eq!(parsed.telemetry_out, Some(PathBuf::from("out.json")));
         assert_eq!(parsed.generated_at, Some(6));
     }
-
     #[test]
     fn pop_args_parse_rejects_payload_flag_aliases() {
         for flag in [
@@ -3852,7 +3643,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn parse_pop_kind_accepts_only_exact_v1_names() {
         assert!(matches!(
@@ -3898,7 +3688,6 @@ mod tests {
             assert!(parse_pop_kind(alias).is_err());
         }
     }
-
     #[test]
     fn hedging_args_parse_reads_kind_input_format_and_generated_at() {
         let args = [
@@ -3918,7 +3707,6 @@ mod tests {
         assert_eq!(parsed.telemetry_out, Some(PathBuf::from("out.json")));
         assert_eq!(parsed.generated_at, Some(6));
     }
-
     #[test]
     fn hedging_args_parse_rejects_payload_flag_aliases() {
         for flag in [
@@ -3943,7 +3731,6 @@ mod tests {
             Err(CliError::Config(message)) if message.contains("unsupported sorafs-validate command")
         ));
     }
-
     #[test]
     fn parse_hedging_kind_accepts_only_exact_v1_names() {
         assert!(matches!(
@@ -3977,7 +3764,6 @@ mod tests {
             assert!(parse_hedging_kind(alias).is_err());
         }
     }
-
     #[test]
     fn orderbook_args_parse_reads_kind_input_format_and_generated_at() {
         let args = [
@@ -3997,7 +3783,6 @@ mod tests {
         assert_eq!(parsed.telemetry_out, Some(PathBuf::from("out.json")));
         assert_eq!(parsed.generated_at, Some(6));
     }
-
     #[test]
     fn orderbook_args_parse_rejects_payload_flag_aliases() {
         for flag in [
@@ -4019,7 +3804,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn parse_orderbook_kind_accepts_only_exact_v1_names() {
         assert!(matches!(
@@ -4057,7 +3841,6 @@ mod tests {
             assert!(parse_orderbook_kind(alias).is_err());
         }
     }
-
     #[test]
     fn order_args_parse_reads_order_format_and_generated_at() {
         let args = [
@@ -4073,7 +3856,6 @@ mod tests {
         assert_eq!(parsed.telemetry_out, Some(PathBuf::from("out.json")));
         assert_eq!(parsed.generated_at, Some(6));
     }
-
     #[test]
     fn order_args_parse_rejects_input_alias() {
         let args = ["--input=order.to".to_owned()];
@@ -4082,7 +3864,6 @@ mod tests {
             Err(CliError::Config(message)) if message.contains("unknown order option")
         ));
     }
-
     #[test]
     fn order_args_parse_reads_signed_order_input() {
         let args = ["--signed-order=signed-order.to".to_owned()];
@@ -4090,7 +3871,6 @@ mod tests {
         assert_eq!(parsed.order, Some(PathBuf::from("signed-order.to")));
         assert!(parsed.signed);
     }
-
     #[test]
     fn order_args_parse_rejects_multiple_inputs() {
         let args = [
@@ -4102,14 +3882,12 @@ mod tests {
             Err(CliError::Config(message)) if message.contains("one input path")
         ));
     }
-
     #[test]
     fn cli_error_exit_code_matches_contract() {
         assert_eq!(CliError::Config("x".to_owned()).exit_code(), 4);
         assert_eq!(CliError::Io("x".to_owned()).exit_code(), 3);
         assert_eq!(CliError::Internal("x".to_owned()).exit_code(), 10);
     }
-
     #[test]
     fn yaml_string_quotes_control_characters() {
         assert_eq!(yaml_string("a\n\"b\""), "\"a\\n\\\"b\\\"\"");

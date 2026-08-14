@@ -1,5 +1,10 @@
 package org.hyperledger.iroha.android.client;
 
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import org.hyperledger.iroha.android.client.transport.TransportRequest;
+import org.hyperledger.iroha.android.client.transport.TransportResponse;
+
 final class HttpClientTransportTestFixtures {
   private HttpClientTransportTestFixtures() {}
 
@@ -29,5 +34,23 @@ final class HttpClientTransportTestFixtures {
         + "\"protocols\":["
         + rows
         + "]}";
+  }
+}
+
+/** One-dispatch executor shared by the split exact-read transport tests. */
+final class OneResponseExecutor implements HttpTransportExecutor {
+  private final TransportResponse response;
+  TransportRequest lastRequest;
+  int requestCount;
+
+  OneResponseExecutor(final TransportResponse response) {
+    this.response = Objects.requireNonNull(response, "response");
+  }
+
+  @Override
+  public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
+    lastRequest = Objects.requireNonNull(request, "request");
+    requestCount++;
+    return CompletableFuture.completedFuture(response);
   }
 }

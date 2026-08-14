@@ -1,12 +1,9 @@
 //! On-chain oracle instruction handlers.
-
-#[cfg(feature = "telemetry")]
-use std::time::Instant;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroUsize,
+use super::prelude::*;
+use crate::{
+    oracle::{FeedEventRecord, ObservationWindow, ObservationWindowKey},
+    state::{StateTransaction, WorldTransaction},
 };
-
 use blake3::Hasher;
 use iroha_crypto::{Algorithm, Hash, PublicKey, SignatureOf, ed25519_parse_signature};
 use iroha_data_model::{
@@ -37,13 +34,12 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::oracle as oracle_permission;
 use iroha_primitives::numeric::Quantity;
-
-use super::prelude::*;
-use crate::{
-    oracle::{FeedEventRecord, ObservationWindow, ObservationWindowKey},
-    state::{StateTransaction, WorldTransaction},
+#[cfg(feature = "telemetry")]
+use std::time::Instant;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
 };
-
 /// Exact retained Oracle purpose carried by a one-shot numeric movement capability.
 pub(in crate::smartcontracts::isi) enum VerifiedOracleNumericPurpose {
     Reward {
@@ -65,7 +61,6 @@ pub(in crate::smartcontracts::isi) enum VerifiedOracleNumericPurpose {
         dispute_id: OracleDisputeId,
     },
 }
-
 /// Non-reusable proof that Oracle admission selected one exact retained movement.
 pub(in crate::smartcontracts::isi) struct VerifiedOracleNumericMovement {
     purpose: VerifiedOracleNumericPurpose,
@@ -73,7 +68,6 @@ pub(in crate::smartcontracts::isi) struct VerifiedOracleNumericMovement {
     destination_id: AssetId,
     amount: Quantity,
 }
-
 impl VerifiedOracleNumericMovement {
     fn new(
         purpose: VerifiedOracleNumericPurpose,
@@ -88,7 +82,6 @@ impl VerifiedOracleNumericMovement {
             amount,
         }
     }
-
     pub(in crate::smartcontracts::isi) fn into_parts(
         self,
     ) -> (VerifiedOracleNumericPurpose, AssetId, AssetId, Quantity) {
@@ -100,15 +93,12 @@ impl VerifiedOracleNumericMovement {
         )
     }
 }
-
 fn aggregation_err(err: &iroha_data_model::oracle::OracleAggregationError) -> Error {
     Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
 }
-
 fn signature_err(message: impl Into<String>) -> Error {
     Error::InvalidParameter(InvalidParameterError::SmartContract(message.into()))
 }
-
 fn verify_typed_signature_for_signer<T: norito::codec::Encode>(
     signature: &SignatureOf<T>,
     signer: &PublicKey,
@@ -125,11 +115,9 @@ fn verify_typed_signature_for_signer<T: norito::codec::Encode>(
     }
     signature.verify(signer, value)
 }
-
 fn has_permission_in_set(permissions: Option<&Permissions>, required: &DataPermission) -> bool {
     permissions.is_some_and(|permissions| permissions.contains(required))
 }
-
 fn has_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -141,7 +129,6 @@ fn has_permission(
     ) {
         return true;
     }
-
     let role_ids: Vec<_> = state_transaction
         .world
         .account_roles_iter(authority)
@@ -154,10 +141,8 @@ fn has_permission(
             return true;
         }
     }
-
     false
 }
-
 fn require_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -173,7 +158,6 @@ fn require_permission(
         )))
     }
 }
-
 fn ensure_provider_allowed(
     config: &iroha_data_model::oracle::FeedConfig,
     provider: &AccountId,
@@ -187,13 +171,11 @@ fn ensure_provider_allowed(
         )))
     }
 }
-
 fn expected_twitter_feed_id(
     cfg: &iroha_config::parameters::actual::OracleTwitterBinding,
 ) -> FeedId {
     FeedId(cfg.feed_id.clone())
 }
-
 fn validate_binding_ttl(
     attestation: &TwitterBindingAttestation,
     cfg: &iroha_config::parameters::actual::OracleTwitterBinding,
@@ -220,7 +202,6 @@ fn validate_binding_ttl(
     }
     Ok(())
 }
-
 fn ensure_binding_matches_history(
     state_transaction: &StateTransaction<'_, '_>,
     feed_id: &FeedId,
@@ -242,7 +223,6 @@ fn ensure_binding_matches_history(
                 FeedEventOutcome::Success(ref success) if success.value == expected_value
             )
     });
-
     if found {
         Ok(())
     } else {
@@ -253,7 +233,6 @@ fn ensure_binding_matches_history(
         )))
     }
 }
-
 fn retained_history_event<'world>(
     world: &'world WorldTransaction<'_, '_>,
     feed_id: &FeedId,
@@ -267,14 +246,12 @@ fn retained_history_event<'world>(
             && record.event.request_hash == request_hash
     })
 }
-
 fn latest_retained_slot(world: &WorldTransaction<'_, '_>, feed_id: &FeedId) -> Option<FeedSlot> {
     world
         .oracle_history
         .get(feed_id)
         .and_then(|history| history.iter().map(|record| record.event.slot).max())
 }
-
 fn ensure_window_fresh_and_unprocessed(
     world: &WorldTransaction<'_, '_>,
     config: &iroha_data_model::oracle::FeedConfig,
@@ -299,7 +276,6 @@ fn ensure_window_fresh_and_unprocessed(
             },
         ));
     }
-
     if let Some(latest_slot) = latest_retained_slot(world, &config.feed_id)
         && latest_slot > slot
         && latest_slot.saturating_sub(slot) > config.replay_window_slots.get()
@@ -315,10 +291,8 @@ fn ensure_window_fresh_and_unprocessed(
             },
         ));
     }
-
     Ok(())
 }
-
 fn validate_feed_registration(
     feed: &iroha_data_model::oracle::FeedConfig,
     world: &WorldTransaction<'_, '_>,
@@ -400,7 +374,6 @@ fn validate_feed_registration(
             history_depth.get()
         )));
     }
-
     if let Some(existing) = world.oracle_feeds.get(&feed.feed_id) {
         if existing.feed_config_version >= feed.feed_config_version {
             return Err(signature_err(format!(
@@ -411,10 +384,8 @@ fn validate_feed_registration(
             )));
         }
     }
-
     Ok(())
 }
-
 fn stage_deadline(
     stage: iroha_data_model::oracle::OracleChangeStage,
     cfg: &iroha_config::parameters::actual::OracleGovernance,
@@ -434,7 +405,6 @@ fn stage_deadline(
         Some(started_at.saturating_add(sla))
     }
 }
-
 fn seed_change_stages(
     created_at: u64,
     cfg: &iroha_config::parameters::actual::OracleGovernance,
@@ -471,7 +441,6 @@ fn seed_change_stages(
     }
     stages
 }
-
 fn required_votes(
     stage: iroha_data_model::oracle::OracleChangeStage,
     class: iroha_data_model::oracle::OracleChangeClass,
@@ -495,7 +464,6 @@ fn required_votes(
         Stage::Enactment => NonZeroUsize::new(1).expect("non-zero"),
     }
 }
-
 fn append_stage_evidence(
     proposal: &mut iroha_data_model::oracle::OracleChangeProposal,
     stage: iroha_data_model::oracle::OracleChangeStage,
@@ -521,7 +489,6 @@ fn append_stage_evidence(
         }
     }
 }
-
 #[derive(Clone, Copy)]
 enum ProviderOutcome {
     Inlier,
@@ -529,7 +496,6 @@ enum ProviderOutcome {
     Error,
     NoShow,
 }
-
 fn classify_providers(
     config: &iroha_data_model::oracle::FeedConfig,
     observations: &[Observation],
@@ -546,7 +512,6 @@ fn classify_providers(
             }
         }
     }
-
     if let iroha_data_model::oracle::FeedEventOutcome::Success(success) = outcome {
         for entry in &success.entries {
             map.insert(
@@ -559,15 +524,12 @@ fn classify_providers(
             );
         }
     }
-
     for provider in &config.providers {
         map.entry(provider.clone())
             .or_insert(ProviderOutcome::NoShow);
     }
-
     map
 }
-
 fn with_provider_stats_mut<F>(
     world: &mut WorldTransaction<'_, '_>,
     feed_id: &FeedId,
@@ -585,7 +547,6 @@ fn with_provider_stats_mut<F>(
     f(&mut stats);
     world.oracle_provider_stats.insert(key, stats);
 }
-
 fn reward_provider(
     state_transaction: &mut StateTransaction<'_, '_>,
     feed_id: &FeedId,
@@ -601,11 +562,9 @@ fn reward_provider(
         economics.reward_pool.clone(),
     );
     let provider_asset = AssetId::new(economics.reward_asset.clone(), provider.clone());
-
     if amount.is_zero() {
         return Ok(());
     }
-
     let movement = VerifiedOracleNumericMovement::new(
         VerifiedOracleNumericPurpose::Reward {
             feed_id: feed_id.clone(),
@@ -622,12 +581,10 @@ fn reward_provider(
         state_transaction,
         movement,
     )?;
-
     with_provider_stats_mut(&mut state_transaction.world, feed_id, provider, |stats| {
         stats.inliers = stats.inliers.saturating_add(1);
         stats.record_reward();
     });
-
     state_transaction
         .world
         .emit_events(Some(OracleEvent::RewardApplied(OracleReward {
@@ -638,17 +595,14 @@ fn reward_provider(
             oracle_id: provider.clone(),
             amount: amount.clone(),
         })));
-
     #[cfg(feature = "telemetry")]
     {
         state_transaction
             .telemetry
             .observe_oracle_reward(feed_id, &amount);
     }
-
     Ok(())
 }
-
 fn slash_provider(
     state_transaction: &mut StateTransaction<'_, '_>,
     feed_id: &FeedId,
@@ -664,11 +618,9 @@ fn slash_provider(
         economics.slash_asset.clone(),
         economics.slash_receiver.clone(),
     );
-
     if amount.is_zero() {
         return Ok(());
     }
-
     let movement = VerifiedOracleNumericMovement::new(
         VerifiedOracleNumericPurpose::Penalty {
             feed_id: feed_id.clone(),
@@ -686,7 +638,6 @@ fn slash_provider(
         state_transaction,
         movement,
     )?;
-
     with_provider_stats_mut(&mut state_transaction.world, feed_id, provider, |stats| {
         match kind {
             OraclePenaltyKind::Outlier => {
@@ -702,7 +653,6 @@ fn slash_provider(
         }
         stats.record_slash();
     });
-
     state_transaction
         .world
         .emit_events(Some(OracleEvent::PenaltyApplied(OraclePenalty {
@@ -714,17 +664,14 @@ fn slash_provider(
             kind,
             amount: amount.clone(),
         })));
-
     #[cfg(feature = "telemetry")]
     {
         state_transaction
             .telemetry
             .observe_oracle_penalty(feed_id, amount, kind);
     }
-
     Ok(())
 }
-
 fn apply_economics_for_slot(
     state_transaction: &mut StateTransaction<'_, '_>,
     config: &iroha_data_model::oracle::FeedConfig,
@@ -772,10 +719,8 @@ fn apply_economics_for_slot(
             )?,
         }
     }
-
     Ok(())
 }
-
 fn ensure_dispute_anchors_to_history(
     world: &WorldTransaction<'_, '_>,
     config: &iroha_data_model::oracle::FeedConfig,
@@ -787,7 +732,6 @@ fn ensure_dispute_anchors_to_history(
     if evidence_hashes.is_empty() {
         return Err(signature_err("oracle dispute evidence must not be empty"));
     }
-
     let record = retained_history_event(
         world,
         &config.feed_id,
@@ -804,7 +748,6 @@ fn ensure_dispute_anchors_to_history(
             request_hash
         ))
     })?;
-
     if let Some(latest_slot) = latest_retained_slot(world, &config.feed_id)
         && latest_slot > slot
         && latest_slot.saturating_sub(slot) > config.dispute_window_slots.get()
@@ -817,7 +760,6 @@ fn ensure_dispute_anchors_to_history(
             latest_slot
         )));
     }
-
     if let FeedEventOutcome::Success(success) = &record.event.outcome
         && !success
             .entries
@@ -828,10 +770,8 @@ fn ensure_dispute_anchors_to_history(
             "target provider `{target}` did not contribute to the disputed successful event"
         )));
     }
-
     Ok(())
 }
-
 fn derive_dispute_id(
     feed_id: &FeedId,
     slot: FeedSlot,
@@ -850,7 +790,6 @@ fn derive_dispute_id(
     buf.copy_from_slice(&digest.as_bytes()[..8]);
     OracleDisputeId(u64::from_le_bytes(buf))
 }
-
 fn payload_u64(payload: &norito::json::Map, field: &str) -> Result<u64, Error> {
     let value = payload
         .get(field)
@@ -867,7 +806,6 @@ fn payload_u64(payload: &norito::json::Map, field: &str) -> Result<u64, Error> {
         "DeFi oracle payload field `{field}` must be a non-negative integer"
     )))
 }
-
 fn checked_observation_integer(
     value: iroha_data_model::oracle::ObservationValue,
 ) -> Result<u64, Error> {
@@ -888,7 +826,6 @@ fn checked_observation_integer(
     let normalized = value.mantissa / divisor;
     u64::try_from(normalized).map_err(|_| signature_err("DeFi source feed value exceeds u64 range"))
 }
-
 fn find_retained_source_event<'a>(
     world: &'a WorldTransaction<'_, '_>,
     source: &DefiOracleAttestationSource,
@@ -901,7 +838,6 @@ fn find_retained_source_event<'a>(
             record.event.slot == source.slot && record.event.request_hash == source.request_hash
         })
 }
-
 fn derive_defi_attestation_hash(attestation: &DefiOracleAttestation) -> u64 {
     let mut hasher = Hasher::new();
     hasher.update(b"defi-oracle-attestation-v1");
@@ -921,7 +857,6 @@ fn derive_defi_attestation_hash(attestation: &DefiOracleAttestation) -> u64 {
     let value = u64::from_le_bytes(buf) & i64::MAX as u64;
     value.max(1)
 }
-
 fn verify_defi_oracle_signature(
     public_key: &PublicKey,
     attestation: &DefiOracleAttestation,
@@ -932,12 +867,10 @@ fn verify_defi_oracle_signature(
         .verify(public_key, &attestation.oracle_payload)
         .map_err(|err| signature_err(format!("invalid DeFi oracle signature: {err}")))
 }
-
 fn parse_defi_oracle_signer_public_key(signer_public_key: &[u8]) -> Result<PublicKey, Error> {
     PublicKey::from_bytes(Algorithm::Ed25519, signer_public_key)
         .map_err(|err| signature_err(format!("invalid DeFi signer public key: {err}")))
 }
-
 fn validate_defi_payload_shape(
     attestation: &DefiOracleAttestation,
 ) -> Result<norito::json::Map, Error> {
@@ -953,14 +886,12 @@ fn validate_defi_payload_shape(
     if attestation.oracle_signature.is_empty() {
         return Err(signature_err("DeFi oracle signature must not be empty"));
     }
-
     let value: norito::json::Value = norito::json::from_slice(&attestation.oracle_payload)
         .map_err(|err| signature_err(format!("invalid DeFi oracle JSON payload: {err}")))?;
     let object = value
         .as_object()
         .cloned()
         .ok_or_else(|| signature_err("DeFi oracle payload must be a JSON object"))?;
-
     let domain = payload_u64(&object, "domain")?;
     if domain != u64::from(attestation.key.domain) {
         return Err(signature_err("DeFi oracle payload domain mismatch"));
@@ -996,7 +927,6 @@ fn validate_defi_payload_shape(
             "DeFi oracle attestation_hash is not deterministic",
         ));
     }
-
     match attestation.key.domain {
         DEFI_ORACLE_DOMAIN_PERPS_MARKET => {
             for field in ["mark_price_bps", "index_price_bps", "confidence_bps"] {
@@ -1016,10 +946,8 @@ fn validate_defi_payload_shape(
         }
         _ => {}
     }
-
     Ok(object)
 }
-
 fn validate_defi_sources(
     world: &WorldTransaction<'_, '_>,
     attestation: &DefiOracleAttestation,
@@ -1071,31 +999,25 @@ fn validate_defi_sources(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{KeyPair, Signature, SignatureOf};
     use iroha_data_model::oracle::{DefiOracleAttestationKey, kits};
-
-    use super::*;
-
     fn checked_ed25519_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("DeFi oracle fixture key generation should succeed")
     }
-
     fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
             panic!("{algorithm:?} oracle fixture key generation should succeed: {err}")
         })
     }
-
     fn provider() -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
             .expect("DeFi oracle provider fixture key generation should succeed");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn direct_defi_attestation(attestation_hash: u64) -> DefiOracleAttestation {
         DefiOracleAttestation {
             key: DefiOracleAttestationKey::new(DEFI_ORACLE_DOMAIN_PERPS_MARKET, 42),
@@ -1113,7 +1035,6 @@ mod tests {
             source_events: Vec::new(),
         }
     }
-
     fn observation_body(provider: AccountId) -> iroha_data_model::oracle::ObservationBody {
         iroha_data_model::oracle::ObservationBody {
             feed_id: FeedId("price_xor_usd".parse().expect("oracle feed id")),
@@ -1129,18 +1050,15 @@ mod tests {
             timestamp_ms: Some(1_700_000_000_123),
         }
     }
-
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     const NONCANONICAL_ED25519_R: [u8; 32] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn signature_of_with_malformed_ed25519_r<T>(
         signature: &SignatureOf<T>,
         replacement_r: &[u8; 32],
@@ -1149,26 +1067,22 @@ mod tests {
         payload[..replacement_r.len()].copy_from_slice(replacement_r);
         SignatureOf::from_signature(Signature::from_bytes(&payload))
     }
-
     #[test]
     fn direct_defi_attestation_shape_accepts_empty_sources() {
         validate_defi_payload_shape(&direct_defi_attestation(17))
             .expect("direct provider-signed attestation should not require source events");
     }
-
     #[test]
     fn direct_defi_attestation_shape_rejects_zero_hash() {
         let err = validate_defi_payload_shape(&direct_defi_attestation(0))
             .expect_err("zero compatibility hash must reject");
         assert!(format!("{err:?}").contains("attestation_hash must be non-zero"));
     }
-
     #[test]
     fn defi_oracle_signature_rejects_all_zero_signature_material() {
         let keypair = checked_ed25519_keypair();
         let mut attestation = direct_defi_attestation(17);
         attestation.oracle_signature = vec![0; 64];
-
         let err = verify_defi_oracle_signature(keypair.public_key(), &attestation)
             .expect_err("all-zero signature material must reject before verification");
         let Error::InvalidParameter(InvalidParameterError::SmartContract(message)) = err else {
@@ -1179,7 +1093,6 @@ mod tests {
             "unexpected error message: {message}"
         );
     }
-
     #[test]
     fn defi_oracle_signer_public_key_rejects_inert_or_malformed_ed25519_material() {
         for (label, signer_public_key) in [
@@ -1198,7 +1111,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn defi_oracle_signature_rejects_malformed_ed25519_signature_r() {
         const SMALL_ORDER_R: [u8; 32] = [
@@ -1210,7 +1122,6 @@ mod tests {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
-
         let keypair = checked_ed25519_keypair();
         let mut attestation = direct_defi_attestation(17);
         let valid_signature =
@@ -1221,7 +1132,6 @@ mod tests {
         attestation.oracle_signature = valid_signature.clone();
         verify_defi_oracle_signature(keypair.public_key(), &attestation)
             .expect("valid DeFi oracle signature should verify");
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
@@ -1229,7 +1139,6 @@ mod tests {
             let mut malformed_signature = valid_signature.clone();
             malformed_signature[..replacement_r.len()].copy_from_slice(&replacement_r);
             attestation.oracle_signature = malformed_signature;
-
             let err = verify_defi_oracle_signature(keypair.public_key(), &attestation)
                 .expect_err("malformed DeFi oracle signature R must fail admission");
             let Error::InvalidParameter(InvalidParameterError::SmartContract(message)) = err else {
@@ -1241,7 +1150,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn oracle_observation_signature_rejects_malformed_ed25519_signature_r() {
         let keypair = checked_ed25519_keypair();
@@ -1250,7 +1158,6 @@ mod tests {
             .expect("oracle observation fixture signing should succeed");
         verify_typed_signature_for_signer(&signature, keypair.public_key(), &body)
             .expect("valid oracle observation signature should verify");
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_R),
             ("noncanonical", NONCANONICAL_ED25519_R),
@@ -1269,7 +1176,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn oracle_observation_signature_rejects_malformed_mldsa_signature_lengths() {
         let keypair = checked_keypair_with_algorithm(Algorithm::MlDsa);
@@ -1279,7 +1185,6 @@ mod tests {
         verify_typed_signature_for_signer(&signature, keypair.public_key(), &body)
             .expect("valid oracle ML-DSA observation signature should verify");
         let valid_signature = signature.payload().to_vec();
-
         for (label, replacement_signature) in [
             (
                 "short",
@@ -1305,7 +1210,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn source_linked_defi_attestation_keeps_deterministic_hash_check() {
         let mut attestation = direct_defi_attestation(17);
@@ -1319,7 +1223,6 @@ mod tests {
         let err = validate_defi_payload_shape(&attestation)
             .expect_err("source-linked attestation must keep deterministic hash validation");
         assert!(format!("{err:?}").contains("attestation_hash is not deterministic"));
-
         let deterministic_hash = derive_defi_attestation_hash(&attestation);
         attestation.attestation_hash = deterministic_hash;
         attestation.oracle_payload = format!(
@@ -1330,7 +1233,6 @@ mod tests {
             .expect("source-linked attestation with deterministic hash should validate");
     }
 }
-
 impl Execute for RegisterOracleFeed {
     #[allow(clippy::too_many_lines)]
     fn execute(
@@ -1339,30 +1241,25 @@ impl Execute for RegisterOracleFeed {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let feed = self.feed;
-
         require_permission(
             state_transaction,
             authority,
             oracle_permission::CanRegisterOracleFeed,
             "CanRegisterOracleFeed",
         )?;
-
         validate_feed_registration(
             &feed,
             &state_transaction.world,
             state_transaction.oracle.history_depth,
         )?;
-
         // Persist the new configuration.
         state_transaction
             .world
             .oracle_feeds
             .insert(feed.feed_id.clone(), feed);
-
         Ok(())
     }
 }
-
 impl Execute for SubmitOracleObservation {
     fn execute(
         self,
@@ -1371,13 +1268,11 @@ impl Execute for SubmitOracleObservation {
     ) -> Result<(), Error> {
         let observation = self.observation;
         let provider = &observation.body.provider_id;
-
         if provider != authority {
             return Err(signature_err(format!(
                 "authority `{authority}` is not the observation provider `{provider}`"
             )));
         }
-
         let config = state_transaction
             .world
             .oracle_feeds
@@ -1389,7 +1284,6 @@ impl Execute for SubmitOracleObservation {
                     observation.body.feed_id.as_str()
                 ))
             })?;
-
         ensure_provider_allowed(&config, provider)?;
         ensure_window_fresh_and_unprocessed(
             &state_transaction.world,
@@ -1397,7 +1291,6 @@ impl Execute for SubmitOracleObservation {
             observation.body.slot,
             observation.body.request_hash,
         )?;
-
         // Verify the provider signature over the observation payload.
         let signatory = provider.controller().single_signatory().ok_or_else(|| {
             signature_err("oracle providers must use single-signature controllers")
@@ -1426,7 +1319,6 @@ impl Execute for SubmitOracleObservation {
                 "invalid observation signature: {err}"
             )));
         }
-
         // Buffer the observation for its `(feed, slot, request_hash)` window.
         let key = ObservationWindowKey::new(
             observation.body.feed_id.clone(),
@@ -1440,11 +1332,9 @@ impl Execute for SubmitOracleObservation {
             .get(&key)
             .cloned()
             .unwrap_or_else(|| ObservationWindow::new(&key));
-
         window
             .push(&config, observation)
             .map_err(|err| aggregation_err(&err))?;
-
         state_transaction
             .world
             .oracle_observations
@@ -1452,7 +1342,6 @@ impl Execute for SubmitOracleObservation {
         Ok(())
     }
 }
-
 impl Execute for SubmitDefiOracleAttestation {
     fn execute(
         self,
@@ -1461,19 +1350,16 @@ impl Execute for SubmitDefiOracleAttestation {
     ) -> Result<(), Error> {
         let attestation = self.attestation;
         let provider = &attestation.provider;
-
         if provider != authority {
             return Err(signature_err(format!(
                 "authority `{authority}` is not the DeFi oracle provider `{provider}`"
             )));
         }
-
         if attestation.oracle_scheme != 1 {
             return Err(signature_err(
                 "DeFi oracle attestation currently requires Ed25519 scheme 1",
             ));
         }
-
         let provider_signatory = provider.controller().single_signatory().ok_or_else(|| {
             signature_err("DeFi oracle providers must use single-signature controllers")
         })?;
@@ -1484,10 +1370,8 @@ impl Execute for SubmitDefiOracleAttestation {
             ));
         }
         verify_defi_oracle_signature(&public_key, &attestation)?;
-
         let payload = validate_defi_payload_shape(&attestation)?;
         validate_defi_sources(&state_transaction.world, &attestation, &payload, provider)?;
-
         let key = attestation.key;
         let mut retained = state_transaction
             .world
@@ -1517,11 +1401,9 @@ impl Execute for SubmitDefiOracleAttestation {
             .emit_events(Some(OracleEvent::DefiAttestationRecorded(
                 DefiOracleAttestationRecorded { attestation },
             )));
-
         Ok(())
     }
 }
-
 impl Execute for AggregateOracleFeed {
     fn execute(
         self,
@@ -1539,7 +1421,6 @@ impl Execute for AggregateOracleFeed {
                     self.feed_id.as_str()
                 ))
             })?;
-
         ensure_provider_allowed(&config, authority)?;
         ensure_window_fresh_and_unprocessed(
             &state_transaction.world,
@@ -1547,7 +1428,6 @@ impl Execute for AggregateOracleFeed {
             self.slot,
             self.request_hash,
         )?;
-
         let key = ObservationWindowKey::new(
             self.feed_id.clone(),
             config.feed_config_version,
@@ -1567,7 +1447,6 @@ impl Execute for AggregateOracleFeed {
                     },
                 )
             })?;
-
         let observations = window.into_sorted();
         #[cfg(feature = "telemetry")]
         let started = Instant::now();
@@ -1579,15 +1458,12 @@ impl Execute for AggregateOracleFeed {
             &observations,
         )
         .map_err(|err| aggregation_err(&err))?;
-
         state_transaction.world.oracle_observations.remove(key);
-
         let record = FeedEventRecord {
             event: output.into_feed_event(),
             recorded_at_ms: state_transaction.block_unix_timestamp_ms(),
             evidence_hashes: self.evidence_hashes,
         };
-
         apply_economics_for_slot(
             state_transaction,
             &config,
@@ -1596,7 +1472,6 @@ impl Execute for AggregateOracleFeed {
             self.slot,
             self.request_hash,
         )?;
-
         // Persist bounded history (per feed).
         let mut history = state_transaction
             .world
@@ -1614,12 +1489,10 @@ impl Execute for AggregateOracleFeed {
             .world
             .oracle_history
             .insert(self.feed_id.clone(), history);
-
         // Emit data event for subscribers.
         state_transaction
             .world
             .emit_events(Some(OracleEvent::FeedProcessed(record.clone())));
-
         #[cfg(feature = "telemetry")]
         {
             state_transaction.telemetry.observe_oracle_aggregation(
@@ -1629,11 +1502,9 @@ impl Execute for AggregateOracleFeed {
                 started.elapsed(),
             );
         }
-
         Ok(())
     }
 }
-
 impl Execute for OpenOracleDispute {
     fn execute(
         self,
@@ -1650,9 +1521,7 @@ impl Execute for OpenOracleDispute {
                     self.feed_id.as_str()
                 ))
             })?;
-
         ensure_provider_allowed(config, &self.target)?;
-
         ensure_dispute_anchors_to_history(
             &state_transaction.world,
             config,
@@ -1661,19 +1530,16 @@ impl Execute for OpenOracleDispute {
             &self.target,
             &self.evidence_hashes,
         )?;
-
         let economics = state_transaction.oracle.economics.clone();
         let bond_amount = self
             .bond
             .unwrap_or_else(|| economics.dispute_bond_amount.clone());
-
         let challenger_asset =
             AssetId::new(economics.dispute_bond_asset.clone(), authority.clone());
         let escrow_asset = AssetId::new(
             economics.dispute_bond_asset.clone(),
             economics.slash_receiver.clone(),
         );
-
         let dispute_id = derive_dispute_id(
             &self.feed_id,
             self.slot,
@@ -1692,7 +1558,6 @@ impl Execute for OpenOracleDispute {
                 dispute_id.0
             )));
         }
-
         crate::smartcontracts::isi::asset::isi::execute_oracle_dispute_bond_transfer(
             state_transaction,
             authority,
@@ -1701,7 +1566,6 @@ impl Execute for OpenOracleDispute {
             escrow_asset,
             bond_amount.clone(),
         )?;
-
         let dispute = OracleDispute {
             id: dispute_id,
             feed_id: self.feed_id,
@@ -1714,7 +1578,6 @@ impl Execute for OpenOracleDispute {
             reason: self.reason,
             status: OracleDisputeStatus::Open,
         };
-
         state_transaction
             .world
             .oracle_disputes
@@ -1725,13 +1588,11 @@ impl Execute for OpenOracleDispute {
         Ok(())
     }
 }
-
 struct DisputeAssets {
     escrow: AssetId,
     challenger: AssetId,
     target: AssetId,
 }
-
 impl DisputeAssets {
     fn new(
         economics: &iroha_config::parameters::actual::OracleEconomics,
@@ -1751,14 +1612,12 @@ impl DisputeAssets {
         }
     }
 }
-
 struct DisputeEconomics {
     outlier_slash: Quantity,
     error_slash: Quantity,
     reward: Quantity,
     frivolous_slash: Quantity,
 }
-
 impl DisputeEconomics {
     fn from_config(economics: &iroha_config::parameters::actual::OracleEconomics) -> Self {
         Self {
@@ -1769,7 +1628,6 @@ impl DisputeEconomics {
         }
     }
 }
-
 fn resolve_upheld_dispute(
     state_transaction: &mut StateTransaction<'_, '_>,
     dispute: &OracleDispute,
@@ -1800,7 +1658,6 @@ fn resolve_upheld_dispute(
         &assets.challenger,
     )
 }
-
 fn resolve_reduced_dispute(
     state_transaction: &mut StateTransaction<'_, '_>,
     dispute: &OracleDispute,
@@ -1824,7 +1681,6 @@ fn resolve_reduced_dispute(
         &assets.challenger,
     )
 }
-
 fn resolve_frivolous_dispute(
     state_transaction: &mut StateTransaction<'_, '_>,
     dispute: &OracleDispute,
@@ -1839,7 +1695,6 @@ fn resolve_frivolous_dispute(
         &assets.target,
     )
 }
-
 fn move_from_escrow(
     state_transaction: &mut StateTransaction<'_, '_>,
     dispute: &OracleDispute,
@@ -1860,7 +1715,6 @@ fn move_from_escrow(
         movement,
     )
 }
-
 impl Execute for ResolveOracleDispute {
     fn execute(
         self,
@@ -1873,7 +1727,6 @@ impl Execute for ResolveOracleDispute {
             oracle_permission::CanResolveOracleDispute,
             "CanResolveOracleDispute",
         )?;
-
         let Some(mut dispute) = state_transaction
             .world
             .oracle_disputes
@@ -1885,14 +1738,12 @@ impl Execute for ResolveOracleDispute {
                 self.dispute_id.0
             )));
         };
-
         if !matches!(dispute.status, OracleDisputeStatus::Open) {
             return Err(signature_err(format!(
                 "dispute `{}` already resolved",
                 dispute.id.0
             )));
         }
-
         let economics_cfg = state_transaction.oracle.economics.clone();
         let config = state_transaction
             .world
@@ -1912,7 +1763,6 @@ impl Execute for ResolveOracleDispute {
             dispute.slot,
             dispute.request_hash,
         );
-
         match self.outcome {
             OracleDisputeOutcome::Upheld => {
                 resolve_upheld_dispute(state_transaction, &dispute, ctx, &economics, &assets)?
@@ -1924,7 +1774,6 @@ impl Execute for ResolveOracleDispute {
                 resolve_frivolous_dispute(state_transaction, &dispute, &economics, &assets)?
             }
         }
-
         dispute.status = OracleDisputeStatus::Resolved(self.outcome);
         state_transaction
             .world
@@ -1936,7 +1785,6 @@ impl Execute for ResolveOracleDispute {
         Ok(())
     }
 }
-
 impl Execute for ProposeOracleChange {
     fn execute(
         self,
@@ -1954,14 +1802,12 @@ impl Execute for ProposeOracleChange {
                 self.change_id.as_hash()
             )));
         }
-
         require_permission(
             state_transaction,
             authority,
             oracle_permission::CanProposeOracleChange,
             "CanProposeOracleChange",
         )?;
-
         validate_feed_registration(
             &self.feed,
             &state_transaction.world,
@@ -1984,7 +1830,6 @@ impl Execute for ProposeOracleChange {
             OracleChangeStage::Intake,
             &self.evidence_hashes,
         );
-
         state_transaction
             .world
             .oracle_changes
@@ -1998,7 +1843,6 @@ impl Execute for ProposeOracleChange {
                 payload_hash: proposal.payload_hash,
                 proposer: authority.clone(),
             })));
-
         if let Some(intake) = proposal
             .stages
             .iter()
@@ -2017,11 +1861,9 @@ impl Execute for ProposeOracleChange {
                     },
                 )));
         }
-
         Ok(())
     }
 }
-
 fn start_stage_if_needed(
     proposal: &mut OracleChangeProposal,
     stage: OracleChangeStage,
@@ -2039,7 +1881,6 @@ fn start_stage_if_needed(
         }
     }
 }
-
 fn enact_change(
     state_transaction: &mut StateTransaction<'_, '_>,
     proposal: &OracleChangeProposal,
@@ -2055,7 +1896,6 @@ fn enact_change(
         .insert(proposal.feed.feed_id.clone(), proposal.feed.clone());
     Ok(())
 }
-
 impl Execute for VoteOracleChangeStage {
     #[allow(clippy::too_many_lines)]
     fn execute(
@@ -2069,7 +1909,6 @@ impl Execute for VoteOracleChangeStage {
             oracle_permission::CanVoteOracleChangeStage { stage: self.stage },
             "CanVoteOracleChangeStage",
         )?;
-
         let Some(mut proposal) = state_transaction
             .world
             .oracle_changes
@@ -2081,14 +1920,12 @@ impl Execute for VoteOracleChangeStage {
                 self.change_id.as_hash()
             )));
         };
-
         if proposal.status.is_terminal() {
             return Err(signature_err(format!(
                 "oracle change `{}` is already finalized",
                 proposal.id.as_hash()
             )));
         }
-
         let now = state_transaction.block_height();
         if proposal.stages.is_empty() {
             proposal.stages = seed_change_stages(now, &state_transaction.oracle.governance);
@@ -2108,7 +1945,6 @@ impl Execute for VoteOracleChangeStage {
                 self.stage, active_stage
             )));
         }
-
         start_stage_if_needed(
             &mut proposal,
             active_stage,
@@ -2116,7 +1952,6 @@ impl Execute for VoteOracleChangeStage {
             &state_transaction.oracle.governance,
         );
         append_stage_evidence(&mut proposal, self.stage, &self.evidence_hashes);
-
         let stage_idx = proposal
             .stages
             .iter()
@@ -2133,17 +1968,14 @@ impl Execute for VoteOracleChangeStage {
         let approvals;
         let rejections;
         let evidence_hashes;
-
         {
             let stage_rec = proposal
                 .stages
                 .get_mut(stage_idx)
                 .expect("stage exists by index");
-
             if !stage_rec.is_pending() {
                 return Err(signature_err("stage already completed or failed"));
             }
-
             if self.approve {
                 stage_rec.approvals.insert(authority.clone());
                 let needed = required_votes(
@@ -2169,12 +2001,10 @@ impl Execute for VoteOracleChangeStage {
                     at: now,
                 }));
             }
-
             approvals = u32::try_from(stage_rec.approvals.len()).unwrap_or(u32::MAX);
             rejections = u32::try_from(stage_rec.rejections.len()).unwrap_or(u32::MAX);
             evidence_hashes = stage_rec.evidence.clone();
         }
-
         if let Some(next) = next_stage {
             start_stage_if_needed(
                 &mut proposal,
@@ -2183,7 +2013,6 @@ impl Execute for VoteOracleChangeStage {
                 &state_transaction.oracle.governance,
             );
         }
-
         if self.approve && should_enact {
             enact_change(state_transaction, &proposal)?;
             if let Some(enact) = proposal
@@ -2203,11 +2032,9 @@ impl Execute for VoteOracleChangeStage {
             }
             status_update = Some(OracleChangeStatus::Enacted(now));
         }
-
         if let Some(status) = status_update {
             proposal.status = status;
         }
-
         state_transaction
             .world
             .oracle_changes
@@ -2224,13 +2051,15 @@ impl Execute for VoteOracleChangeStage {
                     evidence_hashes,
                 },
             )));
-
         Ok(())
     }
 }
-
 /// Oracle-specific query handlers.
 pub mod query {
+    use crate::{
+        smartcontracts::{ValidQuery, ValidSingularQuery},
+        state::{StateReadOnly, WorldReadOnly},
+    };
     use eyre::Result;
     use iroha_data_model::{
         events::data::oracle::FeedEventRecord,
@@ -2252,12 +2081,6 @@ pub mod query {
     };
     use iroha_telemetry::metrics;
     use mv::storage::StorageReadOnly;
-
-    use crate::{
-        smartcontracts::{ValidQuery, ValidSingularQuery},
-        state::{StateReadOnly, WorldReadOnly},
-    };
-
     impl ValidSingularQuery for FindOracleFeedById {
         #[metrics(+"find_oracle_feed_by_id")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<FeedConfig, Error> {
@@ -2265,11 +2088,10 @@ pub mod query {
                 .world()
                 .oracle_feeds()
                 .get(&self.feed_id)
-                .cloned()
                 .ok_or_else(|| Error::Find(FindError::OracleFeed(self.feed_id.clone())))
+                .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
         }
     }
-
     impl ValidSingularQuery for FindOracleDisputeById {
         #[metrics(+"find_oracle_dispute_by_id")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<OracleDispute, Error> {
@@ -2277,11 +2099,10 @@ pub mod query {
                 .world()
                 .oracle_disputes()
                 .get(&self.dispute_id)
-                .cloned()
                 .ok_or_else(|| Error::Find(FindError::OracleDispute(self.dispute_id)))
+                .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
         }
     }
-
     impl ValidSingularQuery for FindOracleChangeById {
         #[metrics(+"find_oracle_change_by_id")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<OracleChangeProposal, Error> {
@@ -2289,11 +2110,10 @@ pub mod query {
                 .world()
                 .oracle_changes()
                 .get(&self.change_id)
-                .cloned()
                 .ok_or_else(|| Error::Find(FindError::OracleChange(self.change_id)))
+                .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
         }
     }
-
     impl ValidSingularQuery for FindOracleProviderStatsByKey {
         #[metrics(+"find_oracle_provider_stats_by_key")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<OracleProviderStats, Error> {
@@ -2305,7 +2125,6 @@ pub mod query {
                 .ok_or_else(|| Error::Find(FindError::OracleProviderStats(self.key.clone())))
         }
     }
-
     impl ValidSingularQuery for FindTwitterBindingByHash {
         #[metrics(+"find_twitter_binding_by_hash")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<TwitterBindingRecord, Error> {
@@ -2313,11 +2132,10 @@ pub mod query {
                 .world()
                 .twitter_bindings()
                 .get(&self.binding_hash.digest)
-                .cloned()
                 .ok_or_else(|| Error::Find(FindError::TwitterBinding(self.binding_hash.clone())))
+                .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
         }
     }
-
     impl ValidSingularQuery for FindLatestDefiOracleAttestation {
         #[metrics(+"find_latest_defi_oracle_attestation")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<DefiOracleAttestation, Error> {
@@ -2326,11 +2144,10 @@ pub mod query {
                 .defi_oracle_attestations()
                 .get(&self.key)
                 .and_then(|items| items.last())
-                .cloned()
                 .ok_or_else(|| Error::Find(FindError::DefiOracleAttestation(self.key)))
+                .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
         }
     }
-
     impl ValidQuery for FindOracleFeeds {
         #[metrics(+"find_oracle_feeds")]
         fn execute(
@@ -2348,7 +2165,6 @@ pub mod query {
             Ok(items.into_iter())
         }
     }
-
     impl ValidQuery for FindOracleHistoryByFeedId {
         #[metrics(+"find_oracle_history_by_feed_id")]
         fn execute(
@@ -2368,7 +2184,6 @@ pub mod query {
             Ok(items.into_iter())
         }
     }
-
     impl ValidQuery for FindOracleProviderStatsByFeedId {
         #[metrics(+"find_oracle_provider_stats_by_feed_id")]
         fn execute(
@@ -2392,7 +2207,6 @@ pub mod query {
             Ok(items.into_iter())
         }
     }
-
     impl ValidQuery for FindDefiOracleAttestationsByKey {
         #[metrics(+"find_defi_oracle_attestations_by_key")]
         fn execute(
@@ -2412,7 +2226,6 @@ pub mod query {
             Ok(items.into_iter())
         }
     }
-
     impl ValidQuery for FindOracleDisputes {
         #[metrics(+"find_oracle_disputes")]
         fn execute(
@@ -2430,7 +2243,6 @@ pub mod query {
             Ok(items.into_iter())
         }
     }
-
     impl ValidQuery for FindOracleDisputesByFeedId {
         #[metrics(+"find_oracle_disputes_by_feed_id")]
         fn execute(
@@ -2449,7 +2261,6 @@ pub mod query {
             Ok(items.into_iter())
         }
     }
-
     impl ValidQuery for FindOracleChanges {
         #[metrics(+"find_oracle_changes")]
         fn execute(
@@ -2467,7 +2278,6 @@ pub mod query {
             Ok(items.into_iter())
         }
     }
-
     impl ValidQuery for FindTwitterBindingsByUaid {
         #[metrics(+"find_twitter_bindings_by_uaid")]
         fn execute(
@@ -2490,7 +2300,6 @@ pub mod query {
         }
     }
 }
-
 impl Execute for RecordTwitterBinding {
     fn execute(
         self,
@@ -2503,7 +2312,6 @@ impl Execute for RecordTwitterBinding {
             oracle_permission::CanManageTwitterBindings,
             "CanManageTwitterBindings",
         )?;
-
         let RecordTwitterBinding {
             attestation,
             feed_id,
@@ -2517,7 +2325,6 @@ impl Execute for RecordTwitterBinding {
                 expected_feed_id.as_str()
             )));
         }
-
         let feed_config = state_transaction
             .world
             .oracle_feeds
@@ -2529,34 +2336,27 @@ impl Execute for RecordTwitterBinding {
                     feed_id.as_str()
                 ))
             })?;
-
         ensure_provider_allowed(&feed_config, authority)?;
-
         if attestation.feed_config_version != feed_config.feed_config_version {
             return Err(signature_err(format!(
                 "attestation feed_config_version {} does not match registered version {}",
                 attestation.feed_config_version.0, feed_config.feed_config_version.0
             )));
         }
-
         if attestation.binding_hash.pepper_id != cfg.pepper_id {
             return Err(signature_err(format!(
                 "twitter binding pepper `{}` does not match expected `{}`",
                 attestation.binding_hash.pepper_id, cfg.pepper_id
             )));
         }
-
         validate_binding_ttl(&attestation, cfg)?;
-
         let now_ms = state_transaction.block_unix_timestamp_ms();
         if attestation.is_expired(now_ms) {
             return Err(signature_err(
                 "twitter binding attestation is already expired",
             ));
         }
-
         ensure_binding_matches_history(state_transaction, &feed_id, &attestation)?;
-
         let digest = attestation.binding_hash.digest;
         if let Some(existing) = state_transaction.world.twitter_bindings.get(&digest) {
             let spacing = attestation
@@ -2569,7 +2369,6 @@ impl Execute for RecordTwitterBinding {
                 )));
             }
         }
-
         let record = TwitterBindingRecord {
             feed_id,
             provider: authority.clone(),
@@ -2577,12 +2376,10 @@ impl Execute for RecordTwitterBinding {
             recorded_at_ms: now_ms,
         };
         let binding_digest = record.binding_digest();
-
         state_transaction
             .world
             .twitter_bindings
             .insert(binding_digest, record.clone());
-
         let mut uaid_index = state_transaction
             .world
             .twitter_bindings_by_uaid
@@ -2596,7 +2393,6 @@ impl Execute for RecordTwitterBinding {
             .world
             .twitter_bindings_by_uaid
             .insert(record.attestation.uaid, uaid_index);
-
         state_transaction
             .world
             .emit_events(Some(OracleEvent::TwitterBindingRecorded(
@@ -2604,7 +2400,6 @@ impl Execute for RecordTwitterBinding {
                     record: record.clone(),
                 },
             )));
-
         #[cfg(feature = "telemetry")]
         {
             state_transaction.telemetry.observe_twitter_binding(
@@ -2613,11 +2408,9 @@ impl Execute for RecordTwitterBinding {
                 record.attestation.is_expired(now_ms),
             );
         }
-
         Ok(())
     }
 }
-
 impl Execute for RevokeTwitterBinding {
     fn execute(
         self,
@@ -2630,7 +2423,6 @@ impl Execute for RevokeTwitterBinding {
             oracle_permission::CanManageTwitterBindings,
             "CanManageTwitterBindings",
         )?;
-
         let cfg = &state_transaction.oracle.twitter_binding;
         let feed_id = expected_twitter_feed_id(cfg);
         let feed_config = state_transaction
@@ -2645,12 +2437,10 @@ impl Execute for RevokeTwitterBinding {
                 ))
             })?;
         ensure_provider_allowed(&feed_config, authority)?;
-
         let digest = self.binding_hash.digest;
         let Some(record) = state_transaction.world.twitter_bindings.remove(digest) else {
             return Err(signature_err("twitter binding not found"));
         };
-
         if let Some(mut uaids) = state_transaction
             .world
             .twitter_bindings_by_uaid
@@ -2670,7 +2460,6 @@ impl Execute for RevokeTwitterBinding {
                     .insert(record.attestation.uaid, uaids);
             }
         }
-
         let now_ms = state_transaction.block_unix_timestamp_ms();
         state_transaction
             .world
@@ -2682,11 +2471,9 @@ impl Execute for RevokeTwitterBinding {
                     recorded_at_ms: now_ms,
                 },
             )));
-
         Ok(())
     }
 }
-
 impl Execute for RollbackOracleChange {
     fn execute(
         self,
@@ -2699,7 +2486,6 @@ impl Execute for RollbackOracleChange {
             oracle_permission::CanRollbackOracleChange,
             "CanRollbackOracleChange",
         )?;
-
         let Some(mut proposal) = state_transaction
             .world
             .oracle_changes
@@ -2711,14 +2497,12 @@ impl Execute for RollbackOracleChange {
                 self.change_id.as_hash()
             )));
         };
-
         if proposal.status.is_terminal() {
             return Err(signature_err(format!(
                 "oracle change `{}` is already finalized",
                 self.change_id.as_hash()
             )));
         }
-
         let now = state_transaction.block_height();
         let target_stage = self
             .stage
@@ -2737,7 +2521,6 @@ impl Execute for RollbackOracleChange {
                 target_stage, active_stage
             )));
         }
-
         if let Some(record) = proposal
             .stages
             .iter_mut()
@@ -2746,13 +2529,11 @@ impl Execute for RollbackOracleChange {
             record.failure = Some(OracleChangeStageFailure::Rollback(self.reason.clone()));
             record.completed_at.get_or_insert(now);
         }
-
         proposal.status = OracleChangeStatus::Failed(OracleChangeFailure {
             stage: target_stage,
             reason: OracleChangeStageFailure::Rollback(self.reason.clone()),
             at: now,
         });
-
         state_transaction
             .world
             .oracle_changes

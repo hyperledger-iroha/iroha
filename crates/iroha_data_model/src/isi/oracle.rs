@@ -1,5 +1,3 @@
-use iroha_primitives::numeric::Quantity;
-
 use super::*;
 use crate::{
     oracle::{
@@ -9,7 +7,7 @@ use crate::{
     },
     prelude::Hash,
 };
-
+use iroha_primitives::numeric::Quantity;
 isi! {
     /// Register an oracle feed configuration on-chain.
     pub struct RegisterOracleFeed {
@@ -17,7 +15,6 @@ isi! {
         pub feed: FeedConfig,
     }
 }
-
 isi! {
     /// Submit a signed oracle observation for admission.
     pub struct SubmitOracleObservation {
@@ -25,7 +22,6 @@ isi! {
         pub observation: Observation,
     }
 }
-
 isi! {
     /// Aggregate admitted observations for a feed slot into a feed event.
     pub struct AggregateOracleFeed {
@@ -40,7 +36,6 @@ isi! {
         pub evidence_hashes: Vec<Hash>,
     }
 }
-
 isi! {
     /// Open a dispute against an oracle provider for a specific feed slot.
     pub struct OpenOracleDispute {
@@ -62,7 +57,6 @@ isi! {
         pub reason: String,
     }
 }
-
 isi! {
     /// Resolve an open oracle dispute.
     pub struct ResolveOracleDispute {
@@ -75,7 +69,6 @@ isi! {
         pub notes: String,
     }
 }
-
 isi! {
     /// Propose a governance change for an oracle feed.
     pub struct ProposeOracleChange {
@@ -92,7 +85,6 @@ isi! {
         pub evidence_hashes: Vec<Hash>,
     }
 }
-
 isi! {
     /// Record a stage vote for an oracle change proposal.
     pub struct VoteOracleChangeStage {
@@ -107,7 +99,6 @@ isi! {
         pub evidence_hashes: Vec<Hash>,
     }
 }
-
 isi! {
     /// Explicitly roll back an oracle change proposal.
     pub struct RollbackOracleChange {
@@ -120,7 +111,6 @@ isi! {
         pub reason: String,
     }
 }
-
 isi! {
     /// Submit a native Soracles attestation carrying `DeFi` ABI-compatible oracle bytes.
     pub struct SubmitDefiOracleAttestation {
@@ -128,7 +118,6 @@ isi! {
         pub attestation: DefiOracleAttestation,
     }
 }
-
 isi! {
     /// Record a twitter follow binding attestation.
     pub struct RecordTwitterBinding {
@@ -138,7 +127,6 @@ isi! {
         pub feed_id: FeedId,
     }
 }
-
 isi! {
     /// Revoke a twitter follow binding record.
     pub struct RevokeTwitterBinding {
@@ -148,7 +136,6 @@ isi! {
         pub reason: String,
     }
 }
-
 impl crate::seal::Instruction for RegisterOracleFeed {}
 impl crate::seal::Instruction for SubmitOracleObservation {}
 impl crate::seal::Instruction for AggregateOracleFeed {}
@@ -160,18 +147,15 @@ impl crate::seal::Instruction for RollbackOracleChange {}
 impl crate::seal::Instruction for SubmitDefiOracleAttestation {}
 impl crate::seal::Instruction for RecordTwitterBinding {}
 impl crate::seal::Instruction for RevokeTwitterBinding {}
-
 fn oracle_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RegisterOracleFeed {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let feed = super::decode_aos_canonical_field::<FeedConfig>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -184,14 +168,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterOracleFeed {
         Ok((Self { feed }, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for SubmitOracleObservation {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let observation = super::decode_aos_canonical_field::<Observation>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -204,14 +186,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SubmitOracleObservation {
         Ok((Self { observation }, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for AggregateOracleFeed {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let feed_id = super::decode_aos_canonical_field::<FeedId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -248,14 +228,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AggregateOracleFeed {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for OpenOracleDispute {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let feed_id = super::decode_aos_canonical_field::<FeedId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -303,14 +281,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for OpenOracleDispute {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for ResolveOracleDispute {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let dispute_id = super::decode_aos_canonical_field::<OracleDisputeId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -342,14 +318,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ResolveOracleDispute {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for ProposeOracleChange {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let change_id = super::decode_aos_canonical_field::<OracleChangeId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -391,14 +365,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ProposeOracleChange {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for VoteOracleChangeStage {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let change_id = super::decode_aos_canonical_field::<OracleChangeId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -435,14 +407,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for VoteOracleChangeStage {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RollbackOracleChange {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let change_id = super::decode_aos_canonical_field::<OracleChangeId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -470,14 +440,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RollbackOracleChange {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for SubmitDefiOracleAttestation {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let attestation = super::decode_aos_canonical_field::<DefiOracleAttestation>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -490,14 +458,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SubmitDefiOracleAttestation {
         Ok((Self { attestation }, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RecordTwitterBinding {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let attestation = super::decode_aos_canonical_field::<TwitterBindingAttestation>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -520,14 +486,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RecordTwitterBinding {
         ))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RevokeTwitterBinding {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = oracle_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let binding_hash = super::decode_aos_canonical_field::<KeyedHash>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -550,12 +514,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RevokeTwitterBinding {
         ))
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use iroha_primitives::numeric::Numeric;
-    use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::{
         nexus::UniversalAccountId,
@@ -564,7 +524,8 @@ mod tests {
             TwitterBindingStatus, kits,
         },
     };
-
+    use iroha_primitives::numeric::Numeric;
+    use norito::core::DecodeFromSlice;
     #[derive(norito::codec::Encode)]
     struct ForgedOpenOracleDispute {
         feed_id: FeedId,
@@ -575,11 +536,9 @@ mod tests {
         evidence_hashes: Vec<Hash>,
         reason: String,
     }
-
     fn feed() -> FeedConfig {
         kits::price_xor_usd().feed_config
     }
-
     fn observation() -> Observation {
         kits::price_xor_usd()
             .observations
@@ -587,19 +546,15 @@ mod tests {
             .expect("observation fixture")
             .clone()
     }
-
     fn request_hash() -> Hash {
         kits::price_xor_usd().connector_request.request_hash()
     }
-
     fn evidence_hash() -> Hash {
         Hash::new(b"oracle-evidence")
     }
-
     fn change_id() -> OracleChangeId {
         OracleChangeId::from(Hash::new(b"oracle-change"))
     }
-
     fn twitter_attestation() -> TwitterBindingAttestation {
         let kit = kits::twitter_follow_binding();
         TwitterBindingAttestation {
@@ -615,7 +570,6 @@ mod tests {
             feed_config_version: FeedConfigVersion(1),
         }
     }
-
     fn defi_attestation() -> DefiOracleAttestation {
         DefiOracleAttestation {
             key: DefiOracleAttestationKey::new(1, 42),
@@ -636,7 +590,6 @@ mod tests {
             }],
         }
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -647,7 +600,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_framed_rejects_truncated<T>(value: &T)
     where
         T: norito::core::NoritoSerialize,
@@ -662,7 +614,6 @@ mod tests {
             );
         }
     }
-
     fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, value: T)
     where
         T: crate::isi::Instruction
@@ -680,7 +631,6 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     fn sample_values() -> (
         RegisterOracleFeed,
         SubmitOracleObservation,
@@ -753,7 +703,6 @@ mod tests {
             },
         )
     }
-
     #[test]
     fn negative_numeric_payload_cannot_decode_as_oracle_dispute_bond() {
         let observation = observation();
@@ -766,13 +715,11 @@ mod tests {
             evidence_hashes: vec![evidence_hash()],
             reason: "negative bond".to_owned(),
         };
-
         assert!(
             OpenOracleDispute::decode_from_slice(&forged.encode()).is_err(),
             "a negative signed payload must not cross the oracle bond quantity boundary"
         );
     }
-
     #[test]
     fn oracle_decode_from_slice_roundtrips() {
         let (
@@ -788,7 +735,6 @@ mod tests {
             record_binding,
             revoke_binding,
         ) = sample_values();
-
         assert_slice_roundtrip(register);
         assert_slice_roundtrip(submit);
         assert_slice_roundtrip(aggregate);
@@ -801,7 +747,6 @@ mod tests {
         assert_slice_roundtrip(record_binding);
         assert_slice_roundtrip(revoke_binding);
     }
-
     #[test]
     fn oracle_framed_decode_rejects_truncated_payloads() {
         let (
@@ -817,7 +762,6 @@ mod tests {
             record_binding,
             revoke_binding,
         ) = sample_values();
-
         assert_framed_rejects_truncated(&register);
         assert_framed_rejects_truncated(&submit);
         assert_framed_rejects_truncated(&aggregate);
@@ -830,7 +774,6 @@ mod tests {
         assert_framed_rejects_truncated(&record_binding);
         assert_framed_rejects_truncated(&revoke_binding);
     }
-
     #[test]
     fn oracle_registry_decodes_type_names() {
         let registry = crate::isi::InstructionRegistry::new()
@@ -858,7 +801,6 @@ mod tests {
             record_binding,
             revoke_binding,
         ) = sample_values();
-
         assert_registry_decodes(&registry, register);
         assert_registry_decodes(&registry, submit);
         assert_registry_decodes(&registry, aggregate);
@@ -871,14 +813,12 @@ mod tests {
         assert_registry_decodes(&registry, record_binding);
         assert_registry_decodes(&registry, revoke_binding);
     }
-
     #[test]
     fn default_registry_encodes_defi_attestation_instruction_box() {
         crate::isi::set_instruction_registry(crate::instruction_registry::default());
         let instruction = crate::isi::InstructionBox::from(SubmitDefiOracleAttestation {
             attestation: defi_attestation(),
         });
-
         norito::to_bytes(&instruction)
             .expect("default registry should encode SubmitDefiOracleAttestation");
     }

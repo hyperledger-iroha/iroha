@@ -1,7 +1,6 @@
 fn alias_grace_until_ms(lease_expiry_ms: Option<u64>) -> Option<u64> {
     lease_expiry_ms.map(|expiry| expiry.saturating_add(ASSET_ALIAS_GRACE_MS))
 }
-
 fn validate_alias_for_asset_definition(
     alias: Option<&AssetDefinitionAlias>,
     definition: &AssetDefinition,
@@ -12,7 +11,6 @@ fn validate_alias_for_asset_definition(
         )
     })
 }
-
 fn dataspace_id_for_alias_segment(
     state_transaction: &StateTransaction<'_, '_>,
     dataspace_alias: &str,
@@ -35,7 +33,6 @@ fn dataspace_id_for_alias_segment(
         }
     })
 }
-
 fn asset_definition_home_dataspace(
     state_transaction: &StateTransaction<'_, '_>,
     definition: &AssetDefinition,
@@ -47,7 +44,6 @@ fn asset_definition_home_dataspace(
             dataspace_id_for_alias_segment(state_transaction, domain.dataspace().as_ref())
         })
 }
-
 fn dataspace_is_public_or_universal(
     state_transaction: &StateTransaction<'_, '_>,
     dataspace_id: DataSpaceId,
@@ -62,7 +58,6 @@ fn dataspace_is_public_or_universal(
                 lane.dataspace_id == dataspace_id && lane.visibility == LaneVisibility::Public
             })
 }
-
 fn ensure_global_asset_definition_home_is_public_or_universal(
     state_transaction: &StateTransaction<'_, '_>,
     definition: &AssetDefinition,
@@ -73,7 +68,6 @@ fn ensure_global_asset_definition_home_is_public_or_universal(
     if definition.balance_scope_policy() != AssetBalancePolicy::Global {
         return Ok(());
     }
-
     let home_dataspace = asset_definition_home_dataspace(state_transaction, definition)
         .ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
@@ -84,7 +78,6 @@ fn ensure_global_asset_definition_home_is_public_or_universal(
                 .into(),
             )
         })?;
-
     if !dataspace_is_public_or_universal(state_transaction, home_dataspace) {
         return Err(InstructionExecutionError::InvariantViolation(
             format!(
@@ -95,6 +88,5 @@ fn ensure_global_asset_definition_home_is_public_or_universal(
             .into(),
         ));
     }
-
     Ok(())
 }

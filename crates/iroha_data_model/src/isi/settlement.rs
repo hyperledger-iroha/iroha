@@ -1,15 +1,3 @@
-use std::collections::{BTreeMap, BTreeSet};
-
-use derive_more::{Constructor, Display, FromStr};
-use getset::{CopyGetters, Getters};
-use iroha_crypto::{Hash, HashOf, derive_non_signing_ed25519_public_key};
-use iroha_data_model_derive::model;
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
-use norito::derive::{JsonDeserialize, JsonSerialize};
-
 pub use self::model::SettlementId;
 use super::*;
 use crate::{
@@ -20,13 +8,20 @@ use crate::{
     oracle::{FeedConfigVersion, FeedEvent, FeedId, FeedSlot, ObservationValue},
     prelude::{AccountId, AssetDefinitionId},
 };
-
+use derive_more::{Constructor, Display, FromStr};
+use getset::{CopyGetters, Getters};
+use iroha_crypto::{Hash, HashOf, derive_non_signing_ed25519_public_key};
+use iroha_data_model_derive::model;
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+use norito::derive::{JsonDeserialize, JsonSerialize};
+use std::collections::{BTreeMap, BTreeSet};
 const FX_CORRIDOR_ESCROW_ACCOUNT_DOMAIN_V1: &[u8] = b"iroha:fx-corridor:escrow-account:v1";
-
 #[model]
 mod model {
     use super::*;
-
     /// One-shot identifier consumed when a settlement commits successfully.
     #[derive(
         Debug,
@@ -53,16 +48,13 @@ mod model {
         pub name: Name,
     }
 }
-
 string_id!(SettlementId);
-
 enum_type! {
     pub enum SettlementExecutionOrder {
         DeliveryThenPayment,
         PaymentThenDelivery,
     }
 }
-
 enum_type! {
     pub enum SettlementAtomicity {
         AllOrNothing,
@@ -70,21 +62,18 @@ enum_type! {
         CommitSecondLeg,
     }
 }
-
 #[allow(clippy::derivable_impls)]
 impl Default for SettlementExecutionOrder {
     fn default() -> Self {
         Self::DeliveryThenPayment
     }
 }
-
 #[allow(clippy::derivable_impls)]
 impl Default for SettlementAtomicity {
     fn default() -> Self {
         Self::AllOrNothing
     }
 }
-
 /// Execution plan covering leg ordering and failure handling.
 #[derive(
     Copy, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, CopyGetters, Decode, Encode, IntoSchema,
@@ -97,14 +86,12 @@ pub struct SettlementPlan {
     /// Atomicity policy to apply when executing the settlement.
     atomicity: SettlementAtomicity,
 }
-
 impl SettlementPlan {
     /// Construct a settlement plan from the desired order and atomicity policy.
     pub const fn new(order: SettlementExecutionOrder, atomicity: SettlementAtomicity) -> Self {
         Self { order, atomicity }
     }
 }
-
 impl Default for SettlementPlan {
     fn default() -> Self {
         Self::new(
@@ -113,7 +100,6 @@ impl Default for SettlementPlan {
         )
     }
 }
-
 /// One leg of a bilateral settlement (asset or payment).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -130,7 +116,6 @@ pub struct SettlementLeg {
     /// Optional metadata (e.g., ISIN, clearing reference).
     pub metadata: Metadata,
 }
-
 /// Immutable identity of one first-release FX corridor.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -146,7 +131,6 @@ pub struct FxCorridorId {
     /// Destination-currency asset definition.
     pub destination_asset_definition_id: AssetDefinitionId,
 }
-
 /// Exact retained oracle event selected by a signed FX settlement.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -162,7 +146,6 @@ pub struct FxCorridorOracleEvidence {
     /// Typed hash of the complete retained feed event.
     pub event_hash: HashOf<FeedEvent>,
 }
-
 /// Deterministic fixed-window usage retained for one FX corridor.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -176,7 +159,6 @@ pub struct FxCorridorUsage {
     /// Total destination currency released in the current window.
     pub destination_amount: Quantity,
 }
-
 /// Immutable routing and pricing policy for one native FX corridor.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -216,7 +198,6 @@ pub struct FxCorridorPolicy {
     /// Whether new settlements may use this policy.
     pub enabled: bool,
 }
-
 impl FxCorridorPolicy {
     /// Return the first static policy invariant violation, if any.
     #[must_use]
@@ -258,7 +239,6 @@ impl FxCorridorPolicy {
         }
         None
     }
-
     /// Return the immutable corridor identity used for protocol escrow derivation.
     #[must_use]
     pub fn corridor_id(&self) -> FxCorridorId {
@@ -271,7 +251,6 @@ impl FxCorridorPolicy {
         }
     }
 }
-
 /// Derive the non-signable reserve account for one exact FX corridor and asset.
 #[must_use]
 pub fn fx_corridor_escrow_account_id_v1(
@@ -290,7 +269,6 @@ pub fn fx_corridor_escrow_account_id_v1(
         ],
     ))
 }
-
 /// Complete governed set of native FX corridor policies.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -300,11 +278,9 @@ pub struct FxCorridorPolicyRegistry {
     /// Bounded O(1)-per-corridor exposure and velocity counters.
     pub usage: BTreeMap<Name, FxCorridorUsage>,
 }
-
 impl FxCorridorPolicyRegistry {
     /// Identifier of the custom parameter carrying all FX corridor policies.
     pub const PARAMETER_ID_STR: &'static str = "iroha:fx_corridor_policies";
-
     /// Construct the registry custom-parameter identifier.
     #[must_use]
     pub fn parameter_id() -> crate::parameter::CustomParameterId {
@@ -312,24 +288,20 @@ impl FxCorridorPolicyRegistry {
             .parse()
             .expect("valid FX corridor policy-registry parameter identifier")
     }
-
     /// Return the policy registered under `policy_id`.
     #[must_use]
     pub fn get(&self, policy_id: &Name) -> Option<&FxCorridorPolicy> {
         self.policies.get(policy_id)
     }
-
     /// Insert or replace a policy under its embedded identifier.
     pub fn upsert(&mut self, policy: FxCorridorPolicy) {
         self.policies.insert(policy.policy_id.clone(), policy);
     }
-
     /// Return retained usage for `policy_id`.
     #[must_use]
     pub fn usage(&self, policy_id: &Name) -> Option<&FxCorridorUsage> {
         self.usage.get(policy_id)
     }
-
     /// Convert the registry into the custom parameter accepted by `SetParameter`.
     #[cfg(feature = "json")]
     #[must_use]
@@ -339,7 +311,6 @@ impl FxCorridorPolicyRegistry {
             iroha_primitives::json::Json::new(self),
         )
     }
-
     /// Decode a matching policy-registry custom parameter.
     ///
     /// # Errors
@@ -356,7 +327,6 @@ impl FxCorridorPolicyRegistry {
         Ok(Some(custom.payload().try_into_any_norito::<Self>()?))
     }
 }
-
 isi! {
     #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
     /// Register or replace a native FX corridor policy.
@@ -365,7 +335,6 @@ isi! {
         pub policy: FxCorridorPolicy,
     }
 }
-
 isi! {
     #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
     /// Fund the isolated destination reserve of one exact FX corridor.
@@ -380,7 +349,6 @@ isi! {
         pub amount: Quantity,
     }
 }
-
 isi! {
     #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
     /// Refund an inactive FX corridor reserve to its immutable owner.
@@ -395,7 +363,6 @@ isi! {
         pub amount: Quantity,
     }
 }
-
 isi! {
     #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
     /// Atomically settle one policy-backed cross-dataspace FX conversion.
@@ -420,33 +387,27 @@ isi! {
         pub oracle_evidence: FxCorridorOracleEvidence,
     }
 }
-
 impl SetFxCorridorPolicy {
     /// Stable wire identifier used by tooling that reports the concrete operation.
     pub const WIRE_ID: &'static str = "iroha.settlement.fx_corridor.policy.set";
 }
-
 impl FundFxCorridorEscrow {
     /// Stable wire identifier used by tooling that reports the concrete operation.
     pub const WIRE_ID: &'static str = "iroha.settlement.fx_corridor.escrow.fund";
 }
-
 impl RefundFxCorridorEscrow {
     /// Stable wire identifier used by tooling that reports the concrete operation.
     pub const WIRE_ID: &'static str = "iroha.settlement.fx_corridor.escrow.refund";
 }
-
 impl SettleFxCorridor {
     /// Stable wire identifier used by tooling that reports the concrete operation.
     pub const WIRE_ID: &'static str = "iroha.settlement.fx_corridor.settle";
 }
-
 impl core::fmt::Display for SetFxCorridorPolicy {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "SET FX CORRIDOR POLICY `{}`", self.policy.policy_id)
     }
 }
-
 impl core::fmt::Display for FundFxCorridorEscrow {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
@@ -456,7 +417,6 @@ impl core::fmt::Display for FundFxCorridorEscrow {
         )
     }
 }
-
 impl core::fmt::Display for RefundFxCorridorEscrow {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
@@ -466,7 +426,6 @@ impl core::fmt::Display for RefundFxCorridorEscrow {
         )
     }
 }
-
 impl core::fmt::Display for SettleFxCorridor {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
@@ -476,7 +435,6 @@ impl core::fmt::Display for SettleFxCorridor {
         )
     }
 }
-
 impl SettlementLeg {
     /// Construct a settlement leg without metadata.
     pub fn new(
@@ -494,7 +452,6 @@ impl SettlementLeg {
         }
     }
 }
-
 isi! {
     #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
     /// Delivery-versus-payment settlement instruction requiring exact counterparty consent.
@@ -514,7 +471,6 @@ isi! {
         pub metadata: Metadata,
     }
 }
-
 isi! {
     #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
     /// Payment-versus-payment settlement instruction requiring exact counterparty consent.
@@ -534,13 +490,11 @@ isi! {
         pub metadata: Metadata,
     }
 }
-
 impl DvpIsi {
     /// Stable wire identifier used by the instruction registry.
     pub const WIRE_ID: &'static str = "iroha.settlement.dvp";
     /// Domain separator for the complete counterparty-authorized `DvP` intent.
     pub const INTENT_HASH_DOMAIN: &'static [u8] = b"iroha:settlement:dvp-intent:v1\0";
-
     /// Construct a `DvP` instruction enforcing basic invariants.
     pub fn new(
         settlement_id: SettlementId,
@@ -556,7 +510,6 @@ impl DvpIsi {
             metadata: Metadata::default(),
         }
     }
-
     /// Return the domain-separated commitment that a counterparty authorizes.
     ///
     /// The commitment covers the complete canonical instruction, including both
@@ -567,13 +520,11 @@ impl DvpIsi {
         Hash::new_from_chunks(&[Self::INTENT_HASH_DOMAIN, encoded.as_slice()])
     }
 }
-
 impl PvpIsi {
     /// Stable wire identifier used by the instruction registry.
     pub const WIRE_ID: &'static str = "iroha.settlement.pvp";
     /// Domain separator for the complete counterparty-authorized `PvP` intent.
     pub const INTENT_HASH_DOMAIN: &'static [u8] = b"iroha:settlement:pvp-intent:v1\0";
-
     /// Construct a `PvP` instruction enforcing basic invariants.
     pub fn new(
         settlement_id: SettlementId,
@@ -589,7 +540,6 @@ impl PvpIsi {
             metadata: Metadata::default(),
         }
     }
-
     /// Return the domain-separated commitment that a counterparty authorizes.
     ///
     /// The commitment covers the complete canonical instruction, including both
@@ -600,7 +550,6 @@ impl PvpIsi {
         Hash::new_from_chunks(&[Self::INTENT_HASH_DOMAIN, encoded.as_slice()])
     }
 }
-
 impl core::fmt::Display for DvpIsi {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
@@ -612,7 +561,6 @@ impl core::fmt::Display for DvpIsi {
         )
     }
 }
-
 impl core::fmt::Display for PvpIsi {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
@@ -624,7 +572,6 @@ impl core::fmt::Display for PvpIsi {
         )
     }
 }
-
 /// Settlement kind recorded in a successful receipt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -646,7 +593,6 @@ pub enum SettlementKind {
     /// Policy-backed native cross-dataspace FX conversion.
     FxCorridor,
 }
-
 /// Enumerates the logical role played by a settlement leg.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -674,7 +620,6 @@ pub enum SettlementLegRole {
     /// Destination-currency payout leg in an FX corridor settlement.
     FxDestination,
 }
-
 /// Snapshot of a single leg in a committed settlement receipt.
 #[allow(missing_copy_implementations)]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -693,7 +638,6 @@ pub struct SettlementLegSnapshot {
     /// Original leg payload.
     pub leg: SettlementLeg,
 }
-
 /// Immutable pricing and route context retained for a successful native FX settlement.
 ///
 /// The two generic leg snapshots retain the actual balance movements. This record additionally
@@ -740,7 +684,6 @@ pub struct FxCorridorSettlementDetails {
     /// Destination quantity paid out.
     pub destination_amount: Quantity,
 }
-
 /// Immutable receipt persisted after one successful settlement.
 ///
 /// The containing world-state map is keyed by the settlement identifier, so the
@@ -773,19 +716,17 @@ pub struct SettlementReceipt {
     /// Block timestamp (milliseconds since Unix epoch).
     pub executed_at_ms: u64,
     /// The two committed settlement legs.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_array"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_array"))]
     pub legs: [SettlementLegSnapshot; 2],
     /// Exact governed FX context, present only for native FX corridor settlements.
     pub fx_corridor: Option<FxCorridorSettlementDetails>,
 }
-
 impl crate::seal::Instruction for DvpIsi {}
 impl crate::seal::Instruction for PvpIsi {}
 impl crate::seal::Instruction for SetFxCorridorPolicy {}
 impl crate::seal::Instruction for FundFxCorridorEscrow {}
 impl crate::seal::Instruction for RefundFxCorridorEscrow {}
 impl crate::seal::Instruction for SettleFxCorridor {}
-
 isi_box! {
     /// Grouping enum for settlement instructions.
     pub enum SettlementInstructionBox {
@@ -803,22 +744,17 @@ isi_box! {
         SettleFxCorridor(SettleFxCorridor),
     }
 }
-
 impl_into_box! {
     DvpIsi | PvpIsi | SetFxCorridorPolicy | FundFxCorridorEscrow | RefundFxCorridorEscrow | SettleFxCorridor => SettlementInstructionBox
 }
-
 impl crate::seal::Instruction for SettlementInstructionBox {}
-
 impl SettlementInstructionBox {
     /// Stable Norito wire identifier for boxed settlement instructions.
     pub const WIRE_ID: &'static str = "iroha.settlement";
 }
-
 fn settlement_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 macro_rules! impl_settlement_decode_from_slice {
     ($ty:ty { $($field:ident : $field_ty:ty),+ $(,)? }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -827,7 +763,6 @@ macro_rules! impl_settlement_decode_from_slice {
                 if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
                     return super::decode_packed_instruction_payload::<Self>(bytes);
                 }
-
                 let mut offset = 0usize;
                 $(
                     let $field = super::decode_aos_canonical_field::<$field_ty>(
@@ -844,7 +779,6 @@ macro_rules! impl_settlement_decode_from_slice {
         }
     };
 }
-
 impl_settlement_decode_from_slice!(DvpIsi {
     settlement_id: SettlementId,
     delivery_leg: SettlementLeg,
@@ -852,7 +786,6 @@ impl_settlement_decode_from_slice!(DvpIsi {
     plan: SettlementPlan,
     metadata: Metadata,
 });
-
 impl_settlement_decode_from_slice!(PvpIsi {
     settlement_id: SettlementId,
     primary_leg: SettlementLeg,
@@ -860,25 +793,21 @@ impl_settlement_decode_from_slice!(PvpIsi {
     plan: SettlementPlan,
     metadata: Metadata,
 });
-
 impl_settlement_decode_from_slice!(SetFxCorridorPolicy {
     policy: FxCorridorPolicy,
 });
-
 impl_settlement_decode_from_slice!(FundFxCorridorEscrow {
     policy_id: Name,
     expected_policy_revision: u64,
     destination_asset_definition_id: AssetDefinitionId,
     amount: Quantity,
 });
-
 impl_settlement_decode_from_slice!(RefundFxCorridorEscrow {
     policy_id: Name,
     expected_policy_revision: u64,
     destination_asset_definition_id: AssetDefinitionId,
     amount: Quantity,
 });
-
 impl_settlement_decode_from_slice!(SettleFxCorridor {
     policy_id: Name,
     expected_policy_revision: u64,
@@ -890,7 +819,6 @@ impl_settlement_decode_from_slice!(SettleFxCorridor {
     expected_destination_amount: Quantity,
     oracle_evidence: FxCorridorOracleEvidence,
 });
-
 impl<'a> norito::core::DecodeFromSlice<'a> for SettlementInstructionBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = settlement_decode_flags();
@@ -944,7 +872,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SettlementInstructionBox {
         Ok((value, offset))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -952,7 +879,6 @@ mod tests {
     use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode, Encode};
     use norito::core::DecodeFromSlice;
-
     #[derive(Encode)]
     struct ForgedSettleFxCorridor {
         policy_id: Name,
@@ -965,7 +891,6 @@ mod tests {
         expected_destination_amount: Quantity,
         oracle_evidence: FxCorridorOracleEvidence,
     }
-
     #[derive(Encode)]
     struct ForgedSettlementLeg {
         asset_definition_id: AssetDefinitionId,
@@ -974,7 +899,6 @@ mod tests {
         to: AccountId,
         metadata: Metadata,
     }
-
     #[derive(Encode)]
     struct ForgedFxCorridorSettlementDetails {
         policy_id: Name,
@@ -993,23 +917,19 @@ mod tests {
         source_amount: Numeric,
         destination_amount: Numeric,
     }
-
     const ALICE_SIGNATORY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
     const BOB_SIGNATORY: &str =
         "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016";
-
     fn account(signatory: &str, _domain: &str) -> AccountId {
         AccountId::new(signatory.parse().expect("public key"))
     }
-
     fn asset(domain: &str, name: &str) -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new(domain, "universal").expect("domain"),
             name.parse().expect("name"),
         )
     }
-
     fn dvp_instruction() -> DvpIsi {
         let settlement_id: SettlementId = "dvp_trade_1".parse().expect("settlement id");
         let delivery_leg = SettlementLeg::new(
@@ -1035,7 +955,6 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     fn pvp_instruction() -> PvpIsi {
         let settlement_id: SettlementId = "pvp_fx_1".parse().expect("settlement id");
         let primary_leg = SettlementLeg::new(
@@ -1061,7 +980,6 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     fn fx_policy() -> FxCorridorPolicy {
         FxCorridorPolicy {
             policy_id: "cbuae_aed_sbp_pkr".parse().expect("policy id"),
@@ -1086,7 +1004,6 @@ mod tests {
             enabled: true,
         }
     }
-
     fn fx_oracle_event() -> FeedEvent {
         FeedEvent {
             feed_id: "aed_pkr".parse().expect("feed id"),
@@ -1099,7 +1016,6 @@ mod tests {
             }),
         }
     }
-
     fn fx_oracle_evidence() -> FxCorridorOracleEvidence {
         let event = fx_oracle_event();
         FxCorridorOracleEvidence {
@@ -1110,7 +1026,6 @@ mod tests {
             event_hash: HashOf::new(&event),
         }
     }
-
     fn fx_settlement_instruction() -> SettleFxCorridor {
         let policy = fx_policy();
         SettleFxCorridor {
@@ -1125,7 +1040,6 @@ mod tests {
             oracle_evidence: fx_oracle_evidence(),
         }
     }
-
     fn fx_funding_instruction() -> FundFxCorridorEscrow {
         let policy = fx_policy();
         FundFxCorridorEscrow {
@@ -1135,7 +1049,6 @@ mod tests {
             amount: Quantity::from(10_000_u32),
         }
     }
-
     fn fx_refund_instruction() -> RefundFxCorridorEscrow {
         let policy = fx_policy();
         RefundFxCorridorEscrow {
@@ -1145,7 +1058,6 @@ mod tests {
             amount: Quantity::from(250_u32),
         }
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -1156,7 +1068,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(
         registry: &crate::isi::InstructionRegistry,
         wire_id: &str,
@@ -1176,7 +1087,6 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     fn dvp_roundtrip_encodes_plan() {
         let settlement_id: SettlementId = "dvp_trade_1".parse().expect("settlement id");
@@ -1196,7 +1106,6 @@ mod tests {
             SettlementExecutionOrder::DeliveryThenPayment,
             SettlementAtomicity::AllOrNothing,
         );
-
         let instruction = DvpIsi {
             settlement_id: settlement_id.clone(),
             delivery_leg: delivery_leg.clone(),
@@ -1204,7 +1113,6 @@ mod tests {
             plan,
             metadata: Metadata::default(),
         };
-
         let bytes = instruction.encode();
         let decoded = DvpIsi::decode(&mut bytes.as_slice()).expect("decode");
         assert_eq!(instruction, decoded);
@@ -1215,7 +1123,6 @@ mod tests {
             delivery_leg.asset_definition_id()
         );
     }
-
     #[test]
     fn pvp_display_includes_identifier() {
         let settlement_id: SettlementId = "pvp_fx_1".parse().expect("settlement id");
@@ -1235,7 +1142,6 @@ mod tests {
             SettlementExecutionOrder::PaymentThenDelivery,
             SettlementAtomicity::CommitSecondLeg,
         );
-
         let instruction = PvpIsi {
             settlement_id,
             primary_leg,
@@ -1243,25 +1149,21 @@ mod tests {
             plan,
             metadata: Metadata::default(),
         };
-
         let formatted = format!("{instruction}");
         assert!(formatted.contains("pvp_fx_1"));
         assert!(formatted.contains("PaymentThenDelivery"));
         assert!(formatted.contains("CommitSecondLeg"));
     }
-
     #[test]
     fn bilateral_intent_hash_binds_complete_instruction() {
         let dvp = dvp_instruction();
         let same = dvp.clone();
         let mut changed = dvp.clone();
         changed.payment_leg.quantity = Quantity::from(1_006_u32);
-
         assert_eq!(dvp.intent_hash(), same.intent_hash());
         assert_ne!(dvp.intent_hash(), changed.intent_hash());
         assert_ne!(dvp.intent_hash(), pvp_instruction().intent_hash());
     }
-
     #[test]
     fn settlement_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(dvp_instruction());
@@ -1289,7 +1191,6 @@ mod tests {
             fx_settlement_instruction(),
         ));
     }
-
     #[test]
     fn fx_protocol_escrow_binds_exact_network_corridor_and_asset() {
         let policy = fx_policy();
@@ -1321,12 +1222,10 @@ mod tests {
             &other_corridor,
             &policy.destination_asset_definition_id,
         );
-
         assert_ne!(first, other_network);
         assert_ne!(first, other_asset);
         assert_ne!(first, other_corridor);
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn settlement_instructions_json_roundtrip() {
@@ -1335,13 +1234,11 @@ mod tests {
         let decoded: DvpIsi =
             norito::json::from_str(&encoded).expect("deserialize DvP instruction");
         assert_eq!(decoded, dvp);
-
         let pvp = pvp_instruction();
         let encoded = norito::json::to_json(&pvp).expect("serialize PvP instruction");
         let decoded: PvpIsi =
             norito::json::from_str(&encoded).expect("deserialize PvP instruction");
         assert_eq!(decoded, pvp);
-
         let policy = SetFxCorridorPolicy {
             policy: fx_policy(),
         };
@@ -1354,11 +1251,9 @@ mod tests {
         let decoded: SetFxCorridorPolicy =
             norito::json::from_str(&encoded).expect("deserialize FX policy instruction");
         assert_eq!(decoded, policy);
-
         assert!(!encoded.contains("source_sink"));
         assert!(!encoded.contains("destination_reserve"));
         assert!(!encoded.contains("rate_numerator"));
-
         let settlement = fx_settlement_instruction();
         let encoded =
             norito::json::to_json(&settlement).expect("serialize FX settlement instruction");
@@ -1366,7 +1261,6 @@ mod tests {
             norito::json::from_str(&encoded).expect("deserialize FX settlement instruction");
         assert_eq!(decoded, settlement);
     }
-
     #[test]
     fn fx_receipt_json_requires_canonical_quantity_strings() {
         let policy = fx_policy();
@@ -1393,7 +1287,6 @@ mod tests {
         let decoded: FxCorridorSettlementDetails =
             norito::json::from_str(&canonical).expect("canonical FX receipt JSON");
         assert_eq!(decoded, details);
-
         for replacement in ["\"source_amount\":10", "\"source_amount\":\"010\""] {
             let malformed = canonical.replace("\"source_amount\":\"10\"", replacement);
             assert!(
@@ -1402,7 +1295,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn committed_settlement_receipt_roundtrips_one_fixed_leg_pair() {
         let DvpIsi {
@@ -1433,12 +1325,10 @@ mod tests {
             ],
             fx_corridor: None,
         };
-
         let bytes = receipt.encode();
         let decoded = SettlementReceipt::decode(&mut bytes.as_slice()).expect("decode receipt");
         assert_eq!(decoded, receipt);
         assert_eq!(decoded.legs.len(), 2);
-
         #[cfg(feature = "json")]
         {
             let json = norito::json::to_json(&receipt).expect("serialize receipt");
@@ -1452,7 +1342,6 @@ mod tests {
             assert_eq!(decoded.legs.len(), 2);
         }
     }
-
     #[test]
     fn negative_numeric_payloads_cannot_decode_as_settlement_quantities() {
         let encoded = ForgedSettlementLeg {
@@ -1467,7 +1356,6 @@ mod tests {
             SettlementLeg::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as a settlement leg"
         );
-
         let policy = fx_policy();
         let recipient = account(BOB_SIGNATORY, "sbp");
         let forged_instruction = ForgedSettleFxCorridor {
@@ -1485,7 +1373,6 @@ mod tests {
             SettleFxCorridor::decode_from_slice(&forged_instruction.encode()).is_err(),
             "a negative signed payload must not decode as an FX settlement instruction"
         );
-
         let forged_receipt = ForgedFxCorridorSettlementDetails {
             policy_id: policy.policy_id,
             policy_revision: policy.revision,
@@ -1509,7 +1396,6 @@ mod tests {
             "a negative signed payload must not decode as a durable FX settlement receipt"
         );
     }
-
     #[test]
     fn settlement_registry_decodes_type_names_and_stable_ids() {
         let registry = crate::isi::registry::default();

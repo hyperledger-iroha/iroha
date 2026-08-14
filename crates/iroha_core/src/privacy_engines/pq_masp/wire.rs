@@ -4,7 +4,10 @@
 //! ciphertext bytes. Wallets retain the large ML-KEM secret keys and decrypted
 //! note plaintexts locally. There is exactly one byte layout for each object;
 //! no suite identifiers, optional fields, or compatibility decoders exist.
-
+use super::relation::{
+    PqMaspNotePlaintextV1, derive_pq_masp_note_commitment_v1,
+    derive_pq_masp_note_encryption_keys_digest_v1,
+};
 use chacha20poly1305::{
     XChaCha20Poly1305,
     aead::{Aead as _, KeyInit as _, Payload},
@@ -23,12 +26,6 @@ use soranet_pq::{
 };
 use thiserror::Error;
 use zeroize::Zeroizing;
-
-use super::relation::{
-    PqMaspNotePlaintextV1, derive_pq_masp_note_commitment_v1,
-    derive_pq_masp_note_encryption_keys_digest_v1,
-};
-
 /// Exact canonical ML-DSA-65 public-key length.
 pub const ML_DSA_65_PUBLIC_KEY_BYTES_V1: usize = 1_952;
 /// Exact canonical ML-DSA-65 signature length.
@@ -54,14 +51,12 @@ pub const PQ_MASP_MAX_AUTHORIZATION_PROOF_BYTES_V1: usize =
 /// Maximum inner STARK size after reserving the fixed authorization header.
 pub const PQ_MASP_MAX_STARK_PROOF_BYTES_V1: usize =
     PQ_MASP_MAX_AUTHORIZATION_PROOF_BYTES_V1 - PQ_MASP_AUTHORIZATION_HEADER_BYTES_V1;
-
 /// Exact wallet-visible encrypted-output, plaintext, and AAD schema.
 ///
 /// Keep this descriptor beside the codec: the compiled governance profile
 /// commits to these bytes and must not describe a stale or alternate wallet
 /// layout.
 pub(crate) const PQ_MASP_WALLET_CIPHERTEXT_SCHEMA_V1: &[u8] = b"typed-output:recipient-id32+encapsulation-digest32+output-commitment32+ciphertext[PQE1+mlkem768-ciphertext1088+nonce24+xchacha20poly1305[PQN1+value-u128be+authorization-key-digest32+recipient-id32+nullifier-key-digest32+rho32+blinding32+memo-digest32]+tag16]|mlkem768-domain-kdf|aad:domain+asset-definition-id-u64be-length+norito+pool-id32+output-commitment32+recipient-id32+encapsulation-digest32";
-
 pub(crate) const AUTHORIZATION_MAGIC_V1: &[u8; 4] = b"PQA1";
 pub(crate) const ENCRYPTED_OUTPUT_MAGIC_V1: &[u8; 4] = b"PQE1";
 const NOTE_PLAINTEXT_MAGIC_V1: &[u8; 4] = b"PQN1";
@@ -77,19 +72,16 @@ const NOTE_KDF_NAMESPACE_V1: &str = "pq-masp-stark-v0";
 const NOTE_KDF_LABEL_V1: &str = "mlkem768-xchacha20poly1305-note-v1";
 const NOTE_ENCAPSULATION_PERSONALIZATION_V1: &[u8] =
     b"iroha:privacy:pq-masp:mlkem768-encapsulation:v1";
-
 /// SHA-256 of the canonical encrypted-output wire KAT.
 pub(crate) const PQ_MASP_ENCRYPTED_OUTPUT_KAT_SHA256_V1: [u8; 32] = [
     0x0e, 0x27, 0x36, 0xc4, 0x42, 0x43, 0x71, 0xf9, 0x03, 0x62, 0x37, 0x91, 0x24, 0xeb, 0xf2, 0xde,
     0x20, 0xd0, 0x17, 0x79, 0x17, 0x4a, 0xc5, 0x54, 0x2a, 0x9c, 0x07, 0xdf, 0x05, 0xb8, 0xe9, 0x34,
 ];
-
 /// SHA-256 of the canonical consensus-bound PQA1 authorization-wrapper KAT.
 pub(crate) const PQ_MASP_AUTHORIZATION_WIRE_KAT_SHA256_V1: [u8; 32] = [
     0xf7, 0xda, 0x65, 0x35, 0x39, 0xb3, 0x2e, 0x7a, 0xbc, 0xd4, 0x67, 0x89, 0x3e, 0x8c, 0xd5, 0x54,
     0x38, 0x5c, 0x54, 0x8f, 0xc8, 0xbd, 0x06, 0x40, 0xdd, 0xe8, 0x4e, 0xbe, 0x6d, 0x86, 0x97, 0x5a,
 ];
-
 /// Exact decoded ML-DSA authorization wrapper.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PqMaspAuthorizationProofRefV1<'a> {
@@ -100,14 +92,12 @@ pub(crate) struct PqMaspAuthorizationProofRefV1<'a> {
     /// Inner transparent STARK proof.
     pub(crate) stark_proof: &'a [u8],
 }
-
 #[derive(Clone, Copy)]
 struct PqMaspEncryptedOutputRefV1<'a> {
     ml_kem_ciphertext: &'a [u8],
     nonce: &'a [u8],
     aead_ciphertext: &'a [u8],
 }
-
 /// Failure of the fixed PQ-MASP authorization or note-encryption wire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PqMaspWireErrorV1 {
@@ -169,11 +159,9 @@ pub enum PqMaspWireErrorV1 {
     #[error("PQ-MASP note key derivation failed")]
     KeyDerivation,
 }
-
 fn is_zero(bytes: &[u8]) -> bool {
     bytes.iter().all(|byte| *byte == 0)
 }
-
 fn checked_sha256_v1(domain: &[u8], value: &[u8]) -> Result<[u8; 32], PqMaspWireErrorV1> {
     let length = u64::try_from(value.len()).map_err(|_| PqMaspWireErrorV1::Encoding)?;
     let mut hash = Sha256::new();
@@ -182,7 +170,6 @@ fn checked_sha256_v1(domain: &[u8], value: &[u8]) -> Result<[u8; 32], PqMaspWire
     hash.update(value);
     Ok(hash.finalize().into())
 }
-
 /// Derive the committed digest for a canonical ML-DSA-65 authorization key.
 pub fn derive_pq_masp_authorization_key_digest_v1(
     public_key: &[u8],
@@ -197,7 +184,6 @@ pub fn derive_pq_masp_authorization_key_digest_v1(
         public_key,
     )?))
 }
-
 /// Derive the committed ML-DSA-65 authorization-key digest from one canonical
 /// secret key without returning or requiring a caller-supplied public key.
 ///
@@ -212,7 +198,6 @@ pub fn derive_pq_masp_authorization_key_digest_from_secret_v1(
         .map_err(|_| PqMaspWireErrorV1::InvalidAuthorizationSecretKey)?;
     derive_pq_masp_authorization_key_digest_v1(&public_key)
 }
-
 /// Validate an ML-DSA-65 secret key and its exact statement key binding.
 pub(super) fn validate_pq_masp_authorization_secret_key_v1(
     expected_key_digest: PrivacyAuthorizationKeyDigestV1,
@@ -225,7 +210,6 @@ pub(super) fn validate_pq_masp_authorization_secret_key_v1(
     }
     Ok(())
 }
-
 /// Derive the public identifier for a canonical ML-KEM-768 recipient key.
 pub fn derive_pq_masp_recipient_id_v1(
     public_key: &[u8],
@@ -242,7 +226,6 @@ pub fn derive_pq_masp_recipient_id_v1(
         public_key,
     )?))
 }
-
 pub(super) fn derive_encapsulation_digest_v1(
     ml_kem_ciphertext: &[u8],
 ) -> Result<PrivacyEncryptionKeyV1, PqMaspWireErrorV1> {
@@ -256,7 +239,6 @@ pub(super) fn derive_encapsulation_digest_v1(
         ml_kem_ciphertext,
     )?))
 }
-
 fn authorization_message_v1(
     statement_digest: PrivacyStatementDigestV1,
     consensus_binding_digest: PrivacyNativeConsensusBindingDigestV1,
@@ -272,14 +254,12 @@ fn authorization_message_v1(
     hash.update(proof_digest);
     Ok(hash.finalize().into())
 }
-
 fn validate_stark_proof_size_v1(stark_proof: &[u8]) -> Result<(), PqMaspWireErrorV1> {
     if stark_proof.is_empty() || stark_proof.len() > PQ_MASP_MAX_STARK_PROOF_BYTES_V1 {
         return Err(PqMaspWireErrorV1::InvalidLength);
     }
     Ok(())
 }
-
 /// Decode exactly one ML-DSA-65 authorization and inner STARK proof.
 pub(crate) fn decode_pq_masp_authorization_proof_v1(
     bytes: &[u8],
@@ -323,7 +303,6 @@ pub(crate) fn decode_pq_masp_authorization_proof_v1(
         stark_proof,
     })
 }
-
 fn encode_authorization_proof_v1(
     public_key: &[u8],
     signature: &[u8],
@@ -351,7 +330,6 @@ fn encode_authorization_proof_v1(
     bytes.extend_from_slice(stark_proof);
     Ok(bytes)
 }
-
 /// Sign a statement, consensus binding, and exact inner STARK with ML-DSA-65.
 pub(crate) fn authorize_pq_masp_stark_proof_v1(
     statement_digest: PrivacyStatementDigestV1,
@@ -383,7 +361,6 @@ pub(crate) fn authorize_pq_masp_stark_proof_v1(
     .map_err(|_| PqMaspWireErrorV1::InvalidAuthorizationSecretKey)?;
     encode_authorization_proof_v1(&public_key, signature.as_bytes(), stark_proof)
 }
-
 /// Verify the ML-DSA-65 wrapper and return the exact inner STARK proof.
 pub(crate) fn verify_pq_masp_authorization_v1<'a>(
     statement_digest: PrivacyStatementDigestV1,
@@ -410,7 +387,6 @@ pub(crate) fn verify_pq_masp_authorization_v1<'a>(
     .map_err(|_| PqMaspWireErrorV1::AuthorizationFailed)?;
     Ok(decoded)
 }
-
 fn note_plaintext_bytes_v1(note: &PqMaspNotePlaintextV1) -> Zeroizing<Vec<u8>> {
     let mut bytes = Zeroizing::new(Vec::with_capacity(PQ_MASP_NOTE_PLAINTEXT_BYTES_V1));
     bytes.extend_from_slice(NOTE_PLAINTEXT_MAGIC_V1);
@@ -423,14 +399,12 @@ fn note_plaintext_bytes_v1(note: &PqMaspNotePlaintextV1) -> Zeroizing<Vec<u8>> {
     bytes.extend_from_slice(&note.memo_digest);
     bytes
 }
-
 fn take_32_v1(bytes: &[u8], start: usize) -> Result<[u8; 32], PqMaspWireErrorV1> {
     bytes
         .get(start..start + 32)
         .and_then(|value| value.try_into().ok())
         .ok_or(PqMaspWireErrorV1::InvalidLength)
 }
-
 fn decode_note_plaintext_v1(bytes: &[u8]) -> Result<PqMaspNotePlaintextV1, PqMaspWireErrorV1> {
     if bytes.len() != PQ_MASP_NOTE_PLAINTEXT_BYTES_V1 {
         return Err(PqMaspWireErrorV1::InvalidLength);
@@ -453,7 +427,6 @@ fn decode_note_plaintext_v1(bytes: &[u8]) -> Result<PqMaspNotePlaintextV1, PqMas
         memo_digest: take_32_v1(bytes, 180)?,
     })
 }
-
 fn note_aad_v1(
     statement: &PqMaspStarkStatementV1,
     commitment: PrivacyCommitmentV1,
@@ -484,7 +457,6 @@ fn note_aad_v1(
     aad.extend_from_slice(encapsulation_digest.as_bytes());
     Ok(aad)
 }
-
 fn derive_note_key_v1(
     shared_secret: &[u8],
     aad: &[u8],
@@ -503,7 +475,6 @@ fn derive_note_key_v1(
     key.copy_from_slice(&derived);
     Ok(key)
 }
-
 fn derive_nonce_v1(
     seed: &HedgedRngSeed,
     commitment: PrivacyCommitmentV1,
@@ -530,7 +501,6 @@ fn derive_nonce_v1(
     }
     Ok(nonce)
 }
-
 fn parse_encrypted_output_v1(
     output: &PrivacyEncryptedOutputV1,
 ) -> Result<PqMaspEncryptedOutputRefV1<'_>, PqMaspWireErrorV1> {
@@ -563,14 +533,12 @@ fn parse_encrypted_output_v1(
         aead_ciphertext,
     })
 }
-
 /// Validate the exact public ML-KEM/XChaCha encrypted-output shape.
 pub fn validate_pq_masp_encrypted_output_v1(
     output: &PrivacyEncryptedOutputV1,
 ) -> Result<(), PqMaspWireErrorV1> {
     parse_encrypted_output_v1(output).map(|_| ())
 }
-
 /// Encrypt one fixed-width PQ-MASP note for an ML-KEM-768 recipient.
 pub(crate) fn encrypt_pq_masp_note_v1(
     statement: &PqMaspStarkStatementV1,
@@ -637,7 +605,6 @@ pub(crate) fn encrypt_pq_masp_note_v1(
     validate_pq_masp_encrypted_output_v1(&output)?;
     Ok((commitment, output))
 }
-
 /// Decrypt and authenticate one PQ-MASP note with an ML-KEM-768 secret key.
 pub fn decrypt_pq_masp_note_v1(
     statement: &PqMaspStarkStatementV1,
@@ -692,7 +659,6 @@ pub fn decrypt_pq_masp_note_v1(
     }
     Ok(note)
 }
-
 /// Recompute and check the ordered output-key digest after wallet encryption.
 pub fn validate_pq_masp_note_encryption_key_digest_v1(
     statement: &PqMaspStarkStatementV1,
@@ -708,11 +674,10 @@ pub fn validate_pq_masp_note_encryption_key_digest_v1(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
-
+    use super::*;
+    use crate::privacy_engines::pq_masp::relation::derive_pq_masp_nullifier_key_digest_v1;
     use iroha_data_model::{
         asset::AssetDefinitionId,
         domain::DomainId,
@@ -727,38 +692,28 @@ mod tests {
     };
     use rand::{SeedableRng as _, TryCryptoRng, TryRngCore, rngs::StdRng};
     use soranet_pq::{generate_mldsa_keypair_from_seed, generate_mlkem_keypair_from_seed};
-
-    use super::*;
-    use crate::privacy_engines::pq_masp::relation::derive_pq_masp_nullifier_key_digest_v1;
-
+    use std::str::FromStr as _;
     fn raw(byte: u8) -> [u8; 32] {
         [byte; 32]
     }
-
     #[derive(Debug)]
     struct InjectedWalletEntropyError;
-
     impl core::fmt::Display for InjectedWalletEntropyError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected PQ-MASP wallet entropy failure")
         }
     }
-
     struct AdversarialWalletRng {
         fail: bool,
     }
-
     impl TryRngCore for AdversarialWalletRng {
         type Error = InjectedWalletEntropyError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(InjectedWalletEntropyError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(InjectedWalletEntropyError)
         }
-
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             if self.fail {
                 let midpoint = destination.len() / 2;
@@ -769,9 +724,7 @@ mod tests {
             Ok(())
         }
     }
-
     impl TryCryptoRng for AdversarialWalletRng {}
-
     fn statement_shell() -> PqMaspStarkStatementV1 {
         PqMaspStarkStatementV1 {
             context: PrivacyStatementContextV1 {
@@ -805,7 +758,6 @@ mod tests {
             authorization_epoch: 1,
         }
     }
-
     #[test]
     fn protocol_domains_use_the_one_canonical_external_identifier() {
         let label = PrivacyProtocolIdV1::PqMaspStarkV0.canonical_label();
@@ -814,7 +766,6 @@ mod tests {
         assert_ne!(AUTHORIZATION_CONTEXT_V1, b"iroha-pq-masp-stark-v0");
         assert_ne!(NOTE_KDF_NAMESPACE_V1, "iroha/privacy/pq-masp-stark-v0");
     }
-
     #[test]
     fn dependency_parameter_sizes_match_the_pinned_wire() {
         assert_eq!(
@@ -834,14 +785,12 @@ mod tests {
             ML_KEM_768_CIPHERTEXT_BYTES_V1
         );
     }
-
     #[test]
     fn wallet_schema_matches_the_exact_plaintext_and_aad_layout() {
         assert_eq!(
             PQ_MASP_WALLET_CIPHERTEXT_SCHEMA_V1,
             b"typed-output:recipient-id32+encapsulation-digest32+output-commitment32+ciphertext[PQE1+mlkem768-ciphertext1088+nonce24+xchacha20poly1305[PQN1+value-u128be+authorization-key-digest32+recipient-id32+nullifier-key-digest32+rho32+blinding32+memo-digest32]+tag16]|mlkem768-domain-kdf|aad:domain+asset-definition-id-u64be-length+norito+pool-id32+output-commitment32+recipient-id32+encapsulation-digest32"
         );
-
         let statement = statement_shell();
         let value = u128::from_be_bytes([
             0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
@@ -870,7 +819,6 @@ mod tests {
             decode_note_plaintext_v1(&plaintext).expect("canonical plaintext"),
             note
         );
-
         let mut stale_little_endian = plaintext.to_vec();
         stale_little_endian[4..20].copy_from_slice(&value.to_le_bytes());
         let stale_note = decode_note_plaintext_v1(&stale_little_endian)
@@ -883,7 +831,6 @@ mod tests {
                 .expect("canonical note commitment"),
             "a stale little-endian wallet layout must not alias the canonical note"
         );
-
         let commitment = PrivacyCommitmentV1::new(raw(0x87));
         let recipient = PrivacyRecipientIdV1::new(raw(0x98));
         let encapsulation_digest = PrivacyEncryptionKeyV1::new(raw(0xa9));
@@ -903,7 +850,6 @@ mod tests {
         expected_aad.extend_from_slice(recipient.as_bytes());
         expected_aad.extend_from_slice(encapsulation_digest.as_bytes());
         assert_eq!(aad, expected_aad);
-
         let reordered = note_aad_v1(
             &statement,
             commitment,
@@ -916,7 +862,6 @@ mod tests {
             "recipient and encapsulation roles must not alias"
         );
     }
-
     #[test]
     fn mlkem_xchacha_note_roundtrip_and_mutations_fail_closed() {
         let recipient_keys = generate_mlkem_keypair_from_seed(
@@ -1005,7 +950,6 @@ mod tests {
             decrypt_pq_masp_note_v1(&cross_asset, &output, recipient_keys.secret_key()),
             Err(PqMaspWireErrorV1::AuthenticationFailed)
         );
-
         let mut mutations = Vec::new();
         let mut truncated = output.clone();
         truncated.ciphertext.pop();
@@ -1046,7 +990,6 @@ mod tests {
                         .is_err()
             );
         }
-
         let mut self_consistent_encapsulation_substitution = output.clone();
         self_consistent_encapsulation_substitution.ciphertext[4] ^= 1;
         let kem_end = 4 + ML_KEM_768_CIPHERTEXT_BYTES_V1;
@@ -1070,7 +1013,6 @@ mod tests {
             ),
             Err(PqMaspWireErrorV1::AuthenticationFailed)
         );
-
         let wrong_keys = generate_mlkem_keypair_from_seed(
             MlKemSuite::MlKem768,
             HedgedRngSeed::from_entropy(raw(27)),
@@ -1082,7 +1024,6 @@ mod tests {
             Err(PqMaspWireErrorV1::EncryptedOutputBinding)
         );
     }
-
     #[test]
     fn mldsa_authorization_binds_statement_consensus_key_and_inner_proof_bytes() {
         let authorization_keys = generate_mldsa_keypair_from_seed(
@@ -1119,7 +1060,6 @@ mod tests {
         )
         .expect("verify authorization");
         assert_eq!(verified.stark_proof, stark_proof);
-
         let mut mutations = Vec::new();
         let mut bad_magic = encoded.clone();
         bad_magic[0] ^= 1;
@@ -1186,7 +1126,6 @@ mod tests {
             ),
             Err(PqMaspWireErrorV1::ZeroRandomness)
         );
-
         let mut zero_signature = encoded.clone();
         let signature_start = 8 + ML_DSA_65_PUBLIC_KEY_BYTES_V1;
         zero_signature[signature_start..signature_start + ML_DSA_65_SIGNATURE_BYTES_V1].fill(0);
@@ -1207,7 +1146,6 @@ mod tests {
             Err(PqMaspWireErrorV1::InvalidLength)
         );
     }
-
     #[test]
     fn zero_seed_and_noncanonical_keys_are_rejected() {
         let statement = statement_shell();

@@ -3,9 +3,6 @@
 //!
 //! These tests focus on making sure the queue rejects expired payloads and that the
 //! ready/pending drain helpers stay panic-free under concurrent pressure.
-
-use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, time::Duration};
-
 use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_core::{
     kura::Kura,
@@ -18,8 +15,8 @@ use iroha_crypto::KeyPair;
 use iroha_data_model::{domain::Domain, prelude::*};
 use iroha_primitives::time::TimeSource;
 use nonzero_ext::nonzero;
+use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, time::Duration};
 use tokio::time::sleep;
-
 /// Helper trait exposing queue drain helpers for the integration tests.
 ///
 /// The production queue exposes `get_transactions_for_block` and
@@ -29,32 +26,26 @@ trait QueueDrainExt {
     fn drain_ready(&self, view: &StateView<'_>, limit: NonZeroUsize) -> Vec<TransactionGuard>;
     fn drain_pending(&self, view: &StateView<'_>) -> Vec<AcceptedTransaction<'static>>;
 }
-
 impl QueueDrainExt for Arc<Queue> {
     fn drain_ready(&self, view: &StateView<'_>, limit: NonZeroUsize) -> Vec<TransactionGuard> {
         let mut drained = Vec::with_capacity(limit.get());
         self.get_transactions_for_block(view, limit, &mut drained);
         drained
     }
-
     fn drain_pending(&self, view: &StateView<'_>) -> Vec<AcceptedTransaction<'static>> {
         self.all_transactions(view).collect()
     }
 }
-
 fn checked_random_queue_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked queue transaction keypair")
 }
-
 #[test]
 fn queue_regression_fixture_uses_checked_randomness() {
     let _key_pair = checked_random_queue_keypair();
 }
-
 fn build_state() -> (Arc<State>, NetworkId, AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-
     let key_pair = checked_random_queue_keypair();
     let (public_key, _) = key_pair.clone().into_parts();
     let domain_id: DomainId =
@@ -63,7 +54,6 @@ fn build_state() -> (Arc<State>, NetworkId, AccountId, KeyPair) {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty());
-
     let chain_id = ChainId::from("queue-regressions-chain");
     let state = Arc::new(State::new_with_chain_for_testing(
         world,
@@ -72,10 +62,8 @@ fn build_state() -> (Arc<State>, NetworkId, AccountId, KeyPair) {
         chain_id.clone(),
     ));
     let network_id = *state.network_id_ref();
-
     (state, network_id, account_id, key_pair)
 }
-
 fn queue_config(capacity: usize, ttl: Duration) -> QueueConfig {
     QueueConfig {
         capacity: NonZeroUsize::new(capacity).expect("non-zero capacity"),
@@ -84,7 +72,6 @@ fn queue_config(capacity: usize, ttl: Duration) -> QueueConfig {
         ..QueueConfig::default()
     }
 }
-
 fn make_transaction(
     network_id: &NetworkId,
     authority: &AccountId,
@@ -106,14 +93,12 @@ fn make_transaction(
     let tx = builder.sign(key_pair.private_key());
     AcceptedTransaction::new_unchecked(Cow::Owned(tx))
 }
-
 #[test]
 fn queue_rejects_explicitly_expired_transactions() {
     // Coverage: Queue::is_expired TTL override path (`queue.rs`).
     let (state, chain_id, authority, key_pair) = build_state();
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
     let queue = Queue::from_config(queue_config(8, Duration::from_secs(60)), events_sender);
-
     let expired = make_transaction(
         &chain_id,
         &authority,
@@ -122,27 +107,21 @@ fn queue_rejects_explicitly_expired_transactions() {
         Some(Duration::from_secs(1)),
         Duration::from_secs(0),
     );
-
     assert!(queue.is_expired(&expired), "transaction should be expired");
-
     let view = state.view();
     let result = queue.push(expired, view);
-
     match result {
         Err(failure) => assert!(matches!(failure.err, QueueError::Expired)),
         Ok(()) => panic!("expired transaction unexpectedly enqueued"),
     }
-
     assert_eq!(queue.queued_len(), 0, "expired transaction must not linger");
 }
-
 #[test]
 fn queue_rejects_transactions_expiring_by_config_ttl() {
     // Coverage: Queue::is_expired fallback to config TTL (`queue.rs`).
     let (state, chain_id, authority, key_pair) = build_state();
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(4);
     let queue = Queue::from_config(queue_config(4, Duration::from_millis(10)), events_sender);
-
     let expired = make_transaction(
         &chain_id,
         &authority,
@@ -151,23 +130,18 @@ fn queue_rejects_transactions_expiring_by_config_ttl() {
         None,
         Duration::from_secs(0),
     );
-
     assert!(
         queue.is_expired(&expired),
         "config TTL should expire transaction"
     );
-
     let view = state.view();
     let result = queue.push(expired, view);
-
     match result {
         Err(failure) => assert!(matches!(failure.err, QueueError::Expired)),
         Ok(()) => panic!("expired transaction unexpectedly enqueued"),
     }
-
     assert_eq!(queue.queued_len(), 0, "expired transaction must not linger");
 }
-
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_ready_and_pending_drains_stay_consistent() {
     // Coverage: concurrent access to the queue drain loops (ready vs. pending).
@@ -177,9 +151,7 @@ async fn concurrent_ready_and_pending_drains_stay_consistent() {
         queue_config(64, Duration::from_secs(60)),
         events_sender,
     ));
-
     let now = TimeSource::new_system().get_unix_time();
-
     // Pre-seed a few transactions to exercise both drain paths immediately.
     for nonce in 0..8 {
         let tx = make_transaction(
@@ -198,7 +170,6 @@ async fn concurrent_ready_and_pending_drains_stay_consistent() {
             .push(tx, state.view())
             .expect("queue accepts seed transaction");
     }
-
     let queue_for_ready = Arc::clone(&queue);
     let state_for_ready = Arc::clone(&state);
     let ready_task = async move {
@@ -211,7 +182,6 @@ async fn concurrent_ready_and_pending_drains_stay_consistent() {
             sleep(Duration::from_millis(2)).await;
         }
     };
-
     let queue_for_pending = Arc::clone(&queue);
     let state_for_pending = Arc::clone(&state);
     let pending_task = async move {
@@ -222,7 +192,6 @@ async fn concurrent_ready_and_pending_drains_stay_consistent() {
             sleep(Duration::from_millis(1)).await;
         }
     };
-
     let queue_for_push = Arc::clone(&queue);
     let state_for_push = Arc::clone(&state);
     let chain_id_for_push = chain_id.clone();
@@ -247,9 +216,7 @@ async fn concurrent_ready_and_pending_drains_stay_consistent() {
             sleep(Duration::from_millis(1)).await;
         }
     };
-
     tokio::join!(ready_task, pending_task, push_task);
-
     // The queue should stay internally consistent despite the concurrent drains.
     let remaining = queue.queued_len();
     if remaining > 0 {

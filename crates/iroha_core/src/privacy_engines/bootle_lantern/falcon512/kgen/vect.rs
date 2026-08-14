@@ -1,17 +1,13 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
-
 use super::fxp::{FXC, FXR, GM_TAB};
-
 // ========================================================================
 // Fixed-point vector operations
 // ========================================================================
-
 // In FFT representation, we only keep half of the coefficients, because
 // all our vectors are real in non-FFT; thus, the FFT representation is
 // redundant. For 0 <= k < n/2, f[k] contains the real part, and f[k + n/2]
 // the imaginary part of the complex value.
-
 // Convert a (real) vector to its FFT representation.
 pub(crate) fn vect_FFT(logn: u32, f: &mut [FXR]) {
     let hn = 1usize << (logn - 1);
@@ -44,7 +40,6 @@ pub(crate) fn vect_FFT(logn: u32, f: &mut [FXR]) {
         t = ht;
     }
 }
-
 // Convert back from FFT representation into a real vector.
 //
 // Note: in the final outer iteration:
@@ -108,21 +103,18 @@ pub(crate) fn vect_iFFT(logn: u32, f: &mut [FXR]) {
         ht = t;
     }
 }
-
 // Set vector d to the value of polynomial f.
 pub(crate) fn vect_to_fxr(logn: u32, d: &mut [FXR], f: &[i8]) {
     for i in 0..(1usize << logn) {
         d[i] = FXR::from_i32(f[i] as i32);
     }
 }
-
 // Add vector b to vector a. This works in both real and FFT representations.
 pub(crate) fn vect_add(logn: u32, a: &mut [FXR], b: &[FXR]) {
     for i in 0..(1usize << logn) {
         a[i] += b[i];
     }
 }
-
 // Multiply vector a by constant c. This works in both real and FFT
 // representations.
 pub(crate) fn vect_mul_realconst(logn: u32, a: &mut [FXR], c: FXR) {
@@ -130,14 +122,12 @@ pub(crate) fn vect_mul_realconst(logn: u32, a: &mut [FXR], c: FXR) {
         a[i] *= c;
     }
 }
-
 // Multiply vector a by 2^e. Exponent e should be in the [0,30] range.
 pub(crate) fn vect_mul2e(logn: u32, a: &mut [FXR], e: u32) {
     for i in 0..(1usize << logn) {
         a[i].set_mul2e(e);
     }
 }
-
 // Multiply vector a by vector b. The vectors must be in FFT representation,
 // and the result is in FFT representation.
 pub(crate) fn vect_mul_fft(logn: u32, a: &mut [FXR], b: &[FXR]) {
@@ -156,14 +146,12 @@ pub(crate) fn vect_mul_fft(logn: u32, a: &mut [FXR], b: &[FXR]) {
         a[i + hn] = z.im;
     }
 }
-
 // Convert a vector into its Hermitian adjoint (in FFT representation).
 pub(crate) fn vect_adj_fft(logn: u32, a: &mut [FXR]) {
     for i in (1usize << (logn - 1))..(1usize << logn) {
         a[i].set_neg();
     }
 }
-
 // Multiply vector a by the self-adjoint vector b. Both vectors are in FFT
 // representation. Since the FFT representation of a self-adjoint vector
 // contains only real numbers, the second half of b contains only zeros and
@@ -176,7 +164,6 @@ pub(crate) fn vect_mul_selfadj_fft(logn: u32, a: &mut [FXR], b: &[FXR]) {
         a[i + hn] *= c;
     }
 }
-
 // Divide vector a by the self-adjoint vector b. Both vectors are in FFT
 // representation. Since the FFT representation of a self-adjoint vector
 // contains only real numbers, the second half of b contains only zeros and
@@ -192,7 +179,6 @@ pub(crate) fn vect_div_selfadj_fft(logn: u32, a: &mut [FXR], b: &[FXR]) {
         a[i + hn] /= c;
     }
 }
-
 // Compute d = a*adj(a) + b*adj(b). Polynomials are in FFT representation.
 // Since d is self-adjoint, it is half-size (only the low half is set, the
 // high half is implicitly zero).
@@ -202,7 +188,6 @@ pub(crate) fn vect_norm_fft(logn: u32, d: &mut [FXR], a: &[FXR], b: &[FXR]) {
         d[i] = a[i].sqr() + a[i + hn].sqr() + b[i].sqr() + b[i + hn].sqr();
     }
 }
-
 // Compute d = (2^e)/(a*adj(a) + b*adj(b)). Polynomials are in FFT
 // representation. Since d is self-adjoint, it is half-size (only the
 // low half is set, the high half is implicitly zero).
@@ -215,5 +200,4 @@ pub(crate) fn vect_invnorm_fft(logn: u32, d: &mut [FXR], a: &[FXR], b: &[FXR], e
         d[i] = r / (z1 + z2);
     }
 }
-
 // ========================================================================

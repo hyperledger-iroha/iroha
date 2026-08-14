@@ -4,17 +4,13 @@
 //! refusal scenario fixtures defined in `fixtures/sorafs_gateway/capability_refusal`.
 //! Scenarios drive the capability refusal conformance suite, operator
 //! self-certification kit, and SDK regression matrix.
-
+use eyre::{Result as EyreResult, WrapErr};
+use norito::json::{self, Value};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-
-use eyre::{Result as EyreResult, WrapErr};
-use norito::json::{self, Value};
-
 const SCENARIOS_FILE: &str = "scenarios.json";
-
 /// Describes a single capability refusal scenario.
 #[derive(Debug, Clone)]
 pub struct CapabilityRefusalScenario {
@@ -43,7 +39,6 @@ pub struct CapabilityRefusalScenario {
     /// Canonical gateway mutation payload stored for the scenario.
     pub gateway: Option<Value>,
 }
-
 /// Canonical response emitted by the gateway for a capability refusal.
 #[derive(Debug, Clone)]
 pub struct CapabilityRefusalResponse {
@@ -56,7 +51,6 @@ pub struct CapabilityRefusalResponse {
     /// Canonical gateway mutation payload associated with the refusal.
     pub gateway: Option<Value>,
 }
-
 /// Load all capability refusal scenarios from disk.
 ///
 /// # Errors
@@ -72,7 +66,6 @@ pub fn load_scenarios() -> EyreResult<Vec<CapabilityRefusalScenario>> {
     let array = value
         .as_array()
         .ok_or_else(|| eyre::eyre!("capability refusal scenarios file must contain an array"))?;
-
     array
         .iter()
         .map(|entry| {
@@ -80,7 +73,6 @@ pub fn load_scenarios() -> EyreResult<Vec<CapabilityRefusalScenario>> {
         })
         .collect()
 }
-
 /// Load capability refusal scenarios and convert them into canonical responses.
 ///
 /// # Errors
@@ -92,13 +84,11 @@ pub fn load_responses() -> EyreResult<Vec<CapabilityRefusalResponse>> {
         .map(|scenario| Ok(CapabilityRefusalResponse::from(&scenario)))
         .collect()
 }
-
 fn parse_scenario(root: &Path, value: &Value) -> EyreResult<CapabilityRefusalScenario> {
     let map = value
         .as_object()
         .cloned()
         .ok_or_else(|| eyre::eyre!("scenario entry must be a JSON object"))?;
-
     let id = required_string(&map, "id")?;
     let description = required_string(&map, "description")?;
     let status = required_u64(&map, "status")?;
@@ -122,7 +112,6 @@ fn parse_scenario(root: &Path, value: &Value) -> EyreResult<CapabilityRefusalSce
     let request = load_optional_fixture(root, request_fixture.as_deref(), &id, "request")?;
     let response = load_optional_fixture(root, response_fixture.as_deref(), &id, "response")?;
     let gateway = load_optional_fixture(root, gateway_fixture.as_deref(), &id, "gateway")?;
-
     Ok(CapabilityRefusalScenario {
         id,
         description,
@@ -138,29 +127,24 @@ fn parse_scenario(root: &Path, value: &Value) -> EyreResult<CapabilityRefusalSce
         gateway,
     })
 }
-
 fn required_string(map: &json::Map, key: &str) -> EyreResult<String> {
     map.get(key)
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .ok_or_else(|| eyre::eyre!("missing or invalid `{key}` field in capability refusal entry"))
 }
-
 fn required_u64(map: &json::Map, key: &str) -> EyreResult<u64> {
     map.get(key)
         .and_then(Value::as_u64)
         .ok_or_else(|| eyre::eyre!("missing or invalid `{key}` field in capability refusal entry"))
 }
-
 /// Root directory that contains the capability refusal fixtures.
 pub fn fixtures_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fixtures/sorafs_gateway/capability_refusal")
 }
-
 fn display(path: &Path) -> String {
     path.display().to_string()
 }
-
 fn load_optional_fixture(
     root: &Path,
     relative: Option<&str>,
@@ -187,7 +171,6 @@ fn load_optional_fixture(
     })?;
     Ok(Some(value))
 }
-
 impl From<&CapabilityRefusalScenario> for CapabilityRefusalResponse {
     fn from(scenario: &CapabilityRefusalScenario) -> Self {
         let body = build_response_body(scenario);
@@ -199,7 +182,6 @@ impl From<&CapabilityRefusalScenario> for CapabilityRefusalResponse {
         }
     }
 }
-
 fn build_response_body(scenario: &CapabilityRefusalScenario) -> Value {
     match scenario.response.clone() {
         Some(Value::Object(mut map)) => {
@@ -238,7 +220,6 @@ fn build_response_body(scenario: &CapabilityRefusalScenario) -> Value {
         }
     }
 }
-
 fn normalize_details(details: &Value) -> Value {
     match details {
         Value::Object(map) if !map.is_empty() => Value::Object(map.clone()),
@@ -250,11 +231,9 @@ fn normalize_details(details: &Value) -> Value {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn scenarios_fixture_is_well_formed() {
         let scenarios = load_scenarios().expect("load capability refusal scenarios");

@@ -1,8 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Configuration retrieval and mutation integration tests.
-
-use std::{thread, time::Duration};
-
 use integration_tests::sandbox;
 use iroha_config::client_api::{
     ConfigUpdateDTO, Logger, NetworkUpdate, ResumeHashDirective, SoranetHandshakePowSummary,
@@ -11,7 +8,7 @@ use iroha_config::client_api::{
 use iroha_data_model::Level;
 use iroha_test_network::NetworkBuilder;
 use nonzero_ext::nonzero;
-
+use std::{thread, time::Duration};
 const TEST_POW_DIFFICULTY: u8 = 7;
 const TEST_POW_MAX_FUTURE_SKEW: u64 = 720;
 const TEST_POW_MIN_TTL: u64 = 180;
@@ -30,7 +27,6 @@ const CONFIG_APPLY_RETRY_DELAY: Duration = Duration::from_millis(100);
 const CONFIG_PROPAGATION_RETRY_ATTEMPTS: usize = 600;
 const CONFIG_PROPAGATION_RETRY_DELAY: Duration = Duration::from_millis(200);
 const CONFIG_RECONCILIATION_RETRY_ATTEMPTS: usize = 300;
-
 #[test]
 fn config_scenarios() -> eyre::Result<()> {
     let builder = NetworkBuilder::new()
@@ -86,23 +82,17 @@ fn config_scenarios() -> eyre::Result<()> {
         return Ok(());
     };
     let client = network.client();
-
     soranet_pow_puzzle_config_roundtrips_scenario(&client)?;
     retrieve_update_config_scenario(&client)?;
     soranet_pow_puzzle_update_propagates_across_peers_scenario(&network, &rt)?;
-
     Ok(())
 }
-
 fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Result<()> {
     let config = client.get_config()?;
-
     assert_eq!(config.network.block_gossip_size, nonzero!(100u32));
     assert_eq!(config.queue.capacity, nonzero!(100_000_usize));
-
     let initial_level = config.logger.level;
     let initial_filter = config.logger.filter.clone();
-
     let new_level = if initial_level == Level::ERROR {
         Level::INFO
     } else {
@@ -113,7 +103,6 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
     } else {
         Some("iroha_p2p=trace".parse()?)
     };
-
     client.set_config(&ConfigUpdateDTO {
         logger: Logger {
             level: new_level,
@@ -125,19 +114,15 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
         transport: None,
         compute_pricing: None,
     })?;
-
     let config = client.get_config()?;
-
     assert_eq!(config.network.block_gossip_size, nonzero!(100u32));
     assert_eq!(config.queue.capacity, nonzero!(100_000_usize));
     assert_eq!(config.logger.level, new_level);
     assert_eq!(config.logger.filter, new_filter);
-
     // Now override SoraNet handshake settings.
     let descriptor_hex =
         "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f".to_string();
     let resume_hex = "aabbccddeeff00112233445566778899".to_string();
-
     let handshake_update = ConfigUpdateDTO {
         logger: Logger {
             level: new_level,
@@ -175,7 +160,6 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
         compute_pricing: None,
     };
     client.set_config(&handshake_update)?;
-
     let mut config = client.get_config()?;
     for _ in 0..CONFIG_APPLY_RETRY_ATTEMPTS {
         let handshake = &config.network.soranet_handshake;
@@ -200,10 +184,8 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
     assert_eq!(puzzle.lanes, UPDATED_POW_LANES);
     assert!(!config.network.require_sm_handshake_match);
     assert!(!config.network.require_sm_openssl_preview_match);
-
     Ok(())
 }
-
 fn soranet_pow_puzzle_config_roundtrips_scenario(
     client: &iroha::client::Client,
 ) -> eyre::Result<()> {
@@ -218,10 +200,8 @@ fn soranet_pow_puzzle_config_roundtrips_scenario(
     assert_eq!(puzzle.memory_kib, INITIAL_POW_MEMORY_KIB);
     assert_eq!(puzzle.time_cost, INITIAL_POW_TIME_COST);
     assert_eq!(puzzle.lanes, INITIAL_POW_LANES);
-
     Ok(())
 }
-
 #[allow(clippy::too_many_lines)]
 fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
     network: &sandbox::SerializedNetwork,
@@ -229,7 +209,6 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
 ) -> eyre::Result<()> {
     // Wait for genesis to be committed.
     rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 1).await })?;
-
     let peers: Vec<_> = network.peers().iter().collect();
     let (peer_to_update, other_peers) = peers
         .split_first()
@@ -244,7 +223,6 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
     let baseline_puzzle = baseline_pow
         .puzzle
         .expect("puzzle summary present at baseline");
-
     let bump_u8 = |current: u8, desired: u8| {
         if current == desired {
             desired.saturating_add(1)
@@ -266,7 +244,6 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
             desired
         }
     };
-
     let target_difficulty = bump_u8(baseline_pow.difficulty, TEST_POW_DIFFICULTY);
     let target_max_future_skew =
         bump_u64(baseline_pow.max_future_skew_secs, TEST_POW_MAX_FUTURE_SKEW);
@@ -275,7 +252,6 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
     let target_puzzle_memory = bump_u32(baseline_puzzle.memory_kib, TEST_POW_MEMORY_KIB);
     let target_puzzle_time = bump_u32(baseline_puzzle.time_cost, TEST_POW_TIME_COST);
     let target_puzzle_lanes = bump_u32(baseline_puzzle.lanes, TEST_POW_LANES).min(16);
-
     let pow_matches_target = |pow: &SoranetHandshakePowSummary| {
         pow.required
             && pow.difficulty == target_difficulty
@@ -288,7 +264,6 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
                     && puzzle.lanes == target_puzzle_lanes
             })
     };
-
     for peer in other_peers {
         let remote_pow = peer.client().get_config()?.network.soranet_handshake.pow;
         assert!(
@@ -297,7 +272,6 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
             peer.id()
         );
     }
-
     let pow_update = ConfigUpdateDTO {
         logger: Logger {
             level: baseline.logger.level,
@@ -330,9 +304,7 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
         transport: None,
         compute_pricing: None,
     };
-
     client.set_config(&pow_update)?;
-
     let mut initiator_pow = client.get_config()?.network.soranet_handshake.pow;
     let mut initiator_applied = pow_matches_target(&initiator_pow);
     for _ in 0..CONFIG_APPLY_RETRY_ATTEMPTS {
@@ -348,7 +320,6 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
         initiator_applied,
         "failed to apply updated puzzle settings on the initiating peer"
     );
-
     let mut propagated = false;
     for _ in 0..CONFIG_PROPAGATION_RETRY_ATTEMPTS {
         propagated = other_peers
@@ -362,7 +333,6 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
         }
         thread::sleep(CONFIG_PROPAGATION_RETRY_DELAY);
     }
-
     if !propagated {
         println!(
             "Target PoW: required={target_difficulty}, diff={target_difficulty}, max_skew={target_max_future_skew}, min_ttl={target_min_ttl}, ticket_ttl={target_ticket_ttl}, puzzle={{memory_kib={target_puzzle_memory}, time_cost={target_puzzle_time}, lanes={target_puzzle_lanes}}}"
@@ -449,12 +419,10 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
             thread::sleep(CONFIG_PROPAGATION_RETRY_DELAY);
         }
     }
-
     assert!(
         propagated,
         "puzzle configuration did not propagate to all peers"
     );
-
     rt.block_on(network.shutdown());
     Ok(())
 }

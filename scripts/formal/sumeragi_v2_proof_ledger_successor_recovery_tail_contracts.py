@@ -805,6 +805,15 @@ def _persistent_recovery_cut_source_fidelity_errors(
     sources = {
         name: path.read_text(encoding="utf-8") for name, path in paths.items()
     }
+    for source_name in ("adapter", "runtime", "effects", "worker"):
+        _loaded_path, reviewed_source = _read_reviewed_rust_source(
+            repo_root,
+            paths[source_name].relative_to(repo_root).as_posix(),
+            errors,
+            f"persistent recovery-cut {source_name} source",
+        )
+        if reviewed_source:
+            sources[source_name] = reviewed_source
 
     def require_context_item(
         source_name: str,
@@ -2156,9 +2165,7 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
             "active lifecycle clean shutdown",
             active_shutdowns,
             (
-                "mut launched",
-                "local_proposal",
-                "runner_activation",
+                "let Self { launched, local_proposal, runner_activation, } = self",
                 "output_guard.begin_fail_stop_operation()",
                 "runner_activation.retire(&launched.leader_wire_ingress_binding.ingress)",
                 "drop(local_proposal)",

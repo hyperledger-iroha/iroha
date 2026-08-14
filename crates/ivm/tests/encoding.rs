@@ -1,8 +1,6 @@
 use ivm::{encoding, instruction};
-
 mod wide {
     use super::*;
-
     #[test]
     fn encode_decode_rr() {
         let word = encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 3, 1, 2);
@@ -12,7 +10,6 @@ mod wide {
         assert_eq!(rs1, 1);
         assert_eq!(rs2, 2);
     }
-
     #[test]
     fn encode_decode_ri() {
         let word = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 5, 5, 7);
@@ -22,7 +19,6 @@ mod wide {
         assert_eq!(rs1, 5);
         assert_eq!(imm, 7);
     }
-
     #[test]
     fn encode_decode_mem() {
         let load = encoding::wide::encode_load(instruction::wide::memory::LOAD64, 3, 1, -8);
@@ -31,7 +27,6 @@ mod wide {
         assert_eq!(rd, 3);
         assert_eq!(base, 1);
         assert_eq!(imm_l, -8);
-
         let store = encoding::wide::encode_store(instruction::wide::memory::STORE64, 2, 5, 4);
         let (op_s, base_s, rs_s, imm_s) = encoding::wide::decode_mem(store);
         assert_eq!(op_s, instruction::wide::memory::STORE64);
@@ -39,7 +34,6 @@ mod wide {
         assert_eq!(rs_s, 5);
         assert_eq!(imm_s, 4);
     }
-
     #[test]
     fn encode_decode_mem128() {
         let load128 = encoding::wide::encode_load128(instruction::wide::memory::LOAD128, 9, 4, 10);
@@ -48,7 +42,6 @@ mod wide {
         assert_eq!(rd_lo, 9);
         assert_eq!(base, 4);
         assert_eq!(rd_hi, 10);
-
         let store128 =
             encoding::wide::encode_store128(instruction::wide::memory::STORE128, 3, 5, 6);
         let (op_s, base_s, rs_lo, rs_hi) = encoding::wide::decode_store128(store128);
@@ -57,7 +50,6 @@ mod wide {
         assert_eq!(rs_lo, 5);
         assert_eq!(rs_hi, 6);
     }
-
     #[test]
     fn encode_decode_branch() {
         let word = encoding::wide::encode_branch(instruction::wide::control::BEQ, 1, 2, -4);
@@ -67,7 +59,6 @@ mod wide {
         assert_eq!(rs2, 2);
         assert_eq!(off, -4);
     }
-
     #[test]
     fn encode_decode_jump() {
         let word = encoding::wide::encode_jump(instruction::wide::control::JAL, 1, 1024);
@@ -76,7 +67,6 @@ mod wide {
         assert_eq!(rd, 1);
         assert_eq!(off, 1024);
     }
-
     #[test]
     fn encode_decode_sys() {
         let sys = encoding::wide::encode_sys(instruction::wide::system::SCALL, 0xAB);
@@ -84,7 +74,6 @@ mod wide {
         assert_eq!(op_sys, instruction::wide::system::SCALL);
         assert_eq!(code, 0xAB);
     }
-
     #[test]
     fn encode_halt() {
         let word = encoding::wide::encode_halt();

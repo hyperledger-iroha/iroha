@@ -19,17 +19,14 @@ pub const BUNDLED_RANS_GPU_BUILD_AVAILABLE: bool = cfg!(all(
         feature = "codec-gpu-cuda"
     )
 ));
-
-use core::{fmt, str::FromStr};
-
-use thiserror::Error;
-
 use crate::{
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
     core::{self as norito_core, DecodeFromSlice, Error as CoreError},
     json,
     json::Value as NoritoJsonValue,
 };
+use core::{fmt, str::FromStr};
+use thiserror::Error;
 /// Blake3-based 32-byte hash used across NSC metadata (chunk commitments, IDs, etc.).
 pub type Hash = [u8; 32];
 /// Compute the canonical BLAKE3 digest used by content-addressed streaming artifacts.
@@ -47,26 +44,22 @@ pub fn blake3_hash(bytes: &[u8]) -> Hash {
 /// consumers to authenticate artifacts that cannot safely be materialized as
 /// one contiguous allocation.
 pub struct Blake3Hasher(blake3::Hasher);
-
 impl Blake3Hasher {
     /// Start a canonical unkeyed BLAKE3 digest.
     #[must_use]
     pub fn new() -> Self {
         Self(blake3::Hasher::new())
     }
-
     /// Absorb the next exact byte range in canonical order.
     pub fn update(&mut self, bytes: &[u8]) {
         self.0.update(bytes);
     }
-
     /// Finish and return the canonical 32-byte digest.
     #[must_use]
     pub fn finalize(self) -> Hash {
         self.0.finalize().into()
     }
 }
-
 impl Default for Blake3Hasher {
     fn default() -> Self {
         Self::new()
@@ -90,29 +83,24 @@ pub type VerifierId = [u8; 32];
 pub type ContractSignature = Signature;
 /// ISO-style region code used in ticket policies (e.g., "us", "eu").
 pub type RegionCode = String;
-
 pub use codec::{
     BundleContextRemap, BundleContextStats, BundledStats, BundledTelemetry, BundledToken,
     load_bundle_context_remap_from_json,
 };
-
 #[inline]
 fn saturating_usize_to_u32(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
-
 #[inline]
 fn saturating_usize_to_u64(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
-
 /// Video profile identifier (`baseline`, `uhd_main`, `uhd_ai`, etc.).
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, NoritoSerialize, NoritoDeserialize,
 )]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct ProfileId(pub u16);
-
 impl ProfileId {
     /// Baseline SDR profile (`ProfileId = 0`).
     pub const BASELINE: Self = Self(0);
@@ -121,7 +109,6 @@ impl ProfileId {
     /// HDR + neural residual profile (`ProfileId = 2`).
     pub const UHD_AI: Self = Self(2);
 }
-
 /// Entropy coder advertised by manifests and segment headers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, Default)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -130,25 +117,21 @@ pub enum EntropyMode {
     #[default]
     RansBundled,
 }
-
 impl EntropyMode {
     #[must_use]
     pub const fn is_bundled(self) -> bool {
         true
     }
-
     #[must_use]
     fn as_str(self) -> &'static str {
         "rans_bundled"
     }
 }
-
 impl fmt::Display for EntropyMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
-
 /// Rate-distortion optimizer mode for the bundled entropy path.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -163,16 +146,13 @@ pub enum RdoMode {
     /// Perceptual lambda schedule tuned for SSIM-like behaviour.
     Perceptual,
 }
-
 impl RdoMode {
     pub const fn is_enabled(self) -> bool {
         !matches!(self, Self::None)
     }
 }
-
 impl FromStr for EntropyMode {
     type Err = ();
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim().to_ascii_lowercase().as_str() {
             "rans_bundled" | "rans-bundled" => Ok(Self::RansBundled),
@@ -180,12 +160,10 @@ impl FromStr for EntropyMode {
         }
     }
 }
-
 /// Bitfield describing manifest feature flags (HDR, neural bundle, privacy overlay, etc.).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct CapabilityFlags(u32);
-
 impl CapabilityFlags {
     /// Feature bit enabling feedback hint frames (`ManifestV1::feedback_hint`).
     pub const FEATURE_FEEDBACK_HINTS: u32 = 1 << 0;
@@ -199,33 +177,27 @@ impl CapabilityFlags {
     pub const FEATURE_BUNDLE_ACCEL_CPU_SIMD: u32 = 1 << 13;
     /// Feature bit indicating bundled rANS paths execute on GPU accelerators.
     pub const FEATURE_BUNDLE_ACCEL_GPU: u32 = 1 << 14;
-
     /// Creates a new flag wrapper from raw bits.
     pub const fn from_bits(bits: u32) -> Self {
         Self(bits)
     }
-
     /// Returns the underlying bit representation.
     pub const fn bits(self) -> u32 {
         self.0
     }
-
     /// Checks whether all bits in `mask` are set.
     pub const fn contains(self, mask: u32) -> bool {
         (self.0 & mask) == mask
     }
-
     /// Returns a new flag set with the provided mask applied.
     pub const fn insert(self, mask: u32) -> Self {
         Self(self.0 | mask)
     }
-
     /// Returns a new flag set with the provided mask removed.
     pub const fn remove(self, mask: u32) -> Self {
         Self(self.0 & !mask)
     }
 }
-
 /// Acceleration backend used for bundled entropy pipelines.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -238,7 +210,6 @@ pub enum BundleAcceleration {
     /// GPU accelerated bundle processing.
     Gpu,
 }
-
 impl BundleAcceleration {
     /// Capability bit mask representing this acceleration choice.
     pub const fn capability_mask(self) -> u32 {
@@ -249,24 +220,20 @@ impl BundleAcceleration {
         }
     }
 }
-
 /// Privacy relay capabilities advertised in `PrivacyRoute`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct PrivacyCapabilities(u32);
-
 impl PrivacyCapabilities {
     /// Creates a new capability wrapper from raw bits.
     pub const fn from_bits(bits: u32) -> Self {
         Self(bits)
     }
-
     /// Returns the raw bitset.
     pub const fn bits(self) -> u32 {
         self.0
     }
 }
-
 /// FEC configuration advertised at the manifest or feedback layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -278,7 +245,6 @@ pub struct FecParameters {
     /// Number of parity symbols emitted for each protected window.
     pub parity_symbols: Option<u8>,
 }
-
 /// Per-layer rate/FEC/storage hints emitted by the adaptive controller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -292,7 +258,6 @@ pub struct LayerFeedback {
     /// Optional override for the preferred storage class for this layer.
     pub storage_hint: Option<StorageClass>,
 }
-
 /// Feedback emitted per segment so viewers and relays can adapt.
 #[derive(Clone, Debug, PartialEq, Eq, Default, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -304,7 +269,6 @@ pub struct FeedbackHint {
     /// Active FEC parameters.
     pub fec: Option<FecParameters>,
 }
-
 /// HPKE suites supported by the transport negotiation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -314,7 +278,6 @@ pub enum HpkeSuite {
     /// Kyber1024 + ChaCha20Poly1305 operated in AuthPsk mode (`suite_id = 0x0002`).
     Kyber1024AuthPsk,
 }
-
 impl HpkeSuite {
     /// Numeric identifier used by transport capability hashing.
     #[must_use]
@@ -324,7 +287,6 @@ impl HpkeSuite {
             Self::Kyber1024AuthPsk => 0x0002,
         }
     }
-
     /// Converts the suite into a bit index used by [`HpkeSuiteMask`].
     #[must_use]
     pub const fn bit(self) -> u16 {
@@ -334,12 +296,10 @@ impl HpkeSuite {
         }
     }
 }
-
 /// Bitmask describing the HPKE suites supported by an endpoint.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct HpkeSuiteMask(u16);
-
 impl HpkeSuiteMask {
     /// Empty mask (no suites supported).
     pub const EMPTY: Self = Self(0);
@@ -347,37 +307,31 @@ impl HpkeSuiteMask {
     pub const KYBER768: Self = Self(1 << HpkeSuite::Kyber768AuthPsk.bit());
     /// Convenience constant containing Suite #2 (Kyber1024).
     pub const KYBER1024: Self = Self(1 << HpkeSuite::Kyber1024AuthPsk.bit());
-
     /// Construct a mask that advertises a single suite.
     #[must_use]
     pub const fn from_suite(suite: HpkeSuite) -> Self {
         Self(1 << suite.bit())
     }
-
     /// Returns the raw bit representation.
     #[must_use]
     pub const fn bits(self) -> u16 {
         self.0
     }
-
     /// Construct a mask from raw bits.
     #[must_use]
     pub const fn from_bits(bits: u16) -> Self {
         Self(bits)
     }
-
     /// Returns true when the given suite is advertised in this mask.
     #[must_use]
     pub const fn contains(self, suite: HpkeSuite) -> bool {
         (self.0 & (1 << suite.bit())) != 0
     }
-
     /// Computes the intersection of two masks.
     #[must_use]
     pub const fn intersection(self, other: Self) -> Self {
         Self(self.0 & other.0)
     }
-
     /// Returns the lowest-index suite present in the mask.
     #[must_use]
     pub const fn lowest(self) -> Option<HpkeSuite> {
@@ -390,7 +344,6 @@ impl HpkeSuiteMask {
         }
     }
 }
-
 /// Privacy bucket configuration used when redacting telemetry counters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -398,7 +351,6 @@ pub enum PrivacyBucketGranularity {
     /// Standard NSC v1 aggregation rules (1% loss buckets, 1 ms latency bands).
     StandardV1,
 }
-
 /// Transport capability advertisement exchanged during the QUIC handshake.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -414,7 +366,6 @@ pub struct TransportCapabilities {
     /// Privacy bucket configuration applied to telemetry exports.
     pub privacy_bucket_granularity: PrivacyBucketGranularity,
 }
-
 impl TransportCapabilities {
     /// Convenience helper building the mandatory Kyber768 + DATAGRAM profile.
     #[must_use]
@@ -428,7 +379,6 @@ impl TransportCapabilities {
         }
     }
 }
-
 /// Resolved transport configuration derived from the two advertised capability sets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TransportCapabilityResolution {
@@ -443,7 +393,6 @@ pub struct TransportCapabilityResolution {
     /// Privacy bucket configuration negotiated for telemetry exports.
     pub privacy_bucket_granularity: PrivacyBucketGranularity,
 }
-
 impl TransportCapabilityResolution {
     /// Compute the canonical hash recorded inside manifests for auditing.
     #[must_use]
@@ -459,7 +408,6 @@ impl TransportCapabilityResolution {
         hasher.finalize().into()
     }
 }
-
 /// Errors encountered when resolving advertised transport capabilities.
 #[derive(Clone, Copy, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum TransportCapabilityError {
@@ -478,7 +426,6 @@ pub enum TransportCapabilityError {
     #[error("invalid datagram size advertised ({0} bytes)")]
     InvalidDatagramSize(u16),
 }
-
 /// Resolve the transport capabilities advertised by two endpoints.
 pub fn resolve_transport_capabilities(
     local: &TransportCapabilities,
@@ -488,14 +435,12 @@ pub fn resolve_transport_capabilities(
     let hpke_suite = shared
         .lowest()
         .ok_or(TransportCapabilityError::NoSharedHpkeSuite)?;
-
     if local.privacy_bucket_granularity != remote.privacy_bucket_granularity {
         return Err(TransportCapabilityError::PrivacyBucketMismatch {
             local: local.privacy_bucket_granularity,
             remote: remote.privacy_bucket_granularity,
         });
     }
-
     let use_datagram = local.supports_datagram && remote.supports_datagram;
     let max_segment_datagram_size = if use_datagram {
         let negotiated = local
@@ -508,11 +453,9 @@ pub fn resolve_transport_capabilities(
     } else {
         0
     };
-
     let fec_feedback_interval_ms = local
         .fec_feedback_interval_ms
         .max(remote.fec_feedback_interval_ms);
-
     Ok(TransportCapabilityResolution {
         hpke_suite,
         use_datagram,
@@ -521,7 +464,6 @@ pub fn resolve_transport_capabilities(
         privacy_bucket_granularity: local.privacy_bucket_granularity,
     })
 }
-
 /// Storage tier for a segment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -531,7 +473,6 @@ pub enum StorageClass {
     /// Long-retention, higher-cost storage.
     Permanent,
 }
-
 /// Available FEC schemes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -543,7 +484,6 @@ pub enum FecScheme {
     /// Sliding-window RS 18/14 variant.
     Rs18_14,
 }
-
 /// Encryption suite negotiated for segments/control frames.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -553,7 +493,6 @@ pub enum EncryptionSuite {
     /// Kyber768 + XChaCha20-Poly1305 using the referenced key fingerprint.
     Kyber768XChaCha20Poly1305(Hash),
 }
-
 /// Basic manifest metadata visible to viewers.
 #[derive(Clone, Debug, PartialEq, Eq, Default, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -563,7 +502,6 @@ pub struct StreamMetadata {
     pub access_policy_id: Option<Hash>,
     pub tags: Vec<String>,
 }
-
 /// Privacy relay descriptor used in manifest routes.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -573,7 +511,6 @@ pub struct PrivacyRelay {
     pub key_fingerprint: Hash,
     pub capabilities: PrivacyCapabilities,
 }
-
 /// Authentication posture applied when exiting a SoraNet circuit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -583,7 +520,6 @@ pub enum SoranetAccessKind {
     /// Exit relays require viewer authentication/tickets before forwarding.
     Authenticated,
 }
-
 /// Stream tags advertised by SoraNet relays to differentiate exit adapters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -594,47 +530,39 @@ pub enum SoranetStreamTag {
     /// Kaigi real-time conferencing bridge.
     Kaigi,
 }
-
 /// Blinded identifier for the streaming circuit advertised by a relay directory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct SoranetChannelId(pub [u8; 32]);
-
 impl SoranetChannelId {
     /// Total number of bytes carried by the identifier.
     pub const LENGTH: usize = 32;
-
     /// Construct a blinded channel identifier from raw bytes.
     #[must_use]
     pub const fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
-
     /// Borrow the underlying byte array.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
-
 impl From<[u8; 32]> for SoranetChannelId {
     fn from(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 }
-
 impl From<SoranetChannelId> for [u8; 32] {
     fn from(id: SoranetChannelId) -> Self {
         id.0
     }
 }
-
 impl AsRef<[u8; 32]> for SoranetChannelId {
     fn as_ref(&self) -> &[u8; 32] {
         &self.0
     }
 }
-
 /// Parameters required to bridge a privacy route over a SoraNet circuit.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -651,13 +579,11 @@ pub struct SoranetRoute {
     #[norito(default)]
     pub stream_tag: SoranetStreamTag,
 }
-
 impl<'a> DecodeFromSlice<'a> for SoranetRoute {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), CoreError> {
         norito_core::decode_field_canonical::<Self>(bytes)
     }
 }
-
 /// An entry/exit route authorizing privacy-preserving transport.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -672,7 +598,6 @@ pub struct PrivacyRoute {
     #[norito(default)]
     pub soranet: Option<SoranetRoute>,
 }
-
 /// Optional neural enhancement bundle metadata.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -685,12 +610,10 @@ pub struct NeuralBundle {
     pub metal_shader_sha256: Option<Hash>,
     pub cuda_ptx_sha256: Option<Hash>,
 }
-
 /// Bitfield describing which playback profiles a capability ticket authorizes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct TicketCapabilities(u32);
-
 impl TicketCapabilities {
     /// Capability flag allowing live streaming access.
     pub const LIVE: u32 = 1 << 0;
@@ -702,33 +625,27 @@ impl TicketCapabilities {
     pub const HDR: u32 = 1 << 3;
     /// Capability flag enabling spatial audio playback.
     pub const SPATIAL_AUDIO: u32 = 1 << 4;
-
     /// Construct a capability flag wrapper from raw bits.
     pub const fn from_bits(bits: u32) -> Self {
         Self(bits)
     }
-
     /// Retrieve the underlying bit representation.
     pub const fn bits(self) -> u32 {
         self.0
     }
-
     /// Check whether all flags in `mask` are enabled.
     pub const fn contains(self, mask: u32) -> bool {
         (self.0 & mask) == mask
     }
-
     /// Return a new flag set with the provided `mask` inserted.
     pub const fn insert(self, mask: u32) -> Self {
         Self(self.0 | mask)
     }
-
     /// Return a new flag set with the provided `mask` cleared.
     pub const fn remove(self, mask: u32) -> Self {
         Self(self.0 & !mask)
     }
 }
-
 /// Optional policy constraints embedded in capability tickets.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -740,7 +657,6 @@ pub struct TicketPolicy {
     /// Optional bandwidth cap in kilobits per second.
     pub max_bandwidth_kbps: Option<u32>,
 }
-
 /// Codec projection of streaming ticket metadata emitted by the ledger runtime.
 ///
 /// This data-only type does not authenticate an issuer, verify a proof, debit
@@ -771,7 +687,6 @@ pub struct StreamingTicket {
     pub policy: Option<TicketPolicy>,
     pub capabilities: TicketCapabilities,
 }
-
 /// Ticket revocation payload carrying nullifier metadata.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -781,7 +696,6 @@ pub struct TicketRevocation {
     pub reason_code: u16,
     pub revocation_signature: ContractSignature,
 }
-
 /// Manifest describing a single NSC segment.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -810,7 +724,6 @@ pub struct ManifestV1 {
     pub capabilities: CapabilityFlags,
     pub signature: Signature,
 }
-
 /// Segment header persisted alongside chunk data.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -835,7 +748,6 @@ pub struct SegmentHeader {
     #[norito(default)]
     pub bundle_acceleration: BundleAcceleration,
 }
-
 /// Chunk descriptor within a segment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -846,7 +758,6 @@ pub struct ChunkDescriptor {
     pub commitment: Hash,
     pub parity: bool,
 }
-
 /// Merkle proof for DA validation.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -855,7 +766,6 @@ pub struct MerkleProof {
     pub sibling_hashes: Vec<Hash>,
     pub directions: Vec<bool>,
 }
-
 /// Data availability proof submitted on-chain.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -868,7 +778,6 @@ pub struct DataAvailabilityProof {
     pub storage_commitment: Hash,
     pub validator_signature: Signature,
 }
-
 /// Control stream frames exchanged over QUIC.
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -887,7 +796,6 @@ pub enum ControlFrame {
     PrivacyRouteAck(PrivacyRouteAckFrame),
     Error(ControlErrorFrame),
 }
-
 /// Error codes used in control frames.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -897,7 +805,6 @@ pub enum ErrorCode {
     RateLimited,
     ProtocolViolation,
 }
-
 /// Session key update frame payload.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -909,7 +816,6 @@ pub struct KeyUpdate {
     pub key_counter: u64,
     pub signature: Signature,
 }
-
 /// Group content key update payload.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -918,7 +824,6 @@ pub struct ContentKeyUpdate {
     pub gck_wrapped: Bytes,
     pub valid_from_segment: u64,
 }
-
 /// Privacy route provisioning payload.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -933,7 +838,6 @@ pub struct PrivacyRouteUpdate {
     #[norito(default)]
     pub soranet: Option<SoranetRoute>,
 }
-
 /// Capability negotiation report.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -950,7 +854,6 @@ pub struct CapabilityReport {
     pub max_datagram_size: u16,
     pub dplpmtud: bool,
 }
-
 /// Capability negotiation acknowledgement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -961,7 +864,6 @@ pub struct CapabilityAck {
     pub max_datagram_size: u16,
     pub dplpmtud: bool,
 }
-
 /// Endpoint role during capability negotiation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -969,7 +871,6 @@ pub enum CapabilityRole {
     Publisher,
     Viewer,
 }
-
 /// Audio capability advertisement.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -978,7 +879,6 @@ pub struct AudioCapability {
     pub ambisonics: bool,
     pub max_channels: u8,
 }
-
 /// Supported output resolutions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -989,7 +889,6 @@ pub enum Resolution {
     R2160p,
     Custom(ResolutionCustom),
 }
-
 /// Audio frame layout (mono, stereo, ambisonics).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -998,7 +897,6 @@ pub enum AudioLayout {
     Stereo,
     FirstOrderAmbisonics,
 }
-
 impl AudioLayout {
     #[must_use]
     pub const fn channel_count(self) -> usize {
@@ -1009,7 +907,6 @@ impl AudioLayout {
         }
     }
 }
-
 impl From<AudioLayout> for iroha_audio::ChannelLayout {
     fn from(value: AudioLayout) -> Self {
         match value {
@@ -1019,7 +916,6 @@ impl From<AudioLayout> for iroha_audio::ChannelLayout {
         }
     }
 }
-
 impl From<iroha_audio::ChannelLayout> for AudioLayout {
     fn from(value: iroha_audio::ChannelLayout) -> Self {
         match value {
@@ -1029,7 +925,6 @@ impl From<iroha_audio::ChannelLayout> for AudioLayout {
         }
     }
 }
-
 /// Encoded audio frame aligned with a video segment.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -1040,7 +935,6 @@ pub struct AudioFrame {
     pub channel_layout: AudioLayout,
     pub payload: Bytes,
 }
-
 /// Summary describing the audio track present in a segment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -1052,7 +946,6 @@ pub struct AudioTrackSummary {
     pub layout: AudioLayout,
     pub fec_level: u8,
 }
-
 /// Encoded audio payload accompanying a segment.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -1060,47 +953,40 @@ pub struct SegmentAudio {
     pub summary: AudioTrackSummary,
     pub frames: Vec<AudioFrame>,
 }
-
 impl<'a> crate::core::DecodeFromSlice<'a> for SegmentAudio {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), crate::Error> {
         crate::core::decode_field_canonical::<SegmentAudio>(bytes)
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct AudioPcmLengthMismatchInfo {
     pub expected: u64,
     pub found: u64,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct AudioChannelCountMismatchInfo {
     pub expected: u8,
     pub found: u8,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct AudioEncoderSampleCountMismatchInfo {
     pub expected: u16,
     pub found: u16,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct AudioBackendFailureInfo {
     pub message: String,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct AudioCodecLayoutMismatchInfo {
     pub expected: AudioLayout,
     pub found: AudioLayout,
 }
-
 /// Errors emitted by the audio encoding/decoding layer.
 #[derive(Debug, Error)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -1140,7 +1026,6 @@ pub enum AudioCodecError {
     #[error("audio backend does not support layout {0:?}")]
     BackendUnsupportedLayout(AudioLayout),
 }
-
 impl AudioCodecError {
     fn from_backend(err: iroha_audio::CodecError) -> Self {
         match err {
@@ -1175,19 +1060,16 @@ impl AudioCodecError {
         }
     }
 }
-
 impl SegmentAudio {
     #[must_use]
     pub fn len(&self) -> usize {
         self.frames.len()
     }
-
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.frames.is_empty()
     }
 }
-
 /// Viewer-side congestion feedback emitted at the negotiated cadence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -1205,7 +1087,6 @@ pub struct FeedbackHintFrame {
     /// Publisher-selected parity budget for the next window.
     pub parity_chunks: u8,
 }
-
 /// Receiver telemetry sent during playback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -1230,7 +1111,6 @@ pub struct ReceiverReport {
     /// Optional viewer-provided sync diagnostics for validator enforcement.
     pub sync_diagnostics: Option<SyncDiagnostics>,
 }
-
 /// Result of an operational audit routed through the telemetry bridge.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -1246,7 +1126,6 @@ pub struct TelemetryAuditOutcome {
     /// Optional mitigation URL with runbooks or RCA notes.
     pub mitigation_url: Option<String>,
 }
-
 /// Telemetry emitted by publisher/decoder implementations.
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -1258,54 +1137,46 @@ pub enum TelemetryEvent {
     Energy(TelemetryEnergyStats),
     AuditOutcome(TelemetryAuditOutcome),
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct ManifestAnnounceFrame {
     pub manifest: ManifestV1,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct ChunkRequestFrame {
     pub segment: u64,
     pub chunk_id: u16,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct ChunkAcknowledgeFrame {
     pub segment: u64,
     pub chunk_id: u16,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct TransportCapabilitiesFrame {
     pub endpoint_role: CapabilityRole,
     pub capabilities: TransportCapabilities,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct PrivacyRouteAckFrame {
     pub route_id: Hash,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct ControlErrorFrame {
     pub code: ErrorCode,
     pub message: String,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct ResolutionCustom {
     pub width: u16,
     pub height: u16,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct TelemetryEncodeStats {
@@ -1315,7 +1186,6 @@ pub struct TelemetryEncodeStats {
     pub avg_audio_jitter_ms: u16,
     pub max_audio_jitter_ms: u16,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct TelemetryDecodeStats {
@@ -1326,7 +1196,6 @@ pub struct TelemetryDecodeStats {
     pub avg_av_drift_ms: i16,
     pub max_av_drift_ms: u16,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct TelemetryNetworkStats {
@@ -1336,7 +1205,6 @@ pub struct TelemetryNetworkStats {
     pub fec_failures: u32,
     pub datagram_reinjects: u32,
 }
-
 /// Aggregated viewer sync diagnostics transmitted with [`ReceiverReport`] frames.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -1358,7 +1226,6 @@ pub struct SyncDiagnostics {
     /// Count of samples exceeding the configured sync threshold within the window.
     pub violation_count: u16,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct TelemetrySecurityStats {
@@ -1368,7 +1235,6 @@ pub struct TelemetrySecurityStats {
     pub last_content_key_id: Option<u64>,
     pub last_content_key_valid_from: Option<u64>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct TelemetryEnergyStats {
@@ -1378,7 +1244,6 @@ pub struct TelemetryEnergyStats {
     /// Decoder power draw reported in milliwatts.
     pub decoder_milliwatts: u32,
 }
-
 macro_rules! impl_decode_from_slice_via_archived {
     ($($ty:ty),* $(,)?) => {
         $(
@@ -1390,7 +1255,6 @@ macro_rules! impl_decode_from_slice_via_archived {
         )*
     };
 }
-
 impl_decode_from_slice_via_archived!(
     NeuralBundle,
     FecParameters,
@@ -1431,7 +1295,6 @@ impl_decode_from_slice_via_archived!(
     ReceiverReport,
     TelemetryEvent,
 );
-
 /// Frequency table for a single rANS symbol group.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -1450,7 +1313,6 @@ pub struct RansGroupTableV1 {
     /// Cumulative distribution (CDF) for the symbol group.
     pub cumulative: Vec<u32>,
 }
-
 /// Deterministic rANS table set body.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -1465,15 +1327,12 @@ pub struct RansTablesBodyV1 {
     /// Frequency/cumulative tables per symbol group.
     pub groups: Vec<RansGroupTableV1>,
 }
-
 const fn default_bundle_width() -> u8 {
     0
 }
-
 const fn default_group_width_bits() -> u8 {
     0
 }
-
 /// Manifest describing deterministic rANS tables and metadata.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -1491,7 +1350,6 @@ pub struct RansTablesV1 {
     /// Deterministic table body.
     pub body: RansTablesBodyV1,
 }
-
 /// Signature algorithms supported for rANS table manifests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(tag = "algorithm")]
@@ -1501,7 +1359,6 @@ pub enum SignatureAlgorithm {
     #[norito(rename = "ed25519")]
     Ed25519,
 }
-
 impl json::FastJsonWrite for SignatureAlgorithm {
     fn write_json(&self, out: &mut String) {
         let label = match self {
@@ -1509,8 +1366,31 @@ impl json::FastJsonWrite for SignatureAlgorithm {
         };
         json::write_json_string(label, out);
     }
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to("ed25519", out)
+    }
 }
-
+#[cfg(test)]
+mod signature_algorithm_json_tests {
+    use super::*;
+    #[test]
+    fn signature_algorithm_has_exact_checked_json_bytes() {
+        let value = SignatureAlgorithm::Ed25519;
+        let expected = json::to_json(&value).expect("serialize signature algorithm");
+        assert_eq!(expected, "\"ed25519\"");
+        assert_eq!(
+            json::to_json_bounded(&value, expected.len()).expect("serialize at exact bound"),
+            expected
+        );
+        assert_eq!(
+            json::to_json_bounded(&value, expected.len() - 1),
+            Err(json::BoundedJsonError::BodyTooLarge)
+        );
+    }
+}
 impl json::JsonDeserialize for SignatureAlgorithm {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = parser.parse_string()?;
@@ -1522,7 +1402,6 @@ impl json::JsonDeserialize for SignatureAlgorithm {
         }
     }
 }
-
 /// Optional signature wrapper for [`RansTablesV1`] payloads.
 #[derive(
     Clone,
@@ -1544,7 +1423,6 @@ pub struct RansTablesSignatureV1 {
     /// Signature payload bytes.
     pub signature: [u8; 64],
 }
-
 /// Signed rANS table artefact optionally including an Ed25519 signature.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -1556,8 +1434,8 @@ pub struct SignedRansTablesV1 {
     /// Optional signature attesting the payload.
     pub signature: Option<RansTablesSignatureV1>,
 }
-
 pub mod crypto {
+    use super::{CapabilityRole, ContentKeyUpdate, EncryptionSuite, Hash, KeyUpdate};
     use chacha20poly1305::{
         ChaCha20Poly1305, XChaCha20Poly1305,
         aead::{Aead, KeyInit, Payload},
@@ -1565,9 +1443,6 @@ pub mod crypto {
     use hkdf::Hkdf;
     use sha3::Sha3_256;
     use thiserror::Error;
-
-    use super::{CapabilityRole, ContentKeyUpdate, EncryptionSuite, Hash, KeyUpdate};
-
     const STS_SALT: &[u8] = b"nsc-sts";
     const STS_ROOT_LABEL: &[u8] = b"nsc-sts-root";
     const STS_SEND_LABEL: &[u8] = b"nsc-sts-send";
@@ -1578,7 +1453,6 @@ pub mod crypto {
     const GROUP_CONTENT_KEY_LEN: usize = 32;
     const X25519_EPHEMERAL_PUBLIC_LEN: usize = 32;
     const KYBER768_CIPHERTEXT_LEN: usize = 1088;
-
     /// Errors emitted by NSC crypto helpers.
     #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
     pub enum CryptoError {
@@ -1616,14 +1490,12 @@ pub mod crypto {
         #[error("invalid content key state: {0}")]
         InvalidContentKeyState(&'static str),
     }
-
     /// Session transport keys derived for a given endpoint role.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct TransportKeys {
         pub send: [u8; 32],
         pub recv: [u8; 32],
     }
-
     fn gck_associated_data(content_key_id: u64, valid_from_segment: u64) -> [u8; 23] {
         let mut ad = [0u8; 23];
         ad[..GCK_AAD_LABEL.len()].copy_from_slice(GCK_AAD_LABEL);
@@ -1632,7 +1504,6 @@ pub mod crypto {
         ad[GCK_AAD_LABEL.len() + 8..].copy_from_slice(&valid_from_segment.to_le_bytes());
         ad
     }
-
     fn validate_group_content_key(gck: &[u8]) -> Result<(), CryptoError> {
         if gck.len() != GROUP_CONTENT_KEY_LEN {
             return Err(CryptoError::InvalidGroupContentKeyLength {
@@ -1642,7 +1513,6 @@ pub mod crypto {
         }
         Ok(())
     }
-
     fn validate_shared_secret(shared_secret: &[u8]) -> Result<(), CryptoError> {
         if shared_secret.len() != STS_SHARED_SECRET_LEN {
             return Err(CryptoError::InvalidSharedSecretLength {
@@ -1652,14 +1522,12 @@ pub mod crypto {
         }
         Ok(())
     }
-
     fn key_update_ephemeral_len_for_suite(suite: &EncryptionSuite) -> usize {
         match suite {
             EncryptionSuite::X25519ChaCha20Poly1305(_) => X25519_EPHEMERAL_PUBLIC_LEN,
             EncryptionSuite::Kyber768XChaCha20Poly1305(_) => KYBER768_CIPHERTEXT_LEN,
         }
     }
-
     fn validate_key_update_ephemeral(frame: &KeyUpdate) -> Result<(), CryptoError> {
         let expected = key_update_ephemeral_len_for_suite(&frame.suite);
         let found = frame.pub_ephemeral.len();
@@ -1668,14 +1536,12 @@ pub mod crypto {
         }
         Ok(())
     }
-
     /// Track monotonic key update counters and negotiated suite.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub struct KeyUpdateState {
         last_counter: Option<u64>,
         suite: Option<EncryptionSuite>,
     }
-
     /// Persistable representation of [`KeyUpdateState`].
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct KeyUpdateSnapshot {
@@ -1684,7 +1550,6 @@ pub mod crypto {
         /// Highest key counter accepted so far.
         pub last_counter: u64,
     }
-
     impl KeyUpdateState {
         pub fn record(&mut self, frame: &KeyUpdate) -> Result<(), CryptoError> {
             if frame.protocol_version == 0 {
@@ -1720,15 +1585,12 @@ pub mod crypto {
             self.last_counter = Some(frame.key_counter);
             Ok(())
         }
-
         pub fn suite(&self) -> Option<&EncryptionSuite> {
             self.suite.as_ref()
         }
-
         pub fn last_counter(&self) -> Option<u64> {
             self.last_counter
         }
-
         pub fn restore(
             &mut self,
             last_counter: Option<u64>,
@@ -1741,7 +1603,6 @@ pub mod crypto {
             self.suite = suite;
             Ok(())
         }
-
         /// Produce a snapshot capturing the negotiated suite and last accepted counter.
         #[must_use]
         pub fn snapshot(&self) -> Option<KeyUpdateSnapshot> {
@@ -1752,7 +1613,6 @@ pub mod crypto {
                 last_counter,
             })
         }
-
         /// Rehydrate a [`KeyUpdateState`] from a snapshot.
         pub fn from_snapshot(snapshot: KeyUpdateSnapshot) -> Result<Self, CryptoError> {
             let mut state = Self::default();
@@ -1760,14 +1620,12 @@ pub mod crypto {
             Ok(state)
         }
     }
-
     /// Track content key rotations.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub struct ContentKeyState {
         last_id: Option<u64>,
         last_valid_from: Option<u64>,
     }
-
     /// Persistable representation of [`ContentKeyState`].
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct ContentKeySnapshot {
@@ -1776,7 +1634,6 @@ pub mod crypto {
         /// Highest valid-from segment observed so far.
         pub last_valid_from: u64,
     }
-
     impl ContentKeyState {
         pub fn record(&mut self, update: &ContentKeyUpdate) -> Result<(), CryptoError> {
             if update.gck_wrapped.is_empty() {
@@ -1802,15 +1659,12 @@ pub mod crypto {
             self.last_valid_from = Some(update.valid_from_segment);
             Ok(())
         }
-
         pub fn last_id(&self) -> Option<u64> {
             self.last_id
         }
-
         pub fn last_valid_from(&self) -> Option<u64> {
             self.last_valid_from
         }
-
         pub fn restore(
             &mut self,
             last_id: Option<u64>,
@@ -1825,7 +1679,6 @@ pub mod crypto {
             self.last_valid_from = last_valid_from;
             Ok(())
         }
-
         /// Produce a snapshot capturing the last accepted identifiers.
         #[must_use]
         pub fn snapshot(&self) -> Option<ContentKeySnapshot> {
@@ -1836,7 +1689,6 @@ pub mod crypto {
                 last_valid_from,
             })
         }
-
         /// Rehydrate a [`ContentKeyState`] from a snapshot.
         pub fn from_snapshot(snapshot: ContentKeySnapshot) -> Result<Self, CryptoError> {
             let mut state = Self::default();
@@ -1844,21 +1696,18 @@ pub mod crypto {
             Ok(state)
         }
     }
-
     fn role_tag_send(role: CapabilityRole) -> u8 {
         match role {
             CapabilityRole::Publisher => 0x01,
             CapabilityRole::Viewer => 0x02,
         }
     }
-
     fn opposite_role(role: CapabilityRole) -> CapabilityRole {
         match role {
             CapabilityRole::Publisher => CapabilityRole::Viewer,
             CapabilityRole::Viewer => CapabilityRole::Publisher,
         }
     }
-
     fn hkdf_expand_with_label(
         hk: &Hkdf<Sha3_256>,
         label: &[u8],
@@ -1870,24 +1719,20 @@ pub mod crypto {
         info.extend_from_slice(suffix);
         hk.expand(&info, out).map_err(|_| CryptoError::HkdfExpand)
     }
-
     fn hkdf_from_prk(prk: &[u8; 32]) -> Hkdf<Sha3_256> {
         // `from_prk` panics only if length < hash_len; 32 bytes meets Sha3-256 requirements.
         Hkdf::<Sha3_256>::from_prk(prk).expect("prk length must equal digest output")
     }
-
     fn suite_nonce_len(suite: &EncryptionSuite) -> usize {
         match suite {
             EncryptionSuite::X25519ChaCha20Poly1305(_) => 12,
             EncryptionSuite::Kyber768XChaCha20Poly1305(_) => 24,
         }
     }
-
     /// Return the nonce length required by the selected encryption suite.
     pub fn nonce_len_for_suite(suite: &EncryptionSuite) -> usize {
         suite_nonce_len(suite)
     }
-
     fn chunk_associated_data(segment_number: u64, chunk_id: u16, chunk_root: &Hash) -> [u8; 42] {
         let mut ad = [0u8; 42];
         ad[..8].copy_from_slice(&segment_number.to_le_bytes());
@@ -1895,7 +1740,6 @@ pub mod crypto {
         ad[10..].copy_from_slice(chunk_root);
         ad
     }
-
     /// Derive the session transport secret root from the 32-byte shared secret output of the
     /// handshake.
     pub fn derive_sts_root(shared_secret: &[u8]) -> Result<[u8; 32], CryptoError> {
@@ -1906,7 +1750,6 @@ pub mod crypto {
             .map_err(|_| CryptoError::HkdfExpand)?;
         Ok(root)
     }
-
     /// Derive directional transport keys for the provided endpoint role.
     pub fn derive_transport_keys_for_role(
         shared_secret: &[u8],
@@ -1915,7 +1758,6 @@ pub mod crypto {
         let sts_root = derive_sts_root(shared_secret)?;
         derive_transport_keys_from_sts_root(&sts_root, role)
     }
-
     /// Re-derive transport keys given a previously computed STS root.
     pub fn derive_transport_keys_from_sts_root(
         sts_root: &[u8; 32],
@@ -1933,7 +1775,6 @@ pub mod crypto {
         )?;
         Ok(TransportKeys { send, recv })
     }
-
     /// Derive the per-segment content encryption key from the GCK.
     pub fn derive_content_key(
         gck: &[u8; 32],
@@ -1946,7 +1787,6 @@ pub mod crypto {
         hkdf_expand_with_label(&hk, CEK_LABEL, &suffix, &mut cek)?;
         Ok(cek)
     }
-
     /// Derive the per-chunk AEAD nonce from the manifest salt.
     pub fn derive_chunk_nonce(
         nonce_salt: &[u8; 32],
@@ -1960,12 +1800,10 @@ pub mod crypto {
         hkdf_expand_with_label(&hk, NONCE_LABEL, &suffix, &mut nonce)?;
         Ok(nonce)
     }
-
     #[inline]
     fn chacha_key_from_bytes(bytes: &[u8; 32]) -> chacha20poly1305::Key {
         (*bytes).into()
     }
-
     #[inline]
     fn chacha_nonce_from_slice(bytes: &[u8]) -> Result<chacha20poly1305::Nonce, CryptoError> {
         let arr: [u8; 12] = bytes
@@ -1976,7 +1814,6 @@ pub mod crypto {
             })?;
         Ok(arr.into())
     }
-
     #[inline]
     fn xchacha_nonce_from_slice(bytes: &[u8]) -> Result<chacha20poly1305::XNonce, CryptoError> {
         let arr: [u8; 24] = bytes
@@ -1987,7 +1824,6 @@ pub mod crypto {
             })?;
         Ok(arr.into())
     }
-
     /// Encrypt a chunk payload for the selected suite.
     pub fn encrypt_chunk(
         suite: &EncryptionSuite,
@@ -2030,7 +1866,6 @@ pub mod crypto {
             }
         }
     }
-
     /// Decrypt a chunk payload for the selected suite.
     pub fn decrypt_chunk(
         suite: &EncryptionSuite,
@@ -2073,7 +1908,6 @@ pub mod crypto {
             }
         }
     }
-
     /// Wrap a 32-byte Group Content Key (GCK) using the negotiated transport send key and explicit
     /// nonce.
     ///
@@ -2124,7 +1958,6 @@ pub mod crypto {
         out.extend_from_slice(&ciphertext);
         Ok(out)
     }
-
     /// Unwrap a 32-byte Group Content Key (GCK) using the transport receive key and inline nonce.
     pub fn unwrap_gck(
         suite: &EncryptionSuite,
@@ -2168,7 +2001,6 @@ pub mod crypto {
         validate_group_content_key(plaintext.as_slice())?;
         Ok(plaintext)
     }
-
     /// Build the associated data commitments for a ciphertext batch.
     pub fn chunk_commitments_for_ciphertexts(
         segment_number: u64,
@@ -2181,34 +2013,28 @@ pub mod crypto {
             })
             .collect()
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
         use crate::streaming::{
             CapabilityRole, ContentKeyUpdate, EncryptionSuite, Hash, KeyUpdate, Signature,
         };
-
         fn sample_suite() -> EncryptionSuite {
             EncryptionSuite::X25519ChaCha20Poly1305([0xAA; 32])
         }
-
         fn sample_suite_xchacha() -> EncryptionSuite {
             EncryptionSuite::Kyber768XChaCha20Poly1305([0xBB; 32])
         }
-
         fn sample_hash(seed: u8) -> Hash {
             let mut h = [0u8; 32];
             h.fill(seed);
             h
         }
-
         fn sample_signature(seed: u8) -> Signature {
             let mut sig = [0u8; 64];
             sig.fill(seed);
             sig
         }
-
         fn encrypt_gck_without_length_check(
             suite: &EncryptionSuite,
             transport_key: &[u8; 32],
@@ -2249,7 +2075,6 @@ pub mod crypto {
                 }
             }
         }
-
         #[test]
         fn transport_keys_deterministic() {
             let secret = sample_hash(0x13);
@@ -2262,7 +2087,6 @@ pub mod crypto {
             assert_ne!(publisher_keys.send, publisher_keys.recv);
             assert_ne!(viewer_keys.send, viewer_keys.recv);
         }
-
         #[test]
         fn transport_secret_derivation_rejects_invalid_shared_secret_length() {
             let short_secret = [0x14u8; 31];
@@ -2274,7 +2098,6 @@ pub mod crypto {
                     found: 31
                 }
             ));
-
             let err = derive_transport_keys_for_role(&short_secret, CapabilityRole::Publisher)
                 .expect_err("short transport secret rejected");
             assert!(matches!(
@@ -2285,7 +2108,6 @@ pub mod crypto {
                 }
             ));
         }
-
         #[test]
         fn content_key_and_nonce_deterministic() {
             let gck = sample_hash(1);
@@ -2293,18 +2115,15 @@ pub mod crypto {
             let cek_one = derive_content_key(&gck, 77).unwrap();
             let cek_two = derive_content_key(&gck, 77).unwrap();
             assert_eq!(cek_one, cek_two);
-
             let suite = sample_suite();
             let nonce_one = derive_chunk_nonce(&nonce_salt, 5, &suite).unwrap();
             let nonce_two = derive_chunk_nonce(&nonce_salt, 5, &suite).unwrap();
             assert_eq!(nonce_one, nonce_two);
             assert_eq!(nonce_one.len(), 12);
-
             let suite_x = sample_suite_xchacha();
             let nonce_x = derive_chunk_nonce(&nonce_salt, 9, &suite_x).unwrap();
             assert_eq!(nonce_x.len(), 24);
         }
-
         #[test]
         fn encrypt_decrypt_roundtrip_chacha() {
             let suite = sample_suite();
@@ -2321,7 +2140,6 @@ pub mod crypto {
                 decrypt_chunk(&suite, &cek, &nonce, 42, 1, &chunk_root, &ciphertext).unwrap();
             assert_eq!(decrypted, plaintext);
         }
-
         #[test]
         fn encrypt_decrypt_roundtrip_xchacha() {
             let suite = sample_suite_xchacha();
@@ -2337,7 +2155,6 @@ pub mod crypto {
                 decrypt_chunk(&suite, &cek, &nonce, 99, 3, &chunk_root, &ciphertext).unwrap();
             assert_eq!(decrypted, payload);
         }
-
         #[test]
         fn key_update_state_enforces_monotonicity_and_suite() {
             let mut state = KeyUpdateState::default();
@@ -2352,10 +2169,8 @@ pub mod crypto {
             state.record(&frame).unwrap();
             assert_eq!(state.last_counter(), Some(1));
             assert!(state.suite().is_some());
-
             frame.key_counter = 2;
             state.record(&frame).unwrap();
-
             frame.key_counter = 2;
             let err = state.record(&frame).expect_err("non-monotonic counter");
             assert!(matches!(
@@ -2365,7 +2180,6 @@ pub mod crypto {
                     found: 2
                 }
             ));
-
             let mut other_frame = frame.clone();
             other_frame.key_counter = 3;
             other_frame.suite = sample_suite_xchacha();
@@ -2374,7 +2188,6 @@ pub mod crypto {
                 .expect_err("suite change rejected");
             assert!(matches!(err, CryptoError::SuiteChanged { .. }));
         }
-
         #[test]
         fn key_update_state_rejects_zero_counter_without_state_change() {
             let suite = sample_suite();
@@ -2387,18 +2200,15 @@ pub mod crypto {
                 key_counter: 0,
                 signature: sample_signature(14),
             };
-
             let err = state.record(&frame).expect_err("zero counter rejected");
             assert_eq!(err, CryptoError::InvalidKeyCounter { found: 0 });
             assert_eq!(state.last_counter(), None);
             assert_eq!(state.suite(), None);
-
             frame.key_counter = 1;
             state.record(&frame).unwrap();
             assert_eq!(state.last_counter(), Some(1));
             assert_eq!(state.suite(), Some(&suite));
         }
-
         #[test]
         fn key_update_state_restore_rejects_zero_counter_without_state_change() {
             let suite = sample_suite();
@@ -2412,14 +2222,12 @@ pub mod crypto {
                 signature: sample_signature(18),
             };
             state.record(&frame).unwrap();
-
             let err = state
                 .restore(Some(0), Some(suite))
                 .expect_err("zero restore counter rejected");
             assert_eq!(err, CryptoError::InvalidKeyCounter { found: 0 });
             assert_eq!(state.last_counter(), Some(1));
             assert_eq!(state.suite(), Some(&suite));
-
             let snapshot = KeyUpdateSnapshot {
                 suite,
                 last_counter: 0,
@@ -2428,7 +2236,6 @@ pub mod crypto {
                 .expect_err("zero snapshot counter rejected");
             assert_eq!(err, CryptoError::InvalidKeyCounter { found: 0 });
         }
-
         #[test]
         fn key_update_state_rejects_zero_protocol_version_without_state_change() {
             let suite = sample_suite();
@@ -2441,20 +2248,17 @@ pub mod crypto {
                 key_counter: 1,
                 signature: sample_signature(16),
             };
-
             let err = state
                 .record(&frame)
                 .expect_err("zero protocol version rejected");
             assert_eq!(err, CryptoError::InvalidProtocolVersion { found: 0 });
             assert_eq!(state.last_counter(), None);
             assert_eq!(state.suite(), None);
-
             frame.protocol_version = 1;
             state.record(&frame).unwrap();
             assert_eq!(state.last_counter(), Some(1));
             assert_eq!(state.suite(), Some(&suite));
         }
-
         #[test]
         fn key_update_state_rejects_invalid_x25519_ephemeral_without_state_change() {
             let suite = sample_suite();
@@ -2468,7 +2272,6 @@ pub mod crypto {
                 signature: sample_signature(12),
             };
             state.record(&frame).unwrap();
-
             frame.key_counter = 2;
             frame
                 .pub_ephemeral
@@ -2485,12 +2288,10 @@ pub mod crypto {
             );
             assert_eq!(state.last_counter(), Some(1));
             assert_eq!(state.suite(), Some(&suite));
-
             frame.pub_ephemeral.resize(X25519_EPHEMERAL_PUBLIC_LEN, 0);
             state.record(&frame).unwrap();
             assert_eq!(state.last_counter(), Some(2));
         }
-
         #[test]
         fn key_update_state_rejects_invalid_kyber_ephemeral_without_state_change() {
             let suite = sample_suite_xchacha();
@@ -2503,7 +2304,6 @@ pub mod crypto {
                 key_counter: 1,
                 signature: sample_signature(22),
             };
-
             let err = state
                 .record(&frame)
                 .expect_err("short kyber ciphertext rejected");
@@ -2516,13 +2316,11 @@ pub mod crypto {
             );
             assert_eq!(state.last_counter(), None);
             assert_eq!(state.suite(), None);
-
             frame.pub_ephemeral.resize(KYBER768_CIPHERTEXT_LEN, 0);
             state.record(&frame).unwrap();
             assert_eq!(state.last_counter(), Some(1));
             assert_eq!(state.suite(), Some(&suite));
         }
-
         #[test]
         fn content_key_state_enforces_rotation_rules() {
             let mut state = ContentKeyState::default();
@@ -2532,7 +2330,6 @@ pub mod crypto {
                 valid_from_segment: 20,
             };
             state.record(&update).unwrap();
-
             update.content_key_id = 5;
             let err = state.record(&update).expect_err("id must increase");
             assert!(matches!(
@@ -2542,7 +2339,6 @@ pub mod crypto {
                     found: 5
                 }
             ));
-
             update.content_key_id = 6;
             update.valid_from_segment = 10;
             let err = state.record(&update).expect_err("valid_from must advance");
@@ -2553,7 +2349,6 @@ pub mod crypto {
                     found: 10
                 }
             ));
-
             let err = state
                 .record(&ContentKeyUpdate {
                     content_key_id: 7,
@@ -2563,7 +2358,6 @@ pub mod crypto {
                 .expect_err("empty gck");
             assert!(matches!(err, CryptoError::InvalidWrappedKey));
         }
-
         #[test]
         fn content_key_state_restore_rejects_partial_state_without_state_change() {
             let mut state = ContentKeyState::default();
@@ -2574,7 +2368,6 @@ pub mod crypto {
                     valid_from_segment: 20,
                 })
                 .unwrap();
-
             for (last_id, last_valid_from) in [(Some(6), None), (None, Some(30))] {
                 let err = state
                     .restore(last_id, last_valid_from)
@@ -2588,11 +2381,9 @@ pub mod crypto {
                 assert_eq!(state.last_id(), Some(5));
                 assert_eq!(state.last_valid_from(), Some(20));
             }
-
             state.restore(Some(6), Some(30)).unwrap();
             assert_eq!(state.last_id(), Some(6));
             assert_eq!(state.last_valid_from(), Some(30));
-
             let snapshot = ContentKeySnapshot {
                 last_id: 7,
                 last_valid_from: 40,
@@ -2602,7 +2393,6 @@ pub mod crypto {
             assert_eq!(restored.last_id(), Some(7));
             assert_eq!(restored.last_valid_from(), Some(40));
         }
-
         #[test]
         fn gck_wrap_unwrap_roundtrip() {
             let suite = sample_suite();
@@ -2621,7 +2411,6 @@ pub mod crypto {
                 .expect("unwrap");
             assert_eq!(unwrapped, gck);
         }
-
         #[test]
         fn gck_wrap_rejects_invalid_plaintext_length() {
             let suite = sample_suite();
@@ -2638,7 +2427,6 @@ pub mod crypto {
                 }
             ));
         }
-
         #[test]
         fn gck_unwrap_rejects_invalid_plaintext_length() {
             let transport_key = sample_hash(46);
@@ -2666,22 +2454,18 @@ pub mod crypto {
         }
     }
 }
-
 pub mod chunk {
-    use thiserror::Error;
-
     use super::{AudioCodecError, Hash, MerkleProof, saturating_usize_to_u32};
     use crate::streaming::codec::{
         Chroma420Frame, EncodedSegment, FRAME_HEADER_LEN, FrameDimensions, FrameType, SegmentError,
         decode_block_rle, dequantize_coeffs, inverse_dct, predictor_block, verify_segment,
         write_reconstructed_block,
     };
-
+    use thiserror::Error;
     const LEAF_DOMAIN: &[u8] = b"nsc_ct_leaf";
     const NODE_DOMAIN: &[u8] = b"nsc_ct_node";
     const STORAGE_DOMAIN: &[u8] = b"nsc_storage";
     const DA_DOMAIN: &[u8] = b"nsc_da";
-
     /// Bounds violation details returned by [`ChunkError::IndexOutOfBounds`].
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -2689,7 +2473,6 @@ pub mod chunk {
         pub index: u32,
         pub len: u32,
     }
-
     /// Errors emitted by chunk hashing and Merkle utilities.
     #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -2705,7 +2488,6 @@ pub mod chunk {
         #[error("chunk id list must be strictly ascending")]
         UnsortedChunkIds,
     }
-
     /// Compute the leaf hash for a chunk ciphertext.
     pub fn chunk_leaf_hash(segment_number: u64, chunk_id: u16, ciphertext: &[u8]) -> Hash {
         let mut hasher = domain_hasher(LEAF_DOMAIN);
@@ -2714,7 +2496,6 @@ pub mod chunk {
         hasher.update(ciphertext);
         finalize_hash(hasher)
     }
-
     /// Compute chunk commitments for a slice of chunk payloads.
     pub fn chunk_commitments(segment_number: u64, chunks: &[(u16, &[u8])]) -> Vec<Hash> {
         chunks
@@ -2722,7 +2503,6 @@ pub mod chunk {
             .map(|(id, payload)| chunk_leaf_hash(segment_number, *id, payload))
             .collect()
     }
-
     /// Compute the Merkle root for a set of chunk commitments.
     pub fn merkle_root(leaves: &[Hash]) -> Result<Hash, ChunkError> {
         if leaves.is_empty() {
@@ -2731,14 +2511,12 @@ pub mod chunk {
         if leaves.len() == 1 {
             return Ok(leaves[0]);
         }
-
         let mut level: Vec<Hash> = leaves.to_vec();
         while level.len() > 1 {
             level = next_parent_level(&level);
         }
         Ok(level[0])
     }
-
     /// Build a Merkle proof for a given leaf index.
     pub fn merkle_proof(
         leaves: &[Hash],
@@ -2754,12 +2532,10 @@ pub mod chunk {
                 len: saturating_usize_to_u32(leaves.len()),
             }));
         }
-
         let mut current = leaves.to_vec();
         let mut siblings = Vec::new();
         let mut directions = Vec::new();
         let mut idx = index;
-
         while current.len() > 1 {
             let is_right = idx % 2 == 1;
             let sibling_idx = if is_right {
@@ -2774,20 +2550,17 @@ pub mod chunk {
             current = next_parent_level(&current);
             idx /= 2;
         }
-
         Ok(MerkleProof {
             chunk_id,
             sibling_hashes: siblings,
             directions,
         })
     }
-
     /// Verify a Merkle proof against an expected root.
     pub fn verify_merkle_proof(leaf: &Hash, proof: &MerkleProof, expected_root: &Hash) -> bool {
         if proof.sibling_hashes.len() != proof.directions.len() {
             return false;
         }
-
         let mut node = *leaf;
         for (sibling, is_left) in proof.sibling_hashes.iter().zip(proof.directions.iter()) {
             node = if *is_left {
@@ -2798,7 +2571,6 @@ pub mod chunk {
         }
         node == *expected_root
     }
-
     /// Compute the data-availability storage commitment.
     pub fn storage_commitment(
         segment_number: u64,
@@ -2818,7 +2590,6 @@ pub mod chunk {
         }
         Ok(finalize_hash(hasher))
     }
-
     /// Compute the data availability proof root helper per spec (`nsc_da`).
     pub fn data_availability_root(
         segment_number: u64,
@@ -2838,7 +2609,6 @@ pub mod chunk {
         }
         Ok(finalize_hash(hasher))
     }
-
     fn next_parent_level(level: &[Hash]) -> Vec<Hash> {
         let mut next = Vec::with_capacity(level.len().div_ceil(2));
         for pair in level.chunks(2) {
@@ -2848,45 +2618,38 @@ pub mod chunk {
         }
         next
     }
-
     fn parent_hash(left: &Hash, right: &Hash) -> Hash {
         let mut hasher = domain_hasher(NODE_DOMAIN);
         hasher.update(left);
         hasher.update(right);
         finalize_hash(hasher)
     }
-
     fn finalize_hash(hasher: blake3::Hasher) -> Hash {
         let digest = hasher.finalize();
         let mut out = [0u8; 32];
         out.copy_from_slice(digest.as_bytes());
         out
     }
-
     fn domain_hasher(domain: &[u8]) -> blake3::Hasher {
         let mut hasher = blake3::Hasher::new();
         hasher.update(domain);
         hasher
     }
-
     fn is_strictly_ascending(ids: &[u16]) -> bool {
         ids.windows(2).all(|w| w[0] < w[1])
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct FrameLengthMismatch {
         pub expected: u32,
         pub actual: u32,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct FrameIndexMismatchInfo {
         pub expected: u32,
         pub found: u32,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct FramePtsMismatchInfo {
@@ -2894,7 +2657,6 @@ pub mod chunk {
         pub expected: u64,
         pub found: u64,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct UnalignedDimensionsInfo {
@@ -2902,40 +2664,34 @@ pub mod chunk {
         pub height: u16,
         pub block_size: u8,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct BlockCountMismatchInfo {
         pub expected: u32,
         pub found: u32,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct FrameCountOverflowInfo {
         pub max: u32,
         pub found: u32,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct AudioSampleCountMismatchInfo {
         pub expected: u64,
         pub found: u64,
     }
-
     /// Error raised when the encoded chroma payload is shorter than advertised.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct ChromaPayloadTruncatedInfo;
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct ChromaDimensionsNotEvenInfo {
         pub width: u16,
         pub height: u16,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct AudioFrameCadenceMismatchInfo {
@@ -2944,7 +2700,6 @@ pub mod chunk {
         pub sample_rate: u32,
         pub frame_duration_ns: u32,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct AudioFrameCadenceOverflowInfo {
@@ -2952,7 +2707,6 @@ pub mod chunk {
         pub sample_rate: u32,
         pub frame_duration_ns: u32,
     }
-
     #[derive(Debug, Error)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub enum CodecError {
@@ -3052,13 +2806,11 @@ pub mod chunk {
         #[error("audio timestamp overflow at index {0}")]
         AudioTimestampOverflow(u32),
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct BaselineDecoder {
         dimensions: FrameDimensions,
         frame_duration_ns: u32,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct DecodedFrame {
@@ -3067,7 +2819,6 @@ pub mod chunk {
         pub luma: Vec<u8>,
         pub chroma: Option<Chroma420Frame>,
     }
-
     impl BaselineDecoder {
         pub fn new(dimensions: FrameDimensions, frame_duration_ns: u32) -> Self {
             Self {
@@ -3075,7 +2826,6 @@ pub mod chunk {
                 frame_duration_ns,
             }
         }
-
         pub fn decode_segment(
             &self,
             segment: &EncodedSegment,
@@ -3086,7 +2836,6 @@ pub mod chunk {
                 &segment.chunks,
                 segment.audio.as_ref(),
             )?;
-
             let mut frames = Vec::with_capacity(segment.chunks.len());
             let frame_step = u64::from(self.frame_duration_ns);
             let dims = self.dimensions;
@@ -3136,7 +2885,6 @@ pub mod chunk {
                         found: block_count as u32,
                     }));
                 }
-
                 let mut offset = FRAME_HEADER_LEN;
                 let mut reconstructed = vec![0u8; aligned_dims.pixel_count()];
                 let mut prev_dc = 0i16;
@@ -3162,10 +2910,8 @@ pub mod chunk {
                         block_idx,
                     );
                 }
-
                 #[cfg(feature = "streaming-neural-filter")]
                 super::codec::apply_neural_filter(&mut reconstructed, aligned_dims);
-
                 let cropped =
                     crate::streaming::codec::crop_frame_luma(&reconstructed, dims, aligned_dims);
                 let chroma = if chunk.len() > offset {
@@ -3236,7 +2982,6 @@ pub mod chunk {
             Ok(frames)
         }
     }
-
     pub(crate) fn read_frame_header_field<const N: usize>(
         chunk: &[u8],
         offset: usize,
@@ -3247,19 +2992,15 @@ pub mod chunk {
         raw.copy_from_slice(slice);
         Ok(raw)
     }
-
     pub(crate) fn read_frame_header_u16_le(chunk: &[u8], offset: usize) -> Result<u16, CodecError> {
         Ok(u16::from_le_bytes(read_frame_header_field(chunk, offset)?))
     }
-
     pub(crate) fn read_frame_header_u32_le(chunk: &[u8], offset: usize) -> Result<u32, CodecError> {
         Ok(u32::from_le_bytes(read_frame_header_field(chunk, offset)?))
     }
-
     pub(crate) fn read_frame_header_u64_le(chunk: &[u8], offset: usize) -> Result<u64, CodecError> {
         Ok(u64::from_le_bytes(read_frame_header_field(chunk, offset)?))
     }
-
     pub(crate) fn read_chroma_len(chunk: &[u8], offset: usize) -> Result<usize, CodecError> {
         let end = offset
             .checked_add(4)
@@ -3275,7 +3016,6 @@ pub mod chunk {
         raw.copy_from_slice(slice);
         Ok(u32::from_le_bytes(raw) as usize)
     }
-
     fn decode_chroma_plane(
         payload: &[u8],
         frame_type: FrameType,
@@ -3298,11 +3038,9 @@ pub mod chunk {
             let predictor = predictor_block(previous, aligned, block_idx, frame_type);
             write_reconstructed_block(&mut reconstructed, &spatial, &predictor, aligned, block_idx);
         }
-
         let cropped = crate::streaming::codec::crop_frame_luma(&reconstructed, dimensions, aligned);
         Ok((cropped, reconstructed))
     }
-
     pub(crate) fn derive_nonce_salt(
         segment_number: u64,
         frame_count: usize,
@@ -3317,15 +3055,12 @@ pub mod chunk {
         }
         finalize_hash(hasher)
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
-
         fn sample_payload(byte: u8, len: usize) -> Vec<u8> {
             vec![byte; len]
         }
-
         #[test]
         fn merkle_root_single_leaf_is_leaf() {
             let payload = sample_payload(0xAA, 8);
@@ -3333,7 +3068,6 @@ pub mod chunk {
             let root = merkle_root(&[leaf]).expect("root");
             assert_eq!(root, leaf);
         }
-
         #[test]
         fn merkle_proof_verifies_for_even_leaves() {
             let ciphertexts = [
@@ -3352,7 +3086,6 @@ pub mod chunk {
             let leaf = leaves[2];
             assert!(verify_merkle_proof(&leaf, &proof, &root));
         }
-
         #[test]
         fn merkle_proof_verifies_for_odd_leaves() {
             let ciphertexts = [
@@ -3370,7 +3103,6 @@ pub mod chunk {
             let leaf = leaves[2];
             assert!(verify_merkle_proof(&leaf, &proof, &root));
         }
-
         #[test]
         fn merkle_proof_detects_bad_root() {
             let leaves = vec![
@@ -3383,14 +3115,12 @@ pub mod chunk {
             tampered_root[0] ^= 0xFF;
             assert!(!verify_merkle_proof(&leaves[0], &proof, &tampered_root));
         }
-
         #[test]
         fn storage_commitment_requires_sorted_ids() {
             let chunk_root = chunk_leaf_hash(5, 0, &sample_payload(0xAA, 1));
             let err = storage_commitment(5, 1, &chunk_root, &[2, 1]).unwrap_err();
             assert!(matches!(err, ChunkError::UnsortedChunkIds));
         }
-
         #[test]
         fn storage_commitment_matches_spec() {
             let chunk_root = chunk_leaf_hash(5, 0, &sample_payload(0xAA, 4));
@@ -3400,39 +3130,22 @@ pub mod chunk {
             assert_ne!(commitment, [0u8; 32]);
             assert_ne!(proof_root, [0u8; 32]);
         }
-
         #[test]
         fn derive_nonce_salt_varies_with_chunk_payloads() {
             let chunks = vec![sample_payload(0x01, 4), sample_payload(0x02, 8)];
             let salt_a = derive_nonce_salt(9, chunks.len(), &chunks);
             let salt_b = derive_nonce_salt(9, chunks.len(), &chunks);
             assert_eq!(salt_a, salt_b, "nonce salt must be deterministic");
-
             let mut altered = chunks.clone();
             altered[1][3] ^= 0xFF;
             let salt_c = derive_nonce_salt(9, altered.len(), &altered);
             assert_ne!(salt_a, salt_c, "nonce salt must reflect chunk contents");
-
             let salt_d = derive_nonce_salt(10, chunks.len(), &chunks);
             assert_ne!(salt_a, salt_d, "nonce salt must capture segment number");
         }
     }
 }
-
 pub mod codec {
-    use std::{
-        collections::{BTreeMap, VecDeque},
-        convert::TryInto,
-        fs,
-        path::Path,
-        sync::{Arc, OnceLock},
-    };
-
-    use norito_derive::{NoritoDeserialize, NoritoSerialize};
-    use sha2::{Digest, Sha256};
-    use thiserror::Error;
-    use toml::Value as TomlValue;
-
     use super::{
         AudioCodecError, AudioCodecLayoutMismatchInfo, AudioEncoderSampleCountMismatchInfo,
         AudioFrame, AudioLayout, AudioTrackSummary, BundleAcceleration, Bytes, CapabilityFlags,
@@ -3450,7 +3163,17 @@ pub mod codec {
         json, norito_core, saturating_usize_to_u32, saturating_usize_to_u64,
     };
     use crate as norito;
-
+    use norito_derive::{NoritoDeserialize, NoritoSerialize};
+    use sha2::{Digest, Sha256};
+    use std::{
+        collections::{BTreeMap, VecDeque},
+        convert::TryInto,
+        fs,
+        path::Path,
+        sync::{Arc, OnceLock},
+    };
+    use thiserror::Error;
+    use toml::Value as TomlValue;
     pub(crate) const BLOCK_SIZE: usize = 8;
     pub(crate) const BLOCK_PIXELS: usize = BLOCK_SIZE * BLOCK_SIZE;
     pub(crate) const FRAME_HEADER_LEN: usize = 16;
@@ -3547,7 +3270,6 @@ pub mod codec {
             -0.0975451610080643,
         ],
     ];
-
     #[cfg(feature = "streaming-fixed-point-dct")]
     const DCT_FACTORS_Q15: [[i16; 8]; 8] = [
         [11585, 11585, 11585, 11585, 11585, 11585, 11585, 11585],
@@ -3559,14 +3281,12 @@ pub mod codec {
         [6270, -15137, 15137, -6270, -6270, 15137, -15137, 6270],
         [3196, -9102, 13623, -16069, 16069, -13623, 9102, -3196],
     ];
-
     #[cfg(feature = "streaming-fixed-point-dct")]
     const DCT_Q_BITS: u32 = 15;
     #[cfg(feature = "streaming-fixed-point-dct")]
     const DCT_SHIFT: u32 = DCT_Q_BITS * 2;
     #[cfg(feature = "streaming-fixed-point-dct")]
     const DCT_ROUND: i64 = 1 << (DCT_SHIFT - 1);
-
     #[derive(Debug, Error)]
     pub enum BundleTableError {
         #[error("failed to read SignedRansTablesV1 artefact: {0}")]
@@ -3584,7 +3304,6 @@ pub mod codec {
         #[error("invalid rANS frequency group for bit length {bit_len}: {reason}")]
         InvalidGroup { bit_len: u8, reason: &'static str },
     }
-
     /// Errors returned when decoding bundled rANS streams.
     #[derive(Clone, Debug, Error, PartialEq, Eq)]
     pub enum BundleDecodeError {
@@ -3626,7 +3345,6 @@ pub mod codec {
             found: u8,
         },
     }
-
     /// Errors encountered while loading or applying a bundle context remap.
     #[derive(Debug, Error)]
     pub enum ContextRemapError {
@@ -3643,7 +3361,6 @@ pub mod codec {
         #[error("context remap contains an invalid context id {0}")]
         InvalidContext(u64),
     }
-
     /// Mapping from raw bundle contexts to a pruned/remapped domain.
     #[derive(Clone, Debug)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -3653,7 +3370,6 @@ pub mod codec {
         remapped: u32,
         dropped: u32,
     }
-
     impl BundleContextRemap {
         /// Construct a new remap with the provided mapping table and escape context.
         pub fn new(
@@ -3669,31 +3385,26 @@ pub mod codec {
                 dropped,
             }
         }
-
         /// Apply the remap to a raw context, returning the mapped or escape context.
         #[must_use]
         pub fn map(&self, context: BundleContextId) -> BundleContextId {
             *self.mapping.get(&context).unwrap_or(&self.escape_context)
         }
-
         /// Escape context used for unmapped entries.
         #[must_use]
         pub const fn escape_context(&self) -> BundleContextId {
             self.escape_context
         }
-
         /// Number of contexts explicitly remapped.
         #[must_use]
         pub const fn remapped_count(&self) -> u32 {
             self.remapped
         }
-
         /// Number of contexts routed to the escape bucket.
         #[must_use]
         pub const fn dropped_count(&self) -> u32 {
             self.dropped
         }
-
         fn from_report(value: &NoritoJsonValue) -> Result<Self, ContextRemapError> {
             let escape_context = value
                 .get("escape_context")
@@ -3704,7 +3415,6 @@ pub mod codec {
             let mut mapping = BTreeMap::new();
             let mut remapped = 0u32;
             let mut dropped = 0u32;
-
             let mut ingest_rows =
                 |key: &str, dest: Option<BundleContextId>| -> Result<(), ContextRemapError> {
                     if let Some(entries) = value.get(key).and_then(NoritoJsonValue::as_array) {
@@ -3732,13 +3442,11 @@ pub mod codec {
                     }
                     Ok(())
                 };
-
             ingest_rows("kept", None)?;
             ingest_rows("dropped", Some(escape_context))?;
             Ok(Self::new(mapping, escape_context, remapped, dropped))
         }
     }
-
     /// Load a bundle context remap from a JSON file (output of `streaming-context-remap`).
     pub fn load_bundle_context_remap_from_json<P: AsRef<Path>>(
         path: P,
@@ -3748,7 +3456,6 @@ pub mod codec {
         let remap = BundleContextRemap::from_report(&value)?;
         Ok(Arc::new(remap))
     }
-
     #[derive(Clone, Debug)]
     pub struct BundleAnsTables {
         precision_bits: u8,
@@ -3756,25 +3463,21 @@ pub mod codec {
         max_width: u8,
         tables: [SymbolTable; MAX_BUNDLE_WIDTH],
     }
-
     #[cfg(feature = "schema-structural")]
     impl ::iroha_schema::TypeId for BundleAnsTables {
         fn id() -> String {
             "BundleAnsTables".to_owned()
         }
     }
-
     #[cfg(feature = "schema-structural")]
     impl ::iroha_schema::IntoSchema for BundleAnsTables {
         fn type_name() -> String {
             "BundleAnsTables".to_owned()
         }
-
         fn update_schema_map(map: &mut ::iroha_schema::MetaMap) {
             if map.contains_key::<Self>() {
                 return;
             }
-
             map.insert::<Self>(::iroha_schema::Metadata::Struct(
                 ::iroha_schema::NamedFieldsMeta {
                     declarations: vec![
@@ -3793,12 +3496,10 @@ pub mod codec {
                     ],
                 },
             ));
-
             <u8 as ::iroha_schema::IntoSchema>::update_schema_map(map);
             <Hash as ::iroha_schema::IntoSchema>::update_schema_map(map);
         }
     }
-
     impl BundleAnsTables {
         fn uniform(precision_bits: u8) -> Self {
             let tables = core::array::from_fn(|idx| {
@@ -3812,7 +3513,6 @@ pub mod codec {
                 tables,
             }
         }
-
         fn from_signed(signed: &SignedRansTablesV1) -> Result<Self, BundleTableError> {
             verify_signed_tables(signed)?;
             let mut slots: [Option<SymbolTable>; MAX_BUNDLE_WIDTH] = core::array::from_fn(|_| None);
@@ -3877,7 +3577,6 @@ pub mod codec {
                 tables,
             })
         }
-
         fn table_for_bits(&self, bit_len: u8) -> &SymbolTable {
             assert!(
                 bit_len <= self.max_width,
@@ -3888,26 +3587,21 @@ pub mod codec {
             let clamped = bit_len.clamp(1, self.max_width);
             &self.tables[clamped as usize - 1]
         }
-
         pub fn precision_bits(&self) -> u8 {
             self.precision_bits
         }
-
         pub fn checksum(&self) -> Hash {
             self.checksum
         }
-
         pub fn max_width(&self) -> u8 {
             self.max_width
         }
-
         #[cfg(test)]
         pub(crate) fn from_signed_for_tests(
             signed: &SignedRansTablesV1,
         ) -> Result<Self, BundleTableError> {
             Self::from_signed(signed)
         }
-
         #[cfg(test)]
         pub(crate) fn freq_len_for_bits_for_tests(&self, bit_len: u8) -> Option<usize> {
             if bit_len == 0 || bit_len > self.max_width {
@@ -3916,7 +3610,6 @@ pub mod codec {
             Some(self.table_for_bits(bit_len).freq.len())
         }
     }
-
     pub fn load_bundle_tables_from_toml<P: AsRef<Path>>(
         path: P,
     ) -> Result<Arc<BundleAnsTables>, BundleTableError> {
@@ -3931,7 +3624,6 @@ pub mod codec {
         let tables = BundleAnsTables::from_signed(&signed)?;
         Ok(Arc::new(tables))
     }
-
     fn decode_signed_rans_tables_compat(
         raw_value: &NoritoJsonValue,
     ) -> Result<SignedRansTablesV1, BundleTableError> {
@@ -3943,13 +3635,11 @@ pub mod codec {
         }
         decode_signed_rans_tables_manual(&normalized)
     }
-
     fn parse_jsonish_norito_value(raw: &str) -> Result<NoritoJsonValue, json::Error> {
         let trimmed = raw.trim();
         if let Ok(value) = json::parse_value(trimmed) {
             return Ok(value);
         }
-
         if let Ok(inner) = json::from_str::<String>(trimmed) {
             let inner_trimmed = inner.trim();
             if let Ok(value) = json::parse_value(inner_trimmed) {
@@ -3960,11 +3650,9 @@ pub mod codec {
                 return Ok(value);
             }
         }
-
         let normalized = normalize_jsonish_payload(trimmed);
         json::parse_value(&normalized)
     }
-
     fn normalize_jsonish_payload(raw: &str) -> String {
         let mut out = raw.trim().trim_matches(&['"', '\''][..]).to_owned();
         if out.contains("\\\"") {
@@ -3978,11 +3666,9 @@ pub mod codec {
                 .replace("\\[", "[")
                 .replace("\\]", "]");
         }
-
         out = replace_equals_and_missing_colons(&out);
         strip_trailing_commas(&out)
     }
-
     fn replace_equals_and_missing_colons(input: &str) -> String {
         let chars: Vec<char> = input.chars().collect();
         let mut out = String::with_capacity(input.len() + 16);
@@ -3993,10 +3679,8 @@ pub mod codec {
         let mut after_object_key = false;
         let mut context_stack: Vec<char> = Vec::new();
         let mut object_expect_key = false;
-
         while i < chars.len() {
             let ch = chars[i];
-
             if !in_string && after_object_key && !ch.is_whitespace() {
                 if ch == ':' || ch == '=' {
                     out.push(':');
@@ -4010,7 +3694,6 @@ pub mod codec {
                 object_expect_key = false;
                 continue;
             }
-
             if in_string {
                 out.push(ch);
                 if escaped {
@@ -4026,7 +3709,6 @@ pub mod codec {
                 i += 1;
                 continue;
             }
-
             match ch {
                 '"' => {
                     let in_object = context_stack.last() == Some(&'{');
@@ -4076,20 +3758,16 @@ pub mod codec {
                 }
                 _ => out.push(ch),
             }
-
             i += 1;
         }
-
         out
     }
-
     fn strip_trailing_commas(input: &str) -> String {
         let chars: Vec<char> = input.chars().collect();
         let mut out = String::with_capacity(input.len());
         let mut in_string = false;
         let mut escaped = false;
         let mut i = 0usize;
-
         while i < chars.len() {
             let ch = chars[i];
             if in_string {
@@ -4104,7 +3782,6 @@ pub mod codec {
                 i += 1;
                 continue;
             }
-
             if ch == '"' {
                 in_string = true;
                 escaped = false;
@@ -4112,7 +3789,6 @@ pub mod codec {
                 i += 1;
                 continue;
             }
-
             if ch == ',' {
                 let mut lookahead = i + 1;
                 while lookahead < chars.len() && chars[lookahead].is_whitespace() {
@@ -4123,14 +3799,11 @@ pub mod codec {
                     continue;
                 }
             }
-
             out.push(ch);
             i += 1;
         }
-
         out
     }
-
     fn expand_jsonish_strings(value: &mut NoritoJsonValue) {
         match value {
             NoritoJsonValue::String(raw) => {
@@ -4152,7 +3825,6 @@ pub mod codec {
             _ => {}
         }
     }
-
     fn coerce_jsonish_scalar_strings(value: &mut NoritoJsonValue) {
         match value {
             NoritoJsonValue::String(raw) => {
@@ -4182,7 +3854,6 @@ pub mod codec {
             _ => {}
         }
     }
-
     fn decode_signed_rans_tables_manual(
         raw_value: &NoritoJsonValue,
     ) -> Result<SignedRansTablesV1, BundleTableError> {
@@ -4192,20 +3863,17 @@ pub mod codec {
             coerce_jsonish_scalar_strings(&mut parsed);
             return decode_signed_rans_tables_manual(&parsed);
         }
-
         let root = raw_value
             .as_object()
             .ok_or(BundleTableError::InvalidStructure(
                 "SignedRansTablesV1 root must be an object",
             ))?;
-
         let (payload_value, signature_value) = if let Some(payload) = root.get("payload") {
             (payload, root.get("signature"))
         } else {
             // Compatibility: some legacy payloads persisted only the payload body.
             (raw_value, None)
         };
-
         let payload = parse_rans_tables_payload(payload_value)?;
         let signature = match signature_value {
             Some(value) => parse_rans_tables_signature(value)?,
@@ -4213,7 +3881,6 @@ pub mod codec {
         };
         Ok(SignedRansTablesV1 { payload, signature })
     }
-
     fn parse_rans_tables_payload(
         value: &NoritoJsonValue,
     ) -> Result<RansTablesV1, BundleTableError> {
@@ -4223,18 +3890,15 @@ pub mod codec {
             coerce_jsonish_scalar_strings(&mut parsed);
             return parse_rans_tables_payload(&parsed);
         }
-
         let payload = value.as_object().ok_or(BundleTableError::InvalidStructure(
             "SignedRansTablesV1 payload must be an object",
         ))?;
-
         let body_value = payload
             .get("body")
             .ok_or(BundleTableError::InvalidStructure(
                 "SignedRansTablesV1 payload missing body",
             ))?;
         let body = parse_rans_tables_body(body_value)?;
-
         Ok(RansTablesV1 {
             version: parse_u16_field(
                 payload,
@@ -4259,7 +3923,6 @@ pub mod codec {
             body,
         })
     }
-
     fn parse_rans_tables_body(
         value: &NoritoJsonValue,
     ) -> Result<RansTablesBodyV1, BundleTableError> {
@@ -4269,11 +3932,9 @@ pub mod codec {
             coerce_jsonish_scalar_strings(&mut parsed);
             return parse_rans_tables_body(&parsed);
         }
-
         let body = value.as_object().ok_or(BundleTableError::InvalidStructure(
             "SignedRansTablesV1 payload body must be an object",
         ))?;
-
         let groups_value = body
             .get("groups")
             .ok_or(BundleTableError::InvalidStructure(
@@ -4288,7 +3949,6 @@ pub mod codec {
         for group in groups_array {
             groups.push(parse_rans_group(group)?);
         }
-
         Ok(RansTablesBodyV1 {
             seed: parse_u64_field(
                 body,
@@ -4303,7 +3963,6 @@ pub mod codec {
             groups,
         })
     }
-
     fn parse_rans_group(value: &NoritoJsonValue) -> Result<RansGroupTableV1, BundleTableError> {
         if let Some(raw) = value.as_str() {
             let mut parsed = parse_jsonish_norito_value(raw).map_err(BundleTableError::Json)?;
@@ -4311,11 +3970,9 @@ pub mod codec {
             coerce_jsonish_scalar_strings(&mut parsed);
             return parse_rans_group(&parsed);
         }
-
         let group = value.as_object().ok_or(BundleTableError::InvalidStructure(
             "SignedRansTablesV1 payload group must be an object",
         ))?;
-
         let frequencies = parse_u16_array_field(
             group,
             "frequencies",
@@ -4326,7 +3983,6 @@ pub mod codec {
             "cumulative",
             "SignedRansTablesV1 payload group cumulative must be an integer array",
         )?;
-
         Ok(RansGroupTableV1 {
             width_bits: parse_u8_field(
                 group,
@@ -4347,7 +4003,6 @@ pub mod codec {
             cumulative,
         })
     }
-
     fn parse_rans_tables_signature(
         value: &NoritoJsonValue,
     ) -> Result<Option<RansTablesSignatureV1>, BundleTableError> {
@@ -4364,7 +4019,6 @@ pub mod codec {
             coerce_jsonish_scalar_strings(&mut parsed);
             return parse_rans_tables_signature(&parsed);
         }
-
         let signature = value.as_object().ok_or(BundleTableError::InvalidStructure(
             "SignedRansTablesV1 signature must be an object",
         ))?;
@@ -4381,7 +4035,6 @@ pub mod codec {
                 ));
             }
         };
-
         Ok(Some(RansTablesSignatureV1 {
             algorithm,
             public_key: parse_hex_field::<32>(
@@ -4396,7 +4049,6 @@ pub mod codec {
             )?,
         }))
     }
-
     fn parse_string_field(
         map: &BTreeMap<String, NoritoJsonValue>,
         key: &'static str,
@@ -4410,7 +4062,6 @@ pub mod codec {
             .map(str::to_owned)
             .ok_or(BundleTableError::InvalidStructure(err))
     }
-
     fn parse_u64_field(
         map: &BTreeMap<String, NoritoJsonValue>,
         key: &'static str,
@@ -4421,7 +4072,6 @@ pub mod codec {
             .ok_or(BundleTableError::InvalidStructure(err))?;
         parse_u64_value(value, err)
     }
-
     fn parse_u16_field(
         map: &BTreeMap<String, NoritoJsonValue>,
         key: &'static str,
@@ -4433,7 +4083,6 @@ pub mod codec {
         let parsed = parse_u64_value(value, err)?;
         u16::try_from(parsed).map_err(|_| BundleTableError::InvalidStructure(err))
     }
-
     fn parse_u8_field(
         map: &BTreeMap<String, NoritoJsonValue>,
         key: &'static str,
@@ -4445,7 +4094,6 @@ pub mod codec {
         let parsed = parse_u64_value(value, err)?;
         u8::try_from(parsed).map_err(|_| BundleTableError::InvalidStructure(err))
     }
-
     fn parse_u64_value(
         value: &NoritoJsonValue,
         err: &'static str,
@@ -4465,7 +4113,6 @@ pub mod codec {
         }
         Err(BundleTableError::InvalidStructure(err))
     }
-
     fn parse_u16_array_field(
         map: &BTreeMap<String, NoritoJsonValue>,
         key: &'static str,
@@ -4484,7 +4131,6 @@ pub mod codec {
         }
         Ok(out)
     }
-
     fn parse_u32_array_field(
         map: &BTreeMap<String, NoritoJsonValue>,
         key: &'static str,
@@ -4505,7 +4151,6 @@ pub mod codec {
         }
         Ok(out)
     }
-
     fn parse_hex_field<const N: usize>(
         map: &BTreeMap<String, NoritoJsonValue>,
         key: &'static str,
@@ -4519,7 +4164,6 @@ pub mod codec {
             .ok_or(BundleTableError::InvalidStructure(err))?;
         parse_hex_array::<N>(raw, err)
     }
-
     fn parse_hex_array<const N: usize>(
         raw: &str,
         err: &'static str,
@@ -4538,7 +4182,6 @@ pub mod codec {
         }
         Ok(out)
     }
-
     fn hex_nibble(byte: u8) -> Option<u8> {
         match byte {
             b'0'..=b'9' => Some(byte - b'0'),
@@ -4547,7 +4190,6 @@ pub mod codec {
             _ => None,
         }
     }
-
     /// Lazily construct the shared default bundle tables (uniform distribution).
     ///
     /// The returned handle is backed by a `OnceLock`, so multiple callers share the
@@ -4558,7 +4200,6 @@ pub mod codec {
             .get_or_init(|| Arc::new(BundleAnsTables::uniform(BUNDLE_ANS_PRECISION_BITS)))
             .clone()
     }
-
     fn hash_bundle_tables(tables: &[SymbolTable; MAX_BUNDLE_WIDTH], precision_bits: u8) -> Hash {
         let mut hasher = Sha256::new();
         hasher.update([precision_bits]);
@@ -4573,7 +4214,6 @@ pub mod codec {
         hash.copy_from_slice(&digest);
         hash
     }
-
     fn verify_signed_tables(signed: &SignedRansTablesV1) -> Result<(), BundleTableError> {
         let bytes = {
             // Table checksums are part of signed TOML artefacts, so keep their
@@ -4591,7 +4231,6 @@ pub mod codec {
         }
         Ok(())
     }
-
     fn toml_to_norito_value(value: &TomlValue) -> Result<NoritoJsonValue, BundleTableError> {
         use toml::Value::{Array, Boolean, Datetime, Float, Integer, String as TomlString, Table};
         Ok(match value {
@@ -4622,26 +4261,22 @@ pub mod codec {
             }
         })
     }
-
     const BASELINE_QUANT_MATRIX: [u8; 64] = [
         16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69,
         56, 14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81,
         104, 113, 92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99,
     ];
-
     const ZIG_ZAG: [usize; 64] = [
         0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27,
         20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
         58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
     ];
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub(crate) enum FrameType {
         Intra,
         Predicted,
     }
-
     impl FrameType {
         fn as_byte(self) -> u8 {
             match self {
@@ -4649,7 +4284,6 @@ pub mod codec {
                 Self::Predicted => 1,
             }
         }
-
         pub(crate) fn from_byte(byte: u8) -> Result<Self, CodecError> {
             match byte {
                 0 => Ok(Self::Intra),
@@ -4657,12 +4291,10 @@ pub mod codec {
                 other => Err(CodecError::UnknownFrameType(other)),
             }
         }
-
         pub(crate) fn reset_dc(self) -> bool {
             matches!(self, FrameType::Intra)
         }
     }
-
     /// Segment encoding parameters for the baseline profile.
     #[derive(Clone, Debug)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -4689,7 +4321,6 @@ pub mod codec {
         pub rdo_mode: RdoMode,
         pub rdo_neural_seed: Option<Hash>,
     }
-
     impl Default for BaselineEncoderConfig {
         fn default() -> Self {
             Self {
@@ -4715,51 +4346,43 @@ pub mod codec {
             }
         }
     }
-
     impl BaselineEncoderConfig {
         #[must_use]
         pub fn with_audio(mut self, audio: AudioEncoderConfig) -> Self {
             self.audio = Some(audio);
             self
         }
-
         #[must_use]
         pub fn with_bundle_tables(mut self, tables: Arc<BundleAnsTables>) -> Self {
             self.bundle_tables = tables;
             self
         }
-
         #[must_use]
         pub fn with_bundle_acceleration(mut self, accel: BundleAcceleration) -> Self {
             self.bundle_acceleration = accel;
             self
         }
-
         #[must_use]
         pub fn with_bundle_context_remap(mut self, remap: Arc<BundleContextRemap>) -> Self {
             self.bundle_context_remap = Some(remap);
             self
         }
-
         #[must_use]
         pub fn with_bundle_prefetch_distance(mut self, distance: u16) -> Self {
             self.bundle_prefetch_distance = distance;
             self
         }
-
         #[must_use]
         pub fn with_rdo_mode(mut self, mode: RdoMode) -> Self {
             self.rdo_mode = mode;
             self
         }
-
         #[must_use]
         pub fn with_rdo_neural_seed(mut self, seed: Hash) -> Self {
             self.rdo_neural_seed = Some(seed);
             self
         }
     }
-
     /// Parameters required to construct a manifest for a baseline segment.
     #[derive(Clone, Debug)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -4776,7 +4399,6 @@ pub mod codec {
         pub neural_bundle: Option<NeuralBundle>,
         pub transport_capabilities_hash: Hash,
     }
-
     impl Default for BaselineManifestParams {
         fn default() -> Self {
             Self {
@@ -4794,7 +4416,6 @@ pub mod codec {
             }
         }
     }
-
     /// Encoded segment artifacts produced by the baseline encoder.
     #[derive(Clone, Debug)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -4804,7 +4425,6 @@ pub mod codec {
         pub chunks: Vec<Vec<u8>>,
         pub audio: Option<SegmentAudio>,
     }
-
     impl EncodedSegment {
         /// Construct a manifest that matches the encoded segment.
         pub fn build_manifest(&self, mut params: BaselineManifestParams) -> ManifestV1 {
@@ -4846,7 +4466,6 @@ pub mod codec {
                 signature: params.signature,
             }
         }
-
         /// Verify that a manifest is consistent with the encoded segment.
         pub fn verify_manifest(&self, manifest: &ManifestV1) -> Result<(), ManifestError> {
             verify_segment(
@@ -4856,7 +4475,6 @@ pub mod codec {
                 self.audio.as_ref(),
             )
             .map_err(ManifestError::from)?;
-
             if manifest.segment_number != self.header.segment_number {
                 return Err(ManifestError::SegmentNumberMismatch);
             }
@@ -4928,7 +4546,6 @@ pub mod codec {
             }
             Ok(())
         }
-
         /// Wrap the encoded segment into a portable bundle for RD/decoder tooling.
         pub fn to_bundle(
             &self,
@@ -4937,7 +4554,6 @@ pub mod codec {
         ) -> SegmentBundle {
             self.to_bundle_with_chroma(frame_dimensions, frame_duration_ns, Vec::new())
         }
-
         /// Wrap the encoded segment into a portable bundle for RD/decoder tooling, attaching optional chroma sidecars.
         pub fn to_bundle_with_chroma(
             &self,
@@ -4956,7 +4572,6 @@ pub mod codec {
             }
         }
     }
-
     /// Serialized segment bundle carrying the encoded payloads and decoder metadata.
     #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -4980,14 +4595,12 @@ pub mod codec {
         #[norito(skip_serializing_if = "Vec::is_empty")]
         pub chroma: Vec<Chroma420Frame>,
     }
-
     impl SegmentBundle {
         /// Convert the bundle back into an encoded segment, validating chunk commitments.
         pub fn into_segment(self) -> Result<(EncodedSegment, FrameDimensions, u32), SegmentError> {
             let (segment, dims, duration, _) = self.into_segment_with_chroma()?;
             Ok((segment, dims, duration))
         }
-
         /// Convert the bundle back into an encoded segment and return the attached chroma frames.
         pub fn into_segment_with_chroma(
             self,
@@ -5014,27 +4627,23 @@ pub mod codec {
             ))
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct ChunkListCountMismatch {
         pub descriptors: u32,
         pub chunks: u32,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct HeaderDescriptorCountMismatch {
         pub header: u16,
         pub actual: u32,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct ChunkCountOverflowInfo {
         pub found: u32,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct DescriptorOffsetDetails {
@@ -5042,7 +4651,6 @@ pub mod codec {
         pub expected: u32,
         pub actual: u32,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct DescriptorLengthDetails {
@@ -5050,49 +4658,42 @@ pub mod codec {
         pub descriptor: u32,
         pub chunk: u32,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct AudioSampleRateMismatchInfo {
         pub expected: u32,
         pub found: u32,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct AudioFrameSamplesMismatchInfo {
         pub expected: u16,
         pub found: u16,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct AudioFrameDurationMismatchInfo {
         pub expected: u32,
         pub found: u32,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct AudioFrameCountMismatchInfo {
         pub expected: u16,
         pub found: u16,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct AudioFecMismatchInfo {
         pub expected: u8,
         pub found: u8,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct AudioLayoutMismatchInfo {
         pub expected: AudioLayout,
         pub found: AudioLayout,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct AudioTimestampMismatchInfo {
@@ -5100,7 +4701,6 @@ pub mod codec {
         pub expected: u64,
         pub found: u64,
     }
-
     /// Errors emitted when verifying or decoding NSC segments.
     #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -5166,7 +4766,6 @@ pub mod codec {
         #[error("audio timestamp computation overflow at index {0}")]
         AudioTimestampOverflow(u32),
     }
-
     /// Errors emitted when validating a manifest against an encoded segment.
     #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::TypeId))]
@@ -5216,7 +4815,6 @@ pub mod codec {
             required_mask: u32,
         },
     }
-
     #[cfg(feature = "schema-structural")]
     #[derive(::iroha_schema::IntoSchema)]
     #[allow(dead_code)]
@@ -5224,7 +4822,6 @@ pub mod codec {
         required_bundled: bool,
         found_bundled: bool,
     }
-
     #[cfg(feature = "schema-structural")]
     #[derive(::iroha_schema::IntoSchema)]
     #[allow(dead_code)]
@@ -5233,18 +4830,15 @@ pub mod codec {
         found_mask: u32,
         required_mask: u32,
     }
-
     #[cfg(feature = "schema-structural")]
     impl ::iroha_schema::IntoSchema for ManifestError {
         fn type_name() -> String {
             "ManifestError".to_owned()
         }
-
         fn update_schema_map(map: &mut ::iroha_schema::MetaMap) {
             if map.contains_key::<Self>() {
                 return;
             }
-
             map.insert::<Self>(::iroha_schema::Metadata::Enum(::iroha_schema::EnumMeta {
                 variants: vec![
                     ::iroha_schema::EnumVariant {
@@ -5321,7 +4915,6 @@ pub mod codec {
                     },
                 ],
             }));
-
             <SegmentError as ::iroha_schema::IntoSchema>::update_schema_map(map);
             <u32 as ::iroha_schema::IntoSchema>::update_schema_map(map);
             <CapabilityEntropyFlagMismatchInfo as ::iroha_schema::IntoSchema>::update_schema_map(
@@ -5332,7 +4925,6 @@ pub mod codec {
             );
         }
     }
-
     /// Frame geometry used by the baseline codec (luma-only for now).
     #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -5340,16 +4932,13 @@ pub mod codec {
         pub width: u16,
         pub height: u16,
     }
-
     impl FrameDimensions {
         pub const fn new(width: u16, height: u16) -> Self {
             Self { width, height }
         }
-
         pub const fn pixel_count(self) -> usize {
             self.width as usize * self.height as usize
         }
-
         const fn align_component(value: u16) -> u16 {
             if value == 0 {
                 0
@@ -5363,31 +4952,26 @@ pub mod codec {
                 }
             }
         }
-
         pub const fn align_to_block(self) -> Self {
             Self {
                 width: Self::align_component(self.width),
                 height: Self::align_component(self.height),
             }
         }
-
         pub const fn block_aligned(self) -> bool {
             (self.width as usize).is_multiple_of(BLOCK_SIZE)
                 && (self.height as usize).is_multiple_of(BLOCK_SIZE)
         }
-
         pub const fn block_count(self) -> usize {
             (self.width as usize / BLOCK_SIZE) * (self.height as usize / BLOCK_SIZE)
         }
     }
-
     /// Raw luma frame used by the baseline encoder.
     #[derive(Clone, Debug, PartialEq, Eq)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct RawFrame {
         pub luma: Vec<u8>,
     }
-
     impl RawFrame {
         pub fn new(dimensions: FrameDimensions, luma: Vec<u8>) -> Result<Self, CodecError> {
             let expected = dimensions.pixel_count();
@@ -5400,7 +4984,6 @@ pub mod codec {
             Ok(Self { luma })
         }
     }
-
     /// 4:2:0 chroma planes paired with a luma frame.
     #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -5410,7 +4993,6 @@ pub mod codec {
         /// V plane in row-major order.
         pub v: Bytes,
     }
-
     pub(crate) fn ensure_chroma_even_dimensions(
         dimensions: FrameDimensions,
     ) -> Result<(), CodecError> {
@@ -5424,7 +5006,6 @@ pub mod codec {
         }
         Ok(())
     }
-
     impl Chroma420Frame {
         /// Construct a chroma frame, validating that both planes match the expected dimensions.
         pub fn new(dimensions: FrameDimensions, u: Bytes, v: Bytes) -> Result<Self, CodecError> {
@@ -5438,7 +5019,6 @@ pub mod codec {
             }
             Ok(Self { u, v })
         }
-
         /// Build a neutral 4:2:0 chroma frame (U/V filled with 128).
         pub fn neutral(dimensions: FrameDimensions) -> Self {
             debug_assert!(
@@ -5453,9 +5033,7 @@ pub mod codec {
             }
         }
     }
-
     const AUDIO_SYNC_TOLERANCE_NS: u64 = 10_000_000;
-
     fn checked_frame_count(frame_count: usize) -> Result<u16, CodecError> {
         u16::try_from(frame_count).map_err(|_| {
             CodecError::FrameCountOverflow(FrameCountOverflowInfo {
@@ -5464,7 +5042,6 @@ pub mod codec {
             })
         })
     }
-
     fn expected_audio_frame_samples(
         sample_rate: u32,
         frame_duration_ns: u32,
@@ -5483,12 +5060,10 @@ pub mod codec {
         }
         Ok(expected as u16)
     }
-
     struct AudioEncoderState {
         encoder: iroha_audio::Encoder,
         sequence: u64,
     }
-
     pub struct BaselineEncoder {
         config: BaselineEncoderConfig,
         audio: Option<AudioEncoderState>,
@@ -5497,7 +5072,6 @@ pub mod codec {
         rdo_lambda: f32,
         neural_predictor: Option<NeuralPredictor>,
     }
-
     pub(crate) fn pad_frame_luma(
         input: &[u8],
         dims: FrameDimensions,
@@ -5532,7 +5106,6 @@ pub mod codec {
         }
         out
     }
-
     pub(crate) fn crop_frame_luma(
         aligned_data: &[u8],
         dims: FrameDimensions,
@@ -5554,7 +5127,6 @@ pub mod codec {
         }
         out
     }
-
     impl BaselineEncoder {
         pub fn new(config: BaselineEncoderConfig) -> Self {
             assert!(
@@ -5579,13 +5151,11 @@ pub mod codec {
                 neural_predictor,
             }
         }
-
         /// Latest bundled entropy telemetry (stats + token stream) recorded by the encoder.
         #[must_use]
         pub fn bundled_telemetry(&self) -> Option<&BundledTelemetry> {
             self.bundled_telemetry.as_ref()
         }
-
         fn ensure_audio_state(
             &mut self,
             audio_cfg: &AudioEncoderConfig,
@@ -5600,7 +5170,6 @@ pub mod codec {
                     backend: audio_cfg.backend,
                 })
                 .map_err(AudioCodecError::from_backend)?;
-
                 self.audio = Some(AudioEncoderState {
                     encoder,
                     sequence: 0,
@@ -5608,7 +5177,6 @@ pub mod codec {
             }
             Ok(self.audio.as_mut().expect("audio state initialized"))
         }
-
         fn encode_audio_track(
             &mut self,
             audio_pcm: Option<&[i16]>,
@@ -5642,7 +5210,6 @@ pub mod codec {
                     },
                 ));
             }
-
             let samples = audio_pcm.ok_or(CodecError::AudioTrackMissing)?;
             let channels = audio_cfg.channel_count();
             let samples_per_frame = audio_cfg.frame_samples as usize * channels;
@@ -5657,11 +5224,9 @@ pub mod codec {
                     },
                 ));
             }
-
             let state = self
                 .ensure_audio_state(&audio_cfg)
                 .map_err(CodecError::from)?;
-
             let mut frames_out = Vec::with_capacity(frame_count);
             for (idx, window) in samples.chunks(samples_per_frame).enumerate() {
                 let payload = state
@@ -5687,10 +5252,8 @@ pub mod codec {
                     .checked_add(1)
                     .ok_or(CodecError::AudioSequenceOverflow)?;
             }
-
             let frames_per_segment =
                 u16::try_from(frame_count).map_err(|_| CodecError::AudioFrameCountOverflow)?;
-
             let summary = AudioTrackSummary {
                 sample_rate: audio_cfg.sample_rate,
                 frame_samples: audio_cfg.frame_samples,
@@ -5699,13 +5262,11 @@ pub mod codec {
                 layout: audio_cfg.layout,
                 fec_level: audio_cfg.fec_level,
             };
-
             Ok(Some(SegmentAudio {
                 summary,
                 frames: frames_out,
             }))
         }
-
         pub fn encode_segment(
             &mut self,
             segment_number: u64,
@@ -5723,7 +5284,6 @@ pub mod codec {
                 audio_pcm,
             )
         }
-
         pub fn encode_segment_with_chroma(
             &mut self,
             segment_number: u64,
@@ -5750,7 +5310,6 @@ pub mod codec {
             if chroma.is_some() {
                 ensure_chroma_even_dimensions(self.config.frame_dimensions)?;
             }
-
             let dims = self.config.frame_dimensions;
             let frame_len = dims.pixel_count();
             let aligned_dims = dims.align_to_block();
@@ -5762,11 +5321,9 @@ pub mod codec {
                 })
             })?;
             let frame_step = u64::from(self.config.frame_duration_ns);
-
             let chroma_frames = chroma.unwrap_or(&[]);
             let chroma_dims = FrameDimensions::new(dims.width / 2, dims.height / 2);
             let chroma_aligned = chroma_dims.align_to_block();
-
             let mut chunks = Vec::with_capacity(frames.len());
             let mut reconstructed_prev: Option<Vec<u8>> = None;
             let mut previous_chroma_u: Option<Vec<u8>> = None;
@@ -5797,7 +5354,6 @@ pub mod codec {
                         actual: saturating_usize_to_u32(frame.luma.len()),
                     }));
                 }
-
                 let padded_storage = if dims == aligned_dims {
                     None
                 } else {
@@ -5808,7 +5364,6 @@ pub mod codec {
                 } else {
                     frame.luma.as_slice()
                 };
-
                 let frame_type = if idx == 0 {
                     FrameType::Intra
                 } else {
@@ -5820,7 +5375,6 @@ pub mod codec {
                 let pts = timeline_start_ns
                     .checked_add(idx_delta)
                     .ok_or(CodecError::FramePtsOverflow(saturating_usize_to_u32(idx)))?;
-
                 let prev_ref = reconstructed_prev.as_deref();
                 let hooks: &mut dyn BundledHooks = bundler
                     .as_mut()
@@ -5838,7 +5392,6 @@ pub mod codec {
                     self.config.bundle_width,
                     self.config.rdo_mode,
                 )?;
-
                 let chroma_planes = chroma_frames.get(idx);
                 let mut chunk = Vec::with_capacity(
                     FRAME_HEADER_LEN
@@ -5912,22 +5465,17 @@ pub mod codec {
                     previous_chroma_v = None;
                 }
                 chunks.push(chunk);
-
                 reconstructed_prev = Some(recon);
             }
-
             let rdo_report = rdo_builder.and_then(RdoTelemetryBuilder::finish);
             self.bundled_telemetry = bundler.map(|rec| {
                 let mut telemetry = rec.finish();
                 telemetry.rdo = rdo_report;
                 telemetry
             });
-
             let offsets_and_lengths = compute_offsets(&chunks);
             let chunk_ids: Vec<u16> = (0..frame_count).collect();
-
             let nonce_salt = derive_nonce_salt(segment_number, frames.len(), &chunks);
-
             let payload_refs: Vec<(u16, &[u8])> = chunk_ids
                 .iter()
                 .zip(chunks.iter())
@@ -5937,10 +5485,8 @@ pub mod codec {
             let root = merkle_root(&commitments)
                 .map_err(SegmentError::from)
                 .map_err(CodecError::from)?;
-
             let audio =
                 self.encode_audio_track(audio_pcm, frames.len(), timeline_start_ns, frame_step)?;
-
             let descriptors: Vec<ChunkDescriptor> = offsets_and_lengths
                 .into_iter()
                 .zip(commitments.iter())
@@ -5953,13 +5499,11 @@ pub mod codec {
                     parity: false,
                 })
                 .collect();
-
             let entropy_tables_checksum = self
                 .config
                 .entropy_mode
                 .is_bundled()
                 .then(|| self.bundle_tables.checksum());
-
             let header = SegmentHeader {
                 segment_number,
                 profile: self.config.profile,
@@ -5985,7 +5529,6 @@ pub mod codec {
                 audio_summary: audio.as_ref().map(|track| track.summary),
                 bundle_acceleration: self.config.bundle_acceleration,
             };
-
             Ok(EncodedSegment {
                 header,
                 descriptors,
@@ -5993,7 +5536,6 @@ pub mod codec {
                 audio,
             })
         }
-
         #[allow(clippy::too_many_arguments)]
         fn encode_frame_payload(
             frame: &[u8],
@@ -6014,7 +5556,6 @@ pub mod codec {
             if frame_type.reset_dc() {
                 prev_dc = 0;
             }
-
             for block_index in 0..dims.block_count() {
                 let (residual, predictor) =
                     build_residual_block(frame, prev_frame, dims, block_index, frame_type);
@@ -6041,7 +5582,6 @@ pub mod codec {
                     block_index,
                     frame_type,
                 );
-
                 let dequantized = dequantize_coeffs(&quantized, quantizer);
                 let spatial = inverse_dct(&dequantized);
                 write_reconstructed_block(
@@ -6052,18 +5592,15 @@ pub mod codec {
                     block_index,
                 );
             }
-
             Ok((payload, reconstructed))
         }
     }
-
     pub(crate) fn block_origin(dims: FrameDimensions, block_index: usize) -> (usize, usize) {
         let blocks_per_row = dims.width as usize / BLOCK_SIZE;
         let row = block_index / blocks_per_row;
         let col = block_index % blocks_per_row;
         (col * BLOCK_SIZE, row * BLOCK_SIZE)
     }
-
     pub(crate) fn build_residual_block(
         frame: &[u8],
         prev_frame: Option<&[u8]>,
@@ -6090,7 +5627,6 @@ pub mod codec {
         }
         (residual, predictor)
     }
-
     pub(crate) fn predictor_block(
         prev_frame: Option<&[u8]>,
         dims: FrameDimensions,
@@ -6112,7 +5648,6 @@ pub mod codec {
             [0i16; BLOCK_PIXELS]
         }
     }
-
     pub(crate) fn write_reconstructed_block(
         reconstructed: &mut [u8],
         spatial: &[i32; BLOCK_PIXELS],
@@ -6131,17 +5666,14 @@ pub mod codec {
             }
         }
     }
-
     #[cfg(test)]
     mod block_tests {
         use super::*;
-
         fn linear_frame(dims: FrameDimensions, offset: u8) -> Vec<u8> {
             (0..dims.pixel_count())
                 .map(|idx| offset.wrapping_add(idx as u8))
                 .collect()
         }
-
         fn block_pixels(frame: &[u8], dims: FrameDimensions, block_index: usize) -> Vec<u8> {
             let (origin_x, origin_y) = block_origin(dims, block_index);
             let stride = dims.width as usize;
@@ -6154,7 +5686,6 @@ pub mod codec {
             }
             out
         }
-
         #[test]
         fn block_origin_maps_index_to_coordinates() {
             let dims = FrameDimensions::new(16, 16);
@@ -6163,7 +5694,6 @@ pub mod codec {
             assert_eq!(block_origin(dims, 2), (0, BLOCK_SIZE));
             assert_eq!(block_origin(dims, 3), (BLOCK_SIZE, BLOCK_SIZE));
         }
-
         #[test]
         fn build_residual_block_tracks_previous_frame_for_predicted() {
             let dims = FrameDimensions::new(16, 8);
@@ -6171,14 +5701,12 @@ pub mod codec {
             let current: Vec<u8> = prev.iter().map(|value| value.saturating_add(2)).collect();
             let (residual, predictor) =
                 build_residual_block(&current, Some(&prev), dims, 1, FrameType::Predicted);
-
             assert!(residual.iter().all(|&value| value == 2));
             let expected_block = block_pixels(&prev, dims, 1);
             for (actual, expected) in predictor.iter().zip(expected_block) {
                 assert_eq!(*actual, i16::from(expected));
             }
         }
-
         #[test]
         fn build_residual_block_resets_predictor_for_intra_frames() {
             let dims = FrameDimensions::new(8, 8);
@@ -6186,28 +5714,23 @@ pub mod codec {
             let prev = linear_frame(dims, 3);
             let (residual, predictor) =
                 build_residual_block(&current, Some(&prev), dims, 0, FrameType::Intra);
-
             assert!(predictor.iter().all(|&value| value == 0));
             for (idx, &value) in residual.iter().enumerate() {
                 assert_eq!(value, i16::from(current[idx]));
             }
         }
-
         #[test]
         fn predictor_block_only_uses_previous_frame_for_predicted() {
             let dims = FrameDimensions::new(16, 8);
             let prev = linear_frame(dims, 7);
-
             let predicted = predictor_block(Some(&prev), dims, 1, FrameType::Predicted);
             let expected_block = block_pixels(&prev, dims, 1);
             for (actual, expected) in predicted.iter().zip(expected_block) {
                 assert_eq!(*actual, i16::from(expected));
             }
-
             let intra = predictor_block(Some(&prev), dims, 1, FrameType::Intra);
             assert!(intra.iter().all(|&value| value == 0));
         }
-
         #[test]
         fn write_reconstructed_block_clamps_and_combines_samples() {
             let dims = FrameDimensions::new(8, 8);
@@ -6223,7 +5746,6 @@ pub mod codec {
             assert_eq!(reconstructed[2], 25);
             assert_eq!(reconstructed[3], 30);
         }
-
         #[cfg(feature = "streaming-neural-filter")]
         #[test]
         fn neural_filter_is_deterministic_and_effectful() {
@@ -6241,7 +5763,6 @@ pub mod codec {
             assert_ne!(frame, untouched, "neural filter should change the frame");
         }
     }
-
     /// Deterministic scalar fixed-point DCT used as the cross-hardware reference.
     /// Accelerated variants must prove bit-exact parity against this path.
     #[cfg(feature = "streaming-fixed-point-dct")]
@@ -6270,7 +5791,6 @@ pub mod codec {
         }
         out
     }
-
     #[cfg(not(feature = "streaming-fixed-point-dct"))]
     pub(crate) fn forward_dct(block: &[i16; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
         let mut out = [0i32; BLOCK_PIXELS];
@@ -6288,7 +5808,6 @@ pub mod codec {
         }
         out
     }
-
     #[cfg(feature = "streaming-fixed-point-dct")]
     pub(crate) fn inverse_dct(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
         let mut out = [0i32; BLOCK_PIXELS];
@@ -6315,7 +5834,6 @@ pub mod codec {
         }
         out
     }
-
     #[cfg(not(feature = "streaming-fixed-point-dct"))]
     pub(crate) fn inverse_dct(coeffs: &[i32; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
         let mut out = [0i32; BLOCK_PIXELS];
@@ -6333,11 +5851,9 @@ pub mod codec {
         }
         out
     }
-
     fn qp_scale(quantizer: u8) -> i32 {
         (quantizer as i32).max(1)
     }
-
     pub(crate) fn quantize_coeffs(
         coeffs: &[i32; BLOCK_PIXELS],
         quantizer: u8,
@@ -6349,7 +5865,6 @@ pub mod codec {
             }
             return out;
         }
-
         let scale = qp_scale(quantizer);
         for (idx, coeff) in coeffs.iter().enumerate() {
             let step = (i32::from(BASELINE_QUANT_MATRIX[idx]).max(1)) * scale;
@@ -6363,7 +5878,6 @@ pub mod codec {
         }
         out
     }
-
     pub(crate) fn dequantize_coeffs(
         coeffs: &[i16; BLOCK_PIXELS],
         quantizer: u8,
@@ -6375,7 +5889,6 @@ pub mod codec {
             }
             return out;
         }
-
         let scale = qp_scale(quantizer);
         for (idx, coeff) in coeffs.iter().enumerate() {
             let step = (i32::from(BASELINE_QUANT_MATRIX[idx]).max(1)) * scale;
@@ -6383,7 +5896,6 @@ pub mod codec {
         }
         out
     }
-
     pub(crate) trait BundledHooks {
         fn record_dc(&mut self, _diff: i16) {}
         fn record_ac(&mut self, _zeros: u8, _value: i16) {}
@@ -6396,12 +5908,9 @@ pub mod codec {
         ) {
         }
     }
-
     #[derive(Default)]
     struct NoopBundledHooks;
-
     impl BundledHooks for NoopBundledHooks {}
-
     #[derive(Clone, Copy, Debug, Default, NoritoSerialize, NoritoDeserialize)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct BundledStats {
@@ -6425,7 +5934,6 @@ pub mod codec {
         pub flush_context_switch: u64,
         pub flush_end_of_block: u64,
     }
-
     impl BundledStats {
         fn record_flush(&mut self, reason: BundleFlushReason) {
             match reason {
@@ -6441,10 +5949,8 @@ pub mod codec {
             }
         }
     }
-
     pub(crate) const RDO_BUCKET_COUNT: usize = 5;
     pub(crate) const RDO_MAX_SYMBOLS: usize = 1 << MAX_BUNDLE_WIDTH;
-
     #[derive(Clone, Debug, Default, NoritoSerialize, NoritoDeserialize)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct RdoTelemetry {
@@ -6457,7 +5963,6 @@ pub mod codec {
         pub distortion_penalty: u64,
         pub neural_class_histogram: Vec<u64>,
     }
-
     #[derive(Clone, Copy, Debug, Default, NoritoSerialize, NoritoDeserialize)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct ContextFrequency {
@@ -6466,7 +5971,6 @@ pub mod codec {
         pub total_bits: u64,
         pub symbol_counts: [u64; RDO_MAX_SYMBOLS],
     }
-
     /// Summary describing the context remap applied during bundle recording.
     #[derive(Clone, Copy, Debug, Default, NoritoSerialize, NoritoDeserialize)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -6475,7 +5979,6 @@ pub mod codec {
         pub remapped: u32,
         pub dropped: u32,
     }
-
     #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct BundledTelemetry {
@@ -6498,7 +6001,6 @@ pub mod codec {
         #[norito(default)]
         pub rdo: Option<RdoTelemetry>,
     }
-
     impl BundledTelemetry {
         /// Decode the ANS stream into bundle symbols using the supplied tables.
         pub fn decode_symbols(
@@ -6513,7 +6015,6 @@ pub mod codec {
             }
             decode_bundle_stream(&self.ans_stream, &self.bundles, tables)
         }
-
         /// Verify that the ANS stream reproduces the recorded bundle bits.
         pub fn verify_stream(&self, tables: &BundleAnsTables) -> Result<(), BundleDecodeError> {
             let decoded = self.decode_symbols(tables)?;
@@ -6533,7 +6034,6 @@ pub mod codec {
             Ok(())
         }
     }
-
     #[derive(Clone, Copy, Debug, NoritoSerialize, NoritoDeserialize)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::TypeId))]
     pub enum BundledToken {
@@ -6541,7 +6041,6 @@ pub mod codec {
         Ac { run: u8, value: i16 },
         EndOfBlock,
     }
-
     #[cfg(feature = "schema-structural")]
     #[derive(::iroha_schema::IntoSchema)]
     #[allow(dead_code)]
@@ -6549,18 +6048,15 @@ pub mod codec {
         run: u8,
         value: i16,
     }
-
     #[cfg(feature = "schema-structural")]
     impl ::iroha_schema::IntoSchema for BundledToken {
         fn type_name() -> String {
             "BundledToken".to_owned()
         }
-
         fn update_schema_map(map: &mut ::iroha_schema::MetaMap) {
             if map.contains_key::<Self>() {
                 return;
             }
-
             map.insert::<Self>(::iroha_schema::Metadata::Enum(::iroha_schema::EnumMeta {
                 variants: vec![
                     ::iroha_schema::EnumVariant {
@@ -6580,12 +6076,10 @@ pub mod codec {
                     },
                 ],
             }));
-
             <i16 as ::iroha_schema::IntoSchema>::update_schema_map(map);
             <BundledAcTokenSchema as ::iroha_schema::IntoSchema>::update_schema_map(map);
         }
     }
-
     #[derive(Clone, Copy, Debug, NoritoSerialize, NoritoDeserialize)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub enum BundleType {
@@ -6595,7 +6089,6 @@ pub mod codec {
         SignParityLevel,
         SignificanceRle,
     }
-
     impl BundleType {
         const fn as_u8(self) -> u8 {
             match self {
@@ -6607,7 +6100,6 @@ pub mod codec {
             }
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub enum BundleFlushReason {
@@ -6615,7 +6107,6 @@ pub mod codec {
         ContextSwitch,
         EndOfBlock,
     }
-
     #[derive(
         Clone,
         Copy,
@@ -6631,13 +6122,11 @@ pub mod codec {
     )]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct BundleContextId(pub u16);
-
     impl BundleContextId {
         pub const fn new(raw: u16) -> Self {
             Self(raw)
         }
     }
-
     #[derive(Clone, Copy, Debug, NoritoSerialize, NoritoDeserialize)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct BundleRecord {
@@ -6647,7 +6136,6 @@ pub mod codec {
         pub bit_len: u8,
         pub flush: BundleFlushReason,
     }
-
     #[derive(Clone, Copy, Debug, NoritoSerialize, NoritoDeserialize)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct BundleContextStats {
@@ -6663,7 +6151,6 @@ pub mod codec {
         pub flush_context_switch: u64,
         pub flush_end_of_block: u64,
     }
-
     impl BundleContextStats {
         const fn new(context: BundleContextId) -> Self {
             Self {
@@ -6679,7 +6166,6 @@ pub mod codec {
                 flush_end_of_block: 0,
             }
         }
-
         fn record_bundle(&mut self, bundle_type: BundleType, flush: BundleFlushReason) {
             self.bundles_total = self.bundles_total.saturating_add(1);
             match bundle_type {
@@ -6701,7 +6187,6 @@ pub mod codec {
             }
             self.record_flush(flush);
         }
-
         fn record_flush(&mut self, flush: BundleFlushReason) {
             match flush {
                 BundleFlushReason::TypeComplete => {
@@ -6716,7 +6201,6 @@ pub mod codec {
             }
         }
     }
-
     #[derive(Clone, Copy)]
     struct DpReport {
         energy: u32,
@@ -6725,7 +6209,6 @@ pub mod codec {
         distortion_penalty: u64,
         neural_class: Option<usize>,
     }
-
     struct RdoTelemetryBuilder {
         mode: RdoMode,
         lambda_bits: f32,
@@ -6736,7 +6219,6 @@ pub mod codec {
         neural_histogram: Vec<u64>,
         blocks: u64,
     }
-
     impl RdoTelemetryBuilder {
         fn new(mode: RdoMode, lambda_bits: f32, neural_classes: usize) -> Option<Self> {
             if !mode.is_enabled() {
@@ -6757,7 +6239,6 @@ pub mod codec {
                 blocks: 0,
             })
         }
-
         fn record(&mut self, report: &DpReport) {
             let bucket = energy_bucket(report.energy);
             if let Some(slot) = self.energy_histogram.get_mut(bucket) {
@@ -6775,7 +6256,6 @@ pub mod codec {
             }
             self.blocks = self.blocks.saturating_add(1);
         }
-
         fn finish(self) -> Option<RdoTelemetry> {
             Some(RdoTelemetry {
                 mode: self.mode,
@@ -6789,7 +6269,6 @@ pub mod codec {
             })
         }
     }
-
     const fn energy_bucket(energy: u32) -> usize {
         let mut idx = 0usize;
         while idx < RDO_ENERGY_BUCKETS.len() {
@@ -6800,14 +6279,12 @@ pub mod codec {
         }
         RDO_BUCKET_COUNT - 1
     }
-
     fn rdo_lambda_for_mode(mode: RdoMode, quantizer: u8) -> f32 {
         match mode {
             RdoMode::Perceptual => rdo_lambda_perceptual(quantizer),
             _ => rdo_lambda_for_quantizer(quantizer),
         }
     }
-
     fn rdo_lambda_for_quantizer(quantizer: u8) -> f32 {
         match quantizer_to_bucket(quantizer) {
             0 => 0.45,
@@ -6816,7 +6293,6 @@ pub mod codec {
             _ => 1.35,
         }
     }
-
     fn rdo_lambda_perceptual(quantizer: u8) -> f32 {
         // Slightly soften lambda at mid/high Q to favour structure (SSIM proxy) while
         // keeping low-Q output close to the rate-focused schedule.
@@ -6827,7 +6303,6 @@ pub mod codec {
             _ => 1.15,
         }
     }
-
     fn block_energy(coeffs: &[i16; BLOCK_PIXELS]) -> u32 {
         coeffs
             .iter()
@@ -6837,7 +6312,6 @@ pub mod codec {
             .map(u32::from)
             .sum()
     }
-
     fn max_zero_run_in_block(coeffs: &[i16; BLOCK_PIXELS]) -> u8 {
         let mut max_run = 0u8;
         let mut run = 0u8;
@@ -6851,7 +6325,6 @@ pub mod codec {
         }
         max_run
     }
-
     fn estimate_rle_bits(coeffs: &[i16; BLOCK_PIXELS]) -> u64 {
         let mut pos = 1usize;
         let mut bits = 0u64;
@@ -6874,7 +6347,6 @@ pub mod codec {
         }
         bits
     }
-
     fn token_rate_bits(zero_run: usize) -> f32 {
         let mut tokens = 1u32;
         let mut run = zero_run;
@@ -6884,7 +6356,6 @@ pub mod codec {
         }
         tokens as f32 * RLE_TOKEN_BITS_F
     }
-
     #[allow(clippy::too_many_arguments)]
     fn optimize_block_dp(
         coeffs: &mut [i16; BLOCK_PIXELS],
@@ -6907,7 +6378,6 @@ pub mod codec {
                 neural_class: None,
             };
         }
-
         let mut lambda = lambda_bits;
         let mut neural_class = None;
         if matches!(mode, RdoMode::Neural)
@@ -6930,15 +6400,12 @@ pub mod codec {
                 _ => 1.28,
             };
         }
-
         let ac_len = BLOCK_PIXELS - 1;
         let mut best = vec![vec![f32::INFINITY; ac_len + 1]; ac_len + 1];
         let mut keep = vec![vec![false; ac_len + 1]; ac_len];
-
         for slot in best[ac_len].iter_mut().take(ac_len + 1) {
             *slot = RLE_EOB_BITS_F;
         }
-
         for idx in (0..ac_len).rev() {
             let coeff = original[ZIG_ZAG[idx + 1]];
             let distortion_zero = f32::from(coeff) * f32::from(coeff);
@@ -6958,7 +6425,6 @@ pub mod codec {
                 }
             }
         }
-
         let mut run = 0usize;
         for idx in 0..ac_len {
             let slot = ZIG_ZAG[idx + 1];
@@ -6970,7 +6436,6 @@ pub mod codec {
             }
         }
         coeffs[0] = original[0];
-
         let before_bits = estimate_rle_bits(&original);
         let after_bits = estimate_rle_bits(coeffs);
         let distortion_penalty: u64 = original
@@ -6982,7 +6447,6 @@ pub mod codec {
                 diff.saturating_mul(diff) as u64
             })
             .sum();
-
         DpReport {
             energy,
             before_bits,
@@ -6991,28 +6455,23 @@ pub mod codec {
             neural_class,
         }
     }
-
     struct TinyPrng(u64);
-
     impl TinyPrng {
         fn new(seed: u64) -> Self {
             Self(seed | 1)
         }
-
         fn next(&mut self) -> u32 {
             self.0 ^= self.0 << 13;
             self.0 ^= self.0 >> 7;
             self.0 ^= self.0 << 17;
             (self.0 >> 32) as u32
         }
-
         fn next_i8(&mut self) -> i8 {
             let raw = self.next();
             let span = 11i16;
             let value = (raw % (2 * span as u32 + 1)) as i16 - span;
             value as i8
         }
-
         fn next_i16(&mut self) -> i16 {
             let raw = self.next();
             let span = 127i32;
@@ -7020,7 +6479,6 @@ pub mod codec {
             value as i16
         }
     }
-
     #[derive(Clone)]
     struct NeuralPredictor {
         weights1: [[i8; NEURAL_FEATURES]; NEURAL_HIDDEN],
@@ -7029,7 +6487,6 @@ pub mod codec {
         bias2: [i16; NEURAL_OUTPUT],
         activation_scale: i16,
     }
-
     impl NeuralPredictor {
         fn from_seed(seed: [u8; 32]) -> Self {
             let mut seed_bytes = [0u8; 8];
@@ -7064,7 +6521,6 @@ pub mod codec {
                 activation_scale,
             }
         }
-
         fn predict(&self, features: &[i8; NEURAL_FEATURES]) -> usize {
             let mut hidden = [0i16; NEURAL_HIDDEN];
             for (idx, (row, bias)) in self.weights1.iter().zip(self.bias1.iter()).enumerate() {
@@ -7076,7 +6532,6 @@ pub mod codec {
                 let relu = scaled.max(0).min(i32::from(i16::MAX));
                 hidden[idx] = relu as i16;
             }
-
             let mut best = (0usize, i32::MIN);
             for (class, (row, bias)) in self.weights2.iter().zip(self.bias2.iter()).enumerate() {
                 let mut acc = i32::from(*bias);
@@ -7090,7 +6545,6 @@ pub mod codec {
             best.0
         }
     }
-
     fn build_neural_features(
         coeffs: &[i16; BLOCK_PIXELS],
         energy: u32,
@@ -7121,11 +6575,9 @@ pub mod codec {
         features[7] = tail_energy.min(127) as i8;
         features
     }
-
     #[cfg(test)]
     mod rdo_tests {
         use super::*;
-
         #[test]
         fn dp_optimizer_reduces_rate_on_sparse_block() {
             let mut coeffs = [0i16; BLOCK_PIXELS];
@@ -7156,7 +6608,6 @@ pub mod codec {
             // ensure DC preserved
             assert_eq!(working[0], coeffs[0]);
         }
-
         #[test]
         fn neural_predictor_is_deterministic() {
             let predictor = NeuralPredictor::from_seed(DEFAULT_NEURAL_SEED);
@@ -7166,7 +6617,6 @@ pub mod codec {
             let second = predictor.predict(&features);
             assert_eq!(first, second);
         }
-
         #[test]
         fn context_frequency_records_symbols() {
             let dims = FrameDimensions::new(8, 8);
@@ -7189,7 +6639,6 @@ pub mod codec {
             assert_eq!(entry.bundles, 1);
             assert_eq!(entry.symbol_counts[3], 1);
         }
-
         #[test]
         fn context_remap_loader_maps_and_escapes() {
             let path = std::env::temp_dir().join("remap_loader.json");
@@ -7212,7 +6661,6 @@ pub mod codec {
             let _ = std::fs::remove_file(&path);
         }
     }
-
     struct BundleStreamRecorder {
         stats: BundledStats,
         tokens: Vec<BundledToken>,
@@ -7230,7 +6678,6 @@ pub mod codec {
         last_context: Option<BundleContextId>,
         context_remap: Option<Arc<BundleContextRemap>>,
     }
-
     impl BundleStreamRecorder {
         fn new(
             bundle_width: u8,
@@ -7262,13 +6709,11 @@ pub mod codec {
                 context_remap,
             }
         }
-
         fn context_stats_entry(&mut self, context: BundleContextId) -> &mut BundleContextStats {
             self.context_stats
                 .entry(context)
                 .or_insert_with(|| BundleContextStats::new(context))
         }
-
         fn map_context(&self, context: BundleContextId) -> BundleContextId {
             if let Some(remap) = self.context_remap.as_ref() {
                 remap.map(context)
@@ -7276,7 +6721,6 @@ pub mod codec {
                 context
             }
         }
-
         fn finish(self) -> BundledTelemetry {
             let (ans_stream, used_acceleration) = encode_bundle_stream_with_opts(
                 self.tables.as_ref(),
@@ -7304,7 +6748,6 @@ pub mod codec {
                 rdo: None,
             }
         }
-
         fn record_bundle(
             &mut self,
             bundle_type: BundleType,
@@ -7347,7 +6790,6 @@ pub mod codec {
                 flush,
             });
         }
-
         fn accumulate_stats(&mut self, value: i16) {
             let nonzero = value != 0;
             if nonzero {
@@ -7355,26 +6797,22 @@ pub mod codec {
             } else {
                 self.stats.significance_zero = self.stats.significance_zero.saturating_add(1);
             }
-
             let negative = value < 0;
             if negative {
                 self.stats.sign_negative = self.stats.sign_negative.saturating_add(1);
             } else {
                 self.stats.sign_positive = self.stats.sign_positive.saturating_add(1);
             }
-
             if self.width >= 3 && value != 0 {
                 let parity = (value.wrapping_abs() as u32 & 1) as u8;
                 if parity == 1 {
                     self.stats.parity_one = self.stats.parity_one.saturating_add(1);
                 }
             }
-
             if self.width >= 4 && value.abs() >= 2 {
                 self.stats.geq2_one = self.stats.geq2_one.saturating_add(1);
             }
         }
-
         fn record_block(
             &mut self,
             block_index: usize,
@@ -7406,7 +6844,6 @@ pub mod codec {
             self.pending_blocks
                 .push_back(BlockBundleState::new(block_index, slots));
         }
-
         fn ensure_current_block(&mut self) {
             if self.current_block.is_none()
                 && let Some(next) = self.pending_blocks.pop_front()
@@ -7414,14 +6851,12 @@ pub mod codec {
                 self.current_block = Some(next);
             }
         }
-
         fn peek_slot(&mut self) -> Option<SlotContext> {
             self.ensure_current_block();
             self.current_block
                 .as_ref()
                 .and_then(BlockBundleState::peek_slot)
         }
-
         fn pop_slot(&mut self) -> Option<SlotContext> {
             loop {
                 self.ensure_current_block();
@@ -7436,7 +6871,6 @@ pub mod codec {
                 }
             }
         }
-
         fn flush_pending_zero_slots(&mut self) {
             while let Some(slot) = self.pop_slot() {
                 debug_assert!(!slot.is_non_zero);
@@ -7452,7 +6886,6 @@ pub mod codec {
                 self.emit_zero_run_bundle(slot.context, run);
             }
         }
-
         fn record_zero_run(&mut self, zeros: u8) {
             let mut remaining = zeros;
             while remaining > 0 {
@@ -7478,7 +6911,6 @@ pub mod codec {
                 remaining = remaining.saturating_sub(run as u8);
             }
         }
-
         fn emit_zero_run_bundle(&mut self, context: BundleContextId, mut run: u16) {
             while run > 0 {
                 let (bits, bit_len, consumed) = bundle_zero_run_symbol(run, self.width);
@@ -7492,7 +6924,6 @@ pub mod codec {
                 run = run.saturating_sub(consumed);
             }
         }
-
         #[allow(clippy::too_many_arguments)]
         fn compute_context(
             &self,
@@ -7514,7 +6945,6 @@ pub mod codec {
             let prev_bucket = level_bucket(prev_level_abs);
             let frame_class: u8 = if frame_type == FrameType::Intra { 0 } else { 1 };
             let coeff_bucket = (coeff != 0) as u8;
-
             let mut hash = 0x811C9DC5u32;
             hash = hash_mix(hash, bundle_type.as_u8() as u32);
             hash = hash_mix(hash, subband.into());
@@ -7529,7 +6959,6 @@ pub mod codec {
             BundleContextId::new((hash & 0xFFFF) as u16)
         }
     }
-
     impl BundledHooks for BundleStreamRecorder {
         fn record_block_coeffs(
             &mut self,
@@ -7539,13 +6968,11 @@ pub mod codec {
         ) {
             self.record_block(block_index, coeffs, frame_type);
         }
-
         fn record_dc(&mut self, diff: i16) {
             self.ensure_current_block();
             self.stats.dc_events = self.stats.dc_events.saturating_add(1);
             self.tokens.push(BundledToken::DcDiff(diff));
         }
-
         fn record_ac(&mut self, zeros: u8, value: i16) {
             self.stats.ac_events = self.stats.ac_events.saturating_add(1);
             self.stats.zero_run_total = self.stats.zero_run_total.saturating_add(u64::from(zeros));
@@ -7553,7 +6980,6 @@ pub mod codec {
             if value != 0 {
                 self.stats.nonzero_levels = self.stats.nonzero_levels.saturating_add(1);
             }
-
             self.record_zero_run(zeros);
             let slot = self
                 .pop_slot()
@@ -7567,10 +6993,8 @@ pub mod codec {
                 len,
                 BundleFlushReason::TypeComplete,
             );
-
             self.tokens.push(BundledToken::Ac { run: zeros, value });
         }
-
         fn record_eob(&mut self) {
             self.flush_pending_zero_slots();
             self.stats.blocks_encoded = self.stats.blocks_encoded.saturating_add(1);
@@ -7584,20 +7008,17 @@ pub mod codec {
             self.last_context = None;
         }
     }
-
     #[derive(Clone, Copy)]
     struct SlotContext {
         context: BundleContextId,
         is_non_zero: bool,
     }
-
     struct BlockBundleState {
         #[allow(dead_code)]
         block_index: usize,
         slots: Vec<SlotContext>,
         cursor: usize,
     }
-
     impl BlockBundleState {
         fn new(block_index: usize, slots: Vec<SlotContext>) -> Self {
             Self {
@@ -7606,7 +7027,6 @@ pub mod codec {
                 cursor: 0,
             }
         }
-
         fn next_slot(&mut self) -> Option<SlotContext> {
             let slot = self.slots.get(self.cursor).copied();
             if slot.is_some() {
@@ -7614,15 +7034,12 @@ pub mod codec {
             }
             slot
         }
-
         fn peek_slot(&self) -> Option<SlotContext> {
             self.slots.get(self.cursor).copied()
         }
     }
-
     const BUNDLE_ANS_PRECISION_BITS: u8 = 12;
     const BUNDLE_RANS_BYTE_L: u32 = 1 << 23;
-
     #[derive(Clone, Debug)]
     struct SymbolTable {
         freq: Vec<u16>,
@@ -7630,16 +7047,13 @@ pub mod codec {
         precision_bits: u8,
         decode: Vec<AnsSymbol>,
     }
-
     #[derive(Clone, Copy, Debug)]
     struct AnsSymbol {
         symbol: u16,
         start: u16,
         freq: u16,
     }
-
     pub(super) const MAX_BUNDLE_WIDTH: usize = 4;
-
     impl SymbolTable {
         fn from_group(group: &RansGroupTableV1) -> Result<Self, BundleTableError> {
             let width_bits = match group.width_bits {
@@ -7706,7 +7120,6 @@ pub mod codec {
             );
             Ok(table)
         }
-
         fn from_frequencies(freq: Vec<u16>, start: Vec<u16>, precision_bits: u8) -> Self {
             let decode = build_decode_table(&freq, &start, precision_bits);
             Self {
@@ -7717,7 +7130,6 @@ pub mod codec {
             }
         }
     }
-
     fn infer_group_width_bits(group_size: u16) -> Result<u8, BundleTableError> {
         if group_size == 0 {
             return Err(BundleTableError::InvalidGroup {
@@ -7734,7 +7146,6 @@ pub mod codec {
         }
         Ok(value.trailing_zeros() as u8)
     }
-
     fn build_uniform_symbol_table(bit_len: u8, precision_bits: u8) -> SymbolTable {
         let alphabet = 1usize << bit_len.max(1);
         let precision = 1usize << precision_bits;
@@ -7758,7 +7169,6 @@ pub mod codec {
         }
         SymbolTable::from_frequencies(freq, start, precision_bits)
     }
-
     fn derive_significance_table(source: &SymbolTable) -> SymbolTable {
         let mut freq = vec![0u16; 2];
         for (symbol, &value) in source.freq.iter().enumerate() {
@@ -7773,7 +7183,6 @@ pub mod codec {
         }
         SymbolTable::from_frequencies(freq, start, source.precision_bits)
     }
-
     fn build_decode_table(freq: &[u16], start: &[u16], precision_bits: u8) -> Vec<AnsSymbol> {
         let precision = 1usize << precision_bits;
         let mut table = vec![
@@ -7799,7 +7208,6 @@ pub mod codec {
         }
         table
     }
-
     #[inline]
     fn prefetch_bundle_record(record: &BundleRecord) {
         #[cfg(target_arch = "x86_64")]
@@ -7807,7 +7215,6 @@ pub mod codec {
             use core::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
             _mm_prefetch(record as *const _ as *const i8, _MM_HINT_T0);
         }
-
         #[cfg(target_arch = "aarch64")]
         unsafe {
             core::arch::asm!(
@@ -7817,7 +7224,6 @@ pub mod codec {
             );
         }
     }
-
     struct BundleRansEncoder<'a> {
         tables: &'a BundleAnsTables,
         precision_bits: u8,
@@ -7825,7 +7231,6 @@ pub mod codec {
         buffer: Vec<u8>,
         table_cache: [Option<&'a SymbolTable>; MAX_BUNDLE_WIDTH + 1],
     }
-
     impl<'a> BundleRansEncoder<'a> {
         fn new(tables: &'a BundleAnsTables) -> Self {
             let mut table_cache: [Option<&'a SymbolTable>; MAX_BUNDLE_WIDTH + 1] =
@@ -7841,7 +7246,6 @@ pub mod codec {
                 table_cache,
             }
         }
-
         fn encode_record(&mut self, record: &BundleRecord) {
             let table = self
                 .table_cache
@@ -7852,7 +7256,6 @@ pub mod codec {
             let symbol = (record.bits & ((1 << record.bit_len) - 1)) as usize;
             self.encode_symbol(symbol, table);
         }
-
         fn encode_symbol(&mut self, symbol: usize, table: &SymbolTable) {
             let freq = table.freq[symbol] as u32;
             let start = table.start[symbol] as u32;
@@ -7862,7 +7265,6 @@ pub mod codec {
             }
             self.state = ((self.state / freq) << self.precision_bits) + (self.state % freq) + start;
         }
-
         fn finish(mut self) -> Vec<u8> {
             for _ in 0..4 {
                 self.buffer.push((self.state & 0xFF) as u8);
@@ -7871,7 +7273,6 @@ pub mod codec {
             self.buffer
         }
     }
-
     struct BundleRansDecoder<'a> {
         tables: &'a BundleAnsTables,
         precision_bits: u8,
@@ -7879,7 +7280,6 @@ pub mod codec {
         cursor: usize,
         state: u32,
     }
-
     impl<'a> BundleRansDecoder<'a> {
         fn new(buffer: &'a [u8], tables: &'a BundleAnsTables) -> Result<Self, BundleDecodeError> {
             if buffer.len() < 4 {
@@ -7899,12 +7299,10 @@ pub mod codec {
                 state,
             })
         }
-
         fn decode_record(&mut self, record: &BundleRecord) -> Result<u8, BundleDecodeError> {
             let table = self.tables.table_for_bits(record.bit_len);
             self.decode_symbol(table).map(|sym| sym as u8)
         }
-
         fn decode_symbol(&mut self, table: &SymbolTable) -> Result<u16, BundleDecodeError> {
             let mask = (1u32 << self.precision_bits) - 1;
             let idx = (self.state & mask) as usize;
@@ -7914,7 +7312,6 @@ pub mod codec {
             self.renormalize()?;
             Ok(sym.symbol)
         }
-
         fn renormalize(&mut self) -> Result<(), BundleDecodeError> {
             while self.state < BUNDLE_RANS_BYTE_L && self.cursor > 0 {
                 self.cursor -= 1;
@@ -7926,16 +7323,13 @@ pub mod codec {
             Ok(())
         }
     }
-
     const SIMD_BUNDLE_MAGIC: [u8; 4] = *b"BR4\x01";
-
     #[cfg(test)]
     fn encode_bundle_stream(tables: &BundleAnsTables, bundles: &[BundleRecord]) -> Vec<u8> {
         let (stream, _acceleration) =
             encode_bundle_stream_with_opts(tables, bundles, BundleAcceleration::None, 0);
         stream
     }
-
     fn encode_bundle_stream_with_opts(
         tables: &BundleAnsTables,
         bundles: &[BundleRecord],
@@ -7968,7 +7362,6 @@ pub mod codec {
             )
         }
     }
-
     fn encode_bundle_stream_scalar(
         tables: &BundleAnsTables,
         bundles: &[BundleRecord],
@@ -7987,7 +7380,6 @@ pub mod codec {
         }
         encoder.finish()
     }
-
     fn encode_bundle_stream_simd(
         tables: &BundleAnsTables,
         bundles: &[BundleRecord],
@@ -8002,7 +7394,6 @@ pub mod codec {
         for bit_len in 1..=tables.max_width() {
             table_cache[bit_len as usize] = Some(tables.table_for_bits(bit_len));
         }
-
         for rev_idx in 0..bundles.len() {
             let idx = bundles.len() - 1 - rev_idx;
             if distance > 0
@@ -8025,14 +7416,12 @@ pub mod codec {
             }
             *state = ((*state / freq) << precision_bits) + (*state % freq) + start;
         }
-
         for (state, buffer) in states.iter_mut().zip(buffers.iter_mut()) {
             for _ in 0..4 {
                 buffer.push((*state & 0xFF) as u8);
                 *state >>= 8;
             }
         }
-
         let mut payload_len = SIMD_BUNDLE_MAGIC.len();
         let mut lane_lengths = [0usize; 4];
         let mut overflowed = false;
@@ -8047,7 +7436,6 @@ pub mod codec {
             // SIMD header stores lane lengths as u32, so fall back to scalar on overflow.
             return encode_bundle_stream_scalar(tables, bundles, prefetch_distance);
         }
-
         let mut out = Vec::with_capacity(payload_len);
         out.extend_from_slice(&SIMD_BUNDLE_MAGIC);
         for len in lane_lengths {
@@ -8059,7 +7447,6 @@ pub mod codec {
         }
         out
     }
-
     fn cpu_simd_supported() -> bool {
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -8072,7 +7459,6 @@ pub mod codec {
         #[allow(unreachable_code)]
         false
     }
-
     /// Decode a bundled rANS stream back into the raw bundle symbols.
     pub fn decode_bundle_stream(
         stream: &[u8],
@@ -8108,7 +7494,6 @@ pub mod codec {
         }
         Ok(out)
     }
-
     fn decode_bundle_stream_simd(
         stream: &[u8],
         bundles: &[BundleRecord],
@@ -8145,7 +7530,6 @@ pub mod codec {
             decoders[idx] = Some(BundleRansDecoder::new(lane_slice, tables)?);
             lane_cursor = next;
         }
-
         let mut out = Vec::with_capacity(bundles.len());
         for (idx, record) in bundles.iter().enumerate() {
             let lane = (bundles.len() - 1 - idx) & 3;
@@ -8156,7 +7540,6 @@ pub mod codec {
         }
         Ok(out)
     }
-
     fn read_simd_bundle_lane_len(
         stream: &[u8],
         cursor: &mut usize,
@@ -8172,7 +7555,6 @@ pub mod codec {
         *cursor = end;
         Ok(u32::from_le_bytes(buf) as usize)
     }
-
     fn bundle_bits(value: i16, width: u8) -> (BundleType, u8, u8) {
         let nonzero = value != 0;
         let mut bits = (nonzero as u8) & 0x1;
@@ -8180,27 +7562,23 @@ pub mod codec {
         if !nonzero || width <= 1 {
             return (BundleType::SignificanceOnly, bits, len);
         }
-
         let negative = value < 0;
         bits = (bits << 1) | (negative as u8);
         len += 1;
         if width <= 2 {
             return (BundleType::SignAndMagnitude, bits, len);
         }
-
         let parity = (value.saturating_abs() as u16 & 1) as u8;
         bits = (bits << 1) | parity;
         len += 1;
         if width <= 3 {
             return (BundleType::SignParity, bits, len);
         }
-
         let geq2 = (value.saturating_abs() >= 2) as u8;
         bits = (bits << 1) | geq2;
         len += 1;
         (BundleType::SignParityLevel, bits, len)
     }
-
     fn bundle_zero_run_symbol(run: u16, width: u8) -> (u8, u8, u16) {
         let bit_len = width.max(2).min(MAX_BUNDLE_WIDTH as u8);
         let max_symbol = (1u16 << bit_len) - 1;
@@ -8208,7 +7586,6 @@ pub mod codec {
         let bits = u8::try_from(consumed).unwrap_or(u8::MAX);
         (bits, bit_len, consumed)
     }
-
     fn quantizer_to_bucket(qp: u8) -> u8 {
         match qp {
             0..=12 => 0,
@@ -8217,7 +7594,6 @@ pub mod codec {
             _ => 3,
         }
     }
-
     fn position_class(order: usize) -> u8 {
         match order {
             0 => 0,
@@ -8227,7 +7603,6 @@ pub mod codec {
             _ => 4,
         }
     }
-
     fn subband_class(slot: usize) -> u8 {
         let row = slot / BLOCK_SIZE;
         let col = slot % BLOCK_SIZE;
@@ -8239,7 +7614,6 @@ pub mod codec {
             (false, false) => 3,
         }
     }
-
     fn neighbor_nonzero_count(coeffs: &[i16; BLOCK_PIXELS], slot: usize) -> u8 {
         let row = slot / BLOCK_SIZE;
         let col = slot % BLOCK_SIZE;
@@ -8258,7 +7632,6 @@ pub mod codec {
         }
         count.min(3)
     }
-
     fn level_bucket(value: u8) -> u8 {
         match value {
             0 => 0,
@@ -8267,11 +7640,9 @@ pub mod codec {
             _ => 3,
         }
     }
-
     fn hash_mix(acc: u32, value: u32) -> u32 {
         acc.wrapping_mul(16777619) ^ value
     }
-
     pub(crate) fn encode_block_rle(
         coeffs: &[i16; BLOCK_PIXELS],
         prev_dc: &mut i16,
@@ -8286,7 +7657,6 @@ pub mod codec {
         out.extend_from_slice(&diff.to_le_bytes());
         hooks.record_dc(diff);
         *prev_dc = dc;
-
         let mut pos = 1usize;
         while pos < BLOCK_PIXELS {
             let mut zero_run = 0usize;
@@ -8294,32 +7664,27 @@ pub mod codec {
                 zero_run += 1;
                 pos += 1;
             }
-
             if pos == BLOCK_PIXELS {
                 out.push(RLE_EOB);
                 out.extend_from_slice(&0i16.to_le_bytes());
                 hooks.record_eob();
                 return;
             }
-
             while zero_run > MAX_ZERO_RUN {
                 out.push(MAX_ZERO_RUN as u8);
                 out.extend_from_slice(&0i16.to_le_bytes());
                 hooks.record_ac(MAX_ZERO_RUN as u8, 0);
                 zero_run -= MAX_ZERO_RUN;
             }
-
             out.push(zero_run as u8);
             out.extend_from_slice(&coeffs[ZIG_ZAG[pos]].to_le_bytes());
             hooks.record_ac(zero_run as u8, coeffs[ZIG_ZAG[pos]]);
             pos += 1;
         }
-
         out.push(RLE_EOB);
         out.extend_from_slice(&0i16.to_le_bytes());
         hooks.record_eob();
     }
-
     fn take_block_i16_le(
         bytes: &[u8],
         offset: &mut usize,
@@ -8336,7 +7701,6 @@ pub mod codec {
         *offset = end;
         Ok(i16::from_le_bytes(raw))
     }
-
     fn take_rle_record(
         bytes: &[u8],
         offset: &mut usize,
@@ -8353,7 +7717,6 @@ pub mod codec {
         *offset = end;
         Ok((record[0], i16::from_le_bytes(raw)))
     }
-
     pub(crate) fn decode_block_rle(
         bytes: &[u8],
         offset: &mut usize,
@@ -8365,17 +7728,14 @@ pub mod codec {
         let dc = prev_dc.wrapping_add(dc_diff);
         coeffs[0] = dc;
         *prev_dc = dc;
-
         let mut pos = 1usize;
         let mut finished = false;
         while pos < BLOCK_PIXELS {
             let (run, value) = take_rle_record(bytes, offset, block_index)?;
-
             if run == RLE_EOB {
                 finished = true;
                 break;
             }
-
             let advance = run as usize;
             if pos + advance >= BLOCK_PIXELS {
                 return Err(CodecError::RleOverflow(block_index));
@@ -8384,7 +7744,6 @@ pub mod codec {
             coeffs[ZIG_ZAG[pos]] = value;
             pos += 1;
         }
-
         if !finished {
             if pos < BLOCK_PIXELS {
                 return Err(CodecError::TruncatedBlock(block_index));
@@ -8397,12 +7756,10 @@ pub mod codec {
         }
         Ok(coeffs)
     }
-
     #[inline]
     fn clamp_pixel(value: i32) -> u8 {
         value.clamp(0, 255) as u8
     }
-
     #[cfg(feature = "streaming-neural-filter")]
     pub(super) fn apply_neural_filter(frame: &mut [u8], dims: FrameDimensions) {
         let width = usize::from(dims.width);
@@ -8417,7 +7774,6 @@ pub mod codec {
         if len == 0 || frame.len() < len {
             return;
         }
-
         const KERNEL: [i8; 9] = [1, 2, 1, 2, 4, 2, 1, 2, 1];
         const SHIFT: i32 = 4;
         const BIAS: i32 = 8;
@@ -8440,7 +7796,6 @@ pub mod codec {
         }
         frame[..len].copy_from_slice(&out);
     }
-
     #[cfg_attr(not(test), allow(dead_code))]
     fn layout_channel_count(layout: AudioLayout) -> usize {
         match layout {
@@ -8449,7 +7804,6 @@ pub mod codec {
             AudioLayout::FirstOrderAmbisonics => 4,
         }
     }
-
     #[derive(Clone, Copy, Debug)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     pub struct AudioEncoderConfig {
@@ -8460,7 +7814,6 @@ pub mod codec {
         pub target_bitrate: Option<u32>,
         pub backend: iroha_audio::BackendPreference,
     }
-
     impl Default for AudioEncoderConfig {
         fn default() -> Self {
             Self {
@@ -8473,19 +7826,16 @@ pub mod codec {
             }
         }
     }
-
     impl AudioEncoderConfig {
         #[must_use]
         pub fn channel_count(&self) -> usize {
             self.layout.channel_count()
         }
     }
-
     pub struct AudioEncoder {
         config: AudioEncoderConfig,
         backend: iroha_audio::Encoder,
     }
-
     impl AudioEncoder {
         pub fn new(config: AudioEncoderConfig) -> Result<Self, AudioCodecError> {
             let backend = iroha_audio::Encoder::new(iroha_audio::EncoderConfig {
@@ -8499,7 +7849,6 @@ pub mod codec {
             .map_err(AudioCodecError::from_backend)?;
             Ok(Self { config, backend })
         }
-
         pub fn encode_frame(
             &mut self,
             sequence: u64,
@@ -8519,12 +7868,10 @@ pub mod codec {
             })
         }
     }
-
     pub struct AudioDecoder {
         config: AudioEncoderConfig,
         backend: iroha_audio::Decoder,
     }
-
     impl AudioDecoder {
         pub fn new(config: AudioEncoderConfig) -> Result<Self, AudioCodecError> {
             let backend = iroha_audio::Decoder::new(iroha_audio::EncoderConfig {
@@ -8538,7 +7885,6 @@ pub mod codec {
             .map_err(AudioCodecError::from_backend)?;
             Ok(Self { config, backend })
         }
-
         pub fn decode_frame(&mut self, frame: &AudioFrame) -> Result<Vec<i16>, AudioCodecError> {
             if frame.channel_layout != self.config.layout {
                 return Err(AudioCodecError::LayoutMismatch(
@@ -8553,7 +7899,6 @@ pub mod codec {
                 .map_err(AudioCodecError::from_backend)
         }
     }
-
     fn checked_chunk_count(chunk_count: usize) -> Result<u16, SegmentError> {
         u16::try_from(chunk_count).map_err(|_| {
             SegmentError::ChunkCountOverflow(ChunkCountOverflowInfo {
@@ -8561,7 +7906,6 @@ pub mod codec {
             })
         })
     }
-
     pub fn verify_segment(
         header: &SegmentHeader,
         descriptors: &[ChunkDescriptor],
@@ -8574,7 +7918,6 @@ pub mod codec {
                 chunks: saturating_usize_to_u32(chunks.len()),
             }));
         }
-
         let descriptor_count = checked_chunk_count(descriptors.len())?;
         if header.chunk_count != descriptor_count {
             return Err(SegmentError::HeaderCountMismatch(
@@ -8584,11 +7927,9 @@ pub mod codec {
                 },
             ));
         }
-
         let mut payload_refs = Vec::with_capacity(descriptors.len());
         let mut expected_offset = 0u32;
         let mut last_chunk_id: Option<u16> = None;
-
         for (idx, (descriptor, chunk)) in descriptors.iter().zip(chunks.iter()).enumerate() {
             if let Some(last) = last_chunk_id
                 && descriptor.chunk_id <= last
@@ -8596,7 +7937,6 @@ pub mod codec {
                 return Err(SegmentError::UnsortedChunkIds);
             }
             last_chunk_id = Some(descriptor.chunk_id);
-
             let chunk_len = u32::try_from(chunk.len())
                 .map_err(|_| SegmentError::ChunkLengthOverflow(saturating_usize_to_u32(idx)))?;
             if descriptor.offset != expected_offset {
@@ -8620,12 +7960,9 @@ pub mod codec {
             expected_offset = expected_offset
                 .checked_add(chunk_len)
                 .ok_or(SegmentError::OffsetOverflow(saturating_usize_to_u32(idx)))?;
-
             payload_refs.push((descriptor.chunk_id, chunk.as_slice()));
         }
-
         let commitments = chunk_commitments(header.segment_number, &payload_refs);
-
         for (idx, (descriptor, commitment)) in
             descriptors.iter().zip(commitments.iter()).enumerate()
         {
@@ -8635,12 +7972,10 @@ pub mod codec {
                 )));
             }
         }
-
         let root = merkle_root(&commitments)?;
         if header.chunk_merkle_root != root {
             return Err(SegmentError::MerkleMismatch);
         }
-
         match (header.audio_summary.as_ref(), audio) {
             (Some(summary), Some(track)) => {
                 if track.summary.sample_rate != summary.sample_rate {
@@ -8734,17 +8069,14 @@ pub mod codec {
             (None, Some(_)) => return Err(SegmentError::AudioSummaryUnexpected),
             (None, None) => {}
         }
-
         Ok(())
     }
-
     #[derive(Clone, Copy)]
     #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     struct OffsetMeta {
         offset: u32,
         length: u32,
     }
-
     fn compute_offsets(chunks: &[Vec<u8>]) -> Vec<OffsetMeta> {
         let mut offset = 0u32;
         chunks
@@ -8760,11 +8092,8 @@ pub mod codec {
             })
             .collect()
     }
-
     #[cfg(test)]
     mod tests {
-        use std::{str::FromStr, sync::Arc};
-
         use super::*;
         use crate::streaming::{
             Hash,
@@ -8773,13 +8102,12 @@ pub mod codec {
                 read_frame_header_u32_le, read_frame_header_u64_le,
             },
         };
-
+        use std::{str::FromStr, sync::Arc};
         fn hash_seed(seed: u8) -> Hash {
             let mut bytes = [0u8; 32];
             bytes.fill(seed);
             bytes
         }
-
         const JPEG_SAMPLE_BLOCK: [i16; BLOCK_PIXELS] = [
             52, 55, 61, 66, 70, 61, 64, 73, //
             63, 59, 55, 90, 109, 85, 69, 72, //
@@ -8790,21 +8118,18 @@ pub mod codec {
             85, 71, 64, 59, 55, 61, 65, 83, //
             87, 79, 69, 68, 65, 76, 78, 94,
         ];
-
         #[cfg(not(feature = "streaming-fixed-point-dct"))]
         const JPEG_SAMPLE_DCT_Q4: [i32; BLOCK_PIXELS] = [
             609, -30, -61, 27, 56, -20, -2, 0, 4, -22, -61, 10, 13, -7, -9, 5, -47, 7, 77, -25,
             -29, 10, 5, -6, -49, 12, 34, -15, -10, 6, 2, 2, 12, -7, -13, -4, -2, 2, -3, 3, -8, 3,
             2, -6, -2, 1, 4, 2, -1, 0, 0, -2, -1, -3, 4, -1, 0, 0, -1, -4, -1, 0, 1, 2,
         ];
-
         #[cfg(feature = "streaming-fixed-point-dct")]
         const JPEG_SAMPLE_DCT_Q4: [i32; BLOCK_PIXELS] = [
             609, -31, -62, 27, 56, -21, -3, 0, 4, -23, -62, 10, 13, -8, -10, 5, -48, 7, 77, -26,
             -30, 10, 5, -7, -50, 12, 34, -16, -11, 6, 2, 2, 12, -8, -14, -5, -3, 2, -4, 3, -9, 3,
             2, -7, -3, 1, 4, 2, -2, 0, 0, -3, -2, -4, 4, -2, -1, 0, -2, -5, -2, -1, 1, 2,
         ];
-
         const JPEG_SAMPLE_QUANT_Q4: [i16; BLOCK_PIXELS] = [
             10, -1, -2, 0, 1, 0, 0, 0, //
             0, 0, -1, 0, 0, 0, 0, 0, //
@@ -8815,7 +8140,6 @@ pub mod codec {
             0, 0, 0, 0, 0, 0, 0, 0, //
             0, 0, 0, 0, 0, 0, 0, 0,
         ];
-
         const JPEG_SAMPLE_DEQUANT_Q4: [i32; BLOCK_PIXELS] = [
             640, -44, -80, 0, 96, 0, 0, 0, //
             0, 0, -56, 0, 0, 0, 0, 0, //
@@ -8826,7 +8150,6 @@ pub mod codec {
             0, 0, 0, 0, 0, 0, 0, 0, //
             0, 0, 0, 0, 0, 0, 0, 0,
         ];
-
         const JPEG_SAMPLE_RECON_Q4: [i32; BLOCK_PIXELS] = [
             55, 39, 51, 85, 88, 60, 52, 70, //
             64, 52, 69, 107, 110, 78, 65, 80, //
@@ -8837,12 +8160,10 @@ pub mod codec {
             82, 57, 57, 81, 84, 65, 70, 97, //
             97, 66, 57, 76, 79, 66, 79, 112,
         ];
-
         const GOLDEN_Q4_CHUNK: [u8; 30] = [
             0, 0, 0, 0, 232, 3, 0, 0, 0, 0, 0, 0, 0, 4, 1, 0, 14, 0, 0, 255, 255, 0, 247, 255, 6,
             255, 255, 255, 0, 0,
         ];
-
         #[test]
         fn encode_and_verify_roundtrip() {
             let mut encoder = BaselineEncoder::new(BaselineEncoderConfig::default());
@@ -8854,7 +8175,6 @@ pub mod codec {
             let encoded = encoder
                 .encode_segment(5, 1_000, 3, &frames, None)
                 .expect("encode");
-
             assert_eq!(encoded.header.segment_number, 5);
             assert_eq!(encoded.header.chunk_count, 2);
             assert_eq!(encoded.descriptors.len(), 2);
@@ -8863,7 +8183,6 @@ pub mod codec {
                 encoded.descriptors[1].offset,
                 encoded.chunks[0].len() as u32
             );
-
             verify_segment(
                 &encoded.header,
                 &encoded.descriptors,
@@ -8872,7 +8191,6 @@ pub mod codec {
             )
             .expect("verification");
         }
-
         #[test]
         fn encode_segment_with_chroma_roundtrips_payload() {
             let dims = FrameDimensions::new(16, 16);
@@ -8904,7 +8222,6 @@ pub mod codec {
                 chunk.len() > FRAME_HEADER_LEN,
                 "chunk should include chroma payload bytes"
             );
-
             let decoder = BaselineDecoder::new(dims, config.frame_duration_ns);
             let decoded = decoder.decode_segment(&segment).expect("decode");
             assert_eq!(decoded.len(), 1, "single frame should decode");
@@ -8923,7 +8240,6 @@ pub mod codec {
                 "chroma decode should not fall back to neutral fill"
             );
         }
-
         #[test]
         fn encode_segment_honors_explicit_duration() {
             let config = BaselineEncoderConfig {
@@ -8932,14 +8248,12 @@ pub mod codec {
                 ..BaselineEncoderConfig::default()
             };
             let mut encoder = BaselineEncoder::new(config.clone());
-
             let frame = RawFrame::new(config.frame_dimensions, vec![0xEE; 16]).unwrap();
             let encoded = encoder
                 .encode_segment(6, 10_000, 2, &[frame], None)
                 .expect("encode");
             assert_eq!(encoded.header.duration_ns, config.duration_ns);
         }
-
         #[test]
         fn verify_detects_tampered_chunk() {
             let mut encoder = BaselineEncoder::new(BaselineEncoderConfig::default());
@@ -8961,7 +8275,6 @@ pub mod codec {
             .expect_err("should fail");
             assert!(matches!(err, SegmentError::CommitmentMismatch(0)));
         }
-
         #[test]
         fn verify_rejects_unsorted_chunk_ids() {
             let mut encoder = BaselineEncoder::new(BaselineEncoderConfig::default());
@@ -8983,7 +8296,6 @@ pub mod codec {
             .expect_err("unsorted ids must fail");
             assert!(matches!(err, SegmentError::UnsortedChunkIds));
         }
-
         #[test]
         fn verify_rejects_header_count_mismatch() {
             let mut encoder = BaselineEncoder::new(BaselineEncoderConfig::default());
@@ -9006,7 +8318,6 @@ pub mod codec {
                     if details.header == 0 && details.actual == 1
             ));
         }
-
         #[test]
         fn verify_rejects_descriptor_offset_mismatch() {
             let mut encoder = BaselineEncoder::new(BaselineEncoderConfig::default());
@@ -9031,7 +8342,6 @@ pub mod codec {
                 SegmentError::DescriptorOffsetMismatch(details) if details.index == 1
             ));
         }
-
         #[test]
         fn verify_rejects_descriptor_length_mismatch() {
             let mut encoder = BaselineEncoder::new(BaselineEncoderConfig::default());
@@ -9056,7 +8366,6 @@ pub mod codec {
                 SegmentError::DescriptorLengthMismatch(details) if details.index == 0
             ));
         }
-
         #[test]
         fn decode_rejects_pts_mismatch() {
             let config = BaselineEncoderConfig {
@@ -9066,7 +8375,6 @@ pub mod codec {
                 ..BaselineEncoderConfig::default()
             };
             let mut encoder = BaselineEncoder::new(config.clone());
-
             let frames = vec![
                 RawFrame::new(config.frame_dimensions, vec![0x11; 16]).unwrap(),
                 RawFrame::new(config.frame_dimensions, vec![0x22; 16]).unwrap(),
@@ -9075,7 +8383,6 @@ pub mod codec {
                 .encode_segment(19, 1_000, 6, &frames, None)
                 .expect("encode");
             segment.header.timeline_start_ns += 1;
-
             let decoder = BaselineDecoder::new(config.frame_dimensions, config.frame_duration_ns);
             let err = decoder
                 .decode_segment(&segment)
@@ -9085,7 +8392,6 @@ pub mod codec {
                 CodecError::FramePtsMismatch(details) if details.index == 0
             ));
         }
-
         #[test]
         fn encode_segment_detects_pts_overflow() {
             let config = BaselineEncoderConfig {
@@ -9095,7 +8401,6 @@ pub mod codec {
                 ..BaselineEncoderConfig::default()
             };
             let mut encoder = BaselineEncoder::new(config.clone());
-
             let frames: Vec<RawFrame> = (0..2)
                 .map(|_| {
                     RawFrame::new(
@@ -9105,14 +8410,12 @@ pub mod codec {
                     .unwrap()
                 })
                 .collect();
-
             let timeline_start_ns = u64::MAX - u64::from(config.frame_duration_ns) + 1;
             let err = encoder
                 .encode_segment(23, timeline_start_ns, 4, &frames, None)
                 .expect_err("overflow must be rejected");
             assert!(matches!(err, CodecError::FramePtsOverflow(1)));
         }
-
         #[test]
         fn merkle_root_changes_on_chunk_mutation() {
             let dims = FrameDimensions::new(4, 4);
@@ -9127,7 +8430,6 @@ pub mod codec {
             let encoded = encoder
                 .encode_segment(1, 0, 1, &frames, None)
                 .expect("encode");
-
             let payload_refs: Vec<(u16, &[u8])> = encoded
                 .chunks
                 .iter()
@@ -9136,7 +8438,6 @@ pub mod codec {
                 .collect();
             let commitments_a = chunk_commitments(1, &payload_refs);
             let root_a = merkle_root(&commitments_a).expect("root");
-
             let mut chunks_b = encoded.chunks.clone();
             chunks_b[0][FRAME_HEADER_LEN] ^= 0x1;
             let payload_refs_b: Vec<(u16, &[u8])> = chunks_b
@@ -9148,7 +8449,6 @@ pub mod codec {
             let root_b = merkle_root(&commitments_b).expect("root");
             assert_ne!(root_a, root_b);
         }
-
         #[test]
         fn manifest_build_and_verify() {
             let mut encoder = BaselineEncoder::new(BaselineEncoderConfig::default());
@@ -9160,7 +8460,6 @@ pub mod codec {
             let encoded = encoder
                 .encode_segment(11, 5_000, 9, &frames, None)
                 .expect("encode");
-
             let params = BaselineManifestParams {
                 stream_id: hash_seed(3),
                 protocol_version: 1,
@@ -9186,7 +8485,6 @@ pub mod codec {
                 .verify_manifest(&manifest)
                 .expect("manifest verification");
         }
-
         #[test]
         fn manifest_verify_detects_descriptor_mismatch() {
             let mut encoder = BaselineEncoder::new(BaselineEncoderConfig::default());
@@ -9206,7 +8504,6 @@ pub mod codec {
                 .expect_err("should detect descriptor mismatch");
             assert!(matches!(err, ManifestError::DescriptorMismatch(0)));
         }
-
         #[test]
         fn manifest_verify_detects_chunk_root_mismatch() {
             let mut encoder = BaselineEncoder::new(BaselineEncoderConfig::default());
@@ -9229,7 +8526,6 @@ pub mod codec {
                 .expect_err("should detect chunk root mismatch");
             assert!(matches!(err, ManifestError::ChunkRootMismatch));
         }
-
         #[test]
         fn manifest_verify_detects_audio_summary_mismatch() {
             let dims = FrameDimensions::new(4, 4);
@@ -9257,7 +8553,6 @@ pub mod codec {
                 .expect_err("audio summary mismatch must fail");
             assert!(matches!(err, ManifestError::AudioSummaryMismatch));
         }
-
         #[test]
         fn encode_manifest_decode_roundtrip() {
             let config = BaselineEncoderConfig {
@@ -9267,7 +8562,6 @@ pub mod codec {
                 ..BaselineEncoderConfig::default()
             };
             let mut encoder = BaselineEncoder::new(config.clone());
-
             let frames = vec![
                 RawFrame::new(config.frame_dimensions, vec![0x10; 16]).unwrap(),
                 RawFrame::new(config.frame_dimensions, vec![0x20; 16]).unwrap(),
@@ -9275,7 +8569,6 @@ pub mod codec {
             let segment = encoder
                 .encode_segment(33, 500, 9, &frames, None)
                 .expect("encode");
-
             let manifest = segment.build_manifest(BaselineManifestParams {
                 stream_id: hash_seed(9),
                 da_endpoint: "/dns/publisher/quic".into(),
@@ -9289,9 +8582,7 @@ pub mod codec {
                 signature: [0u8; 64],
                 ..BaselineManifestParams::default()
             });
-
             segment.verify_manifest(&manifest).expect("manifest verify");
-
             let decoder = BaselineDecoder::new(config.frame_dimensions, config.frame_duration_ns);
             let decoded = decoder.decode_segment(&segment).expect("decode");
             assert_eq!(decoded.len(), frames.len());
@@ -9302,7 +8593,6 @@ pub mod codec {
             assert_eq!(decoded[1].pts_ns, 500 + config.frame_duration_ns as u64);
             assert_eq!(decoded[1].luma, frames[1].luma);
         }
-
         #[test]
         fn audio_adpcm_roundtrip() {
             let mut encoder = AudioEncoder::new(AudioEncoderConfig {
@@ -9334,7 +8624,6 @@ pub mod codec {
                 .unwrap();
             assert!(max_err <= 11000);
         }
-
         #[test]
         fn audio_encoder_errors_on_length() {
             let mut encoder = AudioEncoder::new(AudioEncoderConfig {
@@ -9348,7 +8637,6 @@ pub mod codec {
                 .expect_err("length mismatch must fail");
             assert!(matches!(err, AudioCodecError::InvalidPcmLength(_)));
         }
-
         #[test]
         fn baseline_encoder_rejects_zero_frame_samples() {
             let dims = FrameDimensions::new(4, 4);
@@ -9371,7 +8659,6 @@ pub mod codec {
                 CodecError::Audio(AudioCodecError::InvalidSampleCount(_))
             ));
         }
-
         #[test]
         fn baseline_encoder_produces_audio_summary() {
             let dims = FrameDimensions::new(4, 4);
@@ -9401,7 +8688,6 @@ pub mod codec {
             let segment = encoder
                 .encode_segment(31, 2_000, 7, &frames, Some(&pcm))
                 .expect("encode with audio");
-
             let audio = segment.audio.as_ref().expect("audio track present");
             assert_eq!(audio.summary.sample_rate, audio_cfg.sample_rate);
             assert_eq!(audio.summary.frame_samples, audio_cfg.frame_samples);
@@ -9411,7 +8697,6 @@ pub mod codec {
             assert_eq!(audio.summary.fec_level, audio_cfg.fec_level);
             assert_eq!(segment.header.audio_summary, Some(audio.summary));
         }
-
         #[test]
         fn chroma_rejects_odd_dimensions() {
             let dims = FrameDimensions::new(7, 8);
@@ -9423,7 +8708,6 @@ pub mod codec {
                     if info.width == 7 && info.height == 8
             ));
         }
-
         #[test]
         fn checked_frame_count_rejects_overflow() {
             let err = checked_frame_count(u16::MAX as usize + 1)
@@ -9434,7 +8718,6 @@ pub mod codec {
                     if info.found == u32::from(u16::MAX) + 1
             ));
         }
-
         #[test]
         fn checked_chunk_count_rejects_overflow() {
             let err = checked_chunk_count(u16::MAX as usize + 1)
@@ -9445,7 +8728,6 @@ pub mod codec {
                     if info.found == u32::from(u16::MAX) + 1
             ));
         }
-
         #[test]
         fn audio_frame_cadence_mismatch_rejected() {
             let dims = FrameDimensions::new(8, 8);
@@ -9475,7 +8757,6 @@ pub mod codec {
                     if info.expected == 1600 && info.found == 240
             ));
         }
-
         #[test]
         fn audio_frame_cadence_rounding_accepts_30fps() {
             let dims = FrameDimensions::new(8, 8);
@@ -9500,7 +8781,6 @@ pub mod codec {
                 .encode_segment(2, 2_000, 2, &[frame], Some(&pcm))
                 .expect("rounded cadence should pass");
         }
-
         #[test]
         fn bundled_entropy_stats_recorded() {
             let config = BaselineEncoderConfig {
@@ -9510,19 +8790,16 @@ pub mod codec {
                 bundle_width: 2,
                 ..BaselineEncoderConfig::default()
             };
-
             let mut encoder = BaselineEncoder::new(config.clone());
             let frame = RawFrame::new(
                 config.frame_dimensions,
                 vec![0x55; config.frame_dimensions.pixel_count()],
             )
             .expect("frame");
-
             let segment = encoder
                 .encode_segment(1, 0, 7, &[frame], None)
                 .expect("encode");
             assert_eq!(segment.header.entropy_mode, EntropyMode::RansBundled);
-
             let telemetry = encoder
                 .bundled_telemetry()
                 .expect("bundled telemetry recorded");
@@ -9547,7 +8824,6 @@ pub mod codec {
             }
             assert!(!telemetry.tokens.is_empty());
         }
-
         #[test]
         fn bundled_context_stats_cover_flushes() {
             let config = BaselineEncoderConfig {
@@ -9557,18 +8833,15 @@ pub mod codec {
                 bundle_width: 3,
                 ..BaselineEncoderConfig::default()
             };
-
             let mut encoder = BaselineEncoder::new(config.clone());
             let frame = RawFrame::new(
                 config.frame_dimensions,
                 vec![0x11; config.frame_dimensions.pixel_count()],
             )
             .expect("frame");
-
             encoder
                 .encode_segment(2, 10, 9, &[frame], None)
                 .expect("bundled encode");
-
             let telemetry = encoder
                 .bundled_telemetry()
                 .expect("bundled telemetry recorded");
@@ -9606,7 +8879,6 @@ pub mod codec {
                 );
             }
         }
-
         #[test]
         fn bundle_stream_recorder_counts_zero_runs_and_tokens() {
             let dims = FrameDimensions::new(8, 8);
@@ -9623,13 +8895,11 @@ pub mod codec {
             let mut coeffs = [0i16; BLOCK_PIXELS];
             coeffs[ZIG_ZAG[1]] = 5;
             coeffs[ZIG_ZAG[4]] = -2;
-
             recorder.record_block(0, &coeffs, FrameType::Predicted);
             recorder.record_dc(3);
             recorder.record_ac(0, 5);
             recorder.record_ac(2, -2);
             recorder.record_eob();
-
             let telemetry = recorder.finish();
             assert_eq!(telemetry.stats.blocks_encoded, 1);
             assert_eq!(telemetry.stats.ac_events, 2);
@@ -9652,7 +8922,6 @@ pub mod codec {
                 "zero runs should emit RLE bundles"
             );
         }
-
         #[test]
         fn bundle_stream_recorder_flushes_zero_only_blocks() {
             let dims = FrameDimensions::new(8, 8);
@@ -9667,11 +8936,9 @@ pub mod codec {
                 None,
             );
             let coeffs = [0i16; BLOCK_PIXELS];
-
             recorder.record_block(0, &coeffs, FrameType::Intra);
             recorder.record_dc(0);
             recorder.record_eob();
-
             let telemetry = recorder.finish();
             assert_eq!(telemetry.stats.blocks_encoded, 1);
             let expected_slots =
@@ -9696,7 +8963,6 @@ pub mod codec {
                 telemetry.bundles.len() as u64
             );
         }
-
         #[test]
         fn bundle_stream_recorder_accumulates_significance_stats() {
             let dims = FrameDimensions::new(8, 8);
@@ -9716,14 +8982,12 @@ pub mod codec {
             coeffs[ZIG_ZAG[1]] = 3; // odd positive
             coeffs[ZIG_ZAG[2]] = -4; // even negative (>= 2)
             coeffs[ZIG_ZAG[3]] = 1; // odd positive
-
             recorder.record_block(0, &coeffs, FrameType::Intra);
             recorder.record_dc(7);
             recorder.record_ac(0, 3);
             recorder.record_ac(0, -4);
             recorder.record_ac(0, 1);
             recorder.record_eob();
-
             let telemetry = recorder.finish();
             let total_ac = u64::try_from(BLOCK_PIXELS - 1).expect("block size fits u64");
             assert_eq!(telemetry.stats.significance_one, 3);
@@ -9733,7 +8997,6 @@ pub mod codec {
             assert_eq!(telemetry.stats.parity_one, 2);
             assert_eq!(telemetry.stats.geq2_one, 2);
         }
-
         #[test]
         fn bundle_prefetch_keeps_stream_deterministic() {
             let dims = FrameDimensions::new(8, 8);
@@ -9747,7 +9010,6 @@ pub mod codec {
                 3,
                 None,
             );
-
             for block_idx in 0..6 {
                 let mut coeffs = [0i16; BLOCK_PIXELS];
                 coeffs[ZIG_ZAG[1]] = (block_idx as i16) + 1;
@@ -9756,7 +9018,6 @@ pub mod codec {
                 recorder.record_ac(0, coeffs[ZIG_ZAG[1]]);
                 recorder.record_eob();
             }
-
             let telemetry = recorder.finish();
             let baseline_stream =
                 encode_bundle_stream_scalar(tables.as_ref(), &telemetry.bundles, 0);
@@ -9779,7 +9040,6 @@ pub mod codec {
             assert_eq!(telemetry.prefetch_distance, 3);
             assert_eq!(telemetry.acceleration, BundleAcceleration::None);
         }
-
         fn sample_bundles() -> Vec<BundleRecord> {
             vec![
                 BundleRecord {
@@ -9805,7 +9065,6 @@ pub mod codec {
                 },
             ]
         }
-
         #[test]
         fn bundle_stream_simd_roundtrips() {
             let tables = default_bundle_tables();
@@ -9819,14 +9078,12 @@ pub mod codec {
                 .collect();
             assert_eq!(decoded, expected);
         }
-
         #[test]
         fn simd_bundle_lane_len_reader_rejects_truncated_or_overflowed_offsets() {
             let bytes = 13u32.to_le_bytes();
             let mut cursor = 0usize;
             assert_eq!(read_simd_bundle_lane_len(&bytes, &mut cursor).unwrap(), 13);
             assert_eq!(cursor, 4);
-
             for len in 0..4 {
                 let mut cursor = 0usize;
                 let err = read_simd_bundle_lane_len(&bytes[..len], &mut cursor)
@@ -9834,14 +9091,12 @@ pub mod codec {
                 assert!(matches!(err, BundleDecodeError::InvalidSimdHeader));
                 assert_eq!(cursor, 0);
             }
-
             let mut overflow_cursor = usize::MAX;
             let err = read_simd_bundle_lane_len(&[], &mut overflow_cursor)
                 .expect_err("cursor overflow should fail closed");
             assert!(matches!(err, BundleDecodeError::InvalidSimdHeader));
             assert_eq!(overflow_cursor, usize::MAX);
         }
-
         #[test]
         fn bundle_stream_acceleration_matches_header() {
             let tables = default_bundle_tables();
@@ -9859,7 +9114,6 @@ pub mod codec {
             };
             assert_eq!(accel, expected);
         }
-
         #[test]
         fn rle_bundles_roundtrip_via_ans() {
             let tables = default_bundle_tables();
@@ -9887,7 +9141,6 @@ pub mod codec {
                 assert_eq!(record.bits & mask, decoded_bits & mask);
             }
         }
-
         #[test]
         fn rle_all_one_symbols_roundtrip() {
             let tables = default_bundle_tables();
@@ -9907,7 +9160,6 @@ pub mod codec {
             assert_eq!(decoded.len(), bundles.len());
             assert!(decoded.iter().all(|&value| value == 1));
         }
-
         #[test]
         fn simd_bundle_stream_matches_scalar_output() {
             if !cpu_simd_supported() {
@@ -9924,7 +9176,6 @@ pub mod codec {
                 2,
                 None,
             );
-
             let mut coeffs = [0i16; BLOCK_PIXELS];
             coeffs[ZIG_ZAG[1]] = 5;
             coeffs[ZIG_ZAG[2]] = -3;
@@ -9935,7 +9186,6 @@ pub mod codec {
             recorder.record_ac(0, coeffs[ZIG_ZAG[2]]);
             recorder.record_ac(1, coeffs[ZIG_ZAG[4]]);
             recorder.record_eob();
-
             let telemetry = recorder.finish();
             let scalar_stream = encode_bundle_stream_scalar(tables.as_ref(), &telemetry.bundles, 0);
             let simd_decoded =
@@ -9948,7 +9198,6 @@ pub mod codec {
             assert_eq!(simd_decoded, scalar_decoded);
             assert_eq!(telemetry.prefetch_distance, 2);
         }
-
         #[test]
         fn bundled_manifest_requires_checksum() {
             let config = BaselineEncoderConfig {
@@ -9984,7 +9233,6 @@ pub mod codec {
                 .expect_err("missing checksum must fail");
             assert!(matches!(err, ManifestError::EntropyTablesMismatch));
         }
-
         #[test]
         fn manifest_capabilities_follow_entropy_mode() {
             let bundled_config = BaselineEncoderConfig {
@@ -10014,7 +9262,6 @@ pub mod codec {
                 "bundled manifests must set FEATURE_ENTROPY_BUNDLED"
             );
         }
-
         #[test]
         fn bundled_manifest_missing_entropy_feature_bit_rejected() {
             let config = BaselineEncoderConfig {
@@ -10048,7 +9295,6 @@ pub mod codec {
                 }
             ));
         }
-
         #[test]
         fn bundled_manifest_missing_required_acceleration_bit_rejected() {
             let config = BaselineEncoderConfig {
@@ -10086,7 +9332,6 @@ pub mod codec {
                     && found_mask == 0
             ));
         }
-
         #[test]
         fn bundled_manifest_with_wrong_acceleration_bit_rejected() {
             let config = BaselineEncoderConfig {
@@ -10125,7 +9370,6 @@ pub mod codec {
                     && found_mask == CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD
             ));
         }
-
         #[test]
         fn bundled_telemetry_roundtrips_tokens_via_ans_stream() {
             let config = BaselineEncoderConfig {
@@ -10157,7 +9401,6 @@ pub mod codec {
                 .expect("decoded symbols");
             assert_eq!(decoded.len(), telemetry.bundles.len());
         }
-
         #[test]
         fn bundled_telemetry_checksum_mismatch_signalled() {
             let config = BaselineEncoderConfig {
@@ -10187,7 +9430,6 @@ pub mod codec {
                 .expect_err("checksum mismatch must be reported");
             assert!(matches!(err, BundleDecodeError::ChecksumMismatch { .. }));
         }
-
         #[test]
         fn segment_bundle_roundtrip_validates_payloads() {
             let dims = FrameDimensions::new(8, 8);
@@ -10224,7 +9466,6 @@ pub mod codec {
             assert_eq!(roundtrip.audio, segment.audio);
             assert_eq!(chroma_roundtrip, vec![chroma0, chroma1]);
         }
-
         #[test]
         fn rdo_perceptual_uses_softer_lambda() {
             let default = rdo_lambda_for_mode(RdoMode::DynamicProgramming, 20);
@@ -10234,7 +9475,6 @@ pub mod codec {
                 "perceptual lambda should be softer than default for SSIM bias"
             );
         }
-
         #[test]
         fn entropy_mode_parsing_rejects_unknown_strings() {
             assert_eq!(EntropyMode::from_str("rans"), Err(()));
@@ -10245,7 +9485,6 @@ pub mod codec {
                 Ok(EntropyMode::RansBundled)
             );
         }
-
         #[test]
         fn bundled_ans_roundtrip_order() {
             let records = vec![
@@ -10290,7 +9529,6 @@ pub mod codec {
                     .collect::<Vec<_>>()
             );
         }
-
         #[test]
         fn verify_segment_accepts_audio_within_tolerance() {
             let dims = FrameDimensions::new(4, 4);
@@ -10313,12 +9551,10 @@ pub mod codec {
             let segment = encoder
                 .encode_segment(41, 3_000, 5, &frames, Some(&pcm))
                 .expect("encode segment");
-
             let mut skewed = segment.clone();
             if let Some(audio) = skewed.audio.as_mut() {
                 audio.frames[0].timestamp_ns += AUDIO_SYNC_TOLERANCE_NS - 1;
             }
-
             verify_segment(
                 &skewed.header,
                 &skewed.descriptors,
@@ -10327,7 +9563,6 @@ pub mod codec {
             )
             .expect("skew within tolerance");
         }
-
         #[test]
         fn verify_segment_rejects_audio_skew_beyond_tolerance() {
             let dims = FrameDimensions::new(4, 4);
@@ -10350,12 +9585,10 @@ pub mod codec {
             let segment = encoder
                 .encode_segment(43, 5_000, 9, &frames, Some(&pcm))
                 .expect("encode segment");
-
             let mut skewed = segment.clone();
             if let Some(audio) = skewed.audio.as_mut() {
                 audio.frames[1].timestamp_ns += AUDIO_SYNC_TOLERANCE_NS + 1;
             }
-
             let err = verify_segment(
                 &skewed.header,
                 &skewed.descriptors,
@@ -10368,22 +9601,17 @@ pub mod codec {
                 SegmentError::AudioTimestampMismatch(info) if info.index == 1
             ));
         }
-
         #[test]
         fn forward_dct_quantization_matches_golden() {
             let dct = forward_dct(&JPEG_SAMPLE_BLOCK);
             assert_eq!(dct, JPEG_SAMPLE_DCT_Q4);
-
             let quant = quantize_coeffs(&dct, 4);
             assert_eq!(quant, JPEG_SAMPLE_QUANT_Q4);
-
             let dequant = dequantize_coeffs(&quant, 4);
             assert_eq!(dequant, JPEG_SAMPLE_DEQUANT_Q4);
-
             let recon = inverse_dct(&dequant);
             assert_eq!(recon, JPEG_SAMPLE_RECON_Q4);
         }
-
         #[test]
         fn baseline_encoder_entropy_matches_golden_chunk() {
             let dims = FrameDimensions::new(8, 8);
@@ -10403,11 +9631,9 @@ pub mod codec {
             let segment = encoder
                 .encode_segment(42, 1_000, 7, &[frame], None)
                 .expect("encode");
-
             assert_eq!(segment.chunks.len(), 1);
             assert_eq!(segment.chunks[0].as_slice(), GOLDEN_Q4_CHUNK);
         }
-
         #[test]
         fn decode_block_rle_rejects_overflow_run() {
             let dims = FrameDimensions::new(8, 8);
@@ -10427,7 +9653,6 @@ pub mod codec {
             let segment = encoder
                 .encode_segment(7, 10_000, 3, &[frame], None)
                 .expect("encode");
-
             let mut corrupted = segment.chunks[0].clone();
             let run_offset = FRAME_HEADER_LEN + 2;
             corrupted[run_offset] = 200;
@@ -10437,7 +9662,6 @@ pub mod codec {
                 decode_block_rle(&corrupted, &mut offset, &mut prev_dc, 0).expect_err("overflow");
             assert!(matches!(err, CodecError::RleOverflow(0)));
         }
-
         #[test]
         fn decode_block_rle_rejects_missing_end_of_block() {
             let mut payload = Vec::new();
@@ -10452,7 +9676,6 @@ pub mod codec {
                 .expect_err("missing end-of-block should reject");
             assert!(matches!(err, CodecError::MissingEndOfBlock(0)));
         }
-
         #[test]
         fn decode_block_rle_rejects_truncated_stream() {
             let mut offset = 0usize;
@@ -10460,7 +9683,6 @@ pub mod codec {
             let err = decode_block_rle(&[0xAA], &mut offset, &mut prev_dc, 2)
                 .expect_err("too short for dc diff");
             assert!(matches!(err, CodecError::TruncatedBlock(2)));
-
             let mut payload = Vec::new();
             payload.extend_from_slice(&0i16.to_le_bytes());
             payload.push(0x01);
@@ -10470,7 +9692,6 @@ pub mod codec {
             let err = decode_block_rle(&payload, &mut offset2, &mut prev_dc2, 4)
                 .expect_err("missing run payload");
             assert!(matches!(err, CodecError::TruncatedBlock(4)));
-
             let mut overflow_offset = usize::MAX;
             let mut prev_dc3 = 0i16;
             let err = decode_block_rle(&[], &mut overflow_offset, &mut prev_dc3, 6)
@@ -10478,7 +9699,6 @@ pub mod codec {
             assert!(matches!(err, CodecError::TruncatedBlock(6)));
             assert_eq!(overflow_offset, usize::MAX);
         }
-
         #[test]
         fn rle_block_readers_reject_offset_overflow_without_advancing() {
             let mut i16_offset = usize::MAX;
@@ -10486,25 +9706,21 @@ pub mod codec {
                 .expect_err("i16 reader offset overflow should fail closed");
             assert!(matches!(err, CodecError::TruncatedBlock(7)));
             assert_eq!(i16_offset, usize::MAX);
-
             let mut record_offset = usize::MAX;
             let err = take_rle_record(&[], &mut record_offset, 8)
                 .expect_err("RLE record reader offset overflow should fail closed");
             assert!(matches!(err, CodecError::TruncatedBlock(8)));
             assert_eq!(record_offset, usize::MAX);
         }
-
         #[test]
         fn frame_header_readers_reject_truncated_or_overflowed_offsets() {
             let mut header = [0u8; FRAME_HEADER_LEN];
             header[..4].copy_from_slice(&42u32.to_le_bytes());
             header[4..12].copy_from_slice(&1234u64.to_le_bytes());
             header[14..16].copy_from_slice(&9u16.to_le_bytes());
-
             assert_eq!(read_frame_header_u32_le(&header, 0).unwrap(), 42);
             assert_eq!(read_frame_header_u64_le(&header, 4).unwrap(), 1234);
             assert_eq!(read_frame_header_u16_le(&header, 14).unwrap(), 9);
-
             assert!(matches!(
                 read_frame_header_u32_le(&header[..3], 0),
                 Err(CodecError::ChunkTooShort)
@@ -10518,13 +9734,11 @@ pub mod codec {
                 Err(CodecError::ChunkTooShort)
             ));
         }
-
         #[test]
         fn chroma_len_reader_rejects_truncated_or_overflowed_offsets() {
             let mut metadata = [0u8; 8];
             metadata[..4].copy_from_slice(&5u32.to_le_bytes());
             metadata[4..8].copy_from_slice(&7u32.to_le_bytes());
-
             assert_eq!(read_chroma_len(&metadata, 0).unwrap(), 5);
             assert_eq!(read_chroma_len(&metadata, 4).unwrap(), 7);
             assert!(matches!(
@@ -10536,7 +9750,6 @@ pub mod codec {
                 Err(CodecError::ChromaPayloadTruncated(_))
             ));
         }
-
         fn deterministic_payloads(seed: u8, count: usize) -> Vec<Vec<u8>> {
             (0..count)
                 .map(|chunk_idx| {
@@ -10551,7 +9764,6 @@ pub mod codec {
                 })
                 .collect()
         }
-
         #[test]
         fn merkle_proof_roundtrip_holds() {
             let cases = [
@@ -10559,7 +9771,6 @@ pub mod codec {
                 (1, 7, deterministic_payloads(3, 2)),
                 (u64::MAX, 42, deterministic_payloads(11, 5)),
             ];
-
             for (segment_number, content_key_id, payloads) in cases {
                 let chunk_ids: Vec<u16> = (0..payloads.len()).map(|idx| idx as u16).collect();
                 let payload_refs: Vec<(u16, &[u8])> = chunk_ids
@@ -10567,10 +9778,8 @@ pub mod codec {
                     .zip(payloads.iter())
                     .map(|(id, bytes)| (*id, bytes.as_slice()))
                     .collect();
-
                 let commitments = chunk_commitments(segment_number, &payload_refs);
                 let root = merkle_root(&commitments).expect("non-empty leaves produce root");
-
                 for (idx, chunk_id) in chunk_ids.iter().enumerate() {
                     let proof = crate::streaming::chunk::merkle_proof(&commitments, idx, *chunk_id)
                         .expect("proof");
@@ -10579,7 +9788,6 @@ pub mod codec {
                         &leaf, &proof, &root
                     ));
                 }
-
                 let storage_hash = crate::streaming::chunk::storage_commitment(
                     segment_number,
                     content_key_id,
@@ -10595,7 +9803,6 @@ pub mod codec {
                 )
                 .expect("da root");
                 assert_ne!(storage_hash, da_hash);
-
                 if chunk_ids.len() >= 2 {
                     let mut unsorted = chunk_ids.clone();
                     unsorted.swap(0, 1);
@@ -10622,15 +9829,11 @@ pub mod codec {
         }
     }
 }
-
 pub use codec::{
     BundleAnsTables, BundleTableError, default_bundle_tables, load_bundle_tables_from_toml,
 };
-
 #[cfg(test)]
 mod tests {
-    use sha2::{Digest, Sha256};
-
     use super::*;
     use crate::{
         deserialize_from, json,
@@ -10640,63 +9843,17 @@ mod tests {
         },
         to_bytes,
     };
-
-    fn demo_hash(seed: u8) -> Hash {
-        let mut bytes = [0u8; 32];
-        bytes.fill(seed);
-        bytes
-    }
-
-    fn demo_signature(seed: u8) -> Signature {
-        let mut bytes = [0u8; 64];
-        bytes.fill(seed);
-        bytes
-    }
-
-    fn hex_encode(bytes: impl AsRef<[u8]>) -> String {
-        const LUT: &[u8; 16] = b"0123456789abcdef";
-        let mut out = String::with_capacity(bytes.as_ref().len() * 2);
-        for byte in bytes.as_ref() {
-            out.push(char::from(LUT[(byte >> 4) as usize]));
-            out.push(char::from(LUT[(byte & 0x0f) as usize]));
-        }
-        out
-    }
-
-    #[test]
-    fn shared_blake3_adapter_matches_official_vectors() {
-        assert_eq!(
-            hex_encode(blake3_hash(b"")),
-            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
-        );
-        assert_eq!(
-            hex_encode(blake3_hash(b"abc")),
-            "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
-        );
-
-        let message = b"incremental content-addressed artifact verification";
-        let mut incremental = Blake3Hasher::new();
-        for chunk in message.chunks(3) {
-            incremental.update(chunk);
-        }
-        assert_eq!(incremental.finalize(), blake3_hash(message));
-
-        let mut empty = Blake3Hasher::default();
-        empty.update(&[]);
-        assert_eq!(empty.finalize(), blake3_hash(b""));
-    }
-
+    use sha2::{Digest, Sha256};
+    include!("streaming/shared_hash_tests.rs");
     #[test]
     fn decode_from_slice_rejects_short_payloads() {
         let err = <SoranetRoute as crate::core::DecodeFromSlice>::decode_from_slice(&[])
             .expect_err("short soranet route");
         assert!(matches!(err, crate::core::Error::LengthMismatch));
-
         let err = <FeedbackHint as crate::core::DecodeFromSlice>::decode_from_slice(&[])
             .expect_err("short feedback hint");
         assert!(matches!(err, crate::core::Error::LengthMismatch));
     }
-
     #[test]
     fn decode_bundle_stream_simd_rejects_length_mismatch() {
         let tables = codec::default_bundle_tables();
@@ -10711,7 +9868,6 @@ mod tests {
             codec::decode_bundle_stream(&stream, &bundles, tables.as_ref()).expect_err("bad len");
         assert!(matches!(err, codec::BundleDecodeError::LengthMismatch));
     }
-
     #[test]
     fn decode_bundle_stream_rejects_zero_bit_length_before_rle_shift() {
         let tables = codec::default_bundle_tables();
@@ -10722,7 +9878,6 @@ mod tests {
             bit_len: 0,
             flush: codec::BundleFlushReason::EndOfBlock,
         }];
-
         let err = codec::decode_bundle_stream(&[], &bundles, tables.as_ref())
             .expect_err("zero-width records must fail before shifting");
         assert_eq!(
@@ -10734,7 +9889,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn decode_bundle_stream_rejects_width_above_authenticated_tables() {
         let tables = codec::default_bundle_tables();
@@ -10746,7 +9900,6 @@ mod tests {
             bit_len: invalid_width,
             flush: codec::BundleFlushReason::EndOfBlock,
         }];
-
         let err = codec::decode_bundle_stream(&[], &bundles, tables.as_ref())
             .expect_err("out-of-domain widths must fail before shifting");
         assert_eq!(
@@ -10758,7 +9911,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn transparent_wrappers_roundtrip_individually() {
         fn roundtrip<T>(value: T) -> T
@@ -10772,29 +9924,22 @@ mod tests {
             let encoded = to_bytes(&value).expect("serialize wrapper");
             deserialize_from(encoded.as_slice()).expect("deserialize wrapper")
         }
-
         let profile = ProfileId::UHD_AI;
         assert_eq!(roundtrip(profile), profile);
-
         let capability_flags = CapabilityFlags::from_bits(
             CapabilityFlags::FEATURE_FEEDBACK_HINTS | CapabilityFlags::FEATURE_SM_TRANSACTIONS,
         );
         assert_eq!(roundtrip(capability_flags), capability_flags);
-
         let privacy = PrivacyCapabilities::from_bits(0b1010);
         assert_eq!(roundtrip(privacy), privacy);
-
         let suites = HpkeSuiteMask::KYBER1024;
         assert_eq!(roundtrip(suites), suites);
-
         let channel = SoranetChannelId::new(demo_hash(0x90));
         assert_eq!(roundtrip(channel), channel);
-
         let ticket_caps =
             TicketCapabilities::from_bits(TicketCapabilities::LIVE | TicketCapabilities::HDR);
         assert_eq!(roundtrip(ticket_caps), ticket_caps);
     }
-
     #[test]
     fn manifest_roundtrip() {
         let chunk = ChunkDescriptor {
@@ -10858,12 +10003,10 @@ mod tests {
             capabilities: CapabilityFlags::from_bits(0b1_0101),
             signature: demo_signature(15),
         };
-
         let encoded = to_bytes(&manifest).expect("serialize");
         let decoded: ManifestV1 = deserialize_from(encoded.as_slice()).expect("deserialize");
         assert_eq!(decoded, manifest);
     }
-
     #[test]
     fn privacy_route_with_soranet_metadata_roundtrip() {
         let route = PrivacyRoute {
@@ -10891,7 +10034,6 @@ mod tests {
                 stream_tag: SoranetStreamTag::NoritoStream,
             }),
         };
-
         let encoded = to_bytes(&route).expect("serialize privacy route");
         let decoded: PrivacyRoute =
             deserialize_from(encoded.as_slice()).expect("deserialize privacy route");
@@ -10903,12 +10045,10 @@ mod tests {
             "channel id must roundtrip"
         );
     }
-
     #[test]
     fn soranet_stream_tag_default_is_norito() {
         assert_eq!(SoranetStreamTag::default(), SoranetStreamTag::NoritoStream);
     }
-
     #[test]
     fn receiver_report_with_sync_diagnostics_roundtrip() {
         let diagnostics = SyncDiagnostics {
@@ -10938,13 +10078,11 @@ mod tests {
             fec_budget: 3,
             sync_diagnostics: Some(diagnostics),
         };
-
         let encoded = to_bytes(&report).expect("serialize receiver report");
         let decoded: ReceiverReport =
             deserialize_from(encoded.as_slice()).expect("deserialize receiver report");
         assert_eq!(decoded, report);
     }
-
     #[test]
     fn streaming_ticket_roundtrip() {
         let capabilities = TicketCapabilities::from_bits(
@@ -10977,7 +10115,6 @@ mod tests {
             policy: Some(policy),
             capabilities,
         };
-
         let encoded = to_bytes(&ticket).expect("serialize ticket");
         let decoded: StreamingTicket =
             deserialize_from(encoded.as_slice()).expect("deserialize ticket");
@@ -10985,7 +10122,6 @@ mod tests {
         assert!(decoded.capabilities.contains(TicketCapabilities::HDR));
         assert!(!decoded.capabilities.contains(TicketCapabilities::VOD));
     }
-
     #[test]
     fn ticket_revocation_roundtrip() {
         let revocation = TicketRevocation {
@@ -10999,7 +10135,6 @@ mod tests {
             deserialize_from(encoded.as_slice()).expect("deserialize ticket revocation");
         assert_eq!(decoded, revocation);
     }
-
     #[test]
     fn control_frame_roundtrip() {
         let frame = ControlFrame::KeyUpdate(KeyUpdate {
@@ -11010,12 +10145,10 @@ mod tests {
             key_counter: 5,
             signature: demo_signature(22),
         });
-
         let encoded = to_bytes(&frame).expect("serialize");
         let decoded: ControlFrame = deserialize_from(encoded.as_slice()).expect("deserialize");
         assert_eq!(decoded, frame);
     }
-
     #[test]
     fn telemetry_roundtrip() {
         let event = TelemetryEvent::Security(TelemetrySecurityStats {
@@ -11025,12 +10158,10 @@ mod tests {
             last_content_key_id: Some(42),
             last_content_key_valid_from: Some(1_700_123_456),
         });
-
         let encoded = to_bytes(&event).expect("serialize");
         let decoded: TelemetryEvent = deserialize_from(encoded.as_slice()).expect("deserialize");
         assert_eq!(decoded, event);
     }
-
     #[test]
     fn segment_header_roundtrip() {
         let header = SegmentHeader {
@@ -11064,12 +10195,10 @@ mod tests {
             audio_summary: None,
             bundle_acceleration: BundleAcceleration::None,
         };
-
         let encoded = to_bytes(&header).expect("serialize");
         let decoded: SegmentHeader = deserialize_from(encoded.as_slice()).expect("deserialize");
         assert_eq!(decoded, header);
     }
-
     #[test]
     fn feedback_hint_frame_roundtrip() {
         let frame = FeedbackHintFrame {
@@ -11084,7 +10213,6 @@ mod tests {
         let decoded: FeedbackHintFrame = deserialize_from(encoded.as_slice()).expect("deserialize");
         assert_eq!(decoded, frame);
     }
-
     include!("streaming/baseline_and_bundle_tests.rs");
     include!("streaming/repo_fixture_test.rs");
 }

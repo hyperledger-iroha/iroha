@@ -1,7 +1,4 @@
 //! Module for cursor-based pagination functionality.
-
-use std::{fmt::Debug, iter::Peekable, num::NonZeroU64};
-
 use iroha_data_model::{
     prelude::SelectorTuple,
     query::{
@@ -10,7 +7,7 @@ use iroha_data_model::{
         error::QueryExecutionFail,
     },
 };
-
+use std::{fmt::Debug, iter::Peekable, num::NonZeroU64};
 fn evaluate_selector_tuple<T>(
     batch: Vec<T>,
     selector: &SelectorTuple<T>,
@@ -21,16 +18,13 @@ where
     QueryOutputBatchBox: From<Vec<T>>,
 {
     let mut batch_tuple = Vec::new();
-
     let mut iter = selector.iter().peekable();
-
     // If no projection was requested, return the entire items as a single tuple element
     if iter.peek().is_none() {
         return Ok(QueryOutputBatchBoxTuple::from_batch(
             QueryOutputBatchBox::from(batch),
         ));
     }
-
     while let Some(item) = iter.next() {
         if iter.peek().is_none() {
             // do not clone the last item
@@ -38,15 +32,12 @@ where
             return QueryOutputBatchBoxTuple::new(batch_tuple)
                 .map_err(|error| QueryExecutionFail::Conversion(error.to_string()));
         }
-
         batch_tuple.push(item.project_clone(batch.iter())?);
     }
-
     // unreachable: handled empty selector above
     QueryOutputBatchBoxTuple::new(batch_tuple)
         .map_err(|error| QueryExecutionFail::Conversion(error.to_string()))
 }
-
 trait BatchedTrait {
     fn next_batch(
         &mut self,
@@ -54,7 +45,6 @@ trait BatchedTrait {
     ) -> Result<(QueryOutputBatchBoxTuple, Option<NonZeroU64>), QueryExecutionFail>;
     fn remaining(&self) -> Option<u64>;
 }
-
 struct BatchedInner<I>
 where
     I: ExactSizeIterator + Send + Sync,
@@ -65,7 +55,6 @@ where
     batch_size: NonZeroU64,
     cursor: Option<u64>,
 }
-
 impl<I> BatchedTrait for BatchedInner<I>
 where
     I: ExactSizeIterator + Send + Sync,
@@ -81,12 +70,10 @@ where
             // the server is done with the iterator
             return Err(QueryExecutionFail::CursorDone);
         };
-
         if cursor != server_cursor {
             // the cursor doesn't match
             return Err(QueryExecutionFail::CursorMismatch);
         }
-
         let mut current_batch_size: usize = 0;
         let batch: Vec<I::Item> = self
             .iter
@@ -99,10 +86,8 @@ where
                     .expect("`u32` should always fit into `usize`"),
             )
             .collect();
-
         // evaluate the requested projections
         let batch = evaluate_selector_tuple(batch, &self.selector)?;
-
         // determine if there are elements left after this batch
         let remaining_after = self.iter.len();
         if remaining_after > 0 {
@@ -114,19 +99,16 @@ where
             // iterator drained
             self.cursor = None;
         }
-
         Ok((
             batch,
             self.cursor
                 .map(|cursor| NonZeroU64::new(cursor).expect("Cursor is never 0")),
         ))
     }
-
     fn remaining(&self) -> Option<u64> {
         Some(self.iter.len() as u64)
     }
 }
-
 struct StreamingBatchedInner<I>
 where
     I: Iterator + Send + Sync,
@@ -137,7 +119,6 @@ where
     batch_size: NonZeroU64,
     cursor: Option<u64>,
 }
-
 impl<I> BatchedTrait for StreamingBatchedInner<I>
 where
     I: Iterator + Send + Sync,
@@ -152,11 +133,9 @@ where
         let Some(server_cursor) = self.cursor else {
             return Err(QueryExecutionFail::CursorDone);
         };
-
         if cursor != server_cursor {
             return Err(QueryExecutionFail::CursorMismatch);
         }
-
         let mut current_batch_size: usize = 0;
         let batch: Vec<I::Item> = self
             .iter
@@ -170,7 +149,6 @@ where
             )
             .collect();
         let batch = evaluate_selector_tuple(batch, &self.selector)?;
-
         if self.iter.peek().is_some() {
             let batch_len =
                 u64::try_from(current_batch_size).expect("batch size must fit into u64");
@@ -178,30 +156,25 @@ where
         } else {
             self.cursor = None;
         }
-
         Ok((
             batch,
             self.cursor
                 .map(|cursor| NonZeroU64::new(cursor).expect("Cursor is never 0")),
         ))
     }
-
     fn remaining(&self) -> Option<u64> {
         None
     }
 }
-
 /// A query output iterator that combines evaluating selectors, batching and type erasure.
 pub struct ErasedQueryIterator {
     inner: Box<dyn BatchedTrait + Send + Sync>,
 }
-
 impl Debug for ErasedQueryIterator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QueryBatchedErasedIterator").finish()
     }
 }
-
 impl ErasedQueryIterator {
     /// Creates a new erased query iterator. Boxes the inner iterator to erase its type.
     pub fn new<I>(iter: I, selector: SelectorTuple<I::Item>, batch_size: NonZeroU64) -> Self
@@ -214,7 +187,6 @@ impl ErasedQueryIterator {
     {
         Self::new_with_cursor(iter, selector, batch_size, 0)
     }
-
     /// Creates a new erased query iterator with a custom initial cursor value.
     pub(crate) fn new_with_cursor<I>(
         iter: I,
@@ -238,7 +210,6 @@ impl ErasedQueryIterator {
             }),
         }
     }
-
     /// Creates an erased query iterator for an iterator that cannot cheaply
     /// report an exact remaining length.
     pub(crate) fn new_streaming_with_cursor<I>(
@@ -263,7 +234,6 @@ impl ErasedQueryIterator {
             }),
         }
     }
-
     /// Gets the next batch of results.
     ///
     /// Checks if the cursor matches the server's cursor.
@@ -280,7 +250,6 @@ impl ErasedQueryIterator {
     ) -> Result<(QueryOutputBatchBoxTuple, Option<NonZeroU64>), QueryExecutionFail> {
         self.inner.next_batch(cursor)
     }
-
     /// Returns the number of remaining elements in the iterator.
     ///
     /// You should not rely on the reported amount being correct for safety, same as [`ExactSizeIterator::len`].
@@ -288,26 +257,21 @@ impl ErasedQueryIterator {
         self.inner.remaining()
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::prelude::*;
     use nonzero_ext::nonzero;
-
-    use super::*;
-
     #[test]
     fn empty_selector_projects_full_items() {
         let d1: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let d2: DomainId = DomainId::try_new("underland", "universal").unwrap();
         let items = vec![d1.clone(), d2.clone()];
-
         let mut it = ErasedQueryIterator::new(
             items.clone().into_iter(),
             SelectorTuple::<DomainId>::default(),
             nonzero!(10_u64),
         );
-
         let (batch_tuple, next) = it.next_batch(0).expect("batch");
         assert!(next.is_none(), "one batch only");
         assert_eq!(
@@ -324,37 +288,30 @@ mod tests {
             other => panic!("unexpected batch variant: {other:?}"),
         }
     }
-
     #[test]
     fn cursor_mismatch_and_done_paths() {
         let d1: DomainId = DomainId::try_new("alpha", "universal").unwrap();
         let d2: DomainId = DomainId::try_new("beta", "universal").unwrap();
         let d3: DomainId = DomainId::try_new("gamma", "universal").unwrap();
         let items = vec![d1, d2, d3];
-
         let mut it = ErasedQueryIterator::new(
             items.into_iter(),
             SelectorTuple::<DomainId>::default(),
             nonzero!(2_u64),
         );
-
         assert_eq!(it.remaining(), Some(3));
-
         // First batch with correct cursor
         let (b1, next) = it.next_batch(0).expect("first batch");
         assert_eq!(b1.len(), 2);
         let cur = next.expect("next cursor").get();
-
         // Mismatch
         let err = it.next_batch(1).unwrap_err();
         assert!(matches!(err, QueryExecutionFail::CursorMismatch));
-
         // Second batch with correct cursor
         let (b2, next2) = it.next_batch(cur).expect("second batch");
         assert_eq!(b2.len(), 1);
         assert!(next2.is_none(), "drained");
         assert_eq!(it.remaining(), Some(0));
-
         // Done path
         let err = it.next_batch(cur).unwrap_err();
         assert!(matches!(err, QueryExecutionFail::CursorDone));

@@ -4,26 +4,21 @@
 //! caps process-local work. It carries no task state or authority: the set is
 //! rebuilt empty on restart, while leases and terminal outcomes remain solely
 //! chain-authoritative.
-
 use std::{
     collections::BTreeSet,
     sync::{Arc, Mutex},
 };
-
 use thiserror::Error;
-
 #[derive(Debug)]
 struct NativeRepairSingleflightStateV1 {
     max_inflight: usize,
     task_ids: Mutex<BTreeSet<[u8; 32]>>,
 }
-
 /// Bounded process-local single-flight gate for native repair I/O.
 #[derive(Debug, Clone)]
 pub(crate) struct NativeRepairSingleflightV1 {
     state: Arc<NativeRepairSingleflightStateV1>,
 }
-
 impl NativeRepairSingleflightV1 {
     /// Construct an empty gate with a non-zero process-local concurrency bound.
     pub(crate) fn new(max_inflight: usize) -> Self {
@@ -34,7 +29,6 @@ impl NativeRepairSingleflightV1 {
             }),
         }
     }
-
     /// Enter one task execution until the returned guard is dropped.
     pub(crate) fn try_enter(
         &self,
@@ -61,7 +55,6 @@ impl NativeRepairSingleflightV1 {
             task_id,
         })
     }
-
     #[cfg(test)]
     fn inflight(&self) -> usize {
         self.state
@@ -71,7 +64,6 @@ impl NativeRepairSingleflightV1 {
             .len()
     }
 }
-
 /// Rejection from the non-authoritative native repair coordination gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub(crate) enum NativeRepairSingleflightErrorV1 {
@@ -88,14 +80,12 @@ pub(crate) enum NativeRepairSingleflightErrorV1 {
     #[error("native repair execution coordination is unavailable")]
     Poisoned,
 }
-
 /// RAII token that removes its task from the ephemeral set on every exit path.
 #[derive(Debug)]
 pub(crate) struct NativeRepairSingleflightGuardV1 {
     state: Arc<NativeRepairSingleflightStateV1>,
     task_id: [u8; 32],
 }
-
 impl Drop for NativeRepairSingleflightGuardV1 {
     fn drop(&mut self) {
         self.state
@@ -105,11 +95,9 @@ impl Drop for NativeRepairSingleflightGuardV1 {
             .remove(&self.task_id);
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn duplicate_task_is_suppressed_until_guard_drop() {
         let gate = NativeRepairSingleflightV1::new(2);
@@ -124,7 +112,6 @@ mod tests {
         gate.try_enter([1; 32])
             .expect("task re-enters after guard drop");
     }
-
     #[test]
     fn distinct_tasks_are_bounded_without_becoming_authority() {
         let gate = NativeRepairSingleflightV1::new(2);
@@ -139,7 +126,6 @@ mod tests {
             NativeRepairSingleflightErrorV1::InvalidTaskId
         );
     }
-
     #[test]
     fn unwind_drops_ephemeral_task_membership() {
         let gate = NativeRepairSingleflightV1::new(1);

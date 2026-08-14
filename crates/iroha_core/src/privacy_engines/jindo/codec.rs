@@ -1,7 +1,4 @@
 //! Fixed-width canonical proof wire for revised Jindo Figs. 2--7.
-
-use thiserror::Error;
-
 use super::{
     JINDO_ENCODING_SLOTS_V1, JINDO_FIELD_ELEMENT_BYTES_V1, JINDO_MAX_BATCH_SIZE_V1,
     JINDO_RING_DEGREE_V1,
@@ -11,7 +8,7 @@ use super::{
         JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoPrimeModulusV1, JindoRnsPolynomialV1,
     },
 };
-
+use thiserror::Error;
 pub const JINDO_PROOF_MAGIC_V1: [u8; 4] = *b"IJP2";
 pub const JINDO_PROOF_VERSION_V1: u8 = 2;
 pub const JINDO_PROOF_HEADER_BYTES_V1: usize = 8;
@@ -24,7 +21,6 @@ pub const JINDO_PROOF_BYTES_V1: usize = JINDO_PROOF_HEADER_BYTES_V1
     + (JINDO_PROOF_OUTER_POLYNOMIALS_V1 + JINDO_PROOF_INNER_POLYNOMIALS_V1)
         * JINDO_PROOF_RNS_POLYNOMIAL_BYTES_V1
     + JINDO_PROOF_FIELD_ELEMENTS_V1 * JINDO_FIELD_ELEMENT_BYTES_V1;
-
 const MASK_COMMITMENTS: usize = 3;
 const PARTIALS: usize = 1;
 const ENCODE_RESPONSES: usize = 3;
@@ -34,7 +30,6 @@ const MASK_SPLIT_EVALUATIONS: usize = JINDO_ENCODING_SLOTS_V1;
 const BLIND_EVALUATIONS: usize = JINDO_MAX_BATCH_SIZE_V1;
 const SPLIT_EVALUATIONS: usize =
     JINDO_MAX_BATCH_SIZE_V1 * JINDO_PARAMETERS_V1.split * JINDO_ENCODING_SLOTS_V1;
-
 const _: () = {
     assert!(MASK_COMMITMENTS + INNER_COMMITMENTS == JINDO_PROOF_OUTER_POLYNOMIALS_V1);
     assert!(PARTIALS + ENCODE_RESPONSES + MLWE_RESPONSES == JINDO_PROOF_INNER_POLYNOMIALS_V1);
@@ -43,7 +38,6 @@ const _: () = {
             == JINDO_PROOF_FIELD_ELEMENTS_V1
     );
 };
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct JindoEvaluationProofV1 {
     pub(crate) mask_commitments: Vec<JindoRnsPolynomialV1>,
@@ -55,7 +49,6 @@ pub(crate) struct JindoEvaluationProofV1 {
     pub(crate) blind_evaluations: Vec<JindoFieldElementV1>,
     pub(crate) split_evaluations: Vec<JindoFieldElementV1>,
 }
-
 impl JindoEvaluationProofV1 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -125,7 +118,6 @@ impl JindoEvaluationProofV1 {
             split_evaluations,
         })
     }
-
     pub(crate) fn decode_exact(
         bytes: &[u8],
         expected_batch_count: usize,
@@ -169,7 +161,6 @@ impl JindoEvaluationProofV1 {
         if bytes[7] != 0 {
             return Err(JindoProofCodecErrorV1::NonZeroReserved { reserved: bytes[7] });
         }
-
         let mut cursor = JINDO_PROOF_HEADER_BYTES_V1;
         let mut polynomial_index = 0_u16;
         let mask_commitments = read_polynomials(
@@ -222,7 +213,6 @@ impl JindoEvaluationProofV1 {
             split_evaluations,
         )
     }
-
     pub(crate) fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(JINDO_PROOF_BYTES_V1);
         out.extend_from_slice(&JINDO_PROOF_MAGIC_V1);
@@ -239,7 +229,6 @@ impl JindoEvaluationProofV1 {
         out
     }
 }
-
 fn read_polynomials(
     bytes: &[u8],
     cursor: &mut usize,
@@ -273,7 +262,6 @@ fn read_polynomials(
     }
     Ok(out)
 }
-
 fn read_fields(
     bytes: &[u8],
     cursor: &mut usize,
@@ -292,7 +280,6 @@ fn read_fields(
     }
     Ok(out)
 }
-
 fn write_polynomials(out: &mut Vec<u8>, values: &[JindoRnsPolynomialV1]) {
     for value in values {
         for residue in value.residues().iter().flatten() {
@@ -305,7 +292,6 @@ fn write_fields(out: &mut Vec<u8>, values: &[JindoFieldElementV1]) {
         out.extend_from_slice(&value.to_canonical_bytes());
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Fixed-width section of a canonical Jindo proof.
 pub enum JindoProofSectionV1 {
@@ -326,7 +312,6 @@ pub enum JindoProofSectionV1 {
     /// Split evaluations for the committed polynomials.
     SplitEvaluations,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 /// Failure to encode or decode the canonical Jindo proof wire format.
 pub enum JindoProofCodecErrorV1 {
@@ -411,11 +396,9 @@ pub enum JindoProofCodecErrorV1 {
         index: u16,
     },
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const MASK_COMMITMENTS_OFFSET: usize = JINDO_PROOF_HEADER_BYTES_V1;
     const MASK_SPLIT_EVALUATION_OFFSET: usize =
         MASK_COMMITMENTS_OFFSET + MASK_COMMITMENTS * JINDO_PROOF_RNS_POLYNOMIAL_BYTES_V1;
@@ -431,7 +414,6 @@ mod tests {
         INNER_COMMITMENTS_OFFSET + INNER_COMMITMENTS * JINDO_PROOF_RNS_POLYNOMIAL_BYTES_V1;
     const SPLIT_EVALUATIONS_OFFSET: usize =
         BLIND_EVALUATIONS_OFFSET + BLIND_EVALUATIONS * JINDO_FIELD_ELEMENT_BYTES_V1;
-
     fn proof() -> JindoEvaluationProofV1 {
         JindoEvaluationProofV1::new(
             vec![JindoRnsPolynomialV1::zero(); MASK_COMMITMENTS],
@@ -445,7 +427,6 @@ mod tests {
         )
         .unwrap()
     }
-
     #[test]
     fn exact_shape_roundtrips_and_has_frozen_size() {
         assert_eq!(JINDO_PROOF_BYTES_V1, 331_912);
@@ -455,7 +436,6 @@ mod tests {
             proof()
         );
     }
-
     #[test]
     fn malformed_wire_fails_before_variable_allocation() {
         let encoded = proof().encode();
@@ -470,18 +450,15 @@ mod tests {
         assert!(JindoEvaluationProofV1::decode_exact(&trailing, 4, trailing.len() as u32).is_err());
         assert!(JindoEvaluationProofV1::decode_exact(&encoded, 3, encoded.len() as u32).is_err());
     }
-
     #[test]
     fn every_header_field_and_legacy_magic_fail_closed() {
         let encoded = proof().encode();
-
         let mut legacy = encoded.clone();
         legacy[..4].copy_from_slice(b"IJP1");
         assert_eq!(
             JindoEvaluationProofV1::decode_exact(&legacy, 4, legacy.len() as u32),
             Err(JindoProofCodecErrorV1::InvalidMagic)
         );
-
         for (index, replacement, expected) in [
             (
                 4,
@@ -510,7 +487,6 @@ mod tests {
                 Err(expected)
             );
         }
-
         assert_eq!(
             JindoEvaluationProofV1::decode_exact(&encoded, 4, (JINDO_PROOF_BYTES_V1 - 1) as u32,),
             Err(JindoProofCodecErrorV1::TooLarge {
@@ -519,7 +495,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn every_rns_phase_rejects_a_residue_equal_to_its_modulus() {
         let encoded = proof().encode();
@@ -544,7 +519,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn every_field_phase_rejects_the_field_modulus() {
         let encoded = proof().encode();
@@ -568,7 +542,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn frozen_phase_offsets_cover_the_wire_without_gaps() {
         assert_eq!(MASK_COMMITMENTS_OFFSET, 8);

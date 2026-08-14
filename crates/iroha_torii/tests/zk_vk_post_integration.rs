@@ -2,9 +2,6 @@
 //! Integration tests for POST VK registry endpoints (`app_api`).
 #![cfg(feature = "app_api")]
 #![allow(clippy::too_many_lines)]
-
-use std::sync::Arc;
-
 use axum::{Router, routing::post};
 use base64::Engine as _;
 use http_body_util::BodyExt as _;
@@ -18,13 +15,12 @@ use iroha_data_model::{account::AccountId, transaction::TransactionBuilder};
 use iroha_torii::NoritoJson;
 use nonzero_ext::nonzero;
 use norito::json;
+use std::sync::Arc;
 use tower::ServiceExt as _;
-
 fn checked_vk_post_authority_fixture() -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random()
         .expect("generate checked ZK VK POST authority fixture keypair")
 }
-
 #[test]
 fn vk_post_authority_fixture_uses_checked_ed25519_key_generation() {
     let key_pair = checked_vk_post_authority_fixture();
@@ -32,10 +28,8 @@ fn vk_post_authority_fixture_uses_checked_ed25519_key_generation() {
         .public_key()
         .try_algorithm()
         .expect("fixture VK POST public key has a valid algorithm");
-
     assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
 }
-
 #[tokio::test]
 async fn vk_register_update_return_unsigned_local_signing_drafts() {
     // Minimal state and queue
@@ -77,7 +71,6 @@ async fn vk_register_update_return_unsigned_local_signing_drafts() {
                 }
             }),
         );
-
     // Helper: build headers
     let _json_ct = {
         let mut h = axum::http::HeaderMap::new();
@@ -87,12 +80,10 @@ async fn vk_register_update_return_unsigned_local_signing_drafts() {
         );
         h
     };
-
     // Prepare a keypair whose public key matches the authority account id.
     let kp = checked_vk_post_authority_fixture();
     let exposed = iroha_crypto::ExposedPrivateKey(kp.private_key().clone());
     let authority = AccountId::new(kp.public_key().clone());
-
     // 1) Register (vk_bytes omitted; provide commitment_hex only)
     let body_reg_value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", authority.clone()),
@@ -152,7 +143,6 @@ async fn vk_register_update_return_unsigned_local_signing_drafts() {
             .as_ref()
             .to_vec()
     );
-
     // 2) Update (version increments)
     let body_upd_value = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", authority.clone()),
@@ -212,7 +202,6 @@ async fn vk_register_update_return_unsigned_local_signing_drafts() {
             .as_ref()
             .to_vec()
     );
-
     let legacy_body = json::to_json(&iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", authority),
         iroha_torii::json_entry("private_key", exposed),

@@ -189,6 +189,7 @@ CERTIFIED_RESPONSE_REGISTRATION_SHA256 = {
 }
 
 _REQUIRED_CHECKER_BINDINGS = (
+    "_read_reviewed_rust_source",
     "_require_rust_item",
     "_require_rust_item_context",
     "_require_rust_item_token_sha256",
@@ -407,9 +408,21 @@ def _applied_phase_admission_production_source_fidelity_errors(
                 "applied-phase admission refinement"
             ]
 
-    adapter_source = adapter_path.read_text(encoding="utf-8")
-    runtime_source = runtime_path.read_text(encoding="utf-8")
     errors: list[str] = []
+    _, adapter_source = _read_reviewed_rust_source(
+        repo_root,
+        adapter_path.relative_to(repo_root).as_posix(),
+        errors,
+        "production adapter applied-phase admission source",
+    )
+    _, runtime_source = _read_reviewed_rust_source(
+        repo_root,
+        runtime_path.relative_to(repo_root).as_posix(),
+        errors,
+        "serialized runtime applied-phase admission source",
+    )
+    if errors:
+        return errors
     adapter_context = (("impl", "SumeragiV2Adapter"),)
     runtime_context = (
         (

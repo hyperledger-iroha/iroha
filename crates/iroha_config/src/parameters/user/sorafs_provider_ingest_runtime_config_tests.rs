@@ -1,17 +1,13 @@
 //! Focused parser tests for the SoraFS provider-ingest runtime policy.
-
 use super::*;
-
 fn provider_id() -> ProviderId {
     ProviderId::new([0x51; 32])
 }
-
 fn completion_signer_public_key_hex() -> String {
     let key =
         KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519).expect("completion signer key");
     hex::encode(key.public_key().to_bytes().1)
 }
-
 fn valid_config() -> SorafsProviderIngestRuntimeConfig {
     SorafsProviderIngestRuntimeConfig {
         enabled: true,
@@ -41,7 +37,6 @@ fn valid_config() -> SorafsProviderIngestRuntimeConfig {
         ..SorafsProviderIngestRuntimeConfig::default()
     }
 }
-
 fn enable_attestation_journal(config: &mut SorafsProviderAttestationJournalConfig) {
     config.enabled = true;
     config.clock_seal_handle =
@@ -57,10 +52,8 @@ fn enable_attestation_journal(config: &mut SorafsProviderAttestationJournalConfi
     config.inventory_revision = Some(13);
     config.inventory_policy_digest_hex = Some("c3".repeat(32));
 }
-
 fn large_valid_outbox_config() -> SorafsProviderIngestRuntimeConfig {
     use defaults::sorafs::storage::provider_ingest_runtime::outbox;
-
     let mut config = valid_config();
     config.max_source_jobs_per_tick = 1;
     config.outbox.max_active_entries = 1;
@@ -69,7 +62,6 @@ fn large_valid_outbox_config() -> SorafsProviderIngestRuntimeConfig {
     config.outbox.max_signed_transaction_bytes = Bytes(outbox::MAX_SIGNED_TRANSACTION_BYTES_LIMIT);
     config
 }
-
 #[test]
 fn disabled_default_is_inert() {
     let config = SorafsProviderIngestRuntimeConfig::default();
@@ -88,7 +80,6 @@ fn disabled_default_is_inert() {
     assert!(config.parse(false, None, &mut emitter).is_none());
     assert!(emitter.into_result().is_ok());
 }
-
 #[test]
 fn enabled_policy_parses_without_credentials() {
     let provider_id = provider_id();
@@ -143,11 +134,9 @@ fn enabled_policy_parses_without_credentials() {
     assert_eq!(parsed.outbox.checkpoint_operation_timeout_ms, 30_000);
     assert!(parsed.provider_attestation_journal.is_none());
 }
-
 #[test]
 fn enabled_attestation_journal_projects_exact_policy_and_bindings() {
     use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
-
     let mut config = valid_config();
     enable_attestation_journal(&mut config.provider_attestation_journal);
     let mut emitter = Emitter::new();
@@ -185,7 +174,6 @@ fn enabled_attestation_journal_projects_exact_policy_and_bindings() {
         })
     );
 }
-
 #[test]
 fn disabled_attestation_journal_rejects_every_binding_field() {
     let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 9] = [
@@ -199,7 +187,6 @@ fn disabled_attestation_journal_rejects_every_binding_field() {
         |config| config.inventory_revision = Some(1),
         |config| config.inventory_policy_digest_hex = Some("c3".repeat(32)),
     ];
-
     for mutate in mutations {
         let mut config = SorafsProviderIngestRuntimeConfig::default();
         mutate(&mut config.provider_attestation_journal);
@@ -208,7 +195,6 @@ fn disabled_attestation_journal_rejects_every_binding_field() {
         assert!(emitter.into_result().is_err());
     }
 }
-
 #[test]
 fn enabled_attestation_journal_requires_all_three_binding_roles() {
     for present_roles in 0_u8..0b111 {
@@ -235,7 +221,6 @@ fn enabled_attestation_journal_requires_all_three_binding_roles() {
                 .provider_attestation_journal
                 .inventory_policy_digest_hex = None;
         }
-
         let mut emitter = Emitter::new();
         assert!(
             config
@@ -246,7 +231,6 @@ fn enabled_attestation_journal_requires_all_three_binding_roles() {
         assert!(emitter.into_result().is_err());
     }
 }
-
 #[test]
 fn enabled_attestation_journal_rejects_partial_binding_triplets() {
     for present_fields in 0b001_u8..0b111 {
@@ -259,7 +243,6 @@ fn enabled_attestation_journal_rejects_partial_binding_triplets() {
         config
             .provider_attestation_journal
             .clock_seal_policy_digest_hex = (present_fields & 0b100 != 0).then(|| "c1".repeat(32));
-
         let mut emitter = Emitter::new();
         assert!(
             config
@@ -270,7 +253,6 @@ fn enabled_attestation_journal_rejects_partial_binding_triplets() {
         assert!(emitter.into_result().is_err());
     }
 }
-
 #[test]
 fn enabled_attestation_journal_rejects_unqualified_bindings() {
     let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 12] = [
@@ -287,7 +269,6 @@ fn enabled_attestation_journal_rejects_unqualified_bindings() {
         |config| config.approval_signer_policy_digest_hex = Some("gg".repeat(32)),
         |config| config.inventory_policy_digest_hex = Some("c3".repeat(31)),
     ];
-
     for mutate in mutations {
         let mut config = valid_config();
         enable_attestation_journal(&mut config.provider_attestation_journal);
@@ -301,7 +282,6 @@ fn enabled_attestation_journal_rejects_unqualified_bindings() {
         assert!(emitter.into_result().is_err());
     }
 }
-
 #[test]
 fn attestation_journal_requires_enabled_provider_ingest_parent() {
     let mut config = SorafsProviderIngestRuntimeConfig::default();
@@ -316,11 +296,9 @@ fn attestation_journal_requires_enabled_provider_ingest_parent() {
         "unexpected diagnostic: {error}"
     );
 }
-
 #[test]
 fn attestation_journal_rejects_zero_below_minimum_and_above_limit_bounds() {
     use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
-
     let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 17] = [
         |config| config.max_entries = 0,
         |config| config.max_entries = journal::MAX_ENTRIES_LIMIT + 1,
@@ -351,7 +329,6 @@ fn attestation_journal_rejects_zero_below_minimum_and_above_limit_bounds() {
         |config| config.max_cas_retries = 0,
         |config| config.max_cas_retries = journal::MAX_CAS_RETRIES_LIMIT + 1,
     ];
-
     for mutate in mutations {
         let mut config = valid_config();
         enable_attestation_journal(&mut config.provider_attestation_journal);
@@ -365,11 +342,9 @@ fn attestation_journal_rejects_zero_below_minimum_and_above_limit_bounds() {
         assert!(emitter.into_result().is_err());
     }
 }
-
 #[test]
 fn attestation_journal_accepts_exact_checkpoint_minimum() {
     use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
-
     let mut config = valid_config();
     enable_attestation_journal(&mut config.provider_attestation_journal);
     config.provider_attestation_journal.checkpoint_max_bytes =
@@ -387,7 +362,6 @@ fn attestation_journal_accepts_exact_checkpoint_minimum() {
         journal::CHECKPOINT_MIN_BYTES
     );
 }
-
 #[test]
 fn attestation_journal_stage_timeouts_must_fit_the_claim_lease() {
     let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 2] = [
@@ -411,11 +385,9 @@ fn attestation_journal_stage_timeouts_must_fit_the_claim_lease() {
         assert!(emitter.into_result().is_err());
     }
 }
-
 #[test]
 fn defaults_and_actual_projection_respect_provider_broker_limits() {
     use defaults::sorafs::storage::provider_ingest_runtime::outbox;
-
     assert_eq!(outbox::CHECKPOINT_MAX_BYTES_LIMIT, 192 * 1024 * 1024);
     assert_eq!(outbox::MAX_SIGNED_TRANSACTION_BYTES_LIMIT, 64 * 1024 * 1024);
     assert_eq!(outbox::MAX_SIGNED_TRANSACTION_BYTES_MIN, 64 * 1024);
@@ -426,7 +398,6 @@ fn defaults_and_actual_projection_respect_provider_broker_limits() {
     assert!(outbox::CHECKPOINT_MAX_BYTES.0 <= outbox::CHECKPOINT_MAX_BYTES_LIMIT);
     assert!(outbox::MAX_SIGNED_TRANSACTION_BYTES.0 >= outbox::MAX_SIGNED_TRANSACTION_BYTES_MIN);
     assert!(outbox::MAX_SIGNED_TRANSACTION_BYTES.0 <= outbox::MAX_SIGNED_TRANSACTION_BYTES_LIMIT);
-
     let mut emitter = Emitter::new();
     let parsed = large_valid_outbox_config()
         .parse(true, Some(&provider_id()), &mut emitter)
@@ -441,11 +412,9 @@ fn defaults_and_actual_projection_respect_provider_broker_limits() {
         outbox::MAX_SIGNED_TRANSACTION_BYTES_LIMIT
     );
 }
-
 #[test]
 fn broker_incompatible_outbox_limits_fail_closed() {
     use defaults::sorafs::storage::provider_ingest_runtime::outbox;
-
     let mut oversized_checkpoint = large_valid_outbox_config();
     oversized_checkpoint.outbox.checkpoint_max_bytes =
         Bytes(outbox::CHECKPOINT_MAX_BYTES_LIMIT + 1);
@@ -455,7 +424,6 @@ fn broker_incompatible_outbox_limits_fail_closed() {
         emitter.into_result().is_err(),
         "checkpoint bytes above the stock broker ceiling must fail"
     );
-
     let mut oversized_transaction = large_valid_outbox_config();
     oversized_transaction.outbox.max_signed_transaction_bytes =
         Bytes(outbox::MAX_SIGNED_TRANSACTION_BYTES_LIMIT + 1);
@@ -465,7 +433,6 @@ fn broker_incompatible_outbox_limits_fail_closed() {
         emitter.into_result().is_err(),
         "signed transaction bytes above the stock broker ceiling must fail"
     );
-
     let mut below_envelope_reserve = large_valid_outbox_config();
     below_envelope_reserve.outbox.max_signed_transaction_bytes =
         Bytes(outbox::MAX_SIGNED_TRANSACTION_BYTES_MIN - 1);
@@ -475,7 +442,6 @@ fn broker_incompatible_outbox_limits_fail_closed() {
         emitter.into_result().is_err(),
         "a signed transaction limit without room beyond the envelope reserve must fail"
     );
-
     let mut exact_minimum = large_valid_outbox_config();
     exact_minimum.outbox.max_active_entries = 1;
     exact_minimum.outbox.max_terminal_entries = 1;
@@ -490,7 +456,6 @@ fn broker_incompatible_outbox_limits_fail_closed() {
         projected.outbox.max_signed_transaction_bytes.0,
         outbox::MAX_SIGNED_TRANSACTION_BYTES_MIN
     );
-
     let mut legacy_128_mib_ceiling = large_valid_outbox_config();
     legacy_128_mib_ceiling.outbox.max_signed_transaction_bytes = Bytes(128 * 1024 * 1024);
     let mut emitter = Emitter::new();
@@ -500,7 +465,6 @@ fn broker_incompatible_outbox_limits_fail_closed() {
         "one retained expected payload plus one signed transaction at the 128 MiB ceiling cannot fit the 192 MiB checkpoint ceiling"
     );
 }
-
 #[test]
 fn enabled_policy_requires_storage_provider_and_production_handles() {
     let mut config = valid_config();
@@ -513,12 +477,10 @@ fn enabled_policy_requires_storage_provider_and_production_handles() {
     config.checkpoint_store_handle = Some("sealed.sorafs.test".to_owned());
     config.checkpoint_store_revision = Some(0);
     config.checkpoint_store_policy_digest_hex = Some("A7".repeat(32));
-
     let mut emitter = Emitter::new();
     assert!(config.parse(false, None, &mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn enabled_policy_rejects_credential_or_uri_parameter_handles() {
     for rejected in [
@@ -540,7 +502,6 @@ fn enabled_policy_rejects_credential_or_uri_parameter_handles() {
         assert!(emitter.into_result().is_err());
     }
 }
-
 #[test]
 fn enabled_policy_rejects_stale_or_noncanonical_completion_signer_binding() {
     let mut config = valid_config();
@@ -553,7 +514,6 @@ fn enabled_policy_rejects_stale_or_noncanonical_completion_signer_binding() {
     config.completion_signer_algorithm = Some(Algorithm::Secp256k1);
     config.completion_signer_public_key_hex =
         Some(completion_signer_public_key_hex().to_uppercase());
-
     let mut emitter = Emitter::new();
     assert!(
         config
@@ -562,7 +522,6 @@ fn enabled_policy_rejects_stale_or_noncanonical_completion_signer_binding() {
     );
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn enabled_policy_rejects_zero_provider_identity() {
     let zero_provider_id = ProviderId::new([0; 32]);
@@ -574,11 +533,9 @@ fn enabled_policy_rejects_zero_provider_identity() {
     );
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn unsafe_resource_timing_and_capacity_bounds_fail_closed() {
     use defaults::sorafs::storage::provider_ingest_runtime::outbox;
-
     let provider_id = provider_id();
     let mut config = valid_config();
     config.scan_interval_ms = 0;
@@ -612,7 +569,6 @@ fn unsafe_resource_timing_and_capacity_bounds_fail_closed() {
     config.outbox.max_signed_transaction_bytes =
         Bytes(outbox::MAX_SIGNED_TRANSACTION_BYTES_LIMIT + 1);
     config.outbox.max_status_page_size = 1_001;
-
     let mut emitter = Emitter::new();
     assert!(
         config
@@ -621,7 +577,6 @@ fn unsafe_resource_timing_and_capacity_bounds_fail_closed() {
     );
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn checkpoint_operation_deadline_must_be_nonzero_and_bounded() {
     for invalid_timeout_ms in [0, 24 * 60 * 60 * 1_000 + 1] {
@@ -635,7 +590,6 @@ fn checkpoint_operation_deadline_must_be_nonzero_and_bounded() {
         );
     }
 }
-
 #[test]
 fn checked_aggregate_capacities_fail_closed() {
     let provider_id = provider_id();
@@ -649,7 +603,6 @@ fn checked_aggregate_capacities_fail_closed() {
     config.outbox.max_terminal_entries = 1;
     config.outbox.checkpoint_max_bytes = Bytes(1);
     config.outbox.max_signed_transaction_bytes = Bytes(1);
-
     let mut emitter = Emitter::new();
     assert!(
         config
@@ -658,7 +611,6 @@ fn checked_aggregate_capacities_fail_closed() {
     );
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn archive_policy_allows_zero_lag_but_rejects_absolute_or_dot_roots() {
     let provider_id = provider_id();
@@ -670,7 +622,6 @@ fn archive_policy_allows_zero_lag_but_rejects_absolute_or_dot_roots() {
         .expect("zero-lag archive policy");
     assert_eq!(parsed.finalized_archive.max_kura_tip_lag_blocks, 0);
     assert!(emitter.into_result().is_ok());
-
     for relative_root in [
         PathBuf::from("."),
         PathBuf::from("archive/../substituted"),
@@ -689,13 +640,11 @@ fn archive_policy_allows_zero_lag_but_rejects_absolute_or_dot_roots() {
         assert!(emitter.into_result().is_err());
     }
 }
-
 #[test]
 fn worst_case_outbox_transactions_must_fit_checkpoint() {
     let provider_id = provider_id();
     let mut config = valid_config();
     config.outbox.max_active_entries = 4_096;
-
     let mut emitter = Emitter::new();
     assert!(
         config
@@ -704,7 +653,6 @@ fn worst_case_outbox_transactions_must_fit_checkpoint() {
     );
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn disabled_policy_rejects_stale_runtime_bindings() {
     let mut config = SorafsProviderIngestRuntimeConfig::default();
@@ -716,7 +664,6 @@ fn disabled_policy_rejects_stale_runtime_bindings() {
     assert!(config.parse(false, None, &mut emitter).is_none());
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn disabled_policy_rejects_each_top_level_provider_qualification_field() {
     let mutations: [fn(&mut SorafsProviderIngestRuntimeConfig); 4] = [

@@ -1,12 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Validates that an exact genesis-network mismatch causes transaction rejection.
-
 use integration_tests::sandbox;
 use iroha::crypto::{Hash, HashOf};
 use iroha::data_model::prelude::*;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
-
 #[test]
 fn send_tx_with_same_chain_name_but_different_genesis_network() {
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
@@ -25,7 +23,6 @@ fn send_tx_with_same_chain_name_but_different_genesis_network() {
         "test_asset".parse().unwrap(),
     );
     let to_transfer = Quantity::from(1_u32);
-
     let create_sender_account = Register::account(Account::new(sender_id.clone()));
     let create_receiver_account = Register::account(Account::new(receiver_id.clone()));
     let register_asset_definition = Register::asset_definition({
@@ -58,7 +55,6 @@ fn send_tx_with_same_chain_name_but_different_genesis_network() {
             b"same-chain-name-different-genesis",
         )));
     assert_ne!(network_id, foreign_network_id);
-
     let transfer_instruction = Transfer::asset_quantity(
         AssetId::new(
             AssetDefinitionId::derive_from_components(

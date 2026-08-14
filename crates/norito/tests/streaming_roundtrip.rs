@@ -1,6 +1,4 @@
 //! Integration tests for the Norito Streaming Codec baseline pipeline.
-use std::convert::TryFrom;
-
 use norito::streaming::{
     CapabilityFlags, EncryptionSuite, FecScheme, ManifestV1, Multiaddr, PrivacyCapabilities,
     PrivacyRelay, PrivacyRoute, StreamMetadata,
@@ -13,7 +11,7 @@ use norito::streaming::{
         FrameDimensions, ManifestError, RawFrame, SegmentError, verify_segment,
     },
 };
-
+use std::convert::TryFrom;
 const SEGMENT_NUMBER: u64 = 41;
 const TIMELINE_START_NS: u64 = 1_333_000;
 const CONTENT_KEY_ID: u64 = 1_024;
@@ -48,7 +46,6 @@ const EXPECTED_DA_ROOT: [u8; 32] = [
     250, 83, 206, 148, 228, 66, 143, 6, 205, 251, 238, 224, 213, 12, 12, 79, 197, 61, 49, 130, 228,
     91, 131, 42, 62, 158, 245, 200, 200, 159, 203, 146,
 ];
-
 #[test]
 fn baseline_segment_manifest_roundtrip() {
     let dims = FrameDimensions::new(8, 8);
@@ -62,7 +59,6 @@ fn baseline_segment_manifest_roundtrip() {
         quantizer: 0,
         ..BaselineEncoderConfig::default()
     };
-
     let mut encoder = BaselineEncoder::new(encoder_config.clone());
     let frames = [
         pattern_frame(dims, 0x11),
@@ -73,7 +69,6 @@ fn baseline_segment_manifest_roundtrip() {
         .iter()
         .map(|bytes| RawFrame::new(dims, bytes.clone()).expect("frame"))
         .collect();
-
     let segment = encoder
         .encode_segment(
             SEGMENT_NUMBER,
@@ -91,7 +86,6 @@ fn baseline_segment_manifest_roundtrip() {
         segment.header.duration_ns,
         FRAME_DURATION_NS.saturating_mul(raw_frames.len() as u32)
     );
-
     verify_segment(
         &segment.header,
         &segment.descriptors,
@@ -99,25 +93,20 @@ fn baseline_segment_manifest_roundtrip() {
         segment.audio.as_ref(),
     )
     .expect("segment verification");
-
     let payload_refs: Vec<(u16, &[u8])> = segment
         .descriptors
         .iter()
         .zip(segment.chunks.iter())
         .map(|(descriptor, chunk)| (descriptor.chunk_id, chunk.as_slice()))
         .collect();
-
     let commitments = chunk_commitments(SEGMENT_NUMBER, &payload_refs);
     assert_eq!(commitments, EXPECTED_COMMITMENTS);
-
     for (descriptor, expected) in segment.descriptors.iter().zip(commitments.iter()) {
         assert_eq!(&descriptor.commitment, expected);
     }
-
     let root = merkle_root(&commitments).expect("merkle root");
     assert_eq!(root, EXPECTED_CHUNK_ROOT);
     assert_eq!(segment.header.chunk_merkle_root, EXPECTED_CHUNK_ROOT);
-
     let chunk_ids: Vec<u16> = segment
         .descriptors
         .iter()
@@ -131,7 +120,6 @@ fn baseline_segment_manifest_roundtrip() {
     )
     .expect("storage commitment");
     assert_eq!(storage, EXPECTED_STORAGE_COMMITMENT);
-
     let da_root = data_availability_root(
         SEGMENT_NUMBER,
         CONTENT_KEY_ID,
@@ -140,16 +128,13 @@ fn baseline_segment_manifest_roundtrip() {
     )
     .expect("da root");
     assert_eq!(da_root, EXPECTED_DA_ROOT);
-
     assert_eq!(segment.header.nonce_salt, EXPECTED_NONCE_SALT);
-
     let proof = merkle_proof(&commitments, 1, segment.descriptors[1].chunk_id).expect("proof");
     assert!(verify_merkle_proof(
         &commitments[1],
         &proof,
         &segment.header.chunk_merkle_root
     ));
-
     let manifest_params = BaselineManifestParams {
         stream_id: [0x21; 32],
         protocol_version: 1,
@@ -176,9 +161,7 @@ fn baseline_segment_manifest_roundtrip() {
         manifest.transport_capabilities_hash,
         manifest_params.transport_capabilities_hash
     );
-
     assert_roundtrip_metadata(&segment, &manifest);
-
     let decoder = BaselineDecoder::new(dims, FRAME_DURATION_NS);
     let decoded = decoder.decode_segment(&segment).expect("decode");
     assert_eq!(decoded.len(), raw_frames.len());
@@ -199,14 +182,12 @@ fn baseline_segment_manifest_roundtrip() {
         }
     }
 }
-
 fn pattern_frame(dimensions: FrameDimensions, seed: u8) -> Vec<u8> {
     let count = dimensions.pixel_count();
     (0..count)
         .map(|idx| seed.wrapping_add((idx as u8).wrapping_mul(7)))
         .collect()
 }
-
 fn sample_privacy_route() -> PrivacyRoute {
     PrivacyRoute {
         route_id: [0x31; 32],
@@ -228,7 +209,6 @@ fn sample_privacy_route() -> PrivacyRoute {
         soranet: None,
     }
 }
-
 fn assert_roundtrip_metadata(segment: &EncodedSegment, manifest: &ManifestV1) {
     assert_eq!(segment.header.segment_number, manifest.segment_number);
     assert_eq!(segment.header.profile, manifest.profile);
@@ -238,7 +218,6 @@ fn assert_roundtrip_metadata(segment: &EncodedSegment, manifest: &ManifestV1) {
     assert_eq!(segment.header.nonce_salt, manifest.nonce_salt);
     assert_eq!(segment.descriptors.len(), manifest.chunk_descriptors.len());
 }
-
 #[test]
 fn baseline_encoder_handles_unaligned_dimensions() {
     let dims = FrameDimensions::new(10, 8);
@@ -253,7 +232,6 @@ fn baseline_encoder_handles_unaligned_dimensions() {
     let segment = encoder
         .encode_segment(7, TIMELINE_START_NS, CONTENT_KEY_ID, &[raw], None)
         .expect("unaligned dimensions must encode");
-
     assert_eq!(segment.header.chunk_count, 1);
     let decoder = BaselineDecoder::new(dims, frame_duration);
     let frames = decoder
@@ -271,7 +249,6 @@ fn baseline_encoder_handles_unaligned_dimensions() {
         "unaligned frame exceeded tolerance with diff {max_diff}"
     );
 }
-
 #[test]
 fn baseline_quantized_roundtrip_within_tolerance() {
     let dims = FrameDimensions::new(16, 16);
@@ -288,7 +265,6 @@ fn baseline_quantized_roundtrip_within_tolerance() {
         .iter()
         .map(|bytes| RawFrame::new(dims, bytes.clone()).expect("frame"))
         .collect();
-
     let segment = encoder
         .encode_segment(
             SEGMENT_NUMBER + 1,
@@ -298,7 +274,6 @@ fn baseline_quantized_roundtrip_within_tolerance() {
             None,
         )
         .expect("encode segment");
-
     verify_segment(
         &segment.header,
         &segment.descriptors,
@@ -306,11 +281,9 @@ fn baseline_quantized_roundtrip_within_tolerance() {
         segment.audio.as_ref(),
     )
     .expect("segment verification");
-
     let decoder = BaselineDecoder::new(dims, config.frame_duration_ns);
     let decoded = decoder.decode_segment(&segment).expect("decode");
     assert_eq!(decoded.len(), raw_frames.len());
-
     let mut max_diff = 0u16;
     for (frame_idx, decoded_frame) in decoded.iter().enumerate() {
         for (decoded_px, expected_px) in decoded_frame.luma.iter().zip(frames[frame_idx].iter()) {
@@ -323,7 +296,6 @@ fn baseline_quantized_roundtrip_within_tolerance() {
         "maximum pixel delta {max_diff} exceeded tolerance"
     );
 }
-
 #[test]
 fn verify_segment_detects_unsorted_chunk_ids() {
     let dims = FrameDimensions::new(8, 8);
@@ -346,7 +318,6 @@ fn verify_segment_detects_unsorted_chunk_ids() {
             None,
         )
         .expect("encode segment");
-
     let mut tampered_descriptors = segment.descriptors.clone();
     tampered_descriptors[0].chunk_id = 1;
     tampered_descriptors[1].chunk_id = 0;
@@ -359,7 +330,6 @@ fn verify_segment_detects_unsorted_chunk_ids() {
     .expect_err("unsorted chunk ids must fail");
     assert!(matches!(err, SegmentError::UnsortedChunkIds));
 }
-
 #[test]
 fn manifest_verification_rejects_nonce_salt_change() {
     let dims = FrameDimensions::new(8, 8);
@@ -378,7 +348,6 @@ fn manifest_verification_rejects_nonce_salt_change() {
             None,
         )
         .expect("encode segment");
-
     let mut manifest = segment.build_manifest(BaselineManifestParams {
         stream_id: [0x99; 32],
         da_endpoint: Multiaddr::from("/dns/nonce-mismatch/quic"),
@@ -390,7 +359,6 @@ fn manifest_verification_rejects_nonce_salt_change() {
         .expect_err("nonce mismatch must fail");
     assert!(matches!(err, ManifestError::NonceSaltMismatch));
 }
-
 fn build_segment_for_decoder_tests(
     dims: FrameDimensions,
     frame_count: usize,
@@ -417,7 +385,6 @@ fn build_segment_for_decoder_tests(
         .expect("encode segment");
     (config, segment)
 }
-
 fn refresh_segment_commitments(segment: &mut EncodedSegment) {
     segment.header.chunk_count = segment.descriptors.len() as u16;
     let mut payload_refs = Vec::with_capacity(segment.chunks.len());
@@ -435,7 +402,6 @@ fn refresh_segment_commitments(segment: &mut EncodedSegment) {
     }
     segment.header.chunk_merkle_root = merkle_root(&commitments).expect("chunk root");
 }
-
 #[test]
 fn baseline_decoder_rejects_frame_index_mismatch() {
     let dims = FrameDimensions::new(8, 8);
@@ -450,7 +416,6 @@ fn baseline_decoder_rejects_frame_index_mismatch() {
         segment.audio.as_ref(),
     )
     .expect("segment verification");
-
     let decoder = BaselineDecoder::new(dims, config.frame_duration_ns);
     let err = decoder
         .decode_segment(&segment)
@@ -463,7 +428,6 @@ fn baseline_decoder_rejects_frame_index_mismatch() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn baseline_decoder_rejects_frame_pts_mismatch() {
     let dims = FrameDimensions::new(8, 8);
@@ -479,7 +443,6 @@ fn baseline_decoder_rejects_frame_pts_mismatch() {
         segment.audio.as_ref(),
     )
     .expect("segment verification");
-
     let decoder = BaselineDecoder::new(dims, config.frame_duration_ns);
     let err = decoder
         .decode_segment(&segment)
@@ -493,7 +456,6 @@ fn baseline_decoder_rejects_frame_pts_mismatch() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn baseline_decoder_rejects_block_count_mismatch() {
     let dims = FrameDimensions::new(8, 8);
@@ -507,7 +469,6 @@ fn baseline_decoder_rejects_block_count_mismatch() {
         segment.audio.as_ref(),
     )
     .expect("segment verification");
-
     let decoder = BaselineDecoder::new(dims, config.frame_duration_ns);
     let err = decoder
         .decode_segment(&segment)
@@ -521,7 +482,6 @@ fn baseline_decoder_rejects_block_count_mismatch() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
-
 #[test]
 fn baseline_decoder_rejects_truncated_chunk() {
     let dims = FrameDimensions::new(8, 8);
@@ -535,7 +495,6 @@ fn baseline_decoder_rejects_truncated_chunk() {
         segment.audio.as_ref(),
     )
     .expect("segment verification");
-
     let decoder = BaselineDecoder::new(dims, config.frame_duration_ns);
     let err = decoder
         .decode_segment(&segment)

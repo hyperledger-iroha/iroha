@@ -1,10 +1,8 @@
 // Same-scope regression coverage extracted to keep the parent source budget bounded.
-
 #[test]
 fn default_namespace_lease_price_is_exact() {
     assert_eq!(default_namespace_lease_price().to_string(), "0.5");
 }
-
 #[test]
 fn absolute_renewal_target_requires_positive_whole_year_delta() {
     let current = 10_000;
@@ -23,7 +21,6 @@ fn absolute_renewal_target_requires_positive_whole_year_delta() {
         .is_err()
     );
 }
-
 #[test]
 fn auto_renew_state_storage_is_target_bound_and_revision_preserving() {
     let target = AliasTargetV1::AccountAlias(ResolvedAccountAliasV1::new(
@@ -42,7 +39,6 @@ fn auto_renew_state_storage_is_target_bound_and_revision_preserving() {
         alias_auto_renew_state(&world.view(), &target).expect("decode auto-renew state"),
         Some(state)
     );
-
     let other = AliasTargetV1::AccountAlias(ResolvedAccountAliasV1::new(
         "other@universal"
             .parse::<AccountAliasName>()
@@ -54,7 +50,6 @@ fn auto_renew_state_storage_is_target_bound_and_revision_preserving() {
         None
     );
 }
-
 #[test]
 fn auto_renew_storage_selection_is_bounded_and_wraps_after_cursor() {
     let mut entries = ["alpha@universal", "bravo@universal", "charlie@universal"]
@@ -80,7 +75,6 @@ fn auto_renew_storage_selection_is_bounded_and_wraps_after_cursor() {
         .iter()
         .map(|(key, _)| key.clone())
         .collect::<Vec<_>>();
-
     assert_eq!(
         alias_auto_renew_candidate_keys(&world.view(), None, 2),
         keys[..2]
@@ -99,18 +93,15 @@ fn auto_renew_storage_selection_is_bounded_and_wraps_after_cursor() {
         "a full sweep must revisit the cursor key after wrapping"
     );
 }
-
 fn owner() -> AccountId {
     let public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
         .parse()
         .expect("public key");
     AccountId::new(public_key)
 }
-
 fn checked_keypair() -> KeyPair {
     KeyPair::try_random().expect("SNS fixture key generation should succeed")
 }
-
 fn checked_account_id() -> AccountId {
     AccountId::new(checked_keypair().public_key().clone())
 }

@@ -87,6 +87,26 @@ class ZkAssetMerklePathTest {
     }
 
     @Test
+    fun toriiProviderRejectsReusableExplicitFreshness() {
+        val client = ConfidentialAssetToriiClient.builder()
+            .executor(CapturingExecutor("{}"))
+            .baseUri(URI.create("https://example.com"))
+            .localSigningContext(LocalSigningContext(networkId))
+            .build()
+        assertFailsWith<IllegalArgumentException> {
+            ToriiZkAssetMerklePathProvider(
+                client,
+                ToriiCanonicalRequestAuth(
+                    "alice",
+                    keyPair.private,
+                    1_700_000_000_000L,
+                    "reused-provider-nonce",
+                ),
+            )
+        }
+    }
+
+    @Test
     fun toriiProviderRejectsPathCountDriftAndReorderedNodeResponses() {
         val commitments = listOf(scalarBytes(1), scalarBytes(2))
         val root = computeRoot(commitments)
@@ -224,12 +244,7 @@ class ZkAssetMerklePathTest {
     }
 
     private fun canonicalAuth(): ToriiCanonicalRequestAuth =
-        ToriiCanonicalRequestAuth(
-            "alice",
-            keyPair.private,
-            1_700_000_000_000L,
-            "zk-provider-1",
-        )
+        ToriiCanonicalRequestAuth("alice", keyPair.private)
 
     private data class MerklePathResponseEntry(
         val commitment: ByteArray,

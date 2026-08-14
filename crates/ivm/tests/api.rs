@@ -1,7 +1,5 @@
 //! API surface tests for IVM convenience wrappers.
-
 use ivm::Memory;
-
 #[test]
 fn load_u64_wrapper_matches_memory() {
     let mut vm = ivm::IVM::new(1_000_000);

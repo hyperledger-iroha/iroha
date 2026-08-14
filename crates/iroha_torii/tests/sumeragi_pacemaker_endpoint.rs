@@ -1,14 +1,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Router-level test for GET /v1/sumeragi/pacemaker (telemetry-gated)
 #![cfg(feature = "telemetry")]
-
 #[tokio::test]
 async fn sumeragi_pacemaker_endpoint_shape() {
     use axum::{Router, routing::get};
     use iroha_config::parameters::actual::TelemetryProfile;
     use iroha_torii::MaybeTelemetry;
     use tower::ServiceExt;
-
     // Prepare telemetry with some values
     let telemetry = MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Developer);
     if let Some(tele) = telemetry.telemetry() {
@@ -26,7 +24,6 @@ async fn sumeragi_pacemaker_endpoint_shape() {
             .sumeragi_pacemaker_view_timeout_remaining_ms
             .set(750);
     }
-
     // Build a tiny router with the pacemaker endpoint handler
     let app = Router::new().route(
         "/v1/sumeragi/pacemaker",
@@ -38,7 +35,6 @@ async fn sumeragi_pacemaker_endpoint_shape() {
             }
         }),
     );
-
     let resp = app
         .oneshot(
             axum::http::Request::builder()
@@ -49,13 +45,11 @@ async fn sumeragi_pacemaker_endpoint_shape() {
         .await
         .unwrap();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-
     let body = http_body_util::BodyExt::collect(resp.into_body())
         .await
         .unwrap()
         .to_bytes();
     let s = String::from_utf8(body.to_vec()).unwrap();
-
     // Parse JSON and check expected keys exist
     let v: norito::json::Value = norito::json::from_str(&s).unwrap();
     for k in [

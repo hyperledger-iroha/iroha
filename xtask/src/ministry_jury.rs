@@ -1,9 +1,3 @@
-use std::{
-    error::Error,
-    fs,
-    path::{Path, PathBuf},
-};
-
 use blake2::digest::Digest;
 use hex::{FromHex, decode as hex_decode};
 use iroha_crypto::Blake2b256;
@@ -21,14 +15,17 @@ use rand_chacha::ChaCha20Rng;
 use rand_core_06::{OsRng as SecureOsRng, RngCore as SecureRngCore};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
+use std::{
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+};
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
-
 pub enum Command {
     Sortition(SortitionOptions),
     BallotCommit(BallotCommitOptions),
     BallotVerify(BallotVerifyOptions),
 }
-
 #[derive(Clone)]
 pub struct SortitionOptions {
     pub roster_path: PathBuf,
@@ -43,7 +40,6 @@ pub struct SortitionOptions {
     pub failover_grace_secs: u32,
     pub output_path: Option<PathBuf>,
 }
-
 #[derive(Clone)]
 pub struct BallotCommitOptions {
     pub proposal_id: String,
@@ -56,13 +52,11 @@ pub struct BallotCommitOptions {
     pub output_path: Option<PathBuf>,
     pub reveal_output_path: Option<PathBuf>,
 }
-
 #[derive(Clone)]
 pub struct BallotVerifyOptions {
     pub commit_path: PathBuf,
     pub reveal_path: PathBuf,
 }
-
 pub fn run(command: Command) -> Result<(), Box<dyn Error>> {
     match command {
         Command::Sortition(options) => {
@@ -91,7 +85,6 @@ pub fn run(command: Command) -> Result<(), Box<dyn Error>> {
         Command::BallotVerify(options) => run_ballot_verify(&options),
     }
 }
-
 fn run_sortition(options: &SortitionOptions) -> Result<PolicyJurySortitionV1, Box<dyn Error>> {
     let roster_bytes = fs::read(&options.roster_path).map_err(|err| {
         format!(
@@ -106,7 +99,6 @@ fn run_sortition(options: &SortitionOptions) -> Result<PolicyJurySortitionV1, Bo
         )
     })?;
     roster.validate()?;
-
     if options.committee_size == 0 {
         return Err("policy jury sortition requires --committee-size >= 1".into());
     }
@@ -114,7 +106,6 @@ fn run_sortition(options: &SortitionOptions) -> Result<PolicyJurySortitionV1, Bo
         .committee_size
         .checked_add(options.waitlist_size)
         .ok_or("committee + waitlist size overflow")?;
-
     let eligible = roster.eligible_jurors()?;
     if eligible.len() < total_required {
         return Err(format!(
@@ -123,17 +114,14 @@ fn run_sortition(options: &SortitionOptions) -> Result<PolicyJurySortitionV1, Bo
         )
         .into());
     }
-
     let beacon = parse_beacon(&options.beacon_hex)?;
     let draws = perform_draws(&eligible, total_required, beacon)?;
-
     let drawn_at_ms = unix_millis(options.drawn_at)?;
     let waitlist_expiry_ms = unix_millis(calculate_waitlist_expiry(
         options.drawn_at,
         options.waitlist_ttl_hours,
     )?)?;
     let snapshot_digest = digest_roster(&roster_bytes);
-
     let default_grace = roster
         .default_grace_period_secs
         .unwrap_or(options.grace_period_secs);
@@ -161,7 +149,6 @@ fn run_sortition(options: &SortitionOptions) -> Result<PolicyJurySortitionV1, Bo
             }
         })
         .collect();
-
     let waitlist: Vec<PolicyJuryWaitlistEntry> = draws
         .iter()
         .skip(options.committee_size)
@@ -176,7 +163,6 @@ fn run_sortition(options: &SortitionOptions) -> Result<PolicyJurySortitionV1, Bo
             }
         })
         .collect();
-
     let manifest = PolicyJurySortitionV1 {
         version: POLICY_JURY_SORTITION_VERSION_V1,
         proposal_id: options.proposal_id.clone(),
@@ -193,7 +179,6 @@ fn run_sortition(options: &SortitionOptions) -> Result<PolicyJurySortitionV1, Bo
         .map_err(|err| format!("generated sortition manifest failed validation: {err}"))?;
     Ok(manifest)
 }
-
 fn run_ballot_commit(options: &BallotCommitOptions) -> Result<(), Box<dyn Error>> {
     let (commit, reveal) = build_ballot_pair(options)?;
     write_json_artifact(
@@ -206,7 +191,6 @@ fn run_ballot_commit(options: &BallotCommitOptions) -> Result<(), Box<dyn Error>
     }
     Ok(())
 }
-
 fn run_ballot_verify(options: &BallotVerifyOptions) -> Result<(), Box<dyn Error>> {
     let commit_bytes = fs::read(&options.commit_path).map_err(|err| {
         format!(
@@ -233,7 +217,6 @@ fn run_ballot_verify(options: &BallotVerifyOptions) -> Result<(), Box<dyn Error>
     );
     Ok(())
 }
-
 fn build_ballot_pair(
     options: &BallotCommitOptions,
 ) -> Result<(PolicyJuryBallotCommitV1, PolicyJuryBallotRevealV1), Box<dyn Error>> {
@@ -263,7 +246,6 @@ fn build_ballot_pair(
         .map_err(|err| format!("generated ballot failed verification: {err}"))?;
     Ok((commit, reveal))
 }
-
 fn write_json_artifact<T>(value: &T, path: Option<&Path>, label: &str) -> Result<(), Box<dyn Error>>
 where
     T: norito::json::JsonSerialize + ?Sized,
@@ -287,7 +269,6 @@ where
     }
     Ok(())
 }
-
 fn unix_millis(timestamp: OffsetDateTime) -> Result<u64, Box<dyn Error>> {
     let nanos = timestamp.unix_timestamp_nanos();
     if nanos < 0 {
@@ -296,7 +277,6 @@ fn unix_millis(timestamp: OffsetDateTime) -> Result<u64, Box<dyn Error>> {
     Ok(u64::try_from(nanos / 1_000_000)
         .map_err(|err| format!("failed to convert timestamp to milliseconds: {err}"))?)
 }
-
 fn calculate_waitlist_expiry(
     drawn_at: OffsetDateTime,
     ttl_hours: u32,
@@ -306,7 +286,6 @@ fn calculate_waitlist_expiry(
         .checked_add(duration)
         .ok_or_else(|| "waitlist TTL caused overflow when computing expiry timestamp".into())
 }
-
 fn parse_beacon(input: &str) -> Result<[u8; 32], Box<dyn Error>> {
     let trimmed = input.trim();
     if trimmed.len() != 64 {
@@ -319,13 +298,11 @@ fn parse_beacon(input: &str) -> Result<[u8; 32], Box<dyn Error>> {
     <[u8; 32]>::from_hex(trimmed)
         .map_err(|err| format!("failed to decode randomness beacon hex: {err}").into())
 }
-
 fn digest_roster(bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Blake2b256::new();
     hasher.update(bytes);
     hasher.finalize().into()
 }
-
 fn perform_draws(
     members: &[EligibleJuror],
     picks: usize,
@@ -349,7 +326,6 @@ fn perform_draws(
     }
     Ok(draws)
 }
-
 #[derive(Deserialize)]
 struct JuryRoster {
     format_version: u32,
@@ -357,7 +333,6 @@ struct JuryRoster {
     #[serde(default)]
     default_grace_period_secs: Option<u32>,
 }
-
 impl JuryRoster {
     fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.format_version != 1 {
@@ -372,7 +347,6 @@ impl JuryRoster {
         }
         Ok(())
     }
-
     fn eligible_jurors(&self) -> Result<Vec<EligibleJuror>, Box<dyn Error>> {
         let mut members = Vec::new();
         for (index, juror) in self.jurors.iter().cloned().enumerate() {
@@ -394,7 +368,6 @@ impl JuryRoster {
         Ok(members)
     }
 }
-
 #[derive(Clone, Deserialize)]
 struct JuryCandidate {
     juror_id: String,
@@ -410,26 +383,21 @@ struct JuryCandidate {
     #[serde(rename = "metadata")]
     metadata: Option<JsonValue>,
 }
-
 #[derive(Clone)]
 struct EligibleJuror {
     member: JuryCandidate,
     #[allow(dead_code)]
     original_index: usize,
 }
-
 struct DrawRef {
     index: usize,
 }
-
 const fn default_weight() -> u64 {
     1
 }
-
 const fn default_true() -> bool {
     true
 }
-
 pub fn parse_vote_choice(value: &str) -> Result<PolicyJuryVoteChoice, Box<dyn Error>> {
     match value.trim().to_lowercase().as_str() {
         "approve" => Ok(PolicyJuryVoteChoice::Approve),
@@ -441,12 +409,10 @@ pub fn parse_vote_choice(value: &str) -> Result<PolicyJuryVoteChoice, Box<dyn Er
         .into()),
     }
 }
-
 pub fn parse_ballot_timestamp(label: &str, value: &str) -> Result<OffsetDateTime, Box<dyn Error>> {
     OffsetDateTime::parse(value, &Rfc3339)
         .map_err(|err| format!("failed to parse {label} timestamp `{value}`: {err}").into())
 }
-
 pub fn parse_nonce_hex_or_random(value: Option<&str>) -> Result<Vec<u8>, Box<dyn Error>> {
     if let Some(raw) = value {
         let trimmed = raw.trim();
@@ -466,7 +432,6 @@ pub fn parse_nonce_hex_or_random(value: Option<&str>) -> Result<Vec<u8>, Box<dyn
     SecureRngCore::fill_bytes(&mut rng, &mut nonce);
     Ok(nonce)
 }
-
 fn ensure_nonce_len(bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     if bytes.len() < 16 {
         return Err(format!(
@@ -477,25 +442,20 @@ fn ensure_nonce_len(bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 pub fn parse_drawn_at(value: &str) -> Result<OffsetDateTime, Box<dyn Error>> {
     OffsetDateTime::parse(value, &Rfc3339)
         .map_err(|err| format!("failed to parse --drawn-at timestamp `{value}`: {err}").into())
 }
-
 #[cfg(test)]
 mod tests {
-    use tempfile::NamedTempFile;
-
     use super::*;
-
+    use tempfile::NamedTempFile;
     #[test]
     fn parse_beacon_validates_length() {
         assert!(parse_beacon(&"ff".repeat(31)).is_err());
         let beacon = parse_beacon(&"ab".repeat(32)).expect("valid beacon");
         assert_eq!(beacon[0], 0xAB);
     }
-
     #[test]
     fn run_sortition_generates_manifest() {
         let temp = NamedTempFile::new().expect("temp file");
@@ -532,7 +492,6 @@ mod tests {
         assert_eq!(manifest.round_id, "PJ-2026-02");
         manifest.validate().expect("manifest valid");
     }
-
     #[test]
     fn parse_vote_choice_supports_variants() {
         assert!(matches!(
@@ -549,7 +508,6 @@ mod tests {
         ));
         assert!(parse_vote_choice("maybe").is_err());
     }
-
     #[test]
     fn build_ballot_pair_matches_commitment() {
         let options = BallotCommitOptions {

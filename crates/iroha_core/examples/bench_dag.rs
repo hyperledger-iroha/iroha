@@ -42,11 +42,8 @@
 //! - Compares per-wave sort vs BinaryHeap ready-queue schedulers (both
 //!   deterministic by a synthetic key `(call_hash, idx)`).
 //! - No external deps are used; timings are rough but comparable.
-
-use std::time::{Duration, Instant};
-
 use iroha_core::pipeline::access::AccessSet;
-
+use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DistKind {
     Uniform,
@@ -55,7 +52,6 @@ enum DistKind {
     AllUnique,
     HotRead,
 }
-
 #[derive(Debug, Clone)]
 struct Params {
     n: usize,
@@ -76,7 +72,6 @@ struct Params {
     delta_index_hashmap: bool,
     delta_index_vec: bool,
 }
-
 impl Default for Params {
     fn default() -> Self {
         Self {
@@ -96,7 +91,6 @@ impl Default for Params {
         }
     }
 }
-
 // Simple LCG for deterministic pseudo-random generation (no deps)
 #[derive(Clone)]
 struct Lcg(u64);
@@ -113,7 +107,6 @@ impl Lcg {
         (self.next_u64() >> 1) as usize
     }
 }
-
 fn parse_params() -> Params {
     let mut p = Params::default();
     for arg in std::env::args().skip(1) {
@@ -176,11 +169,9 @@ fn parse_params() -> Params {
     }
     p
 }
-
 fn key_string(i: usize) -> String {
     format!("k{}", i)
 }
-
 // Build a Zipf CDF for keys in [0..keys)
 fn zipf_cdf(keys: usize, s: f64) -> Vec<f64> {
     let mut w = Vec::with_capacity(keys);
@@ -194,7 +185,6 @@ fn zipf_cdf(keys: usize, s: f64) -> Vec<f64> {
     }
     w
 }
-
 fn sample_zipf(cdf: &[f64], r: f64) -> usize {
     use core::cmp::Ordering;
     let mut lo = 0usize;
@@ -208,7 +198,6 @@ fn sample_zipf(cdf: &[f64], r: f64) -> usize {
     }
     lo.min(cdf.len().saturating_sub(1))
 }
-
 fn gen_access_sets(p: &Params) -> Vec<AccessSet> {
     let mut rng = Lcg::new(p.seed);
     let zipf_cdf = if matches!(p.dist, DistKind::Zipf) {
@@ -272,13 +261,11 @@ fn gen_access_sets(p: &Params) -> Vec<AccessSet> {
     }
     sets
 }
-
 // Synthetic delta: list of write-key indices for a tx
 #[derive(Clone)]
 struct Delta {
     keys: Vec<usize>,
 }
-
 fn gen_deltas(p: &Params, seed_offset: u64) -> Vec<Delta> {
     let mut rng = Lcg::new(p.seed.wrapping_add(seed_offset));
     let zipf_cdf = if matches!(p.dist, DistKind::Zipf) {
@@ -325,7 +312,6 @@ fn gen_deltas(p: &Params, seed_offset: u64) -> Vec<Delta> {
     }
     deltas
 }
-
 // Naive O(n^2) DAG build
 fn dag_build_naive(access: &[AccessSet]) -> (Vec<Vec<usize>>, Vec<usize>) {
     let n = access.len();
@@ -347,7 +333,6 @@ fn dag_build_naive(access: &[AccessSet]) -> (Vec<Vec<usize>>, Vec<usize>) {
     }
     (adj, indeg)
 }
-
 // Optimized O(n + E) DAG build (example-local copy matching block.rs strategy)
 fn dag_build_optimized(access: &[AccessSet]) -> (Vec<Vec<usize>>, Vec<usize>) {
     use std::collections::HashMap;
@@ -356,7 +341,6 @@ fn dag_build_optimized(access: &[AccessSet]) -> (Vec<Vec<usize>>, Vec<usize>) {
     let mut indeg = vec![0usize; n];
     let mut last_writer: HashMap<&str, usize> = HashMap::new();
     let mut open_readers: HashMap<&str, Vec<usize>> = HashMap::new();
-
     for (idx, aset) in access.iter().enumerate() {
         let mut parents: Vec<usize> = Vec::new();
         for k in aset.read_keys.iter() {
@@ -387,7 +371,6 @@ fn dag_build_optimized(access: &[AccessSet]) -> (Vec<Vec<usize>>, Vec<usize>) {
     }
     (adj, indeg)
 }
-
 fn schedule_kahn(adj: &[Vec<usize>], indeg: &[usize]) -> Vec<usize> {
     use std::collections::BTreeSet;
     let n = indeg.len();
@@ -406,7 +389,6 @@ fn schedule_kahn(adj: &[Vec<usize>], indeg: &[usize]) -> Vec<usize> {
     }
     order
 }
-
 fn layers_from_dag(adj: &[Vec<usize>], indeg: &[usize]) -> Vec<Vec<usize>> {
     use std::collections::BTreeSet;
     let n = indeg.len();
@@ -431,7 +413,6 @@ fn layers_from_dag(adj: &[Vec<usize>], indeg: &[usize]) -> Vec<Vec<usize>> {
     }
     layers
 }
-
 // Deterministic synthetic call-hash generator for tie-breaking
 fn gen_call_keys(n: usize, seed: u64) -> Vec<u64> {
     let mut rng = Lcg::new(seed);
@@ -441,7 +422,6 @@ fn gen_call_keys(n: usize, seed: u64) -> Vec<u64> {
     }
     out
 }
-
 // Per-wave sort scheduler by (key, idx)
 fn schedule_wave_by_key(adj: &[Vec<usize>], indeg: &[usize], key: &[u64]) -> Vec<usize> {
     let n = indeg.len();
@@ -463,7 +443,6 @@ fn schedule_wave_by_key(adj: &[Vec<usize>], indeg: &[usize], key: &[u64]) -> Vec
     }
     order
 }
-
 // BinaryHeap ready-queue scheduler by (key, idx)
 fn schedule_heap_by_key(adj: &[Vec<usize>], indeg: &[usize], key: &[u64]) -> Vec<usize> {
     use std::{cmp::Reverse, collections::BinaryHeap};
@@ -487,7 +466,6 @@ fn schedule_heap_by_key(adj: &[Vec<usize>], indeg: &[usize], key: &[u64]) -> Vec
     }
     order
 }
-
 // Convert adjacency Vec<Vec<usize>> to CSR (row_offsets, cols) and indeg vector
 fn adj_to_csr(adj: &[Vec<usize>]) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
     let n = adj.len();
@@ -509,7 +487,6 @@ fn adj_to_csr(adj: &[Vec<usize>]) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
     }
     (row_offsets, cols, indeg)
 }
-
 fn schedule_wave_by_key_csr(
     row_offsets: &[usize],
     cols: &[usize],
@@ -536,7 +513,6 @@ fn schedule_wave_by_key_csr(
     }
     order
 }
-
 fn schedule_heap_by_key_csr(
     row_offsets: &[usize],
     cols: &[usize],
@@ -565,14 +541,12 @@ fn schedule_heap_by_key_csr(
     }
     order
 }
-
 // Intern keys per block (strings -> compact usize IDs), deterministically.
 #[derive(Clone)]
 struct AccessIds {
     reads: Vec<usize>,
     writes: Vec<usize>,
 }
-
 fn intern_access_sets(access: &[AccessSet]) -> (usize, Vec<AccessIds>) {
     use std::collections::BTreeMap;
     let mut map: BTreeMap<&str, usize> = BTreeMap::new();
@@ -607,7 +581,6 @@ fn intern_access_sets(access: &[AccessSet]) -> (usize, Vec<AccessIds>) {
     }
     (key_count, out)
 }
-
 // Build CSR adjacency from interned access ids
 fn build_csr_from_ids(ids: &[AccessIds], key_count: usize) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
     let n = ids.len();
@@ -689,7 +662,6 @@ fn build_csr_from_ids(ids: &[AccessIds], key_count: usize) -> (Vec<usize>, Vec<u
     }
     (row_offsets, cols, indeg)
 }
-
 // DSF components from interned access ids
 fn dsu_components(ids: &[AccessIds], key_count: usize) -> Vec<Vec<usize>> {
     let n = ids.len();
@@ -770,7 +742,6 @@ fn dsu_components(ids: &[AccessIds], key_count: usize) -> Vec<Vec<usize>> {
     comps.sort_by_key(|c| c[0]);
     comps
 }
-
 fn layers_monolithic_csr(
     row_offsets: &[usize],
     cols: &[usize],
@@ -796,7 +767,6 @@ fn layers_monolithic_csr(
     }
     layers
 }
-
 fn layers_per_component_vec(adj: &[Vec<usize>], components: &[Vec<usize>]) -> Vec<Vec<usize>> {
     let n = adj.len();
     let mut per: Vec<Vec<Vec<usize>>> = Vec::new();
@@ -849,7 +819,6 @@ fn layers_per_component_vec(adj: &[Vec<usize>], components: &[Vec<usize>]) -> Ve
     }
     merged
 }
-
 fn layers_per_component_csr(
     row_offsets: &[usize],
     cols: &[usize],
@@ -908,7 +877,6 @@ fn layers_per_component_csr(
     }
     merged
 }
-
 fn time<F, R>(label: &str, mut f: F) -> (Duration, R)
 where
     F: FnMut() -> R,
@@ -917,11 +885,9 @@ where
     let r = f();
     (t0.elapsed(), r)
 }
-
 fn fmt_dur(d: Duration) -> String {
     format!("{} ms", d.as_secs_f64() * 1000.0)
 }
-
 fn main() {
     let p = parse_params();
     let sched_label = if p.sched_both {
@@ -943,11 +909,9 @@ fn main() {
         p.n, p.keys, p.reads, p.writes, p.dist, p.zipf_s, p.iters, p.seed, sched_label, delta_label
     );
     println!("delta_writes per tx={}", p.delta_writes);
-
     // Generate once and reuse for fairness
     let (gen_dur, access) = time("gen", || gen_access_sets(&p));
     println!("generated access sets in {}", fmt_dur(gen_dur));
-
     let mut naive_times = Vec::new();
     let mut opt_times = Vec::new();
     // Accumulators for scheduler summaries
@@ -957,14 +921,12 @@ fn main() {
     let mut sched_heap_times_csr = Vec::new();
     let mut naive_edges = 0usize;
     let mut opt_edges = 0usize;
-
     for i in 0..p.iters {
         let (t1, (adj_n, indeg_n)) = time("naive", || dag_build_naive(&access));
         let e1: usize = indeg_n.iter().sum();
         let _ = schedule_kahn(&adj_n, &indeg_n);
         naive_times.push(t1);
         naive_edges = e1; // same every run
-
         let (t2, (adj_o, indeg_o)) = time("opt", || dag_build_optimized(&access));
         let e2: usize = indeg_o.iter().sum();
         let _ = schedule_kahn(&adj_o, &indeg_o);
@@ -978,7 +940,6 @@ fn main() {
             fmt_dur(t2),
             e2
         );
-
         // Scheduler variants: per-wave vs heap using synthetic call keys
         let keys = gen_call_keys(p.n, p.seed.wrapping_add(1337 + i as u64));
         if p.sched_both || !p.sched_csr {
@@ -1015,7 +976,6 @@ fn main() {
             sched_heap_times_csr.push(t_heap);
         }
     }
-
     let avg = |ts: &[Duration]| -> Duration {
         let total = ts.iter().fold(Duration::ZERO, |a, &b| a.saturating_add(b));
         if ts.is_empty() {
@@ -1025,7 +985,6 @@ fn main() {
         }
     };
     let min = |ts: &[Duration]| -> Duration { ts.iter().copied().min().unwrap_or(Duration::ZERO) };
-
     println!("-- summary --");
     println!(
         "naive: avg={} min={} edges={}",
@@ -1039,7 +998,6 @@ fn main() {
         fmt_dur(min(&opt_times)),
         opt_edges
     );
-
     // Scheduler summaries
     if !sched_wave_times_vec.is_empty() {
         println!(
@@ -1059,7 +1017,6 @@ fn main() {
             fmt_dur(min(&sched_heap_times_csr)),
         );
     }
-
     // Interning + CSR + DSF benchmarks
     let (t_intern, (key_count, access_ids)) = time("intern", || intern_access_sets(&access));
     println!("intern: {} (keys={})", fmt_dur(t_intern), key_count);
@@ -1094,7 +1051,6 @@ fn main() {
         buckets[6],
         buckets[7]
     );
-
     // Layers: monolithic Vec adjacency (optimized builder)
     let (adj_opt, indeg_opt) = dag_build_optimized(&access);
     let (t_layers_vec_mono, layers_vec_mono) =
@@ -1185,13 +1141,11 @@ fn main() {
         buckets[6],
         buckets[7]
     );
-
     // Build layers from optimized DAG (same edges) for merge benchmark
     let (adj_o, indeg_o) = dag_build_optimized(&access);
     let layers = layers_from_dag(&adj_o, &indeg_o);
     let layer_vertices: usize = layers.iter().map(|l| l.len()).sum();
     println!("layers: {} (vertices={})", layers.len(), layer_vertices);
-
     // Generate synthetic deltas once
     let (t_delta_gen, deltas) = time("delta_gen", || gen_deltas(&p, 777));
     let total_ops: usize = deltas.iter().map(|d| d.keys.len()).sum();
@@ -1200,10 +1154,8 @@ fn main() {
         fmt_dur(t_delta_gen),
         total_ops
     );
-
     // As in block.rs: deltas come as a Vec<(idx, Option<Result<Delta, _>>)>; here: all Ok
     let deltas_vec: Vec<(usize, Delta)> = (0..p.n).map(|i| (i, deltas[i].clone())).collect();
-
     // Merge benchmarks (multi-iteration): naive linear scan vs indexed lookups
     let mut merge_naive_times = Vec::new();
     let mut merge_build_map_times = Vec::new();
@@ -1226,7 +1178,6 @@ fn main() {
             }
         });
         merge_naive_times.push(t_merge_naive);
-
         if p.delta_index_hashmap {
             // Build index map and do O(1) lookups per prepared index
             let (t_build_map, deltas_map) = time("build_map", || {
@@ -1238,7 +1189,6 @@ fn main() {
                 m
             });
             merge_build_map_times.push(t_build_map);
-
             let mut state_opt: std::collections::HashMap<usize, i64> =
                 std::collections::HashMap::new();
             let (t_merge_opt, _) = time("merge_opt", || {
@@ -1253,7 +1203,6 @@ fn main() {
                 }
             });
             merge_opt_times.push(t_merge_opt);
-
             println!(
                 "iter {}: merge naive={} | build_map={} + opt={}",
                 i + 1,
@@ -1262,7 +1211,6 @@ fn main() {
                 fmt_dur(t_merge_opt)
             );
         }
-
         if p.delta_index_vec {
             // Build vec index and do direct lookups
             let (t_build_vec, deltas_idx) = time("build_vec", || {

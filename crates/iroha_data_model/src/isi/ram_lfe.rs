@@ -1,8 +1,6 @@
 //! Hidden-program RAM-LFE program-policy instructions.
-
 use super::*;
 use crate::ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy};
-
 isi! {
     /// Register a new generic RAM-LFE program policy.
     pub struct RegisterRamLfeProgramPolicy {
@@ -10,9 +8,7 @@ isi! {
         pub policy: RamLfeProgramPolicy,
     }
 }
-
 impl crate::seal::Instruction for RegisterRamLfeProgramPolicy {}
-
 isi! {
     /// Activate an existing RAM-LFE program policy.
     pub struct ActivateRamLfeProgramPolicy {
@@ -20,9 +16,7 @@ isi! {
         pub program_id: RamLfeProgramId,
     }
 }
-
 impl crate::seal::Instruction for ActivateRamLfeProgramPolicy {}
-
 isi! {
     /// Deactivate an existing RAM-LFE program policy.
     pub struct DeactivateRamLfeProgramPolicy {
@@ -30,9 +24,7 @@ isi! {
         pub program_id: RamLfeProgramId,
     }
 }
-
 impl crate::seal::Instruction for DeactivateRamLfeProgramPolicy {}
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RegisterRamLfeProgramPolicy {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -40,7 +32,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterRamLfeProgramPolicy {
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let policy = super::decode_aos_canonical_field::<RamLfeProgramPolicy>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -53,7 +44,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterRamLfeProgramPolicy {
         Ok((Self { policy }, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for ActivateRamLfeProgramPolicy {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -61,7 +51,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ActivateRamLfeProgramPolicy {
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let program_id = super::decode_aos_canonical_field::<RamLfeProgramId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -74,7 +63,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ActivateRamLfeProgramPolicy {
         Ok((Self { program_id }, offset))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for DeactivateRamLfeProgramPolicy {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -82,7 +70,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for DeactivateRamLfeProgramPolicy {
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let program_id = super::decode_aos_canonical_field::<RamLfeProgramId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -95,32 +82,26 @@ impl<'a> norito::core::DecodeFromSlice<'a> for DeactivateRamLfeProgramPolicy {
         Ok((Self { program_id }, offset))
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::account::AccountId;
     use iroha_crypto::{
         Algorithm, Hash, KeyPair, PolicyCommitment, PublicKey, RamLfeBackend,
         RamLfeVerificationMode,
     };
     use norito::core::DecodeFromSlice;
-
-    use super::*;
-    use crate::account::AccountId;
-
     fn public_key(seed: u8) -> PublicKey {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked RAM-LFE fixture keypair");
         key_pair.public_key().clone()
     }
-
     fn account(seed: u8) -> AccountId {
         AccountId::new(public_key(seed))
     }
-
     fn program_id() -> RamLfeProgramId {
         "email_retail".parse().expect("program id")
     }
-
     fn policy() -> RamLfeProgramPolicy {
         RamLfeProgramPolicy::new(
             program_id(),
@@ -136,7 +117,6 @@ mod tests {
         )
         .with_note("identifier resolver")
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -147,7 +127,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(
         registry: &crate::isi::InstructionRegistry,
         wire_id: &'static str,
@@ -167,7 +146,6 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     fn ram_lfe_policy_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(RegisterRamLfeProgramPolicy { policy: policy() });
@@ -178,7 +156,6 @@ mod tests {
             program_id: program_id(),
         });
     }
-
     #[test]
     fn ram_lfe_policy_registry_decodes_stable_ids() {
         let registry = crate::isi::InstructionRegistry::new()
@@ -191,7 +168,6 @@ mod tests {
             .register_with_id_slice::<DeactivateRamLfeProgramPolicy>(
                 "identity::DeactivateRamLfeProgramPolicy",
             );
-
         assert_registry_decodes(
             &registry,
             "identity::RegisterRamLfeProgramPolicy",

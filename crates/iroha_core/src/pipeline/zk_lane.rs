@@ -9,9 +9,13 @@
 //! - Overlay builder: after running IVM to collect queued ISIs, capture the
 //!   formal trace and submit a job if ZK is enabled in config.
 //! - Node startup: call `start()` once to initialize the worker.
-
 #![deny(missing_docs)]
-
+#[cfg(test)]
+use iroha_crypto::HashOf;
+use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
+use ivm::zk::{Constraint, MemEvent, RegEvent, RegisterState, StepEntry};
+use norito::streaming::CapabilityFlags;
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     num::NonZeroU64,
@@ -20,15 +24,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-
-#[cfg(test)]
-use iroha_crypto::HashOf;
-use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
-use ivm::zk::{Constraint, MemEvent, RegEvent, RegisterState, StepEntry};
-use norito::streaming::CapabilityFlags;
-use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
-
 /// Task carrying a single IVM execution's formal trace and metadata.
 #[derive(Clone)]
 pub struct ZkTask {
@@ -57,7 +53,6 @@ pub struct ZkTask {
     /// Negotiated feature flags advertised by the peer (if available).
     pub negotiated_capabilities: Option<CapabilityFlags>,
 }
-
 impl ZkTask {
     /// Compute a stable digest of the task contents for idempotence/logging.
     pub fn digest(&self) -> [u8; 32] {
@@ -107,7 +102,6 @@ impl ZkTask {
         h.finalize().into()
     }
 }
-
 /// Result of background verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZkOutcome {
@@ -116,7 +110,6 @@ pub enum ZkOutcome {
     /// Verification failed (constraint or path mismatch).
     Rejected,
 }
-
 /// Handle for submitting ZK tasks to the background worker.
 #[derive(Clone)]
 pub struct ZkLaneHandle {
@@ -125,7 +118,6 @@ pub struct ZkLaneHandle {
     enqueue_poll: Duration,
     retry_ring: Arc<RetryRing>,
 }
-
 impl ZkLaneHandle {
     /// Submit a task; returns false only if admission fails after bounded wait/retry handling.
     pub fn submit(&self, task: ZkTask) -> bool {
@@ -179,40 +171,33 @@ impl ZkLaneHandle {
         }
     }
 }
-
 static GLOBAL_SENDER: OnceLock<ZkLaneHandle> = OnceLock::new();
 static EVENTS: OnceLock<crate::EventsSender> = OnceLock::new();
 static RESULT_CACHE: OnceLock<Arc<ZkResultCache>> = OnceLock::new();
-
 const ZK_RESULT_CACHE_CAP: usize = 8_192;
 const ZK_RESULT_CACHE_TTL_MS: u64 = 300_000;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CacheAdmission {
     Accepted,
     Inflight,
     Cached,
 }
-
 #[derive(Debug, Clone, Copy)]
 struct ZkResultEntry {
     recorded_at: Instant,
 }
-
 #[derive(Debug)]
 struct ZkResultCache {
     cap: usize,
     ttl: Duration,
     inner: std::sync::Mutex<ZkResultCacheInner>,
 }
-
 #[derive(Debug, Default)]
 struct ZkResultCacheInner {
     entries: BTreeMap<[u8; 32], ZkResultEntry>,
     order: VecDeque<[u8; 32]>,
     inflight: BTreeSet<[u8; 32]>,
 }
-
 impl ZkResultCache {
     fn new(cap: usize, ttl: Duration) -> Self {
         Self {
@@ -221,7 +206,6 @@ impl ZkResultCache {
             inner: std::sync::Mutex::new(ZkResultCacheInner::default()),
         }
     }
-
     fn admit(&self, key: [u8; 32], now: Instant) -> CacheAdmission {
         let mut inner = match self.inner.lock() {
             Ok(guard) => guard,
@@ -246,7 +230,6 @@ impl ZkResultCache {
         inner.inflight.insert(key);
         CacheAdmission::Accepted
     }
-
     fn record(&self, key: [u8; 32], now: Instant) {
         let mut inner = match self.inner.lock() {
             Ok(guard) => guard,
@@ -271,7 +254,6 @@ impl ZkResultCache {
             inner.entries.remove(&oldest);
         }
     }
-
     fn clear_inflight(&self, key: [u8; 32]) {
         match self.inner.lock() {
             Ok(mut guard) => {
@@ -286,18 +268,15 @@ impl ZkResultCache {
         }
     }
 }
-
 impl ZkResultCacheInner {
     fn touch(&mut self, key: [u8; 32]) {
         self.order.retain(|entry| entry != &key);
         self.order.push_back(key);
     }
-
     fn remove_entry(&mut self, key: &[u8; 32]) {
         self.entries.remove(key);
         self.order.retain(|entry| entry != key);
     }
-
     fn gc(&mut self, now: Instant, ttl: Duration) {
         if ttl == Duration::ZERO {
             return;
@@ -313,31 +292,26 @@ impl ZkResultCacheInner {
         }
     }
 }
-
 fn clear_inflight_digest(digest: [u8; 32]) {
     if let Some(cache) = RESULT_CACHE.get() {
         cache.clear_inflight(digest);
     }
 }
-
 struct RetryTask {
     task: ZkTask,
     attempts: u32,
 }
-
 #[derive(Debug, Clone, Copy, Default)]
 struct RetryDrainStats {
     replayed: u64,
     exhausted: u64,
     depth: usize,
 }
-
 struct RetryRing {
     cap: usize,
     max_attempts: u32,
     inner: std::sync::Mutex<VecDeque<RetryTask>>,
 }
-
 impl RetryRing {
     fn new(cap: usize, max_attempts: u32) -> Self {
         Self {
@@ -346,7 +320,6 @@ impl RetryRing {
             inner: std::sync::Mutex::new(VecDeque::new()),
         }
     }
-
     fn enqueue(&self, task: ZkTask) -> Result<usize, ZkTask> {
         match self.inner.lock() {
             Ok(mut queue) => {
@@ -362,7 +335,6 @@ impl RetryRing {
             }
         }
     }
-
     fn drain_into_pending(&self, pending: &mut Vec<ZkTask>, pending_cap: usize) -> RetryDrainStats {
         let mut stats = RetryDrainStats::default();
         let mut queue = match self.inner.lock() {
@@ -372,7 +344,6 @@ impl RetryRing {
                 return stats;
             }
         };
-
         if pending.len() >= pending_cap {
             for entry in queue.iter_mut() {
                 entry.attempts = entry.attempts.saturating_add(1);
@@ -389,7 +360,6 @@ impl RetryRing {
             stats.depth = queue.len();
             return stats;
         }
-
         while pending.len() < pending_cap {
             let Some(entry) = queue.pop_front() else {
                 break;
@@ -400,7 +370,6 @@ impl RetryRing {
         stats.depth = queue.len();
         stats
     }
-
     fn clear(&self) -> usize {
         match self.inner.lock() {
             Ok(mut queue) => {
@@ -417,7 +386,6 @@ impl RetryRing {
             }
         }
     }
-
     fn depth(&self) -> usize {
         match self.inner.lock() {
             Ok(queue) => queue.len(),
@@ -431,13 +399,11 @@ impl RetryRing {
         }
     }
 }
-
 fn with_metrics(mut apply: impl FnMut(&iroha_telemetry::metrics::Metrics)) {
     if let Some(metrics) = iroha_telemetry::metrics::global() {
         apply(metrics.as_ref());
     }
 }
-
 fn record_lane_drop(reason: &str) {
     with_metrics(|metrics| {
         metrics
@@ -446,7 +412,6 @@ fn record_lane_drop(reason: &str) {
             .inc();
     });
 }
-
 fn record_lane_drop_by(reason: &str, count: u64) {
     if count == 0 {
         return;
@@ -458,19 +423,16 @@ fn record_lane_drop_by(reason: &str, count: u64) {
             .inc_by(count);
     });
 }
-
 fn record_enqueue_wait() {
     with_metrics(|metrics| {
         metrics.zk_lane_enqueue_wait_total.inc();
     });
 }
-
 fn record_enqueue_timeout() {
     with_metrics(|metrics| {
         metrics.zk_lane_enqueue_timeout_total.inc();
     });
 }
-
 fn set_pending_depth(depth: usize) {
     with_metrics(|metrics| {
         metrics
@@ -478,7 +440,6 @@ fn set_pending_depth(depth: usize) {
             .set(u64::try_from(depth).unwrap_or(u64::MAX));
     });
 }
-
 fn set_retry_ring_depth(depth: usize) {
     with_metrics(|metrics| {
         metrics
@@ -486,7 +447,6 @@ fn set_retry_ring_depth(depth: usize) {
             .set(u64::try_from(depth).unwrap_or(u64::MAX));
     });
 }
-
 fn enqueue_retry_task(retry_ring: &RetryRing, task: ZkTask, full_reason: &str) -> bool {
     match retry_ring.enqueue(task) {
         Ok(depth) => {
@@ -502,16 +462,13 @@ fn enqueue_retry_task(retry_ring: &RetryRing, task: ZkTask, full_reason: &str) -
         }
     }
 }
-
 struct WorkerPool {
     work_txs: Vec<std_mpsc::SyncSender<ZkTask>>,
     join_handles: Vec<thread::JoinHandle<()>>,
     next_worker: usize,
 }
-
 const AUTO_WORKER_MIN: usize = 2;
 const AUTO_WORKER_MAX: usize = 8;
-
 impl WorkerPool {
     fn spawn(worker_threads: usize, work_queue_cap: usize) -> Self {
         let mut work_txs = Vec::with_capacity(worker_threads);
@@ -536,7 +493,6 @@ impl WorkerPool {
             next_worker: 0,
         }
     }
-
     fn dispatch(&mut self, mut job: ZkTask) -> Result<(), ZkTask> {
         if self.work_txs.is_empty() {
             return Err(job);
@@ -568,7 +524,6 @@ impl WorkerPool {
         }
         Err(job)
     }
-
     fn prune_disconnected(&mut self, mut disconnected: Vec<usize>) {
         disconnected.sort_unstable();
         disconnected.dedup();
@@ -582,7 +537,6 @@ impl WorkerPool {
         }
     }
 }
-
 fn resolve_worker_threads(configured: usize) -> usize {
     if configured == 0 {
         let detected = std::thread::available_parallelism()
@@ -593,7 +547,6 @@ fn resolve_worker_threads(configured: usize) -> usize {
         configured.max(1)
     }
 }
-
 fn resolve_queue_cap(configured: usize, workers: usize) -> usize {
     if configured == 0 {
         workers.saturating_mul(4).max(128)
@@ -601,15 +554,12 @@ fn resolve_queue_cap(configured: usize, workers: usize) -> usize {
         configured.max(1)
     }
 }
-
 fn resolve_enqueue_wait_ms(configured: u64) -> Duration {
     Duration::from_millis(configured)
 }
-
 fn resolve_retry_tick_ms(configured: u64) -> Duration {
     Duration::from_millis(configured.max(1))
 }
-
 fn resolve_enqueue_poll(wait: Duration) -> Duration {
     if wait > Duration::ZERO {
         Duration::from_millis(1)
@@ -617,7 +567,6 @@ fn resolve_enqueue_poll(wait: Duration) -> Duration {
         Duration::ZERO
     }
 }
-
 fn dispatch_pending(pool: &mut WorkerPool, pending: &mut Vec<ZkTask>) {
     if pending.is_empty() {
         set_pending_depth(0);
@@ -632,7 +581,6 @@ fn dispatch_pending(pool: &mut WorkerPool, pending: &mut Vec<ZkTask>) {
     *pending = retained;
     set_pending_depth(pending.len());
 }
-
 fn process_job(job: ZkTask) {
     let dig = job.digest();
     let outcome = ivm::zk::verify_trace(&job.trace, &job.constraints, &job.mem_log, &job.reg_log)
@@ -643,7 +591,6 @@ fn process_job(job: ZkTask) {
     }
     emit_outcome(job, dig, outcome);
 }
-
 fn emit_outcome(job: ZkTask, dig: [u8; 32], outcome: ZkOutcome) {
     #[cfg(feature = "zk-preverify")]
     if matches!(outcome, ZkOutcome::Verified) {
@@ -726,7 +673,6 @@ fn emit_outcome(job: ZkTask, dig: [u8; 32], outcome: ZkOutcome) {
         ));
     }
 }
-
 #[cfg(test)]
 #[allow(dead_code)]
 fn process_batch(batch: &mut Vec<ZkTask>) {
@@ -734,20 +680,17 @@ fn process_batch(batch: &mut Vec<ZkTask>) {
         process_job(job);
     }
 }
-
 /// Try to submit a task through a globally registered lane, if present.
 pub fn try_submit(task: ZkTask) -> bool {
     GLOBAL_SENDER
         .get()
         .is_some_and(|handle| handle.submit(task))
 }
-
 /// Register a global events sender to receive ZK verification warnings.
 /// No-op if already registered.
 pub fn register_events_sender(sender: crate::EventsSender) {
     let _ = EVENTS.set(sender);
 }
-
 /// Start the background ZK lane if Halo2 verification is enabled.
 ///
 /// Returns an optional handle and a `tokio` task `JoinHandle` wrapped for
@@ -795,7 +738,6 @@ pub fn start(
     });
     set_pending_depth(0);
     set_retry_ring_depth(0);
-
     let max_batch = cfg.verifier_max_batch.max(1) as usize;
     let task = tokio::spawn(async move {
         let mut worker_pool = WorkerPool::spawn(workers, worker_queue_cap);
@@ -864,7 +806,6 @@ pub fn start(
                     dispatch_pending(&mut worker_pool, &mut pending);
                 }
             }
-
             let retry_stats = retry_ring.drain_into_pending(&mut pending, queue_cap);
             if retry_stats.replayed > 0 {
                 with_metrics(|metrics| {
@@ -927,12 +868,10 @@ pub fn start(
     });
     Some((handle, task))
 }
-
 #[cfg(test)]
 mod tests {
     //! Minimal unit tests for `ZkLane` helpers.
     use super::*;
-
     #[test]
     fn digest_changes_with_roots_and_sizes() {
         fn mk(n: usize) -> ZkTask {
@@ -972,7 +911,6 @@ mod tests {
         let b = mk(4).digest();
         assert_ne!(a, b);
     }
-
     #[test]
     fn queue_cap_defaults_scale_with_workers() {
         assert_eq!(resolve_queue_cap(0, 1), 128);
@@ -980,23 +918,19 @@ mod tests {
         assert_eq!(resolve_queue_cap(0, 64), 256);
         assert_eq!(resolve_queue_cap(17, 4), 17);
     }
-
     #[test]
     fn worker_threads_auto_is_bounded() {
         let expected = std::thread::available_parallelism()
             .map(|count| count.get())
             .unwrap_or(1)
             .clamp(AUTO_WORKER_MIN, AUTO_WORKER_MAX);
-
         assert_eq!(resolve_worker_threads(0), expected);
         assert!(resolve_worker_threads(0) <= AUTO_WORKER_MAX);
     }
-
     #[test]
     fn worker_threads_preserves_explicit_count() {
         assert_eq!(resolve_worker_threads(32), 32);
     }
-
     #[test]
     fn retry_ring_replays_when_pending_has_capacity() {
         let ring = RetryRing::new(8, 3);
@@ -1014,7 +948,6 @@ mod tests {
             negotiated_capabilities: None,
         };
         assert!(ring.enqueue(task).is_ok(), "ring accepts first task");
-
         let mut pending = Vec::new();
         let stats = ring.drain_into_pending(&mut pending, 1);
         assert_eq!(stats.replayed, 1);
@@ -1022,7 +955,6 @@ mod tests {
         assert_eq!(stats.depth, 0);
         assert_eq!(pending.len(), 1);
     }
-
     #[test]
     fn retry_ring_exhausts_when_pending_stays_full() {
         let ring = RetryRing::new(4, 2);
@@ -1042,7 +974,6 @@ mod tests {
             };
             assert!(ring.enqueue(task).is_ok(), "ring enqueue should succeed");
         }
-
         let mut pending = vec![ZkTask {
             tx_hash: None,
             code_hash: [0xFF; 32],
@@ -1059,36 +990,30 @@ mod tests {
         let first = ring.drain_into_pending(&mut pending, 1);
         assert_eq!(first.exhausted, 0);
         assert_eq!(first.depth, 2);
-
         let second = ring.drain_into_pending(&mut pending, 1);
         assert_eq!(second.exhausted, 2);
         assert_eq!(second.depth, 0);
     }
-
     #[test]
     fn result_cache_dedupes_inflight_and_reuses_recent_result() {
         let cache = ZkResultCache::new(8, Duration::from_millis(100));
         let now = Instant::now();
         let key = [0x5A; 32];
-
         assert_eq!(cache.admit(key, now), CacheAdmission::Accepted);
         assert_eq!(
             cache.admit(key, now + Duration::from_millis(10)),
             CacheAdmission::Inflight
         );
-
         cache.record(key, now + Duration::from_millis(15));
         assert_eq!(
             cache.admit(key, now + Duration::from_millis(20)),
             CacheAdmission::Cached
         );
-
         assert_eq!(
             cache.admit(key, now + Duration::from_millis(130)),
             CacheAdmission::Accepted
         );
     }
-
     #[test]
     fn result_cache_evicts_oldest_entries_when_capacity_reached() {
         let cache = ZkResultCache::new(2, Duration::from_secs(1));
@@ -1096,14 +1021,12 @@ mod tests {
         let a = [0x01; 32];
         let b = [0x02; 32];
         let c = [0x03; 32];
-
         assert_eq!(cache.admit(a, now), CacheAdmission::Accepted);
         cache.record(a, now);
         assert_eq!(cache.admit(b, now), CacheAdmission::Accepted);
         cache.record(b, now + Duration::from_millis(1));
         assert_eq!(cache.admit(c, now), CacheAdmission::Accepted);
         cache.record(c, now + Duration::from_millis(2));
-
         assert_eq!(
             cache.admit(a, now + Duration::from_millis(3)),
             CacheAdmission::Accepted
@@ -1113,17 +1036,13 @@ mod tests {
             CacheAdmission::Cached
         );
     }
-
     #[cfg(feature = "zk-preverify")]
     #[test]
     fn process_batch_enqueues_digest_and_trace_jobs() {
-        use std::num::NonZeroU64;
-
         use iroha_data_model::block::BlockHeader;
-
+        use std::num::NonZeroU64;
         crate::zk::reset_trace_proof_state_for_tests();
         crate::zk::reset_trace_proving_state_for_tests();
-
         let header = BlockHeader::new(
             NonZeroU64::new(42).expect("non-zero"),
             None,
@@ -1159,14 +1078,11 @@ mod tests {
             negotiated_capabilities: None,
         };
         let expected_digest = task.digest();
-
         let mut batch = vec![task];
         process_batch(&mut batch);
         assert!(batch.is_empty(), "processing drains the batch");
-
         let proving_jobs = crate::zk::collect_traces_for_proving(header.height().get());
         assert_eq!(proving_jobs.len(), 1, "trace job enqueued for proving");
-
         let proofs = crate::zk::collect_trace_proofs_for_height(header.height().get());
         assert_eq!(proofs.len(), 1, "digest artifact recorded");
         let artifact = &proofs[0];

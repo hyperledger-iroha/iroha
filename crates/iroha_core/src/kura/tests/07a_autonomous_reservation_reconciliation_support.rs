@@ -19,7 +19,6 @@ fn autonomous_reservation_reconciliation_group(
         ordered_keys,
     }
 }
-
 fn two_reservation_autonomous_lane_payload_for_kura(
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
@@ -104,12 +103,10 @@ fn two_reservation_autonomous_lane_payload_for_kura(
     .expect("two-reservation autonomous payload");
     (network_id, epoch, payload)
 }
-
 use crate::sumeragi::v2_core::{
     IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED,
     IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN,
 };
-
 impl Kura {
     fn autonomous_lane_retirement_matching_reservation(
         &self,
@@ -132,7 +129,6 @@ impl Kura {
             .and_then(|record| record.retirement)
             .filter(|retirement| retirement.reservation_keys.contains(reservation)))
     }
-
     fn autonomous_lane_payload_matches_reservation(
         &self,
         reservation: &LaneQueueReservationKeyV2,

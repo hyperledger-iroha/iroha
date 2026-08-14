@@ -1,6 +1,19 @@
 """Late-bound proof-ledger cases executed in the canonical test namespace."""
 
 
+def test_rust_item_scanner_ignores_lint_only_inner_cfg_attr() -> None:
+    """A conditional lint annotation must not masquerade as compile gating."""
+
+    module = load_checker()
+    source = (
+        "#![cfg_attr(not(test), allow(dead_code))]\n"
+        "pub fn always_compiled() {}\n"
+    )
+    (item,) = module.rust_items(source, "always_compiled")
+
+    assert item.ancestor_inner_attributes == ()
+
+
 def copy_serviced_candidate_production_fixture(tmp_path: Path) -> None:
     """Copy the durable candidate store and its adapter integration."""
 
@@ -175,6 +188,7 @@ def copy_async_source_fidelity_fixture(
         Path("crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_core.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/tests.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_core/types.rs"),
@@ -196,6 +210,7 @@ def copy_async_source_fidelity_fixture(
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("scripts/render_taira_validator_bundle.py"),
         Path("scripts/verify_sumeragi_v2.sh"),
+        Path("xtask/src/kagami_profiles.rs"),
         Path("defaults/kagami/iroha3-taira/config.toml"),
         Path("defaults/kagami/iroha3-taira/genesis.json"),
         Path("configs/soranexus/taira/config.toml"),
@@ -212,6 +227,7 @@ def copy_async_source_fidelity_fixture(
             "SumeragiV2AsyncTemporalClosureProofs.tla",
             "SumeragiV2AsyncStage6Proofs.tla",
             "SumeragiV2AsyncRecoveryVoteEpochProofs.tla",
+            "SumeragiV2AsyncRecoveryVoteEpochBoundaryContinuationProofs.tla",
             "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
             "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs.tla",
         )
@@ -801,10 +817,6 @@ def rebind_changed_same_round_expanded_source_seal(
     ), errors
 
 
-
-
-
-
 @pytest.mark.parametrize(
     ("item_kind", "seal_key", "item_name", "context", "old", "new", "expected_error"),
     (
@@ -818,12 +830,88 @@ def rebind_changed_same_round_expanded_source_seal(
             "completion ownership must retain time/debt, runtime-capacity class",
         ),
         (
+            "struct",
+            "V2IoCompletionOwnership",
+            "V2IoCompletionOwnership",
+            (),
+            "    recovered_lifecycle_sign: Option<RecoveredLifecycleSignDispatchKeyV1>,\n",
+            "    recovered_lifecycle_sign: Option<u128>,\n",
+            "completion ownership must retain time/debt, runtime-capacity class",
+        ),
+        (
+            "struct",
+            "V2IoCompletionOwnership",
+            "V2IoCompletionOwnership",
+            (),
+            "    recovered_decision_fetch: Option<RecoveredDecisionFetchDispatchKeyV1>,\n",
+            "    recovered_decision_fetch: Option<u128>,\n",
+            "completion ownership must retain time/debt, runtime-capacity class",
+        ),
+        (
+            "struct",
+            "V2IoCommandQueueState",
+            "V2IoCommandQueueState",
+            (),
+            "    recovered_lifecycle_signs:\n"
+            "        BTreeMap<RecoveredLifecycleSignDispatchKeyV1, V2IoTrackedRecoveredLifecycleSignV1>,\n",
+            "    recovered_lifecycle_signs: BTreeMap<u128, V2IoTrackedRecoveredLifecycleSignV1>,\n",
+            "command queue must retain every recovered lifecycle command under its exact opaque dispatch key",
+        ),
+        (
+            "struct",
+            "V2IoCommandQueueState",
+            "V2IoCommandQueueState",
+            (),
+            "    recovered_decision_fetch_bodies:\n"
+            "        BTreeMap<RecoveredDecisionFetchDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>,\n",
+            "    recovered_decision_fetch_bodies: BTreeMap<u128, V2IoTrackedRecoveredDecisionFetchBodyV1>,\n",
+            "command queue must retain every recovered lifecycle command under its exact opaque dispatch key",
+        ),
+        (
+            "struct",
+            "V2IoCompletionOwnership",
+            "V2IoCompletionOwnership",
+            (),
+            "    recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,\n",
+            "    recovered_decision_apply: Option<u128>,\n",
+            "completion ownership must retain time/debt, runtime-capacity class",
+        ),
+        (
             "method",
             "V2IoCommand::runtime_lifecycle_ordinal",
             "runtime_lifecycle_ordinal",
             (("impl", "V2IoCommand"),),
             "            Self::Sign { task, .. } => Some(task.lifecycle_ordinal()),\n",
             "            Self::Sign { .. } => None,\n",
+            "every completion-producing I/O command must project its immutable runtime lifecycle ordinal",
+        ),
+        (
+            "method",
+            "V2IoCommand::runtime_lifecycle_ordinal",
+            "runtime_lifecycle_ordinal",
+            (("impl", "V2IoCommand"),),
+            "            Self::RecoveredLifecycleSign(task) => Some(task.dispatch_key().lifecycle_ordinal()),\n",
+            "            Self::RecoveredLifecycleSign(_) => None,\n",
+            "every completion-producing I/O command must project its immutable runtime lifecycle ordinal",
+        ),
+        (
+            "method",
+            "V2IoCommand::runtime_lifecycle_ordinal",
+            "runtime_lifecycle_ordinal",
+            (("impl", "V2IoCommand"),),
+            "            Self::PersistRecoveredDecisionFetchBody(task) => {\n"
+            "                Some(task.dispatch_key().lifecycle_ordinal())\n"
+            "            }\n",
+            "            Self::PersistRecoveredDecisionFetchBody(_) => None,\n",
+            "every completion-producing I/O command must project its immutable runtime lifecycle ordinal",
+        ),
+        (
+            "method",
+            "V2IoCommand::runtime_lifecycle_ordinal",
+            "runtime_lifecycle_ordinal",
+            (("impl", "V2IoCommand"),),
+            "            Self::RecoveredDecisionApply(task) => Some(task.dispatch_key().lifecycle_ordinal()),\n",
+            "            Self::RecoveredDecisionApply(_) => None,\n",
             "every completion-producing I/O command must project its immutable runtime lifecycle ordinal",
         ),
         (
@@ -862,6 +950,28 @@ def rebind_changed_same_round_expanded_source_seal(
             "            runtime_lifecycle_ordinal,\n",
             "            requires_runtime_capacity: false,\n"
             "            runtime_lifecycle_ordinal,\n",
+            "completion publication must atomically retain the exact capacity class",
+        ),
+        (
+            "method",
+            "V2IoAdmission::retain_completion",
+            "retain_completion",
+            (("impl", "V2IoAdmission"),),
+            "            recovered_lifecycle_sign,\n"
+            "            recovered_decision_fetch,\n",
+            "            recovered_lifecycle_sign: None,\n"
+            "            recovered_decision_fetch,\n",
+            "completion publication must atomically retain the exact capacity class",
+        ),
+        (
+            "method",
+            "V2IoAdmission::retain_completion",
+            "retain_completion",
+            (("impl", "V2IoAdmission"),),
+            "            recovered_decision_fetch,\n"
+            "        });\n",
+            "            recovered_decision_fetch: None,\n"
+            "        });\n",
             "completion publication must atomically retain the exact capacity class",
         ),
         (
@@ -910,6 +1020,42 @@ def rebind_changed_same_round_expanded_source_seal(
             "                    let runtime_lifecycle_ordinal = command.runtime_lifecycle_ordinal();\n",
             "                    let runtime_lifecycle_ordinal = None;\n",
             "I/O worker must capture exact completion provenance before moving",
+        ),
+        (
+            "method",
+            "V2IoHandle::spawn",
+            "spawn",
+            (("impl", "V2IoHandle"),),
+            "                    let recovered_lifecycle_sign_key = command.recovered_lifecycle_sign_key();\n",
+            "                    let recovered_lifecycle_sign_key = None;\n",
+            "I/O worker must capture exact completion provenance before moving",
+        ),
+        (
+            "method",
+            "V2IoHandle::spawn",
+            "spawn",
+            (("impl", "V2IoHandle"),),
+            "                    let recovered_decision_fetch_key = command.recovered_decision_fetch_key();\n",
+            "                    let recovered_decision_fetch_key = None;\n",
+            "I/O worker must capture exact completion provenance before moving",
+        ),
+        (
+            "method",
+            "V2IoHandle::spawn",
+            "spawn",
+            (("impl", "V2IoHandle"),),
+            "                    let recovered_decision_apply_key = command.recovered_decision_apply_key();\n",
+            "                    let recovered_decision_apply_key = None;\n",
+            "I/O worker must capture exact completion provenance before moving",
+        ),
+        (
+            "method",
+            "V2IoHandle::spawn",
+            "spawn",
+            (("impl", "V2IoHandle"),),
+            "                                            recovered_decision_apply_key.map_or_else(\n",
+            "                                            None.map_or_else(\n",
+            "I/O worker must use the key captured before execution",
         ),
         (
             "method",
@@ -1062,6 +1208,30 @@ def test_exact_serve_completion_provenance_survives_digest_refresh(
             "build_v2_io_command_channel",
             "build_v2_io_command_channel",
             (),
+            "            recovered_decision_applies: BTreeMap::new(),\n",
+            "            recovered_decision_applies: BTreeMap::default(),\n",
+            "command channel initializer must start with no fabricated recovered Decision Apply owner",
+        ),
+        (
+            "build_v2_io_command_channel",
+            "build_v2_io_command_channel",
+            (),
+            "            recovered_lifecycle_signs: BTreeMap::new(),\n",
+            "            recovered_lifecycle_signs: BTreeMap::default(),\n",
+            "command channel initializer must start with no fabricated recovered Sign owner",
+        ),
+        (
+            "build_v2_io_command_channel",
+            "build_v2_io_command_channel",
+            (),
+            "            recovered_decision_fetch_bodies: BTreeMap::new(),\n",
+            "            recovered_decision_fetch_bodies: BTreeMap::default(),\n",
+            "command channel initializer must start with no fabricated recovered Decision Fetch owner",
+        ),
+        (
+            "build_v2_io_command_channel",
+            "build_v2_io_command_channel",
+            (),
             "            producer_episode_due: false,\n"
             "            producer_episode_active: false,\n",
             "            producer_episode_active: false,\n"
@@ -1077,6 +1247,36 @@ def test_exact_serve_completion_provenance_survives_digest_refresh(
             "        state.producer_episode_due = true;\n",
             "receiver teardown must clear producer-episode due before active "
             "and Serve rollback",
+        ),
+        (
+            "V2IoCommandQueue::close_receiver",
+            "close_receiver",
+            (("impl", "V2IoCommandQueue"),),
+            "        state\n"
+            "            .recovered_decision_applies\n"
+            "            .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);\n",
+            "        state.recovered_decision_applies.clear();\n",
+            "receiver teardown must retain only completion-pending recovered Decision Apply ownership",
+        ),
+        (
+            "V2IoCommandQueue::close_receiver",
+            "close_receiver",
+            (("impl", "V2IoCommandQueue"),),
+            "        state\n"
+            "            .recovered_lifecycle_signs\n"
+            "            .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);\n",
+            "        state.recovered_lifecycle_signs.clear();\n",
+            "receiver teardown must retain only completion-pending recovered Sign ownership",
+        ),
+        (
+            "V2IoCommandQueue::close_receiver",
+            "close_receiver",
+            (("impl", "V2IoCommandQueue"),),
+            "        state\n"
+            "            .recovered_decision_fetch_bodies\n"
+            "            .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);\n",
+            "        state.recovered_decision_fetch_bodies.clear();\n",
+            "receiver teardown must retain only completion-pending recovered Decision Fetch ownership",
         ),
         (
             "V2IoCommandQueue::close_receiver",
@@ -1313,7 +1513,6 @@ def test_exact_serve_executor_duplicate_boolean_seam_stays_absent(
         and "exact reviewed token digest" not in error
         for error in errors
     ), errors
-
 
 
 @pytest.mark.parametrize(
@@ -1609,6 +1808,16 @@ def _assert_selected_serve_liveness_item_semantic_mutation(
     items = selected_items(source)
     assert len(items) == 1
     item = items[0]
+    if source_kind == "worker" and item.source.count(old) == 0:
+        # The reviewed worker fixture moved from a nested inline module into
+        # one include provider, removing exactly one four-space indent level.
+        def extracted_provider_text(value: str) -> str:
+            return "".join(
+                line[4:] if line.startswith("    ") else line
+                for line in value.splitlines(keepends=True)
+            )
+
+        old, new = extracted_provider_text(old), extracted_provider_text(new)
     assert item.source.count(old) == 1, (seal_key, old)
     mutated_item = item.source.replace(old, new, 1)
     assert source.count(item.source) == 1, seal_key
@@ -2139,7 +2348,6 @@ def test_exact_serve_cross_file_boundaries_survive_item_digest_refresh(
     _assert_direct_serve_item_mutation(
         tmp_path, relative, "method", item_name, context, old, new, expected_error
     )
-
 
 @pytest.mark.parametrize(
     ("relative", "item_name", "context", "old", "new", "expected_error"),

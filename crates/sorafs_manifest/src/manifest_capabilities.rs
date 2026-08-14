@@ -1,10 +1,8 @@
 //! Helpers for inspecting manifest metadata and provider capabilities.
-
 use crate::{
     ChunkingProfileV1, ManifestV1,
     provider_advert::{CapabilityType, ProviderAdvertBodyV1, ProviderCapabilityRangeV1},
 };
-
 /// Summary of manifest chunker metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChunkProfileSummary {
@@ -27,7 +25,6 @@ pub struct ChunkProfileSummary {
     /// Multihash code baked into the profile.
     pub multihash_code: u64,
 }
-
 impl From<&ChunkingProfileV1> for ChunkProfileSummary {
     fn from(profile: &ChunkingProfileV1) -> Self {
         Self {
@@ -43,7 +40,6 @@ impl From<&ChunkingProfileV1> for ChunkProfileSummary {
         }
     }
 }
-
 /// Summary of manifest transport capabilities.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestCapabilitySummary {
@@ -70,7 +66,6 @@ pub struct ManifestCapabilitySummary {
     /// Raw capability types observed in the provider advert.
     pub advertised_capabilities: Vec<CapabilityType>,
 }
-
 impl Default for ManifestCapabilitySummary {
     fn default() -> Self {
         Self {
@@ -88,7 +83,6 @@ impl Default for ManifestCapabilitySummary {
         }
     }
 }
-
 /// Analyse manifest metadata and optional provider advert for capability hints.
 #[must_use]
 pub fn detect_manifest_capabilities(
@@ -96,7 +90,6 @@ pub fn detect_manifest_capabilities(
     advert: Option<&ProviderAdvertBodyV1>,
 ) -> ManifestCapabilitySummary {
     let mut summary = ManifestCapabilitySummary::default();
-
     if let Some(manifest) = manifest {
         summary.chunk_profile = Some(ChunkProfileSummary::from(&manifest.chunking));
         for entry in &manifest.metadata {
@@ -120,7 +113,6 @@ pub fn detect_manifest_capabilities(
             }
         }
     }
-
     if let Some(advert) = advert {
         for capability in &advert.capabilities {
             summary.advertised_capabilities.push(capability.cap_type);
@@ -144,10 +136,8 @@ pub fn detect_manifest_capabilities(
             }
         }
     }
-
     summary
 }
-
 fn parse_bool(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "true" | "1" | "yes" | "y" => Some(true),
@@ -155,7 +145,6 @@ fn parse_bool(value: &str) -> Option<bool> {
         _ => None,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,7 +155,6 @@ mod tests {
             ProviderCapabilitySoranetPqV1,
         },
     };
-
     fn sample_manifest() -> ManifestV1 {
         ManifestBuilder::new()
             .root_cid(crate::canonical_manifest_root_cid([0xAA; 32]))
@@ -198,7 +186,6 @@ mod tests {
             .build()
             .expect("build manifest")
     }
-
     fn sample_advert(range_payload: Vec<u8>) -> ProviderAdvertBodyV1 {
         use crate::provider_advert::{
             AdvertEndpoint, AvailabilityTier, EndpointKind, PathDiversityPolicy, QosHints,
@@ -250,7 +237,6 @@ mod tests {
             }]),
         }
     }
-
     #[test]
     fn detect_manifest_metadata_capabilities() {
         let manifest = sample_manifest();
@@ -262,7 +248,6 @@ mod tests {
         assert_eq!(chunk_profile.name, "sf1");
         assert_eq!(chunk_profile.semver, "1.0.0");
     }
-
     #[test]
     fn detect_advert_capabilities() {
         let range = ProviderCapabilityRangeV1 {
@@ -285,7 +270,6 @@ mod tests {
                 .contains(&CapabilityType::ToriiGateway)
         );
     }
-
     #[test]
     fn detect_soranet_pq_capability_marks_flags() {
         let mut advert = sample_advert(Vec::new());
@@ -304,7 +288,6 @@ mod tests {
         assert!(summary.supports_soranet);
         assert!(summary.supports_soranet_hybrid_pq);
     }
-
     #[test]
     fn parse_bool_accepts_variants() {
         assert_eq!(parse_bool("YES"), Some(true));

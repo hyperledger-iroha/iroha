@@ -15,6 +15,10 @@ Note: For the v1 release, VRF penalties jail offenders after the activation lag,
 ## Scope & prerequisites
 
 - `iroha_cli` configured for the target cluster (see `specs/cli.md`).
+- An allow-listed operator key in an absolute runtime-only mode-`0600` file.
+  For brevity, every `iroha ... ops sumeragi ...` command below assumes the
+  global `--operator-private-key-file /absolute/runtime/operator.key` option;
+  there is no account-key, token, environment, or TOML fallback.
 - `curl`/`jq` for scraping the Torii `/status` payload when preparing inputs.
 - Prometheus access (or snapshot exports) for the `sumeragi_vrf_*` metrics.
 - Awareness of the current epoch and roster so you can match CLI output to the

@@ -1,15 +1,11 @@
 //! SORA runtime-upgrade governance resilience tests on 4-peer local networks.
-
 use super::sora_parliament_lifecycle_smoke::sora_runtime_governance;
-
-use std::time::Duration;
-
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
     isi::governance::{ProposeRuntimeUpgradeProposal, VotingMode},
     runtime::RuntimeUpgradeManifest,
 };
-
+use std::time::Duration;
 #[tokio::test]
 async fn sora_runtime_upgrade_resilience_peer_restart_during_multibody_sortition() -> Result<()> {
     let Some(mut fixture) = sora_runtime_governance::setup_runtime_governance_fixture(stringify!(
@@ -19,7 +15,6 @@ async fn sora_runtime_upgrade_resilience_peer_restart_during_multibody_sortition
     else {
         return Ok(());
     };
-
     let peer_count = fixture.network.peers().len();
     if peer_count < 2 {
         return Err(eyre!(
@@ -33,7 +28,6 @@ async fn sora_runtime_upgrade_resilience_peer_restart_during_multibody_sortition
         Some(restart_idx),
     )
     .await?;
-
     for (peer_idx, peer) in fixture.network.peers().iter().enumerate() {
         let mut peer_client = peer.client();
         sora_runtime_governance::tune_client_timeouts(&mut peer_client);
@@ -59,10 +53,8 @@ async fn sora_runtime_upgrade_resilience_peer_restart_during_multibody_sortition
             "peer #{peer_idx} should agree on runtime activation height"
         );
     }
-
     Ok(())
 }
-
 #[tokio::test]
 #[ignore = "long-running runtime governance chain soak"]
 async fn sora_runtime_upgrade_resilience_chained_rounds_soak() -> Result<()> {
@@ -73,22 +65,18 @@ async fn sora_runtime_upgrade_resilience_chained_rounds_soak() -> Result<()> {
     else {
         return Ok(());
     };
-
     let first =
         sora_runtime_governance::enact_runtime_upgrade_round(&mut fixture, "chain-round-1", None)
             .await?;
     let second =
         sora_runtime_governance::enact_runtime_upgrade_round(&mut fixture, "chain-round-2", None)
             .await?;
-
     assert!(
         second.activated_height > first.activated_height,
         "second runtime upgrade should activate at a strictly later height than the first"
     );
-
     Ok(())
 }
-
 #[tokio::test]
 async fn sora_runtime_upgrade_resilience_rejects_overlapping_runtime_window_proposal() -> Result<()>
 {
@@ -99,7 +87,6 @@ async fn sora_runtime_upgrade_resilience_rejects_overlapping_runtime_window_prop
     else {
         return Ok(());
     };
-
     let baseline = sora_runtime_governance::enact_runtime_upgrade_round(
         &mut fixture,
         "overlap-baseline",
@@ -107,7 +94,6 @@ async fn sora_runtime_upgrade_resilience_rejects_overlapping_runtime_window_prop
     )
     .await
     .wrap_err("enact baseline runtime upgrade before overlap rejection check")?;
-
     let abi_hash_hex = sora_runtime_governance::canonical_abi_hex();
     let overlapping_manifest = RuntimeUpgradeManifest {
         name: "parliament.runtime.upgrade.overlap.second".to_string(),
@@ -128,7 +114,6 @@ async fn sora_runtime_upgrade_resilience_rejects_overlapping_runtime_window_prop
     let overlapping_proposal_id_hex = hex::encode(
         sora_runtime_governance::compute_runtime_upgrade_proposal_id(&overlapping_manifest),
     );
-
     let overlapping_tx_hash = fixture
         .alice
         .submit(
@@ -149,7 +134,6 @@ async fn sora_runtime_upgrade_resilience_rejects_overlapping_runtime_window_prop
     )
     .await
     .wrap_err("overlapping runtime-upgrade proposal should be rejected")?;
-
     let overlap_payload = fixture
         .alice
         .get_gov_proposal_json(&overlapping_proposal_id_hex)?;
@@ -160,6 +144,5 @@ async fn sora_runtime_upgrade_resilience_rejects_overlapping_runtime_window_prop
         Some(true),
         "rejected overlapping runtime proposal should not be stored as found"
     );
-
     Ok(())
 }

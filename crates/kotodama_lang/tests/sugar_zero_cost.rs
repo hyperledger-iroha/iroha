@@ -1,9 +1,7 @@
 //! IR and executable-equivalence tests for expression-oriented Kotodama V1 sugar.
-
 use kotodama_lang::{
     compiler::Compiler, ir, metadata::ProgramMetadata, parser::parse, semantic::analyze,
 };
-
 fn executable_code(source: &str) -> Vec<u8> {
     let artifact = Compiler::new()
         .compile_source(source)
@@ -11,7 +9,6 @@ fn executable_code(source: &str) -> Vec<u8> {
     let metadata = ProgramMetadata::parse(&artifact).expect("parse Kotodama V1 artifact");
     artifact[metadata.code_offset..].to_vec()
 }
-
 fn assert_executable_equivalent(sugar: &str, explicit: &str, description: &str) {
     assert_eq!(
         executable_code(sugar),
@@ -19,7 +16,6 @@ fn assert_executable_equivalent(sugar: &str, explicit: &str, description: &str) 
         "{description} must be erased before executable code generation"
     );
 }
-
 fn assert_ir_equivalent(sugar: &str, explicit: &str, description: &str) {
     let lower = |source| {
         let parsed = parse(source).expect("parse Kotodama V1 source for IR comparison");
@@ -46,7 +42,6 @@ fn assert_ir_equivalent(sugar: &str, explicit: &str, description: &str) {
         );
     }
 }
-
 #[test]
 fn result_propagation_matches_the_exhaustive_early_return_form() {
     let propagated = r#"
@@ -68,7 +63,6 @@ fn result_propagation_matches_the_exhaustive_early_return_form() {
             }
         }
     "#;
-
     assert_ir_equivalent(
         propagated,
         explicit,
@@ -80,7 +74,6 @@ fn result_propagation_matches_the_exhaustive_early_return_form() {
         "postfix Result propagation with a changed success layout",
     );
 }
-
 #[test]
 fn option_propagation_matches_the_exhaustive_early_return_form() {
     let propagated = r#"
@@ -102,7 +95,6 @@ fn option_propagation_matches_the_exhaustive_early_return_form() {
             }
         }
     "#;
-
     assert_ir_equivalent(
         propagated,
         explicit,
@@ -114,7 +106,6 @@ fn option_propagation_matches_the_exhaustive_early_return_form() {
         "postfix Option propagation with a changed payload layout",
     );
 }
-
 #[test]
 fn function_tail_matches_explicit_return() {
     let tail = r#"
@@ -127,11 +118,9 @@ fn function_tail_matches_explicit_return() {
             view fn main(int value) -> int { return value + 1; }
         }
     "#;
-
     assert_ir_equivalent(tail, explicit, "function tail expression");
     assert_executable_equivalent(tail, explicit, "function tail expression");
 }
-
 #[test]
 fn if_block_expression_matches_the_existing_ternary() {
     let block = r#"
@@ -148,11 +137,9 @@ fn if_block_expression_matches_the_existing_ternary() {
             }
         }
     "#;
-
     assert_ir_equivalent(block, ternary, "expression-valued if block");
     assert_executable_equivalent(block, ternary, "expression-valued if block");
 }
-
 #[test]
 fn if_let_matches_the_exhaustive_match_form() {
     let if_let = r#"
@@ -172,11 +159,9 @@ fn if_let_matches_the_exhaustive_match_form() {
             }
         }
     "#;
-
     assert_ir_equivalent(if_let, exhaustive, "if let expression");
     assert_executable_equivalent(if_let, exhaustive, "if let expression");
 }
-
 #[test]
 fn result_if_let_matches_the_exhaustive_match_form() {
     let if_let = r#"
@@ -196,11 +181,9 @@ fn result_if_let_matches_the_exhaustive_match_form() {
             }
         }
     "#;
-
     assert_ir_equivalent(if_let, exhaustive, "Result if let expression");
     assert_executable_equivalent(if_let, exhaustive, "Result if let expression");
 }
-
 #[test]
 fn named_call_matches_explicit_source_order_and_positional_abi_order() {
     let named = r#"
@@ -229,11 +212,9 @@ fn named_call_matches_explicit_source_order_and_positional_abi_order() {
             }
         }
     "#;
-
     assert_ir_equivalent(named, explicit, "out-of-order named call");
     assert_executable_equivalent(named, explicit, "out-of-order named call");
 }
-
 #[test]
 fn named_struct_matches_explicit_source_order_and_declaration_layout() {
     let named = r#"
@@ -280,7 +261,6 @@ fn named_struct_matches_explicit_source_order_and_declaration_layout() {
             }
         }
     "#;
-
     assert_ir_equivalent(
         named,
         explicit,
@@ -292,7 +272,6 @@ fn named_struct_matches_explicit_source_order_and_declaration_layout() {
         "out-of-order named struct with observable field evaluation",
     );
 }
-
 #[test]
 fn exhaustive_option_match_matches_eager_unwrap_or() {
     let matched = r#"
@@ -312,7 +291,6 @@ fn exhaustive_option_match_matches_eager_unwrap_or() {
             }
         }
     "#;
-
     assert_ir_equivalent(matched, explicit, "exhaustive Option match");
     assert_executable_equivalent(matched, explicit, "exhaustive Option match");
 }

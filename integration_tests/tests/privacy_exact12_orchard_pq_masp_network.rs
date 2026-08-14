@@ -2,12 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Four-peer DA/RBC, lifecycle, atomicity, nullifier replay, and restart gate
 //! for the retained native Orchard and PQ-MASP production actions.
-
-use std::{
-    num::{NonZeroU32, NonZeroU64},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
-
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -56,8 +50,11 @@ use iroha_core::{
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, gen_account_in};
+use std::{
+    num::{NonZeroU32, NonZeroU64},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tokio::time::{Instant, sleep, timeout};
-
 const ORCHARD_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::OrchardHalo2ActionsV1;
 const PQ_MASP_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::PqMaspStarkV0;
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(180);
@@ -71,37 +68,31 @@ const ACTION_TTL: Duration = Duration::from_secs(7_200);
 const TRANSACTION_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
 const TORII_CONTENT_BUDGET_BYTES: i64 = 128 * 1024 * 1024;
 const NETWORK_FRAME_BUDGET_BYTES: i64 = 128 * 1024 * 1024;
-
 #[derive(Clone, Copy)]
 struct ProtocolExpectationV1 {
     protocol: PrivacyProtocolIdV1,
     compiled: PrivacyCompiledProfileSnapshotV1,
     activation: Option<PrivacyProtocolActivationRecordV1>,
 }
-
 fn bounded_client(mut client: Client) -> Client {
     client.transaction_status_timeout = SUBMISSION_TIMEOUT;
     client.torii_request_timeout = Duration::from_secs(45);
     client
 }
-
 fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
 }
-
 fn error_chain_contains(error: &eyre::Report, needle: &str) -> bool {
     let needle = needle.to_ascii_lowercase();
     error
         .chain()
         .any(|cause| cause.to_string().to_ascii_lowercase().contains(&needle))
 }
-
 fn error_chain_contains_any(error: &eyre::Report, needles: &[&str]) -> bool {
     needles
         .iter()
         .any(|needle| error_chain_contains(error, needle))
 }
-
 fn is_exact_transaction_replay(error: &eyre::Report) -> bool {
     error_chain_contains_any(
         error,
@@ -115,7 +106,6 @@ fn is_exact_transaction_replay(error: &eyre::Report) -> bool {
         ],
     )
 }
-
 fn protocol_row(
     snapshot: &PrivacyExact12CapabilityManifestV1,
     protocol: PrivacyProtocolIdV1,
@@ -127,7 +117,6 @@ fn protocol_row(
         .find(|row| row.protocol_id == protocol)
         .ok_or_else(|| eyre!("canonical capability snapshot omitted {protocol:?}"))
 }
-
 fn assert_protocol_expectations(
     snapshot: &PrivacyExact12CapabilityManifestV1,
     expectations: &[ProtocolExpectationV1],
@@ -154,7 +143,6 @@ fn assert_protocol_expectations(
     }
     Ok(())
 }
-
 async fn wait_for_all_peer_protocols(
     network: &sandbox::SerializedNetwork,
     minimum_height: u64,
@@ -203,7 +191,6 @@ async fn wait_for_all_peer_protocols(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     let blocks = client
         .query(FindBlocks)
@@ -222,7 +209,6 @@ fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     ensure!(hash != [0; 32], "canonical genesis hash must be nonzero");
     Ok(hash)
 }
-
 fn next_incoming_height(client: &Client) -> Result<u64> {
     client
         .get_privacy_capabilities()
@@ -231,7 +217,6 @@ fn next_incoming_height(client: &Client) -> Result<u64> {
         .checked_add(1)
         .ok_or_else(|| eyre!("incoming privacy height overflowed"))
 }
-
 fn proposed_activation(
     compiled: CompiledPrivacyProfileV1,
     proposed_at_height: u64,
@@ -244,7 +229,6 @@ fn proposed_activation(
         },
     ))
 }
-
 fn active_activation(
     compiled: CompiledPrivacyProfileV1,
     proposed_at_height: u64,
@@ -258,7 +242,6 @@ fn active_activation(
         },
     ))
 }
-
 async fn submit_instructions(
     client: &Client,
     instructions: Vec<InstructionBox>,
@@ -274,7 +257,6 @@ async fn submit_instructions(
     .map_err(|error| eyre!("{context}: submission task failed: {error}"))?
     .wrap_err_with(|| context.to_owned())
 }
-
 async fn submit_signed_transaction(
     client: &Client,
     transaction: &SignedTransaction,
@@ -291,7 +273,6 @@ async fn submit_signed_transaction(
     .map_err(|error| eyre!("{context}: submission task failed: {error}"))?
     .wrap_err_with(|| context.to_owned())
 }
-
 async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<()> {
     let start = client
         .get_privacy_capabilities()
@@ -325,7 +306,6 @@ async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<
     );
     Ok(())
 }
-
 fn exact_transaction_result(
     client: &Client,
     transaction: &SignedTransaction,
@@ -348,7 +328,6 @@ fn exact_transaction_result(
     );
     Ok(Some(committed.result().0.is_ok()))
 }
-
 async fn wait_for_transaction_result_on_peers(
     clients: &[Client],
     transaction: &SignedTransaction,
@@ -386,7 +365,6 @@ async fn wait_for_transaction_result_on_peers(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 fn asset_quantities(client: &Client, asset_ids: &[AssetId]) -> Result<Vec<Option<Quantity>>> {
     let assets = client
         .query(FindAssets::new())
@@ -402,7 +380,6 @@ fn asset_quantities(client: &Client, asset_ids: &[AssetId]) -> Result<Vec<Option
         })
         .collect())
 }
-
 async fn wait_for_asset_quantities(
     clients: &[Client],
     asset_ids: &[AssetId],
@@ -438,7 +415,6 @@ async fn wait_for_asset_quantities(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 fn independently_resign_corrupted_proof(
     client: &Client,
     valid: &SignedTransaction,
@@ -463,7 +439,6 @@ fn independently_resign_corrupted_proof(
     envelope
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
         .wrap_err("proof corruption must preserve the generic envelope contract")?;
-
     let corrupted = TransactionBuilder::from_payload(valid.payload().clone())
         .wrap_err("re-open canonical retained-native payload")?
         .with_instructions([SubmitPrivacyProofV1::new(envelope)])
@@ -486,7 +461,6 @@ fn independently_resign_corrupted_proof(
     );
     Ok(corrupted)
 }
-
 async fn wait_for_common_v2_subject(
     clients: &[Client],
     minimum_height: u64,
@@ -534,7 +508,6 @@ async fn wait_for_common_v2_subject(
         sleep(POLL_INTERVAL).await;
     }
 }
-
 fn action_context(
     client: &Client,
     genesis_hash: [u8; 32],
@@ -552,7 +525,6 @@ fn action_context(
         genesis_hash,
     }
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_restart()
 -> Result<()> {
@@ -573,7 +545,6 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
     let orchard_asset_at_reserve = AssetId::new(orchard_asset.clone(), reserve_account.clone());
     let transaction_budget =
         NonZeroU64::new(TRANSACTION_BUDGET_BYTES).expect("fixed transaction budget is nonzero");
-
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -582,6 +553,10 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
         .with_config_layer(|layer| {
             layer
                 .write(["torii", "max_content_len"], TORII_CONTENT_BUDGET_BYTES)
+                .write(
+                    ["torii", "query_fanout_max_retained_bytes"],
+                    TORII_CONTENT_BUDGET_BYTES,
+                )
                 .write(["network", "max_frame_bytes"], NETWORK_FRAME_BUDGET_BYTES)
                 .write(
                     ["network", "max_frame_bytes_consensus"],
@@ -631,7 +606,6 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
     };
-
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
@@ -653,7 +627,6 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             .wrap_err("load canonical PQ-MASP compiled profile")?;
         let orchard_snapshot: PrivacyCompiledProfileSnapshotV1 = orchard_compiled.into();
         let pq_snapshot: PrivacyCompiledProfileSnapshotV1 = pq_compiled.into();
-
         submit_instructions(
             &client,
             vec![
@@ -666,7 +639,6 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "grant CanEnactGovernance",
         )
         .await?;
-
         let registration_height = next_incoming_height(&client)?;
         let activation_height = registration_height
             .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
@@ -702,7 +674,6 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "exact proposed retained-native lifecycles",
         )
         .await?;
-
         let creation_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .wrap_err("system clock is before the Unix epoch")?;
@@ -798,7 +769,6 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             pre_orchard.transaction.hash() != final_orchard.transaction.hash(),
             "pre-activation and final Orchard actions must be distinct"
         );
-
         let advance_target = activation_height
             .checked_sub(3)
             .ok_or_else(|| eyre!("activation height lacks two probe predecessors"))?;
@@ -810,7 +780,6 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
         .map_err(|_| {
             eyre!("advancing through the activation lead exceeded {ACTIVATION_ADVANCE_TIMEOUT:?}")
         })??;
-
         let pre_orchard_error = submit_signed_transaction(
             &client,
             &pre_orchard.transaction,
@@ -857,7 +826,6 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "pre-activation rejections must preserve public bridge balances",
         )
         .await?;
-
         submit_instructions(
             &client,
             vec![
@@ -892,7 +860,6 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "exact active retained-native lifecycles",
         )
         .await?;
-
         submit_instructions(
             &client,
             vec![
@@ -916,7 +883,6 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "pool bootstrap must preserve public bridge balances",
         )
         .await?;
-
         let corrupted_orchard =
             independently_resign_corrupted_proof(&client, &final_orchard.transaction)?;
         let corrupted_pq =
@@ -978,7 +944,6 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
                 >= bootstrap_height.saturating_add(2),
             "both rejected proof transactions must reach canonical finality"
         );
-
         let restart_index = network.peers().len() - 1;
         let restart_peer = network.peers()[restart_index].clone();
         let config_layers = network.config_layers().collect::<Vec<_>>();
@@ -993,7 +958,6 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             .filter(|(index, _)| *index != restart_index)
             .map(|(_, peer)| bounded_client(peer.client()))
             .collect::<Vec<_>>();
-
         submit_signed_transaction(
             &client,
             &final_orchard.transaction,
@@ -1030,7 +994,6 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "canonical Orchard deposit must apply atomically",
         )
         .await?;
-
         let pq_replay_error = submit_signed_transaction(
             &client,
             &pq_actions.replay_transaction,
@@ -1062,7 +1025,6 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "nullifier replay must preserve post-Orchard state",
         )
         .await?;
-
         let finalized_height = client
             .get_privacy_capabilities()
             .wrap_err("query height before exact retained-native replays")?
@@ -1094,7 +1056,6 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "healthy-peer retained-native DA/RBC subject",
         )
         .await?;
-
         timeout(
             RESTART_TIMEOUT,
             restart_peer.start_checked(config_layers.iter(), None),
@@ -1188,7 +1149,6 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
         Ok(())
     }
     .await;
-
     network.shutdown().await;
     result
 }

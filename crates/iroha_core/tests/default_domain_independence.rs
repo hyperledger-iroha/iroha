@@ -1,13 +1,10 @@
 //! Regression guards for domainless universal accounts and explicit domain state.
-
-use std::{fs, path::Path};
-
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     account::{AccountAddress, AccountId},
     domain::DomainId,
 };
-
+use std::{fs, path::Path};
 #[test]
 fn universal_account_address_is_independent_of_explicit_domain_context() {
     let key_pair = KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519)
@@ -15,7 +12,6 @@ fn universal_account_address_is_independent_of_explicit_domain_context() {
     let account = AccountId::new(key_pair.public_key().clone());
     let address = AccountAddress::from_account_id(&account).expect("canonical account address");
     let canonical = address.canonical_hex().expect("canonical address bytes");
-
     for domain in [
         DomainId::try_new("default", "universal").expect("explicit default-named domain"),
         DomainId::try_new("merchant", "retail").expect("explicit routed domain"),
@@ -29,7 +25,6 @@ fn universal_account_address_is_independent_of_explicit_domain_context() {
         );
     }
 }
-
 #[test]
 fn process_default_domain_cannot_reenter_validation_or_world_state() {
     let crates_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -55,7 +50,6 @@ fn process_default_domain_cannot_reenter_validation_or_world_state() {
         "set_default_account_domain_label",
         "pub fn domain_selector",
     ];
-
     for relative in sources {
         let source = fs::read_to_string(crates_dir.join(relative))
             .unwrap_or_else(|error| panic!("read {relative}: {error}"));

@@ -6,15 +6,11 @@
 //! can operate on typed structures instead of manual loops. The helpers are
 //! intentionally simple and deterministic so the eventual trace builder can be
 //! audited easily.
-
 use core::cmp::min;
-
 /// Goldilocks modulus (2^64 - 2^32 + 1) used by the FASTPQ AIR.
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
-
 /// Number of bytes stored per packed limb (little-endian).
 pub const LIMB_BYTES: usize = 7;
-
 /// Packed representation of an arbitrary byte slice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackedBytes {
@@ -23,7 +19,6 @@ pub struct PackedBytes {
     /// Original uncompressed length in bytes.
     pub length: usize,
 }
-
 impl PackedBytes {
     /// Reconstruct the original byte vector using the stored length to trim
     /// padding introduced during packing.
@@ -38,7 +33,6 @@ impl PackedBytes {
         out
     }
 }
-
 /// Pack an arbitrary byte slice into 7-byte little-endian limbs.
 #[must_use]
 pub fn pack_bytes(bytes: &[u8]) -> PackedBytes {
@@ -48,7 +42,6 @@ pub fn pack_bytes(bytes: &[u8]) -> PackedBytes {
             length: 0,
         };
     }
-
     let mut limbs = Vec::with_capacity(bytes.len().div_ceil(LIMB_BYTES));
     let mut offset = 0;
     while offset < bytes.len() {
@@ -64,25 +57,20 @@ pub fn pack_bytes(bytes: &[u8]) -> PackedBytes {
         limbs.push(limb);
         offset += take;
     }
-
     PackedBytes {
         limbs,
         length: bytes.len(),
     }
 }
-
 /// Unpack a previously packed limb representation into raw bytes.
 #[must_use]
 pub fn unpack_bytes(packed: &PackedBytes) -> Vec<u8> {
     packed.to_bytes()
 }
-
 #[cfg(test)]
 mod tests {
-    use core::convert::TryFrom;
-
     use super::*;
-
+    use core::convert::TryFrom;
     #[test]
     fn roundtrip_empty() {
         let packed = pack_bytes(&[]);
@@ -90,7 +78,6 @@ mod tests {
         assert_eq!(packed.length, 0);
         assert_eq!(unpack_bytes(&packed), Vec::<u8>::new());
     }
-
     #[test]
     fn roundtrip_various_lengths() {
         for len in 1..=32 {
@@ -102,7 +89,6 @@ mod tests {
             assert_eq!(unpack_bytes(&packed), data);
         }
     }
-
     #[test]
     fn padding_is_trimmed() {
         let data = vec![0xAA, 0xBB, 0xCC, 0xDD];
@@ -110,7 +96,6 @@ mod tests {
         assert_eq!(packed.limbs.len(), 1);
         assert_eq!(unpack_bytes(&packed), data);
     }
-
     #[test]
     fn limbs_always_canonical() {
         for len in [0usize, 1, 6, 7, 15, 31, 64, 127, 191] {

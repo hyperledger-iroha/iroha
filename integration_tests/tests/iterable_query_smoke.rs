@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii iterable queries smoke test: ensure genesis assets are discoverable
 //! and batching works end-to-end via the HTTP `/query` path.
-
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
@@ -9,7 +8,6 @@ use iroha::data_model::prelude::*;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;
 use reqwest::Client as HttpClient;
-
 #[test]
 fn find_genesis_assets_via_torii_iterable() -> Result<()> {
     let builder = NetworkBuilder::new();
@@ -21,14 +19,12 @@ fn find_genesis_assets_via_torii_iterable() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-
     // Execute a simple iterable query; default fetch size is fine for smoke test.
     let assets = client.query(FindAssets::new()).execute_all()?;
     assert!(
         !assets.is_empty(),
         "expected at least one asset from genesis"
     );
-
     // Verify the well-known genesis asset exists with expected quantity.
     let asset_id = AssetId::new(
         AssetDefinitionId::derive_from_components(
@@ -42,13 +38,11 @@ fn find_genesis_assets_via_torii_iterable() -> Result<()> {
         .find(|a| a.id() == &asset_id)
         .expect("genesis rose asset not found");
     assert_eq!(*rose.value(), Quantity::from(13_u32));
-
     let http = HttpClient::new();
     let peer = match network.peers().first() {
         Some(p) => p,
         None => return Ok(()),
     };
-
     // GET /v1/accounts?limit=1 should return genesis accounts (non-empty items, accurate total)
     let accounts_url = format!("{}/v1/accounts?limit=1&offset=0", peer.torii_url());
     let accounts_body = rt.block_on(async {
@@ -77,7 +71,6 @@ fn find_genesis_assets_via_torii_iterable() -> Result<()> {
         !account_items.is_empty(),
         "expected accounts payload via HTTP"
     );
-
     // GET /v1/accounts/{alice}/assets?limit=1 should list genesis balances
     let alice_assets_url = format!(
         "{}/v1/accounts/{}/assets?limit=1",
@@ -107,6 +100,5 @@ fn find_genesis_assets_via_torii_iterable() -> Result<()> {
         !alice_items.is_empty(),
         "expected Alice asset list via HTTP"
     );
-
     Ok(())
 }

@@ -5,9 +5,6 @@
 //! identity after the bounded read. Other targets fail closed before reading.
 //! Callers remain responsible for ancestor confinement: these pathname-based
 //! opens do not claim to close a deliberately timed ancestor-directory ABA.
-
-use std::{io, path::Path};
-
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 #[cfg(unix)]
@@ -15,7 +12,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Read as _,
 };
-
+use std::{io, path::Path};
 /// Read one exact, bounded, singly linked regular final component.
 ///
 /// The returned bytes come from one descriptor whose type, size, link count,
@@ -40,7 +37,6 @@ pub(crate) fn read_bounded_single_link_regular_file_v1(
         ))
     }
 }
-
 #[cfg(unix)]
 fn read_bounded_single_link_regular_file_impl_v1<F>(
     path: &Path,
@@ -54,9 +50,7 @@ where
     if !metadata_is_single_link_regular(&named_before) || named_before.len() > max_bytes {
         return Err(invalid_local_file());
     }
-
     before_open(path)?;
-
     let mut options = OpenOptions::new();
     options.read(true);
     set_no_follow_nonblocking(&mut options);
@@ -68,7 +62,6 @@ where
     {
         return Err(changed_local_file());
     }
-
     let read_limit = max_bytes.checked_add(1).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -80,7 +73,6 @@ where
         .min(64 * 1024);
     let mut bytes = Vec::with_capacity(initial_capacity);
     file.by_ref().take(read_limit).read_to_end(&mut bytes)?;
-
     let opened_after = file.metadata()?;
     let named_after = fs::symlink_metadata(path)?;
     let bytes_len = u64::try_from(bytes.len()).map_err(|_| changed_local_file())?;
@@ -95,7 +87,6 @@ where
     }
     Ok(bytes)
 }
-
 /// Exercise the bounded descriptor boundary with a deterministic pre-open hook.
 ///
 /// The hook runs after the named-file snapshot and immediately before the
@@ -112,7 +103,6 @@ where
 {
     read_bounded_single_link_regular_file_impl_v1(path, max_bytes, before_open)
 }
-
 #[cfg(unix)]
 fn invalid_local_file() -> io::Error {
     io::Error::new(
@@ -120,7 +110,6 @@ fn invalid_local_file() -> io::Error {
         "local input must be one bounded, singly linked regular file",
     )
 }
-
 #[cfg(unix)]
 fn changed_local_file() -> io::Error {
     io::Error::new(
@@ -128,17 +117,14 @@ fn changed_local_file() -> io::Error {
         "local input changed while its bounded bytes were read",
     )
 }
-
 #[cfg(unix)]
 fn metadata_is_single_link_regular(metadata: &fs::Metadata) -> bool {
     !metadata_is_link(metadata) && metadata.is_file() && metadata.nlink() == 1
 }
-
 #[cfg(unix)]
 fn metadata_is_link(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
-
 #[cfg(unix)]
 fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev()
@@ -152,12 +138,10 @@ fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.nlink() == 1
         && right.nlink() == 1
 }
-
 #[cfg(unix)]
 fn set_no_follow_nonblocking(options: &mut OpenOptions) {
     options.custom_flags(platform_no_follow_flag() | platform_nonblocking_flag());
 }
-
 #[cfg(all(
     target_os = "android",
     not(any(
@@ -169,7 +153,6 @@ fn set_no_follow_nonblocking(options: &mut OpenOptions) {
     ))
 ))]
 compile_error!("Musubi bounded local-file reads are not qualified for this Android architecture");
-
 #[cfg(all(
     unix,
     not(any(
@@ -184,12 +167,10 @@ compile_error!("Musubi bounded local-file reads are not qualified for this Andro
     ))
 ))]
 compile_error!("Musubi bounded local-file reads are not qualified for this Unix target");
-
 #[cfg(all(target_os = "android", target_arch = "riscv64"))]
 const fn platform_no_follow_flag() -> i32 {
     0x400000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "aarch64", target_arch = "arm")
@@ -197,7 +178,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x8000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "x86", target_arch = "x86_64")
@@ -205,7 +185,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x20000
 }
-
 #[cfg(all(
     target_os = "linux",
     any(
@@ -219,7 +198,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x8000
 }
-
 #[cfg(all(
     target_os = "linux",
     not(any(
@@ -233,7 +211,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x20000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -249,7 +226,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     target_os = "linux",
     any(
@@ -262,7 +238,6 @@ const fn platform_no_follow_flag() -> i32 {
 const fn platform_nonblocking_flag() -> i32 {
     0x80
 }
-
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "sparc", target_arch = "sparc64")
@@ -270,7 +245,6 @@ const fn platform_nonblocking_flag() -> i32 {
 const fn platform_nonblocking_flag() -> i32 {
     0x4000
 }
-
 #[cfg(any(
     target_os = "android",
     all(
@@ -288,7 +262,6 @@ const fn platform_nonblocking_flag() -> i32 {
 const fn platform_nonblocking_flag() -> i32 {
     0x800
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -304,18 +277,13 @@ const fn platform_nonblocking_flag() -> i32 {
 const fn platform_nonblocking_flag() -> i32 {
     0x4
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::fs;
-
     #[cfg(unix)]
     use std::{fs::File, process::Command};
-
     use tempfile::tempdir;
-
-    use super::*;
-
     #[cfg(unix)]
     #[test]
     fn reads_exact_regular_bytes_and_rejects_oversize_files() {
@@ -326,7 +294,6 @@ mod tests {
             read_bounded_single_link_regular_file_v1(&path, 5).expect("bounded read"),
             b"exact"
         );
-
         File::create(&path)
             .expect("replace input")
             .set_len(6)
@@ -338,7 +305,6 @@ mod tests {
             io::ErrorKind::InvalidData
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn rejects_hardlinked_inputs() {
@@ -347,7 +313,6 @@ mod tests {
         let alias = temporary.path().join("alias");
         fs::write(&path, b"exact").expect("write input");
         fs::hard_link(&path, &alias).expect("create hard link");
-
         assert_eq!(
             read_bounded_single_link_regular_file_v1(&path, 5)
                 .expect_err("hardlinked input must fail")
@@ -355,7 +320,6 @@ mod tests {
             io::ErrorKind::InvalidData
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn raced_regular_replacement_is_rejected() {
@@ -364,7 +328,6 @@ mod tests {
         let replacement = temporary.path().join("replacement");
         fs::write(&path, b"first").expect("write initial input");
         fs::write(&replacement, b"other").expect("write replacement input");
-
         let error = read_bounded_single_link_regular_file_with_hook_v1(&path, 5, |path| {
             fs::remove_file(path)?;
             fs::rename(&replacement, path)
@@ -372,33 +335,27 @@ mod tests {
         .expect_err("raced regular replacement must fail");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
-
     #[cfg(unix)]
     #[test]
     fn rejects_symlink_and_device_inputs_before_reading() {
         use std::os::unix::fs::symlink;
-
         let temporary = tempdir().expect("temporary directory");
         let target = temporary.path().join("target");
         let symbolic = temporary.path().join("symbolic");
         fs::write(&target, b"exact").expect("write target");
         symlink(&target, &symbolic).expect("create symlink");
-
         assert!(read_bounded_single_link_regular_file_v1(&symbolic, 5).is_err());
         assert!(read_bounded_single_link_regular_file_v1(Path::new("/dev/null"), 5).is_err());
     }
-
     #[cfg(unix)]
     #[test]
     fn raced_symlink_is_rejected_by_the_no_follow_open() {
         use std::os::unix::fs::symlink;
-
         let temporary = tempdir().expect("temporary directory");
         let path = temporary.path().join("input");
         let target = temporary.path().join("target");
         fs::write(&path, b"first").expect("write initial input");
         fs::write(&target, b"other").expect("write symlink target");
-
         let error = read_bounded_single_link_regular_file_with_hook_v1(&path, 5, |path| {
             fs::remove_file(path)?;
             symlink(&target, path)
@@ -407,7 +364,6 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::FilesystemLoop);
         assert_eq!(fs::read(&target).expect("read target"), b"other");
     }
-
     #[cfg(not(unix))]
     #[test]
     fn unsupported_platforms_fail_closed_before_reading() {
@@ -421,14 +377,12 @@ mod tests {
             io::ErrorKind::Unsupported
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn raced_fifo_is_rejected_without_a_blocking_open() {
         let temporary = tempdir().expect("temporary directory");
         let path = temporary.path().join("input");
         fs::write(&path, b"exact").expect("write initial input");
-
         let error = read_bounded_single_link_regular_file_with_hook_v1(&path, 5, |path| {
             fs::remove_file(path)?;
             let status = Command::new("mkfifo").arg(path).status()?;

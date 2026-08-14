@@ -1,12 +1,9 @@
 //! Validate the public `SoraFS` reputation finalized-archive policy.
-
-use std::path::{Path, PathBuf};
-
 use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::AccountId;
-
+use std::path::{Path, PathBuf};
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
     ConfigReader::new()
@@ -14,7 +11,6 @@ fn base_reader() -> ConfigReader {
         .read_toml_with_extends(base_path)
         .expect("base config should load")
 }
-
 fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
     let table = source
         .parse()
@@ -26,7 +22,6 @@ fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
         .parse()
         .map_err(|error| format!("{error:?}"))
 }
-
 fn absolute_state_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
@@ -37,7 +32,6 @@ fn absolute_state_dir() -> PathBuf {
         PathBuf::from("/var/lib/iroha/sorafs/reputation")
     }
 }
-
 fn absolute_trust_policy_path() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
@@ -48,17 +42,14 @@ fn absolute_trust_policy_path() -> PathBuf {
         PathBuf::from("/etc/iroha/reputation-trust-policy.to")
     }
 }
-
 fn toml_path(path: &Path) -> String {
     path.display().to_string().replace('\\', "\\\\")
 }
-
 fn ed25519_public_key_hex(seed: u8) -> String {
     let key_pair =
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("test Ed25519 keypair");
     hex::encode(key_pair.public_key().to_bytes().1)
 }
-
 fn native_signer_bindings() -> String {
     [
         ("proof_outcome", "proof-outcome", 0x72),
@@ -90,7 +81,6 @@ policy_digest_hex = "{policy_digest_hex}"
     .collect::<Vec<_>>()
     .join("")
 }
-
 fn enabled_overlay(
     max_record_bytes: u64,
     max_entries: usize,
@@ -135,7 +125,6 @@ finalized_archive_max_kura_tip_lag_blocks = {max_kura_tip_lag_blocks}
 "#
     )
 }
-
 #[test]
 fn explicit_archive_policy_projects_exact_bounds_and_a_derived_private_root() {
     let actual = parse_overlay(&enabled_overlay(
@@ -151,7 +140,6 @@ fn explicit_archive_policy_projects_exact_bounds_and_a_derived_private_root() {
         .reputation_runtime
         .as_ref()
         .expect("enabled reputation runtime");
-
     assert_eq!(reputation.state_dir, absolute_state_dir());
     assert_eq!(
         reputation.finalized_archive_root,
@@ -169,7 +157,6 @@ fn explicit_archive_policy_projects_exact_bounds_and_a_derived_private_root() {
     );
     assert_eq!(reputation.finalized_archive_max_kura_tip_lag_blocks, 0);
 }
-
 #[test]
 fn enabled_archive_policy_rejects_zero_inconsistent_overflowing_and_stale_bounds() {
     let usize_max = u64::try_from(usize::MAX).expect("usize must fit in u64");
@@ -220,7 +207,6 @@ fn enabled_archive_policy_rejects_zero_inconsistent_overflowing_and_stale_bounds
         );
     }
 }
-
 #[test]
 fn disabled_runtime_rejects_nondefault_archive_claims() {
     let source = r"
@@ -228,13 +214,11 @@ fn disabled_runtime_rejects_nondefault_archive_claims() {
 finalized_archive_max_entries = 999999
 ";
     let error = parse_overlay(source).expect_err("dormant archive policy must fail closed");
-
     assert!(
         error.contains("finalized archive policy must remain at defaults when disabled"),
         "unexpected disabled archive diagnostic: {error}"
     );
 }
-
 #[test]
 fn finalized_archive_root_is_not_a_user_settable_path() {
     let source = r#"
@@ -242,7 +226,6 @@ fn finalized_archive_root_is_not_a_user_settable_path() {
 finalized_archive_root = "/run/secrets/forbidden-archive-root"
 "#;
     let error = parse_overlay(source).expect_err("archive root must be derived internally");
-
     assert!(
         error.contains("sorafs.storage.reputation_runtime.finalized_archive_root"),
         "unexpected derived-root diagnostic: {error}"
@@ -252,7 +235,6 @@ finalized_archive_root = "/run/secrets/forbidden-archive-root"
         "unknown-field diagnostics must not echo private path material"
     );
 }
-
 fn reserve_transparency_overlay(query_handle: &str) -> String {
     let state_dir = if cfg!(target_os = "windows") {
         r"C:\iroha\sorafs\reserve-transparency".to_owned()
@@ -274,7 +256,6 @@ checkpoint_max_bytes = 32768
         state_dir.replace('\\', "\\\\")
     )
 }
-
 #[test]
 fn reserve_transparency_scanner_reuses_exact_reputation_query_binding() {
     let source = format!(
@@ -288,7 +269,6 @@ fn reserve_transparency_scanner_reuses_exact_reputation_query_binding() {
         .sorafs_storage
         .reserve_transparency_runtime
         .expect("scanner enabled");
-
     assert_eq!(scanner.finalized_query_handle, "ledger.finalized.primary");
     assert_eq!(scanner.poll_interval, std::time::Duration::from_millis(250));
     assert_eq!(
@@ -299,7 +279,6 @@ fn reserve_transparency_scanner_reuses_exact_reputation_query_binding() {
     assert_eq!(scanner.max_pages_per_tick, 12);
     assert_eq!(scanner.checkpoint_max_bytes.0, 32_768);
 }
-
 #[test]
 fn reserve_transparency_scanner_rejects_substituted_query_handle() {
     let source = format!(
@@ -313,7 +292,6 @@ fn reserve_transparency_scanner_rejects_substituted_query_handle() {
         "unexpected query-binding diagnostic: {error}"
     );
 }
-
 #[test]
 fn disabled_reserve_transparency_scanner_rejects_nondefault_policy() {
     let error = parse_overlay(

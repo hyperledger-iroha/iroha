@@ -174,7 +174,9 @@ available.
 - `/v1/sorafs/pin` is not an alias catalogue. It returns finalized bounded
   `PinManifestSummaryV1` rows through an exclusive digest-keyset page and omits
   alias proofs/cache projections. `/v1/sorafs/aliases` owns alias enumeration
-  and hydrates its responses with `cache_evaluation.successor` (lineage head,
+  behind exact canonical-account request authentication; the legacy handler
+  materializes the authoritative inventory before applying its bounded
+  response page. It hydrates responses with `cache_evaluation.successor` (lineage head,
   approval status, anomalies) and `cache_evaluation.governance`
   (revocation/freeze/rotation flags) sourced from the pin registry snapshot.
   `GET /v1/sorafs/pin/{digest_hex}` is also deliberately separate: it returns

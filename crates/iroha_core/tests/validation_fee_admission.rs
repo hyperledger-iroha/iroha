@@ -1,8 +1,5 @@
 //! Integration coverage for validator admission of Parliament-enacted validation-fee policy.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
-use std::{collections::BTreeMap, num::NonZeroU64, sync::Arc};
-
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -62,7 +59,7 @@ use iroha_data_model::{
 use iroha_primitives::{json::Json, numeric::NumericSpec};
 use mv::storage::StorageReadOnly;
 use sha2::Sha256;
-
+use std::{collections::BTreeMap, num::NonZeroU64, sync::Arc};
 const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
 const TEST_REFERENDUM_DURATION_BLOCKS: u64 = 3_600;
 const TEST_LIFECYCLE_WINDOW_START_HEIGHT: u64 = 2;
@@ -75,13 +72,11 @@ const TEST_POLICY_WINDOW_END_HEIGHT: u64 =
 const TEST_POLICY_ENACTMENT_HEIGHT: u64 = TEST_POLICY_WINDOW_END_HEIGHT + 3_600;
 const TEST_POLICY_EFFECTIVE_HEIGHT: u64 =
     TEST_POLICY_ENACTMENT_HEIGHT + VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
-
 fn quantity(value: &str) -> Quantity {
     value
         .parse()
         .expect("canonical validation-fee fixture quantity")
 }
-
 fn plain_electorate_rules() -> ValidationFeePlainElectorateRulesV1 {
     ValidationFeePlainElectorateRulesV1 {
         voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
@@ -102,7 +97,6 @@ fn plain_electorate_rules() -> ValidationFeePlainElectorateRulesV1 {
             ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
     }
 }
-
 fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {
     BlockHeader::new(
         NonZeroU64::new(height).expect("height"),
@@ -113,30 +107,25 @@ fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {
         0,
     )
 }
-
 fn key_pair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key pair")
 }
-
 fn account(seed: u8) -> (AccountId, KeyPair) {
     let key_pair = key_pair(seed);
     (AccountId::new(key_pair.public_key().clone()), key_pair)
 }
-
 fn fee_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("fees", "paynet").expect("domain id"),
         "fee_token".parse().expect("asset name"),
     )
 }
-
 fn xor_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("fees", "paynet").expect("domain id"),
         "xor".parse().expect("asset name"),
     )
 }
-
 fn payout_contract_address() -> ContractAddress {
     ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -148,7 +137,6 @@ fn payout_contract_address() -> ContractAddress {
     )
     .expect("payout contract address")
 }
-
 fn pool_contract_address() -> ContractAddress {
     ContractAddress::derive(
         &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -160,7 +148,6 @@ fn pool_contract_address() -> ContractAddress {
     )
     .expect("pool contract address")
 }
-
 fn payout_contract_artifact() -> (
     Vec<u8>,
     iroha_data_model::smart_contract::manifest::ContractManifest,
@@ -231,7 +218,6 @@ fn payout_contract_artifact() -> (
         ivm::verify_contract_artifact(&artifact).expect("valid payout contract artifact");
     (artifact, verified.manifest)
 }
-
 fn pool_contract_artifact() -> (
     Vec<u8>,
     iroha_data_model::smart_contract::manifest::ContractManifest,
@@ -289,7 +275,6 @@ fn pool_contract_artifact() -> (
     let verified = ivm::verify_contract_artifact(&artifact).expect("valid pool contract artifact");
     (artifact, verified.manifest)
 }
-
 fn payout_binding(fee_asset: &AssetDefinitionId) -> ValidationFeeTreasuryPayoutBindingV1 {
     let contract_address = payout_contract_address();
     let (contract_artifact, _) = payout_contract_artifact();
@@ -314,7 +299,6 @@ fn payout_binding(fee_asset: &AssetDefinitionId) -> ValidationFeeTreasuryPayoutB
             .collect(),
     }
 }
-
 fn test_state() -> (
     State,
     AccountId,
@@ -376,7 +360,6 @@ fn test_state() -> (
     ));
     (state, user, user_key_pair, recipient, treasury, fee_asset)
 }
-
 fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransaction<'static> {
     let max_clock_drift = state
         .view()
@@ -395,7 +378,6 @@ fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransacti
     )
     .expect("transaction admission should pass stateless checks")
 }
-
 fn commit_empty_genesis_like_block(state: &State) {
     let block_signer = key_pair(240);
     let new_block = BlockBuilder::new(Vec::new())
@@ -409,7 +391,6 @@ fn commit_empty_genesis_like_block(state: &State) {
     let _events = state_block.apply_without_execution(&committed_block, Vec::new());
     state_block.commit().expect("commit initial block hash");
 }
-
 fn validation_fee_policy(
     state: &State,
     fee_asset: AssetDefinitionId,
@@ -433,7 +414,6 @@ fn validation_fee_policy(
         treasury_payout_binding: Some(payout_binding),
     }
 }
-
 fn test_parliament_bodies() -> ParliamentBodies {
     let member = account(250).0;
     let rosters = [
@@ -465,7 +445,6 @@ fn test_parliament_bodies() -> ParliamentBodies {
         rosters,
     }
 }
-
 fn test_roster_root() -> [u8; 32] {
     let encoded = norito::to_bytes(&test_parliament_bodies()).expect("encode Parliament bodies");
     let digest = Blake2b512::digest(encoded);
@@ -473,7 +452,6 @@ fn test_roster_root() -> [u8; 32] {
     root.copy_from_slice(&digest[..32]);
     root
 }
-
 fn test_plain_electorate_snapshot(
     proposal_id: [u8; 32],
     proposal_operator: &AccountId,
@@ -494,7 +472,6 @@ fn test_plain_electorate_snapshot(
     )
     .expect("canonical validation-fee admission PLAIN electorate snapshot")
 }
-
 fn test_parliament_authorization(
     proposal_id: [u8; 32],
     policy_effective_height: u64,
@@ -542,11 +519,9 @@ fn test_parliament_authorization(
         enacted_at_height,
     }
 }
-
 fn policy_treasury_account(policy: &ValidationFeePolicyV1) -> AccountId {
     policy.treasury_account_id.clone()
 }
-
 fn payout_lifecycle_proposal(policy: &ValidationFeePolicyV1) -> ProposalKind {
     ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
         payout_binding: policy
@@ -556,11 +531,9 @@ fn payout_lifecycle_proposal(policy: &ValidationFeePolicyV1) -> ProposalKind {
         plain_electorate_rules: plain_electorate_rules(),
     })
 }
-
 fn payout_lifecycle_proposal_id(policy: &ValidationFeePolicyV1) -> [u8; 32] {
     payout_lifecycle_proposal(policy).fingerprint()
 }
-
 fn policy_proposal(policy: &ValidationFeePolicyV1) -> ProposalKind {
     ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
         policy: policy.clone(),
@@ -568,7 +541,6 @@ fn policy_proposal(policy: &ValidationFeePolicyV1) -> ProposalKind {
         plain_electorate_rules: plain_electorate_rules(),
     })
 }
-
 fn policy_registry(policy: &ValidationFeePolicyV1) -> ValidationFeePolicyRegistryV1 {
     let lifecycle_id = payout_lifecycle_proposal_id(policy);
     let lifecycle_seal = policy
@@ -597,7 +569,6 @@ fn policy_registry(policy: &ValidationFeePolicyV1) -> ValidationFeePolicyRegistr
         registered_policies: vec![entry],
     }
 }
-
 fn seed_open_proposal(
     kind: ProposalKind,
     proposer: &AccountId,
@@ -698,7 +669,6 @@ fn seed_open_proposal(
     );
     proposal_id
 }
-
 fn install_validation_fee_policy(
     state: &State,
     authority: &AccountId,
@@ -715,7 +685,6 @@ fn install_validation_fee_policy(
         upper: TEST_POLICY_WINDOW_END_HEIGHT,
     };
     let proposal_id = policy_proposal(&policy).fingerprint();
-
     // At the exact referendum start, install the immutable payout runtime and
     // persist an open 3,600-block lifecycle referendum. An enactment attempt
     // before explicit finalization must fail closed.
@@ -860,7 +829,6 @@ fn install_validation_fee_policy(
             iroha_core::state::GovernanceReferendumStatus::Open
         );
     }
-
     // Immediately after the inclusive referendum end, explicitly finalize the
     // protected PLAIN referendum and enact only after that evidence exists.
     {
@@ -981,7 +949,6 @@ fn install_validation_fee_policy(
             );
         }
     }
-
     // Only after the lifecycle enactment is persisted, seed the exact
     // 3,600-block policy referendum and prove that it cannot enact while open.
     {
@@ -1008,7 +975,6 @@ fn install_validation_fee_policy(
         stx.apply();
         block.commit().expect("commit open policy referendum");
     }
-
     // The first height after the window explicitly persists the finalized approval.
     {
         let mut block = state.block(block_header(
@@ -1043,7 +1009,6 @@ fn install_validation_fee_policy(
         assert_eq!(evidence.finalized_at_height, TEST_POLICY_WINDOW_END_HEIGHT);
         assert!(evidence.approved);
     }
-
     // The reviewed policy fixes effective=h_end+124,560. The exact 120,960-block
     // activation equation therefore admits enactment only at h_end+3,600.
     {
@@ -1092,7 +1057,6 @@ fn install_validation_fee_policy(
         Some(TEST_POLICY_ENACTMENT_HEIGHT)
     );
 }
-
 fn metadata_for_policy(policy: &ValidationFeePolicyV1, fee_instruction_index: usize) -> Metadata {
     let mut metadata = Metadata::default();
     metadata.insert(
@@ -1115,7 +1079,6 @@ fn metadata_for_policy(policy: &ValidationFeePolicyV1, fee_instruction_index: us
     );
     metadata
 }
-
 fn metadata_for_batch_policy(
     policy: &ValidationFeePolicyV1,
     fee_instruction_index: usize,
@@ -1130,7 +1093,6 @@ fn metadata_for_batch_policy(
     );
     metadata
 }
-
 fn signed_transfer(
     state: &State,
     user: &AccountId,
@@ -1156,7 +1118,6 @@ fn signed_transfer(
         metadata,
     )
 }
-
 fn signed_transfer_with_metadata(
     state: &State,
     user: &AccountId,
@@ -1179,7 +1140,6 @@ fn signed_transfer_with_metadata(
         metadata,
     )
 }
-
 fn signed_transfer_with_fee_instruction(
     state: &State,
     user: &AccountId,
@@ -1200,7 +1160,6 @@ fn signed_transfer_with_fee_instruction(
         metadata,
     )
 }
-
 fn signed_transfer_with_principal_and_fee_instruction(
     state: &State,
     user: &AccountId,
@@ -1236,7 +1195,6 @@ fn signed_transfer_with_principal_and_fee_instruction(
     .with_metadata(metadata)
     .sign(user_key_pair.private_key())
 }
-
 fn signed_ivm_proved_overlay(
     state: &State,
     user: &AccountId,
@@ -1250,7 +1208,6 @@ fn signed_ivm_proved_overlay(
     }
     .encode();
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-
     TransactionBuilder::new(
         *state.network_id_ref(),
         user.clone(),
@@ -1265,7 +1222,6 @@ fn signed_ivm_proved_overlay(
     .with_metadata(metadata)
     .sign(user_key_pair.private_key())
 }
-
 fn signed_transfer_with_explicit_fee_asset_instruction(
     state: &State,
     user: &AccountId,
@@ -1297,7 +1253,6 @@ fn signed_transfer_with_explicit_fee_asset_instruction(
     .with_metadata(metadata)
     .sign(user_key_pair.private_key())
 }
-
 fn signed_transfer_with_explicit_fee_source_instruction(
     state: &State,
     user: &AccountId,
@@ -1329,7 +1284,6 @@ fn signed_transfer_with_explicit_fee_source_instruction(
     .with_metadata(metadata)
     .sign(user_key_pair.private_key())
 }
-
 fn signed_batch_transfer_with_principal_amounts(
     state: &State,
     user: &AccountId,
@@ -1367,7 +1321,6 @@ fn signed_batch_transfer_with_principal_amounts(
         ],
     )
 }
-
 fn signed_batch_transfer_with_entries(
     state: &State,
     user: &AccountId,
@@ -1385,7 +1338,6 @@ fn signed_batch_transfer_with_entries(
     .with_metadata(metadata_for_batch_policy(policy, 0, 2))
     .sign(user_key_pair.private_key())
 }
-
 fn validate_in_block(state: &State, height: u64, tx: SignedTransaction) -> String {
     let accepted = accept_transaction(state, tx);
     let mut block = state.block(block_header(height, 1_700_000_002_000 + height));
@@ -1396,7 +1348,6 @@ fn validate_in_block(state: &State, height: u64, tx: SignedTransaction) -> Strin
         Err(error) => format!("{error:?}"),
     }
 }
-
 fn accept_transaction_error(state: &State, tx: SignedTransaction) -> String {
     let max_clock_drift = state
         .view()
@@ -1417,21 +1368,18 @@ fn accept_transaction_error(state: &State, tx: SignedTransaction) -> String {
         Err(error) => format!("{error:?}"),
     }
 }
-
 fn asset_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Quantity {
     world
         .assets()
         .get(asset_id)
         .map_or_else(Quantity::zero, |value| value.clone().into_inner())
 }
-
 #[test]
 fn raw_fee_asset_transfer_is_rejected_without_exact_active_validation_fee() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
     commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
     install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
-
     let missing_fee_error = validate_in_block(
         &state,
         TEST_POLICY_EFFECTIVE_HEIGHT,
@@ -1449,7 +1397,6 @@ fn raw_fee_asset_transfer_is_rejected_without_exact_active_validation_fee() {
         missing_fee_error.contains("missing validation-fee transfer of 10 minor units"),
         "unexpected missing-fee rejection: {missing_fee_error}"
     );
-
     let exact_fee_result = validate_in_block(
         &state,
         TEST_POLICY_EFFECTIVE_HEIGHT + 1,
@@ -1465,7 +1412,6 @@ fn raw_fee_asset_transfer_is_rejected_without_exact_active_validation_fee() {
     );
     assert_eq!(exact_fee_result, "ok");
 }
-
 #[test]
 fn validation_fee_registry_cannot_be_installed_through_generic_parameter_path() {
     let (state, user, _, _, treasury, fee_asset) = test_state();
@@ -1486,7 +1432,6 @@ fn validation_fee_registry_cannot_be_installed_through_generic_parameter_path() 
         "unexpected protected-registry rejection: {error_debug}"
     );
 }
-
 #[test]
 fn active_registry_rejects_stored_governance_enactment_height_mismatch() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
@@ -1494,7 +1439,6 @@ fn active_registry_rejects_stored_governance_enactment_height_mismatch() {
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
     install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
     let proposal_id = policy_proposal(&policy).fingerprint();
-
     {
         let mut block = state.block(block_header(
             TEST_POLICY_ENACTMENT_HEIGHT + 1,
@@ -1516,7 +1460,6 @@ fn active_registry_rejects_stored_governance_enactment_height_mismatch() {
             .commit()
             .expect("commit adversarial stored-height mismatch");
     }
-
     let error = validate_in_block(
         &state,
         TEST_POLICY_EFFECTIVE_HEIGHT,
@@ -1537,14 +1480,12 @@ fn active_registry_rejects_stored_governance_enactment_height_mismatch() {
         "stored enactment-height mismatch must fail closed: {error}"
     );
 }
-
 #[test]
 fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
     commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset, treasury.clone());
     install_validation_fee_policy(&state, &user, &user_key_pair, policy);
-
     let wrapper_permission: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
             contract: payout_contract_address(),
@@ -1567,7 +1508,6 @@ fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
         1_700_000_007_000,
     ));
     let mut stx = block.transaction();
-
     for (permission, required_owner) in [
         (wrapper_permission, treasury.clone()),
         (pool_permission, treasury.clone()),
@@ -1587,7 +1527,6 @@ fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
                 .contains("forbids delegating its exact runtime permissions"),
             "unexpected payout runtime delegation error: {grant_error}"
         );
-
         let revoke_error = Revoke::account_permission(permission, required_owner)
             .execute(&user, &mut stx)
             .expect_err("required payout runtime permission must remain pinned");
@@ -1599,14 +1538,12 @@ fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
         );
     }
 }
-
 #[test]
 fn ivm_proved_overlay_reaches_active_validation_fee_admission() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
     commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury.clone());
     install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
-
     let principal = || {
         InstructionBox::from(Transfer::asset_quantity(
             AssetId::new(fee_asset.clone(), user.clone()),
@@ -1621,7 +1558,6 @@ fn ivm_proved_overlay_reaches_active_validation_fee_admission() {
             treasury.clone(),
         ))
     };
-
     let missing_fee_error = validate_in_block(
         &state,
         TEST_POLICY_EFFECTIVE_HEIGHT,
@@ -1637,7 +1573,6 @@ fn ivm_proved_overlay_reaches_active_validation_fee_admission() {
         missing_fee_error.contains("missing validation-fee transfer of 10 minor units"),
         "unexpected proved-IVM missing-fee rejection: {missing_fee_error}"
     );
-
     let exact_fee_result = validate_in_block(
         &state,
         TEST_POLICY_EFFECTIVE_HEIGHT + 1,
@@ -1655,14 +1590,12 @@ fn ivm_proved_overlay_reaches_active_validation_fee_admission() {
         "exact proved-IVM overlay fee must pass validation-fee admission: {exact_fee_result}"
     );
 }
-
 #[test]
 fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
     commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury.clone());
     install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
-
     let recipient_asset = AssetId::new(fee_asset.clone(), recipient.clone());
     let treasury_asset = AssetId::new(fee_asset.clone(), treasury.clone());
     let missing_fee_tx = signed_transfer(
@@ -1695,7 +1628,6 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         "treasury must not be credited by a transaction rejected before execution"
     );
     drop(view);
-
     let underpaid_fee_tx = signed_transfer_with_principal_and_fee_instruction(
         &state,
         &user,
@@ -1727,7 +1659,6 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         "wrong fee amount must not credit the treasury"
     );
     drop(view);
-
     let fee_then_overdrawn_principal_tx = TransactionBuilder::new(
         *state.network_id_ref(),
         user.clone(),
@@ -1771,7 +1702,6 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         "fee transfer must roll back when the later principal transfer fails"
     );
     drop(view);
-
     let principal_then_overdrawn_fee_tx = signed_transfer_with_principal_and_fee_instruction(
         &state,
         &user,
@@ -1806,7 +1736,6 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         "treasury must not be credited by a rejected transaction"
     );
     drop(view);
-
     let exact_fee_tx = signed_transfer(
         &state,
         &user,
@@ -1839,14 +1768,12 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         "fee transfer must commit with the principal transfer"
     );
 }
-
 #[test]
 fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
     commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
     install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
-
     let mut exact_fee_tx = signed_transfer(
         &state,
         &user,
@@ -1858,7 +1785,6 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
     );
     let exact_fee_result = validate_in_block(&state, 3, exact_fee_tx.clone());
     assert_eq!(exact_fee_result, "ok");
-
     let mut wrong_policy_hash_metadata = metadata_for_policy(&policy, 1);
     wrong_policy_hash_metadata.insert(
         VALIDATION_FEE_POLICY_HASH_METADATA_KEY
@@ -1876,7 +1802,6 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         true,
         wrong_policy_hash_metadata,
     );
-
     let mut policy_hash_mutation_tx = exact_fee_tx.clone();
     policy_hash_mutation_tx.set_signature(wrong_policy_hash_tx.signature().clone());
     let signature_error = accept_transaction_error(&state, policy_hash_mutation_tx);
@@ -1885,7 +1810,6 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
             || signature_error.contains("signature verification"),
         "policy-hash payload mutation must fail signature admission, got {signature_error}"
     );
-
     let mut wrong_policy_version_metadata = metadata_for_policy(&policy, 1);
     wrong_policy_version_metadata.insert(
         VALIDATION_FEE_POLICY_VERSION_METADATA_KEY
@@ -1911,7 +1835,6 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
             || signature_error.contains("signature verification"),
         "policy-version payload mutation must fail signature admission, got {signature_error}"
     );
-
     let wrong_fee_coordinate_tx = signed_transfer_with_metadata(
         &state,
         &user,
@@ -1930,7 +1853,6 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
             || signature_error.contains("signature verification"),
         "fee-coordinate payload mutation must fail signature admission, got {signature_error}"
     );
-
     let wrong_principal_amount_tx = signed_transfer_with_principal_and_fee_instruction(
         &state,
         &user,
@@ -1949,7 +1871,6 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
             || signature_error.contains("signature verification"),
         "principal-amount payload mutation must fail signature admission, got {signature_error}"
     );
-
     let (alternate_recipient, _) = account(4);
     let wrong_principal_recipient_tx = signed_transfer_with_principal_and_fee_instruction(
         &state,
@@ -1969,7 +1890,6 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
             || signature_error.contains("signature verification"),
         "principal-recipient payload mutation must fail signature admission, got {signature_error}"
     );
-
     let exact_batch_tx = signed_batch_transfer_with_principal_amounts(
         &state,
         &user,
@@ -1982,7 +1902,6 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
     );
     let exact_batch_result = accept_transaction_error(&state, exact_batch_tx.clone());
     assert_eq!(exact_batch_result, "ok");
-
     let wrong_batch_principal_tx = signed_batch_transfer_with_principal_amounts(
         &state,
         &user,
@@ -2001,7 +1920,6 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
             || signature_error.contains("signature verification"),
         "batch-principal payload mutation must fail signature admission, got {signature_error}"
     );
-
     let wrong_batch_source_tx = signed_batch_transfer_with_entries(
         &state,
         &user,
@@ -2031,7 +1949,6 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
             || signature_error.contains("signature verification"),
         "batch-source payload mutation must fail signature admission, got {signature_error}"
     );
-
     let wrong_batch_amount_tx = signed_batch_transfer_with_principal_amounts(
         &state,
         &user,
@@ -2050,7 +1967,6 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
             || signature_error.contains("signature verification"),
         "batch-amount payload mutation must fail signature admission, got {signature_error}"
     );
-
     let wrong_batch_asset = AssetDefinitionId::derive_from_components(
         DomainId::try_new("fees", "paynet").expect("domain id"),
         "wrong_batch_token".parse().expect("asset name"),
@@ -2079,7 +1995,6 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
             || signature_error.contains("signature verification"),
         "batch-asset payload mutation must fail signature admission, got {signature_error}"
     );
-
     let wrong_batch_recipient_tx = signed_batch_transfer_with_principal_amounts(
         &state,
         &user,
@@ -2098,7 +2013,6 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
             || signature_error.contains("signature verification"),
         "batch-recipient payload mutation must fail signature admission, got {signature_error}"
     );
-
     let wrong_fee_amount_tx = signed_transfer_with_fee_instruction(
         &state,
         &user,
@@ -2116,7 +2030,6 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
             || signature_error.contains("signature verification"),
         "fee-amount payload mutation must fail signature admission, got {signature_error}"
     );
-
     let wrong_fee_asset = AssetDefinitionId::derive_from_components(
         DomainId::try_new("fees", "paynet").expect("domain id"),
         "wrong_fee_token".parse().expect("asset name"),
@@ -2140,7 +2053,6 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
             || signature_error.contains("signature verification"),
         "fee-asset payload mutation must fail signature admission, got {signature_error}"
     );
-
     let wrong_fee_source_tx = signed_transfer_with_explicit_fee_source_instruction(
         &state,
         &user,
@@ -2160,7 +2072,6 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
             || signature_error.contains("signature verification"),
         "fee-source payload mutation must fail signature admission, got {signature_error}"
     );
-
     let wrong_treasury_tx = signed_transfer_with_fee_instruction(
         &state,
         &user,

@@ -1,5 +1,4 @@
 //! Exact first-party verifier for the pinned Microsoft Vega-MC profile.
-
 use super::super::{
     VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
     algebra::{eq_evals, eq_evaluate, inner_product, log2_exact},
@@ -18,10 +17,8 @@ use super::{
         MultiRoundInstanceWire, RelaxedSpartanWire, SplitInstanceWire, SumcheckWire,
     },
 };
-
 const DEFAULT_COMMITMENT_WIDTH: usize = 2_048;
 const MAX_APPLICATION_EQ_TABLE_ITEMS: usize = 1 << 21;
-
 /// Verify one already decoded proof under one already decoded canonical key.
 pub(super) fn verify(
     proof: &McProofWire,
@@ -34,18 +31,15 @@ pub(super) fn verify(
     {
         return invalid();
     }
-
     let application_key = derive_and_match_key(&key.application_key)?;
     let verifier_key = derive_and_match_key(&key.verifier_commitment_key)?;
     let digest = key.digest()?;
-
     let mut step_instances = proof.step_instances.clone();
     for instance in &mut step_instances {
         instance.shared.clone_from(&proof.shared_commitment);
     }
     let mut core_instance = proof.core_instance.clone();
     core_instance.shared.clone_from(&proof.shared_commitment);
-
     for (index, instance) in step_instances.iter().enumerate() {
         let mut transcript = VegaTranscriptV1::new_neutron_nova();
         transcript
@@ -62,7 +56,6 @@ pub(super) fn verify(
             .map_err(|_| McCodecError::InvalidEncoding)?;
         validate_split_instance(instance, &key.step_shape, &mut transcript)?;
     }
-
     let mut core_transcript = VegaTranscriptV1::new_neutron_nova();
     core_transcript
         .absorb_raw(b"vk", &digest)
@@ -71,13 +64,11 @@ pub(super) fn verify(
         .absorb_scalars(b"public_values", &core_instance.public_values)
         .map_err(|_| McCodecError::InvalidEncoding)?;
     validate_split_instance(&core_instance, &key.core_shape, &mut core_transcript)?;
-
     let original_public_values = step_instances
         .iter()
         .map(|instance| instance.public_values.clone())
         .collect::<Vec<_>>();
     let core_public_values = core_instance.public_values.clone();
-
     let padded_count = step_instances
         .len()
         .checked_next_power_of_two()
@@ -95,7 +86,6 @@ pub(super) fn verify(
         .map(split_to_regular)
         .collect::<Result<Vec<_>, _>>()?;
     let core_regular = split_to_regular(&core_instance)?;
-
     let mut transcript = VegaTranscriptV1::new_neutron_nova();
     transcript
         .absorb_raw(b"vk", &digest)
@@ -115,7 +105,6 @@ pub(super) fn verify(
     transcript
         .absorb_scalar(b"T", Scalar::zero())
         .map_err(|_| McCodecError::InvalidEncoding)?;
-
     let rounds_b = log2_exact(step_regular.len()).map_err(|_| McCodecError::InvalidEncoding)?;
     let step_variables = key.step_shape.variables()?;
     let rounds_x =
@@ -135,7 +124,6 @@ pub(super) fn verify(
                 .map_err(|_| McCodecError::InvalidEncoding)?,
         );
     }
-
     validate_multi_round_instance(
         &proof.verifier_instance,
         &key.verifier_shape,
@@ -160,7 +148,6 @@ pub(super) fn verify(
     if r_y.len() != rounds_y {
         return invalid();
     }
-
     let folded_step = fold_instances(r_b, &step_regular)?;
     let random_instance = RelaxedInstance {
         witness_commitment: proof.random_instance.witness_commitment.to_local()?,
@@ -183,7 +170,6 @@ pub(super) fn verify(
         &folded_verifier,
         &mut transcript,
     )?;
-
     let row_weights = eq_evals(r_x).map_err(|_| McCodecError::InvalidEncoding)?;
     let column_weights = application_eq_evals(r_y)?;
     let eval_a_step = key.step_shape.a.evaluate(&row_weights, &column_weights)?;
@@ -192,7 +178,6 @@ pub(super) fn verify(
     let eval_a_core = key.core_shape.a.evaluate(&row_weights, &column_weights)?;
     let eval_b_core = key.core_shape.b.evaluate(&row_weights, &column_weights)?;
     let eval_c_core = key.core_shape.c.evaluate(&row_weights, &column_weights)?;
-
     let variables_log2 = log2_exact(step_variables).map_err(|_| McCodecError::InvalidEncoding)?;
     let mut folded_sparse = Vec::with_capacity(folded_step.public_inputs.len() + 1);
     folded_sparse.push(Scalar::one());
@@ -219,7 +204,6 @@ pub(super) fn verify(
     {
         return invalid();
     }
-
     let evaluation_batching = transcript
         .squeeze(b"c_eval")
         .map_err(|_| McCodecError::InvalidEncoding)?;
@@ -264,7 +248,6 @@ pub(super) fn verify(
         &batched_evaluation,
         &proof.evaluation_argument,
     )?;
-
     // Keep the derived keys live in the verifier boundary. The application key
     // equality check above prevents a substituted serialized generator set,
     // while the wire key is used directly by the final compatibility equation.
@@ -273,7 +256,6 @@ pub(super) fn verify(
     }
     Ok((original_public_values, core_public_values))
 }
-
 fn derive_and_match_key(wire: &HyraxKeyWire) -> Result<CommitmentKey, McCodecError> {
     let key =
         CommitmentKey::derive(b"ck", wire.columns).map_err(|_| McCodecError::InvalidEncoding)?;
@@ -285,7 +267,6 @@ fn derive_and_match_key(wire: &HyraxKeyWire) -> Result<CommitmentKey, McCodecErr
     }
     Ok(key)
 }
-
 fn validate_split_instance(
     instance: &SplitInstanceWire,
     shape: &SplitShapeWire,
@@ -332,7 +313,6 @@ fn validate_split_instance(
         .absorb_commitment(b"comm_W_rest", &instance.rest.to_local()?)
         .map_err(|_| McCodecError::InvalidEncoding)
 }
-
 fn validate_multi_round_instance(
     instance: &MultiRoundInstanceWire,
     shape: &MultiRoundShapeWire,
@@ -367,7 +347,6 @@ fn validate_multi_round_instance(
     }
     Ok(())
 }
-
 fn validate_optional_segment(
     commitment: Option<&McCommitment>,
     values: usize,
@@ -379,7 +358,6 @@ fn validate_optional_segment(
         _ => invalid(),
     }
 }
-
 fn validate_commitment(
     commitment: &McCommitment,
     values: usize,
@@ -391,7 +369,6 @@ fn validate_commitment(
         Ok(())
     }
 }
-
 fn split_to_regular(instance: &SplitInstanceWire) -> Result<Instance, McCodecError> {
     let commitments = [
         instance.shared.as_ref(),
@@ -413,7 +390,6 @@ fn split_to_regular(instance: &SplitInstanceWire) -> Result<Instance, McCodecErr
         public_inputs,
     })
 }
-
 fn multi_round_to_regular(instance: &MultiRoundInstanceWire) -> Result<Instance, McCodecError> {
     let witness_commitment = concatenate_commitments(instance.commitments.iter())?;
     let challenge_count = instance
@@ -435,7 +411,6 @@ fn multi_round_to_regular(instance: &MultiRoundInstanceWire) -> Result<Instance,
         public_inputs,
     })
 }
-
 fn concatenate_commitments<'a>(
     commitments: impl Iterator<Item = &'a McCommitment>,
 ) -> Result<Commitment, McCodecError> {
@@ -445,7 +420,6 @@ fn concatenate_commitments<'a>(
     }
     Commitment::from_points(points).map_err(|_| McCodecError::InvalidEncoding)
 }
-
 fn fold_instances(challenges: &[Scalar], instances: &[Instance]) -> Result<Instance, McCodecError> {
     if instances.is_empty()
         || instances.len()
@@ -482,7 +456,6 @@ fn fold_instances(challenges: &[Scalar], instances: &[Instance]) -> Result<Insta
         public_inputs,
     })
 }
-
 fn weights_from_challenges(
     challenges: &[Scalar],
     count: usize,
@@ -509,7 +482,6 @@ fn weights_from_challenges(
     }
     Ok(weights)
 }
-
 fn verify_nifs(
     key: &CommitmentKey,
     shape: &RegularShapeWire,
@@ -529,7 +501,6 @@ fn verify_nifs(
     {
         return invalid();
     }
-
     transcript
         .absorb_relaxed_r1cs_instance(
             b"U1",
@@ -548,7 +519,6 @@ fn verify_nifs(
     let challenge = transcript
         .squeeze(b"r")
         .map_err(|_| McCodecError::InvalidEncoding)?;
-
     let witness_commitment = fold(
         &[&relaxed.witness_commitment, &regular.witness_commitment],
         &[Scalar::one(), challenge],
@@ -573,7 +543,6 @@ fn verify_nifs(
         relaxation: relaxed.relaxation + challenge,
     })
 }
-
 fn verify_relaxed_spartan(
     proof: &RelaxedSpartanWire,
     shape: &RegularShapeWire,
@@ -609,14 +578,12 @@ fn verify_relaxed_spartan(
     {
         return invalid();
     }
-
     transcript
         .absorb_scalar(b"u_relaxed", instance.relaxation)
         .map_err(|_| McCodecError::InvalidEncoding)?;
     transcript
         .absorb_scalars(b"X_relaxed", &instance.public_inputs)
         .map_err(|_| McCodecError::InvalidEncoding)?;
-
     let mut tau = Vec::with_capacity(outer_rounds);
     for _ in 0..outer_rounds {
         tau.push(
@@ -637,7 +604,6 @@ fn verify_relaxed_spartan(
     transcript
         .absorb_scalars(b"claims_outer", &proof.outer_claims)
         .map_err(|_| McCodecError::InvalidEncoding)?;
-
     let batching_challenge = transcript
         .squeeze(b"r")
         .map_err(|_| McCodecError::InvalidEncoding)?;
@@ -667,7 +633,6 @@ fn verify_relaxed_spartan(
         witness_point,
     )
     .map_err(|_| McCodecError::InvalidEncoding)?;
-
     let row_weights = eq_evals(&row_point).map_err(|_| McCodecError::InvalidEncoding)?;
     let column_weights = eq_evals(&column_point).map_err(|_| McCodecError::InvalidEncoding)?;
     if column_weights.len() != assignment_table_len {
@@ -698,7 +663,6 @@ fn verify_relaxed_spartan(
     if inner_final != batched_matrix_evaluation * assignment_evaluation {
         return invalid();
     }
-
     transcript
         .absorb_scalars(b"v_W", &proof.witness_opening)
         .map_err(|_| McCodecError::InvalidEncoding)?;
@@ -706,7 +670,6 @@ fn verify_relaxed_spartan(
         .absorb_scalars(b"v_E", &proof.error_opening)
         .map_err(|_| McCodecError::InvalidEncoding)
 }
-
 fn sumcheck_from_wire(proof: &SumcheckWire, degree: usize) -> Result<SumcheckProof, McCodecError> {
     let rounds = proof
         .rounds
@@ -722,7 +685,6 @@ fn sumcheck_from_wire(proof: &SumcheckWire, degree: usize) -> Result<SumcheckPro
         .collect::<Result<Vec<_>, _>>()?;
     Ok(SumcheckProof::new(rounds))
 }
-
 fn application_eq_evals(point: &[Scalar]) -> Result<Vec<Scalar>, McCodecError> {
     let size = application_eq_table_size(point.len())?;
     let mut evaluations = vec![Scalar::zero(); size];
@@ -738,7 +700,6 @@ fn application_eq_evals(point: &[Scalar]) -> Result<Vec<Scalar>, McCodecError> {
     }
     Ok(evaluations)
 }
-
 fn application_eq_table_size(variable_count: usize) -> Result<usize, McCodecError> {
     let size = 1_usize
         .checked_shl(u32::try_from(variable_count).map_err(|_| McCodecError::InvalidEncoding)?)
@@ -748,7 +709,6 @@ fn application_eq_table_size(variable_count: usize) -> Result<usize, McCodecErro
     }
     Ok(size)
 }
-
 fn power_polynomial_evaluate(
     base: Scalar,
     variables: usize,
@@ -770,7 +730,6 @@ fn power_polynomial_evaluate(
         },
     ))
 }
-
 fn sparse_polynomial_evaluate(
     variables: usize,
     evaluations: &[Scalar],
@@ -809,7 +768,6 @@ fn sparse_polynomial_evaluate(
             value * (Scalar::one() - coordinate)
         }))
 }
-
 fn verify_hyrax_opening(
     key: &HyraxKeyWire,
     evaluation_key: &HyraxKeyWire,
@@ -848,7 +806,6 @@ fn verify_hyrax_opening(
         argument,
     )
 }
-
 fn verify_linear_ipa(
     key: &HyraxKeyWire,
     evaluation_key: &HyraxKeyWire,
@@ -902,7 +859,6 @@ fn verify_linear_ipa(
     let challenge = transcript
         .squeeze(b"r")
         .map_err(|_| McCodecError::InvalidEncoding)?;
-
     let lhs_vector = vector_commitment.mul_scalar(challenge) + argument.delta;
     let rhs_vector = msm(
         &argument.responses,
@@ -925,21 +881,17 @@ fn verify_linear_ipa(
     }
     Ok(())
 }
-
 fn scalar_from_usize(value: usize) -> Result<Scalar, McCodecError> {
     u64::try_from(value)
         .map(Scalar::from_u64)
         .map_err(|_| McCodecError::InvalidEncoding)
 }
-
 fn invalid<T>() -> Result<T, McCodecError> {
     Err(McCodecError::InvalidEncoding)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const PYTHON_VK: &[u8] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../vendor/vega-prover/reference/fixtures/cubic/python_vk.bin"
@@ -948,7 +900,6 @@ mod tests {
         env!("CARGO_MANIFEST_DIR"),
         "/../../vendor/vega-prover/reference/fixtures/cubic/python_standalone_proof.bin"
     ));
-
     #[test]
     fn independent_python_proof_verifies_and_equation_mutation_fails() {
         let key = McVerifierKeyWire::decode(PYTHON_VK).expect("canonical Python key");
@@ -961,12 +912,10 @@ mod tests {
         let (step, core) = verify(&proof, &key, key.num_steps).expect("independent proof verifies");
         assert_eq!(step, vec![vec![Scalar::from_u64(15)]; key.num_steps]);
         assert_eq!(core, vec![Scalar::from_u64(15)]);
-
         let mut corrupted = proof.clone();
         corrupted.relaxed_spartan.error_blinding += Scalar::one();
         assert!(verify(&corrupted, &key, key.num_steps).is_err());
     }
-
     #[test]
     fn application_equality_table_bound_covers_exact_figure9_width() {
         assert_eq!(application_eq_table_size(21), Ok(1 << 21));

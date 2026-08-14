@@ -1,7 +1,5 @@
-use rand::{SeedableRng as _, rngs::StdRng};
-
 use super::*;
-
+use rand::{SeedableRng as _, rngs::StdRng};
 #[test]
 fn retained_polynomial_batches_are_byte_exact_across_thread_counts() {
     let native_columns = (0_u64..17)
@@ -43,13 +41,11 @@ fn retained_polynomial_batches_are_byte_exact_across_thread_counts() {
                 (commitment, replay)
             })
     };
-
     let single = run(1);
     let release = run(4);
     assert_eq!(single, release);
     assert_eq!(single.0, single.1);
 }
-
 #[test]
 fn retained_polynomial_commitment_rejects_before_witness_source_work() {
     fn reject_before_source(
@@ -89,7 +85,6 @@ fn retained_polynomial_commitment_rejects_before_witness_source_work() {
             "shape and commitment allocation preflight precede source work"
         );
     }
-
     reject_before_source(b"", b"node", 0, 3, 6, 2, 3, &[]);
     reject_before_source(b"leaf", b"", 0, 3, 6, 2, 3, &[]);
     reject_before_source(b"leaf", b"node", 0, 3, 3, 2, 3, &[]);
@@ -100,7 +95,6 @@ fn retained_polynomial_commitment_rejects_before_witness_source_work() {
     reject_before_source(b"leaf", b"node", 0, 3, 6, 2, 3, &[64]);
     reject_before_source(b"leaf", b"node", usize::from(u16::MAX) + 1, 3, 6, 2, 3, &[]);
     reject_before_source(b"leaf", b"node", 0, 3, 6, usize::from(u16::MAX) + 1, 3, &[]);
-
     let calls = std::cell::Cell::new(0_usize);
     let mut rng = StdRng::from_seed([0xD3; 32]);
     assert_eq!(

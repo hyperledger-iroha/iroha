@@ -1,4 +1,13 @@
+#[cfg(test)]
+use blstrs::G2Prepared;
+use blstrs::{G1Affine, G2Affine};
 use core::marker::PhantomData;
+use group::prime::PrimeCurveAffine;
+use parking_lot::Mutex;
+#[cfg(feature = "rand")]
+use rand::rngs::OsRng;
+#[cfg(feature = "rand")]
+use rand_core::TryCryptoRng;
 #[cfg(test)]
 use std::sync::Arc;
 use std::{
@@ -6,25 +15,12 @@ use std::{
     sync::OnceLock,
     vec::Vec,
 };
-
-#[cfg(test)]
-use blstrs::G2Prepared;
-use blstrs::{G1Affine, G2Affine};
-use group::prime::PrimeCurveAffine;
-use parking_lot::Mutex;
-#[cfg(feature = "rand")]
-use rand::rngs::OsRng;
-#[cfg(feature = "rand")]
-use rand_core::TryCryptoRng;
 use w3f_bls::{
     EngineBLS, PublicKey as W3fPublicKey, SerializableToBytes as _, Signature as W3fSignature,
 };
 use zeroize::{Zeroize as _, Zeroizing};
-
 pub(super) const MESSAGE_CONTEXT: &[u8; 20] = b"for signing messages";
-
 use crate::{Algorithm, Error, KeyGenOption, ParseError};
-
 #[cfg(feature = "rand")]
 fn checked_seed_from_rng<R>(context: &str, rng: &mut R) -> Result<Zeroizing<Vec<u8>>, Error>
 where
@@ -36,30 +32,24 @@ where
     ensure_bls_seed_material_not_all_zero(context, seed.as_slice())?;
     Ok(seed)
 }
-
 fn bls_seed_material_is_all_zero(seed: &[u8]) -> bool {
     !seed.is_empty() && seed.iter().all(|&byte| byte == 0)
 }
-
 fn bls_seed_material_all_zero_error(context: &str) -> Error {
     Error::KeyGen(format!("BLS {context} seed material must not be all zero"))
 }
-
 fn ensure_bls_seed_material_not_all_zero(context: &str, seed: &[u8]) -> Result<(), Error> {
     if bls_seed_material_is_all_zero(seed) {
         return Err(bls_seed_material_all_zero_error(context));
     }
     Ok(())
 }
-
 fn bls_signature_material_is_all_zero(signature: &[u8]) -> bool {
     !signature.is_empty() && signature.iter().all(|&byte| byte == 0)
 }
-
 fn bls_public_key_material_is_all_zero(public_key: &[u8]) -> bool {
     !public_key.is_empty() && public_key.iter().all(|&byte| byte == 0)
 }
-
 fn ensure_bls_signature_material_not_all_zero(signature: &[u8]) -> Result<(), Error> {
     if bls_signature_material_is_all_zero(signature) {
         return Err(ParseError("BLS signature material must not be all zero".to_string()).into());
@@ -67,19 +57,31 @@ fn ensure_bls_signature_material_not_all_zero(signature: &[u8]) -> Result<(), Er
     Ok(())
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static PUBLIC_KEY_CACHE_CALLS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_public_key_cache_calls() {
+    PUBLIC_KEY_CACHE_CALLS.with(|calls| calls.set(0));
+}
+
+#[cfg(test)]
+fn public_key_cache_calls() -> usize {
+    PUBLIC_KEY_CACHE_CALLS.with(core::cell::Cell::get)
+}
+
 pub trait BlsConfiguration {
     const ALGORITHM: Algorithm;
     // true: Normal (pk in G1, sig in G2); false: Small (pk in G2, sig in G1)
     const NORMAL: bool;
 }
-
 #[doc(hidden)]
 #[cfg(test)]
 pub trait PreparedPublicKeyCacheAccess: BlsConfiguration {}
-
 #[cfg(test)]
 impl<C: BlsConfiguration> PreparedPublicKeyCacheAccess for C {}
-
 // Public key wrapper stores compressed bytes; orientation depends on C::NORMAL
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicKey<C: BlsConfiguration> {
@@ -90,12 +92,10 @@ impl<C: BlsConfiguration> PublicKey<C> {
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
-
     pub fn to_bytes(&self) -> Vec<u8> {
         self.bytes.clone()
     }
 }
-
 // Private key wrapper holds the scalar
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SecretKey<C: BlsConfiguration> {
@@ -106,11 +106,9 @@ impl<C: BlsConfiguration> SecretKey<C> {
     pub fn to_bytes(&self) -> [u8; 32] {
         *self.bytes
     }
-
     pub(crate) fn to_zeroizing_bytes(&self) -> Zeroizing<[u8; 32]> {
         Zeroizing::new(*self.bytes)
     }
-
     fn from_bytes(bytes: Zeroizing<[u8; 32]>) -> Self {
         Self {
             bytes,
@@ -123,22 +121,18 @@ impl<C: BlsConfiguration> zeroize::Zeroize for SecretKey<C> {
         self.bytes.zeroize();
     }
 }
-
 pub struct BlsImpl<C: BlsConfiguration + ?Sized>(PhantomData<C>);
-
 impl<C: BlsConfiguration> BlsImpl<C> {
     /// Return the exact canonical signature length for this BLS orientation.
     pub const fn signature_len() -> usize {
         if C::NORMAL { 96 } else { 48 }
     }
-
     #[allow(clippy::similar_names)]
     pub fn keypair(
         option: KeyGenOption<SecretKey<C>>,
     ) -> Result<(PublicKey<C>, SecretKey<C>), Error> {
         Self::try_keypair(option)
     }
-
     #[allow(clippy::similar_names)]
     pub fn try_keypair(
         mut option: KeyGenOption<SecretKey<C>>,
@@ -163,12 +157,10 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             }
             KeyGenOption::FromPrivateKey(key) => key,
         };
-
         let public_key =
             Self::derive_public_key(&sk).map_err(|err| Error::KeyGen(err.to_string()))?;
         Ok((public_key, sk))
     }
-
     #[cfg(feature = "rand")]
     pub(super) fn random_keypair_from_rng<R>(
         rng: &mut R,
@@ -187,7 +179,6 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             Self::derive_public_key(&sk).map_err(|err| Error::KeyGen(err.to_string()))?;
         Ok((public_key, sk))
     }
-
     fn secret_key_from_generated_bytes(bytes: &[u8]) -> Result<SecretKey<C>, Error> {
         let mut arr = Zeroizing::new([0u8; 32]);
         if bytes.len() != arr.len() {
@@ -198,11 +189,9 @@ impl<C: BlsConfiguration> BlsImpl<C> {
         arr.as_mut().copy_from_slice(bytes);
         Ok(SecretKey::from_bytes(arr))
     }
-
     pub fn sign(message: &[u8], sk: &SecretKey<C>) -> Result<Vec<u8>, Error> {
         Self::try_sign(message, sk)
     }
-
     pub fn try_sign(message: &[u8], sk: &SecretKey<C>) -> Result<Vec<u8>, Error> {
         // Produce signature with w3f to match canonical encoding exactly.
         let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
@@ -216,7 +205,6 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             Ok(sk_w.sign(&msg).to_bytes())
         }
     }
-
     pub fn derive_public_key(sk: &SecretKey<C>) -> Result<PublicKey<C>, ParseError> {
         // Public key depends on orientation; derive via w3f to ensure stable encoding
         let pk_bytes = if C::NORMAL {
@@ -233,7 +221,6 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             _m: PhantomData,
         })
     }
-
     pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey<C>) -> Result<(), Error> {
         if C::NORMAL {
             verify_w3f::<w3f_bls::ZBLS>(message, signature, &pk.bytes)
@@ -241,7 +228,6 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             verify_w3f::<w3f_bls::TinyBLS381>(message, signature, &pk.bytes)
         }
     }
-
     pub(crate) fn verify_aggregate_same_message(
         message: &[u8],
         signatures: &[&[u8]],
@@ -257,7 +243,6 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             )
         }
     }
-
     /// Aggregate a sequence of BLS signatures (same-message context) into a single signature.
     /// The caller is responsible for ensuring all signatures are valid and from the same suite.
     /// Rejects aggregates that cancel to the identity element.
@@ -270,7 +255,6 @@ impl<C: BlsConfiguration> BlsImpl<C> {
                 .map(|signature| signature.to_bytes())
         }
     }
-
     /// Verify a pre-aggregated signature for the same-message case.
     pub(crate) fn verify_preaggregated_same_message(
         message: &[u8],
@@ -291,7 +275,6 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             )
         }
     }
-
     /// Verify every signature against its paired distinct message and public key.
     ///
     /// This intentionally preserves per-signature validity instead of deriving
@@ -307,7 +290,6 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             verify_multi_message_w3f::<w3f_bls::TinyBLS381>(messages, signatures, public_keys)
         }
     }
-
     pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey<C>, ParseError> {
         if bls_public_key_material_is_all_zero(payload) {
             return Err(ParseError(
@@ -326,6 +308,28 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             bytes: payload.to_vec(),
             _m: PhantomData,
         })
+    }
+
+    /// Validate compressed public-key bytes for bounded decoding without
+    /// consulting or populating the process-wide public-key caches.
+    pub(crate) fn validate_public_key_for_decode(payload: &[u8]) -> Result<(), ParseError> {
+        if bls_public_key_material_is_all_zero(payload) {
+            return Err(ParseError(
+                "BLS public key material must not be all zero".to_string(),
+            ));
+        }
+        let valid = if C::NORMAL {
+            to_g1(payload).is_some()
+        } else {
+            to_g2(payload).is_some()
+        };
+        if valid {
+            Ok(())
+        } else if C::NORMAL {
+            Err(ParseError("invalid G1 public key".to_string()))
+        } else {
+            Err(ParseError("invalid G2 public key".to_string()))
+        }
     }
 
     pub fn parse_private_key(payload: &[u8]) -> Result<SecretKey<C>, ParseError> {
@@ -348,7 +352,6 @@ impl<C: BlsConfiguration> BlsImpl<C> {
         Ok(SecretKey::from_bytes(arr))
     }
 }
-
 fn parse_w3f_signature<E: EngineBLS>(bytes: &[u8]) -> Result<W3fSignature<E>, Error> {
     ensure_bls_signature_material_not_all_zero(bytes)?;
     let signature = W3fSignature::<E>::from_bytes(bytes)
@@ -363,7 +366,6 @@ fn parse_w3f_signature<E: EngineBLS>(bytes: &[u8]) -> Result<W3fSignature<E>, Er
     }
     Ok(signature)
 }
-
 fn parse_w3f_public_key<E: EngineBLS>(bytes: &[u8]) -> Result<W3fPublicKey<E>, Error> {
     if bls_public_key_material_is_all_zero(bytes) {
         return Err(ParseError("BLS public key material must not be all zero".to_string()).into());
@@ -380,10 +382,8 @@ fn parse_w3f_public_key<E: EngineBLS>(bytes: &[u8]) -> Result<W3fPublicKey<E>, E
     }
     Ok(public_key)
 }
-
 fn aggregate_w3f_signatures<E: EngineBLS>(signatures: &[&[u8]]) -> Result<W3fSignature<E>, Error> {
     use core::ops::AddAssign as _;
-
     let mut signatures = signatures.iter();
     let first = signatures.next().ok_or(Error::BadSignature)?;
     let first = parse_w3f_signature::<E>(first)?;
@@ -399,12 +399,10 @@ fn aggregate_w3f_signatures<E: EngineBLS>(signatures: &[&[u8]]) -> Result<W3fSig
     }
     Ok(aggregate)
 }
-
 fn aggregate_w3f_public_keys<E: EngineBLS>(
     public_keys: &[&[u8]],
 ) -> Result<W3fPublicKey<E>, Error> {
     use core::ops::AddAssign as _;
-
     let mut seen = BTreeSet::new();
     let mut public_keys = public_keys.iter();
     let first_bytes = public_keys.next().ok_or(Error::BadSignature)?;
@@ -427,7 +425,6 @@ fn aggregate_w3f_public_keys<E: EngineBLS>(
     }
     Ok(aggregate)
 }
-
 fn verify_w3f<E: EngineBLS>(
     message: &[u8],
     signature: &[u8],
@@ -442,7 +439,6 @@ fn verify_w3f<E: EngineBLS>(
         Err(Error::BadSignature)
     }
 }
-
 fn verify_aggregate_same_message_w3f<E: EngineBLS>(
     message: &[u8],
     signatures: &[&[u8]],
@@ -460,7 +456,6 @@ fn verify_aggregate_same_message_w3f<E: EngineBLS>(
         Err(Error::BadSignature)
     }
 }
-
 fn verify_preaggregated_same_message_w3f<E: EngineBLS>(
     message: &[u8],
     aggregated_signature: &[u8],
@@ -478,7 +473,6 @@ fn verify_preaggregated_same_message_w3f<E: EngineBLS>(
         Err(Error::BadSignature)
     }
 }
-
 fn ensure_distinct_messages(messages: &[&[u8]]) -> Result<(), Error> {
     let mut seen = BTreeSet::new();
     for &message in messages {
@@ -488,7 +482,6 @@ fn ensure_distinct_messages(messages: &[&[u8]]) -> Result<(), Error> {
     }
     Ok(())
 }
-
 fn verify_multi_message_w3f<E: EngineBLS>(
     messages: &[&[u8]],
     signatures: &[&[u8]],
@@ -500,7 +493,6 @@ fn verify_multi_message_w3f<E: EngineBLS>(
         return Err(Error::BadSignature);
     }
     ensure_distinct_messages(messages)?;
-
     for ((message, signature), public_key) in messages
         .iter()
         .zip(signatures.iter())
@@ -510,32 +502,28 @@ fn verify_multi_message_w3f<E: EngineBLS>(
     }
     Ok(())
 }
-
 const PUBKEY_CACHE_MAX: usize = 4096;
-
 fn g1_pubkey_cache() -> &'static Mutex<BTreeMap<Vec<u8>, G1Affine>> {
     static CACHE: OnceLock<Mutex<BTreeMap<Vec<u8>, G1Affine>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
-
 fn g2_pubkey_cache() -> &'static Mutex<BTreeMap<Vec<u8>, G2Affine>> {
     static CACHE: OnceLock<Mutex<BTreeMap<Vec<u8>, G2Affine>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
-
 #[cfg(test)]
 fn g2_prepared_cache() -> &'static Mutex<BTreeMap<Vec<u8>, Arc<G2Prepared>>> {
     static CACHE: OnceLock<Mutex<BTreeMap<Vec<u8>, Arc<G2Prepared>>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
-
 #[cfg(test)]
 fn g2_prepared_generator() -> &'static Arc<G2Prepared> {
     static GENERATOR: OnceLock<Arc<G2Prepared>> = OnceLock::new();
     GENERATOR.get_or_init(|| Arc::new(G2Prepared::from(G2Affine::generator())))
 }
-
 fn to_g1_public_key(bytes: &[u8]) -> Option<G1Affine> {
+    #[cfg(test)]
+    PUBLIC_KEY_CACHE_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
     if let Some(point) = g1_pubkey_cache().lock().get(bytes).copied() {
         return Some(point);
     }
@@ -547,8 +535,9 @@ fn to_g1_public_key(bytes: &[u8]) -> Option<G1Affine> {
     cache.insert(bytes.to_vec(), point);
     Some(point)
 }
-
 fn to_g2_public_key(bytes: &[u8]) -> Option<G2Affine> {
+    #[cfg(test)]
+    PUBLIC_KEY_CACHE_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
     if let Some(point) = g2_pubkey_cache().lock().get(bytes).copied() {
         return Some(point);
     }
@@ -560,7 +549,6 @@ fn to_g2_public_key(bytes: &[u8]) -> Option<G2Affine> {
     cache.insert(bytes.to_vec(), point);
     Some(point)
 }
-
 #[cfg(test)]
 fn to_g2_prepared(bytes: &[u8]) -> Option<Arc<G2Prepared>> {
     if let Some(point) = g2_prepared_cache().lock().get(bytes).cloned() {
@@ -575,7 +563,6 @@ fn to_g2_prepared(bytes: &[u8]) -> Option<Arc<G2Prepared>> {
     cache.insert(bytes.to_vec(), Arc::clone(&prepared));
     Some(prepared)
 }
-
 fn to_g1(bytes: &[u8]) -> Option<G1Affine> {
     if bytes.len() != 48 {
         return None;
@@ -606,7 +593,6 @@ fn to_g2(bytes: &[u8]) -> Option<G2Affine> {
     }
     Some(point)
 }
-
 #[cfg(test)]
 pub(super) fn detect_variant_normal(
     message: &[u8],
@@ -624,7 +610,6 @@ pub(super) fn detect_variant_normal(
     } else {
         return (false, false);
     };
-
     // CONCAT: Message::new(context, message)
     let ok_concat = {
         let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
@@ -640,7 +625,6 @@ pub(super) fn detect_variant_normal(
     };
     (ok_concat, ok_aug)
 }
-
 #[cfg(test)]
 pub(super) fn detect_variant_small(
     message: &[u8],
@@ -658,7 +642,6 @@ pub(super) fn detect_variant_small(
     } else {
         return (false, false);
     };
-
     let ok_concat = {
         let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
         sig.verify(&msg, &pk)
@@ -672,7 +655,6 @@ pub(super) fn detect_variant_small(
     };
     (ok_concat, ok_aug)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -690,7 +672,6 @@ mod tests {
         const ALGORITHM: Algorithm = Algorithm::BlsSmall;
         const NORMAL: bool = false;
     }
-
     #[test]
     fn smoke_normal() {
         let (pk, sk) =
@@ -698,7 +679,6 @@ mod tests {
         let sig = BlsImpl::<CNormal>::sign(b"abc", &sk).expect("BLS sign");
         assert!(BlsImpl::<CNormal>::verify(b"abc", &sig, &pk).is_ok());
     }
-
     #[test]
     fn smoke_small() {
         let (pk, sk) =
@@ -706,7 +686,6 @@ mod tests {
         let sig = BlsImpl::<CSmall>::sign(b"xyz", &sk).expect("BLS sign");
         assert!(BlsImpl::<CSmall>::verify(b"xyz", &sig, &pk).is_ok());
     }
-
     fn assert_seeded_keypair_deterministic<C: BlsConfiguration>() {
         let (public_one, private_one) =
             BlsImpl::<C>::try_keypair(KeyGenOption::UseSeed(vec![0x42; 24]))
@@ -714,32 +693,26 @@ mod tests {
         let (public_two, private_two) =
             BlsImpl::<C>::try_keypair(KeyGenOption::UseSeed(vec![0x42; 24]))
                 .expect("second seeded BLS keypair");
-
         assert_eq!(public_one.to_bytes(), public_two.to_bytes());
         assert_eq!(private_one.to_bytes(), private_two.to_bytes());
     }
-
     #[test]
     fn seeded_keypairs_are_deterministic() {
         assert_seeded_keypair_deterministic::<CNormal>();
         assert_seeded_keypair_deterministic::<CSmall>();
     }
-
     #[test]
     fn secret_key_clone_preserves_bytes_and_signing() {
         let (public_key, secret_key) =
             BlsImpl::<CNormal>::try_keypair(KeyGenOption::UseSeed(vec![0x5B; 24]))
                 .expect("seeded BLS keypair");
         let cloned = secret_key.clone();
-
         assert_eq!(secret_key.to_bytes(), cloned.to_bytes());
-
         let signature = BlsImpl::<CNormal>::sign(b"cloned bls secret key", &cloned)
             .expect("clone signs messages");
         BlsImpl::<CNormal>::verify(b"cloned bls secret key", &signature, &public_key)
             .expect("clone signature verifies");
     }
-
     #[test]
     fn public_key_cache_roundtrip_normal() {
         let (pk, _sk) =
@@ -749,7 +722,6 @@ mod tests {
         let cached = to_g1_public_key(&bytes).expect("cached public key");
         assert_eq!(parsed.to_compressed(), cached.to_compressed());
     }
-
     #[test]
     fn public_key_cache_roundtrip_small() {
         let (pk, _sk) =
@@ -761,12 +733,40 @@ mod tests {
     }
 
     #[test]
+    fn decode_public_key_validation_bypasses_caches() {
+        let (normal, _normal_secret) =
+            BlsImpl::<CNormal>::keypair(KeyGenOption::UseSeed(vec![0x31; 8]))
+                .expect("normal BLS keypair");
+        let (small, _small_secret) =
+            BlsImpl::<CSmall>::keypair(KeyGenOption::UseSeed(vec![0x32; 8]))
+                .expect("small BLS keypair");
+
+        reset_public_key_cache_calls();
+        BlsImpl::<CNormal>::validate_public_key_for_decode(normal.as_bytes())
+            .expect("normal decode validation");
+        BlsImpl::<CSmall>::validate_public_key_for_decode(small.as_bytes())
+            .expect("small decode validation");
+        assert_eq!(
+            public_key_cache_calls(),
+            0,
+            "decode validation must not consult the process-wide caches"
+        );
+
+        BlsImpl::<CNormal>::parse_public_key(normal.as_bytes()).expect("ordinary normal parse");
+        BlsImpl::<CSmall>::parse_public_key(small.as_bytes()).expect("ordinary small parse");
+        assert_eq!(
+            public_key_cache_calls(),
+            2,
+            "the observation counter must see both ordinary cached parsers"
+        );
+    }
+
+    #[test]
     fn prepared_generator_is_cached() {
         let first = g2_prepared_generator();
         let second = g2_prepared_generator();
         assert!(Arc::ptr_eq(first, second));
     }
-
     #[test]
     fn prepared_public_key_cache_roundtrip_small() {
         let (pk, _sk) =
@@ -776,14 +776,12 @@ mod tests {
         let cached = to_g2_prepared(&bytes).expect("cached prepared key");
         assert!(Arc::ptr_eq(&prepared, &cached));
     }
-
     #[test]
     fn compressed_point_decoders_reject_invalid_encodings() {
         let mut invalid_g1 = [0xFF; 48];
         let mut invalid_g2 = [0xFF; 96];
         invalid_g1[0] = 0x00;
         invalid_g2[0] = 0x00;
-
         assert!(to_g1_public_key(&invalid_g1).is_none());
         assert!(to_g2_public_key(&invalid_g2).is_none());
     }

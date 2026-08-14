@@ -1,5 +1,4 @@
 // Upstream reply-route supersession regression retained through the merge.
-
 #[test]
 fn delayed_block_sync_reply_route_is_superseded_without_poisoning_output() {
     let history = durable_history_fixture();
@@ -16,7 +15,6 @@ fn delayed_block_sync_reply_route_is_superseded_without_poisoning_output() {
             rank: 1,
         })
     });
-
     let request = BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::CommitCertificateRequest(wire::CommitCertificateRequest {
             protocol_version: wire::PROTOCOL_VERSION,
@@ -46,7 +44,6 @@ fn delayed_block_sync_reply_route_is_superseded_without_poisoning_output() {
     );
     let (delayed_routes, delayed_ownership) =
         fair_ingress_route_owner(request, history.requester.clone(), hub, delayed_old_route);
-
     let guard = Arc::clone(&service.output_guard);
     let operation = guard
         .begin_fail_stop_operation()
@@ -61,7 +58,6 @@ fn delayed_block_sync_reply_route_is_superseded_without_poisoning_output() {
         )
         .expect("current block-sync response enters exact output");
     operation.complete();
-
     let (fifo_before, reservations_before, source_fifo_before) = {
         let pending = service
             .lock_pending_exact_output()
@@ -78,7 +74,6 @@ fn delayed_block_sync_reply_route_is_superseded_without_poisoning_output() {
             pending.source_fifo_owners.clone(),
         )
     };
-
     let operation = guard
         .begin_fail_stop_operation()
         .expect("delayed replay must not inherit a poisoned guard");
@@ -92,7 +87,6 @@ fn delayed_block_sync_reply_route_is_superseded_without_poisoning_output() {
         )
         .expect("delayed authenticated replay is consumed as superseded");
     operation.complete();
-
     assert!(!guard.restart_required());
     let pending = service
         .lock_pending_exact_output()

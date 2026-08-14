@@ -377,9 +377,9 @@ def _load_source_manifest(source: Path) -> dict[str, object]:
         "chain_discriminant": CHAIN_DISCRIMINANT,
         "node_storage_budget_bytes": 68_719_476_736,
         "node_storage_budget_weights": {
-            "kura_blocks_bps": 7500,
+            "kura_blocks_bps": 7499,
             "wsv_snapshots_bps": 2000,
-            "sorafs_bps": 0,
+            "sorafs_bps": 1,
             "soranet_spool_bps": 250,
             "soravpn_spool_bps": 250,
         },

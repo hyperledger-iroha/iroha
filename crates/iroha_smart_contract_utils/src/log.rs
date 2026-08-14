@@ -1,7 +1,5 @@
 //! IVM logging utilities
-
 pub use iroha_data_model::Level;
-
 /// Log `obj` with desired log level.
 ///
 /// Prints the output along with its level to stderr.
@@ -9,7 +7,6 @@ pub use iroha_data_model::Level;
 pub fn __log<T: std::string::ToString + ?Sized>(log_level: Level, obj: &T) {
     eprintln!("{}: {}", log_level, obj.to_string());
 }
-
 /// Construct a new event
 #[macro_export]
 macro_rules! event {
@@ -17,7 +14,6 @@ macro_rules! event {
         $crate::log::__log($log_level, $msg)
     };
 }
-
 /// Construct an event at the trace level.
 #[macro_export]
 macro_rules! trace {
@@ -25,7 +21,6 @@ macro_rules! trace {
         $crate::event!($crate::log::Level::TRACE, $msg)
     };
 }
-
 /// Construct an event at the debug level.
 #[macro_export]
 macro_rules! debug {
@@ -33,7 +28,6 @@ macro_rules! debug {
         $crate::event!($crate::log::Level::DEBUG, $msg)
     };
 }
-
 /// Construct an event at the info level.
 #[macro_export]
 macro_rules! info {
@@ -41,7 +35,6 @@ macro_rules! info {
         $crate::event!($crate::log::Level::INFO, $msg)
     };
 }
-
 /// Construct an event at the warn level.
 #[macro_export]
 macro_rules! warn {
@@ -49,7 +42,6 @@ macro_rules! warn {
         $crate::event!($crate::log::Level::WARN, $msg)
     };
 }
-
 /// Construct an event at the error level.
 #[macro_export]
 macro_rules! error {
@@ -57,11 +49,9 @@ macro_rules! error {
         $crate::event!($crate::log::Level::ERROR, $msg)
     };
 }
-
 #[cfg(test)]
 mod tests {
     const LOG_MESSAGE: &str = "log_message";
-
     #[test]
     fn log_call() {
         crate::warn!(LOG_MESSAGE);

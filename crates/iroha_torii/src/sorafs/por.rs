@@ -5,27 +5,6 @@
 //! indexes in place with exact node-authoritative generation updates. Coordinator
 //! persistence retains only exact report publication state once the projection
 //! has been installed.
-
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    fs::{self, File, OpenOptions},
-    io::{Read as _, Write as _},
-    ops::Bound,
-    path::{Component, Path, PathBuf},
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
-#[cfg(feature = "app_api")]
-use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs as _},
-    sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
-    time::Duration as StdDuration,
-};
-
-#[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
-
 #[cfg(feature = "app_api")]
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -61,11 +40,28 @@ use sorafs_node::{
     PorMutationFailureV1, PorStatusAuthoritySnapshotV1, PorStatusAuthorityUpdateV1,
     por_repair_source_identity_v1,
 };
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    fs::{self, File, OpenOptions},
+    io::{Read as _, Write as _},
+    ops::Bound,
+    path::{Component, Path, PathBuf},
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+#[cfg(feature = "app_api")]
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs as _},
+    sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
+    time::Duration as StdDuration,
+};
 use thiserror::Error;
 use time::{Date, Duration, OffsetDateTime, Weekday};
 #[cfg(feature = "app_api")]
 use tokio::time::{MissedTickBehavior, interval};
-
 const POR_STATUS_PAGE_VERSION_V1: u8 = 1;
 const POR_STATUS_EXPORT_PAGE_VERSION_V1: u8 = 1;
 /// Maximum sum of canonical status-record bytes returned by one PoR page.
@@ -79,7 +75,6 @@ const MAX_POR_COORDINATOR_RECORDS: usize =
 const MAX_POR_COORDINATOR_FORCED_PROVIDERS: usize = 4_096;
 const MAX_POR_COORDINATOR_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_POR_COORDINATOR_DECODE_ALLOCATED_BYTES: usize = 512 * 1024 * 1024;
-
 const fn por_coordinator_decode_limits() -> norito::DecodeLimits {
     norito::DecodeLimits::new(
         MAX_POR_COORDINATOR_RECORDS,
@@ -89,14 +84,12 @@ const fn por_coordinator_decode_limits() -> norito::DecodeLimits {
         64,
     )
 }
-
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PorCoordinatorVerdictOutcome {
     Inserted,
     Existing,
 }
-
 #[derive(Debug, Clone)]
 struct RecordedVerdict {
     outcome: AuditOutcomeV1,
@@ -105,7 +98,6 @@ struct RecordedVerdict {
     proof_digest: Option<[u8; 32]>,
     canonical_digest: [u8; 32],
 }
-
 impl RecordedVerdict {
     #[cfg(test)]
     fn from_verdict(verdict: &AuditVerdictV1) -> Result<Self, PorCoordinatorError> {
@@ -120,7 +112,6 @@ impl RecordedVerdict {
         })
     }
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct RecordedVerdictSnapshot {
     outcome: u8,
@@ -131,7 +122,6 @@ struct RecordedVerdictSnapshot {
     proof_digest: Option<[u8; 32]>,
     canonical_digest: [u8; 32],
 }
-
 impl From<&RecordedVerdict> for RecordedVerdictSnapshot {
     fn from(verdict: &RecordedVerdict) -> Self {
         Self {
@@ -143,7 +133,6 @@ impl From<&RecordedVerdict> for RecordedVerdictSnapshot {
         }
     }
 }
-
 impl RecordedVerdictSnapshot {
     fn into_recorded_verdict(self) -> Result<RecordedVerdict, PorPersistenceError> {
         let outcome = match self.outcome {
@@ -161,20 +150,17 @@ impl RecordedVerdictSnapshot {
         })
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RecordedVerdictSnapshot {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
         norito::core::decode_field_canonical::<RecordedVerdictSnapshot>(bytes)
     }
 }
-
 /// Validated record and canonical-byte ceilings for one PoR status page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PorStatusPageLimits {
     records: usize,
     canonical_bytes: usize,
 }
-
 impl PorStatusPageLimits {
     /// Validate first-release page limits at the coordinator boundary.
     pub(crate) fn new(records: usize, canonical_bytes: usize) -> Result<Self, PorCoordinatorError> {
@@ -205,7 +191,6 @@ impl PorStatusPageLimits {
         })
     }
 }
-
 /// Opaque, versioned cursor for a PoR status or export page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PorStatusPageCursor {
@@ -226,7 +211,6 @@ pub(crate) enum PorStatusPageCursor {
         challenge_id: [u8; 32],
     },
 }
-
 impl PorStatusPageCursor {
     /// Decode one canonical URL-safe cursor, or begin at the first page.
     ///
@@ -249,7 +233,6 @@ impl PorStatusPageCursor {
         })
     }
 }
-
 /// Bounded, generation-bound PoR status page.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct PorStatusPageV1 {
@@ -277,7 +260,6 @@ pub struct PorStatusPageV1 {
     /// Challenge status records in canonical index order.
     pub statuses: Vec<PorChallengeStatusV1>,
 }
-
 /// Bounded replacement for the retired full-history PoR export response.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct PorStatusExportPageV1 {
@@ -292,33 +274,27 @@ pub struct PorStatusExportPageV1 {
     /// Bounded page evaluated against one exact coordinator generation.
     pub page: PorStatusPageV1,
 }
-
 /// Durable exact report material and its publication acknowledgement.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PreparedWeeklyReportV1 {
     report: PorWeeklyReportV1,
     published: bool,
 }
-
 type PorStatusOrderKey = (u64, [u8; 32]);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PorStatusCursorAnchor {
     epoch_id: u64,
     issued_at: u64,
     challenge_id: [u8; 32],
 }
-
 impl PorStatusCursorAnchor {
     fn status_order_key(self) -> PorStatusOrderKey {
         (self.issued_at, self.challenge_id)
     }
-
     fn epoch_order_key(self) -> (u64, u64, [u8; 32]) {
         (self.epoch_id, self.issued_at, self.challenge_id)
     }
 }
-
 fn por_status_selection_digest(filter: &PorStatusFilter) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"iroha.sorafs.por.status-cursor.selection.v1");
@@ -352,7 +328,6 @@ fn por_status_selection_digest(filter: &PorStatusFilter) -> [u8; 32] {
     }
     *hasher.finalize().as_bytes()
 }
-
 fn por_export_selection_digest(range: Option<(u64, u64)>) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"iroha.sorafs.por.export-cursor.selection.v1");
@@ -368,7 +343,6 @@ fn por_export_selection_digest(range: Option<(u64, u64)>) -> [u8; 32] {
     }
     *hasher.finalize().as_bytes()
 }
-
 #[derive(Debug, Clone)]
 struct PorStatusIndexes {
     generation: u64,
@@ -379,7 +353,6 @@ struct PorStatusIndexes {
     by_outcome: BTreeMap<u8, BTreeSet<PorStatusOrderKey>>,
     epoch_order: BTreeSet<(u64, u64, [u8; 32])>,
 }
-
 impl Default for PorStatusIndexes {
     fn default() -> Self {
         Self {
@@ -393,7 +366,6 @@ impl Default for PorStatusIndexes {
         }
     }
 }
-
 impl PorStatusIndexes {
     fn from_records(records: &DashMap<[u8; 32], ChallengeRecord>, generation: u64) -> Self {
         debug_assert_ne!(generation, 0, "PoR status generation is always non-zero");
@@ -406,7 +378,6 @@ impl PorStatusIndexes {
         }
         indexes
     }
-
     fn from_statuses(statuses: &BTreeMap<[u8; 32], PorChallengeStatusV1>, generation: u64) -> Self {
         debug_assert_ne!(generation, 0, "PoR status generation is always non-zero");
         let mut indexes = Self {
@@ -418,11 +389,9 @@ impl PorStatusIndexes {
         }
         indexes
     }
-
     fn order_key(status: &PorChallengeStatusV1) -> PorStatusOrderKey {
         (status.issued_at, status.challenge_id)
     }
-
     fn insert_status(&mut self, status: &PorChallengeStatusV1) {
         let key = Self::order_key(status);
         self.canonical.insert(key);
@@ -445,7 +414,6 @@ impl PorStatusIndexes {
         self.epoch_order
             .insert((status.epoch_id, status.issued_at, status.challenge_id));
     }
-
     fn remove_status(&mut self, status: &PorChallengeStatusV1) {
         let key = Self::order_key(status);
         self.canonical.remove(&key);
@@ -456,7 +424,6 @@ impl PorStatusIndexes {
         self.epoch_order
             .remove(&(status.epoch_id, status.issued_at, status.challenge_id));
     }
-
     fn remove_secondary<K: Ord + Copy>(
         index: &mut BTreeMap<K, BTreeSet<PorStatusOrderKey>>,
         key: &K,
@@ -470,18 +437,15 @@ impl PorStatusIndexes {
             index.remove(key);
         }
     }
-
     fn commit_insert(&mut self, status: &PorChallengeStatusV1, next_generation: u64) {
         self.insert_status(status);
         self.publish_generation(next_generation);
     }
-
     #[cfg(test)]
     fn commit_remove(&mut self, status: &PorChallengeStatusV1, next_generation: u64) {
         self.remove_status(status);
         self.publish_generation(next_generation);
     }
-
     fn commit_replace(
         &mut self,
         previous: &PorChallengeStatusV1,
@@ -492,12 +456,10 @@ impl PorStatusIndexes {
         self.insert_status(current);
         self.publish_generation(next_generation);
     }
-
     fn publish_generation(&mut self, next_generation: u64) {
         debug_assert_eq!(self.generation.checked_add(1), Some(next_generation));
         self.generation = next_generation;
     }
-
     fn validate_against_records(
         &self,
         records: &DashMap<[u8; 32], ChallengeRecord>,
@@ -515,20 +477,17 @@ impl PorStatusIndexes {
         Ok(())
     }
 }
-
 #[derive(Debug)]
 struct AuthoritativePorProjectionV1 {
     statuses: BTreeMap<[u8; 32], PorChallengeStatusV1>,
     indexes: PorStatusIndexes,
     forced_providers: HashMap<[u8; 32], BTreeMap<u64, usize>>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AuthoritativeUpdateAction {
     Insert,
     Replace,
 }
-
 fn por_status_identity_is_unchanged(
     previous: &PorChallengeStatusV1,
     current: &PorChallengeStatusV1,
@@ -543,7 +502,6 @@ fn por_status_identity_is_unchanged(
         && previous.forced == current.forced
         && previous.issued_at == current.issued_at
 }
-
 fn por_status_lifecycle_advances(
     previous: &PorChallengeStatusV1,
     current: &PorChallengeStatusV1,
@@ -558,7 +516,6 @@ fn por_status_lifecycle_advances(
     {
         return false;
     }
-
     match previous.status {
         PorChallengeOutcome::AwaitingProof => match current.status {
             PorChallengeOutcome::ProofSubmitted => true,
@@ -583,7 +540,6 @@ fn por_status_lifecycle_advances(
         | PorChallengeOutcome::Repaired => false,
     }
 }
-
 fn remove_forced_status(
     forced_providers: &mut HashMap<[u8; 32], BTreeMap<u64, usize>>,
     status: &PorChallengeStatusV1,
@@ -615,7 +571,6 @@ fn remove_forced_status(
         forced_providers.remove(&status.provider_id);
     }
 }
-
 fn insert_forced_status(
     forced_providers: &mut HashMap<[u8; 32], BTreeMap<u64, usize>>,
     status: &PorChallengeStatusV1,
@@ -631,7 +586,6 @@ fn insert_forced_status(
             .expect("bounded PoR status retention leaves forced-provenance count headroom");
     }
 }
-
 /// Rebuildable PoR read projection and durable weekly-report publisher state.
 #[derive(Debug, Clone)]
 pub struct PorCoordinator {
@@ -657,14 +611,12 @@ pub struct PorCoordinator {
     #[cfg(test)]
     status_page_projection_lookups: Arc<std::sync::atomic::AtomicUsize>,
 }
-
 include!("por/coordinator_impl.rs");
 impl Default for PorCoordinator {
     fn default() -> Self {
         Self::new()
     }
 }
-
 struct PorStatusPageAccumulator {
     snapshot_generation: u64,
     selection_digest: [u8; 32],
@@ -675,7 +627,6 @@ struct PorStatusPageAccumulator {
     statuses: Vec<PorChallengeStatusV1>,
     has_more: bool,
 }
-
 impl PorStatusPageAccumulator {
     fn new(
         snapshot_generation: u64,
@@ -693,11 +644,9 @@ impl PorStatusPageAccumulator {
             has_more: false,
         }
     }
-
     fn record_limit_reached(&self) -> bool {
         self.statuses.len() == self.limits.records
     }
-
     fn note_inspected_candidate(&mut self) -> Result<(), PorCoordinatorError> {
         self.inspected_candidates = self
             .inspected_candidates
@@ -705,16 +654,13 @@ impl PorStatusPageAccumulator {
             .ok_or(PorCoordinatorError::StatusPageByteOverflow)?;
         Ok(())
     }
-
     fn consume_candidate(&mut self, status: &PorChallengeStatusV1) {
         self.last_consumed_candidate =
             Some((status.epoch_id, status.issued_at, status.challenge_id));
     }
-
     fn mark_has_more(&mut self) {
         self.has_more = true;
     }
-
     fn accept(&mut self, status: PorChallengeStatusV1) -> Result<bool, PorCoordinatorError> {
         if self.statuses.len() == self.limits.records {
             self.has_more = true;
@@ -740,7 +686,6 @@ impl PorStatusPageAccumulator {
         self.statuses.push(status);
         Ok(true)
     }
-
     fn finish(self) -> Result<PorStatusPageV1, PorCoordinatorError> {
         let record_limit = u32::try_from(self.limits.records)
             .map_err(|_| PorCoordinatorError::StatusPageByteOverflow)?;
@@ -787,7 +732,6 @@ impl PorStatusPageAccumulator {
         })
     }
 }
-
 include!("por/persistence_randomness.rs");
 #[cfg(feature = "app_api")]
 /// Errors collecting VRF materials required for PoR challenge planning.
@@ -841,7 +785,6 @@ pub enum VrfError {
     #[error("provider VRF state persistence failure: {0}")]
     Persistence(String),
 }
-
 #[cfg(feature = "app_api")]
 /// Supplies VRF bundles required to plan PoR challenges.
 pub trait VrfProvider: Send + Sync {
@@ -855,10 +798,8 @@ pub trait VrfProvider: Send + Sync {
         randomness: &PorRandomness,
     ) -> Result<HashMap<ManifestVrfKey, ManifestVrfBundle>, VrfError>;
 }
-
 #[cfg(feature = "app_api")]
 const VRF_STATE_VERSION_V1: u8 = 1;
-
 #[cfg(feature = "app_api")]
 #[derive(
     Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, PartialOrd, Ord,
@@ -868,21 +809,18 @@ struct VrfStateKeyV1 {
     provider_id: [u8; 32],
     manifest_digest: [u8; 32],
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct VrfStateEntryV1 {
     key: VrfStateKeyV1,
     submission: ProviderVrfSubmissionV1,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct VrfProviderSequenceV1 {
     provider_id: [u8; 32],
     high_water: u64,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct VrfStateSnapshotV1 {
@@ -891,14 +829,12 @@ struct VrfStateSnapshotV1 {
     entries: Vec<VrfStateEntryV1>,
     sequences: Vec<VrfProviderSequenceV1>,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Default)]
 struct VrfState {
     entries: BTreeMap<VrfStateKeyV1, ProviderVrfSubmissionV1>,
     sequences: BTreeMap<[u8; 32], u64>,
 }
-
 #[cfg(feature = "app_api")]
 /// Admission-bound, authenticated, bounded, durable provider VRF store.
 #[derive(Debug)]
@@ -911,7 +847,6 @@ pub struct VerifiedVrfProvider {
     max_clock_skew_secs: u64,
     state: Mutex<VrfState>,
 }
-
 #[cfg(feature = "app_api")]
 impl VerifiedVrfProvider {
     /// Load and fully reverify durable provider VRF state.
@@ -944,7 +879,6 @@ impl VerifiedVrfProvider {
             state: Mutex::new(state),
         })
     }
-
     fn verify_submission(
         &self,
         submission: &ProviderVrfSubmissionV1,
@@ -973,14 +907,12 @@ impl VerifiedVrfProvider {
             .map_err(|error| VrfError::InvalidSignature(error.to_string()))?;
         verify_provider_vrf(submission, record.por_vrf_key(), &self.network_id)
     }
-
     fn accept_verified(
         &self,
         submission: ProviderVrfSubmissionV1,
         current_epoch: u64,
     ) -> Result<(), VrfError> {
         let oldest = current_epoch.saturating_sub(self.retention_epochs);
-
         let key = VrfStateKeyV1 {
             epoch_id: submission.epoch_id,
             provider_id: submission.provider_id,
@@ -1029,7 +961,6 @@ impl VerifiedVrfProvider {
         }
         Ok(())
     }
-
     /// Authenticate, verify, replay-check, and durably accept one provider VRF.
     pub fn submit(
         &self,
@@ -1045,7 +976,6 @@ impl VerifiedVrfProvider {
         self.accept_verified(submission, current_epoch)
     }
 }
-
 #[cfg(feature = "app_api")]
 impl VrfProvider for VerifiedVrfProvider {
     fn vrf_bundles_for_epoch(
@@ -1089,7 +1019,6 @@ impl VrfProvider for VerifiedVrfProvider {
         Ok(bundles)
     }
 }
-
 #[cfg(feature = "app_api")]
 fn verify_provider_vrf(
     submission: &ProviderVrfSubmissionV1,
@@ -1125,7 +1054,6 @@ fn verify_provider_vrf(
     }
     Ok(())
 }
-
 #[cfg(feature = "app_api")]
 fn persist_vrf_state(
     path: &Path,
@@ -1155,7 +1083,6 @@ fn persist_vrf_state(
     store_secure_state(path, &snapshot, "provider VRF")
         .map_err(|error| VrfError::Persistence(error.to_string()))
 }
-
 #[cfg(feature = "app_api")]
 fn load_vrf_state(
     path: &Path,
@@ -1277,13 +1204,11 @@ fn load_vrf_state(
     }
     Ok(state)
 }
-
 #[cfg(feature = "app_api")]
 /// Narrow boundary for durable PoR Governance DAG publication.
 trait PorGovernancePublisher: Send + Sync {
     /// Return whether a durable signed Governance DAG publisher is bound.
     fn is_ready(&self) -> bool;
-
     /// Publish one validated canonical challenge envelope.
     ///
     /// # Errors
@@ -1294,7 +1219,6 @@ trait PorGovernancePublisher: Send + Sync {
         &self,
         publication: PorChallengePublicationV1,
     ) -> Result<(), sorafs_node::GovernancePublishError>;
-
     /// Publish one validated canonical weekly report.
     ///
     /// # Errors
@@ -1306,20 +1230,17 @@ trait PorGovernancePublisher: Send + Sync {
         report: PorWeeklyReportV1,
     ) -> Result<(), sorafs_node::GovernancePublishError>;
 }
-
 #[cfg(feature = "app_api")]
 impl PorGovernancePublisher for sorafs_node::NodeHandle {
     fn is_ready(&self) -> bool {
         self.has_governance_publisher()
     }
-
     fn publish_challenge(
         &self,
         publication: PorChallengePublicationV1,
     ) -> Result<(), sorafs_node::GovernancePublishError> {
         self.publish_por_challenge_publication(publication)
     }
-
     fn publish_weekly_report(
         &self,
         report: PorWeeklyReportV1,
@@ -1327,7 +1248,6 @@ impl PorGovernancePublisher for sorafs_node::NodeHandle {
         self.publish_por_weekly_report(report)
     }
 }
-
 #[cfg(feature = "app_api")]
 /// Errors that can surface while running the PoR automation workflow.
 #[derive(Debug, Error)]
@@ -1360,7 +1280,6 @@ pub enum PorAutomationError {
     #[error("PoR lifecycle persistence worker failed: {0}")]
     BlockingWorker(String),
 }
-
 #[cfg(feature = "app_api")]
 /// Runtime wiring PoR challenge scheduling, proof ingestion, and reporting automation.
 pub struct PorCoordinatorRuntime {
@@ -1391,7 +1310,6 @@ pub struct PorCoordinatorRuntime {
     /// Serialises scheduler invocations and their durable side effects.
     run_lock: tokio::sync::Mutex<()>,
 }
-
 #[cfg(feature = "app_api")]
 impl PorCoordinatorRuntime {
     #[must_use]
@@ -1418,7 +1336,6 @@ impl PorCoordinatorRuntime {
             vrf_submission_deadline_secs,
         )
     }
-
     #[allow(clippy::too_many_arguments)]
     fn new_with_publisher(
         storage: Arc<dyn PorStorage>,
@@ -1450,37 +1367,31 @@ impl PorCoordinatorRuntime {
             run_lock: tokio::sync::Mutex::new(()),
         }
     }
-
     /// Attach the authenticated provider VRF ingest store used by this runtime.
     #[must_use]
     pub fn with_verified_vrf_provider(mut self, provider: Arc<VerifiedVrfProvider>) -> Self {
         self.verified_vrf_provider = Some(provider);
         self
     }
-
     /// Attach Torii telemetry to the runtime.
     #[must_use]
     pub fn with_telemetry(mut self, telemetry: crate::routing::MaybeTelemetry) -> Self {
         self.telemetry = telemetry;
         self
     }
-
     fn record_challenge_metric(&self, challenge: &PorChallengeV1, duplicate_samples: usize) {
         self.telemetry.with_metrics(|tel| {
             tel.record_sorafs_por_scheduler_challenge(challenge.forced, duplicate_samples);
         });
     }
-
     fn record_scheduler_failure(&self) {
         self.telemetry.with_metrics(|tel| {
             tel.record_sorafs_por_scheduler_failure();
         });
     }
-
     fn compute_epoch(&self, now_secs: u64) -> u64 {
         now_secs / self.epoch_interval_secs
     }
-
     /// Compute the ISO week marker for the supplied timestamp.
     ///
     /// # Errors
@@ -1518,7 +1429,6 @@ impl PorCoordinatorRuntime {
             .map_err(PorAutomationError::Coordinator)?;
         Ok((cycle, iso_week_marker(cycle)))
     }
-
     /// Publish a weekly report if the ISO week marker has advanced.
     ///
     /// # Errors
@@ -1546,7 +1456,6 @@ impl PorCoordinatorRuntime {
         );
         Ok(())
     }
-
     /// Execute automation logic for the specified timestamp (seconds since UNIX epoch).
     ///
     /// # Errors
@@ -1560,7 +1469,6 @@ impl PorCoordinatorRuntime {
             self.publish_weekly_report_if_needed(now_secs)?;
             return Ok(false);
         }
-
         let epoch_start = epoch
             .checked_mul(self.epoch_interval_secs)
             .ok_or(PorAutomationError::TimestampOverflow)?;
@@ -1571,7 +1479,6 @@ impl PorCoordinatorRuntime {
             self.publish_weekly_report_if_needed(now_secs)?;
             return Ok(false);
         }
-
         let mut randomness = self
             .randomness
             .randomness_for_epoch(epoch, now_secs, self.response_window_secs)
@@ -1579,13 +1486,11 @@ impl PorCoordinatorRuntime {
         randomness.issued_at_unix = forced_deadline;
         let vrf_map = self.vrf_provider.vrf_bundles_for_epoch(&randomness)?;
         let planned = self.storage.plan_challenges(randomness, &vrf_map, true)?;
-
         if planned.is_empty() {
             self.last_epoch.store(epoch, AtomicOrdering::SeqCst);
             self.publish_weekly_report_if_needed(now_secs)?;
             return Ok(false);
         }
-
         for PlannedChallenge {
             challenge,
             duplicate_samples,
@@ -1630,12 +1535,10 @@ impl PorCoordinatorRuntime {
             }
             self.record_challenge_metric(&challenge, duplicate_samples);
         }
-
         self.last_epoch.store(epoch, AtomicOrdering::SeqCst);
         self.publish_weekly_report_if_needed(now_secs)?;
         Ok(true)
     }
-
     /// Execute automation logic using the current system clock.
     ///
     /// # Errors
@@ -1644,7 +1547,6 @@ impl PorCoordinatorRuntime {
     pub async fn run_once(&self) -> Result<bool, PorAutomationError> {
         self.run_once_at(unix_now()).await
     }
-
     /// Accept one authenticated provider VRF for an active local manifest.
     pub fn submit_provider_vrf(
         &self,
@@ -1667,14 +1569,12 @@ impl PorCoordinatorRuntime {
         }
         provider.accept_verified(submission, current_epoch)
     }
-
     /// Spawn a Tokio task that periodically runs [`run_once`](Self::run_once`) until shutdown.
     pub fn spawn(self: Arc<Self>, shutdown: ShutdownSignal) {
         const TICK_INTERVAL_SECS: u64 = 60;
         tokio::spawn(async move {
             let mut ticker = interval(StdDuration::from_secs(TICK_INTERVAL_SECS));
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
             loop {
                 tokio::select! {
                     _ = shutdown.receive() => break,
@@ -1689,7 +1589,6 @@ impl PorCoordinatorRuntime {
         });
     }
 }
-
 #[cfg(feature = "app_api")]
 /// Storage abstraction required by the PoR automation runtime.
 pub trait PorStorage: Send + Sync {
@@ -1704,7 +1603,6 @@ pub trait PorStorage: Send + Sync {
         vrf_records: &HashMap<ManifestVrfKey, ManifestVrfBundle>,
         allow_forced: bool,
     ) -> Result<Vec<PlannedChallenge>, PorChallengePlannerError>;
-
     /// Record the fact that a challenge was issued so providers can submit proofs later.
     ///
     /// # Errors
@@ -1715,7 +1613,6 @@ pub trait PorStorage: Send + Sync {
         &self,
         challenge: &PorChallengeV1,
     ) -> Result<PorStatusAuthorityUpdateV1, PorMutationFailureV1>;
-
     /// Return whether a provider currently owns the active local manifest target.
     fn vrf_target_is_active(
         &self,
@@ -1724,7 +1621,6 @@ pub trait PorStorage: Send + Sync {
         now_secs: u64,
     ) -> bool;
 }
-
 #[cfg(feature = "app_api")]
 impl PorStorage for sorafs_node::NodeHandle {
     fn plan_challenges(
@@ -1735,14 +1631,12 @@ impl PorStorage for sorafs_node::NodeHandle {
     ) -> Result<Vec<PlannedChallenge>, PorChallengePlannerError> {
         self.plan_por_challenges_with_forced_policy(randomness, vrf_records, allow_forced)
     }
-
     fn record_challenge(
         &self,
         challenge: &PorChallengeV1,
     ) -> Result<PorStatusAuthorityUpdateV1, PorMutationFailureV1> {
         self.record_por_challenge_with_authority_update(challenge)
     }
-
     fn vrf_target_is_active(
         &self,
         provider_id: [u8; 32],
@@ -1765,7 +1659,6 @@ impl PorStorage for sorafs_node::NodeHandle {
         })
     }
 }
-
 #[derive(Default)]
 struct ProviderStats {
     manifests: HashSet<[u8; 32]>,
@@ -1775,7 +1668,6 @@ struct ProviderStats {
     forced: u32,
     first_failure_at: Option<u64>,
 }
-
 /// Parameters used for filtering status queries.
 /// Filter parameters for querying recorded PoR status information.
 #[derive(Clone, Copy, Debug, Default)]
@@ -1789,7 +1681,6 @@ pub struct PorStatusFilter {
     /// Restrict results to a given challenge outcome.
     pub status: Option<PorChallengeOutcome>,
 }
-
 impl PorStatusFilter {
     fn matches(&self, status: &PorChallengeStatusV1) -> bool {
         if let Some(manifest) = self.manifest {
@@ -1815,7 +1706,6 @@ impl PorStatusFilter {
         true
     }
 }
-
 /// Errors returned by the PoR coordinator while processing challenges, proofs, or reports.
 #[derive(Debug, Error)]
 pub enum PorCoordinatorError {
@@ -2099,14 +1989,12 @@ pub enum PorCoordinatorError {
     #[error("persistence failure: {0}")]
     Persistence(#[from] PorPersistenceError),
 }
-
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
 }
-
 fn iso_week_bounds(
     cycle: PorReportIsoWeek,
 ) -> Result<(OffsetDateTime, OffsetDateTime), PorCoordinatorError> {
@@ -2121,11 +2009,9 @@ fn iso_week_bounds(
         .ok_or(PorCoordinatorError::IsoWeekComputation)?;
     Ok((start, end))
 }
-
 fn iso_week_marker(cycle: PorReportIsoWeek) -> u64 {
     (u64::from(cycle.year) << 8) | u64::from(cycle.week)
 }
-
 fn next_iso_week(cycle: PorReportIsoWeek) -> Result<PorReportIsoWeek, PorCoordinatorError> {
     cycle
         .validate()
@@ -2140,7 +2026,6 @@ fn next_iso_week(cycle: PorReportIsoWeek) -> Result<PorReportIsoWeek, PorCoordin
         .map_err(PorCoordinatorError::InvalidIsoWeek)?;
     Ok(next)
 }
-
 fn canonical_weekly_report_generated_at(
     cycle: PorReportIsoWeek,
 ) -> Result<u64, PorCoordinatorError> {
@@ -2150,12 +2035,10 @@ fn canonical_weekly_report_generated_at(
     let (_, end) = iso_week_bounds(cycle)?;
     u64::try_from(end.unix_timestamp()).map_err(|_| PorCoordinatorError::IsoWeekComputation)
 }
-
 // ------------- Tests -------------
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc as StdArc, Barrier};
-
+    use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
     #[cfg(feature = "app_api")]
     use sorafs_manifest::{ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1};
@@ -2166,45 +2049,36 @@ mod tests {
         },
         provider_advert::{AdvertSignature, SignatureAlgorithm},
     };
+    use std::sync::{Arc as StdArc, Barrier};
     use tempfile::tempdir;
-
-    use super::*;
-
     fn canonical_temp_root(dir: &tempfile::TempDir) -> PathBuf {
         let root = fs::canonicalize(dir.path()).expect("canonical temp root");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
                 .expect("private canonical temp root");
         }
         root
     }
-
     #[cfg(feature = "app_api")]
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
             iroha_crypto::Hash::prehashed([seed; iroha_crypto::Hash::LENGTH]),
         ))
     }
-
     fn provider_signing_key() -> SigningKey {
         SigningKey::from_bytes(&[0xAB; 32])
     }
-
     fn auditor_signing_key() -> SigningKey {
         SigningKey::from_bytes(&[0xAC; 32])
     }
-
     fn provider_key() -> Vec<u8> {
         provider_signing_key().verifying_key().to_bytes().to_vec()
     }
-
     fn auditor_keys() -> Vec<Vec<u8>> {
         vec![auditor_signing_key().verifying_key().to_bytes().to_vec()]
     }
-
     fn resign_proof(proof: &mut sorafs_manifest::por::PorProofV1) {
         let key = provider_signing_key();
         proof.signature.public_key = key.verifying_key().to_bytes().to_vec();
@@ -2213,7 +2087,6 @@ mod tests {
             .expect("encode proof signing payload");
         proof.signature.signature = key.sign(&payload).to_bytes().to_vec();
     }
-
     fn resign_verdict(verdict: &mut AuditVerdictV1) {
         let key = auditor_signing_key();
         let payload = verdict
@@ -2225,19 +2098,16 @@ mod tests {
             signature: key.sign(&payload).to_bytes().to_vec(),
         }];
     }
-
     #[test]
     fn persistence_path_preserves_suffixes_without_predictable_temp_name() {
         let base = PathBuf::from("/tmp/por_snapshot.norito.json");
         let persistence = PorPersistence::new(base.clone());
         assert_eq!(persistence.path, base);
     }
-
     #[cfg(unix)]
     #[test]
     fn immutable_secure_publication_is_exactly_idempotent_and_conflict_safe() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
@@ -2258,12 +2128,10 @@ mod tests {
             "temporary files must not survive publication or conflict"
         );
     }
-
     #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
     #[test]
     fn descriptor_relative_link_publication_is_exclusive_and_unlinks_source() {
         use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
@@ -2275,7 +2143,6 @@ mod tests {
             .read(true)
             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
         let parent = options.open(&root).expect("open publication directory");
-
         link_secure_file_noreplace(
             &parent,
             source.file_name().expect("source name"),
@@ -2297,7 +2164,6 @@ mod tests {
             1,
             "published file must not retain the temporary hard link"
         );
-
         fs::write(&source, b"replacement").expect("write conflicting source");
         let error = link_secure_file_noreplace(
             &parent,
@@ -2312,12 +2178,10 @@ mod tests {
             b"replacement"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn descriptor_relative_replace_stays_bound_to_opened_parent() {
         use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
@@ -2328,7 +2192,6 @@ mod tests {
         let source_name = std::ffi::OsStr::new(".state.tmp");
         let destination_name = std::ffi::OsStr::new("state.to");
         fs::write(named_parent.join(source_name), b"canonical").expect("write staged state");
-
         let mut options = OpenOptions::new();
         options
             .read(true)
@@ -2341,7 +2204,6 @@ mod tests {
             .expect("private path impostor");
         fs::write(named_parent.join(source_name), b"attacker sentinel")
             .expect("write same-name impostor entry");
-
         publish_secure_file_replace(
             &pinned_parent,
             source_name,
@@ -2350,7 +2212,6 @@ mod tests {
             &named_parent.join(destination_name),
         )
         .expect("publish through pinned parent");
-
         assert_eq!(
             fs::read(displaced_parent.join(destination_name)).expect("pinned publication"),
             b"canonical"
@@ -2365,12 +2226,10 @@ mod tests {
             "descriptor-relative publication and cleanup must not unlink through a swapped path"
         );
     }
-
     #[cfg(all(unix, not(target_os = "espidf")))]
     #[test]
     fn descriptor_relative_read_stays_bound_to_opened_parent() {
         use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
@@ -2383,7 +2242,6 @@ mod tests {
         fs::write(&original, b"canonical").expect("write original state");
         fs::set_permissions(&original, fs::Permissions::from_mode(0o600))
             .expect("private original state");
-
         let mut options = OpenOptions::new();
         options
             .read(true)
@@ -2398,7 +2256,6 @@ mod tests {
         fs::write(&impostor, b"malicious").expect("write same-size impostor state");
         fs::set_permissions(&impostor, fs::Permissions::from_mode(0o600))
             .expect("private impostor state");
-
         assert_eq!(
             secure_read_bytes_in_parent(&pinned_parent, filename, &impostor, 1_024)
                 .expect("descriptor-relative read")
@@ -2410,7 +2267,6 @@ mod tests {
             b"malicious"
         );
     }
-
     #[cfg(any(not(unix), target_os = "espidf"))]
     #[test]
     fn immutable_publication_fails_closed_without_atomic_noreplace_support() {
@@ -2432,12 +2288,10 @@ mod tests {
             "unsupported publication must not leave temporary state"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn concurrent_immutable_publication_has_one_canonical_winner() {
         use std::os::unix::fs::PermissionsExt as _;
-
         const WORKERS: usize = 16;
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
@@ -2491,12 +2345,10 @@ mod tests {
             "temporary files must not survive concurrent publication"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn concurrent_identical_immutable_publication_is_idempotent() {
         use std::os::unix::fs::PermissionsExt as _;
-
         const WORKERS: usize = 16;
         const CANONICAL: &[u8] = b"one-canonical-publication";
         let dir = tempdir().expect("temp dir");
@@ -2520,7 +2372,6 @@ mod tests {
                 .map(|worker| worker.join().expect("publication worker"))
                 .collect::<Vec<_>>()
         });
-
         assert!(
             results.iter().all(Result::is_ok),
             "identical concurrent publications must be idempotent: {results:?}"
@@ -2535,12 +2386,10 @@ mod tests {
             "temporary files must not survive idempotent publication"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn secure_persistence_rejects_parent_traversal_symlinks_and_hardlinks() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
@@ -2548,7 +2397,6 @@ mod tests {
             secure_atomic_write(&root.join("nested/../escape"), b"x", 8, true),
             Err(SecureFileError::UnsafePath(_))
         ));
-
         let real = root.join("real");
         fs::create_dir(&real).expect("real directory");
         fs::set_permissions(&real, fs::Permissions::from_mode(0o700)).expect("private real dir");
@@ -2558,7 +2406,6 @@ mod tests {
             secure_atomic_write(&linked.join("state.to"), b"x", 8, true),
             Err(SecureFileError::UnsafePath(_))
         ));
-
         let destination = real.join("state.to");
         secure_atomic_write(&destination, b"state", 8, true).expect("initial state");
         let alias = real.join("state-alias.to");
@@ -2572,7 +2419,6 @@ mod tests {
             Err(SecureFileError::UnsafePath(_))
         ));
     }
-
     #[cfg(all(unix, feature = "app_api"))]
     fn drand_test_provider(state_path: PathBuf) -> DrandHttpRandomnessProvider {
         let state_owner_lock =
@@ -2593,12 +2439,10 @@ mod tests {
             commit_lock: tokio::sync::Mutex::new(()),
         }
     }
-
     #[cfg(all(unix, feature = "app_api"))]
     #[tokio::test]
     async fn drand_high_water_commits_atomically_under_concurrency() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private state root");
@@ -2614,7 +2458,6 @@ mod tests {
             randomness: [0x20; 32],
             signature: [0x21; iroha_crypto::drand::DRAND_SIGNATURE_BYTES],
         };
-
         let lower_provider = StdArc::clone(&provider);
         let higher_provider = StdArc::clone(&provider);
         let (lower_result, higher_result) = tokio::join!(
@@ -2633,7 +2476,6 @@ mod tests {
                 ),
             "the lower round may commit first or be rejected after the higher round"
         );
-
         let in_memory = provider
             .state
             .lock()
@@ -2649,7 +2491,6 @@ mod tests {
         assert_eq!(persisted.round, 11);
         assert_eq!(persisted.randomness, [0x20; 32]);
     }
-
     #[cfg(all(unix, feature = "app_api"))]
     #[test]
     fn drand_state_owner_lock_is_exclusive_and_recoverable() {
@@ -2666,12 +2507,10 @@ mod tests {
         SecureStateOwnerLock::acquire(&state_path, "drand")
             .expect("ownership lock is released when the provider is dropped");
     }
-
     #[cfg(all(unix, feature = "app_api"))]
     #[tokio::test]
     async fn drand_persistence_failure_rolls_back_memory_and_retry_succeeds() {
         use std::os::unix::fs::symlink;
-
         let dir = tempdir().expect("temp dir");
         let state_path = canonical_temp_root(&dir).join("drand-state.to");
         let provider = drand_test_provider(state_path.clone());
@@ -2681,14 +2520,12 @@ mod tests {
             signature: [0x42; iroha_crypto::drand::DRAND_SIGNATURE_BYTES],
         };
         symlink("missing-target", &state_path).expect("install unsafe destination");
-
         assert!(matches!(
             provider.commit_high_water(&beacon).await,
             Err(RandomnessError::Persistence(_))
         ));
         assert!(provider.state.lock().is_none());
         fs::remove_file(&state_path).expect("remove unsafe destination");
-
         provider
             .commit_high_water(&beacon)
             .await
@@ -2698,7 +2535,6 @@ mod tests {
             Some(10)
         );
     }
-
     #[cfg(all(unix, feature = "app_api"))]
     #[tokio::test]
     async fn drand_same_round_equivocation_never_overwrites_high_water() {
@@ -2720,7 +2556,6 @@ mod tests {
             signature: [0x62; iroha_crypto::drand::DRAND_SIGNATURE_BYTES],
             ..accepted
         };
-
         assert!(matches!(
             provider.commit_high_water(&conflicting).await,
             Err(RandomnessError::Equivocation { round: 10 })
@@ -2734,7 +2569,6 @@ mod tests {
             [0x51; 32]
         );
     }
-
     #[cfg(all(unix, feature = "app_api"))]
     #[test]
     fn drand_startup_rejects_truncated_and_wrong_key_state() {
@@ -2748,7 +2582,6 @@ mod tests {
             ),
             Err(RandomnessError::Persistence(_))
         ));
-
         let quicknet_key: [u8; iroha_crypto::drand::DRAND_PUBLIC_KEY_BYTES] = hex::decode(concat!(
             "83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb90022d3e760183c",
             "8c4b450b6a0a6c3ac6a5776a2d1064510d1fec758c921cc22b0e17e63aaf4bcb",
@@ -2781,7 +2614,6 @@ mod tests {
         )
         .expect("write valid quicknet state");
         load_drand_state(&state_path, &quicknet_key).expect("pinned quicknet state");
-
         let wrong_form_key_pair = iroha_crypto::KeyPair::try_from_seed(
             vec![0x7A; 32],
             iroha_crypto::Algorithm::BlsNormal,
@@ -2793,7 +2625,6 @@ mod tests {
                 .is_err(),
             "a BLS-normal G1 key must not be accepted as a drand G2 public key"
         );
-
         let wrong_key_pair =
             iroha_crypto::KeyPair::try_from_seed(vec![0x7A; 32], iroha_crypto::Algorithm::BlsSmall)
                 .expect("derive a distinct valid G2 key");
@@ -2806,10 +2637,8 @@ mod tests {
             Err(RandomnessError::Persistence(_))
         ));
     }
-
     #[cfg(feature = "app_api")]
     include!("por/vrf_state_tests.rs");
-
     fn sample_challenge(forced: bool) -> PorChallengeV1 {
         let manifest_digest = [0x22; 32];
         let provider_id = [0x33; 32];
@@ -2851,7 +2680,6 @@ mod tests {
             deadline_at: 1_700_000_900,
         }
     }
-
     fn authoritative_status_snapshot(marker: u8, generation: u64) -> PorStatusAuthoritySnapshotV1 {
         let mut challenge = sample_challenge(marker % 2 == 0);
         challenge.provider_id = [marker; 32];
@@ -2877,7 +2705,6 @@ mod tests {
             statuses: vec![ChallengeRecord::from_challenge(challenge).to_status()],
         }
     }
-
     #[test]
     fn absent_node_authority_is_explicitly_unavailable() {
         let coordinator = PorCoordinator::new();
@@ -2885,13 +2712,11 @@ mod tests {
             coordinator.require_authoritative_projection(),
             Err(PorCoordinatorError::AuthoritativeProjectionUnavailable)
         ));
-
         coordinator
             .install_authoritative_projection(authoritative_status_snapshot(0x40, 100))
             .expect("install node-authoritative projection");
         assert!(coordinator.require_authoritative_projection().is_ok());
     }
-
     #[test]
     fn authoritative_projection_swap_is_generation_record_atomic() {
         let coordinator = StdArc::new(PorCoordinator::new());
@@ -2902,7 +2727,6 @@ mod tests {
         coordinator
             .install_authoritative_projection(first.clone())
             .expect("install initial projection");
-
         let barrier = StdArc::new(Barrier::new(5));
         let writer = {
             let coordinator = StdArc::clone(&coordinator);
@@ -2958,7 +2782,6 @@ mod tests {
             200
         );
     }
-
     #[test]
     fn authoritative_projection_updates_in_place_and_fail_closed_on_generation_gaps() {
         let coordinator = PorCoordinator::new();
@@ -2972,7 +2795,6 @@ mod tests {
             let projection = coordinator.authoritative_projection.read();
             std::ptr::from_ref(projection.as_ref().expect("installed projection"))
         };
-
         let challenge = sample_challenge(false);
         let pending_status = ChallengeRecord::from_challenge(challenge.clone()).to_status();
         let pending_update = PorStatusAuthorityUpdateV1 {
@@ -2986,7 +2808,6 @@ mod tests {
         coordinator
             .apply_authoritative_update(pending_update)
             .expect("same-generation exact update is idempotent");
-
         let proof = sample_proof(&challenge);
         let mut proof_record = ChallengeRecord::from_challenge(challenge);
         proof_record.proof_digest = Some(proof.proof_digest());
@@ -3015,7 +2836,6 @@ mod tests {
             Some(&proof_status)
         );
         drop(projection);
-
         let gap = coordinator
             .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
                 generation: 5,
@@ -3036,7 +2856,6 @@ mod tests {
             ),
             Err(PorCoordinatorError::AuthoritativeProjectionUnavailable)
         ));
-
         coordinator
             .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
                 generation: 3,
@@ -3057,7 +2876,6 @@ mod tests {
             PorCoordinatorError::InvalidAuthoritativeProjection(_)
         ));
         assert!(coordinator.authoritative_projection.read().is_none());
-
         coordinator
             .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
                 generation: 3,
@@ -3077,7 +2895,6 @@ mod tests {
         ));
         assert!(coordinator.authoritative_projection.read().is_none());
     }
-
     #[test]
     fn authoritative_projection_rejects_skipped_proof_submission_generation() {
         let coordinator = PorCoordinator::new();
@@ -3088,7 +2905,6 @@ mod tests {
                 statuses: vec![awaiting.clone()],
             })
             .expect("install awaiting-proof authority");
-
         let mut skipped = awaiting.clone();
         skipped.status = PorChallengeOutcome::Failed;
         skipped.responded_at = Some(skipped.issued_at.saturating_add(1));
@@ -3105,7 +2921,6 @@ mod tests {
             Err(PorCoordinatorError::InvalidAuthoritativeProjection(_))
         ));
         assert!(coordinator.authoritative_projection.read().is_none());
-
         coordinator
             .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
                 generation: 2,
@@ -3127,7 +2942,6 @@ mod tests {
             })
             .expect("direct deadline failure is the admitted no-proof transition");
     }
-
     #[test]
     fn forced_provenance_counts_survive_same_provider_epoch_retention() {
         let coordinator = PorCoordinator::with_record_limit(2);
@@ -3166,7 +2980,6 @@ mod tests {
                 Some(&2)
             );
         }
-
         let replacement = authoritative_status_snapshot(0x56, 11).statuses.remove(0);
         coordinator
             .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
@@ -3188,7 +3001,6 @@ mod tests {
                 "retiring one challenge must preserve the surviving provenance"
             );
         }
-
         let replacement = authoritative_status_snapshot(0x58, 12).statuses.remove(0);
         coordinator
             .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
@@ -3207,7 +3019,6 @@ mod tests {
                 .contains_key(&provider_id)
         );
     }
-
     #[test]
     fn authoritative_projection_rolls_terminal_retention_and_accepts_archived_replay_noop() {
         let coordinator = PorCoordinator::with_record_limit(1);
@@ -3223,7 +3034,6 @@ mod tests {
                 statuses: vec![terminal.clone()],
             })
             .expect("install full bounded projection");
-
         let replacement = authoritative_status_snapshot(0x62, 5).statuses.remove(0);
         coordinator
             .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
@@ -3232,7 +3042,6 @@ mod tests {
                 removed_challenge_ids: vec![terminal.challenge_id],
             })
             .expect("remove archived terminal and insert replacement atomically");
-
         coordinator
             .apply_authoritative_update(PorStatusAuthorityUpdateV1 {
                 generation: 5,
@@ -3248,7 +3057,6 @@ mod tests {
             Some(&replacement)
         );
     }
-
     #[test]
     fn restart_rebuilds_projection_and_persistence_retires_lifecycle_records() {
         let dir = tempdir().expect("temp dir");
@@ -3259,7 +3067,6 @@ mod tests {
             .record_challenge(&stale_challenge)
             .expect("persist legacy lifecycle fixture");
         drop(coordinator);
-
         let restored = PorCoordinator::with_persistence(path.clone()).expect("restore fixture");
         let authoritative = authoritative_status_snapshot(0x77, 300);
         let authoritative_id = authoritative.statuses[0].challenge_id;
@@ -3280,7 +3087,6 @@ mod tests {
         assert_eq!(page.snapshot_generation, 300);
         assert_eq!(page.statuses[0].challenge_id, authoritative_id);
         drop(restored);
-
         let report_only =
             PorCoordinator::with_persistence(path).expect("restore report-only state");
         let empty = report_only
@@ -3305,7 +3111,6 @@ mod tests {
             .expect("query restarted projection");
         assert_eq!(rebuilt.statuses[0].challenge_id, authoritative_id);
     }
-
     fn sample_proof(challenge: &PorChallengeV1) -> sorafs_manifest::por::PorProofV1 {
         let mut proof = sorafs_manifest::por::PorProofV1 {
             version: POR_PROOF_VERSION_V1,
@@ -3332,7 +3137,6 @@ mod tests {
         resign_proof(&mut proof);
         proof
     }
-
     fn sample_verdict(
         challenge: &PorChallengeV1,
         outcome: AuditOutcomeV1,
@@ -3358,7 +3162,6 @@ mod tests {
         resign_verdict(&mut verdict);
         verdict
     }
-
     #[test]
     fn records_challenge_proof_and_verdict() {
         let coordinator = PorCoordinator::new();
@@ -3379,7 +3182,6 @@ mod tests {
         assert_eq!(status.status, PorChallengeOutcome::Verified);
         assert_eq!(status.proof_digest, Some(proof_digest));
     }
-
     #[test]
     fn status_query_filters_before_applying_page_limit() {
         fn challenge_for(provider: u8, issued_at: u64) -> PorChallengeV1 {
@@ -3396,7 +3198,6 @@ mod tests {
             challenge.deadline_at = issued_at + 900;
             challenge
         }
-
         let coordinator = PorCoordinator::new();
         let page_anchor = challenge_for(0x31, 1_700_000_000);
         let non_matching = challenge_for(0x32, 1_700_001_000);
@@ -3406,7 +3207,6 @@ mod tests {
                 .record_challenge(challenge)
                 .expect("record distinct challenge");
         }
-
         let filter = PorStatusFilter {
             provider: Some(matching.provider_id),
             ..PorStatusFilter::default()
@@ -3415,7 +3215,6 @@ mod tests {
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].challenge_id, matching.challenge_id);
     }
-
     #[test]
     fn indexed_status_pages_enforce_continuity_and_exact_byte_budget() {
         fn challenge_for(provider: u8, issued_at: u64) -> PorChallengeV1 {
@@ -3432,7 +3231,6 @@ mod tests {
             challenge.deadline_at = issued_at + 900;
             challenge
         }
-
         let coordinator = PorCoordinator::new();
         let challenges = [
             challenge_for(0x41, 1_700_000_100),
@@ -3444,7 +3242,6 @@ mod tests {
                 .record_challenge(challenge)
                 .expect("record indexed challenge");
         }
-
         let one_record = PorStatusPageLimits::new(1, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
             .expect("one-record limits");
         let first = coordinator
@@ -3457,7 +3254,6 @@ mod tests {
         assert_eq!(first.statuses.len(), 1);
         assert!(first.has_more);
         assert!(first.next_cursor.is_some());
-
         let second = coordinator
             .query_status_page(
                 &PorStatusFilter::default(),
@@ -3471,7 +3267,6 @@ mod tests {
             second.statuses[0].challenge_id,
             first.statuses[0].challenge_id
         );
-
         let first_record_bytes = to_bytes(&first.statuses[0])
             .expect("encode first status")
             .len();
@@ -3503,7 +3298,6 @@ mod tests {
             "the matching record inspected only to discover a byte boundary must be retried"
         );
     }
-
     #[test]
     fn sparse_status_intersection_is_lookup_bounded_and_cursor_complete() {
         const STATUS_COUNT: usize = 1_027;
@@ -3513,7 +3307,6 @@ mod tests {
         let mut statuses = Vec::with_capacity(STATUS_COUNT);
         let mut expected_match = [0_u8; 32];
         let mut first_cursor_anchor = [0_u8; 32];
-
         for index in 0..STATUS_COUNT {
             let mut challenge = sample_challenge(false);
             challenge.manifest_digest = if index <= INTERSECTION_INDEX {
@@ -3553,7 +3346,6 @@ mod tests {
             statuses.push(ChallengeRecord::from_challenge(challenge).to_status());
         }
         statuses.sort_by_key(|status| status.challenge_id);
-
         let coordinator = PorCoordinator::new();
         coordinator
             .install_authoritative_projection(PorStatusAuthoritySnapshotV1 {
@@ -3594,7 +3386,6 @@ mod tests {
             PorStatusPageCursor::After { challenge_id, .. }
                 if challenge_id == first_cursor_anchor
         ));
-
         coordinator
             .status_page_projection_lookups
             .store(0, std::sync::atomic::Ordering::Relaxed);
@@ -3613,7 +3404,6 @@ mod tests {
         assert!(!second.has_more);
         assert!(second.next_cursor.is_none());
     }
-
     #[test]
     fn status_page_continuation_rejects_mutation_and_filter_substitution() {
         let coordinator = PorCoordinator::new();
@@ -3646,7 +3436,6 @@ mod tests {
             .expect("first page");
         let cursor = PorStatusPageCursor::from_opaque(page.next_cursor.as_deref())
             .expect("first page must return a canonical continuation");
-
         let forged_epoch_cursor = match cursor {
             PorStatusPageCursor::After {
                 snapshot_generation,
@@ -3668,7 +3457,6 @@ mod tests {
                 .query_status_page(&PorStatusFilter::default(), limits, forged_epoch_cursor,),
             Err(PorCoordinatorError::PageCursorAnchorMismatch { .. })
         ));
-
         let overlapping_filter = PorStatusFilter {
             status: Some(PorChallengeOutcome::AwaitingProof),
             ..PorStatusFilter::default()
@@ -3677,7 +3465,6 @@ mod tests {
             coordinator.query_status_page(&overlapping_filter, limits, cursor,),
             Err(PorCoordinatorError::PageCursorSelectionMismatch)
         ));
-
         let mut third_challenge = sample_challenge(false);
         third_challenge.provider_id = [0x55; 32];
         third_challenge.challenge_id = derive_challenge_id(
@@ -3697,7 +3484,6 @@ mod tests {
             Err(PorCoordinatorError::StalePageGeneration { .. })
         ));
     }
-
     #[test]
     fn export_continuation_rejects_overlapping_range_substitution() {
         let coordinator = PorCoordinator::new();
@@ -3713,7 +3499,6 @@ mod tests {
         coordinator
             .record_challenge(&first)
             .expect("record first export challenge");
-
         let mut second = sample_challenge(false);
         second.provider_id = [0x45; 32];
         second.epoch_id = 42;
@@ -3729,7 +3514,6 @@ mod tests {
         coordinator
             .record_challenge(&second)
             .expect("record second export challenge");
-
         let limits = PorStatusPageLimits::new(1, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
             .expect("export page limits");
         let page = coordinator
@@ -3737,7 +3521,6 @@ mod tests {
             .expect("first export page");
         let cursor = PorStatusPageCursor::from_opaque(page.page.next_cursor.as_deref())
             .expect("export page must return a canonical continuation");
-
         let forged_epoch_cursor = match cursor {
             PorStatusPageCursor::After {
                 snapshot_generation,
@@ -3758,13 +3541,11 @@ mod tests {
             coordinator.export_status_page(Some((41, 42)), limits, forged_epoch_cursor),
             Err(PorCoordinatorError::PageCursorAnchorMismatch { .. })
         ));
-
         assert!(matches!(
             coordinator.export_status_page(Some((41, 43)), limits, cursor),
             Err(PorCoordinatorError::PageCursorSelectionMismatch)
         ));
     }
-
     #[test]
     fn outcome_index_tracks_verdict_transition_and_bounded_export() {
         let coordinator = PorCoordinator::new();
@@ -3786,7 +3567,6 @@ mod tests {
                 .len(),
             1
         );
-
         let proof = sample_proof(&challenge);
         let proof_digest = proof.proof_digest();
         coordinator
@@ -3796,7 +3576,6 @@ mod tests {
         coordinator
             .record_verdict(&verdict, &auditor_keys(), 1)
             .expect("record verdict");
-
         assert!(
             coordinator
                 .query_status_page(&pending_filter, limits, PorStatusPageCursor::First)
@@ -3816,7 +3595,6 @@ mod tests {
                 .challenge_id,
             challenge.challenge_id
         );
-
         let export = coordinator
             .export_status_page(
                 Some((challenge.epoch_id, challenge.epoch_id)),
@@ -3830,7 +3608,6 @@ mod tests {
         assert_eq!(export.start_epoch, Some(challenge.epoch_id));
         assert_eq!(export.end_epoch, Some(challenge.epoch_id));
     }
-
     #[test]
     fn page_limit_type_rejects_zero_and_protocol_overflow() {
         assert!(matches!(
@@ -3849,14 +3626,12 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn forged_proofs_and_verdicts_leave_coordinator_state_retryable() {
         let coordinator = PorCoordinator::new();
         let challenge = sample_challenge(false);
         coordinator.record_challenge(&challenge).unwrap();
         let proof = sample_proof(&challenge);
-
         for mutation in 0..4 {
             let mut forged = proof.clone();
             match mutation {
@@ -3871,7 +3646,6 @@ mod tests {
             let status = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
             assert_eq!(status[0].proof_digest, None);
         }
-
         coordinator
             .record_proof(&proof, &provider_key())
             .expect("valid proof retry");
@@ -3897,7 +3671,6 @@ mod tests {
             assert_eq!(status[0].status, PorChallengeOutcome::ProofSubmitted);
             assert_eq!(status[0].proof_digest, Some(digest));
         }
-
         coordinator
             .record_verdict(&valid, &auditor_keys(), 1)
             .expect("valid verdict retry");
@@ -3915,14 +3688,12 @@ mod tests {
             Err(PorCoordinatorError::VerdictConflict { .. })
         ));
     }
-
     #[test]
     fn coordinator_enforces_admission_key_and_auditor_policy() {
         let coordinator = PorCoordinator::new();
         let challenge = sample_challenge(false);
         coordinator.record_challenge(&challenge).unwrap();
         let proof = sample_proof(&challenge);
-
         assert!(matches!(
             coordinator.record_proof(&proof, &[0xEE; 32]),
             Err(PorCoordinatorError::InvalidProofSignature(
@@ -3932,7 +3703,6 @@ mod tests {
         coordinator
             .record_proof(&proof, &provider_key())
             .expect("admitted provider proof");
-
         let verdict = sample_verdict(
             &challenge,
             AuditOutcomeV1::Success,
@@ -3959,7 +3729,6 @@ mod tests {
             .record_verdict(&verdict, &auditor_keys(), 1)
             .expect("trusted auditor threshold");
     }
-
     #[test]
     fn coordinator_rejects_replays_and_supports_compensating_rollbacks() {
         let coordinator = PorCoordinator::new();
@@ -3969,7 +3738,6 @@ mod tests {
             coordinator.record_challenge(&challenge),
             Err(PorCoordinatorError::DuplicateChallenge { .. })
         ));
-
         let proof = sample_proof(&challenge);
         coordinator.record_proof(&proof, &provider_key()).unwrap();
         assert!(matches!(
@@ -3979,7 +3747,6 @@ mod tests {
         coordinator.rollback_proof(&proof).unwrap();
         let status = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
         assert_eq!(status[0].proof_digest, None);
-
         coordinator.record_proof(&proof, &provider_key()).unwrap();
         let verdict = sample_verdict(
             &challenge,
@@ -4000,7 +3767,6 @@ mod tests {
         assert_eq!(status[0].status, PorChallengeOutcome::ProofSubmitted);
         assert_eq!(status[0].proof_digest, Some(proof.proof_digest()));
     }
-
     #[test]
     fn concurrent_conflicting_proofs_have_exactly_one_winner() {
         const WORKERS: usize = 16;
@@ -4008,7 +3774,6 @@ mod tests {
         let challenge = sample_challenge(false);
         coordinator.record_challenge(&challenge).unwrap();
         let barrier = StdArc::new(Barrier::new(WORKERS));
-
         let results = std::thread::scope(|scope| {
             let mut workers = Vec::with_capacity(WORKERS);
             for index in 0..WORKERS {
@@ -4028,7 +3793,6 @@ mod tests {
                 .map(|worker| worker.join().expect("proof worker"))
                 .collect::<Vec<_>>()
         });
-
         assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
         assert_eq!(
             results
@@ -4040,12 +3804,10 @@ mod tests {
         let statuses = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
         assert!(statuses[0].proof_digest.is_some());
     }
-
     #[cfg(unix)]
     #[test]
     fn persistence_failures_roll_back_each_coordinator_transition() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         let blocked_parent = root.join("blocked");
@@ -4053,7 +3815,6 @@ mod tests {
         let coordinator = PorCoordinator::with_persistence(&snapshot_path).unwrap();
         fs::set_permissions(&blocked_parent, fs::Permissions::from_mode(0o755)).unwrap();
         let challenge = sample_challenge(true);
-
         assert!(matches!(
             coordinator.record_challenge(&challenge),
             Err(PorCoordinatorError::Persistence(_))
@@ -4063,7 +3824,6 @@ mod tests {
                 .query_statuses(&PorStatusFilter::default(), None, None)
                 .is_empty()
         );
-
         fs::set_permissions(&blocked_parent, fs::Permissions::from_mode(0o700)).unwrap();
         coordinator
             .record_challenge(&challenge)
@@ -4076,7 +3836,6 @@ mod tests {
         ));
         let status = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
         assert_eq!(status[0].proof_digest, None);
-
         fs::set_permissions(&blocked_parent, fs::Permissions::from_mode(0o700)).unwrap();
         coordinator
             .record_proof(&proof, &provider_key())
@@ -4092,13 +3851,11 @@ mod tests {
         assert_eq!(status[0].status, PorChallengeOutcome::ProofSubmitted);
         assert!(status[0].forced);
         assert_eq!(status[0].proof_digest, Some(digest));
-
         fs::set_permissions(&blocked_parent, fs::Permissions::from_mode(0o700)).unwrap();
         coordinator
             .record_verdict(&verdict, &auditor_keys(), 1)
             .expect("verdict succeeds after persistence recovery");
     }
-
     #[test]
     fn weekly_report_compiles() {
         let coordinator = PorCoordinator::new();
@@ -4143,7 +3900,6 @@ mod tests {
             "identical coordinator history must produce identical report bytes"
         );
     }
-
     #[test]
     fn weekly_report_excludes_timestamps_outside_supported_time_domain() {
         let coordinator = PorCoordinator::new();
@@ -4151,7 +3907,6 @@ mod tests {
         challenge.issued_at = u64::MAX - 600;
         challenge.deadline_at = u64::MAX;
         coordinator.record_challenge(&challenge).expect("challenge");
-
         let report = coordinator
             .weekly_report(PorReportIsoWeek {
                 year: 2023,
@@ -4161,7 +3916,6 @@ mod tests {
         assert_eq!(report.challenges_total, 0);
         assert!(report.top_offenders.is_empty());
     }
-
     #[test]
     fn iso_week_bounds_rejects_unrepresentable_week_end() {
         assert!(matches!(
@@ -4171,14 +3925,12 @@ mod tests {
             }),
             Err(PorCoordinatorError::IsoWeekComputation)
         ));
-
         iso_week_bounds(PorReportIsoWeek {
             year: 2026,
             week: 1,
         })
         .expect("a valid follow-up ISO week must still compute");
     }
-
     fn record_failed_forced_challenge(
         coordinator: &PorCoordinator,
         provider_byte: u8,
@@ -4211,7 +3963,6 @@ mod tests {
             .record_verdict(&verdict, &auditor_keys(), 1)
             .expect("verdict");
     }
-
     #[test]
     fn weekly_report_is_byte_stable_across_insertion_orders_and_ties() {
         let entries = [(4_u8, 14_u8), (2, 12), (3, 13), (1, 11)];
@@ -4233,7 +3984,6 @@ mod tests {
                 1_700_000_003 - index as u64,
             );
         }
-
         let cycle = PorReportIsoWeek {
             year: 2023,
             week: 46,
@@ -4245,7 +3995,6 @@ mod tests {
         let second_report = second
             .weekly_report_at(cycle, generated_at)
             .expect("second report");
-
         assert_eq!(first_report, second_report);
         assert_eq!(first_report.forced_challenges, 4);
         assert_eq!(
@@ -4272,7 +4021,6 @@ mod tests {
             to_bytes(&second_report).expect("encode second report")
         );
     }
-
     #[test]
     fn weekly_report_projects_only_the_requested_week_from_large_history() {
         let coordinator = PorCoordinator::new();
@@ -4296,7 +4044,6 @@ mod tests {
             );
             coordinator.record_challenge(&challenge).expect("challenge");
         };
-
         for index in 0..2_048 {
             record_at(index, 1_600_000_000 + index);
             record_at(10_000 + index, 1_800_000_000 + index);
@@ -4304,7 +4051,6 @@ mod tests {
         for index in 0..3 {
             record_at(20_000 + index, 1_700_000_000 + index);
         }
-
         coordinator
             .weekly_report_projection_lookups
             .store(0, std::sync::atomic::Ordering::Relaxed);
@@ -4324,13 +4070,11 @@ mod tests {
             "report work must be bounded by the canonical week slice, not total retention"
         );
     }
-
     #[test]
     fn persistence_round_trip_restores_state() {
         let dir = tempdir().expect("temp dir");
         let snapshot_path = canonical_temp_root(&dir).join("por_snapshot.to");
         let expected_digest;
-
         {
             let coordinator =
                 PorCoordinator::with_persistence(&snapshot_path).expect("coordinator");
@@ -4347,7 +4091,6 @@ mod tests {
                 .expect("verdict");
             expected_digest = proof_digest;
         }
-
         let coordinator =
             PorCoordinator::with_persistence(&snapshot_path).expect("reload coordinator");
         let statuses = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
@@ -4358,7 +4101,6 @@ mod tests {
         assert!(status.responded_at.is_some());
         assert_eq!(status.repair_task_id, None);
     }
-
     #[test]
     fn persisted_generation_rejects_pre_mutation_cursor_after_restart() {
         fn challenge_for(provider: u8, issued_at_offset: u64) -> PorChallengeV1 {
@@ -4375,7 +4117,6 @@ mod tests {
             challenge.deadline_at += issued_at_offset;
             challenge
         }
-
         let dir = tempdir().expect("temp dir");
         let snapshot_path = canonical_temp_root(&dir).join("por_snapshot.to");
         let limits = PorStatusPageLimits::new(1, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
@@ -4403,7 +4144,6 @@ mod tests {
                 .expect("persist generation-advancing mutation");
             (cursor, page.snapshot_generation)
         };
-
         let coordinator =
             PorCoordinator::with_persistence(&snapshot_path).expect("reload coordinator");
         let error = coordinator
@@ -4419,7 +4159,6 @@ mod tests {
                 if expected == issued_generation && current > expected
         ));
     }
-
     #[test]
     fn persisted_generation_survives_same_cardinality_mutation_and_rollback() {
         fn challenge_for(provider: u8, issued_at_offset: u64) -> PorChallengeV1 {
@@ -4436,7 +4175,6 @@ mod tests {
             challenge.deadline_at += issued_at_offset;
             challenge
         }
-
         let dir = tempdir().expect("temp dir");
         let snapshot_path = canonical_temp_root(&dir).join("por_snapshot.to");
         let limits = PorStatusPageLimits::new(1, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
@@ -4474,7 +4212,6 @@ mod tests {
             );
             (cursor, page.snapshot_generation)
         };
-
         let coordinator =
             PorCoordinator::with_persistence(&snapshot_path).expect("reload coordinator");
         let restored_generation = coordinator.status_indexes.read().generation;
@@ -4492,7 +4229,6 @@ mod tests {
                 if expected == issued_generation && current == restored_generation
         ));
     }
-
     #[test]
     fn post_publication_failure_retains_state_and_fail_stops_until_restart() {
         fn challenge_for(provider: u8, issued_at_offset: u64) -> PorChallengeV1 {
@@ -4509,7 +4245,6 @@ mod tests {
             challenge.deadline_at += issued_at_offset;
             challenge
         }
-
         let dir = tempdir().expect("temp dir");
         let snapshot_path = canonical_temp_root(&dir).join("por_snapshot.to");
         let limits = PorStatusPageLimits::new(1, POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1)
@@ -4533,7 +4268,6 @@ mod tests {
             .next_cursor
             .expect("two records produce a continuation cursor");
         let issued_generation = page.snapshot_generation;
-
         let proof = sample_proof(&second);
         coordinator.inject_persistence_commit_uncertain_once();
         let error = coordinator
@@ -4564,7 +4298,6 @@ mod tests {
             .read()
             .validate_against_records(&coordinator.records)
             .expect("retained memory and indexes remain consistent");
-
         assert!(matches!(
             coordinator.query_status_page(
                 &PorStatusFilter::default(),
@@ -4580,7 +4313,6 @@ mod tests {
         ));
         assert!(!coordinator.records.contains_key(&third.challenge_id));
         drop(coordinator);
-
         let coordinator =
             PorCoordinator::with_persistence(&snapshot_path).expect("reload coordinator");
         assert_eq!(
@@ -4609,7 +4341,6 @@ mod tests {
                 if expected == issued_generation && current == issued_generation + 1
         ));
     }
-
     #[test]
     fn persistence_rejects_zero_or_missing_status_generation() {
         #[derive(NoritoSerialize)]
@@ -4619,7 +4350,6 @@ mod tests {
             forced: Vec<ForcedProviderSnapshot>,
             prepared_weekly_report: Option<PreparedWeeklyReportV1>,
         }
-
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
         let zero_path = root.join("zero-generation.to");
@@ -4643,7 +4373,6 @@ mod tests {
             Err(PorPersistenceError::Decode(message))
                 if message.contains("status generation must be non-zero")
         ));
-
         let missing_path = root.join("missing-generation.to");
         let missing_bytes = to_bytes(&SnapshotWithoutStatusGeneration {
             version: POR_COORDINATOR_SNAPSHOT_VERSION_V1,
@@ -4664,7 +4393,6 @@ mod tests {
             Err(PorPersistenceError::Decode(_))
         ));
     }
-
     #[test]
     fn persistence_rejects_status_generation_below_record_floor() {
         let dir = tempdir().expect("temp dir");
@@ -4685,20 +4413,17 @@ mod tests {
             true,
         )
         .expect("write malformed-generation snapshot");
-
         assert!(matches!(
             PorCoordinator::with_persistence(&snapshot_path),
             Err(PorPersistenceError::Decode(message))
                 if message.contains("below the record floor")
         ));
     }
-
     #[test]
     fn status_generation_exhaustion_fails_before_mutation() {
         let coordinator = PorCoordinator::new();
         coordinator.status_indexes.write().generation = u64::MAX;
         let challenge = sample_challenge(false);
-
         assert!(matches!(
             coordinator.record_challenge(&challenge),
             Err(PorCoordinatorError::StatusGenerationExhausted)
@@ -4706,7 +4431,6 @@ mod tests {
         assert!(coordinator.records.is_empty());
         assert_eq!(coordinator.status_indexes.read().generation, u64::MAX);
     }
-
     #[test]
     fn prepared_weekly_report_survives_restart_and_history_changes() {
         let dir = tempdir().expect("temp dir");
@@ -4715,7 +4439,6 @@ mod tests {
             year: 2023,
             week: 46,
         };
-
         let prepared = {
             let coordinator =
                 PorCoordinator::with_persistence(&snapshot_path).expect("coordinator");
@@ -4725,7 +4448,6 @@ mod tests {
                 .expect("prepare report");
             assert_eq!(prepared.report.challenges_total, 1);
             assert!(!prepared.published);
-
             record_failed_forced_challenge(&coordinator, 2, 12, 1_700_000_100);
             assert_eq!(
                 coordinator
@@ -4747,7 +4469,6 @@ mod tests {
             );
             prepared
         };
-
         let coordinator =
             PorCoordinator::with_persistence(&snapshot_path).expect("reload coordinator");
         let replay = coordinator
@@ -4779,7 +4500,6 @@ mod tests {
             }),
             Err(PorCoordinatorError::WeeklyReportPublicationPending { .. })
         ));
-
         let mut substituted = replay.report.clone();
         substituted.generated_at = substituted.generated_at.saturating_add(1);
         assert!(matches!(
@@ -4804,9 +4524,10 @@ mod tests {
         );
         assert!(!catch_up.published);
     }
-
     #[cfg(feature = "app_api")]
     mod runtime {
+        use super::*;
+        use crate::sorafs::por::{RandomnessProvider, VrfProvider};
         use std::{
             collections::HashMap,
             sync::{
@@ -4814,15 +4535,10 @@ mod tests {
                 atomic::{AtomicUsize, Ordering as AtomicOrdering},
             },
         };
-
-        use super::*;
-        use crate::sorafs::por::{RandomnessProvider, VrfProvider};
-
         #[derive(Clone)]
         struct StaticRandomnessProvider {
             randomness: PorRandomness,
         }
-
         #[async_trait]
         impl RandomnessProvider for StaticRandomnessProvider {
             async fn randomness_for_epoch(
@@ -4834,12 +4550,10 @@ mod tests {
                 Ok(self.randomness)
             }
         }
-
         #[derive(Default, Clone)]
         struct StaticVrfProvider {
             map: HashMap<u64, HashMap<ManifestVrfKey, ManifestVrfBundle>>,
         }
-
         impl VrfProvider for StaticVrfProvider {
             fn vrf_bundles_for_epoch(
                 &self,
@@ -4852,13 +4566,11 @@ mod tests {
                     .unwrap_or_default())
             }
         }
-
         #[derive(Clone)]
         struct ReplaySafeStorage {
             planned: Vec<PlannedChallenge>,
             recorded: Arc<Mutex<Option<PorChallengeV1>>>,
         }
-
         impl PorStorage for ReplaySafeStorage {
             fn plan_challenges(
                 &self,
@@ -4868,7 +4580,6 @@ mod tests {
             ) -> Result<Vec<PlannedChallenge>, PorChallengePlannerError> {
                 Ok(self.planned.clone())
             }
-
             fn record_challenge(
                 &self,
                 challenge: &PorChallengeV1,
@@ -4893,7 +4604,6 @@ mod tests {
                     }
                 }
             }
-
             fn vrf_target_is_active(
                 &self,
                 _provider_id: [u8; 32],
@@ -4903,17 +4613,14 @@ mod tests {
                 true
             }
         }
-
         struct FailOncePublisher {
             attempts: AtomicUsize,
             published: Mutex<Vec<PorChallengePublicationV1>>,
         }
-
         impl PorGovernancePublisher for FailOncePublisher {
             fn is_ready(&self) -> bool {
                 true
             }
-
             fn publish_challenge(
                 &self,
                 publication: PorChallengePublicationV1,
@@ -4926,7 +4633,6 @@ mod tests {
                 self.published.lock().push(publication);
                 Ok(())
             }
-
             fn publish_weekly_report(
                 &self,
                 _report: PorWeeklyReportV1,
@@ -4934,24 +4640,20 @@ mod tests {
                 Ok(())
             }
         }
-
         struct FailOnceWeeklyPublisher {
             attempts: AtomicUsize,
             reports: Mutex<Vec<PorWeeklyReportV1>>,
         }
-
         impl PorGovernancePublisher for FailOnceWeeklyPublisher {
             fn is_ready(&self) -> bool {
                 true
             }
-
             fn publish_challenge(
                 &self,
                 _publication: PorChallengePublicationV1,
             ) -> Result<(), sorafs_node::GovernancePublishError> {
                 Ok(())
             }
-
             fn publish_weekly_report(
                 &self,
                 report: PorWeeklyReportV1,
@@ -4965,21 +4667,17 @@ mod tests {
                 Ok(())
             }
         }
-
         struct NotReadyPublisher;
-
         impl PorGovernancePublisher for NotReadyPublisher {
             fn is_ready(&self) -> bool {
                 false
             }
-
             fn publish_challenge(
                 &self,
                 _publication: PorChallengePublicationV1,
             ) -> Result<(), sorafs_node::GovernancePublishError> {
                 unreachable!("constructor rejects a publisher that is not ready")
             }
-
             fn publish_weekly_report(
                 &self,
                 _report: PorWeeklyReportV1,
@@ -4987,7 +4685,6 @@ mod tests {
                 unreachable!("constructor rejects a publisher that is not ready")
             }
         }
-
         #[test]
         #[should_panic(
             expected = "enabled PoR runtime requires the embedded SoraFS node's signed Governance DAG publisher"
@@ -5006,7 +4703,6 @@ mod tests {
                 drand_randomness: challenge.drand_randomness,
                 drand_signature: challenge.drand_signature,
             };
-
             let _runtime = PorCoordinatorRuntime::new_with_publisher(
                 storage,
                 Arc::new(PorCoordinator::new()),
@@ -5018,7 +4714,6 @@ mod tests {
                 300,
             );
         }
-
         #[test]
         fn scheduler_reports_only_the_previous_completed_iso_week() {
             let current_cycle = PorReportIsoWeek {
@@ -5045,7 +4740,6 @@ mod tests {
                 u64::try_from(current_start.unix_timestamp()).expect("positive timestamp")
             );
         }
-
         include!("por/runtime_retry_tests.rs");
     }
 }

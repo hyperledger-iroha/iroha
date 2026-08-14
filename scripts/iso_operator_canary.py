@@ -9,14 +9,15 @@ Purpose:
 
 Prerequisites:
   Python 3.11+. No third party Python packages are required. The configured
-  rail inbox, audit export directory, endpoints, and optional bearer-token files
-  must already exist.
+  rail inbox, exact NetworkId, runtime-only operator private-key file, audit
+  export directory, endpoints, and optional notary bearer-token file must
+  already exist.
 
 Safety:
   The runner never deletes inputs and never mutates repository files unless
   ``--summary-out`` points at a file to write. Plain HTTP remains disabled by
-  default in the underlying adapters and verifier. Bearer-token file paths are
-  passed through to child scripts, but token contents are never read or persisted
+  default in the underlying adapters and verifier. Runtime secret-file paths are
+  passed through to child scripts, but secret contents are never read or persisted
   by this runner.
 """
 
@@ -112,6 +113,7 @@ SAFE_OUTPUT_CONTROL_CHARS = {"\t", "\n", "\r"}
 SCRIPT_DIR = Path(__file__).resolve().parent
 CLI_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
 JSON_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
+NETWORK_ID_RE = re.compile(r"hash:([0-9A-F]{64})#([0-9A-F]{4})")
 CLI_CANONICAL_NUMBER_RE = re.compile(
     r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?"
 )
@@ -157,7 +159,8 @@ RAIL_KEYS = {
     "dry_run",
     "allow_default_profile",
     "allow_insecure_http",
-    "bearer_token_file",
+    "network_id",
+    "operator_private_key_file",
     "max_payload_bytes",
     "timeout_secs",
     "response_limit_bytes",
@@ -199,6 +202,31 @@ LOCAL_DIAGNOSTIC_STAGE_FLAGS = {
 
 class CanaryError(RuntimeError):
     """Raised when a canary runbook is invalid."""
+
+
+def _crc16_ccitt_false(payload: bytes) -> int:
+    checksum = 0xFFFF
+    for byte in payload:
+        checksum ^= byte << 8
+        for _ in range(8):
+            checksum = (
+                ((checksum << 1) ^ 0x1021) & 0xFFFF
+                if checksum & 0x8000
+                else (checksum << 1) & 0xFFFF
+            )
+    return checksum
+
+
+def _canonical_network_id(value: str, label: str) -> str:
+    match = NETWORK_ID_RE.fullmatch(value)
+    if match is None:
+        raise CanaryError(f"{label} must be one canonical checksummed NetworkId")
+    identity = bytes.fromhex(match.group(1))
+    if identity[-1] & 1 == 0 or _crc16_ccitt_false(value[:69].encode("ascii")) != int(
+        match.group(2), 16
+    ):
+        raise CanaryError(f"{label} must be one canonical checksummed NetworkId")
+    return value
 
 
 def _plain_text(value: str, label: str) -> str:
@@ -1680,30 +1708,30 @@ def _build_rail_stage(
         if message_path is not None:
             _reject_repository_iso_fixture_path(message_path, "rail.message")
         _reject_repository_iso_fixture_path(receipt_dir, "rail.receipt_dir")
-    bearer_raw = _optional_string(rail, "bearer_token_file", "rail")
-    bearer_token_file = (
+    network_id = _canonical_network_id(
+        _required_string(rail, "network_id", "rail"), "rail.network_id"
+    )
+    operator_key_raw = _required_string(rail, "operator_private_key_file", "rail")
+    operator_private_key_file = (
         _path_from_config(
             config_dir,
-            bearer_raw,
-            "rail.bearer_token_file",
+            operator_key_raw,
+            "rail.operator_private_key_file",
             allow_runtime_secret_path=True,
         )
-        if bearer_raw is not None
-        else None
     )
-    if bearer_token_file is not None:
-        _reject_overlapping_paths(
-            bearer_token_file,
-            "rail.bearer_token_file",
-            inbox_dir,
-            "rail.inbox_dir",
-        )
-        _reject_overlapping_paths(
-            receipt_dir,
-            "rail.receipt_dir",
-            bearer_token_file,
-            "rail.bearer_token_file",
-        )
+    _reject_overlapping_paths(
+        operator_private_key_file,
+        "rail.operator_private_key_file",
+        inbox_dir,
+        "rail.inbox_dir",
+    )
+    _reject_overlapping_paths(
+        receipt_dir,
+        "rail.receipt_dir",
+        operator_private_key_file,
+        "rail.operator_private_key_file",
+    )
     dry_run = _policy_bool(
         rail,
         "dry_run",
@@ -1731,7 +1759,8 @@ def _build_rail_stage(
     _append_bool(argv, "--dry-run", dry_run)
     _append_bool(argv, "--allow-default-profile", allow_default_profile)
     _append_bool(argv, "--allow-insecure-http", allow_insecure_http)
-    _append_path(argv, "--bearer-token-file", bearer_token_file)
+    _append_value(argv, "--network-id", network_id)
+    _append_path(argv, "--operator-private-key-file", operator_private_key_file)
     _append_value(argv, "--max-payload-bytes", _optional_positive_int(rail, "max_payload_bytes", "rail"))
     _append_value(argv, "--timeout-secs", _optional_positive_number(rail, "timeout_secs", "rail"))
     _append_value(
@@ -1745,8 +1774,9 @@ def _build_rail_stage(
     ]
     if message_path is not None:
         artifact_paths.append(("rail.message", message_path, False))
-    if bearer_token_file is not None:
-        artifact_paths.append(("rail.bearer_token_file", bearer_token_file, False))
+    artifact_paths.append(
+        ("rail.operator_private_key_file", operator_private_key_file, False)
+    )
     return StagePlan(
         "rail",
         argv,
@@ -2266,19 +2296,25 @@ def _run_command_bounded(
 
 def _redacted_command(argv: list[str]) -> list[str]:
     redacted: list[str] = []
-    redact_next = False
+    redact_next: str | None = None
     for item in argv:
-        if redact_next:
-            redacted.append("<runtime-token-file>")
-            redact_next = False
+        if redact_next is not None:
+            redacted.append(redact_next)
+            redact_next = None
             continue
-        prefix = "--bearer-token-file="
-        if item.startswith(prefix):
-            redacted.append(prefix + "<runtime-token-file>")
+        bearer_prefix = "--bearer-token-file="
+        operator_key_prefix = "--operator-private-key-file="
+        if item.startswith(bearer_prefix):
+            redacted.append(bearer_prefix + "<runtime-token-file>")
+            continue
+        if item.startswith(operator_key_prefix):
+            redacted.append(operator_key_prefix + "<runtime-private-key-file>")
             continue
         redacted.append(item)
         if item == "--bearer-token-file":
-            redact_next = True
+            redact_next = "<runtime-token-file>"
+        elif item == "--operator-private-key-file":
+            redact_next = "<runtime-private-key-file>"
     return redacted
 
 

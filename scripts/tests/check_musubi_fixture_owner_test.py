@@ -128,10 +128,11 @@ def test_owner_command_is_argument_free() -> None:
     command = writer.owner_command()
     assert command[-2:] == ["--bin", "musubi_fixtures"]
     assert command[command.index("--jobs") + 1] == "1"
-    assert command[command.index("-Z") + 1] == "unstable-options"
-    assert command[command.index("--lockfile-path") + 1] == os.fspath(
-        REPO_ROOT / "Cargo.lock"
-    )
+    assert "--locked" in command
+    assert "--offline" in command
+    assert "-Z" not in command
+    assert "unstable-options" not in command
+    assert "--lockfile-path" not in command
     assert "--write" not in command
     assert "--check" not in command
     assert "--output-root" not in command

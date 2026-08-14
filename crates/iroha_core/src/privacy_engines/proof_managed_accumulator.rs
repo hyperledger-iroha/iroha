@@ -9,31 +9,25 @@
 //!
 //! FCMP++ deliberately does not use this module.  Its canonical accumulator is
 //! the Selene/Helios curve tree from the FCMP++ construction.
-
-use std::collections::BTreeSet;
-
 use incrementalmerkletree::{Hashable, Level, Position, frontier::Frontier};
 use iroha_data_model::privacy::{
     PrivacyCommitmentV1, PrivacyNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
 };
 use sha2::{Digest as _, Sha256};
+use std::collections::BTreeSet;
 use thiserror::Error;
-
 const TREE_DEPTH_V1: u8 = 32;
 const EMPTY_LEAF_DOMAIN_V1: &[u8] = b"iroha.privacy.proof-managed-note-tree.empty-leaf.v1";
 const LEAF_DOMAIN_V1: &[u8] = b"iroha.privacy.proof-managed-note-tree.leaf.v1";
 const NODE_DOMAIN_V1: &[u8] = b"iroha.privacy.proof-managed-note-tree.node.v1";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct NoteTreeNodeV1([u8; 32]);
-
 impl Hashable for NoteTreeNodeV1 {
     fn empty_leaf() -> Self {
         let mut hasher = Sha256::new();
         hasher.update(EMPTY_LEAF_DOMAIN_V1);
         Self(hasher.finalize().into())
     }
-
     fn combine(level: Level, left: &Self, right: &Self) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(NODE_DOMAIN_V1);
@@ -43,7 +37,6 @@ impl Hashable for NoteTreeNodeV1 {
         Self(hasher.finalize().into())
     }
 }
-
 /// Canonical compact representation of an IVM/PQ note frontier.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProofManagedFrontierPartsV1 {
@@ -56,7 +49,6 @@ pub(crate) struct ProofManagedFrontierPartsV1 {
     /// Root reconstructed from the complete compact frontier.
     pub(crate) root: PrivacyRootV1,
 }
-
 /// Failure while constructing, restoring, or advancing a note frontier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ProofManagedAccumulatorErrorV1 {
@@ -94,7 +86,6 @@ pub(crate) enum ProofManagedAccumulatorErrorV1 {
     #[error("proof-managed note accumulator tree is full")]
     TreeFull,
 }
-
 fn validate_namespace_v1(
     namespace: PrivacyNamespaceV1,
 ) -> Result<(), ProofManagedAccumulatorErrorV1> {
@@ -109,7 +100,6 @@ fn validate_namespace_v1(
     }
     Ok(())
 }
-
 fn commitment_leaf_v1(
     namespace: PrivacyNamespaceV1,
     commitment: PrivacyCommitmentV1,
@@ -132,7 +122,6 @@ fn commitment_leaf_v1(
     hasher.update(commitment.as_bytes());
     Ok(NoteTreeNodeV1(hasher.finalize().into()))
 }
-
 fn restore_frontier_v1(
     tree_size: u64,
     leaf: Option<[u8; 32]>,
@@ -152,7 +141,6 @@ fn restore_frontier_v1(
     )
     .map_err(|_| ProofManagedAccumulatorErrorV1::FrontierShape)
 }
-
 fn frontier_parts_v1(
     frontier: Frontier<NoteTreeNodeV1, TREE_DEPTH_V1>,
 ) -> ProofManagedFrontierPartsV1 {
@@ -172,7 +160,6 @@ fn frontier_parts_v1(
         root,
     }
 }
-
 /// Return the unique depth-32 authentication path for the sole leaf in a
 /// canonical proof-managed frontier.
 ///
@@ -192,7 +179,6 @@ pub(crate) fn canonical_single_leaf_authentication_path_v1() -> [[u8; 32]; TREE_
         sibling
     })
 }
-
 /// Construct the unique frontier for a complete ordered genesis set.
 ///
 /// # Errors
@@ -220,7 +206,6 @@ pub(crate) fn build_proof_managed_frontier_v1(
     }
     Ok(frontier_parts_v1(frontier))
 }
-
 /// Reconstruct and authenticate a persisted compact frontier.
 ///
 /// # Errors
@@ -240,7 +225,6 @@ pub(crate) fn validate_proof_managed_frontier_v1(
     }
     Ok(())
 }
-
 /// Append public output commitments in their exact statement order.
 ///
 /// # Errors
@@ -275,20 +259,16 @@ pub(crate) fn append_proof_managed_commitments_v1(
     }
     Ok(frontier_parts_v1(frontier))
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::privacy::{
         PrivacyNamespaceScopeV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
         PrivacyPoolProgramNamespaceV1, PrivacyProgramIdV1,
     };
-
-    use super::*;
-
     fn commitment(byte: u8) -> PrivacyCommitmentV1 {
         PrivacyCommitmentV1::new([byte; 32])
     }
-
     fn pq_namespace() -> PrivacyNamespaceV1 {
         PrivacyNamespaceV1::new(
             PrivacyProtocolIdV1::PqMaspStarkV0,
@@ -297,7 +277,6 @@ mod tests {
             }),
         )
     }
-
     fn ivm_namespace() -> PrivacyNamespaceV1 {
         PrivacyNamespaceV1::new(
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
@@ -307,7 +286,6 @@ mod tests {
             }),
         )
     }
-
     #[test]
     fn compact_frontier_round_trips_and_advances_in_order() {
         for (namespace, expected_origin, expected_successor) in [
@@ -334,7 +312,6 @@ mod tests {
                 origin.root,
             )
             .expect("origin frontier authenticates");
-
             let successor = append_proof_managed_commitments_v1(
                 namespace,
                 origin.tree_size,
@@ -356,14 +333,12 @@ mod tests {
                 successor.root,
             )
             .expect("successor frontier authenticates");
-
             let reversed =
                 build_proof_managed_frontier_v1(namespace, &[commitment(2), commitment(1)])
                     .expect("ordered alternate origin");
             assert_ne!(reversed.root, origin.root);
         }
     }
-
     #[test]
     fn protocol_and_namespace_are_cryptographically_separated() {
         let commitments = [commitment(7), commitment(8)];
@@ -372,7 +347,6 @@ mod tests {
         let ivm =
             build_proof_managed_frontier_v1(ivm_namespace(), &commitments).expect("IVM frontier");
         assert_ne!(pq.root, ivm.root);
-
         let other_pq = PrivacyNamespaceV1::new(
             PrivacyProtocolIdV1::PqMaspStarkV0,
             PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
@@ -383,7 +357,6 @@ mod tests {
             build_proof_managed_frontier_v1(other_pq, &commitments).expect("other PQ frontier");
         assert_ne!(pq.root, other.root);
     }
-
     #[test]
     fn malformed_frontiers_and_commitments_fail_closed() {
         let namespace = pq_namespace();
@@ -399,7 +372,6 @@ mod tests {
             build_proof_managed_frontier_v1(namespace, &[commitment(1), commitment(1)]),
             Err(ProofManagedAccumulatorErrorV1::DuplicateCommitment { index: 1 })
         );
-
         let origin = build_proof_managed_frontier_v1(namespace, &[commitment(1), commitment(2)])
             .expect("canonical origin");
         let mut wrong_root = origin.root;
@@ -444,7 +416,6 @@ mod tests {
             ),
             Err(ProofManagedAccumulatorErrorV1::DuplicateCommitment { index: 1 })
         );
-
         let mut substituted_predecessor = origin.root;
         substituted_predecessor.0[31] ^= 1;
         assert_eq!(
@@ -458,7 +429,6 @@ mod tests {
             ),
             Err(ProofManagedAccumulatorErrorV1::RootMismatch)
         );
-
         let full_tree_size = 1_u64 << TREE_DEPTH_V1;
         let full_leaf = Some([0xA5; 32]);
         let full_ommers = vec![[0x5A; 32]; usize::from(TREE_DEPTH_V1)];

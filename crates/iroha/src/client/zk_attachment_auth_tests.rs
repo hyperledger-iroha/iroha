@@ -1,9 +1,7 @@
 // Exact-network authentication contract for the tenant-scoped ZK attachment client.
-
 #[test]
 fn zk_attachment_calls_sign_the_exact_method_path_and_body_once() {
     use std::collections::HashSet;
-
     let client = client_with_base_url(base_url());
     let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&store);
@@ -43,7 +41,6 @@ fn zk_attachment_calls_sign_the_exact_method_path_and_body_once() {
                 .expect("signed attachment delete");
         },
     );
-
     let snapshots = store.lock().expect("attachment snapshots");
     assert_eq!(snapshots.len(), 4);
     for snapshot in snapshots.iter() {
@@ -69,11 +66,9 @@ fn zk_attachment_calls_sign_the_exact_method_path_and_body_once() {
         .collect();
     assert_eq!(nonces.len(), snapshots.len(), "each call is one-shot");
 }
-
 #[test]
 fn zk_compute_calls_sign_the_exact_network_method_path_and_body_once() {
     use std::collections::HashSet;
-
     let client = client_with_base_url(base_url());
     let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&store);
@@ -112,7 +107,6 @@ fn zk_compute_calls_sign_the_exact_network_method_path_and_body_once() {
                 .expect("signed IVM derive");
         },
     );
-
     let snapshots = store.lock().expect("ZK compute snapshots");
     assert_eq!(snapshots.len(), 3);
     for snapshot in snapshots.iter() {

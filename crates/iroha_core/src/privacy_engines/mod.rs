@@ -3,7 +3,6 @@
 //! These modules contain closed first-release cryptographic profiles.  They do
 //! not perform ledger admission or governance; callers must bind the exact
 //! governed statement and parameter digests through [`p256::TranscriptBindingV1`].
-
 pub(crate) mod aggregate_stark;
 pub mod anonymous_pgc;
 pub mod bootle_lantern;
@@ -30,13 +29,6 @@ pub mod zk_ams;
 // builds retain the verifier but cannot observe those crate-private roots.
 #[cfg_attr(not(any(test, feature = "privacy-release-evidence")), allow(dead_code))]
 pub(crate) mod zk_x509;
-
-use iroha_data_model::privacy::{
-    IrohaZkX509StarkP256StatementV1, PrivacyConsensusLimitsV1, PrivacyProofManagedPoolBootstrapV1,
-    PrivacyProtocolIdV1, PrivacyRootV1, PrivacyStatementV1,
-};
-use thiserror::Error;
-
 use self::fcmp_plus_plus::{FcmpNativeErrorV1, FcmpOutputTupleV1};
 use self::proof_managed_accumulator::{
     ProofManagedAccumulatorErrorV1, build_proof_managed_frontier_v1,
@@ -45,11 +37,14 @@ use self::zk_x509::credential_stark::{
     ZkX509CredentialProofErrorV1, ZkX509CredentialPublicBindingV1,
     decode_zk_x509_credential_envelope_v1,
 };
-
+use iroha_data_model::privacy::{
+    IrohaZkX509StarkP256StatementV1, PrivacyConsensusLimitsV1, PrivacyProofManagedPoolBootstrapV1,
+    PrivacyProtocolIdV1, PrivacyRootV1, PrivacyStatementV1,
+};
+use thiserror::Error;
 /// Exact maximum byte length of one canonical first-release `X5S1` proof.
 pub const ZK_X509_CREDENTIAL_PROOF_MAX_BYTES_V1: usize =
     self::zk_x509::profile::ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize;
-
 /// Structural or public-binding failure for one externally produced `X5S1` proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum ZkX509CredentialProofContainerErrorV1 {
@@ -66,7 +61,6 @@ pub enum ZkX509CredentialProofContainerErrorV1 {
     #[error("zk-X509 credential proof public binding does not match")]
     PublicBindingMismatch,
 }
-
 /// Validate the fixed-capacity `X5S1` container and its verifier-owned header.
 ///
 /// This boundary is intended for resource-isolated prover workers. It performs
@@ -112,7 +106,6 @@ pub fn validate_zk_x509_credential_proof_container_v1(
     }
     Ok(())
 }
-
 /// Failure to derive a canonical root for one proof-managed pool bootstrap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ProofManagedPoolRootErrorV1 {
@@ -131,7 +124,6 @@ pub(crate) enum ProofManagedPoolRootErrorV1 {
         source: FcmpNativeErrorV1,
     },
 }
-
 /// Derive the sole canonical epoch-one root for a typed pool bootstrap.
 ///
 /// This central boundary is shared by governance admission and snapshot
@@ -188,14 +180,12 @@ pub(crate) fn proof_managed_pool_initial_root_v1(
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::privacy_engines::zk_x509::credential_stark::{
         ZkX509CredentialPublicBindingV1, encode_zk_x509_credential_envelope_v1,
     };
-
     fn fixture() -> (IrohaZkX509StarkP256StatementV1, [u8; 32], Vec<u8>) {
         let (statement, _) = crate::privacy_engines::zk_x509::projection_air::tests::fixture();
         let genesis = [0xA5; 32];
@@ -206,13 +196,11 @@ mod tests {
             .expect("minimum canonical X5S1");
         (statement, genesis, proof)
     }
-
     #[test]
     fn x509_worker_container_boundary_accepts_only_exact_bound_x5s1() {
         let (statement, genesis, proof) = fixture();
         validate_zk_x509_credential_proof_container_v1(&statement, genesis, &proof)
             .expect("canonical fixed-capacity container");
-
         assert_eq!(
             validate_zk_x509_credential_proof_container_v1(&statement, [0; 32], &proof),
             Err(ZkX509CredentialProofContainerErrorV1::InvalidStatement)

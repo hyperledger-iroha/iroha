@@ -1,5 +1,4 @@
 use super::*;
-
 fn enabled_state_for_lifecycle_test() -> Arc<CoreState> {
     let mut state = CoreState::new_for_testing(
         iroha_core::state::World::default(),
@@ -18,7 +17,6 @@ fn enabled_state_for_lifecycle_test() -> Arc<CoreState> {
         .expect("enable Nexus for lifecycle test");
     Arc::new(state)
 }
-
 #[test]
 fn lane_lifecycle_status_binds_exact_current_catalog() {
     let state = enabled_state_for_lifecycle_test();

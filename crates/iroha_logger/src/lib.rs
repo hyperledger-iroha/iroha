@@ -2,20 +2,18 @@
 pub mod actor;
 pub mod layer;
 pub mod telemetry;
-
+use actor::LoggerHandle;
+use color_eyre::{Report, Result, eyre::eyre};
+pub use iroha_config::{
+    logger::{Format, Level},
+    parameters::actual::{DevTelemetry as DevTelemetryConfig, Logger as Config},
+};
 use std::{
     io,
     sync::{
         OnceLock,
         atomic::{AtomicBool, Ordering},
     },
-};
-
-use actor::LoggerHandle;
-use color_eyre::{Report, Result, eyre::eyre};
-pub use iroha_config::{
-    logger::{Format, Level},
-    parameters::actual::{DevTelemetry as DevTelemetryConfig, Logger as Config},
 };
 use tracing::subscriber::set_global_default;
 pub use tracing::{
@@ -25,22 +23,17 @@ pub use tracing::{
 pub use tracing_futures::Instrument as InstrumentFutures;
 pub use tracing_subscriber::reload::Error as ReloadError;
 use tracing_subscriber::{layer::SubscriberExt, registry::Registry, reload};
-
 const TELEMETRY_CAPACITY: usize = 1000;
-
 static LOGGER_SET: AtomicBool = AtomicBool::new(false);
-
 /// Writer wrapper that drops broken-pipe errors so logging never aborts.
 struct LossyWriter<W> {
     inner: W,
 }
-
 impl<W> LossyWriter<W> {
     fn new(inner: W) -> Self {
         Self { inner }
     }
 }
-
 impl<W: io::Write> io::Write for LossyWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self.inner.write(buf) {
@@ -49,7 +42,6 @@ impl<W: io::Write> io::Write for LossyWriter<W> {
             Err(err) => Err(err),
         }
     }
-
     fn flush(&mut self) -> io::Result<()> {
         match self.inner.flush() {
             Ok(()) => Ok(()),
@@ -58,19 +50,15 @@ impl<W: io::Write> io::Write for LossyWriter<W> {
         }
     }
 }
-
 /// `MakeWriter` wrapper for `LossyWriter` to keep fmt layers Debug-friendly.
 #[derive(Clone, Copy, Debug, Default)]
 struct LossyMakeWriter;
-
 impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LossyMakeWriter {
     type Writer = LossyWriter<std::io::Stdout>;
-
     fn make_writer(&'a self) -> Self::Writer {
         LossyWriter::new(std::io::stdout())
     }
 }
-
 fn try_set_logger() -> Result<()> {
     if LOGGER_SET
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -80,7 +68,6 @@ fn try_set_logger() -> Result<()> {
     }
     Ok(())
 }
-
 /// Initializes the logger globally with given [`Config`].
 ///
 /// Returns [`LoggerHandle`] to interact with the logger instance
@@ -93,12 +80,10 @@ fn try_set_logger() -> Result<()> {
 /// If the logger is already set, raises a generic error.
 pub fn init_global(config: Config) -> Result<LoggerHandle> {
     try_set_logger()?;
-
     // Avoid TestWriter (print!/eprint!), which can panic on broken pipes during shutdown.
     let layer = tracing_subscriber::fmt::layer()
         .with_ansi(config.terminal_colors)
         .with_writer(LossyMakeWriter);
-
     match config.format {
         Format::Full => step2(config, layer),
         Format::Compact => step2(config, layer.compact()),
@@ -106,7 +91,6 @@ pub fn init_global(config: Config) -> Result<LoggerHandle> {
         Format::Json => step2(config, layer.json()),
     }
 }
-
 /// Returns once lazily initialised global logger for testing purposes.
 ///
 /// Log level may be modified via `TEST_LOG_LEVEL` and `TEST_LOG_FILTER` environment variables
@@ -115,7 +99,6 @@ pub fn init_global(config: Config) -> Result<LoggerHandle> {
 /// If [`init_global`] or [`disable_global`] were called first.
 pub fn test_logger() -> LoggerHandle {
     static LOGGER: OnceLock<LoggerHandle> = OnceLock::new();
-
     LOGGER
         .get_or_init(|| {
             // NOTE: if this config should be changed for some specific tests, consider
@@ -134,14 +117,12 @@ pub fn test_logger() -> LoggerHandle {
                 format: Format::Pretty,
                 terminal_colors: true,
             };
-
             init_global(config).expect(
                 "`init_global()` or `disable_global()` should not be called before `test_logger()`",
             )
         })
         .clone()
 }
-
 /// Disables the logger globally, so that subsequent calls to [`init_global`] will fail.
 ///
 /// Disabling logger is required in order to generate flamegraphs and flamecharts.
@@ -151,7 +132,6 @@ pub fn test_logger() -> LoggerHandle {
 pub fn disable_global() -> Result<()> {
     try_set_logger()
 }
-
 #[allow(clippy::needless_pass_by_value)]
 fn step2<L>(config: Config, layer: L) -> Result<LoggerHandle>
 where
@@ -166,18 +146,13 @@ where
         .with(layer)
         .with(level_filter)
         .with(tracing_error::ErrorLayer::default());
-
     #[cfg(all(feature = "tokio-console", not(feature = "no-tokio-console")))]
     let subscriber = subscriber.with(console_subscriber::spawn());
-
     let (subscriber, receiver) = telemetry::Layer::with_capacity(subscriber, TELEMETRY_CAPACITY);
     set_global_default(subscriber)?;
-
     let handle = LoggerHandle::new(level_filter_handle, receiver);
-
     Ok(handle)
 }
-
 /// Macro for sending telemetry info
 #[macro_export]
 macro_rules! telemetry_target {
@@ -185,7 +160,6 @@ macro_rules! telemetry_target {
         concat!("telemetry::", module_path!())
     };
 }
-
 /// Macro for sending telemetry info
 #[macro_export]
 macro_rules! telemetry {
@@ -247,7 +221,6 @@ macro_rules! telemetry {
         )
     );
 }
-
 /// Macro for getting telemetry future target
 #[macro_export]
 macro_rules! telemetry_future_target {
@@ -255,7 +228,6 @@ macro_rules! telemetry_future_target {
         concat!("telemetry_future::", module_path!())
     };
 }
-
 /// Macro for sending telemetry future info
 #[macro_export]
 macro_rules! telemetry_future {
@@ -318,7 +290,6 @@ macro_rules! telemetry_future {
         )
     );
 }
-
 /// Installs the panic hook with [`color_eyre::install`] if it isn't installed yet
 ///
 /// # Errors
@@ -334,31 +305,24 @@ pub fn install_panic_hook() -> Result<(), Report> {
         Ok(())
     }
 }
-
 pub mod prelude {
     //! Module with most used items. Needs to be imported when using `log` macro to avoid `tracing` crate dependency
-
     pub use tracing::{self, Span, debug, error, info, instrument as log, span, trace, warn};
 }
-
 #[cfg(test)]
 mod tests {
     use super::{LossyMakeWriter, LossyWriter};
     use std::io::{self, Write};
     use tracing_subscriber::fmt::MakeWriter;
-
     struct BrokenPipeWriter;
-
     impl Write for BrokenPipeWriter {
         fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
             Err(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"))
         }
-
         fn flush(&mut self) -> io::Result<()> {
             Err(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"))
         }
     }
-
     #[test]
     fn lossy_writer_ignores_broken_pipe() {
         let mut writer = LossyWriter::new(BrokenPipeWriter);
@@ -367,7 +331,6 @@ mod tests {
         assert_eq!(written, buf.len());
         writer.flush().expect("flush should ignore broken pipe");
     }
-
     #[test]
     fn lossy_make_writer_builds() {
         let _ = LossyMakeWriter.make_writer();

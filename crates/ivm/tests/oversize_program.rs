@@ -1,7 +1,6 @@
 use ivm::{IVM, VMError};
 mod common;
 use common::assemble;
-
 #[test]
 fn test_program_too_large() {
     let mut vm = IVM::new(u64::MAX);

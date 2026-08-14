@@ -1,19 +1,15 @@
 #![no_main]
-
 use arbitrary::{Arbitrary, Unstructured};
 use fastpq_prover::{hash_lde_leaves, lde_chunk_size, merkle_paths_for_queries, trace};
 use libfuzzer_sys::fuzz_target;
-
 const MAX_EVALUATIONS: usize = 256;
 const MAX_QUERIES: usize = 64;
-
 #[derive(Debug)]
 struct MerkleInput {
     evaluations: Vec<u64>,
     arity: u32,
     queries: Vec<usize>,
 }
-
 impl<'a> Arbitrary<'a> for MerkleInput {
     fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
         let eval_len =
@@ -22,14 +18,12 @@ impl<'a> Arbitrary<'a> for MerkleInput {
         for _ in 0..eval_len {
             evaluations.push(u.arbitrary()?);
         }
-
         let query_len =
             usize::try_from(u.int_in_range(0..=MAX_QUERIES as u32)?).expect("len fits usize");
         let mut queries = Vec::with_capacity(query_len);
         for _ in 0..query_len {
             queries.push(u.arbitrary()?);
         }
-
         Ok(Self {
             evaluations,
             arity: u.arbitrary()?,
@@ -37,7 +31,6 @@ impl<'a> Arbitrary<'a> for MerkleInput {
         })
     }
 }
-
 fuzz_target!(|input: MerkleInput| {
     if let Ok(leaves) = hash_lde_leaves(&input.evaluations, input.arity) {
         let chunk_size = lde_chunk_size(input.arity).max(1);
@@ -50,7 +43,6 @@ fuzz_target!(|input: MerkleInput| {
                 }
                 return;
             }
-
             let root = trace::merkle_root(&leaves);
             let leaf_count = leaves.len();
             for (query, path) in input.queries.iter().zip(paths.iter()) {

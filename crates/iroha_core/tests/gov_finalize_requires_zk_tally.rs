@@ -1,9 +1,7 @@
 #![doc = "FinalizeReferendum rejects when a ZK election exists but the tally is not finalized."]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! FinalizeReferendum rejects when a ZK election exists but the tally is not finalized.
-
 use core::num::NonZeroU64;
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -24,7 +22,6 @@ use iroha_data_model::{
     smart_contract::ContractAddress,
 };
 use iroha_test_samples::ALICE_ID;
-
 #[test]
 fn finalize_referendum_rejects_unfinalized_zk_election() {
     let kura = Kura::blank_kura_for_testing();
@@ -33,7 +30,6 @@ fn finalize_referendum_rejects_unfinalized_zk_election() {
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-
     let proposal_id = [0x42; 32];
     let rid = hex::encode(proposal_id);
     let referendum = GovernanceReferendumRecord {
@@ -93,7 +89,6 @@ fn finalize_referendum_rejects_unfinalized_zk_election() {
     stx.world
         .governance_referenda_mut()
         .insert(rid.clone(), referendum);
-
     let instr = FinalizeReferendum {
         referendum_id: rid,
         proposal_id,

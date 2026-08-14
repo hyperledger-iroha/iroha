@@ -380,7 +380,10 @@ impl PreparedRecoveredPendingKuraApplyReplayV1 {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(
+    dead_code,
+    reason = "the pending-Kura recovery-plan cutover retains this sealed production bridge"
+)]
 impl AuthenticatedRecoveredPendingKuraAdapterStartupV1 {
     /// Bind the exact runner dependencies without exposing the embedded startup.
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]

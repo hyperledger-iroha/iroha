@@ -1,13 +1,11 @@
 #![allow(clippy::manual_div_ceil)]
 use iroha_schema::IntoSchema;
 use norito::{CompressionConfig, NoritoDeserialize, NoritoSerialize, decode_from_bytes};
-
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 struct Foo {
     a: u32,
     b: String,
 }
-
 #[test]
 fn decode_helper_uncompressed() {
     let v = Foo {
@@ -18,7 +16,6 @@ fn decode_helper_uncompressed() {
     let got: Foo = decode_from_bytes(&bytes).expect("decode");
     assert_eq!(v, got);
 }
-
 #[test]
 fn decode_helper_compressed() {
     let v = Foo {
@@ -30,7 +27,6 @@ fn decode_helper_compressed() {
     let got: Foo = decode_from_bytes(&bytes).expect("decode");
     assert_eq!(v, got);
 }
-
 #[test]
 fn decode_helper_reader() {
     use std::io::Cursor;

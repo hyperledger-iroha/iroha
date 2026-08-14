@@ -1,17 +1,13 @@
 //! Data event definitions used across the Iroha ledger.
-
-use std::{string::String, vec::Vec};
-
+pub use self::model::*;
+use super::*;
 use getset::Getters;
 use iroha_data_model_derive::{EventSet, HasOrigin, model};
 use iroha_primitives::{json::Json, numeric::Quantity};
 #[allow(unused_imports)]
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-
-pub use self::model::*;
-use super::*;
-
+use std::{string::String, vec::Vec};
 macro_rules! data_event {
     ($(#[$meta:meta])* $vis:vis enum $name:ident { $($body:tt)* }) => {
         iroha_data_model_derive::model_single! {
@@ -31,18 +27,14 @@ macro_rules! data_event {
             #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
             $(#[$meta])* $vis enum $name { $($body)* }
         }
-
         #[cfg(feature = "json")]
         impl_json_via_norito_bytes!($name);
     };
 }
-
 // NOTE: if adding/editing events here, make sure to update the corresponding event filter in [`super::filter`]
-
 #[model]
 mod model {
     use super::*;
-
     /// Generic [`MetadataChanged`] struct.
     /// Contains the changed metadata (`(key, value)` pair), either inserted or removed, which is determined by the wrapping event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Getters)]
@@ -53,7 +45,6 @@ mod model {
         pub key: Name,
         pub value: Json,
     }
-
     /// Event
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FromVariant, Decode, Encode, IntoSchema,
@@ -107,7 +98,6 @@ mod model {
         Bridge(bridge::BridgeEvent),
     }
 }
-
 #[cfg(feature = "json")]
 impl<Id> JsonSerialize for MetadataChanged<Id>
 where
@@ -128,8 +118,22 @@ where
         <Json as JsonSerialize>::json_serialize(&self.value, out);
         out.push('}');
     }
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"target\":")?;
+        <Id as JsonSerialize>::json_serialize_to(&self.target, out)?;
+        out.push_str(",\"key\":")?;
+        <Name as JsonSerialize>::json_serialize_to(&self.key, out)?;
+        out.push_str(",\"value\":")?;
+        <Json as JsonSerialize>::json_serialize_to(&self.value, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
-
 #[cfg(feature = "json")]
 impl<Id> JsonDeserialize for MetadataChanged<Id>
 where
@@ -138,17 +142,14 @@ where
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parser.skip_ws();
         parser.consume_char(b'{')?;
-
         let mut target: Option<Id> = None;
         let mut key: Option<Name> = None;
         let mut value: Option<Json> = None;
-
         loop {
             parser.skip_ws();
             if parser.try_consume_char(b'}')? {
                 break;
             }
-
             let field = parser.parse_key()?;
             match field.as_str() {
                 "target" => {
@@ -173,7 +174,6 @@ where
                     return Err(json::Error::unknown_field(other.to_owned()));
                 }
             }
-
             parser.skip_ws();
             if parser.try_consume_char(b',')? {
                 continue;
@@ -181,7 +181,6 @@ where
             parser.consume_char(b'}')?;
             break;
         }
-
         Ok(MetadataChanged {
             target: target.ok_or_else(|| json::Error::missing_field("target"))?,
             key: key.ok_or_else(|| json::Error::missing_field("key"))?,
@@ -189,22 +188,16 @@ where
         })
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(DataEvent);
-
 mod asset {
     //! This module contains `AssetEvent`, `AssetDefinitionEvent` and its impls
-
-    use iroha_data_model_derive::model;
-
     pub use self::model::*;
     use super::*;
-
+    use iroha_data_model_derive::model;
     /// Metadata update associated with a specific asset instance.
     pub type AssetMetadataChanged = MetadataChanged<AssetId>;
     type AssetDefinitionMetadataChanged = MetadataChanged<AssetDefinitionId>;
-
     data_event! {
         #[has_origin(origin = Asset)]
         /// Event describing changes to an individual asset.
@@ -234,7 +227,6 @@ mod asset {
             BatchTransferOutcome(AssetBatchTransferOutcome),
         }
     }
-
     data_event! {
         #[has_origin(origin = AssetDefinition)]
         /// Event describing lifecycle of an asset definition.
@@ -263,11 +255,9 @@ mod asset {
             OwnerChanged(AssetDefinitionOwnerChanged),
         }
     }
-
     #[model]
     mod model {
         use super::*;
-
         /// Depending on the wrapping event, [`Self`] represents the added or removed asset quantity.
         #[allow(clippy::ref_option)]
         #[derive(
@@ -281,7 +271,6 @@ mod asset {
             pub asset: AssetId,
             pub amount: Quantity,
         }
-
         /// One successful transparent asset movement between two account balances.
         ///
         /// Unlike [`AssetChanged`], this payload binds both sides of the movement,
@@ -302,7 +291,6 @@ mod asset {
             /// Exact quantity moved.
             pub amount: Quantity,
         }
-
         /// Stable rejection classification for one independently settled batch leg.
         #[derive(
             Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
@@ -328,7 +316,6 @@ mod asset {
             /// Another deterministic business policy rejected the leg.
             PolicyRejected,
         }
-
         /// Final status for one native batch-transfer leg.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(
@@ -343,7 +330,6 @@ mod asset {
             /// The leg made no state change.
             Rejected(AssetBatchTransferRejection),
         }
-
         /// Stable rejection detail for one independent batch leg.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(
@@ -357,7 +343,6 @@ mod asset {
             /// Deterministic human-readable detail.
             pub message: String,
         }
-
         /// Consensus-bound receipt row for one ordered native batch-transfer leg.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(
@@ -379,7 +364,6 @@ mod asset {
             /// Final leg status.
             pub status: AssetBatchTransferLegStatus,
         }
-
         /// [`Self`] represents updated total asset quantity.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -389,7 +373,6 @@ mod asset {
             pub asset_definition: AssetDefinitionId,
             pub total_amount: Quantity,
         }
-
         /// [`Self`] represents updated total asset quantity.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -401,7 +384,6 @@ mod asset {
             /// Id of new owning account
             pub new_owner: AccountId,
         }
-
         /// Emitted together with [`AssetDefinitionEvent::MintabilityChanged`]
         /// when a limited asset definition (either `Mintable::Once` or `Mintable::Limited`)
         /// exhausts its mintability budget and flips to `Mintable::Not`.
@@ -419,7 +401,6 @@ mod asset {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(
     AssetChanged,
@@ -427,13 +408,10 @@ impl_json_via_norito_bytes!(
     AssetDefinitionOwnerChanged,
     AssetDefinitionMintabilityChanged,
 );
-
 pub mod bridge {
     //! Bridge events
-
     use super::*;
     use crate::nexus::LaneId;
-
     data_event! {
         /// Bridge lane events
         #[has_origin(origin = LaneId)]
@@ -444,18 +422,13 @@ pub mod bridge {
         }
     }
 }
-
 mod nft {
     //! This module contains `NftEvent` and its impls
-
-    use iroha_data_model_derive::model;
-
     pub use self::model::*;
     use super::*;
-
+    use iroha_data_model_derive::model;
     /// Metadata change captured for a specific NFT instance.
     type NftMetadataChanged = MetadataChanged<NftId>;
-
     data_event! {
         #[has_origin(origin = Nft)]
         /// Event describing lifecycle changes for a single NFT.
@@ -476,11 +449,9 @@ mod nft {
             OwnerChanged(NftOwnerChanged),
         }
     }
-
     #[model]
     mod model {
         use super::*;
-
         /// Event indicates that owner of the [`Nft`] is changed
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -494,21 +465,15 @@ mod nft {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(NftOwnerChanged);
-
 mod rwa {
     //! This module contains `RwaEvent` and its impls.
-
-    use iroha_data_model_derive::model;
-
     pub use self::model::*;
     use super::*;
-
+    use iroha_data_model_derive::model;
     /// Metadata change captured for a specific RWA lot.
     type RwaMetadataChanged = MetadataChanged<RwaId>;
-
     data_event! {
         #[has_origin(origin = Rwa)]
         /// Event describing lifecycle changes for a single RWA lot.
@@ -554,11 +519,9 @@ mod rwa {
             ControlsChanged(RwaControlsChanged),
         }
     }
-
     #[model]
     mod model {
         use super::*;
-
         /// Event emitted when full-lot ownership changes in place.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -570,7 +533,6 @@ mod rwa {
             /// New owner of the lot.
             pub new_owner: AccountId,
         }
-
         /// Event emitted when quantity is split out of a source lot into a child lot.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -586,7 +548,6 @@ mod rwa {
             /// Owner of the child lot.
             pub new_owner: AccountId,
         }
-
         /// Event emitted when a derived lot is created from parent contributions.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -598,7 +559,6 @@ mod rwa {
             /// Quantitative parent contributions.
             pub parents: Vec<RwaParentRef>,
         }
-
         /// Event emitted when lot quantity changes due to redemption.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -610,7 +570,6 @@ mod rwa {
             /// Quantity affected by the operation.
             pub quantity: Quantity,
         }
-
         /// Event emitted when held quantity changes.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -622,7 +581,6 @@ mod rwa {
             /// Quantity affected by the hold or release.
             pub quantity: Quantity,
         }
-
         /// Event emitted when a lot's control policy changes.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -636,7 +594,6 @@ mod rwa {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(
     RwaOwnerChanged,
@@ -646,12 +603,9 @@ impl_json_via_norito_bytes!(
     RwaHoldChanged,
     RwaControlsChanged
 );
-
 mod peer {
     //! This module contains `PeerEvent` and its impls
-
     use super::*;
-
     data_event! {
         #[has_origin(origin = Peer)]
         /// Event emitted when peers join or leave the network view.
@@ -663,15 +617,11 @@ mod peer {
         }
     }
 }
-
 mod role {
     //! This module contains `RoleEvent` and its impls
-
-    use iroha_data_model_derive::model;
-
     pub use self::model::*;
     use super::*;
-
+    use iroha_data_model_derive::model;
     data_event! {
         #[has_origin(origin = Role)]
         /// Event describing role lifecycle and permissions.
@@ -689,11 +639,9 @@ mod role {
             PermissionRemoved(RolePermissionChanged),
         }
     }
-
     #[model]
     mod model {
         use super::*;
-
         /// Depending on the wrapping event, [`RolePermissionChanged`] role represents the added or removed role's permission
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -706,35 +654,27 @@ mod role {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(RolePermissionChanged);
-
 impl RolePermissionChanged {
     /// Create a new [`RolePermissionChanged`] event payload.
     #[must_use]
     pub fn new(role: RoleId, permission: Permission) -> Self {
         Self { role, permission }
     }
-
     /// Permission that was added to or removed from the role.
     #[must_use]
     pub fn permission(&self) -> &Permission {
         &self.permission
     }
 }
-
 mod account {
     //! This module contains `AccountEvent` and its impls
-
-    use iroha_data_model_derive::model;
-
     pub use self::model::*;
     use super::{repo_account::RepoAccountEvent, *};
-
+    use iroha_data_model_derive::model;
     /// Metadata change associated with a specific account.
     type AccountMetadataChanged = MetadataChanged<AccountId>;
-
     data_event! {
         #[has_origin(origin = Account)]
         /// Event describing changes applied to an account.
@@ -773,7 +713,6 @@ mod account {
             Repo(RepoAccountEvent),
         }
     }
-
     data_event! {
         #[has_origin(origin = Account)]
         /// Account social-recovery lifecycle event.
@@ -798,18 +737,15 @@ mod account {
             Finalized(AccountRecoveryFinalized),
         }
     }
-
     #[model]
     mod model {
         use super::*;
-
         /// Account creation payload.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct AccountCreated {
             pub account: Account,
         }
-
         /// Depending on the wrapping event, [`AccountPermissionChanged`] role represents the added or removed account role
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -820,7 +756,6 @@ mod account {
             // Getter derived via `getset` is skipped so the field remains opaque to FFI bindings.
             pub permission: Permission,
         }
-
         /// Payload emitted when an account controller is replaced.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -834,7 +769,6 @@ mod account {
             /// New controller attached to the account.
             pub new_controller: crate::account::AccountController,
         }
-
         /// Depending on the wrapping event, [`AccountRoleChanged`] represents the granted or revoked role
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -844,7 +778,6 @@ mod account {
             pub account: AccountId,
             pub role: RoleId,
         }
-
         /// Recovery-policy update payload.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -857,7 +790,6 @@ mod account {
             /// Recovery policy that was persisted.
             pub policy: crate::account::AccountRecoveryPolicy,
         }
-
         /// Recovery-policy removal payload.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -867,7 +799,6 @@ mod account {
             /// Stable alias whose policy was removed.
             pub alias: crate::account::AccountAlias,
         }
-
         /// Recovery-request proposal payload.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -880,7 +811,6 @@ mod account {
             /// Request persisted in world state.
             pub request: crate::account::AccountRecoveryRequest,
         }
-
         /// Recovery-request approval payload.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -895,7 +825,6 @@ mod account {
             /// Updated request after approval was recorded.
             pub request: crate::account::AccountRecoveryRequest,
         }
-
         /// Recovery-request cancellation payload.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -910,7 +839,6 @@ mod account {
             /// Updated request after cancellation.
             pub request: crate::account::AccountRecoveryRequest,
         }
-
         /// Recovery-request finalization payload.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -926,7 +854,6 @@ mod account {
             pub request: crate::account::AccountRecoveryRequest,
         }
     }
-
     impl AccountPermissionChanged {
         /// Create a new [`AccountPermissionChanged`] event payload.
         #[must_use]
@@ -936,14 +863,12 @@ mod account {
                 permission,
             }
         }
-
         /// Permission that was added to or removed from the account.
         #[must_use]
         pub fn permission(&self) -> &Permission {
             &self.permission
         }
     }
-
     impl AccountCreated {
         /// Construct a new account-created payload.
         #[must_use]
@@ -952,7 +877,6 @@ mod account {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(
     AccountPermissionChanged,
@@ -965,19 +889,15 @@ impl_json_via_norito_bytes!(
     AccountRecoveryCancelled,
     AccountRecoveryFinalized
 );
-
 mod repo_account {
     //! Repo lifecycle events scoped to individual accounts.
-
-    use iroha_data_model_derive::model;
-
     pub use self::model::*;
     use super::*;
     use crate::{
         account::AccountId,
         repo::{RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg},
     };
-
+    use iroha_data_model_derive::model;
     data_event! {
         #[has_origin(origin = Account)]
         /// Repo agreement lifecycle event emitted for a specific account perspective.
@@ -993,7 +913,6 @@ mod repo_account {
             MarginCalled(RepoAccountMarginCalled),
         }
     }
-
     /// Role played by the account within a repo agreement lifecycle event.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1013,11 +932,9 @@ mod repo_account {
         /// Account served as the collateral custodian in a tri-party agreement.
         Custodian,
     }
-
     #[model]
     mod model {
         use super::*;
-
         /// Repo initiation payload for a particular participant.
         #[derive(
             Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema,
@@ -1034,7 +951,6 @@ mod repo_account {
             /// Whether the account initiated or accepted the agreement.
             pub role: RepoAccountRole,
         }
-
         /// Repo settlement payload for a particular participant.
         #[derive(
             Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema,
@@ -1057,7 +973,6 @@ mod repo_account {
             /// Whether the account was the initiator or counterparty.
             pub role: RepoAccountRole,
         }
-
         /// Repo margin call payload for a particular participant.
         #[derive(
             Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema,
@@ -1077,7 +992,6 @@ mod repo_account {
             pub role: RepoAccountRole,
         }
     }
-
     impl RepoAccountInitiated {
         /// Create an account-scoped initiation payload.
         #[must_use]
@@ -1095,7 +1009,6 @@ mod repo_account {
             }
         }
     }
-
     impl RepoAccountSettled {
         /// Create an account-scoped settlement payload.
         #[allow(clippy::too_many_arguments)]
@@ -1120,7 +1033,6 @@ mod repo_account {
             }
         }
     }
-
     impl RepoAccountMarginCalled {
         /// Create an account-scoped margin call payload.
         #[must_use]
@@ -1141,22 +1053,17 @@ mod repo_account {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(
     repo_account::RepoAccountInitiated,
     repo_account::RepoAccountSettled
 );
-
 mod domain {
     //! This module contains `DomainEvent` and its impls
-
     pub use self::model::*;
     use super::*;
-
     /// Metadata change associated with a specific domain.
     type DomainMetadataChanged = MetadataChanged<DomainId>;
-
     data_event! {
         #[has_origin(origin = Domain)]
         /// Event describing changes within a domain.
@@ -1219,15 +1126,8 @@ mod domain {
             StreamingTicketRevoked(StreamingTicketRevoked),
         }
     }
-
     #[model]
     mod model {
-        use iroha_crypto::Hash;
-        use norito::streaming::{
-            Multiaddr, PrivacyCapabilities, PrivacyRelay, PrivacyRoute, SoranetAccessKind,
-            SoranetChannelId, SoranetRoute, SoranetStreamTag,
-        };
-
         use super::*;
         use crate::{
             DataSpaceId, LaneId,
@@ -1235,7 +1135,11 @@ mod domain {
             kaigi::{KaigiId, KaigiPrivacyMode, KaigiRelayHealthStatus},
             soranet::ticket::TicketEnvelopeV1,
         };
-
+        use iroha_crypto::Hash;
+        use norito::streaming::{
+            Multiaddr, PrivacyCapabilities, PrivacyRelay, PrivacyRoute, SoranetAccessKind,
+            SoranetChannelId, SoranetRoute, SoranetStreamTag,
+        };
         /// Event indicate that owner of the [`Domain`] is changed
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -1243,7 +1147,6 @@ mod domain {
             pub domain: DomainId,
             pub new_owner: AccountId,
         }
-
         /// Account event paired with an explicit, authoritative routing domain.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -1253,7 +1156,6 @@ mod domain {
             /// Account event payload.
             pub event: AccountEvent,
         }
-
         /// Asset event paired with an explicit, authoritative routing domain.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -1263,7 +1165,6 @@ mod domain {
             /// Asset event payload.
             pub event: AssetEvent,
         }
-
         /// Asset-definition event paired with an explicit, authoritative routing domain.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -1273,7 +1174,6 @@ mod domain {
             /// Asset-definition event payload.
             pub event: AssetDefinitionEvent,
         }
-
         /// Account-domain link payload emitted when membership links change.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -1283,7 +1183,6 @@ mod domain {
             /// Domainless account identifier whose membership link changed.
             pub account: AccountId,
         }
-
         /// Aggregated Kaigi roster counts without exposing individual identities.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -1301,7 +1200,6 @@ mod domain {
             /// Current roster Merkle root (only populated in privacy mode).
             pub roster_root: Option<Hash>,
         }
-
         impl KaigiRosterSummary {
             /// Construct a new roster summary payload.
             #[must_use]
@@ -1323,7 +1221,6 @@ mod domain {
                 }
             }
         }
-
         /// Registration snapshot for a Kaigi relay.
         #[derive(
             Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema,
@@ -1340,7 +1237,6 @@ mod domain {
             /// Fingerprint of the published HPKE public key.
             pub hpke_fingerprint: Hash,
         }
-
         impl KaigiRelayRegistrationSummary {
             /// Construct a new relay registration summary payload.
             #[must_use]
@@ -1358,7 +1254,6 @@ mod domain {
                 }
             }
         }
-
         /// Snapshot describing the active relay manifest.
         #[derive(
             Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema,
@@ -1373,7 +1268,6 @@ mod domain {
             /// Manifest expiry timestamp in milliseconds.
             pub expiry_ms: u64,
         }
-
         impl KaigiRelayManifestSummary {
             /// Construct a new relay manifest summary payload.
             #[must_use]
@@ -1385,7 +1279,6 @@ mod domain {
                 }
             }
         }
-
         /// Health update emitted when a relay status changes.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -1399,7 +1292,6 @@ mod domain {
             /// Timestamp (milliseconds since epoch) when the report was recorded.
             pub reported_at_ms: u64,
         }
-
         impl KaigiRelayHealthSummary {
             /// Construct a new relay health summary payload.
             #[must_use]
@@ -1417,7 +1309,6 @@ mod domain {
                 }
             }
         }
-
         /// Aggregated usage totals for a Kaigi session.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -1431,7 +1322,6 @@ mod domain {
             /// Number of segments recorded.
             pub segments_recorded: u32,
         }
-
         impl KaigiUsageSummary {
             /// Construct a new usage summary payload.
             #[must_use]
@@ -1449,7 +1339,6 @@ mod domain {
                 }
             }
         }
-
         /// Relay descriptor emitted alongside streaming ticket events.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -1459,7 +1348,6 @@ mod domain {
             pub key_fingerprint: [u8; 32],
             pub capabilities_bits: u32,
         }
-
         impl StreamingPrivacyRelay {
             /// Construct a new relay descriptor.
             #[must_use]
@@ -1477,7 +1365,6 @@ mod domain {
                 }
             }
         }
-
         impl From<PrivacyRelay> for StreamingPrivacyRelay {
             fn from(relay: PrivacyRelay) -> Self {
                 Self {
@@ -1488,7 +1375,6 @@ mod domain {
                 }
             }
         }
-
         impl From<&StreamingPrivacyRelay> for PrivacyRelay {
             fn from(relay: &StreamingPrivacyRelay) -> Self {
                 PrivacyRelay {
@@ -1499,7 +1385,6 @@ mod domain {
                 }
             }
         }
-
         /// Access posture advertised by `SoraNet` exit relays.
         #[derive(
             Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
@@ -1511,7 +1396,6 @@ mod domain {
             ReadOnly,
             Authenticated,
         }
-
         impl From<SoranetAccessKind> for StreamingSoranetAccessKind {
             fn from(kind: SoranetAccessKind) -> Self {
                 match kind {
@@ -1520,7 +1404,6 @@ mod domain {
                 }
             }
         }
-
         impl From<StreamingSoranetAccessKind> for SoranetAccessKind {
             fn from(kind: StreamingSoranetAccessKind) -> Self {
                 match kind {
@@ -1529,7 +1412,6 @@ mod domain {
                 }
             }
         }
-
         /// Stream tags advertised by `SoraNet` relays for exit bridges.
         #[derive(
             Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Default,
@@ -1542,7 +1424,6 @@ mod domain {
             NoritoStream,
             Kaigi,
         }
-
         impl From<SoranetStreamTag> for StreamingSoranetStreamTag {
             fn from(tag: SoranetStreamTag) -> Self {
                 match tag {
@@ -1551,7 +1432,6 @@ mod domain {
                 }
             }
         }
-
         impl From<StreamingSoranetStreamTag> for SoranetStreamTag {
             fn from(tag: StreamingSoranetStreamTag) -> Self {
                 match tag {
@@ -1560,7 +1440,6 @@ mod domain {
                 }
             }
         }
-
         /// Privacy route metadata for `SoraNet` transport.
         #[allow(clippy::ref_option)]
         #[derive(
@@ -1579,7 +1458,6 @@ mod domain {
             #[getset(skip)]
             pub stream_tag: StreamingSoranetStreamTag,
         }
-
         impl StreamingSoranetRoute {
             /// Construct a new descriptor from raw fields.
             #[must_use]
@@ -1598,40 +1476,33 @@ mod domain {
                     stream_tag,
                 }
             }
-
             /// Returns optional padding budget (milliseconds).
             #[must_use]
             pub fn padding_budget_ms(&self) -> Option<u16> {
                 self.padding_budget_ms
             }
-
             /// Replace the padding budget (milliseconds).
             pub fn set_padding_budget_ms(&mut self, value: Option<u16>) {
                 self.padding_budget_ms = value;
             }
-
             /// Replace the exit relay multiaddr.
             pub fn set_exit_multiaddr(&mut self, exit: Multiaddr) {
                 self.exit_multiaddr = exit;
             }
-
             /// Replace the advertised access posture.
             pub fn set_access_kind(&mut self, access: StreamingSoranetAccessKind) {
                 self.access_kind = access;
             }
-
             /// Replace the advertised stream tag.
             pub fn set_stream_tag(&mut self, tag: StreamingSoranetStreamTag) {
                 self.stream_tag = tag;
             }
-
             /// Returns the stream tag advertised by the exit.
             #[must_use]
             pub fn stream_tag(&self) -> StreamingSoranetStreamTag {
                 self.stream_tag
             }
         }
-
         impl From<SoranetRoute> for StreamingSoranetRoute {
             fn from(route: SoranetRoute) -> Self {
                 Self {
@@ -1643,7 +1514,6 @@ mod domain {
                 }
             }
         }
-
         impl From<&StreamingSoranetRoute> for SoranetRoute {
             fn from(route: &StreamingSoranetRoute) -> Self {
                 Self {
@@ -1655,7 +1525,6 @@ mod domain {
                 }
             }
         }
-
         /// Privacy route description mirrored from the manifest schema.
         #[derive(
             Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema,
@@ -1674,7 +1543,6 @@ mod domain {
             #[getset(skip)]
             pub ticket: Option<TicketEnvelopeV1>,
         }
-
         impl StreamingPrivacyRoute {
             /// Construct a new relay path descriptor (no ticket attached).
             #[must_use]
@@ -1697,49 +1565,41 @@ mod domain {
                     ticket: None,
                 }
             }
-
             /// Attach a privacy ticket envelope to the route.
             #[must_use]
             pub fn with_ticket(mut self, ticket: TicketEnvelopeV1) -> Self {
                 self.ticket = Some(ticket);
                 self
             }
-
             /// Attach `SoraNet` metadata to the route.
             #[must_use]
             pub fn with_soranet(mut self, soranet: StreamingSoranetRoute) -> Self {
                 self.soranet = Some(soranet);
                 self
             }
-
             /// Returns the attached ticket envelope, if present.
             #[must_use]
             pub fn ticket_envelope(&self) -> Option<&TicketEnvelopeV1> {
                 self.ticket.as_ref()
             }
-
             /// Returns the attached `SoraNet` metadata, if present.
             #[must_use]
             pub fn soranet(&self) -> Option<&StreamingSoranetRoute> {
                 self.soranet.as_ref()
             }
-
             /// Replace the attached `SoraNet` metadata.
             pub fn set_soranet(&mut self, value: Option<StreamingSoranetRoute>) {
                 self.soranet = value;
             }
-
             /// Replace the attached ticket envelope.
             pub fn set_ticket(&mut self, value: Option<TicketEnvelopeV1>) {
                 self.ticket = value;
             }
-
             /// Construct a streaming route from a Norito privacy route and optional ticket.
             #[must_use]
             pub fn from_parts(route: PrivacyRoute, ticket: Option<TicketEnvelopeV1>) -> Self {
                 Self::from(route).with_optional_ticket(ticket)
             }
-
             /// Split the route into the Norito representation and an optional ticket envelope.
             #[must_use]
             pub fn into_parts(self) -> (PrivacyRoute, Option<TicketEnvelopeV1>) {
@@ -1753,7 +1613,6 @@ mod domain {
                     soranet,
                     ticket,
                 } = self;
-
                 let privacy_route = PrivacyRoute {
                     route_id,
                     entry: PrivacyRelay::from(&entry),
@@ -1763,16 +1622,13 @@ mod domain {
                     expiry_segment,
                     soranet: soranet.as_ref().map(SoranetRoute::from),
                 };
-
                 (privacy_route, ticket)
             }
-
             fn with_optional_ticket(mut self, ticket: Option<TicketEnvelopeV1>) -> Self {
                 self.ticket = ticket;
                 self
             }
         }
-
         impl From<PrivacyRoute> for StreamingPrivacyRoute {
             fn from(route: PrivacyRoute) -> Self {
                 Self {
@@ -1787,7 +1643,6 @@ mod domain {
                 }
             }
         }
-
         impl From<&StreamingPrivacyRoute> for PrivacyRoute {
             fn from(route: &StreamingPrivacyRoute) -> Self {
                 PrivacyRoute {
@@ -1801,7 +1656,6 @@ mod domain {
                 }
             }
         }
-
         /// Association between a privacy route and its provisioning window.
         #[derive(
             Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema,
@@ -1818,7 +1672,6 @@ mod domain {
             /// Whether the exit relay has acknowledged provisioning.
             pub acknowledged: bool,
         }
-
         impl StreamingRouteBinding {
             /// Construct a new route binding descriptor.
             #[must_use]
@@ -1835,14 +1688,12 @@ mod domain {
                     acknowledged,
                 }
             }
-
             /// Convert the route descriptor into the Norito representation.
             #[must_use]
             pub fn as_privacy_route(&self) -> PrivacyRoute {
                 PrivacyRoute::from(&self.route)
             }
         }
-
         /// Optional policy constraints embedded in streaming capability tickets.
         #[derive(
             Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema,
@@ -1860,7 +1711,6 @@ mod domain {
             #[getset(skip)]
             pub max_bandwidth_kbps: Option<u32>,
         }
-
         impl StreamingTicketPolicy {
             /// Construct a new streaming ticket policy descriptor.
             #[must_use]
@@ -1875,14 +1725,12 @@ mod domain {
                     max_bandwidth_kbps,
                 }
             }
-
             /// Returns the optional bandwidth ceiling in kilobits per second.
             #[must_use]
             pub fn max_bandwidth_kbps(&self) -> Option<u32> {
                 self.max_bandwidth_kbps
             }
         }
-
         /// Capability bitfield advertised by streaming tickets.
         #[derive(
             Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
@@ -1895,7 +1743,6 @@ mod domain {
         #[cfg_attr(feature = "json", norito(reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct StreamingTicketCapabilities(u32);
-
         impl StreamingTicketCapabilities {
             /// Capability flag allowing live streaming access.
             pub const LIVE: u32 = 1 << 0;
@@ -1907,38 +1754,32 @@ mod domain {
             pub const HDR: u32 = 1 << 3;
             /// Capability flag enabling spatial audio playback.
             pub const SPATIAL_AUDIO: u32 = 1 << 4;
-
             /// Construct capabilities from raw bits.
             #[must_use]
             pub const fn from_bits(bits: u32) -> Self {
                 Self(bits)
             }
-
             /// Expose the underlying bit representation.
             #[must_use]
             pub const fn bits(self) -> u32 {
                 self.0
             }
-
             /// Check whether all bits in `mask` are present.
             #[must_use]
             pub const fn contains(self, mask: u32) -> bool {
                 (self.0 & mask) == mask
             }
-
             /// Return a new capability set with `mask` inserted.
             #[must_use]
             pub const fn insert(self, mask: u32) -> Self {
                 Self(self.0 | mask)
             }
-
             /// Return a new capability set with `mask` removed.
             #[must_use]
             pub const fn remove(self, mask: u32) -> Self {
                 Self(self.0 & !mask)
             }
         }
-
         impl<'a> norito::core::DecodeFromSlice<'a> for StreamingTicketCapabilities {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
                 let (bits, used) =
@@ -1946,7 +1787,6 @@ mod domain {
                 Ok((StreamingTicketCapabilities::from_bits(bits), used))
             }
         }
-
         /// Streaming capability ticket metadata emitted with readiness events.
         #[allow(clippy::ref_option)]
         #[derive(
@@ -2000,7 +1840,6 @@ mod domain {
             /// Playback capabilities granted by the ticket.
             pub capabilities: StreamingTicketCapabilities,
         }
-
         impl StreamingTicketRecord {
             /// Construct a new ticket metadata record.
             #[allow(clippy::too_many_arguments)]
@@ -2050,20 +1889,17 @@ mod domain {
                     capabilities,
                 }
             }
-
             /// Hash of the nullifier associated with this ticket.
             #[must_use]
             pub fn nullifier(&self) -> &Hash {
                 &self.nullifier
             }
-
             /// Capability ticket identifier.
             #[must_use]
             pub fn ticket_id(&self) -> &Hash {
                 &self.ticket_id
             }
         }
-
         /// Event announcing that a streaming capability ticket is ready for use.
         #[derive(
             Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema,
@@ -2080,7 +1916,6 @@ mod domain {
             /// Provisioned privacy routes bundled with the ticket.
             pub routes: Vec<StreamingRouteBinding>,
         }
-
         impl StreamingTicketReady {
             /// Construct a new ticket readiness event payload.
             #[must_use]
@@ -2097,14 +1932,12 @@ mod domain {
                     routes,
                 }
             }
-
             /// Convenience accessor returning the ticket identifier.
             #[must_use]
             pub fn ticket_id(&self) -> &Hash {
                 self.ticket.ticket_id()
             }
         }
-
         /// Event indicating that a streaming capability ticket is no longer valid.
         #[derive(
             Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema,
@@ -2126,7 +1959,6 @@ mod domain {
             /// Signature authorising the revocation.
             pub revocation_signature: [u8; 64],
         }
-
         impl StreamingTicketRevoked {
             /// Construct a new ticket revocation payload.
             #[must_use]
@@ -2147,7 +1979,6 @@ mod domain {
                     revocation_signature,
                 }
             }
-
             /// Returns the identifier of the revoked ticket.
             #[must_use]
             pub fn ticket_id(&self) -> &Hash {
@@ -2156,7 +1987,6 @@ mod domain {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(
     DomainOwnerChanged,
@@ -2171,18 +2001,13 @@ impl_json_via_norito_bytes!(
     domain::StreamingTicketReady,
     domain::StreamingTicketRevoked
 );
-
 mod trigger {
     //! This module contains `TriggerEvent` and its impls
-
-    use iroha_data_model_derive::model;
-
     pub use self::model::*;
     use super::*;
-
+    use iroha_data_model_derive::model;
     /// Metadata change associated with a trigger instance.
     type TriggerMetadataChanged = MetadataChanged<TriggerId>;
-
     data_event! {
         #[has_origin(origin = Trigger)]
         /// Event describing trigger lifecycle updates.
@@ -2205,11 +2030,9 @@ mod trigger {
             MetadataRemoved(TriggerMetadataChanged),
         }
     }
-
     #[model]
     mod model {
         use super::*;
-
         /// Depending on the wrapping event, [`Self`] represents the increased or decreased number of event executions.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -2219,19 +2042,15 @@ mod trigger {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(TriggerNumberOfExecutionsChanged);
-
 mod config {
     pub use self::model::*;
     use super::*;
     use crate::parameter::Parameter;
-
     #[model]
     mod model {
         use super::*;
-
         /// Kind of atomic SCCP registry mutation.
         #[derive(
             Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
@@ -2251,7 +2070,6 @@ mod config {
             /// Remove a never-used staged route revision.
             RemoveStagedRoute,
         }
-
         /// Bounded lifecycle event for a journaled SCCP registry mutation.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -2267,7 +2085,6 @@ mod config {
             /// Digest of the newly installed registry payload.
             pub new_digest: [u8; 32],
         }
-
         /// Changed parameter event
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -2277,7 +2094,6 @@ mod config {
             /// Next value for the parameter
             pub new_value: Parameter,
         }
-
         #[derive(
             Debug,
             Clone,
@@ -2301,7 +2117,6 @@ mod config {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(
     ParameterChanged,
@@ -2309,25 +2124,19 @@ impl_json_via_norito_bytes!(
     SccpRegistryChanged,
     ConfigurationEvent,
 );
-
 mod executor {
-    use iroha_data_model_derive::model;
-
     pub use self::model::*;
+    use iroha_data_model_derive::model;
     // Keep super-module imports available for generated code paths.
     #[allow(unused)]
     use super::*;
-
     #[model]
     mod model {
-
         use iroha_data_model_derive::EventSet;
-
         // Keep super-module imports available for generated code paths.
         #[allow(unused)]
         use super::*;
         use crate::executor::ExecutorDataModel;
-
         #[derive(
             Debug,
             Clone,
@@ -2347,7 +2156,6 @@ mod executor {
             /// Executor data model was upgraded.
             Upgraded(ExecutorUpgrade),
         }
-
         /// Information about the updated executor data model.
         #[derive(
             Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Getters,
@@ -2361,10 +2169,8 @@ mod executor {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(ExecutorEvent, ExecutorUpgrade);
-
 /// Trait for events originating from [`HasOrigin::Origin`].
 pub trait HasOrigin {
     /// Type of the origin.
@@ -2372,19 +2178,16 @@ pub trait HasOrigin {
     /// Identification of the origin.
     fn origin(&self) -> &<Self::Origin as Identifiable>::Id;
 }
-
 impl From<NftEvent> for DataEvent {
     fn from(value: NftEvent) -> Self {
         DomainEvent::Nft(value).into()
     }
 }
-
 impl From<RwaEvent> for DataEvent {
     fn from(value: RwaEvent) -> Self {
         DomainEvent::Rwa(value).into()
     }
 }
-
 impl DataEvent {
     /// Route an account event under a real domain context carried by the emitting operation.
     #[must_use]
@@ -2394,7 +2197,6 @@ impl DataEvent {
             event,
         }))
     }
-
     /// Route an asset event using its authoritative persisted definition domain.
     #[must_use]
     pub fn asset(event: AssetEvent, domain: Option<DomainId>) -> Self {
@@ -2403,7 +2205,6 @@ impl DataEvent {
             None => event.into(),
         }
     }
-
     /// Route an asset-definition event using its authoritative persisted domain.
     #[must_use]
     pub fn asset_definition(event: AssetDefinitionEvent, domain: Option<DomainId>) -> Self {
@@ -2414,7 +2215,6 @@ impl DataEvent {
             None => event.into(),
         }
     }
-
     /// Return the domain id of [`DataEvent`]
     pub fn domain(&self) -> Option<&DomainId> {
         match self {
@@ -2426,7 +2226,6 @@ impl DataEvent {
         }
     }
 }
-
 #[cfg(test)]
 mod event_routing_tests {
     use super::{
@@ -2440,7 +2239,6 @@ mod event_routing_tests {
         asset::{AssetDefinitionId, AssetId},
         domain::DomainId,
     };
-
     #[test]
     fn opaque_asset_definition_events_route_without_domain_wrapper() {
         let domain_id: DomainId = DomainId::try_new("reward", "universal").expect("domain");
@@ -2452,7 +2250,6 @@ mod event_routing_tests {
             .to_string()
             .parse()
             .expect("opaque canonical asset definition id");
-
         let opaque_event = AssetDefinitionEvent::Deleted(opaque_definition.clone());
         assert!(matches!(
             DataEvent::from(opaque_event.clone()),
@@ -2460,7 +2257,6 @@ mod event_routing_tests {
                 if id == opaque_definition
         ));
         assert!(DataEvent::from(opaque_event).domain().is_none());
-
         let scoped_event = AssetDefinitionEvent::Deleted(scoped_definition);
         assert!(matches!(
             DataEvent::asset_definition(scoped_event, Some(domain_id.clone())),
@@ -2470,7 +2266,6 @@ mod event_routing_tests {
             })) if domain == domain_id
         ));
     }
-
     #[test]
     fn opaque_asset_events_route_without_domain_wrapper() {
         let domain_id: DomainId = DomainId::try_new("reward", "universal").expect("domain");
@@ -2492,13 +2287,11 @@ mod event_routing_tests {
             asset: asset_id.clone(),
             amount: 1_u32.into(),
         });
-
         assert!(matches!(
             DataEvent::from(opaque_event.clone()),
             DataEvent::Asset(AssetEvent::Added(change)) if change.asset == asset_id
         ));
         assert!(DataEvent::from(opaque_event).domain().is_none());
-
         let scoped = DataEvent::asset(
             AssetEvent::Added(AssetChanged {
                 asset: asset_id,
@@ -2511,14 +2304,12 @@ mod event_routing_tests {
             DataEvent::Domain(DomainEvent::Asset(ScopedAsset { domain, .. }))
                 if domain == &domain_id
         ));
-
         let encoded = norito::codec::Encode::encode(&scoped);
         let decoded = <DataEvent as norito::codec::Decode>::decode(&mut encoded.as_slice())
             .expect("decode explicitly scoped opaque asset event");
         assert_eq!(decoded, scoped);
         assert_eq!(decoded.domain(), Some(&domain_id));
     }
-
     #[test]
     fn domainless_account_event_roundtrips_without_domain_wrapper() {
         let public_key: PublicKey =
@@ -2529,7 +2320,6 @@ mod event_routing_tests {
         let event = DataEvent::from(super::account::AccountEvent::Deleted(account_id));
         assert!(matches!(event, DataEvent::Account(_)));
         assert!(event.domain().is_none());
-
         let encoded = norito::codec::Encode::encode(&event);
         let decoded = <DataEvent as norito::codec::Decode>::decode(&mut encoded.as_slice())
             .expect("decode domainless account event");
@@ -2537,13 +2327,11 @@ mod event_routing_tests {
         assert!(decoded.domain().is_none());
     }
 }
-
 #[cfg(all(test, feature = "json"))]
 mod tests {
     use super::MetadataChanged;
     use crate::domain::DomainId;
     use iroha_primitives::json::Json;
-
     #[test]
     fn metadata_changed_json_roundtrip() {
         let changed = MetadataChanged {
@@ -2555,9 +2343,16 @@ mod tests {
         let decoded: MetadataChanged<DomainId> =
             norito::json::from_str(&json).expect("deserialize");
         assert_eq!(changed, decoded);
+        assert_eq!(
+            norito::json::to_json_bounded(&changed, json.len()).expect("serialize at exact bound"),
+            json
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&changed, json.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
     }
 }
-
 #[allow(unused_imports)]
 pub mod prelude {
     pub use super::{

@@ -18,28 +18,22 @@
 //! implementation choice, not a mixed representation: raw lowering operands
 //! are rewritten before branding, no parallel operation is retained, and the
 //! opaque SSA API exposes only verified construction and consuming de-SSA.
-
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-
 use crate::{
     ir::{self, Label, Temp},
     regalloc::{visit_instr_defs, visit_instr_uses, visit_terminator_uses},
 };
-
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 /// Maximum control-flow blocks accepted in one V1 function.
 ///
 /// The bound keeps dominance construction and verification deterministic and
 /// memory-bounded for adversarial compiler-service inputs. Critical-edge
 /// splitting is checked against the same ceiling before de-SSA returns.
 const MAX_SSA_BLOCKS_PER_FUNCTION: usize = 4_096;
-
 /// Maximum lowering instructions accepted in one V1 function before SSA.
 const MAX_SSA_INSTRUCTIONS_PER_FUNCTION: usize = 262_144;
-
 /// One uniquely defined SSA value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct Value(usize);
-
 impl Value {
     /// Encode an SSA value in the exhaustive lowering-opcode register slot.
     ///
@@ -50,19 +44,16 @@ impl Value {
     fn encoded(self) -> Temp {
         Temp(self.0)
     }
-
     fn decode(encoded: Temp) -> Self {
         Self(encoded.0)
     }
 }
-
 /// One incoming value for a Phi node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PhiInput {
     predecessor: Label,
     value: Value,
 }
-
 /// An explicit control-flow merge for one lowering temporary.
 #[derive(Debug, PartialEq, Eq)]
 struct Phi {
@@ -70,7 +61,6 @@ struct Phi {
     destination: Value,
     inputs: Vec<PhiInput>,
 }
-
 /// One canonical opcode branded as using the SSA value namespace.
 ///
 /// The payload reuses the exhaustive lowering opcode family so checked and
@@ -79,47 +69,37 @@ struct Phi {
 /// encoded by [`Value::encoded`].
 #[derive(Debug, PartialEq)]
 struct ValueInstruction(ir::Instr);
-
 impl ValueInstruction {
     fn new(canonical: ir::Instr) -> Self {
         Self(canonical)
     }
-
     fn as_ir(&self) -> &ir::Instr {
         &self.0
     }
-
     fn as_ir_mut(&mut self) -> &mut ir::Instr {
         &mut self.0
     }
-
     fn into_ir(self) -> ir::Instr {
         self.0
     }
 }
-
 /// One canonical control transfer branded as using SSA values.
 #[derive(Debug, PartialEq)]
 struct ValueTerminator(ir::Terminator);
-
 impl ValueTerminator {
     fn new(canonical: ir::Terminator) -> Self {
         Self(canonical)
     }
-
     fn as_ir(&self) -> &ir::Terminator {
         &self.0
     }
-
     fn as_ir_mut(&mut self) -> &mut ir::Terminator {
         &mut self.0
     }
-
     fn into_ir(self) -> ir::Terminator {
         self.0
     }
 }
-
 /// One strict SSA basic block.
 #[derive(Debug, PartialEq)]
 struct BasicBlock {
@@ -130,7 +110,6 @@ struct BasicBlock {
     /// Canonical control transfer whose operand slots encode [`Value`]s.
     terminator: ValueTerminator,
 }
-
 /// One strict SSA function.
 #[derive(Debug, PartialEq)]
 struct Function {
@@ -140,13 +119,11 @@ struct Function {
     entry: Label,
     location: crate::ast::SourceLocation,
 }
-
 /// A compiler-owned strict SSA program.
 #[derive(Debug, PartialEq)]
 pub(crate) struct Program {
     functions: Vec<Function>,
 }
-
 impl Program {
     /// Construct and verify strict SSA MIR from lowering IR.
     pub(crate) fn from_ir(program: ir::Program) -> Result<Self, String> {
@@ -162,7 +139,6 @@ impl Program {
         program.verify()?;
         Ok(program)
     }
-
     /// Optimize the strict SSA program and retain only executable functions.
     ///
     /// Constant propagation is driven by executable CFG edges and explicit
@@ -179,7 +155,6 @@ impl Program {
         self.retain_reachable_functions(roots)?;
         self.verify()
     }
-
     fn retain_reachable_functions(&mut self, roots: &BTreeSet<String>) -> Result<(), String> {
         let mut function_indices = BTreeMap::new();
         for (index, function) in self.functions.iter().enumerate() {
@@ -193,7 +168,6 @@ impl Program {
                 ));
             }
         }
-
         // Validate every surviving direct call before graph pruning. This
         // prevents malformed, currently-dead helper functions from hiding an
         // unresolved symbol. Calls in CFG blocks proven unreachable by SCCP
@@ -221,7 +195,6 @@ impl Program {
                 }
             }
         }
-
         let mut pending = Vec::with_capacity(roots.len());
         for root in roots.iter().rev() {
             let Some(index) = function_indices.get(root.as_str()).copied() else {
@@ -238,7 +211,6 @@ impl Program {
             }
             pending.extend(call_graph[index].iter().rev().copied());
         }
-
         let mut index = 0usize;
         self.functions.retain(|_| {
             let keep = reachable.contains(&index);
@@ -247,7 +219,6 @@ impl Program {
         });
         Ok(())
     }
-
     /// Verify definition uniqueness, Phi edges, and dominance for all uses.
     fn verify(&self) -> Result<(), String> {
         let mut names = HashSet::with_capacity(self.functions.len());
@@ -261,7 +232,6 @@ impl Program {
         }
         Ok(())
     }
-
     /// Deterministically destroy Phis and rewrite SSA values into temporaries.
     pub(crate) fn into_ir(self) -> Result<ir::Program, String> {
         self.verify()?;
@@ -273,7 +243,6 @@ impl Program {
                 .collect::<Result<Vec<_>, _>>()?,
         })
     }
-
     #[cfg(test)]
     fn phi_count(&self) -> usize {
         self.functions
@@ -283,7 +252,6 @@ impl Program {
             .sum()
     }
 }
-
 impl Function {
     fn from_ir(mut function: ir::Function) -> Result<Self, String> {
         enforce_ssa_function_budget(&function)?;
@@ -309,7 +277,6 @@ impl Function {
             location: function.location,
         })
     }
-
     fn optimize(&mut self) -> Result<(), String> {
         loop {
             self.verify()?;
@@ -324,7 +291,6 @@ impl Function {
             }
         }
     }
-
     fn apply_sccp(&mut self, analysis: &SccpAnalysis) -> Result<bool, String> {
         let mut changed = false;
         for block in &mut self.blocks {
@@ -351,7 +317,6 @@ impl Function {
                 materialized.append(&mut block.instructions);
                 block.instructions = materialized;
             }
-
             for instruction in &mut block.instructions {
                 if let Some(replacement) = simplify_ssa_instruction(instruction.as_ir(), analysis)
                     && instruction.as_ir() != &replacement
@@ -360,7 +325,6 @@ impl Function {
                     changed = true;
                 }
             }
-
             if let ir::Terminator::Branch {
                 cond,
                 then_bb,
@@ -382,7 +346,6 @@ impl Function {
                 }
             }
         }
-
         if analysis.executable_blocks.len() != self.blocks.len() {
             let mut index = 0usize;
             self.blocks.retain(|_| {
@@ -395,7 +358,6 @@ impl Function {
         reconcile_phi_predecessors(self)?;
         Ok(changed)
     }
-
     fn coalesce_trivial_values(&mut self) -> Result<bool, String> {
         let mut changed = false;
         loop {
@@ -436,7 +398,6 @@ impl Function {
                     }
                 }
             }
-
             let Some(candidate) = candidate else {
                 return Ok(changed);
             };
@@ -453,7 +414,6 @@ impl Function {
             changed = true;
         }
     }
-
     fn eliminate_dead_values(&mut self) -> bool {
         let mut any_changed = false;
         loop {
@@ -471,7 +431,6 @@ impl Function {
                     used.insert(Value::decode(value));
                 });
             }
-
             let mut changed = false;
             for block in &mut self.blocks {
                 block.phis.retain(|phi| {
@@ -497,7 +456,6 @@ impl Function {
             }
         }
     }
-
     fn simplify_control_flow(&mut self) -> Result<bool, String> {
         let phi_labels = self
             .blocks
@@ -538,7 +496,6 @@ impl Function {
         if trampolines.is_empty() && entry_target.is_none() {
             return Ok(false);
         }
-
         let mut changed = false;
         if let Some(entry_target) = entry_target {
             self.entry = entry_target;
@@ -594,7 +551,6 @@ impl Function {
         }
         Ok(changed)
     }
-
     fn into_ir(self) -> Result<ir::Function, String> {
         let mut values = BTreeSet::new();
         for block in &self.blocks {
@@ -620,7 +576,6 @@ impl Function {
             .map(|(index, value)| (value, Temp(index)))
             .collect::<BTreeMap<_, _>>();
         let mut next_temp = value_temps.len();
-
         let mut edge_copies = BTreeMap::<(usize, usize), Vec<(Temp, Temp)>>::new();
         for block in &self.blocks {
             for phi in &block.phis {
@@ -633,7 +588,6 @@ impl Function {
                 }
             }
         }
-
         let mut blocks = self
             .blocks
             .into_iter()
@@ -667,7 +621,6 @@ impl Function {
             .unwrap_or(0)
             .checked_add(1)
             .ok_or_else(|| "SSA block-label space exhausted during Phi destruction".to_owned())?;
-
         for ((predecessor, target), copies) in edge_copies {
             let predecessor = Label(predecessor);
             let target = Label(target);
@@ -700,12 +653,10 @@ impl Function {
                 blocks[predecessor_index].instrs.extend(scheduled);
             }
         }
-
         Cfg::new(
             self.entry,
             blocks.iter().map(|block| (block.label, &block.terminator)),
         )?;
-
         Ok(ir::Function {
             name: self.name,
             params: self.params,
@@ -714,7 +665,6 @@ impl Function {
             location: self.location,
         })
     }
-
     fn verify(&self) -> Result<(), String> {
         let cfg = Cfg::new(
             self.entry,
@@ -723,7 +673,6 @@ impl Function {
                 .map(|block| (block.label, block.terminator.as_ir())),
         )?;
         let mut definitions = HashMap::<Value, DefinitionSite>::new();
-
         for (block_index, block) in self.blocks.iter().enumerate() {
             let mut phi_variables = HashSet::with_capacity(block.phis.len());
             let expected_predecessors = cfg.predecessor_labels(block_index);
@@ -758,7 +707,6 @@ impl Function {
                     ));
                 }
             }
-
             for (instruction_index, instruction) in block.instructions.iter().enumerate() {
                 validate_ssa_instruction(instruction.as_ir())?;
                 let mut failure = None;
@@ -778,7 +726,6 @@ impl Function {
                 }
             }
         }
-
         for (block_index, block) in self.blocks.iter().enumerate() {
             for phi in &block.phis {
                 for input in &phi.inputs {
@@ -830,14 +777,12 @@ impl Function {
         Ok(())
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SccpValue {
     Unknown,
     Integer(i64),
     Overdefined,
 }
-
 fn merge_sccp_value(left: SccpValue, right: SccpValue) -> SccpValue {
     match (left, right) {
         (SccpValue::Unknown, value) | (value, SccpValue::Unknown) => value,
@@ -849,13 +794,11 @@ fn merge_sccp_value(left: SccpValue, right: SccpValue) -> SccpValue {
         | (_, SccpValue::Overdefined) => SccpValue::Overdefined,
     }
 }
-
 struct SccpAnalysis {
     values: BTreeMap<Value, SccpValue>,
     executable_blocks: BTreeSet<usize>,
     executable_edges: BTreeSet<(usize, usize)>,
 }
-
 impl SccpAnalysis {
     fn analyze(function: &Function) -> Result<Self, String> {
         let cfg = Cfg::new(
@@ -870,7 +813,6 @@ impl SccpAnalysis {
             executable_blocks: BTreeSet::from([cfg.entry]),
             executable_edges: BTreeSet::new(),
         };
-
         let mut value_users = BTreeMap::<Value, BTreeSet<usize>>::new();
         for (block_index, block) in function.blocks.iter().enumerate() {
             for phi in &block.phis {
@@ -896,7 +838,6 @@ impl SccpAnalysis {
                     .insert(block_index);
             });
         }
-
         let mut pending = BTreeSet::from([cfg.entry]);
         loop {
             while let Some(block_index) = pending.pop_first() {
@@ -904,7 +845,6 @@ impl SccpAnalysis {
                     continue;
                 }
                 let block = &function.blocks[block_index];
-
                 for phi in &block.phis {
                     let mut state = SccpValue::Unknown;
                     for input in &phi.inputs {
@@ -927,7 +867,6 @@ impl SccpAnalysis {
                         );
                     }
                 }
-
                 for instruction in &block.instructions {
                     let evaluated = evaluate_ssa_instruction(instruction.as_ir(), &analysis);
                     let mut definitions = Vec::new();
@@ -950,7 +889,6 @@ impl SccpAnalysis {
                         }
                     }
                 }
-
                 let targets = match block.terminator.as_ir() {
                     ir::Terminator::Jump(target) => vec![*target],
                     ir::Terminator::Branch {
@@ -980,7 +918,6 @@ impl SccpAnalysis {
                     }
                 }
             }
-
             // A verifier-valid cyclic Phi graph can remain lattice-bottom
             // without a concrete seed. Do not mistake that for proof that its
             // branch successors are unreachable: conservatively make both
@@ -1016,14 +953,12 @@ impl SccpAnalysis {
             }
         }
     }
-
     fn value(&self, value: Value) -> SccpValue {
         self.values
             .get(&value)
             .copied()
             .unwrap_or(SccpValue::Unknown)
     }
-
     fn merge_definition(&mut self, destination: Value, state: SccpValue) -> bool {
         let previous = self.value(destination);
         let merged = merge_sccp_value(previous, state);
@@ -1033,7 +968,6 @@ impl SccpAnalysis {
         self.values.insert(destination, merged);
         true
     }
-
     fn mark_edge(&mut self, cfg: &Cfg, from: usize, target: Label) -> Result<bool, String> {
         let target = cfg.index(target)?;
         let edge_changed = self.executable_edges.insert((from, target));
@@ -1041,7 +975,6 @@ impl SccpAnalysis {
         Ok(edge_changed || block_changed)
     }
 }
-
 fn evaluate_ssa_instruction(
     instruction: &ir::Instr,
     analysis: &SccpAnalysis,
@@ -1063,7 +996,6 @@ fn evaluate_ssa_instruction(
         };
         (Value::decode(destination), state)
     };
-
     Some(match instruction {
         ir::Instr::Const { dest, value } => (Value::decode(*dest), SccpValue::Integer(*value)),
         ir::Instr::Copy { dest, src } => {
@@ -1102,10 +1034,8 @@ fn evaluate_ssa_instruction(
         _ => return None,
     })
 }
-
 fn checked_binary_constant(op: crate::ast::BinaryOp, left: i64, right: i64) -> Option<i64> {
     use crate::ast::BinaryOp;
-
     match op {
         BinaryOp::Add => left.checked_add(right),
         BinaryOp::Sub => left.checked_sub(right),
@@ -1122,10 +1052,8 @@ fn checked_binary_constant(op: crate::ast::BinaryOp, left: i64, right: i64) -> O
         BinaryOp::Ge => Some(i64::from(left >= right)),
     }
 }
-
 fn wrapping_binary_constant(op: crate::ast::BinaryOp, left: i64, right: i64) -> Option<i64> {
     use crate::ast::BinaryOp;
-
     match op {
         BinaryOp::Add => Some(left.wrapping_add(right)),
         BinaryOp::Sub => Some(left.wrapping_sub(right)),
@@ -1142,24 +1070,20 @@ fn wrapping_binary_constant(op: crate::ast::BinaryOp, left: i64, right: i64) -> 
         | BinaryOp::Ge => None,
     }
 }
-
 fn unary_constant(op: crate::ast::UnaryOp, operand: i64) -> Option<i64> {
     match op {
         crate::ast::UnaryOp::Neg => operand.checked_neg(),
         crate::ast::UnaryOp::Not => Some(i64::from(operand == 0)),
     }
 }
-
 fn integer_value(analysis: &SccpAnalysis, encoded: Temp) -> Option<i64> {
     match analysis.value(Value::decode(encoded)) {
         SccpValue::Integer(value) => Some(value),
         SccpValue::Unknown | SccpValue::Overdefined => None,
     }
 }
-
 fn simplify_ssa_instruction(instruction: &ir::Instr, analysis: &SccpAnalysis) -> Option<ir::Instr> {
     use crate::ast::BinaryOp;
-
     match instruction {
         ir::Instr::Copy { dest, src } => {
             integer_value(analysis, *src).map(|value| ir::Instr::Const { dest: *dest, value })
@@ -1328,7 +1252,6 @@ fn simplify_ssa_instruction(instruction: &ir::Instr, analysis: &SccpAnalysis) ->
         _ => None,
     }
 }
-
 enum CoalesceCandidate {
     Phi {
         block: usize,
@@ -1343,7 +1266,6 @@ enum CoalesceCandidate {
         source: Value,
     },
 }
-
 impl CoalesceCandidate {
     fn values(&self) -> (Value, Value) {
         match *self {
@@ -1360,7 +1282,6 @@ impl CoalesceCandidate {
         }
     }
 }
-
 fn replace_ssa_uses(function: &mut Function, from: Value, to: Value) {
     for block in &mut function.blocks {
         for phi in &mut block.phis {
@@ -1384,7 +1305,6 @@ fn replace_ssa_uses(function: &mut Function, from: Value, to: Value) {
         });
     }
 }
-
 fn is_ssa_dce_safe(instruction: &ir::Instr) -> bool {
     match instruction {
         ir::Instr::Const { .. }
@@ -1415,7 +1335,6 @@ fn is_ssa_dce_safe(instruction: &ir::Instr) -> bool {
         _ => false,
     }
 }
-
 fn validate_ssa_instruction(instruction: &ir::Instr) -> Result<(), String> {
     if let ir::Instr::WrappingBinary { op, .. } = instruction
         && !matches!(
@@ -1429,7 +1348,6 @@ fn validate_ssa_instruction(instruction: &ir::Instr) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn resolve_ssa_trampoline(mut label: Label, trampolines: &HashMap<Label, Label>) -> Label {
     let original = label;
     let mut visited = HashSet::new();
@@ -1441,7 +1359,6 @@ fn resolve_ssa_trampoline(mut label: Label, trampolines: &HashMap<Label, Label>)
     }
     label
 }
-
 fn retain_reachable_ssa_blocks(function: &mut Function) -> Result<(), String> {
     let mut label_to_index = HashMap::with_capacity(function.blocks.len());
     for (index, block) in function.blocks.iter().enumerate() {
@@ -1462,7 +1379,6 @@ fn retain_reachable_ssa_blocks(function: &mut Function) -> Result<(), String> {
             }
         }
     }
-
     let mut reachable = BTreeSet::new();
     let mut pending = vec![entry];
     while let Some(index) = pending.pop() {
@@ -1491,7 +1407,6 @@ fn retain_reachable_ssa_blocks(function: &mut Function) -> Result<(), String> {
     });
     reconcile_phi_predecessors(function)
 }
-
 fn place_ssa_entry_first(function: &mut Function) -> Result<(), String> {
     let entry_index = function
         .blocks
@@ -1504,7 +1419,6 @@ fn place_ssa_entry_first(function: &mut Function) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn reconcile_phi_predecessors(function: &mut Function) -> Result<(), String> {
     let mut label_to_index = HashMap::with_capacity(function.blocks.len());
     for (index, block) in function.blocks.iter().enumerate() {
@@ -1546,7 +1460,6 @@ fn reconcile_phi_predecessors(function: &mut Function) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn retain_reachable_lowering_blocks(function: &mut ir::Function) -> Result<(), String> {
     let mut label_to_index = HashMap::with_capacity(function.blocks.len());
     for (index, block) in function.blocks.iter().enumerate() {
@@ -1557,7 +1470,6 @@ fn retain_reachable_lowering_blocks(function: &mut ir::Function) -> Result<(), S
     let Some(entry) = label_to_index.get(&function.entry).copied() else {
         return Err(format!("missing lowering entry block {:?}", function.entry));
     };
-
     // Validate targets in all input blocks before pruning, including blocks
     // that turn out to be unreachable. Malformed lowering IR must never be
     // hidden by optimization.
@@ -1571,7 +1483,6 @@ fn retain_reachable_lowering_blocks(function: &mut ir::Function) -> Result<(), S
             }
         }
     }
-
     let mut reachable = BTreeSet::new();
     let mut pending = vec![entry];
     while let Some(index) = pending.pop() {
@@ -1600,7 +1511,6 @@ fn retain_reachable_lowering_blocks(function: &mut ir::Function) -> Result<(), S
     });
     Ok(())
 }
-
 fn enforce_ssa_function_budget(function: &ir::Function) -> Result<(), String> {
     let instructions = function.blocks.iter().try_fold(0usize, |total, block| {
         total
@@ -1609,7 +1519,6 @@ fn enforce_ssa_function_budget(function: &ir::Function) -> Result<(), String> {
     })?;
     validate_ssa_budget_counts(function.blocks.len(), instructions)
 }
-
 fn validate_ssa_budget_counts(blocks: usize, instructions: usize) -> Result<(), String> {
     if blocks > MAX_SSA_BLOCKS_PER_FUNCTION {
         return Err(format!(
@@ -1625,7 +1534,6 @@ fn validate_ssa_budget_counts(blocks: usize, instructions: usize) -> Result<(), 
     }
     Ok(())
 }
-
 fn place_entry_first(function: &mut ir::Function) -> Result<(), String> {
     let entry_index = function
         .blocks
@@ -1638,7 +1546,6 @@ fn place_entry_first(function: &mut ir::Function) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn ensure_entry_preheader(function: &mut ir::Function) -> Result<(), String> {
     if !function
         .blocks
@@ -1673,14 +1580,12 @@ fn ensure_entry_preheader(function: &mut ir::Function) -> Result<(), String> {
     function.entry = label;
     Ok(())
 }
-
 fn value_temp(values: &BTreeMap<Value, Temp>, value: Value) -> Result<Temp, String> {
     values
         .get(&value)
         .copied()
         .ok_or_else(|| format!("missing lowering temporary for SSA value {value:?}"))
 }
-
 fn rewrite_instruction_values(
     instruction: &mut ir::Instr,
     values: &BTreeMap<Value, Temp>,
@@ -1717,7 +1622,6 @@ fn rewrite_instruction_values(
     }
     failure.map_or(Ok(()), Err)
 }
-
 fn rewrite_terminator_values(
     terminator: &mut ir::Terminator,
     values: &BTreeMap<Value, Temp>,
@@ -1743,7 +1647,6 @@ fn rewrite_terminator_values(
     }
     failure.map_or(Ok(()), Err)
 }
-
 fn successor_labels(terminator: &ir::Terminator) -> Vec<Label> {
     let mut labels = match terminator {
         ir::Terminator::Jump(target) => vec![*target],
@@ -1758,7 +1661,6 @@ fn successor_labels(terminator: &ir::Terminator) -> Vec<Label> {
     labels.dedup();
     labels
 }
-
 fn retarget_edge(terminator: &mut ir::Terminator, from: Label, to: Label) -> Result<(), String> {
     let mut rewritten = false;
     match terminator {
@@ -1788,7 +1690,6 @@ fn retarget_edge(terminator: &mut ir::Terminator, from: Label, to: Label) -> Res
         Err(format!("cannot retarget missing SSA edge to {from:?}"))
     }
 }
-
 fn schedule_parallel_copies(
     mut copies: Vec<(Temp, Temp)>,
     next_temp: &mut usize,
@@ -1803,7 +1704,6 @@ fn schedule_parallel_copies(
             ));
         }
     }
-
     let mut scheduled = Vec::with_capacity(copies.len());
     while !copies.is_empty() {
         let safe = copies
@@ -1814,7 +1714,6 @@ fn schedule_parallel_copies(
             scheduled.push(ir::Instr::Copy { dest, src });
             continue;
         }
-
         // Every remaining destination is also a source, so at least one cycle
         // remains. Preserve the first destination's old value in a fresh
         // temporary and substitute that source before resuming the acyclic
@@ -1836,26 +1735,22 @@ fn schedule_parallel_copies(
     }
     Ok(scheduled)
 }
-
 #[derive(Clone, Copy)]
 enum DefinitionPosition {
     Phi,
     Instruction(usize),
 }
-
 #[derive(Clone, Copy)]
 struct DefinitionSite {
     block: usize,
     position: DefinitionPosition,
 }
-
 #[derive(Clone, Copy)]
 enum UsePosition {
     Instruction(usize),
     Terminator,
     Edge,
 }
-
 fn insert_definition(
     definitions: &mut HashMap<Value, DefinitionSite>,
     value: Value,
@@ -1870,7 +1765,6 @@ fn insert_definition(
     }
     Ok(())
 }
-
 fn verify_use(
     definitions: &HashMap<Value, DefinitionSite>,
     cfg: &Cfg,
@@ -1890,7 +1784,6 @@ fn verify_use(
         }
         return Ok(());
     }
-
     let ordered = match (definition.position, use_position) {
         (DefinitionPosition::Phi, _) => true,
         (DefinitionPosition::Instruction(definition), UsePosition::Instruction(usage)) => {
@@ -1906,7 +1799,6 @@ fn verify_use(
     }
     Ok(())
 }
-
 /// Compact deterministic bit set used by dominance analysis.
 ///
 /// A dense representation avoids cloning thousands of tree nodes per block
@@ -1917,7 +1809,6 @@ struct DominatorSet {
     words: Vec<u64>,
     len: usize,
 }
-
 impl DominatorSet {
     fn full(len: usize) -> Self {
         let word_count = len.div_ceil(u64::BITS as usize);
@@ -1930,7 +1821,6 @@ impl DominatorSet {
         }
         Self { words, len }
     }
-
     fn singleton(len: usize, index: usize) -> Self {
         let mut set = Self {
             words: vec![0; len.div_ceil(u64::BITS as usize)],
@@ -1939,36 +1829,30 @@ impl DominatorSet {
         set.insert(index);
         set
     }
-
     fn insert(&mut self, index: usize) {
         debug_assert!(index < self.len);
         self.words[index / u64::BITS as usize] |= 1_u64 << (index % u64::BITS as usize);
     }
-
     fn contains(&self, index: usize) -> bool {
         index < self.len
             && self.words[index / u64::BITS as usize] & (1_u64 << (index % u64::BITS as usize)) != 0
     }
-
     fn intersect_with(&mut self, other: &Self) {
         debug_assert_eq!(self.len, other.len);
         for (word, other) in self.words.iter_mut().zip(&other.words) {
             *word &= *other;
         }
     }
-
     fn count(&self) -> usize {
         self.words
             .iter()
             .map(|word| word.count_ones() as usize)
             .sum()
     }
-
     fn iter(&self) -> impl Iterator<Item = usize> + '_ {
         (0..self.len).filter(|index| self.contains(*index))
     }
 }
-
 struct Cfg {
     labels: Vec<Label>,
     label_to_index: HashMap<Label, usize>,
@@ -1979,7 +1863,6 @@ struct Cfg {
     dominance_frontier: Vec<BTreeSet<usize>>,
     entry: usize,
 }
-
 impl Cfg {
     fn new<'a>(
         entry: Label,
@@ -2003,7 +1886,6 @@ impl Cfg {
         let Some(entry_index) = label_to_index.get(&entry).copied() else {
             return Err(format!("missing SSA entry block {entry:?}"));
         };
-
         let mut successors = vec![Vec::new(); blocks.len()];
         let mut predecessors = vec![Vec::new(); blocks.len()];
         for (index, (_, terminator)) in blocks.iter().enumerate() {
@@ -2038,7 +1920,6 @@ impl Cfg {
                 "SSA entry block {entry:?} must not have incoming CFG edges"
             ));
         }
-
         let mut reachable = BTreeSet::new();
         let mut pending = vec![entry_index];
         while let Some(block) = pending.pop() {
@@ -2057,7 +1938,6 @@ impl Cfg {
                 .collect::<Vec<_>>();
             return Err(format!("unreachable SSA blocks remain: {unreachable:?}"));
         }
-
         let all_blocks = DominatorSet::full(blocks.len());
         let mut dominators = vec![all_blocks; blocks.len()];
         dominators[entry_index] = DominatorSet::singleton(blocks.len(), entry_index);
@@ -2085,7 +1965,6 @@ impl Cfg {
                 break;
             }
         }
-
         let mut immediate_dominator = vec![None; blocks.len()];
         for block in 0..blocks.len() {
             if block == entry_index {
@@ -2098,7 +1977,6 @@ impl Cfg {
                 .ok_or_else(|| format!("SSA block {:?} has no dominator", labels[block]))?;
             immediate_dominator[block] = Some(candidate);
         }
-
         let mut dominator_children = vec![Vec::new(); blocks.len()];
         for (block, parent) in immediate_dominator.iter().copied().enumerate() {
             if let Some(parent) = parent {
@@ -2108,7 +1986,6 @@ impl Cfg {
         for children in &mut dominator_children {
             children.sort_by_key(|child| labels[*child].0);
         }
-
         let mut dominance_frontier = vec![BTreeSet::new(); blocks.len()];
         for block in 0..blocks.len() {
             if predecessors[block].len() < 2 {
@@ -2130,7 +2007,6 @@ impl Cfg {
                 }
             }
         }
-
         Ok(Self {
             labels,
             label_to_index,
@@ -2142,14 +2018,12 @@ impl Cfg {
             entry: entry_index,
         })
     }
-
     fn index(&self, label: Label) -> Result<usize, String> {
         self.label_to_index
             .get(&label)
             .copied()
             .ok_or_else(|| format!("missing SSA block {label:?}"))
     }
-
     fn predecessor_labels(&self, block: usize) -> Vec<Label> {
         self.predecessors[block]
             .iter()
@@ -2157,7 +2031,6 @@ impl Cfg {
             .collect()
     }
 }
-
 fn place_phi_variables(blocks: &[ir::BasicBlock], cfg: &Cfg) -> Vec<BTreeSet<usize>> {
     let live_in = lowering_liveness(blocks, cfg);
     let mut definition_blocks = BTreeMap::<usize, BTreeSet<usize>>::new();
@@ -2171,7 +2044,6 @@ fn place_phi_variables(blocks: &[ir::BasicBlock], cfg: &Cfg) -> Vec<BTreeSet<usi
             });
         }
     }
-
     let mut result = vec![BTreeSet::new(); blocks.len()];
     for (variable, definitions) in definition_blocks {
         let mut work = definitions.clone();
@@ -2192,7 +2064,6 @@ fn place_phi_variables(blocks: &[ir::BasicBlock], cfg: &Cfg) -> Vec<BTreeSet<usi
     }
     result
 }
-
 fn lowering_liveness(blocks: &[ir::BasicBlock], cfg: &Cfg) -> Vec<BTreeSet<usize>> {
     let mut uses = vec![BTreeSet::new(); blocks.len()];
     let mut definitions = vec![BTreeSet::new(); blocks.len()];
@@ -2213,7 +2084,6 @@ fn lowering_liveness(blocks: &[ir::BasicBlock], cfg: &Cfg) -> Vec<BTreeSet<usize
             }
         });
     }
-
     let mut live_in = vec![BTreeSet::new(); blocks.len()];
     let mut live_out = vec![BTreeSet::new(); blocks.len()];
     loop {
@@ -2243,7 +2113,6 @@ fn lowering_liveness(blocks: &[ir::BasicBlock], cfg: &Cfg) -> Vec<BTreeSet<usize
         }
     }
 }
-
 fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
     use ir::Instr::*;
     match instr {
@@ -2858,7 +2727,6 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
         AxtCommit => {}
     }
 }
-
 fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
     match instr {
         ir::Instr::PointerEq { dest, .. }
@@ -3055,7 +2923,6 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         | ir::Instr::CoreQueryPage { .. } => None,
     }
 }
-
 fn rewrite_instr_definitions<F: FnMut(&mut Temp)>(instruction: &mut ir::Instr, mut visit: F) {
     if let Some(destination) = dest_temp_mut(instruction) {
         visit(destination);
@@ -3083,7 +2950,6 @@ fn rewrite_instr_definitions<F: FnMut(&mut Temp)>(instruction: &mut ir::Instr, m
         _ => {}
     }
 }
-
 fn rewrite_terminator_uses<F: FnMut(&mut Temp)>(terminator: &mut ir::Terminator, mut visit: F) {
     match terminator {
         ir::Terminator::Return(Some(value)) => visit(value),
@@ -3100,7 +2966,6 @@ fn rewrite_terminator_uses<F: FnMut(&mut Temp)>(terminator: &mut ir::Terminator,
         ir::Terminator::Return(None) | ir::Terminator::Jump(_) => {}
     }
 }
-
 struct Renamer {
     cfg: Cfg,
     phi_variables: Vec<BTreeSet<usize>>,
@@ -3111,12 +2976,10 @@ struct Renamer {
     phi_inputs: Vec<BTreeMap<usize, Vec<PhiInput>>>,
     next_value: usize,
 }
-
 enum RenameEvent {
     Enter(usize),
     Exit(Vec<usize>),
 }
-
 impl Renamer {
     fn new(cfg: Cfg, phi_variables: Vec<BTreeSet<usize>>, blocks: Vec<ir::BasicBlock>) -> Self {
         let len = blocks.len();
@@ -3131,7 +2994,6 @@ impl Renamer {
             next_value: 0,
         }
     }
-
     fn rename(&mut self) -> Result<(), String> {
         let mut events = vec![RenameEvent::Enter(self.cfg.entry)];
         while let Some(event) = events.pop() {
@@ -3157,7 +3019,6 @@ impl Renamer {
         }
         Ok(())
     }
-
     fn rename_block(&mut self, block_index: usize) -> Result<Vec<usize>, String> {
         let raw = self.raw_blocks[block_index]
             .take()
@@ -3173,7 +3034,6 @@ impl Renamer {
             self.phi_destinations[block_index].insert(variable, value);
             pushed.push(variable);
         }
-
         let mut instructions = Vec::with_capacity(raw.instrs.len());
         for mut operation in raw.instrs {
             let mut expected_uses = 0usize;
@@ -3230,7 +3090,6 @@ impl Renamer {
             }
             instructions.push(ValueInstruction::new(operation));
         }
-
         let mut terminator = raw.terminator;
         let mut expected_terminator_uses = 0usize;
         visit_terminator_uses(&terminator, |_| expected_terminator_uses += 1);
@@ -3256,7 +3115,6 @@ impl Renamer {
                 raw.label
             ));
         }
-
         for successor in self.cfg.successors[block_index].clone() {
             let variables = self.phi_variables[successor]
                 .iter()
@@ -3273,7 +3131,6 @@ impl Renamer {
                     });
             }
         }
-
         self.blocks[block_index] = Some(BasicBlock {
             label: raw.label,
             phis: Vec::new(),
@@ -3282,7 +3139,6 @@ impl Renamer {
         });
         Ok(pushed)
     }
-
     fn finish(mut self) -> Result<Vec<BasicBlock>, String> {
         for block_index in 0..self.blocks.len() {
             let mut phis = Vec::with_capacity(self.phi_variables[block_index].len());
@@ -3326,7 +3182,6 @@ impl Renamer {
             })
             .collect()
     }
-
     fn new_value(&mut self) -> Result<Value, String> {
         let value = Value(self.next_value);
         self.next_value = self
@@ -3335,7 +3190,6 @@ impl Renamer {
             .ok_or_else(|| "SSA value identity space exhausted".to_owned())?;
         Ok(value)
     }
-
     fn current_value(&self, variable: Temp, block: Label) -> Result<Value, String> {
         self.stacks
             .get(&variable.0)
@@ -3348,22 +3202,18 @@ impl Renamer {
             })
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
-    use crate::{
-        ast::{BinaryOp, SourceLocation},
-        ir::{BasicBlock, Function, Instr, Label, Program as IrProgram, Temp, Terminator},
-    };
-
     use super::{
         BasicBlock as SsaBlock, Cfg, Function as SsaFunction, MAX_SSA_BLOCKS_PER_FUNCTION,
         MAX_SSA_INSTRUCTIONS_PER_FUNCTION, Phi, PhiInput, Program, Renamer, Value,
         ValueInstruction, ValueTerminator, validate_ssa_budget_counts,
     };
-
+    use crate::{
+        ast::{BinaryOp, SourceLocation},
+        ir::{BasicBlock, Function, Instr, Label, Program as IrProgram, Temp, Terminator},
+    };
+    use std::collections::BTreeSet;
     fn function(blocks: Vec<BasicBlock>) -> Function {
         Function {
             name: "test".to_owned(),
@@ -3376,13 +3226,11 @@ mod tests {
             },
         }
     }
-
     fn named_function(name: &str, blocks: Vec<BasicBlock>) -> Function {
         let mut function = function(blocks);
         function.name = name.to_owned();
         function
     }
-
     fn branch_join_program() -> IrProgram {
         IrProgram {
             functions: vec![function(vec![
@@ -3427,7 +3275,6 @@ mod tests {
             ])],
         }
     }
-
     fn loop_join_program() -> IrProgram {
         IrProgram {
             functions: vec![function(vec![
@@ -3481,7 +3328,6 @@ mod tests {
             ])],
         }
     }
-
     fn nested_join_program() -> IrProgram {
         IrProgram {
             functions: vec![function(vec![
@@ -3546,7 +3392,6 @@ mod tests {
             ])],
         }
     }
-
     fn critical_edge_program() -> IrProgram {
         IrProgram {
             functions: vec![function(vec![
@@ -3595,7 +3440,6 @@ mod tests {
             ])],
         }
     }
-
     fn cyclic_loop_ssa_program() -> Program {
         Program {
             functions: vec![SsaFunction {
@@ -3670,7 +3514,6 @@ mod tests {
             }],
         }
     }
-
     #[test]
     fn branch_join_has_one_explicit_phi() {
         let program = Program::from_ir(branch_join_program()).expect("construct branch SSA");
@@ -3691,7 +3534,6 @@ mod tests {
             vec![Label(1), Label(2)]
         );
     }
-
     #[test]
     fn branch_local_temporary_does_not_create_an_incomplete_phi() {
         let raw = IrProgram {
@@ -3734,12 +3576,10 @@ mod tests {
                 },
             ])],
         };
-
         let program = Program::from_ir(raw).expect("dead branch-local values need no Phi");
         program.verify().expect("verify pruned branch SSA");
         assert_eq!(program.phi_count(), 0);
     }
-
     #[test]
     fn ssa_budget_rejects_counts_above_each_v1_ceiling() {
         validate_ssa_budget_counts(
@@ -3763,7 +3603,6 @@ mod tests {
             "{instruction_error}"
         );
     }
-
     #[test]
     fn iterative_renaming_handles_a_deep_dominator_chain() {
         const BLOCKS: usize = 2_048;
@@ -3784,7 +3623,6 @@ mod tests {
         .expect("deep bounded CFG must not recurse on the process stack");
         assert_eq!(program.functions[0].blocks.len(), BLOCKS);
     }
-
     #[test]
     fn ssa_value_identity_exhaustion_is_a_stable_error() {
         let blocks = vec![BasicBlock {
@@ -3807,7 +3645,6 @@ mod tests {
             .expect_err("value identity wraparound must fail closed");
         assert_eq!(error, "SSA value identity space exhausted");
     }
-
     #[test]
     fn loop_header_phi_versions_loop_carried_value() {
         let program = Program::from_ir(loop_join_program()).expect("construct loop SSA");
@@ -3828,7 +3665,6 @@ mod tests {
             vec![Label(0), Label(2)]
         );
     }
-
     #[test]
     fn entry_backedge_receives_a_deterministic_preheader() {
         let raw = IrProgram {
@@ -3866,7 +3702,6 @@ mod tests {
         assert!(preheader.instrs.is_empty());
         assert!(matches!(&preheader.terminator, Terminator::Jump(Label(0))));
     }
-
     #[test]
     fn nested_control_flow_places_inner_and_outer_phis() {
         let program = Program::from_ir(nested_join_program()).expect("construct nested SSA");
@@ -3880,7 +3715,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(labels, vec![Label(6), Label(5)]);
     }
-
     #[test]
     fn de_ssa_splits_a_critical_edge_before_materializing_phi_copies() {
         let lowered = Program::from_ir(critical_edge_program())
@@ -3915,7 +3749,6 @@ mod tests {
         assert_eq!(split_block.instrs.len(), 1);
         assert!(matches!(&split_block.instrs[0], Instr::Copy { .. }));
     }
-
     #[test]
     fn cyclic_loop_phi_copies_use_a_scratch_on_the_split_backedge() {
         let program = cyclic_loop_ssa_program();
@@ -3959,7 +3792,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn join_and_critical_edge_destruction_is_byte_for_byte_stable() {
         let first = Program::from_ir(critical_edge_program())
@@ -3972,7 +3804,6 @@ mod tests {
             .expect("destroy second SSA");
         assert_eq!(format!("{first:#?}"), format!("{second:#?}"));
     }
-
     #[test]
     fn verifier_rejects_duplicate_value_definition() {
         let mut program = Program::from_ir(branch_join_program()).expect("construct branch SSA");
@@ -3991,7 +3822,6 @@ mod tests {
             .expect_err("duplicate SSA definition must fail");
         assert!(error.contains("defined more than once"), "{error}");
     }
-
     #[test]
     fn verifier_rejects_same_instruction_use_before_definition() {
         let mut program = Program::from_ir(branch_join_program()).expect("construct branch SSA");
@@ -4009,7 +3839,6 @@ mod tests {
             .expect_err("same-instruction use must fail dominance ordering");
         assert!(error.contains("used before its definition"), "{error}");
     }
-
     #[test]
     fn construction_rejects_use_before_definition() {
         let program = IrProgram {
@@ -4028,7 +3857,6 @@ mod tests {
         assert!(error.contains("function `test`"), "{error}");
         assert!(error.contains("used before definition"), "{error}");
     }
-
     #[test]
     fn private_numeric_instructions_version_aliased_sources_before_destinations() {
         let raw = IrProgram {
@@ -4053,7 +3881,6 @@ mod tests {
                 terminator: Terminator::Return(Some(Temp(0))),
             }])],
         };
-
         let program = Program::from_ir(raw).expect("construct aliased private-numeric SSA");
         program
             .verify()
@@ -4081,7 +3908,6 @@ mod tests {
             instruction => panic!("expected private commitment, got {instruction:?}"),
         }
     }
-
     #[test]
     fn construction_rejects_malformed_private_numeric_uses() {
         let private_input = IrProgram {
@@ -4101,7 +3927,6 @@ mod tests {
             private_input_error.contains("Temp(1) is used before definition"),
             "{private_input_error}"
         );
-
         let private_commitment = IrProgram {
             functions: vec![function(vec![BasicBlock {
                 label: Label(0),
@@ -4126,7 +3951,6 @@ mod tests {
             "{commitment_error}"
         );
     }
-
     #[test]
     fn deterministic_de_ssa_preserves_checked_effectful_operations_and_origin() {
         let raw = IrProgram {
@@ -4163,14 +3987,12 @@ mod tests {
         assert_eq!(format!("{lowered:#?}"), before);
         assert_eq!(lowered.functions[0].location.line, 7);
         assert_eq!(lowered.functions[0].location.column, 11);
-
         let second = Program::from_ir(IrProgram {
             functions: lowered.functions,
         })
         .expect("reconstruct deterministic SSA");
         assert_eq!(format!("{second:#?}"), first_ssa);
     }
-
     #[test]
     fn sccp_materializes_a_constant_phi_from_two_executable_edges() {
         let raw = IrProgram {
@@ -4225,7 +4047,6 @@ mod tests {
             [ValueInstruction(Instr::Const { value: 37, .. })]
         ));
     }
-
     #[test]
     fn branch_folding_prunes_inactive_phi_input_and_coalesces_the_join() {
         let raw = IrProgram {
@@ -4289,7 +4110,6 @@ mod tests {
             })
         }));
     }
-
     #[test]
     fn checked_overflow_and_division_by_zero_are_retained_when_dead() {
         let raw = IrProgram {
@@ -4338,7 +4158,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(operations, vec![BinaryOp::Add, BinaryOp::Div]);
     }
-
     #[test]
     fn algebraic_identity_is_simplified_and_the_copy_is_coalesced() {
         let raw = IrProgram {
@@ -4377,7 +4196,6 @@ mod tests {
             Terminator::Return(Some(_))
         ));
     }
-
     #[test]
     fn effectful_state_write_is_retained_with_an_unused_result_graph() {
         let raw = IrProgram {
@@ -4411,7 +4229,6 @@ mod tests {
                 .any(|instruction| matches!(instruction.as_ir(), Instr::StateSet { .. }))
         );
     }
-
     #[test]
     fn unreachable_call_does_not_retain_a_helper_function() {
         let root = named_function(
@@ -4469,7 +4286,6 @@ mod tests {
             ["root"]
         );
     }
-
     #[test]
     fn whole_program_ssa_dce_fails_closed_on_missing_and_unresolved_symbols() {
         let unresolved = named_function(
@@ -4492,7 +4308,6 @@ mod tests {
             .optimize_and_retain(&BTreeSet::from(["root".to_owned()]))
             .expect_err("unresolved call must fail closed");
         assert!(error.contains("unresolved SSA callee `missing`"), "{error}");
-
         let mut program = Program::from_ir(IrProgram {
             functions: vec![named_function(
                 "root",
@@ -4511,7 +4326,6 @@ mod tests {
             error.contains("missing SSA root function `absent`"),
             "{error}"
         );
-
         let make_empty = |name: &str| {
             named_function(
                 name,
@@ -4544,7 +4358,6 @@ mod tests {
             "{error}"
         );
     }
-
     #[test]
     fn optimized_ssa_output_is_deterministic_and_corruption_is_rejected() {
         let optimize = || {
@@ -4555,7 +4368,6 @@ mod tests {
             program.into_ir().expect("destroy optimized SSA")
         };
         assert_eq!(format!("{:#?}", optimize()), format!("{:#?}", optimize()));
-
         let mut corrupt = Program::from_ir(branch_join_program()).expect("construct corrupt SSA");
         corrupt.functions[0].blocks[0]
             .instructions

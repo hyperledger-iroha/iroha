@@ -5,16 +5,13 @@
 //! With telemetry enabled, the detached-pipeline metrics should remain zero in
 //! sequential mode and be non-zero in parallel mode. Without telemetry, the
 //! public status snapshot should still expose post-apply detached counters.
-
-use std::{borrow::Cow, sync::Arc};
-
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
     state::StateReadOnly,
 };
 use iroha_data_model::prelude::*;
-
+use std::{borrow::Cow, sync::Arc};
 fn build_world() -> (
     iroha_core::state::State,
     NetworkId,
@@ -49,7 +46,6 @@ fn build_world() -> (
     ));
     (state, network_id, alice_id, alice_kp)
 }
-
 fn make_block(
     network_id: &NetworkId,
     alice_id: &AccountId,
@@ -86,7 +82,6 @@ fn make_block(
         .unpack(|_| {})
         .into()
 }
-
 #[test]
 #[cfg(feature = "telemetry")]
 fn parallel_apply_knob_affects_detached_counters() {
@@ -109,7 +104,6 @@ fn parallel_apply_knob_affects_detached_counters() {
         status_s.pipeline_execution.detached_prepared_total, 0,
         "sequential status: prepared must be zero"
     );
-
     // Parallel mode: expect at least one prepared entry
     let (mut state_par, chain_id, alice_id, kp) = build_world();
     let mut cfg = state_par.view().pipeline().clone();
@@ -131,7 +125,6 @@ fn parallel_apply_knob_affects_detached_counters() {
         "parallel status: expected at least one prepared entry"
     );
 }
-
 #[test]
 #[cfg(not(feature = "telemetry"))]
 fn parallel_apply_knob_compiles_without_telemetry() {

@@ -6,15 +6,6 @@
 //! - An attestation guard that enforces dataspace/committee/signer/expiry rules and verifies signatures.
 //! - A small in-memory retention store for attestation history (indexed per dataspace and epoch) to
 //!   support audit replay and evidence retrieval.
-
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    fs::File,
-    io::Read,
-    path::{Path, PathBuf},
-    sync::OnceLock,
-};
-
 use iroha_crypto::{
     Algorithm, HashOf, Signature, ed25519_parse_signature, mldsa65_parse_signature,
 };
@@ -27,15 +18,20 @@ use iroha_data_model::{
 };
 use iroha_schema::IntoSchema;
 use norito::{codec::Encode, decode_from_reader};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 use thiserror::Error;
-
 /// Enforces JDG SDN commitments with a registry and policy.
 #[derive(Debug, Clone)]
 pub struct JdgSdnEnforcer {
     policy: JdgSdnPolicy,
     registry: JdgSdnRegistry,
 }
-
 impl JdgSdnEnforcer {
     /// Build an enforcer from explicit SDN key records.
     ///
@@ -56,7 +52,6 @@ impl JdgSdnEnforcer {
         }
         Ok(Self { policy, registry })
     }
-
     /// Load an enforcer from Norito-encoded SDN key records.
     ///
     /// # Errors
@@ -86,7 +81,6 @@ impl JdgSdnEnforcer {
             other => other,
         })
     }
-
     /// Load an enforcer from any reader containing Norito-encoded key records.
     ///
     /// # Errors
@@ -111,7 +105,6 @@ impl JdgSdnEnforcer {
         }
         Ok(Self { policy, registry })
     }
-
     /// Validate a JDG attestation against the registry and policy.
     ///
     /// # Errors
@@ -121,28 +114,23 @@ impl JdgSdnEnforcer {
     pub fn validate(&self, attestation: &JdgAttestation) -> Result<(), JdgSdnValidationError> {
         attestation.validate_with_sdn_registry(&self.registry, &self.policy)
     }
-
     /// Active policy in use.
     #[must_use]
     pub fn policy(&self) -> &JdgSdnPolicy {
         &self.policy
     }
-
     /// Registered SDN keys.
     #[must_use]
     pub fn registry(&self) -> &JdgSdnRegistry {
         &self.registry
     }
-
     /// Snapshot of the registered SDN key records.
     #[must_use]
     pub fn registry_snapshot(&self) -> Vec<JdgSdnKeyRecord> {
         self.registry.keys().cloned().collect()
     }
 }
-
 static ENFORCER: OnceLock<JdgSdnEnforcer> = OnceLock::new();
-
 /// Initialise the global JDG SDN enforcer from a registry file and policy.
 ///
 /// Use this during node bootstrap to make the SDN registry available to
@@ -162,13 +150,11 @@ pub fn init_enforcer_from_path(
         .map_err(|_| JdgSdnLoadError::AlreadyInitialised)?;
     Ok(())
 }
-
 /// Access the globally initialised JDG SDN enforcer, if present.
 #[must_use]
 pub fn enforcer() -> Option<&'static JdgSdnEnforcer> {
     ENFORCER.get()
 }
-
 /// Snapshot the active SDN registry and policy if the global enforcer exists.
 #[must_use]
 pub fn sdn_registry_status() -> Option<(JdgSdnPolicy, Vec<JdgSdnKeyRecord>)> {
@@ -178,7 +164,6 @@ pub fn sdn_registry_status() -> Option<(JdgSdnPolicy, Vec<JdgSdnKeyRecord>)> {
         (policy, registry)
     })
 }
-
 /// Errors surfaced while loading an SDN registry.
 #[derive(Debug, Error)]
 pub enum JdgSdnLoadError {
@@ -215,7 +200,6 @@ pub enum JdgSdnLoadError {
     #[error("JDG SDN enforcer already initialised")]
     AlreadyInitialised,
 }
-
 /// Manifest entry describing a committee schedule for a single dataspace.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, norito::codec::Decode, IntoSchema)]
 pub struct JdgCommitteeManifest {
@@ -224,7 +208,6 @@ pub struct JdgCommitteeManifest {
     /// Ordered committee records for the dataspace.
     pub committees: Vec<JdgCommitteeRecord>,
 }
-
 /// Committee membership/rotation record.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, norito::codec::Decode, IntoSchema)]
 pub struct JdgCommitteeRecord {
@@ -240,7 +223,6 @@ pub struct JdgCommitteeRecord {
     /// only the grace window is allowed.
     pub retire_height: u64,
 }
-
 /// Committee member with optional proof-of-possession.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, norito::codec::Decode, IntoSchema)]
 pub struct JdgCommitteeMember {
@@ -250,7 +232,6 @@ pub struct JdgCommitteeMember {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub pop: Option<Vec<u8>>,
 }
-
 impl JdgCommitteeRecord {
     fn validate(&self) -> Result<(), JdgCommitteeError> {
         if self.threshold == 0 {
@@ -321,20 +302,17 @@ impl JdgCommitteeRecord {
         }
         Ok(())
     }
-
     fn contains_height(&self, height: u64, grace_blocks: u64) -> bool {
         height >= self.activation_height
             && height <= self.retire_height.saturating_add(grace_blocks)
     }
 }
-
 /// Committee schedule keyed by dataspace with overlap guardrails.
 #[derive(Debug, Clone)]
 pub struct JdgCommitteeSchedule {
     entries: BTreeMap<DataSpaceId, Vec<JdgCommitteeRecord>>,
     grace_blocks: u64,
 }
-
 impl JdgCommitteeSchedule {
     /// Build a schedule from the supplied manifests.
     ///
@@ -357,7 +335,6 @@ impl JdgCommitteeSchedule {
         }
         Ok(schedule)
     }
-
     /// Load a committee manifest bundle from a Norito-encoded file.
     ///
     /// # Errors
@@ -379,7 +356,6 @@ impl JdgCommitteeSchedule {
             })?;
         Self::from_manifests(manifests, grace_blocks).map_err(JdgCommitteeLoadError::Validation)
     }
-
     /// Active committee for the given dataspace and block height.
     ///
     /// # Errors
@@ -406,7 +382,6 @@ impl JdgCommitteeSchedule {
                 block_height,
             })
     }
-
     fn insert_manifest(&mut self, manifest: JdgCommitteeManifest) -> Result<(), JdgCommitteeError> {
         let entry = self.entries.entry(manifest.dataspace).or_default();
         for record in manifest.committees {
@@ -432,7 +407,6 @@ impl JdgCommitteeSchedule {
         Ok(())
     }
 }
-
 /// Guards applied to JDG attestations before admission/consensus.
 #[derive(Debug, Clone)]
 pub struct JdgAttestationGuard {
@@ -442,7 +416,6 @@ pub struct JdgAttestationGuard {
     max_attestation_lag: u64,
     allowed_signature_schemes: BTreeSet<JdgSignatureScheme>,
 }
-
 impl JdgAttestationGuard {
     /// Construct an attestation guard.
     pub fn new(
@@ -464,7 +437,6 @@ impl JdgAttestationGuard {
             allowed_signature_schemes,
         }
     }
-
     /// Validate the attestation structure, SDN commitments, committee membership, and signatures.
     ///
     /// # Errors
@@ -486,28 +458,24 @@ impl JdgAttestationGuard {
                 limit: self.max_attestation_bytes,
             });
         }
-
         if attestation.scope.dataspace != dataspace {
             return Err(JdgAttestationGuardError::DataspaceMismatch {
                 expected: dataspace,
                 actual: attestation.scope.dataspace,
             });
         }
-
         if attestation.expiry_height <= current_block_height {
             return Err(JdgAttestationGuardError::Expired {
                 expiry_height: attestation.expiry_height,
                 current_block_height,
             });
         }
-
         if attestation.block_height > current_block_height {
             return Err(JdgAttestationGuardError::FutureDated {
                 block_height: attestation.block_height,
                 current_block_height,
             });
         }
-
         if current_block_height
             > attestation
                 .block_height
@@ -519,7 +487,6 @@ impl JdgAttestationGuard {
                 max_attestation_lag: self.max_attestation_lag,
             });
         }
-
         if let Some(enforcer) = &self.sdn_enforcer {
             enforcer
                 .validate(attestation)
@@ -529,7 +496,6 @@ impl JdgAttestationGuard {
                 .validate()
                 .map_err(JdgAttestationGuardError::Attestation)?;
         }
-
         let committee = self
             .schedule
             .active_committee(&dataspace, attestation.block_height)
@@ -559,10 +525,8 @@ impl JdgAttestationGuard {
         }
         Self::validate_signers(attestation, committee)?;
         Self::verify_signatures(attestation, committee, scheme)?;
-
         Ok(committee)
     }
-
     fn validate_signers(
         attestation: &JdgAttestation,
         committee: &JdgCommitteeRecord,
@@ -589,7 +553,6 @@ impl JdgAttestationGuard {
         }
         Ok(())
     }
-
     #[allow(clippy::too_many_lines)]
     fn verify_signatures(
         attestation: &JdgAttestation,
@@ -601,23 +564,19 @@ impl JdgAttestationGuard {
             .signer_bitmap
             .clone()
             .unwrap_or_default();
-
         let signable_hash: HashOf<_> = attestation.signing_hash();
         let hash_bytes: &[u8] = signable_hash.as_ref();
-
         let signer_indexes = if bitmap.is_empty() {
             (0..attestation.signer_set.len()).collect::<Vec<_>>()
         } else {
             collect_bits(bitmap, attestation.signer_set.len())
         };
-
         if signer_indexes.len() < usize::from(committee.threshold) {
             return Err(JdgAttestationGuardError::ThresholdNotMet {
                 valid: signer_indexes.len(),
                 threshold: committee.threshold,
             });
         }
-
         match scheme {
             JdgSignatureScheme::SimpleThreshold => {
                 if attestation.signature.signatures.len() != signer_indexes.len() {
@@ -626,7 +585,6 @@ impl JdgAttestationGuard {
                         actual: attestation.signature.signatures.len(),
                     });
                 }
-
                 let mut valid = 0usize;
                 for (sig_idx, signer_index) in signer_indexes.iter().enumerate() {
                     let signer_index = *signer_index;
@@ -654,7 +612,6 @@ impl JdgAttestationGuard {
                         return Err(JdgAttestationGuardError::SignatureInvalid { index: sig_idx });
                     }
                 }
-
                 if valid < usize::from(committee.threshold) {
                     return Err(JdgAttestationGuardError::ThresholdNotMet {
                         valid,
@@ -706,7 +663,6 @@ impl JdgAttestationGuard {
                         public_keys.push(signer);
                         pops.push(pop.as_slice());
                     }
-
                     let signature = &attestation.signature.signatures[0];
                     iroha_crypto::bls_normal_verify_preaggregated_same_message(
                         hash_bytes,
@@ -727,7 +683,6 @@ impl JdgAttestationGuard {
         Ok(())
     }
 }
-
 fn collect_bits(bitmap: Vec<u8>, max_len: usize) -> Vec<usize> {
     let mut indexes = Vec::new();
     for (byte_idx, byte) in bitmap.into_iter().enumerate() {
@@ -742,14 +697,12 @@ fn collect_bits(bitmap: Vec<u8>, max_len: usize) -> Vec<usize> {
     }
     indexes
 }
-
 /// In-memory retention store for JDG attestations, indexed per dataspace and epoch.
 #[derive(Debug, Clone)]
 pub struct JdgAttestationStore {
     max_per_dataspace: usize,
     records: BTreeMap<DataSpaceId, VecDeque<JdgAttestationRecord>>,
 }
-
 impl JdgAttestationStore {
     /// Construct a new store with the specified per-dataspace cap.
     pub fn new(max_per_dataspace: usize) -> Self {
@@ -758,7 +711,6 @@ impl JdgAttestationStore {
             records: BTreeMap::new(),
         }
     }
-
     /// Insert an attestation, pruning oldest entries for the dataspace when needed.
     pub fn insert(
         &mut self,
@@ -779,7 +731,6 @@ impl JdgAttestationStore {
         }
         record
     }
-
     /// Fetch attestations for a dataspace ordered from oldest to newest.
     #[must_use]
     pub fn for_dataspace(&self, dataspace: &DataSpaceId) -> Vec<JdgAttestationRecord> {
@@ -788,7 +739,6 @@ impl JdgAttestationStore {
             .map(|records| records.iter().cloned().collect())
             .unwrap_or_default()
     }
-
     /// Fetch attestations for a dataspace filtered by epoch.
     #[must_use]
     pub fn for_dataspace_and_epoch(
@@ -808,7 +758,6 @@ impl JdgAttestationStore {
             .unwrap_or_default()
     }
 }
-
 /// Stored attestation snapshot with indexing metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JdgAttestationRecord {
@@ -821,7 +770,6 @@ pub struct JdgAttestationRecord {
     /// Underlying attestation payload.
     pub attestation: JdgAttestation,
 }
-
 /// Errors surfaced while loading or validating committee manifests.
 #[derive(Debug, Error)]
 pub enum JdgCommitteeLoadError {
@@ -847,7 +795,6 @@ pub enum JdgCommitteeLoadError {
     #[error("invalid committee manifest")]
     Validation(#[source] JdgCommitteeError),
 }
-
 /// Errors surfaced by committee schedule validation.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum JdgCommitteeError {
@@ -948,7 +895,6 @@ pub enum JdgCommitteeError {
         block_height: u64,
     },
 }
-
 /// Errors surfaced while validating JDG attestations at admission/consensus boundaries.
 #[derive(Debug, Error)]
 pub enum JdgAttestationGuardError {
@@ -1073,11 +1019,9 @@ pub enum JdgAttestationGuardError {
         scheme_id: u16,
     },
 }
-
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
-
+    use super::*;
     #[cfg(feature = "bls")]
     use iroha_crypto::Algorithm;
     use iroha_crypto::{Hash, Signature, SignatureOf};
@@ -1087,29 +1031,23 @@ mod tests {
         },
         nexus::DataSpaceId,
     };
+    use std::io::Cursor;
     use tempfile::tempdir;
-
-    use super::*;
-
     fn simple_signature_schemes() -> BTreeSet<JdgSignatureScheme> {
         BTreeSet::from([JdgSignatureScheme::SimpleThreshold])
     }
-
     fn checked_random_keypair() -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_random().expect("generate checked JDG fixture keypair")
     }
-
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_random_with_algorithm(algorithm)
             .expect("generate checked JDG fixture keypair")
     }
-
     #[cfg(feature = "bls")]
     fn checked_random_bls_keypair() -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
             .expect("generate checked JDG BLS fixture keypair")
     }
-
     fn checked_jdg_signature_payload(
         keypair: &iroha_crypto::KeyPair,
         signing_hash: &Hash,
@@ -1121,7 +1059,6 @@ mod tests {
             .expect("checked JDG attestation fixture signature verifies");
         signature.payload().to_vec()
     }
-
     fn sample_scope() -> JdgAttestationScope {
         JdgAttestationScope {
             jurisdiction_id: iroha_data_model::jurisdiction::JurisdictionId::new(b"JUR1".to_vec())
@@ -1130,7 +1067,6 @@ mod tests {
             block_range: JdgBlockRange::new(10, 12).expect("valid range"),
         }
     }
-
     fn sample_attestation(
         scope: &JdgAttestationScope,
         sdn_keypair: &iroha_crypto::KeyPair,
@@ -1150,7 +1086,6 @@ mod tests {
         seal.verify_hash(sdn_keypair.public_key(), commitment.signing_hash())
             .expect("checked JDG SDN commitment fixture seal verifies");
         commitment.seal = seal;
-
         let signer = checked_random_keypair().public_key().clone();
         JdgAttestation {
             version: iroha_data_model::jurisdiction::JDG_ATTESTATION_VERSION_V1,
@@ -1177,7 +1112,6 @@ mod tests {
             },
         }
     }
-
     fn policy_require_commitments() -> JdgSdnPolicy {
         JdgSdnPolicy {
             require_commitments: true,
@@ -1186,7 +1120,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn enforcer_loads_registry_from_reader() {
         let policy = policy_require_commitments();
@@ -1199,16 +1132,13 @@ mod tests {
             rotation_parent: None,
         }];
         let bytes = norito::to_bytes(&records).expect("encode registry");
-
         let enforcer =
             JdgSdnEnforcer::from_reader(Cursor::new(bytes), policy).expect("load registry");
         let attestation = sample_attestation(&scope, &sdn_keypair);
-
         enforcer
             .validate(&attestation)
             .expect("attestation must verify");
     }
-
     #[test]
     fn enforcer_rejects_missing_commitments_when_required() {
         let policy = policy_require_commitments();
@@ -1217,7 +1147,6 @@ mod tests {
         let checked_keypair = checked_random_keypair();
         let mut attestation = sample_attestation(&sample_scope(), &checked_keypair);
         attestation.sdn_commitments.clear();
-
         let err = enforcer
             .validate(&attestation)
             .expect_err("missing commitments should be rejected");
@@ -1231,7 +1160,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn enforcer_rejects_scope_mismatch() {
         let policy = policy_require_commitments();
@@ -1247,10 +1175,8 @@ mod tests {
             }],
         )
         .expect("build registry");
-
         let mut attestation = sample_attestation(&scope, &sdn_keypair);
         attestation.sdn_commitments[0].scope.dataspace = DataSpaceId::new(99);
-
         let err = enforcer
             .validate(&attestation)
             .expect_err("scope mismatch expected");
@@ -1260,7 +1186,6 @@ mod tests {
                 | JdgSdnValidationError::Attestation { .. }
         ));
     }
-
     #[test]
     fn enforcer_rejects_inactive_key() {
         let policy = policy_require_commitments();
@@ -1277,7 +1202,6 @@ mod tests {
         )
         .expect("registry built");
         let attestation = sample_attestation(&scope, &sdn_keypair);
-
         let err = enforcer
             .validate(&attestation)
             .expect_err("inactive key should be rejected");
@@ -1286,7 +1210,6 @@ mod tests {
             JdgSdnValidationError::InactiveSdnKey { index: 0, .. }
         ));
     }
-
     #[test]
     fn load_registry_rejects_overlap_beyond_policy() {
         let policy = JdgSdnPolicy {
@@ -1322,12 +1245,10 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn global_enforcer_initialises_once() {
         let dir = tempdir().expect("tmp dir");
         let registry_path = dir.path().join("sdn_registry.norito");
-
         let policy = policy_require_commitments();
         let records = vec![JdgSdnKeyRecord {
             public_key: checked_random_keypair().public_key().clone(),
@@ -1337,19 +1258,16 @@ mod tests {
         }];
         let bytes = norito::to_bytes(&records).expect("encode registry");
         std::fs::write(&registry_path, bytes).expect("write registry");
-
         init_enforcer_from_path(&registry_path, policy).expect("init enforcer");
         let err = init_enforcer_from_path(&registry_path, policy_require_commitments())
             .expect_err("second init must fail");
         matches!(err, JdgSdnLoadError::AlreadyInitialised)
             .then_some(())
             .expect("expected AlreadyInitialised");
-
         let enforcer = enforcer().expect("enforcer should be available");
         assert_eq!(enforcer.policy(), &policy_require_commitments());
         assert_eq!(enforcer.registry_snapshot().len(), 1);
     }
-
     fn committee_with_members(
         dataspace: DataSpaceId,
         activation: u64,
@@ -1366,7 +1284,6 @@ mod tests {
             Algorithm::Ed25519,
         )
     }
-
     fn committee_with_algorithm_members(
         dataspace: DataSpaceId,
         activation: u64,
@@ -1399,7 +1316,6 @@ mod tests {
         };
         (committee, signers)
     }
-
     #[cfg(feature = "bls")]
     fn committee_with_bls_members(
         dataspace: DataSpaceId,
@@ -1435,7 +1351,6 @@ mod tests {
         };
         (committee, signers)
     }
-
     fn signed_attestation_for_committee(
         committee: &JdgCommitteeRecord,
         signers: &[iroha_crypto::KeyPair],
@@ -1489,7 +1404,6 @@ mod tests {
         attestation.signature.signatures = signatures;
         attestation
     }
-
     #[cfg(feature = "bls")]
     fn bls_aggregated_attestation_for_committee(
         committee: &JdgCommitteeRecord,
@@ -1547,7 +1461,6 @@ mod tests {
         attestation.signature.signatures = vec![aggregated];
         attestation
     }
-
     #[test]
     fn committee_manifest_rejects_duplicate_member_after_checked_key_extraction() {
         let dataspace = DataSpaceId::new(8);
@@ -1557,17 +1470,14 @@ mod tests {
             dataspace,
             committees: vec![committee.clone()],
         };
-
         let err = JdgCommitteeSchedule::from_manifests(vec![manifest], 1)
             .expect_err("duplicate committee member should be rejected");
-
         assert!(matches!(
             err,
             JdgCommitteeError::DuplicateMember { committee_id }
                 if committee_id == committee.committee_id
         ));
     }
-
     #[test]
     fn attestation_guard_accepts_valid_committee() {
         let dataspace = DataSpaceId::new(9);
@@ -1579,7 +1489,6 @@ mod tests {
         let schedule =
             JdgCommitteeSchedule::from_manifests(vec![manifest], 1).expect("schedule builds");
         let guard = JdgAttestationGuard::new(schedule, None, 4096, 8, simple_signature_schemes());
-
         let attestation =
             signed_attestation_for_committee(&committee, &signers, &[0, 1], dataspace, 12, 30, 1);
         let committee_used = guard
@@ -1587,7 +1496,6 @@ mod tests {
             .expect("attestation should pass");
         assert_eq!(committee_used.committee_id, committee.committee_id);
     }
-
     #[test]
     fn attestation_guard_rejects_unknown_signer() {
         let dataspace = DataSpaceId::new(10);
@@ -1599,7 +1507,6 @@ mod tests {
         let schedule =
             JdgCommitteeSchedule::from_manifests(vec![manifest], 0).expect("schedule builds");
         let guard = JdgAttestationGuard::new(schedule, None, 4096, 4, simple_signature_schemes());
-
         let mut attestation =
             signed_attestation_for_committee(&committee, &signers, &[0], dataspace, 2, 8, 0);
         attestation.signer_set[0] = checked_random_keypair().public_key().clone();
@@ -1611,7 +1518,6 @@ mod tests {
             JdgAttestationGuardError::UnknownSigner { .. }
         ));
     }
-
     #[test]
     fn attestation_guard_rejects_all_zero_simple_threshold_signature_material() {
         let dataspace = DataSpaceId::new(10);
@@ -1623,7 +1529,6 @@ mod tests {
         let schedule =
             JdgCommitteeSchedule::from_manifests(vec![manifest], 0).expect("schedule builds");
         let guard = JdgAttestationGuard::new(schedule, None, 4096, 4, simple_signature_schemes());
-
         let mut attestation =
             signed_attestation_for_committee(&committee, &signers, &[0], dataspace, 2, 8, 0);
         attestation.signature.signatures[0].fill(0);
@@ -1635,7 +1540,6 @@ mod tests {
             JdgAttestationGuardError::SignatureInvalid { index: 0 }
         ));
     }
-
     #[test]
     fn attestation_guard_rejects_malformed_ed25519_simple_threshold_signature_r() {
         const SMALL_ORDER_R: [u8; 32] = [
@@ -1647,7 +1551,6 @@ mod tests {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
-
         let dataspace = DataSpaceId::new(10);
         let (committee, signers) = committee_with_members(dataspace, 1, 5, 1, 2);
         let manifest = JdgCommitteeManifest {
@@ -1659,11 +1562,9 @@ mod tests {
         let guard = JdgAttestationGuard::new(schedule, None, 4096, 4, simple_signature_schemes());
         let attestation =
             signed_attestation_for_committee(&committee, &signers, &[0], dataspace, 2, 8, 0);
-
         guard
             .validate(&attestation, dataspace, 3)
             .expect("valid simple-threshold signature should verify");
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
@@ -1671,7 +1572,6 @@ mod tests {
             let mut malformed = attestation.clone();
             malformed.signature.signatures[0][..replacement_r.len()]
                 .copy_from_slice(&replacement_r);
-
             let err = guard
                 .validate(&malformed, dataspace, 3)
                 .expect_err("malformed Ed25519 signature R must reject");
@@ -1681,7 +1581,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn attestation_guard_rejects_malformed_mldsa_simple_threshold_signature_lengths() {
         let dataspace = DataSpaceId::new(15);
@@ -1696,11 +1595,9 @@ mod tests {
         let guard = JdgAttestationGuard::new(schedule, None, 32_768, 4, simple_signature_schemes());
         let attestation =
             signed_attestation_for_committee(&committee, &signers, &[0], dataspace, 2, 8, 0);
-
         guard
             .validate(&attestation, dataspace, 3)
             .expect("valid ML-DSA simple-threshold signature should verify");
-
         let valid_signature = &attestation.signature.signatures[0];
         for (label, replacement_signature) in [
             (
@@ -1715,7 +1612,6 @@ mod tests {
         ] {
             let mut malformed = attestation.clone();
             malformed.signature.signatures[0] = replacement_signature;
-
             let err = guard
                 .validate(&malformed, dataspace, 3)
                 .expect_err("malformed ML-DSA signature length must reject");
@@ -1725,7 +1621,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn attestation_guard_rejects_stale_attestation() {
         let dataspace = DataSpaceId::new(11);
@@ -1737,7 +1632,6 @@ mod tests {
         let schedule =
             JdgCommitteeSchedule::from_manifests(vec![manifest], 0).expect("schedule builds");
         let guard = JdgAttestationGuard::new(schedule, None, 4096, 2, simple_signature_schemes());
-
         let attestation =
             signed_attestation_for_committee(&committee, &signers, &[0], dataspace, 6, 20, 0);
         let err = guard
@@ -1745,7 +1639,6 @@ mod tests {
             .expect_err("attestation should be stale");
         assert!(matches!(err, JdgAttestationGuardError::Stale { .. }));
     }
-
     #[test]
     fn attestation_guard_rejects_bad_scheme() {
         let dataspace = DataSpaceId::new(12);
@@ -1757,7 +1650,6 @@ mod tests {
         let schedule =
             JdgCommitteeSchedule::from_manifests(vec![manifest], 0).expect("schedule builds");
         let guard = JdgAttestationGuard::new(schedule, None, 4096, 10, simple_signature_schemes());
-
         let mut attestation =
             signed_attestation_for_committee(&committee, &signers, &[0], dataspace, 3, 30, 0);
         attestation.signature.scheme_id = 99;
@@ -1769,7 +1661,6 @@ mod tests {
             JdgAttestationGuardError::UnsupportedSignatureScheme { scheme_id: 99 }
         ));
     }
-
     #[cfg(feature = "bls")]
     #[test]
     fn attestation_guard_accepts_bls_aggregate_scheme() {
@@ -1788,7 +1679,6 @@ mod tests {
             5,
             BTreeSet::from([JdgSignatureScheme::BlsNormalAggregate]),
         );
-
         let attestation = bls_aggregated_attestation_for_committee(
             &committee,
             &signers,
@@ -1802,26 +1692,21 @@ mod tests {
             .validate(&attestation, dataspace, 3)
             .expect("aggregate signature should pass");
     }
-
     #[test]
     fn attestation_store_prunes_per_dataspace() {
         let dataspace = DataSpaceId::new(13);
         let (committee, signers) = committee_with_members(dataspace, 0, 10, 1, 2);
         let mut store = JdgAttestationStore::new(2);
-
         let a1 = signed_attestation_for_committee(&committee, &signers, &[0], dataspace, 1, 20, 0);
         let a2 = signed_attestation_for_committee(&committee, &signers, &[0], dataspace, 2, 20, 0);
         let a3 = signed_attestation_for_committee(&committee, &signers, &[0], dataspace, 3, 20, 1);
-
         store.insert(dataspace, a1.clone(), 5);
         store.insert(dataspace, a2.clone(), 6);
         store.insert(dataspace, a3.clone(), 7);
-
         let records = store.for_dataspace(&dataspace);
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].attestation.block_height, 2);
         assert_eq!(records[1].attestation.block_height, 3);
-
         let epoch_records = store.for_dataspace_and_epoch(&dataspace, 1);
         assert_eq!(epoch_records.len(), 1);
         assert_eq!(epoch_records[0].attestation.block_height, 3);

@@ -2,7 +2,6 @@
 //!
 //! These values are part of ABI V1. Their numeric discriminants are stable and
 //! must be changed together with the ABI hash and golden tests.
-
 /// Stable failure codes returned by fallible numeric syscalls in `r11`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u64)]
@@ -32,7 +31,6 @@ pub enum NumericFaultV1 {
     /// A register required to be zero by the syscall contract was nonzero.
     ReservedRegisterNonZero = 12,
 }
-
 impl NumericFaultV1 {
     /// Decode a stable ABI tag.
     #[must_use]
@@ -53,14 +51,12 @@ impl NumericFaultV1 {
             _ => return None,
         })
     }
-
     /// Return the stable ABI tag.
     #[must_use]
     pub const fn tag(self) -> u64 {
         self as u64
     }
 }
-
 /// Stable rounding-mode tags supplied to rounded decimal operations in `r13`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u64)]
@@ -80,7 +76,6 @@ pub enum RoundingModeV1 {
     /// Round to nearest, resolving ties toward zero.
     NearestTowardZero = 6,
 }
-
 impl RoundingModeV1 {
     /// Decode a stable ABI tag.
     #[must_use]
@@ -96,14 +91,12 @@ impl RoundingModeV1 {
             _ => return None,
         })
     }
-
     /// Return the stable ABI tag.
     #[must_use]
     pub const fn tag(self) -> u64 {
         self as u64
     }
 }
-
 /// Stable pointer/envelope validation fault codes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u64)]
@@ -131,7 +124,6 @@ pub enum PointerAbiFaultV1 {
     /// The value has a non-minimal or otherwise noncanonical representation.
     NonCanonical = 11,
 }
-
 impl PointerAbiFaultV1 {
     /// Decode a stable ABI tag.
     #[must_use]
@@ -151,14 +143,12 @@ impl PointerAbiFaultV1 {
             _ => return None,
         })
     }
-
     /// Return the stable ABI tag.
     #[must_use]
     pub const fn tag(self) -> u64 {
         self as u64
     }
 }
-
 /// Result pointer/value register for numeric syscalls.
 pub const NUMERIC_RESULT_REGISTER: usize = 10;
 /// Status register: zero on success, otherwise a [`NumericFaultV1`] tag.
@@ -173,11 +163,9 @@ pub const NUMERIC_FAILURE_MODE_REGISTER: usize = 14;
 pub const NUMERIC_FAILURE_TRAP: u64 = 0;
 /// Return an arithmetic-domain failure in `r11` without trapping.
 pub const NUMERIC_FAILURE_STATUS: u64 = 1;
-
 #[cfg(test)]
 mod tests {
     use super::{NumericFaultV1, PointerAbiFaultV1, RoundingModeV1};
-
     #[test]
     fn numeric_fault_tags_are_complete_and_stable() {
         for tag in 1..=12 {
@@ -189,7 +177,6 @@ mod tests {
         assert_eq!(NumericFaultV1::from_tag(0), None);
         assert_eq!(NumericFaultV1::from_tag(13), None);
     }
-
     #[test]
     fn rounding_tags_are_complete_and_stable() {
         for tag in 0..=6 {
@@ -200,7 +187,6 @@ mod tests {
         }
         assert_eq!(RoundingModeV1::from_tag(7), None);
     }
-
     #[test]
     fn pointer_fault_tags_are_complete_and_stable() {
         for tag in 1..=11 {

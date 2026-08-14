@@ -10,7 +10,6 @@ pub(crate) struct RecoveredWalValidateRegistryCut<'registry> {
     address: ConcreteWorkAddress,
     work: Option<ConcreteLifecycleWork>,
 }
-
 /// Opaque exact LedgerV1 store/frame retained by recovered-parent startup.
 ///
 /// Neither the store nor decoded records can be extracted. The later fsync
@@ -22,7 +21,6 @@ pub(crate) struct OpenedRecoveredWalValidateLedger {
     store: super::ledger::LifecycleLedgerStoreV1,
     opened: super::ledger::LifecycleLedgerV1,
 }
-
 /// Exact post-fsync LedgerV1 frame beside its uninstalled recovered Sign.
 #[must_use = "the fsynced recovered WAL repair must install its Sign child"]
 pub(crate) struct PersistedRecoveredWalValidateLedger<'registry> {
@@ -30,7 +28,6 @@ pub(crate) struct PersistedRecoveredWalValidateLedger<'registry> {
     repaired: super::ledger::LifecycleLedgerV1,
     authority: PersistedRecoveredWalLifecycleAuthority<'registry>,
 }
-
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum PersistedRecoveredWalLifecycleAuthority<'registry> {
     Sign(DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>),
@@ -41,7 +38,6 @@ enum PersistedRecoveredWalLifecycleAuthority<'registry> {
         pair: super::ledger::RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
     },
 }
-
 /// Exact repaired storage and installed Sign retained under one registry borrow.
 #[must_use = "the installed recovered WAL storage must complete lifecycle open"]
 pub(crate) struct InstalledRecoveredWalSignStorage<'registry> {
@@ -49,7 +45,6 @@ pub(crate) struct InstalledRecoveredWalSignStorage<'registry> {
     repaired: super::ledger::LifecycleLedgerV1,
     installed: InstalledRecoveredWalSignRegistryCut<'registry>,
 }
-
 /// Typed fail-stop classification for the final exact-store recovery join.
 #[derive(Debug, Error)]
 #[error("{kind}")]
@@ -57,7 +52,6 @@ pub(crate) struct InstalledRecoveredWalSignStorage<'registry> {
 pub(crate) struct ProductionRecoveredWalStorageError {
     kind: ProductionRecoveredWalStorageErrorKind,
 }
-
 #[derive(Debug, Error)]
 #[allow(variant_size_differences)]
 enum ProductionRecoveredWalStorageErrorKind {
@@ -72,12 +66,10 @@ enum ProductionRecoveredWalStorageErrorKind {
     #[error("exact recovered lifecycle open failed: {0}")]
     Open(&'static str),
 }
-
 impl ProductionRecoveredWalStorageError {
     fn new(kind: ProductionRecoveredWalStorageErrorKind) -> Self {
         Self { kind }
     }
-
     /// Return a stable diagnostic without exposing retained startup authority.
     pub(crate) fn reason(&self) -> &'static str {
         match &self.kind {
@@ -97,21 +89,18 @@ impl ProductionRecoveredWalStorageError {
         }
     }
 }
-
 /// Fail-stop error retaining the exact opened frame beside a failed fsync splice.
 #[must_use = "failed exact-store recovered WAL persistence requires restart"]
 pub(crate) struct ExactStoreRecoveredWalPersistError<'registry> {
     _ledger: OpenedRecoveredWalValidateLedger,
     error: RecoveredWalValidateLedgerPersistError<'registry>,
 }
-
 impl ExactStoreRecoveredWalPersistError<'_> {
     /// Return a stable diagnostic without exposing storage or repair authority.
     pub(crate) const fn reason(&self) -> &'static str {
         self.error.reason()
     }
 }
-
 /// Fail-stop error retaining repaired storage beside an uninstalled Sign.
 #[must_use = "failed exact-store recovered Sign installation requires restart"]
 pub(crate) struct ExactStoreRecoveredWalSignInstallError<'registry> {
@@ -119,14 +108,12 @@ pub(crate) struct ExactStoreRecoveredWalSignInstallError<'registry> {
     _repaired: super::ledger::LifecycleLedgerV1,
     error: RecoveredWalSignInstallError<'registry>,
 }
-
 impl ExactStoreRecoveredWalSignInstallError<'_> {
     /// Return a stable diagnostic without exposing storage or registry authority.
     pub(crate) const fn reason(&self) -> &'static str {
         self.error.reason()
     }
 }
-
 impl OpenedRecoveredWalValidateLedger {
     /// Fsync the authenticated repair only against this retained store/frame pair.
     #[allow(clippy::result_large_err)]
@@ -170,7 +157,6 @@ impl OpenedRecoveredWalValidateLedger {
         }
     }
 }
-
 impl<'registry> PersistedRecoveredWalValidateLedger<'registry> {
     /// Advance the cold adapter through either the exact single Broadcast or
     /// its adjacent WAL-backed Commit-Sign pair.
@@ -250,7 +236,6 @@ impl<'registry> PersistedRecoveredWalValidateLedger<'registry> {
                 },
             ));
         };
-
         let mut preview = repair.repair.prepare_cold_signed_broadcast_and_sign(
             verified,
             startup,
@@ -302,7 +287,6 @@ impl<'registry> PersistedRecoveredWalValidateLedger<'registry> {
             },
         ))
     }
-
     /// Install the exact recovered Sign without reopening or substituting storage.
     #[allow(clippy::result_large_err)]
     pub(crate) fn install_recovered_wal_sign(
@@ -343,7 +327,6 @@ impl<'registry> PersistedRecoveredWalValidateLedger<'registry> {
         }
     }
 }
-
 impl<'registry> InstalledRecoveredWalSignStorage<'registry> {
     /// Complete the final-frame Fetch/Serve/Validate census and exact coordinator open.
     #[allow(clippy::result_large_err)]
@@ -449,7 +432,6 @@ impl<'registry> InstalledRecoveredWalSignStorage<'registry> {
             })
     }
 }
-
 /// Opaque failure from storage-authenticated recovered-parent reconstruction.
 ///
 /// Every variant owns the WAL or successor authority still in flight, the
@@ -461,7 +443,6 @@ impl<'registry> InstalledRecoveredWalSignStorage<'registry> {
 pub(crate) struct RecoveredWalParentFactoryError<'body> {
     failure: RecoveredWalParentFactoryFailure<'body>,
 }
-
 #[allow(clippy::large_enum_variant, variant_size_differences)]
 enum RecoveredWalParentFactoryFailure<'body> {
     LedgerOpen {
@@ -494,7 +475,6 @@ enum RecoveredWalParentFactoryFailure<'body> {
         _body: RecoveredValidatedBodyCut<'body>,
     },
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredWalParentFactoryError<'_> {
     /// Return a stable diagnostic without exposing any retained authority.
@@ -521,7 +501,6 @@ impl RecoveredWalParentFactoryError<'_> {
         }
     }
 }
-
 /// Exclusive reservation for the detached Validate address and its projected
 /// Sign successor address.
 ///
@@ -534,7 +513,6 @@ struct RecoveredWalValidateRegistryReservation<'registry> {
     parent_address: ConcreteWorkAddress,
     child: Option<(ConcreteWorkAddress, LifecycleDigest)>,
 }
-
 /// Fail-stop live use of the recovered-WAL detached-parent reservation.
 ///
 /// The exact validated parent is retained but can no longer restore itself.
@@ -546,7 +524,6 @@ pub(in crate::sumeragi) struct LiveValidateSignRegistryReservation<'registry> {
     reservation: RecoveredWalValidateRegistryReservation<'registry>,
     _detached_parent: ConcreteLifecycleWork,
 }
-
 struct DetachedRecoveredValidateCompletion {
     address: ConcreteWorkAddress,
     installed_digest: LifecycleDigest,
@@ -557,7 +534,6 @@ struct DetachedRecoveredValidateCompletion {
     replay_evidence: DetachedValidateReplayEvidenceV1,
     outcome: DurableBodyValidationOutcome,
 }
-
 /// Exact provenance retained while a Validate completion is detached.
 ///
 /// A live authenticated carrier moves its certified or remote-Proposal replay
@@ -571,7 +547,6 @@ enum DetachedValidateReplayEvidenceV1 {
     Retained(DurableValidateReplayEvidenceV1),
     RecoveredBodyMarker(DurableBodyReceipt),
 }
-
 impl DetachedValidateReplayEvidenceV1 {
     fn exactly_matches_durable_body(&self, receipt: &DurableBodyReceipt) -> bool {
         match self {
@@ -580,7 +555,6 @@ impl DetachedValidateReplayEvidenceV1 {
         }
     }
 }
-
 /// Exact validated parent authority retained beside its authenticated WAL
 /// lifecycle repair.
 ///
@@ -597,7 +571,6 @@ pub(crate) struct AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
     validation: DetachedRecoveredValidateCompletion,
     reservation: RecoveredWalValidateRegistryReservation<'registry>,
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl AuthenticatedRecoveredWalValidateLifecycleRepair<'_> {
     /// Revalidate the retained concrete pair and its exact durable validation.
@@ -605,7 +578,6 @@ impl AuthenticatedRecoveredWalValidateLifecycleRepair<'_> {
         recovered_validate_authority_is_exact(&self.repair, &self.validation, &self.reservation)
     }
 }
-
 fn recovered_validate_authority_is_exact(
     repair: &AuthenticatedWalVoteLifecycleRepair,
     validation: &DetachedRecoveredValidateCompletion,
@@ -618,7 +590,6 @@ fn recovered_validate_authority_is_exact(
             .entries
             .contains_key(&validation.address)
 }
-
 fn detached_recovered_validation_is_exact(
     repair: &AuthenticatedWalVoteLifecycleRepair,
     validation: &DetachedRecoveredValidateCompletion,
@@ -653,7 +624,6 @@ fn detached_recovered_validation_is_exact(
         ) == Some(validation.installed_digest)
         && repair.concrete_pair_matches_validation(validated)
 }
-
 // RECOVERED_WAL_VALIDATE_LEDGER_FSYNC_BEGIN
 /// Post-fsync authority for one exact recovered Validate-to-Sign splice.
 ///
@@ -668,7 +638,6 @@ pub(crate) struct DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'regis
     validation: DetachedRecoveredValidateCompletion,
     reservation: RecoveredWalValidateRegistryReservation<'registry>,
 }
-
 /// Frame-bound recovered Validate→Sign→Broadcast authority.
 ///
 /// The durable vote repair, body-revalidated Validate completion, exact child
@@ -685,7 +654,6 @@ struct DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'registry>
     sign_address: ConcreteWorkAddress,
     broadcast_address: ConcreteWorkAddress,
 }
-
 // RECOVERED_WAL_SIGN_REGISTRY_INSTALL_BEGIN
 /// Exclusive post-install view of one exact recovered WAL Sign child.
 ///
@@ -703,7 +671,6 @@ pub(crate) struct InstalledRecoveredWalSignRegistryCut<'registry> {
     next_sign: Option<(ConcreteWorkAddress, LifecycleDigest)>,
     pair: Option<super::ledger::RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1>,
 }
-
 /// Exclusive installed view of one standalone recovered control Sign.
 ///
 /// The dedicated carrier remains in the registry while this cut is alive.
@@ -718,7 +685,6 @@ pub(super) struct InstalledRecoveredWalControlSignRegistryCut<'registry> {
     next_sign: Option<(ConcreteWorkAddress, LifecycleDigest)>,
     pair: Option<super::ledger::RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1>,
 }
-
 /// Exclusive installed view of one recovered Decision Fetch.
 ///
 /// The dedicated carrier stays in the registry while the complete durable
@@ -730,7 +696,6 @@ pub(super) struct InstalledRecoveredWalDecisionFetchRegistryCut<'registry> {
     address: ConcreteWorkAddress,
     digest: LifecycleDigest,
 }
-
 /// Exclusive installed view of one recovered Decision Apply.
 ///
 /// The closed carrier retains the original WAL Fetch and every body-backed
@@ -743,13 +708,11 @@ pub(super) struct InstalledRecoveredDecisionApplyRegistryCut<'registry> {
     address: ConcreteWorkAddress,
     digest: LifecycleDigest,
 }
-
 /// Fail-stop diagnostic for a rejected recovered control carrier install.
 #[must_use = "failed recovered control installation requires restart"]
 pub(super) struct RecoveredWalControlSignInstallError {
     failure: RecoveredWalControlSignInstallFailure,
 }
-
 #[allow(variant_size_differences)]
 enum RecoveredWalControlSignInstallFailure {
     Projection {
@@ -771,7 +734,6 @@ enum RecoveredWalControlSignInstallFailure {
         _combined: RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
     },
 }
-
 impl RecoveredWalControlSignInstallError {
     /// Return a stable diagnostic without exposing retained authority.
     pub(super) const fn reason(&self) -> &'static str {
@@ -794,30 +756,25 @@ impl RecoveredWalControlSignInstallError {
         }
     }
 }
-
 /// Fail-stop diagnostic from the installed control-carrier coordinator join.
 #[must_use = "failed recovered control lifecycle open requires restart"]
 pub(super) struct RecoveredWalControlSignLifecycleOpenError {
     reason: &'static str,
 }
-
 impl RecoveredWalControlSignLifecycleOpenError {
     const fn new(reason: &'static str) -> Self {
         Self { reason }
     }
-
     /// Return the stable non-authorizing failure classification.
     pub(super) const fn reason(&self) -> &'static str {
         self.reason
     }
 }
-
 /// Fail-stop diagnostic for a rejected recovered Decision Fetch install.
 #[must_use = "failed recovered Decision Fetch installation requires restart"]
 pub(super) struct RecoveredWalDecisionFetchInstallError {
     failure: RecoveredWalDecisionFetchInstallFailure,
 }
-
 #[allow(variant_size_differences)]
 enum RecoveredWalDecisionFetchInstallFailure {
     Projection {
@@ -835,7 +792,6 @@ enum RecoveredWalDecisionFetchInstallFailure {
         _store: RecoveredDecisionFetchStoreProjectionV1,
     },
 }
-
 impl RecoveredWalDecisionFetchInstallError {
     /// Return a stable diagnostic without exposing retained authority.
     pub(super) const fn reason(&self) -> &'static str {
@@ -855,31 +811,26 @@ impl RecoveredWalDecisionFetchInstallError {
         }
     }
 }
-
 /// Fail-stop diagnostic from the installed Decision-Fetch coordinator join.
 #[must_use = "failed recovered Decision Fetch lifecycle open requires restart"]
 pub(super) struct RecoveredWalDecisionFetchLifecycleOpenError {
     reason: &'static str,
 }
-
 impl RecoveredWalDecisionFetchLifecycleOpenError {
     const fn new(reason: &'static str) -> Self {
         Self { reason }
     }
-
     /// Return the stable non-authorizing failure classification.
     pub(super) const fn reason(&self) -> &'static str {
         self.reason
     }
 }
-
 /// Fail-stop diagnostic for a rejected recovered Decision Apply install.
 #[must_use = "failed recovered Decision Apply installation requires restart"]
 pub(super) struct RecoveredDecisionApplyInstallError {
     reason: &'static str,
     _authority: RecoveredDecisionApplyInstallAuthority,
 }
-
 #[allow(variant_size_differences)]
 enum RecoveredDecisionApplyInstallAuthority {
     Projection {
@@ -891,7 +842,6 @@ enum RecoveredDecisionApplyInstallAuthority {
         _carrier: RecoveredDecisionApplyRegistryCarrierV1,
     },
 }
-
 impl RecoveredDecisionApplyInstallError {
     fn projection(
         reason: &'static str,
@@ -906,7 +856,6 @@ impl RecoveredDecisionApplyInstallError {
             },
         }
     }
-
     fn carrier(
         reason: &'static str,
         adapter: ProductionLifecycleAdapterStartupV1,
@@ -920,30 +869,25 @@ impl RecoveredDecisionApplyInstallError {
             },
         }
     }
-
     /// Return the stable non-authorizing failure classification.
     pub(super) const fn reason(&self) -> &'static str {
         self.reason
     }
 }
-
 /// Fail-stop diagnostic from the installed Decision-Apply coordinator join.
 #[must_use = "failed recovered Decision Apply lifecycle open requires restart"]
 pub(super) struct RecoveredDecisionApplyLifecycleOpenError {
     reason: &'static str,
 }
-
 impl RecoveredDecisionApplyLifecycleOpenError {
     const fn new(reason: &'static str) -> Self {
         Self { reason }
     }
-
     /// Return the stable non-authorizing failure classification.
     pub(super) const fn reason(&self) -> &'static str {
         self.reason
     }
 }
-
 /// Opaque fail-stop error from post-fsync recovered Sign installation.
 ///
 /// Every variant owns the complete uninstalled durable repair and exclusive
@@ -954,7 +898,6 @@ impl RecoveredDecisionApplyLifecycleOpenError {
 pub(crate) struct RecoveredWalSignInstallError<'registry> {
     failure: RecoveredWalSignInstallFailure<'registry>,
 }
-
 #[allow(clippy::large_enum_variant, variant_size_differences)]
 enum RecoveredWalSignInstallFailure<'registry> {
     InvalidPreflight {
@@ -973,7 +916,6 @@ enum RecoveredWalSignInstallFailure<'registry> {
         _combined: RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
     },
 }
-
 impl RecoveredWalSignInstallError<'_> {
     /// Return a stable diagnostic without releasing retained authority.
     pub(crate) const fn reason(&self) -> &'static str {
@@ -994,7 +936,6 @@ impl RecoveredWalSignInstallError<'_> {
         }
     }
 }
-
 /// Opaque fail-stop error from the recovered Validate LedgerV1 fsync splice.
 ///
 /// Every variant owns either the complete pre-fsync authority or the complete
@@ -1006,7 +947,6 @@ impl RecoveredWalSignInstallError<'_> {
 pub(crate) struct RecoveredWalValidateLedgerPersistError<'registry> {
     failure: RecoveredWalValidateLedgerPersistFailure<'registry>,
 }
-
 #[allow(clippy::large_enum_variant, variant_size_differences)]
 enum RecoveredWalValidateLedgerPersistFailure<'registry> {
     InvalidAuthority {
@@ -1033,7 +973,6 @@ enum RecoveredWalValidateLedgerPersistFailure<'registry> {
         _authority: DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
     },
 }
-
 impl RecoveredWalValidateLedgerPersistError<'_> {
     /// Return a stable diagnostic without releasing any retained authority.
     pub(crate) const fn reason(&self) -> &'static str {
@@ -1062,7 +1001,6 @@ impl RecoveredWalValidateLedgerPersistError<'_> {
         }
     }
 }
-
 impl RecoveredWalValidateRegistryReservation<'_> {
     fn bind_child_if_vacant(
         &mut self,
@@ -1082,7 +1020,6 @@ impl RecoveredWalValidateRegistryReservation<'_> {
             }
         }
     }
-
     fn exact_vacant_pair(&self, validation: &DetachedRecoveredValidateCompletion) -> bool {
         let Some((child, _digest)) = self.child else {
             return false;
@@ -1093,12 +1030,10 @@ impl RecoveredWalValidateRegistryReservation<'_> {
             && !self.registry.entries.contains_key(&child)
     }
 }
-
 impl LiveValidateSignRegistryReservation<'_> {
     fn bind_exact_child(&mut self, address: ConcreteWorkAddress, digest: LifecycleDigest) -> bool {
         self.reservation.bind_child_if_vacant(address, digest)
     }
-
     /// Install prechecked ordinary Sign work at the already-reserved child.
     ///
     /// This is called only after exact LedgerV1 fsync. All validation and
@@ -1129,7 +1064,6 @@ impl LiveValidateSignRegistryReservation<'_> {
         entry.insert(work);
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
     /// Match immutable parent identity only; the immediately following typed
@@ -1162,7 +1096,6 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             && parent.reconstruction_source() == candidate.reconstruction_source
             && parent.durable_payload() == Some(candidate.payload)
     }
-
     fn projected_child_address(
         &self,
         child_ordinal: u128,
@@ -1176,7 +1109,6 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
         let address = ConcreteWorkAddress::new(self.validation.address.owner, child_ordinal, slot)?;
         (address != self.validation.address).then_some((address, digest))
     }
-
     /// Bind the already-fsynced three-row vote lineage to its exact store.
     #[allow(clippy::result_large_err)]
     fn authenticate_signed_broadcast_in_opened_ledger(
@@ -1299,7 +1231,6 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             },
         )
     }
-
     /// Stage against the exact opened ledger, reserve the projected child, and
     /// fsync the complete replacement without exposing inner authority.
     ///
@@ -1364,7 +1295,6 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
                 },
             });
         }
-
         let Self {
             repair,
             validation,
@@ -1405,7 +1335,6 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
         Ok((persisted, durable, changed))
     }
 }
-
 #[cfg(test)]
 impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
     fn parent_ledger_for_test(
@@ -1432,7 +1361,6 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             BTreeMap::new(),
         )
     }
-
     /// Verify that a row with the right semantic projection but the wrong
     /// durable ordinal, owner identity, or row inventory cannot pass the outer
     /// address-to-ledger binding.
@@ -1493,7 +1421,6 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             && !self.ledger_parent_core_identity_is_exact(&wrong_owner)
             && !self.ledger_parent_core_identity_is_exact(&wrong_row)
     }
-
     /// Prove structurally valid replay-origin substitutions fail on both rows.
     pub(crate) fn rejects_foreign_replay_authorities_for_test(&self) -> bool {
         let address = self.validation.address;
@@ -1536,7 +1463,6 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             && !projection.repaired_pair_is_exact(context, foreign_parent.records())
             && !projection.repaired_pair_is_exact(context, foreign_child.records())
     }
-
     /// Consume the complete outer authority through one real fsync, reopen the
     /// frame, and prove that the authenticated repeat stutters exactly.
     #[allow(clippy::result_large_err, clippy::too_many_lines)]
@@ -1672,7 +1598,6 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
         );
         Ok((summary, durable))
     }
-
     /// Exercise the outer stale-snapshot guard without releasing its sealed
     /// error authority. The exact parent snapshot is intentionally not written
     /// to the opened store before the consuming persistence call.
@@ -1723,7 +1648,6 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
         self.persist_in_opened_ledger(&store, &seed)
             .map(|(_ledger, durable, _changed)| durable)
     }
-
     /// Reopen an existing ledger frame and consume this fresh startup
     /// authority through the same idempotent fsync seam.
     ///
@@ -1761,7 +1685,6 @@ impl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
             .map(|(_ledger, durable, changed)| (changed, durable))
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl<'registry> DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry> {
     fn post_fsync_authority_is_exact(&self, store: &super::ledger::LifecycleLedgerStoreV1) -> bool {
@@ -1795,7 +1718,6 @@ impl<'registry> DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registr
                 })
             && store.revalidates_durable_authenticated_wal_vote_repair(&self.repair)
     }
-
     /// Consume the complete post-fsync authority into one exact closed Sign
     /// registry row.
     ///
@@ -1856,7 +1778,6 @@ impl<'registry> DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registr
             pair: None,
         })
     }
-
     #[cfg(test)]
     fn stage_repeat_for_test(
         &self,
@@ -1865,7 +1786,6 @@ impl<'registry> DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registr
     {
         ledger.stage_authenticated_wal_vote_repair(self.repair.repair())
     }
-
     /// Reopen the focused store and revalidate the frame-bound receipt plus
     /// both still-vacant registry reservations without exposing either one.
     #[cfg(test)]
@@ -1886,7 +1806,6 @@ impl<'registry> DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registr
                     )
             })
     }
-
     /// Reopen the supplied ledger root and consume this durable authority into
     /// its exact recovered Sign row.
     #[cfg(test)]
@@ -1917,7 +1836,6 @@ impl<'registry> DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registr
         self.install_recovered_sign(&store)
     }
 }
-
 impl<'registry> DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'registry> {
     /// Install the exact live Broadcast while retaining its complete phase-vote parent.
     #[allow(clippy::result_large_err)]
@@ -2018,7 +1936,6 @@ impl<'registry> DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'
             pair: None,
         })
     }
-
     /// Install one exact phase Prepare-Broadcast plus its independent Commit Sign.
     ///
     /// The loaded LedgerV1 frame, detached Validate completion, WAL repair,
@@ -2103,7 +2020,6 @@ impl<'registry> DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'
         if !exact {
             return Err(fail(self, combined));
         }
-
         let Self {
             repair,
             validation,
@@ -2175,7 +2091,6 @@ impl<'registry> DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'
         })
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl InstalledRecoveredWalSignRegistryCut<'_> {
     fn phase_broadcast_projection(&self) -> Option<&RecoveredLifecycleSignedBroadcastProjectionV1> {
@@ -2194,7 +2109,6 @@ impl InstalledRecoveredWalSignRegistryCut<'_> {
         )
         .then_some(&broadcast.broadcast)
     }
-
     fn phase_broadcast_and_next_vote_projection(
         &self,
     ) -> Option<(
@@ -2233,7 +2147,6 @@ impl InstalledRecoveredWalSignRegistryCut<'_> {
             ))
         .then_some((&broadcast.broadcast, &next_sign.projection, pair))
     }
-
     fn installed_entry_is_exact(&self, store: &super::ledger::LifecycleLedgerStoreV1) -> bool {
         if self.next_sign.is_some()
             || self.pair.is_some()
@@ -2266,7 +2179,6 @@ impl InstalledRecoveredWalSignRegistryCut<'_> {
                     )
             })
     }
-
     /// Reopen the receipt's height-local store and prove the installed parent,
     /// child, owner-count, ordinal, sole Effect slot, digest, and frame binding.
     #[cfg(test)]
@@ -2287,7 +2199,6 @@ impl InstalledRecoveredWalSignRegistryCut<'_> {
             .is_some_and(|(store, _opened)| self.installed_entry_is_exact(&store))
     }
 }
-
 #[cfg(test)]
 impl RecoveredWalSignInstallError<'_> {
     /// Prove that this opaque error still owns the complete exact authority and
@@ -2316,7 +2227,6 @@ impl RecoveredWalSignInstallError<'_> {
 }
 // RECOVERED_WAL_SIGN_REGISTRY_INSTALL_END
 // RECOVERED_WAL_VALIDATE_LEDGER_FSYNC_END
-
 // RECOVERED_WAL_SIGN_COORDINATOR_OPEN_BEGIN
 /// Opaque logical projection minted only from one exact installed Sign row.
 ///
@@ -2330,7 +2240,6 @@ pub(super) struct AuthenticatedRecoveredWalSignProjection {
     parent_address: ConcreteWorkAddress,
     child_address: ConcreteWorkAddress,
 }
-
 impl AuthenticatedRecoveredWalSignProjection {
     /// Return whether both sealed candidates belong to one exact context.
     pub(super) fn belongs_to_context(&self, context: LifecycleContext) -> bool {
@@ -2355,17 +2264,14 @@ impl AuthenticatedRecoveredWalSignProjection {
             && consumed == universe
             && physical.contains_key(&self.child_address.slot)
     }
-
     /// Return the sealed recovered Validate semantic key.
     pub(super) const fn parent_key(&self) -> LifecycleKey {
         self.parent.key
     }
-
     /// Return the sealed recovered Sign semantic key.
     pub(super) const fn child_key(&self) -> LifecycleKey {
         self.child.key
     }
-
     fn continuation_edge(&self) -> Option<super::schema::DurableContinuationEdge> {
         match (self.child.key.phase(), self.child.stage.kind()) {
             (LifecyclePhase::Prepare, LifecycleStageKind::SignPrepareVote) => {
@@ -2377,7 +2283,6 @@ impl AuthenticatedRecoveredWalSignProjection {
             _ => None,
         }
     }
-
     fn repaired_child_record_is_exact(
         &self,
         context: LifecycleContext,
@@ -2397,7 +2302,6 @@ impl AuthenticatedRecoveredWalSignProjection {
             && self.child.initial_state == InitialLifecycleState::Ready
             && self.child.producer_turn.is_none()
     }
-
     /// Prove that one repaired LedgerV1 frame retains both exact sides and its
     /// typed Validate→Sign edge at the installed concrete addresses.
     pub(super) fn repaired_pair_is_exact(
@@ -2438,7 +2342,6 @@ impl AuthenticatedRecoveredWalSignProjection {
             && self.parent.initial_state == InitialLifecycleState::Ready
             && self.parent.producer_turn.is_none()
     }
-
     /// Prove the same repaired parent with an Advanced Sign and live Broadcast.
     pub(super) fn signed_broadcast_chain_is_exact(
         &self,
@@ -2507,7 +2410,6 @@ impl AuthenticatedRecoveredWalSignProjection {
             && sign.replay_matches_candidate(&self.child)
             && broadcast.exactly_matches_record(broadcast_record, sign.owner())
     }
-
     /// Install the exact opaque Sign child only when one live repaired ledger
     /// row retains its complete installed address and logical identity.
     ///
@@ -2529,7 +2431,6 @@ impl AuthenticatedRecoveredWalSignProjection {
         candidates.insert(self.child.key, self.child.clone());
         true
     }
-
     /// Atomically replace the exact parent or stutter on the exact child.
     pub(super) fn splice_candidates(
         &self,
@@ -2556,7 +2457,6 @@ impl AuthenticatedRecoveredWalSignProjection {
             _ => false,
         }
     }
-
     /// Prove the parent is absent and the exact child is retained.
     pub(super) fn owns_spliced_candidates(
         &self,
@@ -2565,7 +2465,6 @@ impl AuthenticatedRecoveredWalSignProjection {
         !candidates.contains_key(&self.parent.key)
             && candidates.get(&self.child.key) == Some(&self.child)
     }
-
     /// Build one closed repaired-pair fixture without exposing either raw
     /// candidate to sibling lifecycle tests.
     #[cfg(all(test, feature = "bls"))]
@@ -2676,7 +2575,6 @@ impl AuthenticatedRecoveredWalSignProjection {
             ledger,
         ))
     }
-
     /// Seed only the opaque projection's parent in a focused recovery fixture.
     #[cfg(test)]
     pub(super) fn seed_parent_candidate_for_test(
@@ -2687,7 +2585,6 @@ impl AuthenticatedRecoveredWalSignProjection {
             .insert(self.parent.key, self.parent.clone())
             .is_none()
     }
-
     /// Seed only the opaque projection's child in a focused recovery fixture.
     #[cfg(test)]
     pub(super) fn seed_child_candidate_for_test(
@@ -2698,7 +2595,6 @@ impl AuthenticatedRecoveredWalSignProjection {
             .insert(self.child.key, self.child.clone())
             .is_none()
     }
-
     /// Seed both exact sides to prove the production splice rejects ambiguity.
     #[cfg(test)]
     pub(super) fn seed_both_candidates_for_test(
@@ -2713,7 +2609,6 @@ impl AuthenticatedRecoveredWalSignProjection {
         true
     }
 }
-
 /// Sealed coordinator-open result for one installed recovered Sign.
 ///
 /// The registry remains exclusively borrowed and the authenticated recovery
@@ -2726,7 +2621,6 @@ pub(crate) struct OpenedRecoveredWalSignLifecycleCut<'registry> {
     recovery: AuthenticatedLifecycleRecoveryCut,
     coordinator: LifecycleCoordinator,
 }
-
 /// Production-only recovered open with the exact stores used by authentication.
 ///
 /// The comparison seals are captured inside the storage-authenticated open,
@@ -2740,7 +2634,6 @@ pub(crate) struct ProductionOpenedRecoveredWalSignLifecycleCut<'registry> {
     payload_store_identity:
         crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreInstanceIdentity,
 }
-
 /// No-lifetime exact-open seal used only to construct the owning production service.
 #[must_use = "the exact recovered WAL open must enter its production owner"]
 pub(crate) struct RecoveredWalProductionOwnerOpenV1 {
@@ -2754,14 +2647,12 @@ pub(crate) struct RecoveredWalProductionOwnerOpenV1 {
     pub(super) payload_store_identity:
         crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreInstanceIdentity,
 }
-
 /// Opaque fail-stop coordinator-open error retaining every volatile input.
 #[cfg_attr(not(test), allow(dead_code))]
 #[must_use = "failed recovered WAL coordinator open still owns all startup authority"]
 pub(crate) struct RecoveredWalSignLifecycleOpenError<'registry> {
     failure: RecoveredWalSignLifecycleOpenFailure<'registry>,
 }
-
 #[allow(clippy::large_enum_variant, variant_size_differences)]
 enum RecoveredWalSignLifecycleOpenFailure<'registry> {
     InvalidAuthority {
@@ -2797,7 +2688,6 @@ enum RecoveredWalSignLifecycleOpenFailure<'registry> {
         _recovery: AuthenticatedLifecycleRecoveryCut,
     },
 }
-
 impl RecoveredWalSignLifecycleOpenError<'_> {
     /// Stable diagnostic which exposes none of the retained recovery parts.
     pub(crate) const fn reason(&self) -> &'static str {
@@ -2826,7 +2716,6 @@ impl RecoveredWalSignLifecycleOpenError<'_> {
         }
     }
 }
-
 impl InstalledRecoveredWalSignRegistryCut<'_> {
     fn structurally_exact_sign(&self) -> Option<&DurableRecoveredWalSignWork> {
         if self.parent_address == self.child_address
@@ -2850,7 +2739,6 @@ impl InstalledRecoveredWalSignRegistryCut<'_> {
             && sign.validates_at(self.child_address, self.child_digest))
         .then_some(sign)
     }
-
     fn structurally_exact_phase_broadcast(
         &self,
         store: &super::ledger::LifecycleLedgerStoreV1,
@@ -2880,7 +2768,6 @@ impl InstalledRecoveredWalSignRegistryCut<'_> {
             && broadcast.validates_phase_in_store(store))
         .then_some(broadcast)
     }
-
     fn structurally_exact_phase_broadcast_and_next_vote(
         &self,
         store: &super::ledger::LifecycleLedgerStoreV1,
@@ -2942,7 +2829,6 @@ impl InstalledRecoveredWalSignRegistryCut<'_> {
             && pair.next_sign_ordinal() == next_sign_address.ordinal)
             .then_some((broadcast, next_sign, pair))
     }
-
     fn authenticated_projection(&self) -> Option<AuthenticatedRecoveredWalSignProjection> {
         let (repair, parent_address, sign_ordinal) = if let Some(sign) =
             self.structurally_exact_sign()
@@ -2980,7 +2866,6 @@ impl InstalledRecoveredWalSignRegistryCut<'_> {
             child_address,
         })
     }
-
     fn coordinator_is_exact(
         &self,
         coordinator: &LifecycleCoordinator,
@@ -3019,7 +2904,6 @@ impl InstalledRecoveredWalSignRegistryCut<'_> {
                 .ready_index
                 .contains(&self.child_address.ordinal)
     }
-
     fn coordinator_broadcast_is_exact(&self, coordinator: &LifecycleCoordinator) -> bool {
         let Some(store) = coordinator.ledger_store.as_ref() else {
             return false;
@@ -3033,7 +2917,6 @@ impl InstalledRecoveredWalSignRegistryCut<'_> {
                 )
             })
     }
-
     fn coordinator_broadcast_and_next_vote_is_exact(
         &self,
         coordinator: &LifecycleCoordinator,
@@ -3052,7 +2935,6 @@ impl InstalledRecoveredWalSignRegistryCut<'_> {
                 })
             })
     }
-
     fn recovery_is_exact(
         &self,
         recovery: &mut AuthenticatedLifecycleRecoveryCut,
@@ -3068,7 +2950,6 @@ impl InstalledRecoveredWalSignRegistryCut<'_> {
                 && recovery.owns_recovered_wal_sign(projection)
         }
     }
-
     fn prepared_join_is_exact(
         &self,
         prepared: &PreparedLifecycleCoordinatorOpen,
@@ -3124,7 +3005,6 @@ impl InstalledRecoveredWalSignRegistryCut<'_> {
                     },
                 )
     }
-
     fn opened_join_is_exact(
         &self,
         coordinator: &LifecycleCoordinator,
@@ -3174,7 +3054,6 @@ impl InstalledRecoveredWalSignRegistryCut<'_> {
                 )
     }
 }
-
 impl InstalledRecoveredWalControlSignRegistryCut<'_> {
     fn exact_control_work(
         &self,
@@ -3201,7 +3080,6 @@ impl InstalledRecoveredWalControlSignRegistryCut<'_> {
             && sign.validates_in_store(self.address, self.digest, store))
         .then_some(sign)
     }
-
     fn exact_control_broadcast_work(
         &self,
         store: &super::ledger::LifecycleLedgerStoreV1,
@@ -3229,7 +3107,6 @@ impl InstalledRecoveredWalControlSignRegistryCut<'_> {
             && broadcast.validates_control_in_store(store))
         .then_some(broadcast)
     }
-
     fn exact_control_broadcast_and_next_vote_work(
         &self,
         store: &super::ledger::LifecycleLedgerStoreV1,
@@ -3284,7 +3161,6 @@ impl InstalledRecoveredWalControlSignRegistryCut<'_> {
             && broadcast.validates_control_in_store(store))
         .then_some((broadcast, next_sign, pair))
     }
-
     fn prepared_join_is_exact(
         &self,
         prepared: &PreparedLifecycleCoordinatorOpen,
@@ -3353,7 +3229,6 @@ impl InstalledRecoveredWalControlSignRegistryCut<'_> {
                     },
                 )
     }
-
     fn opened_join_is_exact(
         &self,
         coordinator: &LifecycleCoordinator,
@@ -3415,7 +3290,6 @@ impl InstalledRecoveredWalControlSignRegistryCut<'_> {
                     },
                 )
     }
-
     /// Install the complete durable Fetch census beside this sole WAL authority.
     pub(super) fn install_fetches(
         &mut self,
@@ -3430,8 +3304,7 @@ impl InstalledRecoveredWalControlSignRegistryCut<'_> {
             })
     }
 }
-
-impl<'registry> InstalledRecoveredWalControlSignRegistryCut<'registry> {
+impl InstalledRecoveredWalControlSignRegistryCut<'_> {
     /// Open and commit the exact control/Fetch/Serve/Producer recovery census.
     #[allow(clippy::result_large_err)]
     pub(super) fn open_with_exact_store_authority(
@@ -3486,7 +3359,6 @@ impl<'registry> InstalledRecoveredWalControlSignRegistryCut<'registry> {
         Ok((coordinator, recovery))
     }
 }
-
 impl InstalledRecoveredWalDecisionFetchRegistryCut<'_> {
     fn exact_decision_fetch_work(
         &self,
@@ -3511,7 +3383,6 @@ impl InstalledRecoveredWalDecisionFetchRegistryCut<'_> {
             && fetch.validates_in_store(self.address, self.digest, store))
         .then_some(fetch)
     }
-
     fn exact_decision_store_work(
         &self,
         ledger: &super::ledger::LifecycleLedgerStoreV1,
@@ -3535,7 +3406,6 @@ impl InstalledRecoveredWalDecisionFetchRegistryCut<'_> {
             && store.validates_in_store(self.address, self.digest, ledger))
         .then_some(store)
     }
-
     fn prepared_join_is_exact(
         &self,
         prepared: &PreparedLifecycleCoordinatorOpen,
@@ -3573,7 +3443,6 @@ impl InstalledRecoveredWalDecisionFetchRegistryCut<'_> {
                     },
                 )
     }
-
     fn opened_join_is_exact(
         &self,
         coordinator: &LifecycleCoordinator,
@@ -3602,7 +3471,6 @@ impl InstalledRecoveredWalDecisionFetchRegistryCut<'_> {
                     },
                 )
     }
-
     /// Install the complete body-backed Fetch census beside the WAL Fetch.
     pub(super) fn install_fetches(
         &mut self,
@@ -3617,8 +3485,7 @@ impl InstalledRecoveredWalDecisionFetchRegistryCut<'_> {
             })
     }
 }
-
-impl<'registry> InstalledRecoveredWalDecisionFetchRegistryCut<'registry> {
+impl InstalledRecoveredWalDecisionFetchRegistryCut<'_> {
     /// Open and commit the exact Decision-Fetch/Fetch/Serve/Producer census.
     #[allow(clippy::result_large_err)]
     pub(super) fn open_with_exact_store_authority(
@@ -3669,7 +3536,6 @@ impl<'registry> InstalledRecoveredWalDecisionFetchRegistryCut<'registry> {
         Ok((coordinator, recovery))
     }
 }
-
 impl InstalledRecoveredDecisionApplyRegistryCut<'_> {
     fn exact_apply_work(&self) -> Option<&DurableRecoveredDecisionApplyWork> {
         if self
@@ -3691,7 +3557,6 @@ impl InstalledRecoveredDecisionApplyRegistryCut<'_> {
             && apply.validates_at(self.address, self.digest))
         .then_some(apply)
     }
-
     fn prepared_join_is_exact(&self, prepared: &PreparedLifecycleCoordinatorOpen) -> bool {
         self.exact_apply_work().is_some_and(|apply| {
             apply.matches_current_ready_record(self.address, self.digest, prepared.coordinator())
@@ -3702,7 +3567,6 @@ impl InstalledRecoveredDecisionApplyRegistryCut<'_> {
                 RecoveredWalRegistrySlotV1::DecisionApply(self.address),
             )
     }
-
     fn opened_join_is_exact(&self, coordinator: &LifecycleCoordinator) -> bool {
         coordinator.ledger_store.is_some()
             && self.exact_apply_work().is_some_and(|apply| {
@@ -3715,7 +3579,6 @@ impl InstalledRecoveredDecisionApplyRegistryCut<'_> {
                     RecoveredWalRegistrySlotV1::DecisionApply(self.address),
                 )
     }
-
     /// Install every unrelated durable Ready-Fetch beside the sole Apply carrier.
     pub(super) fn install_fetches(
         &mut self,
@@ -3730,8 +3593,7 @@ impl InstalledRecoveredDecisionApplyRegistryCut<'_> {
             })
     }
 }
-
-impl<'registry> InstalledRecoveredDecisionApplyRegistryCut<'registry> {
+impl InstalledRecoveredDecisionApplyRegistryCut<'_> {
     /// Publish the exact prospective four-row successor and finish startup.
     ///
     /// Coordinator reconstruction, payload-store authentication, the complete
@@ -3768,7 +3630,6 @@ impl<'registry> InstalledRecoveredDecisionApplyRegistryCut<'registry> {
         Ok((coordinator, recovery))
     }
 }
-
 impl<'registry> InstalledRecoveredWalSignRegistryCut<'registry> {
     #[cfg(test)]
     #[allow(clippy::result_large_err)]
@@ -3856,7 +3717,6 @@ impl<'registry> InstalledRecoveredWalSignRegistryCut<'registry> {
             coordinator,
         })
     }
-
     /// Open against the exact store retained continuously since parent reconstruction.
     #[allow(clippy::result_large_err)]
     fn open_with_exact_store_authority(
@@ -3943,7 +3803,6 @@ impl<'registry> InstalledRecoveredWalSignRegistryCut<'registry> {
             coordinator,
         })
     }
-
     /// Prepare, exact-join, and durably publish the recovered coordinator from
     /// production verified/configured authority without releasing the registry
     /// borrow.
@@ -3973,7 +3832,6 @@ impl<'registry> InstalledRecoveredWalSignRegistryCut<'registry> {
         };
         self.open_with_authority(authority, ledger_root, payload_store, recovery)
     }
-
     /// Open with the minimal exact test authority while retaining all seals.
     #[cfg(test)]
     #[allow(clippy::result_large_err)]
@@ -3997,7 +3855,6 @@ impl<'registry> InstalledRecoveredWalSignRegistryCut<'registry> {
         };
         self.open_with_authority(authority, ledger_root, payload_store, recovery)
     }
-
     /// Corrupt only the opaque installed-token digest for a focused negative
     /// test. The closed registry row and its complete durable authority remain
     /// present and exclusively borrowed.
@@ -4005,7 +3862,6 @@ impl<'registry> InstalledRecoveredWalSignRegistryCut<'registry> {
     pub(crate) fn corrupt_registry_seal_for_test(&mut self) {
         self.child_digest = LifecycleDigest::new([0xFF; 32]);
     }
-
     /// Seed the exact opaque recovered Validate parent for a focused fixture.
     #[cfg(test)]
     pub(crate) fn seed_parent_recovery_for_test(
@@ -4015,7 +3871,6 @@ impl<'registry> InstalledRecoveredWalSignRegistryCut<'registry> {
         self.authenticated_projection()
             .is_some_and(|projection| recovery.seed_recovered_wal_parent_for_test(&projection))
     }
-
     /// Seed the exact opaque recovered Sign child for a re-entry fixture.
     #[cfg(test)]
     pub(crate) fn seed_child_recovery_for_test(
@@ -4025,7 +3880,6 @@ impl<'registry> InstalledRecoveredWalSignRegistryCut<'registry> {
         self.authenticated_projection()
             .is_some_and(|projection| recovery.seed_recovered_wal_child_for_test(&projection))
     }
-
     /// Seed both opaque projection sides for an ambiguous-recovery negative.
     #[cfg(test)]
     pub(crate) fn seed_both_recovery_for_test(
@@ -4037,8 +3891,7 @@ impl<'registry> InstalledRecoveredWalSignRegistryCut<'registry> {
         })
     }
 }
-
-impl<'registry> ProductionOpenedRecoveredWalSignLifecycleCut<'registry> {
+impl ProductionOpenedRecoveredWalSignLifecycleCut<'_> {
     /// Consume the exclusive registry borrow into a no-lifetime owner-open seal.
     pub(crate) fn into_production_owner_open(
         self,
@@ -4087,9 +3940,10 @@ impl<'registry> ProductionOpenedRecoveredWalSignLifecycleCut<'registry> {
             payload_store_identity,
         })
     }
-
+}
+#[cfg(test)]
+impl<'registry> ProductionOpenedRecoveredWalSignLifecycleCut<'registry> {
     /// Seal a focused opened-cut fixture with the exact stores it used.
-    #[cfg(test)]
     pub(crate) fn from_opened_for_test(
         opened: OpenedRecoveredWalSignLifecycleCut<'registry>,
         verified: VerifiedHeightContext,
@@ -4104,7 +3958,6 @@ impl<'registry> ProductionOpenedRecoveredWalSignLifecycleCut<'registry> {
         }
     }
 }
-
 #[cfg(test)]
 impl OpenedRecoveredWalSignLifecycleCut<'_> {
     /// Revalidate the complete installed/recovery/coordinator/store join.
@@ -4116,26 +3969,21 @@ impl OpenedRecoveredWalSignLifecycleCut<'_> {
             .opened_join_is_exact(&self.coordinator, &self.recovery, &projection)
             && self.recovered_wal_sign_census_rejects_mutations_for_test()
     }
-
     fn recovered_wal_sign_census_rejects_mutations_for_test(&self) -> bool {
         let address = self.installed.child_address;
         let registry = &*self.installed.registry;
         if !registry.exactly_covers_recovered_ready_work_and_wal_authority(&self.coordinator) {
             return false;
         }
-
         let mut missing = self.coordinator.clone();
         missing.records.remove(&address.ordinal);
-
         let mut terminal = self.coordinator.clone();
         let Some(terminal_record) = terminal.records.get_mut(&address.ordinal) else {
             return false;
         };
         terminal_record.state = super::LifecycleState::Terminal(super::TerminalOutcome::Cancelled);
-
         let mut stale = self.coordinator.clone();
         stale.ready_index.remove(&address.ordinal);
-
         let mut mutated = self.coordinator.clone();
         let Some(metadata) = mutated.durable_records.get_mut(&address.ordinal) else {
             return false;
@@ -4143,7 +3991,6 @@ impl OpenedRecoveredWalSignLifecycleCut<'_> {
         let mut foreign_source = *metadata.reconstruction_source.as_bytes();
         foreign_source[0] ^= 1;
         metadata.reconstruction_source = LifecycleDigest::new(foreign_source);
-
         [&missing, &terminal, &stale, &mutated]
             .into_iter()
             .all(|coordinator| {
@@ -4151,7 +3998,6 @@ impl OpenedRecoveredWalSignLifecycleCut<'_> {
             })
     }
 }
-
 #[cfg(test)]
 impl RecoveredWalSignLifecycleOpenError<'_> {
     fn installed(&self) -> &InstalledRecoveredWalSignRegistryCut<'_> {
@@ -4167,12 +4013,10 @@ impl RecoveredWalSignLifecycleOpenError<'_> {
             }
         }
     }
-
     /// Prove the error retains one exact installed row against the ledger.
     pub(crate) fn retains_exact_installed_for_test(&self, ledger_root: &Path) -> bool {
         self.installed().exact_installed_shape_for_test(ledger_root)
     }
-
     /// Prove the error still exclusively owns a closed recovered Sign row.
     pub(crate) fn retains_closed_registry_row_for_test(&self) -> bool {
         let installed = self.installed();
@@ -4189,7 +4033,6 @@ impl RecoveredWalSignLifecycleOpenError<'_> {
     }
 }
 // RECOVERED_WAL_SIGN_COORDINATOR_OPEN_END
-
 impl DetachedRecoveredValidateCompletion {
     fn restore(
         self,
@@ -4218,7 +4061,6 @@ impl DetachedRecoveredValidateCompletion {
         }
     }
 }
-
 /// Ownership-preserving failure from the fixed recovered-WAL parent join.
 ///
 /// No adapter effect, pending binding, recovered vote, or registry entry is
@@ -4229,7 +4071,6 @@ impl DetachedRecoveredValidateCompletion {
 pub(crate) struct RecoveredWalValidateRegistryJoinError<'registry> {
     failure: RecoveredWalValidateRegistryJoinFailure<'registry>,
 }
-
 #[allow(clippy::large_enum_variant, variant_size_differences)]
 enum RecoveredWalValidateRegistryJoinFailure<'registry> {
     InvalidCarrier {
@@ -4246,7 +4087,6 @@ enum RecoveredWalValidateRegistryJoinFailure<'registry> {
         _completion: DetachedRecoveredValidateCompletion,
     },
 }
-
 impl RecoveredWalValidateRegistryJoinError<'_> {
     /// Return a stable diagnostic without exposing retained authority.
     pub(crate) const fn reason(&self) -> &'static str {
@@ -4261,7 +4101,6 @@ impl RecoveredWalValidateRegistryJoinError<'_> {
         }
     }
 }
-
 impl Drop for RecoveredWalValidateRegistryCut<'_> {
     fn drop(&mut self) {
         let Some(work) = self.work.take() else {
@@ -4284,7 +4123,6 @@ impl Drop for RecoveredWalValidateRegistryCut<'_> {
         }
     }
 }
-
 impl ConcreteLifecycleWorkRegistry {
     /// Bind one fsynced recovered body to the exact claimed WAL Fetch carrier.
     pub(super) fn prepare_recovered_decision_fetch_store_adapter_authority(
@@ -4326,7 +4164,6 @@ impl ConcreteLifecycleWorkRegistry {
             .project_store_adapter_authority(body)
             .ok_or(RecoveredDecisionFetchStorePreparationErrorV1::InvalidBody)
     }
-
     /// Seal the reducer-derived recovered Store child under the claimed Fetch.
     pub(super) fn prepare_recovered_decision_fetch_store_successor<'registry, 'adapter>(
         &'registry mut self,
@@ -4392,8 +4229,7 @@ impl ConcreteLifecycleWorkRegistry {
         })
     }
 }
-
-impl<'registry, 'adapter> PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter> {
+impl<'adapter> PreparedRecoveredDecisionFetchStoreSuccessor<'_, 'adapter> {
     /// Project the exact child while retaining registry and adapter borrows.
     pub(super) fn project_for_body_transition(
         &self,
@@ -4410,7 +4246,6 @@ impl<'registry, 'adapter> PreparedRecoveredDecisionFetchStoreSuccessor<'registry
             .candidate_for_transition(verified)
             .ok_or(SealedBodySuccessorProjectionError::InvalidCarrier)
     }
-
     /// Replace the exact WAL Fetch carrier with its dedicated Store carrier.
     pub(super) fn commit_after_publication(
         self,
@@ -4453,7 +4288,6 @@ impl<'registry, 'adapter> PreparedRecoveredDecisionFetchStoreSuccessor<'registry
         adapter
     }
 }
-
 impl ConcreteLifecycleWorkRegistry {
     /// Seal the adapter-authenticated Broadcast child under one claimed recovered Sign.
     pub(super) fn prepare_recovered_lifecycle_sign_broadcast_successor<'registry, 'adapter>(
@@ -4554,7 +4388,6 @@ impl ConcreteLifecycleWorkRegistry {
             adapter,
         })
     }
-
     /// Seal the exact Broadcast-and-next-WAL-Sign pair under one claimed Sign.
     ///
     /// Body authority has already crossed the launched service/executor census,
@@ -4668,8 +4501,7 @@ impl ConcreteLifecycleWorkRegistry {
         })
     }
 }
-
-impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter> {
+impl<'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter> {
     /// Project the exact Broadcast candidate while retaining every owner.
     pub(super) fn project_for_transition(
         &self,
@@ -4691,7 +4523,6 @@ impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'regi
         }
         Ok(self.broadcast.candidate().clone())
     }
-
     /// Replace the exact recovered Sign carrier with its durable Broadcast child.
     pub(super) fn commit_after_publication(
         self,
@@ -4744,7 +4575,6 @@ impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'regi
         adapter
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl<'registry, 'adapter>
     PreparedRecoveredLifecycleSignBroadcastAndSignSuccessor<'registry, 'adapter>
@@ -4760,7 +4590,6 @@ impl<'registry, 'adapter>
             (true, true) | (false, false) => None,
         }
     }
-
     /// Clone the two inert admissions only under the transition-private permit.
     pub(super) fn project_transition_candidates(
         &self,
@@ -4768,7 +4597,6 @@ impl<'registry, 'adapter>
     ) -> (CandidateAdmission, CandidateAdmission) {
         self.successor.project_transition_candidates(permit)
     }
-
     /// Bind both process-local child addresses to the exact staged rows.
     pub(super) fn bind_staged_children(
         self,
@@ -4843,11 +4671,8 @@ impl<'registry, 'adapter>
         })
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
-impl<'registry, 'adapter>
-    BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'registry, 'adapter>
-{
+impl<'adapter> BoundRecoveredLifecycleSignBroadcastAndSignSuccessor<'_, 'adapter> {
     /// Replace the exact recovered Sign with both durably published children.
     ///
     /// The combined projection separates only in this assertion-only tail.

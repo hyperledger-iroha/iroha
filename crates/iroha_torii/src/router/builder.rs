@@ -3,13 +3,7 @@
 //! The builder records the exact descriptor for every cataloged mount. Its
 //! manifest is independent of Axum internals: validation never parses router
 //! debug output and never scans source text.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    convert::Infallible,
-    sync::Arc,
-};
-
+use crate::{SharedAppState, operator_signatures};
 use axum::{
     Router,
     body::Body,
@@ -23,10 +17,12 @@ use iroha_torii_shared::route_catalog::{
     EnabledFeatures, HttpMethod, ImplicitRouteDescriptor, Listener, RouteCatalog, RouteDescriptor,
     RouteEffect, RouteProjections,
 };
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    convert::Infallible,
+    sync::Arc,
+};
 use tower::{Layer, Service};
-
-use crate::{SharedAppState, enforce_required_api_token, operator_signatures};
-
 const COMPILED_ROUTE_FEATURES: &[&str] = &[
     #[cfg(feature = "app_api")]
     "app_api",
@@ -45,20 +41,17 @@ const COMPILED_ROUTE_FEATURES: &[&str] = &[
     #[cfg(feature = "push")]
     "push",
 ];
-
 /// Return the Cargo features relevant to canonical route projection.
 #[must_use]
 pub(crate) const fn compiled_route_features() -> EnabledFeatures<'static> {
     EnabledFeatures::new(COMPILED_ROUTE_FEATURES)
 }
-
 /// Complete description of what one composed router mounted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MountedRouteManifest {
     explicit_routes: Vec<RouteDescriptor>,
     implicit_routes: Vec<ImplicitRouteDescriptor>,
 }
-
 /// Stable metadata for the route selected by Axum.
 ///
 /// The route identifier and template come from the catalog. Framework misses
@@ -73,56 +66,47 @@ pub(crate) struct MatchedRouteMetadata {
     admission: Option<AdmissionPolicy>,
     projections: RouteProjections,
 }
-
 impl MatchedRouteMetadata {
     /// Metadata used when no router template was selected.
     #[must_use]
     pub(crate) fn unmatched() -> Self {
         Self::framework("http.route_not_found", "unmatched", None, None, None, None)
     }
-
     /// Stable, bounded route identifier suitable for logs and metric labels.
     #[must_use]
     pub(crate) const fn stable_route_id(&self) -> &'static str {
         self.stable_route_id
     }
-
     /// Router template selected by Axum, never the raw request path.
     #[must_use]
     pub(crate) fn path_template(&self) -> &str {
         &self.path_template
     }
-
     /// Security/audience surface, when the route is cataloged.
     #[must_use]
     pub(crate) const fn surface(&self) -> Option<ApiSurface> {
         self.surface
     }
-
     /// Listener projection, when the route is cataloged.
     #[must_use]
     pub(crate) const fn listener(&self) -> Option<Listener> {
         self.listener
     }
-
     /// Server-side effect classification, when the route is cataloged.
     #[must_use]
     pub(crate) const fn effect(&self) -> Option<RouteEffect> {
         self.effect
     }
-
     /// Principal admission requirement, when the route is cataloged.
     #[must_use]
     pub(crate) const fn admission(&self) -> Option<AdmissionPolicy> {
         self.admission
     }
-
     /// Documentation/tooling projections declared by the catalog.
     #[must_use]
     pub(crate) const fn projections(&self) -> RouteProjections {
         self.projections
     }
-
     /// Build metadata from an exact mounted catalog descriptor.
     pub(crate) fn from_descriptor(descriptor: RouteDescriptor) -> Self {
         Self {
@@ -135,7 +119,6 @@ impl MatchedRouteMetadata {
             projections: descriptor.projections(),
         }
     }
-
     fn framework(
         stable_route_id: &'static str,
         path_template: impl Into<Arc<str>>,
@@ -155,7 +138,6 @@ impl MatchedRouteMetadata {
         }
     }
 }
-
 /// Immutable lookup used to attach catalog metadata after Axum has selected a
 /// route template.
 #[derive(Debug, Clone)]
@@ -164,7 +146,6 @@ pub(crate) struct MountedRouteIndex {
     by_path: Arc<BTreeMap<&'static str, RouteDescriptor>>,
     cors_paths: Arc<BTreeSet<&'static str>>,
 }
-
 impl MountedRouteIndex {
     /// Resolve one selected method/template pair without consulting the raw URI.
     #[must_use]
@@ -176,14 +157,12 @@ impl MountedRouteIndex {
         let Some(path_template) = matched_path else {
             return MatchedRouteMetadata::unmatched();
         };
-
         if let Some(descriptor) = self.explicit.get(&(method.as_str(), path_template)) {
             return MatchedRouteMetadata::from_descriptor(*descriptor);
         }
         if let Some(descriptor) = self.explicit.get(&("ANY", path_template)) {
             return MatchedRouteMetadata::from_descriptor(*descriptor);
         }
-
         if method == Method::HEAD {
             if let Some(descriptor) = self.explicit.get(&("GET", path_template)) {
                 if descriptor.implicit_head() {
@@ -191,7 +170,6 @@ impl MountedRouteIndex {
                 }
             }
         }
-
         if method == Method::OPTIONS && self.cors_paths.contains(path_template) {
             let descriptor = self.by_path.get(path_template).copied();
             return MatchedRouteMetadata::framework(
@@ -203,7 +181,6 @@ impl MountedRouteIndex {
                 descriptor.map(RouteDescriptor::admission),
             );
         }
-
         if let Some(descriptor) = self.by_path.get(path_template) {
             return MatchedRouteMetadata::framework(
                 "http.method_not_allowed",
@@ -214,7 +191,6 @@ impl MountedRouteIndex {
                 Some(descriptor.admission()),
             );
         }
-
         // Axum selected a path absent from the immutable mounted index. Keep
         // the label bounded; completeness tests make this an invariant failure
         // rather than an alternate registration path.
@@ -228,20 +204,17 @@ impl MountedRouteIndex {
         )
     }
 }
-
 impl MountedRouteManifest {
     /// Explicit application operations, in canonical catalog order.
     #[must_use]
     pub(crate) fn explicit_routes(&self) -> &[RouteDescriptor] {
         &self.explicit_routes
     }
-
     /// Framework-level HEAD and CORS OPTIONS behavior.
     #[must_use]
     pub(crate) fn implicit_routes(&self) -> &[ImplicitRouteDescriptor] {
         &self.implicit_routes
     }
-
     /// Build the immutable matched-route lookup used by request middleware.
     #[must_use]
     pub(crate) fn route_index(&self) -> MountedRouteIndex {
@@ -276,7 +249,6 @@ impl MountedRouteManifest {
         }
     }
 }
-
 /// One router assembly failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RouterAssemblyError {
@@ -324,7 +296,6 @@ pub(crate) enum RouterAssemblyError {
     /// One or more enabled catalog routes were never registered.
     MissingRegistrations(Vec<&'static str>),
 }
-
 /// Sealed single-method router used by descriptor-level registration.
 ///
 /// Callers cannot construct this type from an arbitrary [`MethodRouter`], so a
@@ -334,48 +305,39 @@ pub(crate) struct CatalogMethodRouter<S, A = ToriiDefaultAuthentication> {
     authentication: A,
     inner: MethodRouter<S>,
 }
-
 /// Type state for a route governed only by listener-wide Torii authentication.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ToriiDefaultAuthentication;
-
 /// Type state for a route with no route-specific credential.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct UnauthenticatedRoute;
-
 /// Sealed type state for a route whose special authentication has been fixed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SealedAuthentication(AuthenticationPolicy);
-
 /// Authentication type state accepted by catalog registration.
 pub(crate) trait MountedAuthentication {
     /// Return the exact catalog policy installed by this state.
     fn policy(&self) -> AuthenticationPolicy;
 }
-
 impl MountedAuthentication for ToriiDefaultAuthentication {
     fn policy(&self) -> AuthenticationPolicy {
         AuthenticationPolicy::ToriiDefault
     }
 }
-
 impl MountedAuthentication for UnauthenticatedRoute {
     fn policy(&self) -> AuthenticationPolicy {
         AuthenticationPolicy::Unauthenticated
     }
 }
-
 impl MountedAuthentication for SealedAuthentication {
     fn policy(&self) -> AuthenticationPolicy {
         self.0
     }
 }
-
 mod private {
     /// Private supertrait sealing the set of layerable authentication states.
     pub trait Layerable {}
 }
-
 /// Authentication states which may still receive arbitrary middleware.
 ///
 /// Special authentication states deliberately do not implement this trait, so
@@ -385,12 +347,10 @@ pub(crate) trait LayerableAuthentication:
     MountedAuthentication + private::Layerable
 {
 }
-
 impl private::Layerable for ToriiDefaultAuthentication {}
 impl private::Layerable for UnauthenticatedRoute {}
 impl LayerableAuthentication for ToriiDefaultAuthentication {}
 impl LayerableAuthentication for UnauthenticatedRoute {}
-
 /// Authentication witnessed at a reviewed route-handler or protocol boundary.
 ///
 /// This is an explicit review witness, not a proof of the handler's internal
@@ -425,7 +385,6 @@ pub(crate) enum HandlerAuthentication {
     /// preserving the exact selected route's sealed authentication boundary.
     NestedRouteAuthentication,
 }
-
 impl HandlerAuthentication {
     const fn catalog_policy(self) -> AuthenticationPolicy {
         match self {
@@ -438,7 +397,6 @@ impl HandlerAuthentication {
         }
     }
 }
-
 impl<S, A> CatalogMethodRouter<S, A>
 where
     S: Clone + Send + Sync + 'static,
@@ -459,7 +417,6 @@ where
         }
     }
 }
-
 impl<S> CatalogMethodRouter<S, ToriiDefaultAuthentication>
 where
     S: Clone + Send + Sync + 'static,
@@ -478,7 +435,6 @@ where
             inner: self.inner,
         }
     }
-
     /// Declare that this route intentionally has no route-specific credential.
     ///
     /// Listener-wide controls, including the configured Torii API token, still
@@ -492,7 +448,6 @@ where
             inner: self.inner,
         }
     }
-
     /// Attach a sealed witness for authentication performed inside a handler.
     ///
     /// This call records a reviewed handler boundary; it cannot mechanically
@@ -513,7 +468,6 @@ where
         }
     }
 }
-
 impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
     /// Install the exact-account SoraCloud command boundary before extraction.
     ///
@@ -536,7 +490,6 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
             inner: self.inner.layer(layer),
         }
     }
-
     /// Install canonical account authentication over the exact bounded body.
     ///
     /// The middleware buffers at most `max_body_bytes`, verifies the canonical
@@ -562,7 +515,6 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
             inner: self.inner.layer(layer),
         }
     }
-
     /// Admit, bound, and authenticate an expensive proof body before handler work.
     ///
     /// Physical body admission is outermost, canonical exact-network account
@@ -593,29 +545,44 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
                 .layer(admission),
         }
     }
-
-    /// Apply the concrete route-specific Torii API-token middleware.
+    /// Admit a verified-source body before authentication and compilation.
     ///
-    /// This guard is unconditional: it requires exactly one configured token
-    /// even when listener-wide API-token authentication is disabled.
+    /// The outer admission layer owns one complete compiler slot before polling
+    /// the body, enforces an absolute body-read deadline, and hands that exact
+    /// slot to the blocking compiler worker after canonical authentication.
+    #[cfg(feature = "app_api")]
     #[must_use]
-    pub(crate) fn authenticated_required_api_token(
+    pub(crate) fn authenticated_canonical_account_verified_source_body(
         self,
         app_state: SharedAppState,
+        max_body_bytes: usize,
     ) -> CatalogMethodRouter<SharedAppState, SealedAuthentication> {
-        let layer = axum::middleware::from_fn_with_state(app_state, enforce_required_api_token);
+        let auth = axum::middleware::from_fn_with_state(
+            crate::CanonicalAccountBodyAuthState {
+                app: app_state.clone(),
+                max_body_bytes,
+            },
+            crate::enforce_canonical_account_body_authentication,
+        );
+        let admission = axum::middleware::from_fn_with_state(
+            app_state,
+            crate::verified_source_body_admission_middleware,
+        );
         CatalogMethodRouter {
             method: self.method,
-            authentication: SealedAuthentication(AuthenticationPolicy::RequiredApiToken),
-            inner: self.inner.layer(layer),
+            authentication: SealedAuthentication(AuthenticationPolicy::CanonicalAccountSignature),
+            inner: self
+                .inner
+                .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
+                .layer(auth)
+                .layer(admission),
         }
     }
-
-    /// Apply the configured SoraNet collector credential before body decoding.
+    /// Apply exact operator authentication and the SoraNet collector guard before body decoding.
     ///
-    /// The guard fails closed unless the source belongs to an allowed network
-    /// namespace and, when configured, presents an exact dedicated token. It
-    /// also consumes the route-specific rate budget before the Norito
+    /// Exact NetworkId-bound operator authentication runs first. The secondary
+    /// guard then fails closed unless the source belongs to an allowed network
+    /// namespace and consumes a per-operator route budget before the Norito
     /// extractor can inspect attacker-controlled bytes.
     #[must_use]
     pub(crate) fn authenticated_soranet_privacy_collector(
@@ -624,20 +591,26 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
         endpoint: &'static str,
     ) -> CatalogMethodRouter<SharedAppState, SealedAuthentication> {
         let state = crate::soranet_privacy_ingress::SoranetPrivacyCollectorAuthState {
-            app: app_state,
+            app: app_state.clone(),
             endpoint,
         };
-        let layer = axum::middleware::from_fn_with_state(
+        let collector_layer = axum::middleware::from_fn_with_state(
             state,
             crate::soranet_privacy_ingress::enforce_soranet_privacy_collector_authentication,
         );
+        let operator_layer = axum::middleware::from_fn_with_state(
+            app_state,
+            operator_signatures::enforce_operator_access,
+        );
         CatalogMethodRouter {
             method: self.method,
-            authentication: SealedAuthentication(AuthenticationPolicy::SoranetCollectorCredential),
-            inner: self.inner.layer(layer),
+            authentication: SealedAuthentication(AuthenticationPolicy::OperatorSignature),
+            // Tower applies the most recently added layer first: authenticate
+            // and restore the exact body before the collector guard consumes
+            // the verified operator extension.
+            inner: self.inner.layer(collector_layer).layer(operator_layer),
         }
     }
-
     /// Apply Torii's request-signature middleware bound to the submitted identity.
     #[must_use]
     pub(crate) fn authenticated_identity_bound(
@@ -654,7 +627,6 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
             inner: self.inner.layer(layer),
         }
     }
-
     /// Apply the route-specific internal Torii-proxy peer-signature middleware.
     ///
     /// This is cataloged as identity-bound authentication because the cryptographically verified
@@ -675,8 +647,10 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
             inner: self.inner.layer(layer),
         }
     }
-
-    /// Apply Torii's concrete operator-authentication middleware.
+    /// Apply Torii's mandatory exact-network operator-signature middleware.
+    ///
+    /// Optional WebAuthn/mTLS operator authentication is enforced as an
+    /// additional factor and never replaces the signed method, target, and body.
     ///
     /// Unlike the general [`Self::layer`] method, this method also supplies the
     /// sealed authentication witness checked against the route descriptor.
@@ -696,7 +670,6 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
         }
     }
 }
-
 macro_rules! catalog_method_constructor {
     ($name:ident, $method:ident, $constructor:ident) => {
         #[doc = concat!("Construct a sealed single-", stringify!($method), " router.")]
@@ -716,12 +689,10 @@ macro_rules! catalog_method_constructor {
         }
     };
 }
-
 catalog_method_constructor!(catalog_get, Get, get);
 catalog_method_constructor!(catalog_post, Post, post);
 catalog_method_constructor!(catalog_delete, Delete, delete);
 catalog_method_constructor!(catalog_any, Any, any);
-
 /// Catalog-aware wrapper around an Axum router.
 pub(crate) struct RouterBuilder<S = SharedAppState> {
     router: Router<S>,
@@ -732,7 +703,6 @@ pub(crate) struct RouterBuilder<S = SharedAppState> {
     registered_method_paths: BTreeMap<(HttpMethod, &'static str), &'static str>,
     errors: Vec<RouterAssemblyError>,
 }
-
 impl<S> RouterBuilder<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -761,7 +731,6 @@ where
             errors: Vec::new(),
         })
     }
-
     /// Mount one route at the descriptor's exact path.
     ///
     /// Prefer this method for ordinary HTTP operations. The descriptor, rather
@@ -797,13 +766,11 @@ where
         self.router =
             std::mem::take(&mut self.router).route(descriptor.path(), method_router.inner);
     }
-
     /// Get the shared state held by the builder.
     #[must_use]
     pub(crate) fn state(&self) -> &S {
         &self.app_state
     }
-
     /// Finish composition only if every route family is fully cataloged.
     ///
     /// # Errors
@@ -814,12 +781,10 @@ where
     ) -> Result<(Router<S>, MountedRouteManifest), Vec<RouterAssemblyError>> {
         self.finish_inner()
     }
-
     fn register_group(&mut self, descriptors: &'static [RouteDescriptor]) -> bool {
         let mut ids = self.registered_ids.clone();
         let mut method_paths = self.registered_method_paths.clone();
         let mut group_errors = Vec::new();
-
         for descriptor in descriptors {
             let Some(expected) = self
                 .catalog
@@ -859,7 +824,6 @@ where
                 });
             }
         }
-
         if group_errors.is_empty() {
             self.registered_ids = ids;
             self.registered_method_paths = method_paths;
@@ -869,7 +833,6 @@ where
             false
         }
     }
-
     fn finish_inner(self) -> Result<(Router<S>, MountedRouteManifest), Vec<RouterAssemblyError>> {
         let enabled = self
             .catalog
@@ -881,7 +844,6 @@ where
                     .then_some(route.stable_route_id())
             })
             .collect();
-
         let mut errors = self.errors;
         if !missing.is_empty() {
             errors.push(RouterAssemblyError::MissingRegistrations(missing));
@@ -889,7 +851,6 @@ where
         if !errors.is_empty() {
             return Err(errors);
         }
-
         let explicit_routes: Vec<_> = enabled.into_iter().copied().collect();
         let implicit_routes =
             RouteCatalog::new(&explicit_routes).implicit_routes(self.enabled_features);
@@ -902,9 +863,9 @@ where
         ))
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use axum::{
         body::Body,
         http::{Method, Request, StatusCode},
@@ -913,9 +874,6 @@ mod tests {
         ApiSurface, FeatureGate, ImplicitRouteKind, Listener, RouteProjections,
     };
     use tower::ServiceExt as _;
-
-    use super::*;
-
     const READ: RouteDescriptor = RouteDescriptor::new(
         "test.read",
         HttpMethod::Get,
@@ -1024,23 +982,11 @@ mod tests {
         AdmissionPolicy::Public,
     )
     .with_authentication(AuthenticationPolicy::ManifestConditionalContent);
-    const API_TOKEN_REQUIRED: RouteDescriptor = RouteDescriptor::new(
-        "test.api_token_required",
-        HttpMethod::Post,
-        "/v1/tests/api-token-required",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::Mutation,
-        AdmissionPolicy::Operator,
-    )
-    .with_authentication(AuthenticationPolicy::RequiredApiToken);
     const ROUTES: &[RouteDescriptor] = &[READ, WRITE, FEATURED];
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn offline_routes_are_part_of_every_app_api_router() {
         use iroha_torii_shared::route_catalog::offline;
-
         let mut builder = RouterBuilder::new(
             (),
             RouteCatalog::new(offline::ROUTES),
@@ -1090,7 +1036,6 @@ mod tests {
             offline::ROUTES.len()
         );
     }
-
     #[cfg(feature = "app_api")]
     async fn short_circuit_success(
         _request: Request<Body>,
@@ -1098,7 +1043,6 @@ mod tests {
     ) -> StatusCode {
         StatusCode::IM_A_TEAPOT
     }
-
     #[tokio::test]
     async fn complete_manifest_matches_registered_routes_and_separates_implicit_methods() {
         let mut builder =
@@ -1107,7 +1051,6 @@ mod tests {
         builder.route(&READ, catalog_get(|| async { "read" }));
         builder.route(&WRITE, catalog_post(|| async { StatusCode::NO_CONTENT }));
         let (router, manifest) = builder.finish().expect("complete registration");
-
         assert_eq!(manifest.explicit_routes(), &[READ, WRITE]);
         assert_eq!(manifest.implicit_routes().len(), 2);
         assert!(manifest.implicit_routes().iter().any(|route| {
@@ -1121,7 +1064,6 @@ mod tests {
             .resolve(&Method::GET, Some(READ.path()));
         assert_eq!(matched.effect(), Some(RouteEffect::ReadOnly));
         assert_eq!(matched.admission(), Some(AdmissionPolicy::Public));
-
         let response = router
             .oneshot(
                 Request::builder()
@@ -1134,7 +1076,6 @@ mod tests {
             .expect("response");
         assert_eq!(response.status(), StatusCode::OK);
     }
-
     #[test]
     fn unsafe_effect_and_admission_metadata_cannot_reach_mounting() {
         const UNSAFE: RouteDescriptor = RouteDescriptor::new(
@@ -1153,7 +1094,6 @@ mod tests {
         };
         assert!(matches!(error, RouterAssemblyError::InvalidCatalog(_)));
     }
-
     #[test]
     fn duplicate_registration_is_rejected_without_mounting_twice() {
         let mut builder =
@@ -1161,7 +1101,6 @@ mod tests {
                 .expect("valid catalog");
         builder.route(&READ, catalog_get(|| async {}));
         builder.route(&READ, catalog_get(|| async {}));
-
         let errors = builder.finish().expect_err("duplicate must fail");
         assert!(errors.iter().any(|error| {
             matches!(
@@ -1172,7 +1111,6 @@ mod tests {
             )
         }));
     }
-
     #[test]
     fn missing_and_disabled_registrations_are_distinct() {
         let builder = RouterBuilder::new((), RouteCatalog::new(&[READ]), EnabledFeatures::none())
@@ -1182,7 +1120,6 @@ mod tests {
             errors,
             vec![RouterAssemblyError::MissingRegistrations(vec!["test.read"])]
         );
-
         let mut builder =
             RouterBuilder::new((), RouteCatalog::new(&[FEATURED]), EnabledFeatures::none())
                 .expect("valid catalog");
@@ -1195,7 +1132,6 @@ mod tests {
             }]
         );
     }
-
     #[test]
     fn descriptor_mismatch_and_unexpected_route_are_rejected() {
         const MISMATCH: RouteDescriptor = RouteDescriptor::new(
@@ -1221,7 +1157,6 @@ mod tests {
                 .expect("valid catalog");
         builder.route(&MISMATCH, catalog_get(|| async {}));
         builder.route(&UNEXPECTED, catalog_get(|| async {}));
-
         let errors = builder
             .finish()
             .expect_err("invalid registrations must fail");
@@ -1242,14 +1177,12 @@ mod tests {
             )
         }));
     }
-
     #[test]
     fn descriptor_method_mismatch_fails_before_mounting() {
         let mut builder =
             RouterBuilder::new((), RouteCatalog::new(&[READ]), EnabledFeatures::none())
                 .expect("valid catalog");
         builder.route(&READ, catalog_post(|| async {}));
-
         let errors = builder.finish().expect_err("method mismatch must fail");
         assert!(errors.iter().any(|error| {
             matches!(
@@ -1262,14 +1195,12 @@ mod tests {
             )
         }));
     }
-
     #[test]
     fn authentication_policy_mismatch_fails_before_mounting() {
         let mut builder =
             RouterBuilder::new((), RouteCatalog::new(&[HANDSHAKE]), EnabledFeatures::none())
                 .expect("valid catalog");
         builder.route(&HANDSHAKE, catalog_get(|| async {}));
-
         let errors = builder
             .finish()
             .expect_err("missing handler authentication witness must fail");
@@ -1282,7 +1213,6 @@ mod tests {
             }
         )));
     }
-
     #[test]
     fn arbitrary_middleware_cannot_claim_operator_authentication() {
         let mut builder =
@@ -1292,7 +1222,6 @@ mod tests {
             &OPERATOR,
             catalog_get(|| async {}).layer(axum::Extension(())),
         );
-
         let errors = builder
             .finish()
             .expect_err("an arbitrary layer must not satisfy operator authentication");
@@ -1305,7 +1234,6 @@ mod tests {
             }
         )));
     }
-
     #[cfg(feature = "app_api")]
     #[test]
     fn torii_proxy_peer_witness_is_sealed_as_identity_bound_authentication() {
@@ -1321,7 +1249,6 @@ mod tests {
             catalog_post(|| async { StatusCode::NO_CONTENT })
                 .authenticated_torii_proxy_peer(app.clone()),
         );
-
         let (_, manifest) = builder
             .finish()
             .expect("Torii proxy peer authentication witness must match the catalog");
@@ -1330,7 +1257,6 @@ mod tests {
             &[TORII_PROXY_PEER_AUTHENTICATED]
         );
     }
-
     #[test]
     fn handler_and_unauthenticated_witnesses_match_only_their_declared_policy() {
         let mut builder = RouterBuilder::new(
@@ -1345,11 +1271,9 @@ mod tests {
                 .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
         );
         builder.route(&PUBLIC_HEALTH, catalog_get(|| async {}).unauthenticated());
-
         let (_, manifest) = builder.finish().expect("matching witnesses must mount");
         assert_eq!(manifest.explicit_routes(), &[HANDSHAKE, PUBLIC_HEALTH]);
     }
-
     #[test]
     fn canonical_account_handler_witness_matches_only_account_authentication() {
         let mut builder = RouterBuilder::new(
@@ -1363,13 +1287,11 @@ mod tests {
             catalog_post(|| async {})
                 .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
-
         let (_, manifest) = builder
             .finish()
             .expect("canonical account witness must mount");
         assert_eq!(manifest.explicit_routes(), &[ACCOUNT_AUTHENTICATED]);
     }
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn soracloud_command_witness_authenticates_before_the_handler() {
@@ -1377,7 +1299,6 @@ mod tests {
             Arc,
             atomic::{AtomicUsize, Ordering},
         };
-
         let app = crate::mk_app_state_for_tests();
         let calls = Arc::new(AtomicUsize::new(0));
         let handler_calls = Arc::clone(&calls);
@@ -1401,7 +1322,6 @@ mod tests {
         let (router, _) = builder
             .finish()
             .expect("sealed SoraCloud authentication must match the catalog");
-
         let response = router
             .with_state(app)
             .oneshot(
@@ -1416,7 +1336,6 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn canonical_signed_body_requires_the_sealed_handler_witness() {
         let mut builder = RouterBuilder::new(
@@ -1429,7 +1348,6 @@ mod tests {
             &SIGNED_BODY_AUTHENTICATED,
             catalog_post(|| async {}).layer(axum::Extension("self-signed-payload")),
         );
-
         let errors = builder
             .finish()
             .expect_err("arbitrary middleware or a payload self-signature is not a witness");
@@ -1441,7 +1359,6 @@ mod tests {
                 actual: AuthenticationPolicy::ToriiDefault,
             }
         )));
-
         let mut builder = RouterBuilder::new(
             (),
             RouteCatalog::new(&[SIGNED_BODY_AUTHENTICATED]),
@@ -1453,11 +1370,10 @@ mod tests {
             catalog_post(|| async {})
                 .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
-        builder
+        let _ = builder
             .finish()
             .expect("the reviewed canonical signed-body witness must mount");
     }
-
     #[test]
     fn manifest_conditional_content_witness_matches_only_its_catalog_policy() {
         let mut builder = RouterBuilder::new(
@@ -1471,67 +1387,11 @@ mod tests {
             catalog_get(|| async {})
                 .authenticated_in_handler(HandlerAuthentication::ManifestConditionalContent),
         );
-
         let (_, manifest) = builder
             .finish()
             .expect("manifest-conditional content witness must mount");
         assert_eq!(manifest.explicit_routes(), &[MANIFEST_CONDITIONAL_CONTENT]);
     }
-
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn required_api_token_type_state_installs_an_unconditional_guard() {
-        let mut app = crate::mk_app_state_for_tests();
-        let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
-        state.require_api_token = false;
-        state.api_tokens_set = Arc::new(std::collections::HashSet::from([
-            "route-specific-token".to_owned()
-        ]));
-        let mut builder = RouterBuilder::new(
-            app.clone(),
-            RouteCatalog::new(&[API_TOKEN_REQUIRED]),
-            EnabledFeatures::none(),
-        )
-        .expect("valid catalog");
-        builder.route(
-            &API_TOKEN_REQUIRED,
-            catalog_post(|| async { StatusCode::NO_CONTENT })
-                .authenticated_required_api_token(app.clone()),
-        );
-
-        let (router, manifest) = builder
-            .finish()
-            .expect("required API-token guard must mount");
-        assert_eq!(manifest.explicit_routes(), &[API_TOKEN_REQUIRED]);
-
-        let router = router.with_state(app);
-        let missing = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(API_TOKEN_REQUIRED.path())
-                    .body(Body::from("{malformed"))
-                    .expect("missing-token request"),
-            )
-            .await
-            .expect("missing-token response");
-        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
-
-        let accepted = router
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(API_TOKEN_REQUIRED.path())
-                    .header(crate::HEADER_API_TOKEN, "route-specific-token")
-                    .body(Body::empty())
-                    .expect("authenticated request"),
-            )
-            .await
-            .expect("authenticated response");
-        assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
-    }
-
     #[cfg(feature = "app_api")]
     #[test]
     fn proof_body_authentication_mounts_the_exact_catalog_witness() {
@@ -1547,11 +1407,10 @@ mod tests {
             catalog_post(|| async { StatusCode::NO_CONTENT })
                 .authenticated_canonical_account_proof_body(app, 1024),
         );
-        builder
+        let _ = builder
             .finish()
             .expect("proof-body authentication must satisfy the exact catalog policy");
     }
-
     #[test]
     fn wrong_handler_authentication_witness_is_rejected() {
         let mut builder =
@@ -1562,7 +1421,6 @@ mod tests {
             catalog_get(|| async {})
                 .authenticated_in_handler(HandlerAuthentication::OperatorCredentialExchange),
         );
-
         let errors = builder
             .finish()
             .expect_err("a different handler-owned policy must fail");
@@ -1575,23 +1433,19 @@ mod tests {
             }
         )));
     }
-
     #[test]
     fn special_authentication_type_state_cannot_receive_outer_middleware() {
         fn assert_layerable<T: LayerableAuthentication>() {}
-
         struct Invalid;
         trait AmbiguousIfLayerable<A> {
             fn marker() {}
         }
         impl<T: ?Sized> AmbiguousIfLayerable<()> for T {}
         impl<T: ?Sized + LayerableAuthentication> AmbiguousIfLayerable<Invalid> for T {}
-
         assert_layerable::<ToriiDefaultAuthentication>();
         assert_layerable::<UnauthenticatedRoute>();
         let _ = <SealedAuthentication as AmbiguousIfLayerable<_>>::marker;
     }
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn operator_witness_installs_signature_validation_and_replay_protection() {
@@ -1612,7 +1466,6 @@ mod tests {
         let (router, _) = builder.finish().expect("operator route must mount");
         let network_id = *app.state.network_id_ref();
         let router = router.with_state(app);
-
         let unsigned = router
             .clone()
             .oneshot(
@@ -1624,7 +1477,6 @@ mod tests {
             .await
             .expect("unsigned response");
         assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
-
         let uri = OPERATOR.path().parse::<crate::Uri>().expect("operator URI");
         let signed_headers = operator_signatures::signed_request_headers(
             &signer,
@@ -1642,7 +1494,6 @@ mod tests {
             request.headers_mut().extend(signed_headers.clone());
             request
         };
-
         let accepted = router
             .clone()
             .oneshot(signed_request())
@@ -1653,7 +1504,6 @@ mod tests {
             StatusCode::IM_A_TEAPOT,
             "pre-auth middleware may short-circuit only after operator authentication succeeds"
         );
-
         let replayed = router
             .oneshot(signed_request())
             .await

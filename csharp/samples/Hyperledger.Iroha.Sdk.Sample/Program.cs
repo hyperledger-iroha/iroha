@@ -38,12 +38,18 @@ try
         ? null
         : await client.Torii.LookupAliasesByAccountAsync(accounts.Items[0].Id);
     var faucetPuzzle = await client.Torii.GetAccountFaucetPuzzleAsync();
+    if (faucetPuzzle.NetworkId != exactNetworkId)
+    {
+        throw new InvalidOperationException(
+            $"Faucet puzzle targets {faucetPuzzle.NetworkId}, not configured network {exactNetworkId}.");
+    }
 
     Console.WriteLine($"Torii ABI version: {capabilities.AbiVersion}");
     Console.WriteLine($"Torii data model version: {capabilities.DataModelVersion}");
     Console.WriteLine($"Visible accounts in first page: {accounts.Items.Count}");
     Console.WriteLine($"Aliases on first account: {aliases?.Total ?? 0}");
     Console.WriteLine($"Faucet puzzle difficulty bits: {faucetPuzzle.DifficultyBits}");
+    Console.WriteLine($"Faucet puzzle exact network: {faucetPuzzle.NetworkId}");
 
     var transaction = client.Ledger
         .BuildTransaction(

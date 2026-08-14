@@ -2,7 +2,6 @@ use std::{
     sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
 };
-
 use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     NetworkId,
@@ -23,13 +22,11 @@ use iroha_data_model::{
 use iroha_p2p::network::{NetworkReplyRoute, NetworkReplyRouteError, NetworkReplyRouteTestFixture};
 use norito::codec::Encode as _;
 use tempfile::TempDir;
-
 use super::{
     BlockMessage, CryptoHash, FairV2IngressClass, InboundBlockMessage, LaneRelayMessage,
     fair_v2_ingress_is_certified_body_request, fair_v2_ingress_same_control_slot,
     test_sumeragi_handle, test_sumeragi_handle_with_source_geometry,
 };
-
 fn v2_message_with_bytes(index: u32, byte_len: usize) -> BlockMessage {
     BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
@@ -41,15 +38,12 @@ fn v2_message_with_bytes(index: u32, byte_len: usize) -> BlockMessage {
         }),
     ))
 }
-
 fn v2_message_with_index(index: u32) -> BlockMessage {
     v2_message_with_bytes(index, 1)
 }
-
 fn v2_message() -> BlockMessage {
     v2_auxiliary_prepare(0)
 }
-
 fn lane_block_certificate(seed: u8) -> BlockMessage {
     let validator = PeerId::new(
         KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::BlsNormal)
@@ -104,7 +98,6 @@ fn lane_block_certificate(seed: u8) -> BlockMessage {
         commit_qc,
     }))
 }
-
 fn v2_commit_certificate_request(index: u64, requester: &PeerId) -> BlockMessage {
     BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::CommitCertificateRequest(wire::CommitCertificateRequest {
@@ -119,7 +112,6 @@ fn v2_commit_certificate_request(index: u64, requester: &PeerId) -> BlockMessage
         }),
     ))
 }
-
 fn v2_certified_body_request(requester: &PeerId) -> BlockMessage {
     let BlockMessage::V2(message) = v2_vote(wire::GlobalPhase::Prepare) else {
         unreachable!("v2 vote fixture always returns a v2 envelope");
@@ -146,7 +138,6 @@ fn v2_certified_body_request(requester: &PeerId) -> BlockMessage {
         }),
     ))
 }
-
 fn v2_certified_body_request_inbound(requester: &PeerId) -> InboundBlockMessage {
     let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
     let route = routes.mint(requester.clone());
@@ -158,7 +149,6 @@ fn v2_certified_body_request_inbound(requester: &PeerId) -> InboundBlockMessage 
     )
     .expect("certified body request fixture retains its live authenticated reply route")
 }
-
 fn minimal_rs16_layout() -> wire::DataAvailabilityLayout {
     wire::DataAvailabilityLayout {
         encoding: wire::PayloadEncoding::ReedSolomon16,
@@ -169,7 +159,6 @@ fn minimal_rs16_layout() -> wire::DataAvailabilityLayout {
         max_chunk_count: 2,
     }
 }
-
 fn single_stripe_rs16_layout(body_len: usize) -> wire::DataAvailabilityLayout {
     let max_payload_size_bytes = u64::try_from(body_len.max(1)).expect("test body bound fits u64");
     let chunk_size_bytes = u32::try_from(body_len.max(1)).expect("test body bound fits u32");
@@ -185,7 +174,6 @@ fn single_stripe_rs16_layout(body_len: usize) -> wire::DataAvailabilityLayout {
         max_chunk_count: 2,
     }
 }
-
 fn v2_certified_body_response(
     request_ordinal: u64,
     responder: wire::ValidatorIndex,
@@ -223,7 +211,6 @@ fn v2_certified_body_response(
         }),
     ))
 }
-
 fn v2_maximum_certified_body_response(layout: wire::DataAvailabilityLayout) -> BlockMessage {
     let body_len =
         usize::try_from(layout.max_payload_size_bytes).expect("test payload bound fits usize");
@@ -279,7 +266,6 @@ fn v2_maximum_certified_body_response(layout: wire::DataAvailabilityLayout) -> B
         }),
     ))
 }
-
 fn v2_maximum_payload_chunk(layout: wire::DataAvailabilityLayout) -> BlockMessage {
     BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
@@ -297,7 +283,6 @@ fn v2_maximum_payload_chunk(layout: wire::DataAvailabilityLayout) -> BlockMessag
         }),
     ))
 }
-
 fn v2_commit_certificate_response(request_ordinal: u64, responder: &PeerId) -> BlockMessage {
     let BlockMessage::V2(message) = v2_vote(wire::GlobalPhase::Commit) else {
         unreachable!("v2 vote fixture always returns a v2 envelope");
@@ -326,7 +311,6 @@ fn v2_commit_certificate_response(request_ordinal: u64, responder: &PeerId) -> B
         ),
     ))
 }
-
 fn v2_vote(phase: wire::GlobalPhase) -> BlockMessage {
     let round = wire::ConsensusRound {
         context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
@@ -359,7 +343,6 @@ fn v2_vote(phase: wire::GlobalPhase) -> BlockMessage {
         }),
     ))
 }
-
 fn v2_auxiliary_prepare(index: u64) -> BlockMessage {
     let BlockMessage::V2(mut message) = v2_vote(wire::GlobalPhase::Prepare) else {
         unreachable!("v2 vote fixture always returns a v2 envelope");
@@ -372,7 +355,6 @@ fn v2_auxiliary_prepare(index: u64) -> BlockMessage {
     vote.signature = vec![u8::try_from(index).unwrap_or(u8::MAX)];
     BlockMessage::V2(message)
 }
-
 fn v2_timeout_vote() -> BlockMessage {
     BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
@@ -389,7 +371,6 @@ fn v2_timeout_vote() -> BlockMessage {
         }),
     ))
 }
-
 fn v2_timeout_certificate(view: u64) -> BlockMessage {
     BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::TimeoutCertificate(wire::TimeoutCertificate {
@@ -408,7 +389,6 @@ fn v2_timeout_certificate(view: u64) -> BlockMessage {
         }),
     ))
 }
-
 fn v2_maximum_valid_timeout_vote_wire() -> BlockMessage {
     let round = wire::ConsensusRound {
         context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
@@ -462,7 +442,6 @@ fn v2_maximum_valid_timeout_vote_wire() -> BlockMessage {
         }),
     ))
 }
-
 fn v2_maximum_structural_proposal_wire(
     layout: wire::DataAvailabilityLayout,
     roster_len: usize,
@@ -570,7 +549,6 @@ fn v2_maximum_structural_proposal_wire(
         }),
     ))
 }
-
 fn v2_maximum_recovery_wires(
     network_id: &NetworkId,
     requester: &PeerId,
@@ -632,7 +610,6 @@ fn v2_maximum_recovery_wires(
         commit_certificate_response,
     )
 }
-
 fn vote_phase(inbound: &InboundBlockMessage) -> Option<wire::GlobalPhase> {
     let BlockMessage::V2(message) = inbound.message() else {
         return None;
@@ -642,7 +619,6 @@ fn vote_phase(inbound: &InboundBlockMessage) -> Option<wire::GlobalPhase> {
     };
     Some(vote.phase)
 }
-
 fn vote_height(inbound: &InboundBlockMessage) -> Option<u64> {
     let BlockMessage::V2(message) = inbound.message() else {
         return None;
@@ -652,7 +628,6 @@ fn vote_height(inbound: &InboundBlockMessage) -> Option<u64> {
     };
     Some(vote.round.height)
 }
-
 fn payload_chunk_index(inbound: &InboundBlockMessage) -> Option<u32> {
     let BlockMessage::V2(message) = inbound.message() else {
         return None;
@@ -662,14 +637,12 @@ fn payload_chunk_index(inbound: &InboundBlockMessage) -> Option<u32> {
     };
     Some(chunk.index)
 }
-
 fn encoded_v2_len(message: &BlockMessage) -> usize {
     let BlockMessage::V2(message) = message else {
         panic!("test fixture must be a v2 envelope");
     };
     message.encode().len()
 }
-
 fn bind_test_leader_wire_gate(
     ingress: &Arc<super::FairV2Ingress>,
     validator: &PeerId,
@@ -682,7 +655,6 @@ fn bind_test_leader_wire_gate(
         .expect("one-validator fair-ingress geometry");
     ingress.require_leader_wire_lifecycle_gate();
     ingress.state.lock().leader_wire_max_chunk_count = max_chunk_count;
-
     let directory = TempDir::new().expect("temporary leader-wire directory");
     let wal_path = directory.path().join("safety.wal");
     let owner = [0xA6; 32];
@@ -725,7 +697,6 @@ fn bind_test_leader_wire_gate(
     ingress.open().expect("open bound fair ingress");
     directory
 }
-
 #[derive(Clone, Copy, Debug)]
 enum RestoredLeaderWireCut {
     Reserved,
@@ -733,7 +704,6 @@ enum RestoredLeaderWireCut {
     Runtime,
     Volatile,
 }
-
 struct RestoredLeaderWireFixture {
     _directory: TempDir,
     ingress: Arc<super::FairV2Ingress>,
@@ -744,7 +714,6 @@ struct RestoredLeaderWireFixture {
     token: super::FairV2IngressLeaderWireToken,
     runtime_owner: Option<super::serviced_candidate_store::LeaderWireRuntimeOwner>,
 }
-
 fn restored_leader_wire_fixture(cut: RestoredLeaderWireCut) -> RestoredLeaderWireFixture {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
     ingress.close();
@@ -755,7 +724,6 @@ fn restored_leader_wire_fixture(cut: RestoredLeaderWireCut) -> RestoredLeaderWir
         .expect("two-validator fair-ingress geometry");
     ingress.require_leader_wire_lifecycle_gate();
     ingress.state.lock().leader_wire_max_chunk_count = 2;
-
     let layout = minimal_rs16_layout();
     let message = v2_maximum_structural_proposal_wire(layout, 1);
     let BlockMessage::V2(envelope) = &message else {
@@ -780,7 +748,6 @@ fn restored_leader_wire_fixture(cut: RestoredLeaderWireCut) -> RestoredLeaderWir
         admission_ordinal: 7,
         scheduler_ordinal: 41,
     };
-
     let directory = TempDir::new().expect("temporary leader-wire restart directory");
     let wal_path = directory.path().join("safety.wal");
     let owner = [0xA7; 32];
@@ -843,7 +810,6 @@ fn restored_leader_wire_fixture(cut: RestoredLeaderWireCut) -> RestoredLeaderWir
         }
     }
     drop(gate);
-
     let recovery_authority =
         super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
             round.context_id,
@@ -895,7 +861,6 @@ fn restored_leader_wire_fixture(cut: RestoredLeaderWireCut) -> RestoredLeaderWir
             .values()
             .all(|record| record.status == super::FairV2IngressLeaderWireStatus::Dormant)
     );
-
     RestoredLeaderWireFixture {
         _directory: directory,
         ingress,

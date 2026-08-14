@@ -1,7 +1,5 @@
 //! Production supervision for finalized reserve-event transparency ingestion.
-
 use std::{sync::Arc, time::Duration};
-
 use eyre::{Result, bail};
 use iroha_config::parameters::actual::SorafsReserveTransparencyRuntime;
 use iroha_core::state::{State, WorldStateSnapshot as _};
@@ -16,13 +14,10 @@ use sorafs_node::{
         ReserveTransparencyScannerV1, ReserveTransparencySourceSinkV1,
     },
 };
-
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
-
 struct StateReserveTransparencyCommittedProjectionV1 {
     state: Arc<State>,
 }
-
 impl ReserveTransparencyCommittedProjectionV1 for StateReserveTransparencyCommittedProjectionV1 {
     fn verify_committed_anchors(
         &self,
@@ -55,7 +50,6 @@ impl ReserveTransparencyCommittedProjectionV1 for StateReserveTransparencyCommit
         })
     }
 }
-
 fn committed_anchors_match(
     expected: &[ReserveFinalizedCursorV1],
     mut hash_at: impl FnMut(usize) -> Option<[u8; 32]>,
@@ -69,7 +63,6 @@ fn committed_anchors_match(
                 .is_some_and(|hash| hash == cursor.block_hash)
     })
 }
-
 /// Assemble and start the bounded reserve transparency scanner.
 ///
 /// # Errors
@@ -163,20 +156,16 @@ pub(crate) fn start(
     });
     Ok(Child::new(task, OnShutdown::Wait(SHUTDOWN_WAIT)))
 }
-
 fn next_retry_delay(current: Duration, base: Duration, maximum: Duration) -> Duration {
     if current < base {
         return base.min(maximum);
     }
     current.saturating_mul(2).min(maximum)
 }
-
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-
     use super::*;
-
     #[test]
     fn committed_anchor_match_is_exact_and_height_bounded() {
         let hashes = [[0x11; 32], [0x22; 32], [0x33; 32]];
@@ -217,7 +206,6 @@ mod tests {
             |index| hashes.get(index).copied()
         ));
     }
-
     #[test]
     fn retry_delay_is_exponential_and_bounded() {
         let base = Duration::from_millis(100);

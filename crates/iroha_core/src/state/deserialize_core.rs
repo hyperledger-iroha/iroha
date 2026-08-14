@@ -1,16 +1,12 @@
 use std::{collections::BTreeMap, marker::PhantomData, sync::OnceLock};
-
 use norito::codec::{DecodeAll, Encode};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-
 use super::{default_oracle, *};
-
 enum SnapshotJsonField<'a> {
     Borrowed(&'a str),
     #[cfg(test)]
     Owned(json::Value),
 }
-
 impl<'a> SnapshotJsonField<'a> {
     fn decode_canonical<T>(self, field: &str) -> Result<T, json::Error>
     where
@@ -38,7 +34,6 @@ impl<'a> SnapshotJsonField<'a> {
             message: error.to_string(),
         })
     }
-
     fn into_object(self, field: &str) -> Result<SnapshotJsonMap<'a>, json::Error> {
         match self {
             Self::Borrowed(raw) => SnapshotJsonMap::parse(raw, field),
@@ -51,7 +46,6 @@ impl<'a> SnapshotJsonField<'a> {
             }),
         }
     }
-
     fn validate_sccp_registry(&self) -> Result<(), json::Error> {
         match self {
             Self::Borrowed(raw) => validate_sccp_registry_cell_json_str(raw),
@@ -64,12 +58,10 @@ impl<'a> SnapshotJsonField<'a> {
         })
     }
 }
-
 struct SnapshotJsonMap<'a> {
     fields: BTreeMap<String, SnapshotJsonField<'a>>,
     source_order: Option<Vec<String>>,
 }
-
 impl<'a> SnapshotJsonMap<'a> {
     #[cfg(test)]
     fn from_owned(map: json::native::Map) -> Self {
@@ -81,7 +73,6 @@ impl<'a> SnapshotJsonMap<'a> {
             source_order: None,
         }
     }
-
     fn parse(input: &'a str, field: &str) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(input);
         parser
@@ -153,28 +144,22 @@ impl<'a> SnapshotJsonMap<'a> {
             source_order: Some(source_order),
         })
     }
-
     fn remove(&mut self, key: &str) -> Option<SnapshotJsonField<'a>> {
         self.fields.remove(key)
     }
-
     fn get(&self, key: &str) -> Option<&SnapshotJsonField<'a>> {
         self.fields.get(key)
     }
-
     fn contains_key(&self, key: &str) -> bool {
         self.fields.contains_key(key)
     }
-
     #[cfg(test)]
     fn is_empty(&self) -> bool {
         self.fields.is_empty()
     }
-
     fn first_key(&self) -> Option<&str> {
         self.fields.keys().next().map(String::as_str)
     }
-
     fn require_source_order(&self, expected: &[&str], field: &str) -> Result<(), json::Error> {
         let Some(actual) = self.source_order.as_ref() else {
             return Ok(());
@@ -200,7 +185,6 @@ impl<'a> SnapshotJsonMap<'a> {
         }
     }
 }
-
 fn canonical_world_field_order() -> &'static [String] {
     static ORDER: OnceLock<Vec<String>> = OnceLock::new();
     ORDER.get_or_init(|| {
@@ -212,13 +196,11 @@ fn canonical_world_field_order() -> &'static [String] {
             .expect("borrowed default World JSON retains source order")
     })
 }
-
 #[derive(Clone, Copy)]
 pub struct IvmSeed<'e, T> {
     pub ivm: &'e IVM,
     _marker: PhantomData<T>,
 }
-
 impl<'e, T> IvmSeed<'e, T> {
     pub fn cast<U>(&self) -> IvmSeed<'e, U> {
         IvmSeed {
@@ -227,27 +209,23 @@ impl<'e, T> IvmSeed<'e, T> {
         }
     }
 }
-
 impl IvmSeed<'_, TriggerSet> {
     #[allow(clippy::unused_self)]
     fn parse_trigger_set(self, value: SnapshotJsonField<'_>) -> Result<TriggerSet, json::Error> {
         value.decode_canonical("triggers")
     }
 }
-
 pub struct KuraSeed {
     pub kura: Arc<Kura>,
     pub query_handle: LiveQueryStoreHandle,
     #[cfg(feature = "telemetry")]
     pub telemetry: StateTelemetry,
 }
-
 impl KuraSeed {
     #[cfg(test)]
     pub fn into_state_from_json(self, value: json::Value) -> Result<State, json::Error> {
         self.into_state_from_json_with_recovery_mode(value, true)
     }
-
     /// Decode a canonical snapshot directly from its authenticated JSON bytes.
     ///
     /// The borrowed field map retains only schema keys and raw value slices;
@@ -257,7 +235,6 @@ impl KuraSeed {
         let map = SnapshotJsonMap::parse(input, "state")?;
         self.into_state_from_snapshot_map(map, true)
     }
-
     /// Decode a State without loading, promoting, truncating, or otherwise
     /// recovering any durable Kura-adjacent journal.
     ///
@@ -272,7 +249,6 @@ impl KuraSeed {
         let map = SnapshotJsonMap::parse(input, "state")?;
         self.into_state_from_snapshot_map(map, false)
     }
-
     #[cfg(test)]
     fn into_state_from_json_with_recovery_mode(
         self,
@@ -287,7 +263,6 @@ impl KuraSeed {
         };
         self.into_state_from_snapshot_map(SnapshotJsonMap::from_owned(map), allow_durable_recovery)
     }
-
     fn into_state_from_snapshot_map(
         self,
         mut map: SnapshotJsonMap<'_>,
@@ -330,7 +305,6 @@ impl KuraSeed {
             WITHOUT_BOOTSTRAP
         };
         map.require_source_order(expected_order, "state")?;
-
         let world_value = map
             .remove("world")
             .ok_or_else(|| json::Error::missing_field("world"))?;
@@ -358,7 +332,6 @@ impl KuraSeed {
             take_required(&mut map, "space_directory_manifests")?;
         let snapshot_nexus_runtime: SnapshotNexusRuntime =
             take_required(&mut map, "nexus_runtime")?;
-
         let chain_id: ChainId = take_required(&mut map, "chain_id")?;
         let network_id: NetworkId = take_required(&mut map, "network_id")?;
         let block_hashes_vec: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
@@ -398,9 +371,7 @@ impl KuraSeed {
         let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
         let snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord> =
             take_optional(&mut map, "sumeragi_v2_bootstrap")?;
-
         reject_unknown(&map, "state")?;
-
         crate::smartcontracts::code::rebuild_contract_subject_addresses(&mut world).map_err(
             |message| json::Error::InvalidField {
                 field: "contract_subject_bindings".into(),
@@ -413,7 +384,6 @@ impl KuraSeed {
                 message,
             },
         )?;
-
         let public_lane_validator_records =
             decode_public_lane_validator_records(public_lane_validators)?;
         let public_lane_stake_share_records =
@@ -453,7 +423,6 @@ impl KuraSeed {
             "space_directory_manifests",
             |record| record.uaid,
         )?;
-
         world.public_lane_validators = public_lane_validator_records
             .into_iter()
             .map(|record| ((record.lane_id, record.validator.clone()), record))
@@ -486,14 +455,12 @@ impl KuraSeed {
             .collect();
         world.space_directory_manifests =
             decode_space_directory_manifest_sets(space_directory_manifests)?;
-
         world
             .validate_quantity_ledger_invariants()
             .map_err(|message| json::Error::InvalidField {
                 field: "state.world.numeric_ledgers".to_owned(),
                 message,
             })?;
-
         let state = build_state(
             BuildStateInputs {
                 world,
@@ -532,7 +499,6 @@ impl KuraSeed {
         Ok(state)
     }
 }
-
 fn validate_restored_commit_qcs(state: &State) -> Result<(), json::Error> {
     let block_hashes = state.block_hashes.view();
     let commit_qcs = state.world.commit_qcs.view();
@@ -557,7 +523,6 @@ fn validate_restored_commit_qcs(state: &State) -> Result<(), json::Error> {
     }
     Ok(())
 }
-
 fn nexus_from_snapshot_runtime(
     runtime: SnapshotNexusRuntime,
     committed_block_hashes: &[HashOf<BlockHeader>],
@@ -750,7 +715,6 @@ fn nexus_from_snapshot_runtime(
             ),
         });
     }
-
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
     nexus.lane_catalog = catalog;
@@ -769,7 +733,6 @@ fn nexus_from_snapshot_runtime(
         autoscale_sample_history,
     ))
 }
-
 fn validate_snapshot_autoscale_sample_history(
     runtime: &SnapshotNexusRuntime,
     committed_block_hashes: &[HashOf<BlockHeader>],
@@ -831,7 +794,6 @@ fn validate_snapshot_autoscale_sample_history(
             message: "history must retain the latest committed block".to_owned(),
         });
     }
-
     let committed_height =
         u64::try_from(committed_block_hashes.len()).map_err(|_| json::Error::InvalidField {
             field: field.to_owned(),
@@ -853,7 +815,6 @@ fn validate_snapshot_autoscale_sample_history(
             message: "history contains a zero block height".to_owned(),
         });
     }
-
     let mut previous_timestamp = None;
     for (index, record) in history.iter().enumerate() {
         let offset = u64::try_from(index).map_err(|_| json::Error::InvalidField {
@@ -917,10 +878,8 @@ fn validate_snapshot_autoscale_sample_history(
         }
         previous_timestamp = Some(record.creation_time_ms);
     }
-
     Ok(history.iter().copied().collect())
 }
-
 fn decode_snapshot_records<T>(
     records: Vec<SnapshotNoritoBlob>,
     field: &str,
@@ -952,7 +911,6 @@ where
         })
         .collect()
 }
-
 fn validate_canonical_snapshot_record_order<T, K>(
     records: &[T],
     field: &str,
@@ -979,7 +937,6 @@ where
     }
     Ok(())
 }
-
 fn decode_public_lane_validator_records(
     records: Vec<SnapshotNoritoBlob>,
 ) -> Result<Vec<PublicLaneValidatorRecord>, json::Error> {
@@ -1006,7 +963,6 @@ fn decode_public_lane_validator_records(
     }
     Ok(decoded)
 }
-
 fn decode_public_lane_stake_share_records(
     records: Vec<SnapshotNoritoBlob>,
 ) -> Result<Vec<PublicLaneStakeShare>, json::Error> {
@@ -1033,7 +989,6 @@ fn decode_public_lane_stake_share_records(
     }
     Ok(decoded)
 }
-
 fn decode_space_directory_manifest_sets(
     records: Vec<SnapshotSpaceDirectoryManifestSet>,
 ) -> Result<Storage<UniversalAccountId, SpaceDirectoryManifestSet>, json::Error> {
@@ -1065,7 +1020,6 @@ fn decode_space_directory_manifest_sets(
     }
     Ok(storage)
 }
-
 fn take_required<T>(map: &mut SnapshotJsonMap<'_>, key: &str) -> Result<T, json::Error>
 where
     T: JsonDeserialize + JsonSerialize,
@@ -1075,7 +1029,6 @@ where
         .ok_or_else(|| json::Error::missing_field(key))?;
     value.decode_canonical(key)
 }
-
 fn take_optional<T>(map: &mut SnapshotJsonMap<'_>, key: &str) -> Result<Option<T>, json::Error>
 where
     T: JsonDeserialize + JsonSerialize,
@@ -1084,7 +1037,6 @@ where
         .map(|value| value.decode_canonical(key))
         .transpose()
 }
-
 fn take_optional_default<T>(map: &mut SnapshotJsonMap<'_>, key: &str) -> Result<T, json::Error>
 where
     T: JsonDeserialize + JsonSerialize + Default,
@@ -1092,7 +1044,6 @@ where
     map.remove(key)
         .map_or_else(|| Ok(T::default()), |value| value.decode_canonical(key))
 }
-
 fn take_musubi_namespace_bindings(
     map: &mut SnapshotJsonMap<'_>,
 ) -> Result<Storage<MusubiNamespaceV1, MusubiNamespaceBindingV1>, json::Error> {
@@ -1117,7 +1068,6 @@ fn take_musubi_namespace_bindings(
     }
     Ok(bindings)
 }
-
 fn take_musubi_domain_ownership_generations(
     map: &mut SnapshotJsonMap<'_>,
 ) -> Result<Storage<DomainId, u64>, json::Error> {
@@ -1135,7 +1085,6 @@ fn take_musubi_domain_ownership_generations(
     }
     Ok(generations)
 }
-
 fn take_musubi_registry_policy(
     map: &mut SnapshotJsonMap<'_>,
 ) -> Result<Cell<MusubiRegistryPolicyV1>, json::Error> {
@@ -1150,7 +1099,6 @@ fn take_musubi_registry_policy(
         })?;
     Ok(policy)
 }
-
 fn take_musubi_resolver_index_revision(
     map: &mut SnapshotJsonMap<'_>,
 ) -> Result<Cell<MusubiResolverIndexRevisionV1>, json::Error> {
@@ -1164,19 +1112,16 @@ fn take_musubi_resolver_index_revision(
     }
     Ok(revision)
 }
-
 fn take_musubi_resolver_index_checkpoints(
     map: &mut SnapshotJsonMap<'_>,
 ) -> Result<Storage<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>, json::Error> {
     take_required(map, "musubi_resolver_index_checkpoints")
 }
-
 fn take_musubi_replication_shortfall_releases(
     map: &mut SnapshotJsonMap<'_>,
 ) -> Result<Cell<u64>, json::Error> {
     take_required(map, "musubi_replication_shortfall_releases")
 }
-
 fn validate_provider_ingest_completion_authorities(
     provider_owners: &Storage<ProviderId, AccountId>,
     authorities: &Storage<ProviderId, ProviderIngestCompletionAuthorityV1>,
@@ -1195,7 +1140,6 @@ fn validate_provider_ingest_completion_authorities(
     }
     Ok(())
 }
-
 pub(super) fn validate_ram_lfe_program_policies(
     policies: &Storage<RamLfeProgramId, RamLfeProgramPolicy>,
 ) -> Result<(), json::Error> {
@@ -1209,7 +1153,6 @@ pub(super) fn validate_ram_lfe_program_policies(
     }
     Ok(())
 }
-
 fn validate_sccp_inbound_messages(
     messages: &Storage<SccpInboundMessageKeyV1, SccpInboundMessageRecordV1>,
 ) -> Result<(), json::Error> {
@@ -1235,7 +1178,6 @@ fn validate_sccp_inbound_messages(
     }
     Ok(())
 }
-
 fn validate_sccp_outbound_pending_messages(
     messages: &Storage<SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1>,
 ) -> Result<(), json::Error> {
@@ -1249,7 +1191,6 @@ fn validate_sccp_outbound_pending_messages(
     }
     Ok(())
 }
-
 fn validate_sccp_outbound_pending_usage(
     messages: &Storage<SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1>,
     usage: &Cell<SccpOutboundPendingUsageV1>,
@@ -1274,7 +1215,6 @@ fn validate_sccp_outbound_pending_usage(
     }
     Ok(())
 }
-
 fn validate_sccp_outbound_proofs(
     proofs: &Storage<SccpOutboundMessageKeyV1, SccpOutboundProofRecordV1>,
     locator: &Storage<[u8; 32], SccpOutboundMessageKeyV1>,
@@ -1296,7 +1236,6 @@ fn validate_sccp_outbound_proofs(
     }
     Ok(())
 }
-
 fn validate_sccp_outbound_indexes(
     pending: &Storage<SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1>,
     terminal: &Storage<SccpOutboundMessageKeyV1, SccpOutboundProofRecordV1>,
@@ -1440,27 +1379,23 @@ fn validate_sccp_outbound_indexes(
     }
     Ok(())
 }
-
 fn take_ram_lfe_program_policies(
     map: &mut SnapshotJsonMap<'_>,
 ) -> Result<Storage<RamLfeProgramId, RamLfeProgramPolicy>, json::Error> {
     take_required(map, "ram_lfe_program_policies")
 }
-
 fn take_parameters_cell(
     map: &mut SnapshotJsonMap<'_>,
     key: &str,
 ) -> Result<Cell<Parameters>, json::Error> {
     take_required(map, key)
 }
-
 fn take_topology_cell(
     map: &mut SnapshotJsonMap<'_>,
     key: &str,
 ) -> Result<Cell<Vec<PeerId>>, json::Error> {
     take_required(map, key)
 }
-
 fn reject_legacy_musubi_state(
     smart_contract_state: &Storage<StatePath, Vec<u8>>,
 ) -> Result<(), json::Error> {
@@ -1478,7 +1413,6 @@ fn reject_legacy_musubi_state(
     }
     Ok(())
 }
-
 fn is_legacy_musubi_state_path(path: &str) -> bool {
     path == "musubi"
         || path.starts_with("musubi_")
@@ -1486,7 +1420,6 @@ fn is_legacy_musubi_state_path(path: &str) -> bool {
         || path.starts_with("musubi.")
         || path.starts_with("musubi:")
 }
-
 #[allow(clippy::too_many_lines)]
 pub(crate) fn validate_musubi_location_reverse_indices(
     archives: &Storage<ArchiveId, MusubiArchiveRecordV1>,
@@ -1508,7 +1441,6 @@ pub(crate) fn validate_musubi_location_reverse_indices(
     let by_pin = by_pin.view();
     let by_order = by_order.view();
     let by_provider = by_provider.view();
-
     for (order, record) in replication_orders.iter() {
         let reference = by_order.get(order);
         match (record.musubi_archive, reference) {
@@ -1533,7 +1465,6 @@ pub(crate) fn validate_musubi_location_reverse_indices(
             }
         }
     }
-
     for (digest, reference) in by_pin.iter() {
         reference
             .validate()
@@ -1730,14 +1661,12 @@ pub(crate) fn validate_musubi_location_reverse_indices(
     }
     Ok(())
 }
-
 fn invalid_musubi_state(field: &str, message: impl Into<String>) -> json::Error {
     json::Error::InvalidField {
         field: format!("world.{field}"),
         message: message.into(),
     }
 }
-
 fn validate_musubi_resolver_checkpoint_structure(
     checkpoints: &Storage<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>,
     current_revision: u64,
@@ -1778,7 +1707,6 @@ fn validate_musubi_resolver_checkpoint_structure(
     }
     Ok(())
 }
-
 fn validate_musubi_resolver_checkpoint_anchors(
     world: &World,
     block_hashes: &[HashOf<BlockHeader>],
@@ -1788,7 +1716,6 @@ fn validate_musubi_resolver_checkpoint_anchors(
         &world.musubi_resolver_index_checkpoints,
         current_revision,
     )?;
-
     let checkpoints = world.musubi_resolver_index_checkpoints.view();
     let history_is_empty = checkpoints.is_empty();
     if block_hashes.is_empty() {

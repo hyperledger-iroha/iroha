@@ -1,10 +1,5 @@
 //! Trace commitment regression tests built from Norito fixtures.
-
-use std::{
-    fmt::Write as _,
-    path::{Path, PathBuf},
-};
-
+use crate::common::{fixture_update_requested, fixture_update_requested_from};
 use fastpq_isi::CANONICAL_PARAMETER_SETS;
 use fastpq_prover::{
     OperationKind, PublicInputs, StateTransition, TransitionBatch,
@@ -19,17 +14,16 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{decode_from_bytes, json, to_bytes};
-
-use crate::common::{fixture_update_requested, fixture_update_requested_from};
-
+use std::{
+    fmt::Write as _,
+    path::{Path, PathBuf},
+};
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
-
 fn fixture_path(name: &str) -> PathBuf {
     fixtures_dir().join(format!("{name}.norito"))
 }
-
 fn load_fixture(name: &str) -> TransitionBatch {
     let path = fixture_path(name);
     if fixture_update_requested() {
@@ -38,7 +32,6 @@ fn load_fixture(name: &str) -> TransitionBatch {
         std::fs::write(&path, &encoded).expect("write fixture");
         return fresh;
     }
-
     let bytes = std::fs::read(&path)
         .unwrap_or_else(|error| panic!("read FASTPQ fixture {}: {error}", path.display()));
     decode_from_bytes(&bytes).unwrap_or_else(|error| {
@@ -49,7 +42,6 @@ fn load_fixture(name: &str) -> TransitionBatch {
         )
     })
 }
-
 fn build_fixture(name: &str) -> TransitionBatch {
     let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
     batch.public_inputs.dsid = [0xAA; 16];
@@ -58,7 +50,6 @@ fn build_fixture(name: &str) -> TransitionBatch {
     batch.public_inputs.new_root = [0x22; 32];
     batch.public_inputs.perm_root = [0x33; 32];
     batch.public_inputs.tx_set_hash = [0x44; 32];
-
     match name {
         "transfer" => {
             let mut transcripts = vec![sample_transfer_transcript()];
@@ -105,15 +96,12 @@ fn build_fixture(name: &str) -> TransitionBatch {
         }
         other => panic!("unknown fixture {other}"),
     }
-
     batch.sort();
     batch
 }
-
 fn u64_bytes(value: u64) -> Vec<u8> {
     value.to_le_bytes().to_vec()
 }
-
 fn sample_transfer_transcript() -> TransferTranscript {
     let asset_definition = AssetDefinitionId::derive_from_components(
         DomainId::try_new("fixture", "universal").unwrap(),
@@ -140,7 +128,6 @@ fn sample_transfer_transcript() -> TransferTranscript {
         poseidon_preimage_digest: Some(digest),
     }
 }
-
 fn sample_transfer_transitions(transcript: &TransferTranscript) -> Vec<StateTransition> {
     transcript
         .deltas
@@ -162,7 +149,6 @@ fn sample_transfer_transitions(transcript: &TransferTranscript) -> Vec<StateTran
         })
         .collect()
 }
-
 fn numeric_to_bytes(value: &Quantity) -> Vec<u8> {
     let amount: u64 = value
         .as_numeric()
@@ -171,7 +157,6 @@ fn numeric_to_bytes(value: &Quantity) -> Vec<u8> {
         .expect("quantity fits u64");
     amount.to_le_bytes().to_vec()
 }
-
 fn bytes_to_hex(bytes: &[u8]) -> String {
     let mut result = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -179,11 +164,9 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
     }
     result
 }
-
 fn load_ordering_expectations() -> Vec<(String, String)> {
     let path = fixtures_dir().join("ordering_hash.json");
     let update = fixture_update_requested();
-
     if update {
         let mut map = json::native::Map::new();
         for name in ["transfer", "mint", "burn"] {
@@ -196,7 +179,6 @@ fn load_ordering_expectations() -> Vec<(String, String)> {
         let json_text = json::to_json_pretty(&value).expect("serialize ordering_hash.json");
         std::fs::write(&path, json_text).expect("write ordering_hash.json");
     }
-
     let bytes = std::fs::read(&path).expect("read ordering_hash.json");
     let value: json::Value = json::from_slice(&bytes).expect("parse ordering_hash.json");
     let object = value
@@ -214,7 +196,6 @@ fn load_ordering_expectations() -> Vec<(String, String)> {
     entries.sort_by(|(a, _), (b, _)| a.cmp(b));
     entries
 }
-
 fn assert_fixture_semantics_eq(name: &str, actual: &TransitionBatch, expected: &TransitionBatch) {
     assert_eq!(actual.parameter, expected.parameter, "{name} parameter");
     assert_eq!(
@@ -248,32 +229,26 @@ fn assert_fixture_semantics_eq(name: &str, actual: &TransitionBatch, expected: &
         );
     }
 }
-
 #[test]
 fn fixture_update_gate_requires_exact_one() {
     use std::ffi::OsStr;
-
     assert_eq!(fixture_update_requested_from(None), Ok(false));
     assert_eq!(
         fixture_update_requested_from(Some(OsStr::new("1"))),
         Ok(true)
     );
-
     for invalid in ["", "0", "true", " 1", "1 ", "01", "1\n"] {
         assert!(
             fixture_update_requested_from(Some(OsStr::new(invalid))).is_err(),
             "unexpectedly accepted FASTPQ_UPDATE_FIXTURES={invalid:?}"
         );
     }
-
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt as _;
-
         assert!(fixture_update_requested_from(Some(OsStr::from_bytes(b"1\xff"))).is_err());
     }
 }
-
 #[test]
 fn fixtures_roundtrip_via_norito() {
     for name in ["transfer", "mint", "burn"] {
@@ -287,7 +262,6 @@ fn fixtures_roundtrip_via_norito() {
         );
     }
 }
-
 #[test]
 fn ordering_hash_matches_golden_vectors() {
     for (name, expected_hex) in load_ordering_expectations() {
@@ -302,7 +276,6 @@ fn ordering_hash_matches_golden_vectors() {
         assert_eq!(actual_hex, expected_hex, "ordering hash {name}");
     }
 }
-
 #[test]
 fn trace_commitment_matches_golden_vectors() {
     let params = CANONICAL_PARAMETER_SETS

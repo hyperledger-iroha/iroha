@@ -1,8 +1,5 @@
 //! Viral incentive contract flows (SOC-2): follow rewards, escrows, caps, and governance controls.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
-use std::num::NonZeroU64;
-
 use iroha_config::parameters::{actual::ViralIncentives, defaults};
 use iroha_core::{
     kura::Kura,
@@ -34,13 +31,12 @@ use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use norito::codec::Encode;
-
+use std::num::NonZeroU64;
 fn oracle_config() -> iroha_config::parameters::actual::Oracle {
     use iroha_config::parameters::actual::{
         Oracle as OracleConfig, OracleChangeThresholds, OracleEconomics, OracleGovernance,
         OracleTwitterBinding,
     };
-
     OracleConfig {
         history_depth: nonzero!(4_usize),
         economics: OracleEconomics {
@@ -87,10 +83,8 @@ fn oracle_config() -> iroha_config::parameters::actual::Oracle {
         },
     }
 }
-
 fn feed_config(feed_id: FeedId, providers: Vec<AccountId>) -> FeedConfig {
     use iroha_data_model::oracle::{AggregationRule, OutlierPolicy, RiskClass};
-
     FeedConfig {
         feed_id,
         feed_config_version: FeedConfigVersion(1),
@@ -110,7 +104,6 @@ fn feed_config(feed_id: FeedId, providers: Vec<AccountId>) -> FeedConfig {
         replay_window_slots: nonzero!(2_u64),
     }
 }
-
 fn twitter_binding_attestation(
     feed: &FeedConfig,
     uaid: &UniversalAccountId,
@@ -131,11 +124,9 @@ fn twitter_binding_attestation(
         feed_config_version: feed.feed_config_version,
     }
 }
-
 fn checked_signature_of<T: Encode>(private_key: &PrivateKey, payload: &T) -> SignatureOf<T> {
     SignatureOf::try_new(private_key, payload).expect("test fixture signing should succeed")
 }
-
 fn twitter_binding_observation(
     provider: &AccountId,
     signer: &KeyPair,
@@ -156,7 +147,6 @@ fn twitter_binding_observation(
     let signature = checked_signature_of(signer.private_key(), &body);
     Observation { body, signature }
 }
-
 fn grant_permission(world: &mut World, account: &AccountId, permission: impl Into<Permission>) {
     let permission = permission.into();
     let mut permissions = {
@@ -168,10 +158,8 @@ fn grant_permission(world: &mut World, account: &AccountId, permission: impl Int
         .account_permissions_mut_for_testing()
         .insert(account.clone(), permissions);
 }
-
 fn grant_oracle_operator_permissions(world: &mut World, account: &AccountId) {
     use iroha_data_model::oracle::OracleChangeStage;
-
     grant_permission(world, account, oracle_permission::CanRegisterOracleFeed);
     grant_permission(world, account, oracle_permission::CanProposeOracleChange);
     grant_permission(world, account, oracle_permission::CanRollbackOracleChange);
@@ -192,7 +180,6 @@ fn grant_oracle_operator_permissions(world: &mut World, account: &AccountId) {
         );
     }
 }
-
 fn social_world_with_provider(
     def_id: &AssetDefinitionId,
     uaid: UniversalAccountId,
@@ -200,7 +187,6 @@ fn social_world_with_provider(
 ) -> World {
     social_world_with_owner(def_id, uaid, provider, &ALICE_ID)
 }
-
 fn social_world_with_owner(
     def_id: &AssetDefinitionId,
     uaid: UniversalAccountId,
@@ -208,7 +194,6 @@ fn social_world_with_owner(
     uaid_owner: &AccountId,
 ) -> World {
     use iroha_data_model::account::Account;
-
     let oracle_reward_asset = defaults::oracle::reward_asset();
     let oracle_reward_pool = defaults::oracle::reward_pool();
     let oracle_slash_receiver = defaults::oracle::slash_receiver();
@@ -217,11 +202,9 @@ fn social_world_with_owner(
     let wonderland_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     let validators_id: DomainId = DomainId::try_new("validators", "universal").expect("domain");
     let sora_id: DomainId = DomainId::try_new("sora", "universal").expect("domain");
-
     let wonderland: Domain = Domain::new(wonderland_id.clone()).build(&alice);
     let validators: Domain = Domain::new(validators_id.clone()).build(provider);
     let sora: Domain = Domain::new(sora_id.clone()).build(&alice);
-
     let alice_account = {
         let mut builder = Account::new(alice.clone());
         if uaid_owner == &alice {
@@ -245,7 +228,6 @@ fn social_world_with_owner(
     };
     let oracle_reward_pool_account = Account::new(oracle_reward_pool.clone()).build(&alice);
     let oracle_slash_receiver_account = Account::new(oracle_slash_receiver.clone()).build(&alice);
-
     let asset_def = AssetDefinition::numeric(
         def_id.clone(),
         "xor".to_owned(),
@@ -276,7 +258,6 @@ fn social_world_with_owner(
         AssetId::new(oracle_reward_asset.clone(), oracle_slash_receiver),
         Quantity::zero(),
     );
-
     let mut world = World::with_assets(
         [wonderland, validators, sora],
         [
@@ -298,14 +279,12 @@ fn social_world_with_owner(
     grant_oracle_operator_permissions(&mut world, provider);
     world
 }
-
 #[derive(Clone, Copy)]
 struct BindingCtx<'a> {
     binding_hash: &'a KeyedHash,
     slot: u64,
     observed_at_ms: u64,
 }
-
 fn record_binding(
     tx: &mut StateTransaction<'_, '_>,
     feed_cfg: &FeedConfig,
@@ -326,7 +305,6 @@ fn record_binding(
     }
     .execute(provider, tx)
     .expect("submit twitter binding observation");
-
     AggregateOracleFeed {
         feed_id: feed_cfg.feed_id.clone(),
         slot: attestation.slot,
@@ -335,7 +313,6 @@ fn record_binding(
     }
     .execute(provider, tx)
     .expect("aggregate twitter binding slot");
-
     RecordTwitterBinding {
         attestation,
         feed_id: feed_cfg.feed_id.clone(),
@@ -343,7 +320,6 @@ fn record_binding(
     .execute(provider, tx)
     .expect("record twitter binding");
 }
-
 fn setup_viral_state(
     def_id: &AssetDefinitionId,
     uaid: UniversalAccountId,
@@ -351,7 +327,6 @@ fn setup_viral_state(
 ) -> (State, AccountId, KeyPair) {
     setup_viral_state_for_owner(def_id, uaid, &ALICE_ID, configure)
 }
-
 fn setup_viral_state_for_owner(
     def_id: &AssetDefinitionId,
     uaid: UniversalAccountId,
@@ -363,17 +338,14 @@ fn setup_viral_state_for_owner(
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
-
     state.set_oracle(oracle_config());
     let mut gov_cfg = state.gov.clone();
     let mut incentives = gov_cfg.viral_incentives.clone();
     configure(&mut incentives);
     gov_cfg.viral_incentives = incentives;
     state.set_gov(gov_cfg);
-
     (state, provider, signer)
 }
-
 fn register_feed(
     tx: &mut StateTransaction<'_, '_>,
     feed_id: FeedId,
@@ -387,20 +359,16 @@ fn register_feed(
     .expect("register feed");
     feed_cfg
 }
-
 fn header(height: u64) -> BlockHeader {
     header_at(height, 0)
 }
-
 fn header_at(height: u64, creation_time_ms: u64) -> BlockHeader {
     let nonzero_height = NonZeroU64::new(height).expect("height must be non-zero");
     BlockHeader::new(nonzero_height, None, None, None, creation_time_ms, 0)
 }
-
 fn follow_feed_id() -> FeedId {
     TWITTER_FOLLOW_FEED_ID.parse().expect("feed id")
 }
-
 fn twitter_binding(label: &[u8]) -> KeyedHash {
     KeyedHash::new(
         defaults::oracle::twitter_binding_pepper_id(),
@@ -408,11 +376,9 @@ fn twitter_binding(label: &[u8]) -> KeyedHash {
         label,
     )
 }
-
 fn register_follow_feed(tx: &mut StateTransaction<'_, '_>, provider: &AccountId) -> FeedConfig {
     register_feed(tx, follow_feed_id(), provider)
 }
-
 fn record_follow_binding(
     tx: &mut StateTransaction<'_, '_>,
     feed_cfg: &FeedConfig,
@@ -423,7 +389,6 @@ fn record_follow_binding(
 ) {
     record_binding(tx, feed_cfg, uaid, ctx, provider, signer);
 }
-
 #[test]
 fn viral_reward_flow_claims_releases_escrow_and_pays_single_bonus() {
     let def_id: AssetDefinitionId =
@@ -432,7 +397,6 @@ fn viral_reward_flow_claims_releases_escrow_and_pays_single_bonus() {
             "xor".parse().unwrap(),
         );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-viral-1"));
-
     let (state, provider, signer) = setup_viral_state(&def_id, uaid, |viral| {
         viral.incentive_pool_account = (*ALICE_ID).clone();
         viral.escrow_account = (*BOB_ID).clone();
@@ -444,13 +408,10 @@ fn viral_reward_flow_claims_releases_escrow_and_pays_single_bonus() {
         viral.daily_budget = Quantity::from(150_u32);
         viral.campaign_cap = Quantity::from(1_000_u32);
     });
-
     let binding_hash = twitter_binding(b"user-viral");
-
     let mut block = state.block(header(1));
     let mut tx = block.transaction();
     let feed_cfg = register_follow_feed(&mut tx, &provider);
-
     // Before binding is claimed, send funds to Twitter (escrow path) and record binding.
     SendToTwitter {
         binding_hash: binding_hash.clone(),
@@ -458,7 +419,6 @@ fn viral_reward_flow_claims_releases_escrow_and_pays_single_bonus() {
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("send to twitter should create escrow");
-
     let escrow_key = binding_hash.digest;
     record_follow_binding(
         &mut tx,
@@ -472,14 +432,12 @@ fn viral_reward_flow_claims_releases_escrow_and_pays_single_bonus() {
         &provider,
         &signer,
     );
-
     // Claim follow reward: should pay reward, release escrow, and pay a one-time bonus.
     ClaimTwitterFollowReward {
         binding_hash: binding_hash.clone(),
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("claim twitter follow reward");
-
     assert!(tx.world.viral_escrows().get(&escrow_key).is_none());
     assert!(
         tx.world
@@ -494,7 +452,6 @@ fn viral_reward_flow_claims_releases_escrow_and_pays_single_bonus() {
         Quantity::from(150_u32),
         "budget spent must equal follow reward + bonus"
     );
-
     let daily_counter = tx
         .world
         .viral_daily_counters()
@@ -505,7 +462,6 @@ fn viral_reward_flow_claims_releases_escrow_and_pays_single_bonus() {
         daily_counter.claims, 1,
         "one reward claim should be recorded for UAID"
     );
-
     let binding_claims = tx
         .world
         .viral_binding_claims()
@@ -513,7 +469,6 @@ fn viral_reward_flow_claims_releases_escrow_and_pays_single_bonus() {
         .copied()
         .unwrap_or(0);
     assert_eq!(binding_claims, 1, "binding claim count must be 1");
-
     // Second send to Twitter for the same binding should not pay an extra bonus.
     SendToTwitter {
         binding_hash: binding_hash.clone(),
@@ -521,14 +476,12 @@ fn viral_reward_flow_claims_releases_escrow_and_pays_single_bonus() {
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("second send to twitter should succeed");
-
     let budget_after = tx.world.viral_reward_budget();
     assert_eq!(
         budget_after.spent, budget_spent,
         "budget must not increase after second send (bonus already paid)"
     );
 }
-
 #[test]
 fn viral_reward_respects_halt_and_deny_lists() {
     let def_id: AssetDefinitionId =
@@ -537,7 +490,6 @@ fn viral_reward_respects_halt_and_deny_lists() {
             "xor".parse().unwrap(),
         );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-viral-2"));
-
     let (state, provider, signer) = setup_viral_state(&def_id, uaid, |viral| {
         *viral = ViralIncentives {
             incentive_pool_account: (*ALICE_ID).clone(),
@@ -553,14 +505,10 @@ fn viral_reward_respects_halt_and_deny_lists() {
             ..ViralIncentives::default()
         };
     });
-
     let binding_hash = twitter_binding(b"user-viral-deny");
-
     let mut block = state.block(header(1));
     let mut tx = block.transaction();
-
     let feed_cfg = register_follow_feed(&mut tx, &provider);
-
     let feed_id = feed_cfg.feed_id.clone();
     let attestation = twitter_binding_attestation(&feed_cfg, &uaid, binding_hash.clone(), 8, 2_000);
     SubmitOracleObservation {
@@ -568,7 +516,6 @@ fn viral_reward_respects_halt_and_deny_lists() {
     }
     .execute(&provider, &mut tx)
     .expect("submit twitter binding observation");
-
     AggregateOracleFeed {
         feed_id: feed_id.clone(),
         slot: attestation.slot,
@@ -577,14 +524,12 @@ fn viral_reward_respects_halt_and_deny_lists() {
     }
     .execute(&provider, &mut tx)
     .expect("aggregate twitter binding slot");
-
     RecordTwitterBinding {
         attestation,
         feed_id,
     }
     .execute(&provider, &mut tx)
     .expect("record twitter binding");
-
     // With `halt = true`, any viral incentive instruction should fail fast.
     let claim_err = ClaimTwitterFollowReward {
         binding_hash: binding_hash.clone(),
@@ -595,7 +540,6 @@ fn viral_reward_respects_halt_and_deny_lists() {
         format!("{claim_err:?}").contains("halted"),
         "halt flag must prevent rewards"
     );
-
     let send_err = SendToTwitter {
         binding_hash: binding_hash.clone(),
         amount: Quantity::from(1_u32),
@@ -606,7 +550,6 @@ fn viral_reward_respects_halt_and_deny_lists() {
         format!("{send_err:?}").contains("halted"),
         "halt flag must prevent send-to-twitter"
     );
-
     let cancel_err = CancelTwitterEscrow {
         binding_hash: binding_hash.clone(),
     }
@@ -617,7 +560,6 @@ fn viral_reward_respects_halt_and_deny_lists() {
         "halt flag must prevent escrow cancellation"
     );
 }
-
 #[test]
 fn send_to_twitter_delivers_immediately_and_pays_bonus_once() {
     let def_id: AssetDefinitionId =
@@ -626,7 +568,6 @@ fn send_to_twitter_delivers_immediately_and_pays_bonus_once() {
             "xor".parse().unwrap(),
         );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-viral-send"));
-
     let (state, provider, signer) = setup_viral_state_for_owner(&def_id, uaid, &BOB_ID, |viral| {
         viral.incentive_pool_account = (*ALICE_ID).clone();
         viral.escrow_account = (*BOB_ID).clone();
@@ -638,12 +579,9 @@ fn send_to_twitter_delivers_immediately_and_pays_bonus_once() {
         viral.daily_budget = Quantity::from(50_u32);
         viral.campaign_cap = Quantity::from(100_u32);
     });
-
     let binding_hash = twitter_binding(b"user-viral-send");
-
     let mut block = state.block(header(1));
     let mut tx = block.transaction();
-
     let feed_cfg = register_follow_feed(&mut tx, &provider);
     record_follow_binding(
         &mut tx,
@@ -657,14 +595,12 @@ fn send_to_twitter_delivers_immediately_and_pays_bonus_once() {
         &provider,
         &signer,
     );
-
     SendToTwitter {
         binding_hash: binding_hash.clone(),
         amount: Quantity::from(10_u32),
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("send to twitter should pay immediately");
-
     // Second send should not pay another bonus.
     SendToTwitter {
         binding_hash: binding_hash.clone(),
@@ -672,10 +608,8 @@ fn send_to_twitter_delivers_immediately_and_pays_bonus_once() {
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("second send to twitter should also succeed");
-
     tx.apply();
     block.commit().expect("commit block");
-
     let view = state.view();
     let alice_asset_id = AssetId::new(def_id.clone(), ALICE_ID.clone());
     let bob_asset_id = AssetId::new(def_id.clone(), BOB_ID.clone());
@@ -693,7 +627,6 @@ fn send_to_twitter_delivers_immediately_and_pays_bonus_once() {
         .clone();
     assert_eq!(alice_balance.clone().into_inner(), Quantity::from(985_u64));
     assert_eq!(bob_balance.clone().into_inner(), Quantity::from(15_u64));
-
     let budget = view.world().viral_reward_budget();
     assert_eq!(
         budget.spent,
@@ -716,7 +649,6 @@ fn send_to_twitter_delivers_immediately_and_pays_bonus_once() {
         "no escrow should be stored when binding already active"
     );
 }
-
 #[test]
 fn viral_reward_enforces_daily_cap_per_uaid() {
     let def_id: AssetDefinitionId =
@@ -725,7 +657,6 @@ fn viral_reward_enforces_daily_cap_per_uaid() {
             "xor".parse().unwrap(),
         );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-viral-cap"));
-
     let (state, provider, signer) = setup_viral_state(&def_id, uaid, |viral| {
         *viral = ViralIncentives {
             incentive_pool_account: (*ALICE_ID).clone(),
@@ -739,15 +670,12 @@ fn viral_reward_enforces_daily_cap_per_uaid() {
             ..ViralIncentives::default()
         };
     });
-
     let binding_a = twitter_binding(b"user-viral-cap-a");
     let binding_b = twitter_binding(b"user-viral-cap-b");
-
     // Block 1: record both bindings and claim the first one.
     let mut block = state.block(header(1));
     let mut tx = block.transaction();
     let feed_cfg = register_follow_feed(&mut tx, &provider);
-
     record_follow_binding(
         &mut tx,
         &feed_cfg,
@@ -772,16 +700,13 @@ fn viral_reward_enforces_daily_cap_per_uaid() {
         &provider,
         &signer,
     );
-
     ClaimTwitterFollowReward {
         binding_hash: binding_a.clone(),
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("first claim should succeed");
-
     tx.apply();
     block.commit().expect("commit first block");
-
     // Block 2: second claim for the same UAID should hit the daily cap.
     let mut block = state.block(header(2));
     let mut tx = block.transaction();
@@ -794,10 +719,8 @@ fn viral_reward_enforces_daily_cap_per_uaid() {
         format!("{err:?}").contains("daily viral reward cap"),
         "daily cap must reject additional claims for the UAID"
     );
-
     tx.apply();
     block.commit().expect("commit second block");
-
     let view = state.view();
     let budget = view.world().viral_reward_budget();
     assert_eq!(
@@ -820,7 +743,6 @@ fn viral_reward_enforces_daily_cap_per_uaid() {
     assert_eq!(claims_a, 1, "first binding should record one claim");
     assert_eq!(claims_b, 0, "second binding should not be recorded");
 }
-
 #[test]
 fn viral_reward_enforces_budget_limit() {
     let def_id: AssetDefinitionId =
@@ -829,13 +751,11 @@ fn viral_reward_enforces_budget_limit() {
             "xor".parse().unwrap(),
         );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-viral-budget"));
-
     let (provider, signer) = iroha_test_samples::gen_account_in("validators");
     let world = social_world_with_provider(&def_id, uaid, &provider);
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
-
     state.set_oracle(oracle_config());
     let mut gov_cfg = state.gov.clone();
     gov_cfg.viral_incentives = ViralIncentives {
@@ -850,14 +770,12 @@ fn viral_reward_enforces_budget_limit() {
         ..ViralIncentives::default()
     };
     state.set_gov(gov_cfg);
-
     let feed_id: FeedId = TWITTER_FOLLOW_FEED_ID.parse().expect("feed id");
     let binding_hash = KeyedHash::new(
         defaults::oracle::twitter_binding_pepper_id(),
         defaults::oracle::twitter_binding_pepper_id(),
         b"user-viral-budget",
     );
-
     let mut block = state.block(header(1));
     let mut tx = block.transaction();
     let feed_cfg = feed_config(feed_id.clone(), vec![provider.clone()]);
@@ -866,7 +784,6 @@ fn viral_reward_enforces_budget_limit() {
     }
     .execute(&provider, &mut tx)
     .expect("register feed");
-
     record_binding(
         &mut tx,
         &feed_cfg,
@@ -879,7 +796,6 @@ fn viral_reward_enforces_budget_limit() {
         &provider,
         &signer,
     );
-
     let result = ClaimTwitterFollowReward {
         binding_hash: binding_hash.clone(),
     }
@@ -888,10 +804,8 @@ fn viral_reward_enforces_budget_limit() {
         result.unwrap_err().to_string().contains("budget"),
         "budget exhaustion should reject the claim"
     );
-
     tx.apply();
     block.commit().expect("commit block for budget cap check");
-
     let view = state.view();
     let budget = view.world().viral_reward_budget();
     assert_eq!(budget.spent, Quantity::zero(), "budget must stay untouched");
@@ -904,7 +818,6 @@ fn viral_reward_enforces_budget_limit() {
         .clone();
     assert_eq!(pool_balance.clone().into_inner(), Quantity::from(1_000_u64));
 }
-
 #[test]
 fn viral_promo_window_blocks_flows_outside_schedule() {
     let def_id: AssetDefinitionId =
@@ -913,13 +826,11 @@ fn viral_promo_window_blocks_flows_outside_schedule() {
             "xor".parse().unwrap(),
         );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-viral-promo"));
-
     let (provider, signer) = iroha_test_samples::gen_account_in("validators");
     let world = social_world_with_provider(&def_id, uaid, &provider);
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
-
     state.set_oracle(oracle_config());
     let mut gov_cfg = state.gov.clone();
     gov_cfg.viral_incentives.incentive_pool_account = (*ALICE_ID).clone();
@@ -932,17 +843,14 @@ fn viral_promo_window_blocks_flows_outside_schedule() {
     gov_cfg.viral_incentives.promo_starts_at_ms = Some(1_000);
     gov_cfg.viral_incentives.promo_ends_at_ms = Some(2_000);
     state.set_gov(gov_cfg);
-
     let feed_id: FeedId = TWITTER_FOLLOW_FEED_ID.parse().expect("feed id");
     let binding_hash = KeyedHash::new(
         defaults::oracle::twitter_binding_pepper_id(),
         defaults::oracle::twitter_binding_pepper_id(),
         b"user-viral-promo",
     );
-
     let mut block = state.block(header_at(1, 500));
     let mut tx = block.transaction();
-
     let feed_cfg = feed_config(feed_id.clone(), vec![provider.clone()]);
     RegisterOracleFeed {
         feed: feed_cfg.clone(),
@@ -961,7 +869,6 @@ fn viral_promo_window_blocks_flows_outside_schedule() {
         &provider,
         &signer,
     );
-
     let send_err = SendToTwitter {
         binding_hash: binding_hash.clone(),
         amount: Quantity::from(1_u32),
@@ -972,7 +879,6 @@ fn viral_promo_window_blocks_flows_outside_schedule() {
         format!("{send_err:?}").contains("promotion window"),
         "send should be gated by the promo window"
     );
-
     let claim_err = ClaimTwitterFollowReward {
         binding_hash: binding_hash.clone(),
     }
@@ -982,14 +888,12 @@ fn viral_promo_window_blocks_flows_outside_schedule() {
         format!("{claim_err:?}").contains("promotion window"),
         "claim should be gated by the promo window"
     );
-
     assert_eq!(
         tx.world.viral_campaign_budget().spent,
         Quantity::zero(),
         "campaign budget must remain untouched when the promo window blocks flows"
     );
 }
-
 #[test]
 fn viral_follow_game_flow_releases_escrow_and_bonus() {
     let def_id: AssetDefinitionId =
@@ -1003,7 +907,6 @@ fn viral_follow_game_flow_releases_escrow_and_bonus() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
-
     state.set_oracle(oracle_config());
     let mut gov_cfg = state.gov.clone();
     gov_cfg.viral_incentives.incentive_pool_account = (*ALICE_ID).clone();
@@ -1015,24 +918,20 @@ fn viral_follow_game_flow_releases_escrow_and_bonus() {
     gov_cfg.viral_incentives.max_daily_claims_per_uaid = 3;
     gov_cfg.viral_incentives.max_claims_per_binding = 1;
     state.set_gov(gov_cfg);
-
     let feed_id: FeedId = TWITTER_FOLLOW_FEED_ID.parse().expect("feed id");
     let binding_hash = KeyedHash::new(
         defaults::oracle::twitter_binding_pepper_id(),
         defaults::oracle::twitter_binding_pepper_id(),
         b"user-viral-flow",
     );
-
     let mut block = state.block(header_at(1, 1_200));
     let mut tx = block.transaction();
-
     let feed_cfg = feed_config(feed_id.clone(), vec![provider.clone()]);
     RegisterOracleFeed {
         feed: feed_cfg.clone(),
     }
     .execute(&provider, &mut tx)
     .expect("register feed");
-
     SendToTwitter {
         binding_hash: binding_hash.clone(),
         amount: Quantity::from(5_u32),
@@ -1043,7 +942,6 @@ fn viral_follow_game_flow_releases_escrow_and_bonus() {
         tx.world.viral_escrows().get(&binding_hash.digest).is_some(),
         "escrow must be recorded after send"
     );
-
     record_binding(
         &mut tx,
         &feed_cfg,
@@ -1056,13 +954,11 @@ fn viral_follow_game_flow_releases_escrow_and_bonus() {
         &provider,
         &signer,
     );
-
     ClaimTwitterFollowReward {
         binding_hash: binding_hash.clone(),
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("claim should deliver escrow and bonus");
-
     assert!(
         tx.world.viral_escrows().get(&binding_hash.digest).is_none(),
         "escrow must be cleared after claim"
@@ -1080,7 +976,6 @@ fn viral_follow_game_flow_releases_escrow_and_bonus() {
         Quantity::from(15_u32),
         "budget must include reward + bonus"
     );
-
     let replay_err = ClaimTwitterFollowReward {
         binding_hash: binding_hash.clone(),
     }
@@ -1091,7 +986,6 @@ fn viral_follow_game_flow_releases_escrow_and_bonus() {
         "replay claims must be rejected"
     );
 }
-
 #[test]
 fn viral_campaign_cap_limits_reward_and_bonus_spend() {
     let def_id: AssetDefinitionId =
@@ -1100,7 +994,6 @@ fn viral_campaign_cap_limits_reward_and_bonus_spend() {
             "xor".parse().unwrap(),
         );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-viral-cap-campaign"));
-
     let (state, provider, signer) = setup_viral_state(&def_id, uaid, |viral| {
         *viral = ViralIncentives {
             incentive_pool_account: (*ALICE_ID).clone(),
@@ -1115,13 +1008,10 @@ fn viral_campaign_cap_limits_reward_and_bonus_spend() {
             ..ViralIncentives::default()
         };
     });
-
     let binding_hash = twitter_binding(b"user-viral-cap-1");
     let binding_hash_second = twitter_binding(b"user-viral-cap-2");
-
     let mut block = state.block(header_at(1, 1_500));
     let mut tx = block.transaction();
-
     let feed_cfg = register_follow_feed(&mut tx, &provider);
     record_follow_binding(
         &mut tx,
@@ -1135,7 +1025,6 @@ fn viral_campaign_cap_limits_reward_and_bonus_spend() {
         &provider,
         &signer,
     );
-
     // Prefund escrow so the sender bonus is exercised during claim.
     SendToTwitter {
         binding_hash: binding_hash.clone(),
@@ -1143,19 +1032,16 @@ fn viral_campaign_cap_limits_reward_and_bonus_spend() {
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("send to twitter should create escrow");
-
     ClaimTwitterFollowReward {
         binding_hash: binding_hash.clone(),
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("first claim should succeed under the campaign cap");
-
     assert_eq!(
         tx.world.viral_campaign_budget().spent,
         Quantity::from(150_u32),
         "campaign budget must track reward + bonus spend"
     );
-
     // Record a second binding and confirm the campaign cap prevents another payout.
     record_follow_binding(
         &mut tx,
@@ -1169,7 +1055,6 @@ fn viral_campaign_cap_limits_reward_and_bonus_spend() {
         &provider,
         &signer,
     );
-
     let capped_err = ClaimTwitterFollowReward {
         binding_hash: binding_hash_second,
     }

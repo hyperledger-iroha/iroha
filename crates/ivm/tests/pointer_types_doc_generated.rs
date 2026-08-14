@@ -1,5 +1,4 @@
 // Verify the generated section in docs/pointer_abi.md matches the code.
-
 #[test]
 fn generated_pointer_types_section_is_up_to_date() {
     const BEGIN: &str = "<!-- BEGIN GENERATED POINTER TYPES -->";

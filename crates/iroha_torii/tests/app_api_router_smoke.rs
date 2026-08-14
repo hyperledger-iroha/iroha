@@ -4,19 +4,21 @@
 //!
 //! Builds a minimal Torii instance and checks that a couple of App API
 //! endpoints are reachable via the consolidated helper-built router.
-
 use axum::http::{Request, StatusCode, Uri, header::CONTENT_TYPE};
-use iroha_core::prelude::World;
+use std::sync::Arc;
+// use iroha_config::base::WithOrigin; // unused in this smoke test
+use iroha_core::{
+    kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
+};
+use iroha_data_model::{ChainId, peer::PeerId};
 use tower::ServiceExt as _; // for Router::oneshot
-
+// use iroha_primitives::addr::socket_addr; // unused in this smoke test
 #[path = "fixtures.rs"]
 mod fixtures;
-
 // Minimal root config for starting Kiso and wiring Torii
 fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     iroha_torii::test_utils::mk_minimal_root_cfg()
 }
-
 async fn assert_route_is_not_auth_denied(
     app: axum::Router,
     request: Request<axum::body::Body>,
@@ -29,37 +31,110 @@ async fn assert_route_is_not_auth_denied(
     );
     status
 }
-
-async fn assert_sse_route_is_not_auth_denied(app: &axum::Router, path: &str) {
-    let response = fixtures::request_get(app, path).await.unwrap();
-    assert!(!matches!(
-        response.status(),
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
-    ));
-    if response.status() == StatusCode::OK {
-        let content_type = response
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|header| header.to_str().ok())
-            .unwrap_or("");
-        assert!(content_type.contains("text/event-stream"));
-    }
-}
-
-async fn assert_get_route_is_not_auth_denied(app: &axum::Router, path: &str) -> StatusCode {
-    assert_route_is_not_auth_denied(app.clone(), fixtures::get_request(path)).await
-}
-
 #[tokio::test]
 async fn app_api_router_smoke() {
     // Start Kiso and minimal components for Torii
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = mk_minimal_root_cfg();
     cfg.torii.webhooks_enabled = true;
-    let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
-
-    let app = torii.router();
-
+    cfg.torii.operator_signatures.enabled = true;
+    cfg.torii.operator_signatures.allow_node_key = true;
+    let (kiso, _child) = KisoHandle::start(cfg.clone());
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
+    let mut world = World::default();
+    fixtures::seed_peer(&mut world, local_peer_id.clone());
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    let queue_cfg = iroha_config::parameters::actual::Queue::default();
+    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+    let queue = Arc::new(iroha_core::queue::Queue::from_config(
+        queue_cfg,
+        events_sender,
+    ));
+    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+    let _ = peers_tx;
+    let da_receipt_signer = cfg.common.key_pair.clone();
+    // Build Torii (telemetry optional)
+    let torii = {
+        #[cfg(feature = "telemetry")]
+        {
+            use iroha_core::telemetry as core_telemetry;
+            use iroha_primitives::time::TimeSource;
+            let metrics = fixtures::shared_metrics();
+            let (_mh, ts) = TimeSource::new_mock(core::time::Duration::default());
+            let telemetry = core_telemetry::start(
+                metrics,
+                state.clone(),
+                kura.clone(),
+                queue.clone(),
+                peers_rx.clone(),
+                local_peer_id,
+                ts,
+                false,
+            )
+            .0;
+            iroha_torii::Torii::new(
+                ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
+                kiso,
+                cfg.torii.clone(),
+                queue,
+                tokio::sync::broadcast::channel(1).0,
+                LiveQueryStore::start_test(),
+                kura,
+                state,
+                da_receipt_signer.clone(),
+                iroha_torii::OnlinePeersProvider::new(peers_rx),
+                telemetry,
+                true,
+            )
+        }
+        #[cfg(not(feature = "telemetry"))]
+        {
+            iroha_torii::Torii::new(
+                ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
+                kiso,
+                cfg.torii.clone(),
+                queue,
+                tokio::sync::broadcast::channel(1).0,
+                LiveQueryStore::start_test(),
+                kura,
+                state,
+                da_receipt_signer,
+                iroha_torii::OnlinePeersProvider::new(peers_rx),
+            )
+        }
+    };
+    let app = torii.api_router_for_tests();
+    for path in ["/v1/soracloud/status", "/v1/soracloud/apps/status"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .body(axum::body::Body::empty())
+                    .expect("unsigned Soracloud GET"),
+            )
+            .await
+            .expect("Soracloud auth response");
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "{path} must reject missing canonical account authentication"
+        );
+    }
+    assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .uri(Uri::from_static(
+                "/v1/soracloud/model/upload/encryption-recipient",
+            ))
+            .body(axum::body::Body::empty())
+            .expect("public Soracloud discovery GET"),
+    )
+    .await;
     // The v1 alias VOPRF-shaped hash helper was retired before release because it was
     // neither keyed nor verifiable. Every legacy request shape must remain unroutable,
     // including malformed input, a replay, cross-domain material, and wrong-key/proof fields.
@@ -77,40 +152,114 @@ async fn app_api_router_smoke() {
         ),
     ];
     for (case, body) in retired_alias_voprf_attempts {
-        let response = fixtures::request(
-            &app,
-            Request::builder()
-                .method("POST")
-                .uri("/v1/aliases/voprf/evaluate")
-                .header(CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(body))
-                .expect("legacy alias VOPRF request"),
-        )
-        .await
-        .expect("router response");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/aliases/voprf/evaluate")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from(body))
+                    .expect("legacy alias VOPRF request"),
+            )
+            .await
+            .expect("router response");
         assert_eq!(
             response.status(),
             StatusCode::NOT_FOUND,
             "retired alias VOPRF route accepted {case} request"
         );
     }
-
     // 1) App API: GET /v1/accounts/{account_id}/assets — use a bogus id to avoid
     // state setup; we only care that the route exists and responds deterministically.
-    assert_get_route_is_not_auth_denied(&app, "/v1/accounts/bogus_account_id/assets?offset=0")
-        .await;
-
+    assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .uri(Uri::from_static(
+                "/v1/accounts/bogus_account_id/assets?offset=0",
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    )
+    .await;
     // 2) App API: GET /v1/events/sse — endpoint exists; allow OK or 429 depending on rate limits
-    assert_sse_route_is_not_auth_denied(&app, "/v1/events/sse").await;
-
+    let resp_sse = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(Uri::from_static("/v1/events/sse"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(!matches!(
+        resp_sse.status(),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+    ));
+    if resp_sse.status() == StatusCode::OK {
+        let ct = resp_sse
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("");
+        assert!(ct.contains("text/event-stream"));
+    }
     // 2b) App API: GET /v1/explorer/blocks/stream — endpoint exists; allow OK or 429.
-    assert_sse_route_is_not_auth_denied(&app, "/v1/explorer/blocks/stream").await;
-
+    let resp_blocks_sse = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(Uri::from_static("/v1/explorer/blocks/stream"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(!matches!(
+        resp_blocks_sse.status(),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+    ));
+    if resp_blocks_sse.status() == StatusCode::OK {
+        let ct = resp_blocks_sse
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("");
+        assert!(ct.contains("text/event-stream"));
+    }
     // 2c) App API: GET /v1/gov/stream — endpoint exists; allow OK/429.
-    assert_sse_route_is_not_auth_denied(&app, "/v1/gov/stream").await;
-
+    let resp_gov_sse = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(Uri::from_static("/v1/gov/stream"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(!matches!(
+        resp_gov_sse.status(),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+    ));
+    if resp_gov_sse.status() == StatusCode::OK {
+        let ct = resp_gov_sse
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("");
+        assert!(ct.contains("text/event-stream"));
+    }
     // 2d) App API: GET /v1/telemetry/live — endpoint exists; allow OK/429/403.
-    let resp_telemetry_live = fixtures::request_get(&app, "/v1/telemetry/live")
+    let resp_telemetry_live = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(Uri::from_static("/v1/telemetry/live"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     #[cfg(feature = "telemetry")]
@@ -135,9 +284,15 @@ async fn app_api_router_smoke() {
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
         ));
     }
-
     // 2e) App API: GET /v1/telemetry/propagation — endpoint exists; allow OK/429/403.
-    let resp_telemetry_propagation = fixtures::request_get(&app, "/v1/telemetry/propagation")
+    let resp_telemetry_propagation = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(Uri::from_static("/v1/telemetry/propagation"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     #[cfg(feature = "telemetry")]
@@ -154,15 +309,45 @@ async fn app_api_router_smoke() {
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
         ));
     }
-
-    // 3) App API: GET /v1/webhooks — ensure route exists; allow OK or 429
-    assert_get_route_is_not_auth_denied(&app, "/v1/webhooks").await;
-
+    // 3) App API: GET /v1/webhooks — operator auth runs before route dispatch.
+    let unsigned_webhooks_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(Uri::from_static("/v1/webhooks"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        unsigned_webhooks_response.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_route_is_not_auth_denied(
+        app.clone(),
+        fixtures::operator_signed_request(
+            &cfg.common.key_pair,
+            Request::builder()
+                .uri(Uri::from_static("/v1/webhooks"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+            &[],
+        ),
+    )
+    .await;
     // 4) App API: GET /v1/assets/{definition_id}/holders — use percent-encoded '#'
     // in the definition id (bogus#wonderland) to ensure parsing is exercised.
-    assert_get_route_is_not_auth_denied(&app, "/v1/assets/bogus%23wonderland/holders?offset=0")
-        .await;
-
+    assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .uri(Uri::from_static(
+                "/v1/assets/bogus%23wonderland/holders?offset=0",
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    )
+    .await;
     // 5) App API: POST /v1/webhooks — create a webhook (write path)
     let body = r#"{
   "url": "https://example.com/callback",
@@ -171,51 +356,143 @@ async fn app_api_router_smoke() {
 }"#;
     assert_route_is_not_auth_denied(
         app.clone(),
-        fixtures::post_json_request(&("/v1/webhooks"), axum::body::Body::from(body)),
+        fixtures::operator_signed_request(
+            &cfg.common.key_pair,
+            Request::builder()
+                .method("POST")
+                .uri(Uri::from_static("/v1/webhooks"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(body))
+                .unwrap(),
+            body.as_bytes(),
+        ),
     )
     .await;
-
-    assert_get_route_is_not_auth_denied(
-        &app,
-        "/v1/contracts/rollups/swaps/fills?authority=not-a-real-authority",
+    assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .uri(Uri::from_static(
+                "/v1/contracts/rollups/swaps/fills?authority=not-a-real-authority",
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap(),
     )
     .await;
-
-    assert_get_route_is_not_auth_denied(
-        &app,
-        "/v1/contracts/rollups/swaps/candles?authority=not-a-real-authority",
+    assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .uri(Uri::from_static(
+                "/v1/contracts/rollups/swaps/candles?authority=not-a-real-authority",
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap(),
     )
     .await;
-
-    assert_get_route_is_not_auth_denied(
-        &app,
-        "/v1/contracts/rollups/uranai/markets/history?market_id=not-a-real-market",
+    assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .uri(Uri::from_static(
+                "/v1/contracts/rollups/uranai/markets/history?market_id=not-a-real-market",
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap(),
     )
     .await;
-
-    assert_get_route_is_not_auth_denied(
-        &app,
-        "/v1/contracts/rollups/trader/activity?authority=not-a-real-authority",
+    assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .uri(Uri::from_static(
+                "/v1/contracts/rollups/trader/activity?authority=not-a-real-authority",
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap(),
     )
     .await;
-
-    assert_get_route_is_not_auth_denied(
-        &app,
-        "/v1/contracts/rollups/trader/account?authority=not-a-real-authority",
+    assert_route_is_not_auth_denied(
+        app,
+        Request::builder()
+            .uri(Uri::from_static(
+                "/v1/contracts/rollups/trader/account?authority=not-a-real-authority",
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap(),
     )
     .await;
 }
-
 #[tokio::test]
 async fn contract_routes_honor_api_token_requirement() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = mk_minimal_root_cfg();
     cfg.torii.require_api_token = true;
     cfg.torii.api_tokens = vec!["test-token".to_owned()];
-    let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
-
-    let app = torii.router();
-
+    let (kiso, _child) = KisoHandle::start(cfg.clone());
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
+    let mut world = World::default();
+    fixtures::seed_peer(&mut world, local_peer_id.clone());
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    let queue_cfg = iroha_config::parameters::actual::Queue::default();
+    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+    let queue = Arc::new(iroha_core::queue::Queue::from_config(
+        queue_cfg,
+        events_sender,
+    ));
+    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+    let _ = peers_tx;
+    let da_receipt_signer = cfg.common.key_pair.clone();
+    let torii = {
+        #[cfg(feature = "telemetry")]
+        {
+            use iroha_core::telemetry as core_telemetry;
+            use iroha_primitives::time::TimeSource;
+            let metrics = fixtures::shared_metrics();
+            let (_mh, ts) = TimeSource::new_mock(core::time::Duration::default());
+            let telemetry = core_telemetry::start(
+                metrics,
+                state.clone(),
+                kura.clone(),
+                queue.clone(),
+                peers_rx.clone(),
+                local_peer_id,
+                ts,
+                false,
+            )
+            .0;
+            iroha_torii::Torii::new(
+                ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
+                kiso,
+                cfg.torii.clone(),
+                queue,
+                tokio::sync::broadcast::channel(1).0,
+                LiveQueryStore::start_test(),
+                kura,
+                state,
+                da_receipt_signer.clone(),
+                iroha_torii::OnlinePeersProvider::new(peers_rx),
+                telemetry,
+                true,
+            )
+        }
+        #[cfg(not(feature = "telemetry"))]
+        {
+            iroha_torii::Torii::new(
+                ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
+                kiso,
+                cfg.torii.clone(),
+                queue,
+                tokio::sync::broadcast::channel(1).0,
+                LiveQueryStore::start_test(),
+                kura,
+                state,
+                da_receipt_signer,
+                iroha_torii::OnlinePeersProvider::new(peers_rx),
+            )
+        }
+    };
+    let app = torii.api_router_for_tests();
     for (method, path) in [
         ("POST", "/v1/contracts/deploy"),
         ("POST", "/v1/contracts/deploy-bundle"),
@@ -224,21 +501,21 @@ async fn contract_routes_honor_api_token_requirement() {
             "/v1/contracts/deploy-bundles/not-a-real-bundle-digest",
         ),
     ] {
-        let response = fixtures::request(
-            &app,
-            Request::builder()
-                .method(method)
-                .uri(path)
-                .header("x-api-token", "test-token")
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("x-api-token", "test-token")
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "path {path}");
     }
-
     assert_route_is_not_auth_denied(
         app.clone(),
         Request::builder()
@@ -250,7 +527,6 @@ async fn contract_routes_honor_api_token_requirement() {
             .unwrap(),
     )
     .await;
-
     assert_route_is_not_auth_denied(
         app.clone(),
         Request::builder()
@@ -262,7 +538,6 @@ async fn contract_routes_honor_api_token_requirement() {
             .unwrap(),
     )
     .await;
-
     assert_route_is_not_auth_denied(
         app.clone(),
         Request::builder()
@@ -274,7 +549,6 @@ async fn contract_routes_honor_api_token_requirement() {
             .unwrap(),
     )
     .await;
-
     assert_route_is_not_auth_denied(
         app.clone(),
         Request::builder()

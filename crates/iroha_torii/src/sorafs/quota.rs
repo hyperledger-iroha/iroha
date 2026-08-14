@@ -1,19 +1,15 @@
 //! Per-token request and byte-rate quota tracking for SoraFS stream tokens.
-
 use std::{
     collections::BTreeMap,
     sync::atomic::{AtomicU64, Ordering},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-
 use thiserror::Error;
-
 const QUOTA_WINDOW: Duration = Duration::from_mins(1);
 const BYTE_RATE_WINDOW: Duration = Duration::from_secs(1);
 const DEFAULT_MAX_TRACKED_TOKENS: usize = 65_536;
 const TOKEN_ID_HEX_LEN: usize = 32;
-
 /// Tracks the number of requests served under each stream token.
 ///
 /// State is deliberately bounded. Active entries are never evicted merely to
@@ -22,13 +18,11 @@ const TOKEN_ID_HEX_LEN: usize = 32;
 pub struct StreamTokenQuotaTracker {
     inner: Arc<StreamTokenQuotaInner>,
 }
-
 impl Default for StreamTokenQuotaTracker {
     fn default() -> Self {
         Self::with_max_entries(DEFAULT_MAX_TRACKED_TOKENS)
     }
 }
-
 impl StreamTokenQuotaTracker {
     fn with_max_entries(max_entries: usize) -> Self {
         Self {
@@ -39,7 +33,6 @@ impl StreamTokenQuotaTracker {
             }),
         }
     }
-
     /// Attempt to reserve one request and its bytes within the signed token's windows.
     ///
     /// `token_fingerprint` must be the canonical hash of the complete signed
@@ -72,12 +65,10 @@ impl StreamTokenQuotaTracker {
             now_epoch,
         )
     }
-
     #[cfg(test)]
     fn with_capacity_for_tests(max_entries: usize) -> Self {
         Self::with_max_entries(max_entries)
     }
-
     #[cfg(test)]
     fn try_acquire_at(
         &self,
@@ -99,7 +90,6 @@ impl StreamTokenQuotaTracker {
             now_epoch,
         )
     }
-
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn try_acquire_bytes_at(
@@ -125,13 +115,11 @@ impl StreamTokenQuotaTracker {
         )
     }
 }
-
 struct StreamTokenQuotaInner {
     max_entries: usize,
     max_seen_epoch: AtomicU64,
     windows: Mutex<BTreeMap<String, TokenQuotaWindow>>,
 }
-
 impl StreamTokenQuotaInner {
     #[allow(clippy::too_many_arguments)]
     fn try_acquire(
@@ -166,7 +154,6 @@ impl StreamTokenQuotaInner {
         if expires_at_epoch <= now_epoch {
             return Err(StreamTokenQuotaError::Expired);
         }
-
         let mut windows = self
             .windows
             .lock()
@@ -175,7 +162,6 @@ impl StreamTokenQuotaInner {
             window.expires_at_epoch > now_epoch
                 && now.saturating_duration_since(window.last_seen) < QUOTA_WINDOW
         });
-
         if let Some(window) = windows.get_mut(token_id) {
             if window.token_fingerprint != token_fingerprint
                 || window.limit != requests_per_minute
@@ -186,7 +172,6 @@ impl StreamTokenQuotaInner {
             }
             return window.consume(now, requested_bytes);
         }
-
         if requested_bytes > rate_limit_bytes {
             return Err(StreamTokenQuotaError::ByteRateExceeded {
                 retry_after_secs: 1,
@@ -211,7 +196,6 @@ impl StreamTokenQuotaInner {
         Ok(())
     }
 }
-
 fn validate_token_id(token_id: &str) -> Result<(), StreamTokenQuotaError> {
     if token_id.len() != TOKEN_ID_HEX_LEN
         || !token_id
@@ -222,7 +206,6 @@ fn validate_token_id(token_id: &str) -> Result<(), StreamTokenQuotaError> {
     }
     Ok(())
 }
-
 #[derive(Debug, Clone)]
 struct TokenQuotaWindow {
     token_fingerprint: [u8; 32],
@@ -235,7 +218,6 @@ struct TokenQuotaWindow {
     rate_limit_bytes: u64,
     bytes_used: u64,
 }
-
 impl TokenQuotaWindow {
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -258,14 +240,12 @@ impl TokenQuotaWindow {
             bytes_used: requested_bytes,
         }
     }
-
     fn consume(&mut self, now: Instant, requested_bytes: u64) -> Result<(), StreamTokenQuotaError> {
         let elapsed = now.saturating_duration_since(self.started_at);
         if elapsed >= QUOTA_WINDOW {
             self.started_at = now;
             self.used = 0;
         }
-
         if self.used >= self.limit {
             let remaining = QUOTA_WINDOW.saturating_sub(elapsed.min(QUOTA_WINDOW));
             let rounded_up = remaining
@@ -276,7 +256,6 @@ impl TokenQuotaWindow {
                 retry_after_secs: rounded_up as u32,
             });
         }
-
         let byte_elapsed = now.saturating_duration_since(self.bytes_started_at);
         if byte_elapsed >= BYTE_RATE_WINDOW {
             self.bytes_started_at = now;
@@ -293,14 +272,12 @@ impl TokenQuotaWindow {
                 .clamp(1, u64::from(u32::MAX)) as u32;
             return Err(StreamTokenQuotaError::ByteRateExceeded { retry_after_secs });
         }
-
         self.used += 1;
         self.bytes_used = next_bytes;
         self.last_seen = now;
         Ok(())
     }
 }
-
 /// Error returned when stream-token quota admission fails.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum StreamTokenQuotaError {
@@ -346,18 +323,14 @@ pub enum StreamTokenQuotaError {
         current_epoch: u64,
     },
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{sync::Barrier, thread};
-
     use super::*;
-
+    use std::{sync::Barrier, thread};
     const TOKEN_A: &str = "0000000000000000000000000000000a";
     const TOKEN_B: &str = "0000000000000000000000000000000b";
     const TOKEN_C: &str = "0000000000000000000000000000000c";
     const START_EPOCH: u64 = 1_700_000_000;
-
     #[test]
     fn quota_allows_within_limit() {
         let tracker = StreamTokenQuotaTracker::default();
@@ -391,7 +364,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn quota_resets_after_window() {
         let tracker = StreamTokenQuotaTracker::default();
@@ -410,7 +382,6 @@ mod tests {
             )
             .expect("quota resets after window elapses");
     }
-
     #[test]
     fn zero_quota_fails_closed_without_retaining_state() {
         let tracker = StreamTokenQuotaTracker::with_capacity_for_tests(1);
@@ -426,7 +397,6 @@ mod tests {
             .expect_err("zero quota must not mean unlimited");
         assert!(matches!(err, StreamTokenQuotaError::InvalidPolicy(_)));
     }
-
     #[test]
     fn active_entries_are_not_evicted_at_capacity() {
         let tracker = StreamTokenQuotaTracker::with_capacity_for_tests(2);
@@ -440,13 +410,11 @@ mod tests {
             .try_acquire_at(TOKEN_C, [3; 32], 1, START_EPOCH + 300, start, START_EPOCH)
             .expect_err("active state capacity must fail closed");
         assert_eq!(err, StreamTokenQuotaError::CapacityExceeded { capacity: 2 });
-
         let err = tracker
             .try_acquire_at(TOKEN_A, [1; 32], 1, START_EPOCH + 300, start, START_EPOCH)
             .expect_err("the original budget must remain enforced");
         assert!(matches!(err, StreamTokenQuotaError::Exceeded { .. }));
     }
-
     #[test]
     fn expired_entries_are_pruned_before_capacity_check() {
         let tracker = StreamTokenQuotaTracker::with_capacity_for_tests(1);
@@ -465,7 +433,6 @@ mod tests {
             )
             .expect("expired entry pruned");
     }
-
     #[test]
     fn colliding_identifier_cannot_reset_policy() {
         let tracker = StreamTokenQuotaTracker::default();
@@ -478,7 +445,6 @@ mod tests {
             .expect_err("colliding policy rejected");
         assert_eq!(err, StreamTokenQuotaError::PolicyConflict);
     }
-
     #[test]
     fn malformed_and_expired_tokens_fail_before_state_admission() {
         let tracker = StreamTokenQuotaTracker::with_capacity_for_tests(1);
@@ -499,7 +465,6 @@ mod tests {
             .try_acquire_at(TOKEN_B, [2; 32], 1, START_EPOCH + 60, start, START_EPOCH)
             .expect("invalid attempts did not consume capacity");
     }
-
     #[test]
     fn concurrent_admission_never_exceeds_limit() {
         const THREADS: usize = 64;
@@ -539,7 +504,6 @@ mod tests {
             LIMIT as usize
         );
     }
-
     #[test]
     fn aggregate_byte_rate_is_enforced_and_resets_after_one_second() {
         let tracker = StreamTokenQuotaTracker::default();
@@ -587,7 +551,6 @@ mod tests {
             )
             .expect("byte window resets after one second");
     }
-
     #[test]
     fn poisoned_accounting_state_fails_closed() {
         let tracker = StreamTokenQuotaTracker::default();
@@ -598,7 +561,6 @@ mod tests {
         })
         .join();
         assert!(poisoned.is_err(), "poisoning worker must panic");
-
         assert_eq!(
             tracker
                 .try_acquire(
@@ -614,7 +576,6 @@ mod tests {
             StreamTokenQuotaError::StateUnavailable
         );
     }
-
     #[test]
     fn wall_clock_rollback_fails_closed() {
         let tracker = StreamTokenQuotaTracker::default();

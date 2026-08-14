@@ -1,18 +1,14 @@
 #![cfg(feature = "json")]
 //! Representative smoke/regression parity tests for the serde-style JSON API.
-
-use std::collections::BTreeMap;
-
 use norito::json;
 use serde::Serialize;
-
+use std::collections::BTreeMap;
 #[derive(Debug, norito::JsonSerialize, Serialize)]
 struct TypedChild {
     ok: bool,
     note: &'static str,
     ratio: f64,
 }
-
 #[derive(Debug, norito::JsonSerialize, Serialize)]
 struct TypedPayload {
     id: u64,
@@ -21,7 +17,6 @@ struct TypedPayload {
     child: TypedChild,
     aliases: BTreeMap<&'static str, &'static str>,
 }
-
 #[derive(Debug, norito::JsonSerialize, Serialize)]
 struct FloatEnvelope {
     finite: f64,
@@ -31,7 +26,6 @@ struct FloatEnvelope {
     pos_inf: f64,
     neg_inf: f64,
 }
-
 fn assert_matches_serde<T>(value: &T)
 where
     T: norito::json::JsonSerialize + Serialize + ?Sized,
@@ -45,7 +39,6 @@ where
         serde_json::to_string_pretty(value).expect("serde pretty json")
     );
 }
-
 #[test]
 fn typed_payload_smoke_matches_serde_json() {
     let aliases = BTreeMap::from([
@@ -64,10 +57,8 @@ fn typed_payload_smoke_matches_serde_json() {
         },
         aliases,
     };
-
     assert_matches_serde(&payload);
 }
-
 #[test]
 fn float_edge_case_regression_matches_serde_json() {
     let payload = FloatEnvelope {
@@ -78,10 +69,8 @@ fn float_edge_case_regression_matches_serde_json() {
         pos_inf: f64::INFINITY,
         neg_inf: f64::NEG_INFINITY,
     };
-
     assert_matches_serde(&payload);
 }
-
 #[test]
 fn deterministic_btreemap_regression_matches_serde_json() {
     let payload = BTreeMap::from([
@@ -89,6 +78,5 @@ fn deterministic_btreemap_regression_matches_serde_json() {
         ("escaped", "tab\tnewline\nslash\\"),
         ("unicode", "emoji \u{1f389}"),
     ]);
-
     assert_matches_serde(&payload);
 }

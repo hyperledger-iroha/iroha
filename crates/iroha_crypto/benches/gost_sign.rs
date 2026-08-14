@@ -1,14 +1,11 @@
 //! Benchmarks for signature generation and verification across TC26 GOST and baseline curves.
-
-use std::hint::black_box;
-#[cfg(feature = "gost")]
-use std::time::Duration;
-
 #[cfg(feature = "gost")]
 use criterion::{BenchmarkId, Criterion};
 #[cfg(feature = "gost")]
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
-
+use std::hint::black_box;
+#[cfg(feature = "gost")]
+use std::time::Duration;
 /// Seed + metadata for a single benchmark target.
 #[cfg(feature = "gost")]
 struct BenchTarget {
@@ -17,7 +14,6 @@ struct BenchTarget {
     seed: &'static [u8],
     message: &'static [u8],
 }
-
 #[cfg(feature = "gost")]
 const TARGETS: &[BenchTarget] = &[
     BenchTarget {
@@ -63,25 +59,21 @@ const TARGETS: &[BenchTarget] = &[
         message: b"benchmark payload for gost512b",
     },
 ];
-
 #[cfg(feature = "gost")]
 fn checked_signature(private_key: &PrivateKey, message: &[u8]) -> Signature {
     Signature::try_new(private_key, message).expect("bench signature should succeed")
 }
-
 /// Benchmark signing and verification throughput across selected algorithms.
 #[cfg(feature = "gost")]
 fn bench_sign_verify(c: &mut Criterion) {
     let mut group = c.benchmark_group("sign_verify");
     group.sample_size(60);
     group.measurement_time(Duration::from_secs(6));
-
     for target in TARGETS {
         let key_pair = KeyPair::try_from_seed(target.seed.to_vec(), target.algorithm)
             .expect("bench seeded keypair should be valid");
         let public = key_pair.public_key().clone();
         let private = key_pair.private_key().clone();
-
         group.bench_with_input(
             BenchmarkId::new("sign_verify", target.name),
             target,
@@ -98,10 +90,8 @@ fn bench_sign_verify(c: &mut Criterion) {
             },
         );
     }
-
     group.finish();
 }
-
 /// Criterion harness entry point used when `gost` is enabled.
 #[cfg(feature = "gost")]
 fn main() {
@@ -109,6 +99,5 @@ fn main() {
     bench_sign_verify(&mut criterion);
     criterion.final_summary();
 }
-
 #[cfg(not(feature = "gost"))]
 fn main() {}

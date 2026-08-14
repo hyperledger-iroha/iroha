@@ -1,13 +1,10 @@
 //! Canonical Norito helpers shared by ABI producers and consumers.
-
+use crate::VMError;
 use norito::{
     NoritoSerialize,
     codec::{Decode, Encode},
     core::DecodeLimits,
 };
-
-use crate::VMError;
-
 /// Encode a Norito value using the V1 canonical layout.
 ///
 /// The result is independent of any ambient decode/encode flag guard.
@@ -21,7 +18,6 @@ where
 {
     norito::encode_canonical(value).map_err(|_| VMError::NoritoInvalid)
 }
-
 /// Return conservative resource limits derived from one complete Norito frame.
 ///
 /// Packed boolean sequences may carry eight logical elements per encoded byte,
@@ -33,7 +29,6 @@ where
 pub const fn canonical_norito_decode_limits(payload_len: usize) -> DecodeLimits {
     norito::canonical_decode_limits(payload_len)
 }
-
 /// Decode one complete Norito frame using the V1 canonical layout.
 ///
 /// Norito frames carry layout flags and can therefore have multiple byte
@@ -52,7 +47,6 @@ where
 {
     norito::decode_canonical(payload).map_err(|_| VMError::NoritoInvalid)
 }
-
 /// Decode one canonical V1 frame under both default and schema-specific limits.
 ///
 /// Norito composes nested decode-limit scopes by selecting the stricter member
@@ -73,11 +67,9 @@ where
 {
     norito::decode_canonical_with_limits(payload, limits).map_err(|_| VMError::NoritoInvalid)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn rejects_alternate_layout_and_restores_ambient_flags() {
         let value = vec!["first".to_owned(), "second".to_owned()];
@@ -90,7 +82,6 @@ mod tests {
             decode_canonical_norito::<Vec<String>>(&canonical),
             Ok(value.clone())
         );
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let alternate = {
@@ -107,7 +98,6 @@ mod tests {
             decode_canonical_norito::<Vec<String>>(&alternate),
             Err(VMError::NoritoInvalid)
         );
-
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         let ambient_payload = b"unrelated outer payload context";
         let _ambient_payload = norito::core::PayloadCtxGuard::enter(ambient_payload);
@@ -128,7 +118,6 @@ mod tests {
             "canonical decoding must restore the caller's ambient layout"
         );
     }
-
     #[test]
     fn generic_canonical_decode_rejects_forged_sequence_length_under_default_limits() {
         const FORGED_LENGTH: u64 = 1 << 40;
@@ -138,7 +127,6 @@ mod tests {
             norito::core::default_encode_flags(),
         )
         .expect("frame forged vector length with a valid header and checksum");
-
         assert_eq!(
             decode_canonical_norito::<Vec<u64>>(&payload),
             Err(VMError::NoritoInvalid)

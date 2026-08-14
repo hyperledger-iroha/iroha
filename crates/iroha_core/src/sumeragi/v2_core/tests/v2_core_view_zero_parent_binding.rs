@@ -21,7 +21,6 @@ fn view_zero_binds_semantic_parent_decision_across_reproposal_rounds() {
         })
         .expect("the frozen parent reference is accepted");
     assert!(matches!(accepted.effects(), [Effect::FetchBody { .. }]));
-
     let redecided_round = Round::new(frozen.round().height(), frozen.round().view() + 3);
     let equivalent_other_view = CertificateRef::new_with_proposal_round(
         frozen.context_id(),
@@ -55,7 +54,6 @@ fn view_zero_binds_semantic_parent_decision_across_reproposal_rounds() {
         })
         .expect("an equivalent parent CommitQC after unchanged re-proposal is accepted");
     assert!(matches!(accepted.effects(), [Effect::FetchBody { .. }]));
-
     let foreign_context = CertificateRef::new(
         ContextId::repeat(0x42),
         equivalent_other_view.round(),

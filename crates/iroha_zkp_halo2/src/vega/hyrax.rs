@@ -3,15 +3,12 @@
 //! The crate-private V1 Relaxed Spartan proof intentionally opens the
 //! row-bound vector and its combined blinding directly. Its proof wire does
 //! not carry a separate evaluation commitment or inner-product argument.
-
-use thiserror::Error;
-
 use super::{
     VegaT256ScalarV1 as Scalar,
     algebra::{AlgebraError, eq_evals, inner_product, log2_exact},
     commitment::{Commitment, CommitmentError, CommitmentKey, msm},
 };
-
+use thiserror::Error;
 /// Failure while proving or verifying a canonical Hyrax direct opening.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum HyraxError {
@@ -24,7 +21,6 @@ pub(super) enum HyraxError {
     #[error(transparent)]
     Commitment(#[from] CommitmentError),
 }
-
 pub(super) fn prove_direct(
     key: &CommitmentKey,
     polynomial: &[Scalar],
@@ -62,7 +58,6 @@ pub(super) fn prove_direct(
     let combined_blinding = inner_product(&left_weights[..blindings.len()], blindings)?;
     Ok((values, combined_blinding))
 }
-
 pub(super) fn verify_direct(
     key: &CommitmentKey,
     commitment: &Commitment,
@@ -98,19 +93,15 @@ pub(super) fn verify_direct(
     let right_weights = eq_evals(&point[row_variables..])?;
     Ok(inner_product(values, &right_weights)?)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn s(value: u64) -> Scalar {
         Scalar::from_u64(value)
     }
-
     fn setup(columns: usize) -> CommitmentKey {
         CommitmentKey::derive(b"hyrax-direct-opening-test", columns).expect("commitment key")
     }
-
     #[test]
     fn one_row_direct_opening_roundtrips_and_rejects_mutation() {
         let key = setup(4);
@@ -122,7 +113,6 @@ mod tests {
         let commitment = key
             .commit(&polynomial, &[polynomial_blinding])
             .expect("one row");
-
         let (values, blind) =
             prove_direct(&key, &polynomial, &[polynomial_blinding], &point).expect("direct");
         assert_eq!(values, polynomial);
@@ -131,7 +121,6 @@ mod tests {
             verify_direct(&key, &commitment, &values, blind, &point).expect("valid direct"),
             expected
         );
-
         let mut bad_values = values;
         bad_values[0] += Scalar::one();
         assert_eq!(
@@ -149,7 +138,6 @@ mod tests {
             Err(HyraxError::InvalidDirectOpening)
         );
     }
-
     #[test]
     fn multi_row_direct_opening_binds_rows_in_transcript_order() {
         let key = setup(2);
@@ -157,7 +145,6 @@ mod tests {
         let blindings = [s(11), s(13)];
         let point = [s(17), s(19)];
         let commitment = key.commit(&polynomial, &blindings).expect("two rows");
-
         let (values, combined_blinding) =
             prove_direct(&key, &polynomial, &blindings, &point).expect("direct");
         let unselected = Scalar::one() - point[0];
@@ -178,14 +165,12 @@ mod tests {
             inner_product(&polynomial, &eq_evals(&point).expect("small table")).expect("aligned")
         );
     }
-
     #[test]
     fn direct_opening_rejects_inconsistent_shapes() {
         let key = setup(2);
         let polynomial = [s(2), s(3), s(5), s(7)];
         let point = [s(11), s(13)];
         let commitment = key.commit(&polynomial, &[s(17), s(19)]).expect("two rows");
-
         assert!(prove_direct(&key, &[], &[], &point).is_err());
         assert!(prove_direct(&key, &polynomial, &[s(17)], &point).is_err());
         assert!(prove_direct(&key, &polynomial, &[s(17), s(19)], &point[..1]).is_err());

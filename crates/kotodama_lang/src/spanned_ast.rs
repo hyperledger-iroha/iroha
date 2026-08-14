@@ -1,12 +1,9 @@
 //! Stable source identities for the CST-lowered Kotodama AST.
-
+pub(crate) use crate::ast::NodeId;
 use crate::{
     ast::Program,
     source::{SourceFile, SourceId, TextRange},
 };
-
-pub(crate) use crate::ast::NodeId;
-
 /// Coarse source node category retained independently of AST enum layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AstNodeKind {
@@ -43,7 +40,6 @@ pub enum AstNodeKind {
     /// Declaration or reference name.
     Name,
 }
-
 /// Exact source location of one AST node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AstNode {
@@ -56,14 +52,12 @@ pub struct AstNode {
     /// Owning function declaration for function-local nodes.
     pub owner: Option<NodeId>,
 }
-
 /// Per-source AST node arena keyed by stable [`NodeId`] values.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AstSourceMap {
     source: SourceId,
     nodes: Vec<AstNode>,
 }
-
 impl AstSourceMap {
     pub(crate) fn new(source: SourceId) -> Self {
         Self {
@@ -71,24 +65,20 @@ impl AstSourceMap {
             nodes: Vec::new(),
         }
     }
-
     /// Return the source identity shared by every node in this map.
     #[must_use]
     pub const fn source(&self) -> SourceId {
         self.source
     }
-
     /// Return one source node by stable identity.
     #[must_use]
     pub fn node(&self, id: NodeId) -> Option<&AstNode> {
         self.nodes.get(id.index()).filter(|node| node.id == id)
     }
-
     /// Iterate over source nodes in stable allocation order.
     pub fn nodes(&self) -> impl ExactSizeIterator<Item = &AstNode> {
         self.nodes.iter()
     }
-
     pub(crate) fn allocate_owned(
         &mut self,
         kind: AstNodeKind,
@@ -104,7 +94,6 @@ impl AstSourceMap {
         });
         id
     }
-
     pub(crate) fn begin_owned(
         &mut self,
         kind: AstNodeKind,
@@ -113,13 +102,11 @@ impl AstSourceMap {
     ) -> NodeId {
         self.allocate_owned(kind, TextRange::empty(start), owner)
     }
-
     pub(crate) fn finish(&mut self, id: NodeId, end: u32) {
         if let Some(node) = self.nodes.get_mut(id.index()) {
             node.range = TextRange::new(node.range.start, end.max(node.range.start));
         }
     }
-
     /// Reclassify a parser-reserved block expression as the statement form
     /// selected after its trailing syntax is known.
     ///
@@ -131,7 +118,6 @@ impl AstSourceMap {
             node.kind = kind;
         }
     }
-
     pub(crate) fn source_span(
         &self,
         source: &SourceFile,
@@ -142,17 +128,14 @@ impl AstSourceMap {
             .flatten()
             .map(|node| crate::diagnostic::SourceSpan::from_range(source, node.range))
     }
-
     pub(crate) fn source_range(&self, id: NodeId) -> Option<crate::source::SourceRange> {
         self.node(id)
             .map(|node| crate::source::SourceRange::new(self.source, node.range))
     }
-
     pub(crate) fn rebase(&mut self, source: SourceId) {
         self.source = source;
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DeclarationKind {
     SourceUnit,
@@ -164,7 +147,6 @@ pub(crate) enum DeclarationKind {
     Trigger,
     Parameter,
 }
-
 impl DeclarationKind {
     pub(crate) const fn description(self) -> &'static str {
         match self {
@@ -178,16 +160,13 @@ impl DeclarationKind {
             Self::Parameter => "parameter",
         }
     }
-
     pub(crate) const fn is_function(self) -> bool {
         matches!(self, Self::Function)
     }
-
     pub(crate) const fn is_type_declaration(self) -> bool {
         matches!(self, Self::SourceUnit | Self::Struct | Self::ErrorEnum)
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DeclarationFact {
     pub(crate) node: NodeId,
@@ -196,14 +175,12 @@ pub(crate) struct DeclarationFact {
     pub(crate) name: String,
     pub(crate) kind: DeclarationKind,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TypeUseFact {
     pub(crate) node: NodeId,
     pub(crate) owner: Option<NodeId>,
     pub(crate) name: String,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CallFact {
     pub(crate) node: NodeId,
@@ -212,7 +189,6 @@ pub(crate) struct CallFact {
     pub(crate) name: String,
     pub(crate) implicit_receiver: bool,
 }
-
 /// Lexical binding role recorded directly by the parser.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum BindingFactKind {
@@ -221,7 +197,6 @@ pub(crate) enum BindingFactKind {
     Iterator,
     Comprehension,
 }
-
 /// Exact source fact for one non-parameter lexical binding declaration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BindingFact {
@@ -231,7 +206,6 @@ pub(crate) struct BindingFact {
     pub(crate) name: String,
     pub(crate) kind: BindingFactKind,
 }
-
 /// CST-lowerer-owned source facts used to construct resolved HIR without rescanning text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AstFacts {
@@ -241,7 +215,6 @@ pub(crate) struct AstFacts {
     pub(crate) calls: Vec<CallFact>,
     pub(crate) bindings: Vec<BindingFact>,
 }
-
 impl AstFacts {
     pub(crate) fn new(source: SourceId) -> Self {
         Self {
@@ -253,21 +226,18 @@ impl AstFacts {
         }
     }
 }
-
 /// Compiler AST paired with its stable source-node arena and resolver facts.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SpannedProgram {
     pub(crate) program: Program,
     pub(crate) facts: AstFacts,
 }
-
 impl SpannedProgram {
     /// Rebase a cached source unit while preserving every stable local NodeId.
     pub(crate) fn rebase_source(&mut self, source: SourceId) {
         self.facts.source_map.rebase(source);
         crate::ast::rebase_program_source(&mut self.program, source);
     }
-
     pub(crate) fn with_source(mut self, source: SourceId) -> Self {
         self.rebase_source(source);
         self

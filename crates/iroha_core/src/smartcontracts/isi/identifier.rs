@@ -1,5 +1,5 @@
 //! Hidden-function-backed identifier policy instruction handlers.
-
+use super::prelude::*;
 use iroha_crypto::{
     Hash, RamLfeBackend, RamLfeVerificationMode, decode_bfv_programmed_public_parameters,
     identifier_hashes_from_output_hash,
@@ -13,14 +13,10 @@ use iroha_data_model::{
     },
 };
 use iroha_telemetry::metrics;
-
-use super::prelude::*;
-
 /// Execution handlers for identifier-policy ISIs.
 pub mod isi {
     use super::*;
     use crate::state::StateTransaction;
-
     impl Execute for iroha_data_model::isi::identifier::RegisterIdentifierPolicy {
         #[metrics(+"register_identifier_policy")]
         fn execute(
@@ -53,7 +49,6 @@ pub mod isi {
             Ok(())
         }
     }
-
     impl Execute for iroha_data_model::isi::identifier::ActivateIdentifierPolicy {
         #[metrics(+"activate_identifier_policy")]
         fn execute(
@@ -86,7 +81,6 @@ pub mod isi {
             Ok(())
         }
     }
-
     impl Execute for iroha_data_model::isi::identifier::ClaimIdentifier {
         #[metrics(+"claim_identifier")]
         fn execute(
@@ -159,7 +153,6 @@ pub mod isi {
                 &program_policy,
                 crate::zk::ZkVerifyGuardrails::from_cfg(&state_transaction.zk),
             )?;
-
             let uaid = *state_transaction
                 .world
                 .account(&self.account)
@@ -254,7 +247,6 @@ pub mod isi {
                     ));
                 }
             }
-
             if let Some(existing_claim) = state_transaction
                 .world
                 .identifier_claims
@@ -273,7 +265,6 @@ pub mod isi {
                     ));
                 }
             }
-
             let details = state_transaction
                 .world
                 .account_mut(&self.account)
@@ -283,7 +274,6 @@ pub mod isi {
                 opaque_ids.push(receipt_payload.opaque_id);
                 details.set_opaque_ids(opaque_ids);
             }
-
             state_transaction
                 .world
                 .opaque_uaids
@@ -303,7 +293,6 @@ pub mod isi {
             Ok(())
         }
     }
-
     impl Execute for iroha_data_model::isi::identifier::RevokeIdentifier {
         #[metrics(+"revoke_identifier")]
         fn execute(
@@ -330,7 +319,6 @@ pub mod isi {
                     .into(),
                 ));
             }
-
             let policy = state_transaction
                 .world
                 .identifier_policies
@@ -345,7 +333,6 @@ pub mod isi {
                         .into(),
                 ));
             }
-
             let details = state_transaction
                 .world
                 .account_mut(&claim.account_id)
@@ -357,7 +344,6 @@ pub mod isi {
                 .filter(|opaque| opaque != &self.opaque_id)
                 .collect();
             details.set_opaque_ids(retained);
-
             state_transaction.world.opaque_uaids.remove(self.opaque_id);
             state_transaction
                 .world
@@ -366,7 +352,6 @@ pub mod isi {
             Ok(())
         }
     }
-
     fn ensure_policy_authorized(
         authority: &AccountId,
         policy: &IdentifierPolicy,
@@ -381,7 +366,6 @@ pub mod isi {
                 .into(),
         ))
     }
-
     fn evict_expired_identifier_binding(
         state_transaction: &mut StateTransaction<'_, '_>,
         opaque_id: &OpaqueAccountId,
@@ -401,7 +385,6 @@ pub mod isi {
         {
             return Ok(());
         }
-
         let retained: Vec<_> = state_transaction
             .world
             .account(&existing_claim.account_id)
@@ -416,7 +399,6 @@ pub mod isi {
             .account_mut(&existing_claim.account_id)
             .map_err(Error::from)?
             .set_opaque_ids(retained);
-
         state_transaction
             .world
             .opaque_uaids
@@ -427,7 +409,6 @@ pub mod isi {
             .remove(opaque_id.clone());
         Ok(())
     }
-
     fn validate_program_receipt(
         receipt: &IdentifierResolutionReceipt,
         policy: &IdentifierPolicy,
@@ -475,7 +456,6 @@ pub mod isi {
                 .into(),
             ));
         }
-
         let public_parameters = match program_policy.backend {
             RamLfeBackend::BfvProgrammedSha3_256V1 => decode_bfv_programmed_public_parameters(
                 &program_policy.commitment.public_parameters,
@@ -545,9 +525,7 @@ pub mod isi {
                 .into(),
             ));
         }
-
         validate_output_opening(&receipt.payload.opening, execution, program_policy)?;
-
         let expected_hashes = expected_identifier_hashes(policy, &receipt.payload.opening)?;
         if receipt.payload.opaque_id != OpaqueAccountId::from(expected_hashes.0) {
             return Err(Error::InvariantViolation(
@@ -567,7 +545,6 @@ pub mod isi {
                 .into(),
             ));
         }
-
         match program_policy.verification_mode {
             RamLfeVerificationMode::Signed => {
                 if !matches!(&receipt.attestation, RamLfeReceiptAttestation::Signed(_)) {
@@ -617,10 +594,8 @@ pub mod isi {
                 )?;
             }
         }
-
         Ok(())
     }
-
     fn expected_identifier_hashes(
         policy: &IdentifierPolicy,
         opening: &RamLfeOutputOpening,
@@ -639,7 +614,6 @@ pub mod isi {
             &opening.payload.opened_output_hash,
         ))
     }
-
     fn validate_output_opening(
         opening: &RamLfeOutputOpening,
         execution: &RamLfeExecutionReceiptPayload,
@@ -712,7 +686,6 @@ pub mod isi {
                 )
             })
     }
-
     fn verify_execution_proof(
         proof: &iroha_data_model::proof::ProofBox,
         execution: &RamLfeExecutionReceiptPayload,
@@ -724,20 +697,16 @@ pub mod isi {
         )
         .map_err(|err| Error::InvariantViolation(err.into()))
     }
-
     #[cfg(test)]
     mod proof_tests {
-        use std::str::FromStr as _;
-
+        use super::*;
         use iroha_crypto::RamLfeProofVerifierMetadata;
         use iroha_data_model::{
             proof::{ProofBox, VerifyingKeyBox},
             ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId},
             zk::{BackendTag, OpenVerifyEnvelope},
         };
-
-        use super::*;
-
+        use std::str::FromStr as _;
         fn sample_proof_payload() -> RamLfeExecutionReceiptPayload {
             RamLfeExecutionReceiptPayload {
                 program_id: RamLfeProgramId::from_str("identifier_proof_program")
@@ -755,7 +724,6 @@ pub mod isi {
                 expires_at_ms: None,
             }
         }
-
         fn sample_proof_verifier() -> RamLfeProofVerifierMetadata {
             RamLfeProofVerifierMetadata {
                 proof_backend: crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
@@ -764,7 +732,6 @@ pub mod isi {
                 verifying_key_bytes: b"identifier-ram-lfe-proof-vk".to_vec(),
             }
         }
-
         fn test_guardrails() -> crate::zk::ZkVerifyGuardrails {
             crate::zk::ZkVerifyGuardrails {
                 halo2_enabled: true,
@@ -775,7 +742,6 @@ pub mod isi {
                 stark_max_proof_bytes: usize::MAX,
             }
         }
-
         fn sample_proof_box(
             verifier: &RamLfeProofVerifierMetadata,
             mutate: impl FnOnce(&mut OpenVerifyEnvelope),
@@ -798,12 +764,10 @@ pub mod isi {
                 norito::encode_canonical(&envelope).expect("encode canonical OpenVerifyEnvelope"),
             )
         }
-
         #[test]
         fn identifier_verify_execution_proof_rejects_noncanonical_envelope_metadata() {
             let verifier = sample_proof_verifier();
             let execution = sample_proof_payload();
-
             let bad_backend = sample_proof_box(&verifier, |envelope| {
                 envelope.backend = BackendTag::Stark;
             });
@@ -815,7 +779,6 @@ pub mod isi {
                 message.contains("backend tag"),
                 "unexpected error: {message}"
             );
-
             for (backend, expected_message) in [
                 ("halo2/ipa:production-ready", "native verifier registry"),
                 ("stark/fri/sha256-goldilocks", "must use Halo2 IPA Pasta"),
@@ -836,7 +799,6 @@ pub mod isi {
                     "backend {backend}: expected {expected_message:?}, got {message:?}"
                 );
             }
-
             let aux = sample_proof_box(&verifier, |envelope| {
                 envelope.aux = b"unbound-identifier-proof-metadata".to_vec();
             });
@@ -847,7 +809,6 @@ pub mod isi {
                 message.contains("auxiliary bytes"),
                 "unexpected error: {message}"
             );
-
             let zero_vk_hash = sample_proof_box(&verifier, |envelope| {
                 envelope.vk_hash = [0u8; Hash::LENGTH];
             });
@@ -856,7 +817,6 @@ pub mod isi {
                     .expect_err("zero verifier-key hash must reject before proof parsing");
             let message = err.to_string();
             assert!(message.contains("non-zero"), "unexpected error: {message}");
-
             let schema_drift = sample_proof_box(&verifier, |envelope| {
                 envelope.public_inputs.extend_from_slice(b":schema-drift");
             });
@@ -868,7 +828,6 @@ pub mod isi {
                 message.contains("public-input schema hash"),
                 "unexpected error: {message}"
             );
-
             let wrong_vk_hash = sample_proof_box(&verifier, |envelope| {
                 envelope.vk_hash = [0xA5; Hash::LENGTH];
             });
@@ -881,7 +840,6 @@ pub mod isi {
                 "unexpected error: {message}"
             );
         }
-
         #[test]
         fn identifier_verify_execution_proof_rejects_alternate_norito_layout() {
             let verifier = sample_proof_verifier();
@@ -898,7 +856,6 @@ pub mod isi {
             };
             assert_ne!(alternate_bytes, canonical.bytes);
             let alternate = ProofBox::new(canonical.backend, alternate_bytes);
-
             let err = verify_execution_proof(&alternate, &execution, &verifier, test_guardrails())
                 .expect_err("alternate-layout identifier proof envelope must reject");
             assert!(
@@ -906,7 +863,6 @@ pub mod isi {
                 "unexpected error: {err}"
             );
         }
-
         #[test]
         fn identifier_verify_execution_proof_propagates_node_guardrails() {
             let verifier = sample_proof_verifier();
@@ -914,7 +870,6 @@ pub mod isi {
             let proof = sample_proof_box(&verifier, |_| {});
             let mut guardrails = test_guardrails();
             guardrails.halo2_enabled = false;
-
             let err = verify_execution_proof(&proof, &execution, &verifier, guardrails)
                 .expect_err("identifier claim verification must honor disabled Halo2");
             assert!(
@@ -924,9 +879,12 @@ pub mod isi {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use crate::{
+        kura::Kura, prelude::World, query::store::LiveQueryStore, smartcontracts::Execute,
+        state::State,
+    };
     use iroha_crypto::{
         Algorithm, BfvEvaluationKeyBundle, Hash, KeyPair, PrivateKey, RamLfeBackend,
         RamLfeVerificationMode, Signature, SignatureOf,
@@ -958,38 +916,27 @@ mod tests {
     };
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
-
-    use crate::{
-        kura::Kura, prelude::World, query::store::LiveQueryStore, smartcontracts::Execute,
-        state::State,
-    };
-
     fn test_state() -> State {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         State::new_for_testing(World::default(), kura, query)
     }
-
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("identifier fixture key generation should succeed")
     }
-
     fn checked_account_id() -> AccountId {
         AccountId::new(checked_keypair().public_key().clone())
     }
-
     #[test]
     fn checked_keypair_helper_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
-
     fn checked_signature_of<T: norito::codec::Encode>(
         private_key: &PrivateKey,
         payload: &T,
     ) -> SignatureOf<T> {
         SignatureOf::try_new(private_key, payload).expect("test fixture signing should succeed")
     }
-
     fn seed_domain(state: &mut State, domain_id: &DomainId, owner: &AccountId) {
         let domain = Domain {
             id: domain_id.clone(),
@@ -999,7 +946,6 @@ mod tests {
         };
         state.world.domains.insert(domain_id.clone(), domain);
     }
-
     fn seed_account_with_uaid(
         state: &mut State,
         account_id: &AccountId,
@@ -1021,7 +967,6 @@ mod tests {
             .insert(account_id.clone(), account_value);
         state.world.uaid_accounts.insert(uaid, account_id.clone());
     }
-
     fn claim_receipt(
         policy_id: &IdentifierPolicyId,
         program_policy: &RamLfeProgramPolicy,
@@ -1084,7 +1029,6 @@ mod tests {
             attestation: RamLfeReceiptAttestation::Signed(signature),
         }
     }
-
     fn sample_program_policy(
         owner: &AccountId,
         resolver: &KeyPair,
@@ -1131,7 +1075,6 @@ mod tests {
             resolver.public_key().clone(),
         )
     }
-
     fn register_and_activate_program_policy(
         owner: &AccountId,
         tx: &mut crate::state::StateTransaction<'_, '_>,
@@ -1148,7 +1091,6 @@ mod tests {
         .execute(owner, tx)
         .expect("activate program policy");
     }
-
     #[test]
     fn identifier_claim_and_revoke_update_indexes() {
         let mut state = test_state();
@@ -1157,7 +1099,6 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-owner"));
         seed_domain(&mut state, &domain_id, &owner);
         seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
-
         let resolver = checked_keypair();
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let program_id: RamLfeProgramId = "phone_retail".parse().expect("program id");
@@ -1168,7 +1109,6 @@ mod tests {
             IdentifierNormalization::PhoneE164,
             program_id.clone(),
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -1202,7 +1142,6 @@ mod tests {
         .expect("claim identifier");
         tx.apply();
         block.commit().expect("commit block");
-
         let claims = state.world.identifier_claims.view();
         let claim = claims.get(&opaque_id).expect("claim should be indexed");
         assert_eq!(claim.policy_id, policy_id);
@@ -1225,7 +1164,6 @@ mod tests {
                 .contains(&opaque_id),
             "account should advertise claimed opaque id"
         );
-
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -1237,7 +1175,6 @@ mod tests {
         .expect("revoke identifier");
         tx.apply();
         block.commit().expect("commit block");
-
         assert!(
             state
                 .world
@@ -1263,7 +1200,6 @@ mod tests {
             "account should no longer advertise revoked opaque id"
         );
     }
-
     #[test]
     fn claim_identifier_rejects_accounts_without_uaid() {
         let mut state = test_state();
@@ -1282,7 +1218,6 @@ mod tests {
             .world
             .accounts
             .insert(account_id.clone(), account_value);
-
         let resolver = checked_keypair();
         let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
         let program_id: RamLfeProgramId = "email_retail".parse().expect("program id");
@@ -1293,7 +1228,6 @@ mod tests {
             IdentifierNormalization::EmailAddress,
             program_id.clone(),
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -1322,13 +1256,11 @@ mod tests {
         }
         .execute(&owner, &mut tx)
         .expect_err("accounts without a UAID must be rejected");
-
         assert!(
             err.to_string().contains("does not have a UAID"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn claim_identifier_rejects_invalid_receipt_signature() {
         let mut state = test_state();
@@ -1337,7 +1269,6 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-invalid-signature"));
         seed_domain(&mut state, &domain_id, &owner);
         seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
-
         let resolver = checked_keypair();
         let wrong_resolver = checked_keypair();
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
@@ -1349,7 +1280,6 @@ mod tests {
             IdentifierNormalization::PhoneE164,
             program_id.clone(),
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -1362,7 +1292,6 @@ mod tests {
         }
         .execute(&owner, &mut tx)
         .expect("activate policy");
-
         let err = ClaimIdentifier {
             account: owner.clone(),
             receipt: claim_receipt(
@@ -1378,13 +1307,11 @@ mod tests {
         }
         .execute(&owner, &mut tx)
         .expect_err("claim must reject a receipt signed by a different resolver");
-
         assert!(
             err.to_string().contains("signature is invalid"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn claim_identifier_rejects_invalid_output_opening_signature() {
         let mut state = test_state();
@@ -1393,7 +1320,6 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-invalid-opening-signature"));
         seed_domain(&mut state, &domain_id, &owner);
         seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
-
         let resolver = checked_keypair();
         let wrong_resolver = checked_keypair();
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
@@ -1405,7 +1331,6 @@ mod tests {
             IdentifierNormalization::PhoneE164,
             program_id.clone(),
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -1418,7 +1343,6 @@ mod tests {
         }
         .execute(&owner, &mut tx)
         .expect("activate policy");
-
         let mut receipt = claim_receipt(
             &policy_id,
             &program_policy,
@@ -1437,21 +1361,18 @@ mod tests {
         receipt.attestation = RamLfeReceiptAttestation::Signed(
             checked_signature_of(resolver.private_key(), &receipt.payload).into(),
         );
-
         let err = ClaimIdentifier {
             account: owner.clone(),
             receipt,
         }
         .execute(&owner, &mut tx)
         .expect_err("claim must reject an opening signed by a different verifier");
-
         assert!(
             err.to_string()
                 .contains("RAM-LFE output opening signature is invalid"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn claim_identifier_rejects_validly_signed_opening_mismatched_to_execution() {
         let mut state = test_state();
@@ -1460,7 +1381,6 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-opening-mismatch"));
         seed_domain(&mut state, &domain_id, &owner);
         seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
-
         let resolver = checked_keypair();
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let program_id: RamLfeProgramId = "phone_retail".parse().expect("program id");
@@ -1471,7 +1391,6 @@ mod tests {
             IdentifierNormalization::PhoneE164,
             program_id.clone(),
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -1484,7 +1403,6 @@ mod tests {
         }
         .execute(&owner, &mut tx)
         .expect("activate policy");
-
         let resign = |receipt: &mut IdentifierResolutionReceipt| {
             receipt.payload.opening.signature =
                 checked_signature_of(resolver.private_key(), &receipt.payload.opening.payload)
@@ -1493,7 +1411,6 @@ mod tests {
                 checked_signature_of(resolver.private_key(), &receipt.payload).into(),
             );
         };
-
         macro_rules! assert_claim_rejected {
             ($label:literal, |$receipt:ident| $body:block, $expected:literal) => {{
                 let mut $receipt = claim_receipt(
@@ -1521,7 +1438,6 @@ mod tests {
                 );
             }};
         }
-
         assert_claim_rejected!(
             "opening program mismatch",
             |receipt| {
@@ -1587,7 +1503,6 @@ mod tests {
             "opening expiry must be greater"
         );
     }
-
     #[test]
     fn claim_identifier_rejects_zero_receipt_hash() {
         let mut state = test_state();
@@ -1596,7 +1511,6 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-zero-receipt-hash"));
         seed_domain(&mut state, &domain_id, &owner);
         seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
-
         let resolver = checked_keypair();
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
         let program_id: RamLfeProgramId = "phone_retail".parse().expect("program id");
@@ -1607,7 +1521,6 @@ mod tests {
             IdentifierNormalization::PhoneE164,
             program_id.clone(),
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -1620,7 +1533,6 @@ mod tests {
         }
         .execute(&owner, &mut tx)
         .expect("activate policy");
-
         let mut receipt = claim_receipt(
             &policy_id,
             &program_policy,
@@ -1641,13 +1553,11 @@ mod tests {
         }
         .execute(&owner, &mut tx)
         .expect_err("claim must reject a zero receipt hash");
-
         assert!(
             err.to_string().contains("receipt hash must not be zero"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn claim_identifier_rejects_expired_receipts() {
         let mut state = test_state();
@@ -1656,7 +1566,6 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-expired-receipt"));
         seed_domain(&mut state, &domain_id, &owner);
         seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
-
         let resolver = checked_keypair();
         let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
         let program_id: RamLfeProgramId = "email_retail".parse().expect("program id");
@@ -1667,7 +1576,6 @@ mod tests {
             IdentifierNormalization::EmailAddress,
             program_id.clone(),
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 11, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -1680,7 +1588,6 @@ mod tests {
         }
         .execute(&owner, &mut tx)
         .expect("activate policy");
-
         let err = ClaimIdentifier {
             account: owner.clone(),
             receipt: claim_receipt(
@@ -1696,13 +1603,11 @@ mod tests {
         }
         .execute(&owner, &mut tx)
         .expect_err("claim must reject a receipt that is already expired");
-
         assert!(
             err.to_string().contains("expired at or before block time"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn expired_identifier_claim_can_be_reclaimed_by_new_uaid() {
         let mut state = test_state();
@@ -1715,7 +1620,6 @@ mod tests {
         seed_domain(&mut state, &domain_id, &owner);
         seed_account_with_uaid(&mut state, &owner, &domain_id, owner_uaid);
         seed_account_with_uaid(&mut state, &replacement, &domain_id, replacement_uaid);
-
         let resolver = checked_keypair();
         let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
         let program_id: RamLfeProgramId = "email_retail".parse().expect("program id");
@@ -1727,7 +1631,6 @@ mod tests {
             program_id.clone(),
         );
         let output_seed = b"shared-identifier-value";
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -1759,7 +1662,6 @@ mod tests {
         .expect("claim initial identifier");
         tx.apply();
         block.commit().expect("commit first block");
-
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 101, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -1781,7 +1683,6 @@ mod tests {
         .expect("reclaim expired identifier");
         tx.apply();
         block.commit().expect("commit second block");
-
         let claim = state
             .world
             .identifier_claims

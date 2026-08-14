@@ -25,7 +25,6 @@ fn lane_block_application_receipt_persists_canonical_results_and_reloads() {
         .expect("lane ownership")
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(Arc::new(block))
         .expect("store block with lane artifact and results");
@@ -33,7 +32,6 @@ fn lane_block_application_receipt_persists_canonical_results_and_reloads() {
         .expect("persist lane application receipt");
     kura.persist_lane_block_application_receipt(&proposal)
         .expect("duplicate lane application receipt persistence is idempotent");
-
     let receipt = kura
         .read_lane_block_application_receipt(lane_id, lane_block_height)
         .expect("lane application receipt");
@@ -56,7 +54,6 @@ fn lane_block_application_receipt_persists_canonical_results_and_reloads() {
         vec![Hash::from(expected_result.hash())]
     );
     assert!(kura.lane_block_application_receipt_available(&proposal));
-
     let (data_path, index_path) =
         Kura::lane_block_application_receipt_paths_for_entry(lane_entry, temp_dir.path());
     assert!(
@@ -67,7 +64,6 @@ fn lane_block_application_receipt_persists_canonical_results_and_reloads() {
         index_path.is_file(),
         "lane application receipt index file missing"
     );
-
     drop(kura);
     let (reloaded, _) = Kura::new(&config, &lane_config).expect("reopen kura");
     assert_eq!(
@@ -76,7 +72,6 @@ fn lane_block_application_receipt_persists_canonical_results_and_reloads() {
     );
     assert!(reloaded.lane_block_application_receipt_available(&proposal));
 }
-
 #[test]
 fn terminal_receipt_pair_revalidation_fails_closed_on_missing_corrupt_and_mismatched_bytes() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -115,7 +110,6 @@ fn terminal_receipt_pair_revalidation_fails_closed_on_missing_corrupt_and_mismat
     let original_index = fs::read(&index_path).expect("read receipt index bytes");
     assert!(original_data.len() > 1);
     assert!(original_index.len() > 1);
-
     let require_exact = || {
         kura.require_exact_autonomous_lifecycle_terminal_application_receipt_for_tests(
             &expected,
@@ -124,7 +118,6 @@ fn terminal_receipt_pair_revalidation_fails_closed_on_missing_corrupt_and_mismat
         )
     };
     require_exact().expect("an unchanged receipt pair must revalidate exactly");
-
     fs::write(&data_path, &original_data[..original_data.len() - 1])
         .expect("truncate receipt data");
     assert!(
@@ -133,7 +126,6 @@ fn terminal_receipt_pair_revalidation_fails_closed_on_missing_corrupt_and_mismat
     );
     fs::write(&data_path, &original_data).expect("restore receipt data");
     require_exact().expect("restored receipt data must revalidate");
-
     let mut corrupt_data = original_data.clone();
     let corrupt_data_index = corrupt_data.len() / 2;
     corrupt_data[corrupt_data_index] ^= 0x80;
@@ -143,7 +135,6 @@ fn terminal_receipt_pair_revalidation_fails_closed_on_missing_corrupt_and_mismat
         "corrupt receipt data must fail closed",
     );
     fs::write(&data_path, &original_data).expect("restore receipt data after corruption");
-
     fs::write(&index_path, &original_index[..original_index.len() - 1])
         .expect("truncate receipt index");
     assert!(
@@ -151,7 +142,6 @@ fn terminal_receipt_pair_revalidation_fails_closed_on_missing_corrupt_and_mismat
         "a truncated receipt index must fail closed",
     );
     fs::write(&index_path, &original_index).expect("restore receipt index");
-
     let mut mismatched_index = original_index.clone();
     let mismatched_index_offset = mismatched_index.len() / 2;
     mismatched_index[mismatched_index_offset] ^= 0x40;
@@ -162,14 +152,12 @@ fn terminal_receipt_pair_revalidation_fails_closed_on_missing_corrupt_and_mismat
     );
     fs::write(&index_path, &original_index).expect("restore receipt index after mismatch");
     require_exact().expect("the fully restored receipt pair must revalidate");
-
     fs::remove_file(&index_path).expect("remove receipt index");
     assert!(
         require_exact().is_err(),
         "a missing receipt index must fail closed",
     );
 }
-
 #[test]
 fn receipt_repair_preflight_does_not_request_an_already_present_unowned_body() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -195,7 +183,6 @@ fn receipt_repair_preflight_does_not_request_an_already_present_unowned_body() {
         Some(Hash::new(b"unowned-receipt-predecessor"));
     unowned.descriptor.descriptor_hash = unowned.descriptor.computed_descriptor_hash();
     unowned.proposal_hash = unowned.computed_proposal_hash();
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(Arc::new(block))
         .expect("store canonical body with a different lane owner");
@@ -205,7 +192,6 @@ fn receipt_repair_preflight_does_not_request_an_already_present_unowned_body() {
         "a present canonical body that does not own the certified proposal is a conflict, not a recoverable missing-body need",
     );
 }
-
 fn lane_block_application_receipt_strict_retry_reissues_every_barrier() {
     for (label, failure) in strict_progress_sidecar_failure_modes() {
         let temp_dir = TempDir::new().expect("create temp dir");
@@ -235,7 +221,6 @@ fn lane_block_application_receipt_strict_retry_reissues_every_barrier() {
             .expect("lane ownership")
             .clone();
         let proposal = lane_block_proposal_from_ownership(&ownership);
-
         let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
         kura.store_block(Arc::new(block))
             .expect("store canonical receipt evidence");
@@ -244,7 +229,6 @@ fn lane_block_application_receipt_strict_retry_reissues_every_barrier() {
             .expect("recover expected receipt before fault injection");
         let (data_path, index_path) =
             Kura::lane_block_application_receipt_paths_for_entry(lane_entry, temp_dir.path());
-
         failure.inject();
         assert!(
             kura.persist_lane_block_application_receipt_if_ready(&proposal)
@@ -264,7 +248,6 @@ fn lane_block_application_receipt_strict_retry_reissues_every_barrier() {
         let first_data_len = fs::metadata(&data_path)
             .expect("receipt data metadata")
             .len();
-
         drop(kura);
         let (kura, _) = Kura::new(&config, &lane_config).expect("reopen Kura after fault");
         failure.inject();
@@ -273,13 +256,11 @@ fn lane_block_application_receipt_strict_retry_reissues_every_barrier() {
             None,
             "a reopened public reader must not expose a receipt while its {label} barrier fails"
         );
-
         failure.inject();
         assert!(
             !kura.lane_block_application_receipt_available(&proposal),
             "receipt availability must fail closed while its {label} barrier fails"
         );
-
         failure.inject();
         assert!(
             kura.persist_lane_block_application_receipt_if_ready(&proposal)
@@ -293,7 +274,6 @@ fn lane_block_application_receipt_strict_retry_reissues_every_barrier() {
             first_data_len,
             "failed exact receipt retry must not append duplicate bytes"
         );
-
         assert!(
             kura.persist_lane_block_application_receipt_if_ready(&proposal)
                 .expect("receipt retry after barrier recovery"),
@@ -313,7 +293,6 @@ fn lane_block_application_receipt_strict_retry_reissues_every_barrier() {
         );
     }
 }
-
 #[test]
 fn current_application_receipt_fails_closed_after_lane_recreation() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -333,7 +312,6 @@ fn current_application_receipt_fails_closed_after_lane_recreation() {
         .expect("lane ownership")
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(Arc::new(block))
         .expect("store canonical receipt anchor");
@@ -365,7 +343,6 @@ fn current_application_receipt_fails_closed_after_lane_recreation() {
             .format,
         LaneBlockApplicationReceiptArtifactFormat::Current,
     );
-
     kura.install_lane_incarnation_marker_for_test(
         lane_entry,
         Hash::new(b"recreated-current-receipt-incarnation"),
@@ -408,7 +385,6 @@ fn current_application_receipt_fails_closed_after_lane_recreation() {
         "canonical global evidence must not authorize a retired-incarnation receipt replay",
     );
     drop(kura);
-
     let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
     assert!(
         reopened
@@ -417,7 +393,6 @@ fn current_application_receipt_fails_closed_after_lane_recreation() {
         "restart must preserve the recreated marker boundary for current receipts",
     );
 }
-
 #[test]
 fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_closed_after_lane_recreation()
  {
@@ -436,7 +411,6 @@ fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_cl
     let descriptor = execution.proposal.descriptor.clone();
     kura.install_lane_incarnation_marker_for_test(lane_entry, descriptor.lane_incarnation, 0)
         .expect("install merge receipt lane marker");
-
     let mut blocks = DummyBlocks::new();
     let parent = blocks.next();
     let raw_carrier = blocks.next();
@@ -501,7 +475,6 @@ fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_cl
         .is_some(),
         "the compact cursor must revalidate against the exact merge entry and carrier"
     );
-
     let history_before_capacity_refusal = snapshot_regular_files_recursively(temp_dir.path());
     Arc::get_mut(&mut kura)
         .expect("exclusive Kura before compaction capacity refusal")
@@ -542,14 +515,12 @@ fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_cl
     Arc::get_mut(&mut kura)
         .expect("exclusive Kura after compaction capacity refusal")
         .max_disk_usage_bytes = 0;
-
     kura.first_release_lane_retirement_admissible_for_test(
         descriptor.lane_id,
         descriptor.dataspace_id,
         descriptor.lane_incarnation,
     )
     .expect("a canonical merge receipt must release its historical execution from retirement");
-
     kura.install_lane_incarnation_marker_for_test(
         lane_entry,
         Hash::new(b"recreated-merge-receipt-incarnation"),
@@ -580,13 +551,11 @@ fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_cl
         "historical repair must not repopulate a retired receipt into recreated storage",
     );
     drop(kura);
-
     assert!(
         Kura::new(&config, &lane_config).is_err(),
         "restart must fail closed when a recreated active directory still contains the old incarnation's terminal frontier",
     );
 }
-
 #[test]
 fn lane_block_sidecars_remain_valid_for_hash_only_snapshot_anchor() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -615,7 +584,6 @@ fn lane_block_sidecars_remain_valid_for_hash_only_snapshot_anchor() {
         .expect("lane ownership")
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(Arc::new(block))
         .expect("store block with lane artifact and results");
@@ -632,7 +600,6 @@ fn lane_block_sidecars_remain_valid_for_hash_only_snapshot_anchor() {
     let receipt = kura
         .read_lane_block_application_receipt(lane_id, lane_block_height)
         .expect("lane application receipt before snapshot pruning");
-
     kura.force_hash_only_block_for_testing(block_height_usize)
         .expect("force block into hash-only snapshot form");
     assert!(kura.is_hash_only_block_height(block_height_usize));
@@ -653,7 +620,6 @@ fn lane_block_sidecars_remain_valid_for_hash_only_snapshot_anchor() {
     );
     assert!(kura.lane_block_application_receipt_available(&proposal));
 }
-
 #[test]
 fn lane_block_application_receipt_waits_for_committed_results() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -675,7 +641,6 @@ fn lane_block_application_receipt_waits_for_committed_results() {
         .expect("lane ownership")
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact but no results");
@@ -696,7 +661,6 @@ fn lane_block_application_receipt_waits_for_committed_results() {
     );
     assert!(!kura.lane_block_application_receipt_available(&proposal));
 }
-
 #[test]
 fn lane_block_direct_application_receipt_persists_clean_preflight_results() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -718,7 +682,6 @@ fn lane_block_direct_application_receipt_persists_clean_preflight_results() {
         .expect("lane ownership")
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact but no canonical results");
@@ -744,12 +707,10 @@ fn lane_block_direct_application_receipt_persists_clean_preflight_results() {
     let preflight = kura
         .read_lane_block_execution_preflight(lane_id, lane_block_height)
         .expect("lane execution preflight");
-
     kura.persist_direct_lane_block_application_receipt(&input, &preflight)
         .expect("persist direct lane application receipt");
     kura.persist_direct_lane_block_application_receipt(&input, &preflight)
         .expect("direct lane application receipt persistence is idempotent");
-
     let receipt = kura
         .read_lane_block_application_receipt(lane_id, lane_block_height)
         .expect("direct lane application receipt");
@@ -766,7 +727,6 @@ fn lane_block_direct_application_receipt_persists_clean_preflight_results() {
     );
     assert_eq!(receipt.results, vec![result]);
     assert!(kura.lane_block_application_receipt_available(&proposal));
-
     drop(kura);
     let (reloaded, _) = Kura::new(&config, &lane_config).expect("reload kura");
     assert_eq!(
@@ -775,7 +735,6 @@ fn lane_block_direct_application_receipt_persists_clean_preflight_results() {
     );
     assert!(reloaded.lane_block_application_receipt_available(&proposal));
 }
-
 #[test]
 fn lane_block_direct_application_receipt_rejects_rejected_preflight() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -797,7 +756,6 @@ fn lane_block_direct_application_receipt_rejects_rejected_preflight() {
         .expect("lane ownership")
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact");
@@ -824,7 +782,6 @@ fn lane_block_direct_application_receipt_rejects_rejected_preflight() {
     let preflight = kura
         .read_lane_block_execution_preflight(lane_id, lane_block_height)
         .expect("lane execution preflight");
-
     assert!(
         kura.persist_direct_lane_block_application_receipt(&input, &preflight)
             .is_err(),
@@ -836,7 +793,6 @@ fn lane_block_direct_application_receipt_rejects_rejected_preflight() {
     );
     assert!(!kura.lane_block_application_receipt_available(&proposal));
 }
-
 #[test]
 fn lane_block_application_receipt_read_rejects_tampered_sidecar() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -861,7 +817,6 @@ fn lane_block_application_receipt_read_rejects_tampered_sidecar() {
         .expect("lane ownership")
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(Arc::new(block))
         .expect("store block with lane artifact and results");
@@ -889,7 +844,6 @@ fn lane_block_application_receipt_read_rejects_tampered_sidecar() {
         ),
         "tampered sidecar should overwrite the indexed application receipt entry"
     );
-
     assert_eq!(
         kura.read_lane_block_application_receipt(lane_id, lane_block_height),
         None,
@@ -897,7 +851,6 @@ fn lane_block_application_receipt_read_rejects_tampered_sidecar() {
     );
     assert!(!kura.lane_block_application_receipt_available(&proposal));
 }
-
 #[test]
 fn lane_block_application_receipt_reader_rejects_legacy_omitted_merge_evidence() {
     #[derive(Encode)]
@@ -912,7 +865,6 @@ fn lane_block_application_receipt_reader_rejects_legacy_omitted_merge_evidence()
         result_hashes: Vec<Hash>,
         results: Vec<TransactionResult>,
     }
-
     let temp_dir = TempDir::new().expect("create temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
@@ -935,7 +887,6 @@ fn lane_block_application_receipt_reader_rejects_legacy_omitted_merge_evidence()
             .first()
             .expect("lane ownership"),
     );
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(Arc::new(block))
         .expect("store block with lane artifact and results");
@@ -971,7 +922,6 @@ fn lane_block_application_receipt_reader_rejects_legacy_omitted_merge_evidence()
         ),
         "legacy application receipt should replace the indexed test entry"
     );
-
     assert_eq!(
         kura.read_lane_block_application_receipt_from_paths_locked(
             lane_id,
@@ -984,7 +934,6 @@ fn lane_block_application_receipt_reader_rejects_legacy_omitted_merge_evidence()
         "a receipt omitting all eleven merge-evidence fields must fail closed"
     );
 }
-
 #[test]
 fn autonomous_execution_input_requires_complete_exact_source_binding() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -997,7 +946,6 @@ fn autonomous_execution_input_requires_complete_exact_source_binding() {
         Ok(()),
         "a complete reservation-bound autonomous input must be accepted"
     );
-
     for (label, candidate) in [
         ("chain", {
             let mut candidate = input.clone();
@@ -1021,7 +969,6 @@ fn autonomous_execution_input_requires_complete_exact_source_binding() {
             "missing {label} binding must fail closed"
         );
     }
-
     let mut unbound = input.clone();
     unbound.reservation_keys.clear();
     unbound.routing_plans.clear();
@@ -1031,7 +978,6 @@ fn autonomous_execution_input_requires_complete_exact_source_binding() {
         Err("autonomous execution input reservation and routing vectors are not aligned"),
         "the former payload-hint compatibility handoff must fail closed"
     );
-
     let mut unsupported_reservation_version = input;
     unsupported_reservation_version.reservation_keys[0].version =
         LaneQueueReservationKeyV2::VERSION + 1;
@@ -1040,7 +986,6 @@ fn autonomous_execution_input_requires_complete_exact_source_binding() {
         Err("autonomous execution input reservation key is invalid")
     );
 }
-
 #[test]
 fn global_execution_input_rejects_unbound_autonomous_metadata() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1052,7 +997,6 @@ fn global_execution_input_rejects_unbound_autonomous_metadata() {
     input.autonomous_network_id = None;
     input.autonomous_epoch = None;
     input.autonomous_payload_hash = None;
-
     for (label, candidate) in [
         ("reservation", {
             let mut candidate = input.clone();
@@ -1079,7 +1023,6 @@ fn global_execution_input_rejects_unbound_autonomous_metadata() {
             "{label} metadata must fail closed without an autonomous source binding"
         );
     }
-
     input.reservation_keys.clear();
     input.routing_plans.clear();
     input.native_amx_receipts.clear();
@@ -1088,7 +1031,6 @@ fn global_execution_input_rejects_unbound_autonomous_metadata() {
         Ok(())
     );
 }
-
 #[test]
 fn lane_block_application_receipt_replaces_stale_rollback_evidence() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1113,7 +1055,6 @@ fn lane_block_application_receipt_replaces_stale_rollback_evidence() {
             .first()
             .expect("original ownership"),
     );
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(Arc::new(original))
         .expect("store original application block");
@@ -1122,14 +1063,12 @@ fn lane_block_application_receipt_replaces_stale_rollback_evidence() {
     let original_receipt = kura
         .read_lane_block_application_receipt(lane_id, lane_block_height)
         .expect("original receipt");
-
     kura.prune_to_height(0).expect("roll back original carrier");
     assert_eq!(
         kura.read_lane_block_application_receipt(lane_id, lane_block_height),
         None,
         "receipt must become stale when its global evidence is rolled back"
     );
-
     std::thread::sleep(Duration::from_millis(2));
     let mut replacement = dummy_block_with_lane_payload_ownership(
         lane_id,
@@ -1153,14 +1092,12 @@ fn lane_block_application_receipt_replaces_stale_rollback_evidence() {
         .expect("store replacement application block");
     kura.persist_lane_block_application_receipt(&replacement_proposal)
         .expect("stale receipt must not block replacement evidence");
-
     let replacement_receipt = kura
         .read_lane_block_application_receipt(lane_id, lane_block_height)
         .expect("replacement receipt");
     assert_eq!(replacement_receipt.application_block_hash, replacement_hash);
     assert_ne!(replacement_receipt, original_receipt);
 }
-
 #[test]
 fn lane_block_execution_input_rejects_forged_entrypoint_hashes() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1182,7 +1119,6 @@ fn lane_block_execution_input_rejects_forged_entrypoint_hashes() {
         .expect("lane ownership")
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact");
@@ -1191,7 +1127,6 @@ fn lane_block_execution_input_rejects_forged_entrypoint_hashes() {
         .expect("recover executable lane payload");
     let mut forged = LaneBlockExecutionInputArtifact::new(recovered);
     forged.entrypoint_hashes[0] = Hash::new(b"forged lane execution input hash");
-
     assert!(
         kura.write_lane_block_execution_input_artifact(&forged, None, 0)
             .is_err(),
@@ -1202,7 +1137,6 @@ fn lane_block_execution_input_rejects_forged_entrypoint_hashes() {
         None
     );
 }
-
 #[test]
 fn lane_block_execution_input_read_rejects_tampered_sidecar() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1224,7 +1158,6 @@ fn lane_block_execution_input_read_rejects_tampered_sidecar() {
         .expect("lane ownership")
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact");
@@ -1255,14 +1188,12 @@ fn lane_block_execution_input_read_rejects_tampered_sidecar() {
         ),
         "tampered sidecar should overwrite the indexed execution input entry"
     );
-
     assert_eq!(
         kura.read_lane_block_execution_input(lane_id, lane_block_height),
         None,
         "tampered execution input sidecars must be rejected on read"
     );
     assert!(!kura.lane_block_execution_input_available(&proposal));
-
     kura.persist_lane_block_execution_input(&recovered)
         .expect("canonical recovery should overwrite stale execution input");
     let healed = kura
@@ -1274,7 +1205,6 @@ fn lane_block_execution_input_read_rejects_tampered_sidecar() {
         "healed execution input should be available to the standalone executor"
     );
 }
-
 #[test]
 fn lane_block_execution_input_reader_rejects_legacy_omitted_autonomous_binding() {
     #[derive(Encode)]
@@ -1285,7 +1215,6 @@ fn lane_block_execution_input_reader_rejects_legacy_omitted_autonomous_binding()
         entrypoint_hashes: Vec<Hash>,
         entrypoints: Vec<TransactionEntrypoint>,
     }
-
     let temp_dir = TempDir::new().expect("create temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
@@ -1305,7 +1234,6 @@ fn lane_block_execution_input_reader_rejects_legacy_omitted_autonomous_binding()
             .first()
             .expect("lane ownership"),
     );
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact");
@@ -1336,7 +1264,6 @@ fn lane_block_execution_input_reader_rejects_legacy_omitted_autonomous_binding()
         ),
         "legacy execution input should populate the indexed test entry"
     );
-
     assert_eq!(
         kura.read_lane_block_execution_input_from_paths_locked(
             lane_id,
@@ -1349,7 +1276,6 @@ fn lane_block_execution_input_reader_rejects_legacy_omitted_autonomous_binding()
         "a pre-autonomous input omitting bindings, reservations, routing, and receipts must fail closed"
     );
 }
-
 #[test]
 fn lane_block_execution_input_read_heals_stale_canonical_artifact() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1371,7 +1297,6 @@ fn lane_block_execution_input_read_heals_stale_canonical_artifact() {
         .expect("lane ownership")
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact");
@@ -1384,7 +1309,6 @@ fn lane_block_execution_input_read_heals_stale_canonical_artifact() {
         kura.lane_block_execution_input_available(&proposal),
         "fresh execution input should be available before canonical artifact drift"
     );
-
     let stale_artifact = LaneBlockArtifact::new(
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             b"stale canonical lane artifact block hash",
@@ -1408,7 +1332,6 @@ fn lane_block_execution_input_read_heals_stale_canonical_artifact() {
         ),
         "stale lane artifact should overwrite the indexed artifact entry"
     );
-
     assert_eq!(
         kura.read_lane_block_execution_input(lane_id, lane_block_height),
         Some(LaneBlockExecutionInputArtifact::new(recovered.clone())),
@@ -1424,7 +1347,6 @@ fn lane_block_execution_input_read_heals_stale_canonical_artifact() {
         "healing must restore the canonical lane artifact"
     );
 }
-
 #[test]
 fn lane_block_execution_preflight_persists_current_state_results_and_reloads() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1446,7 +1368,6 @@ fn lane_block_execution_preflight_persists_current_state_results_and_reloads() {
         .expect("lane ownership")
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact");
@@ -1464,7 +1385,6 @@ fn lane_block_execution_preflight_persists_current_state_results_and_reloads() {
     let results = vec![TransactionResult::new(TransactionResultInner::Ok(
         DataTriggerSequence::new(),
     ))];
-
     kura.persist_lane_block_execution_preflight(&input, 7, state_hash.clone(), results.clone())
         .expect("persist lane execution preflight");
     kura.persist_lane_block_execution_preflight(&input, 7, state_hash.clone(), results.clone())
@@ -1510,7 +1430,6 @@ fn lane_block_execution_preflight_persists_current_state_results_and_reloads() {
         None,
         "preflight evidence must be tied to the current local state tip"
     );
-
     drop(kura);
     let (reloaded, _) = Kura::new(&config, &lane_config).expect("reload kura");
     assert_eq!(
@@ -1518,7 +1437,6 @@ fn lane_block_execution_preflight_persists_current_state_results_and_reloads() {
         Some(preflight)
     );
 }
-
 #[test]
 fn lane_block_execution_preflight_rejects_result_count_drift() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1540,7 +1458,6 @@ fn lane_block_execution_preflight_rejects_result_count_drift() {
         .expect("lane ownership")
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact");
@@ -1552,7 +1469,6 @@ fn lane_block_execution_preflight_rejects_result_count_drift() {
     let input = kura
         .read_lane_block_execution_input(lane_id, lane_block_height)
         .expect("lane execution input");
-
     let err = kura
         .persist_lane_block_execution_preflight(&input, 0, None, Vec::new())
         .expect_err("preflight result count drift must be rejected");
@@ -1573,7 +1489,6 @@ fn lane_block_execution_preflight_rejects_result_count_drift() {
         "malformed preflight sidecar must not be readable after rejected persist"
     );
 }
-
 #[test]
 fn lane_block_direct_application_input_requires_predecessor_receipt() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1595,7 +1510,6 @@ fn lane_block_direct_application_input_requires_predecessor_receipt() {
         .expect("lane ownership")
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact");
@@ -1610,7 +1524,6 @@ fn lane_block_direct_application_input_requires_predecessor_receipt() {
     let result = TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
     kura.persist_lane_block_execution_preflight(&input, 0, None, vec![result])
         .expect("persist clean lane execution preflight");
-
     assert!(
         !kura.lane_block_predecessor_application_receipt_available(&proposal),
         "height-two lane blocks must wait for their certified predecessor receipt"
@@ -1621,7 +1534,6 @@ fn lane_block_direct_application_input_requires_predecessor_receipt() {
         "clean preflight alone must not bypass lane predecessor application"
     );
 }
-
 #[test]
 fn first_lane_block_requires_the_canonical_zero_predecessor() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1639,12 +1551,10 @@ fn first_lane_block_requires_the_canonical_zero_predecessor() {
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
-
     assert!(
         kura.lane_block_predecessor_application_receipt_available(&proposal),
         "lane-local height one must use the canonical zero/None predecessor"
     );
-
     let mut malformed = proposal;
     malformed.descriptor.previous_lane_block_descriptor_hash =
         Some(Hash::new(b"unexpected height-one predecessor"));
@@ -1655,7 +1565,6 @@ fn first_lane_block_requires_the_canonical_zero_predecessor() {
         "lane-local height one must reject any predecessor descriptor"
     );
 }
-
 #[test]
 fn lane_block_predecessor_receipt_rejects_missing_non_genesis_descriptor() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1680,14 +1589,12 @@ fn lane_block_predecessor_receipt_rejects_missing_non_genesis_descriptor() {
     proposal.descriptor.previous_lane_block_descriptor_hash = None;
     proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
     proposal.proposal_hash = proposal.computed_proposal_hash();
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     assert!(
         !kura.lane_block_predecessor_application_receipt_available(&proposal),
         "a missing non-genesis predecessor descriptor must never bypass lane continuity"
     );
 }
-
 #[test]
 fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1696,7 +1603,6 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let dataspace_id = lane_entry.dataspace_id;
-
     let mut generator = DummyBlocks::new();
     let mut predecessor_block = dummy_block_with_lane_payload_ownership_from_generator(
         &mut generator,
@@ -1715,7 +1621,6 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
         .expect("predecessor lane ownership")
         .clone();
     let predecessor_proposal = lane_block_proposal_from_ownership(&predecessor_ownership);
-
     let mut successor_block = dummy_block_with_lane_payload_ownership_from_generator(
         &mut generator,
         lane_id,
@@ -1729,7 +1634,6 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
         predecessor_proposal.descriptor.descriptor_hash,
     );
     let successor_proposal = lane_block_proposal_from_ownership(&successor_ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(Arc::new(predecessor_block))
         .expect("store predecessor block with results");
@@ -1761,7 +1665,6 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
         kura.lane_block_application_receipt_available(&predecessor_proposal),
         "canonical block application must remain authoritative over stale local preflight evidence"
     );
-
     kura.store_block(Arc::new(successor_block))
         .expect("store successor block with predecessor descriptor");
     let successor_recovered = kura
@@ -1775,7 +1678,6 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
     let ok = TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
     kura.persist_lane_block_execution_preflight(&successor_input, 0, None, vec![ok])
         .expect("persist clean successor preflight");
-
     assert!(
         kura.lane_block_predecessor_application_receipt_available(&successor_proposal),
         "canonical predecessor application must unblock the successor"
@@ -1789,7 +1691,6 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
         .is_some(),
         "clean successor preflight should be exposed after canonical predecessor application"
     );
-
     let canonical_proposal_for = |mut ownership: SumeragiLanePayloadOwnership| {
         let replay_hashes = ownership
             .compute_replay_hashes()
@@ -1800,7 +1701,6 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
         ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
         lane_block_proposal_from_ownership(&ownership)
     };
-
     let mut wrong_hash = successor_ownership.clone();
     wrong_hash.previous_lane_block_descriptor_hash =
         Some(Hash::new(b"wrong predecessor descriptor"));
@@ -1809,7 +1709,6 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
         !kura.lane_block_predecessor_application_receipt_available(&wrong_hash_proposal),
         "a different declared predecessor descriptor must not authorize a successor"
     );
-
     let mut non_increasing_global_height = successor_ownership.clone();
     non_increasing_global_height.proposal_height = predecessor_ownership.proposal_height;
     let non_increasing_global_height_proposal =
@@ -1820,7 +1719,6 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
         ),
         "a predecessor must be anchored at an earlier global proposal height"
     );
-
     let mut wrong_dataspace = successor_ownership.clone();
     wrong_dataspace.dataspace_id = DataSpaceId::new(dataspace_id.as_u64().saturating_add(1));
     let wrong_dataspace_proposal = canonical_proposal_for(wrong_dataspace);
@@ -1828,7 +1726,6 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
         !kura.lane_block_predecessor_application_receipt_available(&wrong_dataspace_proposal),
         "a predecessor receipt from another dataspace must not authorize a successor"
     );
-
     let mut wrong_incarnation = successor_ownership;
     wrong_incarnation.lane_incarnation = Hash::new(b"different successor lane incarnation");
     let wrong_incarnation_proposal = canonical_proposal_for(wrong_incarnation);
@@ -1837,7 +1734,6 @@ fn lane_block_direct_application_input_accepts_canonical_predecessor_receipt() {
         "a predecessor receipt from another lane incarnation must not authorize a successor"
     );
 }
-
 fn predecessor_application_receipt_fails_closed_while_durability_barrier_fails() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -1845,7 +1741,6 @@ fn predecessor_application_receipt_fails_closed_while_durability_barrier_fails()
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let dataspace_id = lane_entry.dataspace_id;
-
     let mut generator = DummyBlocks::new();
     let mut predecessor_block = dummy_block_with_lane_payload_ownership_from_generator(
         &mut generator,
@@ -1864,7 +1759,6 @@ fn predecessor_application_receipt_fails_closed_while_durability_barrier_fails()
         .expect("predecessor lane ownership")
         .clone();
     let predecessor_proposal = lane_block_proposal_from_ownership(&predecessor_ownership);
-
     let mut successor_block = dummy_block_with_lane_payload_ownership_from_generator(
         &mut generator,
         lane_id,
@@ -1878,7 +1772,6 @@ fn predecessor_application_receipt_fails_closed_while_durability_barrier_fails()
         predecessor_proposal.descriptor.descriptor_hash,
     );
     let successor_proposal = lane_block_proposal_from_ownership(&successor_ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(Arc::new(predecessor_block))
         .expect("store predecessor block with canonical results");
@@ -1888,7 +1781,6 @@ fn predecessor_application_receipt_fails_closed_while_durability_barrier_fails()
         kura.lane_block_predecessor_application_receipt_available(&successor_proposal),
         "durable predecessor receipt must authorize its exact successor"
     );
-
     for (label, failure) in strict_progress_sidecar_failure_modes() {
         failure.inject();
         assert!(
@@ -1901,7 +1793,6 @@ fn predecessor_application_receipt_fails_closed_while_durability_barrier_fails()
         );
     }
 }
-
 #[test]
 fn lane_block_execution_preflight_read_rejects_tampered_sidecar() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1923,7 +1814,6 @@ fn lane_block_execution_preflight_read_rejects_tampered_sidecar() {
         .expect("lane ownership")
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact");
@@ -1960,7 +1850,6 @@ fn lane_block_execution_preflight_read_rejects_tampered_sidecar() {
         ),
         "tampered sidecar should overwrite the indexed preflight entry"
     );
-
     assert_eq!(
         kura.read_lane_block_execution_preflight(lane_id, lane_block_height),
         None,
@@ -1971,7 +1860,6 @@ fn lane_block_execution_preflight_read_rejects_tampered_sidecar() {
         None
     );
 }
-
 #[test]
 fn canonical_lane_block_application_receipt_overrides_conflicting_preflight() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -1996,7 +1884,6 @@ fn canonical_lane_block_application_receipt_overrides_conflicting_preflight() {
         .expect("lane ownership")
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(Arc::new(block))
         .expect("store block with lane artifact and results");
@@ -2024,7 +1911,6 @@ fn canonical_lane_block_application_receipt_overrides_conflicting_preflight() {
     );
     kura.persist_lane_block_application_receipt(&proposal)
         .expect("persist canonical lane application receipt");
-
     assert!(
         kura.read_lane_block_application_receipt(lane_id, lane_block_height)
             .is_some(),
@@ -2038,13 +1924,11 @@ fn canonical_lane_block_application_receipt_overrides_conflicting_preflight() {
         kura.lane_block_application_receipt_available(&proposal),
         "canonical block results must keep the lane block applied despite stale preflight evidence"
     );
-
     drop(kura);
     let (reloaded, _) = Kura::new(&config, &lane_config).expect("reload kura");
     assert!(reloaded.lane_block_application_receipt_conflicts_with_preflight(&proposal));
     assert!(reloaded.lane_block_application_receipt_available(&proposal));
 }
-
 #[test]
 fn lane_block_payload_availability_rejects_entrypoint_hash_drift() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -2078,11 +1962,9 @@ fn lane_block_payload_availability_rejects_entrypoint_hash_drift() {
     )])
     .with_lane_payload_ownerships(vec![ownership]);
     block.set_execution_context(Some(execution_context));
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(Arc::new(block))
         .expect("store block with forged lane artifact");
-
     assert_eq!(
         kura.lane_block_payload_availability(&proposal),
         LaneBlockPayloadAvailability::EntrypointHashMismatch
@@ -2092,7 +1974,6 @@ fn lane_block_payload_availability_rejects_entrypoint_hash_drift() {
         Err(LaneBlockPayloadAvailability::EntrypointHashMismatch)
     );
 }
-
 #[test]
 fn lane_block_payload_availability_rejects_missing_entrypoint_index() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -2127,11 +2008,9 @@ fn lane_block_payload_availability_rejects_missing_entrypoint_index() {
     )])
     .with_lane_payload_ownerships(vec![ownership]);
     block.set_execution_context(Some(execution_context));
-
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(Arc::new(block))
         .expect("store block with missing-index lane artifact");
-
     assert_eq!(
         kura.recover_lane_block_payload(&proposal),
         Err(LaneBlockPayloadAvailability::MissingEntrypoint)

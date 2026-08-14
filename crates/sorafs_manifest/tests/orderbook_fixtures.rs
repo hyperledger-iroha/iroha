@@ -1,9 +1,5 @@
 #![allow(unexpected_cfgs)]
-
 //! Round-trip and cross-SDK outcome coverage for committed SoraFS orderbook fixtures.
-
-use std::{fs, path::Path};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use sorafs_manifest::{
     ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1,
@@ -13,18 +9,16 @@ use sorafs_manifest::{
     verify_order_cancel_signature_v1, verify_order_request_signature_v1,
     verify_settlement_receipt_signature_v1,
 };
+use std::{fs, path::Path};
 use tempfile::tempdir;
-
 const FIXTURES_ROOT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/sorafs_manifest/orderbook"
 );
-
 fn read_fixture_bytes(name: &str) -> Vec<u8> {
     let path = format!("{FIXTURES_ROOT}/{name}.to");
     fs::read(&path).unwrap_or_else(|err| panic!("failed to read {path}: {err}"))
 }
-
 fn regenerate_fixtures(root: &Path) {
     let output = cargo_bin_cmd!("generate_orderbook_fixtures")
         .current_dir(root)
@@ -37,7 +31,6 @@ fn regenerate_fixtures(root: &Path) {
         String::from_utf8_lossy(&output.stderr),
     );
 }
-
 fn assert_outcome_fixture(name: &str, actual: &sorafs_manifest::ValidationOutcomeV1) {
     let path = format!("{FIXTURES_ROOT}/{name}");
     let expected =
@@ -48,7 +41,6 @@ fn assert_outcome_fixture(name: &str, actual: &sorafs_manifest::ValidationOutcom
     );
     assert_eq!(actual, expected, "validation outcome fixture drifted");
 }
-
 fn assert_json_hex_matches(name: &str, bytes: &[u8]) {
     let path = format!("{FIXTURES_ROOT}/{name}.json");
     let json_text =
@@ -63,7 +55,6 @@ fn assert_json_hex_matches(name: &str, bytes: &[u8]) {
         hex::decode(norito_hex).expect("fixture commentary must contain valid hex payload");
     assert_eq!(norito_bytes, bytes, "`norito_bytes_hex` drifted");
 }
-
 #[test]
 fn order_request_fixture_decodes_and_validates() {
     let bytes = read_fixture_bytes("order_request_v1");
@@ -86,7 +77,6 @@ fn order_request_fixture_decodes_and_validates() {
     );
     assert_json_hex_matches("order_request_v1", &bytes);
 }
-
 #[test]
 fn order_cancel_fixture_decodes_and_validates() {
     let bytes = read_fixture_bytes("order_cancel_v1");
@@ -107,7 +97,6 @@ fn order_cancel_fixture_decodes_and_validates() {
     );
     assert_json_hex_matches("order_cancel_v1", &bytes);
 }
-
 #[test]
 fn trade_event_fixture_decodes_and_validates() {
     let bytes = read_fixture_bytes("trade_event_v1");
@@ -123,7 +112,6 @@ fn trade_event_fixture_decodes_and_validates() {
     );
     assert_json_hex_matches("trade_event_v1", &bytes);
 }
-
 #[test]
 fn settlement_channel_fixture_decodes_and_validates() {
     let bytes = read_fixture_bytes("settlement_channel_v1");
@@ -141,7 +129,6 @@ fn settlement_channel_fixture_decodes_and_validates() {
     );
     assert_json_hex_matches("settlement_channel_v1", &bytes);
 }
-
 #[test]
 fn settlement_receipt_fixture_decodes_and_validates() {
     let bytes = read_fixture_bytes("settlement_receipt_v1");
@@ -163,7 +150,6 @@ fn settlement_receipt_fixture_decodes_and_validates() {
     );
     assert_json_hex_matches("settlement_receipt_v1", &bytes);
 }
-
 #[test]
 fn orderbook_reference_outcomes_match_cross_sdk_fixtures_exactly() {
     let order = read_fixture_bytes("order_request_v1");
@@ -175,7 +161,6 @@ fn orderbook_reference_outcomes_match_cross_sdk_fixtures_exactly() {
     );
     assert!(order_outcome.is_ok(), "{order_outcome:?}");
     assert_outcome_fixture("order_request_validation_outcome_v1.json", &order_outcome);
-
     for (payload_name, outcome_name, expected_code) in [
         (
             "negative/order_request_bad_signature_v1",
@@ -206,7 +191,6 @@ fn orderbook_reference_outcomes_match_cross_sdk_fixtures_exactly() {
         assert_outcome_fixture(outcome_name, &outcome);
     }
 }
-
 #[test]
 fn orderbook_negative_vectors_preserve_signature_shape_and_break_canonical_encoding() {
     let canonical_bytes = read_fixture_bytes("order_request_v1");
@@ -236,13 +220,11 @@ fn orderbook_negative_vectors_preserve_signature_shape_and_break_canonical_encod
         1,
         "forged fixture must flip exactly one signature byte"
     );
-
     let trailing = read_fixture_bytes("negative/order_request_trailing_bytes_v1");
     assert_eq!(trailing.len(), canonical_bytes.len() + 1);
     assert_eq!(&trailing[..canonical_bytes.len()], canonical_bytes);
     assert_eq!(trailing.last(), Some(&0));
 }
-
 #[test]
 fn orderbook_fixture_regeneration_is_byte_identical() {
     const FILES: [&str; 16] = [
@@ -263,12 +245,10 @@ fn orderbook_fixture_regeneration_is_byte_identical() {
         "negative/order_request_trailing_bytes_v1.to",
         "negative/order_request_trailing_bytes_validation_outcome_v1.json",
     ];
-
     let first = tempdir().expect("create first fixture generation directory");
     let second = tempdir().expect("create second fixture generation directory");
     regenerate_fixtures(first.path());
     regenerate_fixtures(second.path());
-
     for name in FILES {
         let relative = Path::new("fixtures/sorafs_manifest/orderbook").join(name);
         let first_bytes = fs::read(first.path().join(&relative))

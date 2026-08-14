@@ -1,8 +1,6 @@
 //! Deterministic exact SCCP fixtures for crate and downstream integration tests.
-
+use crate::*;
 use core::{num::NonZeroU64, time::Duration};
-use std::collections::BTreeSet;
-
 use halo2curves::{
     Coordinates, CurveAffine,
     bn256::{Fq, Fr, G1Affine},
@@ -39,9 +37,7 @@ use iroha_data_model::{
     },
 };
 use norito::to_bytes;
-
-use crate::*;
-
+use std::collections::BTreeSet;
 /// Complete exact EVM outbound fixture for downstream SCCP integration tests.
 ///
 /// Every field is reconstructed from the governed route and the returned proof
@@ -62,7 +58,6 @@ pub struct SccpExactOutboundTestFixtureV1 {
     /// Complete signed block and exact Sumeragi-v2 finality used by the bundle.
     pub finalized_block: SccpFinalizedBlockTestFixtureV1,
 }
-
 /// Complete block plus finality produced only through the exact test signer.
 ///
 /// Private fields keep the parent invariant closed: a height-two fixture can
@@ -73,21 +68,18 @@ pub struct SccpFinalizedBlockTestFixtureV1 {
     block: SignedBlock,
     proof: TairaBridgeFinalityProofV1,
 }
-
 impl SccpFinalizedBlockTestFixtureV1 {
     /// Return the complete signed block authenticated by this fixture.
     #[must_use]
     pub const fn block(&self) -> &SignedBlock {
         &self.block
     }
-
     /// Return the exact finality proof bound to the proposal and executed wire images.
     #[must_use]
     pub const fn proof(&self) -> &TairaBridgeFinalityProofV1 {
         &self.proof
     }
 }
-
 impl SccpExactOutboundTestFixtureV1 {
     /// Rebuild this exact fixture around one complete finalized signed block.
     ///
@@ -123,7 +115,6 @@ impl SccpExactOutboundTestFixtureV1 {
             Some(self.bundle.commitment_root),
             "an SCCP finalized-header fixture must commit the exact bundle root"
         );
-
         let finalized_block = sccp_finalize_taira_block_test_fixture_v1(block, parent);
         let finality = finalized_block.proof();
         assert_eq!(finality.block_header, block_header);
@@ -137,7 +128,6 @@ impl SccpExactOutboundTestFixtureV1 {
             .finality_artifact
             .verify()
             .expect("exact SCCP finalized-header fixture is cryptographically valid");
-
         let mut bundle = self.bundle.clone();
         bundle.finality_proof =
             to_bytes(finality).expect("canonical exact SCCP finalized-header finality proof");
@@ -146,7 +136,6 @@ impl SccpExactOutboundTestFixtureV1 {
             verified_sccp_message_taira_finality_proof_cryptographically_self_consistent(&bundle)
                 .is_some()
         );
-
         let route = self.route.clone();
         let request =
             build_sccp_groth16_bn254_proof_request_from_governed_route_v1(&bundle, &route)
@@ -158,7 +147,6 @@ impl SccpExactOutboundTestFixtureV1 {
         let bridge_proof = bridge_sccp_destination_proof_v1(&artifact)
             .expect("closed exact finalized-header SCCP bridge proof");
         assert!(verify_sccp_destination_proof_v1(&bridge_proof, &bundle, &route).is_some());
-
         Self {
             route,
             bundle,
@@ -169,17 +157,14 @@ impl SccpExactOutboundTestFixtureV1 {
         }
     }
 }
-
 fn word_u64(value: u64) -> H256 {
     let mut word = [0; 32];
     word[24..].copy_from_slice(&value.to_be_bytes());
     word
 }
-
 fn hex32(value: &str) -> H256 {
     decode_fixed_hex_bytes(value).expect("static exact SCCP test vector is lowercase hex")
 }
-
 fn fq_word(value: Fq) -> H256 {
     let repr = value.to_repr();
     let mut word = [0; 32];
@@ -188,13 +173,11 @@ fn fq_word(value: Fq) -> H256 {
     }
     word
 }
-
 fn g1_words(point: G1Affine) -> [H256; 2] {
     let coordinates: Coordinates<G1Affine> =
         Option::from(point.coordinates()).expect("exact SCCP fixture point is not infinity");
     [fq_word(*coordinates.x()), fq_word(*coordinates.y())]
 }
-
 fn verifying_key() -> SccpGroth16Bn254VerifyingKeyV1 {
     let g1 = SccpBn254G1PointV1 {
         x: word_u64(1),
@@ -228,7 +211,6 @@ fn verifying_key() -> SccpGroth16Bn254VerifyingKeyV1 {
         },
     }
 }
-
 fn outbound_policy() -> SccpOutboundProofPolicyV1 {
     SccpOutboundProofPolicyV1 {
         version: 1,
@@ -252,7 +234,6 @@ fn outbound_policy() -> SccpOutboundProofPolicyV1 {
         },
     }
 }
-
 /// Build the deterministic proved burn-and-record policy used by SCCP tests.
 #[must_use]
 pub fn sccp_sora_outbound_execution_policy_test_fixture_v1() -> SccpSoraOutboundExecutionPolicyV1 {
@@ -269,7 +250,6 @@ pub fn sccp_sora_outbound_execution_policy_test_fixture_v1() -> SccpSoraOutbound
         gas_limit: 50_000_000,
     }
 }
-
 /// Build one complete exact EVM-family governed route for downstream tests.
 ///
 /// # Panics
@@ -355,7 +335,6 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
     assert!(sccp_governed_route_groth16_key_is_valid_v1(&route));
     route
 }
-
 fn transfer_payload(route: &SccpGovernedRouteV1, nonce: u64) -> SccpPayloadV1 {
     let sender = AccountId::new(
         KeyPair::try_from_seed(vec![0x90; 32], Algorithm::Ed25519)
@@ -383,19 +362,16 @@ fn transfer_payload(route: &SccpGovernedRouteV1, nonce: u64) -> SccpPayloadV1 {
         route_id: route.route_id.as_bytes().to_vec(),
     })
 }
-
 fn exact_fixture_proposal_wire_hash(block: &SignedBlock) -> Hash {
     block
         .canonical_proposal_wire_hash()
         .expect("exact SCCP fixture proposal has canonical wire bytes")
 }
-
 fn exact_fixture_executed_wire_hash(block: &SignedBlock) -> Hash {
     block
         .executed_block_wire_hash()
         .expect("exact SCCP fixture executed block has canonical wire bytes")
 }
-
 fn exact_fixture_executed_wire_len(block: &SignedBlock) -> u64 {
     u64::try_from(
         block
@@ -405,7 +381,6 @@ fn exact_fixture_executed_wire_len(block: &SignedBlock) -> u64 {
     )
     .expect("exact SCCP fixture executed block wire length fits u64")
 }
-
 fn assert_exact_finalized_block_fixture(fixture: &SccpFinalizedBlockTestFixtureV1) {
     assert_eq!(fixture.proof.block_header, fixture.block.header());
     assert_eq!(
@@ -448,7 +423,6 @@ fn assert_exact_finalized_block_fixture(fixture: &SccpFinalizedBlockTestFixtureV
         .verify()
         .expect("exact SCCP fixture finality is cryptographically valid");
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "the canonical fixture matrix keeps entrypoint, result, body-root, and exact SCCP ordering assertions together"
@@ -469,7 +443,6 @@ fn assert_exact_fixture_block_body(block: &SignedBlock) {
         external_root,
         "the finalized header must commit the exact external entrypoint order"
     );
-
     let entrypoint_hashes = block
         .entrypoints_cloned()
         .map(|entrypoint| entrypoint.hash())
@@ -504,7 +477,6 @@ fn assert_exact_fixture_block_body(block: &SignedBlock) {
         result_root,
         "the finalized header must commit the exact transaction-result vector"
     );
-
     let mut commitments = Vec::new();
     let mut seen = BTreeSet::new();
     for (entrypoint_index, entrypoint) in external_entrypoints.iter().enumerate() {
@@ -565,7 +537,6 @@ fn assert_exact_fixture_block_body(block: &SignedBlock) {
         "the finalized header SCCP root must match successful record instructions exactly"
     );
 }
-
 /// Finalize one complete height-one or height-two block with the test-only Taira roster.
 ///
 /// This helper is available only to crate tests or consumers of the existing
@@ -756,7 +727,6 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
     assert_exact_finalized_block_fixture(&finalized);
     finalized
 }
-
 fn exact_sccp_fixture_block(
     context: SccpOutboundMessageContextV1,
     payload: &SccpPayloadV1,
@@ -829,7 +799,6 @@ fn exact_sccp_fixture_block(
         .expect("exact SCCP complete block signature verifies");
     block
 }
-
 #[cfg(test)]
 pub fn signed_finality_proof_for_message_test_fixture_v1(
     context: SccpOutboundMessageContextV1,
@@ -840,7 +809,6 @@ pub fn signed_finality_proof_for_message_test_fixture_v1(
     let finalized = sccp_finalize_taira_block_test_fixture_v1(&block, None);
     to_bytes(finalized.proof()).expect("canonical complete-block SCCP finality fixture")
 }
-
 fn message_bundle(
     route: &SccpGovernedRouteV1,
     nonce: u64,
@@ -881,7 +849,6 @@ fn message_bundle(
     );
     (bundle, finalized_block)
 }
-
 fn valid_proof(request: &SccpGroth16Bn254ProofRequestV1) -> Vec<u8> {
     let signals = sccp_groth16_bn254_public_signal_words(
         &request.public_inputs,
@@ -915,7 +882,6 @@ fn valid_proof(request: &SccpGroth16Bn254ProofRequestV1) -> Vec<u8> {
     };
     encode_sccp_evm_groth16_bn254_proof_bytes(&proof)
 }
-
 /// Build an owned, end-to-end exact Ethereum-mainnet outbound test fixture.
 ///
 /// # Panics
@@ -926,7 +892,6 @@ fn valid_proof(request: &SccpGroth16Bn254ProofRequestV1) -> Vec<u8> {
 pub fn sccp_exact_outbound_test_fixture_v1() -> SccpExactOutboundTestFixtureV1 {
     sccp_exact_outbound_test_fixture_for_nonce_v1(7)
 }
-
 /// Build an owned exact Ethereum-mainnet outbound fixture for `nonce`.
 ///
 /// # Panics
@@ -958,11 +923,9 @@ pub fn sccp_exact_outbound_test_fixture_for_nonce_v1(nonce: u64) -> SccpExactOut
         finalized_block,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn finalized_block_rebinding_authenticates_every_exact_hash_role() {
         let fixture = sccp_exact_outbound_test_fixture_v1();
@@ -988,7 +951,6 @@ mod tests {
         let rebound = fixture.with_finalized_block(&block, None);
         let finality = decode_taira_bridge_finality_proof(&rebound.bundle.finality_proof)
             .expect("rebound exact finality decodes");
-
         assert_eq!(finality.block_header, header);
         assert_eq!(finality.finality_artifact.block_hash, header.hash());
         assert_eq!(
@@ -1012,7 +974,6 @@ mod tests {
             .is_some()
         );
     }
-
     #[test]
     fn finalized_height_two_rebinding_authenticates_parent_and_request() {
         let fixture = sccp_exact_outbound_test_fixture_v1();
@@ -1028,7 +989,6 @@ mod tests {
         let rebound = fixture.with_finalized_block(&block, Some(&parent));
         let finality = decode_taira_bridge_finality_proof(&rebound.bundle.finality_proof)
             .expect("height-two exact finality decodes");
-
         assert_eq!(finality.block_header, header);
         assert_eq!(finality.finality_artifact.height, 2);
         let inherited_parent_qc = finality
@@ -1106,7 +1066,6 @@ mod tests {
             .verify()
             .expect("height-two artifact is cryptographically valid");
     }
-
     #[test]
     fn finalized_block_rebinding_rejects_rootless_and_mismatched_blocks() {
         let fixture = sccp_exact_outbound_test_fixture_v1();
@@ -1135,7 +1094,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn successor_rejects_header_matching_parent_wire_substitution() {
         let fixture = sccp_exact_outbound_test_fixture_v1();
@@ -1189,7 +1147,6 @@ mod tests {
             "a successor must reject a parent whose header matches but canonical wire does not"
         );
     }
-
     #[test]
     fn finality_signer_rejects_fixed_header_external_entrypoint_tamper() {
         let fixture = sccp_exact_outbound_test_fixture_v1();
@@ -1206,7 +1163,6 @@ mod tests {
             "the test signer must reject a body whose external entrypoints do not match its fixed header"
         );
     }
-
     #[test]
     fn finality_signer_rejects_fixed_header_result_envelope_tamper() {
         let fixture = sccp_exact_outbound_test_fixture_v1();
@@ -1232,7 +1188,6 @@ mod tests {
             "the test signer must reject a result envelope whose Merkle root does not match its fixed header"
         );
     }
-
     #[test]
     fn finality_signer_rejects_internally_consistent_body_with_stale_sccp_root() {
         let fixture = sccp_exact_outbound_test_fixture_v1();

@@ -1,0 +1,1275 @@
+iroha-bfv-diagnostics-v1
+0	S	placeholder text	S	binary-fragmented placeholder guard must reject markers split across non-text bytes
+1	S	blank text	S	binary-decorated placeholder guard must reject separator-framed blank text
+2	S	printable ASCII	S	trusted reviewer ids with control bytes but no placeholder markers must still fail printable ASCII validation
+3	S	canonical	S	trusted reviewer ids with surrounding whitespace but no placeholder markers must still fail canonicality validation
+4	S	exactly one external-review-approved	S	report marker parser must reject same-statement duplicate markers
+5	S	exactly one external-review-approved	S	report marker parser must reject uppercase same-statement duplicate markers
+6	S	exactly one external-review-approved	S	report marker parser must reject padded-colon duplicate markers
+7	S	exactly one external-review-evidence-archive	S	archive marker parser must reject same-statement duplicate markers
+8	S	exactly one external-review-evidence-archive	S	archive marker parser must reject mixed-case same-statement duplicate markers
+9	S	exactly one external-review-evidence-archive	S	archive marker parser must reject mixed-case padded-colon duplicate markers
+10	S	printable ASCII	S	report marker statement must reject NUL-hidden text
+11	S	printable ASCII	S	archive marker statement must reject control-whitespace text
+12	S	printable ASCII	S	report marker statement must reject UTF-8 bidi/control bytes
+13	S	lowercase signed reviewer id labels	S	case-drifted reviewer-id labels must be rejected instead of accepted as signed labels
+14	S	lowercase signed reviewer id labels	S	case-drifted conflicting reviewer labels must fail before duplicate-label counting
+15	S	lowercase signed reviewer id labels	S	case-drifted duplicate reviewer labels must fail before duplicate-label counting
+16	S	canonical lowercase signed reviewer id labels	S	underscore reviewer-id aliases must fail instead of becoming review prose
+17	S	canonical lowercase signed reviewer id labels	S	collapsed reviewer-id aliases must fail instead of becoming review prose
+18	S	canonical lowercase signed reviewer id labels	S	dotted reviewed-by aliases must fail instead of becoming review prose
+19	S	only canonical generated circuit body hex labels	S	archive artifact hex lookups must reject dotted aliases beside canonical labels
+20	S	header-only audit artifact	S	canonical report digest cache must preserve header-only diagnostics
+21	S	placeholder full-bootstrap digest	S	canonical report digest cache must reject generic full-bootstrap placeholder material digests before artifact sentinel lookup
+22	S	whitespace-prefixed nested-header audit artifact	S	canonical archive digest cache must preserve nested-header diagnostics
+23	S	zero-body audit artifact	S	canonical report digest cache must reject zero-body sentinels
+24	S	blank-body audit artifact	S	canonical archive digest cache must reject blank-body sentinels
+25	S	placeholder full-bootstrap digest	S	external audit artifact pair must reject report digests copied from full-bootstrap placeholder material
+26	S	placeholder full-bootstrap digest	S	external audit artifact pair must reject archive digests copied from full-bootstrap placeholder material
+27	S	centered scale-round source-chain digest must be distinct from key digest	S	release audit key evidence shape must reject source-chain digests copied from proof-key digests before canonical source-chain mismatch
+28	S	native circuit fingerprint must be distinct from key material commitment	S	release audit key evidence shape must reject native circuit fingerprints copied from proof-key material commitments before fingerprint mismatch
+29	S	native payload digest must be distinct from key digest	S	release audit key evidence shape must reject native payload digests copied from proof-key digests before canonical payload mismatch
+30	S	generated circuit body digest must be distinct from native payload digest	S	release audit key evidence shape must reject generated body digests copied from native payload digests before canonical body mismatch
+31	S	native payload digest must be distinct from proof public-input schema payload digest	S	release audit key evidence shape must reject native payload digests copied from generated-body schema payload digests before canonical payload mismatch
+32	S	generated circuit body digest must be distinct from release-prover contract digest	S	release audit key evidence shape must reject generated body digests copied from release-prover contract digests before canonical body mismatch
+33	S	placeholder generated circuit body material	S	release audit key evidence must reject delayed placeholder generated-body digest sentinels before canonical mismatch
+34	S	generated circuit body hex	S	release-audit generated circuit body hex labels must be canonical lowercase
+35	S	only canonical generated circuit body hex labels	S	release-audit generated circuit body hex labels must reject separator aliases beside canonical labels
+36	S	generated circuit body hex	S	release-audit generated circuit body hex values must be canonical lowercase
+37	S	generated circuit body hex	S	release-audit generated circuit body hex fields must reject raw generated body bytes
+38	S	generated circuit body byte length	S	release-audit generated circuit body byte length must reject separator aliases beside canonical labels
+39	S	generated circuit body byte length	S	release-audit generated circuit body byte length must reject decimal prefix aliases
+40	S	generated circuit body byte length	S	release-audit generated circuit body byte length must reject prose-suffixed scalar values
+41	S	accumulator artifact hex	S	governed artifact hex labels must be canonical lowercase
+42	S	accumulator artifact hex	S	governed artifact hex values must be canonical lowercase
+43	S	accumulator artifact hex	S	governed artifact hex values must reject separator-delimited byte text
+44	S	accumulator artifact hex	S	governed artifact hex fields must reject raw artifact bytes
+45	S	exactly one canonical accumulator artifact hex label	S	governed artifact hex fields must reject same-value duplicate aliases
+46	S	placeholder	S	material digest validation must reject separator-obfuscated placeholder preimages
+47	S	placeholder	S	material digest validation must reject delayed separator-obfuscated placeholder preimages
+48	S	placeholder	S	material digest validation must reject binary-framed placeholder preimages
+49	S	placeholder	S	material digest validation must reject delayed binary-framed placeholder preimages
+50	S	placeholder	S	material digest validation must reject case-decorated placeholder preimages
+51	S	placeholder	S	material digest validation must reject delayed case-decorated placeholder preimages
+52	S	placeholder	S	material digest validation must reject binary-framed case-decorated placeholder preimages
+53	S	placeholder	S	material digest validation must reject internal evaluator-artifact transient digests
+54	S	placeholder	S	material digest validation must reject binary-framed internal evaluator-artifact transient digests
+55	S	generated circuit body digest mismatch	S	release audit manifests must reject stale generated circuit body digests before record comparison
+56	S	placeholder	S	release audit manifests must reject placeholder generated circuit body digests before canonical mismatch
+57	S	inert or placeholder generated circuit body material	S	release audit manifests must reject SHA-encoded placeholder generated circuit body digests before canonical mismatch
+58	S	inert or placeholder generated circuit body material	S	release audit signoffs must reject binary-decorated SHA placeholder generated circuit body digests before canonical mismatch
+59	S	placeholder	S	release audit native payload digests must reject domain-hashed placeholders before canonical mismatch
+60	S	inert native payload digest	S	release audit native payload digests must reject raw SHA placeholder sentinels before canonical mismatch
+61	S	verifier native payload digest must be distinct from prover native payload digest	S	standalone release audit manifests must reject verifier native payload digests copied from prover payload digests before canonical mismatch
+62	S	verifier native payload digest must be distinct from prover native payload digest	S	release audit manifest digesting must reject verifier native payload digests copied from prover payload digests before canonical mismatch
+63	S	generated circuit body digest must be distinct from native circuit fingerprint	S	standalone release audit manifests must reject generated body digests copied from native circuit fingerprints before canonical mismatch
+64	S	generated circuit body digest must be distinct from native circuit fingerprint	S	release audit manifest digesting must reject generated body digests copied from native circuit fingerprints before canonical mismatch
+65	S	prover native payload digest must be distinct from proof public-input schema payload digest	S	standalone release audit manifests must reject prover native payload digests copied from generated-body schema payload digests before canonical mismatch
+66	S	prover native payload digest must be distinct from proof public-input schema payload digest	S	release audit manifest digesting must reject prover native payload digests copied from generated-body schema payload digests before canonical mismatch
+67	S	generated circuit body digest must be distinct from release-prover contract digest	S	standalone release audit manifests must reject generated body digests copied from release-prover contract digests before canonical mismatch
+68	S	generated circuit body digest must be distinct from release-prover contract digest	S	release audit manifest digesting must reject generated body digests copied from release-prover contract digests before canonical mismatch
+69	S	centered scale-round source-chain digest	S	standalone release audit manifests must reject stale centered source-chain digests
+70	S	centered scale-round source-chain digest	S	release audit manifest digesting must reject stale centered source-chain digests
+71	S	generated circuit body digest mismatch	S	standalone release audit manifests must reject stale generated circuit body digests
+72	S	generated circuit body digest mismatch	S	release audit manifest digesting must reject stale generated circuit body digests
+73	S	prover native payload digest mismatch	S	standalone release audit manifests must reject stale native prover payload digests
+74	S	prover native payload digest mismatch	S	release audit manifest digesting must reject stale native prover payload digests
+75	S	verifier native payload digest must be distinct from prover native payload digest	S	standalone release audit signoff payloads must reject verifier native payload digests copied from prover payload digests before canonical mismatch
+76	S	verifier native payload digest must be distinct from prover native payload digest	S	standalone release audit signoffs must reject well-signed verifier native payload digests copied from prover payload digests before canonical mismatch
+77	S	generated circuit body digest must be distinct from native circuit fingerprint	S	standalone release audit signoff payloads must reject generated body digests copied from native circuit fingerprints before canonical mismatch
+78	S	verifier native payload digest must be distinct from proof public-input schema payload digest	S	standalone release audit signoff payloads must reject verifier native payload digests copied from generated-body schema payload digests before canonical mismatch
+79	S	generated circuit body digest must be distinct from release-prover contract digest	S	standalone release audit signoff payloads must reject generated body digests copied from release-prover contract digests before canonical mismatch
+80	S	centered scale-round source-chain digest	S	standalone release audit signoff payloads must reject stale centered source-chain digests
+81	S	centered scale-round source-chain digest	S	standalone release audit signoffs must reject well-signed stale centered source-chain digests
+82	S	generated circuit body digest mismatch	S	standalone release audit signoff payloads must reject stale generated circuit body digests
+83	S	generated circuit body digest mismatch	S	standalone release audit signoffs must reject well-signed stale generated circuit body digests
+84	S	verifier native payload digest mismatch	S	standalone release audit signoff payloads must reject stale native verifier payload digests
+85	S	verifier native payload digest mismatch	S	standalone release audit signoffs must reject well-signed stale native verifier payload digests
+86	S	placeholder	S	standalone release audit signoff payloads must reject placeholder generated circuit body digests before canonical mismatch
+87	S	deterministic encrypted-zero transcript	S	exact transcript admission must reject bounded same-public-key refresh masks
+88	S	deterministic encrypted-zero transcript	S	bounded transcript admission must reject exact same-public-key refresh masks
+89	S	machine-generated	S	byte-level production package admission must reject deterministic machine-generated report/archive bodies
+90	S	machine-generated	S	byte-derived production package admission must reject deterministic machine-generated report/archive bodies
+91	S	machine-generated	S	combined byte-level production admission must reject deterministic machine-generated report/archive bodies
+92	S	machine-generated	S	derived-digest combined admission must reject deterministic machine-generated report/archive bodies
+93	S	machine-generated	S	combined byte-level production admission with digests must reject deterministic machine-generated report/archive bodies
+94	S	machine-generated	S	combined byte-level production admission with all digests must reject deterministic machine-generated report/archive bodies
+95	S	machine-generated	S	production-pinned release audit packages must reject deterministic machine-generated report/archive bodies
+96	S	canonical v1 bytes	S	proof public-input schema admission must reject alternate Norito layout
+97	S	canonical v1 bytes	S	native verifier payload admission must reject alternate Norito layout
+98	S	canonical v1 bytes	S	native proof-key material admission must reject alternate outer Norito layout
+99	S	canonical v1 bytes	S	native proof-key material admission must reject alternate nested verifier payload layout
+100	S	canonical v1 bytes	S	governed proof-key admission must reject alternate outer artifact layout
+101	S	canonical v1 bytes	S	governed proof-key admission must reject alternate nested proof-key layout
+102	S	canonical v1 bytes	S	proof-key material admission must reject alternate nested envelope layout
+103	S	exceed	S	Galois-key byte admission must reject forged sequence lengths within canonical decode resource limits
+104	S	placeholder full-bootstrap digest	S	release audit key evidence construction must reject placeholder proof-key digests before decoding key material
+105	S	centered scale-round source-chain digest	S	release-audit proof profiles must reject stale centered source-chain digests
+106	S	canonical base transcript-label	S	release-audit proof profiles must advertise canonical base transcript-label enforcement
+107	S	canonical base transcript-label	S	release-audit proof profiles must advertise suffixed transcript-label alias rejection
+108	S	verifier-owned trace material digest	S	release-audit proof profiles must advertise verifier-owned trace material digest input
+109	S	public opening material layout	S	release-audit proof profiles must pin public-opening material versions
+110	S	public opening material layout	S	release-audit proof profiles must pin public-opening material field counts
+111	S	canonical bytes	S	release-audit proof profiles must pin public-opening material digest domains
+112	S	typed public-opening material	S	release-audit proof profiles must advertise typed public-opening material validation
+113	S	verifier-owned trace material digest	S	release-audit proof-profile construction must not mask downgraded key verifier-owned trace material digest obligations
+114	S	canonical base transcript-label enforcement	S	release-audit proof-profile construction must not mask downgraded key transcript-label obligations
+115	S	suffixed transcript-label alias rejection	S	release-audit proof-profile construction must not mask downgraded key suffixed-label obligations
+116	S	native proof-key role	S	release-audit proof profiles must reject verifier native material paired with prover keys
+117	S	native proof-key role	S	release-audit proof profiles must reject prover native material paired with verifier keys
+118	S	placeholder text	S	native verifier material must reject placeholder generated-body circuit ids before circuit mismatch
+119	S	placeholder text	S	native prover payload must reject placeholder generated-body circuit ids before circuit mismatch
+120	S	canonical	S	native verifier material must reject generated circuit bodies retargeted to another circuit before opaque body mismatch
+121	S	canonical	S	native prover payload must reject generated circuit bodies retargeted to another circuit before opaque body mismatch
+122	S	placeholder text	S	native verifier material must reject placeholder generated-body payload circuit ids before circuit mismatch
+123	S	placeholder text	S	native prover payload must reject placeholder generated-body payload circuit ids before circuit mismatch
+124	S	canonical	S	native verifier material must reject generated circuit bodies whose embedded payload circuit id retargets off the canonical circuit
+125	S	canonical	S	native prover payload must reject generated circuit bodies whose embedded payload circuit id retargets off the canonical circuit
+126	S	role	S	role/circuit-bound native material admission must reject prover bytes under verifier role
+127	S	canonical	S	role/circuit-bound native material admission must reject noncanonical expected circuit ids
+128	S	canonical v1 bytes	S	native proof-key material decoding must reject noncanonical compressed Norito framing
+129	S	canonical v1 bytes	S	role/circuit-bound native material admission must reject compressed Norito framing
+130	S	canonical v1 bytes	S	native prover payload validation must reject noncanonical compressed Norito framing
+131	S	canonical	S	native prover payload validation must reject noncanonical expected circuit ids before payload framing
+132	S	canonical v1 bytes	S	native verifier payload validation must reject noncanonical compressed Norito framing
+133	S	canonical	S	native verifier payload validation must reject noncanonical expected circuit ids before payload framing
+134	S	generated circuit body digest must be distinct from arithmetic trace profile digest	S	native verifier payload validation must reject generated-body digest aliases
+135	S	generated circuit body digest must be distinct from centered scale-round source-chain digest	S	native prover payload validation must reject generated-body digest aliases
+136	S	generated circuit body digest must be distinct from proof public-input schema payload digest	S	native verifier payload validation must reject generated-body digests copied from embedded schema payload digests before SHA replay
+137	S	generated circuit body digest must be distinct from proof public-input schema payload digest	S	native verifier material construction must reject generated-body digests copied from embedded schema payload digests before SHA replay
+138	S	generated circuit body digest must be distinct from release-prover contract digest	S	native prover payload validation must reject generated-body digests copied from embedded release-prover contract digests before SHA replay
+139	S	centered scale-round source-chain digest	S	native verifier material must reject generated bodies with stale centered source-chain digests
+140	S	centered scale-round source-chain digest	S	native prover payload must reject generated bodies with stale centered source-chain digests
+141	S	centered scale-round source-chain digest	S	native proof-key material must reject stale centered source-chain digests
+142	S	arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest	S	native proof-key material must reject AIR digests copied from trace-profile digests before canonical mismatch
+143	S	arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest	S	role/circuit-bound native material admission must reject AIR digests copied from trace-profile digests before canonical mismatch
+144	S	native payload digest must be distinct from native circuit fingerprint	S	native proof-key material must reject payload digests copied from circuit fingerprints before SHA replay
+145	S	native payload digest must be distinct from native circuit fingerprint	S	role/circuit-bound native material admission must reject payload digests copied from circuit fingerprints before SHA replay
+146	S	native payload digest must be distinct from centered scale-round source-chain digest	S	native proof-key material must reject payload digests copied from source-chain digests before SHA replay
+147	S	native payload digest must be distinct from generated circuit body digest	S	native proof-key material must reject payload digests copied from generated-body digests before SHA replay
+148	S	native payload digest must be distinct from generated circuit body digest	S	role/circuit-bound native material admission must reject payload digests copied from generated-body digests before SHA replay
+149	S	native payload digest must be distinct from proof public-input schema payload digest	S	native proof-key material must reject payload digests copied from embedded schema payload digests before SHA replay
+150	S	native payload digest must be distinct from release-prover contract digest	S	native proof-key material must reject payload digests copied from embedded release-prover contract digests before SHA replay
+151	S	centered scale-round source-chain digest	S	native verifier payload must reject stale centered source-chain digests
+152	S	arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest	S	native verifier payloads must reject AIR digests copied from trace-profile digests before canonical mismatch
+153	S	arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest	S	native verifier material construction must reject AIR digests copied from trace-profile digests before canonical mismatch
+154	S	centered scale-round source-chain digest	S	native prover payload must reject stale centered source-chain digests
+155	S	arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest	S	native prover payloads must reject AIR digests copied from trace-profile digests before canonical mismatch
+156	S	generated circuit body arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest	S	native verifier payloads must reject generated bodies with AIR digests copied from trace-profile digests before embedded AIR mismatch
+157	S	no unmasked private-row openings	S	native verifier material must reject generated bodies with stale embedded AIR material before opaque body mismatch
+158	S	no unmasked private-row openings	S	native prover payload must reject generated bodies with stale embedded AIR material before opaque body mismatch
+159	S	payload is invalid	S	native prover material must reject digest-correct verifier payload swaps
+160	S	payload is invalid	S	native verifier material must reject digest-correct transparent prover payload swaps
+161	S	canonical	S	native prover material must reject noncanonical full-bootstrap circuit ids
+162	S	canonical	S	native verifier payload must reject noncanonical full-bootstrap circuit ids
+163	S	placeholder text	S	native payload circuit-id validation must reject placeholder labels before canonical mismatch
+164	S	canonical	S	native verifier payload validation must reject noncanonical embedded circuit ids before generated-body replay
+165	S	canonical	S	native verifier material construction must reject noncanonical embedded verifier payload circuit ids
+166	S	canonical	S	native verifier material must reject digest-correct wrong-circuit embedded verifier payloads
+167	S	canonical	S	native prover payload validation must reject noncanonical embedded circuit ids before generated-body replay
+168	S	canonical	S	native prover material must reject digest-correct wrong-circuit embedded prover payloads
+169	S	native material payload	S	raw verifier payload must not satisfy native material admission
+170	S	blank	S	raw native verifier payload validation must reject blank payloads before decode
+171	S	placeholder	S	raw native verifier payload validation must reject direct placeholder payloads before decode
+172	S	placeholder	S	raw native prover payload validation must reject direct placeholder payloads before decode
+173	S	placeholder text	S	raw native verifier payload validation must reject custom placeholder text before Norito decoding
+174	S	placeholder text	S	raw native prover payload validation must reject custom placeholder text before Norito decoding
+175	S	placeholder text	S	native verifier material construction must reject binary-decorated placeholder payloads before decode
+176	S	placeholder text	S	raw native verifier payload validation must reject binary-decorated placeholder payloads before decode
+177	S	placeholder text	S	raw native prover payload validation must reject binary-decorated placeholder payloads before decode
+178	S	placeholder text	S	raw native verifier payload validation must reject binary-fragmented placeholder payloads before decode
+179	S	placeholder text	S	raw native prover payload validation must reject binary-fragmented placeholder payloads before decode
+180	S	exceeds maximum	S	raw native verifier payload validation must reject oversized placeholder text before scanning it
+181	S	exceeds maximum	S	raw native prover payload validation must reject oversized placeholder text before scanning it
+182	S	placeholder	S	native verifier material construction must reject delayed placeholder payloads before decode
+183	S	placeholder	S	raw native verifier payload validation must reject delayed placeholder payloads before decode
+184	S	placeholder	S	raw native prover payload validation must reject delayed placeholder payloads before decode
+185	S	placeholder text	S	raw native proof-key material validation must reject placeholder material before Norito decoding
+186	S	placeholder text	S	raw native proof-key material validation must reject binary-decorated placeholder material before Norito decoding
+187	S	placeholder text	S	raw native proof-key material validation must reject delayed placeholder material before Norito decoding
+188	S	SHA-256	S	native verifier material must reject non-SHA STARK payloads
+189	S	exceeds n_log2	S	native verifier material must reject impossible STARK blowup/domain geometry
+190	S	placeholder text	S	native verifier payloads must reject binary-decorated generated circuit-body placeholder labels before canonical mismatch
+191	S	field count mismatch	S	native verifier material must bind the verifier payload field count
+192	S	circuit fingerprint mismatch	S	native material must bind the proof circuit fingerprint
+193	S	placeholder	S	native material must reject placeholder proof circuit fingerprints before canonical mismatch
+194	S	zero SHA-256 digest	S	native material must reject missing verifier payload digests
+195	S	placeholder text	S	native material must reject digest-correct inert verifier payload text before payload decoding
+196	S	placeholder text	S	native material must reject generic proof-key placeholder payload text before payload decoding
+197	S	placeholder text	S	native material must reject delayed generic proof-key placeholder payload text before payload decoding
+198	S	payload digest mismatch	S	native material must bind the verifier payload digest
+199	S	ciphertext c0 length	S	exact decrypt must reject ciphertext shape before secret-key shape
+200	S	ciphertext c0 length	S	exact residual profile must reject ciphertext shape before secret-key shape
+201	S	ciphertext c0 length	S	exact residual bound diagnostic must reject ciphertext shape before secret-key shape
+202	S	ciphertext c0 length	S	exact residual bound diagnostic must keep ciphertext-shape preflight before residual-bound capacity
+203	S	residual bound	S	exact residual bound diagnostic must reject public residual-bound capacity before secret-key shape
+204	S	ciphertext c0 length	S	bounded decrypt must reject ciphertext shape before secret-key shape
+205	S	ciphertext c0 length	S	bounded profile must reject ciphertext shape before secret-key shape
+206	S	ciphertext c0 length	S	bounded noise diagnostic must reject ciphertext shape before secret-key shape
+207	S	ciphertext c0 length	S	bounded noise diagnostic must keep ciphertext-shape preflight before noise-bound capacity
+208	S	rounded-noise bound	S	bounded noise diagnostic must reject public noise-bound capacity before secret-key shape
+209	S	must not be empty	S	bounded keygen must reject seed metadata before rounded capacity
+210	S	exceeds plaintext modulus	S	bounded encryption must reject plaintext metadata before rounded capacity
+211	S	must not be empty	S	bounded encryption must reject seed metadata before rounded capacity
+212	S	automorphism power	S	bounded Galois keygen must reject automorphism metadata before rounded capacity
+213	S	must not be empty	S	bounded Galois keygen must reject seed metadata before rounded capacity
+214	S	must not be empty	S	bounded rotation key generation must reject seed metadata before rounded capacity
+215	S	bootstrap key id	S	bounded bootstrap key generation must reject key-id metadata before rounded capacity
+216	S	greater than zero	S	bounded bootstrap key generation must reject refresh-round metadata before rounded capacity
+217	S	must not be empty	S	bounded bootstrap key generation must reject seed metadata before rounded capacity
+218	S	bootstrap key id	S	bounded bootstrap execution must reject key-id metadata before rounded capacity
+219	S	round index 1	S	bounded bootstrap execution must reject round index before rounded capacity
+220	S	rounds 2	S	bounded multi-round bootstrap execution must reject round count before rounded capacity
+221	S	exceeds plaintext modulus	S	bounded scalar add must reject public scalar metadata before rounded capacity
+222	S	exceeds plaintext modulus	S	bounded scalar multiply must reject public scalar metadata before rounded capacity
+223	S	exceeds plaintext modulus	S	bounded plaintext-polynomial multiply must reject public plaintext metadata before rounded capacity
+224	S	exceeds plaintext modulus	S	bounded RNS plaintext-polynomial multiply must reject public plaintext metadata before rounded capacity
+225	S	exceeds plaintext modulus	S	bounded scalar multiply bound propagation must reject public scalar metadata before rounded capacity
+226	S	exceeds plaintext modulus	S	bounded plaintext-polynomial bound propagation must reject public plaintext metadata before rounded capacity
+227	S	relinearization key	S	bounded multiply bound propagation must reject public relinearization-key metadata before rounded capacity
+228	S	automorphism power	S	bounded Galois key-switch bound propagation must reject public key metadata before rounded capacity
+229	S	non-zero rotation_steps	S	bounded packed RotateLeft bound propagation must reject public rotation metadata before rounded capacity
+230	S	duplicate Galois key	S	bounded packed RotateLeft bound propagation must reject public key-set metadata before rounded capacity
+231	S	automorphism power	S	bounded Galois switch must reject public key metadata before rounded capacity
+232	S	automorphism power	S	bounded RNS Galois switch must reject public key metadata before rounded capacity
+233	S	automorphism power	S	bounded basis-extension Galois switch must reject public key metadata before rounded capacity
+234	S	non-zero rotation_steps	S	bounded packed RotateLeft must reject public rotation metadata before rounded capacity
+235	S	duplicate Galois key	S	bounded packed RotateLeft must reject public key-set metadata before rounded capacity
+236	S	duplicate Galois key	S	bounded RNS packed RotateLeft must reject public key-set metadata before rounded capacity
+237	S	duplicate Galois key	S	bounded basis-extension packed RotateLeft must reject public key-set metadata before rounded capacity
+238	S	full slot cycle	S	bounded outer RotateLeft must reject public rotation metadata before rounded capacity
+239	S	full slot cycle	S	bounded RNS outer RotateLeft must reject public rotation metadata before rounded capacity
+240	S	full slot cycle	S	bounded outer RotateLeft bound propagation must reject public rotation metadata before rounded capacity
+241	S	FullBootstrapV1	S	direct bounded full-bootstrap bounds must reject key mode before rounded capacity
+242	S	FullBootstrapV1	S	artifact-aware bounded full-bootstrap prefix bounds must reject key mode before rounded capacity
+243	S	FullBootstrapV1	S	artifact-aware bounded full-bootstrap prefix execution must reject key mode before rounded capacity
+244	S	circuit id	S	direct bounded full-bootstrap bounds must reject governed material metadata before rounded capacity
+245	S	circuit id	S	direct bounded full-bootstrap execution must reject governed material metadata before rounded capacity
+246	S	exceeds plaintext modulus	S	bounded affine execution must reject public circuit metadata before rounded capacity
+247	S	exceeds plaintext modulus	S	bounded affine bound propagation must reject public circuit metadata before rounded capacity
+248	S	at least one round	S	bounded bootstrap bound propagation must reject public round metadata before rounded capacity
+249	S	bootstrap key id	S	key-authorized bounded bootstrap bound propagation must reject public key-id metadata before rounded capacity
+250	S	rounds 2	S	key-authorized bounded bootstrap bound propagation must reject public round metadata before rounded capacity
+251	S	requires at least one diagonal	S	bounded full-bootstrap linear-transform bounds must reject public transform metadata before rounded capacity
+252	S	less than polynomial_degree	S	bounded full-bootstrap raw-sample bounds must reject public sample metadata before rounded capacity
+253	S	less than polynomial_degree	S	bounded full-bootstrap raw-sample execution must reject public sample metadata before rounded capacity
+254	S	less than polynomial_degree	S	bounded full-bootstrap sample-switch bounds must reject public sample metadata before rounded capacity
+255	S	less than polynomial_degree	S	bounded full-bootstrap raw-sample repack must reject public sample metadata before rounded capacity
+256	S	less than polynomial_degree	S	bounded full-bootstrap raw-sample repack bounds must reject public sample metadata before rounded capacity
+257	S	less than polynomial_degree	S	bounded full-bootstrap raw-sample diagnostics must reject public sample metadata before rounded capacity
+258	S	less than polynomial_degree	S	bounded full-bootstrap sample-switch execution must reject public raw-sample metadata before rounded capacity
+259	S	does not match raw sample source_coefficient_index	S	bounded full-bootstrap sample-switch execution must reject public key/sample metadata mismatch before rounded capacity
+260	S	rotation key zero_refresh must not be an all-zero ciphertext	S	bounded key-owner rotation diagnostics must reject inert zero_refresh material
+261	S	bounded-noise rotation key zero_refresh must not be an all-zero ciphertext	S	bounded rotation transcript validation must reject inert zero_refresh material
+262	S	rotation key zero_refresh must not be an all-zero ciphertext	S	direct bounded outer-slot rotation must reject inert zero_refresh material
+263	S	rotation key zero_refresh must not be an all-zero ciphertext	S	RNS bounded outer-slot rotation must reject inert zero_refresh material
+264	S	rotation key zero_refresh must not be an all-zero ciphertext	S	bounded outer-slot rotation bounds must reject inert zero_refresh material
+265	S	placeholder	S	direct bounded-noise bootstrap refresh must reject placeholder public-key digest metadata
+266	S	bootstrap key zero_refresh must not be an all-zero ciphertext	S	bounded bootstrap transcript validation must reject inert zero_refresh material
+267	S	zero_refresh must match round_refreshes[0]	S	direct bounded-noise bootstrap refresh must reject zero_refresh drift before applying a round
+268	S	duplicate round refresh ciphertext	S	RNS bounded-noise bootstrap refresh must reject aliased refresh material before applying rounds
+269	S	duplicate round refresh ciphertext	S	bounded-noise bootstrap bound helper must reject aliased refresh material before returning diagnostics
+270	S	bootstrap key zero_refresh must not be an all-zero ciphertext	S	bounded key-owner refresh diagnostics must reject inert zero_refresh material
+271	S	bootstrap key zero_refresh must not be an all-zero ciphertext	S	direct bounded-noise bootstrap refresh must reject inert zero_refresh material
+272	S	bootstrap key zero_refresh must not be an all-zero ciphertext	S	bounded-noise bootstrap bound helper must reject inert zero_refresh material
+273	S	bootstrap key round_refreshes[1] must not be an all-zero ciphertext	S	RNS bounded-noise bootstrap refresh must reject inert per-round refresh material
+274	S	bootstrap key round_refreshes[1] must not be an all-zero ciphertext	S	bounded-noise bootstrap bound helper must reject inert per-round refresh material
+275	S	must not be empty	S	exact keygen must reject seed metadata before seeded capacity
+276	S	exceeds plaintext modulus	S	exact encryption must reject plaintext metadata before seeded capacity
+277	S	must not be empty	S	exact encryption must reject seed metadata before seeded capacity
+278	S	all zero	S	exact bootstrap refresh construction must reject inert public-key material
+279	S	all zero	S	bounded bootstrap refresh construction must reject inert public-key material
+280	S	refresh-round residual budget	S	exact refresh capacity must reject overbudget advertised rounds
+281	S	refresh-round residual budget	S	exact bootstrap key construction must reject overbudget round capacity before deriving refresh masks
+282	S	refresh-round residual budget	S	exact transcript validation must reject overbudget advertised round capacity before refresh-entry drift
+283	S	refresh-round residual budget	S	exact refresh execution must reject overbudget advertised round capacity before using key material
+284	S	refresh-round noise budget	S	bounded refresh capacity must reject overbudget advertised rounds
+285	S	refresh-round noise budget	S	bounded bootstrap key construction must reject overbudget round capacity before deriving refresh masks
+286	S	refresh-round noise budget	S	bounded transcript validation must reject overbudget advertised round capacity before refresh-entry drift
+287	S	refresh-round noise budget	S	bounded refresh execution must reject overbudget advertised round capacity before using key material
+288	S	exceeds plaintext modulus	S	exact encryption must reject public plaintext before public-key shape
+289	S	must not be empty	S	exact encryption must reject seed metadata before public-key shape
+290	S	all zero	S	exact encryption must reject inert all-zero public-key material
+291	S	a component	S	exact encryption must reject inert zero-a public-key components
+292	S	exceeds plaintext modulus	S	bounded encryption must reject public plaintext before public-key shape
+293	S	must not be empty	S	bounded encryption must reject seed metadata before public-key shape
+294	S	all zero	S	bounded encryption must reject inert all-zero public-key material
+295	S	b component	S	bounded encryption must reject inert zero-b public-key components
+296	S	identifier input exceeds	S	identifier encryption must reject public input length before public-key shape
+297	S	must not be empty	S	identifier encryption must reject seed metadata before public-key shape
+298	S	max_input_bytes must be at least 1	S	identifier public parameters must reject envelope metadata before public-key shape
+299	S	max_input_bytes must be at least 1	S	identifier encryption must reject envelope metadata before public-key shape
+300	S	automorphism power	S	exact Galois keygen must reject public automorphism metadata before secret-key shape
+301	S	must not be empty	S	exact Galois keygen must reject seed metadata before secret-key shape
+302	S	automorphism power	S	bounded Galois keygen must reject public automorphism metadata before secret-key shape
+303	S	must not be empty	S	bounded Galois keygen must reject seed metadata before secret-key shape
+304	S	public key	S	exact public-key consistency must reject public-key shape before secret-key shape
+305	S	public key	S	bounded public-key consistency must reject public-key shape before secret-key shape
+306	S	relinearization key	S	bounded relin consistency must reject public key shape before secret-key shape
+307	S	automorphism power	S	bounded Galois consistency must reject public metadata before secret-key shape
+308	S	Galois key	S	bounded Galois consistency must reject public key shape before secret-key shape
+309	S	canonical v1 bytes	S	public-key byte admission must reject compressed Norito framing
+310	S	canonical v1 bytes	S	public-key byte digesting must reject compressed Norito framing
+311	S	canonical v1 bytes	S	public-key byte decode-and-digest must reject compressed Norito framing
+312	S	Norito-encoded BFV material	S	public-key byte admission must reject non-Norito placeholder-looking bytes
+313	S	Norito-encoded BFV material	S	public-key byte digesting must reject non-Norito placeholder-looking bytes
+314	S	Norito-encoded BFV material	S	public-key byte decode-and-digest must reject non-Norito placeholder-looking bytes
+315	S	canonical v1 bytes	S	exact public-key statement byte hashing must reject compressed Norito framing
+316	S	canonical v1 bytes	S	exact public-key statement byte decode-and-digest must reject compressed Norito framing
+317	S	canonical v1 bytes	S	bounded public-key statement byte hashing must reject compressed Norito framing
+318	S	canonical v1 bytes	S	bounded public-key statement byte decode-and-digest must reject compressed Norito framing
+319	S	seeded BFV encryption residual bound	S	exact public-key statement byte hashing must reject insufficient residual capacity before public-key framing
+320	S	seeded BFV encryption residual bound	S	exact public-key statement byte decode-and-digest must reject insufficient residual capacity before public-key framing
+321	S	fresh encryption noise bound	S	bounded public-key statement byte hashing must reject insufficient noise capacity before public-key framing
+322	S	fresh encryption noise bound	S	bounded public-key statement byte decode-and-digest must reject insufficient noise capacity before public-key framing
+323	S	Norito-encoded BFV material	S	exact public-key statement byte hashing must reject non-Norito placeholder-looking bytes
+324	S	Norito-encoded BFV material	S	exact public-key statement byte decode-and-digest must reject non-Norito placeholder-looking bytes
+325	S	Norito-encoded BFV material	S	bounded public-key statement byte hashing must reject non-Norito placeholder-looking bytes
+326	S	Norito-encoded BFV material	S	bounded public-key statement byte decode-and-digest must reject non-Norito placeholder-looking bytes
+327	S	all zero	S	exact public-key proof statements must reject inert all-zero public keys
+328	S	all zero	S	bounded public-key proof statements must reject inert all-zero public keys
+329	S	canonical v1 bytes	S	ciphertext byte admission must reject compressed Norito framing
+330	S	canonical v1 bytes	S	ciphertext byte digesting must reject compressed Norito framing
+331	S	canonical v1 bytes	S	ciphertext byte decode-and-digest must reject compressed Norito framing
+332	S	Norito-encoded BFV material	S	ciphertext byte admission must reject non-Norito placeholder-looking bytes
+333	S	Norito-encoded BFV material	S	ciphertext byte digesting must reject non-Norito placeholder-looking bytes
+334	S	Norito-encoded BFV material	S	ciphertext byte decode-and-digest must reject non-Norito placeholder-looking bytes
+335	S	canonical v1 bytes	S	exact ciphertext statement byte hashing must reject compressed public-key framing
+336	S	canonical v1 bytes	S	exact ciphertext statement byte decode-and-digest must reject compressed public-key framing
+337	S	canonical v1 bytes	S	exact ciphertext statement byte hashing must reject compressed ciphertext framing
+338	S	canonical v1 bytes	S	exact ciphertext statement byte decode-and-digest must reject compressed ciphertext framing
+339	S	canonical v1 bytes	S	bounded ciphertext statement byte hashing must reject compressed public-key framing
+340	S	canonical v1 bytes	S	bounded ciphertext statement byte decode-and-digest must reject compressed public-key framing
+341	S	canonical v1 bytes	S	bounded ciphertext statement byte hashing must reject compressed ciphertext framing
+342	S	canonical v1 bytes	S	bounded ciphertext statement byte decode-and-digest must reject compressed ciphertext framing
+343	S	caller-declared bound	S	exact ciphertext statement byte hashing must validate the declared bound before ciphertext bytes
+344	S	caller-declared bound	S	exact ciphertext statement byte decode-and-digest must validate the declared bound before ciphertext bytes
+345	S	caller-declared bound	S	bounded ciphertext statement byte hashing must validate the declared bound before ciphertext bytes
+346	S	caller-declared bound	S	bounded ciphertext statement byte decode-and-digest must validate the declared bound before ciphertext bytes
+347	S	caller-declared bound	S	exact ciphertext statement byte hashing must validate the declared bound before public-key bytes
+348	S	caller-declared bound	S	exact ciphertext statement byte decode-and-digest must validate the declared bound before public-key bytes
+349	S	caller-declared bound	S	bounded ciphertext statement byte hashing must validate the declared bound before public-key bytes
+350	S	caller-declared bound	S	bounded ciphertext statement byte decode-and-digest must validate the declared bound before public-key bytes
+351	S	seeded BFV encryption residual bound	S	exact ciphertext statement byte hashing must reject insufficient residual capacity before public-key or ciphertext framing
+352	S	seeded BFV encryption residual bound	S	exact ciphertext statement byte decode-and-digest must reject insufficient residual capacity before public-key or ciphertext framing
+353	S	fresh encryption noise bound	S	bounded ciphertext statement byte hashing must reject insufficient noise capacity before public-key or ciphertext framing
+354	S	fresh encryption noise bound	S	bounded ciphertext statement byte decode-and-digest must reject insufficient noise capacity before public-key or ciphertext framing
+355	S	Norito-encoded BFV material	S	exact ciphertext statement byte hashing must reject non-Norito public-key bytes
+356	S	Norito-encoded BFV material	S	exact ciphertext statement byte decode-and-digest must reject non-Norito public-key bytes
+357	S	Norito-encoded BFV material	S	exact ciphertext statement byte hashing must reject non-Norito ciphertext bytes
+358	S	Norito-encoded BFV material	S	exact ciphertext statement byte decode-and-digest must reject non-Norito ciphertext bytes
+359	S	Norito-encoded BFV material	S	bounded ciphertext statement byte hashing must reject non-Norito public-key bytes
+360	S	Norito-encoded BFV material	S	bounded ciphertext statement byte decode-and-digest must reject non-Norito public-key bytes
+361	S	Norito-encoded BFV material	S	bounded ciphertext statement byte hashing must reject non-Norito ciphertext bytes
+362	S	Norito-encoded BFV material	S	bounded ciphertext statement byte decode-and-digest must reject non-Norito ciphertext bytes
+363	S	all-zero ciphertext	S	ciphertext digesting must reject inert all-zero ciphertexts
+364	S	all-zero ciphertext	S	exact ciphertext statements must reject inert all-zero ciphertexts
+365	S	all-zero ciphertext	S	bounded ciphertext statements must reject inert all-zero ciphertexts
+366	S	exact residual bound	S	exact ciphertext statements must reject unrepresentable declared bounds
+367	S	seeded BFV encryption residual bound	S	exact ciphertext statements must reject profiles without seeded-encryption residual headroom
+368	S	bounded-noise bound	S	bounded ciphertext statements must reject unrepresentable declared bounds
+369	S	nonzero residual	S	exact public-key proof input material must reject zero-residual witnesses
+370	S	statement hash mismatch	S	exact public-key proof input material must reject stale statement hashes
+371	S	must be distinct from public-key digest	S	exact public-key proof input material must reject statement/public-key digest aliases before mismatch checks
+372	S	public-key digest mismatch	S	exact public-key proof input material must reject stale public-key digests
+373	S	residual mismatch	S	exact public-key proof input material must reject stale residual polynomials
+374	S	residual multiples mismatch	S	exact public-key proof input material must reject stale residual multiples
+375	S	max residual mismatch	S	exact public-key proof input material must reject stale residual maxima
+376	S	public key	S	exact public-key proof input material must reject unrelated secret-key witnesses
+377	S	nonzero residual	S	exact ciphertext proof input material must reject zero-residual witnesses
+378	S	statement hash mismatch	S	exact ciphertext proof input material must reject stale statement hashes
+379	S	must be distinct from public-key digest	S	exact ciphertext proof input material must reject public-key/ciphertext digest aliases before mismatch checks
+380	S	ciphertext digest mismatch	S	exact ciphertext proof input material must reject stale ciphertext digests
+381	S	plaintext mismatch	S	exact ciphertext proof input material must reject stale plaintext witnesses
+382	S	scaled coefficients mismatch	S	exact ciphertext proof input material must reject stale scaled coefficients
+383	S	residual multiples mismatch	S	exact ciphertext proof input material must reject stale residual multiples
+384	S	actual residual mismatch	S	exact ciphertext proof input material must reject stale residual maxima
+385	S	exact residual bound	S	exact ciphertext proof input material must reject understated declared bounds
+386	S	public key	S	exact ciphertext proof input material must reject unrelated secret-key witnesses
+387	S	nonzero noise	S	bounded public-key proof input material must reject zero-noise witnesses
+388	S	statement hash mismatch	S	bounded public-key proof input material must reject stale statement hashes
+389	S	must be distinct from public-key digest	S	bounded public-key proof input material must reject statement/public-key digest aliases before mismatch checks
+390	S	public-key digest mismatch	S	bounded public-key proof input material must reject stale public-key digests
+391	S	residual mismatch	S	bounded public-key proof input material must reject stale residual polynomials
+392	S	max noise mismatch	S	bounded public-key proof input material must reject stale residual maxima
+393	S	exceeds bound	S	bounded public-key proof input material must reject unrelated secret-key witnesses
+394	S	nonzero noise	S	bounded ciphertext proof input material must reject zero-noise witnesses
+395	S	statement hash mismatch	S	bounded ciphertext proof input material must reject stale statement hashes
+396	S	must be distinct from public-key digest	S	bounded ciphertext proof input material must reject public-key/ciphertext digest aliases before mismatch checks
+397	S	ciphertext digest mismatch	S	bounded ciphertext proof input material must reject stale ciphertext digests
+398	S	plaintext mismatch	S	bounded ciphertext proof input material must reject stale plaintext witnesses
+399	S	scaled coefficients mismatch	S	bounded ciphertext proof input material must reject stale scaled coefficients
+400	S	noise polynomial mismatch	S	bounded ciphertext proof input material must reject stale noise polynomials
+401	S	actual noise mismatch	S	bounded ciphertext proof input material must reject stale noise maxima
+402	S	rounded noise	S	bounded ciphertext proof input material must reject understated declared bounds
+403	S	exceeds bound	S	bounded ciphertext proof input material must reject unrelated secret-key witnesses
+404	S	public-key digest	S	exact bootstrap proof statements must reject stale public-key digest metadata
+405	S	public-key digest	S	bounded bootstrap proof statements must reject stale public-key digest metadata
+406	S	placeholder	S	exact bootstrap proof statements must reject placeholder public-key digest metadata before comparison
+407	S	placeholder	S	bounded bootstrap proof statements must reject placeholder public-key digest metadata before comparison
+408	S	all zero	S	exact bootstrap proof statements must reject all-zero public keys even when refresh-only digest metadata is omitted
+409	S	all zero	S	bounded bootstrap proof statements must reject all-zero public keys even when refresh-only digest metadata is omitted
+410	S	all-zero refresh ciphertext	S	exact bootstrap proof statements must reject inert all-zero zero_refresh material
+411	S	all-zero refresh ciphertext	S	bounded bootstrap proof statements must reject inert all-zero zero_refresh material
+412	S	all-zero refresh ciphertext	S	exact bootstrap proof statements must reject inert all-zero round refresh material
+413	S	all-zero refresh ciphertext	S	bounded bootstrap proof statements must reject inert all-zero round refresh material
+414	S	zero_refresh must match round_refreshes[0]	S	bootstrap refresh summaries must reject noncanonical zero_refresh drift before digesting
+415	S	zero_refresh must match round_refreshes[0]	S	exact bootstrap proof statements must reject noncanonical zero_refresh drift
+416	S	zero_refresh must match round_refreshes[0]	S	bounded bootstrap proof statements must reject noncanonical zero_refresh drift
+417	S	duplicate round refresh ciphertext	S	bootstrap refresh summaries must reject aliased per-round refresh material before digesting
+418	S	deterministic encrypted-zero transcript	S	bounded transcript validation must reject exact refresh masks
+419	S	deterministic encrypted-zero transcript	S	bounded transcript digesting must reject exact refresh masks
+420	S	deterministic encrypted-zero transcript	S	bounded transcript-bound proof statements must reject exact refresh masks
+421	S	round_refreshes[1]	S	exact transcript proof statements must reject reordered refresh rounds before digesting
+422	S	canonical v1 bytes	S	circuit material byte admission must reject compressed Norito framing
+423	S	canonical v1 bytes	S	circuit material byte digesting must reject compressed Norito framing
+424	S	canonical v1 bytes	S	circuit material byte digest helper must reject compressed Norito framing before hashing
+425	S	Norito-encoded BFV material	S	circuit material byte admission must reject non-Norito placeholder-looking bytes
+426	S	Norito-encoded BFV material	S	circuit material byte digesting must reject non-Norito placeholder-looking bytes
+427	S	Norito-encoded BFV material	S	circuit material byte digest helper must reject non-Norito placeholder-looking bytes
+428	S	canonical	S	full-bootstrap material must bind the canonical circuit id
+429	S	parameter digest	S	full-bootstrap material must bind the registered parameter digest
+430	S	RNS modulus-chain digest must be distinct from parameter digest	S	full-bootstrap material must reject RNS profile digests copied from parameter digests before registered-profile mismatch
+431	S	RNS modulus-chain digest must be distinct from parameter digest	S	full-bootstrap material digesting must reject RNS profile digests copied from parameter digests before hashing
+432	S	key-switch decomposition-chain digest must be distinct from RNS modulus-chain digest	S	full-bootstrap material must reject key-switch profile digests copied from RNS digests before registered-profile mismatch
+433	S	centered scale-round source-chain digest must be distinct from key-switch decomposition-chain digest	S	full-bootstrap material must reject centered scale-round source digests copied from key-switch digests before registered-profile mismatch
+434	S	zero hash	S	full-bootstrap material must reject empty artifact commitments
+435	S	zero hash	S	full-bootstrap material must reject empty proof-profile commitments
+436	S	placeholder	S	full-bootstrap material must reject pending proof-key pair placeholder digests
+437	S	placeholder	S	full-bootstrap material must reject proof-key material placeholder digests
+438	S	placeholder	S	full-bootstrap material must reject draft material digest sentinels
+439	S	placeholder	S	full-bootstrap material must reject not-production-ready material digest sentinels
+440	S	placeholder	S	full-bootstrap material must reject mock proof-key pair commitments
+441	S	placeholder	S	full-bootstrap material must reject fixture verifier-key material commitments
+442	S	placeholder	S	full-bootstrap material must reject internal evaluator-artifact transient proof-key pair commitments
+443	S	placeholder	S	full-bootstrap material must reject internal evaluator-artifact transient verifier-key commitments
+444	S	placeholder	S	full-bootstrap material must reject generic native proof-key placeholder digest sentinels
+445	S	placeholder	S	full-bootstrap material must reject delayed native proof-key placeholder digest sentinels
+446	S	placeholder	S	full-bootstrap material must reject leading-whitespace delayed placeholder digest sentinels
+447	S	placeholder	S	full-bootstrap material must reject replace-before-production material digest sentinels
+448	S	distinct from proof-key pair commitment	S	full-bootstrap material must reject prover-key material commitments that alias the proof-key pair commitment
+449	S	distinct from proof-key pair commitment	S	full-bootstrap material must reject verifier-key material commitments that alias the proof-key pair commitment
+450	S	distinct	S	full-bootstrap material must bind distinct artifact commitments per role
+451	S	distinct	S	full-bootstrap material must bind distinct proof-profile commitments per role
+452	S	distinct	S	full-bootstrap artifact commitments must not reuse profile digests
+453	S	distinct	S	full-bootstrap proof commitments must not reuse profile digests
+454	S	greater than zero	S	full-bootstrap material must reject zero circuit depth
+455	S	supported limit	S	full-bootstrap material must reject oversized circuit depth
+456	S	public-input schema digest	S	full-bootstrap material must bind the expected proof schema
+457	S	placeholder	S	full-bootstrap material proof profile must reject placeholder expected schema digests
+458	S	verifier-key material commitment	S	full-bootstrap material must bind the expected verifier key
+459	S	placeholder	S	full-bootstrap material proof profile must reject placeholder expected verifier commitments
+460	S	zero hash	S	full-bootstrap material proof profile must reject empty schema commitments
+461	S	zero hash	S	full-bootstrap material proof profile must reject empty verifier commitments
+462	S	body must not be empty	S	report helper must reject empty bodies before adding a header
+463	S	body must not be empty	S	archive helper must reject empty bodies before adding a header
+464	S	body must not be all zero	S	report helper must reject zero bodies before adding a header
+465	S	body must not be all zero	S	archive helper must reject zero bodies before adding a header
+466	S	below minimum	S	report helper must reject tiny nonzero bodies before adding a header
+467	S	body must not be blank	S	archive helper must reject blank bodies before adding a header
+468	S	placeholder audit artifact	S	report helper must reject placeholder audit report bodies
+469	S	placeholder audit artifact	S	archive helper must reject pending placeholder audit archive bodies
+470	S	placeholder audit artifact	S	report helper must reject draft/not-for-production audit report bodies
+471	S	placeholder audit artifact	S	archive helper must reject spaced replace-before-production bodies
+472	S	placeholder audit artifact	S	report helper must reject not-production-ready audit report bodies
+473	S	placeholder audit artifact	S	archive helper must reject underscore replace-before-production bodies
+474	S	placeholder audit artifact	S	report helper must reject replace-me handoff placeholder bodies
+475	S	placeholder audit artifact	S	archive helper must reject changeme handoff placeholder bodies
+476	S	placeholder audit artifact	S	report helper must reject stub handoff placeholder bodies
+477	S	placeholder audit artifact	S	archive helper must reject test-only handoff placeholder bodies
+478	S	placeholder audit artifact	S	report helper must reject separator-obfuscated replace-before-production bodies
+479	S	placeholder audit artifact	S	archive helper must reject separator-obfuscated test-only bodies
+480	S	placeholder audit artifact	S	report helper must reject separator-spelled todo bodies
+481	S	placeholder audit artifact	S	archive helper must reject separator-spelled fake bodies
+482	S	placeholder audit artifact	S	report helper must reject separator-spelled stub bodies
+483	S	placeholder audit artifact	S	archive helper must reject separator-spelled mock bodies
+484	S	placeholder audit artifact	S	report helper must reject separator-spelled sample bodies
+485	S	placeholder audit artifact	S	archive helper must reject separator-spelled template bodies
+486	S	placeholder audit artifact	S	report helper must reject your-* handoff placeholder bodies
+487	S	placeholder audit artifact	S	report helper must reject separator-obfuscated your-proof bodies
+488	S	placeholder audit artifact	S	report helper must reject mock/fixture audit report bodies
+489	S	placeholder audit artifact	S	archive helper must reject fixture audit archive bodies
+490	S	placeholder audit artifact	S	report helper must reject delayed placeholder text anywhere in the body
+491	S	placeholder audit artifact	S	archive helper must reject delayed placeholder text anywhere in the body
+492	S	placeholder audit artifact	S	report helper must reject delayed placeholder text after leading whitespace
+493	S	placeholder audit artifact	S	archive helper must reject delayed placeholder text after leading whitespace
+494	S	audit artifact header	S	report helper must reject bodies that already start with an audit artifact header
+495	S	audit artifact header	S	archive helper must reject bodies that already start with an audit artifact header
+496	S	audit artifact header	S	report helper must reject nested audit headers after leading whitespace
+497	S	audit artifact header	S	report helper must reject nested audit headers anywhere in the body
+498	S	audit artifact header	S	release audit body extraction must reject nested headers after leading whitespace
+499	S	audit artifact header	S	release audit body extraction must reject delayed nested headers
+500	S	placeholder audit artifact	S	release audit body extraction must reject delayed placeholder text
+501	S	placeholder audit artifact	S	release audit body extraction must reject delayed placeholder text after leading whitespace
+502	S	exceeds maximum	S	oversized audit artifacts must fail on size before body scanning
+503	S	exceeds maximum	S	oversized audit artifacts must fail on size before header validation
+504	S	non-empty body	S	header-only audit artifacts must fail after size and header validation
+505	S	body must not be all zero	S	zero-body audit artifacts must fail after size and header validation
+506	S	below minimum	S	short nonzero audit artifacts must fail after size and header validation
+507	S	body must not be blank	S	blank audit artifacts must fail after body minimum validation
+508	S	audit artifact header	S	nested audit artifact bodies must fail after size and header validation
+509	S	audit artifact header	S	whitespace-prefixed nested audit artifact bodies must fail after header validation
+510	S	audit artifact header	S	delayed nested audit artifact bodies must fail after header validation
+511	S	placeholder audit artifact	S	artifact digest must reject delayed placeholder text anywhere in the body
+512	S	placeholder audit artifact	S	artifact digest must reject delayed sample/template/example text anywhere in the body
+513	S	RNS modulus-chain digest must be distinct from parameter digest	S	release audit evidence must reject RNS profile digests copied from parameter digests before registered-profile mismatch
+514	S	RNS modulus-chain digest must be distinct from parameter digest	S	release audit evidence digesting must reject RNS profile digests copied from parameter digests before hashing
+515	S	key-switch decomposition-chain digest must be distinct from RNS modulus-chain digest	S	release audit evidence must reject key-switch profile digests copied from RNS digests before registered-profile mismatch
+516	S	placeholder text	S	release audit signoff payloads must reject placeholder circuit ids before signature verification
+517	S	placeholder text	S	release audit signoff payloads must reject binary-decorated placeholder circuit ids before canonical mismatch
+518	S	canonical	S	release audit signoff payloads must reject wrong-circuit ids before signature verification
+519	S	placeholder text	S	release audit manifests must reject placeholder circuit ids before canonical mismatch
+520	S	canonical	S	release audit manifests must reject wrong-circuit ids before manifest matching
+521	S	placeholder text	S	release audit manifests must reject placeholder scope ids before canonical mismatch
+522	S	canonical	S	release audit manifests must reject wrong scope ids before manifest matching
+523	S	placeholder text	S	release audit manifests must reject binary-decorated placeholder scope ids before canonical mismatch
+524	S	canonical v1 bytes	S	artifact-bundle byte admission must reject compressed Norito framing
+525	S	canonical v1 bytes	S	artifact-bundle byte digesting must reject compressed Norito framing
+526	S	canonical v1 bytes	S	artifact-bundle byte material derivation must reject compressed Norito framing
+527	S	canonical v1 bytes	S	artifact-bundle decoded byte material derivation must reject compressed Norito framing
+528	S	Norito-encoded BFV material	S	artifact-bundle byte admission must reject non-Norito placeholder-looking bytes
+529	S	Norito-encoded BFV material	S	artifact-bundle byte digesting must reject non-Norito placeholder-looking bytes
+530	S	Norito-encoded BFV material	S	artifact-bundle byte material derivation must reject non-Norito placeholder-looking bytes
+531	S	Norito-encoded BFV material	S	artifact-bundle decoded byte material derivation must reject non-Norito placeholder-looking bytes
+532	S	placeholder text	S	circuit material validation must reject placeholder circuit ids before canonical mismatch
+533	S	placeholder text	S	circuit material validation must reject binary-decorated placeholder circuit ids before canonical mismatch
+534	S	placeholder text	S	artifact bundle validation must reject binary-decorated placeholder artifact circuit ids before governed material mismatch
+535	S	proof public-input schema artifact digest	S	circuit material validation must reject proof-schema artifact digest drift
+536	S	arithmetic AIR artifact digest	S	circuit material validation must reject arithmetic AIR artifact digest drift
+537	S	placeholder	S	artifact bundle digest material hashing must reject placeholder proof-key digests
+538	S	distinct	S	artifact bundle digest material hashing must reject duplicate artifact digests
+539	S	placeholder text	S	evaluator artifact-set digest material must reject placeholder circuit ids before digest checks
+540	S	placeholder text	S	evaluator artifact-set digest material must reject binary-decorated placeholder circuit ids before digest checks
+541	S	canonical	S	evaluator artifact-set digest material must reject wrong-circuit ids before digest checks
+542	S	placeholder	S	evaluator artifact set digest material hashing must reject placeholder profile digests
+543	S	distinct	S	evaluator artifact set digest material hashing must reject duplicate artifact digests
+544	S	public-key digest must be distinct from artifact bundle digest	S	artifact-aware full-bootstrap execution preflight must reject public-key digest replay from the artifact bundle digest before execution
+545	S	all-zero	S	artifact-aware full-bootstrap execution preflight must reject inert all-zero ciphertext inputs
+546	S	must not be empty	S	artifact bundles must carry the arithmetic AIR contract artifact
+547	S	placeholder text	S	artifact bundles must reject placeholder artifact envelope bytes before digest mismatch
+548	S	placeholder text	S	artifact-derived material must reject placeholder artifact envelope bytes before hashing
+549	S	placeholder text	S	artifact bundles must reject binary-decorated placeholder artifact envelope bytes before digest mismatch
+550	S	placeholder text	S	artifact-derived material must reject binary-decorated placeholder artifact envelope bytes before hashing
+551	S	placeholder text	S	artifact bundles must reject binary-split placeholder artifact envelope bytes before digest mismatch
+552	S	placeholder text	S	artifact-derived material must reject binary-split placeholder artifact envelope bytes before hashing
+553	S	all-zero	S	artifact payload wrapping must reject inert all-zero payloads
+554	S	all-zero	S	evaluator artifact-set digesting must reject inert all-zero artifact bytes
+555	S	placeholder text	S	evaluator artifact-set digesting must reject placeholder artifact envelope bytes before Norito decoding
+556	S	placeholder text	S	evaluator artifact-set digesting must reject binary-decorated placeholder artifact envelope bytes before Norito decoding
+557	S	placeholder text	S	evaluator artifact-set digesting must reject binary-split placeholder artifact envelope bytes before Norito decoding
+558	S	Norito-encoded	S	evaluator artifact-set digesting must reject malformed artifact envelopes
+559	S	canonical v1 envelope bytes	S	artifact bundles must reject noncanonical compressed artifact envelope framing
+560	S	canonical v1 envelope bytes	S	evaluator artifact-set digesting must reject noncanonical compressed artifact envelope framing
+561	S	linear transform	S	evaluator artifact-set digesting must reject opaque typed artifact payloads
+562	S	placeholder text	S	evaluator artifact-set digesting must reject placeholder artifact circuit ids before governed mismatch
+563	S	canonical	S	evaluator artifact-set digesting must reject wrong-circuit artifact envelopes before governed mismatch
+564	S	parameter digest	S	evaluator artifact-set digesting must reject stale artifact profile envelopes
+565	S	arithmetic AIR artifact digest	S	artifact bundles must reject stale arithmetic AIR contract material before payload decoding
+566	S	canonical v1 bytes	S	arithmetic AIR artifact admission must reject noncanonical compressed payload framing
+567	S	placeholder text	S	arithmetic AIR artifact admission must reject binary-split placeholder payloads before typed decoding
+568	S	placeholder	S	blind-rotation key construction must reject placeholder accumulator digests
+569	S	placeholder	S	blind-rotation key validation must reject placeholder accumulator digests
+570	S	switch key	S	executable full-bootstrap artifact bundles must reject metadata-only sample extraction artifacts
+571	S	switch key	S	artifact-aware execution preflight must reject metadata-only sample extraction artifacts
+572	S	must not be empty	S	full-bootstrap artifacts must reject empty evaluator material
+573	S	digest does not match	S	full-bootstrap artifacts must match material commitments
+574	S	digest does not match	S	artifact-aware execution preflight must reject drifted artifacts
+575	S	exceeds maximum	S	full-bootstrap artifacts must reject oversized verifier material
+576	S	digest does not match	S	full-bootstrap artifact validation must reject material drift
+577	S	Norito-encoded	S	full-bootstrap artifacts must reject malformed encoded payloads
+578	S	role	S	full-bootstrap artifacts must reject role-swapped payload envelopes
+579	S	parameter digest	S	full-bootstrap artifacts must reject stale parameter-profile envelopes
+580	S	blind rotation	S	full-bootstrap artifact bundles must reject opaque blind-rotation payloads
+581	S	sample-extraction	S	full-bootstrap artifact bundles must reject opaque sample-extraction payloads
+582	S	placeholder text	S	full-bootstrap artifact builders must reject direct placeholder text payloads
+583	S	placeholder text	S	full-bootstrap artifact builders must reject binary-decorated placeholder payloads
+584	S	placeholder text	S	full-bootstrap artifact builders must reject binary-split placeholder payloads
+585	S	placeholder text	S	full-bootstrap artifacts must reject placeholder inner payloads before typed decoding
+586	S	placeholder text	S	full-bootstrap artifacts must reject binary-decorated placeholder inner payloads before typed decoding
+587	S	placeholder text	S	full-bootstrap artifacts must reject binary-split placeholder inner payloads before typed decoding
+588	S	must not be all-zero	S	full-bootstrap artifacts must reject all-zero outer envelopes before Norito decoding
+589	S	payload must not be all-zero	S	full-bootstrap artifacts must reject all-zero payload envelopes before typed decoding
+590	S	proof public-input schema artifact digest	S	full-bootstrap artifacts must reject empty payload envelopes before schema decoding
+591	S	proof-key pair commitment does not match	S	material derivation must reject stale proof-key pair commitments
+592	S	proof-key pair commitment does not match	S	decoded pair helper must reject stale proof-key pair commitments
+593	S	prover-key	S	material derivation must reject malformed release proof-key artifacts
+594	S	canonical v1 bytes	S	proof public-input schema artifacts must reject noncanonical compressed Norito payload framing
+595	S	placeholder text	S	proof public-input schema artifacts must reject binary-split placeholder payloads before typed decoding
+596	S	canonical	S	proof-key validation must reject wrong-circuit outer proof-key ids before governed material matching
+597	S	placeholder text	S	proof-key validation must reject placeholder governed material circuit ids before key/material mismatch
+598	S	canonical	S	proof-key validation must reject wrong-circuit governed material ids before key/material mismatch
+599	S	canonical v1 bytes	S	proof-key artifacts must reject noncanonical compressed Norito payload framing
+600	S	canonical v1 bytes	S	registered-profile proof-key artifact byte digesting must reject noncanonical compressed payload framing
+601	S	canonical v1 bytes	S	registered-profile proof-key artifact byte decode-and-digest must reject noncanonical compressed payload framing
+602	S	placeholder text	S	prover-key artifacts must reject binary-split placeholder payloads before typed decoding
+603	S	placeholder text	S	registered-profile proof-key artifact byte digesting must reject binary-split placeholder payloads before typed decoding
+604	S	placeholder text	S	registered-profile proof-key artifact byte decode-and-digest must reject binary-split placeholder payloads before typed decoding
+605	S	placeholder text	S	verifier-key artifacts must reject binary-split placeholder payloads before typed decoding
+606	S	role	S	proof-key artifacts must reject prover/verifier role swaps
+607	S	payload role	S	proof-key encoding must reject inner/outer role mismatches
+608	S	payload role	S	proof-key decoding must reject role-confused typed payloads
+609	S	proof public-input schema	S	proof public-input schema artifacts must carry typed schema payloads
+610	S	placeholder text	S	proof public-input schemas must reject placeholder circuit ids before canonical mismatch
+611	S	placeholder text	S	proof public-input schemas must reject binary-decorated placeholder circuit ids before canonical mismatch
+612	S	placeholder text	S	proof public-input schemas must reject whitespace-prefixed placeholder circuit ids before canonicality
+613	S	canonical without surrounding whitespace	S	proof public-input schemas must reject whitespace-padded circuit ids before canonical mismatch
+614	S	canonical	S	proof public-input schemas must reject wrong-circuit ids before schema matching
+615	S	placeholder text	S	proof public-input schemas must reject placeholder statement digest domains before canonical mismatch
+616	S	placeholder text	S	proof public-input schemas must reject binary-decorated placeholder statement digest domains before canonical mismatch
+617	S	placeholder text	S	proof public-input schemas must reject whitespace-prefixed placeholder statement digest domains before canonicality
+618	S	placeholder text	S	proof public-input schemas must reject binary-decorated placeholder witness digest domains before canonical mismatch
+619	S	placeholder text	S	proof public-input schemas must reject binary-decorated placeholder composition domains before canonical mismatch
+620	S	placeholder text	S	proof public-input schemas must reject binary-decorated placeholder proof-input digest domains before canonical mismatch
+621	S	statement digest domain	S	proof public-input schemas must bind the execution statement domain
+622	S	statement material field count	S	proof public-input schemas must pin the top-level statement material layout
+623	S	artifact bundle digest	S	proof public-input schemas must bind concrete artifact bundles
+624	S	claim field count	S	proof public-input schemas must pin the execution claim layout
+625	S	slot index	S	proof public-input schemas must bind output slot indexes
+626	S	output bound	S	proof public-input schemas must bind output residual/noise bounds
+627	S	execution witness digest	S	proof public-input schemas must bind execution witness digests
+628	S	bounded-noise	S	proof public-input schemas must cover bounded-noise claims
+629	S	proof key	S	proof key artifacts must carry typed key payloads
+630	S	canonical	S	proof keys must bind the canonical backend
+631	S	canonical	S	proof keys must bind the canonical key format
+632	S	placeholder text	S	proof-key witness digest domains must reject binary-decorated placeholder labels before canonical mismatch
+633	S	placeholder text	S	proof-key validation must reject binary-decorated governed material circuit ids before key/material mismatch
+634	S	public-input schema digest	S	proof keys must bind the governed public-input schema digest
+635	S	evaluator artifact set digest	S	proof keys must bind the governed evaluator artifact set digest
+636	S	placeholder	S	proof keys must reject placeholder public-input schema digests
+637	S	placeholder	S	proof keys must reject placeholder evaluator artifact-set digests
+638	S	placeholder	S	proof keys must reject placeholder proof-key pair commitments
+639	S	placeholder	S	proof keys must reject transient proof-key pair commitments before recomputing
+640	S	public-input schema digest must be distinct from parameter digest	S	proof-key profile validation must reject schema digests copied from the parameter digest before governed material mismatch
+641	S	public-input schema digest must be distinct from parameter digest	S	proof-key material commitment derivation must reject schema digests copied from the parameter digest before envelope mismatch
+642	S	evaluator artifact set digest must be distinct from public-input schema digest	S	proof-key profile validation must reject evaluator digests copied from the schema digest before governed material mismatch
+643	S	evaluator artifact set digest must be distinct from public-input schema digest	S	proof-key material commitment derivation must reject evaluator digests copied from the schema digest before envelope mismatch
+644	S	proof-key pair commitment must be distinct from evaluator artifact set digest	S	proof-key profile validation must reject pair commitments copied from the evaluator digest before governed material mismatch
+645	S	proof-key pair commitment must be distinct from evaluator artifact set digest	S	proof-key material commitment derivation must reject pair commitments copied from the evaluator digest before envelope mismatch
+646	S	key material commitment must be distinct from proof-key pair commitment	S	proof-key profile validation must reject material commitments copied from pair commitments before recomputing
+647	S	key material commitment must be distinct from proof-key pair commitment	S	proof-key material commitment binding must reject material commitments copied from pair commitments before recomputing
+648	S	zero hash	S	proof-key material commitment binding must reject zero advertised material commitments before recomputing
+649	S	placeholder	S	proof keys must reject placeholder material commitments before recomputing
+650	S	placeholder	S	proof-key material commitment binding must reject placeholder advertised material commitments before recomputing
+651	S	placeholder	S	proof keys must reject transient material commitments before recomputing
+652	S	placeholder	S	proof-key profile validation must reject non-production placeholder digests
+653	S	material commitment	S	proof keys must bind key material to the declared commitment
+654	S	must not be empty	S	proof-key material commitment derivation must reject empty key material before hashing
+655	S	must not be empty	S	proof keys must reject empty backend key material
+656	S	all-zero	S	proof-key material commitment derivation must reject all-zero key material before hashing
+657	S	all-zero	S	proof keys must reject inert all-zero backend key material
+658	S	all-zero	S	proof key artifact admission must reject inert all-zero backend key material
+659	S	native material payload	S	proof-key material envelope encoding must reject raw native key bytes
+660	S	placeholder	S	proof-key material envelope encoding must reject draft public-input schema digests
+661	S	placeholder	S	proof-key material envelope encoding must reject placeholder evaluator artifact set digests
+662	S	evaluator artifact set digest must be distinct from public-input schema digest	S	proof-key material envelope encoding must reject caller-supplied digest aliases before emitting bytes
+663	S	public-input schema digest must be distinct from parameter digest	S	proof-key material envelope encoding must reject public-input schema digests copied from registered profile digests
+664	S	placeholder	S	proof-key material envelope decoding must reject hand-built placeholder digest metadata
+665	S	proof-key pair commitment	S	artifact bundles must reject proof keys advertising a stale pair commitment
+666	S	differs between prover and verifier keys	S	pair commitment helper must reject individually consistent asymmetric prover/verifier commitments
+667	S	differs between prover and verifier keys	S	decoded pair commitment helper must reject individually consistent asymmetric prover/verifier commitments
+668	S	proof-key pair commitment	S	artifact bundles must reject asymmetric proof-key pair commitments before accepting generated artifacts
+669	S	canonical	S	proof-key material commitments must reject noncanonical native verifier material before hashing
+670	S	canonical	S	artifact bundles must reject proof keys retargeted to a noncanonical native circuit
+671	S	canonical	S	proof-key material commitments must reject stale-computed native verifier material before hashing
+672	S	canonical	S	artifact bundles must reject proof-key material retargeted to a noncanonical native circuit
+673	S	canonical v1 bytes	S	artifact-derived proof-key commitments must reject noncanonical compressed Norito payload framing
+674	S	canonical v1 bytes	S	decoded artifact-derived proof-key commitments must reject noncanonical compressed Norito payload framing
+675	S	canonical v1 envelope bytes	S	artifact-derived proof-key commitments must reject noncanonical compressed envelope framing
+676	S	placeholder text	S	artifact-derived proof-key commitments must reject binary-split placeholder payloads before typed decoding
+677	S	placeholder text	S	artifact-derived proof-key commitments must reject placeholder artifact circuit ids before canonical mismatch
+678	S	canonical	S	artifact-derived proof-key commitments must reject wrong-circuit artifact envelopes before profile matching
+679	S	role	S	artifact-derived proof-key commitments must reject role-swapped envelopes
+680	S	greater than zero	S	artifact-derived proof-key commitments must reject zero bootstrap depth
+681	S	max bootstrap depth	S	artifact-derived proof-key commitments must reject depth drift
+682	S	must not be all-zero	S	artifact-derived proof-key commitments must reject all-zero outer envelopes before Norito decoding
+683	S	payload must not be all-zero	S	artifact-derived proof-key commitments must reject all-zero inner payloads before proof-key decoding
+684	S	parameter digest	S	proof-key artifact encoding must reject parameter-profile drift
+685	S	parameter digest	S	artifact-derived proof-key commitments must reject inner parameter-profile drift
+686	S	max bootstrap depth	S	proof-key artifact encoding must reject inner depth drift
+687	S	max bootstrap depth	S	artifact-derived proof-key commitments must reject inner depth drift
+688	S	material commitment	S	proof-key artifact encoding must reject stale declared commitments
+689	S	material commitment	S	artifact-derived proof-key commitments must reject stale declared commitments
+690	S	must not be empty	S	proof-key material commitment derivation must reject empty artifact key bytes before hashing
+691	S	must not be empty	S	artifact-derived proof-key commitments must reject empty backend key bytes
+692	S	all-zero	S	proof-key material commitment derivation must reject all-zero artifact key bytes before hashing
+693	S	all-zero	S	artifact-derived proof-key commitments must reject inert backend key bytes
+694	S	blank text	S	proof-key material commitment derivation must reject binary-decorated blank key bytes before hashing
+695	S	blank text	S	artifact-derived proof-key commitments must reject binary-decorated blank backend key bytes before proof-key decoding fallback
+696	S	canonical v1 bytes	S	AIR contract material byte admission must reject compressed Norito framing
+697	S	canonical v1 bytes	S	AIR contract material byte digesting must reject compressed Norito framing
+698	S	canonical v1 bytes	S	AIR contract material byte digest helper must reject compressed Norito framing before hashing
+699	S	Norito-encoded BFV material	S	AIR contract material byte admission must reject non-Norito placeholder-looking bytes
+700	S	Norito-encoded BFV material	S	AIR contract material byte digesting must reject non-Norito placeholder-looking bytes
+701	S	Norito-encoded BFV material	S	AIR contract material byte digest helper must reject non-Norito placeholder-looking bytes
+702	S	zero hash	S	release-prover contract digest validation must reject missing digests
+703	S	mismatch	S	release-prover contract digest validation must reject stale contracts
+704	S	canonical v1 bytes	S	trace profile byte admission must reject compressed Norito framing
+705	S	canonical v1 bytes	S	trace profile byte digesting must reject compressed Norito framing
+706	S	canonical v1 bytes	S	trace profile byte digest helper must reject compressed Norito framing before hashing
+707	S	Norito-encoded BFV material	S	trace profile byte admission must reject non-Norito placeholder-looking bytes
+708	S	Norito-encoded BFV material	S	trace profile byte digesting must reject non-Norito placeholder-looking bytes
+709	S	Norito-encoded BFV material	S	trace profile byte digest helper must reject non-Norito placeholder-looking bytes
+710	S	placeholder	S	trace profile digest admission must reject placeholder full-bootstrap digests
+711	S	placeholder text	S	trace profiles must reject placeholder circuit ids before canonical mismatch
+712	S	placeholder text	S	trace profiles must reject binary-decorated placeholder circuit ids before canonical mismatch
+713	S	canonical	S	trace profiles must reject wrong-circuit ids before profile digesting
+714	S	placeholder text	S	trace profiles must reject placeholder witness digest domains before mismatch
+715	S	placeholder text	S	trace profiles must reject binary-decorated placeholder witness digest domains before mismatch
+716	S	canonical	S	trace profiles must reject wrong witness digest domains before profile digesting
+717	S	sample-switch output	S	trace profiles must bind the governed sample-switch stage
+718	S	private row count	S	trace profiles must pin the private active-row count
+719	S	private row kind	S	trace profiles must distinguish private active rows
+720	S	private row openings	S	trace profiles must forbid unmasked private-row openings
+721	S	duplicate openings	S	trace profiles must forbid replayed public-row openings
+722	S	field count	S	trace profiles must pin their top-level field count
+723	S	placeholder	S	AIR constraint-system digest admission must reject placeholder full-bootstrap digests
+724	S	arithmetic trace profile	S	proof public-input schemas must bind the arithmetic trace profile
+725	S	placeholder	S	proof public-input schemas must reject placeholder arithmetic trace profile digests
+726	S	arithmetic AIR constraint-system	S	proof public-input schemas must bind the arithmetic AIR contract
+727	S	placeholder	S	proof public-input schemas must reject placeholder arithmetic AIR contract digests
+728	S	arithmetic trace profile	S	proof-key material commitments must reject stale arithmetic trace envelopes before hashing
+729	S	arithmetic trace profile	S	proof-key envelopes must bind the arithmetic trace profile
+730	S	arithmetic AIR constraint-system	S	proof-key material commitments must reject stale AIR envelopes before hashing
+731	S	arithmetic AIR constraint-system	S	proof-key envelopes must bind the arithmetic AIR contract
+732	S	arithmetic trace profile digest must be distinct from parameter digest	S	proof-key material commitments must reject trace-profile envelope digests copied from parameter digests before canonical mismatch
+733	S	arithmetic trace profile digest must be distinct from parameter digest	S	proof-key envelopes must reject trace-profile digests copied from parameter digests before canonical mismatch
+734	S	arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest	S	proof-key material commitments must reject AIR envelope digests copied from trace-profile digests before canonical mismatch
+735	S	arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest	S	proof-key envelopes must reject AIR digests copied from trace-profile digests before canonical mismatch
+736	S	arithmetic trace profile	S	native verifier payloads must bind the arithmetic trace profile
+737	S	arithmetic AIR constraint-system	S	native verifier payloads must bind the arithmetic AIR contract
+738	S	arithmetic trace profile	S	native prover payloads must bind the arithmetic trace profile
+739	S	arithmetic AIR constraint-system	S	native prover payloads must bind the arithmetic AIR contract
+740	S	canonical STARK/FRI query count	S	canonical BFV AIR opening policy must reject short query sets
+741	S	duplicated	S	canonical BFV AIR opening policy must reject replayed public rows
+742	S	must not be empty	S	BFV AIR opening policy must reject empty query sets
+743	S	unmasked private row	S	BFV AIR opening policy must reject direct private-row openings
+744	S	duplicated	S	BFV AIR opening policy must reject duplicate sampled public rows
+745	S	unmasked private row	S	BFV AIR opening policy must reject the last private row
+746	S	unmasked private row	S	BFV AIR opening policy must reject wraparound next-row leakage
+747	S	exceeds padded row count	S	BFV AIR opening policy must reject out-of-domain openings
+748	S	opening schedule	S	transcript validation must reject reordered opening fixtures
+749	S	duplicated	S	transcript validation must still reject duplicate sampled rows
+750	S	zero hash	S	opening derivation must reject zero statement hashes
+751	S	zero hash	S	opening derivation must reject zero trace material digests
+752	S	distinct	S	opening derivation must reject equal statement and trace material digests
+753	S	placeholder	S	opening derivation must reject placeholder statement hashes
+754	S	placeholder	S	opening derivation must reject placeholder trace material digests
+755	S	placeholder	S	opening derivation must reject delayed-placeholder trace material digests
+756	S	placeholder	S	opening derivation must reject binary-framed placeholder trace material digests
+757	S	placeholder	S	opening derivation must reject delayed binary-framed placeholder trace material digests
+758	S	placeholder	S	opening derivation must reject leading delayed binary-framed placeholder trace material digests
+759	S	placeholder	S	opening derivation must reject separator-spelled placeholder trace material digests
+760	S	canonical v1 bytes	S	public opening material byte admission must reject compressed Norito framing
+761	S	canonical v1 bytes	S	public opening material byte digesting must reject compressed Norito framing
+762	S	opening schedule	S	public opening replay must reject hand-built or reordered schedules
+763	S	opened row count	S	public opening replay must reject missing opened rows
+764	S	opened next-row count	S	public opening replay must reject missing opened next rows
+765	S	public padding opening query 0 failed	S	public opening replay must reject row payload drift with query context
+766	S	public padding opening query 0 failed	S	public opening replay must reject next-row payload drift with query context
+767	S	public padding opening query 0 failed	S	public opening replay must reject stale caller slot context
+768	S	public padding opening query 0 failed	S	public opening replay must reject stale caller bound-mode context
+769	S	query count	S	typed public opening material must reject stale query count metadata
+770	S	row width	S	typed public opening material must reject stale row-width metadata
+771	S	opening schedule	S	typed public opening material must reject reordered opening schedules
+772	S	opened row count	S	typed public opening material must reject missing opened rows
+773	S	public padding opening query 0 failed	S	typed public opening material must reject opened row drift
+774	S	zero hash	S	typed public opening material must reject zero statement hashes
+775	S	statement material version	S	proof public-input schemas must pin the statement material version
+776	S	claim version	S	proof public-input schemas must pin the claim version
+777	S	placeholder text	S	proof public-input schemas must reject placeholder statement digest domains before mismatch
+778	S	canonical	S	proof public-input schemas must pin the statement digest domain
+779	S	placeholder text	S	proof public-input schemas must reject placeholder witness digest domains before mismatch
+780	S	canonical	S	proof public-input schemas must pin the witness digest domain
+781	S	witness material version	S	proof public-input schemas must pin the witness material version
+782	S	witness material field count	S	proof public-input schemas must pin the witness material field count
+783	S	witness trace field count	S	proof public-input schemas must pin the witness trace field count
+784	S	witness trace bounds field count	S	proof public-input schemas must pin the witness trace bounds field count
+785	S	arithmetic trace profile	S	proof public-input schemas must pin the arithmetic trace profile
+786	S	arithmetic AIR constraint-system digest must be distinct from arithmetic trace profile digest	S	proof public-input schemas must reject AIR digests copied from trace-profile digests before canonical mismatch
+787	S	arithmetic AIR contract version	S	proof public-input schemas must pin the arithmetic AIR contract version
+788	S	arithmetic AIR contract field count	S	proof public-input schemas must pin the arithmetic AIR contract field count
+789	S	placeholder text	S	proof public-input schemas must reject placeholder AIR composition challenge domains before mismatch
+790	S	canonical	S	proof public-input schemas must pin the AIR composition challenge domain
+791	S	composition challenge digest byte length	S	proof public-input schemas must pin full-digest AIR composition challenge reduction
+792	S	proof input material version	S	proof public-input schemas must pin the proof input material version
+793	S	proof input material field count	S	proof public-input schemas must pin the proof input material field count
+794	S	placeholder text	S	proof public-input schemas must reject placeholder proof input digest domains before mismatch
+795	S	canonical	S	proof public-input schemas must pin the proof input material digest domain
+796	S	placeholder text	S	proof public-input schemas must reject placeholder prover input digest domains before mismatch
+797	S	canonical	S	proof public-input schemas must pin the prover input material digest domain
+798	S	placeholder text	S	proof public-input schemas must reject placeholder AIR evaluation digest domains before mismatch
+799	S	canonical	S	proof public-input schemas must pin the AIR evaluation material digest domain
+800	S	placeholder text	S	proof public-input schemas must reject placeholder trace material digest domains before mismatch
+801	S	canonical	S	proof public-input schemas must pin the arithmetic trace material digest domain
+802	S	placeholder text	S	proof public-input schemas must reject placeholder AIR constraint-system digest domains before mismatch
+803	S	canonical	S	proof public-input schemas must pin the arithmetic AIR constraint-system digest domain
+804	S	separate release-prover material digest domains	S	proof public-input schemas must advertise release-prover digest-domain separation
+805	S	placeholder text	S	proof public-input schemas must reject placeholder proof-key material commitment domains before mismatch
+806	S	canonical	S	proof public-input schemas must pin the proof-key material commitment domain
+807	S	placeholder text	S	proof public-input schemas must reject placeholder proof-key pair commitment domains before mismatch
+808	S	canonical	S	proof public-input schemas must pin the proof-key pair commitment domain
+809	S	separate proof-key material and pair commitment domains	S	proof public-input schemas must advertise proof-key commitment-domain separation
+810	S	prover input material version	S	proof public-input schemas must pin the prover input material version
+811	S	prover input material field count	S	proof public-input schemas must pin the prover input material field count
+812	S	AIR evaluation material version	S	proof public-input schemas must pin the AIR evaluation material version
+813	S	AIR evaluation material field count	S	proof public-input schemas must pin the AIR evaluation material field count
+814	S	public opening material version	S	proof public-input schemas must pin public-opening material versions
+815	S	public opening material field count	S	proof public-input schemas must pin public-opening material field counts
+816	S	placeholder text	S	proof public-input schemas must reject placeholder public-opening material digest domains before mismatch
+817	S	canonical bytes	S	proof public-input schemas must pin the public-opening material digest domain
+818	S	hash count	S	proof public-input schemas must pin the public-input hash count
+819	S	hash byte length	S	proof public-input schemas must pin the public-input hash byte length
+820	S	all-zero	S	proof-key material envelope encoding must reject inert native key bytes
+821	S	proof-key material envelope	S	proof-key material commitment derivation must reject opaque key material before hashing
+822	S	proof-key material envelope	S	proof-key validation must reject opaque backend-native key bytes
+823	S	placeholder text	S	proof-key material commitment derivation must reject placeholder key material before hashing
+824	S	placeholder text	S	proof-key pair commitment derivation must reject placeholder key material before hashing
+825	S	placeholder text	S	proof-key validation must reject placeholder material envelope bytes before Norito decoding
+826	S	placeholder text	S	proof-key material commitment derivation must reject binary-decorated placeholder key material before hashing
+827	S	placeholder text	S	proof-key validation must reject binary-decorated placeholder material envelope bytes before Norito decoding
+828	S	canonical v1 bytes	S	proof-key material commitment derivation must reject noncanonical compressed envelope framing before hashing
+829	S	canonical v1 bytes	S	proof-key-bound envelope byte admission must reject compressed Norito framing
+830	S	canonical v1 bytes	S	proof-key validation must reject noncanonical compressed material envelope framing
+831	S	material envelope public-input schema digest	S	proof-key material commitment derivation must reject key-material envelope metadata drift before hashing
+832	S	material envelope public-input schema digest	S	proof-key-bound envelope byte admission must reject key-material envelope metadata drift
+833	S	material envelope public-input schema digest	S	proof-key validation must reject key-material envelope metadata drift
+834	S	material commitment	S	proof-key-bound envelope byte admission must reject stale declared key-material commitments
+835	S	canonical	S	proof-key material envelopes must reject wrong-circuit ids before key metadata matching
+836	S	Merkle path root validation	S	proof-key material envelopes must bind verifier-floor obligations to key metadata
+837	S	verifier-owned trace material digest	S	proof-key material envelopes must bind verifier-owned trace material digest obligations to key metadata
+838	S	canonical base transcript-label enforcement	S	proof-key material envelopes must bind canonical base transcript-label enforcement to key metadata
+839	S	suffixed transcript-label alias rejection	S	proof-key material envelopes must bind suffixed transcript-label alias rejection to key metadata
+840	S	placeholder	S	proof-key profile validation must reject placeholder parameter digests before governed material matching
+841	S	placeholder	S	proof-key material commitment derivation must reject placeholder parameter digests before hashing
+842	S	verifier-owned trace material digest	S	proof-key validation must reject downgraded verifier-owned trace material digest obligations
+843	S	verifier-owned trace material digest	S	proof-key material commitment derivation must reject downgraded verifier-owned trace material digest obligations before hashing
+844	S	placeholder	S	proof-key material envelope validation must reject placeholder RNS profile digests
+845	S	placeholder	S	proof-key material envelope validation must reject placeholder profile digests before key metadata mismatch
+846	S	canonical	S	proof-key material envelope validation must reject wrong witness digest domains before key metadata mismatch
+847	S	placeholder text	S	proof-key material envelope validation must reject binary-decorated placeholder text before key metadata mismatch
+848	S	zero hash	S	proof-key material envelope validation must reject zero profile digests before key metadata mismatch
+849	S	material envelope role	S	proof-key material commitments must reject role-retargeted envelopes before hashing
+850	S	material envelope public-input schema digest	S	proof-key material commitments must reject public-input schema retargets before hashing
+851	S	material envelope evaluator artifact set digest	S	proof-key material commitments must reject evaluator artifact-set retargets before hashing
+852	S	material envelope parameter digest	S	proof-key material commitments must reject parameter-profile retargets before hashing
+853	S	material envelope max bootstrap depth	S	proof-key material commitments must reject bootstrap-depth retargets before hashing
+854	S	does not match proof key metadata	S	proof-key material commitment derivation must reject mismatched key-material envelopes before hashing
+855	S	proof-key material envelope	S	proof-key material commitments must reject opaque backend-native key bytes before hashing
+856	S	governed full-bootstrap material	S	proof-key validation must bind key material to the governed material record
+857	S	parameter digest	S	proof-key validation must bind key material to the governed parameter profile
+858	S	max bootstrap depth	S	proof-key validation must bind key material to the governed bootstrap depth
+859	S	zero hash	S	full-bootstrap material must reject placeholder proof-key commitments
+860	S	distinct from prover-key material commitment	S	full-bootstrap material must reject duplicate prover/verifier key commitments
+861	S	zero hash	S	proof-key validation must reject placeholder material commitments
+862	S	canonical v1 bytes	S	proof public-input schema byte admission must reject compressed Norito framing
+863	S	canonical v1 bytes	S	proof public-input schema byte digesting must reject compressed Norito framing
+864	S	canonical v1 bytes	S	proof public-input schema byte digest helper must reject compressed Norito framing before hashing
+865	S	placeholder text	S	proof public-input schema byte admission must reject placeholder-looking bytes before Norito decoding
+866	S	placeholder text	S	proof public-input schema byte digesting must reject placeholder-looking bytes before Norito decoding
+867	S	placeholder text	S	proof public-input schema byte digest helper must reject placeholder-looking bytes before Norito decoding
+868	S	linear transform	S	coefficient-to-slot artifacts must carry typed linear-transform payloads
+869	S	all-zero slots	S	linear-transform diagonals must reject inert all-zero slot masks
+870	S	all-zero slots	S	linear-transform artifact encoding must reject inert all-zero diagonals
+871	S	duplicates rotation_steps	S	linear-transform diagonals must have unique rotation metadata
+872	S	blind rotation	S	blind-rotation artifacts must carry typed blind-rotation payloads
+873	S	slot_count	S	blind rotation must bind the packed slot count
+874	S	accumulator digest	S	blind rotation must reject zero accumulator digests
+875	S	duplicates automorphism_power	S	blind rotation must reject duplicate automorphism powers
+876	S	plaintext coefficient	S	blind-rotation selectors must stay inside plaintext modulus
+877	S	binary	S	blind-rotation selectors must be binary slot masks
+878	S	all zero	S	blind-rotation selectors must reject inert all-zero masks
+879	S	accumulator digest	S	blind rotation must bind the governed accumulator artifact digest
+880	S	accumulator	S	accumulator artifacts must carry typed accumulator payloads
+881	S	slot_count	S	accumulator artifacts must bind the packed slot count
+882	S	plaintext coefficient	S	accumulator test-vector coefficients must stay inside plaintext modulus
+883	S	all zero	S	accumulator test vectors must reject inert all-zero placeholders
+884	S	all zero	S	sample-extraction switch key validation must reject any inert key-switch entry
+885	S	all zero	S	sample-extraction switch-key artifact encoding must reject any inert key-switch entry
+886	S	b component must not be all zero	S	sample-extraction switch key validation must reject all-zero b limbs
+887	S	a component must not be all zero	S	sample-extraction switch-key artifact encoding must reject all-zero a limbs
+888	S	sample extraction	S	sample-extraction artifacts must carry typed sample-extraction payloads
+889	S	source_slot_count	S	sample extraction must bind the source packed slot count
+890	S	extracted_coefficient_index	S	sample extraction must reject out-of-range coefficient indices
+891	S	source_ciphertext_component_count	S	sample extraction must reject incompatible source ciphertext shapes
+892	S	output_ciphertext_component_count	S	sample extraction must reject incompatible output ciphertext shapes
+893	S	canonical v1 bytes	S	linear-transform artifacts must reject noncanonical compressed Norito payload framing
+894	S	canonical v1 bytes	S	accumulator artifacts must reject noncanonical compressed Norito payload framing
+895	S	canonical v1 bytes	S	blind-rotation artifacts must reject noncanonical compressed Norito payload framing
+896	S	canonical v1 bytes	S	sample-extraction metadata artifacts must reject noncanonical compressed Norito payload framing
+897	S	canonical v1 bytes	S	sample-extraction switch-key artifacts must reject noncanonical compressed Norito payload framing
+898	S	canonical v1 bytes	S	sample-extraction metadata view must reject noncanonical compressed switch-key payload framing
+899	S	placeholder text	S	linear-transform artifacts must reject binary-split placeholder payloads before typed decoding
+900	S	placeholder text	S	accumulator artifacts must reject binary-split placeholder payloads before typed decoding
+901	S	placeholder text	S	blind-rotation artifacts must reject binary-split placeholder payloads before typed decoding
+902	S	placeholder text	S	sample-extraction metadata artifacts must reject binary-split placeholder payloads before typed decoding
+903	S	placeholder text	S	sample-extraction switch-key artifacts must reject binary-split placeholder payloads before typed decoding
+904	S	residual	S	exact sample-extraction switch-key diagnostics must reject material generated for a different secret key
+905	S	centered noise	S	bounded sample-extraction switch-key diagnostics must reject material generated for a different secret key
+906	S	does not match raw sample	S	bounded sample switch key must reject raw samples from a different extraction coefficient
+907	S	source_coefficient_index	S	raw extracted samples must reject out-of-range coefficient indexes
+908	S	secret_coefficients	S	raw extracted samples must reject malformed coefficient vectors
+909	S	secret_coefficients	S	coefficient-zero repack must reject malformed raw samples
+910	S	all zero	S	raw extracted samples must reject inert all-zero placeholders
+911	S	all zero	S	coefficient-zero repack must reject inert all-zero raw samples
+912	S	does not match raw sample	S	sample switch key must reject raw samples from a different extraction coefficient
+913	S	secret_coefficient_index	S	sample switch key entries must be ordered by secret coefficient
+914	S	max_refresh_rounds to 0	S	release-audited exact execution must reject mixed full-bootstrap refresh metadata before package digest checks
+915	S	max_refresh_rounds to 0	S	release-audited exact bounds must reject mixed full-bootstrap refresh metadata before package digest or bound checks
+916	S	machine-generated	S	release-audited exact execution must reject deterministic generated audit packages before missing Galois keys
+917	S	machine-generated	S	release-audited exact bounds must reject deterministic generated audit packages before malformed input bounds
+918	S	accumulator artifact digest does not match governed full-bootstrap material	S	release-audited exact execution must reject artifact digest drift before missing Galois keys
+919	S	accumulator artifact digest does not match governed full-bootstrap material	S	release-audited exact bounds must reject artifact digest drift before malformed input bounds
+920	S	accumulator artifact digest does not match governed full-bootstrap material	S	release-audited exact execution must run artifact preflight before caller-pinned package digest admission
+921	S	accumulator artifact digest does not match governed full-bootstrap material	S	release-audited exact bounds must run artifact preflight before caller-pinned package digest admission
+922	S	package digest mismatch	S	release-audited exact execution must reject stale caller-pinned package digests
+923	S	package digest mismatch	S	release-audited exact execution must reject stale audit packages before missing Galois keys
+924	S	release audit report bytes digest mismatch	S	release-audited exact execution must reject tampered report bytes before missing Galois keys
+925	S	release audit report bytes digest mismatch	S	release-audited exact bounds must reject tampered report bytes before malformed input bounds
+926	S	release audit evidence archive bytes digest mismatch	S	release-audited exact execution must reject tampered archive bytes before missing Galois keys
+927	S	release audit evidence archive bytes digest mismatch	S	release-audited exact bounds must reject tampered archive bytes before malformed input bounds
+928	S	generated circuit body digest mismatch	S	release-audited exact execution must reject well-signed stale generated-body packages before missing Galois keys
+929	S	generated circuit body digest mismatch	S	release-audited exact bounds must reject well-signed stale generated-body packages before malformed input bounds
+930	S	package digest mismatch	S	release-audited exact execution must reject stale audit packages before malformed ciphertexts
+931	S	all-zero ciphertext	S	exact full-bootstrap prefix trace must reject inert all-zero constructed traces
+932	S	all-zero ciphertext	S	artifact-aware exact full bootstrap must reject inert all-zero constructed traces
+933	S	reviewer id	S	release-audited exact bounds must reject unexpected trusted reviewer ids
+934	S	reviewer id	S	release-audited exact bounds must reject trusted-reviewer drift before missing Galois keys
+935	S	reviewer id	S	release-audited exact bounds must reject trusted-reviewer drift before malformed input bounds
+936	S	Galois key b[0]	S	exact full-bootstrap prefix trace must reject malformed Galois entries before malformed ciphertexts
+937	S	Galois key b[0]	S	artifact-aware exact full bootstrap must reject malformed Galois entries before malformed ciphertexts
+938	S	Galois key b[0]	S	exact full-bootstrap prefix bounds must reject malformed Galois entries before malformed input bounds
+939	S	max_refresh_rounds to 0	S	release-audited bounded execution must reject mixed full-bootstrap refresh metadata before package digest checks
+940	S	max_refresh_rounds to 0	S	release-audited bounded bounds must reject mixed full-bootstrap refresh metadata before package digest or bound checks
+941	S	machine-generated	S	release-audited bounded execution must reject deterministic generated audit packages before missing Galois keys
+942	S	machine-generated	S	release-audited bounded bounds must reject deterministic generated audit packages before malformed input bounds
+943	S	accumulator artifact digest does not match governed full-bootstrap material	S	release-audited bounded execution must reject artifact digest drift before missing Galois keys
+944	S	accumulator artifact digest does not match governed full-bootstrap material	S	release-audited bounded bounds must reject artifact digest drift before malformed input bounds
+945	S	accumulator artifact digest does not match governed full-bootstrap material	S	release-audited bounded execution must run artifact preflight before caller-pinned package digest admission
+946	S	accumulator artifact digest does not match governed full-bootstrap material	S	release-audited bounded bounds must run artifact preflight before caller-pinned package digest admission
+947	S	package digest mismatch	S	release-audited bounded execution must reject stale caller-pinned package digests
+948	S	package digest mismatch	S	release-audited bounded execution must reject stale audit packages before missing Galois keys
+949	S	release audit report bytes digest mismatch	S	release-audited bounded execution must reject tampered report bytes before missing Galois keys
+950	S	release audit report bytes digest mismatch	S	release-audited bounded bounds must reject tampered report bytes before malformed input bounds
+951	S	release audit evidence archive bytes digest mismatch	S	release-audited bounded execution must reject tampered archive bytes before missing Galois keys
+952	S	release audit evidence archive bytes digest mismatch	S	release-audited bounded bounds must reject tampered archive bytes before malformed input bounds
+953	S	generated circuit body digest mismatch	S	release-audited bounded execution must reject well-signed stale generated-body packages before missing Galois keys
+954	S	generated circuit body digest mismatch	S	release-audited bounded bounds must reject well-signed stale generated-body packages before malformed input bounds
+955	S	package digest mismatch	S	release-audited bounded execution must reject stale audit packages before malformed ciphertexts
+956	S	all-zero ciphertext	S	bounded full-bootstrap prefix trace must reject inert all-zero constructed traces
+957	S	all-zero ciphertext	S	artifact-aware bounded full bootstrap must reject inert all-zero constructed traces
+958	S	reviewer id	S	release-audited bounded bounds must reject unexpected trusted reviewer ids
+959	S	reviewer id	S	release-audited bounded bounds must reject trusted-reviewer drift before missing Galois keys
+960	S	reviewer id	S	release-audited bounded bounds must reject trusted-reviewer drift before malformed input bounds
+961	S	Galois key a[0]	S	bounded full-bootstrap prefix trace must reject malformed Galois entries before malformed ciphertexts
+962	S	Galois key a[0]	S	artifact-aware bounded full bootstrap must reject malformed Galois entries before malformed ciphertexts
+963	S	Galois key a[0]	S	bounded full-bootstrap prefix bounds must reject malformed Galois entries before malformed input bounds
+964	S	public-key digest	S	execution proof statements must reject public keys that do not match bootstrap key metadata
+965	S	Galois key set digest must be distinct from input ciphertext digest	S	execution proof statements must reject Galois key-set digests copied from the input ciphertext digest
+966	S	execution witness digest must be distinct from output ciphertext digest	S	execution proof statements must reject witness digests copied from the output ciphertext digest
+967	S	zero hash	S	execution proof statements must reject missing Galois key-set digests
+968	S	placeholder	S	execution proof statements must reject pending Galois key-set digest placeholders
+969	S	placeholder	S	execution proof statements must reject transient Galois key-set digest placeholders
+970	S	placeholder	S	execution proof statements must reject delayed pending Galois key-set digest placeholders
+971	S	zero hash	S	execution proof statements must reject missing witness digests
+972	S	placeholder	S	execution proof statements must reject pending witness digest placeholders
+973	S	placeholder	S	execution proof statements must reject transient witness digest placeholders
+974	S	placeholder	S	execution proof statements must reject delayed pending witness digest placeholders
+975	S	placeholder	S	execution proof statements must reject separator-spelled witness digest placeholders
+976	S	placeholder	S	execution proof statements must reject delayed separator-spelled witness digest placeholders
+977	S	all-zero ciphertext	S	execution proof statements must reject inert all-zero claimed inputs
+978	S	all-zero ciphertext	S	execution proof statements must reject inert all-zero claimed outputs
+979	S	ciphertext c0 length	S	execution proof statements must reject malformed claimed inputs
+980	S	ciphertext c0 length	S	execution proof statements must reject malformed claimed outputs
+981	S	slot index	S	execution proof statements must reject out-of-capacity slot indexes
+982	S	output bounded-noise bound	S	execution proof statements must reject oversized bounded output metadata
+983	S	greater than zero	S	rotation key generation must reject step metadata before public-key shape
+984	S	must not be empty	S	rotation key generation must reject seed metadata before public-key shape
+985	S	public key b length	S	rotation key generation must reject public-key shape before deriving refresh masks
+986	S	bootstrap key id	S	bootstrap key generation must reject key-id metadata before public-key shape
+987	S	placeholder text	S	bootstrap key generation must reject binary-split placeholder key ids before public-key shape
+988	S	placeholder text	S	bootstrap key generation must reject whitespace-prefixed binary-split placeholder key ids before canonicality or public-key shape
+989	S	placeholder text	S	bootstrap key generation must reject whitespace-prefixed placeholder key ids before canonicality or public-key shape
+990	S	must not be empty	S	bootstrap key generation must reject seed metadata before public-key shape
+991	S	public key b length	S	bootstrap key generation must reject public-key shape before deriving refresh masks
+992	S	greater than zero	S	bounded rotation key generation must reject step metadata before public-key shape
+993	S	must not be empty	S	bounded rotation key generation must reject seed metadata before public-key shape
+994	S	public key b length	S	bounded rotation key generation must reject public-key shape before deriving refresh masks
+995	S	bootstrap key id	S	bounded bootstrap key generation must reject key-id metadata before public-key shape
+996	S	placeholder text	S	bounded bootstrap key generation must reject binary-split placeholder key ids before public-key shape
+997	S	placeholder text	S	bounded bootstrap key generation must reject whitespace-prefixed binary-split placeholder key ids before canonicality or public-key shape
+998	S	placeholder text	S	bounded bootstrap key generation must reject whitespace-prefixed placeholder key ids before canonicality or public-key shape
+999	S	must not be empty	S	bounded bootstrap key generation must reject seed metadata before public-key shape
+1000	S	public key b length	S	bounded bootstrap key generation must reject public-key shape before deriving refresh masks
+1001	S	public-key digest	S	bundle transcript validation must reject stale bootstrap public-key digest metadata
+1002	S	public-key digest	S	bundle transcript digesting must reject stale bootstrap public-key digest metadata
+1003	S	public-key digest	S	transcript-bound proof statements must reject stale bootstrap public-key digest metadata
+1004	S	public key b length	S	exact transcript validation must reject public-key shape before bundle shapes
+1005	S	public key b length	S	exact transcript digest must reject public-key shape before bundle shapes
+1006	S	public key b length	S	bounded transcript validation must reject public-key shape before bundle shapes
+1007	S	public key b length	S	bounded transcript digest must reject public-key shape before bundle shapes
+1008	S	all zero	S	exact transcript validation must reject inert public-key material
+1009	S	all zero	S	exact transcript digest must reject inert public-key material
+1010	S	all zero	S	bounded transcript validation must reject inert public-key material
+1011	S	all zero	S	bounded transcript digest must reject inert public-key material
+1012	S	must not be empty	S	transcript metadata must still preflight before public-key shape
+1013	S	round_refreshes[1]	S	bounded transcript proof statements must reject reordered refresh rounds before digesting
+1014	S	exceeds plaintext modulus	S	exact scalar add must reject public scalar before ciphertext shape
+1015	S	exceeds plaintext modulus	S	exact scalar multiply must reject public scalar before ciphertext shape
+1016	S	exceeds plaintext modulus	S	exact plaintext-polynomial multiply must reject public plaintext before ciphertext shape
+1017	S	exceeds plaintext modulus	S	registered scalar add must reject public scalar before ciphertext shape
+1018	S	exceeds plaintext modulus	S	bounded scalar add must reject public scalar before ciphertext shape
+1019	S	exceeds plaintext modulus	S	registered bounded scalar add must reject public scalar before ciphertext shape
+1020	S	exceeds plaintext modulus	S	registered scalar multiply must reject public scalar before ciphertext shape
+1021	S	exceeds plaintext modulus	S	bounded scalar multiply must reject public scalar before ciphertext shape
+1022	S	exceeds plaintext modulus	S	registered bounded scalar multiply must reject public scalar before ciphertext shape
+1023	S	exceeds plaintext modulus	S	registered-profile plaintext-polynomial multiply must reject public plaintext before ciphertext shape
+1024	S	exceeds plaintext modulus	S	bounded plaintext-polynomial multiply must reject public plaintext before ciphertext shape
+1025	S	exceeds plaintext modulus	S	RNS plaintext-polynomial multiply must reject public plaintext before ciphertext shape
+1026	S	exceeds plaintext modulus	S	registered RNS plaintext-polynomial multiply must reject public plaintext before ciphertext shape
+1027	S	exceeds plaintext modulus	S	bounded RNS plaintext-polynomial multiply must reject public plaintext before ciphertext shape
+1028	S	exceeds plaintext modulus	S	registered bounded plaintext-polynomial multiply must reject public plaintext before ciphertext shape
+1029	S	exceeds plaintext modulus	S	exact affine execution must reject public circuit metadata before ciphertext shape
+1030	S	exceeds plaintext modulus	S	registered affine execution must reject public circuit metadata before ciphertext shape
+1031	S	exceeds plaintext modulus	S	bounded affine execution must reject public circuit metadata before ciphertext shape
+1032	S	exceeds plaintext modulus	S	bounded affine execution must reject public circuit metadata before caller RNS chain shape
+1033	S	exceeds plaintext modulus	S	registered bounded affine execution must reject public circuit metadata before ciphertext shape
+1034	S	placeholder	S	direct bootstrap refresh must reject placeholder public-key digest metadata
+1035	S	zero_refresh must match round_refreshes[0]	S	direct bootstrap refresh must reject zero_refresh drift before applying a round
+1036	S	duplicate round refresh ciphertext	S	multi-round bootstrap refresh must reject aliased refresh material before applying rounds
+1037	S	duplicate round refresh ciphertext	S	bootstrap refresh bound helper must reject aliased refresh material before returning diagnostics
+1038	S	bootstrap key zero_refresh must not be an all-zero ciphertext	S	key-owner refresh diagnostics must reject inert zero_refresh material
+1039	S	bootstrap key zero_refresh must not be an all-zero ciphertext	S	direct bootstrap refresh must reject inert zero_refresh material before applying a round
+1040	S	bootstrap key zero_refresh must not be an all-zero ciphertext	S	bootstrap refresh bound helper must reject inert zero_refresh material
+1041	S	bootstrap key round_refreshes[1] must not be an all-zero ciphertext	S	multi-round bootstrap refresh must reject inert per-round refresh material
+1042	S	max_refresh_rounds to 0	S	full-bootstrap admission must reject refresh material inherited from refresh-only keys
+1043	S	canonical v1 bytes	S	evaluation-key bundle byte admission must reject compressed Norito framing
+1044	S	canonical v1 bytes	S	evaluation-key bundle byte digesting must reject compressed Norito framing
+1045	S	canonical v1 bytes	S	evaluation-key bundle byte decode-and-digest must reject compressed Norito framing
+1046	S	Norito-encoded BFV material	S	evaluation-key bundle byte admission must reject non-Norito placeholder-looking bytes
+1047	S	Norito-encoded BFV material	S	evaluation-key bundle byte digesting must reject non-Norito placeholder-looking bytes
+1048	S	Norito-encoded BFV material	S	evaluation-key bundle byte decode-and-digest must reject non-Norito placeholder-looking bytes
+1049	S	placeholder	S	full-bootstrap bundle validation must reject placeholder public-key digest metadata
+1050	S	placeholder	S	full-bootstrap bundle digesting must reject placeholder public-key digest metadata
+1051	S	placeholder	S	full-bootstrap material proof statements must reject placeholder public-key digest metadata
+1052	S	canonical v1 bytes	S	material proof input admission must reject alternate Norito layout
+1053	S	public-key digest	S	material governance byte admission must reject decoded public-key substitution before artifact/proof-input handoff
+1054	S	public-key digest	S	material governance byte digest admission must reject decoded public-key substitution before digest trust
+1055	S	public-key digest	S	material governance byte digests admission must reject decoded public-key substitution before digest trust
+1056	S	canonical v1 bytes	S	governance byte admission must reject compressed public-key framing
+1057	S	canonical v1 bytes	S	governance byte digest admission must reject compressed public-key framing
+1058	S	canonical v1 bytes	S	governance byte digests admission must reject compressed public-key framing
+1059	S	canonical v1 bytes	S	governance byte admission must reject compressed evaluation-key bundle framing
+1060	S	canonical v1 bytes	S	governance byte digest admission must reject compressed evaluation-key bundle framing
+1061	S	canonical v1 bytes	S	governance byte digests admission must reject compressed evaluation-key bundle framing
+1062	S	canonical v1 bytes	S	governance byte admission must reject compressed artifact-bundle framing
+1063	S	canonical v1 bytes	S	governance byte digest admission must reject compressed artifact-bundle framing
+1064	S	canonical v1 bytes	S	governance byte digests admission must reject compressed artifact-bundle framing
+1065	S	canonical v1 bytes	S	material proof input byte admission must reject compressed Norito framing
+1066	S	canonical v1 bytes	S	material proof input byte digesting must reject compressed Norito framing
+1067	S	canonical v1 bytes	S	material proof input byte digest helper must reject compressed Norito framing before hashing
+1068	S	canonical v1 bytes	S	caller-bound material proof input byte digesting must reject compressed Norito framing
+1069	S	canonical v1 bytes	S	caller-bound material proof input byte digest helper must reject compressed Norito framing
+1070	S	canonical v1 bytes	S	caller-bound material proof input byte admission must reject compressed Norito framing
+1071	S	not registered	S	caller-bound material proof input byte digesting must reject parameter-profile retargeting before compressed proof-input bytes
+1072	S	not registered	S	caller-bound material proof input byte digest helper must reject parameter-profile retargeting before compressed proof-input bytes
+1073	S	not registered	S	caller-bound material proof input byte admission must reject parameter-profile retargeting before compressed proof-input bytes
+1074	S	canonical v1 bytes	S	governance byte admission must reject compressed proof-input framing
+1075	S	canonical v1 bytes	S	governance byte digest admission must reject compressed proof-input framing
+1076	S	canonical v1 bytes	S	governance byte digests admission must reject compressed proof-input framing
+1077	S	Norito-encoded material proof input material	S	material proof input byte admission must reject non-Norito placeholder-looking bytes
+1078	S	Norito-encoded material proof input material	S	material proof input byte digesting must reject non-Norito placeholder-looking bytes
+1079	S	Norito-encoded material proof input material	S	material proof input byte digest helper must reject non-Norito placeholder-looking bytes
+1080	S	Norito-encoded material proof input material	S	caller-bound material proof input byte digesting must reject non-Norito placeholder-looking bytes
+1081	S	Norito-encoded material proof input material	S	caller-bound material proof input byte digest helper must reject non-Norito placeholder-looking bytes
+1082	S	Norito-encoded material proof input material	S	caller-bound material proof input byte admission must reject non-Norito placeholder-looking bytes
+1083	S	Norito-encoded material proof input material	S	governance byte admission must reject non-Norito proof-input bytes
+1084	S	Norito-encoded material proof input material	S	governance byte digest admission must reject non-Norito proof-input bytes
+1085	S	Norito-encoded material proof input material	S	governance byte digests admission must reject non-Norito proof-input bytes
+1086	S	not registered	S	material proof input construction must reject BFV parameter-profile retargeting
+1087	S	not registered	S	caller-bound material proof input validation must reject BFV parameter-profile retargeting
+1088	S	not registered	S	caller-bound material proof input digesting must reject BFV parameter-profile retargeting
+1089	S	not registered	S	caller-bound material proof input byte digest helper must reject BFV parameter-profile retargeting
+1090	S	caller artifacts	S	caller-bound material proof input digest must reject self-consistent material for other artifacts
+1091	S	caller artifacts	S	caller-bound material proof input byte digest helper must reject canonical proof input bytes for other artifacts
+1092	S	caller artifacts	S	governance byte admission must reject canonical proof input bytes for other artifacts
+1093	S	caller artifacts	S	governance byte digest admission must reject canonical proof input bytes for other artifacts
+1094	S	caller artifacts	S	governance byte digests admission must reject canonical proof input bytes for other artifacts
+1095	S	caller artifacts	S	caller-bound material proof input validation must reject caller artifact retargeting
+1096	S	caller artifacts	S	caller-bound material proof input digesting must reject caller artifact retargeting
+1097	S	material proof input material version	S	material proof input material must reject stale layout versions
+1098	S	material proof input material version	S	material proof input material digest must reject stale layout versions
+1099	S	material proof input material field count	S	material proof input material must reject stale layout field counts
+1100	S	statement hash mismatch	S	material proof input material must reject forged statement hashes
+1101	S	zero hash	S	material proof input material must reject zero statement hashes
+1102	S	placeholder	S	material proof input material must reject placeholder statement hashes
+1103	S	placeholder	S	material proof input material must reject separator-spelled placeholder statement hashes
+1104	S	placeholder	S	material proof input digesting must reject separator-spelled placeholder statement hashes
+1105	S	placeholder	S	material proof input material must reject delayed separator-spelled placeholder statement hashes
+1106	S	placeholder	S	material proof input digesting must reject delayed separator-spelled placeholder statement hashes
+1107	S	public-key digest	S	material proof input constructors must reject wrong but valid public keys
+1108	S	public-key digest	S	caller-bound material proof input validation must reject public-key retargeting
+1109	S	public-key digest	S	caller-bound material proof input digesting must reject public-key retargeting
+1110	S	public-key digest	S	material proof input material must reject stale public keys
+1111	S	public key a length	S	material proof input material must reject malformed public keys
+1112	S	statement hash mismatch	S	material proof input material must reject stale embedded evaluation keys
+1113	S	artifact bundle failed validation	S	material proof input material must reject artifact bytes that do not match governed material
+1114	S	must be distinct	S	material proof input material must reject duplicate artifact-role digests before artifact bundle mismatch
+1115	S	must be distinct	S	material proof input material digesting must reject duplicate artifact-role digests before hashing
+1116	S	role	S	material proof input material must reject role-spliced artifact envelopes
+1117	S	role	S	material proof input material digesting must reject role-spliced artifact envelopes
+1118	S	role	S	caller-bound material proof input digesting must reject role-spliced artifact envelopes
+1119	S	all zero	S	refresh-only statement lookup must still reject inert public-key material
+1120	S	all zero	S	missing-bootstrap statement lookup must still reject inert public-key material
+1121	S	caller artifacts	S	caller-bound material proof input validation must reject evaluation-key retargeting
+1122	S	caller artifacts	S	caller-bound material proof input digesting must reject evaluation-key retargeting
+1123	S	public-key digest	S	material proof input constructors must reject wrong but valid public keys
+1124	S	public-key digest	S	full-bootstrap proof statements must reject public keys that do not match bootstrap key metadata
+1125	S	public-key digest	S	full-bootstrap admission must reject keys without public-key commitments
+1126	S	full-bootstrap material proof statements	S	full-bootstrap material must not produce exact zero-refresh transcript statements
+1127	S	full-bootstrap material proof statements	S	full-bootstrap material must not produce bounded zero-refresh transcript statements
+1128	S	public-key digest	S	full-bootstrap transcript inventory must reject public keys that do not match bootstrap key metadata
+1129	S	public-key digest	S	bounded full-bootstrap transcript inventory must reject public keys that do not match bootstrap key metadata
+1130	S	must not carry deterministic zero-refresh transcript seeds	S	full-bootstrap material must reject encrypted-zero bootstrap transcript seeds
+1131	S	must not carry deterministic zero-refresh transcript seeds	S	bounded full-bootstrap material must reject encrypted-zero bootstrap transcript seeds
+1132	S	must not carry deterministic zero-refresh transcript seeds	S	full-bootstrap material must reject exact zero-refresh transcript statements
+1133	S	must not carry deterministic zero-refresh transcript seeds	S	full-bootstrap material must reject bounded zero-refresh transcript statements
+1134	S	must not carry full bootstrapping circuit material	S	refresh-only bundles must reject full-bootstrap material
+1135	S	all-zero	S	full-bootstrap execution preflight must reject inert all-zero ciphertext inputs
+1136	S	all-zero	S	direct exact full-bootstrap execution must reject all-zero inputs before requiring artifacts
+1137	S	all-zero	S	direct bounded full-bootstrap execution must reject all-zero inputs before requiring artifacts
+1138	S	requires public-key digest	S	full-bootstrap execution preflight must reject missing public-key digest metadata
+1139	S	requires public-key digest	S	direct full-bootstrap execution must reject missing public-key digest metadata before requiring artifacts
+1140	S	requires public-key digest	S	direct full-bootstrap residual-bound entry must reject missing public-key digest metadata before requiring artifacts
+1141	S	requires public-key digest	S	bounded direct full-bootstrap execution must reject missing public-key digest metadata before requiring artifacts
+1142	S	requires public-key digest	S	bounded direct full-bootstrap bound entry must reject missing public-key digest metadata before requiring artifacts
+1143	S	placeholder	S	full-bootstrap execution preflight must reject placeholder public-key digest metadata
+1144	S	placeholder	S	direct full-bootstrap execution must reject placeholder public-key digest metadata before requiring artifacts
+1145	S	placeholder	S	direct full-bootstrap residual-bound entry must reject placeholder public-key digest metadata before requiring artifacts
+1146	S	placeholder	S	bounded direct full-bootstrap execution must reject placeholder public-key digest metadata before requiring artifacts
+1147	S	placeholder	S	bounded direct full-bootstrap bound entry must reject placeholder public-key digest metadata before requiring artifacts
+1148	S	requires governed full-bootstrap circuit artifacts	S	direct full-bootstrap execution entry point must require artifacts after preflight
+1149	S	requires governed full-bootstrap circuit artifacts	S	direct full-bootstrap residual-bound entry point must require artifacts after preflight
+1150	S	requires governed full-bootstrap circuit artifacts	S	direct full-bootstrap bounded-noise bound entry point must require artifacts after preflight
+1151	S	requires FullBootstrapV1 bootstrap key	S	full-bootstrap preflight must reject refresh-only keys
+1152	S	parameter digest	S	full-bootstrap preflight must reject material/profile drift before execution
+1153	S	parameter digest	S	full-bootstrap execution entry must reject drifted material before requiring artifacts
+1154	S	parameter digest	S	full-bootstrap residual-bound entry must reject drifted material before requiring artifacts
+1155	S	parameter digest	S	bounded full-bootstrap execution entry must reject drifted material before requiring artifacts
+1156	S	parameter digest	S	bounded full-bootstrap bound entry must reject drifted material before requiring artifacts
+1157	S	ciphertext c0 length	S	full-bootstrap preflight must reject malformed input ciphertexts
+1158	S	input residual bound	S	full-bootstrap residual-bound preflight must reject oversized exact metadata
+1159	S	input bounded-noise bound	S	full-bootstrap bounded-noise preflight must reject oversized noise metadata
+1160	S	requires governed full-bootstrap circuit artifacts	S	full-bootstrap material must not route through the refresh bridge
+1161	S	requires governed full-bootstrap circuit artifacts	S	full-bootstrap keys must not use the zero-refresh proof statement
+1162	S	requires governed full-bootstrap circuit artifacts	S	full-bootstrap keys must not use the bounded-noise zero-refresh proof statement
+1163	S	requires governed full-bootstrap circuit artifacts	S	full-bootstrap refresh execution must remain fail-closed
+1164	S	requires governed full-bootstrap circuit artifacts	S	full-bootstrap bundles must not route through refresh-only zero-refresh diagnostics
+1165	S	requires governed full-bootstrap circuit artifacts	S	full-bootstrap bundles must not route through bounded refresh-only diagnostics
+1166	S	BFV bootstrap refresh round index 1	S	single-round exact bootstrap must reject round index before ciphertext shape
+1167	S	BFV bootstrap refresh round index 1	S	single-round exact bootstrap must reject round index before key shape
+1168	S	BFV bootstrap refresh rounds 2	S	multi-round exact bootstrap must reject round count before key shape
+1169	S	BFV bounded-noise bootstrap refresh round index 1	S	single-round bounded bootstrap must reject round index before ciphertext shape
+1170	S	BFV bounded-noise bootstrap refresh round index 1	S	single-round bounded bootstrap must reject round index before key shape
+1171	S	bootstrap refresh rounds 2	S	multi-round bounded bootstrap must reject round count before key shape
+1172	S	BFV RNS bootstrap refresh round index 1	S	single-round RNS bootstrap must reject round index before ciphertext shape
+1173	S	BFV RNS bootstrap refresh round index 1	S	single-round RNS bootstrap must reject round index before key shape
+1174	S	BFV bootstrap refresh rounds 2	S	multi-round RNS bootstrap must reject round count before key shape
+1175	S	BFV RNS bootstrap refresh round index 1	S	single-round RNS bootstrap must reject round index before caller-supplied chain shape
+1176	S	BFV bootstrap refresh rounds 2	S	multi-round RNS bootstrap must reject round count before caller-supplied chain shape
+1177	S	bootstrap refresh round index 1	S	single-round bounded RNS bootstrap must reject round index before ciphertext shape
+1178	S	bootstrap refresh round index 1	S	single-round bounded RNS bootstrap must reject round index before key shape
+1179	S	bootstrap refresh rounds 2	S	multi-round bounded RNS bootstrap must reject round count before key shape
+1180	S	bootstrap refresh round index 1	S	single-round bounded RNS bootstrap must reject round index before caller-supplied chain shape
+1181	S	bootstrap refresh rounds 2	S	multi-round bounded RNS bootstrap must reject round count before caller-supplied chain shape
+1182	S	BFV bounded-noise basis-extension RNS bootstrap refresh round index 1	S	single-round bounded basis-extension RNS bootstrap must reject round index before caller-supplied chain shape
+1183	S	BFV bounded-noise basis-extension RNS bootstrap refresh rounds 2	S	multi-round bounded basis-extension RNS bootstrap must reject round count before caller-supplied chain shape
+1184	S	BFV RNS bootstrap refresh round index 1	S	registered exact bootstrap must reject round index before ciphertext shape
+1185	S	BFV RNS bootstrap refresh round index 1	S	registered exact bootstrap must reject round index before key shape
+1186	S	BFV bootstrap refresh rounds 2	S	registered exact multi-round bootstrap must reject round count before key shape
+1187	S	bootstrap refresh round index 1	S	registered bounded bootstrap must reject round index before ciphertext shape
+1188	S	bootstrap refresh round index 1	S	registered bounded bootstrap must reject round index before key shape
+1189	S	bootstrap refresh rounds 2	S	registered bounded multi-round bootstrap must reject round count before key shape
+1190	S	zero_refresh must match round_refreshes[0]	S	RNS exact bootstrap refresh must reject zero_refresh drift before applying a round
+1191	S	duplicate round refresh ciphertext	S	registered RNS exact bootstrap refresh must reject aliased refresh material before applying rounds
+1192	S	rotation key zero_refresh must not be an all-zero ciphertext	S	key-owner rotation diagnostics must reject inert zero_refresh material
+1193	S	rotation key zero_refresh must not be an all-zero ciphertext	S	direct outer-slot rotation must reject inert zero_refresh material before applying refresh
+1194	S	rotation key zero_refresh must not be an all-zero ciphertext	S	outer-slot rotation residual bounds must reject inert zero_refresh material
+1195	S	rotation key zero_refresh must not be an all-zero ciphertext	S	RNS exact outer-slot rotation must reject inert zero_refresh material
+1196	S	rotation key zero_refresh must not be an all-zero ciphertext	S	registered RNS exact outer-slot rotation must reject inert zero_refresh material
+1197	S	full slot cycle	S	exact outer rotation must reject full-cycle metadata before key or slot shape
+1198	S	full slot cycle	S	RNS outer rotation must reject full-cycle metadata before key or slot shape
+1199	S	full slot cycle	S	registered RNS outer rotation must reject full-cycle metadata before key or slot shape
+1200	S	at least one ciphertext slot	S	exact outer rotation must reject empty slot metadata before key shape
+1201	S	full slot cycle	S	bounded outer rotation must reject full-cycle metadata before key or slot shape
+1202	S	full slot cycle	S	bounded RNS outer rotation must reject full-cycle metadata before key or slot shape
+1203	S	at least one ciphertext slot	S	bounded outer rotation must reject empty slot metadata before key shape
+1204	S	1..	S	exact Galois switch must reject public automorphism metadata before ciphertext shape
+1205	S	1..	S	RNS Galois switch must reject public automorphism metadata before ciphertext shape
+1206	S	1..	S	registered Galois switch must reject public automorphism metadata before ciphertext shape
+1207	S	1..	S	bounded Galois switch must reject public automorphism metadata before ciphertext shape
+1208	S	1..	S	bounded RNS Galois switch must reject public automorphism metadata before ciphertext shape
+1209	S	1..	S	registered bounded Galois switch must reject public automorphism metadata before ciphertext shape
+1210	S	1..	S	bounded basis-extension Galois switch must reject public automorphism metadata before ciphertext shape
+1211	S	1..	S	registered bounded basis-extension Galois switch must reject public automorphism metadata before ciphertext shape
+1212	S	full slot cycle	S	exact packed RotateLeft must reject full-cycle metadata before key or ciphertext shape
+1213	S	full slot cycle	S	RNS packed RotateLeft must reject full-cycle metadata before key or ciphertext shape
+1214	S	full slot cycle	S	registered packed RotateLeft must reject full-cycle metadata before key or ciphertext shape
+1215	S	non-zero rotation_steps	S	exact packed RotateLeft must reject zero rotation metadata before key or ciphertext shape
+1216	S	full slot cycle	S	bounded packed RotateLeft must reject full-cycle metadata before key or ciphertext shape
+1217	S	full slot cycle	S	bounded RNS packed RotateLeft must reject full-cycle metadata before key or ciphertext shape
+1218	S	full slot cycle	S	registered bounded RNS packed RotateLeft must reject full-cycle metadata before key or ciphertext shape
+1219	S	full slot cycle	S	bounded basis-extension packed RotateLeft must reject full-cycle metadata before key or ciphertext shape
+1220	S	full slot cycle	S	registered bounded basis-extension packed RotateLeft must reject full-cycle metadata before key or ciphertext shape
+1221	S	Galois key	S	exact Galois switch must reject key entries before ciphertext shape
+1222	S	Galois key	S	RNS exact Galois switch must reject key entries before ciphertext shape
+1223	S	Galois key	S	registered RNS exact Galois switch must reject key entries before ciphertext shape
+1224	S	Galois key	S	bounded Galois switch must reject key entries before ciphertext shape
+1225	S	Galois key	S	bounded RNS Galois switch must reject key entries before ciphertext shape
+1226	S	Galois key	S	registered bounded RNS Galois switch must reject key entries before ciphertext shape
+1227	S	Galois key	S	bounded basis-extension Galois switch must reject key entries before ciphertext shape
+1228	S	Galois key	S	registered bounded basis-extension Galois switch must reject key entries before ciphertext shape
+1229	S	duplicate Galois key	S	Galois key-set validation must reject duplicate public metadata before key shapes
+1230	S	duplicate Galois key	S	exact packed RotateLeft must reject duplicate key metadata before ciphertext shape
+1231	S	duplicate Galois key	S	RNS packed RotateLeft must reject duplicate key metadata before ciphertext shape
+1232	S	duplicate Galois key	S	exact packed RotateLeft bound propagation must reject duplicate key metadata before key shapes
+1233	S	Galois key expected	S	exact packed RotateLeft must reject malformed key entries before ciphertext shape
+1234	S	Galois key expected	S	RNS packed RotateLeft must reject malformed key entries before ciphertext shape
+1235	S	duplicate Galois key	S	bounded packed RotateLeft must reject duplicate key metadata before ciphertext shape
+1236	S	duplicate Galois key	S	bounded RNS packed RotateLeft must reject duplicate key metadata before ciphertext shape
+1237	S	duplicate Galois key	S	bounded basis-extension packed RotateLeft must reject duplicate key metadata before ciphertext shape
+1238	S	duplicate Galois key	S	bounded packed RotateLeft bound propagation must reject duplicate key metadata before key shapes
+1239	S	Galois key expected	S	bounded packed RotateLeft must reject malformed key entries before ciphertext shape
+1240	S	Galois key expected	S	bounded RNS packed RotateLeft must reject malformed key entries before ciphertext shape
+1241	S	Galois key expected	S	bounded basis-extension packed RotateLeft must reject malformed key entries before ciphertext shape
+1242	S	Galois key expected	S	registered RNS packed RotateLeft must reject malformed key entries before ciphertext shape
+1243	S	Galois key expected	S	registered bounded RNS packed RotateLeft must reject malformed key entries before ciphertext shape
+1244	S	Galois key expected	S	registered bounded basis-extension packed RotateLeft must reject malformed key entries before ciphertext shape
+1245	S	relinearization key expected	S	exact multiply must reject relinearization-key digit count before ciphertext shape
+1246	S	relinearization key b[0] length	S	exact multiply must reject relinearization entry polynomials before ciphertext shape
+1247	S	relinearization key b[0] length	S	exact multiply must still validate relinearization entry polynomials
+1248	S	bounded-noise relinearization key expected	S	bounded multiply must reject relinearization-key digit count before ciphertext shape
+1249	S	bounded-noise relinearization key b[0] length	S	bounded multiply must reject relinearization entry polynomials before ciphertext shape
+1250	S	RNS exact relinearization key expected	S	RNS multiply must reject relinearization-key digit count before ciphertext shape
+1251	S	RNS exact relinearization key b[0] length	S	RNS multiply must reject relinearization entry polynomials before ciphertext shape
+1252	S	RNS exact relinearization key b[0] length	S	RNS multiply must still validate relinearization entry polynomials
+1253	S	bounded-noise RNS relinearization key expected	S	bounded RNS multiply must reject relinearization-key digit count before ciphertext shape
+1254	S	bounded-noise RNS relinearization key b[0] length	S	bounded RNS multiply must reject relinearization entry polynomials before ciphertext shape
+1255	S	bounded-noise basis-extension RNS relinearization key expected	S	bounded basis-extension multiply must reject digit count before ciphertext shape
+1256	S	bounded-noise basis-extension RNS relinearization key b[0] length	S	bounded basis-extension multiply must reject entry polynomials before ciphertext shape
+1257	S	source chain must be a prefix of the evaluator chain	S	bounded basis-extension multiply must reject scale-round source retargets before payload shapes
+1258	S	RNS exact relinearization key b[0] length	S	registered RNS multiply must reject entry polynomials before ciphertext shape
+1259	S	bounded-noise basis-extension RNS relinearization key b[0] length	S	registered bounded RNS multiply must reject entry polynomials before ciphertext shape
+1260	S	bounded-noise basis-extension RNS relinearization key b[0] length	S	registered bounded basis-extension multiply must reject entry polynomials before ciphertext shape
+1261	S	evaluation-key bundle rotation_keys[0].zero_refresh must not be an all-zero ciphertext	S	evaluation-key bundle owner diagnostics must reject inert all-zero rotation refresh masks
+1262	S	all-zero refresh ciphertext	S	evaluation-key bundle digesting must reject inert all-zero rotation refresh masks
+1263	S	all-zero refresh ciphertext	S	evaluation-key bundle digesting must reject inert all-zero bootstrap zero_refresh descriptors
+1264	S	all-zero refresh ciphertext	S	evaluation-key bundle digesting must reject inert all-zero bootstrap round refresh masks
+1265	S	zero_refresh must match round_refreshes[0]	S	evaluation-key bundle digest refresh preflight must reject zero_refresh drift directly
+1266	S	duplicate round refresh ciphertext	S	evaluation-key bundle digest refresh preflight must reject duplicate per-round refresh material directly
+1267	S	centered scale-round source-chain	S	full-bootstrap material must reject stale centered scale-round source-chain digests
+1268	S	centered scale-round source-chain	S	proof-key artifact envelopes must reject stale centered source-chain digests
+1269	S	centered scale-round source-chain	S	release-audit evidence must reject stale nested proof-profile source-chain digests
+1270	S	centered scale-round source-chain	S	release-audit evidence must reject stale centered source-chain digests
+1271	S	rotation key zero_refresh must not be an all-zero ciphertext	S	registered bounded outer-slot rotation must reject inert zero_refresh material
+1272	S	rotation key zero_refresh must not be an all-zero ciphertext	S	registered bounded basis-extension outer-slot rotation must reject inert zero_refresh material
+1273	S	rotation key zero_refresh must not be an all-zero ciphertext	S	registered bounded basis-extension outer-slot rotation bounds must reject inert zero_refresh material

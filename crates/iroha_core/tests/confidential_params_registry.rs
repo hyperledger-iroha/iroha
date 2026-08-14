@@ -1,7 +1,6 @@
 #![doc = "Confidential parameter registry flow tests covering publish and lifecycle operations."]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -23,7 +22,6 @@ use iroha_primitives::json::Json;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
 fn fresh_state() -> State {
     let domain_id: iroha_data_model::domain::DomainId =
         iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain");
@@ -34,7 +32,6 @@ fn fresh_state() -> State {
     let query_handle = LiveQueryStore::start_test();
     State::new_for_testing(world, kura, query_handle)
 }
-
 fn grant_manage_confidential_params(state: &mut State) {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -51,7 +48,6 @@ fn grant_manage_confidential_params(state: &mut State) {
     stx.apply();
     block.commit().expect("commit grant block");
 }
-
 fn sample_pedersen_params(id: u32) -> PedersenParams {
     PedersenParams {
         params_id: ConfidentialParamsId::new(id),
@@ -64,7 +60,6 @@ fn sample_pedersen_params(id: u32) -> PedersenParams {
         status: ConfidentialStatus::Active,
     }
 }
-
 fn sample_poseidon_params(id: u32) -> PoseidonParams {
     PoseidonParams {
         params_id: ConfidentialParamsId::new(id),
@@ -77,17 +72,14 @@ fn sample_poseidon_params(id: u32) -> PoseidonParams {
         status: ConfidentialStatus::Active,
     }
 }
-
 #[test]
 fn publish_pedersen_params_inserts_record() {
     let mut state = fresh_state();
     grant_manage_confidential_params(&mut state);
-
     let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
-
     let params = sample_pedersen_params(7);
     let id = params.params_id;
     let publish: InstructionBox = confidential::PublishPedersenParams {
@@ -99,7 +91,6 @@ fn publish_pedersen_params_inserts_record() {
         .expect("publish pedersen params");
     stx.apply();
     block.commit().expect("commit publish block");
-
     let view = state.view();
     let stored = view
         .world()
@@ -108,16 +99,13 @@ fn publish_pedersen_params_inserts_record() {
         .expect("pedersen params stored");
     assert_eq!(stored, &params);
 }
-
 #[test]
 fn publish_pedersen_params_requires_permission() {
     let state = fresh_state();
-
     let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
-
     let params = sample_pedersen_params(3);
     let publish: InstructionBox = confidential::PublishPedersenParams { params }.into();
     let err = executor
@@ -135,7 +123,6 @@ fn publish_pedersen_params_requires_permission() {
     drop(stx);
     block.commit().expect("commit missing permission block");
 }
-
 #[test]
 fn publish_pedersen_params_rejects_duplicate_or_withdrawn() {
     let mut state = fresh_state();
@@ -145,7 +132,6 @@ fn publish_pedersen_params_rejects_duplicate_or_withdrawn() {
     let executor = {
         let mut stx = block.transaction();
         let executor = stx.world.executor().clone();
-
         let params = sample_pedersen_params(11);
         let publish: InstructionBox = confidential::PublishPedersenParams {
             params: params.clone(),
@@ -157,7 +143,6 @@ fn publish_pedersen_params_rejects_duplicate_or_withdrawn() {
         stx.apply();
         executor
     };
-
     {
         let mut stx_dup = block.transaction();
         let params = sample_pedersen_params(11);
@@ -180,7 +165,6 @@ fn publish_pedersen_params_rejects_duplicate_or_withdrawn() {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     {
         let withdrawn = confidential::PublishPedersenParams {
             params: PedersenParams {
@@ -206,12 +190,10 @@ fn publish_pedersen_params_rejects_duplicate_or_withdrawn() {
     }
     block.commit().expect("commit pedersen duplicate block");
 }
-
 #[test]
 fn set_pedersen_params_lifecycle_updates_entry() {
     let mut state = fresh_state();
     grant_manage_confidential_params(&mut state);
-
     let header = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let params = sample_pedersen_params(5);
@@ -232,7 +214,6 @@ fn set_pedersen_params_lifecycle_updates_entry() {
         stx.apply();
         executor
     };
-
     {
         let mut stx_update = block.transaction();
         let update = confidential::SetPedersenParamsLifecycle {
@@ -247,7 +228,6 @@ fn set_pedersen_params_lifecycle_updates_entry() {
         stx_update.apply();
     }
     block.commit().expect("commit pedersen lifecycle block");
-
     let view = state.view();
     let stored = view
         .world()
@@ -258,17 +238,14 @@ fn set_pedersen_params_lifecycle_updates_entry() {
     assert_eq!(stored.activation_height, Some(42));
     assert_eq!(stored.withdraw_height, Some(80));
 }
-
 #[test]
 fn set_pedersen_params_lifecycle_missing_or_withdrawn() {
     let mut state = fresh_state();
     grant_manage_confidential_params(&mut state);
-
     let header = BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
-
     // Missing entry
     let missing = confidential::SetPedersenParamsLifecycle {
         params_id: ConfidentialParamsId::new(99),
@@ -289,7 +266,6 @@ fn set_pedersen_params_lifecycle_missing_or_withdrawn() {
         other => panic!("unexpected error: {other:?}"),
     }
     drop(stx);
-
     // Insert params and withdraw them.
     let params = sample_pedersen_params(13);
     let id = params.params_id;
@@ -307,7 +283,6 @@ fn set_pedersen_params_lifecycle_missing_or_withdrawn() {
             .expect("publish pedersen params");
         stx_publish.apply();
     }
-
     {
         let mut stx_withdraw = block.transaction();
         let withdraw = confidential::SetPedersenParamsLifecycle {
@@ -321,7 +296,6 @@ fn set_pedersen_params_lifecycle_missing_or_withdrawn() {
             .expect("withdraw params");
         stx_withdraw.apply();
     }
-
     // Attempt to update withdrawn entry again.
     {
         let mut stx_again = block.transaction();
@@ -350,12 +324,10 @@ fn set_pedersen_params_lifecycle_missing_or_withdrawn() {
         .commit()
         .expect("commit pedersen lifecycle missing block");
 }
-
 #[test]
 fn publish_poseidon_params_and_update_lifecycle() {
     let mut state = fresh_state();
     grant_manage_confidential_params(&mut state);
-
     let header = BlockHeader::new(nonzero!(6_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let params = sample_poseidon_params(2);
@@ -376,7 +348,6 @@ fn publish_poseidon_params_and_update_lifecycle() {
         stx.apply();
         executor
     };
-
     {
         // Update lifecycle metadata.
         let mut stx_update = block.transaction();
@@ -392,7 +363,6 @@ fn publish_poseidon_params_and_update_lifecycle() {
         stx_update.apply();
     }
     block.commit().expect("commit poseidon lifecycle block");
-
     let view = state.view();
     let stored = view
         .world()
@@ -403,17 +373,14 @@ fn publish_poseidon_params_and_update_lifecycle() {
     assert_eq!(stored.activation_height, Some(30));
     assert_eq!(stored.withdraw_height, Some(120));
 }
-
 #[test]
 fn poseidon_lifecycle_missing_and_withdrawn_behaviour() {
     let mut state = fresh_state();
     grant_manage_confidential_params(&mut state);
-
     let header = BlockHeader::new(nonzero!(7_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
-
     // Missing entry
     let missing = confidential::SetPoseidonParamsLifecycle {
         params_id: ConfidentialParamsId::new(200),
@@ -434,7 +401,6 @@ fn poseidon_lifecycle_missing_and_withdrawn_behaviour() {
         other => panic!("unexpected error: {other:?}"),
     }
     drop(stx);
-
     // Publish + withdraw poseidon params.
     let params = sample_poseidon_params(3);
     let id = params.params_id;
@@ -452,7 +418,6 @@ fn poseidon_lifecycle_missing_and_withdrawn_behaviour() {
             .expect("publish poseidon params");
         stx_publish.apply();
     }
-
     {
         let mut stx_withdraw = block.transaction();
         let withdraw = confidential::SetPoseidonParamsLifecycle {
@@ -466,7 +431,6 @@ fn poseidon_lifecycle_missing_and_withdrawn_behaviour() {
             .expect("withdraw poseidon params");
         stx_withdraw.apply();
     }
-
     let err = {
         let mut stx_again = block.transaction();
         executor

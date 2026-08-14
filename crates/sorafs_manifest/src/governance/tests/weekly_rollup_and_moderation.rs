@@ -1,12 +1,10 @@
 // Appeal-finance weekly-rollup and moderation-governance regressions.
-
 #[test]
 fn appeal_finance_weekly_rollup_enforces_exact_size_and_source_boundaries() {
     let rollup = max_source_appeal_finance_weekly_rollup();
     rollup
         .validate()
         .expect("exact source-report boundary validates");
-
     let exact = rollup
         .encoded_len_exact()
         .expect("appeal finance weekly rollup exact length");
@@ -24,7 +22,6 @@ fn appeal_finance_weekly_rollup_enforces_exact_size_and_source_boundaries() {
             }
         ) if found == exact && maximum == exact - 1
     ));
-
     let mut too_many_declared = rollup.clone();
     too_many_declared.report_count += 1;
     assert!(matches!(
@@ -39,7 +36,6 @@ fn appeal_finance_weekly_rollup_enforces_exact_size_and_source_boundaries() {
                 .expect("source-report ceiling fits u64")
                 + 1
     ));
-
     let mut too_many_ids = rollup;
     too_many_ids.source_report_ids.push(
         (u128::try_from(SORAFS_APPEAL_FINANCE_WEEKLY_SOURCE_REPORTS_MAX_V1)
@@ -57,7 +53,6 @@ fn appeal_finance_weekly_rollup_enforces_exact_size_and_source_boundaries() {
         ) if found == SORAFS_APPEAL_FINANCE_WEEKLY_SOURCE_REPORTS_MAX_V1 + 1
     ));
 }
-
 #[test]
 fn appeal_finance_weekly_rollup_enforces_config_and_outcome_boundaries() {
     let first = sample_appeal_finance_report();
@@ -76,7 +71,6 @@ fn appeal_finance_weekly_rollup_enforces_config_and_outcome_boundaries() {
     config_rollup
         .validate()
         .expect("exact config-version boundary validates");
-
     let mut too_many_configs = config_rollup;
     too_many_configs
         .appeal_finance_config_versions
@@ -93,7 +87,6 @@ fn appeal_finance_weekly_rollup_enforces_config_and_outcome_boundaries() {
             }
         ) if found == SORAFS_APPEAL_FINANCE_WEEKLY_CONFIG_VERSIONS_MAX_V1 + 1
     ));
-
     let outcomes = [
         SoraFsAppealFinanceOutcomeV1::Uphold,
         SoraFsAppealFinanceOutcomeV1::Overturn,
@@ -126,7 +119,6 @@ fn appeal_finance_weekly_rollup_enforces_config_and_outcome_boundaries() {
     outcome_rollup
         .validate()
         .expect("exact outcome boundary validates");
-
     outcome_rollup
         .outcomes
         .push(outcome_rollup.outcomes.last().expect("outcome").clone());
@@ -140,7 +132,6 @@ fn appeal_finance_weekly_rollup_enforces_config_and_outcome_boundaries() {
         ) if found == SORAFS_APPEAL_FINANCE_WEEKLY_OUTCOMES_MAX_V1 + 1
     ));
 }
-
 #[test]
 fn appeal_finance_weekly_rollup_rejects_duplicate_report_ids() {
     let report = sample_appeal_finance_report();
@@ -148,14 +139,12 @@ fn appeal_finance_weekly_rollup_rejects_duplicate_report_ids() {
         year: 2026,
         week: 26,
     };
-
     let err = SoraFsAppealFinanceWeeklyRollupV1::from_reports(
         cycle,
         1_800_000_100_000,
         &[report.clone(), report.clone()],
     )
     .expect_err("duplicate report rejected");
-
     assert_eq!(
         err,
         SoraFsAppealFinanceWeeklyRollupBuildError::DuplicateReportId {
@@ -163,7 +152,6 @@ fn appeal_finance_weekly_rollup_rejects_duplicate_report_ids() {
         }
     );
 }
-
 #[test]
 fn appeal_finance_weekly_rollup_build_rejects_quantity_overflow() {
     let mut first = sample_appeal_finance_report();
@@ -173,7 +161,6 @@ fn appeal_finance_weekly_rollup_build_rejects_quantity_overflow() {
             .expect("maximum positive quantity");
     let mut second = second_appeal_finance_report();
     second.deposit_xor = "1".parse().expect("canonical quantity");
-
     let err = SoraFsAppealFinanceWeeklyRollupV1::from_reports(
         PorReportIsoWeek {
             year: 2026,
@@ -183,7 +170,6 @@ fn appeal_finance_weekly_rollup_build_rejects_quantity_overflow() {
         &[first, second.clone()],
     )
     .expect_err("overflowing report totals must fail closed");
-
     assert!(matches!(
         err,
         SoraFsAppealFinanceWeeklyRollupBuildError::AmountOverflow {
@@ -193,7 +179,6 @@ fn appeal_finance_weekly_rollup_build_rejects_quantity_overflow() {
         } if report_id == second.report_id
     ));
 }
-
 #[test]
 fn appeal_finance_weekly_rollup_validation_rejects_outcome_overflow() {
     let first = sample_appeal_finance_report();
@@ -212,7 +197,6 @@ fn appeal_finance_weekly_rollup_validation_rejects_outcome_overflow() {
             .parse()
             .expect("maximum positive quantity");
     rollup.outcomes[1].total_deposit_xor = "1".parse().expect("canonical quantity");
-
     assert!(matches!(
         rollup.validate(),
         Err(
@@ -223,7 +207,6 @@ fn appeal_finance_weekly_rollup_validation_rejects_outcome_overflow() {
         )
     ));
 }
-
 #[test]
 fn moderation_ballot_event_rejects_inconsistent_tally() {
     let event = SoraFsModerationBallotGovernanceEventV1 {
@@ -254,13 +237,11 @@ fn moderation_ballot_event_rejects_inconsistent_tally() {
         }),
         challenge: None,
     };
-
     assert!(matches!(
         event.validate(),
         Err(SoraFsModerationBallotGovernanceEventValidationError::TallyRoundMismatch { .. })
     ));
 }
-
 #[test]
 fn moderation_ballot_event_accepts_challenge_lifecycle_events() {
     let submitted_challenge = SoraFsModerationBallotGovernanceChallengeV1 {
@@ -295,7 +276,6 @@ fn moderation_ballot_event_accepts_challenge_lifecycle_events() {
     submitted
         .validate()
         .expect("submitted challenge event validates");
-
     let resolved_challenge = SoraFsModerationBallotGovernanceChallengeV1 {
         decision: Some(SoraFsModerationBallotGovernanceChallengeDecisionV1::Rejected),
         resolved_by: Some("moderation-operator".to_owned()),
@@ -313,7 +293,6 @@ fn moderation_ballot_event_accepts_challenge_lifecycle_events() {
         .validate()
         .expect("resolved challenge event validates");
 }
-
 #[test]
 fn moderation_challenge_enforces_account_and_public_text_boundaries() {
     let case_id = "c".repeat(SORAFS_MODERATION_IDENTIFIER_MAX_BYTES_V1);
@@ -348,7 +327,6 @@ fn moderation_challenge_enforces_account_and_public_text_boundaries() {
         challenge: Some(challenge),
     };
     event.validate().expect("bounded challenge validates");
-
     let mut long_reason = event.clone();
     long_reason
         .challenge
@@ -366,7 +344,6 @@ fn moderation_challenge_enforces_account_and_public_text_boundaries() {
             }
         ) if found == SORAFS_MODERATION_PUBLIC_TEXT_MAX_BYTES_V1 + 1
     ));
-
     let mut long_account = event;
     long_account
         .challenge
@@ -385,7 +362,6 @@ fn moderation_challenge_enforces_account_and_public_text_boundaries() {
         ) if found == SORAFS_MODERATION_ACCOUNT_MAX_BYTES_V1 + 1
     ));
 }
-
 #[test]
 fn moderation_ballot_event_rejects_invalid_challenge_payloads() {
     let base_challenge = SoraFsModerationBallotGovernanceChallengeV1 {
@@ -421,7 +397,6 @@ fn moderation_ballot_event_rejects_invalid_challenge_payloads() {
         event.validate(),
         Err(SoraFsModerationBallotGovernanceEventValidationError::MissingChallengeTarget)
     ));
-
     let mut resolved = event;
     let challenge = resolved.challenge.as_mut().expect("challenge");
     challenge.kind = SoraFsModerationBallotGovernanceChallengeKindV1::EvidenceMismatch;

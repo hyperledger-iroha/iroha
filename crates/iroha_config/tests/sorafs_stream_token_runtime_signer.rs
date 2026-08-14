@@ -1,19 +1,15 @@
 //! Validate the V1 hard cut to runtime-only stream-token signing.
-
-use std::path::PathBuf;
-
 use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::AccountId;
-
+use std::path::PathBuf;
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
     ConfigReader::new()
         .read_toml_with_extends(base_path)
         .expect("base config should load")
 }
-
 fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
     let table = source
         .parse()
@@ -25,13 +21,11 @@ fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
         .parse()
         .map_err(|error| format!("{error:?}"))
 }
-
 fn public_key_hex(seed: u8) -> String {
     let key_pair =
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("test Ed25519 keypair");
     hex::encode(key_pair.public_key().to_bytes().1)
 }
-
 fn native_signer_bindings() -> String {
     [
         ("proof_outcome", "proof-outcome", 0x52),
@@ -63,7 +57,6 @@ policy_digest_hex = "{policy_digest_hex}"
     .collect::<Vec<_>>()
     .join("")
 }
-
 fn enabled_overlay(handle: &str, public_key_hex: &str) -> String {
     let native_signers = native_signer_bindings();
     format!(
@@ -86,7 +79,6 @@ admission_provider_policy_digest_hex = "{}"
         "a5".repeat(32)
     )
 }
-
 #[test]
 fn enabled_stream_tokens_parse_one_exact_non_secret_runtime_binding() {
     let public_key_hex = public_key_hex(0x42);
@@ -96,7 +88,6 @@ fn enabled_stream_tokens_parse_one_exact_non_secret_runtime_binding() {
     ))
     .expect("valid runtime signer binding");
     let tokens = &actual.torii.sorafs_storage.stream_tokens;
-
     assert!(tokens.enabled);
     assert_eq!(
         tokens.signer_handle.as_deref(),
@@ -124,7 +115,6 @@ fn enabled_stream_tokens_parse_one_exact_non_secret_runtime_binding() {
     assert_eq!(tokens.admission_reconcile_max_items, 256);
     assert_eq!(tokens.admission_lease_ttl_ms, 120_000);
 }
-
 #[test]
 fn stream_token_runtime_binding_rejects_incomplete_disabled_and_non_production_forms() {
     let valid_public_key = public_key_hex(0x43);
@@ -228,7 +218,6 @@ signer_public_key_hex = "{valid_public_key}"
         );
     }
 }
-
 #[test]
 fn stream_token_admission_binding_and_bounds_fail_closed() {
     let valid_public_key = public_key_hex(0x45);
@@ -271,7 +260,6 @@ fn stream_token_admission_binding_and_bounds_fail_closed() {
         );
     }
 }
-
 #[test]
 fn stream_token_runtime_binding_rejects_noncanonical_or_invalid_ed25519_keys() {
     let valid_public_key = public_key_hex(0x44);
@@ -317,7 +305,6 @@ fn stream_token_runtime_binding_rejects_noncanonical_or_invalid_ed25519_keys() {
         );
     }
 }
-
 #[test]
 fn legacy_stream_token_signing_key_path_is_rejected_without_disclosing_it() {
     let retired_path = "/run/secrets/retired-stream-token-seed";
@@ -334,7 +321,6 @@ signing_key_path = "{retired_path}"
         .read_and_complete::<UserConfig>()
         .expect_err("legacy stream-token seed path must be rejected");
     let diagnostic = format!("{error:?}");
-
     assert!(
         diagnostic.contains("unknown parameter")
             && diagnostic.contains("sorafs.storage.stream_tokens.signing_key_path"),
@@ -345,7 +331,6 @@ signing_key_path = "{retired_path}"
         "unknown-field diagnostics must not disclose the retired path"
     );
 }
-
 #[test]
 fn retired_sorafs_environment_aliases_remain_unvisited() {
     const RETIRED_ALIASES: [(&str, &str); 25] = [
@@ -383,14 +368,12 @@ fn retired_sorafs_environment_aliases_remain_unvisited() {
         .fold(MockEnv::new(), |env, (alias, value)| {
             env.set(*alias, *value)
         });
-
     let actual: ActualConfig = base_reader()
         .with_env(env.clone())
         .read_and_complete::<UserConfig>()
         .expect("retired environment aliases are not schema inputs")
         .parse()
         .expect("retired environment aliases cannot alter V1 configuration");
-
     assert!(!actual.torii.sorafs_storage.stream_tokens.enabled);
     let unvisited = env.unvisited();
     for (alias, _) in RETIRED_ALIASES {
@@ -400,7 +383,6 @@ fn retired_sorafs_environment_aliases_remain_unvisited() {
         );
     }
 }
-
 #[test]
 fn sorafs_configuration_has_no_production_environment_bindings() {
     let source = include_str!("../src/parameters/user.rs");
@@ -408,7 +390,6 @@ fn sorafs_configuration_has_no_production_environment_bindings() {
         .lines()
         .filter(|line| line.contains("env =") && line.contains("SORAFS_"))
         .collect::<Vec<_>>();
-
     assert!(
         bindings.is_empty(),
         "SoraFS V1 behavior must be configured through canonical TOML only; found environment bindings: {bindings:?}"

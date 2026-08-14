@@ -1,22 +1,17 @@
 //! Hyrax row commitments over the canonical T256 group.
-
-use thiserror::Error;
-
+use super::{
+    VegaCurveError, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar, derive_t256_generators_v1,
+};
 use halo2curves::{
     group::{Curve as _, prime::PrimeCurveAffine as _},
     msm::msm_best,
     t256::{T256, T256Affine},
 };
-
-use super::{
-    VegaCurveError, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar, derive_t256_generators_v1,
-};
-
+use thiserror::Error;
 const COMMITMENT_BEGIN: &[u8] = b"poly_commitment_begin";
 const COMMITMENT_END: &[u8] = b"poly_commitment_end";
 pub(super) const MAX_COMMITMENT_WORKERS: usize = 20;
 pub(super) const COMMITMENT_WORKER_STACK_BYTES: usize = 512 * 1024;
-
 /// Failure while constructing or combining a Hyrax commitment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(super) enum CommitmentError {
@@ -27,12 +22,10 @@ pub(super) enum CommitmentError {
     #[error(transparent)]
     Curve(#[from] VegaCurveError),
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Commitment {
     points: Vec<Point>,
 }
-
 impl Commitment {
     pub(super) fn from_points(points: Vec<Point>) -> Result<Self, CommitmentError> {
         if points.is_empty() || points.iter().any(|point| point.is_identity()) {
@@ -40,15 +33,12 @@ impl Commitment {
         }
         Ok(Self { points })
     }
-
     pub(super) fn points(&self) -> &[Point] {
         &self.points
     }
-
     pub(super) fn len(&self) -> usize {
         self.points.len()
     }
-
     pub(super) fn transcript_bytes(&self) -> Result<Vec<u8>, CommitmentError> {
         let point_bytes = self
             .points
@@ -65,7 +55,6 @@ impl Commitment {
         Ok(bytes)
     }
 }
-
 #[derive(Clone, Debug)]
 pub(super) struct CommitmentKey {
     generators: Vec<Point>,
@@ -75,7 +64,6 @@ pub(super) struct CommitmentKey {
     #[cfg(test)]
     panic_worker: Option<usize>,
 }
-
 impl CommitmentKey {
     pub(super) fn derive(label: &[u8], columns: usize) -> Result<Self, CommitmentError> {
         if columns == 0 {
@@ -100,19 +88,15 @@ impl CommitmentKey {
         key.validate_independence()?;
         Ok(key)
     }
-
     pub(super) fn columns(&self) -> usize {
         self.generators.len()
     }
-
     pub(super) fn generators(&self) -> &[Point] {
         &self.generators
     }
-
     pub(super) fn hiding_generator(&self) -> Point {
         self.hiding_generator
     }
-
     pub(super) fn with_worker_count(
         mut self,
         worker_count: usize,
@@ -123,13 +107,11 @@ impl CommitmentKey {
         self.worker_count = worker_count;
         Ok(self)
     }
-
     #[cfg(test)]
     fn with_test_worker_panic(mut self, worker_index: usize) -> Self {
         self.panic_worker = Some(worker_index);
         self
     }
-
     pub(super) fn commit(
         &self,
         values: &[Scalar],
@@ -203,7 +185,6 @@ impl CommitmentKey {
         })?;
         Commitment::from_points(points)
     }
-
     fn commit_rows(
         &self,
         values: &[Scalar],
@@ -225,7 +206,6 @@ impl CommitmentKey {
         }
         Ok(points)
     }
-
     fn validate_independence(&self) -> Result<(), CommitmentError> {
         let mut points = self.generators.clone();
         points.push(self.hiding_generator);
@@ -242,7 +222,6 @@ impl CommitmentKey {
         Ok(())
     }
 }
-
 pub(super) fn msm(scalars: &[Scalar], points: &[Point]) -> Result<Point, CommitmentError> {
     if scalars.len() != points.len() {
         return Err(CommitmentError::InvalidDimension);
@@ -252,14 +231,12 @@ pub(super) fn msm(scalars: &[Scalar], points: &[Point]) -> Result<Point, Commitm
         &batch_normalize(points),
     )))
 }
-
 fn batch_normalize(points: &[Point]) -> Vec<T256Affine> {
     let projective = points.iter().map(|point| point.0).collect::<Vec<T256>>();
     let mut affine = vec![T256Affine::identity(); projective.len()];
     T256::batch_normalize(&projective, &mut affine);
     affine
 }
-
 pub(super) fn fold(
     commitments: &[&Commitment],
     weights: &[Scalar],
@@ -289,15 +266,12 @@ pub(super) fn fold(
     }
     Commitment::from_points(output)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn s(value: u64) -> Scalar {
         Scalar::from_u64(value)
     }
-
     #[test]
     fn canonical_ck_derivation_matches_independent_vector() {
         let key = CommitmentKey::derive(b"ck", 4).expect("canonical key");
@@ -311,7 +285,6 @@ mod tests {
         );
         assert_eq!(key.columns(), 4);
     }
-
     #[test]
     fn commitments_are_linear_and_fold_by_rows() {
         let key = CommitmentKey::derive(b"vega-commitment-test", 4).expect("canonical key");
@@ -328,7 +301,6 @@ mod tests {
             .expect("linear commitment");
         assert_eq!(folded, expected);
     }
-
     #[test]
     fn commitment_dimensions_and_identity_results_fail_closed() {
         let key = CommitmentKey::derive(b"vega-commitment-negative", 2)
@@ -339,7 +311,6 @@ mod tests {
         let commitment = key.commit(&[s(1), s(2)], &[s(3)]).expect("valid");
         assert!(fold(&[&commitment], &[Scalar::zero()]).is_err());
     }
-
     #[test]
     fn invalid_worker_counts_and_worker_panics_fail_closed() {
         let key = CommitmentKey::derive(b"vega-commitment-worker-negative", 2)
@@ -366,7 +337,6 @@ mod tests {
             Err(CommitmentError::InvalidDimension)
         );
     }
-
     #[test]
     fn commitment_transcript_encoding_has_exact_markers_and_points() {
         let key = CommitmentKey::derive(b"vega-commitment-transcript", 2)

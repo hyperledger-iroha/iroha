@@ -1,5 +1,4 @@
 use std::time::Duration;
-
 use iroha_config::parameters::{
     actual::SorafsRolloutPhase,
     defaults::{
@@ -9,7 +8,6 @@ use iroha_config::parameters::{
 };
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 use sorafs_orchestrator::AnonymityPolicy;
-
 pub fn default_alias_cache_policy() -> AliasCachePolicy {
     AliasCachePolicy::new(
         Duration::from_secs(torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
@@ -22,11 +20,9 @@ pub fn default_alias_cache_policy() -> AliasCachePolicy {
         Duration::from_secs(torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS),
     )
 }
-
 pub fn default_anonymity_policy() -> AnonymityPolicy {
     AnonymityPolicy::parse(DEFAULT_ANONYMITY_POLICY).unwrap_or(AnonymityPolicy::GuardPq)
 }
-
 pub fn default_rollout_phase() -> SorafsRolloutPhase {
     SorafsRolloutPhase::parse(DEFAULT_ROLLOUT_PHASE).unwrap_or_default()
 }

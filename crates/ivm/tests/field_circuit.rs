@@ -3,7 +3,6 @@ use ivm::{
     field,
     halo2::{FieldCircuit, FieldOp},
 };
-
 #[test]
 fn test_field_add_sub_mul_inv() {
     let add_res = field::add(5, 7);
@@ -21,7 +20,6 @@ fn test_field_add_sub_mul_inv() {
         result: add_res.wrapping_add(1),
     };
     assert!(add_bad.verify().is_err());
-
     let sub_res = field::sub(5, 7);
     let sub = FieldCircuit {
         op: FieldOp::Sub,
@@ -30,7 +28,6 @@ fn test_field_add_sub_mul_inv() {
         result: sub_res,
     };
     assert!(sub.verify().is_ok());
-
     let mul_res = field::mul(5, 7);
     let mul = FieldCircuit {
         op: FieldOp::Mul,
@@ -39,7 +36,6 @@ fn test_field_add_sub_mul_inv() {
         result: mul_res,
     };
     assert!(mul.verify().is_ok());
-
     let inv_val = 5u64;
     let inv_res = field::inv(inv_val).unwrap();
     let inv = FieldCircuit {
@@ -56,7 +52,6 @@ fn test_field_add_sub_mul_inv() {
         result: field::add(inv_res, 1),
     };
     assert!(inv_bad.verify().is_err());
-
     let inv_zero = FieldCircuit {
         op: FieldOp::Inv,
         a: 0,
@@ -65,7 +60,6 @@ fn test_field_add_sub_mul_inv() {
     };
     assert!(inv_zero.verify().is_err());
 }
-
 #[test]
 fn test_field_wraparound() {
     let mul_zero = FieldCircuit {
@@ -75,7 +69,6 @@ fn test_field_wraparound() {
         result: 0,
     };
     assert!(mul_zero.verify().is_ok());
-
     let inv_one = FieldCircuit {
         op: FieldOp::Inv,
         a: 1,

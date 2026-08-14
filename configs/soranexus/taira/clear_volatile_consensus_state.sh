@@ -537,7 +537,7 @@ if [[ $START_AFTER -eq 1 ]]; then
       for port in "${ports[@]}"; do
         [[ -n "$port" ]] || continue
         if ! curl -fsS --max-time 3 -H "Accept: application/json" \
-          "http://127.0.0.1:${port}/v1/sumeragi/status" >/tmp/taira-clear-sumeragi-"${port}".json; then
+          "http://127.0.0.1:${port}/status" >/tmp/taira-clear-status-"${port}".json; then
           ok=0
           break
         fi
@@ -548,54 +548,29 @@ if [[ $START_AFTER -eq 1 ]]; then
       fi
       sleep 2
     done
-    [[ "$torii_ready" == "1" ]] || die "Torii readiness failed: one or more configured Torii ports did not return /v1/sumeragi/status"
+    [[ "$torii_ready" == "1" ]] || die "Torii readiness failed: one or more configured Torii ports did not return /status"
 
     echo "==> local summaries"
     for port in "${ports[@]}"; do
       [[ -n "$port" ]] || continue
       echo "port=$port"
       if curl -fsS --max-time 3 -H "Accept: application/json" \
-        "http://127.0.0.1:${port}/v1/sumeragi/status" >/tmp/taira-clear-sumeragi-"${port}".json; then
+        "http://127.0.0.1:${port}/status" >/tmp/taira-clear-status-"${port}".json; then
         PORT="$port" python3 - <<'PY'
 import json
 import os
 from pathlib import Path
 
 port = os.environ["PORT"]
-payload = json.loads(Path(f"/tmp/taira-clear-sumeragi-{port}.json").read_text())
-context = payload.get("height_context") or {}
-commit = payload.get("last_commit_qc") or {}
-certificate = commit.get("certificate") or {}
-round_ = certificate.get("round") or {}
-operator = payload.get("operator") or {}
-tx_queue = operator.get("tx_queue") or {}
-
-
-def tag(record, key):
-    return record.get(key) if isinstance(record, dict) else None
+payload = json.loads(Path(f"/tmp/taira-clear-status-{port}.json").read_text())
 
 
 print(json.dumps({
-    "protocol_version": payload.get("protocol_version"),
-    "height": payload.get("height"),
-    "view": payload.get("view"),
-    "phase": tag(payload.get("phase"), "phase"),
-    "body_state": tag(payload.get("body_state"), "state"),
-    "pending_persistence_id": payload.get("pending_persistence_id"),
-    "mode": tag(context.get("mode"), "mode"),
-    "epoch": context.get("epoch"),
-    "validator_count": context.get("validator_count"),
-    "last_committed_height": payload.get("last_committed_height"),
-    "commit_qc_height": round_.get("height"),
-    "commit_qc_signers": commit.get("signer_count"),
-    "commit_qc_signed_power": commit.get("signed_power"),
-    "view_change_install_total": operator.get("view_change_install_total"),
-    "busy_deferral_total": operator.get("busy_deferral_total"),
-    "tx_queue_depth": tx_queue.get("queued_transactions"),
-    "tx_queue_capacity": tx_queue.get("capacity"),
-    "lane_block_sessions": len(payload.get("lane_block_sessions", []))
-        if isinstance(payload.get("lane_block_sessions"), list)
-        else None,
+    "blocks": payload.get("blocks"),
+    "queue_size": payload.get("queue_size"),
+    "peers": payload.get("peers"),
+    "txs_approved": payload.get("txs_approved"),
+    "txs_rejected": payload.get("txs_rejected"),
 }, sort_keys=True))
 PY
       fi

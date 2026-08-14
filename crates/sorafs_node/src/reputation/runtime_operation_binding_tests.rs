@@ -1,5 +1,4 @@
 // Reputation operation binding and publisher-key regressions.
-
 #[test]
 fn operation_keys_bind_phase_material_and_signed_result() {
     let signing = publication_idempotency_key(
@@ -26,7 +25,6 @@ fn operation_keys_bind_phase_material_and_signed_result() {
     assert_ne!(signing, governance);
     assert_ne!(governance, substituted);
 }
-
 #[test]
 fn governance_publisher_key_rejects_weak_and_noncanonical_points() {
     let mut weak_identity = [0_u8; 32];

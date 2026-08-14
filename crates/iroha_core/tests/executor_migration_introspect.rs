@@ -1,7 +1,6 @@
 //! Executor fixture admission and migration-boundary tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use core::num::NonZeroU64;
-
 use iroha_core::{
     executor::Executor as RuntimeExecutor,
     kura::Kura,
@@ -14,31 +13,25 @@ use iroha_data_model::{
 use iroha_data_model::{block::BlockHeader, smart_contract::payloads::ExecutorContext};
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, Memory, VMError, host::IVMHost};
-
 struct LoggingHost;
-
 impl IVMHost for LoggingHost {
     fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
         Ok(0)
     }
-
     fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
         println!("syscall {number:#x}");
         Err(VMError::UnknownSyscall(number))
     }
-
     fn as_any(&mut self) -> &mut dyn core::any::Any {
         self
     }
 }
-
 #[test]
 fn canonical_executor_runs_without_hidden_host_semantics() {
     let bytes = include_bytes!("../../../defaults/executor.to");
     let mut vm = IVM::new(0);
     vm.load_program(bytes).unwrap();
     vm.set_host(LoggingHost);
-
     let context = ExecutorContext {
         authority: ALICE_ID.clone(),
         curr_block: BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0),
@@ -55,7 +48,6 @@ fn canonical_executor_runs_without_hidden_host_semantics() {
     vm.run()
         .expect("canonical executor must run through ordinary guest semantics");
 }
-
 #[test]
 fn tiny_halt_bytecode_cannot_select_fixture_migration_behavior() {
     let state = State::new_with_chain_for_testing(
@@ -76,7 +68,6 @@ fn tiny_halt_bytecode_cannot_select_fixture_migration_behavior() {
     let mut state_transaction = block.transaction();
     let original_data_model = state_transaction.world.executor_data_model().clone();
     let mut executor = RuntimeExecutor::Initial;
-
     for vector_length in 1..=8 {
         let mut bytecode = ivm::ProgramMetadata {
             version_major: 1,
@@ -89,7 +80,6 @@ fn tiny_halt_bytecode_cannot_select_fixture_migration_behavior() {
         .encode();
         bytecode.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let raw = DataModelExecutor::new(IvmBytecode::from_compiled(bytecode));
-
         let error = executor
             .migrate(raw, &mut state_transaction, &ALICE_ID)
             .expect_err("a HALT-only program does not return a canonical migration result");

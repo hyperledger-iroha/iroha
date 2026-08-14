@@ -1,5 +1,4 @@
 // Publication recovery, retry, readback, and finalization tests.
-
 #[test]
 fn finalized_chain_time_must_strictly_pass_the_exact_registration_deadline() {
     let (request, broker) = request();
@@ -8,7 +7,6 @@ fn finalized_chain_time_must_strictly_pass_the_exact_registration_deadline() {
     let intent = registration_intent(operation_id, &request, receipt);
     let valid_until_ms =
         archive_registration_intent_valid_until_ms(&intent).expect("exact registration deadline");
-
     let mut at_deadline = archive_absence_evidence(&request, 60);
     at_deadline.finalized_time_ms = valid_until_ms;
     let terminal = PublicationArchiveRegistrationTerminalV1::finalized_validity_window_elapsed(
@@ -16,7 +14,6 @@ fn finalized_chain_time_must_strictly_pass_the_exact_registration_deadline() {
         at_deadline,
     );
     assert!(terminal.validate_for(&request, &intent).is_err());
-
     let mut after_deadline = archive_absence_evidence(&request, 61);
     after_deadline.finalized_time_ms = valid_until_ms + 1;
     let terminal = PublicationArchiveRegistrationTerminalV1::finalized_validity_window_elapsed(
@@ -26,7 +23,6 @@ fn finalized_chain_time_must_strictly_pass_the_exact_registration_deadline() {
     terminal
         .validate_for(&request, &intent)
         .expect("finalized time after the exact deadline is terminal");
-
     let mut substituted = terminal;
     substituted.reason =
         PublicationArchiveRegistrationTerminalReasonV1::FinalizedValidityWindowElapsed {
@@ -34,7 +30,6 @@ fn finalized_chain_time_must_strictly_pass_the_exact_registration_deadline() {
         };
     assert!(substituted.validate_for(&request, &intent).is_err());
 }
-
 #[cfg(unix)]
 #[test]
 fn retry_and_receipt_substitution_never_advance_the_journal() {
@@ -67,7 +62,6 @@ fn retry_and_receipt_substitution_never_advance_the_journal() {
             .windows(plan_bytes.len())
             .any(|window| window == plan_bytes.as_slice())
     );
-
     let mut backend = EarlyBackend {
         broker,
         fail_validation_once: true,
@@ -86,7 +80,6 @@ fn retry_and_receipt_substitution_never_advance_the_journal() {
     let unchanged = store.load(operation_id).expect("unchanged journal");
     assert_eq!(unchanged.phase, PublicationPhaseV1::Validation);
     assert_eq!(unchanged.revision, 1);
-
     assert_eq!(
         engine
             .advance_once(operation_id, &source, &mut backend)
@@ -110,7 +103,6 @@ fn retry_and_receipt_substitution_never_advance_the_journal() {
     assert_eq!(unchanged.revision, 2);
     assert!(unchanged.staging_receipt.is_none());
 }
-
 #[cfg(unix)]
 #[test]
 fn future_issued_receipt_waits_within_service_skew_before_registration() {
@@ -133,7 +125,6 @@ fn future_issued_receipt_waits_within_service_skew_before_registration() {
         receipt_window: Some((issued_at_ms, issued_at_ms + 100)),
         prepare_calls: 0,
     };
-
     assert_eq!(
         within_engine
             .advance_once(within_operation, &source, &mut within_backend)
@@ -162,7 +153,6 @@ fn future_issued_receipt_waits_within_service_skew_before_registration() {
         waiting
     );
     assert_eq!(within_backend.prepare_calls, 0);
-
     within_backend.now_ms = issued_at_ms;
     assert_eq!(
         within_engine
@@ -180,7 +170,6 @@ fn future_issued_receipt_waits_within_service_skew_before_registration() {
         1
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn future_issued_receipt_beyond_service_skew_is_rejected_before_persistence() {
@@ -221,7 +210,6 @@ fn future_issued_receipt_beyond_service_skew_is_rejected_before_persistence() {
     assert!(rejected.archive_registration_attempts.is_empty());
     assert_eq!(beyond_backend.prepare_calls, 0);
 }
-
 #[cfg(unix)]
 #[test]
 #[allow(
@@ -249,7 +237,6 @@ fn registration_intent_recovers_a_dropped_commit_response_after_expiry_and_resta
         return_conflicting_archive: false,
         registration_mode: ArchiveRecoveryMode::Commit,
     };
-
     assert_eq!(
         engine
             .advance_once(operation_id, &source, &mut backend)
@@ -278,7 +265,6 @@ fn registration_intent_recovers_a_dropped_commit_response_after_expiry_and_resta
     assert!(intent_journal.registered_archive.is_none());
     assert_eq!(backend.prepare_calls, 1);
     assert_eq!(backend.registration_calls, 0);
-
     let reopened = PublicationJournalStore::open(temp.path()).expect("reopen journal store");
     let resumed = PublicationEngine::new(&reopened);
     let error = resumed
@@ -299,7 +285,6 @@ fn registration_intent_recovers_a_dropped_commit_response_after_expiry_and_resta
     );
     assert!(interrupted.registered_archive.is_none());
     assert!(backend.now_ms > durable_intent.staging_receipt.payload.expires_at_ms);
-
     assert_eq!(
         resumed
             .advance_once(operation_id, &source, &mut backend)
@@ -322,7 +307,6 @@ fn registration_intent_recovers_a_dropped_commit_response_after_expiry_and_resta
     assert_eq!(backend.prepare_calls, 1);
     assert_eq!(backend.registration_calls, 2);
     assert_eq!(backend.pin_calls, 0);
-
     let pin_store = PublicationJournalStore::open(temp.path()).expect("reopen before pin");
     let pin_resume = PublicationEngine::new(&pin_store);
     assert_eq!(
@@ -339,7 +323,6 @@ fn registration_intent_recovers_a_dropped_commit_response_after_expiry_and_resta
         PublicationAdvanceV1::Progressed(PublicationPhaseV1::Replication)
     );
 }
-
 #[cfg(unix)]
 #[test]
 #[allow(
@@ -357,7 +340,6 @@ fn archive_location_generation_recovers_prepared_submitted_applied_and_retired_c
     let source = BytesSource(b"canonical-car".to_vec());
     let mut backend = LocationRecoveryBackend::new(broker, [LocationPollV1::Retired]);
     backend.drop_location_response_once = true;
-
     for step in 0..5 {
         engine
             .advance_once(operation_id, &source, &mut backend)
@@ -369,7 +351,6 @@ fn archive_location_generation_recovers_prepared_submitted_applied_and_retired_c
     assert!(prepared.archive_location_attempts[0].registration.is_none());
     assert!(prepared.archive_location_attempts[0].terminal.is_none());
     let first_intent = prepared.archive_location_attempts[0].intent.clone();
-
     let submitted_store =
         PublicationJournalStore::open(temp.path()).expect("reopen after preparation");
     let submitted_engine = PublicationEngine::new(&submitted_store);
@@ -388,7 +369,6 @@ fn archive_location_generation_recovers_prepared_submitted_applied_and_retired_c
         prepared
     );
     assert_eq!(backend.applied_generations, vec![1]);
-
     let applied_store =
         PublicationJournalStore::open(temp.path()).expect("reopen after applied cut");
     let applied_engine = PublicationEngine::new(&applied_store);
@@ -405,7 +385,6 @@ fn archive_location_generation_recovers_prepared_submitted_applied_and_retired_c
     assert_eq!(applied_attempt.intent, first_intent);
     assert!(applied_attempt.registration.is_some());
     assert!(applied_attempt.terminal.is_none());
-
     assert_eq!(
         applied_engine
             .advance_once(operation_id, &source, &mut backend)
@@ -427,7 +406,6 @@ fn archive_location_generation_recovers_prepared_submitted_applied_and_retired_c
     assert!(retired.archive_location_attempts[0].terminal.is_some());
     assert!(retired.replication.is_none());
     assert!(retired.readbacks.is_empty());
-
     let replacement_store =
         PublicationJournalStore::open(temp.path()).expect("reopen after retirement");
     let replacement_engine = PublicationEngine::new(&replacement_store);
@@ -458,7 +436,6 @@ fn archive_location_generation_recovers_prepared_submitted_applied_and_retired_c
         backend.prepared_generations,
         vec![(1, Vec::new()), (2, vec![first_intent.location_id])]
     );
-
     assert_eq!(
         replacement_engine
             .advance_once(operation_id, &source, &mut backend)
@@ -479,7 +456,6 @@ fn archive_location_generation_recovers_prepared_submitted_applied_and_retired_c
     );
     assert!(replacement.archive_location_attempts[1].terminal.is_none());
 }
-
 #[cfg(unix)]
 #[test]
 fn retirement_is_rechecked_before_replication_and_readback() {
@@ -525,7 +501,6 @@ fn retirement_is_rechecked_before_replication_and_readback() {
         assert!(retired.submission.is_none());
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn selected_location_renewal_requires_terminal_rotation_and_fresh_readbacks() {
@@ -546,7 +521,6 @@ fn selected_location_renewal_requires_terminal_rotation_and_fresh_readbacks() {
             LocationPollV1::HealthyRevisionOffset(2),
         ],
     );
-
     for step in 0..6 {
         engine
             .advance_once(operation_id, &source, &mut backend)
@@ -556,7 +530,6 @@ fn selected_location_renewal_requires_terminal_rotation_and_fresh_readbacks() {
         store.load(operation_id).expect("replication journal").phase,
         PublicationPhaseV1::Replication
     );
-
     assert_eq!(
         engine
             .advance_once(operation_id, &source, &mut backend)
@@ -574,7 +547,6 @@ fn selected_location_renewal_requires_terminal_rotation_and_fresh_readbacks() {
             .revision,
         3
     );
-
     assert_eq!(
         engine
             .advance_once(operation_id, &source, &mut backend)
@@ -585,7 +557,6 @@ fn selected_location_renewal_requires_terminal_rotation_and_fresh_readbacks() {
         store.load(operation_id).expect("unchanged stale journal"),
         renewed
     );
-
     assert_eq!(
         engine
             .advance_once(operation_id, &source, &mut backend)
@@ -612,7 +583,6 @@ fn selected_location_renewal_requires_terminal_rotation_and_fresh_readbacks() {
     assert_eq!(backend.release_preparations, 1);
     assert_eq!(backend.release_submissions, 0);
 }
-
 #[cfg(unix)]
 #[test]
 fn stale_pre_send_poll_preserves_the_live_intent_and_replays_identical_bytes() {
@@ -633,7 +603,6 @@ fn stale_pre_send_poll_preserves_the_live_intent_and_replays_identical_bytes() {
             LocationPollV1::HealthyRevisionOffset(2),
         ],
     );
-
     for step in 0..8 {
         engine
             .advance_once(operation_id, &source, &mut backend)
@@ -642,7 +611,6 @@ fn stale_pre_send_poll_preserves_the_live_intent_and_replays_identical_bytes() {
     let guarded = store.load(operation_id).expect("release journal");
     assert_eq!(guarded.phase, PublicationPhaseV1::ReleaseSubmission);
     assert_eq!(guarded.readbacks.len(), 2);
-
     assert_eq!(
         engine
             .advance_once(operation_id, &source, &mut backend)
@@ -656,7 +624,6 @@ fn stale_pre_send_poll_preserves_the_live_intent_and_replays_identical_bytes() {
     assert_eq!(backend.release_submissions, 0);
     assert_eq!(backend.release_preparations, 1);
     assert_eq!(backend.release_intents.len(), 1);
-
     assert_eq!(
         engine
             .advance_once(operation_id, &source, &mut backend)
@@ -668,7 +635,6 @@ fn stale_pre_send_poll_preserves_the_live_intent_and_replays_identical_bytes() {
     assert_eq!(backend.release_intents.len(), 2);
     assert_eq!(backend.release_intents[0], backend.release_intents[1]);
 }
-
 #[cfg(unix)]
 #[test]
 fn authoritative_pending_status_never_resigns_or_replaces_the_live_transaction() {
@@ -700,7 +666,6 @@ fn authoritative_pending_status_never_resigns_or_replaces_the_live_transaction()
     let digest = live.release_submission_attempts[0]
         .intent
         .signed_transaction_digest;
-
     for _ in 0..2 {
         assert_eq!(
             engine
@@ -713,7 +678,6 @@ fn authoritative_pending_status_never_resigns_or_replaces_the_live_transaction()
     assert_eq!(backend.release_preparations, 1);
     assert_eq!(backend.release_submissions, 0);
     assert_eq!(backend.release_intents, vec![digest, digest]);
-
     assert_eq!(
         engine
             .advance_once(operation_id, &source, &mut backend)
@@ -724,7 +688,6 @@ fn authoritative_pending_status_never_resigns_or_replaces_the_live_transaction()
     assert_eq!(backend.release_submissions, 1);
     assert_eq!(backend.release_intents, vec![digest, digest, digest]);
 }
-
 #[cfg(unix)]
 #[test]
 fn lost_release_response_restarts_from_the_same_journaled_transaction() {
@@ -745,7 +708,6 @@ fn lost_release_response_restarts_from_the_same_journaled_transaction() {
             LocationPollV1::HealthyDirectoryAdvance,
         ],
     );
-
     for step in 0..8 {
         engine
             .advance_once(operation_id, &source, &mut backend)
@@ -757,7 +719,6 @@ fn lost_release_response_restarts_from_the_same_journaled_transaction() {
         .intent
         .signed_transaction_digest;
     backend.drop_release_response_once = true;
-
     let error = engine
         .advance_once(operation_id, &source, &mut backend)
         .expect_err("a lost response leaves the exact live intent durable");
@@ -782,7 +743,6 @@ fn lost_release_response_restarts_from_the_same_journaled_transaction() {
     assert_eq!(backend.release_preparations, 1);
     assert_eq!(backend.release_intents, vec![exact_digest, exact_digest]);
 }
-
 #[cfg(unix)]
 #[test]
 fn stale_retirement_is_pending_in_readback() {
@@ -814,7 +774,6 @@ fn stale_retirement_is_pending_in_readback() {
                 .expect("advance to guarded phase");
         }
         let guarded = store.load(operation_id).expect("guarded journal");
-
         assert_eq!(
             engine
                 .advance_once(operation_id, &source, &mut backend)
@@ -825,7 +784,6 @@ fn stale_retirement_is_pending_in_readback() {
             store.load(operation_id).expect("unchanged journal"),
             guarded
         );
-
         assert_eq!(
             engine
                 .advance_once(operation_id, &source, &mut backend)
@@ -844,7 +802,6 @@ fn stale_retirement_is_pending_in_readback() {
             .load(operation_id)
             .expect("revalidate terminal against durable replication floor");
         assert_eq!(reopened, retired);
-
         let mut regressed = retired;
         let registration = regressed.archive_location_attempts[0]
             .registration
@@ -865,7 +822,6 @@ fn stale_retirement_is_pending_in_readback() {
         ));
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn stale_post_rejection_retirement_preserves_the_latest_checkpoint() {
@@ -895,7 +851,6 @@ fn stale_post_rejection_retirement_preserves_the_latest_checkpoint() {
             .unwrap_or_else(|error| panic!("reach release submission step {step}: {error}"));
     }
     let guarded = store.load(operation_id).expect("release journal");
-
     assert_eq!(
         engine
             .advance_once(operation_id, &source, &mut backend)
@@ -909,7 +864,6 @@ fn stale_post_rejection_retirement_preserves_the_latest_checkpoint() {
         Some(PublicationReleaseSubmissionOutcomeV1::Terminal(_))
     ));
     assert_eq!(backend.release_submissions, 1);
-
     assert_eq!(
         engine
             .advance_once(operation_id, &source, &mut backend)
@@ -934,7 +888,6 @@ fn stale_post_rejection_retirement_preserves_the_latest_checkpoint() {
     );
     assert_eq!(backend.release_submissions, 1);
 }
-
 #[cfg(unix)]
 #[test]
 fn rejected_release_never_resigns_against_stale_or_unchanged_location_state() {
@@ -964,7 +917,6 @@ fn rejected_release_never_resigns_against_stale_or_unchanged_location_state() {
             .unwrap_or_else(|error| panic!("reach release submission step {step}: {error}"));
     }
     let guarded = store.load(operation_id).expect("release journal");
-
     assert_eq!(
         engine
             .advance_once(operation_id, &source, &mut backend)
@@ -975,7 +927,6 @@ fn rejected_release_never_resigns_against_stale_or_unchanged_location_state() {
     assert_ne!(terminal, guarded);
     assert_eq!(backend.release_submissions, 1);
     assert_eq!(backend.release_preparations, 1);
-
     assert_eq!(
         engine
             .advance_once(operation_id, &source, &mut backend)
@@ -995,7 +946,6 @@ fn rejected_release_never_resigns_against_stale_or_unchanged_location_state() {
     assert_eq!(backend.release_submissions, 1);
     assert_eq!(backend.release_preparations, 1);
 }
-
 #[test]
 fn checkpoint_allows_higher_target_revision_at_equal_location_height_on_a_newer_page() {
     let (request, broker) = request();
@@ -1012,14 +962,12 @@ fn checkpoint_allows_higher_target_revision_at_equal_location_height_on_a_newer_
         .location(&registration)
         .expect("previous fixture location")
         .finalized_height;
-
     assert_eq!(
         replication_checkpoint_progress(&request, &registration, &previous, &current)
             .expect("newer full page authenticates the higher local revision"),
         PublicationLocationProgressV1::Current
     );
 }
-
 #[cfg(unix)]
 #[test]
 fn rejected_release_rotates_only_after_post_rejection_retirement_evidence() {
@@ -1067,7 +1015,6 @@ fn rejected_release_rotates_only_after_post_rejection_retirement_evidence() {
     assert!(retired.submission.is_none());
     assert!(retired.readbacks.is_empty());
 }
-
 #[cfg(unix)]
 #[test]
 fn expired_receipt_is_refreshed_only_before_registration_intent() {
@@ -1091,7 +1038,6 @@ fn expired_receipt_is_refreshed_only_before_registration_intent() {
         return_conflicting_archive: false,
         registration_mode: ArchiveRecoveryMode::Commit,
     };
-
     engine
         .advance_once(operation_id, &source, &mut backend)
         .expect("validate");
@@ -1108,7 +1054,6 @@ fn expired_receipt_is_refreshed_only_before_registration_intent() {
     let reset = store.load(operation_id).expect("receipt reset journal");
     assert!(reset.staging_receipt.is_none());
     assert!(reset.archive_registration_attempts.is_empty());
-
     engine
         .advance_once(operation_id, &source, &mut backend)
         .expect("stage fresh receipt");
@@ -1118,7 +1063,6 @@ fn expired_receipt_is_refreshed_only_before_registration_intent() {
     assert_eq!(backend.staged_receipts.len(), 2);
     assert_eq!(backend.prepare_calls, 1);
 }
-
 #[cfg(unix)]
 #[test]
 fn expired_unsubmitted_intent_rotates_only_after_authoritative_terminal_absence() {
@@ -1142,7 +1086,6 @@ fn expired_unsubmitted_intent_rotates_only_after_authoritative_terminal_absence(
         return_conflicting_archive: false,
         registration_mode: ArchiveRecoveryMode::ExpiredAbsent,
     };
-
     engine
         .advance_once(operation_id, &source, &mut backend)
         .expect("validate");
@@ -1155,7 +1098,6 @@ fn expired_unsubmitted_intent_rotates_only_after_authoritative_terminal_absence(
     let before_crash = store.load(operation_id).expect("first intent journal");
     let first_attempt = before_crash.archive_registration_attempts[0].clone();
     assert_eq!(backend.registration_calls, 0);
-
     backend.now_ms = first_attempt.intent.staging_receipt.payload.expires_at_ms + 1;
     let reopened = PublicationJournalStore::open(temp.path()).expect("reopen journal store");
     let resumed = PublicationEngine::new(&reopened);
@@ -1175,7 +1117,6 @@ fn expired_unsubmitted_intent_rotates_only_after_authoritative_terminal_absence(
     );
     assert!(terminal.archive_registration_attempts[0].terminal.is_some());
     assert!(terminal.staging_receipt.is_none());
-
     resumed
         .advance_once(operation_id, &source, &mut backend)
         .expect("stage replacement receipt");
@@ -1206,7 +1147,6 @@ fn expired_unsubmitted_intent_rotates_only_after_authoritative_terminal_absence(
     assert_eq!(backend.staged_receipts.len(), 2);
     assert_eq!(backend.prepare_calls, 2);
 }
-
 #[cfg(unix)]
 #[test]
 fn unknown_or_pending_application_state_never_rotates_the_exact_intent() {
@@ -1230,7 +1170,6 @@ fn unknown_or_pending_application_state_never_rotates_the_exact_intent() {
         return_conflicting_archive: false,
         registration_mode: ArchiveRecoveryMode::Pending,
     };
-
     engine
         .advance_once(operation_id, &source, &mut backend)
         .expect("validate");
@@ -1252,7 +1191,6 @@ fn unknown_or_pending_application_state_never_rotates_the_exact_intent() {
     assert_eq!(backend.staged_receipts.len(), 1);
     assert_eq!(backend.prepare_calls, 1);
 }
-
 #[cfg(unix)]
 #[test]
 fn archive_registration_attempt_generation_is_strictly_bounded() {
@@ -1293,7 +1231,6 @@ fn archive_registration_attempt_generation_is_strictly_bounded() {
     store
         .write(&journal)
         .expect("persist maximum-generation journal");
-
     let source = BytesSource(b"canonical-car".to_vec());
     let mut backend = ArchiveRecoveryBackend {
         broker,
@@ -1317,7 +1254,6 @@ fn archive_registration_attempt_generation_is_strictly_bounded() {
                 && error.class() == PublicationBackendFailureClass::Permanent
     ));
     assert!(backend.staged_receipts.is_empty());
-
     let mut oversized = journal;
     let previous = oversized
         .archive_registration_attempts
@@ -1334,7 +1270,6 @@ fn archive_registration_attempt_generation_is_strictly_bounded() {
             if reason.contains("attempt bound")
     ));
 }
-
 #[cfg(unix)]
 #[test]
 fn archive_location_attempt_generation_is_bounded_and_encoded_below_journal_limit() {
@@ -1356,7 +1291,6 @@ fn archive_location_attempt_generation_is_bounded_and_encoded_below_journal_limi
         ));
     journal.registered_archive = Some(registered.clone());
     journal.phase = PublicationPhaseV1::ArchiveRegistration;
-
     for generation in 1..=MUSUBI_MAX_ARCHIVE_LOCATION_ATTEMPTS_V1 {
         let generation = u8::try_from(generation).expect("generation fits u8");
         let registration =
@@ -1389,7 +1323,6 @@ fn archive_location_attempt_generation_is_bounded_and_encoded_below_journal_limi
         store.load(operation_id).expect("reload bounded journal"),
         journal
     );
-
     let mut rewritten = journal.clone();
     rewritten.archive_location_attempts[0]
         .terminal
@@ -1400,7 +1333,6 @@ fn archive_location_attempt_generation_is_bounded_and_encoded_below_journal_limi
         &journal.archive_location_attempts,
         &rewritten.archive_location_attempts,
     ));
-
     let generation =
         u8::try_from(MUSUBI_MAX_ARCHIVE_LOCATION_ATTEMPTS_V1 + 1).expect("ninth fits u8");
     let registration =
@@ -1425,7 +1357,6 @@ fn archive_location_attempt_generation_is_bounded_and_encoded_below_journal_limi
             if reason.contains("archive-location attempt bound")
     ));
 }
-
 #[cfg(unix)]
 #[test]
 #[allow(
@@ -1488,7 +1419,6 @@ fn terminal_and_replacement_pages_reject_same_snapshot_or_revision_substitution(
             )
             .is_err()
     );
-
     let exact_expiry = PublicationArchiveLocationTerminalV1 {
         transaction_hash: second.intent.transaction_hash,
         reason: PublicationArchiveLocationTerminalReasonV1::RegistryExpired { block_height: None },
@@ -1504,7 +1434,6 @@ fn terminal_and_replacement_pages_reject_same_snapshot_or_revision_substitution(
             &PublicationArchiveLocationTerminalFloorV1::Prepared,
         )
         .expect("unchanged prepared snapshot proves exact expiry absence");
-
     let mut same_snapshot_substituted = exact_expiry.clone();
     let mut unrelated = second.location().expect("second location fixture").clone();
     unrelated.location_id = MusubiArchiveLocationIdV1::new([0xe5; 32]);
@@ -1538,7 +1467,6 @@ fn terminal_and_replacement_pages_reject_same_snapshot_or_revision_substitution(
             )
             .is_err()
     );
-
     let mut same_revision_substituted = exact_expiry;
     same_revision_substituted
         .finalized_page
@@ -1573,7 +1501,6 @@ fn terminal_and_replacement_pages_reject_same_snapshot_or_revision_substitution(
             )
             .is_err()
     );
-
     let mut journal = PublicationJournalV1::new(request.clone()).expect("publication journal");
     journal.validation = Some(validation_evidence(&request));
     journal.staging_receipt = Some(receipt);
@@ -1598,7 +1525,6 @@ fn terminal_and_replacement_pages_reject_same_snapshot_or_revision_substitution(
     journal
         .validate()
         .expect("exact terminal-to-prepared checkpoint");
-
     let mut replacement_substituted = journal;
     let prepared = &mut replacement_substituted.archive_location_attempts[1]
         .intent
@@ -1628,7 +1554,6 @@ fn terminal_and_replacement_pages_reject_same_snapshot_or_revision_substitution(
             if reason.contains("regressed prior terminal finality")
     ));
 }
-
 #[cfg(unix)]
 #[test]
 fn conflicting_authoritative_archive_never_reaches_pin_coordination() {
@@ -1652,7 +1577,6 @@ fn conflicting_authoritative_archive_never_reaches_pin_coordination() {
         return_conflicting_archive: true,
         registration_mode: ArchiveRecoveryMode::Commit,
     };
-
     engine
         .advance_once(operation_id, &source, &mut backend)
         .expect("validate");
@@ -1679,7 +1603,6 @@ fn conflicting_authoritative_archive_never_reaches_pin_coordination() {
     assert!(unchanged.registered_archive.is_none());
     assert_eq!(backend.pin_calls, 0);
 }
-
 #[cfg(unix)]
 #[test]
 fn detached_resume_crosses_all_seven_phases_and_reuses_amx_submission() {
@@ -1699,7 +1622,6 @@ fn detached_resume_crosses_all_seven_phases_and_reuses_amx_submission() {
         readback_providers: Vec::new(),
         submissions: 0,
     };
-
     assert_eq!(
         engine
             .publish(request, &source, &mut backend)
@@ -1709,7 +1631,6 @@ fn detached_resume_crosses_all_seven_phases_and_reuses_amx_submission() {
     let replication_wait = store.load(operation_id).expect("replication journal");
     assert_eq!(replication_wait.phase, PublicationPhaseV1::Replication);
     assert_eq!(replication_wait.revision, 7);
-
     assert_eq!(
         engine
             .resume(operation_id, &source, &mut backend)
@@ -1720,7 +1641,6 @@ fn detached_resume_crosses_all_seven_phases_and_reuses_amx_submission() {
     let finality_wait = store.load(operation_id).expect("finality journal");
     assert_eq!(finality_wait.phase, PublicationPhaseV1::FinalVerification);
     assert_eq!(finality_wait.revision, 10);
-
     let completed = engine
         .resume(operation_id, &source, &mut backend)
         .expect("complete final verification");
@@ -1737,7 +1657,6 @@ fn detached_resume_crosses_all_seven_phases_and_reuses_amx_submission() {
     ));
     assert_eq!(backend.submissions, 1);
 }
-
 #[cfg(unix)]
 #[test]
 fn trait_backed_readback_skips_corrupt_provider_and_uses_later_quorum() {
@@ -1783,7 +1702,6 @@ fn trait_backed_readback_skips_corrupt_provider_and_uses_later_quorum() {
     );
     journal.validate().expect("fallback journal remains valid");
 }
-
 #[cfg(unix)]
 #[test]
 fn trait_backed_invalid_readback_quorum_stops_before_amx_without_journal_mutation() {
@@ -1803,7 +1721,6 @@ fn trait_backed_invalid_readback_quorum_stops_before_amx_without_journal_mutatio
         readback_providers: Vec::new(),
         submissions: 0,
     };
-
     let error = engine
         .publish(request, &source, &mut backend)
         .expect_err("invalid providers cannot authorize AMX submission");
@@ -1829,7 +1746,6 @@ fn trait_backed_invalid_readback_quorum_stops_before_amx_without_journal_mutatio
     unchanged
         .validate()
         .expect("failed readbacks leave a valid journal");
-
     let error = engine
         .resume(operation_id, &source, &mut backend)
         .expect_err("retry still lacks two valid providers");
@@ -1846,7 +1762,6 @@ fn trait_backed_invalid_readback_quorum_stops_before_amx_without_journal_mutatio
     );
     assert_eq!(backend.submissions, 0);
 }
-
 #[cfg(unix)]
 #[test]
 fn trait_backed_readback_exhaustion_preserves_backend_failure_class_and_code() {
@@ -1880,7 +1795,6 @@ fn trait_backed_readback_exhaustion_preserves_backend_failure_class_and_code() {
             readback_providers: Vec::new(),
             submissions: 0,
         };
-
         let error = engine
             .publish(request, &source, &mut backend)
             .expect_err("one backend failure plus invalid evidence cannot authorize AMX");
@@ -1908,7 +1822,6 @@ fn trait_backed_readback_exhaustion_preserves_backend_failure_class_and_code() {
             .expect("failed readbacks leave a valid journal");
     }
 }
-
 #[cfg(unix)]
 #[test]
 fn journal_rejects_missing_phase_evidence_and_tampered_receipt_signature() {
@@ -1919,14 +1832,12 @@ fn journal_rejects_missing_phase_evidence_and_tampered_receipt_signature() {
     let operation_id = engine
         .begin_detached(request)
         .expect("persist detached operation");
-
     let mut missing = store.load(operation_id).expect("load journal");
     missing.phase = PublicationPhaseV1::Replication;
     assert!(matches!(
         missing.validate(),
         Err(PublicationError::InvalidJournal(_))
     ));
-
     let source = BytesSource(b"car".to_vec());
     let mut backend = EarlyBackend {
         broker,
@@ -1969,7 +1880,6 @@ fn journal_rejects_missing_phase_evidence_and_tampered_receipt_signature() {
         })
     ));
 }
-
 #[test]
 fn journal_rejects_archive_registration_receipt_replay_from_another_nonce() {
     let (request, broker) = request();
@@ -2011,7 +1921,6 @@ fn journal_rejects_archive_registration_receipt_replay_from_another_nonce() {
     journal
         .validate()
         .expect("registration must retain the exact staged receipt");
-
     let mut replayed_binding = request.receipt_binding();
     replayed_binding.nonce = [0xEE; 32];
     journal
@@ -2030,7 +1939,6 @@ fn journal_rejects_archive_registration_receipt_replay_from_another_nonce() {
         })
     ));
 }
-
 #[test]
 fn journal_rejects_a_refreshed_receipt_after_archive_registration() {
     let (request, broker) = request();
@@ -2048,7 +1956,6 @@ fn journal_rejects_a_refreshed_receipt_after_archive_registration() {
         registered_receipt.payload.expires_at_ms + 1_001,
     );
     assert_ne!(registered_receipt, refreshed_receipt);
-
     let mut journal = PublicationJournalV1::new(request).expect("publication journal");
     journal.validation = Some(validation_evidence(&journal.request));
     journal.staging_receipt = Some(refreshed_receipt);
@@ -2082,7 +1989,6 @@ fn journal_rejects_a_refreshed_receipt_after_archive_registration() {
             if reason.contains("exact staging receipt")
     ));
 }
-
 #[test]
 fn replication_requires_three_exact_finalized_providers() {
     let (request, broker) = request();
@@ -2110,7 +2016,6 @@ fn replication_requires_three_exact_finalized_providers() {
     registration
         .validate_for(request.operation_id(), &request, &registered, &[])
         .expect("valid archive registration");
-
     let below_quorum = location(&request, &registration, 2);
     assert!(matches!(
         validate_replication(&request, &registration, &below_quorum),
@@ -2119,10 +2024,8 @@ fn replication_requires_three_exact_finalized_providers() {
             ..
         })
     ));
-
     let exact = location(&request, &registration, 3);
     validate_replication(&request, &registration, &exact).expect("three-provider quorum");
-
     let mut stale = exact.clone();
     stale.revision -= 1;
     assert!(matches!(
@@ -2132,7 +2035,6 @@ fn replication_requires_three_exact_finalized_providers() {
             ..
         })
     ));
-
     let mut equal_revision_substitution = exact.clone();
     equal_revision_substitution.renew_after_epoch += 1;
     assert!(matches!(
@@ -2142,7 +2044,6 @@ fn replication_requires_three_exact_finalized_providers() {
             ..
         })
     ));
-
     let mut renewed_registration = registration.clone();
     renewed_registration.intent.pin_manifest = ManifestDigest::new([0xD1; 32]);
     renewed_registration.intent.replication_order = ReplicationOrderId::new([0xD2; 32]);
@@ -2175,7 +2076,6 @@ fn replication_requires_three_exact_finalized_providers() {
             ..
         })
     ));
-
     let mut substituted = exact;
     substituted.provider_attestation_set_digest =
         MusubiProviderBundleAttestationSetDigestV1::new([0xEE; 32]);
@@ -2187,7 +2087,6 @@ fn replication_requires_three_exact_finalized_providers() {
         })
     ));
 }
-
 #[test]
 #[allow(
     clippy::too_many_lines,
@@ -2218,7 +2117,6 @@ fn archive_location_checkpoints_reject_revision_and_snapshot_substitution() {
     registration
         .validate_polled_page(&request, &registration.finalized_page)
         .expect("baseline finalized location page");
-
     let mut target_revision_regressed = registration.clone();
     target_revision_regressed.finalized_page.items[0].revision =
         registration.intent.expected_location_revision;
@@ -2227,7 +2125,6 @@ fn archive_location_checkpoints_reject_revision_and_snapshot_substitution() {
             .validate_for(request.operation_id(), &request, &registered, &[])
             .is_err()
     );
-
     let mut first_application_substituted = registration.clone();
     first_application_substituted.finalized_page.items[0].pin_manifest =
         ManifestDigest::new([0xe1; 32]);
@@ -2236,7 +2133,6 @@ fn archive_location_checkpoints_reject_revision_and_snapshot_substitution() {
             .validate_for(request.operation_id(), &request, &registered, &[])
             .is_err()
     );
-
     let mut first_application_not_healthy = registration.clone();
     first_application_not_healthy.finalized_page.items[0].state =
         MusubiArchiveLocationStateV1::Degraded;
@@ -2245,7 +2141,6 @@ fn archive_location_checkpoints_reject_revision_and_snapshot_substitution() {
             .validate_for(request.operation_id(), &request, &registered, &[])
             .is_err()
     );
-
     let mut first_application_wrong_height = registration.clone();
     first_application_wrong_height.applied_height -= 1;
     assert!(
@@ -2253,7 +2148,6 @@ fn archive_location_checkpoints_reject_revision_and_snapshot_substitution() {
             .validate_for(request.operation_id(), &request, &registered, &[])
             .is_err()
     );
-
     let mut archive_revision_regressed = registration.finalized_page.clone();
     archive_revision_regressed.snapshot.finalized_height += 1;
     archive_revision_regressed.snapshot.finalized_block_hash = [0xe2; 32];
@@ -2265,7 +2159,6 @@ fn archive_location_checkpoints_reject_revision_and_snapshot_substitution() {
             .validate_polled_page(&request, &archive_revision_regressed)
             .is_err()
     );
-
     let mut equal_archive_revision_substituted = registration.finalized_page.clone();
     equal_archive_revision_substituted.snapshot.finalized_height += 1;
     equal_archive_revision_substituted
@@ -2281,7 +2174,6 @@ fn archive_location_checkpoints_reject_revision_and_snapshot_substitution() {
             .validate_polled_page(&request, &equal_archive_revision_substituted)
             .is_err()
     );
-
     let mut same_snapshot_higher_revision = registration.finalized_page.clone();
     same_snapshot_higher_revision.archive.location_revision += 1;
     same_snapshot_higher_revision.items[0].revision += 1;
@@ -2290,7 +2182,6 @@ fn archive_location_checkpoints_reject_revision_and_snapshot_substitution() {
             .validate_polled_page(&request, &same_snapshot_higher_revision)
             .is_err()
     );
-
     let mut item_ahead_of_archive = registration.finalized_page.clone();
     item_ahead_of_archive.items[0].revision += 1;
     assert!(
@@ -2298,14 +2189,12 @@ fn archive_location_checkpoints_reject_revision_and_snapshot_substitution() {
             .validate_polled_page(&request, &item_ahead_of_archive)
             .is_err()
     );
-
     let mut same_snapshot_archive_substitution = registration.intent.prepared_page.clone();
     same_snapshot_archive_substitution.archive.location_revision += 1;
     assert!(
         validate_archive_location_page(&request, &registered, &same_snapshot_archive_substitution,)
             .is_err()
     );
-
     let mut registered_current = registered;
     registered_current.snapshot = registration.finalized_page.snapshot;
     registered_current.archive = registration.finalized_page.archive.clone();
@@ -2329,7 +2218,6 @@ fn archive_location_checkpoints_reject_revision_and_snapshot_substitution() {
         .is_err()
     );
 }
-
 #[test]
 fn readback_rejects_provider_or_commitment_substitution() {
     let (request, broker) = request();
@@ -2347,7 +2235,6 @@ fn readback_rejects_provider_or_commitment_substitution() {
     exact
         .validate_for(&request, &location, provider)
         .expect("exact readback");
-
     let mut wrong_provider = exact.clone();
     wrong_provider.provider = location.providers[1];
     assert!(
@@ -2363,7 +2250,6 @@ fn readback_rejects_provider_or_commitment_substitution() {
             .is_err()
     );
 }
-
 #[test]
 fn release_preparation_requires_a_sorted_distinct_location_provider_subset() {
     let (request, broker) = request();
@@ -2392,7 +2278,6 @@ fn release_preparation_requires_a_sorted_distinct_location_provider_subset() {
         &registration,
     )
     .expect("any sorted two-provider location subset is valid");
-
     let assert_rejected = |readbacks| {
         assert!(matches!(
             PublicationReleasePreparationFloorV1::try_new(
@@ -2409,20 +2294,16 @@ fn release_preparation_requires_a_sorted_distinct_location_provider_subset() {
                 == "provider readbacks were not a strictly ordered distinct location-provider subset"
         ));
     };
-
     let mut duplicate = later_subset.clone();
     duplicate[1] = duplicate[0].clone();
     assert_rejected(duplicate);
-
     let mut unsorted = later_subset.clone();
     unsorted.swap(0, 1);
     assert_rejected(unsorted);
-
     let mut nonmember = later_subset;
     nonmember[1].provider = ProviderId::new([0xFE; 32]);
     assert_rejected(nonmember);
 }
-
 #[test]
 fn amx_and_final_index_evidence_bind_the_exact_release() {
     let (request, _) = request();
@@ -2447,7 +2328,6 @@ fn amx_and_final_index_evidence_bind_the_exact_release() {
             .validate_for(operation_id, &instruction)
             .is_err()
     );
-
     let exact_final = final_evidence(&request);
     exact_final
         .validate_for(&request, &exact_submission)
@@ -2520,7 +2400,6 @@ fn amx_and_final_index_evidence_bind_the_exact_release() {
             .is_err()
     );
 }
-
 #[test]
 fn detached_operation_ids_are_canonical_nonzero_lowercase_hex() {
     let (request, _) = request();

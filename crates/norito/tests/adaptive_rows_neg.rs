@@ -1,6 +1,5 @@
 //! Negative tests for adaptive AoS rows decoding.
 use norito::core::Error;
-
 #[test]
 fn decode_rows_u64_str_bool_adaptive_truncated_header() {
     // Tag + incomplete varint length
@@ -13,7 +12,6 @@ fn decode_rows_u64_str_bool_adaptive_truncated_header() {
         Err(Error::LengthMismatch) | Err(Error::Message(_))
     ));
 }
-
 #[test]
 fn decode_rows_u64_str_bool_adaptive_truncated_row() {
     // Tag + n=1 + id present but missing flag byte after name
@@ -28,7 +26,6 @@ fn decode_rows_u64_str_bool_adaptive_truncated_row() {
     norito::core::write_len_to_vec(&mut body, 3);
     body.extend_from_slice(b"abc");
     // MISSING: flag byte → truncation
-
     let mut bytes = Vec::new();
     bytes.push(norito::columnar::ADAPTIVE_TAG_AOS);
     bytes.extend_from_slice(&body);

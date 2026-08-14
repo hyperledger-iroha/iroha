@@ -1,9 +1,6 @@
 //! Runtime upgrade helpers for CLI
-
 use eyre::Result;
-
 use crate::{CliOutputFormat, Run, RunContext};
-
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Runtime ABI helpers
@@ -17,7 +14,6 @@ pub enum Command {
     /// Fetch node capability advert (ABI + crypto manifest)
     Capabilities,
 }
-
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -89,7 +85,6 @@ impl Run for Command {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum AbiCommand {
     /// Fetch the active ABI version from the node
@@ -99,7 +94,6 @@ pub enum AbiCommand {
     /// Fetch the node's canonical ABI hash for the active policy
     Hash,
 }
-
 impl Run for AbiCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -122,7 +116,6 @@ impl Run for AbiCommand {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum UpgradeCommand {
     /// List proposed/activated runtime upgrades
@@ -134,7 +127,6 @@ pub enum UpgradeCommand {
     /// Build a `CancelRuntimeUpgrade` instruction skeleton via Torii
     Cancel(CancelArgs),
 }
-
 impl Run for UpgradeCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -149,14 +141,12 @@ impl Run for UpgradeCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ProposeArgs {
     /// Path to a JSON file with `RuntimeUpgradeManifest` fields
     #[arg(long, value_name = "PATH")]
     file: std::path::PathBuf,
 }
-
 impl Run for ProposeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = context.client_from_config();
@@ -166,14 +156,12 @@ impl Run for ProposeArgs {
         context.print_data(&out)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ActivateArgs {
     /// Upgrade id (hex)
     #[arg(long, value_name = "HEX")]
     id: String,
 }
-
 impl Run for ActivateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = context.client_from_config();
@@ -181,14 +169,12 @@ impl Run for ActivateArgs {
         context.print_data(&out)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct CancelArgs {
     /// Upgrade id (hex)
     #[arg(long, value_name = "HEX")]
     id: String,
 }
-
 impl Run for CancelArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = context.client_from_config();

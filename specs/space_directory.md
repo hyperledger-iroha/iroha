@@ -16,7 +16,9 @@ fixtures, and governance templates.
 
 | Term | Description | References |
 |------|-------------|------------|
-| Dataspace | Execution context/Lane that runs a governance-approved contract set. | `nexus.md`, `crates/iroha_data_model/src/nexus/mod.rs` |
+| Dataspace | Physical security, execution, validator/server, and storage boundary. A dataspace owns one or more lanes; a workload or namespace name does not create a dataspace. | `nexus.md`, `crates/iroha_data_model/src/nexus/mod.rs` |
+| Lane | Logical execution and routing stream inside exactly one dataspace. Multiple lanes may share the same physical dataspace. | `nexus_lanes.md`, `crates/iroha_data_model/src/nexus/mod.rs` |
+| Namespace | Independently governed logical naming scope with an explicit home-dataspace binding. Its identity remains separate from both `DataSpaceId` and `LaneId`, even when aliases match. | `nexus.md`, `crates/iroha_data_model/src/nexus/mod.rs` |
 | UAID | `UniversalAccountId` (blake2b-32 hash) used to anchor cross-dataspace permissions. | `crates/iroha_data_model/src/nexus/manifest.rs` |
 | Capability Manifest | `AssetPermissionManifest` describing deterministic allow/deny rules for a UAID/dataspace pair (deny wins). | Fixture `fixtures/space_directory/capability/*.manifest.json` |
 | Dataspace Profile | Governance + DA metadata published alongside manifests so operators can reconstruct validator sets, composability whitelists, and audit hooks. | Fixture `fixtures/space_directory/profile/cbdc_lane_profile.json` |
@@ -352,8 +354,7 @@ canonical `AssetPermissionManifest` JSON:
 - `manifest` is the full `AssetPermissionManifest` object, allowing SDKs and
   dashboards to render the entries without bespoke schemas.
 
-Access controls mirror the bindings and portfolio APIs (CIDR/API-token/fee
-policy gates). Use this surface to verify manifest rotations, ensure revocation
+Read access controls mirror the bindings and portfolio APIs. Use this surface to verify manifest rotations, ensure revocation
 evidence is visible to regulators, and hydrate SDK caches without scraping the
 Space Directory contract directly.
 
@@ -372,7 +373,6 @@ POST /v1/space-directory/manifests
 | Field | Type | Description |
 |-------|------|-------------|
 | `authority` | `AccountId` | Account that signs the publication transaction (must hold `CanPublishSpaceDirectoryManifest{dataspace}`). |
-| `private_key` | `ExposedPrivateKey` | Wrapped private key matching `authority`. |
 | `manifest` | `AssetPermissionManifest` | Canonical manifest payload (UAID, dataspace, lifecycle schedule, entries). |
 | `reason` (optional) | `String` | Convenience string applied to `entries[*].notes` when missing. |
 
@@ -381,7 +381,6 @@ Sample request body:
 ```jsonc
 {
   "authority": "<i105-account-id>",
-  "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
     "uaid": "uaid:0f4d…ab11",
@@ -407,11 +406,16 @@ Sample request body:
 }
 ```
 
-Torii responds with `202 Accepted` as soon as the transaction is queued. When
-the block executes, `SpaceDirectoryEvent::ManifestActivated` fires (subject to
-`activation_epoch`), bindings are rebuilt automatically, and the manifest
-inventory endpoint reflects the new payload. Access controls mirror the other
-Space Directory write APIs (CIDR/API-token/fee-policy gating).
+Torii returns a canonical unsigned transaction draft and never accepts a
+private key or queues the transaction. The request must carry exact-NetworkId
+canonical account headers signed over the exact method, path, query, and raw
+JSON body; that authenticated account must equal `authority`. The client
+validates and signs the returned payload locally, then submits the resulting
+`SignedTransaction` through the ordinary transaction endpoint. CIDR, rate, and
+deployment-wide API-token policy remain additional controls, not authentication
+substitutes. When the signed transaction executes,
+`SpaceDirectoryEvent::ManifestActivated` fires (subject to
+`activation_epoch`) and bindings are rebuilt automatically.
 
 ### Manifest revocation API
 
@@ -427,7 +431,6 @@ POST /v1/space-directory/manifests/revoke
 | Field | Type | Description |
 |-------|------|-------------|
 | `authority` | `AccountId` | Account that signs the revocation transaction. |
-| `private_key` | `ExposedPrivateKey` | Base64-wrapped private key used by Torii to sign on behalf of `authority`. |
 | `uaid` | `String` | UAID literal (`uaid:<hex>` or raw 64-char hex digest, LSB=1). |
 | `dataspace` | `u64` | Dataspace identifier that hosts the manifest. |
 | `revoked_epoch` | `u64` | Epoch (inclusive) when the revocation should take effect. |
@@ -438,7 +441,6 @@ Sample JSON body:
 ```jsonc
 {
   "authority": "<i105-account-id>",
-  "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
   "dataspace": 11,
   "revoked_epoch": 9216,
@@ -446,11 +448,12 @@ Sample JSON body:
 }
 ```
 
-Torii returns `202 Accepted` once the transaction enters the queue. When the
-block executes you will receive `SpaceDirectoryEvent::ManifestRevoked`,
-`uaid_dataspaces` is rebuilt automatically, and both `/portfolio` and the
-manifest inventory start reporting the revoked state immediately. CIDR and
-fee-policy gates match the read endpoints.
+Torii returns the same canonical unsigned transaction draft as publication and
+never accepts or uses a private key. Exact-NetworkId canonical account headers
+must authenticate the raw request and the authenticated account must equal
+`authority`. After the locally signed transaction executes,
+`SpaceDirectoryEvent::ManifestRevoked` fires, `uaid_dataspaces` is rebuilt, and
+both `/portfolio` and the manifest inventory report the revoked state.
 
 ## 6. Dataspace Profile Template
 

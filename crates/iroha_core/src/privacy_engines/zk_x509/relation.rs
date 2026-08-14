@@ -10,21 +10,6 @@
 //! The reference relation is not itself a privacy proof. The purpose-built AIR
 //! proves the same predicates without exposing this private witness, while
 //! governance separately controls consensus activation.
-
-use iroha_data_model::privacy::{
-    IrohaZkX509StarkP256StatementV1, PrivacyAttributeDigestV1, PrivacyCertificateKeyDigestV1,
-    PrivacyNullifierV1, PrivacyStatementV1, PrivacyX509CrlDerDigestV1,
-    PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1,
-    PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordV1,
-    PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordV1,
-};
-use p256::ecdsa::{
-    Signature as P256Signature, VerifyingKey as P256VerifyingKey,
-    signature::{Verifier as _, hazmat::PrehashVerifier as _},
-};
-use thiserror::Error;
-use time::{Date, Month, PrimitiveDateTime, Time};
-
 use super::{
     codec::ZkX509WitnessV1,
     der::{
@@ -44,28 +29,36 @@ use super::{
         ZK_X509_UNCOMPRESSED_P256_BYTES_V1, ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1,
     },
 };
-
+use iroha_data_model::privacy::{
+    IrohaZkX509StarkP256StatementV1, PrivacyAttributeDigestV1, PrivacyCertificateKeyDigestV1,
+    PrivacyNullifierV1, PrivacyStatementV1, PrivacyX509CrlDerDigestV1,
+    PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1,
+    PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordV1,
+    PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordV1,
+};
+use p256::ecdsa::{
+    Signature as P256Signature, VerifyingKey as P256VerifyingKey,
+    signature::{Verifier as _, hazmat::PrehashVerifier as _},
+};
+use thiserror::Error;
+use time::{Date, Month, PrimitiveDateTime, Time};
 const OID_AUTHORITY_KEY_IDENTIFIER: &[u8] = &[0x55, 0x1d, 0x23];
 const OID_SUBJECT_KEY_IDENTIFIER: &[u8] = &[0x55, 0x1d, 0x0e];
 const OID_KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x0f];
 const OID_BASIC_CONSTRAINTS: &[u8] = &[0x55, 0x1d, 0x13];
 const OID_EXTENDED_KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x25];
 const OID_CRL_NUMBER: &[u8] = &[0x55, 0x1d, 0x14];
-
 const OID_COUNTRY_NAME: &[u8] = &[0x55, 0x04, 0x06];
 const OID_ORGANIZATION_NAME: &[u8] = &[0x55, 0x04, 0x0a];
 const OID_ORGANIZATIONAL_UNIT_NAME: &[u8] = &[0x55, 0x04, 0x0b];
 const OID_COMMON_NAME: &[u8] = &[0x55, 0x04, 0x03];
-
 const OID_CLIENT_AUTHENTICATION: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02];
-
 const KEY_USAGE_DIGITAL_SIGNATURE: u16 = 1 << 0;
 const KEY_USAGE_CONTENT_COMMITMENT: u16 = 1 << 1;
 const KEY_USAGE_KEY_ENCIPHERMENT: u16 = 1 << 2;
 const KEY_USAGE_KEY_AGREEMENT: u16 = 1 << 4;
 const KEY_USAGE_KEY_CERT_SIGN: u16 = 1 << 5;
 const KEY_USAGE_CRL_SIGN: u16 = 1 << 6;
-
 /// Public governance objects selected by the statement and supplied by state.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ZkX509GovernanceV1<'a> {
@@ -76,7 +69,6 @@ pub(crate) struct ZkX509GovernanceV1<'a> {
     /// Exact active signed-CRL revision.
     pub(crate) crl: &'a PrivacyZkX509CrlRecordV1,
 }
-
 /// Deterministic public projection obtained after a successful relation check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509RelationOutputV1 {
@@ -87,7 +79,6 @@ pub(crate) struct ZkX509RelationOutputV1 {
     /// Challenge digest signed by the certificate subject key.
     pub(crate) ownership_challenge_digest: [u8; 32],
 }
-
 /// Failure of the strict native reference relation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509RelationErrorV1 {
@@ -152,7 +143,6 @@ pub(crate) enum ZkX509RelationErrorV1 {
     #[error("zk-X509 wallet ownership proof failed")]
     InvalidWalletOwnership,
 }
-
 /// Execute the complete strict native relation over one public statement and
 /// private witness.
 ///
@@ -166,20 +156,17 @@ pub(crate) fn validate_reference_relation_v1(
 ) -> Result<ZkX509RelationOutputV1, ZkX509RelationErrorV1> {
     validate_governance_binding_v1(statement, governance)?;
     validate_witness_statement_shape_v1(statement, witness)?;
-
     let mut chain = Vec::with_capacity(witness.certificate_chain_der.len());
     for certificate in &witness.certificate_chain_der {
         chain.push(parse_certificate_v1(certificate)?);
     }
     validate_certificate_path_v1(statement, &chain)?;
-
     let root = chain.last().ok_or(ZkX509RelationErrorV1::WitnessMismatch)?;
     verify_ca_membership_v1(
         *statement.ca_membership_root.as_bytes(),
         root.spki_der,
         &witness.ca_membership_path,
     )?;
-
     let parsed_crl = parse_crl_v1(&witness.crl_der)?;
     validate_complete_crl_v1(
         statement,
@@ -188,7 +175,6 @@ pub(crate) fn validate_reference_relation_v1(
         &parsed_crl,
         &witness.crl_der,
     )?;
-
     let subject_public_key_digest = derive_subject_public_key_digest_v1(statement, &chain)?;
     if subject_public_key_digest != statement.subject_public_key_digest {
         return Err(ZkX509RelationErrorV1::ProjectionMismatch);
@@ -199,21 +185,18 @@ pub(crate) fn validate_reference_relation_v1(
         return Err(ZkX509RelationErrorV1::ProjectionMismatch);
     }
     validate_attribute_projections_v1(statement, &chain[0], witness)?;
-
     let ownership_challenge_digest = derive_ownership_challenge_digest_v1(statement)?;
     verify_p256_prehash_signature_v1(
         chain[0].public_key,
         &ownership_challenge_digest,
         &witness.wallet_ownership_signature_rs,
     )?;
-
     Ok(ZkX509RelationOutputV1 {
         subject_public_key_digest,
         certificate_nullifier,
         ownership_challenge_digest,
     })
 }
-
 fn validate_governance_binding_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     governance: ZkX509GovernanceV1<'_>,
@@ -236,7 +219,6 @@ fn validate_governance_binding_v1(
     {
         return Err(ZkX509RelationErrorV1::InvalidGovernance);
     }
-
     let policy = governance.certificate_policy;
     let crl = governance.crl;
     if statement.trust_anchor_id != governance.trust_anchor.trust_anchor_id
@@ -265,7 +247,6 @@ fn validate_governance_binding_v1(
     }
     Ok(())
 }
-
 fn validate_witness_statement_shape_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     witness: &ZkX509WitnessV1,
@@ -286,7 +267,6 @@ fn validate_witness_statement_shape_v1(
     }
     Ok(())
 }
-
 fn validate_certificate_path_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     chain: &[ParsedCertificateV1<'_>],
@@ -310,7 +290,6 @@ fn validate_certificate_path_v1(
     {
         return Err(ZkX509RelationErrorV1::InvalidCertificatePath);
     }
-
     for index in 1..chain.len() {
         let ca = &chain[index];
         let subordinate_ca_count =
@@ -327,7 +306,6 @@ fn validate_certificate_path_v1(
             return Err(ZkX509RelationErrorV1::InvalidCertificatePath);
         }
     }
-
     for index in 0..chain.len() - 1 {
         let child = &chain[index];
         let parent = &chain[index + 1];
@@ -338,7 +316,6 @@ fn validate_certificate_path_v1(
         }
         verify_p256_sha256_signature_v1(parent.public_key, child.tbs_der, child.signature_der)?;
     }
-
     let root = chain
         .last()
         .ok_or(ZkX509RelationErrorV1::InvalidCertificatePath)?;
@@ -350,7 +327,6 @@ fn validate_certificate_path_v1(
     verify_p256_sha256_signature_v1(root.public_key, root.tbs_der, root.signature_der)?;
     Ok(())
 }
-
 fn leaf_key_usage_flags_v1(key_usage: PrivacyX509KeyUsageV1) -> u16 {
     let mut flags = 0_u16;
     if key_usage.digital_signature.is_required() {
@@ -367,7 +343,6 @@ fn leaf_key_usage_flags_v1(key_usage: PrivacyX509KeyUsageV1) -> u16 {
     }
     flags
 }
-
 fn validate_complete_crl_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     governed_crl: &PrivacyZkX509CrlRecordV1,
@@ -401,7 +376,6 @@ fn validate_complete_crl_v1(
     }
     verify_p256_sha256_signature_v1(issuer.public_key, crl.tbs_der, crl.signature_der)
         .map_err(|_| ZkX509RelationErrorV1::InvalidCrl)?;
-
     if crl
         .revoked_serials
         .iter()
@@ -411,7 +385,6 @@ fn validate_complete_crl_v1(
     }
     Ok(())
 }
-
 fn derive_subject_public_key_digest_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     chain: &[ParsedCertificateV1<'_>],
@@ -435,7 +408,6 @@ fn derive_subject_public_key_digest_v1(
         &fields,
     )?))
 }
-
 fn derive_certificate_nullifier_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     issuer_spki_der: &[u8],
@@ -452,7 +424,6 @@ fn derive_certificate_nullifier_v1(
         ],
     )?))
 }
-
 fn validate_attribute_projections_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     leaf: &ParsedCertificateV1<'_>,
@@ -489,7 +460,6 @@ fn validate_attribute_projections_v1(
     }
     Ok(())
 }
-
 fn derive_ownership_challenge_digest_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<[u8; 32], ZkX509RelationErrorV1> {
@@ -512,19 +482,16 @@ fn derive_ownership_challenge_digest_v1(
         ],
     )?)
 }
-
 #[derive(Clone, Copy)]
 struct ParsedNameV1<'a> {
     encoded: &'a [u8],
     attributes: [Option<&'a [u8]>; 4],
 }
-
 #[derive(Clone, Copy)]
 struct BasicConstraintsV1 {
     ca: bool,
     path_len: Option<u32>,
 }
-
 #[derive(Clone)]
 struct CertificateExtensionsV1<'a> {
     authority_key_identifier: &'a [u8],
@@ -533,7 +500,6 @@ struct CertificateExtensionsV1<'a> {
     key_usage: u16,
     extended_key_usages: Option<Vec<PrivacyX509ExtendedKeyUsageV1>>,
 }
-
 #[derive(Clone)]
 struct ParsedCertificateV1<'a> {
     tbs_der: &'a [u8],
@@ -547,7 +513,6 @@ struct ParsedCertificateV1<'a> {
     signature_der: &'a [u8],
     extensions: CertificateExtensionsV1<'a>,
 }
-
 fn parse_certificate_v1(der: &[u8]) -> Result<ParsedCertificateV1<'_>, ZkX509RelationErrorV1> {
     let limits = ZkX509DerLimitsV1::profile();
     let certificate =
@@ -564,7 +529,6 @@ fn parse_certificate_v1(der: &[u8]) -> Result<ParsedCertificateV1<'_>, ZkX509Rel
         return Err(ZkX509RelationErrorV1::InvalidCertificateStructure);
     }
     validate_ecdsa_signature_der_v1(signature_value.bytes())?;
-
     let mut fields = tbs.children(limits)?;
     let version = fields.read_value()?;
     if version.tag() != context_tag_v1(0, true) || version.contents() != [0x02, 0x01, 0x02] {
@@ -595,7 +559,6 @@ fn parse_certificate_v1(der: &[u8]) -> Result<ParsedCertificateV1<'_>, ZkX509Rel
         return Err(ZkX509RelationErrorV1::InvalidCertificateStructure);
     }
     let extensions = parse_certificate_extensions_v1(extension_wrapper.contents())?;
-
     Ok(ParsedCertificateV1 {
         tbs_der: tbs.encoded(),
         serial,
@@ -609,7 +572,6 @@ fn parse_certificate_v1(der: &[u8]) -> Result<ParsedCertificateV1<'_>, ZkX509Rel
         extensions,
     })
 }
-
 fn parse_spki_v1(spki: ZkX509DerValueV1<'_>) -> Result<(&[u8], &[u8]), ZkX509RelationErrorV1> {
     let limits = ZkX509DerLimitsV1::profile();
     let mut fields = spki.children(limits)?;
@@ -629,7 +591,6 @@ fn parse_spki_v1(spki: ZkX509DerValueV1<'_>) -> Result<(&[u8], &[u8]), ZkX509Rel
     }
     Ok((spki.encoded(), key.bytes()))
 }
-
 fn parse_validity_v1(validity: ZkX509DerValueV1<'_>) -> Result<(u64, u64), ZkX509RelationErrorV1> {
     let mut fields = validity.children(ZkX509DerLimitsV1::profile())?;
     let not_before = parse_time_v1(fields.read_value()?)?;
@@ -639,7 +600,6 @@ fn parse_validity_v1(validity: ZkX509DerValueV1<'_>) -> Result<(u64, u64), ZkX50
     }
     Ok((not_before, not_after))
 }
-
 fn parse_time_v1(value: ZkX509DerValueV1<'_>) -> Result<u64, ZkX509RelationErrorV1> {
     let (year, offset) = match value.tag() {
         tag if tag == universal_primitive_tag_v1(23) => {
@@ -692,7 +652,6 @@ fn parse_time_v1(value: ZkX509DerValueV1<'_>) -> Result<u64, ZkX509RelationError
     )
     .map_err(|_| ZkX509RelationErrorV1::InvalidTime)
 }
-
 fn parse_decimal_v1(bytes: &[u8]) -> Result<u16, ZkX509RelationErrorV1> {
     let mut value = 0_u16;
     for byte in bytes {
@@ -706,7 +665,6 @@ fn parse_decimal_v1(bytes: &[u8]) -> Result<u16, ZkX509RelationErrorV1> {
     }
     Ok(value)
 }
-
 fn parse_name_v1(name: ZkX509DerValueV1<'_>) -> Result<ParsedNameV1<'_>, ZkX509RelationErrorV1> {
     let limits = ZkX509DerLimitsV1::profile();
     let mut rdns = name.children(limits)?;
@@ -750,7 +708,6 @@ fn parse_name_v1(name: ZkX509DerValueV1<'_>) -> Result<ParsedNameV1<'_>, ZkX509R
         attributes,
     })
 }
-
 fn validate_directory_string_v1(
     index: usize,
     value: ZkX509DerValueV1<'_>,
@@ -809,7 +766,6 @@ fn validate_directory_string_v1(
     }
     Ok(())
 }
-
 fn context_tag_v1(number: u32, constructed: bool) -> ZkX509DerTagV1 {
     ZkX509DerTagV1 {
         class: ZkX509DerClassV1::ContextSpecific,
@@ -817,7 +773,6 @@ fn context_tag_v1(number: u32, constructed: bool) -> ZkX509DerTagV1 {
         number,
     }
 }
-
 fn universal_primitive_tag_v1(number: u32) -> ZkX509DerTagV1 {
     ZkX509DerTagV1 {
         class: ZkX509DerClassV1::Universal,
@@ -825,7 +780,6 @@ fn universal_primitive_tag_v1(number: u32) -> ZkX509DerTagV1 {
         number,
     }
 }
-
 fn parse_certificate_extensions_v1(
     explicit_contents: &[u8],
 ) -> Result<CertificateExtensionsV1<'_>, ZkX509RelationErrorV1> {
@@ -836,7 +790,6 @@ fn parse_certificate_extensions_v1(
     if extensions.is_empty() {
         return Err(ZkX509RelationErrorV1::InvalidExtensions);
     }
-
     let mut authority_key_identifier = None;
     let mut subject_key_identifier = None;
     let mut basic_constraints = None;
@@ -862,7 +815,6 @@ fn parse_certificate_extensions_v1(
             return Err(ZkX509RelationErrorV1::InvalidExtensions);
         }
         previous_rank = Some(rank);
-
         if rank == 0 {
             if critical || authority_key_identifier.is_some() {
                 return Err(ZkX509RelationErrorV1::InvalidExtensions);
@@ -890,7 +842,6 @@ fn parse_certificate_extensions_v1(
             extended_key_usages = Some(parse_extended_key_usages_v1(value)?);
         }
     }
-
     Ok(CertificateExtensionsV1 {
         authority_key_identifier: authority_key_identifier
             .ok_or(ZkX509RelationErrorV1::InvalidExtensions)?,
@@ -901,7 +852,6 @@ fn parse_certificate_extensions_v1(
         extended_key_usages,
     })
 }
-
 fn parse_extension_v1(
     extension: ZkX509DerValueV1<'_>,
 ) -> Result<(&[u8], bool, &[u8]), ZkX509RelationErrorV1> {
@@ -935,7 +885,6 @@ fn parse_extension_v1(
     }
     Ok((oid, critical, value))
 }
-
 fn parse_authority_key_identifier_v1(encoded: &[u8]) -> Result<&[u8], ZkX509RelationErrorV1> {
     let limits = ZkX509DerLimitsV1::profile();
     let sequence =
@@ -951,7 +900,6 @@ fn parse_authority_key_identifier_v1(encoded: &[u8]) -> Result<&[u8], ZkX509Rela
     }
     Ok(key_identifier.contents())
 }
-
 fn parse_subject_key_identifier_v1(encoded: &[u8]) -> Result<&[u8], ZkX509RelationErrorV1> {
     let identifier = parse_single_der_value_v1(encoded, ZkX509DerLimitsV1::profile())?
         .require_tag(ZkX509DerTagV1::OCTET_STRING)?;
@@ -960,7 +908,6 @@ fn parse_subject_key_identifier_v1(encoded: &[u8]) -> Result<&[u8], ZkX509Relati
     }
     Ok(identifier.contents())
 }
-
 fn parse_basic_constraints_v1(encoded: &[u8]) -> Result<BasicConstraintsV1, ZkX509RelationErrorV1> {
     let limits = ZkX509DerLimitsV1::profile();
     let sequence =
@@ -988,7 +935,6 @@ fn parse_basic_constraints_v1(encoded: &[u8]) -> Result<BasicConstraintsV1, ZkX5
     }
     Ok(BasicConstraintsV1 { ca: true, path_len })
 }
-
 fn parse_key_usage_v1(encoded: &[u8]) -> Result<u16, ZkX509RelationErrorV1> {
     let bit_string =
         parse_single_der_value_v1(encoded, ZkX509DerLimitsV1::profile())?.as_bit_string()?;
@@ -1014,7 +960,6 @@ fn parse_key_usage_v1(encoded: &[u8]) -> Result<u16, ZkX509RelationErrorV1> {
     }
     Ok(flags)
 }
-
 fn parse_extended_key_usages_v1(
     encoded: &[u8],
 ) -> Result<Vec<PrivacyX509ExtendedKeyUsageV1>, ZkX509RelationErrorV1> {
@@ -1048,7 +993,6 @@ fn parse_extended_key_usages_v1(
     }
     Ok(usages)
 }
-
 fn parse_nonnegative_integer_v1(
     value: ZkX509DerValueV1<'_>,
     max_bytes: usize,
@@ -1074,7 +1018,6 @@ fn parse_nonnegative_integer_v1(
     }
     Ok(result)
 }
-
 fn validate_ecdsa_signature_der_v1(
     signature_der: &[u8],
 ) -> Result<P256Signature, ZkX509RelationErrorV1> {
@@ -1090,7 +1033,6 @@ fn validate_ecdsa_signature_der_v1(
     P256Signature::from_der(signature_der)
         .map_err(|_| ZkX509RelationErrorV1::InvalidSignatureEncoding)
 }
-
 fn verify_p256_sha256_signature_v1(
     public_key: &[u8],
     message: &[u8],
@@ -1106,7 +1048,6 @@ fn verify_p256_sha256_signature_v1(
     key.verify(message, &signature)
         .map_err(|_| ZkX509RelationErrorV1::InvalidCertificateSignature)
 }
-
 fn verify_p256_prehash_signature_v1(
     public_key: &[u8],
     message_digest: &[u8; 32],
@@ -1122,7 +1063,6 @@ fn verify_p256_prehash_signature_v1(
     key.verify_prehash(message_digest, &signature)
         .map_err(|_| ZkX509RelationErrorV1::InvalidWalletOwnership)
 }
-
 struct ParsedCrlV1<'a> {
     tbs_der: &'a [u8],
     issuer: ParsedNameV1<'a>,
@@ -1133,7 +1073,6 @@ struct ParsedCrlV1<'a> {
     crl_number: u64,
     signature_der: &'a [u8],
 }
-
 fn parse_crl_v1(der: &[u8]) -> Result<ParsedCrlV1<'_>, ZkX509RelationErrorV1> {
     let limits = ZkX509DerLimitsV1::profile();
     let crl = parse_single_der_value_v1(der, limits)?.require_tag(ZkX509DerTagV1::SEQUENCE)?;
@@ -1149,7 +1088,6 @@ fn parse_crl_v1(der: &[u8]) -> Result<ParsedCrlV1<'_>, ZkX509RelationErrorV1> {
         return Err(ZkX509RelationErrorV1::InvalidCrl);
     }
     validate_ecdsa_signature_der_v1(signature.bytes())?;
-
     let mut fields = tbs.children(limits)?;
     let version = fields.read_value()?.as_integer()?;
     if version.contents() != [1] {
@@ -1166,7 +1104,6 @@ fn parse_crl_v1(der: &[u8]) -> Result<ParsedCrlV1<'_>, ZkX509RelationErrorV1> {
     if next_update <= this_update {
         return Err(ZkX509RelationErrorV1::InvalidCrl);
     }
-
     let entries_or_extensions = fields.read_value()?;
     let (revoked_serials, extension_wrapper) =
         if entries_or_extensions.tag() == ZkX509DerTagV1::SEQUENCE {
@@ -1181,7 +1118,6 @@ fn parse_crl_v1(der: &[u8]) -> Result<ParsedCrlV1<'_>, ZkX509RelationErrorV1> {
     }
     let (authority_key_identifier, crl_number) =
         parse_crl_extensions_v1(extension_wrapper.contents())?;
-
     Ok(ParsedCrlV1 {
         tbs_der: tbs.encoded(),
         issuer,
@@ -1193,7 +1129,6 @@ fn parse_crl_v1(der: &[u8]) -> Result<ParsedCrlV1<'_>, ZkX509RelationErrorV1> {
         signature_der: signature.bytes(),
     })
 }
-
 /// Owned native-reference projection used only for AIR differential tests.
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1231,7 +1166,6 @@ pub(crate) struct ZkX509NativeCertificateProjectionV1 {
     /// Ordered closed-profile EKU codes, present only for a leaf.
     pub(crate) extended_key_usages: Option<Vec<u8>>,
 }
-
 /// Owned CRL native-reference projection used only for AIR differential tests.
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1253,7 +1187,6 @@ pub(crate) struct ZkX509NativeCrlProjectionV1 {
     /// Exact DER ECDSA signature encoding.
     pub(crate) signature_der: Vec<u8>,
 }
-
 #[cfg(test)]
 fn eku_code_v1(value: PrivacyX509ExtendedKeyUsageV1) -> u8 {
     match value {
@@ -1262,7 +1195,6 @@ fn eku_code_v1(value: PrivacyX509ExtendedKeyUsageV1) -> u8 {
         PrivacyX509ExtendedKeyUsageV1::WalletIdentity => 2,
     }
 }
-
 /// Parse exact private DER through the native reference without invoking any
 /// AIR code.  This remains test-only so prover/verifier paths cannot delegate
 /// constraints to the oracle.
@@ -1325,7 +1257,6 @@ pub(crate) fn parse_native_der_projection_for_air_test_v1(
     };
     Ok((certificates, crl))
 }
-
 fn parse_revoked_certificates_v1(
     sequence: ZkX509DerValueV1<'_>,
     this_update: u64,
@@ -1369,7 +1300,6 @@ fn parse_revoked_certificates_v1(
     }
     Ok(serials)
 }
-
 fn parse_crl_extensions_v1(
     explicit_contents: &[u8],
 ) -> Result<(&[u8], u64), ZkX509RelationErrorV1> {
@@ -1414,12 +1344,16 @@ fn parse_crl_extensions_v1(
         crl_number.ok_or(ZkX509RelationErrorV1::InvalidCrl)?,
     ))
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) mod release_fixture;
-
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::*;
+    use crate::privacy_engines::zk_x509::{
+        codec::ZkX509AttributeOpeningV1,
+        der_air::{ZkX509DerEkuV1, ZkX509Rfc5280StatementV1, build_zk_x509_rfc5280_trace_v1},
+        merkle::{ca_membership_path_from_complete_spkis_v1, ca_root_from_complete_spkis_v1},
+    };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId,
@@ -1441,18 +1375,9 @@ pub(crate) mod tests {
         },
         elliptic_curve::PrimeField as _,
     };
-
-    use super::*;
-    use crate::privacy_engines::zk_x509::{
-        codec::ZkX509AttributeOpeningV1,
-        der_air::{ZkX509DerEkuV1, ZkX509Rfc5280StatementV1, build_zk_x509_rfc5280_trace_v1},
-        merkle::{ca_membership_path_from_complete_spkis_v1, ca_root_from_complete_spkis_v1},
-    };
-
     const CRL_THIS_UPDATE: u64 = 1_672_531_200; // 2023-01-01T00:00:00Z
     const CRL_NEXT_UPDATE: u64 = CRL_THIS_UPDATE + 300;
     const VALIDATION_TIME: u64 = CRL_THIS_UPDATE + 60;
-
     pub(crate) struct Fixture {
         pub(crate) statement: IrohaZkX509StarkP256StatementV1,
         pub(crate) trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
@@ -1460,7 +1385,6 @@ pub(crate) mod tests {
         pub(crate) crl: PrivacyZkX509CrlRecordV1,
         pub(crate) witness: ZkX509WitnessV1,
     }
-
     impl Fixture {
         pub(crate) fn governance(&self) -> ZkX509GovernanceV1<'_> {
             ZkX509GovernanceV1 {
@@ -1470,7 +1394,6 @@ pub(crate) mod tests {
             }
         }
     }
-
     #[test]
     fn strict_reference_relation_accepts_deterministic_known_answer_fixture() {
         let fixture = fixture();
@@ -1490,7 +1413,6 @@ pub(crate) mod tests {
         );
         assert_ne!(output.ownership_challenge_digest, [0; 32]);
     }
-
     #[test]
     fn native_reference_and_der_air_produce_identical_rfc5280_outputs() {
         let fixture = fixture_with_revoked_serials(&[9, 300]);
@@ -1582,39 +1504,33 @@ pub(crate) mod tests {
         assert_eq!(native_crl.crl_number, air.crl.crl_number);
         assert_eq!(native_crl.signature_der, air.crl.signature.encoded);
     }
-
     #[test]
     fn relation_binds_every_governed_revision_and_public_projection() {
         let fixture = fixture();
-
         let mut changed = fixture.statement.clone();
         changed.trust_anchor_record_epoch += 1;
         assert_eq!(
             validate_reference_relation_v1(&changed, fixture.governance(), &fixture.witness),
             Err(ZkX509RelationErrorV1::StatementMismatch)
         );
-
         let mut changed = fixture.statement.clone();
         changed.crl_record_digest.0[0] ^= 1;
         assert_eq!(
             validate_reference_relation_v1(&changed, fixture.governance(), &fixture.witness),
             Err(ZkX509RelationErrorV1::StatementMismatch)
         );
-
         let mut changed = fixture.statement.clone();
         changed.subject_public_key_digest.0[0] ^= 1;
         assert_eq!(
             validate_reference_relation_v1(&changed, fixture.governance(), &fixture.witness),
             Err(ZkX509RelationErrorV1::ProjectionMismatch)
         );
-
         let mut changed = fixture.statement.clone();
         changed.certificate_nullifier.0[0] ^= 1;
         assert_eq!(
             validate_reference_relation_v1(&changed, fixture.governance(), &fixture.witness),
             Err(ZkX509RelationErrorV1::ProjectionMismatch)
         );
-
         let mut changed = fixture.statement.clone();
         changed.disclosed_attributes[0].attribute_digest.0[0] ^= 1;
         assert_eq!(
@@ -1622,11 +1538,9 @@ pub(crate) mod tests {
             Err(ZkX509RelationErrorV1::ProjectionMismatch)
         );
     }
-
     #[test]
     fn relation_rejects_certificate_crl_path_and_ownership_mutations() {
         let fixture = fixture();
-
         let mut changed = fixture.witness.clone();
         let leaf_last = changed.certificate_chain_der[0].len() - 1;
         changed.certificate_chain_der[0][leaf_last] ^= 1;
@@ -1636,7 +1550,6 @@ pub(crate) mod tests {
                 | ZkX509RelationErrorV1::InvalidSignatureEncoding
                 | ZkX509RelationErrorV1::Der(_))
         ));
-
         let mut changed = fixture.witness.clone();
         let crl_last = changed.crl_der.len() - 1;
         changed.crl_der[crl_last] ^= 1;
@@ -1646,7 +1559,6 @@ pub(crate) mod tests {
                 | ZkX509RelationErrorV1::InvalidSignatureEncoding
                 | ZkX509RelationErrorV1::Der(_))
         ));
-
         let mut changed = fixture.witness.clone();
         changed
             .ca_membership_path
@@ -1659,7 +1571,6 @@ pub(crate) mod tests {
                 ZkX509MerkleErrorV1::RootMismatch
             ))
         ));
-
         let mut changed = fixture.witness.clone();
         changed.wallet_ownership_signature_rs[8] ^= 1;
         assert!(matches!(
@@ -1669,7 +1580,6 @@ pub(crate) mod tests {
                 | ZkX509RelationErrorV1::Der(_))
         ));
     }
-
     #[test]
     fn strict_times_cover_leap_days_boundaries_and_malformed_encodings() {
         assert_eq!(
@@ -1678,7 +1588,6 @@ pub(crate) mod tests {
         );
         assert!(parse_time_v1(der_value(&tlv(0x17, b"490101000000Z"))).is_ok());
         assert!(parse_time_v1(der_value(&tlv(0x18, b"20500101000000Z"))).is_ok());
-
         for malformed in [
             tlv(0x17, b"690101000000Z"),
             tlv(0x17, b"000230000000Z"),
@@ -1693,7 +1602,6 @@ pub(crate) mod tests {
             );
         }
     }
-
     #[test]
     fn distinguished_names_use_a_version_independent_closed_string_profile() {
         let unicode = name(&[
@@ -1701,7 +1609,6 @@ pub(crate) mod tests {
             (OID_COMMON_NAME, 0x0c, "Alice \u{1f512}".as_bytes()),
         ]);
         parse_name_v1(der_value(&unicode)).expect("well-formed non-control UTF-8");
-
         for invalid in [
             name(&[(OID_COMMON_NAME, 0x0c, "Alice\u{0085}".as_bytes())]),
             name(&[(OID_COMMON_NAME, 0x0c, &[0xc0, 0x80])]),
@@ -1718,7 +1625,6 @@ pub(crate) mod tests {
             );
         }
     }
-
     #[test]
     fn extension_defaults_order_duplicates_and_named_bits_fail_closed() {
         let aki = extension(OID_AUTHORITY_KEY_IDENTIFIER, false, &aki_inner(&[1; 20]));
@@ -1732,7 +1638,6 @@ pub(crate) mod tests {
         );
         let valid = sequence(&[aki.clone(), ski.clone(), key_usage, basic_constraints, eku]);
         parse_certificate_extensions_v1(&valid).expect("canonical extensions");
-
         let reordered = sequence(&[
             ski.clone(),
             aki.clone(),
@@ -1748,13 +1653,11 @@ pub(crate) mod tests {
             parse_certificate_extensions_v1(&reordered).map(|_| ()),
             Err(ZkX509RelationErrorV1::InvalidExtensions)
         );
-
         let duplicate = sequence(&[aki.clone(), aki]);
         assert_eq!(
             parse_certificate_extensions_v1(&duplicate).map(|_| ()),
             Err(ZkX509RelationErrorV1::InvalidExtensions)
         );
-
         let explicit_false = sequence(&[
             object_identifier(OID_AUTHORITY_KEY_IDENTIFIER),
             tlv(0x01, &[0]),
@@ -1764,13 +1667,11 @@ pub(crate) mod tests {
             parse_extension_v1(der_value(&explicit_false)),
             Err(ZkX509RelationErrorV1::InvalidExtensions)
         );
-
         assert_eq!(
             parse_key_usage_v1(&bit_string(&[0x80, 0], 0)),
             Err(ZkX509RelationErrorV1::InvalidExtensions)
         );
     }
-
     #[test]
     fn wallet_ownership_rejects_mathematically_valid_high_s_malleation() {
         let fixture = fixture();
@@ -1788,7 +1689,6 @@ pub(crate) mod tests {
             Err(ZkX509RelationErrorV1::InvalidWalletOwnership)
         );
     }
-
     #[test]
     fn rfc5280_signatures_accept_the_mathematically_equivalent_high_s_form() {
         let key = p256_key(9);
@@ -1806,14 +1706,12 @@ pub(crate) mod tests {
         )
         .expect("RFC 5280 accepts either valid s half");
     }
-
     #[test]
     fn p256_signature_and_public_key_encodings_reject_adversarial_boundaries() {
         let key = p256_key(9);
         let signature: P256Signature = key.sign(b"strict P-256 encoding");
         validate_ecdsa_signature_der_v1(signature.to_der().as_bytes())
             .expect("canonical signature");
-
         const P256_ORDER: [u8; 32] = [
             0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2,
@@ -1833,7 +1731,6 @@ pub(crate) mod tests {
                 "malformed P-256 signature was accepted"
             );
         }
-
         let compressed = key.verifying_key().to_encoded_point(true);
         let compressed_spki = sequence(&[
             ZK_X509_P256_PUBLIC_KEY_ALGORITHM_IDENTIFIER_DER_V1.to_vec(),
@@ -1843,7 +1740,6 @@ pub(crate) mod tests {
             parse_spki_v1(der_value(&compressed_spki)),
             Err(ZkX509RelationErrorV1::InvalidPublicKey)
         );
-
         let mut off_curve = [0_u8; ZK_X509_UNCOMPRESSED_P256_BYTES_V1];
         off_curve[0] = 0x04;
         let off_curve_spki = sequence(&[
@@ -1855,13 +1751,11 @@ pub(crate) mod tests {
             Err(ZkX509RelationErrorV1::InvalidPublicKey)
         );
     }
-
     #[test]
     fn complete_nonempty_crl_is_bound_by_exact_der_and_omission_fails_closed() {
         let fixture = fixture_with_revoked_serials(&[9, 300, 65_537]);
         validate_reference_relation_v1(&fixture.statement, fixture.governance(), &fixture.witness)
             .expect("complete nonempty CRL");
-
         let mut omitted = fixture.witness.clone();
         omitted.crl_der = crl(
             &name(&[(OID_COMMON_NAME, 0x0c, b"Iroha Test Root")]),
@@ -1875,7 +1769,6 @@ pub(crate) mod tests {
             Err(ZkX509RelationErrorV1::InvalidCrl)
         );
     }
-
     #[test]
     fn complete_crl_rejects_duplicates_permutations_and_revoked_leaf() {
         let duplicate_der = crl(
@@ -1889,7 +1782,6 @@ pub(crate) mod tests {
             parse_crl_v1(&duplicate_der).map(|_| ()),
             Err(ZkX509RelationErrorV1::InvalidCrl)
         );
-
         let descending_der = crl(
             &name(&[(OID_COMMON_NAME, 0x0c, b"Iroha Test Root")]),
             &p256_key(1),
@@ -1901,7 +1793,6 @@ pub(crate) mod tests {
             parse_crl_v1(&descending_der).map(|_| ()),
             Err(ZkX509RelationErrorV1::InvalidCrl)
         );
-
         let revoked = fixture_with_revoked_serials(&[2, 9]);
         assert_eq!(
             validate_reference_relation_v1(
@@ -1912,7 +1803,6 @@ pub(crate) mod tests {
             Err(ZkX509RelationErrorV1::CertificateRevoked)
         );
     }
-
     #[test]
     fn complete_crl_entry_count_and_revocation_times_are_bounded() {
         let issuer = name(&[(OID_COMMON_NAME, 0x0c, b"Iroha Test Root")]);
@@ -1923,7 +1813,6 @@ pub(crate) mod tests {
             parse_crl_v1(&oversized).map(|_| ()),
             Err(ZkX509RelationErrorV1::InvalidCrl)
         );
-
         let mut future_revocation = crl(&issuer, &issuer_key, &[0x31; 20], 7, &[9]);
         let offset = future_revocation
             .windows(b"221231000000Z".len())
@@ -1936,7 +1825,6 @@ pub(crate) mod tests {
             Err(ZkX509RelationErrorV1::InvalidCrl)
         );
     }
-
     #[test]
     fn canonical_certificate_and_crl_documents_reject_every_truncation() {
         let fixture = fixture_with_revoked_serials(&[9, 300]);
@@ -1955,7 +1843,6 @@ pub(crate) mod tests {
             );
         }
     }
-
     #[test]
     fn disclosed_name_projection_hashes_content_not_der_tag_or_length() {
         let fixture = fixture();
@@ -2000,14 +1887,12 @@ pub(crate) mod tests {
             content_digest
         );
         assert_ne!(content_digest, encoded_digest);
-
         let boundary = vec![b'A'; ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1];
         let boundary_name = name(&[(OID_COMMON_NAME, 0x0c, &boundary)]);
         let parsed = parse_name_v1(der_value(&boundary_name)).expect("256-byte DirectoryString");
         assert_eq!(parsed.attributes[3], Some(boundary.as_slice()));
         assert_eq!(tlv(0x0c, &boundary).len(), 260);
     }
-
     #[test]
     fn relation_rejects_a_one_bit_mutation_at_every_private_der_byte() {
         let fixture = fixture_with_revoked_serials(&[9, 300]);
@@ -2036,11 +1921,9 @@ pub(crate) mod tests {
             );
         }
     }
-
     pub(crate) fn fixture() -> Fixture {
         fixture_with_revoked_serials(&[])
     }
-
     fn fixture_with_revoked_serials(revoked_serials: &[u64]) -> Fixture {
         let root_key = p256_key(1);
         let leaf_key = p256_key(2);
@@ -2059,13 +1942,11 @@ pub(crate) mod tests {
             2, &root_name, &leaf_name, &leaf_key, &root_key, &leaf_ski, &root_ski, false,
         );
         let crl_der = crl(&root_name, &root_key, &root_ski, 7, revoked_serials);
-
         let parsed_leaf = parse_certificate_v1(&leaf_der).expect("leaf");
         let parsed_root = parse_certificate_v1(&root_der).expect("root");
         let parsed_chain = vec![parsed_leaf, parsed_root];
         let parsed_crl = parse_crl_v1(&crl_der).expect("CRL");
         assert_eq!(parsed_crl.revoked_serials.len(), revoked_serials.len());
-
         let governed_spkis = [parsed_chain[1].spki_der];
         let ca_membership_path =
             ca_membership_path_from_complete_spkis_v1(&governed_spkis, parsed_chain[1].spki_der)
@@ -2115,7 +1996,6 @@ pub(crate) mod tests {
             PrivacyZkX509RecordLifecycleV1::Active,
         )
         .expect("CRL record");
-
         let wallet_key_pair =
             KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519).expect("wallet fixture key");
         let mut statement = IrohaZkX509StarkP256StatementV1 {
@@ -2190,7 +2070,6 @@ pub(crate) mod tests {
             .normalize_s()
             .unwrap_or(ownership_signature);
         assert!(ownership_signature.normalize_s().is_none());
-
         Fixture {
             statement,
             trust_anchor,
@@ -2205,13 +2084,11 @@ pub(crate) mod tests {
             },
         }
     }
-
     fn p256_key(seed: u8) -> P256SigningKey {
         let mut bytes = [0_u8; 32];
         bytes[31] = seed;
         P256SigningKey::from_slice(&bytes).expect("nonzero fixture key")
     }
-
     #[allow(clippy::too_many_arguments)]
     fn certificate(
         serial: u64,
@@ -2272,7 +2149,6 @@ pub(crate) mod tests {
             bit_string(signature.to_der().as_bytes(), 0),
         ])
     }
-
     fn crl(
         issuer: &[u8],
         issuer_key: &P256SigningKey,
@@ -2312,7 +2188,6 @@ pub(crate) mod tests {
             bit_string(signature.to_der().as_bytes(), 0),
         ])
     }
-
     fn spki(key: &P256SigningKey) -> Vec<u8> {
         let point = key.verifying_key().to_encoded_point(false);
         sequence(&[
@@ -2320,7 +2195,6 @@ pub(crate) mod tests {
             bit_string(point.as_bytes(), 0),
         ])
     }
-
     fn name(attributes: &[(&[u8], u8, &[u8])]) -> Vec<u8> {
         sequence(
             &attributes
@@ -2331,7 +2205,6 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>(),
         )
     }
-
     fn extension(oid: &[u8], critical: bool, inner: &[u8]) -> Vec<u8> {
         let mut fields = vec![object_identifier(oid)];
         if critical {
@@ -2340,26 +2213,21 @@ pub(crate) mod tests {
         fields.push(octet_string(inner));
         sequence(&fields)
     }
-
     fn aki_inner(identifier: &[u8]) -> Vec<u8> {
         sequence(&[tlv(0x80, identifier)])
     }
-
     fn object_identifier(contents: &[u8]) -> Vec<u8> {
         tlv(0x06, contents)
     }
-
     fn octet_string(contents: &[u8]) -> Vec<u8> {
         tlv(0x04, contents)
     }
-
     fn bit_string(bytes: &[u8], unused_bits: u8) -> Vec<u8> {
         let mut contents = Vec::with_capacity(bytes.len() + 1);
         contents.push(unused_bits);
         contents.extend_from_slice(bytes);
         tlv(0x03, &contents)
     }
-
     fn integer(value: u64) -> Vec<u8> {
         if value == 0 {
             return tlv(0x02, &[0]);
@@ -2375,12 +2243,10 @@ pub(crate) mod tests {
         }
         tlv(0x02, &magnitude)
     }
-
     fn sequence(values: &[Vec<u8>]) -> Vec<u8> {
         let contents = values.concat();
         tlv(0x30, &contents)
     }
-
     fn tlv(tag: u8, contents: &[u8]) -> Vec<u8> {
         let mut encoded = vec![tag];
         if contents.len() < 128 {
@@ -2398,7 +2264,6 @@ pub(crate) mod tests {
         encoded.extend_from_slice(contents);
         encoded
     }
-
     fn der_value(encoded: &[u8]) -> ZkX509DerValueV1<'_> {
         parse_single_der_value_v1(encoded, ZkX509DerLimitsV1::profile()).expect("test DER")
     }

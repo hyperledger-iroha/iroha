@@ -1,5 +1,9 @@
 //! Generate per-client Iroha CLI configs from a base client.toml.
-
+use crate::{Outcome, RunArgs, tui};
+use clap::Args as ClapArgs;
+use color_eyre::eyre::{Result, WrapErr as _, eyre};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
+use iroha_data_model::NetworkId;
 use std::{
     collections::BTreeSet,
     fmt::Write as _,
@@ -7,18 +11,9 @@ use std::{
     io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
-
-use clap::Args as ClapArgs;
-use color_eyre::eyre::{Result, WrapErr as _, eyre};
-use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
-use iroha_data_model::NetworkId;
 use zeroize::Zeroizing;
-
-use crate::{Outcome, RunArgs, tui};
-
 const DEFAULT_TTL_MS: u64 = 120_000;
 const DEFAULT_STATUS_TIMEOUT_MS: u64 = 120_000;
-
 #[derive(Debug, Clone)]
 struct BaseConfig {
     chain: String,
@@ -26,13 +21,11 @@ struct BaseConfig {
     torii_url: String,
     basic_auth: Option<BasicAuth>,
 }
-
 #[derive(Debug, Clone)]
 struct BasicAuth {
     web_login: String,
     password: String,
 }
-
 /// Generate per-client CLI configs from a base client.toml.
 #[derive(ClapArgs, Debug, Clone)]
 pub struct Args {
@@ -55,7 +48,6 @@ pub struct Args {
     #[arg(long, value_delimiter = ',', required = true, value_name = "NAME")]
     names: Vec<String>,
 }
-
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         let base = load_base_config(&self.base_config)?;
@@ -70,13 +62,11 @@ impl<T: Write> RunArgs<T> for Args {
             .transpose()?;
         crate::secure_fs::prepare_empty_private_directory(&out_dir)
             .wrap_err("prepare client-config private output directory")?;
-
         tui::status(format!(
             "Generating {} client configs in {}",
             names.len(),
             out_dir.display()
         ));
-
         for name in names {
             let key_pair = if let Some(master_seed) = master_seed.as_ref() {
                 derive_client_key_pair(master_seed.as_slice(), &name)?
@@ -90,12 +80,10 @@ impl<T: Write> RunArgs<T> for Args {
                 .wrap_err_with(|| format!("failed to write {}", path.display()))?;
             writeln!(writer, "wrote {}", path.display())?;
         }
-
         tui::success("Client configs ready");
         Ok(())
     }
 }
-
 fn derive_client_key_pair(master_seed: &[u8], name: &str) -> Result<KeyPair> {
     if master_seed.len() != 32 {
         return Err(eyre!("client-config master seed must be exactly 32 bytes"));
@@ -113,13 +101,11 @@ fn derive_client_key_pair(master_seed: &[u8], name: &str) -> Result<KeyPair> {
     KeyPair::try_from_seed(std::mem::take(&mut *seed_material), Algorithm::Ed25519)
         .wrap_err_with(|| format!("failed to derive key pair for client `{name}`"))
 }
-
 fn load_base_config(path: &Path) -> Result<BaseConfig> {
     let raw =
         fs::read_to_string(path).wrap_err_with(|| format!("failed to read {}", path.display()))?;
     let value: toml::Value =
         toml::from_str(&raw).wrap_err_with(|| format!("invalid TOML in {}", path.display()))?;
-
     let chain = value
         .get("chain")
         .and_then(toml::Value::as_str)
@@ -136,7 +122,6 @@ fn load_base_config(path: &Path) -> Result<BaseConfig> {
         .and_then(toml::Value::as_str)
         .ok_or_else(|| eyre!("base config is missing `torii_url`"))?
         .to_owned();
-
     let basic_auth = match value.get("basic_auth").and_then(toml::Value::as_table) {
         Some(table) => {
             let web_login = table
@@ -156,7 +141,6 @@ fn load_base_config(path: &Path) -> Result<BaseConfig> {
         }
         None => None,
     };
-
     Ok(BaseConfig {
         chain,
         network_id,
@@ -164,7 +148,6 @@ fn load_base_config(path: &Path) -> Result<BaseConfig> {
         basic_auth,
     })
 }
-
 fn resolve_out_dir(base_config: &Path, out_dir: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(out_dir) = out_dir {
         return Ok(out_dir);
@@ -174,11 +157,9 @@ fn resolve_out_dir(base_config: &Path, out_dir: Option<PathBuf>) -> Result<PathB
         .ok_or_else(|| eyre!("base config has no parent directory"))?;
     Ok(parent.join("clients"))
 }
-
 fn normalize_names(raw: Vec<String>) -> Result<Vec<String>> {
     let mut names = Vec::new();
     let mut seen = BTreeSet::new();
-
     for name in raw {
         let trimmed = name.trim();
         if trimmed.is_empty() {
@@ -195,20 +176,16 @@ fn normalize_names(raw: Vec<String>) -> Result<Vec<String>> {
         }
         names.push(trimmed.to_owned());
     }
-
     if names.is_empty() {
         return Err(eyre!("no client names provided"));
     }
-
     Ok(names)
 }
-
 fn render_client_config(base: &BaseConfig, domain: &str, key_pair: &KeyPair) -> Zeroizing<String> {
     let public_key = key_pair.public_key().to_string();
     let private_key = Zeroizing::new(ExposedPrivateKey(key_pair.private_key().clone()).to_string());
     let network_id =
         norito::literal::format("hash", &base.network_id.to_string().to_ascii_uppercase());
-
     let mut rendered = Zeroizing::new(format!(
         concat!(
             "chain = \"{chain}\"\n",
@@ -234,22 +211,17 @@ fn render_client_config(base: &BaseConfig, domain: &str, key_pair: &KeyPair) -> 
         private_key = private_key.as_str(),
         public_key = public_key,
     ));
-
     if let Some(auth) = &base.basic_auth {
         rendered.push_str("\n[basic_auth]\n");
         let _ = writeln!(&mut *rendered, "password  = \"{}\"", auth.password);
         let _ = writeln!(&mut *rendered, "web_login = \"{}\"", auth.web_login);
     }
-
     rendered
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{fs, io::BufWriter};
-
     use super::*;
-
+    use std::{fs, io::BufWriter};
     fn write_base_config(path: &Path) {
         let payload = r#"
 chain = "demo-chain"
@@ -262,13 +234,11 @@ web_login = "demo"
 "#;
         fs::write(path, payload).expect("write base config");
     }
-
     #[test]
     fn load_base_config_reads_fields() {
         let temp = tempfile::tempdir().expect("temp dir");
         let path = temp.path().join("client.toml");
         write_base_config(&path);
-
         let base = load_base_config(&path).expect("load base config");
         assert_eq!(base.chain, "demo-chain");
         assert_eq!(
@@ -280,7 +250,6 @@ web_login = "demo"
         assert_eq!(auth.web_login, "demo");
         assert_eq!(auth.password, "secret");
     }
-
     #[test]
     fn resolve_out_dir_defaults_to_clients_dir() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -288,24 +257,20 @@ web_login = "demo"
         let out_dir = resolve_out_dir(&path, None).expect("resolve out dir");
         assert_eq!(out_dir, temp.path().join("clients"));
     }
-
     #[test]
     fn normalize_names_trims_and_rejects_duplicates() {
         let names = normalize_names(vec![" admin1 ".into(), "admin2".into()]).expect("names ok");
         assert_eq!(names, vec!["admin1".to_owned(), "admin2".to_owned()]);
-
         let err = normalize_names(vec!["admin1".into(), "admin1".into()])
             .expect_err("duplicate rejected");
         assert!(format!("{err}").contains("duplicate client name"));
     }
-
     #[test]
     fn deterministic_client_derivation_requires_secret_master_and_separates_names() {
         let master = [0xA5; 32];
         let alice = derive_client_key_pair(&master, "alice").expect("derive Alice");
         let alice_again = derive_client_key_pair(&master, "alice").expect("derive Alice again");
         let bob = derive_client_key_pair(&master, "bob").expect("derive Bob");
-
         assert_eq!(alice.public_key(), alice_again.public_key());
         assert_ne!(alice.public_key(), bob.public_key());
         assert!(
@@ -313,7 +278,6 @@ web_login = "demo"
             "low-entropy, wrong-length master material must be rejected"
         );
     }
-
     #[test]
     fn render_client_config_contains_expected_fields() {
         let base = BaseConfig {
@@ -332,7 +296,6 @@ web_login = "demo"
             .expect("seeded client key should derive");
         let rendered = render_client_config(&base, "acme.universal", &key_pair);
         let value: toml::Value = toml::from_str(&rendered).expect("parse rendered config");
-
         assert_eq!(
             value.get("chain").and_then(toml::Value::as_str),
             Some("demo-chain")
@@ -345,7 +308,6 @@ web_login = "demo"
             value.get("torii_url").and_then(toml::Value::as_str),
             Some("http://127.0.0.1:8080/")
         );
-
         let account = value
             .get("account")
             .and_then(toml::Value::as_table)
@@ -364,7 +326,6 @@ web_login = "demo"
             account.get("private_key").and_then(toml::Value::as_str),
             Some(expected_private.as_str())
         );
-
         let transaction = value
             .get("transaction")
             .and_then(toml::Value::as_table)
@@ -388,7 +349,6 @@ web_login = "demo"
             transaction.get("nonce").and_then(toml::Value::as_bool),
             Some(false)
         );
-
         let basic_auth = value
             .get("basic_auth")
             .and_then(toml::Value::as_table)
@@ -402,7 +362,6 @@ web_login = "demo"
             Some("secret")
         );
     }
-
     #[test]
     fn render_client_config_accepts_dataspace_account_scope() {
         let base = BaseConfig {
@@ -418,7 +377,6 @@ web_login = "demo"
             .expect("seeded client key should derive");
         let rendered = render_client_config(&base, "cbuae", &key_pair);
         let value: toml::Value = toml::from_str(&rendered).expect("parse rendered config");
-
         let account = value
             .get("account")
             .and_then(toml::Value::as_table)
@@ -428,14 +386,12 @@ web_login = "demo"
             Some("cbuae")
         );
     }
-
     #[test]
     fn run_writes_client_configs() {
         let temp = tempfile::tempdir().expect("temp dir");
         let base_path = temp.path().join("client.toml");
         write_base_config(&base_path);
         let out_dir = temp.path().join("clients");
-
         let args = Args {
             base_config: base_path.clone(),
             out_dir: Some(out_dir.clone()),
@@ -443,19 +399,15 @@ web_login = "demo"
             seed_hex: Some("11".repeat(32)),
             names: vec!["admin1".to_owned()],
         };
-
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer).expect("run client configs");
-
         let config_path = out_dir.join("admin1.toml");
         assert!(config_path.exists());
     }
-
     #[cfg(unix)]
     #[test]
     fn random_default_uses_distinct_keys_and_owner_only_atomic_outputs() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let temp = tempfile::tempdir().expect("temp dir");
         let base_path = temp.path().join("client.toml");
         write_base_config(&base_path);
@@ -469,7 +421,6 @@ web_login = "demo"
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer).expect("generate fresh clients");
-
         assert_eq!(
             fs::metadata(&out_dir)
                 .expect("out dir")
@@ -501,7 +452,6 @@ web_login = "demo"
             .as_str()
             .expect("sponsor public key");
         assert_ne!(sender_public, sponsor_public);
-
         let command_output = String::from_utf8(writer.into_inner().expect("writer bytes"))
             .expect("UTF-8 command output");
         assert!(

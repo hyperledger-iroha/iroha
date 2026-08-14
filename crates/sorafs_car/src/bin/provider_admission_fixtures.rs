@@ -1,11 +1,4 @@
 //! Generates deterministic provider admission fixtures for SoraFS tests.
-
-use std::{
-    env, fs,
-    io::{self, Write},
-    path::{Path, PathBuf},
-};
-
 use ed25519_dalek::{Signer, SigningKey};
 use hex::FromHex;
 use iroha_crypto::{BlsNormal, KeyGenOption, KeyPair};
@@ -26,26 +19,25 @@ use sorafs_manifest::{
     compute_envelope_authorization_digest, compute_envelope_digest, compute_proposal_digest,
     verify_advert_against_record, verify_revocation_signatures,
 };
-
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
-
+use std::{
+    env, fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
 const DEFAULT_OUTPUT_DIR: &str = "fixtures/sorafs_manifest/provider_admission";
-
 const PROVIDER_ID_HEX: &str = "0a0b0c0d0e0f0011223344556677889900aa0bb0ccddeeff1122334455667788";
 const STAKE_POOL_ID_HEX: &str = "99887766554433221100ffeeddccbbaa99887766554433221100ffeeddccbbaa";
 const PROVIDER_ENDPOINT_TORII: &str = "torii:cluster.primary.svc.local";
 const PROVIDER_ENDPOINT_QUIC: &str = "quic:cluster.primary.svc.local";
 const RENDEZVOUS_TOPIC: &str = "sorafs.sf1.primary";
 const RENDEZVOUS_REGION: &str = "global";
-
 const LEAF_CERT: &[u8] = &[0xAA, 0xBB, 0xCC, 0xDD];
 const INTERMEDIATE_CERT: &[u8] = &[0x11, 0x22, 0x33, 0x44];
 const QUIC_REPORT: &[u8] = &[0x10, 0x20, 0x30];
-
 const COUNCIL_KEY_BYTES: [u8; 32] = [0x45; 32];
 const PROVIDER_SIGNING_KEY_BYTES: [u8; 32] = [0x21; 32];
-
 const RETIRED_FIXTURE_NAMES: &[&str] = &[
     "proposal_legacy_v1.json",
     "proposal_legacy_v1.to",
@@ -60,12 +52,10 @@ const RETIRED_FIXTURE_NAMES: &[&str] = &[
     "envelope_v2.json",
     "envelope_v2.to",
 ];
-
 #[derive(Debug)]
 struct Options {
     out_dir: PathBuf,
 }
-
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 struct FixtureSummary {
@@ -74,21 +64,17 @@ struct FixtureSummary {
     renewal_envelope_digest: [u8; 32],
     revocation_digest: [u8; 32],
 }
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = parse_args(env::args().skip(1))?;
     let summary = generate_fixtures(&options.out_dir)?;
-
     println!(
         "provider admission fixtures refreshed under {} (proposal digest {}, envelope digest {})",
         options.out_dir.display(),
         hex_lower(summary.proposal_v1_digest),
         hex_lower(summary.envelope_v1_digest)
     );
-
     Ok(())
 }
-
 fn parse_args<I>(args: I) -> Result<Options, Box<dyn std::error::Error>>
 where
     I: Iterator<Item = String>,
@@ -107,17 +93,14 @@ where
     }
     Ok(Options { out_dir })
 }
-
 fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::error::Error>> {
     remove_retired_fixtures(out_dir)?;
-
     let descriptor = chunker_registry::lookup_by_handle("sorafs.sf1@1.0.0").ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
             "required chunker registry handle sorafs.sf1@1.0.0 is unavailable",
         )
     })?;
-
     let provider_id = decode_hex_array(PROVIDER_ID_HEX)?;
     let stake_pool_id = decode_hex_array(STAKE_POOL_ID_HEX)?;
     let provider_signing_key = SigningKey::from_bytes(&PROVIDER_SIGNING_KEY_BYTES);
@@ -125,7 +108,6 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
     let advert_key = *provider_signing_key.verifying_key().as_bytes();
     let council_policy =
         ProviderAdmissionCouncilPolicy::new([*council_key.verifying_key().as_bytes()], 1)?;
-
     let proposal_v1 = build_proposal(ProposalParams {
         namespace: descriptor.namespace,
         name: descriptor.name,
@@ -148,28 +130,24 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
     )?;
     let record_v1 = AdmissionRecord::new(envelope_v1.clone(), &council_policy)?;
     verify_advert_against_record(&advert_v1, &record_v1)?;
-
     write_binary(out_dir, "proposal_v1.to", &norito::to_bytes(&proposal_v1)?)?;
     write_json(
         out_dir,
         "proposal_v1.json",
         Value::Object(build_proposal_summary(&proposal_v1)),
     )?;
-
     write_binary(out_dir, "advert_v1.to", &norito::to_bytes(&advert_v1)?)?;
     write_json(
         out_dir,
         "advert_v1.json",
         Value::Object(build_advert_summary(&advert_v1)),
     )?;
-
     write_binary(out_dir, "envelope_v1.to", &norito::to_bytes(&envelope_v1)?)?;
     write_json(
         out_dir,
         "envelope_v1.json",
         Value::Object(build_envelope_summary(&envelope_v1, &record_v1)?),
     )?;
-
     let renewed_proposal_v1 = build_proposal(ProposalParams {
         namespace: descriptor.namespace,
         name: descriptor.name,
@@ -198,7 +176,6 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         &council_key,
     )?;
     let renewed_envelope_v1_digest = compute_envelope_digest(&renewed_envelope_v1)?;
-
     let renewal = ProviderAdmissionRenewalV1 {
         version: PROVIDER_ADMISSION_RENEWAL_VERSION_V1,
         provider_id,
@@ -210,7 +187,6 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
     // Ensure renewal respects invariants.
     let renewed_record = record_v1.apply_renewal(&renewal, &council_policy)?;
     verify_advert_against_record(&renewed_advert_v1, &renewed_record)?;
-
     write_binary(
         out_dir,
         "proposal_renewed_v1.to",
@@ -250,7 +226,6 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         "renewal_v1.json",
         Value::Object(build_renewal_summary(&renewal)),
     )?;
-
     let mut revocation = ProviderAdmissionRevocationV1 {
         version: PROVIDER_ADMISSION_REVOCATION_VERSION_V1,
         provider_id,
@@ -268,14 +243,12 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
     });
     verify_revocation_signatures(&revocation, &council_policy)?;
     record_v1.verify_revocation(&revocation, &council_policy)?;
-
     write_binary(out_dir, "revocation_v1.to", &norito::to_bytes(&revocation)?)?;
     write_json(
         out_dir,
         "revocation_v1.json",
         Value::Object(build_revocation_summary(&revocation, &revocation_digest)),
     )?;
-
     write_json(
         out_dir,
         "metadata.json",
@@ -286,7 +259,6 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
             &record_v1,
         )?),
     )?;
-
     let plan_payload: Vec<u8> = (0..(64 * 1024)).map(|idx| (idx % 251) as u8).collect();
     let plan = CarBuildPlan::single_file_with_profile(&plan_payload, ChunkProfile::DEFAULT)?;
     write_json(
@@ -295,7 +267,6 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         try_chunk_fetch_plan_to_json(&plan)?,
     )?;
     write_readme(out_dir)?;
-
     Ok(FixtureSummary {
         proposal_v1_digest: compute_proposal_digest(&proposal_v1)?,
         envelope_v1_digest: *record_v1.envelope_digest(),
@@ -303,7 +274,6 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         revocation_digest,
     })
 }
-
 struct ProposalParams<'a> {
     namespace: &'a str,
     name: &'a str,
@@ -316,7 +286,6 @@ struct ProposalParams<'a> {
     attested_at: u64,
     expires_at: u64,
 }
-
 fn build_proposal(
     params: ProposalParams<'_>,
 ) -> Result<ProviderAdmissionProposalV1, Box<dyn std::error::Error>> {
@@ -328,7 +297,6 @@ fn build_proposal(
         .collect();
     alias_list.retain(|alias| alias != &canonical_handle);
     alias_list.insert(0, canonical_handle.clone());
-
     let range_payload = ProviderCapabilityRangeV1 {
         max_chunk_span: 32,
         min_granularity: 8,
@@ -337,11 +305,9 @@ fn build_proposal(
         supports_merkle_proof: true,
     }
     .to_bytes()?;
-
     let (vrf_public, vrf_private) =
         BlsNormal::keypair(KeyGenOption::UseSeed(params.provider_id.to_vec()))?;
     let vrf_pair: KeyPair = (vrf_public, vrf_private).into();
-
     Ok(ProviderAdmissionProposalV1 {
         version: 1,
         provider_id: params.provider_id,
@@ -420,7 +386,6 @@ fn build_proposal(
         ]),
     })
 }
-
 fn build_advert(
     proposal: &ProviderAdmissionProposalV1,
     provider_key: &SigningKey,
@@ -476,7 +441,6 @@ fn build_advert(
     advert.verify_signature()?;
     Ok(advert)
 }
-
 fn build_envelope(
     proposal: ProviderAdmissionProposalV1,
     advert_body: ProviderAdvertBodyV1,
@@ -496,7 +460,6 @@ fn build_envelope(
             source,
         }
     })?;
-
     let mut envelope = ProviderAdmissionEnvelopeV1 {
         version: 1,
         proposal,
@@ -524,7 +487,6 @@ fn build_envelope(
     AdmissionRecord::new(envelope.clone(), &policy)?;
     Ok(envelope)
 }
-
 fn build_proposal_summary(proposal: &ProviderAdmissionProposalV1) -> Map {
     let mut map = Map::new();
     map.insert(
@@ -575,7 +537,6 @@ fn build_proposal_summary(proposal: &ProviderAdmissionProposalV1) -> Map {
     );
     map
 }
-
 fn build_advert_summary(advert: &ProviderAdvertV1) -> Map {
     let mut map = Map::new();
     map.insert("issued_at".into(), Value::from(advert.issued_at));
@@ -612,7 +573,6 @@ fn build_advert_summary(advert: &ProviderAdvertV1) -> Map {
     );
     map
 }
-
 fn build_envelope_summary(
     envelope: &ProviderAdmissionEnvelopeV1,
     record: &AdmissionRecord,
@@ -652,7 +612,6 @@ fn build_envelope_summary(
     );
     Ok(map)
 }
-
 fn build_renewal_summary(renewal: &ProviderAdmissionRenewalV1) -> Map {
     let mut map = Map::new();
     map.insert(
@@ -669,7 +628,6 @@ fn build_renewal_summary(renewal: &ProviderAdmissionRenewalV1) -> Map {
     );
     map
 }
-
 fn build_revocation_summary(
     revocation: &ProviderAdmissionRevocationV1,
     revocation_digest: &[u8; 32],
@@ -691,7 +649,6 @@ fn build_revocation_summary(
     );
     map
 }
-
 fn build_metadata_summary(
     proposal: &ProviderAdmissionProposalV1,
     renewal: &ProviderAdmissionRenewalV1,
@@ -722,7 +679,6 @@ fn build_metadata_summary(
     );
     Ok(map)
 }
-
 fn write_binary(
     out_dir: &Path,
     name: &str,
@@ -733,7 +689,6 @@ fn write_binary(
     file.write_all(bytes)?;
     Ok(())
 }
-
 fn write_json(out_dir: &Path, name: &str, value: Value) -> Result<(), Box<dyn std::error::Error>> {
     let mut json_string = to_string_pretty(&value)?;
     json_string.push('\n');
@@ -742,7 +697,6 @@ fn write_json(out_dir: &Path, name: &str, value: Value) -> Result<(), Box<dyn st
     file.write_all(json_string.as_bytes())?;
     Ok(())
 }
-
 fn write_readme(out_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let path = out_dir.join("README.md");
     let content = String::from(
@@ -765,7 +719,6 @@ Do not edit manually; rerun the generator if data changes.\n",
     file.write_all(content.as_bytes())?;
     Ok(())
 }
-
 fn remove_retired_fixtures(out_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     for name in RETIRED_FIXTURE_NAMES {
         let path = out_dir.join(name);
@@ -798,7 +751,6 @@ fn remove_retired_fixtures(out_dir: &Path) -> Result<(), Box<dyn std::error::Err
     }
     Ok(())
 }
-
 fn open_output_file(path: &Path, label: &str) -> Result<fs::File, Box<dyn std::error::Error>> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
@@ -824,7 +776,6 @@ fn open_output_file(path: &Path, label: &str) -> Result<fs::File, Box<dyn std::e
     }
     Ok(file)
 }
-
 fn ensure_parent_dir(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -839,7 +790,6 @@ fn ensure_parent_dir(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
-
 fn validate_output_path(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -855,7 +805,6 @@ fn validate_output_path(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
             return Err(format!("failed to inspect output `{}`: {err}", path.display()).into());
         }
     }
-
     if let Some(parent) = path.parent() {
         for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
             if ancestor.as_os_str().is_empty() {
@@ -891,20 +840,16 @@ fn validate_output_path(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut fs::OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
-
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -920,7 +865,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -937,7 +881,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0
 }
-
 fn decode_hex_array(input: &str) -> Result<[u8; 32], Box<dyn std::error::Error>> {
     let mut out = [0u8; 32];
     let bytes = Vec::from_hex(input)?;
@@ -947,11 +890,9 @@ fn decode_hex_array(input: &str) -> Result<[u8; 32], Box<dyn std::error::Error>>
     out.copy_from_slice(&bytes);
     Ok(out)
 }
-
 fn hex_lower<T: AsRef<[u8]>>(bytes: T) -> String {
     hex::encode(bytes)
 }
-
 fn stream_budget_summary(budget: &StreamBudgetV1) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -971,7 +912,6 @@ fn stream_budget_summary(budget: &StreamBudgetV1) -> Value {
     );
     Value::Object(map)
 }
-
 fn transport_hints_summary(hints: &[TransportHintV1]) -> Value {
     Value::Array(
         hints
@@ -988,7 +928,6 @@ fn transport_hints_summary(hints: &[TransportHintV1]) -> Value {
             .collect(),
     )
 }
-
 fn transport_protocol_label(protocol: TransportProtocol) -> &'static str {
     match protocol {
         TransportProtocol::ToriiHttpRange => "torii_http_range",
@@ -997,15 +936,11 @@ fn transport_protocol_label(protocol: TransportProtocol) -> &'static str {
         TransportProtocol::VendorReserved => "vendor_reserved",
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
-    use tempfile::{TempDir, tempdir};
-
     use super::*;
-
+    use std::collections::BTreeSet;
+    use tempfile::{TempDir, tempdir};
     const EXPECTED_FIXTURE_NAMES: &[&str] = &[
         "README.md",
         "advert_renewed_v1.json",
@@ -1027,13 +962,11 @@ mod tests {
         "revocation_v1.json",
         "revocation_v1.to",
     ];
-
     fn canonical_tempdir() -> (TempDir, PathBuf) {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");
         (temp, path)
     }
-
     #[test]
     fn generate_fixtures_produces_expected_artifacts() {
         let (_dir, dir_path) = canonical_tempdir();
@@ -1041,7 +974,6 @@ mod tests {
             fs::write(dir_path.join(name), b"retired").expect("seed retired fixture");
         }
         let summary = generate_fixtures(&dir_path).expect("fixtures");
-
         assert_eq!(
             hex_lower(summary.proposal_v1_digest),
             "65ce8b32017a665c413844ad0c6ee725a2e7ca83820e9bc0d45f5fec3e8aef64"
@@ -1058,7 +990,6 @@ mod tests {
             hex_lower(summary.revocation_digest),
             "c848c9205487cc40236c25926c69991420959f0794637a7e5d2a0c0b057b745b"
         );
-
         let generated_names: BTreeSet<String> = fs::read_dir(&dir_path)
             .expect("read generated fixture directory")
             .map(|entry| {
@@ -1077,7 +1008,6 @@ mod tests {
             generated_names, expected_names,
             "generator artifact set drifted"
         );
-
         let committed_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/sorafs_manifest/provider_admission");
         for name in EXPECTED_FIXTURE_NAMES {
@@ -1090,7 +1020,6 @@ mod tests {
                 "committed fixture {name} is stale; rerun provider_admission_fixtures"
             );
         }
-
         for name in RETIRED_FIXTURE_NAMES {
             assert!(
                 !dir_path.join(name).exists(),
@@ -1098,20 +1027,16 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn write_binary_creates_parent_and_writes_all_bytes() {
         let (_temp, temp_path) = canonical_tempdir();
         let out_dir = temp_path.join("nested");
-
         write_binary(&out_dir, "payload.to", b"provider-admission").expect("write binary fixture");
-
         assert_eq!(
             fs::read(out_dir.join("payload.to")).expect("read output"),
             b"provider-admission"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn write_json_rejects_symlink_output() {
@@ -1120,18 +1045,15 @@ mod tests {
         fs::write(&target_path, b"unchanged\n").expect("write target");
         let output_path = temp_path.join("metadata.json");
         std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
-
         let err = write_json(&temp_path, "metadata.json", Value::Object(Map::new()))
             .expect_err("reject symlink output");
         let message = err.to_string();
-
         assert!(
             message.contains("must not be a symlink"),
             "unexpected error: {message}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
     }
-
     #[cfg(unix)]
     #[test]
     fn write_readme_rejects_symlink_parent() {
@@ -1140,10 +1062,8 @@ mod tests {
         fs::create_dir(&real_dir).expect("create real dir");
         let linked_dir = temp_path.join("linked");
         std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
-
         let err = write_readme(&linked_dir).expect_err("reject symlink parent");
         let message = err.to_string();
-
         assert!(
             message.contains("parent") && message.contains("must not be a symlink"),
             "unexpected error: {message}"
@@ -1153,7 +1073,6 @@ mod tests {
             "symlink parent should not receive output"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn generate_fixtures_rejects_retired_symlink_without_touching_target() {
@@ -1162,9 +1081,7 @@ mod tests {
         fs::write(&target_path, b"unchanged").expect("write target");
         std::os::unix::fs::symlink(&target_path, temp_path.join("proposal_v2.to"))
             .expect("create retired fixture symlink");
-
         let err = generate_fixtures(&temp_path).expect_err("reject retired fixture symlink");
-
         assert!(
             err.to_string().contains("must not be a symlink"),
             "unexpected error: {err}"

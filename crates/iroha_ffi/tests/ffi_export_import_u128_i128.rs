@@ -1,6 +1,5 @@
 //! Tests for u128/i128 freestanding FFI import/export helpers.
 use iroha_ffi::{ffi_export, ffi_import};
-
 macro_rules! derive_freestanding_export_import {
     ($(fn $ident:ident($inp:ty) -> $out:ty);+ $(;)?) => {
         // FFI imports
@@ -11,11 +10,9 @@ macro_rules! derive_freestanding_export_import {
                 unreachable!("replaced by ffi_import")
             }
         )*
-
         // FFI exports
         mod exports {
             use super::*;
-
             $(
                 #[doc = "FFI export function"]
                 #[ffi_export]
@@ -26,7 +23,6 @@ macro_rules! derive_freestanding_export_import {
         }
     };
 }
-
 derive_freestanding_export_import! {
     fn freestanding_u128(u128) -> u128;
     fn freestanding_i128(i128) -> i128;
@@ -41,7 +37,6 @@ derive_freestanding_export_import! {
     fn freestanding_u128_array([u128; 6]) -> [u128; 6];
     fn freestanding_i128_array([i128; 11]) -> [i128; 11];
 }
-
 fn u128_values() -> [u128; 6] {
     [
         u128::MAX,
@@ -52,7 +47,6 @@ fn u128_values() -> [u128; 6] {
         0,
     ]
 }
-
 fn i128_values() -> [i128; 11] {
     [
         i128::MAX,
@@ -68,71 +62,54 @@ fn i128_values() -> [i128; 11] {
         i128::MIN,
     ]
 }
-
 #[test]
 fn u128_conversion() {
     let values = u128_values();
-
     for value in values {
         assert_eq!(value, freestanding_u128(value));
     }
 }
-
 #[test]
 fn i128_conversion() {
     let values = i128_values();
-
     for value in values {
         assert_eq!(value, freestanding_i128(value));
     }
 }
-
 #[test]
 fn u128_ref_conversion() {
     let values = u128_values();
-
     for value in values {
         assert_eq!(value, *freestanding_u128_ref(&value));
     }
 }
-
 #[test]
 fn i128_ref_conversion() {
     let values = i128_values();
-
     for value in values {
         assert_eq!(value, *freestanding_i128_ref(&value));
     }
 }
-
 #[test]
 fn u128_slice_conversion() {
     let values = u128_values();
-
     assert_eq!(values, *freestanding_u128_slice(&values));
 }
-
 #[test]
 fn i128_slice_conversion() {
     let values = i128_values();
-
     assert_eq!(values, *freestanding_i128_slice(&values));
 }
-
 #[test]
 fn u128_vec_conversion() {
     let values = u128_values().to_vec();
-
     assert_eq!(values, freestanding_u128_vec(values.clone()));
 }
-
 #[test]
 fn i128_vec_conversion() {
     let values = i128_values().to_vec();
-
     assert_eq!(values, freestanding_i128_vec(values.clone()));
 }
-
 #[test]
 fn u128_box_conversion() {
     let values = u128_values();
@@ -141,27 +118,21 @@ fn u128_box_conversion() {
         assert_eq!(value, freestanding_u128_box(value.clone()));
     }
 }
-
 #[test]
 fn i128_box_conversion() {
     let values = i128_values();
-
     for value in values {
         let value = Box::new(value);
         assert_eq!(value, freestanding_i128_box(value.clone()));
     }
 }
-
 #[test]
 fn u128_array_conversion() {
     let values = u128_values();
-
     assert_eq!(values, freestanding_u128_array(values));
 }
-
 #[test]
 fn i128_array_conversion() {
     let values = i128_values();
-
     assert_eq!(values, freestanding_i128_array(values));
 }

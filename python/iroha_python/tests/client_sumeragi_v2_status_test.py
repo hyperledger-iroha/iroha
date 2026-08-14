@@ -9,6 +9,7 @@ import iroha_python.client as client_module
 import pytest
 
 from iroha_python.client import (
+    OperatorSigningContext,
     SumeragiDiagnosticsSnapshot,
     SumeragiStatusSnapshot,
     SumeragiV2BodyState,
@@ -17,6 +18,13 @@ from iroha_python.client import (
     SumeragiV2MergeCarrierCommitment,
     SumeragiV2StatusPhase,
     ToriiClient,
+)
+from iroha_python.crypto import Ed25519KeyPair, NetworkId
+
+
+_OPERATOR_CONTEXT = OperatorSigningContext(
+    NetworkId.from_bytes(bytes([0xA5]) * 32),
+    Ed25519KeyPair.from_private_key(bytes([0x0B]) * 32),
 )
 
 
@@ -350,7 +358,11 @@ def test_typed_endpoint_methods_reject_swapped_sumeragi_payloads(
         "/v1/sumeragi/status": _healthy_diagnostics(),
         "/v1/sumeragi/diagnostics": _healthy_status(),
     }
-    client = ToriiClient("http://node.test", max_retries=0)
+    client = ToriiClient(
+        "http://node.test",
+        max_retries=0,
+        operator_signing_context=_OPERATOR_CONTEXT,
+    )
 
     def get_sccp_json_object(
         path: str,
@@ -362,7 +374,11 @@ def test_typed_endpoint_methods_reject_swapped_sumeragi_payloads(
         calls.append((path, context, maximum_body_bytes))
         return payloads[path]
 
-    monkeypatch.setattr(client, "_get_sccp_json_object", get_sccp_json_object)
+    monkeypatch.setattr(
+        client,
+        "_get_sumeragi_operator_json_object",
+        get_sccp_json_object,
+    )
 
     with pytest.raises(RuntimeError, match="sumeragi status contains unknown field"):
         client.get_sumeragi_status_typed()
@@ -385,7 +401,11 @@ def test_typed_endpoint_methods_reject_swapped_sumeragi_payloads(
     response.headers["Content-Type"] = "application/json"
     response._content = b'{"receipt":{"version":1,"version":2}}'
     response._content_consumed = True
-    strict_client = ToriiClient("http://node.test", max_retries=0)
+    strict_client = ToriiClient(
+        "http://node.test",
+        max_retries=0,
+        operator_signing_context=_OPERATOR_CONTEXT,
+    )
     monkeypatch.setattr(strict_client, "_request", lambda *args, **kwargs: response)
     with pytest.raises(ValueError, match="duplicate field `version`"):
         strict_client.get_sumeragi_diagnostics_typed()

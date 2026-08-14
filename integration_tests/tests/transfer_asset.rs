@@ -1,8 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Tests for transferring assets between accounts.
-
-use std::time::{Duration, Instant};
-
 use integration_tests::{sandbox, sync::sync_after_submission};
 use iroha::{
     client::Client,
@@ -16,13 +13,12 @@ use iroha::{
 };
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
-
+use std::time::{Duration, Instant};
 fn start_default(
     context: &'static str,
 ) -> Option<(sandbox::SerializedNetwork, tokio::runtime::Runtime)> {
     sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context).unwrap()
 }
-
 #[test]
 // This test suite is also covered at the UI level in the iroha_cli tests
 // in test_tranfer_assets.py
@@ -45,7 +41,6 @@ fn simulate_transfer_quantity() {
         Transfer::asset_quantity,
     )
 }
-
 fn wait_for_asset_value(
     client: &Client,
     asset_definition_id: &AssetDefinitionId,
@@ -55,10 +50,8 @@ fn wait_for_asset_value(
 ) {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
-
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "assets were not queried".to_owned();
-
     while Instant::now() < deadline {
         match client.query(FindAssets::new()).execute_all() {
             Ok(assets) => {
@@ -80,15 +73,12 @@ fn wait_for_asset_value(
                 last_observed = format!("query failed: {err}");
             }
         }
-
         std::thread::sleep(POLL_INTERVAL);
     }
-
     panic!(
         "timed out waiting for transferred asset after {context}; expected_value={expected_value:?}; last_observed={last_observed}"
     );
 }
-
 fn simulate_transfer(
     context: &'static str,
     starting_amount: Quantity,
@@ -106,7 +96,6 @@ fn simulate_transfer(
     let iroha = network.client();
     let mut status = iroha.get_status().expect("failed to read initial status");
     let mut last_non_empty_height = status.blocks_non_empty;
-
     let (alice_id, mouse_id) = generate_two_ids();
     let create_mouse = create_mouse(mouse_id.clone());
     let (asset_definition_id, asset_definition_name) = asset_definition_id_for(context);
@@ -118,7 +107,6 @@ fn simulate_transfer(
         starting_amount,
         AssetId::new(asset_definition_id.clone(), alice_id.clone()),
     );
-
     let instructions: [InstructionBox; 3] = [
         // create_alice.into(), We don't need to register Alice, because she is created in genesis
         create_mouse.into(),
@@ -140,7 +128,6 @@ fn simulate_transfer(
     )
     .expect("failed to synchronize after transfer asset state preparation");
     last_non_empty_height = status.blocks_non_empty;
-
     //When
     let transfer_asset = transfer_ctr(
         AssetId::new(asset_definition_id.clone(), alice_id),
@@ -170,17 +157,14 @@ fn simulate_transfer(
         "asset transfer",
     );
 }
-
 fn generate_two_ids() -> (AccountId, AccountId) {
     let alice_id = ALICE_ID.clone();
     let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
     (alice_id, mouse_id)
 }
-
 fn create_mouse(mouse_id: AccountId) -> Register<Account> {
     Register::account(Account::new(mouse_id.clone()))
 }
-
 fn asset_definition_id_for(context: &str) -> (AssetDefinitionId, String) {
     let name = format!("camomile_{context}");
     let id = AssetDefinitionId::derive_from_components(
@@ -189,7 +173,6 @@ fn asset_definition_id_for(context: &str) -> (AssetDefinitionId, String) {
     );
     (id, name)
 }
-
 #[test]
 fn should_fail_if_asset_not_found() {
     let context = "should_fail_if_asset_not_found";
@@ -197,7 +180,6 @@ fn should_fail_if_asset_not_found() {
         return;
     };
     let iroha = network.client();
-
     let (alice_id, mouse_id) = generate_two_ids();
     let (asset_definition_id, asset_definition_name) = asset_definition_id_for(context);
     let create_asset_definition = Register::asset_definition(AssetDefinition::numeric(
@@ -208,13 +190,11 @@ fn should_fail_if_asset_not_found() {
     ));
     let asset_id = AssetId::new(asset_definition_id.clone(), alice_id);
     let transfer_asset = Transfer::asset_quantity(asset_id.clone(), 20_u32, mouse_id.clone());
-
     let instructions: [InstructionBox; 2] = [create_asset_definition.into(), transfer_asset.into()];
     let result = iroha.submit_all_blocking(
         instructions,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
-
     assert!(result.is_err());
     assert!(
         result

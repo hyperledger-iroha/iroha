@@ -1,15 +1,12 @@
 #![cfg(feature = "json")]
 //! Validate that from_json_fast_smart parses small inputs via the typed parser.
-
 use norito::json::from_json_fast_smart;
-
 #[derive(Debug, PartialEq, norito::derive::FastJson, norito::derive::FastJsonWrite)]
 struct Item {
     id: u64,
     name: String,
     flag: bool,
 }
-
 // Implement the generic typed parser contract
 impl norito::json::JsonDeserialize for Item {
     fn json_deserialize(p: &mut norito::json::Parser<'_>) -> Result<Self, norito::json::Error> {
@@ -46,7 +43,6 @@ impl norito::json::JsonDeserialize for Item {
         })
     }
 }
-
 #[test]
 fn smart_prefers_small_typed_parser() {
     let s = "{\"id\":1,\"name\":\"x\",\"flag\":true}";

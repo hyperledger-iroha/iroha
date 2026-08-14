@@ -311,5 +311,3 @@
             "stop script should clean pidfiles after shutdown"
         );
     }
-
-    #[cfg(unix)]

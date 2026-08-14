@@ -2,15 +2,12 @@
 //!
 //! Each peer exposes a log stream that delivers structured events for both
 //! stdout/stderr lines and lifecycle notifications such as automatic restarts.
-
 use std::{
     fmt,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
 use tokio::sync::broadcast;
-
 /// Identifies the source of a log entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogStreamKind {
@@ -21,7 +18,6 @@ pub enum LogStreamKind {
     /// Supervisor lifecycle/meta event.
     System,
 }
-
 impl fmt::Display for LogStreamKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -31,11 +27,9 @@ impl fmt::Display for LogStreamKind {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn emit_line_broadcasts_event() {
         let stream = PeerLogStream::new("peer0");
@@ -56,7 +50,6 @@ mod tests {
             other => panic!("expected line event, got {other:?}"),
         }
     }
-
     #[test]
     fn emit_lifecycle_broadcasts_event() {
         let stream = PeerLogStream::new("peer1");
@@ -76,7 +69,6 @@ mod tests {
         }
     }
 }
-
 /// Events emitted on a peer log stream.
 #[derive(Debug, Clone)]
 pub enum PeerLogEvent {
@@ -101,7 +93,6 @@ pub enum PeerLogEvent {
         timestamp_ms: u128,
     },
 }
-
 /// Lifecycle events reported through the log stream.
 #[derive(Debug, Clone)]
 pub enum LifecycleEvent {
@@ -135,21 +126,18 @@ pub enum LifecycleEvent {
     /// Peer was stopped explicitly by the operator.
     StoppedByUser,
 }
-
 fn now_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
         .as_millis()
 }
-
 /// Broadcast-backed peer log stream.
 #[derive(Clone, Debug)]
 pub struct PeerLogStream {
     alias: Arc<str>,
     sender: broadcast::Sender<PeerLogEvent>,
 }
-
 impl PeerLogStream {
     /// Create a new log stream for the supplied peer alias.
     pub fn new(alias: impl Into<String>) -> Self {
@@ -159,17 +147,14 @@ impl PeerLogStream {
             sender,
         }
     }
-
     /// Logical alias associated with this log stream.
     pub fn alias(&self) -> &str {
         &self.alias
     }
-
     /// Subscribe to events emitted by the peer log stream.
     pub fn subscribe(&self) -> broadcast::Receiver<PeerLogEvent> {
         self.sender.subscribe()
     }
-
     /// Emit a stdout/stderr line.
     pub fn emit_line(&self, kind: LogStreamKind, message: impl Into<String>) {
         let _ = self.sender.send(PeerLogEvent::Line {
@@ -179,7 +164,6 @@ impl PeerLogStream {
             message: message.into(),
         });
     }
-
     /// Emit a lifecycle event.
     pub fn emit_lifecycle(&self, event: LifecycleEvent) {
         let _ = self.sender.send(PeerLogEvent::Lifecycle {

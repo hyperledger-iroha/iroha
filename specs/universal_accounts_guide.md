@@ -126,6 +126,13 @@ Current Torii routes:
 | `POST /v1/identifiers/resolve` | Accepts `{ policy_id, encrypted_input, output_opening }`. The endpoint re-evaluates the encrypted input, verifies the external output opening, derives the `opaque:` handle from the opened output hash, and returns a nested `{ payload, attestation }` receipt when an active claim exists. |
 | `GET /v1/identifiers/receipts/{receipt_hash}` | Looks up the persisted `IdentifierClaimRecord` bound to a deterministic receipt hash so operators and SDKs can audit claim ownership or diagnose replay / mismatch failures without scanning the full identifier index. |
 
+Every RAM-LFE or identifier `POST` in this table requires exact-NetworkId
+canonical account authentication over the exact method, path, query, and raw
+body before JSON decoding or cryptographic work. Claim-receipt requests
+additionally require the authenticated account to resolve exactly to the
+`{account_id}` path principal. Responses are private and non-storable; API
+tokens and CIDR allowlists do not replace the account signature.
+
 Torii's in-process execution runtime is configured under
 `torii.ram_lfe.programs[*]`, keyed by `program_id`. The identifier routes now
 reuse that same RAM-LFE runtime instead of a separate `identifier_resolver`

@@ -13,7 +13,20 @@
 //!   - DELETE `/v1/zk/attachments/{id}` – delete stored attachment and its metadata.
 //! - A background GC task periodically deletes entries older than a TTL;
 //!   TTL and size caps are provided via `iroha_config` (Torii).
-
+use crate::{
+    NoritoQuery,
+    routing::MaybeTelemetry,
+    utils::NORITO_MIME_TYPE,
+    zk1::{MAX_TLV_COUNT as ZK1_MAX_TLV_COUNT, parse_tags as parse_zk1_tags},
+};
+use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
+use flate2::read::GzDecoder;
+use iroha_config::parameters::actual::AttachmentSanitizerMode;
+use iroha_data_model::account::AccountId;
+use iroha_logger::prelude::*;
+use norito::json;
+use parking_lot::RwLock;
+use sha2::{Digest as _, Sha256};
 use std::{
     env,
     ffi::OsStr,
@@ -25,25 +38,8 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
-use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
-use flate2::read::GzDecoder;
-use iroha_config::parameters::actual::AttachmentSanitizerMode;
-use iroha_data_model::account::AccountId;
-use iroha_logger::prelude::*;
-use norito::json;
-use parking_lot::RwLock;
-use sha2::{Digest as _, Sha256};
 use tokio::{sync::Mutex, task};
 use zstd::stream::read::Decoder as ZstdDecoder;
-
-use crate::{
-    NoritoQuery,
-    routing::MaybeTelemetry,
-    utils::NORITO_MIME_TYPE,
-    zk1::{MAX_TLV_COUNT as ZK1_MAX_TLV_COUNT, parse_tags as parse_zk1_tags},
-};
-
 const MAX_ATTACHMENT_BYTES_FALLBACK: usize = 4 * 1024 * 1024; // fallback 4 MiB
 const ATTACHMENT_TTL_SECS_FALLBACK: u64 = 7 * 24 * 60 * 60; // fallback 7 days
 const GC_INTERVAL_SECS: u64 = 60; // run every minute
@@ -61,37 +57,31 @@ const SANITIZER_RESPONSE_OVERHEAD_BYTES: usize = 64 * 1024;
 const ATTACHMENT_META_SCAN_MAX_FILES: usize = 20_000;
 /// Maximum encoded size of one persisted attachment metadata record.
 pub(super) const ATTACHMENT_META_FILE_MAX_BYTES: u64 = 64 * 1024;
-
 /// Tenant namespace for the attachments store.
 ///
 /// This is a stable, opaque identifier (64-hex) derived from a signed Iroha account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttachmentTenant(String);
-
 impl AttachmentTenant {
     /// Derive a tenant key from a signed account id.
     pub fn from_account(account: &AccountId) -> Self {
         Self(hash_identity_hex("account", &account.to_string()))
     }
-
     /// Derive a tenant key from a validated API token.
     ///
     /// This remains available for tests and backward-compatible migration helpers.
     pub fn from_api_token(token: &str) -> Self {
         Self(hash_identity_hex("token", token))
     }
-
     /// Tenant used when neither token nor remote address is available.
     pub fn anonymous() -> Self {
         Self(hash_identity_hex("anon", "anon"))
     }
-
     /// Return the stable tenant key (lowercase 64-hex).
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
 }
-
 #[derive(
     Debug,
     Clone,
@@ -109,7 +99,6 @@ pub struct AttachmentHashes {
     /// SHA-256 digest of the stored (sanitized) attachment bytes.
     pub sha256: String,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -131,7 +120,6 @@ pub struct AttachmentSanitizerVerdict {
     /// Whether the sanitizer executed in an isolated subprocess.
     pub sandboxed: bool,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -155,7 +143,6 @@ pub struct AttachmentProvenance {
     /// Sanitizer summary for the stored attachment.
     pub sanitizer: AttachmentSanitizerVerdict,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -187,19 +174,15 @@ pub struct AttachmentMeta {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub zk1_tags: Option<Vec<String>>,
 }
-
 pub(crate) fn base_dir() -> PathBuf {
     crate::data_dir::base_dir()
 }
-
 fn attachments_root_dir() -> PathBuf {
     base_dir().join("zk_attachments")
 }
-
 fn attachments_dir(tenant: &AttachmentTenant) -> PathBuf {
     attachments_root_dir().join(tenant.as_str())
 }
-
 fn ensure_root_dir() {
     if cfg!(test) {
         let _ = fs::create_dir_all(attachments_root_dir());
@@ -210,24 +193,19 @@ fn ensure_root_dir() {
         let _ = fs::create_dir_all(attachments_root_dir());
     });
 }
-
 fn ensure_dirs(tenant: &AttachmentTenant) {
     ensure_root_dir();
     let _ = fs::create_dir_all(attachments_dir(tenant));
 }
-
 fn meta_path(tenant: &AttachmentTenant, id: &str) -> PathBuf {
     attachments_dir(tenant).join(format!("{}.json", id))
 }
-
 fn bin_path(tenant: &AttachmentTenant, id: &str) -> PathBuf {
     attachments_dir(tenant).join(format!("{}.bin", id))
 }
-
 fn invalid_attachment_file(message: impl Into<String>) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, message.into())
 }
-
 /// Open one attachment-store entry without following its final path component.
 ///
 /// Unix pins the containing directory and uses one non-blocking `openat`, so a
@@ -245,11 +223,9 @@ pub(super) fn open_attachment_regular_file(
 ) -> std::io::Result<(fs::File, fs::Metadata)> {
     open_attachment_regular_file_platform(path)
 }
-
 #[cfg(unix)]
 fn open_attachment_regular_file_platform(path: &Path) -> std::io::Result<(fs::File, fs::Metadata)> {
     use std::os::unix::fs::MetadataExt as _;
-
     let parent_path = path
         .parent()
         .ok_or_else(|| invalid_attachment_file("attachment path has no containing directory"))?;
@@ -288,14 +264,11 @@ fn open_attachment_regular_file_platform(path: &Path) -> std::io::Result<(fs::Fi
     }
     Ok((file, metadata))
 }
-
 #[cfg(windows)]
 fn open_attachment_regular_file_platform(path: &Path) -> std::io::Result<(fs::File, fs::Metadata)> {
     use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
-
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-
     let before = fs::symlink_metadata(path)?;
     let before_identity = (before.volume_serial_number(), before.file_index());
     if !before.is_file()
@@ -308,7 +281,6 @@ fn open_attachment_regular_file_platform(path: &Path) -> std::io::Result<(fs::Fi
             "attachment entry is not a direct single-link regular file",
         ));
     }
-
     let mut options = fs::OpenOptions::new();
     let file = options
         .read(true)
@@ -333,7 +305,6 @@ fn open_attachment_regular_file_platform(path: &Path) -> std::io::Result<(fs::Fi
     }
     Ok((file, opened))
 }
-
 #[cfg(not(any(unix, windows)))]
 fn open_attachment_regular_file_platform(
     _path: &Path,
@@ -343,7 +314,6 @@ fn open_attachment_regular_file_platform(
         "this platform does not expose a secure direct-file attachment primitive",
     ))
 }
-
 /// Read one direct regular attachment entry under a hard byte ceiling.
 ///
 /// # Errors
@@ -379,19 +349,16 @@ pub(super) fn read_bounded_attachment_regular_file(
     }
     Ok(bytes)
 }
-
 /// Initialize on-disk directories for attachments storage.
 pub fn init_persistence() {
     ensure_root_dir();
 }
-
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
 }
-
 fn list_all_ids(tenant: &AttachmentTenant) -> Vec<String> {
     let mut ids = Vec::new();
     if let Ok(rd) = fs::read_dir(attachments_dir(tenant)) {
@@ -407,7 +374,6 @@ fn list_all_ids(tenant: &AttachmentTenant) -> Vec<String> {
     }
     ids
 }
-
 fn load_meta(tenant: &AttachmentTenant, id: &str) -> Option<AttachmentMeta> {
     let id = sanitize_attachment_id(id)?;
     let path = meta_path(tenant, &id);
@@ -417,7 +383,6 @@ fn load_meta(tenant: &AttachmentTenant, id: &str) -> Option<AttachmentMeta> {
     validate_attachment_metadata_contract(&meta, tenant.as_str(), &id).ok()?;
     Some(meta)
 }
-
 fn save_meta(tenant: &AttachmentTenant, meta: &AttachmentMeta) -> std::io::Result<()> {
     let id = sanitize_attachment_id(&meta.id).ok_or_else(|| {
         std::io::Error::new(
@@ -442,7 +407,6 @@ fn save_meta(tenant: &AttachmentTenant, meta: &AttachmentMeta) -> std::io::Resul
     tmp.flush()?;
     tmp.persist(&path).map(|_| ()).map_err(|e| e.error)
 }
-
 fn persist_body(tenant: &AttachmentTenant, id: &str, body: &[u8]) -> std::io::Result<()> {
     let id = sanitize_attachment_id(id).ok_or_else(|| {
         std::io::Error::new(
@@ -458,14 +422,12 @@ fn persist_body(tenant: &AttachmentTenant, id: &str, body: &[u8]) -> std::io::Re
     tmp.flush()?;
     tmp.persist(&path).map(|_| ()).map_err(|e| e.error)
 }
-
 fn delete_attachment_files(tenant: &AttachmentTenant, id: &str) {
     if let Some(clean) = sanitize_attachment_id(id) {
         let _ = fs::remove_file(meta_path(tenant, &clean));
         let _ = fs::remove_file(bin_path(tenant, &clean));
     }
 }
-
 fn hash_identity_hex(label: &str, value: &str) -> String {
     let mut buf = Vec::with_capacity(label.len() + 1 + value.len());
     buf.extend_from_slice(label.as_bytes());
@@ -475,7 +437,6 @@ fn hash_identity_hex(label: &str, value: &str) -> String {
     let digest: [u8; 32] = hash.into();
     hex::encode::<[u8; 32]>(digest)
 }
-
 fn sanitize_tenant_key(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.len() != TENANT_KEY_HEX_LEN {
@@ -486,7 +447,6 @@ fn sanitize_tenant_key(raw: &str) -> Option<String> {
     }
     Some(trimmed.to_ascii_lowercase())
 }
-
 fn sanitize_attachment_id(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.len() != ATTACHMENT_ID_HEX_LEN {
@@ -497,7 +457,6 @@ fn sanitize_attachment_id(raw: &str) -> Option<String> {
     }
     Some(trimmed.to_ascii_lowercase())
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SanitizeRejectReason {
     Type,
@@ -505,7 +464,6 @@ enum SanitizeRejectReason {
     Sandbox,
     Checksum,
 }
-
 impl SanitizeRejectReason {
     fn label(self) -> &'static str {
         match self {
@@ -515,7 +473,6 @@ impl SanitizeRejectReason {
             SanitizeRejectReason::Checksum => "checksum",
         }
     }
-
     fn from_label(label: &str) -> Option<Self> {
         match label {
             "type" => Some(SanitizeRejectReason::Type),
@@ -525,7 +482,6 @@ impl SanitizeRejectReason {
             _ => None,
         }
     }
-
     fn status_code(self) -> StatusCode {
         match self {
             SanitizeRejectReason::Type => StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -536,13 +492,11 @@ impl SanitizeRejectReason {
         }
     }
 }
-
 #[derive(Debug)]
 struct SanitizeError {
     reason: SanitizeRejectReason,
     message: String,
 }
-
 impl SanitizeError {
     fn new(reason: SanitizeRejectReason, message: impl Into<String>) -> Self {
         Self {
@@ -550,14 +504,12 @@ impl SanitizeError {
             message: message.into(),
         }
     }
-
     fn into_wire(self) -> SanitizeErrorWire {
         SanitizeErrorWire {
             reason: self.reason.label().to_string(),
             message: self.message,
         }
     }
-
     fn from_wire(wire: SanitizeErrorWire) -> Self {
         let reason =
             SanitizeRejectReason::from_label(&wire.reason).unwrap_or(SanitizeRejectReason::Sandbox);
@@ -567,7 +519,6 @@ impl SanitizeError {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 struct SanitizerConfig {
     allowed_mime_types: Vec<String>,
@@ -576,7 +527,6 @@ struct SanitizerConfig {
     timeout: Duration,
     mode: AttachmentSanitizerMode,
 }
-
 #[derive(Debug, Clone, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 struct SanitizerSummary {
     sniffed_type: String,
@@ -584,19 +534,16 @@ struct SanitizerSummary {
     archive_depth: u32,
     sandboxed: bool,
 }
-
 #[derive(Debug, Clone)]
 struct SanitizerOutcome {
     summary: SanitizerSummary,
     sanitized_body: Vec<u8>,
 }
-
 #[derive(Debug, Clone, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 struct SanitizeErrorWire {
     reason: String,
     message: String,
 }
-
 #[derive(Debug, Clone, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 struct SanitizerRequest {
     #[norito(default)]
@@ -608,7 +555,6 @@ struct SanitizerRequest {
     max_archive_depth: u32,
     timeout_ms: u64,
 }
-
 #[derive(Debug, Clone, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 enum SanitizerResponse {
     /// Sanitization succeeded with one summary and exact replacement body.
@@ -619,7 +565,6 @@ enum SanitizerResponse {
     /// Sanitization rejected the request.
     Rejected { error: SanitizeErrorWire },
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SniffedFormat {
     Norito,
@@ -629,7 +574,6 @@ enum SniffedFormat {
     Zstd,
     Unknown,
 }
-
 fn normalize_mime(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -645,7 +589,6 @@ fn normalize_mime(raw: &str) -> Option<String> {
     }
     Some(normalized)
 }
-
 fn sniff_format(bytes: &[u8]) -> SniffedFormat {
     if bytes.starts_with(&norito::core::MAGIC) {
         return SniffedFormat::Norito;
@@ -668,7 +611,6 @@ fn sniff_format(bytes: &[u8]) -> SniffedFormat {
     }
     SniffedFormat::Unknown
 }
-
 /// Return the canonical media type for an already-expanded attachment body.
 pub(super) fn sniffed_attachment_media_type(bytes: &[u8]) -> Option<&'static str> {
     match sniff_format(bytes) {
@@ -679,14 +621,12 @@ pub(super) fn sniffed_attachment_media_type(bytes: &[u8]) -> Option<&'static str
         SniffedFormat::Gzip | SniffedFormat::Zstd => None,
     }
 }
-
 fn is_canonical_attachment_digest(value: &str) -> bool {
     value.len() == ATTACHMENT_ID_HEX_LEN
         && value
             .bytes()
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
-
 /// Validate invariants that can be checked from persisted metadata alone.
 ///
 /// # Errors
@@ -736,7 +676,6 @@ pub(super) fn validate_attachment_metadata_contract(
     }
     Ok(())
 }
-
 /// Validate persisted attachment bytes against their required provenance.
 ///
 /// # Errors
@@ -790,7 +729,6 @@ pub(super) fn validate_attachment_body_contract(
     }
     Ok(())
 }
-
 fn read_limited<R: std::io::Read>(
     mut reader: R,
     max_bytes: u64,
@@ -828,7 +766,6 @@ fn read_limited<R: std::io::Read>(
     }
     Ok(out)
 }
-
 fn inspect_bytes(
     bytes: &[u8],
     depth: u32,
@@ -908,7 +845,6 @@ fn inspect_bytes(
         )),
     }
 }
-
 fn sanitizer_config() -> SanitizerConfig {
     SanitizerConfig {
         allowed_mime_types: allowed_mime_types_cfg(),
@@ -918,7 +854,6 @@ fn sanitizer_config() -> SanitizerConfig {
         mode: sanitizer_mode_cfg(),
     }
 }
-
 fn sanitize_attachment_sync(
     declared_type: Option<&str>,
     body: &[u8],
@@ -976,7 +911,6 @@ fn sanitize_attachment_sync(
     }
     Ok(outcome)
 }
-
 async fn sanitize_attachment(
     declared_type: Option<String>,
     body: axum::body::Bytes,
@@ -991,7 +925,6 @@ async fn sanitize_attachment(
         }
     }
 }
-
 async fn sanitize_attachment_in_process(
     declared_type: Option<String>,
     body: axum::body::Bytes,
@@ -1011,7 +944,6 @@ async fn sanitize_attachment_in_process(
     outcome.summary.sandboxed = false;
     Ok(outcome)
 }
-
 async fn sanitize_attachment_subprocess(
     declared_type: Option<String>,
     body: axum::body::Bytes,
@@ -1035,7 +967,6 @@ async fn sanitize_attachment_subprocess(
         })??;
     Ok(outcome)
 }
-
 fn run_sanitizer_subprocess(
     request: SanitizerRequest,
     timeout: Duration,
@@ -1092,7 +1023,6 @@ fn run_sanitizer_subprocess(
             let result = read_sanitizer_stdout_limited(&mut stdout, max_output_bytes);
             let _ = tx.send(result);
         });
-
         let deadline = Instant::now() + timeout;
         loop {
             let Some(status) = child.try_wait().map_err(|err| {
@@ -1120,7 +1050,6 @@ fn run_sanitizer_subprocess(
             }
             break;
         }
-
         let remaining = deadline.saturating_duration_since(Instant::now());
         let stdout_bytes = rx
             .recv_timeout(remaining)
@@ -1133,17 +1062,14 @@ fn run_sanitizer_subprocess(
             .map_err(|err| SanitizeError::new(SanitizeRejectReason::Sandbox, err))?;
         decode_sanitizer_response_bytes(&stdout_bytes)
     })();
-
     if result.is_err() {
         // Best-effort cleanup. If the sanitizer is still running (e.g. timeout),
         // ensure we kill and reap it to avoid leaking a zombie process.
         let _ = child.kill();
         let _ = child.wait();
     }
-
     result
 }
-
 fn read_sanitizer_stdout_limited(
     stdout: &mut impl std::io::Read,
     max_bytes: usize,
@@ -1165,7 +1091,6 @@ fn read_sanitizer_stdout_limited(
         output.extend_from_slice(&chunk[..read]);
     }
 }
-
 fn validate_sanitizer_executable(exe: &Path) -> Result<PathBuf, SanitizeError> {
     let canonical = fs::canonicalize(exe).map_err(|err| {
         SanitizeError::new(
@@ -1191,7 +1116,6 @@ fn validate_sanitizer_executable(exe: &Path) -> Result<PathBuf, SanitizeError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         if metadata.permissions().mode() & 0o111 == 0 {
             return Err(SanitizeError::new(
                 SanitizeRejectReason::Sandbox,
@@ -1228,7 +1152,6 @@ fn validate_sanitizer_executable(exe: &Path) -> Result<PathBuf, SanitizeError> {
     }
     Ok(canonical)
 }
-
 fn decode_sanitizer_response_bytes(stdout_bytes: &[u8]) -> Result<SanitizerOutcome, SanitizeError> {
     let response = norito::decode_canonical::<SanitizerResponse>(stdout_bytes).map_err(|err| {
         SanitizeError::new(
@@ -1247,12 +1170,10 @@ fn decode_sanitizer_response_bytes(stdout_bytes: &[u8]) -> Result<SanitizerOutco
         SanitizerResponse::Rejected { error } => Err(SanitizeError::from_wire(error)),
     }
 }
-
 fn sanitizer_executable() -> Result<PathBuf, SanitizeError> {
     let override_path = attach_cfg().read().sanitizer_exe_override.clone();
     sanitizer_executable_with_override(override_path)
 }
-
 fn sanitizer_executable_with_override(
     override_path: Option<PathBuf>,
 ) -> Result<PathBuf, SanitizeError> {
@@ -1279,7 +1200,6 @@ fn sanitizer_executable_with_override(
         env::consts::EXE_SUFFIX
     )))
 }
-
 fn sandboxed_sanitizer_command(
     exe: &Path,
     max_input_bytes: &str,
@@ -1290,7 +1210,6 @@ fn sandboxed_sanitizer_command(
     let search_path = None;
     sandboxed_sanitizer_command_for_search_path(exe, max_input_bytes, search_path)
 }
-
 fn sandboxed_sanitizer_command_for_search_path(
     exe: &Path,
     max_input_bytes: &str,
@@ -1340,7 +1259,6 @@ fn sandboxed_sanitizer_command_for_search_path(
             return Ok(cmd);
         }
     }
-
     #[cfg(target_os = "macos")]
     {
         if let Some(sandbox_exec) = find_executable_in_search_path(search_path, "sandbox-exec") {
@@ -1364,16 +1282,13 @@ fn sandboxed_sanitizer_command_for_search_path(
             return Ok(cmd);
         }
     }
-
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let _ = search_path;
-
     Err(SanitizeError::new(
         SanitizeRejectReason::Sandbox,
         "attachment sanitizer OS sandbox unavailable",
     ))
 }
-
 #[cfg(target_os = "linux")]
 fn add_bwrap_runtime_path(cmd: &mut Command, path: &Path) -> Result<(), SanitizeError> {
     let Ok(metadata) = fs::symlink_metadata(path) else {
@@ -1395,14 +1310,12 @@ fn add_bwrap_runtime_path(cmd: &mut Command, path: &Path) -> Result<(), Sanitize
     }
     Ok(())
 }
-
 fn set_clean_sanitizer_environment(cmd: &mut Command, max_input_bytes: &str) {
     cmd.env_clear()
         .env(ATTACHMENT_SANITIZER_ENV, "1")
         .env(ATTACHMENT_SANITIZER_MAX_INPUT_ENV, max_input_bytes)
         .env(ATTACHMENT_SANITIZER_SANDBOXED_ENV, "1");
 }
-
 #[cfg(target_os = "macos")]
 fn macos_sandbox_literal(path: &Path) -> Result<String, SanitizeError> {
     let raw = path.to_str().ok_or_else(|| {
@@ -1413,7 +1326,6 @@ fn macos_sandbox_literal(path: &Path) -> Result<String, SanitizeError> {
     })?;
     Ok(raw.replace('\\', "\\\\").replace('"', "\\\""))
 }
-
 fn find_executable_in_search_path(search_path: Option<&OsStr>, name: &str) -> Option<PathBuf> {
     let path = search_path?;
     for dir in env::split_paths(path) {
@@ -1424,7 +1336,6 @@ fn find_executable_in_search_path(search_path: Option<&OsStr>, name: &str) -> Op
     }
     None
 }
-
 fn executable_file(path: &Path) -> bool {
     let Ok(metadata) = fs::metadata(path) else {
         return false;
@@ -1435,20 +1346,17 @@ fn executable_file(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-
         return metadata.permissions().mode() & 0o111 != 0;
     }
     #[cfg(not(unix))]
     true
 }
-
 fn enforce_per_tenant_quota(tenant: &AttachmentTenant, incoming_size: u64) -> bool {
     let max_count_raw = per_tenant_max_count_cfg();
     let max_bytes_raw = per_tenant_max_bytes_cfg();
     if max_count_raw == 0 && max_bytes_raw == 0 {
         return true;
     }
-
     let mut metas: Vec<AttachmentMeta> = list_all_ids(tenant)
         .into_iter()
         .filter_map(|id| load_meta(tenant, &id))
@@ -1458,7 +1366,6 @@ fn enforce_per_tenant_quota(tenant: &AttachmentTenant, incoming_size: u64) -> bo
             .cmp(&b.created_ms)
             .then_with(|| a.id.cmp(&b.id))
     });
-
     let mut total_bytes: u64 = metas.iter().map(|m| m.size).sum();
     let mut count_after_add = metas.len() as u64 + 1;
     let max_count = if max_count_raw == 0 {
@@ -1471,7 +1378,6 @@ fn enforce_per_tenant_quota(tenant: &AttachmentTenant, incoming_size: u64) -> bo
     } else {
         max_bytes_raw
     };
-
     let mut idx = 0usize;
     let mut removed_ids: Vec<String> = Vec::new();
     while (count_after_add > max_count || total_bytes.saturating_add(incoming_size) > max_bytes)
@@ -1483,7 +1389,6 @@ fn enforce_per_tenant_quota(tenant: &AttachmentTenant, incoming_size: u64) -> bo
         count_after_add = count_after_add.saturating_sub(1);
         idx += 1;
     }
-
     if count_after_add > max_count || total_bytes.saturating_add(incoming_size) > max_bytes {
         warn!(
             tenant = tenant.as_str(),
@@ -1496,7 +1401,6 @@ fn enforce_per_tenant_quota(tenant: &AttachmentTenant, incoming_size: u64) -> bo
         );
         return false;
     }
-
     for id in removed_ids.iter() {
         delete_attachment_files(tenant, id);
     }
@@ -1514,7 +1418,6 @@ fn enforce_per_tenant_quota(tenant: &AttachmentTenant, incoming_size: u64) -> bo
     }
     true
 }
-
 /// POST /v1/zk/attachments — store an attachment and return its metadata.
 pub async fn handle_post_attachment(
     tenant: AttachmentTenant,
@@ -1661,12 +1564,10 @@ pub async fn handle_post_attachment(
     )
         .into_response()
 }
-
 /// GET /v1/zk/attachments — list stored attachments metadata.
 pub async fn handle_list_attachments(tenant: AttachmentTenant) -> impl IntoResponse {
     handle_list_attachments_filtered(tenant, NoritoQuery(AttachmentListQuery::default())).await
 }
-
 #[derive(
     Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
 )]
@@ -1691,7 +1592,6 @@ pub struct AttachmentListQuery {
     /// If true, return only ids (array of strings)
     pub ids_only: Option<bool>,
 }
-
 /// GET /v1/zk/attachments with filters
 pub async fn handle_list_attachments_filtered(
     tenant: AttachmentTenant,
@@ -1768,7 +1668,6 @@ pub async fn handle_list_attachments_filtered(
         .body(axum::body::Body::from(body))
         .unwrap()
 }
-
 /// GET /v1/zk/attachments/count — return number of attachments matching filters
 pub async fn handle_count_attachments(
     tenant: AttachmentTenant,
@@ -1827,19 +1726,16 @@ pub async fn handle_count_attachments(
         .body(axum::body::Body::from(s))
         .unwrap()
 }
-
 fn attachment_meta_has_tag(meta: &AttachmentMeta, tag: &str) -> bool {
     meta.zk1_tags
         .as_ref()
         .is_some_and(|tags| tags.iter().any(|existing| existing == tag))
 }
-
 fn needs_export_sanitization(meta: &AttachmentMeta) -> bool {
     meta.provenance
         .as_ref()
         .map_or(true, |prov| prov.sanitizer.archive_depth > 0)
 }
-
 /// GET /v1/zk/attachments/{id} — return the stored attachment bytes.
 pub async fn handle_get_attachment(
     tenant: AttachmentTenant,
@@ -1904,7 +1800,6 @@ pub async fn handle_get_attachment(
         .body(axum::body::Body::from(sanitized.sanitized_body))
         .unwrap()
 }
-
 /// DELETE /v1/zk/attachments/{id} — delete an attachment and its metadata.
 pub async fn handle_delete_attachment(
     tenant: AttachmentTenant,
@@ -1925,7 +1820,6 @@ pub async fn handle_delete_attachment(
         StatusCode::NOT_FOUND.into_response()
     }
 }
-
 /// Start a background GC worker that removes expired attachments.
 pub fn start_gc_worker() {
     ensure_root_dir();
@@ -1988,7 +1882,6 @@ struct AttachConfig {
     sanitizer_exe_override: Option<PathBuf>,
     telemetry: MaybeTelemetry,
 }
-
 impl Default for AttachConfig {
     fn default() -> Self {
         Self {
@@ -2013,14 +1906,11 @@ impl Default for AttachConfig {
         }
     }
 }
-
 static ATTACH_CFG: OnceLock<RwLock<AttachConfig>> = OnceLock::new();
 static ATTACH_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-
 fn attach_cfg() -> &'static RwLock<AttachConfig> {
     ATTACH_CFG.get_or_init(|| RwLock::new(AttachConfig::default()))
 }
-
 /// Configure attachments TTL, per-item size cap, and per-tenant quotas from Torii config.
 /// The sanitizer executable override is intended for tests and tooling.
 #[allow(clippy::too_many_arguments)]
@@ -2055,45 +1945,35 @@ pub fn configure(
         telemetry,
     };
 }
-
 pub(super) fn max_bytes_cfg() -> usize {
     let max_bytes = attach_cfg().read().max_bytes;
     usize::try_from(max_bytes).unwrap_or(usize::MAX)
 }
-
 fn ttl_secs_cfg() -> u64 {
     attach_cfg().read().ttl_secs
 }
-
 fn per_tenant_max_count_cfg() -> u64 {
     attach_cfg().read().per_tenant_max_count
 }
-
 fn per_tenant_max_bytes_cfg() -> u64 {
     attach_cfg().read().per_tenant_max_bytes
 }
-
 fn allowed_mime_types_cfg() -> Vec<String> {
     attach_cfg().read().allowed_mime_types.clone()
 }
-
 fn max_expanded_bytes_cfg() -> u64 {
     attach_cfg().read().max_expanded_bytes
 }
-
 fn max_archive_depth_cfg() -> u32 {
     attach_cfg().read().max_archive_depth
 }
-
 fn sanitizer_mode_cfg() -> AttachmentSanitizerMode {
     attach_cfg().read().sanitizer_mode
 }
-
 fn sanitize_timeout_cfg() -> Duration {
     let ms = attach_cfg().read().sanitize_timeout_ms.max(1);
     Duration::from_millis(ms)
 }
-
 /// Run the attachment sanitizer process if requested via environment.
 pub fn sanitizer_process_exit_code_from_env() -> Option<i32> {
     if env::var_os(ATTACHMENT_SANITIZER_ENV).as_deref() != Some(OsStr::new("1")) {
@@ -2108,7 +1988,6 @@ pub fn sanitizer_process_exit_code_from_env() -> Option<i32> {
     };
     Some(exit_code)
 }
-
 fn run_sanitizer_process() -> Result<(), SanitizeError> {
     if env::var_os(ATTACHMENT_SANITIZER_SANDBOXED_ENV).as_deref() != Some(OsStr::new("1")) {
         return Err(SanitizeError::new(
@@ -2169,7 +2048,6 @@ fn run_sanitizer_process() -> Result<(), SanitizeError> {
         };
     write_sanitizer_response(&response)
 }
-
 fn decode_sanitizer_request_bytes(payload: &[u8]) -> Result<SanitizerRequest, SanitizeError> {
     norito::decode_canonical(payload).map_err(|err| {
         SanitizeError::new(
@@ -2178,12 +2056,10 @@ fn decode_sanitizer_request_bytes(payload: &[u8]) -> Result<SanitizerRequest, Sa
         )
     })
 }
-
 fn sanitizer_cpu_limit_secs(timeout: Duration) -> u64 {
     let millis = timeout.as_millis().max(1) as u64;
     (millis.saturating_add(999) / 1000).max(1)
 }
-
 fn sanitizer_memory_limit_bytes(max_expanded_bytes: u64) -> u64 {
     const BASE_OVERHEAD_BYTES: u64 = 64 * 1024 * 1024;
     let scaled = max_expanded_bytes.saturating_mul(4);
@@ -2191,7 +2067,6 @@ fn sanitizer_memory_limit_bytes(max_expanded_bytes: u64) -> u64 {
         .saturating_add(BASE_OVERHEAD_BYTES)
         .max(BASE_OVERHEAD_BYTES)
 }
-
 fn apply_sanitizer_limits(max_expanded_bytes: u64, timeout: Duration) -> Result<(), SanitizeError> {
     #[cfg(unix)]
     {
@@ -2202,15 +2077,12 @@ fn apply_sanitizer_limits(max_expanded_bytes: u64, timeout: Duration) -> Result<
     }
     Ok(())
 }
-
 #[cfg(unix)]
 #[cfg(any(target_env = "gnu", target_env = "uclibc"))]
 type RlimitResource = libc::__rlimit_resource_t;
-
 #[cfg(unix)]
 #[cfg(not(any(target_env = "gnu", target_env = "uclibc")))]
 type RlimitResource = libc::c_int;
-
 #[cfg(unix)]
 #[allow(unsafe_code)]
 fn set_rlimit(resource: RlimitResource, value: u64) -> Result<(), SanitizeError> {
@@ -2218,12 +2090,10 @@ fn set_rlimit(resource: RlimitResource, value: u64) -> Result<(), SanitizeError>
         rlim_cur: value,
         rlim_max: value,
     };
-
     let result = unsafe { libc::setrlimit(resource, &raw const limit) };
     if result != 0 {
         return Err(SanitizeError {
             reason: SanitizeRejectReason::Sandbox,
-
             message: format!(
                 "setrlimit failed for resource {:?}: {}",
                 resource,
@@ -2231,10 +2101,8 @@ fn set_rlimit(resource: RlimitResource, value: u64) -> Result<(), SanitizeError>
             ),
         });
     }
-
     Ok(())
 }
-
 fn write_sanitizer_response(response: &SanitizerResponse) -> Result<(), SanitizeError> {
     let bytes = norito::encode_canonical(response).map_err(|err| {
         SanitizeError::new(
@@ -2251,7 +2119,6 @@ fn write_sanitizer_response(response: &SanitizerResponse) -> Result<(), Sanitize
     })?;
     Ok(())
 }
-
 fn read_stdin_limited(max_bytes: usize) -> Result<Vec<u8>, SanitizeError> {
     let mut reader = std::io::stdin().lock();
     let mut buf = [0u8; 8 * 1024];
@@ -2277,41 +2144,34 @@ fn read_stdin_limited(max_bytes: usize) -> Result<Vec<u8>, SanitizeError> {
     }
     Ok(out)
 }
-
 fn telemetry_handle() -> MaybeTelemetry {
     attach_cfg().read().telemetry.clone()
 }
-
 fn quota_lock() -> &'static Mutex<()> {
     ATTACH_MUTEX.get_or_init(|| Mutex::new(()))
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsStr, fs, path::PathBuf, process::Command};
-
+    use super::{
+        AttachmentHashes, AttachmentMeta, AttachmentProvenance, AttachmentSanitizerMode,
+        AttachmentSanitizerVerdict, SanitizeRejectReason, SanitizerConfig, ZK1_MAX_TLV_COUNT, json,
+        parse_zk1_tags, sanitize_attachment_id, sanitize_attachment_sync,
+    };
     use axum::http::HeaderMap;
+    use axum::{http::StatusCode, response::IntoResponse};
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use flate2::{Compression, write::GzEncoder};
     use http_body_util::BodyExt as _;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::account::AccountId;
     use sha2::{Digest as _, Sha256};
+    use std::{ffi::OsStr, fs, path::PathBuf, process::Command};
     use std::{
         io,
         io::Write as _,
         sync::Once,
         time::{Duration, Instant},
     };
-
-    use axum::{http::StatusCode, response::IntoResponse};
-
-    use super::{
-        AttachmentHashes, AttachmentMeta, AttachmentProvenance, AttachmentSanitizerMode,
-        AttachmentSanitizerVerdict, SanitizeRejectReason, SanitizerConfig, ZK1_MAX_TLV_COUNT, json,
-        parse_zk1_tags, sanitize_attachment_id, sanitize_attachment_sync,
-    };
-
     #[test]
     fn attachment_config_lock_remains_usable_after_writer_panic() {
         let panic = std::thread::spawn(|| {
@@ -2319,11 +2179,9 @@ mod tests {
             panic!("intentional attachment-config writer panic");
         })
         .join();
-
         assert!(panic.is_err());
         let _guard = super::attach_cfg().read();
     }
-
     fn test_sanitizer_config(max_expanded_bytes: u64, max_archive_depth: u32) -> SanitizerConfig {
         SanitizerConfig {
             allowed_mime_types: vec![
@@ -2337,13 +2195,11 @@ mod tests {
             mode: AttachmentSanitizerMode::InProcess,
         }
     }
-
     fn gzip_compress(input: &[u8]) -> Vec<u8> {
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(input).expect("write gzip input");
         encoder.finish().expect("finish gzip")
     }
-
     fn canonical_test_meta(tenant: &super::AttachmentTenant, body: &[u8]) -> AttachmentMeta {
         let id = hex::encode::<[u8; 32]>(Hash::new(body).into());
         AttachmentMeta {
@@ -2369,7 +2225,6 @@ mod tests {
             zk1_tags: None,
         }
     }
-
     fn load_fixture_base64(name: &str) -> Vec<u8> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
@@ -2386,7 +2241,6 @@ mod tests {
             .decode(joined.as_bytes())
             .unwrap_or_else(|err| panic!("failed to decode fixture {}: {err}", path.display()))
     }
-
     fn ensure_test_config() {
         static INIT: Once = Once::new();
         INIT.call_once(|| {
@@ -2409,12 +2263,10 @@ mod tests {
             );
         });
     }
-
     fn checked_attachment_ed25519_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("test attachment fixture key derivation should succeed")
     }
-
     fn checked_attachment_account(seed: u8) -> AccountId {
         AccountId::new(
             checked_attachment_ed25519_keypair(seed)
@@ -2422,7 +2274,6 @@ mod tests {
                 .clone(),
         )
     }
-
     #[test]
     fn checked_attachment_ed25519_keypair_uses_fallible_seed_derivation() {
         assert_eq!(
@@ -2438,7 +2289,6 @@ mod tests {
             checked_attachment_account(0x42)
         );
     }
-
     #[test]
     fn attachment_meta_norito_roundtrip() {
         let meta = AttachmentMeta {
@@ -2450,13 +2300,10 @@ mod tests {
             provenance: None,
             zk1_tags: None,
         };
-
         let encoded = json::to_json_pretty(&meta).expect("serialize metadata");
         let decoded: AttachmentMeta = json::from_json(&encoded).expect("deserialize metadata");
-
         assert_eq!(meta, decoded);
     }
-
     #[test]
     fn load_meta_rejects_oversized_persisted_metadata() {
         let tmp = tempfile::tempdir().expect("temp dir");
@@ -2469,13 +2316,11 @@ mod tests {
             vec![b' '; super::ATTACHMENT_META_FILE_MAX_BYTES as usize + 1],
         )
         .expect("write oversized persisted metadata");
-
         assert!(
             super::load_meta(&tenant, &id).is_none(),
             "metadata beyond the 64-KiB persistence contract must not be read or parsed"
         );
     }
-
     #[test]
     fn save_meta_rejects_records_beyond_the_persistence_contract() {
         let tmp = tempfile::tempdir().expect("temp dir");
@@ -2491,13 +2336,11 @@ mod tests {
             provenance: None,
             zk1_tags: None,
         };
-
         let error =
             super::save_meta(&tenant, &meta).expect_err("oversized metadata must not be persisted");
         assert!(error.to_string().contains("persistence limit"));
         assert!(!super::meta_path(&tenant, &id).exists());
     }
-
     #[test]
     fn save_and_load_meta_require_canonical_provenance() {
         let tmp = tempfile::tempdir().expect("temp dir");
@@ -2505,14 +2348,12 @@ mod tests {
         let tenant = super::AttachmentTenant::anonymous();
         let body = br#"{"valid":true}"#;
         let meta = canonical_test_meta(&tenant, body);
-
         super::save_meta(&tenant, &meta).expect("persist canonical metadata");
         assert_eq!(
             super::load_meta(&tenant, &meta.id),
             Some(meta.clone()),
             "canonical metadata must round-trip"
         );
-
         let mut missing = meta.clone();
         missing.provenance = None;
         assert!(
@@ -2521,7 +2362,6 @@ mod tests {
                 .to_string()
                 .contains("provenance is required")
         );
-
         let mut rejected = meta.clone();
         rejected
             .provenance
@@ -2535,7 +2375,6 @@ mod tests {
                 .to_string()
                 .contains("verdict")
         );
-
         let mut wrong_expanded_size = meta;
         wrong_expanded_size
             .provenance
@@ -2550,12 +2389,10 @@ mod tests {
                 .contains("expanded size")
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn load_meta_rejects_a_symlink_entry() {
         use std::os::unix::fs::symlink;
-
         let tmp = tempfile::tempdir().expect("temp dir");
         let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
         let tenant = super::AttachmentTenant::anonymous();
@@ -2564,18 +2401,15 @@ mod tests {
         let target = tmp.path().join("outside-metadata.json");
         fs::write(&target, b"{}").expect("write symlink target");
         symlink(&target, super::meta_path(&tenant, &id)).expect("create metadata symlink");
-
         assert!(
             super::load_meta(&tenant, &id).is_none(),
             "metadata readers must not follow attachment-store symlinks"
         );
     }
-
     #[test]
     fn attachment_tenant_is_derived_from_signed_account() {
         let alice = checked_attachment_account(0x43);
         let bob = checked_attachment_account(0x44);
-
         assert_eq!(
             super::AttachmentTenant::from_account(&alice),
             super::AttachmentTenant::from_account(&alice)
@@ -2585,7 +2419,6 @@ mod tests {
             super::AttachmentTenant::from_account(&bob)
         );
     }
-
     #[test]
     fn sanitize_attachment_id_rejects_bad_inputs() {
         assert!(sanitize_attachment_id("../etc/passwd").is_none());
@@ -2597,7 +2430,6 @@ mod tests {
             Some("a".repeat(super::ATTACHMENT_ID_HEX_LEN))
         );
     }
-
     #[tokio::test]
     async fn get_attachment_rejects_invalid_id() {
         let response = super::handle_get_attachment(
@@ -2608,7 +2440,6 @@ mod tests {
         .into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
-
     #[tokio::test]
     async fn get_attachment_rejects_same_size_body_substitution() {
         let tmp = tempfile::tempdir().expect("temp dir");
@@ -2623,13 +2454,11 @@ mod tests {
         super::save_meta(&tenant, &meta).expect("persist canonical metadata");
         fs::write(super::bin_path(&tenant, &meta.id), substituted)
             .expect("substitute same-size body");
-
         let response = super::handle_get_attachment(tenant, axum::extract::Path(meta.id))
             .await
             .into_response();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
-
     #[test]
     fn sanitizer_accepts_norito_magic() {
         let cfg = test_sanitizer_config(1024, 1);
@@ -2638,7 +2467,6 @@ mod tests {
         assert_eq!(outcome.summary.sniffed_type, super::NORITO_MIME_TYPE);
         assert_eq!(outcome.summary.expanded_bytes, body.len() as u64);
     }
-
     #[test]
     fn sanitizer_rejects_declared_mismatch() {
         let cfg = test_sanitizer_config(1024, 1);
@@ -2647,7 +2475,6 @@ mod tests {
             .expect_err("mismatch rejected");
         assert_eq!(err.reason, SanitizeRejectReason::Type);
     }
-
     #[test]
     fn sanitizer_accepts_plus_json_declared_type() {
         let cfg = test_sanitizer_config(1024, 1);
@@ -2656,7 +2483,6 @@ mod tests {
             .expect("plus-json should be accepted");
         assert_eq!(outcome.summary.sniffed_type, super::JSON_MIME_TYPE);
     }
-
     #[test]
     fn sanitizer_rejects_expansion_limit() {
         let cfg = test_sanitizer_config(8, 2);
@@ -2665,7 +2491,6 @@ mod tests {
         let err = sanitize_attachment_sync(None, &gz, &cfg).expect_err("expansion rejected");
         assert_eq!(err.reason, SanitizeRejectReason::Expansion);
     }
-
     #[test]
     fn sanitizer_rejects_archive_depth() {
         let cfg = test_sanitizer_config(1024, 1);
@@ -2675,7 +2500,6 @@ mod tests {
         let err = sanitize_attachment_sync(None, &twice, &cfg).expect_err("depth rejected");
         assert_eq!(err.reason, SanitizeRejectReason::Expansion);
     }
-
     #[test]
     fn sanitizer_limit_helpers_round_up() {
         assert_eq!(
@@ -2691,7 +2515,6 @@ mod tests {
         let scaled_limit = super::sanitizer_memory_limit_bytes(16 * 1024 * 1024);
         assert!(scaled_limit > min_limit);
     }
-
     #[test]
     fn sanitizer_executable_override_prefers_explicit_path() {
         let override_path = PathBuf::from("attachment_sanitizer_stub");
@@ -2699,7 +2522,6 @@ mod tests {
             .expect("override path");
         assert_eq!(resolved, override_path);
     }
-
     #[test]
     fn sanitizer_executable_defaults_to_dedicated_sibling() {
         let resolved = super::sanitizer_executable_with_override(None).expect("sanitizer path");
@@ -2714,7 +2536,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn validate_sanitizer_executable_rejects_missing_non_file_or_node_path() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -2723,25 +2544,21 @@ mod tests {
             super::validate_sanitizer_executable(&missing).expect_err("missing path rejected");
         assert_eq!(err.reason, SanitizeRejectReason::Sandbox);
         assert!(err.message.contains("attachment sanitizer spawn failed"));
-
         let err =
             super::validate_sanitizer_executable(temp.path()).expect_err("directory path rejected");
         assert_eq!(err.reason, SanitizeRejectReason::Sandbox);
         assert!(err.message.contains("is not a file"));
-
         let current = std::env::current_exe().expect("current executable");
         let err = super::validate_sanitizer_executable(&current)
             .expect_err("node executable must be rejected");
         assert_eq!(err.reason, SanitizeRejectReason::Sandbox);
         assert!(err.message.contains("dedicated executable"));
     }
-
     #[test]
     fn sanitizer_command_environment_is_an_explicit_allowlist() {
         let mut cmd = Command::new("attachment_sanitizer");
         cmd.env("PRIVATE_KEY", "must-not-survive");
         super::set_clean_sanitizer_environment(&mut cmd, "4096");
-
         let envs: Vec<_> = cmd.get_envs().collect();
         assert_eq!(envs.len(), 3);
         assert!(
@@ -2760,7 +2577,6 @@ mod tests {
                 && *value == Some(OsStr::new("1"))
         }));
     }
-
     #[test]
     fn sandboxed_sanitizer_command_fails_closed_without_wrapper_in_search_path() {
         let exe = PathBuf::from("attachment_sanitizer");
@@ -2773,7 +2589,6 @@ mod tests {
         assert_eq!(err.reason, SanitizeRejectReason::Sandbox);
         assert!(err.message.contains("OS sandbox unavailable"));
     }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn sandboxed_sanitizer_command_uses_sandbox_exec_on_macos() {
@@ -2788,7 +2603,6 @@ mod tests {
             permissions.set_mode(0o755);
             fs::set_permissions(&sandbox_exec, permissions).expect("make sandbox-exec executable");
         }
-
         let exe = PathBuf::from("attachment_sanitizer");
         let cmd = super::sandboxed_sanitizer_command_for_search_path(
             &exe,
@@ -2797,7 +2611,6 @@ mod tests {
         )
         .expect("sandbox command");
         assert_eq!(cmd.get_program(), sandbox_exec.as_os_str());
-
         let args: Vec<_> = cmd.get_args().collect();
         assert_eq!(args.first().copied(), Some(OsStr::new("-p")));
         assert!(
@@ -2808,7 +2621,6 @@ mod tests {
                     && !profile.contains("(allow file-read*)"))
         );
         assert_eq!(args.last().copied(), Some(exe.as_os_str()));
-
         let envs: Vec<_> = cmd.get_envs().collect();
         assert!(envs.iter().any(|(key, value)| {
             *key == OsStr::new(super::ATTACHMENT_SANITIZER_ENV) && *value == Some(OsStr::new("1"))
@@ -2818,7 +2630,6 @@ mod tests {
                 && *value == Some(OsStr::new("1"))
         }));
     }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn sandboxed_sanitizer_command_uses_bwrap_from_search_path() {
@@ -2833,7 +2644,6 @@ mod tests {
             permissions.set_mode(0o755);
             fs::set_permissions(&bubblewrap, permissions).expect("make bwrap executable");
         }
-
         let exe = PathBuf::from("attachment_sanitizer");
         let cmd = super::sandboxed_sanitizer_command_for_search_path(
             &exe,
@@ -2842,7 +2652,6 @@ mod tests {
         )
         .expect("sandbox command");
         assert_eq!(cmd.get_program(), bubblewrap.as_os_str());
-
         let args: Vec<_> = cmd.get_args().collect();
         assert!(
             args.iter()
@@ -2861,7 +2670,6 @@ mod tests {
             "the sandbox must not expose the host root"
         );
     }
-
     #[test]
     fn sanitizer_stdout_reader_rejects_oversized_response() {
         let mut within_limit = io::Cursor::new(b"1234".as_slice());
@@ -2869,21 +2677,17 @@ mod tests {
             super::read_sanitizer_stdout_limited(&mut within_limit, 4).expect("bounded output"),
             b"1234"
         );
-
         let mut oversized = io::Cursor::new(b"12345".as_slice());
         let err = super::read_sanitizer_stdout_limited(&mut oversized, 4)
             .expect_err("oversized output rejected");
         assert!(err.contains("output exceeds 4 bytes"));
     }
-
     struct AlwaysErrReader;
-
     impl io::Read for AlwaysErrReader {
         fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
             Err(io::Error::other("boom"))
         }
     }
-
     #[test]
     fn read_limited_rejects_expired_deadline_before_read() {
         let err = super::read_limited(
@@ -2892,11 +2696,9 @@ mod tests {
             Instant::now() - Duration::from_millis(1),
         )
         .expect_err("expired deadline");
-
         assert_eq!(err.reason, SanitizeRejectReason::Sandbox);
         assert_eq!(err.message, "attachment sanitize timeout exceeded");
     }
-
     #[test]
     fn read_limited_wraps_reader_error_as_checksum() {
         let err = super::read_limited(
@@ -2905,11 +2707,9 @@ mod tests {
             Instant::now() + Duration::from_millis(100),
         )
         .expect_err("reader error");
-
         assert_eq!(err.reason, SanitizeRejectReason::Checksum);
         assert!(err.message.contains("attachment decompress failed"));
     }
-
     #[test]
     fn read_limited_rejects_oversized_output() {
         let err = super::read_limited(
@@ -2918,18 +2718,15 @@ mod tests {
             Instant::now() + Duration::from_millis(100),
         )
         .expect_err("oversized output");
-
         assert_eq!(err.reason, SanitizeRejectReason::Expansion);
         assert_eq!(
             err.message,
             "attachment expanded beyond max bytes (>4 bytes)"
         );
     }
-
     fn encode_sanitizer_response(response: &super::SanitizerResponse) -> Vec<u8> {
         norito::encode_canonical(response).expect("encode canonical sanitizer response")
     }
-
     fn canonical_sanitizer_request() -> super::SanitizerRequest {
         super::SanitizerRequest {
             declared_type: Some(super::JSON_MIME_TYPE.to_owned()),
@@ -2940,13 +2737,11 @@ mod tests {
             timeout_ms: 500,
         }
     }
-
     #[test]
     fn decode_sanitizer_request_bytes_accepts_exact_canonical_frame() {
         let expected = canonical_sanitizer_request();
         let bytes = norito::encode_canonical(&expected).expect("encode canonical request");
         let decoded = super::decode_sanitizer_request_bytes(&bytes).expect("decode request");
-
         assert_eq!(decoded.declared_type, expected.declared_type);
         assert_eq!(decoded.body, expected.body);
         assert_eq!(decoded.allowed_mime_types, expected.allowed_mime_types);
@@ -2954,19 +2749,16 @@ mod tests {
         assert_eq!(decoded.max_archive_depth, expected.max_archive_depth);
         assert_eq!(decoded.timeout_ms, expected.timeout_ms);
     }
-
     #[test]
     fn decode_sanitizer_request_bytes_rejects_truncated_frame() {
         let mut bytes = norito::encode_canonical(&canonical_sanitizer_request())
             .expect("encode canonical request");
         bytes.pop().expect("request frame is non-empty");
-
         let err = super::decode_sanitizer_request_bytes(&bytes)
             .expect_err("truncated request must fail closed");
         assert_eq!(err.reason, SanitizeRejectReason::Sandbox);
         assert!(err.message.contains("request decode failed"));
     }
-
     #[test]
     fn decode_sanitizer_response_bytes_propagates_type_error() {
         let err = super::decode_sanitizer_response_bytes(&encode_sanitizer_response(
@@ -2978,11 +2770,9 @@ mod tests {
             },
         ))
         .expect_err("type reject");
-
         assert_eq!(err.reason, SanitizeRejectReason::Type);
         assert_eq!(err.message, "unsupported attachment format");
     }
-
     #[test]
     fn decode_sanitizer_response_bytes_accepts_success_response() {
         let outcome = super::decode_sanitizer_response_bytes(&encode_sanitizer_response(
@@ -2997,14 +2787,12 @@ mod tests {
             },
         ))
         .expect("successful decode");
-
         assert_eq!(outcome.summary.sniffed_type, super::JSON_MIME_TYPE);
         assert_eq!(outcome.summary.expanded_bytes, 17);
         assert_eq!(outcome.summary.archive_depth, 1);
         assert!(outcome.summary.sandboxed);
         assert_eq!(outcome.sanitized_body, br#"{"hello":"world"}"#.to_vec());
     }
-
     #[test]
     fn decode_sanitizer_response_bytes_maps_unknown_reason_to_sandbox() {
         let err = super::decode_sanitizer_response_bytes(&encode_sanitizer_response(
@@ -3016,11 +2804,9 @@ mod tests {
             },
         ))
         .expect_err("unknown reject");
-
         assert_eq!(err.reason, SanitizeRejectReason::Sandbox);
         assert_eq!(err.message, "unexpected failure");
     }
-
     #[test]
     fn decode_sanitizer_response_bytes_rejects_truncated_frame() {
         let mut bytes = encode_sanitizer_response(&super::SanitizerResponse::Rejected {
@@ -3030,13 +2816,11 @@ mod tests {
             },
         });
         bytes.pop().expect("response frame is non-empty");
-
         let err = super::decode_sanitizer_response_bytes(&bytes)
             .expect_err("truncated response must fail closed");
         assert_eq!(err.reason, SanitizeRejectReason::Sandbox);
         assert!(err.message.contains("response decode failed"));
     }
-
     #[test]
     fn decode_sanitizer_response_bytes_rejects_well_framed_unknown_variant() {
         let frame = encode_sanitizer_response(&super::SanitizerResponse::Rejected {
@@ -3052,13 +2836,11 @@ mod tests {
         let forged =
             norito::core::frame_bare_with_header_flags::<super::SanitizerResponse>(&payload, flags)
                 .expect("frame response with an unknown variant");
-
         let err = super::decode_sanitizer_response_bytes(&forged)
             .expect_err("unknown response variants must fail closed");
         assert_eq!(err.reason, SanitizeRejectReason::Sandbox);
         assert!(err.message.contains("response decode failed"));
     }
-
     #[test]
     fn sanitizer_rejects_fixture_gzip_bomb() {
         let cfg = test_sanitizer_config(64 * 1024, 2);
@@ -3066,7 +2848,6 @@ mod tests {
         let err = sanitize_attachment_sync(None, &gz, &cfg).expect_err("expansion rejected");
         assert_eq!(err.reason, SanitizeRejectReason::Expansion);
     }
-
     #[test]
     fn sanitizer_rejects_fixture_zstd_nested_depth() {
         let cfg = test_sanitizer_config(4 * 1024 * 1024, 1);
@@ -3074,7 +2855,6 @@ mod tests {
         let err = sanitize_attachment_sync(None, &payload, &cfg).expect_err("depth rejected");
         assert_eq!(err.reason, SanitizeRejectReason::Expansion);
     }
-
     #[test]
     fn zk1_extract_tags_collects_tlv_tags() {
         let mut bytes = b"ZK1\0".to_vec();
@@ -3086,7 +2866,6 @@ mod tests {
         let tags = parse_zk1_tags(&bytes).expect("zk1 tags");
         assert_eq!(tags, vec!["PROF".to_string(), "IPAK".to_string()]);
     }
-
     #[test]
     fn zk1_attachment_tag_extraction_rejects_excess_tlvs_without_partial_metadata() {
         let mut bytes = b"ZK1\0".to_vec();
@@ -3095,12 +2874,10 @@ mod tests {
             bytes.extend_from_slice(&0u32.to_le_bytes());
         }
         assert_eq!(parse_zk1_tags(&bytes), Ok(vec!["PROF".to_owned()]));
-
         bytes.extend_from_slice(b"IPAK");
         bytes.extend_from_slice(&0u32.to_le_bytes());
         assert!(parse_zk1_tags(&bytes).is_err());
     }
-
     #[test]
     fn attachment_meta_tag_filter_requires_the_ingest_index() {
         let tenant = super::AttachmentTenant::anonymous();
@@ -3118,7 +2895,6 @@ mod tests {
         assert!(super::attachment_meta_has_tag(&meta, "PROF"));
         assert!(!super::attachment_meta_has_tag(&meta, "IPAK"));
     }
-
     #[test]
     fn needs_export_sanitization_flags_missing_or_nested() {
         let base = AttachmentMeta {
@@ -3152,7 +2928,6 @@ mod tests {
         }
         assert!(!super::needs_export_sanitization(&meta));
     }
-
     #[tokio::test]
     async fn post_attachment_records_provenance() {
         let tmp = tempfile::tempdir().expect("temp dir");
@@ -3187,13 +2962,11 @@ mod tests {
         assert_eq!(provenance.sanitizer.verdict, "accepted");
         assert_eq!(provenance.sanitizer.archive_depth, 0);
     }
-
     #[tokio::test]
     async fn post_attachment_rejects_over_cardinality_zk1_before_persistence() {
         let tmp = tempfile::tempdir().expect("temp dir");
         let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
         ensure_test_config();
-
         let mut envelope = b"ZK1\0".to_vec();
         for _ in 0..=ZK1_MAX_TLV_COUNT {
             envelope.extend_from_slice(b"PROF");
@@ -3204,7 +2977,6 @@ mod tests {
             axum::http::header::CONTENT_TYPE,
             axum::http::HeaderValue::from_static("application/x-zk1"),
         );
-
         let response = super::handle_post_attachment(
             super::AttachmentTenant::anonymous(),
             headers,
@@ -3212,21 +2984,18 @@ mod tests {
         )
         .await
         .into_response();
-
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert!(
             super::list_all_ids(&super::AttachmentTenant::anonymous()).is_empty(),
             "a rejected envelope must not create attachment state"
         );
     }
-
     #[tokio::test]
     async fn get_attachment_resanitizes_compressed_exports() {
         let tmp = tempfile::tempdir().expect("temp dir");
         let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
         ensure_test_config();
         super::init_persistence();
-
         let payload = br#"{"hello":"world"}"#;
         let compressed = gzip_compress(payload);
         let mut headers = HeaderMap::new();
@@ -3255,7 +3024,6 @@ mod tests {
         assert_eq!(meta.size, payload.len() as u64);
         let provenance = meta.provenance.expect("provenance");
         assert!(provenance.sanitizer.archive_depth > 0);
-
         let response = super::handle_get_attachment(
             super::AttachmentTenant::anonymous(),
             axum::extract::Path(meta.id.clone()),

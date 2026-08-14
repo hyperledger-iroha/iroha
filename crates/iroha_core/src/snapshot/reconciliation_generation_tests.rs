@@ -10,12 +10,10 @@ async fn ordinary_snapshot_hash_reconcile_rejects_ahead_suffix_without_mutation(
     let canonical_hash = block.hash();
     store_block_and_mark_state_height(&mut state, &kura, block);
     let extra_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; 32]));
-
     let hashes = vec![canonical_hash, extra_hash];
     let error = reconcile_snapshot_hash_height_with_kura(&hashes, 1, &kura, false, None)
         .expect_err("ordinary signed snapshots cannot invent a hash-only suffix");
     assert!(matches!(error, TryReadError::MismatchedHeight { .. }));
-
     assert_eq!(kura.blocks_count(), 1);
     assert_eq!(kura.block_hash_at_height(nonzero!(2_usize)), None);
     assert!(
@@ -23,7 +21,6 @@ async fn ordinary_snapshot_hash_reconcile_rejects_ahead_suffix_without_mutation(
         "rejected snapshot must not invent a block body"
     );
     assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
-
     drop(state);
     drop(kura);
     let (reopened, BlockCount(reopened_count)) =
@@ -42,7 +39,6 @@ async fn ordinary_snapshot_hash_reconcile_rejects_ahead_suffix_without_mutation(
         "rejected suffix must remain absent after restart"
     );
 }
-
 #[tokio::test]
 async fn snapshot_hash_reconcile_rejects_forged_prefix_before_extending_suffix() {
     let kura = Kura::blank_kura_for_testing();
@@ -55,7 +51,6 @@ async fn snapshot_hash_reconcile_rejects_forged_prefix_before_extending_suffix()
     let forged_prefix = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x91; 32]));
     let attacker_suffix =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x92; 32]));
-
     SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| passes.set(0));
     let error = reconcile_snapshot_hash_height_with_kura(
         &[forged_prefix, attacker_suffix],
@@ -65,7 +60,6 @@ async fn snapshot_hash_reconcile_rejects_forged_prefix_before_extending_suffix()
         None,
     )
     .expect_err("a divergent retained prefix must reject before suffix extension");
-
     SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| {
         assert_eq!(
             passes.get(),
@@ -88,7 +82,6 @@ async fn snapshot_hash_reconcile_rejects_forged_prefix_before_extending_suffix()
         "rejected snapshot must not persist its attacker-controlled suffix"
     );
 }
-
 #[tokio::test]
 async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
     let tmp_root = tempdir().unwrap();
@@ -103,7 +96,6 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
     let (kura, _) = Kura::new(&source_kura_config, &lane_config).expect("source Kura init");
     let mut state = state_factory_with_kura(Arc::clone(&kura));
     let key_pair = checked_random_snapshot_keypair();
-
     let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
     store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
     let block2 =
@@ -114,12 +106,10 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         &kura,
         &[Arc::clone(&block1), block2],
     );
-
     try_write_snapshot(&state, &snapshot_store_dir, &key_pair, TEST_CHUNK_SIZE)
         .expect("snapshot write");
     let pointer_before =
         std::fs::read(snapshot_store_dir.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
-
     let (tail_loss_kura, BlockCount(initial_height)) =
         Kura::new(&tail_loss_kura_config, &lane_config).expect("tail-loss Kura init");
     assert_eq!(initial_height, 0);
@@ -127,7 +117,6 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         .store_block(Arc::clone(&block1))
         .expect("persist retained prefix block");
     let prefix_hash = block1.hash();
-
     let error = match try_read_snapshot(
         &snapshot_store_dir,
         &tail_loss_kura,
@@ -162,7 +151,6 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         pointer_before,
         "rejected recovery must not replace the selected snapshot generation"
     );
-
     drop(tail_loss_kura);
     let (reopened, BlockCount(reopened_count)) =
         Kura::new(&tail_loss_kura_config, &lane_config).expect("cold reopen tail-loss Kura");
@@ -174,7 +162,6 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
     );
     assert_eq!(reopened.block_hash_at_height(nonzero!(2_usize)), None);
 }
-
 #[tokio::test]
 async fn snapshot_read_validates_hashes_without_historical_block_body() {
     let tmp_root = tempdir().unwrap();
@@ -185,7 +172,6 @@ async fn snapshot_read_validates_hashes_without_historical_block_body() {
     let (kura, _) = Kura::new(&kura_config, &lane_config).expect("kura init");
     let mut state = state_factory_with_kura(Arc::clone(&kura));
     let key_pair = checked_random_snapshot_keypair();
-
     let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
     store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
     let block2 =
@@ -205,12 +191,10 @@ async fn snapshot_read_validates_hashes_without_historical_block_body() {
             Arc::clone(&block3),
         ],
     );
-
     try_write_snapshot(&state, &snapshot_store_dir, &key_pair, TEST_CHUNK_SIZE)
         .expect("snapshot write");
     drop(state);
     drop(kura);
-
     let (kura, block_count) = Kura::new(&kura_config, &lane_config).expect("kura reopen");
     let historical_height = nonzero!(2_usize);
     let payload_len = kura
@@ -239,7 +223,6 @@ async fn snapshot_read_validates_hashes_without_historical_block_body() {
         kura.get_block(historical_height).is_none(),
         "test fixture must make the historical block body unavailable"
     );
-
     let snapshot_state = try_read_snapshot(
         &snapshot_store_dir,
         &kura,
@@ -253,13 +236,11 @@ async fn snapshot_read_validates_hashes_without_historical_block_body() {
         StateTelemetry::new(<_>::default(), true),
     )
     .expect("snapshot read should validate historical hashes without block bodies");
-
     assert_eq!(
         canonical_state_snapshot_bytes_for_tests(&snapshot_state),
         expected_snapshot
     );
 }
-
 #[tokio::test]
 async fn snapshot_hash_reconcile_rejects_non_latest_mismatch() {
     let kura = Kura::blank_kura_for_testing();
@@ -272,10 +253,8 @@ async fn snapshot_hash_reconcile_rejects_non_latest_mismatch() {
     let block3 =
         signed_block_after_transaction(accepted_log_transaction("third"), Some(block2.as_ref()));
     store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block3));
-
     let mut snapshot_hashes = state.committed_block_hashes_snapshot();
     snapshot_hashes[1] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x44; 32]));
-
     let err = reconcile_snapshot_hashes_with_kura(&snapshot_hashes, &kura)
         .expect_err("non-latest hash mismatch must reject snapshot");
     assert!(matches!(
@@ -284,7 +263,6 @@ async fn snapshot_hash_reconcile_rejects_non_latest_mismatch() {
     ));
     assert_eq!(state.committed_height(), 3);
 }
-
 #[tokio::test]
 async fn snapshot_hash_reconcile_rejects_latest_mismatch_without_mutation() {
     let kura = Kura::blank_kura_for_testing();
@@ -294,10 +272,8 @@ async fn snapshot_hash_reconcile_rejects_latest_mismatch_without_mutation() {
     let block2 =
         signed_block_after_transaction(accepted_log_transaction("second"), Some(block1.as_ref()));
     store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
-
     let mut snapshot_hashes = state.committed_block_hashes_snapshot();
     snapshot_hashes[1] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; 32]));
-
     let state_height_before = state.committed_height();
     let state_hash_before = state.latest_block_hash_fast();
     let kura_height_before = kura.exact_durable_blocks_count().unwrap();
@@ -307,7 +283,6 @@ async fn snapshot_hash_reconcile_rejects_latest_mismatch_without_mutation() {
         error,
         TryReadError::MismatchedHash { height: 2, .. }
     ));
-
     assert_eq!(state.committed_height(), state_height_before);
     assert_eq!(
         state.latest_block_hash_fast(),
@@ -321,7 +296,6 @@ async fn snapshot_hash_reconcile_rejects_latest_mismatch_without_mutation() {
     );
     assert_eq!(state.latest_block_hash_fast(), Some(block2.hash()));
 }
-
 #[tokio::test]
 async fn audited_snapshot_hash_reconcile_rejects_every_divergent_existing_hash() {
     let kura = Kura::blank_kura_for_testing();
@@ -334,11 +308,9 @@ async fn audited_snapshot_hash_reconcile_rejects_every_divergent_existing_hash()
     let block3 =
         signed_block_after_transaction(accepted_log_transaction("third"), Some(block2.as_ref()));
     store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block3));
-
     let mut snapshot_hashes = state.committed_block_hashes_snapshot();
     snapshot_hashes[1] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x66; 32]));
     snapshot_hashes[2] = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x77; 32]));
-
     let err = reconcile_snapshot_hashes_with_kura(&snapshot_hashes, &kura)
         .expect_err("audited bootstrap cannot replace any existing Kura hash");
     assert!(matches!(
@@ -347,7 +319,6 @@ async fn audited_snapshot_hash_reconcile_rejects_every_divergent_existing_hash()
     ));
     assert_eq!(state.committed_height(), 3);
 }
-
 #[tokio::test]
 async fn snapshot_read_succeeds_without_selector_bootstrap() {
     let tmp_root = tempdir().unwrap();
@@ -355,7 +326,6 @@ async fn snapshot_read_succeeds_without_selector_bootstrap() {
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
     let expected_chain_id = state.chain_id.clone();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     let snapshot_state = try_read_snapshot(
         &store_dir,
@@ -372,22 +342,18 @@ async fn snapshot_read_succeeds_without_selector_bootstrap() {
     .expect("snapshot read");
     assert_eq!(snapshot_state.chain_id, expected_chain_id);
 }
-
 #[tokio::test]
 async fn snapshot_generation_shape_is_exact_and_idempotent() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     assert_canonical_snapshot_generation(&store_dir);
     let pointer_before = std::fs::read(store_dir.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
     let generation_before = current_generation_name(&store_dir);
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE)
         .expect("repeating the exact snapshot must be idempotent");
-
     assert_eq!(
         std::fs::read(store_dir.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap(),
         pointer_before
@@ -402,14 +368,12 @@ async fn snapshot_generation_shape_is_exact_and_idempotent() {
     );
     assert_canonical_snapshot_generation(&store_dir);
 }
-
 #[tokio::test]
 async fn snapshot_reader_rejects_every_noncanonical_current_pointer() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     let pointer_path = store_dir.join(SNAPSHOT_CURRENT_FILE_NAME);
     let canonical = std::fs::read(&pointer_path).unwrap();
@@ -433,7 +397,6 @@ async fn snapshot_reader_rejects_every_noncanonical_current_pointer() {
             TryReadError::SnapshotGenerationInvalid { .. }
         ));
     }
-
     let oversized = format!("{digest}\n\n").into_bytes();
     assert!(
         u64::try_from(oversized.len()).unwrap() > SNAPSHOT_CURRENT_MAX_BYTES,
@@ -451,14 +414,12 @@ async fn snapshot_reader_rejects_every_noncanonical_current_pointer() {
         other => panic!("unexpected oversized-pointer rejection: {other:?}"),
     }
 }
-
 #[tokio::test]
 async fn bound_generation_rejects_pointer_and_artifact_substitution() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     let payload_limit =
         u64::try_from(iroha_config::parameters::defaults::snapshot::MAX_PAYLOAD_BYTES.get())
@@ -473,7 +434,6 @@ async fn bound_generation_rejects_pointer_and_artifact_substitution() {
         bound.verify_selection_unchanged().is_err(),
         "same-byte pointer substitution must invalidate the bound generation"
     );
-
     let rebound = bind_current_snapshot_generation(&store_dir, payload_limit, TEST_CHUNK_SIZE)
         .expect("rebind substituted pointer");
     let payload_path = current_generation_artifact(&store_dir, SNAPSHOT_FILE_NAME);
@@ -485,7 +445,6 @@ async fn bound_generation_rejects_pointer_and_artifact_substitution() {
         "same-byte artifact substitution must invalidate the bound generation"
     );
 }
-
 #[tokio::test]
 async fn bound_generation_rejects_same_byte_directory_substitution() {
     let tmp_root = tempdir().unwrap();
@@ -493,7 +452,6 @@ async fn bound_generation_rejects_same_byte_directory_substitution() {
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
-
     let payload_limit =
         u64::try_from(iroha_config::parameters::defaults::snapshot::MAX_PAYLOAD_BYTES.get())
             .expect("snapshot payload limit fits u64");
@@ -511,13 +469,11 @@ async fn bound_generation_rejects_same_byte_directory_substitution() {
     ] {
         std::fs::copy(displaced_dir.join(name), generation_dir.join(name)).unwrap();
     }
-
     assert!(
         bound.verify_generation_unchanged().is_err(),
         "same-byte generation-directory substitution must invalidate every binding"
     );
 }
-
 #[tokio::test]
 async fn current_pointer_never_selects_a_partial_generation() {
     let tmp_root = tempdir().unwrap();
@@ -533,7 +489,6 @@ async fn current_pointer_never_selects_a_partial_generation() {
     let payload_limit =
         u64::try_from(iroha_config::parameters::defaults::snapshot::MAX_PAYLOAD_BYTES.get())
             .expect("snapshot payload limit fits u64");
-
     assert!(
         bind_current_snapshot_generation(&store_dir, payload_limit, TEST_CHUNK_SIZE).is_err(),
         "a pointer to a missing generation must fail closed"
@@ -550,7 +505,6 @@ async fn current_pointer_never_selects_a_partial_generation() {
         "a pointer to a partially written generation must fail closed"
     );
 }
-
 #[tokio::test]
 async fn conflicting_immutable_generation_cannot_publish_current_pointer() {
     let tmp_root = tempdir().unwrap();
@@ -567,7 +521,6 @@ async fn conflicting_immutable_generation_cannot_publish_current_pointer() {
         conflicting_payload,
     )
     .unwrap();
-
     let error = try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE)
         .expect_err("a conflicting digest-named generation must fail closed");
     assert!(matches!(error, TryWriteError::PublicationIntegrity(_)));
@@ -577,14 +530,12 @@ async fn conflicting_immutable_generation_cannot_publish_current_pointer() {
         conflicting_payload
     );
 }
-
 #[tokio::test]
 async fn snapshot_write_reuses_the_exact_immutable_generation() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE)
         .expect("initial snapshot write");
     let pointer_before = std::fs::read(store_dir.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
@@ -596,7 +547,6 @@ async fn snapshot_write_reuses_the_exact_immutable_generation() {
     );
     assert_canonical_snapshot_generation(&store_dir);
 }
-
 #[tokio::test]
 async fn snapshot_writer_enforces_the_reader_payload_limit_before_publication() {
     let tmp_root = tempdir().unwrap();
@@ -605,14 +555,12 @@ async fn snapshot_writer_enforces_the_reader_payload_limit_before_publication() 
     let key_pair = checked_random_snapshot_keypair();
     let payload_len = exact_snapshot_payload_bytes(&state).len();
     let exact_limit = NonZeroUsize::new(payload_len).expect("snapshot payload is non-empty");
-
     try_write_snapshot_with_limit(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE, exact_limit)
         .expect("payload exactly at the configured bound must publish");
     let pointer_before = std::fs::read(store_dir.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
     let generations_before = std::fs::read_dir(store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME))
         .unwrap()
         .count();
-
     let smaller_limit = NonZeroUsize::new(payload_len - 1).expect("fixture is larger than one");
     let error = try_write_snapshot_with_limit(
         &state,
@@ -640,7 +588,6 @@ async fn snapshot_writer_enforces_the_reader_payload_limit_before_publication() 
         "oversize rejection must not leave a generation or staging orphan"
     );
 }
-
 #[tokio::test]
 async fn snapshot_generation_gc_retains_current_and_previous_only() {
     let tmp_root = tempdir().unwrap();
@@ -652,17 +599,14 @@ async fn snapshot_generation_gc_retains_current_and_previous_only() {
     let first_name = hex::encode(Sha256::digest(first));
     let second_name = hex::encode(Sha256::digest(second));
     let third_name = hex::encode(Sha256::digest(third));
-
     write_snapshot_bundle_from_bytes(&store_dir, first, &key_pair);
     write_snapshot_bundle_from_bytes(&store_dir, second, &key_pair);
     write_snapshot_bundle_from_bytes(&store_dir, third, &key_pair);
-
     let generations_dir = store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME);
     assert!(!generations_dir.join(first_name).exists());
     assert!(generations_dir.join(&second_name).is_dir());
     assert!(generations_dir.join(&third_name).is_dir());
     assert_eq!(current_generation_name(&store_dir), third_name);
-
     write_snapshot_bundle_from_bytes(&store_dir, third, &key_pair);
     assert!(
         generations_dir.join(second_name).is_dir(),
@@ -674,7 +618,6 @@ async fn snapshot_generation_gc_retains_current_and_previous_only() {
         "repeated writes must keep storage bounded"
     );
 }
-
 #[tokio::test]
 async fn idempotent_gc_fails_closed_when_rollback_chronology_is_ambiguous() {
     let tmp_root = tempdir().unwrap();
@@ -691,7 +634,6 @@ async fn idempotent_gc_fails_closed_when_rollback_chronology_is_ambiguous() {
     let second_extra_name = second_extra.name.clone();
     let (store_identity, current) =
         publish_test_snapshot_generation(&store_dir, current_bytes, &key_pair);
-
     let error = publish_snapshot_current_pointer(
         &store_dir,
         store_identity,
@@ -711,7 +653,6 @@ async fn idempotent_gc_fails_closed_when_rollback_chronology_is_ambiguous() {
         );
     }
 }
-
 #[tokio::test]
 async fn generation_gc_entry_limit_is_enforced_while_enumerating() {
     let tmp_root = tempdir().unwrap();
@@ -727,7 +668,6 @@ async fn generation_gc_entry_limit_is_enforced_while_enumerating() {
     }
     let (store_identity, next) =
         publish_test_snapshot_generation(&store_dir, next_bytes, &key_pair);
-
     let error = publish_snapshot_current_pointer(
         &store_dir,
         store_identity,
@@ -747,7 +687,6 @@ async fn generation_gc_entry_limit_is_enforced_while_enumerating() {
         SNAPSHOT_GENERATION_GC_MAX_ENTRIES + 1
     );
 }
-
 #[tokio::test]
 async fn post_pointer_gc_failures_report_durable_publication_success() {
     for failure_stage in [1, 2] {
@@ -762,7 +701,6 @@ async fn post_pointer_gc_failures_report_durable_publication_success() {
             publish_test_snapshot_generation(&store_dir, b"generation three", &key_pair);
         let next_name = next.name.clone();
         SNAPSHOT_GC_FAILURE_STAGE.with(|stage| stage.set(failure_stage));
-
         publish_snapshot_current_pointer(
             &store_dir,
             store_identity,
@@ -772,7 +710,6 @@ async fn post_pointer_gc_failures_report_durable_publication_success() {
             key_pair.public_key(),
         )
         .expect("a durable pointer is success even when later maintenance fails");
-
         assert_eq!(current_generation_name(&store_dir), next_name);
         bind_current_snapshot_generation(
             &store_dir,
@@ -782,7 +719,6 @@ async fn post_pointer_gc_failures_report_durable_publication_success() {
         .expect("post-maintenance-error current generation remains complete and readable");
     }
 }
-
 #[tokio::test]
 async fn post_pointer_gc_rejects_same_path_generation_substitution() {
     let tmp_root = tempdir().unwrap();
@@ -795,7 +731,6 @@ async fn post_pointer_gc_rejects_same_path_generation_substitution() {
         publish_test_snapshot_generation(&store_dir, b"generation three", &key_pair);
     let next_name = next.name.clone();
     SNAPSHOT_GC_FAILURE_STAGE.with(|stage| stage.set(3));
-
     publish_snapshot_current_pointer(
         &store_dir,
         store_identity,
@@ -805,7 +740,6 @@ async fn post_pointer_gc_rejects_same_path_generation_substitution() {
         key_pair.public_key(),
     )
     .expect("a durable pointer remains successful when GC rejects a substitution");
-
     assert_eq!(current_generation_name(&store_dir), next_name);
     let generations_dir = store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME);
     assert!(
@@ -826,7 +760,6 @@ async fn post_pointer_gc_rejects_same_path_generation_substitution() {
     )
     .expect("substitution rejection cannot damage the published generation");
 }
-
 #[tokio::test]
 async fn snapshot_generation_gc_cleans_safe_orphans_but_preserves_malicious_trees() {
     let tmp_root = tempdir().unwrap();
@@ -834,7 +767,6 @@ async fn snapshot_generation_gc_cleans_safe_orphans_but_preserves_malicious_tree
     let key_pair = checked_random_snapshot_keypair();
     write_snapshot_bundle_from_bytes(&store_dir, b"canonical generation", &key_pair);
     let generations_dir = store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME);
-
     let safe_orphan = generations_dir.join(".snapshot-generation-orphan");
     std::fs::create_dir(&safe_orphan).unwrap();
     std::fs::write(safe_orphan.join(SNAPSHOT_FILE_NAME), b"partial").unwrap();
@@ -845,12 +777,10 @@ async fn snapshot_generation_gc_cleans_safe_orphans_but_preserves_malicious_tree
     let invalid_digest_tree = generations_dir.join(invalid_digest_name);
     std::fs::create_dir(&invalid_digest_tree).unwrap();
     std::fs::write(invalid_digest_tree.join(SNAPSHOT_FILE_NAME), b"conflict").unwrap();
-
     let payload_limit = u64::try_from(defaults::snapshot::MAX_PAYLOAD_BYTES.get()).unwrap();
     bind_current_snapshot_generation(&store_dir, payload_limit, TEST_CHUNK_SIZE)
         .expect("orphan and unknown trees cannot affect current selection");
     write_snapshot_bundle_from_bytes(&store_dir, b"canonical generation", &key_pair);
-
     assert!(
         !safe_orphan.exists(),
         "safe staging orphan should be reclaimed"
@@ -861,7 +791,6 @@ async fn snapshot_generation_gc_cleans_safe_orphans_but_preserves_malicious_tree
         "invalid digest-named trees are conflicts, never GC repair targets"
     );
 }
-
 #[tokio::test]
 async fn concurrent_same_payload_snapshot_writers_publish_one_generation() {
     let tmp_root = tempdir().unwrap();
@@ -885,7 +814,6 @@ async fn concurrent_same_payload_snapshot_writers_publish_one_generation() {
     for writer in writers {
         writer.join().expect("snapshot writer thread").unwrap();
     }
-
     assert_canonical_snapshot_generation(&store_dir);
     assert_eq!(
         std::fs::read_dir(store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME))
@@ -894,7 +822,6 @@ async fn concurrent_same_payload_snapshot_writers_publish_one_generation() {
         1
     );
 }
-
 #[tokio::test]
 async fn pointer_switch_does_not_invalidate_a_pinned_immutable_generation() {
     let tmp_root = tempdir().unwrap();
@@ -904,21 +831,18 @@ async fn pointer_switch_does_not_invalidate_a_pinned_immutable_generation() {
     let payload_limit = u64::try_from(defaults::snapshot::MAX_PAYLOAD_BYTES.get()).unwrap();
     let selected =
         bind_current_snapshot_generation(&store_dir, payload_limit, TEST_CHUNK_SIZE).unwrap();
-
     write_snapshot_bundle_from_bytes(&store_dir, b"new current generation", &key_pair);
     assert!(selected.verify_selection_unchanged().is_err());
     selected
         .verify_generation_unchanged()
         .expect("post-mutation validation pins the selected immutable generation only");
 }
-
 #[tokio::test]
 async fn cannot_find_snapshot_on_read_is_not_found() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let key_pair = checked_random_snapshot_keypair();
     let network_id = NetworkId::from_genesis_hash(dummy_block_hash(0x21));
-
     let Err(error) = try_read_snapshot(
         store_dir,
         &Kura::blank_kura_for_testing(),
@@ -933,10 +857,8 @@ async fn cannot_find_snapshot_on_read_is_not_found() {
     ) else {
         panic!("should not be ok")
     };
-
     assert!(matches!(error, TryReadError::NotFound));
 }
-
 #[tokio::test]
 async fn cannot_parse_snapshot_on_read_is_error() {
     let tmp_root = tempdir().unwrap();
@@ -946,7 +868,6 @@ async fn cannot_parse_snapshot_on_read_is_error() {
     let network_id = NetworkId::from_genesis_hash(dummy_block_hash(0x22));
     let corrupted = [1, 4, 1, 2, 3, 4, 1, 4];
     write_snapshot_bundle_from_bytes(&store_dir, &corrupted, &key_pair);
-
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
@@ -961,17 +882,14 @@ async fn cannot_parse_snapshot_on_read_is_error() {
     ) else {
         panic!("should not be ok")
     };
-
     assert_eq!(format!("{error}"), "Error (de)serializing state snapshot");
 }
-
 #[tokio::test]
 async fn checksum_mismatch_rejected() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     // Corrupt the digest without touching the snapshot bytes.
     std::fs::write(
@@ -979,7 +897,6 @@ async fn checksum_mismatch_rejected() {
         "deadbeef",
     )
     .unwrap();
-
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
@@ -994,13 +911,11 @@ async fn checksum_mismatch_rejected() {
     ) else {
         panic!("should not be ok")
     };
-
     assert!(matches!(
         error,
         TryReadError::SnapshotGenerationInvalid { .. }
     ));
 }
-
 #[tokio::test]
 async fn network_id_mismatch_rejected() {
     let tmp_root = tempdir().unwrap();
@@ -1008,9 +923,7 @@ async fn network_id_mismatch_rejected() {
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
     let expected_network_id = NetworkId::from_genesis_hash(dummy_block_hash(0x42));
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
-
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
@@ -1025,10 +938,8 @@ async fn network_id_mismatch_rejected() {
     ) else {
         panic!("should not be ok")
     };
-
     assert!(matches!(error, TryReadError::NetworkIdMismatch { .. }));
 }
-
 #[tokio::test]
 async fn snapshot_write_rejects_state_ahead_of_kura() {
     let tmp_root = tempdir().unwrap();
@@ -1036,17 +947,14 @@ async fn snapshot_write_rejects_state_ahead_of_kura() {
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
     let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; 32]));
-
     {
         let mut block_hashes = state.block_hashes.block();
         block_hashes.push(hash);
         block_hashes.commit_for_tests();
     }
-
     let Err(error) = try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE) else {
         panic!("snapshot write should reject state ahead of Kura");
     };
-
     assert!(matches!(
         error,
         TryWriteError::StateAheadOfKura {
@@ -1055,21 +963,18 @@ async fn snapshot_write_rejects_state_ahead_of_kura() {
         }
     ));
 }
-
 #[tokio::test]
 async fn missing_checksum_rejected() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     std::fs::remove_file(current_generation_artifact(
         &store_dir,
         SNAPSHOT_DIGEST_FILE_NAME,
     ))
     .unwrap();
-
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
@@ -1084,27 +989,23 @@ async fn missing_checksum_rejected() {
     ) else {
         panic!("should not be ok")
     };
-
     assert!(matches!(
         error,
         TryReadError::SnapshotGenerationInvalid { .. }
     ));
 }
-
 #[tokio::test]
 async fn missing_merkle_rejected() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     std::fs::remove_file(current_generation_artifact(
         &store_dir,
         SNAPSHOT_MERKLE_FILE_NAME,
     ))
     .unwrap();
-
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
@@ -1119,27 +1020,23 @@ async fn missing_merkle_rejected() {
     ) else {
         panic!("should not be ok")
     };
-
     assert!(matches!(
         error,
         TryReadError::SnapshotGenerationInvalid { .. }
     ));
 }
-
 #[tokio::test]
 async fn merkle_root_mismatch_rejected() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     let merkle_path = current_generation_artifact(&store_dir, SNAPSHOT_MERKLE_FILE_NAME);
     let mut metadata = SnapshotMerkleMetadata::from_path(&merkle_path, u64::MAX).expect("metadata");
     metadata.root_hex = hex::encode([0xAA; Hash::LENGTH]);
     let mut merkle_file = File::create(&merkle_path).expect("merkle file");
     json::to_writer(&mut merkle_file, &metadata).expect("write merkle");
-
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
@@ -1154,17 +1051,14 @@ async fn merkle_root_mismatch_rejected() {
     ) else {
         panic!("should not be ok")
     };
-
     assert!(matches!(error, TryReadError::MerkleMismatch { .. }));
 }
-
 #[tokio::test]
 async fn merkle_leaf_count_mismatch_rejected() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     let merkle_path = current_generation_artifact(&store_dir, SNAPSHOT_MERKLE_FILE_NAME);
     let mut metadata = SnapshotMerkleMetadata::from_path(&merkle_path, u64::MAX).expect("metadata");
@@ -1174,7 +1068,6 @@ async fn merkle_leaf_count_mismatch_rejected() {
     );
     let mut merkle_file = File::create(&merkle_path).expect("merkle file");
     json::to_writer(&mut merkle_file, &metadata).expect("write merkle");
-
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
@@ -1189,24 +1082,20 @@ async fn merkle_leaf_count_mismatch_rejected() {
     ) else {
         panic!("should not be ok")
     };
-
     assert!(matches!(error, TryReadError::MerkleMetadataMalformed(_)));
 }
-
 #[tokio::test]
 async fn merkle_chunk_size_mismatch_rejected() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     let merkle_path = current_generation_artifact(&store_dir, SNAPSHOT_MERKLE_FILE_NAME);
     let mut metadata = SnapshotMerkleMetadata::from_path(&merkle_path, u64::MAX).expect("metadata");
     metadata.chunk_size_bytes = u64::try_from(TEST_CHUNK_SIZE.get() * 2).expect("fits in u64");
     let mut merkle_file = File::create(&merkle_path).expect("merkle file");
     json::to_writer(&mut merkle_file, &metadata).expect("write merkle");
-
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
@@ -1221,22 +1110,18 @@ async fn merkle_chunk_size_mismatch_rejected() {
     ) else {
         panic!("should not be ok")
     };
-
     assert!(matches!(
         error,
         TryReadError::MerkleChunkSizeMismatch { .. }
     ));
 }
-
 #[tokio::test]
 async fn merkle_metadata_rejects_numeric_string_fields() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
-
     let merkle_path = current_generation_artifact(&store_dir, SNAPSHOT_MERKLE_FILE_NAME);
     let mut value: norito::json::Value =
         json::from_slice(&std::fs::read(&merkle_path).expect("read merkle"))
@@ -1256,19 +1141,16 @@ async fn merkle_metadata_rejects_numeric_string_fields() {
     );
     let mut merkle_file = File::create(&merkle_path).expect("create merkle file");
     json::to_writer(&mut merkle_file, &value).expect("write merkle json");
-
     let error = SnapshotMerkleMetadata::from_path(&merkle_path, u64::MAX)
         .expect_err("numeric-string Merkle fields are not canonical first-release JSON");
     assert!(matches!(error, SnapshotMerkleError::Parse(_)));
 }
-
 #[tokio::test]
 async fn merkle_chunk_proof_verifies() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     let metadata = SnapshotMerkleMetadata::from_path(
         &current_generation_artifact(&store_dir, SNAPSHOT_MERKLE_FILE_NAME),
@@ -1281,7 +1163,6 @@ async fn merkle_chunk_proof_verifies() {
     metadata
         .verify_chunk(0, chunk)
         .expect("chunk proof should verify");
-
     let mut corrupted = chunk.to_vec();
     if corrupted.is_empty() {
         corrupted.push(1);
@@ -1293,13 +1174,11 @@ async fn merkle_chunk_proof_verifies() {
     };
     assert!(matches!(err, SnapshotMerkleError::ProofInvalid { .. }));
 }
-
 #[tokio::test]
 async fn merkle_last_chunk_proof_authenticates_ragged_five_leaf_geometry() {
     let chunk_size = NonZeroUsize::new(4).expect("non-zero test chunk size");
     let snapshot_bytes = (0_u8..20).collect::<Vec<_>>();
     let metadata = SnapshotMerkleMetadata::from_bytes(&snapshot_bytes, chunk_size);
-
     assert_eq!(
         metadata
             .expected_leaf_count(chunk_size)
@@ -1308,13 +1187,11 @@ async fn merkle_last_chunk_proof_authenticates_ragged_five_leaf_geometry() {
     );
     assert_eq!(metadata.leaf_hashes_hex.len(), 5);
     metadata.verify_self().expect("valid five-leaf metadata");
-
     let chunk_index = 4;
     let last_chunk = &snapshot_bytes[chunk_index * chunk_size.get()..];
     metadata
         .verify_chunk(chunk_index, last_chunk)
         .expect("last chunk proof should verify");
-
     let proof = metadata
         .proof_for_chunk(chunk_index)
         .expect("last chunk proof");
@@ -1324,7 +1201,6 @@ async fn merkle_last_chunk_proof_authenticates_ragged_five_leaf_geometry() {
     assert!(proof.siblings()[0].is_none());
     assert!(proof.siblings()[1].is_none());
     assert!(proof.siblings()[2].is_some());
-
     let digest = Sha256::digest(last_chunk);
     let mut leaf_bytes = [0_u8; Hash::LENGTH];
     leaf_bytes.copy_from_slice(&digest);
@@ -1333,46 +1209,37 @@ async fn merkle_last_chunk_proof_authenticates_ragged_five_leaf_geometry() {
     let commitment =
         MerkleTreeCommitment::new(root, NonZeroU64::new(5).expect("non-zero leaf count"));
     assert!(proof.verify_sha256(&leaf, &commitment));
-
     let forged_sibling =
         HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::new(b"forged snapshot sibling"));
-
     let mut wrong_sibling_path = proof.siblings().to_vec();
     wrong_sibling_path[2] = Some(forged_sibling);
     let wrong_sibling =
         CompactMerkleProof::from_parts(proof.depth(), proof.dirs(), wrong_sibling_path);
     assert!(!wrong_sibling.verify_sha256(&leaf, &commitment));
-
     let mut missing_sibling_path = proof.siblings().to_vec();
     missing_sibling_path[2] = None;
     let missing_sibling =
         CompactMerkleProof::from_parts(proof.depth(), proof.dirs(), missing_sibling_path);
     assert!(!missing_sibling.verify_sha256(&leaf, &commitment));
-
     let mut unexpected_sibling_path = proof.siblings().to_vec();
     unexpected_sibling_path[0] = Some(forged_sibling);
     let unexpected_sibling =
         CompactMerkleProof::from_parts(proof.depth(), proof.dirs(), unexpected_sibling_path);
     assert!(!unexpected_sibling.verify_sha256(&leaf, &commitment));
-
     let wrong_index = CompactMerkleProof::from_parts(proof.depth(), 5, proof.siblings().to_vec());
     assert!(!wrong_index.verify_sha256(&leaf, &commitment));
-
     let wrong_count =
         MerkleTreeCommitment::new(root, NonZeroU64::new(8).expect("non-zero leaf count"));
     assert!(!proof.verify_sha256(&leaf, &wrong_count));
-
     assert!(matches!(
         metadata.verify_chunk(5, last_chunk),
         Err(SnapshotMerkleError::ProofUnavailable { chunk_index: 5 })
     ));
 }
-
 #[tokio::test]
 async fn merkle_empty_snapshot_uses_one_leaf_commitment() {
     let chunk_size = NonZeroUsize::new(4).expect("non-zero test chunk size");
     let metadata = SnapshotMerkleMetadata::from_bytes(&[], chunk_size);
-
     assert_eq!(metadata.total_len_bytes, 0);
     assert_eq!(
         metadata
@@ -1390,14 +1257,12 @@ async fn merkle_empty_snapshot_uses_one_leaf_commitment() {
     metadata
         .verify_chunk(0, &[])
         .expect("empty payload leaf proof should verify");
-
     let proof = metadata
         .proof_for_chunk(0)
         .expect("empty payload leaf proof");
     assert_eq!(proof.depth(), 0);
     assert_eq!(proof.dirs(), 0);
     assert!(proof.siblings().is_empty());
-
     let digest = Sha256::digest([]);
     let mut leaf_bytes = [0_u8; Hash::LENGTH];
     leaf_bytes.copy_from_slice(&digest);
@@ -1406,7 +1271,6 @@ async fn merkle_empty_snapshot_uses_one_leaf_commitment() {
     let commitment =
         MerkleTreeCommitment::new(root, NonZeroU64::new(1).expect("non-zero leaf count"));
     assert!(proof.verify_sha256(&leaf, &commitment));
-
     let wrong_count =
         MerkleTreeCommitment::new(root, NonZeroU64::new(2).expect("non-zero leaf count"));
     assert!(!proof.verify_sha256(&leaf, &wrong_count));
@@ -1415,7 +1279,6 @@ async fn merkle_empty_snapshot_uses_one_leaf_commitment() {
         Err(SnapshotMerkleError::ProofUnavailable { chunk_index: 1 })
     ));
 }
-
 #[tokio::test]
 async fn can_read_multiple_blocks() {
     let tmp_root = tempdir().unwrap();
@@ -1423,16 +1286,13 @@ async fn can_read_multiple_blocks() {
     let kura = Kura::blank_kura_for_testing();
     let mut state = state_factory_with_kura(Arc::clone(&kura));
     let key_pair = checked_random_snapshot_keypair();
-
     let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
     store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
     let block2 =
         signed_block_after_transaction(accepted_log_transaction("second"), Some(block1.as_ref()));
     store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
     store_complete_snapshot_commit_evidence_for_blocks(&state, &kura, &[block1, block2]);
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
-
     let state = try_read_snapshot(
         &store_dir,
         &kura,
@@ -1446,10 +1306,8 @@ async fn can_read_multiple_blocks() {
         StateTelemetry::default(),
     )
     .unwrap();
-
     assert_eq!(state.view().height(), 2);
 }
-
 #[tokio::test]
 async fn finalized_snapshot_tip_rejects_replacement_without_mutation() {
     let tmp_root = tempdir().unwrap();
@@ -1457,7 +1315,6 @@ async fn finalized_snapshot_tip_rejects_replacement_without_mutation() {
     let kura = Kura::blank_kura_for_testing();
     let mut state = state_factory_with_kura(Arc::clone(&kura));
     let key_pair = checked_random_snapshot_keypair();
-
     let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
     store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
     let block2 =
@@ -1469,10 +1326,8 @@ async fn finalized_snapshot_tip_rejects_replacement_without_mutation() {
         &kura,
         &[Arc::clone(&block1), block2],
     );
-
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
     let pointer_before = std::fs::read(store_dir.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
-
     // Once the complete commit tuple authorizes a snapshot, the terminal block is final and
     // cannot be replaced by a same-height soft-fork candidate.
     let replacement = signed_block_after_transaction(
@@ -1498,7 +1353,6 @@ async fn finalized_snapshot_tip_rejects_replacement_without_mutation() {
         pointer_before,
         "rejected block replacement must not change the selected snapshot generation"
     );
-
     let restored = try_read_snapshot(
         &store_dir,
         &kura,
@@ -1512,7 +1366,6 @@ async fn finalized_snapshot_tip_rejects_replacement_without_mutation() {
         <_>::default(),
     )
     .unwrap();
-
     assert_eq!(restored.view().height(), 2);
     assert_eq!(restored.latest_block_hash_fast(), Some(canonical_tip));
 }

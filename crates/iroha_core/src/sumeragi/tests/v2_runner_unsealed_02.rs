@@ -8,7 +8,6 @@ fn tag_roundtrip_rejects_another_height() {
         Err(V2RunnerError::StaleTag)
     ));
 }
-
 fn proposal_owner(
     context: &wire::HeightContext,
     tag: EventTag,
@@ -30,7 +29,6 @@ fn proposal_owner(
         decided_subject,
     }
 }
-
 fn proposal_subject(label: &[u8]) -> wire::BlockSubject {
     wire::BlockSubject {
         parent_block_hash: None,
@@ -38,7 +36,6 @@ fn proposal_subject(label: &[u8]) -> wire::BlockSubject {
         payload_hash: Hash::new(&[label, b" payload"].concat()),
     }
 }
-
 #[test]
 fn locked_body_recovery_is_independent_of_reproposal_gates() {
     let (context, _) = context();
@@ -55,7 +52,6 @@ fn locked_body_recovery_is_independent_of_reproposal_gates() {
         LocalProposalDirective::for_test(tag, leader, Some(locked_round), Some(subject), None);
     let owner = LocalProposalOwner::from(directive);
     let expected_request = Some((tag, locked_round, subject));
-
     for (local_validator, attempted, can_admit) in [
         (nonleader, None, true),
         (leader, Some(owner), true),
@@ -68,11 +64,9 @@ fn locked_body_recovery_is_independent_of_reproposal_gates() {
             "body recovery must survive every local reproposal gate"
         );
     }
-
     let eligible = locked_body_recovery_plan(directive, leader, None, true);
     assert_eq!(eligible.request, expected_request);
     assert!(eligible.may_repropose);
-
     let decided = LocalProposalDirective::for_test(
         tag,
         leader,
@@ -88,7 +82,6 @@ fn locked_body_recovery_is_independent_of_reproposal_gates() {
         }
     );
 }
-
 #[test]
 fn same_tag_higher_lock_retires_all_local_proposal_owners() {
     let (context, _) = context();
@@ -114,16 +107,13 @@ fn same_tag_higher_lock_retires_all_local_proposal_owners() {
         }),
         global_selection: None,
     };
-
     state.reconcile(owner_b);
-
     assert!(state.attempted.is_none());
     assert!(state.submitted.is_none());
     assert!(state.non_empty_retry.is_none());
     assert!(state.candidate_work_wait.is_none());
     assert!(state.pending_events.is_none());
 }
-
 #[test]
 fn deferred_autonomous_work_timeout_arms_only_a_non_empty_retry() {
     let (context, _) = context();
@@ -136,7 +126,6 @@ fn deferred_autonomous_work_timeout_arms_only_a_non_empty_retry() {
     let started_at = Instant::now();
     let wait_bound = Duration::from_secs(2);
     let mut state = LocalProposalState::default();
-
     state.defer_candidate_work(owner, started_at, wait_bound);
     assert_eq!(state.non_empty_retry, None);
     assert!(
@@ -144,14 +133,12 @@ fn deferred_autonomous_work_timeout_arms_only_a_non_empty_retry() {
             .candidate_work_wait
             .is_some_and(|wait| wait.owner == owner && wait.started_at == started_at)
     );
-
     let expired_at = started_at
         .checked_add(wait_bound)
         .expect("fixture wait deadline is representable");
     state.defer_candidate_work(owner, expired_at, wait_bound);
     assert_eq!(state.non_empty_retry, Some(owner));
     assert!(state.candidate_work_wait.is_none());
-
     state.defer_candidate_work(owner, expired_at, wait_bound);
     assert_eq!(
         state.non_empty_retry,
@@ -159,7 +146,6 @@ fn deferred_autonomous_work_timeout_arms_only_a_non_empty_retry() {
         "repeated timeout handling must retain the same single retry"
     );
     assert!(state.candidate_work_wait.is_none());
-
     assert!(state.retire_unsubmitted_non_empty_retry(owner));
     assert_eq!(state.non_empty_retry, None);
     state.defer_candidate_work(owner, expired_at, wait_bound);
@@ -174,7 +160,6 @@ fn deferred_autonomous_work_timeout_arms_only_a_non_empty_retry() {
         "a consumed retry cannot be retired twice"
     );
 }
-
 #[test]
 fn first_same_subject_lock_preserves_pending_local_proposal_events() {
     let (context, _) = context();
@@ -192,9 +177,7 @@ fn first_same_subject_lock_preserves_pending_local_proposal_events() {
         }),
         ..LocalProposalState::default()
     };
-
     state.reconcile(locked);
-
     assert_eq!(state.attempted, Some(locked));
     assert_eq!(state.submitted, Some((locked, subject)));
     assert!(
@@ -204,7 +187,6 @@ fn first_same_subject_lock_preserves_pending_local_proposal_events() {
             .is_some_and(|pending| { pending.owner == locked && pending.subject == subject })
     );
 }
-
 #[test]
 fn higher_same_subject_lock_retires_prior_origin_work() {
     let (context, _) = context();
@@ -222,15 +204,12 @@ fn higher_same_subject_lock_retires_prior_origin_work() {
         }),
         ..LocalProposalState::default()
     };
-
     assert_ne!(lower, higher);
     state.reconcile(higher);
-
     assert!(state.attempted.is_none());
     assert!(state.submitted.is_none());
     assert!(state.pending_events.is_none());
 }
-
 #[test]
 fn first_same_subject_lock_from_prior_view_retires_unlocked_work() {
     let (context, _) = context();
@@ -248,14 +227,11 @@ fn first_same_subject_lock_from_prior_view_retires_unlocked_work() {
         }),
         ..LocalProposalState::default()
     };
-
     state.reconcile(locked);
-
     assert!(state.attempted.is_none());
     assert!(state.submitted.is_none());
     assert!(state.pending_events.is_none());
 }
-
 #[test]
 fn late_old_rejection_cannot_arm_non_empty_retry_for_replacement_lock() {
     let (context, _) = context();
@@ -273,27 +249,23 @@ fn late_old_rejection_cannot_arm_non_empty_retry_for_replacement_lock() {
         submitted: Some((owner_a, subject_a)),
         ..LocalProposalState::default()
     };
-
     assert_eq!(
         state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_a,),
         LocalValidationDisposition::Ignored
     );
     assert_eq!(state.non_empty_retry, None);
-
     state.submitted = Some((owner_b, subject_b));
     assert_eq!(
         state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
         LocalValidationDisposition::RetryNonEmpty
     );
     assert_eq!(state.non_empty_retry, Some(owner_b));
-
     state.submitted = Some((owner_b, subject_b));
     assert_eq!(
         state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
         LocalValidationDisposition::FatalNonEmpty
     );
 }
-
 #[test]
 fn decision_retires_local_work_before_prepared_delivery() {
     let (context, _) = context();
@@ -313,13 +285,11 @@ fn decision_retires_local_work_before_prepared_delivery() {
         }),
         global_selection: None,
     };
-
     assert!(state.take_prepared_events(decided, tag, subject).is_none());
     assert!(state.attempted.is_none());
     assert!(state.submitted.is_none());
     assert!(state.pending_events.is_none());
 }
-
 #[test]
 fn height_one_proposal_projects_staged_genesis_to_resultless_wire() {
     let key_pair = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
@@ -343,7 +313,6 @@ fn height_one_proposal_projects_staged_genesis_to_resultless_wire() {
     assert!(staged.has_results());
     assert!(!staged.is_resultless_proposal());
     assert!(staged.header().result_merkle_root().is_some());
-
     let staged_header_hash = staged.header().hash();
     let staged_hash = staged.hash();
     let staged_signatures = staged.signatures().cloned().collect::<Vec<_>>();
@@ -352,7 +321,6 @@ fn height_one_proposal_projects_staged_genesis_to_resultless_wire() {
     let wire =
         canonical_height_one_proposal_wire(&staged).expect("encode canonical height-one proposal");
     let proposal = decode_framed_signed_block(&wire).expect("decode height-one proposal");
-
     assert!(proposal.is_resultless_proposal());
     assert!(!proposal.has_results());
     assert!(proposal.header().result_merkle_root().is_none());
@@ -381,7 +349,6 @@ fn height_one_proposal_projects_staged_genesis_to_resultless_wire() {
             .expect("hash canonical staged-genesis proposal"),
     );
 }
-
 #[test]
 fn exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift() {
     let (context, _) = context();
@@ -404,7 +371,6 @@ fn exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift() {
         payload_hash: Hash::new(&canonical_wire),
     };
     let tag = EventTag::new(context.height, 3, Generation::new(17));
-
     let encoded = encode_exact_local_body(&context, tag, Some(locked_subject), &canonical_wire)
         .expect("encode unchanged locked body at the reproposal round");
     assert_eq!(
@@ -414,14 +380,12 @@ fn exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift() {
     assert_eq!(encoded.manifest().subject, locked_subject);
     let (_, chunks) = encoded.into_parts();
     assert_eq!(chunks.concat(), canonical_wire);
-
     let foreign_subject = proposal_subject(b"foreign locked subject");
     assert!(matches!(
         encode_exact_local_body(&context, tag, Some(foreign_subject), &canonical_wire,),
         Err(V2RunnerError::LockedBodyMismatch)
     ));
 }
-
 #[test]
 fn recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner() {
     let (context, _) = context();
@@ -486,7 +450,6 @@ fn recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner(
     let decided = directive(Some(subject), Some(subject));
     assert!(!recovered.exactly_matches_directive(decided));
 }
-
 #[test]
 fn outer_ingress_batch_services_completions_and_runtime_before_every_ingress() {
     let (context, _) = context();
@@ -522,7 +485,6 @@ fn outer_ingress_batch_services_completions_and_runtime_before_every_ingress() {
         "a zero-sized batch still owes completion and runtime service opportunities"
     );
 }
-
 #[test]
 fn terminal_ingress_discards_commit_discovery_and_losing_current_body_requests() {
     let (context, keys) = context();
@@ -563,7 +525,6 @@ fn terminal_ingress_discards_commit_discovery_and_losing_current_body_requests()
         },
     );
     assert!(v2_payload_is_terminal_reducer_control(&response));
-
     let manifest = encode_payload(&context, round, subject, &body)
         .expect("encode terminal body fixture payload")
         .manifest()
@@ -571,7 +532,6 @@ fn terminal_ingress_discards_commit_discovery_and_losing_current_body_requests()
     assert!(!v2_payload_is_terminal_reducer_control(
         &wire::ConsensusMessageV2Payload::PayloadManifest(manifest)
     ));
-
     let exact_request = wire::CertifiedBodyRequest {
         round,
         subject,
@@ -584,7 +544,6 @@ fn terminal_ingress_discards_commit_discovery_and_losing_current_body_requests()
         Some(subject),
         context.height,
     ));
-
     let losing_subject = wire::BlockSubject {
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"losing terminal block")),
         ..subject
@@ -597,7 +556,6 @@ fn terminal_ingress_discards_commit_discovery_and_losing_current_body_requests()
         Some(subject),
         context.height,
     ));
-
     losing_request.round.height = context.height.saturating_sub(1);
     losing_request.certificate.round.height = losing_request.round.height;
     losing_request.certificate.proposal_round.height = losing_request.round.height;
@@ -607,7 +565,6 @@ fn terminal_ingress_discards_commit_discovery_and_losing_current_body_requests()
         context.height,
     ));
 }
-
 #[test]
 fn finalized_rollover_closes_ingress_before_successor_replay() {
     let ready = AtomicBool::new(true);
@@ -623,7 +580,6 @@ fn finalized_rollover_closes_ingress_before_successor_replay() {
         Err(FairV2IngressPushError::Closed(_))
     ));
 }
-
 #[test]
 fn lifecycle_preactivation_recovery_aperture_borrows_exact_future_activation() {
     let _status_guard = super::super::status::rbc_status_test_guard();
@@ -743,7 +699,6 @@ fn synthesized_durable_rollover_contract_allows_successor_after_dead_target_hand
     super::super::status::clear_v2_status();
     let context = super::super::v2_worker::tests::production_output_handoff_with_dead_target();
     publish_applied_runner_status(&context);
-
     let predecessor = test_predecessor(&context, b"dead target rollover");
     let construction =
         PendingSuccessorConstruction::begin(predecessor).expect("begin successor handoff");
@@ -774,7 +729,6 @@ fn synthesized_durable_rollover_contract_allows_successor_after_dead_target_hand
         ))
         .expect("bind exact predecessor authority");
     let output_guard = ConsensusOutputGuard::isolated();
-
     open_ingress_for_active_height(
         output_guard.as_ref(),
         &ready,
@@ -782,7 +736,6 @@ fn synthesized_durable_rollover_contract_allows_successor_after_dead_target_hand
         Some((activation, successor.clone())),
     )
     .expect("dead-target durable handoff permits successor activation");
-
     assert!(ready.load(Ordering::Acquire));
     let active = super::super::status::v2_status().expect("active successor status");
     assert_eq!(active.height, successor.height);
@@ -797,7 +750,6 @@ fn synthesized_durable_rollover_contract_allows_successor_after_dead_target_hand
     close_ingress_for_rollover(&ready, &ingress);
     super::super::status::clear_v2_status();
 }
-
 #[test]
 fn successor_activation_is_published_only_after_ingress_is_open() {
     let _guard = super::super::status::rbc_status_test_guard();
@@ -834,7 +786,6 @@ fn successor_activation_is_published_only_after_ingress_is_open() {
         ),
         "closed ingress must precede activation publication"
     );
-
     let mut successor_context = context.clone();
     successor_context.height += 1;
     let mut successor = runner_status(&successor_context);
@@ -864,7 +815,6 @@ fn successor_activation_is_published_only_after_ingress_is_open() {
         Some((activation, successor.clone())),
     )
     .expect("open ingress and publish one activation");
-
     assert!(ready.load(Ordering::Acquire));
     ingress
         .try_push(InboundBlockMessage::new(valid_ingress_probe(), None))
@@ -884,7 +834,6 @@ fn successor_activation_is_published_only_after_ingress_is_open() {
     assert_eq!(marker.round.height, successor.height);
     close_ingress_for_rollover(&ready, &ingress);
     super::super::status::clear_v2_status();
-
     publish_applied_runner_status(&context);
     let predecessor = test_predecessor(&context, b"foreign successor context");
     let construction =
@@ -936,7 +885,6 @@ fn successor_activation_is_published_only_after_ingress_is_open() {
     );
     super::super::status::clear_v2_status();
 }
-
 #[test]
 fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
     let _guard = super::super::status::rbc_status_test_guard();
@@ -948,7 +896,6 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         .configure_roster(std::iter::empty())
         .expect("configure untrusted test lane");
     let directory = TempDir::new().expect("temporary unretired CompleteTip lifecycle root");
-
     let mut successor_context = parent_context.clone();
     successor_context.height += 1;
     let error = PendingSuccessorActivation::recovered(
@@ -978,7 +925,6 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         "unretired CompleteTip recovery must leave ingress closed"
     );
     super::super::status::clear_v2_status();
-
     #[cfg(feature = "bls")]
     {
         let successor_status = |context: &wire::HeightContext| {
@@ -996,7 +942,6 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
             });
             status
         };
-
         let (_kura, _predecessor_root, exact_context, retirement) =
             super::super::v2_first_release_recovery::complete_tip_restart_activation_fixture();
         let activation = PendingSuccessorActivation::RecoveredCompleteTip {
@@ -1027,7 +972,6 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         assert_eq!(published.last_committed_height + 1, published.height);
         close_ingress_for_rollover(&exact_ready, &exact_ingress);
         super::super::status::clear_v2_status();
-
         let (_kura, _predecessor_root, typed_context, retirement) =
             super::super::v2_lifecycle_coordinator::complete_tip_restart_activation_fixture();
         let typed_ready = Arc::new(AtomicBool::new(false));
@@ -1053,7 +997,6 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         assert!(!typed_ready.load(Ordering::Acquire));
         assert!(!typed_ingress.state.lock().open);
         super::super::status::clear_v2_status();
-
         let (_kura, _predecessor_root, invalid_context, retirement) =
             super::super::v2_lifecycle_coordinator::complete_tip_restart_activation_fixture();
         let invalid_ready = Arc::new(AtomicBool::new(true));
@@ -1076,7 +1019,6 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         ));
         assert!(!invalid_ready.load(Ordering::Acquire));
         assert!(!invalid_ingress.state.lock().open);
-
         let (drift_kura, _predecessor_root, drift_context, retirement) =
             super::super::v2_first_release_recovery::complete_tip_restart_activation_fixture();
         let successor_ledger = drift_kura
@@ -1112,7 +1054,6 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         assert!(drift_output_guard.restart_required());
         assert!(drift_output_guard.acquire().is_none());
         assert!(super::super::status::v2_status().is_none());
-
         let (predecessor_kura, predecessor_root, predecessor_context, retirement) =
             super::super::v2_first_release_recovery::complete_tip_restart_activation_fixture();
         let predecessor_ledger = predecessor_root.join("lifecycle-ledger-v1.norito");
@@ -1148,7 +1089,6 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         assert!(predecessor_output_guard.acquire().is_none());
         assert!(super::super::status::v2_status().is_none());
         drop(predecessor_kura);
-
         let (_foreign_kura, _predecessor_root, foreign_context, retirement) =
             super::super::v2_first_release_recovery::complete_tip_restart_activation_fixture();
         let mut foreign_status = successor_status(&foreign_context);
@@ -1190,7 +1130,6 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         assert!(super::super::status::v2_status().is_none());
     }
 }
-
 #[test]
 fn successor_construction_rejects_foreign_same_height_predecessor_authority() {
     let _guard = super::super::status::rbc_status_test_guard();
@@ -1201,7 +1140,6 @@ fn successor_construction_rejects_foreign_same_height_predecessor_authority() {
     let foreign = test_predecessor(&context, b"foreign same-height predecessor");
     assert_eq!(expected.height(), foreign.height());
     assert_ne!(expected, foreign);
-
     let construction =
         PendingSuccessorConstruction::begin(expected).expect("begin exact predecessor handoff");
     let mut successor_context = context.clone();
@@ -1223,7 +1161,6 @@ fn successor_construction_rejects_foreign_same_height_predecessor_authority() {
     );
     super::super::status::clear_v2_status();
 }
-
 #[test]
 fn successor_startup_failure_stays_running_and_fails_closed_without_activation() {
     let _guard = super::super::status::rbc_status_test_guard();
@@ -1241,7 +1178,6 @@ fn successor_startup_failure_stays_running_and_fails_closed_without_activation()
         .configure_roster(std::iter::empty())
         .expect("configure untrusted test lane");
     let output_guard = ConsensusOutputGuard::isolated();
-
     // Force the real adapter constructor to fail on an existing directory
     // where it requires a WAL file. Runtime, service, and later startup
     // failures return through the same armed token/runner-guard boundary.
@@ -1275,7 +1211,6 @@ fn successor_startup_failure_stays_running_and_fails_closed_without_activation()
     );
     drop(activation);
     drop(failure_guard);
-
     assert!(output_guard.restart_required());
     assert!(!ready.load(Ordering::Acquire));
     assert!(matches!(
@@ -1299,13 +1234,11 @@ fn successor_startup_failure_stays_running_and_fails_closed_without_activation()
     );
     super::super::status::clear_v2_status();
 }
-
 #[test]
 fn status_guard_retains_failure_snapshot_and_clears_clean_shutdown() {
     let _guard = super::super::status::rbc_status_test_guard();
     super::super::status::clear_v2_status();
     let (context, _) = context();
-
     let failure_status_guard = V2StatusClearGuard::new();
     publish_applied_runner_status(&context);
     super::super::status::mark_v2_restart_required();
@@ -1313,14 +1246,12 @@ fn status_guard_retains_failure_snapshot_and_clears_clean_shutdown() {
     let retained = super::super::status::v2_status().expect("retained failure snapshot");
     assert_eq!(retained.height, context.height);
     assert!(retained.restart_required);
-
     let mut clean_status_guard = V2StatusClearGuard::new();
     publish_applied_runner_status(&context);
     clean_status_guard.clear_on_drop();
     drop(clean_status_guard);
     assert!(super::super::status::v2_status().is_none());
 }
-
 #[test]
 fn ingress_capacity_error_preserves_message_and_byte_units() {
     let (context, _) = context();
@@ -1330,7 +1261,6 @@ fn ingress_capacity_error_preserves_message_and_byte_units() {
         .take(2)
         .map(|validator| validator.validator.clone())
         .collect::<Vec<_>>();
-
     let count_error = FairV2Ingress::new(8, 3 * 1024, 1024, 0, 0)
         .configure_roster(validators.clone())
         .expect_err("two validators require ten protected message slots");
@@ -1341,7 +1271,6 @@ fn ingress_capacity_error_preserves_message_and_byte_units() {
             required: 10,
         }
     ));
-
     let byte_error = FairV2Ingress::new(10, 2 * 1024, 1024, 0, 0)
         .configure_roster(validators)
         .expect_err("two validators and untrusted traffic require three byte partitions");
@@ -1353,7 +1282,6 @@ fn ingress_capacity_error_preserves_message_and_byte_units() {
         }
     ));
 }
-
 #[test]
 fn ingress_guard_fails_closed_during_unwind() {
     let ready = Arc::new(AtomicBool::new(true));
@@ -1379,7 +1307,6 @@ fn ingress_guard_fails_closed_during_unwind() {
         Err(FairV2IngressPushError::Closed(_))
     ));
 }
-
 #[test]
 fn runner_failure_guard_latches_restart_required_during_unwind() {
     let output_guard = ConsensusOutputGuard::isolated();
@@ -1391,25 +1318,21 @@ fn runner_failure_guard_latches_restart_required_during_unwind() {
             panic!("model runner panic before production services start");
         }
     });
-
     assert!(unwind.is_err(), "runner panic must continue unwinding");
     assert!(output_guard.restart_required());
     assert!(output_guard.acquire().is_none());
     drop(admitted_output);
     assert!(output_guard.acquire().is_none());
 }
-
 #[test]
 fn clean_runner_completion_leaves_output_guard_open() {
     let output_guard = ConsensusOutputGuard::isolated();
     let mut failure_guard = V2RunnerFailureGuard::new(Arc::clone(&output_guard));
     failure_guard.disarm();
     drop(failure_guard);
-
     assert!(!output_guard.restart_required());
     assert!(output_guard.acquire().is_some());
 }
-
 #[test]
 fn bound_block_sync_finalization_retires_only_nonfatal_no_output_paths() {
     let output_guard = ConsensusOutputGuard::isolated();
@@ -1438,7 +1361,6 @@ fn bound_block_sync_finalization_retires_only_nonfatal_no_output_paths() {
         "posted exact output, not VolatileTerminal, owns the runtime receipt"
     );
     calls.borrow_mut().clear();
-
     let served = serve_block_sync_while_guarded(
         output_guard.as_ref(),
         || Ok::<Option<()>, V2BlockSyncError>(None),
@@ -1459,7 +1381,6 @@ fn bound_block_sync_finalization_retires_only_nonfatal_no_output_paths() {
     assert_eq!(no_response, BoundBlockSyncServeOutcome::VolatileNoResponse);
     assert_eq!(calls.borrow().as_slice(), ["volatile"]);
     calls.borrow_mut().clear();
-
     let served = serve_block_sync_while_guarded(
         output_guard.as_ref(),
         || {
@@ -1491,7 +1412,6 @@ fn bound_block_sync_finalization_retires_only_nonfatal_no_output_paths() {
         "runtime retirement precedes nonfatal rejection observation"
     );
     calls.borrow_mut().clear();
-
     let fatal = finalize_bound_block_sync_serve(
         Err(V2BlockSyncError::RestartRequired),
         || {
@@ -1509,7 +1429,6 @@ fn bound_block_sync_finalization_retires_only_nonfatal_no_output_paths() {
         "fatal service failure leaves the durable Runtime owner for restart recovery"
     );
 }
-
 #[test]
 fn prelatched_historical_serve_invokes_no_signer_cache_or_network() {
     let output_guard = ConsensusOutputGuard::isolated();
@@ -1517,7 +1436,6 @@ fn prelatched_historical_serve_invokes_no_signer_cache_or_network() {
     let signer_calls = Cell::new(0_u8);
     let cache_writes = Cell::new(0_u8);
     let network_posts = Cell::new(0_u8);
-
     let result = serve_block_sync_while_guarded(
         output_guard.as_ref(),
         || {
@@ -1530,7 +1448,6 @@ fn prelatched_historical_serve_invokes_no_signer_cache_or_network() {
             Ok(())
         },
     );
-
     assert!(matches!(result, Err(V2BlockSyncError::RestartRequired)));
     assert_eq!(signer_calls.get(), 0);
     assert_eq!(cache_writes.get(), 0);

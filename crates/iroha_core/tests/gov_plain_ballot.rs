@@ -1,6 +1,5 @@
 //! Governance plain ballot test: emits `BallotAccepted` with weight.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -19,7 +18,6 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
-
 #[test]
 fn plain_ballot_emits_ballot_accepted_with_weight() {
     // Build minimal state/transaction
@@ -57,7 +55,6 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant ballot permission");
-
     let amount: u128 = 25;
     let duration_blocks = 10;
     let instr = CastPlainBallot {
@@ -88,7 +85,6 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
         }
     }
     assert!(saw_ok, "expected a BallotAccepted(Plain) event");
-
     // Vote again with longer duration to trigger LockExtended
     let instr2 = CastPlainBallot {
         referendum_id: "ref-1".to_string(),

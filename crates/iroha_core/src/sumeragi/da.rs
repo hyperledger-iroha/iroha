@@ -8,9 +8,7 @@
 //! from peers and retries once it arrives. Reliable broadcast remains a transport
 //! and recovery mechanism for payload distribution (e.g., when a peer misses
 //! `BlockCreated`).
-
 use iroha_data_model::nexus::LaneId;
-
 /// Outcome of the data-availability evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GateReason {
@@ -28,7 +26,6 @@ pub enum GateReason {
         kind: ManifestGateKind,
     },
 }
-
 /// Classification of manifest guard failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManifestGateKind {
@@ -41,7 +38,6 @@ pub enum ManifestGateKind {
     /// Spool scan failed while searching for manifests.
     SpoolScan,
 }
-
 impl ManifestGateKind {
     /// String label used for telemetry and status snapshots.
     #[must_use]
@@ -54,7 +50,6 @@ impl ManifestGateKind {
         }
     }
 }
-
 /// Which gate condition was satisfied most recently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GateSatisfaction {
@@ -63,7 +58,6 @@ pub enum GateSatisfaction {
     /// Required manifest material became available and passed the guard.
     ManifestGuardRecovered,
 }
-
 /// Evaluate whether availability evidence is still missing for a block.
 /// A returned reason keeps commit/finalize work pending until mandatory DA is cleared.
 #[must_use]
@@ -71,10 +65,8 @@ pub fn evaluate(missing_local_data: bool) -> Option<GateReason> {
     if missing_local_data {
         return Some(GateReason::MissingLocalData);
     }
-
     None
 }
-
 /// Determine which gate transitioned to satisfied between `previous` and `current`.
 #[must_use]
 pub fn gate_satisfaction(
@@ -91,11 +83,9 @@ pub fn gate_satisfaction(
         _ => None,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::{GateReason, GateSatisfaction, ManifestGateKind, evaluate, gate_satisfaction};
-
     fn manifest_gate(lane: u32, sequence: u64, kind: ManifestGateKind) -> GateReason {
         GateReason::ManifestGuard {
             lane: iroha_data_model::nexus::LaneId::new(lane),
@@ -104,17 +94,14 @@ mod tests {
             kind,
         }
     }
-
     #[test]
     fn missing_data_reports_missing_local_data() {
         assert_eq!(evaluate(true), Some(GateReason::MissingLocalData));
     }
-
     #[test]
     fn available_data_clears_missing_local_data() {
         assert_eq!(evaluate(false), None);
     }
-
     #[test]
     fn gate_satisfaction_tracks_transitions() {
         assert_eq!(

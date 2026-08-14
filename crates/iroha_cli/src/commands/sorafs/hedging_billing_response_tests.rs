@@ -1,5 +1,4 @@
 // Adversarial response-binding coverage shared by the in-module CLI tests.
-
 fn exact_checkpoint_page_response(
     checkpoint: Option<&str>,
     content_type: &str,
@@ -19,13 +18,11 @@ fn exact_checkpoint_page_response(
         .body(norito::json::to_vec(&Value::Object(page)).expect("encode exact-checkpoint page"))
         .expect("exact-checkpoint response")
 }
-
 fn assert_payload_free_binding_error(error: eyre::Report, expected: &str) {
     let message = error.to_string();
     assert_eq!(message, expected);
     assert!(!message.contains("DO_NOT_ECHO"));
 }
-
 #[test]
 fn billing_statements_cli_rejects_missing_response_anchor_without_output() {
     let checkpoint = "11".repeat(32);
@@ -35,20 +32,17 @@ fn billing_statements_cli_rejects_missing_response_anchor_without_output() {
         limit: 1,
     };
     let mut context = TestContext::new();
-
     let error = args
         .run_with(&mut context, |_client, _filter| {
             Ok(exact_checkpoint_page_response(None, "application/json"))
         })
         .expect_err("missing response anchor must fail closed");
-
     assert_payload_free_binding_error(
         error,
         "SoraFS hedging/billing exact-checkpoint response is missing anchor.checkpoint_fingerprint",
     );
     assert!(context.printed.is_empty());
 }
-
 #[test]
 fn hedging_projection_cli_rejects_mismatched_and_wrong_case_anchors_without_output() {
     let checkpoint = "33".repeat(32);
@@ -67,7 +61,6 @@ fn hedging_projection_cli_rejects_mismatched_and_wrong_case_anchors_without_outp
                 ))
             })
             .expect_err("mismatched or lowercase response anchor must fail closed");
-
         assert_payload_free_binding_error(
             error,
             "SoraFS hedging/billing exact-checkpoint response anchor does not match the request",
@@ -75,7 +68,6 @@ fn hedging_projection_cli_rejects_mismatched_and_wrong_case_anchors_without_outp
         assert!(context.printed.is_empty());
     }
 }
-
 #[test]
 fn exact_checkpoint_cli_rejects_ambiguous_json_media_type_without_output() {
     let checkpoint = "55".repeat(32);
@@ -86,7 +78,6 @@ fn exact_checkpoint_cli_rejects_ambiguous_json_media_type_without_output() {
     };
     let returned = checkpoint.to_ascii_uppercase();
     let mut context = TestContext::new();
-
     let error = args
         .run_with(&mut context, |_client, _filter| {
             Ok(exact_checkpoint_page_response(
@@ -95,14 +86,12 @@ fn exact_checkpoint_cli_rejects_ambiguous_json_media_type_without_output() {
             ))
         })
         .expect_err("ambiguous JSON media type must fail closed");
-
     assert_payload_free_binding_error(
         error,
         "SoraFS hedging/billing exact-checkpoint response must use application/json",
     );
     assert!(context.printed.is_empty());
 }
-
 #[test]
 fn exact_checkpoint_cli_rejects_non_ok_without_echoing_response() {
     let checkpoint = "66".repeat(32);
@@ -112,7 +101,6 @@ fn exact_checkpoint_cli_rejects_non_ok_without_echoing_response() {
         limit: 1,
     };
     let mut context = TestContext::new();
-
     let error = args
         .run_with(&mut context, |_client, _filter| {
             Ok(Response::builder()
@@ -122,7 +110,6 @@ fn exact_checkpoint_cli_rejects_non_ok_without_echoing_response() {
                 .expect("projection conflict response"))
         })
         .expect_err("non-OK response must fail closed");
-
     assert_payload_free_binding_error(
         error,
         "SoraFS hedging/billing exact-checkpoint response returned status 409 Conflict",

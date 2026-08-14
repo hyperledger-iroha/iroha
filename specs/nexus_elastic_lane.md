@@ -18,8 +18,11 @@ re-deriving the catalog geometry by hand.
 
 ## 1. Prerequisites
 
-1. Governance approval for the lane alias, dataspace, validator set, fault tolerance (`f`), and settlement policy.
-2. A finalized validator list (account IDs) and protected namespace list.
+1. Governance approval for the lane alias, owning dataspace, that dataspace's
+   validator cohort and fault tolerance (`f`), and the lane settlement policy.
+2. A finalized validator list (account IDs) for the owning dataspace and a
+   protected namespace list for the lane. In the V1 manifest layout, every
+   lane in one dataspace must project the same validator cohort and quorum.
 3. Access to the node configuration repository so you can append the generated snippets.
 4. Paths for the lane manifest registry (see `nexus.registry.manifest_directory` and
    `cache_directory`).
@@ -53,8 +56,11 @@ scripts/nexus_lane_bootstrap.sh \
 Key flags:
 
 - `--lane-id` must match the new entry’s index in `nexus.lane_catalog`.
-- `--dataspace-alias` and `--dataspace-id/hash` control the dataspace catalog entry (defaults to the
-  lane id when omitted).
+- `--dataspace-alias` and `--dataspace-id/hash` bind the lane to a dataspace
+  catalog entry (the legacy helper defaults the ID to the lane ID when
+  omitted). Reuse an existing dataspace for another logical lane; create a new
+  entry only when a distinct physical cohort and storage boundary are being
+  deployed.
 - `--validator` can be repeated or sourced from `--validators-file`.
 - `--route-instruction` / `--route-account` emit ready-to-paste routing rules.
 - `--metadata key=value` (or `--telemetry-contact/channel/runbook`) capture runbook contacts so
@@ -69,9 +75,12 @@ plus an optional fourth when encoding is enabled:
 
 1. `<slug>.manifest.json` — lane manifest containing the validator quorum, protected namespaces, and
    optional runtime-upgrade hook metadata.
-2. `<slug>.catalog.toml` — a TOML snippet with `[[nexus.lane_catalog]]`, `[[nexus.dataspace_catalog]]`,
-   and any requested routing rules. Ensure `fault_tolerance` is set on the dataspace entry to size
-   the lane-relay committee (`3f+1`).
+2. `<slug>.catalog.toml` — a TOML snippet with `[[nexus.lane_catalog]]`, a
+   candidate `[[nexus.dataspace_catalog]]`, and any requested routing rules.
+   Omit or merge the candidate dataspace entry when binding the lane to an
+   existing physical dataspace. For a genuinely new dataspace, ensure
+   `fault_tolerance` sizes its consensus/relay committee (`3f+1`) and archive
+   evidence of the distinct deployed cohort.
 3. `<slug>.summary.json` — audit summary describing the geometry (slug, segments, metadata) plus the
    required rollout steps and the exact `cargo xtask space-directory encode` command (under
    `space_directory_encode.command`). Attach this JSON to the onboarding ticket for evidence.
@@ -344,13 +353,19 @@ While the workload is saturating the lane:
    ```bash
    curl -sS https://torii.example.com/v1/nexus/lifecycle \
      > artifacts/nexus/load/payments-2026q2/nexus_lifecycle.json
-   curl -sS https://torii.example.com/v1/sumeragi/status \
+   iroha --operator-private-key-file /run/secrets/iroha/operator.key \
+     --output-format json ops sumeragi status \
      > artifacts/nexus/load/payments-2026q2/sumeragi_status.json
-   curl -sS https://torii.example.com/v1/sumeragi/diagnostics \
+   iroha --operator-private-key-file /run/secrets/iroha/operator.key \
+     --output-format json ops sumeragi diagnostics \
      > artifacts/nexus/load/payments-2026q2/sumeragi_diagnostics.json
    curl -sS https://torii.example.com/metrics \
      > artifacts/nexus/load/payments-2026q2/metrics.prom
    ```
+
+   The operator key path is an absolute runtime-only secret and the CLI binds
+   each one-shot request to the exact `network_id` in its client configuration;
+   it does not reuse the account signer or follow redirects.
 
    `nexus_lane_smoke.py` consumes the lifecycle payload. The status snapshot is
    the authoritative `SumeragiV2Status`; diagnostics contain the

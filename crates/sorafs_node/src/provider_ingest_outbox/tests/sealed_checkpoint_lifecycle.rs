@@ -3,7 +3,6 @@ fn sealed_checkpoint_qualification_timeout_is_typed_and_bounded() {
     let directory = tempdir().expect("checkpoint directory");
     let runtime = Arc::new(TestCheckpointRuntime::new(0x61));
     runtime.block_operation(TestCheckpointOperation::Qualification);
-
     let started = Instant::now();
     assert!(matches!(
         open_sealed_with_deadline(&directory, Arc::clone(&runtime)),
@@ -33,13 +32,11 @@ fn sealed_checkpoint_qualification_timeout_is_typed_and_bounded() {
         None
     );
 }
-
 #[test]
 fn sealed_checkpoint_load_timeout_is_typed_and_bounded() {
     let directory = tempdir().expect("checkpoint directory");
     let runtime = Arc::new(TestCheckpointRuntime::new(0x62));
     runtime.block_operation(TestCheckpointOperation::LoadLatest);
-
     let started = Instant::now();
     assert!(matches!(
         open_sealed_with_deadline(&directory, Arc::clone(&runtime)),
@@ -59,13 +56,11 @@ fn sealed_checkpoint_load_timeout_is_typed_and_bounded() {
         None
     );
 }
-
 #[test]
 fn sealed_checkpoint_cas_timeout_does_not_block_shutdown_and_reopens() {
     let directory = tempdir().expect("checkpoint directory");
     let runtime = Arc::new(TestCheckpointRuntime::new(0x63));
     runtime.block_operation(TestCheckpointOperation::CompareAndSwap);
-
     let started = Instant::now();
     assert!(matches!(
         open_sealed_with_deadline(&directory, Arc::clone(&runtime)),
@@ -76,7 +71,6 @@ fn sealed_checkpoint_cas_timeout_does_not_block_shutdown_and_reopens() {
         runtime.operation_calls(TestCheckpointOperation::CompareAndSwap),
         1
     );
-
     runtime.release_blocked_operation();
     wait_for_checkpoint_sequence(&runtime, 1);
     let reopened = reopen_sealed_after_worker_release(&directory, runtime)
@@ -86,7 +80,6 @@ fn sealed_checkpoint_cas_timeout_does_not_block_shutdown_and_reopens() {
         None
     );
 }
-
 #[test]
 fn sealed_checkpoint_readback_timeout_is_sticky_and_recoverable_on_reopen() {
     let directory = tempdir().expect("checkpoint directory");
@@ -94,7 +87,6 @@ fn sealed_checkpoint_readback_timeout_is_sticky_and_recoverable_on_reopen() {
     let outbox =
         open_sealed_with_deadline(&directory, Arc::clone(&runtime)).expect("sealed outbox");
     runtime.block_load_after_next_cas();
-
     assert_eq!(
         outbox.observe_finalized_snapshot(cursor(11), finalized_block_time_ms(cursor(11))),
         Err(ProviderIngestOutboxError::CheckpointProviderTimeout)
@@ -118,13 +110,11 @@ fn sealed_checkpoint_readback_timeout_is_sticky_and_recoverable_on_reopen() {
         load_calls_after_timeout,
         "a timed-out worker must reject later requests without spawning or queuing work"
     );
-
     let shutdown_started = Instant::now();
     drop(outbox);
     assert!(shutdown_started.elapsed() < Duration::from_secs(5));
     runtime.release_blocked_operation();
     wait_for_checkpoint_sequence(&runtime, 2);
-
     let reopened = reopen_sealed_after_worker_release(&directory, runtime)
         .expect("reopen from sealed successor");
     assert_eq!(
@@ -132,7 +122,6 @@ fn sealed_checkpoint_readback_timeout_is_sticky_and_recoverable_on_reopen() {
         Some(cursor(11))
     );
 }
-
 #[test]
 fn sealed_checkpoint_commit_then_worker_panic_is_ambiguous_and_recoverable() {
     let directory = tempdir().expect("checkpoint directory");
@@ -140,7 +129,6 @@ fn sealed_checkpoint_commit_then_worker_panic_is_ambiguous_and_recoverable() {
     let outbox =
         open_sealed_with_deadline(&directory, Arc::clone(&runtime)).expect("sealed outbox");
     runtime.set_next_cas_behavior(TestCheckpointCasBehavior::CommitThenPanic);
-
     assert_eq!(
         outbox.observe_finalized_snapshot(cursor(12), finalized_block_time_ms(cursor(12))),
         Err(ProviderIngestOutboxError::CheckpointAuthorityAmbiguous)
@@ -161,7 +149,6 @@ fn sealed_checkpoint_commit_then_worker_panic_is_ambiguous_and_recoverable() {
             .is_some()
     );
     drop(outbox);
-
     let reopened = reopen_sealed_after_worker_release(&directory, runtime)
         .expect("reopen after committed CAS response loss");
     assert_eq!(
@@ -169,7 +156,6 @@ fn sealed_checkpoint_commit_then_worker_panic_is_ambiguous_and_recoverable() {
         Some(cursor(12))
     );
 }
-
 #[test]
 fn bounded_checkpoint_admission_serializes_healthy_concurrent_reads() {
     let directory = tempdir().expect("checkpoint directory");
@@ -178,7 +164,6 @@ fn bounded_checkpoint_admission_serializes_healthy_concurrent_reads() {
         open_sealed_with_deadline(&directory, Arc::clone(&runtime)).expect("sealed outbox");
     let baseline_load_calls = runtime.operation_calls(TestCheckpointOperation::LoadLatest);
     runtime.block_operation(TestCheckpointOperation::LoadLatest);
-
     let first_outbox = outbox.clone();
     let first = std::thread::spawn(move || first_outbox.aggregate_counts());
     wait_for_operation_calls(
@@ -192,7 +177,6 @@ fn bounded_checkpoint_admission_serializes_healthy_concurrent_reads() {
     let third = std::thread::spawn(move || third_outbox.aggregate_counts());
     std::thread::sleep(Duration::from_millis(10));
     runtime.release_blocked_operation();
-
     for operation in [first, second, third] {
         operation
             .join()
@@ -203,7 +187,6 @@ fn bounded_checkpoint_admission_serializes_healthy_concurrent_reads() {
         .aggregate_counts()
         .expect("checkpoint worker remains qualified after bounded contention");
 }
-
 #[test]
 fn authoritative_head_read_is_serialized_with_local_checkpoint_persistence() {
     let directory = tempdir().expect("checkpoint directory");
@@ -225,7 +208,6 @@ fn authoritative_head_read_is_serialized_with_local_checkpoint_persistence() {
     reader_loaded_rx
         .recv_timeout(Duration::from_secs(5))
         .expect("reader observed authoritative predecessor");
-
     let (writer_lock_attempted, writer_lock_attempted_rx) = std::sync::mpsc::sync_channel(0);
     let writer_outbox = outbox.clone();
     let writer = std::thread::spawn(move || match writer_outbox.state.try_lock() {
@@ -253,7 +235,6 @@ fn authoritative_head_read_is_serialized_with_local_checkpoint_persistence() {
     let writer_acquired_before_reader_release = writer_lock_attempted_rx
         .recv_timeout(Duration::from_secs(5))
         .expect("writer attempted local state lock");
-
     let (reader_result, writer_result) = if writer_acquired_before_reader_release {
         let writer_result = writer.join().expect("writer thread");
         release_reader.send(()).expect("release stale reader");
@@ -265,7 +246,6 @@ fn authoritative_head_read_is_serialized_with_local_checkpoint_persistence() {
         let writer_result = writer.join().expect("writer thread");
         (reader_result, writer_result)
     };
-
     assert!(
         !writer_acquired_before_reader_release,
         "a local persist acquired state after an authoritative read but before comparison"
@@ -286,7 +266,6 @@ fn authoritative_head_read_is_serialized_with_local_checkpoint_persistence() {
         Some(cursor(13))
     );
 }
-
 #[test]
 fn expired_checkpoint_admission_is_busy_without_poisoning_the_worker() {
     let directory = tempdir().expect("checkpoint directory");
@@ -300,7 +279,6 @@ fn expired_checkpoint_admission_is_busy_without_poisoning_the_worker() {
     let expired = Instant::now()
         .checked_sub(Duration::from_millis(1))
         .expect("past instant");
-
     assert!(matches!(
         worker.acquire_call(expired),
         Err(ProviderIngestOutboxError::CheckpointProviderBusy)
@@ -310,7 +288,6 @@ fn expired_checkpoint_admission_is_busy_without_poisoning_the_worker() {
         .aggregate_counts()
         .expect("expired admission must not poison later checkpoint reads");
 }
-
 #[test]
 fn sealed_checkpoint_restart_uses_external_authority_and_exact_cache() {
     let directory = tempdir().expect("checkpoint directory");
@@ -326,7 +303,6 @@ fn sealed_checkpoint_restart_uses_external_authority_and_exact_cache() {
             .expect("canonical sealed record")
     );
     drop(outbox);
-
     let reopened = open_sealed(&directory, runtime).expect("restart from sealed authority");
     assert_eq!(
         reopened
@@ -335,7 +311,6 @@ fn sealed_checkpoint_restart_uses_external_authority_and_exact_cache() {
         Some(cursor(3))
     );
 }
-
 #[test]
 fn sealed_checkpoint_restart_repairs_only_an_exact_immediate_predecessor_cache() {
     let directory = tempdir().expect("checkpoint directory");
@@ -347,7 +322,6 @@ fn sealed_checkpoint_restart_repairs_only_an_exact_immediate_predecessor_cache()
     fs::write(checkpoint_path(&directory), predecessor_cache)
         .expect("simulate crash before local cache replacement");
     drop(outbox);
-
     let reopened = open_sealed(&directory, runtime).expect("recover exact successor");
     assert_eq!(
         reopened
@@ -362,7 +336,6 @@ fn sealed_checkpoint_restart_repairs_only_an_exact_immediate_predecessor_cache()
             .expect("canonical successor")
     );
 }
-
 #[test]
 fn sealed_checkpoint_two_writer_conflict_fails_closed() {
     let first_directory = tempdir().expect("first checkpoint directory");
@@ -371,7 +344,6 @@ fn sealed_checkpoint_two_writer_conflict_fails_closed() {
     let first = open_sealed(&first_directory, Arc::clone(&runtime)).expect("first sealed writer");
     let second =
         open_sealed(&second_directory, Arc::clone(&runtime)).expect("second sealed writer");
-
     observe_finalized(&first, cursor(4));
     assert_eq!(
         second.observe_finalized_snapshot(cursor(5), finalized_block_time_ms(cursor(5))),
@@ -382,14 +354,12 @@ fn sealed_checkpoint_two_writer_conflict_fails_closed() {
         Err(ProviderIngestOutboxError::CheckpointFork)
     );
 }
-
 #[test]
 fn ambiguous_sealed_commit_succeeds_only_after_exact_authoritative_readback() {
     let directory = tempdir().expect("checkpoint directory");
     let runtime = Arc::new(TestCheckpointRuntime::new(0x73));
     let outbox = open_sealed(&directory, Arc::clone(&runtime)).expect("sealed outbox");
     runtime.set_next_cas_behavior(TestCheckpointCasBehavior::CommitAmbiguous);
-
     observe_finalized(&outbox, cursor(6));
     assert_eq!(
         runtime
@@ -399,14 +369,12 @@ fn ambiguous_sealed_commit_succeeds_only_after_exact_authoritative_readback() {
         2
     );
 }
-
 #[test]
 fn unchanged_predecessor_is_an_explicit_safe_retry_for_every_cas_outcome() {
     let directory = tempdir().expect("checkpoint directory");
     let runtime = Arc::new(TestCheckpointRuntime::new(0x74));
     let outbox = open_sealed(&directory, Arc::clone(&runtime)).expect("sealed outbox");
     runtime.set_next_cas_behavior(TestCheckpointCasBehavior::UnchangedAmbiguous);
-
     assert_eq!(
         outbox.observe_finalized_snapshot(cursor(7), finalized_block_time_ms(cursor(7))),
         Err(ProviderIngestOutboxError::CheckpointCasUnchanged)
@@ -424,7 +392,6 @@ fn unchanged_predecessor_is_an_explicit_safe_retry_for_every_cas_outcome() {
     );
     observe_finalized(&outbox, cursor(7));
 }
-
 #[test]
 fn sealed_checkpoint_rollback_and_same_sequence_fork_fail_startup() {
     let directory = tempdir().expect("checkpoint directory");
@@ -434,13 +401,11 @@ fn sealed_checkpoint_rollback_and_same_sequence_fork_fail_startup() {
     observe_finalized(&outbox, cursor(8));
     let committed = runtime.latest().expect("successor record");
     drop(outbox);
-
     runtime.replace_latest(Some(genesis));
     assert!(matches!(
         open_sealed(&directory, Arc::clone(&runtime)),
         Err(ProviderIngestOutboxError::CheckpointRollback)
     ));
-
     let mut forked_checkpoint =
         decode_provider_ingest_checkpoint(&committed.checkpoint_bytes, policy())
             .expect("decode committed checkpoint");

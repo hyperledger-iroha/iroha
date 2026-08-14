@@ -1,5 +1,12 @@
 //! Viral incentive instruction handlers for SOC-2 (follow rewards and escrows).
-
+use super::{
+    Error, Execute,
+    asset::isi::{
+        assert_numeric_spec_with, execute_social_escrow_transfer, execute_social_reward_transfer,
+        execute_social_send_transfer,
+    },
+};
+use crate::state::{StateTransaction, WorldTransaction};
 use eyre::Result;
 use iroha_config::parameters::actual::ViralIncentives;
 use iroha_crypto::Hash;
@@ -17,16 +24,6 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
-
-use super::{
-    Error, Execute,
-    asset::isi::{
-        assert_numeric_spec_with, execute_social_escrow_transfer, execute_social_reward_transfer,
-        execute_social_send_transfer,
-    },
-};
-use crate::state::{StateTransaction, WorldTransaction};
-
 const DAY_MS: u64 = 86_400_000;
 const REJECT_HALTED: &str = "halted";
 const REJECT_PROMO_WINDOW: &str = "promo_window";
@@ -43,15 +40,12 @@ const REJECT_DUPLICATE_ESCROW: &str = "duplicate_escrow";
 const REJECT_ZERO_AMOUNT: &str = "zero_amount";
 const REJECT_ESCROW_MISSING: &str = "escrow_missing";
 const REJECT_ESCROW_OWNER_MISMATCH: &str = "escrow_owner_mismatch";
-
 #[cfg(feature = "telemetry")]
 fn record_social_rejection(stx: &StateTransaction<'_, '_>, reason: &'static str) {
     crate::telemetry::record_social_rejection(stx.telemetry, reason);
 }
-
 #[cfg(not(feature = "telemetry"))]
 fn record_social_rejection(_: &StateTransaction<'_, '_>, _: &'static str) {}
-
 impl Execute for ClaimTwitterFollowReward {
     fn execute(
         self,
@@ -59,7 +53,6 @@ impl Execute for ClaimTwitterFollowReward {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let cfg = state_transaction.gov.viral_incentives.clone();
-
         let now_ms = state_transaction.block_unix_timestamp_ms();
         let promo = match promo_context(&cfg, now_ms) {
             Ok(promo) => promo,
@@ -76,7 +69,6 @@ impl Execute for ClaimTwitterFollowReward {
         let day = current_day(now_ms);
         let binding_hash = self.binding_hash;
         let binding_digest = binding_hash.digest;
-
         let record = state_transaction
             .world
             .twitter_bindings
@@ -86,7 +78,6 @@ impl Execute for ClaimTwitterFollowReward {
                 record_social_rejection(state_transaction, REJECT_BINDING_NOT_FOUND);
                 validation_err("twitter binding not found")
             })?;
-
         if record.attestation.status != TwitterBindingStatus::Following {
             record_social_rejection(state_transaction, REJECT_BINDING_NOT_FOLLOW);
             return Err(validation_err(
@@ -97,14 +88,11 @@ impl Execute for ClaimTwitterFollowReward {
             record_social_rejection(state_transaction, REJECT_BINDING_EXPIRED);
             return Err(validation_err("twitter binding attestation expired"));
         }
-
         let uaid = record.attestation.uaid;
         ensure_not_denied(state_transaction, &cfg, uaid, &binding_hash)?;
-
         let reward_account = select_account_for_uaid(&state_transaction.world, uaid)?;
         enforce_daily_cap(state_transaction, &cfg, uaid, day)?;
         enforce_binding_cap(state_transaction, &cfg, binding_digest)?;
-
         let reward_asset_id = AssetId::new(
             cfg.reward_asset_definition_id.clone(),
             cfg.incentive_pool_account.clone(),
@@ -124,7 +112,6 @@ impl Execute for ClaimTwitterFollowReward {
         campaign_budget =
             consume_campaign_budget(state_transaction, &cfg, campaign_budget, total.clone())?;
         let campaign_cap = cfg.campaign_cap.clone();
-
         execute_social_reward_transfer(
             state_transaction,
             binding_digest,
@@ -132,7 +119,6 @@ impl Execute for ClaimTwitterFollowReward {
             recipient_asset,
             cfg.follow_reward_amount.clone(),
         )?;
-
         let mut payout_ctx = ViralPayoutContext {
             stx: state_transaction,
             cfg: &cfg,
@@ -143,15 +129,11 @@ impl Execute for ClaimTwitterFollowReward {
             promo,
             now_ms,
         };
-
         record_reward_claim(&mut payout_ctx, uaid, reward_account.clone(), &total);
-
         release_escrow_if_present(&mut payout_ctx, uaid, &reward_account)?;
-
         Ok(())
     }
 }
-
 impl Execute for SendToTwitter {
     #[allow(clippy::too_many_lines)]
     fn execute(
@@ -160,7 +142,6 @@ impl Execute for SendToTwitter {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let cfg = state_transaction.gov.viral_incentives.clone();
-
         let now_ms = state_transaction.block_unix_timestamp_ms();
         let promo = match promo_context(&cfg, now_ms) {
             Ok(promo) => promo,
@@ -178,12 +159,10 @@ impl Execute for SendToTwitter {
         let binding_hash = self.binding_hash;
         let binding_digest = binding_hash.digest;
         let amount = self.amount;
-
         if amount.is_zero() {
             record_social_rejection(state_transaction, REJECT_ZERO_AMOUNT);
             return Err(validation_err("send amount must be non-zero"));
         }
-
         let sender_asset = AssetId::new(cfg.reward_asset_definition_id.clone(), authority.clone());
         let escrow_asset = AssetId::new(
             cfg.reward_asset_definition_id.clone(),
@@ -193,7 +172,6 @@ impl Execute for SendToTwitter {
             .numeric_spec_for(sender_asset.definition())
             .map_err(Error::from)?;
         assert_numeric_spec_with(amount.as_numeric(), spec)?;
-
         let binding_record = state_transaction
             .world
             .twitter_bindings
@@ -210,7 +188,6 @@ impl Execute for SendToTwitter {
                     cfg.reward_asset_definition_id.clone(),
                     reward_account.clone(),
                 );
-
                 execute_social_send_transfer(
                     state_transaction,
                     authority,
@@ -219,7 +196,6 @@ impl Execute for SendToTwitter {
                     recipient_asset,
                     amount.clone(),
                 )?;
-
                 let mut budget = refresh_budget(state_transaction, day);
                 let mut campaign_budget = refresh_campaign_budget(state_transaction);
                 let mut payout_ctx = ViralPayoutContext {
@@ -233,7 +209,6 @@ impl Execute for SendToTwitter {
                     now_ms,
                 };
                 let bonus_paid = maybe_pay_bonus(&mut payout_ctx, authority, uaid)?;
-
                 payout_ctx
                     .stx
                     .world
@@ -252,7 +227,6 @@ impl Execute for SendToTwitter {
                 return Ok(());
             }
         }
-
         if state_transaction
             .world
             .viral_escrows
@@ -262,7 +236,6 @@ impl Execute for SendToTwitter {
             record_social_rejection(state_transaction, REJECT_DUPLICATE_ESCROW);
             return Err(validation_err("escrow already exists for binding"));
         }
-
         execute_social_send_transfer(
             state_transaction,
             authority,
@@ -271,7 +244,6 @@ impl Execute for SendToTwitter {
             escrow_asset,
             amount.clone(),
         )?;
-
         let record = ViralEscrowRecord {
             binding_hash: binding_hash.clone(),
             sender: authority.clone(),
@@ -290,7 +262,6 @@ impl Execute for SendToTwitter {
         Ok(())
     }
 }
-
 impl Execute for CancelTwitterEscrow {
     fn execute(
         self,
@@ -302,7 +273,6 @@ impl Execute for CancelTwitterEscrow {
             record_social_rejection(state_transaction, REJECT_HALTED);
             return Err(validation_err("viral incentives are halted by governance"));
         }
-
         let binding_digest = self.binding_hash.digest;
         let Some(record) = state_transaction
             .world
@@ -313,18 +283,15 @@ impl Execute for CancelTwitterEscrow {
             record_social_rejection(state_transaction, REJECT_ESCROW_MISSING);
             return Err(validation_err("no escrow found for binding hash"));
         };
-
         if &record.sender != authority {
             record_social_rejection(state_transaction, REJECT_ESCROW_OWNER_MISMATCH);
             return Err(validation_err("only escrow sender may cancel it"));
         }
-
         let escrow_asset = AssetId::new(
             cfg.reward_asset_definition_id.clone(),
             cfg.escrow_account.clone(),
         );
         let sender_asset = AssetId::new(cfg.reward_asset_definition_id.clone(), authority.clone());
-
         execute_social_escrow_transfer(
             state_transaction,
             binding_digest,
@@ -333,7 +300,6 @@ impl Execute for CancelTwitterEscrow {
             record.amount.clone(),
         )?;
         state_transaction.world.viral_escrows.remove(binding_digest);
-
         state_transaction
             .world
             .emit_events(Some(SocialEvent::EscrowCancelled(ViralEscrowCancelled {
@@ -343,14 +309,12 @@ impl Execute for CancelTwitterEscrow {
         Ok(())
     }
 }
-
 fn ensure_not_halted(cfg: &ViralIncentives) -> Result<(), Error> {
     if cfg.halt {
         return Err(validation_err("viral incentives are halted by governance"));
     }
     Ok(())
 }
-
 fn ensure_not_denied(
     stx: &StateTransaction<'_, '_>,
     cfg: &ViralIncentives,
@@ -371,13 +335,11 @@ fn ensure_not_denied(
     }
     Ok(())
 }
-
 #[derive(Clone, Copy)]
 struct PromoContext {
     promo_active: bool,
     halted: bool,
 }
-
 fn promo_context(cfg: &ViralIncentives, now_ms: u64) -> Result<PromoContext, Error> {
     ensure_not_halted(cfg)?;
     ensure_promo_window(cfg, now_ms)?;
@@ -386,20 +348,17 @@ fn promo_context(cfg: &ViralIncentives, now_ms: u64) -> Result<PromoContext, Err
         halted: cfg.halt,
     })
 }
-
 fn is_promo_active(cfg: &ViralIncentives, now_ms: u64) -> bool {
     let after_start = cfg.promo_starts_at_ms.is_none_or(|start| now_ms >= start);
     let before_end = cfg.promo_ends_at_ms.is_none_or(|end| now_ms < end);
     after_start && before_end
 }
-
 fn ensure_promo_window(cfg: &ViralIncentives, now_ms: u64) -> Result<(), Error> {
     if is_promo_active(cfg, now_ms) {
         return Ok(());
     }
     Err(validation_err("viral promotion window is not active"))
 }
-
 fn enforce_daily_cap(
     stx: &mut StateTransaction<'_, '_>,
     cfg: &ViralIncentives,
@@ -424,7 +383,6 @@ fn enforce_daily_cap(
     stx.world.viral_daily_counters.insert(uaid, counter);
     Ok(())
 }
-
 fn enforce_binding_cap(
     stx: &mut StateTransaction<'_, '_>,
     cfg: &ViralIncentives,
@@ -445,7 +403,6 @@ fn enforce_binding_cap(
         .insert(binding_digest, claims.saturating_add(1));
     Ok(())
 }
-
 fn refresh_budget(stx: &mut StateTransaction<'_, '_>, day: u64) -> ViralRewardBudget {
     let mut budget = stx.world.viral_reward_budget.get().clone();
     if budget.day != day {
@@ -454,11 +411,9 @@ fn refresh_budget(stx: &mut StateTransaction<'_, '_>, day: u64) -> ViralRewardBu
     }
     budget
 }
-
 fn refresh_campaign_budget(stx: &mut StateTransaction<'_, '_>) -> ViralCampaignBudget {
     stx.world.viral_campaign_budget.get().clone()
 }
-
 fn consume_budget(
     stx: &mut StateTransaction<'_, '_>,
     cfg: &ViralIncentives,
@@ -480,7 +435,6 @@ fn consume_budget(
     *stx.world.viral_reward_budget.get_mut() = budget.clone();
     Ok(budget)
 }
-
 fn consume_campaign_budget(
     stx: &mut StateTransaction<'_, '_>,
     cfg: &ViralIncentives,
@@ -502,7 +456,6 @@ fn consume_campaign_budget(
     *stx.world.viral_campaign_budget.get_mut() = campaign.clone();
     Ok(campaign)
 }
-
 struct ViralPayoutContext<'tx, 'view, 'state> {
     stx: &'tx mut StateTransaction<'view, 'state>,
     cfg: &'tx ViralIncentives,
@@ -513,7 +466,6 @@ struct ViralPayoutContext<'tx, 'view, 'state> {
     promo: PromoContext,
     now_ms: u64,
 }
-
 fn maybe_pay_bonus(
     ctx: &mut ViralPayoutContext<'_, '_, '_>,
     sender: &AccountId,
@@ -532,7 +484,6 @@ fn maybe_pay_bonus(
     if ctx.cfg.sender_bonus_amount.is_zero() {
         return Ok(false);
     }
-
     let pool_asset = AssetId::new(
         ctx.cfg.reward_asset_definition_id.clone(),
         ctx.cfg.incentive_pool_account.clone(),
@@ -547,7 +498,6 @@ fn maybe_pay_bonus(
     let campaign_cap = ctx.campaign_cap.clone();
     *ctx.budget = consume_budget(ctx.stx, ctx.cfg, ctx.budget.clone(), bonus.clone())?;
     *ctx.campaign = consume_campaign_budget(ctx.stx, ctx.cfg, ctx.campaign.clone(), bonus.clone())?;
-
     execute_social_reward_transfer(
         ctx.stx,
         ctx.binding_hash.digest,
@@ -555,7 +505,6 @@ fn maybe_pay_bonus(
         sender_asset,
         bonus.clone(),
     )?;
-
     ctx.stx
         .world
         .viral_bonus_paid
@@ -576,7 +525,6 @@ fn maybe_pay_bonus(
         })));
     Ok(true)
 }
-
 fn record_reward_claim(
     ctx: &mut ViralPayoutContext<'_, '_, '_>,
     uaid: UniversalAccountId,
@@ -598,7 +546,6 @@ fn record_reward_claim(
             recorded_at_ms: ctx.now_ms,
         })));
 }
-
 fn release_escrow_if_present(
     ctx: &mut ViralPayoutContext<'_, '_, '_>,
     uaid: UniversalAccountId,
@@ -613,7 +560,6 @@ fn release_escrow_if_present(
     else {
         return Ok(());
     };
-
     let escrow_asset = AssetId::new(
         ctx.cfg.reward_asset_definition_id.clone(),
         ctx.cfg.escrow_account.clone(),
@@ -627,9 +573,7 @@ fn release_escrow_if_present(
         escrow.amount.clone(),
     )?;
     ctx.stx.world.viral_escrows.remove(ctx.binding_hash.digest);
-
     let bonus_paid = maybe_pay_bonus(ctx, &escrow.sender, uaid)?;
-
     ctx.stx
         .world
         .emit_events(Some(SocialEvent::EscrowReleased(ViralEscrowReleased {
@@ -639,10 +583,8 @@ fn release_escrow_if_present(
             bonus_paid,
             released_at_ms: ctx.now_ms,
         })));
-
     Ok(())
 }
-
 fn select_account_for_uaid(
     world: &WorldTransaction<'_, '_>,
     uaid: UniversalAccountId,
@@ -653,50 +595,41 @@ fn select_account_for_uaid(
         .cloned()
         .ok_or_else(|| validation_err("no account registered for UAID"))
 }
-
 const fn current_day(timestamp_ms: u64) -> u64 {
     timestamp_ms / DAY_MS
 }
-
 fn validation_err(message: impl Into<String>) -> Error {
     Error::InvariantViolation(message.into().into_boxed_str())
 }
-
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_data_model::{block::BlockHeader, prelude::*};
-    use iroha_test_samples::ALICE_ID;
-    use nonzero_ext::nonzero;
-
     use super::*;
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
     };
-
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_data_model::{block::BlockHeader, prelude::*};
+    use iroha_test_samples::ALICE_ID;
+    use nonzero_ext::nonzero;
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("social fixture key generation should succeed")
     }
-
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
-
     #[test]
     fn select_account_for_uaid_uses_index() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
-
         let domain_id: DomainId = DomainId::try_new("uaid", "reward").expect("domain id");
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::reward"));
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -706,7 +639,6 @@ mod tests {
         Register::account(new_account)
             .execute(&ALICE_ID, &mut tx)
             .expect("register account");
-
         let selected = select_account_for_uaid(&tx.world, uaid).expect("select account");
         assert_eq!(selected, account_id);
     }

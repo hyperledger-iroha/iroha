@@ -1,8 +1,6 @@
 use iroha_crypto::{Hash, PublicKey};
 use ivm::{Memory, PointerType};
-
 mod common;
-
 fn valid_account_id_literal() -> Vec<u8> {
     let public_key: PublicKey =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -12,7 +10,6 @@ fn valid_account_id_literal() -> Vec<u8> {
         .to_string()
         .into_bytes()
 }
-
 fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
@@ -23,7 +20,6 @@ fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 #[test]
 fn validate_known_types_ok() {
     let valid_account = valid_account_id_literal();
@@ -48,7 +44,6 @@ fn validate_known_types_ok() {
         assert_eq!(v.payload, payload.as_slice());
     }
 }
-
 #[test]
 fn reject_hash_mismatch() {
     let valid_account = valid_account_id_literal();
@@ -64,7 +59,6 @@ fn reject_hash_mismatch() {
         Err(ivm::VMError::NoritoInvalid)
     ));
 }
-
 #[test]
 fn reject_oob_length() {
     // Construct a TLV that claims a very large payload length
@@ -81,7 +75,6 @@ fn reject_oob_length() {
         Err(ivm::VMError::NoritoInvalid)
     ));
 }
-
 #[test]
 fn reject_unknown_type() {
     let tlv = make_tlv(0xFFFF, 1, b"x");
@@ -92,7 +85,6 @@ fn reject_unknown_type() {
         Err(ivm::VMError::NoritoInvalid)
     ));
 }
-
 #[test]
 fn reject_wrong_version() {
     let payload = common::payload_for_type(PointerType::Name, b"cursor");
@@ -104,7 +96,6 @@ fn reject_wrong_version() {
         Err(ivm::VMError::NoritoInvalid)
     ));
 }
-
 #[test]
 fn reject_wrong_region() {
     let payload = common::payload_for_type(PointerType::Name, b"cursor");

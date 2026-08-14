@@ -338,6 +338,7 @@ members = [
 ]
 exclude = [
     "mochi/fixtures",
+    "crates/iroha_confidential_spool",
     "crates/iroha_sumeragi_core",
     "crates/gpuzstd_metal.ignore"
 ]

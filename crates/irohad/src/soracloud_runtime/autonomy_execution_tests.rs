@@ -79,7 +79,6 @@ fn execute_apartment_generated_hf_autonomy_run_executes_locally_and_persists_sum
         SoraHfPlacementHostStatusV1::Warm,
         local_peer_id,
     );
-
     let temp_dir = tempfile::tempdir()?;
     let source_root = temp_dir
         .path()
@@ -121,7 +120,6 @@ fn execute_apartment_generated_hf_autonomy_run_executes_locally_and_persists_sum
             import_error: None,
         },
     )?;
-
     let manager = SoracloudRuntimeManager::new(
         test_runtime_manager_config(temp_dir.path().to_path_buf())
             .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
@@ -129,7 +127,6 @@ fn execute_apartment_generated_hf_autonomy_run_executes_locally_and_persists_sum
     );
     manager.reconcile_once()?;
     let handle = test_runtime_handle(&manager, Arc::clone(&state));
-
     let request = SoracloudApartmentExecutionRequest {
         observed_height: 0,
         observed_block_hash: None,
@@ -144,7 +141,6 @@ fn execute_apartment_generated_hf_autonomy_run_executes_locally_and_persists_sum
     assert_eq!(result.status, SoraAgentRuntimeStatusV1::Running);
     assert!(result.checkpoint_artifact_hash.is_some());
     assert!(result.journal_artifact_hash.is_some());
-
     let (summary, journal_hash) = read_apartment_autonomy_execution_summary(
         temp_dir.path(),
         apartment_name.as_ref(),
@@ -208,7 +204,6 @@ fn execute_apartment_generated_hf_autonomy_run_executes_locally_and_persists_sum
         result.checkpoint_artifact_hash,
         summary.checkpoint_artifact_hash
     );
-
     let second = handle
         .execute_apartment(request)
         .map_err(|error| eyre::eyre!("{error:?}"))?;
@@ -220,7 +215,6 @@ fn execute_apartment_generated_hf_autonomy_run_executes_locally_and_persists_sum
     );
     Ok(())
 }
-
 #[test]
 fn execute_apartment_generated_hf_autonomy_workflow_executes_multiple_steps_locally() -> Result<()>
 {
@@ -303,7 +297,6 @@ fn execute_apartment_generated_hf_autonomy_workflow_executes_multiple_steps_loca
         SoraHfPlacementHostStatusV1::Warm,
         local_peer_id,
     );
-
     let temp_dir = tempfile::tempdir()?;
     let source_root = temp_dir
         .path()
@@ -345,7 +338,6 @@ fn execute_apartment_generated_hf_autonomy_workflow_executes_multiple_steps_loca
             import_error: None,
         },
     )?;
-
     let manager = SoracloudRuntimeManager::new(
         test_runtime_manager_config(temp_dir.path().to_path_buf())
             .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
@@ -353,7 +345,6 @@ fn execute_apartment_generated_hf_autonomy_workflow_executes_multiple_steps_loca
     );
     manager.reconcile_once()?;
     let handle = test_runtime_handle(&manager, Arc::clone(&state));
-
     let result = handle
         .execute_apartment(SoracloudApartmentExecutionRequest {
             observed_height: 0,
@@ -364,7 +355,6 @@ fn execute_apartment_generated_hf_autonomy_workflow_executes_multiple_steps_loca
             request_commitment: run.request_commitment,
         })
         .map_err(|error| eyre::eyre!("{error:?}"))?;
-
     let (summary, _journal_hash) = read_apartment_autonomy_execution_summary(
         temp_dir.path(),
         apartment_name.as_ref(),

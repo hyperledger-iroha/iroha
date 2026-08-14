@@ -1,5 +1,5 @@
 //! Validate SM performance benchmark output against reference medians.
-
+use norito::json::{self, Map, Value};
 use std::{
     collections::BTreeMap,
     convert::TryFrom,
@@ -11,14 +11,10 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-
-use norito::json::{self, Map, Value};
-
 struct BenchSpec {
     key: &'static str,
     path: &'static [&'static str],
 }
-
 const BENCH_SPECS: &[BenchSpec] = &[
     BenchSpec {
         key: "sm2_vs_ed25519_sign/sm2_sign",
@@ -68,7 +64,6 @@ const BENCH_SPECS: &[BenchSpec] = &[
     },
 ];
 const BASELINE_METADATA_FIELDS: &[&str] = &["target_arch", "target_os", "cpu", "notes"];
-
 #[derive(Debug)]
 struct BaselineData {
     metadata: Option<BaselineMetadata>,
@@ -76,20 +71,17 @@ struct BaselineData {
     tolerances: Option<BTreeMap<String, f64>>,
     compare_tolerances: Option<BTreeMap<String, f64>>,
 }
-
 #[derive(Debug, Default)]
 struct BaselineMetadata {
     target_arch: Option<String>,
     target_os: Option<String>,
 }
-
 struct ResultRow {
     key: String,
     measured: f64,
     reference: f64,
     compare: Option<f64>,
 }
-
 struct CliArgs {
     criterion_dir: PathBuf,
     baseline_path: PathBuf,
@@ -104,19 +96,16 @@ struct CliArgs {
     capture_mode: Option<String>,
     capture_label: Option<String>,
 }
-
 struct CaptureMetadata<'a> {
     baseline_path: &'a Path,
     compare_baseline: Option<&'a Path>,
     mode: Option<&'a str>,
     label: Option<&'a str>,
 }
-
 fn main() -> Result<(), Box<dyn Error>> {
     let Some(cli) = parse_args()? else {
         return Ok(());
     };
-
     let baseline = load_baseline(&cli.baseline_path)?;
     warn_on_mismatched_metadata(baseline.metadata.as_ref());
     let compare_baseline = if let Some(path) = cli.compare_baseline.as_deref() {
@@ -124,10 +113,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         None
     };
-
     let results = collect_results(&cli.criterion_dir, &baseline, compare_baseline.as_ref())?;
     emit_summary(&results);
-
     if let Some(path) = cli.capture_json.as_deref() {
         let mode = cli.capture_mode.as_deref();
         let label = cli.capture_label.as_deref().or(mode);
@@ -143,7 +130,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         )?;
         println!("Capture summary written to {}", path.display());
     }
-
     let compare_label = compare_baseline.as_ref().map(|_| {
         cli.compare_label.clone().unwrap_or_else(|| {
             cli.compare_baseline
@@ -153,7 +139,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .to_string()
         })
     });
-
     if let Some(path) = cli.summary_target.as_deref() {
         if let Err(err) = append_summary_markdown(
             &results,
@@ -166,14 +151,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else if cli.require_summary {
         return Err("GITHUB_STEP_SUMMARY not set; cannot write summary".into());
     }
-
     if let Some(path) = cli.write_baseline.as_deref() {
         write_baseline_file(&results, path)?;
         println!("Updated baseline written to {}", path.display());
     }
-
     report_failures(&results, cli.tolerance, baseline.tolerances.as_ref())?;
-
     if let (Some(compare_data), Some(label)) = (compare_baseline.as_ref(), compare_label.as_deref())
     {
         println!(
@@ -190,10 +172,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .or(compare_data.tolerances.as_ref()),
         )?;
     }
-
     Ok(())
 }
-
 fn parse_args() -> Result<Option<CliArgs>, Box<dyn Error>> {
     let mut args = env::args().skip(1);
     let mut cli = CliArgs {
@@ -211,7 +191,6 @@ fn parse_args() -> Result<Option<CliArgs>, Box<dyn Error>> {
         capture_label: None,
     };
     let mut show_help = false;
-
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--criterion-dir" => {
@@ -265,20 +244,16 @@ fn parse_args() -> Result<Option<CliArgs>, Box<dyn Error>> {
             }
         }
     }
-
     if show_help {
         print_help();
         return Ok(None);
     }
     validate_tolerance(cli.tolerance, "--tolerance")?;
     validate_tolerance(cli.compare_tolerance, "--compare-tolerance")?;
-
     Ok(Some(cli))
 }
-
 fn warn_on_mismatched_metadata(meta: Option<&BaselineMetadata>) {
     let Some(meta) = meta else { return };
-
     if let Some(target_arch) = meta.target_arch.as_deref() {
         let arch = env::consts::ARCH;
         if target_arch != arch {
@@ -294,7 +269,6 @@ fn warn_on_mismatched_metadata(meta: Option<&BaselineMetadata>) {
         }
     }
 }
-
 fn collect_results(
     criterion_dir: &Path,
     baseline: &BaselineData,
@@ -326,7 +300,6 @@ fn collect_results(
     }
     Ok(results)
 }
-
 fn report_failures(
     results: &[ResultRow],
     default_tolerance: f64,
@@ -357,7 +330,6 @@ fn report_failures(
             ));
         }
     }
-
     if failures.is_empty() {
         if used_override {
             println!(
@@ -375,7 +347,6 @@ fn report_failures(
         Err(failures.join("\n").into())
     }
 }
-
 fn print_help() {
     println!(
         "Usage: sm_perf_check [--criterion-dir PATH] [--baseline PATH] [--tolerance FRACTION] \
@@ -394,22 +365,17 @@ fn print_help() {
         "Use --capture-json PATH to emit structured measurements for later aggregation (optionally add --capture-mode/--capture-label)."
     );
 }
-
 fn load_baseline(path: &Path) -> Result<BaselineData, Box<dyn Error>> {
     let payload = fs::read_to_string(path)?;
     parse_baseline(&payload)
 }
-
 fn parse_baseline(payload: &str) -> Result<BaselineData, Box<dyn Error>> {
     let value: Value = norito::json::from_str(payload)?;
-
     let metadata = value.get("metadata").map(parse_metadata).transpose()?;
-
     let benchmarks = value
         .get("benchmarks")
         .and_then(Value::as_object)
         .ok_or("baseline file missing 'benchmarks' object")?;
-
     let mut map = BTreeMap::new();
     for (name, entry) in benchmarks {
         ensure_known_benchmark(name, "baseline benchmark")?;
@@ -423,7 +389,6 @@ fn parse_baseline(payload: &str) -> Result<BaselineData, Box<dyn Error>> {
         map.insert(name.clone(), median);
     }
     validate_benchmark_coverage(&map)?;
-
     let tolerances = if let Some(value) = value.get("tolerances") {
         let object = value
             .as_object()
@@ -441,7 +406,6 @@ fn parse_baseline(payload: &str) -> Result<BaselineData, Box<dyn Error>> {
     } else {
         None
     };
-
     let compare_tolerances = if let Some(value) = value.get("compare_tolerances") {
         let object = value
             .as_object()
@@ -459,7 +423,6 @@ fn parse_baseline(payload: &str) -> Result<BaselineData, Box<dyn Error>> {
     } else {
         None
     };
-
     Ok(BaselineData {
         metadata,
         benchmarks: map,
@@ -467,7 +430,6 @@ fn parse_baseline(payload: &str) -> Result<BaselineData, Box<dyn Error>> {
         compare_tolerances,
     })
 }
-
 fn parse_metadata(value: &Value) -> Result<BaselineMetadata, Box<dyn Error>> {
     let object = value
         .as_object()
@@ -477,18 +439,15 @@ fn parse_metadata(value: &Value) -> Result<BaselineMetadata, Box<dyn Error>> {
             return Err(format!("baseline metadata field `{field}` is not supported").into());
         }
     }
-
     let target_arch = optional_metadata_string(object, "target_arch")?;
     let target_os = optional_metadata_string(object, "target_os")?;
     let _cpu = optional_metadata_string(object, "cpu")?;
     let _notes = optional_metadata_string(object, "notes")?;
-
     Ok(BaselineMetadata {
         target_arch,
         target_os,
     })
 }
-
 fn optional_metadata_string(object: &Map, field: &str) -> Result<Option<String>, Box<dyn Error>> {
     object
         .get(field)
@@ -501,7 +460,6 @@ fn optional_metadata_string(object: &Map, field: &str) -> Result<Option<String>,
         .transpose()
         .map_err(Into::into)
 }
-
 fn validate_benchmark_coverage(benchmarks: &BTreeMap<String, f64>) -> Result<(), Box<dyn Error>> {
     for spec in BENCH_SPECS {
         if !benchmarks.contains_key(spec.key) {
@@ -510,7 +468,6 @@ fn validate_benchmark_coverage(benchmarks: &BTreeMap<String, f64>) -> Result<(),
     }
     Ok(())
 }
-
 fn ensure_known_benchmark(name: &str, context: &str) -> Result<(), Box<dyn Error>> {
     if BENCH_SPECS.iter().any(|spec| spec.key == name) {
         Ok(())
@@ -518,7 +475,6 @@ fn ensure_known_benchmark(name: &str, context: &str) -> Result<(), Box<dyn Error
         Err(format!("{context} `{name}` is not in the SM benchmark target set").into())
     }
 }
-
 fn load_measurement(dir: &Path, spec: &BenchSpec) -> Result<f64, Box<dyn Error>> {
     let mut path = PathBuf::from(dir);
     for component in spec.path {
@@ -526,7 +482,6 @@ fn load_measurement(dir: &Path, spec: &BenchSpec) -> Result<f64, Box<dyn Error>>
     }
     path.push("new");
     path.push("estimates.json");
-
     let payload = fs::read_to_string(&path)
         .map_err(|err| format!("failed to read measurement for {}: {err}", spec.key))?;
     let value: Value = norito::json::from_str(&payload)?;
@@ -541,7 +496,6 @@ fn load_measurement(dir: &Path, spec: &BenchSpec) -> Result<f64, Box<dyn Error>>
                 spec.key
             )
         })?;
-
     // Criterion stores nanoseconds in `estimates.json`; convert to microseconds.
     let measured = median / 1_000.0;
     validate_positive_finite(
@@ -553,21 +507,18 @@ fn load_measurement(dir: &Path, spec: &BenchSpec) -> Result<f64, Box<dyn Error>>
     )?;
     Ok(measured)
 }
-
 fn validate_tolerance(value: f64, context: &str) -> Result<(), Box<dyn Error>> {
     if !value.is_finite() || value < 0.0 {
         return Err(format!("{context} must be a finite non-negative decimal").into());
     }
     Ok(())
 }
-
 fn validate_positive_finite(value: f64, message: &str) -> Result<(), Box<dyn Error>> {
     if !value.is_finite() || value <= 0.0 {
         return Err(message.to_owned().into());
     }
     Ok(())
 }
-
 fn emit_summary(results: &[ResultRow]) {
     println!("SM benchmark medians (microseconds):");
     let has_compare = results.iter().any(|row| row.compare.is_some());
@@ -594,7 +545,6 @@ fn emit_summary(results: &[ResultRow]) {
         }
     }
 }
-
 fn append_summary_markdown(
     results: &[ResultRow],
     summary_path: &Path,
@@ -639,7 +589,6 @@ fn append_summary_markdown(
             percent = tolerance * 100.0
         );
     }
-
     let mut file = fs::OpenOptions::new()
         .append(true)
         .create(true)
@@ -647,7 +596,6 @@ fn append_summary_markdown(
     file.write_all(buffer.as_bytes())?;
     Ok(())
 }
-
 fn report_comparison_failures(
     results: &[ResultRow],
     compare_label: &str,
@@ -681,7 +629,6 @@ fn report_comparison_failures(
             ));
         }
     }
-
     if failures.is_empty() {
         if used_override {
             println!(
@@ -701,33 +648,27 @@ fn report_comparison_failures(
         Err(failures.join("\n").into())
     }
 }
-
 fn write_baseline_file(results: &[ResultRow], path: &Path) -> Result<(), Box<dyn Error>> {
     let mut metadata = Map::new();
     let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| env::consts::ARCH.to_owned());
     let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_else(|_| env::consts::OS.to_owned());
     metadata.insert("target_arch".to_owned(), Value::from(arch));
     metadata.insert("target_os".to_owned(), Value::from(os));
-
     if let Ok(cpu) = env::var("SM_PERF_CPU_LABEL") {
         metadata.insert("cpu".to_owned(), Value::from(cpu));
     }
-
     let mut benchmarks = Map::new();
     for row in results {
         benchmarks.insert(row.key.clone(), Value::from(row.measured));
     }
-
     let mut root = Map::new();
     root.insert("metadata".to_owned(), Value::Object(metadata));
     root.insert("benchmarks".to_owned(), Value::Object(benchmarks));
-
     let json = Value::Object(root);
     let content = json::to_json_pretty(&json)?;
     fs::write(path, content)?;
     Ok(())
 }
-
 fn write_capture_json(
     results: &[ResultRow],
     metadata: &CaptureMetadata<'_>,
@@ -738,13 +679,11 @@ fn write_capture_json(
     {
         fs::create_dir_all(parent)?;
     }
-
     let mut meta = Map::new();
     let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| env::consts::ARCH.to_owned());
     let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_else(|_| env::consts::OS.to_owned());
     meta.insert("target_arch".to_owned(), Value::from(arch));
     meta.insert("target_os".to_owned(), Value::from(os));
-
     if let Some(mode) = metadata.mode {
         meta.insert("mode".to_owned(), Value::from(mode));
     }
@@ -754,7 +693,6 @@ fn write_capture_json(
     if let Ok(cpu) = env::var("SM_PERF_CPU_LABEL") {
         meta.insert("cpu_label".to_owned(), Value::from(cpu));
     }
-
     let baseline_display = metadata.baseline_path.display().to_string();
     meta.insert("baseline_path".to_owned(), Value::from(baseline_display));
     if let Some(compare_path) = metadata.compare_baseline {
@@ -763,7 +701,6 @@ fn write_capture_json(
             Value::from(compare_path.display().to_string()),
         );
     }
-
     let timestamp_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|dur| dur.as_millis())
@@ -773,7 +710,6 @@ fn write_capture_json(
         "generated_unix_ms".to_owned(),
         Value::from(timestamp_clamped),
     );
-
     let mut measured_map = Map::new();
     let mut reference_map = Map::new();
     let mut compare_map = Map::new();
@@ -786,7 +722,6 @@ fn write_capture_json(
             has_compare = true;
         }
     }
-
     let mut root = Map::new();
     root.insert("metadata".to_owned(), Value::Object(meta));
     root.insert("benchmarks".to_owned(), Value::Object(measured_map));
@@ -794,24 +729,18 @@ fn write_capture_json(
     if has_compare {
         root.insert("comparison".to_owned(), Value::Object(compare_map));
     }
-
     let json = Value::Object(root);
     fs::write(path, json::to_json_pretty(&json)?)?;
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
-    use std::fmt::Write as _;
-
-    use tempfile::TempDir;
-
     use super::*;
-
+    use std::fmt::Write as _;
+    use tempfile::TempDir;
     fn complete_benchmark_entries() -> Vec<(&'static str, f64)> {
         BENCH_SPECS.iter().map(|spec| (spec.key, 1.0)).collect()
     }
-
     fn object_payload(entries: &[(&str, f64)]) -> String {
         let mut payload = String::from("{");
         for (index, (name, value)) in entries.iter().enumerate() {
@@ -823,7 +752,6 @@ mod tests {
         payload.push('}');
         payload
     }
-
     fn baseline_payload(
         benchmarks: &[(&str, f64)],
         tolerances: &[(&str, f64)],
@@ -840,7 +768,6 @@ mod tests {
             compare_tolerances,
         )
     }
-
     fn baseline_payload_with_metadata(
         metadata: &str,
         benchmarks: &[(&str, f64)],
@@ -859,19 +786,16 @@ mod tests {
             object_payload(compare_tolerances),
         )
     }
-
     #[test]
     fn load_baseline_rejects_non_object_metadata() {
         let benchmarks = complete_benchmark_entries();
         let payload = baseline_payload_with_metadata("true", &benchmarks, &[], &[]);
         let err = parse_baseline(&payload).expect_err("non-object metadata must fail closed");
-
         assert!(
             err.to_string().contains("metadata' must be an object"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn load_baseline_rejects_unknown_metadata_fields() {
         let benchmarks = complete_benchmark_entries();
@@ -886,13 +810,11 @@ mod tests {
             &[],
         );
         let err = parse_baseline(&payload).expect_err("unknown metadata field must fail closed");
-
         assert!(
             err.to_string().contains("metadata field `compiler`"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn load_baseline_rejects_non_string_metadata_fields() {
         let benchmarks = complete_benchmark_entries();
@@ -906,14 +828,12 @@ mod tests {
             &[],
         );
         let err = parse_baseline(&payload).expect_err("non-string metadata field must fail closed");
-
         assert!(
             err.to_string()
                 .contains("metadata field `target_os` must be a string"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn load_baseline_parses_metadata_and_values() {
         let temp = TempDir::new().expect("tempdir");
@@ -938,7 +858,6 @@ mod tests {
             &[("sm3_vs_sha256_hash/sm3_hash", 0.50)],
         );
         fs::write(&path, payload).expect("write baseline");
-
         let baseline = load_baseline(&path).expect("load baseline");
         assert_eq!(
             baseline
@@ -984,12 +903,10 @@ mod tests {
             Some(&0.50)
         );
     }
-
     #[test]
     fn checked_in_sm_baseline_has_exact_target_coverage() {
         let raw = include_str!("../../benches/sm_perf_baseline.json");
         let baseline = parse_baseline(raw).expect("checked-in SM baseline must parse");
-
         assert_eq!(baseline.benchmarks.len(), BENCH_SPECS.len());
         for spec in BENCH_SPECS {
             assert!(
@@ -999,47 +916,40 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn load_baseline_rejects_missing_required_benchmark() {
         let mut benchmarks = complete_benchmark_entries();
         benchmarks.pop();
         let payload = baseline_payload(&benchmarks, &[], &[]);
         let err = parse_baseline(&payload).expect_err("missing benchmark must fail closed");
-
         assert!(
             err.to_string().contains("missing required benchmark"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn load_baseline_rejects_unknown_benchmark() {
         let mut benchmarks = complete_benchmark_entries();
         benchmarks.push(("retired_sm_benchmark", 1.0));
         let payload = baseline_payload(&benchmarks, &[], &[]);
         let err = parse_baseline(&payload).expect_err("unknown benchmark must fail closed");
-
         assert!(
             err.to_string()
                 .contains("not in the SM benchmark target set"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn load_baseline_rejects_non_positive_benchmark_values() {
         let mut benchmarks = complete_benchmark_entries();
         benchmarks[0].1 = 0.0;
         let payload = baseline_payload(&benchmarks, &[], &[]);
         let err = parse_baseline(&payload).expect_err("non-positive benchmark must fail closed");
-
         assert!(
             err.to_string().contains("finite and positive"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn load_baseline_rejects_unknown_or_invalid_tolerances() {
         let benchmarks = complete_benchmark_entries();
@@ -1051,7 +961,6 @@ mod tests {
                 .contains("not in the SM benchmark target set"),
             "unexpected error: {err}"
         );
-
         let invalid_payload = baseline_payload(&benchmarks, &[(BENCH_SPECS[0].key, -0.1)], &[]);
         let err = parse_baseline(&invalid_payload)
             .expect_err("negative tolerance override must fail closed");
@@ -1060,7 +969,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn validate_tolerance_rejects_invalid_values() {
         for value in [-0.01, f64::NAN, f64::INFINITY] {
@@ -1074,14 +982,12 @@ mod tests {
         validate_tolerance(0.0, "--tolerance").expect("zero tolerance is valid");
         validate_tolerance(0.25, "--tolerance").expect("positive finite tolerance is valid");
     }
-
     #[test]
     fn write_capture_json_outputs_expected_payload() {
         let temp = TempDir::new().expect("tempdir");
         let capture_path = temp.path().join("capture.json");
         let baseline_path = temp.path().join("baseline.json");
         fs::write(&baseline_path, "{}").expect("baseline stub");
-
         let rows = vec![
             ResultRow {
                 key: "sm2_vs_ed25519_sign/sm2_sign".to_owned(),
@@ -1096,7 +1002,6 @@ mod tests {
                 compare: None,
             },
         ];
-
         write_capture_json(
             &rows,
             &CaptureMetadata {
@@ -1108,7 +1013,6 @@ mod tests {
             &capture_path,
         )
         .expect("capture json");
-
         let payload = fs::read_to_string(&capture_path).expect("capture payload");
         let value: Value = json::from_str(&payload).expect("parsed capture payload");
         let metadata = value
@@ -1133,7 +1037,6 @@ mod tests {
         );
         assert!(value.get("comparison").is_some());
     }
-
     #[test]
     fn load_measurement_converts_nanoseconds_to_microseconds() {
         let temp = TempDir::new().expect("tempdir");
@@ -1148,7 +1051,6 @@ mod tests {
             }
         }"#;
         fs::write(path.join("estimates.json"), estimates).expect("write estimates");
-
         let spec = &BenchSpec {
             key: "sm2_vs_ed25519_sign/sm2_sign",
             path: &["sm2_vs_ed25519_sign", "sm2_sign"],
@@ -1156,7 +1058,6 @@ mod tests {
         let measurement = load_measurement(temp.path(), spec).expect("load measurement");
         assert!((measurement - 12.345).abs() < f64::EPSILON);
     }
-
     #[test]
     fn load_measurement_rejects_non_positive_medians() {
         let temp = TempDir::new().expect("tempdir");
@@ -1171,7 +1072,6 @@ mod tests {
             }
         }"#;
         fs::write(path.join("estimates.json"), estimates).expect("write estimates");
-
         let spec = &BenchSpec {
             key: "sm2_vs_ed25519_sign/sm2_sign",
             path: &["sm2_vs_ed25519_sign", "sm2_sign"],
@@ -1183,7 +1083,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn per_benchmark_tolerance_override_passes() {
         let rows = vec![ResultRow {
@@ -1197,7 +1096,6 @@ mod tests {
         report_failures(&rows, 0.05, Some(&overrides))
             .expect("override should allow slower benchmark within custom tolerance");
     }
-
     #[test]
     fn per_benchmark_tolerance_override_fails_when_exceeded() {
         let rows = vec![ResultRow {
@@ -1215,7 +1113,6 @@ mod tests {
                 .contains("observed 130.00 µs exceeds allowed 120.00 µs")
         );
     }
-
     #[test]
     fn per_benchmark_tolerance_override_rejects_invalid_values() {
         let rows = vec![ResultRow {
@@ -1228,13 +1125,11 @@ mod tests {
         overrides.insert("bench".to_owned(), f64::NAN);
         let err = report_failures(&rows, 0.05, Some(&overrides))
             .expect_err("invalid override tolerance must fail closed");
-
         assert!(
             err.to_string().contains("finite non-negative"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn comparison_guard_passes_within_tolerance() {
         let rows = vec![ResultRow {
@@ -1246,7 +1141,6 @@ mod tests {
         report_comparison_failures(&rows, "scalar baseline", 0.10, None)
             .expect("comparison within tolerance");
     }
-
     #[test]
     fn comparison_guard_fails_on_excessive_slowdown() {
         let rows = vec![ResultRow {
@@ -1261,7 +1155,6 @@ mod tests {
         assert!(message.contains("bench"));
         assert!(message.contains("scalar baseline"));
     }
-
     #[test]
     fn comparison_guard_rejects_invalid_tolerance() {
         let rows = vec![ResultRow {
@@ -1272,7 +1165,6 @@ mod tests {
         }];
         let err = report_comparison_failures(&rows, "scalar baseline", f64::INFINITY, None)
             .expect_err("invalid comparison tolerance must fail closed");
-
         assert!(
             err.to_string().contains("finite non-negative"),
             "unexpected error: {err}"

@@ -1,5 +1,4 @@
 use super::*;
-
 #[test]
 fn sorafs_appeal_finance_readback_filter_sets_query_params() {
     let client = Client::new(config_factory());
@@ -11,13 +10,11 @@ fn sorafs_appeal_finance_readback_filter_sets_query_params() {
         .expect("build request");
     assert_eq!(request.uri().query(), Some("limit=25"));
 }
-
 #[test]
 fn sorafs_appeal_pricing_readback_targets_endpoints() {
     let client = client_with_base_url(base_url());
     let config_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
     let status_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-
     with_mock_http(
         respond_with(&config_store, json_response(StatusCode::OK, "{}")),
         || {
@@ -34,7 +31,6 @@ fn sorafs_appeal_pricing_readback_targets_endpoints() {
                 .expect("pricing status request");
         },
     );
-
     assert_eq!(
         config_store
             .lock()
@@ -56,7 +52,6 @@ fn sorafs_appeal_pricing_readback_targets_endpoints() {
         "/v1/sorafs/appeals/pricing/status"
     );
 }
-
 #[test]
 fn sorafs_appeal_pricing_quote_sends_json_request() {
     let client = client_with_base_url(base_url());
@@ -69,13 +64,11 @@ fn sorafs_appeal_pricing_quote_sends_json_request() {
         "urgency": "normal",
     }))
     .expect("encode quote payload");
-
     with_mock_http(respond_with(&store, response), || {
         client
             .post_sorafs_appeal_pricing_quote_json(&payload)
             .expect("appeal pricing quote request");
     });
-
     let snapshots = store.lock().expect("snapshot store");
     let snapshot = snapshots.first().expect("snapshot");
     assert_eq!(snapshot.method, HttpMethod::POST);
@@ -93,7 +86,6 @@ fn sorafs_appeal_pricing_quote_sends_json_request() {
         Some("content")
     );
 }
-
 #[test]
 fn sorafs_appeal_finance_deposit_sends_signed_json_request() {
     let client = client_with_base_url(base_url());
@@ -108,13 +100,11 @@ fn sorafs_appeal_finance_deposit_sends_signed_json_request() {
         "idempotency_key": "case-401-round-7",
     }))
     .expect("encode deposit payload");
-
     with_mock_http(respond_with(&store, response), || {
         client
             .post_sorafs_appeal_finance_deposit_json(&payload)
             .expect("appeal finance deposit request");
     });
-
     let snapshots = store.lock().expect("snapshot store");
     let snapshot = snapshots.first().expect("snapshot");
     assert_eq!(snapshot.method, HttpMethod::POST);
@@ -135,20 +125,17 @@ fn sorafs_appeal_finance_deposit_sends_signed_json_request() {
         Some("case-401")
     );
 }
-
 #[test]
 fn sorafs_appeal_finance_deposit_get_normalizes_escrow_id_and_signs() {
     let client = client_with_base_url(base_url());
     let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
     let response = json_response(StatusCode::OK, "{}");
     let escrow_id = format!("0x{}", "AB".repeat(32));
-
     with_mock_http(respond_with(&store, response), || {
         client
             .get_sorafs_appeal_finance_deposit(&escrow_id)
             .expect("appeal finance deposit get request");
     });
-
     let snapshots = store.lock().expect("snapshot store");
     let snapshot = snapshots.first().expect("snapshot");
     assert_eq!(snapshot.method, HttpMethod::GET);
@@ -163,7 +150,6 @@ fn sorafs_appeal_finance_deposit_get_normalizes_escrow_id_and_signs() {
     assert!(headers.contains_key(HEADER_NONCE));
     assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
 }
-
 #[test]
 fn sorafs_appeal_finance_deposit_settle_sends_signed_json_request() {
     let client = client_with_base_url(base_url());
@@ -182,13 +168,11 @@ fn sorafs_appeal_finance_deposit_settle_sends_signed_json_request() {
         "outcome": "uphold"
     }))
     .expect("encode settle payload");
-
     with_mock_http(respond_with(&store, response), || {
         client
             .post_sorafs_appeal_finance_deposit_settle_json(&payload)
             .expect("appeal finance deposit settle request");
     });
-
     let snapshots = store.lock().expect("snapshot store");
     let snapshot = snapshots.first().expect("snapshot");
     assert_eq!(snapshot.method, HttpMethod::POST);
@@ -204,7 +188,6 @@ fn sorafs_appeal_finance_deposit_settle_sends_signed_json_request() {
         Some("uphold")
     );
 }
-
 #[test]
 fn sorafs_appeal_finance_deposit_reconcile_and_submit_target_endpoints() {
     let client = client_with_base_url(base_url());
@@ -223,7 +206,6 @@ fn sorafs_appeal_finance_deposit_reconcile_and_submit_target_endpoints() {
         "outcome": "frivolous"
     }))
     .expect("encode reconcile payload");
-
     with_mock_http(
         respond_with(&reconcile_store, json_response(StatusCode::OK, "{}")),
         || {
@@ -240,7 +222,6 @@ fn sorafs_appeal_finance_deposit_reconcile_and_submit_target_endpoints() {
                 .expect("appeal finance deposit submit-settlement request");
         },
     );
-
     assert_eq!(
         reconcile_store
             .lock()
@@ -262,7 +243,6 @@ fn sorafs_appeal_finance_deposit_reconcile_and_submit_target_endpoints() {
         "/v1/sorafs/appeals/finance/deposits/submit-settlement"
     );
 }
-
 #[test]
 fn sorafs_appeal_finance_readback_targets_endpoints() {
     let client = client_with_base_url(base_url());
@@ -270,7 +250,6 @@ fn sorafs_appeal_finance_readback_targets_endpoints() {
     let rollups_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
     let receipts_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
     let filter = SorafsAppealFinanceReadbackFilter { limit: Some(7) };
-
     with_mock_http(
         respond_with(&reports_store, json_response(StatusCode::OK, "{}")),
         || {
@@ -295,7 +274,6 @@ fn sorafs_appeal_finance_readback_targets_endpoints() {
                 .expect("appeal finance settlement receipts request");
         },
     );
-
     assert_eq!(
         reports_store
             .lock()
@@ -327,7 +305,6 @@ fn sorafs_appeal_finance_readback_targets_endpoints() {
         "/v1/sorafs/appeals/finance/settlement-receipts"
     );
 }
-
 #[test]
 fn sorafs_appeal_finance_json_rejects_empty_payload() {
     let client = client_with_base_url(base_url());

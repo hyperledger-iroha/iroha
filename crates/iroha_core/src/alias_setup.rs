@@ -1,7 +1,5 @@
 //! Read-only classification and validation for declarative alias setup intents.
-
-use std::collections::{BTreeMap, BTreeSet};
-
+use crate::{sns::SNS_DATASPACE_ID_METADATA_KEY, state::WorldReadOnly};
 use iroha_data_model::{
     HasMetadata,
     account::{AccountAddress, AccountId},
@@ -26,13 +24,10 @@ use iroha_executor_data_model::permission::account::{
 };
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
-
-use crate::{sns::SNS_DATASPACE_ID_METADATA_KEY, state::WorldReadOnly};
-
 /// Error code returned when public alias setup tries to claim an operator-catalogued dataspace.
 pub const CATALOGUED_DATASPACE_BOOTSTRAP_REQUIRED_CODE: &str = "alias.catalog.bootstrap_required";
-
 /// Deterministic conflict or validation failure produced while classifying an alias intent.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("{code}: {message}")]
@@ -40,7 +35,6 @@ pub struct AliasSetupError {
     code: &'static str,
     message: String,
 }
-
 impl AliasSetupError {
     /// Construct a coded classifier failure.
     #[must_use]
@@ -50,20 +44,17 @@ impl AliasSetupError {
             message: message.into(),
         }
     }
-
     /// Stable machine-readable error code.
     #[must_use]
     pub const fn code(&self) -> &'static str {
         self.code
     }
-
     /// Human-readable error detail with no secret material.
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
 }
-
 fn sns_error(error: crate::sns::SnsError) -> AliasSetupError {
     let text = error.to_string();
     let code = if text.contains(crate::sns::ALIAS_CATALOG_MAPPING_CONFLICT_CODE) {
@@ -78,7 +69,6 @@ fn sns_error(error: crate::sns::SnsError) -> AliasSetupError {
     };
     AliasSetupError::new(code, text)
 }
-
 /// Build the canonical SNS selector for a resolved target without consulting a static catalog.
 pub fn selector_for_resolved_alias_target(
     target: &AliasTargetV1,
@@ -105,7 +95,6 @@ pub fn selector_for_resolved_alias_target(
         }
     }
 }
-
 /// Build the immutable SNS metadata committed for a resolved setup target.
 ///
 /// # Errors
@@ -127,7 +116,6 @@ pub fn alias_registration_metadata(target: &AliasTargetV1) -> Result<Metadata, A
     }
     Ok(metadata)
 }
-
 /// Borrow the explicit resource owner carried by an alias setup intent.
 #[must_use]
 pub fn alias_intent_owner(intent: &AliasIntentV1) -> &AccountId {
@@ -137,7 +125,6 @@ pub fn alias_intent_owner(intent: &AliasIntentV1) -> &AccountId {
         AliasIntentV1::AccountAlias(value) => &value.target_account,
     }
 }
-
 fn expected_controller(owner: &AccountId) -> Result<NameControllerV1, AliasSetupError> {
     AccountAddress::from_account_id(owner)
         .map(|address| NameControllerV1::account(&address))
@@ -148,7 +135,6 @@ fn expected_controller(owner: &AccountId) -> Result<NameControllerV1, AliasSetup
             )
         })
 }
-
 fn validate_text_id_pair(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -171,7 +157,6 @@ fn validate_text_id_pair(
             false,
         ),
     };
-
     let planned = planned_dataspaces
         .iter()
         .find_map(|(planned_name, id)| (planned_name.as_ref() == name).then_some(*id));
@@ -248,7 +233,6 @@ fn validate_text_id_pair(
         Err(error) => Err(sns_error(error)),
     }
 }
-
 /// Revalidate a resolved target's canonical text against its pinned dataspace ID.
 ///
 /// # Errors
@@ -263,7 +247,6 @@ pub fn validate_resolved_alias_target(
 ) -> Result<(), AliasSetupError> {
     validate_text_id_pair(world, catalog, &BTreeMap::new(), target, now_ms).map(|_| ())
 }
-
 /// Verify a recomputed lease quote against a caller's bounded guard.
 ///
 /// This helper is intentionally separate from classification. Execution must
@@ -328,7 +311,6 @@ pub fn validate_alias_quote_guard(
     }
     Ok(())
 }
-
 fn authority_can_manage_alias_target(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -352,7 +334,6 @@ fn authority_can_manage_alias_target(
         }
     }
 }
-
 /// Verify that a setup transaction authority may create or repair an intent.
 ///
 /// The explicit resource owner may always ensure its own resource. Provisioning
@@ -378,7 +359,6 @@ pub fn validate_alias_intent_authority(
         "authority must own or hold exact management permission for the alias intent",
     ))
 }
-
 fn active_alias_lifecycle_record(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
@@ -400,7 +380,6 @@ fn active_alias_lifecycle_record(
     }
     Ok((selector, record))
 }
-
 /// Classify and quote one guarded absolute-expiry lease renewal without mutation.
 ///
 /// The returned quote is the exact quote execution will recompute. Text/ID
@@ -439,7 +418,6 @@ pub fn classify_alias_lease_renewal(
     validate_alias_quote_guard(world, &quote, &renewal.quote_guard, now_ms)?;
     Ok(quote)
 }
-
 fn policy_payment_asset(
     policy: &iroha_data_model::sns::SuffixPolicyV1,
 ) -> Result<AssetDefinitionId, AliasSetupError> {
@@ -453,7 +431,6 @@ fn policy_payment_asset(
         )
     })
 }
-
 pub(crate) fn validate_alias_auto_renew_ranges(
     config: &AliasAutoRenewConfigV1,
 ) -> Result<(), AliasSetupError> {
@@ -480,7 +457,6 @@ pub(crate) fn validate_alias_auto_renew_ranges(
     }
     Ok(())
 }
-
 fn validate_alias_auto_renew_config(
     world: &impl WorldReadOnly,
     target: &AliasTargetV1,
@@ -524,7 +500,6 @@ fn validate_alias_auto_renew_config(
     }
     Ok(())
 }
-
 /// Classify one owner-only auto-renew configuration CAS without mutation.
 ///
 /// Exact persisted configuration with clean runtime state is a no-op even when
@@ -585,7 +560,6 @@ pub fn classify_alias_auto_renew(
     }
     Ok(AliasLifecyclePlanDispositionV1::Apply)
 }
-
 fn existing_record(
     world: &impl WorldReadOnly,
     selector: &NameSelectorV1,
@@ -597,7 +571,6 @@ fn existing_record(
         Err(error) => Err(sns_error(error)),
     }
 }
-
 fn ensure_active_parent_record(
     world: &impl WorldReadOnly,
     target: &AliasTargetV1,
@@ -618,7 +591,6 @@ fn ensure_active_parent_record(
     }
     Ok(())
 }
-
 fn validate_parent_resource(
     world: &impl WorldReadOnly,
     planned_dataspaces: &BTreeMap<iroha_data_model::name::Name, DataSpaceId>,
@@ -631,7 +603,6 @@ fn validate_parent_resource(
             .get(name)
             .is_some_and(|planned| *planned == id)
     };
-
     match intent {
         AliasIntentV1::Dataspace(_) => Ok(()),
         AliasIntentV1::Domain(value) => {
@@ -672,7 +643,6 @@ fn validate_parent_resource(
         }
     }
 }
-
 fn validate_existing_record(
     record: &NameRecordV1,
     owner: &AccountId,
@@ -718,7 +688,6 @@ fn validate_existing_record(
     }
     Ok(())
 }
-
 fn exact_permission_scope(intent: &AliasIntentV1) -> AccountAliasPermissionScope {
     match intent {
         AliasIntentV1::Dataspace(value) => {
@@ -732,7 +701,6 @@ fn exact_permission_scope(intent: &AliasIntentV1) -> AccountAliasPermissionScope
         }
     }
 }
-
 /// Return the exact automatic manage/delegate/resolve permission bundle for an intent owner.
 #[must_use]
 pub fn exact_alias_permission_bundle(intent: &AliasIntentV1) -> [Permission; 3] {
@@ -749,14 +717,12 @@ pub fn exact_alias_permission_bundle(intent: &AliasIntentV1) -> [Permission; 3] 
         CanResolveAccountAlias { scope }.into(),
     ]
 }
-
 fn exact_permissions_present(world: &impl WorldReadOnly, intent: &AliasIntentV1) -> bool {
     let owner = alias_intent_owner(intent);
     exact_alias_permission_bundle(intent)
         .iter()
         .all(|permission| world.account_contains_inherent_permission(owner, permission))
 }
-
 fn classify_domain_state(
     world: &impl WorldReadOnly,
     intent: &iroha_data_model::alias_setup::AliasDomainIntentV1,
@@ -776,7 +742,6 @@ fn classify_domain_state(
         .domains_by_owner()
         .get(&intent.owner)
         .is_some_and(|domains| domains.contains(&intent.domain.canonical_name));
-
     let Some(domain) = world.domains().get(&intent.domain.canonical_name) else {
         return Ok(true);
     };
@@ -802,7 +767,6 @@ fn classify_domain_state(
     }
     Ok(owner_index_missing)
 }
-
 fn classify_account_state(
     world: &impl WorldReadOnly,
     intent: &iroha_data_model::alias_setup::AliasAccountIntentV1,
@@ -824,7 +788,6 @@ fn classify_account_state(
         }
         _ => {}
     }
-
     if let Some(account) = account {
         match intent.role {
             AccountAliasRoleV1::Primary => match account.label() {
@@ -845,7 +808,6 @@ fn classify_account_state(
             AccountAliasRoleV1::Additional => {}
         }
     }
-
     for (indexed_account, aliases) in world.account_aliases_by_account().iter() {
         if aliases.contains(&alias) && indexed_account != &intent.target_account {
             return Err(AliasSetupError::new(
@@ -868,7 +830,6 @@ fn classify_account_state(
             ));
         }
     }
-
     if let Some(record) = world.account_rekey_records().get(&alias) {
         if record.label != alias {
             return Err(AliasSetupError::new(
@@ -886,7 +847,6 @@ fn classify_account_state(
             ));
         }
     }
-
     let account_missing = account.is_none();
     let binding_missing = world.account_aliases().get(&alias).is_none();
     let reverse_missing = !world
@@ -921,7 +881,6 @@ fn classify_account_state(
         || primary_missing
         || scope_missing)
 }
-
 /// Classify one declarative intent against live state without mutating or quoting it.
 ///
 /// Exact existing state returns [`AliasPlanDispositionV1::NoOp`]. Missing derived
@@ -950,7 +909,6 @@ pub fn classify_alias_intent(
         false,
     )
 }
-
 /// Classify one declarative intent while enforcing the live domain-endorsement policy.
 ///
 /// Per-domain policy stored in `world` overrides
@@ -981,7 +939,6 @@ pub fn classify_alias_intent_with_endorsement_policy(
         default_domain_endorsement_required,
     )
 }
-
 /// Classify an ordered intent while accepting exact parent dataspaces planned earlier.
 ///
 /// `planned_dataspaces` must contain only canonical text/ID pairs from preceding
@@ -1009,7 +966,6 @@ pub fn classify_alias_intent_with_planned_dataspaces(
         now_ms,
     )
 }
-
 /// Classify an ordered intent while accepting exact parent resources planned earlier.
 ///
 /// The planner supplies only successfully classified preceding dataspace and
@@ -1039,7 +995,6 @@ pub fn classify_alias_intent_with_planned_parents(
         false,
     )
 }
-
 /// Classify an ordered intent while enforcing the live domain-endorsement policy.
 ///
 /// This is the policy-aware form of [`classify_alias_intent_with_planned_parents`].
@@ -1092,7 +1047,6 @@ pub fn classify_alias_intent_with_planned_parents_and_endorsement_policy(
             ),
         ));
     }
-
     let resource_needs_repair = match intent {
         AliasIntentV1::Dataspace(_) => false,
         AliasIntentV1::Domain(value) => {
@@ -1117,7 +1071,6 @@ pub fn classify_alias_intent_with_planned_parents_and_endorsement_policy(
         }
         AliasIntentV1::AccountAlias(value) => classify_account_state(world, value)?,
     };
-
     if record.is_none() {
         // Only a deterministic dynamic mapping reaches this branch. Catalog entries are
         // operator-governed namespace declarations and must already have a bootstrap record.
@@ -1128,7 +1081,6 @@ pub fn classify_alias_intent_with_planned_parents_and_endorsement_policy(
     }
     Ok(AliasPlanDispositionV1::NoOp)
 }
-
 /// Return the namespace suffix expected for a resolved target.
 #[must_use]
 pub const fn target_suffix_id(target: &AliasTargetV1) -> u16 {
@@ -1138,7 +1090,6 @@ pub const fn target_suffix_id(target: &AliasTargetV1) -> u16 {
         AliasTargetV1::AccountAlias(_) => ACCOUNT_ALIAS_SUFFIX_ID,
     }
 }
-
 /// Verify that the target namespace policy uses the configured, registered fee asset.
 ///
 /// Planning calls this only after classifying an operation that will actually
@@ -1165,7 +1116,6 @@ pub fn validate_configured_alias_payment_asset(
     )
     .map_err(|error| AliasSetupError::new("alias.quote.payment_asset_mismatch", error.to_string()))
 }
-
 /// Borrow a resolved account alias from an intent when applicable.
 #[must_use]
 pub fn account_alias_intent_target(intent: &AliasIntentV1) -> Option<&ResolvedAccountAliasV1> {
@@ -1174,11 +1124,10 @@ pub fn account_alias_intent_target(intent: &AliasIntentV1) -> Option<&ResolvedAc
         AliasIntentV1::Dataspace(_) | AliasIntentV1::Domain(_) => None,
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
+    use super::*;
+    use crate::{sns::record_storage_key, state::World};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         Registrable,
@@ -1195,16 +1144,12 @@ mod tests {
         sns::{NameControllerV1, NameRecordV1},
     };
     use norito::codec::Encode;
-
-    use super::*;
-    use crate::{sns::record_storage_key, state::World};
-
+    use std::collections::BTreeSet;
     fn account(seed: u8) -> AccountId {
         let pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive alias classifier fixture keypair");
         AccountId::new(pair.public_key().clone())
     }
-
     fn world_with_accounts(accounts: &[AccountId]) -> World {
         World::with(
             [],
@@ -1215,7 +1160,6 @@ mod tests {
             [],
         )
     }
-
     fn set_primary_label_for_testing(world: &World, account_id: &AccountId, label: AccountAlias) {
         let (account_id, account_value) = iroha_data_model::IntoKeyValue::into_key_value(
             Account::new(account_id.clone())
@@ -1233,7 +1177,6 @@ mod tests {
         }
         block.commit();
     }
-
     fn insert_record(world: &mut World, intent: &AliasIntentV1, owner: AccountId) {
         let target = intent.target();
         let selector = selector_for_resolved_alias_target(&target).expect("resolved selector");
@@ -1253,7 +1196,6 @@ mod tests {
             .smart_contract_state_mut_for_testing()
             .insert(record_storage_key(&selector), record.encode());
     }
-
     fn dynamic_dataspace_intent(owner: AccountId) -> AliasIntentV1 {
         let name: iroha_data_model::name::Name = "paynet".parse().expect("dataspace name");
         let dataspace_id = crate::sns::dataspace_id_for_sns_alias(name.as_ref())
@@ -1263,7 +1205,6 @@ mod tests {
             owner,
         })
     }
-
     #[test]
     fn absent_dataspace_is_create_and_requires_deterministic_id() {
         let owner = account(1);
@@ -1274,7 +1215,6 @@ mod tests {
             classify_alias_intent(&world.view(), &catalog, &intent, 1).expect("classify create"),
             AliasPlanDispositionV1::Create
         );
-
         let AliasIntentV1::Dataspace(mut wrong) = intent else {
             unreachable!()
         };
@@ -1287,7 +1227,6 @@ mod tests {
             crate::sns::ALIAS_CATALOG_MAPPING_CONFLICT_CODE
         );
     }
-
     #[test]
     fn catalogued_dataspace_requires_governed_bootstrap_record() {
         let owner = account(2);
@@ -1307,11 +1246,9 @@ mod tests {
             ),
             owner: owner.clone(),
         });
-
         let error = classify_alias_intent(&world.view(), &catalog, &intent, 1)
             .expect_err("public setup must not claim an operator-catalogued dataspace");
         assert_eq!(error.code(), CATALOGUED_DATASPACE_BOOTSTRAP_REQUIRED_CODE,);
-
         insert_record(&mut world, &intent, owner);
         assert_eq!(
             classify_alias_intent(&world.view(), &catalog, &intent, 1)
@@ -1320,7 +1257,6 @@ mod tests {
             "the authenticated bootstrap owner may repair missing derived permissions",
         );
     }
-
     #[test]
     fn configured_payment_asset_validation_matches_consensus_policy_check() {
         let owner = account(15);
@@ -1338,7 +1274,6 @@ mod tests {
         let mut world = World::with([], [owner_account], [payment_definition]);
         crate::sns::seed_default_namespace_policies(&mut world);
         let target = dynamic_dataspace_intent(owner).target();
-
         validate_configured_alias_payment_asset(&world.view(), &target, &payment_asset.to_string())
             .expect("registered configured asset matches the seeded namespace policy");
         let error = validate_configured_alias_payment_asset(
@@ -1349,7 +1284,6 @@ mod tests {
         .expect_err("invalid configured fee asset must block planning");
         assert_eq!(error.code(), "alias.quote.payment_asset_mismatch");
     }
-
     #[test]
     fn new_dataspace_rejects_reverse_id_collision() {
         let owner = account(10);
@@ -1372,7 +1306,6 @@ mod tests {
             crate::sns::ALIAS_CATALOG_MAPPING_CONFLICT_CODE
         );
     }
-
     #[test]
     fn planned_parent_mapping_allows_ordered_domain_creation_without_mutation() {
         let owner = account(7);
@@ -1396,7 +1329,6 @@ mod tests {
         let error = classify_alias_intent(&world.view(), &catalog, &domain, 1)
             .expect_err("unplanned unknown parent must fail");
         assert_eq!(error.code(), "alias.catalog.unknown_mapping");
-
         let planned = BTreeMap::from([(
             parent.dataspace.canonical_name,
             parent.dataspace.dataspace_id,
@@ -1413,7 +1345,6 @@ mod tests {
             AliasPlanDispositionV1::Create
         );
     }
-
     #[test]
     fn endorsement_required_absent_domain_cannot_be_planned_for_setup() {
         let owner = account(17);
@@ -1438,7 +1369,6 @@ mod tests {
             parent.dataspace.canonical_name,
             parent.dataspace.dataspace_id,
         )]);
-
         let error = classify_alias_intent_with_planned_parents_and_endorsement_policy(
             &world.view(),
             &catalog,
@@ -1450,7 +1380,6 @@ mod tests {
         )
         .expect_err("an endorsement-free domain intent must not yield an executable plan");
         assert_eq!(error.code(), "alias.domain.endorsement_required");
-
         let view = world.view();
         assert!(
             view.domains().get(&domain_id).is_none(),
@@ -1461,7 +1390,6 @@ mod tests {
             "read-only planning must not acquire the blocked lease"
         );
     }
-
     #[test]
     fn account_alias_requires_active_or_earlier_planned_domain() {
         let owner = account(11);
@@ -1499,7 +1427,6 @@ mod tests {
         )
         .expect_err("a dataspace alone does not satisfy a domain-qualified alias parent");
         assert_eq!(error.code(), "alias.parent.missing");
-
         assert_eq!(
             classify_alias_intent_with_planned_parents(
                 &world.view(),
@@ -1513,7 +1440,6 @@ mod tests {
             AliasPlanDispositionV1::Create
         );
     }
-
     #[test]
     fn exact_state_is_noop_and_missing_exact_permission_is_repair() {
         let owner = account(2);
@@ -1529,7 +1455,6 @@ mod tests {
             classify_alias_intent(&world.view(), &catalog, &intent, 1).expect("classify no-op"),
             AliasPlanDispositionV1::NoOp
         );
-
         let mut permissions: BTreeSet<_> =
             exact_alias_permission_bundle(&intent).into_iter().collect();
         permissions.pop_first();
@@ -1541,7 +1466,6 @@ mod tests {
             AliasPlanDispositionV1::Repair
         );
     }
-
     #[test]
     fn owner_and_static_dynamic_mapping_drift_fail_closed() {
         let owner = account(3);
@@ -1553,7 +1477,6 @@ mod tests {
         let error = classify_alias_intent(&world.view(), &dynamic_catalog, &intent, 1)
             .expect_err("owner drift must fail");
         assert_eq!(error.code(), "alias.owner.conflict");
-
         let AliasIntentV1::Dataspace(value) = &intent else {
             unreachable!()
         };
@@ -1571,7 +1494,6 @@ mod tests {
             crate::sns::ALIAS_CATALOG_MAPPING_CONFLICT_CODE
         );
     }
-
     #[test]
     fn account_binding_and_primary_drift_fail_closed() {
         let target = account(5);
@@ -1604,7 +1526,6 @@ mod tests {
         let error = classify_alias_intent(&world.view(), &DataSpaceCatalog::default(), &intent, 1)
             .expect_err("binding drift must fail");
         assert_eq!(error.code(), "alias.binding.conflict");
-
         let different_primary = AccountAlias::domainless(
             "other".parse().expect("other label"),
             DataSpaceId::UNIVERSAL,
@@ -1622,7 +1543,6 @@ mod tests {
         .expect_err("primary drift must fail");
         assert_eq!(error.code(), "alias.primary.conflict");
     }
-
     #[test]
     fn missing_domain_state_is_repairable() {
         let owner = account(12);
@@ -1648,7 +1568,6 @@ mod tests {
             AliasPlanDispositionV1::Repair
         );
     }
-
     #[test]
     fn account_reverse_primary_and_rekey_drift_fail_closed() {
         let target = account(13);
@@ -1683,7 +1602,6 @@ mod tests {
         let error = classify_alias_intent(&world.view(), &DataSpaceCatalog::default(), &intent, 1)
             .expect_err("reverse binding drift must fail");
         assert_eq!(error.code(), "alias.binding.conflict");
-
         let mut primary_world = world_with_accounts(&[target.clone(), other.clone()]);
         set_primary_label_for_testing(&primary_world, &other, alias.clone());
         insert_record(&mut primary_world, &parent, target.clone());
@@ -1702,7 +1620,6 @@ mod tests {
         )
         .expect_err("a second account primary must fail");
         assert_eq!(error.code(), "alias.primary.conflict");
-
         let mut rekey_world = world_with_accounts(&[target.clone(), other]);
         insert_record(&mut rekey_world, &parent, target.clone());
         insert_record(&mut rekey_world, &intent, target.clone());
@@ -1729,7 +1646,6 @@ mod tests {
         .expect_err("rekey record identity drift must fail");
         assert_eq!(error.code(), "alias.binding.conflict");
     }
-
     #[test]
     fn auto_renew_disable_planning_is_exact_noop_and_owner_only() {
         let owner = account(8);
@@ -1753,7 +1669,6 @@ mod tests {
             .expect("absent disabled state is an exact no-op"),
             AliasLifecyclePlanDispositionV1::NoOp,
         );
-
         let error = classify_alias_auto_renew(
             &world.view(),
             &DataSpaceCatalog::default(),
@@ -1764,18 +1679,15 @@ mod tests {
         .expect_err("non-owner must not plan auto-renew configuration");
         assert_eq!(error.code(), "alias.auto_renew.owner_forbidden");
     }
-
     #[test]
     fn setup_authority_requires_owner_or_exact_management_scope() {
         let owner = account(10);
         let operator = account(11);
         let mut world = world_with_accounts(&[owner.clone(), operator.clone()]);
         let intent = dynamic_dataspace_intent(owner.clone());
-
         let error = validate_alias_intent_authority(&world.view(), &operator, &intent)
             .expect_err("an unrelated payer must not provision another owner's resource");
         assert_eq!(error.code(), "alias.setup.authority_forbidden");
-
         world.account_permissions.insert(
             operator.clone(),
             BTreeSet::from([Permission::from(CanManageAccountAlias {
@@ -1785,7 +1697,6 @@ mod tests {
         validate_alias_intent_authority(&world.view(), &operator, &intent)
             .expect("the exact dataspace manager may provision for the explicit owner");
     }
-
     #[test]
     fn dynamic_account_alias_management_uses_the_resolved_exact_scope() {
         let owner = account(15);
@@ -1812,7 +1723,6 @@ mod tests {
         );
         validate_alias_intent_authority(&world.view(), &operator, &root_intent)
             .expect("resolved dynamic root alias accepts its exact dataspace scope");
-
         let domain_intent = AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
             alias: ResolvedAccountAliasV1::new(
                 "merchant@banka.paynet"
@@ -1827,7 +1737,6 @@ mod tests {
         let error = validate_alias_intent_authority(&world.view(), &operator, &domain_intent)
             .expect_err("dataspace scope must not widen into a domain-qualified alias");
         assert_eq!(error.code(), "alias.setup.authority_forbidden");
-
         let domain = iroha_data_model::domain::DomainId::try_new("banka", "paynet")
             .expect("canonical dynamic parent domain");
         world.account_permissions.insert(
@@ -1839,7 +1748,6 @@ mod tests {
         validate_alias_intent_authority(&world.view(), &operator, &domain_intent)
             .expect("resolved dynamic domain alias accepts only its exact domain scope");
     }
-
     #[test]
     fn auto_renew_window_must_be_shorter_than_renewal_term() {
         let owner = account(12);
@@ -1862,7 +1770,6 @@ mod tests {
             0,
             Some(config),
         );
-
         let error = classify_alias_auto_renew(
             &world.view(),
             &DataSpaceCatalog::default(),

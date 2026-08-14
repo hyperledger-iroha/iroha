@@ -1,52 +1,42 @@
 //! CLI regressions for the SoraNet trustless verifier.
-
-use std::{env, fs, path::PathBuf};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::decode_from_bytes;
 use norito::json::Value;
 use sorafs_car::{TrustlessVerificationError, TrustlessVerifier, TrustlessVerifierConfig};
 use sorafs_manifest::{ManifestV1, SORAFS_GATEWAY_MANIFEST_DIGEST_HEX};
+use std::{env, fs, path::PathBuf};
 use tempfile::{Builder, TempDir};
-
 fn workspace_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../")
         .join(relative)
 }
-
 fn canonical_temp_base() -> PathBuf {
     env::temp_dir()
         .canonicalize()
         .expect("canonical system temp dir")
 }
-
 fn tempdir() -> Result<TempDir, std::io::Error> {
     Builder::new()
         .prefix("soranet-trustless-verifier-")
         .tempdir_in(canonical_temp_base())
 }
-
 #[test]
 fn trustless_verifier_reports_gateway_fixture_digests() {
     let config_path = workspace_path("configs/soranet/gateway_m0/gateway_trustless_verifier.toml");
     let config =
         TrustlessVerifierConfig::from_file(&config_path).expect("gateway config parses cleanly");
-
     let manifest_bytes = fs::read(workspace_path(
         "fixtures/sorafs_gateway/1.0.0/manifest_v1.to",
     ))
     .expect("manifest bytes");
     let manifest: ManifestV1 =
         decode_from_bytes(&manifest_bytes).expect("manifest Norito decoding succeeds");
-
     let car_bytes = fs::read(workspace_path("fixtures/sorafs_gateway/1.0.0/gateway.car"))
         .expect("gateway CAR bytes");
-
     let outcome = TrustlessVerifier::new(config)
         .verify_full(&manifest, &car_bytes)
         .expect("trustless verification succeeds");
-
     assert_eq!(
         outcome.manifest_digest_hex(),
         SORAFS_GATEWAY_MANIFEST_DIGEST_HEX,
@@ -62,7 +52,6 @@ fn trustless_verifier_reports_gateway_fixture_digests() {
         "91275991d58858bdc7ce3eb4472b61c5289dec3ecc6cf43c6411db772c1888a8",
         "payload digest should match gateway helper file"
     );
-
     // Chunk plan digest and PoR root should be fully populated.
     assert_eq!(outcome.chunk_plan_digest_hex().len(), 64);
     assert_ne!(outcome.chunk_plan_digest_hex(), outcome.car_digest_hex());
@@ -71,7 +60,6 @@ fn trustless_verifier_reports_gateway_fixture_digests() {
         outcome.por_root_hex().chars().any(|ch| ch != '0'),
         "PoR root must not be all zeros"
     );
-
     assert_eq!(outcome.profile_handle(), "sorafs.sf1@1.0.0");
     assert_eq!(
         outcome.report.stats.payload_bytes, manifest.content_length,
@@ -82,7 +70,6 @@ fn trustless_verifier_reports_gateway_fixture_digests() {
         "chunk store should carry the rebuilt plan"
     );
 }
-
 #[test]
 fn trustless_verifier_rejects_manifest_chunk_plan_and_por_root_substitution() {
     let config_path = workspace_path("configs/soranet/gateway_m0/gateway_trustless_verifier.toml");
@@ -97,14 +84,12 @@ fn trustless_verifier_rejects_manifest_chunk_plan_and_por_root_substitution() {
     let car_bytes = fs::read(workspace_path("fixtures/sorafs_gateway/1.0.0/gateway.car"))
         .expect("gateway CAR bytes");
     let verifier = TrustlessVerifier::new(config);
-
     let mut substituted_plan = manifest.clone();
     substituted_plan.chunk_digest_sha3_256[0] ^= 0x80;
     assert!(matches!(
         verifier.verify_full(&substituted_plan, &car_bytes),
         Err(TrustlessVerificationError::ManifestChunkPlanMismatch { .. })
     ));
-
     let mut substituted_root = manifest;
     substituted_root.por_root[31] ^= 0x01;
     assert!(matches!(
@@ -112,13 +97,11 @@ fn trustless_verifier_rejects_manifest_chunk_plan_and_por_root_substitution() {
         Err(TrustlessVerificationError::ManifestPorRootMismatch { .. })
     ));
 }
-
 #[test]
 fn trustless_verifier_emits_reference_validation_outcome() {
     let manifest = workspace_path("fixtures/sorafs_gateway/1.0.0/manifest_v1.to");
     let car = workspace_path("fixtures/sorafs_gateway/1.0.0/gateway.car");
     let config = workspace_path("configs/soranet/gateway_m0/gateway_trustless_verifier.toml");
-
     let output = cargo_bin_cmd!("soranet_trustless_verifier")
         .args([
             "--manifest",
@@ -138,7 +121,6 @@ fn trustless_verifier_emits_reference_validation_outcome() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
@@ -150,7 +132,6 @@ fn trustless_verifier_emits_reference_validation_outcome() {
         Some(123)
     );
 }
-
 #[test]
 fn trustless_verifier_writes_validation_outcome_json_out() {
     let temp = tempdir().expect("tempdir");
@@ -158,7 +139,6 @@ fn trustless_verifier_writes_validation_outcome_json_out() {
     let manifest = workspace_path("fixtures/sorafs_gateway/1.0.0/manifest_v1.to");
     let car = workspace_path("fixtures/sorafs_gateway/1.0.0/gateway.car");
     let config = workspace_path("configs/soranet/gateway_m0/gateway_trustless_verifier.toml");
-
     let output = cargo_bin_cmd!("soranet_trustless_verifier")
         .args([
             "--manifest",
@@ -184,7 +164,6 @@ fn trustless_verifier_writes_validation_outcome_json_out() {
         output.stdout.is_empty(),
         "stdout should be suppressed when --json-out is used"
     );
-
     let outcome_bytes = fs::read(&outcome_path).expect("read validation outcome");
     let outcome: Value = norito::json::from_slice(&outcome_bytes).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
@@ -193,13 +172,11 @@ fn trustless_verifier_writes_validation_outcome_json_out() {
         Some(123)
     );
 }
-
 #[test]
 fn retired_local_pin_record_flag_is_rejected() {
     let manifest = workspace_path("fixtures/sorafs_gateway/1.0.0/manifest_v1.to");
     let car = workspace_path("fixtures/sorafs_gateway/1.0.0/gateway.car");
     let config = workspace_path("configs/soranet/gateway_m0/gateway_trustless_verifier.toml");
-
     let output = cargo_bin_cmd!("soranet_trustless_verifier")
         .args([
             "--manifest",
@@ -213,7 +190,6 @@ fn retired_local_pin_record_flag_is_rejected() {
         ])
         .output()
         .expect("run trustless verifier");
-
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -221,13 +197,11 @@ fn retired_local_pin_record_flag_is_rejected() {
         "stderr: {stderr}"
     );
 }
-
 #[test]
 fn validation_outcome_rejects_noncanonical_generated_at() {
     let manifest = workspace_path("fixtures/sorafs_gateway/1.0.0/manifest_v1.to");
     let car = workspace_path("fixtures/sorafs_gateway/1.0.0/gateway.car");
     let config = workspace_path("configs/soranet/gateway_m0/gateway_trustless_verifier.toml");
-
     for (value, expected) in [
         ("0", "greater than zero"),
         ("0123", "leading zeros"),
@@ -253,7 +227,6 @@ fn validation_outcome_rejects_noncanonical_generated_at() {
             ])
             .output()
             .expect("run trustless verifier");
-
         assert!(
             !output.status.success(),
             "generated_at={value:?} unexpectedly succeeded"
@@ -269,13 +242,11 @@ fn validation_outcome_rejects_noncanonical_generated_at() {
         );
     }
 }
-
 #[test]
 fn generated_at_requires_validation_outcome_mode() {
     let manifest = workspace_path("fixtures/sorafs_gateway/1.0.0/manifest_v1.to");
     let car = workspace_path("fixtures/sorafs_gateway/1.0.0/gateway.car");
     let config = workspace_path("configs/soranet/gateway_m0/gateway_trustless_verifier.toml");
-
     let output = cargo_bin_cmd!("soranet_trustless_verifier")
         .args([
             "--manifest",
@@ -289,7 +260,6 @@ fn generated_at_requires_validation_outcome_mode() {
         ])
         .output()
         .expect("run trustless verifier");
-
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(

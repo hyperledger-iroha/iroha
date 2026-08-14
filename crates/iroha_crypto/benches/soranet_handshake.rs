@@ -1,5 +1,4 @@
 //! Criterion benchmarks for `SoraNet` handshake state-machine cycles.
-
 use criterion::Criterion;
 use iroha_crypto::{
     Algorithm, KeyPair,
@@ -10,17 +9,14 @@ use iroha_crypto::{
 };
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
-
 fn checked_seeded_keypair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("bench SoraNet seeded keypair should be valid")
 }
-
 struct HandshakeScenario {
     client_caps: Vec<u8>,
     relay_caps: Vec<u8>,
 }
-
 impl HandshakeScenario {
     fn new(preferred: HandshakeSuite) -> Self {
         let (client_caps, relay_caps) = match preferred {
@@ -32,7 +28,6 @@ impl HandshakeScenario {
             relay_caps,
         }
     }
-
     fn params(&self) -> RuntimeParams<'_> {
         RuntimeParams {
             descriptor_commit: &DEFAULT_DESCRIPTOR_COMMIT,
@@ -46,15 +41,12 @@ impl HandshakeScenario {
         }
     }
 }
-
 fn run_handshake(preferred: HandshakeSuite) {
     let scenario = HandshakeScenario::new(preferred);
     let params = scenario.params();
-
     let mut rng_client = ChaCha20Rng::from_seed([0xA5; 32]);
     let mut rng_relay = ChaCha20Rng::from_seed([0x5A; 32]);
     let relay_keys = checked_seeded_keypair(0x22);
-
     let (client_hello, client_state) =
         build_client_hello(&params, &mut rng_client).expect("client hello");
     let (relay_message, relay_state) = iroha_crypto::soranet::handshake::process_client_hello(
@@ -72,11 +64,9 @@ fn run_handshake(preferred: HandshakeSuite) {
         &mut rng_client,
     )
     .expect("client finish");
-
     let finish = client_finish.as_deref().unwrap_or(&[]);
     relay_finalize_handshake(relay_state, finish, &relay_keys).expect("relay finalize");
 }
-
 fn soranet_handshake_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("soranet_handshake_cycle");
     group.sample_size(60);
@@ -88,18 +78,15 @@ fn soranet_handshake_benchmarks(c: &mut Criterion) {
     }
     group.finish();
 }
-
 /// Run the `SoraNet` handshake Criterion benchmarks.
 fn main() {
     let mut criterion = Criterion::default().configure_from_args();
     soranet_handshake_benchmarks(&mut criterion);
     criterion.final_summary();
 }
-
 fn decode_hex_vec(label: &str, hex_str: &str) -> Vec<u8> {
     hex::decode(hex_str).unwrap_or_else(|err| panic!("{label} hex decode failed: {err}"))
 }
-
 fn load_nk2_caps() -> (Vec<u8>, Vec<u8>) {
     let raw = include_str!("../../../tests/interop/soranet/interop/rust/snnet-interop-nk2-v1.json");
     let value: norito::json::Value =
@@ -116,7 +103,6 @@ fn load_nk2_caps() -> (Vec<u8>, Vec<u8>) {
         decode_hex_vec("nk2 relay", relay_hex),
     )
 }
-
 fn load_nk3_caps() -> (Vec<u8>, Vec<u8>) {
     let raw = include_str!("../../../tests/interop/soranet/interop/rust/snnet-interop-nk3-v1.json");
     let value: norito::json::Value =

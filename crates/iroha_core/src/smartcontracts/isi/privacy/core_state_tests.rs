@@ -1,5 +1,4 @@
 // Same-scope regression coverage extracted to keep the parent source budget bounded.
-
 #[test]
 fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_state() {
     let fixture = fcmp_runtime_fixture_for_test();
@@ -15,7 +14,6 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
     let nullifier_count =
         u32::try_from(valid_statement.inputs.len()).expect("FCMP++ key-image count");
     let output_count = u32::try_from(valid_statement.outputs.len()).expect("FCMP++ output count");
-
     {
         let mut block = state.block(fcmp_test_header(&fixture));
         let mut transaction = block.transaction();
@@ -41,7 +39,6 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
             "FCMP++ key image was already consumed",
         );
     }
-
     {
         let mut foreign_bootstrap_digest = fixture.snapshot.bootstrap_digest();
         foreign_bootstrap_digest.0[0] ^= 1;
@@ -74,7 +71,6 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
             "persisted FCMP++ key image has cross-bootstrap provenance",
         );
     }
-
     {
         let mut foreign_bootstrap_digest = fixture.snapshot.bootstrap_digest();
         foreign_bootstrap_digest.0[0] ^= 1;
@@ -102,7 +98,6 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
             "FCMP++ output key or provenance differs from its complete tuple",
         );
     }
-
     {
         let mut duplicate_output = SubmitPrivacyProofV1::new(fixture.envelope.clone());
         let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) =
@@ -116,7 +111,6 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
             .statement
             .digest()
             .expect("modified FCMP++ statement digest");
-
         let mut block = state.block(fcmp_test_header(&fixture));
         let mut transaction = block.transaction();
         assert_proof_managed_submit_rejection_is_atomic(
@@ -126,7 +120,6 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
             "FCMP++ output already exists",
         );
     }
-
     {
         let wrong_typed_root = fixture
             .snapshot
@@ -145,7 +138,6 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
             .statement
             .digest()
             .expect("wrong-root FCMP++ statement digest");
-
         let mut block = state.block(fcmp_test_header(&fixture));
         let mut transaction = block.transaction();
         assert_proof_managed_submit_rejection_is_atomic(
@@ -155,7 +147,6 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
             "anchor is not in the exact retained root window",
         );
     }
-
     {
         let successor = fixture
             .snapshot
@@ -181,7 +172,6 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
             "trusted proof-managed pool state failed validation",
         );
     }
-
     let baseline;
     {
         let mut block = state.block(fcmp_test_header(&fixture));
@@ -243,7 +233,6 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
             "dropping the successful FCMP++ transaction published staged state into its parent block"
         );
     }
-
     let mut block = state.block(fcmp_test_header(&fixture));
     let transaction = block.transaction();
     assert_eq!(

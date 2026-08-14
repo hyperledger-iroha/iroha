@@ -1,7 +1,6 @@
 //! UI tests for `iroha_primitives` derive macros.
 #![cfg(all(feature = "trybuild-tests", not(coverage)))]
 use trybuild::TestCases;
-
 #[test]
 fn ui() {
     let test_cases = TestCases::new();

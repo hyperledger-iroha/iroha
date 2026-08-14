@@ -1,8 +1,6 @@
 use ivm::{IVM, Memory, ProgramMetadata, VMError, encoding, instruction};
-
 const CLASSIC_LOAD_OPCODE: u32 = 0x03;
 const CLASSIC_STORE_OPCODE: u32 = 0x23;
-
 fn run_prog(code_words: &[u32]) -> IVM {
     // Patch a leading `addi x2, x0, imm` into a no-op `addi x2, x2, 0` so tests
     // can rely on host-provided x2 base for heap addressing without worrying
@@ -28,21 +26,18 @@ fn run_prog(code_words: &[u32]) -> IVM {
     let _ = vm.run();
     vm
 }
-
 #[test]
 fn loads_stores_alignment_semantics() {
     let addi_base = ivm::kotodama::compiler::encode_addi(2, 2, 0).expect("encode addi");
     let store64 = encoding::wide::encode_store(instruction::wide::memory::STORE64, 2, 3, 0);
     let load64 = encoding::wide::encode_load(instruction::wide::memory::LOAD64, 4, 2, 0);
     let halt = encoding::wide::encode_halt();
-
     let mut vm = run_prog(&[addi_base, store64, load64, halt]);
     vm.reset();
     vm.set_register(2, ivm::Memory::HEAP_START);
     vm.set_register(3, 0x42);
     vm.run().expect("aligned run");
     assert_eq!(vm.register(4), 0x42);
-
     let store_misal = encoding::wide::encode_store(instruction::wide::memory::STORE64, 2, 3, 1);
     let mut misaligned_bytes = ProgramMetadata::default().encode();
     for w in [addi_base, store_misal, halt] {
@@ -57,7 +52,6 @@ fn loads_stores_alignment_semantics() {
         res,
         Err(VMError::MisalignedAccess { .. }) | Err(VMError::UnalignedAccess)
     ));
-
     let load_misal = encoding::wide::encode_load(instruction::wide::memory::LOAD64, 4, 2, 1);
     let mut load_bytes = ProgramMetadata::default().encode();
     for w in [addi_base, store64, load_misal, halt] {
@@ -73,7 +67,6 @@ fn loads_stores_alignment_semantics() {
         Err(VMError::MisalignedAccess { .. }) | Err(VMError::UnalignedAccess)
     ));
 }
-
 #[test]
 fn classic_word_ops_rejected() {
     let addi_base = ivm::kotodama::compiler::encode_addi(2, 2, 0).expect("encode addi");
@@ -90,7 +83,6 @@ fn classic_word_ops_rejected() {
         .expect_err("classic 32-bit ops must be rejected");
     assert!(matches!(err, VMError::InvalidOpcode(_)));
 }
-
 #[test]
 fn branches_randomized_consistency() {
     // Simple BEQ with random values. The wide encoding applies the offset in
@@ -108,7 +100,6 @@ fn branches_randomized_consistency() {
     );
     bytes.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     vm.load_program(&bytes).unwrap();
-
     for a in [0, 1, 7, 42, 255, 1024] {
         for b in [0, 1, 7, 41, 255, 2048] {
             vm.reset();
@@ -126,7 +117,6 @@ fn branches_randomized_consistency() {
         }
     }
 }
-
 #[test]
 fn vector_ops_mode_gating() {
     let mut meta = ProgramMetadata::default();
@@ -138,7 +128,6 @@ fn vector_ops_mode_gating() {
     vm.set_register(32, Memory::HEAP_START);
     let err = vm.run().expect_err("vector op should be gated");
     assert!(matches!(err, VMError::VectorExtensionDisabled));
-
     meta.mode = ivm::ivm_mode::VECTOR;
     let mut bytes2 = meta.encode();
     bytes2.extend_from_slice(&sha.to_le_bytes());

@@ -6,25 +6,15 @@
 //! receipt can only be obtained after the bytes, their metadata, and the
 //! directory entry have been synchronised. The first release has one V1 frame
 //! layout and no predecessor-format reader or migration path.
-
-use std::{
-    collections::BTreeMap,
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
-    mem::size_of,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-
-use super::v2_core::EventTag;
-use iroha_crypto::{Hash, HashOf, PublicKey};
-use iroha_data_model::block::{
-    CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire, decode_framed_signed_block,
-};
-use norito::codec::{Decode, DecodeAll as _, Encode};
-use thiserror::Error;
-
+#![cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "recovered-body seams remain test-sealed until first release"
+    )
+)]
 use super::v2_chunks::encode_payload;
+use super::v2_core::EventTag;
 use super::{
     v2::{
         PreparedRecoveredLifecycleSignedBroadcastAndSignColdPreviewV1,
@@ -41,14 +31,28 @@ use super::{
     v2_transport::AuthenticatedCertifiedBodyResponse,
 };
 use crate::kura::KuraV2CommitReceipt;
-
+use iroha_crypto::{Hash, HashOf, PublicKey};
+use iroha_data_model::block::{
+    CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire, decode_framed_signed_block,
+};
+use norito::codec::{Decode, DecodeAll as _, Encode};
+use std::{
+    collections::BTreeMap,
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
+    mem::size_of,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+use thiserror::Error;
 const STORE_MAGIC: &[u8; 8] = b"SUM2BODY";
 const VALIDATED_MAGIC: &[u8; 8] = b"SUM2VALD";
 const STORE_VERSION: u16 = 1;
 const VALIDATION_OUTCOME_MARKER_VERSION: u16 = 1;
 const FRAME_HEADER_LEN: usize = STORE_MAGIC.len() + size_of::<u16>() + size_of::<u64>();
 const CHECKSUM_LEN: usize = 32;
-
+const FRAME_PAYLOAD_MAX_BYTES: u64 =
+    wire::MAX_EXECUTED_BLOCK_WIRE_BYTES + wire::MAX_DA_ENCODED_PAYLOAD_BYTES;
 /// Metadata and exact canonical bytes persisted in one final body file.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct StoredBodyEnvelope {
@@ -59,7 +63,6 @@ struct StoredBodyEnvelope {
     manifest: wire::PayloadManifest,
     canonical_wire: Vec<u8>,
 }
-
 /// Closed durable result of deterministic validation for one exact body frame.
 ///
 /// A merge-sidecar deferral is deliberately absent: it is a retry dependency,
@@ -73,7 +76,6 @@ enum ValidationOutcomeMarkerKind {
     /// Deterministic execution rejected with this canonical closed code.
     Rejected(u8),
 }
-
 /// Versioned durable validation outcome bound to one exact body-store frame.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct ValidationOutcomeMarker {
@@ -85,7 +87,6 @@ struct ValidationOutcomeMarker {
     body_frame_hash: Hash,
     outcome: ValidationOutcomeMarkerKind,
 }
-
 /// Non-forgeable acknowledgement that one exact body is durable locally.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[must_use]
@@ -96,7 +97,6 @@ pub(crate) struct DurableBodyReceipt {
     manifest_hash: HashOf<wire::PayloadManifest>,
     frame_hash: Hash,
 }
-
 /// Durable proof that one fully authenticated certified-Fetch response's exact
 /// canonical body has crossed the local file-and-directory sync boundary.
 ///
@@ -111,7 +111,6 @@ pub(crate) struct DurableCertifiedFetchBodyReceipt {
     response_hash: HashOf<wire::CertifiedBodyResponse>,
     durable_body: DurableBodyReceipt,
 }
-
 /// Opaque body-frame authority for the recovered Decision Fetch-to-Store cut.
 ///
 /// Live completion and cold recovery are the only mints. Both paths bind the
@@ -123,7 +122,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionFetchStoreBodyAuthorityV1 {
     manifest: wire::PayloadManifest,
     durable: DurableBodyReceipt,
 }
-
 impl RecoveredDecisionFetchStoreBodyAuthorityV1 {
     /// Bind one live authenticated response to its exact durable completion.
     pub(in crate::sumeragi) fn from_persisted_certified_response(
@@ -141,36 +139,30 @@ impl RecoveredDecisionFetchStoreBodyAuthorityV1 {
             durable: receipt.durable_body().clone(),
         })
     }
-
     /// Borrow the canonical manifest only inside the fixed adapter preview.
     pub(in crate::sumeragi) const fn manifest(&self) -> &wire::PayloadManifest {
         &self.manifest
     }
-
     /// Borrow the non-forgeable body receipt only inside fixed projections.
     pub(in crate::sumeragi) const fn durable(&self) -> &DurableBodyReceipt {
         &self.durable
     }
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl DurableCertifiedFetchBodyReceipt {
     /// Hash of the exact authenticated request family served by the response.
     pub(crate) const fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
         self.request_hash
     }
-
     /// Hash of the complete authenticated response, including its responder.
     pub(crate) const fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
         self.response_hash
     }
-
     /// Durable receipt for the response's exact canonical body-store frame.
     pub(crate) const fn durable_body(&self) -> &DurableBodyReceipt {
         &self.durable_body
     }
 }
-
 /// Non-forgeable acknowledgement that deterministic validation succeeded for
 /// the exact durable body.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -179,7 +171,6 @@ pub(crate) struct ValidatedBodyReceipt {
     durable: DurableBodyReceipt,
     execution_commitment: wire::ExecutionCommitment,
 }
-
 // DURABLE_BODY_VALIDATION_SURFACE_BEGIN
 /// Canonical closed identity of a deterministic body rejection.
 ///
@@ -192,7 +183,6 @@ pub(crate) enum BodyValidationRejectionIdentity {
     /// Deterministic validation rejected the exact durable body.
     Rejected,
 }
-
 impl BodyValidationRejectionIdentity {
     /// Return the bounded code shared by durable markers and lifecycle digests.
     pub(crate) const fn canonical_code(&self) -> u8 {
@@ -200,7 +190,6 @@ impl BodyValidationRejectionIdentity {
             Self::Rejected => 0,
         }
     }
-
     /// Decode the closed durable identity domain without accepting extensions.
     const fn from_canonical_code(code: u8) -> Option<Self> {
         match code {
@@ -209,7 +198,6 @@ impl BodyValidationRejectionIdentity {
         }
     }
 }
-
 /// Scheduler-free result of validating one exact durable body.
 ///
 /// The private payload keeps construction inside this storage boundary. In
@@ -219,7 +207,6 @@ impl BodyValidationRejectionIdentity {
 #[derive(Debug, PartialEq, Eq)]
 #[must_use]
 pub(crate) struct DurableBodyValidationOutcome(DurableBodyValidationOutcomeBody);
-
 /// Move-only ownership of one exact semantically revalidated restart marker.
 ///
 /// The marker is removed from the process-local recovery catalog while this
@@ -232,7 +219,6 @@ pub(super) struct RecoveredValidatedBodyCut<'store> {
     key: (wire::ConsensusRound, wire::BlockSubject),
     validated: Option<ValidatedBodyReceipt>,
 }
-
 /// Closed reason an authenticated WAL vote could not detach its body marker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RecoveredValidatedBodyCutError {
@@ -243,7 +229,6 @@ pub(super) enum RecoveredValidatedBodyCutError {
     /// The marker names another execution commitment.
     CommitmentMismatch,
 }
-
 /// Move-only ownership of the exact revalidated body named by a recovered Decision.
 ///
 /// The complete body envelope, durable index entry, manifest, and successful
@@ -263,7 +248,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyBodyCut<'store> {
     manifest: Option<wire::PayloadManifest>,
     validated: Option<ValidatedBodyReceipt>,
 }
-
 /// Move-only recovered-Decision adapter preview with every authority kept whole.
 ///
 /// The original Fetch projection retains its effect, pending binding, WAL
@@ -278,7 +262,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyAdapterPreviewV1<'store> {
     _replay: RecoveredDecisionApplyReplayLineageV1,
     _staged: super::v2::RecoveredDecisionApplyStagedAdapterV1,
 }
-
 /// Closed storage-ready Decision Apply preview.
 ///
 /// The reducer-derived logical lineage remains attached to the same-store
@@ -289,7 +272,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyStoragePreviewV1<'store> {
     staged: super::v2::RecoveredDecisionApplyStagedStorageV1,
     body: RecoveredDecisionApplyBodyCut<'store>,
 }
-
 /// Storage-ready state after the exact body has been restored to its owner.
 ///
 /// This value no longer borrows the body store. A persistence failure retains
@@ -298,14 +280,12 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyStoragePreviewV1<'store> {
 pub(in crate::sumeragi) struct RestoredRecoveredDecisionApplyStorageV1 {
     staged: super::v2::RecoveredDecisionApplyStagedStorageV1,
 }
-
 /// Opaque failure while closing the adapter preview for storage publication.
 #[must_use = "failed recovered Decision storage projection requires restart"]
 pub(in crate::sumeragi) struct RecoveredDecisionApplyStoragePreviewErrorV1<'store> {
     _body: RecoveredDecisionApplyBodyCut<'store>,
     _projection: super::v2::RecoveredDecisionApplyStorageProjectionErrorV1,
 }
-
 #[cfg(all(test, feature = "bls"))]
 impl RecoveredDecisionApplyAdapterPreviewV1<'_> {
     /// Recheck the sealed Fetch/body join and staged adapter state in tests.
@@ -313,7 +293,6 @@ impl RecoveredDecisionApplyAdapterPreviewV1<'_> {
         self._body.exactly_matches_decision(&self._fetch) && self._staged.validates()
     }
 }
-
 impl<'store> RecoveredDecisionApplyAdapterPreviewV1<'store> {
     /// Consume the reducer preview into the sole storage-ready closed form.
     #[allow(clippy::result_large_err)]
@@ -347,7 +326,6 @@ impl<'store> RecoveredDecisionApplyAdapterPreviewV1<'store> {
         }
     }
 }
-
 impl RecoveredDecisionApplyStoragePreviewV1<'_> {
     /// Recheck the same-store Fetch/body/lineage join without exposing parts.
     pub(in crate::sumeragi) fn validates(
@@ -356,14 +334,16 @@ impl RecoveredDecisionApplyStoragePreviewV1<'_> {
     ) -> bool {
         self.staged.validates(verified) && self.body.exactly_matches_decision(self.staged.fetch())
     }
-
     /// Borrow the opaque logical lineage for exact ledger staging.
+    #[allow(
+        dead_code,
+        reason = "reviewed inspection seam retained beside the consuming restore path"
+    )]
     pub(in crate::sumeragi) const fn staged(
         &self,
     ) -> &super::v2::RecoveredDecisionApplyStagedStorageV1 {
         &self.staged
     }
-
     /// Restore the exact body frame and marker, ending the store borrow before
     /// the external LedgerV1 publication can begin.
     pub(in crate::sumeragi) fn restore_body(self) -> RestoredRecoveredDecisionApplyStorageV1 {
@@ -372,7 +352,6 @@ impl RecoveredDecisionApplyStoragePreviewV1<'_> {
         RestoredRecoveredDecisionApplyStorageV1 { staged }
     }
 }
-
 impl RestoredRecoveredDecisionApplyStorageV1 {
     /// Borrow the exact staged lineage for the final pre-fsync recheck.
     pub(in crate::sumeragi) const fn staged(
@@ -380,7 +359,6 @@ impl RestoredRecoveredDecisionApplyStorageV1 {
     ) -> &super::v2::RecoveredDecisionApplyStagedStorageV1 {
         &self.staged
     }
-
     /// Consume the restored state only inside the lifecycle publication tail.
     pub(in crate::sumeragi) fn into_staged(
         self,
@@ -388,7 +366,6 @@ impl RestoredRecoveredDecisionApplyStorageV1 {
         self.staged
     }
 }
-
 /// Opaque failed preview retaining every move-only input until fail-stop restart.
 ///
 /// Dropping this value restores the detached body cut exactly. The adapter is
@@ -399,7 +376,6 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyAdapterPreviewError<'store>
     reason: &'static str,
     _failure: RecoveredDecisionApplyAdapterPreviewFailure<'store>,
 }
-
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum RecoveredDecisionApplyAdapterPreviewFailure<'store> {
     Inputs {
@@ -415,14 +391,12 @@ enum RecoveredDecisionApplyAdapterPreviewFailure<'store> {
         _staging: super::v2::RecoveredDecisionApplyAdapterStagingError,
     },
 }
-
 impl RecoveredDecisionApplyAdapterPreviewError<'_> {
     /// Return one stable non-authorizing diagnostic without releasing inputs.
     pub(in crate::sumeragi) const fn reason(&self) -> &'static str {
         self.reason
     }
 }
-
 /// One-shot call capability for deriving the inert recovered-Decision replay family.
 ///
 /// Construction stays beside the same-store body cut, so no caller can submit
@@ -430,24 +404,18 @@ impl RecoveredDecisionApplyAdapterPreviewError<'_> {
 pub(in crate::sumeragi) struct RecoveredDecisionApplyReplayPermit {
     _linearity: RecoveredDecisionApplyReplayLinearity,
 }
-
 /// One-shot capability for the fixed recovered-Decision reducer preview.
 pub(in crate::sumeragi) struct RecoveredDecisionApplyAdapterPreviewPermit {
     _linearity: RecoveredDecisionApplyAdapterPreviewLinearity,
 }
-
 struct RecoveredDecisionApplyAdapterPreviewLinearity;
-
 impl Drop for RecoveredDecisionApplyAdapterPreviewLinearity {
     fn drop(&mut self) {}
 }
-
 struct RecoveredDecisionApplyReplayLinearity;
-
 impl Drop for RecoveredDecisionApplyReplayLinearity {
     fn drop(&mut self) {}
 }
-
 /// Closed reason a revalidated same-store Decision body could not be detached.
 #[derive(Debug, Error)]
 #[allow(variant_size_differences)]
@@ -471,7 +439,6 @@ pub(in crate::sumeragi) enum RecoveredDecisionApplyBodyCutError {
     #[error("recovered Decision body-store frame failed exact revalidation: {0}")]
     BodyStore(#[source] V2BodyStoreError),
 }
-
 #[derive(Debug, PartialEq, Eq)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum DurableBodyValidationOutcomeBody {
@@ -486,7 +453,6 @@ enum DurableBodyValidationOutcomeBody {
         reference: CertifiedMergeLedgerReference,
     },
 }
-
 #[cfg_attr(not(test), allow(dead_code))]
 impl DurableBodyValidationOutcome {
     /// Exact durable body bound to this result.
@@ -497,7 +463,6 @@ impl DurableBodyValidationOutcome {
             | DurableBodyValidationOutcomeBody::DeferredMergeSidecar { durable, .. } => durable,
         }
     }
-
     /// Durable success receipt, when deterministic validation succeeded.
     pub(crate) const fn validated_receipt(&self) -> Option<&ValidatedBodyReceipt> {
         match &self.0 {
@@ -506,7 +471,6 @@ impl DurableBodyValidationOutcome {
             | DurableBodyValidationOutcomeBody::DeferredMergeSidecar { .. } => None,
         }
     }
-
     /// Deterministic rejection diagnostic, when validation rejected the body.
     pub(crate) fn rejection_reason(&self) -> Option<&str> {
         match &self.0 {
@@ -515,7 +479,6 @@ impl DurableBodyValidationOutcome {
             | DurableBodyValidationOutcomeBody::DeferredMergeSidecar { .. } => None,
         }
     }
-
     /// Canonical closed identity of a deterministic rejection.
     pub(crate) const fn rejection_identity(&self) -> Option<&BodyValidationRejectionIdentity> {
         match &self.0 {
@@ -524,7 +487,6 @@ impl DurableBodyValidationOutcome {
             | DurableBodyValidationOutcomeBody::DeferredMergeSidecar { .. } => None,
         }
     }
-
     /// Exact certified merge reference whose absence deferred validation.
     pub(crate) const fn missing_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
         match &self.0 {
@@ -535,7 +497,6 @@ impl DurableBodyValidationOutcome {
             | DurableBodyValidationOutcomeBody::Rejected { .. } => None,
         }
     }
-
     /// Consume this closed result only when deterministic validation succeeded.
     ///
     /// A rejection or sidecar deferral is returned intact so the future typed
@@ -547,17 +508,14 @@ impl DurableBodyValidationOutcome {
             body => Err(Self(body)),
         }
     }
-
     fn into_body(self) -> DurableBodyValidationOutcomeBody {
         self.0
     }
-
     /// Construct a sealed successful outcome for lifecycle boundary tests.
     #[cfg(test)]
     pub(crate) const fn validated_for_test(receipt: ValidatedBodyReceipt) -> Self {
         Self(DurableBodyValidationOutcomeBody::Validated(receipt))
     }
-
     /// Construct a sealed deterministic rejection for lifecycle boundary tests.
     #[cfg(test)]
     pub(crate) fn rejected_for_test(durable: DurableBodyReceipt) -> Self {
@@ -568,7 +526,6 @@ impl DurableBodyValidationOutcome {
         })
     }
 }
-
 impl RecoveredValidatedBodyCut<'_> {
     /// Revalidate this detached marker against the same authenticated WAL vote.
     pub(super) fn exactly_matches_vote(&self, recovered: &RecoveredWalVoteSign) -> bool {
@@ -581,7 +538,6 @@ impl RecoveredValidatedBodyCut<'_> {
                 && validated.execution_commitment() == vote.execution_commitment
         })
     }
-
     /// Match this one-shot marker to the exact BodyFrame retained by a durable
     /// recovered-WAL Validate parent.
     ///
@@ -596,7 +552,6 @@ impl RecoveredValidatedBodyCut<'_> {
             parent.matches_durable_receipt(active_context, validated.durable())
         })
     }
-
     /// Transfer the exact marker into the sealed durable-validation outcome.
     pub(super) fn into_validation_outcome(mut self) -> DurableBodyValidationOutcome {
         let validated = self
@@ -606,7 +561,6 @@ impl RecoveredValidatedBodyCut<'_> {
         DurableBodyValidationOutcome(DurableBodyValidationOutcomeBody::Validated(validated))
     }
 }
-
 impl Drop for RecoveredValidatedBodyCut<'_> {
     fn drop(&mut self) {
         let Some(validated) = self.validated.take() else {
@@ -616,7 +570,6 @@ impl Drop for RecoveredValidatedBodyCut<'_> {
         debug_assert!(displaced.is_none());
     }
 }
-
 impl<'store> RecoveredDecisionApplyBodyCut<'store> {
     /// Recheck the opaque cut against the same authenticated recovered Decision.
     ///
@@ -650,7 +603,6 @@ impl<'store> RecoveredDecisionApplyBodyCut<'store> {
             && self.envelope.subject == durable.subject()
             && HashOf::new(manifest) == durable.manifest_hash()
     }
-
     /// Derive the inert Store/Validate/Apply replay family without exposing body parts.
     pub(in crate::sumeragi) fn prepare_replay_lineage(
         &self,
@@ -669,7 +621,6 @@ impl<'store> RecoveredDecisionApplyBodyCut<'store> {
             self.durable.as_ref()?,
         )
     }
-
     /// Consume every exact input into one fixed three-event reducer fast-forward.
     ///
     /// The supplied replay lineage is re-derived and compared before the body
@@ -737,7 +688,6 @@ impl<'store> RecoveredDecisionApplyBodyCut<'store> {
             }
         }
     }
-
     /// Compare the retained process identity and full immutable context in tests.
     #[cfg(all(test, feature = "bls"))]
     pub(in crate::sumeragi) fn exactly_matches_store_for_test(
@@ -748,7 +698,6 @@ impl<'store> RecoveredDecisionApplyBodyCut<'store> {
         self.store_identity.same_instance(identity) && &self.context == context
     }
 }
-
 impl Drop for RecoveredDecisionApplyBodyCut<'_> {
     fn drop(&mut self) {
         let durable = self
@@ -780,13 +729,11 @@ impl Drop for RecoveredDecisionApplyBodyCut<'_> {
     }
 }
 // DURABLE_BODY_VALIDATION_SURFACE_END
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct QuarantinedValidationOutcome {
     durable: DurableBodyReceipt,
     outcome: ValidationOutcomeMarkerKind,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RevalidatedRejectedBody {
     durable: DurableBodyReceipt,
@@ -794,7 +741,6 @@ struct RevalidatedRejectedBody {
     /// Volatile diagnostic text reproduced by the current validator.
     reason: String,
 }
-
 impl RevalidatedRejectedBody {
     fn sealed_outcome(&self) -> DurableBodyValidationOutcome {
         let identity = BodyValidationRejectionIdentity::from_canonical_code(self.identity_code)
@@ -806,7 +752,6 @@ impl RevalidatedRejectedBody {
         })
     }
 }
-
 /// Move-only ownership of all semantically revalidated terminal Validate outcomes.
 ///
 /// The cut remains borrowed from one body-store instance and exposes only an
@@ -821,7 +766,6 @@ pub(super) struct RecoveredTerminalValidateOutcomeCatalogCut<'store> {
     selected_rejected:
         BTreeMap<(wire::ConsensusRound, wire::BlockSubject), RevalidatedRejectedBody>,
 }
-
 /// Closed reason the terminal Validate outcome catalog cannot be detached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RecoveredTerminalValidateOutcomeCatalogError {
@@ -830,7 +774,6 @@ pub(super) enum RecoveredTerminalValidateOutcomeCatalogError {
     /// One proposal key names both a success and a deterministic rejection.
     AmbiguousOutcome,
 }
-
 impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
     /// Select exactly one unselected outcome authenticated by the ledger claim.
     ///
@@ -844,7 +787,6 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
             Validated((wire::ConsensusRound, wire::BlockSubject)),
             Rejected((wire::ConsensusRound, wire::BlockSubject)),
         }
-
         let mut exact_match = None;
         for (key, validated) in &self.validated {
             let outcome = DurableBodyValidationOutcome(
@@ -864,7 +806,6 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
                 return false;
             }
         }
-
         match exact_match {
             Some(ExactMatch::Validated(key)) => {
                 let validated = self
@@ -886,14 +827,12 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
         }
         true
     }
-
     /// Consume selected outcomes and restore every unselected catalog entry.
     pub(super) fn commit_selected(mut self) {
         self.restore_unselected();
         self.selected_validated.clear();
         self.selected_rejected.clear();
     }
-
     fn restore_unselected(&mut self) {
         for (key, validated) in std::mem::take(&mut self.validated) {
             let displaced = self.store.validated.insert(key, validated);
@@ -905,7 +844,6 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
         }
     }
 }
-
 impl Drop for RecoveredTerminalValidateOutcomeCatalogCut<'_> {
     fn drop(&mut self) {
         self.restore_unselected();
@@ -919,7 +857,6 @@ impl Drop for RecoveredTerminalValidateOutcomeCatalogCut<'_> {
         }
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum SemanticReplayOutcome {
@@ -927,7 +864,6 @@ enum SemanticReplayOutcome {
     Rejected { identity_code: u8, reason: String },
     DeferredMergeSidecar,
 }
-
 /// Completion minted only after an exact body task reaches durable storage.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[must_use]
@@ -937,29 +873,24 @@ pub(crate) struct BodyStoreCompletion {
     manifest: wire::PayloadManifest,
     receipt: DurableBodyReceipt,
 }
-
 impl BodyStoreCompletion {
     /// Stable asynchronous work identifier.
     pub(crate) const fn work_id(&self) -> EffectWorkId {
         self.work_id
     }
-
     /// Original reducer event tag.
     pub(crate) const fn tag(&self) -> EventTag {
         self.tag
     }
-
     /// Non-forgeable receipt for the exact durable bytes.
     pub(crate) const fn receipt(&self) -> &DurableBodyReceipt {
         &self.receipt
     }
-
     /// Exact manifest stored beside the durable bytes.
     pub(crate) const fn manifest(&self) -> &wire::PayloadManifest {
         &self.manifest
     }
 }
-
 /// Result minted by the body-store service after reloading and validating the
 /// exact durable body represented by a validation task.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -988,7 +919,6 @@ pub(crate) enum BodyValidationCompletion {
         reference: CertifiedMergeLedgerReference,
     },
 }
-
 impl BodyValidationCompletion {
     /// Stable asynchronous work identifier.
     pub(crate) const fn work_id(&self) -> EffectWorkId {
@@ -998,7 +928,6 @@ impl BodyValidationCompletion {
             | Self::DeferredMergeSidecar { work_id, .. } => *work_id,
         }
     }
-
     /// Non-forgeable success receipt, when validation succeeded.
     pub(crate) const fn validated_receipt(&self) -> Option<&ValidatedBodyReceipt> {
         match self {
@@ -1006,7 +935,6 @@ impl BodyValidationCompletion {
             Self::Rejected { .. } | Self::DeferredMergeSidecar { .. } => None,
         }
     }
-
     /// Deterministic rejection diagnostic, when validation failed.
     pub(crate) fn rejection_reason(&self) -> Option<&str> {
         match self {
@@ -1014,7 +942,6 @@ impl BodyValidationCompletion {
             Self::Validated { .. } | Self::DeferredMergeSidecar { .. } => None,
         }
     }
-
     /// Compact certified merge reference whose absence deferred validation.
     pub(crate) const fn missing_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
         match self {
@@ -1023,7 +950,6 @@ impl BodyValidationCompletion {
         }
     }
 }
-
 /// Typed classification supplied by deterministic body validators.
 ///
 /// Only a missing, compact-reference-bound merge sidecar is recoverable. Every
@@ -1036,15 +962,12 @@ pub(crate) trait BodyValidationError: std::fmt::Display {
     fn rejection_identity(&self) -> BodyValidationRejectionIdentity {
         BodyValidationRejectionIdentity::Rejected
     }
-
     /// Return the exact missing sidecar reference when validation should defer.
     fn missing_certified_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
         None
     }
 }
-
 impl BodyValidationError for String {}
-
 /// Authority whose single block signature must cover an exact proposal body.
 ///
 /// Height-one genesis is signed by the configured genesis authority rather
@@ -1058,18 +981,15 @@ pub(crate) enum BlockSignaturePolicy {
     /// Require signature index zero and the configured genesis public key.
     GenesisAuthority(PublicKey),
 }
-
 impl ValidatedBodyReceipt {
     /// Durable body receipt whose exact bytes passed validation.
     pub(crate) const fn durable(&self) -> &DurableBodyReceipt {
         &self.durable
     }
-
     /// Exact deterministic execution result fsynced with the validation marker.
     pub(crate) const fn execution_commitment(&self) -> wire::ExecutionCommitment {
         self.execution_commitment
     }
-
     #[cfg(test)]
     pub(crate) fn for_test(durable: DurableBodyReceipt) -> Self {
         let empty = Hash::new([]);
@@ -1094,7 +1014,6 @@ impl ValidatedBodyReceipt {
             durable,
         }
     }
-
     #[cfg(test)]
     pub(crate) const fn for_test_with_commitment(
         durable: DurableBodyReceipt,
@@ -1106,28 +1025,23 @@ impl ValidatedBodyReceipt {
         }
     }
 }
-
 impl DurableBodyReceipt {
     /// Frozen context which owns the body.
     pub(crate) const fn context_id(&self) -> wire::HeightContextId {
         self.context_id
     }
-
     /// Proposal round which owns the body.
     pub(crate) const fn round(&self) -> wire::ConsensusRound {
         self.round
     }
-
     /// Exact certified subject represented by the bytes.
     pub(crate) const fn subject(&self) -> wire::BlockSubject {
         self.subject
     }
-
     /// Hash of the canonical manifest stored beside the body.
     pub(crate) const fn manifest_hash(&self) -> HashOf<wire::PayloadManifest> {
         self.manifest_hash
     }
-
     /// Hash of the complete checksummed body-store frame.
     ///
     /// This is the lossless 256-bit identity of the bytes acknowledged by the
@@ -1136,7 +1050,6 @@ impl DurableBodyReceipt {
     pub(crate) const fn frame_hash(&self) -> Hash {
         self.frame_hash
     }
-
     #[cfg(test)]
     pub(crate) fn for_test(
         context_id: wire::HeightContextId,
@@ -1153,7 +1066,6 @@ impl DurableBodyReceipt {
         }
     }
 }
-
 /// Persistent exact-body store for one immutable height context.
 ///
 /// The validation snapshot is part of that height ownership contract: callers
@@ -1189,7 +1101,6 @@ pub(crate) struct V2BodyStore {
     /// diagnostic string remains non-authoritative.
     rejected: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), RevalidatedRejectedBody>,
 }
-
 /// Move-only same-store input accepted by unified production lifecycle startup.
 ///
 /// Construction consumes an already-open body store only after every recovered
@@ -1198,7 +1109,6 @@ pub(crate) struct V2BodyStore {
 /// unified owner must consume this exact instance or startup stops.
 #[must_use = "the revalidated body-store cut must enter unified lifecycle startup"]
 pub(crate) struct RevalidatedV2BodyStore(V2BodyStore);
-
 /// Move-only freshly quarantined body-store input for recovered startup.
 ///
 /// This cut can be minted only while no validation marker has already been
@@ -1208,7 +1118,6 @@ pub(crate) struct RevalidatedV2BodyStore(V2BodyStore);
 /// bypass that replay.
 #[must_use = "the quarantined body-store cut must enter recovered lifecycle startup"]
 pub(in crate::sumeragi) struct QuarantinedV2BodyStore(V2BodyStore);
-
 impl QuarantinedV2BodyStore {
     /// Compare the still-owned store with one canonical lifecycle layout.
     pub(in crate::sumeragi) fn matches_lifecycle_storage_root(
@@ -1220,7 +1129,6 @@ impl QuarantinedV2BodyStore {
         self.0
             .matches_lifecycle_storage_root(root, context, signature_policy)
     }
-
     /// Filter and replay every quarantined marker with one exact Apply service.
     ///
     /// This is the only operation that can consume the recovered-startup
@@ -1244,19 +1152,21 @@ impl QuarantinedV2BodyStore {
         self.0.into_revalidated_startup().map_err(Into::into)
     }
 }
-
 impl RevalidatedV2BodyStore {
     /// Compare the complete immutable context without releasing the store.
     pub(in crate::sumeragi) fn matches_context(&self, context: &wire::HeightContext) -> bool {
         &self.0.context == context
     }
-
     /// Compare the still-owned store with one canonical context-addressed root.
     ///
     /// This is a fixed boolean oracle: neither the opened directory nor the
     /// signature policy crosses the sealed startup handoff. Production uses it
     /// to prove that the body owner came from the same Kura-derived storage
     /// layout as the lifecycle ledger before either owner is opened.
+    #[allow(
+        dead_code,
+        reason = "reviewed comparison seam retained for revalidated-startup diagnostics"
+    )]
     pub(in crate::sumeragi) fn matches_lifecycle_storage_root(
         &self,
         root: &Path,
@@ -1267,13 +1177,11 @@ impl RevalidatedV2BodyStore {
             && &self.0.signature_policy == signature_policy
             && self.0.directory == root.join(hex::encode(context.id().0.as_ref()))
     }
-
     /// Return a comparison-only identity for this exact still-owned store.
     #[cfg(all(test, feature = "bls"))]
     pub(in crate::sumeragi) fn instance_identity(&self) -> V2BodyStoreInstanceIdentity {
         self.0.instance_identity()
     }
-
     /// Return whether this revalidated store owns the exact successful marker
     /// needed to replace a recovered Decision Fetch with Apply.
     pub(in crate::sumeragi) fn has_exact_recovered_decision_fetch_parent(
@@ -1282,7 +1190,6 @@ impl RevalidatedV2BodyStore {
     ) -> bool {
         self.0.has_exact_recovered_decision_fetch_parent(projection)
     }
-
     /// Return whether deterministic replay rejected the body named by a
     /// recovered Decision.
     pub(in crate::sumeragi) fn has_rejected_recovered_decision_body(
@@ -1291,7 +1198,6 @@ impl RevalidatedV2BodyStore {
     ) -> bool {
         self.0.has_rejected_recovered_decision_body(projection)
     }
-
     /// Detach the exact successful body frame named by a recovered Decision.
     ///
     /// Every fallible context, marker, index, manifest, checksum, canonical
@@ -1323,7 +1229,6 @@ impl RevalidatedV2BodyStore {
         {
             return Err(RecoveredDecisionApplyBodyCutError::DeterministicRejection);
         }
-
         let mut matching = self
             .0
             .validated
@@ -1370,7 +1275,6 @@ impl RevalidatedV2BodyStore {
                 V2BodyStoreError::ReceiptMismatch,
             ));
         }
-
         let store_identity = self.0.instance_identity();
         let context = self.0.context.clone();
         let durable = self
@@ -1399,7 +1303,6 @@ impl RevalidatedV2BodyStore {
             validated: Some(validated),
         })
     }
-
     /// Consume the sealed instance into the unified production owner.
     ///
     /// The expected context comparison is repeated at the transfer boundary so
@@ -1415,10 +1318,8 @@ impl RevalidatedV2BodyStore {
         Ok(self.0)
     }
 }
-
 #[derive(Debug)]
 struct V2BodyStoreInstanceIdentityMarker;
-
 /// Comparison-only process identity for one exact open body-store instance.
 ///
 /// This seal is not durable authority. It only proves that a lifecycle owner
@@ -1426,14 +1327,12 @@ struct V2BodyStoreInstanceIdentityMarker;
 /// during the live process transition.
 #[derive(Clone, Debug)]
 pub(crate) struct V2BodyStoreInstanceIdentity(Arc<V2BodyStoreInstanceIdentityMarker>);
-
 impl V2BodyStoreInstanceIdentity {
     /// Return whether both seals were projected from the same open store.
     pub(crate) fn same_instance(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
 }
-
 /// Body-store-private one-shot permit for binding a cold adapter body lookup.
 ///
 /// Construction stays in this module so another recovery path cannot bind a
@@ -1441,13 +1340,10 @@ impl V2BodyStoreInstanceIdentity {
 pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyColdPreviewBindPermitV1 {
     _linearity: RecoveredLifecycleNextVoteBodyColdPreviewBindPermitLinearityV1,
 }
-
 struct RecoveredLifecycleNextVoteBodyColdPreviewBindPermitLinearityV1;
-
 impl Drop for RecoveredLifecycleNextVoteBodyColdPreviewBindPermitLinearityV1 {
     fn drop(&mut self) {}
 }
-
 impl RecoveredLifecycleNextVoteBodyColdPreviewBindPermitV1 {
     fn new() -> Self {
         Self {
@@ -1455,7 +1351,6 @@ impl RecoveredLifecycleNextVoteBodyColdPreviewBindPermitV1 {
         }
     }
 }
-
 /// Body-store-private one-shot permit for promoting an exact cold body join.
 ///
 /// The adapter accepts this permit only beside the lookup and receipt selected
@@ -1463,13 +1358,10 @@ impl RecoveredLifecycleNextVoteBodyColdPreviewBindPermitV1 {
 pub(in crate::sumeragi) struct RecoveredLifecycleNextVoteBodyColdAuthorityMintPermitV1 {
     _linearity: RecoveredLifecycleNextVoteBodyColdAuthorityMintPermitLinearityV1,
 }
-
 struct RecoveredLifecycleNextVoteBodyColdAuthorityMintPermitLinearityV1;
-
 impl Drop for RecoveredLifecycleNextVoteBodyColdAuthorityMintPermitLinearityV1 {
     fn drop(&mut self) {}
 }
-
 impl RecoveredLifecycleNextVoteBodyColdAuthorityMintPermitV1 {
     fn new() -> Self {
         Self {
@@ -1477,7 +1369,6 @@ impl RecoveredLifecycleNextVoteBodyColdAuthorityMintPermitV1 {
         }
     }
 }
-
 /// Body-store-private permit for retaining canonical cold Proposal output.
 ///
 /// The same revalidated store that authenticates the next Vote constructs this
@@ -1486,13 +1377,10 @@ impl RecoveredLifecycleNextVoteBodyColdAuthorityMintPermitV1 {
 pub(in crate::sumeragi) struct RecoveredLifecycleColdProposalOutputMintPermitV1 {
     _linearity: RecoveredLifecycleColdProposalOutputMintPermitLinearityV1,
 }
-
 struct RecoveredLifecycleColdProposalOutputMintPermitLinearityV1;
-
 impl Drop for RecoveredLifecycleColdProposalOutputMintPermitLinearityV1 {
     fn drop(&mut self) {}
 }
-
 impl RecoveredLifecycleColdProposalOutputMintPermitV1 {
     fn new() -> Self {
         Self {
@@ -1500,7 +1388,6 @@ impl RecoveredLifecycleColdProposalOutputMintPermitV1 {
         }
     }
 }
-
 /// Immutable post-finality deletion authority for one exact body directory.
 ///
 /// Construction consumes the height-local store only after a matching Kura
@@ -1510,7 +1397,6 @@ pub(crate) struct V2BodyRetirementJob {
     directory: PathBuf,
     parent: Option<PathBuf>,
 }
-
 impl V2BodyRetirementJob {
     /// Delete the finalized height's durable candidate bodies and fsync the
     /// containing directory.
@@ -1531,7 +1417,6 @@ impl V2BodyRetirementJob {
         Ok(())
     }
 }
-
 impl V2BodyStore {
     /// Consume a freshly opened store into recovered-startup quarantine.
     ///
@@ -1550,12 +1435,10 @@ impl V2BodyStore {
         }
         Ok(QuarantinedV2BodyStore(self))
     }
-
     /// Project a comparison-only identity before moving this store to its worker.
     pub(crate) fn instance_identity(&self) -> V2BodyStoreInstanceIdentity {
         V2BodyStoreInstanceIdentity(Arc::clone(&self.identity))
     }
-
     /// Authenticate one cold reducer-produced next Vote against this store.
     ///
     /// The preview receives this store's process identity only through a
@@ -1630,7 +1513,6 @@ impl V2BodyStore {
         )
         .ok_or(V2BodyStoreError::RecoveredLifecycleNextVoteBodyMismatch)
     }
-
     /// Return whether this already-open store belongs to the exact context.
     ///
     /// Production startup uses this when a durable recovery catalog must be
@@ -1638,7 +1520,6 @@ impl V2BodyStore {
     pub(crate) fn matches_context(&self, context: &wire::HeightContext) -> bool {
         &self.context == context
     }
-
     /// Compare this exact opened store with one sealed lifecycle storage root.
     ///
     /// The caller receives only a boolean. The context-addressed directory and
@@ -1654,7 +1535,6 @@ impl V2BodyStore {
             && &self.signature_policy == signature_policy
             && self.directory == root.join(hex::encode(context.id().0.as_ref()))
     }
-
     /// Compare a receipt with the exact in-memory entry owned by this open store.
     ///
     /// This deliberately performs no filesystem I/O. A caller can therefore
@@ -1670,7 +1550,6 @@ impl V2BodyStore {
                 .get(&(receipt.round, receipt.subject))
                 .is_some_and(|known| known == receipt)
     }
-
     /// Replace an accepted frame after its receipt was minted.
     #[cfg(test)]
     pub(super) fn corrupt_owned_frame_for_test(
@@ -1693,7 +1572,6 @@ impl V2BodyStore {
             .and_then(|()| file.sync_all())
             .map_err(|source| V2BodyStoreError::Io { path, source })
     }
-
     /// Open the active context directory and fail closed on every malformed
     /// final body file. Incomplete `.tmp` files are unacknowledged writes and
     /// are deliberately ignored.
@@ -1704,7 +1582,6 @@ impl V2BodyStore {
     ) -> Result<Self, V2BodyStoreError> {
         Self::open_with_policy(root, context, BlockSignaturePolicy::RotatingLeader)
     }
-
     /// Open a context directory with an explicit block-signature policy.
     ///
     /// The genesis-authority policy is valid only for the first height with no
@@ -1729,7 +1606,6 @@ impl V2BodyStore {
         if let Some(parent) = directory.parent() {
             sync_directory(parent)?;
         }
-
         let mut store = Self {
             identity: Arc::new(V2BodyStoreInstanceIdentityMarker),
             context,
@@ -1811,7 +1687,6 @@ impl V2BodyStore {
         }
         Ok(store)
     }
-
     /// Open an empty, context-addressed store for non-cryptographic lifecycle fixtures.
     ///
     /// Production must use [`Self::open_with_policy`]. This helper exists only
@@ -1841,7 +1716,6 @@ impl V2BodyStore {
             rejected: BTreeMap::new(),
         })
     }
-
     /// Recover the durable receipt indexed by an exact round and subject.
     ///
     /// Receipts are reconstructed and fully revalidated while opening the
@@ -1855,7 +1729,6 @@ impl V2BodyStore {
     ) -> Option<DurableBodyReceipt> {
         self.entries.get(&(round, subject)).cloned()
     }
-
     /// Reload a recovered body's canonical manifest together with its durable
     /// receipt.
     ///
@@ -1878,7 +1751,6 @@ impl V2BodyStore {
             .ok_or(V2BodyStoreError::ReceiptMismatch)?;
         Ok(Some((manifest, receipt)))
     }
-
     /// Snapshot the in-memory recovery index reconstructed while opening.
     ///
     /// This performs no filesystem I/O and lets the serialized reducer owner
@@ -1904,7 +1776,6 @@ impl V2BodyStore {
         }
         Ok(catalog)
     }
-
     /// Re-run deterministic validation for every marker recovered from disk.
     ///
     /// Structurally valid marker bytes are deliberately quarantined while the
@@ -1929,7 +1800,6 @@ impl V2BodyStore {
         if self.pending_revalidation.is_empty() {
             return Ok(());
         }
-
         let mut replayed = BTreeMap::<wire::BlockSubject, SemanticReplayOutcome>::new();
         let mut promoted_validated = BTreeMap::new();
         let mut promoted_rejected = BTreeMap::new();
@@ -1962,7 +1832,6 @@ impl V2BodyStore {
                 replayed.insert(key.1, outcome.clone());
                 outcome
             };
-
             match (recovered.outcome, reproduced) {
                 (_, SemanticReplayOutcome::DeferredMergeSidecar) => {
                     retired_missing_sidecar.insert(*key, recovered.clone());
@@ -2002,14 +1871,12 @@ impl V2BodyStore {
                 _ => return Err(V2BodyStoreError::RecoveredValidationOutcomeMismatch),
             }
         }
-
         self.validated.extend(promoted_validated);
         self.rejected.extend(promoted_rejected);
         self.retired_revalidation.extend(retired_missing_sidecar);
         self.pending_revalidation.clear();
         Ok(())
     }
-
     /// Retire restart vote authority for bodies other than a verified decision.
     ///
     /// Once Kura has a cryptographically verified finality artifact, losing
@@ -2034,7 +1901,6 @@ impl V2BodyStore {
             .retain(|(_, candidate), _| *candidate == subject);
         Ok(())
     }
-
     /// Retain only marker authority named by authenticated WAL replay.
     ///
     /// Superseded view-local markers remain on disk as checksummed diagnostics,
@@ -2057,7 +1923,6 @@ impl V2BodyStore {
             .retain(|(round, subject), _| authority.authorizes(*round, *subject));
         Ok(())
     }
-
     /// Require all restart markers to have crossed semantic revalidation.
     ///
     /// The serialized runtime calls this before restoring vote authority so a
@@ -2070,7 +1935,6 @@ impl V2BodyStore {
             Err(V2BodyStoreError::UnrevalidatedValidationMarkers)
         }
     }
-
     /// Consume this exact open store into the sole production-startup handoff.
     ///
     /// Checksummed restart markers cannot cross this boundary. The store is
@@ -2085,7 +1949,6 @@ impl V2BodyStore {
         self.ensure_recovered_markers_revalidated()?;
         Ok(RevalidatedV2BodyStore(self))
     }
-
     /// Snapshot semantically revalidated success receipts for WAL recovery.
     ///
     /// Deterministic rejections remain in a separate private map and cannot be
@@ -2095,7 +1958,6 @@ impl V2BodyStore {
     ) -> BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt> {
         self.validated.clone()
     }
-
     /// Reconstruct the exact fsynced body authority for a recovered Decision Store.
     ///
     /// This cold path requires one unambiguous WAL-matching body frame and
@@ -2140,7 +2002,6 @@ impl V2BodyStore {
             durable: durable.clone(),
         })
     }
-
     /// Detect the exact validated predecessor reserved for Decision Apply publication.
     ///
     /// This read-only oracle exposes no receipt. A matching marker prevents the
@@ -2154,7 +2015,6 @@ impl V2BodyStore {
             .values()
             .any(|validated| projection.matches_validated_body(validated))
     }
-
     /// Detect a matching success marker still awaiting semantic replay.
     ///
     /// This is a rejection-only oracle. A quarantined marker is not Apply
@@ -2173,7 +2033,6 @@ impl V2BodyStore {
                 ValidationOutcomeMarkerKind::Rejected(_) => false,
             })
     }
-
     /// Detect a deterministic rejection for the body named by a Commit Decision.
     ///
     /// Both semantically replayed and quarantined rejection markers are
@@ -2191,7 +2050,6 @@ impl V2BodyStore {
                     && projection.matches_durable_body(&pending.durable)
             })
     }
-
     /// Detach the aggregate semantically revalidated terminal outcome catalog.
     ///
     /// Checks precede every move so a failed factory leaves the store intact.
@@ -2212,7 +2070,6 @@ impl V2BodyStore {
         {
             return Err(RecoveredTerminalValidateOutcomeCatalogError::AmbiguousOutcome);
         }
-
         let validated = std::mem::take(&mut self.validated);
         let rejected = std::mem::take(&mut self.rejected);
         Ok(RecoveredTerminalValidateOutcomeCatalogCut {
@@ -2223,7 +2080,6 @@ impl V2BodyStore {
             selected_rejected: BTreeMap::new(),
         })
     }
-
     /// Detach the exact revalidated proposal marker named by one recovered WAL vote.
     ///
     /// This one-shot factory consults neither a scheduler lease nor a runtime
@@ -2260,7 +2116,6 @@ impl V2BodyStore {
             validated: Some(validated),
         })
     }
-
     /// Execute one exact-body persistence task on a storage-service thread.
     ///
     /// Only this method can mint [`BodyStoreCompletion`], and it does so only
@@ -2277,7 +2132,6 @@ impl V2BodyStore {
             receipt,
         })
     }
-
     // DURABLE_BODY_VALIDATION_API_BEGIN
     /// Execute deterministic validation against one exact durable body.
     ///
@@ -2314,7 +2168,6 @@ impl V2BodyStore {
         {
             return Err(V2BodyStoreError::ReceiptMismatch);
         }
-
         let envelope = self.load_envelope(&durable)?;
         if envelope.context_id != durable.context_id()
             || envelope.round != durable.round()
@@ -2326,7 +2179,6 @@ impl V2BodyStore {
         }
         let block = decode_framed_signed_block(&envelope.canonical_wire)
             .map_err(|error| V2BodyStoreError::BlockDecode(error.to_string()))?;
-
         if let Some(validated) = self.validated.get(&key) {
             if validated.durable() != &durable {
                 return Err(V2BodyStoreError::ReceiptMismatch);
@@ -2341,7 +2193,6 @@ impl V2BodyStore {
             }
             return Ok(rejected.sealed_outcome());
         }
-
         match validator(&block) {
             Ok(execution_commitment) => {
                 let validated = self.persist_validated_receipt(&durable, execution_commitment)?;
@@ -2366,7 +2217,6 @@ impl V2BodyStore {
         }
     }
     // DURABLE_BODY_VALIDATION_API_END
-
     /// Execute deterministic validation against the exact durable task body.
     ///
     /// Filesystem loading, canonical decoding, and the validator callback all
@@ -2410,7 +2260,6 @@ impl V2BodyStore {
             }
         }
     }
-
     /// Durably persist the exact body carried by an authenticated certified
     /// Fetch response and bind its complete transport occurrence.
     ///
@@ -2435,7 +2284,6 @@ impl V2BodyStore {
         let context_id = round.context_id;
         let manifest_hash = HashOf::new(&response.manifest);
         let durable_body = self.store(response.manifest.clone(), response.body.clone())?;
-
         if durable_body.context_id() != context_id
             || durable_body.round() != round
             || durable_body.subject() != subject
@@ -2443,14 +2291,12 @@ impl V2BodyStore {
         {
             return Err(V2BodyStoreError::ReceiptMismatch);
         }
-
         Ok(DurableCertifiedFetchBodyReceipt {
             request_hash,
             response_hash,
             durable_body,
         })
     }
-
     /// Validate and durably store canonical `SignedBlockWire` bytes.
     ///
     /// An identical body is idempotent. A different final file for the same
@@ -2469,7 +2315,6 @@ impl V2BodyStore {
             canonical_wire,
         };
         self.validate_envelope(&envelope)?;
-
         let key = (envelope.round, envelope.subject);
         if let Some(existing) = self.entries.get(&key) {
             let existing_envelope = self.load_envelope(existing)?;
@@ -2478,7 +2323,6 @@ impl V2BodyStore {
             }
             return Err(V2BodyStoreError::ConflictingBody);
         }
-
         let encoded = envelope.encode();
         let framed = frame_payload(&encoded)?;
         let frame_hash = Hash::new(&framed);
@@ -2489,7 +2333,6 @@ impl V2BodyStore {
         self.manifests.insert(key, envelope.manifest);
         Ok(receipt)
     }
-
     /// Load and revalidate the exact block represented by a durable receipt.
     pub(crate) fn load(
         &self,
@@ -2499,7 +2342,6 @@ impl V2BodyStore {
         decode_framed_signed_block(&envelope.canonical_wire)
             .map_err(|error| V2BodyStoreError::BlockDecode(error.to_string()))
     }
-
     /// Load the exact canonical `SignedBlockWire` bytes represented by a
     /// durable receipt.
     ///
@@ -2513,7 +2355,6 @@ impl V2BodyStore {
     ) -> Result<Vec<u8>, V2BodyStoreError> {
         Ok(self.load_envelope(receipt)?.canonical_wire)
     }
-
     /// Find the newest durable proposal round retaining one exact subject.
     ///
     /// Locked-candidate recovery uses this lookup to find the retained body for
@@ -2541,7 +2382,6 @@ impl V2BodyStore {
             .ok_or(V2BodyStoreError::ReceiptMismatch)?;
         Ok(Some((manifest, receipt)))
     }
-
     /// Test helper that runs a validator synchronously over the exact durable
     /// body and persists the same marker used by the production task API.
     #[cfg(test)]
@@ -2566,7 +2406,6 @@ impl V2BodyStore {
             .map_err(|error| V2BodyStoreError::DeterministicValidation(error.to_string()))?;
         self.persist_validated_receipt(receipt, execution_commitment)
     }
-
     fn persist_validated_receipt(
         &mut self,
         receipt: &DurableBodyReceipt,
@@ -2656,7 +2495,6 @@ impl V2BodyStore {
         self.validated.insert(key, validated.clone());
         Ok(validated)
     }
-
     fn persist_rejected_outcome(
         &mut self,
         receipt: &DurableBodyReceipt,
@@ -2746,7 +2584,6 @@ impl V2BodyStore {
         self.rejected.insert(key, rejected.clone());
         Ok(rejected)
     }
-
     fn ensure_validation_outcome_consistent(
         &self,
         receipt: &DurableBodyReceipt,
@@ -2803,7 +2640,6 @@ impl V2BodyStore {
         }
         Ok(())
     }
-
     /// Retire every losing and decided candidate after Kura durably finalizes
     /// the owning height context.
     ///
@@ -2825,7 +2661,6 @@ impl V2BodyStore {
             directory: self.directory,
         })
     }
-
     fn load_envelope(
         &self,
         receipt: &DurableBodyReceipt,
@@ -2842,14 +2677,12 @@ impl V2BodyStore {
         }
         Ok(envelope)
     }
-
     fn verify_receipt(&self, receipt: &DurableBodyReceipt) -> Result<(), V2BodyStoreError> {
         if !self.owns_receipt(receipt) {
             return Err(V2BodyStoreError::ReceiptMismatch);
         }
         Ok(())
     }
-
     fn validate_envelope(&self, envelope: &StoredBodyEnvelope) -> Result<(), V2BodyStoreError> {
         if envelope.version != STORE_VERSION {
             return Err(V2BodyStoreError::UnsupportedVersion(envelope.version));
@@ -2871,7 +2704,6 @@ impl V2BodyStore {
         if Hash::new(&envelope.canonical_wire) != envelope.subject.payload_hash {
             return Err(V2BodyStoreError::PayloadHashMismatch);
         }
-
         let block = decode_framed_signed_block(&envelope.canonical_wire)
             .map_err(|error| V2BodyStoreError::BlockDecode(error.to_string()))?;
         if !block.is_resultless_proposal() {
@@ -2919,7 +2751,6 @@ impl V2BodyStore {
         if header.prev_block_hash() != expected_parent {
             return Err(V2BodyStoreError::ParentMismatch);
         }
-
         let (expected_index, expected_key) = match &self.signature_policy {
             BlockSignaturePolicy::RotatingLeader => {
                 let leader = self.context.leader(body_origin_view);
@@ -2949,7 +2780,6 @@ impl V2BodyStore {
             .map_err(|_| V2BodyStoreError::InvalidExpectedSignature)?;
         Ok(())
     }
-
     fn validate_marker(
         &self,
         marker: &ValidationOutcomeMarker,
@@ -2985,7 +2815,6 @@ impl V2BodyStore {
         }
         Ok(())
     }
-
     fn path_for(&self, round: wire::ConsensusRound, subject: wire::BlockSubject) -> PathBuf {
         let key_hash = Hash::new((round, subject).encode());
         self.directory.join(format!(
@@ -2995,7 +2824,6 @@ impl V2BodyStore {
             hex::encode(key_hash.as_ref())
         ))
     }
-
     fn validated_path_for(
         &self,
         round: wire::ConsensusRound,
@@ -3004,7 +2832,6 @@ impl V2BodyStore {
         self.path_for(round, subject).with_extension("validated")
     }
 }
-
 fn receipt_for(envelope: &StoredBodyEnvelope, frame_hash: Hash) -> DurableBodyReceipt {
     DurableBodyReceipt {
         context_id: envelope.context_id,
@@ -3014,18 +2841,22 @@ fn receipt_for(envelope: &StoredBodyEnvelope, frame_hash: Hash) -> DurableBodyRe
         frame_hash,
     }
 }
-
 fn frame_payload(payload: &[u8]) -> Result<Vec<u8>, V2BodyStoreError> {
     frame_payload_with_magic(STORE_MAGIC, payload)
 }
-
 fn frame_payload_with_magic(magic: &[u8; 8], payload: &[u8]) -> Result<Vec<u8>, V2BodyStoreError> {
     let payload_len = u64::try_from(payload.len()).map_err(|_| V2BodyStoreError::BodyTooLarge)?;
+    if payload_len > FRAME_PAYLOAD_MAX_BYTES {
+        return Err(V2BodyStoreError::BodyTooLarge);
+    }
     let capacity = FRAME_HEADER_LEN
         .checked_add(payload.len())
         .and_then(|length| length.checked_add(CHECKSUM_LEN))
         .ok_or(V2BodyStoreError::BodyTooLarge)?;
-    let mut frame = Vec::with_capacity(capacity);
+    let mut frame = Vec::new();
+    frame
+        .try_reserve_exact(capacity)
+        .map_err(|_| V2BodyStoreError::BodyTooLarge)?;
     frame.extend_from_slice(magic);
     frame.extend_from_slice(&STORE_VERSION.to_le_bytes());
     frame.extend_from_slice(&payload_len.to_le_bytes());
@@ -3033,7 +2864,6 @@ fn frame_payload_with_magic(magic: &[u8; 8], payload: &[u8]) -> Result<Vec<u8>, 
     frame.extend_from_slice(Hash::new(payload).as_ref());
     Ok(frame)
 }
-
 fn read_envelope(path: &Path) -> Result<(StoredBodyEnvelope, Hash), V2BodyStoreError> {
     let (payload, frame_hash) = read_frame_payload_with_hash(path, STORE_MAGIC)?;
     let mut cursor = payload.as_slice();
@@ -3041,11 +2871,9 @@ fn read_envelope(path: &Path) -> Result<(StoredBodyEnvelope, Hash), V2BodyStoreE
         .map_err(|error| V2BodyStoreError::EnvelopeDecode(error.to_string()))?;
     Ok((envelope, frame_hash))
 }
-
 fn read_frame_payload(path: &Path, magic: &[u8; 8]) -> Result<Vec<u8>, V2BodyStoreError> {
     read_frame_payload_with_hash(path, magic).map(|(payload, _)| payload)
 }
-
 fn read_frame_payload_with_hash(
     path: &Path,
     magic: &[u8; 8],
@@ -3054,18 +2882,30 @@ fn read_frame_payload_with_hash(
         path: path.to_path_buf(),
         source,
     })?;
-    let mut frame = Vec::new();
-    file.read_to_end(&mut frame)
+    let opened_len = file
+        .metadata()
         .map_err(|source| V2BodyStoreError::Io {
             path: path.to_path_buf(),
             source,
-        })?;
-    if frame.len() < FRAME_HEADER_LEN + CHECKSUM_LEN || &frame[..magic.len()] != magic {
+        })?
+        .len();
+    let maximum_frame_bytes = FRAME_PAYLOAD_MAX_BYTES
+        .checked_add(
+            u64::try_from(FRAME_HEADER_LEN + CHECKSUM_LEN).expect("frame overhead fits u64"),
+        )
+        .ok_or(V2BodyStoreError::BodyTooLarge)?;
+    if opened_len > maximum_frame_bytes {
+        return Err(V2BodyStoreError::BodyTooLarge);
+    }
+    let mut header = [0_u8; FRAME_HEADER_LEN];
+    file.read_exact(&mut header)
+        .map_err(|_| V2BodyStoreError::CorruptFrame)?;
+    if &header[..magic.len()] != magic {
         return Err(V2BodyStoreError::CorruptFrame);
     }
     let version_offset = magic.len();
     let version = u16::from_le_bytes(
-        frame[version_offset..version_offset + size_of::<u16>()]
+        header[version_offset..version_offset + size_of::<u16>()]
             .try_into()
             .map_err(|_| V2BodyStoreError::CorruptFrame)?,
     );
@@ -3074,26 +2914,48 @@ fn read_frame_payload_with_hash(
     }
     let length_offset = version_offset + size_of::<u16>();
     let payload_len = u64::from_le_bytes(
-        frame[length_offset..length_offset + size_of::<u64>()]
+        header[length_offset..length_offset + size_of::<u64>()]
             .try_into()
             .map_err(|_| V2BodyStoreError::CorruptFrame)?,
     );
+    if payload_len > FRAME_PAYLOAD_MAX_BYTES {
+        return Err(V2BodyStoreError::BodyTooLarge);
+    }
     let payload_len = usize::try_from(payload_len).map_err(|_| V2BodyStoreError::BodyTooLarge)?;
     let expected_len = FRAME_HEADER_LEN
         .checked_add(payload_len)
         .and_then(|length| length.checked_add(CHECKSUM_LEN))
         .ok_or(V2BodyStoreError::BodyTooLarge)?;
-    if frame.len() != expected_len {
+    if opened_len != u64::try_from(expected_len).map_err(|_| V2BodyStoreError::BodyTooLarge)? {
         return Err(V2BodyStoreError::CorruptFrame);
     }
-    let payload = frame[FRAME_HEADER_LEN..FRAME_HEADER_LEN + payload_len].to_vec();
-    let checksum = &frame[FRAME_HEADER_LEN + payload_len..];
-    if Hash::new(&payload).as_ref().as_slice() != checksum {
+    let mut payload = Vec::new();
+    payload
+        .try_reserve_exact(payload_len)
+        .map_err(|_| V2BodyStoreError::BodyTooLarge)?;
+    payload.resize(payload_len, 0);
+    file.read_exact(&mut payload)
+        .map_err(|_| V2BodyStoreError::CorruptFrame)?;
+    let mut checksum = [0_u8; CHECKSUM_LEN];
+    file.read_exact(&mut checksum)
+        .map_err(|_| V2BodyStoreError::CorruptFrame)?;
+    let mut trailing = [0_u8; 1];
+    if file
+        .read(&mut trailing)
+        .map_err(|source| V2BodyStoreError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?
+        != 0
+    {
+        return Err(V2BodyStoreError::CorruptFrame);
+    }
+    if Hash::new(&payload).as_ref() != checksum.as_slice() {
         return Err(V2BodyStoreError::ChecksumMismatch);
     }
-    Ok((payload, Hash::new(&frame)))
+    let frame_hash = Hash::new_from_chunks(&[&header, &payload, &checksum]);
+    Ok((payload, frame_hash))
 }
-
 fn write_validation_outcome_marker(
     path: &Path,
     marker: &ValidationOutcomeMarker,
@@ -3102,7 +2964,6 @@ fn write_validation_outcome_marker(
     let frame = frame_payload_with_magic(VALIDATED_MAGIC, &payload)?;
     write_atomic_synced(path, &frame)
 }
-
 fn read_validation_outcome_marker(
     path: &Path,
 ) -> Result<ValidationOutcomeMarker, V2BodyStoreError> {
@@ -3111,7 +2972,6 @@ fn read_validation_outcome_marker(
     ValidationOutcomeMarker::decode_all(&mut cursor)
         .map_err(|error| V2BodyStoreError::ValidationMarkerDecode(error.to_string()))
 }
-
 fn write_atomic_synced(path: &Path, bytes: &[u8]) -> Result<(), V2BodyStoreError> {
     let tmp_path = path.with_extension(
         path.extension()
@@ -3141,7 +3001,6 @@ fn write_atomic_synced(path: &Path, bytes: &[u8]) -> Result<(), V2BodyStoreError
     let parent = path.parent().ok_or(V2BodyStoreError::MissingParent)?;
     sync_directory(parent)
 }
-
 fn sync_directory(path: &Path) -> Result<(), V2BodyStoreError> {
     File::open(path)
         .and_then(|directory| directory.sync_all())
@@ -3150,7 +3009,6 @@ fn sync_directory(path: &Path) -> Result<(), V2BodyStoreError> {
             source,
         })
 }
-
 /// Exact-body persistence or validation failure.
 #[derive(Debug, Error)]
 pub(crate) enum V2BodyStoreError {
@@ -3294,5 +3152,4 @@ pub(crate) enum V2BodyStoreError {
     #[error("Sumeragi v2 body-store path has no parent directory")]
     MissingParent,
 }
-
 include!("v2_body_store_tests.rs");

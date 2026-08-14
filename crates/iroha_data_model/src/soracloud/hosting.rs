@@ -11,7 +11,6 @@ pub enum SoraHfBackendFamilyV1 {
     /// GGUF-backed local execution.
     Gguf,
 }
-
 /// Canonical weight/layout format admitted for authoritative HF placement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -27,7 +26,6 @@ pub enum SoraHfModelFormatV1 {
     /// GGUF layout.
     Gguf,
 }
-
 /// Deterministic size bucket used for adaptive placement and tariff lookup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -43,7 +41,6 @@ pub enum SoraHfModelSizeBucketV1 {
     /// Models above 8 GiB.
     Large,
 }
-
 /// Canonical resource profile derived from HF source/import metadata.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -65,7 +62,6 @@ pub struct SoraHfResourceProfileV1 {
     #[norito(default)]
     pub vram_bytes_floor: u64,
 }
-
 impl SoraHfResourceProfileV1 {
     /// Validate the derived HF resource profile.
     ///
@@ -96,13 +92,11 @@ impl SoraHfResourceProfileV1 {
         }
         Ok(())
     }
-
     /// Return the deterministic model-size bucket for this profile.
     #[must_use]
     pub fn size_bucket(&self) -> SoraHfModelSizeBucketV1 {
         const TWO_GIB: u64 = 2 * 1024 * 1024 * 1024;
         const EIGHT_GIB: u64 = 8 * 1024 * 1024 * 1024;
-
         if self.required_model_bytes <= TWO_GIB {
             SoraHfModelSizeBucketV1::Small
         } else if self.required_model_bytes <= EIGHT_GIB {
@@ -112,7 +106,6 @@ impl SoraHfResourceProfileV1 {
         }
     }
 }
-
 /// Return the exact first-release maximum compute reservation charge for an
 /// HF shared-lease window.
 ///
@@ -151,7 +144,6 @@ pub fn hf_shared_lease_max_compute_reservation_fee_v1(
     };
     Ok(xor_quantity_from_nanos(nanos))
 }
-
 /// Active opt-in validator host capability advert for authoritative HF placement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -187,7 +179,6 @@ pub struct SoraModelHostCapabilityRecordV1 {
     /// Timestamp after which the advert is no longer eligible without a heartbeat.
     pub heartbeat_expires_at_ms: u64,
 }
-
 impl SoraModelHostCapabilityRecordV1 {
     /// Validate the authoritative model-host capability advert.
     ///
@@ -259,14 +250,12 @@ impl SoraModelHostCapabilityRecordV1 {
         }
         Ok(())
     }
-
     /// Return whether the advert remains eligible at the supplied timestamp.
     #[must_use]
     pub fn is_active_at(&self, now_ms: u64) -> bool {
         self.heartbeat_expires_at_ms > now_ms
     }
 }
-
 /// Active opt-in validator host capability advert for authoritative Inrou placement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -306,7 +295,6 @@ pub struct SoraInrouHostCapabilityRecordV1 {
     /// Timestamp after which the advert is no longer eligible without a refresh.
     pub heartbeat_expires_at_ms: u64,
 }
-
 impl SoraInrouHostCapabilityRecordV1 {
     /// Validate the authoritative Inrou host advert.
     ///
@@ -399,20 +387,17 @@ impl SoraInrouHostCapabilityRecordV1 {
         }
         Ok(())
     }
-
     /// Return whether the advert remains eligible at the supplied timestamp.
     #[must_use]
     pub fn is_active_at(&self, now_ms: u64) -> bool {
         self.heartbeat_expires_at_ms > now_ms
     }
-
     /// Return whether the advert may host placed replicas at the supplied timestamp.
     #[must_use]
     pub fn can_host_replicas_at(&self, now_ms: u64) -> bool {
         self.is_active_at(now_ms) && !self.proxy_only && self.max_hosted_replica_capacity > 0
     }
 }
-
 /// Authoritative host assignment for one placed Inrou replica slot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -437,7 +422,6 @@ pub struct SoraInrouReplicaPlacementV1 {
     #[norito(default)]
     pub selection_latency_ms: Option<u32>,
 }
-
 impl SoraInrouReplicaPlacementV1 {
     /// Validate one placed Inrou replica assignment.
     ///
@@ -469,7 +453,6 @@ impl SoraInrouReplicaPlacementV1 {
         Ok(())
     }
 }
-
 /// Authoritative per-revision placement record for hosted Inrou replicas.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -496,7 +479,6 @@ pub struct SoraInrouServicePlacementRecordV1 {
     #[norito(default)]
     pub last_error: Option<String>,
 }
-
 impl SoraInrouServicePlacementRecordV1 {
     /// Validate the authoritative Inrou placement record.
     ///
@@ -552,7 +534,6 @@ impl SoraInrouServicePlacementRecordV1 {
         Ok(())
     }
 }
-
 /// Placement lifecycle state for the active HF compute reservation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -574,7 +555,6 @@ pub enum SoraHfPlacementStatusV1 {
     /// The placement was retired alongside the lease window.
     Retired,
 }
-
 /// Assigned role of a validator within a placement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -588,7 +568,6 @@ pub enum SoraHfPlacementHostRoleV1 {
     /// Warm or warming failover replica.
     Replica,
 }
-
 /// Current placement status for an assigned validator host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -606,7 +585,6 @@ pub enum SoraHfPlacementHostStatusV1 {
     /// Host slot was retired from the placement.
     Retired,
 }
-
 /// Host assignment persisted on the authoritative placement record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -625,7 +603,6 @@ pub struct SoraHfPlacementHostAssignmentV1 {
     /// Host class used for compute tariff lookup.
     pub host_class: String,
 }
-
 impl SoraHfPlacementHostAssignmentV1 {
     /// Validate an authoritative placement host assignment.
     ///
@@ -645,7 +622,6 @@ impl SoraHfPlacementHostAssignmentV1 {
         Ok(())
     }
 }
-
 /// Authoritative placement record attached to the active HF lease window.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -682,7 +658,6 @@ pub struct SoraHfPlacementRecordV1 {
     #[norito(default)]
     pub last_error: Option<String>,
 }
-
 impl SoraHfPlacementRecordV1 {
     /// Validate the authoritative HF placement record.
     ///
@@ -755,7 +730,6 @@ impl SoraHfPlacementRecordV1 {
         }
         Ok(())
     }
-
     /// Count the currently warm assigned hosts.
     #[must_use]
     pub fn warm_host_count(&self) -> u32 {
@@ -768,7 +742,6 @@ impl SoraHfPlacementRecordV1 {
         .unwrap_or(u32::MAX)
     }
 }
-
 /// Canonical Soracloud model-host violation kinds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -784,7 +757,6 @@ pub enum SoraModelHostViolationKindV1 {
     /// The host advert was provably self-contradictory.
     AdvertContradiction,
 }
-
 /// Authoritative evidence record for a Soracloud model-host violation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -832,7 +804,6 @@ pub struct SoraModelHostViolationEvidenceRecordV1 {
     #[norito(default)]
     pub slash_id: Option<Hash>,
 }
-
 impl SoraModelHostViolationEvidenceRecordV1 {
     /// Validate the authoritative host-violation evidence record.
     ///
@@ -944,7 +915,6 @@ impl SoraModelHostViolationEvidenceRecordV1 {
         Ok(())
     }
 }
-
 /// Import lifecycle state for a canonical Hugging Face source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -962,7 +932,6 @@ pub enum SoraHfSourceStatusV1 {
     /// The canonical source was retired and should no longer accept new joins.
     Retired,
 }
-
 /// Authoritative canonical Hugging Face import metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -997,7 +966,6 @@ pub struct SoraHfSourceRecordV1 {
     #[norito(default)]
     pub last_error: Option<String>,
 }
-
 impl SoraHfSourceRecordV1 {
     /// Validate canonical Hugging Face source metadata.
     ///
@@ -1055,7 +1023,6 @@ impl SoraHfSourceRecordV1 {
         Ok(())
     }
 }
-
 /// Shared-lease pool lifecycle state for a canonical HF source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1073,7 +1040,6 @@ pub enum SoraHfSharedLeaseStatusV1 {
     /// The pool was explicitly retired.
     Retired,
 }
-
 /// Shared-lease membership lifecycle state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1087,7 +1053,6 @@ pub enum SoraHfSharedLeaseMemberStatusV1 {
     /// The account left the pool or was expired out of the current window.
     Left,
 }
-
 /// Audit action recorded for shared Hugging Face lease windows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1107,7 +1072,6 @@ pub enum SoraHfSharedLeaseActionV1 {
     /// The current window was retired early.
     Retire,
 }
-
 /// Queued next-window sponsorship metadata for a shared Hugging Face lease pool.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1140,7 +1104,6 @@ pub struct SoraHfSharedLeaseQueuedWindowV1 {
     #[norito(default)]
     pub apartment_name: Option<Name>,
 }
-
 impl SoraHfSharedLeaseQueuedWindowV1 {
     /// Validate queued shared-lease sponsorship metadata.
     ///
@@ -1203,7 +1166,6 @@ impl SoraHfSharedLeaseQueuedWindowV1 {
         Ok(())
     }
 }
-
 /// Shared-lease pool metadata keyed by canonical import and pricing dimensions.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1237,7 +1199,6 @@ pub struct SoraHfSharedLeasePoolV1 {
     #[norito(default)]
     pub queued_next_window: Option<SoraHfSharedLeaseQueuedWindowV1>,
 }
-
 impl SoraHfSharedLeasePoolV1 {
     /// Validate shared-lease pool metadata.
     ///
@@ -1311,7 +1272,6 @@ impl SoraHfSharedLeasePoolV1 {
         Ok(())
     }
 }
-
 /// Account-scoped shared-lease membership plus free service/apartment bindings.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1355,7 +1315,6 @@ pub struct SoraHfSharedLeaseMemberV1 {
     #[norito(default)]
     pub apartment_bindings: BTreeSet<String>,
 }
-
 impl SoraHfSharedLeaseMemberV1 {
     /// Validate shared-lease membership metadata.
     ///
@@ -1405,7 +1364,6 @@ impl SoraHfSharedLeaseMemberV1 {
         Ok(())
     }
 }
-
 /// Audit record for shared Hugging Face lease lifecycle changes.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1442,7 +1400,6 @@ pub struct SoraHfSharedLeaseAuditEventV1 {
     #[norito(default)]
     pub apartment_name: Option<String>,
 }
-
 impl SoraHfSharedLeaseAuditEventV1 {
     /// Validate shared-lease audit metadata.
     ///
@@ -1504,7 +1461,6 @@ impl SoraHfSharedLeaseAuditEventV1 {
         Ok(())
     }
 }
-
 /// Audit record for model-artifact lifecycle changes.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1532,7 +1488,6 @@ pub struct SoraModelArtifactAuditEventV1 {
     /// Provenance signer that authorized the event.
     pub signer: PublicKey,
 }
-
 impl SoraModelArtifactAuditEventV1 {
     /// Validate model-artifact audit metadata.
     ///
@@ -1573,7 +1528,6 @@ impl SoraModelArtifactAuditEventV1 {
         Ok(())
     }
 }
-
 /// Audit action recorded for authoritative Soracloud agent-apartment state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1605,7 +1559,6 @@ pub enum SoraAgentApartmentActionV1 {
     /// An approved autonomy run completed execution and recorded a runtime outcome.
     AutonomyRunExecuted,
 }
-
 /// Runtime status of an authoritative Soracloud agent apartment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1619,7 +1572,6 @@ pub enum SoraAgentRuntimeStatusV1 {
     /// Apartment lease expired and must be renewed before further work.
     LeaseExpired,
 }
-
 /// Pending wallet spend request tracked inside an authoritative apartment record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1636,7 +1588,6 @@ pub struct SoraAgentWalletSpendRequestV1 {
     /// Audit sequence that created the request.
     pub created_sequence: u64,
 }
-
 /// Daily wallet-spend aggregate for an asset/day bucket pair.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1651,7 +1602,6 @@ pub struct SoraAgentWalletDailySpendEntryV1 {
     /// Total nominal quantity spent in that bucket.
     pub spent: Quantity,
 }
-
 /// Mailbox message queued for deterministic apartment-to-apartment delivery.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1672,7 +1622,6 @@ pub struct SoraAgentMailboxMessageV1 {
     /// Audit sequence that enqueued the message.
     pub enqueued_sequence: u64,
 }
-
 /// Allowlist entry authorizing an autonomy artifact for an apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1688,7 +1637,6 @@ pub struct SoraAgentArtifactAllowRuleV1 {
     /// Audit sequence that added the rule.
     pub added_sequence: u64,
 }
-
 /// Historical autonomy-run approval recorded for an apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1717,7 +1665,6 @@ pub struct SoraAgentAutonomyRunRecordV1 {
     /// Audit sequence that approved the run.
     pub approved_sequence: u64,
 }
-
 /// Authoritative persistent-state accounting attached to an apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1731,7 +1678,6 @@ pub struct SoraAgentPersistentStateV1 {
     #[norito(default)]
     pub key_sizes: BTreeMap<String, u64>,
 }
-
 /// Authoritative runtime record for a Soracloud agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1799,7 +1745,6 @@ pub struct SoraAgentApartmentRecordV1 {
     #[norito(default)]
     pub autonomy_run_history: Vec<SoraAgentAutonomyRunRecordV1>,
 }
-
 impl SoraAgentApartmentRecordV1 {
     /// Validate apartment lifecycle and deterministic-accounting invariants.
     ///
@@ -1813,7 +1758,6 @@ impl SoraAgentApartmentRecordV1 {
         self.validate_budget_fields()?;
         self.validate_collection_fields()
     }
-
     fn validate_required_fields(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora agent apartment record",
@@ -1866,7 +1810,6 @@ impl SoraAgentApartmentRecordV1 {
         }
         Ok(())
     }
-
     fn validate_restart_fields(&self) -> Result<(), SoracloudManifestError> {
         if self
             .last_restart_reason
@@ -1898,7 +1841,6 @@ impl SoraAgentApartmentRecordV1 {
         }
         Ok(())
     }
-
     fn validate_budget_fields(&self) -> Result<(), SoracloudManifestError> {
         if self.autonomy_budget_ceiling_units == 0 {
             return Err(invalid_field(
@@ -1916,7 +1858,6 @@ impl SoraAgentApartmentRecordV1 {
         }
         Ok(())
     }
-
     fn validate_collection_fields(&self) -> Result<(), SoracloudManifestError> {
         for revoked in &self.revoked_policy_capabilities {
             if revoked.trim().is_empty() {
@@ -1944,7 +1885,6 @@ impl SoraAgentApartmentRecordV1 {
         }
         Ok(())
     }
-
     fn validate_pending_wallet_request(
         request_id: &str,
         request: &SoraAgentWalletSpendRequestV1,
@@ -1962,7 +1902,6 @@ impl SoraAgentApartmentRecordV1 {
         }
         Ok(())
     }
-
     fn validate_wallet_daily_spend_entry(
         key: &str,
         entry: &SoraAgentWalletDailySpendEntryV1,
@@ -1976,7 +1915,6 @@ impl SoraAgentApartmentRecordV1 {
         }
         Ok(())
     }
-
     fn validate_mailbox_message(
         message: &SoraAgentMailboxMessageV1,
     ) -> Result<(), SoracloudManifestError> {
@@ -2005,7 +1943,6 @@ impl SoraAgentApartmentRecordV1 {
         }
         Ok(())
     }
-
     fn validate_artifact_allowlist_rule(
         artifact_hash: &str,
         rule: &SoraAgentArtifactAllowRuleV1,
@@ -2026,7 +1963,6 @@ impl SoraAgentApartmentRecordV1 {
         }
         Ok(())
     }
-
     fn validate_autonomy_run(
         run: &SoraAgentAutonomyRunRecordV1,
     ) -> Result<(), SoracloudManifestError> {
@@ -2071,7 +2007,6 @@ impl SoraAgentApartmentRecordV1 {
         Ok(())
     }
 }
-
 /// Audit record for authoritative agent-apartment state transitions.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2164,7 +2099,6 @@ pub struct SoraAgentApartmentAuditEventV1 {
     #[norito(default)]
     pub succeeded: Option<bool>,
 }
-
 impl SoraAgentApartmentAuditEventV1 {
     /// Validate agent-apartment audit metadata.
     ///
@@ -2264,7 +2198,6 @@ impl SoraAgentApartmentAuditEventV1 {
         Ok(())
     }
 }
-
 fn validate_public_url(
     manifest: &'static str,
     field: &'static str,
@@ -2281,7 +2214,6 @@ fn validate_public_url(
     }
     Ok(())
 }
-
 fn validate_absolute_path(
     manifest: &'static str,
     field: &'static str,
@@ -2293,7 +2225,6 @@ fn validate_absolute_path(
     }
     Ok(())
 }
-
 /// Lifecycle action recorded for an app-level Soracloud topology transition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2307,7 +2238,6 @@ pub enum SoraAppInfraActionV1 {
     /// Upgrade of an already admitted app topology.
     Upgrade,
 }
-
 /// Static-site binding attached to a Soracloud app.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2331,7 +2261,6 @@ pub struct SoraAppStaticSiteBindingV1 {
     #[norito(default)]
     pub api_base_path: Option<String>,
 }
-
 impl SoraAppStaticSiteBindingV1 {
     /// Validate static-site binding fields.
     ///
@@ -2372,7 +2301,6 @@ impl SoraAppStaticSiteBindingV1 {
         )
     }
 }
-
 /// Route projection exposed by a service inside an app topology.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2391,7 +2319,6 @@ pub struct SoraAppRouteProjectionV1 {
     #[norito(default)]
     pub internal_url: Option<String>,
 }
-
 impl SoraAppRouteProjectionV1 {
     /// Validate app route projection fields.
     ///
@@ -2420,7 +2347,6 @@ impl SoraAppRouteProjectionV1 {
         )
     }
 }
-
 /// Reference to an admitted Soracloud service revision in an app topology.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2452,7 +2378,6 @@ pub struct SoraAppInfraServiceRefV1 {
     #[norito(default)]
     pub shard: Option<String>,
 }
-
 impl SoraAppInfraServiceRefV1 {
     /// Validate service reference fields.
     ///
@@ -2505,7 +2430,6 @@ impl SoraAppInfraServiceRefV1 {
         Ok(())
     }
 }
-
 /// Canonical app-level Soracloud infrastructure manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2527,14 +2451,12 @@ pub struct SoraAppInfraManifestV1 {
     /// Authoritative service topology.
     pub services: Vec<SoraAppInfraServiceRefV1>,
 }
-
 impl SoraAppInfraManifestV1 {
     /// Compute the canonical app-infra manifest hash.
     #[must_use]
     pub fn manifest_hash(&self) -> Hash {
         Hash::new(Encode::encode(self))
     }
-
     /// Validate app topology invariants.
     ///
     /// # Errors
@@ -2569,7 +2491,6 @@ impl SoraAppInfraManifestV1 {
         Ok(())
     }
 }
-
 /// Authoritative app-level Soracloud infrastructure state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2594,7 +2515,6 @@ pub struct SoraAppInfraStateV1 {
     /// Active app topology manifest.
     pub manifest: SoraAppInfraManifestV1,
 }
-
 impl SoraAppInfraStateV1 {
     /// Validate app topology state.
     ///
@@ -2638,7 +2558,6 @@ impl SoraAppInfraStateV1 {
         Ok(())
     }
 }
-
 /// Audit record for an authoritative Soracloud app topology event.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2666,7 +2585,6 @@ pub struct SoraAppInfraAuditEventV1 {
     /// Provenance signer that authorized the topology transition.
     pub signer: PublicKey,
 }
-
 impl SoraAppInfraAuditEventV1 {
     /// Validate app topology audit records.
     ///
@@ -2705,7 +2623,6 @@ impl SoraAppInfraAuditEventV1 {
         )
     }
 }
-
 /// Audit record for an authoritative Soracloud lifecycle event.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2769,7 +2686,6 @@ pub struct SoraServiceAuditEventV1 {
     /// Provenance signer that authorized the lifecycle action.
     pub signer: PublicKey,
 }
-
 impl SoraServiceAuditEventV1 {
     /// Validate Soracloud lifecycle audit records.
     ///
@@ -2781,14 +2697,12 @@ impl SoraServiceAuditEventV1 {
         self.validate_optional_fields()?;
         self.validate_break_glass_fields()
     }
-
     fn validate_required_fields(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora service audit event",
             self.schema_version,
             SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
         )?;
-
         if self.sequence == 0 {
             return Err(invalid_field(
                 "sora service audit event",
@@ -2796,7 +2710,6 @@ impl SoraServiceAuditEventV1 {
                 "must be greater than zero",
             ));
         }
-
         if self
             .from_version
             .as_ref()
@@ -2808,7 +2721,6 @@ impl SoraServiceAuditEventV1 {
                 "must not be empty when provided",
             ));
         }
-
         validate_nonblank_field("sora service audit event", "to_version", &self.to_version)?;
         validate_soracloud_digest_hash(
             "sora service audit event",
@@ -2822,7 +2734,6 @@ impl SoraServiceAuditEventV1 {
         )?;
         Ok(())
     }
-
     fn validate_optional_fields(&self) -> Result<(), SoracloudManifestError> {
         if self
             .rollout_handle
@@ -2835,7 +2746,6 @@ impl SoraServiceAuditEventV1 {
                 "must not be empty when provided",
             ));
         }
-
         if self
             .state_key
             .as_ref()
@@ -2898,7 +2808,6 @@ impl SoraServiceAuditEventV1 {
         }
         Ok(())
     }
-
     fn validate_break_glass_fields(&self) -> Result<(), SoracloudManifestError> {
         if self
             .break_glass_reason
@@ -2928,7 +2837,6 @@ impl SoraServiceAuditEventV1 {
         Ok(())
     }
 }
-
 /// Runtime health status observed for a materialized service revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
@@ -2947,7 +2855,6 @@ pub enum SoraServiceHealthStatusV1 {
     /// Revision is not fit to serve traffic.
     Unavailable,
 }
-
 /// Authoritative runtime state for the active revision of a service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2976,7 +2883,6 @@ pub struct SoraServiceRuntimeStateV1 {
     #[norito(default)]
     pub last_receipt_id: Option<Hash>,
 }
-
 impl SoraServiceRuntimeStateV1 {
     /// Validate runtime-state bounds and formatting.
     ///
@@ -2989,13 +2895,11 @@ impl SoraServiceRuntimeStateV1 {
             self.schema_version,
             SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
         )?;
-
         validate_nonblank_field(
             "sora service runtime state",
             "active_service_version",
             &self.active_service_version,
         )?;
-
         if self.load_factor_bps > 10_000 {
             return Err(invalid_field(
                 "sora service runtime state",
@@ -3003,7 +2907,6 @@ impl SoraServiceRuntimeStateV1 {
                 "must be within 0..=10_000",
             ));
         }
-
         if let Some(handle) = self.rollout_handle.as_ref()
             && handle.trim().is_empty()
         {
@@ -3025,11 +2928,9 @@ impl SoraServiceRuntimeStateV1 {
                 last_receipt_id,
             )?;
         }
-
         Ok(())
     }
 }
-
 /// Authoritative runtime state for one placed Inrou replica slot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3073,7 +2974,6 @@ pub struct SoraInrouReplicaRuntimeStateV1 {
     #[norito(default)]
     pub last_error: Option<String>,
 }
-
 impl SoraInrouReplicaRuntimeStateV1 {
     /// Validate per-replica runtime-state bounds and formatting.
     ///
@@ -3128,7 +3028,6 @@ impl SoraInrouReplicaRuntimeStateV1 {
         Ok(())
     }
 }
-
 /// Ordered asynchronous mailbox message used for replicated cross-service calls.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3160,7 +3059,6 @@ pub struct SoraServiceMailboxMessageV1 {
     #[norito(default)]
     pub expires_at_sequence: Option<u64>,
 }
-
 impl SoraServiceMailboxMessageV1 {
     /// Validate deterministic mailbox-message ordering constraints.
     ///
@@ -3183,7 +3081,6 @@ impl SoraServiceMailboxMessageV1 {
             "payload_commitment",
             self.payload_commitment,
         )?;
-
         if self.available_after_sequence < self.enqueue_sequence {
             return Err(invalid_field(
                 "sora service mailbox message",
@@ -3191,7 +3088,6 @@ impl SoraServiceMailboxMessageV1 {
                 "must be >= enqueue_sequence",
             ));
         }
-
         if Hash::new(self.payload_bytes.as_slice()) != self.payload_commitment {
             return Err(invalid_field(
                 "sora service mailbox message",
@@ -3199,7 +3095,6 @@ impl SoraServiceMailboxMessageV1 {
                 "must match payload_bytes",
             ));
         }
-
         if let Some(expires_at) = self.expires_at_sequence
             && expires_at <= self.available_after_sequence
         {
@@ -3209,11 +3104,9 @@ impl SoraServiceMailboxMessageV1 {
                 "must be greater than available_after_sequence",
             ));
         }
-
         Ok(())
     }
 }
-
 /// Authoritative execution receipt emitted by the generic Soracloud runtime.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3260,7 +3153,6 @@ pub struct SoraRuntimeReceiptV1 {
     #[norito(default)]
     pub checkpoint_artifact_hash: Option<Hash>,
 }
-
 impl SoraRuntimeReceiptV1 {
     /// Validate runtime-receipt classification and certification rules.
     ///
@@ -3273,7 +3165,6 @@ impl SoraRuntimeReceiptV1 {
             self.schema_version,
             SORA_RUNTIME_RECEIPT_VERSION_V1,
         )?;
-
         validate_nonblank_field(
             "sora runtime receipt",
             "service_version",
@@ -3329,7 +3220,6 @@ impl SoraRuntimeReceiptV1 {
                 "placement attribution must provide placement_id, selected_validator_account_id, and selected_peer_id together",
             ));
         }
-
         match self.handler_class {
             SoraServiceHandlerClassV1::Asset | SoraServiceHandlerClassV1::Query => {
                 if self.certified_by == SoraCertifiedResponsePolicyV1::None {
@@ -3357,7 +3247,6 @@ impl SoraRuntimeReceiptV1 {
                 }
             }
         }
-
         Ok(())
     }
 }

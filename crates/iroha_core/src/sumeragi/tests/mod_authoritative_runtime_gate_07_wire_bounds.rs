@@ -6,7 +6,6 @@ fn fair_v2_ingress_maximum_merge_sidecar_chunk_frame_matches_canonical_wire() {
         CertifiedMergeSidecarServiceGenerationV1, CertifiedMergeSidecarStreamEpochV1,
         MAX_CERTIFIED_MERGE_CHUNK_BYTES,
     };
-
     let peers = validator_peers(2);
     let requester = peers.first().expect("requester fixture").clone();
     let responder = peers.get(1).expect("responder fixture").clone();
@@ -23,7 +22,6 @@ fn fair_v2_ingress_maximum_merge_sidecar_chunk_frame_matches_canonical_wire() {
         responder_key_bytes.len(),
         "the exact fixture helper takes one shared embedded key width"
     );
-
     let message = crate::NetworkMessage::CertifiedMergeSidecar(Arc::new(
         CertifiedMergeSidecarMessage::Chunk(CertifiedMergeSidecarChunkV1 {
             version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
@@ -54,7 +52,6 @@ fn fair_v2_ingress_maximum_merge_sidecar_chunk_frame_matches_canonical_wire() {
         required_network_message_bytes,
         "allocation-free geometry must equal the maximum wrapped canonical chunk"
     );
-
     let exact_frame = iroha_p2p::network::data_frame_wire_len(
         &responder,
         Some(&requester),
@@ -76,7 +73,6 @@ fn fair_v2_ingress_maximum_merge_sidecar_chunk_frame_matches_canonical_wire() {
         "feature-independent maximum-key geometry must cover the concrete fixture"
     );
 }
-
 #[test]
 fn fair_v2_ingress_minimal_layout_enforces_exact_block_sync_frame_boundary() {
     let layout = minimal_rs16_layout();
@@ -105,7 +101,6 @@ fn fair_v2_ingress_minimal_layout_enforces_exact_block_sync_frame_boundary() {
             .max(required_block_sync),
     )
     .expect("minimal-context outbound charge is representable");
-
     let ordinary_bytes = super::MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES;
     let certified_bytes = super::fair_v2_ingress_required_certified_fence_escape_bytes(1);
     let completion_bytes = super::MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES;
@@ -131,13 +126,11 @@ fn fair_v2_ingress_minimal_layout_enforces_exact_block_sync_frame_boundary() {
             None,
         )
     };
-
     let exact = ingress_with_transport_caps(required_block_sync, required_outbound);
     exact
         .configure_roster_for_context([validator.clone()], &network_id, layout)
         .expect("the exact transport frame caps must activate");
     exact.open().expect("the exact transport caps must open");
-
     let short = ingress_with_transport_caps(
         required_block_sync
             .checked_sub(1)
@@ -154,7 +147,6 @@ fn fair_v2_ingress_minimal_layout_enforces_exact_block_sync_frame_boundary() {
         super::FairV2IngressCapacityKind::BlockSyncFrameBytes
     );
     assert_eq!(short.open(), Err(error));
-
     let outbound_short = ingress_with_transport_caps(required_block_sync, required_outbound - 1);
     let outbound_error = outbound_short
         .configure_roster_for_context([validator], &network_id, layout)

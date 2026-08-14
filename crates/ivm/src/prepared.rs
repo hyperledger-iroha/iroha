@@ -1,14 +1,4 @@
 //! Immutable, validated contract programs prepared for repeated IVM execution.
-
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    fmt,
-    sync::Arc,
-};
-
-use iroha_crypto::Hash;
-use iroha_data_model::smart_contract::manifest::ContractManifest;
-
 use crate::{
     ProgramMetadata, VMError,
     instruction::wide,
@@ -16,14 +6,19 @@ use crate::{
     ivm_cache::DecodedOp,
     metadata::{EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor},
 };
-
+use iroha_crypto::Hash;
+use iroha_data_model::smart_contract::manifest::ContractManifest;
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fmt,
+    sync::Arc,
+};
 #[derive(Clone, Copy, Debug)]
 struct PreparedEntrypointIndex {
     descriptor_index: usize,
     absolute_pc: u64,
     requires_private_inputs: bool,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct PreparedControlFlowNode {
     pc: u64,
@@ -31,7 +26,6 @@ struct PreparedControlFlowNode {
     successor_count: u8,
     has_indirect_successor: bool,
 }
-
 impl PreparedControlFlowNode {
     fn new(pc: u64) -> Self {
         Self {
@@ -41,7 +35,6 @@ impl PreparedControlFlowNode {
             has_indirect_successor: false,
         }
     }
-
     fn push_successor(&mut self, target: u64) -> Result<(), VMError> {
         let index = usize::from(self.successor_count);
         let Some(slot) = self.successors.get_mut(index) else {
@@ -51,24 +44,20 @@ impl PreparedControlFlowNode {
         self.successor_count = self.successor_count.saturating_add(1);
         Ok(())
     }
-
     fn successors(&self) -> &[u64] {
         &self.successors[..usize::from(self.successor_count)]
     }
 }
-
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedControlFlow {
     boundaries: Arc<[u64]>,
     nodes: Arc<[PreparedControlFlowNode]>,
 }
-
 impl PreparedControlFlow {
     pub(crate) fn from_decoded(decoded: &[DecodedOp]) -> Result<Self, VMError> {
         let boundaries = decoded.iter().map(|op| op.pc).collect::<Vec<_>>();
         let is_boundary = |pc: u64| boundaries.binary_search(&pc).is_ok();
         let mut nodes = Vec::with_capacity(decoded.len());
-
         for op in decoded {
             let opcode = wide::opcode(op.inst);
             let fallthrough = op.pc.checked_add(u64::from(op.len));
@@ -136,13 +125,11 @@ impl PreparedControlFlow {
             }
             nodes.push(node);
         }
-
         Ok(Self {
             boundaries: Arc::from(boundaries.into_boxed_slice()),
             nodes: Arc::from(nodes.into_boxed_slice()),
         })
     }
-
     fn node(&self, pc: u64) -> Option<&PreparedControlFlowNode> {
         let index = self.boundaries.binary_search(&pc).ok()?;
         let node = self.nodes.get(index)?;
@@ -150,7 +137,6 @@ impl PreparedControlFlow {
         Some(node)
     }
 }
-
 fn direct_target(op: &DecodedOp) -> Option<u64> {
     let offset_words = match wide::opcode(op.inst) {
         wide::control::BEQ
@@ -168,7 +154,6 @@ fn direct_target(op: &DecodedOp) -> Option<u64> {
         .checked_add(i128::from(byte_offset))
         .and_then(|target| u64::try_from(target).ok())
 }
-
 fn decoded_syscall_number(op: &DecodedOp) -> Option<u32> {
     match wide::opcode(op.inst) {
         wide::system::SCALL => Some(u32::from(wide::imm8(op.inst) as u8)),
@@ -176,7 +161,6 @@ fn decoded_syscall_number(op: &DecodedOp) -> Option<u32> {
         _ => None,
     }
 }
-
 fn entrypoint_reaches_private_input(
     decoded: &[DecodedOp],
     control_flow: &PreparedControlFlow,
@@ -200,7 +184,6 @@ fn entrypoint_reaches_private_input(
     }
     Ok(false)
 }
-
 pub(crate) struct PreparedContractParts {
     pub(crate) artifact: Arc<[u8]>,
     pub(crate) metadata: ProgramMetadata,
@@ -214,7 +197,6 @@ pub(crate) struct PreparedContractParts {
     pub(crate) prepared_program: PreparedProgram,
     pub(crate) control_flow: PreparedControlFlow,
 }
-
 struct PreparedContractInner {
     artifact: Arc<[u8]>,
     metadata: ProgramMetadata,
@@ -230,7 +212,6 @@ struct PreparedContractInner {
     prepared_program: PreparedProgram,
     control_flow: PreparedControlFlow,
 }
-
 /// Immutable validated contract artifact ready for repeated IVM loading.
 ///
 /// Cloning this value only clones one [`Arc`]. The complete deployable image,
@@ -240,7 +221,6 @@ struct PreparedContractInner {
 pub struct PreparedContract {
     inner: Arc<PreparedContractInner>,
 }
-
 impl PreparedContract {
     pub(crate) fn from_parts(parts: PreparedContractParts) -> Result<Self, VMError> {
         let instruction_entry_pc = parts
@@ -292,19 +272,16 @@ impl PreparedContract {
             }),
         })
     }
-
     /// Return the canonical full-artifact hash used as the preparation key.
     #[must_use]
     pub fn code_hash(&self) -> Hash {
         self.inner.code_hash
     }
-
     /// Return the complete canonical deployable `.to` image.
     #[must_use]
     pub fn artifact(&self) -> &[u8] {
         &self.inner.artifact
     }
-
     /// Clone the shared complete canonical deployable `.to` image.
     ///
     /// This is intended for asynchronous consumers that must retain the
@@ -314,13 +291,11 @@ impl PreparedContract {
     pub fn shared_artifact(&self) -> Arc<[u8]> {
         Arc::clone(&self.inner.artifact)
     }
-
     /// Return the parsed execution metadata.
     #[must_use]
     pub fn metadata(&self) -> &ProgramMetadata {
         &self.inner.metadata
     }
-
     /// Return the manifest derived from the validated artifact.
     ///
     /// The manifest is retained with the prepared contract so admission and
@@ -330,29 +305,24 @@ impl PreparedContract {
     pub fn manifest(&self) -> &ContractManifest {
         &self.inner.manifest
     }
-
     /// Return the fixed metadata-header length.
     #[must_use]
     pub fn header_len(&self) -> usize {
         self.inner.header_len
     }
-
     /// Return the artifact offset of the executable instruction stream.
     #[must_use]
     pub fn code_offset(&self) -> usize {
         self.inner.code_offset
     }
-
     /// Return the decoded, validated contract interface.
     #[must_use]
     pub fn contract_interface(&self) -> &EmbeddedContractInterfaceV1 {
         &self.inner.contract_interface
     }
-
     pub(crate) fn shared_contract_interface(&self) -> Arc<EmbeddedContractInterfaceV1> {
         Arc::clone(&self.inner.contract_interface)
     }
-
     /// Resolve an entrypoint to its absolute PC in IVM code memory.
     #[must_use]
     pub fn entrypoint_pc(&self, name: &str) -> Option<u64> {
@@ -361,14 +331,12 @@ impl PreparedContract {
             .get(name)
             .map(|entrypoint| entrypoint.absolute_pc)
     }
-
     /// Resolve an entrypoint descriptor without reparsing the embedded interface.
     #[must_use]
     pub fn entrypoint_descriptor(&self, name: &str) -> Option<&EmbeddedEntrypointDescriptor> {
         let index = self.inner.entrypoints.get(name)?.descriptor_index;
         self.inner.contract_interface.entrypoints.get(index)
     }
-
     /// Return whether validated bytecode reachable from `name` reads a private witness.
     ///
     /// This fact is derived from the complete decoded call graph while the
@@ -380,13 +348,11 @@ impl PreparedContract {
             .get(name)
             .map(|entrypoint| entrypoint.requires_private_inputs)
     }
-
     /// Return the validated relative instruction boundaries.
     #[must_use]
     pub fn instruction_boundaries(&self) -> &[u64] {
         &self.inner.control_flow.boundaries
     }
-
     /// Return whether `relative_pc` is a validated instruction boundary.
     #[must_use]
     pub fn is_instruction_boundary(&self, relative_pc: u64) -> bool {
@@ -396,7 +362,6 @@ impl PreparedContract {
             .binary_search(&relative_pc)
             .is_ok()
     }
-
     /// Return statically known successor PCs for a relative instruction PC.
     ///
     /// An empty slice represents a halt, return, or unverifiable indirect edge.
@@ -407,7 +372,6 @@ impl PreparedContract {
             .node(relative_pc)
             .map(PreparedControlFlowNode::successors)
     }
-
     /// Return whether a relative instruction has an indirect control-flow edge.
     #[must_use]
     pub fn has_indirect_control_flow(&self, relative_pc: u64) -> bool {
@@ -416,28 +380,22 @@ impl PreparedContract {
             .node(relative_pc)
             .is_some_and(|node| node.has_indirect_successor)
     }
-
     pub(crate) fn code_region(&self) -> &[u8] {
         &self.inner.artifact[self.inner.header_len..]
     }
-
     pub(crate) fn instruction_entry_pc(&self) -> u64 {
         self.inner.instruction_entry_pc
     }
-
     pub(crate) fn literal_table(&self) -> &DecodedLiteralTable {
         &self.inner.literal_table
     }
-
     pub(crate) fn decoded(&self) -> &Arc<[DecodedOp]> {
         &self.inner.decoded
     }
-
     pub(crate) fn prepared_program(&self) -> &PreparedProgram {
         &self.inner.prepared_program
     }
 }
-
 impl fmt::Debug for PreparedContract {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter

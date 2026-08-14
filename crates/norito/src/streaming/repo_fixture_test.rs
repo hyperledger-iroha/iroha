@@ -1,5 +1,4 @@
 // Repository-fixture coverage for deterministic bundled rANS tables.
-
 #[test]
 fn load_bundle_tables_accepts_repo_fixture() {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

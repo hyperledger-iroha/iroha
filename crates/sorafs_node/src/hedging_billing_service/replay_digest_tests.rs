@@ -17,14 +17,12 @@ fn cross_peer_old_page_replay_is_exact_and_equivocation_safe() {
             .expect("old exact cross-peer replay"),
         HedgingBillingIngestOutcomeV1::Replay { next_sequence: 3 }
     );
-
     let forged = page(vec![event(1, "storage:event:1", "11")]);
     assert!(matches!(
         service.ingest_finalized_page(&forged),
         Err(HedgingBillingServiceError::FinalizedEventEquivocation)
     ));
 }
-
 #[test]
 fn event_replay_digest_binds_network_and_exact_event() {
     let first_network = test_network_id(b"billing-network-a");
@@ -32,7 +30,6 @@ fn event_replay_digest_binds_network_and_exact_event() {
     let first_event = event(1, "storage:event:1", "10");
     let mut changed_event = first_event.clone();
     changed_event.quantity_units = 2;
-
     let first_digest = event_replay_digest(first_network, &first_event).expect("digest");
     eprintln!(
         "billing replay compatibility digest: {}",

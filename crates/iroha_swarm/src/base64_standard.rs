@@ -1,23 +1,18 @@
 //! Canonical RFC 4648 standard-alphabet Base64 encoding.
-
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
 fn symbol(index: u8) -> char {
     char::from(ALPHABET[usize::from(index)])
 }
-
 /// Encodes bytes with the RFC 4648 standard alphabet and mandatory padding.
 pub(super) fn encode(bytes: &[u8]) -> String {
     let mut encoded = String::with_capacity(bytes.len().div_ceil(3).saturating_mul(4));
     let mut chunks = bytes.chunks_exact(3);
-
     for chunk in &mut chunks {
         encoded.push(symbol(chunk[0] >> 2));
         encoded.push(symbol(((chunk[0] & 0x03) << 4) | (chunk[1] >> 4)));
         encoded.push(symbol(((chunk[1] & 0x0f) << 2) | (chunk[2] >> 6)));
         encoded.push(symbol(chunk[2] & 0x3f));
     }
-
     match chunks.remainder() {
         [] => {}
         [first] => {
@@ -34,14 +29,11 @@ pub(super) fn encode(bytes: &[u8]) -> String {
         }
         _ => unreachable!("chunks_exact(3) leaves at most two bytes"),
     }
-
     encoded
 }
-
 #[cfg(test)]
 mod tests {
     use super::encode;
-
     #[test]
     fn matches_rfc_4648_test_vectors() {
         for (plain, expected) in [
@@ -56,7 +48,6 @@ mod tests {
             assert_eq!(encode(plain), expected);
         }
     }
-
     #[test]
     fn encodes_binary_remainder_lengths_with_canonical_padding() {
         for (plain, expected) in [

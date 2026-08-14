@@ -1,5 +1,4 @@
 //! Musubi package-manager library entrypoint.
-
 pub mod archive_fetch;
 mod atomic_io;
 pub mod cache;
@@ -19,7 +18,6 @@ mod registry_cache;
 mod resolver;
 mod test_runner;
 pub mod workspace;
-
 /// Run the Musubi command-line interface.
 ///
 /// Return the stable process exit status after writing routed command output.

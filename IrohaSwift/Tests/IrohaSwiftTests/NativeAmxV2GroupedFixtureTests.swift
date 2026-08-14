@@ -656,9 +656,17 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [NativeAmxGroupedEndpointURLProtocol.self]
         let session = URLSession(configuration: configuration)
+        let operatorSigningKey = try SigningKey.ed25519(
+            privateKey: Data(repeating: 0x6B, count: 32)
+        )
+        let operatorSigningContext = try ToriiOperatorSigningContext(
+            networkId: TestNetworkIds.canonical,
+            signingKey: operatorSigningKey
+        )
         let client = ToriiClient(
             baseURL: URL(string: "https://native-amx-grouped.test")!,
-            session: session
+            session: session,
+            operatorSigningContext: operatorSigningContext
         )
         defer {
             NativeAmxGroupedEndpointURLProtocol.handler = nil

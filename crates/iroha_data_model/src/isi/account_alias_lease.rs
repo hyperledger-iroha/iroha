@@ -3,9 +3,7 @@
 //! New callers should use [`super::alias_setup::EnsureAlias`]. This instruction
 //! remains registered so BOI participants built against the pre-declarative
 //! alias API can submit the same lease request into the current SNS engine.
-
 use super::*;
-
 isi! {
     /// Acquire a finite SNS lease for an account alias.
     pub struct AcquireAccountAliasLease {
@@ -22,11 +20,9 @@ isi! {
         pub pricing_class_hint: Option<u8>,
     }
 }
-
 impl AcquireAccountAliasLease {
     /// Stable legacy wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.account.alias.lease.acquire";
-
     /// Construct a paid alias lease-acquisition instruction.
     #[must_use]
     pub fn new(
@@ -45,9 +41,7 @@ impl AcquireAccountAliasLease {
         }
     }
 }
-
 impl crate::seal::Instruction for AcquireAccountAliasLease {}
-
 impl<'a> norito::core::DecodeFromSlice<'a> for AcquireAccountAliasLease {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -55,7 +49,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AcquireAccountAliasLease {
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
-
         let mut offset = 0usize;
         let alias = super::decode_aos_canonical_field::<crate::account::rekey::AccountAlias>(
             super::read_aos_field(bytes, &mut offset, flags)?,
@@ -97,24 +90,20 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AcquireAccountAliasLease {
         ))
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
-    use norito::core::DecodeFromSlice;
-
     use super::*;
     use crate::{
         account::rekey::{AccountAlias, AccountAliasDomain},
         nexus::DataSpaceId,
     };
-
+    use iroha_crypto::{Algorithm, KeyPair};
+    use norito::core::DecodeFromSlice;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive account-alias fixture keypair");
         AccountId::new(key_pair.public_key().clone())
     }
-
     #[test]
     fn legacy_acquire_alias_roundtrips() {
         let alias = AccountAlias::new(

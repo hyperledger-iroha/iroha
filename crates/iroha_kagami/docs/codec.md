@@ -48,6 +48,15 @@ Algorithm
 Both commands by default read data from `stdin` and print result to `stdout`.
 There are flags `--input` and `--output` which can be used to read/write from files instead.
 
+Codec input and rendered output are limited to 64 MiB, matching the
+first-release signed-genesis artifact corridor (the largest registered codec
+type). JSON input is lexically preflighted and typed decoding uses fixed
+element, allocation, and nesting budgets before any converter is entered.
+Inputs above these limits are rejected; split unrelated records instead of
+combining them into one codec invocation. Type guessing evaluates converters
+in deterministic order and applies the same 64 MiB ceiling to all retained
+matches together.
+
 These commands require `--type` argument. If data type is not known, [`norito-to-rust`](#norito-to-rust) can be used to detect it.
 
 * Decode the specified data type from a binary:

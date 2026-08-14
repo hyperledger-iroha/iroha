@@ -853,15 +853,22 @@ def _package_source_closure(
 
 
 def _is_build_package_path(relative: Path, package_directories: Iterable[Path]) -> bool:
-    for package in package_directories:
-        if relative == package or package not in relative.parents:
-            continue
-        package_relative = relative.relative_to(package)
-        return not (
-            package_relative.parts
-            and package_relative.parts[0] in NON_BUILD_PACKAGE_TREES
-        )
-    return False
+    package = max(
+        (
+            candidate
+            for candidate in package_directories
+            if relative != candidate and candidate in relative.parents
+        ),
+        key=lambda candidate: len(candidate.parts),
+        default=None,
+    )
+    if package is None:
+        return False
+    package_relative = relative.relative_to(package)
+    return not (
+        package_relative.parts
+        and package_relative.parts[0] in NON_BUILD_PACKAGE_TREES
+    )
 
 
 def _build_package_paths(

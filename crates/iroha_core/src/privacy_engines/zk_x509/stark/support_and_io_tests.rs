@@ -1,14 +1,11 @@
 // Lexically included by `zk_x509::stark::tests` to preserve the existing libtest paths.
-
 use std::{
     collections::BTreeSet,
     sync::{Mutex, OnceLock},
 };
-
 use iroha_crypto::{Hash, HashOf};
 use rand::{RngCore, SeedableRng as _, rngs::StdRng};
 use sha2::{Digest as _, Sha256};
-
 use super::*;
 use crate::privacy_engines::zk_x509::{
     der_air::ZkX509DerEkuV1, der_stark::ZkX509DerStarkPrivateShapeV1, io_air::ZkX509IoEndpointV1,
@@ -27,25 +24,20 @@ use iroha_data_model::{
         PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509TrustAnchorRecordDigestV1,
     },
 };
-
 static PROOF_TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-
 fn proof_guard() -> std::sync::MutexGuard<'static, ()> {
     PROOF_TEST_MUTEX
         .get_or_init(|| Mutex::new(()))
         .lock()
         .expect("zk-X509 STARK proof mutex")
 }
-
 fn extension_v1(value: F) -> E {
     E::from_base(value)
 }
-
 const TERMINAL_TEST_HEADER_BYTES_V1: usize = 12;
 const TERMINAL_TEST_RECORD_BYTES_V1: usize = 16;
 const TERMINAL_TEST_VALUE_OFFSET_V1: usize = 8;
 const TEST_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [0x93; 32];
-
 fn overwrite_main_terminal_record_value_v1(
     encoded: &mut [u8],
     frame_offset: usize,
@@ -58,7 +50,6 @@ fn overwrite_main_terminal_record_value_v1(
         + TERMINAL_TEST_VALUE_OFFSET_V1;
     encoded[start..start + 8].copy_from_slice(&value.0.to_be_bytes());
 }
-
 #[test]
 fn main_transcript_is_release_only_and_domain_separated() {
     let public_digest = [0x71; 32];
@@ -78,12 +69,10 @@ fn main_transcript_is_release_only_and_domain_separated() {
         new_main_transcript_after_profile_validation_v1(&[0x72; 32], first_release_digest)
             .expect("public-bound release transcript");
     let focused = new_transcript_v1(&public_digest).expect("focused transcript");
-
     assert_ne!(first.state(), second.state());
     assert_ne!(first.state(), changed_public.state());
     assert_ne!(first.state(), focused.state());
 }
-
 #[derive(Default)]
 struct MockMainTraceGroupSourceV1 {
     short_base_column: bool,
@@ -93,7 +82,6 @@ struct MockMainTraceGroupSourceV1 {
     short_residues: bool,
     noncanonical_residues: bool,
 }
-
 fn mock_main_column_value_v1(
     registration: RegisteredSegmentLayoutV1,
     local_column: usize,
@@ -106,7 +94,6 @@ fn mock_main_column_value_v1(
         + u64::try_from(row % 97).expect("small row residue")
         + u64::from(u8::from(aux)))
 }
-
 fn mock_main_residue_value_v1(
     registration: RegisteredSegmentLayoutV1,
     query_index: usize,
@@ -130,7 +117,6 @@ fn mock_main_residue_value_v1(
         .add(F(u64::try_from(query_index).expect("log25 query fits u64")))
         .add(F(x.0 % 257))
 }
-
 fn mock_main_fixed_row_v1(registration: RegisteredSegmentLayoutV1, query_index: usize) -> Vec<F> {
     (0..registration.segment.fixed_width)
         .map(|column| {
@@ -141,7 +127,6 @@ fn mock_main_fixed_row_v1(registration: RegisteredSegmentLayoutV1, query_index: 
         })
         .collect()
 }
-
 impl MainTraceGroupSourceV1 for MockMainTraceGroupSourceV1 {
     fn native_base_column_v1(
         &mut self,
@@ -162,7 +147,6 @@ impl MainTraceGroupSourceV1 for MockMainTraceGroupSourceV1 {
                 .collect(),
         ))
     }
-
     fn native_aux_column_v1(
         &mut self,
         registration: RegisteredSegmentLayoutV1,
@@ -180,7 +164,6 @@ impl MainTraceGroupSourceV1 for MockMainTraceGroupSourceV1 {
         Ok(ZeroizingMainTraceColumnV1(column))
     }
 }
-
 impl MainOpenedConstraintTestSourceV1 for MockMainTraceGroupSourceV1 {
     fn fixed_opened_rows_v1(
         &mut self,
@@ -200,7 +183,6 @@ impl MainOpenedConstraintTestSourceV1 for MockMainTraceGroupSourceV1 {
         }
         Ok(fixed)
     }
-
     fn constraint_residues_v1(
         &mut self,
         registration: RegisteredSegmentLayoutV1,
@@ -222,7 +204,6 @@ impl MainOpenedConstraintTestSourceV1 for MockMainTraceGroupSourceV1 {
         Ok(residues)
     }
 }
-
 fn mock_main_group_providers_v1<'a>(
     sources: [&'a mut MockMainTraceGroupSourceV1; FULL_PROFILE_TRACE_GROUPS_V1],
 ) -> Vec<MainTraceGroupProviderV1<'a>> {
@@ -236,7 +217,6 @@ fn mock_main_group_providers_v1<'a>(
         MainTraceGroupProviderV1::Log19(log19),
     ]
 }
-
 fn mock_main_opened_group_providers_v1<'a>(
     sources: [&'a mut MockMainTraceGroupSourceV1; FULL_PROFILE_TRACE_GROUPS_V1],
 ) -> Vec<MainOpenedGroupProviderV1<'a>> {
@@ -250,7 +230,6 @@ fn mock_main_opened_group_providers_v1<'a>(
         MainOpenedGroupProviderV1::TestLog19(log19),
     ]
 }
-
 fn mock_main_opened_groups_v1(
     layout: &AggregateProofLayoutV1,
 ) -> Vec<aggregate::AggregateOpenedTraceGroupV1> {
@@ -277,7 +256,6 @@ fn mock_main_opened_groups_v1(
         })
         .collect()
 }
-
 fn mock_main_alphas_v1(layout: &AggregateProofLayoutV1) -> Vec<Vec<Vec<E>>> {
     layout
         .registered_segments
@@ -296,7 +274,6 @@ fn mock_main_alphas_v1(layout: &AggregateProofLayoutV1) -> Vec<Vec<Vec<E>>> {
         })
         .collect()
 }
-
 fn mock_main_mixes_v1(layout: &AggregateProofLayoutV1) -> Vec<Vec<FriMixV1>> {
     let composition = (0..COMPOSITION_DEGREE_CHUNKS)
         .map(|index| E::from_base(F(u64::try_from(index + 31).expect("small mix"))))
@@ -322,11 +299,9 @@ fn mock_main_mixes_v1(layout: &AggregateProofLayoutV1) -> Vec<Vec<FriMixV1>> {
         })
         .collect()
 }
-
 fn endpoint(role: ZkX509IoSegmentRoleV1, instance: u16) -> ZkX509IoEndpointV1 {
     ZkX509IoEndpointV1 { role, instance }
 }
-
 fn channel(
     channel: u32,
     producer: ZkX509IoEndpointV1,
@@ -346,7 +321,6 @@ fn channel(
         consumer_values: vec![value.to_vec(); consumers.len()],
     }
 }
-
 fn fixture_witnesses() -> Vec<ZkX509IoChannelWitnessV1> {
     vec![
         channel(
@@ -368,7 +342,6 @@ fn fixture_witnesses() -> Vec<ZkX509IoChannelWitnessV1> {
         ),
     ]
 }
-
 fn fixture_statement() -> ZkX509IoStarkStatementV1 {
     ZkX509IoStarkStatementV1::new(
         fixture_witnesses()
@@ -378,7 +351,6 @@ fn fixture_statement() -> ZkX509IoStarkStatementV1 {
     )
     .expect("valid statement")
 }
-
 fn io_challenges_fixture_v1() -> ZkX509IoChallengesV1 {
     let mut transcript = TransparentTranscriptV1::new(
         b"zk-x509-io-logical-active-tests-v1",
@@ -388,7 +360,6 @@ fn io_challenges_fixture_v1() -> ZkX509IoChallengesV1 {
     .expect("I/O test transcript");
     derive_zk_x509_io_challenges_v1(&mut transcript).expect("I/O test challenges")
 }
-
 fn focused_io_material_fixture_v1() -> (IoTraceMaterialV1, ZkX509IoChallengesV1) {
     let statement = fixture_statement();
     let witnesses = fixture_witnesses();
@@ -418,7 +389,6 @@ fn focused_io_material_fixture_v1() -> (IoTraceMaterialV1, ZkX509IoChallengesV1)
         challenges,
     )
 }
-
 fn main_io_topology_source_fixture_v1(
     disclosures: usize,
 ) -> (IrohaZkX509StarkP256StatementV1, ZkX509MainIoBaseMaterialV1) {
@@ -443,7 +413,6 @@ fn main_io_topology_source_fixture_v1(
         },
     )
 }
-
 fn legacy_direct_io_fixed_row_v1(
     statement: &ZkX509IoStarkStatementV1,
     topology_execution: &[IoAccessV1],
@@ -480,7 +449,6 @@ fn legacy_direct_io_fixed_row_v1(
     fixed[FIX_TRANSITION] = transition;
     fixed
 }
-
 #[test]
 fn main_io_statement_only_compiler_matches_every_honest_legacy_fixed_row_and_column() {
     let (statement, source) = main_io_topology_source_fixture_v1(0);
@@ -497,7 +465,6 @@ fn main_io_statement_only_compiler_matches_every_honest_legacy_fixed_row_and_col
         build_zk_x509_io_base_tables_v1(&synthetic).expect("legacy direct topology tables");
     assert_eq!(topology_execution.len(), source.logical_active_rows);
     assert_eq!(topology_sorted.len(), source.logical_active_rows);
-
     for index in 0..registration.segment.trace_size() {
         let compiled = schedule.fixed_row_v1(index).expect("compiled fixed row");
         let legacy = legacy_direct_io_fixed_row_v1(
@@ -514,7 +481,6 @@ fn main_io_statement_only_compiler_matches_every_honest_legacy_fixed_row_and_col
             "all {IO_FIXED_WIDTH} fixed columns must match at MAIN row {index}"
         );
     }
-
     let post_base = projection_provider_post_base_v1(&statement);
     let prover =
         MainIoProverConstraintSourceV1::for_main_v1(&layout, &statement, &source, post_base)
@@ -548,7 +514,6 @@ fn main_io_statement_only_compiler_matches_every_honest_legacy_fixed_row_and_col
     assert_eq!(verifier.fixed_schedule, schedule);
     assert!(verifier.fixed_openings.is_empty());
 }
-
 #[test]
 fn main_io_fixed_same_address_schedule_and_topology_are_independent_of_private_bytes() {
     let statement = fixture_statement();
@@ -563,7 +528,6 @@ fn main_io_fixed_same_address_schedule_and_topology_are_independent_of_private_b
             logical_active_rows,
         )
         .expect("honest fixed schedule");
-
     let mut changed_witnesses = witnesses.clone();
     let private = changed_witnesses
         .iter_mut()
@@ -591,7 +555,6 @@ fn main_io_fixed_same_address_schedule_and_topology_are_independent_of_private_b
             .iter()
             .any(|value| *value == F::ONE)
     );
-
     let schedule = MainIoFixedScheduleV1::compile_v1(layout, &statement, logical_active_rows)
         .expect("statement-only schedule");
     schedule
@@ -615,14 +578,12 @@ fn main_io_fixed_same_address_schedule_and_topology_are_independent_of_private_b
             .is_err()
     );
 }
-
 #[test]
 fn full_main_io_registration_is_capacity_but_d0_through_d4_use_logical_selectors_and_endpoints() {
     let layout = SegmentLayoutV1::for_full_io().expect("full I/O layout");
     assert_eq!(layout.trace_log2, 18);
     assert_eq!(layout.trace_size(), ZK_X509_IO_FIXED_CAPACITY_ROWS_V1);
     assert_eq!(layout.active_rows, ZK_X509_IO_FIXED_CAPACITY_ROWS_V1);
-
     for disclosures in 0..=4 {
         let statement =
             crate::privacy_engines::zk_x509::main_io::tests::statement_with_disclosures_v1(
@@ -664,7 +625,6 @@ fn full_main_io_registration_is_capacity_but_d0_through_d4_use_logical_selectors
             .expect("last capacity row"),
             [F::ZERO, F::ZERO, F::ZERO, F::ZERO]
         );
-
         let current_base = vec![F::ZERO; IO_BASE_WIDTH];
         let next_base = current_base.clone();
         let mut current_aux = vec![F::ZERO; IO_AUX_WIDTH];
@@ -711,7 +671,6 @@ fn full_main_io_registration_is_capacity_but_d0_through_d4_use_logical_selectors
         );
     }
 }
-
 #[test]
 fn io_logical_geometry_rejects_zero_over_capacity_and_noncanonical_two_count_layouts() {
     let full = SegmentLayoutV1::for_full_io().expect("full I/O");
@@ -726,13 +685,11 @@ fn io_logical_geometry_rejects_zero_over_capacity_and_noncanonical_two_count_lay
         )
         .is_err()
     );
-
     let logical_active_rows =
         io_active_rows_v1(fixture_statement().declarations()).expect("focused logical rows");
     let mut noncanonical = SegmentLayoutV1::for_io(logical_active_rows).expect("focused I/O");
     noncanonical.active_rows += 1;
     assert!(validate_io_logical_geometry_v1(noncanonical, logical_active_rows).is_err());
-
     let base = vec![F::ZERO; IO_BASE_WIDTH];
     let aux = vec![F::ZERO; IO_AUX_WIDTH];
     let fixed = vec![F::ZERO; IO_FIXED_WIDTH];
@@ -763,14 +720,12 @@ fn io_logical_geometry_rejects_zero_over_capacity_and_noncanonical_two_count_lay
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
 }
-
 #[test]
 fn io_material_rejects_off_by_one_selectors_padding_forgery_and_continuation_mismatch() {
     let (material, challenges) = focused_io_material_fixture_v1();
     validate_io_trace_material_shape_v1(&material).expect("canonical material shape");
     validate_io_base_constraints_v1(&material, challenges)
         .expect("canonical focused I/O constraints");
-
     let logical = material.logical_active_rows;
     let mut moved_last = material.clone();
     moved_last.fixed_columns[FIX_LAST_ACTIVE][logical - 1] = F::ZERO;
@@ -779,21 +734,18 @@ fn io_material_rejects_off_by_one_selectors_padding_forgery_and_continuation_mis
         validate_io_trace_material_shape_v1(&moved_last),
         Err(ZkX509StarkErrorV1::IoWitness)
     ));
-
     let mut active_padding = material.clone();
     active_padding.fixed_columns[FIX_ACTIVE][logical] = F::ONE;
     assert!(matches!(
         validate_io_trace_material_shape_v1(&active_padding),
         Err(ZkX509StarkErrorV1::IoWitness)
     ));
-
     let mut base_padding = material.clone();
     base_padding.base_columns[EXEC_VALUE][logical] = F::ONE;
     assert!(matches!(
         validate_io_trace_material_shape_v1(&base_padding),
         Err(ZkX509StarkErrorV1::IoWitness)
     ));
-
     let mut wrong_continuation = material.clone();
     wrong_continuation.aux_columns[AUX_CONT_GLOBAL_END][logical] =
         wrong_continuation.aux_columns[AUX_CONT_GLOBAL_END][logical].add(F::ONE);
@@ -801,7 +753,6 @@ fn io_material_rejects_off_by_one_selectors_padding_forgery_and_continuation_mis
         validate_io_trace_material_shape_v1(&wrong_continuation),
         Err(ZkX509StarkErrorV1::IoWitness)
     ));
-
     let mut wrong_logical_count = material;
     wrong_logical_count.logical_active_rows += 1;
     assert!(matches!(
@@ -809,7 +760,6 @@ fn io_material_rejects_off_by_one_selectors_padding_forgery_and_continuation_mis
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
 }
-
 #[test]
 fn phased_full_main_io_provider_enforces_base_then_token_then_aux_and_rejects_tampering() {
     let _guard = proof_guard();
@@ -818,7 +768,6 @@ fn phased_full_main_io_provider_enforces_base_then_token_then_aux_and_rejects_ta
     let registration = layout
         .registered_segment(SegmentAdapterIdV1::ByteMemory, 0)
         .expect("MAIN I/O registration");
-
     let assert_source_rejected = |changed: &ZkX509MainIoBaseMaterialV1| {
         assert!(
             MainIoTraceGroupSourceV1::for_main_v1(&layout, &statement, changed).is_err(),
@@ -904,7 +853,6 @@ fn phased_full_main_io_provider_enforces_base_then_token_then_aux_and_rejects_ta
     changed.witnesses[0].consumer_values.pop();
     assert_source_rejected(&changed);
     drop(changed);
-
     let (other_statement, _) = main_io_topology_source_fixture_v1(1);
     assert!(
         MainIoTraceGroupSourceV1::for_main_v1(&layout, &other_statement, &source).is_err(),
@@ -919,7 +867,6 @@ fn phased_full_main_io_provider_enforces_base_then_token_then_aux_and_rejects_ta
         MainIoTraceGroupSourceV1::for_main_v1(&isolated_io_layout, &statement, &source).is_err(),
         "production provider requires the exact 49-registration MAIN layout"
     );
-
     let post_base = projection_provider_post_base_v1(&statement);
     let mut failed_bind = MainIoTraceGroupSourceV1::for_main_v1(&layout, &statement, &source)
         .expect("failed-bind adversary base phase");
@@ -935,7 +882,6 @@ fn phased_full_main_io_provider_enforces_base_then_token_then_aux_and_rejects_ta
     ));
     assert!(failed_bind.aux_columns.is_none());
     drop(failed_bind);
-
     let mut provider = MainIoTraceGroupSourceV1::for_main_v1(&layout, &statement, &source)
         .expect("MAIN I/O base phase");
     let logical = source.logical_active_rows;
@@ -972,7 +918,6 @@ fn phased_full_main_io_provider_enforces_base_then_token_then_aux_and_rejects_ta
             .native_base_column_v1(wrong_registration, 0)
             .is_err()
     );
-
     provider.base_columns[EXEC_VALUE][logical] = F::ONE;
     assert!(provider.validate_base_phase_v1().is_err());
     provider.base_columns[EXEC_VALUE][logical] = F::ZERO;
@@ -984,7 +929,6 @@ fn phased_full_main_io_provider_enforces_base_then_token_then_aux_and_rejects_ta
     provider
         .validate_base_phase_v1()
         .expect("restored base phase");
-
     provider
         .bind_challenges_v1(post_base)
         .expect("opaque post-base token binds I/O auxiliary phase");
@@ -1013,7 +957,6 @@ fn phased_full_main_io_provider_enforces_base_then_token_then_aux_and_rejects_ta
             .native_aux_column_v1(wrong_registration, 0)
             .is_err()
     );
-
     let aux_columns = provider.aux_columns.as_ref().expect("bound aux");
     assert!(
         provider
@@ -1041,7 +984,6 @@ fn phased_full_main_io_provider_enforces_base_then_token_then_aux_and_rejects_ta
         assert_eq!(aux_columns[AUX_SORT_BEFORE + lane][logical], final_sort);
         assert_eq!(aux_columns[AUX_SORT_AFTER + lane][capacity - 1], final_sort);
     }
-
     provider.aux_columns.as_mut().expect("bound aux")[AUX_CONT_MEMORY_END][logical] =
         logical_field.add(F::ONE);
     assert!(provider.validate_bound_phase_v1().is_err());
@@ -1066,7 +1008,6 @@ fn phased_full_main_io_provider_enforces_base_then_token_then_aux_and_rejects_ta
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
     ));
 }
-
 #[test]
 fn main_io_verifier_rejects_registration_query_next_x_width_and_noncanonical_without_mutation() {
     let (statement, _) = main_io_topology_source_fixture_v1(0);
@@ -1098,7 +1039,6 @@ fn main_io_verifier_rejects_registration_query_next_x_width_and_noncanonical_wit
         aux_current: &aux,
         aux_next: &aux,
     };
-
     assert!(
         source
             .constraint_residues_v1(
@@ -1148,7 +1088,6 @@ fn main_io_verifier_rejects_registration_query_next_x_width_and_noncanonical_wit
             )
             .is_err()
     );
-
     let short_base = vec![F::ZERO; registration.segment.base_width - 1];
     let short_opening = RegisteredOpenedRowsV1 {
         base_current: &short_base,
@@ -1185,7 +1124,6 @@ fn main_io_verifier_rejects_registration_query_next_x_width_and_noncanonical_wit
             )
             .is_err()
     );
-
     let mut noncanonical_base = base.clone();
     noncanonical_base[0] = F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1);
     let noncanonical_opening = RegisteredOpenedRowsV1 {
@@ -1224,7 +1162,6 @@ fn main_io_verifier_rejects_registration_query_next_x_width_and_noncanonical_wit
             )
             .is_err()
     );
-
     assert!(
         source.fixed_openings.is_empty(),
         "every invalid request must reject before sampling"
@@ -1232,7 +1169,6 @@ fn main_io_verifier_rejects_registration_query_next_x_width_and_noncanonical_wit
     assert_eq!(source.fixed_schedule, original_schedule);
     assert_eq!(source.challenges, original_challenges);
 }
-
 #[test]
 fn main_io_closed_log18_verifier_matches_prover_residues_and_reuses_bounded_cache() {
     let (statement, source) = main_io_topology_source_fixture_v1(0);
@@ -1261,7 +1197,6 @@ fn main_io_closed_log18_verifier_matches_prover_residues_and_reuses_bounded_cach
         aux_current: &aux,
         aux_next: &aux,
     };
-
     let mut log5 = MockMainTraceGroupSourceV1::default();
     let mut log8 = MockMainTraceGroupSourceV1::default();
     let mut log15 = MockMainTraceGroupSourceV1::default();
@@ -1284,7 +1219,6 @@ fn main_io_closed_log18_verifier_matches_prover_residues_and_reuses_bounded_cach
         .expect("closed log-18 I/O verifier route");
     drop(providers);
     assert_eq!(verifier.fixed_openings.len(), 2);
-
     let verifier_fixed = *verifier
         .fixed_openings
         .get(&query_index)
@@ -1303,13 +1237,11 @@ fn main_io_closed_log18_verifier_matches_prover_residues_and_reuses_bounded_cach
         accumulator_quotient_value_v1(registration.segment, x, &opened_residues, &alphas,)
             .expect("residue quotient")
     );
-
     let repeated = verifier
         .constraint_residues_v1(registration, query_index, next_query_index, x, opening)
         .expect("cache reuse");
     assert_eq!(repeated, opened_residues);
     assert_eq!(verifier.fixed_openings.len(), 2);
-
     let cap_query = 1_000;
     let cap_next = verifier
         .next_query_index_v1(cap_query)
@@ -1343,7 +1275,6 @@ fn main_io_closed_log18_verifier_matches_prover_residues_and_reuses_bounded_cach
         VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1
     );
 }
-
 fn fixture() -> &'static (ZkX509IoStarkStatementV1, Vec<u8>) {
     static FIXTURE: OnceLock<(ZkX509IoStarkStatementV1, Vec<u8>)> = OnceLock::new();
     let _guard = proof_guard();
@@ -1359,21 +1290,17 @@ fn fixture() -> &'static (ZkX509IoStarkStatementV1, Vec<u8>) {
         (statement, proof)
     })
 }
-
 fn fixture_layout() -> SegmentLayoutV1 {
     SegmentLayoutV1::for_io(io_active_rows_v1(fixture().0.declarations()).expect("rows"))
         .expect("layout")
 }
-
 fn fixture_aggregate_layout() -> AggregateProofLayoutV1 {
     AggregateProofLayoutV1::for_segments(&[fixture_layout()]).expect("aggregate layout")
 }
-
 fn decode_fixture() -> ZkX509SegmentedStarkProofV1 {
     decode_zk_x509_segmented_stark_proof_v1(&fixture().1, &fixture_aggregate_layout())
         .expect("decode fixture")
 }
-
 fn assert_rejected(proof: &ZkX509SegmentedStarkProofV1) {
     match encode_zk_x509_segmented_stark_proof_v1(proof, &fixture_aggregate_layout()) {
         Ok(bytes) => assert!(
@@ -1384,7 +1311,6 @@ fn assert_rejected(proof: &ZkX509SegmentedStarkProofV1) {
         Err(error) => panic!("unexpected adversarial encode failure: {error}"),
     }
 }
-
 fn projection_fixture() -> &'static (
     IrohaZkX509StarkP256StatementV1,
     ZkX509ProjectionWitnessV1,
@@ -1406,11 +1332,9 @@ fn projection_fixture() -> &'static (
         (statement, witness, proof)
     })
 }
-
 fn projection_layout() -> SegmentLayoutV1 {
     SegmentLayoutV1::for_projection().expect("projection layout")
 }
-
 fn projection_provider_post_base_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> ZkX509CredentialMainPostBaseChallengesV1 {
@@ -1428,7 +1352,6 @@ fn projection_provider_post_base_v1(
     .expect("joint post-base challenge derivation")
     .main_post_base()
 }
-
 fn main_base_commitment_session_fixture_v1() -> ZkX509MainBaseCommitmentSessionV1 {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     ZkX509MainBaseCommitmentSessionV1::new_after_profile_validation_v1(
@@ -1438,7 +1361,6 @@ fn main_base_commitment_session_fixture_v1() -> ZkX509MainBaseCommitmentSessionV
     )
     .expect("canonical MAIN base session after injected profile validation")
 }
-
 fn unpinned_main_verifier_profile_fixture_v1() -> ZkX509MainVerifierProfileV1 {
     ZkX509MainVerifierProfileV1 {
         registration: validate_zk_x509_main_registration_shape_v1()
@@ -1446,33 +1368,26 @@ fn unpinned_main_verifier_profile_fixture_v1() -> ZkX509MainVerifierProfileV1 {
         compiled_profile_digest: TEST_COMPILED_PROFILE_DIGEST_V1,
     }
 }
-
 fn der_layout() -> SegmentLayoutV1 {
     SegmentLayoutV1::for_der(ZkX509DerStarkShapeV1.active_rows()).expect("DER layout")
 }
-
 fn der_aggregate_layout() -> AggregateProofLayoutV1 {
     AggregateProofLayoutV1::for_segments(&[der_layout()]).expect("DER aggregate layout")
 }
-
 fn sha_word_layout() -> SegmentLayoutV1 {
     SegmentLayoutV1::for_sha_segment(0, ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1[0])
         .expect("SHA batch layout")
 }
-
 fn sha_word_aggregate_layout() -> AggregateProofLayoutV1 {
     AggregateProofLayoutV1::for_segments(&[sha_word_layout()]).expect("SHA-word aggregate layout")
 }
-
 fn projection_aggregate_layout() -> AggregateProofLayoutV1 {
     AggregateProofLayoutV1::for_segments(&[projection_layout()])
         .expect("projection aggregate layout")
 }
-
 fn accumulator_aggregate_layout() -> AggregateProofLayoutV1 {
     AggregateProofLayoutV1::for_accumulators_v1().expect("accumulator aggregate layout")
 }
-
 fn p256_aggregate_challenges_fixture() -> P256AggregateChallengesV1 {
     let mut transcript =
         TransparentTranscriptV1::new(b"p256-aggregate-test", &[0x31; 32], &[0x57; 32])
@@ -1480,7 +1395,6 @@ fn p256_aggregate_challenges_fixture() -> P256AggregateChallengesV1 {
     derive_p256_aggregate_challenges_v1(&mut transcript)
         .expect("canonical P-256 aggregate challenges")
 }
-
 fn p256_terminal_fixture(role: P256EcdsaRoleV1) -> P256TerminalRegistrationV1 {
     let buses = P256BusTerminalClaimsV1 {
         value_execution: [F(11), F(12), F(13), F(14)],
@@ -1516,7 +1430,6 @@ fn p256_terminal_fixture(role: P256EcdsaRoleV1) -> P256TerminalRegistrationV1 {
     terminals.validate(role).expect("canonical P-256 terminals");
     terminals
 }
-
 fn zero_p256_terminal_fixture(role: P256EcdsaRoleV1) -> P256TerminalRegistrationV1 {
     let zero = [F::ZERO; P256_CROSS_TRACE_LANES_V1];
     let buses = P256BusTerminalClaimsV1 {
@@ -1549,7 +1462,6 @@ fn zero_p256_terminal_fixture(role: P256EcdsaRoleV1) -> P256TerminalRegistration
         sink: zero,
     }
 }
-
 fn p256_main_provider_post_base_fixture_v1() -> ZkX509CredentialMainPostBaseChallengesV1 {
     derive_zk_x509_credential_pre_aux_binding_v1(
         ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
@@ -1564,7 +1476,6 @@ fn p256_main_provider_post_base_fixture_v1() -> ZkX509CredentialMainPostBaseChal
     .expect("canonical joint post-base challenges")
     .main_post_base()
 }
-
 fn p256_main_terminal_claims_fixture_v1() -> ZkX509P256TerminalClaimsV1 {
     fn scalar_buses(signature: usize) -> P256BusTerminalClaimsV1 {
         let mut buses = zero_p256_terminal_fixture(P256EcdsaRoleV1::CertificateOrCrl).buses;
@@ -1578,7 +1489,6 @@ fn p256_main_terminal_claims_fixture_v1() -> ZkX509P256TerminalClaimsV1 {
         buses.scalar_bus_window = buses.window_scalar;
         buses
     }
-
     let certificate_or_crl = core::array::from_fn(|signature| {
         let mut terminals = zero_p256_terminal_fixture(P256EcdsaRoleV1::CertificateOrCrl);
         terminals.buses = scalar_buses(signature);
@@ -1607,7 +1517,6 @@ fn p256_main_terminal_claims_fixture_v1() -> ZkX509P256TerminalClaimsV1 {
         },
     }
 }
-
 fn main_log19_statement_fixture_v1() -> ZkX509Rfc5280StatementV1 {
     ZkX509Rfc5280StatementV1 {
         presentation_not_before_unix_seconds: 1,
@@ -1618,7 +1527,6 @@ fn main_log19_statement_fixture_v1() -> ZkX509Rfc5280StatementV1 {
         disclosed_attribute_indices: Vec::new(),
     }
 }
-
 fn main_log19_terminal_claims_fixture_v1() -> ZkX509MainTerminalClaimsV1 {
     let der = ZkX509DerStarkTerminalClaimsV1 {
         input_byte: [F(3), F(5), F(7), F(11)],
@@ -1638,7 +1546,6 @@ fn main_log19_terminal_claims_fixture_v1() -> ZkX509MainTerminalClaimsV1 {
         p256: p256_main_terminal_claims_fixture_v1(),
     }
 }
-
 fn main_log19_source_fixture_v1(
     layout: &AggregateProofLayoutV1,
 ) -> MainLog19VerifierConstraintSourceV1 {
@@ -1650,11 +1557,9 @@ fn main_log19_source_fixture_v1(
     )
     .expect("closed mixed log19 verifier source")
 }
-
 fn main_log19_query_coordinates_fixture_v1() -> [usize; QUERY_COUNT] {
     core::array::from_fn(|index| index * P256_MAIN_LOG19_NEXT_STRIDE_V1)
 }
-
 fn main_log19_adversarial_query_coordinates_fixture_v1() -> [usize; QUERY_COUNT] {
     core::array::from_fn(|index| {
         let shift = match index {
@@ -1665,7 +1570,6 @@ fn main_log19_adversarial_query_coordinates_fixture_v1() -> [usize; QUERY_COUNT]
         shift * P256_MAIN_LOG19_NEXT_STRIDE_V1 + index
     })
 }
-
 fn p256_main_base_source_fixture_v1() -> P256MainBaseSourceV1 {
     p256_main_base_source_fixture_for_test_v1().expect("canonical central P-256 base source")
 }

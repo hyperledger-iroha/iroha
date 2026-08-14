@@ -1,5 +1,4 @@
 use ivm::{self, PointerType, SyscallPolicy};
-
 #[test]
 fn syscall_policy_allows_known_and_rejects_unknown_for_v1() {
     // Known allowed syscall in the canonical surface
@@ -11,7 +10,6 @@ fn syscall_policy_allows_known_and_rejects_unknown_for_v1() {
         SyscallPolicy::AbiV1,
         ivm::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE
     ));
-
     // Pick a number not present in the canonical surface.
     let list = ivm::syscalls::abi_syscall_list();
     let unknown = list
@@ -31,7 +29,6 @@ fn syscall_policy_allows_known_and_rejects_unknown_for_v1() {
         unknown
     ));
 }
-
 #[test]
 fn first_release_compiler_runtime_syscalls_are_ungated_in_abi_v1() {
     for number in [
@@ -48,7 +45,6 @@ fn first_release_compiler_runtime_syscalls_are_ungated_in_abi_v1() {
         );
     }
 }
-
 #[test]
 fn pointer_type_policy_allows_soracloud_response_under_abi_v1() {
     assert!(ivm::is_type_allowed_for_policy(

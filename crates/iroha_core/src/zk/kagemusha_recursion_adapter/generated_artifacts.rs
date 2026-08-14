@@ -21,7 +21,6 @@ pub struct KagemushaGeneratedParityArtifactsV4 {
     /// proof under `verifying_key`.
     pub bootstrap_witness: Vec<u8>,
 }
-
 /// Owner-private, seekable spool containing one generated raw artifact.
 ///
 /// Full release parameters and proving keys are intentionally parked here
@@ -33,27 +32,22 @@ pub struct KagemushaGeneratedArtifactSpoolV4 {
     size_bytes: u64,
     sha256: [u8; 32],
 }
-
 impl KagemushaGeneratedArtifactSpoolV4 {
     /// Exact number of raw payload bytes in this spool.
     #[must_use]
     pub const fn size_bytes(&self) -> u64 {
         self.size_bytes
     }
-
     /// SHA-256 of the exact raw payload bytes in this spool.
     #[must_use]
     pub const fn sha256(&self) -> [u8; 32] {
         self.sha256
     }
-
     /// Copy the exact payload to `writer`, rejecting any truncated or changed
     /// backing file before returning.
     pub fn copy_to<W: std::io::Write + ?Sized>(&mut self, writer: &mut W) -> Result<(), String> {
         use std::io::{Read as _, Seek as _};
-
         use sha2::Digest as _;
-
         self.file
             .seek(std::io::SeekFrom::Start(0))
             .map_err(|error| format!("failed to rewind Kagemusha V4 artifact spool: {error}"))?;
@@ -91,7 +85,6 @@ impl KagemushaGeneratedArtifactSpoolV4 {
         }
         Ok(())
     }
-
     /// Materialize this one payload for tests.
     #[cfg(test)]
     pub fn into_bytes(mut self) -> Result<Vec<u8>, String> {
@@ -108,7 +101,6 @@ impl KagemushaGeneratedArtifactSpoolV4 {
         Ok(bytes)
     }
 }
-
 /// Lightweight profile metadata supplied with every streamed generator role.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaGeneratedParityProfileV4 {
@@ -121,7 +113,6 @@ pub struct KagemushaGeneratedParityProfileV4 {
     /// Exact augmented Step-proof size.
     pub step_proof_size_bytes: u32,
 }
-
 /// File-backed writer that deliberately presents an infallible `Write`
 /// surface to Halo2's processed-key serializer. Several nested polynomial
 /// serializers ignore I/O results; the first real file/size failure is saved
@@ -132,11 +123,9 @@ struct KagemushaInfallibleArtifactSpoolWriterV4 {
     sha256: sha2::Sha256,
     first_error: Option<String>,
 }
-
 impl KagemushaInfallibleArtifactSpoolWriterV4 {
     fn new(role: &str) -> Result<Self, String> {
         use sha2::Digest as _;
-
         Ok(Self {
             file: tempfile::tempfile().map_err(|error| {
                 format!("failed to open owner-private Kagemusha V4 {role} spool: {error}")
@@ -146,10 +135,8 @@ impl KagemushaInfallibleArtifactSpoolWriterV4 {
             first_error: None,
         })
     }
-
     fn finish(mut self, role: &str) -> Result<KagemushaGeneratedArtifactSpoolV4, String> {
         use std::io::{Seek as _, Write as _};
-
         if let Some(error) = self.first_error.take() {
             return Err(error);
         }
@@ -172,14 +159,12 @@ impl KagemushaInfallibleArtifactSpoolWriterV4 {
             sha256: self.sha256.finalize().into(),
         })
     }
-
     fn remember_error(&mut self, error: String) {
         if self.first_error.is_none() {
             self.first_error = Some(error);
         }
     }
 }
-
 impl std::io::Write for KagemushaInfallibleArtifactSpoolWriterV4 {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         if self.first_error.is_none() {
@@ -210,7 +195,6 @@ impl std::io::Write for KagemushaInfallibleArtifactSpoolWriterV4 {
         // real error is retained above and returned by `finish`.
         Ok(bytes.len())
     }
-
     fn flush(&mut self) -> std::io::Result<()> {
         if self.first_error.is_none()
             && let Err(error) = self.file.flush()
@@ -222,20 +206,17 @@ impl std::io::Write for KagemushaInfallibleArtifactSpoolWriterV4 {
         Ok(())
     }
 }
-
 fn kagemusha_generated_spool_from_bytes_v4(
     role: &str,
     bytes: &[u8],
 ) -> Result<KagemushaGeneratedArtifactSpoolV4, String> {
     use std::io::Write as _;
-
     let mut writer = KagemushaInfallibleArtifactSpoolWriterV4::new(role)?;
     writer
         .write_all(bytes)
         .expect("Kagemusha V4 artifact spool writer is infallible");
     writer.finish(role)
 }
-
 /// Complete raw Eq/Ep output of one V4 generation run.
 pub struct KagemushaGeneratedPastaCycleArtifactsV4 {
     /// StepEq/Vesta material.
@@ -249,7 +230,6 @@ pub struct KagemushaGeneratedPastaCycleArtifactsV4 {
     /// lineages and both fixed-size accumulation transcripts.
     pub max_recursive_pair_bytes: u32,
 }
-
 /// Canonical opaque-pair measurements returned by streaming generation.
 pub struct KagemushaGeneratedProofPairMeasurementV4 {
     /// Terminally verified selector-one initialization pair.
@@ -258,13 +238,11 @@ pub struct KagemushaGeneratedProofPairMeasurementV4 {
     /// fixed accumulation transcripts.
     pub max_recursive_pair_bytes: u32,
 }
-
 struct KagemushaGenerationCalibrationV4 {
     public_inputs: KagemushaPastaCyclePublicInputsV4,
     secure: super::confidential_v2::KagemushaStepSecureWitnessV3,
     output_membership: super::kagemusha_v2::KagemushaOutputMembershipWitnessV4,
 }
-
 fn kagemusha_calibration_exact_limbs_v4(bytes: [u8; 32]) -> [u32; 8] {
     std::array::from_fn(|index| {
         u32::from_le_bytes(
@@ -274,12 +252,10 @@ fn kagemusha_calibration_exact_limbs_v4(bytes: [u8; 32]) -> [u32; 8] {
         )
     })
 }
-
 fn kagemusha_calibration_scalar_v4(bytes: [u8; 32], role: &str) -> Result<Fp, String> {
     Option::<Fp>::from(Fp::from_repr(bytes.into()))
         .ok_or_else(|| format!("Kagemusha V4 calibration {role} is not canonical Fp"))
 }
-
 fn kagemusha_calibration_put_digest_v4(
     fields: &mut [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4],
     start: usize,
@@ -297,7 +273,6 @@ fn kagemusha_calibration_put_digest_v4(
     }
     Ok(())
 }
-
 fn kagemusha_calibration_put_field_v4(
     fields: &mut [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4],
     index: usize,
@@ -310,7 +285,6 @@ fn kagemusha_calibration_put_field_v4(
         kagemusha_calibration_scalar_v4(bytes, role)?;
     Ok(())
 }
-
 fn kagemusha_calibration_membership_path_v4(
     path: super::confidential_v2::ConfidentialMerklePathV2,
 ) -> iroha_data_model::offline::KagemushaConfidentialMerklePathV2 {
@@ -321,27 +295,23 @@ fn kagemusha_calibration_membership_path_v4(
         root,
     }
 }
-
 const KAGEMUSHA_INITIALIZATION_RELATION_PAYER_V4: &str = "kagemusha-fixed-padding-payer";
 const KAGEMUSHA_INITIALIZATION_RELATION_AMOUNT_V4: u128 = 1;
 const KAGEMUSHA_INITIALIZATION_RELATION_LEAF_INDEX_V4: u32 = 0;
 const KAGEMUSHA_INITIALIZATION_RELATION_SPEND_KEY_V4: [u8; 32] = [0x46; 32];
 const KAGEMUSHA_INITIALIZATION_RELATION_RHO_V4: [u8; 32] = [0x47; 32];
 const KAGEMUSHA_INITIALIZATION_RELATION_OPERATION_ID_V4: [u8; 32] = [0x48; 32];
-
 struct KagemushaInitializationRelationV4 {
     topup: super::confidential_v2::KagemushaTopUpShieldPublicInputsV2,
     secure: super::confidential_v2::KagemushaStepSecureWitnessV3,
     output_membership: super::kagemusha_v2::KagemushaOutputMembershipWitnessV4,
 }
-
 fn kagemusha_initialization_diversifier_v4() -> [u8; 32] {
     let repr = Fp::from(4).to_repr();
     let mut bytes = [0_u8; 32];
     bytes.copy_from_slice(repr.as_ref());
     bytes
 }
-
 /// Build the deterministic, satisfying initialization relation shared by key
 /// calibration and exact-candidate recursive qualification.
 fn kagemusha_initialization_relation_v4(
@@ -350,7 +320,6 @@ fn kagemusha_initialization_relation_v4(
     asset_scale: u32,
 ) -> Result<KagemushaInitializationRelationV4, String> {
     use super::{confidential_v2, kagemusha_v2};
-
     let diversifier = kagemusha_initialization_diversifier_v4();
     let empty_path = confidential_v2::compute_confidential_merkle_path_v3(&[], 0)?;
     let secure = confidential_v2::prepare_kagemusha_step_topup_witness_v3(
@@ -366,7 +335,6 @@ fn kagemusha_initialization_relation_v4(
         KAGEMUSHA_INITIALIZATION_RELATION_LEAF_INDEX_V4,
         &empty_path,
     )?;
-
     let asset_tag = confidential_v2::derive_confidential_asset_tag_v3(asset_definition_id)?;
     let network_tag = confidential_v2::derive_confidential_network_tag_v3(network_id)?;
     let payer_tag = confidential_v2::derive_kagemusha_topup_payer_tag_v3(
@@ -397,7 +365,6 @@ fn kagemusha_initialization_relation_v4(
     if empty_path.root != initial_root {
         return Err("Kagemusha V4 initialization empty path/root mismatch".to_owned());
     }
-
     let recipient_update_path = kagemusha_calibration_membership_path_v4(empty_path.clone());
     let recipient_membership_path = kagemusha_calibration_membership_path_v4(
         confidential_v2::compute_confidential_merkle_path_v3(&final_commitments, 0)?,
@@ -457,7 +424,6 @@ fn kagemusha_initialization_relation_v4(
         output_membership,
     })
 }
-
 /// Build one deterministic, satisfying initialization relation for key
 /// calibration and the measured live pair.  None of these values is an
 /// authenticated release identity: the exporter supplies that layer after the
@@ -468,13 +434,10 @@ fn kagemusha_generation_calibration_v4(
 ) -> Result<KagemushaGenerationCalibrationV4, String> {
     use halo2_proofs::halo2curves::pasta::Fp;
     use iroha_data_model::NetworkId;
-
     use super::kagemusha_v2;
-
     const ASSET_DEFINITION: &str = "kagemusha-fixed-padding#internal";
     const NETWORK_SEED: &[u8] = b"kagemusha-fixed-padding-network";
     const ASSET_SCALE: u32 = 0;
-
     let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
         iroha_data_model::block::BlockHeader,
     >::from_untyped_unchecked(
@@ -495,7 +458,6 @@ fn kagemusha_generation_calibration_v4(
     let final_root = topup.finalized_root;
     let operation_id = KAGEMUSHA_INITIALIZATION_RELATION_OPERATION_ID_V4;
     let amount = KAGEMUSHA_INITIALIZATION_RELATION_AMOUNT_V4;
-
     let statement_digest = [0x11_u8; 32];
     let topup_anchor_digest = [0x31_u8; 32];
     let manifest_sha256 = [0x41_u8; 32];
@@ -589,7 +551,6 @@ fn kagemusha_generation_calibration_v4(
     }
     fields[kagemusha_v2::I_TOPUP_ANCHOR_COUNT] = Fp::ONE;
     let operation = KagemushaStepOperationVectorV4::from_fields(fields);
-
     let mut result_state =
         vec![0_u32; iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
     result_state[kagemusha_v2::S_VERSION] =
@@ -632,7 +593,6 @@ fn kagemusha_generation_calibration_v4(
         .copy_from_slice(&kagemusha_calibration_exact_limbs_v4(
             verifier_key_id_digest,
         ));
-
     let public_inputs = KagemushaPastaCyclePublicInputsV4 {
         public_statement_digest: kagemusha_calibration_exact_limbs_v4(statement_digest),
         operation,
@@ -654,17 +614,14 @@ fn kagemusha_generation_calibration_v4(
         parent_ep_deferred_sha256: [[0; 8]; KAGEMUSHA_PASTA_PARENT_SLOTS_V1],
         live_selector: KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4,
     };
-
     Ok(KagemushaGenerationCalibrationV4 {
         public_inputs,
         secure,
         output_membership,
     })
 }
-
 const KAGEMUSHA_CANDIDATE_STEP_TWO_KEY_SET_DOMAIN_V4: &[u8] =
     b"iroha:kagemusha:candidate-recursive-step-two-key-set:v4";
-
 fn kagemusha_candidate_step_two_key_set_sha256_v4(
     candidate_sha256: [u8; 32],
     manifest_sha256: [u8; 32],
@@ -680,7 +637,6 @@ fn kagemusha_candidate_step_two_key_set_sha256_v4(
     }
     hasher.finalize().into()
 }
-
 fn kagemusha_candidate_step_two_role_digests_v4(
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
 ) -> Result<[[u8; 32]; 8], String> {
@@ -724,7 +680,6 @@ fn kagemusha_candidate_step_two_role_digests_v4(
         step_ep_vk.payload_sha256,
     ])
 }
-
 /// Strict proof that an exact unsigned candidate completed a real step-one to
 /// step-two recursion and both pairs passed a freshly loaded terminal verifier.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -774,7 +729,6 @@ pub struct KagemushaCandidateRecursiveStepTwoEvidenceV4 {
     /// Number of pairs accepted by the freshly loaded terminal verifier.
     terminal_verified_pair_count: u32,
 }
-
 impl KagemushaCandidateRecursiveStepTwoEvidenceV4 {
     fn role_digests(&self) -> [[u8; 32]; 8] {
         [
@@ -788,7 +742,6 @@ impl KagemushaCandidateRecursiveStepTwoEvidenceV4 {
             self.step_ep_verifying_key_payload_sha256,
         ]
     }
-
     /// Enforce the exact two-step, one-parent, one-key-set terminal evidence
     /// contract consumed by candidate publication.
     ///
@@ -829,7 +782,6 @@ impl KagemushaCandidateRecursiveStepTwoEvidenceV4 {
         }
         Ok(())
     }
-
     /// Rebind this result to the exact canonical candidate and its staged
     /// proving/verifying-key descriptors.
     ///
@@ -862,7 +814,6 @@ impl KagemushaCandidateRecursiveStepTwoEvidenceV4 {
         Ok(())
     }
 }
-
 fn kagemusha_candidate_qualification_init_statement_v4(
     candidate: &iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
     manifest_sha256: [u8; 32],
@@ -874,7 +825,6 @@ fn kagemusha_candidate_qualification_init_statement_v4(
         KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
         kagemusha_recursive_spend_verifier_key_id_v4,
     };
-
     let manifest = &candidate.manifest;
     let anchor_digest = [0x31_u8; 32];
     let anchor_ref = KagemushaRecursiveSpendTopUpAnchorRefV2 {
@@ -924,7 +874,6 @@ fn kagemusha_candidate_qualification_init_statement_v4(
         .map_err(|error| error.to_string())?;
     Ok(statement)
 }
-
 fn kagemusha_candidate_qualification_bundle_v4(
     candidate: &iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
     manifest_sha256: [u8; 32],
@@ -940,7 +889,6 @@ fn kagemusha_candidate_qualification_bundle_v4(
         },
         proof::ProofBox,
     };
-
     let manifest = &candidate.manifest;
     let [step_eq, step_ep] = manifest.profiles.as_slice() else {
         return Err("Kagemusha V4 candidate does not have exactly two profiles".to_owned());
@@ -1003,7 +951,6 @@ fn kagemusha_candidate_qualification_bundle_v4(
         .map_err(|error| error.to_string())?;
     Ok(bundle)
 }
-
 fn kagemusha_candidate_private_path_v4(
     path: &iroha_data_model::offline::KagemushaConfidentialMerklePathV2,
 ) -> super::confidential_v2::ConfidentialMerklePathV2 {
@@ -1014,14 +961,12 @@ fn kagemusha_candidate_private_path_v4(
         root: path.root,
     }
 }
-
 struct KagemushaCandidateQualificationAppendV4 {
     initialization_bundle_digest: [u8; 32],
     bound_parent_bundle_digest: [u8; 32],
     statement: KagemushaRecursiveSpendPublicStatementV4,
     operation: KagemushaStepOperationVectorV4,
 }
-
 #[allow(clippy::too_many_lines)]
 fn kagemusha_candidate_qualification_append_v4(
     candidate: &iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4,
@@ -1037,7 +982,6 @@ fn kagemusha_candidate_qualification_append_v4(
         KagemushaRecursiveSpendSplitIntentV4, KagemushaScaledAmountV2,
         KagemushaSpendableNoteDescriptorV2,
     };
-
     let init_bundle = kagemusha_candidate_qualification_bundle_v4(
         candidate,
         manifest_sha256,
@@ -1197,7 +1141,6 @@ fn kagemusha_candidate_qualification_append_v4(
         operation,
     })
 }
-
 /// Prove and terminally verify a genuine recursive child with the exact
 /// proving and verifying keys staged in one unsigned candidate.
 ///
@@ -1234,9 +1177,7 @@ where
         KagemushaRecursiveSpendSplitIntentV4, KagemushaScaledAmountV2,
         KagemushaSpendableNoteDescriptorV2,
     };
-
     use super::{confidential_v2, kagemusha_v2};
-
     candidate.validate().map_err(|error| error.to_string())?;
     KagemushaQualificationMemoryContractV4::for_operator(memory_guard)
         .validate_candidate(candidate)?;
@@ -1263,7 +1204,6 @@ where
         expected_candidate_sha256,
         expected_manifest_sha256,
     )?;
-
     let relation = kagemusha_initialization_relation_v4(
         &candidate.manifest.network_id,
         &candidate.manifest.asset.to_string(),
@@ -1277,7 +1217,6 @@ where
         &relation.output_membership,
         KAGEMUSHA_INITIALIZATION_RELATION_PAYER_V4,
     )?;
-
     // The constructor authenticates both framed proving-key spools, parses the
     // exact candidate verifier payloads, and rejects a PK whose embedded VK
     // differs byte-for-byte from that staged VK.
@@ -1313,7 +1252,6 @@ where
     )?;
     let initialization_bundle_digest = init_bundle.digest().map_err(|error| error.to_string())?;
     drop(init_bundle);
-
     let input_leaf = relation
         .output_membership
         .recipient
@@ -1331,7 +1269,6 @@ where
         next_zero_leaf_index,
         &kagemusha_candidate_private_path_v4(&relation.output_membership.dummy_path),
     )?;
-
     let recipient_spend_key = [0x61_u8; 32];
     let recipient_rho = [0x62_u8; 32];
     let recipient_diversifier = confidential_v2::derive_confidential_diversifier_v2(
@@ -1382,7 +1319,6 @@ where
         dummy_path: kagemusha_calibration_membership_path_v4(append_paths.next_zero_path.clone()),
     };
     kagemusha_v2::KagemushaOutputMembershipCircuitV4::new(append_membership.clone())?;
-
     let amount = KagemushaScaledAmountV2::new(
         KAGEMUSHA_INITIALIZATION_RELATION_AMOUNT_V4,
         candidate.manifest.asset_scale,
@@ -1477,7 +1413,6 @@ where
         &append_secure,
         &append_membership,
     )?;
-
     let (
         initialization_proof_step_count,
         initialization_parent_count,
@@ -1504,7 +1439,6 @@ where
         )
     };
     drop(prover);
-
     // Reopen the bounded verifier roles after all proving-key state has been
     // dropped. Every role is rebound to the same unsigned candidate before it
     // is parsed, then both semantic statements receive a full terminal decision.
@@ -1545,7 +1479,6 @@ where
         2,
         manifest_limbs,
     )?;
-
     let evidence = KagemushaCandidateRecursiveStepTwoEvidenceV4 {
         candidate_sha256,
         manifest_sha256,
@@ -1578,7 +1511,6 @@ where
     )
     .map_err(|error| error.to_string())
 }
-
 /// Reauthenticate and terminally verify the exact proof pairs stored in a
 /// candidate qualification receipt.
 ///
@@ -1611,7 +1543,6 @@ where
         -> Result<super::kagemusha_artifact_v4::KagemushaValidatedArtifactPayloadV4, String>,
 {
     use super::kagemusha_v2;
-
     candidate.validate().map_err(|error| error.to_string())?;
     qualification_memory_contract.validate_candidate(candidate)?;
     receipt
@@ -1638,7 +1569,6 @@ where
     {
         return Err("Kagemusha V4 qualification receipt substituted candidate roles".to_owned());
     }
-
     let role_digests = kagemusha_candidate_step_two_role_digests_v4(&candidate.manifest)?;
     let key_set_sha256 = kagemusha_candidate_step_two_key_set_sha256_v4(
         candidate_sha256,
@@ -1650,7 +1580,6 @@ where
         expected_candidate_sha256,
         expected_manifest_sha256,
     )?;
-
     // Receipt verification never proves. Authenticate the two release-sized PK
     // roles with fixed scratch, scan their exact processed-key geometry, and
     // bind each embedded VK prefix to the separately authenticated VK. Full
@@ -1701,7 +1630,6 @@ where
         step_ep_verifying_key.payload_sha256,
     )?;
     drop(step_ep_proving_key_spool);
-
     // Parse each of the remaining six bounded roles once and retain the
     // resulting terminal verifier for both stored proof pairs.
     let terminal = KagemushaPastaCycleTerminalVerifierV4::from_validated_artifact_loader(
@@ -1730,7 +1658,6 @@ where
     let append_parent_count = append_decoded.public_inputs.parent_count()?;
     drop(init_decoded);
     drop(append_decoded);
-
     let relation = kagemusha_initialization_relation_v4(
         &candidate.manifest.network_id,
         &candidate.manifest.asset.to_string(),
@@ -1757,7 +1684,6 @@ where
             "Kagemusha V4 qualification append is not the exact child of initialization".to_owned(),
         );
     }
-
     let init_state =
         kagemusha_v2::KagemushaRecursiveSpendStateVectorV5::from_statement_v4(&init_statement)?;
     let append_state =
@@ -1788,7 +1714,6 @@ where
         2,
         manifest_limbs,
     )?;
-
     let evidence = KagemushaCandidateRecursiveStepTwoEvidenceV4 {
         candidate_sha256,
         manifest_sha256,
@@ -1816,7 +1741,6 @@ where
     evidence.validate_for_candidate(candidate)?;
     Ok(evidence)
 }
-
 struct KagemushaEqBootstrapSeedV4 {
     protocol: PlonkProtocol<halo2_proofs::halo2curves::pasta::EqAffine>,
     structure_sha256: [u8; 32],
@@ -1827,7 +1751,6 @@ struct KagemushaEqBootstrapSeedV4 {
         snark_verifier::loader::native::NativeLoader,
     >,
 }
-
 struct KagemushaEpBootstrapSeedV4 {
     protocol: PlonkProtocol<halo2_proofs::halo2curves::pasta::EpAffine>,
     structure_sha256: [u8; 32],
@@ -1838,7 +1761,6 @@ struct KagemushaEpBootstrapSeedV4 {
         snark_verifier::loader::native::NativeLoader,
     >,
 }
-
 fn kagemusha_eq_bootstrap_seed_v4(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,
@@ -1883,7 +1805,6 @@ fn kagemusha_eq_bootstrap_seed_v4(
         current,
     })
 }
-
 fn kagemusha_ep_bootstrap_seed_v4(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EpAffine,
@@ -1928,10 +1849,8 @@ fn kagemusha_ep_bootstrap_seed_v4(
         current,
     })
 }
-
 #[cfg(feature = "kagemusha-generation-memory-lab")]
 struct KagemushaK17ShapeProbeScopeV5;
-
 #[cfg(feature = "kagemusha-generation-memory-lab")]
 impl KagemushaK17ShapeProbeScopeV5 {
     fn enter() -> Result<Self, String> {
@@ -1944,7 +1863,6 @@ impl KagemushaK17ShapeProbeScopeV5 {
         Ok(Self)
     }
 }
-
 #[cfg(feature = "kagemusha-generation-memory-lab")]
 impl Drop for KagemushaK17ShapeProbeScopeV5 {
     fn drop(&mut self) {
@@ -1952,7 +1870,6 @@ impl Drop for KagemushaK17ShapeProbeScopeV5 {
         KAGEMUSHA_K17_SHAPE_PROBE_ACTIVE_V5.with(|active| active.set(false));
     }
 }
-
 #[cfg(feature = "kagemusha-generation-memory-lab")]
 fn kagemusha_k17_shape_probe_params_v5(
     advice_columns: u32,
@@ -1975,7 +1892,6 @@ fn kagemusha_k17_shape_probe_params_v5(
         max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4,
     }
 }
-
 #[cfg(feature = "kagemusha-generation-memory-lab")]
 fn kagemusha_k17_dummy_parent_proof_v5<C>(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<C>,
@@ -1987,7 +1903,6 @@ where
     C::ScalarExt: PrimeField + From<u64>,
 {
     use halo2_proofs::poly::commitment::ParamsProver as _;
-
     let generators = params.get_g();
     if generators.is_empty() {
         return Err("Kagemusha k17 shape probe ParamsIPA has no generators".to_owned());
@@ -2006,7 +1921,6 @@ where
         proof.extend_from_slice(scalar.to_repr().as_ref());
         scalar_index = scalar_index.saturating_add(1);
     };
-
     for _ in 0..protocol.num_witness.iter().sum::<usize>() {
         push_point(&mut proof);
     }
@@ -2016,7 +1930,6 @@ where
     for _ in 0..protocol.evaluations.len() {
         push_scalar(&mut proof);
     }
-
     let mut rotations_by_polynomial =
         std::collections::BTreeMap::<usize, std::collections::BTreeSet<i32>>::new();
     for query in &protocol.queries {
@@ -2030,7 +1943,6 @@ where
         .map(|rotations| rotations.into_iter().collect::<Vec<_>>())
         .collect::<std::collections::BTreeSet<_>>()
         .len();
-
     // BGH19 multi-open: f, one evaluation per distinct polynomial rotation
     // set, the ZK commitment, k pairs of IPA round points, c, the blind, and u.
     push_point(&mut proof);
@@ -2049,7 +1961,6 @@ where
     push_point(&mut proof);
     Ok(proof)
 }
-
 #[cfg(feature = "kagemusha-generation-memory-lab")]
 fn kagemusha_k17_dummy_accumulator_v5<C>(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<C>,
@@ -2063,7 +1974,6 @@ where
     C::ScalarExt: PrimeField + From<u64>,
 {
     use halo2_proofs::poly::commitment::{Params as _, ParamsProver as _};
-
     let round_count = usize::try_from(params.k())
         .map_err(|_| "Kagemusha k17 accumulator degree does not fit usize".to_owned())?;
     let generators = params.get_g();
@@ -2083,7 +1993,6 @@ where
         generators[generator_index],
     ))
 }
-
 #[cfg(feature = "kagemusha-generation-memory-lab")]
 fn kagemusha_k17_eq_probe_seed_v5(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
@@ -2093,7 +2002,6 @@ fn kagemusha_k17_eq_probe_seed_v5(
     expected_proof_bytes: u32,
 ) -> Result<KagemushaEqBootstrapSeedV4, String> {
     use halo2_proofs::plonk::keygen_vk_custom;
-
     let public_len = usize::try_from(
         validate_kagemusha_circuit_params_v4(circuit_params)?.instance_column_limbs,
     )
@@ -2132,7 +2040,6 @@ fn kagemusha_k17_eq_probe_seed_v5(
         current: kagemusha_k17_dummy_accumulator_v5(params, 101)?,
     })
 }
-
 #[cfg(feature = "kagemusha-generation-memory-lab")]
 fn kagemusha_k17_ep_probe_seed_v5(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
@@ -2142,7 +2049,6 @@ fn kagemusha_k17_ep_probe_seed_v5(
     expected_proof_bytes: u32,
 ) -> Result<KagemushaEpBootstrapSeedV4, String> {
     use halo2_proofs::plonk::keygen_vk_custom;
-
     let public_len = usize::try_from(
         validate_kagemusha_circuit_params_v4(circuit_params)?.instance_column_limbs,
     )
@@ -2181,7 +2087,6 @@ fn kagemusha_k17_ep_probe_seed_v5(
         current: kagemusha_k17_dummy_accumulator_v5(params, 211)?,
     })
 }
-
 fn kagemusha_eq_seed_bootstrap_payload_v4(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,

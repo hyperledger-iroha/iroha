@@ -22,7 +22,6 @@ fn concurrent_pending_invitations_rebase_and_accept_independently() {
     let first_id = MusubiInviteIdV1::new([0x21; 32]);
     let second_id = MusubiInviteIdV1::new([0x22; 32]);
     seed_package_owner(&package, &owner, 1, &mut transaction);
-
     InviteMusubiPackageMaintainerV1 {
         package: package.clone(),
         invite_id: first_id,
@@ -43,7 +42,6 @@ fn concurrent_pending_invitations_rebase_and_accept_independently() {
     }
     .execute(&owner, &mut transaction)
     .expect("second invitation rebases the first invitation");
-
     for invite_id in [first_id, second_id] {
         let invitation = transaction
             .world
@@ -53,7 +51,6 @@ fn concurrent_pending_invitations_rebase_and_accept_independently() {
         assert_eq!(invitation.state, MusubiInvitationStateV1::Pending);
         assert_eq!(invitation.expected_governance_revision, 3);
     }
-
     AcceptMusubiPackageMaintainerV1 {
         package: package.clone(),
         invite_id: first_id,
@@ -77,7 +74,6 @@ fn concurrent_pending_invitations_rebase_and_accept_independently() {
         .expect("second invitation remains pending");
     assert_eq!(second.state, MusubiInvitationStateV1::Pending);
     assert_eq!(second.expected_governance_revision, 4);
-
     AcceptMusubiPackageMaintainerV1 {
         package: package.clone(),
         invite_id: second_id,
@@ -103,7 +99,6 @@ fn concurrent_pending_invitations_rebase_and_accept_independently() {
         MusubiInvitationStateV1::Accepted
     );
 }
-
 #[test]
 fn stale_accept_retries_after_an_invitation_race_rebases_the_cas_revision() {
     let state = State::new_for_testing(
@@ -126,7 +121,6 @@ fn stale_accept_retries_after_an_invitation_race_rebases_the_cas_revision() {
     let package = package("stale-invite-race");
     let first_id = MusubiInviteIdV1::new([0x24; 32]);
     seed_package_owner(&package, &owner, 1, &mut transaction);
-
     InviteMusubiPackageMaintainerV1 {
         package: package.clone(),
         invite_id: first_id,
@@ -148,7 +142,6 @@ fn stale_accept_retries_after_an_invitation_race_rebases_the_cas_revision() {
     .execute(&owner, &mut transaction)
     .expect("racing invitation advances and rebases governance");
     let _ = take_musubi_events(&mut transaction);
-
     let stale = AcceptMusubiPackageMaintainerV1 {
         package: package.clone(),
         invite_id: first_id,
@@ -179,7 +172,6 @@ fn stale_accept_retries_after_an_invitation_race_rebases_the_cas_revision() {
         3
     );
     assert!(take_musubi_events(&mut transaction).is_empty());
-
     AcceptMusubiPackageMaintainerV1 {
         package: package.clone(),
         invite_id: first_id,
@@ -198,7 +190,6 @@ fn stale_accept_retries_after_an_invitation_race_rebases_the_cas_revision() {
         4
     );
 }
-
 #[test]
 fn invalid_invitation_is_rejected_before_pending_invitations_are_rebased() {
     let state = State::new_for_testing(
@@ -242,7 +233,6 @@ fn invalid_invitation_is_rejected_before_pending_invitations_are_rebased() {
         .iter()
         .map(|(key, entry)| (key.clone(), entry.clone()))
         .collect::<Vec<_>>();
-
     let error = InviteMusubiPackageMaintainerV1 {
         package: package.clone(),
         invite_id: MusubiInviteIdV1::new([0; 32]),
@@ -253,7 +243,6 @@ fn invalid_invitation_is_rejected_before_pending_invitations_are_rebased() {
     }
     .execute(&owner, &mut transaction)
     .expect_err("a zero invitation identity must fail before governance advances");
-
     assert!(error.to_string().contains("invitation is invalid"));
     assert_eq!(
         transaction
@@ -299,7 +288,6 @@ fn invalid_invitation_is_rejected_before_pending_invitations_are_rebased() {
     );
     assert!(take_musubi_events(&mut transaction).is_empty());
 }
-
 #[test]
 fn publication_index_overflow_drops_the_unapplied_invitation_plan() {
     let state = State::new_for_testing(
@@ -341,7 +329,6 @@ fn publication_index_overflow_drops_the_unapplied_invitation_plan() {
         .iter()
         .map(|(key, entry)| (key.clone(), entry.clone()))
         .collect::<Vec<_>>();
-
     let error = (|| -> Result<(), Error> {
         let mut candidate = transaction
             .world
@@ -365,7 +352,6 @@ fn publication_index_overflow_drops_the_unapplied_invitation_plan() {
         Ok(())
     })()
     .expect_err("publication must fail when the resolver revision cannot advance");
-
     assert!(
         error
             .to_string()
@@ -403,7 +389,6 @@ fn publication_index_overflow_drops_the_unapplied_invitation_plan() {
     );
     assert!(take_musubi_events(&mut transaction).is_empty());
 }
-
 #[test]
 fn publication_reverse_reference_failure_drops_the_unapplied_invitation_plan() {
     let state = State::new_for_testing(
@@ -477,7 +462,6 @@ fn publication_reverse_reference_failure_drops_the_unapplied_invitation_plan() {
         )
         .expect("successor release version is valid"),
     );
-
     let error = (|| -> Result<(), Error> {
         let mut candidate = transaction
             .world
@@ -505,7 +489,6 @@ fn publication_reverse_reference_failure_drops_the_unapplied_invitation_plan() {
         Ok(())
     })()
     .expect_err("publication must fail when an archive reference bound is exhausted");
-
     assert!(error.to_string().contains("reverse references"));
     assert_eq!(
         transaction
@@ -542,7 +525,6 @@ fn publication_reverse_reference_failure_drops_the_unapplied_invitation_plan() {
     );
     assert!(take_musubi_events(&mut transaction).is_empty());
 }
-
 #[test]
 fn package_pending_invitation_bound_is_enforced_before_mutation() {
     let state = State::new_for_testing(
@@ -597,7 +579,6 @@ fn package_pending_invitation_bound_is_enforced_before_mutation() {
         MusubiMaintainerDirectoryEntryV1::Accepted(owner_member),
         &mut transaction,
     );
-
     for index in 0..MUSUBI_MAX_PENDING_INVITATIONS_V1 {
         let mut bytes = [0_u8; 32];
         bytes[..8].copy_from_slice(
@@ -624,7 +605,6 @@ fn package_pending_invitation_bound_is_enforced_before_mutation() {
         pending_invitation_count(&package, transaction.world()),
         MUSUBI_MAX_PENDING_INVITATIONS_V1
     );
-
     let instruction = InviteMusubiPackageMaintainerV1 {
         package: package.clone(),
         invite_id: MusubiInviteIdV1::new([0xFE; 32]),
@@ -648,7 +628,6 @@ fn package_pending_invitation_bound_is_enforced_before_mutation() {
         1
     );
 }
-
 #[test]
 fn expired_pending_invitations_reclaim_bound_and_emit_bounded_events() {
     let state = State::new_for_testing(
@@ -669,7 +648,6 @@ fn expired_pending_invitations_reclaim_bound_and_emit_bounded_events() {
     let owner = account(31);
     let package = package("expiry-reclaim");
     seed_package_owner(&package, &owner, 1, &mut transaction);
-
     for index in 0..MUSUBI_MAX_PENDING_INVITATIONS_V1 {
         let mut bytes = [0_u8; 32];
         bytes[..8].copy_from_slice(
@@ -695,7 +673,6 @@ fn expired_pending_invitations_reclaim_bound_and_emit_bounded_events() {
         pending_invitation_count(&package, transaction.world()),
         MUSUBI_MAX_PENDING_INVITATIONS_V1
     );
-
     let replacement_id = MusubiInviteIdV1::new([0xFE; 32]);
     InviteMusubiPackageMaintainerV1 {
         package: package.clone(),
@@ -707,7 +684,6 @@ fn expired_pending_invitations_reclaim_bound_and_emit_bounded_events() {
     }
     .execute(&owner, &mut transaction)
     .expect("expired invitations reclaim capacity before the bound check");
-
     assert_eq!(
         transaction
             .world
@@ -740,7 +716,6 @@ fn expired_pending_invitations_reclaim_bound_and_emit_bounded_events() {
             .state,
         MusubiInvitationStateV1::Pending
     );
-
     let events = take_musubi_events(&mut transaction);
     assert_eq!(
         events
@@ -758,7 +733,6 @@ fn expired_pending_invitations_reclaim_bound_and_emit_bounded_events() {
     );
     assert_eq!(events.len(), MUSUBI_MAX_PENDING_INVITATIONS_V1 + 1);
 }
-
 #[test]
 fn invitation_revoke_is_owner_only_cas_and_replay_safe() {
     let state = State::new_for_testing(
@@ -795,7 +769,6 @@ fn invitation_revoke_is_owner_only_cas_and_replay_safe() {
         },
         &mut transaction,
     );
-
     let revoke = |expected_governance_revision| RevokeMusubiPackageMaintainerInvitationV1 {
         package: package.clone(),
         invite_id,
@@ -814,7 +787,6 @@ fn invitation_revoke_is_owner_only_cas_and_replay_safe() {
             .contains("stale Musubi package governance")
     );
     assert!(take_musubi_events(&mut transaction).is_empty());
-
     revoke(1)
         .execute(&owner, &mut transaction)
         .expect("the current owner may revoke the pending invitation");
@@ -852,7 +824,6 @@ fn invitation_revoke_is_owner_only_cas_and_replay_safe() {
         take_musubi_events(&mut transaction).as_slice(),
         [MusubiEvent::MaintainerInvitationRevoked(_)]
     ));
-
     let replay = revoke(2)
         .execute(&owner, &mut transaction)
         .expect_err("a terminal invitation cannot be revoked twice");
@@ -867,7 +838,6 @@ fn invitation_revoke_is_owner_only_cas_and_replay_safe() {
     );
     assert!(take_musubi_events(&mut transaction).is_empty());
 }
-
 #[test]
 fn accepting_an_expired_invitation_fails_without_mutating_it() {
     let state = State::new_for_testing(
@@ -903,7 +873,6 @@ fn accepting_an_expired_invitation_fails_without_mutating_it() {
         },
         &mut transaction,
     );
-
     let error = AcceptMusubiPackageMaintainerV1 {
         package: package.clone(),
         invite_id,
@@ -928,7 +897,6 @@ fn accepting_an_expired_invitation_fails_without_mutating_it() {
     assert_eq!(pending_invitation_count(&package, transaction.world()), 1);
     assert!(take_musubi_events(&mut transaction).is_empty());
 }
-
 #[test]
 fn maintainer_query_visibility_excludes_only_height_expired_invitations() {
     let package = package("query-expiry");
@@ -961,7 +929,6 @@ fn maintainer_query_visibility_excludes_only_height_expired_invitations() {
         10,
     ));
 }
-
 #[test]
 fn identical_alias_replay_requires_current_package_owner_authorization() {
     let state = State::new_for_testing(
@@ -1002,7 +969,6 @@ fn identical_alias_replay_requires_current_package_owner_authorization() {
     closed_policy.alias_pricing.revision = 2;
     closed_policy.alias_pricing.length_5_to_32_xor = 2;
     *transaction.world.musubi_registry_policy.get_mut() = closed_policy;
-
     let error = RegisterMusubiAliasV1 {
         alias: alias.clone(),
         target: package.clone(),
@@ -1021,7 +987,6 @@ fn identical_alias_replay_requires_current_package_owner_authorization() {
         1
     );
     assert!(take_musubi_events(&mut transaction).is_empty());
-
     RegisterMusubiAliasV1 {
         alias: alias.clone(),
         target: package,
@@ -1040,7 +1005,6 @@ fn identical_alias_replay_requires_current_package_owner_authorization() {
     );
     assert!(take_musubi_events(&mut transaction).is_empty());
 }
-
 #[test]
 fn location_reverse_indices_reject_reuse_and_retain_tombstones() {
     let state = State::new_for_testing(
@@ -1070,7 +1034,6 @@ fn location_reverse_indices_reject_reuse_and_retain_tombstones() {
             .get(&pin)
             .is_some_and(|reference| reference.active && reference.location == first.key())
     );
-
     let conflicting = location_fixture(
         0xA4,
         pin,
@@ -1078,7 +1041,6 @@ fn location_reverse_indices_reject_reuse_and_retain_tombstones() {
     );
     bind_location_reverse_indices(None, &conflicting, &mut transaction)
         .expect_err("one pin manifest cannot be rebound to another location");
-
     retire_location_reverse_indices(&first, &mut transaction)
         .expect("retirement atomically leaves reuse tombstones");
     assert!(
@@ -1091,7 +1053,6 @@ fn location_reverse_indices_reject_reuse_and_retain_tombstones() {
     bind_location_reverse_indices(None, &conflicting, &mut transaction)
         .expect_err("retired pin tombstones permanently reject reuse");
 }
-
 #[test]
 fn namespace_binding_replay_requires_current_owner_authorization() {
     let state = State::new_for_testing(
@@ -1151,18 +1112,15 @@ fn namespace_binding_replay_requires_current_owner_authorization() {
     closed_policy.revision = 2;
     closed_policy.mode = MusubiRegistryAdmissionModeV1::Closed;
     *transaction.world.musubi_registry_policy.get_mut() = closed_policy;
-
     let unauthorized = RegisterMusubiNamespaceBindingV1::new(binding.clone(), 1)
         .execute(&stranger, &mut transaction)
         .expect_err("an arbitrary authority cannot obtain a successful namespace replay");
     assert!(unauthorized.to_string().contains("does not own"));
     assert!(transaction.world.take_external_events().is_empty());
-
     RegisterMusubiNamespaceBindingV1::new(binding.clone(), u64::MAX)
         .execute(&owner, &mut transaction)
         .expect("the current owner may replay an identical binding under closed admission");
     assert!(transaction.world.take_external_events().is_empty());
-
     record.owner = stranger.clone();
     record.ownership_generation = 2;
     transaction
@@ -1177,7 +1135,6 @@ fn namespace_binding_replay_requires_current_owner_authorization() {
         .execute(&stranger, &mut transaction)
         .expect("the live owner may replay an immutable older-generation binding");
     assert!(transaction.world.take_external_events().is_empty());
-
     let conflicting = MusubiNamespaceBindingV1 {
         home_dataspace: iroha_data_model::nexus::DataSpaceId::new(8),
         ..binding
@@ -1187,7 +1144,6 @@ fn namespace_binding_replay_requires_current_owner_authorization() {
         .expect_err("conflicting immutable namespace binding is rejected");
     assert!(transaction.world.take_external_events().is_empty());
 }
-
 #[test]
 fn namespace_claim_uses_live_owner_generation_after_immutable_binding_registration() {
     let owner_keypair =
@@ -1221,7 +1177,6 @@ fn namespace_claim_uses_live_owner_generation_after_immutable_binding_registrati
             payload,
         }
     };
-
     validate_namespace_claim_authority(&binding, None, &owner, &owner, 2, 50)
         .expect("the live owner may claim after ownership generation advances");
     validate_namespace_claim_authority(
@@ -1245,7 +1200,6 @@ fn namespace_claim_uses_live_owner_generation_after_immutable_binding_registrati
     validate_namespace_claim_authority(&binding, None, &owner, &owner, 0, 50)
         .expect_err("a zero live ownership generation must fail closed");
 }
-
 #[test]
 fn namespace_home_dataspace_matches_catalog_for_root_and_domain_scopes() {
     let world = World::default();
@@ -1264,7 +1218,6 @@ fn namespace_home_dataspace_matches_catalog_for_root_and_domain_scopes() {
             generation: 1,
         },
     ];
-
     for binding in &bindings {
         validate_namespace_home_dataspace(binding, &world.view(), &catalog, 50)
             .expect("namespace alias and structural dataspace agree");
@@ -1276,7 +1229,6 @@ fn namespace_home_dataspace_matches_catalog_for_root_and_domain_scopes() {
             .expect_err("cross-dataspace namespace binding must fail closed");
     }
 }
-
 #[test]
 fn namespace_home_dataspace_rejects_static_dynamic_alias_conflicts_for_all_scopes() {
     let catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
@@ -1314,7 +1266,6 @@ fn namespace_home_dataspace_rejects_static_dynamic_alias_conflicts_for_all_scope
             generation: 1,
         },
     ];
-
     for binding in &bindings {
         let error = validate_namespace_home_dataspace(binding, &world.view(), &catalog, 50)
             .expect_err("conflicting static and dynamic dataspace mappings must fail closed");
@@ -1326,7 +1277,6 @@ fn namespace_home_dataspace_rejects_static_dynamic_alias_conflicts_for_all_scope
         );
     }
 }
-
 #[test]
 fn release_yank_rejects_decoded_empty_reason_before_state_lookup() {
     let release = MusubiReleaseIdV1::new(
@@ -1348,7 +1298,6 @@ fn release_yank_rejects_decoded_empty_reason_before_state_lookup() {
     assert_ne!(hostile, json, "reason fixture must be replaced");
     let decoded: SetMusubiReleaseYankV1 =
         norito::json::from_json(&hostile).expect("decode structurally valid hostile request");
-
     let state = State::new_for_testing(
         World::new(),
         Kura::blank_kura_for_testing(),
@@ -1372,7 +1321,6 @@ fn release_yank_rejects_decoded_empty_reason_before_state_lookup() {
         "unexpected decoded-yank rejection: {error}"
     );
 }
-
 #[test]
 fn parliament_consumption_records_server_execution_height() {
     let state = State::new_for_testing(
@@ -1400,7 +1348,6 @@ fn parliament_consumption_records_server_execution_height() {
             .expect("governance fixture height exceeds its minimum delay"),
         execute_after_height: GOVERNANCE_EXECUTION_HEIGHT,
     };
-
     consume_parliament_decision(decision, &mut transaction)
         .expect("valid decision is consumed at the server block height");
     let consumed = transaction
@@ -1412,7 +1359,6 @@ fn parliament_consumption_records_server_execution_height() {
     assert_eq!(consumed.minimum_enactment_delay, minimum_enactment_delay);
     assert_eq!(consumed.consumed_at_height, GOVERNANCE_EXECUTION_HEIGHT);
 }
-
 #[test]
 fn proposal_fingerprint_mismatch_is_rejected_before_recovery_mutation() {
     let state = State::new_for_testing(
@@ -1445,7 +1391,6 @@ fn proposal_fingerprint_mismatch_is_rejected_before_recovery_mutation() {
     assert_ne!(wrong_id, kind.fingerprint());
     let decision = decision_for_current_block(wrong_id, &action, &transaction);
     insert_enacted_proposal(wrong_id, kind, decision.enacted_at_height, &mut transaction);
-
     let error = RecoverMusubiPackageV1 {
         decision,
         package: package.clone(),
@@ -1455,7 +1400,6 @@ fn proposal_fingerprint_mismatch_is_rejected_before_recovery_mutation() {
     .execute(&account(83), &mut transaction)
     .expect_err("a proposal stored under a non-fingerprint key must fail closed");
     assert!(error.to_string().contains("fingerprint"), "{error}");
-
     let persisted = transaction
         .world
         .musubi_packages
@@ -1479,7 +1423,6 @@ fn proposal_fingerprint_mismatch_is_rejected_before_recovery_mutation() {
     );
     assert!(take_musubi_events(&mut transaction).is_empty());
 }
-
 #[test]
 fn owner_recovery_binds_consumption_state_event_and_rejects_replay() {
     let state = State::new_for_testing(
@@ -1510,7 +1453,6 @@ fn owner_recovery_binds_consumption_state_event_and_rejects_replay() {
         expected_revision: 1,
     });
     let decision = seed_enacted_decision(&action, &mut transaction);
-
     RecoverMusubiPackageV1 {
         decision,
         package: package.clone(),
@@ -1519,7 +1461,6 @@ fn owner_recovery_binds_consumption_state_event_and_rejects_replay() {
     }
     .execute(&account(87), &mut transaction)
     .expect("canonical owner recovery executes");
-
     let consumption = *transaction
         .world
         .musubi_governance_decisions
@@ -1556,7 +1497,6 @@ fn owner_recovery_binds_consumption_state_event_and_rejects_replay() {
             .get(&MusubiPackageMemberKeyV1::new(package.clone(), old_owner))
             .is_none()
     );
-
     let events = take_musubi_events(&mut transaction);
     let [MusubiEvent::PackageRecovered(event)] = events.as_slice() else {
         panic!("expected exactly one package-recovery event: {events:?}");
@@ -1566,7 +1506,6 @@ fn owner_recovery_binds_consumption_state_event_and_rejects_replay() {
     assert_eq!(event.finalized_height, consumption.consumed_at_height);
     assert_eq!(event.governance_revision, persisted.revisions.governance);
     assert_eq!(usize::from(event.owner_count), persisted.owners.len());
-
     let replay_error = RecoverMusubiPackageV1 {
         decision,
         package: package.clone(),
@@ -1589,7 +1528,6 @@ fn owner_recovery_binds_consumption_state_event_and_rejects_replay() {
     );
     assert!(take_musubi_events(&mut transaction).is_empty());
 }
-
 #[test]
 fn artifact_takedown_binds_state_resolver_directory_consumption_event_and_rejects_replay() {
     let state = State::new_for_testing(
@@ -1608,7 +1546,6 @@ fn artifact_takedown_binds_state_resolver_directory_consumption_event_and_reject
     );
     let mut block = state.block(header);
     let mut transaction = block.transaction();
-
     let archive = retention_archive(91);
     let archive_id = archive.archive_id;
     let source_digest = archive.commitment.source_tree_digest;
@@ -1624,7 +1561,6 @@ fn artifact_takedown_binds_state_resolver_directory_consumption_event_and_reject
     let release_id = initial_release.manifest.release.clone();
     let package = release_id.package.clone();
     seed_package_owner(&package, &account(92), 1, &mut transaction);
-
     let initial_index_revision = transaction.world.musubi_resolver_index_revision.get().get();
     let expected_index_revision = initial_index_revision
         .checked_add(1)
@@ -1663,7 +1599,6 @@ fn artifact_takedown_binds_state_resolver_directory_consumption_event_and_reject
         .world
         .musubi_resolver_index
         .insert(release_id.clone(), initial_row.clone());
-
     let (namespace, metadata_revision) = {
         let package_record = transaction
             .world
@@ -1693,7 +1628,6 @@ fn artifact_takedown_binds_state_resolver_directory_consumption_event_and_reject
         .world
         .musubi_public_directory
         .insert(selector.clone(), initial_directory);
-
     let reason: MusubiReasonV1 = "governed security response"
         .parse()
         .expect("bounded takedown reason");
@@ -1704,7 +1638,6 @@ fn artifact_takedown_binds_state_resolver_directory_consumption_event_and_reject
     });
     let decision = seed_enacted_decision(&action, &mut transaction);
     let minimum_enactment_delay = transaction.gov.min_enactment_delay;
-
     SetMusubiArtifactTakedownV1 {
         decision,
         release: release_id.clone(),
@@ -1713,7 +1646,6 @@ fn artifact_takedown_binds_state_resolver_directory_consumption_event_and_reject
     }
     .execute(&account(93), &mut transaction)
     .expect("canonical artifact takedown executes");
-
     let expected_governance =
         MusubiArtifactGovernanceStateV1::TakenDown(MusubiArtifactTakedownV1 {
             action_digest: decision.action_digest,
@@ -1775,7 +1707,6 @@ fn artifact_takedown_binds_state_resolver_directory_consumption_event_and_reject
             }
         )]
     );
-
     let replay_error = SetMusubiArtifactTakedownV1 {
         decision,
         release: release_id.clone(),
@@ -1810,7 +1741,6 @@ fn artifact_takedown_binds_state_resolver_directory_consumption_event_and_reject
     );
     assert!(take_musubi_events(&mut transaction).is_empty());
 }
-
 #[test]
 fn empty_maintainer_role_and_revision_overflow_fail_closed() {
     let empty = MusubiMaintainerPermissionsV1 {

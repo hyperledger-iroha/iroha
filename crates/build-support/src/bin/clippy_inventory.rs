@@ -1,6 +1,6 @@
 #![deny(warnings)]
 //! Emit a Norito JSON inventory of remaining Clippy warnings per crate.
-
+use norito::json::{self, Value};
 use std::{
     collections::BTreeMap,
     fs,
@@ -8,12 +8,8 @@ use std::{
     path::PathBuf,
     process::{Command, Stdio},
 };
-
-use norito::json::{self, Value};
-
 const REPORT_PATH: &str = "target/clippy-inventory.norito.json";
 const INVENTORY_PREFIX: &str = "clippy inventory:";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ClippyWarning {
     code: Option<String>,
@@ -21,13 +17,10 @@ struct ClippyWarning {
     file: Option<String>,
     line: Option<u64>,
 }
-
 type DynError = Box<dyn std::error::Error + Send + Sync + 'static>;
-
 fn main() -> Result<(), DynError> {
     run()
 }
-
 fn run() -> Result<(), DynError> {
     let mut command = Command::new("cargo");
     command
@@ -37,7 +30,6 @@ fn run() -> Result<(), DynError> {
         .arg("--message-format=json")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-
     let mut child = command.spawn()?;
     let stdout = child
         .stdout
@@ -47,7 +39,6 @@ fn run() -> Result<(), DynError> {
         .stderr
         .take()
         .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "missing stderr from cargo"))?;
-
     let mut stderr_reader = BufReader::new(stderr);
     let stderr_handle = std::thread::spawn(move || -> io::Result<()> {
         let mut buffer = String::new();
@@ -57,23 +48,19 @@ fn run() -> Result<(), DynError> {
         }
         Ok(())
     });
-
     let mut warnings: BTreeMap<String, Vec<ClippyWarning>> = BTreeMap::new();
     let mut stdout_reader = BufReader::new(stdout);
     let mut line = String::new();
-
     while stdout_reader.read_line(&mut line)? != 0 {
         if let Some(warning) = parse_warning_line(line.trim()) {
             warnings.entry(warning.0).or_default().push(warning.1);
         }
         line.clear();
     }
-
     let status = child.wait()?;
     if let Err(err) = stderr_handle.join().unwrap() {
         eprintln!("{INVENTORY_PREFIX} failed to read cargo stderr: {err}");
     }
-
     emit_summary(&warnings)?;
     if !status.success() {
         return Err(format!("cargo clippy exited with status {status}").into());
@@ -86,12 +73,10 @@ fn run() -> Result<(), DynError> {
     }
     Ok(())
 }
-
 fn parse_warning_line(line: &str) -> Option<(String, ClippyWarning)> {
     if !line.starts_with('{') {
         return None;
     }
-
     let value: Value = match json::from_str(line) {
         Ok(value) => value,
         Err(err) => {
@@ -99,20 +84,15 @@ fn parse_warning_line(line: &str) -> Option<(String, ClippyWarning)> {
             return None;
         }
     };
-
     if !matches!(value.get("reason"), Some(Value::String(s)) if s == "compiler-message") {
         return None;
     }
-
     let package_id = value.get("package_id").and_then(Value::as_str)?;
     let crate_name = package_short_name(package_id).to_owned();
-
     let message = value.get("message")?;
-
     if !matches!(message.get("level"), Some(Value::String(level)) if level == "warning") {
         return None;
     }
-
     let text = message
         .get("message")
         .and_then(Value::as_str)
@@ -120,15 +100,12 @@ fn parse_warning_line(line: &str) -> Option<(String, ClippyWarning)> {
         .unwrap_or("")
         .trim()
         .to_owned();
-
     let code = message
         .get("code")
         .and_then(|code| code.get("code"))
         .and_then(Value::as_str)
         .map(str::to_owned);
-
     let (file, line) = extract_primary_span(message.get("spans"));
-
     Some((
         crate_name,
         ClippyWarning {
@@ -139,7 +116,6 @@ fn parse_warning_line(line: &str) -> Option<(String, ClippyWarning)> {
         },
     ))
 }
-
 fn extract_primary_span(spans: Option<&Value>) -> (Option<String>, Option<u64>) {
     let mut primary: Option<&Value> = None;
     if let Some(Value::Array(list)) = spans {
@@ -153,7 +129,6 @@ fn extract_primary_span(spans: Option<&Value>) -> (Option<String>, Option<u64>) 
             primary = list.first();
         }
     }
-
     if let Some(Value::Object(obj)) = primary {
         let file = obj
             .get("file_name")
@@ -165,11 +140,9 @@ fn extract_primary_span(spans: Option<&Value>) -> (Option<String>, Option<u64>) 
         (None, None)
     }
 }
-
 fn package_short_name(package_id: &str) -> &str {
     package_id.split([' ', '#']).next().unwrap_or(package_id)
 }
-
 fn emit_summary(warnings: &BTreeMap<String, Vec<ClippyWarning>>) -> Result<(), DynError> {
     if warnings.is_empty() {
         println!("{INVENTORY_PREFIX} no warnings detected");
@@ -193,7 +166,6 @@ fn emit_summary(warnings: &BTreeMap<String, Vec<ClippyWarning>>) -> Result<(), D
             }
         }
     }
-
     let mut crates_report = Vec::new();
     for (crate_name, entries) in warnings {
         let mut warning_values = Vec::with_capacity(entries.len());
@@ -229,9 +201,7 @@ fn emit_summary(warnings: &BTreeMap<String, Vec<ClippyWarning>>) -> Result<(), D
             ("warnings", json::array(warning_values.into_iter())?),
         ])?);
     }
-
     let report = json::object([("crates", json::array(crates_report.into_iter())?)])?;
-
     let output = json::to_json_pretty(&report)?;
     let path = PathBuf::from(REPORT_PATH);
     if let Some(parent) = path.parent() {
@@ -240,11 +210,9 @@ fn emit_summary(warnings: &BTreeMap<String, Vec<ClippyWarning>>) -> Result<(), D
     fs::write(&path, output)?;
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn splits_package_name() {
         assert_eq!(package_short_name("crate_a 0.1.0"), "crate_a");
@@ -254,7 +222,6 @@ mod tests {
         );
         assert_eq!(package_short_name("crate_c#meta"), "crate_c");
     }
-
     #[test]
     fn parses_warning_line() {
         let sample = r#"{
@@ -280,7 +247,6 @@ mod tests {
         assert_eq!(parsed.1.file.as_deref(), Some("src/lib.rs"));
         assert_eq!(parsed.1.line, Some(42));
     }
-
     #[test]
     fn primary_span_fallbacks() {
         let spans = json::array([
@@ -298,11 +264,9 @@ mod tests {
             .unwrap(),
         ])
         .unwrap();
-
         let (file, line) = extract_primary_span(Some(&spans));
         assert_eq!(file.as_deref(), Some("first.rs"));
         assert_eq!(line, Some(1));
-
         let spans_no_primary = json::array([json::object([
             ("file_name", json::to_value("fallback.rs").unwrap()),
             ("line_start", json::to_value(&9_u64).unwrap()),

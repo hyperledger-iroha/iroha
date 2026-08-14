@@ -3,7 +3,6 @@
 //! C ABI:
 //! - gpu_zstd_compress(src_ptr, src_len, level, dst_ptr, dst_len)
 //! - gpu_zstd_decompress(src_ptr, src_len, dst_ptr, dst_len)
-
 /// Shared little-endian bitstream helpers for zstd frame coding.
 #[allow(dead_code)]
 pub mod bitstream;
@@ -16,16 +15,13 @@ pub mod huffman;
 /// Shared deterministic zstd frame encoder/decoder.
 #[allow(dead_code)]
 pub mod zstd_frame;
-
 use std::{io::Cursor, ptr, slice};
-
 const RC_OK: i32 = 0;
 const RC_INVALID: i32 = 1;
 const RC_NO_SPACE: i32 = 2;
 #[cfg_attr(all(target_os = "macos", target_arch = "aarch64"), allow(dead_code))]
 const RC_GPU_UNAVAILABLE: i32 = 3;
 const RC_ZSTD: i32 = 4;
-
 const CHUNK_SIZE: u32 = 32 * 1024;
 #[cfg_attr(
     not(all(target_os = "macos", target_arch = "aarch64")),
@@ -37,7 +33,6 @@ const MIN_MATCH: u32 = 3;
     allow(dead_code)
 )]
 const MAX_MATCH: u32 = 64;
-
 /// Deterministic zstd sequence emitted by GPU match-finding kernels.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -51,7 +46,6 @@ pub struct GpuZstdSequence {
     /// Reserved for ABI-compatible future extension; must be zero.
     pub reserved: u32,
 }
-
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 unsafe extern "C" {
     fn gpuzstd_metal_count_sequences(
@@ -63,7 +57,6 @@ unsafe extern "C" {
         out_counts: *mut u32,
         counts_len: u32,
     ) -> i32;
-
     fn gpuzstd_metal_write_sequences(
         input: *const u8,
         input_len: usize,
@@ -75,7 +68,6 @@ unsafe extern "C" {
         out_seqs: *mut GpuZstdSequence,
         seq_capacity: u32,
     ) -> i32;
-
     #[cfg(test)]
     fn gpuzstd_metal_huff_encode(
         input: *const u8,
@@ -86,7 +78,6 @@ unsafe extern "C" {
         out_lengths: *mut u8,
         lengths_len: usize,
     ) -> i32;
-
     #[cfg(test)]
     fn gpuzstd_metal_huff_decode(
         encoded: *const u8,
@@ -96,7 +87,6 @@ unsafe extern "C" {
         out_bytes: *mut u8,
         out_len: usize,
     ) -> i32;
-
     #[cfg(test)]
     fn gpuzstd_metal_fse_encode(
         symbols: *const u16,
@@ -109,7 +99,6 @@ unsafe extern "C" {
         out_capacity: usize,
         out_len: *mut usize,
     ) -> i32;
-
     #[cfg(test)]
     fn gpuzstd_metal_fse_decode(
         encoded: *const u8,
@@ -122,7 +111,6 @@ unsafe extern "C" {
         out_len: usize,
     ) -> i32;
 }
-
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn gpu_sequences(input: &[u8]) -> Result<GpuSequences, i32> {
     if input.is_empty() {
@@ -150,7 +138,6 @@ fn gpu_sequences(input: &[u8]) -> Result<GpuSequences, i32> {
     if rc != RC_OK {
         return Err(rc);
     }
-
     let mut offsets = Vec::with_capacity(chunk_count);
     let mut total: u64 = 0;
     for count in &counts {
@@ -185,7 +172,6 @@ fn gpu_sequences(input: &[u8]) -> Result<GpuSequences, i32> {
     if rc != RC_OK {
         return Err(rc);
     }
-
     let mut consumed: u64 = 0;
     for seq in &gpu_seqs {
         consumed = consumed.saturating_add(seq.lit_len as u64);
@@ -200,19 +186,16 @@ fn gpu_sequences(input: &[u8]) -> Result<GpuSequences, i32> {
         seqs: gpu_seqs,
     })
 }
-
 #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 fn gpu_sequences(_input: &[u8]) -> Result<GpuSequences, i32> {
     Err(RC_GPU_UNAVAILABLE)
 }
-
 #[derive(Default)]
 struct GpuSequences {
     counts: Vec<u32>,
     offsets: Vec<u32>,
     seqs: Vec<GpuZstdSequence>,
 }
-
 /// Compress `src` into `dst` using the shared helper path.
 ///
 /// # Safety
@@ -256,7 +239,6 @@ pub unsafe fn compress_ffi(
     }
     RC_OK
 }
-
 #[cfg(feature = "c-abi")]
 #[unsafe(no_mangle)]
 /// Compress `src` into `dst` using the Metal/shared helper path.
@@ -273,7 +255,6 @@ pub unsafe extern "C" fn gpu_zstd_compress(
 ) -> i32 {
     unsafe { compress_ffi(src, src_len, level, dst, dst_len) }
 }
-
 /// Decompress `src` into `dst` using the shared helper path.
 ///
 /// # Safety
@@ -309,7 +290,6 @@ pub unsafe fn decompress_ffi(
     }
     RC_OK
 }
-
 #[cfg(feature = "c-abi")]
 #[unsafe(no_mangle)]
 /// Decompress `src` into `dst` using the Metal/shared helper path.
@@ -325,14 +305,12 @@ pub unsafe extern "C" fn gpu_zstd_decompress(
 ) -> i32 {
     unsafe { decompress_ffi(src, src_len, dst, dst_len) }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     use crate::{fse, huffman};
     use std::time::Instant;
-
     fn lcg_payload(len: usize, mut seed: u64) -> Vec<u8> {
         let mut out = vec![0u8; len];
         for byte in &mut out {
@@ -341,7 +319,6 @@ mod tests {
         }
         out
     }
-
     fn try_gpu_compress(payload: &[u8]) -> Result<Vec<u8>, i32> {
         let mut out = vec![0u8; payload.len().saturating_mul(4).saturating_add(512)];
         let mut out_len = out.len();
@@ -360,7 +337,6 @@ mod tests {
         out.truncate(out_len);
         Ok(out)
     }
-
     fn try_gpu_decompress(payload: &[u8], expected_len: usize) -> Result<Vec<u8>, i32> {
         let mut out = vec![0u8; expected_len.saturating_mul(2).saturating_add(256)];
         let mut out_len = out.len();
@@ -378,7 +354,6 @@ mod tests {
         out.truncate(out_len);
         Ok(out)
     }
-
     fn skip_if_unavailable(rc: i32) -> bool {
         if rc == RC_GPU_UNAVAILABLE {
             eprintln!("gpuzstd_metal unavailable; skipping test");
@@ -387,7 +362,6 @@ mod tests {
             false
         }
     }
-
     #[test]
     fn gpu_roundtrip_matches_cpu() {
         let payload = b"gpuzstd metal roundtrip";
@@ -411,7 +385,6 @@ mod tests {
         };
         assert_eq!(decoded, payload);
     }
-
     #[test]
     fn gpu_decode_handles_cpu_zstd() {
         let payload = b"gpuzstd metal cpu decode";
@@ -427,7 +400,6 @@ mod tests {
         };
         assert_eq!(decoded, payload);
     }
-
     #[test]
     fn gpu_encode_matches_cpu_zstd() {
         let payload = b"gpuzstd metal encode";
@@ -443,7 +415,6 @@ mod tests {
         let decoded = zstd::decode_all(Cursor::new(&compressed)).expect("cpu decode");
         assert_eq!(decoded, payload);
     }
-
     #[test]
     fn gpu_determinism_corpus_roundtrip() {
         let corpus = [
@@ -455,7 +426,6 @@ mod tests {
         ];
         let random_1 = lcg_payload(257, 0x1234_5678_9abc_def0);
         let random_2 = lcg_payload(4096, 0xfeed_beef_cafe_f00d);
-
         for payload in corpus
             .into_iter()
             .chain([random_1.as_slice(), random_2.as_slice()])
@@ -479,10 +449,8 @@ mod tests {
                 }
             };
             assert_eq!(compressed_a, compressed_b);
-
             let decoded_cpu = zstd::decode_all(Cursor::new(&compressed_a)).expect("cpu decode");
             assert_eq!(decoded_cpu, payload);
-
             let decoded_gpu = match try_gpu_decompress(&compressed_a, payload.len()) {
                 Ok(bytes) => bytes,
                 Err(rc) => {
@@ -495,13 +463,11 @@ mod tests {
             assert_eq!(decoded_gpu, payload);
         }
     }
-
     #[test]
     #[ignore]
     fn gpu_vs_cpu_benchmark() {
         let sizes = [4 * 1024, 32 * 1024, 128 * 1024, 1024 * 1024];
         let iterations = [10usize, 6, 4, 2];
-
         for (&size, &iters) in sizes.iter().zip(iterations.iter()) {
             let payload = lcg_payload(size, 0x1234_5678_9abc_def0 ^ size as u64);
             let cpu_start = Instant::now();
@@ -509,7 +475,6 @@ mod tests {
                 let _ = zstd::encode_all(Cursor::new(&payload), 1).expect("cpu encode");
             }
             let cpu_elapsed = cpu_start.elapsed();
-
             let gpu_start = Instant::now();
             let mut last = None;
             for _ in 0..iters {
@@ -525,12 +490,10 @@ mod tests {
                 last = Some(compressed);
             }
             let gpu_elapsed = gpu_start.elapsed();
-
             if let Some(compressed) = last {
                 let decoded = zstd::decode_all(Cursor::new(&compressed)).expect("cpu decode");
                 assert_eq!(decoded.len(), payload.len());
             }
-
             let cpu_avg = cpu_elapsed.as_secs_f64() * 1e6 / iters as f64;
             let gpu_avg = gpu_elapsed.as_secs_f64() * 1e6 / iters as f64;
             println!(
@@ -539,7 +502,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn gpu_decode_rejects_invalid_frames() {
         let invalid = [0u8, 1, 2, 3, 4, 5];
@@ -555,7 +517,6 @@ mod tests {
         };
         assert_eq!(rc, RC_ZSTD);
     }
-
     #[test]
     fn gpu_compress_reports_unavailable_when_metal_path_is_unavailable() {
         let payload = b"gpuzstd availability fallback";
@@ -580,7 +541,6 @@ mod tests {
             assert_eq!(rc, RC_OK);
         }
     }
-
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     #[test]
     fn gpu_huffman_parity() {
@@ -609,7 +569,6 @@ mod tests {
         assert_eq!(gpu_lengths, cpu_table.lengths);
         assert_eq!(gpu_out, cpu_encoded);
     }
-
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     #[test]
     fn gpu_huffman_decode_roundtrip() {
@@ -633,7 +592,6 @@ mod tests {
         assert_eq!(rc, RC_OK);
         assert_eq!(gpu_out, payload);
     }
-
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     #[test]
     fn gpu_fse_parity() {
@@ -645,7 +603,6 @@ mod tests {
         let norm = fse::normalize_counts(&counts, 5).expect("normalize");
         let (ct, dt) = fse::build_tables(&norm, 3, 5).expect("tables");
         let cpu_encoded = fse::encode_symbols(&symbols, &ct).expect("cpu encode");
-
         let mut gpu_out = vec![0u8; cpu_encoded.len().saturating_mul(2).saturating_add(16)];
         let mut gpu_len = gpu_out.len();
         let rc = unsafe {
@@ -668,7 +625,6 @@ mod tests {
         assert_eq!(rc, RC_OK);
         gpu_out.truncate(gpu_len);
         assert_eq!(gpu_out, cpu_encoded);
-
         let mut gpu_symbols = vec![0u16; symbols.len()];
         let rc = unsafe {
             gpuzstd_metal_fse_decode(
@@ -684,7 +640,6 @@ mod tests {
         };
         assert_eq!(rc, RC_OK);
         assert_eq!(gpu_symbols, symbols);
-
         let cpu_decoded = fse::decode_symbols(&cpu_encoded, symbols.len(), &dt).expect("decode");
         assert_eq!(cpu_decoded, symbols);
     }

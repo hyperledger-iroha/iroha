@@ -1,15 +1,6 @@
 //! Router smoke tests for the first-release offline API.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "app_api")]
-
-use std::{
-    convert::Infallible,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
-
 use axum::body::{Body, Bytes};
 use axum::extract::connect_info::ConnectInfo;
 use axum::http::{
@@ -17,18 +8,21 @@ use axum::http::{
     header::{ACCEPT, CONTENT_TYPE},
 };
 use iroha_core::prelude::World;
-
+use std::{
+    convert::Infallible,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 #[path = "fixtures.rs"]
 mod fixtures;
-
 fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     iroha_torii::test_utils::mk_minimal_root_cfg()
 }
-
 fn connect_info() -> ConnectInfo<std::net::SocketAddr> {
     ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
 }
-
 fn tracked_oversized_body(limit: u64) -> (Body, Arc<AtomicUsize>) {
     let polls = Arc::new(AtomicUsize::new(0));
     let body_polls = Arc::clone(&polls);
@@ -42,18 +36,14 @@ fn tracked_oversized_body(limit: u64) -> (Body, Arc<AtomicUsize>) {
     }));
     (body, polls)
 }
-
 #[tokio::test]
 async fn offline_router_exposes_only_the_final_first_release_contract() {
     const OFFLINE_COMMAND_BODY_LIMIT: u64 = 2_200_000;
-
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = mk_minimal_root_cfg();
     cfg.torii.max_content_len = OFFLINE_COMMAND_BODY_LIMIT.into();
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
-
     let app = torii.router();
-
     let readiness = fixtures::request(
         &app,
         Request::builder()
@@ -81,7 +71,6 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
     assert!(capability.ready);
     assert!(capability.assets.is_empty());
     assert!(capability.blockers.is_empty());
-
     let legacy_selector = fixtures::request(
         &app,
         Request::builder()
@@ -103,14 +92,12 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
         norito::json::from_slice(&legacy_selector_body)
             .expect("decode selector-neutral offline capability");
     assert_eq!(legacy_selector_capability, capability);
-
     for path in ["/v1/offline/top-up", "/v1/offline/redeem"] {
         enum RejectedHeaders {
             MissingIdempotency,
             DuplicateIdempotency,
             ForbiddenCanonicalAuth,
         }
-
         for (case, expected_status, expected_code) in [
             (
                 RejectedHeaders::MissingIdempotency,
@@ -161,7 +148,6 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                     );
                 }
             }
-
             let response = fixtures::request(&app, request)
                 .await
                 .expect("pre-body admission response");
@@ -177,7 +163,6 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                 norito::json::from_slice(&body).expect("decode pre-body admission error");
             assert_eq!(error.code(), expected_code, "path={path}");
         }
-
         let json = fixtures::request(
             &app,
             Request::builder()
@@ -201,7 +186,6 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             "request_content_type_unsupported",
             "path={path}"
         );
-
         let norito = fixtures::request(
             &app,
             Request::builder()
@@ -221,7 +205,6 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             StatusCode::BAD_REQUEST,
             "{path} must decode a direct typed Norito archive"
         );
-
         let missing_content_type = fixtures::request(
             &app,
             Request::builder()
@@ -237,7 +220,6 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             missing_content_type.status(),
             StatusCode::UNSUPPORTED_MEDIA_TYPE
         );
-
         for (content_type, expected_status, expected_code) in [
             (
                 "application/problem+json",
@@ -279,7 +261,6 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                 norito::json::from_slice(&body).expect("decode content-type error");
             assert_eq!(error.code(), expected_code, "path={path}");
         }
-
         let json_with_charset = fixtures::request(
             &app,
             Request::builder()
@@ -308,7 +289,6 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             "request_content_type_unsupported",
             "path={path}"
         );
-
         for (content_type, expected_code) in [("application/x-norito", "request_norito_invalid")] {
             let empty = fixtures::request(
                 &app,
@@ -331,7 +311,6 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             assert_eq!(error.code(), expected_code, "path={path}");
         }
     }
-
     for path in ["/v1/offline/top-up", "/v1/offline/redeem"] {
         let oversized_len = usize::try_from(OFFLINE_COMMAND_BODY_LIMIT)
             .expect("test limit fits usize")
@@ -371,7 +350,6 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                 norito::json::from_slice(&body).expect("decode typed content-type rejection");
             assert_eq!(error.code(), expected_code, "path={path}");
         }
-
         let above_axum_default = fixtures::request(
             &app,
             Request::builder()
@@ -400,7 +378,6 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
         let error: iroha_torii_shared::ErrorEnvelope =
             norito::json::from_slice(&body).expect("decode large in-limit error");
         assert_eq!(error.code(), "request_norito_invalid", "path={path}");
-
         let body_chunks = futures::stream::iter([
             Ok::<_, Infallible>(Bytes::from(vec![
                 b' ';
@@ -441,7 +418,6 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             norito::json::from_slice(&body).expect("decode typed over-limit error");
         assert_eq!(error.code(), "request_payload_too_large", "path={path}");
     }
-
     let invalid_operation_id = fixtures::request(
         &app,
         Request::builder()
@@ -454,7 +430,6 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
     .await
     .expect("operation response");
     assert_eq!(invalid_operation_id.status(), StatusCode::BAD_REQUEST);
-
     let missing_operation = fixtures::request(
         &app,
         Request::builder()
@@ -467,7 +442,6 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
     .await
     .expect("operation response");
     assert_eq!(missing_operation.status(), StatusCode::NOT_FOUND);
-
     for (method, path) in [
         (Method::POST, "/v1/offline/readiness".to_owned()),
         (Method::GET, "/v1/offline/top-up".to_owned()),

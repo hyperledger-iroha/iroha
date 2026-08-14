@@ -6,7 +6,6 @@ pub open spec fn production_effect_trace_relation(
     production_effect_slots_authorized(trace)
         && production_effect_order_relation(trace, event_kind)
 }
-
 /// Branch relation after the exact effect trace has passed its independent
 /// authorization and ordering check.
 pub open spec fn production_transition_branch_constraints(
@@ -26,7 +25,6 @@ pub open spec fn production_transition_branch_constraints(
         enter_count,
     )
 }
-
 /// Branch relation after the exact effect trace has passed its independent
 /// authorization and ordering check.
 pub open spec fn production_transition_branch_relation(
@@ -41,7 +39,6 @@ pub open spec fn production_transition_branch_relation(
         production_effect_count(facts.effects, 8),
     )
 }
-
 pub closed spec fn production_transition_action_relation(
     facts: ProductionTransitionFactsProjection,
 ) -> bool {
@@ -53,7 +50,6 @@ pub closed spec fn production_transition_action_relation(
         production_transition_branch_relation,
     )
 }
-
 /// Every accepted production action has an explicit TLA+ macro-step name and
 /// its durable-boundary name permits exactly the projected state delta.
 pub proof fn production_action_has_named_tla_mapping(
@@ -101,7 +97,6 @@ pub proof fn production_action_has_named_tla_mapping(
         _ => {},
     }
 }
-
 /// The executable gate bounds the safety-relevant volatile structures on both
 /// sides of every committed step and makes bounded persisted-TC retention explicit.
 pub proof fn production_action_preserves_volatile_bounds(
@@ -162,5 +157,4 @@ pub proof fn production_action_preserves_volatile_bounds(
 {
     reveal(production_transition_action_relation);
 }
-
 } // verus!

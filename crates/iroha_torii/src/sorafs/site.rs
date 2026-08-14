@@ -1,5 +1,5 @@
 //! Static-site binding helpers backed by SoraFS storage.
-
+use http::uri::Authority;
 use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
@@ -7,14 +7,10 @@ use std::{
     net::IpAddr,
     path::{Component, Path, PathBuf},
 };
-
-use http::uri::Authority;
-
 /// Only supported static-site binding document schema.
 pub const SITE_BINDINGS_SCHEMA_VERSION_V1: u8 = 1;
 /// Maximum JSON container nesting accepted before parsing.
 const SITE_BINDINGS_MAX_JSON_DEPTH: usize = 16;
-
 /// Versioned JSON document loaded once from the configured startup path.
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::JsonDeserialize, norito::derive::JsonSerialize,
@@ -26,7 +22,6 @@ pub struct SiteBindingsDocument {
     #[norito(default)]
     pub sites: Vec<SiteBinding>,
 }
-
 /// Hostname to manifest mapping used for local static-site serving.
 #[derive(
     Debug, Clone, norito::derive::JsonDeserialize, norito::derive::JsonSerialize, PartialEq, Eq,
@@ -43,7 +38,6 @@ pub struct SiteBinding {
     #[norito(default)]
     pub spa_fallback: Option<bool>,
 }
-
 impl SiteBinding {
     /// Return the configured index document or the default.
     #[must_use]
@@ -53,20 +47,17 @@ impl SiteBinding {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or("index.html")
     }
-
     /// Return the SPA fallback toggle (defaults to `true`).
     #[must_use]
     pub fn spa_fallback_enabled(&self) -> bool {
         self.spa_fallback.unwrap_or(true)
     }
-
     /// Return the normalized host form used for lookup.
     #[must_use]
     pub fn normalized_hostname(&self) -> Option<String> {
         normalize_host_header(&self.hostname)
     }
 }
-
 /// Load, bound, and validate the configured static-site bindings.
 ///
 /// The returned document is intended to be cached in Torii's immutable app state;
@@ -77,7 +68,6 @@ pub fn load_configured_site_bindings(
     let Some(path) = config.path.as_deref() else {
         return Ok(None);
     };
-
     let max_bytes = usize::try_from(config.max_bytes.get()).map_err(|_| {
         format!(
             "configured SoraFS site binding byte limit {} exceeds this platform's address space",
@@ -86,7 +76,6 @@ pub fn load_configured_site_bindings(
     })?;
     load_site_bindings_file(path, max_bytes, config.max_sites.get()).map(Some)
 }
-
 /// Load one static-site binding document with explicit resource limits.
 pub fn load_site_bindings_file(
     path: &Path,
@@ -99,12 +88,10 @@ pub fn load_site_bindings_file(
     if max_sites == 0 {
         return Err("SoraFS site binding max_sites must be non-zero".to_owned());
     }
-
     let path = absolute_secure_path(path)?;
     let bytes = read_secure_bounded(&path, max_bytes)?;
     validate_json_depth(&bytes, SITE_BINDINGS_MAX_JSON_DEPTH)
         .map_err(|err| format!("invalid SoraFS site bindings `{}`: {err}", path.display()))?;
-
     let value = norito::json::from_slice::<norito::json::Value>(&bytes).map_err(|err| {
         format!(
             "failed to parse SoraFS site bindings `{}` as JSON: {err}",
@@ -126,7 +113,6 @@ pub fn load_site_bindings_file(
         .sort_unstable_by(|left, right| left.hostname.cmp(&right.hostname));
     Ok(document)
 }
-
 fn absolute_secure_path(path: &Path) -> Result<PathBuf, String> {
     if path.as_os_str().is_empty() {
         return Err("SoraFS site binding path must not be empty".to_owned());
@@ -147,7 +133,6 @@ fn absolute_secure_path(path: &Path) -> Result<PathBuf, String> {
             .map_err(|err| format!("failed to resolve SoraFS site binding path: {err}"))
     }
 }
-
 fn reject_symlink_components(path: &Path) -> Result<(), String> {
     let mut current = PathBuf::new();
     let component_count = path.components().count();
@@ -177,7 +162,6 @@ fn reject_symlink_components(path: &Path) -> Result<(), String> {
         #[cfg(unix)]
         if index + 1 < component_count {
             use std::os::unix::fs::MetadataExt as _;
-
             if metadata.mode() & 0o022 != 0 {
                 return Err(format!(
                     "SoraFS site binding ancestor `{}` must not be group- or world-writable",
@@ -188,14 +172,12 @@ fn reject_symlink_components(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn open_read_only_no_follow(path: &Path) -> Result<File, String> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-
         options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
     }
     options.open(path).map_err(|err| {
@@ -205,7 +187,6 @@ fn open_read_only_no_follow(path: &Path) -> Result<File, String> {
         )
     })
 }
-
 #[allow(unsafe_code)]
 fn validate_binding_file_metadata(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
     if !metadata.is_file() {
@@ -217,7 +198,6 @@ fn validate_binding_file_metadata(path: &Path, metadata: &fs::Metadata) -> Resul
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-
         if metadata.nlink() != 1 {
             return Err(format!(
                 "SoraFS site binding file `{}` must have exactly one hard link",
@@ -240,7 +220,6 @@ fn validate_binding_file_metadata(path: &Path, metadata: &fs::Metadata) -> Resul
     }
     Ok(())
 }
-
 fn read_secure_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, String> {
     reject_symlink_components(path)?;
     let before = fs::symlink_metadata(path).map_err(|err| {
@@ -259,7 +238,6 @@ fn read_secure_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, String>
             max_bytes
         ));
     }
-
     let file = open_read_only_no_follow(path)?;
     let opened = file.metadata().map_err(|err| {
         format!(
@@ -271,7 +249,6 @@ fn read_secure_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, String>
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-
         if before.dev() != opened.dev() || before.ino() != opened.ino() {
             return Err(format!(
                 "SoraFS site binding file `{}` changed while it was opened",
@@ -279,7 +256,6 @@ fn read_secure_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, String>
             ));
         }
     }
-
     let read_limit = u64::try_from(max_bytes)
         .unwrap_or(u64::MAX)
         .saturating_add(1);
@@ -311,7 +287,6 @@ fn read_secure_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, String>
     }
     Ok(bytes)
 }
-
 fn validate_json_depth(bytes: &[u8], max_depth: usize) -> Result<(), String> {
     let mut depth = 0usize;
     let mut in_string = false;
@@ -343,7 +318,6 @@ fn validate_json_depth(bytes: &[u8], max_depth: usize) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn reject_unknown_keys(
     object: &norito::json::Map,
     allowed: &[&str],
@@ -354,7 +328,6 @@ fn reject_unknown_keys(
     }
     Ok(())
 }
-
 fn validate_binding_json_shape(
     value: &norito::json::Value,
     max_sites: usize,
@@ -392,7 +365,6 @@ fn validate_binding_json_shape(
     }
     Ok(())
 }
-
 fn validate_site_bindings(document: &SiteBindingsDocument, max_sites: usize) -> Result<(), String> {
     if document.version != SITE_BINDINGS_SCHEMA_VERSION_V1 {
         return Err(format!(
@@ -406,7 +378,6 @@ fn validate_site_bindings(document: &SiteBindingsDocument, max_sites: usize) -> 
             document.sites.len()
         ));
     }
-
     let mut hostnames = BTreeSet::new();
     for (index, binding) in document.sites.iter().enumerate() {
         validate_site_binding(binding).map_err(|err| format!("sites[{index}]: {err}"))?;
@@ -419,7 +390,6 @@ fn validate_site_bindings(document: &SiteBindingsDocument, max_sites: usize) -> 
     }
     Ok(())
 }
-
 fn validate_site_binding(binding: &SiteBinding) -> Result<(), String> {
     validate_canonical_hostname(&binding.hostname)?;
     if binding.manifest_digest_hex.len() != 64
@@ -438,7 +408,6 @@ fn validate_site_binding(binding: &SiteBinding) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn validate_index_document_name(index_document: &str) -> Result<(), String> {
     if index_document.is_empty()
         || index_document.len() > 255
@@ -455,7 +424,6 @@ fn validate_index_document_name(index_document: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn validate_canonical_hostname(hostname: &str) -> Result<(), String> {
     if hostname.is_empty()
         || hostname.len() > 253
@@ -481,7 +449,6 @@ fn validate_canonical_hostname(hostname: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 /// Normalize an inbound `Host` header or configured hostname.
 #[must_use]
 pub fn normalize_host_header(raw: &str) -> Option<String> {
@@ -500,7 +467,6 @@ pub fn normalize_host_header(raw: &str) -> Option<String> {
     // accepts a larger syntactically valid authority.
     (!host.is_empty() && host.len() <= 253).then_some(host)
 }
-
 /// Encode a raw CID byte sequence using lowercase multibase base32.
 #[must_use]
 pub fn encode_content_cid(bytes: &[u8]) -> String {
@@ -508,12 +474,10 @@ pub fn encode_content_cid(bytes: &[u8]) -> String {
     if bytes.is_empty() {
         return "b".to_string();
     }
-
     let mut acc = 0u32;
     let mut bits = 0u32;
     let mut out = Vec::with_capacity((bytes.len() * 8).div_ceil(5) + 1);
     out.push(b'b');
-
     for byte in bytes {
         acc = (acc << 8) | (*byte as u32);
         bits += 8;
@@ -523,15 +487,12 @@ pub fn encode_content_cid(bytes: &[u8]) -> String {
             bits -= 5;
         }
     }
-
     if bits > 0 {
         let index = ((acc << (5 - bits)) & 0x1f) as usize;
         out.push(ALPHABET[index]);
     }
-
     String::from_utf8(out).expect("CID alphabet is valid UTF-8")
 }
-
 /// Decode a lowercase multibase base32 CID into raw bytes.
 #[must_use]
 pub fn decode_content_cid(raw: &str) -> Option<Vec<u8>> {
@@ -542,18 +503,15 @@ pub fn decode_content_cid(raw: &str) -> Option<Vec<u8>> {
     if encoded.is_empty() {
         return None;
     }
-
     let mut acc = 0u32;
     let mut bits = 0u32;
     let mut out = Vec::with_capacity((encoded.len() * 5) / 8);
-
     for ch in encoded.chars() {
         let value = match ch {
             'a'..='z' => (ch as u8 - b'a') as u32,
             '2'..='7' => 26 + (ch as u8 - b'2') as u32,
             _ => return None,
         };
-
         acc = (acc << 5) | value;
         bits += 5;
         while bits >= 8 {
@@ -561,21 +519,17 @@ pub fn decode_content_cid(raw: &str) -> Option<Vec<u8>> {
             bits -= 8;
         }
     }
-
     if bits > 0 {
         let mask = (1u32 << bits) - 1;
         if (acc & mask) != 0 {
             return None;
         }
     }
-
     if out.is_empty() {
         return None;
     }
-
     Some(out)
 }
-
 /// Resolve the binding matching the provided host.
 #[must_use]
 pub fn find_site_binding<'a>(
@@ -588,14 +542,12 @@ pub fn find_site_binding<'a>(
         .iter()
         .find(|binding| binding.normalized_hostname().as_deref() == Some(normalized.as_str()))
 }
-
 /// Convert a request path into dataset path components.
 #[must_use]
 pub fn path_components_for_request(raw_path: &str, index_document: &str) -> Option<Vec<String>> {
     const MAX_SITE_PATH_BYTES: usize = 4096;
     const MAX_SITE_PATH_COMPONENTS: usize = 128;
     const MAX_SITE_PATH_COMPONENT_BYTES: usize = 255;
-
     if raw_path.len() > MAX_SITE_PATH_BYTES || validate_index_document_name(index_document).is_err()
     {
         return None;
@@ -611,7 +563,6 @@ pub fn path_components_for_request(raw_path: &str, index_document: &str) -> Opti
     if effective.len() > MAX_SITE_PATH_BYTES {
         return None;
     }
-
     let mut segments = Vec::new();
     for segment in effective.split('/') {
         if segment.is_empty()
@@ -626,14 +577,11 @@ pub fn path_components_for_request(raw_path: &str, index_document: &str) -> Opti
         }
         segments.push(segment.to_string());
     }
-
     if segments.is_empty() {
         return None;
     }
-
     Some(segments)
 }
-
 /// Decide whether an unknown path should fall back to the SPA entrypoint.
 #[must_use]
 pub fn should_use_spa_fallback(raw_path: &str, binding: &SiteBinding) -> bool {
@@ -644,7 +592,6 @@ pub fn should_use_spa_fallback(raw_path: &str, binding: &SiteBinding) -> bool {
     let last = trimmed.rsplit('/').next().unwrap_or_default();
     !last.contains('.')
 }
-
 /// Best-effort content-type lookup for static site assets.
 #[must_use]
 pub fn content_type_for_path(path: &[String]) -> &'static str {
@@ -674,11 +621,9 @@ pub fn content_type_for_path(path: &[String]) -> &'static str {
         _ => "application/octet-stream",
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn sample_document() -> SiteBindingsDocument {
         SiteBindingsDocument {
             version: SITE_BINDINGS_SCHEMA_VERSION_V1,
@@ -690,7 +635,6 @@ mod tests {
             }],
         }
     }
-
     fn write_secure_fixture(bytes: &[u8]) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("create temporary site binding directory");
         let canonical_dir = fs::canonicalize(dir.path()).expect("canonical temporary directory");
@@ -699,17 +643,14 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
                 .expect("restrict site bindings fixture permissions");
         }
         (dir, path)
     }
-
     fn encoded_sample_document() -> Vec<u8> {
         norito::json::to_vec(&sample_document()).expect("encode sample site bindings")
     }
-
     #[test]
     fn configured_loader_is_disabled_without_a_path() {
         let config = iroha_config::parameters::actual::SorafsGatewaySiteBindings::default();
@@ -718,7 +659,6 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn normalizes_hostnames_with_ports() {
         assert_eq!(
@@ -730,7 +670,6 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn request_path_defaults_to_index_document() {
         assert_eq!(
@@ -753,7 +692,6 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn spa_fallback_skips_extensionful_assets() {
         let binding = SiteBinding {
@@ -765,7 +703,6 @@ mod tests {
         assert!(should_use_spa_fallback("/swap", &binding));
         assert!(!should_use_spa_fallback("/assets/app.js", &binding));
     }
-
     #[test]
     fn cid_roundtrip_uses_lowercase_multibase_base32() {
         let encoded = encode_content_cid(&[0x01, 0x71, 0x1f, 0x20, 0xf3, 0x09, 0x6a, 0xe2]);
@@ -775,7 +712,6 @@ mod tests {
             Some(vec![0x01, 0x71, 0x1f, 0x20, 0xf3, 0x09, 0x6a, 0xe2])
         );
     }
-
     #[test]
     fn secure_loader_accepts_exact_resource_bound_and_sorts_hosts() {
         let mut document = sample_document();
@@ -787,14 +723,12 @@ mod tests {
         });
         let bytes = norito::json::to_vec(&document).expect("encode site bindings");
         let (_dir, path) = write_secure_fixture(&bytes);
-
         let loaded = load_site_bindings_file(&path, bytes.len(), 2).expect("valid bindings");
         assert_eq!(loaded.sites[0].hostname, "alpha.sora.org");
         assert_eq!(loaded.sites[1].hostname, "taira.sora.org");
         assert!(load_site_bindings_file(&path, bytes.len() - 1, 2).is_err());
         assert!(load_site_bindings_file(&path, bytes.len(), 1).is_err());
     }
-
     #[test]
     fn loader_rejects_duplicate_hosts_and_noncanonical_fields() {
         let invalid_documents = [
@@ -842,7 +776,6 @@ mod tests {
                 ..sample_document()
             },
         ];
-
         for (index, document) in invalid_documents.into_iter().enumerate() {
             let bytes = norito::json::to_vec(&document).expect("encode invalid bindings");
             let (_dir, path) = write_secure_fixture(&bytes);
@@ -852,7 +785,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn loader_rejects_unknown_duplicate_and_deep_json_fields() {
         let digest = "ab".repeat(32);
@@ -870,7 +802,6 @@ mod tests {
             ),
             format!("{}0{}", "[".repeat(17), "]".repeat(17)),
         ];
-
         for (index, json) in cases.into_iter().enumerate() {
             let (_dir, path) = write_secure_fixture(json.as_bytes());
             assert!(
@@ -879,30 +810,24 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn loader_caches_owned_document_instead_of_reopening_path() {
         let bytes = encoded_sample_document();
         let (_dir, path) = write_secure_fixture(&bytes);
         let loaded = load_site_bindings_file(&path, bytes.len(), 1).expect("load bindings");
-
         fs::write(&path, b"not json").expect("replace source after startup load");
         assert_eq!(loaded, sample_document());
     }
-
     #[cfg(unix)]
     #[test]
     fn secure_loader_rejects_symlinks_hardlinks_and_unsafe_permissions() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
-
         let bytes = encoded_sample_document();
-
         let (dir, path) = write_secure_fixture(&bytes);
         let canonical_dir = fs::canonicalize(dir.path()).expect("canonical fixture directory");
         let file_link = canonical_dir.join("bindings-link.json");
         symlink(&path, &file_link).expect("create binding symlink");
         assert!(load_site_bindings_file(&file_link, bytes.len(), 1).is_err());
-
         let nested = canonical_dir.join("nested");
         fs::create_dir(&nested).expect("create nested directory");
         let nested_file = nested.join("bindings.json");
@@ -912,16 +837,13 @@ mod tests {
         assert!(
             load_site_bindings_file(&parent_link.join("bindings.json"), bytes.len(), 1).is_err()
         );
-
         let hard_link = canonical_dir.join("bindings-hardlink.json");
         fs::hard_link(&path, &hard_link).expect("create hard link");
         assert!(load_site_bindings_file(&path, bytes.len(), 1).is_err());
         fs::remove_file(&hard_link).expect("remove hard link");
-
         fs::set_permissions(&path, fs::Permissions::from_mode(0o622))
             .expect("make fixture group writable");
         assert!(load_site_bindings_file(&path, bytes.len(), 1).is_err());
-
         let (unsafe_parent, unsafe_path) = write_secure_fixture(&bytes);
         fs::set_permissions(
             fs::canonicalize(unsafe_parent.path()).expect("canonical unsafe parent"),
@@ -930,7 +852,6 @@ mod tests {
         .expect("make parent world writable");
         assert!(load_site_bindings_file(&unsafe_path, bytes.len(), 1).is_err());
     }
-
     #[test]
     fn secure_loader_rejects_traversal_and_non_files() {
         let bytes = encoded_sample_document();

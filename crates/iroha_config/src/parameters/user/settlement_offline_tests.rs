@@ -1,10 +1,8 @@
 use super::*;
-
 #[test]
 fn offline_parse_defaults_to_universal_capability_without_operator_catalog() {
     let mut emitter = Emitter::new();
     let actual = Offline::default().parse(&mut emitter);
-
     assert!(emitter.into_result().is_ok());
     assert!(actual.escrow_accounts.is_empty());
     assert!(actual.kagemusha_release_policy_path.is_none());
@@ -15,7 +13,6 @@ fn offline_parse_defaults_to_universal_capability_without_operator_catalog() {
         defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
     );
 }
-
 #[test]
 fn offline_parse_requires_release_paths_as_a_pair() {
     for offline in [
@@ -33,7 +30,6 @@ fn offline_parse_requires_release_paths_as_a_pair() {
         assert!(emitter.into_result().is_err());
     }
 }
-
 #[test]
 fn offline_parse_preserves_paired_release_paths() {
     let policy = PathBuf::from("policy.norito");
@@ -47,13 +43,11 @@ fn offline_parse_preserves_paired_release_paths() {
         ..Offline::default()
     }
     .parse(&mut emitter);
-
     assert!(emitter.into_result().is_ok());
     assert_eq!(actual.kagemusha_release_policy_path, Some(policy));
     assert_eq!(actual.kagemusha_artifact_dir, Some(artifacts));
     assert_eq!(actual.kagemusha_catalog_qualification_seal_path, Some(seal));
 }
-
 #[test]
 fn offline_parse_rejects_qualification_seal_without_release_paths() {
     let mut emitter = Emitter::new();
@@ -64,10 +58,8 @@ fn offline_parse_rejects_qualification_seal_without_release_paths() {
         ..Offline::default()
     }
     .parse(&mut emitter);
-
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn offline_parse_rejects_relative_qualification_seal_path() {
     let mut emitter = Emitter::new();
@@ -78,10 +70,8 @@ fn offline_parse_rejects_relative_qualification_seal_path() {
         ..Offline::default()
     }
     .parse(&mut emitter);
-
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn offline_parse_rejects_empty_release_paths() {
     let mut emitter = Emitter::new();
@@ -91,10 +81,8 @@ fn offline_parse_rejects_empty_release_paths() {
         ..Offline::default()
     }
     .parse(&mut emitter);
-
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn offline_parse_rejects_empty_qualification_seal_path() {
     let mut emitter = Emitter::new();
@@ -105,10 +93,8 @@ fn offline_parse_rejects_empty_qualification_seal_path() {
         ..Offline::default()
     }
     .parse(&mut emitter);
-
     assert!(emitter.into_result().is_err());
 }
-
 #[test]
 fn offline_parse_rejects_zero_kagemusha_decoded_budget() {
     let mut emitter = Emitter::new();
@@ -117,14 +103,12 @@ fn offline_parse_rejects_zero_kagemusha_decoded_budget() {
         ..Offline::default()
     }
     .parse(&mut emitter);
-
     assert!(emitter.into_result().is_err());
     assert_eq!(
         actual.kagemusha_max_decoded_bytes,
         defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
     );
 }
-
 #[test]
 fn offline_parse_rejects_kagemusha_budget_above_safety_ceiling() {
     let mut emitter = Emitter::new();
@@ -133,14 +117,12 @@ fn offline_parse_rejects_kagemusha_budget_above_safety_ceiling() {
         ..Offline::default()
     }
     .parse(&mut emitter);
-
     assert!(emitter.into_result().is_err());
     assert_eq!(
         actual.kagemusha_max_decoded_bytes,
         defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
     );
 }
-
 #[test]
 fn offline_parse_allows_lower_kagemusha_budget() {
     let lower = defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES / 2;
@@ -150,7 +132,6 @@ fn offline_parse_allows_lower_kagemusha_budget() {
         ..Offline::default()
     }
     .parse(&mut emitter);
-
     assert!(emitter.into_result().is_ok());
     assert_eq!(actual.kagemusha_max_decoded_bytes, lower);
 }

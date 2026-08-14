@@ -1,7 +1,4 @@
 //! No-governance validation-fee registry feature-boundary regression.
-
-use std::str::FromStr as _;
-
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use iroha_data_model::{
     NetworkId,
@@ -20,7 +17,7 @@ use iroha_data_model::{
         ValidationFeePolicyRegistryV1, ValidationFeePolicyV1, initial_validation_fee_amount,
     },
 };
-
+use std::str::FromStr as _;
 const PARITY_PUBLIC_KEY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const REFERENDUM_START_HEIGHT: u64 = 1;
@@ -29,18 +26,15 @@ const REFERENDUM_END_HEIGHT: u64 = REFERENDUM_START_HEIGHT + REFERENDUM_DURATION
 const POLICY_ENACTMENT_HEIGHT: u64 = REFERENDUM_END_HEIGHT + 1;
 const POLICY_EFFECTIVE_HEIGHT: u64 =
     POLICY_ENACTMENT_HEIGHT + VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
-
 fn parity_account_id() -> AccountId {
     let public_key: PublicKey = PARITY_PUBLIC_KEY.parse().expect("parse public key");
     AccountId::new(public_key)
 }
-
 fn fixture_account_id(seed: u8) -> AccountId {
     let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("derive deterministic fixture account");
     AccountId::new(key_pair.public_key().clone())
 }
-
 #[test]
 fn typed_validation_fee_registry_fails_closed_without_governance() {
     let proposal_id = [0x12; 32];
@@ -143,7 +137,6 @@ fn typed_validation_fee_registry_fails_closed_without_governance() {
     let encoded = norito::to_bytes(&registry).expect("encode typed registry");
     let decoded: ValidationFeePolicyRegistryV1 =
         norito::decode_from_bytes(&encoded).expect("decode typed registry");
-
     assert!(matches!(
         decoded.validate(),
         Err(ValidationFeePolicyRegistryError::InvalidParliamentAuthorization { policy_version: 1 })

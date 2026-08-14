@@ -9,14 +9,11 @@
 //! each register when zero–knowledge mode is active.  Vector operations no
 //! longer use a dedicated register file – instead groups of the general
 //! registers are interpreted as vectors.  This module implements that design.
-use std::sync::atomic::{AtomicBool, Ordering};
-
+use crate::zk::{RegEvent, with_reg_logger};
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree};
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
-
-use crate::zk::{RegEvent, with_reg_logger};
-
+use std::sync::atomic::{AtomicBool, Ordering};
 pub struct Registers {
     /// 256 general purpose 64-bit registers. `r0` is hardwired to zero.
     gpr: [u64; 256],
@@ -34,7 +31,6 @@ pub struct Registers {
     /// Pending register indices awaiting incremental rebuild.
     pending: Mutex<Vec<usize>>,
 }
-
 impl Clone for Registers {
     fn clone(&self) -> Self {
         let gpr = self.gpr;
@@ -54,7 +50,6 @@ impl Clone for Registers {
         }
     }
 }
-
 impl Registers {
     #[inline]
     fn record_usage(&self, idx: usize) {
@@ -69,7 +64,6 @@ impl Registers {
             let _ = idx;
         }
     }
-
     #[cfg(not(feature = "merkle_incremental"))]
     #[inline]
     fn mark_pending(&self, idx: usize) {
@@ -79,7 +73,6 @@ impl Registers {
         }
         self.dirty.store(true, Ordering::Release);
     }
-
     #[inline]
     pub fn new() -> Self {
         let gpr = [0u64; 256];
@@ -101,7 +94,6 @@ impl Registers {
             pending: Mutex::new(Vec::new()),
         }
     }
-
     /// Snapshot of unique register usage since the last reset.
     #[inline]
     pub fn usage_summary(&self) -> RegisterUsageSummary {
@@ -114,7 +106,6 @@ impl Registers {
             RegisterUsageSummary::default()
         }
     }
-
     /// Clear the execution-scope usage accounting without touching register contents.
     #[inline]
     pub fn clear_usage(&self) {
@@ -169,7 +160,6 @@ impl Registers {
             });
         }
     }
-
     /// Unconditionally set register `idx`, including r0.
     #[inline]
     pub fn force_set(&mut self, idx: usize, value: u64) {
@@ -199,7 +189,6 @@ impl Registers {
             });
         });
     }
-
     /// Get the privacy tag of register `idx`.
     #[inline]
     pub fn tag(&self, idx: usize) -> bool {
@@ -207,7 +196,6 @@ impl Registers {
         self.record_usage(idx);
         self.tags[idx]
     }
-
     /// Set the privacy tag of register `idx`. Writing to `r0` has no effect.
     #[inline]
     pub fn set_tag(&mut self, idx: usize, value: bool) {
@@ -239,7 +227,6 @@ impl Registers {
             });
         }
     }
-
     /// Unconditionally set the privacy tag of register `idx`.
     #[inline]
     pub fn force_set_tag(&mut self, idx: usize, value: bool) {
@@ -269,32 +256,27 @@ impl Registers {
             });
         });
     }
-
     /// Mutable access for test‑suites and advanced host tooling.
     #[inline]
     pub fn set_raw(&mut self, index: usize, value: u64) {
         self.set(index, value);
     }
-
     /// Return a copy of all general-purpose registers.
     #[inline]
     pub fn snapshot(&self) -> [u64; 256] {
         self.gpr
     }
-
     /// Return a copy of all privacy tags.
     #[inline]
     pub fn snapshot_tags(&self) -> [bool; 256] {
         self.tags
     }
-
     /// Return the Merkle root of the register file.
     #[inline]
     pub fn merkle_root(&self) -> HashOf<MerkleTree<[u8; 32]>> {
         self.ensure_built();
         self.tree.lock().root().expect("tree has at least one leaf")
     }
-
     /// Merkle authentication path for register `idx`.
     #[inline]
     pub fn merkle_path(&self, idx: usize) -> Vec<[u8; 32]> {
@@ -308,7 +290,6 @@ impl Registers {
             .map(|opt| opt.map(|h| *h.as_ref()).unwrap_or([0u8; 32]))
             .collect()
     }
-
     /// Combined helper: return both the typed Merkle root and authentication
     /// path for `idx`. Performs at most one rebuild and borrows the tree once.
     #[inline]
@@ -327,7 +308,6 @@ impl Registers {
             .collect();
         (root, path)
     }
-
     /// Build a compact Merkle proof for the register at `idx`.
     ///
     /// Without truncation the returned root is the full register-tree root.
@@ -356,7 +336,6 @@ impl Registers {
         };
         (proof, adj_root)
     }
-
     #[inline]
     /// Ensure the Merkle tree is rebuilt when marked dirty. This uses a
     /// deterministic full rebuild today; once `iroha_crypto` exposes a
@@ -368,13 +347,11 @@ impl Registers {
             self.dirty.store(false, Ordering::Release);
         }
     }
-
     #[inline]
     fn ensure_built_and_lock(&self) -> parking_lot::MutexGuard<'_, MerkleTree<[u8; 32]>> {
         self.ensure_built();
         self.tree.lock()
     }
-
     #[inline]
     /// Rebuild the Merkle tree from cached leaf digests.
     fn rebuild_tree(&self) {
@@ -388,7 +365,6 @@ impl Registers {
             pending.dedup();
             let indices: Vec<usize> = pending.drain(..).collect();
             drop(pending);
-
             let mut tree = self.tree.lock();
             for idx in indices {
                 tree.update_hashed_leaf_sha256(idx, self.leaves[idx]);
@@ -401,7 +377,6 @@ impl Registers {
             self.pending.lock().clear();
         }
     }
-
     /// Get a vector stored starting at register `idx` (uses two consecutive
     /// registers as a 128-bit value containing four 32-bit lanes).
     #[inline]
@@ -416,7 +391,6 @@ impl Registers {
             (hi >> 32) as u32,
         ]
     }
-
     /// Store a vector at register `idx` (two consecutive registers).
     #[inline]
     pub fn set_vector(&mut self, idx: usize, vals: [u32; 4]) {
@@ -427,24 +401,20 @@ impl Registers {
         self.set(idx + 1, hi);
     }
 }
-
 impl Default for Registers {
     fn default() -> Self {
         Self::new()
     }
 }
-
 #[cfg(any(feature = "iroha_telemetry", test))]
 #[derive(Clone, Copy)]
 struct RegisterUsage {
     bitmap: [u64; 4],
     max_index: u16,
 }
-
 #[cfg(not(any(feature = "iroha_telemetry", test)))]
 #[derive(Clone, Copy, Default)]
 struct RegisterUsage;
-
 #[cfg(any(feature = "iroha_telemetry", test))]
 impl RegisterUsage {
     const fn new() -> Self {
@@ -453,7 +423,6 @@ impl RegisterUsage {
             max_index: 0,
         }
     }
-
     fn mark(&mut self, idx: usize) {
         debug_assert!(idx < 256);
         let word = idx / 64;
@@ -463,7 +432,6 @@ impl RegisterUsage {
             self.max_index = idx as u16;
         }
     }
-
     fn summary(self) -> RegisterUsageSummary {
         let unique_registers = self.unique_count();
         let max_index = if unique_registers == 0 {
@@ -476,7 +444,6 @@ impl RegisterUsage {
             unique_registers,
         }
     }
-
     fn unique_count(&self) -> u16 {
         self.bitmap
             .iter()
@@ -484,21 +451,18 @@ impl RegisterUsage {
             .sum()
     }
 }
-
 #[cfg(not(any(feature = "iroha_telemetry", test)))]
 impl RegisterUsage {
     const fn new() -> Self {
         Self
     }
 }
-
 /// Summary of register pressure for a single VM execution.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RegisterUsageSummary {
     pub max_index: usize,
     pub unique_registers: u16,
 }
-
 #[inline]
 fn register_leaf_digest(value: u64, tag: bool) -> [u8; 32] {
     let mut bytes = [0u8; 9];
@@ -506,23 +470,18 @@ fn register_leaf_digest(value: u64, tag: bool) -> [u8; 32] {
     bytes[1..].copy_from_slice(&value.to_le_bytes());
     Sha256::digest(bytes).into()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn usage_tracks_max_index_and_unique_registers() {
         let mut regs = Registers::new();
-
         regs.set(5, 10);
         regs.set(127, 20);
         let _ = regs.get(5);
-
         let snapshot = regs.usage_summary();
         assert_eq!(snapshot.max_index, 127);
         assert_eq!(snapshot.unique_registers, 2);
-
         regs.clear_usage();
         let cleared = regs.usage_summary();
         assert_eq!(cleared.unique_registers, 0);

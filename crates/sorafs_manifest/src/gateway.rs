@@ -1,21 +1,16 @@
 //! Helpers for SoraFS gateway policy enforcement.
-
-use std::collections::HashMap;
-
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use hex::FromHex;
-use iroha_crypto::{Algorithm, PublicKey};
-use norito::json::{Map, Value};
-use thiserror::Error;
-
 use crate::gar::{
     GarCdnPolicyV1, GarLicenseSetV1, GarMetricsPolicyV1, GarModerationAction,
     GarModerationDirectiveV1, GarPolicyPayloadV1,
 };
-
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use hex::FromHex;
+use iroha_crypto::{Algorithm, PublicKey};
+use norito::json::{Map, Value};
+use std::collections::HashMap;
+use thiserror::Error;
 const MAX_SAMPLING_BPS: u64 = 10_000;
 const GAR_RECORD_VERSION_V1: u16 = 1;
-
 /// Errors returned when decoding or verifying a gateway authorisation record.
 #[derive(Debug, Error)]
 pub enum GatewayAuthorizationError {
@@ -117,7 +112,6 @@ pub enum GatewayAuthorizationError {
     #[error("invalid manifest digest hex: {0}")]
     ManifestDigestHex(#[from] hex::FromHexError),
 }
-
 /// Parsed SoraFS Gateway Authorization Record (GAR).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GatewayAuthorizationRecord {
@@ -134,80 +128,67 @@ pub struct GatewayAuthorizationRecord {
     policy: GarPolicyPayloadV1,
     extensions: Map,
 }
-
 impl GatewayAuthorizationRecord {
     /// Returns the record schema version.
     #[must_use]
     pub fn record_version(&self) -> u16 {
         self.record_version
     }
-
     /// Returns the logical gateway name.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
-
     /// Returns the manifest CID the record authorises.
     #[must_use]
     pub fn manifest_cid(&self) -> &str {
         &self.manifest_cid
     }
-
     /// Returns the optional manifest digest (BLAKE3-256).
     #[must_use]
     pub fn manifest_digest(&self) -> Option<&[u8; 32]> {
         self.manifest_digest.as_ref()
     }
-
     /// Returns the canonical host patterns covered by this record.
     #[must_use]
     pub fn host_patterns(&self) -> &[HostPattern] {
         &self.host_patterns
     }
-
     /// Returns the optional Content Security Policy template.
     #[must_use]
     pub fn csp_template(&self) -> Option<&str> {
         self.csp_template.as_deref()
     }
-
     /// Returns the optional HSTS template.
     #[must_use]
     pub fn hsts_template(&self) -> Option<&str> {
         self.hsts_template.as_deref()
     }
-
     /// Returns the beginning of the validity window (inclusive, in Unix seconds).
     #[must_use]
     pub fn valid_from_epoch(&self) -> u64 {
         self.valid_from_epoch
     }
-
     /// Returns the end of the validity window (inclusive, in Unix seconds), if present.
     #[must_use]
     pub fn valid_until_epoch(&self) -> Option<u64> {
         self.valid_until_epoch
     }
-
     /// Returns the key identifier that signed this record.
     #[must_use]
     pub fn key_id(&self) -> &str {
         &self.key_id
     }
-
     /// Returns any additional JSON fields preserved from the payload.
     #[must_use]
     pub fn extensions(&self) -> &Map {
         &self.extensions
     }
-
     /// Returns the structured GAR v2 policy payload (licensing/moderation/telemetry).
     #[must_use]
     pub fn policy_payload(&self) -> &GarPolicyPayloadV1 {
         &self.policy
     }
-
     /// Checks whether the record is valid at the supplied Unix timestamp.
     ///
     /// # Errors
@@ -232,7 +213,6 @@ impl GatewayAuthorizationRecord {
         }
         Ok(())
     }
-
     /// Determines whether the record authorises the supplied host.
     #[must_use]
     pub fn matches_host(&self, host: &str) -> bool {
@@ -243,7 +223,6 @@ impl GatewayAuthorizationRecord {
         })
     }
 }
-
 /// Canonical host pattern representation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostPattern {
@@ -252,7 +231,6 @@ pub enum HostPattern {
     /// Wildcard suffix (matches any subdomain).
     Wildcard { pattern: String, suffix: String },
 }
-
 impl HostPattern {
     /// Returns the canonical pattern string (`*.example.com` or `example.com`).
     #[must_use]
@@ -262,7 +240,6 @@ impl HostPattern {
             Self::Wildcard { pattern, .. } => pattern,
         }
     }
-
     /// Performs a host match against the canonicalised host value.
     #[must_use]
     pub fn matches(&self, host: &str) -> bool {
@@ -275,7 +252,6 @@ impl HostPattern {
             }
         }
     }
-
     fn parse(raw: &str) -> Result<Self, GatewayAuthorizationError> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -341,13 +317,11 @@ impl HostPattern {
         }
     }
 }
-
 /// Verifier that decodes and validates compact GAR JWS payloads.
 #[derive(Debug, Clone, Default)]
 pub struct GatewayAuthorizationVerifier {
     keys: HashMap<String, PublicKey>,
 }
-
 impl GatewayAuthorizationVerifier {
     /// Insert or replace a public key for the supplied identifier.
     pub fn insert(
@@ -357,7 +331,6 @@ impl GatewayAuthorizationVerifier {
     ) -> Option<PublicKey> {
         self.keys.insert(key_id.into(), public_key)
     }
-
     /// Validate the supplied GAR JWS without checking the validity window.
     pub fn verify(
         &self,
@@ -365,7 +338,6 @@ impl GatewayAuthorizationVerifier {
     ) -> Result<GatewayAuthorizationRecord, GatewayAuthorizationError> {
         self.verify_internal(jws, None)
     }
-
     /// Validate the supplied GAR JWS and require that it is valid at `now` (Unix seconds).
     pub fn verify_at(
         &self,
@@ -374,7 +346,6 @@ impl GatewayAuthorizationVerifier {
     ) -> Result<GatewayAuthorizationRecord, GatewayAuthorizationError> {
         self.verify_internal(jws, Some(now))
     }
-
     fn verify_internal(
         &self,
         jws: &str,
@@ -402,11 +373,9 @@ impl GatewayAuthorizationVerifier {
                 "too many segments in compact JWS",
             ));
         }
-
         let header_bytes = URL_SAFE_NO_PAD.decode(header_segment)?;
         let payload_bytes = URL_SAFE_NO_PAD.decode(payload_segment)?;
         let signature_bytes = URL_SAFE_NO_PAD.decode(signature_segment)?;
-
         if signature_bytes.len() != 64 {
             return Err(GatewayAuthorizationError::InvalidSignatureLength {
                 found: signature_bytes.len(),
@@ -421,14 +390,12 @@ impl GatewayAuthorizationVerifier {
         crate::checked_ed25519_signature_from_bytes(&signature_array).map_err(|reason| {
             GatewayAuthorizationError::InvalidEd25519SignatureMaterial { reason }
         })?;
-
         let signing_input = format!("{header_segment}.{payload_segment}");
         let signature = iroha_crypto::ed25519_parse_signature(&signature_bytes).map_err(|err| {
             GatewayAuthorizationError::InvalidEd25519SignatureMaterial {
                 reason: err.to_string(),
             }
         })?;
-
         let header_value: Value = norito::json::from_slice(&header_bytes)
             .map_err(|err| GatewayAuthorizationError::Json(format!("header: {err}")))?;
         let mut header_map = match header_value {
@@ -454,7 +421,6 @@ impl GatewayAuthorizationVerifier {
         let key_id = take_required_string(&mut header_map, "kid")?
             .trim()
             .to_string();
-
         let public_key = self
             .keys
             .get(&key_id)
@@ -474,7 +440,6 @@ impl GatewayAuthorizationVerifier {
         signature
             .verify(public_key, signing_input.as_bytes())
             .map_err(GatewayAuthorizationError::Signature)?;
-
         let payload_value: Value = norito::json::from_slice(&payload_bytes)
             .map_err(|err| GatewayAuthorizationError::Json(format!("payload: {err}")))?;
         let mut payload_map = match payload_value {
@@ -485,7 +450,6 @@ impl GatewayAuthorizationVerifier {
                 ));
             }
         };
-
         let record_version_raw = take_required_u64(&mut payload_map, "version")?;
         let record_version = u16::try_from(record_version_raw).map_err(|_| {
             GatewayAuthorizationError::InvalidField {
@@ -512,7 +476,6 @@ impl GatewayAuthorizationVerifier {
         }
         let manifest_digest =
             parse_optional_digest(take_optional_string(&mut payload_map, "manifest_digest")?)?;
-
         let host_values = take_required_array(&mut payload_map, "host_patterns")?;
         let mut host_patterns = Vec::with_capacity(host_values.len());
         for value in host_values {
@@ -527,10 +490,8 @@ impl GatewayAuthorizationVerifier {
         if host_patterns.is_empty() {
             return Err(GatewayAuthorizationError::EmptyHostPatterns);
         }
-
         let csp_template = take_optional_string(&mut payload_map, "csp_template")?;
         let hsts_template = take_optional_string(&mut payload_map, "hsts_template")?;
-
         let valid_from_epoch =
             take_optional_u64(&mut payload_map, "valid_from_epoch")?.unwrap_or(0);
         let valid_until_epoch = take_optional_u64(&mut payload_map, "valid_until_epoch")?;
@@ -543,7 +504,6 @@ impl GatewayAuthorizationVerifier {
             });
         }
         let policy_payload = parse_policy_payload(&mut payload_map)?;
-
         let record = GatewayAuthorizationRecord {
             record_version,
             name,
@@ -558,15 +518,12 @@ impl GatewayAuthorizationVerifier {
             policy: policy_payload,
             extensions: payload_map,
         };
-
         if let Some(now) = now {
             record.ensure_applicable_at(now)?;
         }
-
         Ok(record)
     }
 }
-
 impl std::iter::FromIterator<(String, PublicKey)> for GatewayAuthorizationVerifier {
     fn from_iter<I: IntoIterator<Item = (String, PublicKey)>>(iter: I) -> Self {
         Self {
@@ -574,7 +531,6 @@ impl std::iter::FromIterator<(String, PublicKey)> for GatewayAuthorizationVerifi
         }
     }
 }
-
 fn canonicalise_host(host: &str) -> Option<String> {
     let trimmed = host.trim();
     if trimmed.is_empty() || trimmed.starts_with('.') || trimmed.ends_with('.') {
@@ -591,7 +547,6 @@ fn canonicalise_host(host: &str) -> Option<String> {
     }
     Some(trimmed.to_ascii_lowercase())
 }
-
 fn take_required_string(
     map: &mut Map,
     key: &'static str,
@@ -618,7 +573,6 @@ fn take_required_string(
         None => Err(GatewayAuthorizationError::MissingField(key)),
     }
 }
-
 fn take_optional_string(
     map: &mut Map,
     key: &'static str,
@@ -642,7 +596,6 @@ fn take_optional_string(
         None => Ok(None),
     }
 }
-
 fn take_required_u64(map: &mut Map, key: &'static str) -> Result<u64, GatewayAuthorizationError> {
     match map.remove(key) {
         Some(Value::Number(number)) => {
@@ -664,7 +617,6 @@ fn take_required_u64(map: &mut Map, key: &'static str) -> Result<u64, GatewayAut
         None => Err(GatewayAuthorizationError::MissingField(key)),
     }
 }
-
 fn take_optional_u64(
     map: &mut Map,
     key: &'static str,
@@ -685,7 +637,6 @@ fn take_optional_u64(
         None => Ok(None),
     }
 }
-
 fn take_optional_bool(
     map: &mut Map,
     key: &'static str,
@@ -700,7 +651,6 @@ fn take_optional_bool(
         None => Ok(None),
     }
 }
-
 fn take_required_array(
     map: &mut Map,
     key: &'static str,
@@ -718,7 +668,6 @@ fn take_required_array(
         None => Err(GatewayAuthorizationError::MissingField(key)),
     }
 }
-
 fn parse_optional_digest(
     candidate: Option<String>,
 ) -> Result<Option<[u8; 32]>, GatewayAuthorizationError> {
@@ -727,7 +676,6 @@ fn parse_optional_digest(
         .transpose()
         .map_err(GatewayAuthorizationError::ManifestDigestHex)
 }
-
 fn parse_policy_payload(map: &mut Map) -> Result<GarPolicyPayloadV1, GatewayAuthorizationError> {
     let license_sets = take_optional_array(map, "license_sets")?
         .unwrap_or_default()
@@ -766,7 +714,6 @@ fn parse_policy_payload(map: &mut Map) -> Result<GarPolicyPayloadV1, GatewayAuth
         .transpose()?
         .unwrap_or_default();
     let rpt_digest = parse_optional_digest(take_optional_string(map, "rpt_digest")?)?;
-
     Ok(GarPolicyPayloadV1 {
         license_sets,
         moderation_directives,
@@ -776,7 +723,6 @@ fn parse_policy_payload(map: &mut Map) -> Result<GarPolicyPayloadV1, GatewayAuth
         rpt_digest,
     })
 }
-
 fn parse_license_set(value: Value) -> Result<GarLicenseSetV1, GatewayAuthorizationError> {
     let mut map = value_to_object(value, "license_sets")?;
     let slug = take_required_string(&mut map, "slug")?;
@@ -794,7 +740,6 @@ fn parse_license_set(value: Value) -> Result<GarLicenseSetV1, GatewayAuthorizati
         reference_uri,
     })
 }
-
 fn parse_moderation_directive(
     value: Value,
 ) -> Result<GarModerationDirectiveV1, GatewayAuthorizationError> {
@@ -814,7 +759,6 @@ fn parse_moderation_directive(
         notes,
     })
 }
-
 fn parse_cdn_policy(mut map: Map) -> Result<GarCdnPolicyV1, GatewayAuthorizationError> {
     let ttl_override_secs = take_optional_u64(&mut map, "ttl_override_secs")?;
     let purge_tags = take_optional_array(&mut map, "purge_tags")?
@@ -835,7 +779,6 @@ fn parse_cdn_policy(mut map: Map) -> Result<GarCdnPolicyV1, GatewayAuthorization
         .transpose()?
         .unwrap_or_default();
     let legal_hold = take_optional_bool(&mut map, "legal_hold")?.unwrap_or(false);
-
     Ok(GarCdnPolicyV1 {
         ttl_override_secs,
         purge_tags,
@@ -846,7 +789,6 @@ fn parse_cdn_policy(mut map: Map) -> Result<GarCdnPolicyV1, GatewayAuthorization
         legal_hold,
     })
 }
-
 fn parse_metrics_policy(mut map: Map) -> Result<GarMetricsPolicyV1, GatewayAuthorizationError> {
     let policy_id = take_required_string(&mut map, "policy_id")?;
     let sampling_bps_raw = take_required_u64(&mut map, "sampling_bps")?;
@@ -869,7 +811,6 @@ fn parse_metrics_policy(mut map: Map) -> Result<GarMetricsPolicyV1, GatewayAutho
         allowed_metrics,
     })
 }
-
 fn parse_moderation_action(value: &str) -> Result<GarModerationAction, GatewayAuthorizationError> {
     let normalized = value.trim().to_ascii_lowercase();
     match normalized.as_str() {
@@ -883,7 +824,6 @@ fn parse_moderation_action(value: &str) -> Result<GarModerationAction, GatewayAu
         }),
     }
 }
-
 fn collect_string_array(
     values: Vec<Value>,
     field: &'static str,
@@ -916,7 +856,6 @@ fn collect_string_array(
     }
     Ok(out)
 }
-
 fn value_to_object(value: Value, field: &'static str) -> Result<Map, GatewayAuthorizationError> {
     match value {
         Value::Object(map) => Ok(map),
@@ -926,7 +865,6 @@ fn value_to_object(value: Value, field: &'static str) -> Result<Map, GatewayAuth
         }),
     }
 }
-
 fn take_optional_array(
     map: &mut Map,
     key: &'static str,
@@ -941,14 +879,11 @@ fn take_optional_array(
         None => Ok(None),
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, PublicKey};
-
-    use super::*;
-
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -958,7 +893,6 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn build_test_verifier() -> (GatewayAuthorizationVerifier, SigningKey) {
         let signing_key = SigningKey::from_bytes(&[0x11; 32]);
         let verifying_key = signing_key.verifying_key();
@@ -968,13 +902,11 @@ mod tests {
         verifier.insert("council-key-1", public_key);
         (verifier, signing_key)
     }
-
     fn checked_test_keypair(algorithm: Algorithm) -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
             panic!("checked SoraFS gateway {algorithm:?} fixture key generation failed: {err}")
         })
     }
-
     fn build_jws(signing_key: &SigningKey, payload: &Value) -> String {
         let header = norito::json!({
             "alg": "EdDSA",
@@ -990,7 +922,6 @@ mod tests {
         let signature_segment = URL_SAFE_NO_PAD.encode(signature.to_bytes());
         format!("{header_segment}.{payload_segment}.{signature_segment}")
     }
-
     fn base_payload() -> Value {
         norito::json!({
             "version": 1,
@@ -1037,17 +968,14 @@ mod tests {
             "rpt_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         })
     }
-
     #[test]
     fn verify_success() {
         let (verifier, signing_key) = build_test_verifier();
         let payload = base_payload();
         let jws = build_jws(&signing_key, &payload);
-
         let record = verifier
             .verify_at(&jws, 1_750_000_000)
             .expect("record should verify");
-
         assert_eq!(record.record_version(), 1);
         assert_eq!(record.name(), "gw-alpha");
         assert_eq!(record.manifest_cid(), "bafyalpha");
@@ -1076,7 +1004,6 @@ mod tests {
         assert_eq!(cdn.deny_regions, ["US".to_string()]);
         assert!(!cdn.legal_hold);
     }
-
     #[test]
     fn verify_rejects_tampered_signature() {
         let (verifier, signing_key) = build_test_verifier();
@@ -1090,7 +1017,6 @@ mod tests {
         let err = verifier.verify(&jws).expect_err("signature must fail");
         assert!(matches!(err, GatewayAuthorizationError::Signature(_)));
     }
-
     #[test]
     fn verify_rejects_all_zero_signature_material() {
         let (verifier, signing_key) = build_test_verifier();
@@ -1099,7 +1025,6 @@ mod tests {
         let mut segments = jws.split('.').map(ToOwned::to_owned).collect::<Vec<_>>();
         segments[2] = URL_SAFE_NO_PAD.encode([0_u8; 64]);
         let jws = segments.join(".");
-
         let err = verifier
             .verify(&jws)
             .expect_err("all-zero signature material must fail closed");
@@ -1108,13 +1033,11 @@ mod tests {
             GatewayAuthorizationError::InvalidEd25519SignatureMaterial { .. }
         ));
     }
-
     #[test]
     fn verify_rejects_malformed_signature_r() {
         let (verifier, signing_key) = build_test_verifier();
         let payload = base_payload();
         let jws = build_jws(&signing_key, &payload);
-
         for (label, replacement_r, expected_reason) in [
             ("small-order", SMALL_ORDER_R, "small-order"),
             ("noncanonical", NONCANONICAL_R, "not a canonical"),
@@ -1126,7 +1049,6 @@ mod tests {
             signature[..32].copy_from_slice(&replacement_r);
             segments[2] = URL_SAFE_NO_PAD.encode(signature);
             let malformed_jws = segments.join(".");
-
             let err = verifier
                 .verify(&malformed_jws)
                 .expect_err("malformed signature R must fail closed");
@@ -1140,7 +1062,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn rejects_unsupported_record_version() {
         let (verifier, signing_key) = build_test_verifier();
@@ -1157,7 +1078,6 @@ mod tests {
             GatewayAuthorizationError::UnsupportedRecordVersion { found: 2 }
         ));
     }
-
     #[test]
     fn rejects_record_version_overflow() {
         let (verifier, signing_key) = build_test_verifier();
@@ -1177,7 +1097,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn verify_rejects_unknown_key() {
         let (_, signing_key) = build_test_verifier();
@@ -1187,11 +1106,9 @@ mod tests {
         let err = verifier.verify(&jws).expect_err("unknown key");
         assert!(matches!(err, GatewayAuthorizationError::UnknownKeyId(_)));
     }
-
     #[test]
     fn gateway_non_ed25519_fixture_key_uses_checked_generation() {
         let secp_keypair = checked_test_keypair(Algorithm::Secp256k1);
-
         assert_eq!(
             secp_keypair
                 .public_key()
@@ -1200,7 +1117,6 @@ mod tests {
             Algorithm::Secp256k1,
         );
     }
-
     #[test]
     fn verify_rejects_registered_non_ed25519_key_before_signature_verification() {
         let (_, signing_key) = build_test_verifier();
@@ -1209,11 +1125,9 @@ mod tests {
         verifier.insert("council-key-1", secp_keypair.public_key().clone());
         let payload = base_payload();
         let jws = build_jws(&signing_key, &payload);
-
         let err = verifier
             .verify(&jws)
             .expect_err("non-Ed25519 gateway key must fail before signature verification");
-
         assert!(matches!(
             err,
             GatewayAuthorizationError::InvalidKeyAlgorithm {
@@ -1222,7 +1136,6 @@ mod tests {
             } if key_id == "council-key-1"
         ));
     }
-
     #[test]
     fn applies_time_window() {
         let (verifier, signing_key) = build_test_verifier();
@@ -1249,7 +1162,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn rejects_invalid_validity_window() {
         let (verifier, signing_key) = build_test_verifier();
@@ -1276,7 +1188,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn rejects_invalid_pattern() {
         assert!(matches!(
@@ -1284,7 +1195,6 @@ mod tests {
             Err(GatewayAuthorizationError::InvalidHostPattern { .. })
         ));
     }
-
     #[test]
     fn rejects_unknown_moderation_action() {
         let (verifier, signing_key) = build_test_verifier();
@@ -1306,7 +1216,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn rejects_metrics_policy_overflow() {
         let (verifier, signing_key) = build_test_verifier();
@@ -1334,7 +1243,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn host_matching_rejects_consecutive_dots() {
         let (verifier, signing_key) = build_test_verifier();

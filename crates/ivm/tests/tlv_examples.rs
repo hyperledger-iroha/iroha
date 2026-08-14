@@ -1,6 +1,5 @@
 //! Golden-structure tests for pointer-ABI TLV envelopes.
 //! These tests validate big-endian length encoding and basic layout.
-
 use iroha_crypto::Hash;
 use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
@@ -14,7 +13,6 @@ use ivm::{
     },
 };
 use norito::{decode_from_bytes, to_bytes};
-
 fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
@@ -26,7 +24,6 @@ fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 fn sample_descriptor() -> AxtDescriptor {
     let dsid_a = DataSpaceId::new(7);
     let dsid_b = DataSpaceId::new(11);
@@ -46,7 +43,6 @@ fn sample_descriptor() -> AxtDescriptor {
         ],
     }
 }
-
 #[test]
 fn tlv_account_id_structure() {
     // "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
@@ -61,14 +57,12 @@ fn tlv_account_id_structure() {
         payload.len() as u32
     );
     assert_eq!(&tlv[7..7 + payload.len()], payload);
-
     // Verify hash field matches
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()
         .unwrap();
     let exp_hash: [u8; 32] = Hash::new(payload).into();
     assert_eq!(got_hash, exp_hash);
-
     // Preload into INPUT and read back a slice
     let mut mem = Memory::new(0);
     mem.preload_input(0, &tlv).expect("preload input");
@@ -77,7 +71,6 @@ fn tlv_account_id_structure() {
         .unwrap();
     assert_eq!(region, &*tlv);
 }
-
 #[test]
 fn tlv_assetdef_structure() {
     let payload = b"62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -93,7 +86,6 @@ fn tlv_assetdef_structure() {
     let exp_hash: [u8; 32] = Hash::new(payload).into();
     assert_eq!(got_hash, exp_hash);
 }
-
 #[test]
 fn tlv_name_structure() {
     let payload = b"cursor";
@@ -109,7 +101,6 @@ fn tlv_name_structure() {
     let exp_hash: [u8; 32] = Hash::new(payload).into();
     assert_eq!(got_hash, exp_hash);
 }
-
 #[test]
 fn tlv_json_structure() {
     let payload = br#"{"query":"sc_dummy","cursor":1}"#;
@@ -125,7 +116,6 @@ fn tlv_json_structure() {
     let exp_hash: [u8; 32] = Hash::new(payload).into();
     assert_eq!(got_hash, exp_hash);
 }
-
 #[test]
 fn tlv_nftid_structure() {
     let payload = b"rose:uuid:0123$wonderland";
@@ -141,14 +131,12 @@ fn tlv_nftid_structure() {
     let exp_hash: [u8; 32] = Hash::new(payload).into();
     assert_eq!(got_hash, exp_hash);
 }
-
 #[test]
 fn tlv_dataspace_id_roundtrip() {
     let dsid = DataSpaceId::new(0xDEAD_BEEF_CAFE_BABE);
     let payload = to_bytes(&dsid).expect("encode DataSpaceId");
     let type_id = PointerType::DataSpaceId as u16;
     let tlv = make_tlv(type_id, 1, &payload);
-
     assert_eq!(u16::from_be_bytes(tlv[0..2].try_into().unwrap()), type_id);
     assert_eq!(
         u32::from_be_bytes(tlv[3..7].try_into().unwrap()),
@@ -157,43 +145,36 @@ fn tlv_dataspace_id_roundtrip() {
     let decoded: DataSpaceId =
         decode_from_bytes(&tlv[7..7 + payload.len()]).expect("decode DataSpaceId payload");
     assert_eq!(decoded, dsid);
-
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()
         .unwrap();
     let exp_hash: [u8; 32] = Hash::new(payload).into();
     assert_eq!(got_hash, exp_hash);
 }
-
 #[test]
 fn tlv_axt_descriptor_roundtrip() {
     let descriptor = sample_descriptor();
     let payload = to_bytes(&descriptor).expect("encode descriptor");
     let type_id = PointerType::AxtDescriptor as u16;
     let tlv = make_tlv(type_id, 1, &payload);
-
     assert_eq!(u16::from_be_bytes(tlv[0..2].try_into().unwrap()), type_id);
     assert_eq!(
         u32::from_be_bytes(tlv[3..7].try_into().unwrap()),
         payload.len() as u32
     );
-
     let decoded: AxtDescriptor =
         decode_from_bytes(&tlv[7..7 + payload.len()]).expect("decode AxtDescriptor payload");
     assert_eq!(decoded, descriptor);
-
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()
         .unwrap();
     let exp_hash: [u8; 32] = Hash::new(payload).into();
     assert_eq!(got_hash, exp_hash);
 }
-
 #[test]
 fn tlv_asset_handle_roundtrip() {
     let descriptor = sample_descriptor();
     let binding = axt::compute_binding(&descriptor).expect("compute binding");
-
     let handle = AssetHandle {
         scope: vec!["transfer".into(), "withdraw".into()],
         subject: HandleSubject {
@@ -218,11 +199,9 @@ fn tlv_asset_handle_roundtrip() {
         issuer_context: Default::default(),
         issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
-
     let payload = to_bytes(&handle).expect("encode handle");
     let type_id = PointerType::AssetHandle as u16;
     let tlv = make_tlv(type_id, 1, &payload);
-
     assert_eq!(u16::from_be_bytes(tlv[0..2].try_into().unwrap()), type_id);
     assert_eq!(
         u32::from_be_bytes(tlv[3..7].try_into().unwrap()),
@@ -231,14 +210,12 @@ fn tlv_asset_handle_roundtrip() {
     let decoded: AssetHandle =
         decode_from_bytes(&tlv[7..7 + payload.len()]).expect("decode AssetHandle payload");
     assert_eq!(decoded, handle);
-
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()
         .unwrap();
     let exp_hash: [u8; 32] = Hash::new(payload).into();
     assert_eq!(got_hash, exp_hash);
 }
-
 #[test]
 fn tlv_proof_blob_roundtrip() {
     let proof = ProofBlob {
@@ -248,7 +225,6 @@ fn tlv_proof_blob_roundtrip() {
     let payload = to_bytes(&proof).expect("encode proof");
     let type_id = PointerType::ProofBlob as u16;
     let tlv = make_tlv(type_id, 1, &payload);
-
     assert_eq!(u16::from_be_bytes(tlv[0..2].try_into().unwrap()), type_id);
     assert_eq!(
         u32::from_be_bytes(tlv[3..7].try_into().unwrap()),
@@ -257,7 +233,6 @@ fn tlv_proof_blob_roundtrip() {
     let decoded: ProofBlob =
         decode_from_bytes(&tlv[7..7 + payload.len()]).expect("decode ProofBlob payload");
     assert_eq!(decoded, proof);
-
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()
         .unwrap();

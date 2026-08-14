@@ -1,14 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! `NPoS` election respects staking constraints and delays activation by finality margin.
 #![allow(clippy::too_many_lines)]
-
-use std::{
-    num::NonZeroU64,
-    str::FromStr,
-    sync::atomic::{AtomicUsize, Ordering},
-    time::{Duration, Instant},
-};
-
 use eyre::{Context as _, ensure};
 use integration_tests::sandbox;
 use iroha::client::Client;
@@ -34,8 +26,13 @@ use iroha_test_network::{
 };
 use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use norito::json::{self, Value};
+use std::{
+    num::NonZeroU64,
+    str::FromStr,
+    sync::atomic::{AtomicUsize, Ordering},
+    time::{Duration, Instant},
+};
 use tokio::time::sleep;
-
 const EPOCH_LEN: NonZeroU64 = NonZeroU64::new(6).expect("fixture epoch length must be non-zero");
 const FINALITY_MARGIN: u64 = 2;
 const MIN_SELF_BOND: u64 = 1_000;
@@ -51,34 +48,28 @@ const HEIGHT_ADVANCE_POLL: Duration = Duration::from_millis(200);
 const HEIGHT_ADVANCE_RESUBMIT_EVERY_ATTEMPTS: u64 = 4;
 const STAKE_ASSET_NAME: &str = "NPOS Stake";
 const NEXUS_FEE_ASSET_NAME: &str = "Nexus Fee";
-
 static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
-
 #[derive(Clone, Copy)]
 enum StakeActivationProfile {
     MinStakeFilter,
     EntityCorrelationCap,
 }
-
 fn min_connected_peers_for_submit(peer_count: usize) -> u64 {
     match peer_count {
         0..=2 => 0,
         _ => u64::try_from(peer_count.saturating_sub(2)).expect("peer count should fit into u64"),
     }
 }
-
 fn commit_quorum_size(peer_count: usize) -> usize {
     let tolerated_faults = peer_count.saturating_sub(1) / 3;
     peer_count.saturating_sub(tolerated_faults)
 }
-
 fn count_heights_at_or_above(heights: &[u64], target_height: u64) -> usize {
     heights
         .iter()
         .filter(|height| **height >= target_height)
         .count()
 }
-
 fn pick_fallback_submit_peer_index(block_totals: &[u64], seed: usize) -> usize {
     if block_totals.is_empty() {
         return 0;
@@ -95,7 +86,6 @@ fn pick_fallback_submit_peer_index(block_totals: &[u64], seed: usize) -> usize {
     let offset = seed % best_indices.len();
     best_indices[offset]
 }
-
 fn pick_submit_peer_index(
     leader_index: Option<usize>,
     leader_connected: bool,
@@ -109,7 +99,6 @@ fn pick_submit_peer_index(
         fallback
     }
 }
-
 fn ordered_submit_peer_indices(
     leader_index: Option<usize>,
     leader_connected: bool,
@@ -119,7 +108,6 @@ fn ordered_submit_peer_indices(
     if block_totals.is_empty() {
         return Vec::new();
     }
-
     let fallback = pick_fallback_submit_peer_index(block_totals, seed);
     let mut ordered = Vec::with_capacity(block_totals.len());
     if leader_connected
@@ -128,17 +116,14 @@ fn ordered_submit_peer_indices(
     {
         ordered.push(leader_index);
     }
-
     for offset in 0..block_totals.len() {
         let idx = (fallback + offset) % block_totals.len();
         if !ordered.contains(&idx) {
             ordered.push(idx);
         }
     }
-
     ordered
 }
-
 fn submit_peer_indices_for_network(
     network: &sandbox::SerializedNetwork,
     probe: &Client,
@@ -179,7 +164,6 @@ fn submit_peer_indices_for_network(
         fallback_seed,
     )
 }
-
 fn validator_account_id_for_index(index: usize) -> AccountId {
     let key_pair = KeyPair::try_from_seed(
         format!("integration_tests::sumeragi_npos_stake_activation::{index}").into_bytes(),
@@ -188,28 +172,23 @@ fn validator_account_id_for_index(index: usize) -> AccountId {
     .expect("fixture NPoS validator key");
     AccountId::new(key_pair.public_key().clone())
 }
-
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
 }
-
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
 }
-
 fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
     defaults::nexus::fees::fee_asset_id()
         .parse()
         .expect("default nexus fee asset id")
 }
-
 fn nexus_fee_asset_id_literal() -> String {
     nexus_fee_asset_definition_id().to_string()
 }
-
 #[test]
 fn validator_account_id_for_index_uses_checked_seed_derivation() {
     let expected_key_pair = KeyPair::try_from_seed(
@@ -217,13 +196,11 @@ fn validator_account_id_for_index_uses_checked_seed_derivation() {
         Algorithm::Ed25519,
     )
     .expect("fixture NPoS validator key");
-
     assert_eq!(
         validator_account_id_for_index(3),
         AccountId::new(expected_key_pair.public_key().clone())
     );
 }
-
 #[test]
 fn min_connected_peers_for_submit_keeps_quorum_margin() {
     assert_eq!(min_connected_peers_for_submit(0), 0);
@@ -232,7 +209,6 @@ fn min_connected_peers_for_submit_keeps_quorum_margin() {
     assert_eq!(min_connected_peers_for_submit(3), 1);
     assert_eq!(min_connected_peers_for_submit(4), 2);
 }
-
 #[test]
 fn commit_quorum_size_matches_byzantine_fault_tolerance() {
     assert_eq!(commit_quorum_size(0), 0);
@@ -240,13 +216,11 @@ fn commit_quorum_size_matches_byzantine_fault_tolerance() {
     assert_eq!(commit_quorum_size(4), 3);
     assert_eq!(commit_quorum_size(7), 5);
 }
-
 #[test]
 fn count_heights_at_or_above_counts_only_reached_peers() {
     assert_eq!(count_heights_at_or_above(&[2, 8, 9, 3], 8), 2);
     assert_eq!(count_heights_at_or_above(&[], 1), 0);
 }
-
 #[test]
 fn should_submit_height_progress_tick_retries_on_new_height_or_interval() {
     assert!(should_submit_height_progress_tick(None, 0, 0, 4));
@@ -256,30 +230,24 @@ fn should_submit_height_progress_tick_retries_on_new_height_or_interval() {
     assert!(should_submit_height_progress_tick(Some(4), 4, 4, 4));
     assert!(!should_submit_height_progress_tick(Some(4), 4, 4, 0));
 }
-
 #[test]
 fn pick_fallback_submit_peer_index_prefers_best_height_round_robin() {
     let totals = [7, 11, 11, 3];
-
     assert_eq!(pick_fallback_submit_peer_index(&totals, 0), 1);
     assert_eq!(pick_fallback_submit_peer_index(&totals, 1), 2);
     assert_eq!(pick_fallback_submit_peer_index(&totals, 2), 1);
     assert_eq!(pick_fallback_submit_peer_index(&[], 42), 0);
 }
-
 #[test]
 fn pick_submit_peer_index_prefers_connected_leader() {
     let totals = [4, 9, 9, 1];
-
     assert_eq!(pick_submit_peer_index(Some(3), true, &totals, 0), 3);
     assert_eq!(pick_submit_peer_index(Some(3), false, &totals, 0), 1);
     assert_eq!(pick_submit_peer_index(None, true, &totals, 1), 2);
 }
-
 #[test]
 fn ordered_submit_peer_indices_prioritize_leader_then_fallback_cycle() {
     let totals = [4, 9, 9, 1];
-
     assert_eq!(
         ordered_submit_peer_indices(Some(3), true, &totals, 0),
         vec![3, 1, 2, 0]
@@ -293,11 +261,9 @@ fn ordered_submit_peer_indices_prioritize_leader_then_fallback_cycle() {
         vec![2, 3, 0, 1]
     );
 }
-
 #[test]
 fn canonical_nexus_fee_asset_id_uses_explicit_fixture_name() {
     let fee_asset_id = nexus_fee_asset_definition_id();
-
     let _definition = AssetDefinition::new(
         fee_asset_id,
         NEXUS_FEE_ASSET_NAME.to_owned(),
@@ -306,7 +272,6 @@ fn canonical_nexus_fee_asset_id_uses_explicit_fixture_name() {
         None,
     );
 }
-
 fn profile_for_index(index: usize, profile: StakeActivationProfile) -> (u64, Option<&'static str>) {
     match profile {
         StakeActivationProfile::MinStakeFilter => {
@@ -325,7 +290,6 @@ fn profile_for_index(index: usize, profile: StakeActivationProfile) -> (u64, Opt
         }
     }
 }
-
 fn stake_genesis_post_topology_transactions(
     topology: &[PeerId],
     profile: StakeActivationProfile,
@@ -335,7 +299,6 @@ fn stake_genesis_post_topology_transactions(
     let stake_asset_id = stake_asset_definition_id();
     let fee_asset_id = nexus_fee_asset_definition_id();
     let genesis_account_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
-
     let definition = {
         AssetDefinition::new(
             stake_asset_id.clone(),
@@ -356,7 +319,6 @@ fn stake_genesis_post_topology_transactions(
         )
     }
     .with_metadata(Metadata::default());
-
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(stake_domain.clone())).into(),
         Register::domain(Domain::new(nexus_domain.clone())).into(),
@@ -394,7 +356,6 @@ fn stake_genesis_post_topology_transactions(
             .into(),
         );
     }
-
     let mut validator_tx = Vec::new();
     for (index, peer) in topology.iter().enumerate() {
         let validator_id = validator_account_id_for_index(index);
@@ -419,10 +380,8 @@ fn stake_genesis_post_topology_transactions(
         );
         validator_tx.push(ActivatePublicLaneValidator::new(LaneId::SINGLE, validator_id).into());
     }
-
     vec![bootstrap_tx, validator_tx]
 }
-
 async fn advance_to_height(
     network: &sandbox::SerializedNetwork,
     client: &Client,
@@ -436,14 +395,12 @@ async fn advance_to_height(
     let quorum = commit_quorum_size(network.peers().len()).max(1);
     let mut last_observed = Vec::new();
     wait_for_submit_connectivity(network, Duration::from_secs(30)).await?;
-
     while Instant::now() <= deadline {
         let heights = collect_network_heights(network, &mut last_observed).await;
         last_height = last_height.max(heights.iter().copied().max().unwrap_or_default());
         if count_heights_at_or_above(&heights, target_height) >= quorum {
             return Ok(());
         }
-
         if should_submit_height_progress_tick(
             last_submitted_height,
             last_height,
@@ -454,7 +411,6 @@ async fn advance_to_height(
             last_submitted_height = Some(last_height);
         }
         tick = tick.saturating_add(1);
-
         let remaining = deadline.saturating_duration_since(Instant::now());
         let probe_timeout = remaining.min(Duration::from_secs(15));
         let target_next_height = last_height.saturating_add(1).min(target_height);
@@ -467,13 +423,11 @@ async fn advance_to_height(
             Err(_) => sleep(HEIGHT_ADVANCE_POLL).await,
         }
     }
-
     eyre::bail!(
         "network height did not reach quorum {quorum} at {target_height} for {log_prefix}; \
          last observed height={last_height}; last observed peers={last_observed:?}"
     );
 }
-
 async fn wait_for_network_height_quorum(
     network: &sandbox::SerializedNetwork,
     target_height: u64,
@@ -482,7 +436,6 @@ async fn wait_for_network_height_quorum(
 ) -> eyre::Result<Vec<u64>> {
     let deadline = Instant::now() + timeout;
     let mut last_observed = Vec::new();
-
     loop {
         let heights = collect_network_heights(network, &mut last_observed).await;
         if count_heights_at_or_above(&heights, target_height) >= quorum {
@@ -498,7 +451,6 @@ async fn wait_for_network_height_quorum(
         sleep(HEIGHT_ADVANCE_POLL).await;
     }
 }
-
 async fn collect_network_heights(
     network: &sandbox::SerializedNetwork,
     last_observed: &mut Vec<String>,
@@ -523,7 +475,6 @@ async fn collect_network_heights(
     }
     heights
 }
-
 fn client_observing_height(
     network: &sandbox::SerializedNetwork,
     target_height: u64,
@@ -549,7 +500,6 @@ fn client_observing_height(
         })
         .unwrap_or_else(|| fallback.clone())
 }
-
 async fn wait_for_submit_connectivity(
     network: &sandbox::SerializedNetwork,
     timeout: Duration,
@@ -557,7 +507,6 @@ async fn wait_for_submit_connectivity(
     let deadline = Instant::now() + timeout;
     let expected = min_connected_peers_for_submit(network.peers().len());
     let mut last_snapshot = Vec::new();
-
     loop {
         let peer_counts = network
             .peers()
@@ -570,18 +519,15 @@ async fn wait_for_submit_connectivity(
                 return Ok(());
             }
         }
-
         if Instant::now() >= deadline {
             eyre::bail!(
                 "peer connectivity did not reach {expected} connected peers within {:?}; last_snapshot={last_snapshot:?}",
                 timeout
             );
         }
-
         sleep(Duration::from_millis(250)).await;
     }
 }
-
 async fn submit_progress_log(
     network: &sandbox::SerializedNetwork,
     probe: &Client,
@@ -593,7 +539,6 @@ async fn submit_progress_log(
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         Metadata::default(),
     );
-
     let mut accepted = false;
     let mut errors = Vec::new();
     for idx in candidate_indices {
@@ -611,14 +556,12 @@ async fn submit_progress_log(
             Err(err) => errors.push(format!("{peer_name}: submit join error: {err}")),
         }
     }
-
     ensure!(
         accepted,
         "progress log was not accepted by any candidate peer; errors={errors:?}"
     );
     Ok(())
 }
-
 fn should_submit_height_progress_tick(
     last_submitted_height: Option<u64>,
     current_height: u64,
@@ -630,7 +573,6 @@ fn should_submit_height_progress_tick(
             && attempt > 0
             && attempt.is_multiple_of(resubmit_every_attempts))
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<()> {
     init_instruction_registry();
@@ -641,7 +583,6 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     npos.vrf_reveal_window_blocks = 4;
     npos.min_self_bond = MIN_SELF_BOND.into();
     npos.finality_margin_blocks = FINALITY_MARGIN;
-
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_auto_populated_trusted_peers()
@@ -682,7 +623,6 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
                 topology_entries,
             )
         });
-
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(npos_election_filters_stake_and_applies_after_margin),
@@ -691,12 +631,9 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     else {
         return Ok(());
     };
-
     let client = network.client();
     let peers = network.peers();
-
     let eligible_peer = &peers[0];
-
     let pre_margin_height = (FINALITY_MARGIN / 2).max(1);
     advance_to_height(
         &network,
@@ -715,9 +652,7 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
         &format!("collector roster should not have activated before height {pre_margin_height}"),
     )
     .await?;
-
     advance_to_height(&network, &client, WAIT_HEIGHT, "stake activation tick").await?;
-
     let activation_client = client_observing_height(&network, WAIT_HEIGHT, &client);
     let collectors_url = activation_client
         .torii_url
@@ -725,11 +660,9 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
         .wrap_err("compose validator-set history URL")?;
     let expected_peer = eligible_peer.id().to_string();
     wait_for_single_collector(&collectors_url, &expected_peer).await?;
-
     network.shutdown().await;
     Ok(())
 }
-
 async fn fetch_collectors(http: &reqwest::Client, url: &reqwest::Url) -> eyre::Result<Value> {
     let response = http
         .get(url.clone())
@@ -748,7 +681,6 @@ async fn fetch_collectors(http: &reqwest::Client, url: &reqwest::Url) -> eyre::R
         .wrap_err("validator-set history body")?;
     json::from_str(&body).wrap_err("parse validator-set history JSON")
 }
-
 async fn wait_for_single_collector(
     collectors_url: &reqwest::Url,
     expected_peer: &str,
@@ -769,7 +701,6 @@ async fn wait_for_single_collector(
         sleep(COLLECTOR_POLL).await;
     }
 }
-
 async fn assert_no_single_collector(
     collectors_url: &reqwest::Url,
     expected_peer: &str,
@@ -784,7 +715,6 @@ async fn assert_no_single_collector(
     );
     Ok(())
 }
-
 async fn collector_peer_ids(
     http: &reqwest::Client,
     collectors_url: &reqwest::Url,
@@ -804,7 +734,6 @@ async fn collector_peer_ids(
         .collect();
     Ok(peers)
 }
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     init_instruction_registry();
@@ -816,7 +745,6 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     npos.min_self_bond = MIN_SELF_BOND.into();
     npos.max_entity_correlation_pct = 50;
     npos.finality_margin_blocks = FINALITY_MARGIN;
-
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_auto_populated_trusted_peers()
@@ -857,7 +785,6 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
                 topology_entries,
             )
         });
-
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
         stringify!(npos_entity_correlation_limits_validator_set),
@@ -866,13 +793,10 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     else {
         return Ok(());
     };
-
     let client = network.client();
     let peers = network.peers();
-
     let peer_a = &peers[0];
     let peer_b = &peers[1];
-
     advance_to_height(
         &network,
         &client,
@@ -880,7 +804,6 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
         "stake activation entity tick",
     )
     .await?;
-
     let activation_client = client_observing_height(&network, WAIT_HEIGHT, &client);
     let collectors_url = activation_client
         .torii_url
@@ -900,7 +823,6 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
         }
         sleep(COLLECTOR_POLL).await;
     }
-
     network.shutdown().await;
     Ok(())
 }

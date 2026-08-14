@@ -7,9 +7,7 @@
 //!   0x0040_0000..0x007F_FFFF -> Stack
 //!   0x0080_0000..0x00BF_FFFF -> Heap
 //! Each segment is currently 4 MB in size.
-
 use crate::error::VMError;
-
 /// Identifier for a memory segment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Segment {
@@ -17,14 +15,12 @@ pub enum Segment {
     Stack,
     Heap,
 }
-
 /// Segmented memory with code, stack and heap regions.
 pub struct Memory {
     pub code: Vec<u8>,
     pub stack: Vec<u8>,
     pub heap: Vec<u8>,
 }
-
 impl Memory {
     /// Size of each segment in bytes (4 MB).
     pub const SEGMENT_SIZE: usize = 0x40_0000;
@@ -32,7 +28,6 @@ impl Memory {
     pub const CODE_START: u64 = 0x0000_0000;
     pub const STACK_START: u64 = 0x0040_0000;
     pub const HEAP_START: u64 = 0x0080_0000;
-
     /// Create a new memory instance with default segment sizes.
     pub fn new() -> Self {
         Self {
@@ -41,7 +36,6 @@ impl Memory {
             heap: vec![0u8; Self::SEGMENT_SIZE],
         }
     }
-
     /// Map a flat address to a segment and offset.
     fn map_addr(&self, addr: u64, size: usize) -> Result<(Segment, usize), VMError> {
         // Compute end with overflow check to avoid wrapping comparisons
@@ -49,7 +43,6 @@ impl Memory {
             .checked_add(size as u64)
             .ok_or(VMError::MemoryOutOfBounds)?;
         let seg_sz = Self::SEGMENT_SIZE as u64;
-
         // Determine segment based on address range
         // NOTE: CODE_START is 0, so the lower-bound check would be tautological; only check upper bound.
         if end <= Self::CODE_START + seg_sz {
@@ -62,7 +55,6 @@ impl Memory {
             Err(VMError::MemoryOutOfBounds)
         }
     }
-
     /// Load a u64 from memory (little-endian).
     pub fn load_u64(&self, addr: u64) -> Result<u64, VMError> {
         if !addr.is_multiple_of(8) {
@@ -77,7 +69,6 @@ impl Memory {
         let bytes: [u8; 8] = slice[off..off + 8].try_into().unwrap();
         Ok(u64::from_le_bytes(bytes))
     }
-
     /// Store a u64 into memory (little-endian).
     pub fn store_u64(&mut self, addr: u64, value: u64) -> Result<(), VMError> {
         if !addr.is_multiple_of(8) {
@@ -98,7 +89,6 @@ impl Memory {
         }
     }
 }
-
 impl Default for Memory {
     fn default() -> Self {
         Self::new()

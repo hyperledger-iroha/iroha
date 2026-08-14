@@ -1,13 +1,10 @@
 //! Buffer sizing and guard-rail policies.
-
+use crate::{Numeric, XorQuantity, XorQuantityError};
 use derive_more::{Display, From};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     json::{JsonDeserialize, JsonSerialize},
 };
-
-use crate::{Numeric, XorQuantity, XorQuantityError};
-
 /// Outcome of evaluating the remaining buffer against the configured policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BufferStatus {
@@ -22,7 +19,6 @@ pub enum BufferStatus {
     /// Buffer is nearly empty and settlement must halt until refilled.
     Halt,
 }
-
 /// Buffer-policy evaluation failures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum BufferPolicyError {
@@ -33,7 +29,6 @@ pub enum BufferPolicyError {
     #[error("buffer threshold arithmetic failed: {0}")]
     Arithmetic(#[from] XorQuantityError),
 }
-
 /// Capacity of the dataspace buffer expressed in exact XOR and coverage hours.
 #[derive(
     Clone, Debug, Eq, PartialEq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -44,7 +39,6 @@ pub struct BufferCapacity {
     /// Rolling window the buffer is expected to cover.
     pub horizon_hours: u16,
 }
-
 /// Thresholds used when classifying the remaining buffer into operational states.
 #[derive(
     Clone,
@@ -80,7 +74,6 @@ pub struct BufferPolicy {
     #[norito(rename = "halt_pct")]
     pub halt: u8,
 }
-
 impl BufferPolicy {
     /// Roadmap default (alert 75%, throttle 25%, XOR-only 10%, halt 2%).
     #[must_use]
@@ -92,7 +85,6 @@ impl BufferPolicy {
             halt: 2,
         }
     }
-
     /// Validate threshold bounds and ordering.
     pub const fn validate(self) -> Result<(), BufferPolicyError> {
         if self.alert > 100
@@ -104,7 +96,6 @@ impl BufferPolicy {
         }
         Ok(())
     }
-
     fn is_below(
         remaining: &XorQuantity,
         capacity: &XorQuantity,
@@ -118,7 +109,6 @@ impl BufferPolicy {
             .and_then(XorQuantity::try_from_quantity)?;
         Ok(remaining < &threshold)
     }
-
     /// Evaluate the current buffer status against the configured thresholds.
     ///
     /// A zero-capacity buffer is always halted. Boundary equality belongs to
@@ -144,7 +134,6 @@ impl BufferPolicy {
             Ok(BufferStatus::Normal)
         }
     }
-
     /// Whether the buffer has fallen below the alert threshold.
     pub fn is_soft_breached(
         self,
@@ -156,7 +145,6 @@ impl BufferPolicy {
             BufferStatus::Normal
         ))
     }
-
     /// Whether the buffer requires XOR-only inclusion or a halt.
     pub fn is_hard_breached(
         self,
@@ -169,16 +157,13 @@ impl BufferPolicy {
         ))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::{BufferPolicy, BufferPolicyError, BufferStatus};
     use crate::XorQuantity;
-
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
     }
-
     #[test]
     fn evaluate_buffer_thresholds_and_exact_boundaries() {
         let policy = BufferPolicy::roadmap_default();
@@ -208,7 +193,6 @@ mod tests {
             Ok(BufferStatus::Halt)
         );
     }
-
     #[test]
     fn zero_capacity_halts() {
         assert_eq!(
@@ -216,7 +200,6 @@ mod tests {
             Ok(BufferStatus::Halt)
         );
     }
-
     #[test]
     fn rejects_invalid_threshold_order_and_range() {
         for policy in [
@@ -241,12 +224,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn soft_and_hard_breach_helpers_propagate_results() {
         let policy = BufferPolicy::roadmap_default();
         let capacity = xor("1000000");
-
         assert_eq!(
             policy.is_soft_breached(&xor("2000000"), &capacity),
             Ok(false)

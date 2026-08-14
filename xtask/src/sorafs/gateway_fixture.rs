@@ -1,10 +1,4 @@
 //! Utilities for generating the canonical SoraFS gateway fixture bundle.
-
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
-
 use blake3::{Hasher, hash as blake3_hash};
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use norito::{
@@ -23,8 +17,11 @@ use sorafs_manifest::{
     },
     por::{PorChallengeV1, PorProofV1},
 };
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 use thiserror::Error;
-
 const CHALLENGE_FIXTURE_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../fixtures/sorafs_manifest/por/challenge_v1.to"
@@ -33,7 +30,6 @@ const PROOF_FIXTURE_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../fixtures/sorafs_manifest/por/proof_v1.to"
 ));
-
 /// Canonical fixture bundle built by the harness.
 #[derive(Debug, Clone)]
 pub struct FixtureBundle {
@@ -45,7 +41,6 @@ pub struct FixtureBundle {
     pub chunk_digest_sha3_256: [u8; 32],
     pub council_envelope: Vec<u8>,
 }
-
 /// Errors reported during fixture generation.
 #[derive(Debug, Error)]
 pub enum FixtureError {
@@ -58,9 +53,7 @@ pub enum FixtureError {
     #[error("{0}")]
     Invalid(String),
 }
-
 const COUNCIL_ENVELOPE_JSON_FILE: &str = "manifest_council_envelope.json";
-
 /// Generate the canonical fixture bundle deterministically.
 pub fn generate_bundle() -> FixtureBundle {
     let payload = sample_payload_bytes();
@@ -79,7 +72,6 @@ pub fn generate_bundle() -> FixtureBundle {
         .first()
         .cloned()
         .unwrap_or_else(|| b"bafysorafsmanifest".to_vec());
-
     let mut manifest = ManifestBuilder::new()
         .root_cid(root_cid)
         .dag_codec(DagCodecId(stats.dag_codec))
@@ -97,7 +89,6 @@ pub fn generate_bundle() -> FixtureBundle {
         .governance(GovernanceProofs::default())
         .build()
         .expect("manifest fixture construction");
-
     let descriptor = chunker_registry::default_descriptor();
     let alias_list: Vec<String> = descriptor
         .aliases
@@ -112,13 +103,11 @@ pub fn generate_bundle() -> FixtureBundle {
         )
     });
     manifest.chunking.aliases = alias_list;
-
     let mut challenge: PorChallengeV1 =
         decode_from_bytes(CHALLENGE_FIXTURE_BYTES).expect("decode PoR challenge fixture");
     let mut proof: PorProofV1 =
         decode_from_bytes(PROOF_FIXTURE_BYTES).expect("decode PoR proof fixture");
     challenge.chunking_profile.clone_from(&canonical_alias);
-
     let manifest_digest = manifest
         .digest()
         .expect("manifest digest computation from fixture");
@@ -134,7 +123,6 @@ pub fn generate_bundle() -> FixtureBundle {
         &manifest.chunking.aliases,
     )
     .expect("fixture council envelope construction");
-
     FixtureBundle {
         manifest,
         challenge,
@@ -145,13 +133,11 @@ pub fn generate_bundle() -> FixtureBundle {
         council_envelope,
     }
 }
-
 /// Write the canonical fixture bundle to disk and return the computed metadata.
 pub fn write_bundle(output_dir: &Path) -> Result<GeneratedMetadata, FixtureError> {
     fs::create_dir_all(output_dir)?;
     let bundle = generate_bundle();
     let metadata = metadata_from_bundle(&bundle);
-
     fs::write(
         output_dir.join("manifest_v1.to"),
         to_bytes(&bundle.manifest)?,
@@ -173,13 +159,11 @@ pub fn write_bundle(output_dir: &Path) -> Result<GeneratedMetadata, FixtureError
         output_dir.join("proof_v1.json"),
         json::to_vec(&bundle.proof)?,
     )?;
-
     fs::write(output_dir.join("payload.bin"), &bundle.payload)?;
     fs::write(
         output_dir.join("payload.blake3"),
         format!("{}\n", metadata.payload_blake3_hex),
     )?;
-
     fs::write(output_dir.join("gateway.car"), &bundle.car_bytes)?;
     fs::write(
         output_dir.join("gateway_car.blake3"),
@@ -189,7 +173,6 @@ pub fn write_bundle(output_dir: &Path) -> Result<GeneratedMetadata, FixtureError
         output_dir.join(COUNCIL_ENVELOPE_JSON_FILE),
         &bundle.council_envelope,
     )?;
-
     fs::write(
         output_dir.join("scenarios.json"),
         json::to_vec(&scenarios_json_value())?,
@@ -198,10 +181,8 @@ pub fn write_bundle(output_dir: &Path) -> Result<GeneratedMetadata, FixtureError
         output_dir.join("metadata.json"),
         json::to_vec(&metadata_json_value(&metadata))?,
     )?;
-
     Ok(metadata)
 }
-
 /// Metadata produced after generating the fixtures.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct GeneratedMetadata {
@@ -215,7 +196,6 @@ pub struct GeneratedMetadata {
     pub chunk_digest_sha3_256_hex: String,
     pub council_envelope_blake3_hex: String,
 }
-
 /// Compute fixture metadata from an in-memory bundle.
 pub fn metadata_from_bundle(bundle: &FixtureBundle) -> GeneratedMetadata {
     let manifest_bytes =
@@ -237,7 +217,6 @@ pub fn metadata_from_bundle(bundle: &FixtureBundle) -> GeneratedMetadata {
     let manifest_digest = blake3_hash(&manifest_bytes).to_hex().to_string();
     let payload_digest = blake3_hash(&bundle.payload).to_hex().to_string();
     let car_digest = blake3_hash(&bundle.car_bytes).to_hex().to_string();
-
     GeneratedMetadata {
         version: SORAFS_GATEWAY_FIXTURE_VERSION.to_string(),
         profile_version: SORAFS_GATEWAY_PROFILE_VERSION.to_string(),
@@ -250,7 +229,6 @@ pub fn metadata_from_bundle(bundle: &FixtureBundle) -> GeneratedMetadata {
         council_envelope_blake3_hex: council_envelope_digest,
     }
 }
-
 fn fixtures_digest_bytes(
     manifest_bytes: &[u8],
     challenge_bytes: &[u8],
@@ -268,7 +246,6 @@ fn fixtures_digest_bytes(
     hasher.update(council_envelope);
     hasher.finalize()
 }
-
 fn metadata_json_value(metadata: &GeneratedMetadata) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(metadata.version.clone()));
@@ -306,7 +283,6 @@ fn metadata_json_value(metadata: &GeneratedMetadata) -> Value {
     );
     Value::Object(map)
 }
-
 fn scenarios_json_value() -> Value {
     let scenarios = [
         ("A1", "Full CAR replay (sf1 profile)", 200, "success"),
@@ -360,7 +336,6 @@ fn scenarios_json_value() -> Value {
         .collect();
     Value::Array(entries)
 }
-
 fn sample_payload_bytes() -> Vec<u8> {
     const LEN: usize = 1_048_576;
     let mut payload = Vec::with_capacity(LEN);
@@ -372,34 +347,29 @@ fn sample_payload_bytes() -> Vec<u8> {
     }
     payload
 }
-
 /// Helper returning the default fixture directory.
 pub fn default_output_dir() -> PathBuf {
     PathBuf::from("fixtures")
         .join("sorafs_gateway")
         .join("1.0.0")
 }
-
 pub fn verify_bundle(dir: &Path) -> Result<GeneratedMetadata, FixtureError> {
     let metadata_path = dir.join("metadata.json");
     let metadata_raw = fs::read(&metadata_path)?;
     let mut metadata: GeneratedMetadata = norito::json::from_slice(&metadata_raw)?;
     ensure_metadata_constants(&metadata)?;
-
     let manifest_path = dir.join("manifest_v1.to");
     let challenge_path = dir.join("challenge_v1.to");
     let proof_path = dir.join("proof_v1.to");
     let payload_path = dir.join("payload.bin");
     let car_path = dir.join("gateway.car");
     let council_envelope_path = dir.join(COUNCIL_ENVELOPE_JSON_FILE);
-
     let manifest_bytes = fs::read(&manifest_path)?;
     let challenge_bytes = fs::read(&challenge_path)?;
     let proof_bytes = fs::read(&proof_path)?;
     let payload_bytes = fs::read(&payload_path)?;
     let car_bytes = fs::read(&car_path)?;
     let council_envelope_bytes = fs::read(&council_envelope_path)?;
-
     // Ensure artifacts decode cleanly.
     let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes)?;
     let _challenge: PorChallengeV1 = decode_from_bytes(&challenge_bytes)?;
@@ -415,7 +385,6 @@ pub fn verify_bundle(dir: &Path) -> Result<GeneratedMetadata, FixtureError> {
             .chunks,
     );
     verify_council_envelope(&manifest, chunk_digest_sha3_256, &council_envelope_bytes)?;
-
     let fixtures_digest = fixtures_digest_bytes(
         &manifest_bytes,
         &challenge_bytes,
@@ -430,7 +399,6 @@ pub fn verify_bundle(dir: &Path) -> Result<GeneratedMetadata, FixtureError> {
     let payload_digest = blake3_hash(&payload_bytes).to_hex().to_string();
     let car_digest = blake3_hash(&car_bytes).to_hex().to_string();
     let council_envelope_digest = blake3_hash(&council_envelope_bytes).to_hex().to_string();
-
     ensure_digest_match(
         "fixtures_digest_blake3_hex",
         &metadata.fixtures_digest_blake3_hex,
@@ -457,12 +425,10 @@ pub fn verify_bundle(dir: &Path) -> Result<GeneratedMetadata, FixtureError> {
         &metadata.council_envelope_blake3_hex,
         &council_envelope_digest,
     )?;
-
     let payload_hex_file = read_hex_file(&dir.join("payload.blake3"))?;
     ensure_digest_match("payload.blake3", &payload_hex_file, &payload_digest)?;
     let car_hex_file = read_hex_file(&dir.join("gateway_car.blake3"))?;
     ensure_digest_match("gateway_car.blake3", &car_hex_file, &car_digest)?;
-
     let scenarios_raw = fs::read(dir.join("scenarios.json"))?;
     let actual_scenarios: Value = norito::json::from_slice(&scenarios_raw)?;
     if actual_scenarios != scenarios_json_value() {
@@ -470,7 +436,6 @@ pub fn verify_bundle(dir: &Path) -> Result<GeneratedMetadata, FixtureError> {
             "scenarios.json drift detected".to_string(),
         ));
     }
-
     metadata.fixtures_digest_blake3_hex = fixtures_digest;
     metadata.manifest_blake3_hex = manifest_digest;
     metadata.payload_blake3_hex = payload_digest;
@@ -479,7 +444,6 @@ pub fn verify_bundle(dir: &Path) -> Result<GeneratedMetadata, FixtureError> {
     metadata.council_envelope_blake3_hex = council_envelope_digest;
     Ok(metadata)
 }
-
 fn build_council_envelope(
     manifest: &ManifestV1,
     chunk_digest_sha3_256: [u8; 32],
@@ -494,7 +458,6 @@ fn build_council_envelope(
     let (_, signer_bytes) = public_key.try_to_bytes().map_err(|err| {
         FixtureError::Invalid(format!("failed to export council public key: {err}"))
     })?;
-
     let mut signature_entry = Map::new();
     signature_entry.insert("algorithm".into(), Value::from("ed25519"));
     signature_entry.insert("signer".into(), Value::from(hex::encode(signer_bytes)));
@@ -506,7 +469,6 @@ fn build_council_envelope(
         "signer_multihash".into(),
         Value::from(public_key.to_string()),
     );
-
     let mut envelope = Map::new();
     envelope.insert(
         "chunk_digest_sha3_256".into(),
@@ -531,12 +493,10 @@ fn build_council_envelope(
         "signatures".into(),
         Value::Array(vec![Value::Object(signature_entry)]),
     );
-
     let mut encoded = json::to_vec_pretty(&Value::Object(envelope))?;
     encoded.push(b'\n');
     Ok(encoded)
 }
-
 fn verify_council_envelope(
     manifest: &ManifestV1,
     chunk_digest_sha3_256: [u8; 32],
@@ -561,7 +521,6 @@ fn verify_council_envelope(
             "council envelope chunk_digest_sha3_256 mismatch: envelope={chunk_hex} computed={expected_chunk_hex}"
         )));
     }
-
     let profile = required_str(obj, "profile")?;
     if !manifest
         .chunking
@@ -596,7 +555,6 @@ fn verify_council_envelope(
             "council envelope profile_aliases mismatch: envelope={envelope_aliases:?} manifest={manifest_aliases:?}"
         )));
     }
-
     let signatures = obj
         .get("signatures")
         .and_then(Value::as_array)
@@ -611,7 +569,6 @@ fn verify_council_envelope(
     }
     Ok(())
 }
-
 fn verify_council_signature(signature: &Value, payload: &[u8]) -> Result<(), FixtureError> {
     let obj = signature
         .as_object()
@@ -651,25 +608,21 @@ fn verify_council_signature(signature: &Value, payload: &[u8]) -> Result<(), Fix
         .verify(&public_key, payload)
         .map_err(|err| FixtureError::Invalid(format!("council signature did not verify: {err}")))
 }
-
 fn required_str<'a>(obj: &'a Map, field: &str) -> Result<&'a str, FixtureError> {
     obj.get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| FixtureError::Invalid(format!("council envelope missing `{field}`")))
 }
-
 fn fixture_council_keypair() -> Result<KeyPair, FixtureError> {
     let seed = blake3_hash(b"sorafs-gateway-fixture-council-v1");
     KeyPair::try_from_seed(seed.as_bytes().to_vec(), Algorithm::Ed25519).map_err(|err| {
         FixtureError::Invalid(format!("fixture council key derivation failed: {err}"))
     })
 }
-
 fn read_hex_file(path: &Path) -> Result<String, FixtureError> {
     let raw = fs::read_to_string(path)?;
     Ok(raw.trim().to_ascii_lowercase())
 }
-
 fn ensure_metadata_constants(metadata: &GeneratedMetadata) -> Result<(), FixtureError> {
     if metadata.version != SORAFS_GATEWAY_FIXTURE_VERSION {
         return Err(FixtureError::Invalid(format!(
@@ -691,7 +644,6 @@ fn ensure_metadata_constants(metadata: &GeneratedMetadata) -> Result<(), Fixture
     }
     Ok(())
 }
-
 fn ensure_digest_match(label: &str, expected: &str, actual: &str) -> Result<(), FixtureError> {
     let expected_norm = expected.trim().to_ascii_lowercase();
     let actual_norm = actual.trim().to_ascii_lowercase();
@@ -702,13 +654,10 @@ fn ensure_digest_match(label: &str, expected: &str, actual: &str) -> Result<(), 
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
-    use tempfile::tempdir;
-
     use super::*;
-
+    use tempfile::tempdir;
     #[test]
     fn verify_bundle_accepts_pristine_output() {
         let dir = tempdir().expect("temp dir");
@@ -720,7 +669,6 @@ mod tests {
             SORAFS_GATEWAY_PROFILE_VERSION.to_string()
         );
     }
-
     #[test]
     fn verify_bundle_detects_payload_corruption() {
         let dir = tempdir().expect("temp dir");
@@ -734,7 +682,6 @@ mod tests {
         );
         assert!(matches_expected, "unexpected error: {err:?}");
     }
-
     #[test]
     fn verify_council_envelope_rejects_malformed_ed25519_signature_r() {
         const SMALL_ORDER_R: [u8; 32] = [
@@ -746,7 +693,6 @@ mod tests {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
-
         let bundle = generate_bundle();
         verify_council_envelope(
             &bundle.manifest,
@@ -756,7 +702,6 @@ mod tests {
         .expect("valid council envelope verifies");
         let envelope: Value =
             json::from_slice(&bundle.council_envelope).expect("decode council envelope");
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
@@ -779,7 +724,6 @@ mod tests {
                 Value::String(hex::encode(signature_bytes)),
             );
             let encoded = json::to_vec(&malformed).expect("encode malformed envelope");
-
             let err =
                 verify_council_envelope(&bundle.manifest, bundle.chunk_digest_sha3_256, &encoded)
                     .expect_err("malformed Ed25519 R must fail admission");

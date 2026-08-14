@@ -1,9 +1,7 @@
 //! Kotodama structs: basic named-field access lowers to pointer-ABI and
 //! passes CoreHost TLV validation for domain transfer.
-
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 mod common;
-
 #[test]
 fn struct_fields_lower_to_corehost_syscall_args() {
     // Define a struct with pointer-ABI fields and use it to call a builtin.
@@ -21,12 +19,10 @@ fn struct_fields_lower_to_corehost_syscall_args() {
             }
         }
     "#;
-
     let compiler = KotodamaCompiler::new();
     let prog = compiler
         .compile_source(src)
         .expect("compile Kotodama with struct fields");
-
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     vm.load_program(&prog).expect("load program");

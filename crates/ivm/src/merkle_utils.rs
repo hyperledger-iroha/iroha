@@ -1,11 +1,8 @@
 //! Utilities for working with Merkle proofs emitted by the VM.
-
+use crate::{Memory, Registers};
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf, MerkleError, MerkleProof};
 use norito::codec::{Decode, Encode};
 use sha2::Digest as _;
-
-use crate::{Memory, Registers};
-
 /// Decode a compact Merkle proof from bytes written by the GET_MERKLE_COMPACT syscall.
 ///
 /// Layout: `[u8 depth][u32 dirs_le][u32 count][count*32 siblings]`
@@ -60,7 +57,6 @@ pub fn decode_compact_proof_bytes(
         .map_err(|_| "non-canonical compact proof")?;
     Ok((proof, need))
 }
-
 /// Build a compact Merkle proof for a given leaf index from a vector of
 /// authentication siblings encoded as raw bytes (leaf→root). Zeros encode
 /// missing siblings. `depth_cap` limits the number of levels used (<= 32).
@@ -89,7 +85,6 @@ pub fn make_compact_from_path_bytes(
         .collect();
     CompactMerkleProof::from_parts(depth as u8, dirs, siblings)
 }
-
 /// Compute the SHA-256 digest used as a memory leaf from a 32-byte chunk.
 /// The memory leaf is `SHA-256(chunk)` where the last partial chunk is
 /// zero-padded to 32 bytes before hashing.
@@ -98,7 +93,6 @@ pub fn compute_memory_leaf_digest(chunk: &[u8; 32]) -> [u8; 32] {
     out.copy_from_slice(&sha2::Sha256::digest(chunk));
     out
 }
-
 /// Compute the SHA-256 digest used as a register leaf from a value and tag.
 /// The register leaf is `SHA-256([tag(1)] || value_le(8))` where `tag=false`
 /// is encoded as 0 and `tag=true` as 1.
@@ -110,7 +104,6 @@ pub fn compute_register_leaf_digest(value: u64, tag: bool) -> [u8; 32] {
     out.copy_from_slice(&sha2::Sha256::digest(bytes));
     out
 }
-
 /// A compact proof bundle suitable for IPC: includes the compact proof header
 /// (depth, dirs), the sibling list encoded as raw bytes (32‑zero indicates a
 /// missing sibling), and the proof-local root bytes.
@@ -129,7 +122,6 @@ pub struct CompactProofBundle {
     /// Full-tree root, or a partial-path root when the proof was depth-capped.
     pub root: [u8; 32],
 }
-
 impl CompactProofBundle {
     /// Convert this bundle back into a typed `CompactMerkleProof` using
     /// `None` for zero-siblings.
@@ -147,7 +139,6 @@ impl CompactProofBundle {
             .collect();
         CompactMerkleProof::from_parts(self.depth, self.dirs, siblings)
     }
-
     /// Expand the canonical compact encoding into a full proof.
     ///
     /// The direction bitset already is the proof's leaf index; accepting a
@@ -166,9 +157,7 @@ impl CompactProofBundle {
         self.to_compact_proof().try_into_full()
     }
 }
-
 // Norito encoding/decoding derives are used so bundles can be passed via INPUT/OUTPUT.
-
 /// Build a `CompactProofBundle` for a memory address using the in‑process
 /// compact builder.
 pub fn memory_compact_bundle(
@@ -198,7 +187,6 @@ pub fn memory_compact_bundle(
         root: root_bytes,
     }
 }
-
 /// Build a `CompactProofBundle` for a register index using the in‑process
 /// compact builder.
 pub fn registers_compact_bundle(

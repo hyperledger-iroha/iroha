@@ -1,7 +1,5 @@
 //! SoraNet relay library shared by the daemon and supporting tooling.
-
 #![allow(unexpected_cfgs)]
-
 pub mod capability;
 pub mod circuit;
 pub mod compliance;
@@ -24,7 +22,6 @@ pub mod scheduler;
 pub mod token_tool;
 pub mod vpn;
 pub mod vpn_adapter;
-
 pub(crate) fn checked_ed25519_verifying_key_from_bytes(
     public_key: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
 ) -> Result<ed25519_dalek::VerifyingKey, String> {
@@ -40,28 +37,23 @@ pub(crate) fn checked_ed25519_verifying_key_from_bytes(
     }
     Ok(verifying_key)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const SMALL_ORDER_ED25519_POINT: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     const NONCANONICAL_ED25519_IDENTITY: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     const NONCANONICAL_NON_SMALL_ORDER_ED25519_POINT: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
         0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     #[test]
     fn checked_ed25519_verifying_key_rejects_inert_weak_or_noncanonical_material() {
         let all_zero = checked_ed25519_verifying_key_from_bytes(&[0; 32])
@@ -70,18 +62,15 @@ mod tests {
             all_zero.contains("all zero"),
             "unexpected error: {all_zero}"
         );
-
         let weak = checked_ed25519_verifying_key_from_bytes(&SMALL_ORDER_ED25519_POINT)
             .expect_err("small-order Ed25519 key must be rejected");
         assert!(weak.contains("small-order"), "unexpected error: {weak}");
-
         let noncanonical = checked_ed25519_verifying_key_from_bytes(&NONCANONICAL_ED25519_IDENTITY)
             .expect_err("noncanonical Ed25519 key must be rejected");
         assert!(
             noncanonical.contains("non-canonical"),
             "unexpected error: {noncanonical}"
         );
-
         let noncanonical =
             checked_ed25519_verifying_key_from_bytes(&NONCANONICAL_NON_SMALL_ORDER_ED25519_POINT)
                 .expect_err("noncanonical non-small-order Ed25519 key must be rejected");

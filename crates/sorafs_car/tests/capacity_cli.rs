@@ -1,10 +1,4 @@
 #![cfg(feature = "cli")]
-
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-};
-
 use assert_cmd::cargo::cargo_bin_cmd;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use norito::{
@@ -15,33 +9,32 @@ use sorafs_manifest::capacity::{
     CapacityDeclarationV1, CapacityDisputeKind, CapacityDisputeV1, CapacityTelemetryV1,
     ReplicationOrderV1,
 };
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 use tempfile::{Builder, TempDir};
-
 fn canonical_temp_base() -> std::path::PathBuf {
     env::temp_dir()
         .canonicalize()
         .expect("canonical system temp dir")
 }
-
 fn tempdir() -> Result<TempDir, std::io::Error> {
     Builder::new()
         .prefix("sorafs-capacity-cli-")
         .tempdir_in(canonical_temp_base())
 }
-
 fn write_spec(temp: &TempDir, name: &str, contents: &str) -> PathBuf {
     let path = temp.path().join(name);
     fs::write(&path, contents.trim_start().as_bytes()).expect("write spec");
     path
 }
-
 fn run_capacity_command(args: impl IntoIterator<Item = String>) -> std::process::Output {
     let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity");
     cmd.args(args);
     cmd.output().expect("run capacity command")
 }
-
 fn assert_capacity_failure(output: std::process::Output, expected: &str, output_path: &Path) {
     assert!(
         !output.status.success(),
@@ -58,17 +51,14 @@ fn assert_capacity_failure(output: std::process::Output, expected: &str, output_
         output_path.display()
     );
 }
-
 #[test]
 fn capacity_declaration_cli_produces_canonical_outputs() {
     let temp = tempdir().expect("tempdir");
     let spec_path = temp.path().join("declaration_spec.json");
     fs::write(&spec_path, SPEC_JSON.trim_start().as_bytes()).expect("write spec");
-
     let json_out = temp.path().join("summary.json");
     let b64_out = temp.path().join("declaration.b64");
     let norito_out = temp.path().join("declaration.to");
-
     let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity")
         .arg("declaration")
@@ -78,7 +68,6 @@ fn capacity_declaration_cli_produces_canonical_outputs() {
         .arg(format!("--norito-out={}", norito_out.display()))
         .arg("--quiet");
     cmd.assert().success();
-
     let base64_text = fs::read_to_string(&b64_out).expect("read base64");
     let base64_trimmed = base64_text.trim();
     let norito_bytes = fs::read(&norito_out).expect("read norito bytes");
@@ -86,7 +75,6 @@ fn capacity_declaration_cli_produces_canonical_outputs() {
         .decode(base64_trimmed.as_bytes())
         .expect("decode base64");
     assert_eq!(decoded_bytes, norito_bytes);
-
     let declaration: CapacityDeclarationV1 =
         decode_from_bytes(&norito_bytes).expect("decode capacity declaration");
     assert_eq!(declaration.provider_id, [0x11; 32]);
@@ -95,7 +83,6 @@ fn capacity_declaration_cli_produces_canonical_outputs() {
     assert_eq!(declaration.chunker_commitments.len(), 1);
     assert_eq!(declaration.lane_commitments.len(), 1);
     assert_eq!(declaration.metadata.len(), 1);
-
     let summary_bytes = fs::read(&json_out).expect("read summary");
     let summary_value: Value = json::from_slice(&summary_bytes).expect("parse summary json");
     let summary_obj = summary_value
@@ -123,12 +110,10 @@ fn capacity_declaration_cli_produces_canonical_outputs() {
         base64_trimmed
     );
 }
-
 #[test]
 fn capacity_declaration_cli_rejects_retired_request_and_key_options() {
     let temp = tempdir().expect("tempdir");
     let spec_path = write_spec(&temp, "declaration_spec.json", SPEC_JSON);
-
     for option in [
         "--request-out=request.json",
         "--authority=authority@capacity",
@@ -152,12 +137,10 @@ fn capacity_declaration_cli_rejects_retired_request_and_key_options() {
         );
     }
 }
-
 #[test]
 fn capacity_declaration_cli_rejects_noncanonical_epoch_overrides() {
     let temp = tempdir().expect("tempdir");
     let spec_path = write_spec(&temp, "declaration_spec.json", SPEC_JSON);
-
     for (flag, value, expected) in [
         ("--registered-epoch", "01700000000", "leading zeros"),
         ("--valid-from-epoch", "+1700000000", "canonical unsigned"),
@@ -177,7 +160,6 @@ fn capacity_declaration_cli_rejects_noncanonical_epoch_overrides() {
         assert_capacity_failure(output, expected, &json_out);
     }
 }
-
 #[test]
 fn capacity_specs_reject_noncanonical_public_fields() {
     let cases = [
@@ -251,7 +233,6 @@ fn capacity_specs_reject_noncanonical_public_fields() {
             "leading zeros",
         ),
     ];
-
     for (subcommand, filename, spec, expected) in cases {
         let temp = tempdir().expect("tempdir");
         let spec_path = write_spec(&temp, filename, &spec);
@@ -265,7 +246,6 @@ fn capacity_specs_reject_noncanonical_public_fields() {
         assert_capacity_failure(output, expected, &json_out);
     }
 }
-
 const SPEC_JSON: &str = r#"
 {
   "provider_id_hex": "1111111111111111111111111111111111111111111111111111111111111111",
@@ -303,17 +283,14 @@ const SPEC_JSON: &str = r#"
   }
 }
 "#;
-
 #[test]
 fn capacity_telemetry_cli_produces_canonical_outputs() {
     let temp = tempdir().expect("tempdir");
     let spec_path = temp.path().join("telemetry_spec.json");
     fs::write(&spec_path, TELEMETRY_JSON.trim_start().as_bytes()).expect("write spec");
-
     let json_out = temp.path().join("telemetry_summary.json");
     let b64_out = temp.path().join("telemetry.b64");
     let norito_out = temp.path().join("telemetry.to");
-
     let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity")
         .arg("telemetry")
@@ -323,7 +300,6 @@ fn capacity_telemetry_cli_produces_canonical_outputs() {
         .arg(format!("--norito-out={}", norito_out.display()))
         .arg("--quiet");
     cmd.assert().success();
-
     let base64_text = fs::read_to_string(&b64_out).expect("read base64");
     let base64_trimmed = base64_text.trim();
     let norito_bytes = fs::read(&norito_out).expect("read norito bytes");
@@ -331,7 +307,6 @@ fn capacity_telemetry_cli_produces_canonical_outputs() {
         .decode(base64_trimmed.as_bytes())
         .expect("decode base64");
     assert_eq!(decoded_bytes, norito_bytes);
-
     let telemetry: CapacityTelemetryV1 =
         decode_from_bytes(&decoded_bytes).expect("decode capacity telemetry");
     assert_eq!(telemetry.provider_id, [0x33; 32]);
@@ -344,7 +319,6 @@ fn capacity_telemetry_cli_produces_canonical_outputs() {
     assert_eq!(telemetry.uptime_percent_milli, 99_500);
     assert_eq!(telemetry.por_success_percent_milli, 99_000);
     assert_eq!(telemetry.notes.as_deref(), Some("weekly snapshot"));
-
     let summary_bytes = fs::read(&json_out).expect("read summary");
     let summary_value: Value = json::from_slice(&summary_bytes).expect("parse summary json");
     let summary_obj = summary_value.as_object().expect("summary must be object");
@@ -374,17 +348,14 @@ fn capacity_telemetry_cli_produces_canonical_outputs() {
         "weekly snapshot"
     );
 }
-
 #[test]
 fn capacity_replication_order_cli_produces_canonical_outputs() {
     let temp = tempdir().expect("tempdir");
     let spec_path = temp.path().join("replication_spec.json");
     fs::write(&spec_path, REPLICATION_JSON.trim_start().as_bytes()).expect("write spec");
-
     let json_out = temp.path().join("replication_summary.json");
     let b64_out = temp.path().join("replication.b64");
     let norito_out = temp.path().join("replication.to");
-
     let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity")
         .arg("replication-order")
@@ -394,7 +365,6 @@ fn capacity_replication_order_cli_produces_canonical_outputs() {
         .arg(format!("--norito-out={}", norito_out.display()))
         .arg("--quiet");
     cmd.assert().success();
-
     let base64_text = fs::read_to_string(&b64_out).expect("read base64");
     let base64_trimmed = base64_text.trim();
     let norito_bytes = fs::read(&norito_out).expect("read norito bytes");
@@ -402,7 +372,6 @@ fn capacity_replication_order_cli_produces_canonical_outputs() {
         .decode(base64_trimmed.as_bytes())
         .expect("decode base64");
     assert_eq!(decoded_bytes, norito_bytes);
-
     let order: ReplicationOrderV1 =
         decode_from_bytes(&decoded_bytes).expect("decode replication order");
     assert_eq!(order.order_id, [0x44; 32]);
@@ -414,7 +383,6 @@ fn capacity_replication_order_cli_produces_canonical_outputs() {
     assert_eq!(order.metadata.len(), 1);
     assert_eq!(order.metadata[0].key, "priority");
     assert_eq!(order.metadata[0].value, "standard");
-
     let summary_bytes = fs::read(&json_out).expect("read summary");
     let summary_value: Value = json::from_slice(&summary_bytes).expect("parse summary json");
     let summary_obj = summary_value.as_object().expect("summary must be object");
@@ -438,7 +406,6 @@ fn capacity_replication_order_cli_produces_canonical_outputs() {
         .expect("assignments summary array");
     assert_eq!(assignments.len(), 2);
 }
-
 #[test]
 fn capacity_cli_rejects_retired_request_output_and_complete_subcommand() {
     let temp = tempdir().expect("tempdir");
@@ -455,7 +422,6 @@ fn capacity_cli_rejects_retired_request_output_and_complete_subcommand() {
         "unexpected stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let output = run_capacity_command(["complete".to_owned()]);
     assert!(!output.status.success());
     assert!(
@@ -464,17 +430,14 @@ fn capacity_cli_rejects_retired_request_output_and_complete_subcommand() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
-
 #[test]
 fn capacity_dispute_cli_produces_canonical_outputs() {
     let temp = tempdir().expect("tempdir");
     let spec_path = temp.path().join("dispute_spec.json");
     fs::write(&spec_path, DISPUTE_JSON.trim_start().as_bytes()).expect("write spec");
-
     let json_out = temp.path().join("dispute_summary.json");
     let b64_out = temp.path().join("dispute.b64");
     let norito_out = temp.path().join("dispute.to");
-
     let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity")
         .arg("dispute")
@@ -484,7 +447,6 @@ fn capacity_dispute_cli_produces_canonical_outputs() {
         .arg(format!("--norito-out={}", norito_out.display()))
         .arg("--quiet");
     cmd.assert().success();
-
     let base64_text = fs::read_to_string(&b64_out).expect("read base64");
     let base64_trimmed = base64_text.trim();
     let norito_bytes = fs::read(&norito_out).expect("read norito bytes");
@@ -492,7 +454,6 @@ fn capacity_dispute_cli_produces_canonical_outputs() {
         .decode(base64_trimmed.as_bytes())
         .expect("decode base64");
     assert_eq!(decoded_bytes, norito_bytes);
-
     let dispute: CapacityDisputeV1 =
         decode_from_bytes(&decoded_bytes).expect("decode capacity dispute");
     assert_eq!(dispute.provider_id, [0x22; 32]);
@@ -514,7 +475,6 @@ fn capacity_dispute_cli_produces_canonical_outputs() {
         dispute.description,
         "Provider failed to ingest replication order within SLA."
     );
-
     let summary_bytes = fs::read(&json_out).expect("read summary");
     let summary_value: Value = json::from_slice(&summary_bytes).expect("parse summary json");
     let summary_obj = summary_value
@@ -539,7 +499,6 @@ fn capacity_dispute_cli_produces_canonical_outputs() {
         base64_trimmed
     );
 }
-
 const TELEMETRY_JSON: &str = r#"
 {
   "provider_id_hex": "3333333333333333333333333333333333333333333333333333333333333333",
@@ -555,7 +514,6 @@ const TELEMETRY_JSON: &str = r#"
   "notes": "weekly snapshot"
 }
 "#;
-
 const REPLICATION_JSON: &str = r#"
 {
   "order_id_hex": "4444444444444444444444444444444444444444444444444444444444444444",
@@ -587,7 +545,6 @@ const REPLICATION_JSON: &str = r#"
   }
 }
 "#;
-
 const DISPUTE_JSON: &str = r#"
 {
   "provider_id_hex": "2222222222222222222222222222222222222222222222222222222222222222",

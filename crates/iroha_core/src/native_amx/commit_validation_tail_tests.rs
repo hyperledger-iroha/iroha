@@ -1,7 +1,6 @@
 // Commit-request shape and QC replay-validation tests.
 //
 // Included by `native_amx::tests` to preserve exact libtest names.
-
 #[test]
 fn commit_request_shape_binds_the_exact_round_and_epoch() {
     let keys = [checked_bls_keypair(0x41), checked_bls_keypair(0x42)];
@@ -35,7 +34,6 @@ fn commit_request_shape_binds_the_exact_round_and_epoch() {
         prepare_qc: prepare_qc.clone(),
     };
     assert_eq!(request.validate_shape(), Ok(()));
-
     let mut replayed_view = request.clone();
     replayed_view.request.body.round.view = replayed_view.request.body.round.view.saturating_add(1);
     replayed_view.request.body.coordinator_lane_block_view = replayed_view
@@ -74,7 +72,6 @@ fn commit_request_shape_binds_the_exact_round_and_epoch() {
         Err(NativeAmxCommitRequestError::LegMismatch)
     );
 }
-
 #[test]
 fn qc_validation_rejects_context_replay_and_missing_pop() {
     let keys = [
@@ -108,7 +105,6 @@ fn qc_validation_rejects_context_replay_and_missing_pop() {
         validate_native_amx_qc(&qc, &body, &validators, 3, &pops),
         Ok(())
     );
-
     let mut another_context = body;
     another_context.round.context_id = HeightContextId(
         HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(b"replayed-context")),
@@ -117,7 +113,6 @@ fn qc_validation_rejects_context_replay_and_missing_pop() {
         validate_native_amx_qc(&qc, &another_context, &validators, 3, &pops),
         Err(NativeAmxQcValidationError::BodyMismatch)
     );
-
     let mut missing_pop = pops;
     missing_pop.remove(keys[0].public_key());
     assert_eq!(
@@ -125,7 +120,6 @@ fn qc_validation_rejects_context_replay_and_missing_pop() {
         Err(NativeAmxQcValidationError::InvalidProofOfPossession)
     );
 }
-
 #[test]
 fn vote_signature_rejects_same_label_foreign_genesis_network() {
     let shared_label_a: iroha_data_model::ChainId =
@@ -133,12 +127,10 @@ fn vote_signature_rejects_same_label_foreign_genesis_network() {
     let shared_label_b: iroha_data_model::ChainId =
         "shared-display-label".parse().expect("valid display label");
     assert_eq!(shared_label_a, shared_label_b);
-
     let keypair = checked_bls_keypair(0xE7);
     let local_body = body(NativeAmxPhase::Prepare);
     let mut replayed = signed_vote(&local_body, &keypair);
     replayed.body.network_id = network_id(b"foreign-genesis-with-shared-label");
-
     assert_ne!(
         local_body.signature_preimage(),
         replayed.body.signature_preimage(),

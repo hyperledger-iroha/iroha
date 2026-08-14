@@ -1,14 +1,12 @@
+use clap::{Parser, ValueEnum};
+use eyre::{Result, WrapErr};
+use norito::json;
+use soradns_resolver::transparency::{TransparencyRecord, TransparencyTailer};
 use std::{
     fs::File,
     io::{self, BufRead, BufReader, BufWriter, Write},
     path::PathBuf,
 };
-
-use clap::{Parser, ValueEnum};
-use eyre::{Result, WrapErr};
-use norito::json;
-use soradns_resolver::transparency::{TransparencyRecord, TransparencyTailer};
-
 #[derive(Debug, Parser)]
 #[command(
     author,
@@ -29,7 +27,6 @@ struct Cli {
     #[arg(long)]
     metrics_output: Option<PathBuf>,
 }
-
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum OutputFormat {
     /// Emit JSON Lines compatible with ClickHouse JSONEachRow ingestion.
@@ -37,7 +34,6 @@ enum OutputFormat {
     /// Emit tab-separated rows for ClickHouse TSV ingestion.
     Tsv,
 }
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let reader: Box<dyn BufRead> = match &cli.input {
@@ -54,19 +50,15 @@ fn main() -> Result<()> {
         }
         None => Box::new(BufWriter::new(io::stdout())),
     };
-
     let mut tailer = TransparencyTailer::new();
     let writer_opt: Option<&mut dyn Write> = Some(writer.as_mut());
     process_stream(reader, writer_opt, cli.format, &mut tailer)?;
     writer.flush().wrap_err("failed to flush output writer")?;
-
     if let Some(target) = cli.metrics_output {
         write_metrics(&target, &tailer)?;
     }
-
     Ok(())
 }
-
 fn process_stream<R: BufRead>(
     mut reader: R,
     mut writer: Option<&mut dyn Write>,
@@ -101,18 +93,15 @@ fn process_stream<R: BufRead>(
     }
     Ok(())
 }
-
 fn write_metrics(path: &PathBuf, tailer: &TransparencyTailer) -> Result<()> {
     let lines = tailer.metrics();
     let mut needs_type = std::collections::HashSet::new();
-
     if path.as_os_str() == "-" {
         let mut out = BufWriter::new(io::stdout());
         emit_metrics(&lines, &mut needs_type, &mut out)?;
         out.flush().wrap_err("failed to flush metrics stdout")?;
         return Ok(());
     }
-
     let file = File::create(path).wrap_err("failed to create metrics output file")?;
     let mut out = BufWriter::new(file);
     emit_metrics(&lines, &mut needs_type, &mut out)?;
@@ -120,7 +109,6 @@ fn write_metrics(path: &PathBuf, tailer: &TransparencyTailer) -> Result<()> {
         .wrap_err("failed to flush metrics output writer")?;
     Ok(())
 }
-
 fn emit_metrics<W: Write + ?Sized>(
     lines: &[soradns_resolver::transparency::MetricLine],
     seen_types: &mut std::collections::HashSet<&'static str>,
@@ -140,7 +128,6 @@ fn emit_metrics<W: Write + ?Sized>(
     }
     Ok(())
 }
-
 fn write_record<W: Write + ?Sized>(
     writer: &mut W,
     record: &TransparencyRecord,
@@ -166,15 +153,12 @@ fn write_record<W: Write + ?Sized>(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use soradns_resolver::transparency::{
         BundleEventKind, BundleRecord, BundleSnapshot, ResolverEventKind, ResolverRecord,
     };
-
-    use super::*;
-
     #[test]
     fn json_writer_outputs_line() {
         let mut buffer = Vec::new();
@@ -204,7 +188,6 @@ mod tests {
             "json writer should emit bundle record"
         );
     }
-
     #[test]
     fn tsv_writer_outputs_line() {
         let mut buffer = Vec::new();

@@ -1,5 +1,4 @@
 // Tail extracted from `vpn_tests.rs` to keep both test sources within the hard limit.
-
 #[tokio::test]
 async fn submit_vpn_receipt_requires_operator_and_client_voucher() {
     let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
@@ -26,7 +25,6 @@ async fn submit_vpn_receipt_requires_operator_and_client_voucher() {
             VpnLeaseStatusV1::Active,
             None,
         ));
-
     let relay_session_id = relay_session_id_from_session_id(&session.session_id);
     let quote_id = decode_hex_32(&session.quote_id, "quote").expect("quote id");
     assert_eq!(session.relay_id_hex, hex::encode(active_record.relay_id));
@@ -78,7 +76,6 @@ async fn submit_vpn_receipt_requires_operator_and_client_voucher() {
     let uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
     let headers = signed_app_headers(&operator, &operator_keys, &method, &uri, body.as_ref());
     app.vpn_sessions.clear();
-
     let response = handle_submit_vpn_receipt(app.clone(), &method, &uri, &headers, body.as_ref())
         .await
         .expect("settled")

@@ -3,12 +3,6 @@
 //!
 //! Some helpers are gated by telemetry and may be unused when those tests are
 //! disabled; allow the definitions to stay available across feature sets.
-
-use std::sync::{
-    Arc, LazyLock, Mutex,
-    atomic::{AtomicU64, Ordering},
-};
-
 use axum::{
     body::{Body, Bytes},
     http::Request,
@@ -26,12 +20,14 @@ use iroha_data_model::{ChainId, NetworkId, account::AccountId, peer::PeerId};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::ALICE_ID;
 use iroha_torii::{OnlinePeersProvider, Torii};
+use std::sync::{
+    Arc, LazyLock, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 use tower::ServiceExt as _;
-
 static SHARED_METRICS: LazyLock<Mutex<Arc<Metrics>>> =
     LazyLock::new(|| Mutex::new(Arc::new(Metrics::default())));
 static OPERATOR_NONCE_COUNTER: AtomicU64 = AtomicU64::new(1);
-
 /// Canonical literals for a single well-known account used in tx query tests.
 #[allow(dead_code)]
 pub struct AccountLiterals {
@@ -40,7 +36,6 @@ pub struct AccountLiterals {
     /// Compressed literal.
     pub compressed: String,
 }
-
 /// Singleton fixture so all tx query tests share the same literals.
 #[allow(dead_code)]
 pub static TX_QUERY_ACCOUNT: LazyLock<AccountLiterals> = LazyLock::new(|| {
@@ -54,7 +49,6 @@ pub static TX_QUERY_ACCOUNT: LazyLock<AccountLiterals> = LazyLock::new(|| {
         compressed,
     }
 });
-
 /// Ensure duplicate metric registrations panic inside tests so suites do not silently reuse registries.
 #[allow(dead_code)]
 pub fn enable_duplicate_metric_panic() {
@@ -63,7 +57,6 @@ pub fn enable_duplicate_metric_panic() {
         std::env::set_var("IROHA_METRICS_PANIC_ON_DUPLICATE", "1");
     }
 }
-
 /// Shared metrics registry for tests to avoid duplicate Prometheus descriptor warnings.
 #[allow(dead_code)]
 pub fn shared_metrics() -> Arc<Metrics> {
@@ -73,7 +66,6 @@ pub fn shared_metrics() -> Arc<Metrics> {
         .expect("shared metrics mutex poisoned")
         .clone()
 }
-
 /// Reset the shared metrics registry to a fresh instance for suites that need a clean slate.
 #[allow(dead_code)]
 pub fn reset_shared_metrics() -> Arc<Metrics> {
@@ -85,7 +77,6 @@ pub fn reset_shared_metrics() -> Arc<Metrics> {
     *guard = metrics.clone();
     metrics
 }
-
 /// Seed the world with the given peer IDs using the test-only mutator.
 #[allow(dead_code)]
 pub fn seed_peers<I>(world: &mut World, peer_ids: I)
@@ -99,20 +90,17 @@ where
     }
     world_block.commit();
 }
-
 /// Seed the world with a single peer ID.
 #[allow(dead_code)]
 pub fn seed_peer(world: &mut World, peer_id: PeerId) {
     seed_peers(world, [peer_id]);
 }
-
 /// Own a Torii test instance together with the Kiso task that backs its configuration handle.
 #[allow(dead_code)]
 pub struct ToriiHarness {
     torii: Torii,
     _kiso_child: iroha_futures::supervisor::Child,
 }
-
 #[allow(dead_code)]
 impl ToriiHarness {
     /// Construct Torii from explicit, already-seeded ledger dependencies.
@@ -132,12 +120,10 @@ impl ToriiHarness {
         let (kiso, kiso_child) = KisoHandle::start(cfg.clone());
         let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
         let _ = peers_tx;
-
         #[cfg(feature = "telemetry")]
         let telemetry = if telemetry_enabled {
             use iroha_core::telemetry as core_telemetry;
             use iroha_primitives::time::TimeSource;
-
             let metrics = shared_metrics();
             let (_mock_handle, time_source) = TimeSource::new_mock(core::time::Duration::default());
             let telemetry = core_telemetry::start(
@@ -188,13 +174,11 @@ impl ToriiHarness {
                 OnlinePeersProvider::new(peers_rx),
             )
         };
-
         Self {
             torii,
             _kiso_child: kiso_child,
         }
     }
-
     /// Construct Torii with telemetry disabled when the ledger has no local peer fixture.
     pub fn new_without_telemetry(
         cfg: &iroha_config::parameters::actual::Root,
@@ -219,13 +203,11 @@ impl ToriiHarness {
             false,
         )
     }
-
     /// Build the complete test router while retaining the backing Kiso task.
     pub fn router(&self) -> axum::Router {
         self.torii.api_router_for_tests()
     }
 }
-
 /// Standard single-ledger Torii fixture used by endpoint tests.
 #[allow(dead_code)]
 pub struct StandardToriiHarness {
@@ -235,7 +217,6 @@ pub struct StandardToriiHarness {
     /// Transaction queue retained for request-side-effect assertions.
     pub queue: Arc<Queue>,
 }
-
 #[allow(dead_code)]
 impl StandardToriiHarness {
     /// Build the common `test-chain` router around an explicitly supplied world.
@@ -250,7 +231,6 @@ impl StandardToriiHarness {
         ));
         Self::from_state(cfg, &kura, state)
     }
-
     /// Build the common router around a preconfigured state snapshot.
     pub fn from_state(
         cfg: &iroha_config::parameters::actual::Root,
@@ -280,13 +260,11 @@ impl StandardToriiHarness {
             queue,
         }
     }
-
     /// Build the endpoint router while retaining the ledger fixture.
     pub fn router(&self) -> axum::Router {
         self.harness.router()
     }
 }
-
 /// Send one request through a cloned test router without consuming the caller's handle.
 #[allow(dead_code)]
 pub async fn request(
@@ -295,7 +273,6 @@ pub async fn request(
 ) -> Result<axum::response::Response, std::convert::Infallible> {
     app.clone().oneshot(request).await
 }
-
 /// Send a bodyless GET request while preserving the router result for caller-specific errors.
 #[allow(dead_code)]
 pub async fn request_get(
@@ -304,7 +281,6 @@ pub async fn request_get(
 ) -> Result<axum::response::Response, std::convert::Infallible> {
     request(app, get_request(uri)).await
 }
-
 /// Collect a response body with the caller's exact failure diagnostic.
 #[allow(dead_code)]
 pub async fn response_body(response: axum::response::Response, error: &'static str) -> Bytes {
@@ -313,13 +289,11 @@ pub async fn response_body(response: axum::response::Response, error: &'static s
         .expect(error)
         .to_bytes()
 }
-
 /// Build a bodyless GET request from a string URI.
 #[allow(dead_code)]
 pub fn get_request(uri: &str) -> Request<Body> {
     Request::builder().uri(uri).body(Body::empty()).unwrap()
 }
-
 /// Build a JSON POST request from a string URI and concrete body.
 #[allow(dead_code)]
 pub fn post_json_request(uri: &str, body: Body) -> Request<Body> {
@@ -330,19 +304,16 @@ pub fn post_json_request(uri: &str, body: Body) -> Request<Body> {
         .body(body)
         .unwrap()
 }
-
 /// Send a bodyless GET request through a test router.
 #[allow(dead_code)]
 pub async fn get(app: &axum::Router, uri: &str) -> axum::response::Response {
     request(app, get_request(uri)).await.unwrap()
 }
-
 /// Send a JSON POST request through a test router.
 #[allow(dead_code)]
 pub async fn post_json(app: &axum::Router, uri: &str, body: Body) -> axum::response::Response {
     request(app, post_json_request(uri, body)).await.unwrap()
 }
-
 /// Attach operator signature headers to a request targeting operator-only endpoints.
 ///
 /// Operator endpoints are internet-reachable by design but must be authenticated with a
@@ -355,22 +326,20 @@ pub fn operator_signed_request(
     body_bytes: &[u8],
 ) -> Request<Body> {
     use std::time::{SystemTime, UNIX_EPOCH};
-
     let ts_ms: u64 = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
         .try_into()
         .unwrap_or(u64::MAX);
-
     let nonce_counter = OPERATOR_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut nonce_bytes = [0_u8; 12];
     nonce_bytes[..8].copy_from_slice(&nonce_counter.to_le_bytes());
     let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
-
     const DOMAIN: &[u8] = b"iroha.operator.http-request.network.v1\0";
     let canonical_request =
-        iroha_torii::canonical_request_message(request.method(), request.uri(), body_bytes);
+        iroha_torii::canonical_request_message(request.method(), request.uri(), body_bytes)
+            .expect("canonical operator fixture is within V1 limits");
     let network_id = iroha_torii::test_utils::signed_query_network_id();
     let mut msg = Vec::with_capacity(
         DOMAIN.len() + network_id.as_bytes().len() + canonical_request.len() + nonce.len() + 32,
@@ -382,10 +351,8 @@ pub fn operator_signed_request(
     msg.extend_from_slice(ts_ms.to_string().as_bytes());
     msg.extend_from_slice(b"\n");
     msg.extend_from_slice(nonce.as_bytes());
-
     let signature =
         Signature::try_new(key_pair.private_key(), &msg).expect("operator request signature");
-
     let headers = request.headers_mut();
     headers.insert(
         "x-iroha-operator-public-key",
@@ -413,10 +380,8 @@ pub fn operator_signed_request(
             .parse()
             .expect("operator signature header"),
     );
-
     request
 }
-
 /// Attach app-canonical signature headers to a request targeting app-authenticated endpoints.
 #[allow(dead_code)]
 pub fn app_signed_request(
@@ -429,17 +394,14 @@ pub fn app_signed_request(
         sync::LazyLock,
         time::{SystemTime, UNIX_EPOCH},
     };
-
     static APP_NONCE_SEQ: LazyLock<std::sync::atomic::AtomicU64> =
         LazyLock::new(|| std::sync::atomic::AtomicU64::new(0));
-
     let ts_ms: u64 = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
         .try_into()
         .unwrap_or(u64::MAX);
-
     let nonce_seq = APP_NONCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nonce = format!(
         "itest-{ts_ms}-{nonce_seq}-{}-{}",
@@ -453,18 +415,23 @@ pub fn app_signed_request(
         body_bytes,
         ts_ms,
         &nonce,
-    );
+    )
+    .expect("canonical app fixture is within V1 limits");
     let signature =
         Signature::try_new(key_pair.private_key(), &msg).expect("app canonical request signature");
-
     let headers = request.headers_mut();
     headers.insert(
         iroha_torii::HEADER_ACCOUNT,
-        account_id.to_string().parse().expect("account header"),
+        account_id
+            .to_canonical_hex()
+            .expect("canonical account header")
+            .parse()
+            .expect("account header"),
     );
     headers.insert(
         iroha_torii::HEADER_SIGNATURE,
         iroha_torii::signature_header_value(&signature)
+            .expect("encode valid app signature header")
             .parse()
             .expect("app signature header"),
     );
@@ -476,6 +443,5 @@ pub fn app_signed_request(
         iroha_torii::HEADER_NONCE,
         nonce.parse().expect("nonce header"),
     );
-
     request
 }

@@ -7,9 +7,11 @@
 //! singular record.
 
 #![cfg(feature = "app_api")]
-
-use std::{collections::VecDeque, convert::Infallible, future::Future, time::Duration};
-
+use crate::{
+    JsonBody, SharedAppState,
+    routing::MaybeTelemetry,
+    utils::extractors::{ExtractAccept, JsonOrNoritoVersioned},
+};
 use axum::{
     extract::{
         Extension, Path, State,
@@ -53,18 +55,11 @@ use iroha_data_model::{
 use iroha_logger::{debug, warn};
 use norito::json;
 use sorafs_node::reserve_transaction_forwarder::RESERVE_TRANSACTION_MAX_CANONICAL_BYTES_V1;
-
-use crate::{
-    JsonBody, SharedAppState,
-    routing::MaybeTelemetry,
-    utils::extractors::{ExtractAccept, JsonOrNoritoVersioned},
-};
-
+use std::{collections::VecDeque, convert::Infallible, future::Future, time::Duration};
 /// Exact TTL used by every caller- and worker-signed reserve V1 transaction.
 const RESERVE_TRANSACTION_TTL_V1: Duration = Duration::from_secs(300);
 const RESERVE_DEFAULT_PAGE_LIMIT_V1: u32 = 100;
 const RESERVE_EVENT_POLL_INTERVAL_V1: Duration = Duration::from_secs(1);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReserveCommandRouteV1 {
     RequestMovement(ReserveMovementKindV1),
@@ -74,7 +69,6 @@ enum ReserveCommandRouteV1 {
     SubmitAppeal,
     DecideAppeal([u8; 32]),
 }
-
 async fn observe_reserve_api_response<F>(
     telemetry: MaybeTelemetry,
     route: &'static str,
@@ -104,7 +98,6 @@ where
     });
     response
 }
-
 #[derive(Debug, Default)]
 struct ReservePageQueryV1 {
     expected_finalized_height: Option<u64>,
@@ -112,13 +105,11 @@ struct ReservePageQueryV1 {
     after_id: Option<[u8; 32]>,
     limit: Option<u32>,
 }
-
 #[derive(Debug, Default)]
 struct ReserveAnchorQueryV1 {
     expected_finalized_height: Option<u64>,
     expected_finalized_block_hash: Option<[u8; 32]>,
 }
-
 #[derive(Debug, Default)]
 struct ReserveEventQueryV1 {
     expected_finalized_height: Option<u64>,
@@ -129,7 +120,6 @@ struct ReserveEventQueryV1 {
     after_event_index: Option<u32>,
     limit: Option<u32>,
 }
-
 impl ReserveAnchorQueryV1 {
     fn parse(raw: Option<&str>) -> Result<Self, Response> {
         let mut query = Self::default();
@@ -150,14 +140,12 @@ impl ReserveAnchorQueryV1 {
         )?;
         Ok(query)
     }
-
     fn expected_finalized_cursor(&self) -> Option<ReserveFinalizedCursorV1> {
         self.expected_finalized_height
             .zip(self.expected_finalized_block_hash)
             .map(|(height, block_hash)| ReserveFinalizedCursorV1 { height, block_hash })
     }
 }
-
 impl ReservePageQueryV1 {
     fn parse(raw: Option<&str>, after_parameter: &str) -> Result<Self, Response> {
         let mut query = Self::default();
@@ -193,20 +181,17 @@ impl ReservePageQueryV1 {
         }
         Ok(query)
     }
-
     fn expected_finalized_cursor(&self) -> Option<ReserveFinalizedCursorV1> {
         self.expected_finalized_height
             .zip(self.expected_finalized_block_hash)
             .map(|(height, block_hash)| ReserveFinalizedCursorV1 { height, block_hash })
     }
-
     fn limit(&self) -> u32 {
         self.limit
             .unwrap_or(RESERVE_DEFAULT_PAGE_LIMIT_V1)
             .clamp(1, RESERVE_QUERY_MAX_ITEMS_V1)
     }
 }
-
 impl ReserveEventQueryV1 {
     fn parse(raw: Option<&str>) -> Result<Self, Response> {
         let mut query = Self::default();
@@ -265,13 +250,11 @@ impl ReserveEventQueryV1 {
         }
         Ok(query)
     }
-
     fn expected_finalized_cursor(&self) -> Option<ReserveFinalizedCursorV1> {
         self.expected_finalized_height
             .zip(self.expected_finalized_block_hash)
             .map(|(height, block_hash)| ReserveFinalizedCursorV1 { height, block_hash })
     }
-
     fn after(&self) -> Option<ReserveFinalizedEventCursorV1> {
         Some(ReserveFinalizedEventCursorV1 {
             sequence: self.after_sequence?,
@@ -280,14 +263,12 @@ impl ReserveEventQueryV1 {
             event_index: self.after_event_index?,
         })
     }
-
     fn limit(&self) -> u32 {
         self.limit
             .unwrap_or(RESERVE_DEFAULT_PAGE_LIMIT_V1)
             .clamp(1, RESERVE_QUERY_MAX_ITEMS_V1)
     }
 }
-
 pub(crate) async fn handle_post_sorafs_reserve_top_up(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -307,7 +288,6 @@ pub(crate) async fn handle_post_sorafs_reserve_top_up(
     })
     .await
 }
-
 pub(crate) async fn handle_post_sorafs_reserve_withdrawal(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -327,7 +307,6 @@ pub(crate) async fn handle_post_sorafs_reserve_withdrawal(
     })
     .await
 }
-
 pub(crate) async fn handle_post_sorafs_reserve_movement_decision(
     State(state): State<SharedAppState>,
     Path(movement_id_hex): Path<String>,
@@ -352,7 +331,6 @@ pub(crate) async fn handle_post_sorafs_reserve_movement_decision(
     })
     .await
 }
-
 pub(crate) async fn handle_post_sorafs_reserve_credit_draw(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -372,7 +350,6 @@ pub(crate) async fn handle_post_sorafs_reserve_credit_draw(
     })
     .await
 }
-
 pub(crate) async fn handle_post_sorafs_reserve_credit_repay(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -392,7 +369,6 @@ pub(crate) async fn handle_post_sorafs_reserve_credit_repay(
     })
     .await
 }
-
 pub(crate) async fn handle_post_sorafs_reserve_appeal(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -412,7 +388,6 @@ pub(crate) async fn handle_post_sorafs_reserve_appeal(
     })
     .await
 }
-
 pub(crate) async fn handle_post_sorafs_reserve_appeal_decision(
     State(state): State<SharedAppState>,
     Path(appeal_id_hex): Path<String>,
@@ -437,7 +412,6 @@ pub(crate) async fn handle_post_sorafs_reserve_appeal_decision(
     })
     .await
 }
-
 async fn submit_reserve_signed_transaction(
     state: SharedAppState,
     headers: HeaderMap,
@@ -463,7 +437,6 @@ async fn submit_reserve_signed_transaction(
         Err(error) => error.into_response(),
     }
 }
-
 fn validate_reserve_signed_transaction(
     state: &SharedAppState,
     transaction: &SignedTransaction,
@@ -475,7 +448,6 @@ fn validate_reserve_signed_transaction(
         .execute(&view)
         .map_err(reserve_query_error_response)?;
     let authority = transaction.authority();
-
     match route {
         ReserveCommandRouteV1::RequestMovement(expected_kind) => {
             let request = one_instruction::<RequestSorafsReserveMovement>(transaction)?;
@@ -590,7 +562,6 @@ fn validate_reserve_signed_transaction(
         }
     }
 }
-
 fn validate_reserve_signed_envelope_and_route(
     expected_network: &iroha_data_model::NetworkId,
     transaction: &SignedTransaction,
@@ -670,7 +641,6 @@ fn validate_reserve_signed_envelope_and_route(
         Err(route_mismatch(route))
     }
 }
-
 fn one_instruction<T: 'static>(transaction: &SignedTransaction) -> Result<&T, Response> {
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return Err(json_error(
@@ -688,7 +658,6 @@ fn one_instruction<T: 'static>(transaction: &SignedTransaction) -> Result<&T, Re
             )
         })
 }
-
 fn require_current_provider_binding(
     expected_revision: u64,
     policy_digest: [u8; 32],
@@ -706,14 +675,12 @@ fn require_current_provider_binding(
     }
     Ok(())
 }
-
 fn require_provider_authority(
     authority: &AccountId,
     account: &ReserveProviderAccountV1,
 ) -> Result<(), Response> {
     require_subject(authority, &account.terms.provider_account, "provider")
 }
-
 fn require_subject(
     actual: &AccountId,
     expected: &AccountId,
@@ -728,7 +695,6 @@ fn require_subject(
         ))
     }
 }
-
 fn route_mismatch(route: ReserveCommandRouteV1) -> Response {
     let expected = match route {
         ReserveCommandRouteV1::RequestMovement(ReserveMovementKindV1::TopUp) => {
@@ -748,7 +714,6 @@ fn route_mismatch(route: ReserveCommandRouteV1) -> Response {
         format!("SoraFS reserve route requires exactly one `{expected}` native instruction"),
     )
 }
-
 pub(crate) async fn handle_get_sorafs_reserve_policy(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -782,7 +747,6 @@ pub(crate) async fn handle_get_sorafs_reserve_policy(
     })
     .await
 }
-
 pub(crate) async fn handle_get_sorafs_reserve_providers(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -821,7 +785,6 @@ pub(crate) async fn handle_get_sorafs_reserve_providers(
     })
     .await
 }
-
 pub(crate) async fn handle_get_sorafs_reserve_provider(
     State(state): State<SharedAppState>,
     Path(provider_id_hex): Path<String>,
@@ -869,7 +832,6 @@ pub(crate) async fn handle_get_sorafs_reserve_provider(
     })
     .await
 }
-
 pub(crate) async fn handle_get_sorafs_reserve_movements(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -908,7 +870,6 @@ pub(crate) async fn handle_get_sorafs_reserve_movements(
     })
     .await
 }
-
 pub(crate) async fn handle_get_sorafs_reserve_movement(
     State(state): State<SharedAppState>,
     Path(movement_id_hex): Path<String>,
@@ -953,7 +914,6 @@ pub(crate) async fn handle_get_sorafs_reserve_movement(
     })
     .await
 }
-
 pub(crate) async fn handle_get_sorafs_reserve_appeals(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -992,7 +952,6 @@ pub(crate) async fn handle_get_sorafs_reserve_appeals(
     })
     .await
 }
-
 pub(crate) async fn handle_get_sorafs_reserve_appeal(
     State(state): State<SharedAppState>,
     Path(appeal_id_hex): Path<String>,
@@ -1037,7 +996,6 @@ pub(crate) async fn handle_get_sorafs_reserve_appeal(
     })
     .await
 }
-
 pub(crate) async fn handle_get_sorafs_reserve_events(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -1076,7 +1034,6 @@ pub(crate) async fn handle_get_sorafs_reserve_events(
     })
     .await
 }
-
 pub(crate) async fn handle_get_sorafs_reserve_events_stream(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -1124,7 +1081,6 @@ pub(crate) async fn handle_get_sorafs_reserve_events_stream(
     })
     .await
 }
-
 pub(crate) async fn handle_get_sorafs_reserve_events_ws(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -1183,7 +1139,6 @@ pub(crate) async fn handle_get_sorafs_reserve_events_ws(
     })
     .await
 }
-
 fn query_reserve_events(
     state: &SharedAppState,
     caller: &AccountId,
@@ -1202,7 +1157,6 @@ fn query_reserve_events(
         .execute(&view)
         .map_err(|error| reserve_query_public_message(&error))
 }
-
 fn revalidate_reserve_stream_operator(
     state: &SharedAppState,
     caller: &AccountId,
@@ -1217,7 +1171,6 @@ fn revalidate_reserve_stream_operator(
         Err("SoraFS reserve stream authorization is no longer valid".to_owned())
     }
 }
-
 fn reserve_event_stream(
     state: SharedAppState,
     caller: AccountId,
@@ -1234,13 +1187,11 @@ fn reserve_event_stream(
         })
     })
 }
-
 #[derive(Debug, PartialEq, Eq)]
 enum ReserveEventStreamFrameV1 {
     Event(ReserveFinalizedEventV1),
     TerminalError(String),
 }
-
 fn reserve_event_frame_stream(
     state: SharedAppState,
     caller: AccountId,
@@ -1256,7 +1207,6 @@ fn reserve_event_frame_stream(
         limit: u32,
         terminal: bool,
     }
-
     let after = reserve_event_resume_cursor(&initial.events, initial_after);
     stream::unfold(
         PollState {
@@ -1299,7 +1249,6 @@ fn reserve_event_frame_stream(
         },
     )
 }
-
 async fn reserve_event_websocket(
     socket: WebSocket,
     state: SharedAppState,
@@ -1320,7 +1269,6 @@ async fn reserve_event_websocket(
     )
     .await
 }
-
 async fn reserve_event_websocket_io<S, R, SendError, ReceiveError>(
     mut sender: S,
     mut receiver: R,
@@ -1344,7 +1292,6 @@ where
             .await
             .map_err(|error| error.to_string())?;
     }
-
     loop {
         tokio::select! {
             inbound = receiver.next() => {
@@ -1370,7 +1317,6 @@ where
         }
     }
 }
-
 fn reserve_sse_event(event: &ReserveFinalizedEventV1) -> SseEvent {
     match reserve_event_json(event) {
         Ok(json) => SseEvent::default()
@@ -1380,13 +1326,11 @@ fn reserve_sse_event(event: &ReserveFinalizedEventV1) -> SseEvent {
         Err(error) => SseEvent::default().event("error").data(error),
     }
 }
-
 fn reserve_event_json(event: &ReserveFinalizedEventV1) -> Result<String, String> {
     json::to_json(event)
         .map(|json| json.to_string())
         .map_err(|error| format!("failed to encode finalized SoraFS reserve event: {error}"))
 }
-
 fn reserve_event_resume_cursor(
     events: &[ReserveFinalizedEventV1],
     initial_after: Option<ReserveFinalizedEventCursorV1>,
@@ -1396,7 +1340,6 @@ fn reserve_event_resume_cursor(
         .map(ReserveFinalizedEventV1::cursor)
         .or(initial_after)
 }
-
 fn authenticate_reserve_read(
     state: &SharedAppState,
     headers: &HeaderMap,
@@ -1434,7 +1377,6 @@ fn authenticate_reserve_read(
         }
     }
 }
-
 fn require_reserve_operator(
     caller: &AccountId,
     policy: &ReserveAuthorityPolicyRecordV1,
@@ -1448,12 +1390,10 @@ fn require_reserve_operator(
         ))
     }
 }
-
 fn is_reserve_operator(caller: &AccountId, policy: &ReserveAuthorityPolicyRecordV1) -> bool {
     caller.subject_id() == policy.policy.operations_authority.subject_id()
         || caller.subject_id() == policy.policy.decision_authority.subject_id()
 }
-
 fn require_provider_or_operator_for_id(
     view: &impl StateReadOnly,
     caller: &AccountId,
@@ -1475,7 +1415,6 @@ fn require_provider_or_operator_for_id(
         ))
     }
 }
-
 fn require_expected_cursor(
     view: &impl StateReadOnly,
     expected: Option<ReserveFinalizedCursorV1>,
@@ -1494,7 +1433,6 @@ fn require_expected_cursor(
     }
     Ok(actual)
 }
-
 fn reserve_finalized_cursor(view: &impl StateReadOnly) -> Option<ReserveFinalizedCursorV1> {
     u64::try_from(view.block_hashes().len())
         .ok()
@@ -1505,7 +1443,6 @@ fn reserve_finalized_cursor(view: &impl StateReadOnly) -> Option<ReserveFinalize
         })
         .filter(|cursor| cursor.height != 0 && cursor.block_hash != [0; 32])
 }
-
 fn anchored_record_response<T: norito::json::JsonSerialize>(
     cursor: ReserveFinalizedCursorV1,
     field: &str,
@@ -1536,7 +1473,6 @@ fn anchored_record_response<T: norito::json::JsonSerialize>(
     ]))
     .into_response()
 }
-
 fn reserve_query_error_response(error: QueryExecutionFail) -> Response {
     let status = match error {
         QueryExecutionFail::Find(
@@ -1559,7 +1495,6 @@ fn reserve_query_error_response(error: QueryExecutionFail) -> Response {
     }
     json_error(status, reserve_query_public_message(&error))
 }
-
 fn reserve_query_public_message(error: &QueryExecutionFail) -> String {
     match error {
         QueryExecutionFail::Find(
@@ -1580,7 +1515,6 @@ fn reserve_query_public_message(error: &QueryExecutionFail) -> String {
         _ => "authoritative finalized SoraFS reserve state is unavailable".to_owned(),
     }
 }
-
 fn walk_query(
     raw: Option<&str>,
     mut visit: impl FnMut(&str, &str) -> Result<(), String>,
@@ -1610,7 +1544,6 @@ fn walk_query(
     }
     Ok(())
 }
-
 fn parse_unique_u64(target: &mut Option<u64>, name: &str, raw: &str) -> Result<(), String> {
     if target.is_some() || raw.is_empty() {
         return Err(format!(
@@ -1628,7 +1561,6 @@ fn parse_unique_u64(target: &mut Option<u64>, name: &str, raw: &str) -> Result<(
     *target = Some(value);
     Ok(())
 }
-
 fn parse_unique_u32(target: &mut Option<u32>, name: &str, raw: &str) -> Result<(), String> {
     if target.is_some() || raw.is_empty() {
         return Err(format!(
@@ -1646,7 +1578,6 @@ fn parse_unique_u32(target: &mut Option<u32>, name: &str, raw: &str) -> Result<(
     *target = Some(value);
     Ok(())
 }
-
 fn parse_unique_hex(
     target: &mut Option<[u8; 32]>,
     name: &str,
@@ -1667,7 +1598,6 @@ fn parse_unique_hex(
     *target = Some(value);
     Ok(())
 }
-
 fn validate_finalized_cursor_pair(
     height: Option<u64>,
     block_hash: Option<[u8; 32]>,
@@ -1686,7 +1616,6 @@ fn validate_finalized_cursor_pair(
     }
     Ok(())
 }
-
 fn parse_nonzero_hex(raw: &str, name: &str) -> Result<[u8; 32], String> {
     let value = parse_hex(raw, name)?;
     if value == [0; 32] {
@@ -1694,7 +1623,6 @@ fn parse_nonzero_hex(raw: &str, name: &str) -> Result<[u8; 32], String> {
     }
     Ok(value)
 }
-
 fn parse_hex(raw: &str, name: &str) -> Result<[u8; 32], String> {
     if raw.len() != 64
         || raw
@@ -1711,14 +1639,12 @@ fn parse_hex(raw: &str, name: &str) -> Result<[u8; 32], String> {
         .try_into()
         .map_err(|_| format!("SoraFS reserve `{name}` must decode to 32 bytes"))
 }
-
 fn feature_disabled() -> Response {
     json_error(
         StatusCode::NOT_FOUND,
         "SoraFS reserve API is not enabled on this node",
     )
 }
-
 fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (
         status,
@@ -1729,19 +1655,9 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     )
         .into_response()
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::NonZeroU32,
-        pin::Pin,
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        },
-        task::{Context, Poll},
-    };
-
+    use super::*;
     use futures::{Sink, channel::mpsc, task::AtomicWaker};
     use iroha_core::{smartcontracts::Execute, state::World};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -1768,9 +1684,15 @@ mod tests {
     };
     use iroha_primitives::json::Json;
     use sorafs_manifest::deal::XorQuantity;
-
-    use super::*;
-
+    use std::{
+        num::NonZeroU32,
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        task::{Context, Poll},
+    };
     #[test]
     fn reserve_auth_rejects_foreign_exact_network_before_feature_disclosure() {
         let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
@@ -1787,12 +1709,10 @@ mod tests {
             0xD4,
             0xE4,
         );
-
         let response = authenticate_reserve_read(&state, &headers, &method, &uri)
             .expect_err("foreign-network reserve authorization must fail closed");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
-
     fn signed_transaction(
         network_id: &NetworkId,
         instruction: InstructionBox,
@@ -1800,7 +1720,6 @@ mod tests {
     ) -> SignedTransaction {
         signed_transactions(network_id, vec![instruction], mutate)
     }
-
     fn signed_transactions(
         network_id: &NetworkId,
         instructions: Vec<InstructionBox>,
@@ -1819,13 +1738,11 @@ mod tests {
             .with_instructions(instructions)
             .sign(key_pair.private_key())
     }
-
     fn reserve_test_network_id(marker: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([marker; Hash::LENGTH]),
         ))
     }
-
     fn movement(kind: ReserveMovementKindV1) -> InstructionBox {
         RequestSorafsReserveMovement::new(
             [0x11; 32],
@@ -1837,20 +1754,17 @@ mod tests {
         )
         .into()
     }
-
     fn reserve_test_account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("reserve stream account key");
         AccountId::new(key_pair.public_key().clone())
     }
-
     fn reserve_test_asset_definition() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("reserve", "universal").expect("reserve domain"),
             "xor".parse().expect("reserve asset name"),
         )
     }
-
     fn reserve_stream_test_app(
         governance: &AccountId,
         custody: &AccountId,
@@ -1892,7 +1806,6 @@ mod tests {
             .insert(governance.clone(), permissions);
         crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(world)
     }
-
     fn reserve_stream_policy(
         revision: u64,
         predecessor_policy_digest: Option<[u8; 32]>,
@@ -1917,7 +1830,6 @@ mod tests {
             max_open_appeals_per_provider: 2,
         }
     }
-
     fn commit_reserve_stream_policies(
         state: &SharedAppState,
         governance: &AccountId,
@@ -1948,7 +1860,6 @@ mod tests {
         block.block_hashes.push_for_tests(block_hash);
         block.commit().expect("commit reserve stream test block");
     }
-
     struct FirstFrameFlushGateSink {
         output: mpsc::UnboundedSender<WsMessage>,
         release_first_flush: Arc<AtomicBool>,
@@ -1956,17 +1867,14 @@ mod tests {
         sent: usize,
         first_flush_pending: bool,
     }
-
     impl Sink<WsMessage> for FirstFrameFlushGateSink {
         type Error = String;
-
         fn poll_ready(
             self: Pin<&mut Self>,
             _context: &mut Context<'_>,
         ) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
-
         fn start_send(self: Pin<&mut Self>, item: WsMessage) -> Result<(), Self::Error> {
             let this = self.get_mut();
             this.output
@@ -1978,7 +1886,6 @@ mod tests {
             }
             Ok(())
         }
-
         fn poll_flush(
             self: Pin<&mut Self>,
             context: &mut Context<'_>,
@@ -1993,7 +1900,6 @@ mod tests {
             this.first_flush_pending = false;
             Poll::Ready(Ok(()))
         }
-
         fn poll_close(
             self: Pin<&mut Self>,
             context: &mut Context<'_>,
@@ -2001,7 +1907,6 @@ mod tests {
             self.poll_flush(context)
         }
     }
-
     #[test]
     fn signed_boundary_rejects_wrong_route_network_and_noncanonical_envelope_fields() {
         let network_id = reserve_test_network_id(0xA1);
@@ -2030,7 +1935,6 @@ mod tests {
             .status(),
             StatusCode::BAD_REQUEST
         );
-
         let nonce = signed_transaction(
             &network_id,
             movement(ReserveMovementKindV1::TopUp),
@@ -2049,7 +1953,6 @@ mod tests {
             .status(),
             StatusCode::BAD_REQUEST
         );
-
         let mut forbidden_metadata = Metadata::default();
         forbidden_metadata.insert("forbidden".parse().expect("metadata key"), true);
         let metadata = signed_transaction(
@@ -2067,7 +1970,6 @@ mod tests {
             .status(),
             StatusCode::BAD_REQUEST
         );
-
         let multiple = signed_transactions(
             &network_id,
             vec![
@@ -2087,7 +1989,6 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
     }
-
     #[test]
     fn finalized_query_parser_rejects_duplicates_partial_cursors_and_noncanonical_hex() {
         assert!(ReserveAnchorQueryV1::parse(Some("limit=1")).is_err());
@@ -2115,7 +2016,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn empty_initial_event_page_preserves_exclusive_resume_cursor() {
         let after = ReserveFinalizedEventCursorV1 {
@@ -2126,12 +2026,10 @@ mod tests {
         };
         assert_eq!(reserve_event_resume_cursor(&[], Some(after)), Some(after));
     }
-
     #[tokio::test]
     async fn policy_rotation_revokes_buffered_and_future_sse_and_websocket_events() {
         const AUTHORIZATION_REVOKED: &str =
             "SoraFS reserve stream authorization is no longer valid";
-
         let governance = reserve_test_account(0xB1);
         let custody = reserve_test_account(0xB2);
         let treasury = reserve_test_account(0xB3);
@@ -2139,13 +2037,11 @@ mod tests {
         let replacement = reserve_test_account(0xB5);
         let state =
             reserve_stream_test_app(&governance, &custody, &treasury, &caller, &replacement);
-
         let first = reserve_stream_policy(1, None, &custody, &treasury, &caller);
         let first_digest = first.digest().expect("first reserve policy digest");
         let second = reserve_stream_policy(2, Some(first_digest), &custody, &treasury, &caller);
         let second_digest = second.digest().expect("second reserve policy digest");
         commit_reserve_stream_policies(&state, &governance, [first, second], 10);
-
         let buffered = query_reserve_events(&state, &caller, None, None, 100)
             .expect("authorized initial reserve page");
         assert_eq!(buffered.events.len(), 2, "two frames must be buffered");
@@ -2157,7 +2053,6 @@ mod tests {
         let future = query_reserve_events(&state, &caller, None, Some(buffered_after), 100)
             .expect("authorized empty continuation page");
         assert!(future.events.is_empty());
-
         let buffered_sse = reserve_event_frame_stream(
             Arc::clone(&state),
             caller.clone(),
@@ -2178,7 +2073,6 @@ mod tests {
             100,
         );
         futures::pin_mut!(future_sse);
-
         let (buffered_ws_output, mut buffered_ws_frames) = mpsc::unbounded();
         let release_first_flush = Arc::new(AtomicBool::new(false));
         let flush_waker = Arc::new(AtomicWaker::new());
@@ -2203,7 +2097,6 @@ mod tests {
                 .expect("first buffered WebSocket frame timeout")
                 .expect("first buffered WebSocket frame");
         assert!(matches!(first_ws_frame, WsMessage::Text(_)));
-
         let (future_ws_output, mut future_ws_frames) = mpsc::unbounded();
         let future_ws = tokio::spawn(reserve_event_websocket_io(
             future_ws_output,
@@ -2215,7 +2108,6 @@ mod tests {
             100,
         ));
         tokio::task::yield_now().await;
-
         let third =
             reserve_stream_policy(3, Some(second_digest), &custody, &treasury, &replacement);
         commit_reserve_stream_policies(&state, &governance, [third], 11);
@@ -2231,7 +2123,6 @@ mod tests {
             vec![3],
             "the policy rotation event must exist as a future frame"
         );
-
         assert_eq!(
             buffered_sse.next().await,
             Some(ReserveEventStreamFrameV1::TerminalError(
@@ -2240,7 +2131,6 @@ mod tests {
             "SSE must suppress its second already-buffered event"
         );
         assert!(buffered_sse.next().await.is_none());
-
         release_first_flush.store(true, Ordering::Release);
         flush_waker.wake();
         let buffered_ws_error = tokio::time::timeout(Duration::from_secs(1), buffered_ws)
@@ -2253,7 +2143,6 @@ mod tests {
             buffered_ws_frames.next().await.is_none(),
             "WebSocket must suppress its second already-buffered event"
         );
-
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(2), future_sse.next())
                 .await
@@ -2264,7 +2153,6 @@ mod tests {
             "SSE must suppress events finalized after revocation"
         );
         assert!(future_sse.next().await.is_none());
-
         let future_ws_error = tokio::time::timeout(Duration::from_secs(2), future_ws)
             .await
             .expect("future WebSocket revocation timeout")

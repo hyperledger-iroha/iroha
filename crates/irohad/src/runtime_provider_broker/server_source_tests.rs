@@ -34,7 +34,6 @@ fn pop_broker_sources_never_export_recipient_private_keys() {
         );
     }
 }
-
 #[test]
 fn pop_broker_preserves_caller_signed_mutation_authority() {
     let mut request = PopAuthenticateRequestWireV1 {
@@ -64,7 +63,6 @@ fn pop_broker_preserves_caller_signed_mutation_authority() {
         ),
         Ok(())
     );
-
     request.action = pop_action_to_wire(
         sorafs_node::pop_credentials::PopCredentialApiActionV1::ReadEnrollmentStatus,
     );
@@ -74,7 +72,6 @@ fn pop_broker_preserves_caller_signed_mutation_authority() {
     );
     assert_eq!(validate_pop_principal(authenticated_only, &request), Ok(()));
 }
-
 #[test]
 fn production_unary_binding_caps_accept_defaults_and_reject_cap_plus_one() {
     let checkpoint_public_key =
@@ -97,7 +94,6 @@ fn production_unary_binding_caps_accept_defaults_and_reject_cap_plus_one() {
         validate_wire_binding(&appeal_too_large),
         Err(BrokerError::BindingMismatch)
     );
-
     let mut provider_checkpoint = plain_runtime_binding(
         IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore,
         "sealed://sorafs/provider-ingest/checkpoint-primary",
@@ -114,7 +110,6 @@ fn production_unary_binding_caps_accept_defaults_and_reject_cap_plus_one() {
         validate_wire_binding(&provider_checkpoint),
         Err(BrokerError::BindingMismatch)
     );
-
     let signer_details = ProviderIngestSignerBindingWireV1 {
         runtime_handle: "software://sorafs/provider-ingest/signer-primary".to_owned(),
         adapter_revision: 3,
@@ -141,7 +136,6 @@ fn production_unary_binding_caps_accept_defaults_and_reject_cap_plus_one() {
         validate_wire_binding(&provider_signer),
         Err(BrokerError::BindingMismatch)
     );
-
     let mut evidence_checkpoint =
         evidence_viewer_binding(IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore);
     assert_eq!(validate_wire_binding(&evidence_checkpoint), Ok(()));
@@ -168,7 +162,6 @@ fn production_unary_binding_caps_accept_defaults_and_reject_cap_plus_one() {
         validate_wire_binding(&evidence_publisher),
         Err(BrokerError::BindingMismatch)
     );
-
     assert_eq!(
         validate_provider_ingest_account_canonical_bytes(&vec![
             0xA5;
@@ -185,7 +178,6 @@ fn production_unary_binding_caps_accept_defaults_and_reject_cap_plus_one() {
         Err(BrokerError::Rejected)
     );
 }
-
 #[test]
 fn broker_instance_lock_records_atomic_marker_provenance() {
     let directory = tempfile::tempdir().expect("create lock provenance directory");
@@ -193,7 +185,6 @@ fn broker_instance_lock_records_atomic_marker_provenance() {
         .expect("harden lock provenance directory");
     let parent = fs::File::open(directory.path()).expect("open lock provenance parent");
     let uid = rustix::process::geteuid().as_raw();
-
     let first = endpoint_recovery::InstanceLockGuard::acquire(&parent, uid)
         .expect("exclusively create first lock marker");
     assert!(!first.marker_preexisted());
@@ -202,7 +193,6 @@ fn broker_instance_lock_records_atomic_marker_provenance() {
         .expect("open persisted lock marker");
     assert!(second.marker_preexisted());
 }
-
 #[test]
 fn broker_server_preserves_active_listener_without_lock_or_readiness() {
     let (_directory, path, policy, listener) = bind_fake_broker();
@@ -211,7 +201,6 @@ fn broker_server_preserves_active_listener_without_lock_or_readiness() {
         .parent()
         .expect("broker parent")
         .join(".runtime-provider-broker-v1.lock");
-
     for attempt in 0..2 {
         let ready = AtomicBool::new(false);
         assert_eq!(
@@ -239,7 +228,6 @@ fn broker_server_preserves_active_listener_without_lock_or_readiness() {
     }
     drop(listener);
 }
-
 #[test]
 fn broker_server_rejects_active_locked_socket_without_unlinking_it() {
     let (_directory, path, policy, listener) = bind_fake_broker();
@@ -267,7 +255,6 @@ fn broker_server_rejects_active_locked_socket_without_unlinking_it() {
     assert!(path.exists());
     drop(listener);
 }
-
 #[test]
 fn broker_server_recovers_exact_stale_socket_after_unclean_exit() {
     let directory = tempfile::tempdir().expect("create stale broker directory");
@@ -280,7 +267,6 @@ fn broker_server_recovers_exact_stale_socket_after_unclean_exit() {
     set_socket_mode(&path).expect("harden stale broker socket");
     let stale_identity = endpoint_identity(&policy).expect("capture stale socket identity");
     drop(stale);
-
     let server_policy = policy.clone();
     let ready_policy = policy.clone();
     let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
@@ -311,7 +297,6 @@ fn broker_server_recovers_exact_stale_socket_after_unclean_exit() {
         .expect("recovered broker exits cleanly");
     assert!(!path.exists());
 }
-
 #[test]
 fn broker_server_preserves_non_socket_symlink_and_wrong_mode_entries() {
     let directory = tempfile::tempdir().expect("create rejected endpoint directory");
@@ -320,7 +305,6 @@ fn broker_server_preserves_non_socket_symlink_and_wrong_mode_entries() {
     let path = directory.path().join("runtime-provider-broker-v1.sock");
     let policy = EndpointPolicy::for_test(path.clone());
     let bindings = IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain");
-
     fs::write(&path, b"not-a-socket").expect("write regular endpoint substitution");
     assert_eq!(
         serve_with_policy(
@@ -336,7 +320,6 @@ fn broker_server_preserves_non_socket_symlink_and_wrong_mode_entries() {
         b"not-a-socket"
     );
     fs::remove_file(&path).expect("remove regular substitution");
-
     let target = path.with_extension("target");
     fs::write(&target, b"target").expect("write symlink target");
     symlink(&target, &path).expect("create endpoint symlink");
@@ -356,7 +339,6 @@ fn broker_server_preserves_non_socket_symlink_and_wrong_mode_entries() {
             .is_symlink()
     );
     fs::remove_file(&path).expect("remove endpoint symlink");
-
     let wrong_mode = UnixListener::bind(&path).expect("bind wrong-mode socket");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("set wrong socket mode");
     drop(wrong_mode);
@@ -372,11 +354,9 @@ fn broker_server_preserves_non_socket_symlink_and_wrong_mode_entries() {
     assert!(path.exists(), "wrong-mode socket remains for inspection");
     fs::remove_file(&path).expect("remove wrong-mode socket");
 }
-
 #[test]
 fn stale_socket_recovery_detects_identity_substitution_before_unlink() {
     use std::cell::RefCell;
-
     let directory = tempfile::tempdir().expect("create recovery race directory");
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden recovery race directory");
@@ -414,11 +394,9 @@ fn stale_socket_recovery_detects_identity_substitution_before_unlink() {
     drop(replacement);
     fs::remove_file(&path).expect("remove preserved replacement");
 }
-
 #[test]
 fn orderly_cleanup_quarantines_before_detecting_identity_substitution() {
     use std::cell::RefCell;
-
     let directory = tempfile::tempdir().expect("create cleanup race directory");
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden cleanup race directory");
@@ -432,7 +410,6 @@ fn orderly_cleanup_quarantines_before_detecting_identity_substitution() {
     let guard = endpoint_recovery::InstanceLockGuard::acquire(&parent, policy.expected_service_uid)
         .expect("acquire cleanup race lock");
     let replacement = RefCell::new(None);
-
     assert_eq!(
         endpoint_recovery::cleanup_socket_entry_with_probe(
             &parent,
@@ -457,7 +434,6 @@ fn orderly_cleanup_quarantines_before_detecting_identity_substitution() {
     drop(replacement);
     fs::remove_file(&path).expect("remove restored cleanup replacement");
 }
-
 #[test]
 fn broker_endpoint_rejects_socket_hardlink_alias_without_removal() {
     let directory = tempfile::tempdir().expect("create hardlink regression directory");
@@ -473,7 +449,6 @@ fn broker_endpoint_rejects_socket_hardlink_alias_without_removal() {
     let original = fs::symlink_metadata(&path).expect("inspect hardlinked endpoint");
     assert_eq!(original.nlink(), 2);
     assert_eq!(endpoint_identity(&policy), Err(BrokerError::Unavailable));
-
     assert_eq!(
         serve_with_policy_and_lifecycle(
             &IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain"),
@@ -493,7 +468,6 @@ fn broker_endpoint_rejects_socket_hardlink_alias_without_removal() {
     fs::remove_file(&alias).expect("remove socket alias");
     fs::remove_file(&path).expect("remove canonical socket");
 }
-
 #[test]
 fn broker_server_readiness_follows_qualification_and_secure_bind() {
     let directory = tempfile::tempdir().expect("create broker server directory");
@@ -534,7 +508,6 @@ fn broker_server_readiness_follows_qualification_and_secure_bind() {
         .expect("join ready broker server")
         .expect("ready broker server exits cleanly");
     assert!(!path.exists(), "orderly shutdown removes the bound socket");
-
     let rejected_path = directory.path().join("rejected-runtime-provider.sock");
     let rejected_policy = EndpointPolicy::for_test(rejected_path.clone());
     let rejected_lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
@@ -558,7 +531,6 @@ fn broker_server_readiness_follows_qualification_and_secure_bind() {
         "qualification failure must precede endpoint creation"
     );
 }
-
 #[test]
 fn broker_server_readiness_failure_stops_before_accept_and_cleans_endpoint() {
     let directory = tempfile::tempdir().expect("create failed-readiness server directory");
@@ -569,7 +541,6 @@ fn broker_server_readiness_failure_stops_before_accept_and_cleans_endpoint() {
     let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
     let callback_lifecycle = Arc::clone(&lifecycle);
     let callback_invoked = AtomicBool::new(false);
-
     assert_eq!(
         serve_with_policy_and_fallible_readiness(
             &IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain"),
@@ -603,7 +574,6 @@ fn broker_server_readiness_failure_stops_before_accept_and_cleans_endpoint() {
         "no client can enter an accept loop after readiness publication fails"
     );
 }
-
 #[test]
 fn broker_server_graceful_cleanup_allows_exact_endpoint_rebind() {
     let directory = tempfile::tempdir().expect("create broker server directory");
@@ -611,7 +581,6 @@ fn broker_server_graceful_cleanup_allows_exact_endpoint_rebind() {
         .expect("harden broker server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
     let policy = EndpointPolicy::for_test(path.clone());
-
     for attempt in 0..2 {
         let server_policy = policy.clone();
         let bindings = IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain");
@@ -647,7 +616,6 @@ fn broker_server_graceful_cleanup_allows_exact_endpoint_rebind() {
         );
     }
 }
-
 #[test]
 fn broker_server_never_signals_ready_for_existing_endpoint() {
     let (_directory, path, policy, listener) = bind_fake_broker();
@@ -677,7 +645,6 @@ fn broker_server_never_signals_ready_for_existing_endpoint() {
     assert!(path.exists());
     drop(listener);
 }
-
 #[test]
 fn broker_server_never_signals_ready_for_endpoint_substituted_during_requalification() {
     #[derive(Debug)]
@@ -686,12 +653,10 @@ fn broker_server_never_signals_ready_for_endpoint_substituted_during_requalifica
         second_probe_entered: Arc<std::sync::Barrier>,
         release_second_probe: Arc<std::sync::Barrier>,
     }
-
     impl sorafs_node::GovernanceDagRuntimeSigner for BlockingReadySigner {
         fn handle(&self) -> &str {
             SERVER_TEST_SIGNER_HANDLE
         }
-
         fn qualification(
             &self,
         ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
@@ -706,15 +671,12 @@ fn broker_server_never_signals_ready_for_endpoint_substituted_during_requalifica
                 ),
             )
         }
-
         fn publisher_peer_id(&self) -> &[u8] {
             b"12D3KooWRuntimeBrokerServerPrimary"
         }
-
         fn public_key(&self) -> [u8; 32] {
             TEST_SIGNER_KEY
         }
-
         fn sign(
             &self,
             _purpose: sorafs_node::GovernanceDagSigningPurposeV1,
@@ -723,7 +685,6 @@ fn broker_server_never_signals_ready_for_endpoint_substituted_during_requalifica
             Ok([0xA5; 64])
         }
     }
-
     let directory = tempfile::tempdir().expect("create broker server directory");
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
@@ -783,7 +744,6 @@ fn broker_server_never_signals_ready_for_endpoint_substituted_during_requalifica
     drop(replacement);
     fs::remove_file(&path).expect("remove pre-ready test replacement");
 }
-
 #[test]
 fn broker_server_idle_loop_detects_endpoint_substitution_and_preserves_replacement() {
     let directory = tempfile::tempdir().expect("create broker server directory");
@@ -834,7 +794,6 @@ fn broker_server_idle_loop_detects_endpoint_substitution_and_preserves_replaceme
     drop(replacement);
     fs::remove_file(&path).expect("remove test replacement endpoint");
 }
-
 #[test]
 fn broker_server_callback_panic_still_cleans_bound_endpoint() {
     let directory = tempfile::tempdir().expect("create broker server directory");
@@ -861,19 +820,16 @@ fn broker_server_callback_panic_still_cleans_bound_endpoint() {
         "bound endpoint guard must run while callback panic unwinds"
     );
 }
-
 #[test]
 fn broker_server_requalifies_complete_catalog_immediately_before_ready() {
     #[derive(Debug)]
     struct DriftingReadySigner {
         qualification_calls: AtomicU64,
     }
-
     impl sorafs_node::GovernanceDagRuntimeSigner for DriftingReadySigner {
         fn handle(&self) -> &str {
             SERVER_TEST_SIGNER_HANDLE
         }
-
         fn qualification(
             &self,
         ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
@@ -885,15 +841,12 @@ fn broker_server_requalifies_complete_catalog_immediately_before_ready() {
                 ),
             )
         }
-
         fn publisher_peer_id(&self) -> &[u8] {
             b"12D3KooWRuntimeBrokerServerPrimary"
         }
-
         fn public_key(&self) -> [u8; 32] {
             TEST_SIGNER_KEY
         }
-
         fn sign(
             &self,
             _purpose: sorafs_node::GovernanceDagSigningPurposeV1,
@@ -902,7 +855,6 @@ fn broker_server_requalifies_complete_catalog_immediately_before_ready() {
             Ok([0xA5; 64])
         }
     }
-
     let directory = tempfile::tempdir().expect("create broker server directory");
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
@@ -930,7 +882,6 @@ fn broker_server_requalifies_complete_catalog_immediately_before_ready() {
         "failed second qualification cleans the endpoint before returning"
     );
 }
-
 #[test]
 fn broker_server_preserves_requalification_failure_during_shutdown() {
     #[derive(Debug)]
@@ -939,12 +890,10 @@ fn broker_server_preserves_requalification_failure_during_shutdown() {
         second_probe_entered: Arc<std::sync::Barrier>,
         release_second_probe: Arc<std::sync::Barrier>,
     }
-
     impl sorafs_node::GovernanceDagRuntimeSigner for FailingReadySigner {
         fn handle(&self) -> &str {
             SERVER_TEST_SIGNER_HANDLE
         }
-
         fn qualification(
             &self,
         ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
@@ -960,15 +909,12 @@ fn broker_server_preserves_requalification_failure_during_shutdown() {
                 ),
             )
         }
-
         fn publisher_peer_id(&self) -> &[u8] {
             b"12D3KooWRuntimeBrokerServerPrimary"
         }
-
         fn public_key(&self) -> [u8; 32] {
             TEST_SIGNER_KEY
         }
-
         fn sign(
             &self,
             _purpose: sorafs_node::GovernanceDagSigningPurposeV1,
@@ -977,7 +923,6 @@ fn broker_server_preserves_requalification_failure_during_shutdown() {
             Ok([0xA5; 64])
         }
     }
-
     let directory = tempfile::tempdir().expect("create broker server directory");
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
@@ -1024,7 +969,6 @@ fn broker_server_preserves_requalification_failure_during_shutdown() {
         "failed requalification cleans the endpoint during shutdown"
     );
 }
-
 #[test]
 fn stock_registry_projects_exact_streamed_provider_source_limits() {
     let limits = ProviderIngestSourceLimitsV1 {
@@ -1050,7 +994,6 @@ fn stock_registry_projects_exact_streamed_provider_source_limits() {
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
     ));
 }
-
 #[test]
 fn musubi_source_fetch_v2_reconstructs_exact_private_binding() {
     let payload = vec![0xD7; 4 * 1024 + 19];
@@ -1115,7 +1058,6 @@ fn musubi_source_fetch_v2_reconstructs_exact_private_binding() {
         .expect("join Musubi source broker")
         .expect("Musubi source broker exits cleanly");
 }
-
 #[test]
 fn stalled_source_stream_releases_unary_session_capacity() {
     let payload = vec![0xA7; 8 * 1024 * 1024];
@@ -1181,7 +1123,6 @@ fn stalled_source_stream_releases_unary_session_capacity() {
         .expect("join source broker")
         .expect("source broker exits cleanly");
 }
-
 #[test]
 fn source_stream_post_qualification_runs_after_exact_backend_eof() {
     let payload = vec![0xB8; 512 * 1024 + 7];
@@ -1232,7 +1173,6 @@ fn source_stream_post_qualification_runs_after_exact_backend_eof() {
         .expect("join drift source broker")
         .expect("drift source broker exits cleanly");
 }
-
 #[test]
 fn source_fetch_future_obeys_configured_absolute_timeout() {
     let payload = vec![0xC9; 17];
@@ -1281,7 +1221,6 @@ fn source_fetch_future_obeys_configured_absolute_timeout() {
         .expect("join timeout source broker")
         .expect("timeout source broker exits cleanly");
 }
-
 #[test]
 fn broker_server_pre_requested_shutdown_skips_qualification_and_bind() {
     let directory = tempfile::tempdir().expect("create broker server directory");
@@ -1303,7 +1242,6 @@ fn broker_server_pre_requested_shutdown_skips_qualification_and_bind() {
         "pre-requested shutdown must not create an endpoint"
     );
 }
-
 #[test]
 fn lifecycle_linearizes_readiness_shutdown_and_operation_admission() {
     let stopped_before_ready = RuntimeProviderBrokerLifecycleV1::new();
@@ -1313,7 +1251,6 @@ fn lifecycle_linearizes_readiness_shutdown_and_operation_admission() {
         stopped_callback.store(true, Ordering::Release);
     }));
     assert!(!stopped_callback.load(Ordering::Acquire));
-
     let failed_readiness = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
     assert_eq!(
         failed_readiness.publish_ready_fallible(|| Err(RuntimeProviderBrokerReadinessErrorV1)),
@@ -1327,7 +1264,6 @@ fn lifecycle_linearizes_readiness_shutdown_and_operation_admission() {
         failed_readiness.shutdown_requested(),
         "a failed callback must atomically move the lifecycle to stopping"
     );
-
     let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
     assert!(
         lifecycle.publish_ready(|| {}),
@@ -1349,7 +1285,6 @@ fn lifecycle_linearizes_readiness_shutdown_and_operation_admission() {
     drop(admitted);
     assert_eq!(lifecycle.active_provider_call_count(), 0);
 }
-
 #[test]
 fn lifecycle_shutdown_waits_for_competing_readiness_callback() {
     let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
@@ -1358,7 +1293,6 @@ fn lifecycle_shutdown_waits_for_competing_readiness_callback() {
     let shutdown_observed_callback = Arc::new(AtomicBool::new(false));
     let (callback_entered_sender, callback_entered_receiver) = mpsc::sync_channel(0);
     let (release_callback_sender, release_callback_receiver) = mpsc::sync_channel(0);
-
     let publisher_lifecycle = Arc::clone(&lifecycle);
     let publisher_callback_finished = Arc::clone(&callback_finished);
     let publisher = thread::spawn(move || {
@@ -1375,7 +1309,6 @@ fn lifecycle_shutdown_waits_for_competing_readiness_callback() {
     callback_entered_receiver
         .recv()
         .expect("readiness callback owns the publication gate");
-
     let shutdown_lifecycle = Arc::clone(&lifecycle);
     let shutdown_started_probe = Arc::clone(&shutdown_started);
     let shutdown_callback_probe = Arc::clone(&callback_finished);
@@ -1409,7 +1342,6 @@ fn lifecycle_shutdown_waits_for_competing_readiness_callback() {
     );
     assert!(lifecycle.shutdown_requested());
 }
-
 #[test]
 fn accepted_session_controls_close_peer_during_unexpected_unwind() {
     let (mut peer, accepted) = UnixStream::pair().expect("create accepted-session socket pair");
@@ -1428,7 +1360,6 @@ fn accepted_session_controls_close_peer_during_unexpected_unwind() {
         "RAII shutdown wakes a peer when serving unexpectedly unwinds"
     );
 }
-
 #[test]
 fn broker_server_drains_two_live_persistent_sessions_on_shutdown() {
     let (_directory, _path, policy, shutdown, server) = start_test_server();
@@ -1445,7 +1376,6 @@ fn broker_server_drains_two_live_persistent_sessions_on_shutdown() {
         .expect("broker server closes and joins both live sessions");
     drop((first, second));
 }
-
 #[test]
 fn broker_server_rejects_excess_persistent_session_without_queueing() {
     let (_directory, _path, policy, shutdown, server) = start_test_server();
@@ -1503,7 +1433,6 @@ fn broker_server_rejects_excess_persistent_session_without_queueing() {
         .expect("join broker server")
         .expect("broker server exits cleanly");
 }
-
 fn read_handshake(stream: &mut UnixStream) -> HandshakeRequestV1 {
     let frame = read_length_prefixed(stream, MAX_HANDSHAKE_FRAME_BYTES_V1)
         .expect("read fake broker handshake");
@@ -1516,7 +1445,6 @@ fn read_handshake(stream: &mut UnixStream) -> HandshakeRequestV1 {
     assert_valid_handshake_request(&request);
     request
 }
-
 fn send_handshake(stream: &mut UnixStream, response: &HandshakeResponseV1) {
     let frame = encode_frame(
         FRAME_KIND_HANDSHAKE_RESPONSE_V1,
@@ -1527,7 +1455,6 @@ fn send_handshake(stream: &mut UnixStream, response: &HandshakeResponseV1) {
     write_length_prefixed(stream, &frame, MAX_HANDSHAKE_FRAME_BYTES_V1)
         .expect("write fake broker handshake response");
 }
-
 fn read_operation(stream: &mut UnixStream) -> OperationRequestV1 {
     let (announced_slot, announced_operation, frame) =
         read_operation_request_frame(stream).expect("read fake broker operation");
@@ -1542,7 +1469,6 @@ fn read_operation(stream: &mut UnixStream) -> OperationRequestV1 {
     assert_eq!(request.operation, announced_operation);
     request
 }
-
 fn send_operation(stream: &mut UnixStream, response: &OperationResponseV1) {
     let frame = encode_frame(
         FRAME_KIND_OPERATION_RESPONSE_V1,
@@ -1553,7 +1479,6 @@ fn send_operation(stream: &mut UnixStream, response: &OperationResponseV1) {
     write_length_prefixed(stream, &frame, MAX_OPERATION_FRAME_BYTES_V1)
         .expect("write fake broker operation response");
 }
-
 fn source_reader_for_test(
     payload: &[u8],
     timeout: Duration,
@@ -1587,7 +1512,6 @@ fn source_reader_for_test(
         transcript,
     )
 }
-
 fn write_source_chunk_for_test(
     writer: &mut UnixStream,
     transcript: &mut blake3::Hasher,
@@ -1614,7 +1538,6 @@ fn write_source_chunk_for_test(
     )
     .expect("write source chunk");
 }
-
 fn write_source_payload_for_test(
     writer: &mut UnixStream,
     transcript: &mut blake3::Hasher,
@@ -1637,7 +1560,6 @@ fn write_source_payload_for_test(
         );
     }
 }
-
 fn write_source_trailer_for_test(
     writer: &mut UnixStream,
     transcript: &blake3::Hasher,
@@ -1668,7 +1590,6 @@ fn write_source_trailer_for_test(
     )
     .expect("write source trailer");
 }
-
 fn test_source_authorization(
     content_length: u64,
 ) -> sorafs_node::FinalizedProviderIngestAuthorizationV1 {
@@ -1686,7 +1607,6 @@ fn test_source_authorization(
     )
     .expect("construct test finalized authorization")
 }
-
 #[test]
 fn source_reader_preserves_backpressure_and_authenticates_exact_eof() {
     let payload = vec![0xA5; MAX_PROVIDER_INGEST_SOURCE_CHUNK_PAYLOAD_BYTES_V1 * 2 + 17];
@@ -1735,11 +1655,9 @@ fn source_reader_preserves_backpressure_and_authenticates_exact_eof() {
     assert!(reader.finished);
     writer_thread.join().expect("join source writer");
 }
-
 #[test]
 fn source_reader_rejects_truncation_reordering_duplicates_and_digest_mismatch() {
     let payload = vec![0x5A; MAX_PROVIDER_INGEST_SOURCE_CHUNK_PAYLOAD_BYTES_V1 + 7];
-
     let (mut truncated, writer, _) = source_reader_for_test(&payload, Duration::from_secs(1));
     writer
         .shutdown(std::net::Shutdown::Both)
@@ -1748,7 +1666,6 @@ fn source_reader_rejects_truncation_reordering_duplicates_and_digest_mismatch() 
         std::io::Read::read_to_end(&mut truncated, &mut Vec::new()).is_err(),
         "truncated stream must not produce EOF"
     );
-
     for first_sequence in [1, 0] {
         let (mut reader, mut writer, mut transcript) =
             source_reader_for_test(&payload, Duration::from_secs(1));
@@ -1772,7 +1689,6 @@ fn source_reader_rejects_truncation_reordering_duplicates_and_digest_mismatch() 
         );
         writer_thread.join().expect("join malformed source writer");
     }
-
     let (mut reader, mut writer, mut transcript) =
         source_reader_for_test(&payload, Duration::from_secs(1));
     let writer_payload = payload.clone();
@@ -1789,7 +1705,6 @@ fn source_reader_rejects_truncation_reordering_duplicates_and_digest_mismatch() 
         .join()
         .expect("join digest-mismatched source writer");
 }
-
 #[test]
 fn source_reader_rejects_extra_frames_wire_trailing_bytes_and_timeout() {
     let payload = vec![0x6B; 17];
@@ -1801,7 +1716,6 @@ fn source_reader_rejects_extra_frames_wire_trailing_bytes_and_timeout() {
         .shutdown(std::net::Shutdown::Write)
         .expect("close extra-frame stream");
     assert!(std::io::Read::read_to_end(&mut extra_frame_reader, &mut Vec::new()).is_err());
-
     let (mut trailing_reader, mut writer, mut transcript) =
         source_reader_for_test(&payload, Duration::from_secs(1));
     write_source_payload_for_test(&mut writer, &mut transcript, &payload);
@@ -1816,14 +1730,12 @@ fn source_reader_rejects_extra_frames_wire_trailing_bytes_and_timeout() {
         .shutdown(std::net::Shutdown::Write)
         .expect("close trailing-byte stream");
     assert!(std::io::Read::read_to_end(&mut trailing_reader, &mut Vec::new()).is_err());
-
     let (mut timed_out, writer, _) = source_reader_for_test(&payload, Duration::from_millis(20));
     let error = std::io::Read::read(&mut timed_out, &mut [0_u8; 1])
         .expect_err("silent source must time out");
     assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     drop(writer);
 }
-
 #[test]
 fn source_reader_drop_closes_unverified_connection() {
     let payload = vec![0x7C; 17];
@@ -1848,7 +1760,6 @@ fn source_reader_drop_closes_unverified_connection() {
         Err(error) => panic!("failed to observe source reader shutdown: {error}"),
     }
 }
-
 #[test]
 fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
     let payload = vec![0xD1; 4096];
@@ -1857,7 +1768,6 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
     let binding =
         ProviderBindingWireV1::try_from_binding(bindings.iter().next().expect("source binding"))
             .expect("project source binding");
-
     let generic = source_request_to_wire(
         sorafs_node::ProviderIngestSourceRequestV1::new(
             authorization.clone(),
@@ -1876,7 +1786,6 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
         ),
         Ok(())
     );
-
     let (musubi_authorization, musubi) = test_source_musubi_fetch_binding(
         &authorization,
         &manifest,
@@ -1899,7 +1808,6 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
         ),
         Ok(())
     );
-
     let mut later_cursor = exact.clone();
     later_cursor
         .musubi_archive
@@ -1919,7 +1827,6 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
         Ok(()),
         "a current informational claim may be newer than its retained admission"
     );
-
     let rejects = |candidate: &ProviderIngestSourceFetchRequestWireV2| {
         assert_eq!(
             validate_source_fetch_request(
@@ -1931,7 +1838,6 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
             Err(BrokerError::Rejected)
         );
     };
-
     let mut inconsistent_network = exact.clone();
     inconsistent_network
         .musubi_archive
@@ -1939,7 +1845,6 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
         .expect("Musubi wire")
         .network_id = test_network_id(0x17);
     rejects(&inconsistent_network);
-
     let mut zero_cursor = exact.clone();
     zero_cursor
         .musubi_archive
@@ -1948,7 +1853,6 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
         .observed_finalized_cursor
         .height = 0;
     rejects(&zero_cursor);
-
     let mut forked_cursor = exact.clone();
     forked_cursor
         .musubi_archive
@@ -1957,7 +1861,6 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
         .observed_finalized_cursor
         .block_hash = [0xE0; 32];
     rejects(&forked_cursor);
-
     let mut wrong_order = exact.clone();
     wrong_order
         .musubi_archive
@@ -1967,7 +1870,6 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
         .replication_order =
         iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0xE1; 32]);
     rejects(&wrong_order);
-
     let mut wrong_archive = exact.clone();
     wrong_archive
         .musubi_archive
@@ -1976,7 +1878,6 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
         .binding
         .archive_id = iroha_data_model::musubi::ArchiveId::new([0xE2; 32]);
     rejects(&wrong_archive);
-
     let mut wrong_root = exact.clone();
     let wrong_root_binding = &mut wrong_root
         .musubi_archive
@@ -1988,7 +1889,6 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
             .expect("alternate canonical root CID");
     wrong_root_binding.archive_id = wrong_root_binding.commitment.archive_id();
     rejects(&wrong_root);
-
     let mut wrong_chunker = exact.clone();
     let wrong_chunker_binding = &mut wrong_chunker
         .musubi_archive
@@ -1998,7 +1898,6 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
     wrong_chunker_binding.commitment.chunker.name = "other".to_owned();
     wrong_chunker_binding.archive_id = wrong_chunker_binding.commitment.archive_id();
     rejects(&wrong_chunker);
-
     let mut wrong_plan = exact.clone();
     let wrong_plan_binding = &mut wrong_plan
         .musubi_archive
@@ -2009,7 +1908,6 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
         iroha_data_model::musubi::MusubiContentDigestV1::new([0xE4; 32]);
     wrong_plan_binding.archive_id = wrong_plan_binding.commitment.archive_id();
     rejects(&wrong_plan);
-
     let mut wrong_por = exact.clone();
     let wrong_por_binding = &mut wrong_por
         .musubi_archive
@@ -2020,7 +1918,6 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
         iroha_data_model::musubi::MusubiContentDigestV1::new([0xE5; 32]);
     wrong_por_binding.archive_id = wrong_por_binding.commitment.archive_id();
     rejects(&wrong_por);
-
     let mut wrong_length = exact;
     let wrong_length_binding = &mut wrong_length
         .musubi_archive
@@ -2033,7 +1930,6 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
         .saturating_add(1);
     wrong_length_binding.archive_id = wrong_length_binding.commitment.archive_id();
     rejects(&wrong_length);
-
     let (foreign_authorization, foreign_musubi) =
         test_source_musubi_fetch_binding(&authorization, &manifest, &plan, test_network_id(0x17));
     let foreign_network_request = sorafs_node::ProviderIngestSourceRequestV1::new(
@@ -2054,7 +1950,6 @@ fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
         Err(BrokerError::BindingMismatch)
     );
 }
-
 #[test]
 fn source_fetch_v2_rejects_retired_operation_28_and_legacy_wire() {
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
@@ -2062,7 +1957,6 @@ fn source_fetch_v2_rejects_retired_operation_28_and_legacy_wire() {
         authorization: sorafs_node::FinalizedProviderIngestAuthorizationV1,
         source_provider_ids: Vec<[u8; 32]>,
     }
-
     let bindings = source_test_catalog(Duration::from_secs(5), 64 * 1024, 1);
     let binding =
         ProviderBindingWireV1::try_from_binding(bindings.iter().next().expect("source binding"))
@@ -2093,7 +1987,6 @@ fn source_fetch_v2_rejects_retired_operation_28_and_legacy_wire() {
         Err(BrokerError::BindingMismatch)
     );
 }
-
 fn source_protocol_rejects_oversize_metadata_frame_count_and_total_without_allocating() {
     assert_eq!(
         validate_source_metadata_lengths(sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 1, 1),
@@ -2121,7 +2014,6 @@ fn source_protocol_rejects_oversize_metadata_frame_count_and_total_without_alloc
         ),
         Err(BrokerError::Protocol)
     );
-
     let binding = ProviderBindingWireV1 {
         slot: IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id(),
         handle: "network://sorafs/provider-ingest/source-primary".to_owned(),
@@ -2182,7 +2074,6 @@ fn source_protocol_rejects_oversize_metadata_frame_count_and_total_without_alloc
         Err(BrokerError::Rejected)
     );
 }
-
 #[test]
 fn source_plan_metadata_roundtrips_canonically_and_rejects_trailing_bytes() {
     let payload = vec![0xAB; 512 * 1024 + 3];
@@ -2196,7 +2087,6 @@ fn source_plan_metadata_roundtrips_canonically_and_rejects_trailing_bytes() {
     trailing.push(0);
     assert_eq!(decode_source_plan(&trailing), Err(BrokerError::Rejected));
 }
-
 #[test]
 fn source_streams_transfer_to_actual_retained_plan_reservations() {
     let payload = vec![0xAB; 512 * 1024 + 3];
@@ -2232,21 +2122,17 @@ fn source_streams_transfer_to_actual_retained_plan_reservations() {
     drop(first);
     assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
 }
-
 #[test]
 fn stream_token_gateway_admission_qualification_roundtrips_through_dispatch() {
     const HANDLE: &str = "sealed-cas:prod/stream-token/gateway-admission/v1";
-
     #[derive(Debug)]
     struct QualificationOnlyProvider {
         qualification: iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1,
     }
-
     impl iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1 for QualificationOnlyProvider {
         fn handle(&self) -> &str {
             HANDLE
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -2255,7 +2141,6 @@ fn stream_token_gateway_admission_qualification_roundtrips_through_dispatch() {
         > {
             Ok(self.qualification)
         }
-
         fn admit(
             &self,
             _request: &iroha_torii::sorafs::StreamTokenGatewayAdmissionRequestV1,
@@ -2265,7 +2150,6 @@ fn stream_token_gateway_admission_qualification_roundtrips_through_dispatch() {
         > {
             Err(iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1::Unavailable)
         }
-
         fn pending(
             &self,
             _max_items: u32,
@@ -2275,7 +2159,6 @@ fn stream_token_gateway_admission_qualification_roundtrips_through_dispatch() {
         > {
             Err(iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1::Unavailable)
         }
-
         fn acknowledge(
             &self,
             _record: iroha_torii::sorafs::StreamTokenGatewayAdmissionRecordV1,
@@ -2285,7 +2168,6 @@ fn stream_token_gateway_admission_qualification_roundtrips_through_dispatch() {
         > {
             Err(iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1::Unavailable)
         }
-
         fn release_lease(
             &self,
             _record: iroha_torii::sorafs::StreamTokenGatewayAdmissionRecordV1,
@@ -2296,7 +2178,6 @@ fn stream_token_gateway_admission_qualification_roundtrips_through_dispatch() {
             Err(iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1::Unavailable)
         }
     }
-
     let qualification = iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1 {
         gateway_id: [0x54; 32],
         revision: 7,
@@ -2315,7 +2196,6 @@ fn stream_token_gateway_admission_qualification_roundtrips_through_dispatch() {
         Some(qualification.max_tracked_tokens);
     binding.stream_token_gateway_admission_reconcile_max_items = Some(16);
     validate_wire_binding(&binding).expect("valid stream-token gateway binding");
-
     let backends = RuntimeProviderBrokerBackendsV1::new()
         .with_stream_token_gateway_admission(Arc::new(QualificationOnlyProvider { qualification }));
     validate_exact_backend_set(std::slice::from_ref(&binding), &backends)
@@ -2350,7 +2230,6 @@ fn stream_token_gateway_admission_qualification_roundtrips_through_dispatch() {
     validate_operation_result(&request, STATUS_OK_V1, &encoded, &state.network_id)
         .expect("validate stream-token gateway qualification response");
 }
-
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_socket_device_identity_preserves_signed_dev_t_bits() {
@@ -2380,14 +2259,12 @@ fn bind_fake_broker() -> (
     let policy = EndpointPolicy::for_test(path.clone());
     (directory, path, policy, listener)
 }
-
 fn hold_instance_lock(policy: &EndpointPolicy) -> endpoint_recovery::InstanceLockGuard {
     let parent = fs::File::open(policy.path.parent().expect("broker endpoint parent"))
         .expect("open broker endpoint parent");
     endpoint_recovery::InstanceLockGuard::acquire(&parent, policy.expected_service_uid)
         .expect("hold active broker instance lock")
 }
-
 fn seed_instance_lock_marker(policy: &EndpointPolicy) {
     let marker = hold_instance_lock(policy);
     drop(marker);

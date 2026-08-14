@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import quote
 
 CANONICAL_OWNER = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
+CANONICAL_OWNER_HEADER = "0x02000120" + "00" * 32
 
 
 def authority_fee_payment(gas_limit: Optional[int] = None) -> Dict[str, Any]:
@@ -109,7 +110,6 @@ def connect_session_fixture(
         "token_wallet": token_wallet,
         "token_management": token_management,
         "token_relay": token_relay,
-        "ttl": 30,
     }
     response.pop("node")
     return request, response

@@ -1,6 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Trigger lifecycle regression tests.
-
 use eyre::{Result, eyre};
 use iroha::{
     client::Client,
@@ -9,14 +8,12 @@ use iroha::{
         prelude::{FindAssets, Identifiable, Quantity, QueryBuilderExt},
     },
 };
-
 mod by_call_trigger;
 mod data_trigger;
 mod execution_log;
 mod orphans;
 mod time_trigger;
 mod trigger_rollback;
-
 fn get_asset_value(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
     let assets = client
         .query(FindAssets::new())
@@ -26,6 +23,5 @@ fn get_asset_value(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
         .into_iter()
         .find(|asset| asset.id() == asset_id)
         .ok_or_else(|| eyre!("asset {asset_id} not found"))?;
-
     Ok(asset.value().clone())
 }

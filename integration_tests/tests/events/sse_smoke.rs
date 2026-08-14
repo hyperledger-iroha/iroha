@@ -1,6 +1,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! SSE smoke test: verify that `/v1/events/sse` streams trigger and data events.
-
+use eyre::Result;
+use integration_tests::sandbox;
+use iroha::data_model::prelude::*;
+use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
+use iroha_test_network::NetworkBuilder;
+use iroha_test_samples::ALICE_ID;
+use norito::json::{self, Value as JsonValue};
 use std::{
     io::{BufRead, BufReader, ErrorKind, Write},
     net::{TcpStream, ToSocketAddrs},
@@ -12,45 +18,29 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
-use eyre::Result;
-use integration_tests::sandbox;
-use iroha::data_model::prelude::*;
-use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
-use iroha_test_network::NetworkBuilder;
-use iroha_test_samples::ALICE_ID;
-use norito::json::{self, Value as JsonValue};
-
 // Match the client status timeout so slow test networks don't drop SSE readers early.
 const SSE_TIMEOUT: Duration = Duration::from_secs(300);
-
 struct SseReader {
     rx: Receiver<String>,
     shutdown: Arc<AtomicBool>,
 }
-
 impl Deref for SseReader {
     type Target = Receiver<String>;
-
     fn deref(&self) -> &Self::Target {
         &self.rx
     }
 }
-
 impl Drop for SseReader {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Release);
     }
 }
-
 fn sse_reader_should_stop(deadline: Instant, shutdown: &AtomicBool) -> bool {
     shutdown.load(Ordering::Acquire) || Instant::now() >= deadline
 }
-
 fn is_read_timeout(err: &std::io::Error) -> bool {
     matches!(err.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock)
 }
-
 fn parse_sse_data_line(line: &str) -> Option<&str> {
     let line = line.trim_end_matches(['\r', '\n']);
     let rest = line.strip_prefix("data:")?;
@@ -58,7 +48,6 @@ fn parse_sse_data_line(line: &str) -> Option<&str> {
     let rest = rest.trim();
     if rest.is_empty() { None } else { Some(rest) }
 }
-
 /// Wait for the SSE reader to establish a connection (the reader emits a
 /// synthetic `{"connected":true}` payload when headers have been consumed).
 fn wait_for_sse_ready(rx: &Receiver<String>) -> Result<()> {
@@ -67,11 +56,9 @@ fn wait_for_sse_ready(rx: &Receiver<String>) -> Result<()> {
     })
     .map(|_| ())
 }
-
 #[test]
 fn sse_smoke_scenarios() -> Result<()> {
     use iroha::data_model::events::time::{ExecutionTime, TimeEventFilter};
-
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
         NetworkBuilder::new().with_min_peers(4),
         stringify!(sse_smoke_scenarios),
@@ -81,12 +68,10 @@ fn sse_smoke_scenarios() -> Result<()> {
     };
     let peer = network.peer();
     let client = peer.client();
-
     // Scenario 1: Execute trigger event + data event.
     {
         let rx = spawn_sse_reader(peer.api_address());
         wait_for_sse_ready(&rx)?;
-
         let trigger_id: TriggerId = "sse_smoke_trigger_exec".parse()?;
         let asset_id = AssetId::new(
             AssetDefinitionId::derive_from_components(
@@ -130,7 +115,6 @@ fn sse_smoke_scenarios() -> Result<()> {
         {
             return Ok(());
         }
-
         let result: Result<()> = (|| {
             let exec_evt = wait_for_sse(&rx, SSE_TIMEOUT, |val| {
                 summary_contains(val, "ExecuteTriggerEvent")
@@ -144,17 +128,14 @@ fn sse_smoke_scenarios() -> Result<()> {
             assert_eq!(data_evt["category"].as_str(), Some("Data"));
             Ok(())
         })();
-
         if sandbox::handle_result(result, stringify!(sse_emits_execute_trigger_event))?.is_none() {
             return Ok(());
         }
     }
-
     // Scenario 2: Time trigger + metadata event.
     {
         let rx = spawn_sse_reader(peer.api_address());
         wait_for_sse_ready(&rx)?;
-
         let key: Name = "sse_tick".parse()?;
         let time_trigger = Trigger::new(
             "sse_time_trigger_event".parse()?,
@@ -181,7 +162,6 @@ fn sse_smoke_scenarios() -> Result<()> {
         {
             return Ok(());
         }
-
         if sandbox::handle_result(
             client.submit_blocking(
                 Log::new(Level::INFO, "trigger tick".to_string()),
@@ -193,7 +173,6 @@ fn sse_smoke_scenarios() -> Result<()> {
         {
             return Ok(());
         }
-
         let result: Result<()> = (|| {
             let time_evt =
                 wait_for_sse(&rx, SSE_TIMEOUT, |val| summary_contains(val, "TimeEvent"))?;
@@ -206,7 +185,6 @@ fn sse_smoke_scenarios() -> Result<()> {
             assert_eq!(meta_evt["category"].as_str(), Some("Data"));
             Ok(())
         })();
-
         if sandbox::handle_result(
             result,
             stringify!(sse_captures_time_trigger_and_metadata_events),
@@ -216,10 +194,8 @@ fn sse_smoke_scenarios() -> Result<()> {
             return Ok(());
         }
     }
-
     Ok(())
 }
-
 fn spawn_sse_reader(addr: IrohaSocketAddr) -> SseReader {
     let (tx, rx) = mpsc::channel::<String>();
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -233,7 +209,6 @@ fn spawn_sse_reader(addr: IrohaSocketAddr) -> SseReader {
         let host = target.to_string();
         let deadline = Instant::now() + SSE_TIMEOUT;
         let mut backoff = Duration::from_millis(200);
-
         // Retry connecting until the server is ready or the overall SSE timeout elapses.
         while !sse_reader_should_stop(deadline, &shutdown_flag) {
             if let Ok(mut stream) = TcpStream::connect(target) {
@@ -247,7 +222,6 @@ fn spawn_sse_reader(addr: IrohaSocketAddr) -> SseReader {
                     continue;
                 }
                 let _ = stream.flush();
-
                 let mut reader = BufReader::new(stream);
                 let mut line = String::new();
                 // Consume headers.
@@ -279,7 +253,6 @@ fn spawn_sse_reader(addr: IrohaSocketAddr) -> SseReader {
                 if tx.send(r#"{"connected":true}"#.to_owned()).is_err() {
                     return;
                 }
-
                 // Stream SSE payloads; if the server closes the connection unexpectedly,
                 // retry until the overall deadline.
                 loop {
@@ -308,7 +281,6 @@ fn spawn_sse_reader(addr: IrohaSocketAddr) -> SseReader {
     });
     SseReader { rx, shutdown }
 }
-
 fn wait_for_sse<F>(rx: &Receiver<String>, timeout: Duration, predicate: F) -> Result<JsonValue>
 where
     F: Fn(&JsonValue) -> bool,
@@ -335,13 +307,11 @@ where
         }
     }
 }
-
 fn summary_contains(val: &JsonValue, needle: &str) -> bool {
     val.get("summary")
         .and_then(JsonValue::as_str)
         .is_some_and(|s| s.contains(needle))
 }
-
 #[test]
 fn sse_reader_should_stop_honors_deadline_and_shutdown() {
     let shutdown = AtomicBool::new(false);
@@ -349,14 +319,11 @@ fn sse_reader_should_stop_honors_deadline_and_shutdown() {
         .checked_sub(Duration::from_millis(1))
         .expect("checked_sub should not underflow");
     assert!(sse_reader_should_stop(expired, &shutdown));
-
     let future = Instant::now() + Duration::from_secs(1);
     assert!(!sse_reader_should_stop(future, &shutdown));
-
     shutdown.store(true, Ordering::Release);
     assert!(sse_reader_should_stop(future, &shutdown));
 }
-
 #[test]
 fn is_read_timeout_matches_timeout_kinds() {
     assert!(is_read_timeout(&std::io::Error::new(
@@ -372,7 +339,6 @@ fn is_read_timeout_matches_timeout_kinds() {
         "other"
     )));
 }
-
 #[test]
 fn parse_sse_data_line_accepts_optional_space() {
     assert_eq!(
@@ -386,11 +352,9 @@ fn parse_sse_data_line_accepts_optional_space() {
     assert_eq!(parse_sse_data_line("data:\r\n"), None);
     assert_eq!(parse_sse_data_line(": comment\n"), None);
 }
-
 #[test]
 fn sse_reader_connects_and_reads_data_lines() -> Result<()> {
     use std::net::TcpListener;
-
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     let addr = listener.local_addr()?;
     let (data_tx, data_rx): (Sender<()>, Receiver<()>) = mpsc::channel();
@@ -427,7 +391,6 @@ fn sse_reader_connects_and_reads_data_lines() -> Result<()> {
         let _ = stream.flush();
         std::thread::sleep(Duration::from_millis(50));
     });
-
     let rx = spawn_sse_reader(addr.into());
     wait_for_sse_ready(&rx)?;
     let _ = data_tx.send(());

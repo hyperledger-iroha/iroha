@@ -1,5 +1,4 @@
 //! Consolidated integration-test harness for the SoraNet relay.
-
 #[path = "adaptive_and_puzzle.rs"]
 mod adaptive_and_puzzle;
 #[path = "constant_rate_handshake.rs"]

@@ -1,5 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-
+use crate::{ContractArtifactError, DecodedOp};
 use iroha_data_model::smart_contract::manifest::{
     AccessSetHints, DynamicAccessHint, EntryPointKind, KotobaTranslationEntry,
 };
@@ -12,22 +11,18 @@ use ivm_abi::state_value::{
     MAX_STATE_VALUE_NODES, MAX_STATE_VALUE_SCHEMA_BYTES,
     admissible_state_value_schema_for_embedded_type_v1,
 };
-
-use crate::{ContractArtifactError, DecodedOp};
-
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValidationProfile {
     Production,
     KotoTest,
 }
-
 impl ValidationProfile {
     fn allows_syscall(self, number: u32) -> bool {
         ivm_abi::syscalls::is_syscall_allowed(ivm_abi::SyscallPolicy::AbiV1, number)
             || (self == Self::KotoTest && ivm_abi::syscalls::is_koto_test_syscall(number))
     }
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "the ordered artifact/interface audit preserves stable fail-closed first-error precedence"
@@ -49,7 +44,6 @@ pub fn validate_contract_interface(
             "CNTR compiler_fingerprint must not be empty",
         ));
     }
-
     let features_bitmap = contract_interface.features_bitmap;
     if features_bitmap & !CONTRACT_FEATURE_KNOWN_BITS != 0 {
         return Err(ContractArtifactError::invalid(format!(
@@ -71,7 +65,6 @@ pub fn validate_contract_interface(
             "CNTR features_bitmap does not match metadata VECTOR mode",
         ));
     }
-
     validate_access_set_hints(contract_interface.access_set_hints.as_ref())?;
     validate_kotoba_entries(&contract_interface.kotoba)?;
     validate_state_descriptors(contract_interface)?;
@@ -80,13 +73,11 @@ pub fn validate_contract_interface(
         &contract_interface.states,
     )?;
     validate_error_codes(contract_interface)?;
-
     if contract_interface.entrypoints.is_empty() {
         return Err(ContractArtifactError::invalid(
             "CNTR must declare at least one entrypoint",
         ));
     }
-
     validate_bytecode_security(decoded, zk_enabled, profile)?;
     let valid_pcs = decoded.iter().map(|op| op.pc).collect::<BTreeSet<_>>();
     let mut entrypoint_names = BTreeSet::new();
@@ -96,7 +87,6 @@ pub fn validate_contract_interface(
     let mut hajimari_seen = false;
     let mut kaizen_seen = false;
     let mut test_return_seen = false;
-
     for entrypoint in &contract_interface.entrypoints {
         let is_test_return = profile == ValidationProfile::KotoTest
             && entrypoint.name == KOTO_TEST_RETURN_ENTRYPOINT;
@@ -304,17 +294,14 @@ pub fn validate_contract_interface(
         }
         entrypoint_reachability.insert(entrypoint.name.clone(), reachability);
     }
-
     if profile == ValidationProfile::KotoTest && !test_return_seen {
         return Err(ContractArtifactError::invalid(
             "Kotodama test-suite interface is missing its compiler-owned return entrypoint",
         ));
     }
-
     if profile == ValidationProfile::Production {
         validate_nonrecursive_direct_calls(decoded, &entrypoint_pcs)?;
     }
-
     // Entrypoint authorization is enforced by dispatch metadata, not by code at
     // the target PC. Shared implementation must live in private helpers.
     for caller in &contract_interface.entrypoints {
@@ -330,7 +317,6 @@ pub fn validate_contract_interface(
             }
         }
     }
-
     let mut trigger_ids = BTreeSet::new();
     for entrypoint in &contract_interface.entrypoints {
         for trigger in &entrypoint.triggers {
@@ -371,33 +357,26 @@ pub fn validate_contract_interface(
             }
         }
     }
-
     Ok(())
 }
-
 fn is_canonical_source_identifier(name: &str) -> bool {
     iroha_data_model::smart_contract::entrypoint::is_canonical_kotodama_identifier(name)
 }
-
 fn is_canonical_source_declaration_name(name: &str, is_function: bool) -> bool {
     is_canonical_source_identifier(name)
         && !kotodama_lang::semantic::is_reserved_source_declaration(name, is_function)
 }
-
 fn is_canonical_source_type_declaration_name(name: &str) -> bool {
     is_canonical_source_identifier(name)
         && !kotodama_lang::semantic::is_reserved_source_type_declaration(name)
 }
-
 fn is_canonical_entrypoint_name(name: &str) -> bool {
     matches!(name, "hajimari" | "始まり" | "kaizen" | "改善")
         || is_canonical_source_declaration_name(name, true)
 }
-
 fn is_canonical_seiyaku_name(name: &str) -> bool {
     is_canonical_source_type_declaration_name(name)
 }
-
 fn validate_koto_test_return_entrypoint(
     entrypoint: &EmbeddedEntrypointDescriptor,
     decoded: &[DecodedOp],
@@ -435,7 +414,6 @@ fn validate_koto_test_return_entrypoint(
     }
     Ok(())
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "the bytecode security pass keeps its exhaustive opcode policy in one auditable traversal"
@@ -446,7 +424,6 @@ fn validate_bytecode_security(
     profile: ValidationProfile,
 ) -> Result<(), ContractArtifactError> {
     use ivm_abi::instruction::wide;
-
     let instruction_boundaries = decoded.iter().map(|op| op.pc).collect::<BTreeSet<_>>();
     for op in decoded {
         let opcode = wide::opcode(op.inst);
@@ -526,7 +503,6 @@ fn validate_bytecode_security(
                 op.pc
             )));
         }
-
         let requires_fallthrough = matches!(
             opcode,
             wide::control::BEQ
@@ -554,24 +530,19 @@ fn validate_bytecode_security(
     }
     Ok(())
 }
-
 fn decoded_syscall_number(instruction: u32) -> Option<u32> {
     use ivm_abi::instruction::wide;
-
     match wide::opcode(instruction) {
         wide::system::SCALL => Some(u32::from(wide::imm8(instruction).cast_unsigned())),
         wide::system::SYSTEM => Some(ivm_abi::encoding::wide::decode_syscallx(instruction)),
         _ => None,
     }
 }
-
 fn is_direct_call(op: &DecodedOp) -> bool {
     use ivm_abi::instruction::wide;
-
     let opcode = wide::opcode(op.inst);
     opcode == wide::control::JALS || (opcode == wide::control::JAL && wide::rd(op.inst) == 1)
 }
-
 /// Validate the deployable direct-call graph without trusting compiler metadata.
 #[expect(
     clippy::too_many_lines,
@@ -582,7 +553,6 @@ fn validate_nonrecursive_direct_calls(
     entrypoint_pcs: &BTreeSet<u64>,
 ) -> Result<(), ContractArtifactError> {
     use ivm_abi::instruction::wide;
-
     let instructions = decoded
         .iter()
         .map(|op| (op.pc, op))
@@ -597,7 +567,6 @@ fn validate_nonrecursive_direct_calls(
         })?;
         roots.insert(target);
     }
-
     let mut owners = BTreeMap::<u64, u64>::new();
     let mut pending = roots
         .iter()
@@ -614,7 +583,6 @@ fn validate_nonrecursive_direct_calls(
             continue;
         }
         owners.insert(pc, owner);
-
         let op = instructions.get(&pc).ok_or_else(|| {
             ContractArtifactError::invalid(format!(
                 "function root {owner} reaches non-instruction pc {pc}"
@@ -637,7 +605,6 @@ fn validate_nonrecursive_direct_calls(
                 ))
             })
         };
-
         match opcode {
             wide::control::HALT | wide::control::JALR => {}
             wide::control::BEQ
@@ -665,7 +632,6 @@ fn validate_nonrecursive_direct_calls(
             _ => pending.push_back((fallthrough()?, owner)),
         }
     }
-
     let mut calls = roots
         .iter()
         .copied()
@@ -684,7 +650,6 @@ fn validate_nonrecursive_direct_calls(
             .expect("every control-flow owner is a function root")
             .insert(target);
     }
-
     let mut indegree = roots
         .iter()
         .copied()
@@ -700,7 +665,6 @@ fn validate_nonrecursive_direct_calls(
             })?;
         }
     }
-
     let mut ready = indegree
         .iter()
         .filter_map(|(root, degree)| (*degree == 0).then_some(*root))
@@ -730,13 +694,10 @@ fn validate_nonrecursive_direct_calls(
             "recursive direct-call cycle reaches function root pc {cycle_pc}; recursion is forbidden in Kotodama V1"
         )));
     }
-
     Ok(())
 }
-
 fn direct_control_flow_target(op: &DecodedOp) -> Option<u64> {
     use ivm_abi::instruction::wide;
-
     let offset_words = match wide::opcode(op.inst) {
         wide::control::BEQ
         | wide::control::BNE
@@ -753,19 +714,16 @@ fn direct_control_flow_target(op: &DecodedOp) -> Option<u64> {
         .checked_add(i128::from(byte_offset))
         .and_then(|target| u64::try_from(target).ok())
 }
-
 struct Reachability {
     syscalls: BTreeSet<u32>,
     pcs: BTreeSet<u64>,
 }
-
 fn reachable_syscalls(
     decoded: &[DecodedOp],
     entry_pc: u64,
     entrypoint_name: &str,
 ) -> Result<Reachability, ContractArtifactError> {
     use ivm_abi::instruction::wide;
-
     let instructions = decoded
         .iter()
         .map(|op| (op.pc, op))
@@ -773,7 +731,6 @@ fn reachable_syscalls(
     let mut pending = VecDeque::from([entry_pc]);
     let mut visited = BTreeSet::new();
     let mut syscalls = BTreeSet::new();
-
     while let Some(pc) = pending.pop_front() {
         if !visited.insert(pc) {
             continue;
@@ -786,7 +743,6 @@ fn reachable_syscalls(
         if let Some(number) = decoded_syscall_number(op.inst) {
             syscalls.insert(number);
         }
-
         let opcode = wide::opcode(op.inst);
         let fallthrough = op.pc.checked_add(u64::from(op.len));
         match opcode {
@@ -868,7 +824,6 @@ fn reachable_syscalls(
         pcs: visited,
     })
 }
-
 fn validate_view_effects(
     entrypoint_name: &str,
     syscalls: &BTreeSet<u32>,
@@ -887,7 +842,6 @@ fn validate_view_effects(
     }
     Ok(())
 }
-
 fn validate_entrypoint_access_claims(
     entrypoint: &EmbeddedEntrypointDescriptor,
     syscalls: &BTreeSet<u32>,
@@ -895,7 +849,6 @@ fn validate_entrypoint_access_claims(
     if entrypoint.access_hints_complete != Some(true) {
         return Ok(());
     }
-
     for number in syscalls {
         let access = ivm_abi::syscalls::syscall_access(*number);
         if !entrypoint_claim_covers_access(entrypoint, access) {
@@ -907,13 +860,11 @@ fn validate_entrypoint_access_claims(
     }
     Ok(())
 }
-
 fn entrypoint_claim_covers_access(
     entrypoint: &EmbeddedEntrypointDescriptor,
     access: ivm_abi::syscalls::SyscallAccess,
 ) -> bool {
     use ivm_abi::syscalls::SyscallAccess;
-
     let is_state_key = |key: &str| key.starts_with("state:");
     let global_read = entrypoint.read_keys.iter().any(|key| key == "*")
         || entrypoint.write_keys.iter().any(|key| key == "*");
@@ -930,7 +881,6 @@ fn entrypoint_claim_covers_access(
         .write_keys
         .iter()
         .any(|key| key != "*" && !is_state_key(key));
-
     match access {
         SyscallAccess::None => true,
         SyscallAccess::StateRead => global_read || state_read,
@@ -940,7 +890,6 @@ fn entrypoint_claim_covers_access(
         SyscallAccess::Dynamic => global_write,
     }
 }
-
 fn validate_access_set_hints(
     access_set_hints: Option<&AccessSetHints>,
 ) -> Result<(), ContractArtifactError> {
@@ -969,7 +918,6 @@ fn validate_access_set_hints(
     )?;
     Ok(())
 }
-
 fn validate_access_keys(
     owner: &str,
     field: &str,
@@ -984,7 +932,6 @@ fn validate_access_keys(
     }
     Ok(())
 }
-
 fn validate_dynamic_access_hints(
     owner: &str,
     field: &str,
@@ -1007,7 +954,6 @@ fn validate_dynamic_access_hints(
     }
     Ok(())
 }
-
 fn embedded_state_map_key_type_name(ty: &EmbeddedStateType) -> Option<&'static str> {
     match ty {
         EmbeddedStateType::Int => Some("int"),
@@ -1032,7 +978,6 @@ fn embedded_state_map_key_type_name(ty: &EmbeddedStateType) -> Option<&'static s
         | EmbeddedStateType::List { .. } => None,
     }
 }
-
 fn validate_dynamic_access_hint_state_maps(
     access_set_hints: Option<&AccessSetHints>,
     states: &[EmbeddedStateDescriptor],
@@ -1040,7 +985,6 @@ fn validate_dynamic_access_hint_state_maps(
     let Some(access_set_hints) = access_set_hints else {
         return Ok(());
     };
-
     let state_maps = states
         .iter()
         .filter_map(|state| {
@@ -1050,7 +994,6 @@ fn validate_dynamic_access_hint_state_maps(
             embedded_state_map_key_type_name(key).map(|key_type| (state.name.as_str(), key_type))
         })
         .collect::<BTreeMap<_, _>>();
-
     for (field, hints) in [
         (
             "access_set_hints.dynamic_reads",
@@ -1087,7 +1030,6 @@ fn validate_dynamic_access_hint_state_maps(
     }
     Ok(())
 }
-
 fn validate_kotoba_entries(
     entries: &[KotobaTranslationEntry],
 ) -> Result<(), ContractArtifactError> {
@@ -1122,7 +1064,6 @@ fn validate_kotoba_entries(
     }
     Ok(())
 }
-
 fn validate_entrypoint_name(name: &str) -> Result<(), ContractArtifactError> {
     if name.is_empty() {
         return Err(ContractArtifactError::invalid(
@@ -1141,7 +1082,6 @@ fn validate_entrypoint_name(name: &str) -> Result<(), ContractArtifactError> {
     }
     Ok(())
 }
-
 fn validate_state_descriptors(
     contract_interface: &EmbeddedContractInterfaceV1,
 ) -> Result<(), ContractArtifactError> {
@@ -1169,7 +1109,6 @@ fn validate_state_descriptors(
     }
     Ok(())
 }
-
 fn validate_runtime_state_schema(
     state_name: &str,
     declared_type: &EmbeddedStateType,
@@ -1185,7 +1124,6 @@ fn validate_runtime_state_schema(
     }
     Ok(())
 }
-
 fn validate_error_codes(
     contract_interface: &EmbeddedContractInterfaceV1,
 ) -> Result<(), ContractArtifactError> {
@@ -1219,7 +1157,6 @@ fn validate_error_codes(
     }
     Ok(())
 }
-
 fn is_supported_state_map_key(ty: &EmbeddedStateType) -> bool {
     matches!(
         ty,
@@ -1238,7 +1175,6 @@ fn is_supported_state_map_key(ty: &EmbeddedStateType) -> bool {
             | EmbeddedStateType::Name
     )
 }
-
 enum PendingStateTypeValidation<'a> {
     Type {
         ty: &'a EmbeddedStateType,
@@ -1251,7 +1187,6 @@ enum PendingStateTypeValidation<'a> {
         field_names: BTreeSet<&'a str>,
     },
 }
-
 fn validate_state_type(
     ty: &EmbeddedStateType,
     allow_state_map: bool,
@@ -1265,7 +1200,6 @@ fn validate_state_type(
     }
     Ok(())
 }
-
 fn validate_pending_state_type<'a>(
     item: PendingStateTypeValidation<'a>,
     pending: &mut Vec<PendingStateTypeValidation<'a>>,
@@ -1283,7 +1217,6 @@ fn validate_pending_state_type<'a>(
         } => schedule_nested_state_types(ty, allow_state_map, pending),
     }
 }
-
 fn validate_pending_struct_fields<'a>(
     struct_name: &'a str,
     fields: &'a [ivm_abi::metadata::EmbeddedStateFieldDescriptor],
@@ -1318,7 +1251,6 @@ fn validate_pending_struct_fields<'a>(
     });
     Ok(())
 }
-
 fn schedule_nested_state_types<'a>(
     ty: &'a EmbeddedStateType,
     allow_state_map: bool,
@@ -1404,13 +1336,10 @@ fn schedule_nested_state_types<'a>(
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
-    use ivm_abi::metadata::EmbeddedStateFieldDescriptor;
-
     use super::*;
-
+    use ivm_abi::metadata::EmbeddedStateFieldDescriptor;
     fn dynamic_hint(
         base_key: &str,
         key_type: &str,
@@ -1424,7 +1353,6 @@ mod tests {
             max_keys,
         }
     }
-
     fn dynamic_read_hints(hints: Vec<DynamicAccessHint>) -> AccessSetHints {
         AccessSetHints {
             read_keys: Vec::new(),
@@ -1433,7 +1361,6 @@ mod tests {
             dynamic_writes: Vec::new(),
         }
     }
-
     fn state_map(
         name: &str,
         key: EmbeddedStateType,
@@ -1447,7 +1374,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn dynamic_hint_key_type_mapping_matches_the_exact_shared_v1_order() {
         let mapped = [
@@ -1473,14 +1399,12 @@ mod tests {
             ivm_abi::access_hints::DYNAMIC_ACCESS_HINT_KEY_TYPES_V1
         );
     }
-
     #[test]
     fn source_identifier_policy_rejects_exact_amount_only() {
         assert!(!is_canonical_source_identifier("Amount"));
         assert!(is_canonical_source_identifier("amount"));
         assert!(is_canonical_source_identifier("money"));
     }
-
     #[test]
     fn dynamic_hints_resolve_exact_declared_state_maps() {
         for (index, (key, key_type)) in [
@@ -1518,7 +1442,6 @@ mod tests {
                 .expect("hint must resolve to its exact declared StateMap");
         }
     }
-
     #[test]
     fn dynamic_hint_shape_aliases_duplicates_and_overflow_reject() {
         let valid = dynamic_hint("state:Orders", "int", "range", 1);
@@ -1537,7 +1460,6 @@ mod tests {
         validate_access_set_hints(Some(&dynamic_read_hints(vec![valid.clone(), valid])))
             .expect_err("duplicate dynamic hints must reject");
     }
-
     #[test]
     fn identical_hint_is_allowed_once_in_each_independent_list() {
         let hint = dynamic_hint("state:amount", "quantity", "take", 1);
@@ -1552,13 +1474,11 @@ mod tests {
             EmbeddedStateType::Quantity,
             EmbeddedStateType::Bool,
         )];
-
         validate_access_set_hints(Some(&hints))
             .expect("read/write lists have independent duplicate domains");
         validate_dynamic_access_hint_state_maps(Some(&hints), &states)
             .expect("the same exact StateMap hint may appear once in each list");
     }
-
     #[test]
     fn same_base_with_distinct_bound_fields_is_not_a_duplicate() {
         let hints = dynamic_read_hints(vec![
@@ -1571,17 +1491,14 @@ mod tests {
             EmbeddedStateType::Int,
             EmbeddedStateType::Bool,
         )];
-
         validate_access_set_hints(Some(&hints))
             .expect("duplicate identity is the complete four-field record");
         validate_dynamic_access_hint_state_maps(Some(&hints), &states)
             .expect("every distinct record resolves to the same exact StateMap");
     }
-
     #[test]
     fn dynamic_hints_reject_unknown_scalar_and_mismatched_state_targets() {
         let hints = dynamic_read_hints(vec![dynamic_hint("state:Orders", "int", "take", 1)]);
-
         for states in [
             Vec::new(),
             vec![EmbeddedStateDescriptor {
@@ -1598,7 +1515,6 @@ mod tests {
                 .expect_err("hint must resolve to a StateMap with an identical key type");
         }
     }
-
     fn wide_struct(field_count: usize) -> EmbeddedStateType {
         EmbeddedStateType::Struct {
             name: "Wide".to_owned(),
@@ -1610,7 +1526,6 @@ mod tests {
                 .collect(),
         }
     }
-
     fn nested_lists(wrapper_count: usize) -> EmbeddedStateType {
         (0..wrapper_count).fold(EmbeddedStateType::Bool, |element, _| {
             EmbeddedStateType::List {
@@ -1619,17 +1534,14 @@ mod tests {
             }
         })
     }
-
     fn validate_declared_state_type(ty: &EmbeddedStateType) -> Result<(), ContractArtifactError> {
         validate_state_type(ty, true)?;
         validate_runtime_state_schema("value", ty)
     }
-
     #[test]
     fn exact_runtime_state_schema_node_boundary_is_admitted() {
         validate_declared_state_type(&wide_struct(MAX_STATE_VALUE_NODES - 1))
             .expect("one struct plus 255 leaves is exactly 256 runtime schema nodes");
-
         let error = validate_declared_state_type(&wide_struct(MAX_STATE_VALUE_NODES))
             .expect_err("one struct plus 256 leaves must exceed the runtime schema limit");
         assert!(
@@ -1638,38 +1550,32 @@ mod tests {
                 .contains("256 nodes or levels and 65536 encoded bytes")
         );
     }
-
     #[test]
     fn state_map_applies_the_exact_runtime_limit_to_its_value_only() {
         let state_map = |value| EmbeddedStateType::StateMap {
             key: Box::new(EmbeddedStateType::AccountId),
             value: Box::new(value),
         };
-
         validate_declared_state_type(&state_map(wide_struct(MAX_STATE_VALUE_NODES - 1)))
             .expect("the StateMap resource and key are not part of its value schema");
         validate_declared_state_type(&state_map(wide_struct(MAX_STATE_VALUE_NODES)))
             .expect_err("an oversized StateMap value schema must reject at admission");
     }
-
     #[test]
     fn recursive_list_element_nodes_share_the_outer_schema_budget() {
         let list = |element| EmbeddedStateType::List {
             element: Box::new(element),
             capacity: 64,
         };
-
         validate_declared_state_type(&list(wide_struct(MAX_STATE_VALUE_NODES - 2)))
             .expect("List + struct + 254 leaves is exactly 256 nodes");
         validate_declared_state_type(&list(wide_struct(MAX_STATE_VALUE_NODES - 1)))
             .expect_err("List element schemas must not receive a fresh 256-node budget");
-
         validate_declared_state_type(&nested_lists(MAX_STATE_VALUE_NODES - 1))
             .expect("255 nested Lists plus one leaf is the exact depth and node boundary");
         validate_declared_state_type(&nested_lists(MAX_STATE_VALUE_NODES))
             .expect_err("256 nested Lists plus one leaf exceeds both exact runtime limits");
     }
-
     #[test]
     fn canonical_runtime_schema_byte_limit_is_enforced_at_admission() {
         let ty = EmbeddedStateType::Struct {
@@ -1679,7 +1585,6 @@ mod tests {
                 ty: EmbeddedStateType::Bool,
             }],
         };
-
         validate_declared_state_type(&ty)
             .expect_err("a CNTR type whose canonical runtime schema exceeds 64 KiB must reject");
     }

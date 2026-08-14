@@ -1,19 +1,15 @@
 //! On-chain Nexus fee sponsor program model.
-
-use std::{collections::BTreeSet, fmt, num::NonZeroU64, str::FromStr};
-
-use iroha_crypto::Hash;
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-
 use crate::{
     account::{AccountId, ParsedAccountId},
     asset::AssetDefinitionId,
     name::Name,
     smart_contract::ContractAddress,
 };
-
+use iroha_crypto::Hash;
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::{collections::BTreeSet, fmt, num::NonZeroU64, str::FromStr};
 /// Error returned while parsing [`FeeSponsorProgramId`] literals.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum FeeSponsorProgramIdParseError {
@@ -27,7 +23,6 @@ pub enum FeeSponsorProgramIdParseError {
     #[error("invalid program name: {0}")]
     InvalidName(String),
 }
-
 /// Stable on-chain identifier for one fee sponsor program.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -41,7 +36,6 @@ pub struct FeeSponsorProgramId {
     /// Sponsor-local program name.
     pub name: Name,
 }
-
 impl FeeSponsorProgramId {
     /// Construct a sponsor program identifier.
     #[must_use]
@@ -49,16 +43,13 @@ impl FeeSponsorProgramId {
         Self { sponsor, name }
     }
 }
-
 impl fmt::Display for FeeSponsorProgramId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}/{}", self.sponsor, self.name)
     }
 }
-
 impl FromStr for FeeSponsorProgramId {
     type Err = FeeSponsorProgramIdParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (sponsor, name) = s
             .split_once('/')
@@ -78,7 +69,6 @@ impl FromStr for FeeSponsorProgramId {
         Ok(Self::new(sponsor, name))
     }
 }
-
 /// Primary key for one immutable sponsor-program revision.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -92,7 +82,6 @@ pub struct FeeSponsorProgramRevisionKey {
     /// Monotonic sponsor-program revision number.
     pub revision: u64,
 }
-
 impl FeeSponsorProgramRevisionKey {
     /// Construct an immutable sponsor-program revision key.
     #[must_use]
@@ -103,7 +92,6 @@ impl FeeSponsorProgramRevisionKey {
         }
     }
 }
-
 /// Consensus-visible lifecycle of a fee sponsor program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -123,7 +111,6 @@ pub enum FeeSponsorProgramLifecycle {
     /// Program is a permanent tombstone and its identifier cannot be reused.
     Closed,
 }
-
 /// Accounts eligible to use a fee sponsor program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -137,7 +124,6 @@ pub enum FeeSponsorEligibility {
     /// Enrolled accounts and accounts routed through this exact default may use it.
     EnrolledOrRouteDefault,
 }
-
 /// Effect of a sponsor rule when it matches a signed operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -151,7 +137,6 @@ pub enum FeeSponsorRuleEffect {
     /// Reject the matched operation even if an allow rule matches it.
     Deny,
 }
-
 /// Exact selector payload for one native instruction.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -167,7 +152,6 @@ pub struct FeeSponsorNativeInstructionSelector {
     #[norito(default)]
     pub asset_definition_id: Option<AssetDefinitionId>,
 }
-
 /// Multisig operation that a sponsor rule may authorize.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -185,7 +169,6 @@ pub enum FeeSponsorMultisigOperation {
     /// Register a new multisig account.
     Register,
 }
-
 /// Exact selector for explicitly enumerated multisig operations and target accounts.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -199,7 +182,6 @@ pub struct FeeSponsorMultisigSelector {
     /// Non-empty, strictly ordered set of exact target account IDs.
     pub account_ids: Vec<AccountId>,
 }
-
 /// Exact selector payload for one deployed contract and code version.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -216,7 +198,6 @@ pub struct FeeSponsorContractSelector {
     #[norito(default)]
     pub entrypoints: Vec<String>,
 }
-
 /// Exact selector payload for one IVM bytecode hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -228,7 +209,6 @@ pub struct FeeSponsorIvmSelector {
     /// Hash of the signed IVM bytecode.
     pub code_hash: Hash,
 }
-
 /// Exact selector for one class of signed transaction operation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -253,7 +233,6 @@ pub enum FeeSponsorRuleSelector {
     /// One exact proved-IVM program hash.
     IvmProved(FeeSponsorIvmSelector),
 }
-
 /// One stable, ordered sponsor-program rule.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -269,7 +248,6 @@ pub struct FeeSponsorRule {
     /// Exact signed-intent selectors matched by this rule.
     pub selectors: Vec<FeeSponsorRuleSelector>,
 }
-
 impl FeeSponsorRule {
     /// Construct a rule with no selectors.
     #[must_use]
@@ -281,7 +259,6 @@ impl FeeSponsorRule {
         }
     }
 }
-
 /// Deterministic spending limits for one fee asset.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -305,7 +282,6 @@ pub struct FeeSponsorAssetBudget {
     /// Number of consensus blocks in one budget epoch.
     pub epoch_length_blocks: NonZeroU64,
 }
-
 /// Immutable rules and budgets for one sponsor-program revision.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -325,7 +301,6 @@ pub struct FeeSponsorProgramRevision {
     /// Per-asset deterministic spending limits.
     pub asset_budgets: Vec<FeeSponsorAssetBudget>,
 }
-
 /// Error returned when a sponsor-program revision violates canonical invariants.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum FeeSponsorProgramRevisionError {
@@ -396,7 +371,6 @@ pub enum FeeSponsorProgramRevisionError {
     #[error("fee sponsor budget limits for `{0}` are inconsistent")]
     InconsistentBudgetLimits(AssetDefinitionId),
 }
-
 impl FeeSponsorProgramRevision {
     /// Validate self-contained, consensus-visible revision invariants.
     ///
@@ -425,7 +399,6 @@ impl FeeSponsorProgramRevision {
         {
             return Err(FeeSponsorProgramRevisionError::NoAllowRule);
         }
-
         let mut rule_ids = BTreeSet::new();
         for rule in &self.rules {
             if !rule_ids.insert(rule.id.clone()) {
@@ -514,7 +487,6 @@ impl FeeSponsorProgramRevision {
                 }
             }
         }
-
         if self.asset_budgets.is_empty() {
             return Err(FeeSponsorProgramRevisionError::NoAssetBudgets);
         }
@@ -546,7 +518,6 @@ impl FeeSponsorProgramRevision {
         }
         Ok(())
     }
-
     /// Validate this revision as the strict successor of `latest`.
     ///
     /// # Errors
@@ -569,7 +540,6 @@ impl FeeSponsorProgramRevision {
         Ok(())
     }
 }
-
 /// Persisted delayed activation of one immutable sponsor-program revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -585,7 +555,6 @@ pub struct FeeSponsorProgramActivation {
     /// Consensus postpones the switch until every older-revision spend lease has expired.
     pub activate_at_height: u64,
 }
-
 /// Sponsor-owned lifecycle record for a fee sponsor program.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -613,7 +582,6 @@ pub struct FeeSponsorProgram {
     #[norito(default)]
     pub scheduled_activation: Option<FeeSponsorProgramActivation>,
 }
-
 impl FeeSponsorProgram {
     /// Construct a staged, fail-closed program with an immutable payout account and no revisions.
     #[must_use]
@@ -628,7 +596,6 @@ impl FeeSponsorProgram {
         }
     }
 }
-
 /// Primary key for an enrolled sponsor-program beneficiary.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -642,7 +609,6 @@ pub struct FeeSponsorEnrollmentKey {
     /// Canonical beneficiary account.
     pub beneficiary: AccountId,
 }
-
 /// Persisted sponsor-program enrollment.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -656,7 +622,6 @@ pub struct FeeSponsorEnrollment {
     /// Consensus height at which enrollment took effect.
     pub enrolled_at_height: u64,
 }
-
 /// Primary key for one program-isolated fee-asset vault allocation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -670,7 +635,6 @@ pub struct FeeSponsorVaultKey {
     /// Canonical allocated asset definition.
     pub asset_definition_id: AssetDefinitionId,
 }
-
 /// Persisted program-isolated vault allocation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -684,7 +648,6 @@ pub struct FeeSponsorVault {
     /// Amount allocated to this exact program and asset.
     pub balance: Quantity,
 }
-
 /// Block-scoped sponsor budget window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -696,7 +659,6 @@ pub struct FeeSponsorBlockBudgetWindow {
     /// Consensus block height.
     pub height: u64,
 }
-
 /// Program-wide epoch sponsor budget window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -708,7 +670,6 @@ pub struct FeeSponsorProgramEpochBudgetWindow {
     /// Height-derived epoch number.
     pub epoch: u64,
 }
-
 /// Beneficiary-scoped epoch sponsor budget window.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -722,7 +683,6 @@ pub struct FeeSponsorBeneficiaryEpochBudgetWindow {
     /// Canonical beneficiary account.
     pub beneficiary: AccountId,
 }
-
 /// Deterministic accounting window for a sponsor budget counter.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -743,7 +703,6 @@ pub enum FeeSponsorBudgetWindow {
     /// Capacity consumed by one beneficiary in one deterministic epoch.
     BeneficiaryEpoch(FeeSponsorBeneficiaryEpochBudgetWindow),
 }
-
 /// Key for a durable program budget counter.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -759,7 +718,6 @@ pub struct FeeSponsorBudgetCounterKey {
     /// Exact block, program-epoch, or beneficiary-epoch accounting window.
     pub window: FeeSponsorBudgetWindow,
 }
-
 /// Durable amount charged against one sponsor budget counter.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -773,7 +731,6 @@ pub struct FeeSponsorBudgetCounter {
     /// Actual deterministic fees charged in the keyed epoch.
     pub spent: Quantity,
 }
-
 /// Funding source recorded by fee receipts and settlement records.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -792,7 +749,6 @@ pub enum FeeDebitSource {
     /// Charge a program-isolated protocol vault allocation.
     SponsorProgram(FeeSponsorProgramId),
 }
-
 /// Stable machine-readable reason why sponsor-program admission failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -840,7 +796,6 @@ pub enum FeeRejectionCode {
     /// On-chain program or route state violates a required invariant.
     InvalidProgramConfiguration,
 }
-
 impl FeeRejectionCode {
     /// Every stable public rejection code in canonical declaration order.
     pub const ALL: [Self; 19] = [
@@ -864,7 +819,6 @@ impl FeeRejectionCode {
         Self::RelayCapacityUnavailable,
         Self::InvalidProgramConfiguration,
     ];
-
     /// Return the stable lower-snake-case wire and telemetry label.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -891,21 +845,17 @@ impl FeeRejectionCode {
         }
     }
 }
-
 impl fmt::Display for FeeRejectionCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
-
 /// Error returned when a public fee rejection code label is unknown.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 #[error("unknown fee rejection code `{0}`")]
 pub struct FeeRejectionCodeParseError(pub String);
-
 impl FromStr for FeeRejectionCode {
     type Err = FeeRejectionCodeParseError;
-
     fn from_str(label: &str) -> Result<Self, Self::Err> {
         let code = match label {
             "invalid_fee_intent" => Self::InvalidFeeIntent,
@@ -932,33 +882,26 @@ impl FromStr for FeeRejectionCode {
         Ok(code)
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
-    use norito::codec::{Decode as _, Encode as _};
-
     use super::*;
-
+    use iroha_crypto::{Algorithm, KeyPair};
     fn sponsor_account() -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![0x53; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn fixture_account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn program_id() -> FeeSponsorProgramId {
         FeeSponsorProgramId::new(
             sponsor_account(),
             "retail_transfers".parse().expect("valid program name"),
         )
     }
-
     fn sample_revision() -> FeeSponsorProgramRevision {
         FeeSponsorProgramRevision {
             program_id: program_id(),
@@ -987,14 +930,12 @@ mod tests {
             }],
         }
     }
-
     #[test]
     fn program_id_display_roundtrips() {
         let id = program_id();
         let literal = id.to_string();
         assert_eq!(literal.parse::<FeeSponsorProgramId>().unwrap(), id);
     }
-
     #[test]
     fn program_id_parse_rejects_padding_and_extra_segments() {
         let sponsor = sponsor_account();
@@ -1016,7 +957,6 @@ mod tests {
             Err(FeeSponsorProgramIdParseError::InvalidFormat)
         );
     }
-
     #[test]
     fn program_id_parse_rejects_invalid_literals() {
         assert_eq!(
@@ -1032,7 +972,6 @@ mod tests {
             Err(FeeSponsorProgramIdParseError::InvalidName(_))
         ));
     }
-
     #[test]
     fn program_constructor_is_fail_closed() {
         let id = program_id();
@@ -1044,7 +983,6 @@ mod tests {
         assert_eq!(program.staged_revision, None);
         assert_eq!(program.scheduled_activation, None);
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn program_json_requires_immutable_payout_account() {
@@ -1056,19 +994,16 @@ mod tests {
             .expect("sponsor program object")
             .remove("payout_account")
             .expect("payout account is encoded");
-
         assert!(
             norito::json::from_value::<FeeSponsorProgram>(value).is_err(),
             "the first-release program wire must not default an omitted payout account"
         );
     }
-
     #[test]
     fn program_state_and_revision_roundtrip_binary_and_json() {
         let id = program_id();
         let program = FeeSponsorProgram::new(id.clone(), id.sponsor);
         let revision = sample_revision();
-
         let bytes = revision.encode();
         assert_eq!(
             FeeSponsorProgramRevision::decode(&mut bytes.as_slice()).unwrap(),
@@ -1080,14 +1015,12 @@ mod tests {
                 .expect("deserialize revision"),
             revision
         );
-
         let program_bytes = program.encode();
         assert_eq!(
             FeeSponsorProgram::decode(&mut program_bytes.as_slice()).unwrap(),
             program
         );
     }
-
     #[test]
     fn multisig_selector_roundtrips_binary_and_json() {
         let mut account_ids = vec![fixture_account(0x31), fixture_account(0x32)];
@@ -1100,13 +1033,11 @@ mod tests {
             ],
             account_ids,
         });
-
         let bytes = selector.encode();
         assert_eq!(
             FeeSponsorRuleSelector::decode(&mut bytes.as_slice()).unwrap(),
             selector
         );
-
         let json = norito::json::to_json(&selector).expect("serialize multisig selector");
         assert!(json.contains("\"kind\":\"multisig\""), "{json}");
         assert!(json.contains("\"operation\":\"propose\""), "{json}");
@@ -1118,7 +1049,6 @@ mod tests {
             selector
         );
     }
-
     #[test]
     fn multisig_selector_validation_requires_canonical_explicit_sets() {
         let mut account_ids = vec![fixture_account(0x41), fixture_account(0x42)];
@@ -1134,7 +1064,6 @@ mod tests {
         let mut revision = sample_revision();
         revision.rules[0].selectors = vec![FeeSponsorRuleSelector::Multisig(selector.clone())];
         assert_eq!(revision.validate(), Ok(()));
-
         let mut invalid = revision.clone();
         let FeeSponsorRuleSelector::Multisig(selector) = &mut invalid.rules[0].selectors[0] else {
             panic!("fixture selector must be multisig")
@@ -1144,7 +1073,6 @@ mod tests {
             invalid.validate(),
             Err(FeeSponsorProgramRevisionError::EmptyMultisigOperations(_))
         ));
-
         let mut invalid = revision.clone();
         let FeeSponsorRuleSelector::Multisig(selector) = &mut invalid.rules[0].selectors[0] else {
             panic!("fixture selector must be multisig")
@@ -1157,7 +1085,6 @@ mod tests {
             invalid.validate(),
             Err(FeeSponsorProgramRevisionError::NonCanonicalMultisigOperations(_))
         ));
-
         let mut invalid = revision.clone();
         let FeeSponsorRuleSelector::Multisig(selector) = &mut invalid.rules[0].selectors[0] else {
             panic!("fixture selector must be multisig")
@@ -1167,7 +1094,6 @@ mod tests {
             invalid.validate(),
             Err(FeeSponsorProgramRevisionError::EmptyMultisigAccounts(_))
         ));
-
         let mut invalid = revision;
         let FeeSponsorRuleSelector::Multisig(selector) = &mut invalid.rules[0].selectors[0] else {
             panic!("fixture selector must be multisig")
@@ -1178,7 +1104,6 @@ mod tests {
             Err(FeeSponsorProgramRevisionError::NonCanonicalMultisigAccounts(_))
         ));
     }
-
     #[test]
     fn revision_validation_is_fail_closed_and_monotonic() {
         let revision = sample_revision();
@@ -1192,14 +1117,12 @@ mod tests {
                 latest: 1,
             })
         );
-
         let mut invalid = revision.clone();
         invalid.rules[0].selectors.clear();
         assert!(matches!(
             invalid.validate(),
             Err(FeeSponsorProgramRevisionError::EmptyRuleSelectors(_))
         ));
-
         let mut invalid = revision.clone();
         let duplicate = invalid.rules[0].selectors[0].clone();
         invalid.rules[0].selectors.push(duplicate);
@@ -1207,7 +1130,6 @@ mod tests {
             invalid.validate(),
             Err(FeeSponsorProgramRevisionError::DuplicateRuleSelector(_))
         ));
-
         let mut invalid = revision.clone();
         let FeeSponsorRuleSelector::NativeInstruction(selector) =
             &mut invalid.rules[0].selectors[0]
@@ -1219,7 +1141,6 @@ mod tests {
             invalid.validate(),
             Err(FeeSponsorProgramRevisionError::InvalidInstructionWireId(_))
         ));
-
         let mut invalid = revision.clone();
         invalid.rules[0].selectors = vec![FeeSponsorRuleSelector::ContractCall(
             FeeSponsorContractSelector {
@@ -1234,7 +1155,6 @@ mod tests {
             invalid.validate(),
             Err(FeeSponsorProgramRevisionError::EmptyContractEntrypoints(_))
         ));
-
         let mut invalid = revision.clone();
         invalid.rules[0].selectors = vec![FeeSponsorRuleSelector::ContractCall(
             FeeSponsorContractSelector {
@@ -1249,14 +1169,12 @@ mod tests {
             invalid.validate(),
             Err(FeeSponsorProgramRevisionError::InvalidContractEntrypoint { .. })
         ));
-
         let mut invalid = revision.clone();
         invalid.asset_budgets[0].per_transaction = Quantity::zero();
         assert!(matches!(
             invalid.validate(),
             Err(FeeSponsorProgramRevisionError::ZeroBudgetLimit(_))
         ));
-
         let mut invalid = revision;
         invalid.rules.push(invalid.rules[0].clone());
         assert!(matches!(
@@ -1264,7 +1182,6 @@ mod tests {
             Err(FeeSponsorProgramRevisionError::DuplicateRuleId(_))
         ));
     }
-
     #[test]
     fn vault_and_enrollment_keys_are_program_isolated() {
         let id = program_id();
@@ -1281,7 +1198,6 @@ mod tests {
             norito::json::from_str::<FeeSponsorEnrollment>(&json).unwrap(),
             enrollment
         );
-
         let vault = FeeSponsorVault {
             key: FeeSponsorVaultKey {
                 program_id: id,
@@ -1297,7 +1213,6 @@ mod tests {
             vault
         );
     }
-
     #[test]
     fn rejection_code_labels_are_stable_and_roundtrip() {
         let expected = [

@@ -1,12 +1,9 @@
 //! Events emitted by native asset escrow flows.
-
+use crate::{account::AccountId, escrow::AssetEscrowRecord, name::Name};
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-
-use crate::{account::AccountId, escrow::AssetEscrowRecord, name::Name};
-
 /// Native escrow lifecycle events.
 #[derive(
     Debug,
@@ -45,7 +42,6 @@ pub enum EscrowEvent {
     /// Court resolved a disputed escrow.
     Resolved(AssetEscrowResolved),
 }
-
 impl EscrowEvent {
     /// Return the escrow record carried by this event.
     #[must_use]
@@ -63,7 +59,6 @@ impl EscrowEvent {
         }
     }
 }
-
 /// Conditional-escrow attestation event.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -80,7 +75,6 @@ pub struct ConditionalEscrowAttested {
     /// Whether this attestation atomically released all remaining custody.
     pub automatically_released: bool,
 }
-
 /// Dispute opening event.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -95,7 +89,6 @@ pub struct AssetEscrowDisputed {
     /// Evidence hashes attached by the disputing party.
     pub evidence_hashes: Vec<Hash>,
 }
-
 /// Court resolution event.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -112,7 +105,6 @@ pub struct AssetEscrowResolved {
     /// Amount refunded to the seller.
     pub seller_amount: Quantity,
 }
-
 /// Prelude exports for native escrow events.
 pub mod prelude {
     pub use super::{

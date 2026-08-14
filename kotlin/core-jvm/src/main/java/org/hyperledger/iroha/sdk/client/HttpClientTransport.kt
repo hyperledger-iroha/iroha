@@ -245,7 +245,7 @@ class HttpClientTransport(
     fun getLedgerExecutedBlockWire(height: Long): CompletableFuture<ByteArray> =
         getLedgerExecutedBlockWire(BigInteger.valueOf(height))
 
-    /** Fetch the exact canonical committed Exact12 manifest and require native validation. */
+    /** Fetch the exact committed Exact12 manifest with one-shot canonical account authentication. */
     fun getPrivacyCapabilities(
         canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<PrivacyExact12CapabilityManifestV1> =
@@ -262,7 +262,8 @@ class HttpClientTransport(
      * Obtain the token required immediately before constructing a retained privacy action.
      *
      * The token is issued only when committed readiness/activation and the complete native local
-     * profile tuple agree. A legacy snapshot or local catalog cannot enter this path.
+     * profile tuple agree. A legacy snapshot or local catalog cannot enter this path. Capability
+     * discovery is authenticated against the exact locally configured network.
      */
     fun requirePrivacyExact12CapabilityAdmission(
         protocolId: PrivacyProtocolIdV1,
@@ -382,13 +383,21 @@ class HttpClientTransport(
         return fetchJsonAllowingNotFound(buildJsonGetRequest("/v1/identifiers/receipts/${encodePathSegment(normalizedReceiptHash)}", emptyMap()), IdentifierJsonParser::parseClaimRecord, "identifier claim lookup")
     }
 
-    fun resolveIdentifier(requestBody: IdentifierResolveRequest): CompletableFuture<Optional<IdentifierResolutionReceipt>> {
+    fun resolveIdentifier(
+        requestBody: IdentifierResolveRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<Optional<IdentifierResolutionReceipt>> {
         val body = encodeJsonBody(buildIdentifierResolvePayload(requestBody.policyId, requestBody.encryptedInputHex, requestBody.outputOpening))
-        return fetchJsonAllowingNotFound(buildJsonPostRequest("/v1/identifiers/resolve", body), IdentifierJsonParser::parseResolutionReceipt, "identifier resolve")
+        return fetchJsonAllowingNotFound(buildVpnRequest("POST", "/v1/identifiers/resolve", body, canonicalAuth), IdentifierJsonParser::parseResolutionReceipt, "identifier resolve")
     }
 
-    fun resolveIdentifier(policyId: String, encryptedInputHex: String, outputOpening: RamLfeOutputOpening): CompletableFuture<Optional<IdentifierResolutionReceipt>> =
-        resolveIdentifier(IdentifierResolveRequest.encrypted(policyId, encryptedInputHex, outputOpening))
+    fun resolveIdentifier(
+        policyId: String,
+        encryptedInputHex: String,
+        outputOpening: RamLfeOutputOpening,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<Optional<IdentifierResolutionReceipt>> =
+        resolveIdentifier(IdentifierResolveRequest.encrypted(policyId, encryptedInputHex, outputOpening), canonicalAuth)
 
     override fun resolveAccountAlias(alias: String): CompletableFuture<Optional<AccountAliasResolution>> {
         val normalizedAlias = AccountAliasName.parse(alias).canonicalText()
@@ -564,14 +573,17 @@ class HttpClientTransport(
 
     override fun getSumeragiStatus(): CompletableFuture<SumeragiV2Status> =
         fetchExactJson(
-            buildExactJsonGetRequest("/v1/sumeragi/status", SUMERAGI_STATUS_JSON_MAX_BYTES),
+            buildExactOperatorJsonGetRequest(
+                "/v1/sumeragi/status",
+                SUMERAGI_STATUS_JSON_MAX_BYTES,
+            ),
             Function { payload -> SumeragiV2Status.parseJson(payload) },
             "Sumeragi status",
         )
 
     override fun getSumeragiDiagnostics(): CompletableFuture<SumeragiDiagnosticsStatus> =
         fetchExactJson(
-            buildExactJsonGetRequest(
+            buildExactOperatorJsonGetRequest(
                 "/v1/sumeragi/diagnostics",
                 SUMERAGI_DIAGNOSTICS_JSON_MAX_BYTES,
             ),
@@ -660,27 +672,52 @@ class HttpClientTransport(
         ) { "account aliases response contains entries outside the requested scope" }
     }
 
-    fun issueIdentifierClaimReceipt(accountId: String, requestBody: IdentifierResolveRequest): CompletableFuture<Optional<IdentifierResolutionReceipt>> {
-        val normalizedAccountId = normalizeNonBlank(accountId, "accountId")
+    fun issueIdentifierClaimReceipt(
+        accountId: String,
+        requestBody: IdentifierResolveRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<Optional<IdentifierResolutionReceipt>> {
+        val normalizedAccountId = org.hyperledger.iroha.sdk.address.requireCanonicalI105Address(accountId, "accountId")
+        require(normalizedAccountId == canonicalAuth.accountId) {
+            "canonicalAuth.accountId must equal the claim-receipt path accountId"
+        }
         val body = encodeJsonBody(buildIdentifierResolvePayload(requestBody.policyId, requestBody.encryptedInputHex, requestBody.outputOpening))
-        return fetchJsonAllowingNotFound(buildJsonPostRequest("/v1/accounts/${encodePathSegment(normalizedAccountId)}/identifiers/claim-receipt", body), IdentifierJsonParser::parseResolutionReceipt, "identifier claim receipt")
+        return fetchJsonAllowingNotFound(buildVpnRequest("POST", "/v1/accounts/${encodePathSegment(normalizedAccountId)}/identifiers/claim-receipt", body, canonicalAuth), IdentifierJsonParser::parseResolutionReceipt, "identifier claim receipt")
     }
 
-    fun issueIdentifierClaimReceipt(accountId: String, policyId: String, encryptedInputHex: String, outputOpening: RamLfeOutputOpening): CompletableFuture<Optional<IdentifierResolutionReceipt>> =
-        issueIdentifierClaimReceipt(accountId, IdentifierResolveRequest.encrypted(policyId, encryptedInputHex, outputOpening))
+    fun issueIdentifierClaimReceipt(
+        accountId: String,
+        policyId: String,
+        encryptedInputHex: String,
+        outputOpening: RamLfeOutputOpening,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<Optional<IdentifierResolutionReceipt>> =
+        issueIdentifierClaimReceipt(accountId, IdentifierResolveRequest.encrypted(policyId, encryptedInputHex, outputOpening), canonicalAuth)
 
-    fun executeRamLfeProgram(programId: String, requestBody: RamLfeExecuteRequest): CompletableFuture<Optional<RamLfeExecuteResponse>> {
+    fun executeRamLfeProgram(
+        programId: String,
+        requestBody: RamLfeExecuteRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<Optional<RamLfeExecuteResponse>> {
         val normalizedProgramId = normalizeNonBlank(programId, "programId")
         val body = encodeJsonBody(buildRamLfeExecutePayload(requestBody.encryptedInputHex))
-        return fetchJsonAllowingNotFound(buildJsonPostRequest("/v1/ram-lfe/programs/${encodePathSegment(normalizedProgramId)}/execute", body), RamLfeJsonParser::parseExecuteResponse, "ram-lfe execute")
+        return fetchJsonAllowingNotFound(buildVpnRequest("POST", "/v1/ram-lfe/programs/${encodePathSegment(normalizedProgramId)}/execute", body, canonicalAuth), RamLfeJsonParser::parseExecuteResponse, "ram-lfe execute")
     }
 
-    fun verifyRamLfeReceipt(requestBody: RamLfeReceiptVerifyRequest): CompletableFuture<RamLfeReceiptVerifyResponse> {
+    fun verifyRamLfeReceipt(
+        requestBody: RamLfeReceiptVerifyRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<RamLfeReceiptVerifyResponse> {
         val body = encodeJsonBody(buildRamLfeReceiptVerifyPayload(requestBody.receipt, requestBody.outputHex))
-        return fetchJson(buildJsonPostRequest("/v1/ram-lfe/receipts/verify", body), RamLfeJsonParser::parseReceiptVerifyResponse, "ram-lfe receipt verify")
+        return fetchJson(buildVpnRequest("POST", "/v1/ram-lfe/receipts/verify", body, canonicalAuth), RamLfeJsonParser::parseReceiptVerifyResponse, "ram-lfe receipt verify")
     }
 
-    fun verifyRamLfeReceipt(receipt: Map<String, Any>, outputHex: String?): CompletableFuture<RamLfeReceiptVerifyResponse> = verifyRamLfeReceipt(RamLfeReceiptVerifyRequest(receipt, outputHex))
+    fun verifyRamLfeReceipt(
+        receipt: Map<String, Any>,
+        outputHex: String?,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<RamLfeReceiptVerifyResponse> =
+        verifyRamLfeReceipt(RamLfeReceiptVerifyRequest(receipt, outputHex), canonicalAuth)
 
     fun getVpnProfile(): CompletableFuture<VpnProfile> {
         requireSecureVpnBaseUri()
@@ -1102,6 +1139,39 @@ class HttpClientTransport(
         return builder.build()
     }
 
+    private fun buildExactOperatorJsonGetRequest(
+        path: String,
+        maximumResponseBytes: Long,
+    ): TransportRequest {
+        require(config.defaultHeaders().keys.none { it.equals("Accept", ignoreCase = true) }) {
+            "Accept must not be overridden for exact JSON requests"
+        }
+        OperatorRequestSigner.requireGeneratedAuth(config.defaultHeaders())
+        val target = resolvePath(path)
+        val operatorHeaders = OperatorRequestSigner.buildHeaders(
+            config.requireOperatorSigningContext(),
+            "GET",
+            target,
+            ByteArray(0),
+        )
+        val builder = TransportRequest.builder()
+            .setUri(target)
+            .setMethod("GET")
+            .addHeader("Accept", "application/json")
+            .setMaximumResponseBytes(maximumResponseBytes)
+            .setTimeout(config.requestTimeout())
+        for ((key, value) in config.defaultHeaders()) builder.addHeader(key, value)
+        for ((key, value) in operatorHeaders) builder.addHeader(key, value)
+        TransportSecurity.requireHttpRequestAllowed(
+            "HttpClientTransport operator GET",
+            config.baseUri(),
+            target,
+            operatorHeaders,
+            null,
+        )
+        return builder.build()
+    }
+
     private fun buildJsonPostRequest(
         path: String,
         body: ByteArray,
@@ -1157,6 +1227,7 @@ class HttpClientTransport(
 
     private fun buildVpnRequest(method: String, path: String, body: ByteArray?, canonicalAuth: ToriiCanonicalRequestAuth): TransportRequest {
         if (path.startsWith("/v1/vpn/")) requireSecureVpnBaseUri()
+        requireCanonicalHeadersUnset()
         val target = resolvePath(path)
         val builder = TransportRequest.builder().setUri(target).setMethod(method).addHeader("Accept", "application/json").setTimeout(config.requestTimeout())
         if (body != null) {
@@ -1165,6 +1236,13 @@ class HttpClientTransport(
         for ((k, v) in config.defaultHeaders()) builder.addHeader(k, v)
         val canonicalHeaders = buildCanonicalHeaders(method, target, body, canonicalAuth)
         for ((k, v) in canonicalHeaders) builder.addHeader(k, v)
+        TransportSecurity.requireHttpRequestAllowed(
+            "HttpClientTransport",
+            config.baseUri(),
+            target,
+            canonicalHeaders,
+            body,
+        )
         return builder.build()
     }
 
@@ -1600,7 +1678,17 @@ class HttpClientTransport(
         }
         private fun emitRedactionFailure(sink: TelemetrySink, signalId: String, reason: String) { sink.emitSignal(REDACTION_FAILURE_SIGNAL, mapOf("signal_id" to signalId, "reason" to reason)) }
         private fun buildPipelineStatusHttpException(hashHex: String, response: ClientResponse): TransactionStatusHttpException = TransactionStatusHttpException(hashHex, response.statusCode, response.rejectCode(), HttpErrorMessageExtractor.extractMessage(response.body))
-        private fun appendQuery(target: URI, params: Map<String, String>): URI { if (params.isEmpty()) return target; val sb = StringBuilder(target.toString()).append(if (target.toString().contains("?")) "&" else "?").append(encodeQuery(params)); return URI.create(sb.toString()) }
+        private fun appendQuery(target: URI, params: Map<String, String>): URI {
+            if (params.isEmpty()) return target
+            val targetText = target.toString()
+            val fragmentIndex = targetText.indexOf('#').let { if (it >= 0) it else targetText.length }
+            val builder = StringBuilder(targetText.length + 1)
+                .append(targetText, 0, fragmentIndex)
+            builder.append(if (builder.indexOf("?") >= 0) "&" else "?")
+            builder.append(encodeQuery(params))
+            builder.append(targetText, fragmentIndex, targetText.length)
+            return URI.create(builder.toString())
+        }
         private fun encodeQuery(params: Map<String, String>): String = params.entries.joinToString("&") { (k, v) -> "${urlEncode(k)}=${urlEncode(v)}" }
         private fun encodePathSegment(segment: String): String = urlEncode(segment).replace("+", "%20")
         private fun urlEncode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8.name())

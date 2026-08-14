@@ -1,11 +1,12 @@
 //! Authoritative SoraFS moderation commit/reveal ledger handlers.
-
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    str::FromStr,
-    sync::OnceLock,
+use super::*;
+use crate::{
+    smartcontracts::ValidSingularQuery,
+    smartcontracts::isi::sorafs_pop_registry::{
+        read_active_publications, read_pinned_publications,
+    },
+    state::{StateTransaction, WorldReadOnly},
 };
-
 use iroha_data_model::{
     account::AccountId,
     events::data::sorafs::{
@@ -69,16 +70,7 @@ use sorafs_manifest::pop_credentials::{
     POP_MEMBERSHIP_PROOF_MAX_BYTES_V1, PopEligibilityClassV1, PopMembershipProofV1,
     verify_pop_membership_proof_v1,
 };
-
-use super::*;
-use crate::{
-    smartcontracts::ValidSingularQuery,
-    smartcontracts::isi::sorafs_pop_registry::{
-        read_active_publications, read_pinned_publications,
-    },
-    state::{StateTransaction, WorldReadOnly},
-};
-
+use std::{str::FromStr, sync::OnceLock};
 const POLICY_STATE_KEY: &str = "sorafs_moderation_policy_v1";
 const STATUS_STATE_KEY: &str = "sorafs_moderation_status_v1";
 const APPEAL_STATE_KEY_PREFIX: &str = "sorafs_moderation_appeal_v1_";
@@ -124,23 +116,20 @@ const PROOF_LIMITS: DecodeLimits = DecodeLimits::new(
 );
 const MANAGE_PERMISSION: &str = "CanManageSorafsModeration";
 const MODERATION_QUERY_MAX_SNAPSHOT_RECORDS_V1: usize = 65_536;
-
-#[derive(Clone, Debug, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct AppealDepositBindingStateV1 {
     deposit_lock_digest: [u8; 32],
     case_id: String,
     round_id: String,
     intake_digest: [u8; 32],
 }
-
-#[derive(Clone, Debug, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct AppealProofTokenBindingStateV1 {
     proof_token_digest: [u8; 32],
     case_id: String,
     round_id: String,
     intake_digest: [u8; 32],
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ModerationPersistedEventV1 {
     sequence: u64,
@@ -148,24 +137,26 @@ struct ModerationPersistedEventV1 {
     event_index: u32,
     event: SorafsModerationLedgerEvent,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ModerationEventJournalHeadV1 {
     last_sequence: u64,
     last_target_block_height: u64,
     last_event_index: u32,
 }
-
 fn invalid_parameter(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
         message.into(),
     ))
 }
-
 fn corrupt_state(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvariantViolation(message.into().into())
 }
-
+fn corrupt_stored_payload(error: InstructionExecutionError) -> InstructionExecutionError {
+    match error {
+        error @ InstructionExecutionError::Query(_) => error,
+        error => corrupt_state(error.to_string()),
+    }
+}
 fn require_manage_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -199,7 +190,6 @@ fn require_manage_permission(
         )))
     }
 }
-
 fn block_time_ms(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<u64, InstructionExecutionError> {
@@ -211,14 +201,12 @@ fn block_time_ms(
     }
     Ok(now)
 }
-
 fn ceil_unix_ms_to_epoch(unix_ms: u64) -> Result<u64, InstructionExecutionError> {
     unix_ms
         .checked_add(999)
         .map(|value| value / 1_000)
         .ok_or_else(|| corrupt_state("moderation millisecond deadline overflows epoch rounding"))
 }
-
 fn active_pop_snapshot(
     state_transaction: &StateTransaction<'_, '_>,
     now: u64,
@@ -250,7 +238,6 @@ fn active_pop_snapshot(
     })?;
     Ok((snapshot, active))
 }
-
 fn require_pinned_pop_snapshot(
     state_transaction: &StateTransaction<'_, '_>,
     snapshot: &ModerationPoPRegistrySnapshotV1,
@@ -266,7 +253,6 @@ fn require_pinned_pop_snapshot(
         snapshot.registry_audit_head,
     )
 }
-
 fn latest_parent_randomness_anchor(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<[u8; 32], InstructionExecutionError> {
@@ -286,7 +272,6 @@ fn latest_parent_randomness_anchor(
     }
     Ok(anchor)
 }
-
 fn eligibility_class(class: PopEligibilityClassV1) -> ModerationJurorEligibilityClassV1 {
     match class {
         PopEligibilityClassV1::General => ModerationJurorEligibilityClassV1::General,
@@ -296,40 +281,33 @@ fn eligibility_class(class: PopEligibilityClassV1) -> ModerationJurorEligibility
         PopEligibilityClassV1::Observer => ModerationJurorEligibilityClassV1::Observer,
     }
 }
-
 fn policy_key() -> &'static StatePath {
     static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| StatePath::from_str(POLICY_STATE_KEY).expect("static state key is valid"))
 }
-
 fn status_key() -> &'static StatePath {
     static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| StatePath::from_str(STATUS_STATE_KEY).expect("static state key is valid"))
 }
-
 fn event_journal_head_key() -> &'static StatePath {
     static KEY: OnceLock<StatePath> = OnceLock::new();
     KEY.get_or_init(|| {
         StatePath::from_str(EVENT_JOURNAL_HEAD_STATE_KEY).expect("static state key is valid")
     })
 }
-
 fn event_key(sequence: u64) -> StatePath {
     StatePath::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
         .expect("static prefix plus fixed-width lowercase hex is a valid state key")
 }
-
 fn digest_key(prefix: &str, digest: [u8; 32]) -> StatePath {
     StatePath::from_str(&format!("{prefix}{}", hex::encode(digest)))
         .expect("static prefix plus lowercase hex is a valid state key")
 }
-
 fn update_string(hasher: &mut blake3::Hasher, value: &str) {
     let length = u64::try_from(value.len()).expect("state-key material length fits u64");
     hasher.update(&length.to_le_bytes());
     hasher.update(value.as_bytes());
 }
-
 fn validate_lookup_identifiers(
     case_id: &str,
     round_id: &str,
@@ -343,7 +321,6 @@ fn validate_lookup_identifiers(
     }
     Ok(())
 }
-
 fn validate_challenge_reason(reason: &str) -> Result<(), InstructionExecutionError> {
     if reason.trim().is_empty()
         || reason != reason.trim()
@@ -356,7 +333,6 @@ fn validate_challenge_reason(reason: &str) -> Result<(), InstructionExecutionErr
     }
     Ok(())
 }
-
 fn case_digest(case_id: &str, round_id: &str) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(CASE_KEY_DOMAIN_V1);
@@ -364,7 +340,6 @@ fn case_digest(case_id: &str, round_id: &str) -> [u8; 32] {
     update_string(&mut hasher, round_id);
     *hasher.finalize().as_bytes()
 }
-
 fn juror_digest(case_id: &str, round_id: &str, juror: &AccountId) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(JUROR_KEY_DOMAIN_V1);
@@ -373,7 +348,6 @@ fn juror_digest(case_id: &str, round_id: &str, juror: &AccountId) -> [u8; 32] {
     update_string(&mut hasher, &juror.to_string());
     *hasher.finalize().as_bytes()
 }
-
 fn challenge_digest(case_id: &str, round_id: &str, challenge_id: &str) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(CHALLENGE_KEY_DOMAIN_V1);
@@ -382,93 +356,78 @@ fn challenge_digest(case_id: &str, round_id: &str, challenge_id: &str) -> [u8; 3
     update_string(&mut hasher, challenge_id);
     *hasher.finalize().as_bytes()
 }
-
 fn nullifier_digest(nullifier: [u8; 32]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(NULLIFIER_KEY_DOMAIN_V1);
     hasher.update(&nullifier);
     *hasher.finalize().as_bytes()
 }
-
 fn appeal_deposit_digest(deposit_lock_digest: [u8; 32]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(APPEAL_DEPOSIT_KEY_DOMAIN_V1);
     hasher.update(&deposit_lock_digest);
     *hasher.finalize().as_bytes()
 }
-
 fn appeal_proof_token_digest(proof_token_digest: [u8; 32]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(APPEAL_PROOF_TOKEN_KEY_DOMAIN_V1);
     hasher.update(&proof_token_digest);
     *hasher.finalize().as_bytes()
 }
-
 fn appeal_key(case_id: &str, round_id: &str) -> StatePath {
     digest_key(APPEAL_STATE_KEY_PREFIX, case_digest(case_id, round_id))
 }
-
 fn eligibility_key(case_id: &str, round_id: &str, juror: &AccountId) -> StatePath {
     digest_key(
         ELIGIBILITY_STATE_KEY_PREFIX,
         juror_digest(case_id, round_id, juror),
     )
 }
-
 fn nullifier_key(nullifier: [u8; 32]) -> StatePath {
     digest_key(NULLIFIER_STATE_KEY_PREFIX, nullifier_digest(nullifier))
 }
-
 fn appeal_deposit_key(deposit_lock_digest: [u8; 32]) -> StatePath {
     digest_key(
         APPEAL_DEPOSIT_STATE_KEY_PREFIX,
         appeal_deposit_digest(deposit_lock_digest),
     )
 }
-
 fn appeal_proof_token_key(proof_token_digest: [u8; 32]) -> StatePath {
     digest_key(
         APPEAL_PROOF_TOKEN_STATE_KEY_PREFIX,
         appeal_proof_token_digest(proof_token_digest),
     )
 }
-
 fn case_key(case_id: &str, round_id: &str) -> StatePath {
     digest_key(CASE_STATE_KEY_PREFIX, case_digest(case_id, round_id))
 }
-
 fn commit_key(case_id: &str, round_id: &str, juror: &AccountId) -> StatePath {
     digest_key(
         COMMIT_STATE_KEY_PREFIX,
         juror_digest(case_id, round_id, juror),
     )
 }
-
 fn reveal_key(case_id: &str, round_id: &str, juror: &AccountId) -> StatePath {
     digest_key(
         REVEAL_STATE_KEY_PREFIX,
         juror_digest(case_id, round_id, juror),
     )
 }
-
 fn challenge_key(case_id: &str, round_id: &str, challenge_id: &str) -> StatePath {
     digest_key(
         CHALLENGE_STATE_KEY_PREFIX,
         challenge_digest(case_id, round_id, challenge_id),
     )
 }
-
 fn outcome_key(case_id: &str, round_id: &str) -> StatePath {
     digest_key(OUTCOME_STATE_KEY_PREFIX, case_digest(case_id, round_id))
 }
-
 fn no_show_key(case_id: &str, round_id: &str, juror: &AccountId) -> StatePath {
     digest_key(
         NO_SHOW_STATE_KEY_PREFIX,
         juror_digest(case_id, round_id, juror),
     )
 }
-
 fn encode_state<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
@@ -476,7 +435,6 @@ fn encode_state<T: norito::core::NoritoSerialize>(
     norito::to_bytes(value)
         .map_err(|error| corrupt_state(format!("failed to encode {label}: {error}")))
 }
-
 fn encode_payload<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
@@ -484,8 +442,21 @@ fn encode_payload<T: norito::core::NoritoSerialize>(
     norito::encode_canonical(value)
         .map_err(|error| invalid_parameter(format!("failed to canonicalize {label}: {error}")))
 }
-
-fn decode_state<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionError>
+fn decode_state_for_current<T>(
+    bytes: &[u8],
+    label: &str,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<T, InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    decode_state_with_current(bytes, label, Some(current))
+}
+fn decode_state_with_current<T>(
+    bytes: &[u8],
+    label: &str,
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+) -> Result<T, InstructionExecutionError>
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
@@ -494,17 +465,66 @@ where
             "{label} state exceeds {STATE_MAX_BYTES} bytes"
         )));
     }
-    let value = decode_from_bytes_with_limits::<T>(bytes, STATE_LIMITS)
-        .map_err(|error| corrupt_state(format!("failed to decode {label}: {error}")))?;
-    if encode_state(&value, label)? != bytes {
-        return Err(corrupt_state(format!(
-            "{label} state is not exact canonical Norito"
-        )));
+    let limits = match current.as_deref() {
+        Some(current) => current.decode_limits(bytes.len(), STATE_LIMITS),
+        None => crate::smartcontracts::isi::query::singular_query_decode_limits(
+            bytes.len(),
+            STATE_LIMITS,
+        ),
+    }
+    .map_err(InstructionExecutionError::Query)?;
+    let (value, allocation_bytes) = if current.is_some() {
+        let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
+            decode_from_bytes_with_limits::<T>(bytes, limits)
+        });
+        (value, Some(usage.total_allocated_bytes()))
+    } else {
+        (decode_from_bytes_with_limits::<T>(bytes, limits), None)
+    };
+    let value = value.map_err(|error| {
+        if crate::smartcontracts::isi::query::singular_query_limits_active()
+            && error.is_decode_resource_limit()
+        {
+            InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
+        } else {
+            corrupt_state(format!("failed to decode {label}: {error}"))
+        }
+    })?;
+    norito::verify_exact_frame(&value, bytes).map_err(|error| {
+        if matches!(error, norito::Error::NonCanonicalEncoding) {
+            corrupt_state(format!("{label} state is not exact canonical Norito"))
+        } else {
+            corrupt_state(format!("failed to encode {label}: {error}"))
+        }
+    })?;
+    if let (Some(current), Some(allocation_bytes)) = (current.as_deref_mut(), allocation_bytes) {
+        current
+            .add_nested(allocation_bytes)
+            .map_err(InstructionExecutionError::Query)?;
     }
     Ok(value)
 }
-
 fn decode_payload<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    decode_payload_with_current(bytes, label, None)
+}
+fn decode_payload_for_current<T>(
+    bytes: &[u8],
+    label: &str,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<T, InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    decode_payload_with_current(bytes, label, Some(current))
+}
+fn decode_payload_with_current<T>(
+    bytes: &[u8],
+    label: &str,
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+) -> Result<T, InstructionExecutionError>
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
@@ -514,15 +534,41 @@ where
             bytes.len()
         )));
     }
-    decode_canonical_with_limits::<T>(bytes, PAYLOAD_LIMITS).map_err(|error| {
+    let limits = match current.as_deref() {
+        Some(current) => current.decode_limits(bytes.len(), PAYLOAD_LIMITS),
+        None => crate::smartcontracts::isi::query::singular_query_decode_limits(
+            bytes.len(),
+            PAYLOAD_LIMITS,
+        ),
+    }
+    .map_err(InstructionExecutionError::Query)?;
+    let (value, allocation_bytes) = if current.is_some() {
+        let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
+            decode_canonical_with_limits::<T>(bytes, limits)
+        });
+        (value, Some(usage.total_allocated_bytes()))
+    } else {
+        (decode_canonical_with_limits::<T>(bytes, limits), None)
+    };
+    let value = value.map_err(|error| {
+        if crate::smartcontracts::isi::query::singular_query_limits_active()
+            && error.is_decode_resource_limit()
+        {
+            return InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit);
+        }
         if matches!(&error, norito::Error::NonCanonicalEncoding) {
             invalid_parameter(format!("{label} payload is not exact canonical Norito"))
         } else {
             invalid_parameter(format!("invalid canonical {label} payload: {error}"))
         }
-    })
+    })?;
+    if let (Some(current), Some(allocation_bytes)) = (current.as_deref_mut(), allocation_bytes) {
+        current
+            .add_nested(allocation_bytes)
+            .map_err(InstructionExecutionError::Query)?;
+    }
+    Ok(value)
 }
-
 fn validate_persisted_event(
     record: &ModerationPersistedEventV1,
     expected_sequence: u64,
@@ -557,10 +603,23 @@ fn validate_persisted_event(
     }
     Ok(())
 }
-
 fn read_persisted_event(
     world: &impl WorldReadOnly,
     sequence: u64,
+) -> Result<Option<ModerationPersistedEventV1>, InstructionExecutionError> {
+    read_persisted_event_with_current(world, sequence, None)
+}
+fn read_persisted_event_for_current(
+    world: &impl WorldReadOnly,
+    sequence: u64,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<Option<ModerationPersistedEventV1>, InstructionExecutionError> {
+    read_persisted_event_with_current(world, sequence, Some(current))
+}
+fn read_persisted_event_with_current(
+    world: &impl WorldReadOnly,
+    sequence: u64,
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<ModerationPersistedEventV1>, InstructionExecutionError> {
     if sequence == 0 {
         return Err(corrupt_state(
@@ -571,25 +630,43 @@ fn read_persisted_event(
     let Some(bytes) = world.smart_contract_state().get(&key) else {
         return Ok(None);
     };
-    let record: ModerationPersistedEventV1 = decode_state(bytes, "moderation committed event")?;
+    let record: ModerationPersistedEventV1 =
+        decode_state_with_current(bytes, "moderation committed event", current.as_deref_mut())?;
     validate_persisted_event(&record, sequence)?;
     Ok(Some(record))
 }
-
 fn read_event_journal_head(
     world: &impl WorldReadOnly,
+) -> Result<Option<ModerationEventJournalHeadV1>, InstructionExecutionError> {
+    read_event_journal_head_with_current(world, None)
+}
+fn read_event_journal_head_for_current(
+    world: &impl WorldReadOnly,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<Option<ModerationEventJournalHeadV1>, InstructionExecutionError> {
+    read_event_journal_head_with_current(world, Some(current))
+}
+fn read_event_journal_head_with_current(
+    world: &impl WorldReadOnly,
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<ModerationEventJournalHeadV1>, InstructionExecutionError> {
     let Some(bytes) = world.smart_contract_state().get(event_journal_head_key()) else {
         return Ok(None);
     };
-    let head: ModerationEventJournalHeadV1 = decode_state(bytes, "moderation event journal head")?;
+    let head: ModerationEventJournalHeadV1 = decode_state_with_current(
+        bytes,
+        "moderation event journal head",
+        current.as_deref_mut(),
+    )?;
     if head.last_sequence == 0 || head.last_target_block_height == 0 {
         return Err(corrupt_state(
             "stored moderation event journal head is invalid",
         ));
     }
-    let last = read_persisted_event(world, head.last_sequence)?
-        .ok_or_else(|| corrupt_state("moderation event journal head has no terminal record"))?;
+    let mut transient_current = moderation_transient_current(current.as_deref())?;
+    let last =
+        read_persisted_event_with_current(world, head.last_sequence, transient_current.as_mut())?
+            .ok_or_else(|| corrupt_state("moderation event journal head has no terminal record"))?;
     if last.target_block_height != head.last_target_block_height
         || last.event_index != head.last_event_index
     {
@@ -599,7 +676,6 @@ fn read_event_journal_head(
     }
     Ok(Some(head))
 }
-
 fn ensure_no_event_after_head(
     world: &impl WorldReadOnly,
     head: Option<ModerationEventJournalHeadV1>,
@@ -647,7 +723,6 @@ fn ensure_no_event_after_head(
     }
     Ok(())
 }
-
 fn decode_membership_proof(
     bytes: &[u8],
 ) -> Result<PopMembershipProofV1, InstructionExecutionError> {
@@ -668,14 +743,26 @@ fn decode_membership_proof(
         }
     })
 }
-
 fn read_policy(
     world: &impl WorldReadOnly,
+) -> Result<Option<ModerationLedgerPolicyRecord>, InstructionExecutionError> {
+    read_policy_with_current(world, None)
+}
+fn read_policy_for_current(
+    world: &impl WorldReadOnly,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<Option<ModerationLedgerPolicyRecord>, InstructionExecutionError> {
+    read_policy_with_current(world, Some(current))
+}
+fn read_policy_with_current(
+    world: &impl WorldReadOnly,
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<ModerationLedgerPolicyRecord>, InstructionExecutionError> {
     let Some(bytes) = world.smart_contract_state().get(policy_key()) else {
         return Ok(None);
     };
-    let record: ModerationLedgerPolicyRecord = decode_state(bytes, "moderation policy")?;
+    let record: ModerationLedgerPolicyRecord =
+        decode_state_with_current(bytes, "moderation policy", current.as_deref_mut())?;
     record
         .policy
         .validate()
@@ -694,14 +781,26 @@ fn read_policy(
     }
     Ok(Some(record))
 }
-
 fn read_status(
     world: &impl WorldReadOnly,
+) -> Result<Option<ModerationLedgerStatusV1>, InstructionExecutionError> {
+    read_status_with_current(world, None)
+}
+fn read_status_for_current(
+    world: &impl WorldReadOnly,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<Option<ModerationLedgerStatusV1>, InstructionExecutionError> {
+    read_status_with_current(world, Some(current))
+}
+fn read_status_with_current(
+    world: &impl WorldReadOnly,
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<ModerationLedgerStatusV1>, InstructionExecutionError> {
     let Some(bytes) = world.smart_contract_state().get(status_key()) else {
         return Ok(None);
     };
-    let status: ModerationLedgerStatusV1 = decode_state(bytes, "moderation status")?;
+    let status: ModerationLedgerStatusV1 =
+        decode_state_with_current(bytes, "moderation status", current.as_deref_mut())?;
     if status.updated_at_unix_ms == 0
         || status.finalized_cases != status.outcomes
         || status.panel_selections > status.appeal_intakes
@@ -717,7 +816,6 @@ fn read_status(
     }
     Ok(Some(status))
 }
-
 fn status_for_mutation(
     world: &impl WorldReadOnly,
     now: u64,
@@ -732,7 +830,6 @@ fn status_for_mutation(
     }
     Ok(status)
 }
-
 fn canonical_account_list(accounts: &[AccountId]) -> bool {
     let mut previous: Option<String> = None;
     accounts.iter().all(|account| {
@@ -742,14 +839,12 @@ fn canonical_account_list(accounts: &[AccountId]) -> bool {
         valid
     })
 }
-
 fn unique_account_list(accounts: &[AccountId]) -> bool {
-    let mut seen = std::collections::BTreeSet::new();
     accounts
         .iter()
-        .all(|account| seen.insert(account.to_string()))
+        .enumerate()
+        .all(|(index, account)| accounts[..index].iter().all(|previous| previous != account))
 }
-
 fn canonical_identifier_list(values: &[String]) -> bool {
     let mut previous: Option<&str> = None;
     values.iter().all(|value| {
@@ -759,11 +854,26 @@ fn canonical_identifier_list(values: &[String]) -> bool {
         valid
     })
 }
-
 fn read_appeal(
     world: &impl WorldReadOnly,
     case_id: &str,
     round_id: &str,
+) -> Result<Option<ModerationAppealRecordV1>, InstructionExecutionError> {
+    read_appeal_with_current(world, case_id, round_id, None)
+}
+fn read_appeal_for_current(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<Option<ModerationAppealRecordV1>, InstructionExecutionError> {
+    read_appeal_with_current(world, case_id, round_id, Some(current))
+}
+fn read_appeal_with_current(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<ModerationAppealRecordV1>, InstructionExecutionError> {
     let Some(bytes) = world
         .smart_contract_state()
@@ -771,7 +881,8 @@ fn read_appeal(
     else {
         return Ok(None);
     };
-    let record: ModerationAppealRecordV1 = decode_state(bytes, "moderation appeal")?;
+    let record: ModerationAppealRecordV1 =
+        decode_state_with_current(bytes, "moderation appeal", current.as_deref_mut())?;
     record
         .intake
         .validate()
@@ -870,41 +981,44 @@ fn read_appeal(
             "stored moderation appeal has assignment state without sortition",
         ));
     }
-    let mut absent = std::collections::BTreeSet::new();
-    let mut replacements = std::collections::BTreeSet::new();
-    if record.replacements.iter().any(|replacement| {
-        replacement.absent_juror == replacement.replacement_juror
-            || !absent.insert(replacement.absent_juror.to_string())
-            || !replacements.insert(replacement.replacement_juror.to_string())
-            || record.selection.as_ref().is_none_or(|selection| {
-                !selection.jurors.contains(&replacement.absent_juror)
-                    || !selection.waitlist.contains(&replacement.replacement_juror)
-            })
-    }) {
+    if record
+        .replacements
+        .iter()
+        .enumerate()
+        .any(|(index, replacement)| {
+            replacement.absent_juror == replacement.replacement_juror
+                || record.replacements[..index].iter().any(|previous| {
+                    previous.absent_juror == replacement.absent_juror
+                        || previous.replacement_juror == replacement.replacement_juror
+                })
+                || record.selection.as_ref().is_none_or(|selection| {
+                    !selection.jurors.contains(&replacement.absent_juror)
+                        || !selection.waitlist.contains(&replacement.replacement_juror)
+                })
+        })
+    {
         return Err(corrupt_state(
             "stored moderation failover replacements are inconsistent",
         ));
     }
-    let (expected_replacements, failover_exhausted) = record.selection.as_ref().map_or_else(
-        || (Vec::new(), false),
+    let (replacements_match_expected, failover_exhausted) = record.selection.as_ref().map_or_else(
+        || (record.replacements.is_empty(), false),
         |selection| {
             let missing_primaries = selection
                 .jurors
                 .iter()
-                .filter(|juror| !record.accepted_jurors.contains(juror))
-                .collect::<Vec<_>>();
-            let replacements = missing_primaries
-                .iter()
-                .zip(selection.waitlist.iter())
-                .map(|(absent, replacement)| ModerationJurorReplacementV1 {
-                    absent_juror: (*absent).clone(),
-                    replacement_juror: replacement.clone(),
-                })
-                .collect::<Vec<_>>();
-            (
-                replacements,
-                missing_primaries.len() > selection.waitlist.len(),
-            )
+                .filter(|juror| !record.accepted_jurors.contains(juror));
+            let missing_count = missing_primaries.clone().count();
+            let expected_count = missing_count.min(selection.waitlist.len());
+            let replacements_match = record.replacements.len() == expected_count
+                && missing_primaries
+                    .zip(selection.waitlist.iter())
+                    .zip(record.replacements.iter())
+                    .all(|((absent, replacement), recorded)| {
+                        recorded.absent_juror == *absent
+                            && recorded.replacement_juror == *replacement
+                    });
+            (replacements_match, missing_count > selection.waitlist.len())
         },
     );
     let lifecycle_valid = match record.status {
@@ -924,7 +1038,7 @@ fn read_appeal(
         ModerationAppealStatusV1::BallotOpen => {
             record.selection.is_some()
                 && !failover_exhausted
-                && record.replacements == expected_replacements
+                && replacements_match_expected
                 && record.activated_at_unix_ms.is_some_and(|time| {
                     time > record.intake.acceptance_deadline_unix_ms
                         && time < record.intake.commit_deadline_unix_ms
@@ -939,14 +1053,14 @@ fn read_appeal(
         ModerationAppealStatusV1::FailoverExhausted => {
             record.selection.is_some()
                 && failover_exhausted
-                && record.replacements == expected_replacements
+                && replacements_match_expected
                 && record.activated_at_unix_ms.is_none()
                 && record.finalized_at_unix_ms.is_none()
         }
         ModerationAppealStatusV1::Finalized => {
             record.selection.is_some()
                 && !failover_exhausted
-                && record.replacements == expected_replacements
+                && replacements_match_expected
                 && record.activated_at_unix_ms.is_some()
                 && record.finalized_at_unix_ms.is_some_and(|time| {
                     time > record.intake.reveal_deadline_unix_ms
@@ -963,7 +1077,6 @@ fn read_appeal(
     }
     Ok(Some(record))
 }
-
 fn required_appeal(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -975,10 +1088,23 @@ fn required_appeal(
         ))
     })
 }
-
 fn read_appeal_deposit_binding(
     world: &impl WorldReadOnly,
     deposit_lock_digest: [u8; 32],
+) -> Result<Option<AppealDepositBindingStateV1>, InstructionExecutionError> {
+    read_appeal_deposit_binding_with_current(world, deposit_lock_digest, None)
+}
+fn read_appeal_deposit_binding_for_current(
+    world: &impl WorldReadOnly,
+    deposit_lock_digest: [u8; 32],
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<Option<AppealDepositBindingStateV1>, InstructionExecutionError> {
+    read_appeal_deposit_binding_with_current(world, deposit_lock_digest, Some(current))
+}
+fn read_appeal_deposit_binding_with_current(
+    world: &impl WorldReadOnly,
+    deposit_lock_digest: [u8; 32],
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<AppealDepositBindingStateV1>, InstructionExecutionError> {
     let Some(bytes) = world
         .smart_contract_state()
@@ -986,8 +1112,11 @@ fn read_appeal_deposit_binding(
     else {
         return Ok(None);
     };
-    let binding: AppealDepositBindingStateV1 =
-        decode_state(bytes, "moderation appeal deposit binding")?;
+    let binding: AppealDepositBindingStateV1 = decode_state_with_current(
+        bytes,
+        "moderation appeal deposit binding",
+        current.as_deref_mut(),
+    )?;
     if binding.deposit_lock_digest != deposit_lock_digest
         || binding.intake_digest == [0; 32]
         || validate_lookup_identifiers(&binding.case_id, &binding.round_id).is_err()
@@ -996,8 +1125,14 @@ fn read_appeal_deposit_binding(
             "stored moderation appeal deposit binding is inconsistent",
         ));
     }
-    let primary = read_appeal(world, &binding.case_id, &binding.round_id)?
-        .ok_or_else(|| corrupt_state("moderation appeal deposit binding has no appeal"))?;
+    let mut transient_current = moderation_transient_current(current.as_deref())?;
+    let primary = read_appeal_with_current(
+        world,
+        &binding.case_id,
+        &binding.round_id,
+        transient_current.as_mut(),
+    )?
+    .ok_or_else(|| corrupt_state("moderation appeal deposit binding has no appeal"))?;
     if primary.intake_digest != binding.intake_digest
         || primary.intake.appeal_deposit_lock_digest != deposit_lock_digest
     {
@@ -1007,10 +1142,23 @@ fn read_appeal_deposit_binding(
     }
     Ok(Some(binding))
 }
-
 fn read_appeal_proof_token_binding(
     world: &impl WorldReadOnly,
     proof_token_digest: [u8; 32],
+) -> Result<Option<AppealProofTokenBindingStateV1>, InstructionExecutionError> {
+    read_appeal_proof_token_binding_with_current(world, proof_token_digest, None)
+}
+fn read_appeal_proof_token_binding_for_current(
+    world: &impl WorldReadOnly,
+    proof_token_digest: [u8; 32],
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<Option<AppealProofTokenBindingStateV1>, InstructionExecutionError> {
+    read_appeal_proof_token_binding_with_current(world, proof_token_digest, Some(current))
+}
+fn read_appeal_proof_token_binding_with_current(
+    world: &impl WorldReadOnly,
+    proof_token_digest: [u8; 32],
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<AppealProofTokenBindingStateV1>, InstructionExecutionError> {
     let Some(bytes) = world
         .smart_contract_state()
@@ -1018,8 +1166,11 @@ fn read_appeal_proof_token_binding(
     else {
         return Ok(None);
     };
-    let binding: AppealProofTokenBindingStateV1 =
-        decode_state(bytes, "moderation appeal proof-token binding")?;
+    let binding: AppealProofTokenBindingStateV1 = decode_state_with_current(
+        bytes,
+        "moderation appeal proof-token binding",
+        current.as_deref_mut(),
+    )?;
     if binding.proof_token_digest != proof_token_digest
         || binding.intake_digest == [0; 32]
         || validate_lookup_identifiers(&binding.case_id, &binding.round_id).is_err()
@@ -1028,8 +1179,14 @@ fn read_appeal_proof_token_binding(
             "stored moderation appeal proof-token binding is inconsistent",
         ));
     }
-    let primary = read_appeal(world, &binding.case_id, &binding.round_id)?
-        .ok_or_else(|| corrupt_state("moderation appeal proof-token binding has no appeal"))?;
+    let mut transient_current = moderation_transient_current(current.as_deref())?;
+    let primary = read_appeal_with_current(
+        world,
+        &binding.case_id,
+        &binding.round_id,
+        transient_current.as_mut(),
+    )?
+    .ok_or_else(|| corrupt_state("moderation appeal proof-token binding has no appeal"))?;
     if primary.intake_digest != binding.intake_digest
         || primary.intake.proof_token_digest != proof_token_digest
     {
@@ -1039,12 +1196,29 @@ fn read_appeal_proof_token_binding(
     }
     Ok(Some(binding))
 }
-
 fn read_eligibility(
     world: &impl WorldReadOnly,
     case_id: &str,
     round_id: &str,
     juror: &AccountId,
+) -> Result<Option<ModerationJurorEligibilityRecordV1>, InstructionExecutionError> {
+    read_eligibility_with_current(world, case_id, round_id, juror, None)
+}
+fn read_eligibility_for_current(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    juror: &AccountId,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<Option<ModerationJurorEligibilityRecordV1>, InstructionExecutionError> {
+    read_eligibility_with_current(world, case_id, round_id, juror, Some(current))
+}
+fn read_eligibility_with_current(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    juror: &AccountId,
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<ModerationJurorEligibilityRecordV1>, InstructionExecutionError> {
     let Some(bytes) = world
         .smart_contract_state()
@@ -1052,8 +1226,11 @@ fn read_eligibility(
     else {
         return Ok(None);
     };
-    let record: ModerationJurorEligibilityRecordV1 =
-        decode_state(bytes, "moderation juror eligibility")?;
+    let record: ModerationJurorEligibilityRecordV1 = decode_state_with_current(
+        bytes,
+        "moderation juror eligibility",
+        current.as_deref_mut(),
+    )?;
     if record.case_id != case_id
         || record.round_id != round_id
         || &record.juror != juror
@@ -1068,7 +1245,8 @@ fn read_eligibility(
             "stored moderation juror eligibility is inconsistent",
         ));
     }
-    let appeal = read_appeal(world, case_id, round_id)?
+    let mut transient_current = moderation_transient_current(current.as_deref())?;
+    let appeal = read_appeal_with_current(world, case_id, round_id, transient_current.as_mut())?
         .ok_or_else(|| corrupt_state("moderation eligibility has no appeal"))?;
     let reveal_deadline_epoch = ceil_unix_ms_to_epoch(appeal.intake.reveal_deadline_unix_ms)?;
     if record.pop_snapshot_digest != appeal.pop_snapshot_digest
@@ -1083,23 +1261,43 @@ fn read_eligibility(
     }
     Ok(Some(record))
 }
-
 fn read_nullifier(
     world: &impl WorldReadOnly,
     nullifier: [u8; 32],
+) -> Result<Option<ModerationJurorEligibilityRecordV1>, InstructionExecutionError> {
+    read_nullifier_with_current(world, nullifier, None)
+}
+fn read_nullifier_for_current(
+    world: &impl WorldReadOnly,
+    nullifier: [u8; 32],
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<Option<ModerationJurorEligibilityRecordV1>, InstructionExecutionError> {
+    read_nullifier_with_current(world, nullifier, Some(current))
+}
+fn read_nullifier_with_current(
+    world: &impl WorldReadOnly,
+    nullifier: [u8; 32],
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<ModerationJurorEligibilityRecordV1>, InstructionExecutionError> {
     let Some(bytes) = world.smart_contract_state().get(&nullifier_key(nullifier)) else {
         return Ok(None);
     };
     let record: ModerationJurorEligibilityRecordV1 =
-        decode_state(bytes, "moderation PoP nullifier")?;
+        decode_state_with_current(bytes, "moderation PoP nullifier", current.as_deref_mut())?;
     if record.nullifier != nullifier {
         return Err(corrupt_state(
             "stored moderation PoP nullifier key is inconsistent",
         ));
     }
-    let primary = read_eligibility(world, &record.case_id, &record.round_id, &record.juror)?
-        .ok_or_else(|| corrupt_state("moderation PoP nullifier has no eligibility record"))?;
+    let mut transient_current = moderation_transient_current(current.as_deref())?;
+    let primary = read_eligibility_with_current(
+        world,
+        &record.case_id,
+        &record.round_id,
+        &record.juror,
+        transient_current.as_mut(),
+    )?
+    .ok_or_else(|| corrupt_state("moderation PoP nullifier has no eligibility record"))?;
     if primary != record {
         return Err(corrupt_state(
             "moderation PoP nullifier disagrees with eligibility record",
@@ -1107,11 +1305,26 @@ fn read_nullifier(
     }
     Ok(Some(record))
 }
-
 fn read_case(
     world: &impl WorldReadOnly,
     case_id: &str,
     round_id: &str,
+) -> Result<Option<ModerationCaseRecordV1>, InstructionExecutionError> {
+    read_case_with_current(world, case_id, round_id, None)
+}
+fn read_case_for_current(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<Option<ModerationCaseRecordV1>, InstructionExecutionError> {
+    read_case_with_current(world, case_id, round_id, Some(current))
+}
+fn read_case_with_current(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<ModerationCaseRecordV1>, InstructionExecutionError> {
     let Some(bytes) = world
         .smart_contract_state()
@@ -1119,7 +1332,8 @@ fn read_case(
     else {
         return Ok(None);
     };
-    let record: ModerationCaseRecordV1 = decode_state(bytes, "moderation case")?;
+    let record: ModerationCaseRecordV1 =
+        decode_state_with_current(bytes, "moderation case", current.as_deref_mut())?;
     record
         .spec
         .validate()
@@ -1177,7 +1391,8 @@ fn read_case(
             ));
         }
     }
-    let outcome = read_outcome(world, case_id, round_id)?;
+    let mut transient_current = moderation_transient_current(current.as_deref())?;
+    let outcome = read_outcome_with_current(world, case_id, round_id, transient_current.as_mut())?;
     match (record.status, outcome) {
         (ModerationCaseStatusV1::Finalized, Some(outcome))
             if outcome.quorum == record.spec.quorum
@@ -1202,12 +1417,29 @@ fn read_case(
     }
     Ok(Some(record))
 }
-
 fn read_commit(
     world: &impl WorldReadOnly,
     case_id: &str,
     round_id: &str,
     juror: &AccountId,
+) -> Result<Option<ModerationCommitRecordV1>, InstructionExecutionError> {
+    read_commit_with_current(world, case_id, round_id, juror, None)
+}
+fn read_commit_for_current(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    juror: &AccountId,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<Option<ModerationCommitRecordV1>, InstructionExecutionError> {
+    read_commit_with_current(world, case_id, round_id, juror, Some(current))
+}
+fn read_commit_with_current(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    juror: &AccountId,
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<ModerationCommitRecordV1>, InstructionExecutionError> {
     let Some(bytes) = world
         .smart_contract_state()
@@ -1215,10 +1447,18 @@ fn read_commit(
     else {
         return Ok(None);
     };
-    let record: ModerationCommitRecordV1 = decode_state(bytes, "moderation commit")?;
-    let commit: SoraFsModerationBallotCommitV1 =
-        decode_payload(&record.canonical_commit, "stored moderation commit")
-            .map_err(|error| corrupt_state(error.to_string()))?;
+    let record: ModerationCommitRecordV1 =
+        decode_state_with_current(bytes, "moderation commit", current.as_deref_mut())?;
+    let mut transient_current = moderation_transient_current(current.as_deref())?;
+    let commit: SoraFsModerationBallotCommitV1 = match transient_current.as_mut() {
+        Some(current) => decode_payload_for_current(
+            &record.canonical_commit,
+            "stored moderation commit",
+            current,
+        ),
+        None => decode_payload(&record.canonical_commit, "stored moderation commit"),
+    }
+    .map_err(corrupt_stored_payload)?;
     commit
         .validate()
         .map_err(|error| corrupt_state(format!("invalid stored moderation commit: {error}")))?;
@@ -1235,7 +1475,7 @@ fn read_commit(
             "stored moderation commitment provenance is inconsistent",
         ));
     }
-    let case = read_case(world, case_id, round_id)?
+    let case = read_case_with_current(world, case_id, round_id, transient_current.as_mut())?
         .ok_or_else(|| corrupt_state("stored moderation commitment has no authoritative case"))?;
     if commit.context != case.spec.context
         || !case.spec.jurors.iter().any(|candidate| candidate == juror)
@@ -1248,12 +1488,29 @@ fn read_commit(
     }
     Ok(Some(record))
 }
-
 fn read_reveal(
     world: &impl WorldReadOnly,
     case_id: &str,
     round_id: &str,
     juror: &AccountId,
+) -> Result<Option<ModerationRevealRecordV1>, InstructionExecutionError> {
+    read_reveal_with_current(world, case_id, round_id, juror, None)
+}
+fn read_reveal_for_current(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    juror: &AccountId,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<Option<ModerationRevealRecordV1>, InstructionExecutionError> {
+    read_reveal_with_current(world, case_id, round_id, juror, Some(current))
+}
+fn read_reveal_with_current(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    juror: &AccountId,
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<ModerationRevealRecordV1>, InstructionExecutionError> {
     let Some(bytes) = world
         .smart_contract_state()
@@ -1261,10 +1518,18 @@ fn read_reveal(
     else {
         return Ok(None);
     };
-    let record: ModerationRevealRecordV1 = decode_state(bytes, "moderation reveal")?;
-    let reveal: SoraFsModerationBallotRevealV1 =
-        decode_payload(&record.canonical_reveal, "stored moderation reveal")
-            .map_err(|error| corrupt_state(error.to_string()))?;
+    let record: ModerationRevealRecordV1 =
+        decode_state_with_current(bytes, "moderation reveal", current.as_deref_mut())?;
+    let mut transient_current = moderation_transient_current(current.as_deref())?;
+    let reveal: SoraFsModerationBallotRevealV1 = match transient_current.as_mut() {
+        Some(current) => decode_payload_for_current(
+            &record.canonical_reveal,
+            "stored moderation reveal",
+            current,
+        ),
+        None => decode_payload(&record.canonical_reveal, "stored moderation reveal"),
+    }
+    .map_err(corrupt_stored_payload)?;
     reveal
         .validate()
         .map_err(|error| corrupt_state(format!("invalid stored moderation reveal: {error}")))?;
@@ -1281,13 +1546,21 @@ fn read_reveal(
             "stored moderation reveal provenance is inconsistent",
         ));
     }
-    let case = read_case(world, case_id, round_id)?
+    let case = read_case_with_current(world, case_id, round_id, transient_current.as_mut())?
         .ok_or_else(|| corrupt_state("stored moderation reveal has no authoritative case"))?;
-    let commit = read_commit(world, case_id, round_id, juror)?
-        .ok_or_else(|| corrupt_state("stored moderation reveal has no commitment"))?;
-    let commit: SoraFsModerationBallotCommitV1 =
-        decode_payload(&commit.canonical_commit, "stored moderation commit")
-            .map_err(|error| corrupt_state(error.to_string()))?;
+    let mut commit_current = moderation_transient_current(transient_current.as_ref())?;
+    let commit_record =
+        read_commit_with_current(world, case_id, round_id, juror, commit_current.as_mut())?
+            .ok_or_else(|| corrupt_state("stored moderation reveal has no commitment"))?;
+    let commit: SoraFsModerationBallotCommitV1 = match commit_current.as_mut() {
+        Some(current) => decode_payload_for_current(
+            &commit_record.canonical_commit,
+            "stored moderation commit",
+            current,
+        ),
+        None => decode_payload(&commit_record.canonical_commit, "stored moderation commit"),
+    }
+    .map_err(corrupt_stored_payload)?;
     if reveal.context != case.spec.context
         || !case.spec.jurors.iter().any(|candidate| candidate == juror)
         || record.accepted_at_unix_ms <= case.spec.challenge_deadline_unix_ms
@@ -1300,12 +1573,29 @@ fn read_reveal(
     }
     Ok(Some(record))
 }
-
 fn read_challenge(
     world: &impl WorldReadOnly,
     case_id: &str,
     round_id: &str,
     challenge_id: &str,
+) -> Result<Option<ModerationChallengeRecordV1>, InstructionExecutionError> {
+    read_challenge_with_current(world, case_id, round_id, challenge_id, None)
+}
+fn read_challenge_for_current(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    challenge_id: &str,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<Option<ModerationChallengeRecordV1>, InstructionExecutionError> {
+    read_challenge_with_current(world, case_id, round_id, challenge_id, Some(current))
+}
+fn read_challenge_with_current(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    challenge_id: &str,
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<ModerationChallengeRecordV1>, InstructionExecutionError> {
     let Some(bytes) =
         world
@@ -1314,7 +1604,8 @@ fn read_challenge(
     else {
         return Ok(None);
     };
-    let record: ModerationChallengeRecordV1 = decode_state(bytes, "moderation challenge")?;
+    let record: ModerationChallengeRecordV1 =
+        decode_state_with_current(bytes, "moderation challenge", current.as_deref_mut())?;
     if record.case_id != case_id
         || record.round_id != round_id
         || record.challenge_id != challenge_id
@@ -1331,7 +1622,8 @@ fn read_challenge(
             "stored moderation challenge metadata is inconsistent",
         ));
     }
-    let case = read_case(world, case_id, round_id)?
+    let mut transient_current = moderation_transient_current(current.as_deref())?;
+    let case = read_case_with_current(world, case_id, round_id, transient_current.as_mut())?
         .ok_or_else(|| corrupt_state("stored moderation challenge has no authoritative case"))?;
     if record.raised_at_unix_ms <= case.spec.commit_deadline_unix_ms
         || record.raised_at_unix_ms > case.spec.challenge_deadline_unix_ms
@@ -1374,11 +1666,26 @@ fn read_challenge(
     }
     Ok(Some(record))
 }
-
 fn read_outcome(
     world: &impl WorldReadOnly,
     case_id: &str,
     round_id: &str,
+) -> Result<Option<ModerationOutcomeRecordV1>, InstructionExecutionError> {
+    read_outcome_with_current(world, case_id, round_id, None)
+}
+fn read_outcome_for_current(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<Option<ModerationOutcomeRecordV1>, InstructionExecutionError> {
+    read_outcome_with_current(world, case_id, round_id, Some(current))
+}
+fn read_outcome_with_current(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<ModerationOutcomeRecordV1>, InstructionExecutionError> {
     let Some(bytes) = world
         .smart_contract_state()
@@ -1386,7 +1693,8 @@ fn read_outcome(
     else {
         return Ok(None);
     };
-    let record: ModerationOutcomeRecordV1 = decode_state(bytes, "moderation outcome")?;
+    let record: ModerationOutcomeRecordV1 =
+        decode_state_with_current(bytes, "moderation outcome", current.as_deref_mut())?;
     let kind_consistent = match record.kind {
         ModerationOutcomeKindV1::Decided(choice) => {
             record.votes_total >= u32::from(record.quorum)
@@ -1412,7 +1720,6 @@ fn read_outcome(
     }
     Ok(Some(record))
 }
-
 #[allow(clippy::too_many_lines)]
 fn read_no_show(
     world: &impl WorldReadOnly,
@@ -1420,13 +1727,32 @@ fn read_no_show(
     round_id: &str,
     juror: &AccountId,
 ) -> Result<Option<ModerationNoShowRecordV1>, InstructionExecutionError> {
+    read_no_show_with_current(world, case_id, round_id, juror, None)
+}
+fn read_no_show_for_current(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    juror: &AccountId,
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+) -> Result<Option<ModerationNoShowRecordV1>, InstructionExecutionError> {
+    read_no_show_with_current(world, case_id, round_id, juror, Some(current))
+}
+fn read_no_show_with_current(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    juror: &AccountId,
+    mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+) -> Result<Option<ModerationNoShowRecordV1>, InstructionExecutionError> {
     let Some(bytes) = world
         .smart_contract_state()
         .get(&no_show_key(case_id, round_id, juror))
     else {
         return Ok(None);
     };
-    let record: ModerationNoShowRecordV1 = decode_state(bytes, "moderation no-show")?;
+    let record: ModerationNoShowRecordV1 =
+        decode_state_with_current(bytes, "moderation no-show", current.as_deref_mut())?;
     if record.case_id != case_id
         || record.round_id != round_id
         || &record.juror != juror
@@ -1438,16 +1764,23 @@ fn read_no_show(
             "stored moderation no-show metadata is inconsistent",
         ));
     }
-    let case = read_case(world, case_id, round_id)?
+    let mut transient_current = moderation_transient_current(current.as_deref())?;
+    let case = read_case_with_current(world, case_id, round_id, transient_current.as_mut())?
         .ok_or_else(|| corrupt_state("stored moderation no-show has no authoritative case"))?;
-    let outcome = read_outcome(world, case_id, round_id)?
+    let outcome = read_outcome_with_current(world, case_id, round_id, transient_current.as_mut())?
         .ok_or_else(|| corrupt_state("stored moderation no-show has no terminal outcome"))?;
     let expected_penalty = match record.kind {
         ModerationNoShowKindV1::MissingCommit => case.policy.missing_commit_penalty_points,
         ModerationNoShowKindV1::UnrevealedCommit => case.policy.unrevealed_commit_penalty_points,
     };
-    let has_commit = read_commit(world, case_id, round_id, juror)?.is_some();
-    let has_reveal = read_reveal(world, case_id, round_id, juror)?.is_some();
+    let mut ballot_current = moderation_transient_current(transient_current.as_ref())?;
+    let has_commit =
+        read_commit_with_current(world, case_id, round_id, juror, ballot_current.as_mut())?
+            .is_some();
+    let mut ballot_current = moderation_transient_current(transient_current.as_ref())?;
+    let has_reveal =
+        read_reveal_with_current(world, case_id, round_id, juror, ballot_current.as_mut())?
+            .is_some();
     if case.status != ModerationCaseStatusV1::Finalized
         || !case.spec.jurors.iter().any(|candidate| candidate == juror)
         || outcome.no_show_count == 0
@@ -1464,7 +1797,6 @@ fn read_no_show(
     }
     Ok(Some(record))
 }
-
 fn required_case(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -1476,7 +1808,6 @@ fn required_case(
         ))
     })
 }
-
 fn ensure_case_open(case: &ModerationCaseRecordV1) -> Result<(), InstructionExecutionError> {
     if case.status == ModerationCaseStatusV1::Open {
         Ok(())
@@ -1487,7 +1818,6 @@ fn ensure_case_open(case: &ModerationCaseRecordV1) -> Result<(), InstructionExec
         )))
     }
 }
-
 fn ensure_juror(
     case: &ModerationCaseRecordV1,
     juror: &AccountId,
@@ -1501,23 +1831,19 @@ fn ensure_juror(
         )))
     }
 }
-
 fn checked_inc(value: u64, label: &str) -> Result<u64, InstructionExecutionError> {
     value
         .checked_add(1)
         .ok_or_else(|| corrupt_state(format!("moderation {label} counter overflow")))
 }
-
 fn checked_add(value: u64, addend: u64, label: &str) -> Result<u64, InstructionExecutionError> {
     value
         .checked_add(addend)
         .ok_or_else(|| corrupt_state(format!("moderation {label} counter overflow")))
 }
-
 fn encode_status(status: &ModerationLedgerStatusV1) -> Result<Vec<u8>, InstructionExecutionError> {
     encode_state(status, "moderation status")
 }
-
 fn emit_moderation_ledger_event(
     state_transaction: &mut StateTransaction<'_, '_>,
     kind: SorafsModerationLedgerEventKind,
@@ -1537,7 +1863,6 @@ fn emit_moderation_ledger_event(
             "moderation event target height {target_block_height} does not match executing block height {executing_block_height}"
         )));
     }
-
     let event = SorafsModerationLedgerEvent {
         kind,
         case_id: case_id.map(str::to_owned),
@@ -1636,7 +1961,6 @@ fn emit_moderation_ledger_event(
         .emit_events(Some(SorafsGatewayEvent::ModerationLedger(event)));
     Ok(())
 }
-
 impl Execute for SetSorafsModerationPolicy {
     fn execute(
         self,
@@ -1651,7 +1975,6 @@ impl Execute for SetSorafsModerationPolicy {
         let digest = self.policy.digest().map_err(|error| {
             invalid_parameter(format!("failed to digest moderation policy: {error}"))
         })?;
-
         let current = read_policy(state_transaction.world())?;
         let mut status = match current.as_ref() {
             None => {
@@ -1692,7 +2015,6 @@ impl Execute for SetSorafsModerationPolicy {
             }
         };
         status.updated_at_unix_ms = now;
-
         let record = ModerationLedgerPolicyRecord {
             policy: self.policy,
             policy_digest: digest,
@@ -1720,7 +2042,6 @@ impl Execute for SetSorafsModerationPolicy {
         Ok(())
     }
 }
-
 impl Execute for SubmitSorafsModerationAppeal {
     fn execute(
         self,
@@ -1893,7 +2214,6 @@ impl Execute for SubmitSorafsModerationAppeal {
         Ok(())
     }
 }
-
 impl Execute for RegisterSorafsModerationJurorEligibility {
     #[allow(clippy::too_many_lines)]
     fn execute(
@@ -2036,7 +2356,6 @@ impl Execute for RegisterSorafsModerationJurorEligibility {
         Ok(())
     }
 }
-
 impl Execute for FinalizeSorafsModerationSortition {
     #[allow(clippy::too_many_lines)]
     fn execute(
@@ -2201,7 +2520,6 @@ impl Execute for FinalizeSorafsModerationSortition {
         Ok(())
     }
 }
-
 impl Execute for AcceptSorafsModerationJurorAssignment {
     fn execute(
         self,
@@ -2274,7 +2592,6 @@ impl Execute for AcceptSorafsModerationJurorAssignment {
         Ok(())
     }
 }
-
 impl Execute for ActivateSorafsModerationCase {
     #[allow(clippy::too_many_lines)]
     fn execute(
@@ -2441,7 +2758,6 @@ impl Execute for ActivateSorafsModerationCase {
         Ok(())
     }
 }
-
 impl Execute for SubmitSorafsModerationCommit {
     fn execute(
         self,
@@ -2517,7 +2833,6 @@ impl Execute for SubmitSorafsModerationCommit {
         let mut status = status_for_mutation(state_transaction.world(), now)?;
         status.commitments = checked_inc(status.commitments, "commitment")?;
         status.updated_at_unix_ms = now;
-
         let record_key = commit_key(&record.case_id, &record.round_id, authority);
         let case_key = case_key(&record.case_id, &record.round_id);
         let encoded_record = encode_state(&record, "moderation commit")?;
@@ -2546,7 +2861,6 @@ impl Execute for SubmitSorafsModerationCommit {
         Ok(())
     }
 }
-
 impl Execute for RaiseSorafsModerationChallenge {
     #[allow(clippy::too_many_lines)]
     fn execute(
@@ -2647,7 +2961,6 @@ impl Execute for RaiseSorafsModerationChallenge {
         let mut status = status_for_mutation(state_transaction.world(), now)?;
         status.challenges = checked_inc(status.challenges, "challenge")?;
         status.updated_at_unix_ms = now;
-
         let record_key = challenge_key(&record.case_id, &record.round_id, &record.challenge_id);
         let case_key = case_key(&record.case_id, &record.round_id);
         let encoded_record = encode_state(&record, "moderation challenge")?;
@@ -2676,7 +2989,6 @@ impl Execute for RaiseSorafsModerationChallenge {
         Ok(())
     }
 }
-
 impl Execute for ResolveSorafsModerationChallenge {
     fn execute(
         self,
@@ -2772,7 +3084,6 @@ impl Execute for ResolveSorafsModerationChallenge {
         Ok(())
     }
 }
-
 impl Execute for SubmitSorafsModerationReveal {
     #[allow(clippy::too_many_lines)]
     fn execute(
@@ -2847,7 +3158,6 @@ impl Execute for SubmitSorafsModerationReveal {
                 "moderation reveal does not match commitment: {error}"
             ))
         })?;
-
         reveal.revealed_at_unix_ms = now;
         let canonical_reveal = encode_payload(&reveal, "moderation reveal")?;
         let record = ModerationRevealRecordV1 {
@@ -2869,7 +3179,6 @@ impl Execute for SubmitSorafsModerationReveal {
         let mut status = status_for_mutation(state_transaction.world(), now)?;
         status.reveals = checked_inc(status.reveals, "reveal")?;
         status.updated_at_unix_ms = now;
-
         let record_key = reveal_key(&record.case_id, &record.round_id, authority);
         let case_key = case_key(&record.case_id, &record.round_id);
         let encoded_record = encode_state(&record, "moderation reveal")?;
@@ -2898,7 +3207,6 @@ impl Execute for SubmitSorafsModerationReveal {
         Ok(())
     }
 }
-
 fn increment_choice(
     counts: &mut ModerationVoteCountsV1,
     choice: SoraFsModerationVoteChoice,
@@ -2914,7 +3222,6 @@ fn increment_choice(
         .ok_or_else(|| corrupt_state("moderation vote counter overflow"))?;
     Ok(())
 }
-
 impl Execute for FinalizeSorafsModerationCase {
     #[allow(clippy::too_many_lines)]
     fn execute(
@@ -2980,7 +3287,6 @@ impl Execute for FinalizeSorafsModerationCase {
                 .ok_or_else(|| corrupt_state("moderation expired-challenge counter overflow"))?;
             case.pending_challenge_count = 0;
         }
-
         let challenged = case.accepted_challenge_count != 0 || case.expired_challenge_count != 0;
         let mut counts = ModerationVoteCountsV1::default();
         let mut no_shows = Vec::new();
@@ -3027,7 +3333,6 @@ impl Execute for FinalizeSorafsModerationCase {
                 });
             }
         }
-
         let votes_total = counts
             .checked_total()
             .ok_or_else(|| corrupt_state("moderation vote-total overflow"))?;
@@ -3076,7 +3381,6 @@ impl Execute for FinalizeSorafsModerationCase {
         status.outcomes = checked_inc(status.outcomes, "outcome")?;
         status.no_shows = checked_add(status.no_shows, u64::from(no_show_count), "no-show")?;
         status.updated_at_unix_ms = now;
-
         let encoded_outcome = encode_state(&outcome, "moderation outcome")?;
         let encoded_case = encode_state(&case, "moderation case")?;
         let encoded_appeal = encode_state(&appeal, "moderation appeal")?;
@@ -3100,7 +3404,6 @@ impl Execute for FinalizeSorafsModerationCase {
                 encode_state(no_show, "moderation no-show")?,
             ));
         }
-
         state_transaction
             .world
             .smart_contract_state
@@ -3140,13 +3443,11 @@ impl Execute for FinalizeSorafsModerationCase {
         Ok(())
     }
 }
-
 #[derive(Default)]
 struct ModerationSnapshotReadBudget {
     records: usize,
     encoded_bytes: usize,
 }
-
 impl ModerationSnapshotReadBudget {
     fn charge(&mut self, key: &StatePath, payload: &[u8]) -> Result<(), InstructionExecutionError> {
         self.records = self
@@ -3163,15 +3464,17 @@ impl ModerationSnapshotReadBudget {
             .checked_add(key.to_string().len())
             .and_then(|total| total.checked_add(payload.len()))
             .ok_or_else(|| corrupt_state("moderation snapshot byte counter overflow"))?;
-        if self.encoded_bytes > MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1 {
+        let maximum = crate::smartcontracts::isi::query::singular_query_frame_limit(
+            MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1,
+        );
+        if self.encoded_bytes > maximum {
             return Err(corrupt_state(format!(
-                "moderation snapshot source state exceeds {MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1} bytes"
+                "moderation snapshot source state exceeds {maximum} bytes"
             )));
         }
         Ok(())
     }
 }
-
 fn charge_existing_snapshot_state(
     world: &impl WorldReadOnly,
     key: &StatePath,
@@ -3182,30 +3485,78 @@ fn charge_existing_snapshot_state(
     }
     Ok(())
 }
-
+fn moderation_transient_current(
+    retained: Option<&crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+) -> Result<
+    Option<crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+    InstructionExecutionError,
+> {
+    retained
+        .map(|current| {
+            crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(
+                current.resident_bytes(),
+            )
+        })
+        .transpose()
+        .map_err(InstructionExecutionError::Query)
+}
+fn reset_moderation_current(
+    current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+    resident_bytes: usize,
+) -> Result<(), InstructionExecutionError> {
+    *current =
+        crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(resident_bytes)
+            .map_err(InstructionExecutionError::Query)?;
+    Ok(())
+}
 fn scan_moderation_state_prefix<T>(
     world: &impl WorldReadOnly,
     prefix: &'static str,
     label: &'static str,
     budget: &mut ModerationSnapshotReadBudget,
-    mut validate: impl FnMut(&StatePath, T) -> Result<T, InstructionExecutionError>,
-) -> Result<Vec<T>, InstructionExecutionError>
+    retained_base_bytes: usize,
+    mut validate: impl FnMut(
+        &StatePath,
+        T,
+        &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
+    ) -> Result<T, InstructionExecutionError>,
+) -> Result<crate::smartcontracts::isi::query::SingularQueryRetainedVec<T>, InstructionExecutionError>
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
     let start = StatePath::from_str(prefix).expect("static moderation state prefix is valid");
-    let mut records = Vec::new();
+    let mut record_count = 0usize;
+    for (key, _) in world.smart_contract_state().range(start.clone()..) {
+        if !key.as_ref().starts_with(prefix) {
+            break;
+        }
+        record_count = record_count
+            .checked_add(1)
+            .ok_or_else(|| corrupt_state("moderation snapshot record count overflow"))?;
+        if record_count > MODERATION_QUERY_MAX_SNAPSHOT_RECORDS_V1 {
+            return Err(corrupt_state(format!(
+                "moderation snapshot exceeds {MODERATION_QUERY_MAX_SNAPSHOT_RECORDS_V1} stored records"
+            )));
+        }
+    }
+    let mut records =
+        crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(record_count)?;
     for (key, payload) in world.smart_contract_state().range(start..) {
-        if !key.to_string().starts_with(prefix) {
+        if !key.as_ref().starts_with(prefix) {
             break;
         }
         budget.charge(key, payload)?;
-        let candidate = decode_state(payload, label)?;
-        records.push(validate(key, candidate)?);
+        let mut current = crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(
+            retained_base_bytes,
+        )
+        .map_err(InstructionExecutionError::Query)?;
+        let candidate = decode_state_for_current(payload, label, &mut current)?;
+        records
+            .try_push(validate(key, candidate, &mut current)?)
+            .map_err(InstructionExecutionError::Query)?;
     }
-    Ok(records)
+    Ok(records.into_retained_vec())
 }
-
 fn resolve_finalized_cursor(
     state_ro: &impl crate::state::StateReadOnly,
 ) -> Result<ModerationFinalizedCursorV1, QueryExecutionFail> {
@@ -3233,10 +3584,9 @@ fn resolve_finalized_cursor(
         block_hash: hash,
     })
 }
-
 fn resolve_committed_event(
     state_ro: &impl crate::state::StateReadOnly,
-    record: &ModerationPersistedEventV1,
+    record: ModerationPersistedEventV1,
 ) -> Result<ModerationFinalizedEventV1, QueryExecutionFail> {
     let hash_index = record
         .target_block_height
@@ -3268,63 +3618,9 @@ fn resolve_committed_event(
         block_height: record.target_block_height,
         block_hash,
         event_index: record.event_index,
-        event: record.event.clone(),
+        event: record.event,
     })
 }
-
-fn validate_event_successor(
-    previous: Option<&ModerationPersistedEventV1>,
-    current: &ModerationPersistedEventV1,
-) -> Result<(), InstructionExecutionError> {
-    let Some(previous) = previous else {
-        if current.sequence != 1 || current.event_index != 0 {
-            return Err(corrupt_state(
-                "moderation event journal does not begin at sequence one and block index zero",
-            ));
-        }
-        return Ok(());
-    };
-    if previous
-        .sequence
-        .checked_add(1)
-        .is_none_or(|next| current.sequence != next)
-    {
-        return Err(corrupt_state(
-            "moderation event journal sequence is not contiguous",
-        ));
-    }
-    match current
-        .target_block_height
-        .cmp(&previous.target_block_height)
-    {
-        core::cmp::Ordering::Less => Err(corrupt_state(
-            "moderation event journal block height regressed",
-        )),
-        core::cmp::Ordering::Equal => {
-            if previous
-                .event_index
-                .checked_add(1)
-                .is_some_and(|next| current.event_index == next)
-            {
-                Ok(())
-            } else {
-                Err(corrupt_state(
-                    "moderation event journal block index is not contiguous",
-                ))
-            }
-        }
-        core::cmp::Ordering::Greater => {
-            if current.event_index == 0 {
-                Ok(())
-            } else {
-                Err(corrupt_state(
-                    "moderation event journal did not reset its block index",
-                ))
-            }
-        }
-    }
-}
-
 fn checked_snapshot_limits(
     query: &FindSorafsModerationSnapshot,
 ) -> Result<(usize, usize), QueryExecutionFail> {
@@ -3348,7 +3644,6 @@ fn checked_snapshot_limits(
     })?;
     Ok((max_cases, max_events))
 }
-
 fn checked_event_page_limit(limit: u32) -> Result<usize, QueryExecutionFail> {
     if !(1..=MODERATION_QUERY_MAX_EVENTS_V1).contains(&limit) {
         return Err(QueryExecutionFail::Conversion(format!(
@@ -3359,29 +3654,95 @@ fn checked_event_page_limit(limit: u32) -> Result<usize, QueryExecutionFail> {
         QueryExecutionFail::Conversion("SoraFS moderation event limit conversion failed".to_owned())
     })
 }
-
+#[derive(Clone, Copy)]
+struct ModerationQueryEventPosition {
+    sequence: u64,
+    target_block_height: u64,
+    event_index: u32,
+}
+impl From<&ModerationPersistedEventV1> for ModerationQueryEventPosition {
+    fn from(record: &ModerationPersistedEventV1) -> Self {
+        Self {
+            sequence: record.sequence,
+            target_block_height: record.target_block_height,
+            event_index: record.event_index,
+        }
+    }
+}
+fn validate_query_event_successor(
+    previous: Option<ModerationQueryEventPosition>,
+    current: &ModerationPersistedEventV1,
+) -> Result<(), QueryExecutionFail> {
+    let Some(previous) = previous else {
+        return (current.sequence == 1 && current.event_index == 0)
+            .then_some(())
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(
+                    "moderation event journal does not begin at sequence one and block index zero"
+                        .to_owned(),
+                )
+            });
+    };
+    if previous
+        .sequence
+        .checked_add(1)
+        .is_none_or(|next| current.sequence != next)
+    {
+        return Err(QueryExecutionFail::Conversion(
+            "moderation event journal sequence is not contiguous".to_owned(),
+        ));
+    }
+    match current
+        .target_block_height
+        .cmp(&previous.target_block_height)
+    {
+        core::cmp::Ordering::Less => Err(QueryExecutionFail::Conversion(
+            "moderation event journal block height regressed".to_owned(),
+        )),
+        core::cmp::Ordering::Equal
+            if previous
+                .event_index
+                .checked_add(1)
+                .is_some_and(|next| current.event_index == next) =>
+        {
+            Ok(())
+        }
+        core::cmp::Ordering::Equal => Err(QueryExecutionFail::Conversion(
+            "moderation event journal block index is not contiguous".to_owned(),
+        )),
+        core::cmp::Ordering::Greater if current.event_index == 0 => Ok(()),
+        core::cmp::Ordering::Greater => Err(QueryExecutionFail::Conversion(
+            "moderation event journal did not reset its block index".to_owned(),
+        )),
+    }
+}
 fn read_event_sequence(
     state_ro: &impl crate::state::StateReadOnly,
     sequence: u64,
-    previous: Option<&ModerationPersistedEventV1>,
-) -> Result<(ModerationPersistedEventV1, ModerationFinalizedEventV1), QueryExecutionFail> {
-    let record = read_persisted_event(state_ro.world(), sequence)
+    previous: Option<ModerationQueryEventPosition>,
+    retained_base_bytes: usize,
+) -> Result<(ModerationQueryEventPosition, ModerationFinalizedEventV1), QueryExecutionFail> {
+    let mut current = crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(
+        retained_base_bytes,
+    )?;
+    let record = read_persisted_event_for_current(state_ro.world(), sequence, &mut current)
         .map_err(query_failure)?
         .ok_or_else(|| {
             QueryExecutionFail::Conversion(format!(
                 "moderation event journal is missing sequence {sequence}"
             ))
         })?;
-    validate_event_successor(previous, &record).map_err(query_failure)?;
-    let resolved = resolve_committed_event(state_ro, &record)?;
-    Ok((record, resolved))
+    validate_query_event_successor(previous, &record)?;
+    let position = ModerationQueryEventPosition::from(&record);
+    let resolved = resolve_committed_event(state_ro, record)?;
+    Ok((position, resolved))
 }
-
 fn latest_committed_events(
     state_ro: &impl crate::state::StateReadOnly,
     head: Option<ModerationEventJournalHeadV1>,
     limit: usize,
     budget: &mut ModerationSnapshotReadBudget,
+    retained_base_bytes: usize,
 ) -> Result<Vec<ModerationFinalizedEventV1>, QueryExecutionFail> {
     let Some(head) = head else {
         return Ok(Vec::new());
@@ -3399,15 +3760,22 @@ fn latest_committed_events(
         let predecessor_sequence = start - 1;
         charge_existing_snapshot_state(state_ro.world(), &event_key(predecessor_sequence), budget)
             .map_err(query_failure)?;
-        Some(
-            read_persisted_event(state_ro.world(), predecessor_sequence)
+        let mut current = crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(
+            retained_base_bytes,
+        )?;
+        Some(ModerationQueryEventPosition::from(
+            &read_persisted_event_for_current(
+                state_ro.world(),
+                predecessor_sequence,
+                &mut current,
+            )
                 .map_err(query_failure)?
                 .ok_or_else(|| {
                     QueryExecutionFail::Conversion(format!(
                         "moderation event journal is missing predecessor sequence {predecessor_sequence}"
                     ))
                 })?,
-        )
+        ))
     } else {
         None
     };
@@ -3416,27 +3784,33 @@ fn latest_committed_events(
             "moderation snapshot event count does not fit into usize".to_owned(),
         )
     })?;
-    let mut events = Vec::with_capacity(capacity);
+    let mut events = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(capacity)?;
     for sequence in start..=head.last_sequence {
         charge_existing_snapshot_state(state_ro.world(), &event_key(sequence), budget)
             .map_err(query_failure)?;
-        let (record, resolved) = read_event_sequence(state_ro, sequence, previous.as_ref())?;
-        previous = Some(record);
-        events.push(resolved);
+        let (position, resolved) =
+            read_event_sequence(state_ro, sequence, previous, retained_base_bytes)?;
+        previous = Some(position);
+        events.try_push(resolved)?;
     }
-    Ok(events)
+    events.into_vec()
 }
-
 fn query_moderation_event_page(
     query: &FindSorafsModerationEvents,
     state_ro: &impl crate::state::StateReadOnly,
 ) -> Result<ModerationFinalizedEventPageV1, QueryExecutionFail> {
     let limit = checked_event_page_limit(query.limit)?;
+    let page_bytes_limit = crate::smartcontracts::isi::query::singular_query_frame_limit(
+        MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+    );
     let finalized_cursor = resolve_finalized_cursor(state_ro)?;
     if query.expected_finalized_cursor != finalized_cursor {
         return Err(QueryExecutionFail::Expired);
     }
-    let head = read_event_journal_head(state_ro.world()).map_err(query_failure)?;
+    let mut head_current =
+        crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(0)?;
+    let head = read_event_journal_head_for_current(state_ro.world(), &mut head_current)
+        .map_err(query_failure)?;
     ensure_no_event_after_head(state_ro.world(), head).map_err(query_failure)?;
     let mut previous = match query.after {
         Some(after) => {
@@ -3444,14 +3818,7 @@ fn query_moderation_event_page(
             if after.sequence == 0 || after.sequence > head.last_sequence {
                 return Err(QueryExecutionFail::Expired);
             }
-            let record = read_persisted_event(state_ro.world(), after.sequence)
-                .map_err(query_failure)?
-                .ok_or(QueryExecutionFail::Expired)?;
-            let resolved = resolve_committed_event(state_ro, &record)?;
-            if resolved.cursor() != after {
-                return Err(QueryExecutionFail::Expired);
-            }
-            let predecessor = if after.sequence == 1 {
+            let predecessor_record = if after.sequence == 1 {
                 None
             } else {
                 let predecessor_sequence = after.sequence - 1;
@@ -3465,8 +3832,20 @@ fn query_moderation_event_page(
                         })?,
                 )
             };
-            validate_event_successor(predecessor.as_ref(), &record).map_err(query_failure)?;
-            Some(record)
+            let predecessor = predecessor_record
+                .as_ref()
+                .map(ModerationQueryEventPosition::from);
+            drop(predecessor_record);
+            let record = read_persisted_event(state_ro.world(), after.sequence)
+                .map_err(query_failure)?
+                .ok_or(QueryExecutionFail::Expired)?;
+            validate_query_event_successor(predecessor, &record)?;
+            let position = ModerationQueryEventPosition::from(&record);
+            let resolved = resolve_committed_event(state_ro, record)?;
+            if resolved.cursor() != after {
+                return Err(QueryExecutionFail::Expired);
+            }
+            Some(position)
         }
         None => None,
     };
@@ -3474,37 +3853,32 @@ fn query_moderation_event_page(
         .after
         .map_or(Some(1), |after| after.sequence.checked_add(1));
     let last_sequence = head.map_or(0, |head| head.last_sequence);
-    let mut events = Vec::with_capacity(limit);
+    let mut events = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
     let mut encoded_event_bytes = 0usize;
     let mut sequence = start;
     while let Some(current_sequence) = sequence {
         if current_sequence > last_sequence || events.len() >= limit {
             break;
         }
-        let (record, resolved) =
-            read_event_sequence(state_ro, current_sequence, previous.as_ref())?;
+        let (position, resolved) = read_event_sequence(state_ro, current_sequence, previous, 0)?;
         encoded_event_bytes = encoded_event_bytes
-            .checked_add(
-                norito::encode_canonical(&resolved)
-                    .map_err(|error| {
-                        QueryExecutionFail::Conversion(format!(
-                            "failed to encode committed moderation event: {error}"
-                        ))
-                    })?
-                    .len(),
-            )
+            .checked_add(norito::core::encoded_frame_len(&resolved).map_err(|error| {
+                QueryExecutionFail::Conversion(format!(
+                    "failed to size committed moderation event: {error}"
+                ))
+            })?)
             .ok_or_else(|| {
                 QueryExecutionFail::Conversion(
                     "committed moderation event page byte counter overflow".to_owned(),
                 )
             })?;
-        if encoded_event_bytes > MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+        if encoded_event_bytes > page_bytes_limit {
             return Err(QueryExecutionFail::Conversion(format!(
-                "committed moderation event page exceeds {MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1} bytes"
+                "committed moderation event page exceeds {page_bytes_limit} bytes"
             )));
         }
-        previous = Some(record);
-        events.push(resolved);
+        previous = Some(position);
+        events.try_push(resolved)?;
         sequence = current_sequence.checked_add(1);
     }
     let has_more = events
@@ -3518,25 +3892,22 @@ fn query_moderation_event_page(
     });
     let page = ModerationFinalizedEventPageV1 {
         finalized_cursor,
-        events,
+        events: events.into_vec()?,
         has_more,
         next_after,
     };
-    let encoded_len = norito::encode_canonical(&page)
-        .map_err(|error| {
-            QueryExecutionFail::Conversion(format!(
-                "failed to encode committed moderation event page: {error}"
-            ))
-        })?
-        .len();
-    if encoded_len > MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+    let encoded_len = norito::core::encoded_frame_len(&page).map_err(|error| {
+        QueryExecutionFail::Conversion(format!(
+            "failed to size committed moderation event page: {error}"
+        ))
+    })?;
+    if encoded_len > page_bytes_limit {
         return Err(QueryExecutionFail::Conversion(format!(
-            "committed moderation event page encodes to {encoded_len} bytes, above {MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1}"
+            "committed moderation event page encodes to {encoded_len} bytes, above {page_bytes_limit}"
         )));
     }
     Ok(page)
 }
-
 fn count_as_u64(count: usize, label: &str) -> Result<u64, QueryExecutionFail> {
     u64::try_from(count).map_err(|_| {
         QueryExecutionFail::Conversion(format!(
@@ -3544,7 +3915,6 @@ fn count_as_u64(count: usize, label: &str) -> Result<u64, QueryExecutionFail> {
         ))
     })
 }
-
 fn sum_lengths_as_u64(
     counts: impl IntoIterator<Item = usize>,
     label: &str,
@@ -3556,7 +3926,6 @@ fn sum_lengths_as_u64(
         })
     })
 }
-
 #[allow(clippy::too_many_lines)]
 fn query_moderation_snapshot(
     query: &FindSorafsModerationSnapshot,
@@ -3564,18 +3933,10 @@ fn query_moderation_snapshot(
 ) -> Result<ModerationFinalizedLedgerSnapshotV1, QueryExecutionFail> {
     let (max_cases, max_events) = checked_snapshot_limits(query)?;
     let finalized_cursor = resolve_finalized_cursor(state_ro)?;
-    let finalized_block = state_ro.latest_block().ok_or_else(|| {
-        QueryExecutionFail::Conversion(
-            "finalized moderation snapshot requires its exact Kura block".to_owned(),
-        )
-    })?;
-    let finalized_at_unix_ms = finalized_block.header().creation_time_ms;
-    if finalized_block.header().height().get() != finalized_cursor.height
-        || finalized_block.hash().as_ref() != &finalized_cursor.block_hash
-        || finalized_at_unix_ms == 0
-    {
+    let finalized_at_unix_ms = state_ro.query_ledger_time_ms();
+    if finalized_at_unix_ms == 0 {
         return Err(QueryExecutionFail::Conversion(
-            "finalized moderation snapshot Kura block does not match its state anchor".to_owned(),
+            "finalized moderation snapshot state anchor has no ledger time".to_owned(),
         ));
     }
     let world = state_ro.world();
@@ -3584,203 +3945,313 @@ fn query_moderation_snapshot(
     charge_existing_snapshot_state(world, status_key(), &mut budget).map_err(query_failure)?;
     charge_existing_snapshot_state(world, event_journal_head_key(), &mut budget)
         .map_err(query_failure)?;
-
-    let policy = read_policy(world).map_err(query_failure)?;
-    let status = read_status(world).map_err(query_failure)?;
-    let head = read_event_journal_head(world).map_err(query_failure)?;
+    let mut retained_base =
+        crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(0)?;
+    let policy = read_policy_for_current(world, &mut retained_base).map_err(query_failure)?;
+    let status = read_status_for_current(world, &mut retained_base).map_err(query_failure)?;
+    let retained_base_bytes = retained_base.resident_bytes();
+    let mut head_current = crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(
+        retained_base_bytes,
+    )?;
+    let head =
+        read_event_journal_head_for_current(world, &mut head_current).map_err(query_failure)?;
     ensure_no_event_after_head(world, head).map_err(query_failure)?;
-
-    let mut appeals: Vec<ModerationAppealRecordV1> = scan_moderation_state_prefix(
+    let mut appeals: crate::smartcontracts::isi::query::SingularQueryRetainedVec<
+        ModerationAppealRecordV1,
+    > = scan_moderation_state_prefix(
         world,
         APPEAL_STATE_KEY_PREFIX,
         "moderation appeal",
         &mut budget,
-        |key, candidate: ModerationAppealRecordV1| {
+        retained_base_bytes,
+        |key, candidate: ModerationAppealRecordV1, current| {
             if appeal_key(&candidate.intake.case_id, &candidate.intake.round_id) != *key {
                 return Err(corrupt_state(
                     "authoritative moderation appeal key does not match its record",
                 ));
             }
-            let record = read_appeal(world, &candidate.intake.case_id, &candidate.intake.round_id)?
-                .ok_or_else(|| {
-                    corrupt_state(
-                        "authoritative moderation appeal disappeared during snapshot read",
-                    )
-                })?;
-            read_appeal_deposit_binding(world, record.intake.appeal_deposit_lock_digest)?
+            let candidate_resident_bytes = current.resident_bytes();
+            let record = read_appeal_for_current(
+                world,
+                &candidate.intake.case_id,
+                &candidate.intake.round_id,
+                current,
+            )?
+            .ok_or_else(|| {
+                corrupt_state("authoritative moderation appeal disappeared during snapshot read")
+            })?;
+            if record != candidate {
+                return Err(corrupt_state(
+                    "authoritative moderation appeal changed during snapshot read",
+                ));
+            }
+            let deposit_lock_digest = record.intake.appeal_deposit_lock_digest;
+            let proof_token_digest = record.intake.proof_token_digest;
+            drop(record);
+            reset_moderation_current(current, candidate_resident_bytes)?;
+            read_appeal_deposit_binding_for_current(world, deposit_lock_digest, current)?
                 .ok_or_else(|| {
                     corrupt_state("authoritative moderation appeal has no deposit binding")
                 })?;
-            read_appeal_proof_token_binding(world, record.intake.proof_token_digest)?.ok_or_else(
-                || corrupt_state("authoritative moderation appeal has no proof-token binding"),
-            )?;
-            Ok(record)
+            reset_moderation_current(current, candidate_resident_bytes)?;
+            read_appeal_proof_token_binding_for_current(world, proof_token_digest, current)?
+                .ok_or_else(|| {
+                    corrupt_state("authoritative moderation appeal has no proof-token binding")
+                })?;
+            Ok(candidate)
         },
     )
     .map_err(query_failure)?;
-    let deposit_bindings: Vec<AppealDepositBindingStateV1> = scan_moderation_state_prefix(
+    let deposit_bindings: crate::smartcontracts::isi::query::SingularQueryRetainedVec<
+        AppealDepositBindingStateV1,
+    > = scan_moderation_state_prefix(
         world,
         APPEAL_DEPOSIT_STATE_KEY_PREFIX,
         "moderation appeal deposit binding",
         &mut budget,
-        |key, candidate: AppealDepositBindingStateV1| {
+        retained_base_bytes,
+        |key, candidate: AppealDepositBindingStateV1, current| {
             if appeal_deposit_key(candidate.deposit_lock_digest) != *key {
                 return Err(corrupt_state(
                     "authoritative moderation appeal deposit key does not match its binding",
                 ));
             }
-            read_appeal_deposit_binding(world, candidate.deposit_lock_digest)?.ok_or_else(|| {
+            let record = read_appeal_deposit_binding_for_current(
+                world,
+                candidate.deposit_lock_digest,
+                current,
+            )?
+            .ok_or_else(|| {
                 corrupt_state(
                     "authoritative moderation appeal deposit disappeared during snapshot read",
                 )
-            })
+            })?;
+            if record != candidate {
+                return Err(corrupt_state(
+                    "authoritative moderation appeal deposit changed during snapshot read",
+                ));
+            }
+            Ok(candidate)
         },
     )
     .map_err(query_failure)?;
-    let proof_token_bindings: Vec<AppealProofTokenBindingStateV1> = scan_moderation_state_prefix(
+    let proof_token_bindings: crate::smartcontracts::isi::query::SingularQueryRetainedVec<
+        AppealProofTokenBindingStateV1,
+    > = scan_moderation_state_prefix(
         world,
         APPEAL_PROOF_TOKEN_STATE_KEY_PREFIX,
         "moderation appeal proof-token binding",
         &mut budget,
-        |key, candidate: AppealProofTokenBindingStateV1| {
+        retained_base_bytes,
+        |key, candidate: AppealProofTokenBindingStateV1, current| {
             if appeal_proof_token_key(candidate.proof_token_digest) != *key {
                 return Err(corrupt_state(
                     "authoritative moderation appeal proof-token key does not match its binding",
                 ));
             }
-            read_appeal_proof_token_binding(world, candidate.proof_token_digest)?.ok_or_else(|| {
+            let record = read_appeal_proof_token_binding_for_current(
+                world,
+                candidate.proof_token_digest,
+                current,
+            )?
+            .ok_or_else(|| {
                 corrupt_state(
                     "authoritative moderation appeal proof-token disappeared during snapshot read",
                 )
-            })
+            })?;
+            if record != candidate {
+                return Err(corrupt_state(
+                    "authoritative moderation appeal proof-token changed during snapshot read",
+                ));
+            }
+            Ok(candidate)
         },
     )
     .map_err(query_failure)?;
-    let mut eligibilities: Vec<ModerationJurorEligibilityRecordV1> = scan_moderation_state_prefix(
+    let mut eligibilities: crate::smartcontracts::isi::query::SingularQueryRetainedVec<
+        ModerationJurorEligibilityRecordV1,
+    > = scan_moderation_state_prefix(
         world,
         ELIGIBILITY_STATE_KEY_PREFIX,
         "moderation juror eligibility",
         &mut budget,
-        |key, candidate: ModerationJurorEligibilityRecordV1| {
+        retained_base_bytes,
+        |key, candidate: ModerationJurorEligibilityRecordV1, current| {
             if eligibility_key(&candidate.case_id, &candidate.round_id, &candidate.juror) != *key {
                 return Err(corrupt_state(
                     "authoritative moderation eligibility key does not match its record",
                 ));
             }
-            let record = read_eligibility(
+            let candidate_resident_bytes = current.resident_bytes();
+            let record = read_eligibility_for_current(
                 world,
                 &candidate.case_id,
                 &candidate.round_id,
                 &candidate.juror,
+                current,
             )?
             .ok_or_else(|| {
                 corrupt_state(
                     "authoritative moderation eligibility disappeared during snapshot read",
                 )
             })?;
-            let nullifier = read_nullifier(world, record.nullifier)?.ok_or_else(|| {
-                corrupt_state("authoritative moderation eligibility has no nullifier binding")
-            })?;
-            if nullifier != record {
+            if record != candidate {
+                return Err(corrupt_state(
+                    "authoritative moderation eligibility changed during snapshot read",
+                ));
+            }
+            let nullifier_digest = record.nullifier;
+            drop(record);
+            reset_moderation_current(current, candidate_resident_bytes)?;
+            let nullifier = read_nullifier_for_current(world, nullifier_digest, current)?
+                .ok_or_else(|| {
+                    corrupt_state("authoritative moderation eligibility has no nullifier binding")
+                })?;
+            if nullifier != candidate {
                 return Err(corrupt_state(
                     "authoritative moderation eligibility disagrees with its nullifier binding",
                 ));
             }
-            Ok(record)
+            Ok(candidate)
         },
     )
     .map_err(query_failure)?;
-    let nullifier_bindings: Vec<ModerationJurorEligibilityRecordV1> = scan_moderation_state_prefix(
+    let nullifier_bindings: crate::smartcontracts::isi::query::SingularQueryRetainedVec<
+        ModerationJurorEligibilityRecordV1,
+    > = scan_moderation_state_prefix(
         world,
         NULLIFIER_STATE_KEY_PREFIX,
         "moderation PoP nullifier",
         &mut budget,
-        |key, candidate: ModerationJurorEligibilityRecordV1| {
+        retained_base_bytes,
+        |key, candidate: ModerationJurorEligibilityRecordV1, current| {
             if nullifier_key(candidate.nullifier) != *key {
                 return Err(corrupt_state(
                     "authoritative moderation nullifier key does not match its record",
                 ));
             }
-            read_nullifier(world, candidate.nullifier)?.ok_or_else(|| {
-                corrupt_state("authoritative moderation nullifier disappeared during snapshot read")
-            })
+            let record = read_nullifier_for_current(world, candidate.nullifier, current)?
+                .ok_or_else(|| {
+                    corrupt_state(
+                        "authoritative moderation nullifier disappeared during snapshot read",
+                    )
+                })?;
+            if record != candidate {
+                return Err(corrupt_state(
+                    "authoritative moderation nullifier changed during snapshot read",
+                ));
+            }
+            Ok(candidate)
         },
     )
     .map_err(query_failure)?;
-    let mut cases: Vec<ModerationCaseRecordV1> = scan_moderation_state_prefix(
+    let mut cases: crate::smartcontracts::isi::query::SingularQueryRetainedVec<
+        ModerationCaseRecordV1,
+    > = scan_moderation_state_prefix(
         world,
         CASE_STATE_KEY_PREFIX,
         "moderation case",
         &mut budget,
-        |key, candidate: ModerationCaseRecordV1| {
+        retained_base_bytes,
+        |key, candidate: ModerationCaseRecordV1, current| {
             if case_key(&candidate.spec.context.case_id, &candidate.spec.round_id) != *key {
                 return Err(corrupt_state(
                     "authoritative moderation case key does not match its record",
                 ));
             }
-            read_case(
+            let record = read_case_for_current(
                 world,
                 &candidate.spec.context.case_id,
                 &candidate.spec.round_id,
+                current,
             )?
             .ok_or_else(|| {
                 corrupt_state("authoritative moderation case disappeared during snapshot read")
-            })
+            })?;
+            if record != candidate {
+                return Err(corrupt_state(
+                    "authoritative moderation case changed during snapshot read",
+                ));
+            }
+            Ok(candidate)
         },
     )
     .map_err(query_failure)?;
-    let commits: Vec<ModerationCommitRecordV1> = scan_moderation_state_prefix(
+    let commits: crate::smartcontracts::isi::query::SingularQueryRetainedVec<
+        ModerationCommitRecordV1,
+    > = scan_moderation_state_prefix(
         world,
         COMMIT_STATE_KEY_PREFIX,
         "moderation commit",
         &mut budget,
-        |key, candidate: ModerationCommitRecordV1| {
+        retained_base_bytes,
+        |key, candidate: ModerationCommitRecordV1, current| {
             if commit_key(&candidate.case_id, &candidate.round_id, &candidate.juror) != *key {
                 return Err(corrupt_state(
                     "authoritative moderation commit key does not match its record",
                 ));
             }
-            read_commit(
+            let record = read_commit_for_current(
                 world,
                 &candidate.case_id,
                 &candidate.round_id,
                 &candidate.juror,
+                current,
             )?
             .ok_or_else(|| {
                 corrupt_state("authoritative moderation commit disappeared during snapshot read")
-            })
+            })?;
+            if record != candidate {
+                return Err(corrupt_state(
+                    "authoritative moderation commit changed during snapshot read",
+                ));
+            }
+            Ok(candidate)
         },
     )
     .map_err(query_failure)?;
-    let reveals: Vec<ModerationRevealRecordV1> = scan_moderation_state_prefix(
+    let reveals: crate::smartcontracts::isi::query::SingularQueryRetainedVec<
+        ModerationRevealRecordV1,
+    > = scan_moderation_state_prefix(
         world,
         REVEAL_STATE_KEY_PREFIX,
         "moderation reveal",
         &mut budget,
-        |key, candidate: ModerationRevealRecordV1| {
+        retained_base_bytes,
+        |key, candidate: ModerationRevealRecordV1, current| {
             if reveal_key(&candidate.case_id, &candidate.round_id, &candidate.juror) != *key {
                 return Err(corrupt_state(
                     "authoritative moderation reveal key does not match its record",
                 ));
             }
-            read_reveal(
+            let record = read_reveal_for_current(
                 world,
                 &candidate.case_id,
                 &candidate.round_id,
                 &candidate.juror,
+                current,
             )?
             .ok_or_else(|| {
                 corrupt_state("authoritative moderation reveal disappeared during snapshot read")
-            })
+            })?;
+            if record != candidate {
+                return Err(corrupt_state(
+                    "authoritative moderation reveal changed during snapshot read",
+                ));
+            }
+            Ok(candidate)
         },
     )
     .map_err(query_failure)?;
-    let challenges: Vec<ModerationChallengeRecordV1> = scan_moderation_state_prefix(
+    let challenges: crate::smartcontracts::isi::query::SingularQueryRetainedVec<
+        ModerationChallengeRecordV1,
+    > = scan_moderation_state_prefix(
         world,
         CHALLENGE_STATE_KEY_PREFIX,
         "moderation challenge",
         &mut budget,
-        |key, candidate: ModerationChallengeRecordV1| {
+        retained_base_bytes,
+        |key, candidate: ModerationChallengeRecordV1, current| {
             if challenge_key(
                 &candidate.case_id,
                 &candidate.round_id,
@@ -3791,59 +4262,88 @@ fn query_moderation_snapshot(
                     "authoritative moderation challenge key does not match its record",
                 ));
             }
-            read_challenge(
+            let record = read_challenge_for_current(
                 world,
                 &candidate.case_id,
                 &candidate.round_id,
                 &candidate.challenge_id,
+                current,
             )?
             .ok_or_else(|| {
                 corrupt_state("authoritative moderation challenge disappeared during snapshot read")
-            })
+            })?;
+            if record != candidate {
+                return Err(corrupt_state(
+                    "authoritative moderation challenge changed during snapshot read",
+                ));
+            }
+            Ok(candidate)
         },
     )
     .map_err(query_failure)?;
-    let outcomes: Vec<ModerationOutcomeRecordV1> = scan_moderation_state_prefix(
+    let outcomes: crate::smartcontracts::isi::query::SingularQueryRetainedVec<
+        ModerationOutcomeRecordV1,
+    > = scan_moderation_state_prefix(
         world,
         OUTCOME_STATE_KEY_PREFIX,
         "moderation outcome",
         &mut budget,
-        |key, candidate: ModerationOutcomeRecordV1| {
+        retained_base_bytes,
+        |key, candidate: ModerationOutcomeRecordV1, current| {
             if outcome_key(&candidate.case_id, &candidate.round_id) != *key {
                 return Err(corrupt_state(
                     "authoritative moderation outcome key does not match its record",
                 ));
             }
-            read_outcome(world, &candidate.case_id, &candidate.round_id)?.ok_or_else(|| {
-                corrupt_state("authoritative moderation outcome disappeared during snapshot read")
-            })
+            let record =
+                read_outcome_for_current(world, &candidate.case_id, &candidate.round_id, current)?
+                    .ok_or_else(|| {
+                        corrupt_state(
+                            "authoritative moderation outcome disappeared during snapshot read",
+                        )
+                    })?;
+            if record != candidate {
+                return Err(corrupt_state(
+                    "authoritative moderation outcome changed during snapshot read",
+                ));
+            }
+            Ok(candidate)
         },
     )
     .map_err(query_failure)?;
-    let no_shows: Vec<ModerationNoShowRecordV1> = scan_moderation_state_prefix(
+    let no_shows: crate::smartcontracts::isi::query::SingularQueryRetainedVec<
+        ModerationNoShowRecordV1,
+    > = scan_moderation_state_prefix(
         world,
         NO_SHOW_STATE_KEY_PREFIX,
         "moderation no-show",
         &mut budget,
-        |key, candidate: ModerationNoShowRecordV1| {
+        retained_base_bytes,
+        |key, candidate: ModerationNoShowRecordV1, current| {
             if no_show_key(&candidate.case_id, &candidate.round_id, &candidate.juror) != *key {
                 return Err(corrupt_state(
                     "authoritative moderation no-show key does not match its record",
                 ));
             }
-            read_no_show(
+            let record = read_no_show_for_current(
                 world,
                 &candidate.case_id,
                 &candidate.round_id,
                 &candidate.juror,
+                current,
             )?
             .ok_or_else(|| {
                 corrupt_state("authoritative moderation no-show disappeared during snapshot read")
-            })
+            })?;
+            if record != candidate {
+                return Err(corrupt_state(
+                    "authoritative moderation no-show changed during snapshot read",
+                ));
+            }
+            Ok(candidate)
         },
     )
     .map_err(query_failure)?;
-
     if appeals.len() > max_cases || cases.len() > max_cases {
         return Err(QueryExecutionFail::Conversion(format!(
             "complete moderation projection contains {} appeals and {} cases, exceeding requested max_cases {max_cases}",
@@ -3851,7 +4351,6 @@ fn query_moderation_snapshot(
             cases.len()
         )));
     }
-
     let primary_records_present = !appeals.is_empty()
         || !eligibilities.is_empty()
         || !cases.is_empty()
@@ -3878,7 +4377,9 @@ fn query_moderation_snapshot(
             ));
         }
     }
-
+    drop(deposit_bindings);
+    drop(proof_token_bindings);
+    drop(nullifier_bindings);
     appeals.sort_by(|left, right| {
         (left.intake.case_id.as_str(), left.intake.round_id.as_str()).cmp(&(
             right.intake.case_id.as_str(),
@@ -3911,221 +4412,287 @@ fn query_moderation_snapshot(
             "moderation snapshot contains duplicate case identities".to_owned(),
         ));
     }
-
-    let appeal_statuses = appeals
-        .iter()
-        .map(|appeal| {
-            (
-                (
-                    appeal.intake.case_id.clone(),
-                    appeal.intake.round_id.clone(),
-                ),
-                appeal.status,
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let case_keys = cases
-        .iter()
-        .map(|case| {
-            (
-                case.spec.context.case_id.clone(),
-                case.spec.round_id.clone(),
-            )
-        })
-        .collect::<BTreeSet<_>>();
     if cases.iter().any(|case| {
-        !appeal_statuses.contains_key(&(
-            case.spec.context.case_id.clone(),
-            case.spec.round_id.clone(),
-        ))
+        let target = (
+            case.spec.context.case_id.as_str(),
+            case.spec.round_id.as_str(),
+        );
+        appeals
+            .binary_search_by(|appeal| {
+                (
+                    appeal.intake.case_id.as_str(),
+                    appeal.intake.round_id.as_str(),
+                )
+                    .cmp(&target)
+            })
+            .is_err()
     }) || appeals.iter().any(|appeal| {
         matches!(
             appeal.status,
             ModerationAppealStatusV1::BallotOpen | ModerationAppealStatusV1::Finalized
-        ) && !case_keys.contains(&(
-            appeal.intake.case_id.clone(),
-            appeal.intake.round_id.clone(),
-        ))
+        ) && {
+            let target = (
+                appeal.intake.case_id.as_str(),
+                appeal.intake.round_id.as_str(),
+            );
+            cases
+                .binary_search_by(|case| {
+                    (
+                        case.spec.context.case_id.as_str(),
+                        case.spec.round_id.as_str(),
+                    )
+                        .cmp(&target)
+                })
+                .is_err()
+        }
     }) {
         return Err(QueryExecutionFail::Conversion(
             "moderation appeal and activated-case projections disagree".to_owned(),
         ));
     }
-
     let eligibility_count = eligibilities.len();
     let commit_count = commits.len();
     let reveal_count = reveals.len();
     let challenge_count = challenges.len();
     let outcome_count = outcomes.len();
     let no_show_count = no_shows.len();
-
+    let appeal_count = appeals.len();
+    let panel_selection_count = appeals
+        .iter()
+        .filter(|appeal| appeal.selection.is_some())
+        .count();
+    let assignment_acceptance_count = sum_lengths_as_u64(
+        appeals.iter().map(|appeal| appeal.accepted_jurors.len()),
+        "assignment acceptance",
+    )?;
+    let failover_replacement_count = sum_lengths_as_u64(
+        appeals.iter().map(|appeal| appeal.replacements.len()),
+        "failover replacement",
+    )?;
+    let failed_panel_formation_count = appeals
+        .iter()
+        .filter(|appeal| {
+            matches!(
+                appeal.status,
+                ModerationAppealStatusV1::InsufficientEligiblePool
+                    | ModerationAppealStatusV1::FailoverExhausted
+            )
+        })
+        .count();
+    let open_case_count = cases
+        .iter()
+        .filter(|case| {
+            matches!(
+                case.status,
+                ModerationCaseStatusV1::Open | ModerationCaseStatusV1::Challenged
+            )
+        })
+        .count();
+    let finalized_case_count = cases
+        .iter()
+        .filter(|case| case.status == ModerationCaseStatusV1::Finalized)
+        .count();
     eligibilities.sort_by(|left, right| {
-        (
-            left.case_id.as_str(),
-            left.round_id.as_str(),
-            left.juror.to_string(),
-        )
-            .cmp(&(
-                right.case_id.as_str(),
-                right.round_id.as_str(),
-                right.juror.to_string(),
-            ))
+        (left.case_id.as_str(), left.round_id.as_str(), &left.juror).cmp(&(
+            right.case_id.as_str(),
+            right.round_id.as_str(),
+            &right.juror,
+        ))
     });
-    let mut eligibility_by_appeal: BTreeMap<
-        (String, String),
-        Vec<ModerationJurorEligibilityRecordV1>,
-    > = BTreeMap::new();
-    for record in eligibilities {
-        eligibility_by_appeal
-            .entry((record.case_id.clone(), record.round_id.clone()))
-            .or_default()
-            .push(record);
-    }
-    let mut appeal_views = Vec::with_capacity(appeals.len());
-    for appeal in appeals.iter().cloned() {
-        let key = (
-            appeal.intake.case_id.clone(),
-            appeal.intake.round_id.clone(),
+    let mut eligibility_records = eligibilities.into_iter();
+    let appeal_count_for_capacity = appeals.len();
+    let mut appeal_views =
+        crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(appeal_count_for_capacity)?;
+    let mut appeals = appeals.into_iter();
+    while let Some((appeal, appeal_allocation_bytes)) = appeals.next_with_allocation_charge()? {
+        let mut current = crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(
+            retained_base_bytes
+                .checked_add(appeal_allocation_bytes)
+                .ok_or(QueryExecutionFail::CapacityLimit)?,
+        )?;
+        let target = (
+            appeal.intake.case_id.as_str(),
+            appeal.intake.round_id.as_str(),
         );
-        appeal_views.push(ModerationFinalizedAppealViewV1 {
+        if eligibility_records
+            .as_slice()
+            .first()
+            .is_some_and(|record| (record.case_id.as_str(), record.round_id.as_str()) < target)
+        {
+            return Err(QueryExecutionFail::Conversion(
+                "moderation snapshot contains orphan eligibility records".to_owned(),
+            ));
+        }
+        let eligibility_count = eligibility_records
+            .as_slice()
+            .iter()
+            .take_while(|record| (record.case_id.as_str(), record.round_id.as_str()) == target)
+            .count();
+        let mut eligibility = current.vec_with_capacity(eligibility_count)?;
+        for _ in 0..eligibility_count {
+            let (record, allocation_bytes) = eligibility_records
+                .next_with_allocation_charge()?
+                .expect("counted moderation eligibility remains available");
+            current.add_nested(allocation_bytes)?;
+            eligibility.push(record)?;
+        }
+        appeal_views.try_push(ModerationFinalizedAppealViewV1 {
             appeal,
-            eligibility: eligibility_by_appeal.remove(&key).unwrap_or_default(),
-        });
+            eligibility: eligibility.into_vec(),
+        })?;
     }
-    if !eligibility_by_appeal.is_empty() {
+    if !eligibility_records.as_slice().is_empty() {
         return Err(QueryExecutionFail::Conversion(
             "moderation snapshot contains orphan eligibility records".to_owned(),
         ));
     }
-
-    let mut commits_by_case: BTreeMap<(String, String), Vec<ModerationCommitRecordV1>> =
-        BTreeMap::new();
-    for record in commits {
-        commits_by_case
-            .entry((record.case_id.clone(), record.round_id.clone()))
-            .or_default()
-            .push(record);
+    let mut commits = commits;
+    commits.sort_by(|left, right| {
+        (left.case_id.as_str(), left.round_id.as_str(), &left.juror).cmp(&(
+            right.case_id.as_str(),
+            right.round_id.as_str(),
+            &right.juror,
+        ))
+    });
+    let mut reveals = reveals;
+    reveals.sort_by(|left, right| {
+        (left.case_id.as_str(), left.round_id.as_str(), &left.juror).cmp(&(
+            right.case_id.as_str(),
+            right.round_id.as_str(),
+            &right.juror,
+        ))
+    });
+    let mut challenges = challenges;
+    challenges.sort_by(|left, right| {
+        (
+            left.case_id.as_str(),
+            left.round_id.as_str(),
+            &left.challenge_id,
+        )
+            .cmp(&(
+                right.case_id.as_str(),
+                right.round_id.as_str(),
+                &right.challenge_id,
+            ))
+    });
+    let mut outcomes = outcomes;
+    outcomes.sort_by(|left, right| {
+        (left.case_id.as_str(), left.round_id.as_str())
+            .cmp(&(right.case_id.as_str(), right.round_id.as_str()))
+    });
+    if outcomes.windows(2).any(|window| {
+        window[0].case_id == window[1].case_id && window[0].round_id == window[1].round_id
+    }) {
+        return Err(QueryExecutionFail::Conversion(
+            "moderation snapshot contains duplicate terminal outcomes".to_owned(),
+        ));
     }
-    let mut reveals_by_case: BTreeMap<(String, String), Vec<ModerationRevealRecordV1>> =
-        BTreeMap::new();
-    for record in reveals {
-        reveals_by_case
-            .entry((record.case_id.clone(), record.round_id.clone()))
-            .or_default()
-            .push(record);
+    let mut no_shows = no_shows;
+    no_shows.sort_by(|left, right| {
+        (left.case_id.as_str(), left.round_id.as_str(), &left.juror).cmp(&(
+            right.case_id.as_str(),
+            right.round_id.as_str(),
+            &right.juror,
+        ))
+    });
+    let mut commits = commits.into_iter();
+    let mut reveals = reveals.into_iter();
+    let mut challenges = challenges.into_iter();
+    let mut outcomes = outcomes.into_iter();
+    let mut no_shows = no_shows.into_iter();
+    macro_rules! take_case_records {
+        ($records:ident, $target:expr, $current:ident) => {{
+            let target = $target;
+            if $records
+                .as_slice()
+                .first()
+                .is_some_and(|record| (record.case_id.as_str(), record.round_id.as_str()) < target)
+            {
+                return Err(QueryExecutionFail::Conversion(
+                    "moderation snapshot contains orphan case subrecords".to_owned(),
+                ));
+            }
+            let count = $records
+                .as_slice()
+                .iter()
+                .take_while(|record| (record.case_id.as_str(), record.round_id.as_str()) == target)
+                .count();
+            let mut group = $current.vec_with_capacity(count)?;
+            for _ in 0..count {
+                let (record, allocation_bytes) = $records
+                    .next_with_allocation_charge()?
+                    .expect("counted moderation case record remains available");
+                $current.add_nested(allocation_bytes)?;
+                group.push(record)?;
+            }
+            group.into_vec()
+        }};
     }
-    let mut challenges_by_case: BTreeMap<(String, String), Vec<ModerationChallengeRecordV1>> =
-        BTreeMap::new();
-    for record in challenges {
-        challenges_by_case
-            .entry((record.case_id.clone(), record.round_id.clone()))
-            .or_default()
-            .push(record);
-    }
-    let mut outcomes_by_case: BTreeMap<(String, String), ModerationOutcomeRecordV1> =
-        BTreeMap::new();
-    for record in outcomes {
-        let key = (record.case_id.clone(), record.round_id.clone());
-        if outcomes_by_case.insert(key, record).is_some() {
-            return Err(QueryExecutionFail::Conversion(
-                "moderation snapshot contains duplicate terminal outcomes".to_owned(),
-            ));
-        }
-    }
-    let mut no_shows_by_case: BTreeMap<(String, String), Vec<ModerationNoShowRecordV1>> =
-        BTreeMap::new();
-    for record in no_shows {
-        no_shows_by_case
-            .entry((record.case_id.clone(), record.round_id.clone()))
-            .or_default()
-            .push(record);
-    }
-
-    let mut case_views = Vec::with_capacity(cases.len());
-    for case in cases.iter().cloned() {
-        let key = (
-            case.spec.context.case_id.clone(),
-            case.spec.round_id.clone(),
+    let case_count_for_capacity = cases.len();
+    let mut case_views =
+        crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(case_count_for_capacity)?;
+    let mut cases = cases.into_iter();
+    while let Some((case, case_allocation_bytes)) = cases.next_with_allocation_charge()? {
+        let mut current = crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(
+            retained_base_bytes
+                .checked_add(case_allocation_bytes)
+                .ok_or(QueryExecutionFail::CapacityLimit)?,
+        )?;
+        let target = (
+            case.spec.context.case_id.as_str(),
+            case.spec.round_id.as_str(),
         );
-        let mut case_commits = commits_by_case.remove(&key).unwrap_or_default();
-        case_commits.sort_by(|left, right| left.juror.to_string().cmp(&right.juror.to_string()));
-        let mut case_reveals = reveals_by_case.remove(&key).unwrap_or_default();
-        case_reveals.sort_by(|left, right| left.juror.to_string().cmp(&right.juror.to_string()));
-        let mut case_challenges = challenges_by_case.remove(&key).unwrap_or_default();
-        case_challenges.sort_by(|left, right| left.challenge_id.cmp(&right.challenge_id));
-        let mut case_no_shows = no_shows_by_case.remove(&key).unwrap_or_default();
-        case_no_shows.sort_by(|left, right| left.juror.to_string().cmp(&right.juror.to_string()));
-        case_views.push(ModerationFinalizedCaseViewV1 {
+        let case_commits = take_case_records!(commits, target, current);
+        let case_reveals = take_case_records!(reveals, target, current);
+        let case_challenges = take_case_records!(challenges, target, current);
+        let case_no_shows = take_case_records!(no_shows, target, current);
+        let outcome = match outcomes.as_slice().first() {
+            Some(record) if (record.case_id.as_str(), record.round_id.as_str()) < target => {
+                return Err(QueryExecutionFail::Conversion(
+                    "moderation snapshot contains orphan case subrecords".to_owned(),
+                ));
+            }
+            Some(record) if (record.case_id.as_str(), record.round_id.as_str()) == target => {
+                let (outcome, allocation_bytes) = outcomes
+                    .next_with_allocation_charge()?
+                    .expect("matched moderation outcome remains available");
+                current.add_nested(allocation_bytes)?;
+                Some(outcome)
+            }
+            Some(_) | None => None,
+        };
+        case_views.try_push(ModerationFinalizedCaseViewV1 {
             case,
             commits: case_commits,
             reveals: case_reveals,
             challenges: case_challenges,
-            outcome: outcomes_by_case.remove(&key),
+            outcome,
             no_shows: case_no_shows,
-        });
+        })?;
     }
-    if !commits_by_case.is_empty()
-        || !reveals_by_case.is_empty()
-        || !challenges_by_case.is_empty()
-        || !outcomes_by_case.is_empty()
-        || !no_shows_by_case.is_empty()
+    if !commits.as_slice().is_empty()
+        || !reveals.as_slice().is_empty()
+        || !challenges.as_slice().is_empty()
+        || !outcomes.as_slice().is_empty()
+        || !no_shows.as_slice().is_empty()
     {
         return Err(QueryExecutionFail::Conversion(
             "moderation snapshot contains orphan case subrecords".to_owned(),
         ));
     }
-
     if let Some(status) = status {
         let expected = ModerationLedgerStatusV1 {
-            appeal_intakes: count_as_u64(appeals.len(), "appeal")?,
+            appeal_intakes: count_as_u64(appeal_count, "appeal")?,
             eligibility_proofs: count_as_u64(eligibility_count, "eligibility")?,
-            panel_selections: count_as_u64(
-                appeals
-                    .iter()
-                    .filter(|appeal| appeal.selection.is_some())
-                    .count(),
-                "panel selection",
-            )?,
-            assignment_acceptances: sum_lengths_as_u64(
-                appeals.iter().map(|appeal| appeal.accepted_jurors.len()),
-                "assignment acceptance",
-            )?,
-            failover_replacements: sum_lengths_as_u64(
-                appeals.iter().map(|appeal| appeal.replacements.len()),
-                "failover replacement",
-            )?,
+            panel_selections: count_as_u64(panel_selection_count, "panel selection")?,
+            assignment_acceptances: assignment_acceptance_count,
+            failover_replacements: failover_replacement_count,
             failed_panel_formations: count_as_u64(
-                appeals
-                    .iter()
-                    .filter(|appeal| {
-                        matches!(
-                            appeal.status,
-                            ModerationAppealStatusV1::InsufficientEligiblePool
-                                | ModerationAppealStatusV1::FailoverExhausted
-                        )
-                    })
-                    .count(),
+                failed_panel_formation_count,
                 "failed panel formation",
             )?,
-            open_cases: count_as_u64(
-                cases
-                    .iter()
-                    .filter(|case| {
-                        matches!(
-                            case.status,
-                            ModerationCaseStatusV1::Open | ModerationCaseStatusV1::Challenged
-                        )
-                    })
-                    .count(),
-                "open case",
-            )?,
-            finalized_cases: count_as_u64(
-                cases
-                    .iter()
-                    .filter(|case| case.status == ModerationCaseStatusV1::Finalized)
-                    .count(),
-                "finalized case",
-            )?,
+            open_cases: count_as_u64(open_case_count, "open case")?,
+            finalized_cases: count_as_u64(finalized_case_count, "finalized case")?,
             commitments: count_as_u64(commit_count, "commitment")?,
             reveals: count_as_u64(reveal_count, "reveal")?,
             challenges: count_as_u64(challenge_count, "challenge")?,
@@ -4140,17 +4707,21 @@ fn query_moderation_snapshot(
             ));
         }
         let head = head.expect("initialized moderation ledger requires an event journal head");
-        let latest_event = read_persisted_event(world, head.last_sequence)
-            .map_err(query_failure)?
-            .expect("validated moderation event head has a terminal record");
+        let mut current = crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(
+            retained_base_bytes,
+        )?;
+        let latest_event =
+            read_persisted_event_for_current(world, head.last_sequence, &mut current)
+                .map_err(query_failure)?
+                .expect("validated moderation event head has a terminal record");
         if latest_event.event.occurred_at_unix_ms != status.updated_at_unix_ms {
             return Err(QueryExecutionFail::Conversion(
                 "moderation event journal timestamp disagrees with ledger status".to_owned(),
             ));
         }
     }
-
-    let events = latest_committed_events(state_ro, head, max_events, &mut budget)?;
+    let events =
+        latest_committed_events(state_ro, head, max_events, &mut budget, retained_base_bytes)?;
     let snapshot = ModerationFinalizedLedgerSnapshotV1 {
         version: MODERATION_FINALIZED_SNAPSHOT_VERSION_V1,
         finalized_height: finalized_cursor.height,
@@ -4158,130 +4729,169 @@ fn query_moderation_snapshot(
         finalized_at_unix_ms,
         policy,
         status,
-        appeals: appeal_views,
-        cases: case_views,
+        appeals: appeal_views.into_vec()?,
+        cases: case_views.into_vec()?,
         events,
     };
-    let encoded_len = norito::encode_canonical(&snapshot)
-        .map_err(|error| {
-            QueryExecutionFail::Conversion(format!(
-                "failed to encode finalized moderation snapshot: {error}"
-            ))
-        })?
-        .len();
-    if encoded_len > MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1 {
+    let maximum = crate::smartcontracts::isi::query::singular_query_frame_limit(
+        MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1,
+    );
+    let encoded_len = norito::core::encoded_frame_len(&snapshot).map_err(|error| {
+        QueryExecutionFail::Conversion(format!(
+            "failed to size finalized moderation snapshot: {error}"
+        ))
+    })?;
+    if encoded_len > maximum {
         return Err(QueryExecutionFail::Conversion(format!(
-            "finalized moderation snapshot encodes to {encoded_len} bytes, above {MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1}"
+            "finalized moderation snapshot encodes to {encoded_len} bytes, above {maximum}"
         )));
     }
     Ok(snapshot)
 }
-
 fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
-    QueryExecutionFail::Conversion(error.to_string())
+    match error {
+        InstructionExecutionError::Query(error) => error,
+        error => QueryExecutionFail::Conversion(error.to_string()),
+    }
 }
-
 impl ValidSingularQuery for FindSorafsModerationPolicy {
     fn execute(
         &self,
         state_ro: &impl crate::state::StateReadOnly,
     ) -> Result<ModerationLedgerPolicyRecord, QueryExecutionFail> {
-        read_policy(state_ro.world())
+        let mut current =
+            crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(0)?;
+        read_policy_for_current(state_ro.world(), &mut current)
             .map_err(query_failure)?
             .ok_or_else(|| QueryExecutionFail::Find(FindError::SorafsModerationPolicy))
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationAppeal {
     fn execute(
         &self,
         state_ro: &impl crate::state::StateReadOnly,
     ) -> Result<ModerationAppealRecordV1, QueryExecutionFail> {
-        read_appeal(state_ro.world(), &self.case_id, &self.round_id)
-            .map_err(query_failure)?
-            .ok_or_else(|| {
-                QueryExecutionFail::Find(FindError::SorafsModerationAppeal(format!(
-                    "{} round {}",
-                    self.case_id, self.round_id
-                )))
-            })
+        let mut current =
+            crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(0)?;
+        read_appeal_for_current(
+            state_ro.world(),
+            &self.case_id,
+            &self.round_id,
+            &mut current,
+        )
+        .map_err(query_failure)?
+        .ok_or_else(|| {
+            QueryExecutionFail::Find(FindError::SorafsModerationAppeal(format!(
+                "{} round {}",
+                self.case_id, self.round_id
+            )))
+        })
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationJurorEligibility {
     fn execute(
         &self,
         state_ro: &impl crate::state::StateReadOnly,
     ) -> Result<ModerationJurorEligibilityRecordV1, QueryExecutionFail> {
-        read_eligibility(state_ro.world(), &self.case_id, &self.round_id, &self.juror)
-            .map_err(query_failure)?
-            .ok_or_else(|| {
-                QueryExecutionFail::Find(FindError::SorafsModerationJurorEligibility(format!(
-                    "{} round {} juror {}",
-                    self.case_id, self.round_id, self.juror
-                )))
-            })
+        let mut current =
+            crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(0)?;
+        read_eligibility_for_current(
+            state_ro.world(),
+            &self.case_id,
+            &self.round_id,
+            &self.juror,
+            &mut current,
+        )
+        .map_err(query_failure)?
+        .ok_or_else(|| {
+            QueryExecutionFail::Find(FindError::SorafsModerationJurorEligibility(format!(
+                "{} round {} juror {}",
+                self.case_id, self.round_id, self.juror
+            )))
+        })
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationCase {
     fn execute(
         &self,
         state_ro: &impl crate::state::StateReadOnly,
     ) -> Result<ModerationCaseRecordV1, QueryExecutionFail> {
-        read_case(state_ro.world(), &self.case_id, &self.round_id)
-            .map_err(query_failure)?
-            .ok_or_else(|| {
-                QueryExecutionFail::Find(FindError::SorafsModerationCase(format!(
-                    "{} round {}",
-                    self.case_id, self.round_id
-                )))
-            })
+        let mut current =
+            crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(0)?;
+        read_case_for_current(
+            state_ro.world(),
+            &self.case_id,
+            &self.round_id,
+            &mut current,
+        )
+        .map_err(query_failure)?
+        .ok_or_else(|| {
+            QueryExecutionFail::Find(FindError::SorafsModerationCase(format!(
+                "{} round {}",
+                self.case_id, self.round_id
+            )))
+        })
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationCommit {
     fn execute(
         &self,
         state_ro: &impl crate::state::StateReadOnly,
     ) -> Result<ModerationCommitRecordV1, QueryExecutionFail> {
-        read_commit(state_ro.world(), &self.case_id, &self.round_id, &self.juror)
-            .map_err(query_failure)?
-            .ok_or_else(|| {
-                QueryExecutionFail::Find(FindError::SorafsModerationCommit(format!(
-                    "{} round {} juror {}",
-                    self.case_id, self.round_id, self.juror
-                )))
-            })
+        let mut current =
+            crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(0)?;
+        read_commit_for_current(
+            state_ro.world(),
+            &self.case_id,
+            &self.round_id,
+            &self.juror,
+            &mut current,
+        )
+        .map_err(query_failure)?
+        .ok_or_else(|| {
+            QueryExecutionFail::Find(FindError::SorafsModerationCommit(format!(
+                "{} round {} juror {}",
+                self.case_id, self.round_id, self.juror
+            )))
+        })
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationReveal {
     fn execute(
         &self,
         state_ro: &impl crate::state::StateReadOnly,
     ) -> Result<ModerationRevealRecordV1, QueryExecutionFail> {
-        read_reveal(state_ro.world(), &self.case_id, &self.round_id, &self.juror)
-            .map_err(query_failure)?
-            .ok_or_else(|| {
-                QueryExecutionFail::Find(FindError::SorafsModerationReveal(format!(
-                    "{} round {} juror {}",
-                    self.case_id, self.round_id, self.juror
-                )))
-            })
+        let mut current =
+            crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(0)?;
+        read_reveal_for_current(
+            state_ro.world(),
+            &self.case_id,
+            &self.round_id,
+            &self.juror,
+            &mut current,
+        )
+        .map_err(query_failure)?
+        .ok_or_else(|| {
+            QueryExecutionFail::Find(FindError::SorafsModerationReveal(format!(
+                "{} round {} juror {}",
+                self.case_id, self.round_id, self.juror
+            )))
+        })
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationChallenge {
     fn execute(
         &self,
         state_ro: &impl crate::state::StateReadOnly,
     ) -> Result<ModerationChallengeRecordV1, QueryExecutionFail> {
-        read_challenge(
+        let mut current =
+            crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(0)?;
+        read_challenge_for_current(
             state_ro.world(),
             &self.case_id,
             &self.round_id,
             &self.challenge_id,
+            &mut current,
         )
         .map_err(query_failure)?
         .ok_or_else(|| {
@@ -4292,46 +4902,62 @@ impl ValidSingularQuery for FindSorafsModerationChallenge {
         })
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationOutcome {
     fn execute(
         &self,
         state_ro: &impl crate::state::StateReadOnly,
     ) -> Result<ModerationOutcomeRecordV1, QueryExecutionFail> {
-        read_outcome(state_ro.world(), &self.case_id, &self.round_id)
-            .map_err(query_failure)?
-            .ok_or_else(|| {
-                QueryExecutionFail::Find(FindError::SorafsModerationOutcome(format!(
-                    "{} round {}",
-                    self.case_id, self.round_id
-                )))
-            })
+        let mut current =
+            crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(0)?;
+        read_outcome_for_current(
+            state_ro.world(),
+            &self.case_id,
+            &self.round_id,
+            &mut current,
+        )
+        .map_err(query_failure)?
+        .ok_or_else(|| {
+            QueryExecutionFail::Find(FindError::SorafsModerationOutcome(format!(
+                "{} round {}",
+                self.case_id, self.round_id
+            )))
+        })
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationNoShow {
     fn execute(
         &self,
         state_ro: &impl crate::state::StateReadOnly,
     ) -> Result<ModerationNoShowRecordV1, QueryExecutionFail> {
-        read_no_show(state_ro.world(), &self.case_id, &self.round_id, &self.juror)
-            .map_err(query_failure)?
-            .ok_or_else(|| {
-                QueryExecutionFail::Find(FindError::SorafsModerationNoShow(format!(
-                    "{} round {} juror {}",
-                    self.case_id, self.round_id, self.juror
-                )))
-            })
+        let mut current =
+            crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(0)?;
+        read_no_show_for_current(
+            state_ro.world(),
+            &self.case_id,
+            &self.round_id,
+            &self.juror,
+            &mut current,
+        )
+        .map_err(query_failure)?
+        .ok_or_else(|| {
+            QueryExecutionFail::Find(FindError::SorafsModerationNoShow(format!(
+                "{} round {} juror {}",
+                self.case_id, self.round_id, self.juror
+            )))
+        })
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationStatus {
     fn execute(
         &self,
         state_ro: &impl crate::state::StateReadOnly,
     ) -> Result<ModerationLedgerStatusV1, QueryExecutionFail> {
-        let policy = read_policy(state_ro.world()).map_err(query_failure)?;
-        let status = read_status(state_ro.world()).map_err(query_failure)?;
+        let mut current =
+            crate::smartcontracts::isi::query::SingularQueryCurrentAllocation::new(0)?;
+        let policy =
+            read_policy_for_current(state_ro.world(), &mut current).map_err(query_failure)?;
+        let status =
+            read_status_for_current(state_ro.world(), &mut current).map_err(query_failure)?;
         match (policy, status) {
             (Some(_), Some(status)) => Ok(status),
             (None, None) => Err(QueryExecutionFail::Find(FindError::SorafsModerationStatus)),
@@ -4341,7 +4967,6 @@ impl ValidSingularQuery for FindSorafsModerationStatus {
         }
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationSnapshot {
     fn execute(
         &self,
@@ -4350,7 +4975,6 @@ impl ValidSingularQuery for FindSorafsModerationSnapshot {
         query_moderation_snapshot(self, state_ro)
     }
 }
-
 impl ValidSingularQuery for FindSorafsModerationEvents {
     fn execute(
         &self,
@@ -4359,11 +4983,15 @@ impl ValidSingularQuery for FindSorafsModerationEvents {
         query_moderation_event_page(self, state_ro)
     }
 }
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::too_many_lines)]
-
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use core::num::NonZeroU64;
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
     use iroha_data_model::{
@@ -4410,29 +5038,18 @@ mod tests {
         pop_revocation_root_v1, prove_pop_membership_v1, verify_pop_commitment_root_signature_v1,
         verify_pop_credential_signature_v1, verify_pop_revocation_list_signature_v1,
     };
-
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
-
     const OPENED_AT: u64 = 1_000;
     const COMMIT_DEADLINE: u64 = 2_000;
     const CHALLENGE_DEADLINE: u64 = 3_000;
     const REVEAL_DEADLINE: u64 = 4_000;
-
     fn keypair(seed: u8) -> KeyPair {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
             .expect("valid deterministic Ed25519 seed");
         KeyPair::from_private_key(private).expect("derive deterministic keypair")
     }
-
     fn account(keypair: &KeyPair) -> AccountId {
         AccountId::new(keypair.public_key().clone())
     }
-
     fn policy() -> ModerationLedgerPolicyV1 {
         ModerationLedgerPolicyV1 {
             version: MODERATION_LEDGER_POLICY_VERSION_V1,
@@ -4448,7 +5065,6 @@ mod tests {
             unrevealed_commit_penalty_points: 23,
         }
     }
-
     fn context(jurors: &[AccountId], quorum: u16) -> SoraFsModerationBallotContextV1 {
         SoraFsModerationBallotContextV1 {
             version: SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
@@ -4460,7 +5076,6 @@ mod tests {
             evidence_uri: Some("ipfs://evidence".to_owned()),
         }
     }
-
     fn spec(jurors: Vec<AccountId>, quorum: u16) -> ModerationCaseSpecV1 {
         ModerationCaseSpecV1 {
             version: MODERATION_LEDGER_CASE_VERSION_V1,
@@ -4474,7 +5089,6 @@ mod tests {
             policy_digest: policy().digest().expect("policy digest"),
         }
     }
-
     fn reveal(
         spec: &ModerationCaseSpecV1,
         juror: &AccountId,
@@ -4491,7 +5105,6 @@ mod tests {
             revealed_at_unix_ms: 0,
         }
     }
-
     fn commit(reveal: &SoraFsModerationBallotRevealV1) -> SoraFsModerationBallotCommitV1 {
         SoraFsModerationBallotCommitV1 {
             version: SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
@@ -4502,18 +5115,15 @@ mod tests {
             committed_at_unix_ms: 0,
         }
     }
-
     fn encode<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
         norito::encode_canonical(value).expect("encode canonical fixture")
     }
-
     fn encode_alternate_layout<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         norito::to_bytes(value).expect("encode alternate-layout fixture")
     }
-
     fn state(accounts: &[&KeyPair], manager: &AccountId) -> State {
         let mut world = World::new();
         for keypair in accounts {
@@ -4538,7 +5148,6 @@ mod tests {
             LiveQueryStore::start_test(),
         )
     }
-
     fn header(height: u64, now: u64) -> BlockHeader {
         BlockHeader::new(
             NonZeroU64::new(height).expect("nonzero height"),
@@ -4549,7 +5158,6 @@ mod tests {
             0,
         )
     }
-
     fn transact(
         state: &mut State,
         height: u64,
@@ -4563,19 +5171,16 @@ mod tests {
         block.commit().expect("commit test block");
         Ok(())
     }
-
     fn scalar(value: u64) -> [u8; 32] {
         let mut bytes = [0; 32];
         bytes[..8].copy_from_slice(&value.to_le_bytes());
         bytes
     }
-
     fn pop_nonce(value: u128) -> [u8; 32] {
         let mut bytes = [0; 32];
         bytes[..16].copy_from_slice(&value.to_le_bytes());
         bytes
     }
-
     fn public_key_bytes(keypair: &KeyPair) -> [u8; 32] {
         let (_, bytes) = keypair
             .public_key()
@@ -4583,7 +5188,6 @@ mod tests {
             .expect("fixture public key bytes");
         bytes.try_into().expect("Ed25519 public key length")
     }
-
     fn empty_pop_signature(keypair: &KeyPair) -> PopSignatureV1 {
         PopSignatureV1 {
             algorithm: PopSignatureAlgorithmV1::Ed25519,
@@ -4591,14 +5195,12 @@ mod tests {
             signature: Vec::new(),
         }
     }
-
     fn sign_pop_digest(keypair: &KeyPair, digest: [u8; 32]) -> Vec<u8> {
         Signature::try_new(keypair.private_key(), &digest)
             .expect("sign PoP fixture digest")
             .payload()
             .to_vec()
     }
-
     fn sign_pop_credential(mut credential: PopCredentialV1, keypair: &KeyPair) -> PopCredentialV1 {
         credential.issuer_signature = empty_pop_signature(keypair);
         let digest =
@@ -4607,7 +5209,6 @@ mod tests {
         verify_pop_credential_signature_v1(&credential).expect("credential signature verifies");
         credential
     }
-
     fn sign_pop_root(mut root: PopCommitmentRootV1, keypair: &KeyPair) -> PopCommitmentRootV1 {
         root.publisher_signature = empty_pop_signature(keypair);
         let digest = pop_commitment_root_signature_digest_v1(&root).expect("root signature digest");
@@ -4615,7 +5216,6 @@ mod tests {
         verify_pop_commitment_root_signature_v1(&root).expect("root signature verifies");
         root
     }
-
     fn sign_pop_revocations(
         mut revocations: PopRevocationListV1,
         keypair: &KeyPair,
@@ -4628,7 +5228,6 @@ mod tests {
             .expect("revocation signature verifies");
         revocations
     }
-
     struct PopMaterial {
         credential: PopCredentialV1,
         root: PopCommitmentRootV1,
@@ -4637,7 +5236,6 @@ mod tests {
         credential_path: PopCredentialMerklePathV1,
         revocation_path: PopRevocationNonMembershipPathV1,
     }
-
     impl PopMaterial {
         fn proof(
             &self,
@@ -4662,7 +5260,6 @@ mod tests {
             .expect("create moderation PoP proof")
         }
     }
-
     fn pop_material(issuer: &KeyPair) -> PopMaterial {
         let holder_secret = scalar(0x1234_5678);
         let credential_id = scalar(0x8765_4321);
@@ -4745,12 +5342,10 @@ mod tests {
             revocation_path,
         }
     }
-
     fn shared_pop_material() -> &'static PopMaterial {
         static MATERIAL: std::sync::OnceLock<PopMaterial> = std::sync::OnceLock::new();
         MATERIAL.get_or_init(|| pop_material(&keypair(0x51)))
     }
-
     fn proof_for_appeal(appeal: &ModerationAppealRecordV1) -> PopMembershipProofV1 {
         static PROOF: std::sync::OnceLock<PopMembershipProofV1> = std::sync::OnceLock::new();
         let challenge =
@@ -4763,7 +5358,6 @@ mod tests {
         assert_eq!(proof.verifier_context, context);
         proof.clone()
     }
-
     fn pop_policy(issuer: &KeyPair) -> PopIssuerPolicyV1 {
         PopIssuerPolicyV1 {
             version: POP_ISSUER_POLICY_VERSION_V1,
@@ -4779,7 +5373,6 @@ mod tests {
             paused: false,
         }
     }
-
     fn pop_batch(issuer: &KeyPair, material: &PopMaterial) -> PopCredentialCommitmentBatchV1 {
         let canonical_credential = encode(&material.credential);
         PopCredentialCommitmentBatchV1 {
@@ -4800,7 +5393,6 @@ mod tests {
             }],
         }
     }
-
     fn setup_panel_foundations(state: &mut State, manager: &KeyPair, material: &PopMaterial) {
         let manager_id = account(manager);
         transact(state, 1, 1_000_000, |transaction| {
@@ -4812,7 +5404,6 @@ mod tests {
         .expect("activate PoP registry and moderation policy");
         state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header(1, 1_000_000)));
     }
-
     fn panel_intake(
         appellant: &KeyPair,
         case_id: &str,
@@ -4846,7 +5437,6 @@ mod tests {
             policy_digest: policy().digest().expect("moderation policy digest"),
         }
     }
-
     struct PanelFixture {
         manager: KeyPair,
         appellant: KeyPair,
@@ -4855,7 +5445,6 @@ mod tests {
         state: State,
         next_height: u64,
     }
-
     impl PanelFixture {
         fn new() -> Self {
             let manager = keypair(0x51);
@@ -4882,23 +5471,18 @@ mod tests {
                 next_height: 2,
             }
         }
-
         fn manager_id(&self) -> AccountId {
             account(&self.manager)
         }
-
         fn appellant_id(&self) -> AccountId {
             account(&self.appellant)
         }
-
         fn juror_id(&self) -> AccountId {
             account(&self.juror)
         }
-
         fn outsider_id(&self) -> AccountId {
             account(&self.outsider)
         }
-
         fn run(
             &mut self,
             now: u64,
@@ -4915,7 +5499,6 @@ mod tests {
             }
             result
         }
-
         fn submit(&mut self, panel_size: u16, waitlist_size: u16, quorum: u16) {
             let intake = panel_intake(
                 &self.appellant,
@@ -4931,13 +5514,11 @@ mod tests {
             })
             .expect("submit panel appeal");
         }
-
         fn appeal(&self) -> ModerationAppealRecordV1 {
             FindSorafsModerationAppeal::new("panel-case".to_owned(), "round-1".to_owned())
                 .execute(&self.state.view())
                 .expect("panel appeal query")
         }
-
         fn register_juror(&mut self) {
             let proof = proof_for_appeal(&self.appeal());
             let juror = self.juror_id();
@@ -4951,7 +5532,6 @@ mod tests {
             })
             .expect("register panel juror eligibility");
         }
-
         fn finalize_single_juror_sortition(&mut self) -> [u8; 32] {
             let manager = self.manager_id();
             let juror = self.juror_id();
@@ -4975,7 +5555,6 @@ mod tests {
                 .sortition_digest
         }
     }
-
     #[test]
     fn moderation_payload_decoder_rejects_alternate_norito_layout() {
         let juror = account(&keypair(0xA1));
@@ -4991,7 +5570,6 @@ mod tests {
         );
         decode_from_bytes_with_limits::<SoraFsModerationBallotCommitV1>(&alternate, PAYLOAD_LIMITS)
             .expect("ordinary bounded Norito accepts the advertised alternate layout");
-
         let error =
             decode_payload::<SoraFsModerationBallotCommitV1>(&alternate, "moderation commit")
                 .err()
@@ -5003,7 +5581,6 @@ mod tests {
             "unexpected alternate-layout rejection: {error:?}"
         );
     }
-
     #[test]
     fn moderation_payload_identity_encoding_ignores_ambient_norito_flags() {
         let juror = account(&keypair(0xA3));
@@ -5014,7 +5591,6 @@ mod tests {
             encode_payload(&commit, "moderation commit").expect("encode canonical commit");
         let alternate = encode_alternate_layout(&commit);
         assert_ne!(alternate, canonical);
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let ambient_encoded = {
@@ -5033,7 +5609,6 @@ mod tests {
         };
         assert_eq!(ambient_encoded, canonical);
     }
-
     #[test]
     fn moderation_membership_proof_decoder_rejects_alternate_norito_layout() {
         let mut fixture = PanelFixture::new();
@@ -5047,7 +5622,6 @@ mod tests {
         );
         decode_from_bytes_with_limits::<PopMembershipProofV1>(&alternate, PROOF_LIMITS)
             .expect("ordinary bounded Norito accepts the advertised alternate layout");
-
         let error = decode_membership_proof(&alternate)
             .err()
             .expect("alternate-layout moderation membership proof must fail");
@@ -5058,7 +5632,6 @@ mod tests {
             "unexpected alternate-layout proof rejection: {error:?}"
         );
     }
-
     fn seed_activated_case(
         transaction: &mut StateTransaction<'_, '_>,
         manager: &AccountId,
@@ -5180,7 +5753,6 @@ mod tests {
             .insert(status_key().clone(), encode_status(&status)?);
         Ok(())
     }
-
     struct Fixture {
         manager: KeyPair,
         jurors: [KeyPair; 3],
@@ -5189,7 +5761,6 @@ mod tests {
         spec: ModerationCaseSpecV1,
         next_height: u64,
     }
-
     impl Fixture {
         fn new(quorum: u16) -> Self {
             let manager = keypair(0x11);
@@ -5217,15 +5788,12 @@ mod tests {
                 next_height: 2,
             }
         }
-
         fn manager_id(&self) -> AccountId {
             account(&self.manager)
         }
-
         fn juror_id(&self, index: usize) -> AccountId {
             account(&self.jurors[index])
         }
-
         fn run(
             &mut self,
             now: u64,
@@ -5243,7 +5811,6 @@ mod tests {
             result
         }
     }
-
     #[test]
     fn successful_commit_reveal_finalization_persists_queries_and_no_show() {
         let mut fixture = Fixture::new(2);
@@ -5285,7 +5852,6 @@ mod tests {
                     .execute(&manager, transaction)
             })
             .unwrap();
-
         let case = FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
             .execute(&fixture.state.view())
             .unwrap();
@@ -5322,7 +5888,6 @@ mod tests {
         assert_eq!(status.outcomes, 1);
         assert_eq!(status.no_shows, 1);
     }
-
     #[test]
     fn duplicate_wrong_authority_phase_and_mismatched_reveal_are_atomic() {
         let mut fixture = Fixture::new(1);
@@ -5411,7 +5976,6 @@ mod tests {
         assert_eq!(status.commitments, 1);
         assert_eq!(status.reveals, 1);
     }
-
     #[test]
     fn pending_and_accepted_challenges_block_reveal_and_close_without_penalties() {
         let mut fixture = Fixture::new(1);
@@ -5590,7 +6154,6 @@ mod tests {
             0
         );
     }
-
     #[test]
     fn unresolved_challenge_expires_fail_safe_without_deadlock_or_no_show_penalties() {
         let mut fixture = Fixture::new(1);
@@ -5662,7 +6225,6 @@ mod tests {
                     .execute(&manager, transaction)
             })
             .unwrap();
-
         let case = FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
             .execute(&fixture.state.view())
             .unwrap();
@@ -5693,7 +6255,6 @@ mod tests {
             0
         );
     }
-
     #[test]
     fn rejected_challenge_unblocks_reveals_and_tied_quorum_is_contested() {
         let mut fixture = Fixture::new(2);
@@ -5759,7 +6320,6 @@ mod tests {
                     .execute(&manager, transaction)
             })
             .unwrap();
-
         let challenge = FindSorafsModerationChallenge::new(
             "case-1".to_owned(),
             "round-1".to_owned(),
@@ -5777,7 +6337,6 @@ mod tests {
         assert_eq!(outcome.kind, ModerationOutcomeKindV1::Contested);
         assert_eq!(outcome.votes_total, 2);
     }
-
     #[test]
     fn missed_quorum_persists_distinct_no_show_penalties() {
         let mut fixture = Fixture::new(3);
@@ -5852,7 +6411,6 @@ mod tests {
         assert_eq!(missing.kind, ModerationNoShowKindV1::MissingCommit);
         assert_eq!(missing.penalty_points, 11);
     }
-
     #[test]
     fn bounds_permissions_and_counter_overflow_reject_without_partial_case() {
         let manager_pair = keypair(0x41);
@@ -5887,7 +6445,6 @@ mod tests {
                 .revision,
             1
         );
-
         let mut fixture = Fixture::new(1);
         let juror = fixture.juror_id(0);
         let rollback_reveal = reveal(&fixture.spec, &juror, SoraFsModerationVoteChoice::Uphold, 8);
@@ -5931,7 +6488,6 @@ mod tests {
                 .is_err()
         );
     }
-
     #[test]
     fn genesis_moderation_permission_bypass_matches_executor_policy() {
         let manager_pair = keypair(0x45);
@@ -5951,7 +6507,6 @@ mod tests {
             genesis_authority
         );
     }
-
     #[test]
     fn appeal_intake_is_authority_bound_replay_safe_and_transaction_atomic() {
         let mut fixture = PanelFixture::new();
@@ -5976,7 +6531,6 @@ mod tests {
                 })
                 .is_err()
         );
-
         assert!(
             fixture
                 .run(1_001_000, |transaction| {
@@ -6003,7 +6557,6 @@ mod tests {
                 .appeal_intakes,
             0
         );
-
         fixture.submit(1, 0, 1);
         assert!(
             fixture
@@ -6037,7 +6590,6 @@ mod tests {
             .unwrap();
         assert_eq!(status.appeal_intakes, 1);
         assert_eq!(status.eligibility_proofs, 0);
-
         let mut excluded = PanelFixture::new();
         let excluded_appellant = excluded.appellant_id();
         let excluded_juror = excluded.juror_id();
@@ -6064,875 +6616,5 @@ mod tests {
         );
         assert!(excluded.appeal().eligible_jurors.is_empty());
     }
-
-    #[test]
-    fn private_pop_proof_sortition_and_activation_reject_adversarial_inputs() {
-        let mut fixture = PanelFixture::new();
-        fixture.submit(1, 0, 1);
-        let appeal = fixture.appeal();
-        let juror = fixture.juror_id();
-        let outsider = fixture.outsider_id();
-        let mut wrong_root = proof_for_appeal(&appeal);
-        wrong_root.commitment_root[0] ^= 1;
-        assert!(
-            fixture
-                .run(1_002_000, |transaction| {
-                    RegisterSorafsModerationJurorEligibility::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        encode(&wrong_root),
-                    )
-                    .execute(&juror, transaction)
-                })
-                .is_err()
-        );
-        assert_eq!(fixture.appeal().eligible_jurors.len(), 0);
-
-        fixture.register_juror();
-        let proof = proof_for_appeal(&fixture.appeal());
-        assert!(
-            fixture
-                .run(1_002_001, |transaction| {
-                    RegisterSorafsModerationJurorEligibility::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        encode(&proof),
-                    )
-                    .execute(&outsider, transaction)
-                })
-                .is_err()
-        );
-        assert!(
-            FindSorafsModerationJurorEligibility::new(
-                "panel-case".to_owned(),
-                "round-1".to_owned(),
-                outsider.clone(),
-            )
-            .execute(&fixture.state.view())
-            .is_err()
-        );
-        let snapshot_digest = fixture.appeal().pop_snapshot_digest;
-        let manager = fixture.manager_id();
-        let appellant = fixture.appellant_id();
-        assert!(
-            fixture
-                .run(1_003_000, |transaction| {
-                    FinalizeSorafsModerationSortition::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        snapshot_digest,
-                        latest_parent_randomness_anchor(transaction)?,
-                        vec![juror.clone()],
-                        Vec::new(),
-                    )
-                    .execute(&manager, transaction)
-                })
-                .is_err()
-        );
-        assert!(
-            fixture
-                .run(1_004_000, |transaction| {
-                    FinalizeSorafsModerationSortition::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        snapshot_digest,
-                        latest_parent_randomness_anchor(transaction)?,
-                        vec![juror.clone()],
-                        Vec::new(),
-                    )
-                    .execute(&appellant, transaction)
-                })
-                .is_err()
-        );
-        assert!(
-            fixture
-                .run(1_004_000, |transaction| {
-                    FinalizeSorafsModerationSortition::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        snapshot_digest,
-                        [0; 32],
-                        vec![juror.clone()],
-                        Vec::new(),
-                    )
-                    .execute(&manager, transaction)
-                })
-                .is_err()
-        );
-        assert!(
-            fixture
-                .run(1_004_000, |transaction| {
-                    FinalizeSorafsModerationSortition::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        snapshot_digest,
-                        [0xFF; 32],
-                        vec![juror.clone()],
-                        Vec::new(),
-                    )
-                    .execute(&manager, transaction)
-                })
-                .is_err()
-        );
-        assert!(
-            fixture
-                .run(1_004_000, |transaction| {
-                    FinalizeSorafsModerationSortition::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        snapshot_digest,
-                        latest_parent_randomness_anchor(transaction)?,
-                        vec![juror.clone()],
-                        Vec::new(),
-                    )
-                    .execute(&outsider, transaction)
-                })
-                .is_err()
-        );
-        assert!(
-            fixture
-                .run(1_004_000, |transaction| {
-                    FinalizeSorafsModerationSortition::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        snapshot_digest,
-                        latest_parent_randomness_anchor(transaction)?,
-                        vec![outsider.clone()],
-                        Vec::new(),
-                    )
-                    .execute(&manager, transaction)
-                })
-                .is_err()
-        );
-        assert!(
-            fixture
-                .run(1_004_000, |transaction| {
-                    FinalizeSorafsModerationSortition::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        snapshot_digest,
-                        latest_parent_randomness_anchor(transaction)?,
-                        vec![juror.clone(), juror.clone()],
-                        Vec::new(),
-                    )
-                    .execute(&manager, transaction)
-                })
-                .is_err()
-        );
-        assert_eq!(
-            fixture.appeal().status,
-            ModerationAppealStatusV1::RegisteringJurors
-        );
-
-        let sortition_digest = fixture.finalize_single_juror_sortition();
-        assert!(
-            fixture
-                .run(1_004_001, |transaction| {
-                    RegisterSorafsModerationJurorEligibility::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        encode(&proof),
-                    )
-                    .execute(&outsider, transaction)
-                })
-                .is_err()
-        );
-        assert!(
-            fixture
-                .run(1_004_001, |transaction| {
-                    AcceptSorafsModerationJurorAssignment::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        sortition_digest,
-                    )
-                    .execute(&outsider, transaction)
-                })
-                .is_err()
-        );
-        assert!(
-            fixture
-                .run(1_004_001, |transaction| {
-                    AcceptSorafsModerationJurorAssignment::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        [0xFF; 32],
-                    )
-                    .execute(&juror, transaction)
-                })
-                .is_err()
-        );
-        fixture
-            .run(1_004_001, |transaction| {
-                AcceptSorafsModerationJurorAssignment::new(
-                    "panel-case".to_owned(),
-                    "round-1".to_owned(),
-                    sortition_digest,
-                )
-                .execute(&juror, transaction)
-            })
-            .unwrap();
-        assert!(
-            fixture
-                .run(1_004_002, |transaction| {
-                    AcceptSorafsModerationJurorAssignment::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        sortition_digest,
-                    )
-                    .execute(&juror, transaction)
-                })
-                .is_err()
-        );
-        assert!(
-            fixture
-                .run(1_005_000, |transaction| {
-                    ActivateSorafsModerationCase::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        sortition_digest,
-                    )
-                    .execute(&manager, transaction)
-                })
-                .is_err()
-        );
-        assert!(
-            fixture
-                .run(1_006_000, |transaction| {
-                    ActivateSorafsModerationCase::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        [0xFE; 32],
-                    )
-                    .execute(&manager, transaction)
-                })
-                .is_err()
-        );
-        assert!(
-            fixture
-                .run(1_006_000, |transaction| {
-                    ActivateSorafsModerationCase::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        sortition_digest,
-                    )
-                    .execute(&outsider, transaction)
-                })
-                .is_err()
-        );
-        assert!(
-            fixture
-                .run(1_006_000, |transaction| {
-                    let mut status = status_for_mutation(transaction.world(), 1_006_000)?;
-                    status.open_cases = u64::MAX;
-                    transaction
-                        .world
-                        .smart_contract_state
-                        .insert(status_key().clone(), encode_status(&status)?);
-                    ActivateSorafsModerationCase::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        sortition_digest,
-                    )
-                    .execute(&manager, transaction)
-                })
-                .is_err()
-        );
-        assert_eq!(
-            fixture.appeal().status,
-            ModerationAppealStatusV1::AwaitingAcceptance
-        );
-        assert!(
-            FindSorafsModerationCase::new("panel-case".to_owned(), "round-1".to_owned())
-                .execute(&fixture.state.view())
-                .is_err()
-        );
-        fixture
-            .run(1_006_000, |transaction| {
-                ActivateSorafsModerationCase::new(
-                    "panel-case".to_owned(),
-                    "round-1".to_owned(),
-                    sortition_digest,
-                )
-                .execute(&manager, transaction)
-            })
-            .unwrap();
-        let appeal = fixture.appeal();
-        assert_eq!(appeal.status, ModerationAppealStatusV1::BallotOpen);
-        assert!(appeal.replacements.is_empty());
-        let case = FindSorafsModerationCase::new("panel-case".to_owned(), "round-1".to_owned())
-            .execute(&fixture.state.view())
-            .unwrap();
-        assert_eq!(case.spec.jurors, vec![juror]);
-        assert_eq!(
-            case.spec.context.panel_roster_hash,
-            sorafs_moderation_panel_roster_hash_v1(&case.spec.jurors, 1)
-        );
-    }
-
-    #[test]
-    fn insufficient_pool_and_no_show_failover_exhaustion_are_terminal() {
-        let mut insufficient = PanelFixture::new();
-        insufficient.submit(1, 0, 1);
-        let snapshot_digest = insufficient.appeal().pop_snapshot_digest;
-        let manager = insufficient.manager_id();
-        insufficient
-            .run(1_004_000, |transaction| {
-                FinalizeSorafsModerationSortition::new(
-                    "panel-case".to_owned(),
-                    "round-1".to_owned(),
-                    snapshot_digest,
-                    latest_parent_randomness_anchor(transaction)?,
-                    Vec::new(),
-                    Vec::new(),
-                )
-                .execute(&manager, transaction)
-            })
-            .unwrap();
-        assert_eq!(
-            insufficient.appeal().status,
-            ModerationAppealStatusV1::InsufficientEligiblePool
-        );
-        assert!(
-            FindSorafsModerationCase::new("panel-case".to_owned(), "round-1".to_owned())
-                .execute(&insufficient.state.view())
-                .is_err()
-        );
-        assert!(
-            insufficient
-                .run(1_004_001, |transaction| {
-                    FinalizeSorafsModerationSortition::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        snapshot_digest,
-                        latest_parent_randomness_anchor(transaction)?,
-                        Vec::new(),
-                        Vec::new(),
-                    )
-                    .execute(&manager, transaction)
-                })
-                .is_err()
-        );
-
-        let mut no_show = PanelFixture::new();
-        no_show.submit(1, 0, 1);
-        no_show.register_juror();
-        let sortition_digest = no_show.finalize_single_juror_sortition();
-        let manager = no_show.manager_id();
-        no_show
-            .run(1_006_000, |transaction| {
-                ActivateSorafsModerationCase::new(
-                    "panel-case".to_owned(),
-                    "round-1".to_owned(),
-                    sortition_digest,
-                )
-                .execute(&manager, transaction)
-            })
-            .unwrap();
-        assert_eq!(
-            no_show.appeal().status,
-            ModerationAppealStatusV1::FailoverExhausted
-        );
-        assert!(
-            FindSorafsModerationCase::new("panel-case".to_owned(), "round-1".to_owned())
-                .execute(&no_show.state.view())
-                .is_err()
-        );
-        assert!(
-            no_show
-                .run(1_006_001, |transaction| {
-                    ActivateSorafsModerationCase::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        sortition_digest,
-                    )
-                    .execute(&manager, transaction)
-                })
-                .is_err()
-        );
-        let status = FindSorafsModerationStatus
-            .execute(&no_show.state.view())
-            .unwrap();
-        assert_eq!(status.failed_panel_formations, 1);
-        assert_eq!(status.open_cases, 0);
-    }
-
-    #[test]
-    fn primary_no_show_uses_next_unique_waitlist_juror_atomically() {
-        let mut fixture = PanelFixture::new();
-        let intake = panel_intake(&fixture.appellant, "panel-case", 1, 1, 1, 0x92);
-        let manager = fixture.manager_id();
-        let appellant = fixture.appellant_id();
-        fixture
-            .run(1_001_000, |transaction| {
-                SubmitSorafsModerationAppeal::new(intake).execute(&appellant, transaction)
-            })
-            .unwrap();
-        let mut appeal = fixture.appeal();
-        let juror = fixture.juror_id();
-        let outsider = fixture.outsider_id();
-        let records = [
-            ModerationJurorEligibilityRecordV1 {
-                case_id: "panel-case".to_owned(),
-                round_id: "round-1".to_owned(),
-                juror: juror.clone(),
-                eligibility_class: ModerationJurorEligibilityClassV1::General,
-                proof_digest: [0xA1; 32],
-                nullifier: [0xB1; 32],
-                pop_snapshot_digest: appeal.pop_snapshot_digest,
-                credential_expires_at_epoch: 2_000,
-                registered_at_unix_ms: 1_002_000,
-            },
-            ModerationJurorEligibilityRecordV1 {
-                case_id: "panel-case".to_owned(),
-                round_id: "round-1".to_owned(),
-                juror: outsider.clone(),
-                eligibility_class: ModerationJurorEligibilityClassV1::General,
-                proof_digest: [0xA2; 32],
-                nullifier: [0xB2; 32],
-                pop_snapshot_digest: appeal.pop_snapshot_digest,
-                credential_expires_at_epoch: 2_000,
-                registered_at_unix_ms: 1_002_000,
-            },
-        ];
-        appeal.eligible_jurors = vec![juror, outsider];
-        appeal.eligible_jurors.sort_by_key(ToString::to_string);
-        fixture
-            .run(1_002_000, |transaction| {
-                let mut status = status_for_mutation(transaction.world(), 1_002_000)?;
-                status.eligibility_proofs = 2;
-                status.updated_at_unix_ms = 1_002_000;
-                transaction.world.smart_contract_state.insert(
-                    appeal_key("panel-case", "round-1"),
-                    encode_state(&appeal, "synthetic verified appeal")?,
-                );
-                for record in &records {
-                    let encoded = encode_state(record, "synthetic verified eligibility")?;
-                    transaction.world.smart_contract_state.insert(
-                        eligibility_key("panel-case", "round-1", &record.juror),
-                        encoded.clone(),
-                    );
-                    transaction
-                        .world
-                        .smart_contract_state
-                        .insert(nullifier_key(record.nullifier), encoded);
-                }
-                transaction
-                    .world
-                    .smart_contract_state
-                    .insert(status_key().clone(), encode_status(&status)?);
-                Ok(())
-            })
-            .unwrap();
-        let snapshot_digest = appeal.pop_snapshot_digest;
-        let mut expected_selection = None;
-        fixture
-            .run(1_004_000, |transaction| {
-                let randomness_anchor = latest_parent_randomness_anchor(transaction)?;
-                let (expected_jurors, expected_waitlist, _, _) = sorafs_moderation_select_panel_v1(
-                    appeal.intake_digest,
-                    appeal.pop_snapshot_digest,
-                    randomness_anchor,
-                    &records,
-                    1,
-                    1,
-                    1,
-                )
-                .map_err(|error| corrupt_state(format!("fixture sortition failed: {error}")))?;
-                expected_selection = Some((expected_jurors.clone(), expected_waitlist.clone()));
-                FinalizeSorafsModerationSortition::new(
-                    "panel-case".to_owned(),
-                    "round-1".to_owned(),
-                    snapshot_digest,
-                    randomness_anchor,
-                    expected_jurors.clone(),
-                    expected_waitlist.clone(),
-                )
-                .execute(&manager, transaction)
-            })
-            .unwrap();
-        let (expected_jurors, expected_waitlist) =
-            expected_selection.expect("fixture captured deterministic selection");
-        let sortition_digest = fixture
-            .appeal()
-            .selection
-            .expect("selection")
-            .sortition_digest;
-        fixture
-            .run(1_006_000, |transaction| {
-                ActivateSorafsModerationCase::new(
-                    "panel-case".to_owned(),
-                    "round-1".to_owned(),
-                    sortition_digest,
-                )
-                .execute(&manager, transaction)
-            })
-            .unwrap();
-        let appeal = fixture.appeal();
-        assert_eq!(appeal.status, ModerationAppealStatusV1::BallotOpen);
-        assert_eq!(appeal.replacements.len(), 1);
-        assert_eq!(appeal.replacements[0].absent_juror, expected_jurors[0]);
-        assert_eq!(
-            appeal.replacements[0].replacement_juror,
-            expected_waitlist[0]
-        );
-        let case = FindSorafsModerationCase::new("panel-case".to_owned(), "round-1".to_owned())
-            .execute(&fixture.state.view())
-            .unwrap();
-        assert_eq!(case.spec.jurors, expected_waitlist);
-        assert_eq!(
-            FindSorafsModerationStatus
-                .execute(&fixture.state.view())
-                .unwrap()
-                .failover_replacements,
-            1
-        );
-    }
-
-    #[test]
-    fn later_pop_revocation_rotation_does_not_rewrite_or_brick_admitted_snapshot() {
-        let mut fixture = PanelFixture::new();
-        fixture.submit(1, 0, 1);
-        let manager = fixture.manager_id();
-        let material = shared_pop_material();
-        let entries = vec![PopRevocationEntryV1 {
-            nonce: material.credential.revocation_nonce,
-            revoked_at_epoch: 1_001,
-            reason: PopRevocationReasonV1::GovernanceSuspension,
-        }];
-        let revocation_root = pop_revocation_root_v1(&entries).expect("rotated revocation root");
-        let publication = sign_pop_revocations(
-            PopRevocationListV1 {
-                version: POP_REVOCATION_LIST_VERSION_V1,
-                list_version: 2,
-                commitment_root: material.root.root_digest,
-                revocation_root,
-                revocation_tree_depth: POP_REVOCATION_TREE_DEPTH_V1,
-                issuer_id: "pop-issuer-sora-foundation".to_owned(),
-                published_at_epoch: 1_001,
-                entries,
-                publisher_signature: empty_pop_signature(&fixture.manager),
-            },
-            &fixture.manager,
-        );
-        let issuer_policy_digest = pop_policy(&fixture.manager)
-            .digest()
-            .expect("policy digest");
-        fixture
-            .run(1_001_500, |transaction| {
-                PublishSorafsPopRevocationList::new(encode(&publication), issuer_policy_digest)
-                    .execute(&manager, transaction)
-            })
-            .unwrap();
-        let proof = proof_for_appeal(&fixture.appeal());
-        let juror = fixture.juror_id();
-        fixture
-            .run(1_002_000, |transaction| {
-                RegisterSorafsModerationJurorEligibility::new(
-                    "panel-case".to_owned(),
-                    "round-1".to_owned(),
-                    encode(&proof),
-                )
-                .execute(&juror, transaction)
-            })
-            .unwrap();
-        let admitted = fixture.appeal();
-        assert_eq!(admitted.eligible_jurors, vec![juror.clone()]);
-        assert_eq!(admitted.pop_snapshot.revocation_list_version, 1);
-        assert_eq!(admitted.pop_snapshot.registry_audit_sequence, 2);
-        let sortition_digest = fixture.finalize_single_juror_sortition();
-        fixture
-            .run(1_004_001, |transaction| {
-                AcceptSorafsModerationJurorAssignment::new(
-                    "panel-case".to_owned(),
-                    "round-1".to_owned(),
-                    sortition_digest,
-                )
-                .execute(&juror, transaction)
-            })
-            .unwrap();
-        fixture
-            .run(1_006_000, |transaction| {
-                ActivateSorafsModerationCase::new(
-                    "panel-case".to_owned(),
-                    "round-1".to_owned(),
-                    sortition_digest,
-                )
-                .execute(&manager, transaction)
-            })
-            .unwrap();
-        assert_eq!(
-            fixture.appeal().status,
-            ModerationAppealStatusV1::BallotOpen
-        );
-        assert_eq!(
-            FindSorafsModerationStatus
-                .execute(&fixture.state.view())
-                .unwrap()
-                .eligibility_proofs,
-            1
-        );
-    }
-
-    #[test]
-    fn committed_event_pages_resolve_final_hashes_and_enforce_exact_cursors() {
-        let mut fixture = Fixture::new(2);
-        let juror0 = fixture.juror_id(0);
-        let juror1 = fixture.juror_id(1);
-        let reveal0 = reveal(
-            &fixture.spec,
-            &juror0,
-            SoraFsModerationVoteChoice::Uphold,
-            0x91,
-        );
-        let reveal1 = reveal(
-            &fixture.spec,
-            &juror1,
-            SoraFsModerationVoteChoice::Overturn,
-            0x92,
-        );
-        fixture
-            .run(1_500, |transaction| {
-                SubmitSorafsModerationCommit::new(encode(&commit(&reveal0)))
-                    .execute(&juror0, transaction)?;
-                SubmitSorafsModerationCommit::new(encode(&commit(&reveal1)))
-                    .execute(&juror1, transaction)
-            })
-            .expect("commit two moderation events in one block");
-
-        let view = fixture.state.view();
-        let anchor = resolve_finalized_cursor(&view).expect("resolve finalized moderation anchor");
-        assert_eq!(anchor.height, 2);
-        let first = FindSorafsModerationEvents::new(anchor, None, 2)
-            .execute(&view)
-            .expect("read first committed-event page");
-        assert_eq!(
-            first
-                .events
-                .iter()
-                .map(|event| event.sequence)
-                .collect::<Vec<_>>(),
-            vec![1, 2]
-        );
-        assert_eq!(first.events[0].block_height, 1);
-        assert_eq!(first.events[0].event_index, 0);
-        assert_eq!(first.events[1].block_height, 2);
-        assert_eq!(first.events[1].event_index, 0);
-        assert_eq!(
-            first.events[1].block_hash,
-            *iroha_crypto::HashOf::new(&header(2, 1_500)).as_ref()
-        );
-        assert!(first.has_more);
-        let continuation = first.next_after.expect("continuation cursor");
-
-        let second = FindSorafsModerationEvents::new(anchor, Some(continuation), 2)
-            .execute(&view)
-            .expect("read second committed-event page");
-        assert_eq!(second.events.len(), 1);
-        assert_eq!(second.events[0].sequence, 3);
-        assert_eq!(second.events[0].block_height, 2);
-        assert_eq!(second.events[0].event_index, 1);
-        assert!(!second.has_more);
-        assert!(second.next_after.is_none());
-        let exhausted = FindSorafsModerationEvents::new(anchor, Some(second.events[0].cursor()), 2)
-            .execute(&view)
-            .expect("a cursor at the journal head yields an empty page");
-        assert!(exhausted.events.is_empty());
-        assert!(!exhausted.has_more);
-        assert!(exhausted.next_after.is_none());
-
-        let mut tampered_after = continuation;
-        tampered_after.block_hash[0] ^= 0xFF;
-        assert!(matches!(
-            FindSorafsModerationEvents::new(anchor, Some(tampered_after), 2).execute(&view),
-            Err(QueryExecutionFail::Expired)
-        ));
-        let mut tampered_anchor = anchor;
-        tampered_anchor.block_hash[0] ^= 0xFF;
-        assert!(matches!(
-            FindSorafsModerationEvents::new(tampered_anchor, None, 2).execute(&view),
-            Err(QueryExecutionFail::Expired)
-        ));
-        assert!(
-            FindSorafsModerationEvents::new(anchor, None, 0)
-                .execute(&view)
-                .is_err()
-        );
-        assert!(
-            FindSorafsModerationEvents::new(anchor, None, MODERATION_QUERY_MAX_EVENTS_V1 + 1)
-                .execute(&view)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn snapshot_rebuilds_complete_chain_projection_in_logical_order() {
-        let mut fixture = PanelFixture::new();
-        let appellant = fixture.appellant_id();
-        let z_intake = panel_intake(&fixture.appellant, "z-case", 1, 0, 1, 0x91);
-        fixture
-            .run(1_001_000, |transaction| {
-                SubmitSorafsModerationAppeal::new(z_intake).execute(&appellant, transaction)
-            })
-            .expect("submit z appeal");
-        let mut a_intake = panel_intake(&fixture.appellant, "a-case", 1, 0, 1, 0x92);
-        a_intake.proof_token_digest = [0x35; 32];
-        fixture
-            .run(1_001_001, |transaction| {
-                SubmitSorafsModerationAppeal::new(a_intake).execute(&appellant, transaction)
-            })
-            .expect("submit a appeal");
-
-        let view = fixture.state.view();
-        let snapshot = FindSorafsModerationSnapshot::new(8, 16)
-            .execute(&view)
-            .expect("rebuild complete finalized moderation snapshot");
-        assert_eq!(snapshot.finalized_height, 3);
-        assert_eq!(
-            snapshot.finalized_at_unix_ms,
-            view.latest_block()
-                .expect("exact finalized block")
-                .header()
-                .creation_time_ms
-        );
-        assert_eq!(
-            snapshot
-                .appeals
-                .iter()
-                .map(|appeal| appeal.appeal.intake.case_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["a-case", "z-case"]
-        );
-        assert!(snapshot.cases.is_empty());
-        assert_eq!(snapshot.events.len(), 3);
-        assert_eq!(
-            snapshot
-                .events
-                .iter()
-                .map(|event| event.sequence)
-                .collect::<Vec<_>>(),
-            vec![1, 2, 3]
-        );
-        assert!(
-            FindSorafsModerationSnapshot::new(1, 16)
-                .execute(&view)
-                .is_err(),
-            "a complete snapshot must fail instead of truncating cases"
-        );
-
-        let appeal = snapshot.appeals[0].appeal.clone();
-        drop(view);
-        fixture.state.world.smart_contract_state.insert(
-            digest_key(APPEAL_STATE_KEY_PREFIX, [0xEE; 32]),
-            encode_state(&appeal, "corrupt duplicate appeal").expect("encode corrupt fixture"),
-        );
-        assert!(
-            FindSorafsModerationSnapshot::new(8, 16)
-                .execute(&fixture.state.view())
-                .is_err(),
-            "a mismatched persisted key must fail the complete projection"
-        );
-    }
-
-    #[test]
-    fn snapshot_includes_all_eligibility_and_latest_typed_events() {
-        let mut fixture = PanelFixture::new();
-        fixture.submit(1, 0, 1);
-        fixture.register_juror();
-        fixture.finalize_single_juror_sortition();
-
-        let snapshot = FindSorafsModerationSnapshot::new(8, 16)
-            .execute(&fixture.state.view())
-            .expect("rebuild eligibility-bearing moderation snapshot");
-        assert_eq!(snapshot.appeals.len(), 1);
-        assert_eq!(snapshot.appeals[0].eligibility.len(), 1);
-        assert_eq!(snapshot.appeals[0].eligibility[0].juror, fixture.juror_id());
-        assert_eq!(snapshot.events.len(), 4);
-        assert_eq!(
-            snapshot.events.last().map(|event| event.event.kind),
-            Some(SorafsModerationLedgerEventKind::SortitionFinalized)
-        );
-        assert_eq!(
-            snapshot.events.last().map(|event| event.block_height),
-            Some(4)
-        );
-    }
-
-    #[test]
-    fn journal_rejects_missing_committed_parent_and_orphan_records() {
-        let manager_pair = keypair(0xA1);
-        let manager = account(&manager_pair);
-        let mut state = state(&[&manager_pair], &manager);
-        transact(&mut state, 1, OPENED_AT, |transaction| {
-            SetSorafsModerationPolicy::new(policy()).execute(&manager, transaction)
-        })
-        .expect("write initial policy event");
-
-        let active = FindSorafsModerationPolicy
-            .execute(&state.view())
-            .expect("active policy");
-        let mut next = policy();
-        next.revision = 2;
-        next.predecessor_policy_digest = Some(active.policy_digest);
-        assert!(
-            transact(&mut state, 2, OPENED_AT + 1, |transaction| {
-                SetSorafsModerationPolicy::new(next).execute(&manager, transaction)
-            })
-            .is_err(),
-            "journal append must derive height from the committed parent, not fabricate a block hash"
-        );
-        assert_eq!(
-            FindSorafsModerationPolicy
-                .execute(&state.view())
-                .expect("policy rollback")
-                .policy
-                .revision,
-            1
-        );
-
-        state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header(1, OPENED_AT)));
-        let (head, terminal) = {
-            let view = state.view();
-            let head = read_event_journal_head(view.world())
-                .expect("read event head")
-                .expect("event head");
-            let terminal = read_persisted_event(view.world(), head.last_sequence)
-                .expect("read terminal event")
-                .expect("terminal event");
-            (head, terminal)
-        };
-        let orphan = ModerationPersistedEventV1 {
-            sequence: head.last_sequence + 2,
-            target_block_height: terminal.target_block_height,
-            event_index: terminal.event_index + 2,
-            event: terminal.event,
-        };
-        state.world.smart_contract_state.insert(
-            event_key(orphan.sequence),
-            encode_state(&orphan, "orphan moderation event").expect("encode orphan event"),
-        );
-        let anchor =
-            resolve_finalized_cursor(&state.view()).expect("resolve finalized moderation anchor");
-        assert!(
-            FindSorafsModerationEvents::new(anchor, None, 8)
-                .execute(&state.view())
-                .is_err(),
-            "event records beyond the journal head must fail closed"
-        );
-    }
-
-    #[test]
-    fn snapshot_budget_fails_closed_at_record_and_byte_ceilings() {
-        let key = StatePath::from_str("moderation_budget_probe").expect("bounded probe key");
-        let mut byte_budget = ModerationSnapshotReadBudget {
-            records: 0,
-            encoded_bytes: MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1,
-        };
-        assert!(byte_budget.charge(&key, &[0x01]).is_err());
-
-        let mut record_budget = ModerationSnapshotReadBudget {
-            records: MODERATION_QUERY_MAX_SNAPSHOT_RECORDS_V1,
-            encoded_bytes: 0,
-        };
-        assert!(record_budget.charge(&key, &[]).is_err());
-    }
+    include!("sorafs/moderation_tail_tests.rs");
 }

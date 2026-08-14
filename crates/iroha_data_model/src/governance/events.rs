@@ -3,18 +3,14 @@
 //! These events mirror the lifecycle described in `gov.md` and the roadmap,
 //! providing typed Norito-serialisable payloads which higher layers can emit
 //! once the corresponding execution paths are implemented.
-
-use std::string::String;
-
-use iroha_primitives::numeric::Quantity;
-use iroha_schema::IntoSchema;
-use norito::codec::{Decode, Encode};
-
 use crate::{
     account::AccountId,
     governance::types::{ParliamentBodies, ProposalId, VoteChoice},
 };
-
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use std::string::String;
 /// Root/sudo execution outcome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub enum SudoExecutionResult {
@@ -23,14 +19,12 @@ pub enum SudoExecutionResult {
     /// The wrapped call failed with a deterministic error/trap code.
     Failure(SudoFailure),
 }
-
 /// Metadata describing a failed sudo execution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct SudoFailure {
     /// Deterministic error/trap code emitted by the host.
     pub error_code: u32,
 }
-
 /// Governance event payloads.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub enum GovernanceEvent {
@@ -71,7 +65,6 @@ pub enum GovernanceEvent {
     /// Deposit slashed for a referendum.
     DepositSlashed(DepositSlashed),
 }
-
 /// Metadata emitted when sudo executes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct SudoExecuted {
@@ -80,14 +73,13 @@ pub struct SudoExecuted {
     /// Identifier of the proposal or context this execution belongs to.
     pub proposal_id: ProposalId,
     /// Blake2b-256 hash of the approving signature set.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub sig_set_hash: [u8; 32],
     /// Block height where the sudo action executed.
     pub at_height: u64,
     /// Result of executing the wrapped call.
     pub result: SudoExecutionResult,
 }
-
 /// Referendum proposal submitted.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct ReferendumProposed {
@@ -98,7 +90,6 @@ pub struct ReferendumProposed {
     /// Deposit locked while the referendum is active.
     pub deposit: Quantity,
 }
-
 /// Referendum opened for voting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct ReferendumOpened {
@@ -109,7 +100,6 @@ pub struct ReferendumOpened {
     /// Exclusive end height for voting.
     pub end: u64,
 }
-
 /// Vote recorded for a referendum.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct VoteCast {
@@ -122,7 +112,6 @@ pub struct VoteCast {
     /// Choice made by the voter.
     pub choice: VoteChoice,
 }
-
 /// Referendum tally summarising outcomes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct ReferendumTallied {
@@ -139,7 +128,6 @@ pub struct ReferendumTallied {
     /// Whether the referendum met approval criteria.
     pub approved: bool,
 }
-
 /// Referendum scheduled for execution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct GovernanceScheduled {
@@ -150,7 +138,6 @@ pub struct GovernanceScheduled {
     /// Upper bound of the execution window (inclusive).
     pub at_window_upper: u64,
 }
-
 /// Referendum enacted successfully.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct GovernanceEnacted {
@@ -159,21 +146,19 @@ pub struct GovernanceEnacted {
     /// Block height at which enactment occurred.
     pub at_height: u64,
 }
-
 /// Referendum enactment failed to execute.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct GovernanceExecutionFailed {
     /// Referendum identifier.
     pub referendum_id: ProposalId,
     /// Blake2b-256 hash of the preimage acted upon.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub preimage_hash: [u8; 32],
     /// Block height where the failure occurred.
     pub at_height: u64,
     /// Deterministic error/trap code from the host.
     pub error_code: u32,
 }
-
 /// Parliament bodies selected for an epoch.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct ParliamentSelected {
@@ -182,7 +167,6 @@ pub struct ParliamentSelected {
     /// Body configuration snapshot persisted by the selection.
     pub bodies: ParliamentBodies,
 }
-
 /// Parliament execution succeeded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct ParliamentEnacted {
@@ -191,21 +175,19 @@ pub struct ParliamentEnacted {
     /// Block height where enactment succeeded.
     pub at_height: u64,
 }
-
 /// Parliament execution failed with a deterministic error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct ParliamentExecutionFailed {
     /// Epoch index the failure applies to.
     pub selection_epoch: u64,
     /// Blake2b-256 hash of the enactment preimage.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub preimage_hash: [u8; 32],
     /// Block height where the failure occurred.
     pub at_height: u64,
     /// Deterministic error/trap code.
     pub error_code: u32,
 }
-
 /// Parliament house type for timeout reporting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub enum ParliamentHouse {
@@ -226,7 +208,6 @@ pub enum ParliamentHouse {
     /// Enactment House.
     Enactment,
 }
-
 /// Parliament missed its deadline and timed out.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct ParliamentTimeout {
@@ -237,7 +218,6 @@ pub struct ParliamentTimeout {
     /// Deterministic reason for the timeout.
     pub reason: String,
 }
-
 /// Parliament vetoed a proposal or manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct ParliamentVetoed {
@@ -246,7 +226,6 @@ pub struct ParliamentVetoed {
     /// Deterministic reason describing the veto.
     pub reason: String,
 }
-
 /// Parliament member removed for cause.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct ParliamentMemberEjected {
@@ -255,14 +234,12 @@ pub struct ParliamentMemberEjected {
     /// Deterministic reason for removal.
     pub reason: String,
 }
-
 /// Enactment certificate rejected during validation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct CertificateRejected {
     /// Deterministic reason describing the rejection.
     pub reason: String,
 }
-
 /// Enactment requires rescheduling.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct RescheduleRequired {
@@ -271,7 +248,6 @@ pub struct RescheduleRequired {
     /// Deterministic reason for the reschedule.
     pub reason: String,
 }
-
 /// Fast-track decision granted by parliament review house.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct FastTrackGranted {
@@ -282,7 +258,6 @@ pub struct FastTrackGranted {
     /// New enactment delay after fast-track (in blocks).
     pub new_delay: u64,
 }
-
 /// Deposit slashed for a referendum due to policy breaches.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct DepositSlashed {
@@ -293,7 +268,6 @@ pub struct DepositSlashed {
     /// Deterministic reason for the slash.
     pub reason: String,
 }
-
 /// Prelude exports for convenience.
 pub mod prelude {
     pub use super::{
@@ -305,15 +279,12 @@ pub mod prelude {
         VoteCast,
     };
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn sample_proposal_id(byte: u8) -> ProposalId {
         ProposalId([byte; 32])
     }
-
     #[test]
     fn sudo_executed_roundtrip() {
         let event = GovernanceEvent::SudoExecuted(SudoExecuted {
@@ -323,13 +294,11 @@ mod tests {
             at_height: 1337,
             result: SudoExecutionResult::Failure(SudoFailure { error_code: 42 }),
         });
-
         let framed = norito::to_bytes(&event).expect("encode governance event");
         let decoded =
             norito::decode_from_bytes::<GovernanceEvent>(&framed).expect("decode governance event");
         assert_eq!(decoded, event);
     }
-
     #[test]
     fn referendum_tallied_roundtrip() {
         let event = GovernanceEvent::ReferendumTallied(ReferendumTallied {
@@ -340,13 +309,11 @@ mod tests {
             turnout: 16,
             approved: true,
         });
-
         let framed = norito::to_bytes(&event).expect("encode referendum tally");
         let decoded =
             norito::decode_from_bytes::<GovernanceEvent>(&framed).expect("decode referendum tally");
         assert_eq!(decoded, event);
     }
-
     #[test]
     fn parliament_timeout_roundtrip() {
         let event = GovernanceEvent::ParliamentTimeout(ParliamentTimeout {
@@ -354,7 +321,6 @@ mod tests {
             house: ParliamentHouse::ReviewPanel,
             reason: "missing quorum".to_owned(),
         });
-
         let framed = norito::to_bytes(&event).expect("encode parliament timeout");
         let decoded = norito::decode_from_bytes::<GovernanceEvent>(&framed)
             .expect("decode parliament timeout");

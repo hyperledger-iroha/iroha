@@ -1,24 +1,19 @@
 use iroha_version_derive::{declare_versioned, version};
 use norito::{Decode as NoritoDecode, Encode as NoritoEncode};
-
 declare_versioned!(VersionedMessage 1..2, Debug, Clone, iroha_macro::FromVariant);
 #[version(version = 1, versioned_alias = "VersionedMessage")]
 #[derive(Debug, Clone, NoritoDecode, NoritoEncode)]
 pub struct Message;
-
 impl Message {
     pub fn handle(&self) {}
 }
-
 declare_versioned!(VersionedMessage2 1..2, Debug, Clone, iroha_macro::FromVariant);
 #[version(version = 1, versioned_alias = "VersionedMessage2")]
 #[derive(Debug, Clone, NoritoDecode, NoritoEncode)]
 pub struct Message2;
-
 impl Message2 {
     pub fn handle(&self) {}
 }
-
 pub fn main() {
     let versioned_message: VersionedMessage = Message.into();
     match versioned_message {

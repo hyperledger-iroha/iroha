@@ -5,16 +5,6 @@
 //! rewrites final symbol identities in typed HIR, and then reruns whole-program
 //! recursion and effect analysis before handing the result to the canonical
 //! compiler session.
-
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
-    error::Error,
-    fmt,
-    sync::{Arc, Mutex},
-};
-
-use iroha_crypto::Hash;
-
 use crate::{
     ast::{FunctionKind, Item, Program, SourceUnitKind},
     builtins::{Builtin, BuiltinSurface},
@@ -29,7 +19,13 @@ use crate::{
     source::{FrontendBudget, SourceFile, SourceId},
     spanned_ast::SpannedProgram,
 };
-
+use iroha_crypto::Hash;
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    error::Error,
+    fmt,
+    sync::{Arc, Mutex},
+};
 const LINKED_SYMBOL_PREFIX: &str = "__kotodama_link_";
 const MAX_PARSED_CACHE_ENTRIES: usize = 64;
 const MAX_PARSED_CACHE_SOURCE_BYTES: usize = 4 * 1024 * 1024;
@@ -39,7 +35,6 @@ pub const MAX_MODULE_GRAPH_SOURCES: usize = 512;
 pub const MAX_MODULE_GRAPH_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum UTF-8 bytes in one portable logical source path.
 pub const MAX_LOGICAL_SOURCE_PATH_BYTES: usize = 4096;
-
 /// One explicit import alias resolved by a lockfile.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImportBinding {
@@ -48,7 +43,6 @@ pub struct ImportBinding {
     /// Stable package identity referenced by the lockfile.
     pub package: String,
 }
-
 /// One parsed reusable module and its diagnostic source name.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModuleUnit {
@@ -57,13 +51,11 @@ pub struct ModuleUnit {
     /// CST-derived, fail-closed resolved source unit.
     pub program: crate::resolved::ResolvedProgram,
 }
-
 impl ModuleUnit {
     fn ast(&self) -> &Program {
         self.program.program()
     }
 }
-
 /// One locked package presented to the typed linker.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PackageUnit {
@@ -76,7 +68,6 @@ pub struct PackageUnit {
     /// Dependency aliases locked for this package.
     pub imports: Vec<ImportBinding>,
 }
-
 /// Complete request for linking one deployable seiyaku.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LinkRequest {
@@ -87,7 +78,6 @@ pub struct LinkRequest {
     /// Locked transitive package graph.
     pub packages: Vec<PackageUnit>,
 }
-
 /// One reusable source unit before parsing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceModuleUnit {
@@ -100,7 +90,6 @@ pub struct SourceModuleUnit {
     /// Complete Kotodama source text.
     pub source: String,
 }
-
 /// One locked package before its source modules are parsed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourcePackageUnit {
@@ -113,7 +102,6 @@ pub struct SourcePackageUnit {
     /// Dependency aliases locked for this package.
     pub imports: Vec<ImportBinding>,
 }
-
 /// Complete source-level request for one typed-HIR module build graph.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceLinkRequest {
@@ -124,7 +112,6 @@ pub struct SourceLinkRequest {
     /// Locked transitive package graph.
     pub packages: Vec<SourcePackageUnit>,
 }
-
 /// Complete source graph for validating one reusable package before publish.
 ///
 /// Unlike [`SourceLinkRequest`], this graph has no deployable seiyaku root.
@@ -139,7 +126,6 @@ pub struct SourcePackageGraphRequest {
     /// Authenticated, locked transitive dependency packages.
     pub dependencies: Vec<SourcePackageUnit>,
 }
-
 /// Linked typed-HIR plus the canonical identity of every graph input.
 #[derive(Debug)]
 pub struct LinkedSourceGraph {
@@ -148,7 +134,6 @@ pub struct LinkedSourceGraph {
     /// Domain-separated digest of source contents, logical paths, imports, and exports.
     pub fingerprint: Hash,
 }
-
 /// Successful canonical validation of one reusable package graph.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidatedSourcePackageGraph {
@@ -159,7 +144,6 @@ pub struct ValidatedSourcePackageGraph {
     /// Unique production functions exposed by the local package manifest.
     pub exports: BTreeSet<String>,
 }
-
 /// Failure while parsing or linking a source module graph.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SourceGraphError {
@@ -207,15 +191,12 @@ pub enum SourceGraphError {
     /// Typed-HIR linking failed.
     Link(LinkError),
 }
-
 impl fmt::Display for SourceGraphError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.clone().into_diagnostics().render_human())
     }
 }
-
 impl Error for SourceGraphError {}
-
 impl SourceGraphError {
     /// Return the stable code for the primary source-graph failure.
     pub fn diagnostic_code(&self) -> &str {
@@ -234,7 +215,6 @@ impl SourceGraphError {
             Self::Link(error) => error.diagnostic_code(),
         }
     }
-
     /// Convert parsing, resolution, metadata, and typed-link failures into one
     /// canonical bundle suitable for human, JSON, or SARIF rendering.
     pub fn into_diagnostics(self) -> DiagnosticBundle {
@@ -276,7 +256,6 @@ impl SourceGraphError {
         }
     }
 }
-
 /// Stable reason for rejecting a logical source path before parsing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InvalidSourcePathReason {
@@ -305,7 +284,6 @@ pub enum InvalidSourcePathReason {
         max_bytes: usize,
     },
 }
-
 impl fmt::Display for InvalidSourcePathReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -335,13 +313,11 @@ impl fmt::Display for InvalidSourcePathReason {
         }
     }
 }
-
 impl From<LinkError> for SourceGraphError {
     fn from(error: LinkError) -> Self {
         Self::Link(error)
     }
 }
-
 struct CachedParsedSource {
     digest: String,
     // Retaining the exact source prevents a digest collision from substituting
@@ -349,13 +325,11 @@ struct CachedParsedSource {
     source: String,
     program: SpannedProgram,
 }
-
 #[derive(Default)]
 struct ParsedSourceCache {
     entries: VecDeque<CachedParsedSource>,
     source_bytes: usize,
 }
-
 impl ParsedSourceCache {
     fn get(&mut self, digest: &str, source: &str) -> Option<SpannedProgram> {
         let index = self
@@ -370,7 +344,6 @@ impl ParsedSourceCache {
         self.entries.push_back(entry);
         Some(program)
     }
-
     fn insert(&mut self, digest: String, source: String, mut program: SpannedProgram) {
         if source.len() > MAX_PARSED_CACHE_SOURCE_BYTES {
             return;
@@ -403,7 +376,6 @@ impl ParsedSourceCache {
         });
     }
 }
-
 /// Reusable, content-addressed parser and typed-HIR linker.
 ///
 /// A call parses independent changed modules in parallel. Equal source contents
@@ -419,7 +391,6 @@ pub struct ModuleBuildGraph {
     #[cfg(test)]
     link_attempts: std::sync::atomic::AtomicUsize,
 }
-
 impl ModuleBuildGraph {
     /// Return the canonical identity of a complete locked source graph.
     ///
@@ -431,7 +402,6 @@ impl ModuleBuildGraph {
         let names = validate_source_link_request(request)?;
         Ok(source_graph_fingerprint(request, &names))
     }
-
     /// Return the canonical identity of one reusable package source graph.
     pub fn package_fingerprint(
         request: &SourcePackageGraphRequest,
@@ -439,7 +409,6 @@ impl ModuleBuildGraph {
         let names = validate_source_package_graph_request(request)?;
         Ok(source_package_graph_fingerprint(request, &names))
     }
-
     /// Parse editor/project sources through the same content-addressed cache
     /// later consumed by typed graph linking.
     pub(crate) fn parse_project_sources(
@@ -453,7 +422,6 @@ impl ModuleBuildGraph {
         let source_ids = stable_source_ids(&keys);
         self.parse_sources_with_ids(sources, &source_ids)
     }
-
     /// Parse, resolve, and type-check one complete locked source graph.
     pub fn link(
         &self,
@@ -580,7 +548,6 @@ impl ModuleBuildGraph {
             fingerprint,
         })
     }
-
     /// Parse, resolve, type/effect-check, and validate one publishable package.
     ///
     /// No synthetic deployable root is created. Every source is parsed once
@@ -598,13 +565,11 @@ impl ModuleBuildGraph {
         #[cfg(test)]
         self.link_attempts
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
         let local_identity = request.package.identity.clone();
         let local_exports = request.package.exports.clone();
         let mut packages = Vec::with_capacity(1_usize.saturating_add(request.dependencies.len()));
         packages.push(request.package);
         packages.extend(request.dependencies);
-
         let sources = packages
             .iter()
             .flat_map(|package| package.modules.iter().cloned())
@@ -630,7 +595,6 @@ impl ModuleBuildGraph {
             .into_iter();
         let mut source_ids = source_ids.into_iter();
         let mut package_identities = package_identities.into_iter();
-
         let mut resolved_packages = Vec::with_capacity(packages.len());
         let mut resolve_diagnostics = Vec::new();
         for package in packages {
@@ -681,7 +645,6 @@ impl ModuleBuildGraph {
                 diagnostics: DiagnosticBundle::new(resolve_diagnostics),
             });
         }
-
         let interface_fingerprint =
             TypedLinker::new(options).validate_package_graph(resolved_packages, &local_identity)?;
         Ok(ValidatedSourcePackageGraph {
@@ -690,7 +653,6 @@ impl ModuleBuildGraph {
             exports: local_exports,
         })
     }
-
     /// Link and compile one explicit local test root with its exact package graph.
     ///
     /// The suite and deployable runtime projection are derived from the same
@@ -711,7 +673,6 @@ impl ModuleBuildGraph {
                 None,
             )));
         }
-
         let session = crate::session::CompilerSession::new(options.clone());
         let _chain_discriminant = session.enter_chain_discriminant();
         let linked = self
@@ -752,19 +713,16 @@ impl ModuleBuildGraph {
         };
         Ok(crate::session::TestCompileOutput { suite, runtime })
     }
-
     #[cfg(test)]
     pub(crate) fn parse_attempt_count(&self) -> usize {
         self.parse_attempts
             .load(std::sync::atomic::Ordering::Relaxed)
     }
-
     #[cfg(test)]
     pub(crate) fn link_attempt_count(&self) -> usize {
         self.link_attempts
             .load(std::sync::atomic::Ordering::Relaxed)
     }
-
     fn parse_sources_with_ids(
         &self,
         sources: &[SourceModuleUnit],
@@ -773,7 +731,6 @@ impl ModuleBuildGraph {
         let package_identities = vec![None; sources.len()];
         self.parse_sources_with_ids_scoped(sources, source_ids, &package_identities)
     }
-
     fn parse_sources_with_ids_scoped(
         &self,
         sources: &[SourceModuleUnit],
@@ -784,7 +741,6 @@ impl ModuleBuildGraph {
             Hash::new_from_chunks(&[b"kotodama-module-source-v1\0", source.as_bytes()]).to_string()
         })
     }
-
     #[cfg(test)]
     fn parse_sources_with_digest(
         &self,
@@ -795,7 +751,6 @@ impl ModuleBuildGraph {
         let package_identities = vec![None; sources.len()];
         self.parse_sources_with_digest_scoped(sources, source_ids, &package_identities, digest)
     }
-
     fn parse_sources_with_digest_scoped(
         &self,
         sources: &[SourceModuleUnit],
@@ -812,7 +767,6 @@ impl ModuleBuildGraph {
             members: Vec<usize>,
             program: Option<SpannedProgram>,
         }
-
         let mut unique = Vec::<UniqueSource>::new();
         let mut digest_indexes = HashMap::<String, Vec<usize>>::new();
         for (source_index, unit) in sources.iter().enumerate() {
@@ -837,7 +791,6 @@ impl ModuleBuildGraph {
                 digest_indexes.entry(source_digest).or_default().push(index);
             }
         }
-
         {
             let mut cache = self
                 .parsed
@@ -847,7 +800,6 @@ impl ModuleBuildGraph {
                 item.program = cache.get(&item.digest, &item.source);
             }
         }
-
         let pending = unique
             .iter()
             .enumerate()
@@ -914,7 +866,6 @@ impl ModuleBuildGraph {
                 diagnostics: DiagnosticBundle::new(parse_diagnostics),
             });
         }
-
         {
             let mut cache = self
                 .parsed
@@ -931,7 +882,6 @@ impl ModuleBuildGraph {
                 );
             }
         }
-
         let mut programs = vec![None; sources.len()];
         for item in unique {
             let program = item.program.expect("every unique source was parsed");
@@ -945,7 +895,6 @@ impl ModuleBuildGraph {
             .collect())
     }
 }
-
 fn remap_diagnostic_bundle_owner(
     bundle: &mut DiagnosticBundle,
     package_identity: Option<&str>,
@@ -967,7 +916,6 @@ fn remap_diagnostic_bundle_owner(
         }
     }
 }
-
 pub(crate) fn stable_source_ids(keys: &[String]) -> Vec<SourceId> {
     let mut order = keys.iter().enumerate().collect::<Vec<_>>();
     order.sort_by(|(left_index, left), (right_index, right)| {
@@ -980,17 +928,14 @@ pub(crate) fn stable_source_ids(keys: &[String]) -> Vec<SourceId> {
     }
     ids
 }
-
 struct CanonicalSourceLinkNames {
     root: String,
     packages: Vec<Vec<String>>,
 }
-
 struct CanonicalSourcePackageGraphNames {
     package: Vec<String>,
     dependencies: Vec<Vec<String>>,
 }
-
 fn validate_source_link_request(
     request: &SourceLinkRequest,
 ) -> Result<CanonicalSourceLinkNames, SourceGraphError> {
@@ -999,7 +944,6 @@ fn validate_source_link_request(
     let packages = validate_source_package_metadata(request.packages.iter())?;
     Ok(CanonicalSourceLinkNames { root, packages })
 }
-
 fn validate_source_package_graph_request(
     request: &SourcePackageGraphRequest,
 ) -> Result<CanonicalSourcePackageGraphNames, SourceGraphError> {
@@ -1017,7 +961,6 @@ fn validate_source_package_graph_request(
         dependencies,
     })
 }
-
 fn canonicalize_source_link_request(
     request: &mut SourceLinkRequest,
     names: CanonicalSourceLinkNames,
@@ -1031,7 +974,6 @@ fn canonicalize_source_link_request(
         .packages
         .sort_by(|left, right| left.identity.cmp(&right.identity));
 }
-
 fn canonicalize_source_package_graph_request(
     request: &mut SourcePackageGraphRequest,
     names: CanonicalSourcePackageGraphNames,
@@ -1044,7 +986,6 @@ fn canonicalize_source_package_graph_request(
         .dependencies
         .sort_by(|left, right| left.identity.cmp(&right.identity));
 }
-
 fn canonicalize_source_package(package: &mut SourcePackageUnit, names: Vec<String>) {
     assert_eq!(
         package.modules.len(),
@@ -1059,7 +1000,6 @@ fn canonicalize_source_package(package: &mut SourcePackageUnit, names: Vec<Strin
         .sort_by(|left, right| left.source_name.cmp(&right.source_name));
     sort_imports(&mut package.imports);
 }
-
 fn sort_imports(imports: &mut [ImportBinding]) {
     imports.sort_by(|left, right| {
         left.alias
@@ -1067,7 +1007,6 @@ fn sort_imports(imports: &mut [ImportBinding]) {
             .then_with(|| left.package.cmp(&right.package))
     });
 }
-
 fn validate_source_graph_budget(request: &SourceLinkRequest) -> Result<(), SourceGraphError> {
     let mut sources = 1_usize;
     let mut source_bytes = request.root.source.len();
@@ -1087,7 +1026,6 @@ fn validate_source_graph_budget(request: &SourceLinkRequest) -> Result<(), Sourc
     }
     Ok(())
 }
-
 fn validate_package_graph_budget(
     request: &SourcePackageGraphRequest,
 ) -> Result<(), SourceGraphError> {
@@ -1113,7 +1051,6 @@ fn validate_package_graph_budget(
     }
     Ok(())
 }
-
 fn validate_source_package_metadata<'a>(
     packages: impl IntoIterator<Item = &'a SourcePackageUnit>,
 ) -> Result<Vec<Vec<String>>, SourceGraphError> {
@@ -1163,7 +1100,6 @@ fn validate_source_package_metadata<'a>(
     validate_acyclic_package_imports(&identities, &imports)?;
     Ok(canonical_sources)
 }
-
 fn canonical_logical_source_name(scope: &str, source: &str) -> Result<String, SourceGraphError> {
     let invalid = |reason| SourceGraphError::InvalidSourcePath {
         scope: scope.to_owned(),
@@ -1196,7 +1132,6 @@ fn canonical_logical_source_name(scope: &str, source: &str) -> Result<String, So
             character,
         }));
     }
-
     let mut components = Vec::new();
     for component in source.split('/') {
         match component {
@@ -1218,14 +1153,12 @@ fn canonical_logical_source_name(scope: &str, source: &str) -> Result<String, So
     }
     Ok(normalized)
 }
-
 fn source_graph_fingerprint(request: &SourceLinkRequest, names: &CanonicalSourceLinkNames) -> Hash {
     fn field(transcript: &mut Vec<u8>, value: impl AsRef<[u8]>) {
         let value = value.as_ref();
         transcript.extend_from_slice(&(value.len() as u64).to_le_bytes());
         transcript.extend_from_slice(value);
     }
-
     fn imports(transcript: &mut Vec<u8>, values: &[ImportBinding]) {
         let mut values = values.to_vec();
         values.sort_by(|left, right| {
@@ -1239,7 +1172,6 @@ fn source_graph_fingerprint(request: &SourceLinkRequest, names: &CanonicalSource
             field(transcript, value.package);
         }
     }
-
     let mut transcript = b"kotodama-source-graph-v1\0".to_vec();
     field(&mut transcript, &names.root);
     field(&mut transcript, &request.root.source);
@@ -1271,7 +1203,6 @@ fn source_graph_fingerprint(request: &SourceLinkRequest, names: &CanonicalSource
     }
     Hash::new(transcript)
 }
-
 fn source_package_graph_fingerprint(
     request: &SourcePackageGraphRequest,
     names: &CanonicalSourcePackageGraphNames,
@@ -1281,7 +1212,6 @@ fn source_package_graph_fingerprint(
         transcript.extend_from_slice(&(value.len() as u64).to_le_bytes());
         transcript.extend_from_slice(value);
     }
-
     fn imports(transcript: &mut Vec<u8>, values: &[ImportBinding]) {
         let mut values = values.to_vec();
         values.sort_by(|left, right| {
@@ -1295,7 +1225,6 @@ fn source_package_graph_fingerprint(
             field(transcript, value.package);
         }
     }
-
     fn package(transcript: &mut Vec<u8>, value: &SourcePackageUnit, names: &[String]) {
         field(transcript, &value.identity);
         imports(transcript, &value.imports);
@@ -1311,7 +1240,6 @@ fn source_package_graph_fingerprint(
             field(transcript, &module.source);
         }
     }
-
     let mut transcript = b"kotodama-source-package-graph-v1\0".to_vec();
     field(&mut transcript, b"local");
     package(&mut transcript, &request.package, &names.package);
@@ -1328,7 +1256,6 @@ fn source_package_graph_fingerprint(
     }
     Hash::new(transcript)
 }
-
 /// Compiler capabilities applied consistently to every linked source unit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LinkerOptions {
@@ -1340,7 +1267,6 @@ pub struct LinkerOptions {
     /// production linking rejects test syntax and never strips it implicitly.
     pub include_tests: bool,
 }
-
 /// A deterministic typed-link failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LinkError {
@@ -1478,7 +1404,6 @@ pub enum LinkError {
     /// Name/export validation produced one or more structured link diagnostics.
     Diagnostics(DiagnosticBundle),
 }
-
 impl LinkError {
     /// Return the stable code for this typed-link failure.
     pub fn diagnostic_code(&self) -> &str {
@@ -1509,7 +1434,6 @@ impl LinkError {
                 .map_or("K2099", |diagnostic| diagnostic.code.as_str()),
         }
     }
-
     /// Convert every typed-link failure into the canonical diagnostic schema.
     pub fn into_diagnostics(self) -> DiagnosticBundle {
         let diagnostic = |code, message| {
@@ -1618,27 +1542,22 @@ impl LinkError {
         }
     }
 }
-
 impl fmt::Display for LinkError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.clone().into_diagnostics().render_human())
     }
 }
-
 impl Error for LinkError {}
-
 /// Stateless deterministic typed-HIR linker.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TypedLinker {
     options: LinkerOptions,
 }
-
 impl TypedLinker {
     /// Create a linker with explicit compiler capabilities.
     pub const fn new(options: LinkerOptions) -> Self {
         Self { options }
     }
-
     /// Resolve and link one seiyaku plus its locked module graph.
     pub fn link(&self, mut request: LinkRequest) -> Result<TypedProgram, LinkError> {
         validate_linker_options(self.options)?;
@@ -1648,7 +1567,6 @@ impl TypedLinker {
             });
         }
         validate_program_symbols(&request.root)?;
-
         let resolved_packages = resolve_packages(self.options, &mut request.packages)?;
         let package_indexes = resolved_packages
             .iter()
@@ -1656,7 +1574,6 @@ impl TypedLinker {
             .map(|(index, package)| (package.identity.clone(), index))
             .collect::<HashMap<_, _>>();
         let root_imports = resolve_imports("root", &request.imports, &package_indexes)?;
-
         let mut import_diagnostics =
             imported_call_diagnostics(&request.root, &root_imports, &resolved_packages);
         for package in &resolved_packages {
@@ -1685,7 +1602,6 @@ impl TypedLinker {
         rename_program_calls(&mut root, &BTreeMap::new(), &root_external_names);
         link_resolved_packages(self.options, &resolved_packages, Some(root))
     }
-
     /// Validate a reusable package and all locked dependencies as typed HIR.
     ///
     /// Every package must contain only production module declarations. The
@@ -1729,13 +1645,11 @@ impl TypedLinker {
         Ok(interface_fingerprint)
     }
 }
-
 #[derive(Clone)]
 struct ResolvedExport {
     linked_name: String,
     signature: FunctionSignature,
 }
-
 struct ResolvedModule<'request> {
     source: &'request ModuleUnit,
     signatures: BTreeMap<String, FunctionSignature>,
@@ -1743,14 +1657,12 @@ struct ResolvedModule<'request> {
     local_structs: HashSet<String>,
     type_prefix: String,
 }
-
 struct ResolvedPackage<'request> {
     identity: String,
     imports: BTreeMap<String, usize>,
     modules: Vec<ResolvedModule<'request>>,
     exports: BTreeMap<String, ResolvedExport>,
 }
-
 fn package_interface_fingerprint(package: &ResolvedPackage<'_>) -> Hash {
     let mut transcript = b"kotodama-package-interface-v1\0".to_vec();
     interface_count(&mut transcript, package.exports.len());
@@ -1769,7 +1681,6 @@ fn package_interface_fingerprint(package: &ResolvedPackage<'_>) -> Hash {
     }
     Hash::new(transcript)
 }
-
 fn interface_field(transcript: &mut Vec<u8>, value: &[u8]) {
     transcript.extend_from_slice(
         &u64::try_from(value.len())
@@ -1778,7 +1689,6 @@ fn interface_field(transcript: &mut Vec<u8>, value: &[u8]) {
     );
     transcript.extend_from_slice(value);
 }
-
 fn interface_count(transcript: &mut Vec<u8>, count: usize) {
     transcript.extend_from_slice(
         &u64::try_from(count)
@@ -1786,7 +1696,6 @@ fn interface_count(transcript: &mut Vec<u8>, count: usize) {
             .to_le_bytes(),
     );
 }
-
 fn interface_optional_field(transcript: &mut Vec<u8>, value: Option<&str>) {
     match value {
         Some(value) => {
@@ -1796,7 +1705,6 @@ fn interface_optional_field(transcript: &mut Vec<u8>, value: Option<&str>) {
         None => transcript.push(0),
     }
 }
-
 fn interface_modifiers(transcript: &mut Vec<u8>, modifiers: &crate::ast::FunctionModifiers) {
     transcript.push(match modifiers.kind {
         FunctionKind::Private => 0,
@@ -1817,7 +1725,6 @@ fn interface_modifiers(transcript: &mut Vec<u8>, modifiers: &crate::ast::Functio
     transcript.push(u8::from(modifiers.is_test));
     interface_optional_field(transcript, modifiers.test_fixture.as_deref());
 }
-
 fn interface_type(transcript: &mut Vec<u8>, ty: &Type) {
     match ty {
         Type::Int => transcript.push(0),
@@ -1885,7 +1792,6 @@ fn interface_type(transcript: &mut Vec<u8>, ty: &Type) {
         }
     }
 }
-
 fn semantic_link_error(module: &ModuleUnit, failures: semantic::SemanticFailures) -> LinkError {
     LinkError::Semantic {
         diagnostics: crate::semantic_diagnostics::from_semantic_failures(
@@ -1896,7 +1802,6 @@ fn semantic_link_error(module: &ModuleUnit, failures: semantic::SemanticFailures
         ),
     }
 }
-
 fn function_declaration_span(module: &ResolvedModule<'_>, name: &str) -> Option<SourceSpan> {
     module
         .source
@@ -1907,7 +1812,6 @@ fn function_declaration_span(module: &ResolvedModule<'_>, name: &str) -> Option<
         })
         .and_then(|symbol| module.source.program.source_span(symbol.source))
 }
-
 fn validate_linker_options(options: LinkerOptions) -> Result<(), LinkError> {
     if options.include_tests != options.test_builtins_enabled {
         return Err(LinkError::Semantic {
@@ -1921,7 +1825,6 @@ fn validate_linker_options(options: LinkerOptions) -> Result<(), LinkError> {
     }
     Ok(())
 }
-
 fn resolve_packages<'request>(
     options: LinkerOptions,
     packages: &'request mut [PackageUnit],
@@ -1963,7 +1866,6 @@ fn resolve_packages<'request>(
             validate_module_items(module)?;
         }
     }
-
     let package_indexes = packages
         .iter()
         .enumerate()
@@ -2023,7 +1925,6 @@ fn resolve_packages<'request>(
                 type_prefix,
             });
         }
-
         let mut exports = BTreeMap::new();
         for export in &package.exports {
             validate_identifier("package export", export)?;
@@ -2099,7 +2000,6 @@ fn resolve_packages<'request>(
         )))
     }
 }
-
 fn validate_acyclic_package_imports(
     identities: &[String],
     imports: &[BTreeMap<String, usize>],
@@ -2115,7 +2015,6 @@ fn validate_acyclic_package_imports(
         })
         .collect::<Vec<_>>();
     let mut state = vec![0_u8; identities.len()];
-
     for start in 0..identities.len() {
         if state[start] != 0 {
             continue;
@@ -2148,7 +2047,6 @@ fn validate_acyclic_package_imports(
                 }
                 continue;
             }
-
             let (finished, _) = stack.pop().expect("non-empty package DFS stack");
             path.pop().expect("package DFS path mirrors its stack");
             state[finished] = 2;
@@ -2156,7 +2054,6 @@ fn validate_acyclic_package_imports(
     }
     Ok(())
 }
-
 fn link_resolved_packages(
     options: LinkerOptions,
     packages: &[ResolvedPackage<'_>],
@@ -2172,7 +2069,6 @@ fn link_resolved_packages(
         .flat_map(|program| program.message_entries.iter())
         .map(|entry| entry.msg_id.clone())
         .collect::<HashSet<_>>();
-
     for (package_index, package) in packages.iter().enumerate() {
         let external = external_signatures(&package.imports, packages);
         let external_names = external_linked_names(&package.imports, packages);
@@ -2186,7 +2082,6 @@ fn link_resolved_packages(
                 .map_err(|failures| semantic_link_error(module.source, failures))?;
             qualify_typed_program(&mut typed, &module.local_structs, &module.type_prefix);
             rename_program_calls(&mut typed, &module.linked_names, &external_names);
-
             for error in &mut typed.error_codes {
                 if !seen_error_codes.insert(error.code) {
                     return Err(LinkError::DuplicateErrorCode { code: error.code });
@@ -2203,7 +2098,6 @@ fn link_resolved_packages(
                     });
                 }
             }
-
             if let Some(program) = &mut linked {
                 for (id, node) in std::mem::take(&mut typed.hir_nodes) {
                     if program.hir_nodes.insert(id, node).is_some() {
@@ -2251,7 +2145,6 @@ fn link_resolved_packages(
             }
         }
     }
-
     let linked = linked.ok_or_else(|| LinkError::Semantic {
         diagnostics: DiagnosticBundle::single(Diagnostic::error(
             "E_EMPTY_PACKAGE_GRAPH",
@@ -2272,7 +2165,6 @@ fn link_resolved_packages(
     })?;
     Ok(linked)
 }
-
 fn resolve_imports(
     scope: &str,
     imports: &[ImportBinding],
@@ -2308,7 +2200,6 @@ fn resolve_imports(
     }
     Ok(resolved)
 }
-
 /// Return whether an import alias collides with a V1 builtin or compiler name.
 ///
 /// Package frontends use the same predicate as the typed linker so a manifest
@@ -2325,7 +2216,6 @@ pub fn is_reserved_import_alias(alias: &str) -> bool {
                 .is_some_and(|(root, _)| root == alias)
         })
 }
-
 fn external_signatures(
     imports: &BTreeMap<String, usize>,
     packages: &[ResolvedPackage<'_>],
@@ -2338,7 +2228,6 @@ fn external_signatures(
     }
     external
 }
-
 fn external_linked_names(
     imports: &BTreeMap<String, usize>,
     packages: &[ResolvedPackage<'_>],
@@ -2351,7 +2240,6 @@ fn external_linked_names(
     }
     names
 }
-
 fn validate_identifier(context: &str, name: &str) -> Result<(), LinkError> {
     let mut chars = name.chars();
     let first = chars.next();
@@ -2365,7 +2253,6 @@ fn validate_identifier(context: &str, name: &str) -> Result<(), LinkError> {
     }
     Ok(())
 }
-
 fn validate_program_symbols(module: &ModuleUnit) -> Result<(), LinkError> {
     validate_identifier("source-unit name", &module.ast().unit.name)?;
     let mut declarations = HashSet::new();
@@ -2400,7 +2287,6 @@ fn validate_program_symbols(module: &ModuleUnit) -> Result<(), LinkError> {
     }
     Ok(())
 }
-
 fn validate_module_items(module: &ModuleUnit) -> Result<(), LinkError> {
     for item in &module.ast().items {
         let invalid = match item {
@@ -2424,7 +2310,6 @@ fn validate_module_items(module: &ModuleUnit) -> Result<(), LinkError> {
     }
     Ok(())
 }
-
 fn imported_call_diagnostics(
     module: &ModuleUnit,
     imports: &BTreeMap<String, usize>,
@@ -2477,7 +2362,6 @@ fn imported_call_diagnostics(
     }
     diagnostics
 }
-
 fn qualify_signature(
     signature: &mut FunctionSignature,
     local_structs: &HashSet<String>,
@@ -2488,7 +2372,6 @@ fn qualify_signature(
     }
     qualify_type(&mut signature.return_type, local_structs, prefix);
 }
-
 fn qualify_type(ty: &mut Type, local_structs: &HashSet<String>, prefix: &str) {
     match ty {
         Type::Secret(inner) | Type::Option(inner) | Type::List(inner, _) => {
@@ -2537,7 +2420,6 @@ fn qualify_type(ty: &mut Type, local_structs: &HashSet<String>, prefix: &str) {
         | Type::NamedStruct(_) => {}
     }
 }
-
 fn qualify_typed_program(
     program: &mut TypedProgram,
     local_structs: &HashSet<String>,
@@ -2554,7 +2436,6 @@ fn qualify_typed_program(
         qualify_block(&mut function.body, local_structs, prefix);
     }
 }
-
 fn qualify_block(block: &mut TypedBlock, local_structs: &HashSet<String>, prefix: &str) {
     for statement in &mut block.statements {
         qualify_statement(statement, local_structs, prefix);
@@ -2563,7 +2444,6 @@ fn qualify_block(block: &mut TypedBlock, local_structs: &HashSet<String>, prefix
         qualify_expr(tail, local_structs, prefix);
     }
 }
-
 fn qualify_statement(
     statement: &mut TypedStatement,
     local_structs: &HashSet<String>,
@@ -2634,7 +2514,6 @@ fn qualify_statement(
         TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => {}
     }
 }
-
 fn qualify_expr(expr: &mut TypedExpr, local_structs: &HashSet<String>, prefix: &str) {
     qualify_type(&mut expr.ty, local_structs, prefix);
     match expr.kind_mut() {
@@ -2741,7 +2620,6 @@ fn qualify_expr(expr: &mut TypedExpr, local_structs: &HashSet<String>, prefix: &
         | ExprKind::Ident(_) => {}
     }
 }
-
 fn rename_program_calls(
     program: &mut TypedProgram,
     local_names: &BTreeMap<String, String>,
@@ -2756,7 +2634,6 @@ fn rename_program_calls(
         }
     }
 }
-
 fn rename_block_calls(
     block: &mut TypedBlock,
     local_names: &BTreeMap<String, String>,
@@ -2769,7 +2646,6 @@ fn rename_block_calls(
         rename_expr_calls(tail, local_names, external_names);
     }
 }
-
 fn rename_statement_calls(
     statement: &mut TypedStatement,
     local_names: &BTreeMap<String, String>,
@@ -2839,7 +2715,6 @@ fn rename_statement_calls(
         TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => {}
     }
 }
-
 fn rename_expr_calls(
     expr: &mut TypedExpr,
     local_names: &BTreeMap<String, String>,
@@ -2947,12 +2822,10 @@ fn rename_expr_calls(
         | ExprKind::Ident(_) => {}
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ast::Statement;
-
     #[test]
     fn every_fixed_linker_diagnostic_is_explainable_as_resolve() {
         let errors = [
@@ -3028,7 +2901,6 @@ mod tests {
                 key: "errors.failed".to_owned(),
             },
         ];
-
         for error in errors {
             let code = error.diagnostic_code();
             let explanation = crate::diagnostic::diagnostic_explanation(code)
@@ -3040,7 +2912,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn source_graph_preserves_semantic_code_independently_of_localized_message() {
         let error = SourceGraphError::from(LinkError::Semantic {
@@ -3055,14 +2926,12 @@ mod tests {
         assert!(error.to_string().contains("[E_LIST_CAPACITY]"));
         assert!(error.to_string().contains("la capacité dépasse la limite"));
     }
-
     fn spanned(source: &str) -> SpannedProgram {
         let file = SourceFile::new(SourceId(0), "cache-fixture.ko", source);
         crate::parser::parse_source_spanned(&file, FrontendBudget::v1())
             .map(|(program, _)| program)
             .expect("parse spanned linker fixture")
     }
-
     fn source(name: &str, source: &str) -> ModuleUnit {
         let source_id = SourceId(
             name.bytes()
@@ -3091,11 +2960,9 @@ mod tests {
                 .expect("resolve linker fixture"),
         }
     }
-
     fn source_slice(source: &str, range: crate::source::TextRange) -> Option<&str> {
         source.get(usize::try_from(range.start).ok()?..usize::try_from(range.end).ok()?)
     }
-
     fn package(modules: Vec<ModuleUnit>, exports: &[&str]) -> PackageUnit {
         PackageUnit {
             identity: "std/math@1.0.0".to_owned(),
@@ -3104,7 +2971,6 @@ mod tests {
             imports: Vec::new(),
         }
     }
-
     fn request(root: ModuleUnit, package: PackageUnit) -> LinkRequest {
         LinkRequest {
             root,
@@ -3115,7 +2981,6 @@ mod tests {
             packages: vec![package],
         }
     }
-
     fn transitive_source_request(base_source: &str) -> SourceLinkRequest {
         let base_identity = "std/base@1.0.0".to_owned();
         let derived_identity = "std/derived@1.0.0".to_owned();
@@ -3156,7 +3021,6 @@ mod tests {
             ],
         }
     }
-
     #[test]
     fn links_explicit_export_after_independent_type_analysis() {
         let linked = TypedLinker::default()
@@ -3174,7 +3038,6 @@ mod tests {
                 ),
             ))
             .expect("link typed HIR");
-
         assert_eq!(linked.unit.name, "App");
         assert_eq!(linked.items.len(), 2);
         let TypedItem::Function(root) = &linked.items[0];
@@ -3195,7 +3058,6 @@ mod tests {
         let TypedItem::Function(module) = &linked.items[1];
         assert_eq!(name, &module.name);
     }
-
     #[test]
     fn imported_repeated_parameter_types_remain_named_only() {
         let dependency = || {
@@ -3207,7 +3069,6 @@ mod tests {
                 &["choose"],
             )
         };
-
         let positional = TypedLinker::default()
             .link(request(
                 source(
@@ -3226,7 +3087,6 @@ mod tests {
                 .and_then(|span| span.source.as_deref()),
             Some("app.ko"),
         );
-
         let linked = TypedLinker::default()
             .link(request(
                 source(
@@ -3252,7 +3112,6 @@ mod tests {
         assert_eq!(evaluation_order, &[1, 0]);
         assert!(name.starts_with(LINKED_SYMBOL_PREFIX));
     }
-
     #[test]
     fn rejects_unexported_and_unknown_calls() {
         let unexported_source = "seiyaku App { view fn run() -> int { return arith::hidden(); } }";
@@ -3277,7 +3136,6 @@ mod tests {
             source_slice(unexported_source, unexported_span),
             Some("arith::hidden")
         );
-
         let unknown_source = "seiyaku App { view fn run() -> int { return other::add(); } }";
         let unknown = TypedLinker::default()
             .link(request(
@@ -3303,7 +3161,6 @@ mod tests {
             Some("other::add")
         );
     }
-
     #[test]
     fn imported_call_failures_are_multi_error_spanned_and_renderer_equivalent() {
         let root_source = "seiyaku App { view fn run() -> int { return arith::hidden() + arith::also_hidden(); } }";
@@ -3344,7 +3201,6 @@ mod tests {
             spellings,
             vec!["arith::hidden".to_owned(), "arith::also_hidden".to_owned()]
         );
-
         let human = diagnostics.render_human();
         assert_eq!(human.matches("error[E_UNEXPORTED_SYMBOL]").count(), 2);
         let json: norito::json::Value =
@@ -3363,7 +3219,6 @@ mod tests {
             assert_eq!(result.pointer("/properties/kotodama"), Some(canonical),);
         }
     }
-
     #[test]
     fn source_graph_unknown_calls_retain_every_exact_resolver_span() {
         let root_source =
@@ -3403,7 +3258,6 @@ mod tests {
             vec!["missing".to_owned(), "also_missing".to_owned()]
         );
     }
-
     #[test]
     fn source_graph_unknown_import_aliases_retain_every_exact_resolved_call_span() {
         let root_source =
@@ -3443,7 +3297,6 @@ mod tests {
             vec!["missing::one".to_owned(), "other::two".to_owned()]
         );
     }
-
     #[test]
     fn rejects_import_aliases_that_collide_with_builtin_namespaces() {
         let dependency = package(
@@ -3462,7 +3315,6 @@ mod tests {
                 dependency.clone(),
             );
             request.imports[0].alias = alias.to_owned();
-
             let error = TypedLinker::default()
                 .link(request)
                 .expect_err("compiler namespace import must be rejected as ambiguous");
@@ -3478,7 +3330,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn rejects_ambiguous_duplicate_export() {
         let error = TypedLinker::default()
@@ -3512,7 +3363,6 @@ mod tests {
         assert_eq!(diagnostic.labels.len(), 1);
         assert_eq!(diagnostic.labels[0].span.source.as_deref(), Some("b.ko"));
     }
-
     #[test]
     fn same_private_function_name_in_two_modules_remains_module_local() {
         let linked = TypedLinker::default()
@@ -3536,7 +3386,6 @@ mod tests {
                 ),
             ))
             .expect("private names are scoped per module");
-
         let names = linked
             .items
             .iter()
@@ -3553,7 +3402,6 @@ mod tests {
             4
         );
     }
-
     #[test]
     fn rejects_compiler_reserved_declaration() {
         let package_identity = "std/math@1.0.0".to_owned();
@@ -3585,7 +3433,6 @@ mod tests {
             .expect_err("reserved linker prefix must fail");
         assert!(matches!(error, SourceGraphError::Resolve { .. }));
     }
-
     #[test]
     fn source_graph_parses_equal_contents_once_and_reuses_cache() {
         let graph = ModuleBuildGraph::default();
@@ -3701,7 +3548,6 @@ mod tests {
             "an unchanged source must not be reparsed"
         );
     }
-
     #[test]
     fn reused_graph_parses_only_changes_and_rechecks_dependents() {
         let graph = ModuleBuildGraph::default();
@@ -3713,7 +3559,6 @@ mod tests {
             .expect("link initial transitive graph");
         assert_eq!(graph.parse_attempt_count(), 3);
         assert_eq!(graph.link_attempt_count(), 1);
-
         let implementation_changed = graph
             .link(
                 transitive_source_request("module Base { fn value() -> int { return 2; } }"),
@@ -3735,7 +3580,6 @@ mod tests {
             first.program, implementation_changed.program,
             "the reused dependent must link against the changed implementation",
         );
-
         let error = graph
             .link(
                 transitive_source_request(
@@ -3766,7 +3610,6 @@ mod tests {
             "cached parsing must never suppress dependent semantic validation",
         );
     }
-
     #[test]
     fn source_graph_accumulates_independent_parse_and_resolution_failures() {
         let request = |root_source: &str, module_source: &str| SourceLinkRequest {
@@ -3785,7 +3628,6 @@ mod tests {
                 imports: Vec::new(),
             }],
         };
-
         let parse = ModuleBuildGraph::default()
             .link(
                 request("seiyaku App { € }", "module Math { £ }"),
@@ -3801,7 +3643,6 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert!(parse_owners.contains(&(None, Some("app.ko"))));
         assert!(parse_owners.contains(&(Some("example/math@1.0.0"), Some("src/lib.ko"))));
-
         let resolved = ModuleBuildGraph::default()
             .link(
                 request(
@@ -3821,7 +3662,6 @@ mod tests {
         assert!(resolved_owners.contains(&(None, Some("app.ko"))));
         assert!(resolved_owners.contains(&(Some("example/math@1.0.0"), Some("src/lib.ko"))));
     }
-
     #[test]
     fn linked_typed_hir_retains_path_and_order_stable_distinct_source_ids() {
         let request = transitive_source_request("module Base { fn value() -> int { return 1; } }");
@@ -3833,14 +3673,12 @@ mod tests {
                 module.source_name = format!(r".\nested\..\{}", module.source_name);
             }
         }
-
         let left = ModuleBuildGraph::default()
             .link(request, LinkerOptions::default())
             .expect("link canonical package order");
         let right = ModuleBuildGraph::default()
             .link(reordered, LinkerOptions::default())
             .expect("link reversed package order");
-
         assert_eq!(left.program.source_files, right.program.source_files);
         assert_eq!(left.program.source_files.len(), 3);
         assert_eq!(
@@ -3868,7 +3706,6 @@ mod tests {
             assert!(!name_source.range.is_empty());
         }
     }
-
     #[test]
     fn source_cache_defends_against_adversarial_digest_collision() {
         let graph = ModuleBuildGraph::default();
@@ -3899,7 +3736,6 @@ mod tests {
             2
         );
     }
-
     #[test]
     fn parsed_source_cache_is_bounded_and_uses_lru_eviction() {
         let program = spanned("module Cached { fn value() -> int { return 1; } }");
@@ -3913,14 +3749,12 @@ mod tests {
         }
         assert_eq!(cache.entries.len(), MAX_PARSED_CACHE_ENTRIES);
         assert!(cache.get("digest-0", "source-0").is_some());
-
         cache.insert("digest-new".to_owned(), "source-new".to_owned(), program);
         assert_eq!(cache.entries.len(), MAX_PARSED_CACHE_ENTRIES);
         assert!(cache.get("digest-0", "source-0").is_some());
         assert!(cache.get("digest-1", "source-1").is_none());
         assert!(cache.source_bytes <= MAX_PARSED_CACHE_SOURCE_BYTES);
     }
-
     #[test]
     fn parsed_source_cache_enforces_aggregate_source_budget() {
         let program = spanned("module Cached { fn value() -> int { return 1; } }");
@@ -3938,7 +3772,6 @@ mod tests {
         assert!(cache.get("large-0", &"a".repeat(1024 * 1024)).is_none());
         assert!(cache.get("large-4", &"e".repeat(1024 * 1024)).is_some());
     }
-
     #[test]
     fn source_graph_rejects_excessive_module_count_before_parsing() {
         let modules = (0..MAX_MODULE_GRAPH_SOURCES)
@@ -3964,7 +3797,6 @@ mod tests {
             .expect_err("root plus maximum modules exceeds the graph count");
         assert!(matches!(error, SourceGraphError::Budget { .. }));
     }
-
     #[test]
     fn source_graph_rejects_excessive_aggregate_bytes_before_parsing() {
         let request = SourceLinkRequest {
@@ -3986,7 +3818,6 @@ mod tests {
             } if source_bytes == MAX_MODULE_GRAPH_SOURCE_BYTES + 1
         ));
     }
-
     #[test]
     fn graph_fingerprint_is_order_stable_and_binds_exports() {
         let root = SourceModuleUnit {
@@ -4017,7 +3848,6 @@ mod tests {
             ModuleBuildGraph::fingerprint(&changed).expect("changed graph fingerprint"),
             "export metadata participates in the graph identity"
         );
-
         let mut two_imports = left;
         two_imports.imports.push(ImportBinding {
             alias: "another".to_owned(),
@@ -4031,7 +3861,6 @@ mod tests {
             "incidental lockfile ordering must not invalidate the graph"
         );
     }
-
     fn publish_package(modules: Vec<SourceModuleUnit>, exports: &[&str]) -> SourcePackageUnit {
         SourcePackageUnit {
             identity: "local/quotes@1.0.0".to_owned(),
@@ -4040,14 +3869,12 @@ mod tests {
             imports: Vec::new(),
         }
     }
-
     fn source_module(name: &str, source: &str) -> SourceModuleUnit {
         SourceModuleUnit {
             source_name: name.to_owned(),
             source: source.to_owned(),
         }
     }
-
     fn invalid_logical_source_paths() -> Vec<(String, InvalidSourcePathReason)> {
         vec![
             (String::new(), InvalidSourcePathReason::Empty),
@@ -4110,7 +3937,6 @@ mod tests {
             ),
         ]
     }
-
     #[test]
     fn package_graph_validates_unique_typed_export_and_locked_call() {
         let dependency_identity = "std/math@1.0.0".to_owned();
@@ -4137,13 +3963,11 @@ mod tests {
                 imports: Vec::new(),
             }],
         };
-
         let validated = ModuleBuildGraph::default()
             .validate_package(request, LinkerOptions::default())
             .expect("typed package graph");
         assert_eq!(validated.exports, BTreeSet::from(["quote".to_owned()]));
     }
-
     #[test]
     fn package_interface_fingerprint_tracks_types_not_function_bodies() {
         let validate = |source: &str| {
@@ -4163,7 +3987,6 @@ mod tests {
         let first = validate("module Quotes { fn quote() -> int { return 1; } }");
         let body_changed = validate("module Quotes { fn quote() -> int { return 2; } }");
         let type_changed = validate("module Quotes { fn quote() -> bool { return true; } }");
-
         assert_ne!(first.fingerprint, body_changed.fingerprint);
         assert_eq!(
             first.interface_fingerprint,
@@ -4174,7 +3997,6 @@ mod tests {
             type_changed.interface_fingerprint
         );
     }
-
     #[test]
     fn linked_test_project_uses_one_exact_graph_for_suite_and_runtime() {
         let dependency_identity = "std/math@1.0.0".to_owned();
@@ -4215,7 +4037,6 @@ mod tests {
                 "tests/unit.ko",
             )
             .expect("compile exact linked test graph");
-
         assert!(output.runtime.is_some());
         assert!(
             output
@@ -4235,7 +4056,6 @@ mod tests {
                 .all(|entry| entry.function_name != "dependency_is_linked")
         );
     }
-
     #[test]
     fn package_graph_rejects_missing_and_ambiguous_exports() {
         let graph = ModuleBuildGraph::default();
@@ -4255,7 +4075,6 @@ mod tests {
             )
             .expect_err("missing export must fail");
         assert_eq!(missing.diagnostic_code(), "E_MISSING_EXPORT", "{missing:?}");
-
         let first_source = "module A { fn quote() -> int { return 1; } }";
         let second_source = "module B { fn quote() -> int { return 2; } }";
         let ambiguous = graph
@@ -4305,7 +4124,6 @@ mod tests {
             Some("quote")
         );
     }
-
     #[test]
     fn package_graph_rejects_invalid_types_and_bodies() {
         for (source, expected_code, expected_phase) in [
@@ -4351,7 +4169,6 @@ mod tests {
             assert_eq!(primary.source.as_deref(), Some("invalid.ko"));
         }
     }
-
     #[test]
     fn package_graph_rejects_duplicate_symbols_and_module_names() {
         let duplicate_symbol = ModuleBuildGraph::default()
@@ -4374,7 +4191,6 @@ mod tests {
             SourceGraphError::Resolve { .. }
                 | SourceGraphError::Link(LinkError::DuplicateSymbol { .. })
         ));
-
         let duplicate_module = ModuleBuildGraph::default()
             .validate_package(
                 SourcePackageGraphRequest {
@@ -4404,7 +4220,6 @@ mod tests {
             "{duplicate_module:?}"
         );
     }
-
     #[test]
     fn package_graph_rejects_seiyaku_and_test_only_exports() {
         let seiyaku = ModuleBuildGraph::default()
@@ -4429,7 +4244,6 @@ mod tests {
             ),
             "{seiyaku:?}"
         );
-
         let test_only = ModuleBuildGraph::default()
             .validate_package(
                 SourcePackageGraphRequest {
@@ -4447,7 +4261,6 @@ mod tests {
             .expect_err("test-only function cannot satisfy production export");
         assert_eq!(test_only.diagnostic_code(), "E_TEST_ONLY_PRODUCTION");
     }
-
     #[test]
     fn package_graph_rejects_dependency_hidden_call() {
         let dependency_identity = "std/math@1.0.0".to_owned();
@@ -4482,7 +4295,6 @@ mod tests {
             .expect_err("hidden dependency call must fail");
         assert_eq!(error.diagnostic_code(), "E_UNEXPORTED_SYMBOL", "{error:?}");
     }
-
     #[test]
     fn package_graph_rejects_import_cycles_without_call_cycles() {
         let local_identity = "local/quotes@1.0.0".to_owned();
@@ -4529,7 +4341,6 @@ mod tests {
         );
         assert_eq!(graph.parse_attempt_count(), 0);
     }
-
     #[test]
     fn package_graph_rejects_duplicate_normalized_logical_sources_before_parsing() {
         let request = SourcePackageGraphRequest {
@@ -4553,7 +4364,6 @@ mod tests {
         assert_eq!(graph.parse_attempt_count(), 0);
         assert_eq!(graph.link_attempt_count(), 0);
     }
-
     #[test]
     fn package_fingerprint_normalizes_portable_logical_source_paths() {
         let left = SourcePackageGraphRequest {
@@ -4573,7 +4383,6 @@ mod tests {
             ModuleBuildGraph::package_fingerprint(&right).expect("right fingerprint")
         );
     }
-
     #[test]
     fn source_graph_fingerprint_normalizes_root_and_package_paths() {
         let left = SourceLinkRequest {
@@ -4589,13 +4398,11 @@ mod tests {
         let mut right = left.clone();
         right.root.source_name = r".\src\\app.ko".to_owned();
         right.packages[0].modules[0].source_name = r"src\nested\..\lib.ko".to_owned();
-
         assert_eq!(
             ModuleBuildGraph::fingerprint(&left).expect("canonical fingerprint"),
             ModuleBuildGraph::fingerprint(&right).expect("portable-alias fingerprint")
         );
     }
-
     #[test]
     fn invalid_root_paths_fail_closed_before_any_parse_or_link_attempt() {
         for (source_name, expected_reason) in invalid_logical_source_paths() {
@@ -4638,7 +4445,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn invalid_package_paths_fail_closed_before_any_parse_or_link_attempt() {
         for (source_name, expected_reason) in invalid_logical_source_paths() {
@@ -4669,7 +4475,6 @@ mod tests {
             assert_eq!(graph.link_attempt_count(), 0);
         }
     }
-
     #[test]
     fn root_path_is_canonical_in_parse_diagnostics() {
         let graph = ModuleBuildGraph::default();
@@ -4704,7 +4509,6 @@ mod tests {
         assert_eq!(graph.parse_attempt_count(), 1);
         assert_eq!(graph.link_attempt_count(), 1);
     }
-
     #[test]
     fn canonical_module_order_makes_parallel_parse_failure_deterministic() {
         let request = SourcePackageGraphRequest {
@@ -4716,7 +4520,6 @@ mod tests {
         };
         let mut reordered = request.clone();
         reordered.package.modules.reverse();
-
         let first = ModuleBuildGraph::default()
             .validate_package(request, LinkerOptions::default())
             .expect_err("first malformed package must fail");

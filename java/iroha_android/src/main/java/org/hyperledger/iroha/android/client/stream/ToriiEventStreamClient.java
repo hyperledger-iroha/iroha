@@ -137,14 +137,19 @@ public final class ToriiEventStreamClient {
     if (params.isEmpty()) {
       return target;
     }
-    final StringBuilder builder = new StringBuilder(target.toString());
+    final String targetText = target.toString();
+    final int rawFragmentIndex = targetText.indexOf('#');
+    final int fragmentIndex = rawFragmentIndex >= 0 ? rawFragmentIndex : targetText.length();
+    final StringBuilder builder = new StringBuilder(targetText.length() + 1);
+    builder.append(targetText, 0, fragmentIndex);
     final String query = encodeQuery(params);
     if (target.getQuery() == null || target.getQuery().isEmpty()) {
-      builder.append(target.toString().contains("?") ? "&" : "?");
+      builder.append(builder.indexOf("?") >= 0 ? "&" : "?");
     } else {
       builder.append("&");
     }
     builder.append(query);
+    builder.append(targetText, fragmentIndex, targetText.length());
     return URI.create(builder.toString());
   }
 

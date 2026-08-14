@@ -4,18 +4,14 @@
 //! archive contains. The aggregate DSL can be evaluated against these rows after
 //! retrieval from DA without depending on ad hoc JSON maps or endpoint-specific
 //! response wrappers.
-
+use crate::query::projection_checkpoint::QueryProjectionResourceKind;
 use iroha_primitives::numeric::Quantity;
 use norito::{
     codec::{Decode, Encode},
     to_bytes,
 };
-
-use crate::query::projection_checkpoint::QueryProjectionResourceKind;
-
 /// Version of the logical rowset payload carried inside a shard archive.
 pub const QUERY_PROJECTION_ROWSET_VERSION: u16 = 1;
-
 /// Alias-aware projected account row.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionAccountRow {
@@ -32,7 +28,6 @@ pub struct QueryProjectionAccountRow {
     /// Whether the account has a primary alias projection.
     pub has_primary_alias: bool,
 }
-
 /// Alias-aware projected asset-holder row.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionAssetHolderRow {
@@ -53,7 +48,6 @@ pub struct QueryProjectionAssetHolderRow {
     /// Whether the holder account has a primary alias projection.
     pub has_primary_alias: bool,
 }
-
 /// Alias-aware projected account asset row.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionAccountAssetRow {
@@ -80,7 +74,6 @@ pub struct QueryProjectionAccountAssetRow {
     /// Whether the account has a primary alias projection.
     pub has_primary_alias: bool,
 }
-
 /// Stable metadata entry captured in an asset-definition projection row.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionMetadataEntry {
@@ -89,7 +82,6 @@ pub struct QueryProjectionMetadataEntry {
     /// Canonical JSON payload for the metadata value.
     pub value_json: String,
 }
-
 /// Projected asset definition row.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionAssetDefinitionRow {
@@ -112,14 +104,12 @@ pub struct QueryProjectionAssetDefinitionRow {
     /// Metadata snapshot fields available to `metadata.<key>` DSL paths.
     pub metadata: Vec<QueryProjectionMetadataEntry>,
 }
-
 /// Projected domain row.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionDomainRow {
     /// Canonical domain id.
     pub id: String,
 }
-
 /// Rowset payload for one `accounts` projection shard.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionAccountsShardRowSet {
@@ -130,7 +120,6 @@ pub struct QueryProjectionAccountsShardRowSet {
     /// Projected rows assigned to this partition.
     pub rows: Vec<QueryProjectionAccountRow>,
 }
-
 /// Rowset payload for one `asset_holders` projection shard.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionAssetHoldersShardRowSet {
@@ -145,7 +134,6 @@ pub struct QueryProjectionAssetHoldersShardRowSet {
     /// Projected rows assigned to this partition and asset definition.
     pub rows: Vec<QueryProjectionAssetHolderRow>,
 }
-
 /// Rowset payload for one `account_assets` projection shard.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionAccountAssetsShardRowSet {
@@ -156,7 +144,6 @@ pub struct QueryProjectionAccountAssetsShardRowSet {
     /// Projected rows assigned to this account partition.
     pub rows: Vec<QueryProjectionAccountAssetRow>,
 }
-
 /// Rowset payload for one `asset_definitions` projection shard.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionAssetDefinitionsShardRowSet {
@@ -167,7 +154,6 @@ pub struct QueryProjectionAssetDefinitionsShardRowSet {
     /// Projected rows assigned to this definition partition.
     pub rows: Vec<QueryProjectionAssetDefinitionRow>,
 }
-
 /// Rowset payload for one `domains` projection shard.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionDomainsShardRowSet {
@@ -178,7 +164,6 @@ pub struct QueryProjectionDomainsShardRowSet {
     /// Projected rows assigned to this domain partition.
     pub rows: Vec<QueryProjectionDomainRow>,
 }
-
 /// Canonical rowset payload variants supported by the projection archive contract today.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum QueryProjectionShardRowSet {
@@ -193,7 +178,6 @@ pub enum QueryProjectionShardRowSet {
     /// Rowset for the `domains` resource family.
     Domains(QueryProjectionDomainsShardRowSet),
 }
-
 impl QueryProjectionAccountsShardRowSet {
     /// Construct a rowset for one `accounts` partition.
     #[must_use]
@@ -205,7 +189,6 @@ impl QueryProjectionAccountsShardRowSet {
         }
     }
 }
-
 impl QueryProjectionAssetHoldersShardRowSet {
     /// Construct a rowset for one `asset_holders` partition.
     #[must_use]
@@ -224,7 +207,6 @@ impl QueryProjectionAssetHoldersShardRowSet {
         }
     }
 }
-
 impl QueryProjectionAccountAssetsShardRowSet {
     /// Construct a rowset for one `account_assets` partition.
     #[must_use]
@@ -236,7 +218,6 @@ impl QueryProjectionAccountAssetsShardRowSet {
         }
     }
 }
-
 impl QueryProjectionAssetDefinitionsShardRowSet {
     /// Construct a rowset for one `asset_definitions` partition.
     #[must_use]
@@ -248,7 +229,6 @@ impl QueryProjectionAssetDefinitionsShardRowSet {
         }
     }
 }
-
 impl QueryProjectionDomainsShardRowSet {
     /// Construct a rowset for one `domains` partition.
     #[must_use]
@@ -260,7 +240,6 @@ impl QueryProjectionDomainsShardRowSet {
         }
     }
 }
-
 impl QueryProjectionShardRowSet {
     /// Resource family represented by this rowset.
     #[must_use]
@@ -273,7 +252,6 @@ impl QueryProjectionShardRowSet {
             Self::Domains(_) => QueryProjectionResourceKind::Domains,
         }
     }
-
     /// Stable partition identifier represented by this rowset.
     #[must_use]
     pub const fn partition_id(&self) -> u32 {
@@ -285,7 +263,6 @@ impl QueryProjectionShardRowSet {
             Self::Domains(rowset) => rowset.partition_id,
         }
     }
-
     /// Canonical asset-definition discriminator when present.
     #[must_use]
     pub fn asset_definition_id(&self) -> Option<&str> {
@@ -297,7 +274,6 @@ impl QueryProjectionShardRowSet {
             Self::Domains(_) => None,
         }
     }
-
     /// Number of logical rows carried inside this rowset.
     #[must_use]
     pub fn row_count(&self) -> u64 {
@@ -309,7 +285,6 @@ impl QueryProjectionShardRowSet {
             Self::Domains(rowset) => rowset.rows.len() as u64,
         }
     }
-
     /// Encode the rowset as canonical Norito bytes for inclusion in an archive payload.
     ///
     /// # Errors
@@ -319,12 +294,10 @@ impl QueryProjectionShardRowSet {
         to_bytes(self)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use norito::decode_from_bytes;
-
     #[test]
     fn accounts_rowset_round_trips_through_norito() {
         let rowset = QueryProjectionShardRowSet::Accounts(QueryProjectionAccountsShardRowSet::new(
@@ -338,7 +311,6 @@ mod tests {
                 has_primary_alias: true,
             }],
         ));
-
         let encoded = rowset.encode_payload().expect("encode rowset");
         let decoded: QueryProjectionShardRowSet =
             decode_from_bytes(&encoded).expect("decode rowset");
@@ -348,7 +320,6 @@ mod tests {
         assert_eq!(decoded.asset_definition_id(), None);
         assert_eq!(decoded.row_count(), 1);
     }
-
     #[test]
     fn asset_holders_rowset_reports_asset_discriminator() {
         let rowset =
@@ -367,13 +338,11 @@ mod tests {
                     has_primary_alias: true,
                 }],
             ));
-
         assert_eq!(rowset.resource(), QueryProjectionResourceKind::AssetHolders);
         assert_eq!(rowset.partition_id(), 9);
         assert_eq!(rowset.asset_definition_id(), Some("pkr#paynet"));
         assert_eq!(rowset.row_count(), 1);
     }
-
     #[test]
     fn account_assets_rowset_round_trips_through_norito() {
         let rowset = QueryProjectionShardRowSet::AccountAssets(
@@ -394,7 +363,6 @@ mod tests {
                 }],
             ),
         );
-
         let encoded = rowset.encode_payload().expect("encode rowset");
         let decoded: QueryProjectionShardRowSet =
             decode_from_bytes(&encoded).expect("decode rowset");
@@ -406,7 +374,6 @@ mod tests {
         assert_eq!(decoded.partition_id(), 3);
         assert_eq!(decoded.row_count(), 1);
     }
-
     #[test]
     fn asset_definitions_and_domains_rowsets_report_resources() {
         let definitions = QueryProjectionShardRowSet::AssetDefinitions(
@@ -434,7 +401,6 @@ mod tests {
         );
         assert_eq!(definitions.partition_id(), 4);
         assert_eq!(definitions.row_count(), 1);
-
         let domains = QueryProjectionShardRowSet::Domains(QueryProjectionDomainsShardRowSet::new(
             5,
             vec![QueryProjectionDomainRow {

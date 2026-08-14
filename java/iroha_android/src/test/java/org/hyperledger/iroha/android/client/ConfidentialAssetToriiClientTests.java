@@ -36,6 +36,7 @@ public final class ConfidentialAssetToriiClientTests {
     rootsAndMerklePathsRejectOverflowDuplicateKeysAndInconsistentShape();
     merklePathParserRejectsDuplicateKeysBeforeLastValueWins();
     nonSuccessResponsesSurfaceConfidentialAssetToriiException();
+    latestRootAndClientConfigConversionRequireExactNetworkAuth();
     canonicalAuthConfigurationFailsClosedBeforeDispatch();
     System.out.println("[IrohaAndroid] ConfidentialAssetToriiClientTests passed.");
   }
@@ -80,6 +81,32 @@ public final class ConfidentialAssetToriiClientTests {
     assert executor.requestCount == 1 : "signed roots request must dispatch exactly once";
     assertCanonicalSignature(executor.lastRequest, NETWORK_ID, "zk-roots-1", true);
     assertCanonicalSignature(executor.lastRequest, OTHER_NETWORK_ID, "zk-roots-1", false);
+    assertCanonicalSignature(
+        executor.lastRequest,
+        NETWORK_ID,
+        "zk-roots-1",
+        false,
+        "GET",
+        executor.lastRequest.uri(),
+        executor.lastRequest.body());
+    assertCanonicalSignature(
+        executor.lastRequest,
+        NETWORK_ID,
+        "zk-roots-1",
+        false,
+        "POST",
+        URI.create("https://example.com/v1/zk/merkle-path"),
+        executor.lastRequest.body());
+    final byte[] alteredBody = executor.lastRequest.body();
+    alteredBody[0] ^= 0x01;
+    assertCanonicalSignature(
+        executor.lastRequest,
+        NETWORK_ID,
+        "zk-roots-1",
+        false,
+        "POST",
+        executor.lastRequest.uri(),
+        alteredBody);
     assert root.equals(response.latest()) : "latest mismatch";
     assert response.roots().equals(List.of(root)) : "roots mismatch";
     assert response.evaluatedBlockHeight() == 7 : "height mismatch";
@@ -371,6 +398,42 @@ public final class ConfidentialAssetToriiClientTests {
     assert executor.requestCount == 0 : "ambiguous canonical headers must not dispatch";
   }
 
+  private static void latestRootAndClientConfigConversionRequireExactNetworkAuth() {
+    final String root = "01".repeat(32);
+    final StubExecutor executor =
+        new StubExecutor(
+            200,
+            "{\"latest\":\""
+                + root
+                + "\",\"roots\":[\""
+                + root
+                + "\"],\"evaluated_block_height\":7,\"evaluated_block_hash\":\""
+                + "0a".repeat(32)
+                + "\"}");
+    expectIllegalState(
+        () ->
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://example.com"))
+                .build()
+                .toConfidentialAssetToriiClient(executor));
+    assert executor.requestCount == 0 : "missing network context must not dispatch";
+
+    final ConfidentialAssetToriiClient client =
+        ClientConfig.builder()
+            .setBaseUri(URI.create("https://example.com"))
+            .setLocalSigningContext(new LocalSigningContext(NETWORK_ID))
+            .build()
+            .toConfidentialAssetToriiClient(executor);
+    final byte[] latest =
+        client
+            .getLatestZkAssetRoot("usd#bank", canonicalAuth("zk-latest-1"))
+            .join();
+    assert java.util.Arrays.equals(filled((byte) 1), latest) : "latest root mismatch";
+    assert "/v1/zk/roots".equals(executor.lastRequest.uri().getPath()) : "latest root path";
+    assert executor.lastRequest.replayPolicy() == RequestReplayPolicy.ONE_SHOT
+        : "latest root request must be one-shot";
+  }
+
   private static ToriiCanonicalRequestAuth canonicalAuth(final String nonce) {
     return new ToriiCanonicalRequestAuth(
         "alice",
@@ -403,6 +466,24 @@ public final class ConfidentialAssetToriiClientTests {
       final NetworkId expectedNetworkId,
       final String nonce,
       final boolean expected) {
+    assertCanonicalSignature(
+        request,
+        expectedNetworkId,
+        nonce,
+        expected,
+        request.method(),
+        request.uri(),
+        request.body());
+  }
+
+  private static void assertCanonicalSignature(
+      final TransportRequest request,
+      final NetworkId expectedNetworkId,
+      final String nonce,
+      final boolean expected,
+      final String method,
+      final URI uri,
+      final byte[] body) {
     try {
       final byte[] signature =
           Base64.getDecoder()
@@ -412,9 +493,9 @@ public final class ConfidentialAssetToriiClientTests {
       verifier.update(
           CanonicalRequestSigner.canonicalRequestSignatureMessage(
               expectedNetworkId,
-              request.method(),
-              request.uri(),
-              request.body(),
+              method,
+              uri,
+              body,
               1_700_000_000_000L,
               nonce));
       assert verifier.verify(signature) == expected : "canonical request signature mismatch";

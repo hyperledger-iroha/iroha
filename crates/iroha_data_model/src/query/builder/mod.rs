@@ -3,15 +3,9 @@
 //!
 //! Constructed iterable queries are encoded into [`QueryWithParams`], which
 //! carries the concrete query, predicate, selector, and pagination components.
-
 mod batch_downcast;
 mod iter;
-
-use std::{marker::PhantomData, vec::Vec};
-
 pub use self::{batch_downcast::TypedBatchDowncastError, iter::QueryIterator};
-use derive_where::derive_where;
-
 use crate::query::{
     Query, QueryOutputBatchBoxTuple, QueryWithParams, SingularQueryBox, SingularQueryOutputBox,
     builder::batch_downcast::HasTypedBatchIter,
@@ -21,7 +15,8 @@ use crate::query::{
     },
     parameters::{FetchSize, Pagination, QueryParams, Sorting},
 };
-
+use derive_where::derive_where;
+use std::{marker::PhantomData, vec::Vec};
 /// A trait abstracting away concrete backend for executing queries against iroha.
 pub trait QueryExecutor {
     /// A type of cursor used in iterable queries.
@@ -30,7 +25,6 @@ pub trait QueryExecutor {
     type Cursor;
     /// An error that can occur during query execution.
     type Error;
-
     /// Executes a singular query and returns its result.
     ///
     /// # Errors
@@ -40,7 +34,6 @@ pub trait QueryExecutor {
         &self,
         query: SingularQueryBox,
     ) -> Result<SingularQueryOutputBox, Self::Error>;
-
     /// Starts an iterable query and returns the first batch of results, an optional exact remaining count and a cursor to continue the query.
     ///
     /// # Errors
@@ -51,7 +44,6 @@ pub trait QueryExecutor {
         &self,
         query: QueryWithParams,
     ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>;
-
     /// Continues an iterable query from the given cursor and returns the next batch of results, an optional exact remaining count and a cursor to continue the query.
     ///
     /// # Errors
@@ -62,7 +54,6 @@ pub trait QueryExecutor {
         cursor: Self::Cursor,
     ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>;
 }
-
 /// An error that can occur when constraining the number of results of an iterable query to one.
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, displaydoc::Display, thiserror::Error,
@@ -77,13 +68,11 @@ pub enum SingleQueryError<E> {
     /// Expected one or zero query results, got more than one
     ExpectedOneOrZeroGotMany,
 }
-
 impl<E> From<E> for SingleQueryError<E> {
     fn from(e: E) -> Self {
         SingleQueryError::QueryError(e)
     }
 }
-
 /// Struct that simplifies construction of an iterable query.
 #[derive_where(Clone; Q, CompoundPredicate<Q::Item>, SelectorTuple<Q::Item>)]
 pub struct QueryBuilder<'e, E, Q, T>
@@ -101,7 +90,6 @@ where
     // NOTE: T is a phantom type used to denote the selected tuple in `selector`
     phantom: PhantomData<T>,
 }
-
 impl<'a, E, Q> QueryBuilder<'a, E, Q, Q::Item>
 where
     Q: Query + 'static,
@@ -119,7 +107,6 @@ where
             phantom: PhantomData,
         }
     }
-
     /// Experimental: override the selector tuple directly.
     ///
     /// Note: In the canonical DSL, selectors are not evaluated; this method
@@ -132,7 +119,6 @@ where
         Self { selector, ..self }
     }
 }
-
 impl<'a, E, Q, T> QueryBuilder<'a, E, Q, T>
 where
     Q: Query + 'static,
@@ -148,7 +134,6 @@ where
             ..self
         }
     }
-
     /// Only return results that match the predicate constructed with the given closure.
     ///
     /// If multiple filters are added, they are combined with a logical AND.
@@ -169,7 +154,6 @@ where
     {
         self.filter(predicate_builder(Default::default()))
     }
-
     /// Return only the fields of the results specified by the given closure.
     ///
     /// You can select multiple fields by returning a tuple from the closure.
@@ -190,7 +174,6 @@ where
         O: IntoSelectorTuple<SelectingType = Q::Item>,
     {
         let new_selector = f(Default::default()).into_selector_tuple();
-
         QueryBuilder {
             query_executor: self.query_executor,
             query: self.query,
@@ -202,19 +185,16 @@ where
             phantom: PhantomData,
         }
     }
-
     /// Sort the results according to the specified sorting.
     #[must_use]
     pub fn with_sorting(self, sorting: Sorting) -> Self {
         Self { sorting, ..self }
     }
-
     /// Only return part of the results specified by the pagination.
     #[must_use]
     pub fn with_pagination(self, pagination: Pagination) -> Self {
         Self { pagination, ..self }
     }
-
     /// Change the batch size of the iterable query.
     ///
     /// Larger batch sizes reduce the number of round-trips to iroha peer, but require more memory.
@@ -223,7 +203,6 @@ where
         Self { fetch_size, ..self }
     }
 }
-
 impl<E, Q, T> QueryBuilder<'_, E, Q, T>
 where
     Q: Query
@@ -244,7 +223,6 @@ where
     pub fn execute(self) -> Result<QueryIterator<E, T>, E::Error> {
         let item_kind = self.query.query_item_kind();
         let query_payload: Vec<u8> = self.query.dyn_encode();
-
         let query = QueryWithParams {
             query: (),
             query_payload,
@@ -257,17 +235,13 @@ where
                 fetch_size: self.fetch_size,
             },
         };
-
         let (first_batch, _remaining_items, continue_cursor) =
             self.query_executor.start_query(query)?;
-
         let iterator =
             QueryIterator::<E, T>::new(first_batch, continue_cursor).map_err(E::Error::from)?;
-
         Ok(iterator)
     }
 }
-
 /// An extension trait for query builders that provides convenience methods to execute queries.
 pub trait QueryBuilderExt<E, Q, T>
 where
@@ -287,14 +261,12 @@ where
     ///
     /// Returns an error if the query execution fails.
     fn execute_all(self) -> Result<Vec<T>, E::Error>;
-
     /// Execute the query, constraining the number of results to zero or one.
     ///
     /// # Errors
     ///
     /// Returns an error if the query execution fails or if more than one result is returned.
     fn execute_single_opt(self) -> Result<Option<T>, SingleQueryError<E::Error>>;
-
     /// Execute the query, constraining the number of results to exactly one.
     ///
     /// # Errors
@@ -302,7 +274,6 @@ where
     /// Returns an error if the query execution fails or if zero or more than one result is returned.
     fn execute_single(self) -> Result<T, SingleQueryError<E::Error>>;
 }
-
 /// Blanket implementation of [`QueryBuilderExt`] for [`QueryBuilder`].
 impl<E, Q, T> QueryBuilderExt<E, Q, T> for QueryBuilder<'_, E, Q, T>
 where
@@ -319,12 +290,10 @@ where
     fn execute_all(self) -> Result<Vec<T>, E::Error> {
         self.execute()?.collect::<Result<Vec<_>, _>>()
     }
-
     fn execute_single_opt(self) -> Result<Option<T>, SingleQueryError<E::Error>> {
         let mut iter = self.execute()?;
         let first = iter.next().transpose()?;
         let second = iter.next().transpose()?;
-
         match (first, second) {
             (None, None) => Ok(None),
             (Some(result), None) => Ok(Some(result)),
@@ -334,12 +303,10 @@ where
             }
         }
     }
-
     fn execute_single(self) -> Result<T, SingleQueryError<E::Error>> {
         let mut iter = self.execute()?;
         let first = iter.next().transpose()?;
         let second = iter.next().transpose()?;
-
         match (first, second) {
             (None, None) => Err(SingleQueryError::ExpectedOneGotNone),
             (Some(result), None) => Ok(result),
@@ -350,16 +317,12 @@ where
         }
     }
 }
-
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
     pub use super::QueryBuilderExt;
 }
-
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-
     use super::*;
     use crate::{
         domain::Domain,
@@ -368,23 +331,20 @@ mod tests {
             domain::FindDomains,
         },
     };
-
+    use std::cell::RefCell;
     #[derive(Default)]
     struct RecordingExecutor {
         query: RefCell<Option<QueryWithParams>>,
     }
-
     impl QueryExecutor for RecordingExecutor {
         type Cursor = ();
         type Error = TypedBatchDowncastError;
-
         fn execute_singular_query(
             &self,
             _query: SingularQueryBox,
         ) -> Result<SingularQueryOutputBox, Self::Error> {
             unreachable!("iterable-query test executor received a singular query")
         }
-
         fn start_query(
             &self,
             query: QueryWithParams,
@@ -401,7 +361,6 @@ mod tests {
             self.query.replace(Some(query));
             Ok((QueryOutputBatchBoxTuple::from_batch(batch), Some(0), None))
         }
-
         fn continue_query(
             (): Self::Cursor,
         ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
@@ -409,16 +368,13 @@ mod tests {
             unreachable!("empty test result cannot have a continuation")
         }
     }
-
     fn assert_domain_iterator(_: QueryIterator<RecordingExecutor, Domain>) {}
-
     #[test]
     fn selecting_a_full_tuple_keeps_item_type_and_query_discriminator() {
         let executor = RecordingExecutor::default();
         let builder = QueryBuilder::new(&executor, FindDomains)
             .select_with(|_| SelectorTuple::<Domain>::default());
         let iterator = builder.execute().expect("execute projected domain query");
-
         assert_domain_iterator(iterator);
         assert_eq!(
             executor
@@ -430,11 +386,8 @@ mod tests {
             QueryItemKind::Domain
         );
     }
-
     #[test]
     fn escrow_builders_emit_query_specific_discriminants() {
-        use iroha_crypto::KeyPair;
-
         use crate::{
             account::AccountId,
             escrow::AssetEscrowStatus,
@@ -442,7 +395,7 @@ mod tests {
                 FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
             },
         };
-
+        use iroha_crypto::KeyPair;
         let account = AccountId::new(
             KeyPair::try_random()
                 .expect("generate escrow query account")
@@ -450,7 +403,6 @@ mod tests {
                 .clone(),
         );
         let executor = RecordingExecutor::default();
-
         let seller_results = QueryBuilder::new(
             &executor,
             FindAssetEscrowsBySeller {
@@ -464,7 +416,6 @@ mod tests {
             executor.query.borrow().as_ref().expect("seller query").item,
             QueryItemKind::AssetEscrowsBySeller
         );
-
         let buyer_results = QueryBuilder::new(
             &executor,
             FindAssetEscrowsByBuyer {
@@ -478,7 +429,6 @@ mod tests {
             executor.query.borrow().as_ref().expect("buyer query").item,
             QueryItemKind::AssetEscrowsByBuyer
         );
-
         let status_results = QueryBuilder::new(
             &executor,
             FindAssetEscrowsByStatus {

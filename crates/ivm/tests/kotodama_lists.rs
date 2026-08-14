@@ -1,18 +1,14 @@
 //! End-to-end coverage for bounded Kotodama List lowering and execution.
-
-use std::collections::BTreeMap;
-
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::Name;
 use iroha_primitives::json::Json;
 use ivm::{IVM, KotodamaCompiler, ProgramMetadata, host::DefaultHost, pointer_abi::PointerType};
 use ivm_abi::{list::ListLayoutV1, sum::SumLayoutV1};
+use std::collections::BTreeMap;
 mod common;
-
 fn run(source: &str) -> IVM {
     run_with_gas(source).0
 }
-
 fn run_with_gas(source: &str) -> (IVM, u64) {
     let program = KotodamaCompiler::new()
         .compile_source(source)
@@ -36,7 +32,6 @@ fn run_with_gas(source: &str) -> (IVM, u64) {
     let gas_used = u64::MAX.saturating_sub(vm.remaining_gas());
     (vm, gas_used)
 }
-
 fn run_main_body_with_gas(result_type: &str, body: &str) -> (IVM, u64) {
     run_with_gas(&format!(
         r#"
@@ -48,7 +43,6 @@ fn run_main_body_with_gas(result_type: &str, body: &str) -> (IVM, u64) {
         "#
     ))
 }
-
 fn returned_int_list(vm: &IVM, capacity: u64) -> (u64, u64, Vec<i64>, Vec<u64>) {
     let layout = ListLayoutV1::try_new(capacity, 1).expect("List<int, N> layout");
     let base = vm.register(10);
@@ -63,7 +57,6 @@ fn returned_int_list(vm: &IVM, capacity: u64) -> (u64, u64, Vec<i64>, Vec<u64>) 
         .collect();
     (length, words[1], elements, words[active_end..].to_vec())
 }
-
 fn positive_gas_delta(measured: u64, control: u64, operation: &str) -> u64 {
     assert!(
         measured > control,
@@ -71,7 +64,6 @@ fn positive_gas_delta(measured: u64, control: u64, operation: &str) -> u64 {
     );
     measured - control
 }
-
 fn argument_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -85,7 +77,6 @@ fn argument_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(Hash::new(payload).as_ref());
     out
 }
-
 fn run_parameterized_int_entrypoint(program: &[u8], index: i64) -> (IVM, u64) {
     let metadata = ProgramMetadata::parse(program).expect("parse parameterized List metadata");
     let entrypoint = metadata
@@ -121,7 +112,6 @@ fn run_parameterized_int_entrypoint(program: &[u8], index: i64) -> (IVM, u64) {
     let gas = u64::MAX.saturating_sub(vm.remaining_gas());
     (vm, gas)
 }
-
 fn run_multiword_mutation_failure_case(
     program: &[u8],
     operation: i64,
@@ -160,7 +150,6 @@ fn run_multiword_mutation_failure_case(
     vm.set_program_counter(entrypoint_pc)
         .expect("select multiword List entrypoint");
     vm.run().expect("execute multiword List program");
-
     let layout = ListLayoutV1::try_new(2, 2).expect("List<Pair, 2> layout");
     let base = vm.register(10);
     let allocation = (0..layout.allocation_bytes().expect("bounded allocation") / 8)
@@ -171,7 +160,6 @@ fn run_multiword_mutation_failure_case(
         .expect("observe heap cursor without allocating");
     (allocation, heap_cursor)
 }
-
 #[test]
 fn safe_mutations_execute_with_transactional_failures() {
     let vm = run(r#"
@@ -190,7 +178,6 @@ fn safe_mutations_execute_with_transactional_failures() {
         "#);
     assert_eq!(common::decode_i64_register(&vm, 10), 312);
 }
-
 #[test]
 fn comprehension_and_take_execute_as_bounded_copies() {
     let vm = run(r#"
@@ -209,7 +196,6 @@ fn comprehension_and_take_execute_as_bounded_copies() {
         "#);
     assert_eq!(common::decode_i64_register(&vm, 10), 6);
 }
-
 #[test]
 fn list_gas_grows_with_the_active_element_count_at_fixed_capacity() {
     let mut samples = Vec::new();
@@ -237,7 +223,6 @@ fn list_gas_grows_with_the_active_element_count_at_fixed_capacity() {
         );
         samples.push((active_len, gas_used));
     }
-
     for pair in samples.windows(2) {
         assert!(
             pair[0].1 < pair[1].1,
@@ -245,7 +230,6 @@ fn list_gas_grows_with_the_active_element_count_at_fixed_capacity() {
         );
     }
 }
-
 #[test]
 fn get_gas_is_deterministic_and_does_not_scan_preceding_elements() {
     let program = KotodamaCompiler::new()
@@ -271,7 +255,6 @@ fn get_gas_is_deterministic_and_does_not_scan_preceding_elements() {
             "#,
         )
         .expect("compile matched argument-decoding control");
-
     let mut samples = Vec::new();
     for (index, expected) in [(0, 10), (1, 20), (3, 40), (8, 99)] {
         let (vm, gas) = run_parameterized_int_entrypoint(&program, index);
@@ -291,7 +274,6 @@ fn get_gas_is_deterministic_and_does_not_scan_preceding_elements() {
         );
         samples.push((index, operation_gas));
     }
-
     assert!(
         samples[0].1 < samples[1].1,
         "canonical exact-int zero must retain its cheaper zero-magnitude path: {samples:?}"
@@ -305,7 +287,6 @@ fn get_gas_is_deterministic_and_does_not_scan_preceding_elements() {
         "a missing get must skip payload materialization: {samples:?}"
     );
 }
-
 #[test]
 fn try_set_gas_and_transactionality_cover_success_and_failure() {
     let (control, control_gas) = run_main_body_with_gas(
@@ -316,7 +297,6 @@ fn try_set_gas_and_transactionality_cover_success_and_failure() {
         "#,
     );
     let control_values = returned_int_list(&control, 4);
-
     let (success, success_gas) = run_main_body_with_gas(
         "List<int, 4>",
         r#"
@@ -329,7 +309,6 @@ fn try_set_gas_and_transactionality_cover_success_and_failure() {
         returned_int_list(&success, 4),
         (2, 4, vec![10, 99], vec![0, 0])
     );
-
     let (failure, failure_gas) = run_main_body_with_gas(
         "List<int, 4>",
         r#"
@@ -343,7 +322,6 @@ fn try_set_gas_and_transactionality_cover_success_and_failure() {
         control_values,
         "failed try_set must leave the complete allocation unchanged"
     );
-
     let success_delta = positive_gas_delta(success_gas, control_gas, "successful try_set");
     let failure_delta = positive_gas_delta(failure_gas, control_gas, "failed try_set");
     assert!(
@@ -351,12 +329,10 @@ fn try_set_gas_and_transactionality_cover_success_and_failure() {
         "failed try_set must skip element writes: success={success_delta}, failure={failure_delta}"
     );
 }
-
 #[test]
 fn arbitrary_width_out_of_range_indices_are_total_and_transactional() {
     const SIGNED_512_MIN: &str = "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048";
     const SIGNED_512_MAX: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
-
     for index in [
         "9223372036854775808",
         "18446744073709551615",
@@ -387,7 +363,6 @@ fn arbitrary_width_out_of_range_indices_are_total_and_transactional() {
         );
     }
 }
-
 #[test]
 fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
     let (space_control, space_control_gas) = run_main_body_with_gas(
@@ -409,7 +384,6 @@ fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
         returned_int_list(&success, 3),
         (3, 3, vec![10, 20, 30], vec![])
     );
-
     let (full_control, full_control_gas) = run_main_body_with_gas(
         "List<int, 3>",
         r#"
@@ -435,7 +409,6 @@ fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
         returned_int_list(&space_control, 3),
         (2, 3, vec![10, 20], vec![0])
     );
-
     let success_delta = positive_gas_delta(success_gas, space_control_gas, "successful try_push");
     let failure_delta = positive_gas_delta(failure_gas, full_control_gas, "full-capacity try_push");
     assert!(
@@ -443,7 +416,6 @@ fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
         "full try_push must skip element and length writes: success={success_delta}, failure={failure_delta}"
     );
 }
-
 #[test]
 fn failed_multiword_mutations_preserve_every_word_and_allocate_nothing_after_preflight() {
     let program = KotodamaCompiler::new()
@@ -503,7 +475,6 @@ fn failed_multiword_mutations_preserve_every_word_and_allocate_nothing_after_pre
             "#,
         )
         .expect("compile multiword mutation failure fixture");
-
     for index in ["-1", "1", "8", "18446744073709551616"] {
         let control = run_multiword_mutation_failure_case(&program, 0, index);
         let failure = run_multiword_mutation_failure_case(&program, 1, index);
@@ -516,7 +487,6 @@ fn failed_multiword_mutations_preserve_every_word_and_allocate_nothing_after_pre
             "failed try_set({index}) allocated after its matched bounds proof"
         );
     }
-
     let full_control = run_multiword_mutation_failure_case(&program, 2, "0");
     let full_failure = run_multiword_mutation_failure_case(&program, 3, "0");
     assert_eq!(
@@ -528,7 +498,6 @@ fn failed_multiword_mutations_preserve_every_word_and_allocate_nothing_after_pre
         "full-capacity try_push allocated before returning false"
     );
 }
-
 #[test]
 fn pop_gas_and_transactionality_cover_nonempty_and_empty_lists() {
     let (nonempty_control, nonempty_control_gas) = run_main_body_with_gas(
@@ -555,7 +524,6 @@ fn pop_gas_and_transactionality_cover_nonempty_and_empty_lists() {
         (1, 3, vec![10], vec![0, 0]),
         "pop must clear the vacated slot"
     );
-
     let (empty_control, empty_control_gas) = run_main_body_with_gas(
         "List<int, 3>",
         r#"
@@ -577,7 +545,6 @@ fn pop_gas_and_transactionality_cover_nonempty_and_empty_lists() {
         empty_control_values,
         "empty pop must leave the complete allocation unchanged"
     );
-
     let nonempty_delta = positive_gas_delta(nonempty_gas, nonempty_control_gas, "nonempty pop");
     let empty_delta = positive_gas_delta(empty_gas, empty_control_gas, "empty pop");
     assert!(
@@ -585,7 +552,6 @@ fn pop_gas_and_transactionality_cover_nonempty_and_empty_lists() {
         "empty pop must skip payload reads and clearing writes: nonempty={nonempty_delta}, empty={empty_delta}"
     );
 }
-
 #[test]
 fn contains_gas_increases_by_one_exact_scan_step_per_mismatch() {
     let mut samples = Vec::new();
@@ -603,7 +569,6 @@ fn contains_gas_increases_by_one_exact_scan_step_per_mismatch() {
         assert_eq!(common::decode_i64_register(&vm, 10), expected);
         samples.push((needle, gas));
     }
-
     let first_scan_step = samples[1].1 - samples[0].1;
     assert!(first_scan_step > 0, "each mismatch must consume gas");
     assert_eq!(samples[2].1 - samples[1].1, first_scan_step);
@@ -613,7 +578,6 @@ fn contains_gas_increases_by_one_exact_scan_step_per_mismatch() {
         "an absent value must examine all active elements: {samples:?}"
     );
 }
-
 #[test]
 fn comprehension_gas_delta_is_exactly_linear_in_active_source_elements() {
     let mut deltas = Vec::new();
@@ -654,7 +618,6 @@ fn comprehension_gas_delta_is_exactly_linear_in_active_source_elements() {
             positive_gas_delta(copied_gas, control_gas, "List comprehension"),
         ));
     }
-
     let fixed_delta = deltas[0].1;
     let per_element = deltas[1].1 - fixed_delta;
     assert!(
@@ -669,7 +632,6 @@ fn comprehension_gas_delta_is_exactly_linear_in_active_source_elements() {
         );
     }
 }
-
 #[test]
 fn enumerate_materializes_bounded_structured_elements() {
     let vm = run(r#"
@@ -684,7 +646,6 @@ fn enumerate_materializes_bounded_structured_elements() {
         "#);
     assert_eq!(common::decode_i64_register(&vm, 10), 18);
 }
-
 #[test]
 fn list_of_options_uses_one_word_per_element() {
     let vm = run(r#"
@@ -719,7 +680,6 @@ fn list_of_options_uses_one_word_per_element() {
         Ok((false, vec![]))
     );
 }
-
 #[test]
 fn contains_compares_nested_lists_sums_and_structs_by_value() {
     let vm = run(r#"
@@ -787,7 +747,6 @@ fn contains_compares_nested_lists_sums_and_structs_by_value() {
         "#);
     assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
-
 #[test]
 fn recursive_contains_support_does_not_admit_resource_elements() {
     let error = KotodamaCompiler::new()
@@ -808,7 +767,6 @@ fn recursive_contains_support_does_not_admit_resource_elements() {
         "unexpected compiler diagnostic: {error}"
     );
 }
-
 #[test]
 fn zero_sized_elements_have_a_stable_public_compiler_diagnostic() {
     let error = KotodamaCompiler::new()
@@ -833,7 +791,6 @@ fn zero_sized_elements_have_a_stable_public_compiler_diagnostic() {
         error.contains("List elements must encode at least one word"),
         "diagnostic must explain the representation requirement: {error}"
     );
-
     KotodamaCompiler::new()
         .compile_source(
             r#"

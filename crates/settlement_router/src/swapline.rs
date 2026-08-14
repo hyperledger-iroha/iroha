@@ -1,13 +1,10 @@
 //! Repo/reverse-repo style swap lines that supplement AMM liquidity.
-
+use crate::{Numeric, NumericOperationError, RoundingMode, XorQuantity, XorQuantityError};
 use derive_more::{Display, From};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     json::{JsonDeserialize, JsonSerialize},
 };
-
-use crate::{Numeric, NumericOperationError, RoundingMode, XorQuantity, XorQuantityError};
-
 /// Uniquely identifies a swap line (per dataspace and collateral flavour).
 #[derive(
     Clone,
@@ -27,7 +24,6 @@ use crate::{Numeric, NumericOperationError, RoundingMode, XorQuantity, XorQuanti
 )]
 #[display("{_0}")]
 pub struct SwapLineId(pub u32);
-
 /// Asset class eligible for posting as collateral against a swap line.
 #[derive(
     Clone,
@@ -53,7 +49,6 @@ pub enum CollateralKind {
     #[display("stable")]
     Stable,
 }
-
 /// Swap-line calculation failures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum SwapLineError {
@@ -67,7 +62,6 @@ pub enum SwapLineError {
     #[error("swap-line ratio arithmetic failed: {0}")]
     Numeric(#[from] NumericOperationError),
 }
-
 /// Static configuration for a swap line.
 #[derive(
     Clone, Debug, Eq, PartialEq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -86,7 +80,6 @@ pub struct SwapLineConfig {
     /// Whether the facility uses fee-based remuneration or classic interest.
     pub uses_fee_schedule: bool,
 }
-
 impl SwapLineConfig {
     /// Validate static invariants.
     pub fn validate(&self) -> Result<(), SwapLineError> {
@@ -95,7 +88,6 @@ impl SwapLineConfig {
         }
         Ok(())
     }
-
     /// Return the minimum collateral required for an outstanding balance.
     ///
     /// The result rounds upward at XOR's precision boundary so collateral is
@@ -114,7 +106,6 @@ impl SwapLineConfig {
             )
             .map_err(SwapLineError::from)
     }
-
     /// Evaluate utilisation as an exact decimal rounded to 28 fractional
     /// digits using nearest-even ties.
     pub fn utilisation(&self, outstanding: &XorQuantity) -> Result<Numeric, SwapLineError> {
@@ -129,7 +120,6 @@ impl SwapLineConfig {
             .map_err(SwapLineError::from)
     }
 }
-
 /// Runtime view of a swap line, tracking outstanding notional and collateral.
 #[derive(
     Clone, Debug, Eq, PartialEq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -140,7 +130,6 @@ pub struct SwapLineExposure {
     /// Collateral posted against the swap line.
     pub collateral_value: XorQuantity,
 }
-
 impl SwapLineExposure {
     /// Determine whether utilisation and collateral satisfy the configuration.
     pub fn is_healthy(&self, config: &SwapLineConfig) -> Result<bool, SwapLineError> {
@@ -152,16 +141,13 @@ impl SwapLineExposure {
         Ok(self.collateral_value >= required)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::{CollateralKind, SwapLineConfig, SwapLineError, SwapLineExposure, SwapLineId};
     use crate::{Numeric, XorQuantity};
-
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
     }
-
     fn config() -> SwapLineConfig {
         SwapLineConfig {
             id: SwapLineId(7),
@@ -172,7 +158,6 @@ mod tests {
             uses_fee_schedule: false,
         }
     }
-
     #[test]
     fn utilisation_and_health_are_exact() {
         let config = config();
@@ -180,7 +165,6 @@ mod tests {
             outstanding_xor: xor("400000.000000001"),
             collateral_value: xor("404000.000000002"),
         };
-
         assert!(
             config
                 .utilisation(&exposure.outstanding_xor)
@@ -189,7 +173,6 @@ mod tests {
         );
         assert_eq!(exposure.is_healthy(&config), Ok(true));
     }
-
     #[test]
     fn rejects_zero_limit_instead_of_reporting_zero_utilisation() {
         let mut invalid = config();
@@ -207,7 +190,6 @@ mod tests {
             Err(SwapLineError::ZeroLimit)
         );
     }
-
     #[test]
     fn over_limit_and_undercollateralized_exposures_are_unhealthy() {
         let config = config();

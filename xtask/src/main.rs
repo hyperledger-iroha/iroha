@@ -1,26 +1,4 @@
 //! Developer automation entrypoint for repository maintenance tasks.
-
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, BTreeSet},
-    env,
-    error::Error,
-    ffi::OsStr,
-    fmt::Write as FmtWrite,
-    fs,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    process,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
-
-#[cfg(unix)]
-use std::{
-    ffi::OsString,
-    os::unix::ffi::{OsStrExt, OsStringExt},
-};
-
 use axum::{
     Router,
     body::{self, Body},
@@ -68,6 +46,25 @@ use norito::{
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+    env,
+    error::Error,
+    ffi::OsStr,
+    fmt::Write as FmtWrite,
+    fs,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    process,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+#[cfg(unix)]
+use std::{
+    ffi::OsString,
+    os::unix::ffi::{OsStrExt, OsStringExt},
+};
 use tempfile::TempDir;
 use time::{
     Date, OffsetDateTime,
@@ -75,7 +72,6 @@ use time::{
 };
 use tokio::runtime::Builder as TokioRuntimeBuilder;
 use tower::ServiceExt;
-
 mod da;
 mod vote_tally;
 use fastpq::{BenchInput, BenchManifestOptions};
@@ -138,14 +134,12 @@ use crate::norito_rpc::{
     FixtureOptions as NoritoRpcFixtureOptions, generate_fixtures as run_norito_rpc_fixtures,
     run_verify,
 };
-
 fn main() {
     if let Err(err) = entrypoint() {
         eprintln!("error: {err}");
         process::exit(1);
     }
 }
-
 enum CommandKind {
     OpenApi {
         outputs: Vec<PathBuf>,
@@ -506,19 +500,16 @@ enum CommandKind {
     },
     Help,
 }
-
 #[derive(Clone, Debug)]
 pub(crate) enum JsonTarget {
     Stdout,
     File(PathBuf),
 }
-
 #[derive(Clone, Copy)]
 enum AccelerationOutputFormat {
     Json,
     Table,
 }
-
 impl AccelerationOutputFormat {
     fn parse(value: &str) -> Result<Self, Box<dyn Error>> {
         match value {
@@ -528,7 +519,6 @@ impl AccelerationOutputFormat {
         }
     }
 }
-
 #[derive(Clone, Debug, Serialize)]
 struct AccelerationConfigReport {
     enable_simd: bool,
@@ -541,7 +531,6 @@ struct AccelerationConfigReport {
     prefer_cpu_sha2_max_leaves_aarch64: Option<usize>,
     prefer_cpu_sha2_max_leaves_x86: Option<usize>,
 }
-
 #[derive(Clone, Debug, Serialize)]
 struct AccelerationBackendReport {
     supported: bool,
@@ -550,7 +539,6 @@ struct AccelerationBackendReport {
     parity_ok: bool,
     last_error: Option<String>,
 }
-
 #[derive(Clone, Debug, Serialize)]
 struct AccelerationStateReport {
     config: AccelerationConfigReport,
@@ -558,7 +546,6 @@ struct AccelerationStateReport {
     metal: AccelerationBackendReport,
     cuda: AccelerationBackendReport,
 }
-
 impl AccelerationStateReport {
     fn capture() -> Self {
         Self::from_parts(
@@ -567,7 +554,6 @@ impl AccelerationStateReport {
             ivm::acceleration_runtime_errors(),
         )
     }
-
     fn from_parts(
         config: ivm::AccelerationConfig,
         runtime: ivm::AccelerationRuntimeStatus,
@@ -581,7 +567,6 @@ impl AccelerationStateReport {
         }
     }
 }
-
 impl AccelerationConfigReport {
     fn from_config(config: ivm::AccelerationConfig) -> Self {
         Self {
@@ -597,7 +582,6 @@ impl AccelerationConfigReport {
         }
     }
 }
-
 impl AccelerationBackendReport {
     fn from_status(status: ivm::BackendRuntimeStatus, last_error: Option<String>) -> Self {
         Self {
@@ -609,14 +593,12 @@ impl AccelerationBackendReport {
         }
     }
 }
-
 fn run_acceleration_state(format: AccelerationOutputFormat) -> Result<(), Box<dyn Error>> {
     let state = AccelerationStateReport::capture();
     let rendered = render_acceleration_state(&state, format)?;
     println!("{rendered}");
     Ok(())
 }
-
 fn render_acceleration_state(
     state: &AccelerationStateReport,
     format: AccelerationOutputFormat,
@@ -626,7 +608,6 @@ fn render_acceleration_state(
         AccelerationOutputFormat::Table => Ok(format_acceleration_table(state)),
     }
 }
-
 fn format_acceleration_table(state: &AccelerationStateReport) -> String {
     let mut output = String::new();
     let cfg = &state.config;
@@ -687,18 +668,15 @@ fn format_acceleration_table(state: &AccelerationStateReport) -> String {
     }
     output
 }
-
 fn format_optional(value: Option<usize>) -> String {
     match value {
         Some(v) => v.to_string(),
         None => "auto".to_string(),
     }
 }
-
 fn format_bool(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
 }
-
 #[derive(Default)]
 struct IsoLintOptions {
     isin_path: Option<PathBuf>,
@@ -706,7 +684,6 @@ struct IsoLintOptions {
     mic_path: Option<PathBuf>,
     fixtures_path: Option<PathBuf>,
 }
-
 impl IsoLintOptions {
     fn is_empty(&self) -> bool {
         self.isin_path.is_none()
@@ -714,7 +691,6 @@ impl IsoLintOptions {
             && self.mic_path.is_none()
             && self.fixtures_path.is_none()
     }
-
     fn ensure_defaults(&mut self) {
         if self.is_empty() {
             let root = workspace_root();
@@ -725,32 +701,27 @@ impl IsoLintOptions {
         }
     }
 }
-
 struct IsoFixtures {
     instruments: Vec<String>,
     bics: Vec<String>,
     leis: Vec<String>,
     mics: Vec<String>,
 }
-
 struct StreamingBundleCheckOptions {
     config_path: PathBuf,
     tables_override: Option<PathBuf>,
     output: JsonTarget,
 }
-
 struct StreamingContextRemapOptions {
     input: PathBuf,
     top: usize,
     output: JsonTarget,
 }
-
 struct SoradnsVerifyGarOptions {
     gar_path: PathBuf,
     expectations: soradns::GarVerifyOptions,
     json_out: Option<JsonTarget>,
 }
-
 impl IsoFixtures {
     fn load(path: &Path) -> Result<Self, Box<dyn Error>> {
         let raw = fs::read_to_string(path)?;
@@ -763,7 +734,6 @@ impl IsoFixtures {
         })
     }
 }
-
 fn parse_u64_flag(raw: &str, flag: &str) -> Result<u64, Box<dyn Error>> {
     let trimmed = raw.trim();
     let parsed = trimmed
@@ -771,7 +741,6 @@ fn parse_u64_flag(raw: &str, flag: &str) -> Result<u64, Box<dyn Error>> {
         .map_err(|_| format!("{flag} requires an unsigned integer"))?;
     Ok(parsed)
 }
-
 fn validate_sorafs_adoption_override_id(raw: &str) -> Result<(), Box<dyn Error>> {
     let mut chars = raw.chars();
     let Some(first) = chars.next() else {
@@ -791,14 +760,12 @@ fn validate_sorafs_adoption_override_id(raw: &str) -> Result<(), Box<dyn Error>>
     }
     Ok(())
 }
-
 fn unix_timestamp_now() -> Result<u64, Box<dyn Error>> {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(duration) => Ok(duration.as_secs()),
         Err(err) => Err(Box::new(err)),
     }
 }
-
 fn string_array(root: &Value, key: &str) -> Result<Vec<String>, Box<dyn Error>> {
     let Some(value) = root.as_object().and_then(|map| map.get(key)) else {
         return Ok(Vec::new());
@@ -818,7 +785,6 @@ fn string_array(root: &Value, key: &str) -> Result<Vec<String>, Box<dyn Error>> 
     }
     Ok(out)
 }
-
 fn ensure_dataset_loaded<T>(
     snapshot: &DatasetSnapshot<T>,
     label: &str,
@@ -836,7 +802,6 @@ fn ensure_dataset_loaded<T>(
         }
     }
 }
-
 fn ensure_reference(
     label: &str,
     outcome: Result<(), ReferenceDataError>,
@@ -846,19 +811,15 @@ fn ensure_reference(
         Err(err) => Err(format!("{label} validation failed: {err}").into()),
     }
 }
-
 fn lint_iso_bridge(mut options: IsoLintOptions) -> Result<(), Box<dyn Error>> {
     options.ensure_defaults();
-
     let config = IsoReferenceData {
         isin_crosswalk_path: options.isin_path.clone(),
         bic_lei_path: options.bic_lei_path.clone(),
         mic_directory_path: options.mic_path.clone(),
         ..IsoReferenceData::default()
     };
-
     let snapshots = ReferenceDataSnapshots::from_config(&config);
-
     if options.isin_path.is_some() {
         ensure_dataset_loaded(snapshots.isin_cusip(), "ISIN↔CUSIP crosswalk")?;
     }
@@ -868,10 +829,8 @@ fn lint_iso_bridge(mut options: IsoLintOptions) -> Result<(), Box<dyn Error>> {
     if options.mic_path.is_some() {
         ensure_dataset_loaded(snapshots.mic_directory(), "MIC directory")?;
     }
-
     if let Some(fixtures_path) = options.fixtures_path.as_ref() {
         let fixtures = IsoFixtures::load(fixtures_path)?;
-
         if !fixtures.instruments.is_empty() {
             if options.isin_path.is_none() {
                 return Err(
@@ -882,7 +841,6 @@ fn lint_iso_bridge(mut options: IsoLintOptions) -> Result<(), Box<dyn Error>> {
                 ensure_reference(&format!("Instrument {isin}"), snapshots.validate_isin(isin))?;
             }
         }
-
         if !fixtures.bics.is_empty() {
             if options.bic_lei_path.is_none() {
                 return Err("BIC fixtures specified but no BIC↔LEI dataset configured".into());
@@ -891,7 +849,6 @@ fn lint_iso_bridge(mut options: IsoLintOptions) -> Result<(), Box<dyn Error>> {
                 ensure_reference(&format!("BIC {bic}"), snapshots.validate_bic(bic))?;
             }
         }
-
         if !fixtures.leis.is_empty() {
             if options.bic_lei_path.is_none() {
                 return Err("LEI fixtures specified but no BIC↔LEI dataset configured".into());
@@ -900,7 +857,6 @@ fn lint_iso_bridge(mut options: IsoLintOptions) -> Result<(), Box<dyn Error>> {
                 ensure_reference(&format!("LEI {lei}"), snapshots.validate_lei(lei))?;
             }
         }
-
         if !fixtures.mics.is_empty() {
             if options.mic_path.is_none() {
                 return Err("MIC fixtures specified but no MIC directory configured".into());
@@ -910,17 +866,14 @@ fn lint_iso_bridge(mut options: IsoLintOptions) -> Result<(), Box<dyn Error>> {
             }
         }
     }
-
     println!("ISO bridge reference data lint passed");
     Ok(())
 }
-
 fn streaming_bundle_check(options: StreamingBundleCheckOptions) -> Result<(), Box<dyn Error>> {
     let summary = build_streaming_bundle_summary(&options.config_path, options.tables_override)?;
     write_json_output(&summary, options.output)?;
     Ok(())
 }
-
 fn build_streaming_bundle_summary(
     config_path: &Path,
     tables_override: Option<PathBuf>,
@@ -950,7 +903,6 @@ fn build_streaming_bundle_summary(
         json::Value::from(tables.precision_bits()),
     );
     tables_json.insert("checksum".into(), json::Value::from(checksum_hex));
-
     let mut summary = json::Map::new();
     summary.insert(
         "config".into(),
@@ -987,10 +939,8 @@ fn build_streaming_bundle_summary(
         json::Value::from(accel_allowed),
     );
     summary.insert("tables".into(), json::Value::Object(tables_json));
-
     Ok(json::Value::Object(summary))
 }
-
 fn bundle_accel_label(accel: actual::BundleAcceleration) -> &'static str {
     match accel {
         actual::BundleAcceleration::None => "none",
@@ -998,7 +948,6 @@ fn bundle_accel_label(accel: actual::BundleAcceleration) -> &'static str {
         actual::BundleAcceleration::Gpu => "gpu",
     }
 }
-
 #[derive(Serialize, JsonSerialize)]
 struct ContextRemapRow {
     original: u16,
@@ -1007,13 +956,11 @@ struct ContextRemapRow {
     total_bits: u64,
     dominant_symbol: Option<SymbolCount>,
 }
-
 #[derive(Serialize, JsonSerialize)]
 struct SymbolCount {
     symbol: u8,
     count: u64,
 }
-
 #[derive(Serialize, JsonSerialize)]
 struct ContextRemapReport {
     input: String,
@@ -1022,9 +969,7 @@ struct ContextRemapReport {
     kept: Vec<ContextRemapRow>,
     dropped: Vec<ContextRemapRow>,
 }
-
 const CONTEXT_SYMBOL_CAP: usize = 1 << 4;
-
 fn streaming_context_remap(options: StreamingContextRemapOptions) -> Result<(), Box<dyn Error>> {
     let raw = fs::read_to_string(&options.input)?;
     let telemetry: Value = norito::json::from_str(&raw)?;
@@ -1068,7 +1013,6 @@ fn streaming_context_remap(options: StreamingContextRemapOptions) -> Result<(), 
     let value = json::to_value(&report)?;
     write_json_output(&value, options.output)
 }
-
 impl ContextRemapRow {
     fn from_frequency(freq: &ContextFrequency, remapped: Option<u16>) -> Self {
         let dominant_symbol = dominant_symbol(&freq.symbol_counts);
@@ -1081,7 +1025,6 @@ impl ContextRemapRow {
         }
     }
 }
-
 fn dominant_symbol(counts: &[u64]) -> Option<SymbolCount> {
     counts
         .iter()
@@ -1099,7 +1042,6 @@ fn dominant_symbol(counts: &[u64]) -> Option<SymbolCount> {
             count,
         })
 }
-
 fn parse_context_frequency(entry: &Value) -> Option<ContextFrequency> {
     let obj = entry.as_object()?;
     let context = obj.get("context")?.as_u64()? as u16;
@@ -1118,7 +1060,6 @@ fn parse_context_frequency(entry: &Value) -> Option<ContextFrequency> {
         symbol_counts,
     })
 }
-
 fn entrypoint() -> Result<(), Box<dyn Error>> {
     let command = parse_command(env::args())?;
     match command {
@@ -1942,7 +1883,6 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn parse_command<I>(mut args: I) -> Result<CommandKind, Box<dyn Error>>
 where
     I: Iterator<Item = String>,
@@ -1953,7 +1893,6 @@ where
         print_usage();
         return Err("missing command".into());
     };
-
     match cmd.as_str() {
         "-h" | "--help" => Ok(CommandKind::Help),
         "soracloud-inrou-smoke" => {
@@ -2064,7 +2003,6 @@ where
                     flag => return Err(format!("unknown flag for openapi: {flag}").into()),
                 }
             }
-
             if unsigned_manifest && signature_envelope.is_some() {
                 return Err(
                     "openapi flag --unsigned-manifest cannot be combined with --signature-envelope"
@@ -2077,7 +2015,6 @@ where
                         .into(),
                 );
             }
-
             if output_root.is_some() && (!outputs.is_empty() || manifest_path.is_some()) {
                 return Err(
                     "openapi --output-root cannot be combined with --output or --manifest".into(),
@@ -2097,7 +2034,6 @@ where
                     manifest_path.unwrap_or_else(default_openapi_manifest_path),
                 )
             };
-
             for (index, output) in outputs.iter().enumerate() {
                 if openapi_paths_alias(output, &manifest) {
                     return Err(format!(
@@ -2154,7 +2090,6 @@ where
                     }
                 }
             }
-
             Ok(CommandKind::OpenApi {
                 outputs,
                 canonical_spec,
@@ -2261,7 +2196,6 @@ where
                     }
                 }
             }
-
             let config =
                 config.ok_or("da-replication-audit requires --config <torii_config.toml>")?;
             if manifests.is_empty() {
@@ -2479,7 +2413,6 @@ where
                     }
                 }
             }
-
             let manifest = match manifest {
                 Some(path) => path,
                 None => normalize_path(&default_da_proof_manifest())?,
@@ -2562,7 +2495,6 @@ where
                     }
                 }
             }
-
             Ok(CommandKind::OpenApiVerify {
                 spec: spec_path.unwrap_or_else(default_openapi_path),
                 manifest: manifest_path.unwrap_or_else(default_openapi_manifest_path),
@@ -2889,7 +2821,6 @@ where
                     }
                 }
             }
-
             let output = output.unwrap_or_else(default_mochi_bundle_path);
             Ok(CommandKind::MochiBundle {
                 output,
@@ -3653,12 +3584,10 @@ where
                     }
                 }
             }
-
             let signatures =
                 signatures.ok_or("sorafs-fetch-fixture requires --signatures <path|url>")?;
             let output =
                 output.unwrap_or_else(|| workspace_root().join("fixtures").join("sorafs_chunker"));
-
             Ok(CommandKind::SorafsFetchFixture {
                 options: Box::new(sorafs::FetchFixtureOptions {
                     signatures_source: signatures,
@@ -3715,7 +3644,6 @@ where
                     }
                 }
             }
-
             if let Some(envelope) = verify_envelope {
                 if output.is_some()
                     || signing_key.is_some()
@@ -3726,7 +3654,6 @@ where
                 }
                 return Ok(CommandKind::SorafsGatewayAttestVerify { envelope });
             }
-
             let signing_key_path =
                 signing_key.ok_or("sorafs-gateway-attest requires --signing-key <path>")?;
             let signer_account = signer_account
@@ -3736,7 +3663,6 @@ where
                     .join("artifacts")
                     .join("sorafs_gateway_attest")
             });
-
             Ok(CommandKind::SorafsGatewayAttest {
                 options: Box::new(sorafs::GatewayAttestOptions {
                     output_dir: output,
@@ -3995,7 +3921,6 @@ where
                     }
                 }
             }
-
             if gateway.is_none() && headers_path.is_none() {
                 return Err("sorafs-gateway-probe requires --gateway or --headers-file".into());
             }
@@ -4067,7 +3992,6 @@ where
             } else {
                 None
             };
-
             let options = sorafs::GatewayProbeOptions {
                 request: gateway.map(|url| sorafs::GatewayProbeRequest {
                     url,
@@ -4800,7 +4724,6 @@ where
                     }
                 }
             }
-
             let output_dir = output_dir.unwrap_or_else(|| {
                 workspace_root()
                     .join("artifacts")
@@ -4814,7 +4737,6 @@ where
             let trustless_config = trustless_config.ok_or_else(|| {
                 "soranet-gateway-pq requires --trustless-config <path>".to_string()
             })?;
-
             Ok(CommandKind::SoranetGatewayPq {
                 options: soranet_gateway_pq::GatewayPqOptions {
                     output_dir,
@@ -5673,7 +5595,6 @@ where
             let mut stage_report: Option<PathBuf> = None;
             let mut attachments: Vec<VerificationAttachment> = Vec::new();
             let mut output: Option<JsonTarget> = None;
-
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -5747,7 +5668,6 @@ where
                     }
                 }
             }
-
             let promotion = promotion.ok_or("soranet-testnet-feed requires --promotion <value>")?;
             let window_start =
                 window_start.ok_or("soranet-testnet-feed requires --window-start <date>")?;
@@ -5755,7 +5675,6 @@ where
                 window_end.ok_or("soranet-testnet-feed requires --window-end <date>")?;
             let metrics_report =
                 metrics_report.ok_or("soranet-testnet-feed requires --metrics-report <path>")?;
-
             if let Some(path) = relays_file {
                 let mut from_file = load_relays_from_file(&path)?;
                 relays.append(&mut from_file);
@@ -5765,7 +5684,6 @@ where
                     "soranet-testnet-feed requires at least one --relay or --relays-file".into(),
                 );
             }
-
             let options = VerificationFeedOptions {
                 promotion,
                 window_start,
@@ -7246,7 +7164,6 @@ where
                     }
                 }
             }
-
             let regions = regions.ok_or("soranet-rollout-plan requires --regions <a,b,...>")?;
             let start = start.ok_or("soranet-rollout-plan requires --start <RFC3339 timestamp>")?;
             let regions_vec: Vec<String> = regions
@@ -7266,7 +7183,6 @@ where
                 Some(spec) => Some(soranet_rollout::parse_duration_spec(&spec)?),
                 None => None,
             };
-
             let options = soranet_rollout::PlanOptions {
                 label: label.unwrap_or_else(|| "SNNet-16G rollout".to_string()),
                 environment: environment.unwrap_or_else(|| "production".to_string()),
@@ -7352,7 +7268,6 @@ where
                     }
                 }
             }
-
             let log_path = log_path.ok_or("soranet-rollout-capture requires --log <path>")?;
             let key_path = key_path.ok_or("soranet-rollout-capture requires --key <path>")?;
             let options = soranet_rollout::CaptureOptions {
@@ -7505,7 +7420,6 @@ where
                     }
                 }
             }
-
             let input =
                 input.ok_or("sns-scorecard requires --input <path to steward metrics JSON>")?;
             let output_json = output_json.ok_or(
@@ -7582,7 +7496,6 @@ where
                     }
                 }
             }
-
             let suffix = suffix.ok_or("sns-annex requires --suffix <.suffix>")?;
             let cycle = cycle.ok_or("sns-annex requires --cycle <YYYY-MM>")?;
             let dashboard_path =
@@ -7594,7 +7507,6 @@ where
                 candidate.push(format!("{cycle}.md"));
                 candidate
             });
-
             Ok(CommandKind::SnsAnnex(sns::AnnexOptions {
                 suffix,
                 cycle,
@@ -7939,7 +7851,6 @@ where
                 "benchmarks/norito_stage1/latest.md",
             ))?);
             let mut allow_overwrite = false;
-
             fn parse_size_bytes(raw: &str) -> Result<usize, String> {
                 let raw = raw.trim();
                 if let Some(stripped) = raw.strip_suffix('k').or_else(|| raw.strip_suffix('K')) {
@@ -7957,7 +7868,6 @@ where
                 raw.parse::<usize>()
                     .map_err(|_| format!("invalid size `{raw}`"))
             }
-
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -8020,7 +7930,6 @@ where
             let mut threshold = Some(normalize_path(Path::new("benchmarks/i3/thresholds.json"))?);
             let mut allow_overwrite = false;
             let mut flamegraph_hint = false;
-
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -8105,7 +8014,6 @@ where
             let mut threshold = normalize_path(Path::new("benchmarks/i3/slo_thresholds.json"))?;
             let mut allow_overwrite = false;
             let mut flamegraph_hint = false;
-
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -8175,7 +8083,6 @@ where
                 "benchmarks/poseidon/poseidon_cuda_latest.md",
             ))?);
             let mut allow_overwrite = false;
-
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -9640,7 +9547,6 @@ where
         }
     }
 }
-
 fn generate_openapi(
     outputs: Vec<PathBuf>,
     canonical_spec: PathBuf,
@@ -9650,7 +9556,6 @@ fn generate_openapi(
     unsigned_manifest: bool,
 ) -> Result<(), Box<dyn Error>> {
     let spec = require_release_router_openapi(try_generate_router_openapi())?;
-
     let formatted = json::to_string_pretty(&spec)?;
     let emits_manifest = signature_envelope.is_some() || unsigned_manifest;
     if emits_manifest
@@ -9688,12 +9593,10 @@ fn generate_openapi(
                 .into(),
         );
     }
-
     for path in &outputs {
         write_openapi_file_atomic(path, formatted.as_bytes(), "OpenAPI output")?;
         println!("wrote {}", path.display());
     }
-
     if emits_manifest {
         let provenance = generator_provenance
             .as_ref()
@@ -9716,10 +9619,8 @@ fn generate_openapi(
             )?;
         }
     }
-
     Ok(())
 }
-
 fn require_release_router_openapi(
     generated: Result<Option<Value>, Box<dyn Error>>,
 ) -> Result<Value, Box<dyn Error>> {
@@ -9729,7 +9630,6 @@ fn require_release_router_openapi(
     validate_release_openapi_spec(&spec)?;
     Ok(spec)
 }
-
 fn validate_release_openapi_spec(spec: &Value) -> Result<(), Box<dyn Error>> {
     let document = spec
         .as_object()
@@ -9744,7 +9644,6 @@ fn validate_release_openapi_spec(spec: &Value) -> Result<(), Box<dyn Error>> {
         )
         .into());
     }
-
     let info = document
         .get("info")
         .and_then(Value::as_object)
@@ -9761,7 +9660,6 @@ fn validate_release_openapi_spec(spec: &Value) -> Result<(), Box<dyn Error>> {
             .into());
         }
     }
-
     let paths = document
         .get("paths")
         .and_then(Value::as_object)
@@ -9772,7 +9670,6 @@ fn validate_release_openapi_spec(spec: &Value) -> Result<(), Box<dyn Error>> {
                 .into(),
         );
     }
-
     let schemas = document
         .get("components")
         .and_then(Value::as_object)
@@ -9787,13 +9684,11 @@ fn validate_release_openapi_spec(spec: &Value) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn validate_release_openapi_bytes(spec_bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     let spec = norito::json::from_slice::<Value>(spec_bytes)
         .map_err(|err| format!("failed to parse release OpenAPI document as JSON: {err}"))?;
     validate_release_openapi_spec(&spec)
 }
-
 const OPENAPI_MANIFEST_VERSION: u32 = 2;
 const OPENAPI_MANIFEST_SIGNATURE_DOMAIN_V2: &[u8] = b"iroha.openapi.manifest.signature.v2";
 const OPENAPI_MANIFEST_MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
@@ -9852,13 +9747,11 @@ const OPENAPI_GENERATOR_INPUT_PATHS: &[&str] = &[
     "vendor",
     "xtask",
 ];
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct OpenApiCargoLockPinV1 {
     bytes: u64,
     sha256_hex: String,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OpenApiManifest {
@@ -9870,7 +9763,6 @@ struct OpenApiManifest {
     generator_source_sha256_hex: Option<String>,
     artifact: OpenApiArtifact,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct OpenApiGeneratorProvenance {
     generated_unix_ms: u64,
@@ -9878,7 +9770,6 @@ struct OpenApiGeneratorProvenance {
     dirty: bool,
     source_sha256_hex: Option<String>,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OpenApiArtifact {
@@ -9888,7 +9779,6 @@ struct OpenApiArtifact {
     blake3_hex: String,
     signature: Option<SignatureEnvelope>,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SignatureEnvelope {
@@ -9896,21 +9786,18 @@ struct SignatureEnvelope {
     public_key_hex: String,
     signature_hex: String,
 }
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SignerAllowlist {
     version: u32,
     allow: Vec<AllowedSigner>,
 }
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AllowedSigner {
     algorithm: String,
     public_key_hex: String,
 }
-
 #[cfg(test)]
 fn write_openapi_manifest(
     spec_path: &Path,
@@ -9936,7 +9823,6 @@ fn write_openapi_manifest(
         None,
     )
 }
-
 fn write_openapi_manifest_with_signature(
     spec_path: &Path,
     manifest_path: &Path,
@@ -9959,7 +9845,6 @@ fn write_openapi_manifest_with_signature(
         signing_payload_path,
     )
 }
-
 fn write_openapi_manifest_unsigned(
     spec_path: &Path,
     manifest_path: &Path,
@@ -9981,7 +9866,6 @@ fn write_openapi_manifest_unsigned(
         signing_payload_path,
     )
 }
-
 fn write_openapi_manifest_from_bytes(
     spec_path: &Path,
     manifest_path: &Path,
@@ -10007,13 +9891,11 @@ fn write_openapi_manifest_from_bytes(
         write_openapi_signing_payload_new(path, &signing_payload)?;
         println!("wrote {}", path.display());
     }
-
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
     write_openapi_manifest_atomic(manifest_path, manifest_json.as_bytes())?;
     println!("wrote {}", manifest_path.display());
     Ok(())
 }
-
 fn write_openapi_signing_payload_new(
     path: &Path,
     signing_payload: &[u8],
@@ -10054,11 +9936,9 @@ fn write_openapi_signing_payload_new(
     }
     write_result
 }
-
 fn write_openapi_manifest_atomic(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     write_openapi_file_atomic(path, bytes, "OpenAPI manifest")
 }
-
 fn write_openapi_file_atomic(path: &Path, bytes: &[u8], label: &str) -> Result<(), Box<dyn Error>> {
     let parent = path
         .parent()
@@ -10067,7 +9947,6 @@ fn write_openapi_file_atomic(path: &Path, bytes: &[u8], label: &str) -> Result<(
     fs::create_dir_all(parent)?;
     validate_openapi_output_ancestors(parent, label)?;
     validate_openapi_replace_target(path, label)?;
-
     let mut temporary = tempfile::Builder::new()
         .prefix(".openapi-manifest-v2.")
         .tempfile_in(parent)
@@ -10098,7 +9977,6 @@ fn write_openapi_file_atomic(path: &Path, bytes: &[u8], label: &str) -> Result<(
     fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
-
 fn validate_openapi_replace_target(path: &Path, label: &str) -> Result<(), Box<dyn Error>> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -10117,7 +9995,6 @@ fn validate_openapi_replace_target(path: &Path, label: &str) -> Result<(), Box<d
     }
     Ok(())
 }
-
 fn validate_openapi_output_ancestors(parent: &Path, label: &str) -> Result<(), Box<dyn Error>> {
     for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
         if ancestor.as_os_str().is_empty() {
@@ -10158,7 +10035,6 @@ fn validate_openapi_output_ancestors(parent: &Path, label: &str) -> Result<(), B
     }
     Ok(())
 }
-
 fn validate_openapi_open_file(
     path: &Path,
     file: &fs::File,
@@ -10182,7 +10058,6 @@ fn validate_openapi_open_file(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn validate_openapi_single_link(
     metadata: &fs::Metadata,
@@ -10195,7 +10070,6 @@ fn validate_openapi_single_link(
     }
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn validate_openapi_single_link(
     _metadata: &fs::Metadata,
@@ -10204,18 +10078,15 @@ fn validate_openapi_single_link(
 ) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
-
 #[cfg(unix)]
 fn openapi_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(not(unix))]
 fn openapi_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len()
 }
-
 fn openapi_path_matches_file(path: &Path, file: &fs::File) -> bool {
     let Ok(opened) = file.metadata() else {
         return false;
@@ -10227,7 +10098,6 @@ fn openapi_path_matches_file(path: &Path, file: &fs::File) -> bool {
         && current.is_file()
         && openapi_metadata_matches(&opened, &current)
 }
-
 fn read_openapi_input_stable(
     path: &Path,
     label: &str,
@@ -10235,7 +10105,6 @@ fn read_openapi_input_stable(
 ) -> Result<Vec<u8>, Box<dyn Error>> {
     read_openapi_input_stable_with_policy(path, label, max_bytes, false, false)
 }
-
 fn read_openapi_input_stable_with_policy(
     path: &Path,
     label: &str,
@@ -10248,7 +10117,6 @@ fn read_openapi_input_stable_with_policy(
         .ok_or_else(|| format!("{label} path must have a parent directory"))?;
     validate_openapi_output_ancestors(parent, label)?;
     validate_openapi_replace_target(path, label)?;
-
     let mut options = fs::OpenOptions::new();
     options.read(true);
     set_openapi_no_follow_flag(&mut options);
@@ -10276,7 +10144,6 @@ fn read_openapi_input_stable_with_policy(
         )
         .into());
     }
-
     let capacity = usize::try_from(declared_len)
         .map_err(|_| format!("{label} {} does not fit in memory", path.display()))?;
     let mut bytes = Vec::with_capacity(capacity);
@@ -10313,7 +10180,6 @@ fn read_openapi_input_stable_with_policy(
     validate_openapi_output_ancestors(parent, label)?;
     Ok(bytes)
 }
-
 #[cfg(unix)]
 fn openapi_read_state_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
@@ -10326,12 +10192,10 @@ fn openapi_read_state_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(not(unix))]
 fn openapi_read_state_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
-
 fn read_openapi_utf8_input_stable(
     path: &Path,
     label: &str,
@@ -10341,7 +10205,6 @@ fn read_openapi_utf8_input_stable(
     String::from_utf8(bytes)
         .map_err(|err| format!("{label} {} must be UTF-8: {err}", path.display()).into())
 }
-
 fn read_openapi_utf8_trust_input_stable(
     path: &Path,
     label: &str,
@@ -10351,21 +10214,17 @@ fn read_openapi_utf8_trust_input_stable(
     String::from_utf8(bytes)
         .map_err(|err| format!("{label} {} must be UTF-8: {err}", path.display()).into())
 }
-
 #[cfg(unix)]
 fn set_openapi_no_follow_flag(options: &mut fs::OpenOptions) {
     use std::os::unix::fs::OpenOptionsExt as _;
     options.custom_flags(openapi_no_follow_flag());
 }
-
 #[cfg(not(unix))]
 fn set_openapi_no_follow_flag(_options: &mut fs::OpenOptions) {}
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn openapi_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -10381,7 +10240,6 @@ fn openapi_no_follow_flag() -> i32 {
 fn openapi_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -10398,7 +10256,6 @@ fn openapi_no_follow_flag() -> i32 {
 fn openapi_no_follow_flag() -> i32 {
     0
 }
-
 fn build_openapi_manifest(
     _spec_path: &Path,
     spec_bytes: &[u8],
@@ -10423,7 +10280,6 @@ fn build_openapi_manifest(
         },
     })
 }
-
 fn verify_openapi_manifest(
     spec_path: &Path,
     manifest_path: &Path,
@@ -10453,7 +10309,6 @@ fn verify_openapi_manifest(
             manifest_path.display()
         )
     })?;
-
     if manifest.version != OPENAPI_MANIFEST_VERSION {
         return Err(format!(
             "unsupported OpenAPI manifest version {}; expected {OPENAPI_MANIFEST_VERSION}",
@@ -10466,7 +10321,6 @@ fn verify_openapi_manifest(
     {
         return Err("OpenAPI manifest generated_unix_ms must be a positive safe integer".into());
     }
-
     let provenance = OpenApiGeneratorProvenance {
         generated_unix_ms: manifest.generated_unix_ms,
         commit: manifest.generator_commit.clone(),
@@ -10477,9 +10331,7 @@ fn verify_openapi_manifest(
         &provenance,
         allow_unsigned && manifest.artifact.signature.is_none(),
     )?;
-
     verify_openapi_artifact_path(spec_path, &manifest.artifact.path)?;
-
     let expected_sha256 = hex::encode(Sha256::digest(&spec_bytes));
     if manifest.artifact.sha256_hex != expected_sha256 {
         return Err(format!(
@@ -10488,7 +10340,6 @@ fn verify_openapi_manifest(
         )
         .into());
     }
-
     let expected_blake3 = blake3::hash(&spec_bytes).to_hex().to_string();
     if manifest.artifact.blake3_hex != expected_blake3 {
         return Err(format!(
@@ -10497,7 +10348,6 @@ fn verify_openapi_manifest(
         )
         .into());
     }
-
     let actual_size = spec_bytes.len() as u64;
     if manifest.artifact.bytes != actual_size {
         return Err(format!(
@@ -10507,7 +10357,6 @@ fn verify_openapi_manifest(
         .into());
     }
     let signing_payload = encode_openapi_manifest_signing_payload(&manifest, &spec_bytes)?;
-
     match &manifest.artifact.signature {
         Some(signature) => {
             let allowed_signers = allowed_signers_path
@@ -10539,7 +10388,6 @@ fn verify_openapi_manifest(
             );
         }
     }
-
     println!(
         "verified {} against {}",
         manifest_path.display(),
@@ -10547,7 +10395,6 @@ fn verify_openapi_manifest(
     );
     Ok(())
 }
-
 fn verify_openapi_artifact_path(
     _spec_path: &Path,
     artifact_path: &str,
@@ -10560,7 +10407,6 @@ fn verify_openapi_artifact_path(
     }
     Ok(())
 }
-
 fn encode_space_directory_manifest(input: &Path, output: &Path) -> Result<(), Box<dyn Error>> {
     if !input.exists() {
         return Err(format!("manifest JSON `{}` does not exist", input.display()).into());
@@ -10568,7 +10414,6 @@ fn encode_space_directory_manifest(input: &Path, output: &Path) -> Result<(), Bo
     if !input.is_file() {
         return Err(format!("manifest JSON `{}` is not a file", input.display()).into());
     }
-
     let contents = fs::read(input)
         .map_err(|err| format!("failed to read manifest JSON `{}`: {err}", input.display()))?;
     let manifest: AssetPermissionManifest = norito::json::from_slice(&contents).map_err(|err| {
@@ -10583,7 +10428,6 @@ fn encode_space_directory_manifest(input: &Path, output: &Path) -> Result<(), Bo
             input.display()
         )
     })?;
-
     if let Some(parent) = output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -10597,7 +10441,6 @@ fn encode_space_directory_manifest(input: &Path, output: &Path) -> Result<(), Bo
             output.display()
         )
     })?;
-
     let blake3_hex = blake3::hash(&norito_bytes).to_hex().to_string();
     println!(
         "encoded manifest for UAID {} in dataspace {} -> {} ({} entries, {} bytes, blake3={})",
@@ -10610,7 +10453,6 @@ fn encode_space_directory_manifest(input: &Path, output: &Path) -> Result<(), Bo
     );
     Ok(())
 }
-
 fn encode_openapi_manifest_signing_payload(
     manifest: &OpenApiManifest,
     artifact_bytes: &[u8],
@@ -10682,7 +10524,6 @@ fn encode_openapi_manifest_signing_payload(
     append_openapi_signing_component(&mut encoded, b"artifact.content", artifact_bytes)?;
     Ok(encoded)
 }
-
 fn append_openapi_signing_component(
     output: &mut Vec<u8>,
     label: &[u8],
@@ -10698,7 +10539,6 @@ fn append_openapi_signing_component(
     output.extend_from_slice(value);
     Ok(())
 }
-
 fn validate_openapi_manifest_v2_fields(
     manifest: &OpenApiManifest,
     artifact_bytes: &[u8],
@@ -10758,7 +10598,6 @@ fn validate_openapi_manifest_v2_fields(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn sign_manifest_payload_for_test(
     payload: &[u8],
@@ -10792,7 +10631,6 @@ fn sign_manifest_payload_for_test(
         signature_hex: hex::encode(signature.payload()),
     })
 }
-
 fn load_signature_envelope(path: &Path) -> Result<SignatureEnvelope, Box<dyn Error>> {
     let text = read_openapi_utf8_input_stable(
         path,
@@ -10816,7 +10654,6 @@ fn load_signature_envelope(path: &Path) -> Result<SignatureEnvelope, Box<dyn Err
     validate_signature_envelope_fields(&envelope)?;
     Ok(envelope)
 }
-
 fn validate_signature_envelope_fields(signature: &SignatureEnvelope) -> Result<(), Box<dyn Error>> {
     if signature.algorithm != "ed25519" {
         return Err(format!(
@@ -10833,7 +10670,6 @@ fn validate_signature_envelope_fields(signature: &SignatureEnvelope) -> Result<(
     }
     Ok(())
 }
-
 fn validate_openapi_ed25519_public_key_hex(
     public_key_hex: &str,
     label: &str,
@@ -10855,7 +10691,6 @@ fn validate_openapi_ed25519_public_key_hex(
     }
     Ok(())
 }
-
 fn verify_manifest_signature(
     signature: &SignatureEnvelope,
     payload: &[u8],
@@ -10871,7 +10706,6 @@ fn verify_manifest_signature(
     sig.verify(&public_key, payload)
         .map_err(|err| format!("manifest signature verification failed: {err}").into())
 }
-
 fn load_signer_allowlist(path: &Path) -> Result<SignerAllowlist, Box<dyn Error>> {
     let contents = read_openapi_utf8_trust_input_stable(
         path,
@@ -10919,7 +10753,6 @@ fn load_signer_allowlist(path: &Path) -> Result<SignerAllowlist, Box<dyn Error>>
     }
     Ok(allowlist)
 }
-
 #[cfg(unix)]
 fn validate_openapi_open_trust_file_permissions(
     path: &Path,
@@ -10942,7 +10775,6 @@ fn validate_openapi_open_trust_file_permissions(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn validate_openapi_open_non_executable_permissions(
     path: &Path,
@@ -10961,7 +10793,6 @@ fn validate_openapi_open_non_executable_permissions(
     }
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn validate_openapi_open_non_executable_permissions(
     _path: &Path,
@@ -10970,7 +10801,6 @@ fn validate_openapi_open_non_executable_permissions(
 ) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn validate_openapi_open_trust_file_permissions(
     _path: &Path,
@@ -10979,7 +10809,6 @@ fn validate_openapi_open_trust_file_permissions(
 ) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
-
 fn ensure_signer_allowed(
     signature: &SignatureEnvelope,
     allowlist: &SignerAllowlist,
@@ -10990,7 +10819,6 @@ fn ensure_signer_allowed(
     if allowed {
         return Ok(());
     }
-
     let allowed_keys: Vec<String> = allowlist
         .allow
         .iter()
@@ -11004,7 +10832,6 @@ fn ensure_signer_allowed(
     )
     .into())
 }
-
 fn validate_openapi_generator_provenance(
     provenance: &OpenApiGeneratorProvenance,
     allow_dirty_unsigned: bool,
@@ -11052,14 +10879,12 @@ fn validate_openapi_generator_provenance(
     }
     Ok(())
 }
-
 fn is_lower_hex_digest(value: &str, bytes: usize) -> bool {
     value.len() == bytes * 2
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
-
 fn openapi_generator_output_paths(
     canonical_spec: &Path,
     outputs: &[PathBuf],
@@ -11089,7 +10914,6 @@ fn openapi_generator_output_paths(
     paths.dedup();
     paths
 }
-
 fn git_source_provenance(
     repo_root: &Path,
     excluded_paths: &[PathBuf],
@@ -11103,7 +10927,6 @@ fn git_source_provenance(
     }
     let generated_unix_ms = git_head_timestamp_ms(repo_root)?;
     let committed_source_sha256_hex = git_openapi_generator_input_tree_sha256(repo_root, head)?;
-
     let pathspecs = git_source_pathspecs(repo_root, excluded_paths)?;
     let mut status_args = vec![
         OsString::from("status"),
@@ -11121,7 +10944,6 @@ fn git_source_provenance(
             source_sha256_hex: Some(committed_source_sha256_hex),
         });
     }
-
     let mut diff_args = vec![
         OsString::from("diff"),
         OsString::from("--binary"),
@@ -11140,7 +10962,6 @@ fn git_source_provenance(
     ];
     untracked_args.extend(pathspecs);
     let untracked = git_stdout(repo_root, &untracked_args)?;
-
     let mut source_digest = Sha256::new();
     update_sha256_component(
         &mut source_digest,
@@ -11163,7 +10984,6 @@ fn git_source_provenance(
         let relative_path = git_path_from_bytes(path_bytes)?;
         hash_untracked_path(&mut source_digest, &repo_root.join(relative_path))?;
     }
-
     Ok(OpenApiGeneratorProvenance {
         generated_unix_ms,
         commit: None,
@@ -11171,7 +10991,6 @@ fn git_source_provenance(
         source_sha256_hex: Some(hex::encode(source_digest.finalize())),
     })
 }
-
 fn git_openapi_generator_input_tree_sha256(
     repo_root: &Path,
     commit: &str,
@@ -11231,7 +11050,6 @@ fn git_openapi_generator_input_tree_sha256(
     if !tree.ends_with(&[0]) {
         return Err("git ls-tree output for OpenAPI generator inputs must end in NUL".into());
     }
-
     let mut resolved_paths = Vec::new();
     let mut unique_paths = BTreeSet::new();
     let mut cargo_lock_pin_mode = None;
@@ -11289,7 +11107,6 @@ fn git_openapi_generator_input_tree_sha256(
             return Err(format!("OpenAPI Cargo.lock pin is missing at commit {commit}").into());
         }
     }
-
     let pin = read_git_openapi_cargo_lock_pin(repo_root, commit)?;
     let ignored_input = read_openapi_generator_ignored_input(repo_root, &pin)?;
     Ok(openapi_generator_input_closure_sha256(
@@ -11297,7 +11114,6 @@ fn git_openapi_generator_input_tree_sha256(
         &ignored_input,
     ))
 }
-
 fn openapi_generator_input_closure_sha256(tree: &[u8], ignored_input: &[u8]) -> String {
     let mut source_digest = Sha256::new();
     update_sha256_component(
@@ -11324,7 +11140,6 @@ fn openapi_generator_input_closure_sha256(tree: &[u8], ignored_input: &[u8]) -> 
     update_sha256_component(&mut source_digest, b"ignored-input-bytes", ignored_input);
     hex::encode(source_digest.finalize())
 }
-
 fn parse_openapi_cargo_lock_pin(bytes: &[u8]) -> Result<OpenApiCargoLockPinV1, Box<dyn Error>> {
     if bytes.is_empty() || u64::try_from(bytes.len())? > OPENAPI_CARGO_LOCK_PIN_MAX_BYTES {
         return Err(format!(
@@ -11377,7 +11192,6 @@ fn parse_openapi_cargo_lock_pin(bytes: &[u8]) -> Result<OpenApiCargoLockPinV1, B
         sha256_hex: sha256_hex.to_owned(),
     })
 }
-
 fn read_git_openapi_cargo_lock_pin(
     repo_root: &Path,
     commit: &str,
@@ -11428,7 +11242,6 @@ fn read_git_openapi_cargo_lock_pin(
     }
     parse_openapi_cargo_lock_pin(&committed_pin)
 }
-
 fn read_openapi_generator_ignored_input(
     repo_root: &Path,
     pin: &OpenApiCargoLockPinV1,
@@ -11467,7 +11280,6 @@ fn read_openapi_generator_ignored_input(
         )
         .into());
     }
-
     let path = repo_root.join(OPENAPI_GENERATOR_IGNORED_INPUT);
     let bytes = read_openapi_input_stable_with_policy(
         &path,
@@ -11497,7 +11309,6 @@ fn read_openapi_generator_ignored_input(
     }
     Ok(bytes)
 }
-
 fn validate_openapi_generator_input_inventory() -> Result<Vec<&'static str>, Box<dyn Error>> {
     let inventory = std::str::from_utf8(OPENAPI_GENERATOR_INPUT_INVENTORY)
         .map_err(|err| format!("OpenAPI generator input inventory is not UTF-8: {err}"))?;
@@ -11539,7 +11350,6 @@ fn validate_openapi_generator_input_inventory() -> Result<Vec<&'static str>, Box
     }
     Ok(paths)
 }
-
 fn git_head_timestamp_ms(repo_root: &Path) -> Result<u64, Box<dyn Error>> {
     let timestamp = git_stdout(repo_root, &["show", "-s", "--format=%ct", "HEAD"])?;
     let seconds = std::str::from_utf8(&timestamp)
@@ -11552,7 +11362,6 @@ fn git_head_timestamp_ms(repo_root: &Path) -> Result<u64, Box<dyn Error>> {
         .filter(|milliseconds| *milliseconds > 0)
         .ok_or_else(|| "git HEAD timestamp cannot be represented as positive milliseconds".into())
 }
-
 fn git_source_pathspecs(
     repo_root: &Path,
     excluded_paths: &[PathBuf],
@@ -11590,7 +11399,6 @@ fn git_source_pathspecs(
     }
     relative_exclusions.sort();
     relative_exclusions.dedup();
-
     let mut pathspecs = vec![OsString::from("--"), OsString::from(".")];
     pathspecs.extend(
         relative_exclusions
@@ -11599,7 +11407,6 @@ fn git_source_pathspecs(
     );
     Ok(pathspecs)
 }
-
 fn git_stdout<S: AsRef<OsStr>>(repo_root: &Path, args: &[S]) -> Result<Vec<u8>, Box<dyn Error>> {
     let rendered_args = args
         .iter()
@@ -11622,26 +11429,22 @@ fn git_stdout<S: AsRef<OsStr>>(repo_root: &Path, args: &[S]) -> Result<Vec<u8>, 
     }
     Ok(output.stdout)
 }
-
 fn update_sha256_component(hasher: &mut Sha256, label: &[u8], value: &[u8]) {
     hasher.update((label.len() as u64).to_le_bytes());
     hasher.update(label);
     hasher.update((value.len() as u64).to_le_bytes());
     hasher.update(value);
 }
-
 #[cfg(unix)]
 fn git_path_from_bytes(bytes: &[u8]) -> Result<PathBuf, Box<dyn Error>> {
     Ok(PathBuf::from(OsString::from_vec(bytes.to_vec())))
 }
-
 #[cfg(not(unix))]
 fn git_path_from_bytes(bytes: &[u8]) -> Result<PathBuf, Box<dyn Error>> {
     let path = std::str::from_utf8(bytes)
         .map_err(|err| format!("git returned a non-UTF-8 untracked path: {err}"))?;
     Ok(PathBuf::from(path))
 }
-
 fn hash_untracked_path(hasher: &mut Sha256, path: &Path) -> Result<(), Box<dyn Error>> {
     let metadata = fs::symlink_metadata(path).map_err(|err| {
         format!(
@@ -11667,7 +11470,6 @@ fn hash_untracked_path(hasher: &mut Sha256, path: &Path) -> Result<(), Box<dyn E
         )
         .into());
     }
-
     update_sha256_component(hasher, b"untracked-kind", b"file");
     update_sha256_component(hasher, b"untracked-size", &metadata.len().to_le_bytes());
     let mut file = fs::File::open(path).map_err(|err| {
@@ -11687,7 +11489,6 @@ fn hash_untracked_path(hasher: &mut Sha256, path: &Path) -> Result<(), Box<dyn E
     }
     Ok(())
 }
-
 fn update_sha256_os_str_component(hasher: &mut Sha256, label: &[u8], value: &OsStr) {
     #[cfg(unix)]
     {
@@ -11698,13 +11499,10 @@ fn update_sha256_os_str_component(hasher: &mut Sha256, label: &[u8], value: &OsS
         update_sha256_component(hasher, label, value.to_string_lossy().as_bytes());
     }
 }
-
 #[cfg(test)]
 mod acceleration_state_tests {
-    use serde_json::Value;
-
     use super::*;
-
+    use serde_json::Value;
     #[test]
     fn parse_supports_acceleration_state_command() {
         let args = ["xtask", "acceleration-state", "--format", "json"];
@@ -11717,7 +11515,6 @@ mod acceleration_state_tests {
             _ => panic!("expected acceleration-state command"),
         }
     }
-
     #[test]
     fn parse_routes_nexus_connect_fixture_to_the_closed_owner() {
         let root = workspace_root();
@@ -11735,7 +11532,6 @@ mod acceleration_state_tests {
         assert_eq!(options.mode, nexus::NexusConnectFixtureMode::Check);
         assert_eq!(options.output_root, root);
     }
-
     #[test]
     fn parse_fastpq_cuda_suite_operation_updates_default_artifact_names() {
         let args = ["xtask", "fastpq-cuda-suite", "--operation", "lde"];
@@ -11769,7 +11565,6 @@ mod acceleration_state_tests {
             _ => panic!("expected fastpq-cuda-suite command"),
         }
     }
-
     #[test]
     fn parse_sorafs_gateway_attest_verify_command() {
         let args = [
@@ -11791,7 +11586,6 @@ mod acceleration_state_tests {
             _ => panic!("expected sorafs-gateway-attest verify command"),
         }
     }
-
     #[test]
     fn parse_sorafs_gateway_attest_verify_rejects_generation_flags() {
         let args = [
@@ -11813,7 +11607,6 @@ mod acceleration_state_tests {
             "unexpected error: {message}"
         );
     }
-
     #[test]
     fn render_outputs_include_last_error() {
         let config = ivm::AccelerationConfig {
@@ -11850,7 +11643,6 @@ mod acceleration_state_tests {
             cuda: None,
         };
         let state = AccelerationStateReport::from_parts(config, runtime, errors);
-
         let table =
             render_acceleration_state(&state, AccelerationOutputFormat::Table).expect("render");
         assert!(
@@ -11861,7 +11653,6 @@ mod acceleration_state_tests {
             table.contains("max_gpus: 2"),
             "table output should include config values"
         );
-
         let json =
             render_acceleration_state(&state, AccelerationOutputFormat::Json).expect("render json");
         let parsed: Value = serde_json::from_str(&json).expect("json parse");
@@ -11877,13 +11668,10 @@ mod acceleration_state_tests {
         assert_eq!(parsed["simd"]["last_error"], serde_json::Value::Null);
     }
 }
-
 #[cfg(test)]
 mod openapi_tests {
-    use tempfile::tempdir;
-
     use super::*;
-
+    use tempfile::tempdir;
     const RELEASE_OPENAPI_FIXTURE: &[u8] = br#"{
   "openapi": "3.1.0",
   "info": {"title": "Torii fixture", "version": "1.0.0"},
@@ -11896,11 +11684,9 @@ mod openapi_tests {
   "paths": {"/status": {"get": {"responses": {"200": {"description": "ok"}}}}},
   "components": {"schemas": {"Status": {"type": "object"}}}
 }"#;
-
     fn write_release_openapi_fixture(path: &Path) {
         fs::write(path, RELEASE_OPENAPI_FIXTURE).expect("write release OpenAPI fixture");
     }
-
     fn empty_openapi_stub() -> Value {
         norito::json::from_slice(
             br#"{
@@ -11912,7 +11698,6 @@ mod openapi_tests {
         )
         .expect("parse empty OpenAPI fixture")
     }
-
     fn clean_generator_provenance() -> OpenApiGeneratorProvenance {
         OpenApiGeneratorProvenance {
             generated_unix_ms: 1_700_000_000_000,
@@ -11921,7 +11706,6 @@ mod openapi_tests {
             source_sha256_hex: Some("22".repeat(32)),
         }
     }
-
     #[test]
     fn manifest_v2_signing_payload_matches_the_cross_language_fixture() {
         const ARTIFACT: &[u8] = b"OpenAPI V2 deterministic fixture\n";
@@ -11951,7 +11735,6 @@ mod openapi_tests {
             "775b7af4c2c8a98dc49cf117745f0032f5064485b82a807f946a71b27539b9cd"
         );
     }
-
     #[test]
     fn openapi_generator_input_closure_matches_the_cross_language_fixture() {
         assert_eq!(
@@ -11959,7 +11742,6 @@ mod openapi_tests {
             "f8eaf5cc575ab4dfe79b6809693ea9ebb4b0336d93e9bd51160caaa776923d70"
         );
     }
-
     #[test]
     fn openapi_cargo_lock_pin_parser_requires_the_canonical_v1_profile() {
         let pin =
@@ -12001,7 +11783,6 @@ mod openapi_tests {
             );
         }
     }
-
     fn initialize_git_fixture(root: &Path) {
         git_stdout(root, &["init", "--quiet"]).expect("initialize git fixture");
         const DIRECTORY_INPUTS: &[&str] = &[
@@ -12083,7 +11864,6 @@ mod openapi_tests {
         )
         .expect("commit git fixture");
     }
-
     #[test]
     fn openapi_cli_rejects_removed_stub_escape_hatch() {
         let args = ["xtask", "openapi", "--allow-stub"];
@@ -12096,7 +11876,6 @@ mod openapi_tests {
             "unexpected removed-flag error: {err}"
         );
     }
-
     #[test]
     fn openapi_output_root_binds_the_canonical_spec_and_manifest() {
         let args = [
@@ -12124,7 +11903,6 @@ mod openapi_tests {
         assert_eq!(manifest, root.join("manifest.json"));
         assert!(unsigned_manifest);
     }
-
     #[test]
     fn openapi_output_root_rejects_ambiguous_or_unsafe_paths() {
         for (args, expected) in [
@@ -12184,7 +11962,6 @@ mod openapi_tests {
             );
         }
     }
-
     #[test]
     fn openapi_outputs_reject_manifest_and_duplicate_aliases() {
         for args in [
@@ -12219,13 +11996,11 @@ mod openapi_tests {
             );
         }
     }
-
     #[test]
     fn router_generation_failures_and_empty_documents_fail_closed() {
         let missing = require_release_router_openapi(Ok(None))
             .expect_err("missing router document must fail closed");
         assert!(missing.to_string().contains("generation failed closed"));
-
         let failed = require_release_router_openapi(Err("router setup failed".into()))
             .expect_err("router generation error must fail closed");
         assert!(
@@ -12233,7 +12008,6 @@ mod openapi_tests {
                 .to_string()
                 .contains("failed to generate OpenAPI from Torii router")
         );
-
         let empty = require_release_router_openapi(Ok(Some(empty_openapi_stub())))
             .expect_err("an empty OpenAPI document must never be accepted");
         assert!(
@@ -12242,7 +12016,6 @@ mod openapi_tests {
                 .contains("empty/stub specifications are forbidden")
         );
     }
-
     #[test]
     fn manifest_writers_reject_empty_openapi_before_output() {
         let tmp = tempdir().expect("tempdir");
@@ -12254,7 +12027,6 @@ mod openapi_tests {
         fs::write(&key_path, hex::encode([0x42_u8; 32])).expect("write key");
         let detached =
             sign_manifest_payload_for_test(&stub_bytes, &key_path).expect("sign fixture payload");
-
         for (name, result, manifest_path) in [
             {
                 let manifest_path = tmp.path().join("signed.json");
@@ -12300,7 +12072,6 @@ mod openapi_tests {
             );
         }
     }
-
     #[test]
     fn manifest_verifier_rejects_digest_matching_empty_openapi() {
         let tmp = tempdir().expect("tempdir");
@@ -12328,7 +12099,6 @@ mod openapi_tests {
             serde_json::to_vec_pretty(&manifest).expect("serialize manifest"),
         )
         .expect("write matching manifest");
-
         let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
             .expect_err("digest-matching empty OpenAPI must not verify");
         assert!(
@@ -12336,7 +12106,6 @@ mod openapi_tests {
                 .contains("empty/stub specifications are forbidden")
         );
     }
-
     #[test]
     fn manifest_signature_round_trip() {
         let tmp = tempdir().expect("tempdir");
@@ -12349,7 +12118,6 @@ mod openapi_tests {
         let signature = sign_manifest_payload_for_test(&payload, &key_path).expect("sign payload");
         verify_manifest_signature(&signature, &payload).expect("verify signature");
     }
-
     #[test]
     fn openapi_v2_signing_payload_matches_javascript_fixture() {
         let artifact = b"OpenAPI V2 deterministic fixture\n";
@@ -12374,7 +12142,6 @@ mod openapi_tests {
             "775b7af4c2c8a98dc49cf117745f0032f5064485b82a807f946a71b27539b9cd"
         );
     }
-
     #[test]
     fn openapi_v2_manifest_deserialization_rejects_v1_and_unknown_fields() {
         let v1 = br#"{
@@ -12396,7 +12163,6 @@ mod openapi_tests {
         let err = encode_openapi_manifest_signing_payload(&parsed, b"x")
             .expect_err("V1 manifests must not produce a signing payload");
         assert!(err.to_string().contains("expected 2"));
-
         let unknown = br#"{
   "version": 2,
   "generated_unix_ms": 1700000000000,
@@ -12415,17 +12181,14 @@ mod openapi_tests {
             .expect_err("unknown V1 compatibility fields must fail closed");
         assert!(err.to_string().contains("unknown field"));
     }
-
     #[test]
     fn detached_signature_envelope_writes_manifest() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("spec.json");
         write_release_openapi_fixture(&spec_path);
-
         let key_path = tmp.path().join("key.hex");
         let key_hex = hex::encode([0x22u8; 32]);
         fs::write(&key_path, key_hex).expect("write key");
-
         let payload = fs::read(&spec_path).expect("read spec");
         let unsigned = build_openapi_manifest(&spec_path, &payload, &clean_generator_provenance())
             .expect("build unsigned manifest");
@@ -12439,7 +12202,6 @@ mod openapi_tests {
             serde_json::to_string_pretty(&signature).expect("serialize signature"),
         )
         .expect("write detached envelope");
-
         let manifest_path = tmp.path().join("manifest.json");
         let loaded = load_signature_envelope(&envelope_path).expect("load detached envelope");
         write_openapi_manifest_with_signature(
@@ -12453,7 +12215,6 @@ mod openapi_tests {
         verify_openapi_manifest(&spec_path, &manifest_path, false, None)
             .expect("verify detached manifest");
     }
-
     #[test]
     fn openapi_manifest_verifier_rejects_duplicate_json_members() {
         let tmp = tempdir().expect("tempdir");
@@ -12471,7 +12232,6 @@ mod openapi_tests {
         let duplicated =
             manifest.replacen("\"version\": 2,", "\"version\": 2,\n  \"version\": 2,", 1);
         fs::write(&manifest_path, duplicated).expect("write duplicate-key manifest");
-
         let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
             .expect_err("duplicate JSON members must fail closed");
         assert!(
@@ -12479,7 +12239,6 @@ mod openapi_tests {
             "unexpected duplicate-key manifest error: {err}"
         );
     }
-
     #[test]
     fn signature_envelope_reader_rejects_duplicate_json_members() {
         let tmp = tempdir().expect("tempdir");
@@ -12501,7 +12260,6 @@ mod openapi_tests {
             "unexpected duplicate-key envelope error: {err}"
         );
     }
-
     #[test]
     fn openapi_local_signing_flag_is_removed() {
         let args = ["xtask", "openapi", "--sign", "signing.key"];
@@ -12516,7 +12274,6 @@ mod openapi_tests {
             "expected removed flag rejection, got {message}"
         );
     }
-
     #[test]
     fn openapi_unsigned_manifest_mode_conflicts_with_signing() {
         let args = [
@@ -12536,14 +12293,12 @@ mod openapi_tests {
             "expected cannot be combined message, got {message}"
         );
     }
-
     #[test]
     fn unsigned_openapi_manifest_verifies_when_allowed() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("spec.json");
         write_release_openapi_fixture(&spec_path);
         let manifest_path = tmp.path().join("manifest.json");
-
         write_openapi_manifest_unsigned(
             &spec_path,
             &manifest_path,
@@ -12553,7 +12308,6 @@ mod openapi_tests {
         .expect("write unsigned manifest");
         verify_openapi_manifest(&spec_path, &manifest_path, true, None)
             .expect("unsigned manifest should verify when allowed");
-
         let err = verify_openapi_manifest(&spec_path, &manifest_path, false, None)
             .expect_err("unsigned manifest should fail without opt-in");
         let message = err.to_string();
@@ -12562,7 +12316,6 @@ mod openapi_tests {
             "expected missing signature message, got {message}"
         );
     }
-
     #[test]
     fn unchanged_unsigned_openapi_manifest_write_is_byte_idempotent() {
         let tmp = tempdir().expect("tempdir");
@@ -12570,21 +12323,17 @@ mod openapi_tests {
         write_release_openapi_fixture(&spec_path);
         let manifest_path = tmp.path().join("manifest.json");
         let provenance = clean_generator_provenance();
-
         write_openapi_manifest_unsigned(&spec_path, &manifest_path, &provenance, None)
             .expect("write unsigned manifest");
         let expected_bytes = fs::read(&manifest_path).expect("read unsigned manifest");
-
         write_openapi_manifest_unsigned(&spec_path, &manifest_path, &provenance, None)
             .expect("rewrite unchanged unsigned manifest");
-
         assert_eq!(
             fs::read(&manifest_path).expect("read rewritten manifest"),
             expected_bytes,
             "an unchanged writer pass must be a byte-level no-op"
         );
     }
-
     #[test]
     fn changed_openapi_content_or_provenance_refreshes_manifest() {
         let tmp = tempdir().expect("tempdir");
@@ -12592,14 +12341,12 @@ mod openapi_tests {
         write_release_openapi_fixture(&spec_path);
         let manifest_path = tmp.path().join("manifest.json");
         let clean = clean_generator_provenance();
-
         write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean, None)
             .expect("write unsigned manifest");
         let mut manifest: OpenApiManifest =
             serde_json::from_slice(&fs::read(&manifest_path).expect("read unsigned manifest"))
                 .expect("parse unsigned manifest");
         let original_sha256 = manifest.artifact.sha256_hex.clone();
-
         fs::write(&spec_path, ALTERED_RELEASE_OPENAPI_FIXTURE).expect("alter OpenAPI fixture");
         write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean, None)
             .expect("rewrite content-changed manifest");
@@ -12609,7 +12356,6 @@ mod openapi_tests {
         .expect("parse content-changed manifest");
         assert_eq!(manifest.generated_unix_ms, clean.generated_unix_ms);
         assert_ne!(manifest.artifact.sha256_hex, original_sha256);
-
         let dirty = OpenApiGeneratorProvenance {
             generated_unix_ms: clean.generated_unix_ms + 1,
             commit: None,
@@ -12630,7 +12376,6 @@ mod openapi_tests {
             dirty.source_sha256_hex
         );
     }
-
     #[test]
     fn invalid_existing_openapi_timestamp_is_not_reused() {
         let tmp = tempdir().expect("tempdir");
@@ -12638,7 +12383,6 @@ mod openapi_tests {
         write_release_openapi_fixture(&spec_path);
         let manifest_path = tmp.path().join("manifest.json");
         let provenance = clean_generator_provenance();
-
         write_openapi_manifest_unsigned(&spec_path, &manifest_path, &provenance, None)
             .expect("write unsigned manifest");
         let mut manifest: OpenApiManifest =
@@ -12650,7 +12394,6 @@ mod openapi_tests {
             serde_json::to_vec_pretty(&manifest).expect("serialize unsafe-time manifest"),
         )
         .expect("write unsafe-time manifest");
-
         write_openapi_manifest_unsigned(&spec_path, &manifest_path, &provenance, None)
             .expect("replace unsafe existing timestamp");
         let rewritten: OpenApiManifest =
@@ -12659,14 +12402,12 @@ mod openapi_tests {
         assert_eq!(rewritten.generated_unix_ms, provenance.generated_unix_ms);
         assert!(rewritten.generated_unix_ms <= OPENAPI_MANIFEST_MAX_SAFE_INTEGER);
     }
-
     #[test]
     fn openapi_manifest_rejects_unknown_fields() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("spec.json");
         write_release_openapi_fixture(&spec_path);
         let manifest_path = tmp.path().join("manifest.json");
-
         write_openapi_manifest_unsigned(
             &spec_path,
             &manifest_path,
@@ -12686,7 +12427,6 @@ mod openapi_tests {
             serde_json::to_vec_pretty(&manifest).expect("serialize malformed manifest"),
         )
         .expect("write malformed manifest");
-
         let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
             .expect_err("unknown manifest fields must fail closed");
         assert!(
@@ -12694,14 +12434,12 @@ mod openapi_tests {
             "unexpected unknown-field error: {err}"
         );
     }
-
     #[test]
     fn unsigned_openapi_manifest_still_checks_payload_integrity() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("spec.json");
         write_release_openapi_fixture(&spec_path);
         let manifest_path = tmp.path().join("manifest.json");
-
         write_openapi_manifest_unsigned(
             &spec_path,
             &manifest_path,
@@ -12710,7 +12448,6 @@ mod openapi_tests {
         )
         .expect("write unsigned manifest");
         fs::write(&spec_path, ALTERED_RELEASE_OPENAPI_FIXTURE).expect("tamper spec");
-
         let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
             .expect_err("allowing unsigned manifests must not allow stale digests");
         let message = err.to_string();
@@ -12719,7 +12456,6 @@ mod openapi_tests {
             "expected digest mismatch message, got {message}"
         );
     }
-
     #[test]
     fn dirty_unsigned_openapi_manifest_records_explicit_source_provenance() {
         let tmp = tempdir().expect("tempdir");
@@ -12732,7 +12468,6 @@ mod openapi_tests {
             dirty: true,
             source_sha256_hex: Some("ab".repeat(32)),
         };
-
         write_openapi_manifest_unsigned(&spec_path, &manifest_path, &dirty, None)
             .expect("write dirty unsigned manifest");
         verify_openapi_manifest(&spec_path, &manifest_path, true, None)
@@ -12747,7 +12482,6 @@ mod openapi_tests {
             manifest.generator_source_sha256_hex.as_deref(),
             Some("abababababababababababababababababababababababababababababababab")
         );
-
         let err = verify_openapi_manifest(&spec_path, &manifest_path, false, None)
             .expect_err("release verification must reject dirty provenance");
         assert!(
@@ -12755,7 +12489,6 @@ mod openapi_tests {
             "unexpected dirty release error: {err}"
         );
     }
-
     #[test]
     fn openapi_manifest_rejects_ambiguous_or_forged_dirty_provenance() {
         for (name, provenance, expected) in [
@@ -12868,7 +12601,6 @@ mod openapi_tests {
             );
         }
     }
-
     #[test]
     fn signed_openapi_manifest_rejects_dirty_source_provenance() {
         let tmp = tempdir().expect("tempdir");
@@ -12883,7 +12615,6 @@ mod openapi_tests {
             dirty: true,
             source_sha256_hex: Some("ab".repeat(32)),
         };
-
         let err = write_openapi_manifest(&spec_path, &manifest_path, &key_path, &dirty)
             .expect_err("dirty source must never produce a signed manifest");
         assert!(
@@ -12892,7 +12623,6 @@ mod openapi_tests {
         );
         assert!(!manifest_path.exists());
     }
-
     #[test]
     fn git_source_provenance_excludes_only_generated_outputs_and_is_deterministic() {
         let tmp = tempdir().expect("tempdir");
@@ -12924,7 +12654,6 @@ mod openapi_tests {
             git_head_timestamp_ms(tmp.path()).expect("HEAD timestamp"),
             "generated_unix_ms must derive from immutable HEAD metadata"
         );
-
         fs::write(
             &generated[0],
             b"{\"version\":2,\"generated_unix_ms\":100}\n",
@@ -12940,7 +12669,6 @@ mod openapi_tests {
             generated_only, clean,
             "generated files are not source inputs"
         );
-
         fs::write(tmp.path().join("Cargo.lock"), b"fixture-lock-v2\n")
             .expect("change ignored Cargo lock");
         let lock_changed = git_source_provenance(tmp.path(), &generated)
@@ -12960,7 +12688,6 @@ mod openapi_tests {
             lock_restored, clean,
             "restoring the ignored Cargo lock must restore clean provenance"
         );
-
         fs::write(tmp.path().join("xtask/source.txt"), b"source-v2\n")
             .expect("modify tracked source");
         let first = git_source_provenance(tmp.path(), &generated).expect("first dirty provenance");
@@ -12971,7 +12698,6 @@ mod openapi_tests {
             first.generated_unix_ms, clean.generated_unix_ms,
             "dirty development generation must retain the deterministic HEAD timestamp"
         );
-
         fs::write(
             &generated[0],
             b"{\"version\":2,\"generated_unix_ms\":200}\n",
@@ -12987,13 +12713,11 @@ mod openapi_tests {
             second.source_sha256_hex, first.source_sha256_hex,
             "identical source must retain its digest across generated timestamps"
         );
-
         fs::write(tmp.path().join("xtask/source.txt"), b"source-v3\n")
             .expect("change tracked source content");
         let changed =
             git_source_provenance(tmp.path(), &generated).expect("changed dirty provenance");
         assert_ne!(changed.source_sha256_hex, first.source_sha256_hex);
-
         fs::write(tmp.path().join("untracked-source.rs"), b"fn one() {}\n")
             .expect("write untracked source");
         let untracked_one =
@@ -13007,7 +12731,6 @@ mod openapi_tests {
             "untracked non-output contents must be provenance-bound"
         );
     }
-
     #[test]
     fn openapi_generator_ignored_lock_fails_closed_when_missing_empty_large_or_tracked() {
         let tmp = tempdir().expect("tempdir");
@@ -13019,7 +12742,6 @@ mod openapi_tests {
         .expect("UTF-8 fixture HEAD")
         .trim()
         .to_owned();
-
         fs::remove_file(&lock).expect("remove ignored Cargo lock");
         let missing = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
             .expect_err("missing ignored Cargo lock must fail");
@@ -13027,7 +12749,6 @@ mod openapi_tests {
             missing.to_string().contains("ignored Cargo lock"),
             "unexpected missing-lock error: {missing}"
         );
-
         fs::write(&lock, []).expect("write empty ignored Cargo lock");
         let empty = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
             .expect_err("empty ignored Cargo lock must fail");
@@ -13035,7 +12756,6 @@ mod openapi_tests {
             empty.to_string().contains("must not be empty"),
             "unexpected empty-lock error: {empty}"
         );
-
         let canonical = fs::read(workspace_root().join(OPENAPI_GENERATOR_IGNORED_INPUT))
             .expect("read canonical ignored Cargo lock");
         fs::write(&lock, &canonical[..canonical.len() - 1])
@@ -13046,7 +12766,6 @@ mod openapi_tests {
             short.to_string().contains("expected exactly"),
             "unexpected short-lock error: {short}"
         );
-
         let mut substituted = canonical;
         substituted[0] ^= 1;
         fs::write(&lock, substituted).expect("write substituted ignored Cargo lock");
@@ -13056,7 +12775,6 @@ mod openapi_tests {
             wrong_digest.to_string().contains("SHA-256"),
             "unexpected substituted-lock error: {wrong_digest}"
         );
-
         let large = fs::File::create(&lock).expect("create oversized ignored Cargo lock");
         large
             .set_len(OPENAPI_GENERATOR_IGNORED_INPUT_MAX_BYTES + 1)
@@ -13068,7 +12786,6 @@ mod openapi_tests {
             oversized.to_string().contains("exceeds the"),
             "unexpected oversized-lock error: {oversized}"
         );
-
         fs::copy(
             workspace_root().join(OPENAPI_GENERATOR_IGNORED_INPUT),
             &lock,
@@ -13086,7 +12803,6 @@ mod openapi_tests {
             "unexpected tracked-lock error: {tracked}"
         );
     }
-
     #[test]
     fn openapi_generator_ignored_lock_requires_a_git_ignore_rule() {
         let tmp = tempdir().expect("tempdir");
@@ -13098,7 +12814,6 @@ mod openapi_tests {
         .expect("UTF-8 fixture HEAD")
         .trim()
         .to_owned();
-
         let err = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
             .expect_err("unignored Cargo lock must fail");
         assert!(
@@ -13106,12 +12821,10 @@ mod openapi_tests {
             "unexpected unignored-lock error: {err}"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn openapi_generator_ignored_lock_rejects_executable_symlink_and_hardlink_inputs() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
-
         let executable_fixture = tempdir().expect("executable tempdir");
         initialize_git_fixture(executable_fixture.path());
         let executable_lock = executable_fixture
@@ -13136,7 +12849,6 @@ mod openapi_tests {
             executable.to_string().contains("must not be executable"),
             "unexpected executable-lock error: {executable}"
         );
-
         let symlink_fixture = tempdir().expect("symlink tempdir");
         initialize_git_fixture(symlink_fixture.path());
         let symlink_lock = symlink_fixture.path().join(OPENAPI_GENERATOR_IGNORED_INPUT);
@@ -13157,7 +12869,6 @@ mod openapi_tests {
             linked.to_string().contains("must not be a symlink"),
             "unexpected symlink-lock error: {linked}"
         );
-
         let hardlink_fixture = tempdir().expect("hardlink tempdir");
         initialize_git_fixture(hardlink_fixture.path());
         let hardlink_lock = hardlink_fixture
@@ -13180,12 +12891,10 @@ mod openapi_tests {
             "unexpected hardlink-lock error: {hardlinked}"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn openapi_generator_pin_rejects_missing_executable_and_symlinked_git_blobs() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
-
         for mutation in 0..3 {
             let fixture = tempdir().expect("pin tempdir");
             initialize_git_fixture(fixture.path());
@@ -13248,7 +12957,6 @@ mod openapi_tests {
             );
         }
     }
-
     #[test]
     fn openapi_generator_rejects_a_pinned_commit_that_tracks_cargo_lock() {
         let fixture = tempdir().expect("tracked ancestor tempdir");
@@ -13279,7 +12987,6 @@ mod openapi_tests {
         .expect("UTF-8 bad ancestor HEAD")
         .trim()
         .to_owned();
-
         git_stdout(
             fixture.path(),
             &[
@@ -13318,7 +13025,6 @@ mod openapi_tests {
         )
         .expect("inspect current tree");
         assert!(current_tree_entry.is_empty());
-
         let error = git_openapi_generator_input_tree_sha256(fixture.path(), &bad_ancestor)
             .expect_err("tracked pinned Cargo lock must fail");
         assert!(
@@ -13328,17 +13034,14 @@ mod openapi_tests {
             "unexpected tracked-ancestor error: {error}"
         );
     }
-
     #[test]
     fn detached_signature_envelope_must_match_spec_bytes() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("spec.json");
         write_release_openapi_fixture(&spec_path);
-
         let key_path = tmp.path().join("key.hex");
         let key_hex = hex::encode([0x55u8; 32]);
         fs::write(&key_path, key_hex).expect("write key");
-
         let other_payload = ALTERED_RELEASE_OPENAPI_FIXTURE;
         let other_manifest =
             build_openapi_manifest(&spec_path, other_payload, &clean_generator_provenance())
@@ -13349,7 +13052,6 @@ mod openapi_tests {
         let signature = sign_manifest_payload_for_test(&other_signing_payload, &key_path)
             .expect("sign payload");
         let manifest_path = tmp.path().join("manifest.json");
-
         let err = write_openapi_manifest_with_signature(
             &spec_path,
             &manifest_path,
@@ -13368,17 +13070,14 @@ mod openapi_tests {
             "manifest must not be written after signature verification fails"
         );
     }
-
     #[test]
     fn openapi_allow_unsigned_still_rejects_invalid_signature() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("spec.json");
         write_release_openapi_fixture(&spec_path);
-
         let key_path = tmp.path().join("key.hex");
         let key_hex = hex::encode([0x66u8; 32]);
         fs::write(&key_path, key_hex).expect("write key");
-
         let manifest_path = tmp.path().join("manifest.json");
         write_openapi_manifest(
             &spec_path,
@@ -13387,7 +13086,6 @@ mod openapi_tests {
             &clean_generator_provenance(),
         )
         .expect("sign manifest");
-
         let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
         let mut manifest: OpenApiManifest =
             serde_json::from_str(&manifest_json).expect("parse manifest json");
@@ -13402,7 +13100,6 @@ mod openapi_tests {
             serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
         )
         .expect("rewrite manifest");
-
         let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
             .expect_err("allow-unsigned must not bypass invalid signatures");
         let message = err.to_string();
@@ -13411,7 +13108,6 @@ mod openapi_tests {
             "expected signature material rejection, got {message}"
         );
     }
-
     #[test]
     fn openapi_signature_envelope_rejects_malformed_ed25519_signature_r() {
         const SMALL_ORDER_R: [u8; 32] = [
@@ -13423,14 +13119,12 @@ mod openapi_tests {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
-
         let tmp = tempdir().expect("tempdir");
         let key_path = tmp.path().join("key.hex");
         fs::write(&key_path, hex::encode([0x67u8; 32])).expect("write key");
         let payload = b"{\"ok\":true}";
         let signature = sign_manifest_payload_for_test(payload, &key_path).expect("sign payload");
         verify_manifest_signature(&signature, payload).expect("valid signature verifies");
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
@@ -13440,7 +13134,6 @@ mod openapi_tests {
                 hex::decode(&malformed.signature_hex).expect("decode signature hex");
             signature_bytes[..32].copy_from_slice(&replacement_r);
             malformed.signature_hex = hex::encode(signature_bytes);
-
             let err = verify_manifest_signature(&malformed, payload)
                 .expect_err("malformed Ed25519 R must fail admission");
             let message = err.to_string();
@@ -13450,7 +13143,6 @@ mod openapi_tests {
             );
         }
     }
-
     #[test]
     fn openapi_signature_envelope_rejects_unsupported_algorithm() {
         let payload = b"{\"ok\":true}";
@@ -13459,7 +13151,6 @@ mod openapi_tests {
             public_key_hex: hex::encode([0x77u8; 32]),
             signature_hex: hex::encode([0x88u8; 64]),
         };
-
         let err = verify_manifest_signature(&signature, payload)
             .expect_err("unsupported signature algorithms must be rejected");
         let message = err.to_string();
@@ -13468,7 +13159,6 @@ mod openapi_tests {
             "expected unsupported algorithm message, got {message}"
         );
     }
-
     #[test]
     fn openapi_signature_envelope_rejects_invalid_hex_fields() {
         let payload = b"{\"ok\":true}";
@@ -13484,7 +13174,6 @@ mod openapi_tests {
             message.contains("public_key_hex must be exactly 64 lowercase"),
             "expected invalid public key message, got {message}"
         );
-
         let tmp = tempdir().expect("tempdir");
         let key_path = tmp.path().join("key.hex");
         fs::write(&key_path, hex::encode([0x78_u8; 32])).expect("write signing key");
@@ -13503,7 +13192,6 @@ mod openapi_tests {
             "expected invalid signature hex message, got {message}"
         );
     }
-
     #[test]
     fn openapi_signature_envelope_rejects_weak_and_noncanonical_public_keys() {
         let cases = [
@@ -13532,7 +13220,6 @@ mod openapi_tests {
             );
         }
     }
-
     #[test]
     fn openapi_manifest_rejects_unsafe_artifact_path() {
         let tmp = tempdir().expect("tempdir");
@@ -13546,7 +13233,6 @@ mod openapi_tests {
             None,
         )
         .expect("write unsigned manifest");
-
         let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
         let mut manifest: OpenApiManifest =
             serde_json::from_str(&manifest_json).expect("parse manifest json");
@@ -13556,7 +13242,6 @@ mod openapi_tests {
             serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
         )
         .expect("rewrite manifest");
-
         let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
             .expect_err("unsafe artifact path must fail verification");
         let message = err.to_string();
@@ -13565,7 +13250,6 @@ mod openapi_tests {
             "expected unsafe path message, got {message}"
         );
     }
-
     #[test]
     fn openapi_manifest_rejects_platform_specific_artifact_paths() {
         for artifact_path in ["versions\\current\\torii.json", "C:/outside/torii.json", ""] {
@@ -13580,7 +13264,6 @@ mod openapi_tests {
                 None,
             )
             .expect("write unsigned manifest");
-
             let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
             let mut manifest: OpenApiManifest =
                 serde_json::from_str(&manifest_json).expect("parse manifest json");
@@ -13590,7 +13273,6 @@ mod openapi_tests {
                 serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
             )
             .expect("rewrite manifest");
-
             let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
                 .expect_err("platform-specific artifact paths must fail verification");
             let message = err.to_string();
@@ -13600,7 +13282,6 @@ mod openapi_tests {
             );
         }
     }
-
     #[test]
     fn openapi_manifest_rejects_artifact_file_name_mismatch() {
         let tmp = tempdir().expect("tempdir");
@@ -13614,7 +13295,6 @@ mod openapi_tests {
             None,
         )
         .expect("write unsigned manifest");
-
         let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
         let mut manifest: OpenApiManifest =
             serde_json::from_str(&manifest_json).expect("parse manifest json");
@@ -13624,7 +13304,6 @@ mod openapi_tests {
             serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
         )
         .expect("rewrite manifest");
-
         let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
             .expect_err("artifact filename mismatch must fail verification");
         let message = err.to_string();
@@ -13633,7 +13312,6 @@ mod openapi_tests {
             "expected artifact path mismatch message, got {message}"
         );
     }
-
     #[test]
     fn signing_payload_output_is_create_new_and_never_overwrites() {
         let tmp = tempdir().expect("tempdir");
@@ -13660,7 +13338,6 @@ mod openapi_tests {
             assert_eq!(mode, 0o600, "signing payload must be owner-only");
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn signing_payload_output_refuses_symlinks() {
@@ -13677,7 +13354,6 @@ mod openapi_tests {
         );
         assert_eq!(fs::read(&target).expect("read target"), b"target");
     }
-
     #[cfg(unix)]
     #[test]
     fn signing_payload_output_refuses_symlinked_parent() {
@@ -13694,7 +13370,6 @@ mod openapi_tests {
         );
         assert!(!real_parent.join("payload").exists());
     }
-
     #[cfg(unix)]
     #[test]
     fn openapi_manifest_writer_refuses_symlink_and_hardlink_targets() {
@@ -13711,7 +13386,6 @@ mod openapi_tests {
             } else {
                 fs::hard_link(&protected, &manifest_path).expect("create manifest hard link");
             }
-
             let err = write_openapi_manifest_unsigned(
                 &spec_path,
                 &manifest_path,
@@ -13729,7 +13403,6 @@ mod openapi_tests {
             );
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn openapi_output_writer_refuses_symlink_and_hardlink_targets() {
@@ -13744,7 +13417,6 @@ mod openapi_tests {
             } else {
                 fs::hard_link(&protected, &output_path).expect("create OpenAPI output hard link");
             }
-
             let err = write_openapi_file_atomic(&output_path, b"replacement", "OpenAPI output")
                 .expect_err("linked OpenAPI output target must fail closed");
             assert!(
@@ -13757,7 +13429,6 @@ mod openapi_tests {
             );
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn signature_envelope_reader_refuses_symlinks_and_hardlinks() {
@@ -13772,7 +13443,6 @@ mod openapi_tests {
             } else {
                 fs::hard_link(&protected, &envelope_path).expect("create envelope hard link");
             }
-
             let err = load_signature_envelope(&envelope_path)
                 .expect_err("linked signature envelope must fail closed");
             assert!(
@@ -13781,7 +13451,6 @@ mod openapi_tests {
             );
         }
     }
-
     #[test]
     fn signature_envelope_reader_bounds_input() {
         let tmp = tempdir().expect("tempdir");
@@ -13798,7 +13467,6 @@ mod openapi_tests {
             "unexpected oversized-envelope error: {err}"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn openapi_manifest_verifier_refuses_linked_inputs() {
@@ -13819,7 +13487,6 @@ mod openapi_tests {
                 None,
             )
             .expect("write unsigned manifest");
-
             let linked_path = if input_kind == "specification" {
                 &spec_path
             } else {
@@ -13836,7 +13503,6 @@ mod openapi_tests {
                 fs::hard_link(&protected, linked_path)
                     .expect("create OpenAPI verifier input hard link");
             }
-
             let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
                 .expect_err("linked verifier input must fail closed");
             assert!(
@@ -13845,7 +13511,6 @@ mod openapi_tests {
             );
         }
     }
-
     #[test]
     fn openapi_signer_allowlist_is_canonical_and_duplicate_free() {
         let tmp = tempdir().expect("tempdir");
@@ -13853,7 +13518,6 @@ mod openapi_tests {
         fs::write(&key_path, hex::encode([0x55u8; 32])).expect("write key");
         let signer = sign_manifest_payload_for_test(b"allowlist", &key_path)
             .expect("derive valid signer public key");
-
         for (name, contents, expected) in [
             (
                 "duplicate-json-member",
@@ -13892,12 +13556,10 @@ mod openapi_tests {
             );
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn openapi_signer_allowlist_refuses_unsafe_permissions() {
         use std::os::unix::fs::PermissionsExt as _;
-
         let tmp = tempdir().expect("tempdir");
         let allowlist_path = tmp.path().join("allow.json");
         fs::write(&allowlist_path, r#"{"version":1,"allow":[]}"#).expect("write empty allowlist");
@@ -13911,7 +13573,6 @@ mod openapi_tests {
             "unexpected unsafe-permission error: {err}"
         );
     }
-
     #[test]
     fn signing_payload_path_must_not_alias_generated_outputs() {
         let tmp = tempdir().expect("tempdir");
@@ -13935,17 +13596,14 @@ mod openapi_tests {
             "unexpected alias error: {err}"
         );
     }
-
     #[test]
     fn manifest_signature_must_be_allowlisted() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("spec.json");
         write_release_openapi_fixture(&spec_path);
-
         let signing_key_path = tmp.path().join("signing.key");
         let signing_key_hex = hex::encode([0x33u8; 32]);
         fs::write(&signing_key_path, signing_key_hex).expect("write key");
-
         let manifest_path = tmp.path().join("manifest.json");
         write_openapi_manifest(
             &spec_path,
@@ -13962,14 +13620,12 @@ mod openapi_tests {
             .signature
             .as_ref()
             .expect("signature must exist after signing");
-
         let allowlist_path = tmp.path().join("allow.json");
         let allowlist_contents = format!(
             "{{\"version\":1,\"allow\":[{{\"algorithm\":\"ed25519\",\"public_key_hex\":\"{}\"}}]}}",
             signer.public_key_hex
         );
         fs::write(&allowlist_path, allowlist_contents).expect("write allowlist");
-
         verify_openapi_manifest(
             &spec_path,
             &manifest_path,
@@ -13977,7 +13633,6 @@ mod openapi_tests {
             Some(allowlist_path.as_path()),
         )
         .expect("allowed signer should verify");
-
         let rejecting_key_path = tmp.path().join("rejecting.key");
         fs::write(&rejecting_key_path, hex::encode([0x44u8; 32])).expect("write rejecting key");
         let rejecting_signer = sign_manifest_payload_for_test(b"rejecting", &rejecting_key_path)
@@ -13988,7 +13643,6 @@ mod openapi_tests {
             rejecting_signer.public_key_hex
         );
         fs::write(&rejecting_path, rejecting_contents).expect("write rejecting allowlist");
-
         let err = verify_openapi_manifest(
             &spec_path,
             &manifest_path,
@@ -14003,13 +13657,10 @@ mod openapi_tests {
         );
     }
 }
-
 #[cfg(test)]
 mod space_directory_tests {
-    use tempfile::tempdir;
-
     use super::*;
-
+    use tempfile::tempdir;
     const SAMPLE_MANIFEST: &str = r#"{
   "version": 1,
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
@@ -14049,7 +13700,6 @@ mod space_directory_tests {
     }
   ]
 }"#;
-
     const INVALID_MANIFEST: &str = r#"{
   "version": 2,
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
@@ -14058,24 +13708,20 @@ mod space_directory_tests {
   "activation_epoch": 1024,
   "entries": []
 }"#;
-
     #[test]
     fn encode_manifest_round_trips_through_norito() {
         let tmp = tempdir().expect("tempdir");
         let json_path = tmp.path().join("cbdc_wholesale.manifest.json");
         fs::write(&json_path, SAMPLE_MANIFEST).expect("write manifest json");
         let output_path = tmp.path().join("cbdc_wholesale.manifest.to");
-
         encode_space_directory_manifest(&json_path, &output_path)
             .expect("encode manifest into Norito");
-
         let norito_bytes = fs::read(&output_path).expect("read encoded manifest");
         assert!(
             norito_bytes.starts_with(&norito::core::MAGIC),
             "encoded manifest must include Norito magic header"
         );
     }
-
     #[test]
     fn reject_unsupported_manifest_version() {
         assert!(
@@ -14084,11 +13730,9 @@ mod space_directory_tests {
         );
     }
 }
-
 #[cfg(test)]
 mod streaming_bundle_tests {
     use super::*;
-
     fn fixtures_dir() -> PathBuf {
         workspace_root()
             .join("crates")
@@ -14096,7 +13740,6 @@ mod streaming_bundle_tests {
             .join("tests")
             .join("fixtures")
     }
-
     #[test]
     fn bundle_summary_reports_defaults() {
         let config = fixtures_dir().join("minimal_with_trusted_peers.toml");
@@ -14136,7 +13779,6 @@ mod streaming_bundle_tests {
             Some(expected_checksum.as_str())
         );
     }
-
     #[test]
     fn bundle_summary_honors_config_overrides() {
         let config = fixtures_dir().join("streaming_bundled.toml");
@@ -14159,7 +13801,6 @@ mod streaming_bundle_tests {
             Some(3)
         );
     }
-
     #[test]
     fn context_remap_produces_top_mapping() {
         let tmp = TempDir::new().expect("tmp dir");
@@ -14215,20 +13856,16 @@ mod streaming_bundle_tests {
         );
     }
 }
-
 fn try_generate_router_openapi() -> Result<Option<Value>, Box<dyn Error>> {
     let runtime = TokioRuntimeBuilder::new_current_thread()
         .enable_all()
         .build()?;
     runtime.block_on(generate_router_openapi_async())
 }
-
 async fn generate_router_openapi_async() -> Result<Option<Value>, Box<dyn Error>> {
     const OPENAPI_ENDPOINT_CANDIDATES: &[&str] = &["/openapi.json", "/openapi"];
-
     let _data_dir = TestDataDirGuard::new();
     let mut cfg = mk_minimal_root_cfg();
-
     let mut tokens = vec!["Test-Token".to_owned()];
     if let Ok(single) = std::env::var("TORII_OPENAPI_TOKEN")
         && !single.is_empty()
@@ -14246,9 +13883,7 @@ async fn generate_router_openapi_async() -> Result<Option<Value>, Box<dyn Error>
     }
     cfg.torii.require_api_token = true;
     cfg.torii.api_tokens = tokens.clone();
-
     let (kiso, _child) = KisoHandle::start(cfg.clone());
-
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(
@@ -14256,13 +13891,11 @@ async fn generate_router_openapi_async() -> Result<Option<Value>, Box<dyn Error>
         kura.clone(),
         query_store,
     ));
-
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(Default::default());
     let _peers_tx_guard = peers_tx;
-
     let torii = iroha_torii::Torii::new_with_handle(
         cfg.common.chain.clone(),
         iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash),
@@ -14278,12 +13911,10 @@ async fn generate_router_openapi_async() -> Result<Option<Value>, Box<dyn Error>
         None,
         MaybeTelemetry::disabled(),
     );
-
     let router = torii.api_router_for_tests();
     let spec = fetch_openapi_from_router(router, OPENAPI_ENDPOINT_CANDIDATES).await;
     Ok(spec)
 }
-
 async fn fetch_openapi_from_router(router: Router, candidates: &[&str]) -> Option<Value> {
     let mut token_header = std::env::var("TORII_OPENAPI_TOKEN")
         .ok()
@@ -14296,7 +13927,6 @@ async fn fetch_openapi_from_router(router: Router, candidates: &[&str]) -> Optio
     if token_header.is_none() {
         token_header = Some("Test-Token".to_owned());
     }
-
     for path in candidates {
         let mut builder = Request::builder().uri(*path);
         if let Some(token) = token_header.as_deref() {
@@ -14310,7 +13940,6 @@ async fn fetch_openapi_from_router(router: Router, candidates: &[&str]) -> Optio
         if !response.status().is_success() {
             continue;
         }
-
         let bytes = match body::to_bytes(response.into_body(), usize::MAX).await {
             Ok(bytes) => bytes,
             Err(err) => {
@@ -14321,7 +13950,6 @@ async fn fetch_openapi_from_router(router: Router, candidates: &[&str]) -> Optio
         if bytes.is_empty() {
             continue;
         }
-
         match norito::json::from_slice::<Value>(bytes.as_ref()) {
             Ok(value) => return Some(value),
             Err(err) => {
@@ -14331,7 +13959,6 @@ async fn fetch_openapi_from_router(router: Router, candidates: &[&str]) -> Optio
     }
     None
 }
-
 fn generate_vote_tally_bundle(
     output: PathBuf,
     verify: bool,
@@ -14375,7 +14002,6 @@ fn generate_vote_tally_bundle(
         }
         return Ok(());
     }
-
     let summary = write_bundle(&output)?;
     if print_hashes {
         print_bundle_hashes(&output)?;
@@ -14389,7 +14015,6 @@ fn generate_vote_tally_bundle(
     }
     Ok(())
 }
-
 fn compare_bundle_dirs(generated: &Path, expected: &Path) -> Result<(), Box<dyn Error>> {
     for name in bundle_file_names() {
         let fresh_path = generated.join(name);
@@ -14414,12 +14039,10 @@ fn compare_bundle_dirs(generated: &Path, expected: &Path) -> Result<(), Box<dyn 
     }
     Ok(())
 }
-
 fn write_summary_json(summary: &BundleSummary, target: JsonTarget) -> Result<(), Box<dyn Error>> {
     let value = summary_to_json(summary);
     write_json_output(&value, target)
 }
-
 pub(crate) fn write_json_output(value: &Value, target: JsonTarget) -> Result<(), Box<dyn Error>> {
     let mut json_text = norito::json::to_string_pretty(value)?;
     json_text.push('\n');
@@ -14436,12 +14059,10 @@ pub(crate) fn write_json_output(value: &Value, target: JsonTarget) -> Result<(),
     }
     Ok(())
 }
-
 fn write_address_vectors(target: JsonTarget) -> Result<(), Box<dyn Error>> {
     let value = compliance_vectors_json();
     write_json_output(&value, target)
 }
-
 fn verify_address_vectors(path: &Path) -> Result<(), Box<dyn Error>> {
     let generated = compliance_vectors_json();
     let raw = fs::read_to_string(path)?;
@@ -14455,7 +14076,6 @@ fn verify_address_vectors(path: &Path) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn handle_attestation_manifest(
     summary: &BundleSummary,
     dir: &Path,
@@ -14557,7 +14177,6 @@ fn handle_attestation_manifest(
         }
     }
 }
-
 fn artifacts_to_map(
     artifacts: &[Value],
 ) -> Result<BTreeMap<String, (u64, String)>, Box<dyn Error>> {
@@ -14576,7 +14195,6 @@ fn artifacts_to_map(
     }
     Ok(map)
 }
-
 fn print_bundle_hashes(dir: &Path) -> Result<(), Box<dyn Error>> {
     for name in bundle_file_names() {
         let path = dir.join(name);
@@ -14585,30 +14203,24 @@ fn print_bundle_hashes(dir: &Path) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
-
 fn compute_hash(bytes: &[u8]) -> String {
     hex::encode(iroha_hash(bytes))
 }
-
 pub(crate) fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("xtask resides in workspace root")
         .to_path_buf()
 }
-
 fn default_openapi_path() -> PathBuf {
     workspace_root().join("artifacts/openapi/torii.json")
 }
-
 fn default_openapi_manifest_path() -> PathBuf {
     workspace_root().join("artifacts/openapi/manifest.json")
 }
-
 fn default_openapi_allowed_signers_path() -> PathBuf {
     workspace_root().join("artifacts/openapi/allowed_signers.json")
 }
-
 fn normalize_openapi_output_root(value: &str) -> Result<PathBuf, Box<dyn Error>> {
     let requested = Path::new(value);
     if value.is_empty()
@@ -14639,35 +14251,30 @@ fn normalize_openapi_output_root(value: &str) -> Result<PathBuf, Box<dyn Error>>
     }
     Ok(normalized)
 }
-
 fn default_da_report_path() -> PathBuf {
     workspace_root()
         .join("artifacts")
         .join("da")
         .join("threat_model_report.json")
 }
-
 fn default_da_replication_audit_path() -> PathBuf {
     workspace_root()
         .join("artifacts")
         .join("da")
         .join("replication_audit.json")
 }
-
 fn default_da_commitment_reconcile_path() -> PathBuf {
     workspace_root()
         .join("artifacts")
         .join("da")
         .join("commitment_reconciliation.json")
 }
-
 fn default_da_privilege_audit_path() -> PathBuf {
     workspace_root()
         .join("artifacts")
         .join("da")
         .join("privilege_audit.json")
 }
-
 fn default_da_proof_bench_json_path() -> PathBuf {
     workspace_root()
         .join("artifacts")
@@ -14675,7 +14282,6 @@ fn default_da_proof_bench_json_path() -> PathBuf {
         .join("proof_bench")
         .join("benchmark.json")
 }
-
 fn default_da_proof_bench_markdown_path() -> PathBuf {
     workspace_root()
         .join("artifacts")
@@ -14683,7 +14289,6 @@ fn default_da_proof_bench_markdown_path() -> PathBuf {
         .join("proof_bench")
         .join("benchmark.md")
 }
-
 fn default_da_proof_manifest() -> PathBuf {
     workspace_root()
         .join("fixtures")
@@ -14692,7 +14297,6 @@ fn default_da_proof_manifest() -> PathBuf {
         .join("rs_parity_v1")
         .join("manifest.json")
 }
-
 fn default_da_proof_payload() -> PathBuf {
     workspace_root()
         .join("fixtures")
@@ -14701,7 +14305,6 @@ fn default_da_proof_payload() -> PathBuf {
         .join("rs_parity_v1")
         .join("payload.bin")
 }
-
 fn default_da_proof_generated_payload() -> PathBuf {
     workspace_root()
         .join("artifacts")
@@ -14709,7 +14312,6 @@ fn default_da_proof_generated_payload() -> PathBuf {
         .join("proof_bench")
         .join("payload.bin")
 }
-
 fn default_gar_receipts_dir(pop_label: &str) -> PathBuf {
     workspace_root()
         .join("artifacts")
@@ -14718,7 +14320,6 @@ fn default_gar_receipts_dir(pop_label: &str) -> PathBuf {
         .join(pop_label)
         .join("gar_receipts")
 }
-
 fn default_gar_acks_dir(pop_label: &str) -> PathBuf {
     workspace_root()
         .join("artifacts")
@@ -14727,7 +14328,6 @@ fn default_gar_acks_dir(pop_label: &str) -> PathBuf {
         .join(pop_label)
         .join("gar_acks")
 }
-
 fn default_gar_summary_path(pop_label: &str) -> PathBuf {
     workspace_root()
         .join("artifacts")
@@ -14736,7 +14336,6 @@ fn default_gar_summary_path(pop_label: &str) -> PathBuf {
         .join(pop_label)
         .join("gar_receipts_summary.json")
 }
-
 fn run_config_debug(path: &Path) -> Result<(), Box<dyn Error>> {
     println!("reading config {}", path.display());
     let reader = ConfigReader::new();
@@ -14761,7 +14360,6 @@ fn run_config_debug(path: &Path) -> Result<(), Box<dyn Error>> {
         }
     }
 }
-
 fn load_actual_config(path: &Path) -> eyre::Result<actual::Root> {
     let reader = ConfigReader::new();
     let reader = reader
@@ -14773,58 +14371,48 @@ fn load_actual_config(path: &Path) -> eyre::Result<actual::Root> {
         .parse()
         .map_err(|err| eyre!("configuration `{}` invalid: {err:?}", path.display()))
 }
-
 fn default_nexus_lane_commitment_dir() -> PathBuf {
     workspace_root()
         .join("fixtures")
         .join("nexus")
         .join("lane_commitments")
 }
-
 fn default_address_vectors_path() -> Result<PathBuf, Box<dyn Error>> {
     normalize_path(Path::new("fixtures/account/address_vectors.json"))
 }
-
 fn default_vote_tally_path() -> PathBuf {
     workspace_root().join("fixtures/zk/vote_tally")
 }
-
 fn default_mochi_bundle_path() -> PathBuf {
     workspace_root().join("target/mochi-bundle")
 }
-
 fn default_taikai_spool_dir() -> PathBuf {
     workspace_root()
         .join("storage")
         .join("da_manifests")
         .join("taikai")
 }
-
 fn default_testnet_kit_path() -> PathBuf {
     workspace_root()
         .join("docs")
         .join("examples")
         .join("soranet_testnet_operator_kit")
 }
-
 fn default_rollout_plan_path() -> PathBuf {
     workspace_root()
         .join("artifacts")
         .join("soranet_pq_rollout_plan.json")
 }
-
 fn default_rollout_markdown_path() -> PathBuf {
     workspace_root()
         .join("artifacts")
         .join("soranet_pq_rollout_plan.md")
 }
-
 fn default_rollout_capture_dir() -> PathBuf {
     workspace_root()
         .join("artifacts")
         .join("soranet_pq_rollout")
 }
-
 fn default_soranet_chaos_dir(now: SystemTime) -> PathBuf {
     let datetime = OffsetDateTime::from(now);
     let slug = format!(
@@ -14839,11 +14427,9 @@ fn default_soranet_chaos_dir(now: SystemTime) -> PathBuf {
         .join("chaos_game_day")
         .join(slug)
 }
-
 fn default_directory_release_output_root() -> PathBuf {
     workspace_root().join("artifacts").join("soradns_directory")
 }
-
 fn default_pin_fixture_path() -> PathBuf {
     workspace_root()
         .join("crates")
@@ -14853,7 +14439,6 @@ fn default_pin_fixture_path() -> PathBuf {
         .join("sorafs_pin_registry")
         .join("snapshot.json")
 }
-
 fn parse_seed(value: &str) -> Result<u64, Box<dyn Error>> {
     if let Some(stripped) = value.strip_prefix("0x") {
         u64::from_str_radix(stripped, 16).map_err(|err| err.into())
@@ -14863,7 +14448,6 @@ fn parse_seed(value: &str) -> Result<u64, Box<dyn Error>> {
         value.parse::<u64>().map_err(|err| err.into())
     }
 }
-
 fn default_sm_wycheproof_path() -> PathBuf {
     workspace_root()
         .join("crates")
@@ -14872,7 +14456,6 @@ fn default_sm_wycheproof_path() -> PathBuf {
         .join("fixtures")
         .join("wycheproof_sm2.json")
 }
-
 pub(crate) fn normalize_path(path: &Path) -> Result<PathBuf, Box<dyn Error>> {
     if path.is_absolute() {
         Ok(path.to_path_buf())
@@ -14880,7 +14463,6 @@ pub(crate) fn normalize_path(path: &Path) -> Result<PathBuf, Box<dyn Error>> {
         Ok(workspace_root().join(path))
     }
 }
-
 fn normalize_norito_rpc_output_root(value: &str) -> Result<PathBuf, Box<dyn Error>> {
     let requested = Path::new(value);
     if value.is_empty()
@@ -14901,11 +14483,9 @@ fn normalize_norito_rpc_output_root(value: &str) -> Result<PathBuf, Box<dyn Erro
     }
     Ok(normalized)
 }
-
 fn openapi_paths_alias(left: &Path, right: &Path) -> bool {
     openapi_path_identity(left) == openapi_path_identity(right)
 }
-
 fn openapi_path_identity(path: &Path) -> PathBuf {
     if let Ok(canonical) = path.canonicalize() {
         return canonical;
@@ -14927,14 +14507,12 @@ fn openapi_path_identity(path: &Path) -> PathBuf {
     }
     normalized
 }
-
 fn parse_gate_date(value: &str) -> Result<Date, Box<dyn Error>> {
     let spec = format_description::parse("[year]-[month]-[day]")
         .map_err(|err| -> Box<dyn Error> { format!("invalid gate date spec: {err}").into() })?;
     Date::parse(value, &spec)
         .map_err(|err| -> Box<dyn Error> { format!("invalid date `{value}`: {err}").into() })
 }
-
 fn parse_attachment_spec(spec: &str) -> Result<(String, PathBuf), Box<dyn Error>> {
     let Some((label, path)) = spec.split_once('=') else {
         return Err(
@@ -14953,7 +14531,6 @@ fn parse_attachment_spec(spec: &str) -> Result<(String, PathBuf), Box<dyn Error>
     let normalized = normalize_path(Path::new(path))?;
     Ok((label.to_string(), normalized))
 }
-
 fn load_relays_from_file(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
     let raw = fs::read_to_string(path)?;
     let trimmed = raw.trim();
@@ -14985,7 +14562,6 @@ fn load_relays_from_file(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
             .collect())
     }
 }
-
 fn parse_label_value(spec: &str, flag: &str) -> Result<(String, String), Box<dyn Error>> {
     let Some((label, value)) = spec.split_once('=') else {
         return Err(format!("{flag} expects label=value").into());
@@ -15000,13 +14576,11 @@ fn parse_label_value(spec: &str, flag: &str) -> Result<(String, String), Box<dyn
     }
     Ok((label.to_string(), value.to_string()))
 }
-
 fn parse_labelled_path(spec: &str, flag: &str) -> Result<(String, PathBuf), Box<dyn Error>> {
     let (label, path_str) = parse_label_value(spec, flag)?;
     let path = normalize_path(Path::new(&path_str))?;
     Ok((label, path))
 }
-
 fn parse_operation_limit(spec: &str, flag: &str) -> Result<(String, f64), Box<dyn Error>> {
     let (label, value_str) = parse_label_value(spec, flag)?;
     let value = value_str.parse::<f64>().map_err(|err| {
@@ -15014,7 +14588,6 @@ fn parse_operation_limit(spec: &str, flag: &str) -> Result<(String, f64), Box<dy
     })?;
     Ok((label, value))
 }
-
 fn parse_rollout_artifact_spec(spec: &str) -> Result<(String, String), Box<dyn Error>> {
     let mut kind: Option<String> = None;
     let mut path: Option<String> = None;
@@ -15045,10 +14618,8 @@ fn parse_rollout_artifact_spec(spec: &str) -> Result<(String, String), Box<dyn E
     let path = path.ok_or("missing `path=` in --artifact spec")?;
     Ok((kind, path))
 }
-
 const NORITO_RPC_FIXTURES_USAGE_DESCRIPTION: &str = "    Regenerate canonical Norito-RPC transaction fixtures, the typed V1 alias-setup fixture, and Android/Python/Swift mirrors under the selected output root.";
 const NORITO_RPC_VERIFY_USAGE_DESCRIPTION: &str = "    Re-render and compare canonical Norito-RPC transaction and alias-setup fixture bytes, schema hashes, the compact hash vector, and Android/Python/Swift mirrors; optionally emit a JSON verification report.";
-
 fn print_usage() {
     eprintln!("xtask usage:");
     eprintln!(
@@ -15634,6 +15205,5 @@ fn print_usage() {
         "    Print the applied acceleration configuration and Metal/CUDA runtime status to feed parity dashboards."
     );
 }
-
 #[cfg(test)]
 mod tests;

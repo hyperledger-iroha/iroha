@@ -1,5 +1,3 @@
-use std::{collections::HashMap, str::FromStr};
-
 use iroha_crypto::Hash;
 use iroha_data_model::peer::Peer;
 use ivm::{
@@ -7,10 +5,9 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
-
+use std::{collections::HashMap, str::FromStr};
 mod common;
 use common::assemble_syscalls;
-
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let payload = PointerType::from_u16(type_id)
         .map(|pty| common::payload_for_type(pty, payload))
@@ -24,7 +21,6 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&h);
     out
 }
-
 fn sample_account() -> AccountId {
     let _domain: ivm::mock_wsv::DomainId =
         iroha_data_model::DomainId::try_new("domain", "universal").expect("domain id");
@@ -34,7 +30,6 @@ fn sample_account() -> AccountId {
             .expect("public key"),
     )
 }
-
 #[test]
 fn register_peer_then_unregister() {
     let alice: AccountId = sample_account();
@@ -42,7 +37,6 @@ fn register_peer_then_unregister() {
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
     const SAMPLE_PEER: &str =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@127.0.0.1:1337";
     let peer_json = format!(r#"{{"peer":"{SAMPLE_PEER}"}}"#);
@@ -54,7 +48,6 @@ fn register_peer_then_unregister() {
     let prog_unreg = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_PEER as u8]);
     vm.load_program(&prog_unreg).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
-
     // Register peer
     vm.memory.preload_input(0, &p).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
@@ -66,7 +59,6 @@ fn register_peer_then_unregister() {
         let peer = Peer::from_str(SAMPLE_PEER).expect("valid peer");
         assert!(host.wsv.has_peer(&peer));
     }
-
     // Unregister peer should now succeed
     vm.memory.preload_input(0, &p).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
@@ -78,7 +70,6 @@ fn register_peer_then_unregister() {
         assert!(!host.wsv.has_peer(&peer));
     }
 }
-
 #[test]
 fn create_enable_disable_remove_trigger() {
     let alice: AccountId = sample_account();
@@ -86,7 +77,6 @@ fn create_enable_disable_remove_trigger() {
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
     // Missing name -> invalid
     let tr_bad = make_tlv(PointerType::Json as u16, br#"{"type":"data"}"#);
     vm.memory.preload_input(0, &tr_bad).expect("preload input");
@@ -94,7 +84,6 @@ fn create_enable_disable_remove_trigger() {
     let prog_ct = assemble_syscalls(&[syscalls::SYSCALL_CREATE_TRIGGER as u8]);
     vm.load_program(&prog_ct).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::NoritoInvalid)));
-
     // Valid create (with name)
     let tr_ok = make_tlv(PointerType::Json as u16, br#"{"name":"t1"}"#);
     vm.memory.preload_input(0, &tr_ok).expect("preload input");
@@ -105,7 +94,6 @@ fn create_enable_disable_remove_trigger() {
         let host = any.downcast_mut::<WsvHost>().expect("downcast WsvHost");
         assert_eq!(host.wsv.trigger_state("t1"), Some(true));
     }
-
     // Disable trigger t1
     let name = make_tlv(PointerType::Name as u16, b"t1");
     vm.memory.preload_input(0, &name).expect("preload input");
@@ -118,7 +106,6 @@ fn create_enable_disable_remove_trigger() {
         let host = any.downcast_mut::<WsvHost>().expect("downcast WsvHost");
         assert_eq!(host.wsv.trigger_state("t1"), Some(false));
     }
-
     // Remove trigger t1
     vm.memory.preload_input(0, &name).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
@@ -129,13 +116,11 @@ fn create_enable_disable_remove_trigger() {
         let host = any.downcast_mut::<WsvHost>().expect("downcast WsvHost");
         assert_eq!(host.wsv.trigger_state("t1"), None);
     }
-
     // Removing non-existent trigger should fail
     vm.memory.preload_input(0, &name).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     vm.load_program(&prog_rm).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
-
     // Toggling unknown trigger should fail
     vm.memory.preload_input(0, &name).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);

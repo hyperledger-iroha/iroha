@@ -1,10 +1,8 @@
 //! Re-encode canonical account literals across chain discriminants or derive contract subjects.
-
 use clap::Parser;
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::account_address::parse_account_address;
 use iroha::data_model::smart_contract::ContractAddress;
-
 #[derive(Parser, Debug)]
 struct Args {
     #[arg(long, conflicts_with = "contract_address")]
@@ -16,7 +14,6 @@ struct Args {
     #[arg(long)]
     to_chain_discriminant: u16,
 }
-
 fn main() -> Result<()> {
     let args = Args::parse();
     let account = if let Some(account) = args.account.as_deref() {

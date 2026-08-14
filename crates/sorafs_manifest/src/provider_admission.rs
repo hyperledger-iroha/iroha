@@ -1,5 +1,4 @@
 #![allow(unexpected_cfgs)]
-
 //! Provider admission schemas and validators for SoraFS.
 //!
 //! Governance-approved providers publish a `ProviderAdmissionProposalV1`
@@ -7,17 +6,6 @@
 //! attested endpoints. Councillors co-sign the canonical digest inside a
 //! `ProviderAdmissionEnvelopeV1`, which Torii and gateways use to authorise
 //! incoming `ProviderAdvertV1` payloads.
-
-use std::{collections::BTreeSet, num::NonZeroUsize};
-
-use blake3::Hasher;
-use iroha_crypto::{Algorithm, PublicKey};
-use norito::{
-    core::Error as NoritoError,
-    derive::{NoritoDeserialize, NoritoSerialize},
-};
-use thiserror::Error;
-
 #[cfg(test)]
 use crate::provider_advert::TransportProtocol;
 use crate::{
@@ -29,7 +17,14 @@ use crate::{
         StreamBudgetV1, TransportHintError, TransportHintV1, validate_potr_mldsa_capability,
     },
 };
-
+use blake3::Hasher;
+use iroha_crypto::{Algorithm, PublicKey};
+use norito::{
+    core::Error as NoritoError,
+    derive::{NoritoDeserialize, NoritoSerialize},
+};
+use std::{collections::BTreeSet, num::NonZeroUsize};
+use thiserror::Error;
 /// Current proposal schema version.
 pub const PROVIDER_ADMISSION_PROPOSAL_VERSION_V1: u8 = 1;
 /// Current envelope schema version.
@@ -40,13 +35,11 @@ pub const ENDPOINT_ATTESTATION_VERSION_V1: u8 = 1;
 pub const PROVIDER_ADMISSION_RENEWAL_VERSION_V1: u8 = 1;
 /// Admission revocation schema version.
 pub const PROVIDER_ADMISSION_REVOCATION_VERSION_V1: u8 = 1;
-
 const PROPOSAL_DIGEST_DOMAIN: &[u8] = b"sorafs-provider-admission-v1";
 const ADVERT_BODY_DIGEST_DOMAIN: &[u8] = b"sorafs-provider-advert-body-v1";
 const ENVELOPE_AUTHORIZATION_DIGEST_DOMAIN: &[u8] = b"sorafs-provider-admission-authorization-v1";
 const ENVELOPE_DIGEST_DOMAIN: &[u8] = b"sorafs-provider-admission-envelope-v1";
 const REVOCATION_DIGEST_DOMAIN: &[u8] = b"sorafs-provider-admission-revocation-v1";
-
 /// Trusted council keys and quorum required to authorise provider admission changes.
 ///
 /// Production callers must construct this policy from operator-controlled configuration. Keys
@@ -56,7 +49,6 @@ pub struct ProviderAdmissionCouncilPolicy {
     trusted_signers: BTreeSet<[u8; 32]>,
     signature_threshold: NonZeroUsize,
 }
-
 impl ProviderAdmissionCouncilPolicy {
     /// Construct a council policy after validating every trusted Ed25519 key and the quorum.
     ///
@@ -98,26 +90,22 @@ impl ProviderAdmissionCouncilPolicy {
             signature_threshold,
         })
     }
-
     /// Return whether the policy trusts the supplied canonical Ed25519 key.
     #[must_use]
     pub fn trusts(&self, signer: &[u8; 32]) -> bool {
         self.trusted_signers.contains(signer)
     }
-
     /// Return the number of distinct trusted council keys.
     #[must_use]
     pub fn trusted_signer_count(&self) -> usize {
         self.trusted_signers.len()
     }
-
     /// Return the number of distinct signatures required for authorisation.
     #[must_use]
     pub fn signature_threshold(&self) -> NonZeroUsize {
         self.signature_threshold
     }
 }
-
 /// Invalid provider-admission council policy configuration.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ProviderAdmissionCouncilPolicyError {
@@ -152,7 +140,6 @@ pub enum ProviderAdmissionCouncilPolicyError {
         trusted_signers: usize,
     },
 }
-
 /// Norito payload submitted by candidate storage providers.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderAdmissionProposalV1 {
@@ -187,7 +174,6 @@ pub struct ProviderAdmissionProposalV1 {
     #[norito(default)]
     pub transport_hints: Option<Vec<TransportHintV1>>,
 }
-
 impl ProviderAdmissionProposalV1 {
     /// Validates the proposal against registry policy.
     pub fn validate(&self) -> Result<(), ProviderAdmissionValidationError> {
@@ -314,13 +300,11 @@ impl ProviderAdmissionProposalV1 {
         }
         Ok(())
     }
-
     /// Computes the canonical BLAKE3 digest over the proposal payload.
     pub fn digest(&self) -> Result<[u8; 32], NoritoError> {
         compute_proposal_digest(self)
     }
 }
-
 /// Council-approved BLS public-key variant for provider PoR VRF proofs.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub enum ProviderVrfPublicKeyV1 {
@@ -329,7 +313,6 @@ pub enum ProviderVrfPublicKeyV1 {
     /// Small-signature BLS: a 96-byte compressed G2 public key and 48-byte G1 proof.
     BlsSmall([u8; 96]),
 }
-
 impl ProviderVrfPublicKeyV1 {
     /// Return the canonical compressed public-key bytes.
     #[must_use]
@@ -339,7 +322,6 @@ impl ProviderVrfPublicKeyV1 {
             Self::BlsSmall(bytes) => bytes,
         }
     }
-
     /// Validate the public key's length, curve encoding, subgroup, and identity.
     pub fn validate(&self) -> Result<(), ProviderAdmissionValidationError> {
         let valid = match self {
@@ -352,7 +334,6 @@ impl ProviderVrfPublicKeyV1 {
         Ok(())
     }
 }
-
 /// Endpoint record paired with its attestation.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct EndpointAdmissionV1 {
@@ -361,7 +342,6 @@ pub struct EndpointAdmissionV1 {
     /// Remote-attestation bundle tied to the endpoint.
     pub attestation: EndpointAttestationV1,
 }
-
 impl EndpointAdmissionV1 {
     fn validate(&self) -> Result<(), EndpointAdmissionError> {
         if self.endpoint.host_pattern.trim().is_empty() {
@@ -382,7 +362,6 @@ impl EndpointAdmissionV1 {
         Ok(())
     }
 }
-
 /// Supported endpoint attestation modes.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
@@ -392,7 +371,6 @@ pub enum EndpointAttestationKind {
     /// QUIC + TLS 1.3 certificate report.
     Quic = 2,
 }
-
 /// Remote-attestation report for a provider endpoint.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct EndpointAttestationV1 {
@@ -416,7 +394,6 @@ pub struct EndpointAttestationV1 {
     #[norito(default)]
     pub report: Vec<u8>,
 }
-
 impl EndpointAttestationV1 {
     fn validate(&self) -> Result<(), EndpointAttestationError> {
         if self.version != ENDPOINT_ATTESTATION_VERSION_V1 {
@@ -446,7 +423,6 @@ impl EndpointAttestationV1 {
         Ok(())
     }
 }
-
 /// Governance envelope binding proposals, adverts, and council signatures.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderAdmissionEnvelopeV1 {
@@ -470,7 +446,6 @@ pub struct ProviderAdmissionEnvelopeV1 {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 impl ProviderAdmissionEnvelopeV1 {
     /// Validates structural invariants and digest bindings.
     pub fn validate(&self) -> Result<(), ProviderAdmissionValidationError> {
@@ -515,7 +490,6 @@ impl ProviderAdmissionEnvelopeV1 {
         Ok(())
     }
 }
-
 fn compare_core_fields(
     proposal: &ProviderAdmissionProposalV1,
     advert_body: &ProviderAdvertBodyV1,
@@ -563,7 +537,6 @@ fn compare_core_fields(
     }
     Ok(())
 }
-
 fn validate_aliases(
     aliases: &[String],
     descriptor: &'static chunker_registry::ChunkerProfileDescriptor,
@@ -598,7 +571,6 @@ fn validate_aliases(
     }
     Ok(())
 }
-
 fn validate_jurisdiction_code(code: &str) -> Result<(), ProviderAdmissionValidationError> {
     if code.len() != 2 || !code.chars().all(|c| c.is_ascii_uppercase()) {
         return Err(ProviderAdmissionValidationError::InvalidJurisdictionCode {
@@ -607,7 +579,6 @@ fn validate_jurisdiction_code(code: &str) -> Result<(), ProviderAdmissionValidat
     }
     Ok(())
 }
-
 /// Computes the proposal digest using BLAKE3 with an admission-specific domain separator.
 pub fn compute_proposal_digest(
     proposal: &ProviderAdmissionProposalV1,
@@ -618,7 +589,6 @@ pub fn compute_proposal_digest(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 /// Computes the advertisement body digest using the admission domain separator.
 pub fn compute_advert_body_digest(
     advert_body: &ProviderAdvertBodyV1,
@@ -629,7 +599,6 @@ pub fn compute_advert_body_digest(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 /// Computes the digest council members sign to authorise an admission envelope.
 ///
 /// The digest covers every envelope field except the signatures themselves, including validity
@@ -647,7 +616,6 @@ pub fn compute_envelope_authorization_digest(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 /// Computes the canonical digest for an admission envelope.
 pub fn compute_envelope_digest(
     envelope: &ProviderAdmissionEnvelopeV1,
@@ -658,7 +626,6 @@ pub fn compute_envelope_digest(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 /// Admission registry entry produced from a verified envelope.
 #[derive(Debug, Clone)]
 pub struct AdmissionRecord {
@@ -670,13 +637,11 @@ pub struct AdmissionRecord {
     envelope_digest: [u8; 32],
     trust: AdmissionRecordTrust,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AdmissionRecordTrust {
     CouncilVerified,
     UntrustedSigners,
 }
-
 impl AdmissionRecord {
     /// Constructs a verified admission record under the configured council trust policy.
     pub fn new(
@@ -690,7 +655,6 @@ impl AdmissionRecord {
             AdmissionRecordTrust::CouncilVerified,
         )
     }
-
     /// Constructs an integrity-checked record without establishing signer trust.
     ///
     /// This is reserved for reference validators and offline fixture tooling. Production
@@ -705,7 +669,6 @@ impl AdmissionRecord {
             AdmissionRecordTrust::UntrustedSigners,
         )
     }
-
     fn from_verified_envelope(
         envelope: ProviderAdmissionEnvelopeV1,
         advert_digest: [u8; 32],
@@ -724,19 +687,16 @@ impl AdmissionRecord {
             trust,
         })
     }
-
     /// Returns the immutable governance envelope backing this registry entry.
     #[must_use]
     pub fn envelope(&self) -> &ProviderAdmissionEnvelopeV1 {
         &self.envelope
     }
-
     /// Returns the canonical digest of the admitted provider advert body.
     #[must_use]
     pub fn advert_body_digest(&self) -> &[u8; 32] {
         &self.advert_body_digest
     }
-
     /// Whether this record was established under a configured council trust policy.
     ///
     /// Integrity-only records created for reference fixtures deliberately return
@@ -745,25 +705,21 @@ impl AdmissionRecord {
     pub fn is_council_verified(&self) -> bool {
         self.trust == AdmissionRecordTrust::CouncilVerified
     }
-
     /// Returns the provider identifier associated with this record.
     #[must_use]
     pub fn provider_id(&self) -> &[u8; 32] {
         &self.envelope.proposal.provider_id
     }
-
     /// Returns the admission-approved advert key.
     #[must_use]
     pub fn advert_key(&self) -> &[u8; 32] {
         &self.envelope.proposal.advert_key
     }
-
     /// Returns the council-approved provider PoR VRF public key.
     #[must_use]
     pub fn por_vrf_key(&self) -> &ProviderVrfPublicKeyV1 {
         &self.envelope.proposal.por_vrf_key
     }
-
     /// Returns the council-approved ML-DSA-65 key used for PoTR receipts.
     ///
     /// Absence means the provider is not authorised to emit production PoTR
@@ -777,13 +733,11 @@ impl AdmissionRecord {
             .find(|capability| capability.cap_type == CapabilityType::PotrMlDsa)
             .map(|capability| capability.payload.as_slice())
     }
-
     /// Returns the canonical envelope digest.
     #[must_use]
     pub fn envelope_digest(&self) -> &[u8; 32] {
         &self.envelope_digest
     }
-
     /// Apply a governance-approved renewal and return the updated admission record.
     pub fn apply_renewal(
         &self,
@@ -799,7 +753,6 @@ impl AdmissionRecord {
             AdmissionRecordTrust::CouncilVerified,
         )
     }
-
     /// Apply a renewal after checking signatures cryptographically without establishing trust.
     ///
     /// This is reserved for reference validators and offline fixture tooling. Production
@@ -814,7 +767,6 @@ impl AdmissionRecord {
             AdmissionRecordTrust::UntrustedSigners,
         )
     }
-
     fn apply_renewal_inner<F>(
         &self,
         renewal: &ProviderAdmissionRenewalV1,
@@ -842,7 +794,6 @@ impl AdmissionRecord {
                 provided: renewal.previous_envelope_digest,
             });
         }
-
         let computed_digest = compute_envelope_digest(&renewal.envelope).map_err(|err| {
             ProviderAdmissionRenewalError::Envelope(ProviderAdmissionEnvelopeError::Serialization {
                 context: "envelope",
@@ -855,16 +806,13 @@ impl AdmissionRecord {
                 computed: computed_digest,
             });
         }
-
         if renewal.envelope.proposal.provider_id != renewal.provider_id {
             return Err(ProviderAdmissionRenewalError::ProviderMismatch {
                 renewal: renewal.envelope.proposal.provider_id,
                 record: renewal.provider_id,
             });
         }
-
         let new_advert_digest = verify(&renewal.envelope)?;
-
         if renewal.envelope.proposal.profile_id != self.envelope.proposal.profile_id {
             return Err(ProviderAdmissionRenewalError::ProfileIdChanged {
                 previous: self.envelope.proposal.profile_id.clone(),
@@ -883,7 +831,6 @@ impl AdmissionRecord {
         if renewal.envelope.proposal.por_vrf_key != self.envelope.proposal.por_vrf_key {
             return Err(ProviderAdmissionRenewalError::PorVrfKeyChanged);
         }
-
         if renewal.envelope.retention_epoch < self.envelope.retention_epoch {
             return Err(ProviderAdmissionRenewalError::RetentionNotExtended {
                 previous: self.envelope.retention_epoch,
@@ -896,7 +843,6 @@ impl AdmissionRecord {
                 updated: renewal.envelope.issued_at,
             });
         }
-
         Ok(Self {
             envelope: renewal.envelope.clone(),
             advert_body_digest: new_advert_digest,
@@ -904,7 +850,6 @@ impl AdmissionRecord {
             trust,
         })
     }
-
     /// Verify a governance revocation record against this admission entry.
     pub fn verify_revocation(
         &self,
@@ -915,7 +860,6 @@ impl AdmissionRecord {
             verify_revocation_signatures(revocation, policy)
         })
     }
-
     /// Verify revocation integrity without establishing signer trust.
     ///
     /// This is reserved for reference validators and offline fixture tooling. Production
@@ -926,7 +870,6 @@ impl AdmissionRecord {
     ) -> Result<(), ProviderAdmissionRevocationError> {
         self.verify_revocation_inner(revocation, verify_revocation_signatures_untrusted_signers)
     }
-
     fn verify_revocation_inner<F>(
         &self,
         revocation: &ProviderAdmissionRevocationV1,
@@ -953,7 +896,6 @@ impl AdmissionRecord {
         Ok(())
     }
 }
-
 /// Verifies an admission envelope against the configured council trust policy.
 pub fn verify_envelope(
     envelope: &ProviderAdmissionEnvelopeV1,
@@ -972,7 +914,6 @@ pub fn verify_envelope(
         .map_err(ProviderAdmissionEnvelopeError::Signature)?;
     Ok(envelope.advert_body_digest)
 }
-
 /// Verifies envelope integrity without establishing that any signer is trusted.
 ///
 /// This API exists for language-neutral reference validators and deterministic fixture tools.
@@ -993,7 +934,6 @@ pub fn verify_envelope_untrusted_signers(
         .map_err(ProviderAdmissionEnvelopeError::Signature)?;
     Ok(envelope.advert_body_digest)
 }
-
 /// Validates that a provider advert matches the governance admission record.
 pub fn verify_advert_against_record(
     advert: &ProviderAdvertV1,
@@ -1021,7 +961,6 @@ pub fn verify_advert_against_record(
     }
     Ok(())
 }
-
 pub(crate) fn verify_council_signatures_over_digest(
     signatures: &[CouncilSignature],
     digest: &[u8; 32],
@@ -1042,14 +981,12 @@ pub(crate) fn verify_council_signatures_over_digest(
     }
     Ok(())
 }
-
 pub(crate) fn verify_council_signatures_without_trust(
     signatures: &[CouncilSignature],
     digest: &[u8; 32],
 ) -> Result<(), ProviderAdmissionSignatureError> {
     verify_council_signatures_inner(signatures, digest, None)
 }
-
 fn verify_council_signatures_inner(
     signatures: &[CouncilSignature],
     digest: &[u8; 32],
@@ -1118,7 +1055,6 @@ fn verify_council_signatures_inner(
     }
     Ok(())
 }
-
 /// Errors raised during proposal and envelope validation.
 #[derive(Debug, Error)]
 pub enum ProviderAdmissionValidationError {
@@ -1204,7 +1140,6 @@ pub enum ProviderAdmissionValidationError {
     #[error("proposal and advert mismatch on field `{field}`")]
     FieldMismatch { field: &'static str },
 }
-
 #[cfg(test)]
 impl PartialEq for ProviderAdmissionValidationError {
     fn eq(&self, other: &Self) -> bool {
@@ -1212,10 +1147,8 @@ impl PartialEq for ProviderAdmissionValidationError {
             && self.to_string() == other.to_string()
     }
 }
-
 #[cfg(test)]
 impl Eq for ProviderAdmissionValidationError {}
-
 /// Errors surfaced while verifying admission envelopes.
 #[derive(Debug, Error)]
 pub enum ProviderAdmissionEnvelopeError {
@@ -1230,7 +1163,6 @@ pub enum ProviderAdmissionEnvelopeError {
         source: NoritoError,
     },
 }
-
 /// Errors surfaced when verifying council signatures.
 #[derive(Debug, Error)]
 pub enum ProviderAdmissionSignatureError {
@@ -1258,7 +1190,6 @@ pub enum ProviderAdmissionSignatureError {
     #[error("council signature verification failed for signer {signer:02x?}: {reason}")]
     Verification { signer: [u8; 32], reason: String },
 }
-
 /// Errors surfaced when verifying provider adverts against governance records.
 #[derive(Debug, Error)]
 pub enum ProviderAdmissionAdvertError {
@@ -1281,7 +1212,6 @@ pub enum ProviderAdmissionAdvertError {
         retention_epoch: u64,
     },
 }
-
 /// Governance-approved renewal of a provider admission envelope.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderAdmissionRenewalV1 {
@@ -1299,7 +1229,6 @@ pub struct ProviderAdmissionRenewalV1 {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 impl ProviderAdmissionRenewalV1 {
     /// Returns the provider identifier associated with this renewal.
     #[must_use]
@@ -1307,7 +1236,6 @@ impl ProviderAdmissionRenewalV1 {
         &self.provider_id
     }
 }
-
 /// Errors surfaced when applying a provider admission renewal.
 #[derive(Debug, Error)]
 pub enum ProviderAdmissionRenewalError {
@@ -1348,7 +1276,6 @@ pub enum ProviderAdmissionRenewalError {
     #[error("issued_at must not decrease (previous {previous}, updated {updated})")]
     IssuedAtRegression { previous: u64, updated: u64 },
 }
-
 /// Governance-approved revocation of an admission envelope.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderAdmissionRevocationV1 {
@@ -1368,7 +1295,6 @@ pub struct ProviderAdmissionRevocationV1 {
     #[norito(default)]
     pub notes: Option<String>,
 }
-
 /// Errors surfaced when verifying a revocation record.
 #[derive(Debug, Error)]
 pub enum ProviderAdmissionRevocationError {
@@ -1395,7 +1321,6 @@ pub enum ProviderAdmissionRevocationError {
         provided: [u8; 32],
     },
 }
-
 impl ProviderAdmissionRevocationV1 {
     /// Computes the canonical digest signed by council members.
     pub fn digest(&self) -> Result<[u8; 32], NoritoError> {
@@ -1409,7 +1334,6 @@ impl ProviderAdmissionRevocationV1 {
             #[norito(default)]
             notes: Option<&'a str>,
         }
-
         let body = RevocationBody {
             version: self.version,
             provider_id: self.provider_id,
@@ -1425,7 +1349,6 @@ impl ProviderAdmissionRevocationV1 {
         Ok(*hasher.finalize().as_bytes())
     }
 }
-
 /// Verify revocation signatures under the configured council trust policy and return its digest.
 pub fn verify_revocation_signatures(
     revocation: &ProviderAdmissionRevocationV1,
@@ -1435,7 +1358,6 @@ pub fn verify_revocation_signatures(
         verify_council_signatures_over_digest(signatures, digest, policy)
     })
 }
-
 /// Verify revocation integrity without establishing that any signer is trusted.
 ///
 /// This API exists for reference validators and deterministic fixture tools. Production
@@ -1445,7 +1367,6 @@ pub fn verify_revocation_signatures_untrusted_signers(
 ) -> Result<[u8; 32], ProviderAdmissionRevocationError> {
     verify_revocation_signatures_inner(revocation, verify_council_signatures_without_trust)
 }
-
 fn verify_revocation_signatures_inner<F>(
     revocation: &ProviderAdmissionRevocationV1,
     verify: F,
@@ -1464,13 +1385,11 @@ where
     if revocation.council_signatures.is_empty() {
         return Err(ProviderAdmissionRevocationError::MissingSignatures);
     }
-
     let digest = revocation.digest()?;
     verify(&revocation.council_signatures, &digest)
         .map_err(ProviderAdmissionRevocationError::Signature)?;
     Ok(digest)
 }
-
 /// Errors surfaced when validating endpoint admission records.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum EndpointAdmissionError {
@@ -1487,7 +1406,6 @@ pub enum EndpointAdmissionError {
     #[error(transparent)]
     Attestation(#[from] EndpointAttestationError),
 }
-
 /// Errors surfaced when validating endpoint attestation payloads.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum EndpointAttestationError {
@@ -1504,11 +1422,8 @@ pub enum EndpointAttestationError {
     #[error("ALPN identifier must not be empty")]
     EmptyAlpn,
 }
-
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::{Signer, SigningKey};
-
     use super::*;
     use crate::{
         AdvertSignature, PROVIDER_ADVERT_VERSION_V1, SignatureAlgorithm,
@@ -1517,7 +1432,7 @@ mod tests {
             QosHints, RendezvousTopic,
         },
     };
-
+    use ed25519_dalek::{Signer, SigningKey};
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -1527,14 +1442,12 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn council_signature() -> CouncilSignature {
         CouncilSignature {
             signer: [0xAA; 32],
             signature: vec![0x55; 64],
         }
     }
-
     fn sample_endpoint() -> (EndpointAdmissionV1, AdvertEndpoint) {
         let endpoint = AdvertEndpoint {
             kind: EndpointKind::Torii,
@@ -1559,14 +1472,12 @@ mod tests {
             endpoint,
         )
     }
-
     fn sample_capability() -> CapabilityTlv {
         CapabilityTlv {
             cap_type: CapabilityType::ToriiGateway,
             payload: vec![],
         }
     }
-
     fn sample_range_capability() -> CapabilityTlv {
         CapabilityTlv {
             cap_type: CapabilityType::ChunkRangeFetch,
@@ -1581,7 +1492,6 @@ mod tests {
             .expect("encode range capability"),
         }
     }
-
     fn sample_vrf_key() -> ProviderVrfPublicKeyV1 {
         let (public, private) =
             iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![0x34; 32]))
@@ -1595,7 +1505,6 @@ mod tests {
                 .expect("Normal BLS public key is 48 bytes"),
         )
     }
-
     fn sample_proposal() -> ProviderAdmissionProposalV1 {
         let descriptor =
             chunker_registry::lookup_by_handle("sorafs.sf1@1.0.0").expect("registered profile");
@@ -1632,7 +1541,6 @@ mod tests {
             }]),
         }
     }
-
     fn advert_body_from_proposal(proposal: &ProviderAdmissionProposalV1) -> ProviderAdvertBodyV1 {
         let (_, endpoint) = sample_endpoint();
         ProviderAdvertBodyV1 {
@@ -1661,12 +1569,10 @@ mod tests {
             transport_hints: proposal.transport_hints.clone(),
         }
     }
-
     fn sample_advert_body() -> ProviderAdvertBodyV1 {
         let proposal = sample_proposal();
         advert_body_from_proposal(&proposal)
     }
-
     fn council_signature_from_key(key: &SigningKey, digest: &[u8; 32]) -> CouncilSignature {
         let signature = key.sign(digest);
         CouncilSignature {
@@ -1674,7 +1580,6 @@ mod tests {
             signature: signature.to_bytes().to_vec(),
         }
     }
-
     fn council_policy(keys: &[&SigningKey], threshold: usize) -> ProviderAdmissionCouncilPolicy {
         ProviderAdmissionCouncilPolicy::new(
             keys.iter().map(|key| *key.verifying_key().as_bytes()),
@@ -1682,7 +1587,6 @@ mod tests {
         )
         .expect("valid council policy")
     }
-
     fn sign_envelope(envelope: &mut ProviderAdmissionEnvelopeV1, keys: &[&SigningKey]) {
         envelope.council_signatures.clear();
         let digest =
@@ -1695,7 +1599,6 @@ mod tests {
             .council_signatures
             .sort_unstable_by_key(|signature| signature.signer);
     }
-
     fn signed_sample_envelope(keys: &[&SigningKey]) -> ProviderAdmissionEnvelopeV1 {
         let proposal = sample_proposal();
         let advert_body = advert_body_from_proposal(&proposal);
@@ -1716,7 +1619,6 @@ mod tests {
         sign_envelope(&mut envelope, keys);
         envelope
     }
-
     fn sign_advert(key: &SigningKey, advert: &mut ProviderAdvertV1) {
         advert.signature = AdvertSignature {
             algorithm: SignatureAlgorithm::Ed25519,
@@ -1728,7 +1630,6 @@ mod tests {
             .expect("encode advert signature envelope");
         advert.signature.signature = key.sign(&payload).to_bytes().to_vec();
     }
-
     #[test]
     fn admission_record_provenance_survives_clone_and_cannot_be_upgraded_by_renewal() {
         let council_key = SigningKey::from_bytes(&[0xA9; 32]);
@@ -1737,12 +1638,10 @@ mod tests {
         let trusted = AdmissionRecord::new(base_envelope.clone(), &policy).expect("trusted record");
         let untrusted = AdmissionRecord::new_untrusted_signers(base_envelope.clone())
             .expect("integrity-only record");
-
         assert!(trusted.is_council_verified());
         assert!(trusted.clone().is_council_verified());
         assert!(!untrusted.is_council_verified());
         assert!(!untrusted.clone().is_council_verified());
-
         let mut renewed_envelope = base_envelope;
         renewed_envelope.issued_at += 1;
         renewed_envelope.retention_epoch += 1;
@@ -1756,13 +1655,11 @@ mod tests {
             envelope: renewed_envelope,
             notes: None,
         };
-
         let renewed_trusted = trusted
             .apply_renewal(&renewal, &policy)
             .expect("governed renewal");
         assert!(renewed_trusted.is_council_verified());
         assert_eq!(renewed_trusted.envelope(), &renewal.envelope);
-
         let original_untrusted_digest = *untrusted.envelope_digest();
         assert!(matches!(
             untrusted.apply_renewal(&renewal, &policy),
@@ -1775,7 +1672,6 @@ mod tests {
         assert!(!renewed_untrusted.is_council_verified());
         assert_eq!(renewed_untrusted.envelope(), &renewal.envelope);
     }
-
     #[test]
     fn compare_core_fields_detects_stream_budget_mismatch() {
         let proposal = sample_proposal();
@@ -1788,7 +1684,6 @@ mod tests {
                 if field == "stream_budget"
         ));
     }
-
     #[test]
     fn compare_core_fields_detects_transport_hint_mismatch() {
         let proposal = sample_proposal();
@@ -1801,7 +1696,6 @@ mod tests {
                 if field == "transport_hints"
         ));
     }
-
     #[test]
     fn proposal_rejects_duplicate_transport_protocols() {
         let mut proposal = sample_proposal();
@@ -1821,7 +1715,6 @@ mod tests {
             ProviderAdmissionValidationError::DuplicateTransportProtocol
         ));
     }
-
     #[test]
     fn proposal_rejects_invalid_transport_hint_priority() {
         let mut proposal = sample_proposal();
@@ -1837,7 +1730,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn proposal_requires_range_capability_for_stream_budget() {
         let mut proposal = sample_proposal();
@@ -1850,7 +1742,6 @@ mod tests {
             ProviderAdmissionValidationError::RangeMetadataWithoutCapability
         ));
     }
-
     #[test]
     fn proposal_requires_range_capability_for_transport_hints() {
         let mut proposal = sample_proposal();
@@ -1864,7 +1755,6 @@ mod tests {
             ProviderAdmissionValidationError::RangeMetadataWithoutCapability
         ));
     }
-
     #[test]
     fn proposal_rejects_empty_transport_hints() {
         let mut proposal = sample_proposal();
@@ -1875,13 +1765,11 @@ mod tests {
             ProviderAdmissionValidationError::EmptyTransportHints
         ));
     }
-
     #[test]
     fn proposal_validation_succeeds() {
         let proposal = sample_proposal();
         proposal.validate().expect("proposal must be valid");
     }
-
     #[test]
     fn proposal_validation_rejects_unknown_chunker() {
         let mut proposal = sample_proposal();
@@ -1892,7 +1780,6 @@ mod tests {
             ProviderAdmissionValidationError::UnknownChunkerHandle { .. }
         ));
     }
-
     #[test]
     fn proposal_rejects_inert_or_noncanonical_advert_key() {
         let mut proposal = sample_proposal();
@@ -1901,14 +1788,12 @@ mod tests {
             proposal.validate(),
             Err(ProviderAdmissionValidationError::InvalidAdvertKey)
         ));
-
         proposal.advert_key = NONCANONICAL_R;
         assert!(matches!(
             proposal.validate(),
             Err(ProviderAdmissionValidationError::InvalidAdvertKeyMaterial { .. })
         ));
     }
-
     #[test]
     fn endpoint_attestation_checks_validity_window() {
         let mut proposal = sample_proposal();
@@ -1925,7 +1810,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn envelope_validation_succeeds() {
         let proposal = sample_proposal();
@@ -1945,7 +1829,6 @@ mod tests {
         };
         envelope.validate().expect("envelope must validate");
     }
-
     #[test]
     fn envelope_validation_detects_digest_mismatch() {
         let proposal = sample_proposal();
@@ -1969,7 +1852,6 @@ mod tests {
             ProviderAdmissionValidationError::AdvertDigestMismatch
         ));
     }
-
     #[test]
     fn verify_envelope_accepts_valid_signature() {
         let mut proposal = sample_proposal();
@@ -1992,11 +1874,9 @@ mod tests {
         };
         sign_envelope(&mut envelope, &[&council_key]);
         let policy = council_policy(&[&council_key], 1);
-
         let digest = verify_envelope(&envelope, &policy).expect("envelope verifies");
         assert_eq!(digest, envelope.advert_body_digest);
     }
-
     #[test]
     fn verify_envelope_rejects_invalid_signature() {
         let mut proposal = sample_proposal();
@@ -2020,7 +1900,6 @@ mod tests {
         sign_envelope(&mut envelope, &[&council_key]);
         envelope.council_signatures[0].signature[0] ^= 0x01;
         let policy = council_policy(&[&council_key], 1);
-
         let err = verify_envelope(&envelope, &policy).unwrap_err();
         assert!(matches!(
             err,
@@ -2029,7 +1908,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn verify_envelope_rejects_all_zero_signature_material() {
         let mut proposal = sample_proposal();
@@ -2053,7 +1931,6 @@ mod tests {
         sign_envelope(&mut envelope, &[&council_key]);
         envelope.council_signatures[0].signature.fill(0);
         let policy = council_policy(&[&council_key], 1);
-
         let err = verify_envelope(&envelope, &policy).unwrap_err();
         assert!(matches!(
             err,
@@ -2062,7 +1939,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn verify_envelope_rejects_malformed_signature_r() {
         for (label, replacement_r, expected_reason) in [
@@ -2090,7 +1966,6 @@ mod tests {
             sign_envelope(&mut envelope, &[&council_key]);
             envelope.council_signatures[0].signature[..32].copy_from_slice(&replacement_r);
             let policy = council_policy(&[&council_key], 1);
-
             let err = verify_envelope(&envelope, &policy).unwrap_err();
             assert!(
                 matches!(
@@ -2103,12 +1978,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn council_policy_rejects_invalid_or_unsatisfiable_configuration() {
         let key = SigningKey::from_bytes(&[0x91; 32]);
         let signer = *key.verifying_key().as_bytes();
-
         assert!(matches!(
             ProviderAdmissionCouncilPolicy::new([], 1),
             Err(ProviderAdmissionCouncilPolicyError::EmptyTrustedSigners)
@@ -2134,14 +2007,12 @@ mod tests {
             Err(ProviderAdmissionCouncilPolicyError::InvalidPublicKey { .. })
         ));
     }
-
     #[test]
     fn trusted_policy_rejects_self_signed_rogue_envelope() {
         let trusted = SigningKey::from_bytes(&[0x92; 32]);
         let rogue = SigningKey::from_bytes(&[0x93; 32]);
         let envelope = signed_sample_envelope(&[&rogue]);
         let policy = council_policy(&[&trusted], 1);
-
         let error = verify_envelope(&envelope, &policy).unwrap_err();
         assert!(matches!(
             error,
@@ -2150,7 +2021,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn trusted_policy_rejects_mixed_trusted_and_untrusted_signers() {
         let trusted_a = SigningKey::from_bytes(&[0x94; 32]);
@@ -2158,7 +2028,6 @@ mod tests {
         let rogue = SigningKey::from_bytes(&[0x96; 32]);
         let envelope = signed_sample_envelope(&[&trusted_a, &rogue]);
         let policy = council_policy(&[&trusted_a, &trusted_b], 1);
-
         let error = verify_envelope(&envelope, &policy).unwrap_err();
         assert!(matches!(
             error,
@@ -2167,7 +2036,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn trusted_policy_rejects_duplicate_threshold_padding() {
         let trusted_a = SigningKey::from_bytes(&[0x97; 32]);
@@ -2177,7 +2045,6 @@ mod tests {
             .council_signatures
             .push(envelope.council_signatures[0].clone());
         let policy = council_policy(&[&trusted_a, &trusted_b], 2);
-
         let error = verify_envelope(&envelope, &policy).unwrap_err();
         assert!(matches!(
             error,
@@ -2186,14 +2053,12 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn trusted_policy_rejects_below_threshold_and_noncanonical_order() {
         let trusted_a = SigningKey::from_bytes(&[0x99; 32]);
         let trusted_b = SigningKey::from_bytes(&[0x9a; 32]);
         let policy = council_policy(&[&trusted_a, &trusted_b], 2);
         let below_threshold = signed_sample_envelope(&[&trusted_a]);
-
         let error = verify_envelope(&below_threshold, &policy).unwrap_err();
         assert!(matches!(
             error,
@@ -2204,7 +2069,6 @@ mod tests {
                 }
             )
         ));
-
         let mut reversed = signed_sample_envelope(&[&trusted_a, &trusted_b]);
         reversed.council_signatures.reverse();
         let error = verify_envelope(&reversed, &policy).unwrap_err();
@@ -2215,13 +2079,11 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn council_signature_binds_validity_and_complete_advert_body() {
         let trusted = SigningKey::from_bytes(&[0x9b; 32]);
         let policy = council_policy(&[&trusted], 1);
         let envelope = signed_sample_envelope(&[&trusted]);
-
         let mut extended_retention = envelope.clone();
         extended_retention.retention_epoch += 1;
         let error = verify_envelope(&extended_retention, &policy).unwrap_err();
@@ -2231,7 +2093,6 @@ mod tests {
                 ProviderAdmissionSignatureError::Verification { .. }
             )
         ));
-
         let mut rerouted = envelope;
         rerouted.advert_body.path_policy.min_guard_weight += 1;
         rerouted.advert_body_digest =
@@ -2244,7 +2105,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn council_key_rotation_fails_closed_for_retired_key() {
         let retired = SigningKey::from_bytes(&[0x9c; 32]);
@@ -2252,7 +2112,6 @@ mod tests {
         let old_envelope = signed_sample_envelope(&[&retired]);
         let old_policy = council_policy(&[&retired], 1);
         verify_envelope(&old_envelope, &old_policy).expect("old policy accepts old envelope");
-
         let rotated_policy = council_policy(&[&replacement], 1);
         let error = verify_envelope(&old_envelope, &rotated_policy).unwrap_err();
         assert!(matches!(
@@ -2261,12 +2120,10 @@ mod tests {
                 ProviderAdmissionSignatureError::UntrustedSigner { .. }
             )
         ));
-
         let replacement_envelope = signed_sample_envelope(&[&replacement]);
         verify_envelope(&replacement_envelope, &rotated_policy)
             .expect("rotated policy accepts replacement key");
     }
-
     #[test]
     fn envelope_rejects_all_zero_and_noncanonical_embedded_signer_keys() {
         let trusted = SigningKey::from_bytes(&[0x9e; 32]);
@@ -2274,7 +2131,6 @@ mod tests {
         for malformed in [[0; 32], NONCANONICAL_R] {
             let mut envelope = signed_sample_envelope(&[&trusted]);
             envelope.council_signatures[0].signer = malformed;
-
             let error = verify_envelope(&envelope, &policy).unwrap_err();
             assert!(matches!(
                 error,
@@ -2284,7 +2140,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn verify_advert_against_record_succeeds() {
         let mut proposal = sample_proposal();
@@ -2322,13 +2177,11 @@ mod tests {
         sign_envelope(&mut envelope, &[&council_key]);
         let policy = council_policy(&[&council_key], 1);
         let record = AdmissionRecord::new(envelope, &policy).expect("record");
-
         advert
             .verify_signature()
             .expect("provider advert signature verifies");
         verify_advert_against_record(&advert, &record).expect("verification succeeds");
     }
-
     #[test]
     fn verify_advert_against_record_detects_key_mismatch() {
         let mut proposal = sample_proposal();
@@ -2366,7 +2219,6 @@ mod tests {
         sign_envelope(&mut envelope, &[&council_key]);
         let policy = council_policy(&[&council_key], 1);
         let record = AdmissionRecord::new(envelope, &policy).expect("record");
-
         advert.signature.public_key[0] ^= 0xFF;
         let err = verify_advert_against_record(&advert, &record).unwrap_err();
         assert!(matches!(
@@ -2374,11 +2226,9 @@ mod tests {
             ProviderAdmissionAdvertError::AdvertKeyMismatch
         ));
     }
-
     #[test]
     fn renewal_applies_updated_stake_and_endpoints() {
         let council_key = SigningKey::from_bytes(&[0x45; 32]);
-
         let base_proposal = sample_proposal();
         let base_advert = advert_body_from_proposal(&base_proposal);
         let base_proposal_digest = compute_proposal_digest(&base_proposal).expect("digest");
@@ -2397,7 +2247,6 @@ mod tests {
         sign_envelope(&mut base_envelope, &[&council_key]);
         let policy = council_policy(&[&council_key], 1);
         let record = AdmissionRecord::new(base_envelope.clone(), &policy).expect("record");
-
         let mut renewal_proposal = base_envelope.proposal.clone();
         renewal_proposal.stake.stake_amount = renewal_proposal
             .stake
@@ -2441,7 +2290,6 @@ mod tests {
             envelope: renewal_envelope,
             notes: Some("stake top-up".to_owned()),
         };
-
         let updated_record = record
             .apply_renewal(&renewal, &policy)
             .expect("renewal applied");
@@ -2462,7 +2310,6 @@ mod tests {
         );
         assert_eq!(*updated_record.envelope_digest(), renewal.envelope_digest);
     }
-
     #[test]
     fn renewal_rejects_capability_change() {
         let council_key = SigningKey::from_bytes(&[0x55; 32]);
@@ -2490,7 +2337,6 @@ mod tests {
         sign_envelope(&mut base_envelope, &[&council_key]);
         let policy = council_policy(&[&council_key], 1);
         let record = AdmissionRecord::new(base_envelope.clone(), &policy).expect("record");
-
         let mut renewal_envelope = base_envelope.clone();
         let torii_capability = renewal_envelope
             .advert_body
@@ -2530,14 +2376,12 @@ mod tests {
             envelope: renewal_envelope,
             notes: None,
         };
-
         let err = record.apply_renewal(&renewal, &policy).unwrap_err();
         assert!(matches!(
             err,
             ProviderAdmissionRenewalError::CapabilitiesChanged
         ));
     }
-
     #[test]
     fn renewal_and_revocation_require_current_trusted_quorum() {
         let trusted_a = SigningKey::from_bytes(&[0xa1; 32]);
@@ -2546,7 +2390,6 @@ mod tests {
         let policy = council_policy(&[&trusted_a, &trusted_b], 2);
         let base_envelope = signed_sample_envelope(&[&trusted_a, &trusted_b]);
         let record = AdmissionRecord::new(base_envelope.clone(), &policy).expect("base record");
-
         let mut renewed_envelope = base_envelope;
         renewed_envelope.issued_at += 1;
         renewed_envelope.retention_epoch += 1;
@@ -2567,7 +2410,6 @@ mod tests {
                 ProviderAdmissionSignatureError::UntrustedSigner { .. }
             ))
         ));
-
         let mut revocation = ProviderAdmissionRevocationV1 {
             version: PROVIDER_ADMISSION_REVOCATION_VERSION_V1,
             provider_id: *record.provider_id(),
@@ -2589,7 +2431,6 @@ mod tests {
                 }
             )
         ));
-
         revocation
             .council_signatures
             .push(revocation.council_signatures[0].clone());
@@ -2601,7 +2442,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn revocation_signatures_and_registry_checks() {
         let council_key = SigningKey::from_bytes(&[0x65; 32]);
@@ -2623,7 +2463,6 @@ mod tests {
         sign_envelope(&mut envelope, &[&council_key]);
         let policy = council_policy(&[&council_key], 1);
         let record = AdmissionRecord::new(envelope, &policy).expect("record");
-
         let mut revocation = ProviderAdmissionRevocationV1 {
             version: PROVIDER_ADMISSION_REVOCATION_VERSION_V1,
             provider_id: *record.provider_id(),
@@ -2636,12 +2475,10 @@ mod tests {
         let revocation_digest = revocation.digest().expect("digest");
         revocation.council_signatures =
             vec![council_signature_from_key(&council_key, &revocation_digest)];
-
         verify_revocation_signatures(&revocation, &policy).expect("signatures");
         record
             .verify_revocation(&revocation, &policy)
             .expect("registry checks");
-
         let mut mismatched = revocation.clone();
         mismatched.envelope_digest[0] ^= 0xFF;
         let err = record.verify_revocation(&mismatched, &policy).unwrap_err();

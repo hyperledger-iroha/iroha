@@ -1,7 +1,5 @@
 //! Grouped Iroha Core integration tests.
-
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 #[path = "../fx_routing_review.rs"]
 mod fx_routing_review;
 #[path = "../offline_role_authorization.rs"]

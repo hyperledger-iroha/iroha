@@ -1,7 +1,5 @@
 //! Exact runtime-registry qualification for the stream-token signer.
-
 use super::*;
-
 /// Revalidate the deployment-owned Ed25519 signer twice at daemon startup.
 pub(super) fn qualify_dependency(
     bindings: &IrohaRuntimeProviderBindingsV1,
@@ -65,7 +63,6 @@ pub(super) fn qualify_dependency(
     }
     Ok(())
 }
-
 const fn map_probe_error(
     error: iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1,
 ) -> IrohaRuntimeProviderRegistryErrorV1 {
@@ -78,25 +75,20 @@ const fn map_probe_error(
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     };
-
     use iroha_torii::sorafs::{
         StreamTokenRuntimeSigner, StreamTokenRuntimeSignerProbeErrorV1,
         StreamTokenRuntimeSignerQualificationV1, StreamTokenSigningError,
     };
-
     use super::*;
-
     const HANDLE: &str = "software://sorafs/stream-token/eu-1";
     const REVISION: u64 = 7;
     const POLICY_DIGEST: [u8; 32] = [0x42; 32];
-
     fn public_key() -> [u8; 32] {
         let key_pair =
             iroha_crypto::KeyPair::try_from_seed(vec![0x58; 32], iroha_crypto::Algorithm::Ed25519)
@@ -108,11 +100,9 @@ mod tests {
             .try_into()
             .expect("32-byte Ed25519 public key")
     }
-
     fn qualification(revision: u64) -> StreamTokenRuntimeSignerQualificationV1 {
         StreamTokenRuntimeSignerQualificationV1::new(revision, POLICY_DIGEST)
     }
-
     fn bindings() -> IrohaRuntimeProviderBindingsV1 {
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "iroha3-taira".to_owned(),
@@ -128,7 +118,6 @@ mod tests {
             ],
         }
     }
-
     struct ProviderProbe {
         handle: &'static str,
         public_key: [u8; 32],
@@ -142,16 +131,13 @@ mod tests {
         >,
         calls: AtomicUsize,
     }
-
     impl StreamTokenRuntimeSigner for ProviderProbe {
         fn handle(&self) -> &str {
             self.handle
         }
-
         fn public_key(&self) -> [u8; 32] {
             self.public_key
         }
-
         fn qualification(
             &self,
         ) -> Result<StreamTokenRuntimeSignerQualificationV1, StreamTokenRuntimeSignerProbeErrorV1>
@@ -164,12 +150,10 @@ mod tests {
                 .copied()
                 .unwrap_or(Ok(qualification(REVISION)))
         }
-
         fn sign(&self, _signing_payload: &[u8]) -> Result<[u8; 64], StreamTokenSigningError> {
             Err(StreamTokenSigningError::Refused)
         }
     }
-
     fn dependencies(
         handle: &'static str,
         public_key: [u8; 32],
@@ -184,7 +168,6 @@ mod tests {
             calls: AtomicUsize::new(0),
         }))
     }
-
     #[test]
     fn exact_provider_is_observed_twice() {
         qualify_dependency(
@@ -193,7 +176,6 @@ mod tests {
         )
         .expect("exact signer");
     }
-
     #[test]
     fn substituted_identity_is_rejected() {
         assert_eq!(
@@ -208,7 +190,6 @@ mod tests {
             Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
         );
     }
-
     #[test]
     fn drift_unavailability_and_test_markers_fail_closed() {
         assert_eq!(

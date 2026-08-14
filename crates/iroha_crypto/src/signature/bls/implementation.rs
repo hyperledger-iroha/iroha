@@ -1,4 +1,13 @@
+use super::{normal::NormalConfiguration, small::SmallConfiguration};
+use blake2::{Blake2b, digest::consts::U32};
 use core::marker::PhantomData;
+use hkdf::HkdfExtract;
+#[cfg(feature = "rand")]
+use rand::rngs::OsRng;
+#[cfg(feature = "rand")]
+use rand_core::TryCryptoRng;
+use sha2::Digest as _;
+use sha2::Sha256;
 use std::{
     borrow::ToOwned as _,
     cell::RefCell,
@@ -8,43 +17,27 @@ use std::{
     vec,
     vec::Vec,
 };
-
-use blake2::{Blake2b, digest::consts::U32};
-use hkdf::HkdfExtract;
-#[cfg(feature = "rand")]
-use rand::rngs::OsRng;
-#[cfg(feature = "rand")]
-use rand_core::TryCryptoRng;
-use sha2::Digest as _;
-use sha2::Sha256;
 use w3f_bls::{
     EngineBLS, PublicKey, SecretKey as W3fSecretKey, SecretKeyVT, SerializableToBytes as _,
     Signature as BlsSignature,
 };
 use zeroize::{Zeroize as _, Zeroizing};
-
-use super::{normal::NormalConfiguration, small::SmallConfiguration};
-
 pub(super) const MESSAGE_CONTEXT: &[u8; 20] = b"for signing messages";
-
 const PREPARED_PK_CACHE_LIMIT: usize = 128;
 const VERIFY_OK_CACHE_LIMIT: usize = 4096;
 const VERIFY_OK_CACHE_INPUT_BYTES_LIMIT: usize = 2 * 1024 * 1024;
 #[cfg(feature = "rand")]
 const BLS_RNG_SEED_LEN: usize = 32;
-
 #[doc(hidden)]
 pub struct PreparedPublicKeyCache<E: EngineBLS> {
     entries: Vec<(Vec<u8>, E::PublicKeyPrepared)>,
 }
-
 impl<E: EngineBLS> PreparedPublicKeyCache<E> {
     fn new() -> Self {
         Self {
             entries: Vec::new(),
         }
     }
-
     fn get_or_insert(&mut self, pk: &PublicKey<E>, pk_bytes: &[u8]) -> E::PublicKeyPrepared {
         if let Some(pos) = self
             .entries
@@ -67,21 +60,18 @@ impl<E: EngineBLS> PreparedPublicKeyCache<E> {
         prepared
     }
 }
-
 #[derive(Debug, PartialEq, Eq)]
 struct VerifyOkCacheEntry {
     public_key: Vec<u8>,
     message: Vec<u8>,
     signature: Vec<u8>,
 }
-
 impl VerifyOkCacheEntry {
     fn matches(&self, public_key: &[u8], message: &[u8], signature: &[u8]) -> bool {
         self.public_key.as_slice() == public_key
             && self.message.as_slice() == message
             && self.signature.as_slice() == signature
     }
-
     fn input_bytes(&self) -> usize {
         self.public_key
             .len()
@@ -89,7 +79,6 @@ impl VerifyOkCacheEntry {
             .saturating_add(self.signature.len())
     }
 }
-
 /// Bounded cache of successfully verified BLS triples.
 ///
 /// The digest is only an index. Every hit is confirmed against the exact
@@ -102,7 +91,6 @@ pub struct VerifyOkCache {
     insertion_order: VecDeque<([u8; 32], Arc<VerifyOkCacheEntry>)>,
     retained_input_bytes: usize,
 }
-
 impl VerifyOkCache {
     fn new() -> Self {
         Self {
@@ -111,7 +99,6 @@ impl VerifyOkCache {
             retained_input_bytes: 0,
         }
     }
-
     fn contains_at_digest(
         &self,
         digest: [u8; 32],
@@ -125,7 +112,6 @@ impl VerifyOkCache {
                 .any(|entry| entry.matches(public_key, message, signature))
         })
     }
-
     fn remember_at_digest(
         &mut self,
         digest: [u8; 32],
@@ -136,7 +122,6 @@ impl VerifyOkCache {
         if self.contains_at_digest(digest, public_key, message, signature) {
             return;
         }
-
         let input_bytes = public_key
             .len()
             .saturating_add(message.len())
@@ -158,7 +143,6 @@ impl VerifyOkCache {
                 return;
             }
         }
-
         self.retained_input_bytes = self.retained_input_bytes.saturating_add(input_bytes);
         self.entries
             .entry(digest)
@@ -166,7 +150,6 @@ impl VerifyOkCache {
             .push(Arc::clone(&entry));
         self.insertion_order.push_back((digest, entry));
     }
-
     fn evict_oldest(&mut self) -> bool {
         let Some((digest, entry)) = self.insertion_order.pop_front() else {
             return false;
@@ -189,7 +172,6 @@ impl VerifyOkCache {
         true
     }
 }
-
 fn verify_ok_cache_digest(pk_bytes: &[u8], message: &[u8], signature: &[u8]) -> [u8; 32] {
     // Framing makes the index unambiguous; exact collision-bucket matching is
     // still the authority for a positive cache verdict.
@@ -215,14 +197,11 @@ fn verify_ok_cache_digest(pk_bytes: &[u8], message: &[u8], signature: &[u8]) -> 
     h.update(signature);
     h.finalize().into()
 }
-
 #[doc(hidden)]
 pub trait PreparedPublicKeyCacheAccess: BlsConfiguration {
     fn with_cache<R>(f: impl FnOnce(&mut PreparedPublicKeyCache<Self::Engine>) -> R) -> R;
-
     fn with_verify_ok_cache<R>(f: impl FnOnce(&mut VerifyOkCache) -> R) -> R;
 }
-
 thread_local! {
     static PREPARED_PK_CACHE_NORMAL: RefCell<
         PreparedPublicKeyCache<<NormalConfiguration as BlsConfiguration>::Engine>
@@ -233,33 +212,27 @@ thread_local! {
     static VERIFY_OK_CACHE_NORMAL: RefCell<VerifyOkCache> = RefCell::new(VerifyOkCache::new());
     static VERIFY_OK_CACHE_SMALL: RefCell<VerifyOkCache> = RefCell::new(VerifyOkCache::new());
 }
-
 impl PreparedPublicKeyCacheAccess for NormalConfiguration {
     fn with_cache<R>(f: impl FnOnce(&mut PreparedPublicKeyCache<Self::Engine>) -> R) -> R {
         PREPARED_PK_CACHE_NORMAL.with(|cache| f(&mut cache.borrow_mut()))
     }
-
     fn with_verify_ok_cache<R>(f: impl FnOnce(&mut VerifyOkCache) -> R) -> R {
         VERIFY_OK_CACHE_NORMAL.with(|cache| f(&mut cache.borrow_mut()))
     }
 }
-
 impl PreparedPublicKeyCacheAccess for SmallConfiguration {
     fn with_cache<R>(f: impl FnOnce(&mut PreparedPublicKeyCache<Self::Engine>) -> R) -> R {
         PREPARED_PK_CACHE_SMALL.with(|cache| f(&mut cache.borrow_mut()))
     }
-
     fn with_verify_ok_cache<R>(f: impl FnOnce(&mut VerifyOkCache) -> R) -> R {
         VERIFY_OK_CACHE_SMALL.with(|cache| f(&mut cache.borrow_mut()))
     }
 }
-
 /// Thread-safe wrapper around the w3f `SecretKey` that allows interior mutability.
 pub struct ManagedSecretKey<C: BlsConfiguration + ?Sized> {
     bytes: Zeroizing<Vec<u8>>,
     _marker: PhantomData<C>,
 }
-
 impl<C: BlsConfiguration + ?Sized> Clone for ManagedSecretKey<C> {
     fn clone(&self) -> Self {
         Self {
@@ -268,7 +241,6 @@ impl<C: BlsConfiguration + ?Sized> Clone for ManagedSecretKey<C> {
         }
     }
 }
-
 impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
     fn new(secret: &W3fSecretKey<C::Engine>) -> Self {
         Self {
@@ -276,34 +248,27 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
             _marker: PhantomData,
         }
     }
-
     fn try_load_secret(&self) -> Result<W3fSecretKey<C::Engine>, ParseError> {
         W3fSecretKey::<C::Engine>::from_bytes(self.bytes.as_slice())
             .map_err(|err| ParseError(err.to_string()))
     }
-
     pub fn to_bytes(&self) -> Vec<u8> {
         self.bytes.as_slice().to_vec()
     }
-
     pub(crate) fn to_zeroizing_bytes(&self) -> Zeroizing<Vec<u8>> {
         Zeroizing::new(self.bytes.as_slice().to_vec())
     }
-
     pub fn to_fixed_bytes(&self) -> [u8; 32] {
         let mut arr = [0u8; 32];
         arr.copy_from_slice(self.bytes.as_slice());
         arr
     }
-
     pub fn public_key(&self) -> Result<PublicKey<C::Engine>, ParseError> {
         self.try_public_key()
     }
-
     pub fn try_public_key(&self) -> Result<PublicKey<C::Engine>, ParseError> {
         Ok(self.try_load_secret()?.into_public())
     }
-
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
         if !bytes.is_empty() && bytes.iter().all(|&byte| byte == 0) {
             return Err(ParseError(
@@ -314,11 +279,9 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
             .map_err(|err| ParseError(err.to_string()))?;
         Ok(Self::new(&secret))
     }
-
     fn sign_bytes(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
         self.try_sign_bytes(message)
     }
-
     fn try_sign_bytes(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
         #[cfg(feature = "rand")]
         {
@@ -333,7 +296,6 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
             Ok(guard.sign_once(&msg).to_bytes())
         }
     }
-
     #[cfg(feature = "rand")]
     fn try_sign_bytes_with_rng<R>(&self, message: &[u8], rng: &mut R) -> Result<Vec<u8>, Error>
     where
@@ -348,7 +310,6 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
         let rng = crate::rng::rng_from_seed_slice(seed.as_slice());
         Ok(guard.sign(&msg, rng).to_bytes())
     }
-
     #[cfg(test)]
     pub(crate) fn from_unchecked_bytes_for_test(bytes: Vec<u8>) -> Self {
         Self {
@@ -357,7 +318,6 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
         }
     }
 }
-
 impl<C: BlsConfiguration + ?Sized> zeroize::Zeroize for ManagedSecretKey<C> {
     fn zeroize(&mut self) {
         let zero_seed = Zeroizing::new(vec![0u8; C::Engine::SECRET_KEY_SIZE]);
@@ -365,9 +325,7 @@ impl<C: BlsConfiguration + ?Sized> zeroize::Zeroize for ManagedSecretKey<C> {
         self.bytes = Zeroizing::new(new_secret.into_vartime().to_bytes());
     }
 }
-
 use crate::{Algorithm, Error, KeyGenOption, ParseError};
-
 #[cfg(feature = "rand")]
 fn checked_entropy_from_rng<R>(
     context: &str,
@@ -383,37 +341,30 @@ where
     ensure_bls_seed_material_not_all_zero(context, seed.as_slice())?;
     Ok(seed)
 }
-
 fn bls_seed_material_is_all_zero(seed: &[u8]) -> bool {
     !seed.is_empty() && seed.iter().all(|&byte| byte == 0)
 }
-
 fn bls_seed_material_all_zero_error(context: &str) -> Error {
     Error::KeyGen(format!("BLS {context} seed material must not be all zero"))
 }
-
 fn ensure_bls_seed_material_not_all_zero(context: &str, seed: &[u8]) -> Result<(), Error> {
     if bls_seed_material_is_all_zero(seed) {
         return Err(bls_seed_material_all_zero_error(context));
     }
     Ok(())
 }
-
 fn bls_signature_material_is_all_zero(signature: &[u8]) -> bool {
     !signature.is_empty() && signature.iter().all(|&byte| byte == 0)
 }
-
 fn bls_public_key_material_is_all_zero(public_key: &[u8]) -> bool {
     !public_key.is_empty() && public_key.iter().all(|&byte| byte == 0)
 }
-
 fn ensure_bls_signature_material_not_all_zero(signature: &[u8]) -> Result<(), Error> {
     if bls_signature_material_is_all_zero(signature) {
         return Err(ParseError("BLS signature material must not be all zero".to_string()).into());
     }
     Ok(())
 }
-
 fn parse_canonical_bls_signature<E: EngineBLS>(
     signature_bytes: &[u8],
 ) -> Result<BlsSignature<E>, Error> {
@@ -432,7 +383,6 @@ fn parse_canonical_bls_signature<E: EngineBLS>(
     }
     Ok(signature)
 }
-
 fn ensure_distinct_messages(messages: &[&[u8]]) -> Result<(), Error> {
     let mut seen = BTreeSet::new();
     for &msg in messages {
@@ -442,20 +392,16 @@ fn ensure_distinct_messages(messages: &[&[u8]]) -> Result<(), Error> {
     }
     Ok(())
 }
-
 pub trait BlsConfiguration {
     const ALGORITHM: Algorithm;
     type Engine: w3f_bls::EngineBLS;
 }
-
 pub struct BlsImpl<C: BlsConfiguration + ?Sized>(PhantomData<C>);
-
 impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     /// Return the exact canonical signature length for this BLS orientation.
     pub const fn signature_len() -> usize {
         C::Engine::SIGNATURE_SERIALIZED_SIZE
     }
-
     // the names are from an RFC, not a good idea to change them
     #[allow(clippy::similar_names)]
     pub fn keypair(
@@ -463,7 +409,6 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     ) -> Result<(PublicKey<C::Engine>, ManagedSecretKey<C>), Error> {
         Self::try_keypair(option)
     }
-
     #[allow(clippy::similar_names)]
     pub fn try_keypair(
         mut option: KeyGenOption<ManagedSecretKey<C>>,
@@ -490,7 +435,6 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
                 let h = extract.finalize().1;
                 h.expand(&info[..], okm.as_mut_slice())
                     .map_err(|_| Error::KeyGen("BLS HKDF seed expansion failed".into()))?;
-
                 let deterministic_rng = crate::rng::rng_from_seed_slice(okm.as_slice());
                 let secret = SecretKeyVT::<C::Engine>::from_seed(okm.as_slice())
                     .into_split(deterministic_rng);
@@ -503,7 +447,6 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             .map_err(|err| Error::KeyGen(err.to_string()))?;
         Ok((public_key, private_key))
     }
-
     #[cfg(feature = "rand")]
     pub(super) fn random_keypair_from_rng<R>(
         rng: &mut R,
@@ -521,19 +464,15 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             .map_err(|err| Error::KeyGen(err.to_string()))?;
         Ok((public_key, private_key))
     }
-
     pub fn sign(message: &[u8], sk: &ManagedSecretKey<C>) -> Result<Vec<u8>, Error> {
         sk.sign_bytes(message)
     }
-
     pub fn try_sign(message: &[u8], sk: &ManagedSecretKey<C>) -> Result<Vec<u8>, Error> {
         Self::sign(message, sk)
     }
-
     pub fn derive_public_key(sk: &ManagedSecretKey<C>) -> Result<PublicKey<C::Engine>, ParseError> {
         sk.try_public_key()
     }
-
     pub fn verify(
         message: &[u8],
         signature_bytes: &[u8],
@@ -558,27 +497,23 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         }) {
             return Ok(());
         }
-
         let domain_message = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
         let prepared_pk = C::with_cache(|cache| cache.get_or_insert(pk, &pk_bytes));
         let prepared_message = <C::Engine as EngineBLS>::prepare_signature(
             domain_message.hash_to_signature_curve::<C::Engine>(),
         );
         let prepared_signature = <C::Engine as EngineBLS>::prepare_signature(signature.0);
-
         if !<C::Engine as EngineBLS>::verify_prepared(
             prepared_signature,
             &[(prepared_pk, prepared_message)],
         ) {
             return Err(Error::BadSignature);
         }
-
         C::with_verify_ok_cache(|cache| {
             cache.remember_at_digest(cache_digest, &pk_bytes, message, signature_bytes);
         });
         Ok(())
     }
-
     /// Aggregate-style verification for the case where all signers signed the same message.
     /// Performs one deterministic aggregate check after the public wrappers have validated a
     /// proof of possession for every signer.
@@ -597,7 +532,6 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             parse_canonical_bls_signature::<C::Engine>(bytes)
         };
         let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
-
         // Parse and aggregate signatures
         let mut sig_it = signatures.iter();
         let first_sig_bytes = sig_it.next().ok_or(Error::BadSignature)?;
@@ -611,7 +545,6 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         if agg_sig.to_bytes() == identity_sig {
             return Err(Error::BadSignature);
         }
-
         // Parse and aggregate public keys; enforce unique signers.
         let mut seen_pks = BTreeSet::new();
         let mut pk_it = public_keys.iter();
@@ -628,7 +561,6 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             }
             agg_pk_group.add_assign(&pk.0);
         }
-
         let agg_pk = PublicKey::<C::Engine>(agg_pk_group);
         if agg_pk.to_bytes() == identity_pk {
             return Err(Error::BadSignature);
@@ -639,7 +571,6 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         }
         Ok(())
     }
-
     /// Aggregate a sequence of BLS signatures (same-message context) into a single signature.
     /// The caller is responsible for ensuring all signatures are valid and belong to the same
     /// scheme/engine variant. Rejects aggregates that cancel to the identity element.
@@ -667,7 +598,6 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         }
         Ok(agg_sig_bytes)
     }
-
     /// Verify a pre-aggregated signature for the case where all signers signed the
     /// same message. Public keys are aggregated inside this function and a single pairing
     /// check is performed.
@@ -708,7 +638,6 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         }
         Ok(())
     }
-
     pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey<C::Engine>, ParseError> {
         if bls_public_key_material_is_all_zero(payload) {
             return Err(ParseError(
@@ -730,7 +659,6 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         }
         Ok(key)
     }
-
     pub fn parse_private_key(payload: &[u8]) -> Result<ManagedSecretKey<C>, ParseError> {
         let key = ManagedSecretKey::from_bytes(payload)?;
         let identity = PublicKey::<C::Engine>(Default::default());
@@ -740,7 +668,6 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         Ok(key)
     }
 }
-
 impl<C: BlsConfiguration + PreparedPublicKeyCacheAccess + ?Sized> BlsImpl<C> {
     /// Verify each signature against its paired distinct message and public key.
     ///
@@ -757,7 +684,6 @@ impl<C: BlsConfiguration + PreparedPublicKeyCacheAccess + ?Sized> BlsImpl<C> {
             return Err(Error::BadSignature);
         }
         ensure_distinct_messages(messages)?;
-
         for ((message, signature_bytes), public_key_bytes) in messages
             .iter()
             .zip(signatures.iter())
@@ -769,15 +695,12 @@ impl<C: BlsConfiguration + PreparedPublicKeyCacheAccess + ?Sized> BlsImpl<C> {
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     #[cfg(feature = "rand")]
     use rand_core::{TryCryptoRng, TryRngCore};
-
     const SEEDED_KEYGEN_COMPAT_SEED: &[u8] = b"iroha-bls-seeded-keygen-compat";
-
     #[test]
     fn verify_ok_cache_confirms_exact_triple_inside_collision_bucket() {
         let mut cache = VerifyOkCache::new();
@@ -787,7 +710,6 @@ mod tests {
         let signature = b"signature";
         let spliced_message = b"ms";
         let spliced_signature = b"ignature";
-
         cache.remember_at_digest(forced_digest, public_key, message, signature);
         assert!(cache.contains_at_digest(forced_digest, public_key, message, signature));
         assert!(
@@ -803,7 +725,6 @@ mod tests {
             !cache.contains_at_digest(forced_digest, b"other-key", message, signature),
             "the exact public key is part of every cached verdict"
         );
-
         cache.remember_at_digest(
             forced_digest,
             public_key,
@@ -818,7 +739,6 @@ mod tests {
         ));
         assert_eq!(cache.insertion_order.len(), 2);
     }
-
     #[test]
     fn verify_ok_cache_digest_frames_variable_length_fields() {
         let public_key = b"public-key";
@@ -828,18 +748,15 @@ mod tests {
             "moving bytes across message/signature boundaries must change the digest"
         );
     }
-
     #[test]
     fn verify_ok_cache_does_not_retain_oversized_triples() {
         let mut cache = VerifyOkCache::new();
         let oversized_message = vec![0x42; VERIFY_OK_CACHE_INPUT_BYTES_LIMIT];
         cache.remember_at_digest([0x5A; 32], b"pk", &oversized_message, b"signature");
-
         assert!(cache.entries.is_empty());
         assert!(cache.insertion_order.is_empty());
         assert_eq!(cache.retained_input_bytes, 0);
     }
-
     #[test]
     fn verify_ok_cache_evicts_the_exact_oldest_entry() {
         let mut cache = VerifyOkCache::new();
@@ -848,31 +765,25 @@ mod tests {
         cache.remember_at_digest(first_digest, b"pk-1", b"message-1", b"signature-1");
         cache.remember_at_digest(second_digest, b"pk-2", b"message-2", b"signature-2");
         let retained_before = cache.retained_input_bytes;
-
         assert!(cache.evict_oldest());
         assert!(!cache.contains_at_digest(first_digest, b"pk-1", b"message-1", b"signature-1"));
         assert!(cache.contains_at_digest(second_digest, b"pk-2", b"message-2", b"signature-2"));
         assert!(cache.retained_input_bytes < retained_before);
     }
-
     #[cfg(feature = "rand")]
     struct FillSequenceTryRng {
         fills: [u8; 2],
         next_fill: usize,
     }
-
     #[cfg(feature = "rand")]
     impl TryRngCore for FillSequenceTryRng {
         type Error = core::convert::Infallible;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.fills[self.next_fill.min(1)]; 4]))
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Ok(u64::from_le_bytes([self.fills[self.next_fill.min(1)]; 8]))
         }
-
         fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
             let fill = self.fills[self.next_fill.min(1)];
             self.next_fill = self.next_fill.saturating_add(1);
@@ -880,10 +791,8 @@ mod tests {
             Ok(())
         }
     }
-
     #[cfg(feature = "rand")]
     impl TryCryptoRng for FillSequenceTryRng {}
-
     fn legacy_seeded_keypair<C: BlsConfiguration>() -> (PublicKey<C::Engine>, ManagedSecretKey<C>) {
         let salt = b"BLS-SIG-KEYGEN-SALT-";
         let secret_key_size =
@@ -897,7 +806,6 @@ mod tests {
         let h = hkdf::Hkdf::<Sha256>::new(Some(&salt[..]), &ikm);
         h.expand(&info, &mut okm).expect("legacy BLS HKDF expands");
         ikm.zeroize();
-
         let deterministic_rng = crate::rng::rng_from_seed_slice(&okm);
         let secret = SecretKeyVT::<C::Engine>::from_seed(&okm).into_split(deterministic_rng);
         okm.zeroize();
@@ -905,24 +813,20 @@ mod tests {
         let public = private.try_public_key().expect("legacy public key derives");
         (public, private)
     }
-
     fn assert_seeded_keypair_matches_legacy_ikm<C: BlsConfiguration>() {
         let (public, private) =
             BlsImpl::<C>::try_keypair(KeyGenOption::UseSeed(SEEDED_KEYGEN_COMPAT_SEED.to_vec()))
                 .expect("streaming BLS keypair derives");
         let (legacy_public, legacy_private) = legacy_seeded_keypair::<C>();
-
         assert_eq!(public.to_bytes(), legacy_public.to_bytes());
         assert_eq!(private.to_bytes(), legacy_private.to_bytes());
     }
-
     fn assert_managed_secret_clone_preserves_bytes<C: BlsConfiguration>() {
         let (public, private) = BlsImpl::<C>::try_keypair(KeyGenOption::UseSeed(
             b"iroha-bls-managed-secret-clone".to_vec(),
         ))
         .expect("BLS keypair derives");
         let clone = private.clone();
-
         assert_eq!(private.to_bytes(), clone.to_bytes());
         assert_eq!(
             private.to_fixed_bytes().as_slice(),
@@ -936,37 +840,31 @@ mod tests {
                 .to_bytes()
         );
     }
-
     fn assert_managed_secret_from_bytes_rejects_all_zero_material<C: BlsConfiguration>() {
         let err = match ManagedSecretKey::<C>::from_bytes(&[0u8; 32]) {
             Ok(_) => panic!("all-zero BLS managed secret material must fail"),
             Err(err) => err,
         };
-
         assert!(
             err.to_string().contains("all zero"),
             "unexpected all-zero BLS managed secret error: {err:?}"
         );
     }
-
     #[test]
     fn seeded_keygen_hkdf_extract_streaming_matches_legacy_ikm() {
         assert_seeded_keypair_matches_legacy_ikm::<NormalConfiguration>();
         assert_seeded_keypair_matches_legacy_ikm::<SmallConfiguration>();
     }
-
     #[test]
     fn managed_secret_clone_preserves_bytes() {
         assert_managed_secret_clone_preserves_bytes::<NormalConfiguration>();
         assert_managed_secret_clone_preserves_bytes::<SmallConfiguration>();
     }
-
     #[test]
     fn managed_secret_from_bytes_rejects_all_zero_material() {
         assert_managed_secret_from_bytes_rejects_all_zero_material::<NormalConfiguration>();
         assert_managed_secret_from_bytes_rejects_all_zero_material::<SmallConfiguration>();
     }
-
     #[cfg(feature = "rand")]
     #[test]
     fn random_keypair_from_rng_rejects_all_zero_split_seed() {
@@ -974,7 +872,6 @@ mod tests {
             fills: [0x42, 0],
             next_fill: 0,
         };
-
         match BlsImpl::<NormalConfiguration>::random_keypair_from_rng(&mut rng) {
             Err(Error::KeyGen(message)) => {
                 assert!(message.contains("key split"));
@@ -984,7 +881,6 @@ mod tests {
             Ok(_) => panic!("all-zero BLS key-split seed material must fail"),
         }
     }
-
     #[cfg(feature = "rand")]
     #[test]
     fn try_sign_bytes_with_rng_rejects_all_zero_split_seed() {
@@ -996,7 +892,6 @@ mod tests {
             fills: [0, 0],
             next_fill: 0,
         };
-
         match private.try_sign_bytes_with_rng(b"iroha-bls-message", &mut rng) {
             Err(Error::Signing(message)) => {
                 assert!(message.contains("signing key split"));

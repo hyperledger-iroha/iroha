@@ -1,8 +1,6 @@
 //! Golden parity tests for 16-byte lane edges on x86_64 (AVX2 path).
 #![cfg(all(feature = "json", target_arch = "x86_64"))]
-
 use norito::json::{build_struct_index, build_struct_index_scalar_test};
-
 // Helper: left-pad with spaces to align a target substring index to a 16-byte boundary.
 fn pad_to_align(doc: &str, target_sub: &str, lane: usize) -> String {
     let bytes = doc.as_bytes();
@@ -21,7 +19,6 @@ fn pad_to_align(doc: &str, target_sub: &str, lane: usize) -> String {
     s.push_str(doc);
     s
 }
-
 #[test]
 fn avx2_16byte_lane_parity_or_skip() {
     if !std::is_x86_feature_detected!("avx2") {
@@ -43,7 +40,6 @@ fn avx2_16byte_lane_parity_or_skip() {
         let avx2 = build_struct_index(&doc);
         assert_eq!(scalar.offsets, avx2.offsets, "doc: {}", doc);
     }
-
     // Crafted lane-edge cases (16-byte)
     let crafted = vec![
         pad_to_align(r#"{"k":"a\\\"b"}"#, r#"\""#, 15), // '\\' at 15, '"' at 16

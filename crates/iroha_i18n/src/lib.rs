@@ -1,13 +1,10 @@
 //! Internationalization helpers shared across Iroha components.
-
+use norito::json::{self, Value};
 use std::{
     borrow::Cow,
     collections::HashMap,
     sync::{Arc, OnceLock},
 };
-
-use norito::json::{self, Value};
-
 macro_rules! language_catalog {
     ($(
         $variant:ident => {
@@ -23,33 +20,28 @@ macro_rules! language_catalog {
                 $variant,
             )+
         }
-
         impl Language {
             /// Ordered list of all supported languages.
             pub const ALL: &'static [Language] = &[
                 $( Language::$variant, )+
             ];
-
             /// Canonical language tag used in translation bundles.
             pub const fn tag(self) -> &'static str {
                 match self {
                     $( Language::$variant => $tag, )+
                 }
             }
-
             #[cfg(test)]
             const fn file_stem(self) -> &'static str {
                 match self {
                     $( Language::$variant => $file, )+
                 }
             }
-
             const fn cli_asset(self) -> &'static str {
                 match self {
                     $( Language::$variant => include_str!(concat!("lang/cli/", $file, ".json")), )+
                 }
             }
-
             const fn daemon_asset(self) -> &'static str {
                 match self {
                     $( Language::$variant => include_str!(concat!("lang/daemon/", $file, ".json")), )+
@@ -58,7 +50,6 @@ macro_rules! language_catalog {
         }
     };
 }
-
 language_catalog! {
     English => { tag: "en", file: "en" },
     Japanese => { tag: "ja", file: "ja" },
@@ -137,7 +128,6 @@ language_catalog! {
     AncientEgyptianHieroglyph => { tag: "egy", file: "egy" },
     Manchurian => { tag: "mnc", file: "mnc" },
 }
-
 /// Translation bundle identifier. Different executables ship distinct key sets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Bundle {
@@ -146,7 +136,6 @@ pub enum Bundle {
     /// Daemon/server messages.
     Daemon,
 }
-
 impl Bundle {
     const fn asset(self, language: Language) -> &'static str {
         match self {
@@ -154,7 +143,6 @@ impl Bundle {
             Bundle::Daemon => language.daemon_asset(),
         }
     }
-
     const fn name(self) -> &'static str {
         match self {
             Bundle::Cli => "cli",
@@ -162,12 +150,10 @@ impl Bundle {
         }
     }
 }
-
 /// Resolve the most appropriate [`Language`] given optional overrides and locale environment.
 pub fn detect_language(lang_override: Option<&str>) -> Language {
     detect_language_from_provider(lang_override, |key| std::env::var(key).ok())
 }
-
 fn detect_language_from_provider<F>(lang_override: Option<&str>, mut get_var: F) -> Language
 where
     F: FnMut(&str) -> Option<String>,
@@ -184,14 +170,12 @@ where
     }
     Language::English
 }
-
 impl Language {
     /// Resolve a language from a locale string (BCP47 or glibc-style).
     pub fn from_locale(raw: &str) -> Option<Self> {
         let parts = split_locale(raw)?;
         identify_language(&parts)
     }
-
     /// Parse a canonical language tag.
     pub fn from_tag(tag: &str) -> Option<Self> {
         let lower = tag.trim().to_ascii_lowercase();
@@ -201,7 +185,6 @@ impl Language {
         identify_language(&split_locale_inner(&lower))
     }
 }
-
 fn split_locale(raw: &str) -> Option<Vec<String>> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -217,7 +200,6 @@ fn split_locale(raw: &str) -> Option<Vec<String>> {
         .collect();
     if parts.is_empty() { None } else { Some(parts) }
 }
-
 fn split_locale_inner(lower: &str) -> Vec<String> {
     let base = lower.split('.').next().unwrap_or(lower);
     base.replace('-', "_")
@@ -226,7 +208,6 @@ fn split_locale_inner(lower: &str) -> Vec<String> {
         .map(ToString::to_string)
         .collect()
 }
-
 fn identify_language(parts: &[String]) -> Option<Language> {
     let lang = parts.first()?.as_str();
     let rest = &parts[1..];
@@ -311,7 +292,6 @@ fn identify_language(parts: &[String]) -> Option<Language> {
         _ => return None,
     })
 }
-
 fn identify_chinese(rest: &[String]) -> Language {
     if rest
         .iter()
@@ -328,11 +308,9 @@ fn identify_chinese(rest: &[String]) -> Language {
     // Default to simplified when no region/script marker is present.
     Language::SimplifiedChinese
 }
-
 const FIRST_STRONG_ISOLATE: &str = "\u{2068}";
 const RIGHT_TO_LEFT_ISOLATE: &str = "\u{2067}";
 const POP_DIRECTIONAL_ISOLATE: &str = "\u{2069}";
-
 /// Determine whether the provided language is right-to-left.
 pub const fn is_rtl_language(language: Language) -> bool {
     matches!(
@@ -340,7 +318,6 @@ pub const fn is_rtl_language(language: Language) -> bool {
         Language::Arabic | Language::Hebrew | Language::Farsi | Language::Urdu | Language::Divehi
     )
 }
-
 /// Wrap dynamic text so that it renders correctly in right-to-left locales.
 pub fn wrap_placeholder(language: Language, value: &str) -> Cow<'_, str> {
     if is_rtl_language(language) {
@@ -351,19 +328,15 @@ pub fn wrap_placeholder(language: Language, value: &str) -> Cow<'_, str> {
         Cow::Borrowed(value)
     }
 }
-
 type TranslationMap = HashMap<String, String>;
-
 fn translation_cache(bundle: Bundle) -> &'static HashMap<Language, Arc<TranslationMap>> {
     static CLI: OnceLock<HashMap<Language, Arc<TranslationMap>>> = OnceLock::new();
     static DAEMON: OnceLock<HashMap<Language, Arc<TranslationMap>>> = OnceLock::new();
-
     match bundle {
         Bundle::Cli => CLI.get_or_init(|| load_bundle(Bundle::Cli)),
         Bundle::Daemon => DAEMON.get_or_init(|| load_bundle(Bundle::Daemon)),
     }
 }
-
 fn load_bundle(bundle: Bundle) -> HashMap<Language, Arc<TranslationMap>> {
     let mut storage = HashMap::new();
     for &language in Language::ALL {
@@ -373,7 +346,6 @@ fn load_bundle(bundle: Bundle) -> HashMap<Language, Arc<TranslationMap>> {
     }
     storage
 }
-
 fn parse_translations(raw: &str, bundle: Bundle, language: Language) -> TranslationMap {
     let value: Value = json::from_str(raw)
         .unwrap_or_else(|err| panic!("invalid JSON for {} ({:?}): {err}", bundle.name(), language));
@@ -398,7 +370,6 @@ fn parse_translations(raw: &str, bundle: Bundle, language: Language) -> Translat
     }
     map
 }
-
 /// Localizer provides read-only access to translation strings.
 #[derive(Clone)]
 pub struct Localizer {
@@ -406,7 +377,6 @@ pub struct Localizer {
     translations: Arc<TranslationMap>,
     default_translations: Arc<TranslationMap>,
 }
-
 impl Localizer {
     /// Instantiate a localizer for the given bundle and language.
     pub fn new(bundle: Bundle, language: Language) -> Self {
@@ -426,12 +396,10 @@ impl Localizer {
             default_translations,
         }
     }
-
     /// Resolve the active language.
     pub const fn language(&self) -> Language {
         self.language
     }
-
     fn lookup(&self, key: &str) -> String {
         self.translations
             .get(key)
@@ -445,7 +413,6 @@ impl Localizer {
             .cloned()
             .unwrap_or_else(|| key.to_string())
     }
-
     fn wrap_directionality(&self, text: String) -> String {
         if is_rtl_language(self.language) {
             format!("{RIGHT_TO_LEFT_ISOLATE}{text}{POP_DIRECTIONAL_ISOLATE}")
@@ -453,7 +420,6 @@ impl Localizer {
             text
         }
     }
-
     /// Fetch a localized string for the given key.
     ///
     /// When the key is missing in the active language, the English translation is used as the
@@ -462,7 +428,6 @@ impl Localizer {
         let text = self.lookup(key);
         self.wrap_directionality(text)
     }
-
     /// Fetch a localized string and replace `{placeholder}` markers with provided values.
     ///
     /// Placeholders are wrapped with directionality isolates for RTL languages.
@@ -478,20 +443,16 @@ impl Localizer {
         self.wrap_directionality(text)
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, fs, path::Path};
-
     use super::*;
-
+    use std::{collections::BTreeSet, fs, path::Path};
     fn expected_file_stems() -> BTreeSet<String> {
         Language::ALL
             .iter()
             .map(|language| language.file_stem().to_string())
             .collect()
     }
-
     fn directory_file_stems(relative: &str) -> BTreeSet<String> {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
         fs::read_dir(&base)
@@ -508,7 +469,6 @@ mod tests {
             })
             .collect()
     }
-
     #[test]
     fn cli_languages_match_translation_files() {
         let expected = expected_file_stems();
@@ -518,7 +478,6 @@ mod tests {
             "CLI translation files must match Language::ALL entries"
         );
     }
-
     #[test]
     fn daemon_languages_match_translation_files() {
         let expected = expected_file_stems();
@@ -528,13 +487,11 @@ mod tests {
             "Daemon translation files must match Language::ALL entries"
         );
     }
-
     #[test]
     fn detects_override_language() {
         let language = detect_language_from_provider(Some("ru"), |_| None);
         assert_eq!(language, Language::Russian);
     }
-
     #[test]
     fn detects_from_env_with_region() {
         let language = detect_language_from_provider(None, |key| match key {
@@ -543,25 +500,21 @@ mod tests {
         });
         assert_eq!(language, Language::Portuguese);
     }
-
     #[test]
     fn defaults_to_english() {
         let language = detect_language_from_provider(None, |_| None);
         assert_eq!(language, Language::English);
     }
-
     #[test]
     fn loads_cli_translation() {
         let loc = Localizer::new(Bundle::Cli, Language::English);
         assert_eq!(loc.t("info.started"), "CLI started");
     }
-
     #[test]
     fn loads_daemon_translation() {
         let loc = Localizer::new(Bundle::Daemon, Language::English);
         assert_eq!(loc.t("info.welcome"), "Welcome to Hyperledger Iroha!");
     }
-
     #[test]
     fn recognizes_portuguese_aliases() {
         for tag in ["pt", "ptbr", "pt_br"] {
@@ -573,7 +526,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn wrap_placeholder_handles_rtl_languages() {
         let arabic = wrap_placeholder(Language::Arabic, "IVM");
@@ -581,24 +533,20 @@ mod tests {
         let english = wrap_placeholder(Language::English, "IVM");
         assert_eq!(english.as_ref(), "IVM");
     }
-
     #[test]
     fn rtl_translations_are_wrapped_for_rendering() {
         let urdu = Localizer::new(Bundle::Cli, Language::Urdu).t("info.started");
         assert!(urdu.starts_with(RIGHT_TO_LEFT_ISOLATE));
         assert!(urdu.ends_with(POP_DIRECTIONAL_ISOLATE));
-
         let english = Localizer::new(Bundle::Cli, Language::English).t("info.started");
         assert!(!english.starts_with(RIGHT_TO_LEFT_ISOLATE));
         assert!(!english.ends_with(POP_DIRECTIONAL_ISOLATE));
     }
-
     #[test]
     fn t_with_replaces_placeholders_and_handles_directionality() {
         let english = Localizer::new(Bundle::Cli, Language::English)
             .t_with("info.client_git_sha", &[("sha", "abc123")]);
         assert_eq!(english, "Client git SHA: abc123");
-
         let urdu = Localizer::new(Bundle::Cli, Language::Urdu)
             .t_with("info.client_git_sha", &[("sha", "abc123")]);
         assert!(urdu.starts_with(RIGHT_TO_LEFT_ISOLATE));
@@ -608,11 +556,9 @@ mod tests {
             "placeholder must be wrapped for RTL languages: {urdu:?}"
         );
     }
-
     #[test]
     fn localizer_falls_back_to_english_translation() {
         use std::sync::Arc;
-
         let cache = translation_cache(Bundle::Cli);
         let english = cache
             .get(&Language::English)
@@ -625,7 +571,6 @@ mod tests {
             translations: Arc::new(stripped),
             default_translations: english.clone(),
         };
-
         assert_eq!(
             localizer.t("info.started"),
             format!("{RIGHT_TO_LEFT_ISOLATE}CLI started{POP_DIRECTIONAL_ISOLATE}")
@@ -635,7 +580,6 @@ mod tests {
             format!("{RIGHT_TO_LEFT_ISOLATE}unknown.key{POP_DIRECTIONAL_ISOLATE}")
         );
     }
-
     #[test]
     fn rtl_language_detection_matches_catalog() {
         let rtl_languages = [
@@ -651,7 +595,6 @@ mod tests {
                 "expected {language:?} to be treated as RTL"
             );
         }
-
         let ltr_languages = [Language::English, Language::Japanese, Language::French];
         for &language in &ltr_languages {
             assert!(
@@ -660,20 +603,16 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn cli_translations_are_complete() {
         assert_bundle_translations(Bundle::Cli);
     }
-
     #[test]
     fn daemon_translations_are_complete() {
         assert_bundle_translations(Bundle::Daemon);
     }
-
     fn assert_bundle_translations(bundle: Bundle) {
         use std::collections::{BTreeMap, BTreeSet};
-
         let english =
             parse_translations(bundle.asset(Language::English), bundle, Language::English);
         let english_keys: BTreeSet<_> = english.keys().cloned().collect();
@@ -681,7 +620,6 @@ mod tests {
             .iter()
             .map(|(key, value)| (key.clone(), extract_placeholders(value)))
             .collect();
-
         for &language in Language::ALL {
             let translations = parse_translations(bundle.asset(language), bundle, language);
             let keys: BTreeSet<_> = translations.keys().cloned().collect();
@@ -692,7 +630,6 @@ mod tests {
                 bundle.name(),
                 language
             );
-
             for key in &english_keys {
                 let placeholders = extract_placeholders(
                     translations
@@ -712,10 +649,8 @@ mod tests {
             }
         }
     }
-
     fn extract_placeholders(text: &str) -> std::collections::BTreeSet<String> {
         use std::collections::BTreeSet;
-
         let mut placeholders = BTreeSet::new();
         let mut remainder = text;
         while let Some(start) = remainder.find('{') {

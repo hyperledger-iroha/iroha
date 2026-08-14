@@ -1,18 +1,21 @@
-/// <reference types="node" />
-
+import type { Buffer } from "buffer";
 import type { BrowserFeePayment } from "./transaction-codec.js";
+import { OperatorSigningContext } from "./operator-request.js";
 import type { RepoAgreementLifecycleFields } from "./repo-agreement.js";
 import type { ToriiBlockMerkleCommitment, ToriiBlockMerkleProof, ToriiBlockProofs, ToriiBlockProofTrustedAnchor, ToriiBlockProofVerification } from "./src/blockProofTypes.js";
+import type { BufferEncoding } from "./src/nodeBufferTypes.js";
 import type { ToriiBrowserExplorerAccountsOptions, ToriiBrowserExplorerAssetDefinition, ToriiBrowserExplorerAssetDefinitionsOptions, ToriiBrowserExplorerAssetsOptions, ToriiBrowserExplorerCursorPage, ToriiBrowserExplorerDomainsOptions, ToriiBrowserExplorerOwnedDomainOptions } from "./src/toriiBrowserExplorerTypes.js";
+import type { SubscriptionActionResponse, SubscriptionAuthorityActionRequest, SubscriptionCancelActionRequest, SubscriptionChargeActionRequest, SubscriptionCreateRequest, SubscriptionCreateResponse, SubscriptionGetResponse, SubscriptionListItem, SubscriptionListResponse, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse, SubscriptionPlanListItem, SubscriptionPlanListResponse, SubscriptionUsageDraft, SubscriptionUsageRequest } from "./src/subscriptionTypes.js";
 import type { SorafsOrderbookSignedTransaction, SorafsOrderbookSubmissionReceipt, SorafsOrderbookTransactionSubmitOptions } from "./src/sorafsOrderbookSubmission.js";
 import { NetworkId } from "./src/networkId.js";
-export { NetworkId };
+export { NetworkId, OperatorSigningContext };
 export * from "./kotodama-compiler.js";
 export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
 export * from "./bootle-lantern-issuance.js";
 export * from "./src/blockProofTypes.js";
 export * from "./src/toriiBrowserExplorerTypes.js";
+export type * from "./src/subscriptionTypes.js";
 export * from "./src/sorafsOrderbookSubmission.js";
 
 export type JsonValue =
@@ -1731,6 +1734,10 @@ export interface RequiredCanonicalRequestOptions {
   canonicalAuth: CanonicalRequestAuth;
 }
 
+export interface AbortSignalOptions {
+  signal?: AbortSignal;
+}
+
 export interface AliasLookupByAccountItem {
   alias: string;
   dataspace: string;
@@ -2008,6 +2015,7 @@ export interface RamLfeExecutionReceipt {
 export interface RamLfeExecuteOptions {
   encryptedInput: string;
   signal?: AbortSignal;
+  canonicalAuth: CanonicalRequestAuth;
 }
 
 export interface RamLfeExecuteResponse {
@@ -2030,6 +2038,7 @@ export interface IdentifierResolutionRequestOptions {
   encryptedInput: string;
   outputOpening: RamLfeOutputOpening;
   signal?: AbortSignal;
+  canonicalAuth: CanonicalRequestAuth;
 }
 
 export interface IdentifierResolutionReceiptPayload {
@@ -2118,8 +2127,8 @@ export interface CaptureSumeragiTelemetryOptions {
 export interface AppendSumeragiTelemetryOptions
   extends CaptureSumeragiTelemetryOptions {
   fs?: {
-    mkdir?: typeof import("node:fs/promises").mkdir;
-    appendFile?: typeof import("node:fs/promises").appendFile;
+    mkdir?: (path: string, options: { recursive: true }) => Promise<string | undefined | void>;
+    appendFile?: (path: string, data: string) => Promise<void>;
   };
 }
 
@@ -3857,7 +3866,6 @@ export function verifyIdentifierResolutionReceipt(
   policySummary: IdentifierPolicyClientSummary,
 ): boolean;
 
-
 type IrohaJsPublicApi = typeof import("./index.js");
 type IrohaJsRuntimeNamespace<Keys extends keyof IrohaJsPublicApi> = Readonly<
   Pick<IrohaJsPublicApi, Keys>
@@ -3866,6 +3874,7 @@ type IrohaJsRuntimeNamespace<Keys extends keyof IrohaJsPublicApi> = Readonly<
 type ToriiRuntimeNamespaceExport =
     "IsoMessageTimeoutError"
   | "LocalSigningContext"
+  | "OperatorSigningContext"
   | "ToriiClient"
   | "TransactionBatchAdmissionAmbiguousError"
   | "SorafsOrderbookSubmissionAmbiguousError"
@@ -4096,7 +4105,6 @@ export interface ResolvedToriiClientConfig {
 }
 
 export type ToriiHealthStatus = { status: string } & Record<string, unknown>;
-
 /** Immutable NetworkId context required by APIs that return local-signing drafts. */
 export class LocalSigningContext {
   constructor(networkId: NetworkId, chainDiscriminant?: number);
@@ -4111,6 +4119,7 @@ export interface ToriiClientOptions extends ToriiClientRetryOptions {
   fetchImpl?: typeof fetch;
   config?: ToriiClientConfigSource;
   localSigningContext?: LocalSigningContext;
+  operatorSigningContext?: OperatorSigningContext;
   canonicalRequestAuth?: CanonicalRequestAuth;
   allowInsecure?: boolean;
   sorafsAliasPolicy?: SorafsAliasPolicyOptions;
@@ -5232,109 +5241,6 @@ export interface ToriiTriggerRecord {
 export interface ToriiTriggerListPage {
   items: ReadonlyArray<ToriiTriggerRecord>;
   total: number;
-}
-
-export type SubscriptionPlan = Record<string, unknown>;
-export type SubscriptionState = Record<string, unknown>;
-export type SubscriptionInvoice = Record<string, unknown>;
-
-export interface SubscriptionPlanCreateRequest {
-  authority: string;
-  planId: string;
-  plan: SubscriptionPlan;
-}
-
-export interface SubscriptionPlanCreateResponse extends AppApiTransactionDraft {
-  plan_id: string;
-}
-
-export interface SubscriptionPlanListItem {
-  plan_id: string;
-  plan: SubscriptionPlan;
-}
-
-export interface SubscriptionPlanListResponse {
-  items: ReadonlyArray<SubscriptionPlanListItem>;
-  total: number;
-}
-
-export interface SubscriptionCreateRequest {
-  authority: string;
-  subscriptionId: string;
-  planId: string;
-  billingTriggerId?: string;
-  usageTriggerId?: string | null;
-  firstChargeMs?: NumericLike;
-  grantUsageToProvider?: boolean;
-  privateKey?:
-    | ArrayBufferView
-    | ArrayBuffer
-    | Buffer
-    | ReadonlyArray<number>
-    | string;
-  privateKeyHex?: string;
-  privateKeyMultihash?: string;
-  privateKeyAlgorithm?: string;
-}
-
-export interface SubscriptionCreateResponse {
-  ok: boolean;
-  subscription_id: string;
-  billing_trigger_id: string;
-  usage_trigger_id?: string;
-  first_charge_ms: number;
-  tx_hash_hex: string;
-}
-
-export interface SubscriptionListItem {
-  subscription_id: string;
-  subscription: SubscriptionState;
-  invoice?: SubscriptionInvoice | null;
-  plan?: SubscriptionPlan | null;
-}
-
-export interface SubscriptionListResponse {
-  items: ReadonlyArray<SubscriptionListItem>;
-  total: number;
-}
-
-export interface SubscriptionGetResponse {
-  subscription_id: string;
-  subscription: SubscriptionState;
-  invoice?: SubscriptionInvoice | null;
-  plan?: SubscriptionPlan | null;
-}
-
-export interface SubscriptionActionRequest {
-  authority: string;
-  chargeAtMs?: NumericLike;
-  cancelMode?: "immediate" | "period_end";
-  privateKey?:
-    | ArrayBufferView
-    | ArrayBuffer
-    | Buffer
-    | ReadonlyArray<number>
-    | string;
-  privateKeyHex?: string;
-  privateKeyMultihash?: string;
-  privateKeyAlgorithm?: string;
-}
-
-export interface SubscriptionUsageRequest {
-  authority: string;
-  unitKey: string;
-  delta: QuantityInput;
-  usageTriggerId?: string | null;
-}
-
-export interface SubscriptionUsageDraft extends AppApiTransactionDraft {
-  subscription_id: string;
-}
-
-export interface SubscriptionActionResponse {
-  ok: boolean;
-  subscription_id: string;
-  tx_hash_hex: string;
 }
 
 export interface ToriiStatusPayload {
@@ -8899,6 +8805,7 @@ export interface SorafsAliasListOptions {
   limit?: NumericLike;
   offset?: NumericLike;
   signal?: AbortSignal;
+  canonicalAuth: CanonicalRequestAuth;
 }
 
 export interface SorafsReplicationReceipt {
@@ -8936,6 +8843,7 @@ export interface SorafsReplicationListOptions {
   limit?: NumericLike;
   offset?: NumericLike;
   signal?: AbortSignal;
+  canonicalAuth: CanonicalRequestAuth;
 }
 
 export type SorafsOrderbookSide = "bid" | "ask";
@@ -9973,6 +9881,8 @@ export interface ToriiBrowserClientOptions {
   fetchImpl?: typeof fetch;
   /** Exact genesis-derived network identity required by canonical-auth methods. */
   networkId?: NetworkId;
+  /** Immutable exact-network signer required by operator-only browser reads. */
+  operatorSigningContext?: OperatorSigningContext;
   defaultHeaders?: Record<string, string>;
   timeoutMs?: NumericLike;
   config?: {
@@ -9995,147 +9905,6 @@ export interface ToriiLedgerHeadersOptions {
   signal?: AbortSignal;
 }
 
-export interface ToriiBlockMerkleProof {
-  readonly leaf_index: number;
-  readonly audit_path: ReadonlyArray<string | null>;
-}
-
-export interface ToriiBlockReceiptProof {
-  readonly leaf: string;
-  readonly proof: ToriiBlockMerkleProof;
-}
-
-export interface ToriiBlockMerkleCommitment {
-  readonly root: string;
-  readonly leaf_count: string;
-}
-
-export interface ToriiBlockProofTransferSmtWitness {
-  readonly root_before: string;
-  readonly root_after: string;
-  readonly path_bits: ReadonlyArray<number>;
-  readonly siblings: ReadonlyArray<string>;
-}
-
-export interface ToriiBlockProofTransferDeltaTranscript {
-  readonly from_account: string;
-  readonly to_account: string;
-  readonly asset_definition: string;
-  readonly amount: string;
-  readonly from_balance_before: string;
-  readonly from_balance_after: string;
-  readonly to_balance_before: string;
-  readonly to_balance_after: string;
-  readonly from_smt_witness: ToriiBlockProofTransferSmtWitness;
-  readonly to_smt_witness: ToriiBlockProofTransferSmtWitness;
-}
-
-export interface ToriiBlockProofTransferTranscript {
-  readonly batch_hash: string;
-  readonly deltas: ReadonlyArray<ToriiBlockProofTransferDeltaTranscript>;
-  readonly authority_digest: string;
-  readonly poseidon_preimage_digest: string | null;
-}
-
-export interface ToriiBlockProofs {
-  readonly block_height: string;
-  readonly block_hash: string;
-  readonly executed_block_wire_hash: string;
-  readonly entry_hash: string;
-  readonly entry_commitment: ToriiBlockMerkleCommitment;
-  readonly entry_proof: ToriiBlockReceiptProof;
-  readonly result_commitment: ToriiBlockMerkleCommitment;
-  readonly result_proof: ToriiBlockReceiptProof;
-  readonly fastpq_transcripts: Readonly<
-    Record<string, ReadonlyArray<ToriiBlockProofTransferTranscript>>
-  >;
-}
-
-/**
- * Structural anchor for local BlockProofs consistency checks.
- *
- * The SDK does not authenticate this value or block finality. It must come
- * from an independently authenticated block and must never be copied from the
- * ToriiBlockProofs response being checked.
- */
-export interface ToriiBlockProofTrustedAnchor {
-  readonly block_height: string;
-  readonly block_hash: string;
-  readonly executed_block_wire_hash: string;
-  readonly entry_hash: string;
-  readonly entry_index: number;
-  readonly entry_commitment: ToriiBlockMerkleCommitment;
-  readonly result_commitment: ToriiBlockMerkleCommitment;
-  readonly fastpq_transcripts: ToriiBlockProofs["fastpq_transcripts"];
-}
-
-export interface ToriiBlockProofVerification {
-  /** Consistency with the supplied anchor; this is not a finality verdict. */
-  readonly valid: boolean;
-  readonly anchor_matches: boolean;
-  readonly entry_hash_matches: boolean;
-  readonly entry_proof_valid: boolean;
-  readonly result_pair_consistent: boolean;
-  readonly result_proof_valid: boolean;
-}
-
-/** First-release native authenticated BlockProofs verifier version. */
-export const AUTHENTICATED_BLOCK_PROOFS_VERSION_V1: 1;
-/** Maximum exact executed SignedBlockWire bytes accepted by the native verifier. */
-export const AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1: 33554432;
-/** Maximum canonical Norito bytes accepted for one BridgeFinalityProof. */
-export const AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1: 9437184;
-/** Maximum canonical Norito bytes accepted for one BlockProofs response. */
-export const AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1: 16777216;
-
-export interface AuthenticatedBlockProofInputV1 {
-  readonly version: 1;
-  /** Application-pinned exact genesis-derived NetworkId; this must not be sourced from the response. */
-  readonly networkId: string;
-  /** Application-pinned marked 32-byte HeightContextId. */
-  readonly trustedContextId: ArrayBufferView | ArrayBuffer | Buffer;
-  /** Application-selected marked 32-byte transaction entrypoint hash. */
-  readonly expectedEntryHash: ArrayBufferView | ArrayBuffer | Buffer;
-  /**
-   * Optional last verified BridgeFinalityProof. When present, the target proof
-   * must be its immediate cryptographic successor.
-   */
-  readonly previousFinalityProofNorito?:
-    | ArrayBufferView
-    | ArrayBuffer
-    | Buffer
-    | null;
-  /** Canonical Norito BridgeFinalityProof for the target block. */
-  readonly finalityProofNorito: ArrayBufferView | ArrayBuffer | Buffer;
-  /** Exact canonical executed SignedBlockWire for the target block. */
-  readonly executedBlockWire: ArrayBufferView | ArrayBuffer | Buffer;
-  /** Canonical Norito BlockProofs response returned by Torii. */
-  readonly blockProofsNorito: ArrayBufferView | ArrayBuffer | Buffer;
-}
-
-export interface AuthenticatedBlockProofVerdictV1 {
-  /** Finality is authenticated whenever a verdict resolves; this additionally covers BlockProofs. */
-  readonly valid: boolean;
-  readonly code: "valid" | "block_proofs_mismatch";
-  readonly blockHeight: string;
-  readonly blockHashHex: string;
-  readonly executedBlockWireHashHex: string;
-  readonly entryHashHex: string;
-  /** Verified context to retain alongside the accepted finality proof for successor state. */
-  readonly heightContextIdHex: string;
-}
-
-/**
- * Verify Torii BlockProofs through the native Rust Sumeragi-v2 finality path.
- *
- * The promise rejects on malformed, non-canonical, wrong-chain, wrong-context,
- * stale/skipped, or cryptographically invalid finality material. A valid
- * finality chain carrying inconsistent Merkle/result/transcript proofs resolves
- * to a verdict whose `valid` field is false.
- */
-export function verifyAuthenticatedBlockProofsV1(
-  input: Readonly<AuthenticatedBlockProofInputV1>,
-): Promise<Readonly<AuthenticatedBlockProofVerdictV1>>;
 export interface ToriiBrowserTransactionStatusOptions
   extends ToriiBrowserRequestOptions {
   scope?: "local" | "global";
@@ -10325,13 +10094,13 @@ export declare class ToriiBrowserClient {
   ): Promise<ToriiBrowserAccountHistoryListResponse<T>>;
   queryAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,
-    options?: TransactionQueryOptions,
+    options: TransactionQueryOptions & ToriiBrowserCanonicalRequestOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   queryTransactions<T = ToriiAccountTransactionItem>(
-    options?: TransactionQueryOptions,
+    options: TransactionQueryOptions & ToriiBrowserCanonicalRequestOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   queryVisibleTransactions<T = ToriiAccountTransactionItem>(
-    options?: TransactionQueryOptions,
+    options: TransactionQueryOptions & ToriiBrowserCanonicalRequestOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   listContractActivity<T = ToriiContractActivityItem>(
     options?: ToriiBrowserContractActivityListOptions,
@@ -10629,73 +10398,73 @@ export declare class ToriiClient {
     options?: IterableListOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   queryAccounts<T = ToriiAccountListItem>(
-    options?: IterableQueryOptions,
+    options: IterableQueryOptions & RequiredCanonicalRequestOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   iterateAccounts<T = ToriiAccountListItem>(
     options?: PaginationIteratorOptions,
   ): AsyncGenerator<T, void, unknown>;
   iterateAccountsQuery<T = ToriiAccountListItem>(
-    options?: PaginationIteratorOptions,
+    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
   ): AsyncGenerator<T, void, unknown>;
   listDomains<T = ToriiDomainListItem>(
     options?: IterableListOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   queryDomains<T = ToriiDomainListItem>(
-    options?: IterableQueryOptions,
+    options: IterableQueryOptions & RequiredCanonicalRequestOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   iterateDomains<T = ToriiDomainListItem>(
     options?: PaginationIteratorOptions,
   ): AsyncGenerator<T, void, unknown>;
   iterateDomainsQuery<T = ToriiDomainListItem>(
-    options?: PaginationIteratorOptions,
+    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
   ): AsyncGenerator<T, void, unknown>;
   listAssetDefinitions<T = ToriiAssetDefinitionListItem>(
     options?: IterableListOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   queryAssetDefinitions<T = ToriiAssetDefinitionListItem>(
-    options?: IterableQueryOptions,
+    options: IterableQueryOptions & RequiredCanonicalRequestOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   iterateAssetDefinitions<T = ToriiAssetDefinitionListItem>(
     options?: PaginationIteratorOptions,
   ): AsyncGenerator<T, void, unknown>;
   iterateAssetDefinitionsQuery<T = ToriiAssetDefinitionListItem>(
-    options?: PaginationIteratorOptions,
+    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
   ): AsyncGenerator<T, void, unknown>;
   listRepoAgreements(
     options?: IterableListOptions,
   ): Promise<RepoAgreementListResponse>;
   queryRepoAgreements(
-    options?: IterableQueryOptions,
+    options: IterableQueryOptions & RequiredCanonicalRequestOptions,
   ): Promise<RepoAgreementListResponse>;
   iterateRepoAgreements(
     options?: PaginationIteratorOptions,
   ): AsyncGenerator<ToriiRepoAgreement, void, unknown>;
   iterateRepoAgreementsQuery(
-    options?: PaginationIteratorOptions,
+    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
   ): AsyncGenerator<ToriiRepoAgreement, void, unknown>;
   listNfts<T = ToriiNftListItem>(
     options?: IterableListOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   queryNfts<T = ToriiNftListItem>(
-    options?: IterableQueryOptions,
+    options: IterableQueryOptions & RequiredCanonicalRequestOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   iterateNfts<T = ToriiNftListItem>(
     options?: PaginationIteratorOptions,
   ): AsyncGenerator<T, void, unknown>;
   iterateNftsQuery<T = ToriiNftListItem>(
-    options?: PaginationIteratorOptions,
+    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
   ): AsyncGenerator<T, void, unknown>;
   listRwas<T = ToriiRwaListItem>(
     options?: IterableListOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   queryRwas<T = ToriiRwaListItem>(
-    options?: IterableQueryOptions,
+    options: IterableQueryOptions & RequiredCanonicalRequestOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   iterateRwas<T = ToriiRwaListItem>(
     options?: PaginationIteratorOptions,
   ): AsyncGenerator<T, void, unknown>;
   iterateRwasQuery<T = ToriiRwaListItem>(
-    options?: PaginationIteratorOptions,
+    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
   ): AsyncGenerator<T, void, unknown>;
   listExplorerRwas<T = ToriiExplorerRwa>(
     options?: ExplorerRwaListOptions,
@@ -10735,7 +10504,7 @@ export declare class ToriiClient {
   ): Promise<ToriiIterableListResponse<T>>;
   queryAccountAssets<T = ToriiAccountAssetItem>(
     accountId: string,
-    options?: IterableQueryOptions,
+    options: IterableQueryOptions & RequiredCanonicalRequestOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   iterateAccountAssets<T = ToriiAccountAssetItem>(
     accountId: string,
@@ -10743,7 +10512,7 @@ export declare class ToriiClient {
   ): AsyncGenerator<T, void, unknown>;
   iterateAccountAssetsQuery<T = ToriiAccountAssetItem>(
     accountId: string,
-    options?: PaginationIteratorOptions,
+    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
   ): AsyncGenerator<T, void, unknown>;
   listAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,
@@ -10757,13 +10526,13 @@ export declare class ToriiClient {
   ): Promise<ToriiIterableListResponse<T>>;
   queryAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,
-    options?: TransactionQueryOptions,
+    options: TransactionQueryOptions & RequiredCanonicalRequestOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   queryTransactions<T = ToriiAccountTransactionItem>(
-    options?: TransactionQueryOptions,
+    options: TransactionQueryOptions & RequiredCanonicalRequestOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   queryVisibleTransactions<T = ToriiAccountTransactionItem>(
-    options?: TransactionQueryOptions,
+    options: TransactionQueryOptions & RequiredCanonicalRequestOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   iterateAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,
@@ -10771,13 +10540,13 @@ export declare class ToriiClient {
   ): AsyncGenerator<T, void, unknown>;
   iterateAccountTransactionsQuery<T = ToriiAccountTransactionItem>(
     accountId: string,
-    options?: PaginationIteratorOptions,
+    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
   ): AsyncGenerator<T, void, unknown>;
   iterateTransactionsQuery<T = ToriiAccountTransactionItem>(
-    options?: TransactionIteratorOptions,
+    options: TransactionIteratorOptions & RequiredCanonicalRequestOptions,
   ): AsyncGenerator<T, void, unknown>;
   iterateVisibleTransactionsQuery<T = ToriiAccountTransactionItem>(
-    options?: TransactionIteratorOptions,
+    options: TransactionIteratorOptions & RequiredCanonicalRequestOptions,
   ): AsyncGenerator<T, void, unknown>;
   listAssetHolders<T = ToriiAssetHolderItem>(
     assetDefinitionId: string,
@@ -10785,7 +10554,7 @@ export declare class ToriiClient {
   ): Promise<ToriiIterableListResponse<T>>;
   queryAssetHolders<T = ToriiAssetHolderItem>(
     assetDefinitionId: string,
-    options?: IterableQueryOptions,
+    options: IterableQueryOptions & RequiredCanonicalRequestOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   iterateAssetHolders<T = ToriiAssetHolderItem>(
     assetDefinitionId: string,
@@ -10793,7 +10562,7 @@ export declare class ToriiClient {
   ): AsyncGenerator<T, void, unknown>;
   iterateAssetHoldersQuery<T = ToriiAssetHolderItem>(
     assetDefinitionId: string,
-    options?: PaginationIteratorOptions,
+    options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
   ): AsyncGenerator<T, void, unknown>;
   listAccountPermissions<T = ToriiAccountPermissionItem>(
     accountId: string,
@@ -10911,6 +10680,7 @@ export declare class ToriiClient {
     receipt: Record<string, unknown>;
     outputHex?: string;
     signal?: AbortSignal;
+    canonicalAuth: CanonicalRequestAuth;
   }): Promise<Record<string, unknown>>;
   listSorafsPinManifests(
     options?: SorafsPinListOptions,
@@ -10919,16 +10689,16 @@ export declare class ToriiClient {
     options?: SorafsPinIteratorOptions,
   ): AsyncGenerator<SorafsPinManifestSummaryV1, void, unknown>;
   listSorafsAliases(
-    options?: SorafsAliasListOptions,
+    options: SorafsAliasListOptions,
   ): Promise<SorafsAliasListResponse>;
   iterateSorafsAliases(
-    options?: SorafsAliasListOptions & PaginationIteratorOptions,
+    options: SorafsAliasListOptions & PaginationIteratorOptions,
   ): AsyncGenerator<SorafsAliasRecord, void, unknown>;
   listSorafsReplicationOrders(
-    options?: SorafsReplicationListOptions,
+    options: SorafsReplicationListOptions,
   ): Promise<SorafsReplicationListResponse>;
   iterateSorafsReplicationOrders(
-    options?: SorafsReplicationListOptions & PaginationIteratorOptions,
+    options: SorafsReplicationListOptions & PaginationIteratorOptions,
   ): AsyncGenerator<SorafsReplicationOrderRecord, void, unknown>;
   submitSorafsOrderbookOrder(
     signedTransaction: SorafsOrderbookSignedTransaction,
@@ -11118,11 +10888,11 @@ export declare class ToriiClient {
   ): Promise<UaidManifestsResponse>;
   publishSpaceDirectoryManifest(
     request: PublishSpaceDirectoryManifestRequest,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<AppApiTransactionDraft>;
   revokeSpaceDirectoryManifest(
     request: RevokeSpaceDirectoryManifestRequest,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<AppApiTransactionDraft>;
   submitTransaction(
     payload: ArrayBufferView | ArrayBuffer | Buffer,
@@ -11158,46 +10928,35 @@ export declare class ToriiClient {
   ): Promise<ToriiPipelineStatus | null>;
   getPipelineRecovery(
     height: number | string | bigint,
+    options?: AbortSignalOptions,
   ): Promise<Record<string, unknown> | null>;
   getPipelineRecoveryTyped(
     height: number | string | bigint,
+    options?: AbortSignalOptions,
   ): Promise<ToriiPipelineRecoverySidecar | null>;
-  getPipelinePreflight(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiPipelinePreflight>;
+  getPipelinePreflight(options?: AbortSignalOptions): Promise<ToriiPipelinePreflight>;
   getPipelineRecoveryFastpqProofs(
     height: number | string | bigint,
-    options?: { signal?: AbortSignal },
+    options?: AbortSignalOptions,
   ): Promise<Record<string, unknown> | null>;
   getPipelineRecoveryFastpqProofsTyped(
     height: number | string | bigint,
-    options?: { signal?: AbortSignal },
+    options?: AbortSignalOptions,
   ): Promise<ToriiPipelineRecoveryFastpqProofs | null>;
-  getHealth(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiHealthStatus | null>;
+  getHealth(options?: AbortSignalOptions): Promise<ToriiHealthStatus | null>;
   getConfiguration(): Promise<unknown | null>;
   getConfigurationTyped(): Promise<ToriiConfigurationSnapshot | null>;
   getConfidentialGasSchedule(): Promise<ConfidentialGasSchedule | null>;
-  getStatusSnapshot(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiStatusSnapshot>;
-  deploySoracloudAppInfra(
-    request: SoracloudAppInfraRequest | Record<string, unknown>,
-    options?: { signal?: AbortSignal },
-  ): Promise<unknown>;
-  upgradeSoracloudAppInfra(
-    request: SoracloudAppInfraRequest | Record<string, unknown>,
-    options?: { signal?: AbortSignal },
-  ): Promise<unknown>;
-  getSoracloudAppInfraStatus(options?: {
+  getStatusSnapshot(options?: AbortSignalOptions): Promise<ToriiStatusSnapshot>;
+  deploySoracloudAppInfra(request: SoracloudAppInfraRequest | Record<string, unknown>, options: RequiredCanonicalRequestOptions): Promise<unknown>;
+  upgradeSoracloudAppInfra(request: SoracloudAppInfraRequest | Record<string, unknown>, options: RequiredCanonicalRequestOptions): Promise<unknown>;
+  getSoracloudAppInfraStatus(options: RequiredCanonicalRequestOptions & {
     appName?: string;
     auditLimit?: NumericLike;
-    signal?: AbortSignal;
   }): Promise<unknown>;
   getSoracloudNamedAppInfraStatus(
     appName: string,
-    options?: { auditLimit?: NumericLike; signal?: AbortSignal },
+    options: RequiredCanonicalRequestOptions & { auditLimit?: NumericLike },
   ): Promise<unknown>;
   getNetworkTimeNow(options?: {
     signal?: AbortSignal;
@@ -11776,7 +11535,7 @@ export declare class ToriiClient {
   ): AsyncGenerator<SubscriptionPlanListItem, void, unknown>;
   createSubscriptionPlan(
     request: SubscriptionPlanCreateRequest,
-    options?: { signal?: AbortSignal },
+    options: RequiredCanonicalRequestOptions,
   ): Promise<SubscriptionPlanCreateResponse>;
   listSubscriptions(
     options?: SubscriptionListOptions,
@@ -11786,7 +11545,7 @@ export declare class ToriiClient {
   ): AsyncGenerator<SubscriptionListItem, void, unknown>;
   createSubscription(
     request: SubscriptionCreateRequest,
-    options?: { signal?: AbortSignal },
+    options: RequiredCanonicalRequestOptions,
   ): Promise<SubscriptionCreateResponse>;
   getSubscription(
     subscriptionId: string,
@@ -11794,34 +11553,35 @@ export declare class ToriiClient {
   ): Promise<SubscriptionGetResponse | null>;
   pauseSubscription(
     subscriptionId: string,
-    request: SubscriptionActionRequest,
-    options?: { signal?: AbortSignal },
+    request: SubscriptionAuthorityActionRequest,
+    options: RequiredCanonicalRequestOptions,
   ): Promise<SubscriptionActionResponse>;
   resumeSubscription(
     subscriptionId: string,
-    request: SubscriptionActionRequest,
-    options?: { signal?: AbortSignal },
+    request: SubscriptionChargeActionRequest,
+    options: RequiredCanonicalRequestOptions,
   ): Promise<SubscriptionActionResponse>;
   cancelSubscription(
     subscriptionId: string,
-    request: SubscriptionActionRequest,
-    options?: { signal?: AbortSignal },
+    request: SubscriptionCancelActionRequest,
+    options: RequiredCanonicalRequestOptions,
   ): Promise<SubscriptionActionResponse>;
   keepSubscription(
     subscriptionId: string,
-    request: SubscriptionActionRequest,
-    options?: { signal?: AbortSignal },
+    request: SubscriptionAuthorityActionRequest,
+    options: RequiredCanonicalRequestOptions,
   ): Promise<SubscriptionActionResponse>;
   chargeSubscriptionNow(
     subscriptionId: string,
-    request: SubscriptionActionRequest,
-    options?: { signal?: AbortSignal },
+    request: SubscriptionChargeActionRequest,
+    options: RequiredCanonicalRequestOptions,
   ): Promise<SubscriptionActionResponse>;
   recordSubscriptionUsage(
     subscriptionId: string,
     request: SubscriptionUsageRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<SubscriptionUsageDraft>;}
+    options: RequiredCanonicalRequestOptions,
+  ): Promise<SubscriptionUsageDraft>;
+}
 
 export interface NoritoRpcClientOptions {
   fetchImpl?: typeof fetch;

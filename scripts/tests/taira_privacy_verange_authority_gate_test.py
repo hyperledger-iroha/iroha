@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts import taira_privacy_sealed_controller as controller
+from scripts import taira_privacy_governance_authority as governance_authority
 from scripts import taira_privacy_verange_case_plan as case_plan
 
 
@@ -121,8 +122,17 @@ def test_barrier_is_first_operation_and_has_no_caller_escape() -> None:
         node.attr for node in ast.walk(barrier) if isinstance(node, ast.Attribute)
     }
     assert not ({"environ", "getenv", "open", "Path"} & (names | attributes))
-    assert case_plan.VERANGE_GOVERNANCE_AUTHORITY_ENVELOPE_SCHEMA in source
-    assert case_plan.VERANGE_GOVERNANCE_AUTHORITY_REPLAY_NAMESPACE in source
+    governance_source = (
+        ROOT / "scripts/taira_privacy_governance_authority.py"
+    ).read_text(encoding="utf-8")
+    assert case_plan.VERANGE_GOVERNANCE_AUTHORITY_ENVELOPE_SCHEMA == (
+        governance_authority.AUTHORITY_ENVELOPE_SCHEMA
+    )
+    assert case_plan.VERANGE_GOVERNANCE_AUTHORITY_REPLAY_NAMESPACE == (
+        governance_authority.REPLAY_NAMESPACE
+    )
+    assert governance_authority.AUTHORITY_ENVELOPE_SCHEMA in governance_source
+    assert governance_authority.REPLAY_NAMESPACE in governance_source
 
 
 def test_no_lower_production_planner_or_registered_runner_bypasses_barrier() -> None:

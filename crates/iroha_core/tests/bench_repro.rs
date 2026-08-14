@@ -1,6 +1,5 @@
 //! Reproduces the ISI gas calibration benchmark setup for debugging.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-
 use iroha_core::{
     executor::{Executor, InstructionExecutionProfile},
     gas,
@@ -20,11 +19,9 @@ use iroha_data_model::{
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-
 fn bench_block_header() -> BlockHeader {
     BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0)
 }
-
 fn build_bench_state() -> (State, AccountId, AccountId) {
     let (authority, _) = gen_account_in("wonderland");
     let (recipient, _) = gen_account_in("wonderland");
@@ -48,7 +45,6 @@ fn build_bench_state() -> (State, AccountId, AccountId) {
     let state = State::new_for_testing(world, kura, query_handle);
     (state, authority, recipient)
 }
-
 #[test]
 fn execute_register_domain_like_bench() {
     let (state, authority, _recipient) = build_bench_state();

@@ -2671,6 +2671,14 @@ def test_leader_wire_physical_ingress_regressions_cannot_be_deleted(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "try_send_as",
+            (("impl", "V2IoCommandQueue"),),
+            "matches!(&command, V2IoCommand::Shutdown)",
+            "class == V2IoAdmissionClass::Control",
+            "exact rolled-back shutdown bypass",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "drop",
             (("impl", "Drop", "for", "CertifiedServePredecessorAdmissionV1"),),
             "            .close_serve_predecessor_admission(self.barrier)\n",
@@ -2931,6 +2939,14 @@ def test_local_runner_service_contract_rejects_disconnected_deadlock_obligation(
         "lifecycle_digest_key",
     ),
     (
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "begin_fetch",
+            "owner.matches_body_coordinates(round, subject)",
+            "false",
+            "ordinary Fetch admission must reject coordinates already owned by recovered Decision Fetch",
+            "begin_fetch",
+        ),
         (
             "crates/iroha_core/src/sumeragi/v2_runtime.rs",
             "adopt_effect_ownership",

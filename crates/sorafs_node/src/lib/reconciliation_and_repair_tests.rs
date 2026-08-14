@@ -1,5 +1,4 @@
 // Node reconciliation, appeal-finance, storage, and repair regressions.
-
 fn reconciliation_handle_with_governance(root: &Path) -> NodeHandle {
     let signer = Arc::new(TestGovernanceDagSigner::new());
     let cfg = StorageConfig::builder()
@@ -36,7 +35,6 @@ fn reconciliation_handle_with_governance(root: &Path) -> NodeHandle {
     assert!(handle.has_governance_publisher());
     handle
 }
-
 #[test]
 fn governance_dag_file_reads_are_descriptor_rooted_and_bounded() {
     let temp = tempfile::tempdir().expect("create governance readback root");
@@ -45,7 +43,6 @@ fn governance_dag_file_reads_are_descriptor_rooted_and_bounded() {
     fs::create_dir(governance.join("snapshots")).expect("create snapshot directory");
     fs::write(governance.join("snapshots/state.json"), b"state-v1")
         .expect("write governance snapshot");
-
     assert_eq!(
         handle
             .read_governance_dag_file(Path::new("snapshots/state.json"), 8)
@@ -73,7 +70,6 @@ fn governance_dag_file_reads_are_descriptor_rooted_and_bounded() {
             .kind(),
         io::ErrorKind::InvalidInput
     );
-
     #[cfg(unix)]
     {
         let outside = temp.path().join("outside");
@@ -89,7 +85,6 @@ fn governance_dag_file_reads_are_descriptor_rooted_and_bounded() {
         );
     }
 }
-
 fn weekly_rollup_publish_index_entry(root: &Path) -> JsonValue {
     let publication_state_path = root
         .join("governance")
@@ -113,7 +108,6 @@ fn weekly_rollup_publish_index_entry(root: &Path) -> JsonValue {
         .cloned()
         .expect("weekly rollup publish-index entry")
 }
-
 fn indexed_governance_artifact(root: &Path, entry: &JsonValue, field: &str) -> PathBuf {
     let relative = entry
         .get(field)
@@ -121,7 +115,6 @@ fn indexed_governance_artifact(root: &Path, entry: &JsonValue, field: &str) -> P
         .expect("governance artifact path");
     root.join("governance").join(relative)
 }
-
 fn rewrite_test_digest_sidecar(path: &Path) {
     let bytes = fs::read(path).expect("read governance artifact");
     let extension = path
@@ -137,13 +130,11 @@ fn rewrite_test_digest_sidecar(path: &Path) {
     )
     .expect("rewrite governance artifact digest");
 }
-
 #[test]
 fn node_handle_reconciliation_includes_appeal_finance_rollups() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
     let root = temp_dir.path().canonicalize().expect("canonical temp dir");
     let handle = reconciliation_handle_with_governance(&root);
-
     let rollup = appeal_finance_weekly_rollup_fixture();
     handle
         .publish_authenticated_appeal_finance_weekly_rollup(
@@ -151,7 +142,6 @@ fn node_handle_reconciliation_includes_appeal_finance_rollups() {
             governance_submission_account(0xB8),
         )
         .expect("publish appeal finance weekly rollup");
-
     let reconciliation = handle
         .run_reconciliation_once(1_700_000_300, &empty_finalized_repair_projection())
         .expect("reconciliation report");
@@ -169,7 +159,6 @@ fn node_handle_reconciliation_includes_appeal_finance_rollups() {
         rollup.total_rewards_forfeited_treasury_xor
     );
 }
-
 #[test]
 fn node_handle_reconciliation_ignores_tampered_rollup_json_mirror() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -182,7 +171,6 @@ fn node_handle_reconciliation_ignores_tampered_rollup_json_mirror() {
             governance_submission_account(0xB9),
         )
         .expect("publish appeal finance weekly rollup");
-
     let index_entry = weekly_rollup_publish_index_entry(&root);
     let json_path = indexed_governance_artifact(&root, &index_entry, "json_path");
     fs::write(
@@ -191,7 +179,6 @@ fn node_handle_reconciliation_ignores_tampered_rollup_json_mirror() {
     )
     .expect("replace display-only rollup JSON");
     rewrite_test_digest_sidecar(&json_path);
-
     let reconciliation = handle
         .run_reconciliation_once(1_700_000_301, &empty_finalized_repair_projection())
         .expect("reconciliation authenticates the signed canonical rollup");
@@ -207,7 +194,6 @@ fn node_handle_reconciliation_ignores_tampered_rollup_json_mirror() {
         rollup.total_rewards_forfeited_treasury_xor
     );
 }
-
 #[test]
 fn node_handle_reconciliation_rejects_rollup_source_substitution() {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -219,7 +205,6 @@ fn node_handle_reconciliation_rejects_rollup_source_substitution() {
             governance_submission_account(0xBA),
         )
         .expect("publish appeal finance weekly rollup");
-
     let index_entry = weekly_rollup_publish_index_entry(&root);
     let encoded_path = indexed_governance_artifact(&root, &index_entry, "encoded_path");
     let mut encoded = fs::read(&encoded_path).expect("read canonical weekly rollup");
@@ -227,7 +212,6 @@ fn node_handle_reconciliation_rejects_rollup_source_substitution() {
     *last ^= 1;
     fs::write(&encoded_path, encoded).expect("substitute canonical weekly rollup");
     rewrite_test_digest_sidecar(&encoded_path);
-
     let error = handle
         .run_reconciliation_once(1_700_000_302, &empty_finalized_repair_projection())
         .expect_err("signed source substitution must fail closed");
@@ -240,18 +224,15 @@ fn node_handle_reconciliation_rejects_rollup_source_substitution() {
         "unexpected source-substitution error: {message}"
     );
 }
-
 #[test]
 fn reconciliation_without_provider_binding_fails_without_publication() {
     let (cfg, _dir) = storage_config_with_temp_dir();
     let handle = NodeHandle::new_with_policies(cfg, RepairConfig::default(), GcConfig::default());
     let publisher = Arc::new(RecordingPublisher::default());
     handle.set_governance_publisher(publisher.clone());
-
     let error = handle
         .run_reconciliation_once(1_700_000_301, &empty_finalized_repair_projection())
         .expect_err("unbound reconciliation must fail closed");
-
     assert!(matches!(
         error,
         ReconciliationError::ProviderBindingUnavailable
@@ -259,16 +240,13 @@ fn reconciliation_without_provider_binding_fails_without_publication() {
     assert!(publisher.take().is_empty());
     assert_eq!(handle.pending_governance_publication_count(), 0);
 }
-
 #[test]
 fn appeal_finance_exact_addition_normalizes_scale() {
     let sum = xor("420")
         .checked_add(&xor("80.2500"))
         .expect("exact XOR sum");
-
     assert_eq!(sum, xor("500.25"));
 }
-
 #[test]
 fn node_handle_gc_skips_manifest_with_active_repair_task() {
     let (cfg, _dir) = storage_config_with_temp_dir();
@@ -281,7 +259,6 @@ fn node_handle_gc_skips_manifest_with_active_repair_task() {
     let handle =
         NodeHandle::new_with_policies(cfg, RepairConfig::default(), GcConfig::from(&gc_actual));
     let provider_id = ensure_test_capacity_provider(&handle);
-
     let payload = b"gc-repair-blocked";
     let plan = CarBuildPlan::single_file(payload).expect("plan");
     let retention_epoch = 1_700_000_000;
@@ -292,13 +269,11 @@ fn node_handle_gc_skips_manifest_with_active_repair_task() {
         .pin_policy(policy)
         .build()
         .expect("manifest");
-
     let mut reader = payload.as_slice();
     let manifest_id = handle
         .ingest_manifest(&manifest, &plan, &mut reader)
         .expect("ingest manifest");
     let manifest_digest: [u8; 32] = manifest.digest().expect("digest").into();
-
     let repair_projection = finalized_repair_projection(vec![active_native_repair_task(
         manifest_digest,
         provider_id,
@@ -313,7 +288,6 @@ fn node_handle_gc_skips_manifest_with_active_repair_task() {
     );
     assert!(handle.manifest_metadata(&manifest_id).is_ok());
 }
-
 #[test]
 fn node_handle_gc_blocks_shared_chunks_and_records_metrics() {
     let (cfg, _dir) = storage_config_with_temp_dir();
@@ -325,14 +299,12 @@ fn node_handle_gc_blocks_shared_chunks_and_records_metrics() {
     };
     let handle =
         NodeHandle::new_with_policies(cfg, RepairConfig::default(), GcConfig::from(&gc_actual));
-
     let payload = b"shared-chunk-payload";
     let plan = CarBuildPlan::single_file(payload).expect("plan");
     let retention_epoch = 1_700_000_000;
     let now_unix = retention_epoch + 10;
     let mut policy = PinPolicy::default();
     policy.retention_epoch = retention_epoch;
-
     let manifest_a = manifest_builder_for_plan(payload, &plan)
         .add_metadata("test.fixture_id", "gc-shared-a")
         .pin_policy(policy.clone())
@@ -343,7 +315,6 @@ fn node_handle_gc_blocks_shared_chunks_and_records_metrics() {
         .pin_policy(policy)
         .build()
         .expect("manifest b");
-
     let mut reader = payload.as_slice();
     handle
         .ingest_manifest(&manifest_a, &plan, &mut reader)
@@ -352,13 +323,11 @@ fn node_handle_gc_blocks_shared_chunks_and_records_metrics() {
     handle
         .ingest_manifest(&manifest_b, &plan, &mut reader)
         .expect("ingest manifest b");
-
     let metrics = global_or_default();
     let before = metrics
         .torii_sorafs_gc_blocked_total
         .with_label_values(&["shared_chunks"])
         .get();
-
     let report = run_test_gc(&handle, now_unix, &empty_finalized_repair_projection());
     assert!(report.evictions.is_empty());
     assert!(
@@ -367,19 +336,16 @@ fn node_handle_gc_blocks_shared_chunks_and_records_metrics() {
             .iter()
             .any(|skip| skip.reason == "shared_chunks")
     );
-
     let after = metrics
         .torii_sorafs_gc_blocked_total
         .with_label_values(&["shared_chunks"])
         .get();
     assert!(after >= before.saturating_add(1));
 }
-
 #[test]
 fn node_handle_reflects_config() {
     let (cfg, _dir) = storage_config_with_temp_dir();
     let handle = NodeHandle::new(cfg.clone());
-
     assert!(handle.is_enabled());
     let observed = handle.config();
     assert_eq!(observed.enabled(), cfg.enabled());
@@ -396,17 +362,13 @@ fn node_handle_reflects_config() {
     assert!(handle.storage().is_some());
     assert!(handle.pdp_provider_protocol().is_some());
 }
-
 #[test]
 fn node_handle_is_disabled_when_backend_is_unavailable() {
     let (cfg, _dir) = storage_config_with_temp_dir();
     let mut handle = NodeHandle::new(cfg);
-
     handle.storage = None;
-
     assert!(!handle.is_enabled());
 }
-
 #[test]
 fn node_handle_threads_repair_and_gc_config() {
     let (cfg, _dir) = storage_config_with_temp_dir();
@@ -417,7 +379,6 @@ fn node_handle_threads_repair_and_gc_config() {
         max_attempts: 6,
         worker_concurrency: 9,
     };
-
     let actual_gc = iroha_config::parameters::actual::SorafsGc {
         enabled: true,
         interval_secs: 300,
@@ -425,23 +386,19 @@ fn node_handle_threads_repair_and_gc_config() {
         retention_grace_secs: 86_400,
         ..Default::default()
     };
-
     let repair_cfg = RepairConfig::from(&actual_repair);
     let gc_cfg = GcConfig::from(&actual_gc);
     let handle = NodeHandle::new_with_policies(cfg, repair_cfg.clone(), gc_cfg.clone());
-
     assert!(handle.repair_config().enabled());
     assert_eq!(handle.repair_config().claim_ttl_secs(), 900);
     assert_eq!(handle.repair_config().heartbeat_interval_secs(), 45);
     assert_eq!(handle.repair_config().max_attempts(), 6);
     assert_eq!(handle.repair_config().worker_concurrency(), 9);
-
     assert!(handle.gc_config().enabled());
     assert_eq!(handle.gc_config().interval_secs(), 300);
     assert_eq!(handle.gc_config().max_deletions_per_run(), 2_000);
     assert_eq!(handle.gc_config().retention_grace_secs(), 86_400);
 }
-
 #[test]
 fn native_repair_config_fails_startup_outside_consensus_and_resource_bounds() {
     let baseline = iroha_config::parameters::actual::SorafsRepair {
@@ -452,7 +409,6 @@ fn native_repair_config_fails_startup_outside_consensus_and_resource_bounds() {
         worker_concurrency: 1,
     };
     let mut invalid = Vec::new();
-
     let mut lease_too_small = baseline;
     lease_too_small.claim_ttl_secs = 0;
     invalid.push(("claim_ttl_secs", lease_too_small));
@@ -483,7 +439,6 @@ fn native_repair_config_fails_startup_outside_consensus_and_resource_bounds() {
     disabled_but_consumed.enabled = false;
     disabled_but_consumed.max_attempts = 0;
     invalid.push(("max_attempts", disabled_but_consumed));
-
     let temp = tempfile::tempdir().expect("temp dir");
     for (expected, repair) in invalid {
         let config = StorageConfig::builder()
@@ -499,7 +454,6 @@ fn native_repair_config_fails_startup_outside_consensus_and_resource_bounds() {
         assert!(matches!(error, NodeInitError::NativeRepairConfig { .. }));
         assert!(error.to_string().contains(expected), "{error}");
     }
-
     let maximum = iroha_config::parameters::actual::SorafsRepair {
         claim_ttl_secs: REPAIR_LEDGER_MAX_LEASE_MS_V1 / 1_000,
         heartbeat_interval_secs: REPAIR_LEDGER_MAX_LEASE_MS_V1 / 1_000 - 1,
@@ -508,12 +462,10 @@ fn native_repair_config_fails_startup_outside_consensus_and_resource_bounds() {
     validate_native_repair_config(&RepairConfig::from(maximum))
         .expect("maximum bounded native lease config is accepted");
 }
-
 #[test]
 fn node_handle_records_capacity_declaration() {
     let (cfg, _dir) = storage_config_with_temp_dir();
     let handle = NodeHandle::new(cfg);
-
     let declaration = CapacityDeclarationV1 {
         version: CAPACITY_DECLARATION_VERSION_V1,
         provider_id: [0x11; 32],
@@ -547,16 +499,13 @@ fn node_handle_records_capacity_declaration() {
         2,
         Metadata::default(),
     );
-
     handle
         .record_capacity_declaration(&record)
         .expect("record declaration");
-
     let usage = handle.capacity_usage();
     assert_eq!(usage.provider_id, Some([0x11; 32]));
     assert_eq!(usage.committed_total_gib, 100);
     assert_eq!(usage.available_total_gib, 100);
-
     let telemetry = handle
         .build_capacity_telemetry()
         .expect("telemetry accumulator present")
@@ -565,12 +514,10 @@ fn node_handle_records_capacity_declaration() {
     assert_eq!(telemetry.utilised_capacity_gib, 0);
     assert_eq!(telemetry.successful_replications, 0);
 }
-
 #[test]
 fn node_handle_completes_replication_order() {
     let (cfg, _dir) = storage_config_with_temp_dir();
     let handle = NodeHandle::new(cfg);
-
     let declaration = CapacityDeclarationV1 {
         version: CAPACITY_DECLARATION_VERSION_V1,
         provider_id: [0x22; 32],
@@ -604,11 +551,9 @@ fn node_handle_completes_replication_order() {
         100,
         Metadata::default(),
     );
-
     handle
         .record_capacity_declaration(&record)
         .expect("record declaration");
-
     let order = ReplicationOrderV1 {
         version: sorafs_manifest::capacity::REPLICATION_ORDER_VERSION_V1,
         order_id: [0x99; 32],
@@ -630,20 +575,17 @@ fn node_handle_completes_replication_order() {
         },
         metadata: Vec::new(),
     };
-
     let plan = handle
         .schedule_replication_order(&order)
         .expect("schedule order")
         .expect("plan produced");
     assert_eq!(plan.assigned_slice_gib, 50);
-
     let release = handle
         .complete_replication_order(order.order_id)
         .expect("complete order");
     assert_eq!(release.released_gib, 50);
     assert_eq!(release.remaining_total_gib, 200);
 }
-
 #[test]
 fn capacity_declaration_reservations_and_meter_survive_restart() {
     let (base, _dir) = storage_config_with_temp_dir();
@@ -714,7 +656,6 @@ fn capacity_declaration_reservations_and_meter_survive_restart() {
         .expect("persist order")
         .expect("targeted plan");
     drop(source);
-
     let restored = NodeHandle::new(cfg);
     let usage = restored.capacity_usage();
     assert_eq!(usage.provider_id, Some(declaration.provider_id));
@@ -733,12 +674,10 @@ fn capacity_declaration_reservations_and_meter_survive_restart() {
     assert_eq!(release.released_gib, 50);
     assert_eq!(restored.capacity_usage().allocated_total_gib, 0);
 }
-
 #[test]
 fn node_handle_meter_tracks_replication_flow() {
     let (cfg, _dir) = storage_config_with_temp_dir();
     let handle = NodeHandle::new(cfg);
-
     let declaration = CapacityDeclarationV1 {
         version: CAPACITY_DECLARATION_VERSION_V1,
         provider_id: [0x55; 32],
@@ -775,13 +714,11 @@ fn node_handle_meter_tracks_replication_flow() {
     handle
         .record_capacity_declaration(&record)
         .expect("record declaration");
-
     let meter = handle.capacity_meter();
     let snapshot = meter.snapshot();
     assert_eq!(snapshot.declared_gib, 256);
     assert_eq!(snapshot.orders_issued, 0);
     assert_eq!(snapshot.outstanding_orders, 0);
-
     let order = ReplicationOrderV1 {
         version: REPLICATION_ORDER_VERSION_V1,
         order_id: [0x44; 32],
@@ -806,33 +743,27 @@ fn node_handle_meter_tracks_replication_flow() {
             value: "standard".into(),
         }],
     };
-
     let plan = handle
         .schedule_replication_order(&order)
         .expect("schedule ok")
         .expect("plan expected");
     assert_eq!(plan.assigned_slice_gib, 64);
-
     let snapshot_after_schedule = meter.snapshot();
     assert_eq!(snapshot_after_schedule.orders_issued, 1);
     assert_eq!(snapshot_after_schedule.outstanding_orders, 1);
     assert_eq!(snapshot_after_schedule.outstanding_total_gib, 64);
-
     handle
         .complete_replication_order(order.order_id)
         .expect("complete order");
-
     let snapshot_after_complete = meter.snapshot();
     assert_eq!(snapshot_after_complete.orders_completed, 1);
     assert_eq!(snapshot_after_complete.utilised_gib, 64);
     assert_eq!(snapshot_after_complete.outstanding_orders, 0);
-
     handle.update_telemetry(|acc| {
         acc.record_uptime_sample(540, 600).expect("uptime sample");
         acc.record_por_sample(true);
         acc.record_por_sample(false);
     });
-
     let telemetry = handle
         .build_capacity_telemetry()
         .expect("telemetry accumulator present")
@@ -842,30 +773,25 @@ fn node_handle_meter_tracks_replication_flow() {
     assert_eq!(telemetry.uptime_percent_milli, 90_000);
     assert_eq!(telemetry.por_success_percent_milli, 50_000);
 }
-
 #[test]
 fn node_handle_storage_ingest_and_fetch_range() {
     let (cfg, _dir) = storage_config_with_temp_dir();
     let handle = NodeHandle::new(cfg);
-
     let payload = b"node handle storage fetch test";
     let plan = CarBuildPlan::single_file(payload).expect("plan");
     let manifest = manifest_builder_for_plan(payload, &plan)
         .pin_policy(PinPolicy::default())
         .build()
         .expect("manifest");
-
     let mut reader = &payload[..];
     let manifest_id = handle
         .ingest_manifest(&manifest, &plan, &mut reader)
         .expect("ingest");
-
     let bytes = handle
         .read_payload_range(&manifest_id, 5, 6)
         .expect("read range");
     assert_eq!(bytes, b"handle"[..]);
 }
-
 #[test]
 fn admitted_payload_lease_reads_exact_bytes_without_paths() {
     let (cfg, _dir) = storage_config_with_temp_dir();
@@ -884,7 +810,6 @@ fn admitted_payload_lease_reads_exact_bytes_without_paths() {
         .manifest_metadata(&manifest_id)
         .expect("admitted manifest metadata")
         .manifest_digest();
-
     let readback = handle
         .with_admitted_payload_read_lease(&manifest_digest, |lease| {
             assert_eq!(lease.manifest_digest(), &manifest_digest);
@@ -898,10 +823,8 @@ fn admitted_payload_lease_reads_exact_bytes_without_paths() {
             bytes
         })
         .expect("acquire admitted payload lease");
-
     assert_eq!(readback, payload);
 }
-
 #[test]
 fn admitted_payload_lease_opens_repeated_fresh_readers_at_zero() {
     let (cfg, _dir) = storage_config_with_temp_dir();
@@ -920,21 +843,18 @@ fn admitted_payload_lease_opens_repeated_fresh_readers_at_zero() {
         .manifest_metadata(&manifest_id)
         .expect("admitted manifest metadata")
         .manifest_digest();
-
     handle
         .with_admitted_payload_read_lease(&manifest_digest, |lease| {
             let mut first = lease.open_reader().expect("open first fresh reader");
             let mut prefix = [0_u8; 5];
             first.read_exact(&mut prefix).expect("read first prefix");
             assert_eq!(&prefix, &payload[..prefix.len()]);
-
             let mut second = lease.open_reader().expect("open second fresh reader");
             let mut second_bytes = Vec::new();
             second
                 .read_to_end(&mut second_bytes)
                 .expect("read second fresh pass");
             assert_eq!(second_bytes, payload);
-
             let mut third = lease.open_reader().expect("open third fresh reader");
             let mut third_bytes = Vec::new();
             third
@@ -948,55 +868,45 @@ fn admitted_payload_lease_opens_repeated_fresh_readers_at_zero() {
         })
         .expect("acquire admitted payload lease");
 }
-
 #[test]
 fn admitted_payload_lease_rejects_missing_manifest_digest() {
     let (cfg, _dir) = storage_config_with_temp_dir();
     let handle = NodeHandle::new(cfg);
     let missing_digest = [0xA5; 32];
-
     assert!(matches!(
         handle.with_admitted_payload_read_lease(&missing_digest, |_| ()),
         Err(AdmittedPayloadReadLeaseErrorV1::NotAdmitted)
     ));
 }
-
 #[test]
 fn node_handle_storage_sample_por() {
     let (cfg, _dir) = storage_config_with_temp_dir();
     let handle = NodeHandle::new(cfg);
-
     let payload = b"SoraFS node handle PoR sampling payload";
     let plan = CarBuildPlan::single_file(payload).expect("plan");
     let manifest = manifest_builder_for_plan(payload, &plan)
         .pin_policy(PinPolicy::default())
         .build()
         .expect("manifest");
-
     let mut reader = &payload[..];
     let manifest_id = handle
         .ingest_manifest(&manifest, &plan, &mut reader)
         .expect("ingest");
-
     let storage = handle.storage().expect("storage backend");
     let stored = storage.manifest(&manifest_id).expect("stored manifest");
     let expected = stored.por_tree().leaf_count().min(3);
-
     let samples = handle.sample_por(&manifest_id, 3, 99).expect("sample por");
     assert_eq!(samples.len(), expected);
     let root = *stored.por_tree().root();
-
     for (_idx, proof) in samples {
         assert!(proof.verify(&root));
     }
 }
-
 #[test]
 fn node_handle_plan_por_challenges_handles_vrf_and_forced() {
     use std::collections::HashMap;
     let (cfg, _dir) = storage_config_with_temp_dir();
     let handle = NodeHandle::new(cfg);
-
     let declaration = CapacityDeclarationV1 {
         version: CAPACITY_DECLARATION_VERSION_V1,
         provider_id: [0x11; 32],
@@ -1041,19 +951,16 @@ fn node_handle_plan_por_challenges_handles_vrf_and_forced() {
     handle
         .record_capacity_declaration(&record)
         .expect("record declaration");
-
     let payload = vec![0xEE; 128 * 1024];
     let plan = CarBuildPlan::single_file(&payload).expect("plan");
     let manifest = manifest_builder_for_plan(&payload, &plan)
         .pin_policy(PinPolicy::default())
         .build()
         .expect("manifest");
-
     let mut reader = &payload[..];
     handle
         .ingest_manifest(&manifest, &plan, &mut reader)
         .expect("ingest");
-
     let randomness = PorRandomness {
         epoch_id: 42,
         issued_at_unix: 1_700_000_000,
@@ -1062,7 +969,6 @@ fn node_handle_plan_por_challenges_handles_vrf_and_forced() {
         drand_randomness: [0x33; 32],
         drand_signature: [0x44; 48],
     };
-
     let plans = handle
         .plan_por_challenges(randomness.clone(), &HashMap::new())
         .expect("forced challenge");
@@ -1072,14 +978,12 @@ fn node_handle_plan_por_challenges_handles_vrf_and_forced() {
     assert!(forced.vrf_output.is_none());
     assert!(forced.sample_count > 0);
     assert_eq!(forced.sample_count, 128);
-
     let mut inert_randomness = randomness.clone();
     inert_randomness.drand_signature = [0; 48];
     assert!(matches!(
         handle.plan_por_challenges(inert_randomness, &HashMap::new()),
         Err(PorChallengePlannerError::InvalidDrandSignature)
     ));
-
     let mut vrf_records = HashMap::new();
     vrf_records.insert(
         ManifestVrfKey {
@@ -1095,7 +999,6 @@ fn node_handle_plan_por_challenges_handles_vrf_and_forced() {
             proof: iroha_crypto::vrf::VrfProof::SigInG1([0x66; 48]),
         },
     );
-
     let plans_with_vrf = handle
         .plan_por_challenges(randomness.clone(), &vrf_records)
         .expect("vrf-backed challenge");
@@ -1107,13 +1010,11 @@ fn node_handle_plan_por_challenges_handles_vrf_and_forced() {
         satisfied.vrf_proof,
         Some(iroha_crypto::vrf::VrfProof::SigInG1(_))
     ));
-
     assert!(matches!(
         handle.plan_por_challenges_with_forced_policy(randomness.clone(), &HashMap::new(), false,),
         Err(PorChallengePlannerError::MissingVrfBeforeDeadline { .. })
     ));
 }
-
 #[test]
 fn node_handle_plan_por_challenges_skips_expired_manifest() {
     let (cfg, _dir) = storage_config_with_temp_dir();
@@ -1123,7 +1024,6 @@ fn node_handle_plan_por_challenges_skips_expired_manifest() {
     };
     let handle =
         NodeHandle::new_with_policies(cfg, RepairConfig::default(), GcConfig::from(&gc_actual));
-
     let declaration = CapacityDeclarationV1 {
         version: CAPACITY_DECLARATION_VERSION_V1,
         provider_id: [0x22; 32],
@@ -1160,7 +1060,6 @@ fn node_handle_plan_por_challenges_skips_expired_manifest() {
     handle
         .record_capacity_declaration(&record)
         .expect("record declaration");
-
     let now_unix = 1_700_000_000;
     let expired_manifest = build_manifest_with_retention(
         vec![0x01; 8],
@@ -1174,7 +1073,6 @@ fn node_handle_plan_por_challenges_skips_expired_manifest() {
         b"active-por-manifest",
         &handle,
     );
-
     let randomness = PorRandomness {
         epoch_id: 7,
         issued_at_unix: now_unix,
@@ -1183,7 +1081,6 @@ fn node_handle_plan_por_challenges_skips_expired_manifest() {
         drand_randomness: [0x55; 32],
         drand_signature: [0x66; 48],
     };
-
     let plans = handle
         .plan_por_challenges(randomness, &HashMap::new())
         .expect("plan por");
@@ -1191,7 +1088,6 @@ fn node_handle_plan_por_challenges_skips_expired_manifest() {
     assert_eq!(plans[0].challenge.manifest_digest, active_manifest);
     assert_ne!(plans[0].challenge.manifest_digest, expired_manifest);
 }
-
 fn build_manifest_with_retention(
     fixture_id: Vec<u8>,
     retention_epoch: u64,
@@ -1212,7 +1108,6 @@ fn build_manifest_with_retention(
         .expect("ingest");
     manifest.digest().expect("digest").into()
 }
-
 #[test]
 fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart() {
     use crate::{
@@ -1230,7 +1125,6 @@ fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart()
             sorafs_repair_task_id_v1,
         },
     };
-
     let (cfg, _dir) = storage_config_with_temp_dir();
     let repair_actual = iroha_config::parameters::actual::SorafsRepair {
         enabled: true,
@@ -1275,7 +1169,6 @@ fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart()
     handle
         .record_capacity_declaration(&record)
         .expect("bind local provider");
-
     let payload = b"finalized-native-repair-corrupt-chunk";
     let plan = CarBuildPlan::single_file(payload).expect("chunk plan");
     let build_manifest = |fixture_id: Vec<u8>| {
@@ -1313,7 +1206,6 @@ fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart()
     assert_ne!(target.path, source.path);
     let corrupt = vec![0xA5; target.length as usize];
     std::fs::write(&target.path, &corrupt).expect("corrupt target chunk");
-
     let authority_key =
         KeyPair::try_from_seed(vec![0xC5; 32], Algorithm::Ed25519).expect("authority key");
     let authority = AccountId::new(authority_key.public_key().clone());
@@ -1419,7 +1311,6 @@ fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart()
         std::fs::read(&target.path).expect("malformed task performs no storage I/O"),
         corrupt
     );
-
     std::fs::write(&source.path, &corrupt).expect("make every local replica invalid");
     let orchestrator_calls = Arc::new(AtomicUsize::new(0));
     handle.set_repair_orchestrator(Arc::new(FailingRepairOrchestrator {
@@ -1442,7 +1333,6 @@ fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart()
     );
     handle.clear_repair_orchestrator();
     std::fs::write(&source.path, payload).expect("restore a valid local source replica");
-
     let first = handle
         .execute_finalized_native_repair(&finalized_task, &authority, &context, 2_000)
         .expect("execute exact finalized native lease");
@@ -1460,7 +1350,6 @@ fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart()
         blake3::hash(&std::fs::read(&target.path).expect("read restored target")).as_bytes(),
         &target.digest
     );
-
     let replay = handle
         .execute_finalized_native_repair(&finalized_task, &authority, &context, 2_001)
         .expect("deduplicate exact terminal operation");
@@ -1484,7 +1373,6 @@ fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart()
             )
     ));
     drop(handle);
-
     let restored = NodeHandle::new_with_policies(cfg, repair_config, GcConfig::default());
     let pending = restored
         .pending_repair_transactions_after(None, 8)

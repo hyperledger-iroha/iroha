@@ -109,7 +109,11 @@ This document satisfies **SNNet-1** (handshake, salt rotation, capability TLVs) 
   plus both clock-skew edges (`max_ttl + 2 * clock_skew`). Active entries are
   never evicted: an unreadable, malformed,
   unwritable, or exhausted ledger fails startup or rejects admission instead of
-  admitting a replay. Each relay identity must have one authoritative ledger;
+  admitting a replay. The first-release ledger ceiling is 65,536 entries. Its
+  capacity-derived byte limit and explicit Norito allocation budget are checked
+  before replay maps are allocated; the final path component must remain a
+  stable direct regular file and cannot be a symbolic link or reparse point.
+  Each relay identity must have one authoritative ledger;
   a process-lifetime exclusive sidecar lock rejects a second owner, and cloned
   active replicas with independent stores are invalid. The Prometheus counter
   `soranet_token_verify_total{issuer,relay,outcome}` records accepted/replay/

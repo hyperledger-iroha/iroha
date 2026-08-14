@@ -1,11 +1,8 @@
 //! Print canonical Sumeragi v2 metadata for raw genesis manifests.
-
-use std::{env, path::PathBuf, str::FromStr as _};
-
 use iroha_crypto::PublicKey;
 use iroha_data_model::account::AccountId;
 use iroha_genesis::RawGenesisTransaction;
-
+use std::{env, path::PathBuf, str::FromStr as _};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut raw_args = env::args_os().skip(1);
     if raw_args.next().as_deref() == Some(std::ffi::OsStr::new("--account")) {
@@ -27,7 +24,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", account.to_i105_for_discriminant(discriminant)?);
         return Ok(());
     }
-
     let paths = env::args_os()
         .skip(1)
         .map(PathBuf::from)
@@ -35,7 +31,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if paths.is_empty() {
         return Err("usage: sumeragi_v2_manifest_fingerprint <genesis.json> [...]".into());
     }
-
     for path in paths {
         let manifest = RawGenesisTransaction::from_path(&path)?;
         let refreshed = manifest.with_consensus_meta();

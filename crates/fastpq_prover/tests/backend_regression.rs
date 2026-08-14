@@ -1,7 +1,5 @@
 //! Regression fixtures for FASTPQ V1 backend artifacts captured from transition batches.
-
-use std::fs;
-
+use crate::common::fixture_update_requested;
 use fastpq_prover::{
     ExecutionMode, OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch,
     gadgets::transfer::attach_transfer_smt_witnesses,
@@ -16,9 +14,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use norito::core::to_bytes;
 use norito::to_bytes as norito_bytes;
-
-use crate::common::fixture_update_requested;
-
+use std::fs;
 fn v1_captured_fixture_batch(rows: usize) -> TransitionBatch {
     let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
     let mut transcripts = Vec::new();
@@ -70,7 +66,6 @@ fn v1_captured_fixture_batch(rows: usize) -> TransitionBatch {
     batch.public_inputs.tx_set_hash = [0u8; 32];
     batch
 }
-
 fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
     let seed: [u8; Hash::LENGTH] = Hash::new(format!("{label}@{domain}")).into();
     let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::default())
@@ -78,7 +73,6 @@ fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
     let _ = domain;
     AccountId::new(keypair.public_key().clone())
 }
-
 fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTransition) {
     let asset_definition = AssetDefinitionId::derive_from_components(
         DomainId::try_new("fixture", "universal").unwrap(),
@@ -131,7 +125,6 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
     );
     (transcript, sender, receiver)
 }
-
 #[test]
 fn v1_artifact_balanced_1k_matches_fixture() {
     let update = fixture_update_requested();
@@ -156,7 +149,6 @@ fn v1_artifact_balanced_1k_matches_fixture() {
     }
     assert_fixture_bytes("v1_balanced_1k.bin", &encoded, expected);
 }
-
 #[cfg(feature = "fastpq-gpu")]
 #[test]
 fn v1_artifact_balanced_cpu_gpu_parity() {
@@ -186,7 +178,6 @@ fn v1_artifact_balanced_cpu_gpu_parity() {
     );
     assert_eq!(cpu_encoded, gpu_encoded, "V1 cpu/gpu proofs must match");
 }
-
 #[test]
 fn v1_artifact_balanced_5k_matches_fixture() {
     let update = fixture_update_requested();
@@ -211,7 +202,6 @@ fn v1_artifact_balanced_5k_matches_fixture() {
     }
     assert_fixture_bytes("v1_balanced_5k.bin", &encoded, expected);
 }
-
 fn assert_fixture_bytes(name: &str, actual: &[u8], expected: &[u8]) {
     assert!(
         actual == expected,

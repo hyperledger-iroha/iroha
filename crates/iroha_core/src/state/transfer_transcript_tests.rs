@@ -1,12 +1,9 @@
 // Transfer-transcript tests remain in the parent state test module.
-
 use iroha_data_model::block::BlockHeader;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use nonzero_ext::nonzero;
-
 use super::*;
 use crate::kura::Kura;
-
 fn sample_delta(amount: u32) -> TransferDeltaTranscript {
     TransferDeltaTranscript {
         from_account: (*ALICE_ID).clone(),
@@ -24,7 +21,6 @@ fn sample_delta(amount: u32) -> TransferDeltaTranscript {
         to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
     }
 }
-
 #[test]
 fn transfer_transcripts_flush_into_block_map_on_apply() {
     let kura = Kura::blank_kura_for_testing();
@@ -73,7 +69,6 @@ fn transfer_transcripts_flush_into_block_map_on_apply() {
     );
     assert_eq!(transcript.poseidon_preimage_digest, Some(expected_poseidon));
 }
-
 #[test]
 fn transfer_transcripts_reject_missing_call_hash() {
     let kura = Kura::blank_kura_for_testing();
@@ -110,7 +105,6 @@ fn transfer_transcripts_reject_missing_call_hash() {
     let transcripts = block.drain_transfer_transcripts();
     assert!(transcripts.is_empty());
 }
-
 #[test]
 fn transfer_transcript_identity_preflight_fails_closed_during_replay() {
     let kura = Kura::blank_kura_for_testing();
@@ -118,14 +112,12 @@ fn transfer_transcript_identity_preflight_fails_closed_during_replay() {
     let state = State::new(World::default(), Arc::clone(&kura), query);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
-
     {
         let mut transaction = block.transaction();
         let error = transaction
             .require_transfer_transcript_identity("test transfer")
             .expect_err("live transfer without call_hash must fail closed");
         assert!(error.to_string().contains("transaction call_hash"));
-
         let call_hash = iroha_crypto::Hash::prehashed([0xA5; iroha_crypto::Hash::LENGTH]);
         transaction.tx_call_hash = Some(call_hash);
         assert_eq!(
@@ -135,7 +127,6 @@ fn transfer_transcript_identity_preflight_fails_closed_during_replay() {
             call_hash
         );
     }
-
     block.replay_compatibility = true;
     let transaction = block.transaction();
     let error = transaction
@@ -143,7 +134,6 @@ fn transfer_transcript_identity_preflight_fails_closed_during_replay() {
         .expect_err("replay transfer without call_hash must fail closed");
     assert!(error.to_string().contains("transaction call_hash"));
 }
-
 #[test]
 fn replay_transfer_transcripts_reject_missing_call_hash_without_fastpq_work() {
     let kura = Kura::blank_kura_for_testing();
@@ -155,7 +145,6 @@ fn replay_transfer_transcripts_reject_missing_call_hash_without_fastpq_work() {
     let _guard = crate::sumeragi::witness::exec_witness_guard();
     crate::sumeragi::witness::start_block();
     let mut tx = block.transaction();
-
     tx.record_transfer_transcript(&ALICE_ID, sample_delta(1))
         .expect_err("replay mode must not bypass transcript identity");
     assert!(
@@ -163,13 +152,11 @@ fn replay_transfer_transcripts_reject_missing_call_hash_without_fastpq_work() {
         "rejected replay transfer must not stage FASTPQ transcripts"
     );
     tx.apply();
-
     assert!(block.drain_transfer_transcripts().is_empty());
     let witness = crate::sumeragi::witness::drain_exec_witness();
     assert!(witness.fastpq_transcripts.is_empty());
     assert!(witness.fastpq_batches.is_empty());
 }
-
 #[test]
 fn generated_rwa_id_rejects_missing_call_hash() {
     let kura = Kura::blank_kura_for_testing();
@@ -179,7 +166,6 @@ fn generated_rwa_id_rejects_missing_call_hash() {
     let mut block = state.block(header);
     let mut tx = block.transaction();
     let domain = DomainId::try_new("wonderland", "universal").unwrap();
-
     let err = tx
         .next_generated_rwa_id(&domain, "test")
         .expect_err("missing transaction call_hash must fail");
@@ -188,7 +174,6 @@ fn generated_rwa_id_rejects_missing_call_hash() {
         "unexpected error: {err}"
     );
 }
-
 #[test]
 fn transfer_transcripts_batch_records_multiple_deltas() {
     let kura = Kura::blank_kura_for_testing();
@@ -244,7 +229,6 @@ fn transfer_transcripts_batch_records_multiple_deltas() {
     );
     assert!(transcript.poseidon_preimage_digest.is_none());
 }
-
 #[test]
 fn transfer_transcripts_batch_flushes_each_recorded_transaction_hash() {
     let kura = Kura::blank_kura_for_testing();
@@ -292,7 +276,6 @@ fn transfer_transcripts_batch_flushes_each_recorded_transaction_hash() {
         .expect("record second transcript");
     tx.tx_call_hash = None;
     tx.apply();
-
     let transcripts = block.drain_transfer_transcripts();
     assert_eq!(transcripts.len(), 2);
     assert_eq!(
@@ -310,12 +293,10 @@ fn transfer_transcripts_batch_flushes_each_recorded_transaction_hash() {
         vec![delta_b]
     );
 }
-
 #[test]
 fn detached_asset_transfer_matches_sequential_transcript_and_events() {
     use crate::smartcontracts::Execute as _;
     use iroha_data_model::isi::Transfer;
-
     fn build_transfer_world(receiver_asset_balance: Option<u32>) -> (World, AssetId, AssetId) {
         let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
@@ -351,7 +332,6 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
         );
         (world, alice_asset_id, bob_asset_id)
     }
-
     fn balance(state: &State, asset_id: &AssetId) -> Quantity {
         state
             .view()
@@ -361,10 +341,8 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
             .map(|value| value.as_ref().clone())
             .unwrap_or_else(Quantity::zero)
     }
-
     let call_hash = iroha_crypto::Hash::prehashed([7_u8; iroha_crypto::Hash::LENGTH]);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-
     let (world_seq, alice_asset_id, bob_asset_id) = build_transfer_world(None);
     let kura_seq = Kura::blank_kura_for_testing();
     let query_seq = crate::query::store::LiveQueryStore::start_test();
@@ -381,7 +359,6 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
     let events_seq = block_seq.world.take_external_events();
     let transcripts_seq = block_seq.drain_transfer_transcripts();
     block_seq.commit().expect("commit sequential block");
-
     let (world_det, _, _) = build_transfer_world(None);
     let kura_det = Kura::blank_kura_for_testing();
     let query_det = crate::query::store::LiveQueryStore::start_test();
@@ -408,7 +385,6 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
     let events_det = block_det.world.take_external_events();
     let transcripts_det = block_det.drain_transfer_transcripts();
     block_det.commit().expect("commit detached block");
-
     let (world_existing_tx, _, _) = build_transfer_world(None);
     let kura_existing_tx = Kura::blank_kura_for_testing();
     let query_existing_tx = crate::query::store::LiveQueryStore::start_test();
@@ -432,7 +408,6 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
     block_existing_tx
         .commit()
         .expect("commit existing-transaction detached block");
-
     let second_call_hash = iroha_crypto::Hash::prehashed([8_u8; iroha_crypto::Hash::LENGTH]);
     let (world_batch, _, _) = build_transfer_world(None);
     let kura_batch = Kura::blank_kura_for_testing();
@@ -473,7 +448,6 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
     let events_batch = block_batch.world.take_external_events();
     let transcripts_batch = block_batch.drain_transfer_transcripts();
     block_batch.commit().expect("commit batch detached block");
-
     assert_eq!(events_seq, events_det);
     assert_eq!(events_seq, events_existing_tx);
     assert_eq!(transcripts_seq, transcripts_det);
@@ -490,7 +464,6 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
         events_batch.len() > events_seq.len(),
         "two-transfer batch should preserve both transfers' event stream"
     );
-
     let (world_batch_guard, _, _) = build_transfer_world(Some(0));
     let kura_batch_guard = Kura::blank_kura_for_testing();
     let query_batch_guard = crate::query::store::LiveQueryStore::start_test();
@@ -505,7 +478,6 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
         first_delta.supports_numeric_transfer_batch_merge(&batch_guard_tx),
         "preseeded receiver assets without matching data triggers should batch"
     );
-
     let executable = iroha_data_model::transaction::Executable::Instructions(
         iroha_primitives::const_vec::ConstVec::from(Vec::<InstructionBox>::new()),
     );
@@ -532,7 +504,6 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
         first_delta.supports_numeric_transfer_batch_merge(&batch_guard_tx),
         "unrelated data triggers should not disable transfer batching"
     );
-
     let matching_action = crate::smartcontracts::triggers::specialized::SpecializedAction::new(
         executable,
         Repeats::Indefinitely,
@@ -555,7 +526,6 @@ fn detached_asset_transfer_matches_sequential_transcript_and_events() {
         "matching asset data triggers should keep per-transaction semantics"
     );
     drop(batch_guard_tx);
-
     assert_eq!(balance(&state_det, &alice_asset_id), Quantity::from(7_u32));
     assert_eq!(balance(&state_det, &bob_asset_id), Quantity::from(3_u32));
     assert_eq!(

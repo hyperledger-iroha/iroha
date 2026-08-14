@@ -4,7 +4,6 @@
 //! constructs the spanned AST, and records the completed syntax-node outline.
 //! The CST sink later merges that outline with the original trivia-bearing
 //! tape; there is no second structural parser or CST-to-token reparse.
-
 use super::{
     ast::*,
     diagnostic::{
@@ -23,7 +22,6 @@ use super::{
     },
 };
 use iroha_primitives::{bigint::BigInt, numeric_abi::IntValueV1};
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParseError {
     /// Stable machine-readable diagnostic code, independent of message text.
@@ -42,10 +40,8 @@ pub struct ParseError {
     /// Syntax-outline node that owned `expected` at the failure boundary.
     pub(crate) expected_owner: Option<usize>,
 }
-
 type ParseResult<T> = Result<T, Box<ParseError>>;
 type ForEachMapBinding = (NodeId, String, Option<String>, Expr);
-
 fn integer_digits(spelling: &str) -> (&str, u32) {
     if let Some(digits) = spelling
         .strip_prefix("0x")
@@ -61,7 +57,6 @@ fn integer_digits(spelling: &str) -> (&str, u32) {
         (spelling, 10)
     }
 }
-
 fn parse_integer_value(spelling: &str, negative: bool) -> Result<BigInt, ()> {
     let (digits, radix_value) = integer_digits(spelling);
     let radix = BigInt::from(radix_value);
@@ -78,7 +73,6 @@ fn parse_integer_value(spelling: &str, negative: bool) -> Result<BigInt, ()> {
     IntValueV1::try_new(value.clone()).map_err(|_| ())?;
     Ok(value)
 }
-
 fn parse_bounded_unsigned(spelling: &str, maximum: u64) -> Result<u64, ()> {
     let (digits, radix) = integer_digits(spelling);
     let compact = digits
@@ -88,11 +82,9 @@ fn parse_bounded_unsigned(spelling: &str, maximum: u64) -> Result<u64, ()> {
     let value = u64::from_str_radix(&compact, radix).map_err(|_| ())?;
     (value <= maximum).then_some(value).ok_or(())
 }
-
 fn bigint_literal_expr(value: BigInt) -> Expr {
     Expr::IntLiteral(value)
 }
-
 fn retired_numeric_type_replacement(name: &str) -> Option<Option<&'static str>> {
     match name {
         "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128"
@@ -103,7 +95,6 @@ fn retired_numeric_type_replacement(name: &str) -> Option<Option<&'static str>> 
         _ => None,
     }
 }
-
 fn expected_syntax_kind(kind: &TokenKind) -> Option<SyntaxKind> {
     Some(match kind {
         TokenKind::Fn => SyntaxKind::KwFn,
@@ -175,7 +166,6 @@ fn expected_syntax_kind(kind: &TokenKind) -> Option<SyntaxKind> {
         TokenKind::EOF => SyntaxKind::Eof,
     })
 }
-
 fn map_iteration_has_explicit_bound(expr: &Expr) -> bool {
     matches!(
         expr.kind(),
@@ -189,18 +179,15 @@ fn map_iteration_has_explicit_bound(expr: &Expr) -> bool {
                 || (name == "range" && args.len() == 3)
     )
 }
-
 struct ParsedCallArguments {
     args: Vec<Expr>,
     argument_names: Option<Vec<String>>,
     ranges: Vec<TextRange>,
 }
-
 enum ParsedBlockElement {
     Statement(Statement),
     Tail(Expr),
 }
-
 fn block_element_syntax_kind(element: &ParsedBlockElement) -> SyntaxKind {
     match element {
         ParsedBlockElement::Tail(_) => SyntaxKind::TailExpr,
@@ -215,7 +202,6 @@ fn block_element_syntax_kind(element: &ParsedBlockElement) -> SyntaxKind {
         },
     }
 }
-
 #[derive(Default)]
 struct FunctionAttributes {
     reads: Vec<String>,
@@ -223,7 +209,6 @@ struct FunctionAttributes {
     is_test: bool,
     test_fixture: Option<String>,
 }
-
 impl FunctionAttributes {
     fn is_empty(&self) -> bool {
         self.reads.is_empty()
@@ -232,7 +217,6 @@ impl FunctionAttributes {
             && self.test_fixture.is_none()
     }
 }
-
 /// Parse a KOTODAMA source string into a [`Program`].
 pub fn parse(src: &str) -> Result<Program, String> {
     if src.len() > crate::source::MAX_SOURCE_BYTES {
@@ -245,7 +229,6 @@ pub fn parse(src: &str) -> Result<Program, String> {
     let source = SourceFile::new(SourceId(0), "<source>", src);
     parse_source(&source, FrontendBudget::v1()).map_err(|bundle| bundle.render_human())
 }
-
 /// Parse one named source file through the canonical V1 token stream.
 ///
 /// The lossless lexer runs exactly once. Its significant tokens feed this AST
@@ -258,7 +241,6 @@ pub fn parse_source(
     let output = crate::syntax::parse_program(source, budget);
     output.program.ok_or(output.diagnostics)
 }
-
 /// Parse once and retain the exact significant token stream for later
 /// resolution/type diagnostics.
 pub(crate) fn parse_source_spanned(
@@ -267,20 +249,17 @@ pub(crate) fn parse_source_spanned(
 ) -> Result<(SpannedProgram, Vec<Token>), DiagnosticBundle> {
     crate::syntax::parser::parse_spanned_program(source, budget)
 }
-
 pub(crate) struct GrammarParseOutput {
     pub(crate) spanned: Option<SpannedProgram>,
     pub(crate) diagnostics: DiagnosticBundle,
     pub(crate) outline: SyntaxOutline,
     pub(crate) missing: Vec<MissingSyntax>,
 }
-
 /// Parse the canonical significant token view once while recording the CST
 /// structure chosen by those exact grammar decisions.
 pub(crate) fn parse_with_syntax(source: &SourceFile, tokens: &[Token]) -> GrammarParseOutput {
     #[cfg(test)]
     CANONICAL_GRAMMAR_PARSES.with(|count| count.set(count.get().saturating_add(1)));
-
     let mut parser = CstAstLowerer::new(tokens, source, true);
     let parsed = parser.parse_program();
     let mut errors = std::mem::take(&mut parser.errors);
@@ -296,7 +275,6 @@ pub(crate) fn parse_with_syntax(source: &SourceFile, tokens: &[Token]) -> Gramma
     });
     parser.syntax.finish_open_nodes(source.text().len() as u32);
     let outline = std::mem::take(&mut parser.syntax).into_outline();
-
     let mut missing = errors
         .iter()
         .filter_map(|error| {
@@ -330,7 +308,6 @@ pub(crate) fn parse_with_syntax(source: &SourceFile, tokens: &[Token]) -> Gramma
         missing,
     }
 }
-
 fn append_forbidden_source_identifier_errors(
     parser: &CstAstLowerer<'_>,
     tokens: &[Token],
@@ -359,22 +336,18 @@ fn append_forbidden_source_identifier_errors(
         ));
     }
 }
-
 #[cfg(test)]
 thread_local! {
     static CANONICAL_GRAMMAR_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
-
 #[cfg(test)]
 pub(crate) fn reset_direct_cst_lowering_count() {
     CANONICAL_GRAMMAR_PARSES.with(|count| count.set(0));
 }
-
 #[cfg(test)]
 pub(crate) fn direct_cst_lowering_count() -> usize {
     CANONICAL_GRAMMAR_PARSES.with(std::cell::Cell::get)
 }
-
 pub(crate) fn validate_nesting(
     source: &SourceFile,
     budget: FrontendBudget,
@@ -458,7 +431,6 @@ pub(crate) fn validate_nesting(
     }
     Ok(())
 }
-
 fn parse_diagnostic_bundle(source: &SourceFile, mut errors: Vec<ParseError>) -> DiagnosticBundle {
     let omitted = errors.len().saturating_sub(MAX_DIAGNOSTICS - 1);
     errors.truncate(MAX_DIAGNOSTICS - 1);
@@ -507,7 +479,6 @@ fn parse_diagnostic_bundle(source: &SourceFile, mut errors: Vec<ParseError>) -> 
     }
     DiagnosticBundle::new(diagnostics)
 }
-
 /// Wrap a unit-test fragment in a canonical `seiyaku`/`誓約` container before parsing.
 #[cfg(test)]
 pub(crate) fn parse_test_fragment(src: &str) -> Result<Program, String> {
@@ -521,7 +492,6 @@ pub(crate) fn parse_test_fragment(src: &str) -> Result<Program, String> {
         parse(&format!("seiyaku TestContract {{\n{src}\n}}"))
     }
 }
-
 struct CstAstLowerer<'a> {
     tokens: &'a [Token],
     pos: usize,
@@ -536,7 +506,6 @@ struct CstAstLowerer<'a> {
     declared_function_parameters: std::collections::BTreeMap<String, Option<Vec<String>>>,
     syntax: SyntaxOutlineBuilder,
 }
-
 impl<'a> CstAstLowerer<'a> {
     fn new(tokens: &'a [Token], source: &'a SourceFile, recover: bool) -> Self {
         let mut syntax = SyntaxOutlineBuilder::default();
@@ -556,26 +525,22 @@ impl<'a> CstAstLowerer<'a> {
             syntax,
         }
     }
-
     fn current_start(&self) -> u32 {
         self.tokens
             .get(self.pos)
             .or_else(|| self.tokens.last())
             .map_or(0, |token| token.range.start)
     }
-
     fn previous_end(&self, fallback: u32) -> u32 {
         self.tokens
             .get(self.pos.saturating_sub(1))
             .map_or(fallback, |token| token.range.end)
     }
-
     fn begin_node(&mut self, kind: AstNodeKind, start: u32) -> NodeId {
         self.facts
             .source_map
             .begin_owned(kind, start, self.current_function)
     }
-
     fn finish_node(&mut self, node: NodeId) {
         let start = self
             .facts
@@ -585,31 +550,24 @@ impl<'a> CstAstLowerer<'a> {
         let end = self.previous_end(start);
         self.facts.source_map.finish(node, end);
     }
-
     fn syntax_start(&mut self, kind: SyntaxKind, start: u32) -> usize {
         self.syntax.start(kind, start)
     }
-
     fn syntax_finish(&mut self, node: usize, fallback: u32) {
         self.syntax.finish(node, self.previous_end(fallback));
     }
-
     fn syntax_finish_at(&mut self, node: usize, end: u32) {
         self.syntax.finish(node, end);
     }
-
     fn syntax_set_kind(&mut self, node: usize, kind: SyntaxKind) {
         self.syntax.set_kind(node, kind);
     }
-
     fn syntax_checkpoint(&self) -> SyntaxOutlineCheckpoint {
         self.syntax.checkpoint()
     }
-
     fn syntax_rollback(&mut self, checkpoint: SyntaxOutlineCheckpoint) {
         self.syntax.rollback(checkpoint);
     }
-
     fn with_syntax<T>(
         &mut self,
         kind: SyntaxKind,
@@ -621,7 +579,6 @@ impl<'a> CstAstLowerer<'a> {
         self.syntax_finish(node, start);
         result
     }
-
     fn syntax_item_kind(&self, start: usize) -> SyntaxKind {
         let mut cursor = start;
         while matches!(
@@ -679,7 +636,6 @@ impl<'a> CstAstLowerer<'a> {
             _ => SyntaxKind::ErrorNode,
         }
     }
-
     fn syntax_statement_kind(&self, start: usize) -> SyntaxKind {
         match self.tokens.get(start).map(|token| &token.kind) {
             Some(TokenKind::Let | TokenKind::Var) => SyntaxKind::LetStmt,
@@ -691,7 +647,6 @@ impl<'a> CstAstLowerer<'a> {
             _ => SyntaxKind::ExprStmt,
         }
     }
-
     fn record_declaration(
         &mut self,
         node: NodeId,
@@ -712,7 +667,6 @@ impl<'a> CstAstLowerer<'a> {
             kind,
         });
     }
-
     fn record_type_use(&mut self, name: String, range: TextRange) {
         let node =
             self.facts
@@ -724,7 +678,6 @@ impl<'a> CstAstLowerer<'a> {
             name,
         });
     }
-
     fn source_expression(&mut self, kind: AstNodeKind, range: TextRange, expression: Expr) -> Expr {
         let node = self
             .facts
@@ -736,7 +689,6 @@ impl<'a> CstAstLowerer<'a> {
             expression: Box::new(expression),
         }
     }
-
     fn source_expression_from(&mut self, start: u32, expression: Expr) -> Expr {
         let range = TextRange::new(start, self.previous_end(start));
         if expression
@@ -748,7 +700,6 @@ impl<'a> CstAstLowerer<'a> {
             self.source_expression(AstNodeKind::Expression, range, expression)
         }
     }
-
     fn source_statement(&mut self, range: TextRange, statement: Statement) -> Statement {
         let node = self.facts.source_map.allocate_owned(
             AstNodeKind::Statement,
@@ -761,7 +712,6 @@ impl<'a> CstAstLowerer<'a> {
             statement: Box::new(statement),
         }
     }
-
     fn finish_owned_expression(
         &mut self,
         owner: NodeId,
@@ -777,7 +727,6 @@ impl<'a> CstAstLowerer<'a> {
             expression: Box::new(expression),
         }
     }
-
     fn finish_owned_statement(
         &mut self,
         owner: NodeId,
@@ -794,7 +743,6 @@ impl<'a> CstAstLowerer<'a> {
             statement: Box::new(statement),
         }
     }
-
     fn record_binding(
         &mut self,
         owner: NodeId,
@@ -816,7 +764,6 @@ impl<'a> CstAstLowerer<'a> {
             kind,
         });
     }
-
     fn source_type(&mut self, range: TextRange, ty: TypeExpr) -> TypeExpr {
         let node =
             self.facts
@@ -828,7 +775,6 @@ impl<'a> CstAstLowerer<'a> {
             ty: Box::new(ty),
         }
     }
-
     fn record_call(
         &mut self,
         name: String,
@@ -858,7 +804,6 @@ impl<'a> CstAstLowerer<'a> {
             SourceRange::new(self.facts.source_map.source(), call_range),
         )
     }
-
     fn parse_program(&mut self) -> ParseResult<Program> {
         let kind = if self.peek(TokenKind::Seiyaku) {
             SourceUnitKind::Seiyaku
@@ -886,7 +831,6 @@ impl<'a> CstAstLowerer<'a> {
             fixtures: self.fixtures.clone(),
         })
     }
-
     fn parse_source_unit(&mut self, kind: SourceUnitKind) -> ParseResult<(SourceUnit, Vec<Item>)> {
         let start = self.current_start();
         let syntax_unit = self.syntax_start(SyntaxKind::SourceUnit, start);
@@ -1121,7 +1065,6 @@ impl<'a> CstAstLowerer<'a> {
         self.syntax_finish(syntax_unit, start);
         Ok((SourceUnit { kind, name }, items))
     }
-
     fn parse_error_enum_def(&mut self) -> ParseResult<Item> {
         let node = self.begin_node(AstNodeKind::ErrorEnum, self.current_start());
         self.expect(TokenKind::Error)?;
@@ -1186,7 +1129,6 @@ impl<'a> CstAstLowerer<'a> {
         self.finish_node(node);
         Ok(Item::ErrorEnum(ErrorEnumDef { name, variants }))
     }
-
     fn parse_trigger_decl(&mut self) -> ParseResult<Item> {
         let node = self.begin_node(AstNodeKind::Trigger, self.current_start());
         let tok = self.bump();
@@ -1268,7 +1210,6 @@ impl<'a> CstAstLowerer<'a> {
             metadata,
         }))
     }
-
     fn parse_trigger_call(&mut self) -> ParseResult<TriggerCall> {
         let first = self.expect_ident()?;
         if self.peek(TokenKind::ColonColon) {
@@ -1285,7 +1226,6 @@ impl<'a> CstAstLowerer<'a> {
             })
         }
     }
-
     fn parse_trigger_filter(&mut self) -> ParseResult<TriggerFilter> {
         let kind = self.expect_ident()?;
         match kind.as_str() {
@@ -1311,7 +1251,6 @@ impl<'a> CstAstLowerer<'a> {
             )),
         }
     }
-
     fn parse_trigger_data_filter(&mut self) -> ParseResult<TriggerDataFilter> {
         let kind = self.expect_trigger_context_ident()?;
         match kind.as_str() {
@@ -1331,7 +1270,6 @@ impl<'a> CstAstLowerer<'a> {
             }
         }
     }
-
     fn parse_trigger_data_family_keyword(&self, family: &str) -> ParseResult<TriggerDataFamily> {
         match family {
             "peer" => Ok(TriggerDataFamily::Peer),
@@ -1351,7 +1289,6 @@ impl<'a> CstAstLowerer<'a> {
             )),
         }
     }
-
     fn parse_trigger_data_matcher_block(&mut self) -> ParseResult<Vec<TriggerDataMatcher>> {
         self.expect(TokenKind::LBrace)?;
         let mut matchers = Vec::new();
@@ -1364,7 +1301,6 @@ impl<'a> CstAstLowerer<'a> {
         self.expect(TokenKind::RBrace)?;
         Ok(matchers)
     }
-
     fn parse_trigger_pipeline_filter(&mut self) -> ParseResult<TriggerPipelineFilter> {
         let kind = self.expect_ident()?;
         match kind.as_str() {
@@ -1386,7 +1322,6 @@ impl<'a> CstAstLowerer<'a> {
             )),
         }
     }
-
     fn parse_trigger_time_filter(&mut self) -> ParseResult<TriggerTimeFilter> {
         let kind = self.expect_ident()?;
         match kind.as_str() {
@@ -1412,7 +1347,6 @@ impl<'a> CstAstLowerer<'a> {
             )),
         }
     }
-
     fn parse_trigger_repeats(&mut self) -> ParseResult<TriggerRepeats> {
         if self.peek_ident_n(0, "indefinitely") {
             self.bump();
@@ -1427,7 +1361,6 @@ impl<'a> CstAstLowerer<'a> {
         })?;
         Ok(TriggerRepeats::Exactly(count))
     }
-
     fn parse_trigger_metadata_block(&mut self) -> ParseResult<Vec<TriggerMetadataEntry>> {
         self.expect(TokenKind::LBrace)?;
         let mut entries = Vec::new();
@@ -1448,7 +1381,6 @@ impl<'a> CstAstLowerer<'a> {
         self.expect(TokenKind::RBrace)?;
         Ok(entries)
     }
-
     fn parse_u64_literal(&mut self, context: &str) -> ParseResult<u64> {
         let tok = self.bump();
         match tok.kind.clone() {
@@ -1465,7 +1397,6 @@ impl<'a> CstAstLowerer<'a> {
             )),
         }
     }
-
     fn expect_ident_or_string(&mut self) -> ParseResult<String> {
         let tok = self.bump();
         match tok.kind.clone() {
@@ -1474,7 +1405,6 @@ impl<'a> CstAstLowerer<'a> {
             _ => Err(self.error(tok, "identifier or string literal")),
         }
     }
-
     fn parse_function_attributes(&mut self) -> ParseResult<FunctionAttributes> {
         let mut attrs = FunctionAttributes::default();
         while self.peek(TokenKind::Hash) {
@@ -1513,7 +1443,6 @@ impl<'a> CstAstLowerer<'a> {
         }
         Ok(attrs)
     }
-
     fn parse_access_value_list(&mut self) -> ParseResult<Vec<String>> {
         if self.peek(TokenKind::LBracket) {
             self.bump();
@@ -1539,7 +1468,6 @@ impl<'a> CstAstLowerer<'a> {
             _ => Err(self.error(tok, "string literal")),
         }
     }
-
     #[allow(dead_code)]
     fn parse_access_attribute_body(&mut self, attrs: &mut FunctionAttributes) -> ParseResult<()> {
         self.expect(TokenKind::LParen)?;
@@ -1586,7 +1514,6 @@ impl<'a> CstAstLowerer<'a> {
         self.expect(TokenKind::RParen)?;
         Ok(())
     }
-
     fn parse_test_attribute_body(&mut self, attrs: &mut FunctionAttributes) -> ParseResult<()> {
         attrs.is_test = true;
         if !self.peek(TokenKind::LParen) {
@@ -1636,7 +1563,6 @@ impl<'a> CstAstLowerer<'a> {
         self.expect(TokenKind::RParen)?;
         Ok(())
     }
-
     fn parse_test_target_decl(&mut self) -> ParseResult<()> {
         let tok = self.bump();
         if !matches!(tok.kind, TokenKind::Ident(ref s) if s == "koto_test") {
@@ -1674,7 +1600,6 @@ impl<'a> CstAstLowerer<'a> {
         self.test_target = Some(TestTargetDecl { target });
         Ok(())
     }
-
     fn parse_fixture_decl(&mut self) -> ParseResult<FixtureDecl> {
         let tok = self.bump();
         if !matches!(tok.kind, TokenKind::Ident(ref s) if s == "fixture") {
@@ -1712,7 +1637,6 @@ impl<'a> CstAstLowerer<'a> {
         self.expect(TokenKind::RBrace)?;
         Ok(FixtureDecl { name, actions })
     }
-
     fn parse_struct_def(&mut self) -> ParseResult<Item> {
         // struct Name { Type field; ... }
         let node = self.begin_node(AstNodeKind::Struct, self.current_start());
@@ -1753,7 +1677,6 @@ impl<'a> CstAstLowerer<'a> {
         self.finish_node(node);
         Ok(Item::Struct(super::ast::StructDef { name, fields }))
     }
-
     fn parse_state_decl(&mut self) -> ParseResult<Item> {
         // Canonical V1 form: `state Type name;`.
         let node = self.begin_node(AstNodeKind::State, self.current_start());
@@ -1779,7 +1702,6 @@ impl<'a> CstAstLowerer<'a> {
         self.finish_node(node);
         Ok(Item::State(super::ast::StateDecl { name, ty }))
     }
-
     fn parse_const_decl(&mut self) -> ParseResult<Item> {
         let node = self.begin_node(AstNodeKind::Const, self.current_start());
         self.expect(TokenKind::Const)?;
@@ -1806,7 +1728,6 @@ impl<'a> CstAstLowerer<'a> {
         self.finish_node(node);
         Ok(Item::Const(super::ast::ConstDecl { name, ty, value }))
     }
-
     fn parse_fn_loose(
         &mut self,
         name_override: Option<String>,
@@ -1967,7 +1888,6 @@ impl<'a> CstAstLowerer<'a> {
         }
         result
     }
-
     fn parse_block(&mut self) -> ParseResult<Block> {
         let block_start = self.current_start();
         let syntax_block = self.syntax_start(SyntaxKind::Block, block_start);
@@ -2024,7 +1944,6 @@ impl<'a> CstAstLowerer<'a> {
         self.syntax_finish(syntax_block, block_start);
         Ok(Block { statements, tail })
     }
-
     fn parse_block_element(&mut self) -> ParseResult<ParsedBlockElement> {
         if self.peek(TokenKind::Let) || self.peek(TokenKind::Var) {
             let statement_start = self.current_start();
@@ -2206,13 +2125,11 @@ impl<'a> CstAstLowerer<'a> {
             self.finish_block_expression(expr)
         }
     }
-
     fn finish_block_expression(&mut self, expression: Expr) -> ParseResult<ParsedBlockElement> {
         if self.peek(TokenKind::Semicolon) {
             self.bump();
             return Ok(ParsedBlockElement::Statement(Statement::Expr(expression)));
         }
-
         let missing_else = matches!(
             expression.kind(),
             Expr::If {
@@ -2229,7 +2146,6 @@ impl<'a> CstAstLowerer<'a> {
         {
             return Ok(ParsedBlockElement::Tail(expression));
         }
-
         if matches!(expression.kind(), Expr::If { .. } | Expr::IfLet { .. }) {
             return Ok(ParsedBlockElement::Statement(
                 self.if_expression_statement(expression),
@@ -2238,7 +2154,6 @@ impl<'a> CstAstLowerer<'a> {
         if matches!(expression.kind(), Expr::Match { .. }) {
             return Ok(ParsedBlockElement::Statement(Statement::Expr(expression)));
         }
-
         let token = self
             .tokens
             .get(self.pos)
@@ -2246,7 +2161,6 @@ impl<'a> CstAstLowerer<'a> {
             .unwrap_or_else(|| self.bump());
         Err(self.error(token, "`;` or the end of the enclosing block"))
     }
-
     fn if_expression_statement(&mut self, expression: Expr) -> Statement {
         let mut expression = expression;
         let mut wrappers = Vec::new();
@@ -2274,7 +2188,6 @@ impl<'a> CstAstLowerer<'a> {
         }
         statement
     }
-
     fn parse_if_expression(&mut self) -> ParseResult<Expr> {
         let start = self.current_start();
         let owner = self.begin_node(AstNodeKind::Expression, start);
@@ -2284,7 +2197,6 @@ impl<'a> CstAstLowerer<'a> {
         let range = TextRange::new(start, self.previous_end(start));
         Ok(self.finish_owned_expression(owner, AstNodeKind::Expression, range, expression))
     }
-
     fn parse_if_expression_inner(&mut self, owner: NodeId) -> ParseResult<Expr> {
         self.expect(TokenKind::If)?;
         let (pattern, value, condition) = if self.peek(TokenKind::Let) {
@@ -2334,7 +2246,6 @@ impl<'a> CstAstLowerer<'a> {
             })
         }
     }
-
     fn parse_match_expression(&mut self) -> ParseResult<Expr> {
         let start = self.current_start();
         let owner = self.begin_node(AstNodeKind::Expression, start);
@@ -2344,7 +2255,6 @@ impl<'a> CstAstLowerer<'a> {
         let range = TextRange::new(start, self.previous_end(start));
         Ok(self.finish_owned_expression(owner, AstNodeKind::Expression, range, expression))
     }
-
     fn parse_match_expression_inner(&mut self, owner: NodeId) -> ParseResult<Expr> {
         self.expect(TokenKind::Match)?;
         let value = self.parse_expr_before_block()?;
@@ -2392,14 +2302,12 @@ impl<'a> CstAstLowerer<'a> {
             arms,
         })
     }
-
     fn parse_sum_pattern(&mut self, owner: NodeId, ordinal: usize) -> ParseResult<SumPattern> {
         let start = self.current_start();
         self.with_syntax(SyntaxKind::SumPattern, start, |parser| {
             parser.parse_sum_pattern_inner(owner, ordinal)
         })
     }
-
     fn parse_sum_pattern_inner(
         &mut self,
         owner: NodeId,
@@ -2471,7 +2379,6 @@ impl<'a> CstAstLowerer<'a> {
         };
         Ok(SumPattern { variant, binding })
     }
-
     fn inc_statement(&mut self, name: String, range: TextRange) -> Statement {
         let left =
             self.source_expression(AstNodeKind::Expression, range, Expr::Ident(name.clone()));
@@ -2491,7 +2398,6 @@ impl<'a> CstAstLowerer<'a> {
         );
         self.source_statement(range, Statement::Assign { name, value })
     }
-
     fn parse_for_range(&mut self) -> ParseResult<Option<(Statement, Expr, Statement)>> {
         let save = self.pos;
         let header_start = self.current_start();
@@ -2566,7 +2472,6 @@ impl<'a> CstAstLowerer<'a> {
         self.syntax_rollback(syntax_checkpoint);
         Ok(None)
     }
-
     fn parse_expr(&mut self) -> ParseResult<Expr> {
         let start = self.current_start();
         let expression = self.parse_conditional()?;
@@ -2581,14 +2486,12 @@ impl<'a> CstAstLowerer<'a> {
             Ok(self.source_expression(AstNodeKind::Expression, range, expression))
         }
     }
-
     fn parse_expr_before_block(&mut self) -> ParseResult<Expr> {
         let previous = std::mem::replace(&mut self.allow_struct_literals, false);
         let result = self.parse_expr();
         self.allow_struct_literals = previous;
         result
     }
-
     fn parse_conditional(&mut self) -> ParseResult<Expr> {
         enum Frame {
             Then {
@@ -2601,7 +2504,6 @@ impl<'a> CstAstLowerer<'a> {
                 then_expr: Expr,
             },
         }
-
         let mut frames = Vec::new();
         let mut current = self.parse_logical_or()?;
         loop {
@@ -2617,7 +2519,6 @@ impl<'a> CstAstLowerer<'a> {
                 current = self.parse_logical_or()?;
                 continue;
             }
-
             match frames.pop() {
                 Some(Frame::Then { start, condition }) => {
                     self.expect(TokenKind::Colon)?;
@@ -2646,7 +2547,6 @@ impl<'a> CstAstLowerer<'a> {
             }
         }
     }
-
     fn parse_logical_or(&mut self) -> ParseResult<Expr> {
         let start = self.current_start();
         let mut expr = self.parse_logical_and()?;
@@ -2668,7 +2568,6 @@ impl<'a> CstAstLowerer<'a> {
         }
         Ok(expr)
     }
-
     fn parse_logical_and(&mut self) -> ParseResult<Expr> {
         let start = self.current_start();
         let mut expr = self.parse_comparison()?;
@@ -2690,7 +2589,6 @@ impl<'a> CstAstLowerer<'a> {
         }
         Ok(expr)
     }
-
     fn parse_comparison(&mut self) -> ParseResult<Expr> {
         let start = self.current_start();
         let mut expr = self.parse_term()?;
@@ -2732,7 +2630,6 @@ impl<'a> CstAstLowerer<'a> {
         }
         Ok(expr)
     }
-
     fn parse_term(&mut self) -> ParseResult<Expr> {
         let start = self.current_start();
         let mut expr = self.parse_factor()?;
@@ -2762,7 +2659,6 @@ impl<'a> CstAstLowerer<'a> {
         }
         Ok(expr)
     }
-
     fn parse_factor(&mut self) -> ParseResult<Expr> {
         let start = self.current_start();
         let mut expr = self.parse_unary()?;
@@ -2795,7 +2691,6 @@ impl<'a> CstAstLowerer<'a> {
         }
         Ok(expr)
     }
-
     fn parse_unary(&mut self) -> ParseResult<Expr> {
         let mut prefixes: Vec<(UnaryOp, Token)> = Vec::new();
         loop {
@@ -2860,7 +2755,6 @@ impl<'a> CstAstLowerer<'a> {
                 break;
             }
         }
-
         let postfix_start = self.current_start();
         let primary = self.parse_primary()?;
         let mut expr = self.parse_postfix(primary, postfix_start)?;
@@ -2875,7 +2769,6 @@ impl<'a> CstAstLowerer<'a> {
         }
         Ok(expr)
     }
-
     fn parse_postfix(&mut self, mut expr: Expr, expression_start: u32) -> ParseResult<Expr> {
         loop {
             if self.peek(TokenKind::Dot) {
@@ -2999,7 +2892,6 @@ impl<'a> CstAstLowerer<'a> {
         }
         Ok(expr)
     }
-
     fn parse_primary(&mut self) -> ParseResult<Expr> {
         let tok = self.bump();
         let expression = match &tok.kind {
@@ -3066,7 +2958,6 @@ impl<'a> CstAstLowerer<'a> {
             Ok(self.source_expression(AstNodeKind::Expression, range, expression))
         }
     }
-
     fn parse_list_expression(&mut self, opening: Token) -> ParseResult<Expr> {
         let start = opening.range.start;
         let syntax_list = self.syntax_start(SyntaxKind::ListExpr, start);
@@ -3085,7 +2976,6 @@ impl<'a> CstAstLowerer<'a> {
             self.bump();
             return Ok(Expr::List(Vec::new()));
         }
-
         let first = self.parse_expr()?;
         if self.peek(TokenKind::For) {
             self.bump();
@@ -3121,7 +3011,6 @@ impl<'a> CstAstLowerer<'a> {
                 expression,
             ));
         }
-
         let mut elements = vec![first];
         while self.peek(TokenKind::Comma) {
             self.bump();
@@ -3133,7 +3022,6 @@ impl<'a> CstAstLowerer<'a> {
         self.expect(TokenKind::RBracket)?;
         Ok(Expr::List(elements))
     }
-
     fn parse_parenthesized(&mut self, opening: Token) -> ParseResult<Expr> {
         let mut openings = vec![opening];
         while self.peek(TokenKind::LParen) {
@@ -3161,7 +3049,6 @@ impl<'a> CstAstLowerer<'a> {
                 expected_owner: None,
             }));
         }
-
         let mut expression = self.parse_expr()?;
         for _ in openings.iter().rev() {
             if self.peek(TokenKind::Comma) {
@@ -3176,7 +3063,6 @@ impl<'a> CstAstLowerer<'a> {
         }
         Ok(expression)
     }
-
     fn parse_named_primary(&mut self, ident_token: Token, mut name: String) -> ParseResult<Expr> {
         // Keyword tokens stay reserved as bindings and declarations. Canonical
         // V1 capability paths that intentionally use branded keywords admit
@@ -3336,7 +3222,6 @@ impl<'a> CstAstLowerer<'a> {
             Ok(Expr::Ident(name))
         }
     }
-
     fn parse_json_object(&mut self, start: u32) -> ParseResult<Expr> {
         self.with_syntax(
             SyntaxKind::JsonObjectExpr,
@@ -3344,7 +3229,6 @@ impl<'a> CstAstLowerer<'a> {
             Self::parse_json_object_inner,
         )
     }
-
     fn parse_json_object_inner(&mut self) -> ParseResult<Expr> {
         self.expect(TokenKind::LBrace)?;
         let mut entries = Vec::new();
@@ -3389,7 +3273,6 @@ impl<'a> CstAstLowerer<'a> {
         self.expect(TokenKind::RBrace)?;
         Ok(Expr::JsonObject(entries))
     }
-
     fn parse_json_array(&mut self, start: u32) -> ParseResult<Expr> {
         self.with_syntax(
             SyntaxKind::JsonArrayExpr,
@@ -3397,7 +3280,6 @@ impl<'a> CstAstLowerer<'a> {
             Self::parse_json_array_inner,
         )
     }
-
     fn parse_json_array_inner(&mut self) -> ParseResult<Expr> {
         self.expect(TokenKind::LBracket)?;
         let mut elements = Vec::new();
@@ -3411,7 +3293,6 @@ impl<'a> CstAstLowerer<'a> {
         self.expect(TokenKind::RBracket)?;
         Ok(Expr::JsonArray(elements))
     }
-
     fn call_parameter_names(&self, name: &str, implicit_receiver: bool) -> Option<Vec<String>> {
         if !implicit_receiver {
             if let Some(parameters) = self.declared_function_parameters.get(name) {
@@ -3428,7 +3309,6 @@ impl<'a> CstAstLowerer<'a> {
                 );
             }
         }
-
         let parameters: &[&str] = match name {
             "Option::some"
             | "option::some"
@@ -3454,7 +3334,6 @@ impl<'a> CstAstLowerer<'a> {
         };
         Some(parameters.iter().map(|name| (*name).to_owned()).collect())
     }
-
     fn parse_call_arguments(
         &mut self,
         parameter_names: Option<&[String]>,
@@ -3473,7 +3352,6 @@ impl<'a> CstAstLowerer<'a> {
         self.syntax_finish_at(syntax_arguments, end);
         result
     }
-
     fn parse_call_arguments_inner(
         &mut self,
         parameter_names: Option<&[String]>,
@@ -3591,7 +3469,6 @@ impl<'a> CstAstLowerer<'a> {
             ranges,
         })
     }
-
     fn legacy_sum_replacement(&self, name: &str, parsed: &ParsedCallArguments) -> Option<String> {
         if parsed.argument_names.is_some() {
             return None;
@@ -3617,7 +3494,6 @@ impl<'a> CstAstLowerer<'a> {
             _ => None,
         }
     }
-
     fn parse_struct_literal_fields(&mut self) -> ParseResult<Vec<StructLiteralField>> {
         let mut fields = Vec::<StructLiteralField>::new();
         while !self.peek(TokenKind::RBrace) {
@@ -3664,11 +3540,9 @@ impl<'a> CstAstLowerer<'a> {
         }
         Ok(fields)
     }
-
     fn expect_ident(&mut self) -> ParseResult<String> {
         self.expect_ident_token().map(|(name, _)| name)
     }
-
     fn expect_ident_token(&mut self) -> ParseResult<(String, Token)> {
         let tok = self.bump();
         match &tok.kind {
@@ -3680,7 +3554,6 @@ impl<'a> CstAstLowerer<'a> {
             }
         }
     }
-
     /// Admit the reserved `trigger` spelling only where trigger-filter grammar
     /// defines it as a data-family or matcher keyword.
     fn expect_trigger_context_ident(&mut self) -> ParseResult<String> {
@@ -3691,7 +3564,6 @@ impl<'a> CstAstLowerer<'a> {
             _ => Err(self.error(tok, "trigger-filter identifier")),
         }
     }
-
     fn expect_namespace_segment(&mut self) -> ParseResult<String> {
         let tok = self.bump();
         match &tok.kind {
@@ -3706,7 +3578,6 @@ impl<'a> CstAstLowerer<'a> {
             }
         }
     }
-
     fn parse_type_expr(&mut self) -> ParseResult<TypeExpr> {
         let start = self.current_start();
         let ty = self.parse_type_expr_inner()?;
@@ -3722,7 +3593,6 @@ impl<'a> CstAstLowerer<'a> {
             ty: Box::new(ty),
         })
     }
-
     fn parse_type_expr_inner(&mut self) -> ParseResult<TypeExpr> {
         enum Frame {
             Generic {
@@ -3735,7 +3605,6 @@ impl<'a> CstAstLowerer<'a> {
                 args: Vec<TypeExpr>,
             },
         }
-
         let mut frames = Vec::new();
         'next_type: loop {
             let mut current = loop {
@@ -3751,7 +3620,6 @@ impl<'a> CstAstLowerer<'a> {
                     });
                     continue;
                 }
-
                 if let Some(Token {
                     kind: TokenKind::Number(value),
                     ..
@@ -3767,7 +3635,6 @@ impl<'a> CstAstLowerer<'a> {
                     })?;
                     break self.source_type(token.range, TypeExpr::Const(value));
                 }
-
                 let (base, base_token) = self.expect_ident_token()?;
                 if let Some(replacement) = retired_numeric_type_replacement(&base) {
                     let replacement_message = replacement.map_or_else(
@@ -3817,7 +3684,6 @@ impl<'a> CstAstLowerer<'a> {
                 }
                 break self.source_type(base_token.range, TypeExpr::Path(base));
             };
-
             loop {
                 let Some(frame) = frames.pop() else {
                     return Ok(current);
@@ -3861,7 +3727,6 @@ impl<'a> CstAstLowerer<'a> {
             }
         }
     }
-
     fn tuple_type_arity_error(&self, opening: &Token, closing: &Token) -> Box<ParseError> {
         let line_text = self
             .source
@@ -3882,7 +3747,6 @@ impl<'a> CstAstLowerer<'a> {
             expected_owner: None,
         })
     }
-
     fn try_parse_lvalue_expr(&mut self) -> ParseResult<Expr> {
         // Parse an identifier then tail of member/index chains
         let expression_start = self.current_start();
@@ -3956,7 +3820,6 @@ impl<'a> CstAstLowerer<'a> {
         }
         Ok(expr)
     }
-
     fn parse_for_each_map(
         &mut self,
         statement_start: u32,
@@ -4008,7 +3871,6 @@ impl<'a> CstAstLowerer<'a> {
         self.syntax_rollback(syntax_checkpoint);
         Ok(None)
     }
-
     fn parse_param_type_annotation(&mut self) -> ParseResult<(bool, TypeExpr)> {
         if self.peek(TokenKind::State) {
             let token = self.bump();
@@ -4020,7 +3882,6 @@ impl<'a> CstAstLowerer<'a> {
         let ty = self.parse_type_expr()?;
         Ok((false, ty))
     }
-
     fn parse_param(&mut self) -> ParseResult<Param> {
         // Canonical V1 form: `Type name`.
         let (is_state, ty) = self.parse_param_type_annotation()?;
@@ -4048,7 +3909,6 @@ impl<'a> CstAstLowerer<'a> {
             is_state,
         })
     }
-
     fn expect(&mut self, kind: TokenKind) -> ParseResult<()> {
         let expected = expected_syntax_kind(&kind);
         let tok = self.tokens.get(self.pos).cloned().unwrap_or_else(|| Token {
@@ -4069,7 +3929,6 @@ impl<'a> CstAstLowerer<'a> {
             Err(error)
         }
     }
-
     fn expect_or_insert(
         &mut self,
         kind: TokenKind,
@@ -4096,7 +3955,6 @@ impl<'a> CstAstLowerer<'a> {
         }
         self.expect(kind)
     }
-
     fn number_to_usize(&self, token: &Token, value: &str, context: &str) -> ParseResult<usize> {
         parse_bounded_unsigned(value, usize::MAX as u64)
             .and_then(|value| usize::try_from(value).map_err(|_| ()))
@@ -4104,7 +3962,6 @@ impl<'a> CstAstLowerer<'a> {
                 self.range_error(token, format!("{context} integer literal out of range"))
             })
     }
-
     fn range_error(&self, token: &Token, message: String) -> Box<ParseError> {
         let line_text = self
             .source
@@ -4124,22 +3981,18 @@ impl<'a> CstAstLowerer<'a> {
             expected_owner: None,
         })
     }
-
     fn peek(&self, kind: TokenKind) -> bool {
         self.tokens.get(self.pos).map(|t| t.kind.clone()) == Some(kind)
     }
-
     fn peek_n(&self, offset: usize, kind: TokenKind) -> bool {
         self.tokens.get(self.pos + offset).map(|t| t.kind.clone()) == Some(kind)
     }
-
     fn peek_ident_n(&self, offset: usize, name: &str) -> bool {
         matches!(
             self.tokens.get(self.pos + offset),
             Some(Token { kind: TokenKind::Ident(s), .. }) if s == name
         )
     }
-
     fn typed_local_starts_here(&self) -> bool {
         if matches!(
             (self.tokens.get(self.pos), self.tokens.get(self.pos + 1)),
@@ -4186,7 +4039,6 @@ impl<'a> CstAstLowerer<'a> {
         }
         false
     }
-
     fn question_starts_ternary(&self) -> bool {
         if !self.peek(TokenKind::Question)
             || !self
@@ -4196,7 +4048,6 @@ impl<'a> CstAstLowerer<'a> {
         {
             return false;
         }
-
         // `value?[index]` is postfix propagation followed by indexing, while
         // `flag ? [value] : [fallback]` is a conditional whose first branch is
         // a list literal. Look for the conditional's top-level `:` instead of
@@ -4238,7 +4089,6 @@ impl<'a> CstAstLowerer<'a> {
         }
         false
     }
-
     fn token_starts_expression(kind: &TokenKind) -> bool {
         matches!(
             kind,
@@ -4258,7 +4108,6 @@ impl<'a> CstAstLowerer<'a> {
                 | TokenKind::Bang
         )
     }
-
     fn synchronize_source_item(&mut self, item_start: usize) {
         let start_column = self
             .tokens
@@ -4279,7 +4128,6 @@ impl<'a> CstAstLowerer<'a> {
             self.pos = self.pos.saturating_add(1);
         }
     }
-
     fn synchronize_statement(&mut self, statement_start: usize) {
         if self.pos > statement_start
             && self
@@ -4322,7 +4170,6 @@ impl<'a> CstAstLowerer<'a> {
             self.pos = self.pos.saturating_add(1);
         }
     }
-
     fn token_starts_statement(token: &Token) -> bool {
         matches!(
             &token.kind,
@@ -4338,7 +4185,6 @@ impl<'a> CstAstLowerer<'a> {
                 | TokenKind::Ident(_)
         )
     }
-
     fn token_starts_source_item(token: &Token) -> bool {
         matches!(
             &token.kind,
@@ -4360,7 +4206,6 @@ impl<'a> CstAstLowerer<'a> {
             TokenKind::Ident(name) if matches!(name.as_str(), "fixture" | "koto_test")
         )
     }
-
     fn bump(&mut self) -> Token {
         let tok = self.tokens.get(self.pos).cloned().unwrap_or(Token {
             kind: TokenKind::EOF,
@@ -4375,7 +4220,6 @@ impl<'a> CstAstLowerer<'a> {
         }
         tok
     }
-
     fn error(&self, token: Token, expected: &str) -> Box<ParseError> {
         let line_text = self.source.lines().nth(token.line - 1).unwrap_or("");
         let caret = " ".repeat(token.column.saturating_sub(1)) + "^";
@@ -4392,7 +4236,6 @@ impl<'a> CstAstLowerer<'a> {
             expected_owner: None,
         })
     }
-
     fn coded_error(
         &self,
         token: Token,
@@ -4405,14 +4248,12 @@ impl<'a> CstAstLowerer<'a> {
         error
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BlockExpressionFlow {
     Unit,
     Value,
     Diverges,
 }
-
 fn combine_expression_branch_flows(
     branches: impl IntoIterator<Item = BlockExpressionFlow>,
 ) -> BlockExpressionFlow {
@@ -4434,7 +4275,6 @@ fn combine_expression_branch_flows(
         BlockExpressionFlow::Diverges
     }
 }
-
 fn block_flow(block: &Block) -> BlockExpressionFlow {
     if block.statements.iter().any(statement_diverges) {
         return BlockExpressionFlow::Diverges;
@@ -4444,7 +4284,6 @@ fn block_flow(block: &Block) -> BlockExpressionFlow {
         .as_deref()
         .map_or(BlockExpressionFlow::Unit, block_expression_flow)
 }
-
 fn statement_diverges(statement: &Statement) -> bool {
     match statement.kind() {
         Statement::Return(_) | Statement::Break | Statement::Continue => true,
@@ -4486,7 +4325,6 @@ fn statement_diverges(statement: &Statement) -> bool {
         | Statement::ForEachMap { .. } => false,
     }
 }
-
 fn block_expression_flow(expression: &Expr) -> BlockExpressionFlow {
     match expression.kind() {
         Expr::If {
@@ -4511,7 +4349,6 @@ fn block_expression_flow(expression: &Expr) -> BlockExpressionFlow {
         _ => BlockExpressionFlow::Value,
     }
 }
-
 fn if_expression_statement_inner(expression: Expr) -> Statement {
     match expression.into_kind() {
         Expr::If {
@@ -4537,7 +4374,6 @@ fn if_expression_statement_inner(expression: Expr) -> Statement {
         _ => unreachable!("else-if parsing produces an if expression"),
     }
 }
-
 fn removed_method_helper_message(name: &str) -> Option<&'static str> {
     match name {
         "account_id" | "asset_definition" | "asset_id" | "nft_id" | "name" | "json" | "domain"
@@ -4573,7 +4409,6 @@ fn removed_method_helper_message(name: &str) -> Option<&'static str> {
         _ => None,
     }
 }
-
 fn removed_method_helper_code(name: &str) -> &'static str {
     if matches!(
         name,
@@ -4584,7 +4419,6 @@ fn removed_method_helper_code(name: &str) -> &'static str {
         "K1001"
     }
 }
-
 fn removed_free_helper_message(name: &str) -> Option<&'static str> {
     match name {
         "ledger::trigger::create" => Some(
@@ -4662,7 +4496,6 @@ fn removed_free_helper_message(name: &str) -> Option<&'static str> {
         _ => None,
     }
 }
-
 fn removed_free_helper_code(name: &str) -> &'static str {
     if retired_trigger_alias_replacement(name).is_some() {
         "E_RETIRED_TRIGGER_ALIAS"
@@ -4706,7 +4539,6 @@ fn removed_free_helper_code(name: &str) -> &'static str {
         "K1001"
     }
 }
-
 fn retired_trigger_alias_replacement(name: &str) -> Option<&'static str> {
     match name {
         "ledger::trigger::create" => Some("ledger::trigger::register"),
@@ -4714,16 +4546,13 @@ fn retired_trigger_alias_replacement(name: &str) -> Option<&'static str> {
         _ => None,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_data_model::DomainId;
-
     fn parse_module(body: &str) -> Result<Program, String> {
         parse(&format!("module TestModule {{ {body} }}"))
     }
-
     fn sample_account_literal() -> String {
         iroha_data_model::account::AccountId::new(
             "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
@@ -4732,7 +4561,6 @@ mod tests {
         )
         .to_string()
     }
-
     #[test]
     fn parse_return_statements() {
         let src = "fn f() { return; return 1; }";
@@ -4752,7 +4580,6 @@ mod tests {
             _ => panic!("no return expr"),
         }
     }
-
     #[test]
     fn conditional_parser_preserves_nested_then_and_else_associativity() {
         let program = parse_module("fn f() { return a ? b ? c : d : e ? f : g; }")
@@ -4780,7 +4607,6 @@ mod tests {
             "the nested else arm must bind to the outer conditional"
         );
     }
-
     #[test]
     fn iterative_type_parser_preserves_nested_generic_and_tuple_shapes() {
         let program = parse_module("struct Wrapper { Result<Option<int>, (bool, string)> value }")
@@ -4807,7 +4633,6 @@ mod tests {
         assert!(matches!(elements[0].kind(), TypeExpr::Path(path) if path == "bool"));
         assert!(matches!(elements[1].kind(), TypeExpr::Path(path) if path == "string"));
     }
-
     #[test]
     fn parses_list_literals_and_filtered_comprehensions() {
         let program = parse_module(
@@ -4833,7 +4658,6 @@ mod tests {
             } if item == "value"
         ));
     }
-
     #[test]
     fn canonical_public_parse_output_contains_no_provenance_wrappers() {
         let program = parse_module(
@@ -4843,14 +4667,12 @@ mod tests {
         let Item::Function(function) = &program.items[0] else {
             panic!("expected function item")
         };
-
         let parameter_ty = function.params[0].ty.as_ref().expect("parameter type");
         assert!(parameter_ty.source().is_none());
         let TypeExpr::Generic { args, .. } = parameter_ty else {
             panic!("List type")
         };
         assert!(args.iter().all(|ty| ty.source().is_none()));
-
         let statement = &function.body.statements[0];
         assert!(statement.source().is_none());
         let Statement::Let { value, .. } = statement else {
@@ -4869,7 +4691,6 @@ mod tests {
         assert!(expression.source().is_none());
         assert!(source.source().is_none());
         assert!(condition.source().is_none());
-
         let tail = function.body.tail.as_deref().expect("call tail");
         assert!(tail.source().is_none());
         let Expr::Call { args, .. } = tail else {
@@ -4877,7 +4698,6 @@ mod tests {
         };
         assert!(args.iter().all(|argument| argument.source().is_none()));
     }
-
     #[test]
     fn list_type_capacity_is_preserved_as_a_constant_argument() {
         let program = parse_module("fn values(List<Option<int>, 64> input) {}").expect("List type");
@@ -4894,14 +4714,12 @@ mod tests {
         assert!(matches!(args[0].kind(), TypeExpr::Generic { base, .. } if base == "Option"));
         assert!(matches!(args[1].kind(), TypeExpr::Const(64)));
     }
-
     #[test]
     fn malformed_list_expression_reports_the_closing_delimiter() {
         let error = parse_module("fn invalid() { let values = [1, 2; }")
             .expect_err("unterminated List must fail");
         assert!(error.contains("RBracket"), "{error}");
     }
-
     #[test]
     fn rejects_source_unit_values_and_degenerate_tuple_types() {
         for (body, expected) in [
@@ -4925,7 +4743,6 @@ mod tests {
             let error = parse_module(body).expect_err("invalid Unit/tuple surface must fail");
             assert!(error.contains(expected), "unexpected error: {error}");
         }
-
         let grouped = parse_module(
             "fn grouped() -> int { return (1); } fn pair((int, bool) value) -> (int, bool) { return (1, true); } fn omitted() { return; }",
         )
@@ -4938,7 +4755,6 @@ mod tests {
             Statement::Return(Some(value)) if matches!(value.kind(), Expr::IntLiteral(value) if value == &BigInt::one())
         ));
     }
-
     #[test]
     fn else_if_is_represented_as_a_nested_if_in_the_else_block() {
         let program = parse_module(
@@ -4973,7 +4789,6 @@ mod tests {
         };
         assert_eq!(inner_else.statements.len(), 1);
     }
-
     #[test]
     fn mixed_value_and_divergent_control_flow_remains_a_tail_expression() {
         let program = parse_module(
@@ -4993,7 +4808,6 @@ mod tests {
             "#,
         )
         .expect("parse mixed value/divergent tails");
-
         for (function, expected) in program.items.iter().zip(["if", "if let", "match"]) {
             let Item::Function(function) = function else {
                 panic!("expected function")
@@ -5014,7 +4828,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn list_literal_ternary_is_distinct_from_propagation_followed_by_indexing() {
         let program = parse_module(
@@ -5024,7 +4837,6 @@ mod tests {
             "#,
         )
         .expect("parse list ternary and propagation-index adjacency");
-
         let Item::Function(choose) = &program.items[0] else {
             panic!("expected choose function")
         };
@@ -5037,7 +4849,6 @@ mod tests {
             }) if matches!(then_expr.kind(), Expr::List(_))
                 && matches!(else_expr.kind(), Expr::List(_))
         ));
-
         let Item::Function(index) = &program.items[1] else {
             panic!("expected index function")
         };
@@ -5047,7 +4858,6 @@ mod tests {
                 if matches!(target.kind(), Expr::Propagate(_))
         ));
     }
-
     #[test]
     fn parses_value_tails_and_expression_oriented_control_flow() {
         let program = parse_module(
@@ -5066,7 +4876,6 @@ mod tests {
             "#,
         )
         .expect("parse expression-oriented V1 control flow");
-
         let functions = program
             .items
             .iter()
@@ -5099,7 +4908,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn postfix_propagation_binds_tighter_than_ternary() {
         let program = parse_module(
@@ -5116,7 +4924,6 @@ mod tests {
                     if matches!(value.kind(), Expr::Ident(name) if name == "maybe"))
         ));
     }
-
     #[test]
     fn active_only_sum_constructors_have_no_placeholder_payloads() {
         let program = parse_module(
@@ -5141,7 +4948,6 @@ mod tests {
                 Expr::ResultErr(_),
             ]
         ));
-
         for (source, replacement) in [
             ("fn f() -> Option<int> { option::none(0) }", "Option::none"),
             (
@@ -5154,14 +4960,12 @@ mod tests {
             assert!(error.contains(replacement), "{error}");
         }
     }
-
     #[test]
     fn mutable_bindings_still_require_initializers() {
         let error = parse_module("fn invalid() { var int value; }")
             .expect_err("uninitialized locals are not part of V1");
         assert!(error.contains("Equal"), "unexpected error: {error}");
     }
-
     #[test]
     fn error_enum_requires_explicit_unique_nonzero_u32_codes() {
         let program =
@@ -5173,7 +4977,6 @@ mod tests {
         assert_eq!(errors.name, "Payment");
         assert_eq!(errors.variants[0].name, "Unauthorized");
         assert_eq!(errors.variants[0].code, 1001);
-
         for body in [
             "error enum Empty {}",
             "error enum Zero { Invalid = 0 }",
@@ -5186,21 +4989,18 @@ mod tests {
             assert!(!error.is_empty(), "empty diagnostic for `{body}`");
         }
     }
-
     #[test]
     fn parse_bools_and_logical_ops() {
         let src = "fn g() { let x = true && !false; }";
         let prog = parse_module(src).unwrap();
         assert_eq!(prog.items.len(), 1);
     }
-
     #[test]
     fn parse_assignment_and_break_continue() {
         let src = "fn h() { var x = 0; x = 1; for i in range(10) { if i == 3 { break; } if i == 5 { continue; } } }";
         let prog = parse_module(src).unwrap();
         assert_eq!(prog.items.len(), 1);
     }
-
     #[test]
     fn parse_preserves_local_binding_mutability() {
         let program = parse_module("fn f() { let fixed = 1; var int changing = 2; }")
@@ -5217,7 +5017,6 @@ mod tests {
             Statement::Let { mutable: true, .. }
         ));
     }
-
     #[test]
     fn parse_canonical_seiyaku_surface_and_preserve_identity() {
         let src = r#"
@@ -5254,7 +5053,6 @@ mod tests {
         assert_eq!(functions[3].modifiers.kind, FunctionKind::View);
         assert_eq!(functions[4].modifiers.kind, FunctionKind::Private);
     }
-
     #[test]
     fn lifecycle_declarations_reject_source_authorization() {
         for source in [
@@ -5268,7 +5066,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parse_canonical_module_surface_and_preserve_identity() {
         let prog =
@@ -5277,7 +5074,6 @@ mod tests {
         assert_eq!(prog.unit.kind, SourceUnitKind::Module);
         assert_eq!(prog.unit.name, "Math");
     }
-
     #[test]
     fn parse_canonical_context_and_ledger_namespaces() {
         let program = parse(
@@ -5319,7 +5115,6 @@ mod tests {
             matches!(call.kind(), Expr::Call { name, .. } if name == "ledger::asset::transfer")
         );
     }
-
     #[test]
     fn keyword_tokens_are_admitted_only_in_required_namespace_positions() {
         let program = parse(
@@ -5351,7 +5146,6 @@ mod tests {
         assert!(
             matches!(trigger_call.kind(), Expr::Call { name, .. } if name == "ledger::trigger::set_enabled")
         );
-
         for binding in ["state", "trigger"] {
             let source = format!("seiyaku Reserved {{ fn bad() {{ let {binding} = 1; }} }}");
             parse(&source).expect_err("keyword must remain unavailable as a binding");
@@ -5359,7 +5153,6 @@ mod tests {
         parse("seiyaku Reserved { fn bad() { seiyaku::register_code(); } }")
             .expect_err("declaration keywords must remain unavailable as namespace roots");
     }
-
     #[test]
     fn english_declaration_spellings_are_rejected() {
         for source in [
@@ -5372,7 +5165,6 @@ mod tests {
             parse(source).expect_err("English declaration spelling must be rejected");
         }
     }
-
     #[test]
     fn branded_keywords_are_contextual_namespace_segments_only() {
         for source in [
@@ -5381,7 +5173,6 @@ mod tests {
         ] {
             parse(source).expect("branded capability path must parse");
         }
-
         for source in [
             "module M { fn f() { kotoage(); } }",
             "module M { fn f() { seiyaku::grant_kotoage(); } }",
@@ -5391,7 +5182,6 @@ mod tests {
             parse(source).expect_err("branded declaration keyword must stay reserved");
         }
     }
-
     #[test]
     fn branded_japanese_declaration_keywords_are_first_class() {
         for source in [
@@ -5403,7 +5193,6 @@ mod tests {
             parse(source).expect("branded Japanese declaration syntax must parse");
         }
     }
-
     #[test]
     fn exactly_one_named_source_unit_is_required() {
         for source in [
@@ -5414,7 +5203,6 @@ mod tests {
             parse(source).expect_err("invalid source-unit cardinality must fail");
         }
     }
-
     #[test]
     fn canonical_declaration_shapes_are_required() {
         for source in [
@@ -5428,7 +5216,6 @@ mod tests {
             parse(source).expect_err("legacy declaration shape must fail");
         }
     }
-
     #[test]
     fn retired_colon_declarations_report_the_type_first_replacement() {
         for (source, replacement) in [
@@ -5449,7 +5236,6 @@ mod tests {
             assert!(error.contains(replacement), "{error}");
         }
     }
-
     #[test]
     fn retired_numeric_type_spellings_are_rejected_with_replacements() {
         for legacy in crate::semantic::V1_RETIRED_NUMERIC_TYPE_NAMES {
@@ -5461,7 +5247,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn exact_amount_is_rejected_in_every_identifier_context() {
         for source in [
@@ -5486,7 +5271,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn lowercase_amount_and_non_identifier_amount_text_remain_valid() {
         parse(
@@ -5507,7 +5291,6 @@ mod tests {
         )
         .expect("lowercase `amount`, strings, comments, and quoted JSON keys remain valid");
     }
-
     #[test]
     fn retired_amount_type_keeps_its_quantity_fix_diagnostic_only() {
         let error = parse("module M { fn f(Amount value) {} }")
@@ -5516,7 +5299,6 @@ mod tests {
         assert!(error.contains("use `quantity`"), "{error}");
         assert!(!error.contains("E_FORBIDDEN_SOURCE_IDENTIFIER"), "{error}");
     }
-
     #[test]
     fn every_retired_amount_type_keeps_its_quantity_fix_during_recovery() {
         for (index, (source, retired_count, forbidden_count)) in [
@@ -5558,7 +5340,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn retired_numeric_helpers_are_rejected_before_resolution() {
         for source in [
@@ -5572,7 +5353,6 @@ mod tests {
             assert!(error.contains("E_RETIRED_NUMERIC_HELPER"), "{error}");
         }
     }
-
     #[test]
     fn retired_trigger_aliases_have_exact_canonical_fixes() {
         for (retired, replacement) in [
@@ -5592,13 +5372,11 @@ mod tests {
             let range = fix.span.byte_range.expect("exact source range");
             assert_eq!(&text[range.start as usize..range.end as usize], retired);
             assert_eq!(fix.replacement, replacement);
-
             let mut repaired = text.clone();
             repaired.replace_range(range.start as usize..range.end as usize, &fix.replacement);
             parse(&repaired).expect("canonical replacement must parse");
         }
     }
-
     #[test]
     fn modules_reject_deployable_contract_items() {
         for body in [
@@ -5613,7 +5391,6 @@ mod tests {
             parse(&source).expect_err("module must reject deployable item");
         }
     }
-
     #[test]
     fn while_and_unbounded_for_forms_are_rejected() {
         for body in [
@@ -5625,7 +5402,6 @@ mod tests {
             parse_module(body).expect_err("unbounded loop form must fail");
         }
     }
-
     #[test]
     fn parse_for_range_loop() {
         let src = "fn f() { for x in range(6) { let y = x; } }";
@@ -5640,7 +5416,6 @@ mod tests {
             .expect("function present");
         assert!(!func.body.statements.is_empty());
     }
-
     #[test]
     fn source_meta_is_rejected_in_favor_of_build_configuration() {
         for body in [
@@ -5661,14 +5436,12 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parse_reports_unexpected_top_level_tokens() {
         let src = "let orphan = 1;";
         let err = parse(src).unwrap_err();
         assert!(err.contains("exactly one"));
     }
-
     #[test]
     fn parse_reports_unexpected_contract_items() {
         let src = r#"
@@ -5679,7 +5452,6 @@ mod tests {
         let err = parse(src).unwrap_err();
         assert!(err.contains("source-unit item"));
     }
-
     #[test]
     fn parse_function_modifiers_are_preserved() {
         let src = r#"
@@ -5700,7 +5472,6 @@ mod tests {
         assert_eq!(func.modifiers.kind, FunctionKind::Kotoage);
         assert_eq!(func.modifiers.permission.as_deref(), Some("Admin"));
     }
-
     #[test]
     fn kotoage_authorization_is_a_parse_time_grammar_requirement() {
         for source in [
@@ -5716,11 +5487,9 @@ mod tests {
             );
             assert!(!error.contains("K2004"), "{error}");
         }
-
         parse("seiyaku Demo { view fn read() -> int { return 1; } }")
             .expect("public views remain valid without source authorization");
     }
-
     #[test]
     fn retired_numeric_literal_suffixes_are_rejected() {
         for suffix in ["i64", "u128", "amt", "qty", "float", "money"] {
@@ -5732,7 +5501,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn adaptive_width_int_literal_is_allowed_without_a_suffix() {
         let src = "fn main() { let int x = 340282366920938463463374607431768211455; }";
@@ -5753,7 +5521,6 @@ mod tests {
             Expr::IntLiteral(value) if value.to_string() == "340282366920938463463374607431768211455"
         ));
     }
-
     #[test]
     fn decimal_literal_ast_retains_exact_source_spelling() {
         let program = parse_module("fn main() { let decimal value = 1.250_0; }")
@@ -5771,7 +5538,6 @@ mod tests {
         };
         assert!(matches!(value.kind(), Expr::DecimalLiteral(value) if value == "1.250_0"));
     }
-
     #[test]
     fn decimal_literals_follow_existing_expression_precedence() {
         let program = parse_module("fn main() { let value = true ? 1.0 : 2.0 + 3.0 * 4.0; }")
@@ -5806,7 +5572,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn signed_literals_retain_postfix_calls_after_atomic_range_parsing() {
         for literal in ["-1", "-1.0"] {
@@ -5821,7 +5586,6 @@ mod tests {
             .unwrap_or_else(|error| panic!("signed postfix `{literal}` failed: {error}"));
         }
     }
-
     #[test]
     fn native_json_preserves_decoded_keys_and_exact_source_spelling() {
         let program = parse_module(
@@ -5848,7 +5612,6 @@ mod tests {
         assert_eq!(entries[1].key_spelling, "\"owner-alias\"");
         assert!(matches!(entries[1].value.kind(), Expr::JsonArray(items) if items.len() == 1));
     }
-
     #[test]
     fn named_calls_preserve_source_names_and_trailing_comma() {
         let program = parse_module(
@@ -5882,7 +5645,6 @@ mod tests {
         );
         assert!(!implicit_receiver);
     }
-
     #[test]
     fn method_named_arguments_exclude_the_implicit_receiver() {
         let program =
@@ -5915,7 +5677,6 @@ mod tests {
         );
         assert!(implicit_receiver);
     }
-
     #[test]
     fn quantity_json_getter_uses_canonical_source_name_and_rejects_legacy_names() {
         let program =
@@ -5942,7 +5703,6 @@ mod tests {
         };
         assert_eq!(name, "get_quantity");
         assert!(implicit_receiver);
-
         for legacy in ["get_amount", "get_numeric"] {
             let source =
                 format!("fn main(Json value, Name key) {{ let found = value.{legacy}(key); }}");
@@ -5950,7 +5710,6 @@ mod tests {
             assert!(error.contains("E_LEGACY_JSON_GETTER"), "{error}");
         }
     }
-
     #[test]
     fn mixed_and_duplicate_named_call_arguments_are_rejected() {
         for (source, code) in [
@@ -5971,7 +5730,6 @@ mod tests {
             assert!(error.contains(code), "unexpected error: {error}");
         }
     }
-
     #[test]
     fn mixed_call_fixes_use_the_declared_parameter_mapping_in_both_directions() {
         for (id, call, original, replacement) in [
@@ -5993,13 +5751,11 @@ mod tests {
             let range = fix.span.byte_range.expect("exact fix range");
             assert_eq!(&text[range.start as usize..range.end as usize], original);
             assert_eq!(fix.replacement, replacement);
-
             let mut repaired = text;
             repaired.replace_range(range.start as usize..range.end as usize, &fix.replacement);
             parse(&repaired).expect("the machine fix must produce one named call style");
         }
     }
-
     #[test]
     fn unresolved_mixed_calls_do_not_guess_parameter_names() {
         for (id, call) in [(9, "target(1, second: 2)"), (10, "target(first: 1, 2)")] {
@@ -6027,7 +5783,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn named_struct_literals_support_shorthand_and_trailing_comma() {
         let program = parse_module(
@@ -6059,7 +5814,6 @@ mod tests {
         assert!(!fields[0].shorthand);
         assert!(fields[1].shorthand && fields[2].shorthand);
     }
-
     #[test]
     fn duplicate_struct_literal_fields_are_rejected() {
         let error = parse_module(
@@ -6068,19 +5822,16 @@ mod tests {
         .expect_err("duplicate field must fail");
         assert!(error.contains("E_DUPLICATE_STRUCT_FIELD"), "{error}");
     }
-
     #[test]
     fn control_flow_block_is_not_parsed_as_a_struct_literal() {
         parse_module("fn main(bool ready) { if ready {} }")
             .expect("if block must remain unambiguous");
     }
-
     #[test]
     fn negative_unsuffixed_literal_remains_available_for_semantic_quantity_validation() {
         parse_module("fn main() { let quantity value = -10; }")
             .expect("the parser leaves nominal quantity validation to semantics");
     }
-
     #[test]
     fn signed_512_bit_integer_endpoints_are_accepted() {
         for spelling in [
@@ -6091,7 +5842,6 @@ mod tests {
                 .expect("signed 512-bit endpoint must parse");
         }
     }
-
     #[test]
     fn signed_512_bit_integer_neighbors_are_rejected() {
         for spelling in [
@@ -6103,7 +5853,6 @@ mod tests {
             assert!(error.contains("E_INT_LITERAL_OVERFLOW"), "{error}");
         }
     }
-
     #[test]
     fn radix_literals_use_the_same_signed_512_bit_domain() {
         let maximum_hex = format!("0x7{}", "f".repeat(127));
@@ -6114,7 +5863,6 @@ mod tests {
             parse_module(&format!("fn main() {{ let int value = {spelling}; }}"))
                 .unwrap_or_else(|error| panic!("signed endpoint `{spelling}` failed: {error}"));
         }
-
         let positive_neighbor_hex = format!("0x8{}", "0".repeat(127));
         let negative_neighbor_hex = format!("-0x8{}1", "0".repeat(126));
         let positive_neighbor_binary = format!("0b1{}", "0".repeat(511));
@@ -6133,7 +5881,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn source_macros_are_rejected_without_ast_rewriting() {
         for src in [
@@ -6148,20 +5895,17 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parse_tuple_index_literal() {
         let src = "fn main() { let t = (1, 2); let x = t.1; }";
         parse_module(src).expect("parse tuple index");
     }
-
     #[test]
     fn bounded_collection_attribute_is_rejected() {
         let src = "fn f(StateMap<int, int> m) { for (k, v) in m #[bounded(1)] { let z = k; } }";
         let error = parse_module(src).expect_err("#[bounded] is not Kotodama V1 syntax");
         assert!(error.contains("`.take(N)` or `.range(start, end)`"));
     }
-
     #[test]
     fn free_calls_cannot_claim_postfix_state_map_bounds() {
         for iterator in ["take(m, 1)", "range(m, 0, 1)"] {
@@ -6178,7 +5922,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parse_compound_assignment_keeps_rhs() {
         let src = "fn f() { m[0] += 1; }";
@@ -6200,7 +5943,6 @@ mod tests {
             other => panic!("expected compound assignment, got {other:?}"),
         }
     }
-
     #[test]
     fn parse_bytes_literal() {
         let src = r#"fn main() { let b = b"ab"; }"#;
@@ -6222,7 +5964,6 @@ mod tests {
             other => panic!("expected let statement, got {other:?}"),
         }
     }
-
     #[test]
     fn parse_access_attributes_are_rejected() {
         let src = r#"
@@ -6232,7 +5973,6 @@ mod tests {
         let err = parse_module(src).expect_err("manual access attributes should be rejected");
         assert!(err.contains("access metadata is generated by the compiler"));
     }
-
     #[test]
     fn parse_rejects_state_parameter_annotations() {
         let src = r#"
@@ -6241,7 +5981,6 @@ mod tests {
         let err = parse_module(src).expect_err("state parameters must be rejected");
         assert!(err.contains("state handles are not first-class parameters"));
     }
-
     #[test]
     fn parse_rejects_removed_free_map_helpers() {
         let err = parse_module("fn f(StateMap<int, int> m) { let _x = get_or(m, 1, 7); }")
@@ -6251,7 +5990,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn state_map_get_method_preserves_call_form_for_resolution() {
         let program = parse_module(
@@ -6286,14 +6024,12 @@ mod tests {
         assert_eq!(method, STATE_MAP_GET_INTRINSIC);
         assert_eq!(free, "get");
     }
-
     #[test]
     fn parse_rejects_removed_free_json_helpers() {
         let err = parse_module("fn f(Json ev) { let _x = get_int(ev, Name::parse(\"n\")); }")
             .expect_err("free get_int should be rejected");
         assert!(err.contains("json.get_int(key)"), "unexpected error: {err}");
     }
-
     #[test]
     fn parse_rejects_free_sum_type_helpers() {
         for expression in [
@@ -6315,13 +6051,11 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parse_rejects_removed_method_map_aliases() {
         let err = parse_module("fn f(StateMap<int, int> m) { let _x = m.has(1); }")
             .expect_err("method has should be rejected");
         assert!(err.contains("map.contains(key)"), "unexpected error: {err}");
-
         let err =
             parse_module("fn f(StateMap<int, int> m) { let _x = m.get_or_insert_default(1, 7); }")
                 .expect_err("method get_or_insert_default should be rejected");
@@ -6330,7 +6064,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn parse_rejects_removed_method_path_and_json_aliases() {
         let err = parse_module("fn f(Name base) { let _x = base.path_map_key(7); }")
@@ -6339,12 +6072,10 @@ mod tests {
             err.contains("base.path(segment)"),
             "unexpected error: {err}"
         );
-
         let err = parse_module("fn f(Json ev) { let _x = ev.json_get_int(Name::parse(\"n\")); }")
             .expect_err("method json_get_int should be rejected");
         assert!(err.contains("json.get_int(key)"), "unexpected error: {err}");
     }
-
     #[test]
     fn parse_rejects_constructor_method_aliases() {
         for source in [
@@ -6360,7 +6091,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn source_localization_tables_are_not_part_of_v1() {
         for spelling in ["messages", "kotoba"] {
@@ -6373,7 +6103,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parse_trigger_decl() {
         let authority = sample_account_literal();
@@ -6405,7 +6134,6 @@ mod tests {
         assert_eq!(trigger.authority.as_deref(), Some(authority.as_str()));
         assert_eq!(trigger.metadata.len(), 3);
     }
-
     #[test]
     fn trigger_declarations_require_arrow_target_syntax() {
         for source in [
@@ -6415,13 +6143,11 @@ mod tests {
             parse(source).expect_err("retired trigger declaration syntax must fail");
         }
     }
-
     #[test]
     fn call_statement_sugar_is_rejected() {
         parse("seiyaku Demo { fn run() { call helper(); } fn helper() {} }")
             .expect_err("statement-level call sugar must fail");
     }
-
     #[test]
     fn parse_trigger_decl_rejects_duplicate_control_fields() {
         for (field, duplicate_line, expected) in [
@@ -6450,7 +6176,6 @@ mod tests {
             assert!(err.contains(expected), "{field}: unexpected error: {err}");
         }
     }
-
     #[test]
     fn parse_trigger_decl_rejects_negative_and_overflow_repeats() {
         for (repeats, expected) in [
@@ -6472,7 +6197,6 @@ mod tests {
             assert!(err.contains(expected), "unexpected error: {err}");
         }
     }
-
     #[test]
     fn parse_trigger_decl_with_data_filter() {
         let src = r#"
@@ -6494,7 +6218,6 @@ mod tests {
             .expect("trigger present");
         assert!(matches!(trigger.filter, TriggerFilter::Data(_)));
     }
-
     fn sample_asset_definition_literal() -> String {
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
@@ -6502,7 +6225,6 @@ mod tests {
         )
         .to_string()
     }
-
     #[test]
     fn parse_trigger_decl_with_structured_data_filter() {
         let asset_definition = sample_asset_definition_literal();
@@ -6539,9 +6261,7 @@ mod tests {
         assert_eq!(filter.matchers[0].key, "asset_definition");
         assert_eq!(filter.matchers[0].value, asset_definition);
     }
-
     include!("parser/tests/trigger_filter_core_families.rs");
-
     #[test]
     fn parse_trigger_decl_rejects_nondeterministic_pipeline_filter() {
         let src = r#"
@@ -6555,6 +6275,5 @@ mod tests {
         let err = parse(src).expect_err("parse should reject unsupported pipeline filter");
         assert!(err.contains("transaction [approved]"));
     }
-
     include!("parser/tests/tail_fixtures.rs");
 }

@@ -1,5 +1,5 @@
 //! Bounded process helpers for integration tests.
-
+use crate::timeouts::read_env_duration;
 use std::{
     future::Future,
     io::{self, Read},
@@ -9,35 +9,28 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-
-use crate::timeouts::read_env_duration;
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
     task::JoinHandle,
 };
-
 /// Environment override for ordinary test subprocess timeouts.
 pub const PROCESS_TIMEOUT_ENV: &str = "IROHA_TEST_PROCESS_TIMEOUT_MS";
 /// Environment override for nested build subprocess timeouts.
 pub const BUILD_TIMEOUT_ENV: &str = "IROHA_TEST_BUILD_TIMEOUT_MS";
-
 const PROCESS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(60);
 const BUILD_TIMEOUT_DEFAULT: Duration = Duration::from_secs(20 * 60);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const PROCESS_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
-
 /// Default timeout for ordinary test subprocesses.
 #[must_use]
 pub fn process_timeout() -> Duration {
     read_env_duration(PROCESS_TIMEOUT_ENV, PROCESS_TIMEOUT_DEFAULT)
 }
-
 /// Default timeout for nested build/check subprocesses.
 #[must_use]
 pub fn build_timeout() -> Duration {
     read_env_duration(BUILD_TIMEOUT_ENV, BUILD_TIMEOUT_DEFAULT)
 }
-
 /// Extension methods that run std commands with the default integration-test timeout.
 pub trait CommandTimeoutExt {
     /// Run a command to completion with piped output and the default timeout.
@@ -46,7 +39,6 @@ pub trait CommandTimeoutExt {
     ///
     /// Returns process errors or a timeout error.
     fn bounded_output(&mut self) -> io::Result<Output>;
-
     /// Run a command to completion with inherited output and the default timeout.
     ///
     /// # Errors
@@ -54,36 +46,29 @@ pub trait CommandTimeoutExt {
     /// Returns process errors or a timeout error.
     fn bounded_status(&mut self) -> io::Result<ExitStatus>;
 }
-
 impl CommandTimeoutExt for Command {
     fn bounded_output(&mut self) -> io::Result<Output> {
         output_with_timeout(self, process_timeout())
     }
-
     fn bounded_status(&mut self) -> io::Result<ExitStatus> {
         status_with_timeout(self, process_timeout())
     }
 }
-
 /// Extension methods that run Tokio commands with the default integration-test timeout.
 pub trait TokioCommandTimeoutExt {
     /// Run a command to completion with piped output and the default timeout.
     fn bounded_output(&mut self) -> Pin<Box<dyn Future<Output = io::Result<Output>> + '_>>;
-
     /// Run a command to completion with inherited output and the default timeout.
     fn bounded_status(&mut self) -> Pin<Box<dyn Future<Output = io::Result<ExitStatus>> + '_>>;
 }
-
 impl TokioCommandTimeoutExt for tokio::process::Command {
     fn bounded_output(&mut self) -> Pin<Box<dyn Future<Output = io::Result<Output>> + '_>> {
         Box::pin(tokio_output_with_timeout(self, process_timeout()))
     }
-
     fn bounded_status(&mut self) -> Pin<Box<dyn Future<Output = io::Result<ExitStatus>> + '_>> {
         Box::pin(tokio_status_with_timeout(self, process_timeout()))
     }
 }
-
 /// Run a command to completion with piped output and a timeout.
 ///
 /// # Errors
@@ -112,7 +97,6 @@ pub fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Resu
     let mut stderr = stderr_reader.is_none().then(Vec::new);
     let mut status = None;
     let started = Instant::now();
-
     loop {
         if status.is_none() {
             status = child.try_wait()?;
@@ -130,7 +114,6 @@ pub fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Resu
                 stderr: stderr.take().expect("stderr present"),
             });
         }
-
         let elapsed = started.elapsed();
         if elapsed >= timeout {
             terminate_std_child(&tree, &mut child);
@@ -142,7 +125,6 @@ pub fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Resu
         thread::sleep(PROCESS_POLL_INTERVAL.min(timeout.saturating_sub(elapsed)));
     }
 }
-
 /// Run a command to completion with inherited output and a timeout.
 ///
 /// # Errors
@@ -169,7 +151,6 @@ pub fn status_with_timeout(command: &mut Command, timeout: Duration) -> io::Resu
     };
     Ok(status)
 }
-
 /// Run a Tokio command to completion with piped output and a timeout.
 ///
 /// # Errors
@@ -202,7 +183,6 @@ pub async fn tokio_output_with_timeout(
     let mut stderr = stderr_reader.is_none().then(Vec::new);
     let mut status = None;
     let started = Instant::now();
-
     loop {
         if status.is_none() {
             status = child.try_wait()?;
@@ -220,7 +200,6 @@ pub async fn tokio_output_with_timeout(
                 stderr: stderr.take().expect("stderr present"),
             });
         }
-
         let elapsed = started.elapsed();
         if elapsed >= timeout {
             terminate_tokio_child(&tree, &mut child);
@@ -232,7 +211,6 @@ pub async fn tokio_output_with_timeout(
         tokio::time::sleep(PROCESS_POLL_INTERVAL.min(timeout.saturating_sub(elapsed))).await;
     }
 }
-
 /// Run a Tokio command to completion with inherited output and a timeout.
 ///
 /// # Errors
@@ -256,7 +234,6 @@ pub async fn tokio_status_with_timeout(
         }
     };
     let started = Instant::now();
-
     loop {
         if let Some(status) = child.try_wait()? {
             return Ok(status);
@@ -270,30 +247,25 @@ pub async fn tokio_status_with_timeout(
         tokio::time::sleep(PROCESS_POLL_INTERVAL.min(timeout.saturating_sub(elapsed))).await;
     }
 }
-
 fn configure_std_command(command: &mut Command) {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
-
         command.process_group(0);
     }
 }
-
 fn configure_tokio_command(command: &mut tokio::process::Command) {
     #[cfg(unix)]
     {
         command.process_group(0);
     }
 }
-
 struct ProcessTree {
     #[cfg(not(windows))]
     child_id: u32,
     #[cfg(windows)]
     job: windows_process::Job,
 }
-
 impl ProcessTree {
     fn for_std_child(child: &std::process::Child) -> io::Result<Self> {
         #[cfg(windows)]
@@ -308,7 +280,6 @@ impl ProcessTree {
             Ok(Self { child_id })
         }
     }
-
     fn for_tokio_child(child: &tokio::process::Child) -> io::Result<Self> {
         #[cfg(windows)]
         {
@@ -324,7 +295,6 @@ impl ProcessTree {
             Ok(Self { child_id })
         }
     }
-
     fn terminate(&self) -> io::Result<()> {
         #[cfg(unix)]
         {
@@ -343,19 +313,16 @@ impl ProcessTree {
         }
     }
 }
-
 fn terminate_std_child(tree: &ProcessTree, child: &mut std::process::Child) {
     if tree.terminate().is_err() {
         let _ = child.kill();
     }
 }
-
 fn terminate_tokio_child(tree: &ProcessTree, child: &mut tokio::process::Child) {
     if tree.terminate().is_err() {
         let _ = child.start_kill();
     }
 }
-
 #[cfg(unix)]
 #[allow(unsafe_code)]
 fn terminate_unix_process_group(child_id: u32) -> io::Result<()> {
@@ -365,7 +332,6 @@ fn terminate_unix_process_group(child_id: u32) -> io::Result<()> {
         fn kill(pid: i32, sig: i32) -> i32;
     }
     const SIGKILL: i32 = 9;
-
     if unsafe { kill(-process_group, SIGKILL) } == 0 {
         Ok(())
     } else {
@@ -377,11 +343,9 @@ fn terminate_unix_process_group(child_id: u32) -> io::Result<()> {
         }
     }
 }
-
 struct PipeReader {
     receiver: Receiver<Vec<u8>>,
 }
-
 fn read_pipe<R>(mut pipe: R) -> PipeReader
 where
     R: Read + Send + 'static,
@@ -394,7 +358,6 @@ where
     });
     PipeReader { receiver }
 }
-
 fn poll_pipe(reader: &mut Option<PipeReader>) -> Option<Vec<u8>> {
     match reader.as_ref()?.receiver.try_recv() {
         Ok(bytes) => {
@@ -408,14 +371,12 @@ fn poll_pipe(reader: &mut Option<PipeReader>) -> Option<Vec<u8>> {
         Err(TryRecvError::Empty) => None,
     }
 }
-
 fn drain_pipe(reader: &mut Option<PipeReader>, timeout: Duration) -> Vec<u8> {
     reader
         .take()
         .and_then(|reader| reader.receiver.recv_timeout(timeout).ok())
         .unwrap_or_default()
 }
-
 fn read_async_pipe<R>(mut pipe: R) -> JoinHandle<Vec<u8>>
 where
     R: AsyncRead + Unpin + Send + 'static,
@@ -426,7 +387,6 @@ where
         bytes
     })
 }
-
 async fn poll_async_pipe(reader: &mut Option<JoinHandle<Vec<u8>>>) -> Option<Vec<u8>> {
     if !reader.as_ref().is_some_and(JoinHandle::is_finished) {
         return None;
@@ -434,7 +394,6 @@ async fn poll_async_pipe(reader: &mut Option<JoinHandle<Vec<u8>>>) -> Option<Vec
     let handle = reader.take()?;
     Some(handle.await.unwrap_or_default())
 }
-
 async fn drain_async_pipe(reader: &mut Option<JoinHandle<Vec<u8>>>, timeout: Duration) -> Vec<u8> {
     let Some(mut handle) = reader.take() else {
         return Vec::new();
@@ -447,7 +406,6 @@ async fn drain_async_pipe(reader: &mut Option<JoinHandle<Vec<u8>>>, timeout: Dur
         }
     }
 }
-
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod windows_process {
@@ -458,12 +416,9 @@ mod windows_process {
         os::windows::io::{AsRawHandle, RawHandle},
         ptr,
     };
-
     type Handle = *mut c_void;
-
     const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: i32 = 9;
     const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
-
     #[repr(C)]
     struct IoCounters {
         read_operation_count: u64,
@@ -473,7 +428,6 @@ mod windows_process {
         write_transfer_count: u64,
         other_transfer_count: u64,
     }
-
     impl IoCounters {
         const fn empty() -> Self {
             Self {
@@ -486,7 +440,6 @@ mod windows_process {
             }
         }
     }
-
     #[repr(C)]
     struct JobObjectBasicLimitInformation {
         per_process_user_time_limit: i64,
@@ -499,7 +452,6 @@ mod windows_process {
         priority_class: u32,
         scheduling_class: u32,
     }
-
     impl JobObjectBasicLimitInformation {
         const fn kill_on_close() -> Self {
             Self {
@@ -515,7 +467,6 @@ mod windows_process {
             }
         }
     }
-
     #[repr(C)]
     struct JobObjectExtendedLimitInformation {
         basic_limit_information: JobObjectBasicLimitInformation,
@@ -525,7 +476,6 @@ mod windows_process {
         peak_process_memory_used: usize,
         peak_job_memory_used: usize,
     }
-
     impl JobObjectExtendedLimitInformation {
         const fn kill_on_close() -> Self {
             Self {
@@ -538,7 +488,6 @@ mod windows_process {
             }
         }
     }
-
     unsafe extern "system" {
         fn CreateJobObjectW(job_attributes: *mut c_void, name: *const u16) -> Handle;
         fn SetInformationJobObject(
@@ -551,11 +500,9 @@ mod windows_process {
         fn TerminateJobObject(job: Handle, exit_code: u32) -> i32;
         fn CloseHandle(object: Handle) -> i32;
     }
-
     pub(super) struct Job {
         handle: Handle,
     }
-
     impl Job {
         pub(super) fn new<T>(child: &T) -> io::Result<Self>
         where
@@ -565,7 +512,6 @@ mod windows_process {
             if handle.is_null() {
                 return Err(io::Error::last_os_error());
             }
-
             let job = Self { handle };
             let mut info = JobObjectExtendedLimitInformation::kill_on_close();
             let info_len = u32::try_from(size_of::<JobObjectExtendedLimitInformation>())
@@ -581,16 +527,13 @@ mod windows_process {
             if ok == 0 {
                 return Err(io::Error::last_os_error());
             }
-
             let process = child.as_raw_handle();
             let ok = unsafe { AssignProcessToJobObject(job.handle, raw_handle_to_handle(process)) };
             if ok == 0 {
                 return Err(io::Error::last_os_error());
             }
-
             Ok(job)
         }
-
         pub(super) fn terminate(&self) -> io::Result<()> {
             if unsafe { TerminateJobObject(self.handle, 1) } == 0 {
                 Err(io::Error::last_os_error())
@@ -599,18 +542,15 @@ mod windows_process {
             }
         }
     }
-
     impl Drop for Job {
         fn drop(&mut self) {
             let _ = unsafe { CloseHandle(self.handle) };
         }
     }
-
     fn raw_handle_to_handle(handle: RawHandle) -> Handle {
         handle.cast()
     }
 }
-
 fn wait_for_exit(
     child: &mut std::process::Child,
     timeout: Duration,
@@ -627,18 +567,15 @@ fn wait_for_exit(
         thread::sleep(PROCESS_POLL_INTERVAL.min(timeout.saturating_sub(elapsed)));
     }
 }
-
 fn command_timeout_error(command_debug: &str, timeout: Duration) -> io::Error {
     io::Error::new(
         io::ErrorKind::TimedOut,
         format!("command {command_debug} timed out after {timeout:?}"),
     )
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn sleeping_command() -> Command {
         if cfg!(windows) {
             let mut command = Command::new("cmd");
@@ -650,7 +587,6 @@ mod tests {
             command
         }
     }
-
     fn pipe_holding_descendant_command() -> Command {
         if cfg!(windows) {
             let mut command = Command::new("cmd");
@@ -665,7 +601,6 @@ mod tests {
             command
         }
     }
-
     fn tokio_pipe_holding_descendant_command() -> tokio::process::Command {
         if cfg!(windows) {
             let mut command = tokio::process::Command::new("cmd");
@@ -680,14 +615,12 @@ mod tests {
             command
         }
     }
-
     #[test]
     fn output_with_timeout_fails_fast() {
         let err =
             output_with_timeout(&mut sleeping_command(), Duration::from_millis(20)).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
     }
-
     #[test]
     fn output_with_timeout_terminates_pipe_holding_descendants() {
         let started = Instant::now();
@@ -703,7 +636,6 @@ mod tests {
             started.elapsed()
         );
     }
-
     #[tokio::test]
     async fn tokio_output_with_timeout_fails_fast() {
         let mut command = if cfg!(windows) {
@@ -720,7 +652,6 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
     }
-
     #[tokio::test]
     async fn tokio_output_with_timeout_terminates_pipe_holding_descendants() {
         let started = Instant::now();

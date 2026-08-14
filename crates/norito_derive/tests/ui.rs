@@ -1,20 +1,16 @@
 //! UI tests for norito_derive (proc-macros).
-
 use std::{
     env, fs,
     path::{Component, Path, PathBuf},
     process::Command,
 };
-
 #[test]
 fn ui() {
     let t = trybuild::TestCases::new();
     t.pass("tests/ui/pass/*.rs");
     t.compile_fail("tests/ui/fail/*.rs");
-
     scrub_trybuild_manifest_paths();
 }
-
 fn scrub_trybuild_manifest_paths() {
     // trybuild emits absolute paths; rewrite them so target-codex artifacts stay portable.
     let Some(target_dir) = cargo_target_dir() else {
@@ -31,7 +27,6 @@ fn scrub_trybuild_manifest_paths() {
     };
     let _ = fs::write(manifest_path, updated);
 }
-
 fn cargo_target_dir() -> Option<PathBuf> {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = Command::new(cargo)
@@ -45,7 +40,6 @@ fn cargo_target_dir() -> Option<PathBuf> {
     let target_dir = value.get("target_directory")?.as_str()?;
     Some(PathBuf::from(target_dir))
 }
-
 fn rewrite_manifest_paths(contents: &str, manifest_dir: &Path) -> Option<String> {
     let mut changed = false;
     let mut out = String::with_capacity(contents.len());
@@ -63,7 +57,6 @@ fn rewrite_manifest_paths(contents: &str, manifest_dir: &Path) -> Option<String>
     }
     changed.then_some(out)
 }
-
 fn rewrite_path_line(line: &str, manifest_dir: &Path) -> (String, bool) {
     let indent_len = line.len() - line.trim_start().len();
     let indent = &line[..indent_len];
@@ -92,7 +85,6 @@ fn rewrite_path_line(line: &str, manifest_dir: &Path) -> (String, bool) {
     let rewritten = format!("{indent}path = \"{escaped}\"{rest}");
     (rewritten, true)
 }
-
 fn parse_basic_string(input: &str) -> Option<(String, &str)> {
     let mut chars = input.char_indices();
     let (_, first) = chars.next()?;
@@ -115,7 +107,6 @@ fn parse_basic_string(input: &str) -> Option<(String, &str)> {
     }
     None
 }
-
 fn escape_basic_string(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -127,7 +118,6 @@ fn escape_basic_string(value: &str) -> String {
     }
     out
 }
-
 fn make_relative_path(from: &Path, to: &Path) -> Option<PathBuf> {
     let from_components: Vec<Component<'_>> = from.components().collect();
     let to_components: Vec<Component<'_>> = to.components().collect();
@@ -152,7 +142,6 @@ fn make_relative_path(from: &Path, to: &Path) -> Option<PathBuf> {
     }
     Some(result)
 }
-
 #[test]
 fn relative_path_shared_prefix() {
     let base = env::temp_dir().join("norito_derive_trybuild_paths");
@@ -182,7 +171,6 @@ fn relative_path_shared_prefix() {
     expected.push("example.rs");
     assert_eq!(relative, expected);
 }
-
 #[test]
 fn rewrite_manifest_paths_scrubs_absolute_paths() {
     let base = env::temp_dir().join("norito_derive_trybuild_manifest");

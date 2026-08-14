@@ -1,12 +1,10 @@
 // Moderation source-attestation request validation regressions.
-
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct RetiredModerationArchiveQualifyRequestWireV1 {
     version: u16,
     slot: u16,
     chain_id: String,
 }
-
 #[test]
 fn moderation_source_attestation_pre_dispatch_is_exact_network_and_slot_bound() {
     let checkpoint = evidence_viewer_binding(IrohaRuntimeProviderSlotV1::ModerationCheckpointStore);
@@ -55,7 +53,6 @@ fn moderation_source_attestation_pre_dispatch_is_exact_network_and_slot_bound() 
         ),
         Ok(())
     );
-
     let archive =
         evidence_viewer_binding(IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive);
     let wrong_slot = make_operation_request(
@@ -75,7 +72,6 @@ fn moderation_source_attestation_pre_dispatch_is_exact_network_and_slot_bound() 
         ),
         Err(BrokerError::BindingMismatch)
     );
-
     let mut substituted = statement;
     substituted.terminal_set_digest = [0; 32];
     let substituted_payload = encode_canonical(
@@ -106,7 +102,6 @@ fn moderation_source_attestation_pre_dispatch_is_exact_network_and_slot_bound() 
         Err(BrokerError::Rejected)
     );
 }
-
 #[test]
 fn moderation_archive_rejects_same_label_foreign_genesis_and_retired_chain_wire() {
     let archive =
@@ -135,7 +130,6 @@ fn moderation_archive_rejects_same_label_foreign_genesis_and_retired_chain_wire(
         Err(BrokerError::BindingMismatch),
         "an identical display label must not admit a different genesis"
     );
-
     let legacy = encode_canonical(
         &RetiredModerationArchiveQualifyRequestWireV1 {
             version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
@@ -154,11 +148,9 @@ fn moderation_archive_rejects_same_label_foreign_genesis_and_retired_chain_wire(
         "the retired chain_id wire shape must have no compatibility decoder"
     );
 }
-
 #[test]
 fn moderation_delivery_rejects_same_label_foreign_genesis_before_dispatch() {
     use sorafs_node::moderation_orchestrator::ModerationTerminalHandoffKindV1 as Kind;
-
     let foreign_network = test_network_id(0x16);
     let mut handoff = moderation_handoff_test_request(Kind::Settlement);
     handoff.handoff.network_id = foreign_network;
@@ -180,7 +172,6 @@ fn moderation_delivery_rejects_same_label_foreign_genesis_before_dispatch() {
         ),
         "an identical display label must not admit a foreign-network handoff"
     );
-
     let mut notification = moderation_panel_test_request();
     notification.notification.network_id = foreign_network;
     notification.notification.notification_id = notification.notification.canonical_id();
